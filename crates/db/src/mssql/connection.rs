@@ -2,8 +2,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use async_trait::async_trait;
+use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use one_core::storage::DbConnectionConfig;
-use tiberius::{AuthMethod, Client, ColumnType, Config, Row};
+use tiberius::{AuthMethod, Client, ColumnType, Config, Row, Uuid};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
@@ -16,8 +17,13 @@ use crate::executor::{
     SqlSource,
 };
 use crate::ssh_tunnel::resolve_connection_target;
+use crate::types::FieldType;
 use crate::{DatabasePlugin, format_message, truncate_str};
 use connection_tunnel::TunnelGuard;
+use db_value::{
+    CellState, ColumnDescriptor, DbValue, FloatWidth, Nullability, RawPayload, RawRepresentation,
+    ResultBatch, ResultRow,
+};
 
 pub struct MssqlDbConnection {
     config: DbConnectionConfig,
@@ -98,6 +104,229 @@ impl MssqlDbConnection {
         )
     }
 
+    fn is_binary_column_type(column_type: ColumnType) -> bool {
+        matches!(
+            column_type,
+            ColumnType::BigVarBin | ColumnType::BigBinary | ColumnType::Image
+        )
+    }
+
+    /// 处理 `try_get` 的解码结果:成功值、SQL NULL 与解码失败严格分开。
+    fn try_cell<T>(
+        result: tiberius::Result<Option<T>>,
+        native_type: ColumnType,
+        to_value: impl FnOnce(T) -> (DbValue, String),
+    ) -> (CellState, Option<String>) {
+        match result {
+            Ok(Some(value)) => {
+                let (typed, display) = to_value(value);
+                (CellState::Decoded(typed), Some(display))
+            }
+            Ok(None) => (CellState::Decoded(DbValue::Null), None),
+            Err(error) => Self::decode_failure(native_type, None, error.to_string()),
+        }
+    }
+
+    fn decode_failure(
+        native_type: ColumnType,
+        raw: Option<Vec<u8>>,
+        diagnostic: String,
+    ) -> (CellState, Option<String>) {
+        let type_name = format!("{native_type:?}");
+        let display = match &raw {
+            Some(bytes) => format!("0x{}", hex::encode(bytes)),
+            None => format!("<{type_name} decode error>"),
+        };
+        (
+            CellState::DecodeError {
+                native_type: type_name,
+                raw: raw.map(|bytes| RawPayload {
+                    bytes,
+                    representation: RawRepresentation::DatabaseValueBytes,
+                }),
+                diagnostic,
+            },
+            Some(display),
+        )
+    }
+
+    /// 按 Tiberius 列类型分派解码:binary/text 由列类型决定,不再靠字节内容猜测。
+    fn extract_cell(
+        row: &Row,
+        index: usize,
+        column_type: ColumnType,
+    ) -> (CellState, Option<String>) {
+        if Self::is_binary_column_type(column_type) {
+            return match row.try_get::<&[u8], _>(index) {
+                Ok(Some(bytes)) => {
+                    let bytes = bytes.to_vec();
+                    (
+                        CellState::Decoded(DbValue::Binary(bytes.clone())),
+                        Some(format!("0x{}", hex::encode(bytes))),
+                    )
+                }
+                Ok(None) => (CellState::Decoded(DbValue::Null), None),
+                Err(error) => Self::decode_failure(column_type, None, error.to_string()),
+            };
+        }
+
+        if matches!(column_type, ColumnType::Xml) {
+            return match row.try_get::<&tiberius::xml::XmlData, _>(index) {
+                Ok(Some(xml)) => {
+                    let text = xml.as_ref().to_string();
+                    (CellState::Decoded(DbValue::Text(text.clone())), Some(text))
+                }
+                Ok(None) => (CellState::Decoded(DbValue::Null), None),
+                Err(error) => Self::decode_failure(column_type, None, error.to_string()),
+            };
+        }
+
+        if Self::is_character_column_type(column_type) {
+            return match row.try_get::<&str, _>(index) {
+                Ok(Some(text)) => {
+                    let text = text.to_string();
+                    (CellState::Decoded(DbValue::Text(text.clone())), Some(text))
+                }
+                Ok(None) => (CellState::Decoded(DbValue::Null), None),
+                Err(error) => match row.try_get::<&[u8], _>(index) {
+                    Ok(Some(bytes)) => {
+                        Self::decode_failure(column_type, Some(bytes.to_vec()), error.to_string())
+                    }
+                    _ => Self::decode_failure(column_type, None, error.to_string()),
+                },
+            };
+        }
+
+        match column_type {
+            ColumnType::Bit => Self::try_cell(row.try_get::<bool, _>(index), column_type, |v| {
+                (DbValue::Bool(v), v.to_string())
+            }),
+            ColumnType::Int1 => Self::try_cell(row.try_get::<u8, _>(index), column_type, |v| {
+                let s = v.to_string();
+                (DbValue::Integer(s.clone()), s)
+            }),
+            ColumnType::Int2 => Self::try_cell(row.try_get::<i16, _>(index), column_type, |v| {
+                let s = v.to_string();
+                (DbValue::Integer(s.clone()), s)
+            }),
+            ColumnType::Int4 => Self::try_cell(row.try_get::<i32, _>(index), column_type, |v| {
+                let s = v.to_string();
+                (DbValue::Integer(s.clone()), s)
+            }),
+            ColumnType::Int8 => Self::try_cell(row.try_get::<i64, _>(index), column_type, |v| {
+                let s = v.to_string();
+                (DbValue::Integer(s.clone()), s)
+            }),
+            // Driver limitation: tiberius decodes TDS money as `ColumnData::F64`
+            // after already losing the exact scaled integer, so large money values
+            // cannot be recovered with full precision here. Kept as Decimal text
+            // for display; not claimed as exact.
+            ColumnType::Money | ColumnType::Money4 => {
+                Self::try_cell(row.try_get::<f64, _>(index), column_type, |v| {
+                    let s = v.to_string();
+                    (DbValue::Decimal(s.clone()), s)
+                })
+            }
+            ColumnType::Float4 => Self::try_cell(row.try_get::<f32, _>(index), column_type, |v| {
+                let s = v.to_string();
+                (
+                    DbValue::Float {
+                        value: s.clone(),
+                        width: FloatWidth::F32,
+                    },
+                    s,
+                )
+            }),
+            ColumnType::Float8 => Self::try_cell(row.try_get::<f64, _>(index), column_type, |v| {
+                let s = v.to_string();
+                (
+                    DbValue::Float {
+                        value: s.clone(),
+                        width: FloatWidth::F64,
+                    },
+                    s,
+                )
+            }),
+            ColumnType::Guid => Self::try_cell(row.try_get::<Uuid, _>(index), column_type, |v| {
+                let s = v.to_string();
+                (DbValue::Uuid(s.clone()), s)
+            }),
+            ColumnType::Decimaln | ColumnType::Numericn => Self::try_cell(
+                row.try_get::<tiberius::numeric::Numeric, _>(index),
+                column_type,
+                |v| {
+                    let s = v.to_string();
+                    (DbValue::Decimal(s.clone()), s)
+                },
+            ),
+            ColumnType::Datetime | ColumnType::Datetimen | ColumnType::Datetime2 => {
+                Self::try_cell(row.try_get::<NaiveDateTime, _>(index), column_type, |v| {
+                    let s = v.format("%Y-%m-%d %H:%M:%S").to_string();
+                    (DbValue::DateTime(s.clone()), s)
+                })
+            }
+            ColumnType::Daten => {
+                Self::try_cell(row.try_get::<NaiveDate, _>(index), column_type, |v| {
+                    let s = v.format("%Y-%m-%d").to_string();
+                    (DbValue::Date(s.clone()), s)
+                })
+            }
+            ColumnType::Timen => {
+                Self::try_cell(row.try_get::<NaiveTime, _>(index), column_type, |v| {
+                    let s = v.format("%H:%M:%S%.f").to_string();
+                    (DbValue::Time(s.clone()), s)
+                })
+            }
+            _ => {
+                // 未建模类型:保留 legacy 显示,typed 明确 Undecoded,不伪装成值。
+                let display = Self::extract_value(row, index);
+                (
+                    CellState::Undecoded {
+                        native_type: format!("{column_type:?}"),
+                        raw: None,
+                        reason: "no typed decoder for this MSSQL column type".to_string(),
+                    },
+                    display,
+                )
+            }
+        }
+    }
+
+    fn build_descriptors(columns: &[String], column_types: &[String]) -> Vec<ColumnDescriptor> {
+        columns
+            .iter()
+            .zip(column_types.iter())
+            .enumerate()
+            .map(|(index, (name, db_type))| ColumnDescriptor {
+                id: format!("column:{index}"),
+                label: name.clone(),
+                native_type: db_type.clone(),
+                logical_type: format!("{:?}", FieldType::from_db_type(db_type)),
+                nullable: Nullability::Unknown,
+                charset: None,
+                collation: None,
+                precision: None,
+                scale: None,
+            })
+            .collect()
+    }
+
+    fn collect_binary_cells(rows: &[ResultRow]) -> Vec<BinaryCell> {
+        let mut binary_cells = Vec::new();
+        for (row_index, row) in rows.iter().enumerate() {
+            for (column_index, cell) in row.cells.iter().enumerate() {
+                if let CellState::Decoded(DbValue::Binary(bytes)) = cell {
+                    binary_cells.push(BinaryCell {
+                        row_index,
+                        column_index,
+                        bytes: bytes.clone(),
+                    });
+                }
+            }
+        }
+        binary_cells
+    }
+
     fn build_query_result(
         columns: Vec<String>,
         column_types: Vec<String>,
@@ -117,49 +346,50 @@ impl MssqlDbConnection {
             .zip(column_types.iter())
             .map(|(name, db_type)| QueryColumnMeta::new(name.clone(), db_type.clone()))
             .collect();
+        let descriptors = Self::build_descriptors(&columns, &column_types);
 
-        let mut binary_cells = Vec::new();
-        let all_rows: Vec<Vec<Option<String>>> = rows
+        let (cells_rows, display_rows): (Vec<Vec<CellState>>, Vec<Vec<Option<String>>>) = rows
             .iter()
-            .enumerate()
-            .map(|(row_index, row)| {
-                (0..columns.len())
-                    .map(|i| {
-                        let column_type = row.columns()[i].column_type();
-                        if matches!(
-                            column_type,
-                            ColumnType::BigVarBin | ColumnType::BigBinary | ColumnType::Image
-                        ) {
-                            if let Some(bytes) = row.try_get::<&[u8], _>(i).ok().flatten() {
-                                binary_cells.push(BinaryCell {
-                                    row_index,
-                                    column_index: i,
-                                    bytes: bytes.to_vec(),
-                                });
-                                return Some(format!("0x{}", hex::encode(bytes)));
-                            }
-                        }
-                        if Self::is_character_column_type(column_type) {
-                            return row
-                                .try_get::<&str, _>(i)
-                                .ok()
-                                .flatten()
-                                .map(str::to_owned)
-                                .or_else(|| Self::extract_value(row, i));
-                        }
-                        Self::extract_value(row, i)
-                    })
-                    .collect()
+            .map(|row| {
+                let mut cells = Vec::with_capacity(columns.len());
+                let mut display = Vec::with_capacity(columns.len());
+                for i in 0..columns.len() {
+                    let column_type = row.columns()[i].column_type();
+                    let (state, cell_display) = Self::extract_cell(row, i, column_type);
+                    cells.push(state);
+                    display.push(cell_display);
+                }
+                (cells, display)
             })
             .collect();
+
+        let batch_rows = cells_rows
+            .into_iter()
+            .enumerate()
+            .map(|(row_index, cells)| ResultRow {
+                id: row_index as u64,
+                cells,
+            })
+            .collect::<Vec<_>>();
+        let binary_cells = Self::collect_binary_cells(&batch_rows);
+        let typed_batch = match ResultBatch::try_new(0, descriptors, batch_rows, true) {
+            Ok(batch) => Arc::new(batch),
+            Err(error) => {
+                return SqlResult::Error(SqlErrorInfo {
+                    sql,
+                    message: format!("failed to build typed result batch: {error}"),
+                });
+            }
+        };
 
         SqlResult::Query(QueryResult {
             sql,
             columns,
             column_meta,
-            rows: all_rows,
+            rows: display_rows,
             binary_cells,
             elapsed_ms,
+            typed_batch: Some(typed_batch),
         })
     }
 
@@ -296,6 +526,51 @@ mod tests {
                 "{column_type:?}"
             );
         }
+    }
+
+    #[test]
+    fn binary_column_types_are_classified_as_binary() {
+        for column_type in [
+            ColumnType::BigBinary,
+            ColumnType::BigVarBin,
+            ColumnType::Image,
+        ] {
+            assert!(
+                MssqlDbConnection::is_binary_column_type(column_type),
+                "{column_type:?}"
+            );
+        }
+        for column_type in [
+            ColumnType::BigChar,
+            ColumnType::BigVarChar,
+            ColumnType::NVarchar,
+        ] {
+            assert!(
+                !MssqlDbConnection::is_binary_column_type(column_type),
+                "{column_type:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn decode_failure_is_distinct_from_null_and_carries_raw_bytes() {
+        let (state, display) = MssqlDbConnection::decode_failure(
+            ColumnType::BigVarChar,
+            Some(b"\xFF\xFE".to_vec()),
+            "boom".into(),
+        );
+        assert_eq!(
+            state,
+            CellState::DecodeError {
+                native_type: "BigVarChar".to_string(),
+                raw: Some(RawPayload {
+                    bytes: b"\xFF\xFE".to_vec(),
+                    representation: RawRepresentation::DatabaseValueBytes,
+                }),
+                diagnostic: "boom".to_string(),
+            }
+        );
+        assert_eq!(display, Some("0xfffe".to_string()));
     }
 }
 

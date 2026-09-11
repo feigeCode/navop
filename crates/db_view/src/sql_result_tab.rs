@@ -9,7 +9,18 @@ use gpui::{
     ParentElement, Render, ScrollHandle, StatefulInteractiveElement, Styled,
     UniformListScrollHandle, Window, div, px, uniform_list,
 };
-use gpui_component::{ActiveTheme, Icon, Sizable, Size, StyledExt, button::{Button, ButtonVariants}, clipboard::Clipboard, h_flex, popover::Popover, progress::Progress, scroll::{ScrollableElement, Scrollbar, ScrollbarMode}, spinner::Spinner, tab::{Tab, TabBar}, v_flex};
+use gpui_component::{
+    ActiveTheme, Icon, Sizable, Size, StyledExt,
+    button::{Button, ButtonVariants},
+    clipboard::Clipboard,
+    h_flex,
+    popover::Popover,
+    progress::Progress,
+    scroll::{ScrollableElement, Scrollbar, ScrollbarMode},
+    spinner::Spinner,
+    tab::{Tab, TabBar},
+    v_flex,
+};
 use one_assets::IconName;
 use one_ui::edit_table::Column;
 use smol::Timer;
@@ -905,11 +916,12 @@ impl SqlResultTabContainer {
                     .collect();
 
                 data_grid.update(cx, |this, cx| {
-                    this.update_data_with_binary_cells(
+                    this.update_data_with_typed_batch(
                         columns,
                         rows,
                         vec![],
                         query_result.binary_cells.clone(),
+                        query_result.typed_batch.clone(),
                         cx,
                     );
                     this.set_sql_result_column_meta(query_result.column_meta.clone(), cx);
@@ -1266,10 +1278,7 @@ impl SqlResultTabContainer {
                     .right_0()
                     .bottom_0()
                     .w(px(16.))
-                    .child(
-                        Scrollbar::vertical(&self.scroll_handle)
-                            .mode(ScrollbarMode::Always),
-                    ),
+                    .child(Scrollbar::vertical(&self.scroll_handle).mode(ScrollbarMode::Always)),
             )
             .into_any_element()
     }

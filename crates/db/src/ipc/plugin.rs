@@ -2685,6 +2685,7 @@ mod tests {
                     rows: vec![vec![Some("1".into())]],
                     binary_cells: vec![],
                     elapsed_ms: 0,
+                    ..Default::default()
                 }));
             }
             let mut columns = vec!["__rowid__".into(), "ID".into()];
@@ -2700,6 +2701,7 @@ mod tests {
                 rows,
                 binary_cells: vec![],
                 elapsed_ms: 0,
+                ..Default::default()
             }))
         }
 

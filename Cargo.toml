@@ -6,6 +6,7 @@ members = [
     "crates/html-preview",
     "crates/reqwest_client",
     "crates/db",
+    "crates/db-value",
     "crates/connection-import-protocol",
     "crates/db_view",
     "crates/extension-runtime",
@@ -118,6 +119,7 @@ public_mcp = { path = "crates/public_mcp" }
 tool_runtime = { path = "crates/tool_runtime" }
 universal-plugins = { path = "crates/universal-plugins" }
 db = { path = "crates/db" }
+db-value = { path = "crates/db-value" }
 connection-import-protocol = { path = "crates/connection-import-protocol" }
 db_view = { path = "crates/db_view" }
 redis_view = { path = "crates/redis_view" }

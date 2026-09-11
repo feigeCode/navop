@@ -1,7 +1,11 @@
 use crate::types::FieldType;
+use db_value::{
+    CellState, ColumnDescriptor, DbValue, Nullability, ResultBatch, ResultRow, ValueModelError,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// SQL 脚本来源
 #[derive(Clone, Debug)]
@@ -169,6 +173,345 @@ pub struct QueryResult {
     /// Execution time in milliseconds
     #[serde(with = "elapsed_ms_serde")]
     pub elapsed_ms: u128,
+    /// 类型权威的 typed batch,进程内承载 [`db_value::ResultBatch`]。
+    ///
+    /// 只存在于内存中,不随 IPC/序列化传输;`rows`/`binary_cells` 仍是其
+    /// legacy 兼容投影。通过 [`QueryResult::from_typed_batch`] 构造时填充。
+    #[serde(skip)]
+    pub typed_batch: Option<Arc<ResultBatch>>,
+}
+
+impl Default for QueryResult {
+    fn default() -> Self {
+        Self {
+            sql: String::new(),
+            columns: Vec::new(),
+            column_meta: Vec::new(),
+            rows: Vec::new(),
+            binary_cells: Vec::new(),
+            elapsed_ms: 0,
+            typed_batch: None,
+        }
+    }
+}
+
+/// 把带类型的 batch 投影成 legacy 的 `rows` + `binary_cells`。
+///
+/// 这是 executor 与 IPC 共用的唯一 legacy 投影实现,避免两处漂移。`DateTime`
+/// 归一到空格分隔,`Binary` 统一使用 [`db_value::format_binary_preview`] 的大写、
+/// 有界 hex 预览并附带精确字节 sidecar。
+/// `Undecoded`/`DecodeError` 无法无损投影时显式失败。
+pub(crate) fn project_batch_to_legacy(
+    batch: &ResultBatch,
+) -> Result<(Vec<Vec<Option<String>>>, Vec<BinaryCell>), QueryResultValueError> {
+    let mut rows = Vec::with_capacity(batch.rows.len());
+    let mut binary_cells = Vec::new();
+
+    for (row_index, row) in batch.rows.iter().enumerate() {
+        let mut legacy_row = Vec::with_capacity(row.cells.len());
+        for (column_index, cell) in row.cells.iter().enumerate() {
+            match cell {
+                CellState::Decoded(value) => {
+                    if let DbValue::Binary(bytes) = value {
+                        binary_cells.push(BinaryCell {
+                            row_index,
+                            column_index,
+                            bytes: bytes.clone(),
+                        });
+                    }
+                    legacy_row.push(legacy_text(value));
+                }
+                CellState::Undecoded { .. } | CellState::DecodeError { .. } => {
+                    return Err(QueryResultValueError::UnsupportedCell {
+                        row_index,
+                        column_index,
+                    });
+                }
+            }
+        }
+        rows.push(legacy_row);
+    }
+
+    Ok((rows, binary_cells))
+}
+
+fn legacy_text(value: &DbValue) -> Option<String> {
+    match value {
+        DbValue::Null => None,
+        DbValue::DateTime(value) => Some(format_ipc_datetime(value)),
+        DbValue::Binary(bytes) => Some(db_value::format_binary_preview(bytes)),
+        other => Some(db_value::ResultBatch::display_value(other)),
+    }
+}
+
+/// legacy 兼容投影保留的 datetime 展示:去掉 `T`/时区,秒后小数按需保留。
+fn format_ipc_datetime(value: &str) -> String {
+    if let Ok(datetime) = chrono::DateTime::parse_from_rfc3339(value) {
+        return format_naive_datetime(datetime.naive_local());
+    }
+
+    let parsed = chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%.f")
+        .or_else(|_| chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f"));
+    match parsed {
+        Ok(datetime) => format_naive_datetime(datetime),
+        Err(_) => value.to_string(),
+    }
+}
+
+fn format_naive_datetime(datetime: chrono::NaiveDateTime) -> String {
+    let micros = datetime.and_utc().timestamp_subsec_micros();
+    if micros == 0 {
+        datetime.format("%Y-%m-%d %H:%M:%S").to_string()
+    } else if micros % 1_000 == 0 {
+        format!(
+            "{}.{:03}",
+            datetime.format("%Y-%m-%d %H:%M:%S"),
+            micros / 1_000
+        )
+    } else {
+        format!("{}.{:06}", datetime.format("%Y-%m-%d %H:%M:%S"), micros)
+    }
+}
+
+impl QueryResult {
+    /// Convert the compatibility representation into the typed value model.
+    ///
+    /// A legacy string without authoritative type metadata remains `LegacyText`.
+    /// This method never parses hex previews or numeric strings.
+    pub fn to_result_batch(&self) -> Result<ResultBatch, QueryResultValueError> {
+        let view = self.typed_view().map_err(QueryResultValueError::Shape)?;
+        let columns = self
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(index, name)| {
+                let metadata = self.column_meta.get(index);
+                ColumnDescriptor {
+                    id: format!("column:{index}"),
+                    label: name.clone(),
+                    native_type: metadata
+                        .map(|metadata| metadata.db_type.clone())
+                        .unwrap_or_else(|| "UNKNOWN".to_string()),
+                    logical_type: metadata
+                        .map(|metadata| format!("{:?}", metadata.field_type))
+                        .unwrap_or_else(|| "Unknown".to_string()),
+                    nullable: metadata
+                        .map(|metadata| {
+                            if metadata.nullable {
+                                Nullability::Yes
+                            } else {
+                                Nullability::No
+                            }
+                        })
+                        .unwrap_or(Nullability::Unknown),
+                    charset: metadata.and_then(|metadata| metadata.result_charset.clone()),
+                    collation: metadata.and_then(|metadata| metadata.result_collation.clone()),
+                    precision: None,
+                    scale: None,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let rows = (0..self.rows.len())
+            .map(|row_index| {
+                let cells = (0..self.columns.len())
+                    .map(|column_index| match view.cell(row_index, column_index) {
+                        Some(QueryCellRef::Null) => CellState::Decoded(DbValue::Null),
+                        Some(QueryCellRef::Binary(bytes)) => {
+                            CellState::Decoded(DbValue::Binary(bytes.to_vec()))
+                        }
+                        Some(QueryCellRef::Text(text)) => {
+                            CellState::Decoded(DbValue::LegacyText(text.to_string()))
+                        }
+                        None => CellState::Decoded(DbValue::Null),
+                    })
+                    .collect();
+                ResultRow {
+                    id: row_index as u64,
+                    cells,
+                }
+            })
+            .collect();
+
+        ResultBatch::try_new(0, columns, rows, true).map_err(QueryResultValueError::Model)
+    }
+
+    /// Build the legacy projection consumed by older UI and serialization code.
+    ///
+    /// 投影不填充 [`Self::typed_batch`];这只是一种从 typed batch 重建 legacy
+    /// 表示的兼容入口。
+    pub fn from_result_batch(
+        sql: String,
+        batch: &ResultBatch,
+        elapsed_ms: u128,
+    ) -> Result<Self, QueryResultValueError> {
+        let columns = batch
+            .columns
+            .iter()
+            .map(|column| column.label.clone())
+            .collect();
+        let column_meta = batch
+            .columns
+            .iter()
+            .map(|column| QueryColumnMeta::new(&column.label, &column.native_type))
+            .collect();
+        let (rows, binary_cells) = project_batch_to_legacy(batch)?;
+
+        Ok(Self {
+            sql,
+            columns,
+            column_meta,
+            rows,
+            binary_cells,
+            elapsed_ms,
+            typed_batch: None,
+        })
+    }
+
+    /// 由 typed batch 承载结果:填充 legacy 投影并保留 [`Self::typed_batch`]。
+    ///
+    /// `batch` 是类型权威;`columns`/`column_meta`/`rows`/`binary_cells` 由它派生。
+    pub fn from_typed_batch(
+        sql: String,
+        batch: ResultBatch,
+        elapsed_ms: u128,
+    ) -> Result<Self, QueryResultValueError> {
+        let columns = batch
+            .columns
+            .iter()
+            .map(|column| column.label.clone())
+            .collect::<Vec<_>>();
+        let column_meta = batch
+            .columns
+            .iter()
+            .map(|column| {
+                QueryColumnMeta::new(&column.label, &column.native_type)
+                    .with_result_encoding(column.charset.clone(), column.collation.clone(), None)
+                    .with_nullable(column.nullable == Nullability::Yes)
+            })
+            .collect::<Vec<_>>();
+        let (rows, binary_cells) = project_batch_to_legacy(&batch)?;
+
+        Ok(Self {
+            sql,
+            columns,
+            column_meta,
+            rows,
+            binary_cells,
+            elapsed_ms,
+            typed_batch: Some(Arc::new(batch)),
+        })
+    }
+
+    /// 访问进程内承载的 typed batch(如有)。
+    pub fn typed_batch(&self) -> Option<&ResultBatch> {
+        self.typed_batch.as_deref()
+    }
+
+    /// 丢弃进程内承载的 typed batch,仅保留 legacy 投影。
+    pub fn invalidate_typed_batch(&mut self) {
+        self.typed_batch = None;
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum QueryResultValueError {
+    #[error("invalid legacy query result: {0}")]
+    Shape(#[from] QueryResultError),
+    #[error("invalid typed result batch: {0}")]
+    Model(#[from] ValueModelError),
+    #[error("cell ({row_index}, {column_index}) cannot be projected to the legacy result")]
+    UnsupportedCell {
+        row_index: usize,
+        column_index: usize,
+    },
+}
+
+#[cfg(test)]
+mod typed_value_tests {
+    use super::*;
+    use db_value::{CellState, DbValue};
+
+    fn result(rows: Vec<Vec<Option<&str>>>, binary_cells: Vec<BinaryCell>) -> QueryResult {
+        QueryResult {
+            sql: "select value from example".to_string(),
+            columns: vec!["value".to_string()],
+            column_meta: vec![QueryColumnMeta::new("value", "TEXT")],
+            rows: rows
+                .into_iter()
+                .map(|row| {
+                    row.into_iter()
+                        .map(|value| value.map(str::to_string))
+                        .collect()
+                })
+                .collect(),
+            binary_cells,
+            elapsed_ms: 0,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn legacy_adapter_does_not_guess_text_or_numeric_types() {
+        let result = result(vec![vec![Some("123")]], Vec::new());
+        let batch = result.to_result_batch().unwrap();
+
+        assert_eq!(
+            batch.rows[0].cells[0],
+            CellState::Decoded(DbValue::LegacyText("123".to_string()))
+        );
+    }
+
+    #[test]
+    fn legacy_adapter_uses_binary_sidecar_as_authority() {
+        let result = result(
+            vec![vec![Some("0x68656C6C6F")]],
+            vec![BinaryCell {
+                row_index: 0,
+                column_index: 0,
+                bytes: b"hello".to_vec(),
+            }],
+        );
+        let batch = result.to_result_batch().unwrap();
+
+        assert_eq!(
+            batch.rows[0].cells[0],
+            CellState::Decoded(DbValue::Binary(b"hello".to_vec()))
+        );
+    }
+
+    #[test]
+    fn typed_projection_rejects_undecoded_values_in_legacy_result() {
+        let batch = ResultBatch::try_new(
+            1,
+            vec![db_value::ColumnDescriptor {
+                id: "value".to_string(),
+                label: "value".to_string(),
+                native_type: "CUSTOM".to_string(),
+                logical_type: "unknown".to_string(),
+                nullable: db_value::Nullability::Unknown,
+                charset: None,
+                collation: None,
+                precision: None,
+                scale: None,
+            }],
+            vec![db_value::ResultRow {
+                id: 0,
+                cells: vec![CellState::Undecoded {
+                    native_type: "CUSTOM".to_string(),
+                    raw: None,
+                    reason: "codec unavailable".to_string(),
+                }],
+            }],
+            true,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            QueryResult::from_result_batch("select".to_string(), &batch, 0),
+            Err(QueryResultValueError::UnsupportedCell { .. })
+        ));
+    }
 }
 
 /// A validated, typed view over one query result cell.
@@ -342,6 +685,83 @@ mod tests {
     }
 
     #[test]
+    fn query_result_typed_batch_is_skipped_on_serialize_and_deserializes_to_none() {
+        let result = QueryResult {
+            sql: "select payload from files".to_string(),
+            columns: vec!["payload".to_string()],
+            column_meta: vec![QueryColumnMeta::new("payload", "BLOB")],
+            rows: vec![vec![Some("0x010203".to_string())]],
+            binary_cells: vec![],
+            elapsed_ms: 1,
+            typed_batch: Some(Arc::new(
+                ResultBatch::try_new(
+                    0,
+                    vec![ColumnDescriptor {
+                        id: "column:0".to_string(),
+                        label: "payload".to_string(),
+                        native_type: "BLOB".to_string(),
+                        logical_type: "Binary".to_string(),
+                        nullable: Nullability::Yes,
+                        charset: None,
+                        collation: None,
+                        precision: None,
+                        scale: None,
+                    }],
+                    vec![ResultRow {
+                        id: 0,
+                        cells: vec![CellState::Decoded(DbValue::Binary(vec![1, 2, 3]))],
+                    }],
+                    true,
+                )
+                .unwrap(),
+            )),
+        };
+
+        let encoded = serde_json::to_value(&result).expect("query result should serialize");
+        assert!(encoded.get("typed_batch").is_none());
+
+        let decoded: QueryResult =
+            serde_json::from_value(encoded).expect("query result should deserialize");
+        assert!(decoded.typed_batch.is_none());
+    }
+
+    #[test]
+    fn from_typed_batch_carries_typed_batch_and_invalidates() {
+        let batch = ResultBatch::try_new(
+            0,
+            vec![ColumnDescriptor {
+                id: "column:0".to_string(),
+                label: "value".to_string(),
+                native_type: "TEXT".to_string(),
+                logical_type: "Text".to_string(),
+                nullable: Nullability::Yes,
+                charset: None,
+                collation: None,
+                precision: None,
+                scale: None,
+            }],
+            vec![ResultRow {
+                id: 0,
+                cells: vec![CellState::Decoded(DbValue::Text("hello".to_string()))],
+            }],
+            true,
+        )
+        .unwrap();
+
+        let mut result = QueryResult::from_typed_batch("select value".to_string(), batch, 7)
+            .expect("from_typed_batch should succeed");
+
+        assert!(result.typed_batch().is_some());
+        assert_eq!(result.rows, vec![vec![Some("hello".to_string())]]);
+        assert_eq!(result.columns, vec!["value".to_string()]);
+        assert_eq!(result.column_meta[0].db_type, "TEXT");
+
+        result.invalidate_typed_batch();
+        assert!(result.typed_batch.is_none());
+        assert!(result.typed_batch().is_none());
+    }
+
+    #[test]
     fn query_column_meta_result_encoding_is_optional_and_roundtrips() {
         let meta = QueryColumnMeta::new("payload", "MYSQL_TYPE_LONG_BLOB").with_result_encoding(
             Some("gbk"),
@@ -402,6 +822,7 @@ mod tests {
                 bytes: vec![0, 0xff],
             }],
             elapsed_ms: 0,
+            ..Default::default()
         }
     }
 
@@ -493,6 +914,7 @@ mod tests {
                 rows: vec![],
                 binary_cells: vec![],
                 elapsed_ms: 0,
+                ..Default::default()
             }),
             SqlResult::Exec(ExecResult {
                 sql: rewritten_sql.to_string(),

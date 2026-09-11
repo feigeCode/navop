@@ -208,6 +208,8 @@ async fn mssql_export_query_rows(
         .await
         .map_err(|error| anyhow::anyhow!("SQL Server export query failed: {error}"))?
     {
+        // 保留 legacy：SHOW CREATE/导出会把这些行整体交给列/键/索引解析器，
+        // 迁移到 metadata_read 需重构解析器边界，暂不改动。
         SqlResult::Query(result) => Ok(result.rows),
         SqlResult::Exec(_) => Err(anyhow::anyhow!(
             "SQL Server export metadata query returned an execution result"
@@ -989,11 +991,14 @@ impl DatabasePlugin for MsSqlPlugin {
         ).await.map_err(|e| anyhow::anyhow!("Failed to list databases: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            let databases: Vec<String> = query_result
-                .rows
-                .iter()
-                .filter_map(|row| row.first().and_then(|v| v.clone()))
-                .collect();
+            let mut databases = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                if let Some(name) =
+                    crate::metadata_read::metadata_text(&query_result, row_index, 0, "utf8mb4")?
+                {
+                    databases.push(name);
+                }
+            }
             info!("[MSSQL Plugin] Found {} databases", databases.len());
             Ok(databases)
         } else {
@@ -1020,27 +1025,23 @@ impl DatabasePlugin for MsSqlPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list databases: {}", e))?;
 
         let rows: Vec<Vec<String>> = if let SqlResult::Query(query_result) = result {
-            query_result
-                .rows
-                .iter()
-                .map(|row| {
-                    vec![
-                        row.get(0).and_then(|v| v.clone()).unwrap_or_default(),
-                        row.get(1)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                        row.get(2)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                        row.get(3)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                        row.get(4)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                    ]
-                })
-                .collect()
+            let mut rows = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                rows.push(vec![
+                    crate::metadata_read::metadata_text(&query_result, row_index, 0, "utf8mb4")?
+                        .unwrap_or_default(),
+                    crate::metadata_read::metadata_text(&query_result, row_index, 1, "utf8mb4")?
+                        .unwrap_or_else(|| "-".to_string()),
+                    crate::metadata_read::metadata_text(&query_result, row_index, 2, "utf8mb4")?
+                        .unwrap_or_else(|| "-".to_string()),
+                    crate::metadata_read::metadata_integer(&query_result, row_index, 3)?
+                        .map(|n| n.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                    crate::metadata_read::metadata_text(&query_result, row_index, 4, "utf8mb4")?
+                        .unwrap_or_else(|| "-".to_string()),
+                ]);
+            }
+            rows
         } else {
             vec![]
         };
@@ -1086,21 +1087,33 @@ impl DatabasePlugin for MsSqlPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list databases: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
-                .rows
-                .iter()
-                .map(|row| DatabaseInfo {
-                    name: row.get(0).and_then(|v| v.clone()).unwrap_or_default(),
+            let mut databases = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                databases.push(DatabaseInfo {
+                    name: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        0,
+                        "utf8mb4",
+                    )?
+                    .unwrap_or_default(),
                     charset: None,
-                    collation: row.get(3).and_then(|v| v.clone()),
+                    collation: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        3,
+                        "utf8mb4",
+                    )?,
                     size: None,
-                    table_count: row
-                        .get(4)
-                        .and_then(|v| v.clone())
-                        .and_then(|s| s.parse().ok()),
+                    table_count: crate::metadata_read::metadata_integer(
+                        &query_result,
+                        row_index,
+                        4,
+                    )?,
                     comment: None,
-                })
-                .collect())
+                });
+            }
+            Ok(databases)
         } else {
             Ok(vec![])
         }
@@ -1134,11 +1147,14 @@ impl DatabasePlugin for MsSqlPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list schemas: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            let schemas = query_result
-                .rows
-                .iter()
-                .filter_map(|row| row.first().and_then(|v| v.clone()))
-                .collect();
+            let mut schemas = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                if let Some(schema) =
+                    crate::metadata_read::metadata_text(&query_result, row_index, 0, "utf8mb4")?
+                {
+                    schemas.push(schema);
+                }
+            }
             Ok(filter_schemas(
                 connection.config(),
                 SchemaFilterProfile::MsSql,
@@ -1189,19 +1205,18 @@ impl DatabasePlugin for MsSqlPlugin {
                     .text_right(),
             ];
 
-            let rows: Vec<Vec<String>> = query_result
-                .rows
-                .iter()
-                .map(|row| {
-                    vec![
-                        row.first().and_then(|v| v.clone()).unwrap_or_default(),
-                        row.get(1).and_then(|v| v.clone()).unwrap_or_default(),
-                        row.get(2)
-                            .and_then(|v| v.clone())
-                            .unwrap_or_else(|| "0".to_string()),
-                    ]
-                })
-                .collect();
+            let mut rows: Vec<Vec<String>> = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                rows.push(vec![
+                    crate::metadata_read::metadata_text(&query_result, row_index, 0, "utf8mb4")?
+                        .unwrap_or_default(),
+                    crate::metadata_read::metadata_text(&query_result, row_index, 1, "utf8mb4")?
+                        .unwrap_or_default(),
+                    crate::metadata_read::metadata_integer(&query_result, row_index, 2)?
+                        .map(|n| n.to_string())
+                        .unwrap_or_else(|| "0".to_string()),
+                ]);
+            }
 
             Ok(ObjectView {
                 db_node_type: DbNodeType::Schema,
@@ -1250,21 +1265,41 @@ impl DatabasePlugin for MsSqlPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list tables: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
-                .rows
-                .iter()
-                .map(|row| TableInfo {
-                    name: row.get(0).and_then(|v| v.clone()).unwrap_or_default(),
+            let mut tables = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                tables.push(TableInfo {
+                    name: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        0,
+                        "utf8mb4",
+                    )?
+                    .unwrap_or_default(),
                     object_type: crate::TableObjectType::Table,
-                    schema: row.get(1).and_then(|v| v.clone()),
-                    comment: row.get(2).and_then(|v| v.clone()),
+                    schema: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        1,
+                        "utf8mb4",
+                    )?,
+                    comment: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        2,
+                        "utf8mb4",
+                    )?,
                     engine: None,
-
-                    create_time: row.get(3).and_then(|v| v.clone()),
+                    create_time: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        3,
+                        "utf8mb4",
+                    )?,
                     charset: None,
                     collation: None,
-                })
-                .collect())
+                });
+            }
+            Ok(tables)
         } else {
             Ok(vec![])
         }
@@ -1306,24 +1341,20 @@ impl DatabasePlugin for MsSqlPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list tables: {}", e))?;
 
         let rows: Vec<Vec<String>> = if let SqlResult::Query(query_result) = result {
-            query_result
-                .rows
-                .iter()
-                .map(|row| {
-                    vec![
-                        row.get(0).and_then(|v| v.clone()).unwrap_or_default(),
-                        row.get(1)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                        row.get(2)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                        row.get(3)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                    ]
-                })
-                .collect()
+            let mut rows = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                rows.push(vec![
+                    crate::metadata_read::metadata_text(&query_result, row_index, 0, "utf8mb4")?
+                        .unwrap_or_default(),
+                    crate::metadata_read::metadata_text(&query_result, row_index, 1, "utf8mb4")?
+                        .unwrap_or_else(|| "-".to_string()),
+                    crate::metadata_read::metadata_text(&query_result, row_index, 2, "utf8mb4")?
+                        .unwrap_or_else(|| "-".to_string()),
+                    crate::metadata_read::metadata_text(&query_result, row_index, 3, "utf8mb4")?
+                        .unwrap_or_else(|| "-".to_string()),
+                ]);
+            }
+            rows
         } else {
             vec![]
         };
@@ -1394,32 +1425,32 @@ impl DatabasePlugin for MsSqlPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list columns: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
-                .rows
-                .iter()
-                .map(|row| {
-                    let is_nullable = row
-                        .get(2)
-                        .and_then(|v| v.clone())
-                        .map(|v| v == "1" || v.to_lowercase() == "true")
-                        .unwrap_or(true);
-                    let is_primary_key = row
-                        .get(6)
-                        .and_then(|v| v.clone())
-                        .map(|v| v == "1")
-                        .unwrap_or(false);
-                    ColumnInfo {
-                        name: row.get(0).and_then(|v| v.clone()).unwrap_or_default(),
-                        data_type: row.get(1).and_then(|v| v.clone()).unwrap_or_default(),
-                        is_nullable,
-                        is_primary_key,
-                        default_value: row.get(3).and_then(|v| v.clone()),
-                        comment: row.get(5).and_then(|v| v.clone()),
-                        charset: None,
-                        collation: None,
-                    }
-                })
-                .collect())
+            let mut columns = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                let cell = |column_index| {
+                    crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        column_index,
+                        "utf8mb4",
+                    )
+                };
+                let is_nullable = cell(2)?
+                    .map(|v| v == "1" || v.to_lowercase() == "true")
+                    .unwrap_or(true);
+                let is_primary_key = cell(6)?.map(|v| v == "1").unwrap_or(false);
+                columns.push(ColumnInfo {
+                    name: cell(0)?.unwrap_or_default(),
+                    data_type: cell(1)?.unwrap_or_default(),
+                    is_nullable,
+                    is_primary_key,
+                    default_value: cell(3)?,
+                    comment: cell(5)?,
+                    charset: None,
+                    collation: None,
+                });
+            }
+            Ok(columns)
         } else {
             Ok(vec![])
         }
@@ -1976,15 +2007,21 @@ impl DatabasePlugin for MsSqlPlugin {
         if let SqlResult::Query(query_result) = result {
             let mut indexes: HashMap<String, IndexInfo> = HashMap::new();
 
-            for row in &query_result.rows {
-                let index_name = row.get(0).and_then(|v| v.clone()).unwrap_or_default();
-                let column_name = row.get(1).and_then(|v| v.clone()).unwrap_or_default();
-                let index_type = row.get(2).and_then(|v| v.clone()).unwrap_or_default();
-                let is_unique = row
-                    .get(3)
-                    .and_then(|v| v.clone())
-                    .unwrap_or("0".to_string())
-                    == "1";
+            for row_index in 0..query_result.rows.len() {
+                let index_name =
+                    crate::metadata_read::metadata_text(&query_result, row_index, 0, "utf8mb4")?
+                        .unwrap_or_default();
+                let column_name =
+                    crate::metadata_read::metadata_text(&query_result, row_index, 1, "utf8mb4")?
+                        .unwrap_or_default();
+                let index_type =
+                    crate::metadata_read::metadata_text(&query_result, row_index, 2, "utf8mb4")?
+                        .unwrap_or_default();
+                let is_unique =
+                    crate::metadata_read::metadata_text(&query_result, row_index, 3, "utf8mb4")?
+                        .as_deref()
+                        .unwrap_or("0")
+                        == "1";
 
                 indexes
                     .entry(index_name.clone())
@@ -2078,16 +2115,32 @@ impl DatabasePlugin for MsSqlPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list views: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
-                .rows
-                .iter()
-                .map(|row| ViewInfo {
-                    name: row.get(0).and_then(|v| v.clone()).unwrap_or_default(),
-                    schema: row.get(1).and_then(|v| v.clone()),
+            let mut views = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                views.push(ViewInfo {
+                    name: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        0,
+                        "utf8mb4",
+                    )?
+                    .unwrap_or_default(),
+                    schema: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        1,
+                        "utf8mb4",
+                    )?,
                     definition: None,
-                    comment: row.get(2).and_then(|v| v.clone()),
-                })
-                .collect())
+                    comment: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        2,
+                        "utf8mb4",
+                    )?,
+                });
+            }
+            Ok(views)
         } else {
             Ok(vec![])
         }
@@ -2122,24 +2175,20 @@ impl DatabasePlugin for MsSqlPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list views: {}", e))?;
 
         let rows: Vec<Vec<String>> = if let SqlResult::Query(query_result) = result {
-            query_result
-                .rows
-                .iter()
-                .map(|row| {
-                    vec![
-                        row.get(0).and_then(|v| v.clone()).unwrap_or_default(),
-                        row.get(1)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                        row.get(2)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                        row.get(3)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                    ]
-                })
-                .collect()
+            let mut rows = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                rows.push(vec![
+                    crate::metadata_read::metadata_text(&query_result, row_index, 0, "utf8mb4")?
+                        .unwrap_or_default(),
+                    crate::metadata_read::metadata_text(&query_result, row_index, 1, "utf8mb4")?
+                        .unwrap_or_else(|| "-".to_string()),
+                    crate::metadata_read::metadata_text(&query_result, row_index, 2, "utf8mb4")?
+                        .unwrap_or_else(|| "-".to_string()),
+                    crate::metadata_read::metadata_text(&query_result, row_index, 3, "utf8mb4")?
+                        .unwrap_or_else(|| "-".to_string()),
+                ]);
+            }
+            rows
         } else {
             vec![]
         };
@@ -2196,20 +2245,36 @@ impl DatabasePlugin for MsSqlPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list functions: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
-                .rows
-                .iter()
-                .map(|row| FunctionInfo {
-                    name: row.get(0).and_then(|v| v.clone()).unwrap_or_default(),
+            let mut functions = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                functions.push(FunctionInfo {
+                    name: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        0,
+                        "utf8mb4",
+                    )?
+                    .unwrap_or_default(),
                     schema: None,
-                    return_type: row.get(2).and_then(|v| v.clone()),
+                    return_type: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        2,
+                        "utf8mb4",
+                    )?,
                     parameters: vec![],
                     identity_arguments: None,
                     object_id: None,
                     definition: None,
-                    comment: row.get(3).and_then(|v| v.clone()),
-                })
-                .collect())
+                    comment: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        3,
+                        "utf8mb4",
+                    )?,
+                });
+            }
+            Ok(functions)
         } else {
             Ok(vec![])
         }
@@ -2248,24 +2313,20 @@ impl DatabasePlugin for MsSqlPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list functions: {}", e))?;
 
         let rows: Vec<Vec<String>> = if let SqlResult::Query(query_result) = result {
-            query_result
-                .rows
-                .iter()
-                .map(|row| {
-                    vec![
-                        row.get(0).and_then(|v| v.clone()).unwrap_or_default(),
-                        row.get(1)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                        row.get(2)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                        row.get(3)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                    ]
-                })
-                .collect()
+            let mut rows = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                rows.push(vec![
+                    crate::metadata_read::metadata_text(&query_result, row_index, 0, "utf8mb4")?
+                        .unwrap_or_default(),
+                    crate::metadata_read::metadata_text(&query_result, row_index, 1, "utf8mb4")?
+                        .unwrap_or_else(|| "-".to_string()),
+                    crate::metadata_read::metadata_text(&query_result, row_index, 2, "utf8mb4")?
+                        .unwrap_or_else(|| "-".to_string()),
+                    crate::metadata_read::metadata_text(&query_result, row_index, 3, "utf8mb4")?
+                        .unwrap_or_else(|| "-".to_string()),
+                ]);
+            }
+            rows
         } else {
             vec![]
         };
@@ -2313,20 +2374,31 @@ impl DatabasePlugin for MsSqlPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list procedures: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
-                .rows
-                .iter()
-                .map(|row| FunctionInfo {
-                    name: row.get(0).and_then(|v| v.clone()).unwrap_or_default(),
+            let mut procedures = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                procedures.push(FunctionInfo {
+                    name: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        0,
+                        "utf8mb4",
+                    )?
+                    .unwrap_or_default(),
                     schema: None,
                     return_type: None,
                     parameters: vec![],
                     identity_arguments: None,
                     object_id: None,
                     definition: None,
-                    comment: row.get(2).and_then(|v| v.clone()),
-                })
-                .collect())
+                    comment: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        2,
+                        "utf8mb4",
+                    )?,
+                });
+            }
+            Ok(procedures)
         } else {
             Ok(vec![])
         }
@@ -2359,24 +2431,20 @@ impl DatabasePlugin for MsSqlPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list procedures: {}", e))?;
 
         let rows: Vec<Vec<String>> = if let SqlResult::Query(query_result) = result {
-            query_result
-                .rows
-                .iter()
-                .map(|row| {
-                    vec![
-                        row.get(0).and_then(|v| v.clone()).unwrap_or_default(),
-                        row.get(1)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                        row.get(2)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                        row.get(3)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                    ]
-                })
-                .collect()
+            let mut rows = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                rows.push(vec![
+                    crate::metadata_read::metadata_text(&query_result, row_index, 0, "utf8mb4")?
+                        .unwrap_or_default(),
+                    crate::metadata_read::metadata_text(&query_result, row_index, 1, "utf8mb4")?
+                        .unwrap_or_else(|| "-".to_string()),
+                    crate::metadata_read::metadata_text(&query_result, row_index, 2, "utf8mb4")?
+                        .unwrap_or_else(|| "-".to_string()),
+                    crate::metadata_read::metadata_text(&query_result, row_index, 3, "utf8mb4")?
+                        .unwrap_or_else(|| "-".to_string()),
+                ]);
+            }
+            rows
         } else {
             vec![]
         };
@@ -2420,17 +2488,29 @@ impl DatabasePlugin for MsSqlPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list triggers: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
-                .rows
-                .iter()
-                .map(|row| TriggerInfo {
-                    name: row.get(0).and_then(|v| v.clone()).unwrap_or_default(),
-                    table_name: row.get(1).and_then(|v| v.clone()).unwrap_or_default(),
+            let mut triggers = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                triggers.push(TriggerInfo {
+                    name: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        0,
+                        "utf8mb4",
+                    )?
+                    .unwrap_or_default(),
+                    table_name: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        1,
+                        "utf8mb4",
+                    )?
+                    .unwrap_or_default(),
                     event: "UNKNOWN".to_string(),
                     timing: "UNKNOWN".to_string(),
                     definition: None,
-                })
-                .collect())
+                });
+            }
+            Ok(triggers)
         } else {
             Ok(vec![])
         }
@@ -2460,22 +2540,19 @@ impl DatabasePlugin for MsSqlPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list triggers: {}", e))?;
 
         let rows: Vec<Vec<String>> = if let SqlResult::Query(query_result) = result {
-            query_result
-                .rows
-                .iter()
-                .map(|row| {
-                    vec![
-                        row.get(0).and_then(|v| v.clone()).unwrap_or_default(),
-                        row.get(1)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                        row.get(2)
-                            .and_then(|v| v.clone())
-                            .map(|v| if v == "0" { "Enabled" } else { "Disabled" }.to_string())
-                            .unwrap_or("Unknown".to_string()),
-                    ]
-                })
-                .collect()
+            let mut rows = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                rows.push(vec![
+                    crate::metadata_read::metadata_text(&query_result, row_index, 0, "utf8mb4")?
+                        .unwrap_or_default(),
+                    crate::metadata_read::metadata_text(&query_result, row_index, 1, "utf8mb4")?
+                        .unwrap_or_else(|| "-".to_string()),
+                    crate::metadata_read::metadata_text(&query_result, row_index, 2, "utf8mb4")?
+                        .map(|v| if v == "0" { "Enabled" } else { "Disabled" }.to_string())
+                        .unwrap_or_else(|| "Unknown".to_string()),
+                ]);
+            }
+            rows
         } else {
             vec![]
         };
@@ -2520,23 +2597,27 @@ impl DatabasePlugin for MsSqlPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list sequences: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
-                .rows
-                .iter()
-                .map(|row| SequenceInfo {
-                    name: row.get(0).and_then(|v| v.clone()).unwrap_or_default(),
-                    start_value: row
-                        .get(2)
-                        .and_then(|v| v.clone())
-                        .and_then(|s| s.parse().ok()),
-                    increment: row
-                        .get(3)
-                        .and_then(|v| v.clone())
-                        .and_then(|s| s.parse().ok()),
+            let mut sequences = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                sequences.push(SequenceInfo {
+                    name: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        0,
+                        "utf8mb4",
+                    )?
+                    .unwrap_or_default(),
+                    start_value: crate::metadata_read::metadata_integer(
+                        &query_result,
+                        row_index,
+                        2,
+                    )?,
+                    increment: crate::metadata_read::metadata_integer(&query_result, row_index, 3)?,
                     min_value: None,
                     max_value: None,
-                })
-                .collect())
+                });
+            }
+            Ok(sequences)
         } else {
             Ok(vec![])
         }
@@ -2567,27 +2648,25 @@ impl DatabasePlugin for MsSqlPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list sequences: {}", e))?;
 
         let rows: Vec<Vec<String>> = if let SqlResult::Query(query_result) = result {
-            query_result
-                .rows
-                .iter()
-                .map(|row| {
-                    vec![
-                        row.get(0).and_then(|v| v.clone()).unwrap_or_default(),
-                        row.get(1)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                        row.get(2)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                        row.get(3)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                        row.get(4)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                    ]
-                })
-                .collect()
+            let mut rows = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                rows.push(vec![
+                    crate::metadata_read::metadata_text(&query_result, row_index, 0, "utf8mb4")?
+                        .unwrap_or_default(),
+                    crate::metadata_read::metadata_text(&query_result, row_index, 1, "utf8mb4")?
+                        .unwrap_or_else(|| "-".to_string()),
+                    crate::metadata_read::metadata_integer(&query_result, row_index, 2)?
+                        .map(|n| n.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                    crate::metadata_read::metadata_integer(&query_result, row_index, 3)?
+                        .map(|n| n.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                    crate::metadata_read::metadata_integer(&query_result, row_index, 4)?
+                        .map(|n| n.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                ]);
+            }
+            rows
         } else {
             vec![]
         };
@@ -3622,6 +3701,7 @@ mod tests {
                 rows,
                 binary_cells: vec![],
                 elapsed_ms: 0,
+                ..Default::default()
             }))
         }
 

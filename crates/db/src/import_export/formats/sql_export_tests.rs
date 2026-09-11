@@ -133,6 +133,7 @@ impl DbConnection for PagedConnection {
                 rows,
                 binary_cells: vec![],
                 elapsed_ms: 1,
+                ..Default::default()
             }));
         }
         let mut rows = self.pages.lock().unwrap().remove(0);
@@ -158,6 +159,7 @@ impl DbConnection for PagedConnection {
             rows,
             binary_cells: vec![],
             elapsed_ms: 1,
+            ..Default::default()
         }))
     }
 
@@ -273,6 +275,7 @@ impl DbConnection for MySqlBinaryTextConnection {
                 ],
                 binary_cells: vec![],
                 elapsed_ms: 1,
+                ..Default::default()
             }));
         }
 
@@ -336,6 +339,7 @@ impl DbConnection for MySqlBinaryTextConnection {
             rows: vec![vec![Some("1".to_string()), Some(payload), Some(raw)]],
             binary_cells,
             elapsed_ms: 1,
+            ..Default::default()
         }))
     }
 
@@ -557,6 +561,7 @@ fn sql_dump_prefers_binary_sidecar_without_guessing_from_display_text() {
             bytes: vec![0x00, 0x01, 0xff],
         }],
         elapsed_ms: 1,
+        ..Default::default()
     };
     let mut wrote_header = false;
 
@@ -661,10 +666,54 @@ fn sql_dump_preserves_null_empty_text_and_empty_binary() {
             bytes: Vec::new(),
         }],
         elapsed_ms: 1,
+        ..Default::default()
     };
 
     let output = render_insert_statements(&MySqlPlugin::new(), "`t`", &query_result)
         .expect("valid query result should render");
+
+    assert!(output.contains("VALUES (NULL, '', X'');"));
+}
+
+#[test]
+fn sql_dump_prefers_typed_batch_null_empty_text_and_empty_binary() {
+    let batch = db_value::ResultBatch::try_new(
+        0,
+        ["nullable", "empty_text", "empty_binary"]
+            .into_iter()
+            .map(|label| db_value::ColumnDescriptor {
+                id: label.to_string(),
+                label: label.to_string(),
+                native_type: "TEXT".to_string(),
+                logical_type: "Text".to_string(),
+                nullable: db_value::Nullability::Unknown,
+                charset: None,
+                collation: None,
+                precision: None,
+                scale: None,
+            })
+            .collect(),
+        vec![db_value::ResultRow {
+            id: 0,
+            cells: vec![
+                db_value::CellState::Decoded(db_value::DbValue::Null),
+                db_value::CellState::Decoded(db_value::DbValue::Text(String::new())),
+                db_value::CellState::Decoded(db_value::DbValue::Binary(Vec::new())),
+            ],
+        }],
+        true,
+    )
+    .unwrap();
+    let mut query_result = QueryResult::from_typed_batch("select".to_string(), batch, 0).unwrap();
+    query_result.rows = vec![vec![
+        Some("stale".to_string()),
+        Some("stale".to_string()),
+        Some("stale".to_string()),
+    ]];
+    query_result.binary_cells = Vec::new();
+
+    let output = render_insert_statements(&MySqlPlugin::new(), "`t`", &query_result)
+        .expect("typed cells should render");
 
     assert!(output.contains("VALUES (NULL, '', X'');"));
 }
@@ -681,6 +730,7 @@ fn sql_dump_rejects_malformed_query_result() {
         rows: vec![vec![Some("only one cell".to_string())]],
         binary_cells: vec![],
         elapsed_ms: 1,
+        ..Default::default()
     };
 
     let error = render_insert_statements(&MySqlPlugin::new(), "`t`", &query_result)
@@ -709,6 +759,7 @@ fn mysql_sql_dump_formats_bit_values_as_unquoted_literals() {
         ],
         binary_cells: vec![],
         elapsed_ms: 1,
+        ..Default::default()
     };
 
     let output = render_insert_statements(&MySqlPlugin::new(), "`test_bit`", &query_result)

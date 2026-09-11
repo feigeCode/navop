@@ -3,11 +3,15 @@ use std::time::Instant;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 
+use super::cells::{RenderCell, ResultCells};
 use super::import_execution::{ImportStatement, execute_import_statements};
-use super::{format_import_table_reference, format_import_text_value, load_import_columns};
+use super::{
+    format_import_table_reference, format_import_text_value, load_import_columns,
+    sync_typed_batch_from_legacy,
+};
 use crate::DatabasePlugin;
 use crate::connection::DbConnection;
-use crate::executor::{QueryCellRef, QueryResult, SqlResult};
+use crate::executor::{QueryResult, SqlResult};
 use crate::import_export::{
     ExportConfig, ExportProgressEvent, ExportProgressSender, ExportResult, FormatHandler,
     ImportConfig, ImportResult,
@@ -24,9 +28,7 @@ pub(super) fn render_delimited_query_result(
     record_terminator: &str,
     null_string: &str,
 ) -> Result<String> {
-    let view = query_result
-        .typed_view()
-        .map_err(|error| anyhow!("Invalid query result for {format_name} export: {error}"))?;
+    let cells = ResultCells::new(query_result, format_name)?;
     let mut output = String::new();
 
     if include_header {
@@ -45,21 +47,21 @@ pub(super) fn render_delimited_query_result(
         output.push_str(record_terminator);
     }
 
-    for row_index in 0..query_result.rows.len() {
-        for column_index in 0..query_result.columns.len() {
+    for row_index in 0..cells.row_count() {
+        for column_index in 0..cells.column_count() {
             if column_index > 0 {
                 output.push(delimiter);
             }
-            match view.cell(row_index, column_index) {
-                Some(QueryCellRef::Null) => output.push_str(null_string),
-                Some(QueryCellRef::Text(value)) => output.push_str(&escape_delimited_field(
+            match cells.cell(row_index, column_index) {
+                Some(RenderCell::Null) => output.push_str(null_string),
+                Some(RenderCell::Text(value)) => output.push_str(&escape_delimited_field(
                     format_name,
                     value,
                     delimiter,
                     qualifier,
                     null_string,
                 )?),
-                Some(QueryCellRef::Binary(_)) => {
+                Some(RenderCell::Binary(_)) => {
                     return Err(anyhow!(
                         "{format_name} export does not support binary cell at row {}, column {} ({:?}) without an explicit binary encoding",
                         row_index + 1,
@@ -399,6 +401,7 @@ impl FormatHandler for CsvFormatHandler {
                     &mut query_result,
                 )
                 .await?;
+                sync_typed_batch_from_legacy(&mut query_result)?;
                 let rows_count = query_result.rows.len() as u64;
                 let table_output = render_delimited_query_result(
                     "CSV",
@@ -529,6 +532,7 @@ mod tests {
             rows: vec![vec![None, Some(String::new())]],
             binary_cells: vec![],
             elapsed_ms: 0,
+            ..Default::default()
         };
 
         let output =
@@ -551,6 +555,7 @@ mod tests {
                 bytes: b"true".to_vec(),
             }],
             elapsed_ms: 0,
+            ..Default::default()
         };
 
         let error =
@@ -561,6 +566,66 @@ mod tests {
             error
                 .to_string()
                 .contains("CSV export does not support binary cell at row 1, column 1")
+        );
+    }
+
+    fn typed_result(cells: Vec<db_value::CellState>) -> QueryResult {
+        let labels = ["nullable", "empty", "payload"];
+        let columns = labels
+            .iter()
+            .take(cells.len())
+            .map(|label| db_value::ColumnDescriptor {
+                id: (*label).to_string(),
+                label: (*label).to_string(),
+                native_type: "TEXT".to_string(),
+                logical_type: "Text".to_string(),
+                nullable: db_value::Nullability::Unknown,
+                charset: None,
+                collation: None,
+                precision: None,
+                scale: None,
+            })
+            .collect::<Vec<_>>();
+        let batch = db_value::ResultBatch::try_new(
+            0,
+            columns,
+            vec![db_value::ResultRow { id: 0, cells }],
+            true,
+        )
+        .unwrap();
+        QueryResult::from_typed_batch("select".to_string(), batch, 0).unwrap()
+    }
+
+    #[test]
+    fn csv_render_prefers_typed_batch_over_stale_legacy_projection() {
+        let mut result = typed_result(vec![
+            db_value::CellState::Decoded(db_value::DbValue::Text("typed".to_string())),
+            db_value::CellState::Decoded(db_value::DbValue::Null),
+        ]);
+        result.rows = vec![vec![Some("stale".to_string()), Some("stale".to_string())]];
+        result.binary_cells = Vec::new();
+
+        let output =
+            render_delimited_query_result("CSV", &result, ',', Some('"'), true, "\n", "\\N")
+                .expect("typed text cells should render");
+
+        assert_eq!(output, "nullable,empty\ntyped,\\N\n");
+    }
+
+    #[test]
+    fn csv_render_uses_typed_batch_binary_bytes_over_display_text() {
+        let result = typed_result(vec![db_value::CellState::Decoded(
+            db_value::DbValue::Binary(b"typed".to_vec()),
+        )]);
+
+        let error =
+            render_delimited_query_result("CSV", &result, ',', Some('"'), true, "\n", "\\N")
+                .expect_err("typed binary cells must be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("CSV export does not support binary cell")
         );
     }
 }
