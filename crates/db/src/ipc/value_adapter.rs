@@ -251,4 +251,135 @@ mod tests {
         .unwrap();
         assert_eq!(empty_rows, vec![vec![Some(String::new())]]);
     }
+
+    #[test]
+    fn old_wire_cell_values_map_to_typed_matrix() {
+        // Capability matrix (T10): every `CellValue` variant an old driver may
+        // send must map losslessly to the typed model, except compound/private
+        // kinds that become a display-only Unsupported, and invalid Bytes that
+        // are rejected. This locks cross-repo compatibility with legacy plugins.
+        let uuid = "3b0a8a35-8f9e-4b17-9e90-2dee4b0c6f33";
+        let cases: Vec<(CellValue, Option<DbValue>)> = vec![
+            (CellValue::Null, Some(DbValue::Null)),
+            (CellValue::Bool { value: true }, Some(DbValue::Bool(true))),
+            (
+                CellValue::I64 { value: -42 },
+                Some(DbValue::Integer("-42".into())),
+            ),
+            (
+                CellValue::U64 {
+                    value: 18_000_000_000_000_000_000,
+                },
+                Some(DbValue::Unsigned("18000000000000000000".into())),
+            ),
+            (
+                CellValue::F64 { value: 1.5 },
+                Some(DbValue::Float {
+                    value: "1.5".into(),
+                    width: FloatWidth::F64,
+                }),
+            ),
+            (
+                CellValue::Decimal {
+                    value: "1234567890.123456789012345678".into(),
+                },
+                Some(DbValue::Decimal("1234567890.123456789012345678".into())),
+            ),
+            (
+                CellValue::Text {
+                    value: "héllo".into(),
+                },
+                Some(DbValue::Text("héllo".into())),
+            ),
+            (
+                CellValue::Bytes {
+                    value: "AQID".into(),
+                },
+                Some(DbValue::Binary(vec![1, 2, 3])),
+            ),
+            (
+                CellValue::Json {
+                    value: serde_json::json!({"a": 1}),
+                },
+                Some(DbValue::Json(serde_json::json!({"a": 1}))),
+            ),
+            (
+                CellValue::Uuid { value: uuid.into() },
+                Some(DbValue::Uuid(uuid.into())),
+            ),
+            (
+                CellValue::Date {
+                    value: "2026-05-27".into(),
+                },
+                Some(DbValue::Date("2026-05-27".into())),
+            ),
+            (
+                CellValue::Time {
+                    value: "12:34:56.789".into(),
+                },
+                Some(DbValue::Time("12:34:56.789".into())),
+            ),
+            (
+                CellValue::Datetime {
+                    value: "2026-05-27T12:34:56.789Z".into(),
+                },
+                Some(DbValue::DateTime("2026-05-27T12:34:56.789Z".into())),
+            ),
+            (
+                CellValue::Duration {
+                    value: "P1DT2H".into(),
+                },
+                Some(DbValue::Duration("P1DT2H".into())),
+            ),
+            // Compound/private kinds: not yet represented -> display-only.
+            (
+                CellValue::Array {
+                    element_type: ColumnTypeKind::I64,
+                    value: vec![CellValue::I64 { value: 1 }],
+                },
+                None,
+            ),
+            (
+                CellValue::Map {
+                    value: serde_json::Map::new(),
+                },
+                None,
+            ),
+            (
+                CellValue::Geo {
+                    subtype: "point".into(),
+                    value: "POINT(0 0)".into(),
+                },
+                None,
+            ),
+            (
+                CellValue::Custom {
+                    subtype: "x".into(),
+                    raw: "AQI".into(),
+                },
+                None,
+            ),
+        ];
+
+        for (wire, expected) in cases {
+            let state = cell_to_cell_state(wire).expect("wire cell should convert");
+            match expected {
+                Some(value) => assert_eq!(state, CellState::Decoded(value)),
+                None => {
+                    assert!(
+                        matches!(state, CellState::Decoded(DbValue::Unsupported { .. })),
+                        "compound/private wire value must stay Unsupported, got {state:?}"
+                    );
+                }
+            }
+        }
+
+        // Invalid base64 is rejected, never downgraded to NULL or empty.
+        assert!(matches!(
+            cell_to_cell_state(CellValue::Bytes {
+                value: "not_base64!".into()
+            }),
+            Err(DbError::Query { .. })
+        ));
+    }
 }
