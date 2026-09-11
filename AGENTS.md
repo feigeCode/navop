@@ -596,6 +596,13 @@
 - **验证方式**：`cargo check -p resource_view`、`cargo check -p main --features main/shell-plugins`；启动 app 肉眼核对浅/深色主题下的表头、斑马纹、hover、状态徽标、按钮 loading 与空/加载态。
 - **适用范围**：`crates/resource_view/src/{lib.rs,collection_table.rs}`、`navop-extensions/extensions/composite/*/extension.json` 的列 `style` 定义，以及任何用 Rust 原生渲染资源工作台/管理页面的场景。
 
+- **标题**：GPUI 纯布局 / 拖拽交互回归用 `debug_selector` + `debug_bounds` + `simulate_mouse_*` 在测试内断言，不靠肉眼
+- **触发信号**：改了表头、列宽、滚动容器这类纯布局代码，无法用返回值和状态断言覆盖；担心“列被压缩”“宽容器下表格留空白”“分隔条拖不动”这类回归只能靠启动 GUI 肉眼确认。
+- **根因 / 约束**：gpui 的 `debug_selector(|| "id".to_string())`（需先 `.id(...)`，非 test 构建为空实现）+ `VisualTestContext::debug_bounds("id")` 能拿到元素真实布局矩形；`VisualTestContext::simulate_window_resize(*handle, size(..))` 可改窗口尺寸（`open_window` 返回的 `WindowHandle<Root>` 需解引用成 `AnyWindowHandle`）；`simulate_mouse_down/move/up` 能驱动 `on_drag` / `on_drag_move` 的真实事件链路。坑点：这类断言极易“空跑通过”，例如窗口恰好比表格宽时，压缩类断言永远成立。
+- **正确做法**：给被测容器/表头加稳定 `.id()` + `.debug_selector(...)`；用 `Bounds::centered(None, size(px(w), px(h)), cx)` 开窄窗口，断言 `scroll.size.width < 期望内容宽度`（自证前提）+ `header.size.width >= 列宽之和` + `header.right() > scroll.right()`；再 `simulate_window_resize` 到宽窗口断言 `scroll.right() == header.right()`（有空间时必须铺满）。拖拽类交互用 `simulate_mouse_down` → 至少两次 `simulate_mouse_move`（跨过拖拽起始阈值）→ `simulate_mouse_up`，并断言变化幅度（如 `width_after >= width_before + 40.0`）而非仅“变了”。写完后做一次变异验证：临时删掉生效那一行，确认测试确实转红。
+- **验证方式**：`cargo test -p redis_view --lib <测试名>`（含变异验证一次），`cargo clippy -p redis_view --all-targets` 无新增告警。
+- **适用范围**：`crates/redis_view/src/{key_value_view.rs,value_table_columns.rs}`，以及任何 GPUI 表格 / 滚动 / 拖拽布局改动。
+
 ### 执行原则
 
 1. 先澄清，再实现；先缩小边界，再扩展范围。

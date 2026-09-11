@@ -39,6 +39,7 @@ mod redis_tool_widgets;
 mod redis_tree_event;
 pub mod redis_tree_view;
 pub mod sidebar;
+mod value_table_columns;
 
 // 核心导出
 #[cfg(feature = "builtin-redis")]
