@@ -158,12 +158,10 @@ fn decode_untyped_bytes(bytes: Vec<u8>) -> (CellState, Option<String>) {
             Some(display),
         );
     }
+    // Bytes that are not valid text are kept lossless as a binary sidecar rather
+    // than an unrecoverable hex string, matching every other binary path.
     let display = format_as_hex(&bytes);
-    let display_str = display.clone();
-    (
-        CellState::Decoded(DbValue::LegacyText(display_str)),
-        Some(display),
-    )
+    (CellState::Decoded(DbValue::Binary(bytes)), Some(display))
 }
 
 /// Decode a JSON wire value. UTF-8 text is kept as text (parsed when possible
@@ -589,12 +587,9 @@ mod tests {
     }
 
     #[test]
-    fn untyped_invalid_utf8_stays_hex_without_a_sidecar() {
+    fn untyped_invalid_utf8_keeps_lossless_binary_sidecar() {
         let (state, display) = decode_cell(Value::Bytes(vec![0xff, 0xfe]), None);
         assert_eq!(display.as_deref(), Some("0xFFFE"));
-        assert_eq!(
-            state,
-            CellState::Decoded(DbValue::LegacyText("0xFFFE".to_string()))
-        );
+        assert_eq!(state, CellState::Decoded(DbValue::Binary(vec![0xff, 0xfe])));
     }
 }

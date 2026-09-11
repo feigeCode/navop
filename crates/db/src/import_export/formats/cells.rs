@@ -35,6 +35,14 @@ pub(super) struct ResultCells<'a> {
 impl<'a> ResultCells<'a> {
     pub(super) fn new(result: &'a QueryResult, format_name: &str) -> Result<Self> {
         if let Some(batch) = result.typed_batch() {
+            if batch.columns.len() != result.columns.len() {
+                return Err(anyhow!(
+                    "Invalid typed result for {format_name} export: typed batch has {} columns \
+                     but the result declares {}",
+                    batch.columns.len(),
+                    result.columns.len()
+                ));
+            }
             let (rows, binary_cells) = project_batch_to_legacy(batch).map_err(|error| {
                 anyhow!("Invalid typed result for {format_name} export: {error}")
             })?;

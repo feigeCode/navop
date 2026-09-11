@@ -152,7 +152,7 @@ fn typed_batch_large_integer_exceeding_i64_falls_back_to_precise_text() {
 }
 
 #[test]
-fn typed_batch_undecoded_cell_is_rejected_not_disguised_as_text() {
+fn typed_batch_undecoded_cell_falls_back_to_legacy_text() {
     let batch = db_value::ResultBatch::try_new(
         0,
         vec![column_descriptor(
@@ -174,14 +174,14 @@ fn typed_batch_undecoded_cell_is_rejected_not_disguised_as_text() {
     let result = QueryResult {
         sql: "select payload".to_string(),
         columns: vec!["payload".to_string()],
+        rows: vec![vec![Some("<int4[]>".to_string())]],
         typed_batch: Some(Arc::new(batch)),
         ..Default::default()
     };
 
-    let error = sql_results_to_row_batch(vec![SqlResult::Query(result)]).unwrap_err();
+    let batch = sql_results_to_row_batch(vec![SqlResult::Query(result)]).unwrap();
 
-    assert_eq!("query_failed", error.code);
-    assert!(error.message.contains("UNKNOWN"));
+    assert_eq!(batch.rows[0][0], DbValue::Text("<int4[]>".to_string()));
 }
 
 #[test]

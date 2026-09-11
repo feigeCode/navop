@@ -20,15 +20,17 @@ pub(super) fn sql_results_to_row_batch(results: Vec<SqlResult>) -> Result<RowBat
 
 fn query_to_row_batch(query: &QueryResult) -> Result<RowBatch, DbError> {
     if let Some(batch) = query.typed_batch() {
-        return typed_batch_to_row_batch(batch);
+        return Ok(typed_batch_to_row_batch(query, batch));
     }
     Ok(legacy_query_to_row_batch(query))
 }
 
 /// 类型化 batch 的保真映射:`Binary`→Bytes、`Decimal`→精确文本、
 /// `Integer`/`Float`→对应数值、`Json`→其文本形式。
-/// `Undecoded`/`DecodeError`/`Unsupported` 无法保真表达,显式报错而非伪装成 `Text`。
-fn typed_batch_to_row_batch(batch: &ResultBatch) -> Result<RowBatch, DbError> {
+///
+/// 扩展协议无法表达的单元格(`Undecoded`/`DecodeError`/`Unsupported`)回退到该结果的
+/// legacy 字符串投影,保持与迁移前一致的可用性,而不是让整个查询失败。
+fn typed_batch_to_row_batch(query: &QueryResult, batch: &ResultBatch) -> RowBatch {
     let columns = batch
         .columns
         .iter()
@@ -40,29 +42,38 @@ fn typed_batch_to_row_batch(batch: &ResultBatch) -> Result<RowBatch, DbError> {
         .collect::<Vec<_>>();
 
     let mut rows = Vec::with_capacity(batch.rows.len());
-    for row in &batch.rows {
+    for (row_index, row) in batch.rows.iter().enumerate() {
         let mut cells = Vec::with_capacity(row.cells.len());
-        for cell in &row.cells {
-            cells.push(match cell {
-                CellState::Decoded(value) => map_typed_value(value)?,
-                CellState::Undecoded { native_type, .. } => {
-                    return Err(unsupported_cell(native_type, "undecoded"));
-                }
-                CellState::DecodeError { native_type, .. } => {
-                    return Err(unsupported_cell(native_type, "decode error"));
-                }
-            });
+        for (column_index, cell) in row.cells.iter().enumerate() {
+            let value = match cell {
+                CellState::Decoded(value) => map_typed_value(value).ok(),
+                CellState::Undecoded { .. } | CellState::DecodeError { .. } => None,
+            };
+            cells.push(value.unwrap_or_else(|| legacy_cell(query, row_index, column_index)));
         }
         rows.push(cells);
     }
 
-    Ok(RowBatch {
+    RowBatch {
         columns,
         rows,
         next_cursor: None,
-    })
+    }
 }
 
+fn legacy_cell(query: &QueryResult, row_index: usize, column_index: usize) -> DbValue {
+    match query
+        .rows
+        .get(row_index)
+        .and_then(|row| row.get(column_index))
+        .and_then(Option::as_deref)
+    {
+        Some(text) => DbValue::Text(text.to_string()),
+        None => DbValue::Null,
+    }
+}
+
+/// 已知类型但扩展协议无法保真表达时返回错误;调用方会回退到 legacy 文本。
 fn unsupported_cell(native_type: &str, reason: &str) -> DbError {
     DbError::query_failed(format!(
         "cell of type `{native_type}` cannot be represented in the extension protocol ({reason})"

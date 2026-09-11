@@ -135,6 +135,7 @@ pub fn normalize_query_result_binary_semantics(
 
     apply_schema_column_metadata(query_result, &schema_mapping);
 
+    let binary_before = query_result.binary_cells.len();
     let rows = &mut query_result.rows;
     query_result.binary_cells.retain_mut(|cell| {
         let Some(selection) = &text_decoders[cell.column_index] else {
@@ -145,6 +146,13 @@ pub fn normalize_query_result_binary_semantics(
         rows[cell.row_index][cell.column_index] = Some(selection.decoder.decode_validated(bytes));
         false
     });
+
+    // Reclassifying a binary cell into text cannot be represented in the typed
+    // batch without re-running the codec, so drop the now-stale authoritative
+    // typed batch and let consumers read the corrected legacy projection.
+    if query_result.binary_cells.len() < binary_before {
+        query_result.invalidate_typed_batch();
+    }
 
     Ok(())
 }
@@ -404,6 +412,59 @@ mod tests {
             elapsed_ms: 0,
             ..Default::default()
         }
+    }
+
+    fn typed_result(columns: &[&str], cells: Vec<Vec<db_value::CellState>>) -> QueryResult {
+        use db_value::{ColumnDescriptor, Nullability, ResultBatch, ResultRow};
+        let descriptors = columns
+            .iter()
+            .map(|name| ColumnDescriptor {
+                id: format!("column:{name}"),
+                label: (*name).to_string(),
+                native_type: "MYSQL_TYPE_LONG_BLOB".to_string(),
+                logical_type: "LongText".to_string(),
+                nullable: Nullability::Unknown,
+                charset: None,
+                collation: None,
+                precision: None,
+                scale: None,
+            })
+            .collect();
+        let rows = cells
+            .into_iter()
+            .enumerate()
+            .map(|(index, cells)| ResultRow {
+                id: index as u64,
+                cells,
+            })
+            .collect();
+        let batch = ResultBatch::try_new(0, descriptors, rows, true).unwrap();
+        QueryResult::from_typed_batch("SELECT * FROM example".to_string(), batch, 0).unwrap()
+    }
+
+    #[test]
+    fn normalize_invalidates_stale_typed_batch_when_reclassifying_text() {
+        use db_value::{CellState, DbValue};
+        let mut normalized = typed_result(
+            &["payload"],
+            vec![vec![CellState::Decoded(DbValue::Binary(b"text".to_vec()))]],
+        );
+        assert!(normalized.typed_batch().is_some());
+        assert_eq!(normalized.binary_cells.len(), 1);
+
+        normalize_query_result_binary_semantics(
+            &mut normalized,
+            &DatabaseType::MySQL,
+            &[column("payload", "LONGTEXT")],
+        )
+        .unwrap();
+
+        assert!(normalized.binary_cells.is_empty());
+        assert_eq!(normalized.rows[0][0].as_deref(), Some("text"));
+        assert!(
+            normalized.typed_batch().is_none(),
+            "stale typed batch must be invalidated after text reclassification"
+        );
     }
 
     fn encoded_bytes(encoding: &'static Encoding, text: &str) -> Vec<u8> {
