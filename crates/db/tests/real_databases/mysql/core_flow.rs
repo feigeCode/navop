@@ -145,6 +145,10 @@ async fn assert_connection_result_encoding(connection: &(dyn DbConnection + Send
             .iter()
             .any(|cell| cell.column_index == 2 && cell.bytes == b"raw")
     );
+    assert!(
+        result.typed_batch().is_some(),
+        "driver results must carry the authoritative typed batch"
+    );
 
     connection
         .query("SET character_set_results=utf8mb4")
@@ -323,6 +327,31 @@ async fn assert_metadata(
     connection: &(dyn DbConnection + Send + Sync),
     database: &str,
 ) {
+    // Regression: with `character_set_results=binary` the wire collation is 63,
+    // so known text metadata must be strictly recovered instead of shown as hex.
+    connection
+        .query("SET character_set_results=binary")
+        .await
+        .expect("binary result encoding should be accepted");
+    let binary_charset_databases = plugin
+        .list_databases(connection)
+        .await
+        .expect("MySQL databases should list under binary result encoding");
+    assert!(
+        binary_charset_databases.iter().any(|name| name == database),
+        "database names must survive character_set_results=binary"
+    );
+    assert!(
+        binary_charset_databases
+            .iter()
+            .all(|name| !name.starts_with("0x")),
+        "database names must not be rendered as hex previews"
+    );
+    connection
+        .query("SET character_set_results=utf8mb4")
+        .await
+        .expect("test should restore utf8mb4 result encoding");
+
     let databases = plugin
         .list_databases(connection)
         .await
