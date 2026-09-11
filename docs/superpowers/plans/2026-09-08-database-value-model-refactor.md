@@ -22,6 +22,16 @@
 
 未完成（阻塞项）：T10 IPC wire 版本协商与外仓 `navop-extensions`；T11 LOB 资源生命周期与打包验收；T12 删除 `rows`/`binary_cells`（需全部消费者、真实库与跨仓协议三重门禁）。ClickHouse JSONCompact 路径无法无损承载任意二进制 String 字节，需 `RowBinaryWithNamesAndTypes` spike 后才能宣称无损。真实 MySQL/PG/MSSQL/Oracle/ClickHouse 运行时未验收。
 
+### 独立审查修复（2026-09-11）
+
+对 7 个提交做独立审查后修复了以下问题：
+- Critical：`normalize_query_result_binary_semantics` 将二进制纠正为文本、`strip_hidden_result_columns` 删除列后都未失效 `typed_batch`，导致权威值与 legacy 投影不一致。现已在两种情况下失效 `typed_batch`，并补回归测试。
+- High：extension gateway 对 `Undecoded`/`DecodeError`/`Unsupported` 由“整体报错”改为回退 legacy 文本，保持迁移前可用性。
+- Medium：`ResultCells` 校验 typed batch 列宽避免导出 panic；MySQL 未定型非文本字节改用 `Binary` 保留无损 sidecar；PostgreSQL `TIMESTAMPTZ` 恢复保留时区偏移的显示。
+- 已记录限制：MSSQL `money` 受 tiberius 只暴露 `f64` 所限，无法恢复精确 scaled integer。
+- 保留决策：`metadata_read` 对无法解码的元数据 fail closed（符合本文第 5.1 节“失败返回含列来源的错误”）。
+- 待办：二进制字节共享 `Arc<[u8]>`（H2）需改动 `DbValue::Binary` 类型，属较大改动，暂缓。
+
 ## 1. 结论、问题边界与优先级
 
 **建议接受跨层重构，但不推倒重做所有数据库 SDK，也不把所有数据库强制改为 IPC。核心改造是：建立唯一、无损、带类型的查询值模型，让显示文本退出数据契约。** 二进制格式只是问题的一个表现；当前链路也存在数值、时间、未知类型、解码失败与 SQL NULL 混淆的风险。
