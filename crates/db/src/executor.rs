@@ -198,7 +198,8 @@ impl Default for QueryResult {
 /// 把带类型的 batch 投影成 legacy 的 `rows` + `binary_cells`。
 ///
 /// 这是 executor 与 IPC 共用的唯一 legacy 投影实现,避免两处漂移。`DateTime`
-/// 归一到空格分隔,`Binary` 用无截断的小写 hex 预览并附带精确字节 sidecar。
+/// 归一到空格分隔,`Binary` 统一使用 [`db_value::format_binary_preview`] 的大写、
+/// 有界 hex 预览并附带精确字节 sidecar。
 /// `Undecoded`/`DecodeError` 无法无损投影时显式失败。
 pub(crate) fn project_batch_to_legacy(
     batch: &ResultBatch,
@@ -238,7 +239,7 @@ fn legacy_text(value: &DbValue) -> Option<String> {
     match value {
         DbValue::Null => None,
         DbValue::DateTime(value) => Some(format_ipc_datetime(value)),
-        DbValue::Binary(bytes) => Some(format!("0x{}", hex::encode(bytes))),
+        DbValue::Binary(bytes) => Some(db_value::format_binary_preview(bytes)),
         other => Some(db_value::ResultBatch::display_value(other)),
     }
 }
