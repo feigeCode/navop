@@ -89,6 +89,9 @@ impl OraclePlugin {
         (!sql.is_empty()).then(|| sql.to_string())
     }
 
+    // 导出 DDL 加载器整体消费多列行数据（表/列注释、索引 DDL），由调用方按
+    // 列索引解析；此处的 legacy `rows` 投影属于“整体交给定义加载器”的例外，
+    // 逐格迁移到 metadata_read 改动过大，暂保留。
     async fn export_query_rows(
         connection: &dyn DbConnection,
         query: &str,
@@ -1356,16 +1359,17 @@ impl DatabasePlugin for OraclePlugin {
 
         for sql in schema_queries {
             if let Ok(SqlResult::Query(qr)) = connection.query(sql).await {
-                let schemas = qr
-                    .rows
-                    .iter()
-                    .filter_map(|row| {
-                        row.first()
-                            .and_then(|v| v.clone())
-                            .map(|s| s.trim().to_string())
-                            .filter(|s| !s.is_empty())
-                    })
-                    .collect();
+                let mut schemas = Vec::new();
+                for row_index in 0..qr.rows.len() {
+                    if let Some(name) =
+                        crate::metadata_read::metadata_text(&qr, row_index, 0, "utf8mb4")?
+                    {
+                        let name = name.trim().to_string();
+                        if !name.is_empty() {
+                            schemas.push(name);
+                        }
+                    }
+                }
                 let schemas =
                     filter_schemas(connection.config(), SchemaFilterProfile::Oracle, schemas);
                 if !schemas.is_empty() {
@@ -1383,11 +1387,14 @@ impl DatabasePlugin for OraclePlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list schemas (fallback): {}", e))?;
 
         if let SqlResult::Query(qr) = result {
-            let schemas = qr
-                .rows
-                .iter()
-                .filter_map(|row| row.first().and_then(|v| v.clone()))
-                .collect();
+            let mut schemas = Vec::new();
+            for row_index in 0..qr.rows.len() {
+                if let Some(name) =
+                    crate::metadata_read::metadata_text(&qr, row_index, 0, "utf8mb4")?
+                {
+                    schemas.push(name);
+                }
+            }
             Ok(filter_schemas(
                 connection.config(),
                 SchemaFilterProfile::Oracle,
@@ -1568,27 +1575,24 @@ impl DatabasePlugin for OraclePlugin {
         for (name, sql) in schema_queries {
             match connection.query(sql).await {
                 Ok(SqlResult::Query(query_result)) => {
-                    rows = query_result
-                        .rows
-                        .iter()
-                        .map(|row| {
-                            vec![
-                                row.get(0).and_then(|v| v.clone()).unwrap_or_default(),
-                                row.get(1)
-                                    .and_then(|v| v.clone())
-                                    .unwrap_or("-".to_string()),
-                                row.get(2)
-                                    .and_then(|v| v.clone())
-                                    .unwrap_or("-".to_string()),
-                                row.get(3)
-                                    .and_then(|v| v.clone())
-                                    .unwrap_or("-".to_string()),
-                                row.get(4)
-                                    .and_then(|v| v.clone())
-                                    .unwrap_or("-".to_string()),
-                            ]
-                        })
-                        .collect();
+                    rows = Vec::new();
+                    for row_index in 0..query_result.rows.len() {
+                        let cell = |column_index| {
+                            crate::metadata_read::metadata_text(
+                                &query_result,
+                                row_index,
+                                column_index,
+                                "utf8mb4",
+                            )
+                        };
+                        rows.push(vec![
+                            cell(0)?.unwrap_or_default(),
+                            cell(1)?.unwrap_or_else(|| "-".to_string()),
+                            cell(2)?.unwrap_or_else(|| "-".to_string()),
+                            cell(3)?.unwrap_or_else(|| "-".to_string()),
+                            cell(4)?.unwrap_or_else(|| "-".to_string()),
+                        ]);
+                    }
                     if !rows.is_empty() {
                         break;
                     }
@@ -1662,21 +1666,29 @@ impl DatabasePlugin for OraclePlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list tables for schema '{}': {}", schema, e))?;
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
-                .rows
-                .iter()
-                .map(|row| TableInfo {
-                    name: row.get(0).and_then(|v| v.clone()).unwrap_or_default(),
+            let mut tables = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                let cell = |column_index| {
+                    crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        column_index,
+                        "utf8mb4",
+                    )
+                };
+                tables.push(TableInfo {
+                    name: cell(0)?.unwrap_or_default(),
                     object_type: crate::TableObjectType::Table,
                     schema: Some(schema.to_string()),
-                    comment: row.get(1).and_then(|v| v.clone()),
+                    comment: cell(1)?,
                     engine: None,
 
                     create_time: None,
                     charset: None,
                     collation: None,
-                })
-                .collect())
+                });
+            }
+            Ok(tables)
         } else {
             Ok(vec![])
         }
@@ -1710,24 +1722,24 @@ impl DatabasePlugin for OraclePlugin {
                 .map_err(|e| anyhow::anyhow!("Failed to list tables: {}", e))?;
 
             let rows: Vec<Vec<String>> = if let SqlResult::Query(query_result) = result {
-                query_result
-                    .rows
-                    .iter()
-                    .map(|row| {
-                        vec![
-                            row.get(0).and_then(|v| v.clone()).unwrap_or_default(),
-                            row.get(1)
-                                .and_then(|v| v.clone())
-                                .unwrap_or("-".to_string()),
-                            row.get(2)
-                                .and_then(|v| v.clone())
-                                .unwrap_or("-".to_string()),
-                            row.get(3)
-                                .and_then(|v| v.clone())
-                                .unwrap_or("-".to_string()),
-                        ]
-                    })
-                    .collect()
+                let mut rows = Vec::new();
+                for row_index in 0..query_result.rows.len() {
+                    let cell = |column_index| {
+                        crate::metadata_read::metadata_text(
+                            &query_result,
+                            row_index,
+                            column_index,
+                            "utf8mb4",
+                        )
+                    };
+                    rows.push(vec![
+                        cell(0)?.unwrap_or_default(),
+                        cell(1)?.unwrap_or_else(|| "-".to_string()),
+                        cell(2)?.unwrap_or_else(|| "-".to_string()),
+                        cell(3)?.unwrap_or_else(|| "-".to_string()),
+                    ]);
+                }
+                rows
             } else {
                 vec![]
             };
@@ -1800,32 +1812,30 @@ impl DatabasePlugin for OraclePlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list columns: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
-                .rows
-                .iter()
-                .map(|row| {
-                    let is_nullable = row
-                        .get(2)
-                        .and_then(|v| v.clone())
-                        .unwrap_or("Y".to_string())
-                        == "Y";
-                    let is_pk = row
-                        .get(4)
-                        .and_then(|v| v.clone())
-                        .unwrap_or("N".to_string())
-                        == "Y";
-                    ColumnInfo {
-                        name: row.get(0).and_then(|v| v.clone()).unwrap_or_default(),
-                        data_type: row.get(1).and_then(|v| v.clone()).unwrap_or_default(),
-                        is_nullable,
-                        is_primary_key: is_pk,
-                        default_value: row.get(3).and_then(|v| v.clone()),
-                        comment: row.get(5).and_then(|v| v.clone()),
-                        charset: None,
-                        collation: None,
-                    }
-                })
-                .collect())
+            let mut columns = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                let cell = |column_index| {
+                    crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        column_index,
+                        "utf8mb4",
+                    )
+                };
+                let is_nullable = cell(2)?.unwrap_or_else(|| "Y".to_string()) == "Y";
+                let is_pk = cell(4)?.unwrap_or_else(|| "N".to_string()) == "Y";
+                columns.push(ColumnInfo {
+                    name: cell(0)?.unwrap_or_default(),
+                    data_type: cell(1)?.unwrap_or_default(),
+                    is_nullable,
+                    is_primary_key: is_pk,
+                    default_value: cell(3)?,
+                    comment: cell(5)?,
+                    charset: None,
+                    collation: None,
+                });
+            }
+            Ok(columns)
         } else {
             Ok(vec![])
         }
@@ -1911,15 +1921,19 @@ impl DatabasePlugin for OraclePlugin {
         if let SqlResult::Query(query_result) = result {
             let mut indexes: HashMap<String, IndexInfo> = HashMap::new();
 
-            for row in &query_result.rows {
-                let index_name = row.get(0).and_then(|v| v.clone()).unwrap_or_default();
-                let column_name = row.get(1).and_then(|v| v.clone()).unwrap_or_default();
-                let index_type = row.get(2).and_then(|v| v.clone()).unwrap_or_default();
-                let is_unique = row
-                    .get(3)
-                    .and_then(|v| v.clone())
-                    .unwrap_or("NONUNIQUE".to_string())
-                    == "UNIQUE";
+            for row_index in 0..query_result.rows.len() {
+                let cell = |column_index| {
+                    crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        column_index,
+                        "utf8mb4",
+                    )
+                };
+                let index_name = cell(0)?.unwrap_or_default();
+                let column_name = cell(1)?.unwrap_or_default();
+                let index_type = cell(2)?.unwrap_or_default();
+                let is_unique = cell(3)?.unwrap_or_else(|| "NONUNIQUE".to_string()) == "UNIQUE";
 
                 indexes
                     .entry(index_name.clone())
@@ -2004,16 +2018,24 @@ impl DatabasePlugin for OraclePlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list views: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
-                .rows
-                .iter()
-                .map(|row| ViewInfo {
-                    name: row.get(0).and_then(|v| v.clone()).unwrap_or_default(),
+            let mut views = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                let cell = |column_index| {
+                    crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        column_index,
+                        "utf8mb4",
+                    )
+                };
+                views.push(ViewInfo {
+                    name: cell(0)?.unwrap_or_default(),
                     schema: Some(schema.to_string()),
                     definition: None,
-                    comment: row.get(1).and_then(|v| v.clone()),
-                })
-                .collect())
+                    comment: cell(1)?,
+                });
+            }
+            Ok(views)
         } else {
             Ok(vec![])
         }
@@ -2043,18 +2065,22 @@ impl DatabasePlugin for OraclePlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list views: {}", e))?;
 
         let rows: Vec<Vec<String>> = if let SqlResult::Query(query_result) = result {
-            query_result
-                .rows
-                .iter()
-                .map(|row| {
-                    vec![
-                        row.get(0).and_then(|v| v.clone()).unwrap_or_default(),
-                        row.get(1)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                    ]
-                })
-                .collect()
+            let mut rows = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                let cell = |column_index| {
+                    crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        column_index,
+                        "utf8mb4",
+                    )
+                };
+                rows.push(vec![
+                    cell(0)?.unwrap_or_default(),
+                    cell(1)?.unwrap_or_else(|| "-".to_string()),
+                ]);
+            }
+            rows
         } else {
             vec![]
         };
@@ -2095,11 +2121,16 @@ impl DatabasePlugin for OraclePlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list functions: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
-                .rows
-                .iter()
-                .map(|row| FunctionInfo {
-                    name: row.get(0).and_then(|v| v.clone()).unwrap_or_default(),
+            let mut functions = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                functions.push(FunctionInfo {
+                    name: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        0,
+                        "utf8mb4",
+                    )?
+                    .unwrap_or_default(),
                     schema: None,
                     return_type: None,
                     parameters: vec![],
@@ -2107,8 +2138,9 @@ impl DatabasePlugin for OraclePlugin {
                     object_id: None,
                     definition: None,
                     comment: None,
-                })
-                .collect())
+                });
+            }
+            Ok(functions)
         } else {
             Ok(vec![])
         }
@@ -2149,24 +2181,24 @@ impl DatabasePlugin for OraclePlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list functions: {}", e))?;
 
         let rows: Vec<Vec<String>> = if let SqlResult::Query(query_result) = result {
-            query_result
-                .rows
-                .iter()
-                .map(|row| {
-                    vec![
-                        row.get(0).and_then(|v| v.clone()).unwrap_or_default(),
-                        row.get(1)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                        row.get(2)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                        row.get(3)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                    ]
-                })
-                .collect()
+            let mut rows = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                let cell = |column_index| {
+                    crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        column_index,
+                        "utf8mb4",
+                    )
+                };
+                rows.push(vec![
+                    cell(0)?.unwrap_or_default(),
+                    cell(1)?.unwrap_or_else(|| "-".to_string()),
+                    cell(2)?.unwrap_or_else(|| "-".to_string()),
+                    cell(3)?.unwrap_or_else(|| "-".to_string()),
+                ]);
+            }
+            rows
         } else {
             vec![]
         };
@@ -2208,11 +2240,16 @@ impl DatabasePlugin for OraclePlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list procedures: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
-                .rows
-                .iter()
-                .map(|row| FunctionInfo {
-                    name: row.get(0).and_then(|v| v.clone()).unwrap_or_default(),
+            let mut procedures = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                procedures.push(FunctionInfo {
+                    name: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        0,
+                        "utf8mb4",
+                    )?
+                    .unwrap_or_default(),
                     schema: None,
                     return_type: None,
                     parameters: vec![],
@@ -2220,8 +2257,9 @@ impl DatabasePlugin for OraclePlugin {
                     object_id: None,
                     definition: None,
                     comment: None,
-                })
-                .collect())
+                });
+            }
+            Ok(procedures)
         } else {
             Ok(vec![])
         }
@@ -2262,24 +2300,24 @@ impl DatabasePlugin for OraclePlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list procedures: {}", e))?;
 
         let rows: Vec<Vec<String>> = if let SqlResult::Query(query_result) = result {
-            query_result
-                .rows
-                .iter()
-                .map(|row| {
-                    vec![
-                        row.get(0).and_then(|v| v.clone()).unwrap_or_default(),
-                        row.get(1)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                        row.get(2)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                        row.get(3)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                    ]
-                })
-                .collect()
+            let mut rows = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                let cell = |column_index| {
+                    crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        column_index,
+                        "utf8mb4",
+                    )
+                };
+                rows.push(vec![
+                    cell(0)?.unwrap_or_default(),
+                    cell(1)?.unwrap_or_else(|| "-".to_string()),
+                    cell(2)?.unwrap_or_else(|| "-".to_string()),
+                    cell(3)?.unwrap_or_else(|| "-".to_string()),
+                ]);
+            }
+            rows
         } else {
             vec![]
         };
@@ -2324,17 +2362,25 @@ impl DatabasePlugin for OraclePlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list triggers: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
-                .rows
-                .iter()
-                .map(|row| TriggerInfo {
-                    name: row.get(0).and_then(|v| v.clone()).unwrap_or_default(),
-                    table_name: row.get(1).and_then(|v| v.clone()).unwrap_or_default(),
-                    event: row.get(2).and_then(|v| v.clone()).unwrap_or_default(),
-                    timing: row.get(3).and_then(|v| v.clone()).unwrap_or_default(),
+            let mut triggers = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                let cell = |column_index| {
+                    crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        column_index,
+                        "utf8mb4",
+                    )
+                };
+                triggers.push(TriggerInfo {
+                    name: cell(0)?.unwrap_or_default(),
+                    table_name: cell(1)?.unwrap_or_default(),
+                    event: cell(2)?.unwrap_or_default(),
+                    timing: cell(3)?.unwrap_or_default(),
                     definition: None,
-                })
-                .collect())
+                });
+            }
+            Ok(triggers)
         } else {
             Ok(vec![])
         }
@@ -2376,27 +2422,25 @@ impl DatabasePlugin for OraclePlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list triggers: {}", e))?;
 
         let rows: Vec<Vec<String>> = if let SqlResult::Query(query_result) = result {
-            query_result
-                .rows
-                .iter()
-                .map(|row| {
-                    vec![
-                        row.get(0).and_then(|v| v.clone()).unwrap_or_default(),
-                        row.get(1)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                        row.get(2)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                        row.get(3)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                        row.get(4)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                    ]
-                })
-                .collect()
+            let mut rows = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                let cell = |column_index| {
+                    crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        column_index,
+                        "utf8mb4",
+                    )
+                };
+                rows.push(vec![
+                    cell(0)?.unwrap_or_default(),
+                    cell(1)?.unwrap_or_else(|| "-".to_string()),
+                    cell(2)?.unwrap_or_else(|| "-".to_string()),
+                    cell(3)?.unwrap_or_else(|| "-".to_string()),
+                    cell(4)?.unwrap_or_else(|| "-".to_string()),
+                ]);
+            }
+            rows
         } else {
             vec![]
         };
@@ -2445,29 +2489,27 @@ impl DatabasePlugin for OraclePlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list sequences: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
-                .rows
-                .iter()
-                .map(|row| SequenceInfo {
-                    name: row.get(0).and_then(|v| v.clone()).unwrap_or_default(),
-                    start_value: row
-                        .get(4)
-                        .and_then(|v| v.clone())
-                        .and_then(|s| s.parse().ok()),
-                    increment: row
-                        .get(3)
-                        .and_then(|v| v.clone())
-                        .and_then(|s| s.parse().ok()),
-                    min_value: row
-                        .get(1)
-                        .and_then(|v| v.clone())
-                        .and_then(|s| s.parse().ok()),
-                    max_value: row
-                        .get(2)
-                        .and_then(|v| v.clone())
-                        .and_then(|s| s.parse().ok()),
-                })
-                .collect())
+            let mut sequences = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                sequences.push(SequenceInfo {
+                    name: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        0,
+                        "utf8mb4",
+                    )?
+                    .unwrap_or_default(),
+                    start_value: crate::metadata_read::metadata_integer(
+                        &query_result,
+                        row_index,
+                        4,
+                    )?,
+                    increment: crate::metadata_read::metadata_integer(&query_result, row_index, 3)?,
+                    min_value: crate::metadata_read::metadata_integer(&query_result, row_index, 1)?,
+                    max_value: crate::metadata_read::metadata_integer(&query_result, row_index, 2)?,
+                });
+            }
+            Ok(sequences)
         } else {
             Ok(vec![])
         }
@@ -2501,33 +2543,27 @@ impl DatabasePlugin for OraclePlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list sequences: {}", e))?;
 
         let rows: Vec<Vec<String>> = if let SqlResult::Query(query_result) = result {
-            query_result
-                .rows
-                .iter()
-                .map(|row| {
-                    vec![
-                        row.get(0).and_then(|v| v.clone()).unwrap_or_default(),
-                        row.get(1)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                        row.get(2)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                        row.get(3)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                        row.get(4)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                        row.get(5)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                        row.get(6)
-                            .and_then(|v| v.clone())
-                            .unwrap_or("-".to_string()),
-                    ]
-                })
-                .collect()
+            let mut rows = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                let cell = |column_index| {
+                    crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        column_index,
+                        "utf8mb4",
+                    )
+                };
+                rows.push(vec![
+                    cell(0)?.unwrap_or_default(),
+                    cell(1)?.unwrap_or_else(|| "-".to_string()),
+                    cell(2)?.unwrap_or_else(|| "-".to_string()),
+                    cell(3)?.unwrap_or_else(|| "-".to_string()),
+                    cell(4)?.unwrap_or_else(|| "-".to_string()),
+                    cell(5)?.unwrap_or_else(|| "-".to_string()),
+                    cell(6)?.unwrap_or_else(|| "-".to_string()),
+                ]);
+            }
+            rows
         } else {
             vec![]
         };
@@ -3291,7 +3327,7 @@ mod tests {
 
             Ok(SqlResult::Query(QueryResult {
                 sql: query.to_string(),
-                columns: vec![],
+                columns: vec!["username".to_string()],
                 column_meta: vec![],
                 rows,
                 binary_cells: vec![],
@@ -3410,7 +3446,7 @@ mod tests {
             let rows = vec![vec![Some("APP".to_string())]];
             Ok(SqlResult::Query(QueryResult {
                 sql: query.to_string(),
-                columns: vec![],
+                columns: vec!["username".to_string()],
                 column_meta: vec![],
                 rows,
                 binary_cells: vec![],

@@ -274,19 +274,17 @@ impl PostgresPlugin {
         })?;
 
         match result {
-            SqlResult::Query(query_result) => query_result
-                .rows
-                .first()
-                .and_then(|row| row.first())
-                .and_then(Clone::clone)
-                .filter(|definition| !definition.trim().is_empty())
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "PostgreSQL returned no CREATE statement for {} {}",
-                        routine_kind,
-                        routine.name
-                    )
-                }),
+            SqlResult::Query(query_result) => {
+                crate::metadata_read::metadata_text(&query_result, 0, 0, "utf8mb4")?
+                    .filter(|definition| !definition.trim().is_empty())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "PostgreSQL returned no CREATE statement for {} {}",
+                            routine_kind,
+                            routine.name
+                        )
+                    })
+            }
             SqlResult::Error(error) => Err(anyhow::anyhow!(
                 "Failed to load {} definition: {}",
                 routine_kind,
@@ -1362,11 +1360,15 @@ impl DatabasePlugin for PostgresPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list databases: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
-                .rows
-                .iter()
-                .filter_map(|row| row.first().and_then(|v| v.clone()))
-                .collect())
+            let mut databases = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                if let Some(name) =
+                    crate::metadata_read::metadata_text(&query_result, row_index, 0, "utf8mb4")?
+                {
+                    databases.push(name);
+                }
+            }
+            Ok(databases)
         } else {
             Err(anyhow::anyhow!("Unexpected result type"))
         }
@@ -1442,30 +1444,32 @@ impl DatabasePlugin for PostgresPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list databases: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            let databases: Vec<DatabaseInfo> = query_result
-                .rows
-                .iter()
-                .filter_map(|row| {
-                    let name = row.first().and_then(|v| v.clone())?;
-                    let charset = row.get(1).and_then(|v| v.clone());
-                    let collation = row.get(2).and_then(|v| v.clone());
-                    let size = row.get(3).and_then(|v| v.clone());
-                    let table_count = row
-                        .get(4)
-                        .and_then(|v| v.clone())
-                        .and_then(|s| s.parse::<i64>().ok());
-                    let comment = row.get(5).and_then(|v| v.clone());
-
-                    Some(DatabaseInfo {
-                        name,
-                        charset,
-                        collation,
-                        size,
-                        table_count,
-                        comment,
-                    })
-                })
-                .collect();
+            let mut databases = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                let cell = |column_index| {
+                    crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        column_index,
+                        "utf8mb4",
+                    )
+                };
+                let Some(name) = cell(0)? else {
+                    continue;
+                };
+                databases.push(DatabaseInfo {
+                    name,
+                    charset: cell(1)?,
+                    collation: cell(2)?,
+                    size: cell(3)?,
+                    table_count: crate::metadata_read::metadata_integer(
+                        &query_result,
+                        row_index,
+                        4,
+                    )?,
+                    comment: cell(5)?,
+                });
+            }
             Ok(databases)
         } else {
             Err(anyhow::anyhow!("Unexpected result type"))
@@ -1492,11 +1496,14 @@ impl DatabasePlugin for PostgresPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list schemas: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            let schemas = query_result
-                .rows
-                .iter()
-                .filter_map(|row| row.first().and_then(|v| v.clone()))
-                .collect();
+            let mut schemas = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                if let Some(schema) =
+                    crate::metadata_read::metadata_text(&query_result, row_index, 0, "utf8mb4")?
+                {
+                    schemas.push(schema);
+                }
+            }
             Ok(filter_schemas(
                 connection.config(),
                 SchemaFilterProfile::PostgreSql,
@@ -1537,20 +1544,25 @@ impl DatabasePlugin for PostgresPlugin {
                 Column::localized("description", "ObjectView.columns.description").width(300.0),
             ];
 
-            let rows: Vec<Vec<String>> = query_result
-                .rows
-                .iter()
-                .map(|row| {
-                    vec![
-                        row.first().and_then(|v| v.clone()).unwrap_or_default(),
-                        row.get(1).and_then(|v| v.clone()).unwrap_or_default(),
-                        row.get(2)
-                            .and_then(|v| v.clone())
-                            .unwrap_or_else(|| "0".to_string()),
-                        row.get(3).and_then(|v| v.clone()).unwrap_or_default(),
-                    ]
-                })
-                .collect();
+            let mut rows: Vec<Vec<String>> = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                let cell = |column_index| {
+                    crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        column_index,
+                        "utf8mb4",
+                    )
+                };
+                rows.push(vec![
+                    cell(0)?.unwrap_or_default(),
+                    cell(1)?.unwrap_or_default(),
+                    crate::metadata_read::metadata_integer(&query_result, row_index, 2)?
+                        .map(|n| n.to_string())
+                        .unwrap_or_else(|| "0".to_string()),
+                    cell(3)?.unwrap_or_default(),
+                ]);
+            }
 
             Ok(ObjectView {
                 db_node_type: DbNodeType::Schema,
@@ -1587,20 +1599,36 @@ impl DatabasePlugin for PostgresPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list tables: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            let tables: Vec<TableInfo> = query_result
-                .rows
-                .iter()
-                .map(|row| TableInfo {
-                    name: row.first().and_then(|v| v.clone()).unwrap_or_default(),
+            let mut tables = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                tables.push(TableInfo {
+                    name: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        0,
+                        "utf8mb4",
+                    )?
+                    .unwrap_or_default(),
                     object_type: TableObjectType::Table,
-                    schema: row.get(1).and_then(|v| v.clone()),
-                    comment: row.get(2).and_then(|v| v.clone()).filter(|s| !s.is_empty()),
+                    schema: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        1,
+                        "utf8mb4",
+                    )?,
+                    comment: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        2,
+                        "utf8mb4",
+                    )?
+                    .filter(|s| !s.is_empty()),
                     engine: None,
                     create_time: None,
                     charset: None,
                     collation: None,
-                })
-                .collect();
+                });
+            }
 
             Ok(tables)
         } else {
@@ -1663,44 +1691,45 @@ impl DatabasePlugin for PostgresPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list tables: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            let object_view_rows: Vec<Vec<String>> = query_result
-                .rows
-                .iter()
-                .map(|row| {
-                    // 新的索引映射 (0-based)，严格对应 SQL 查询顺序：
-                    // 0: Name, 1: Owner, 2: Type, 3: Rows, 4: Size, 5: Indexes, 6: Tablespace, 7: Comment
+            let mut object_view_rows: Vec<Vec<String>> = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                let cell = |column_index| {
+                    crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        column_index,
+                        "utf8mb4",
+                    )
+                };
 
-                    let row_count = row
-                        .get(3)
-                        .and_then(|v| v.clone())
-                        .and_then(|s| s.parse::<i64>().ok())
+                // 新的索引映射 (0-based)，严格对应 SQL 查询顺序：
+                // 0: Name, 1: Owner, 2: Type, 3: Rows, 4: Size, 5: Indexes, 6: Tablespace, 7: Comment
+                let row_count =
+                    crate::metadata_read::metadata_integer(&query_result, row_index, 3)?
                         .map(|n| n.to_string())
                         .unwrap_or_else(|| "-".to_string());
 
-                    // 类型转换
-                    let object_type = match row.get(2).and_then(|v| v.as_deref()) {
-                        Some("v") => "View",
-                        Some("m") => "Materialized View",
-                        Some("p") => "Partitioned Table",
-                        _ => "Table",
-                    };
+                // 类型转换
+                let object_type = match cell(2)?.as_deref() {
+                    Some("v") => "View",
+                    Some("m") => "Materialized View",
+                    Some("p") => "Partitioned Table",
+                    _ => "Table",
+                };
 
-                    vec![
-                        row.first().and_then(|v| v.clone()).unwrap_or_default(), // Name (index 0)
-                        row.get(1).and_then(|v| v.clone()).unwrap_or_default(),  // Owner (index 1)
-                        object_type.to_string(),                                 // Type (index 2)
-                        row_count,                                               // Rows (index 3)
-                        row.get(4)
-                            .and_then(|v| v.clone())
-                            .unwrap_or_else(|| "-".to_string()), // Size (index 4)
-                        row.get(5)
-                            .and_then(|v| v.clone())
-                            .unwrap_or_else(|| "0".to_string()), // Indexes (index 5)
-                        row.get(6).and_then(|v| v.clone()).unwrap_or_default(), // Tablespace (index 6)
-                        row.get(7).and_then(|v| v.clone()).unwrap_or_default(), // Comment (index 7)
-                    ]
-                })
-                .collect();
+                object_view_rows.push(vec![
+                    cell(0)?.unwrap_or_default(),                // Name (index 0)
+                    cell(1)?.unwrap_or_default(),                // Owner (index 1)
+                    object_type.to_string(),                     // Type (index 2)
+                    row_count,                                   // Rows (index 3)
+                    cell(4)?.unwrap_or_else(|| "-".to_string()), // Size (index 4)
+                    crate::metadata_read::metadata_integer(&query_result, row_index, 5)?
+                        .map(|n| n.to_string())
+                        .unwrap_or_else(|| "0".to_string()), // Indexes (index 5)
+                    cell(6)?.unwrap_or_default(),                // Tablespace (index 6)
+                    cell(7)?.unwrap_or_default(),                // Comment (index 7)
+                ]);
+            }
 
             Ok(ObjectView {
                 db_node_type: DbNodeType::Table,
@@ -1753,31 +1782,31 @@ impl DatabasePlugin for PostgresPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list columns: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
-                .rows
-                .iter()
-                .map(|row| {
-                    let raw_type = row.get(1).and_then(|v| v.clone()).unwrap_or_default();
-                    ColumnInfo {
-                        name: row.first().and_then(|v| v.clone()).unwrap_or_default(),
-                        data_type: Self::normalize_type_name(&raw_type),
-                        is_nullable: row
-                            .get(2)
-                            .and_then(|v| v.clone())
-                            .map(|v| v == "YES")
-                            .unwrap_or(true),
-                        is_primary_key: row
-                            .get(4)
-                            .and_then(|v| v.clone())
-                            .map(|v| v == "t" || v == "true" || v == "1")
-                            .unwrap_or(false),
-                        default_value: row.get(3).and_then(|v| v.clone()),
-                        comment: row.get(5).and_then(|v| v.clone()),
-                        charset: None,
-                        collation: None,
-                    }
-                })
-                .collect())
+            let mut columns = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                let cell = |column_index| {
+                    crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        column_index,
+                        "utf8mb4",
+                    )
+                };
+                let raw_type = cell(1)?.unwrap_or_default();
+                columns.push(ColumnInfo {
+                    name: cell(0)?.unwrap_or_default(),
+                    data_type: Self::normalize_type_name(&raw_type),
+                    is_nullable: cell(2)?.map(|v| v == "YES").unwrap_or(true),
+                    is_primary_key: cell(4)?
+                        .map(|v| v == "t" || v == "true" || v == "1")
+                        .unwrap_or(false),
+                    default_value: cell(3)?,
+                    comment: cell(5)?,
+                    charset: None,
+                    collation: None,
+                });
+            }
+            Ok(columns)
         } else {
             Err(anyhow::anyhow!("Unexpected result type"))
         }
@@ -1857,14 +1886,17 @@ impl DatabasePlugin for PostgresPlugin {
         if let SqlResult::Query(query_result) = result {
             let mut indexes: HashMap<String, IndexInfo> = HashMap::new();
 
-            for row in query_result.rows {
-                let index_name = row.first().and_then(|v| v.clone()).unwrap_or_default();
-                let column_name = row.get(1).and_then(|v| v.clone()).unwrap_or_default();
-                let is_unique = row
-                    .get(2)
-                    .and_then(|v| v.clone())
-                    .map(|v| v == "t" || v == "true")
-                    .unwrap_or(false);
+            for row_index in 0..query_result.rows.len() {
+                let index_name =
+                    crate::metadata_read::metadata_text(&query_result, row_index, 0, "utf8mb4")?
+                        .unwrap_or_default();
+                let column_name =
+                    crate::metadata_read::metadata_text(&query_result, row_index, 1, "utf8mb4")?
+                        .unwrap_or_default();
+                let is_unique =
+                    crate::metadata_read::metadata_text(&query_result, row_index, 2, "utf8mb4")?
+                        .map(|v| v == "t" || v == "true")
+                        .unwrap_or(false);
 
                 indexes
                     .entry(index_name.clone())
@@ -1987,6 +2019,8 @@ impl DatabasePlugin for PostgresPlugin {
             .map_err(|error| anyhow::anyhow!("Failed to list foreign keys: {}", error))?;
 
         match result {
+            // 保留 legacy：外键行整体交给 parse_postgres_foreign_keys（复杂解析器），
+            // 迁移到 metadata_read 需重构解析器边界，暂不改动。
             SqlResult::Query(query_result) => Ok(parse_postgres_foreign_keys(query_result.rows)),
             _ => Err(anyhow::anyhow!("Unexpected result type")),
         }
@@ -2021,15 +2055,32 @@ impl DatabasePlugin for PostgresPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list check constraints: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
-                .rows
-                .iter()
-                .map(|row| CheckInfo {
-                    name: row.first().and_then(|v| v.clone()).unwrap_or_default(),
-                    table_name: row.get(1).and_then(|v| v.clone()).unwrap_or_default(),
-                    definition: row.get(2).and_then(|v| v.clone()),
-                })
-                .collect())
+            let mut checks = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                checks.push(CheckInfo {
+                    name: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        0,
+                        "utf8mb4",
+                    )?
+                    .unwrap_or_default(),
+                    table_name: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        1,
+                        "utf8mb4",
+                    )?
+                    .unwrap_or_default(),
+                    definition: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        2,
+                        "utf8mb4",
+                    )?,
+                });
+            }
+            Ok(checks)
         } else {
             Err(anyhow::anyhow!("Unexpected result type"))
         }
@@ -2057,16 +2108,32 @@ impl DatabasePlugin for PostgresPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list views: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
-                .rows
-                .iter()
-                .map(|row| ViewInfo {
-                    name: row.first().and_then(|v| v.clone()).unwrap_or_default(),
-                    schema: row.get(1).and_then(|v| v.clone()),
-                    definition: row.get(2).and_then(|v| v.clone()),
+            let mut views = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                views.push(ViewInfo {
+                    name: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        0,
+                        "utf8mb4",
+                    )?
+                    .unwrap_or_default(),
+                    schema: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        1,
+                        "utf8mb4",
+                    )?,
+                    definition: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        2,
+                        "utf8mb4",
+                    )?,
                     comment: None,
-                })
-                .collect())
+                });
+            }
+            Ok(views)
         } else {
             Err(anyhow::anyhow!("Unexpected result type"))
         }
@@ -2141,30 +2208,36 @@ impl DatabasePlugin for PostgresPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list functions: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
-                .rows
-                .iter()
-                .map(|row| {
-                    let identity_arguments = row.get(2).and_then(Clone::clone);
-                    FunctionInfo {
-                        name: row.first().and_then(Clone::clone).unwrap_or_default(),
-                        schema: row.get(4).and_then(Clone::clone),
-                        return_type: row.get(1).and_then(Clone::clone),
-                        parameters: identity_arguments
-                            .as_deref()
-                            .unwrap_or_default()
-                            .split(',')
-                            .map(str::trim)
-                            .filter(|value| !value.is_empty())
-                            .map(str::to_string)
-                            .collect(),
-                        identity_arguments,
-                        object_id: row.get(3).and_then(Clone::clone),
-                        definition: row.get(5).and_then(Clone::clone),
-                        comment: None,
-                    }
-                })
-                .collect())
+            let mut functions = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                let cell = |column_index| {
+                    crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        column_index,
+                        "utf8mb4",
+                    )
+                };
+                let identity_arguments = cell(2)?;
+                functions.push(FunctionInfo {
+                    name: cell(0)?.unwrap_or_default(),
+                    schema: cell(4)?,
+                    return_type: cell(1)?,
+                    parameters: identity_arguments
+                        .as_deref()
+                        .unwrap_or_default()
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string)
+                        .collect(),
+                    identity_arguments,
+                    object_id: cell(3)?,
+                    definition: cell(5)?,
+                    comment: None,
+                });
+            }
+            Ok(functions)
         } else {
             Err(anyhow::anyhow!("Unexpected result type"))
         }
@@ -2260,30 +2333,36 @@ impl DatabasePlugin for PostgresPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list procedures: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
-                .rows
-                .iter()
-                .map(|row| {
-                    let identity_arguments = row.get(1).and_then(Clone::clone);
-                    FunctionInfo {
-                        name: row.first().and_then(Clone::clone).unwrap_or_default(),
-                        schema: row.get(3).and_then(Clone::clone),
-                        return_type: None,
-                        parameters: identity_arguments
-                            .as_deref()
-                            .unwrap_or_default()
-                            .split(',')
-                            .map(str::trim)
-                            .filter(|value| !value.is_empty())
-                            .map(str::to_string)
-                            .collect(),
-                        identity_arguments,
-                        object_id: row.get(2).and_then(Clone::clone),
-                        definition: row.get(4).and_then(Clone::clone),
-                        comment: None,
-                    }
-                })
-                .collect())
+            let mut procedures = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                let cell = |column_index| {
+                    crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        column_index,
+                        "utf8mb4",
+                    )
+                };
+                let identity_arguments = cell(1)?;
+                procedures.push(FunctionInfo {
+                    name: cell(0)?.unwrap_or_default(),
+                    schema: cell(3)?,
+                    return_type: None,
+                    parameters: identity_arguments
+                        .as_deref()
+                        .unwrap_or_default()
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string)
+                        .collect(),
+                    identity_arguments,
+                    object_id: cell(2)?,
+                    definition: cell(4)?,
+                    comment: None,
+                });
+            }
+            Ok(procedures)
         } else {
             Err(anyhow::anyhow!("Unexpected result type"))
         }
@@ -2388,17 +2467,46 @@ impl DatabasePlugin for PostgresPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list triggers: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
-                .rows
-                .iter()
-                .map(|row| TriggerInfo {
-                    name: row.first().and_then(|v| v.clone()).unwrap_or_default(),
-                    table_name: row.get(1).and_then(|v| v.clone()).unwrap_or_default(),
-                    event: row.get(2).and_then(|v| v.clone()).unwrap_or_default(),
-                    timing: row.get(3).and_then(|v| v.clone()).unwrap_or_default(),
-                    definition: row.get(4).and_then(Clone::clone),
-                })
-                .collect())
+            let mut triggers = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                triggers.push(TriggerInfo {
+                    name: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        0,
+                        "utf8mb4",
+                    )?
+                    .unwrap_or_default(),
+                    table_name: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        1,
+                        "utf8mb4",
+                    )?
+                    .unwrap_or_default(),
+                    event: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        2,
+                        "utf8mb4",
+                    )?
+                    .unwrap_or_default(),
+                    timing: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        3,
+                        "utf8mb4",
+                    )?
+                    .unwrap_or_default(),
+                    definition: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        4,
+                        "utf8mb4",
+                    )?,
+                });
+            }
+            Ok(triggers)
         } else {
             Err(anyhow::anyhow!("Unexpected result type"))
         }
@@ -2459,29 +2567,27 @@ impl DatabasePlugin for PostgresPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list sequences: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
-                .rows
-                .iter()
-                .map(|row| SequenceInfo {
-                    name: row.first().and_then(|v| v.clone()).unwrap_or_default(),
-                    start_value: row
-                        .get(1)
-                        .and_then(|v| v.clone())
-                        .and_then(|s| s.parse().ok()),
-                    increment: row
-                        .get(2)
-                        .and_then(|v| v.clone())
-                        .and_then(|s| s.parse().ok()),
-                    min_value: row
-                        .get(3)
-                        .and_then(|v| v.clone())
-                        .and_then(|s| s.parse().ok()),
-                    max_value: row
-                        .get(4)
-                        .and_then(|v| v.clone())
-                        .and_then(|s| s.parse().ok()),
-                })
-                .collect())
+            let mut sequences = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                sequences.push(SequenceInfo {
+                    name: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        0,
+                        "utf8mb4",
+                    )?
+                    .unwrap_or_default(),
+                    start_value: crate::metadata_read::metadata_integer(
+                        &query_result,
+                        row_index,
+                        1,
+                    )?,
+                    increment: crate::metadata_read::metadata_integer(&query_result, row_index, 2)?,
+                    min_value: crate::metadata_read::metadata_integer(&query_result, row_index, 3)?,
+                    max_value: crate::metadata_read::metadata_integer(&query_result, row_index, 4)?,
+                });
+            }
+            Ok(sequences)
         } else {
             Err(anyhow::anyhow!("Unexpected result type"))
         }
@@ -2617,6 +2723,7 @@ impl DatabasePlugin for PostgresPlugin {
             .await
             .map_err(|error| anyhow::anyhow!("Failed to export table constraints: {}", error))?
         {
+            // 保留 legacy：SHOW CREATE 约束行整体交给外键/约束限定解析，暂不改动。
             SqlResult::Query(result) => result
                 .rows
                 .into_iter()
@@ -2658,11 +2765,9 @@ impl DatabasePlugin for PostgresPlugin {
             .await
             .map_err(|error| anyhow::anyhow!("Failed to export table comment: {}", error))?
         {
-            SqlResult::Query(result) => result
-                .rows
-                .first()
-                .and_then(|row| row.first())
-                .and_then(|value| value.clone()),
+            SqlResult::Query(result) => {
+                crate::metadata_read::metadata_text(&result, 0, 0, "utf8mb4")?
+            }
             _ => return Err(anyhow::anyhow!("Unexpected table comment result type")),
         };
 
@@ -2691,6 +2796,7 @@ impl DatabasePlugin for PostgresPlugin {
             .await
             .map_err(|error| anyhow::anyhow!("Failed to export table indexes: {}", error))?
         {
+            // 保留 legacy：SHOW CREATE 索引定义行整体交给表引用限定解析，暂不改动。
             SqlResult::Query(result) => result
                 .rows
                 .into_iter()
@@ -3389,6 +3495,24 @@ mod tests {
         )
     }
 
+    /// Legacy metadata result whose column width matches the returned rows.
+    ///
+    /// Real drivers always populate column metadata, so the checked readers can
+    /// validate shape; these fakes must do the same instead of returning rows
+    /// with an empty column list.
+    fn legacy_metadata_result(sql: &str, rows: Vec<Vec<Option<String>>>) -> QueryResult {
+        let column_count = rows.first().map(Vec::len).unwrap_or(0);
+        QueryResult {
+            sql: sql.to_string(),
+            columns: vec![String::new(); column_count],
+            column_meta: vec![],
+            rows,
+            binary_cells: vec![],
+            elapsed_ms: 0,
+            ..Default::default()
+        }
+    }
+
     struct CommentMetadataConnection {
         config: DbConnectionConfig,
         queries: Mutex<Vec<String>>,
@@ -3542,15 +3666,7 @@ mod tests {
                 vec![]
             };
 
-            Ok(SqlResult::Query(QueryResult {
-                sql: query.to_string(),
-                columns: vec![],
-                column_meta: vec![],
-                rows,
-                binary_cells: vec![],
-                elapsed_ms: 0,
-                ..Default::default()
-            }))
+            Ok(SqlResult::Query(legacy_metadata_result(query, rows)))
         }
 
         async fn current_database(&self) -> Result<Option<String>, DbError> {
@@ -3736,15 +3852,7 @@ mod tests {
                 )));
             };
 
-            Ok(SqlResult::Query(QueryResult {
-                sql: query.to_string(),
-                columns: vec![],
-                column_meta: vec![],
-                rows,
-                binary_cells: vec![],
-                elapsed_ms: 0,
-                ..Default::default()
-            }))
+            Ok(SqlResult::Query(legacy_metadata_result(query, rows)))
         }
 
         async fn current_database(&self) -> Result<Option<String>, DbError> {
@@ -3856,15 +3964,7 @@ mod tests {
                 vec![]
             };
 
-            Ok(SqlResult::Query(QueryResult {
-                sql: query.to_string(),
-                columns: vec![],
-                column_meta: vec![],
-                rows,
-                binary_cells: vec![],
-                elapsed_ms: 0,
-                ..Default::default()
-            }))
+            Ok(SqlResult::Query(legacy_metadata_result(query, rows)))
         }
 
         async fn current_database(&self) -> Result<Option<String>, DbError> {

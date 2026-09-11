@@ -728,11 +728,15 @@ impl DatabasePlugin for ClickHousePlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list databases: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
-                .rows
-                .iter()
-                .filter_map(|row| row.first().and_then(|v| v.clone()))
-                .collect())
+            let mut names = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                if let Some(name) =
+                    crate::metadata_read::metadata_text(&query_result, row_index, 0, "utf8mb4")?
+                {
+                    names.push(name);
+                }
+            }
+            Ok(names)
         } else {
             Err(anyhow::anyhow!("Unexpected result type"))
         }
@@ -787,21 +791,26 @@ impl DatabasePlugin for ClickHousePlugin {
         if let SqlResult::Query(query_result) = result {
             let mut databases = Vec::new();
 
-            for row in query_result.rows {
-                if let (Some(name), engine, comment) = (
-                    row.get(0).and_then(|v| v.clone()),
-                    row.get(1).and_then(|v| v.clone()),
-                    row.get(2).and_then(|v| v.clone()),
-                ) {
-                    databases.push(DatabaseInfo {
-                        name: name.clone(),
-                        charset: engine, // Store engine in charset field
-                        collation: None,
-                        size: None,
-                        table_count: None,
-                        comment,
-                    });
-                }
+            for row_index in 0..query_result.rows.len() {
+                let cell = |column_index| {
+                    crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        column_index,
+                        "utf8mb4",
+                    )
+                };
+                let Some(name) = cell(0)? else {
+                    continue;
+                };
+                databases.push(DatabaseInfo {
+                    name,
+                    charset: cell(1)?, // Store engine in charset field
+                    collation: None,
+                    size: None,
+                    table_count: None,
+                    comment: cell(2)?,
+                });
             }
 
             Ok(databases)
@@ -835,24 +844,29 @@ impl DatabasePlugin for ClickHousePlugin {
         if let SqlResult::Query(query_result) = result {
             let mut tables = Vec::new();
 
-            for row in query_result.rows {
-                if let (Some(name), engine) = (
-                    row.get(0).and_then(|v| v.clone()),
-                    row.get(1).and_then(|v| v.clone()),
-                ) {
-                    let comment = row.get(2).and_then(|v| v.clone());
+            for row_index in 0..query_result.rows.len() {
+                let cell = |column_index| {
+                    crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        column_index,
+                        "utf8mb4",
+                    )
+                };
+                let Some(name) = cell(0)? else {
+                    continue;
+                };
 
-                    tables.push(TableInfo {
-                        name: name.clone(),
-                        object_type: TableObjectType::Table,
-                        schema: None,
-                        create_time: None,
-                        charset: None,
-                        collation: None,
-                        engine,
-                        comment,
-                    });
-                }
+                tables.push(TableInfo {
+                    name,
+                    object_type: TableObjectType::Table,
+                    schema: None,
+                    create_time: None,
+                    charset: None,
+                    collation: None,
+                    engine: cell(1)?,
+                    comment: cell(2)?,
+                });
             }
 
             Ok(tables)
@@ -917,38 +931,46 @@ impl DatabasePlugin for ClickHousePlugin {
         if let SqlResult::Query(query_result) = result {
             let mut columns = Vec::new();
 
-            for row in query_result.rows {
-                if let (Some(name), Some(data_type)) = (
-                    row.get(0).and_then(|v| v.clone()),
-                    row.get(1).and_then(|v| v.clone()),
-                ) {
-                    let default_kind = row.get(2).and_then(|v| v.clone());
-                    let default_expression = row.get(3).and_then(|v| v.clone());
-                    let comment = row.get(4).and_then(|v| v.clone());
-                    let is_primary_key = row
-                        .get(5)
-                        .and_then(|v| v.clone())
-                        .map(|v| v == "1")
+            for row_index in 0..query_result.rows.len() {
+                let cell = |column_index| {
+                    crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        column_index,
+                        "utf8mb4",
+                    )
+                };
+                let Some(name) = cell(0)? else {
+                    continue;
+                };
+                let Some(data_type) = cell(1)? else {
+                    continue;
+                };
+                let default_kind = cell(2)?;
+                let default_expression = cell(3)?;
+                let comment = cell(4)?;
+                let is_primary_key =
+                    crate::metadata_read::metadata_integer(&query_result, row_index, 5)?
+                        .map(|value| value == 1)
                         .unwrap_or(false);
 
-                    let is_nullable = data_type.starts_with("Nullable(");
-                    let default_value = if default_kind.as_deref() == Some("DEFAULT") {
-                        default_expression
-                    } else {
-                        None
-                    };
+                let is_nullable = data_type.starts_with("Nullable(");
+                let default_value = if default_kind.as_deref() == Some("DEFAULT") {
+                    default_expression
+                } else {
+                    None
+                };
 
-                    columns.push(ColumnInfo {
-                        name: name.clone(),
-                        data_type: data_type.clone(),
-                        is_nullable,
-                        default_value,
-                        is_primary_key,
-                        comment,
-                        charset: None,
-                        collation: None,
-                    });
-                }
+                columns.push(ColumnInfo {
+                    name,
+                    data_type,
+                    is_nullable,
+                    default_value,
+                    is_primary_key,
+                    comment,
+                    charset: None,
+                    collation: None,
+                });
             }
 
             Ok(columns)
@@ -1018,30 +1040,37 @@ impl DatabasePlugin for ClickHousePlugin {
         if let SqlResult::Query(query_result) = result {
             let mut indexes = Vec::new();
 
-            for row in query_result.rows {
-                if let (Some(name), index_type, expr) = (
-                    row.get(0).and_then(|v| v.clone()),
-                    row.get(1).and_then(|v| v.clone()),
-                    row.get(2).and_then(|v| v.clone()),
-                ) {
-                    let granularity = row.get(3).and_then(|v| v.clone());
+            for row_index in 0..query_result.rows.len() {
+                let cell = |column_index| {
+                    crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        column_index,
+                        "utf8mb4",
+                    )
+                };
+                let Some(name) = cell(0)? else {
+                    continue;
+                };
+                let index_type = cell(1)?;
+                let expr = cell(2)?;
+                let granularity = cell(3)?;
 
-                    let columns = expr.as_ref().map(|e| vec![e.clone()]).unwrap_or_default();
+                let columns = expr.map(|expr| vec![expr]).unwrap_or_default();
 
-                    let index_type_str = index_type.as_deref().unwrap_or("minmax");
+                let index_type_str = index_type.as_deref().unwrap_or("minmax");
 
-                    indexes.push(IndexInfo {
-                        name: name.clone(),
-                        columns,
-                        is_unique: false,
-                        is_primary: false,
-                        index_type: Some(format!(
-                            "{} (granularity: {})",
-                            index_type_str,
-                            granularity.as_deref().unwrap_or("1")
-                        )),
-                    });
-                }
+                indexes.push(IndexInfo {
+                    name,
+                    columns,
+                    is_unique: false,
+                    is_primary: false,
+                    index_type: Some(format!(
+                        "{} (granularity: {})",
+                        index_type_str,
+                        granularity.as_deref().unwrap_or("1")
+                    )),
+                });
             }
 
             Ok(indexes)
@@ -1103,17 +1132,25 @@ impl DatabasePlugin for ClickHousePlugin {
         if let SqlResult::Query(query_result) = result {
             let mut views = Vec::new();
 
-            for row in query_result.rows {
-                if let Some(name) = row.get(0).and_then(|v| v.clone()) {
-                    let definition = row.get(1).and_then(|v| v.clone());
+            for row_index in 0..query_result.rows.len() {
+                let cell = |column_index| {
+                    crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        column_index,
+                        "utf8mb4",
+                    )
+                };
+                let Some(name) = cell(0)? else {
+                    continue;
+                };
 
-                    views.push(ViewInfo {
-                        name: name.clone(),
-                        schema: None,
-                        definition,
-                        comment: None,
-                    });
-                }
+                views.push(ViewInfo {
+                    name,
+                    schema: None,
+                    definition: cell(1)?,
+                    comment: None,
+                });
             }
 
             Ok(views)
@@ -1169,21 +1206,29 @@ impl DatabasePlugin for ClickHousePlugin {
         if let SqlResult::Query(query_result) = result {
             let mut functions = Vec::new();
 
-            for row in query_result.rows {
-                if let Some(name) = row.get(0).and_then(|v| v.clone()) {
-                    let definition = row.get(1).and_then(|v| v.clone());
+            for row_index in 0..query_result.rows.len() {
+                let cell = |column_index| {
+                    crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        column_index,
+                        "utf8mb4",
+                    )
+                };
+                let Some(name) = cell(0)? else {
+                    continue;
+                };
 
-                    functions.push(FunctionInfo {
-                        name: name.clone(),
-                        schema: None,
-                        return_type: None,
-                        parameters: Vec::new(),
-                        identity_arguments: None,
-                        object_id: None,
-                        definition,
-                        comment: None,
-                    });
-                }
+                functions.push(FunctionInfo {
+                    name,
+                    schema: None,
+                    return_type: None,
+                    parameters: Vec::new(),
+                    identity_arguments: None,
+                    object_id: None,
+                    definition: cell(1)?,
+                    comment: None,
+                });
             }
 
             Ok(functions)
@@ -1365,11 +1410,8 @@ impl DatabasePlugin for ClickHousePlugin {
                 )
             })?;
 
-        query_result
-            .rows
-            .first()
-            .and_then(|row| row.get(ddl_column))
-            .and_then(|value| value.as_deref())
+        crate::metadata_read::metadata_text(&query_result, 0, ddl_column, "utf8mb4")?
+            .as_deref()
             .and_then(Self::normalize_export_ddl)
             .ok_or_else(|| anyhow::anyhow!("SHOW CREATE TABLE returned empty table DDL"))
     }

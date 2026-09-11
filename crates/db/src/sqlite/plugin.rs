@@ -770,11 +770,16 @@ impl DatabasePlugin for SqlitePlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list tables: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
-                .rows
-                .iter()
-                .map(|row| TableInfo {
-                    name: row.first().and_then(|v| v.clone()).unwrap_or_default(),
+            let mut tables = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                tables.push(TableInfo {
+                    name: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        0,
+                        "utf8mb4",
+                    )?
+                    .unwrap_or_default(),
                     object_type: crate::TableObjectType::Table,
                     schema: None,
                     comment: None,
@@ -783,8 +788,9 @@ impl DatabasePlugin for SqlitePlugin {
                     create_time: None,
                     charset: None,
                     collation: None,
-                })
-                .collect())
+                });
+            }
+            Ok(tables)
         } else {
             Err(anyhow::anyhow!("Unexpected result type"))
         }
@@ -838,28 +844,40 @@ impl DatabasePlugin for SqlitePlugin {
         );
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
-                .rows
-                .iter()
-                .map(|row| ColumnInfo {
-                    name: row.get(1).and_then(|v| v.clone()).unwrap_or_default(),
-                    data_type: row.get(2).and_then(|v| v.clone()).unwrap_or_default(),
-                    is_nullable: row
-                        .get(3)
-                        .and_then(|v| v.clone())
-                        .map(|v| v == "0")
-                        .unwrap_or(true),
-                    is_primary_key: row
-                        .get(5)
-                        .and_then(|v| v.clone())
-                        .map(|v| v == "1")
-                        .unwrap_or(false),
-                    default_value: row.get(4).and_then(|v| v.clone()),
+            let mut columns = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                let cell = |column_index| {
+                    crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        column_index,
+                        "utf8mb4",
+                    )
+                };
+                columns.push(ColumnInfo {
+                    name: cell(1)?.unwrap_or_default(),
+                    data_type: cell(2)?.unwrap_or_default(),
+                    is_nullable: crate::metadata_read::metadata_integer(
+                        &query_result,
+                        row_index,
+                        3,
+                    )?
+                    .map(|value| value == 0)
+                    .unwrap_or(true),
+                    is_primary_key: crate::metadata_read::metadata_integer(
+                        &query_result,
+                        row_index,
+                        5,
+                    )?
+                    .map(|value| value == 1)
+                    .unwrap_or(false),
+                    default_value: cell(4)?,
                     comment: None,
                     charset: None,
                     collation: None,
-                })
-                .collect())
+                });
+            }
+            Ok(columns)
         } else {
             Err(anyhow::anyhow!("Unexpected result type"))
         }
@@ -922,28 +940,42 @@ impl DatabasePlugin for SqlitePlugin {
         if let SqlResult::Query(query_result) = result {
             let mut indexes = Vec::new();
 
-            for row in query_result.rows {
-                let origin = row.get(3).and_then(|v| v.clone()).unwrap_or_default();
+            for row_index in 0..query_result.rows.len() {
+                let cell = |column_index| {
+                    crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        column_index,
+                        "utf8mb4",
+                    )
+                };
+                let origin = cell(3)?.unwrap_or_default();
                 if origin == "pk" {
                     continue;
                 }
 
-                let index_name = row.get(1).and_then(|v| v.clone()).unwrap_or_default();
-                let is_unique = row
-                    .get(2)
-                    .and_then(|v| v.clone())
-                    .map(|v| v == "1")
-                    .unwrap_or(false);
+                let index_name = cell(1)?.unwrap_or_default();
+                let is_unique =
+                    crate::metadata_read::metadata_integer(&query_result, row_index, 2)?
+                        .map(|value| value == 1)
+                        .unwrap_or(false);
 
                 let info_sql = format!("PRAGMA index_info(\"{}\")", index_name);
                 let info_result = connection.query(&info_sql).await;
 
                 let columns = if let Ok(SqlResult::Query(info_query)) = info_result {
-                    info_query
-                        .rows
-                        .iter()
-                        .filter_map(|r| r.get(2).and_then(|v| v.clone()))
-                        .collect()
+                    let mut columns = Vec::new();
+                    for info_row_index in 0..info_query.rows.len() {
+                        if let Some(column) = crate::metadata_read::metadata_text(
+                            &info_query,
+                            info_row_index,
+                            2,
+                            "utf8mb4",
+                        )? {
+                            columns.push(column);
+                        }
+                    }
+                    columns
                 } else {
                     Vec::new()
                 };
@@ -1013,16 +1045,27 @@ impl DatabasePlugin for SqlitePlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list views: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
-                .rows
-                .iter()
-                .map(|row| ViewInfo {
-                    name: row.first().and_then(|v| v.clone()).unwrap_or_default(),
+            let mut views = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                views.push(ViewInfo {
+                    name: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        0,
+                        "utf8mb4",
+                    )?
+                    .unwrap_or_default(),
                     schema: None,
-                    definition: row.get(1).and_then(|v| v.clone()),
+                    definition: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        1,
+                        "utf8mb4",
+                    )?,
                     comment: None,
-                })
-                .collect())
+                });
+            }
+            Ok(views)
         } else {
             Err(anyhow::anyhow!("Unexpected result type"))
         }
@@ -1118,17 +1161,25 @@ impl DatabasePlugin for SqlitePlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list triggers: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
-                .rows
-                .iter()
-                .map(|row| TriggerInfo {
-                    name: row.first().and_then(|v| v.clone()).unwrap_or_default(),
-                    table_name: row.get(1).and_then(|v| v.clone()).unwrap_or_default(),
+            let mut triggers = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                let cell = |column_index| {
+                    crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        column_index,
+                        "utf8mb4",
+                    )
+                };
+                triggers.push(TriggerInfo {
+                    name: cell(0)?.unwrap_or_default(),
+                    table_name: cell(1)?.unwrap_or_default(),
                     event: String::new(),
                     timing: String::new(),
-                    definition: row.get(2).and_then(|v| v.clone()),
-                })
-                .collect())
+                    definition: cell(2)?,
+                });
+            }
+            Ok(triggers)
         } else {
             Err(anyhow::anyhow!("Unexpected result type"))
         }
@@ -1272,12 +1323,19 @@ impl DatabasePlugin for SqlitePlugin {
             .map_err(|e| anyhow::anyhow!("Query failed: {}", e))?;
 
         let mut statements = match table_result {
-            SqlResult::Query(query_result) => query_result
-                .rows
-                .into_iter()
-                .filter_map(|row| row.first().cloned().flatten())
-                .filter_map(|sql| Self::normalize_catalog_sql(&sql))
-                .collect::<Vec<_>>(),
+            SqlResult::Query(query_result) => {
+                let mut ddl = Vec::new();
+                for row_index in 0..query_result.rows.len() {
+                    if let Some(sql) =
+                        crate::metadata_read::metadata_text(&query_result, row_index, 0, "utf8mb4")?
+                    {
+                        if let Some(sql) = Self::normalize_catalog_sql(&sql) {
+                            ddl.push(sql);
+                        }
+                    }
+                }
+                ddl
+            }
             SqlResult::Error(sql_error_info) => {
                 return Err(anyhow::anyhow!("Query failed: {}", sql_error_info.message));
             }
@@ -1293,13 +1351,15 @@ impl DatabasePlugin for SqlitePlugin {
             .await
             .map_err(|e| anyhow::anyhow!("Query failed: {}", e))?;
         if let SqlResult::Query(query_result) = index_result {
-            statements.extend(
-                query_result
-                    .rows
-                    .into_iter()
-                    .filter_map(|row| row.first().cloned().flatten())
-                    .filter_map(|sql| Self::normalize_catalog_sql(&sql)),
-            );
+            for row_index in 0..query_result.rows.len() {
+                if let Some(sql) =
+                    crate::metadata_read::metadata_text(&query_result, row_index, 0, "utf8mb4")?
+                {
+                    if let Some(sql) = Self::normalize_catalog_sql(&sql) {
+                        statements.push(sql);
+                    }
+                }
+            }
         }
 
         Ok(statements.join(";\n"))
