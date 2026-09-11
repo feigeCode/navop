@@ -85,6 +85,8 @@ struct LocalSearchInput {
     has_matching_descendant: bool,
     is_load_more: bool,
     is_expanded: bool,
+    /// 连接 / 数据库这类结构锚点：过滤态下即使自身与子树都不匹配也要保留
+    is_structural: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -121,7 +123,11 @@ fn effective_tree_expansion(
 }
 
 fn local_search_visibility(input: LocalSearchInput) -> LocalSearchVisibility {
-    let include_node = !input.filter_active
+    // 过滤态下连接 / 数据库是结构锚点：即使它们与子树都不匹配也要保留。
+    // 否则整棵树会只剩空面板，用户看到的现象就是「搜不到 key」——分不清是
+    // 关键词没命中、键还没加载，还是搜索本身坏了。
+    let include_node = input.is_structural
+        || !input.filter_active
         || input.ancestor_matches
         || input.node_matches
         || input.is_load_more
@@ -133,6 +139,50 @@ fn local_search_visibility(input: LocalSearchInput) -> LocalSearchVisibility {
         descendants_inherit_match: input.filter_active
             && (input.ancestor_matches || input.node_matches),
     }
+}
+
+/// 计算本地过滤关键词。
+///
+/// 返回 `None` 表示「不过滤」，有两种情况：
+/// 1. 关键词为空；
+/// 2. 服务端已经按这个关键词扫描过——此时列表本身就是服务端的权威结果，
+///    不能再按树节点名二次过滤，否则跨命名空间命中的键会被误藏
+///    （例如 `*we*` 命中 `flow:east:1`，但节点名 `flow` / `east` 都不含 `we`）。
+fn search_filter_keyword(
+    search_keyword: &str,
+    server_search_keyword: Option<&str>,
+) -> Option<String> {
+    let keyword = search_keyword.trim();
+    if keyword.is_empty() {
+        return None;
+    }
+    if server_search_keyword == Some(keyword) {
+        return None;
+    }
+    // 含通配符的关键词只能交给服务端 SCAN，本地不做子串匹配。
+    if keyword.contains('*') || keyword.contains('?') || keyword.contains('[') {
+        return None;
+    }
+    Some(keyword.to_lowercase())
+}
+
+/// 解析一次搜索应该作用在哪些数据库节点上。
+///
+/// 搜索框属于整棵树而不是某一个节点，所以：
+/// - 选中能落到某个数据库时，只搜那一个库（保持原有语义）；
+/// - 否则回退到每个已连接连接的默认库，避免「没有选中节点 → 回车毫无反应」。
+fn resolve_search_targets(
+    selected_db_node: Option<String>,
+    fallback_db_nodes: impl IntoIterator<Item = String>,
+) -> Vec<String> {
+    if let Some(selected) = selected_db_node {
+        return vec![selected];
+    }
+
+    let mut targets: Vec<String> = fallback_db_nodes.into_iter().collect();
+    targets.sort();
+    targets.dedup();
+    targets
 }
 
 fn apply_redis_selection_state(
@@ -183,6 +233,10 @@ pub struct RedisTreeView {
     search_state: Entity<InputState>,
     /// 搜索关键词
     search_keyword: String,
+    /// 最近一次提交给服务端 SCAN 的关键词
+    ///
+    /// 与服务端结果配套：等于当前关键词时说明列表已是服务端权威结果，本地不再过滤。
+    server_search_keyword: Option<String>,
     /// 搜索请求序号（node_id -> token）
     search_tokens: HashMap<String, u64>,
     /// 数据库总键数（db_node_id -> total）
@@ -227,21 +281,7 @@ impl RedisTreeView {
             }
 
             if matches!(event, InputEvent::PressEnter { .. }) {
-                this.search_keyword = this.search_state.read(cx).text().to_string();
-                if let Some(node_id) = this.get_selected_refreshable_node() {
-                    if let Some(node) = this.nodes.get(&node_id) {
-                        if matches!(node.node_type, RedisNodeType::Database(_)) {
-                            let pattern = this.search_keyword.trim().to_string();
-                            if pattern.is_empty() {
-                                this.reset_db_key_count(&node_id);
-                                this.refresh_keys(node_id, cx);
-                            } else {
-                                cx.emit(RedisTreeViewEvent::SearchKeys { node_id, pattern });
-                            }
-                        }
-                    }
-                }
-                cx.notify();
+                this.trigger_search(cx);
             }
         })
         .detach();
@@ -255,6 +295,7 @@ impl RedisTreeView {
             context_menu_node_id: None,
             search_state,
             search_keyword: String::new(),
+            server_search_keyword: None,
             search_tokens: HashMap::new(),
             db_total_key_counts: HashMap::new(),
             selected_databases: HashMap::new(),
@@ -710,6 +751,11 @@ impl RedisTreeView {
                 format!("*{}*", trimmed)
             };
 
+        // 标记该关键词已交给服务端扫描：结果回来时列表本身就是权威结果，
+        // 本地不再按节点名二次过滤（否则跨命名空间的命中会被误藏）。
+        self.server_search_keyword = Some(trimmed.to_string());
+        self.rebuild_flat_entries();
+
         let token = self.bump_search_token(&node.id);
         self.load_keys(
             node.connection_id.clone(),
@@ -721,6 +767,57 @@ impl RedisTreeView {
             token,
             cx,
         );
+    }
+
+    /// 提交一次搜索：读取输入框、更新关键词状态并驱动服务端 SCAN。
+    ///
+    /// 回车与搜索按钮共用这一条路径，避免两个入口各自漂移。
+    fn trigger_search(&mut self, cx: &mut Context<Self>) {
+        self.search_keyword = self.search_state.read(cx).text().to_string();
+        let pattern = self.search_keyword.trim().to_string();
+        let targets = self.search_target_node_ids();
+
+        if pattern.is_empty() {
+            // 清空关键词 = 回到「列出全部键」，同时解除服务端结果标记。
+            self.server_search_keyword = None;
+            self.search_collapsed_nodes.clear();
+            for node_id in targets {
+                self.reset_db_key_count(&node_id);
+                self.refresh_keys(node_id, cx);
+            }
+            self.rebuild_flat_entries();
+            cx.notify();
+            return;
+        }
+
+        for node_id in targets {
+            cx.emit(RedisTreeViewEvent::SearchKeys {
+                node_id,
+                pattern: pattern.clone(),
+            });
+        }
+        self.rebuild_flat_entries();
+        cx.notify();
+    }
+
+    /// 本次搜索应该扫描哪些数据库节点
+    ///
+    /// 优先当前选中的库；若当前没有可用的选中库（例如还没点过任何节点），
+    /// 则回退到每个已连接连接的默认库，而不是静默什么都不做。
+    fn search_target_node_ids(&self) -> Vec<String> {
+        let selected_db = self.get_selected_refreshable_node().filter(|node_id| {
+            self.nodes
+                .get(node_id)
+                .is_some_and(|node| matches!(node.node_type, RedisNodeType::Database(_)))
+        });
+
+        let fallback = self.connected_nodes.iter().filter_map(|connection_id| {
+            let db_index = self.default_db_for_connection(connection_id);
+            let db_node_id = Self::db_node_id(connection_id, db_index);
+            self.nodes.contains_key(&db_node_id).then_some(db_node_id)
+        });
+
+        resolve_search_targets(selected_db, fallback)
     }
 
     /// 加载键列表
@@ -1422,6 +1519,52 @@ impl RedisTreeView {
         }
     }
 
+    /// 当前扁平列表里是否还有可见的键
+    fn has_visible_key(&self) -> bool {
+        self.flat_entries.iter().any(|entry| {
+            self.nodes
+                .get(&entry.node_id)
+                .is_some_and(|node| matches!(node.node_type, RedisNodeType::Key(_)))
+        })
+    }
+
+    /// 关键词非空但一个键都没显示出来时的提示语
+    ///
+    /// 区分「本地已加载的列表里没匹配」与「服务端也确认没有」：前者要引导用户
+    /// 回车扫描服务端，否则用户只会看到一片空白并认为搜索坏了。
+    fn search_empty_hint(&self) -> Option<String> {
+        let keyword = self.search_keyword.trim();
+        if keyword.is_empty() || self.has_visible_key() {
+            return None;
+        }
+
+        if self.server_search_keyword.as_deref() == Some(keyword) {
+            Some(t!("RedisTree.search_no_server_match", keyword = keyword).to_string())
+        } else {
+            Some(t!("RedisTree.search_no_local_match", keyword = keyword).to_string())
+        }
+    }
+
+    /// 列表为空时的兜底文案
+    fn empty_state_message(&self) -> String {
+        self.search_empty_hint()
+            .unwrap_or_else(|| t!("RedisTree.no_data").to_string())
+    }
+
+    /// 「没有匹配的键」提示条
+    fn render_search_hint(&self, hint: String, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .w_full()
+            .flex_shrink_0()
+            .px_2()
+            .py_1()
+            .border_t_1()
+            .border_color(cx.theme().border)
+            .text_sm()
+            .text_color(cx.theme().muted_foreground)
+            .child(hint)
+    }
+
     fn reset_db_key_count(&mut self, node_id: &str) {
         if let Some(total) = self.db_total_key_counts.get(node_id).copied() {
             if let Some(node) = self.nodes.get_mut(node_id) {
@@ -1555,7 +1698,7 @@ impl RedisTreeView {
 
     /// 折叠节点
     fn collapse_node(&mut self, node_id: &str, cx: &mut Context<Self>) {
-        if self.local_filter_keyword().is_some() {
+        if self.is_search_active() {
             self.search_collapsed_nodes.insert(node_id.to_string());
         }
         self.expanded_nodes.remove(node_id);
@@ -1652,11 +1795,18 @@ impl RedisTreeView {
     }
 
     fn is_node_expanded(&self, node_id: &str) -> bool {
+        // 展开策略看「是否处于搜索态」，而不是「是否在做本地名字过滤」：
+        // 服务端搜索期间本地过滤会关闭，但结果仍然需要自动铺开（issue #9）。
         effective_tree_expansion(
-            self.local_filter_keyword().is_some(),
+            self.is_search_active(),
             self.expanded_nodes.contains(node_id),
             self.search_collapsed_nodes.contains(node_id),
         )
+    }
+
+    /// 是否处于搜索态（关键词非空）
+    fn is_search_active(&self) -> bool {
+        !self.search_keyword.trim().is_empty()
     }
 
     /// 递归添加节点条目
@@ -1667,22 +1817,27 @@ impl RedisTreeView {
         match_cache: &mut HashMap<String, bool>,
     ) {
         let filter_keyword = self.local_filter_keyword();
-        let (_is_expandable, matches, child_ids, is_load_more) = match self.nodes.get(node_id) {
-            Some(node) => {
-                let is_load_more = matches!(node.node_type, RedisNodeType::LoadMore);
-                let matches = filter_keyword
-                    .as_ref()
-                    .map(|keyword| node.name.to_lowercase().contains(keyword))
-                    .unwrap_or(true);
-                let child_ids = node
-                    .children
-                    .iter()
-                    .map(|child| child.id.clone())
-                    .collect::<Vec<_>>();
-                (node.is_expandable(), matches, child_ids, is_load_more)
-            }
-            None => return,
-        };
+        let (_is_expandable, matches, child_ids, is_load_more, is_structural) =
+            match self.nodes.get(node_id) {
+                Some(node) => {
+                    let is_load_more = matches!(node.node_type, RedisNodeType::LoadMore);
+                    let is_structural = matches!(
+                        node.node_type,
+                        RedisNodeType::Connection | RedisNodeType::Database(_)
+                    );
+                    let matches = filter_keyword
+                        .as_ref()
+                        .map(|keyword| node.name.to_lowercase().contains(keyword))
+                        .unwrap_or(true);
+                    let child_ids = node
+                        .children
+                        .iter()
+                        .map(|child| child.id.clone())
+                        .collect::<Vec<_>>();
+                    (node.is_expandable(), matches, child_ids, is_load_more, is_structural)
+                }
+                None => return,
+            };
 
         let has_matching_descendant = filter_keyword.is_some()
             && !traversal.ancestor_matches
@@ -1696,6 +1851,7 @@ impl RedisTreeView {
             has_matching_descendant,
             is_load_more,
             is_expanded: self.is_node_expanded(node_id),
+            is_structural,
         });
         if !visibility.include_node {
             return;
@@ -1756,14 +1912,7 @@ impl RedisTreeView {
     }
 
     fn local_filter_keyword(&self) -> Option<String> {
-        let keyword = self.search_keyword.trim();
-        if keyword.is_empty() {
-            return None;
-        }
-        if keyword.contains('*') || keyword.contains('?') || keyword.contains('[') {
-            return None;
-        }
-        Some(keyword.to_lowercase())
+        search_filter_keyword(&self.search_keyword, self.server_search_keyword.as_deref())
     }
 
     fn get_node_icon(&self, node_type: &RedisNodeType) -> Icon {
@@ -1921,24 +2070,7 @@ impl RedisTreeView {
                     .tooltip(t!("RedisTree.search_help").to_string())
                     .on_click(move |_, _, cx| {
                         view_for_search.update(cx, |this, cx| {
-                            this.search_keyword = this.search_state.read(cx).text().to_string();
-                            if let Some(node_id) = this.get_selected_refreshable_node() {
-                                if let Some(node) = this.nodes.get(&node_id) {
-                                    if matches!(node.node_type, RedisNodeType::Database(_)) {
-                                        let pattern = this.search_keyword.trim().to_string();
-                                        if pattern.is_empty() {
-                                            this.reset_db_key_count(&node_id);
-                                            this.refresh_keys(node_id, cx);
-                                        } else {
-                                            cx.emit(RedisTreeViewEvent::SearchKeys {
-                                                node_id,
-                                                pattern,
-                                            });
-                                        }
-                                    }
-                                }
-                            }
-                            cx.notify();
+                            this.trigger_search(cx);
                         });
                     }),
             )
@@ -2702,8 +2834,9 @@ impl Render for RedisTreeView {
                         this.child(ContentState::loading(t!("RedisTree.loading").to_string()))
                     })
                     .when(!self.is_loading && entry_count == 0, |this| {
+                        // 搜索态下给出可操作提示，而不是笼统的「暂无数据」
                         this.child(
-                            ContentState::empty(t!("RedisTree.no_data").to_string())
+                            ContentState::empty(self.empty_state_message())
                                 .icon(
                                     Icon::new(IconName::Database)
                                         .color()
@@ -2713,8 +2846,9 @@ impl Render for RedisTreeView {
                         )
                     })
                     .when(!self.is_loading && entry_count > 0, |this| {
+                        let hint = self.search_empty_hint();
                         this.child(
-                            div()
+                            v_flex()
                                 .size_full()
                                 .context_menu({
                                     let view = cx.entity().clone();
@@ -2723,23 +2857,26 @@ impl Render for RedisTreeView {
                                     }
                                 })
                                 .child(
-                                    uniform_list(
-                                        "redis-tree-list",
-                                        entry_count,
-                                        cx.processor(
-                                            move |this: &mut Self,
-                                                  visible_range: std::ops::Range<usize>,
-                                                  window,
-                                                  cx| {
-                                                visible_range
-                                                    .map(|ix| this.render_item(ix, window, cx))
-                                                    .collect()
-                                            },
-                                        ),
-                                    )
-                                    .size_full()
-                                    .track_scroll(&self.scroll_handle),
-                                ),
+                                    div().flex_1().min_h_0().child(
+                                        uniform_list(
+                                            "redis-tree-list",
+                                            entry_count,
+                                            cx.processor(
+                                                move |this: &mut Self,
+                                                      visible_range: std::ops::Range<usize>,
+                                                      window,
+                                                      cx| {
+                                                    visible_range
+                                                        .map(|ix| this.render_item(ix, window, cx))
+                                                        .collect()
+                                                },
+                                            ),
+                                        )
+                                        .size_full()
+                                        .track_scroll(&self.scroll_handle),
+                                    ),
+                                )
+                                .children(hint.map(|hint| self.render_search_hint(hint, cx))),
                         )
                     }),
             )
@@ -2749,6 +2886,8 @@ impl Render for RedisTreeView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::{AppContext, TestAppContext, VisualTestContext, WindowOptions};
+    use gpui_component::Root;
 
     #[test]
     fn context_menu_target_updates_selection_and_clears_on_normal_selection() {
@@ -2851,6 +2990,7 @@ mod tests {
             has_matching_descendant: false,
             is_load_more: false,
             is_expanded: true,
+            is_structural: false,
         });
 
         assert!(visibility.include_node);
@@ -2859,6 +2999,44 @@ mod tests {
             "matched namespace should reveal its loaded children during search"
         );
         assert!(visibility.descendants_inherit_match);
+    }
+
+    /// issue #181：过滤态下连接 / 数据库是结构锚点，必须保留，否则整个面板
+    /// 会变空，用户分不清是没命中还是搜索坏了。
+    #[test]
+    fn filter_keeps_structural_nodes_even_when_nothing_matches() {
+        let visibility = local_search_visibility(LocalSearchInput {
+            filter_active: true,
+            ancestor_matches: false,
+            node_matches: false,
+            has_matching_descendant: false,
+            is_load_more: false,
+            is_expanded: true,
+            is_structural: true,
+        });
+
+        assert!(visibility.include_node, "连接/数据库节点不能整棵消失");
+        assert!(visibility.traverse_children);
+        assert!(
+            !visibility.descendants_inherit_match,
+            "结构锚点自身不匹配时，子节点仍需各自参与匹配"
+        );
+    }
+
+    #[test]
+    fn filter_still_hides_unmatched_key_nodes() {
+        let visibility = local_search_visibility(LocalSearchInput {
+            filter_active: true,
+            ancestor_matches: false,
+            node_matches: false,
+            has_matching_descendant: false,
+            is_load_more: false,
+            is_expanded: true,
+            is_structural: false,
+        });
+
+        assert!(!visibility.include_node);
+        assert!(!visibility.traverse_children);
     }
 
     #[test]
@@ -2870,6 +3048,7 @@ mod tests {
             has_matching_descendant: false,
             is_load_more: false,
             is_expanded: true,
+            is_structural: false,
         });
 
         assert!(visibility.include_node);
@@ -2907,5 +3086,165 @@ mod tests {
 
         assert_eq!(Some("auth"), auth.full_key.as_deref());
         assert_eq!(Some("auth:user"), user.full_key.as_deref());
+    }
+
+    #[test]
+    fn local_filter_is_skipped_once_the_server_scanned_the_same_keyword() {
+        assert_eq!(
+            Some("we".to_string()),
+            search_filter_keyword("we", None),
+            "未扫描服务端时，输入关键词应过滤已加载的列表"
+        );
+        assert_eq!(
+            None,
+            search_filter_keyword("we", Some("we")),
+            "服务端已按同一关键词扫描过，列表即权威结果，不能二次过滤"
+        );
+        assert_eq!(
+            Some("web".to_string()),
+            search_filter_keyword("web", Some("we")),
+            "关键词变化后重新回到本地过滤（在服务端结果上继续收窄）"
+        );
+        assert_eq!(None, search_filter_keyword("   ", Some("we")));
+        assert_eq!(
+            None,
+            search_filter_keyword("key*", None),
+            "含通配符的关键词只能交给服务端 SCAN"
+        );
+    }
+
+    #[test]
+    fn search_targets_prefer_the_selected_db_and_otherwise_cover_every_connected_db() {
+        assert_eq!(
+            vec!["conn:db1".to_string()],
+            resolve_search_targets(Some("conn:db1".to_string()), Vec::new()),
+            "有选中库时只搜它，保持原有语义"
+        );
+
+        let targets = resolve_search_targets(
+            None,
+            vec![
+                "b:db0".to_string(),
+                "a:db0".to_string(),
+                "b:db0".to_string(),
+            ],
+        );
+        assert_eq!(
+            vec!["a:db0".to_string(), "b:db0".to_string()],
+            targets,
+            "没有选中库时回退到所有已连接库，且顺序稳定、不重复"
+        );
+    }
+
+    /// issue #181：服务端 SCAN 命中「键名跨命名空间边界」的键时，不能再被本地
+    /// 名字过滤藏起来，否则用户看到的就是「搜不到 key」。
+    #[gpui::test]
+    fn server_search_results_are_not_hidden_by_the_local_filter(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+
+        let (window, tree) = cx.update(|cx| {
+            let mut tree = None;
+            let window = cx
+                .open_window(WindowOptions::default(), |window, cx| {
+                    let entity = cx.new(|cx| RedisTreeView::new(window, cx));
+                    tree = Some(entity.clone());
+                    cx.new(|cx| Root::new(entity, window, cx))
+                })
+                .expect("open redis tree test window");
+            (window, tree.expect("redis tree view"))
+        });
+
+        let db_node_id = RedisTreeView::db_node_id("conn", 0);
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+
+        tree.update_in(&mut cx, |tree, _window, cx| {
+            tree.connected_nodes.insert("conn".to_string());
+            tree.expanded_nodes.insert("conn".to_string());
+            tree.expanded_nodes.insert(db_node_id.clone());
+            tree.nodes.insert(
+                "conn".to_string(),
+                RedisNode::new(
+                    "conn",
+                    "redis-master",
+                    RedisNodeType::Connection,
+                    "conn",
+                    0,
+                ),
+            );
+            // 走真实挂载路径：set_current_database_node 也是把 db 节点挂到连接下
+            tree.set_node_children(
+                "conn",
+                vec![RedisNode::new(
+                    db_node_id.clone(),
+                    "db0",
+                    RedisNodeType::Database(0),
+                    "conn",
+                    0,
+                )],
+                cx,
+            );
+
+            // 服务端按 `*we*` 返回的键：`we` 跨过了 `:`，而树节点名
+            // `flow` / `east` / `1` 都不含 `we`。
+            let keys = RedisTreeView::build_namespace_tree(
+                "conn",
+                0,
+                vec![("flow:east:1".to_string(), RedisKeyType::String)],
+            );
+            tree.set_node_children(&db_node_id, keys, cx);
+
+            tree.search_keyword = "we".to_string();
+            tree.server_search_keyword = Some("we".to_string());
+            tree.rebuild_flat_entries();
+
+            assert_eq!(
+                vec!["flow:east:1".to_string()],
+                visible_key_names(tree),
+                "服务端已确认命中的键不能被本地名字过滤二次藏起来"
+            );
+            assert!(
+                visible_entry_ids(tree).contains(&db_node_id),
+                "过滤态下数据库锚点仍应可见"
+            );
+
+            // 对照分支：没有服务端扫描记录时，同一个键确实会被本地过滤隐藏。
+            // 没有这条断言，上面的断言就可能因为「根本没过滤」而空跑通过。
+            tree.server_search_keyword = None;
+            tree.rebuild_flat_entries();
+
+            assert!(
+                visible_key_names(tree).is_empty(),
+                "本地过滤（按节点名匹配）确实找不到这个键——这正是用户看到空列表的原因"
+            );
+            assert!(
+                visible_entry_ids(tree).contains(&db_node_id),
+                "即使一个键都不匹配，连接与数据库节点也不能消失"
+            );
+            assert!(
+                tree.search_empty_hint().is_some(),
+                "本地没匹配时要给出「回车扫描服务端」的可操作提示"
+            );
+        });
+        // 真正跑一遍 render：覆盖「无匹配提示条」这条新分支，确认不会 panic
+        cx.run_until_parked();
+    }
+
+    fn visible_entry_ids(tree: &RedisTreeView) -> Vec<String> {
+        tree.flat_entries
+            .iter()
+            .map(|entry| entry.node_id.clone())
+            .collect()
+    }
+
+    fn visible_key_names(tree: &RedisTreeView) -> Vec<String> {
+        tree.flat_entries
+            .iter()
+            .filter_map(|entry| tree.nodes.get(&entry.node_id))
+            .filter(|node| matches!(node.node_type, RedisNodeType::Key(_)))
+            .map(|node| node.full_key.clone().unwrap_or_else(|| node.name.clone()))
+            .collect()
     }
 }
