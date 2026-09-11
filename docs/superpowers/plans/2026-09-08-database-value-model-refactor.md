@@ -4,6 +4,24 @@
 > 调研基线：主仓库曾核对 HEAD `cd7799331b6889264da1a188fc1c8439f57a3b6a`，同时存在其他任务的未提交修改，尤其 `crates/db/src/mysql/plugin.rs`。源码定位以“路径 + 符号”为准，行号仅为调研时参考；实施前重新确认 HEAD、工作区差异及外部扩展 revision。
 > 并发变更提示：写入本文后的核验观察到 HEAD 已推进至 `4765447a9adf01d53475efbb02300d0ce712e893`；这不是本文执行了代码提交。下述审查基线不等于冻结快照，接手者须先核对相关符号的最新差异。
 
+## 实施状态（2026-09-11，分支 `feat/db-value-model-refactor`）
+
+本轮完成了 T01–T09 的代码级主体，T00/T10/T11/T12 仍受外部资源阻塞。关键决策：保留 `QueryResult.rows`/`binary_cells` 作为兼容投影而非立即删除，`typed_batch` 为唯一权威值。
+
+已完成：
+- T01：新增 `crates/db-value`（`DbValue`/`CellState`/`ColumnDescriptor`/`ResultRow`/`ResultBatch`/`RawPayload`），无 GPUI/Tokio/SDK 依赖；NULL、空文本、空 bytes、合法 UTF-8 Binary、解码失败严格区分。
+- T02：`QueryResult` 新增 `#[serde(skip)] typed_batch: Option<Arc<ResultBatch>>` 与 `from_typed_batch`/`invalidate_typed_batch`；旧 JSON 反序列化仍得到 `legacy` 投影（`typed_batch = None`）。
+- T03：IPC `CellValue` 直接进入 typed 模型，非法 base64 显式失败。
+- T04：MySQL 独立 `mysql/codec.rs`；collation 63 不猜文本；新增共享 `db::metadata_read` 受检读取器，所有 MySQL 元数据接口按连接 charset 严格恢复文本（修复截图问题）。
+- T05：PostgreSQL 独立 `postgresql/codec.rs`，精确 Numeric/BYTEA/时间/UUID/JSON。
+- T06/T07/T09：显示、复制、编辑、导入导出、数据比较、分页、extension gateway 均 typed 优先，无 typed_batch 时回退 legacy。
+- T08：MSSQL、Oracle、SQLite、DuckDB、ClickHouse 原生结果 typed-first；SQLite/DuckDB runtime BLOB 永远 Binary；所有驱动元数据读取迁移到 `metadata_read`。
+- 额外：`DbValue::BitString` 保真 MySQL BIT；二进制 legacy 预览统一为大写有界 hex。
+
+验证证据：`db` 1310 passed、`db_view` 696 passed、`extension-runtime` 195 passed、`cargo check -p main` 通过。
+
+未完成（阻塞项）：T10 IPC wire 版本协商与外仓 `navop-extensions`；T11 LOB 资源生命周期与打包验收；T12 删除 `rows`/`binary_cells`（需全部消费者、真实库与跨仓协议三重门禁）。ClickHouse JSONCompact 路径无法无损承载任意二进制 String 字节，需 `RowBinaryWithNamesAndTypes` spike 后才能宣称无损。真实 MySQL/PG/MSSQL/Oracle/ClickHouse 运行时未验收。
+
 ## 1. 结论、问题边界与优先级
 
 **建议接受跨层重构，但不推倒重做所有数据库 SDK，也不把所有数据库强制改为 IPC。核心改造是：建立唯一、无损、带类型的查询值模型，让显示文本退出数据契约。** 二进制格式只是问题的一个表现；当前链路也存在数值、时间、未知类型、解码失败与 SQL NULL 混淆的风险。
