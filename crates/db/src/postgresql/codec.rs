@@ -113,7 +113,10 @@ fn decode(ty: &Type, raw: &[u8]) -> Result<DbValue, String> {
             .map(|value| DbValue::DateTime(value.format("%Y-%m-%d %H:%M:%S%.f").to_string()))
             .map_err(|error| error.to_string()),
         &Type::TIMESTAMPTZ => DateTime::<Utc>::from_sql(&Type::TIMESTAMPTZ, raw)
-            .map(|value| DbValue::DateTime(value.to_rfc3339()))
+            // Keep the offset in the stored string so the shared legacy projection
+            // (which only normalizes RFC3339 `T`-separated values) passes it
+            // through unchanged, matching the pre-refactor `%z` display.
+            .map(|value| DbValue::DateTime(value.format("%Y-%m-%d %H:%M:%S%.f %z").to_string()))
             .map_err(|error| error.to_string()),
         &Type::DATE => NaiveDate::from_sql(&Type::DATE, raw)
             .map(|value| DbValue::Date(value.format("%Y-%m-%d").to_string()))
@@ -293,7 +296,7 @@ mod tests {
             .to_vec();
         assert_eq!(
             decode_raw(&Type::TIMESTAMPTZ, &tz_raw),
-            CellState::Decoded(DbValue::DateTime("2024-03-05T13:45:59+00:00".into()))
+            CellState::Decoded(DbValue::DateTime("2024-03-05 13:45:59 +0000".into()))
         );
     }
 
