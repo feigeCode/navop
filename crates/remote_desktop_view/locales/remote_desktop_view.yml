@@ -17,6 +17,10 @@ RemoteDesktop:
     en: "%{protocol} disconnected: %{reason}. Reconnecting in %{seconds}s"
     zh-CN: "%{protocol} 连接已断开：%{reason}。将在 %{seconds} 秒后重新连接"
     zh-HK: "%{protocol} 連線已中斷：%{reason}。將於 %{seconds} 秒後重新連線"
+  reconnect_notification_immediate:
+    en: "%{protocol} disconnected: %{reason}. Reconnecting"
+    zh-CN: "%{protocol} 连接已断开：%{reason}。正在重新连接"
+    zh-HK: "%{protocol} 連線已中斷：%{reason}。正在重新連線"
   reconnect_notification_manual:
     en: "Reconnecting %{protocol} session"
     zh-CN: "正在重新连接 %{protocol} 会话"

@@ -276,10 +276,15 @@ fn localized_reconnect_notification_for_locale(
         }
     };
     let Some(seconds) = reconnect.delay_secs else {
+        // Only a manual reconnect may read as "reconnecting the session": a
+        // backend-initiated reconnect without a scheduled delay (dynamic display
+        // updates that fall back to a reconnect) must still name its reason,
+        // otherwise the user cannot tell why the session keeps bouncing.
         return t!(
-            "RemoteDesktop.reconnect_notification_manual",
+            "RemoteDesktop.reconnect_notification_immediate",
             locale = locale,
-            protocol = protocol.label()
+            protocol = protocol.label(),
+            reason = reason
         )
         .to_string();
     };

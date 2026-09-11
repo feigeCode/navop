@@ -61,6 +61,41 @@ fn reconnect_notification_supports_vnc_and_traditional_chinese() {
 }
 
 #[test]
+fn scheduled_free_backend_reconnect_still_names_its_reason() {
+    // A reconnect without a scheduled delay comes from the backend (for example
+    // a dynamic display update that fell back to a reconnect). It must not be
+    // reported as a manual reconnect, or the session appears to bounce for no
+    // reason (issue #171).
+    for (locale, expected) in [
+        ("en", "RDP disconnected: display update error. Reconnecting"),
+        ("zh-CN", "RDP 连接已断开：显示更新错误。正在重新连接"),
+        ("zh-HK", "RDP 連線已中斷：顯示更新錯誤。正在重新連線"),
+    ] {
+        let notification = localized_reconnect_notification_for_locale(
+            locale,
+            RemoteDesktopProtocol::Rdp,
+            RemoteDesktopReconnect {
+                reason: RemoteDesktopReconnectReason::DisplayUpdate,
+                delay_secs: None,
+            },
+        );
+
+        assert_eq!(expected, notification);
+        assert_ne!(
+            notification,
+            localized_reconnect_notification_for_locale(
+                locale,
+                RemoteDesktopProtocol::Rdp,
+                RemoteDesktopReconnect {
+                    reason: RemoteDesktopReconnectReason::Manual,
+                    delay_secs: None,
+                },
+            )
+        );
+    }
+}
+
+#[test]
 fn clipboard_notifications_are_localized_for_all_supported_locales() {
     assert_eq!(
         "VNC clipboard currently supports ASCII text only",
