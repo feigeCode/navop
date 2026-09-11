@@ -137,6 +137,12 @@ const COMPOSER_EDITOR_MIN_ROWS: usize = 3;
 const COMPOSER_EDITOR_MAX_ROWS: usize = 10;
 const COMPOSER_EDITOR_FALLBACK_LINE_HEIGHT: f32 = 20.0;
 const COMPOSER_EDITOR_VERTICAL_PADDING: f32 = 12.0;
+/// 底部工具栏操作按钮(发送 / 排队 / 停止)的边长,同时也是工具栏控件高度。
+const TOOLBAR_ACTION_BUTTON_SIZE: f32 = 32.0;
+/// 执行模式下拉在空间紧张时允许收缩到的最小宽度(标签会被截断)。
+const EXECUTION_TRIGGER_MIN_WIDTH: f32 = 64.0;
+/// 下拉触发器里除文字外的固定占位:左右内边距 + 箭头 + 间距。
+const TRIGGER_CHROME_WIDTH: f32 = 48.0;
 
 fn composer_editor_height(state: &EditorState) -> Pixels {
     let rows = state
@@ -174,6 +180,47 @@ fn current_execution_mode_label(label: &SharedString) -> SharedString {
     } else {
         label.clone()
     }
+}
+
+/// 执行模式下拉触发器的宽度。
+///
+/// 执行模式只承载「自动 / 只读 / 手动确认」这类短标签,固定 124px 会在窄侧边栏里
+/// 吃掉模型选择的空间,把发送 / 停止按钮挤成细条。这里按标签估算宽度并夹在区间内:
+/// 中文短标签收窄,英文长标签仍保留原来的可用宽度上限。
+fn execution_trigger_width(label: &str, queue_mode: bool) -> Pixels {
+    let (min, max) = if queue_mode {
+        (72.0, 88.0)
+    } else {
+        (80.0, 124.0)
+    };
+    px((estimated_label_width(label) + TRIGGER_CHROME_WIDTH).clamp(min, max))
+}
+
+/// 估算一段文案的渲染宽度:CJK 等全角字符按 13px,其余按 7.5px。
+fn estimated_label_width(label: &str) -> f32 {
+    label
+        .chars()
+        .map(|ch| if is_full_width_char(ch) { 13.0 } else { 7.5 })
+        .sum()
+}
+
+/// 常见全角字符区间(中日韩文字、全角标点等)。
+fn is_full_width_char(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x1100..=0x115F
+            | 0x2E80..=0x303E
+            | 0x3041..=0x33FF
+            | 0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xA000..=0xA4CF
+            | 0xAC00..=0xD7A3
+            | 0xF900..=0xFAFF
+            | 0xFE30..=0xFE4F
+            | 0xFF00..=0xFF60
+            | 0xFFE0..=0xFFE6
+            | 0x20000..=0x3FFFD
+    )
 }
 
 /// Agent 输入框组件。
@@ -813,10 +860,13 @@ impl AgentInput {
         div().h(px(20.0)).w(px(1.0)).bg(theme.border)
     }
 
-    fn render_execution_mode_menu(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn render_execution_mode_menu(
+        &self,
+        execution_mode_label: SharedString,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let view = cx.entity();
         let is_open = self.open_menu == Some(ComposerMenuKind::Mode);
-        let execution_mode_label = current_execution_mode_label(&self.context.execution_mode_label);
         let data = ModeContentData {
             execution_mode_label: execution_mode_label.clone(),
             options: self.execution_mode_options.clone(),
@@ -1143,8 +1193,10 @@ impl AgentInput {
             Some(m) => SharedString::from(format!("{} / {}", m.provider, m.model)),
             None => SharedString::from(t!("AgentUi.select_model").to_string()),
         };
-        let execution_width = if queue_mode { 88.0 } else { 124.0 };
+        let execution_label = current_execution_mode_label(&self.context.execution_mode_label);
+        let execution_width = execution_trigger_width(&execution_label, queue_mode);
         let model_min_width = if queue_mode { 96.0 } else { 150.0 };
+        let action_button_size = px(TOOLBAR_ACTION_BUTTON_SIZE);
         let mut toolbar = h_flex()
             .w_full()
             .min_w_0()
@@ -1156,17 +1208,17 @@ impl AgentInput {
             .flex_shrink_0()
             .child(
                 div()
-                    .w(px(execution_width))
-                    .h(px(32.0))
-                    .flex_shrink_0()
+                    .w(execution_width)
+                    .min_w(px(EXECUTION_TRIGGER_MIN_WIDTH))
+                    .h(action_button_size)
                     .overflow_hidden()
-                    .child(self.render_execution_mode_menu(cx)),
+                    .child(self.render_execution_mode_menu(execution_label, cx)),
             )
             .child(
                 div()
                     .flex_1()
                     .min_w(px(model_min_width))
-                    .h(px(32.0))
+                    .h(action_button_size)
                     .overflow_hidden()
                     .child(self.render_model_menu(model_label, self.model_options.clone(), cx))
                     .debug_selector(|| "agent-input-model-control".to_string()),
@@ -1176,16 +1228,17 @@ impl AgentInput {
             toolbar = toolbar
                 .child(
                     div()
-                        .w(px(34.0))
-                        .h(px(32.0))
+                        .w(action_button_size)
+                        .h(action_button_size)
                         .flex_shrink_0()
                         .debug_selector(|| "agent-input-queue-send".to_string())
                         .child(
                             Button::new("agent-queue-send")
+                                .debug_selector(|| "agent-queue-send-button".to_string())
                                 .icon(IconName::ArrowUp)
                                 .primary()
                                 .small()
-                                .h(px(32.0))
+                                .size(action_button_size)
                                 .tooltip(t!("AgentUi.queue_for_next_turn").to_string())
                                 .on_click(
                                     cx.listener(|this, _, window, cx| this.submit(window, cx)),
@@ -1194,16 +1247,17 @@ impl AgentInput {
                 )
                 .child(
                     div()
-                        .w(px(34.0))
-                        .h(px(32.0))
+                        .w(action_button_size)
+                        .h(action_button_size)
                         .flex_shrink_0()
                         .debug_selector(|| "agent-input-stop".to_string())
                         .child(
                             Button::new("agent-stop")
+                                .debug_selector(|| "agent-stop-button".to_string())
                                 .icon(IconName::Close)
                                 .danger()
                                 .small()
-                                .h(px(32.0))
+                                .size(action_button_size)
                                 .tooltip(t!("AgentUi.stop").to_string())
                                 .on_click(cx.listener(|this, _, _, cx| this.stop(cx))),
                         ),
@@ -1211,16 +1265,17 @@ impl AgentInput {
         } else {
             toolbar = toolbar.child(
                 div()
-                    .w(px(34.0))
-                    .h(px(32.0))
+                    .w(action_button_size)
+                    .h(action_button_size)
                     .flex_shrink_0()
                     .debug_selector(|| "agent-input-send-control".to_string())
                     .child(
                         Button::new("agent-send")
+                            .debug_selector(|| "agent-send-button".to_string())
                             .icon(IconName::ArrowUp)
                             .primary()
                             .small()
-                            .h(px(32.0))
+                            .size(action_button_size)
                             .tooltip(t!("AgentUi.send").to_string())
                             .on_click(cx.listener(|this, _, window, cx| this.submit(window, cx))),
                     ),
@@ -2636,6 +2691,80 @@ mod tests {
             queue.origin.x + queue.size.width <= stop.origin.x,
             "queue and stop controls must not overlap: queue={queue:?}, stop={stop:?}"
         );
+    }
+
+    #[test]
+    fn execution_trigger_width_tracks_label_length() {
+        // 中文短标签收窄到下限,给模型选择与操作按钮让出空间。
+        assert_eq!(execution_trigger_width("自动", false), px(80.0));
+        assert_eq!(execution_trigger_width("只读", false), px(80.0));
+        // 四字标签按内容展开,仍明显窄于旧的固定 124px。
+        assert_eq!(execution_trigger_width("手动确认", false), px(100.0));
+        // 英文长标签不突破上限,保留原有的可用宽度。
+        assert_eq!(
+            execution_trigger_width("Manual Confirmation", false),
+            px(124.0)
+        );
+        // 运行中还要容纳排队与停止两个按钮,上限更低。
+        let running = execution_trigger_width("自动", true);
+        assert!(
+            running < px(80.0),
+            "running trigger should stay narrower: {running:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn toolbar_keeps_action_button_square_and_execution_trigger_compact(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let (_, cx) = cx.add_window_view(AgentInputLayoutRoot::new);
+        let cx: &mut VisualTestContext = cx;
+
+        let send = cx
+            .debug_bounds("agent-send-button")
+            .expect("send button should be rendered");
+        assert_eq!(
+            (send.size.width, send.size.height),
+            (
+                px(TOOLBAR_ACTION_BUTTON_SIZE),
+                px(TOOLBAR_ACTION_BUTTON_SIZE)
+            ),
+            "send button must stay a 32x32 tap target: send={send:?}"
+        );
+
+        let execution = cx
+            .debug_bounds("agent-execution-mode")
+            .expect("execution mode control should be rendered");
+        assert!(
+            execution.size.width < px(124.0),
+            "execution trigger should hug its short label: execution={execution:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn running_toolbar_keeps_action_buttons_square(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let (_, cx) = cx.add_window_view(AgentInputLayoutRoot::running_with_queue);
+        let cx: &mut VisualTestContext = cx;
+
+        for id in ["agent-queue-send-button", "agent-stop-button"] {
+            let bounds = cx
+                .debug_bounds(id)
+                .unwrap_or_else(|| panic!("{id} should be rendered"));
+            assert_eq!(
+                (bounds.size.width, bounds.size.height),
+                (
+                    px(TOOLBAR_ACTION_BUTTON_SIZE),
+                    px(TOOLBAR_ACTION_BUTTON_SIZE)
+                ),
+                "{id} must stay a 32x32 tap target: {bounds:?}"
+            );
+        }
     }
 
     #[gpui::test]
