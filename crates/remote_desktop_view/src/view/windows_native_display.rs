@@ -3,12 +3,54 @@ use std::time::{Duration, Instant};
 const RESIZE_DEBOUNCE: Duration = Duration::from_millis(400);
 const LOGIN_COMPENSATION_DELAY: Duration = Duration::from_millis(300);
 const RETRY_DELAY: Duration = Duration::from_millis(500);
+/// Retries allowed for one viewport before the session keeps its current
+/// geometry.
+///
+/// `UpdateSessionDisplaySettings` is optional for the host and can be rejected
+/// for the whole session. Retrying it forever re-issues the desktop size and
+/// scale at the maintenance poll rate, which makes the remote session re-render
+/// (pointer included) over and over, so give up until the viewport, login phase
+/// or session generation actually changes.
+const MAX_DISPLAY_RETRIES: u32 = 4;
+const RETRY_BACKOFF_CAP: Duration = Duration::from_secs(4);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct WindowsNativeViewportSettings {
     pub(super) width: u32,
     pub(super) height: u32,
     pub(super) desktop_scale_factor: u32,
+}
+
+/// Whether the native session should be created with client-side smart sizing.
+///
+/// Dynamic display sessions are resized to the viewport, so there is never a
+/// desktop/control mismatch to fit. Leaving smart sizing on only lets mstscax
+/// stretch the session bitmap — pointer included — whenever the two sizes
+/// disagree (for example while a display update is pending or was rejected),
+/// which is the client-side rescaling of the remote cursor. Fixed-size sessions
+/// keep the configured value, where fitting is the point.
+pub(super) fn request_smart_sizing(dynamic_display: bool, configured: bool) -> bool {
+    configured && !dynamic_display
+}
+
+/// Display scale the native session is created with.
+///
+/// Dynamic display sessions are re-scoped to the local display scale by
+/// [`WindowsNativeDisplayState`] as soon as login completes, so creating them
+/// with a different (configured) value only buys one extra remote-side rescale
+/// right after login — mstscax re-renders the whole session for it, the pointer
+/// included. Fixed-size sessions are never re-scoped, so they keep the
+/// configured value.
+pub(super) fn connect_desktop_scale_factor(
+    dynamic_display: bool,
+    configured_scale_factor: u32,
+    display_scale_factor: f32,
+) -> u32 {
+    if dynamic_display {
+        super::resize::scale_factor_percent(display_scale_factor)
+    } else {
+        configured_scale_factor
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,6 +79,7 @@ pub(super) struct WindowsNativeDisplayState {
     force_pending: Option<WindowsNativeDisplayFlushReason>,
     compensation_deadline: Option<Instant>,
     retry_after: Option<Instant>,
+    failed_attempts: u32,
 }
 
 impl WindowsNativeDisplayState {
@@ -50,6 +93,9 @@ impl WindowsNativeDisplayState {
             return;
         }
         self.latest = Some(settings);
+        // A different viewport is a fresh attempt, even for a host that rejected
+        // every previous display update.
+        self.failed_attempts = 0;
         if self.ready {
             self.pending_since = Some(now);
         }
@@ -73,6 +119,7 @@ impl WindowsNativeDisplayState {
         self.force_pending = None;
         self.compensation_deadline = None;
         self.retry_after = None;
+        self.failed_attempts = 0;
     }
 
     pub(super) fn reconnected(&mut self, generation: u64, now: Instant) {
@@ -120,15 +167,37 @@ impl WindowsNativeDisplayState {
         }
         self.last_sent = Some(request.settings);
         self.retry_after = None;
+        self.failed_attempts = 0;
         if self.latest == Some(request.settings) {
             self.pending_since = None;
         }
     }
 
-    pub(super) fn request_failed(&mut self, request: WindowsNativeDisplayRequest, now: Instant) {
-        if self.generation == Some(request.generation) && self.ready {
-            self.retry_after = Some(now + RETRY_DELAY);
+    /// Records a rejected display update.
+    ///
+    /// Returns whether the retries for this viewport are now exhausted; the
+    /// caller is expected to surface that once so a host that cannot apply
+    /// dynamic display updates is not hammered at the poll rate.
+    pub(super) fn request_failed(
+        &mut self,
+        request: WindowsNativeDisplayRequest,
+        now: Instant,
+    ) -> bool {
+        if self.generation != Some(request.generation) || !self.ready {
+            return false;
         }
+        self.failed_attempts = self.failed_attempts.saturating_add(1);
+        if self.failed_attempts <= MAX_DISPLAY_RETRIES {
+            self.retry_after = Some(now + retry_backoff(self.failed_attempts));
+            return false;
+        }
+        self.retry_after = None;
+        // Stop offering the rejected geometry: `take_resize_request` would
+        // otherwise re-request it as soon as the debounce deadline is due.
+        self.pending_since = None;
+        self.force_pending = None;
+        self.compensation_deadline = None;
+        true
     }
 
     pub(super) fn suspend(&mut self) {
@@ -138,6 +207,7 @@ impl WindowsNativeDisplayState {
         self.force_pending = None;
         self.compensation_deadline = None;
         self.retry_after = None;
+        self.failed_attempts = 0;
     }
 
     pub(super) fn reset(&mut self) {
@@ -157,6 +227,7 @@ impl WindowsNativeDisplayState {
         self.force_pending = Some(reason);
         self.compensation_deadline = Some(now + LOGIN_COMPENSATION_DELAY);
         self.retry_after = None;
+        self.failed_attempts = 0;
     }
 
     fn take_resize_request(
@@ -196,6 +267,15 @@ impl WindowsNativeDisplayState {
             reason,
         }
     }
+}
+
+/// Doubling backoff for repeated display-update failures, capped so a session
+/// that eventually recovers is retried soon after.
+fn retry_backoff(failed_attempts: u32) -> Duration {
+    let exponent = failed_attempts.saturating_sub(1).min(8);
+    RETRY_DELAY
+        .saturating_mul(1u32 << exponent)
+        .min(RETRY_BACKOFF_CAP)
 }
 
 #[cfg(test)]

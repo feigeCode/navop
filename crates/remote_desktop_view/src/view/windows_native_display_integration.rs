@@ -108,3 +108,20 @@ pub(super) fn log_display_target_unavailable(request: WindowsNativeDisplayReques
         "display: stage=failure"
     );
 }
+
+/// Reports that the session keeps rejecting display updates.
+///
+/// The session then keeps its current desktop geometry and scale until the
+/// viewport, login phase or session generation changes. Repeatedly re-applying
+/// the same size/scale re-renders the remote session (pointer included), so
+/// retrying is worse than accepting the stale geometry.
+pub(super) fn log_display_gave_up(request: WindowsNativeDisplayRequest) {
+    tracing::warn!(
+        generation = request.generation,
+        width = request.settings.width,
+        height = request.settings.height,
+        desktop_scale = request.settings.desktop_scale_factor,
+        error = "display update retries exhausted",
+        "display: stage=give_up"
+    );
+}
