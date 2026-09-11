@@ -3549,6 +3549,7 @@ mod tests {
                 rows,
                 binary_cells: vec![],
                 elapsed_ms: 0,
+                ..Default::default()
             }))
         }
 
@@ -3742,6 +3743,7 @@ mod tests {
                 rows,
                 binary_cells: vec![],
                 elapsed_ms: 0,
+                ..Default::default()
             }))
         }
 
@@ -3861,6 +3863,7 @@ mod tests {
                 rows,
                 binary_cells: vec![],
                 elapsed_ms: 0,
+                ..Default::default()
             }))
         }
 

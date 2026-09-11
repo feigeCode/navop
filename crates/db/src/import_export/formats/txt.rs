@@ -7,6 +7,7 @@ use super::csv::render_delimited_query_result;
 use super::import_execution::{ImportStatement, execute_import_statements};
 use super::{
     CsvFormatHandler, format_import_table_reference, format_import_text_value, load_import_columns,
+    sync_typed_batch_from_legacy,
 };
 use crate::DatabasePlugin;
 use crate::connection::DbConnection;
@@ -254,6 +255,7 @@ impl FormatHandler for TxtFormatHandler {
                     &mut query_result,
                 )
                 .await?;
+                sync_typed_batch_from_legacy(&mut query_result)?;
                 let rows_count = query_result.rows.len() as u64;
                 let table_output = render_delimited_query_result(
                     "TXT",
@@ -332,6 +334,7 @@ mod tests {
             rows: vec![vec![None, Some(String::new())]],
             binary_cells: vec![],
             elapsed_ms: 0,
+            ..Default::default()
         };
 
         let output =
@@ -354,6 +357,7 @@ mod tests {
                 bytes: b"true".to_vec(),
             }],
             elapsed_ms: 0,
+            ..Default::default()
         };
 
         let error =

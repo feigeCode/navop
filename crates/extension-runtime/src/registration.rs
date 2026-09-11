@@ -774,9 +774,7 @@ fn validate_resource_workbench(
         if let Some(collection) = page.collection.as_ref() {
             for action in &collection.actions {
                 if !workbench.operations.contains_key(&action.operation) {
-                    return Err(invalid(
-                        "collection action references an unknown operation",
-                    ));
+                    return Err(invalid("collection action references an unknown operation"));
                 }
                 if action.id.trim().is_empty() || action.label.trim().is_empty() {
                     return Err(invalid("collection action id and label must not be empty"));

@@ -4,7 +4,14 @@ use gpui::{
     Focusable, Image, ImageFormat, IntoElement, ObjectFit, ParentElement, PathPromptOptions,
     SharedString, Styled, Subscription, Window, actions, div, img, px,
 };
-use gpui_component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _, Size, WindowExt, button::Button, h_flex, input::{Input, InputEvent, InputState}, notification::Notification, v_flex};
+use gpui_component::{
+    ActiveTheme as _, Disableable as _, Icon, Sizable as _, Size, WindowExt,
+    button::Button,
+    h_flex,
+    input::{Input, InputEvent, InputState},
+    notification::Notification,
+    v_flex,
+};
 use one_assets::IconName;
 use one_ui::edit_table::{Column, EditTable, EditTableEvent, EditTableState};
 use one_ui::{create_large_text_editor_with_content, large_text_values_equivalent};
@@ -760,13 +767,26 @@ impl DataGrid {
         binary_cells: Vec<BinaryCell>,
         cx: &mut App,
     ) {
+        self.update_data_with_typed_batch(columns, rows, rowids, binary_cells, None, cx);
+    }
+
+    pub fn update_data_with_typed_batch(
+        &self,
+        columns: Vec<Column>,
+        rows: Vec<Vec<Option<String>>>,
+        rowids: Vec<String>,
+        binary_cells: Vec<BinaryCell>,
+        typed_batch: Option<Arc<db_value::ResultBatch>>,
+        cx: &mut App,
+    ) {
         self.data_generation.fetch_add(1, Ordering::AcqRel);
         self.table.update(cx, |state, cx| {
-            state.delegate_mut().update_data_with_binary_cells(
+            state.delegate_mut().update_data_with_typed_batch(
                 columns,
                 rows,
                 rowids,
                 binary_cells,
+                typed_batch,
                 cx,
             );
             state.refresh(cx);
@@ -1066,7 +1086,7 @@ impl DataGrid {
                     }
                     let query_result = response.query_result;
 
-                    let (columns, rows, rowids, binary_cells) =
+                    let (columns, rows, rowids, binary_cells, typed_batch) =
                         if query_result.columns.first().map(|c| c.as_str()) == Some("__rowid__") {
                             let columns: Vec<Column> = query_result
                                 .columns
@@ -1098,7 +1118,8 @@ impl DataGrid {
                                     })
                                 })
                                 .collect();
-                            (columns, rows, rowids, binary_cells)
+                            // rowid 列被剥离,typed batch 与展示列不再对齐,走 legacy 回退。
+                            (columns, rows, rowids, binary_cells, None)
                         } else {
                             let columns: Vec<Column> = query_result
                                 .columns
@@ -1110,7 +1131,13 @@ impl DataGrid {
                                 .iter()
                                 .map(|row| row.iter().cloned().collect())
                                 .collect();
-                            (columns, rows, Vec::new(), query_result.binary_cells.clone())
+                            (
+                                columns,
+                                rows,
+                                Vec::new(),
+                                query_result.binary_cells.clone(),
+                                query_result.typed_batch.clone(),
+                            )
                         };
 
                     let column_meta: Vec<ColumnInfo> =
@@ -1151,11 +1178,12 @@ impl DataGrid {
                         table.update(cx, |state, cx| {
                             state.delegate_mut().set_loading(false);
                             state.delegate_mut().set_column_meta(column_meta);
-                            state.delegate_mut().update_data_with_binary_cells(
+                            state.delegate_mut().update_data_with_typed_batch(
                                 columns,
                                 rows,
                                 rowids,
                                 binary_cells,
+                                typed_batch,
                                 cx,
                             );
                             state.delegate_mut().apply_order_by_clause(&order_by_clause);
@@ -1709,11 +1737,12 @@ impl DataGrid {
                                 return;
                             }
                             table.update(cx, |state, cx| {
-                                state.delegate_mut().update_data_with_binary_cells(
+                                state.delegate_mut().update_data_with_typed_batch(
                                     columns,
                                     rows,
                                     vec![],
                                     binary_cells,
+                                    query_result.typed_batch.clone(),
                                     cx,
                                 );
                                 // 快路径：结果集自带的列类型直接可用
@@ -3419,6 +3448,7 @@ mod tests {
                 .collect(),
             binary_cells: vec![],
             elapsed_ms: 0,
+            ..Default::default()
         }
     }
 
@@ -3472,6 +3502,7 @@ mod tests {
                 },
             ],
             elapsed_ms: 0,
+            ..Default::default()
         };
 
         let payload = DataGrid::normalize_query_result(result);

@@ -1,5 +1,5 @@
 use db::ipc::{ExternalDatabasePlugin, IpcDriverManifest};
-use db::{BinaryCell, ColumnInfo, DatabasePlugin, DbManager};
+use db::{BinaryCell, ColumnInfo, DatabasePlugin, DbManager, TableCellValue};
 use one_core::storage::DatabaseType;
 use std::path::PathBuf;
 
@@ -460,6 +460,48 @@ fn sql_mutations_require_non_null_primary_keys() {
     let context = sql_context((&null_key_data, &columns, &keyed_metadata), plugin.as_ref());
     assert_eq!(CopyFormatter::format(CopyFormat::SqlUpdate, context), "");
     assert_eq!(CopyFormatter::format(CopyFormat::SqlDelete, context), "");
+}
+
+#[test]
+fn typed_cells_are_authoritative_over_legacy_projection() {
+    let data = vec![vec![
+        Some("legacy-text".into()),
+        Some("0x9999".into()),
+        None,
+    ]];
+    let columns = vec!["text".into(), "binary".into(), "nullish".into()];
+    let metadata = TableMetadata::new("values_table");
+    // legacy sidecar 与 typed cells 冲突,typed 应优先。
+    let binary_cells = vec![binary_cell(0, 1, &[9, 9])];
+    let typed_cells = vec![vec![
+        TableCellValue::Text("typed-text".into()),
+        TableCellValue::Binary(vec![1, 2, 3]),
+        TableCellValue::Null,
+    ]];
+
+    let context = CopyFormatContext::new(&data, &columns, &metadata)
+        .with_binary_cells(&binary_cells)
+        .with_typed_cells(&typed_cells);
+    assert_eq!(
+        CopyFormatter::format(CopyFormat::Tsv, context),
+        "typed-text\tbase64:AQID\t\\N"
+    );
+
+    let context = CopyFormatContext::new(&data, &columns, &metadata)
+        .with_binary_cells(&binary_cells)
+        .with_typed_cells(&typed_cells);
+    assert_eq!(
+        CopyFormatter::format(CopyFormat::Csv, context),
+        "typed-text,base64:AQID,\\N"
+    );
+
+    // 无 typed cells 时维持 legacy 行为。
+    let context =
+        CopyFormatContext::new(&data, &columns, &metadata).with_binary_cells(&binary_cells);
+    assert_eq!(
+        CopyFormatter::format(CopyFormat::Tsv, context),
+        "legacy-text\tbase64:CQk=\t\\N"
+    );
 }
 
 #[test]

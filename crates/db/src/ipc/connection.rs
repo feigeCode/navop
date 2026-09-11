@@ -13,7 +13,7 @@
 
 use crate::connection::{DbConnection, DbError, StreamingProgress};
 use crate::executor::{
-    BinaryCell, ExecOptions, ExecResult, QueryColumnMeta, QueryResult, SqlResult, SqlSource,
+    ExecOptions, ExecResult, QueryColumnMeta, QueryResult, SqlResult, SqlSource,
 };
 use crate::ipc::client::JsonRpcClient;
 use crate::ipc::method_support::{MethodSet, MethodSupport};
@@ -26,6 +26,7 @@ use crate::ssh_tunnel::resolve_connection_target;
 use crate::{DatabasePlugin, SqlErrorInfo, truncate_str};
 use async_trait::async_trait;
 use connection_tunnel::TunnelGuard;
+use db_value::ResultRow;
 use extension_protocol::conn::ConnId;
 use extension_protocol::method;
 use extension_protocol::row::{CellValue, ColumnSpec, Row};
@@ -251,17 +252,26 @@ impl ExternalDbConnection {
             }
         };
 
-        Ok(SqlResult::Query(QueryResult {
-            sql: sql.to_string(),
-            columns,
-            column_meta,
-            rows: fetched.rows,
-            binary_cells: fetched.binary_cells,
-            elapsed_ms: start.elapsed().as_millis(),
-        }))
+        // 先把 wire cell 收进带类型的 batch,再从 batch 统一投影 legacy 兼容表示。
+        // 类型权威留在 `typed_batch`;投影仅供未迁移消费者。
+        let batch =
+            super::value_adapter::result_batch_from_columns(0, &start_resp.columns, fetched.rows)?;
+        let mut result =
+            QueryResult::from_typed_batch(sql.to_string(), batch, start.elapsed().as_millis())
+                .map_err(|error| {
+                    DbError::query(format!(
+                        "failed to project typed IPC result to the legacy result: {error}"
+                    ))
+                })?;
+        // `column_spec_to_meta` 比 batch 派生的元数据更完整(如 collation id 与
+        // MySQL collation 命名空间解析),显式覆盖以保持 IPC 行为不变。
+        result.columns = columns;
+        result.column_meta = column_meta;
+
+        Ok(SqlResult::Query(result))
     }
 
-    /// 把游标里所有行 fetch 出来并转成宿主侧字符串行。
+    /// 把游标里所有行 fetch 出来并转成带类型的 [`ResultRow`]。
     ///
     /// 抽成独立方法是为了让 [`query_select`] 能在 fetch 出错时仍统一走 `cursor/close`
     /// (RAII 式清理),对标 `JsonRpcClient` 的 `PendingGuard`——避免 `?` 提前返回
@@ -271,8 +281,7 @@ impl ExternalDbConnection {
         conn_id: ConnId,
         cursor_id: &str,
     ) -> Result<FetchedRows, DbError> {
-        let mut rows: Vec<Vec<Option<String>>> = Vec::new();
-        let mut binary_cells = Vec::new();
+        let mut rows: Vec<ResultRow> = Vec::new();
         loop {
             let fetch_resp: CursorFetchOutput = self
                 .call::<CursorFetchOutput>(
@@ -282,33 +291,28 @@ impl ExternalDbConnection {
                 .await?;
 
             for row in fetch_resp.rows {
-                let row_index = rows.len();
-                let mut display_row = Vec::with_capacity(row.len());
-                for (column_index, cell) in row.into_iter().enumerate() {
-                    let value = cell_to_display_value(cell).map_err(|error| {
-                        DbError::query_with_source(
-                            format!(
-                                "failed to decode IPC cell at row {row_index}, column {column_index}"
-                            ),
-                            error,
-                        )
-                    })?;
-                    if let Some(bytes) = value.binary {
-                        binary_cells.push(BinaryCell {
-                            row_index,
-                            column_index,
-                            bytes,
-                        });
-                    }
-                    display_row.push(value.text);
-                }
-                rows.push(display_row);
+                let row_id = rows.len() as u64;
+                let cells = row
+                    .into_iter()
+                    .enumerate()
+                    .map(|(column_index, cell)| {
+                        super::value_adapter::cell_to_cell_state(cell).map_err(|error| {
+                            DbError::query_with_source(
+                                format!(
+                                    "failed to decode IPC cell at row {row_id}, column {column_index}"
+                                ),
+                                error,
+                            )
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                rows.push(ResultRow { id: row_id, cells });
             }
             if fetch_resp.done {
                 break;
             }
         }
-        Ok(FetchedRows { rows, binary_cells })
+        Ok(FetchedRows { rows })
     }
 
     /// wire 透传分发:解析信封 → 按需注入 conn_id → 按 [`MethodSupport`] 决定调外部
@@ -575,98 +579,10 @@ fn mysql_result_encoding(collation_id: u16) -> (Option<String>, Option<String>) 
     )
 }
 
-/// 把一行 `Row` 翻译成宿主侧的 `Vec<Option<String>>`(每列一个可空字符串)。
-#[cfg(test)]
-fn row_to_strings(row: Row) -> Result<Vec<Option<String>>, DbError> {
-    row.into_iter().map(cell_to_string).collect()
-}
-
+/// 一次查询 fetch 阶段收集到的带类型行。`query_select` 用它构造
+/// [`db_value::ResultBatch`],再投影出旧 `QueryResult`。
 struct FetchedRows {
-    rows: Vec<Vec<Option<String>>>,
-    binary_cells: Vec<BinaryCell>,
-}
-
-#[derive(Debug)]
-struct CellDisplayValue {
-    text: Option<String>,
-    binary: Option<Vec<u8>>,
-}
-
-/// 单个 `CellValue` → 显示字符串。
-///
-/// 设计考虑:宿主层(`QueryResult`)把列值统一存为 `Option<String>`,这是历史
-/// 选择(参考 SqlitePlugin / MySqlPlugin)。本翻译尽量保持「人可读」+ 「数据无损」:
-/// - 数值:`to_string()`
-/// - decimal/uuid:已经是字符串,直接透传
-/// - datetime:归一到宿主表格常用的空格分隔格式
-/// - bytes:`0x...` hex 化,保持宿主表格中的二进制展示稳定
-/// - json / array / map / geo / custom:`to_string()` 让 caller 看到原 JSON
-#[cfg(test)]
-fn cell_to_string(cell: CellValue) -> Result<Option<String>, DbError> {
-    Ok(cell_to_display_value(cell)?.text)
-}
-
-fn cell_to_display_value(cell: CellValue) -> Result<CellDisplayValue, DbError> {
-    use base64::Engine;
-    let text = match cell {
-        CellValue::Null => None,
-        CellValue::Bool { value } => Some(value.to_string()),
-        CellValue::I64 { value } => Some(value.to_string()),
-        CellValue::U64 { value } => Some(value.to_string()),
-        CellValue::F64 { value } => Some(value.to_string()),
-        CellValue::Decimal { value }
-        | CellValue::Text { value }
-        | CellValue::Uuid { value }
-        | CellValue::Date { value }
-        | CellValue::Time { value }
-        | CellValue::Duration { value } => Some(value),
-        CellValue::Datetime { value } => Some(format_ipc_datetime(&value)),
-        CellValue::Bytes { value } => {
-            return base64::engine::general_purpose::STANDARD
-                .decode(value.as_bytes())
-                .map(|bytes| CellDisplayValue {
-                    text: Some(format!("0x{}", hex::encode(&bytes))),
-                    binary: Some(bytes),
-                })
-                .map_err(|error| {
-                    DbError::query_with_source("invalid base64 in CellValue::Bytes", error)
-                });
-        }
-        CellValue::Json { value } => Some(value.to_string()),
-        CellValue::Array { value, .. } => Some(json!(value).to_string()),
-        CellValue::Map { value } => Some(Value::Object(value).to_string()),
-        CellValue::Geo { value, .. } => Some(value),
-        CellValue::Custom { subtype, raw } => Some(format!("custom:{subtype}({raw})")),
-    };
-    Ok(CellDisplayValue { text, binary: None })
-}
-
-fn format_ipc_datetime(value: &str) -> String {
-    if let Ok(datetime) = chrono::DateTime::parse_from_rfc3339(value) {
-        return format_naive_datetime(datetime.naive_local());
-    }
-
-    let parsed = chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%.f")
-        .or_else(|_| chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f"));
-    match parsed {
-        Ok(datetime) => format_naive_datetime(datetime),
-        Err(_) => value.to_string(),
-    }
-}
-
-fn format_naive_datetime(datetime: chrono::NaiveDateTime) -> String {
-    let micros = datetime.and_utc().timestamp_subsec_micros();
-    if micros == 0 {
-        datetime.format("%Y-%m-%d %H:%M:%S").to_string()
-    } else if micros % 1_000 == 0 {
-        format!(
-            "{}.{:03}",
-            datetime.format("%Y-%m-%d %H:%M:%S"),
-            micros / 1_000
-        )
-    } else {
-        format!("{}.{:06}", datetime.format("%Y-%m-%d %H:%M:%S"), micros)
-    }
+    rows: Vec<ResultRow>,
 }
 
 /// 把 SQL/查询错误的 [`DbError`] 提取出来给 `SqlResult::Error`;别的错误返回 None
@@ -1117,6 +1033,7 @@ fn wire_value_result(sql: &str, value: Value) -> SqlResult {
         rows: vec![vec![Some(value.to_string())]],
         binary_cells: vec![],
         elapsed_ms: 0,
+        ..Default::default()
     })
 }
 
@@ -1157,6 +1074,7 @@ fn schema_users_value_result(sql: &str, value: Value) -> Option<SqlResult> {
         rows,
         binary_cells: vec![],
         elapsed_ms: 0,
+        ..Default::default()
     }))
 }
 
@@ -1169,6 +1087,7 @@ fn sql_explain_value_result(sql: &str, value: Value) -> Option<SqlResult> {
         rows: vec![vec![Some(result.content)]],
         binary_cells: vec![],
         elapsed_ms: 0,
+        ..Default::default()
     }))
 }
 
@@ -1420,116 +1339,6 @@ mod tests {
             assert!(meta.result_collation.is_none());
             assert!(meta.result_collation_id.is_none());
         }
-    }
-
-    #[test]
-    fn cell_to_string_handles_basic_kinds() {
-        assert_eq!(cell_to_string(CellValue::Null).unwrap(), None);
-        assert_eq!(
-            cell_to_string(CellValue::Bool { value: true }).unwrap(),
-            Some("true".to_string())
-        );
-        assert_eq!(
-            cell_to_string(CellValue::I64 { value: 42 }).unwrap(),
-            Some("42".to_string())
-        );
-        assert_eq!(
-            cell_to_string(CellValue::U64 { value: u64::MAX }).unwrap(),
-            Some(u64::MAX.to_string())
-        );
-        assert_eq!(
-            cell_to_string(CellValue::Decimal {
-                value: "1.50000".into()
-            })
-            .unwrap(),
-            Some("1.50000".to_string())
-        );
-        assert_eq!(
-            cell_to_string(CellValue::Text {
-                value: "hello".into()
-            })
-            .unwrap(),
-            Some("hello".to_string())
-        );
-        assert_eq!(
-            cell_to_string(CellValue::Uuid {
-                value: "550e8400-e29b-41d4-a716-446655440000".into()
-            })
-            .unwrap(),
-            Some("550e8400-e29b-41d4-a716-446655440000".to_string())
-        );
-    }
-
-    #[test]
-    fn cell_to_string_formats_ipc_datetime_for_table_display() {
-        assert_eq!(
-            cell_to_string(CellValue::Datetime {
-                value: "2026-04-27T15:08:53.085Z".into()
-            })
-            .unwrap(),
-            Some("2026-04-27 15:08:53.085".to_string())
-        );
-        assert_eq!(
-            cell_to_string(CellValue::Datetime {
-                value: "2026-04-27T15:08:53".into()
-            })
-            .unwrap(),
-            Some("2026-04-27 15:08:53".to_string())
-        );
-    }
-
-    #[test]
-    fn cell_to_display_value_preserves_binary_bytes() {
-        // base64 of [1,2,3] = "AQID"
-        let value = cell_to_display_value(CellValue::Bytes {
-            value: "AQID".into(),
-        })
-        .unwrap();
-        assert_eq!(value.text.as_deref(), Some("0x010203"));
-        assert_eq!(value.binary.as_deref(), Some([1, 2, 3].as_slice()));
-    }
-
-    #[test]
-    fn cell_to_display_value_rejects_invalid_base64() {
-        let error = cell_to_display_value(CellValue::Bytes {
-            value: "not_base64!".into(),
-        })
-        .unwrap_err();
-        assert!(matches!(error, DbError::Query { .. }));
-        assert!(
-            error
-                .to_string()
-                .contains("invalid base64 in CellValue::Bytes")
-        );
-    }
-
-    #[test]
-    fn cell_to_string_serializes_complex_kinds() {
-        let s = cell_to_string(CellValue::Array {
-            element_type: ColumnTypeKind::I64,
-            value: vec![CellValue::I64 { value: 1 }, CellValue::I64 { value: 2 }],
-        })
-        .unwrap();
-        assert!(s.unwrap().contains(r#""i64""#));
-
-        let mut m = serde_json::Map::new();
-        m.insert("k".into(), json!("v"));
-        let s = cell_to_string(CellValue::Map { value: m }).unwrap();
-        assert_eq!(s.as_deref(), Some(r#"{"k":"v"}"#));
-    }
-
-    #[test]
-    fn row_to_strings_preserves_nulls() {
-        let row = vec![
-            CellValue::I64 { value: 1 },
-            CellValue::Null,
-            CellValue::Text { value: "x".into() },
-        ];
-        let strings = row_to_strings(row).unwrap();
-        assert_eq!(strings.len(), 3);
-        assert_eq!(strings[0].as_deref(), Some("1"));
-        assert!(strings[1].is_none());
-        assert_eq!(strings[2].as_deref(), Some("x"));
     }
 
     #[test]

@@ -9,13 +9,12 @@ use crate::{
         DocumentExporterContrib, Engines, HtmlPreviewTransformContrib, IpcEntry, IpcRuntime,
         IpcTransport, Manifest, MenuCommandRef, MenuContrib, ResourceConnectionContrib,
         ResourceConnectionFieldType, ResourceConnectionForm, ResourceConnectionFormField,
-        ResourceConnectionFormTab, ResourceWorkbenchContrib, ResourceWorkbenchEffect,
-        ResourceWorkbenchOperation, ResourceWorkbenchOperationMode, ResourceWorkbenchPage,
-        ResourceWorkbenchRenderer, ResourceWorkbenchRendererKind, ResourceWorkbenchTemplate,
-        ResourceWorkbenchCollection, ResourceWorkbenchColumn, ResourceWorkbenchPagination,
-        ResourceWorkbenchRowAction,
-        RuntimeSection, ShellHostModule, ShellSurface, ShellViewContrib, WasmRuntime,
-        WasmRuntimeKind,
+        ResourceConnectionFormTab, ResourceWorkbenchCollection, ResourceWorkbenchColumn,
+        ResourceWorkbenchContrib, ResourceWorkbenchEffect, ResourceWorkbenchOperation,
+        ResourceWorkbenchOperationMode, ResourceWorkbenchPage, ResourceWorkbenchPagination,
+        ResourceWorkbenchRenderer, ResourceWorkbenchRendererKind, ResourceWorkbenchRowAction,
+        ResourceWorkbenchTemplate, RuntimeSection, ShellHostModule, ShellSurface, ShellViewContrib,
+        WasmRuntime, WasmRuntimeKind,
         contributes::{
             RemoteFileEditorCommandContrib, RemoteFileEditorContrib, RemoteFileEditorLaunchMode,
         },
@@ -498,7 +497,9 @@ fn runtime_catalog_resolves_collection_row_actions_and_badge_columns() {
         collection: Some(ResourceWorkbenchCollection {
             items_path: "/items".into(),
             key_paths: vec!["/id".into()],
-            pagination: ResourceWorkbenchPagination { kind: "none".into() },
+            pagination: ResourceWorkbenchPagination {
+                kind: "none".into(),
+            },
             columns: vec![ResourceWorkbenchColumn {
                 id: "state".into(),
                 title: "State".into(),
@@ -551,7 +552,9 @@ fn runtime_catalog_rejects_collection_action_with_unknown_operation() {
     page.collection = Some(ResourceWorkbenchCollection {
         items_path: "/items".into(),
         key_paths: vec!["/id".into()],
-        pagination: ResourceWorkbenchPagination { kind: "none".into() },
+        pagination: ResourceWorkbenchPagination {
+            kind: "none".into(),
+        },
         columns: vec![],
         open: None,
         actions: vec![ResourceWorkbenchRowAction {

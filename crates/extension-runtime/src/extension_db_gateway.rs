@@ -1,13 +1,13 @@
 #![allow(dead_code)]
 
 use async_trait::async_trait;
-use db::{ExecResult, GlobalDbState, QueryResult, SqlResult};
+use db::GlobalDbState;
 use extension_component::{
     DbSessionResource, ExtensionDbHost, PermissionSet, SqlAccess,
-    protocol::{
-        Column, ConnectionInfo, DbError, DbValue, ExecuteSqlRequest, OpenSessionRequest, RowBatch,
-    },
+    protocol::{ConnectionInfo, DbError, ExecuteSqlRequest, OpenSessionRequest, RowBatch},
 };
+
+use crate::extension_db_gateway_conversion::sql_results_to_row_batch;
 
 pub struct ExtensionDbGateway {
     extension_id: String,
@@ -73,7 +73,7 @@ impl ExtensionDbGateway {
             )
             .await
             .map_err(|error| DbError::query_failed(error.to_string()))?;
-        Ok(sql_results_to_row_batch(results))
+        sql_results_to_row_batch(results)
     }
 
     pub async fn list_databases(&self, connection_id: String) -> Result<Vec<String>, DbError> {
@@ -188,96 +188,6 @@ fn db_exec_options(options: extension_component::protocol::ExecOptions) -> db::E
         streaming: options.stream,
         ..Default::default()
     }
-}
-
-fn sql_results_to_row_batch(results: Vec<SqlResult>) -> RowBatch {
-    if let Some(query) = results.iter().find_map(|result| match result {
-        SqlResult::Query(query) => Some(query),
-        _ => None,
-    }) {
-        return query_to_row_batch(query);
-    }
-    exec_results_to_row_batch(results)
-}
-
-fn query_to_row_batch(query: &QueryResult) -> RowBatch {
-    let columns = query
-        .columns
-        .iter()
-        .enumerate()
-        .map(|(index, name)| {
-            let meta = query.column_meta.get(index);
-            Column {
-                name: name.clone(),
-                type_name: meta.map(|meta| meta.db_type.clone()).unwrap_or_default(),
-                nullable: meta.map(|meta| meta.nullable).unwrap_or(true),
-            }
-        })
-        .collect();
-    let rows = query
-        .rows
-        .iter()
-        .map(|row| {
-            row.iter()
-                .map(|cell| match cell {
-                    Some(value) => DbValue::Text(value.clone()),
-                    None => DbValue::Null,
-                })
-                .collect()
-        })
-        .collect();
-    RowBatch {
-        columns,
-        rows,
-        next_cursor: None,
-    }
-}
-
-fn exec_results_to_row_batch(results: Vec<SqlResult>) -> RowBatch {
-    let rows = results
-        .into_iter()
-        .filter_map(|result| match result {
-            SqlResult::Exec(exec) => Some(exec_to_row(exec)),
-            SqlResult::Error(error) => Some(vec![
-                DbValue::Text(error.sql),
-                DbValue::Text("error".to_string()),
-                DbValue::Text(error.message),
-            ]),
-            SqlResult::Query(_) => None,
-        })
-        .collect();
-    RowBatch {
-        columns: vec![
-            Column {
-                name: "sql".to_string(),
-                type_name: "text".to_string(),
-                nullable: false,
-            },
-            Column {
-                name: "status".to_string(),
-                type_name: "text".to_string(),
-                nullable: false,
-            },
-            Column {
-                name: "message".to_string(),
-                type_name: "text".to_string(),
-                nullable: true,
-            },
-        ],
-        rows,
-        next_cursor: None,
-    }
-}
-
-fn exec_to_row(exec: ExecResult) -> Vec<DbValue> {
-    vec![
-        DbValue::Text(exec.sql),
-        DbValue::Text("ok".to_string()),
-        DbValue::Text(
-            exec.message
-                .unwrap_or_else(|| format!("{} row(s) affected", exec.rows_affected)),
-        ),
-    ]
 }
 
 #[cfg(test)]

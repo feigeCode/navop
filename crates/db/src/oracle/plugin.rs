@@ -3177,6 +3177,7 @@ mod tests {
                 rows,
                 binary_cells: vec![],
                 elapsed_ms: 0,
+                ..Default::default()
             }))
         }
 
@@ -3295,6 +3296,7 @@ mod tests {
                 rows,
                 binary_cells: vec![],
                 elapsed_ms: 0,
+                ..Default::default()
             }))
         }
 
@@ -3413,6 +3415,7 @@ mod tests {
                 rows,
                 binary_cells: vec![],
                 elapsed_ms: 0,
+                ..Default::default()
             }))
         }
 
@@ -3471,6 +3474,7 @@ mod tests {
             rows: vec![vec![Some("42".to_string())]],
             binary_cells: vec![],
             elapsed_ms: 0,
+            ..Default::default()
         };
         paginated_query
             .strip_hidden_result_columns(&mut query_result)
@@ -3535,6 +3539,7 @@ mod tests {
                 bytes: vec![42],
             }],
             elapsed_ms: 0,
+            ..Default::default()
         };
 
         paginated_query

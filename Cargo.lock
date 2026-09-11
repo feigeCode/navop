@@ -3071,6 +3071,7 @@ dependencies = [
  "connection-form",
  "connection_tunnel",
  "dashmap 5.5.3",
+ "db-value",
  "duckdb",
  "encoding_rs",
  "extension-host",
@@ -3112,6 +3113,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "db-value"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "db_view"
 version = "0.15.2"
 dependencies = [
@@ -3122,6 +3132,7 @@ dependencies = [
  "chrono",
  "connection-form",
  "db",
+ "db-value",
  "er_flow",
  "extension-component",
  "ferrum-flow",
@@ -4023,6 +4034,7 @@ dependencies = [
  "async-trait",
  "connection-import-protocol",
  "db",
+ "db-value",
  "db_view",
  "extension-component",
  "extension-protocol",

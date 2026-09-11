@@ -3748,6 +3748,7 @@ mod tests {
             rows: vec![vec![Some(" 42 ".to_string())]],
             binary_cells: vec![],
             elapsed_ms: 0,
+            ..Default::default()
         });
         assert_eq!(42, parse_table_data_total_count(valid).unwrap());
 
@@ -3758,6 +3759,7 @@ mod tests {
             rows: vec![],
             binary_cells: vec![],
             elapsed_ms: 0,
+            ..Default::default()
         });
         assert!(parse_table_data_total_count(missing).is_err());
 
@@ -3768,6 +3770,7 @@ mod tests {
             rows: vec![vec![None]],
             binary_cells: vec![],
             elapsed_ms: 0,
+            ..Default::default()
         });
         assert!(parse_table_data_total_count(null).is_err());
 
@@ -3778,6 +3781,7 @@ mod tests {
             rows: vec![vec![Some("many".to_string())]],
             binary_cells: vec![],
             elapsed_ms: 0,
+            ..Default::default()
         });
         assert!(parse_table_data_total_count(invalid).is_err());
 

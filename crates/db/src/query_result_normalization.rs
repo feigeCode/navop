@@ -402,6 +402,7 @@ mod tests {
                 .collect(),
             binary_cells,
             elapsed_ms: 0,
+            ..Default::default()
         }
     }
 

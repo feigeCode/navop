@@ -1,3 +1,4 @@
+mod codec;
 mod connection;
 mod plugin;
 
