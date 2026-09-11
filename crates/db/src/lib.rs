@@ -13,6 +13,7 @@ pub mod ipc;
 pub mod manager;
 mod manifest_helpers;
 pub mod metadata_cache;
+pub mod metadata_read;
 pub mod plugin;
 pub mod plugin_manifest;
 pub mod query_result_normalization;
