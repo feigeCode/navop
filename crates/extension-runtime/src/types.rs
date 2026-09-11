@@ -19,6 +19,11 @@ pub use resource_connection::RegisteredResourceConnectionContribution;
 #[path = "types/resource_workbench.rs"]
 mod resource_workbench;
 pub use resource_workbench::RegisteredResourceWorkbenchContribution;
+#[path = "types/workbench_operation_catalog.rs"]
+mod workbench_operation_catalog;
+pub use workbench_operation_catalog::{
+    WorkbenchOperationCatalog, WorkbenchOperationEntry, WorkbenchOperationParam,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisteredRemoteFileEditorContribution {
