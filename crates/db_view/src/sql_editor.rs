@@ -22,19 +22,19 @@ use gpui::{
 };
 use gpui_component::highlighter::{Diagnostic, DiagnosticSeverity};
 use gpui_component::input::{
-    CodeActionProvider, CompletionProvider, Copy, Cut, EditorState, GutterMarker, HoverProvider,
-    Paste, SelectAll, TabSize,
+    CodeActionProvider, CompletionProvider, Copy, Cut, EditorState, GutterLane, GutterLaneOptions,
+    GutterMarker, HoverProvider, Paste, SelectAll, TabSize,
 };
 use gpui_component::native_menu::NativeMenu as PlatformNativeMenu;
 use gpui_component::spinner::Spinner;
 use gpui_component::tooltip::Tooltip;
 use gpui_component::{Icon, Rope, RopeExt, Sizable as _, Size};
-use one_assets::IconName;
 use lsp_types::{
     CompletionContext, CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit,
     InlineCompletionContext, InlineCompletionItem, InlineCompletionResponse, InsertReplaceEdit,
     InsertTextFormat, Range as LspRange,
 };
+use one_assets::IconName;
 use one_core::settings::{AppSettings, installed_grid_monospace_font};
 use one_ui::{ExtendedEditor, ExtendedEditorState, SignatureHelpProvider};
 use rust_i18n::t;
@@ -2422,6 +2422,7 @@ fn analyze_diagnostics_pure(
 pub struct SqlEditor {
     editor: Entity<EditorState>,
     extended_editor: Entity<ExtendedEditorState>,
+    gutter_lane: GutterLane,
     default_completion_provider: Rc<DefaultSqlCompletionProvider>,
     default_hover_provider: Option<Rc<DefaultSqlHoverProvider>>,
     default_signature_help_provider: Option<Rc<DefaultSqlSignatureHelpProvider>>,
@@ -2460,9 +2461,15 @@ impl SqlEditor {
 
             editor.lsp_mut().completion_provider = Some(default_provider_trait);
             editor.lsp_mut().hover_provider = Some(default_hover_provider_trait);
-            editor.project_gutter_marker_renderer(Rc::new(render_sql_gutter_marker));
 
             editor
+        });
+        let gutter_lane = editor.update(cx, |state, cx| {
+            state.create_gutter_lane(
+                Vec::new(),
+                GutterLaneOptions::new(render_sql_gutter_marker),
+                cx,
+            )
         });
         let extended_editor = cx.new(|cx| {
             let mut state = ExtendedEditorState::new(editor.clone(), window, cx);
@@ -2472,6 +2479,7 @@ impl SqlEditor {
         Self {
             editor,
             extended_editor,
+            gutter_lane,
             default_completion_provider,
             default_hover_provider: Some(default_hover_provider),
             default_signature_help_provider: Some(default_signature_help_provider),
@@ -2509,6 +2517,11 @@ impl SqlEditor {
     /// Access underlying editor state.
     pub fn input(&self) -> Entity<EditorState> {
         self.editor.clone()
+    }
+
+    /// The gutter lane owned by this editor.
+    pub fn gutter_lane(&self) -> &GutterLane {
+        &self.gutter_lane
     }
 
     /// Invalidate active completion popup and inline completion requests.
@@ -2773,7 +2786,6 @@ impl Render for SqlEditor {
         let capabilities = self.editor.read(cx).context_menu_capabilities();
         div().size_full().child(
             ExtendedEditor::new(&self.extended_editor)
-                .gutter_marker_renderer(Rc::new(render_sql_gutter_marker))
                 .context_menu(move |_, _, cx| {
                     sql_editor_native_menu(capabilities, cx.read_from_clipboard().is_some())
                 })
@@ -2832,11 +2844,12 @@ fn sql_editor_context_menu(
 }
 
 fn render_sql_gutter_marker(marker: &GutterMarker) -> gpui::AnyElement {
+    let animation_id = gpui::SharedString::from(format!("sql-gutter-{}", marker.row()));
     let icon = match marker.icon().as_ref() {
         SQL_GUTTER_RUNNING => Spinner::new()
             .with_size(Size::Small)
             .color(gpui::hsla(0.603, 0.91, 0.6, 1.0))
-            .animation_id(marker.id().clone())
+            .animation_id(animation_id.clone())
             .into_any_element(),
         SQL_GUTTER_SUCCEEDED => Icon::new(IconName::CircleCheck)
             .text_color(gpui::hsla(0.394, 0.71, 0.45, 1.0))
@@ -2853,7 +2866,7 @@ fn render_sql_gutter_marker(marker: &GutterMarker) -> gpui::AnyElement {
     };
     let tooltip = marker.tooltip().cloned();
     div()
-        .id(marker.id().clone())
+        .id(animation_id)
         .size_full()
         .flex()
         .items_center()
@@ -2917,12 +2930,10 @@ mod tests {
             let clicked_marker_for_event = clicked_marker.clone();
             let subscription = cx.subscribe(&input, move |_, _, event: &InputEvent, _| {
                 if let InputEvent::GutterMarkerMouseDown {
-                    marker_id,
-                    logical_row,
+                    index, logical_row, ..
                 } = event
                 {
-                    *clicked_marker_for_event.borrow_mut() =
-                        Some((marker_id.to_string(), *logical_row));
+                    *clicked_marker_for_event.borrow_mut() = Some((*index, *logical_row));
                 }
             });
             sql_editor = Some(editor.clone());
@@ -2939,14 +2950,13 @@ mod tests {
                 editor.set_value("select 1;".to_string(), window, cx)
             });
             let revision = input.read(cx).document_revision();
+            let lane = sql_editor.read(cx).gutter_lane().clone();
+            lane.set(vec![GutterMarker::new(0, SQL_GUTTER_IDLE)], cx);
             input.update(cx, |state, cx| {
-                state.set_gutter_markers(
-                    vec![GutterMarker::new("sql-hook-marker", 0, SQL_GUTTER_IDLE)],
-                    cx,
-                );
-                state.set_range_decorations(vec![RangeDecoration::new("sql-hook-frame", 0..8)], cx);
-                state
-                    .set_inline_widgets(vec![InlineWidget::new("sql-hook-widget", 7, "value")], cx);
+                let _ =
+                    state.create_range_decorations_collection(vec![RangeDecoration::new(0..8)], cx);
+                let _ =
+                    state.create_inline_widgets_collection(vec![InlineWidget::new(7, "value")], cx);
                 assert_eq!(revision, state.document_revision());
             });
             window.draw(cx).clear(cx);
@@ -2954,9 +2964,10 @@ mod tests {
         VisualTestContext::update(visual, |window, cx| window.draw(cx).clear(cx));
 
         let marker_bounds = visual.read(|cx| {
-            input
+            sql_editor
                 .read(cx)
-                .gutter_marker_bounds("sql-hook-marker")
+                .gutter_lane()
+                .marker_bounds(0, cx)
                 .expect("custom gutter marker should render")
         });
         visual.simulate_mouse_down(
@@ -2964,15 +2975,9 @@ mod tests {
             MouseButton::Left,
             Modifiers::default(),
         );
-        assert_eq!(
-            Some(("sql-hook-marker".to_string(), 0)),
-            *clicked_marker.borrow()
-        );
+        assert_eq!(Some((0, 0)), *clicked_marker.borrow());
         visual.read(|cx| {
-            let state = input.read(cx);
-            assert_eq!(1, state.gutter_markers().len());
-            assert_eq!(1, state.range_decorations().len());
-            assert_eq!(1, state.inline_widgets().len());
+            assert_eq!(1, sql_editor.read(cx).gutter_lane().get_markers(cx).len());
         });
     }
 
@@ -3136,14 +3141,10 @@ mod tests {
     }
 
     #[test]
-    fn sql_editor_render_preserves_the_sql_gutter_renderer() {
+    fn sql_editor_installs_the_sql_gutter_renderer_on_its_lane() {
         let source = include_str!("sql_editor.rs");
-        let render = source
-            .split("impl Render for SqlEditor")
-            .nth(1)
-            .expect("SqlEditor render impl exists");
 
-        assert!(render.contains(".gutter_marker_renderer(Rc::new(render_sql_gutter_marker))"));
+        assert!(source.contains("GutterLaneOptions::new(render_sql_gutter_marker)"));
     }
 
     #[test]

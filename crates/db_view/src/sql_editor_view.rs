@@ -26,19 +26,22 @@ use futures::channel::oneshot;
 use futures::stream::{self, StreamExt};
 use gpui::prelude::*;
 use gpui::{
-    AnyWindowHandle, App, AppContext, AsyncApp, Axis, Bounds, ClickEvent, Context,
-    Element, Entity, EventEmitter, FocusHandle, Focusable, Hsla, IntoElement, KeyBinding,
-    MouseMoveEvent, MouseUpEvent, NoAction, ParentElement, Pixels, Point, Render, SharedString,
-    Styled, Subscription, Task, WeakEntity, Window, div, px,
+    AnyWindowHandle, App, AppContext, AsyncApp, Axis, Bounds, ClickEvent, Context, Element, Entity,
+    EventEmitter, FocusHandle, Focusable, Hsla, IntoElement, KeyBinding, MouseMoveEvent,
+    MouseUpEvent, NoAction, ParentElement, Pixels, Point, Render, SharedString, Styled,
+    Subscription, Task, WeakEntity, Window, div, px,
 };
 use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants};
 use gpui_component::dialog::DialogFooter;
 use gpui_component::input::{
-    GutterMarker, Input, InputEvent, InputState, RangeDecoration, RangeDecorationStyle,
+    GutterMarker, InlineWidgetCollection, Input, InputEvent, InputState, RangeDecoration,
+    RangeDecorationCollection, RangeDecorationStyle,
 };
 use gpui_component::notification::Notification;
 use gpui_component::select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState};
-use gpui_component::{ActiveTheme, Disableable, Icon, IndexPath, Sizable, Size, WindowExt, h_flex, v_flex};
+use gpui_component::{
+    ActiveTheme, Disableable, Icon, IndexPath, Sizable, Size, WindowExt, h_flex, v_flex,
+};
 use one_assets::IconName;
 use one_core::connection_notifier::{ConnectionDataEvent, GlobalConnectionNotifier};
 use one_core::gpui_tokio::Tokio;
@@ -309,7 +312,7 @@ fn statement_for_gutter_marker<'a>(
 /// available (INSERT value hints), it is appended as a Fill decoration.
 fn current_statement_frame_decorations(
     index: &dyn StatementIndex,
-    revision: u64,
+    _revision: u64,
     cursor: usize,
     selection: &Range<usize>,
     doc_len: usize,
@@ -320,13 +323,8 @@ fn current_statement_frame_decorations(
         let start = highlight.start.min(doc_len);
         let end = highlight.end.min(doc_len).max(start);
         if start < end {
-            decorations.push(
-                RangeDecoration::new(
-                    format!("insert-values:{revision}:{start}:{end}"),
-                    start..end,
-                )
-                .with_style(RangeDecorationStyle::Fill),
-            );
+            decorations
+                .push(RangeDecoration::new(start..end).with_style(RangeDecorationStyle::Fill));
         }
     }
     if !selection.is_empty() {
@@ -344,10 +342,7 @@ fn current_statement_frame_decorations(
     if start >= end {
         return decorations;
     }
-    decorations.push(RangeDecoration::new(
-        format!("sql-frame:{revision}:{start}:{end}"),
-        start..end,
-    ));
+    decorations.push(RangeDecoration::new(start..end));
     decorations
 }
 
@@ -1421,6 +1416,12 @@ pub struct SqlEditorTab {
     insert_values_highlight: Option<Range<usize>>,
     /// 最近一次计算 INSERT values 区域的 (语句起点, 版本)。
     last_insert_hints_key: Option<(usize, u64)>,
+    /// 当前语句框装饰集合（随编辑自动跟踪范围）。
+    range_decorations: RangeDecorationCollection,
+    /// 行内 widget 集合（INSERT 值提示等）。
+    inline_widgets: InlineWidgetCollection,
+    /// 与 gutter lane 标记顺序一致的 marker id，用于把点击事件映射回语句。
+    gutter_marker_ids: Vec<String>,
 }
 
 struct SqlSchemaUpdateRequest {
@@ -1508,6 +1509,13 @@ impl SqlEditorTab {
         let manual_transaction_generation = Arc::new(AtomicU64::new(0));
 
         let initial_dialect = SqlDialect::from(&config.database_type);
+        let input = editor.read(cx).input();
+        let range_decorations = input.update(cx, |state, cx| {
+            state.create_range_decorations_collection(Vec::new(), cx)
+        });
+        let inline_widgets = input.update(cx, |state, cx| {
+            state.create_inline_widgets_collection(Vec::new(), cx)
+        });
         let mut instance = Self {
             title: config.title,
             editor: editor.clone(),
@@ -1554,6 +1562,9 @@ impl SqlEditorTab {
             foreign_prefetch_inflight: Arc::new(Mutex::new(HashSet::new())),
             insert_values_highlight: None,
             last_insert_hints_key: None,
+            range_decorations,
+            inline_widgets,
+            gutter_marker_ids: Vec::new(),
         };
 
         instance.bind_gutter_marker_event(window, cx);
@@ -1770,12 +1781,13 @@ impl SqlEditorTab {
         }
     }
 
-    fn set_statement_gutter_markers(&self, cx: &mut Context<Self>) {
+    fn set_statement_gutter_markers(&mut self, cx: &mut Context<Self>) {
         let revision = self.editor.read(cx).document_revision(cx);
         let ranges: &[SqlStatementRange] = match &self.viewport_statements {
             Some(viewport) => viewport.scan.statement_ranges(),
             None => self.statement_snapshot.statement_ranges(),
         };
+        let mut ids = Vec::with_capacity(ranges.len());
         let markers = ranges
             .iter()
             .map(|statement| {
@@ -1786,14 +1798,14 @@ impl SqlEditorTab {
                     .copied()
                     .map(SqlGutterMarkerState::icon_token)
                     .unwrap_or(SQL_GUTTER_IDLE);
-                GutterMarker::new(id, statement.start_line, icon)
+                ids.push(id);
+                GutterMarker::new(statement.start_line, icon)
                     .with_tooltip(t!("Query.run_cursor_statement").to_string())
             })
             .collect();
-        self.editor
-            .read(cx)
-            .input()
-            .update(cx, |state, cx| state.set_gutter_markers(markers, cx));
+        let lane = self.editor.read(cx).gutter_lane().clone();
+        self.gutter_marker_ids = ids;
+        lane.set(markers, cx);
     }
 
     fn statement_index_for_document(
@@ -1831,10 +1843,7 @@ impl SqlEditorTab {
 
         let document = self.get_sql_text(cx);
         let Some(index) = self.statement_index_for_document(revision, &document) else {
-            self.editor
-                .read(cx)
-                .input()
-                .update(cx, |state, cx| state.clear_range_decorations(cx));
+            self.range_decorations.clear(cx);
             self.last_frame_key = None;
             return;
         };
@@ -1850,12 +1859,10 @@ impl SqlEditorTab {
         .map(|decoration| match decoration.style() {
             RangeDecorationStyle::Fill => decoration.with_color(cx.theme().primary.opacity(0.07)),
             RangeDecorationStyle::Frame => decoration.with_color(cx.theme().primary),
+            _ => decoration,
         })
         .collect();
-        self.editor
-            .read(cx)
-            .input()
-            .update(cx, |state, cx| state.set_range_decorations(decorations, cx));
+        self.range_decorations.set(decorations, cx);
         self.last_frame_key = Some(frame_key);
     }
 
@@ -1890,10 +1897,7 @@ impl SqlEditorTab {
         else {
             self.insert_values_highlight = None;
             self.last_insert_hints_key = None;
-            self.editor
-                .read(cx)
-                .input()
-                .update(cx, |state, cx| state.clear_inline_widgets(cx));
+            self.inline_widgets.clear(cx);
             return;
         };
         if self.last_insert_hints_key == Some((statement_start, revision)) {
@@ -1914,10 +1918,7 @@ impl SqlEditorTab {
 
         self.insert_values_highlight = values_highlight;
 
-        self.editor
-            .read(cx)
-            .input()
-            .update(cx, |state, cx| state.clear_inline_widgets(cx));
+        self.inline_widgets.clear(cx);
         self.refresh_current_statement_frame(cx);
     }
 
@@ -2497,10 +2498,12 @@ impl SqlEditorTab {
             window,
             |this, _, event: &InputEvent, window, cx| {
                 let InputEvent::GutterMarkerMouseDown {
-                    marker_id,
-                    logical_row,
+                    index, logical_row, ..
                 } = event
                 else {
+                    return;
+                };
+                let Some(marker_id) = this.gutter_marker_ids.get(*index) else {
                     return;
                 };
                 let revision = this.editor.read(cx).document_revision(cx);
@@ -4736,6 +4739,9 @@ impl Clone for SqlEditorTab {
             foreign_prefetch_inflight: self.foreign_prefetch_inflight.clone(),
             insert_values_highlight: self.insert_values_highlight.clone(),
             last_insert_hints_key: self.last_insert_hints_key,
+            range_decorations: self.range_decorations.clone(),
+            inline_widgets: self.inline_widgets.clone(),
+            gutter_marker_ids: self.gutter_marker_ids.clone(),
         }
     }
 }
@@ -4943,9 +4949,9 @@ mod tests {
             .next()
             .unwrap();
 
-        assert!(!refresh.contains("InlineWidget"));
+        assert!(!refresh.contains("InlineWidget::new"));
         assert!(!refresh.contains("set_inline_widgets"));
-        assert!(refresh.contains("state.clear_inline_widgets(cx)"));
+        assert!(refresh.contains("self.inline_widgets.clear(cx)"));
     }
 
     #[test]
@@ -5749,14 +5755,6 @@ mod tests {
         assert_eq!(
             decoration.range(),
             &(statement.sql_range.start_byte..delim_end)
-        );
-        assert_eq!(
-            decoration.id().to_string(),
-            format!(
-                "sql-frame:5:{}:{}",
-                decoration.range().start,
-                decoration.range().end
-            )
         );
         assert_eq!(&sql[decoration.range().clone()], "select * from 用户表;");
     }
