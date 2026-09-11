@@ -853,6 +853,12 @@ pub struct AppSettings {
     pub font_family: String,
     #[serde(default = "default_font_size")]
     pub font_size: f64,
+    /// 界面缩放百分比（100 = 默认大小）。
+    ///
+    /// 该值会与 `font_size` 相乘作为 GPUI 的 rem 基准长度，从而整体缩放以 rem
+    /// 表达的界面尺寸，效果等同于浏览器缩放，便于在 4K 等高分辨率屏幕上使用。
+    #[serde(default = "default_ui_scale_percent")]
+    pub ui_scale_percent: u32,
     #[serde(default = "default_monospace_font_family")]
     pub sql_editor_font_family: String,
     #[serde(default = "default_sql_editor_font_size")]
@@ -1007,6 +1013,17 @@ fn default_custom_accent_color() -> String {
 
 fn default_font_size() -> f64 {
     14.0
+}
+
+/// 界面缩放允许的最小百分比。
+pub const UI_SCALE_PERCENT_MIN: u32 = 50;
+
+/// 界面缩放允许的最大百分比。
+pub const UI_SCALE_PERCENT_MAX: u32 = 300;
+
+/// 界面缩放的默认值（百分比）。
+fn default_ui_scale_percent() -> u32 {
+    100
 }
 
 fn default_sql_editor_font_size() -> f64 {
@@ -1243,6 +1260,7 @@ impl Default for AppSettings {
             custom_accent_color: default_custom_accent_color(),
             font_family: default_font_family(),
             font_size: default_font_size(),
+            ui_scale_percent: default_ui_scale_percent(),
             sql_editor_font_family: default_monospace_font_family(),
             sql_editor_font_size: default_sql_editor_font_size(),
             table_preview_font_family: default_monospace_font_family(),
@@ -1566,12 +1584,25 @@ impl AppSettings {
 
         let theme = Theme::global_mut(cx);
         theme.font_family = resolved.into();
-        theme.font_size = px(self.font_size as f32);
+        // GPUI 的 rem 基准长度取自主题字号（gpui-component 的 `Root::render` 会调用
+        // `window.set_rem_size(cx.theme().font_size)`），因此把界面缩放倍率乘进字号，
+        // 即可整体缩放所有以 rem 表达的字体、间距与控件尺寸。
+        theme.font_size = px(self.font_size as f32 * self.ui_scale());
         Theme::sync_base(cx);
     }
 
     pub fn apply_font_size(&self, cx: &mut App) {
         self.apply_font_settings(cx);
+    }
+
+    /// 界面缩放倍率（1.0 表示 100%）。
+    ///
+    /// 超出允许范围的值会被收敛到 [`UI_SCALE_PERCENT_MIN`] /
+    /// [`UI_SCALE_PERCENT_MAX`] 之间，避免产生不可用的界面尺寸。
+    pub fn ui_scale(&self) -> f32 {
+        self.ui_scale_percent
+            .clamp(UI_SCALE_PERCENT_MIN, UI_SCALE_PERCENT_MAX) as f32
+            / 100.0
     }
 
     /// 应用通用字体族设置到主题（设置面板修改"字体"后调用）。
@@ -1969,6 +2000,36 @@ mod tests {
     }
 
     #[test]
+    fn ui_scale_defaults_to_identity_and_clamps_out_of_range_values() {
+        let mut settings = AppSettings::default();
+        assert_eq!(100, settings.ui_scale_percent);
+        assert!((settings.ui_scale() - 1.0).abs() < f32::EPSILON);
+
+        settings.ui_scale_percent = 150;
+        assert!((settings.ui_scale() - 1.5).abs() < f32::EPSILON);
+
+        settings.ui_scale_percent = 10;
+        let min_scale = super::UI_SCALE_PERCENT_MIN as f32 / 100.0;
+        assert!((settings.ui_scale() - min_scale).abs() < f32::EPSILON);
+
+        settings.ui_scale_percent = 10_000;
+        let max_scale = super::UI_SCALE_PERCENT_MAX as f32 / 100.0;
+        assert!((settings.ui_scale() - max_scale).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn ui_scale_percent_is_read_from_persisted_settings() {
+        let settings: AppSettings =
+            serde_json::from_str(r#"{ "ui_scale_percent": 175 }"#).expect("ui_scale_percent 应能读取");
+        assert_eq!(175, settings.ui_scale_percent);
+        assert!((settings.ui_scale() - 1.75).abs() < f32::EPSILON);
+
+        // 旧配置文件缺少该字段时应回落到 100%。
+        let legacy: AppSettings = serde_json::from_str("{}").expect("旧配置应能读取");
+        assert_eq!(100, legacy.ui_scale_percent);
+    }
+
+    #[test]
     fn app_settings_does_not_require_master_key_on_startup_by_default() {
         assert!(!AppSettings::default().require_master_key_on_startup);
     }
@@ -2305,6 +2366,41 @@ mod tests {
             settings.apply(cx);
 
             assert_eq!(px(18.0), Theme::global(cx).font_size);
+        });
+    }
+
+    #[gpui::test]
+    fn app_settings_apply_scales_theme_font_size_by_ui_scale(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_global(Theme::default());
+
+            let mut settings = AppSettings::default();
+            settings.font_size = 14.0;
+            settings.ui_scale_percent = 150;
+
+            settings.apply(cx);
+
+            // 界面缩放会与字号相乘后写入主题字号，而 gpui-component 的 Root 会用它
+            // 作为窗口 rem 基准长度，从而整体缩放界面。
+            assert_eq!(px(21.0), Theme::global(cx).font_size);
+        });
+    }
+
+    #[gpui::test]
+    fn app_settings_apply_keeps_theme_font_size_at_identity_for_default_ui_scale(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_global(Theme::default());
+
+            let settings = AppSettings::default();
+
+            settings.apply(cx);
+
+            // 默认缩放为 100% 时行为与改动前一致。
+            assert_eq!(px(14.0), Theme::global(cx).font_size);
         });
     }
 

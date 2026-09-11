@@ -2530,6 +2530,14 @@ Settings:
         en: Adjust font size for better readability (8-72)
         zh-CN: 调整字体大小以获得更好的可读性（8-72）
         zh-HK: 調整字型大小以獲得更好的可讀性（8-72）
+      ui_scale:
+        en: Interface Scale
+        zh-CN: 界面缩放
+        zh-HK: 介面縮放
+      ui_scale_desc:
+        en: Scale the whole interface (fonts, spacing and controls); useful on high-resolution displays
+        zh-CN: 整体缩放界面（字体、间距与控件），适合 4K 等高分辨率屏幕
+        zh-HK: 整體縮放介面（字型、間距與控件），適合 4K 等高解析度螢幕
 
     LocalTerminal:
       group_title:

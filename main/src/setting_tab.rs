@@ -773,6 +773,39 @@ impl SettingsPanel {
                                 .default_value(default_settings.font_size),
                             )
                             .description(t!("Settings.General.Font.font_size_desc").to_string()),
+                        )
+                        .item(
+                            SettingItem::new(
+                                t!("Settings.General.Font.ui_scale"),
+                                SettingField::dropdown(
+                                    vec![
+                                        ("100".into(), "100%".into()),
+                                        ("110".into(), "110%".into()),
+                                        ("125".into(), "125%".into()),
+                                        ("150".into(), "150%".into()),
+                                        ("175".into(), "175%".into()),
+                                        ("200".into(), "200%".into()),
+                                    ],
+                                    |cx: &App| {
+                                        SharedString::from(
+                                            AppSettings::global(cx).ui_scale_percent.to_string(),
+                                        )
+                                    },
+                                    |val: SharedString, cx: &mut App| {
+                                        let percent = val.trim().parse::<u32>().unwrap_or(100);
+                                        AppSettings::update_and_save(cx, |settings| {
+                                            settings.ui_scale_percent = percent;
+                                        });
+                                        // rem 基准长度取自主题字号，因此改缩放后需重新应用字体设置。
+                                        AppSettings::current(cx).apply_font_size(cx);
+                                        cx.refresh_windows();
+                                    },
+                                )
+                                .default_value(SharedString::from(
+                                    default_settings.ui_scale_percent.to_string(),
+                                )),
+                            )
+                            .description(t!("Settings.General.Font.ui_scale_desc").to_string()),
                         ),
                     SettingGroup::new()
                         .title(t!("Settings.General.Log.group_title"))
