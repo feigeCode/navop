@@ -231,6 +231,18 @@ Home:
     en: "Invalid local terminal configuration: %{error}"
     zh-CN: "本地终端配置无效：%{error}"
     zh-HK: "本機終端設定無效：%{error}"
+  wsl_distributions_section:
+    en: WSL Distributions
+    zh-CN: WSL 发行版
+    zh-HK: WSL 發行版
+  wsl_distributions_default:
+    en: default
+    zh-CN: 默认
+    zh-HK: 預設
+  wsl_distributions_refresh:
+    en: Re-detect WSL
+    zh-CN: 重新识别 WSL
+    zh-HK: 重新識別 WSL
   remote_desktop_parameters_invalid:
     en: "Invalid remote desktop connection parameters: %{error}"
     zh-CN: "远程桌面连接参数无效：%{error}"

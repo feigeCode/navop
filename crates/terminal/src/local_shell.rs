@@ -243,7 +243,7 @@ fn resolve_cmd() -> String {
 }
 
 #[cfg(any(test, target_os = "windows"))]
-fn resolve_wsl() -> String {
+pub(crate) fn resolve_wsl() -> String {
     system32_path(&["wsl.exe"])
         .or_else(|| find_in_path("wsl.exe"))
         .unwrap_or_else(|| "wsl.exe".to_string())

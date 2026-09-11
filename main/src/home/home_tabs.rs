@@ -1386,6 +1386,24 @@ impl HomePage {
         self.add_local_terminal_tab(config, window, cx);
     }
 
+    /// 以指定 WSL 发行版打开本地终端标签页（`wsl.exe -d <name>`，feigeCode/navop#182）。
+    #[cfg(target_os = "windows")]
+    pub(crate) fn add_terminal_tab_with_wsl_distro(
+        &mut self,
+        distro: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let config = match terminal::local_config_for_wsl_distro(&distro) {
+            Ok(config) => config,
+            Err(error) => {
+                push_local_terminal_config_error(window, &error, cx);
+                return;
+            }
+        };
+        self.add_local_terminal_tab(config, window, cx);
+    }
+
     fn add_terminal_tab_from_profile(
         &mut self,
         profile_kind: Option<LocalTerminalProfileKind>,
