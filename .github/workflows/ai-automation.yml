@@ -1,0 +1,887 @@
+name: AI automation
+
+# Issue triage + optional automated patch pipeline.
+# Everything model-facing lives in scripts/ai/agent.cjs; every decision rule
+# lives in scripts/ai/automation.cjs. This file only wires them together.
+
+on:
+  # 自动触发暂时停用，只保留手动运行；恢复时取消下面注释。
+  # issues:
+  #   types: [opened, reopened]
+  # issue_comment:
+  #   types: [created]
+  # pull_request_target:
+  #   types: [opened, synchronize, reopened, ready_for_review, closed]
+  # schedule:
+  #   - cron: '*/15 * * * *'
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Issue number to classify
+        required: false
+        type: number
+      pull_number:
+        description: PR number to drive through the review loop
+        required: false
+        type: number
+
+concurrency:
+  group: >-
+    ai-auto-${{
+      github.event.issue && github.event.issue.number ||
+      github.event.pull_request && github.event.pull_request.number ||
+      inputs.issue_number ||
+      inputs.pull_number ||
+      github.run_id
+    }}
+  cancel-in-progress: false
+
+# Least privilege by default. Jobs that mutate declare their own write scopes.
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+env:
+  AI_PROVIDER: ${{ vars.AI_PROVIDER || 'codex' }}
+  AI_BASE_URL: ${{ vars.AI_BASE_URL || 'https://api.openai.com/v1' }}
+  AI_MODEL: ${{ vars.AI_MODEL || '' }}
+  AI_AUTOMATION_MODE: ${{ vars.AI_AUTOMATION_MODE || 'full' }}
+  AI_VERIFY_COMMAND: ${{ vars.AI_VERIFY_COMMAND || 'cargo check --workspace --all-targets' }}
+  AI_MAX_REVIEW_ROUNDS: ${{ vars.AI_MAX_REVIEW_ROUNDS || '5' }}
+  AI_TRIAGE_DAILY_LIMIT: ${{ vars.AI_TRIAGE_DAILY_LIMIT || '10' }}
+  AI_OWN_ACTORS: ${{ vars.AI_OWN_ACTORS || 'github-actions[bot]' }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Route: pure JS, no model call, no network.
+  # ---------------------------------------------------------------------------
+  route:
+    name: Route event
+    runs-on: ubuntu-latest
+    outputs:
+      kind: ${{ steps.decide.outputs.kind }}
+      issue_number: ${{ steps.decide.outputs.issue_number }}
+      pull_number: ${{ steps.decide.outputs.pull_number }}
+      reason: ${{ steps.decide.outputs.reason }}
+    steps:
+      - name: Checkout helpers
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          sparse-checkout: |
+            scripts/ai
+            .github/ai
+          sparse-checkout-cone-mode: false
+
+      - name: Freeze automation helpers
+        run: &freeze_helpers |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ai"
+          cp scripts/ai/automation.cjs scripts/ai/agent.cjs "$RUNNER_TEMP/ai/"
+          cp .github/ai/schemas/classification.schema.json "$RUNNER_TEMP/ai/"
+          rm -rf "$RUNNER_TEMP/ai-prompts"
+          cp -r .github/ai/prompts "$RUNNER_TEMP/ai-prompts"
+          chmod -R a-w "$RUNNER_TEMP/ai" "$RUNNER_TEMP/ai-prompts"
+          test -s "$RUNNER_TEMP/ai/automation.cjs"
+
+      - name: Decide route
+        id: decide
+        uses: actions/github-script@v9
+        env:
+          AI_MODE: ${{ env.AI_AUTOMATION_MODE }}
+          OWN_ACTORS: ${{ env.AI_OWN_ACTORS }}
+          DISPATCH_ISSUE: ${{ inputs.issue_number || '' }}
+          DISPATCH_PULL: ${{ inputs.pull_number || '' }}
+        with:
+          script: |
+            const auto = require(`${process.env.RUNNER_TEMP}/ai/automation.cjs`);
+            const event = context.eventName;
+            const ownActors = process.env.OWN_ACTORS;
+            const set = (kind, extra = {}) => {
+              const gated = auto.gateAutomationRoute(kind, {
+                mode: process.env.AI_MODE,
+                reason: extra.reason || kind,
+              });
+              core.setOutput('kind', gated.kind);
+              core.setOutput('issue_number', String(extra.issue_number || ''));
+              core.setOutput('pull_number', String(extra.pull_number || ''));
+              core.setOutput('reason', gated.reason);
+              core.info(`route -> ${gated.kind} (${gated.reason})`);
+            };
+            const isOwn = (login) => auto.parseOwnActors(ownActors).includes(auto.normalizeLogin(login));
+
+            if (event === 'schedule') {
+              return set('review_loop', { pull_number: '', reason: 'scheduled poll' });
+            }
+
+            if (event === 'workflow_dispatch') {
+              if (process.env.DISPATCH_ISSUE) {
+                return set('issue_classify', {
+                  issue_number: process.env.DISPATCH_ISSUE,
+                  reason: 'manual issue',
+                });
+              }
+              if (process.env.DISPATCH_PULL) {
+                return set('review_loop', {
+                  pull_number: process.env.DISPATCH_PULL,
+                  reason: 'manual pr',
+                });
+              }
+              return set('skip', { reason: 'workflow_dispatch without inputs' });
+            }
+
+            if (event === 'issues') {
+              const issue = context.payload.issue;
+              const decision = auto.decideIssuesEventRoute({
+                action: context.payload.action,
+                labels: issue.labels || [],
+                actorLogin: context.payload.sender && context.payload.sender.login,
+                botLogins: ownActors,
+              });
+              return set(decision.kind, {
+                issue_number: issue.number,
+                reason: decision.reason,
+              });
+            }
+
+            if (event === 'issue_comment') {
+              const issue = context.payload.issue;
+              if (issue.pull_request) {
+                return set('skip', { reason: 'pull request comment' });
+              }
+              const { data: live } = await github.rest.issues.get({
+                ...context.repo,
+                issue_number: issue.number,
+              });
+              const decision = auto.decideIssueCommentRoute({
+                labels: live.labels || [],
+                commenterLogin: context.payload.comment.user.login,
+                issueAuthorLogin: live.user && live.user.login,
+                commenterAssociation: context.payload.comment.author_association,
+                botLogins: ownActors,
+                body: context.payload.comment.body || '',
+              });
+              return set(decision.kind, {
+                issue_number: issue.number,
+                reason: decision.reason,
+              });
+            }
+
+            if (event === 'pull_request_target') {
+              const pr = context.payload.pull_request;
+              const sameRepo = pr.head.repo.full_name === `${context.repo.owner}/${context.repo.repo}`;
+              const isBot = isOwn(pr.user && pr.user.login);
+              const hasBotLabel = auto.hasLabel(pr.labels || [], auto.BOT_PR_LABEL);
+              if (context.payload.action === 'closed') {
+                return set('cleanup', {
+                  pull_number: pr.number,
+                  reason: 'pull request closed',
+                });
+              }
+              if (!sameRepo || !(isBot || hasBotLabel)) {
+                return set('skip', {
+                  reason: 'external or non-automation pull request',
+                });
+              }
+              return set('review_loop', {
+                pull_number: pr.number,
+                reason: 'automation pull request event',
+              });
+            }
+
+            return set('skip', { reason: `unhandled ${event}` });
+
+  # ---------------------------------------------------------------------------
+  # Classify: research (optional) -> grounded classification -> labels + reply.
+  # ---------------------------------------------------------------------------
+  classify:
+    name: Classify issue
+    needs: route
+    if: needs.route.outputs.kind == 'issue_classify'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    outputs:
+      category: ${{ steps.apply.outputs.category }}
+      should_implement: ${{ steps.apply.outputs.should_implement }}
+      issue_number: ${{ steps.apply.outputs.issue_number }}
+      summary: ${{ steps.apply.outputs.summary }}
+      reasoning: ${{ steps.apply.outputs.reasoning }}
+      confidence: ${{ steps.apply.outputs.confidence }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Freeze automation helpers
+        run: *freeze_helpers
+
+      - name: Prepare issue context
+        id: prepare
+        uses: actions/github-script@v9
+        env:
+          ISSUE_NUMBER: ${{ needs.route.outputs.issue_number }}
+          DAILY_LIMIT: ${{ env.AI_TRIAGE_DAILY_LIMIT }}
+        with:
+          script: |
+            const fs = require('node:fs');
+            const auto = require(`${process.env.RUNNER_TEMP}/ai/automation.cjs`);
+            const number = Number(process.env.ISSUE_NUMBER);
+            const { data: issue } = await github.rest.issues.get({ ...context.repo, issue_number: number });
+            const { data: comments } = await github.rest.issues.listComments({
+              ...context.repo, issue_number: number, per_page: 100,
+            });
+            if (auto.hasTriageReply(comments) && context.eventName !== 'workflow_dispatch') {
+              core.setOutput('should_run', 'false');
+              core.info('issue already has a triage reply; skipping');
+              return;
+            }
+            // Cheap abuse guard: cap automation triage runs per UTC day.
+            const limit = Number(process.env.DAILY_LIMIT || 10);
+            if (limit > 0 && context.eventName !== 'workflow_dispatch') {
+              const since = new Date();
+              since.setUTCHours(0, 0, 0, 0);
+              const runs = await github.rest.actions.listWorkflowRunsForRepo({
+                ...context.repo,
+                workflow_id: 'ai-automation.yml',
+                created: `>=${since.toISOString().slice(0, 10)}`,
+                per_page: 100,
+              });
+              const used = (runs.data.workflow_runs || []).length;
+              core.info(`triage runs today: ${used}/${limit}`);
+              if (used > limit) {
+                core.setOutput('should_run', 'false');
+                core.info('daily triage budget exhausted');
+                return;
+              }
+            }
+            fs.mkdirSync('.ai-runtime', { recursive: true });
+            fs.writeFileSync('.ai-runtime/issue.json', JSON.stringify({
+              number: issue.number,
+              title: auto.sanitizeUntrustedText(issue.title),
+              body: auto.sanitizeUntrustedText(issue.body),
+              labels: (issue.labels || []).map((l) => (typeof l === 'string' ? l : l.name)),
+              comments: comments.slice(-20).map((c) => ({
+                id: c.id,
+                user: c.user && c.user.login,
+                body: auto.sanitizeUntrustedText(c.body),
+              })),
+            }, null, 2));
+            core.setOutput('should_run', 'true');
+            core.setOutput('issue_number', String(number));
+
+      - name: Stage model credential
+        if: steps.prepare.outputs.should_run == 'true'
+        env:
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s' "$AI_API_KEY" > "$RUNNER_TEMP/ai-api-key"
+          if [ -n "${{ secrets.BRAVE_API_KEY }}" ]; then
+            printf '%s' "${{ secrets.BRAVE_API_KEY }}" > "$RUNNER_TEMP/brave-api-key"
+          else
+            : > "$RUNNER_TEMP/brave-api-key"
+          fi
+
+      - name: Research external context
+        id: research
+        if: steps.prepare.outputs.should_run == 'true'
+        env:
+          BRAVE_API_KEY_FILE: ${{ runner.temp }}/brave-api-key
+        run: |
+          set -euo pipefail
+          node "$RUNNER_TEMP/ai/agent.cjs" research \
+            --issue .ai-runtime/issue.json \
+            --out .ai-runtime/external-research.md
+        continue-on-error: true
+
+      - name: Install Codex CLI
+        if: steps.prepare.outputs.should_run == 'true' && env.AI_PROVIDER == 'codex'
+        run: npm install --global @openai/codex@0.154.0
+
+      - name: Classify
+        id: agent
+        if: steps.prepare.outputs.should_run == 'true'
+        env:
+          GITHUB_TOKEN: ''
+          GH_TOKEN: ''
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          BRAVE_API_KEY_FILE: ${{ runner.temp }}/brave-api-key
+        run: |
+          set -euo pipefail
+          node "$RUNNER_TEMP/ai/agent.cjs" classify \
+            --issue .ai-runtime/issue.json \
+            --prompt "$RUNNER_TEMP/ai-prompts/classify.md" \
+            --schema "$RUNNER_TEMP/ai/classification.schema.json" \
+            --runtime .ai-runtime \
+            --key-file "$RUNNER_TEMP/ai-api-key" \
+            --out .ai-runtime/classify-raw.txt || true
+          if [ ! -s .ai-runtime/classify-raw.txt ]; then
+            echo "classify produced no output" >&2
+            exit 1
+          fi
+          node -e '
+            const fs = require("node:fs");
+            const auto = require(process.env.RUNNER_TEMP + "/ai/automation.cjs");
+            const parsed = auto.parseClassificationText(
+              fs.readFileSync(".ai-runtime/classify-raw.txt", "utf8"));
+            fs.writeFileSync(
+              ".ai-runtime/classification.json", JSON.stringify(parsed, null, 2));
+          '
+          cat .ai-runtime/classification.json
+
+      - name: Scan agent output for credential leaks
+        if: steps.prepare.outputs.should_run == 'true'
+        env:
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+        run: |
+          node -e '
+            const auto = require(process.env.RUNNER_TEMP + "/ai/automation.cjs");
+            auto.assertFilesDoNotContainSecret(
+              [".ai-runtime/classify-raw.txt", ".ai-runtime/classification.json"],
+              process.env.AI_API_KEY, "classify-output");
+          '
+
+      - name: Apply classification
+        id: apply
+        if: steps.prepare.outputs.should_run == 'true'
+        uses: actions/github-script@v9
+        env:
+          ISSUE_NUMBER: ${{ needs.route.outputs.issue_number }}
+          AI_MODE: ${{ env.AI_AUTOMATION_MODE }}
+        with:
+          github-token: ${{ secrets.TRIAGE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
+          script: |
+            const auto = require(`${process.env.RUNNER_TEMP}/ai/automation.cjs`);
+            const number = Number(process.env.ISSUE_NUMBER);
+            let classification;
+            try {
+              classification = auto.parseClassificationFile(
+                `${process.env.GITHUB_WORKSPACE}/.ai-runtime/classification.json`);
+            } catch (err) {
+              core.setFailed('classification invalid: ' + err.message);
+              throw err;
+            }
+            const labels = auto.labelsForCategory(classification.category);
+            await github.rest.issues.createComment({
+              ...context.repo,
+              issue_number: number,
+              body: auto.buildTriageComment(classification),
+            });
+            await github.rest.issues.addLabels({
+              ...context.repo, issue_number: number, labels,
+            });
+            const closeReason = auto.CLOSE_REASONS[classification.category];
+            if (closeReason) {
+              await github.rest.issues.update({
+                ...context.repo,
+                issue_number: number,
+                state: 'closed',
+                state_reason: closeReason,
+              });
+            }
+            core.setOutput('category', classification.category);
+            const implementAllowed =
+              classification.should_implement && !auto.isTriageOnlyMode(process.env.AI_MODE);
+            core.setOutput('should_implement', String(implementAllowed));
+            core.setOutput('issue_number', String(number));
+            core.setOutput('summary', classification.summary);
+            core.setOutput('reasoning', classification.reasoning);
+            core.setOutput('confidence', String(classification.confidence));
+
+      - name: Hand off to humans on failure
+        if: failure() && needs.route.outputs.issue_number != ''
+        uses: actions/github-script@v9
+        env:
+          ISSUE_NUMBER: ${{ needs.route.outputs.issue_number }}
+        with:
+          github-token: ${{ secrets.TRIAGE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
+          script: |
+            const auto = require(`${process.env.RUNNER_TEMP}/ai/automation.cjs`);
+            await github.rest.issues.addLabels({
+              ...context.repo,
+              issue_number: Number(process.env.ISSUE_NUMBER),
+              labels: [auto.READY_FOR_HUMAN_LABEL],
+            });
+
+  # ---------------------------------------------------------------------------
+  # Implement: untrusted runner. Produces a patch artifact, never pushes.
+  # ---------------------------------------------------------------------------
+  implement:
+    name: Implement patch
+    needs: [route, classify]
+    if: needs.classify.outputs.should_implement == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+
+      - name: Freeze automation helpers
+        run: *freeze_helpers
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+
+      - name: Install system dependencies
+        run: |
+          if [ -x script/bootstrap ]; then ./script/bootstrap; fi
+
+      - name: Create working branch
+        env:
+          ISSUE_NUMBER: ${{ needs.classify.outputs.issue_number }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "ai/issue-${ISSUE_NUMBER}-${GITHUB_RUN_ID}"
+
+      - name: Stage model credential
+        env:
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s' "$AI_API_KEY" > "$RUNNER_TEMP/ai-api-key"
+
+      - name: Install Codex CLI
+        if: env.AI_PROVIDER == 'codex'
+        run: npm install --global @openai/codex@0.154.0
+
+      - name: Implement with the coding agent
+        id: agent
+        env:
+          GITHUB_TOKEN: ''
+          GH_TOKEN: ''
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          ISSUE_NUMBER: ${{ needs.classify.outputs.issue_number }}
+          SUMMARY: ${{ needs.classify.outputs.summary }}
+          REASONING: ${{ needs.classify.outputs.reasoning }}
+        run: |
+          set -euo pipefail
+          node -e '
+            const fs = require("node:fs");
+            const auto = require(process.env.RUNNER_TEMP + "/ai/automation.cjs");
+            const issue = {
+              number: Number(process.env.ISSUE_NUMBER),
+              title: process.env.SUMMARY || "",
+              body: process.env.REASONING || "",
+            };
+            fs.mkdirSync(".ai-runtime", { recursive: true });
+            fs.writeFileSync(".ai-runtime/issue.json", JSON.stringify(issue, null, 2));
+          '
+          node "$RUNNER_TEMP/ai/agent.cjs" implement \
+            --issue .ai-runtime/issue.json \
+            --prompt "$RUNNER_TEMP/ai-prompts/implement.md" \
+            --runtime .ai-runtime \
+            --key-file "$RUNNER_TEMP/ai-api-key" \
+            --out .ai-runtime/implement-raw.txt || true
+          cat .ai-runtime/implement-raw.txt || true
+
+      - name: Run verification command
+        id: verify
+        env:
+          VERIFY_COMMAND: ${{ env.AI_VERIFY_COMMAND }}
+        run: |
+          set -euo pipefail
+          bash -lc "$VERIFY_COMMAND"
+        continue-on-error: true
+
+      - name: Scan output for credential leaks
+        env:
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+        run: |
+          node -e '
+            const auto = require(process.env.RUNNER_TEMP + "/ai/automation.cjs");
+            auto.assertFilesDoNotContainSecret(
+              [".ai-runtime/implement-raw.txt"], process.env.AI_API_KEY, "implement-output");
+          '
+
+      - name: Build and guard the patch
+        id: patch
+        if: steps.verify.outcome == 'success'
+        run: |
+          set -euo pipefail
+          git add -A
+          git --no-pager diff --cached > .ai-runtime/change.diff || true
+          node -e '
+            const fs = require("node:fs");
+            const auto = require(process.env.RUNNER_TEMP + "/ai/automation.cjs");
+            const diff = fs.readFileSync(".ai-runtime/change.diff", "utf8");
+            const paths = auto.changedPathsFromDiff(diff);
+            const blocked = auto.findProtectedPaths(paths);
+            if (blocked.length) {
+              console.error("protected paths touched: " + blocked.join(", "));
+              process.exit(1);
+            }
+            if (!paths.length) {
+              console.log("no changes produced");
+              process.exit(2);
+            }
+            fs.writeFileSync(".ai-runtime/changed-paths.txt", paths.join("\n"));
+            console.log("changed: " + paths.join(", "));
+          '
+          if [ $? -eq 2 ]; then echo "changed=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload patch
+        if: steps.patch.outputs.changed == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: ai-patch-${{ github.run_id }}
+          path: .ai-runtime/change.diff
+          retention-days: 3
+
+      - name: Mark needs human when nothing was produced
+        if: steps.patch.outputs.changed != 'true'
+        uses: actions/github-script@v9
+        env:
+          ISSUE_NUMBER: ${{ needs.classify.outputs.issue_number }}
+        with:
+          github-token: ${{ secrets.TRIAGE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
+          script: |
+            const auto = require(`${process.env.RUNNER_TEMP}/ai/automation.cjs`);
+            await github.rest.issues.addLabels({
+              ...context.repo,
+              issue_number: Number(process.env.ISSUE_NUMBER),
+              labels: [auto.READY_FOR_HUMAN_LABEL],
+            });
+
+  # ---------------------------------------------------------------------------
+  # Publish: trusted, fresh runner. Applies the artifact and opens a DRAFT PR.
+  # ---------------------------------------------------------------------------
+  publish_pr:
+    name: Publish draft PR
+    needs: [route, classify, implement]
+    if: needs.implement.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Download patch
+        uses: actions/download-artifact@v7
+        with:
+          name: ai-patch-${{ github.run_id }}
+          path: .ai-runtime
+
+      - name: Checkout default branch
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+
+      - name: Freeze automation helpers
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ai"
+          cp scripts/ai/automation.cjs "$RUNNER_TEMP/ai/"
+          chmod -R a-w "$RUNNER_TEMP/ai"
+          test -s "$RUNNER_TEMP/ai/automation.cjs"
+
+      - name: Publish branch and open draft PR
+        uses: actions/github-script@v9
+        env:
+          ISSUE_NUMBER: ${{ needs.classify.outputs.issue_number }}
+          CATEGORY: ${{ needs.classify.outputs.category }}
+          CONFIDENCE: ${{ needs.classify.outputs.confidence }}
+          SUMMARY: ${{ needs.classify.outputs.summary }}
+          REASONING: ${{ needs.classify.outputs.reasoning }}
+        with:
+          github-token: ${{ secrets.TRIAGE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('node:fs');
+            const { execFileSync } = require('node:child_process');
+            const auto = require(`${process.env.RUNNER_TEMP}/ai/automation.cjs`);
+            const diffPath = `${process.env.GITHUB_WORKSPACE}/.ai-runtime/change.diff`;
+            if (!fs.existsSync(diffPath) || !fs.readFileSync(diffPath, 'utf8').trim()) {
+              core.info('no patch to publish');
+              return;
+            }
+            const branch = auto.automationBranchName({
+              kind: process.env.CATEGORY,
+              issueNumber: process.env.ISSUE_NUMBER,
+              runId: process.env.GITHUB_RUN_ID,
+            });
+            const base = context.payload.repository.default_branch;
+            const run = (args) => execFileSync('git', args, { encoding: 'utf8' });
+            run(['config', 'user.name', 'github-actions[bot]']);
+            run(['config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com']);
+            run(['fetch', 'origin', base]);
+            run(['switch', '-c', branch, `origin/${base}`]);
+            execFileSync('git', ['apply', '--whitespace=nowarn', diffPath], { encoding: 'utf8' });
+            run(['add', '-A']);
+            run(['commit', '-m', `fix: automated patch for #${process.env.ISSUE_NUMBER}`]);
+            run(['push', 'origin', `HEAD:${branch}`]);
+            const paths = auto.changedPathsFromDiff(fs.readFileSync(diffPath, 'utf8'));
+            const { data: pr } = await github.rest.pulls.create({
+              ...context.repo,
+              base,
+              head: branch,
+              draft: true,
+              title: `fix: ${process.env.SUMMARY || 'automated patch'}`.slice(0, 120),
+              body: auto.buildPullRequestBody({
+                issueNumber: process.env.ISSUE_NUMBER,
+                category: process.env.CATEGORY,
+                confidence: process.env.CONFIDENCE,
+                summary: process.env.SUMMARY,
+                reasoning: process.env.REASONING,
+                codePaths: paths,
+              }),
+            });
+            await github.rest.issues.addLabels({
+              ...context.repo,
+              issue_number: pr.number,
+              labels: [auto.BOT_PR_LABEL, auto.REVIEW_LOOP_LABEL],
+            });
+            core.setOutput('pull_number', String(pr.number));
+
+  # ---------------------------------------------------------------------------
+  # Review loop: read findings, optionally fix, escalate after N rounds.
+  # ---------------------------------------------------------------------------
+  review_loop:
+    name: Review loop
+    needs: route
+    if: needs.route.outputs.kind == 'review_loop'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout helpers
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          sparse-checkout: |
+            scripts/ai
+            .github/ai
+          sparse-checkout-cone-mode: false
+
+      - name: Freeze automation helpers
+        run: *freeze_helpers
+
+      - name: Inspect review state
+        id: inspect
+        uses: actions/github-script@v9
+        env:
+          PULL_NUMBER: ${{ needs.route.outputs.pull_number }}
+          MAX_ROUNDS: ${{ env.AI_MAX_REVIEW_ROUNDS }}
+        with:
+          script: |
+            const fs = require('node:fs');
+            const auto = require(`${process.env.RUNNER_TEMP}/ai/automation.cjs`);
+            const explicit = Number(process.env.PULL_NUMBER || 0);
+            let pr = null;
+            if (explicit) {
+              const { data } = await github.rest.pulls.get({ ...context.repo, pull_number: explicit });
+              pr = data;
+            } else {
+              const { data } = await github.rest.pulls.list({
+                ...context.repo, state: 'open', per_page: 100,
+              });
+              pr = (data || []).find((entry) => auto.hasLabel(entry.labels || [], auto.REVIEW_LOOP_LABEL));
+            }
+            if (!pr) {
+              core.setOutput('action', 'none');
+              core.info('no automation PR waiting for review');
+              return;
+            }
+            const { data: comments } = await github.rest.issues.listComments({
+              ...context.repo, issue_number: pr.number, per_page: 100,
+            });
+            const { data: reviews } = await github.rest.pulls.listReviews({
+              ...context.repo, pull_number: pr.number, per_page: 100,
+            });
+            const round = auto.nextReviewRound(
+              (pr.labels || []).map((l) => (typeof l === 'string' ? l : l.name)),
+              Number(process.env.MAX_ROUNDS || 5),
+            );
+            const findings = [
+              ...reviews.filter((r) => r.body).map((r) => `REVIEW (${r.state}): ${r.body}`),
+              ...comments
+                .filter((c) => !auto.isBotLogin(c.user && c.user.login, process.env.OWN_ACTORS || 'github-actions[bot]'))
+                .map((c) => `COMMENT: ${c.body}`),
+            ];
+            const text = findings.join('\n\n');
+            // Keep findings outside the workspace: a later checkout wipes it.
+            const findingsPath = `${process.env.RUNNER_TEMP}/review-findings.md`;
+            fs.writeFileSync(findingsPath, auto.sanitizeUntrustedText(text));
+            core.setOutput('findings_path', findingsPath);
+            core.setOutput('pull_number', String(pr.number));
+            core.setOutput('head_ref', pr.head.ref);
+            if (!text.trim()) {
+              core.setOutput('action', 'none');
+            } else if (auto.isReviewCleanText(text)) {
+              core.setOutput('action', 'clean');
+            } else if (round.exceeded) {
+              core.setOutput('action', 'escalate');
+            } else {
+              core.setOutput('action', 'fix');
+            }
+            core.setOutput('round', String(round.round));
+
+      - name: Mark clean
+        if: steps.inspect.outputs.action == 'clean'
+        uses: actions/github-script@v9
+        env:
+          PULL_NUMBER: ${{ steps.inspect.outputs.pull_number }}
+        with:
+          github-token: ${{ secrets.TRIAGE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
+          script: |
+            const auto = require(`${process.env.RUNNER_TEMP}/ai/automation.cjs`);
+            const number = Number(process.env.PULL_NUMBER);
+            await github.rest.issues.addLabels({
+              ...context.repo, issue_number: number, labels: [auto.REVIEW_CLEAN_LABEL],
+            });
+            await github.rest.issues.removeLabel({
+              ...context.repo, issue_number: number, name: auto.REVIEW_LOOP_LABEL,
+            }).catch(() => {});
+            await github.rest.pulls.requestReviewers({
+              ...context.repo, pull_number: number, reviewers: [context.repo.owner],
+            }).catch(() => {});
+
+      - name: Escalate after max rounds
+        if: steps.inspect.outputs.action == 'escalate'
+        uses: actions/github-script@v9
+        env:
+          PULL_NUMBER: ${{ steps.inspect.outputs.pull_number }}
+          ROUND: ${{ steps.inspect.outputs.round }}
+        with:
+          github-token: ${{ secrets.TRIAGE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
+          script: |
+            const auto = require(`${process.env.RUNNER_TEMP}/ai/automation.cjs`);
+            const number = Number(process.env.PULL_NUMBER);
+            await github.rest.issues.addLabels({
+              ...context.repo, issue_number: number, labels: [auto.READY_FOR_HUMAN_LABEL],
+            });
+            await github.rest.issues.createComment({
+              ...context.repo,
+              issue_number: number,
+              body: `Automation stopped after ${process.env.ROUND} review rounds. A maintainer needs to take over.`,
+            });
+
+      - name: Checkout PR head for fixes
+        if: steps.inspect.outputs.action == 'fix'
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.inspect.outputs.head_ref }}
+          fetch-depth: 0
+
+      - name: Setup Rust for fixes
+        if: steps.inspect.outputs.action == 'fix'
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+
+      - name: Install Codex CLI
+        if: steps.inspect.outputs.action == 'fix' && env.AI_PROVIDER == 'codex'
+        run: npm install --global @openai/codex@0.154.0
+
+      - name: Fix findings
+        if: steps.inspect.outputs.action == 'fix'
+        env:
+          GITHUB_TOKEN: ''
+          GH_TOKEN: ''
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s' "$AI_API_KEY" > "$RUNNER_TEMP/ai-api-key"
+          node "$RUNNER_TEMP/ai/agent.cjs" implement \
+            --issue "${{ steps.inspect.outputs.findings_path }}" \
+            --prompt "$RUNNER_TEMP/ai-prompts/fix-from-review.md" \
+            --runtime "$RUNNER_TEMP/ai-runtime" \
+            --key-file "$RUNNER_TEMP/ai-api-key" \
+            --out "$RUNNER_TEMP/ai-runtime/fix-raw.txt" || true
+          cat "$RUNNER_TEMP/ai-runtime/fix-raw.txt" || true
+
+      - name: Verify and push fix
+        if: steps.inspect.outputs.action == 'fix'
+        env:
+          VERIFY_COMMAND: ${{ env.AI_VERIFY_COMMAND }}
+          PULL_NUMBER: ${{ steps.inspect.outputs.pull_number }}
+          ROUND: ${{ steps.inspect.outputs.round }}
+        run: |
+          set -euo pipefail
+          bash -lc "$VERIFY_COMMAND" || { echo "verification failed"; exit 1; }
+          git add -A
+          node -e '
+            const auto = require(process.env.RUNNER_TEMP + "/ai/automation.cjs");
+            const { execFileSync } = require("node:child_process");
+            const diff = execFileSync("git", ["--no-pager", "diff", "--cached"], { encoding: "utf8" });
+            const paths = auto.changedPathsFromDiff(diff);
+            const blocked = auto.findProtectedPaths(paths);
+            if (blocked.length) { console.error("protected paths: " + blocked.join(", ")); process.exit(1); }
+            if (!paths.length) { console.log("nothing to push"); process.exit(2); }
+          ' || exit 0
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix: address review findings (round ${ROUND})" || exit 0
+          git push origin "HEAD:${{ steps.inspect.outputs.head_ref }}"
+
+  # ---------------------------------------------------------------------------
+  # Cleanup: automation PR merged or closed -> tidy the source issue.
+  # ---------------------------------------------------------------------------
+  cleanup:
+    name: Cleanup source issue
+    needs: route
+    if: needs.route.outputs.kind == 'cleanup'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout helpers
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          sparse-checkout: |
+            scripts/ai
+          sparse-checkout-cone-mode: false
+
+      - name: Freeze automation helpers
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ai"
+          cp scripts/ai/automation.cjs "$RUNNER_TEMP/ai/"
+          chmod -R a-w "$RUNNER_TEMP/ai"
+
+      - name: Remove automation labels from the source issue
+        uses: actions/github-script@v9
+        env:
+          PULL_NUMBER: ${{ needs.route.outputs.pull_number }}
+        with:
+          github-token: ${{ secrets.TRIAGE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
+          script: |
+            const auto = require(`${process.env.RUNNER_TEMP}/ai/automation.cjs`);
+            const { data: pr } = await github.rest.pulls.get({
+              ...context.repo, pull_number: Number(process.env.PULL_NUMBER),
+            });
+            const match = String(pr.body || '').match(/#(\d+)/);
+            if (!match) return;
+            const issueNumber = Number(match[1]);
+            for (const label of ['ready-for-agent', auto.REVIEW_LOOP_LABEL]) {
+              await github.rest.issues.removeLabel({
+                ...context.repo, issue_number: issueNumber, name: label,
+              }).catch(() => {});
+            }
+            if (pr.merged) {
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number: issueNumber,
+                body: `Automated patch merged in #${pr.number}. Thanks for the report.`,
+              });
+            }

@@ -1,0 +1,134 @@
+name: ai-issue-format
+
+on:
+  # 自动触发暂时停用，只保留手动运行；恢复时取消下面注释。
+  # issues:
+  #   types: [opened, edited]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  actions: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    if: >-
+      github.event.issue.user.type != 'Bot' &&
+      !contains(github.event.issue.labels.*.name, 'format-exempt')
+    steps:
+      - name: Checkout helpers
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          sparse-checkout: |
+            scripts/ai
+          sparse-checkout-cone-mode: false
+
+      - name: Validate title and body
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const auto = require(`${process.env.GITHUB_WORKSPACE}/scripts/ai/automation.cjs`);
+            const issue = context.payload.issue;
+            const title = String(issue.title || '').trim();
+            const body = String(issue.body || '').trim();
+            const errors = [];
+
+            if (title.length < 8) {
+              errors.push('标题太短，请写清楚问题或需求（至少 8 个字符）。');
+            }
+            if (!/^[[(]?(bug|feature|question|docs|db|数据库)[)\]]?\s*[:：\-–—]?\s*\S+/i.test(title)) {
+              errors.push('标题请以 `[Bug]` / `[Feature]` / `[Question]` 开头，后接一句概括。');
+            }
+            if (body.length < 60) {
+              errors.push('正文太短（少于 60 字符），请补充复现步骤或需求描述。');
+            }
+            if (body.split('\n').length < 3) {
+              errors.push('请按模板分段落填写，至少包含现象、复现步骤、环境信息三部分。');
+            }
+            if (!/(navop\s*\d|v?\d+\.\d+|\d+\.\d+\.\d+)/i.test(body)) {
+              errors.push('请填写 navop 版本号。');
+            }
+
+            if (errors.length === 0) {
+              core.info('issue format OK');
+              return;
+            }
+
+            const marker = auto.FORMAT_MARKER;
+            const { data: comments } = await github.rest.issues.listComments({
+              ...context.repo, issue_number: issue.number, per_page: 100,
+            });
+            const already = comments.some((c) => String(c.body || '').includes(marker));
+            if (!already) {
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number: issue.number,
+                body: [
+                  marker,
+                  '## Issue format check failed',
+                  '',
+                  '这个问题因为没有遵循模板格式被自动关闭。补充完整后重新编辑即可自动恢复分诊。',
+                  '',
+                  ...errors.map((e) => '- ' + e),
+                  '',
+                  '如果是使用咨询或开放讨论，请改用 [Discussions](https://github.com/feigeCode/navop/discussions)。',
+                ].join('\n'),
+              });
+            }
+            const labels = new Set(
+              (issue.labels || []).map((l) => (typeof l === 'string' ? l : l.name))
+            );
+            labels.add('invalid-format');
+            await github.rest.issues.update({
+              ...context.repo,
+              issue_number: issue.number,
+              state: 'closed',
+              state_reason: 'not_planned',
+              labels: [...labels],
+            });
+
+      - name: Recover when the format was fixed
+        if: github.event.action == 'edited'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const auto = require(`${process.env.GITHUB_WORKSPACE}/scripts/ai/automation.cjs`);
+            const issue = context.payload.issue;
+            const labels = (issue.labels || []).map((l) => (typeof l === 'string' ? l : l.name));
+            if (!labels.includes('invalid-format')) {
+              core.info('issue is not flagged; nothing to recover');
+              return;
+            }
+            const body = String(issue.body || '').trim();
+            const title = String(issue.title || '').trim();
+            const ok = body.length >= 60 && title.length >= 8
+              && /(navop\s*\d|v?\d+\.\d+|\d+\.\d+\.\d+)/i.test(body);
+            if (!ok) {
+              core.info('format still invalid');
+              return;
+            }
+            try {
+              await github.rest.actions.createWorkflowDispatch({
+                ...context.repo,
+                workflow_id: 'ai-automation.yml',
+                ref: context.payload.repository.default_branch,
+                inputs: { issue_number: String(issue.number) },
+              });
+            } catch (err) {
+              core.setFailed('triage dispatch failed: ' + err.message);
+              return;
+            }
+            await github.rest.issues.update({
+              ...context.repo,
+              issue_number: issue.number,
+              state: 'open',
+              labels: labels.filter((l) => l !== 'invalid-format'),
+            });
+            await github.rest.issues.createComment({
+              ...context.repo,
+              issue_number: issue.number,
+              body: `${auto.FORMAT_MARKER} 格式已符合要求，重新开启并开始分诊。`,
+            });
