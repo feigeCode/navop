@@ -1843,8 +1843,8 @@ impl SqlEditorTab {
 
         let document = self.get_sql_text(cx);
         let Some(index) = self.statement_index_for_document(revision, &document) else {
+            self.last_frame_key = Some(frame_key);
             self.range_decorations.clear(cx);
-            self.last_frame_key = None;
             return;
         };
         let decorations = current_statement_frame_decorations(
@@ -1862,8 +1862,8 @@ impl SqlEditorTab {
             _ => decoration,
         })
         .collect();
-        self.range_decorations.set(decorations, cx);
         self.last_frame_key = Some(frame_key);
+        self.range_decorations.set(decorations, cx);
     }
 
     /// Compute INSERT value slots for the statement under the cursor and
