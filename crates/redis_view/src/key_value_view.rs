@@ -233,6 +233,8 @@ pub struct KeyValueView {
     key_info: Option<KeyInfo>,
     /// 键值内容
     value_content: Option<KeyValueContent>,
+    /// 当前内容是否因数量/字节预算被截断
+    value_truncated: bool,
     /// 加载状态
     load_state: LoadState,
     /// 焦点句柄
@@ -316,6 +318,7 @@ impl KeyValueView {
             current_key: None,
             key_info: None,
             value_content: None,
+            value_truncated: false,
             load_state: LoadState::Empty,
             focus_handle: cx.focus_handle(),
             is_dirty: false,
@@ -606,10 +609,11 @@ impl KeyValueView {
     }
 
     fn string_value_is_editable(&self) -> bool {
-        matches!(
-            &self.value_content,
-            Some(KeyValueContent::String(value)) if !is_binary_redis_string(value)
-        )
+        !self.value_truncated
+            && matches!(
+                &self.value_content,
+                Some(KeyValueContent::String(value)) if !is_binary_redis_string(value)
+            )
     }
 
     /// 加载键
@@ -654,6 +658,7 @@ impl KeyValueView {
                         }
                         view.key_info = Some(detail.key_info);
                         view.value_content = Some(detail.value);
+                        view.value_truncated = detail.truncated;
                         view.load_state = LoadState::Loaded;
                     }
                     Err(e) => {
@@ -2019,6 +2024,7 @@ impl KeyValueView {
                             view.current_key = None;
                             view.key_info = None;
                             view.value_content = None;
+                            view.value_truncated = false;
                             view.pending_editor_value = None;
                             view.load_state = LoadState::Empty;
                             view.is_dirty = false;
@@ -2585,7 +2591,7 @@ impl KeyValueView {
     }
 
     /// 渲染底部状态栏
-    fn render_status_bar(&self, _cx: &App) -> impl IntoElement {
+    fn render_status_bar(&self, cx: &App) -> impl IntoElement {
         let Some(info) = &self.key_info else {
             return div().into_any_element();
         };
@@ -2623,6 +2629,16 @@ impl KeyValueView {
                     })
                     .when(!memory_display.is_empty(), |this| {
                         this.child(div().child(memory_display.clone()))
+                    })
+                    .when(self.value_truncated, |this| {
+                        this.child(
+                            h_flex()
+                                .gap_1()
+                                .items_center()
+                                .text_color(cx.theme().warning)
+                                .child(Icon::new(IconName::TriangleAlert))
+                                .child(t!("KeyValueView.status_truncated").to_string()),
+                        )
                     }),
             )
             .trailing(div().child(self.view_format.display_name()))

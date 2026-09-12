@@ -17,8 +17,38 @@ use tokio::sync::RwLock;
 use tokio::time::timeout;
 
 const MAX_COLLECTION_ELEMENTS: i64 = 1000;
+/// 单次加载集合类键值的内容预算（字节）。与条数上限共同保证内存有界。
+const MAX_COLLECTION_BYTES: usize = 16 * 1024 * 1024;
 const DEFAULT_CONNECTION_TIMEOUT_SECONDS: u64 = 10;
 const DEFAULT_SSH_TIMEOUT_SECONDS: u64 = 30;
+
+/// 集合类键值的加载预算：条数与字节任一触顶即停止，保证单次加载内存有界。
+struct CollectionBudget {
+    elements: usize,
+    bytes: usize,
+    truncated: bool,
+}
+
+impl CollectionBudget {
+    fn new() -> Self {
+        Self {
+            elements: 0,
+            bytes: 0,
+            truncated: false,
+        }
+    }
+
+    /// 纳入一个元素（给出其占用字节数）；返回 false 表示已达预算，调用方应停止。
+    fn accept(&mut self, bytes: usize) -> bool {
+        if self.elements >= MAX_COLLECTION_ELEMENTS as usize || self.bytes >= MAX_COLLECTION_BYTES {
+            self.truncated = true;
+            return false;
+        }
+        self.elements += 1;
+        self.bytes = self.bytes.saturating_add(bytes);
+        true
+    }
+}
 
 fn string_content_from_bytes(value: Option<Vec<u8>>) -> KeyValueContent {
     KeyValueContent::String(value.unwrap_or_default())
@@ -539,9 +569,10 @@ impl RedisConnectionImpl {
     async fn scan_set_members(
         conn: &mut ConnectionManager,
         key: &str,
-    ) -> Result<Vec<Vec<u8>>, RedisError> {
+    ) -> Result<(Vec<Vec<u8>>, bool), RedisError> {
         let mut cursor: u64 = 0;
         let mut members: Vec<Vec<u8>> = Vec::new();
+        let mut budget = CollectionBudget::new();
         loop {
             let (next, batch): (u64, Vec<Vec<u8>>) = redis_client::cmd("SSCAN")
                 .arg(key)
@@ -556,22 +587,26 @@ impl RedisConnectionImpl {
                         e,
                     )
                 })?;
-            members.extend(batch);
+            for member in batch {
+                if !budget.accept(member.len()) {
+                    return Ok((members, true));
+                }
+                members.push(member);
+            }
             cursor = next;
-            if cursor == 0 || members.len() >= MAX_COLLECTION_ELEMENTS as usize {
-                break;
+            if cursor == 0 {
+                return Ok((members, budget.truncated));
             }
         }
-        members.truncate(MAX_COLLECTION_ELEMENTS as usize);
-        Ok(members)
     }
 
     async fn scan_hash_fields(
         conn: &mut ConnectionManager,
         key: &str,
-    ) -> Result<Vec<HashField>, RedisError> {
+    ) -> Result<(Vec<HashField>, bool), RedisError> {
         let mut cursor: u64 = 0;
         let mut fields: Vec<HashField> = Vec::new();
+        let mut budget = CollectionBudget::new();
         loop {
             let (next, batch): (u64, Vec<(Vec<u8>, Vec<u8>)>) = redis_client::cmd("HSCAN")
                 .arg(key)
@@ -586,43 +621,96 @@ impl RedisConnectionImpl {
                         e,
                     )
                 })?;
-            fields.extend(
-                batch
-                    .into_iter()
-                    .map(|(field, value)| HashField { field, value }),
-            );
+            for (field, value) in batch {
+                let bytes = field.len().saturating_add(value.len());
+                if !budget.accept(bytes) {
+                    return Ok((fields, true));
+                }
+                fields.push(HashField { field, value });
+            }
             cursor = next;
-            if cursor == 0 || fields.len() >= MAX_COLLECTION_ELEMENTS as usize {
-                break;
+            if cursor == 0 {
+                return Ok((fields, budget.truncated));
             }
         }
-        fields.truncate(MAX_COLLECTION_ELEMENTS as usize);
-        Ok(fields)
     }
 
     async fn zrange_with_scores_conn(
         conn: &mut ConnectionManager,
         key: &str,
-    ) -> Result<Vec<ZSetMember>, RedisError> {
-        let result: Vec<(Vec<u8>, f64)> = conn
-            .zrange_withscores(key, 0, (MAX_COLLECTION_ELEMENTS - 1) as isize)
-            .await
-            .map_err(|e| {
-                RedisError::command_with_source(
-                    t!("RedisConnection.command_failed", command = "ZRANGE").to_string(),
-                    e,
-                )
-            })?;
-        Ok(result
-            .into_iter()
-            .map(|(member, score)| ZSetMember { member, score })
-            .collect())
+    ) -> Result<(Vec<ZSetMember>, bool), RedisError> {
+        const BATCH: i64 = 200;
+        let mut members: Vec<ZSetMember> = Vec::new();
+        let mut budget = CollectionBudget::new();
+        let mut start: i64 = 0;
+        loop {
+            let stop = start + BATCH - 1;
+            let batch: Vec<(Vec<u8>, f64)> = conn
+                .zrange_withscores(key, start as isize, stop as isize)
+                .await
+                .map_err(|e| {
+                    RedisError::command_with_source(
+                        t!("RedisConnection.command_failed", command = "ZRANGE").to_string(),
+                        e,
+                    )
+                })?;
+            if batch.is_empty() {
+                return Ok((members, budget.truncated));
+            }
+            let batch_len = batch.len();
+            for (member, score) in batch {
+                if !budget.accept(member.len()) {
+                    return Ok((members, true));
+                }
+                members.push(ZSetMember { member, score });
+            }
+            if batch_len < BATCH as usize {
+                return Ok((members, budget.truncated));
+            }
+            start += BATCH;
+        }
+    }
+
+    async fn lrange_capped(
+        conn: &mut ConnectionManager,
+        key: &str,
+    ) -> Result<(Vec<Vec<u8>>, bool), RedisError> {
+        const BATCH: i64 = 200;
+        let mut items: Vec<Vec<u8>> = Vec::new();
+        let mut budget = CollectionBudget::new();
+        let mut start: i64 = 0;
+        loop {
+            let stop = start + BATCH - 1;
+            let batch: Vec<Vec<u8>> = conn
+                .lrange(key, start as isize, stop as isize)
+                .await
+                .map_err(|e| {
+                    RedisError::command_with_source(
+                        t!("RedisConnection.command_failed", command = "LRANGE").to_string(),
+                        e,
+                    )
+                })?;
+            if batch.is_empty() {
+                return Ok((items, budget.truncated));
+            }
+            let batch_len = batch.len();
+            for item in batch {
+                if !budget.accept(item.len()) {
+                    return Ok((items, true));
+                }
+                items.push(item);
+            }
+            if batch_len < BATCH as usize {
+                return Ok((items, budget.truncated));
+            }
+            start += BATCH;
+        }
     }
 
     async fn xrange_conn(
         conn: &mut ConnectionManager,
         key: &str,
-    ) -> Result<Vec<StreamEntry>, RedisError> {
+    ) -> Result<(Vec<StreamEntry>, bool), RedisError> {
         let result: Vec<(String, Vec<(Vec<u8>, Vec<u8>)>)> = redis_client::cmd("XRANGE")
             .arg(key)
             .arg("-")
@@ -637,16 +725,55 @@ impl RedisConnectionImpl {
                     e,
                 )
             })?;
-        Ok(result
-            .into_iter()
-            .map(|(id, fields)| StreamEntry {
+        let mut entries: Vec<StreamEntry> = Vec::new();
+        let mut budget = CollectionBudget::new();
+        for (id, fields) in result {
+            let bytes = fields.iter().fold(id.len(), |acc, (field, value)| {
+                acc.saturating_add(field.len()).saturating_add(value.len())
+            });
+            if !budget.accept(bytes) {
+                return Ok((entries, true));
+            }
+            entries.push(StreamEntry {
                 id,
                 fields: fields
                     .into_iter()
                     .map(|(field, value)| HashField { field, value })
                     .collect(),
-            })
-            .collect())
+            });
+        }
+        Ok((entries, budget.truncated))
+    }
+
+    /// 加载 String 值；超过字节预算时只取前 `MAX_COLLECTION_BYTES` 字节并标记截断。
+    async fn load_string_value(
+        conn: &mut ConnectionManager,
+        key: &str,
+        key_info: &KeyInfo,
+    ) -> Result<(KeyValueContent, bool), RedisError> {
+        let total = key_info.size.unwrap_or(0).max(0) as usize;
+        if total > MAX_COLLECTION_BYTES {
+            let last = (MAX_COLLECTION_BYTES - 1) as isize;
+            let value: Vec<u8> = conn.getrange(key, 0, last).await.map_err(|e| {
+                RedisError::command_with_source(
+                    t!("RedisConnection.command_failed", command = "GETRANGE").to_string(),
+                    e,
+                )
+            })?;
+            return Ok((KeyValueContent::String(value), true));
+        }
+
+        let value: Option<Vec<u8>> = redis_client::cmd("GET")
+            .arg(key)
+            .query_async(&mut *conn)
+            .await
+            .map_err(|e| {
+                RedisError::command_with_source(
+                    t!("RedisConnection.command_failed", command = "GET").to_string(),
+                    e,
+                )
+            })?;
+        Ok((string_content_from_bytes(value), false))
     }
 
     async fn key_value_detail_with_conn(
@@ -654,42 +781,36 @@ impl RedisConnectionImpl {
         key: &str,
     ) -> Result<KeyValueDetail, RedisError> {
         let key_info = Self::key_info_with_conn(conn, key).await?;
-        let value = match key_info.key_type {
-            RedisKeyType::String => {
-                let value = redis_client::cmd("GET")
-                    .arg(key)
-                    .query_async::<Option<Vec<u8>>>(&mut *conn)
-                    .await
-                    .map_err(|e| {
-                        RedisError::command_with_source(
-                            t!("RedisConnection.command_failed", command = "GET").to_string(),
-                            e,
-                        )
-                    })?;
-                string_content_from_bytes(value)
-            }
+        let (value, truncated) = match key_info.key_type {
+            RedisKeyType::String => Self::load_string_value(conn, key, &key_info).await?,
             RedisKeyType::List => {
-                let value = conn
-                    .lrange(key, 0, (MAX_COLLECTION_ELEMENTS - 1) as isize)
-                    .await
-                    .map_err(|e| {
-                        RedisError::command_with_source(
-                            t!("RedisConnection.command_failed", command = "LRANGE").to_string(),
-                            e,
-                        )
-                    })?;
-                KeyValueContent::List(value)
+                let (items, truncated) = Self::lrange_capped(conn, key).await?;
+                (KeyValueContent::List(items), truncated)
             }
-            RedisKeyType::Set => KeyValueContent::Set(Self::scan_set_members(conn, key).await?),
+            RedisKeyType::Set => {
+                let (items, truncated) = Self::scan_set_members(conn, key).await?;
+                (KeyValueContent::Set(items), truncated)
+            }
             RedisKeyType::ZSet => {
-                KeyValueContent::ZSet(Self::zrange_with_scores_conn(conn, key).await?)
+                let (items, truncated) = Self::zrange_with_scores_conn(conn, key).await?;
+                (KeyValueContent::ZSet(items), truncated)
             }
-            RedisKeyType::Hash => KeyValueContent::Hash(Self::scan_hash_fields(conn, key).await?),
-            RedisKeyType::Stream => KeyValueContent::Stream(Self::xrange_conn(conn, key).await?),
-            RedisKeyType::None => KeyValueContent::None,
+            RedisKeyType::Hash => {
+                let (fields, truncated) = Self::scan_hash_fields(conn, key).await?;
+                (KeyValueContent::Hash(fields), truncated)
+            }
+            RedisKeyType::Stream => {
+                let (entries, truncated) = Self::xrange_conn(conn, key).await?;
+                (KeyValueContent::Stream(entries), truncated)
+            }
+            RedisKeyType::None => (KeyValueContent::None, false),
         };
 
-        Ok(KeyValueDetail { key_info, value })
+        Ok(KeyValueDetail {
+            key_info,
+            value,
+            truncated,
+        })
     }
 }
 
@@ -1008,20 +1129,6 @@ impl RedisConnection for RedisConnectionImpl {
         })
     }
 
-    async fn hgetall(&self, key: &str) -> Result<Vec<HashField>, RedisError> {
-        let mut conn = self.get_conn().await?;
-        let result: Vec<(Vec<u8>, Vec<u8>)> = conn.hgetall(key).await.map_err(|e| {
-            RedisError::command_with_source(
-                t!("RedisConnection.command_failed", command = "HGETALL").to_string(),
-                e,
-            )
-        })?;
-        Ok(result
-            .into_iter()
-            .map(|(field, value)| HashField { field, value })
-            .collect())
-    }
-
     async fn hset(&self, key: &str, field: &str, value: &str) -> Result<(), RedisError> {
         self.hset_in_db(self.config.db_index, key, field, value)
             .await
@@ -1133,16 +1240,6 @@ impl RedisConnection for RedisConnectionImpl {
         conn.llen(key).await.map_err(|e| {
             RedisError::command_with_source(
                 t!("RedisConnection.command_failed", command = "LLEN").to_string(),
-                e,
-            )
-        })
-    }
-
-    async fn smembers(&self, key: &str) -> Result<Vec<Vec<u8>>, RedisError> {
-        let mut conn = self.get_conn().await?;
-        conn.smembers(key).await.map_err(|e| {
-            RedisError::command_with_source(
-                t!("RedisConnection.command_failed", command = "SMEMBERS").to_string(),
                 e,
             )
         })
@@ -1673,6 +1770,30 @@ pub(crate) mod tests {
         assert!(!RedisConnectionImpl::can_retry_raw_command(&[
             "MEMORY".to_string()
         ]));
+    }
+
+    #[test]
+    fn collection_budget_stops_at_element_limit() {
+        let mut budget = CollectionBudget::new();
+        for _ in 0..MAX_COLLECTION_ELEMENTS {
+            assert!(budget.accept(1), "element within limit should be accepted");
+        }
+        assert!(
+            !budget.accept(1),
+            "element beyond the count limit must be rejected"
+        );
+        assert!(budget.truncated);
+    }
+
+    #[test]
+    fn collection_budget_stops_at_byte_limit() {
+        let mut budget = CollectionBudget::new();
+        assert!(budget.accept(MAX_COLLECTION_BYTES));
+        assert!(
+            !budget.accept(1),
+            "element beyond the byte limit must be rejected"
+        );
+        assert!(budget.truncated);
     }
 
     #[test]

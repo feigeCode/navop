@@ -492,6 +492,10 @@ KeyValueView:
     en: "Size: %{size} B"
     zh-CN: "大小: %{size} B"
     zh-HK: "大小: %{size} B"
+  status_truncated:
+    en: "Content is too large or has too many items; only a truncated subset is shown"
+    zh-CN: "内容过大或条目过多，已截断，仅显示部分内容"
+    zh-HK: "內容過大或條目過多，已截斷，僅顯示部分內容"
   column_rank:
     en: "Rank"
     zh-CN: "排名"
