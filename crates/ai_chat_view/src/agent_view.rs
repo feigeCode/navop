@@ -1039,7 +1039,7 @@ impl AgentChatView {
             false,
         );
 
-        let mut new_view = Self {
+        let new_view = Self {
             runtime,
             session_id,
             resources,
