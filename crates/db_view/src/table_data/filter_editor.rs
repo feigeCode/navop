@@ -884,8 +884,8 @@ impl SimpleCodeEditor {
 impl EventEmitter<FilterEditorEvent> for SimpleCodeEditor {}
 
 impl Render for SimpleCodeEditor {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        Editor::new(&self.editor).size_full()
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        Editor::new(&self.editor).bg(cx.theme().background).size_full()
     }
 }
 
@@ -896,8 +896,8 @@ pub fn create_simple_editor(
     let editor = cx.new(|cx| {
         let editor = EditorState::new(window, cx)
             .language("sql")
+            .line_number(false)
             .clean_on_escape();
-
         editor
     });
 

@@ -1298,7 +1298,7 @@ impl TableDesigner {
                             .text_color(cx.theme().muted_foreground)
                             .child(t!("Table.table_name").to_string()),
                     )
-                    .child(Input::new(&self.table_name_input).w(px(200.)).small()),
+                    .child(Input::new(&self.table_name_input).w(px(200.))),
             )
             .child(
                 h_flex()
@@ -1310,12 +1310,11 @@ impl TableDesigner {
                             .text_color(cx.theme().muted_foreground)
                             .child(t!("Table.comment").to_string()),
                     )
-                    .child(Input::new(&self.table_comment_input).w(px(300.)).small()),
+                    .child(Input::new(&self.table_comment_input).w(px(300.))),
             )
             .child(div().flex_1())
             .child(
                 Button::new("execute")
-                    .small()
                     .primary()
                     .loading(self.executing)
                     .label(t!("Common.save").to_string())
@@ -1393,7 +1392,7 @@ impl TableDesigner {
                                 .text_color(cx.theme().muted_foreground)
                                 .child(t!("Table.engine").to_string()),
                         )
-                        .child(Select::new(&self.engine_select).w(px(200.)).small()),
+                        .child(Select::new(&self.engine_select).w(px(200.))),
                 )
             })
             .when(capabilities.supports_charset, |this| {
@@ -1408,7 +1407,7 @@ impl TableDesigner {
                                 .text_color(cx.theme().muted_foreground)
                                 .child(t!("Table.charset").to_string()),
                         )
-                        .child(Select::new(&self.charset_select).w(px(200.)).small()),
+                        .child(Select::new(&self.charset_select).w(px(200.))),
                 )
             })
             .when(capabilities.supports_collation, |this| {
@@ -1423,7 +1422,7 @@ impl TableDesigner {
                                 .text_color(cx.theme().muted_foreground)
                                 .child(t!("Table.collation").to_string()),
                         )
-                        .child(Select::new(&self.collation_select).w(px(200.)).small()),
+                        .child(Select::new(&self.collation_select).w(px(200.))),
                 )
             })
             .when(capabilities.supports_auto_increment, |this| {
@@ -1438,7 +1437,7 @@ impl TableDesigner {
                                 .text_color(cx.theme().muted_foreground)
                                 .child(t!("Table.auto_increment").to_string()),
                         )
-                        .child(Input::new(&self.auto_increment_input).w(px(200.)).small()),
+                        .child(Input::new(&self.auto_increment_input).w(px(200.))),
                 )
             })
             .into_any_element()
@@ -2567,7 +2566,6 @@ impl ColumnsEditor {
             .child(div().flex_1())
             .child(
                 Input::new(&self.search_input)
-                    .small()
                     .w(px(200.))
                     .prefix(
                         Icon::new(IconName::Search)
@@ -2753,22 +2751,22 @@ impl ColumnsEditor {
             .child(
                 div()
                     .w(self.column_width(COLUMN_NAME_COL))
-                    .child(Input::new(&row.name_input).w_full().small()),
+                    .child(Input::new(&row.name_input).w_full()),
             )
             .child(
                 div()
                     .w(self.column_width(COLUMN_TYPE_COL))
-                    .child(Select::new(&row.type_select).w_full().small()),
+                    .child(Select::new(&row.type_select).w_full()),
             )
             .child(
                 div()
                     .w(self.column_width(COLUMN_LENGTH_COL))
-                    .child(Input::new(&row.length_input).w_full().small()),
+                    .child(Input::new(&row.length_input).w_full()),
             )
             .child(
                 div()
                     .w(self.column_width(COLUMN_SCALE_COL))
-                    .child(Input::new(&row.scale_input).w_full().small()),
+                    .child(Input::new(&row.scale_input).w_full()),
             )
             .child(
                 div()
@@ -2778,7 +2776,6 @@ impl ColumnsEditor {
                     .child(
                         Checkbox::new(("null", idx))
                             .checked(row.nullable)
-                            .small()
                             .on_click(cx.listener(move |this, _, _window, cx| {
                                 this.toggle_nullable(idx, cx)
                             })),
@@ -2792,7 +2789,6 @@ impl ColumnsEditor {
                     .child(
                         Checkbox::new(("pk", idx))
                             .checked(row.is_pk)
-                            .small()
                             .on_click(
                                 cx.listener(move |this, _, _window, cx| this.toggle_pk(idx, cx)),
                             ),
@@ -2806,7 +2802,6 @@ impl ColumnsEditor {
                     .child(
                         Checkbox::new(("ai", idx))
                             .checked(row.auto_increment)
-                            .small()
                             .on_click(cx.listener(move |this, _, _window, cx| {
                                 this.toggle_auto_increment(idx, cx)
                             })),
@@ -2815,7 +2810,7 @@ impl ColumnsEditor {
             .child(
                 div()
                     .flex_1()
-                    .child(Input::new(&row.comment_input).w_full().small()),
+                    .child(Input::new(&row.comment_input).w_full()),
             )
             .into_any_element()
     }
@@ -2877,7 +2872,7 @@ impl ColumnsEditor {
                             .text_color(cx.theme().muted_foreground)
                             .child(format!("{}:", t!("Table.default_value"))),
                     )
-                    .child(Input::new(&row.default_input).w(px(200.)).small()),
+                    .child(Input::new(&row.default_input).w(px(200.))),
             )
             .when(show_charset, |this| {
                 this.child(
@@ -2891,7 +2886,7 @@ impl ColumnsEditor {
                                 .text_color(cx.theme().muted_foreground)
                                 .child(format!("{}:", t!("Table.charset"))),
                         )
-                        .child(Select::new(&row.charset_select).w(px(200.)).small()),
+                        .child(Select::new(&row.charset_select).w(px(200.))),
                 )
             })
             .when(show_collation, |this| {
@@ -2906,7 +2901,7 @@ impl ColumnsEditor {
                                 .text_color(cx.theme().muted_foreground)
                                 .child(format!("{}:", t!("Table.collation"))),
                         )
-                        .child(Select::new(&row.collation_select).w(px(200.)).small()),
+                        .child(Select::new(&row.collation_select).w(px(200.))),
                 )
             })
             .when(is_enum_or_set, |this| {
@@ -2920,7 +2915,7 @@ impl ColumnsEditor {
                                 .text_color(cx.theme().muted_foreground)
                                 .child(format!("{}:", t!("Table.value"))),
                         )
-                        .child(Input::new(&row.enum_values_input).w(px(400.)).small()),
+                        .child(Input::new(&row.enum_values_input).w(px(400.))),
                 )
             })
             .into_any_element()
@@ -3250,18 +3245,17 @@ impl Render for IndexesEditor {
                             .child(
                                 div()
                                     .w(px(160.))
-                                    .child(Input::new(&row.name_input).w_full().small()),
+                                    .child(Input::new(&row.name_input).w_full()),
                             )
                             .child(
                                 div()
                                     .flex_1()
-                                    .child(Input::new(&row.columns_input).w_full().small()),
+                                    .child(Input::new(&row.columns_input).w_full()),
                             )
                             .child(
                                 div().w(px(60.)).flex().justify_center().child(
                                     Checkbox::new(("unique", idx))
                                         .checked(row.is_unique)
-                                        .small()
                                         .on_click(cx.listener(move |this, _, _window, cx| {
                                             this.toggle_unique(idx, cx)
                                         })),
