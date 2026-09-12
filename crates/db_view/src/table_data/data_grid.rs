@@ -2990,7 +2990,6 @@ impl DataGrid {
                                 Icon::new(IconName::Search).text_color(cx.theme().muted_foreground),
                             )
                             .cleanable(true)
-                            .small()
                             .w_full(),
                     ),
                 )

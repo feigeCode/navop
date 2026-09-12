@@ -1,8 +1,10 @@
 use agent_runtime::{
     DEFAULT_AGENT_MAX_ITERATIONS, MAX_AGENT_MAX_ITERATIONS, MIN_AGENT_MAX_ITERATIONS,
 };
-use gpui::App;
+use gpui::{App, AppContext, Context, Entity, IntoElement, ParentElement, Styled, Window};
+use gpui_component::input::{InputEvent, Textarea, TextareaState};
 use gpui_component::setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem};
+use gpui_component::{ActiveTheme, v_flex};
 use one_core::settings::{AiChatSettings, AppSettings};
 use rust_i18n::t;
 
@@ -29,6 +31,66 @@ pub fn agent_setting_group(default_settings: &AiChatSettings) -> SettingGroup {
             )
             .description(t!("Settings.General.Agent.max_iterations_desc").to_string()),
         )
+        .item(custom_system_prompt_item())
+}
+
+fn custom_system_prompt_item() -> SettingItem {
+    SettingItem::render(|_options, window, cx| render_custom_system_prompt(window, cx)).keywords([
+        t!("Settings.General.Agent.custom_system_prompt").to_string(),
+        t!("Settings.General.Agent.custom_system_prompt_desc").to_string(),
+    ])
+}
+
+struct CustomSystemPromptEditor {
+    input: Entity<TextareaState>,
+    _subscription: gpui::Subscription,
+}
+
+fn render_custom_system_prompt(window: &mut Window, cx: &mut App) -> gpui::AnyElement {
+    let editor = window.use_keyed_state("agent-custom-system-prompt", cx, |window, cx| {
+        CustomSystemPromptEditor::new(window, cx)
+    });
+    editor.into_any_element()
+}
+
+impl CustomSystemPromptEditor {
+    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let input = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .auto_grow(4, 12)
+                .placeholder(t!("Settings.General.Agent.custom_system_prompt_placeholder"))
+                .default_value(AppSettings::global(cx).ai_chat.custom_system_prompt.clone())
+        });
+        let subscription = cx.subscribe(&input, |editor: &mut Self, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Change) {
+                let value = editor.input.read(cx).value().to_string();
+                AppSettings::update_and_save(cx, |settings| {
+                    settings.ai_chat.custom_system_prompt = value;
+                });
+                cx.notify();
+            }
+        });
+        Self {
+            input,
+            _subscription: subscription,
+        }
+    }
+}
+
+impl gpui::Render for CustomSystemPromptEditor {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl gpui::IntoElement {
+        v_flex()
+            .w_full()
+            .max_w(gpui::px(640.))
+            .gap_2()
+            .child(
+                gpui::div()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t!("Settings.General.Agent.custom_system_prompt_desc").to_string()),
+            )
+            .child(Textarea::new(&self.input))
+    }
 }
 
 fn normalize_max_iterations(value: f64) -> usize {
