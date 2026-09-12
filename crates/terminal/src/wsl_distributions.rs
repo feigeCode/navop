@@ -49,6 +49,7 @@ pub fn list_wsl_distributions() -> Result<Vec<WslDistribution>> {
 }
 
 #[cfg(any(test, target_os = "windows"))]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) fn list_wsl_distributions_with(wsl: &str) -> Result<Vec<WslDistribution>> {
     let output = std::process::Command::new(wsl)
         .args(["--list", "--verbose"])
