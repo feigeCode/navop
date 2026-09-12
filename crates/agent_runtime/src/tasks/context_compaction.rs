@@ -157,9 +157,11 @@ fn compaction_transcript(history: &RuntimeHistory) -> String {
 fn fallback_summary(history: &RuntimeHistory) -> String {
     let transcript = compaction_transcript(history);
     let transcript = truncate_chars(&transcript, FALLBACK_SUMMARY_MAX_CHARS);
-    format!(
-        "模型未返回上下文压缩摘要。以下为本地保留的历史转录截断摘要，用于继续当前任务：\n{transcript}"
+    t!(
+        "AgentRuntime.compaction_fallback_summary",
+        transcript = transcript
     )
+    .to_string()
 }
 
 fn truncate_chars(value: &str, max_chars: usize) -> String {
@@ -202,13 +204,7 @@ fn compaction_item_text(item: &HistoryItem) -> String {
 }
 
 fn compaction_system_prompt() -> String {
-    [
-        "你正在执行 Codex 风格的上下文压缩。",
-        "请把此前对话压缩为一份可继续执行任务的中文摘要。",
-        "必须保留: 用户目标、关键约束、已完成操作、已修改文件、工具结果、当前风险、未完成事项。",
-        "不要解决新问题，不要编造未发生的事实。",
-    ]
-    .join("\n")
+    t!("AgentRuntime.compaction_system_prompt").to_string()
 }
 
 fn estimated_history_chars(history: &RuntimeHistory) -> usize {
@@ -299,7 +295,7 @@ mod tests {
         assert!(matches!(history.items()[1], HistoryItem::User { .. }));
         let request = model.received_requests().remove(0);
         assert_eq!(Role::System, request.messages[0].role);
-        assert!(request.messages[0].content_as_text().contains("上下文压缩"));
+        assert!(request.messages[0].content_as_text().contains("Codex"));
         assert!(request.messages[1].content_as_text().contains("旧上下文"));
     }
 
@@ -331,7 +327,9 @@ mod tests {
         assert!(compacted);
         match &session.history_snapshot().items()[0] {
             HistoryItem::ContextSummary { text, .. } => {
-                assert!(text.contains("模型未返回上下文压缩摘要"));
+                let prefix =
+                    rust_i18n::t!("AgentRuntime.compaction_fallback_summary", transcript = "");
+                assert!(text.contains(prefix.trim_end()));
                 assert!(text.contains("旧上下文"));
             }
             other => panic!("expected fallback context summary, got {other:?}"),
@@ -365,7 +363,9 @@ mod tests {
         assert!(compacted);
         match &session.history_snapshot().items()[0] {
             HistoryItem::ContextSummary { text, .. } => {
-                assert!(text.contains("模型未返回上下文压缩摘要"));
+                let prefix =
+                    rust_i18n::t!("AgentRuntime.compaction_fallback_summary", transcript = "");
+                assert!(text.contains(prefix.trim_end()));
                 assert!(text.contains("旧上下文"));
             }
             other => panic!("expected fallback context summary, got {other:?}"),

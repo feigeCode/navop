@@ -547,9 +547,9 @@ pub struct AiChatSettings {
         deserialize_with = "deserialize_agent_max_iterations"
     )]
     pub max_iterations: usize,
-    /// 用户自定义系统提示词（追加在内置 Agent 基座提示词之后）。
+    /// 用户自定义系统提示词（追加在内置 Agent 系统提示词模板之后）。
     ///
-    /// 空串表示未启用；旧配置缺少该字段时按空串回落。
+    /// 空串表示不追加；旧配置缺少该字段时按空串回落。
     #[serde(default)]
     pub custom_system_prompt: String,
 }

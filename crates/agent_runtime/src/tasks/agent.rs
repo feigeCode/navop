@@ -186,7 +186,6 @@ async fn run_agent_loop(ctx: AgentLoopContext, cancellation: CancellationToken) 
 
         // 构造请求:system + 历史 + (业务工具 + update_plan)。
         let mut messages = vec![Message::system(build_system_prompt(
-            ctx.task_kind,
             &tool_specs,
             &ctx.resources,
             &ctx.session.skills(),
