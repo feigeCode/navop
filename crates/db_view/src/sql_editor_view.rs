@@ -34,8 +34,8 @@ use gpui::{
 use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants};
 use gpui_component::dialog::DialogFooter;
 use gpui_component::input::{
-    GutterMarker, InlineWidgetCollection, Input, InputEvent, InputState, RangeDecoration,
-    RangeDecorationCollection, RangeDecorationStyle,
+    GutterMarker, Input, InputEvent, InputState, RangeDecoration, RangeDecorationCollection,
+    RangeDecorationStyle,
 };
 use gpui_component::notification::Notification;
 use gpui_component::select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState};
@@ -1418,8 +1418,6 @@ pub struct SqlEditorTab {
     last_insert_hints_key: Option<(usize, u64)>,
     /// 当前语句框装饰集合（随编辑自动跟踪范围）。
     range_decorations: RangeDecorationCollection,
-    /// 行内 widget 集合（INSERT 值提示等）。
-    inline_widgets: InlineWidgetCollection,
     /// 与 gutter lane 标记顺序一致的 marker id，用于把点击事件映射回语句。
     gutter_marker_ids: Vec<String>,
 }
@@ -1513,9 +1511,6 @@ impl SqlEditorTab {
         let range_decorations = input.update(cx, |state, cx| {
             state.create_range_decorations_collection(Vec::new(), cx)
         });
-        let inline_widgets = input.update(cx, |state, cx| {
-            state.create_inline_widgets_collection(Vec::new(), cx)
-        });
         let mut instance = Self {
             title: config.title,
             editor: editor.clone(),
@@ -1563,7 +1558,6 @@ impl SqlEditorTab {
             insert_values_highlight: None,
             last_insert_hints_key: None,
             range_decorations,
-            inline_widgets,
             gutter_marker_ids: Vec::new(),
         };
 
@@ -1843,8 +1837,8 @@ impl SqlEditorTab {
 
         let document = self.get_sql_text(cx);
         let Some(index) = self.statement_index_for_document(revision, &document) else {
+            self.last_frame_key = Some(frame_key);
             self.range_decorations.clear(cx);
-            self.last_frame_key = None;
             return;
         };
         let decorations = current_statement_frame_decorations(
@@ -1862,8 +1856,8 @@ impl SqlEditorTab {
             _ => decoration,
         })
         .collect();
-        self.range_decorations.set(decorations, cx);
         self.last_frame_key = Some(frame_key);
+        self.range_decorations.set(decorations, cx);
     }
 
     /// Compute INSERT value slots for the statement under the cursor and
@@ -1897,7 +1891,6 @@ impl SqlEditorTab {
         else {
             self.insert_values_highlight = None;
             self.last_insert_hints_key = None;
-            self.inline_widgets.clear(cx);
             return;
         };
         if self.last_insert_hints_key == Some((statement_start, revision)) {
@@ -1918,7 +1911,6 @@ impl SqlEditorTab {
 
         self.insert_values_highlight = values_highlight;
 
-        self.inline_widgets.clear(cx);
         self.refresh_current_statement_frame(cx);
     }
 
@@ -4740,7 +4732,6 @@ impl Clone for SqlEditorTab {
             insert_values_highlight: self.insert_values_highlight.clone(),
             last_insert_hints_key: self.last_insert_hints_key,
             range_decorations: self.range_decorations.clone(),
-            inline_widgets: self.inline_widgets.clone(),
             gutter_marker_ids: self.gutter_marker_ids.clone(),
         }
     }
@@ -4949,9 +4940,8 @@ mod tests {
             .next()
             .unwrap();
 
-        assert!(!refresh.contains("InlineWidget::new"));
+        assert!(!refresh.contains("InlineWidget"));
         assert!(!refresh.contains("set_inline_widgets"));
-        assert!(refresh.contains("self.inline_widgets.clear(cx)"));
     }
 
     #[test]
