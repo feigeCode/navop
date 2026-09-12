@@ -56,13 +56,13 @@ edition = "2024"
 # the workspace resolves it from GitHub instead of a sibling ../gpui-component
 # checkout. The dependency keys keep the crate names navop already imports
 # (`gpui_component`, `gpui_base`, `gpui_shell`, ...).
-gpui-component = { git = "https://github.com/feigeCode/gpui-component", rev = "f4ad3342846ce7e81e3da5be61af3f689b606525" }
-gpui-component-assets = { package = "gpui-kit-assets", git = "https://github.com/feigeCode/gpui-component", rev = "f4ad3342846ce7e81e3da5be61af3f689b606525" }
-gpui-base = { git = "https://github.com/feigeCode/gpui-component", rev = "f4ad3342846ce7e81e3da5be61af3f689b606525" }
-gpui-shell = { git = "https://github.com/feigeCode/gpui-component", rev = "f4ad3342846ce7e81e3da5be61af3f689b606525" }
-gpui-component-shell = { git = "https://github.com/feigeCode/gpui-component", rev = "f4ad3342846ce7e81e3da5be61af3f689b606525" }
-gpui-wry = { git = "https://github.com/feigeCode/gpui-component", rev = "f4ad3342846ce7e81e3da5be61af3f689b606525" }
-gpui-kit = { git = "https://github.com/feigeCode/gpui-component", rev = "f4ad3342846ce7e81e3da5be61af3f689b606525" }
+gpui-component = { git = "https://github.com/feigeCode/gpui-component", rev = "254bfe496252d8e0aa9aa38086b28edaeec98eb5" }
+gpui-component-assets = { package = "gpui-kit-assets", git = "https://github.com/feigeCode/gpui-component", rev = "254bfe496252d8e0aa9aa38086b28edaeec98eb5" }
+gpui-base = { git = "https://github.com/feigeCode/gpui-component", rev = "254bfe496252d8e0aa9aa38086b28edaeec98eb5" }
+gpui-shell = { git = "https://github.com/feigeCode/gpui-component", rev = "254bfe496252d8e0aa9aa38086b28edaeec98eb5" }
+gpui-component-shell = { git = "https://github.com/feigeCode/gpui-component", rev = "254bfe496252d8e0aa9aa38086b28edaeec98eb5" }
+gpui-wry = { git = "https://github.com/feigeCode/gpui-component", rev = "254bfe496252d8e0aa9aa38086b28edaeec98eb5" }
+gpui-kit = { git = "https://github.com/feigeCode/gpui-component", rev = "254bfe496252d8e0aa9aa38086b28edaeec98eb5" }
 
 gpui = { package = "gpui-pre", version = "0.3.1" }
 gpui_platform = { package = "gpui-pre-platform", version = "0.3.1", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
@@ -357,4 +357,4 @@ gpui-pre-ztracing-macro    = { git = "https://github.com/feigeCode/gpui-pre.git"
 # live in this root manifest: [patch] sections inside the gpui-component
 # workspace are ignored by cargo. Mirrors the same entry in gpui-component's
 # workspace root, pinned to the same revision as the gpui dependencies above.
-rquickjs = { git = "https://github.com/feigeCode/gpui-component", rev = "f4ad3342846ce7e81e3da5be61af3f689b606525" }
+rquickjs = { git = "https://github.com/feigeCode/gpui-component", rev = "254bfe496252d8e0aa9aa38086b28edaeec98eb5" }
