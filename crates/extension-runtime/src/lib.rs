@@ -30,6 +30,7 @@ pub use types::{
     RegisteredDocumentExporter, RegisteredIpcRuntimeBinding, RegisteredRemoteFileEditorCommand,
     RegisteredRemoteFileEditorContribution, RegisteredResourceConnectionContribution,
     RegisteredResourceWorkbenchContribution, RegisteredShellViewContribution,
+    WorkbenchOperationCatalog, WorkbenchOperationEntry, WorkbenchOperationParam,
 };
 
 #[cfg(all(test, feature = "wasm-components"))]
