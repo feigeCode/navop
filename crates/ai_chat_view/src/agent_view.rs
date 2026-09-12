@@ -853,13 +853,15 @@ pub struct AgentChatView {
     tool_options: Vec<ComposerMenuOption>,
     runtime_factory: Option<AgentRuntimeFactory>,
     is_running: bool,
-    /// 系统提示词（可选，用于自定义 AI 行为）。
-    system_instruction: Option<String>,
-    /// 当前指令是否来自全局设置的自定义系统提示词。
+    /// 当前系统提示词追加指令。
     ///
-    /// 用于区分「设置种子值」与外部显式调用 [`Self::set_system_instruction`]
-    /// 注入的指令（如终端侧边栏的连接上下文指令）：前者在新会话时跟随设置
-    /// 刷新，后者保持不变。
+    /// 来自全局设置或外部显式调用 [`Self::set_system_instruction`]（如终端侧边栏
+    /// 的连接上下文指令），两者都追加在固定的系统提示词模板之后。
+    system_instruction: Option<String>,
+    /// 当前指令是否来自全局设置（而非外部显式注入）。
+    ///
+    /// 来自设置时，新会话/切换模型会跟随设置的最新值刷新（包括清空）；外部显式注入
+    /// 的指令保持不变。默认来源为设置，即使当前设置为空。
     system_instruction_from_settings: bool,
     /// 代码块操作注册表。
     code_block_actions: CodeBlockActionRegistry,
@@ -984,11 +986,13 @@ impl AgentChatView {
 
         let tool_execution_mode =
             runtime_tool_execution_mode(AppSettings::current(cx).ai_chat.tool_execution_mode);
-        // 全局自定义系统提示词：仅在没有任何指令时作为种子值，保证外部调用方
-        // 通过 pending_system_instruction 注入的指令不被覆盖。
-        let seed_system_instruction =
-            AppSettings::current(cx).ai_chat.effective_custom_system_prompt();
-        let system_instruction_from_settings = seed_system_instruction.is_some();
+        // 默认来源为全局设置：初始化时用当前设置作种子值，之后新会话/切换模型都会
+        // 跟随设置刷新（包括配置被清空）。外部显式注入会通过 set_system_instruction
+        // 覆盖来源并保持不变。
+        let seed_system_instruction = AppSettings::current(cx)
+            .ai_chat
+            .effective_custom_system_prompt();
+        let system_instruction_from_settings = true;
         let tool_options = default_tool_options();
 
         let skills = AgentSkillState::load_default();
@@ -2656,9 +2660,9 @@ impl AgentChatView {
                 self.runtime = binding.runtime;
                 self.session_id = binding.session_id;
                 if self.system_instruction_from_settings {
-                    self.system_instruction =
-                        AppSettings::current(cx).ai_chat.effective_custom_system_prompt();
-                    self.system_instruction_from_settings = self.system_instruction.is_some();
+                    self.system_instruction = AppSettings::current(cx)
+                        .ai_chat
+                        .effective_custom_system_prompt();
                 }
                 self.apply_system_instruction_to_current_session();
                 self.sync_session_skills();
@@ -2861,10 +2865,10 @@ impl AgentChatView {
         let session = self.runtime.create_session(self.resources.clone());
         self.session_id = session.id().clone();
         if self.system_instruction_from_settings {
-            // 新会话跟随设置的最新值；外部显式指令保持不变。
-            self.system_instruction =
-                AppSettings::current(cx).ai_chat.effective_custom_system_prompt();
-            self.system_instruction_from_settings = self.system_instruction.is_some();
+            // 新会话跟随设置的最新值（含清空）；外部显式指令保持不变。
+            self.system_instruction = AppSettings::current(cx)
+                .ai_chat
+                .effective_custom_system_prompt();
         }
         self.apply_system_instruction_to_current_session();
         self.sync_session_skills();
@@ -3092,17 +3096,15 @@ impl AgentChatView {
         self.closed_sessions.remove(uid);
         self.session_id = target.id().clone();
         // 快照自带指令的会话优先快照值（行为可复现）；没有指令的旧会话回落到
-        // 当前全局设置，让存量会话也能享受新配置。
+        // 当前全局设置（可能为空），并继续保持来源跟随设置。
         self.system_instruction = target.system_instruction().or_else(|| {
-            AppSettings::current(cx).ai_chat.effective_custom_system_prompt()
+            AppSettings::current(cx)
+                .ai_chat
+                .effective_custom_system_prompt()
         });
-        self.system_instruction_from_settings =
-            self.system_instruction.is_some()
-                && target.system_instruction().is_none();
+        self.system_instruction_from_settings = target.system_instruction().is_none();
         self.current_session = self.session_id.to_string();
-        if let Some(session) = self.runtime.session(&self.session_id) {
-            session.set_system_instruction(self.system_instruction.clone());
-        }
+        self.apply_system_instruction_to_current_session();
         if let Some(transcript) = self.remove_cached_session_transcript(uid) {
             self.transcript = transcript;
         } else {
@@ -8346,9 +8348,56 @@ mod tests {
         run_gpui_until(cx, || model.request_count() >= 1);
 
         let requests = model.received_requests();
-        assert!(requests[0].messages[0]
-            .content_as_text()
-            .contains("始终用 DBA 视角回答。"));
+        assert!(
+            requests[0].messages[0]
+                .content_as_text()
+                .contains("始终用 DBA 视角回答。")
+        );
+    }
+
+    #[gpui::test]
+    fn gpui_settings_prompt_filled_after_empty_view_applies_to_new_session(
+        cx: &mut TestAppContext,
+    ) {
+        init_test_ui(cx);
+        cx.update(|cx| {
+            cx.set_global(AppSettings::default());
+        });
+        let model = Arc::new(MockModelClient::new([ModelResponse::text("好的。")]));
+        let runtime = test_runtime_with_model(model.clone());
+        let config = AgentChatViewConfig::new(runtime, ResourceContext::new(), vec![]);
+
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        // 视图打开时设置为空；随后填写设置，再新建会话应跟随设置刷新。
+        view.update(cx, |view, cx| {
+            let mut settings = AppSettings::current(cx);
+            settings.ai_chat.custom_system_prompt = "空白后填写的人设。".into();
+            cx.set_global(settings);
+            view.start_fresh_session(cx);
+        });
+        view.update_in(cx, |view, window, cx| {
+            let input = view.input.clone();
+            view.on_input_event(
+                &input,
+                &AgentInputEvent::Submit {
+                    text: "解释一下索引".into(),
+                    mentions: Vec::new(),
+                    images: Vec::new(),
+                },
+                window,
+                cx,
+            );
+        });
+        run_gpui_until(cx, || model.request_count() >= 1);
+
+        let requests = model.received_requests();
+        assert!(
+            requests[0].messages[0]
+                .content_as_text()
+                .contains("空白后填写的人设。"),
+            "设置为空时打开视图，之后填写设置，新会话仍应跟随设置"
+        );
     }
 
     #[gpui::test]
@@ -8414,7 +8463,10 @@ mod tests {
             assert!(!view.system_instruction_from_settings);
         });
         let session = runtime.session(&first_id).expect("session should exist");
-        assert_eq!(session.system_instruction().as_deref(), Some("旧会话指令。"));
+        assert_eq!(
+            session.system_instruction().as_deref(),
+            Some("旧会话指令。")
+        );
     }
 
     #[gpui::test]

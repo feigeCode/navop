@@ -1,160 +1,165 @@
-use crate::runtime::TaskKind;
+use chrono::Local;
+use rust_i18n::t;
+
 use crate::skill::SkillContext;
-use crate::tasks::skill_prompt::append_skill_context;
+use crate::tasks::skill_prompt::skill_section;
 use crate::tools::ToolSpec;
 use crate::{Plan, ResourceContext};
 
-const AGENT_SYSTEM: &str = "你是 Navop 的 AI 运维助手。请根据用户目标自主决定如何行动:\
-简单问题直接、简洁地用简体中文回答;需要查询或操作资源时调用相应工具;\
-面对多步任务时,先调用 `update_plan` 列出步骤并随进展更新状态(每完成一步就更新)。\
-计划步骤应描述要达成或验证的结果,而不是待直接执行的工具调用、命令、风险标签或孤立词。\
-可用 `delegate_task` 将边界清晰的子任务交给隔离子代理执行;它不是后端或 Codex CLI 选择。\
-不要为简单问题强行制定计划。完成后直接给出最终回答。";
-
-const ASK_SYSTEM: &str = "你是 Navop 的 AI 助手。当前处于 Ask 模式:\
-只直接、简洁地回答用户问题;不要创建计划;不要调用任何工具。\
-如果用户需要查询、操作或使用上下文资源,请提示切换到 Agent 或 Plan 模式。\
-回答使用简体中文。";
-
-const PLAN_SYSTEM: &str = "你是 Navop 的 AI 助手。当前处于 Plan 模式:\
-面对用户目标时先调用 `update_plan` 给出清晰步骤,再按步骤执行;每完成一步都更新计划状态。\
-计划步骤应描述要达成或验证的结果,而不是待直接执行的工具调用、命令、风险标签或孤立词。\
-可用 `delegate_task` 将边界清晰的子任务交给隔离子代理执行;它不是后端或 Codex CLI 选择。\
-如果目标缺少必要信息,先提出需要补充的问题。回答使用简体中文。";
-
+/// 组装内置 Agent 的系统提示词。
+///
+/// 静态行为规则统一为一份本地化模板（[`AgentRuntime.system_prompt`]），动态上下文
+/// 通过占位符注入：
+///
+/// - `{{resource_info}}` 资源池
+/// - `{{skill_info}}` Skill 元数据与使用规则
+/// - `{{plan_info}}` 当前计划（Todo）
+/// - `{{tool_info}}` 可用工具名与工具选择规则
+/// - `{{current_time}}` 当前本地时间
+///
+/// 该模板固定，用户不可删除。`custom_instruction` 是设置里的「自定义部分」，
+/// 始终追加在模板之后（旧配置的追加语义），不会覆盖默认规则与上下文段落。
 pub(super) fn build_system_prompt(
-    kind: TaskKind,
     tools: &[ToolSpec],
     resources: &ResourceContext,
     skills: &SkillContext,
-    system_instruction: Option<&str>,
+    custom_instruction: Option<&str>,
     current_plan: Option<&Plan>,
 ) -> String {
-    let mut prompt = system_prompt(kind).to_string();
-    append_system_instruction(&mut prompt, system_instruction);
-    append_resource_context(&mut prompt, resources);
-    append_skill_context(&mut prompt, skills);
-    if let Some(plan) = current_plan {
-        append_current_plan(&mut prompt, plan);
-    }
-    if !tools.is_empty() {
-        let names = tools
-            .iter()
-            .map(|tool| tool.name.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-        prompt.push_str("\n\n可用 function calling 工具名: ");
-        prompt.push_str(&names);
-        prompt.push_str(
-            "。只能调用这里列出的工具名;不要调用名为 `tool` 的通用伪工具。工具 arguments 必须是合法 JSON object。",
-        );
-        append_terminal_tool_selection_rules(&mut prompt, tools);
-        append_canonical_runtime_tool_rules(&mut prompt, tools);
-    }
+    let mut prompt = t!("AgentRuntime.system_prompt")
+        .to_string()
+        .replace("{{resource_info}}", &resource_section(resources))
+        .replace("{{skill_info}}", &skill_section(skills))
+        .replace("{{plan_info}}", &plan_section(current_plan))
+        .replace("{{tool_info}}", &tool_section(tools))
+        .replace("{{current_time}}", &current_time_section());
+
+    append_system_instruction(&mut prompt, custom_instruction);
     prompt
 }
 
-fn append_terminal_tool_selection_rules(prompt: &mut String, tools: &[ToolSpec]) {
+fn resource_section(resources: &ResourceContext) -> String {
+    if resources.is_empty() {
+        return String::new();
+    }
+    t!(
+        "AgentRuntime.system_prompt_resource_section",
+        resources = resources.describe()
+    )
+    .to_string()
+}
+
+fn plan_section(plan: Option<&Plan>) -> String {
+    let Some(plan) = plan.filter(|plan| !plan.steps.is_empty()) else {
+        return String::new();
+    };
+    let plan_text = format!(
+        "{}: {}\n{}",
+        t!("AgentRuntime.system_prompt_plan_goal_label"),
+        plan.goal,
+        plan.describe()
+    );
+    t!("AgentRuntime.system_prompt_plan_section", plan = plan_text).to_string()
+}
+
+fn current_time_section() -> String {
+    let time = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    t!("AgentRuntime.system_prompt_current_time", time = time).to_string()
+}
+
+fn tool_section(tools: &[ToolSpec]) -> String {
+    if tools.is_empty() {
+        return String::new();
+    }
+    let names = tools
+        .iter()
+        .map(|tool| tool.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut section = t!("AgentRuntime.system_prompt_tool_section", names = names).to_string();
+    section.push_str(&terminal_tool_selection_rules(tools));
+    section.push_str(&canonical_runtime_tool_rules(tools));
+    section
+}
+
+fn terminal_tool_selection_rules(tools: &[ToolSpec]) -> String {
     let terminal_exec = find_tool_name(tools, &["terminal_exec", "terminal.exec"]);
     let terminal_read = find_tool_name(tools, &["terminal_read", "terminal.read"]);
     let terminal_control = find_tool_name(tools, &["terminal_control", "terminal.control"]);
     let terminal_write_keys =
         find_tool_name(tools, &["terminal_write_keys", "terminal.write_keys"]);
     let ssh_exec = find_tool_name(tools, &["ssh_exec", "ssh.exec", "ssh_remote_exec"]);
-    if terminal_exec.is_none()
-        && terminal_read.is_none()
-        && terminal_control.is_none()
-        && terminal_write_keys.is_none()
-        && ssh_exec.is_none()
-    {
-        return;
-    }
 
-    prompt.push_str("\n\n终端/SSH 工具选择规则:");
+    let mut body = String::new();
     if let Some(name) = ssh_exec {
-        prompt.push_str(&format!(
-            " 对 Agent 自己发起的自动化、诊断、构建、日志查询和非交互检查，默认优先使用 `{name}`；它运行在独立 SSH channel，提供结构化 stdout/stderr/exit_code，也不会占用用户可见终端。它没有交互式 stdin，命令启动后 stdin 会关闭；`command` 必须是完整、自包含、非空且用途明确的 shell 命令，不得直接复制 Todo 步骤标题、描述、状态、风险标签、工具名或孤立自然语言片段。默认只提交无需人工输入或 TTY 且能自行结束的命令；需要输入时使用参数、环境变量、管道/重定向或专用工具，不要提交会等待确认、密码、分页器、编辑器或 REPL 输入的前台命令。有意长期运行的非交互任务才设置 `mode=background`，并使用对应的 command poll/output 工具跟踪；前台超时或 detach 不代表命令已经完成。它不会自动继承可见终端的当前工作目录、已激活虚拟环境、alias/函数或临时环境变量，除非在参数或命令中显式设置。"
-        ));
+        body.push_str(&t!("AgentRuntime.tool_rule_ssh_exec", name = name));
     }
     if let Some(name) = terminal_exec {
         let ssh_name = ssh_exec.unwrap_or("ssh.exec");
-        prompt.push_str(&format!(
-            " 只有当用户明确要求在可见终端/当前终端里执行，或命令必须继承该终端的当前工作目录、已激活虚拟环境、alias/函数、临时环境变量时，才调用 `{name}`；不要因为目标是 SSH 主机就默认选择它。若用户明确要求可见执行，不要用 `{ssh_name}` 替代。`command` 必须是完整、非空且用途明确的命令文本，不得直接复制 Todo 步骤标题、描述、状态、风险标签、工具名或孤立自然语言片段；除非用户明确要求可见交互并会接管后续输入，否则优先提交一次性、能自行结束的命令。`target` 必须指向终端资源，通常设置 `submit=true`。空提示符会直接提交；只有检测到未提交的半行输入时才会用 Ctrl+C 清理，运行中的命令不会被替换而会返回 Busy。不要声称有 exit code，除非工具观测结果明确返回 exit_code。"
+        body.push_str(&t!(
+            "AgentRuntime.tool_rule_terminal_exec",
+            name = name,
+            ssh_name = ssh_name
         ));
     }
     if let Some(name) = terminal_read {
-        prompt.push_str(&format!(
-            " 当需要诊断用户已经在可见终端中执行的命令、查看当前 PTY 现场或读取最近滚屏时，调用只读的 `{name}` 获取必要的最后 N 行；“读取/查看/read”等自然语言意图不等于 shell command，不要为了重新获得输出而重复执行命令。若已有 command_id，优先使用对应的 command output 工具。终端内容可能含敏感信息，只读取诊断所需的最少行数。"
-        ));
+        body.push_str(&t!("AgentRuntime.tool_rule_terminal_read", name = name));
     }
     if let Some(name) = terminal_control {
-        prompt.push_str(&format!(
-            " 当用户明确要求停止、打断当前可见终端的前台任务或发送 Ctrl+C 时，调用 `{name}` 并设置 `action=interrupt`；只有工具结果明确返回 `sent=true` 后才能声称已发送 Ctrl+C。不要把 `\\u0003` 作为 `terminal_exec` 的 command；Agent 取消对话不会中断终端任务。"
-        ));
+        body.push_str(&t!("AgentRuntime.tool_rule_terminal_control", name = name));
     }
     if let Some(name) = terminal_write_keys {
-        prompt.push_str(&format!(
-            " 当用户明确要求向当前可见终端中正在运行的前台 TUI/交互程序注入原始按键时，调用 `{name}`；它绕过 `terminal.exec` 的 shell readiness/busy 检查，向目标 PTY 写入 `bytes` 数组而不是执行 shell 命令。例如在用户明确要求保存退出当前 vim 时，`:wq` 加回车是 `bytes=[58,119,113,13]`；ESC 或 Ctrl-[ 可写入字节 27。不要用它执行普通 shell 命令，也不要用它替代 `{control_name}` 的 Ctrl+C interrupt。写入成功只表示字节已进入 PTY 后端队列，随后必须调用 `{read_name}`（若可用）确认 vim 已退出并回到 shell 提示符，不能仅凭 `sent=true` 声称文件已保存。",
-            control_name = terminal_control.unwrap_or("terminal.control"),
-            read_name = terminal_read.unwrap_or("terminal.read"),
+        let control_name = terminal_control.unwrap_or("terminal.control");
+        let read_name = terminal_read.unwrap_or("terminal.read");
+        body.push_str(&t!(
+            "AgentRuntime.tool_rule_terminal_write_keys",
+            name = name,
+            control_name = control_name,
+            read_name = read_name
         ));
     }
-}
-
-fn append_canonical_runtime_tool_rules(prompt: &mut String, tools: &[ToolSpec]) {
-    let rules = canonical_runtime_tool_rules(tools);
-    if rules.is_empty() {
-        return;
+    if body.is_empty() {
+        return String::new();
     }
-    prompt.push_str("\n\n统一工具命名规则: ");
-    prompt.push_str(&rules.join(" "));
+    let mut section = t!("AgentRuntime.tool_rule_terminal_header").to_string();
+    section.push_str(&body);
+    section
 }
 
-fn canonical_runtime_tool_rules(tools: &[ToolSpec]) -> Vec<String> {
-    let mut rules = Vec::new();
+fn canonical_runtime_tool_rules(tools: &[ToolSpec]) -> String {
+    let mut rules: Vec<String> = Vec::new();
     if let Some(name) = find_tool_name(tools, &["db_exec", "db.exec"]) {
-        rules.push(format!("数据库写入使用 `{name}`。"));
+        rules.push(t!("AgentRuntime.tool_rule_db_exec", name = name).to_string());
     }
     append_family_rule(
         &mut rules,
         tools,
-        CanonicalFamilyRule::new(
-            "SFTP 文件操作",
-            &[
-                "sftp_list",
-                "sftp_read",
-                "sftp_write",
-                "sftp_stat",
-                "sftp_upload",
-                "sftp_download",
-            ],
-        ),
+        t!("AgentRuntime.tool_family_sftp").to_string(),
+        &[
+            "sftp_list",
+            "sftp_read",
+            "sftp_write",
+            "sftp_stat",
+            "sftp_upload",
+            "sftp_download",
+        ],
     );
     append_family_rule(
         &mut rules,
         tools,
-        CanonicalFamilyRule::new(
-            "Redis 操作",
-            &["redis_command", "redis_keys", "redis_get", "redis_set"],
-        ),
+        t!("AgentRuntime.tool_family_redis").to_string(),
+        &["redis_command", "redis_keys", "redis_get", "redis_set"],
     );
-    rules
-}
-
-struct CanonicalFamilyRule<'a> {
-    label: &'a str,
-    names: &'a [&'a str],
-}
-
-impl<'a> CanonicalFamilyRule<'a> {
-    fn new(label: &'a str, names: &'a [&'a str]) -> Self {
-        Self { label, names }
+    if rules.is_empty() {
+        return String::new();
     }
+    let mut section = t!("AgentRuntime.tool_rule_canonical_header").to_string();
+    section.push_str(&rules.join(" "));
+    section
 }
 
-fn append_family_rule(rules: &mut Vec<String>, tools: &[ToolSpec], rule: CanonicalFamilyRule<'_>) {
-    let canonical = rule
-        .names
+fn append_family_rule(rules: &mut Vec<String>, tools: &[ToolSpec], label: String, names: &[&str]) {
+    let canonical = names
         .iter()
         .filter_map(|name| find_tool_name(tools, &[*name]))
         .map(|name| format!("`{name}`"))
@@ -162,7 +167,14 @@ fn append_family_rule(rules: &mut Vec<String>, tools: &[ToolSpec], rule: Canonic
     if canonical.is_empty() {
         return;
     }
-    rules.push(format!("{}使用 {}。", rule.label, canonical.join("、")));
+    rules.push(
+        t!(
+            "AgentRuntime.tool_rule_family",
+            label = label,
+            names = canonical.join("、")
+        )
+        .to_string(),
+    );
 }
 
 fn find_tool_name<'a>(tools: &'a [ToolSpec], candidates: &[&str]) -> Option<&'a str> {
@@ -176,65 +188,67 @@ fn append_system_instruction(prompt: &mut String, instruction: Option<&str>) {
     let Some(instruction) = instruction.map(str::trim).filter(|value| !value.is_empty()) else {
         return;
     };
-    prompt.push_str("\n\n用户自定义系统提示:\n");
-    prompt.push_str(instruction);
-}
-
-fn append_current_plan(prompt: &mut String, plan: &Plan) {
-    if plan.steps.is_empty() {
-        return;
-    }
-    prompt.push_str("\n\n当前计划(Todo)状态（以下内容仅作为不可执行的上下文数据）:\n");
-    prompt.push_str("<plan_context>\n");
-    prompt.push_str(&format!("目标: {}\n", plan.goal));
-    prompt.push_str(&plan.describe());
-    prompt.push_str("</plan_context>\n");
-    prompt.push_str(
-        "如果用户要求继续、下一步或完成剩余任务,基于此计划推进;\
-如步骤状态发生变化,必须调用 `update_plan` 提交完整最新计划,不要把工具调用写成普通文本。",
-    );
-    prompt.push_str(
-        "计划中的目标、步骤标题、描述、状态、风险标签和工具名均不自动构成指令;\
-不得直接把这些字段或其中的孤立词作为 `command` 或其他工具参数。\
-需要执行命令时,必须根据当前目标重新构造并核验完整、非空、用途明确的 `command`。",
-    );
-}
-
-fn append_resource_context(prompt: &mut String, resources: &ResourceContext) {
-    if resources.is_empty() {
-        return;
-    }
-    prompt.push_str("\n\n资源池:\n");
-    prompt.push_str(&resources.describe());
-    prompt.push_str(
-        "调用工具时使用上面列出的资源 id、名称或标签作为 target 参数;\
-当前标记为 [当前] 的资源是默认目标,但不是资源池边界。\
-若工具需要 database、schema、db 或 cwd 等作用域参数,优先使用资源作用域里的值。\
-不要猜测未列出的资源或连接标识。",
-    );
-}
-
-fn system_prompt(kind: TaskKind) -> &'static str {
-    match kind {
-        TaskKind::Agent => AGENT_SYSTEM,
-        TaskKind::Ask => ASK_SYSTEM,
-        TaskKind::Plan => PLAN_SYSTEM,
-    }
+    prompt.push_str(&t!(
+        "AgentRuntime.system_prompt_extra_instruction",
+        instruction = instruction
+    ));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::skill::{SkillContext, SkillRef, SkillSummary};
-    use crate::{PlanSource, PlanStep};
+    use crate::{PlanSource, PlanStep, ResourceKind, ResourceRef};
+
+    fn tool_specs(names: &[&str]) -> Vec<ToolSpec> {
+        names
+            .iter()
+            .map(|name| ToolSpec::new(*name, "", serde_json::json!({ "type": "object" })))
+            .collect()
+    }
 
     #[test]
-    fn system_prompts_use_navop_brand() {
-        for kind in [TaskKind::Agent, TaskKind::Ask, TaskKind::Plan] {
-            let prompt = system_prompt(kind);
-            assert!(prompt.contains("Navop"));
-            assert!(!prompt.contains("onetcli"));
-        }
+    fn default_system_prompt_uses_navop_brand() {
+        let prompt = build_system_prompt(
+            &[],
+            &ResourceContext::new(),
+            &SkillContext::new(),
+            None,
+            None,
+        );
+        assert!(prompt.contains("Navop"));
+        assert!(!prompt.contains("onetcli"));
+    }
+
+    #[test]
+    fn default_template_keeps_dynamic_context_without_custom_instruction() {
+        let resources = ResourceContext::new().with_resource(ResourceRef::new(
+            "db-1",
+            ResourceKind::Mysql,
+            "prod-db",
+        ));
+        let prompt = build_system_prompt(&[], &resources, &SkillContext::new(), None, None);
+        assert!(prompt.contains("Navop"));
+        assert!(prompt.contains("prod-db"));
+    }
+
+    #[test]
+    fn custom_instruction_is_appended_and_does_not_replace_defaults() {
+        let resources = ResourceContext::new().with_resource(ResourceRef::new(
+            "db-1",
+            ResourceKind::Mysql,
+            "prod-db",
+        ));
+        let prompt = build_system_prompt(
+            &[],
+            &resources,
+            &SkillContext::new(),
+            Some("始终用 DBA 视角回答。"),
+            None,
+        );
+        assert!(prompt.contains("Navop"));
+        assert!(prompt.contains("prod-db"));
+        assert!(prompt.contains("始终用 DBA 视角回答。"));
     }
 
     #[test]
@@ -244,23 +258,13 @@ mod tests {
             "Run operational playbooks",
             "/tmp/skills/ops/SKILL.md",
         ));
-
-        let prompt = build_system_prompt(
-            TaskKind::Agent,
-            &[],
-            &ResourceContext::new(),
-            &skills,
-            None,
-            None,
-        );
-
+        let prompt = build_system_prompt(&[], &ResourceContext::new(), &skills, None, None);
         assert!(prompt.contains("Selected skills for this turn"));
         assert!(prompt.contains("ops"));
         assert!(prompt.contains("Run operational playbooks"));
         assert!(prompt.contains("load_skill"));
         assert!(prompt.contains("read_skill_file"));
         assert!(!prompt.contains("Follow the ops checklist."));
-        assert!(!prompt.contains("Instructions:"));
     }
 
     #[test]
@@ -270,40 +274,26 @@ mod tests {
             "Use Superpowers workflows",
             "/tmp/skills/using-superpowers/SKILL.md",
         ));
-
-        let prompt = build_system_prompt(
-            TaskKind::Agent,
-            &[],
-            &ResourceContext::new(),
-            &skills,
-            None,
-            None,
-        );
-
+        let prompt = build_system_prompt(&[], &ResourceContext::new(), &skills, None, None);
         assert!(prompt.contains("Available skill catalog"));
         assert!(prompt.contains("using-superpowers"));
         assert!(prompt.contains("Use Superpowers workflows"));
-        assert!(!prompt.contains("Instructions:"));
     }
 
     #[test]
     fn system_prompt_separates_plan_data_from_executable_commands() {
         let plan = Plan::new("巡检集群", PlanSource::Llm)
             .with_steps(vec![PlanStep::new("风险 read", "读取资源状态")]);
-        let tools = ["ssh.exec", "terminal.exec", "terminal.read"]
-            .into_iter()
-            .map(|name| ToolSpec::new(name, "", serde_json::json!({ "type": "object" })))
-            .collect::<Vec<_>>();
+        let tools = tool_specs(&["ssh.exec", "terminal.exec", "terminal.read"]);
         let prompt = build_system_prompt(
-            TaskKind::Agent,
             &tools,
             &ResourceContext::new(),
             &SkillContext::new(),
             None,
             Some(&plan),
         );
-        assert!(prompt.contains("仅作为不可执行的上下文数据"));
-        assert!(prompt.contains("不得直接把这些字段或其中的孤立词作为 `command`"));
-        assert!(prompt.contains("没有交互式 stdin"));
+        assert!(prompt.contains("plan_context"));
+        assert!(prompt.contains("ssh_exec"));
+        assert!(prompt.contains("terminal_exec"));
     }
 }

@@ -5,6 +5,7 @@
 //! 真正的连接句柄由工具实现在执行时按 [`ResourceId`] 自行获取。这样 runtime
 //! 内核无需依赖 `db` / `ssh` 等 crate,可独立编译与测试。
 
+use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -252,18 +253,22 @@ impl ResourceContext {
     /// 生成供模型阅读的资源清单描述。
     pub fn describe(&self) -> String {
         if self.resources.is_empty() {
-            return "（当前会话没有可操作的资源）".to_string();
+            return t!("AgentRuntime.resource_pool_empty").to_string();
         }
         let mut out = String::new();
         for r in &self.resources {
             let marker = if self.current.as_ref() == Some(&r.id) {
-                " [当前]"
+                t!("AgentRuntime.resource_pool_current_marker").to_string()
             } else {
-                ""
+                String::new()
             };
             out.push_str(&format!(
-                "- {} | 类型={} | id={}{}\n",
-                r.label, r.kind, r.id, marker
+                "- {} | {}={} | id={}{}\n",
+                r.label,
+                t!("AgentRuntime.resource_pool_kind_label"),
+                r.kind,
+                r.id,
+                marker
             ));
             if !r.aliases.is_empty() {
                 out.push_str(&format!("  - aliases={}\n", r.aliases.join(", ")));
@@ -300,7 +305,10 @@ mod tests {
             ResourceKind::Ssh,
             "bastion",
         ));
-        assert!(ctx.describe().contains("[当前]"));
+        assert!(
+            ctx.describe()
+                .contains(t!("AgentRuntime.resource_pool_current_marker").as_ref())
+        );
     }
 
     #[test]
