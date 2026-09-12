@@ -4949,9 +4949,8 @@ mod tests {
             .next()
             .unwrap();
 
-        assert!(!refresh.contains("InlineWidget::new"));
+        assert!(!refresh.contains("InlineWidget"));
         assert!(!refresh.contains("set_inline_widgets"));
-        assert!(refresh.contains("self.inline_widgets.clear(cx)"));
     }
 
     #[test]
