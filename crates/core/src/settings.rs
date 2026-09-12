@@ -547,6 +547,31 @@ pub struct AiChatSettings {
         deserialize_with = "deserialize_agent_max_iterations"
     )]
     pub max_iterations: usize,
+    /// 用户自定义系统提示词（追加在内置 Agent 基座提示词之后）。
+    ///
+    /// 空串表示未启用；旧配置缺少该字段时按空串回落。
+    #[serde(default)]
+    pub custom_system_prompt: String,
+}
+
+/// 自定义系统提示词的最大字符数（按 chars 计），防止拖垮上下文长度。
+pub const MAX_CUSTOM_SYSTEM_PROMPT_CHARS: usize = 8000;
+
+impl AiChatSettings {
+    /// 返回规范化后的自定义系统提示词；空白内容返回 `None`。
+    ///
+    /// 超长内容按 [`MAX_CUSTOM_SYSTEM_PROMPT_CHARS`] 截断，避免配置文件里
+    /// 的异常值直接拖垮每次请求的上下文。
+    pub fn effective_custom_system_prompt(&self) -> Option<String> {
+        let trimmed = self.custom_system_prompt.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        if trimmed.chars().count() <= MAX_CUSTOM_SYSTEM_PROMPT_CHARS {
+            return Some(trimmed.to_string());
+        }
+        Some(trimmed.chars().take(MAX_CUSTOM_SYSTEM_PROMPT_CHARS).collect())
+    }
 }
 
 fn default_agent_max_iterations() -> usize {
@@ -566,6 +591,7 @@ impl Default for AiChatSettings {
         Self {
             tool_execution_mode: AiChatToolExecutionMode::default(),
             max_iterations: default_agent_max_iterations(),
+            custom_system_prompt: String::new(),
         }
     }
 }
@@ -1631,6 +1657,7 @@ mod tests {
 
     use super::{
         AiChatSettings, AiChatToolExecutionMode, AppSettings, ConnectionSortOrder, CustomFont,
+        MAX_CUSTOM_SYSTEM_PROMPT_CHARS,
         DEFAULT_MCP_APPROVAL_TIMEOUT_MS, DEFAULT_TERMINAL_THEME, HomeConnectionLayout,
         LOCALE_SYSTEM, LargeTextCellEditorOpenMode, LocalTerminalProfileKind,
         LocalTerminalProfileSettings, MainWindowState, McpPermissionMode, McpServerMode,
@@ -2027,6 +2054,48 @@ mod tests {
         // 旧配置文件缺少该字段时应回落到 100%。
         let legacy: AppSettings = serde_json::from_str("{}").expect("旧配置应能读取");
         assert_eq!(100, legacy.ui_scale_percent);
+    }
+
+    #[test]
+    fn ai_chat_custom_system_prompt_defaults_to_empty_for_legacy_configs() {
+        let settings: AiChatSettings =
+            serde_json::from_str(r#"{ "max_iterations": 32 }"#).expect("旧配置应能读取");
+        assert_eq!(String::new(), settings.custom_system_prompt);
+        assert_eq!(None, settings.effective_custom_system_prompt());
+    }
+
+    #[test]
+    fn ai_chat_custom_system_prompt_trims_blank_values_to_none() {
+        let mut settings = AiChatSettings::default();
+        settings.custom_system_prompt = "   ".to_string();
+        assert_eq!(None, settings.effective_custom_system_prompt());
+
+        settings.custom_system_prompt = "  始终用 DBA 视角回答。\n".to_string();
+        assert_eq!(
+            Some("始终用 DBA 视角回答。".to_string()),
+            settings.effective_custom_system_prompt()
+        );
+    }
+
+    #[test]
+    fn ai_chat_custom_system_prompt_clamps_overlong_values() {
+        let mut settings = AiChatSettings::default();
+        settings.custom_system_prompt = "好".repeat(MAX_CUSTOM_SYSTEM_PROMPT_CHARS + 100);
+        let effective = settings
+            .effective_custom_system_prompt()
+            .expect("非空内容应返回 Some");
+        assert_eq!(MAX_CUSTOM_SYSTEM_PROMPT_CHARS, effective.chars().count());
+
+        // 边界长度不截断。
+        settings.custom_system_prompt = "x".repeat(MAX_CUSTOM_SYSTEM_PROMPT_CHARS);
+        assert_eq!(
+            MAX_CUSTOM_SYSTEM_PROMPT_CHARS,
+            settings
+                .effective_custom_system_prompt()
+                .expect("边界长度应返回 Some")
+                .chars()
+                .count()
+        );
     }
 
     #[test]
