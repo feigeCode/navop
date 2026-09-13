@@ -3813,7 +3813,11 @@ impl TabContainer {
                     .left_0()
                     .w(left_width)
                     .overflow_hidden()
-                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    // 浮动 dock 会盖在标签内容上方。用 occlude 把下方内容
+                    // 挡出命中栈即可阻止点击穿透；不能用 stop_propagation，
+                    // 它会连带拦截窗口级文字选择处理器（TextSelection 在
+                    // bubble 阶段才开始选区），导致侧边栏内 AI 输出无法选中。
+                    .occlude()
                     .child(self.render_sidebar_dock(SidebarPlacement::Left, left, cx)),
             );
         }
@@ -3827,7 +3831,8 @@ impl TabContainer {
                     .right_0()
                     .w(right_width)
                     .overflow_hidden()
-                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    // 同左 dock：occlude 防穿透，同时放行窗口级文字选择。
+                    .occlude()
                     .child(self.render_sidebar_dock(SidebarPlacement::Right, right, cx)),
             );
         }

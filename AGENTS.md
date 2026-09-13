@@ -631,6 +631,13 @@
 - **验证方式**：回滚后 `git diff --name-only` 只应剩下自己的改动 + 用户原有 WIP；再跑 `cargo check -p <受影响 crate>` 确认未破坏编译。
 - **适用范围**：任何 Rust 仓库的批量格式化；`rustfmt.toml` 带 `edition`/`style_edition` 时，务必用与 `cargo fmt` 相同的 `--edition` 复现行为。
 
+- **标题**：GPUI 文字选择失灵先分「选区色不透明盖字」与「容器 stop_propagation 拦截窗口级选择」两类
+- **触发信号**：侧边栏/面板里的 `TextView` 富文本（AI 输出等）①可以拖出选区但选中文本被实心色块盖住；②拖动完全没有选区高亮。两类症状共用 gpui-component 的窗口级文字选择机制（`TextSelectionLayer` 在 `gpui_component::Root` 里绘制，选区在 mouse-down **bubble 阶段**才 `begin_in_window`）。
+- **根因 / 约束**：① gpui-base `text/inline.rs` 的 `Inline::paint` 先画字形、后画选区 quads（同仓 `SelectableText` 顺序是对的），不透明选区色直接遮字；应用主题的 `selection` 在组件 `ThemeColor::apply_config` 里被 clamp 到 alpha≤0.3 所以无感，但终端主题选区色（`TerminalTheme.selection`，预设均为不透明 `rgb(..)`）经 `agent_theme_from_terminal_theme` 原样传入就中招。② `tab_container.rs` 贡献式侧边栏浮动 dock（a5f9837d4 引入 absolute 覆盖布局时）在容器上 `on_mouse_down → stop_propagation` 防点击穿透，连带把 bubble 阶段的窗口级选择 handler 一并拦掉，dock 内所有 `TextView` 选区无法开始（终端侧边栏在标签内容区内渲染，不经此容器，故不受影响）。数据库/MongoDB 等侧边栏都是贡献式 dock。
+- **正确做法**：①给 `AgentChatTheme.text_selection` 传色时保证半透明（暗 0.3 / 亮 0.4，用 `Hsla::alpha` 设绝对值而非 `opacity` 乘法），不要信任上游主题源不透明；根治要改 fork 的 `Inline::paint` 绘制顺序（quads 画到 `styled_text.paint` 之前）。②容器要防穿透用 `.occlude()`（把下方内容挡出命中栈，元素级 handler 不触发），**不要用 `stop_propagation`**——后者会连带拦截所有窗口级 mouse handler；`stop_propagation` 只该用在确实要独占事件的窄交互元素（如 resize handle）。
+- **验证方式**：`cargo check -p one-core -p terminal_view`、`cargo test -p terminal_view --lib sidebar::tests`（含选区色 alpha 回归断言）、`cargo test -p one-core --lib tab_container sidebar`、`cargo clippy -p one-core -p terminal_view --all-targets`；手工验证需分别开终端侧边栏 AI 与数据库侧边栏 AI 拖选文字。
+- **适用范围**：`crates/terminal_view/src/sidebar/mod.rs`（终端主题 → AgentChatTheme 映射）、`crates/core/src/tab_container.rs`（贡献式侧边栏 dock）、`crates/ai_chat_view/src/theme.rs`（`text_selection` 消费点），以及任何向 gpui-component `TextViewStyle::with_selection` 传色、或在浮动覆盖容器上处理 mouse-down 的路径。
+
 ### 执行原则
 
 1. 先澄清，再实现；先缩小边界，再扩展范围。
