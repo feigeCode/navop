@@ -7,7 +7,6 @@ use one_assets::IconName;
 use one_core::storage::{
     ConnectionType, DatabaseType, DbConnectionConfig, SshParams, StoredConnection,
 };
-use rust_i18n::t;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExternalDriverIconSource<'a> {
@@ -31,14 +30,12 @@ pub(crate) enum ConnectionVisualSize {
     List,
     Card,
     Hero,
-    Rail,
 }
 
 impl ConnectionVisualSize {
     pub(crate) const fn icon_size(self) -> IconSize {
         match self {
             Self::Tree => IconSize::Default,
-            Self::Rail => IconSize::Medium,
             Self::List => IconSize::Large,
             Self::Card => IconSize::Large,
             Self::Hero => IconSize::Hero,
@@ -97,30 +94,6 @@ pub(crate) fn connection_type_navigation_icon(
     connection_type_navigation_icon_name(kind)
         .mono()
         .with_size(size.icon_size())
-}
-
-/// Monochrome navigation-rail icon with the shared rail glyph size.
-pub(crate) fn connection_type_rail_icon(kind: ConnectionType) -> Icon {
-    connection_type_navigation_icon(kind, ConnectionVisualSize::Rail)
-}
-
-/// Localized connection-type label (筛选器/菜单共用；core 的 `label()` 只有英文)。
-pub(crate) fn connection_type_label(kind: ConnectionType) -> String {
-    match kind {
-        ConnectionType::All => t!("ConnectionType.all"),
-        ConnectionType::Database => t!("ConnectionType.database"),
-        ConnectionType::SshSftp => t!("ConnectionType.ssh_sftp"),
-        ConnectionType::Redis => t!("ConnectionType.redis"),
-        ConnectionType::MongoDB => t!("ConnectionType.mongodb"),
-        ConnectionType::Mqtt => t!("ConnectionType.mqtt"),
-        ConnectionType::Serial => t!("ConnectionType.serial"),
-        ConnectionType::Telnet => t!("ConnectionType.telnet"),
-        ConnectionType::PortForwarding => t!("ConnectionType.port_forwarding"),
-        ConnectionType::Rdp => t!("ConnectionType.rdp"),
-        ConnectionType::Vnc => t!("ConnectionType.vnc"),
-        ConnectionType::Extension => t!("ConnectionType.extension"),
-    }
-    .to_string()
 }
 
 /// Original-color protocol identity icon used by cards, lists, and connection pickers.
@@ -267,7 +240,6 @@ mod tests {
         assert_eq!(ConnectionVisualSize::List.icon_size(), IconSize::Large);
         assert_eq!(ConnectionVisualSize::Card.icon_size(), IconSize::Large);
         assert_eq!(ConnectionVisualSize::Hero.icon_size(), IconSize::Hero);
-        assert_eq!(ConnectionVisualSize::Rail.icon_size(), IconSize::Medium);
     }
 
     #[test]

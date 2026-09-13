@@ -455,7 +455,10 @@ mod tests {
     fn both_type_dropdowns_share_the_stateless_menu() {
         let menu = include_str!("../connection_type_menu.rs");
         assert!(menu.contains("ConnectionType::all()"));
-        assert!(menu.contains("connection_type_rail_icon(filter)"));
+        // 菜单项去图标、扩展按名称逐项列出（MQTT 与内置项合并去重）。
+        assert!(!menu.contains("connection_type_rail_icon"));
+        assert!(menu.contains("ConnectionFilter::Builtin"));
+        assert!(menu.contains("extension_filter_targets"));
         assert!(
             include_str!("../persistent_connection_sidebar/filter_bar.rs")
                 .contains("build_filter_menu")

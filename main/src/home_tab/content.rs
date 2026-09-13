@@ -59,7 +59,7 @@ impl HomePage {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let query = self.search_query.read(cx).trim().to_lowercase();
-        let recent = recent::recent_connections(&self.connections, self.selected_filter, "", 6);
+        let recent = recent::recent_connections(&self.connections, &self.selected_filter, "", 6);
         let matching = self
             .home_groups(&query, cx)
             .into_iter()
@@ -200,7 +200,7 @@ impl HomePage {
         let groups = self.home_groups(query, cx);
         // 最近区不参与搜索：有搜索词时隐藏，避免同一连接在最近区与分组中重复出现。
         let recent = if query.is_empty() {
-            recent::recent_connections(&self.connections, self.selected_filter, query, columns)
+            recent::recent_connections(&self.connections, &self.selected_filter, query, columns)
         } else {
             Vec::new()
         };
@@ -338,7 +338,7 @@ impl HomePage {
                         if initial {
                             home.show_new_connection_dialog(window, cx);
                         } else {
-                            home.selected_filter = ConnectionType::All;
+                            home.selected_filter = ConnectionFilter::All;
                             home.clear_workspace_filter(cx);
                             home.search_input
                                 .update(cx, |input, cx| input.set_value("", window, cx));

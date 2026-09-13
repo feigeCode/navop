@@ -60,9 +60,7 @@ use terminal_view::{SshFormWindow, SshFormWindowConfig};
 use terminal_view::{TelnetFormWindow, TelnetFormWindowConfig};
 
 use crate::auth::{AuthService, load_auth_data, show_auth_dialog};
-use crate::connection_visuals::{
-    ConnectionVisualSize, connection_type_label, connection_type_navigation_icon,
-};
+use crate::connection_visuals::{ConnectionVisualSize, connection_type_navigation_icon};
 use crate::home::connection_import_window::show_connection_import_window;
 use crate::home::home_connection_quick_open::ConnectionQuickOpenDelegate;
 use crate::home::home_strategy::build_connection_open_strategy;
@@ -161,7 +159,7 @@ impl HomePage {
 
 pub struct HomePage {
     focus_handle: FocusHandle,
-    pub(crate) selected_filter: ConnectionType,
+    pub(crate) selected_filter: ConnectionFilter,
     connection_layout: ConnectionLayout,
     sidebar_collapsed: bool,
     collapsed_groups: HashSet<Option<i64>>,
@@ -244,6 +242,7 @@ mod connection_card_actions;
 mod connection_card_content;
 mod connection_details;
 pub(crate) mod connection_filter;
+pub(crate) use connection_filter::ConnectionFilter;
 mod connection_form_title;
 mod connection_forms;
 mod connection_grouping;

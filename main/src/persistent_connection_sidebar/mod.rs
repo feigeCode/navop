@@ -104,7 +104,7 @@ const FLOATING_CARD_MARGIN: f32 = 8.0;
 pub(crate) struct PersistentConnectionSidebar {
     pub(super) home_page: Entity<HomePage>,
     pub(super) tree_expanded: bool,
-    pub(super) selected_filter: one_core::storage::ConnectionType,
+    pub(super) selected_filter: crate::home_tab::ConnectionFilter,
     pub(super) hide_empty_workspaces: bool,
     pub(super) auto_hide_tree: bool,
     pub(super) search_input: Entity<InputState>,
@@ -210,7 +210,7 @@ impl PersistentConnectionSidebar {
         Self {
             home_page,
             tree_expanded,
-            selected_filter: one_core::storage::ConnectionType::All,
+            selected_filter: crate::home_tab::ConnectionFilter::All,
             hide_empty_workspaces: tree_state.hide_empty_workspaces,
             auto_hide_tree: tree_state.auto_hide_tree,
             search_input,

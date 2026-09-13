@@ -131,12 +131,12 @@ impl PersistentConnectionSidebar {
         let (query, type_filter) = if self.home_embedded && !self.home_navigation_layout {
             (
                 home.search_query.read(cx).trim().to_lowercase(),
-                home.selected_filter,
+                home.selected_filter.clone(),
             )
         } else {
             (
                 self.search_input.read(cx).value().trim().to_lowercase(),
-                self.selected_filter,
+                self.selected_filter.clone(),
             )
         };
         let collapsed_workspaces = home
@@ -161,7 +161,7 @@ impl PersistentConnectionSidebar {
             .connections
             .iter()
             .filter(|connection| {
-                crate::home_tab::connection_filter::match_connection_type(type_filter, connection)
+                crate::home_tab::connection_filter::match_connection_type(&type_filter, connection)
             })
             .filter_map(|connection| {
                 let id = connection.id?;
@@ -218,7 +218,7 @@ impl PersistentConnectionSidebar {
             },
         );
         if self.home_embedded && !self.home_navigation_layout && query.is_empty() {
-            let recent = crate::home_tab::recent_connections(&home.connections, type_filter, "", 4);
+            let recent = crate::home_tab::recent_connections(&home.connections, &type_filter, "", 4);
             if !recent.is_empty() {
                 let expanded = !home.recent_connections_collapsed();
                 let mut recent_rows = vec![ConnectionTreeRow::RecentHeader {
@@ -244,7 +244,7 @@ impl PersistentConnectionSidebar {
         let has_query = !self.search_input.read(cx).value().is_empty();
         let search_height = if self.home_navigation_layout {
             // 导航主页右侧使用完整 Home toolbar；左侧搜索区与其底边对齐。
-            px(64.0)
+            px(44.0)
         } else {
             px(40.0)
         };
@@ -267,7 +267,6 @@ impl PersistentConnectionSidebar {
             .child(
                 div().min_w_0().flex_1().child(
                     Input::new(&self.search_input)
-                        .xsmall()
                         .appearance(false)
                         .cleanable(has_query)
                         .text_color(palette.foreground),
@@ -289,7 +288,7 @@ impl PersistentConnectionSidebar {
                 .iter()
                 .filter(|connection| {
                     crate::home_tab::connection_filter::match_connection_type(
-                        self.selected_filter,
+                        &self.selected_filter,
                         connection,
                     )
                 })
