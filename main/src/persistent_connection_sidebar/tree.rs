@@ -1,14 +1,11 @@
 use std::ops::Range;
 
 use gpui::prelude::FluentBuilder as _;
-use gpui::{
-    AnyElement, IntoElement, ListSizingBehavior, ParentElement, Styled, div,
-    uniform_list,
-};
+use gpui::{AnyElement, IntoElement, ListSizingBehavior, ParentElement, Styled, div, uniform_list};
 use gpui_component::{Icon, Sizable, StyledExt, h_flex, input::Input, v_flex};
 use one_assets::IconName;
-use one_ui::IconSize;
 use one_core::settings::{AppSettings, ConnectionSortOrder};
+use one_ui::IconSize;
 use rust_i18n::t;
 
 use crate::connection_sort::{connection_name_cmp, lru_sort_key};
@@ -24,7 +21,18 @@ impl PersistentConnectionSidebar {
     /// 主页 Tree 布局嵌入的树视图：满宽、无 resize 手柄，交互与常驻侧栏一致。
     pub(crate) fn render_home_tree(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
         self.home_embedded = true;
+        self.home_navigation_layout = false;
         self.render_tree_impl(None, false, cx)
+    }
+
+    pub(crate) fn render_home_navigation_tree(
+        &mut self,
+        width: gpui::Pixels,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        self.home_embedded = true;
+        self.home_navigation_layout = true;
+        self.render_tree_impl(Some(width), false, cx)
     }
 
     /// 停靠渲染（docked=true 时树从窗口顶部开始，macOS 头部需避让红绿灯）。
@@ -62,12 +70,12 @@ impl PersistentConnectionSidebar {
             .bg(palette.background)
             .text_color(palette.foreground)
             // 嵌入主页时隐藏树头部：页面标题行已提供计数与分组菜单，避免重复。
-            .when(!self.home_embedded, |tree| {
+            .when(!self.home_embedded || self.home_navigation_layout, |tree| {
                 tree.child(self.render_tree_header(palette, macos_titlebar_inset, cx))
             })
             // 嵌入主页时不渲染树内搜索框：主页工具栏的搜索与类型筛选直接驱动树，
             // 避免上下两个搜索框重复。
-            .when(!self.home_embedded, |tree| {
+            .when(!self.home_embedded || self.home_navigation_layout, |tree| {
                 tree.child(self.render_tree_search(palette, cx))
             })
             .when(self.home_page.read(cx).batch_mode_active(), |tree| {
@@ -120,7 +128,7 @@ impl PersistentConnectionSidebar {
     pub(super) fn tree_rows(&self, cx: &gpui::App) -> Vec<ConnectionTreeRow> {
         let home = self.home_page.read(cx);
         // 嵌入主页时使用主页工具栏的搜索词与类型筛选；停靠/浮动时用树自身的。
-        let (query, type_filter) = if self.home_embedded {
+        let (query, type_filter) = if self.home_embedded && !self.home_navigation_layout {
             (
                 home.search_query.read(cx).trim().to_lowercase(),
                 home.selected_filter,
@@ -209,7 +217,7 @@ impl PersistentConnectionSidebar {
                 &collapsed_workspaces
             },
         );
-        if self.home_embedded && query.is_empty() {
+        if self.home_embedded && !self.home_navigation_layout && query.is_empty() {
             let recent = crate::home_tab::recent_connections(&home.connections, type_filter, "", 4);
             if !recent.is_empty() {
                 let expanded = !home.recent_connections_collapsed();

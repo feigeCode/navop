@@ -31,6 +31,9 @@ impl HomePage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        if self.connection_layout == ConnectionLayout::Navigation {
+            return self.render_global_navigation_layout(window, cx);
+        }
         h_flex()
             .size_full()
             .min_w_0()
@@ -58,6 +61,39 @@ impl HomePage {
                             .overflow_hidden()
                             .bg(cx.theme().muted)
                             .child(self.render_content_area(window, cx)),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn render_global_navigation_layout(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(sidebar) = self.connection_sidebar.clone() else {
+            return div().size_full().into_any_element();
+        };
+        h_flex()
+            .size_full()
+            .min_w_0()
+            .overflow_hidden()
+            // 子实体在自己的 Render 租约中读取 HomePage，避免主页 render 重入。
+            .child(sidebar)
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .overflow_hidden()
+                    .bg(cx.theme().background)
+                    .child(self.render_toolbar(window, cx))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .child(self.render_navigation_home_content(window, cx)),
                     ),
             )
             .into_any_element()

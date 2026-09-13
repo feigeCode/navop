@@ -369,6 +369,21 @@ fn workspace_filter_exposes_its_active_state() {
 }
 
 #[test]
+fn global_navigation_layout_combines_connection_tree_recent_connections_and_apps() {
+    let settings = include_str!("../../../../crates/core/src/settings.rs");
+    let home = include_str!("../home_layout.rs");
+    let content = include_str!("../content.rs");
+    let tree = include_str!("../../persistent_connection_sidebar/tree.rs");
+
+    assert!(settings.contains("Navigation"));
+    assert!(home.contains("render_global_navigation_layout"));
+    assert!(home.contains(".child(sidebar)"));
+    assert!(content.contains("render_navigation_home_content"));
+    assert!(content.contains("render_application_workbench(window, cx)"));
+    assert!(tree.contains("self.home_navigation_layout"));
+}
+
+#[test]
 fn recent_section_does_not_participate_in_search() {
     let content = include_str!("../content.rs");
     // 有搜索词时最近区整体隐藏，同一连接只出现在下方分组中

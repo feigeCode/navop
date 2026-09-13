@@ -1,7 +1,7 @@
-use one_ui::IconSize;
 use super::*;
 use gpui_component::Selectable as _;
 use one_core::settings::ConnectionSortOrder;
+use one_ui::IconSize;
 
 impl HomePage {
     pub(super) fn render_toolbar(
@@ -159,6 +159,7 @@ impl HomePage {
             ConnectionLayout::Card => IconName::LayoutDashboard,
             ConnectionLayout::List => IconName::Menu,
             ConnectionLayout::Tree => IconName::Network,
+            ConnectionLayout::Navigation => IconName::PanelLeft,
         };
         IconButton::new(
             "layout-toggle",
@@ -172,6 +173,7 @@ impl HomePage {
                 (ConnectionLayout::Card, t!("Home.card_view")),
                 (ConnectionLayout::List, t!("Home.list_view")),
                 (ConnectionLayout::Tree, t!("Home.tree_view")),
+                (ConnectionLayout::Navigation, t!("Home.navigation_view")),
             ]
             .into_iter()
             .fold(menu, |menu, (layout, label)| {

@@ -131,6 +131,18 @@ Home:
     en: "Sorted by last used · not affected by group filter"
     zh-CN: "按最近使用排序 · 不受分组筛选影响"
     zh-HK: "按最近使用排序 · 不受分組篩選影響"
+  workbench_title:
+    en: "Workbench"
+    zh-CN: "工作台"
+    zh-HK: "工作台"
+  workbench_hint:
+    en: "Open tools and workspace features"
+    zh-CN: "打开工具和工作区功能"
+    zh-HK: "開啟工具與工作區功能"
+  workbench_entry_hint:
+    en: "Open from Home"
+    zh-CN: "从主页打开"
+    zh-HK: "從主頁開啟"
   tree_filter_independent:
     en: "Filters are independent from Home"
     zh-CN: "筛选独立于主页"
@@ -671,6 +683,10 @@ Home:
     en: Tree View
     zh-CN: 树形视图
     zh-HK: 樹形視圖
+  navigation_view:
+    en: Global Navigation
+    zh-CN: 全局导航
+    zh-HK: 全局導覽
   refresh:
     en: Refresh
     zh-CN: 刷新

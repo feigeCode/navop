@@ -10,9 +10,22 @@ use gpui::{
     Pixels, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, WeakEntity,
     Window, actions, div, px,
 };
-use gpui_component::{ActiveTheme, Icon, InteractiveElementExt, Sizable, Size, WindowExt, button::{Button, ButtonVariants as _, DropdownButton}, checkbox::Checkbox, dialog::DialogButtonProps, h_flex, input::{Input, InputEvent, InputState}, list::{List, ListState}, menu::{ContextMenuExt, DropdownMenu as _, PopupMenuItem}, notification::Notification, popover::Popover, tooltip::Tooltip, v_flex};
-use one_assets::IconName;
+use gpui_component::{
+    ActiveTheme, Icon, InteractiveElementExt, Sizable, Size, WindowExt,
+    button::{Button, ButtonVariants as _, DropdownButton},
+    checkbox::Checkbox,
+    dialog::DialogButtonProps,
+    h_flex,
+    input::{Input, InputEvent, InputState},
+    list::{List, ListState},
+    menu::{ContextMenuExt, DropdownMenu as _, PopupMenuItem},
+    notification::Notification,
+    popover::Popover,
+    tooltip::Tooltip,
+    v_flex,
+};
 use mongodb_view::{MongoFormWindow, MongoFormWindowConfig};
+use one_assets::IconName;
 use one_core::cloud_sync::{
     CloudAccountScope, CloudApiClient, CloudSyncService, SyncConflict, SyncEngine, TeamOption,
     UserInfo, get_cached_team_display_options_for_scope, get_cached_team_options,
@@ -95,6 +108,8 @@ pub enum ConnectionLayout {
     List,
     /// 分组树视图（复用常驻侧栏连接树）
     Tree,
+    /// 全局导航视图：左侧连接树，右侧主页功能入口。
+    Navigation,
 }
 
 impl From<HomeConnectionLayout> for ConnectionLayout {
@@ -103,6 +118,7 @@ impl From<HomeConnectionLayout> for ConnectionLayout {
             HomeConnectionLayout::Card => Self::Card,
             HomeConnectionLayout::List => Self::List,
             HomeConnectionLayout::Tree => Self::Tree,
+            HomeConnectionLayout::Navigation => Self::Navigation,
         }
     }
 }
@@ -113,6 +129,7 @@ impl From<ConnectionLayout> for HomeConnectionLayout {
             ConnectionLayout::Card => Self::Card,
             ConnectionLayout::List => Self::List,
             ConnectionLayout::Tree => Self::Tree,
+            ConnectionLayout::Navigation => Self::Navigation,
         }
     }
 }
@@ -121,8 +138,10 @@ impl HomePage {
     pub(crate) fn set_connection_sidebar(
         &mut self,
         sidebar: Entity<crate::persistent_connection_sidebar::PersistentConnectionSidebar>,
+        cx: &mut Context<Self>,
     ) {
         self.connection_sidebar = Some(sidebar);
+        self.sync_sidebar_home_embedded(cx);
     }
 
     pub(crate) fn recent_connections_collapsed(&self) -> bool {
@@ -132,6 +151,10 @@ impl HomePage {
     pub(crate) fn toggle_recent_connections(&mut self, cx: &mut Context<Self>) {
         self.recent_collapsed = !self.recent_collapsed;
         cx.notify();
+    }
+
+    pub(crate) fn uses_global_navigation_layout(&self) -> bool {
+        self.connection_layout == ConnectionLayout::Navigation
     }
 }
 
@@ -249,6 +272,7 @@ mod sidebar_navigation;
 mod sync_route;
 mod team_permissions;
 mod toolbar;
+mod workbench;
 mod workspace;
 mod workspace_filter;
 

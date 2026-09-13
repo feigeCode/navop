@@ -1,9 +1,8 @@
 use gpui::{
-    AnyElement, AppContext, Context, Entity, EventEmitter, Hsla, InteractiveElement,
-    IntoElement, ParentElement, Pixels, Styled, UniformListScrollHandle, Window, div, px, hsla};
-use gpui_component::{
-    input::{InputEvent, InputState},
+    AnyElement, AppContext, Context, Entity, EventEmitter, Hsla, InteractiveElement, IntoElement,
+    ParentElement, Pixels, Styled, UniformListScrollHandle, Window, div, hsla, px,
 };
+use gpui_component::input::{InputEvent, InputState};
 use terminal_view::TerminalColors;
 
 use crate::home_tab::HomePage;
@@ -91,7 +90,12 @@ impl From<&TerminalColors> for SidebarPalette {
 /// terminal themes.
 fn shade(color: Hsla, dark_mode: bool) -> Hsla {
     let amount = if dark_mode { -0.02 } else { -0.015 };
-    hsla(color.h, color.s, (color.l + amount).clamp(0.0, 1.0), color.a)
+    hsla(
+        color.h,
+        color.s,
+        (color.l + amount).clamp(0.0, 1.0),
+        color.a,
+    )
 }
 
 /// 浮动连接树卡片与窗口边缘的间距（像素）。
@@ -112,6 +116,7 @@ pub(crate) struct PersistentConnectionSidebar {
     /// Tree 布局把侧栏作为主页内容渲染时为 true；渲染主体仍由 Render 承担，
     /// 避免在 HomePage 自身 render 租约内 read(home_page) 造成重入。
     home_embedded: bool,
+    home_navigation_layout: bool,
 }
 
 pub(crate) enum PersistentConnectionSidebarEvent {
@@ -122,7 +127,9 @@ impl EventEmitter<PersistentConnectionSidebarEvent> for PersistentConnectionSide
 
 impl gpui::Render for PersistentConnectionSidebar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.home_embedded {
+        if self.home_navigation_layout {
+            self.render_home_navigation_tree(px(248.0), cx)
+        } else if self.home_embedded {
             self.render_home_tree(cx)
         } else {
             // 侧栏由 App 外壳以停靠/浮动形式渲染；空占位避免误作窗口根。
@@ -208,12 +215,22 @@ impl PersistentConnectionSidebar {
             terminal_colors: None,
             tree_scroll_handle: UniformListScrollHandle::new(),
             home_embedded: false,
+            home_navigation_layout: false,
         }
     }
 
     pub(crate) fn set_home_embedded(&mut self, embedded: bool, cx: &mut Context<Self>) {
-        if self.home_embedded != embedded {
+        if self.home_embedded != embedded || self.home_navigation_layout {
             self.home_embedded = embedded;
+            self.home_navigation_layout = false;
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn set_home_navigation_layout(&mut self, cx: &mut Context<Self>) {
+        if !self.home_embedded || !self.home_navigation_layout {
+            self.home_embedded = true;
+            self.home_navigation_layout = true;
             cx.notify();
         }
     }
