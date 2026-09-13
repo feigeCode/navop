@@ -743,6 +743,13 @@ fn ssh_config_with_confirmed_host_key(
 const DEFAULT_COLS: usize = 80;
 const DEFAULT_ROWS: usize = 24;
 
+/// 本地 PTY 后端异常停止时写入 `child_exited` 的哨兵值。
+///
+/// 后端停止时子进程状态未知（PTY 读取线程可能已异常终止，而子进程本身仍然存在），
+/// 因此不能伪造正常的退出码；负值明确表示“没有可用的退出码”。界面只需要知道
+/// “这个会话已经结束”，从而不再把它当作可输入的活动会话。
+const LOCAL_BACKEND_STOPPED_EXIT_CODE: i32 = -1;
+
 /// 将路径安全地转为 POSIX shell 单参数，避免命令注入。
 pub(crate) fn shell_escape_arg(arg: &str) -> String {
     if arg.is_empty() {
@@ -3189,6 +3196,17 @@ impl Terminal {
             TerminalEvent::ChildExit(code) => {
                 self.child_exited = Some(code);
                 cx.emit(TerminalModelEvent::ChildExit(code));
+            }
+            TerminalEvent::BackendStopped => {
+                // 本地 PTY 后端已停止：既不会再产出输出，也不会接受输入。
+                // 必须显式结束会话，否则终端会停留在“看起来还在运行”的永久卡死状态，
+                // 用户既看不到错误也无法通过关闭/重连恢复。
+                tracing::warn!("本地终端后端已停止，标记会话结束");
+                self.backend = None;
+                self.child_exited = Some(LOCAL_BACKEND_STOPPED_EXIT_CODE);
+                cx.emit(TerminalModelEvent::ChildExit(
+                    LOCAL_BACKEND_STOPPED_EXIT_CODE,
+                ));
             }
             TerminalEvent::ClipboardStore(_ty, data) => {
                 cx.emit(TerminalModelEvent::ClipboardStore(data));
