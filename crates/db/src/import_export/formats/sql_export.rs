@@ -1,7 +1,9 @@
 use anyhow::Result;
 
+use super::cells::{RenderCell, ResultCells};
+use super::sync_typed_batch_from_legacy;
 use crate::connection::DbConnection;
-use crate::executor::{QueryCellRef, QueryResult, QueryResultView, SqlResult};
+use crate::executor::{QueryResult, SqlResult};
 use crate::import_export::{ExportConfig, ExportProgressEvent};
 use crate::{
     ColumnInfo, DatabasePlugin, PaginatedQuery,
@@ -48,6 +50,7 @@ pub(super) async fn export_table_data_in_pages(
                 schema_columns.as_deref().unwrap_or_default(),
             )?;
         }
+        sync_typed_batch_from_legacy(&mut query_result)?;
         let rows_count = query_result.rows.len() as u64;
         let data_output = sql_dump_page(
             plugin,
@@ -128,6 +131,7 @@ async fn query_export_page(
         SqlResult::Error(error) => return Err(anyhow::anyhow!(error.message)),
     };
     paginated_query.strip_hidden_result_columns(&mut query_result)?;
+    sync_typed_batch_from_legacy(&mut query_result)?;
     Ok(query_result)
 }
 
@@ -139,9 +143,7 @@ fn sql_dump_page(
     wrote_header: &mut bool,
 ) -> Result<String> {
     if query_result.rows.is_empty() {
-        query_result
-            .typed_view()
-            .map_err(|error| anyhow::anyhow!("Invalid query result for SQL export: {error}"))?;
+        ResultCells::new(query_result, "SQL")?;
         return Ok(String::new());
     }
 
@@ -168,34 +170,32 @@ pub(crate) fn render_insert_statements<P>(
 where
     P: DatabasePlugin + ?Sized,
 {
-    let view = query_result
-        .typed_view()
-        .map_err(|error| anyhow::anyhow!("Invalid query result for SQL export: {error}"))?;
+    let cells = ResultCells::new(query_result, "SQL")?;
     let context = InsertRenderContext {
         plugin,
         table_ident,
         columns: &query_result.columns,
         column_meta: &query_result.column_meta,
-        view: &view,
+        cells: &cells,
     };
     let mut output = String::new();
-    for row_index in 0..query_result.rows.len() {
+    for row_index in 0..cells.row_count() {
         push_insert_statement(&mut output, &context, row_index);
     }
     Ok(output)
 }
 
-struct InsertRenderContext<'a, P: DatabasePlugin + ?Sized> {
+struct InsertRenderContext<'a, 'b, P: DatabasePlugin + ?Sized> {
     plugin: &'a P,
     table_ident: &'a str,
     columns: &'a [String],
     column_meta: &'a [crate::executor::QueryColumnMeta],
-    view: &'a QueryResultView<'a>,
+    cells: &'b ResultCells<'a>,
 }
 
 fn push_insert_statement<P>(
     output: &mut String,
-    context: &InsertRenderContext<'_, P>,
+    context: &InsertRenderContext<'_, '_, P>,
     row_index: usize,
 ) where
     P: DatabasePlugin + ?Sized,
@@ -222,22 +222,22 @@ fn push_insert_statement<P>(
 }
 
 fn format_export_value<P>(
-    context: &InsertRenderContext<'_, P>,
+    context: &InsertRenderContext<'_, '_, P>,
     row_index: usize,
     column_index: usize,
 ) -> String
 where
     P: DatabasePlugin + ?Sized,
 {
-    match context.view.cell(row_index, column_index) {
-        Some(QueryCellRef::Null) => "NULL".to_string(),
-        Some(QueryCellRef::Binary(bytes)) => context.plugin.format_binary_literal(bytes),
-        Some(QueryCellRef::Text(value)) => crate::sql_literal::format_query_text_value(
+    match context.cells.cell(row_index, column_index) {
+        Some(RenderCell::Null) => "NULL".to_string(),
+        Some(RenderCell::Binary(bytes)) => context.plugin.format_binary_literal(bytes),
+        Some(RenderCell::Text(value)) => crate::sql_literal::format_query_text_value(
             context.plugin,
             Some(value),
             context.column_meta.get(column_index),
         ),
-        None => unreachable!("typed view validated row and column bounds"),
+        None => unreachable!("result cells validated row and column bounds"),
     }
 }
 

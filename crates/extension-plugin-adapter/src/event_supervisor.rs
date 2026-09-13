@@ -81,6 +81,15 @@ impl EventStreamSubscription {
         Self::spawn_with_client(client, stream_id, config)
     }
 
+    pub fn spawn_with_cancel(
+        client: ManagedUniversalPluginClient,
+        stream_id: impl Into<String>,
+        config: EventStreamSubscriptionConfig,
+        cancellation: CancellationToken,
+    ) -> Self {
+        Self::spawn_with_client_and_cancel(client, stream_id, config, cancellation)
+    }
+
     pub(crate) fn spawn_with_client<C>(
         client: C,
         stream_id: impl Into<String>,
@@ -89,8 +98,20 @@ impl EventStreamSubscription {
     where
         C: EventStreamClient,
     {
+        Self::spawn_with_client_and_cancel(client, stream_id, config, CancellationToken::new())
+    }
+
+    fn spawn_with_client_and_cancel<C>(
+        client: C,
+        stream_id: impl Into<String>,
+        config: EventStreamSubscriptionConfig,
+        cancellation: CancellationToken,
+    ) -> Self
+    where
+        C: EventStreamClient,
+    {
         let stream_id = stream_id.into();
-        let cancel = CancellationToken::new();
+        let cancel = cancellation;
         let (sender, receiver) = mpsc::channel(config.channel_capacity.max(1));
         let task = tokio::spawn(run_pull_loop(
             client,

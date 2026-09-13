@@ -5,7 +5,7 @@
 //! depend on asset paths or scatter project-specific icon choices throughout
 //! the renderer.
 
-use gpui_component::IconName;
+use one_assets::IconName;
 
 use crate::components::CalloutVariant;
 

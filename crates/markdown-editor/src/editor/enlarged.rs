@@ -10,7 +10,8 @@ use rust_i18n::t;
 use super::Editor;
 use crate::components::{EnlargedBlockKind, HostRenderedArtifact};
 use crate::theme::Theme;
-use gpui_component::{IconName, Size};
+use gpui_component::{Size};
+use one_assets::IconName;
 use one_ui::icon_button::IconButton;
 
 /// State for the enlarged Mermaid/Math view opened from a rendered block.
@@ -294,8 +295,7 @@ mod tests {
     use std::sync::Arc;
 
     use gpui::{AppContext, Entity, Image, ImageFormat, Modifiers, TestAppContext, rgba};
-    use palette::IntoColor as _;
-
+    
     use super::{
         ENLARGED_ZOOM_DEFAULT, ENLARGED_ZOOM_STEP, Editor, EnlargedPreviewLimit,
         enlarged_artifact_size,
@@ -319,11 +319,11 @@ mod tests {
 
     fn host_theme() -> EditorHostTheme {
         EditorHostTheme {
-            background: rgba(0x112233ff).into_color(),
-            foreground: rgba(0x223344ff).into_color(),
-            border: rgba(0x334455ff).into_color(),
-            muted: rgba(0x445566ff).into_color(),
-            accent: rgba(0x556677ff).into_color(),
+            background: rgba(0x112233ff).into(),
+            foreground: rgba(0x223344ff).into(),
+            border: rgba(0x334455ff).into(),
+            muted: rgba(0x445566ff).into(),
+            accent: rgba(0x556677ff).into(),
         }
     }
 

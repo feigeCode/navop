@@ -62,7 +62,7 @@ impl TerminalCommandBar {
             .trailing(
                 IconButton::new(
                     "terminal-command-quick-close",
-                    gpui_component::IconName::Close,
+                    one_assets::IconName::Close,
                 )
                 .role(IconButtonRole::Compact)
                 .custom(

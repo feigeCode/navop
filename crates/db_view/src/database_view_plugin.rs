@@ -6,7 +6,7 @@ use db::plugin_manifest::{
     DatabaseActionToolbarScope, DatabaseCapabilities, DatabaseFormKind, DatabaseUiManifest,
 };
 use gpui::{App, AppContext, Entity, Window};
-use gpui_component::IconName;
+use one_assets::IconName;
 use one_core::storage::DatabaseType;
 use std::rc::Rc;
 

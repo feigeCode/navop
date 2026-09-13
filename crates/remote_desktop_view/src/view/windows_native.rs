@@ -80,6 +80,15 @@ struct WindowsNativePresentation {
     /// Requested visibility; only set to true after a successful show.
     visible: bool,
     latest_bounds: Option<Win32ClientPhysicalBounds>,
+    /// Bounds the native sink (child overlay + ActiveX host window) accepted
+    /// most recently.
+    ///
+    /// The view re-observes its layout on every frame, so the same physical
+    /// bounds arrive at the maintenance poll rate. Re-issuing `SetWindowPos` on
+    /// the ActiveX child for identical bounds makes mstscax re-lay out and
+    /// re-render the whole session — including the session pointer it draws
+    /// itself — which shows up as a continuously rescaled remote cursor.
+    applied_bounds: Option<Win32ClientPhysicalBounds>,
     /// Set by LoginComplete / Reconnected; the overlay must never present
     /// before the session has a drawable framebuffer.
     login_complete: bool,
@@ -102,9 +111,24 @@ impl WindowsNativePresentation {
         if self.state != NativePresentationState::Open {
             return Ok(());
         }
+        let unchanged = self.latest_bounds == Some(bounds);
         self.latest_bounds = Some(bounds);
         if self.active {
+            // The layout observation repeats every frame; only a bounds change
+            // (or a bounds value the sink never accepted) may reach the native
+            // window, otherwise the ActiveX child is resized at the poll rate.
+            if unchanged && self.applied_bounds == Some(bounds) {
+                tracing::trace!(
+                    x = bounds.x,
+                    y = bounds.y,
+                    width = bounds.width,
+                    height = bounds.height,
+                    "skipped a redundant Windows native RDP bounds application"
+                );
+                return Ok(());
+            }
             sink.set_bounds(bounds)?;
+            self.applied_bounds = Some(bounds);
             self.effective_visible = sink.is_effectively_visible();
         }
         Ok(())
@@ -131,6 +155,7 @@ impl WindowsNativePresentation {
 
         if let Some(bounds) = self.latest_bounds {
             sink.set_bounds(bounds)?;
+            self.applied_bounds = Some(bounds);
         }
         if !self.visible {
             sink.show()?;
@@ -181,6 +206,7 @@ impl WindowsNativePresentation {
         self.active = false;
         self.visible = false;
         self.effective_visible = false;
+        self.applied_bounds = None;
         Ok(())
     }
 
@@ -206,6 +232,9 @@ impl WindowsNativePresentation {
         self.effective_visible = false;
         self.login_complete = false;
         self.native_child_ready = false;
+        // The reconnect replaces the ActiveX drawing subtree, so the next
+        // activation must re-apply the cached bounds once.
+        self.applied_bounds = None;
 
         focus_result.and(hide_result)
     }
@@ -225,6 +254,7 @@ impl WindowsNativePresentation {
         self.active = false;
         self.visible = false;
         self.effective_visible = false;
+        self.applied_bounds = None;
         focus_result.and(hide_result)?;
         Ok(true)
     }
@@ -1128,6 +1158,135 @@ mod tests {
         presentation.update_bounds(latest, &mut recorder).unwrap();
 
         assert_eq!(vec![Command::SetBounds(latest)], recorder.commands);
+    }
+
+    #[test]
+    fn repeated_identical_bounds_reach_the_native_child_once() {
+        let mut presentation = ready_presentation();
+        let mut recorder = Recorder::default();
+
+        presentation.update_bounds(bounds(), &mut recorder).unwrap();
+        presentation.activate(false, &mut recorder).unwrap();
+        recorder.commands.clear();
+
+        // The view re-observes its layout every frame; identical bounds must not
+        // resize the ActiveX child at the maintenance poll rate.
+        for _ in 0..8 {
+            presentation.update_bounds(bounds(), &mut recorder).unwrap();
+        }
+        assert!(
+            recorder.commands.is_empty(),
+            "identical bounds must not re-issue SetBounds: {:?}",
+            recorder.commands
+        );
+
+        let latest = Win32ClientPhysicalBounds {
+            x: 30,
+            y: 50,
+            width: 1280,
+            height: 720,
+        };
+        presentation.update_bounds(latest, &mut recorder).unwrap();
+        assert_eq!(vec![Command::SetBounds(latest)], recorder.commands);
+    }
+
+    #[test]
+    fn deactivate_and_activate_reapply_the_cached_bounds_once() {
+        let mut presentation = ready_presentation();
+        let mut recorder = Recorder::default();
+
+        presentation.update_bounds(bounds(), &mut recorder).unwrap();
+        presentation.activate(false, &mut recorder).unwrap();
+        presentation.deactivate(&mut recorder).unwrap();
+        recorder.commands.clear();
+
+        presentation.update_bounds(bounds(), &mut recorder).unwrap();
+        assert!(recorder.commands.is_empty());
+
+        presentation.activate(false, &mut recorder).unwrap();
+        assert_eq!(
+            vec![Command::SetBounds(bounds()), Command::Show],
+            recorder.commands
+        );
+
+        recorder.commands.clear();
+        presentation.update_bounds(bounds(), &mut recorder).unwrap();
+        assert!(recorder.commands.is_empty());
+    }
+
+    #[test]
+    fn bounds_the_sink_rejected_are_retried() {
+        let mut presentation = ready_presentation();
+        let mut recorder = Recorder::default();
+        presentation.update_bounds(bounds(), &mut recorder).unwrap();
+        presentation.activate(false, &mut recorder).unwrap();
+        recorder.commands.clear();
+
+        let latest = Win32ClientPhysicalBounds {
+            x: 30,
+            y: 50,
+            width: 1280,
+            height: 720,
+        };
+        let mut failing = FailingBoundsOnceRecorder {
+            fail_next_bounds: true,
+            ..FailingBoundsOnceRecorder::default()
+        };
+        assert_eq!(
+            Err(PresentationError),
+            presentation.update_bounds(latest, &mut failing)
+        );
+        assert_eq!(vec![Command::SetBounds(latest)], failing.commands);
+
+        // The rejected bounds were never accepted by the sink, so the identical
+        // value must be offered again instead of being deduplicated away.
+        failing.commands.clear();
+        presentation.update_bounds(latest, &mut failing).unwrap();
+        assert_eq!(vec![Command::SetBounds(latest)], failing.commands);
+    }
+
+    #[derive(Default)]
+    struct FailingBoundsOnceRecorder {
+        commands: Vec<Command>,
+        fail_next_bounds: bool,
+    }
+
+    impl NativePresentationSink for FailingBoundsOnceRecorder {
+        type Error = PresentationError;
+
+        fn set_bounds(&mut self, bounds: Win32ClientPhysicalBounds) -> Result<(), Self::Error> {
+            self.commands.push(Command::SetBounds(bounds));
+            if self.fail_next_bounds {
+                self.fail_next_bounds = false;
+                return Err(PresentationError);
+            }
+            Ok(())
+        }
+
+        fn show(&mut self) -> Result<(), Self::Error> {
+            self.commands.push(Command::Show);
+            Ok(())
+        }
+
+        fn focus_child(&mut self) -> Result<(), Self::Error> {
+            self.commands.push(Command::FocusChild);
+            Ok(())
+        }
+
+        fn focus_parent(&mut self) -> Result<(), Self::Error> {
+            self.commands.push(Command::FocusParent);
+            Ok(())
+        }
+
+        fn hide(&mut self) -> Result<(), Self::Error> {
+            self.commands.push(Command::Hide);
+            Ok(())
+        }
+
+        fn is_effectively_visible(&self) -> bool {
+            self.commands.contains(&Command::Show)
+                && !matches!(self.commands.last(), Some(Command::Hide))
+        }
     }
 
     #[test]

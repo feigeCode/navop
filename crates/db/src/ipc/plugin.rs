@@ -26,7 +26,6 @@ use crate::schema_preferences::{
 use crate::sqlite::SqlitePlugin;
 use crate::ssh_tunnel::resolve_connection_target;
 use crate::streaming_parser::StreamingSqlParser;
-use crate::tdengine::TdenginePlugin;
 use crate::types::*;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -448,7 +447,8 @@ fn compatible_plugin_for(database_type: DatabaseType) -> Option<Box<dyn Database
         DatabaseType::MSSQL => Some(Box::new(MsSqlPlugin::new())),
         DatabaseType::Oracle => Some(Box::new(OraclePlugin::new())),
         DatabaseType::ClickHouse => Some(Box::new(ClickHousePlugin::new())),
-        DatabaseType::TDengine => Some(Box::new(TdenginePlugin::new())),
+        // TDengine 原生插件已移除(改由 tdengine IPC 驱动提供),无本地兼容实现。
+        DatabaseType::TDengine => None,
         DatabaseType::External { .. } => None,
     }
 }
@@ -2685,6 +2685,7 @@ mod tests {
                     rows: vec![vec![Some("1".into())]],
                     binary_cells: vec![],
                     elapsed_ms: 0,
+                    ..Default::default()
                 }));
             }
             let mut columns = vec!["__rowid__".into(), "ID".into()];
@@ -2700,6 +2701,7 @@ mod tests {
                 rows,
                 binary_cells: vec![],
                 elapsed_ms: 0,
+                ..Default::default()
             }))
         }
 

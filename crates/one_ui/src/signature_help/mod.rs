@@ -10,7 +10,7 @@ use gpui::{
     prelude::FluentBuilder as _,
 };
 use gpui_component::StyledExt as _;
-use gpui_component::input::{Editor, EditorState, Escape, GutterMarkerRenderer, InputEvent, Rope};
+use gpui_component::input::{Editor, EditorState, Escape, InputEvent, Rope};
 use gpui_component::native_menu::NativeMenu;
 use lsp_types::SignatureHelp;
 
@@ -220,7 +220,6 @@ pub struct ExtendedEditor {
     readonly: bool,
     tab_index: isize,
     aria_label: Option<SharedString>,
-    gutter_marker_renderer: Option<GutterMarkerRenderer>,
     context_menu_builder: Option<Rc<dyn Fn(NativeMenu, &mut Window, &mut App) -> NativeMenu>>,
 }
 
@@ -236,7 +235,6 @@ impl ExtendedEditor {
             readonly: false,
             tab_index: 0,
             aria_label: None,
-            gutter_marker_renderer: None,
             context_menu_builder: None,
         }
     }
@@ -273,11 +271,6 @@ impl ExtendedEditor {
 
     pub fn aria_label(mut self, label: impl Into<SharedString>) -> Self {
         self.aria_label = Some(label.into());
-        self
-    }
-
-    pub fn gutter_marker_renderer(mut self, renderer: GutterMarkerRenderer) -> Self {
-        self.gutter_marker_renderer = Some(renderer);
         self
     }
 
@@ -319,9 +312,6 @@ impl RenderOnce for ExtendedEditor {
                     .disabled(self.disabled)
                     .readonly(self.readonly)
                     .tab_index(self.tab_index)
-                    .when_some(self.gutter_marker_renderer, |editor, renderer| {
-                        editor.gutter_marker_renderer(move |marker| renderer(marker))
-                    })
                     .when_some(self.context_menu_builder, |editor, build| {
                         editor.context_menu(move |menu, window, cx| build(menu, window, cx))
                     })

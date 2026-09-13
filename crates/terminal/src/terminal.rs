@@ -197,14 +197,23 @@ pub enum TerminalSessionMode {
     SessionLog,
 }
 
-const SSH_CLEAR_SCREEN_REDRAW_BYTES: &[u8] = b"\x0c";
+/// Ctrl+L（form feed, 0x0c）：交给 shell 自己清屏并重绘提示符。
+const CLEAR_SCREEN_REDRAW_BYTES: &[u8] = b"\x0c";
 
-fn clear_screen_remote_redraw_bytes(kind: TerminalConnectionKind) -> Option<&'static [u8]> {
+/// 清屏后需要通知 shell 重绘的连接类型。
+///
+/// 直接重置模拟器网格会让 shell 与模拟器失步：shell（以及 Windows 上
+/// ConPTY 自身的屏幕缓冲）仍认为光标在原位置，提示符不会重绘，后续输入
+/// 会错位并出现大块空白（见 issue #188）。因此本地和 SSH 终端清屏后需
+/// 补发 Ctrl+L，由 shell 执行清屏并重绘提示符，保证双方状态一致。
+fn clear_screen_shell_redraw_bytes(kind: TerminalConnectionKind) -> Option<&'static [u8]> {
     match kind {
-        TerminalConnectionKind::Ssh => Some(SSH_CLEAR_SCREEN_REDRAW_BYTES),
-        TerminalConnectionKind::Local
-        | TerminalConnectionKind::Serial
-        | TerminalConnectionKind::Telnet => None,
+        TerminalConnectionKind::Ssh | TerminalConnectionKind::Local => {
+            Some(CLEAR_SCREEN_REDRAW_BYTES)
+        }
+        // 串口/Telnet 面向的是裸控制台，没有 readline 语义，Ctrl+L 可能被
+        // 远端程序当成普通按键，这里只重置本地网格。
+        TerminalConnectionKind::Serial | TerminalConnectionKind::Telnet => None,
     }
 }
 
@@ -1829,7 +1838,7 @@ impl Terminal {
         term.grid_mut().reset::<Color>();
         term.selection = None;
         drop(term);
-        if let Some(bytes) = clear_screen_remote_redraw_bytes(self.connection_kind) {
+        if let Some(bytes) = clear_screen_shell_redraw_bytes(self.connection_kind) {
             self.write(bytes);
         }
         cx.emit(TerminalModelEvent::Wakeup);
@@ -1850,7 +1859,7 @@ impl Terminal {
         term.grid_mut().reset::<Color>();
         term.selection = None;
         drop(term);
-        if let Some(bytes) = clear_screen_remote_redraw_bytes(self.connection_kind) {
+        if let Some(bytes) = clear_screen_shell_redraw_bytes(self.connection_kind) {
             self.write(bytes);
         }
         cx.emit(TerminalModelEvent::Wakeup);
@@ -4508,7 +4517,7 @@ mod tests {
         TerminalConnectionKind, TerminalMfaPrompt, TerminalMfaRequest, TerminalMfaResponder,
         TerminalScrollProxy, TerminalSessionMode, TerminalSshCredentials,
         build_automatic_session_log_request, build_cd_command, build_ssh_base_init_commands,
-        build_ssh_init_commands, clear_screen_remote_redraw_bytes, compose_ssh_init_commands,
+        build_ssh_init_commands, clear_screen_shell_redraw_bytes, compose_ssh_init_commands,
         flush_pending_terminal_events, format_connection_error, host_key_verification_request,
         is_reconnect_generation, is_ssh_password_prompt, keyboard_interactive_answers_for_terminal,
         merge_history_matches, normalize_history_matches, parse_stored_telnet_params,
@@ -5912,18 +5921,22 @@ mod tests {
     }
 
     #[test]
-    fn clear_screen_requests_remote_prompt_redraw_for_ssh_only() {
+    fn clear_screen_requests_shell_prompt_redraw_for_ssh_and_local() {
         assert_eq!(
             Some(b"\x0c".as_slice()),
-            clear_screen_remote_redraw_bytes(TerminalConnectionKind::Ssh)
+            clear_screen_shell_redraw_bytes(TerminalConnectionKind::Ssh)
+        );
+        assert_eq!(
+            Some(b"\x0c".as_slice()),
+            clear_screen_shell_redraw_bytes(TerminalConnectionKind::Local)
         );
         assert_eq!(
             None,
-            clear_screen_remote_redraw_bytes(TerminalConnectionKind::Local)
+            clear_screen_shell_redraw_bytes(TerminalConnectionKind::Serial)
         );
         assert_eq!(
             None,
-            clear_screen_remote_redraw_bytes(TerminalConnectionKind::Serial)
+            clear_screen_shell_redraw_bytes(TerminalConnectionKind::Telnet)
         );
     }
 

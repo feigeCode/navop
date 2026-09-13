@@ -16,8 +16,12 @@ use crate::executor::{
     SqlSource,
 };
 use crate::ssh_tunnel::resolve_connection_target;
+use crate::types::FieldType;
 use crate::{DatabasePlugin, format_message, truncate_str};
 use connection_tunnel::TunnelGuard;
+use db_value::{
+    CellState, ColumnDescriptor, DbValue, FloatWidth, Nullability, ResultBatch, ResultRow,
+};
 
 pub struct OracleDbConnection {
     config: DbConnectionConfig,
@@ -220,21 +224,352 @@ impl OracleDbConnection {
         }
     }
 
+    fn is_binary_oracle_type(oracle_type: &OracleType) -> bool {
+        matches!(
+            oracle_type,
+            OracleType::Raw(_) | OracleType::LongRaw | OracleType::BLOB | OracleType::BFILE
+        )
+    }
+
+    /// 把 GET 结果解码为成功值、SQL NULL 或显式解码失败,三者严格分开。
+    fn decode_failure(oracle_type: &OracleType, diagnostic: String) -> (CellState, Option<String>) {
+        let type_name = oracle_type.to_string();
+        (
+            CellState::DecodeError {
+                native_type: type_name.clone(),
+                raw: None,
+                diagnostic,
+            },
+            Some(format!("<{type_name} decode error>")),
+        )
+    }
+
+    fn date_time_cell(
+        row: &oracle::Row,
+        index: usize,
+        oracle_type: &OracleType,
+    ) -> (CellState, Option<String>) {
+        match row.get::<usize, Option<NaiveDateTime>>(index) {
+            Ok(Some(value)) => {
+                let display = Self::format_naive_date_time(value);
+                (
+                    CellState::Decoded(DbValue::DateTime(display.clone())),
+                    Some(display),
+                )
+            }
+            Ok(None) => (CellState::Decoded(DbValue::Null), None),
+            Err(_) => match row.get::<usize, Option<NaiveDate>>(index) {
+                Ok(Some(value)) => {
+                    let display = Self::format_naive_date(value);
+                    (
+                        CellState::Decoded(DbValue::Date(display.clone())),
+                        Some(display),
+                    )
+                }
+                Ok(None) => (CellState::Decoded(DbValue::Null), None),
+                Err(error) => Self::decode_failure(oracle_type, error.to_string()),
+            },
+        }
+    }
+
+    fn offset_date_time_cell(
+        row: &oracle::Row,
+        index: usize,
+        oracle_type: &OracleType,
+    ) -> (CellState, Option<String>) {
+        let fallback = |row: &oracle::Row, index: usize| -> Option<(CellState, Option<String>)> {
+            if let Ok(Some(value)) = row.get::<usize, Option<DateTime<Local>>>(index) {
+                let display = Self::format_offset_date_time(value.fixed_offset());
+                return Some((
+                    CellState::Decoded(DbValue::DateTime(display.clone())),
+                    Some(display),
+                ));
+            }
+            if let Ok(Some(value)) = row.get::<usize, Option<NaiveDateTime>>(index) {
+                let display = Self::format_naive_date_time(value);
+                return Some((
+                    CellState::Decoded(DbValue::DateTime(display.clone())),
+                    Some(display),
+                ));
+            }
+            None
+        };
+
+        match row.get::<usize, Option<DateTime<FixedOffset>>>(index) {
+            Ok(Some(value)) => {
+                let display = Self::format_offset_date_time(value);
+                (
+                    CellState::Decoded(DbValue::DateTime(display.clone())),
+                    Some(display),
+                )
+            }
+            Ok(None) => (CellState::Decoded(DbValue::Null), None),
+            Err(_) => match row.get::<usize, Option<DateTime<Utc>>>(index) {
+                Ok(Some(value)) => {
+                    let display = Self::format_offset_date_time(value.fixed_offset());
+                    (
+                        CellState::Decoded(DbValue::DateTime(display.clone())),
+                        Some(display),
+                    )
+                }
+                Ok(None) => (CellState::Decoded(DbValue::Null), None),
+                Err(_) => match fallback(row, index) {
+                    Some(cell) => cell,
+                    None => Self::decode_failure(
+                        oracle_type,
+                        "no compatible temporal decoder".to_string(),
+                    ),
+                },
+            },
+        }
+    }
+
+    fn number_cell(
+        row: &oracle::Row,
+        index: usize,
+        oracle_type: &OracleType,
+    ) -> (CellState, Option<String>) {
+        match row.get::<usize, Option<String>>(index) {
+            Ok(Some(value)) => {
+                let display = value;
+                (
+                    CellState::Decoded(DbValue::Decimal(display.clone())),
+                    Some(display),
+                )
+            }
+            Ok(None) => (CellState::Decoded(DbValue::Null), None),
+            Err(_) => match row.get::<usize, Option<i64>>(index) {
+                Ok(Some(value)) => {
+                    let display = value.to_string();
+                    (
+                        CellState::Decoded(DbValue::Integer(display.clone())),
+                        Some(display),
+                    )
+                }
+                Ok(None) => (CellState::Decoded(DbValue::Null), None),
+                Err(_) => match row.get::<usize, Option<f64>>(index) {
+                    Ok(Some(value)) => {
+                        let display = value.to_string();
+                        (
+                            CellState::Decoded(DbValue::Float {
+                                value: display.clone(),
+                                width: FloatWidth::F64,
+                            }),
+                            Some(display),
+                        )
+                    }
+                    Ok(None) => (CellState::Decoded(DbValue::Null), None),
+                    Err(error) => Self::decode_failure(oracle_type, error.to_string()),
+                },
+            },
+        }
+    }
+
+    fn text_cell(
+        row: &oracle::Row,
+        index: usize,
+        oracle_type: &OracleType,
+    ) -> (CellState, Option<String>) {
+        match row.get::<usize, Option<String>>(index) {
+            Ok(Some(value)) => (
+                CellState::Decoded(DbValue::Text(value.clone())),
+                Some(value),
+            ),
+            Ok(None) => (CellState::Decoded(DbValue::Null), None),
+            Err(error) => Self::decode_failure(oracle_type, error.to_string()),
+        }
+    }
+
+    /// 按 Oracle 类型分派解码:RAW/LOB 为 Binary,文本家族为 Text,其余标量带类型。
+    fn extract_cell(
+        row: &oracle::Row,
+        index: usize,
+        oracle_type: &OracleType,
+    ) -> (CellState, Option<String>) {
+        if Self::is_binary_oracle_type(oracle_type) {
+            return match row.get::<usize, Option<Vec<u8>>>(index) {
+                Ok(Some(bytes)) => {
+                    let display = Self::format_binary(&bytes);
+                    (
+                        CellState::Decoded(DbValue::Binary(bytes.clone())),
+                        Some(display),
+                    )
+                }
+                Ok(None) => (CellState::Decoded(DbValue::Null), None),
+                Err(error) => Self::decode_failure(oracle_type, error.to_string()),
+            };
+        }
+
+        match oracle_type {
+            OracleType::Date | OracleType::Timestamp(_) => {
+                Self::date_time_cell(row, index, oracle_type)
+            }
+            OracleType::TimestampTZ(_) | OracleType::TimestampLTZ(_) => {
+                Self::offset_date_time_cell(row, index, oracle_type)
+            }
+            OracleType::Number(_, _) | OracleType::Float(_) => {
+                Self::number_cell(row, index, oracle_type)
+            }
+            OracleType::BinaryFloat => match row.get::<usize, Option<f32>>(index) {
+                Ok(Some(value)) => {
+                    let display = value.to_string();
+                    (
+                        CellState::Decoded(DbValue::Float {
+                            value: display.clone(),
+                            width: FloatWidth::F32,
+                        }),
+                        Some(display),
+                    )
+                }
+                Ok(None) => (CellState::Decoded(DbValue::Null), None),
+                Err(error) => Self::decode_failure(oracle_type, error.to_string()),
+            },
+            OracleType::BinaryDouble => match row.get::<usize, Option<f64>>(index) {
+                Ok(Some(value)) => {
+                    let display = value.to_string();
+                    (
+                        CellState::Decoded(DbValue::Float {
+                            value: display.clone(),
+                            width: FloatWidth::F64,
+                        }),
+                        Some(display),
+                    )
+                }
+                Ok(None) => (CellState::Decoded(DbValue::Null), None),
+                Err(error) => Self::decode_failure(oracle_type, error.to_string()),
+            },
+            OracleType::Boolean => match row.get::<usize, Option<bool>>(index) {
+                Ok(Some(value)) => (
+                    CellState::Decoded(DbValue::Bool(value)),
+                    Some(value.to_string()),
+                ),
+                Ok(None) => (CellState::Decoded(DbValue::Null), None),
+                Err(error) => Self::decode_failure(oracle_type, error.to_string()),
+            },
+            OracleType::Int64 => match row.get::<usize, Option<i64>>(index) {
+                Ok(Some(value)) => {
+                    let display = value.to_string();
+                    (
+                        CellState::Decoded(DbValue::Integer(display.clone())),
+                        Some(display),
+                    )
+                }
+                Ok(None) => (CellState::Decoded(DbValue::Null), None),
+                Err(error) => Self::decode_failure(oracle_type, error.to_string()),
+            },
+            OracleType::UInt64 => match row.get::<usize, Option<u64>>(index) {
+                Ok(Some(value)) => {
+                    let display = value.to_string();
+                    (
+                        CellState::Decoded(DbValue::Unsigned(display.clone())),
+                        Some(display),
+                    )
+                }
+                Ok(None) => (CellState::Decoded(DbValue::Null), None),
+                Err(error) => Self::decode_failure(oracle_type, error.to_string()),
+            },
+            OracleType::Varchar2(_)
+            | OracleType::NVarchar2(_)
+            | OracleType::Char(_)
+            | OracleType::NChar(_)
+            | OracleType::CLOB
+            | OracleType::NCLOB
+            | OracleType::Long
+            | OracleType::Rowid
+            | OracleType::Json
+            | OracleType::Xml => Self::text_cell(row, index, oracle_type),
+            _ => {
+                // 未建模类型:保留 legacy 显示,typed 明确 Undecoded,不伪装成值。
+                let display = Self::extract_value(row, index, oracle_type);
+                (
+                    CellState::Undecoded {
+                        native_type: oracle_type.to_string(),
+                        raw: None,
+                        reason: "no typed decoder for this Oracle type".to_string(),
+                    },
+                    display,
+                )
+            }
+        }
+    }
+
+    fn build_descriptors(
+        column_meta: &[QueryColumnMeta],
+        columns: &[String],
+    ) -> Vec<ColumnDescriptor> {
+        (0..columns.len())
+            .map(|index| {
+                let native_type = column_meta
+                    .get(index)
+                    .map(|meta| meta.db_type.clone())
+                    .unwrap_or_else(|| "UNKNOWN".to_string());
+                ColumnDescriptor {
+                    id: format!("column:{index}"),
+                    label: columns[index].clone(),
+                    native_type: native_type.clone(),
+                    logical_type: format!("{:?}", FieldType::from_db_type(&native_type)),
+                    nullable: Nullability::Unknown,
+                    charset: None,
+                    collation: None,
+                    precision: None,
+                    scale: None,
+                }
+            })
+            .collect()
+    }
+
+    fn collect_binary_cells(rows: &[ResultRow]) -> Vec<BinaryCell> {
+        let mut binary_cells = Vec::new();
+        for (row_index, row) in rows.iter().enumerate() {
+            for (column_index, cell) in row.cells.iter().enumerate() {
+                if let CellState::Decoded(DbValue::Binary(bytes)) = cell {
+                    binary_cells.push(BinaryCell {
+                        row_index,
+                        column_index,
+                        bytes: bytes.clone(),
+                    });
+                }
+            }
+        }
+        binary_cells
+    }
+
     fn build_query_result(
         columns: Vec<String>,
         column_meta: Vec<QueryColumnMeta>,
-        rows: Vec<Vec<Option<String>>>,
-        binary_cells: Vec<BinaryCell>,
+        cells_rows: Vec<Vec<CellState>>,
+        display_rows: Vec<Vec<Option<String>>>,
         sql: String,
         elapsed_ms: u128,
     ) -> SqlResult {
+        let descriptors = Self::build_descriptors(&column_meta, &columns);
+        let batch_rows = cells_rows
+            .into_iter()
+            .enumerate()
+            .map(|(row_index, cells)| ResultRow {
+                id: row_index as u64,
+                cells,
+            })
+            .collect::<Vec<_>>();
+        let binary_cells = Self::collect_binary_cells(&batch_rows);
+        let typed_batch = match ResultBatch::try_new(0, descriptors, batch_rows, true) {
+            Ok(batch) => Arc::new(batch),
+            Err(error) => {
+                return SqlResult::Error(SqlErrorInfo {
+                    sql,
+                    message: format!("failed to build typed result batch: {error}"),
+                });
+            }
+        };
+
         SqlResult::Query(QueryResult {
             sql,
             columns,
             column_meta,
-            rows,
+            rows: display_rows,
             binary_cells,
             elapsed_ms,
+            typed_batch: Some(typed_batch),
         })
     }
 
@@ -299,11 +634,11 @@ impl OracleDbConnection {
                                 .map(|col| col.oracle_type().clone())
                                 .collect();
 
-                            let mut data_rows = Vec::new();
-                            let mut binary_cells = Vec::new();
+                            let mut cells_rows: Vec<Vec<CellState>> = Vec::new();
+                            let mut display_rows: Vec<Vec<Option<String>>> = Vec::new();
                             let mut rows = rows;
                             loop {
-                                if Self::has_reached_query_row_limit(data_rows.len(), max_rows) {
+                                if Self::has_reached_query_row_limit(cells_rows.len(), max_rows) {
                                     break;
                                 }
 
@@ -312,39 +647,20 @@ impl OracleDbConnection {
                                 };
                                 match row_result {
                                     Ok(row) => {
-                                        let row_index = data_rows.len();
-                                        let row_data: Vec<Option<String>> = (0..columns.len())
-                                            .map(|i| {
-                                                if column_types.get(i).is_some_and(|oracle_type| {
-                                                    matches!(
-                                                        oracle_type,
-                                                        OracleType::Raw(_)
-                                                            | OracleType::LongRaw
-                                                            | OracleType::BLOB
-                                                            | OracleType::BFILE
-                                                    )
-                                                }) {
-                                                    if let Some(bytes) = row
-                                                        .get::<usize, Option<Vec<u8>>>(i)
-                                                        .ok()
-                                                        .flatten()
-                                                    {
-                                                        binary_cells.push(BinaryCell {
-                                                            row_index,
-                                                            column_index: i,
-                                                            bytes,
-                                                        });
-                                                    }
+                                        let mut cells = Vec::with_capacity(columns.len());
+                                        let mut display = Vec::with_capacity(columns.len());
+                                        for i in 0..columns.len() {
+                                            let (state, cell_display) = match column_types.get(i) {
+                                                Some(oracle_type) => {
+                                                    Self::extract_cell(&row, i, oracle_type)
                                                 }
-                                                column_types
-                                                    .get(i)
-                                                    .and_then(|oracle_type| {
-                                                        Self::extract_value(&row, i, oracle_type)
-                                                    })
-                                                    .or_else(|| Self::extract_scalar_value(&row, i))
-                                            })
-                                            .collect();
-                                        data_rows.push(row_data);
+                                                None => (CellState::Decoded(DbValue::Null), None),
+                                            };
+                                            cells.push(state);
+                                            display.push(cell_display);
+                                        }
+                                        cells_rows.push(cells);
+                                        display_rows.push(display);
                                     }
                                     Err(e) => {
                                         error!(
@@ -361,15 +677,15 @@ impl OracleDbConnection {
 
                             debug!(
                                 "[Oracle] Query completed: {} rows, {} columns, {}ms",
-                                data_rows.len(),
+                                display_rows.len(),
                                 columns.len(),
                                 elapsed_ms
                             );
                             Ok(Self::build_query_result(
                                 columns,
                                 column_meta,
-                                data_rows,
-                                binary_cells,
+                                cells_rows,
+                                display_rows,
                                 sql_string,
                                 elapsed_ms,
                             ))
@@ -942,5 +1258,44 @@ mod tests {
             25,
             Some(25)
         ));
+    }
+
+    #[test]
+    fn raw_and_lob_types_are_binary_but_text_families_are_not() {
+        use oracle::sql_type::OracleType;
+
+        for oracle_type in [
+            OracleType::Raw(8),
+            OracleType::LongRaw,
+            OracleType::BLOB,
+            OracleType::BFILE,
+        ] {
+            assert!(
+                OracleDbConnection::is_binary_oracle_type(&oracle_type),
+                "{oracle_type:?}"
+            );
+        }
+        for oracle_type in [
+            OracleType::Varchar2(20),
+            OracleType::NVarchar2(20),
+            OracleType::Char(4),
+            OracleType::NChar(4),
+            OracleType::CLOB,
+            OracleType::NCLOB,
+        ] {
+            assert!(
+                !OracleDbConnection::is_binary_oracle_type(&oracle_type),
+                "{oracle_type:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn raw_empty_and_non_utf8_bytes_format_as_hex() {
+        assert_eq!(OracleDbConnection::format_binary(&[]), String::new());
+        assert_eq!(
+            OracleDbConnection::format_binary(&[0xFF, 0x00, 0x68]),
+            "0xFF0068".to_string()
+        );
     }
 }

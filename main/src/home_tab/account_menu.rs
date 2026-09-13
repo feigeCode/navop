@@ -1,3 +1,4 @@
+use one_ui::IconSize;
 use super::*;
 use gpui_component::avatar::Avatar;
 

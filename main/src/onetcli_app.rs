@@ -6,7 +6,7 @@ use crate::persistent_connection_sidebar::{
 };
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext, AsyncApp, ColorExt as _, Context, Entity, ExternalPaths, InteractiveElement,
+    App, AppContext, AsyncApp, Context, Entity, ExternalPaths, InteractiveElement,
     IntoElement, KeyBinding, Keystroke, ParentElement, Render, Styled, Task, Window, actions, div,
 };
 use gpui_component::{WindowExt, dialog::DialogButtonProps, kbd::Kbd, notification::Notification};
@@ -273,9 +273,7 @@ pub(crate) fn shutdown_application_resources_and_quit(cx: &mut App, reason: &'st
             );
         }
 
-        #[cfg(feature = "shell-plugins")]
         let plugin_shutdown_task = cx.update(|cx| universal_plugins::spawn_shutdown(cx));
-        #[cfg(feature = "shell-plugins")]
         if let Some(shutdown_task) = plugin_shutdown_task {
             if let Err(error) = shutdown_task.await {
                 tracing::warn!(
@@ -939,8 +937,7 @@ pub fn init(cx: &mut App) -> anyhow::Result<()> {
     redis_view::init(cx);
     crate::personal_sync_runtime::init(cx);
     mongodb_view::init(cx);
-    mqtt_view::init(cx);
-    #[cfg(not(all(feature = "builtin-redis", feature = "builtin-mongodb")))]
+    #[cfg(not(feature = "builtin-mongodb"))]
     init_native_data_driver_factories(cx);
     crate::public_mcp_runtime::init(cx);
     remote_desktop_view::init(cx);
@@ -961,18 +958,12 @@ pub fn init(cx: &mut App) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(not(all(feature = "builtin-redis", feature = "builtin-mongodb")))]
+#[cfg(not(feature = "builtin-mongodb"))]
 fn init_native_data_driver_factories(cx: &mut App) {
     let Some(root) = extension_runtime::extension::extensions_root() else {
         return;
     };
     let driver_root = root.join("database_drivers");
-    #[cfg(not(feature = "builtin-redis"))]
-    redis_view::init_with_factory(
-        cx,
-        redis_runtime::RedisConnectionFactory::from_installed_root(driver_root.clone()),
-    );
-    #[cfg(not(feature = "builtin-mongodb"))]
     mongodb_view::init_with_factory(
         cx,
         mongodb_runtime::MongoConnectionFactory::from_installed_root(driver_root),
@@ -1377,7 +1368,7 @@ impl OnetCliApp {
             {
                 container = container
                     .with_macos_titlebar_inset(true)
-                    .with_left_padding(cx.theme().geometry.layout.macos_title_bar_content_padding)
+                    .with_left_padding(one_ui::theme_geometry().layout.macos_title_bar_content_padding)
                     .with_top_padding(px(4.0));
             }
 
@@ -2064,37 +2055,41 @@ mod tests {
     }
 
     #[test]
-    fn redis_open_strategy_guards_the_native_driver() {
+    fn redis_open_strategy_uses_the_embedded_backend_without_driver_guard() {
         let source = include_str!("home/home_strategy.rs");
         let strategy = source
             .find("impl ConnectionOpenStrategy for RedisOpenStrategy")
             .unwrap();
-        let body = &source[strategy..];
-        let backend = body
-            .find("default_backend_kind")
-            .expect("Redis backend selection");
-        let requirement = body
-            .find("DEFAULT_REDIS_DRIVER_ID")
-            .expect("Redis native driver requirement");
-        let guard = body
-            .find("open_native_driver_connection_with_guard")
-            .expect("native driver install guard");
-        let open = body
-            .find("open_redis_tab_with_mode")
-            .expect("Redis tab open callback");
+        let rest = &source[strategy..];
+        let end = rest
+            .find("struct MongoOpenStrategy")
+            .expect("next strategy boundary");
+        let body = &rest[..end];
 
-        assert!(backend < requirement);
-        assert!(requirement < guard);
-        assert!(guard < open);
+        body.find("open_redis_tab_with_mode")
+            .expect("Redis tab open callback");
+        assert!(
+            !body.contains("open_native_driver_connection_with_guard"),
+            "builtin Redis must not require an installed native driver"
+        );
+        assert!(
+            !body.contains("DEFAULT_REDIS_DRIVER_ID"),
+            "builtin Redis must not reference the IPC sidecar driver id"
+        );
     }
 
     #[test]
-    fn redis_factory_reloads_the_installed_driver_registry() {
+    fn native_data_driver_factories_only_keep_mongodb() {
         let source = include_str!("onetcli_app.rs");
         let init = source.find("fn init_native_data_driver_factories").unwrap();
-        let body = &source[init..];
+        let rest = &source[init..];
+        let end = rest
+            .find("pub fn refresh_keybindings")
+            .expect("next item boundary");
+        let body = &rest[..end];
 
-        assert!(body.contains("RedisConnectionFactory::from_installed_root"));
+        assert!(body.contains("MongoConnectionFactory::from_installed_root"));
+        assert!(!body.contains("RedisConnectionFactory"));
     }
 
     #[test]
@@ -2303,7 +2298,7 @@ impl Render for OnetCliApp {
         #[cfg(target_os = "macos")]
         if sidebar_expanded {
             let tab_bar_left_padding = if auto_hide_tree {
-                cx.theme().geometry.layout.macos_title_bar_content_padding
+                one_ui::theme_geometry().layout.macos_title_bar_content_padding
             } else {
                 px(0.0)
             };
@@ -2351,7 +2346,7 @@ impl Render for OnetCliApp {
                                             if !this.connection_sidebar.read(cx).is_expanded() {
                                                 return;
                                             }
-                                            let layout = cx.theme().geometry.layout;
+                                            let layout = one_ui::theme_geometry().layout;
                                             // The navigation rail is gone; everything below
                                             // the tab bar on the left now belongs to the
                                             // tree overlay itself, so any content click

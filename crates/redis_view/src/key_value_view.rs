@@ -1,28 +1,21 @@
 //! Redis 键值视图
 
+use crate::value_table_columns::{
+    ColumnWidths, HASH_COLUMNS, LIST_COLUMNS, SET_COLUMNS, ValueColumn, ZSET_COLUMNS,
+    columns_min_row_width, render_column_resize_handle,
+};
 use crate::{
     GlobalRedisState, HashField, KeyInfo, KeyValueContent, KeyValueDetail, RedisKeyType, ZSetMember,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use gpui::{
     App, AppContext, AsyncApp, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
-    Focusable, InteractiveElement, IntoElement, ParentElement, PathPromptOptions, Render,
+    Focusable, InteractiveElement, IntoElement, ParentElement, PathPromptOptions, Pixels, Render,
     SharedString, StatefulInteractiveElement, Styled, Task, Window, div, prelude::FluentBuilder,
     px, relative,
 };
-use gpui_component::{
-    ActiveTheme, Icon, IconName, IconSize as GpuiIconSize, IndexPath, Sizable, Size,
-    WindowExt as _,
-    button::{Button, ButtonVariants as _},
-    checkbox::Checkbox,
-    dialog::DialogButtonProps,
-    h_flex,
-    input::{Input, InputEvent, InputState, Textarea, TextareaState},
-    notification::Notification,
-    radio::Radio,
-    select::{Select, SelectEvent, SelectItem, SelectState},
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Icon, IndexPath, Sizable, Size, WindowExt as _, button::{Button, ButtonVariants as _}, checkbox::Checkbox, dialog::DialogButtonProps, h_flex, input::{Input, InputEvent, InputState, Textarea, TextareaState}, notification::Notification, radio::Radio, select::{Select, SelectEvent, SelectItem, SelectState}, v_flex};
+use one_assets::IconName;
 use one_core::gpui_tokio::Tokio;
 use one_core::tab_container::{TabContent, TabContentEvent};
 use one_ui::{
@@ -240,6 +233,8 @@ pub struct KeyValueView {
     key_info: Option<KeyInfo>,
     /// 键值内容
     value_content: Option<KeyValueContent>,
+    /// 当前内容是否因数量/字节预算被截断
+    value_truncated: bool,
     /// 加载状态
     load_state: LoadState,
     /// 焦点句柄
@@ -273,6 +268,8 @@ pub struct KeyValueView {
 
     // === List 插入位置 ===
     list_insert_position: ListInsertPosition,
+    /// 集合视图的列宽（用户拖拽后按列保存）
+    column_widths: ColumnWidths,
     /// 是否允许关闭标签页
     closeable: bool,
 }
@@ -321,6 +318,7 @@ impl KeyValueView {
             current_key: None,
             key_info: None,
             value_content: None,
+            value_truncated: false,
             load_state: LoadState::Empty,
             focus_handle: cx.focus_handle(),
             is_dirty: false,
@@ -335,8 +333,19 @@ impl KeyValueView {
             sort_order: SortOrder::Asc,
             zset_sort_by: ZSetSortBy::Score,
             list_insert_position: ListInsertPosition::Tail,
+            column_widths: ColumnWidths::new(),
             closeable,
         }
+    }
+
+    /// 当前生效的列宽
+    fn column_width(&self, column: ValueColumn) -> f32 {
+        self.column_widths.width(column)
+    }
+
+    /// 记录用户拖拽后的列宽
+    fn set_column_width(&mut self, column: ValueColumn, width: Pixels) {
+        self.column_widths.resize(column, width.into());
     }
 
     /// 格式选择器变化处理
@@ -600,10 +609,11 @@ impl KeyValueView {
     }
 
     fn string_value_is_editable(&self) -> bool {
-        matches!(
-            &self.value_content,
-            Some(KeyValueContent::String(value)) if !is_binary_redis_string(value)
-        )
+        !self.value_truncated
+            && matches!(
+                &self.value_content,
+                Some(KeyValueContent::String(value)) if !is_binary_redis_string(value)
+            )
     }
 
     /// 加载键
@@ -648,6 +658,7 @@ impl KeyValueView {
                         }
                         view.key_info = Some(detail.key_info);
                         view.value_content = Some(detail.value);
+                        view.value_truncated = detail.truncated;
                         view.load_state = LoadState::Loaded;
                     }
                     Err(e) => {
@@ -2013,6 +2024,7 @@ impl KeyValueView {
                             view.current_key = None;
                             view.key_info = None;
                             view.value_content = None;
+                            view.value_truncated = false;
                             view.pending_editor_value = None;
                             view.load_state = LoadState::Empty;
                             view.is_dirty = false;
@@ -2579,7 +2591,7 @@ impl KeyValueView {
     }
 
     /// 渲染底部状态栏
-    fn render_status_bar(&self, _cx: &App) -> impl IntoElement {
+    fn render_status_bar(&self, cx: &App) -> impl IntoElement {
         let Some(info) = &self.key_info else {
             return div().into_any_element();
         };
@@ -2617,6 +2629,16 @@ impl KeyValueView {
                     })
                     .when(!memory_display.is_empty(), |this| {
                         this.child(div().child(memory_display.clone()))
+                    })
+                    .when(self.value_truncated, |this| {
+                        this.child(
+                            h_flex()
+                                .gap_1()
+                                .items_center()
+                                .text_color(cx.theme().warning)
+                                .child(Icon::new(IconName::TriangleAlert))
+                                .child(t!("KeyValueView.status_truncated").to_string()),
+                        )
                     }),
             )
             .trailing(div().child(self.view_format.display_name()))
@@ -2629,18 +2651,17 @@ impl KeyValueView {
         // 应用筛选
         let items = self.apply_filter(items);
 
+        let index_width = self.column_width(ValueColumn::ListIndex);
+        let value_width = self.column_width(ValueColumn::ListValue);
+        let action_width = self.column_width(ValueColumn::ListAction);
+        let row_min_width = columns_min_row_width(LIST_COLUMNS, &self.column_widths);
+
         v_flex()
             .id("list-value-scroll")
+            .debug_selector(|| "list-value-scroll".to_string())
             .size_full()
             .overflow_scroll()
-            .child(self.render_table_header(
-                vec![
-                    (t!("KeyValueView.column_index").to_string(), 60.0),
-                    (t!("KeyValueView.column_value").to_string(), 0.0),
-                    (t!("KeyValueView.column_action").to_string(), 120.0),
-                ],
-                cx,
-            ))
+            .child(self.render_table_header(LIST_COLUMNS, "list", cx))
             .children(items.into_iter().map({
                 let view = view.clone();
                 move |(idx, item)| {
@@ -2668,6 +2689,7 @@ impl KeyValueView {
                         .id(("list-row", idx))
                         .group("list-row")
                         .w_full()
+                        .min_w(px(row_min_width))
                         .min_h(px(40.0))
                         .px_2()
                         .items_center()
@@ -2676,18 +2698,20 @@ impl KeyValueView {
                         .hover(|this| this.bg(cx.theme().muted))
                         .child(
                             div()
-                                .w(px(60.0))
+                                .w(px(index_width))
+                                .flex_shrink_0()
                                 .text_sm()
                                 .text_color(cx.theme().muted_foreground)
                                 .child(format!("{}", idx + 1)),
                         )
                         .child(
                             h_flex()
-                                .flex_1()
+                                .w(px(value_width))
+                                .flex_shrink_0()
                                 .min_w_0()
                                 .gap_1()
                                 .items_center()
-                                .child(div().flex_1().text_base().truncate().child(display_value))
+                                .child(div().flex_1().min_w_0().text_base().truncate().child(display_value))
                                 .when(binary_item.is_none(), |this| {
                                     this.child(
                                         IconButton::new(("preview-list", idx), IconName::Maximize)
@@ -2711,9 +2735,11 @@ impl KeyValueView {
                                     )
                                 }),
                         )
+                        .child(div().flex_1())
                         .child(
                             h_flex()
-                                .w(px(120.0))
+                                .w(px(action_width))
+                                .flex_shrink_0()
                                 .justify_end()
                                 .gap_1()
                                 .opacity(0.)
@@ -2806,17 +2832,16 @@ impl KeyValueView {
         // 应用筛选
         let items = self.apply_filter(items);
 
+        let member_width = self.column_width(ValueColumn::SetMember);
+        let action_width = self.column_width(ValueColumn::SetAction);
+        let row_min_width = columns_min_row_width(SET_COLUMNS, &self.column_widths);
+
         v_flex()
             .id("set-value-scroll")
+            .debug_selector(|| "set-value-scroll".to_string())
             .size_full()
             .overflow_scroll()
-            .child(self.render_table_header(
-                vec![
-                    (t!("KeyValueView.column_member").to_string(), 0.0),
-                    (t!("KeyValueView.column_action").to_string(), 120.0),
-                ],
-                cx,
-            ))
+            .child(self.render_table_header(SET_COLUMNS, "set", cx))
             .children(items.into_iter().map({
                 let view = view.clone();
                 move |(idx, item)| {
@@ -2844,6 +2869,7 @@ impl KeyValueView {
                         .id(("set-row", idx))
                         .group("set-row")
                         .w_full()
+                        .min_w(px(row_min_width))
                         .min_h(px(40.0))
                         .px_2()
                         .items_center()
@@ -2852,7 +2878,8 @@ impl KeyValueView {
                         .hover(|this| this.bg(cx.theme().muted))
                         .child(
                             h_flex()
-                                .flex_1()
+                                .w(px(member_width))
+                                .flex_shrink_0()
                                 .min_w_0()
                                 .gap_2()
                                 .items_center()
@@ -2861,7 +2888,7 @@ impl KeyValueView {
                                         .with_size(Size::Small)
                                         .text_color(cx.theme().muted_foreground),
                                 )
-                                .child(div().flex_1().text_base().truncate().child(display_value))
+                                .child(div().flex_1().min_w_0().text_base().truncate().child(display_value))
                                 .when(binary_member.is_none(), |this| {
                                     this.child(
                                         IconButton::new(("preview-set", idx), IconName::Maximize)
@@ -2885,9 +2912,11 @@ impl KeyValueView {
                                     )
                                 }),
                         )
+                        .child(div().flex_1())
                         .child(
                             h_flex()
-                                .w(px(120.0))
+                                .w(px(action_width))
+                                .flex_shrink_0()
                                 .justify_end()
                                 .gap_1()
                                 .opacity(0.)
@@ -2993,19 +3022,18 @@ impl KeyValueView {
             }
         };
 
+        let rank_width = self.column_width(ValueColumn::ZSetRank);
+        let score_width = self.column_width(ValueColumn::ZSetScore);
+        let member_width = self.column_width(ValueColumn::ZSetMember);
+        let action_width = self.column_width(ValueColumn::ZSetAction);
+        let row_min_width = columns_min_row_width(ZSET_COLUMNS, &self.column_widths);
+
         v_flex()
             .id("zset-value-scroll")
+            .debug_selector(|| "zset-value-scroll".to_string())
             .size_full()
             .overflow_scroll()
-            .child(self.render_table_header(
-                vec![
-                    (t!("KeyValueView.column_rank").to_string(), 50.0),
-                    (t!("KeyValueView.column_score").to_string(), 140.0),
-                    (t!("KeyValueView.column_member").to_string(), 0.0),
-                    (t!("KeyValueView.column_action").to_string(), 120.0),
-                ],
-                cx,
-            ))
+            .child(self.render_table_header(ZSET_COLUMNS, "zset", cx))
             .children(filtered_items.into_iter().enumerate().map({
                 let view = view.clone();
                 move |(display_idx, (original_idx, item))| {
@@ -3052,6 +3080,7 @@ impl KeyValueView {
                         .id(("zset-row", original_idx))
                         .group("zset-row")
                         .w_full()
+                        .min_w(px(row_min_width))
                         .min_h(px(40.0))
                         .px_2()
                         .items_center()
@@ -3061,7 +3090,8 @@ impl KeyValueView {
                         // 排名徽章
                         .child(
                             div()
-                                .w(px(50.0))
+                                .w(px(rank_width))
+                                .flex_shrink_0()
                                 .text_sm()
                                 .font_weight(if display_idx < 3 {
                                     gpui::FontWeight::BOLD
@@ -3078,13 +3108,18 @@ impl KeyValueView {
                         // 分数可视化柱状图
                         .child(
                             h_flex()
-                                .w(px(140.0))
+                                .w(px(score_width))
+                                .flex_shrink_0()
+                                .overflow_hidden()
                                 .gap_2()
                                 .items_center()
                                 .child(
+                                    // 柱状图占满分数列剩余空间，长分数不会被压缩
                                     div()
+                                        .flex_1()
+                                        .min_w(px(8.0))
+                                        .max_w(px(64.0))
                                         .h(px(16.0))
-                                        .w(px(60.0))
                                         .rounded(px(2.0))
                                         .bg(cx.theme().muted)
                                         .child(
@@ -3097,6 +3132,9 @@ impl KeyValueView {
                                 )
                                 .child(
                                     div()
+                                        .id(format!("zset-score-text-{original_idx}"))
+                                        .debug_selector(|| format!("zset-score-text-{original_idx}"))
+                                        .flex_shrink_0()
                                         .text_sm()
                                         .text_color(cx.theme().primary)
                                         .child(format!("{:.2}", item.score)),
@@ -3104,11 +3142,12 @@ impl KeyValueView {
                         )
                         .child(
                             h_flex()
-                                .flex_1()
+                                .w(px(member_width))
+                                .flex_shrink_0()
                                 .min_w_0()
                                 .gap_1()
                                 .items_center()
-                                .child(div().flex_1().text_base().truncate().child(display_member))
+                                .child(div().flex_1().min_w_0().text_base().truncate().child(display_member))
                                 .when(binary_member.is_none(), |this| {
                                     this.child(
                                         IconButton::new(
@@ -3135,9 +3174,11 @@ impl KeyValueView {
                                     )
                                 }),
                         )
+                        .child(div().flex_1())
                         .child(
                             h_flex()
-                                .w(px(120.0))
+                                .w(px(action_width))
+                                .flex_shrink_0()
                                 .justify_end()
                                 .gap_1()
                                 .opacity(0.)
@@ -3235,18 +3276,17 @@ impl KeyValueView {
         // 应用筛选
         let items = self.apply_filter_hash(items);
 
+        let field_width = self.column_width(ValueColumn::HashField);
+        let value_width = self.column_width(ValueColumn::HashValue);
+        let action_width = self.column_width(ValueColumn::HashAction);
+        let row_min_width = columns_min_row_width(HASH_COLUMNS, &self.column_widths);
+
         v_flex()
             .id("hash-value-scroll")
+            .debug_selector(|| "hash-value-scroll".to_string())
             .size_full()
             .overflow_scroll()
-            .child(self.render_table_header(
-                vec![
-                    (t!("KeyValueView.column_field").to_string(), 150.0),
-                    (t!("KeyValueView.column_value").to_string(), 0.0),
-                    (t!("KeyValueView.column_action").to_string(), 120.0),
-                ],
-                cx,
-            ))
+            .child(self.render_table_header(HASH_COLUMNS, "hash", cx))
             .children(items.into_iter().map({
                 let view = view.clone();
                 move |(idx, item)| {
@@ -3289,6 +3329,7 @@ impl KeyValueView {
                         .id(("hash-row", idx))
                         .group("hash-row")
                         .w_full()
+                        .min_w(px(row_min_width))
                         .min_h(px(40.0))
                         .px_2()
                         .items_center()
@@ -3297,7 +3338,8 @@ impl KeyValueView {
                         .hover(|this| this.bg(cx.theme().muted))
                         .child(
                             div()
-                                .w(px(150.0))
+                                .w(px(field_width))
+                                .flex_shrink_0()
                                 .text_base()
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .truncate()
@@ -3305,11 +3347,12 @@ impl KeyValueView {
                         )
                         .child(
                             h_flex()
-                                .flex_1()
+                                .w(px(value_width))
+                                .flex_shrink_0()
                                 .min_w_0()
                                 .gap_1()
                                 .items_center()
-                                .child(div().flex_1().text_base().truncate().child(value_display))
+                                .child(div().flex_1().min_w_0().text_base().truncate().child(value_display))
                                 .when(binary_value.is_none(), |this| {
                                     this.child(
                                         IconButton::new(("preview-hash", idx), IconName::Maximize)
@@ -3333,9 +3376,11 @@ impl KeyValueView {
                                     )
                                 }),
                         )
+                        .child(div().flex_1())
                         .child(
                             h_flex()
-                                .w(px(120.0))
+                                .w(px(action_width))
+                                .flex_shrink_0()
                                 .justify_end()
                                 .gap_1()
                                 .opacity(0.)
@@ -3449,13 +3494,21 @@ impl KeyValueView {
     }
 
     /// 渲染表格头部
+    ///
+    /// 除尾部操作列外，每列都会带一个可拖拽的列宽分隔条；操作列前会插入一段
+    /// 弹性填充，使其始终贴在表格右侧。表头宽度不会小于各列宽度之和，
+    /// 超出可视区域时由外层滚动容器横向滚动。
     fn render_table_header(
         &self,
-        columns: Vec<(String, f32)>,
+        columns: &[ValueColumn],
+        table_id: &'static str,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let mut header = h_flex()
+            .id(format!("{table_id}-value-header"))
+            .debug_selector(|| format!("{table_id}-value-header"))
             .w_full()
+            .min_w(px(columns_min_row_width(columns, &self.column_widths)))
             .h(px(36.0))
             .px_2()
             .items_center()
@@ -3464,19 +3517,30 @@ impl KeyValueView {
             .bg(cx.theme().muted);
 
         let last_index = columns.len().saturating_sub(1);
-        for (index, (name, width)) in columns.into_iter().enumerate() {
-            let col = div().text_sm().font_weight(gpui::FontWeight::SEMIBOLD);
-
-            if width > 0.0 {
-                let col = col.w(px(width));
-                if index == last_index {
-                    header = header.child(col.text_right().child(name));
-                } else {
-                    header = header.child(col.child(name));
-                }
-            } else {
-                header = header.child(col.flex_1().child(name));
+        for (index, column) in columns.iter().copied().enumerate() {
+            let is_action = index == last_index;
+            if is_action {
+                header = header.child(div().flex_1());
             }
+
+            let label = t!(column.label()).to_string();
+            let cell = div()
+                .relative()
+                .w(px(self.column_width(column)))
+                .flex_shrink_0()
+                .overflow_hidden()
+                .text_sm()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .when(is_action, |this| this.text_right())
+                .child(label)
+                .child(render_column_resize_handle(
+                    column,
+                    cx,
+                    |view: &Self, column| px(view.column_width(column)),
+                    |view: &mut Self, column, width| view.set_column_width(column, width),
+                ));
+
+            header = header.child(cell);
         }
 
         header
@@ -3691,7 +3755,7 @@ impl KeyValueView {
         ContentState::empty(t!("KeyValueView.select_key_placeholder")).icon(
             Icon::new(IconName::Database)
                 .color()
-                .with_size(GpuiIconSize::Large),
+                .with_size(IconSize::Large),
         )
     }
 
@@ -3759,8 +3823,11 @@ mod tests {
         redis_bytes_display, redis_bytes_pair_copy_text, redis_bytes_text,
         should_replace_set_member, zset_member_copy_text,
     };
-    use crate::{KeyInfo, RedisKeyType};
-    use gpui::{AppContext, TestAppContext, VisualTestContext, WindowOptions};
+    use crate::{HashField, KeyInfo, RedisKeyType, ZSetMember};
+    use gpui::{
+        AppContext, Bounds, TestAppContext, VisualTestContext, WindowBounds, WindowOptions, px,
+        size,
+    };
     use gpui_component::Root;
 
     #[gpui::test]
@@ -4007,6 +4074,311 @@ mod tests {
     fn should_replace_set_member_detects_changes() {
         assert!(should_replace_set_member("old", "new"));
         assert!(!should_replace_set_member("same", "same"));
+    }
+
+    /// issue #180：集合视图的列需要可拖拽，长 score / 长 member 不能把列挤坏。
+    #[gpui::test]
+    fn collection_value_views_render_with_draggable_columns(cx: &mut TestAppContext) {
+        use crate::value_table_columns::ValueColumn;
+
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+
+        let (window, view) = cx.update(|cx| {
+            let mut view = None;
+            let window = cx
+                .open_window(WindowOptions::default(), |window, cx| {
+                    let entity = cx.new(|cx| KeyValueView::new(window, cx));
+                    view = Some(entity.clone());
+                    cx.new(|cx| Root::new(entity, window, cx))
+                })
+                .expect("open Redis key value test window");
+            (window, view.expect("key value view"))
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+
+        let cases = [
+            (
+                RedisKeyType::List,
+                KeyValueContent::List(vec![b"list-value-with-a-long-payload".to_vec()]),
+                ValueColumn::ListValue,
+            ),
+            (
+                RedisKeyType::Set,
+                KeyValueContent::Set(vec![b"set-member-with-a-long-payload".to_vec()]),
+                ValueColumn::SetMember,
+            ),
+            (
+                RedisKeyType::ZSet,
+                KeyValueContent::ZSet(vec![ZSetMember {
+                    score: 3092204106115286.0,
+                    member: "009\u{2164}A0186325P18227615E27P6".as_bytes().to_vec(),
+                }]),
+                ValueColumn::ZSetMember,
+            ),
+            (
+                RedisKeyType::Hash,
+                KeyValueContent::Hash(vec![HashField {
+                    field: b"hash-field-with-a-long-payload".to_vec(),
+                    value: b"hash-value-with-a-long-payload".to_vec(),
+                }]),
+                ValueColumn::HashValue,
+            ),
+        ];
+
+        for (key_type, content, column) in cases {
+            view.update_in(&mut cx, |view, _window, cx| {
+                view.key_info = Some(KeyInfo::new("issue-180".into(), key_type));
+                view.value_content = Some(content);
+                view.load_state = LoadState::Loaded;
+                cx.notify();
+            });
+            cx.run_until_parked();
+
+            assert_eq!(
+                column.default_width(),
+                view.read_with(&cx, |view, _| view.column_width(column)),
+                "collection view should start from the declared column width"
+            );
+
+            view.update_in(&mut cx, |view, _window, cx| {
+                view.set_column_width(column, px(512.0));
+                cx.notify();
+            });
+            cx.run_until_parked();
+        }
+
+        assert_eq!(
+            512.0,
+            view.read_with(&cx, |view, _| view.column_width(ValueColumn::HashValue)),
+            "dragging a column must persist the new width"
+        );
+    }
+
+    /// issue #180：ZSet 表格在窄面板下不能被压缩到不可读，而应横向滚动。
+    #[gpui::test]
+    fn zset_table_keeps_column_widths_and_scrolls_horizontally(cx: &mut TestAppContext) {
+        use crate::value_table_columns::{ColumnWidths, ZSET_COLUMNS, columns_min_row_width};
+
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+
+        let window = cx.update(|cx| {
+            let window_bounds = Bounds::centered(None, size(px(360.0), px(600.0)), cx);
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(window_bounds)),
+                    ..Default::default()
+                },
+                |window, cx| {
+                    let entity = cx.new(|cx| KeyValueView::new(window, cx));
+                    entity.update(cx, |view, cx| {
+                        view.key_info = Some(KeyInfo::new("issue-180".into(), RedisKeyType::ZSet));
+                        view.value_content = Some(KeyValueContent::ZSet(vec![
+                            ZSetMember {
+                                score: 3092204106115286.0,
+                                member: "009\u{2164}A0186325P18227615E27P6".as_bytes().to_vec(),
+                            },
+                            ZSetMember {
+                                score: 42.0,
+                                member: b"second-member".to_vec(),
+                            },
+                        ]));
+                        view.load_state = LoadState::Loaded;
+                        cx.notify();
+                    });
+                    cx.new(|cx| Root::new(entity, window, cx))
+                },
+            )
+            .expect("open Redis key value test window")
+        });
+
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+
+        let expected_width = columns_min_row_width(ZSET_COLUMNS, &ColumnWidths::new());
+        let scroll = cx
+            .debug_bounds("zset-value-scroll")
+            .expect("zset table scroll container lays out");
+        let header = cx
+            .debug_bounds("zset-value-header")
+            .expect("zset table header lays out");
+
+        assert!(
+            scroll.size.width < px(expected_width),
+            "this test is only meaningful when the panel is narrower than the table"
+        );
+        assert!(
+            header.size.width >= px(expected_width),
+            "the header must keep the width of its columns, got {} but expected at least {expected_width}",
+            header.size.width
+        );
+        assert!(
+            header.right() > scroll.right(),
+            "columns wider than the panel must overflow into a horizontal scrollbar instead of being squeezed"
+        );
+
+        // 面板变宽后，表格应重新铺满可用宽度，而不是留下空白。
+        cx.simulate_window_resize(*window, size(px(1200.0), px(600.0)));
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+
+        let scroll = cx
+            .debug_bounds("zset-value-scroll")
+            .expect("zset table scroll container lays out after resize");
+        let header = cx
+            .debug_bounds("zset-value-header")
+            .expect("zset table header lays out after resize");
+
+        assert!(
+            scroll.size.width > px(expected_width),
+            "resizing the window should widen the panel past the table columns"
+        );
+        assert_eq!(
+            scroll.right(),
+            header.right(),
+            "the table must fill the panel when there is enough room"
+        );
+    }
+
+    /// issue #180：表头上的列宽分隔条必须真的可以被拖动。
+    #[gpui::test]
+    fn dragging_the_zset_score_resize_handle_widens_the_column(cx: &mut TestAppContext) {
+        use crate::value_table_columns::ValueColumn;
+        use gpui::{MouseButton, Modifiers, point};
+
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+
+        let (window, view) = cx.update(|cx| {
+            let window_bounds = Bounds::centered(None, size(px(360.0), px(600.0)), cx);
+            let mut view = None;
+            let window = cx
+                .open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(window_bounds)),
+                        ..Default::default()
+                    },
+                    |window, cx| {
+                        let entity = cx.new(|cx| KeyValueView::new(window, cx));
+                        entity.update(cx, |view, cx| {
+                            view.key_info =
+                                Some(KeyInfo::new("issue-180".into(), RedisKeyType::ZSet));
+                            view.value_content = Some(KeyValueContent::ZSet(vec![ZSetMember {
+                                score: 3092204106115286.0,
+                                member: b"member".to_vec(),
+                            }]));
+                            view.load_state = LoadState::Loaded;
+                            cx.notify();
+                        });
+                        view = Some(entity.clone());
+                        cx.new(|cx| Root::new(entity, window, cx))
+                    },
+                )
+                .expect("open Redis key value test window");
+            (window, view.expect("key value view"))
+        });
+
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+
+        let handle = cx
+            .debug_bounds("value-column-resize-zset-score")
+            .expect("zset score resize handle lays out");
+        let width_before = view.read_with(&cx, |view, _| view.column_width(ValueColumn::ZSetScore));
+
+        let start = handle.center();
+        let end = point(start.x + px(60.0), start.y);
+        cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_move(end, MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_move(
+            point(end.x + px(1.0), end.y),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::default());
+        cx.run_until_parked();
+
+        let width_after = view.read_with(&cx, |view, _| view.column_width(ValueColumn::ZSetScore));
+        assert!(
+            width_after >= width_before + 40.0,
+            "dragging the score column handle ~60px right must widen it, got {width_before} then {width_after}"
+        );
+    }
+
+    /// issue #180：长 score 不能被列宽压缩，多余空间应留给柱状图。
+    #[gpui::test]
+    fn long_zset_score_is_not_squeezed_by_the_column_width(cx: &mut TestAppContext) {
+        use crate::value_table_columns::ValueColumn;
+
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+
+        let (window, view) = cx.update(|cx| {
+            let window_bounds = Bounds::centered(None, size(px(1200.0), px(600.0)), cx);
+            let mut view = None;
+            let window = cx
+                .open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(window_bounds)),
+                        ..Default::default()
+                    },
+                    |window, cx| {
+                        let entity = cx.new(|cx| KeyValueView::new(window, cx));
+                        entity.update(cx, |view, cx| {
+                            view.key_info =
+                                Some(KeyInfo::new("issue-180".into(), RedisKeyType::ZSet));
+                            view.value_content = Some(KeyValueContent::ZSet(vec![ZSetMember {
+                                score: 3092204106115286.0,
+                                member: b"member".to_vec(),
+                            }]));
+                            view.load_state = LoadState::Loaded;
+                            cx.notify();
+                        });
+                        view = Some(entity.clone());
+                        cx.new(|cx| Root::new(entity, window, cx))
+                    },
+                )
+                .expect("open Redis key value test window");
+            (window, view.expect("key value view"))
+        });
+
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+
+        let default_text = cx
+            .debug_bounds("zset-score-text-0")
+            .expect("score text lays out at the default column width");
+        assert!(
+            default_text.size.width >= px(60.0),
+            "a 16 digit score must render at its natural width, got {}",
+            default_text.size.width
+        );
+
+        view.update_in(&mut cx, |view, _window, cx| {
+            view.set_column_width(ValueColumn::ZSetScore, px(600.0));
+            cx.notify();
+        });
+        cx.run_until_parked();
+
+        let widened_text = cx
+            .debug_bounds("zset-score-text-0")
+            .expect("score text lays out after widening the column");
+        assert_eq!(
+            default_text.size.width, widened_text.size.width,
+            "widening the score column must give the extra space to the bar, not to the score text"
+        );
     }
 }
 

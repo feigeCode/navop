@@ -20,16 +20,14 @@ use db::{
     ipc::{IpcDriverRegistry, driver_icon_from_asset_path, driver_icon_from_file_path},
 };
 use gpui::{
-    AnyElement, App, AppContext, AsyncApp, Axis, Bounds, ColorExt, Context, Element, Entity,
+    AnyElement, App, AppContext, AsyncApp, Axis, Bounds, Context, Element, Entity,
     EventEmitter, FocusHandle, Focusable, FontWeight, InteractiveElement, IntoElement,
     MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, Render, SharedString,
     StatefulInteractiveElement as _, Style, Styled, Task, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::WindowExt;
-use gpui_component::{
-    ActiveTheme, ElementExt as _, Icon, IconName, Sizable, Size, h_flex,
-    notification::Notification, v_flex,
-};
+use gpui_component::{ActiveTheme, ElementExt as _, Icon, Sizable, Size, h_flex, notification::Notification, v_flex};
+use one_assets::IconName;
 use one_core::layout::{SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, TOOLBAR_WIDTH};
 use one_core::sidebar_contribution::{
     SidebarContribution, SidebarPanelChrome, SidebarPanelId, SidebarPanelPolicy, SidebarPanelSize,

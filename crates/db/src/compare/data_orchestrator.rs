@@ -20,8 +20,9 @@ use super::{
     DataCompareTableDependency, DataCompareTableFailure, DataCompareTablePair, RowData, SyncPlan,
     TableSchema, append_table_data_page, build_table_data_request, common_column_mappings,
     compare_data_rows, data_compare_next_page_size, data_compare_paging_decision, identifier_key,
-    map_column_type, normalize_compare_table_data_response, rows_from_query_result_with_mappings,
-    table_data_terminal_probe_required, table_schema_from_columns,
+    map_column_type, normalize_compare_table_data_response, resync_typed_batch,
+    rows_from_query_result_with_mappings, table_data_terminal_probe_required,
+    table_schema_from_columns,
 };
 
 /// Records one table result without allowing a single table failure to discard
@@ -1081,10 +1082,14 @@ fn namespace_matches_scope(
 pub fn build_data_compare_result(
     pair: DataCompareTablePair,
     key_columns: Vec<String>,
-    source_response: TableDataResponse,
-    target_response: TableDataResponse,
+    mut source_response: TableDataResponse,
+    mut target_response: TableDataResponse,
     case_sensitive_identifiers: bool,
 ) -> anyhow::Result<DataCompareResult> {
+    // The compare chain prefers the in-process typed batch when one is present,
+    // so reconcile it with the legacy projection the callers own before reading.
+    resync_typed_batch(&mut source_response.query_result, false);
+    resync_typed_batch(&mut target_response.query_result, false);
     validate_unique_query_columns(
         &source_response.query_result.columns,
         "source result columns",
@@ -1204,6 +1209,7 @@ fn empty_target_response_from_columns(columns: &[ColumnInfo]) -> TableDataRespon
             rows: Vec::new(),
             binary_cells: Vec::new(),
             elapsed_ms: 0,
+            ..Default::default()
         },
     }
 }
@@ -1774,5 +1780,83 @@ mod tests {
         assert!(error.to_string().contains("TIMESTAMPTZ(9)"));
         assert!(error.to_string().contains("无法安全映射"));
         assert!(error.to_string().contains("精度"));
+    }
+
+    fn table_response(columns: &[&str], rows: Vec<Vec<Option<&str>>>) -> TableDataResponse {
+        TableDataResponse {
+            total_count: rows.len(),
+            page: 1,
+            page_size: 10,
+            duration: 0,
+            query_result: QueryResult {
+                sql: String::new(),
+                columns: columns.iter().map(|column| (*column).to_string()).collect(),
+                column_meta: columns
+                    .iter()
+                    .map(|column| QueryColumnMeta::new(*column, "TEXT"))
+                    .collect(),
+                rows: rows
+                    .into_iter()
+                    .map(|row| {
+                        row.into_iter()
+                            .map(|value| value.map(str::to_string))
+                            .collect()
+                    })
+                    .collect(),
+                binary_cells: Vec::new(),
+                elapsed_ms: 0,
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn build_data_compare_result_resyncs_stale_typed_batch_before_comparing() {
+        let mut source = table_response(&["id", "value"], vec![vec![Some("1"), Some("new")]]);
+        source.query_result.typed_batch = Some(std::sync::Arc::new(
+            db_value::ResultBatch::try_new(
+                0,
+                ["id", "value"]
+                    .into_iter()
+                    .map(|label| db_value::ColumnDescriptor {
+                        id: label.to_string(),
+                        label: label.to_string(),
+                        native_type: "TEXT".to_string(),
+                        logical_type: "Text".to_string(),
+                        nullable: db_value::Nullability::Unknown,
+                        charset: None,
+                        collation: None,
+                        precision: None,
+                        scale: None,
+                    })
+                    .collect(),
+                vec![db_value::ResultRow {
+                    id: 0,
+                    cells: vec![
+                        db_value::CellState::Decoded(db_value::DbValue::Integer("1".to_string())),
+                        db_value::CellState::Decoded(db_value::DbValue::Text("old".to_string())),
+                    ],
+                }],
+                true,
+            )
+            .unwrap(),
+        ));
+        let target = table_response(&["id", "value"], vec![vec![Some("1"), Some("new")]]);
+
+        let result = build_data_compare_result(
+            DataCompareTablePair {
+                source_table: "t".to_string(),
+                target_table: "t".to_string(),
+            },
+            vec!["id".to_string()],
+            source,
+            target,
+            false,
+        )
+        .unwrap();
+
+        assert!(result.modified.is_empty());
+        assert!(result.added.is_empty());
+        assert!(result.removed.is_empty());
     }
 }

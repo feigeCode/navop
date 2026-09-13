@@ -5,6 +5,7 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+one-assets = { workspace = true }
 anyhow = { workspace = true }
 dunce = "1.0"
 gpui = { workspace = true }
@@ -23,7 +24,15 @@ smallvec = { workspace = true }
 rust-i18n = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-cocoa = "=0.26.0"
+# 与 gpui-pre 的 objc2 生态版本保持一致(见 gpui-pre 根 Cargo.toml)。
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3.2", features = ["NSPasteboard"] }
+objc2-foundation = { version = "0.3.2", features = [
+    "NSArray",
+    "NSData",
+    "NSURL",
+    "NSString",
+] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = [

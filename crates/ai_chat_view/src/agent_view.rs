@@ -20,21 +20,12 @@ use agent_runtime::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Anchor, App, AppContext, ColorExt as _, Context, Entity, EventEmitter, FontWeight,
+    Anchor, App, AppContext as _, Context, Entity, EventEmitter, FontWeight,
     InteractiveElement, IntoElement, ParentElement, Render, ScrollHandle, SharedString,
     StatefulInteractiveElement, Styled, Subscription, Task, Window, div, px,
 };
-use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, Selectable, Sizable, WindowExt as _,
-    button::{Button, ButtonCustomVariant, ButtonVariants},
-    dialog::DialogButtonProps,
-    h_flex,
-    input::{Input, InputState},
-    menu::{DropdownMenu, PopupMenu, PopupMenuItem},
-    popover::Popover,
-    spinner::Spinner,
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Disableable, Icon, Selectable, Sizable, WindowExt as _, button::{Button, ButtonCustomVariant, ButtonVariants}, dialog::DialogButtonProps, h_flex, input::{Input, InputState}, menu::{DropdownMenu, PopupMenu, PopupMenuItem}, popover::Popover, spinner::Spinner, v_flex};
+use one_assets::IconName;
 #[cfg(not(test))]
 use one_core::gpui_tokio::Tokio;
 use one_core::llm::{GlobalProviderState, LlmConnector, LlmProvider, ProviderConfig};
@@ -862,8 +853,16 @@ pub struct AgentChatView {
     tool_options: Vec<ComposerMenuOption>,
     runtime_factory: Option<AgentRuntimeFactory>,
     is_running: bool,
-    /// 系统提示词（可选，用于自定义 AI 行为）。
+    /// 当前系统提示词追加指令。
+    ///
+    /// 来自全局设置或外部显式调用 [`Self::set_system_instruction`]（如终端侧边栏
+    /// 的连接上下文指令），两者都追加在固定的系统提示词模板之后。
     system_instruction: Option<String>,
+    /// 当前指令是否来自全局设置（而非外部显式注入）。
+    ///
+    /// 来自设置时，新会话/切换模型会跟随设置的最新值刷新（包括清空）；外部显式注入
+    /// 的指令保持不变。默认来源为设置，即使当前设置为空。
+    system_instruction_from_settings: bool,
     /// 代码块操作注册表。
     code_block_actions: CodeBlockActionRegistry,
     /// 可选的局部聊天主题。
@@ -987,6 +986,13 @@ impl AgentChatView {
 
         let tool_execution_mode =
             runtime_tool_execution_mode(AppSettings::current(cx).ai_chat.tool_execution_mode);
+        // 默认来源为全局设置：初始化时用当前设置作种子值，之后新会话/切换模型都会
+        // 跟随设置刷新（包括配置被清空）。外部显式注入会通过 set_system_instruction
+        // 覆盖来源并保持不变。
+        let seed_system_instruction = AppSettings::current(cx)
+            .ai_chat
+            .effective_custom_system_prompt();
+        let system_instruction_from_settings = true;
         let tool_options = default_tool_options();
 
         let skills = AgentSkillState::load_default();
@@ -1037,7 +1043,7 @@ impl AgentChatView {
             false,
         );
 
-        Self {
+        let new_view = Self {
             runtime,
             session_id,
             resources,
@@ -1085,14 +1091,19 @@ impl AgentChatView {
             tool_options,
             runtime_factory,
             is_running: false,
-            system_instruction: None,
+            system_instruction: seed_system_instruction,
+            system_instruction_from_settings,
             theme,
             code_block_actions: CodeBlockActionRegistry::new(),
             _subscriptions: subscriptions,
             _event_task: event_task,
             _acp_permission_task: None,
             _acp_public_mcp_approval_task: None,
+        };
+        if new_view.system_instruction.is_some() {
+            new_view.apply_system_instruction_to_current_session();
         }
+        new_view
     }
 
     fn register_approval_actions(cx: &mut Context<Self>) {
@@ -2648,6 +2659,11 @@ impl AgentChatView {
                 self.persist_current(cx);
                 self.runtime = binding.runtime;
                 self.session_id = binding.session_id;
+                if self.system_instruction_from_settings {
+                    self.system_instruction = AppSettings::current(cx)
+                        .ai_chat
+                        .effective_custom_system_prompt();
+                }
                 self.apply_system_instruction_to_current_session();
                 self.sync_session_skills();
                 self.selected_model = binding.selected_model;
@@ -2848,6 +2864,12 @@ impl AgentChatView {
         self.stash_current_transcript();
         let session = self.runtime.create_session(self.resources.clone());
         self.session_id = session.id().clone();
+        if self.system_instruction_from_settings {
+            // 新会话跟随设置的最新值（含清空）；外部显式指令保持不变。
+            self.system_instruction = AppSettings::current(cx)
+                .ai_chat
+                .effective_custom_system_prompt();
+        }
         self.apply_system_instruction_to_current_session();
         self.sync_session_skills();
         self.current_session = self.session_id.to_string();
@@ -3073,8 +3095,16 @@ impl AgentChatView {
         };
         self.closed_sessions.remove(uid);
         self.session_id = target.id().clone();
-        self.system_instruction = target.system_instruction();
+        // 快照自带指令的会话优先快照值（行为可复现）；没有指令的旧会话回落到
+        // 当前全局设置（可能为空），并继续保持来源跟随设置。
+        self.system_instruction = target.system_instruction().or_else(|| {
+            AppSettings::current(cx)
+                .ai_chat
+                .effective_custom_system_prompt()
+        });
+        self.system_instruction_from_settings = target.system_instruction().is_none();
         self.current_session = self.session_id.to_string();
+        self.apply_system_instruction_to_current_session();
         if let Some(transcript) = self.remove_cached_session_transcript(uid) {
             self.transcript = transcript;
         } else {
@@ -3226,6 +3256,7 @@ impl AgentChatView {
     /// 设置系统提示词（用于自定义 AI 行为）。
     pub fn set_system_instruction(&mut self, instruction: Option<String>, cx: &mut Context<Self>) {
         self.system_instruction = instruction.clone();
+        self.system_instruction_from_settings = false;
         self.apply_system_instruction_to_current_session();
         cx.notify();
     }
@@ -3482,7 +3513,7 @@ impl AgentChatView {
     fn render_sidebar(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         if self.sidebar_collapsed {
             return v_flex()
-                .w(cx.theme().geometry.layout.compact_rail)
+                .w(one_ui::theme_geometry().layout.compact_rail)
                 .h_full()
                 .flex_shrink_0()
                 .border_r_1()
@@ -3536,7 +3567,7 @@ impl AgentChatView {
         };
 
         v_flex()
-            .w(cx.theme().geometry.layout.context_sidebar_default)
+            .w(one_ui::theme_geometry().layout.context_sidebar_default)
             .h_full()
             .min_h_0()
             .flex_shrink_0()
@@ -3708,7 +3739,7 @@ impl AgentChatView {
             .child(
                 PanelHeader::new("agent-history-header")
                     .variant(PanelHeaderVariant::Sidebar)
-                    .horizontal_padding(cx.theme().geometry.spacing.space_2)
+                    .horizontal_padding(one_ui::theme_geometry().spacing.space_2)
                     .background(theme.background)
                     .border_color(border)
                     .title(
@@ -3769,7 +3800,7 @@ impl AgentChatView {
         let theme = resolve_agent_chat_theme(self.theme.as_ref(), cx);
         PanelHeader::new("agent-chat-toolbar")
             .variant(PanelHeaderVariant::Toolbar)
-            .horizontal_padding(cx.theme().geometry.spacing.space_4)
+            .horizontal_padding(one_ui::theme_geometry().spacing.space_4)
             .background(theme.background)
             .border_color(theme.border)
             .title(self.render_agent_switcher(cx))
@@ -4848,8 +4879,7 @@ mod tests {
         point, px,
     };
     use one_core::llm::{ProviderConfig, ProviderType};
-    use palette::IntoColor as _;
-    use serde_json::json;
+        use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct WriteTool;
@@ -8289,6 +8319,157 @@ mod tests {
     }
 
     #[gpui::test]
+    fn gpui_custom_system_prompt_from_settings_seeds_new_view(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        cx.update(|cx| {
+            let mut settings = AppSettings::default();
+            settings.ai_chat.custom_system_prompt = "  始终用 DBA 视角回答。\n".into();
+            cx.set_global(settings);
+        });
+        let model = Arc::new(MockModelClient::new([ModelResponse::text("好的。")]));
+        let runtime = test_runtime_with_model(model.clone());
+        let config = AgentChatViewConfig::new(runtime, ResourceContext::new(), vec![]);
+
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        view.update_in(cx, |view, window, cx| {
+            let input = view.input.clone();
+            view.on_input_event(
+                &input,
+                &AgentInputEvent::Submit {
+                    text: "解释一下索引".into(),
+                    mentions: Vec::new(),
+                    images: Vec::new(),
+                },
+                window,
+                cx,
+            );
+        });
+        run_gpui_until(cx, || model.request_count() >= 1);
+
+        let requests = model.received_requests();
+        assert!(
+            requests[0].messages[0]
+                .content_as_text()
+                .contains("始终用 DBA 视角回答。")
+        );
+    }
+
+    #[gpui::test]
+    fn gpui_settings_prompt_filled_after_empty_view_applies_to_new_session(
+        cx: &mut TestAppContext,
+    ) {
+        init_test_ui(cx);
+        cx.update(|cx| {
+            cx.set_global(AppSettings::default());
+        });
+        let model = Arc::new(MockModelClient::new([ModelResponse::text("好的。")]));
+        let runtime = test_runtime_with_model(model.clone());
+        let config = AgentChatViewConfig::new(runtime, ResourceContext::new(), vec![]);
+
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        // 视图打开时设置为空；随后填写设置，再新建会话应跟随设置刷新。
+        view.update(cx, |view, cx| {
+            let mut settings = AppSettings::current(cx);
+            settings.ai_chat.custom_system_prompt = "空白后填写的人设。".into();
+            cx.set_global(settings);
+            view.start_fresh_session(cx);
+        });
+        view.update_in(cx, |view, window, cx| {
+            let input = view.input.clone();
+            view.on_input_event(
+                &input,
+                &AgentInputEvent::Submit {
+                    text: "解释一下索引".into(),
+                    mentions: Vec::new(),
+                    images: Vec::new(),
+                },
+                window,
+                cx,
+            );
+        });
+        run_gpui_until(cx, || model.request_count() >= 1);
+
+        let requests = model.received_requests();
+        assert!(
+            requests[0].messages[0]
+                .content_as_text()
+                .contains("空白后填写的人设。"),
+            "设置为空时打开视图，之后填写设置，新会话仍应跟随设置"
+        );
+    }
+
+    #[gpui::test]
+    fn gpui_external_system_instruction_wins_over_settings_seed(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        cx.update(|cx| {
+            let mut settings = AppSettings::default();
+            settings.ai_chat.custom_system_prompt = "设置里的人设。".into();
+            cx.set_global(settings);
+        });
+        let model = Arc::new(MockModelClient::new([ModelResponse::text("好的。")]));
+        let runtime = test_runtime_with_model(model.clone());
+        let config = AgentChatViewConfig::new(runtime, ResourceContext::new(), vec![]);
+
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        view.update_in(cx, |view, window, cx| {
+            view.set_system_instruction(Some("外部显式指令。".into()), cx);
+            let input = view.input.clone();
+            view.on_input_event(
+                &input,
+                &AgentInputEvent::Submit {
+                    text: "解释一下索引".into(),
+                    mentions: Vec::new(),
+                    images: Vec::new(),
+                },
+                window,
+                cx,
+            );
+        });
+        run_gpui_until(cx, || model.request_count() >= 1);
+
+        let requests = model.received_requests();
+        let prompt = requests[0].messages[0].content_as_text();
+        assert!(prompt.contains("外部显式指令。"));
+        assert!(!prompt.contains("设置里的人设。"));
+    }
+
+    #[gpui::test]
+    fn gpui_session_switch_restores_snapshot_instruction_for_local_sessions(
+        cx: &mut TestAppContext,
+    ) {
+        init_test_ui(cx);
+        let runtime = test_runtime("m");
+        let config = AgentChatViewConfig::new(runtime.clone(), ResourceContext::new(), vec![]);
+
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let first_id = view.read_with(cx, |view, _| view.session_id.clone());
+        view.update(cx, |view, cx| {
+            // 第一个会话带外部显式指令（模拟旧版行为），随后新建第二个会话。
+            view.set_system_instruction(Some("旧会话指令。".into()), cx);
+            view.start_fresh_session(cx);
+        });
+        let second_id = view.read_with(cx, |view, _| view.session_id.clone());
+        assert_ne!(first_id, second_id);
+
+        // 切回第一个会话：快照值优先，且外部指令不被全局设置覆盖。
+        view.update(cx, |view, cx| {
+            view.switch_session(&first_id.to_string(), cx);
+        });
+        view.read_with(cx, |view, _| {
+            assert!(!view.system_instruction_from_settings);
+        });
+        let session = runtime.session(&first_id).expect("session should exist");
+        assert_eq!(
+            session.system_instruction().as_deref(),
+            Some("旧会话指令。")
+        );
+    }
+
+    #[gpui::test]
     fn gpui_system_instruction_survives_new_local_session(cx: &mut TestAppContext) {
         init_test_ui(cx);
         let runtime = test_runtime("m");
@@ -8667,14 +8848,14 @@ mod tests {
 
     #[test]
     fn background_running_session_uses_readable_foreground_color() {
-        let foreground = gpui::rgb(0xf8fafc).into_color();
-        let selected_foreground = gpui::rgb(0xe2e8f0).into_color();
+        let foreground = gpui::rgb(0xf8fafc).into();
+        let selected_foreground = gpui::rgb(0xe2e8f0).into();
         let style = SessionRowStyle {
             foreground,
-            muted_foreground: gpui::rgb(0x64748b).into_color(),
-            selected_background: gpui::rgb(0x1e293b).into_color(),
+            muted_foreground: gpui::rgb(0x64748b).into(),
+            selected_background: gpui::rgb(0x1e293b).into(),
             selected_foreground,
-            hover_background: gpui::rgb(0x0f172a).into_color(),
+            hover_background: gpui::rgb(0x0f172a).into(),
         };
 
         assert_eq!(

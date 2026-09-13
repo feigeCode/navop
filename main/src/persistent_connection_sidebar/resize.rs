@@ -34,7 +34,7 @@ pub(super) fn resized_connection_tree_width(
 impl PersistentConnectionSidebar {
     pub(super) fn render_tree_resize_handle(&self, cx: &Context<Self>) -> impl IntoElement {
         let initial_x = Rc::new(Cell::new(None));
-        let resize = cx.theme().geometry.resize;
+        let resize = one_ui::theme_geometry().resize;
 
         div()
             .id("persistent-connection-tree-resize")
@@ -93,7 +93,7 @@ impl PersistentConnectionSidebar {
         let Some(initial_x) = drag.initial_x.get() else {
             return;
         };
-        let layout = cx.theme().geometry.layout;
+        let layout = one_ui::theme_geometry().layout;
         let width = resized_connection_tree_width(
             drag.initial_width,
             initial_x,

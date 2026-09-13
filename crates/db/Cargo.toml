@@ -8,6 +8,8 @@ default = []
 builtin-duckdb = ["dep:duckdb"]
 
 [dependencies]
+db-value.workspace = true
+one-assets = { workspace = true }
 anyhow.workspace = true
 async-trait.workspace = true
 base64.workspace = true
@@ -35,7 +37,6 @@ tiberius.workspace = true
 tokio-util = { workspace = true, features = ["compat"] }
 oracle.workspace = true
 clickhouse.workspace = true
-taos.workspace = true
 one-core.workspace = true
 ssh.workspace = true
 sqlformat.workspace = true

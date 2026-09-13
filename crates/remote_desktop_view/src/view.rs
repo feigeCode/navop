@@ -7,7 +7,8 @@ use std::sync::atomic::Ordering;
 use std::{cell::RefCell, rc::Rc};
 
 use gpui::*;
-use gpui_component::{ActiveTheme, Icon, IconName};
+use gpui_component::{ActiveTheme, Icon};
+use one_assets::IconName;
 use one_core::tab_container::{TabContent, TabContentEvent};
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
 use remote_desktop::parse_destination;
@@ -325,7 +326,22 @@ fn prepare_windows_native_connection(
             return Err(WindowsNativePrepareFailure::Endpoint { native, error });
         }
     };
-    let policy = windows_native_policy::connection_policy(&options.rdp);
+    let mut policy = windows_native_policy::connection_policy(&options.rdp);
+    let dynamic_display = windows_native_policy::uses_dynamic_display_updates(&options.rdp);
+    // Dynamic display sessions are re-scoped to the local display scale by the
+    // viewport flush right after login, so declare the same scale when creating
+    // the session. A mismatch costs an extra remote-side rescale at login, and
+    // mstscax re-renders the whole session (pointer included) for it.
+    policy.display.desktop_scale_factor = windows_native_display::connect_desktop_scale_factor(
+        dynamic_display,
+        policy.display.desktop_scale_factor,
+        scale_factor,
+    );
+    // A session that is sized to the viewport has nothing to fit, so client-side
+    // smart sizing would only stretch the session bitmap (pointer included)
+    // whenever the desktop and control sizes disagree.
+    policy.display.smart_sizing =
+        windows_native_display::request_smart_sizing(dynamic_display, policy.display.smart_sizing);
     tracing::info!(
         desktop_width = desktop_size.0,
         desktop_height = desktop_size.1,
@@ -1897,8 +1913,12 @@ impl RemoteDesktopView {
                 request,
                 completed_at,
             }) => {
-                self.windows_native_display
-                    .request_failed(request, completed_at);
+                if self
+                    .windows_native_display
+                    .request_failed(request, completed_at)
+                {
+                    windows_native_display_integration::log_display_gave_up(request);
+                }
             }
             Some(WindowsNativeDisplayCompletion::Suspended(request)) => {
                 if request.generation == operation.token.generation {

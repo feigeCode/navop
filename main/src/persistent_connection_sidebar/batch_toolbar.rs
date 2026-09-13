@@ -1,11 +1,8 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::{Anchor, AnyElement, IntoElement, ParentElement, Radians, Styled, div};
-use gpui_component::{
-    Disableable, Icon, IconName, IconSize, Sizable,
-    button::Toggle,
-    h_flex,
-    menu::{DropdownMenu as _, PopupMenu, PopupMenuItem},
-};
+use gpui_component::{Disableable, Icon, Sizable, button::Toggle, h_flex, menu::{DropdownMenu as _, PopupMenu, PopupMenuItem}};
+use one_ui::IconSize;
+use one_assets::IconName;
 use one_ui::{IconButton, IconButtonRole};
 use rust_i18n::t;
 

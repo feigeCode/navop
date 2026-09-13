@@ -1,7 +1,8 @@
 use crate::database_users_tab::DatabaseUsersTab;
 use db::plugin_manifest::DatabaseCapabilities;
 use gpui::{AnyElement, Context, IntoElement, ParentElement, Styled, Window, div};
-use gpui_component::{ActiveTheme, IconName, Sizable, Size, button::Button};
+use gpui_component::{ActiveTheme, Sizable, Size, button::Button};
+use one_assets::IconName;
 use rust_i18n::t;
 
 #[derive(Clone, Copy)]

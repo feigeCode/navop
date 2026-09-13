@@ -6,6 +6,7 @@ use crate::job_activation::{JobActivationHandle, RecoveredJob, RetiredJob};
 
 pub(crate) struct JobRecord {
     pub(crate) state: JobState,
+    pub(crate) resource_id: Option<String>,
     pub(crate) result_observed: bool,
     pub(crate) blob_ids: BTreeSet<String>,
 }

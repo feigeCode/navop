@@ -168,6 +168,8 @@ impl UniversalPluginService {
         self.manager.universal_plugin_client(runtime_id)
     }
 
+    // 以下方法仅 `shell-plugins` feature 路径下被调用;关闭 feature 时是合法的休眠代码。
+    #[cfg_attr(not(feature = "shell-plugins"), allow(dead_code))]
     pub(crate) fn shell_view(
         &self,
         extension_id: &str,
@@ -180,7 +182,8 @@ impl UniversalPluginService {
             .cloned()
     }
 
-    pub(crate) fn resource_connection(
+    /// 查询已注册的扩展连接贡献(不依赖 Shell feature)。
+    pub fn resource_connection(
         &self,
         extension_id: &str,
         contribution_id: &str,
@@ -192,6 +195,20 @@ impl UniversalPluginService {
             .cloned()
     }
 
+    /// 按 (extension_id, connection contribution id) 查询绑定的原生工作台。
+    pub fn resource_workbench_for_connection(
+        &self,
+        extension_id: &str,
+        contribution_id: &str,
+    ) -> Option<extension_runtime::RegisteredResourceWorkbenchContribution> {
+        self.sync_catalog();
+        self.catalog_source
+            .get()?
+            .resource_workbench_for_connection(extension_id, contribution_id)
+            .cloned()
+    }
+
+    #[cfg_attr(not(feature = "shell-plugins"), allow(dead_code))]
     pub(crate) async fn deactivate_extension(&self, extension_id: &str) {
         let _activation_guard = self.activation_lock.lock().await;
         self.sync_catalog();
@@ -268,12 +285,14 @@ impl UniversalPluginService {
         opened.map(|_| ()).map_err(Into::into)
     }
 
+    #[cfg_attr(not(feature = "shell-plugins"), allow(dead_code))]
     pub(crate) fn begin_extension_retire(&self, extension_id: &str) {
         if let Ok(mut retiring) = self.retiring_extensions.write() {
             retiring.insert(extension_id.to_string());
         }
     }
 
+    #[cfg_attr(not(feature = "shell-plugins"), allow(dead_code))]
     pub(crate) fn finish_extension_retire(&self, extension_id: &str) {
         if let Ok(mut retiring) = self.retiring_extensions.write() {
             retiring.remove(extension_id);
@@ -509,15 +528,19 @@ pub fn init(cx: &mut gpui::App) {
     let startup_service = service.clone();
     let quit_service = service.clone();
     cx.set_global(global);
-    gpui_shell::init_embedded(cx);
-    match crate::shell_plugin_host::ShellPluginHost::new(service, cx) {
-        Ok(host) => {
-            #[cfg(not(test))]
-            host.start_monitor_bridge(cx);
-            extension_view::register_shell_view_opener(std::rc::Rc::new(host.clone()), cx);
-            cx.set_global(host);
+    #[cfg(feature = "shell-plugins")]
+    {
+        gpui_shell::init_embedded(cx);
+        match crate::shell_plugin_host::ShellPluginHost::new(service.clone(), cx) {
+            Ok(host) => {
+                #[cfg(not(test))]
+                host.start_monitor_bridge(cx);
+                extension_view::register_shell_view_opener(std::rc::Rc::new(host.clone()), cx);
+                crate::shell_page_host::install_custom_page_host(host.clone(), cx);
+                cx.set_global(host);
+            }
+            Err(error) => tracing::warn!(%error, "failed to initialize gpui-shell host"),
         }
-        Err(error) => tracing::warn!(%error, "failed to initialize gpui-shell host"),
     }
 
     // RuntimeMonitor::start must be called from the Tokio runtime. Starting it

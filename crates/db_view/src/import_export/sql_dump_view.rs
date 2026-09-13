@@ -1,5 +1,5 @@
 use gpui::{
-    App, AppContext, ClickEvent, ColorExt, Context, Entity, FocusHandle, Focusable,
+    App, AppContext, ClickEvent, Context, Entity, FocusHandle, Focusable,
     InteractiveElement, IntoElement, ParentElement, Render, Styled, Window, div,
     prelude::FluentBuilder, px,
 };

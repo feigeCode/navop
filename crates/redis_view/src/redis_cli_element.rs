@@ -4,7 +4,6 @@
 //! 参考 terminal_view/terminal_element.rs 的实现模式。
 
 use gpui::*;
-use palette::IntoColor;
 use std::sync::Arc;
 
 /// 文本位置（行号和字符索引）
@@ -211,14 +210,14 @@ pub struct CliTheme {
 impl Default for CliTheme {
     fn default() -> Self {
         Self {
-            background: rgb(0x1E1E1E).into_color(),
-            foreground: rgb(0xE4E4E4).into_color(),
-            hint: rgb(0x9CA3AF).into_color(),
-            prompt: rgb(0xDCDCAA).into_color(),
-            command: rgb(0xE4E4E4).into_color(),
-            success: rgb(0x98C379).into_color(),
-            error: rgb(0xF44747).into_color(),
-            cursor: rgb(0xFFFFFF).into_color(),
+            background: rgb(0x1E1E1E).into(),
+            foreground: rgb(0xE4E4E4).into(),
+            hint: rgb(0x9CA3AF).into(),
+            prompt: rgb(0xDCDCAA).into(),
+            command: rgb(0xE4E4E4).into(),
+            success: rgb(0x98C379).into(),
+            error: rgb(0xF44747).into(),
+            cursor: rgb(0xFFFFFF).into(),
             selection_background: hsla(0.58, 0.5, 0.4, 1.0),
             selection_foreground: hsla(0.0, 0.0, 1.0, 1.0),
             font_family: default_monospace_font().into(),
@@ -812,7 +811,6 @@ fn paint_text_with_cell_width(
             background_color: None,
             underline: None,
             strikethrough: None,
-            letter_spacing: None,
         }],
         Some(cell_width), // 使用 cell_width 确保等宽渲染
     );

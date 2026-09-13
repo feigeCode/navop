@@ -6,7 +6,8 @@ use gpui::{
     ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Window, div,
     prelude::FluentBuilder,
 };
-use gpui_component::{ActiveTheme, IconName, h_flex, v_flex};
+use gpui_component::{ActiveTheme, h_flex, v_flex};
+use one_assets::IconName;
 use one_ui::{IconButton, IconButtonRole, PanelHeader, PanelHeaderVariant};
 use rust_i18n::t;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -148,7 +149,7 @@ impl ChatView {
 
         if self.sidebar_collapsed {
             return v_flex()
-                .w(cx.theme().geometry.layout.compact_rail)
+                .w(one_ui::theme_geometry().layout.compact_rail)
                 .h_full()
                 .flex_shrink_0()
                 .border_r_1()
@@ -190,7 +191,7 @@ impl ChatView {
         }
 
         v_flex()
-            .w(cx.theme().geometry.layout.context_sidebar_default)
+            .w(one_ui::theme_geometry().layout.context_sidebar_default)
             .h_full()
             .min_h_0()
             .flex_shrink_0()

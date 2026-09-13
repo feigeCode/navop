@@ -6,14 +6,8 @@ use gpui::{
     App, AppContext, AsyncApp, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement,
     Render, ScrollHandle, Styled, Subscription, Task, Window, div, prelude::FluentBuilder, px,
 };
-use gpui_component::{
-    ActiveTheme, Disableable, IconName,
-    button::{Button, ButtonVariants as _},
-    h_flex,
-    input::{InputEvent, InputState},
-    select::{SearchableVec, SelectEvent, SelectState},
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Disableable, button::{Button, ButtonVariants as _}, h_flex, input::{InputEvent, InputState}, select::{SearchableVec, SelectEvent, SelectState}, v_flex};
+use one_assets::IconName;
 use rust_i18n::t;
 use tokio::sync::mpsc;
 

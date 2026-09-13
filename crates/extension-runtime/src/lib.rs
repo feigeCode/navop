@@ -9,6 +9,7 @@ mod database_driver_install_progress;
 pub mod extension;
 mod extension_action_handler;
 pub mod extension_db_gateway;
+mod extension_db_gateway_conversion;
 pub mod extension_downloader;
 mod extension_package_layout;
 mod extension_view_host;
@@ -28,7 +29,8 @@ pub use global::{GlobalExtensionRuntimeCatalog, global_catalog, refresh_global_r
 pub use types::{
     RegisteredDocumentExporter, RegisteredIpcRuntimeBinding, RegisteredRemoteFileEditorCommand,
     RegisteredRemoteFileEditorContribution, RegisteredResourceConnectionContribution,
-    RegisteredShellViewContribution,
+    RegisteredResourceWorkbenchContribution, RegisteredShellViewContribution,
+    WorkbenchOperationCatalog, WorkbenchOperationEntry, WorkbenchOperationParam,
 };
 
 #[cfg(all(test, feature = "wasm-components"))]

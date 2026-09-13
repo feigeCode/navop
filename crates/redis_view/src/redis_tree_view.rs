@@ -1,26 +1,17 @@
 //! Redis 树形视图
 
 use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 
 use connection_form::credential::resolve_connection_for_runtime;
 use gpui::{
     AnyElement, App, AppContext, AsyncApp, ClipboardItem, Context, Entity, EventEmitter,
     FocusHandle, Focusable, InteractiveElement, IntoElement, MouseButton, ParentElement, Render,
-    SharedString, StatefulInteractiveElement, Styled, UniformListScrollHandle, Window, div,
+    SharedString, StatefulInteractiveElement, Styled, Task, UniformListScrollHandle, Window, div,
     prelude::FluentBuilder, px, uniform_list,
 };
-use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, IconSize as GpuiIconSize, Side, Sizable, Size,
-    button::{Button, ButtonVariants as _},
-    clipboard::Clipboard,
-    h_flex,
-    input::{Input, InputEvent, InputState},
-    menu::{ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem},
-    popover::Popover,
-    scroll::ScrollableElement,
-    spinner::Spinner,
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Disableable, Icon, Side, Sizable, Size, button::{Button, ButtonVariants as _}, clipboard::Clipboard, h_flex, input::{Input, InputEvent, InputState}, menu::{ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem}, popover::Popover, scroll::ScrollableElement, spinner::Spinner, v_flex};
+use one_assets::IconName;
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::{ActiveConnections, StoredConnection};
 use one_ui::{ContentState, IconButton, IconSize};
@@ -36,6 +27,12 @@ const SCAN_BATCH_SIZE: usize = 500;
 const SCAN_TARGET_KEYS: usize = 500;
 const KEY_TYPES_BATCH_SIZE: usize = 200;
 const DEFAULT_REDIS_DATABASE_COUNT: usize = 16;
+
+/// 输入停顿多久后自动向服务端发起一次 SCAN。
+///
+/// 输入瞬间先用本地已加载的键给出即时反馈，停顿后才交给服务端覆盖结果：
+/// 用户既不必按回车，也不会每敲一个键就发一次请求。
+const SEARCH_INPUT_DEBOUNCE: Duration = Duration::from_millis(300);
 
 /// 树形视图事件
 #[derive(Clone, Debug)]
@@ -95,6 +92,8 @@ struct LocalSearchInput {
     has_matching_descendant: bool,
     is_load_more: bool,
     is_expanded: bool,
+    /// 连接 / 数据库这类结构锚点：过滤态下即使自身与子树都不匹配也要保留
+    is_structural: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,7 +130,11 @@ fn effective_tree_expansion(
 }
 
 fn local_search_visibility(input: LocalSearchInput) -> LocalSearchVisibility {
-    let include_node = !input.filter_active
+    // 过滤态下连接 / 数据库是结构锚点：即使它们与子树都不匹配也要保留。
+    // 否则整棵树会只剩空面板，用户看到的现象就是「搜不到 key」——分不清是
+    // 关键词没命中、键还没加载，还是搜索本身坏了。
+    let include_node = input.is_structural
+        || !input.filter_active
         || input.ancestor_matches
         || input.node_matches
         || input.is_load_more
@@ -143,6 +146,61 @@ fn local_search_visibility(input: LocalSearchInput) -> LocalSearchVisibility {
         descendants_inherit_match: input.filter_active
             && (input.ancestor_matches || input.node_matches),
     }
+}
+
+/// 计算本地过滤关键词。
+///
+/// 返回 `None` 表示「不过滤」，有两种情况：
+/// 1. 关键词为空；
+/// 2. 服务端已经按这个关键词扫描过——此时列表本身就是服务端的权威结果，
+///    不能再按树节点名二次过滤，否则跨命名空间命中的键会被误藏
+///    （例如 `*we*` 命中 `flow:east:1`，但节点名 `flow` / `east` 都不含 `we`）。
+fn search_filter_keyword(
+    search_keyword: &str,
+    server_search_keyword: Option<&str>,
+) -> Option<String> {
+    let keyword = search_keyword.trim();
+    if keyword.is_empty() {
+        return None;
+    }
+    if server_search_keyword == Some(keyword) {
+        return None;
+    }
+    // 含通配符的关键词只能交给服务端 SCAN，本地不做子串匹配。
+    if keyword.contains('*') || keyword.contains('?') || keyword.contains('[') {
+        return None;
+    }
+    Some(keyword.to_lowercase())
+}
+
+/// 解析一次搜索应该作用在哪些数据库节点上。
+///
+/// 搜索框属于整棵树而不是某一个节点，所以：
+/// - 选中能落到某个数据库时，只搜那一个库（保持原有语义）；
+/// - 否则回退到每个已连接连接的默认库，避免「没有选中节点 → 回车毫无反应」。
+fn resolve_search_targets(
+    selected_db_node: Option<String>,
+    fallback_db_nodes: impl IntoIterator<Item = String>,
+) -> Vec<String> {
+    if let Some(selected) = selected_db_node {
+        return vec![selected];
+    }
+
+    let mut targets: Vec<String> = fallback_db_nodes.into_iter().collect();
+    targets.sort();
+    targets.dedup();
+    targets
+}
+
+/// 判断一次输入停顿后是否需要向服务端发起 SCAN。
+///
+/// 返回 `false` 的两种情况：
+/// 1. 关键词为空——本地的完整列表就是正确结果，不该再发 SCAN；
+/// 2. 这个关键词已经（或正在）由服务端扫描——重复发起只是浪费一次往返。
+///    用户来回增删字符时会反复落到这个分支，所以这个判断同时充当了去重。
+fn should_scan_after_input(keyword: &str, server_search_keyword: Option<&str>) -> bool {
+    let keyword = keyword.trim();
+    !keyword.is_empty() && server_search_keyword != Some(keyword)
 }
 
 fn apply_redis_selection_state(
@@ -193,8 +251,18 @@ pub struct RedisTreeView {
     search_state: Entity<InputState>,
     /// 搜索关键词
     search_keyword: String,
+    /// 最近一次提交给服务端 SCAN 的关键词
+    ///
+    /// 与服务端结果配套：等于当前关键词时说明列表已是服务端权威结果，本地不再过滤。
+    server_search_keyword: Option<String>,
     /// 搜索请求序号（node_id -> token）
     search_tokens: HashMap<String, u64>,
+    /// 待触发的「输入停顿后自动搜索」定时任务
+    ///
+    /// 每次输入都会替换它：被替换掉的 `Task` 一旦 drop，其未到期的定时器就不会
+    /// 再执行（见 `dropping_the_debounce_task_cancels_its_pending_timer`），
+    /// 于是只有最后一次输入能提交搜索，这就是防抖。
+    search_debounce: Option<Task<()>>,
     /// 数据库总键数（db_node_id -> total）
     db_total_key_counts: HashMap<String, i64>,
     /// 当前每个连接显示的数据库（connection_id -> db_index）
@@ -233,25 +301,13 @@ impl RedisTreeView {
                 this.search_collapsed_nodes.clear();
                 this.rebuild_flat_entries();
                 this.update_local_search_counts();
+                // 敲字停顿后自动扫服务端，用户不必再按回车。
+                this.schedule_search_after_input(cx);
                 cx.notify();
             }
 
             if matches!(event, InputEvent::PressEnter { .. }) {
-                this.search_keyword = this.search_state.read(cx).text().to_string();
-                if let Some(node_id) = this.get_selected_refreshable_node() {
-                    if let Some(node) = this.nodes.get(&node_id) {
-                        if matches!(node.node_type, RedisNodeType::Database(_)) {
-                            let pattern = this.search_keyword.trim().to_string();
-                            if pattern.is_empty() {
-                                this.reset_db_key_count(&node_id);
-                                this.refresh_keys(node_id, cx);
-                            } else {
-                                cx.emit(RedisTreeViewEvent::SearchKeys { node_id, pattern });
-                            }
-                        }
-                    }
-                }
-                cx.notify();
+                this.trigger_search(cx);
             }
         })
         .detach();
@@ -265,7 +321,9 @@ impl RedisTreeView {
             context_menu_node_id: None,
             search_state,
             search_keyword: String::new(),
+            server_search_keyword: None,
             search_tokens: HashMap::new(),
+            search_debounce: None,
             db_total_key_counts: HashMap::new(),
             selected_databases: HashMap::new(),
             database_infos: HashMap::new(),
@@ -720,6 +778,11 @@ impl RedisTreeView {
                 format!("*{}*", trimmed)
             };
 
+        // 标记该关键词已交给服务端扫描：结果回来时列表本身就是权威结果，
+        // 本地不再按节点名二次过滤（否则跨命名空间的命中会被误藏）。
+        self.server_search_keyword = Some(trimmed.to_string());
+        self.rebuild_flat_entries();
+
         let token = self.bump_search_token(&node.id);
         self.load_keys(
             node.connection_id.clone(),
@@ -731,6 +794,99 @@ impl RedisTreeView {
             token,
             cx,
         );
+    }
+
+    /// 提交一次搜索：读取输入框、更新关键词状态并驱动服务端 SCAN。
+    ///
+    /// 回车与搜索按钮共用这一条路径，避免两个入口各自漂移。
+    fn trigger_search(&mut self, cx: &mut Context<Self>) {
+        // 回车 / 点搜索按钮意味着「立刻搜」，撤掉还在等待的输入防抖，
+        // 否则防抖到期后会再扫一次同样的关键词。
+        self.search_debounce = None;
+
+        self.search_keyword = self.search_state.read(cx).text().to_string();
+        let pattern = self.search_keyword.trim().to_string();
+
+        if pattern.is_empty() {
+            // 清空关键词 = 回到「列出全部键」，同时解除服务端结果标记。
+            self.restore_full_key_list(cx);
+            return;
+        }
+
+        // 同步标记为「已交给服务端」：事件是延迟 flush 的，若等订阅方
+        // （`handle_search_keys` → `search_keys`）来写这个标记，中间这段时间里
+        // 关键词看起来仍是「没扫过」的——回车后输入框补发的 Change 会因此
+        // 又武装一个防抖定时器，停顿后重复扫一次同样的关键词。
+        self.server_search_keyword = Some(pattern.clone());
+
+        for node_id in self.search_target_node_ids() {
+            cx.emit(RedisTreeViewEvent::SearchKeys {
+                node_id,
+                pattern: pattern.clone(),
+            });
+        }
+        self.rebuild_flat_entries();
+        cx.notify();
+    }
+
+    /// 回到「列出全部键」：解除服务端结果标记并重新加载完整列表
+    ///
+    /// 服务端搜索会把键列表替换成命中结果，所以退出搜索必须重新 SCAN `*`，
+    /// 只把关键词置空是不够的。
+    fn restore_full_key_list(&mut self, cx: &mut Context<Self>) {
+        self.server_search_keyword = None;
+        self.search_collapsed_nodes.clear();
+        for node_id in self.search_target_node_ids() {
+            self.reset_db_key_count(&node_id);
+            self.refresh_keys(node_id, cx);
+        }
+        self.rebuild_flat_entries();
+        cx.notify();
+    }
+
+    /// 输入停顿后自动向服务端发起一次扫描（防抖）
+    ///
+    /// 输入瞬间先用本地已加载的键给出即时反馈，停顿后再交给服务端 SCAN 覆盖
+    /// 结果：用户既不必按回车，也不会每敲一个键就发一次请求。
+    fn schedule_search_after_input(&mut self, cx: &mut Context<Self>) {
+        // 新输入取代上一次的待触发定时器（旧的 Task 被 drop，其定时器随之取消）。
+        self.search_debounce = None;
+
+        if !should_scan_after_input(&self.search_keyword, self.server_search_keyword.as_deref()) {
+            // 关键词清空时，只有「上一轮是服务端结果」才需要重新加载完整列表。
+            if self.search_keyword.trim().is_empty() && self.server_search_keyword.is_some() {
+                self.restore_full_key_list(cx);
+            }
+            return;
+        }
+
+        self.search_debounce = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SEARCH_INPUT_DEBOUNCE).await;
+            let _ = this.update(cx, |this, cx| {
+                this.search_debounce = None;
+                this.trigger_search(cx);
+            });
+        }));
+    }
+
+    /// 本次搜索应该扫描哪些数据库节点
+    ///
+    /// 优先当前选中的库；若当前没有可用的选中库（例如还没点过任何节点），
+    /// 则回退到每个已连接连接的默认库，而不是静默什么都不做。
+    fn search_target_node_ids(&self) -> Vec<String> {
+        let selected_db = self.get_selected_refreshable_node().filter(|node_id| {
+            self.nodes
+                .get(node_id)
+                .is_some_and(|node| matches!(node.node_type, RedisNodeType::Database(_)))
+        });
+
+        let fallback = self.connected_nodes.iter().filter_map(|connection_id| {
+            let db_index = self.default_db_for_connection(connection_id);
+            let db_node_id = Self::db_node_id(connection_id, db_index);
+            self.nodes.contains_key(&db_node_id).then_some(db_node_id)
+        });
+
+        resolve_search_targets(selected_db, fallback)
     }
 
     /// 加载键列表
@@ -1432,6 +1588,52 @@ impl RedisTreeView {
         }
     }
 
+    /// 当前扁平列表里是否还有可见的键
+    fn has_visible_key(&self) -> bool {
+        self.flat_entries.iter().any(|entry| {
+            self.nodes
+                .get(&entry.node_id)
+                .is_some_and(|node| matches!(node.node_type, RedisNodeType::Key(_)))
+        })
+    }
+
+    /// 关键词非空但一个键都没显示出来时的提示语
+    ///
+    /// 区分「本地已加载的列表里没匹配」与「服务端也确认没有」：前者要引导用户
+    /// 回车扫描服务端，否则用户只会看到一片空白并认为搜索坏了。
+    fn search_empty_hint(&self) -> Option<String> {
+        let keyword = self.search_keyword.trim();
+        if keyword.is_empty() || self.has_visible_key() {
+            return None;
+        }
+
+        if self.server_search_keyword.as_deref() == Some(keyword) {
+            Some(t!("RedisTree.search_no_server_match", keyword = keyword).to_string())
+        } else {
+            Some(t!("RedisTree.search_no_local_match", keyword = keyword).to_string())
+        }
+    }
+
+    /// 列表为空时的兜底文案
+    fn empty_state_message(&self) -> String {
+        self.search_empty_hint()
+            .unwrap_or_else(|| t!("RedisTree.no_data").to_string())
+    }
+
+    /// 「没有匹配的键」提示条
+    fn render_search_hint(&self, hint: String, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .w_full()
+            .flex_shrink_0()
+            .px_2()
+            .py_1()
+            .border_t_1()
+            .border_color(cx.theme().border)
+            .text_sm()
+            .text_color(cx.theme().muted_foreground)
+            .child(hint)
+    }
+
     fn reset_db_key_count(&mut self, node_id: &str) {
         if let Some(total) = self.db_total_key_counts.get(node_id).copied() {
             if let Some(node) = self.nodes.get_mut(node_id) {
@@ -1565,7 +1767,7 @@ impl RedisTreeView {
 
     /// 折叠节点
     fn collapse_node(&mut self, node_id: &str, cx: &mut Context<Self>) {
-        if self.local_filter_keyword().is_some() {
+        if self.is_search_active() {
             self.search_collapsed_nodes.insert(node_id.to_string());
         }
         self.expanded_nodes.remove(node_id);
@@ -1662,11 +1864,18 @@ impl RedisTreeView {
     }
 
     fn is_node_expanded(&self, node_id: &str) -> bool {
+        // 展开策略看「是否处于搜索态」，而不是「是否在做本地名字过滤」：
+        // 服务端搜索期间本地过滤会关闭，但结果仍然需要自动铺开（issue #9）。
         effective_tree_expansion(
-            self.local_filter_keyword().is_some(),
+            self.is_search_active(),
             self.expanded_nodes.contains(node_id),
             self.search_collapsed_nodes.contains(node_id),
         )
+    }
+
+    /// 是否处于搜索态（关键词非空）
+    fn is_search_active(&self) -> bool {
+        !self.search_keyword.trim().is_empty()
     }
 
     /// 递归添加节点条目
@@ -1677,22 +1886,27 @@ impl RedisTreeView {
         match_cache: &mut HashMap<String, bool>,
     ) {
         let filter_keyword = self.local_filter_keyword();
-        let (_is_expandable, matches, child_ids, is_load_more) = match self.nodes.get(node_id) {
-            Some(node) => {
-                let is_load_more = matches!(node.node_type, RedisNodeType::LoadMore);
-                let matches = filter_keyword
-                    .as_ref()
-                    .map(|keyword| node.name.to_lowercase().contains(keyword))
-                    .unwrap_or(true);
-                let child_ids = node
-                    .children
-                    .iter()
-                    .map(|child| child.id.clone())
-                    .collect::<Vec<_>>();
-                (node.is_expandable(), matches, child_ids, is_load_more)
-            }
-            None => return,
-        };
+        let (_is_expandable, matches, child_ids, is_load_more, is_structural) =
+            match self.nodes.get(node_id) {
+                Some(node) => {
+                    let is_load_more = matches!(node.node_type, RedisNodeType::LoadMore);
+                    let is_structural = matches!(
+                        node.node_type,
+                        RedisNodeType::Connection | RedisNodeType::Database(_)
+                    );
+                    let matches = filter_keyword
+                        .as_ref()
+                        .map(|keyword| node.name.to_lowercase().contains(keyword))
+                        .unwrap_or(true);
+                    let child_ids = node
+                        .children
+                        .iter()
+                        .map(|child| child.id.clone())
+                        .collect::<Vec<_>>();
+                    (node.is_expandable(), matches, child_ids, is_load_more, is_structural)
+                }
+                None => return,
+            };
 
         let has_matching_descendant = filter_keyword.is_some()
             && !traversal.ancestor_matches
@@ -1706,6 +1920,7 @@ impl RedisTreeView {
             has_matching_descendant,
             is_load_more,
             is_expanded: self.is_node_expanded(node_id),
+            is_structural,
         });
         if !visibility.include_node {
             return;
@@ -1766,14 +1981,7 @@ impl RedisTreeView {
     }
 
     fn local_filter_keyword(&self) -> Option<String> {
-        let keyword = self.search_keyword.trim();
-        if keyword.is_empty() {
-            return None;
-        }
-        if keyword.contains('*') || keyword.contains('?') || keyword.contains('[') {
-            return None;
-        }
-        Some(keyword.to_lowercase())
+        search_filter_keyword(&self.search_keyword, self.server_search_keyword.as_deref())
     }
 
     fn get_node_icon(&self, node_type: &RedisNodeType) -> Icon {
@@ -1784,7 +1992,7 @@ impl RedisTreeView {
             RedisNodeType::Key(_) => IconName::Key,
             RedisNodeType::LoadMore => IconName::Ellipsis,
         };
-        let icon = Icon::new(name).with_size(GpuiIconSize::Default);
+        let icon = Icon::new(name).with_size(IconSize::Default);
         match node_type {
             RedisNodeType::Connection | RedisNodeType::Database(_) | RedisNodeType::Namespace => {
                 icon.color()
@@ -1931,24 +2139,7 @@ impl RedisTreeView {
                     .tooltip(t!("RedisTree.search_help").to_string())
                     .on_click(move |_, _, cx| {
                         view_for_search.update(cx, |this, cx| {
-                            this.search_keyword = this.search_state.read(cx).text().to_string();
-                            if let Some(node_id) = this.get_selected_refreshable_node() {
-                                if let Some(node) = this.nodes.get(&node_id) {
-                                    if matches!(node.node_type, RedisNodeType::Database(_)) {
-                                        let pattern = this.search_keyword.trim().to_string();
-                                        if pattern.is_empty() {
-                                            this.reset_db_key_count(&node_id);
-                                            this.refresh_keys(node_id, cx);
-                                        } else {
-                                            cx.emit(RedisTreeViewEvent::SearchKeys {
-                                                node_id,
-                                                pattern,
-                                            });
-                                        }
-                                    }
-                                }
-                            }
-                            cx.notify();
+                            this.trigger_search(cx);
                         });
                     }),
             )
@@ -2118,7 +2309,7 @@ impl RedisTreeView {
         } else {
             name
         };
-        let tree = cx.theme().geometry.tree;
+        let tree = one_ui::theme_geometry().tree;
 
         h_flex()
             .id(SharedString::from(format!("redis-node-{}", ix)))
@@ -2130,7 +2321,7 @@ impl RedisTreeView {
             .gap_1()
             .items_center()
             .cursor_pointer()
-            .rounded(cx.theme().geometry.radius.xs)
+            .rounded(one_ui::theme_geometry().radius.xs)
             .when(is_selected, |this| this.bg(cx.theme().list_active))
             .when(!is_selected, |this| {
                 this.hover(|style| style.bg(cx.theme().list_hover))
@@ -2220,7 +2411,7 @@ impl RedisTreeView {
             // 图标（非 Key 节点显示）
             .when(!is_key, |this| {
                 this.child(
-                    icon.with_size(GpuiIconSize::Medium)
+                    icon.with_size(IconSize::Medium)
                         .when(
                             is_connection && !is_connected && error_msg.is_none(),
                             |icon| icon.text_color(cx.theme().muted_foreground),
@@ -2330,7 +2521,7 @@ impl RedisTreeView {
             .when(is_loading, |this| {
                 this.child(
                     Spinner::new()
-                        .with_size(GpuiIconSize::Small)
+                        .with_size(IconSize::Small)
                         .color(cx.theme().muted_foreground),
                 )
             })
@@ -2712,19 +2903,21 @@ impl Render for RedisTreeView {
                         this.child(ContentState::loading(t!("RedisTree.loading").to_string()))
                     })
                     .when(!self.is_loading && entry_count == 0, |this| {
+                        // 搜索态下给出可操作提示，而不是笼统的「暂无数据」
                         this.child(
-                            ContentState::empty(t!("RedisTree.no_data").to_string())
+                            ContentState::empty(self.empty_state_message())
                                 .icon(
                                     Icon::new(IconName::Database)
                                         .color()
-                                        .with_size(GpuiIconSize::Large),
+                                        .with_size(IconSize::Large),
                                 )
                                 .compact(),
                         )
                     })
                     .when(!self.is_loading && entry_count > 0, |this| {
+                        let hint = self.search_empty_hint();
                         this.child(
-                            div()
+                            v_flex()
                                 .size_full()
                                 .context_menu({
                                     let view = cx.entity().clone();
@@ -2733,23 +2926,26 @@ impl Render for RedisTreeView {
                                     }
                                 })
                                 .child(
-                                    uniform_list(
-                                        "redis-tree-list",
-                                        entry_count,
-                                        cx.processor(
-                                            move |this: &mut Self,
-                                                  visible_range: std::ops::Range<usize>,
-                                                  window,
-                                                  cx| {
-                                                visible_range
-                                                    .map(|ix| this.render_item(ix, window, cx))
-                                                    .collect()
-                                            },
-                                        ),
-                                    )
-                                    .size_full()
-                                    .track_scroll(&self.scroll_handle),
-                                ),
+                                    div().flex_1().min_h_0().child(
+                                        uniform_list(
+                                            "redis-tree-list",
+                                            entry_count,
+                                            cx.processor(
+                                                move |this: &mut Self,
+                                                      visible_range: std::ops::Range<usize>,
+                                                      window,
+                                                      cx| {
+                                                    visible_range
+                                                        .map(|ix| this.render_item(ix, window, cx))
+                                                        .collect()
+                                                },
+                                            ),
+                                        )
+                                        .size_full()
+                                        .track_scroll(&self.scroll_handle),
+                                    ),
+                                )
+                                .children(hint.map(|hint| self.render_search_hint(hint, cx))),
                         )
                     }),
             )
@@ -2759,6 +2955,214 @@ impl Render for RedisTreeView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::{AppContext, TestAppContext, VisualTestContext, WindowOptions};
+    use gpui_component::Root;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// 在测试里搭建「一个已连接的连接 + 它的 db0」，返回 db 节点 id
+    fn mount_connected_db(tree: &mut RedisTreeView, cx: &mut Context<RedisTreeView>) -> String {
+        let db_node_id = RedisTreeView::db_node_id("conn", 0);
+        tree.connected_nodes.insert("conn".to_string());
+        tree.expanded_nodes.insert("conn".to_string());
+        tree.expanded_nodes.insert(db_node_id.clone());
+        tree.nodes.insert(
+            "conn".to_string(),
+            RedisNode::new("conn", "redis-master", RedisNodeType::Connection, "conn", 0),
+        );
+        tree.set_node_children(
+            "conn",
+            vec![RedisNode::new(
+                db_node_id.clone(),
+                "db0",
+                RedisNodeType::Database(0),
+                "conn",
+                0,
+            )],
+            cx,
+        );
+        db_node_id
+    }
+
+    #[gpui::test]
+    fn dropping_the_debounce_task_cancels_its_pending_timer(cx: &mut TestAppContext) {
+        // 对照分支：不被 drop 时，定时器必须会执行——否则下面的断言就是空跑。
+        let control_ran = Rc::new(RefCell::new(false));
+        let control_flag = control_ran.clone();
+        let control = cx.spawn(|cx| async move {
+            cx.background_executor().timer(SEARCH_INPUT_DEBOUNCE).await;
+            *control_flag.borrow_mut() = true;
+        });
+
+        cx.executor().advance_clock(SEARCH_INPUT_DEBOUNCE * 3);
+        cx.run_until_parked();
+        assert!(
+            *control_ran.borrow(),
+            "对照分支：未被 drop 的定时任务应当执行，否则本测试说明不了任何问题"
+        );
+        drop(control);
+
+        // 输入防抖靠「替换字段 = drop 掉上一次输入的 Task」来取消上一次输入，
+        // 所以这里必须确认 drop 真的会让未到期的定时器不再执行。
+        let ran = Rc::new(RefCell::new(false));
+        let flag = ran.clone();
+        let task = cx.spawn(|cx| async move {
+            cx.background_executor().timer(SEARCH_INPUT_DEBOUNCE).await;
+            *flag.borrow_mut() = true;
+        });
+        drop(task);
+
+        cx.executor().advance_clock(SEARCH_INPUT_DEBOUNCE * 3);
+        cx.run_until_parked();
+
+        assert!(
+            !*ran.borrow(),
+            "被 drop 的定时任务仍然执行了：输入防抖会漏出过期请求，必须改用显式代次守卫"
+        );
+    }
+
+    #[gpui::test]
+    fn clearing_the_search_box_cancels_the_pending_debounce(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+
+        let (window, tree) = cx.update(|cx| {
+            let mut tree = None;
+            let window = cx
+                .open_window(WindowOptions::default(), |window, cx| {
+                    let entity = cx.new(|cx| RedisTreeView::new(window, cx));
+                    tree = Some(entity.clone());
+                    cx.new(|cx| Root::new(entity, window, cx))
+                })
+                .expect("open redis tree test window");
+            (window, tree.expect("redis tree view"))
+        });
+
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+
+        tree.update_in(&mut cx, |tree, _window, cx| {
+            tree.search_keyword = "we".to_string();
+            tree.schedule_search_after_input(cx);
+            assert!(
+                tree.search_debounce.is_some(),
+                "输入新关键词后应有一个待触发的防抖定时器"
+            );
+
+            tree.search_keyword = String::new();
+            tree.schedule_search_after_input(cx);
+            assert!(
+                tree.search_debounce.is_none(),
+                "搜索框清空后，上一个关键词的防抖必须被撤掉，否则停顿后还会补一次刷新"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn typing_in_the_search_box_scans_the_server_after_a_pause(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+
+        let (window, tree) = cx.update(|cx| {
+            let mut tree = None;
+            let window = cx
+                .open_window(WindowOptions::default(), |window, cx| {
+                    let entity = cx.new(|cx| RedisTreeView::new(window, cx));
+                    tree = Some(entity.clone());
+                    cx.new(|cx| Root::new(entity, window, cx))
+                })
+                .expect("open redis tree test window");
+            (window, tree.expect("redis tree view"))
+        });
+
+        // 记录真正发往服务端的搜索请求。
+        //
+        // 真实链路里事件由 `handle_search_keys` 接住并调用 `search_keys`（后者会
+        // 发起一次真实 SCAN，并顺手把关键词标记为「已交给服务端」）。测试里只复刻
+        // 这个状态副作用，不碰网络。
+        let scanned: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = scanned.clone();
+        cx.update(|cx| {
+            cx.subscribe(&tree, move |tree, event: &RedisTreeViewEvent, cx| {
+                let RedisTreeViewEvent::SearchKeys { pattern, .. } = event else {
+                    return;
+                };
+                sink.borrow_mut().push(pattern.clone());
+                let pattern = pattern.clone();
+                tree.update(cx, |tree, _| {
+                    tree.server_search_keyword = Some(pattern);
+                });
+            })
+            .detach();
+        });
+
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        tree.update_in(&mut cx, |tree, _window, cx| {
+            mount_connected_db(tree, cx);
+        });
+        let focus_handle = tree.read_with(&cx, |tree, cx| {
+            tree.search_state.read(cx).focus_handle(cx).clone()
+        });
+
+        cx.update(|window, cx| window.focus(&focus_handle, cx));
+        cx.run_until_parked();
+
+        // 1) 敲字：只做本地过滤，不该马上打服务端
+        cx.simulate_input("we");
+        assert!(
+            scanned.borrow().is_empty(),
+            "输入后应等输入停顿，而不是每敲一个键就发一次 SCAN（实际 {:?}）",
+            scanned.borrow()
+        );
+        assert_eq!(
+            "we",
+            tree.read_with(&cx, |tree, _| tree.search_keyword.clone()),
+            "输入应立刻更新关键词，用于本地即时过滤"
+        );
+
+        // 2) 停顿到期：自动扫一次服务端
+        cx.executor().advance_clock(SEARCH_INPUT_DEBOUNCE);
+        cx.run_until_parked();
+        assert_eq!(
+            vec!["we".to_string()],
+            scanned.borrow().clone(),
+            "输入停顿后应自动向服务端发起一次搜索（这就是「不用按回车」的路径）"
+        );
+
+        // 3) 继续敲字后停顿：扫的是新关键词
+        cx.simulate_input("b");
+        assert_eq!(
+            1,
+            scanned.borrow().len(),
+            "新输入还没到停顿时间，不该发出请求"
+        );
+        cx.executor().advance_clock(SEARCH_INPUT_DEBOUNCE);
+        cx.run_until_parked();
+        assert_eq!(
+            vec!["we".to_string(), "web".to_string()],
+            scanned.borrow().clone()
+        );
+
+        // 4) 回车：立刻搜，并撤掉待触发的防抖（不能重复扫描同一关键词）
+        cx.simulate_input("3");
+        let before_enter = scanned.borrow().len();
+        cx.simulate_keystrokes("enter");
+        assert!(
+            scanned.borrow().len() > before_enter,
+            "回车应立即搜索，不等防抖"
+        );
+        let after_enter = scanned.borrow().len();
+        cx.executor().advance_clock(SEARCH_INPUT_DEBOUNCE);
+        cx.run_until_parked();
+        assert_eq!(
+            after_enter,
+            scanned.borrow().len(),
+            "回车已提交过，防抖到期不能再补一次同样的 SCAN"
+        );
+    }
 
     #[test]
     fn context_menu_target_updates_selection_and_clears_on_normal_selection() {
@@ -2861,6 +3265,7 @@ mod tests {
             has_matching_descendant: false,
             is_load_more: false,
             is_expanded: true,
+            is_structural: false,
         });
 
         assert!(visibility.include_node);
@@ -2869,6 +3274,44 @@ mod tests {
             "matched namespace should reveal its loaded children during search"
         );
         assert!(visibility.descendants_inherit_match);
+    }
+
+    /// issue #181：过滤态下连接 / 数据库是结构锚点，必须保留，否则整个面板
+    /// 会变空，用户分不清是没命中还是搜索坏了。
+    #[test]
+    fn filter_keeps_structural_nodes_even_when_nothing_matches() {
+        let visibility = local_search_visibility(LocalSearchInput {
+            filter_active: true,
+            ancestor_matches: false,
+            node_matches: false,
+            has_matching_descendant: false,
+            is_load_more: false,
+            is_expanded: true,
+            is_structural: true,
+        });
+
+        assert!(visibility.include_node, "连接/数据库节点不能整棵消失");
+        assert!(visibility.traverse_children);
+        assert!(
+            !visibility.descendants_inherit_match,
+            "结构锚点自身不匹配时，子节点仍需各自参与匹配"
+        );
+    }
+
+    #[test]
+    fn filter_still_hides_unmatched_key_nodes() {
+        let visibility = local_search_visibility(LocalSearchInput {
+            filter_active: true,
+            ancestor_matches: false,
+            node_matches: false,
+            has_matching_descendant: false,
+            is_load_more: false,
+            is_expanded: true,
+            is_structural: false,
+        });
+
+        assert!(!visibility.include_node);
+        assert!(!visibility.traverse_children);
     }
 
     #[test]
@@ -2880,6 +3323,7 @@ mod tests {
             has_matching_descendant: false,
             is_load_more: false,
             is_expanded: true,
+            is_structural: false,
         });
 
         assert!(visibility.include_node);
@@ -2917,5 +3361,201 @@ mod tests {
 
         assert_eq!(Some("auth"), auth.full_key.as_deref());
         assert_eq!(Some("auth:user"), user.full_key.as_deref());
+    }
+
+    #[test]
+    fn local_filter_is_skipped_once_the_server_scanned_the_same_keyword() {
+        assert_eq!(
+            Some("we".to_string()),
+            search_filter_keyword("we", None),
+            "未扫描服务端时，输入关键词应过滤已加载的列表"
+        );
+        assert_eq!(
+            None,
+            search_filter_keyword("we", Some("we")),
+            "服务端已按同一关键词扫描过，列表即权威结果，不能二次过滤"
+        );
+        assert_eq!(
+            Some("web".to_string()),
+            search_filter_keyword("web", Some("we")),
+            "关键词变化后重新回到本地过滤（在服务端结果上继续收窄）"
+        );
+        assert_eq!(None, search_filter_keyword("   ", Some("we")));
+        assert_eq!(
+            None,
+            search_filter_keyword("key*", None),
+            "含通配符的关键词只能交给服务端 SCAN"
+        );
+    }
+
+    #[test]
+    fn input_debounce_skips_empty_and_already_scanned_keywords() {
+        assert!(
+            !should_scan_after_input("", None),
+            "清空搜索框应恢复完整列表，而不是拿空关键词去 SCAN"
+        );
+        assert!(
+            !should_scan_after_input("   ", Some("we")),
+            "只有空白的关键词等同于清空"
+        );
+        assert!(
+            !should_scan_after_input("we", Some("we")),
+            "同一关键词已经扫过（或正在扫），不该重复发起"
+        );
+        assert!(
+            !should_scan_after_input("  we  ", Some("we")),
+            "两端空白不该让同一个关键词被判定成「新关键词」而重复 SCAN"
+        );
+    }
+
+    #[test]
+    fn input_debounce_scans_the_server_for_a_new_keyword() {
+        assert!(
+            should_scan_after_input("we", None),
+            "首次输入关键词，停顿后应自动扫服务端（这正是用户不需要按回车的路径）"
+        );
+        assert!(
+            should_scan_after_input("web", Some("we")),
+            "关键词变化后要重新扫服务端"
+        );
+        assert!(
+            should_scan_after_input("key*", None),
+            "通配符关键词同样交给服务端，本地无法匹配"
+        );
+    }
+
+    #[test]
+    fn search_targets_prefer_the_selected_db_and_otherwise_cover_every_connected_db() {
+        assert_eq!(
+            vec!["conn:db1".to_string()],
+            resolve_search_targets(Some("conn:db1".to_string()), Vec::new()),
+            "有选中库时只搜它，保持原有语义"
+        );
+
+        let targets = resolve_search_targets(
+            None,
+            vec![
+                "b:db0".to_string(),
+                "a:db0".to_string(),
+                "b:db0".to_string(),
+            ],
+        );
+        assert_eq!(
+            vec!["a:db0".to_string(), "b:db0".to_string()],
+            targets,
+            "没有选中库时回退到所有已连接库，且顺序稳定、不重复"
+        );
+    }
+
+    /// issue #181：服务端 SCAN 命中「键名跨命名空间边界」的键时，不能再被本地
+    /// 名字过滤藏起来，否则用户看到的就是「搜不到 key」。
+    #[gpui::test]
+    fn server_search_results_are_not_hidden_by_the_local_filter(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+
+        let (window, tree) = cx.update(|cx| {
+            let mut tree = None;
+            let window = cx
+                .open_window(WindowOptions::default(), |window, cx| {
+                    let entity = cx.new(|cx| RedisTreeView::new(window, cx));
+                    tree = Some(entity.clone());
+                    cx.new(|cx| Root::new(entity, window, cx))
+                })
+                .expect("open redis tree test window");
+            (window, tree.expect("redis tree view"))
+        });
+
+        let db_node_id = RedisTreeView::db_node_id("conn", 0);
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+
+        tree.update_in(&mut cx, |tree, _window, cx| {
+            tree.connected_nodes.insert("conn".to_string());
+            tree.expanded_nodes.insert("conn".to_string());
+            tree.expanded_nodes.insert(db_node_id.clone());
+            tree.nodes.insert(
+                "conn".to_string(),
+                RedisNode::new(
+                    "conn",
+                    "redis-master",
+                    RedisNodeType::Connection,
+                    "conn",
+                    0,
+                ),
+            );
+            // 走真实挂载路径：set_current_database_node 也是把 db 节点挂到连接下
+            tree.set_node_children(
+                "conn",
+                vec![RedisNode::new(
+                    db_node_id.clone(),
+                    "db0",
+                    RedisNodeType::Database(0),
+                    "conn",
+                    0,
+                )],
+                cx,
+            );
+
+            // 服务端按 `*we*` 返回的键：`we` 跨过了 `:`，而树节点名
+            // `flow` / `east` / `1` 都不含 `we`。
+            let keys = RedisTreeView::build_namespace_tree(
+                "conn",
+                0,
+                vec![("flow:east:1".to_string(), RedisKeyType::String)],
+            );
+            tree.set_node_children(&db_node_id, keys, cx);
+
+            tree.search_keyword = "we".to_string();
+            tree.server_search_keyword = Some("we".to_string());
+            tree.rebuild_flat_entries();
+
+            assert_eq!(
+                vec!["flow:east:1".to_string()],
+                visible_key_names(tree),
+                "服务端已确认命中的键不能被本地名字过滤二次藏起来"
+            );
+            assert!(
+                visible_entry_ids(tree).contains(&db_node_id),
+                "过滤态下数据库锚点仍应可见"
+            );
+
+            // 对照分支：没有服务端扫描记录时，同一个键确实会被本地过滤隐藏。
+            // 没有这条断言，上面的断言就可能因为「根本没过滤」而空跑通过。
+            tree.server_search_keyword = None;
+            tree.rebuild_flat_entries();
+
+            assert!(
+                visible_key_names(tree).is_empty(),
+                "本地过滤（按节点名匹配）确实找不到这个键——这正是用户看到空列表的原因"
+            );
+            assert!(
+                visible_entry_ids(tree).contains(&db_node_id),
+                "即使一个键都不匹配，连接与数据库节点也不能消失"
+            );
+            assert!(
+                tree.search_empty_hint().is_some(),
+                "本地没匹配时要给出「回车扫描服务端」的可操作提示"
+            );
+        });
+        // 真正跑一遍 render：覆盖「无匹配提示条」这条新分支，确认不会 panic
+        cx.run_until_parked();
+    }
+
+    fn visible_entry_ids(tree: &RedisTreeView) -> Vec<String> {
+        tree.flat_entries
+            .iter()
+            .map(|entry| entry.node_id.clone())
+            .collect()
+    }
+
+    fn visible_key_names(tree: &RedisTreeView) -> Vec<String> {
+        tree.flat_entries
+            .iter()
+            .filter_map(|entry| tree.nodes.get(&entry.node_id))
+            .filter(|node| matches!(node.node_type, RedisNodeType::Key(_)))
+            .map(|node| node.full_key.clone().unwrap_or_else(|| node.name.clone()))
+            .collect()
     }
 }

@@ -34,15 +34,13 @@ use ai_chat_view::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, AnyView, App, AppContext, ColorExt as _, Context, Entity, EventEmitter,
+    AnyElement, AnyView, App, AppContext as _, Context, Entity, EventEmitter,
     FocusHandle, Focusable, IntoElement, ParentElement, Pixels, Render, SharedString, Styled,
     Subscription, Window, div,
 };
-use gpui_component::{
-    ActiveTheme, Icon, IconName, IconSize, Selectable, Sizable, Size,
-    button::{ButtonCustomVariant, ButtonVariants},
-    h_flex, v_flex,
-};
+use gpui_component::{ActiveTheme, Icon, Selectable, Sizable, Size, button::{ButtonCustomVariant, ButtonVariants}, h_flex, v_flex};
+use one_ui::IconSize;
+use one_assets::IconName;
 use one_core::layout::TOOLBAR_WIDTH;
 use one_core::sidebar_contribution::SidebarPlacement;
 use one_core::storage::{
@@ -1450,7 +1448,7 @@ impl TerminalSidebar {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let is_active = self.tool_dock.is_tool_open(panel);
-        let item_size = Size::Size(cx.theme().geometry.layout.global_rail_item);
+        let item_size = Size::Size(one_ui::theme_geometry().layout.global_rail_item);
 
         terminal_toolbar_icon_button(
             SharedString::from(format!("terminal-sidebar-toolbar-btn-{panel:?}")),
@@ -1610,7 +1608,7 @@ impl TerminalSidebarToolbar {
 impl Render for TerminalSidebarToolbar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let snapshot = self.sidebar.read(cx).toolbar_snapshot();
-        let item_size = Size::Size(cx.theme().geometry.layout.global_rail_item);
+        let item_size = Size::Size(one_ui::theme_geometry().layout.global_rail_item);
 
         v_flex()
             .flex_shrink_0()
@@ -1700,8 +1698,7 @@ mod tests {
     use gpui_component::{Theme, ThemeColor};
     use one_core::sidebar_contribution::SidebarPlacement;
     use one_core::storage::{ConnectionType, StoredConnection};
-    use palette::IntoColor as _;
-    use terminal::terminal::TerminalConnectionKind;
+        use terminal::terminal::TerminalConnectionKind;
 
     fn stored_connection(id: i64, name: &str, connection_type: ConnectionType) -> StoredConnection {
         StoredConnection {
@@ -1870,13 +1867,13 @@ mod tests {
     #[test]
     fn workspace_theme_maps_terminal_palette_and_application_semantic_colors() {
         let colors = TerminalColors {
-            background: rgb(0x101010).into_color(),
-            foreground: rgb(0xf0f0f0).into_color(),
-            muted: rgb(0x202020).into_color(),
-            muted_foreground: rgb(0x909090).into_color(),
-            border: rgb(0x303030).into_color(),
-            accent: rgb(0x3366ff).into_color(),
-            accent_foreground: rgb(0xffffff).into_color(),
+            background: rgb(0x101010).into(),
+            foreground: rgb(0xf0f0f0).into(),
+            muted: rgb(0x202020).into(),
+            muted_foreground: rgb(0x909090).into(),
+            border: rgb(0x303030).into(),
+            accent: rgb(0x3366ff).into(),
+            accent_foreground: rgb(0xffffff).into(),
         };
         let application_theme = Theme::from(ThemeColor::dark().as_ref());
 

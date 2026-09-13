@@ -127,6 +127,9 @@ pub(super) enum HelperRunResult {
         reason: String,
         manual: bool,
         was_connected: bool,
+        /// How long the finished session stayed connected, when it became ready
+        /// before dropping. `None` means it never reported a usable session.
+        connected_for: Option<Duration>,
         disconnect_kind: Option<HelperDisconnectKind>,
     },
 }

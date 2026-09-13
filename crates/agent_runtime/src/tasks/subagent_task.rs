@@ -246,17 +246,12 @@ fn llm_tool_call_id(call: &LlmToolCall) -> ToolCallId {
 }
 
 fn subagent_system_prompt(name: &str) -> String {
-    format!(
-        "你是 Navop agent runtime 派发的隔离子代理 `{name}`。\
-只完成用户给你的子任务。你可以使用提供的只读工具查询上下文,但不要修改外部状态。\
-不要调用 `delegate_task` 或 `update_plan`;它们不会提供给你。\
-输出简体中文结论摘要,包含关键发现、证据和下一步建议。"
-    )
+    t!("AgentRuntime.subagent_system_prompt", name = name).to_string()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::subagent_request;
+    use super::{subagent_request, subagent_system_prompt};
     use crate::tools::ToolSpec;
     use llm_connector::types::Message;
     use serde_json::json;
@@ -275,5 +270,14 @@ mod tests {
         assert!(error.contains("incompatible function-calling schema"));
         assert!(error.contains("/type"));
         assert!(error.contains("root schema must declare type \"object\""));
+    }
+
+    #[test]
+    fn subagent_system_prompt_names_agent_and_forbids_nested_tools() {
+        let prompt = subagent_system_prompt("researcher");
+        assert!(prompt.contains("Navop"));
+        assert!(prompt.contains("researcher"));
+        assert!(prompt.contains("delegate_task"));
+        assert!(prompt.contains("update_plan"));
     }
 }

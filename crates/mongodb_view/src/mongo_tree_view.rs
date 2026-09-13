@@ -9,17 +9,9 @@ use gpui::{
     SharedString, Styled, Subscription, UniformListScrollHandle, Window, div,
     prelude::FluentBuilder, px, uniform_list,
 };
-use gpui_component::{
-    ActiveTheme, Icon, IconName, IconSize, Sizable, Size, WindowExt as _,
-    dialog::DialogButtonProps,
-    h_flex,
-    input::{Editor, EditorState, Input, InputEvent, InputState, Textarea, TextareaState},
-    menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
-    notification::Notification,
-    scroll::Scrollbar,
-    spinner::Spinner,
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Icon, Sizable, Size, WindowExt as _, dialog::DialogButtonProps, h_flex, input::{Editor, EditorState, Input, InputEvent, InputState, Textarea, TextareaState}, menu::{ContextMenuExt, PopupMenu, PopupMenuItem}, notification::Notification, scroll::Scrollbar, spinner::Spinner, v_flex};
+use one_ui::IconSize;
+use one_assets::IconName;
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::{ActiveConnections, StoredConnection};
 use rust_i18n::t;
@@ -1287,7 +1279,7 @@ impl MongoTreeView {
         let icon = Icon::new(icon_name).color().with_size(IconSize::Default);
 
         let indent = MONGO_TREE_INDENT * entry.depth;
-        let tree = cx.theme().geometry.tree;
+        let tree = one_ui::theme_geometry().tree;
         let click_node_id = node_id.clone();
         let view_for_click = cx.entity().clone();
         let view_for_double_click = cx.entity().clone();

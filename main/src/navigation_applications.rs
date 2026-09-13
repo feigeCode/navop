@@ -48,19 +48,19 @@ impl NavigationApplication {
         }
     }
 
-    pub(crate) fn icon(self) -> gpui_component::IconName {
+    pub(crate) fn icon(self) -> one_assets::IconName {
         match self {
-            Self::AiWorkbench => gpui_component::IconName::AILine,
-            Self::Team => gpui_component::IconName::TeamLine,
-            Self::Notes => gpui_component::IconName::NotesLine,
-            Self::Toolbox => gpui_component::IconName::LayoutDashboard,
-            Self::JsonFormatter => gpui_component::IconName::Json,
+            Self::AiWorkbench => one_assets::IconName::AILine,
+            Self::Team => one_assets::IconName::TeamLine,
+            Self::Notes => one_assets::IconName::NotesLine,
+            Self::Toolbox => one_assets::IconName::LayoutDashboard,
+            Self::JsonFormatter => one_assets::IconName::Json,
             // 会话日志用线性图标；IconName::Terminal 的默认资源是固定填充彩色 SVG。
-            Self::SessionLogs => gpui_component::IconName::SquareTerminal,
-            Self::CredentialVault => gpui_component::IconName::Key,
+            Self::SessionLogs => one_assets::IconName::SquareTerminal,
+            Self::CredentialVault => one_assets::IconName::Key,
             // 已知主机使用线性图标，与侧栏其余 *_Line 图标风格一致。
-            Self::KnownHosts => gpui_component::IconName::ServerLine,
-            Self::Extensions => gpui_component::IconName::ExtensionsLine,
+            Self::KnownHosts => one_assets::IconName::ServerLine,
+            Self::Extensions => one_assets::IconName::ExtensionsLine,
         }
     }
 }

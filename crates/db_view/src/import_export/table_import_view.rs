@@ -2,19 +2,12 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use gpui::{
-    App, AppContext, ColorExt, Context, Entity, FocusHandle, Focusable, InteractiveElement,
+    App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement,
     IntoElement, ParentElement, PathPromptOptions, Render, SharedString,
     StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
 };
-use gpui_component::{
-    ActiveTheme, Disableable, IconName, IndexPath, VirtualListScrollHandle,
-    button::{Button, ButtonVariants as _},
-    h_flex,
-    input::{Input, InputState},
-    select::{Select, SelectItem, SelectState},
-    switch::Switch,
-    v_flex, v_virtual_list,
-};
+use gpui_component::{ActiveTheme, Disableable, IndexPath, VirtualListScrollHandle, button::{Button, ButtonVariants as _}, h_flex, input::{Input, InputState}, select::{Select, SelectItem, SelectState}, switch::Switch, v_flex, v_virtual_list};
+use one_assets::IconName;
 use tokio::sync::mpsc;
 
 use db::{CsvImportConfig, DataFormat, GlobalDbState, ImportConfig, ImportProgressEvent};

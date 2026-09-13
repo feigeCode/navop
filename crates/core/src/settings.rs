@@ -547,6 +547,31 @@ pub struct AiChatSettings {
         deserialize_with = "deserialize_agent_max_iterations"
     )]
     pub max_iterations: usize,
+    /// 用户自定义系统提示词（追加在内置 Agent 系统提示词模板之后）。
+    ///
+    /// 空串表示不追加；旧配置缺少该字段时按空串回落。
+    #[serde(default)]
+    pub custom_system_prompt: String,
+}
+
+/// 自定义系统提示词的最大字符数（按 chars 计），防止拖垮上下文长度。
+pub const MAX_CUSTOM_SYSTEM_PROMPT_CHARS: usize = 8000;
+
+impl AiChatSettings {
+    /// 返回规范化后的自定义系统提示词；空白内容返回 `None`。
+    ///
+    /// 超长内容按 [`MAX_CUSTOM_SYSTEM_PROMPT_CHARS`] 截断，避免配置文件里
+    /// 的异常值直接拖垮每次请求的上下文。
+    pub fn effective_custom_system_prompt(&self) -> Option<String> {
+        let trimmed = self.custom_system_prompt.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        if trimmed.chars().count() <= MAX_CUSTOM_SYSTEM_PROMPT_CHARS {
+            return Some(trimmed.to_string());
+        }
+        Some(trimmed.chars().take(MAX_CUSTOM_SYSTEM_PROMPT_CHARS).collect())
+    }
 }
 
 fn default_agent_max_iterations() -> usize {
@@ -566,6 +591,7 @@ impl Default for AiChatSettings {
         Self {
             tool_execution_mode: AiChatToolExecutionMode::default(),
             max_iterations: default_agent_max_iterations(),
+            custom_system_prompt: String::new(),
         }
     }
 }
@@ -853,6 +879,12 @@ pub struct AppSettings {
     pub font_family: String,
     #[serde(default = "default_font_size")]
     pub font_size: f64,
+    /// 界面缩放百分比（100 = 默认大小）。
+    ///
+    /// 该值会与 `font_size` 相乘作为 GPUI 的 rem 基准长度，从而整体缩放以 rem
+    /// 表达的界面尺寸，效果等同于浏览器缩放，便于在 4K 等高分辨率屏幕上使用。
+    #[serde(default = "default_ui_scale_percent")]
+    pub ui_scale_percent: u32,
     #[serde(default = "default_monospace_font_family")]
     pub sql_editor_font_family: String,
     #[serde(default = "default_sql_editor_font_size")]
@@ -1007,6 +1039,17 @@ fn default_custom_accent_color() -> String {
 
 fn default_font_size() -> f64 {
     14.0
+}
+
+/// 界面缩放允许的最小百分比。
+pub const UI_SCALE_PERCENT_MIN: u32 = 50;
+
+/// 界面缩放允许的最大百分比。
+pub const UI_SCALE_PERCENT_MAX: u32 = 300;
+
+/// 界面缩放的默认值（百分比）。
+fn default_ui_scale_percent() -> u32 {
+    100
 }
 
 fn default_sql_editor_font_size() -> f64 {
@@ -1243,6 +1286,7 @@ impl Default for AppSettings {
             custom_accent_color: default_custom_accent_color(),
             font_family: default_font_family(),
             font_size: default_font_size(),
+            ui_scale_percent: default_ui_scale_percent(),
             sql_editor_font_family: default_monospace_font_family(),
             sql_editor_font_size: default_sql_editor_font_size(),
             table_preview_font_family: default_monospace_font_family(),
@@ -1566,12 +1610,25 @@ impl AppSettings {
 
         let theme = Theme::global_mut(cx);
         theme.font_family = resolved.into();
-        theme.font_size = px(self.font_size as f32);
+        // GPUI 的 rem 基准长度取自主题字号（gpui-component 的 `Root::render` 会调用
+        // `window.set_rem_size(cx.theme().font_size)`），因此把界面缩放倍率乘进字号，
+        // 即可整体缩放所有以 rem 表达的字体、间距与控件尺寸。
+        theme.font_size = px(self.font_size as f32 * self.ui_scale());
         Theme::sync_base(cx);
     }
 
     pub fn apply_font_size(&self, cx: &mut App) {
         self.apply_font_settings(cx);
+    }
+
+    /// 界面缩放倍率（1.0 表示 100%）。
+    ///
+    /// 超出允许范围的值会被收敛到 [`UI_SCALE_PERCENT_MIN`] /
+    /// [`UI_SCALE_PERCENT_MAX`] 之间，避免产生不可用的界面尺寸。
+    pub fn ui_scale(&self) -> f32 {
+        self.ui_scale_percent
+            .clamp(UI_SCALE_PERCENT_MIN, UI_SCALE_PERCENT_MAX) as f32
+            / 100.0
     }
 
     /// 应用通用字体族设置到主题（设置面板修改"字体"后调用）。
@@ -1600,6 +1657,7 @@ mod tests {
 
     use super::{
         AiChatSettings, AiChatToolExecutionMode, AppSettings, ConnectionSortOrder, CustomFont,
+        MAX_CUSTOM_SYSTEM_PROMPT_CHARS,
         DEFAULT_MCP_APPROVAL_TIMEOUT_MS, DEFAULT_TERMINAL_THEME, HomeConnectionLayout,
         LOCALE_SYSTEM, LargeTextCellEditorOpenMode, LocalTerminalProfileKind,
         LocalTerminalProfileSettings, MainWindowState, McpPermissionMode, McpServerMode,
@@ -1969,6 +2027,78 @@ mod tests {
     }
 
     #[test]
+    fn ui_scale_defaults_to_identity_and_clamps_out_of_range_values() {
+        let mut settings = AppSettings::default();
+        assert_eq!(100, settings.ui_scale_percent);
+        assert!((settings.ui_scale() - 1.0).abs() < f32::EPSILON);
+
+        settings.ui_scale_percent = 150;
+        assert!((settings.ui_scale() - 1.5).abs() < f32::EPSILON);
+
+        settings.ui_scale_percent = 10;
+        let min_scale = super::UI_SCALE_PERCENT_MIN as f32 / 100.0;
+        assert!((settings.ui_scale() - min_scale).abs() < f32::EPSILON);
+
+        settings.ui_scale_percent = 10_000;
+        let max_scale = super::UI_SCALE_PERCENT_MAX as f32 / 100.0;
+        assert!((settings.ui_scale() - max_scale).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn ui_scale_percent_is_read_from_persisted_settings() {
+        let settings: AppSettings =
+            serde_json::from_str(r#"{ "ui_scale_percent": 175 }"#).expect("ui_scale_percent 应能读取");
+        assert_eq!(175, settings.ui_scale_percent);
+        assert!((settings.ui_scale() - 1.75).abs() < f32::EPSILON);
+
+        // 旧配置文件缺少该字段时应回落到 100%。
+        let legacy: AppSettings = serde_json::from_str("{}").expect("旧配置应能读取");
+        assert_eq!(100, legacy.ui_scale_percent);
+    }
+
+    #[test]
+    fn ai_chat_custom_system_prompt_defaults_to_empty_for_legacy_configs() {
+        let settings: AiChatSettings =
+            serde_json::from_str(r#"{ "max_iterations": 32 }"#).expect("旧配置应能读取");
+        assert_eq!(String::new(), settings.custom_system_prompt);
+        assert_eq!(None, settings.effective_custom_system_prompt());
+    }
+
+    #[test]
+    fn ai_chat_custom_system_prompt_trims_blank_values_to_none() {
+        let mut settings = AiChatSettings::default();
+        settings.custom_system_prompt = "   ".to_string();
+        assert_eq!(None, settings.effective_custom_system_prompt());
+
+        settings.custom_system_prompt = "  始终用 DBA 视角回答。\n".to_string();
+        assert_eq!(
+            Some("始终用 DBA 视角回答。".to_string()),
+            settings.effective_custom_system_prompt()
+        );
+    }
+
+    #[test]
+    fn ai_chat_custom_system_prompt_clamps_overlong_values() {
+        let mut settings = AiChatSettings::default();
+        settings.custom_system_prompt = "好".repeat(MAX_CUSTOM_SYSTEM_PROMPT_CHARS + 100);
+        let effective = settings
+            .effective_custom_system_prompt()
+            .expect("非空内容应返回 Some");
+        assert_eq!(MAX_CUSTOM_SYSTEM_PROMPT_CHARS, effective.chars().count());
+
+        // 边界长度不截断。
+        settings.custom_system_prompt = "x".repeat(MAX_CUSTOM_SYSTEM_PROMPT_CHARS);
+        assert_eq!(
+            MAX_CUSTOM_SYSTEM_PROMPT_CHARS,
+            settings
+                .effective_custom_system_prompt()
+                .expect("边界长度应返回 Some")
+                .chars()
+                .count()
+        );
+    }
+
+    #[test]
     fn app_settings_does_not_require_master_key_on_startup_by_default() {
         assert!(!AppSettings::default().require_master_key_on_startup);
     }
@@ -2305,6 +2435,41 @@ mod tests {
             settings.apply(cx);
 
             assert_eq!(px(18.0), Theme::global(cx).font_size);
+        });
+    }
+
+    #[gpui::test]
+    fn app_settings_apply_scales_theme_font_size_by_ui_scale(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_global(Theme::default());
+
+            let mut settings = AppSettings::default();
+            settings.font_size = 14.0;
+            settings.ui_scale_percent = 150;
+
+            settings.apply(cx);
+
+            // 界面缩放会与字号相乘后写入主题字号，而 gpui-component 的 Root 会用它
+            // 作为窗口 rem 基准长度，从而整体缩放界面。
+            assert_eq!(px(21.0), Theme::global(cx).font_size);
+        });
+    }
+
+    #[gpui::test]
+    fn app_settings_apply_keeps_theme_font_size_at_identity_for_default_ui_scale(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_global(Theme::default());
+
+            let settings = AppSettings::default();
+
+            settings.apply(cx);
+
+            // 默认缩放为 100% 时行为与改动前一致。
+            assert_eq!(px(14.0), Theme::global(cx).font_size);
         });
     }
 

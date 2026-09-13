@@ -5,15 +5,12 @@
 use crate::{home_tab::HomePage, navigation_applications::NavigationApplication};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext as _, ColorExt as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement, IntoElement, ParentElement, Render, SharedString,
     StatefulInteractiveElement, Styled, Window, div, px,
 };
-use gpui_component::{
-    ActiveTheme, IconName, Sizable, h_flex,
-    input::{Input, InputEvent, InputState},
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Sizable, h_flex, input::{Input, InputEvent, InputState}, v_flex};
+use one_assets::IconName;
 use one_core::tab_container::{TabContent, TabContentEvent};
 use rust_i18n::t;
 
@@ -167,7 +164,7 @@ impl ToolboxTab {
                     .justify_center()
                     .child(
                         gpui_component::Icon::new(tool.icon)
-                            .with_size(gpui_component::IconSize::Large)
+                            .with_size(one_ui::IconSize::Large)
                             .text_color(accent),
                     ),
             )
@@ -227,7 +224,7 @@ impl ToolboxTab {
                     .justify_center()
                     .child(
                         gpui_component::Icon::new(IconName::TableDesignTool)
-                            .with_size(gpui_component::IconSize::Large)
+                            .with_size(one_ui::IconSize::Large)
                             .text_color(accent),
                     ),
             )
@@ -285,7 +282,7 @@ impl ToolboxTab {
                     .justify_center()
                     .child(
                         gpui_component::Icon::new(IconName::Plus)
-                            .with_size(gpui_component::IconSize::Large)
+                            .with_size(one_ui::IconSize::Large)
                             .text_color(muted),
                     ),
             )

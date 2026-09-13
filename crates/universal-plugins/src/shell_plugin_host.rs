@@ -23,9 +23,11 @@ mod resource;
 mod runtime;
 pub(crate) mod session;
 mod value;
+mod workbench;
 
 pub(crate) use context::ShellConnectionContext;
 pub(crate) use policy::LoadedShellView;
+pub(crate) use policy::load_borrowed;
 
 use std::{
     cell::RefCell,
@@ -76,6 +78,27 @@ enum TrackedPluginTab {
 
 impl gpui::Global for ShellPluginHost {}
 
+impl ShellPluginHost {
+    pub(crate) fn new_mount_session(
+        &self,
+        backends: std::collections::BTreeMap<String, String>,
+    ) -> std::sync::Arc<session::ShellMountSession> {
+        std::sync::Arc::new(session::ShellMountSession::new(
+            self.service.clone(),
+            backends,
+            self.tokio.clone(),
+        ))
+    }
+    pub fn resource_workbench_for_connection(
+        &self,
+        extension_id: &str,
+        contribution_id: &str,
+    ) -> Option<extension_runtime::RegisteredResourceWorkbenchContribution> {
+        self.service
+            .resource_workbench_for_connection(extension_id, contribution_id)
+    }
+}
+
 pub(crate) struct PreparedShellView {
     pub(crate) contribution: extension_runtime::RegisteredShellViewContribution,
     pub(crate) activations: Vec<ActivationHandle>,
@@ -101,7 +124,7 @@ impl ShellPluginHost {
         })
     }
 
-    pub(crate) fn contribution(
+    pub fn contribution(
         &self,
         extension_id: &str,
         view_id: &str,

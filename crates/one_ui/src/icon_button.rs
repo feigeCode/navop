@@ -8,7 +8,6 @@ use gpui_component::{
     button::{Button, ButtonRounded, ButtonVariant, ButtonVariants},
     menu::DropdownMenu,
 };
-use palette::IntoColor;
 
 /// Semantic sizing presets for icon-only actions.
 ///
@@ -66,7 +65,7 @@ impl IconButton {
             .icon(icon)
             .ghost()
             .with_size(hit_size)
-            .glyph_size(glyph_size.into());
+            .glyph_size(glyph_size);
 
         Self {
             button,
@@ -94,7 +93,7 @@ impl IconButton {
     /// Sets the glyph size without changing the interactive hit target.
     pub fn glyph_size(mut self, size: IconSize) -> Self {
         self.glyph_size = size;
-        self.button = self.button.glyph_size(size.into());
+        self.button = self.button.glyph_size(size);
         self
     }
 
@@ -109,7 +108,7 @@ impl IconButton {
     }
 
     /// Applies a semantic tint to the glyph and button text state.
-    pub fn text_color(mut self, color: impl IntoColor<Hsla>) -> Self {
+    pub fn text_color(mut self, color: impl Into<Hsla>) -> Self {
         self.button = self.button.text_color(color);
         self
     }
@@ -230,7 +229,8 @@ impl RenderOnce for IconButton {
 mod tests {
     use super::*;
     use gpui::px;
-    use gpui_component::{IconName, Theme, button::ButtonCustomVariant};
+    use gpui_component::{Theme, button::ButtonCustomVariant};
+use one_assets::IconName;
 
     #[test]
     fn icon_button_roles_keep_hit_targets_and_glyphs_independent() {

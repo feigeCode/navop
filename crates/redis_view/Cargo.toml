@@ -5,6 +5,7 @@ publish.workspace = true
 edition.workspace = true
 
 [dependencies]
+one-assets = { workspace = true }
 anyhow.workspace = true
 agent_runtime.workspace = true
 async-trait.workspace = true
@@ -26,10 +27,6 @@ rust-i18n.workspace = true
 dashmap.workspace = true
 futures.workspace = true
 redis-runtime.workspace = true
-
-[features]
-default = []
-builtin-redis = ["redis-runtime/builtin-redis"]
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }

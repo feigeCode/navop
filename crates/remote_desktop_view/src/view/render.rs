@@ -568,7 +568,7 @@ impl Render for RemoteDesktopView {
                     div()
                         .id("remote-desktop-presentation-status")
                         .w_full()
-                        .h(cx.theme().geometry.layout.status_bar)
+                        .h(one_ui::theme_geometry().layout.status_bar)
                         .flex_shrink_0()
                         .flex()
                         .items_center()

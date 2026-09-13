@@ -13,7 +13,7 @@ use tool_runtime::{
     ToolHandler, ToolMode, ToolRegistry, ToolResult, ToolTargetSpec,
 };
 
-use command_io::run_command;
+use command_io::{run_command, run_scan_keys};
 use input::{optional_u8, parse_command_args, required_str};
 use schema::{command_schema, get_schema, keys_schema, set_schema};
 
@@ -79,14 +79,20 @@ impl RedisToolHandler {
     async fn execute_keys(&self, input: Value) -> Result<ToolResult, ToolError> {
         let connection = required_str(&input, "connection")?;
         let pattern = required_str(&input, "pattern")?;
-        let db = optional_u8(&input, "db")?;
-        self.execute_parts(
-            connection,
-            db,
-            format!("KEYS {pattern}"),
-            vec!["KEYS".into(), pattern],
-        )
-        .await
+        let db_override = optional_u8(&input, "db")?;
+        let mut params = self.redis_params(&connection)?;
+        let db = db_override.unwrap_or(params.db_index);
+        params.db_index = db;
+        let result = run_scan_keys(params, pattern.clone()).await?;
+
+        Ok(ToolResult::structured(json!({
+            "connection": connection,
+            "db": db,
+            "pattern": pattern,
+            "result": result.value,
+            "display": result.display,
+            "truncated": result.truncated
+        })))
     }
 
     async fn execute_get(&self, input: Value) -> Result<ToolResult, ToolError> {
@@ -268,7 +274,32 @@ fn validate_command(parts: &[String], db: u8, mode: RedisMode) -> Result<(), Too
             message: "Redis Cluster only supports database 0".to_string(),
         });
     }
+    if let Some(guidance) = unbounded_bulk_guidance(parts) {
+        return Err(ToolError::Failed {
+            message: format!(
+                "`{}` is blocked because it can load an unbounded amount of data in one call; {guidance}",
+                parts[0]
+            ),
+        });
+    }
     Ok(())
+}
+
+/// 无界批量命令 → 安全替代提示。返回 `None` 表示允许执行。
+fn unbounded_bulk_guidance(parts: &[String]) -> Option<&'static str> {
+    let command = parts.first()?.to_ascii_uppercase();
+    match command.as_str() {
+        "KEYS" => Some("use the redis.keys tool (SCAN based) instead"),
+        "HGETALL" | "HKEYS" | "HVALS" => {
+            Some("use `HSCAN <key> 0 COUNT 1000` or the key value view")
+        }
+        "SMEMBERS" => Some("use `SSCAN <key> 0 COUNT 1000` or the key value view"),
+        "SUNION" | "SINTER" | "SDIFF" => {
+            Some("these materialize whole sets; scan each source set with SSCAN")
+        }
+        "SORT" => Some("SORT can expand unbounded; add a tight LIMIT or scan the result"),
+        _ => None,
+    }
 }
 
 fn unknown_connection(connection: &str) -> ToolError {

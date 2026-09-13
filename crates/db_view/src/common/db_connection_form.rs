@@ -26,21 +26,8 @@ use gpui::{
     ParentElement, PathPromptOptions, Render, SharedString, Styled, Subscription, Window, div,
     prelude::*, px,
 };
-use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, IndexPath, Sizable, Size,
-    button::{Button, ButtonVariants as _},
-    checkbox::Checkbox,
-    clipboard::Clipboard,
-    form::{field, v_form},
-    h_flex,
-    input::{Input, InputEvent, InputState},
-    popover::Popover,
-    radio::Radio,
-    scroll::ScrollableElement,
-    select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
-    tab::{Tab, TabBar},
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Disableable, Icon, IndexPath, Sizable, Size, button::{Button, ButtonVariants as _}, checkbox::Checkbox, clipboard::Clipboard, form::{field, v_form}, h_flex, input::{Input, InputEvent, InputState}, popover::Popover, radio::Radio, scroll::ScrollableElement, select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState}, tab::{Tab, TabBar}, v_flex};
+use one_assets::IconName;
 use one_core::cloud_sync::TeamOption;
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::traits::Repository;

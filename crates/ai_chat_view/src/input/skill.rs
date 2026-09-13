@@ -2,7 +2,8 @@ use gpui::{
     Context, Entity, InteractiveElement, IntoElement, ParentElement, PathPromptOptions,
     SharedString, StatefulInteractiveElement, Styled, div, prelude::FluentBuilder, px,
 };
-use gpui_component::{ActiveTheme, Icon, IconName, Sizable, button::Button, h_flex, v_flex};
+use gpui_component::{ActiveTheme, Icon, Sizable, button::Button, h_flex, v_flex};
+use one_assets::IconName;
 use rust_i18n::t;
 
 use crate::theme::{AgentChatTheme, active_agent_chat_theme};

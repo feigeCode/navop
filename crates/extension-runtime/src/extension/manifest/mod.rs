@@ -11,7 +11,15 @@ pub use contributes::{
     CommandContrib, DocumentExporterContrib, DocumentRendererContrib, RemoteFileEditorLaunchMode,
     ResourceConnectionContrib, ResourceConnectionFieldType, ResourceConnectionForm,
     ResourceConnectionFormField, ResourceConnectionFormTab, ResourceConnectionSelectOption,
-    ResourceConnectionVisibilityRule, ShellHostModule, ShellSurface, ShellViewContrib,
+    ResourceConnectionVisibilityRule, ResourceWorkbenchAction, ResourceWorkbenchBinding,
+    ResourceWorkbenchBindingSource, ResourceWorkbenchCollection, ResourceWorkbenchColumn,
+    ResourceWorkbenchContrib, ResourceWorkbenchEffect, ResourceWorkbenchInput,
+    ResourceWorkbenchNavigation, ResourceWorkbenchOperation, ResourceWorkbenchOperationMode,
+    ResourceWorkbenchPage, ResourceWorkbenchPagination, ResourceWorkbenchRenderer,
+    ResourceWorkbenchRendererKind, ResourceWorkbenchRowAction, ResourceWorkbenchStatusBar,
+    ResourceWorkbenchTab, ResourceWorkbenchTemplate, ResourceWorkbenchTerminal,
+    ResourceWorkbenchTree, ResourceWorkbenchTreeChildren, ResourceWorkbenchValueType,
+    ShellHostModule, ShellSurface, ShellViewContrib,
 };
 #[cfg(test)]
 pub use contributes::{CommandHandlerContrib, ContributesManifest, HtmlPreviewTransformContrib};

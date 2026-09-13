@@ -231,6 +231,18 @@ Home:
     en: "Invalid local terminal configuration: %{error}"
     zh-CN: "本地终端配置无效：%{error}"
     zh-HK: "本機終端設定無效：%{error}"
+  wsl_distributions_section:
+    en: WSL Distributions
+    zh-CN: WSL 发行版
+    zh-HK: WSL 發行版
+  wsl_distributions_default:
+    en: default
+    zh-CN: 默认
+    zh-HK: 預設
+  wsl_distributions_refresh:
+    en: Re-detect WSL
+    zh-CN: 重新识别 WSL
+    zh-HK: 重新識別 WSL
   remote_desktop_parameters_invalid:
     en: "Invalid remote desktop connection parameters: %{error}"
     zh-CN: "远程桌面连接参数无效：%{error}"
@@ -2530,6 +2542,14 @@ Settings:
         en: Adjust font size for better readability (8-72)
         zh-CN: 调整字体大小以获得更好的可读性（8-72）
         zh-HK: 調整字型大小以獲得更好的可讀性（8-72）
+      ui_scale:
+        en: Interface Scale
+        zh-CN: 界面缩放
+        zh-HK: 介面縮放
+      ui_scale_desc:
+        en: Scale the whole interface (fonts, spacing and controls); useful on high-resolution displays
+        zh-CN: 整体缩放界面（字体、间距与控件），适合 4K 等高分辨率屏幕
+        zh-HK: 整體縮放介面（字型、間距與控件），適合 4K 等高解析度螢幕
 
     LocalTerminal:
       group_title:
@@ -2892,6 +2912,18 @@ Settings:
         en: Maximum Iterations
         zh-CN: 最大迭代次数
         zh-HK: 最大迭代次數
+      custom_system_prompt:
+        en: Custom System Prompt
+        zh-CN: 自定义系统提示词
+        zh-HK: 自訂系統提示詞
+      custom_system_prompt_desc:
+        en: Extra persona or domain rules appended after the built-in agent system prompt; applies to new built-in Agent sessions (not ACP/external agents). The built-in prompt (resources, skills, plan, tool rules) is always kept. Leave empty to append nothing. Up to 8000 characters.
+        zh-CN: 追加在内置 Agent 系统提示词之后的人设或领域规则，对新的内置 Agent 会话生效（不影响 ACP 外部 Agent）。内置提示词（资源、Skill、计划、工具规则）始终保留。留空表示不追加，最长 8000 字符。
+        zh-HK: 附加在內置 Agent 系統提示詞之後的人設或領域規則，對新的內置 Agent 工作階段生效（不影響 ACP 外部 Agent）。內置提示詞（資源、Skill、計畫、工具規則）始終保留。留空表示不附加，最長 8000 字元。
+      custom_system_prompt_placeholder:
+        en: "e.g. Always answer as a senior DBA; keep replies in bullet points..."
+        zh-CN: "例如：始终以资深 DBA 视角回答；回答保持要点式……"
+        zh-HK: "例如：始終以資深 DBA 視角回答；回答保持要點式……"
       max_iterations_desc:
         en: Maximum model and tool round trips in one built-in Agent turn (1-256). Changes apply from the next turn.
         zh-CN: 内置 Agent 单轮中模型与工具调用的最大往返次数（1-256）。修改从下一轮开始生效。

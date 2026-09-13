@@ -8,6 +8,7 @@ default = []
 builtin-duckdb = ["db/builtin-duckdb"]
 
 [dependencies]
+one-assets = { workspace = true }
 anyhow.workspace = true
 base64.workspace = true
 async-trait.workspace = true
@@ -23,6 +24,7 @@ smol.workspace = true
 gpui.workspace = true
 ai_chat_view = { workspace = true, default-features = false }
 db.workspace = true
+db-value.workspace = true
 er_flow.workspace = true
 extension-component = { workspace = true }
 ferrum-flow.workspace = true

@@ -24,26 +24,13 @@ pub use file_list_panel::{
 };
 
 use gpui::{
-    Anchor, AnyElement, AnyWindowHandle, App, AsyncApp, ColorExt, Context, Entity, EventEmitter,
+    Anchor, AnyElement, AnyWindowHandle, App, AsyncApp, Context, Entity, EventEmitter,
     ExternalPaths, FocusHandle, Focusable, FontWeight, IntoElement, MouseButton, ParentElement,
     Render, SharedString, Styled, WeakEntity, Window, actions, div, prelude::*, px,
 };
-use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, IconSize, Sizable, Size, WindowExt,
-    breadcrumb::{Breadcrumb, BreadcrumbItem},
-    button::{Button, ButtonVariants},
-    dialog::{DialogButtonProps, DialogFooter},
-    h_flex,
-    input::{Input, InputEvent, InputState},
-    menu::{DropdownMenu, PopupMenuItem},
-    notification::Notification,
-    popover::{Popover, PopoverState},
-    progress::Progress,
-    scroll::ScrollableElement,
-    spinner::Spinner,
-    tooltip::Tooltip,
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Disableable, Icon, Sizable, Size, WindowExt, breadcrumb::{Breadcrumb, BreadcrumbItem}, button::{Button, ButtonVariants}, dialog::{DialogButtonProps, DialogFooter}, h_flex, input::{Input, InputEvent, InputState}, menu::{DropdownMenu, PopupMenuItem}, notification::Notification, popover::{Popover, PopoverState}, progress::Progress, scroll::ScrollableElement, spinner::Spinner, tooltip::Tooltip, v_flex};
+use one_ui::IconSize;
+use one_assets::IconName;
 use one_core::background_tasks::{
     BackgroundTaskCancellation, BackgroundTaskHandle, BackgroundTaskProgressUnit,
     BackgroundTaskSpec,
@@ -5860,7 +5847,7 @@ impl SftpView {
                 .flex()
                 .items_center()
                 .justify_center()
-                .bg(gpui::black().opacity(cx.theme().geometry.opacity.scrim))
+                .bg(gpui::black().opacity(one_ui::theme_geometry().opacity.scrim))
                 .child(
                     v_flex()
                         .gap_4()
@@ -5956,7 +5943,7 @@ impl SftpView {
             .flex()
             .items_center()
             .justify_center()
-            .bg(gpui::black().opacity(cx.theme().geometry.opacity.scrim))
+            .bg(gpui::black().opacity(one_ui::theme_geometry().opacity.scrim))
             .child(
                 v_flex()
                     .gap_4()
@@ -6419,7 +6406,7 @@ impl SftpView {
     }
 
     fn render_local_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let geometry = cx.theme().geometry.clone();
+        let geometry = one_ui::theme_geometry().clone();
         let is_left_remote = self.left_remote.is_some();
         let breadcrumb = if is_left_remote {
             self.render_left_remote_breadcrumb(cx)
@@ -6784,7 +6771,7 @@ impl SftpView {
                                             .absolute()
                                             .inset_0()
                                             .bg(gpui::black()
-                                                .opacity(cx.theme().geometry.opacity.loading_scrim))
+                                                .opacity(one_ui::theme_geometry().opacity.loading_scrim))
                                             .flex()
                                             .items_center()
                                             .justify_center()
@@ -6825,7 +6812,7 @@ impl SftpView {
     }
 
     fn render_remote_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let geometry = cx.theme().geometry.clone();
+        let geometry = one_ui::theme_geometry().clone();
         let breadcrumb = self.render_remote_breadcrumb(cx);
         let selected_count = self.get_remote_selected_count(cx);
         let has_selection = selected_count > 0;
@@ -7089,7 +7076,7 @@ impl SftpView {
                                         .absolute()
                                         .inset_0()
                                         .bg(gpui::black()
-                                            .opacity(cx.theme().geometry.opacity.loading_scrim))
+                                            .opacity(one_ui::theme_geometry().opacity.loading_scrim))
                                         .flex()
                                         .items_center()
                                         .justify_center()

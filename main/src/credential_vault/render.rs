@@ -1,15 +1,9 @@
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    ColorExt as _, InteractiveElement, IntoElement, ParentElement, Render, Styled, Window, div, px,
+    InteractiveElement, IntoElement, ParentElement, Render, Styled, Window, div, px,
 };
-use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable,
-    button::{Button, ButtonVariants as _},
-    h_flex,
-    input::Input,
-    scroll::ScrollableElement,
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Icon, Sizable, button::{Button, ButtonVariants as _}, h_flex, input::Input, scroll::ScrollableElement, v_flex};
+use one_assets::IconName;
 use one_core::storage::CredentialSummary;
 use rust_i18n::t;
 

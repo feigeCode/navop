@@ -29,23 +29,11 @@ use gpui::{
     FontWeight, InteractiveElement, IntoElement, KeyDownEvent, Keystroke, ParentElement,
     PathPromptOptions, Render, SharedString, Styled, WeakEntity, Window, div,
 };
-use gpui_component::{
-    ActiveTheme, AxisExt, Disableable, Icon, IconName, IndexPath, Sizable, Size, WindowExt,
-    button::{Button, ButtonVariants as _},
-    clipboard::Clipboard,
-    group_box::GroupBoxVariant,
-    h_flex,
-    input::{Input, InputState},
-    kbd::Kbd,
-    scroll::ScrollableElement,
-    select::{Select, SelectItem, SelectState},
-    setting::{
+use gpui_component::{ActiveTheme, AxisExt, Disableable, Icon, IndexPath, Sizable, Size, WindowExt, button::{Button, ButtonVariants as _}, clipboard::Clipboard, group_box::GroupBoxVariant, h_flex, input::{Input, InputState}, kbd::Kbd, scroll::ScrollableElement, select::{Select, SelectItem, SelectState}, setting::{
         NumberFieldOptions, SelectIndex, SettingField, SettingGroup, SettingItem, SettingPage,
         Settings,
-    },
-    switch::Switch,
-    v_flex,
-};
+    }, switch::Switch, v_flex};
+use one_assets::IconName;
 use one_core::cloud_sync::{
     CloudSyncService, GlobalCloudUser, SyncEngine, TeamKeyCacheStatus, TeamOption,
     get_cached_team_options, personal::SyncStoreHealth,
@@ -773,6 +761,39 @@ impl SettingsPanel {
                                 .default_value(default_settings.font_size),
                             )
                             .description(t!("Settings.General.Font.font_size_desc").to_string()),
+                        )
+                        .item(
+                            SettingItem::new(
+                                t!("Settings.General.Font.ui_scale"),
+                                SettingField::dropdown(
+                                    vec![
+                                        ("100".into(), "100%".into()),
+                                        ("110".into(), "110%".into()),
+                                        ("125".into(), "125%".into()),
+                                        ("150".into(), "150%".into()),
+                                        ("175".into(), "175%".into()),
+                                        ("200".into(), "200%".into()),
+                                    ],
+                                    |cx: &App| {
+                                        SharedString::from(
+                                            AppSettings::global(cx).ui_scale_percent.to_string(),
+                                        )
+                                    },
+                                    |val: SharedString, cx: &mut App| {
+                                        let percent = val.trim().parse::<u32>().unwrap_or(100);
+                                        AppSettings::update_and_save(cx, |settings| {
+                                            settings.ui_scale_percent = percent;
+                                        });
+                                        // rem 基准长度取自主题字号，因此改缩放后需重新应用字体设置。
+                                        AppSettings::current(cx).apply_font_size(cx);
+                                        cx.refresh_windows();
+                                    },
+                                )
+                                .default_value(SharedString::from(
+                                    default_settings.ui_scale_percent.to_string(),
+                                )),
+                            )
+                            .description(t!("Settings.General.Font.ui_scale_desc").to_string()),
                         ),
                     SettingGroup::new()
                         .title(t!("Settings.General.Log.group_title"))
@@ -883,7 +904,7 @@ impl SettingsPanel {
                 .group(
                     SettingGroup::new().title(t!("Settings.About.title")).item(
                         SettingItem::render(move |_options, _window, cx| render_about_section(cx))
-                            .search_texts([
+                            .keywords([
                                 t!("Settings.About.title").to_string(),
                                 t!("Settings.About.version").to_string(),
                                 t!("Settings.About.opensource_label").to_string(),
@@ -1953,7 +1974,7 @@ fn about_update_setting_group(auto_update_default: bool) -> SettingGroup {
             )
             .description(t!("Settings.About.Update.auto_update_desc").to_string()),
             SettingItem::render(move |_options, _window, cx| render_manual_update_check_item(cx))
-                .search_texts([
+                .keywords([
                     t!("Settings.About.Update.group_title").to_string(),
                     t!("Settings.About.Update.check_now").to_string(),
                     t!("Settings.About.Update.check_now_desc").to_string(),

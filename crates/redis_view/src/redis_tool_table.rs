@@ -2,7 +2,7 @@
 
 use crate::redis_tool_data::RedisToolKind;
 use gpui::{
-    App, ColorExt, Context, IntoElement, ParentElement, SharedString, Styled, Window, div, px,
+    App, Context, IntoElement, ParentElement, SharedString, Styled, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme, h_flex,

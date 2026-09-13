@@ -144,6 +144,7 @@ impl DbConnection for RecordingConnection {
                 .collect(),
             binary_cells: Vec::new(),
             elapsed_ms: 1,
+            ..Default::default()
         }))
     }
 

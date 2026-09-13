@@ -7,10 +7,8 @@ mod render;
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, SharedString, Window,
 };
-use gpui_component::{
-    Icon, IconName,
-    input::{InputEvent, InputState},
-};
+use gpui_component::{Icon, input::{InputEvent, InputState}};
+use one_assets::IconName;
 use one_core::{
     crypto,
     storage::{CredentialRepository, CredentialSummary, GlobalStorageState, StorageManager},

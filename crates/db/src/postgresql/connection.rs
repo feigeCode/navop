@@ -14,23 +14,17 @@ use rustls::{
 };
 use tokio::sync::Mutex;
 use tokio::time::sleep;
-use tokio_postgres::{
-    Client, Config, NoTls, Row, Statement,
-    config::SslMode,
-    types::{FromSql, Type},
-};
+use tokio_postgres::{Client, Config, NoTls, Row, Statement, config::SslMode};
 use tokio_postgres_rustls::MakeRustlsConnect;
 use tracing::{debug, error, info, warn};
 
 use crate::connection::{DbConnection, DbError, StreamingProgress};
-use crate::executor::{
-    BinaryCell, ExecOptions, ExecResult, QueryColumnMeta, QueryResult, SqlErrorInfo, SqlResult,
-    SqlSource,
-};
+use crate::executor::{ExecOptions, ExecResult, QueryResult, SqlErrorInfo, SqlResult, SqlSource};
 use crate::rustls_provider::ensure_rustls_crypto_provider;
 use crate::ssh_tunnel::resolve_connection_target;
 use crate::{DatabasePlugin, format_message, truncate_str};
 use connection_tunnel::TunnelGuard;
+use db_value::{ColumnDescriptor, Nullability, ResultBatch, ResultRow};
 use tokio::sync::mpsc;
 
 const NUMERIC_POSITIVE: u16 = 0x0000;
@@ -271,25 +265,7 @@ fn skip_postgres_dollar_quote(bytes: &[u8], start: usize) -> Option<usize> {
         .or(Some(bytes.len()))
 }
 
-#[derive(Debug)]
-struct PostgresNumeric(String);
-
-impl<'a> FromSql<'a> for PostgresNumeric {
-    fn from_sql(
-        _ty: &Type,
-        raw: &'a [u8],
-    ) -> std::result::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
-        decode_numeric(raw)
-            .map(Self)
-            .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidData, message).into())
-    }
-
-    fn accepts(ty: &Type) -> bool {
-        *ty == Type::NUMERIC
-    }
-}
-
-fn decode_numeric(raw: &[u8]) -> std::result::Result<String, String> {
+pub(super) fn decode_numeric(raw: &[u8]) -> std::result::Result<String, String> {
     if raw.len() < 8 {
         return Err("PostgreSQL NUMERIC value is shorter than its header".to_string());
     }
@@ -607,191 +583,76 @@ impl PostgresDbConnection {
         Ok(MakeRustlsConnect::new(client_config))
     }
 
-    /// Extract value from PostgreSQL row
-    fn extract_value(row: &Row, index: usize) -> Option<String> {
-        // Get column type
-        let column = &row.columns()[index];
-        let col_type = column.type_();
-
-        // Try to get the value based on type
-        match col_type {
-            // Boolean
-            &Type::BOOL => row
-                .try_get::<_, Option<bool>>(index)
-                .ok()
-                .flatten()
-                .map(|v| v.to_string()),
-
-            // Integer types
-            &Type::INT2 => row
-                .try_get::<_, Option<i16>>(index)
-                .ok()
-                .flatten()
-                .map(|v| v.to_string()),
-            &Type::INT4 => row
-                .try_get::<_, Option<i32>>(index)
-                .ok()
-                .flatten()
-                .map(|v| v.to_string()),
-            &Type::INT8 => row
-                .try_get::<_, Option<i64>>(index)
-                .ok()
-                .flatten()
-                .map(|v| v.to_string()),
-            // PostgreSQL's internal single-byte `"char"` type is distinct from
-            // SQL CHAR(n), which is reported as BPCHAR.
-            &Type::CHAR => row
-                .try_get::<_, Option<i8>>(index)
-                .ok()
-                .flatten()
-                .map(|v| char::from(v as u8).to_string()),
-
-            // Floating point types
-            &Type::FLOAT4 => row
-                .try_get::<_, Option<f32>>(index)
-                .ok()
-                .flatten()
-                .map(|v| v.to_string()),
-            &Type::FLOAT8 => row
-                .try_get::<_, Option<f64>>(index)
-                .ok()
-                .flatten()
-                .map(|v| v.to_string()),
-
-            // NUMERIC is arbitrary precision and must not be coerced through f64.
-            &Type::NUMERIC => row
-                .try_get::<_, Option<PostgresNumeric>>(index)
-                .ok()
-                .flatten()
-                .map(|v| v.0),
-
-            // Text types
-            &Type::TEXT | &Type::VARCHAR | &Type::BPCHAR | &Type::NAME => {
-                row.try_get::<_, Option<String>>(index).ok().flatten()
-            }
-
-            // Date and Time types
-            &Type::TIMESTAMP => {
-                use chrono::NaiveDateTime;
-                row.try_get::<_, Option<NaiveDateTime>>(index)
-                    .ok()
-                    .flatten()
-                    .map(|v| v.format("%Y-%m-%d %H:%M:%S").to_string())
-            }
-            &Type::TIMESTAMPTZ => {
-                use chrono::{DateTime, Utc};
-                row.try_get::<_, Option<DateTime<Utc>>>(index)
-                    .ok()
-                    .flatten()
-                    .map(|v| v.format("%Y-%m-%d %H:%M:%S %z").to_string())
-            }
-            &Type::DATE => {
-                use chrono::NaiveDate;
-                row.try_get::<_, Option<NaiveDate>>(index)
-                    .ok()
-                    .flatten()
-                    .map(|v| v.format("%Y-%m-%d").to_string())
-            }
-            &Type::TIME => {
-                use chrono::NaiveTime;
-                row.try_get::<_, Option<NaiveTime>>(index)
-                    .ok()
-                    .flatten()
-                    .map(|v| v.format("%H:%M:%S").to_string())
-            }
-
-            // Binary types
-            &Type::BYTEA => row
-                .try_get::<_, Option<Vec<u8>>>(index)
-                .ok()
-                .flatten()
-                .map(|v| format!("\\x{}", hex::encode(&v))),
-
-            // JSON types
-            &Type::JSON | &Type::JSONB => row
-                .try_get::<_, Option<serde_json::Value>>(index)
-                .ok()
-                .flatten()
-                .map(|v| v.to_string()),
-
-            // UUID
-            &Type::UUID => row
-                .try_get::<_, Option<uuid::Uuid>>(index)
-                .ok()
-                .flatten()
-                .map(|v| v.to_string()),
-
-            // Array types - try to get as string representation
-            _ if col_type.name().ends_with("[]") => {
-                // For arrays, try to get as string
-                row.try_get::<_, Option<String>>(index)
-                    .ok()
-                    .flatten()
-                    .or_else(|| Some(format!("<array: {}>", col_type.name())))
-            }
-
-            // Default: try as string, otherwise show type info
-            _ => row
-                .try_get::<_, Option<String>>(index)
-                .ok()
-                .flatten()
-                .or_else(|| Some(format!("<{}>", col_type.name()))),
-        }
-    }
-
+    /// 把查询结果组装为带类型的 [`ResultBatch`],再经
+    /// [`QueryResult::from_typed_batch`] 投影出 legacy 的 `rows`/`binary_cells`。
+    ///
+    /// 类型权威保留在 `typed_batch`;投影只供未迁移消费者使用。单元格解码统一走
+    /// [`super::codec::decode_cell`],未知/数组类型落到 `DbValue::Unsupported`,因此
+    /// 不会因无法投影 Undecoded 单元而让整条查询失败。
     fn build_query_result(
         stmt: &Statement,
         rows: Vec<Row>,
         sql: String,
         elapsed_ms: u128,
     ) -> SqlResult {
-        let columns: Vec<String> = stmt
+        let columns = stmt
             .columns()
-            .iter()
-            .map(|col| col.name().to_string())
-            .collect();
-
-        let column_meta: Vec<QueryColumnMeta> = stmt
-            .columns()
-            .iter()
-            .map(|col| {
-                let name = col.name().to_string();
-                let db_type = col.type_().name().to_string();
-                QueryColumnMeta::new(name, db_type)
-            })
-            .collect();
-
-        let mut binary_cells = Vec::new();
-        let all_rows: Vec<Vec<Option<String>>> = rows
             .iter()
             .enumerate()
-            .map(|(row_index, row)| {
-                (0..columns.len())
-                    .map(|i| {
-                        if stmt.columns()[i].type_() == &Type::BYTEA {
-                            if let Some(bytes) = row.try_get::<_, Option<Vec<u8>>>(i).ok().flatten()
-                            {
-                                binary_cells.push(BinaryCell {
-                                    row_index,
-                                    column_index: i,
-                                    bytes,
-                                });
-                            }
-                        }
-                        Self::extract_value(row, i)
-                    })
-                    .collect()
+            .map(|(index, col)| {
+                let native_type = col.type_().name().to_string();
+                ColumnDescriptor {
+                    id: format!("column:{index}"),
+                    label: col.name().to_string(),
+                    native_type: native_type.clone(),
+                    logical_type: native_type,
+                    nullable: Nullability::Unknown,
+                    charset: None,
+                    collation: None,
+                    precision: None,
+                    scale: None,
+                }
             })
-            .collect();
+            .collect::<Vec<_>>();
 
-        SqlResult::Query(QueryResult {
-            sql,
-            columns,
-            column_meta,
-            rows: all_rows,
-            binary_cells,
-            elapsed_ms,
-        })
+        let result_rows = rows
+            .iter()
+            .enumerate()
+            .map(|(row_index, row)| ResultRow {
+                id: row_index as u64,
+                cells: (0..columns.len())
+                    .map(|index| super::codec::decode_cell(row, index))
+                    .collect(),
+            })
+            .collect::<Vec<_>>();
+
+        let batch = match ResultBatch::try_new(0, columns, result_rows, true) {
+            Ok(batch) => batch,
+            Err(error) => {
+                warn!(
+                    "[PostgreSQL] failed to encode typed query result: {}",
+                    error
+                );
+                return SqlResult::Error(SqlErrorInfo {
+                    sql,
+                    message: format!("failed to encode typed query result: {error}"),
+                });
+            }
+        };
+
+        match QueryResult::from_typed_batch(sql.clone(), batch, elapsed_ms) {
+            Ok(result) => SqlResult::Query(result),
+            Err(error) => {
+                warn!(
+                    "[PostgreSQL] failed to project typed query result: {}",
+                    error
+                );
+                SqlResult::Error(SqlErrorInfo {
+                    sql,
+                    message: format!("failed to project typed query result: {error}"),
+                })
+            }
+        }
     }
 
     fn build_exec_result(sql: String, rows_affected: u64, elapsed_ms: u128) -> SqlResult {

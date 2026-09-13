@@ -61,3 +61,4 @@ commit-info.md
 .codegraph/
 .zcode/
 updates_latest.json
+.workbuddy/

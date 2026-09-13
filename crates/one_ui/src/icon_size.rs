@@ -32,17 +32,3 @@ impl From<IconSize> for Size {
         Size::Size(size.pixels())
     }
 }
-
-impl From<IconSize> for gpui_component::IconSize {
-    fn from(size: IconSize) -> Self {
-        match size {
-            IconSize::Micro => gpui_component::IconSize::Micro,
-            IconSize::Small => gpui_component::IconSize::Small,
-            IconSize::Default => gpui_component::IconSize::Default,
-            IconSize::Medium => gpui_component::IconSize::Medium,
-            IconSize::Large => gpui_component::IconSize::Large,
-            IconSize::Display => gpui_component::IconSize::Display,
-            IconSize::Hero => gpui_component::IconSize::Hero,
-        }
-    }
-}

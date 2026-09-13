@@ -3,6 +3,7 @@ use crate::connection::{DbConnection, DbError};
 use crate::import_export::ImportConfig;
 use crate::types::{ColumnInfo, TableCellValue};
 
+mod cells;
 pub mod csv;
 mod import_execution;
 pub mod json;
@@ -71,6 +72,25 @@ fn is_not_supported(error: &anyhow::Error) -> bool {
                 .downcast_ref::<DbError>()
                 .is_some_and(|error| matches!(error, DbError::NotSupported(_)))
         })
+}
+
+/// Rebuilds an in-process typed batch from the current legacy projection.
+///
+/// Export normalization and hidden-column stripping mutate `rows`/`binary_cells`
+/// directly, which would otherwise leave a stale [`crate::executor::QueryResult::typed_batch`]
+/// behind. Rebuilding it from the authoritative legacy projection keeps the typed
+/// cells and the legacy cells consistent without dropping the legacy path.
+pub(super) fn sync_typed_batch_from_legacy(
+    query_result: &mut crate::executor::QueryResult,
+) -> anyhow::Result<()> {
+    if query_result.typed_batch().is_none() {
+        return Ok(());
+    }
+    let batch = query_result
+        .to_result_batch()
+        .map_err(|error| anyhow::anyhow!("Invalid query result after normalization: {error}"))?;
+    query_result.typed_batch = Some(std::sync::Arc::new(batch));
+    Ok(())
 }
 
 #[cfg(test)]

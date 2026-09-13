@@ -1,5 +1,5 @@
 use gpui::px;
-use gpui_component::ThemeGeometry;
+use one_ui::ThemeGeometry;
 
 use super::resize::resized_connection_tree_width;
 
