@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use gpui::prelude::FluentBuilder as _;
-use gpui::{AnyElement, IntoElement, ListSizingBehavior, ParentElement, Styled, div, uniform_list};
+use gpui::{AnyElement, IntoElement, ListSizingBehavior, ParentElement, Styled, div, px, uniform_list};
 use gpui_component::{Icon, Sizable, StyledExt, h_flex, input::Input, v_flex};
 use one_assets::IconName;
 use one_core::settings::{AppSettings, ConnectionSortOrder};
@@ -242,9 +242,15 @@ impl PersistentConnectionSidebar {
 
     fn render_tree_search(&self, palette: SidebarPalette, cx: &gpui::Context<Self>) -> AnyElement {
         let has_query = !self.search_input.read(cx).value().is_empty();
+        let search_height = if self.home_navigation_layout {
+            // 导航主页右侧使用完整 Home toolbar；左侧搜索区与其底边对齐。
+            px(64.0)
+        } else {
+            px(40.0)
+        };
         h_flex()
             .w_full()
-            .h_10()
+            .h(search_height)
             .flex_shrink_0()
             .gap_1()
             .items_center()

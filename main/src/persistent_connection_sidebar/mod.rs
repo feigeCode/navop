@@ -128,7 +128,11 @@ impl EventEmitter<PersistentConnectionSidebarEvent> for PersistentConnectionSide
 impl gpui::Render for PersistentConnectionSidebar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.home_navigation_layout {
-            self.render_home_navigation_tree(px(248.0), cx)
+            if self.tree_expanded {
+                self.render_home_navigation_tree(px(248.0), cx)
+            } else {
+                div().into_any_element()
+            }
         } else if self.home_embedded {
             self.render_home_tree(cx)
         } else {

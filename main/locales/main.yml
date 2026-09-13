@@ -687,6 +687,30 @@ Home:
     en: Global Navigation
     zh-CN: 全局导航
     zh-HK: 全局導覽
+  search_results:
+    en: Search Results
+    zh-CN: 搜索结果
+    zh-HK: 搜尋結果
+  workbench_tools:
+    en: Tools
+    zh-CN: 工具
+    zh-HK: 工具
+  workbench_management:
+    en: Management
+    zh-CN: 管理
+    zh-HK: 管理
+  more_options:
+    en: More options
+    zh-CN: 更多选项
+    zh-HK: 更多選項
+  status:
+    en: Status
+    zh-CN: 状态
+    zh-HK: 狀態
+  sync_ready:
+    en: Ready to sync
+    zh-CN: 同步已就绪
+    zh-HK: 同步已就緒
   refresh:
     en: Refresh
     zh-CN: 刷新

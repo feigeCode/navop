@@ -2280,13 +2280,13 @@ impl Render for OnetCliApp {
             .tab_container
             .read(cx)
             .is_pinned_tab_active_by_id("home");
-        let sidebar_expanded = !home_active && self.connection_sidebar.read(cx).is_expanded();
         let auto_hide_tree = self.connection_sidebar.read(cx).is_auto_hide_tree();
         let home_has_navigation_sidebar = home_active
-            && self
-                .home_page
-                .read(cx)
-                .uses_global_navigation_layout();
+            && cx
+                .try_global::<GlobalHomePage>()
+                .is_some_and(|global| global.home_page.read(cx).uses_global_navigation_layout());
+        let sidebar_expanded = (!home_active || home_has_navigation_sidebar)
+            && self.connection_sidebar.read(cx).is_expanded();
         self.tab_container.update(cx, |tabs, cx| {
             tabs.set_navigation_sidebar_toggle(
                 if home_has_navigation_sidebar {
@@ -2297,13 +2297,14 @@ impl Render for OnetCliApp {
                 cx,
             );
         });
-        let docked_tree = sidebar_expanded && !auto_hide_tree;
+        // 全局导航布局把连接树固定到 TabContainer 左侧；不受自动隐藏设置影响。
+        let docked_tree = sidebar_expanded && (!auto_hide_tree || home_has_navigation_sidebar);
         let docked_tree_element = docked_tree.then(|| {
             self.connection_sidebar.update(cx, |sidebar, cx| {
                 sidebar.render_docked_connection_tree(window, cx)
             })
         });
-        let floating_tree = (sidebar_expanded && auto_hide_tree).then(|| {
+        let floating_tree = (sidebar_expanded && auto_hide_tree && !home_has_navigation_sidebar).then(|| {
             self.connection_sidebar
                 .update(cx, |sidebar, cx| sidebar.render_floating_tree(window, cx))
         });
@@ -2377,8 +2378,8 @@ impl Render for OnetCliApp {
                             .child(main_content),
                     )
             })
-            .when(sidebar_expanded && auto_hide_tree, |this| {
-                this.child(floating_tree.unwrap())
+            .when(sidebar_expanded && auto_hide_tree && !home_has_navigation_sidebar, |this| {
+                this.when_some(floating_tree, |this, tree| this.child(tree))
             })
             .children(sheet_layer)
             .children(dialog_layer)

@@ -374,10 +374,11 @@ fn global_navigation_layout_combines_connection_tree_recent_connections_and_apps
     let home = include_str!("../home_layout.rs");
     let content = include_str!("../content.rs");
     let tree = include_str!("../../persistent_connection_sidebar/tree.rs");
+    let app = include_str!("../../onetcli_app.rs");
 
     assert!(settings.contains("Navigation"));
-    assert!(home.contains("render_global_navigation_layout"));
-    assert!(home.contains(".child(sidebar)"));
+    assert!(home.contains("render_navigation_content"));
+    assert!(app.contains("docked_tree = sidebar_expanded"));
     assert!(content.contains("render_navigation_home_content"));
     assert!(content.contains("render_application_workbench(window, cx)"));
     assert!(tree.contains("self.home_navigation_layout"));

@@ -58,15 +58,34 @@ impl HomePage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let recent = recent::recent_connections(&self.connections, self.selected_filter, "", 4);
-        let (_, card_width) =
-            grid::card_grid_metrics(window.bounds().size.width, window.rem_size());
+        let query = self.search_query.read(cx).trim().to_lowercase();
+        let recent = recent::recent_connections(&self.connections, self.selected_filter, "", 6);
+        let matching = self
+            .home_groups(&query, cx)
+            .into_iter()
+            .flat_map(|(_, _, connections)| connections)
+            .collect::<Vec<_>>();
+        let right_width = window.bounds().size.width - GLOBAL_NAV_TREE_WIDTH;
+        let (_, card_width) = grid::card_grid_metrics(right_width, window.rem_size());
         let mut body = v_flex()
             .w_full()
             .min_w_0()
             .gap_5()
-            .child(self.render_content_heading(recent.len(), cx));
-        if recent.is_empty() {
+            .child(self.render_navigation_heading(query.is_empty(), if query.is_empty() { recent.len() } else { matching.len() }, cx));
+        if !query.is_empty() {
+            if matching.is_empty() {
+                body = body.child(self.render_empty_home(cx));
+            } else {
+                body = body.child(self.render_connections_grid(
+                    matching,
+                    self.selected_connection_id,
+                    ConnectionLayout::Card,
+                    false,
+                    card_width,
+                    cx,
+                ));
+            }
+        } else if recent.is_empty() {
             body = body.child(self.render_empty_home(cx));
         } else {
             body = body.child(self.render_recent_group(
@@ -77,7 +96,10 @@ impl HomePage {
                 cx,
             ));
         }
-        body = body.child(self.render_application_workbench(window, cx));
+        if query.is_empty() {
+            body = body.child(self.render_application_workbench(window, cx));
+            body = body.child(self.render_navigation_status_panel(window, cx));
+        }
         div()
             .id("home-navigation-content")
             .size_full()
@@ -85,6 +107,35 @@ impl HomePage {
             .overflow_y_scroll()
             .p_5()
             .child(body)
+            .into_any_element()
+    }
+
+    fn render_navigation_heading(
+        &self,
+        is_recent: bool,
+        count: usize,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        h_flex()
+            .w_full()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .text_lg()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(if is_recent {
+                        t!("Home.recent_connections").to_string()
+                    } else {
+                        t!("Home.search_results").to_string()
+                    }),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(count.to_string()),
+            )
             .into_any_element()
     }
 
