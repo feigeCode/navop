@@ -4,8 +4,9 @@ use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use remote_file_editor::{
     FilePolicy, decode_text_content, determine_file_policy, load_language_for_path,
 };
+use std::ffi::{OsStr, OsString};
 use std::fs::{self, OpenOptions};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf, Prefix};
 use std::sync::Arc;
 
 mod clipboard;
@@ -200,8 +201,43 @@ fn ensure_target_does_not_exist(path: &Path) -> Result<()> {
 }
 
 pub(crate) fn canonical_workspace_root(path: PathBuf) -> Result<PathBuf> {
-    path.canonicalize()
-        .with_context(|| format!("Unable to open workspace {}", path.display()))
+    let canonical = path
+        .canonicalize()
+        .with_context(|| format!("Unable to open workspace {}", path.display()))?;
+    Ok(normalize_canonical_root(canonical))
+}
+
+/// 把 `canonicalize()` 产出的 verbatim UNC 形式还原成普通 UNC 路径。
+///
+/// Windows 上 `canonicalize()` 对网络路径返回 `\\?\UNC\server\share\...`，
+/// `\\?\` 前缀不会被剥掉。这种形式既不适合展示，也无法与用户给出的
+/// `\\server\share\...` 相等比较——而工作区根目录的变更判断依赖相等比较
+/// （WSL 文件树的根目录就是 `\\wsl$\<发行版>` 这样的 UNC 路径）。
+fn normalize_canonical_root(path: PathBuf) -> PathBuf {
+    let Some((server, share, rest)) = verbatim_unc_parts(&path) else {
+        return path;
+    };
+    let mut normalized = OsString::from(r"\\");
+    normalized.push(server);
+    normalized.push(r"\");
+    normalized.push(share);
+    if !rest.as_os_str().is_empty() {
+        normalized.push(r"\");
+        normalized.push(rest);
+    }
+    PathBuf::from(normalized)
+}
+
+/// 拆出 `\\?\UNC\server\share\rest` 的三段；不是 verbatim UNC 路径时返回 `None`。
+fn verbatim_unc_parts(path: &Path) -> Option<(&OsStr, &OsStr, PathBuf)> {
+    let mut components = path.components();
+    let Component::Prefix(prefix) = components.next()? else {
+        return None;
+    };
+    let Prefix::VerbatimUNC(server, share) = prefix.kind() else {
+        return None;
+    };
+    Some((server, share, components.collect()))
 }
 
 #[cfg(test)]

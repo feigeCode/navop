@@ -77,6 +77,8 @@ use crate::zmodem::{
     ZmodemPickerClaim, ZmodemPickerRequest, ZmodemPickerResponse, ZmodemResponder,
     ZmodemTransferId, ZmodemTransferOutcome, ZmodemTransferProgress,
 };
+#[cfg(target_os = "windows")]
+use crate::wsl_distributions::{wsl_distribution_for_config, wsl_unc_root};
 
 use crate::{
     LocalConfig, SerialBackend, SshBackend, TelnetBackend, TerminalBackend, TerminalControlHandle,
@@ -896,6 +898,21 @@ pub fn resolve_local_working_dir(working_dir: Option<String>) -> Option<PathBuf>
         Some(dir) => Some(PathBuf::from(dir)),
         None => default_local_working_dir(),
     }
+}
+
+/// 本地终端文件树的根目录。
+///
+/// WSL 会话以 `wsl.exe --distribution <发行版>` 启动，发行版文件系统在 Windows 侧
+/// 通过 `\\wsl$\<发行版>` 暴露；这类会话没有 Windows 工作目录，若沿用普通本地
+/// 会话的回落逻辑（`dirs::home_dir()`），文件树会显示本机磁盘而不是发行版里的
+/// 文件。因此这里优先取发行版文件系统根目录，其余情况与
+/// [`resolve_local_working_dir`] 保持一致。
+pub fn resolve_local_workspace_root(config: &LocalConfig) -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    if let Some(root) = wsl_distribution_for_config(config).and_then(wsl_unc_root) {
+        return Some(root);
+    }
+    resolve_local_working_dir(config.working_dir.clone())
 }
 
 /// 准备本地终端的 Shell Integration 环境
@@ -4530,7 +4547,7 @@ mod tests {
     use super::with_local_terminal_default_env;
     use super::{
         AutomaticSessionLogRequestInput, CommandRecordGate, ConnectionState,
-        HostKeyVerificationReason, HostKeyVerificationRequest, SessionLockState,
+        HostKeyVerificationReason, HostKeyVerificationRequest, LocalConfig, SessionLockState,
         SshConnectionUpdate, SshCredentialPromptPolicy, TermDimensions, Terminal,
         TerminalConnectionKind, TerminalMfaPrompt, TerminalMfaRequest, TerminalMfaResponder,
         TerminalScrollProxy, TerminalSessionMode, TerminalSshCredentials,
@@ -4540,9 +4557,10 @@ mod tests {
         is_reconnect_generation, is_ssh_password_prompt, keyboard_interactive_answers_for_terminal,
         merge_history_matches, normalize_history_matches, parse_stored_telnet_params,
         receive_terminal_event_for_gpui, recent_text_from_term,
-        resolve_default_windows_shell_from_env, resolve_local_working_dir, resolve_ssh_connection,
-        send_coalesced_wakeup, shell_escape_arg, should_install_connected_backend,
-        ssh_config_with_confirmed_host_key, ssh_config_with_runtime_credentials,
+        resolve_default_windows_shell_from_env, resolve_local_working_dir,
+        resolve_local_workspace_root, resolve_ssh_connection, send_coalesced_wakeup,
+        shell_escape_arg, should_install_connected_backend, ssh_config_with_confirmed_host_key,
+        ssh_config_with_runtime_credentials,
     };
     use crate::history::{
         HistoryEntry, ShellHistoryFormat, collect_history_suggestions, normalize_history_command,
@@ -6071,6 +6089,42 @@ mod tests {
         assert_eq!(
             dirs::home_dir(),
             resolve_local_working_dir(Some("  ".to_string()))
+        );
+    }
+
+    #[test]
+    fn resolve_local_workspace_root_keeps_the_working_dir_and_home_fallbacks() {
+        let explicit = LocalConfig {
+            shell: Some("cmd.exe".into()),
+            working_dir: Some("D:\\work".into()),
+            ..LocalConfig::default()
+        };
+        assert_eq!(
+            Some(std::path::PathBuf::from("D:\\work")),
+            resolve_local_workspace_root(&explicit)
+        );
+
+        let unspecified = LocalConfig {
+            shell: Some("cmd.exe".into()),
+            ..LocalConfig::default()
+        };
+        assert_eq!(dirs::home_dir(), resolve_local_workspace_root(&unspecified));
+    }
+
+    /// WSL 会话没有 Windows 工作目录；若按普通本地会话回落，文件树会指向本机
+    /// 主目录（issue：WSL 下文件树显示的不是发行版里的目录）。
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn resolve_local_workspace_root_points_wsl_sessions_at_the_distribution() {
+        let config = crate::wsl_distributions::local_config_for_wsl_distro_with(
+            "wsl.exe".into(),
+            "Ubuntu-24.04",
+        )
+        .unwrap();
+
+        assert_eq!(
+            Some(std::path::PathBuf::from(r"\\wsl$\Ubuntu-24.04")),
+            resolve_local_workspace_root(&config)
         );
     }
 

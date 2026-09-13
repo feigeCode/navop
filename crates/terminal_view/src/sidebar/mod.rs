@@ -55,6 +55,7 @@ use ssh::SshSessionManager;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use terminal::resolve_reported_working_dir;
 use terminal::terminal::{SshTerminalConfig, TerminalConnectionKind};
 use workspace_explorer::{
     ExplorerFramePlacement, WorkspaceEditor, WorkspaceExplorer, WorkspaceExplorerConfig,
@@ -1433,11 +1434,18 @@ impl TerminalSidebar {
     }
 
     pub fn sync_workspace_explorer_path(&mut self, path: String, cx: &mut Context<Self>) {
-        if let Some(ref explorer) = self.file_explorer_panel {
-            explorer.update(cx, move |explorer, cx| {
-                explorer.set_root_from_terminal(PathBuf::from(path), cx);
-            });
-        }
+        let Some(explorer) = self.file_explorer_panel.as_ref() else {
+            return;
+        };
+        // WSL 会话上报的是发行版内的 Linux 路径，需要先映射回 `\\wsl$\<发行版>`，
+        // 否则会被当成 Windows 路径而把文件树指到错误目录。
+        let current_root = explorer.read(cx).root().to_path_buf();
+        let Some(root) = resolve_reported_working_dir(&current_root, &path) else {
+            return;
+        };
+        explorer.update(cx, move |explorer, cx| {
+            explorer.set_root_from_terminal(root, cx);
+        });
     }
 
     /// 渲染工具栏按钮
