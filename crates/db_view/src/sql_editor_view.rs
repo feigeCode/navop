@@ -1347,6 +1347,20 @@ fn viewport_statement_scan_input(
     }
 }
 
+/// 当前语句框（SQL 框选高亮）装饰的缓存键。
+///
+/// `generation` 是语句索引的装载世代，见 `SqlEditorTab::statement_index_generation`：
+/// 少了它，“索引缺失时清空装饰”会被当成“该 (revision, cursor, selection) 已经处理过”。
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CurrentStatementFrameKey {
+    /// 语句索引（全量快照 / 视口窗口扫描）的装载世代。
+    generation: u64,
+    revision: u64,
+    cursor: usize,
+    selection: Range<usize>,
+    insert_values: Option<Range<usize>>,
+}
+
 pub struct SqlEditorTab {
     title: SharedString,
     editor: Entity<SqlEditor>,
@@ -1394,8 +1408,15 @@ pub struct SqlEditorTab {
     statement_marker_states: HashMap<String, SqlGutterMarkerState>,
     /// Marker id currently bound to the in-flight execution, if any.
     active_statement_marker: Option<String>,
+    /// 语句索引（全量快照 / 视口窗口扫描）的装载世代。
+    ///
+    /// 必须参与 `last_frame_key` 比较：编辑刚发生时索引还是旧的，语句框会先被
+    /// 清空并把这个“空框”结果也记进缓存；此时 (revision, cursor, selection)
+    /// 与新索引就绪后完全相同，若不带上世代，`refresh_current_statement_frame`
+    /// 会命中缓存直接返回，语句框要等光标移动（鼠标点击）才重新出现。
+    statement_index_generation: u64,
     /// Last editor state used to drive the current-statement decorations.
-    last_frame_key: Option<(u64, usize, Range<usize>, Option<Range<usize>>)>,
+    last_frame_key: Option<CurrentStatementFrameKey>,
     _execution_state_subscription: Option<Subscription>,
     _editor_input_subscription: Option<Subscription>,
     /// 诊断分析运行序号，用于防抖并丢弃过期任务。
@@ -1545,6 +1566,7 @@ impl SqlEditorTab {
             viewport_statements: None,
             statement_marker_states: HashMap::new(),
             active_statement_marker: None,
+            statement_index_generation: 0,
             last_frame_key: None,
             _execution_state_subscription: None,
             _editor_input_subscription: None,
@@ -1757,6 +1779,7 @@ impl SqlEditorTab {
         self.viewport_statements = None;
         self.retain_current_revision_markers(revision);
         self.statement_snapshot = snapshot;
+        self.statement_index_generation = self.statement_index_generation.wrapping_add(1);
         self.set_statement_gutter_markers(cx);
         self.refresh_current_statement_frame(cx);
         self.refresh_insert_value_hints(cx);
@@ -1825,12 +1848,13 @@ impl SqlEditorTab {
         let revision = sql_editor.document_revision(cx);
         let cursor = sql_editor.cursor_offset(cx);
         let selection = sql_editor.selected_range(cx);
-        let frame_key = (
+        let frame_key = CurrentStatementFrameKey {
+            generation: self.statement_index_generation,
             revision,
             cursor,
-            selection.clone(),
-            self.insert_values_highlight.clone(),
-        );
+            selection: selection.clone(),
+            insert_values: self.insert_values_highlight.clone(),
+        };
         if self.last_frame_key.as_ref() == Some(&frame_key) {
             return;
         }
@@ -2002,6 +2026,7 @@ impl SqlEditorTab {
                         });
                     }
                 }
+                this.statement_index_generation = this.statement_index_generation.wrapping_add(1);
                 this.set_statement_gutter_markers(cx);
                 this.refresh_current_statement_frame(cx);
                 this.refresh_insert_value_hints(cx);
@@ -4719,6 +4744,7 @@ impl Clone for SqlEditorTab {
             viewport_statements: self.viewport_statements.clone(),
             statement_marker_states: self.statement_marker_states.clone(),
             active_statement_marker: self.active_statement_marker.clone(),
+            statement_index_generation: self.statement_index_generation,
             last_frame_key: self.last_frame_key.clone(),
             _execution_state_subscription: None,
             _editor_input_subscription: None,
@@ -4895,16 +4921,16 @@ impl Element for ResizeEventHandler {
 #[cfg(test)]
 mod tests {
     use super::{
-        ForeignQualifierKind, ManualSqlExecutionAction, ManualTransactionAction,
-        ManualTransactionInvalidationMode, ManualTransactionSession, ManualTransactionStopAction,
-        QueryFileNameError, QueryToolbarAction, RUN_ALL_QUERY_KEY_BINDINGS,
-        RUN_CURRENT_QUERY_KEY_BINDINGS, RunCurrentQuery, SCHEMA_COLUMN_FETCH_CONCURRENCY,
-        SQL_EDITOR_CONTEXT, SQL_EDITOR_INPUT_CONTEXT, SqlDiagnosticIdentity, SqlMetadataScope,
-        StatementScanInput, ToggleLineComment, can_start_query_execution,
-        can_switch_query_connection, collect_bounded, current_statement_frame_decorations,
-        foreign_prefetch_key, foreign_qualifier_fetch_scope, foreign_qualifier_scope,
-        initial_database_select_value, insert_target_table, insert_values_range,
-        is_current_diagnostic_identity, is_current_manual_transaction_owner,
+        CurrentStatementFrameKey, ForeignQualifierKind, ManualSqlExecutionAction,
+        ManualTransactionAction, ManualTransactionInvalidationMode, ManualTransactionSession,
+        ManualTransactionStopAction, QueryFileNameError, QueryToolbarAction,
+        RUN_ALL_QUERY_KEY_BINDINGS, RUN_CURRENT_QUERY_KEY_BINDINGS, RunCurrentQuery,
+        SCHEMA_COLUMN_FETCH_CONCURRENCY, SQL_EDITOR_CONTEXT, SQL_EDITOR_INPUT_CONTEXT,
+        SqlDiagnosticIdentity, SqlMetadataScope, StatementScanInput, ToggleLineComment,
+        can_start_query_execution, can_switch_query_connection, collect_bounded,
+        current_statement_frame_decorations, foreign_prefetch_key, foreign_qualifier_fetch_scope,
+        foreign_qualifier_scope, initial_database_select_value, insert_target_table,
+        insert_values_range, is_current_diagnostic_identity, is_current_manual_transaction_owner,
         is_current_manual_transaction_start, is_current_query_context_generation,
         lookup_table_columns, manual_sql_execution_action, manual_transaction_control_sql,
         manual_transaction_invalidation_mode, manual_transaction_stop_action,
@@ -4928,6 +4954,59 @@ mod tests {
     use std::time::Duration;
 
     const WIRE_PREFIX: &str = "/*onetcli-ipc-wire*/ ";
+
+    #[test]
+    fn lagging_statement_index_does_not_poison_the_frame_cache() {
+        // 编辑刚发生时索引还是旧的：语句框被清空，且这个“空框”结果也写进了缓存。
+        let cleared_while_stale = CurrentStatementFrameKey {
+            generation: 3,
+            revision: 11,
+            cursor: 24,
+            selection: 24..24,
+            insert_values: None,
+        };
+        let cached = Some(cleared_while_stale.clone());
+
+        // 同一世代、同一光标下重复通知命中缓存，不会重绘（保留防重入语义）。
+        assert_eq!(cached.as_ref(), Some(&cleared_while_stale));
+
+        // 防抖重扫装上新索引后，revision / cursor / selection 全都没变，
+        // 只有索引世代前进：必须重新绘制，否则语句框要等光标移动
+        // （鼠标点击）才出现。
+        let installed = CurrentStatementFrameKey {
+            generation: 4,
+            ..cleared_while_stale.clone()
+        };
+        assert_ne!(cached.as_ref(), Some(&installed));
+    }
+
+    #[test]
+    fn every_statement_index_install_advances_the_frame_generation() {
+        let source = include_str!("sql_editor_view.rs");
+        for header in [
+            "fn refresh_statement_snapshot",
+            "fn schedule_statement_snapshot_refresh",
+        ] {
+            let body = source
+                .split(header)
+                .nth(1)
+                .unwrap()
+                .split("\n    fn ")
+                .next()
+                .unwrap();
+
+            assert!(
+                body.contains("statement_snapshot = ")
+                    || body.contains("viewport_statements = Some("),
+                "{header} should install a statement index"
+            );
+            assert!(
+                body.contains("statement_index_generation"),
+                "{header} must advance the frame generation after installing an index, \
+                 otherwise the current-statement frame is skipped by its cache"
+            );
+        }
+    }
 
     #[test]
     fn insert_value_hints_do_not_paint_over_sql_text() {
