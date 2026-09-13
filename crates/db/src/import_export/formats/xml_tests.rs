@@ -118,6 +118,7 @@ impl DbConnection for XmlTestConnection {
                 ],
                 binary_cells: vec![],
                 elapsed_ms: 0,
+                ..Default::default()
             }));
         }
 
@@ -211,6 +212,7 @@ async fn xml_export_distinguishes_null_empty_text_and_binary_bytes() {
             bytes: vec![0x00, 0x01, 0xff],
         }],
         elapsed_ms: 1,
+        ..Default::default()
     });
     let config = ExportConfig {
         database: "app".to_string(),

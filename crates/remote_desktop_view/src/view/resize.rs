@@ -104,6 +104,26 @@ pub(super) fn is_meaningful_delta(previous: Option<(u16, u16)>, next: (u16, u16)
         || previous.1.abs_diff(next.1) >= RESIZE_DELTA_THRESHOLD
 }
 
+/// The session is already running at the requested desktop size, so a resize
+/// request would be a protocol no-op.
+pub(super) fn is_already_applied(remote_size: Option<(u16, u16)>, requested: (u16, u16)) -> bool {
+    remote_size == Some(requested)
+}
+
+/// Whether the last requested desktop size survives a session reset.
+///
+/// A backend-driven reconnect (`Reconnecting`) brings the session back with the
+/// geometry it was already using, so the recorded size stays authoritative.
+/// Forgetting it turns every later layout observation into a fresh resize
+/// request: `is_meaningful_delta(None, size)` always reports a meaningful
+/// delta, so the identical size gets requested again, and a host that cannot
+/// apply dynamic display updates answers each request with a fallback
+/// reconnect. The session then bounces between connect and reconnect forever
+/// (issue #171).
+pub(super) fn preserve_resize_state_on_session_reset(reason: SessionResetReason) -> bool {
+    matches!(reason, SessionResetReason::Reconnecting)
+}
+
 pub(super) fn can_flush_pending_resize(
     connected: bool,
     remote_size: Option<(u16, u16)>,
@@ -148,8 +168,8 @@ mod tests {
     use gpui::{Bounds, point, px, size};
 
     use super::{
-        InitialSize, can_flush_pending_resize, is_meaningful_delta, resize_dimensions,
-        should_consume_local_resize,
+        InitialSize, can_flush_pending_resize, is_already_applied, is_meaningful_delta,
+        preserve_resize_state_on_session_reset, resize_dimensions, should_consume_local_resize,
     };
     use remote_desktop::{RemoteDesktopCapabilities, ResizeSupport};
 
@@ -294,5 +314,38 @@ mod tests {
         assert_eq!(100, super::scale_factor_percent(0.0));
         assert_eq!(200, super::scale_factor_percent(2.0));
         assert_eq!(300, super::scale_factor_percent(4.0));
+    }
+
+    #[test]
+    fn resize_request_is_skipped_when_the_session_already_has_that_size() {
+        assert!(is_already_applied(Some((1920, 1080)), (1920, 1080)));
+        assert!(!is_already_applied(Some((1920, 1080)), (1280, 720)));
+        // A session that has not reported its size yet must still accept the
+        // first request.
+        assert!(!is_already_applied(None, (1280, 720)));
+    }
+
+    #[test]
+    fn backend_reconnect_keeps_the_requested_desktop_size() {
+        use crate::view::SessionResetReason;
+
+        assert!(preserve_resize_state_on_session_reset(
+            SessionResetReason::Reconnecting
+        ));
+        assert!(!preserve_resize_state_on_session_reset(
+            SessionResetReason::ConnectionFailure
+        ));
+        assert!(!preserve_resize_state_on_session_reset(
+            SessionResetReason::Terminated
+        ));
+    }
+
+    #[test]
+    fn forgotten_resize_size_always_schedules_another_request() {
+        // Guard for the regression behind issue #171: with the recorded size
+        // cleared, the very same layout keeps producing resize requests.
+        let layout = (1920, 1080);
+        assert!(!is_meaningful_delta(Some(layout), layout));
+        assert!(is_meaningful_delta(None, layout));
     }
 }

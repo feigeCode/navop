@@ -2,12 +2,8 @@ use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
     ParentElement, Render, Styled, Window, div, px,
 };
-use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable, Size, h_flex,
-    input::{Input, InputEvent, InputState},
-    slider::{Slider, SliderEvent, SliderState},
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Icon, Sizable, Size, h_flex, input::{Input, InputEvent, InputState}, slider::{Slider, SliderEvent, SliderState}, v_flex};
+use one_assets::IconName;
 use rust_i18n::t;
 
 #[derive(Clone, Debug)]

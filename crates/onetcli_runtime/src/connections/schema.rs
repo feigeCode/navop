@@ -115,8 +115,8 @@ fn built_in_database_ui_manifest(
         DatabaseType::MSSQL => db::mssql::MsSqlPlugin::new().ui_manifest(),
         DatabaseType::Oracle => db::oracle::OraclePlugin::new().ui_manifest(),
         DatabaseType::ClickHouse => db::clickhouse::ClickHousePlugin::new().ui_manifest(),
-        DatabaseType::TDengine => db::tdengine::TdenginePlugin::new().ui_manifest(),
-        DatabaseType::DuckDB | DatabaseType::External { .. } => {
+        // TDengine 原生插件已移除,表单改由 tdengine IPC 外部驱动的 driver.json 声明式提供
+        DatabaseType::TDengine | DatabaseType::DuckDB | DatabaseType::External { .. } => {
             return Err(ToolError::Failed {
                 message: format!(
                     "database type is not a built-in manifest source: {database_type:?}"

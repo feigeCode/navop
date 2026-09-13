@@ -6,7 +6,8 @@ use gpui_component::h_flex;
 use gpui_component::input::Editor;
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::v_flex;
-use gpui_component::{IconName, Sizable, Size};
+use gpui_component::{Sizable, Size};
+use one_assets::IconName;
 use rust_i18n::t;
 
 impl Render for LargeTextEditor {

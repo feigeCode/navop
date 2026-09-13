@@ -21,6 +21,7 @@ struct ProviderHandle {
     runtime_id: String,
     generation: u64,
     provider_id: String,
+    owned: bool,
 }
 
 #[derive(Clone)]
@@ -40,7 +41,7 @@ pub(crate) struct ShellMountSession {
 }
 
 impl ShellMountSession {
-    pub(super) fn new(
+    pub(crate) fn new(
         service: UniversalPluginService,
         backends: BTreeMap<String, String>,
         tokio: tokio::runtime::Handle,
@@ -72,6 +73,27 @@ impl ShellMountSession {
         client: &ManagedUniversalPluginClient,
         result: ResourceOpenResult,
     ) -> Result<HostValue, HostError> {
+        self.register_resource_with_ownership(alias, client, result, true)
+    }
+
+    /// Registers a primary resource borrowed from the connection tab.
+    /// Page cleanup must never close this resource.
+    pub(crate) fn register_borrowed_resource(
+        &self,
+        alias: String,
+        client: &ManagedUniversalPluginClient,
+        result: ResourceOpenResult,
+    ) -> Result<HostValue, HostError> {
+        self.register_resource_with_ownership(alias, client, result, false)
+    }
+
+    fn register_resource_with_ownership(
+        &self,
+        alias: String,
+        client: &ManagedUniversalPluginClient,
+        result: ResourceOpenResult,
+        owned: bool,
+    ) -> Result<HostValue, HostError> {
         let handle = new_handle("resource");
         self.resources
             .lock()
@@ -83,6 +105,7 @@ impl ShellMountSession {
                     runtime_id: client.runtime_id.clone(),
                     generation: client.generation,
                     provider_id: result.resource_id,
+                    owned,
                 },
             );
         Ok(HostObject::new()
@@ -268,6 +291,7 @@ impl ShellMountSession {
                     runtime_id,
                     generation,
                     provider_id: provider_id.to_string(),
+                    owned: true,
                 },
             );
         Ok(handle)

@@ -7,11 +7,8 @@ use gpui::{
     App, InteractiveElement, IntoElement, ParentElement, RenderOnce, SharedString,
     StatefulInteractiveElement, Styled, Window, div, linear_color_stop, linear_gradient, px,
 };
-use gpui_component::{
-    ActiveTheme, IconName,
-    chart::{AreaChart, LineChart},
-    h_flex, v_flex,
-};
+use gpui_component::{ActiveTheme, chart::{AreaChart, LineChart}, h_flex, v_flex};
+use one_assets::IconName;
 
 #[derive(Clone)]
 pub(crate) struct ChartPoint {

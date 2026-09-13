@@ -131,6 +131,11 @@ impl PaginatedQuery {
             }
         }
 
+        // Removing a column shifts every later column index; the typed batch
+        // cannot be cheaply reindexed, so drop it and rely on the corrected
+        // legacy projection until it is rebuilt.
+        query_result.invalidate_typed_batch();
+
         Ok(())
     }
 }
@@ -3748,6 +3753,7 @@ mod tests {
             rows: vec![vec![Some(" 42 ".to_string())]],
             binary_cells: vec![],
             elapsed_ms: 0,
+            ..Default::default()
         });
         assert_eq!(42, parse_table_data_total_count(valid).unwrap());
 
@@ -3758,6 +3764,7 @@ mod tests {
             rows: vec![],
             binary_cells: vec![],
             elapsed_ms: 0,
+            ..Default::default()
         });
         assert!(parse_table_data_total_count(missing).is_err());
 
@@ -3768,6 +3775,7 @@ mod tests {
             rows: vec![vec![None]],
             binary_cells: vec![],
             elapsed_ms: 0,
+            ..Default::default()
         });
         assert!(parse_table_data_total_count(null).is_err());
 
@@ -3778,6 +3786,7 @@ mod tests {
             rows: vec![vec![Some("many".to_string())]],
             binary_cells: vec![],
             elapsed_ms: 0,
+            ..Default::default()
         });
         assert!(parse_table_data_total_count(invalid).is_err());
 
@@ -3796,6 +3805,49 @@ mod tests {
         assert_eq!(
             "count failed",
             parse_table_data_total_count(error).unwrap_err().to_string()
+        );
+    }
+
+    #[test]
+    fn strip_hidden_result_columns_invalidates_stale_typed_batch() {
+        use db_value::{CellState, ColumnDescriptor, DbValue, Nullability, ResultBatch, ResultRow};
+        let descriptor = |id: &str| ColumnDescriptor {
+            id: id.to_string(),
+            label: id.to_string(),
+            native_type: "TEXT".to_string(),
+            logical_type: "Text".to_string(),
+            nullable: Nullability::Unknown,
+            charset: None,
+            collation: None,
+            precision: None,
+            scale: None,
+        };
+        let batch = ResultBatch::try_new(
+            0,
+            vec![descriptor("a"), descriptor("b")],
+            vec![ResultRow {
+                id: 0,
+                cells: vec![
+                    CellState::Decoded(DbValue::Text("x".to_string())),
+                    CellState::Decoded(DbValue::Text("y".to_string())),
+                ],
+            }],
+            true,
+        )
+        .unwrap();
+        let mut query_result =
+            QueryResult::from_typed_batch("SELECT a, b".to_string(), batch, 0).unwrap();
+        assert!(query_result.typed_batch().is_some());
+
+        PaginatedQuery::new("SELECT a, b")
+            .with_hidden_result_column("b")
+            .strip_hidden_result_columns(&mut query_result)
+            .unwrap();
+
+        assert_eq!(query_result.columns, vec!["a".to_string()]);
+        assert!(
+            query_result.typed_batch().is_none(),
+            "typed batch must be invalidated after column removal"
         );
     }
 

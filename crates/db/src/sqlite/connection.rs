@@ -12,10 +12,13 @@ use crate::executor::{
     BinaryCell, ExecOptions, ExecResult, QueryColumnMeta, QueryResult, SqlErrorInfo, SqlResult,
     SqlSource,
 };
+use crate::types::FieldType;
 use crate::{DatabasePlugin, format_message, truncate_str};
+use db_value::{
+    CellState, ColumnDescriptor, DbValue, FloatWidth, Nullability, RawPayload, RawRepresentation,
+    ResultBatch, ResultRow,
+};
 use one_core::storage::DbConnectionConfig;
-
-type QueryRowsWithBinary = (Vec<Vec<Option<String>>>, Vec<BinaryCell>);
 
 pub struct SqliteDbConnection {
     config: DbConnectionConfig,
@@ -30,46 +33,102 @@ impl SqliteDbConnection {
         }
     }
 
-    fn extract_value(value: ValueRef<'_>, decl_type: Option<&str>) -> Option<String> {
+    /// 把 SQLite 运行时 storage class 值解码为带类型值和对应 legacy 显示。
+    ///
+    /// 运行时类型是权威：`Blob` 永远是 [`DbValue::Binary`]（即使字节恰好是
+    /// 合法 UTF-8），`Text` 非法 UTF-8 是显式 [`CellState::DecodeError`] 而不是
+    /// NULL，`Null` 与解码失败严格分开。整数不再按声明的 DATE/TIME 亲和性改写。
+    fn extract_value(value: ValueRef<'_>) -> (CellState, Option<String>) {
         match value {
-            ValueRef::Null => None,
-            ValueRef::Integer(i) => {
-                let type_upper = decl_type.map(|t| t.to_uppercase());
-                let is_datetime = type_upper.as_ref().map_or(false, |t| {
-                    t.contains("DATE") || t.contains("TIME") || t.contains("TIMESTAMP")
-                });
-
-                if is_datetime {
-                    let is_millis = i > 1_000_000_000_000;
-                    if is_millis {
-                        if let Some(dt) = chrono::DateTime::from_timestamp_millis(i) {
-                            return Some(dt.format("%Y-%m-%d %H:%M:%S").to_string());
-                        }
-                    } else {
-                        if let Some(dt) = chrono::DateTime::from_timestamp(i, 0) {
-                            return Some(dt.format("%Y-%m-%d %H:%M:%S").to_string());
-                        }
-                    }
+            ValueRef::Null => (CellState::Decoded(DbValue::Null), None),
+            ValueRef::Integer(i) => (
+                CellState::Decoded(DbValue::Integer(i.to_string())),
+                Some(i.to_string()),
+            ),
+            ValueRef::Real(f) => (
+                CellState::Decoded(DbValue::Float {
+                    value: f.to_string(),
+                    width: FloatWidth::F64,
+                }),
+                Some(f.to_string()),
+            ),
+            ValueRef::Text(t) => match String::from_utf8(t.to_vec()) {
+                Ok(text) => (CellState::Decoded(DbValue::Text(text.clone())), Some(text)),
+                Err(error) => {
+                    let bytes = t.to_vec();
+                    (
+                        CellState::DecodeError {
+                            native_type: "TEXT".to_string(),
+                            raw: Some(RawPayload {
+                                bytes: bytes.clone(),
+                                representation: RawRepresentation::DatabaseValueBytes,
+                            }),
+                            diagnostic: format!("invalid UTF-8 text: {}", error.utf8_error()),
+                        },
+                        Some(format!("0x{}", hex::encode(bytes))),
+                    )
                 }
-                Some(i.to_string())
-            }
-            ValueRef::Real(f) => Some(f.to_string()),
-            ValueRef::Text(t) => String::from_utf8(t.to_vec()).ok(),
+            },
             ValueRef::Blob(b) => {
-                if let Ok(s) = String::from_utf8(b.to_vec()) {
-                    Some(s)
-                } else {
-                    Some(format!("0x{}", hex::encode(b)))
+                let bytes = b.to_vec();
+                // typed 永远是 Binary；legacy 显示保持兼容：合法 UTF-8 展示原样文本,
+                // 否则 hex,以便向后兼容既有消费者。
+                let display = match String::from_utf8(bytes.clone()) {
+                    Ok(text) => text,
+                    Err(_) => format!("0x{}", hex::encode(&bytes)),
+                };
+                (CellState::Decoded(DbValue::Binary(bytes)), Some(display))
+            }
+        }
+    }
+
+    fn build_descriptors(
+        columns: &[String],
+        column_types: &[Option<String>],
+    ) -> Vec<ColumnDescriptor> {
+        columns
+            .iter()
+            .zip(column_types.iter())
+            .enumerate()
+            .map(|(index, (name, decl_type))| {
+                let native_type = decl_type.clone().unwrap_or_else(|| "TEXT".to_string());
+                ColumnDescriptor {
+                    id: format!("column:{index}"),
+                    label: name.clone(),
+                    native_type: native_type.clone(),
+                    logical_type: format!("{:?}", FieldType::from_db_type(&native_type)),
+                    nullable: Nullability::Unknown,
+                    charset: None,
+                    collation: None,
+                    precision: None,
+                    scale: None,
+                }
+            })
+            .collect()
+    }
+
+    /// 从 typed batch 派生 legacy `binary_cells`，保证字节与类型权威一致。
+    fn collect_binary_cells(rows: &[ResultRow]) -> Vec<BinaryCell> {
+        let mut binary_cells = Vec::new();
+        for (row_index, row) in rows.iter().enumerate() {
+            for (column_index, cell) in row.cells.iter().enumerate() {
+                if let CellState::Decoded(DbValue::Binary(bytes)) = cell {
+                    binary_cells.push(BinaryCell {
+                        row_index,
+                        column_index,
+                        bytes: bytes.clone(),
+                    });
                 }
             }
         }
+        binary_cells
     }
 
     fn build_query_result(
         columns: Vec<String>,
         column_types: Vec<Option<String>>,
-        rows: Vec<Vec<Option<String>>>,
-        binary_cells: Vec<BinaryCell>,
+        cells_rows: Vec<Vec<CellState>>,
+        display_rows: Vec<Vec<Option<String>>>,
         sql: String,
         elapsed_ms: u128,
     ) -> SqlResult {
@@ -83,14 +142,34 @@ impl SqliteDbConnection {
                 )
             })
             .collect();
+        let descriptors = Self::build_descriptors(&columns, &column_types);
+        let batch_rows = cells_rows
+            .into_iter()
+            .enumerate()
+            .map(|(row_index, cells)| ResultRow {
+                id: row_index as u64,
+                cells,
+            })
+            .collect::<Vec<_>>();
+        let binary_cells = Self::collect_binary_cells(&batch_rows);
+        let typed_batch = match ResultBatch::try_new(0, descriptors, batch_rows, true) {
+            Ok(batch) => Arc::new(batch),
+            Err(error) => {
+                return SqlResult::Error(SqlErrorInfo {
+                    sql,
+                    message: format!("failed to build typed result batch: {error}"),
+                });
+            }
+        };
 
         SqlResult::Query(QueryResult {
+            column_meta,
             sql,
             columns,
-            column_meta,
-            rows,
+            rows: display_rows,
             binary_cells,
             elapsed_ms,
+            typed_batch: Some(typed_batch),
         })
     }
 
@@ -147,44 +226,40 @@ impl SqliteDbConnection {
                         .map(|c| c.decl_type().map(|s| s.to_string()))
                         .collect();
 
-                    let rows_result: Result<QueryRowsWithBinary, rusqlite::Error> =
-                        stmt.query([]).and_then(|mut rows| {
-                            let mut data_rows = Vec::new();
-                            let mut binary_cells = Vec::new();
-                            while let Some(row) = rows.next()? {
-                                let row_index = data_rows.len();
-                                let mut row_data = Vec::with_capacity(column_count);
-                                for i in 0..column_count {
-                                    let decl_type = column_types.get(i).and_then(|t| t.as_deref());
-                                    let value = row.get_ref(i)?;
-                                    if let ValueRef::Blob(bytes) = value {
-                                        binary_cells.push(BinaryCell {
-                                            row_index,
-                                            column_index: i,
-                                            bytes: bytes.to_vec(),
-                                        });
-                                    }
-                                    row_data.push(Self::extract_value(value, decl_type));
-                                }
-                                data_rows.push(row_data);
+                    let rows_result: Result<
+                        (Vec<Vec<CellState>>, Vec<Vec<Option<String>>>),
+                        rusqlite::Error,
+                    > = stmt.query([]).and_then(|mut rows| {
+                        let mut cells_rows = Vec::new();
+                        let mut display_rows = Vec::new();
+                        while let Some(row) = rows.next()? {
+                            let mut cells = Vec::with_capacity(column_count);
+                            let mut display = Vec::with_capacity(column_count);
+                            for i in 0..column_count {
+                                let (state, cell_display) = Self::extract_value(row.get_ref(i)?);
+                                cells.push(state);
+                                display.push(cell_display);
                             }
-                            Ok((data_rows, binary_cells))
-                        });
+                            cells_rows.push(cells);
+                            display_rows.push(display);
+                        }
+                        Ok((cells_rows, display_rows))
+                    });
 
                     match rows_result {
-                        Ok((data_rows, binary_cells)) => {
+                        Ok((cells_rows, display_rows)) => {
                             let elapsed_ms = start.elapsed().as_millis();
                             debug!(
                                 "[SQLite] Query completed: {} rows, {} columns, {}ms",
-                                data_rows.len(),
+                                display_rows.len(),
                                 columns.len(),
                                 elapsed_ms
                             );
                             Self::build_query_result(
                                 columns,
                                 column_types,
-                                data_rows,
-                                binary_cells,
+                                cells_rows,
+                                display_rows,
                                 sql.to_string(),
                                 elapsed_ms,
                             )
@@ -715,6 +790,7 @@ mod tests {
     use crate::connection::DbConnection;
     use crate::executor::{ExecOptions, SqlResult};
     use crate::sqlite::SqlitePlugin;
+    use db_value::{CellState, DbValue};
     use one_core::storage::{DatabaseType, DbConnectionConfig};
 
     fn test_connection(db_path: &std::path::Path, id: &str) -> SqliteDbConnection {
@@ -823,6 +899,108 @@ mod tests {
         {
             SqlResult::Query(result) => {
                 assert_eq!(vec![vec![Some("0".to_string())]], result.rows);
+            }
+            other => panic!("expected query result, got {other:?}"),
+        }
+
+        connection
+            .disconnect()
+            .await
+            .expect("sqlite should disconnect");
+    }
+
+    #[tokio::test]
+    async fn runtime_blob_is_binary_even_when_bytes_are_valid_utf8() {
+        let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+        let db_path = temp_dir.path().join("sqlite-blob-binary-test.db");
+        let mut connection = test_connection(&db_path, "sqlite-blob-binary-test");
+        connection.connect().await.expect("sqlite should connect");
+
+        {
+            let guard = connection.connection.lock().expect("lock should succeed");
+            let sqlite = guard.as_ref().expect("sqlite should be connected");
+            sqlite
+                .execute_batch(
+                    "CREATE TABLE blobs (id INTEGER PRIMARY KEY, payload BLOB);
+                     INSERT INTO blobs VALUES (1, x'68656C6C6F');",
+                )
+                .expect("fixture should be created");
+        }
+
+        match connection
+            .query("SELECT payload FROM blobs WHERE id = 1")
+            .await
+            .expect("blob query should succeed")
+        {
+            SqlResult::Query(result) => {
+                let batch = result
+                    .typed_batch()
+                    .expect("sqlite result should carry a typed batch");
+                assert_eq!(
+                    batch.rows[0].cells[0],
+                    CellState::Decoded(DbValue::Binary(b"hello".to_vec()))
+                );
+                assert_eq!(result.rows, vec![vec![Some("hello".to_string())]]);
+                assert_eq!(result.binary_cells[0].bytes, b"hello".to_vec());
+            }
+            other => panic!("expected query result, got {other:?}"),
+        }
+
+        connection
+            .disconnect()
+            .await
+            .expect("sqlite should disconnect");
+    }
+
+    #[tokio::test]
+    async fn null_is_distinct_from_empty_and_integer_is_not_date_rewritten() {
+        let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+        let db_path = temp_dir.path().join("sqlite-null-typed-test.db");
+        let mut connection = test_connection(&db_path, "sqlite-null-typed-test");
+        connection.connect().await.expect("sqlite should connect");
+
+        {
+            let guard = connection.connection.lock().expect("lock should succeed");
+            let sqlite = guard.as_ref().expect("sqlite should be connected");
+            sqlite
+                .execute_batch(
+                    "CREATE TABLE samples (id INTEGER PRIMARY KEY, declared_date DATE, txt TEXT);
+                     INSERT INTO samples VALUES (1, 0, NULL);
+                     INSERT INTO samples VALUES (2, 42, '');",
+                )
+                .expect("fixture should be created");
+        }
+
+        match connection
+            .query("SELECT declared_date, txt FROM samples ORDER BY id")
+            .await
+            .expect("typed query should succeed")
+        {
+            SqlResult::Query(result) => {
+                let batch = result
+                    .typed_batch()
+                    .expect("sqlite result should carry a typed batch");
+                assert_eq!(
+                    batch.rows[0].cells,
+                    vec![
+                        CellState::Decoded(DbValue::Integer("0".to_string())),
+                        CellState::Decoded(DbValue::Null),
+                    ]
+                );
+                assert_eq!(
+                    batch.rows[1].cells,
+                    vec![
+                        CellState::Decoded(DbValue::Integer("42".to_string())),
+                        CellState::Decoded(DbValue::Text(String::new())),
+                    ]
+                );
+                assert_eq!(
+                    result.rows,
+                    vec![
+                        vec![Some("0".to_string()), None],
+                        vec![Some("42".to_string()), Some(String::new())],
+                    ]
+                );
             }
             other => panic!("expected query result, got {other:?}"),
         }

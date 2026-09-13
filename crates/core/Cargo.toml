@@ -4,6 +4,7 @@ version = "0.15.2"
 edition = "2024"
 
 [dependencies]
+one-assets = { workspace = true }
 anyhow.workspace = true
 argon2.workspace = true
 agent-client-protocol.workspace = true

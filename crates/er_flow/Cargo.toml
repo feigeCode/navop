@@ -4,6 +4,7 @@ version = "0.15.2"
 edition = "2024"
 
 [dependencies]
+one-ui = { workspace = true }
 anyhow.workspace = true
 ferrum-flow.workspace = true
 gpui.workspace = true

@@ -9,6 +9,7 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 connection-import-protocol = { workspace = true }
 db = { workspace = true }
+db-value = { workspace = true }
 db_view = { workspace = true }
 extension-component = { workspace = true }
 extension-protocol = { workspace = true }

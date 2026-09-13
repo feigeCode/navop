@@ -461,7 +461,22 @@ impl DuckDbPlugin {
             .await
             .map_err(|error| anyhow!("{}: {}", context, error))?
         {
-            SqlResult::Query(query_result) => Ok(query_result.rows),
+            SqlResult::Query(query_result) => {
+                let mut rows = Vec::with_capacity(query_result.rows.len());
+                for row_index in 0..query_result.rows.len() {
+                    let mut row = Vec::with_capacity(query_result.columns.len());
+                    for column_index in 0..query_result.columns.len() {
+                        row.push(crate::metadata_read::metadata_text(
+                            &query_result,
+                            row_index,
+                            column_index,
+                            "utf8mb4",
+                        )?);
+                    }
+                    rows.push(row);
+                }
+                Ok(rows)
+            }
             _ => Err(anyhow!("Unexpected result type")),
         }
     }

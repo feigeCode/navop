@@ -2,12 +2,12 @@ use std::ops::Range;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, ColorExt as _, IntoElement, ListSizingBehavior, ParentElement, Styled, div,
+    AnyElement, IntoElement, ListSizingBehavior, ParentElement, Styled, div,
     uniform_list,
 };
-use gpui_component::{
-    ActiveTheme as _, Icon, IconName, IconSize, Sizable, StyledExt, h_flex, input::Input, v_flex,
-};
+use gpui_component::{Icon, Sizable, StyledExt, h_flex, input::Input, v_flex};
+use one_assets::IconName;
+use one_ui::IconSize;
 use one_core::settings::{AppSettings, ConnectionSortOrder};
 use rust_i18n::t;
 
@@ -285,7 +285,7 @@ impl PersistentConnectionSidebar {
         let home_for_batch = self.home_page.clone();
         let batch_active = self.home_page.read(cx).batch_mode_active();
         let view_for_actions = cx.entity();
-        let layout = cx.theme().geometry.layout;
+        let layout = one_ui::theme_geometry().layout;
         // 停靠树的 header 从窗口左上角开始；macOS 红绿灯覆盖该区域，需左侧避让。
         let titlebar_inset = cfg!(target_os = "macos") && macos_titlebar_inset;
         h_flex()

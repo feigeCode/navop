@@ -16,11 +16,8 @@ use gpui::{
     ParentElement, Pixels, Point, Render, ScrollWheelEvent, SharedString, Styled, Task,
     UTF16Selection, Window, actions, canvas, div, px, size,
 };
-use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable, Size,
-    menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
-    scroll::{Scrollbar, ScrollbarHandle, ScrollbarShow},
-};
+use gpui_component::{ActiveTheme, Icon, Sizable, Size, menu::{ContextMenuExt, PopupMenu, PopupMenuItem}, scroll::{Scrollbar, ScrollbarHandle, ScrollbarMode}};
+use one_assets::IconName;
 use one_core::gpui_tokio::Tokio;
 use one_core::keybindings::{action_id, rebind_keybindings, shortcuts_for};
 use one_core::tab_container::{TabContent, TabContentEvent};
@@ -2080,7 +2077,7 @@ impl Render for RedisCliView {
                         .w(REDIS_CLI_SCROLLBAR_WIDTH)
                         .child(
                             Scrollbar::vertical(&self.scrollbar_handle)
-                                .scrollbar_show(ScrollbarShow::Always),
+                                .mode(ScrollbarMode::Always),
                         ),
                 )
             })

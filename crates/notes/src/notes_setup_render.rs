@@ -1,10 +1,7 @@
 use crate::NotesView;
 use gpui::{Context, IntoElement, ParentElement, Styled, div, px};
-use gpui_component::{
-    ActiveTheme, Icon, IconName, StyledExt,
-    button::{Button, ButtonVariants},
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Icon, StyledExt, button::{Button, ButtonVariants}, v_flex};
+use one_assets::IconName;
 use rust_i18n::t;
 
 impl NotesView {

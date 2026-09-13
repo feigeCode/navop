@@ -144,7 +144,7 @@ fn url_row(
                     Button::new(open_id)
                         .xsmall()
                         .ghost()
-                        .icon(gpui_component::IconName::ExternalLink)
+                        .icon(one_assets::IconName::ExternalLink)
                         .on_click(move |_, _, cx| {
                             cx.open_url(&url_for_open);
                         }),

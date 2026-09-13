@@ -10,6 +10,15 @@ fn reconnect_delay_uses_bounded_backoff() {
 }
 
 #[test]
+fn only_a_long_lived_session_restarts_the_reconnect_backoff() {
+    assert!(session_is_stable(true, Some(Duration::from_secs(30))));
+    assert!(session_is_stable(true, Some(Duration::from_secs(600))));
+    assert!(!session_is_stable(true, Some(Duration::from_secs(2))));
+    assert!(!session_is_stable(true, None));
+    assert!(!session_is_stable(false, Some(Duration::from_secs(600))));
+}
+
+#[test]
 fn reconnect_event_classifies_fast_path_without_exposing_internal_details() {
     let decision = reconnect_decision(
         "[Fast-Path @ /Users/hufei/.cargo/git/checkouts/ironrdp/src/lib.rs:98] custom error",

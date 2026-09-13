@@ -9,10 +9,11 @@ use db::{
     normalize_query_result_binary_semantics, project_schema_columns,
     query_result_normalization::QueryResultNormalizationError,
 };
+use db_value::{CellState, DbValue, ResultBatch};
 use gpui::{
-    App, AppContext, ClipboardItem, ColorExt, Context, Font, ImageFormat, InteractiveElement,
-    IntoElement, ParentElement as _, SharedString, StatefulInteractiveElement, Styled,
-    Subscription, WeakEntity, Window, div, prelude::FluentBuilder, px,
+    App, AppContext, ClipboardItem, Context, Font, ImageFormat, InteractiveElement, IntoElement,
+    ParentElement as _, SharedString, StatefulInteractiveElement, Styled, Subscription, WeakEntity,
+    Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::calendar::Date;
 use gpui_component::date_picker::{DatePickerEvent, DatePickerState};
@@ -20,11 +21,12 @@ use gpui_component::input::{InputEvent, InputState, MaskPattern};
 use gpui_component::menu::{PopupMenu, PopupMenuItem};
 use gpui_component::tooltip::Tooltip;
 use gpui_component::{
-    ActiveTheme, IconName, Sizable as _, Size, WindowExt,
+    ActiveTheme, Sizable as _, Size, WindowExt,
     button::{Button, ButtonVariants},
     h_flex,
     notification::Notification,
 };
+use one_assets::IconName;
 use one_core::settings::{AppSettings, installed_grid_monospace_font};
 use one_core::storage::DatabaseType;
 use one_ui::edit_table::{
@@ -133,6 +135,11 @@ pub struct EditorTableDelegate {
     binary_cells: HashMap<(usize, usize), Arc<Vec<u8>>>,
     /// Exact binary values keyed by their coordinates in `original_rows`.
     original_binary_cells: HashMap<(usize, usize), Arc<Vec<u8>>>,
+    /// 类型权威的 typed batch,与 `rows` 行坐标对齐。
+    ///
+    /// 存在时,单元格的 text/binary/NULL 解析以 typed cells 为准;`rows`/`binary_cells`
+    /// 仍是回退投影。结构变更(删行重排)或 schema 纠偏后会被清除。
+    typed_batch: Option<Arc<ResultBatch>>,
     preview_font_cache: Option<PreviewFontCache>,
 }
 
@@ -227,6 +234,7 @@ impl Clone for EditorTableDelegate {
             data_grid: self.data_grid.clone(),
             binary_cells: self.binary_cells.clone(),
             original_binary_cells: self.original_binary_cells.clone(),
+            typed_batch: self.typed_batch.clone(),
             preview_font_cache: self.preview_font_cache.clone(),
         }
     }
@@ -269,6 +277,7 @@ impl EditorTableDelegate {
             data_grid: None,
             binary_cells: HashMap::new(),
             original_binary_cells: HashMap::new(),
+            typed_batch: None,
             preview_font_cache: None,
         }
     }
@@ -295,7 +304,75 @@ impl EditorTableDelegate {
     }
 
     pub fn is_binary_cell(&self, row_ix: usize, col_ix: usize) -> bool {
-        self.binary_cells.contains_key(&(row_ix, col_ix))
+        self.current_binary_bytes(row_ix, col_ix).is_some()
+    }
+
+    /// 是否持有可用于解析的 typed batch。
+    pub fn has_typed_batch(&self) -> bool {
+        self.typed_batch.is_some()
+    }
+
+    /// 单格 typed cell(若存在且坐标合法)。
+    fn typed_cell(&self, row_ix: usize, col_ix: usize) -> Option<&CellState> {
+        self.typed_batch
+            .as_ref()?
+            .rows
+            .get(row_ix)?
+            .cells
+            .get(col_ix)
+    }
+
+    /// 当前行单元格的权威二进制字节:优先 typed_batch,其次 binary_cells 回退。
+    fn current_binary_bytes(&self, row_ix: usize, col_ix: usize) -> Option<&[u8]> {
+        if let Some(cell) = self.typed_cell(row_ix, col_ix) {
+            return match cell {
+                CellState::Decoded(DbValue::Binary(bytes)) => Some(bytes.as_slice()),
+                CellState::Decoded(_) => None,
+                CellState::Undecoded { .. } | CellState::DecodeError { .. } => self
+                    .binary_cells
+                    .get(&(row_ix, col_ix))
+                    .map(|bytes| bytes.as_slice()),
+            };
+        }
+        self.binary_cells
+            .get(&(row_ix, col_ix))
+            .map(|bytes| bytes.as_slice())
+    }
+
+    /// 与 [`Self::current_binary_bytes`] 同源,但返回可跨闭包持有的 `Arc`。
+    ///
+    /// 无 typed batch 时直接复用 `binary_cells` 的 `Arc`,避免渲染热路径重复分配。
+    fn current_binary_arc(&self, row_ix: usize, col_ix: usize) -> Option<Arc<Vec<u8>>> {
+        if self.typed_batch.is_none() {
+            return self.binary_cells.get(&(row_ix, col_ix)).cloned();
+        }
+        self.current_binary_bytes(row_ix, col_ix)
+            .map(|bytes| Arc::new(bytes.to_vec()))
+    }
+
+    /// 把 typed cell 解析为写入用的三态值。
+    ///
+    /// `Null`/`Binary` 直接取 typed 权威;其余非二进制值沿用已由 typed batch 投影出的
+    /// `rows` 文本,保证与既有输出逐字节兼容。`Undecoded`/`DecodeError` 返回 `None`,
+    /// 交回 `binary_cells`/`rows` 回退路径。
+    fn typed_cell_value(&self, row_ix: usize, col_ix: usize) -> Option<TableCellValue> {
+        let value = match self.typed_cell(row_ix, col_ix)? {
+            CellState::Decoded(value) => value,
+            CellState::Undecoded { .. } | CellState::DecodeError { .. } => return None,
+        };
+
+        Some(match value {
+            DbValue::Null => TableCellValue::Null,
+            DbValue::Binary(bytes) => TableCellValue::Binary(bytes.clone()),
+            other => TableCellValue::Text(
+                self.projected_text(row_ix, col_ix)
+                    .unwrap_or_else(|| ResultBatch::display_value(other)),
+            ),
+        })
+    }
+
+    fn projected_text(&self, row_ix: usize, col_ix: usize) -> Option<String> {
+        self.rows.get(row_ix)?.get(col_ix)?.clone()
     }
 
     fn is_binary_aware_cell(&self, row_ix: usize, col_ix: usize) -> bool {
@@ -392,8 +469,8 @@ impl EditorTableDelegate {
                 .unwrap_or_default();
         }
 
-        if let Some(bytes) = self.binary_cells.get(&(row_ix, col_ix)) {
-            return binary_cell_copy_text(bytes.as_slice());
+        if let Some(bytes) = self.current_binary_bytes(row_ix, col_ix) {
+            return binary_cell_copy_text(bytes);
         }
 
         self.rows
@@ -451,6 +528,7 @@ impl EditorTableDelegate {
                 })
                 .collect(),
             elapsed_ms: 0,
+            ..Default::default()
         };
 
         normalize_query_result_binary_semantics(
@@ -562,6 +640,9 @@ impl EditorTableDelegate {
                 }
             }
         }
+        // schema 纠偏会重写 binary_cells 的语义(TEXT/BLOB),typed batch 无法表达该
+        // 权威,清理掉以便后续解析走纠偏后的 binary_cells。
+        self.typed_batch = None;
         self.set_column_meta(projected_meta);
         self.recalculate_filtered_indices();
         Ok(())
@@ -785,6 +866,35 @@ impl EditorTableDelegate {
         rows: Vec<Vec<Option<String>>>,
         rowids: Vec<String>,
         binary_cells: Vec<BinaryCell>,
+        cx: &mut App,
+    ) {
+        self.replace_data(columns, rows, rowids, binary_cells, None, cx);
+    }
+
+    /// 用类型权威的 typed batch 载入数据。
+    ///
+    /// `typed_batch` 与 `rows` 行坐标对齐,存在时由 [`Self::current_binary_bytes`] /
+    /// [`Self::typed_cell_value`] 优先解析。传 `None` 等价于
+    /// [`Self::update_data_with_binary_cells`] 的回退行为。
+    pub fn update_data_with_typed_batch(
+        &mut self,
+        columns: Vec<Column>,
+        rows: Vec<Vec<Option<String>>>,
+        rowids: Vec<String>,
+        binary_cells: Vec<BinaryCell>,
+        typed_batch: Option<Arc<ResultBatch>>,
+        cx: &mut App,
+    ) {
+        self.replace_data(columns, rows, rowids, binary_cells, typed_batch, cx);
+    }
+
+    fn replace_data(
+        &mut self,
+        columns: Vec<Column>,
+        rows: Vec<Vec<Option<String>>>,
+        rowids: Vec<String>,
+        binary_cells: Vec<BinaryCell>,
+        typed_batch: Option<Arc<ResultBatch>>,
         _cx: &mut App,
     ) {
         const MIN_WIDTH: usize = 80;
@@ -822,6 +932,7 @@ impl EditorTableDelegate {
         self.row_index_map = (0..row_count).map(|i| (i, i)).collect();
         self.original_binary_cells = binary_cells.clone();
         self.binary_cells = binary_cells;
+        self.typed_batch = typed_batch;
 
         // Clear all change tracking
         self.clear_changes();
@@ -1407,6 +1518,26 @@ impl EditTableDelegate for EditorTableDelegate {
                             })
                     })
                     .collect::<Vec<_>>();
+                let typed_cells = if state.delegate().has_typed_batch() {
+                    state
+                        .delegate()
+                        .get_typed_rows_data(&actual_rows)
+                        .ok()
+                        .map(|rows| {
+                            rows.into_iter()
+                                .map(|row| {
+                                    indices
+                                        .iter()
+                                        .map(|index| {
+                                            row.get(*index).cloned().unwrap_or(TableCellValue::Null)
+                                        })
+                                        .collect::<Vec<_>>()
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                } else {
+                    None
+                };
                 let columns = state.get_selection_columns(cx);
                 let (metadata, database_type) = {
                     let delegate = state.delegate();
@@ -1416,8 +1547,11 @@ impl EditTableDelegate for EditorTableDelegate {
                     )
                 };
                 let plugin = cx.global::<GlobalDbState>().get_plugin(&database_type).ok();
-                let context = CopyFormatContext::new(&data, &columns, &metadata)
+                let mut context = CopyFormatContext::new(&data, &columns, &metadata)
                     .with_binary_cells(&binary_cells);
+                if let Some(typed_cells) = typed_cells.as_deref() {
+                    context = context.with_typed_cells(typed_cells);
+                }
                 let context = plugin
                     .as_deref()
                     .map_or(context, |plugin| context.with_plugin(plugin));
@@ -1871,7 +2005,7 @@ impl EditTableDelegate for EditorTableDelegate {
         let font = self.preview_font(cx);
 
         if !self.modified_cells.contains(&(actual_row, col))
-            && let Some(bytes) = self.binary_cells.get(&(actual_row, col)).cloned()
+            && let Some(bytes) = self.current_binary_arc(actual_row, col)
         {
             let byte_len = bytes.len();
             let image_format = binary_cell_image_format(bytes.as_slice());
@@ -2770,8 +2904,8 @@ impl EditTableDelegate for EditorTableDelegate {
                 .unwrap_or_else(|| "NULL".to_string());
         }
 
-        if let Some(bytes) = self.binary_cells.get(&(actual_row, col_ix)) {
-            return binary_cell_copy_text(bytes.as_slice());
+        if let Some(bytes) = self.current_binary_bytes(actual_row, col_ix) {
+            return binary_cell_copy_text(bytes);
         }
 
         self.rows
@@ -2793,8 +2927,8 @@ impl EditTableDelegate for EditorTableDelegate {
                 .flatten();
         }
 
-        if let Some(bytes) = self.binary_cells.get(&(actual_row, col_ix)) {
-            return Some(binary_cell_copy_text(bytes.as_slice()));
+        if let Some(bytes) = self.current_binary_bytes(actual_row, col_ix) {
+            return Some(binary_cell_copy_text(bytes));
         }
 
         self.rows
@@ -2992,6 +3126,9 @@ impl EditorTableDelegate {
             }
         }
         self.binary_cells = new_binary_cells;
+
+        // 行索引已重排,typed batch 不再与 `rows` 对齐,回退到 binary_cells/rows。
+        self.typed_batch = None;
     }
 
     // ============================================================================
@@ -3031,6 +3168,10 @@ impl EditorTableDelegate {
                 }
                 Some(value) => Ok(Some(TableCellValue::Text(value.clone()))),
             };
+        }
+
+        if let Some(value) = self.typed_cell_value(row_ix, col_ix) {
+            return Ok(Some(value));
         }
 
         if let Some(bytes) = self.binary_cells.get(&(row_ix, col_ix)) {
@@ -3200,6 +3341,7 @@ mod tests {
             data_grid: None,
             binary_cells: HashMap::new(),
             original_binary_cells: HashMap::new(),
+            typed_batch: None,
             preview_font_cache: None,
         }
     }
@@ -3341,6 +3483,74 @@ mod tests {
             delegate.get_typed_original_rows_data(&[2]).unwrap()[0][1],
             TableCellValue::Binary(vec![1, 2, 3])
         );
+    }
+
+    fn typed_column(id: &str) -> db_value::ColumnDescriptor {
+        db_value::ColumnDescriptor {
+            id: id.to_string(),
+            label: id.to_string(),
+            native_type: "TEXT".to_string(),
+            logical_type: "text".to_string(),
+            nullable: db_value::Nullability::Unknown,
+            charset: None,
+            collation: None,
+            precision: None,
+            scale: None,
+        }
+    }
+
+    #[test]
+    fn typed_batch_is_authoritative_over_legacy_rows_and_binary_cells() {
+        let mut delegate = test_delegate(vec![vec![
+            Some("typed-text".to_string()),
+            Some("0x9999".to_string()),
+            None,
+        ]]);
+        delegate.columns = vec![
+            Column::new("text_col", "text_col"),
+            Column::new("binary_col", "binary_col"),
+            Column::new("null_col", "null_col"),
+        ];
+        // legacy sidecar 与 typed batch 冲突,typed 应覆盖。
+        set_binary_cell(&mut delegate, 0, 1, vec![9, 9]);
+        set_binary_cell(&mut delegate, 0, 2, vec![7, 7]);
+
+        let batch = db_value::ResultBatch::try_new(
+            0,
+            vec![
+                typed_column("text_col"),
+                typed_column("binary_col"),
+                typed_column("null_col"),
+            ],
+            vec![db_value::ResultRow {
+                id: 0,
+                cells: vec![
+                    db_value::CellState::Decoded(db_value::DbValue::Text("typed-text".into())),
+                    db_value::CellState::Decoded(db_value::DbValue::Binary(vec![1, 2, 3])),
+                    db_value::CellState::Decoded(db_value::DbValue::Null),
+                ],
+            }],
+            true,
+        )
+        .expect("batch should be valid");
+        delegate.typed_batch = Some(std::sync::Arc::new(batch));
+
+        assert!(delegate.has_typed_batch());
+        assert_eq!(delegate.current_binary_bytes(0, 1), Some(&[1u8, 2, 3][..]));
+        assert_eq!(delegate.current_binary_bytes(0, 2), None);
+        assert_eq!(
+            delegate.get_typed_rows_data(&[0]).unwrap(),
+            vec![vec![
+                TableCellValue::Text("typed-text".to_string()),
+                TableCellValue::Binary(vec![1, 2, 3]),
+                TableCellValue::Null,
+            ]]
+        );
+
+        // 移除 typed batch 后回退到 legacy binary_cells。
+        delegate.typed_batch = None;
+        assert!(!delegate.has_typed_batch());
+        assert_eq!(delegate.current_binary_bytes(0, 1), Some(&[9u8, 9][..]));
     }
 
     fn mysql_column(name: &str, data_type: &str) -> ColumnInfo {

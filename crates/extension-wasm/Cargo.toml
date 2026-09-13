@@ -11,8 +11,8 @@ html-preview = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror.workspace = true
-wasmtime = "=36.0.9"
-wasmtime-wasi = "=36.0.9"
+wasmtime = "=36.0.14"
+wasmtime-wasi = "=36.0.14"
 
 [dev-dependencies]
 async-trait = { workspace = true }

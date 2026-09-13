@@ -1,9 +1,7 @@
 use gpui::{
-    AnyElement, AppContext, ColorExt as _, Context, Entity, EventEmitter, Hsla, InteractiveElement,
-    IntoElement, ParentElement, Pixels, Styled, UniformListScrollHandle, Window, div, px,
-};
+    AnyElement, AppContext, Context, Entity, EventEmitter, Hsla, InteractiveElement,
+    IntoElement, ParentElement, Pixels, Styled, UniformListScrollHandle, Window, div, px, hsla};
 use gpui_component::{
-    ActiveTheme as _,
     input::{InputEvent, InputState},
 };
 use terminal_view::TerminalColors;
@@ -79,12 +77,7 @@ impl From<&TerminalColors> for SidebarPalette {
             foreground: colors.foreground,
             muted: colors.muted,
             hover: colors.muted,
-            selected: Hsla::new(
-                colors.accent.hue.into_degrees(),
-                colors.accent.saturation,
-                colors.accent.lightness,
-                0.18,
-            ),
+            selected: hsla(colors.accent.h, colors.accent.s, colors.accent.l, 0.18),
             selected_border: colors.accent,
             muted_foreground: colors.muted_foreground,
             border: colors.border,
@@ -98,12 +91,7 @@ impl From<&TerminalColors> for SidebarPalette {
 /// terminal themes.
 fn shade(color: Hsla, dark_mode: bool) -> Hsla {
     let amount = if dark_mode { -0.02 } else { -0.015 };
-    Hsla::new(
-        color.hue.into_degrees(),
-        color.saturation,
-        (color.lightness + amount).clamp(0.0, 1.0),
-        color.alpha,
-    )
+    hsla(color.h, color.s, (color.l + amount).clamp(0.0, 1.0), color.a)
 }
 
 /// 浮动连接树卡片与窗口边缘的间距（像素）。
@@ -155,7 +143,7 @@ impl PersistentConnectionSidebar {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let palette = self.palette(cx);
-        let layout = cx.theme().geometry.layout;
+        let layout = one_ui::theme_geometry().layout;
         let top = layout.tab_bar;
         let pad = px(FLOATING_CARD_MARGIN);
         div()
@@ -205,7 +193,7 @@ impl PersistentConnectionSidebar {
         })
         .detach();
         let tree_state = one_core::settings::AppSettings::current(cx).connection_sidebar_tree_state;
-        let layout = cx.theme().geometry.layout;
+        let layout = one_ui::theme_geometry().layout;
         let tree_width = px(tree_state.tree_width as f32)
             .clamp(layout.context_sidebar_min, layout.context_sidebar_max);
         Self {

@@ -9,6 +9,10 @@ const RECONNECT_DELAYS: [Duration; 4] = [
     Duration::from_secs(5),
     Duration::from_secs(10),
 ];
+/// A session that drops earlier than this is treated as flapping rather than as
+/// a healthy connection that was lost, so the reconnect backoff keeps growing
+/// instead of restarting at one second.
+const STABLE_SESSION_DURATION: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum ReconnectDecision {
@@ -113,6 +117,16 @@ fn forget_cancelled_files(
 
 pub(super) fn reconnect_delay(attempt: usize) -> Duration {
     RECONNECT_DELAYS[attempt.min(RECONNECT_DELAYS.len() - 1)]
+}
+
+/// Whether a finished session ran long enough to restart the reconnect backoff.
+///
+/// Restarting on `was_connected` alone makes a flapping session reconnect once
+/// per second for as long as the fault lasts, which reads as the client
+/// "hammering" the server with reconnects (issue #171). Only a session that
+/// stayed up counts as progress.
+pub(super) fn session_is_stable(was_connected: bool, connected_for: Option<Duration>) -> bool {
+    was_connected && connected_for.is_some_and(|elapsed| elapsed >= STABLE_SESSION_DURATION)
 }
 
 pub(super) fn reconnect_event(

@@ -8,7 +8,8 @@ use gpui::{
     Focusable, InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled,
     Subscription, Window, div, prelude::FluentBuilder,
 };
-use gpui_component::{ActiveTheme, Icon, IconName, Sizable, Size, v_flex};
+use gpui_component::{ActiveTheme, Icon, Sizable, Size, v_flex};
+use one_assets::IconName;
 use one_core::{
     connection_notifier::{ConnectionDataEvent, get_notifier},
     llm::{

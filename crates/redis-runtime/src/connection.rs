@@ -100,9 +100,6 @@ pub trait RedisConnection: Send + Sync {
 
     // === Hash 操作 ===
 
-    /// 获取 Hash 所有字段和值
-    async fn hgetall(&self, key: &str) -> Result<Vec<HashField>, RedisError>;
-
     /// 设置 Hash 字段值
     async fn hset(&self, key: &str, field: &str, value: &str) -> Result<(), RedisError>;
     /// 在指定数据库中设置 Hash 字段值
@@ -152,9 +149,6 @@ pub trait RedisConnection: Send + Sync {
     async fn llen(&self, key: &str) -> Result<i64, RedisError>;
 
     // === Set 操作 ===
-
-    /// 获取 Set 所有成员
-    async fn smembers(&self, key: &str) -> Result<Vec<Vec<u8>>, RedisError>;
 
     /// 添加成员到 Set
     async fn sadd(&self, key: &str, members: &[&str]) -> Result<i64, RedisError>;

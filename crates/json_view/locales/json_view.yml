@@ -6,6 +6,44 @@ JsonView:
     zh-CN: JSON 格式化
     zh-HK: JSON 格式化
 
+JsonValue:
+  title:
+    en: JSON
+    zh-CN: JSON
+    zh-HK: JSON
+  mode_tree:
+    en: Formatted
+    zh-CN: 格式化
+    zh-HK: 格式化
+  mode_raw:
+    en: Raw
+    zh-CN: 原始
+    zh-HK: 原始
+  expand_all:
+    en: Expand All
+    zh-CN: 全部展开
+    zh-HK: 全部展開
+  collapse_all:
+    en: Collapse All
+    zh-CN: 全部折叠
+    zh-HK: 全部摺疊
+  copy:
+    en: Copy
+    zh-CN: 复制
+    zh-HK: 複製
+  copied:
+    en: Copied
+    zh-CN: 已复制
+    zh-HK: 已複製
+  invalid_json:
+    en: "Invalid JSON: %{error}"
+    zh-CN: "JSON 格式无效：%{error}"
+    zh-HK: "JSON 格式無效：%{error}"
+  empty:
+    en: No JSON content
+    zh-CN: 暂无 JSON 内容
+    zh-HK: 暫無 JSON 內容
+
 JsonFormatter:
   input_placeholder:
     en: "Paste JSON here…"

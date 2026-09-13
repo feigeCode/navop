@@ -14,4 +14,4 @@ pub use plan::{Plan, PlanSource, PlanStatus};
 pub use step::{PlanStep, StepStatus};
 
 // 供 tasks 模块复用:把历史转换为模型消息。
-pub(crate) use prompt::history_to_messages;
+pub(crate) use prompt::{history_to_messages, normalize_system_messages};

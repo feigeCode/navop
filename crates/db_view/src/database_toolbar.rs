@@ -1,8 +1,9 @@
 use gpui::{
-    AnyElement, App, ColorExt, FontWeight, Hsla, IntoElement, ParentElement, Pixels, Styled, div,
+    AnyElement, App, FontWeight, Hsla, IntoElement, ParentElement, Pixels, Styled, div,
     px,
 };
-use gpui_component::{ActiveTheme, Icon, IconName, Sizable, Size};
+use gpui_component::{ActiveTheme, Icon, Sizable, Size};
+use one_assets::IconName;
 
 pub(super) const WORKSPACE_TOOLBAR_HEIGHT: Pixels = px(72.0);
 pub(super) const WORKSPACE_TOOLBAR_ITEM_WIDTH: Pixels = px(76.0);

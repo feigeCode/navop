@@ -210,6 +210,9 @@ fn reconnect_result(
         reason: disconnect.reason,
         manual,
         was_connected,
+        // The owning session loop stamps the observed connected duration before
+        // the result is classified.
+        connected_for: None,
         disconnect_kind: disconnect.kind,
     }
 }

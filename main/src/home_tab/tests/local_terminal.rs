@@ -35,7 +35,35 @@ fn all_local_terminal_profiles_use_the_same_tab_opener() {
         openers
             .matches("self.add_local_terminal_tab(config, window, cx)")
             .count(),
-        2,
-        "both custom and built-in profiles must use the shared activation path",
+        3,
+        "custom, built-in and WSL distro profiles must use the shared activation path",
     );
+}
+
+#[test]
+fn wsl_distro_menu_items_reuse_the_local_terminal_activation_path() {
+    let source = include_str!("../../home/home_tabs.rs");
+    let opener = source
+        .split("    pub(crate) fn add_terminal_tab_with_wsl_distro(")
+        .nth(1)
+        .and_then(|source| source.split("    fn add_terminal_tab_from_profile(").next())
+        .expect("WSL distro tab opener");
+
+    assert!(opener.contains("local_config_for_wsl_distro(&distro)"));
+    assert!(opener.contains("self.add_local_terminal_tab(config, window, cx)"));
+
+    let menu_source = include_str!("../../home_tab/local_terminal.rs");
+    // WSL 发行版区段仅在 Windows 上渲染，其余平台保持原菜单。
+    assert!(menu_source.contains("#[cfg(target_os = \"windows\")]\nfn append_wsl_distributions"));
+    assert!(menu_source.contains("wsl_distributions_section"));
+    assert!(menu_source.contains("add_terminal_tab_with_wsl_distro"));
+    // 区段入口仅在识别到发行版后出现，并提供重新识别操作。
+    assert!(menu_source.contains("wsl_distributions_refresh"));
+    assert!(menu_source.contains("load_wsl_distributions"));
+
+    let data_source = include_str!("../data.rs");
+    assert!(data_source.contains(
+        "#[cfg(target_os = \"windows\")]\n    pub(super) fn load_wsl_distributions"
+    ));
+    assert!(data_source.contains("terminal::list_wsl_distributions()"));
 }

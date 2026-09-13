@@ -1,4 +1,7 @@
-use db::{ColumnInfo, DatabasePlugin, binary_value::format_binary_input, executor::BinaryCell};
+use db::{
+    ColumnInfo, DatabasePlugin, TableCellValue, binary_value::format_binary_input,
+    executor::BinaryCell,
+};
 use gpui::SharedString;
 
 #[path = "copy_sql_format.rs"]
@@ -134,6 +137,8 @@ fn find_column_index(
 pub struct CopyFormatContext<'a> {
     pub data: &'a [Vec<Option<String>>],
     pub binary_cells: &'a [BinaryCell],
+    /// 与 `data` 行列对齐的 typed cells;存在时优先作为解析权威。
+    pub typed_cells: Option<&'a [Vec<TableCellValue>]>,
     pub columns: &'a [SharedString],
     pub metadata: &'a TableMetadata,
     pub plugin: Option<&'a dyn DatabasePlugin>,
@@ -155,6 +160,7 @@ impl<'a> CopyFormatContext<'a> {
         Self {
             data,
             binary_cells: &[],
+            typed_cells: None,
             columns,
             metadata,
             plugin: None,
@@ -166,12 +172,29 @@ impl<'a> CopyFormatContext<'a> {
         self
     }
 
+    pub fn with_typed_cells(mut self, typed_cells: &'a [Vec<TableCellValue>]) -> Self {
+        self.typed_cells = Some(typed_cells);
+        self
+    }
+
     pub fn with_plugin(mut self, plugin: &'a dyn DatabasePlugin) -> Self {
         self.plugin = Some(plugin);
         self
     }
 
     pub(super) fn cell(self, row_index: usize, column_index: usize) -> CopyCell<'a> {
+        if let Some(typed) = self
+            .typed_cells
+            .and_then(|rows| rows.get(row_index))
+            .and_then(|row| row.get(column_index))
+        {
+            return match typed {
+                TableCellValue::Null => CopyCell::Null,
+                TableCellValue::Text(value) => CopyCell::Text(value.as_str()),
+                TableCellValue::Binary(bytes) => CopyCell::Binary(bytes.as_slice()),
+            };
+        }
+
         if let Some(bytes) = self
             .binary_cells
             .iter()

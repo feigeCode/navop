@@ -7,6 +7,7 @@ use crate::planner::Plan;
 pub struct SessionState {
     pub history: RuntimeHistory,
     pub current_plan: Option<Plan>,
+    /// 用户自定义追加指令（追加在系统提示词模板之后）。
     pub system_instruction: Option<String>,
     pub last_error: Option<String>,
 }

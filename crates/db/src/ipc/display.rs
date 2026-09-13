@@ -1,5 +1,6 @@
 use crate::ipc::{IpcDriverManifest, IpcDriverRegistry};
-use gpui_component::{Icon, IconName, IconNamed, Sizable, Size};
+use gpui_component::{Icon, IconNamed, Sizable, Size};
+use one_assets::IconName;
 use one_core::storage::DbConnectionConfig;
 use std::path::{Path, PathBuf};
 
@@ -65,10 +66,9 @@ pub fn driver_icon_from_asset_path(path: impl Into<String>, size: impl Into<Size
 }
 
 pub fn driver_icon_from_file_path(path: impl Into<PathBuf>, size: impl Into<Size>) -> Icon {
-    Icon::default()
-        .file_path(path.into())
-        .color()
-        .with_size(size)
+    // gpui (main) 没有 file_path，直接读文件内容并以 SVG 字节提供
+    let data = std::fs::read(path.into()).unwrap_or_default();
+    Icon::default().data(&data).color().with_size(size)
 }
 
 impl IpcDriverRegistry {

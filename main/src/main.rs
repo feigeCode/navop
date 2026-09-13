@@ -35,6 +35,7 @@ mod personal_sync_runtime_tests;
 mod personal_sync_status;
 mod public_mcp_approval;
 mod public_mcp_runtime;
+mod resource_workbench_terminal;
 mod session_logs;
 mod setting_tab;
 mod settings;
@@ -58,6 +59,7 @@ use tracing::{info, warn};
 
 struct AppAssets {
     builtin: Assets,
+    navop_icons: one_assets::Assets,
     driver: db::ipc::DriverAssetSource,
 }
 
@@ -237,6 +239,7 @@ impl AppAssets {
     fn new() -> Self {
         Self {
             builtin: Assets,
+            navop_icons: one_assets::Assets::new(),
             driver: db::ipc::DriverAssetSource::new(
                 Arc::new(db::ipc::DriverResourceLoader::new()),
                 Arc::new(db::ipc::IpcDriverRegistry::load_default()),
@@ -274,8 +277,11 @@ impl AssetSource for AppAssets {
                     info!(
                         target: "driver_icon",
                         asset_path = path,
-                        "driver asset source returned none; trying builtin assets"
+                        "driver asset source returned none; trying navop/builtin assets"
                     );
+                }
+                if let Ok(Some(asset)) = self.navop_icons.load(path) {
+                    return Ok(Some(asset));
                 }
                 self.builtin.load(path)
             }
@@ -284,8 +290,11 @@ impl AssetSource for AppAssets {
                     target: "driver_icon",
                     asset_path = path,
                     error = %error,
-                    "driver asset source failed; trying builtin assets"
+                    "driver asset source failed; trying navop/builtin assets"
                 );
+                if let Ok(Some(asset)) = self.navop_icons.load(path) {
+                    return Ok(Some(asset));
+                }
                 self.builtin.load(path)
             }
         }
@@ -293,6 +302,7 @@ impl AssetSource for AppAssets {
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
         let mut assets = self.driver.list(path).unwrap_or_default();
+        assets.extend(self.navop_icons.list(path).unwrap_or_default());
         assets.extend(self.builtin.list(path).unwrap_or_default());
         assets.sort();
         assets.dedup();
@@ -431,8 +441,10 @@ fn main() {
         }
         notes::init(cx);
         extension_runtime::init(cx);
-        #[cfg(feature = "shell-plugins")]
         universal_plugins::init(cx);
+        // 资源工作台的 terminal 页面需要宿主提供可嵌入终端;未注册时
+        // 工作台渲染「此构建不可用」而不是崩溃。
+        resource_workbench_terminal::install_terminal_host(cx);
         #[cfg(feature = "shell-plugins")]
         dev_extension_registry::install_dev_host_ops(cx);
 
@@ -842,7 +854,7 @@ mod native_driver_feature_contract_tests {
     }
 
     #[test]
-    fn builtin_native_driver_features_are_declared_and_default_off() {
+    fn builtin_mongodb_feature_is_declared_and_default_off() {
         let manifest = include_str!("../Cargo.toml");
         let features = feature_block(manifest);
         let default_line = features
@@ -850,9 +862,7 @@ mod native_driver_feature_contract_tests {
             .find(|line| line.trim_start().starts_with("default ="))
             .expect("main must declare default features");
 
-        assert!(features.contains("builtin-redis ="));
         assert!(features.contains("builtin-mongodb ="));
-        assert!(!default_line.contains("builtin-redis"));
         assert!(!default_line.contains("builtin-mongodb"));
     }
 

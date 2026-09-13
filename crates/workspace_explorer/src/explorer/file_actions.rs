@@ -11,15 +11,8 @@ use gpui::{
     AnyElement, AppContext as _, AsyncApp, Context, Entity, IntoElement, ParentElement as _,
     Styled as _, WeakEntity, Window, div, prelude::FluentBuilder as _, px,
 };
-use gpui_component::{
-    Disableable as _, Icon, IconName, Sizable as _, Size, StyledExt as _, WindowExt as _,
-    button::{Button, ButtonVariants as _},
-    h_flex,
-    input::{Input, InputEvent, InputState},
-    menu::{PopupMenu, PopupMenuItem},
-    notification::Notification,
-    v_flex,
-};
+use gpui_component::{Disableable as _, Icon, Sizable as _, Size, StyledExt as _, WindowExt as _, button::{Button, ButtonVariants as _}, h_flex, input::{Input, InputEvent, InputState}, menu::{PopupMenu, PopupMenuItem}, notification::Notification, v_flex};
+use one_assets::IconName;
 use rust_i18n::t;
 use std::path::{Path, PathBuf};
 

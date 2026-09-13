@@ -8,28 +8,14 @@ use super::remote_path::{join_remote_path, normalize_remote_path, resolve_remote
 use crate::theme::TerminalColors;
 use chrono::{DateTime, Local};
 use gpui::{
-    Anchor, App, ClipboardItem, ColorExt as _, Context, Entity, EventEmitter, ExternalPaths,
+    Anchor, App, ClipboardItem, Context, Entity, EventEmitter, ExternalPaths,
     FocusHandle, Focusable, Hsla, IntoElement, KeyBinding, ListSizingBehavior, MouseButton,
     MouseDownEvent, ParentElement, PathPromptOptions, Render, SharedString, Styled,
     UniformListScrollHandle, Window, actions, div, prelude::*, px, uniform_list,
 };
-use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, IconSize, InteractiveElementExt, Sizable, Size,
-    WindowExt,
-    breadcrumb::{Breadcrumb, BreadcrumbItem},
-    button::{Button, ButtonVariants},
-    dialog::DialogButtonProps,
-    h_flex,
-    input::{Input, InputEvent, InputState},
-    menu::{ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem},
-    notification::Notification,
-    popover::{Popover, PopoverState},
-    progress::Progress,
-    scroll::ScrollableElement,
-    spinner::Spinner,
-    tooltip::Tooltip,
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Disableable, Icon, InteractiveElementExt, Sizable, Size, WindowExt, breadcrumb::{Breadcrumb, BreadcrumbItem}, button::{Button, ButtonVariants}, dialog::DialogButtonProps, h_flex, input::{Input, InputEvent, InputState}, menu::{ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem}, notification::Notification, popover::{Popover, PopoverState}, progress::Progress, scroll::ScrollableElement, spinner::Spinner, tooltip::Tooltip, v_flex};
+use one_ui::IconSize;
+use one_assets::IconName;
 use one_core::background_tasks::{BackgroundTaskHandle, BackgroundTaskSpec};
 use one_core::gpui_tokio::Tokio;
 use one_core::sidebar_contribution::SidebarPlacement;
@@ -3947,7 +3933,7 @@ impl FileManagerPanel {
         let muted_foreground = self.colors.muted_foreground;
         let breadcrumb = self
             .render_path_breadcrumb(cx)
-            .colors(foreground, muted_foreground);
+            ;
         v_flex()
             .border_b_1()
             .border_color(border)
@@ -6446,7 +6432,7 @@ mod tests {
         assert!(toolbar.contains(r#".id("fm-open-sftp")"#));
         assert!(toolbar.contains("FileManagerPanelEvent::OpenSftp("));
         assert!(toolbar.contains(r#"t!("FileManager.open_sftp")"#));
-        assert!(toolbar.contains(".colors(foreground, muted_foreground)"));
+        
         assert!(toolbar.contains(".text_color(muted_foreground)"));
     }
 

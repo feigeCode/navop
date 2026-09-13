@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use super::{
     WindowsNativeDisplayFlushReason as Reason, WindowsNativeDisplayState,
-    WindowsNativeViewportSettings as Settings,
+    WindowsNativeViewportSettings as Settings, connect_desktop_scale_factor, request_smart_sizing,
 };
 
 const GENERATION: u64 = 7;
@@ -282,4 +282,110 @@ fn retry_success_consumes_overdue_compensation() {
     state.request_succeeded(retry);
 
     assert_eq!(None, state.take_request(now + Duration::from_millis(501)));
+}
+
+#[test]
+fn repeated_display_failures_back_off_and_then_give_up() {
+    let now = Instant::now();
+    let mut state = attached(now);
+    state.login_complete(GENERATION, now);
+
+    let mut request = state.take_request(now).expect("immediate request");
+    let mut at = now;
+    for (index, backoff_ms) in [500u64, 1_000, 2_000, 4_000].into_iter().enumerate() {
+        assert!(
+            !state.request_failed(request, at),
+            "attempt {} must still retry",
+            index + 1
+        );
+        assert_eq!(
+            None,
+            state.take_request(at + Duration::from_millis(backoff_ms - 1)),
+            "a {backoff_ms}ms backoff must gate the retry"
+        );
+        at += Duration::from_millis(backoff_ms);
+        request = state.take_request(at).expect("backed-off retry");
+        assert_eq!(Reason::Retry, request.reason);
+    }
+
+    // The viewport was rejected five times: stop re-asserting the desktop size
+    // and scale for it instead of hammering the session at the poll rate.
+    assert!(state.request_failed(request, at));
+    assert_eq!(None, state.take_request(at + Duration::from_secs(30)));
+}
+
+#[test]
+fn a_new_viewport_rearms_display_updates_after_giving_up() {
+    let now = Instant::now();
+    let mut state = attached(now);
+    state.login_complete(GENERATION, now);
+    let request = state.take_request(now).expect("immediate request");
+    let mut at = now;
+    for _ in 0..5 {
+        state.request_failed(request, at);
+        at += Duration::from_millis(120);
+    }
+    assert_eq!(None, state.take_request(at + Duration::from_secs(10)));
+
+    let resized = Settings {
+        width: 1600,
+        ..settings()
+    };
+    state.observe(resized, at + Duration::from_secs(10));
+
+    assert_eq!(
+        resized,
+        state
+            .take_request(at + Duration::from_millis(10_400))
+            .expect("a changed viewport is a fresh attempt")
+            .settings
+    );
+}
+
+#[test]
+fn reconnect_reapplies_the_viewport_after_giving_up() {
+    let now = Instant::now();
+    let mut state = attached(now);
+    state.login_complete(GENERATION, now);
+    let request = state.take_request(now).expect("immediate request");
+    let mut at = now;
+    for _ in 0..5 {
+        state.request_failed(request, at);
+        at += Duration::from_millis(120);
+    }
+    assert_eq!(None, state.take_request(at + Duration::from_secs(10)));
+
+    state.reconnecting(GENERATION);
+    state.reconnected(GENERATION, at + Duration::from_secs(11));
+
+    assert_eq!(
+        Reason::Reconnected,
+        state
+            .take_request(at + Duration::from_secs(11))
+            .expect("the new session gets a fresh attempt")
+            .reason
+    );
+}
+
+#[test]
+fn dynamic_sessions_connect_with_the_local_display_scale() {
+    // A configured 100% would otherwise be re-scoped to the local 150% by the
+    // first viewport flush, re-rendering the session right after login.
+    assert_eq!(150, connect_desktop_scale_factor(true, 100, 1.5));
+    assert_eq!(100, connect_desktop_scale_factor(true, 100, 1.0));
+    assert_eq!(200, connect_desktop_scale_factor(true, 180, 2.0));
+    // Fixed-size sessions never receive viewport flushes, so they keep the
+    // configured scale.
+    assert_eq!(180, connect_desktop_scale_factor(false, 180, 1.5));
+}
+
+#[test]
+fn dynamic_sessions_never_request_client_side_smart_sizing() {
+    // A viewport-sized session has nothing to fit; smart sizing would only
+    // stretch the session (pointer included) on a transient size mismatch.
+    assert!(!request_smart_sizing(true, true));
+    assert!(!request_smart_sizing(true, false));
+    // A fixed-size session keeps the user's choice.
+    assert!(request_smart_sizing(false, true));
+    assert!(!request_smart_sizing(false, false));
 }

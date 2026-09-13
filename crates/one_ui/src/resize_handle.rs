@@ -9,11 +9,11 @@ use gpui::{
 use gpui_component::ActiveTheme as _;
 
 /// Legacy default resize-handle edge padding.
-#[deprecated(note = "Use cx.theme().geometry.resize.edge_padding")]
+#[deprecated(note = "Use one_ui::theme_geometry().resize.edge_padding")]
 pub const HANDLE_PADDING: Pixels = px(4.);
 
 /// Legacy default resize-handle visible line size.
-#[deprecated(note = "Use cx.theme().geometry.resize.visible_line")]
+#[deprecated(note = "Use one_ui::theme_geometry().resize.visible_line")]
 pub const HANDLE_SIZE: Pixels = px(1.);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

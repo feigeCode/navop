@@ -100,6 +100,13 @@ fn is_channel_open_failure(err: &anyhow::Error) -> bool {
         || msg.contains("administratively prohibited")
 }
 
+/// 设备在建立会话通道过程中主动断开了 SSH 传输层
+/// （russh `Error::Disconnect` / 死 transport 上的 `Error::SendError`）。
+fn is_transport_disconnect_failure(err: &anyhow::Error) -> bool {
+    let msg = format!("{err:#}").to_ascii_lowercase();
+    msg.contains("disconnected") || msg.contains("channel send error")
+}
+
 fn is_timeout_failure(err: &anyhow::Error) -> bool {
     let msg = format!("{err:#}").to_ascii_lowercase();
     msg.contains("timed out")
@@ -114,6 +121,15 @@ fn add_connect_error_context(err: anyhow::Error) -> anyhow::Error {
             "the server refused to open an SSH session channel; check the account's \
              interactive CLI/EXEC permission, the device SSH service-type, and the VTY \
              / concurrent session limit",
+        );
+    }
+
+    if is_transport_disconnect_failure(&err) {
+        return err.context(
+            "the remote device dropped the SSH transport while a session channel was \
+             being opened; embedded/network devices (firewalls, switches) often allow \
+             only a limited number of concurrent sessions — check the device's SSH/VTY \
+             session settings",
         );
     }
 
@@ -1353,28 +1369,54 @@ impl SshBackend {
         loop {
             let client = session_manager.client().await?;
 
+            let mut probe_killed_transport = false;
             let result = {
                 let mut guard = client.lock().await;
                 let shell_integration_requested = if plain_channel_only {
                     false
                 } else {
-                    Self::probe_shell_integration_support(&mut *guard, connection_id).await
+                    let requested =
+                        Self::probe_shell_integration_support(&mut *guard, connection_id).await;
+                    // 受限设备（如仅允许单个会话的嵌入式防火墙/交换机）会在探测
+                    // 通道上直接回 SSH_MSG_DISCONNECT，把整个传输层掐断。此时再
+                    // 在死 transport 上开交互通道只会得到 SendError，因此探测后
+                    // 必须先确认传输层仍然存活，死了就走降级重连。
+                    if !guard.is_connected() {
+                        probe_killed_transport = true;
+                        tracing::warn!(
+                            target: "terminal.ssh.setup",
+                            connection_id,
+                            "shell integration 探测导致传输层断开（受限设备），重建连接并跳过探测"
+                        );
+                    }
+                    requested
                 };
-                Self::prepare_plain_ssh_channel(&mut *guard, pty_config)
-                    .await
-                    .map(|channel| (channel, shell_integration_requested))
+                if probe_killed_transport {
+                    Err(anyhow::anyhow!(
+                        "SSH transport disconnected during shell integration probe"
+                    ))
+                } else {
+                    Self::prepare_plain_ssh_channel(&mut *guard, pty_config)
+                        .await
+                        .map(|channel| (channel, shell_integration_requested))
+                }
             };
 
             match result {
                 Ok((channel, shell_integration_requested)) => {
                     return Ok((client, channel, shell_integration_requested));
                 }
-                Err(err) if attempt == 0 && is_channel_open_failure(&err) => {
-                    tracing::warn!(
-                        target: "terminal.ssh.connect",
-                        error = %err,
-                        "SSH session channel 被拒绝，重建连接并降级为单个裸交互 channel"
-                    );
+                Err(err)
+                    if attempt == 0
+                        && (probe_killed_transport || is_channel_open_failure(&err)) =>
+                {
+                    if !probe_killed_transport {
+                        tracing::warn!(
+                            target: "terminal.ssh.connect",
+                            error = %err,
+                            "SSH session channel 被拒绝，重建连接并降级为单个裸交互 channel"
+                        );
+                    }
                     let invalidated = session_manager.invalidate_client(&client).await;
                     tracing::debug!(
                         target: "terminal.ssh.connect",
@@ -1860,6 +1902,8 @@ mod tests {
     struct MockClient {
         channels: VecDeque<MockChannel>,
         open_error: Option<&'static str>,
+        disconnect_on_open_error: bool,
+        connected: bool,
     }
 
     impl MockClient {
@@ -1867,6 +1911,8 @@ mod tests {
             Self {
                 channels: channels.into_iter().collect(),
                 open_error: None,
+                disconnect_on_open_error: false,
+                connected: true,
             }
         }
 
@@ -1877,6 +1923,22 @@ mod tests {
             Self {
                 channels: channels.into_iter().collect(),
                 open_error: Some(open_error),
+                disconnect_on_open_error: false,
+                connected: true,
+            }
+        }
+
+        /// 模拟受限设备（如华为 USG 防火墙）：通道 open 被拒时直接回
+        /// SSH_MSG_DISCONNECT，把整个传输层一起掐断。
+        fn new_disconnected_on_open_error(
+            channels: impl IntoIterator<Item = MockChannel>,
+            open_error: &'static str,
+        ) -> Self {
+            Self {
+                channels: channels.into_iter().collect(),
+                open_error: Some(open_error),
+                disconnect_on_open_error: true,
+                connected: true,
             }
         }
     }
@@ -1897,6 +1959,9 @@ mod tests {
                 return Ok(channel);
             }
             if let Some(error) = self.open_error.take() {
+                if self.disconnect_on_open_error {
+                    self.connected = false;
+                }
                 return Err(anyhow!(error));
             }
             Err(anyhow!("no more mock channels"))
@@ -1907,7 +1972,7 @@ mod tests {
         }
 
         fn is_connected(&self) -> bool {
-            true
+            self.connected
         }
     }
 
@@ -2220,6 +2285,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn establish_channel_reconnects_with_one_plain_channel_when_probe_kills_transport() {
+        // 模拟华为 USG 等受限设备：探测通道 open 直接被设备回
+        // SSH_MSG_DISCONNECT，传输层被一起掐断。
+        let first_client = MockClient::new_disconnected_on_open_error([], "Disconnected");
+
+        let (fallback_channel, fallback_state) = MockChannel::new([], false);
+        let second_client = MockClient::new([fallback_channel]);
+        let manager = MockSessionManager::new([first_client, second_client]);
+
+        let (_client, _channel, shell_integration_requested) =
+            SshBackend::establish_channel_with_manager(
+                &manager,
+                &PtyConfig::default(),
+                Some(42),
+                false,
+            )
+            .await
+            .expect("探测断开传输层后应以单裸通道模式重连成功");
+
+        assert!(
+            !shell_integration_requested,
+            "传输层被探测掐断后重连，必须以纯裸终端模式建立交互通道"
+        );
+        assert_eq!(
+            manager.invalidation_count(),
+            1,
+            "应失效被探测掐断的 transport generation"
+        );
+        assert_eq!(
+            recorded_ops(&fallback_state),
+            vec![ChannelOp::RequestPty, ChannelOp::RequestShell],
+            "重连后只开一个交互 channel，不再探测"
+        );
+    }
+
+    #[tokio::test]
+    async fn establish_channel_reconnects_when_probe_execution_drops_transport() {
+        // 模拟探测 exec 执行期间设备掐断传输层：探测本身"成功"返回，
+        // 但传输层已死，交互通道不能再在原 transport 上打开。
+        let (probe_channel, probe_state) = MockChannel::new(
+            [
+                ChannelEvent::Data(b"__ONETCLI_SHELL_SUPPORTED__=1\n".to_vec()),
+                ChannelEvent::Close,
+            ],
+            false,
+        );
+        let mut first_client = MockClient::new([probe_channel]);
+        first_client.connected = false;
+
+        let (fallback_channel, fallback_state) = MockChannel::new([], false);
+        let second_client = MockClient::new([fallback_channel]);
+        let manager = MockSessionManager::new([first_client, second_client]);
+
+        let (_client, _channel, shell_integration_requested) =
+            SshBackend::establish_channel_with_manager(
+                &manager,
+                &PtyConfig::default(),
+                Some(42),
+                false,
+            )
+            .await
+            .expect("探测期间传输层断开后应以单裸通道模式重连成功");
+
+        assert!(!shell_integration_requested);
+        assert_eq!(
+            recorded_ops(&probe_state),
+            vec![ChannelOp::Exec, ChannelOp::Close],
+            "探测仍按只读方式完成（exec + close）"
+        );
+        assert_eq!(
+            manager.invalidation_count(),
+            1,
+            "应失效被探测期间断开的 transport generation"
+        );
+        assert_eq!(
+            recorded_ops(&fallback_state),
+            vec![ChannelOp::RequestPty, ChannelOp::RequestShell],
+            "重连后只开一个交互 channel，不再探测"
+        );
+    }
+
+    #[tokio::test]
     async fn establish_channel_reports_shell_integration_requested_after_supported_probe() {
         let (probe_channel, probe_state) = MockChannel::new(
             [
@@ -2330,6 +2477,39 @@ mod tests {
             is_channel_open_failure(&err),
             "应识别截图中的 russh 原始错误文本并触发单通道重连"
         );
+    }
+
+    #[test]
+    fn transport_disconnect_failure_recognizes_russh_error_text() {
+        assert!(
+            is_transport_disconnect_failure(&anyhow!("Channel send error")),
+            "应识别死 transport 上的 russh SendError 文本"
+        );
+        assert!(
+            is_transport_disconnect_failure(&anyhow!("Disconnected")),
+            "应识别 russh Disconnect 文本"
+        );
+        assert!(
+            !is_transport_disconnect_failure(&anyhow!(
+                "Failed to open channel (AdministrativelyProhibited)"
+            )),
+            "channel open 拒绝不应被误判为传输层断开"
+        );
+        assert!(
+            !is_transport_disconnect_failure(&anyhow!("dial tcp 10.0.0.8:22: i/o timeout")),
+            "超时错误不应被误判为传输层断开"
+        );
+    }
+
+    #[test]
+    fn add_connect_error_context_wraps_transport_disconnect_failures() {
+        for raw in ["Channel send error", "Disconnected"] {
+            let message = add_connect_error_context(anyhow!(raw)).to_string();
+            assert!(
+                message.contains("dropped the SSH transport"),
+                "russh「{raw}」错误应补充受限设备会话限制排查提示，实际: {message}"
+            );
+        }
     }
 
     #[test]

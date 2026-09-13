@@ -4,13 +4,8 @@ use crate::storage_location::uses_files_subdir;
 use crate::{NotebookMetadata, NotesStorage, NotesView, TreeState};
 use anyhow::Result;
 use gpui::{Context, Entity, IntoElement, ParentElement, PathPromptOptions, Styled, Window, px};
-use gpui_component::{
-    IconName, WindowExt,
-    button::Button,
-    h_flex,
-    input::{Input, InputState},
-    v_flex,
-};
+use gpui_component::{WindowExt, button::Button, h_flex, input::{Input, InputState}, v_flex};
+use one_assets::IconName;
 use rust_i18n::t;
 use std::path::PathBuf;
 

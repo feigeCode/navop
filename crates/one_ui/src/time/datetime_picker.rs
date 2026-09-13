@@ -13,9 +13,8 @@ use gpui_component::calendar::{Calendar, CalendarEvent, CalendarState, Date, Mat
 use gpui_component::input::{
     Delete, InputEvent, InputState, MaskPattern, NumberInput, NumberInputEvent, StepAction,
 };
-use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, Sizable, Size, StyleSized, StyledExt, h_flex, v_flex,
-};
+use gpui_component::{ActiveTheme, Disableable, Icon, Sizable, Size, StyleSized, StyledExt, h_flex, v_flex};
+use one_assets::IconName;
 use rust_i18n::t;
 
 const CONTEXT: &'static str = "DateTimePicker";

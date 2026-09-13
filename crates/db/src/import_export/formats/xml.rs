@@ -3,6 +3,7 @@ use std::time::Instant;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 
+use super::sync_typed_batch_from_legacy;
 use super::xml_codec::serialize_table;
 use crate::DatabasePlugin;
 use crate::connection::DbConnection;
@@ -174,6 +175,7 @@ async fn query_table(
                 &mut result,
             )
             .await?;
+            sync_typed_batch_from_legacy(&mut result)?;
             Ok(result)
         }
         SqlResult::Error(error) => Err(anyhow!("Query failed: {}", error.message)),

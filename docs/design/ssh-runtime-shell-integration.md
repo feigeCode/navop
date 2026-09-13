@@ -75,6 +75,22 @@ case "${SHELL:-}" in *bash*|*zsh*) printf '__ONETCLI_SHELL_SUPPORTED__=1\n';; es
 - 1s 超时；任何失败只记 warn，降级为不注入，不阻断连接；
 - ash/dash 解析不了 bash 函数语法（实测 `Syntax error: "(" unexpected`），fish 被 `$SHELL` 探测排除——探测是必需的安全门。
 
+#### 受限设备探测断连降级（Issue #183）
+
+华为 USG 等嵌入式网络设备只允许单个 SSH 会话：探测通道本身会触发设备回
+`SSH_MSG_DISCONNECT`，把整个传输层一起掐断（日志表现为 `Disconnected`，随后在死
+transport 上开交互通道报 `Channel send error`）。因此探测返回后必须检查
+`client.is_connected()`：
+
+- 传输层已死 → 失效该 transport generation，重建连接并以
+  `plain_channel_only` 模式重试（只开一个交互 channel，跳过探测）；
+- 传输层存活 → 按原有路径继续（探测失败仍只降级不注入）。
+
+兜底之外，连接表单高级设置提供「禁用 Shell 集成」开关（`disable_shell_integration`，
+复用存储模型既有字段），针对网络设备/工控主机显式跳过探测；降级重试后仍被设备
+断连时，`add_connect_error_context` 会为 russh `Disconnect` / `SendError`
+补充设备 VTY/会话限制排查提示。
+
 ### 4. 回显抑制状态机（`RuntimeShellIntegration`）
 
 ```

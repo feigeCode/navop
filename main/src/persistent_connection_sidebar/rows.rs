@@ -3,10 +3,9 @@ use gpui::{
     AnyElement, AppContext, ElementId, InteractiveElement, IntoElement, ParentElement,
     SharedString, StatefulInteractiveElement, Styled, div,
 };
-use gpui_component::{
-    ActiveTheme, Icon, IconName, IconSize, InteractiveElementExt, Sizable, h_flex,
-    menu::ContextMenuExt,
-};
+use gpui_component::{Icon, InteractiveElementExt, Sizable, h_flex, menu::ContextMenuExt};
+use one_ui::IconSize;
+use one_assets::IconName;
 use rust_i18n::t;
 
 use super::drag::DragConnection;
@@ -57,7 +56,7 @@ impl PersistentConnectionSidebar {
         cx: &gpui::Context<Self>,
     ) -> AnyElement {
         let home = self.home_page.clone();
-        let tree = cx.theme().geometry.tree;
+        let tree = one_ui::theme_geometry().tree;
         let row_height = if self.home_embedded {
             tree.row_height + gpui::px(4.0)
         } else {
@@ -112,7 +111,7 @@ impl PersistentConnectionSidebar {
         let home_for_rename = self.home_page.clone();
         let rename_config = self.workspace_dialog_config(id, cx);
         let view_for_menu = view.clone();
-        let tree = cx.theme().geometry.tree;
+        let tree = one_ui::theme_geometry().tree;
         let row_height = if self.home_embedded {
             tree.row_height + gpui::px(4.0)
         } else {
@@ -256,7 +255,7 @@ impl PersistentConnectionSidebar {
             name: name.clone(),
         };
         let view_for_menu = cx.entity();
-        let tree = cx.theme().geometry.tree;
+        let tree = one_ui::theme_geometry().tree;
         let row_height = if self.home_embedded {
             tree.row_height + gpui::px(4.0)
         } else {

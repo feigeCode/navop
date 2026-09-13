@@ -511,7 +511,9 @@ impl RemoteDesktopView {
                     .take_all_distinct(self.latest_frame.take()),
             );
         }
-        self.last_resize_size = None;
+        if !resize::preserve_resize_state_on_session_reset(reason) {
+            self.last_resize_size = None;
+        }
         self.pending_resize_size = None;
         self.pending_resize_updated_at = None;
         self.last_resize_sent_at = None;
@@ -723,6 +725,16 @@ impl RemoteDesktopView {
         else {
             return;
         };
+        if resize::is_already_applied(self.remote_size, size) {
+            // The session already runs at this size. Sending the request anyway
+            // is a protocol no-op at best; on hosts that cannot apply dynamic
+            // display updates it is answered with a fallback reconnect, which
+            // re-enters this path and loops the session forever (issue #171).
+            self.pending_resize_size = None;
+            self.pending_resize_updated_at = None;
+            self.last_resize_size = Some(size);
+            return;
+        }
         if updated_at.elapsed() < RESIZE_DEBOUNCE
             || self
                 .last_resize_sent_at

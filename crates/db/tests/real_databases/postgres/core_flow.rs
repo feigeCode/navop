@@ -191,10 +191,10 @@ async fn assert_full_type_query(connection: &(dyn DbConnection + Send + Sync), s
     assert_cell(&result, 0, 10, "line 1\nline 2");
     assert_cell(&result, 0, 12, "192.168.1.1");
     assert_cell(&result, 0, 13, "2026-08-22");
-    assert_cell(&result, 0, 14, "12:34:56");
-    assert_cell(&result, 0, 15, "2026-08-22 12:34:56");
-    assert_cell(&result, 0, 15, "2026-08-22 12:34:56");
-    assert_cell(&result, 0, 16, "2026-08-22 12:34:56 +0000");
+    assert_cell(&result, 0, 14, "12:34:56.789");
+    assert_cell(&result, 0, 15, "2026-08-22 12:34:56.789");
+    assert_cell(&result, 0, 15, "2026-08-22 12:34:56.789");
+    assert_cell(&result, 0, 16, "2026-08-22 12:34:56.789 +0000");
     assert_cell(&result, 0, 22, "<_text>");
     assert_cell(&result, 0, 23, "<_int4>");
     assert!(

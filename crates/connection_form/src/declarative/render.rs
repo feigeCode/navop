@@ -3,17 +3,8 @@ use gpui::{
     App, Axis, Context, FocusHandle, Focusable, IntoElement, ParentElement, Render, Styled, Window,
     div, px,
 };
-use gpui_component::{
-    IconName,
-    button::{Button, ButtonVariants as _},
-    checkbox::Checkbox,
-    form::{field, v_form},
-    h_flex,
-    input::{Input, Textarea},
-    select::Select,
-    tab::{Tab, TabBar},
-    v_flex,
-};
+use gpui_component::{button::{Button, ButtonVariants as _}, checkbox::Checkbox, form::{field, v_form}, h_flex, input::{Input, Textarea}, select::Select, tab::{Tab, TabBar}, v_flex};
+use one_assets::IconName;
 use rust_i18n::t;
 use std::collections::HashSet;
 

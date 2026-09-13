@@ -1,5 +1,5 @@
 use gpui::{AnyView, App, EntityId, Hsla, Pixels, SharedString, Window};
-use gpui_component::IconName;
+use one_assets::IconName;
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

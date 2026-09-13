@@ -3,10 +3,8 @@
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, EventEmitter, Global, IntoElement, SharedString,
 };
-use gpui_component::{
-    IconName, Sizable, Size,
-    button::{Button, ButtonVariants},
-};
+use gpui_component::{Sizable, Size, button::{Button, ButtonVariants}};
+use one_assets::IconName;
 use rust_i18n::t;
 
 #[derive(Clone, Debug)]

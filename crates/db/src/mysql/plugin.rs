@@ -118,6 +118,17 @@ fn append_mysql_character_metadata(
     }
 }
 
+const DEFAULT_MYSQL_METADATA_CHARSET: &str = "utf8mb4";
+
+fn mysql_metadata_charset(connection: &dyn DbConnection) -> &str {
+    connection
+        .config()
+        .get_param("charset")
+        .map(|charset| charset.trim())
+        .filter(|charset| !charset.is_empty())
+        .unwrap_or(DEFAULT_MYSQL_METADATA_CHARSET)
+}
+
 impl MySqlPlugin {
     pub fn new() -> Self {
         Self
@@ -1303,11 +1314,16 @@ impl DatabasePlugin for MySqlPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list databases: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
-                .rows
-                .iter()
-                .filter_map(|row| row.first().and_then(|v| v.clone()))
-                .collect())
+            let charset = mysql_metadata_charset(connection);
+            let mut names = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                if let Some(name) =
+                    crate::metadata_read::metadata_text(&query_result, row_index, 0, charset)?
+                {
+                    names.push(name);
+                }
+            }
+            Ok(names)
         } else {
             Err(anyhow::anyhow!("Unexpected result type"))
         }
@@ -1374,28 +1390,37 @@ impl DatabasePlugin for MySqlPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list databases: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            let databases: Vec<DatabaseInfo> = query_result
-                .rows
-                .iter()
-                .filter_map(|row| {
-                    let name = row.first().and_then(|v| v.clone())?;
-                    let charset = row.get(1).and_then(|v| v.clone());
-                    let collation = row.get(2).and_then(|v| v.clone());
-                    let table_count = row
-                        .get(3)
-                        .and_then(|v| v.clone())
-                        .and_then(|s| s.parse::<i64>().ok());
-
-                    Some(DatabaseInfo {
-                        name,
+            let charset = mysql_metadata_charset(connection);
+            let mut databases = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                let Some(name) =
+                    crate::metadata_read::metadata_text(&query_result, row_index, 0, charset)?
+                else {
+                    continue;
+                };
+                databases.push(DatabaseInfo {
+                    name,
+                    charset: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        1,
                         charset,
-                        collation,
-                        size: None,
-                        table_count,
-                        comment: None,
-                    })
-                })
-                .collect();
+                    )?,
+                    collation: crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        2,
+                        charset,
+                    )?,
+                    size: None,
+                    table_count: crate::metadata_read::metadata_integer(
+                        &query_result,
+                        row_index,
+                        3,
+                    )?,
+                    comment: None,
+                });
+            }
             Ok(databases)
         } else {
             Err(anyhow::anyhow!("Unexpected result type"))
@@ -1434,32 +1459,39 @@ impl DatabasePlugin for MySqlPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list tables: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            let tables: Vec<TableInfo> = query_result
-                .rows
-                .iter()
-                .map(|row| {
-                    // 索引顺序：0名, 1注释, 2引擎, 3时间, 4排序, 5类型
-                    let collation = row.get(4).and_then(|v| v.clone());
-                    let charset = collation
-                        .as_ref()
-                        .and_then(|c| c.split('_').next().map(|s| s.to_string()));
-
-                    TableInfo {
-                        name: row.first().and_then(|v| v.clone()).unwrap_or_default(),
-                        object_type: match row.get(5).and_then(|v| v.as_deref()) {
-                            Some("VIEW" | "SYSTEM VIEW") => TableObjectType::View,
-                            _ => TableObjectType::Table,
-                        },
-                        schema: None,
-                        comment: row.get(1).and_then(|v| v.clone()).filter(|s| !s.is_empty()),
-                        engine: row.get(2).and_then(|v| v.clone()),
-                        // row_count 字段已根据要求移除
-                        create_time: row.get(3).and_then(|v| v.clone()),
+            let charset = mysql_metadata_charset(connection);
+            let mut tables = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                let cell = |column_index| {
+                    crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        column_index,
                         charset,
-                        collation,
-                    }
-                })
-                .collect();
+                    )
+                };
+
+                // 索引顺序：0名, 1注释, 2引擎, 3时间, 4排序, 5类型
+                let collation = cell(4)?;
+                let charset_name = collation
+                    .as_ref()
+                    .and_then(|c| c.split('_').next().map(|s| s.to_string()));
+
+                tables.push(TableInfo {
+                    name: cell(0)?.unwrap_or_default(),
+                    object_type: match cell(5)?.as_deref() {
+                        Some("VIEW" | "SYSTEM VIEW") => TableObjectType::View,
+                        _ => TableObjectType::Table,
+                    },
+                    schema: None,
+                    comment: cell(1)?.filter(|s| !s.is_empty()),
+                    engine: cell(2)?,
+                    // row_count 字段已根据要求移除
+                    create_time: cell(3)?,
+                    charset: charset_name,
+                    collation,
+                });
+            }
 
             Ok(tables)
         } else {
@@ -1508,34 +1540,33 @@ impl DatabasePlugin for MySqlPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list tables view: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            let rows: Vec<Vec<String>> = query_result
-                .rows
-                .iter()
-                .map(|row| {
-                    // 索引顺序：0名, 1引擎, 2行数, 3大小(MB), 4创建时间, 5注释
-                    let row_count = row
-                        .get(2)
-                        .and_then(|v| v.clone())
-                        .and_then(|s| s.parse::<i64>().ok())
+            let charset = mysql_metadata_charset(connection);
+            let mut rows: Vec<Vec<String>> = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                let cell = |column_index| {
+                    crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        column_index,
+                        charset,
+                    )
+                };
+
+                // 索引顺序：0名, 1引擎, 2行数, 3大小(MB), 4创建时间, 5注释
+                let row_count =
+                    crate::metadata_read::metadata_integer(&query_result, row_index, 2)?
                         .map(|n| n.to_string())
                         .unwrap_or_else(|| "-".to_string());
 
-                    vec![
-                        row.first().and_then(|v| v.clone()).unwrap_or_default(),
-                        row.get(1)
-                            .and_then(|v| v.clone())
-                            .unwrap_or_else(|| "-".to_string()),
-                        row_count,
-                        row.get(3)
-                            .and_then(|v| v.clone())
-                            .unwrap_or_else(|| "-".to_string()),
-                        row.get(4)
-                            .and_then(|v| v.clone())
-                            .unwrap_or_else(|| "-".to_string()),
-                        row.get(5).and_then(|v| v.clone()).unwrap_or_default(),
-                    ]
-                })
-                .collect();
+                rows.push(vec![
+                    cell(0)?.unwrap_or_default(),
+                    cell(1)?.unwrap_or_else(|| "-".to_string()),
+                    row_count,
+                    cell(3)?.unwrap_or_else(|| "-".to_string()),
+                    cell(4)?.unwrap_or_else(|| "-".to_string()),
+                    cell(5)?.unwrap_or_default(),
+                ]);
+            }
 
             Ok(ObjectView {
                 db_node_type: DbNodeType::Table,
@@ -1572,28 +1603,31 @@ impl DatabasePlugin for MySqlPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list columns: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
-                .rows
-                .iter()
-                .map(|row| ColumnInfo {
-                    name: row.first().and_then(|v| v.clone()).unwrap_or_default(),
-                    data_type: row.get(1).and_then(|v| v.clone()).unwrap_or_default(),
-                    is_nullable: row
-                        .get(2)
-                        .and_then(|v| v.clone())
-                        .map(|v| v == "YES")
-                        .unwrap_or(true),
-                    is_primary_key: row
-                        .get(3)
-                        .and_then(|v| v.clone())
-                        .map(|v| v == "PRI")
-                        .unwrap_or(false),
-                    default_value: row.get(4).and_then(|v| v.clone()),
-                    comment: row.get(5).and_then(|v| v.clone()),
-                    charset: row.get(6).and_then(|v| v.clone()),
-                    collation: row.get(7).and_then(|v| v.clone()),
-                })
-                .collect())
+            let charset = mysql_metadata_charset(connection);
+            let mut columns = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                let cell = |column_index| {
+                    crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        column_index,
+                        charset,
+                    )
+                };
+
+                columns.push(ColumnInfo {
+                    name: cell(0)?.unwrap_or_default(),
+                    data_type: cell(1)?.unwrap_or_default(),
+                    is_nullable: cell(2)?.map(|v| v == "YES").unwrap_or(true),
+                    is_primary_key: cell(3)?.map(|v| v == "PRI").unwrap_or(false),
+                    default_value: cell(4)?,
+                    comment: cell(5)?,
+                    charset: cell(6)?,
+                    collation: cell(7)?,
+                });
+            }
+
+            Ok(columns)
         } else {
             Err(anyhow::anyhow!("Unexpected result type"))
         }
@@ -1662,17 +1696,22 @@ impl DatabasePlugin for MySqlPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list indexes: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
+            let charset = mysql_metadata_charset(connection);
             let mut indexes: HashMap<String, IndexInfo> = HashMap::new();
 
-            for row in query_result.rows {
-                let index_name = row.first().and_then(|v| v.clone()).unwrap_or_default();
-                let column_name = row.get(1).and_then(|v| v.clone()).unwrap_or_default();
-                let is_unique = row
-                    .get(2)
-                    .and_then(|v| v.clone())
-                    .map(|v| v == "0")
-                    .unwrap_or(false);
-                let index_type = row.get(3).and_then(|v| v.clone());
+            for row_index in 0..query_result.rows.len() {
+                let cell = |column_index| {
+                    crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        column_index,
+                        charset,
+                    )
+                };
+                let index_name = cell(0)?.unwrap_or_default();
+                let column_name = cell(1)?.unwrap_or_default();
+                let is_unique = cell(2)?.map(|v| v == "0").unwrap_or(false);
+                let index_type = cell(3)?;
 
                 indexes
                     .entry(index_name.clone())
@@ -1745,6 +1784,8 @@ impl DatabasePlugin for MySqlPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list foreign keys: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
+            // Legacy 路径：外键解析器依赖 owned `rows` 的列式分组语义，暂不迁移到
+            // 共享受检读取器，避免重写复合外键解析逻辑时引入回归。
             Ok(parse_mysql_foreign_keys(query_result.rows))
         } else {
             Err(anyhow::anyhow!("Unexpected result type"))
@@ -1765,6 +1806,8 @@ impl DatabasePlugin for MySqlPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list table triggers: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
+            // Legacy 路径：触发器解析器直接消费 owned `rows`，当前保留以避免重写
+            // 解析器；元数据列举主路径已迁移到共享受检读取器。
             Ok(parse_mysql_triggers(query_result.rows))
         } else {
             Err(anyhow::anyhow!("Unexpected result type"))
@@ -1773,7 +1816,7 @@ impl DatabasePlugin for MySqlPlugin {
 
     async fn list_table_checks(
         &self,
-        _connection: &dyn DbConnection,
+        connection: &dyn DbConnection,
         _database: &str,
         _schema: Option<String>,
         _table: &str,
@@ -1790,21 +1833,32 @@ impl DatabasePlugin for MySqlPlugin {
             _database, _table
         );
 
-        let result = _connection
+        let result = connection
             .query(&sql)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to list check constraints: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
-                .rows
-                .iter()
-                .map(|row| CheckInfo {
-                    name: row.first().and_then(|v| v.clone()).unwrap_or_default(),
-                    table_name: row.get(1).and_then(|v| v.clone()).unwrap_or_default(),
-                    definition: row.get(2).and_then(|v| v.clone()),
-                })
-                .collect())
+            let charset = mysql_metadata_charset(connection);
+            let mut checks = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                let cell = |column_index| {
+                    crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        column_index,
+                        charset,
+                    )
+                };
+
+                checks.push(CheckInfo {
+                    name: cell(0)?.unwrap_or_default(),
+                    table_name: cell(1)?.unwrap_or_default(),
+                    definition: cell(2)?,
+                });
+            }
+
+            Ok(checks)
         } else {
             Err(anyhow::anyhow!("Unexpected result type"))
         }
@@ -1832,16 +1886,27 @@ impl DatabasePlugin for MySqlPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list views: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
-                .rows
-                .iter()
-                .map(|row| ViewInfo {
-                    name: row.first().and_then(|v| v.clone()).unwrap_or_default(),
+            let charset = mysql_metadata_charset(connection);
+            let mut views = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                let cell = |column_index| {
+                    crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        column_index,
+                        charset,
+                    )
+                };
+
+                views.push(ViewInfo {
+                    name: cell(0)?.unwrap_or_default(),
                     schema: None,
-                    definition: row.get(1).and_then(|v| v.clone()),
+                    definition: cell(1)?,
                     comment: None,
-                })
-                .collect())
+                });
+            }
+
+            Ok(views)
         } else {
             Err(anyhow::anyhow!("Unexpected result type"))
         }
@@ -1898,20 +1963,31 @@ impl DatabasePlugin for MySqlPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list functions: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
-                .rows
-                .iter()
-                .map(|row| FunctionInfo {
-                    name: row.first().and_then(|v| v.clone()).unwrap_or_default(),
+            let charset = mysql_metadata_charset(connection);
+            let mut functions = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                let cell = |column_index| {
+                    crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        column_index,
+                        charset,
+                    )
+                };
+
+                functions.push(FunctionInfo {
+                    name: cell(0)?.unwrap_or_default(),
                     schema: None,
-                    return_type: row.get(1).and_then(|v| v.clone()),
+                    return_type: cell(1)?,
                     parameters: Vec::new(),
                     identity_arguments: None,
                     object_id: None,
                     definition: None,
                     comment: None,
-                })
-                .collect())
+                });
+            }
+
+            Ok(functions)
         } else {
             Err(anyhow::anyhow!("Unexpected result type"))
         }
@@ -2099,11 +2175,20 @@ impl DatabasePlugin for MySqlPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list procedures: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
-                .rows
-                .iter()
-                .map(|row| FunctionInfo {
-                    name: row.first().and_then(|v| v.clone()).unwrap_or_default(),
+            let charset = mysql_metadata_charset(connection);
+            let mut procedures = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                let cell = |column_index| {
+                    crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        column_index,
+                        charset,
+                    )
+                };
+
+                procedures.push(FunctionInfo {
+                    name: cell(0)?.unwrap_or_default(),
                     schema: None,
                     return_type: None,
                     parameters: Vec::new(),
@@ -2111,8 +2196,10 @@ impl DatabasePlugin for MySqlPlugin {
                     object_id: None,
                     definition: None,
                     comment: None,
-                })
-                .collect())
+                });
+            }
+
+            Ok(procedures)
         } else {
             Err(anyhow::anyhow!("Unexpected result type"))
         }
@@ -2218,17 +2305,28 @@ impl DatabasePlugin for MySqlPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list triggers: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
-                .rows
-                .iter()
-                .map(|row| TriggerInfo {
-                    name: row.first().and_then(|v| v.clone()).unwrap_or_default(),
-                    table_name: row.get(1).and_then(|v| v.clone()).unwrap_or_default(),
-                    event: row.get(2).and_then(|v| v.clone()).unwrap_or_default(),
-                    timing: row.get(3).and_then(|v| v.clone()).unwrap_or_default(),
+            let charset = mysql_metadata_charset(connection);
+            let mut triggers = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                let cell = |column_index| {
+                    crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        column_index,
+                        charset,
+                    )
+                };
+
+                triggers.push(TriggerInfo {
+                    name: cell(0)?.unwrap_or_default(),
+                    table_name: cell(1)?.unwrap_or_default(),
+                    event: cell(2)?.unwrap_or_default(),
+                    timing: cell(3)?.unwrap_or_default(),
                     definition: None,
-                })
-                .collect())
+                });
+            }
+
+            Ok(triggers)
         } else {
             Err(anyhow::anyhow!("Unexpected result type"))
         }
@@ -3485,9 +3583,12 @@ impl Default for MySqlPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::connection::StreamingProgress;
+    use crate::executor::{ExecOptions, QueryResult, SqlSource};
     use crate::plugin::DatabasePlugin;
     use crate::types::{ColumnDefinition, IndexDefinition, TableDesign, TableOptions};
     use crate::{DatabaseActionId, DatabaseFormKind, FormValueCondition, ReferenceDataKind};
+    use db_value::{CellState, ColumnDescriptor, DbValue, Nullability, ResultBatch, ResultRow};
 
     fn create_plugin() -> MySqlPlugin {
         MySqlPlugin::new()
@@ -3642,6 +3743,106 @@ mod tests {
         }
     }
 
+    struct MetadataConnection {
+        config: DbConnectionConfig,
+        result: QueryResult,
+    }
+
+    impl MetadataConnection {
+        fn new(charset: &str, result: QueryResult) -> Self {
+            let config = DbConnectionConfig {
+                id: String::new(),
+                database_type: DatabaseType::MySQL,
+                name: "mysql".to_string(),
+                host: "localhost".to_string(),
+                port: 3306,
+                username: "root".to_string(),
+                password: String::new(),
+                database: None,
+                service_name: None,
+                sid: None,
+                workspace_id: None,
+                proxy: None,
+                credential_reference: None,
+                extra_params: [("charset".to_string(), charset.to_string())]
+                    .into_iter()
+                    .collect(),
+            };
+            Self { config, result }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl DbConnection for MetadataConnection {
+        fn config(&self) -> &DbConnectionConfig {
+            &self.config
+        }
+
+        fn set_config_database(&mut self, database: Option<String>) {
+            self.config.database = database;
+        }
+
+        async fn connect(&mut self) -> std::result::Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn disconnect(&mut self) -> std::result::Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn execute(
+            &self,
+            _plugin: &dyn DatabasePlugin,
+            _script: &str,
+            _options: ExecOptions,
+        ) -> std::result::Result<Vec<SqlResult>, DbError> {
+            Ok(Vec::new())
+        }
+
+        async fn query(&self, _query: &str) -> std::result::Result<SqlResult, DbError> {
+            Ok(SqlResult::Query(self.result.clone()))
+        }
+
+        async fn current_database(&self) -> std::result::Result<Option<String>, DbError> {
+            Ok(None)
+        }
+
+        async fn switch_database(&self, _database: &str) -> std::result::Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn execute_streaming(
+            &self,
+            _plugin: &dyn DatabasePlugin,
+            _source: SqlSource,
+            _options: ExecOptions,
+            _sender: tokio::sync::mpsc::Sender<StreamingProgress>,
+        ) -> std::result::Result<(), DbError> {
+            Ok(())
+        }
+    }
+
+    fn typed_metadata_result(column_names: &[&str], cells: Vec<CellState>) -> QueryResult {
+        let columns = column_names
+            .iter()
+            .enumerate()
+            .map(|(index, name)| ColumnDescriptor {
+                id: format!("column:{index}"),
+                label: (*name).to_string(),
+                native_type: "VARCHAR".to_string(),
+                logical_type: "Text".to_string(),
+                nullable: Nullability::Unknown,
+                charset: None,
+                collation: None,
+                precision: None,
+                scale: None,
+            })
+            .collect();
+        let batch =
+            ResultBatch::try_new(0, columns, vec![ResultRow { id: 0, cells }], true).unwrap();
+        QueryResult::from_typed_batch("metadata".to_string(), batch, 0).unwrap()
+    }
+
     // ==================== Basic Plugin Info Tests ====================
 
     #[test]
@@ -3748,6 +3949,124 @@ mod tests {
             Some("SET NEW.created_at = NOW()".to_string()),
             triggers[0].definition
         );
+    }
+
+    // ==================== Metadata Listing Tests ====================
+
+    #[tokio::test]
+    async fn test_list_tables_decodes_ambiguous_binary_with_connection_charset() {
+        let result = typed_metadata_result(
+            &[
+                "TABLE_NAME",
+                "TABLE_COMMENT",
+                "ENGINE",
+                "CREATE_TIME",
+                "TABLE_COLLATION",
+                "TABLE_TYPE",
+            ],
+            vec![
+                CellState::Decoded(DbValue::Binary(vec![0xE9])),
+                CellState::Decoded(DbValue::Text("main table".to_string())),
+                CellState::Decoded(DbValue::Text("InnoDB".to_string())),
+                CellState::Decoded(DbValue::Text("2024-01-02 03:04:05".to_string())),
+                CellState::Decoded(DbValue::Binary(b"utf8mb4_general_ci".to_vec())),
+                CellState::Decoded(DbValue::Text("VIEW".to_string())),
+            ],
+        );
+        let connection = MetadataConnection::new("latin1", result);
+
+        let tables = create_plugin()
+            .list_tables(&connection, "app", None)
+            .await
+            .unwrap();
+
+        assert_eq!(1, tables.len());
+        assert_eq!("\u{e9}", tables[0].name);
+        assert_eq!(TableObjectType::View, tables[0].object_type);
+        assert_eq!(Some("main table".to_string()), tables[0].comment);
+        assert_eq!(Some("InnoDB".to_string()), tables[0].engine);
+        assert_eq!(
+            Some("2024-01-02 03:04:05".to_string()),
+            tables[0].create_time
+        );
+        assert_eq!(Some("utf8mb4".to_string()), tables[0].charset);
+        assert_eq!(Some("utf8mb4_general_ci".to_string()), tables[0].collation);
+    }
+
+    #[tokio::test]
+    async fn test_list_tables_fails_on_undecodable_metadata_instead_of_hex() {
+        let result = typed_metadata_result(
+            &[
+                "TABLE_NAME",
+                "TABLE_COMMENT",
+                "ENGINE",
+                "CREATE_TIME",
+                "TABLE_COLLATION",
+                "TABLE_TYPE",
+            ],
+            vec![
+                CellState::Decoded(DbValue::Binary(vec![0xFF, 0xFE])),
+                CellState::Decoded(DbValue::Null),
+                CellState::Decoded(DbValue::Null),
+                CellState::Decoded(DbValue::Null),
+                CellState::Decoded(DbValue::Null),
+                CellState::Decoded(DbValue::Text("BASE TABLE".to_string())),
+            ],
+        );
+        let connection = MetadataConnection::new("utf8mb4", result);
+
+        let error = create_plugin()
+            .list_tables(&connection, "app", None)
+            .await
+            .err()
+            .expect("invalid bytes should fail");
+
+        assert!(
+            error.to_string().contains("invalid for charset"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_columns_maps_flags_and_decodes_binary_columns() {
+        let result = typed_metadata_result(
+            &[
+                "COLUMN_NAME",
+                "COLUMN_TYPE",
+                "IS_NULLABLE",
+                "COLUMN_KEY",
+                "COLUMN_DEFAULT",
+                "COLUMN_COMMENT",
+                "CHARACTER_SET_NAME",
+                "COLLATION_NAME",
+            ],
+            vec![
+                CellState::Decoded(DbValue::Binary(b"id".to_vec())),
+                CellState::Decoded(DbValue::Text("bigint".to_string())),
+                CellState::Decoded(DbValue::Text("NO".to_string())),
+                CellState::Decoded(DbValue::Text("PRI".to_string())),
+                CellState::Decoded(DbValue::Null),
+                CellState::Decoded(DbValue::Binary(vec![0xE9])),
+                CellState::Decoded(DbValue::Binary(b"utf8mb4".to_vec())),
+                CellState::Decoded(DbValue::Null),
+            ],
+        );
+        let connection = MetadataConnection::new("latin1", result);
+
+        let columns = create_plugin()
+            .list_columns(&connection, "app", None, "orders")
+            .await
+            .unwrap();
+
+        assert_eq!(1, columns.len());
+        assert_eq!("id", columns[0].name);
+        assert_eq!("bigint", columns[0].data_type);
+        assert!(!columns[0].is_nullable);
+        assert!(columns[0].is_primary_key);
+        assert_eq!(None, columns[0].default_value);
+        assert_eq!(Some("\u{e9}".to_string()), columns[0].comment);
+        assert_eq!(Some("utf8mb4".to_string()), columns[0].charset);
+        assert_eq!(None, columns[0].collation);
     }
 
     // ==================== DDL SQL Generation Tests ====================

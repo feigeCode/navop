@@ -3,11 +3,14 @@ use crate::executor::{
     ExecOptions, ExecResult, QueryColumnMeta, QueryResult, SqlErrorInfo, SqlResult, SqlSource,
 };
 use crate::ssh_tunnel::resolve_connection_target;
+use crate::types::FieldType;
 use crate::{DatabasePlugin, format_message, truncate_str};
 
+use super::codec;
 use async_trait::async_trait;
 use clickhouse::Client;
 use connection_tunnel::TunnelGuard;
+use db_value::{CellState, ColumnDescriptor, DbValue, Nullability, ResultBatch, ResultRow};
 use one_core::storage::DbConnectionConfig;
 use serde::Deserialize;
 use std::time::{Duration, Instant};
@@ -45,21 +48,74 @@ impl ClickHouseDbConnection {
         })
     }
 
-    fn build_query_result(
-        columns: Vec<String>,
-        column_meta: Vec<QueryColumnMeta>,
-        rows: Vec<Vec<Option<String>>>,
+    /// 把 JSONCompact 结果组装为带类型的 [`ResultBatch`],再经
+    /// [`QueryResult::from_typed_batch`] 携带 `typed_batch`。
+    ///
+    /// `typed_batch` 是类型权威;`rows`/`column_meta` 仍是现有 legacy 兼容投影,
+    /// 由本函数显式覆盖为原有行为,避免与既有消费者漂移。JSONCompact 无法无损承载
+    /// 任意二进制 `String` 字节,`codec` 对此保守处理(见 `clickhouse::codec` 模块说明)。
+    fn build_typed_query_result(
+        meta: &[ClickHouseJsonMeta],
+        data: &[Vec<serde_json::Value>],
         sql: String,
         elapsed_ms: u128,
-    ) -> SqlResult {
-        SqlResult::Query(QueryResult {
-            sql,
-            columns,
-            column_meta,
-            rows,
-            binary_cells: vec![],
-            elapsed_ms,
-        })
+    ) -> Result<SqlResult, DbError> {
+        let columns = Self::column_descriptors(meta);
+        let rows = Self::typed_rows(&columns, data);
+        let batch = ResultBatch::try_new(0, columns, rows, true).map_err(|error| {
+            DbError::query(format!("failed to build typed result batch: {error}"))
+        })?;
+        let mut query_result =
+            QueryResult::from_typed_batch(sql, batch, elapsed_ms).map_err(|error| {
+                DbError::query(format!("failed to build typed query result: {error}"))
+            })?;
+
+        let column_meta: Vec<QueryColumnMeta> = meta
+            .iter()
+            .map(|meta| QueryColumnMeta::new(meta.name.clone(), meta.data_type.clone()))
+            .collect();
+        query_result.rows = Self::map_json_rows(&column_meta, data);
+        query_result.column_meta = column_meta;
+        query_result.binary_cells = Vec::new();
+        Ok(SqlResult::Query(query_result))
+    }
+
+    fn column_descriptors(meta: &[ClickHouseJsonMeta]) -> Vec<ColumnDescriptor> {
+        meta.iter()
+            .enumerate()
+            .map(|(index, column)| ColumnDescriptor {
+                id: format!("column:{index}"),
+                label: column.name.clone(),
+                native_type: column.data_type.clone(),
+                logical_type: format!("{:?}", FieldType::from_db_type(&column.data_type)),
+                nullable: if codec::is_nullable(&column.data_type) {
+                    Nullability::Yes
+                } else {
+                    Nullability::Unknown
+                },
+                charset: None,
+                collation: None,
+                precision: None,
+                scale: None,
+            })
+            .collect()
+    }
+
+    fn typed_rows(columns: &[ColumnDescriptor], data: &[Vec<serde_json::Value>]) -> Vec<ResultRow> {
+        data.iter()
+            .enumerate()
+            .map(|(row_index, row)| ResultRow {
+                id: row_index as u64,
+                cells: columns
+                    .iter()
+                    .enumerate()
+                    .map(|(column_index, column)| match row.get(column_index) {
+                        Some(value) => codec::decode_cell(&column.native_type, value),
+                        None => CellState::Decoded(DbValue::Null),
+                    })
+                    .collect(),
+            })
+            .collect()
     }
 
     async fn execute_single(client: &Client, sql: &str) -> Result<SqlResult, DbError> {
@@ -75,29 +131,13 @@ impl ClickHouseDbConnection {
         match Self::fetch_json_compact(client, sql).await {
             Ok(result) => {
                 let elapsed_ms = start.elapsed().as_millis();
-
-                let columns: Vec<String> =
-                    result.meta.iter().map(|meta| meta.name.clone()).collect();
-                let column_meta: Vec<QueryColumnMeta> = result
-                    .meta
-                    .iter()
-                    .map(|meta| QueryColumnMeta::new(meta.name.clone(), meta.data_type.clone()))
-                    .collect();
-                let all_rows = Self::map_json_rows(&column_meta, result.data);
-
                 debug!(
                     "[ClickHouse] Query completed: {} rows, {} columns, {}ms",
-                    all_rows.len(),
-                    columns.len(),
+                    result.data.len(),
+                    result.meta.len(),
                     elapsed_ms
                 );
-                Ok(Self::build_query_result(
-                    columns,
-                    column_meta,
-                    all_rows,
-                    sql_string,
-                    elapsed_ms,
-                ))
+                Self::build_typed_query_result(&result.meta, &result.data, sql_string, elapsed_ms)
             }
             Err(query_err) => {
                 debug!(
@@ -140,9 +180,9 @@ impl ClickHouseDbConnection {
 
     fn map_json_rows(
         columns: &[QueryColumnMeta],
-        data: Vec<Vec<serde_json::Value>>,
+        data: &[Vec<serde_json::Value>],
     ) -> Vec<Vec<Option<String>>> {
-        data.into_iter()
+        data.iter()
             .map(|row| {
                 let mut values = Vec::with_capacity(columns.len());
                 for index in 0..columns.len() {
@@ -228,7 +268,7 @@ mod tests {
         let columns = vec![QueryColumnMeta::new("code", "FixedString(8)")];
         let rows = ClickHouseDbConnection::map_json_rows(
             &columns,
-            vec![vec![serde_json::Value::String("abc\0\0\0\0\0".to_string())]],
+            &[vec![serde_json::Value::String("abc\0\0\0\0\0".to_string())]],
         );
 
         assert_eq!(rows, vec![vec![Some("abc".to_string())]]);
@@ -246,7 +286,7 @@ mod tests {
         ];
         let rows = ClickHouseDbConnection::map_json_rows(
             &columns,
-            vec![vec![
+            &[vec![
                 serde_json::Value::String("a\0\0\0".to_string()),
                 serde_json::Value::String("a\0".to_string()),
             ]],
@@ -254,6 +294,65 @@ mod tests {
 
         assert_eq!(rows[0][0].as_deref(), Some("a"));
         assert_eq!(rows[0][1].as_deref(), Some("a\0"));
+    }
+
+    fn meta(name: &str, data_type: &str) -> ClickHouseJsonMeta {
+        ClickHouseJsonMeta {
+            name: name.to_string(),
+            data_type: data_type.to_string(),
+        }
+    }
+
+    #[test]
+    fn typed_result_carries_batch_and_preserves_legacy_projection() {
+        let meta = vec![
+            meta("id", "UInt64"),
+            meta("amount", "Decimal(18, 4)"),
+            meta("name", "String"),
+            meta("fixed", "FixedString(4)"),
+            meta("seen_at", "Nullable(DateTime64(3))"),
+        ];
+        let data = vec![vec![
+            serde_json::Value::String("18446744073709551615".to_string()),
+            serde_json::Value::String("12.3400".to_string()),
+            serde_json::Value::String("héllo".to_string()),
+            serde_json::Value::String("a\0\0\0".to_string()),
+            serde_json::Value::Null,
+        ]];
+
+        let result =
+            ClickHouseDbConnection::build_typed_query_result(&meta, &data, "select".into(), 3)
+                .unwrap();
+        let SqlResult::Query(query) = result else {
+            panic!("expected query result");
+        };
+
+        let batch = query.typed_batch().expect("typed batch is carried");
+        assert_eq!(batch.columns.len(), 5);
+        assert_eq!(
+            batch.rows[0].cells,
+            vec![
+                CellState::Decoded(DbValue::Unsigned("18446744073709551615".into())),
+                CellState::Decoded(DbValue::Decimal("12.3400".into())),
+                CellState::Decoded(DbValue::LegacyText("héllo".into())),
+                CellState::Decoded(DbValue::LegacyText("a".into())),
+                CellState::Decoded(DbValue::Null),
+            ]
+        );
+
+        // legacy rows 保持现有投影:FixString 去尾 NUL、String 原样、NULL 为 None。
+        assert_eq!(
+            query.rows,
+            vec![vec![
+                Some("18446744073709551615".to_string()),
+                Some("12.3400".to_string()),
+                Some("héllo".to_string()),
+                Some("a".to_string()),
+                None,
+            ]]
+        );
+        assert!(query.binary_cells.is_empty());
+        assert_eq!(query.column_meta[1].db_type, "Decimal(18, 4)");
     }
 }
 

@@ -45,6 +45,16 @@ pub(super) fn helper_event_to_output(
             message,
         }),
         HelperEvent::Reconnecting { reason, delay_secs } => {
+            // A helper-initiated reconnect restarts the session inside the helper
+            // process, so the backend loop never classifies it. Record why it
+            // happened: display updates that cannot be applied in place are the
+            // usual cause and used to be invisible in the host log.
+            tracing::warn!(
+                protocol = protocol.label(),
+                ?reason,
+                ?delay_secs,
+                "remote desktop helper requested a session reconnect"
+            );
             Some(RemoteDesktopOutput::Reconnecting(RemoteDesktopReconnect {
                 reason: reconnect_reason(reason),
                 delay_secs,

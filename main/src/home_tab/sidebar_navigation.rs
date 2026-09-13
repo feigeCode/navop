@@ -1,3 +1,4 @@
+use one_ui::IconSize;
 use super::*;
 use crate::navigation_applications::{NavigationApplication, home_applications};
 use gpui_component::Icon;

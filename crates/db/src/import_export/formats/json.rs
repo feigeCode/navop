@@ -4,9 +4,11 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use serde_json::Value;
 
+use super::cells::{RenderCell, ResultCells};
+use super::sync_typed_batch_from_legacy;
 use crate::DatabasePlugin;
 use crate::connection::DbConnection;
-use crate::executor::{QueryCellRef, QueryResult, SqlResult};
+use crate::executor::{QueryResult, SqlResult};
 use crate::import_export::{
     ExportConfig, ExportProgressEvent, ExportProgressSender, ExportResult, FormatHandler,
     ImportConfig, ImportResult,
@@ -15,25 +17,23 @@ use crate::import_export::{
 pub struct JsonFormatHandler;
 
 fn query_result_to_json_rows(query_result: &QueryResult) -> Result<Vec<Value>> {
-    let view = query_result
-        .typed_view()
-        .map_err(|error| anyhow!("Invalid query result for JSON export: {error}"))?;
-    let mut rows = Vec::with_capacity(query_result.rows.len());
+    let cells = ResultCells::new(query_result, "JSON")?;
+    let mut rows = Vec::with_capacity(cells.row_count());
 
-    for row_index in 0..query_result.rows.len() {
+    for row_index in 0..cells.row_count() {
         let mut object = serde_json::Map::new();
         for (column_index, column_name) in query_result.columns.iter().enumerate() {
-            let value = match view.cell(row_index, column_index) {
-                Some(QueryCellRef::Null) => Value::Null,
-                Some(QueryCellRef::Text(value)) => Value::String(value.to_string()),
-                Some(QueryCellRef::Binary(_)) => {
+            let value = match cells.cell(row_index, column_index) {
+                Some(RenderCell::Null) => Value::Null,
+                Some(RenderCell::Text(value)) => Value::String(value.to_string()),
+                Some(RenderCell::Binary(_)) => {
                     return Err(anyhow!(
                         "JSON export does not support binary cell at row {}, column {} ({column_name:?}) without an explicit binary encoding",
                         row_index + 1,
                         column_index + 1,
                     ));
                 }
-                None => unreachable!("typed view validated row and column bounds"),
+                None => unreachable!("result cells validated row and column bounds"),
             };
             object.insert(column_name.clone(), value);
         }
@@ -186,6 +186,7 @@ impl FormatHandler for JsonFormatHandler {
                     &mut query_result,
                 )
                 .await?;
+                sync_typed_batch_from_legacy(&mut query_result)?;
                 let rows_count = query_result.rows.len() as u64;
                 let table_data = query_result_to_json_rows(&query_result)?;
 
@@ -311,6 +312,7 @@ mod tests {
             rows: vec![vec![None, Some(String::new())]],
             binary_cells: vec![],
             elapsed_ms: 0,
+            ..Default::default()
         };
 
         let rows = query_result_to_json_rows(&result).expect("text-only JSON should render");
@@ -331,6 +333,7 @@ mod tests {
                 bytes: b"true".to_vec(),
             }],
             elapsed_ms: 0,
+            ..Default::default()
         };
 
         let error =
@@ -355,6 +358,7 @@ mod tests {
             rows: vec![vec![Some("only one".to_string())]],
             binary_cells: vec![],
             elapsed_ms: 0,
+            ..Default::default()
         };
 
         let error = query_result_to_json_rows(&result)
@@ -365,5 +369,35 @@ mod tests {
                 .to_string()
                 .contains("Invalid query result for JSON export")
         );
+    }
+
+    #[test]
+    fn json_rows_prefer_typed_batch_over_stale_legacy_projection() {
+        let batch = db_value::ResultBatch::try_new(
+            0,
+            vec![db_value::ColumnDescriptor {
+                id: "nullable".to_string(),
+                label: "nullable".to_string(),
+                native_type: "TEXT".to_string(),
+                logical_type: "Text".to_string(),
+                nullable: db_value::Nullability::Unknown,
+                charset: None,
+                collation: None,
+                precision: None,
+                scale: None,
+            }],
+            vec![db_value::ResultRow {
+                id: 0,
+                cells: vec![db_value::CellState::Decoded(db_value::DbValue::Null)],
+            }],
+            true,
+        )
+        .unwrap();
+        let mut result = QueryResult::from_typed_batch("select".to_string(), batch, 0).unwrap();
+        result.rows = vec![vec![Some("stale".to_string())]];
+
+        let rows = query_result_to_json_rows(&result).expect("typed null should render");
+
+        assert_eq!(rows, vec![json!({ "nullable": null })]);
     }
 }

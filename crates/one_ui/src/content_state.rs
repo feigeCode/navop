@@ -3,9 +3,8 @@ use gpui::{
     AnyElement, App, IntoElement, ParentElement, Pixels, RenderOnce, SharedString, StyleRefinement,
     Styled, Window, div, prelude::FluentBuilder as _,
 };
-use gpui_component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, spinner::Spinner, v_flex,
-};
+use gpui_component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, spinner::Spinner, v_flex};
+use one_assets::IconName;
 
 /// Generic outer-content states. Business state machines remain owned by pages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

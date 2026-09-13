@@ -1,0 +1,3 @@
+[submodule "navop-extensions"]
+	path = navop-extensions
+	url = https://github.com/feigeCode/navop-extensions

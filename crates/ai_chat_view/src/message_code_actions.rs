@@ -309,7 +309,7 @@ fn html_download_button(state_id: &SharedString, preview: &Entity<HtmlCodeBlockV
     Button::new(SharedString::from(format!(
         "{state_id}-{HTML_DOWNLOAD_ACTION_ID}"
     )))
-    .icon(gpui_component::IconName::ArrowDown)
+    .icon(one_assets::IconName::ArrowDown)
     .ghost()
     .xsmall()
     .tooltip(t!("HtmlPreview.download_html").to_string())
@@ -326,7 +326,7 @@ fn html_open_browser_button(
     Button::new(SharedString::from(format!(
         "{state_id}-{HTML_OPEN_BROWSER_ACTION_ID}"
     )))
-    .icon(gpui_component::IconName::ExternalLink)
+    .icon(one_assets::IconName::ExternalLink)
     .ghost()
     .xsmall()
     .tooltip(t!("HtmlPreview.open_browser").to_string())
@@ -340,7 +340,7 @@ fn html_preview_button(state_id: &SharedString, preview: &Entity<HtmlCodeBlockVi
     Button::new(SharedString::from(format!(
         "{state_id}-{HTML_PREVIEW_ACTION_ID}"
     )))
-    .icon(gpui_component::IconName::Eye)
+    .icon(one_assets::IconName::Eye)
     .ghost()
     .xsmall()
     .tooltip(t!("HtmlPreview.open_dialog").to_string())

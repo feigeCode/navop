@@ -607,6 +607,8 @@ pub struct KeyValueDetail {
     pub key_info: KeyInfo,
     /// 值内容
     pub value: KeyValueContent,
+    /// 是否因数量/字节预算被截断（此时 `value` 不是完整内容）
+    pub truncated: bool,
 }
 
 /// 键值内容

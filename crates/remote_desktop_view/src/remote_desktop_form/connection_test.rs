@@ -3,18 +3,15 @@ use std::time::Duration;
 use connection_form::credential::resolve_connection_for_runtime;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AppContext, AsyncApp, Context, IntoElement, ParentElement, Styled, WeakEntity, Window, div, px,
-};
+    AppContext, AsyncApp, Context, IntoElement, ParentElement, Styled, WeakEntity, Window, div, px};
 use gpui_component::{
-    ActiveTheme, Colorize as _, Disableable, Sizable,
+    ActiveTheme,  Disableable, Sizable,
     button::{Button, ButtonVariants as _},
     h_flex,
-    scroll::ScrollableElement,
-};
+    scroll::ScrollableElement};
 use one_core::{
     gpui_tokio::Tokio,
-    storage::{RemoteDesktopBackendPreference, RemoteDesktopProtocol, StoredConnection},
-};
+    storage::{RemoteDesktopBackendPreference, RemoteDesktopProtocol, StoredConnection}};
 use rust_i18n::t;
 
 use super::RemoteDesktopFormWindow;
@@ -27,15 +24,13 @@ pub(super) enum ConnectionTestResult {
     /// The native RDP backend only probes TCP reachability; credentials are
     /// validated when the actual session starts.
     NativeReachable,
-    Failure(String),
-}
+    Failure(String)}
 
 #[derive(Default)]
 pub(super) struct ConnectionTestState {
     generation: u64,
     is_testing: bool,
-    result: Option<ConnectionTestResult>,
-}
+    result: Option<ConnectionTestResult>}
 
 impl ConnectionTestState {
     fn begin(&mut self) -> Option<u64> {
@@ -141,8 +136,7 @@ impl RemoteDesktopFormWindow {
             let result = match spawn_result {
                 Ok(()) if uses_native_test => ConnectionTestResult::NativeReachable,
                 Ok(()) => ConnectionTestResult::Success,
-                Err(error) => ConnectionTestResult::Failure(error.to_string()),
-            };
+                Err(error) => ConnectionTestResult::Failure(error.to_string())};
 
             let _ = cx.update_window(window_handle, |_, _, cx| {
                 let _ = this.update(cx, |this, cx| {
@@ -185,8 +179,7 @@ impl RemoteDesktopFormWindow {
                     .text_sm()
                     .text_color(cx.theme().danger)
                     .child(reason),
-            ),
-        }
+            )}
     }
 
     pub(super) fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -301,16 +294,14 @@ fn test_native_rdp_reachability(
 
     Err(match last_error {
         Some(detail) => format!("could not connect to {host}:{port}: {detail}"),
-        None => format!("could not resolve any address for {host}:{port}"),
-    })
+        None => format!("could not resolve any address for {host}:{port}")})
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         CONNECTION_TEST_TIMEOUT, ConnectionTestResult, ConnectionTestState,
-        should_use_native_connection_test, test_ironrdp_reachability, test_native_rdp_reachability,
-    };
+        should_use_native_connection_test, test_ironrdp_reachability, test_native_rdp_reachability};
     use one_core::storage::RemoteDesktopBackendPreference;
 
     fn native_test_options(
@@ -329,8 +320,7 @@ mod tests {
                 audio_playback: false,
                 proxy: None,
                 backend_preference: backend,
-                rdp: None,
-            },
+                rdp: None},
         )
     }
 
@@ -467,8 +457,7 @@ mod tests {
             host: String::new(),
             port: 1080,
             username: None,
-            password: None,
-        });
+            password: None});
 
         let error = test_ironrdp_reachability(&options, CONNECTION_TEST_TIMEOUT)
             .expect_err("an invalid proxy must not fall back to a direct target probe");

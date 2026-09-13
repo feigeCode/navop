@@ -32,39 +32,51 @@ impl LoadedShellView {
     }
 }
 
-impl ShellPluginHost {
-    pub(crate) fn load(
-        &self,
-        prepared: PreparedShellView,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> std::result::Result<LoadedShellView, ShellLoadError> {
-        let session = Arc::new(ShellMountSession::new(
-            self.service.clone(),
-            prepared.contribution.backends.clone(),
-            self.tokio.clone(),
-        ));
-        let result = load_with_session(self, prepared, Arc::clone(&session), window, cx);
-        result
-            .map(|loaded| LoadedShellView {
-                loaded,
-                session: Arc::clone(&session),
-            })
-            .map_err(|error| ShellLoadError { error, session })
+/// Loads a Shell page using a caller-owned mount session and an already-open
+/// primary resource. No activation or resource/open is performed here.
+pub(crate) fn load_borrowed(
+    host: &ShellPluginHost,
+    contribution: extension_runtime::RegisteredShellViewContribution,
+    session: Arc<ShellMountSession>,
+    connection: Option<super::ShellConnectionContext>,
+    workbench: extension_runtime::RegisteredResourceWorkbenchContribution,
+    session_handle: extension_plugin_adapter::ResourceSessionHandle,
+    page_context: serde_json::Value,
+    window: &mut Window,
+    cx: &mut App,
+) -> Result<LoadedShellView, ShellLoadError> {
+    let prepared = PreparedShellView {
+        contribution,
+        activations: Vec::new(),
+        connection: None,
+    };
+    match load_with_session_and_connection(
+        host,
+        prepared,
+        Arc::clone(&session),
+        connection,
+        Some((workbench, session_handle, page_context)),
+        window,
+        cx,
+    ) {
+        Ok(loaded) => Ok(LoadedShellView { loaded, session }),
+        Err(error) => Err(ShellLoadError { error, session }),
     }
 }
 
-fn load_with_session(
+fn load_with_session_and_connection(
     host: &ShellPluginHost,
     prepared: PreparedShellView,
     session: Arc<ShellMountSession>,
+    connection: Option<super::ShellConnectionContext>,
+    workbench: Option<(
+        extension_runtime::RegisteredResourceWorkbenchContribution,
+        extension_plugin_adapter::ResourceSessionHandle,
+        serde_json::Value,
+    )>,
     window: &mut Window,
     cx: &mut App,
 ) -> Result<LoadedScriptView> {
-    let connection = prepared
-        .connection
-        .map(|connection| connection.adopt(&session))
-        .transpose()?;
     let mut policy = base_policy(&prepared.contribution)?;
     let modules = &prepared.contribution.modules;
     if modules.contains(&extension_runtime::extension::manifest::ShellHostModule::Context) {
@@ -91,12 +103,60 @@ fn load_with_session(
     if modules.contains(&extension_runtime::extension::manifest::ShellHostModule::Dev) {
         policy = policy.with_host_module(dev::dev_module())?;
     }
+    if modules.contains(&extension_runtime::extension::manifest::ShellHostModule::Workbench) {
+        let (descriptor, handle, page_context) = workbench.ok_or_else(|| {
+            anyhow!("navop.workbench requires a borrowed resource-workbench session")
+        })?;
+        policy = policy.with_host_module(super::workbench::workbench_module(
+            handle,
+            descriptor,
+            page_context,
+            host.tokio.clone(),
+        ))?;
+    }
     let options = ViewLoadOptions::new(
         &prepared.contribution.extension_root,
         entry_relative_path(&prepared.contribution)?,
         Rc::new(policy),
     );
     host.runtime.load_view(options, window, cx)
+}
+
+impl ShellPluginHost {
+    pub(crate) fn load(
+        &self,
+        prepared: PreparedShellView,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> std::result::Result<LoadedShellView, ShellLoadError> {
+        let session = Arc::new(ShellMountSession::new(
+            self.service.clone(),
+            prepared.contribution.backends.clone(),
+            self.tokio.clone(),
+        ));
+        let result = load_with_session(self, prepared, Arc::clone(&session), window, cx);
+        result
+            .map(|loaded| LoadedShellView {
+                loaded,
+                session: Arc::clone(&session),
+            })
+            .map_err(|error| ShellLoadError { error, session })
+    }
+}
+
+fn load_with_session(
+    host: &ShellPluginHost,
+    mut prepared: PreparedShellView,
+    session: Arc<ShellMountSession>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Result<LoadedScriptView> {
+    let connection = prepared
+        .connection
+        .take()
+        .map(|connection| connection.adopt(&session))
+        .transpose()?;
+    load_with_session_and_connection(host, prepared, session, connection, None, window, cx)
 }
 
 fn base_policy(

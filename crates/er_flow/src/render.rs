@@ -1,10 +1,8 @@
 use ferrum_flow::{Node, NodeCardVariant, NodeRenderer, Port, RenderContext};
 use gpui::{
     AnyElement, Element as _, Hsla, ParentElement as _, Styled as _, div, prelude::FluentBuilder,
-    px, rgb,
-};
-use gpui_component::{Colorize as _, Theme};
-use palette::IntoColor;
+    px, rgb};
+use gpui_component::{ Theme};
 
 /// ER 实体卡片的主题色配置，映射自应用级 GPUI 主题。
 #[derive(Clone, Copy, PartialEq)]
@@ -24,29 +22,27 @@ pub struct ErCardTheme {
     pub null_text: Hsla,
     pub badge_primary: Hsla,
     pub badge_secondary: Hsla,
-    pub field_dot: Hsla,
-}
+    pub field_dot: Hsla}
 
 impl Default for ErCardTheme {
     fn default() -> Self {
         Self {
-            card_background: rgb(0xffffff).into_color(),
-            card_border: rgb(0x60a5fa).into_color(),
-            card_border_selected: rgb(0x2563eb).into_color(),
-            stripe: rgb(0xe6f4ff).into_color(),
-            header_background: rgb(0xe4e4e7).into_color(),
-            header_text: rgb(0x111827).into_color(),
-            header_border: rgb(0xbfdbfe).into_color(),
-            row_odd: rgb(0xf9fafb).into_color(),
-            row_even: rgb(0xffffff).into_color(),
-            row_border: rgb(0xe5e7eb).into_color(),
-            column_text: rgb(0x111827).into_color(),
-            type_text: rgb(0x6b7280).into_color(),
-            null_text: rgb(0x9ca3af).into_color(),
-            badge_primary: rgb(0x3b82f6).into_color(),
-            badge_secondary: rgb(0x22c55e).into_color(),
-            field_dot: rgb(0x9ca3af).into_color(),
-        }
+            card_background: rgb(0xffffff).into(),
+            card_border: rgb(0x60a5fa).into(),
+            card_border_selected: rgb(0x2563eb).into(),
+            stripe: rgb(0xe6f4ff).into(),
+            header_background: rgb(0xe4e4e7).into(),
+            header_text: rgb(0x111827).into(),
+            header_border: rgb(0xbfdbfe).into(),
+            row_odd: rgb(0xf9fafb).into(),
+            row_even: rgb(0xffffff).into(),
+            row_border: rgb(0xe5e7eb).into(),
+            column_text: rgb(0x111827).into(),
+            type_text: rgb(0x6b7280).into(),
+            null_text: rgb(0x9ca3af).into(),
+            badge_primary: rgb(0x3b82f6).into(),
+            badge_secondary: rgb(0x22c55e).into(),
+            field_dot: rgb(0x9ca3af).into()}
     }
 }
 
@@ -69,15 +65,13 @@ impl ErCardTheme {
             null_text: ui.muted_foreground,
             badge_primary: ui.primary,
             badge_secondary: ui.success,
-            field_dot: ui.muted_foreground,
-        }
+            field_dot: ui.muted_foreground}
     }
 }
 
 #[derive(Clone, Copy, Default)]
 pub struct ErEntityRenderer {
-    pub card_theme: ErCardTheme,
-}
+    pub card_theme: ErCardTheme}
 
 impl ErEntityRenderer {
     pub fn new(theme: ErCardTheme) -> Self {
@@ -86,8 +80,7 @@ impl ErEntityRenderer {
 
     pub fn from_ui_theme(ui: &Theme) -> Self {
         Self {
-            card_theme: ErCardTheme::from_ui_theme(ui),
-        }
+            card_theme: ErCardTheme::from_ui_theme(ui)}
     }
 }
 

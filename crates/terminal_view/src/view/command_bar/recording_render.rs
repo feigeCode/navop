@@ -6,11 +6,8 @@ use gpui::{
     AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Styled, div,
     prelude::FluentBuilder as _, px,
 };
-use gpui_component::{
-    ActiveTheme, Disableable, IconName, Selectable, Sizable,
-    button::{Button, ButtonCustomVariant, ButtonVariants},
-    h_flex, v_flex,
-};
+use gpui_component::{ActiveTheme, Disableable, Selectable, Sizable, button::{Button, ButtonCustomVariant, ButtonVariants}, h_flex, v_flex};
+use one_assets::IconName;
 use rust_i18n::t;
 
 const RECORDING_POPOVER_WIDTH: f32 = 340.0;

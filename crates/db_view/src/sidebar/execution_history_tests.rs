@@ -17,6 +17,7 @@ fn query_result_preserves_sql_rows_and_elapsed_time() {
         rows: vec![vec![Some("1".to_string())], vec![Some("2".to_string())]],
         binary_cells: vec![],
         elapsed_ms: 12,
+        ..Default::default()
     });
 
     let record = ExecutionRecord::from_result(context(), &result);
@@ -101,6 +102,7 @@ fn aggregated_results_preserve_all_errors_and_totals() {
             rows: vec![vec![Some("1".to_string())]],
             binary_cells: vec![],
             elapsed_ms: 6,
+            ..Default::default()
         }),
         SqlResult::Exec(ExecResult {
             sql: "insert".to_string(),

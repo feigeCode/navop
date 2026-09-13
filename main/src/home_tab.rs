@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use db::ipc::IpcDriverRegistry;
 use db_view::connection_form_window::{ConnectionFormWindow, ConnectionFormWindowConfig};
-use gpui::ColorExt as _;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Anchor, AnyElement, App, AppContext, AsyncApp, ClipboardItem, Context, Entity, EventEmitter,
@@ -11,22 +10,9 @@ use gpui::{
     Pixels, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, WeakEntity,
     Window, actions, div, px,
 };
-use gpui_component::{
-    ActiveTheme, Icon, IconName, IconSize, InteractiveElementExt, Sizable, Size, WindowExt,
-    button::{Button, ButtonVariants as _, DropdownButton},
-    checkbox::Checkbox,
-    dialog::DialogButtonProps,
-    h_flex,
-    input::{Input, InputEvent, InputState},
-    list::{List, ListState},
-    menu::{ContextMenuExt, DropdownMenu as _, PopupMenuItem},
-    notification::Notification,
-    popover::Popover,
-    tooltip::Tooltip,
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Icon, InteractiveElementExt, Sizable, Size, WindowExt, button::{Button, ButtonVariants as _, DropdownButton}, checkbox::Checkbox, dialog::DialogButtonProps, h_flex, input::{Input, InputEvent, InputState}, list::{List, ListState}, menu::{ContextMenuExt, DropdownMenu as _, PopupMenuItem}, notification::Notification, popover::Popover, tooltip::Tooltip, v_flex};
+use one_assets::IconName;
 use mongodb_view::{MongoFormWindow, MongoFormWindowConfig};
-use mqtt_view::{MqttFormConfig, MqttFormWindow};
 use one_core::cloud_sync::{
     CloudAccountScope, CloudApiClient, CloudSyncService, SyncConflict, SyncEngine, TeamOption,
     UserInfo, get_cached_team_display_options_for_scope, get_cached_team_options,
@@ -199,6 +185,9 @@ pub struct HomePage {
     team_permissions: TeamPermissionSnapshot,
     port_forwarding_runtime: Arc<tokio::sync::Mutex<PortForwardingRuntime>>,
     pub(crate) external_driver_registry: IpcDriverRegistry,
+    /// Windows 已识别的 WSL 发行版缓存（issue #182）；None=识别中，空列表=无发行版。
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub(crate) wsl_distributions: Option<Arc<Vec<terminal::WslDistribution>>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

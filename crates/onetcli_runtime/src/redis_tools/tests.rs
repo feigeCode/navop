@@ -1,4 +1,4 @@
-use super::{RedisTool, RedisToolHandler};
+use super::{RedisTool, RedisToolHandler, validate_command};
 use one_core::storage::connection::SqliteConnection;
 use one_core::storage::migration::run_migrations;
 use one_core::storage::traits::Repository;
@@ -7,6 +7,30 @@ use one_core::storage::{
     StoredConnection,
 };
 use std::sync::Arc;
+
+#[test]
+fn unbounded_bulk_commands_are_blocked_in_redis_command() {
+    for command in [
+        "KEYS", "HGETALL", "HKEYS", "HVALS", "SMEMBERS", "SUNION", "SINTER", "SDIFF", "SORT",
+    ] {
+        let parts = vec![command.to_string()];
+        let error = validate_command(&parts, 0, RedisMode::Standalone)
+            .expect_err("unbounded bulk command must be blocked");
+        assert!(
+            error.to_string().contains(command),
+            "error should name the blocked command: {error}"
+        );
+    }
+}
+
+#[test]
+fn bounded_read_commands_still_pass_validation() {
+    for command in ["GET", "HSCAN", "SSCAN", "SCAN", "TTL", "STRLEN"] {
+        let parts = vec![command.to_string(), "key".to_string()];
+        validate_command(&parts, 0, RedisMode::Standalone)
+            .expect("bounded command should pass validation");
+    }
+}
 
 #[test]
 fn redis_params_resolve_vault_username_before_connecting() {

@@ -10,25 +10,12 @@ use connection_form::team::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, AsyncApp, ColorExt as _, Context, Div, Entity, FocusHandle, Focusable,
+    App, AppContext, AsyncApp, Context, Div, Entity, FocusHandle, Focusable,
     InteractiveElement, IntoElement, ParentElement, PathPromptOptions, Render, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div, px, relative,
+    StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div, img, px, relative,
 };
-use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, Sizable, Size, WindowExt,
-    button::{Button, ButtonVariants as _},
-    checkbox::Checkbox,
-    dialog::DialogFooter,
-    h_flex,
-    input::{Input, InputState, Textarea, TextareaState},
-    notification::Notification,
-    radio::Radio,
-    scroll::ScrollableElement,
-    select::{Select, SelectItem, SelectState},
-    tab::{Tab, TabBar},
-    tooltip::Tooltip,
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Disableable, Icon, Sizable, Size, WindowExt, button::{Button, ButtonVariants as _}, checkbox::Checkbox, dialog::DialogFooter, h_flex, input::{Input, InputState, Textarea, TextareaState}, notification::Notification, radio::Radio, scroll::ScrollableElement, select::{Select, SelectItem, SelectState}, tab::{Tab, TabBar}, tooltip::Tooltip, v_flex};
+use one_assets::IconName;
 use one_core::cloud_sync::TeamOption;
 use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
 use one_core::gpui_tokio::Tokio;
@@ -237,6 +224,7 @@ pub struct SshFormWindow {
     keepalive_interval_input: Entity<InputState>,
     keepalive_max_input: Entity<InputState>,
     allow_legacy_algorithms: bool,
+    disable_shell_integration: bool,
 
     // 初始化
     init_script_input: Entity<TextareaState>,
@@ -751,6 +739,7 @@ impl SshFormWindow {
         let mut sync_enabled = true; // 默认启用云同步
         let mut x11_forwarding = false;
         let mut allow_legacy_algorithms = false;
+        let mut disable_shell_integration = false;
         let mut sftp_account_use_custom = false;
         let mut detected_os_id: Option<String> = None;
         let mut manual_icon: Option<String> = None;
@@ -841,6 +830,7 @@ impl SshFormWindow {
                 }
                 x11_forwarding = params.x11_forwarding.unwrap_or(false);
                 allow_legacy_algorithms = params.allow_legacy_algorithms.unwrap_or(false);
+                disable_shell_integration = params.disable_shell_integration.unwrap_or(false);
                 terminal_encoding_select.update(cx, |select, cx| {
                     select.set_selected_value(&params.terminal_encoding, window, cx);
                 });
@@ -1020,6 +1010,7 @@ impl SshFormWindow {
             keepalive_interval_input,
             keepalive_max_input,
             allow_legacy_algorithms,
+            disable_shell_integration,
             init_script_input,
             default_directory_input,
             sftp_default_directory_input,
@@ -1307,7 +1298,11 @@ impl SshFormWindow {
             default_directory,
             init_script,
             sftp_default_directory,
-            disable_shell_integration: None,
+            disable_shell_integration: if self.disable_shell_integration {
+                Some(true)
+            } else {
+                None
+            },
             x11_forwarding: if self.x11_forwarding {
                 Some(true)
             } else {
@@ -2045,11 +2040,12 @@ impl SshFormWindow {
 
     fn render_custom_icon_tile(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let selected = self.custom_icon_file_path.is_some();
+        // gpui 没有 Icon::file_path，直接用 img 从文件系统渲染用户上传的图标
         let icon = self
             .custom_icon_file_path
             .as_ref()
-            .map(|path| Icon::default().file_path(path).color().with_size(px(22.0)))
-            .unwrap_or_else(|| Icon::new(IconName::Upload).with_size(px(18.0)));
+            .map(|path| img(path.clone()).size_5().into_any_element())
+            .unwrap_or_else(|| Icon::new(IconName::Upload).with_size(px(18.0)).into_any_element());
 
         div()
             .id("ssh-icon-local")
@@ -2955,6 +2951,34 @@ impl SshFormWindow {
                                 .text_sm()
                                 .text_color(cx.theme().muted_foreground)
                                 .child(t!("SSH.allow_legacy_algorithms_desc").to_string()),
+                        ),
+                ),
+            )
+            .child(
+                self.render_form_row(
+                    &t!("SSH.disable_shell_integration"),
+                    h_flex()
+                        .w_full()
+                        .gap_2()
+                        .items_start()
+                        .child(
+                            div().flex_shrink_0().child(
+                                Checkbox::new("disable-shell-integration")
+                                    .checked(self.disable_shell_integration)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.disable_shell_integration =
+                                            !this.disable_shell_integration;
+                                        cx.notify();
+                                    })),
+                            ),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(t!("SSH.disable_shell_integration_desc").to_string()),
                         ),
                 ),
             )

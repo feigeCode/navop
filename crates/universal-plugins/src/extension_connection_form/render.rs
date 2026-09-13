@@ -1,10 +1,10 @@
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, Axis, ColorExt, Context, FocusHandle, Focusable, IntoElement, ParentElement, Render,
-    Styled, Window, div, px,
+    App, Axis, Context, FocusHandle, Focusable, IntoElement, ParentElement, Render, Styled, Window,
+    div, px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, IconName, Sizable,
+    ActiveTheme, Disableable, Sizable,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     form::{field, v_form},
@@ -14,6 +14,7 @@ use gpui_component::{
     select::Select,
     v_flex,
 };
+use one_assets::IconName;
 use rust_i18n::t;
 
 use super::ExtensionConnectionForm;

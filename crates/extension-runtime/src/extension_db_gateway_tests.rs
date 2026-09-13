@@ -1,6 +1,9 @@
 use super::*;
-use db::{QueryColumnMeta, SqlErrorInfo};
+use db::{ExecResult, QueryColumnMeta, QueryResult, SqlErrorInfo, SqlResult};
+use db_value::{CellState, ColumnDescriptor, DbValue as TypedDbValue, ResultRow};
+use extension_component::protocol::DbValue;
 use one_core::storage::{DatabaseType, DbConnectionConfig};
+use std::sync::Arc;
 
 #[test]
 fn list_connections_requires_explicit_permission() {
@@ -66,13 +69,119 @@ fn query_result_converts_to_row_batch() {
         rows: vec![vec![Some("1".to_string())], vec![None]],
         binary_cells: vec![],
         elapsed_ms: 1,
-    })]);
+        ..Default::default()
+    })])
+    .unwrap();
 
     assert_eq!("id", batch.columns[0].name);
     assert_eq!("int", batch.columns[0].type_name);
     assert!(!batch.columns[0].nullable);
     assert_eq!(DbValue::Text("1".to_string()), batch.rows[0][0]);
     assert_eq!(DbValue::Null, batch.rows[1][0]);
+}
+
+#[test]
+fn typed_batch_maps_values_without_text_flattening() {
+    let batch = db_value::ResultBatch::try_new(
+        0,
+        vec![
+            column_descriptor("data", "BYTEA", db_value::Nullability::No),
+            column_descriptor("amount", "NUMERIC", db_value::Nullability::No),
+            column_descriptor("processed", "BOOL", db_value::Nullability::No),
+            column_descriptor("extra", "JSON", db_value::Nullability::Yes),
+            column_descriptor("missing", "TEXT", db_value::Nullability::Yes),
+        ],
+        vec![ResultRow {
+            id: 0,
+            cells: vec![
+                CellState::Decoded(TypedDbValue::Binary(vec![0x00, 0xFF])),
+                CellState::Decoded(TypedDbValue::Decimal("123.4500".to_string())),
+                CellState::Decoded(TypedDbValue::Bool(true)),
+                CellState::Decoded(TypedDbValue::Json(serde_json::json!({"a": [1, 2]}))),
+                CellState::Decoded(TypedDbValue::Null),
+            ],
+        }],
+        true,
+    )
+    .unwrap();
+    let result = QueryResult::from_typed_batch("select * from t".to_string(), batch, 1)
+        .expect("from_typed_batch should succeed");
+
+    let row_batch = sql_results_to_row_batch(vec![SqlResult::Query(result)]).unwrap();
+
+    assert_eq!(DbValue::Bytes(vec![0x00, 0xFF]), row_batch.rows[0][0]);
+    assert_eq!(DbValue::Text("123.4500".to_string()), row_batch.rows[0][1]);
+    assert_eq!(DbValue::Bool(true), row_batch.rows[0][2]);
+    assert_eq!(
+        DbValue::Text("{\"a\":[1,2]}".to_string()),
+        row_batch.rows[0][3]
+    );
+    assert_eq!(DbValue::Null, row_batch.rows[0][4]);
+    assert_eq!("BYTEA", row_batch.columns[0].type_name);
+    assert!(!row_batch.columns[0].nullable);
+    assert!(row_batch.columns[3].nullable);
+}
+
+#[test]
+fn typed_batch_large_integer_exceeding_i64_falls_back_to_precise_text() {
+    let batch = db_value::ResultBatch::try_new(
+        0,
+        vec![column_descriptor(
+            "big",
+            "NUMERIC",
+            db_value::Nullability::No,
+        )],
+        vec![ResultRow {
+            id: 0,
+            cells: vec![CellState::Decoded(TypedDbValue::Integer(
+                "99999999999999999999999".to_string(),
+            ))],
+        }],
+        true,
+    )
+    .unwrap();
+    let result = QueryResult::from_typed_batch("select big".to_string(), batch, 1)
+        .expect("from_typed_batch should succeed");
+
+    let row_batch = sql_results_to_row_batch(vec![SqlResult::Query(result)]).unwrap();
+
+    assert_eq!(
+        DbValue::Text("99999999999999999999999".to_string()),
+        row_batch.rows[0][0]
+    );
+}
+
+#[test]
+fn typed_batch_undecoded_cell_falls_back_to_legacy_text() {
+    let batch = db_value::ResultBatch::try_new(
+        0,
+        vec![column_descriptor(
+            "payload",
+            "UNKNOWN",
+            db_value::Nullability::No,
+        )],
+        vec![ResultRow {
+            id: 0,
+            cells: vec![CellState::Undecoded {
+                native_type: "UNKNOWN".to_string(),
+                raw: None,
+                reason: "no codec".to_string(),
+            }],
+        }],
+        true,
+    )
+    .unwrap();
+    let result = QueryResult {
+        sql: "select payload".to_string(),
+        columns: vec!["payload".to_string()],
+        rows: vec![vec![Some("<int4[]>".to_string())]],
+        typed_batch: Some(Arc::new(batch)),
+        ..Default::default()
+    };
+
+    let batch = sql_results_to_row_batch(vec![SqlResult::Query(result)]).unwrap();
+
+    assert_eq!(batch.rows[0][0], DbValue::Text("<int4[]>".to_string()));
 }
 
 #[test]
@@ -88,7 +197,8 @@ fn exec_and_error_results_convert_to_status_rows() {
             sql: "bad".to_string(),
             message: "syntax error".to_string(),
         }),
-    ]);
+    ])
+    .unwrap();
 
     assert_eq!(2, batch.rows.len());
     assert_eq!(DbValue::Text("ok".to_string()), batch.rows[0][1]);
@@ -139,6 +249,24 @@ fn host_trait_execute_rejects_closed_session_resource() {
 
 fn db_state() -> GlobalDbState {
     GlobalDbState::new()
+}
+
+fn column_descriptor(
+    name: &str,
+    native_type: &str,
+    nullable: db_value::Nullability,
+) -> ColumnDescriptor {
+    ColumnDescriptor {
+        id: name.to_string(),
+        label: name.to_string(),
+        native_type: native_type.to_string(),
+        logical_type: "unknown".to_string(),
+        nullable,
+        charset: None,
+        collation: None,
+        precision: None,
+        scale: None,
+    }
 }
 
 fn config(id: &str) -> DbConnectionConfig {

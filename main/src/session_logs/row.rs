@@ -1,10 +1,6 @@
 use gpui::{FontWeight, IntoElement, ParentElement, Styled, div, px};
-use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, Sizable,
-    button::{Button, ButtonVariants as _},
-    checkbox::Checkbox,
-    h_flex, v_flex,
-};
+use gpui_component::{ActiveTheme, Disableable, Icon, Sizable, button::{Button, ButtonVariants as _}, checkbox::Checkbox, h_flex, v_flex};
+use one_assets::IconName;
 use rust_i18n::t;
 use std::path::PathBuf;
 use terminal::recording::{RecordingBackend, RecordingCompleteness, SessionLogEntry};

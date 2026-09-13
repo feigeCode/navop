@@ -1,4 +1,5 @@
 use std::sync::mpsc::Sender;
+use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -93,9 +94,10 @@ impl BackendLoop {
             HelperRunResult::Reconnect {
                 reason,
                 was_connected,
+                connected_for,
                 disconnect_kind,
                 ..
-            } => self.handle_disconnect(reason, was_connected, disconnect_kind),
+            } => self.handle_disconnect(reason, was_connected, connected_for, disconnect_kind),
         }
     }
 
@@ -103,11 +105,12 @@ impl BackendLoop {
         &mut self,
         reason: String,
         was_connected: bool,
+        connected_for: Option<Duration>,
         disconnect_kind: Option<HelperDisconnectKind>,
     ) -> bool {
         match reconnect::reconnect_decision(&reason, was_connected, disconnect_kind) {
             reconnect::ReconnectDecision::Retry(reconnect_reason) => {
-                self.retry(was_connected, reconnect_reason)
+                self.retry(was_connected, connected_for, reconnect_reason)
             }
             reconnect::ReconnectDecision::ConnectionFailure(failure) => {
                 self.finish(reason, failure, false);
@@ -120,9 +123,24 @@ impl BackendLoop {
         }
     }
 
-    fn retry(&mut self, was_connected: bool, reason: RemoteDesktopReconnectReason) -> bool {
-        if was_connected {
+    fn retry(
+        &mut self,
+        was_connected: bool,
+        connected_for: Option<Duration>,
+        reason: RemoteDesktopReconnectReason,
+    ) -> bool {
+        if reconnect::session_is_stable(was_connected, connected_for) {
             self.reconnect_attempt = 0;
+        } else if was_connected {
+            // The session dropped right after connecting. Restarting the
+            // backoff here would retry once per second for as long as the fault
+            // lasts, so keep escalating and leave a trace for diagnosis.
+            tracing::warn!(
+                ?connected_for,
+                next_attempt = self.reconnect_attempt,
+                reason = ?reason,
+                "remote desktop session dropped shortly after connecting"
+            );
         }
         let delay = reconnect::reconnect_delay(self.reconnect_attempt);
         self.reconnect_attempt = self.reconnect_attempt.saturating_add(1);
@@ -165,6 +183,7 @@ fn helper_start_failure() -> HelperRunResult {
         reason: "failed to start remote desktop helper".to_string(),
         manual: false,
         was_connected: false,
+        connected_for: None,
         disconnect_kind: None,
     }
 }
@@ -177,6 +196,7 @@ fn poll_helper_session(
     output_tx: &OutputMailboxSender,
 ) -> HelperRunResult {
     let mut was_connected = false;
+    let mut connected_since: Option<Instant> = None;
     loop {
         if let Some(result) = input::handle_backend_signals(
             &signal_rx,
@@ -187,7 +207,10 @@ fn poll_helper_session(
             backend.protocol,
             &backend.diagnostic_tx,
         ) {
-            return result;
+            return with_connected_for(result, connected_since);
+        }
+        if was_connected && connected_since.is_none() {
+            connected_since = Some(Instant::now());
         }
         let mut input_context = input::RemoteInputContext {
             connect: &mut backend.connect,
@@ -201,12 +224,36 @@ fn poll_helper_session(
         if let Some(result) =
             input::handle_remote_input(&mut backend.input_rx, &mut input_context, was_connected)
         {
-            return result;
+            return with_connected_for(result, connected_since);
         }
         if let Some(result) = input::poll_helper_exit(&mut helper, was_connected, backend.protocol)
         {
-            return result;
+            return with_connected_for(result, connected_since);
         }
         std::thread::sleep(REMOTE_DESKTOP_BACKEND_POLL_INTERVAL);
+    }
+}
+
+/// Attach how long the finished session was usable so the reconnect policy can
+/// tell a lost healthy session apart from one that never stabilized.
+fn with_connected_for(
+    result: HelperRunResult,
+    connected_since: Option<Instant>,
+) -> HelperRunResult {
+    match result {
+        HelperRunResult::Reconnect {
+            reason,
+            manual,
+            was_connected,
+            disconnect_kind,
+            ..
+        } => HelperRunResult::Reconnect {
+            reason,
+            manual,
+            was_connected,
+            connected_for: connected_since.map(|since| since.elapsed()),
+            disconnect_kind,
+        },
+        result => result,
     }
 }

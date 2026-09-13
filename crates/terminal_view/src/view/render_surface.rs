@@ -265,7 +265,7 @@ impl TerminalView {
             .child(
                 Scrollbar::vertical(&self.scrollbar_handle)
                     .viewport_from_layout()
-                    .scrollbar_show(ScrollbarShow::Always),
+                    .mode(ScrollbarMode::Always),
             )
             .into_any_element()
     }

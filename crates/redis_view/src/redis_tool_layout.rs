@@ -9,19 +9,11 @@ use crate::redis_tool_view::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, ColorExt, Context, InteractiveElement, IntoElement, ParentElement,
+    AnyElement, App, Context, InteractiveElement, IntoElement, ParentElement,
     SharedString, StatefulInteractiveElement, Styled, div, px,
 };
-use gpui_component::{
-    ActiveTheme, Icon, IconName, IconSize as GpuiIconSize, Sizable, Size,
-    button::{Button, ButtonVariants as _},
-    h_flex,
-    input::Input,
-    switch::Switch,
-    table::DataTable,
-    tag::Tag,
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Icon, Sizable, Size, button::{Button, ButtonVariants as _}, h_flex, input::Input, switch::Switch, table::DataTable, tag::Tag, v_flex};
+use one_assets::IconName;
 use one_ui::{ContentState, IconButton, IconSize};
 use rust_i18n::t;
 
@@ -41,7 +33,7 @@ impl RedisToolView {
         let view = cx.entity().clone();
         let auto_view = cx.entity().clone();
         let reset_view = cx.entity().clone();
-        let geometry = cx.theme().geometry.clone();
+        let geometry = one_ui::theme_geometry().clone();
         h_flex()
             .w_full()
             .h(geometry.layout.command_bar)
@@ -50,7 +42,7 @@ impl RedisToolView {
             .items_center()
             .border_b(geometry.border.hairline)
             .border_color(cx.theme().border)
-            .child(Icon::new(self.icon_name()).with_size(GpuiIconSize::Medium))
+            .child(Icon::new(self.icon_name()).with_size(IconSize::Medium))
             .child(
                 div()
                     .font_weight(gpui::FontWeight::BOLD)
@@ -324,7 +316,7 @@ impl RedisToolView {
         match &self.load_state {
             LoadState::Empty => {
                 ContentState::empty(t!("RedisTool.connection_required").to_string())
-                    .icon(Icon::new(IconName::Redis).with_size(GpuiIconSize::Large))
+                    .icon(Icon::new(IconName::Redis).with_size(IconSize::Large))
                     .into_any_element()
             }
             LoadState::Loading => {
@@ -481,7 +473,7 @@ fn render_received_messages(view: &RedisToolView, cx: &mut Context<RedisToolView
     if view.received_messages.is_empty() {
         return ContentState::empty(t!("RedisPubSub.messages_empty_title").to_string())
             .detail(t!("RedisPubSub.messages_empty_detail").to_string())
-            .icon(Icon::new(IconName::Network).with_size(GpuiIconSize::Large))
+            .icon(Icon::new(IconName::Network).with_size(IconSize::Large))
             .compact()
             .into_any_element();
     }

@@ -6,7 +6,8 @@ use std::sync::Arc;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use gpui::{App, Context, ParentElement, Styled, Window, px};
-use gpui_component::{ActiveTheme, Icon, IconName, WindowExt, dialog::DialogButtonProps, v_flex};
+use gpui_component::{ActiveTheme, Icon, WindowExt, dialog::DialogButtonProps, v_flex};
+use one_assets::IconName;
 use one_core::license::{Feature, GlobalLicenseService, LicenseService, LocalLicenseStorage};
 use rust_i18n::t;
 

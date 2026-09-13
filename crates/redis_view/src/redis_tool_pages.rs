@@ -11,7 +11,8 @@ use crate::redis_tool_widgets::{
     memory_bars, metric_cards, section_title, stat_string, stat_value, tip_for_key, value,
 };
 use gpui::{AnyElement, App, IntoElement, ParentElement, SharedString, Styled};
-use gpui_component::{IconName, v_flex};
+use gpui_component::{v_flex};
+use one_assets::IconName;
 
 /// 构造页签顶部的摘要区域(metric_cards、memory_bars、section_title 等)。
 pub fn build_header(kind: RedisToolKind, rows: &[ToolRow], cx: &App) -> AnyElement {

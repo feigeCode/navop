@@ -94,4 +94,13 @@ impl TerminalView {
 
         cx.global_mut::<ActiveConnections>().remove(connection_id);
     }
+
+    /// 显式回收终端:供嵌入宿主(如资源工作台的 terminal 页面)在卸载时调用。
+    ///
+    /// 与标签页关闭走同一条清理路径——注销广播输入 / public MCP 会话、
+    /// 释放连接占用、取消 zmodem 后台任务、关闭底层 pty 进程。
+    /// 嵌入场景没有关闭确认流程,因此直接执行终态清理。
+    pub fn shutdown_embedded(&mut self, cx: &mut Context<Self>) {
+        self.close_terminal_now(cx);
+    }
 }

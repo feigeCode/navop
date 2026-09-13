@@ -47,6 +47,16 @@ pub struct NetworkEndpoint {
 
 impl NetworkEndpoint {
     pub fn parse(value: &str) -> Result<Self, ProviderPermissionError> {
+        if let Some(path) = value.strip_prefix("unix://") {
+            if (!path.starts_with('/') && !path.starts_with("~/")) || path.contains("..") {
+                return Err(ProviderPermissionError::InvalidUrl);
+            }
+            return Ok(Self {
+                scheme: "unix".to_owned(),
+                host: expand_home(path),
+                port: 0,
+            });
+        }
         if value.contains("://") {
             let url = Url::parse(value).map_err(|_| ProviderPermissionError::InvalidUrl)?;
             if !matches!(url.scheme(), "http" | "https") {
@@ -58,12 +68,7 @@ impl NetworkEndpoint {
             let port = url
                 .port_or_known_default()
                 .ok_or_else(|| ProviderPermissionError::InvalidUrl)?;
-            if !url.username().is_empty()
-                || url.password().is_some()
-                || url.path() != "/"
-                || url.query().is_some()
-                || url.fragment().is_some()
-            {
+            if !url.username().is_empty() || url.password().is_some() || url.fragment().is_some() {
                 return Err(ProviderPermissionError::InvalidUrl);
             }
             return Ok(Self {
@@ -96,6 +101,7 @@ impl NetworkEndpoint {
 pub struct ProviderPermissionSet {
     secret_reads: Vec<(String, String)>,
     tcp_endpoints: Vec<(String, Vec<u16>)>,
+    unix_sockets: Vec<String>,
 }
 
 pub struct ResourceOpenAuthorizer {
@@ -150,6 +156,8 @@ impl ProviderPermissionSet {
                         set.tcp_endpoints.push((host.to_owned(), ports));
                     }
                 }
+            } else if let Some(path) = permission.strip_prefix("net:unix:") {
+                set.unix_sockets.push(expand_home(path));
             }
         }
         set
@@ -162,6 +170,9 @@ impl ProviderPermissionSet {
     }
 
     pub fn allows_endpoint(&self, endpoint: &NetworkEndpoint) -> bool {
+        if endpoint.scheme == "unix" {
+            return self.unix_sockets.iter().any(|path| path == &endpoint.host);
+        }
         matches!(endpoint.scheme.as_str(), "http" | "https" | "tcp")
             && self.tcp_endpoints.iter().any(|(host, ports)| {
                 (host == "*" || host.eq_ignore_ascii_case(&endpoint.host))
@@ -201,6 +212,7 @@ fn resource_endpoints(config: &Value) -> Result<Vec<NetworkEndpoint>, ProviderPe
         "server",
         "bootstrap_servers",
         "endpoint",
+        "socket",
     ] {
         if let Some(value) = config.get(field) {
             push_endpoint_values(value, &mut values)?;
@@ -221,8 +233,10 @@ fn resource_endpoints(config: &Value) -> Result<Vec<NetworkEndpoint>, ProviderPe
         values.push(Value::String(format!("{host}:{port}")));
     }
 
+    // Local resources and credential/resource-id based resources may not have
+    // a network endpoint in their open configuration.
     if values.is_empty() {
-        return Err(ProviderPermissionError::InvalidUrl);
+        return Ok(Vec::new());
     }
     values
         .iter()
@@ -233,6 +247,15 @@ fn resource_endpoints(config: &Value) -> Result<Vec<NetworkEndpoint>, ProviderPe
                 .and_then(NetworkEndpoint::parse)
         })
         .collect()
+}
+
+fn expand_home(path: &str) -> String {
+    let Some(relative) = path.strip_prefix("~/") else {
+        return path.to_owned();
+    };
+    dirs::home_dir()
+        .map(|home| home.join(relative).to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_owned())
 }
 
 fn push_endpoint_values(
@@ -299,7 +322,49 @@ mod tests {
             "secrets:read:elasticsearch.*",
             "net:tcp:127.0.0.1:9200",
             "net:tcp:example.com:9200-9210",
+            "net:unix:~/.docker/run/docker.sock",
         ])
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_socket_permission_matches_exact_expanded_path() {
+        let endpoint = NetworkEndpoint::parse(&format!(
+            "unix://{}/.docker/run/docker.sock",
+            dirs::home_dir().unwrap().display()
+        ))
+        .unwrap();
+        assert!(set().allows_endpoint(&endpoint));
+        assert!(
+            !set().allows_endpoint(&NetworkEndpoint::parse("unix:///tmp/docker.sock").unwrap())
+        );
+    }
+
+    #[test]
+    fn resource_open_authorizer_enforces_unix_socket() {
+        let authorizer = ResourceOpenAuthorizer::new([
+            "net:unix:~/.docker/run/docker.sock",
+            "net:unix:/var/run/docker.sock",
+        ]);
+        authorizer
+            .authorize(&ResourceOpenParams {
+                resource_type: "docker".into(),
+                config: serde_json::json!({
+                    "socket": "unix://~/.docker/run/docker.sock"
+                }),
+                metadata: None,
+            })
+            .unwrap();
+        assert_eq!(
+            ProviderPermissionError::NetworkDenied,
+            authorizer
+                .authorize(&ResourceOpenParams {
+                    resource_type: "docker".into(),
+                    config: serde_json::json!({"socket": "unix:///tmp/docker.sock"}),
+                    metadata: None,
+                })
+                .unwrap_err()
+        );
     }
 
     #[test]
@@ -384,6 +449,29 @@ mod tests {
             ProviderPermissionError::NetworkDenied,
             authorizer.authorize(&denied).unwrap_err()
         );
+    }
+
+    #[test]
+    fn local_resource_without_endpoint_does_not_require_network_permission() {
+        ResourceOpenAuthorizer::new(std::iter::empty::<&str>())
+            .authorize(&ResourceOpenParams {
+                resource_type: "file".into(),
+                config: serde_json::json!({"path": "/tmp/example.txt"}),
+                metadata: None,
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn http_endpoint_keeps_path_and_query_outside_network_authorization() {
+        let authorizer = ResourceOpenAuthorizer::new(["net:tcp:example.com:443"]);
+        authorizer
+            .authorize(&ResourceOpenParams {
+                resource_type: "api".into(),
+                config: serde_json::json!({"endpoint": "https://example.com/v1?tenant=acme"}),
+                metadata: None,
+            })
+            .unwrap();
     }
 
     #[test]

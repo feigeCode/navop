@@ -1,6 +1,6 @@
 # Database connections
 
-Navop includes MySQL, PostgreSQL, SQLite, DuckDB, SQL Server, Oracle, ClickHouse, and TDengine support (TDengine uses the official taos WebSocket driver via taosAdapter :6041 — pure Rust with no local C dependency). Extensions can add Dameng, Kingbase, GBase 8s, OceanBase, openGauss, IoTDB, and other drivers. Fields and advanced capabilities depend on the driver and server version.
+Navop includes built-in MySQL, PostgreSQL, SQLite, DuckDB, SQL Server, Oracle, and ClickHouse support. TDengine is provided as an installable extension driver (official taos WebSocket driver via taosAdapter :6041 — pure Rust with no local C dependency). Extensions can additionally add Dameng, Kingbase, GBase 8s, OceanBase, openGauss, IoTDB, and other drivers. Legacy built-in TDengine connections prompt you to install the driver extension when opened. Fields and advanced capabilities depend on the driver and server version.
 
 The built-in Oracle driver requires the [Oracle Instant Client](https://www.oracle.com/database/technologies/instant-client/downloads.html). To use Oracle without Instant Client, install the pure-Go Oracle driver from the extension marketplace; when connecting to Oracle you can choose between the Native and Go drivers.
 

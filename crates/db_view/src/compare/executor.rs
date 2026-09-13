@@ -430,6 +430,7 @@ mod tests {
             rows: vec![vec![Some("1".to_string()), None]],
             binary_cells: vec![],
             elapsed_ms: 0,
+            ..Default::default()
         };
 
         let rows = rows_from_query_result(&result).unwrap();
@@ -463,6 +464,7 @@ mod tests {
             ]],
             binary_cells: vec![],
             elapsed_ms: 0,
+            ..Default::default()
         };
 
         let rows = rows_from_query_result(&result).unwrap();
@@ -485,6 +487,7 @@ mod tests {
             rows: vec![vec![Some("12345678901234567890.1234500".to_string())]],
             binary_cells: vec![],
             elapsed_ms: 0,
+            ..Default::default()
         };
 
         let rows = rows_from_query_result(&result).unwrap();
@@ -532,6 +535,7 @@ mod tests {
                     },
                 ],
                 elapsed_ms: 0,
+                ..Default::default()
             },
         };
 
@@ -1468,6 +1472,7 @@ mod tests {
                 rows,
                 binary_cells: vec![],
                 elapsed_ms: 0,
+                ..Default::default()
             },
         }
     }

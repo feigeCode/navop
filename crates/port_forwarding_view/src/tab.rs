@@ -6,7 +6,8 @@ use gpui::{
     App, AsyncApp, Context, EventEmitter, FocusHandle, Focusable, IntoElement, Render,
     SharedString, Task, Window,
 };
-use gpui_component::{Icon, IconName, Sizable, Size};
+use gpui_component::{Icon, Sizable, Size};
+use one_assets::IconName;
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::{ActiveConnections, PortForwardingKind, StoredConnection};
 use one_core::tab_container::{TabContent, TabContentEvent};

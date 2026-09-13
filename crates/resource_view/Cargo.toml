@@ -1,0 +1,21 @@
+[package]
+name = "resource_view"
+version = "0.1.0"
+publish.workspace = true
+edition.workspace = true
+
+[dependencies]
+extension-plugin-adapter.workspace = true
+extension-protocol.workspace = true
+extension-runtime.workspace = true
+extension-host.workspace = true
+gpui.workspace = true
+gpui-component.workspace = true
+json_view.workspace = true
+one-core.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

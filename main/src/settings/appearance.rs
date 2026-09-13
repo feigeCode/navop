@@ -3,16 +3,8 @@ use gpui::{
     App, Entity, Hsla, InteractiveElement, IntoElement, ParentElement, SharedString,
     StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder as _, px,
 };
-use gpui_component::{
-    ActiveTheme, Icon, IconName, Selectable, Sizable, ThemeColor, ThemeConfig, ThemeMode,
-    ThemeRegistry,
-    button::{Button, ButtonVariants},
-    color_picker::ColorPicker,
-    h_flex,
-    slider::Slider,
-    switch::Switch,
-    try_parse_color, v_flex,
-};
+use gpui_component::{ActiveTheme, Icon, Selectable, Sizable, ThemeColor, ThemeConfig, ThemeMode, ThemeRegistry, button::{Button, ButtonVariants}, color_picker::ColorPicker, h_flex, slider::Slider, switch::Switch, try_parse_color, v_flex};
+use one_assets::IconName;
 use one_core::{settings::AppSettings, themes};
 use rust_i18n::t;
 use std::rc::Rc;

@@ -18,7 +18,6 @@ use crate::plugin_manifest::DatabaseCapabilities;
 use crate::postgresql::PostgresPlugin;
 use crate::runtime_contract::require_tokio_runtime;
 use crate::sqlite::SqlitePlugin;
-use crate::tdengine::TdenginePlugin;
 use crate::{
     DbNode, DbNodeType, ExecOptions, SqlErrorInfo, SqlResult, SqlSource, TableDesign,
     TableSaveResponse,
@@ -158,6 +157,11 @@ async fn cached_foreign_keys(
     .await
 }
 
+/// TDengine 经外部 IPC 驱动(driver_id "tdengine")提供实现,
+/// 主仓不再内置原生插件;历史连接的 `DatabaseType::TDengine` 在
+/// `get_plugin` 中路由到同一外部驱动解析路径。
+const TDENGINE_IPC_DRIVER_ID: &str = "tdengine";
+
 /// Database manager - creates database plugins
 pub struct DbManager {
     mysql: Arc<dyn DatabasePlugin>,
@@ -165,7 +169,6 @@ pub struct DbManager {
     sqlite: Arc<dyn DatabasePlugin>,
     duckdb: Arc<dyn DatabasePlugin>,
     clickhouse: Arc<dyn DatabasePlugin>,
-    tdengine: Arc<dyn DatabasePlugin>,
     mssql: Arc<dyn DatabasePlugin>,
     oracle: Arc<dyn DatabasePlugin>,
     external_drivers: HashMap<String, Arc<dyn DatabasePlugin>>,
@@ -203,7 +206,6 @@ impl DbManager {
             sqlite: Arc::new(SqlitePlugin::new()),
             duckdb: default_duckdb_plugin(&registry),
             clickhouse: Arc::new(ClickHousePlugin::new()),
-            tdengine: Arc::new(TdenginePlugin::new()),
             mssql: Arc::new(MsSqlPlugin::new()),
             oracle: Arc::new(OraclePlugin::new()),
             external_drivers,
@@ -218,23 +220,27 @@ impl DbManager {
             DatabaseType::SQLite => Ok(Arc::clone(&self.sqlite)),
             DatabaseType::DuckDB => Ok(Arc::clone(&self.duckdb)),
             DatabaseType::ClickHouse => Ok(Arc::clone(&self.clickhouse)),
-            DatabaseType::TDengine => Ok(Arc::clone(&self.tdengine)),
+            // TDengine 无原生插件,与 External 一致按 driver_id 解析 IPC 外部驱动。
+            DatabaseType::TDengine => self.resolve_external_plugin(TDENGINE_IPC_DRIVER_ID),
             DatabaseType::MSSQL => Ok(Arc::clone(&self.mssql)),
             DatabaseType::Oracle => Ok(Arc::clone(&self.oracle)),
-            DatabaseType::External { driver_id } => {
-                if let Some(driver) = (self.external_registry_reloader)().find(driver_id) {
-                    return Ok(Arc::new(ExternalDatabasePlugin::for_driver(driver))
-                        as Arc<dyn DatabasePlugin>);
-                }
-                if let Some(plugin) = self.external_drivers.get(driver_id).cloned() {
-                    return Ok(plugin);
-                }
-                Err(DbError::connection(format!(
-                    "external driver '{}' not found",
-                    driver_id
-                )))
-            }
+            DatabaseType::External { driver_id } => self.resolve_external_plugin(driver_id),
         }
+    }
+
+    /// 按 driver_id 解析外部 IPC 驱动插件:优先实时重载注册表,回退构造时快照。
+    fn resolve_external_plugin(&self, driver_id: &str) -> Result<Arc<dyn DatabasePlugin>, DbError> {
+        if let Some(driver) = (self.external_registry_reloader)().find(driver_id) {
+            return Ok(
+                Arc::new(ExternalDatabasePlugin::for_driver(driver)) as Arc<dyn DatabasePlugin>
+            );
+        }
+        if let Some(plugin) = self.external_drivers.get(driver_id).cloned() {
+            return Ok(plugin);
+        }
+        Err(DbError::connection(format!(
+            "external driver '{driver_id}' not found"
+        )))
     }
 }
 
@@ -265,7 +271,6 @@ impl Clone for DbManager {
             sqlite: Arc::clone(&self.sqlite),
             duckdb: Arc::clone(&self.duckdb),
             clickhouse: Arc::clone(&self.clickhouse),
-            tdengine: Arc::clone(&self.tdengine),
             mssql: Arc::clone(&self.mssql),
             oracle: Arc::clone(&self.oracle),
             external_drivers: self.external_drivers.clone(),

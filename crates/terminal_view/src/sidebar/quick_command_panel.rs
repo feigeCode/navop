@@ -4,31 +4,18 @@
 
 use gpui::prelude::*;
 use gpui::{
-    App, AppContext, ClipboardItem, ColorExt as _, Context, Entity, EventEmitter, FocusHandle,
+    App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
     Focusable, InteractiveElement, IntoElement, Keystroke, ListSizingBehavior, MouseButton,
     ParentElement, Render, SharedString, Styled, UniformListScrollHandle, Window, div,
     uniform_list,
 };
-use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable, Size, WindowExt,
-    button::{Button, ButtonCustomVariant, ButtonVariant},
-    checkbox::Checkbox,
-    dialog::DialogButtonProps,
-    h_flex,
-    input::{Input, InputEvent, InputState, Textarea, TextareaState},
-    menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
-    notification::Notification,
-    radio::{Radio, RadioGroup},
-    select::{Select, SelectItem, SelectState},
-    tooltip::Tooltip,
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Icon, Sizable, Size, WindowExt, button::{Button, ButtonCustomVariant, ButtonVariant}, checkbox::Checkbox, dialog::DialogButtonProps, h_flex, input::{Input, InputEvent, InputState, Textarea, TextareaState}, menu::{ContextMenuExt, PopupMenu, PopupMenuItem}, notification::Notification, radio::{Radio, RadioGroup}, select::{Select, SelectItem, SelectState}, tooltip::Tooltip, v_flex};
+use one_assets::IconName;
 use one_core::keybindings::shortcut_spec_from_keystroke;
 use one_core::storage::{
     GlobalStorageState, QuickCommand, QuickCommandRepository, traits::Repository,
 };
 use one_ui::{IconButton, IconButtonRole};
-use palette::IntoColor;
 use rust_i18n::t;
 use std::{ops::Range, sync::Arc};
 
@@ -231,15 +218,15 @@ fn quick_command_group_chip_label(filter: &QuickCommandGroupFilter) -> String {
 
 fn quick_command_group_color(color: Option<&str>, fallback: gpui::Hsla) -> gpui::Hsla {
     match color.unwrap_or_default() {
-        "blue" => gpui::rgb(0x3b82f6).into_color(),
-        "cyan" => gpui::rgb(0x06b6d4).into_color(),
-        "green" => gpui::rgb(0x22c55e).into_color(),
-        "yellow" => gpui::rgb(0xeab308).into_color(),
-        "orange" => gpui::rgb(0xf97316).into_color(),
-        "red" => gpui::rgb(0xef4444).into_color(),
-        "pink" => gpui::rgb(0xec4899).into_color(),
-        "purple" => gpui::rgb(0xa855f7).into_color(),
-        "gray" => gpui::rgb(0x64748b).into_color(),
+        "blue" => gpui::rgb(0x3b82f6).into(),
+        "cyan" => gpui::rgb(0x06b6d4).into(),
+        "green" => gpui::rgb(0x22c55e).into(),
+        "yellow" => gpui::rgb(0xeab308).into(),
+        "orange" => gpui::rgb(0xf97316).into(),
+        "red" => gpui::rgb(0xef4444).into(),
+        "pink" => gpui::rgb(0xec4899).into(),
+        "purple" => gpui::rgb(0xa855f7).into(),
+        "gray" => gpui::rgb(0x64748b).into(),
         _ => fallback,
     }
 }

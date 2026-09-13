@@ -125,6 +125,9 @@ async fn close_blobs(service: &UniversalPluginService, records: Vec<ProviderHand
 
 async fn close_resources(service: &UniversalPluginService, records: Vec<ProviderHandle>) {
     for record in records {
+        if !record.owned {
+            continue;
+        }
         if let Ok(client) = current_client(service, &record) {
             let _ = client
                 .client()
@@ -147,4 +150,20 @@ fn current_client(
         return Err(HostError::new("provider generation changed"));
     }
     Ok(client)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn borrowed_resource_cleanup_guard_is_present() {
+        let source = include_str!("cleanup.rs");
+        let close_resources = source
+            .split("async fn close_resources")
+            .nth(1)
+            .expect("close_resources exists");
+        assert!(
+            close_resources.contains("if !record.owned"),
+            "page cleanup must skip borrowed primary resources"
+        );
+    }
 }

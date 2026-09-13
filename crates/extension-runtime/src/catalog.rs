@@ -19,7 +19,8 @@ use super::types::{
     ExtensionRuntimeError, RegisteredDbTreeMenuContribution, RegisteredDocumentExporter,
     RegisteredDocumentRenderer, RegisteredHtmlPreviewTransform, RegisteredIpcRuntimeBinding,
     RegisteredKeybindingContribution, RegisteredRemoteFileEditorContribution,
-    RegisteredResourceConnectionContribution, RegisteredShellViewContribution, WasmRuntimeBinding,
+    RegisteredResourceConnectionContribution, RegisteredResourceWorkbenchContribution,
+    RegisteredShellViewContribution, WasmRuntimeBinding,
 };
 
 static WASM_CATALOG_LOG_KEYS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -45,6 +46,7 @@ pub struct ExtensionRuntimeCatalog {
     pub(super) remote_file_editors: Vec<RegisteredRemoteFileEditorContribution>,
     pub(super) shell_views: BTreeMap<String, RegisteredShellViewContribution>,
     pub(super) resource_connections: BTreeMap<String, RegisteredResourceConnectionContribution>,
+    pub(super) resource_workbenches: BTreeMap<String, RegisteredResourceWorkbenchContribution>,
 }
 
 #[derive(Debug)]
@@ -82,6 +84,7 @@ impl ExtensionRuntimeCatalog {
             remote_file_editors: Vec::new(),
             shell_views: BTreeMap::new(),
             resource_connections: BTreeMap::new(),
+            resource_workbenches: BTreeMap::new(),
         }
     }
 
@@ -212,6 +215,35 @@ impl ExtensionRuntimeCatalog {
     ) -> Option<&RegisteredResourceConnectionContribution> {
         self.resource_connections
             .get(&format!("{extension_id}::{connection_id}"))
+    }
+
+    pub fn resource_workbenches(
+        &self,
+    ) -> impl Iterator<Item = &RegisteredResourceWorkbenchContribution> {
+        self.resource_workbenches.values()
+    }
+
+    pub fn resource_workbench(
+        &self,
+        extension_id: &str,
+        workbench_id: &str,
+    ) -> Option<&RegisteredResourceWorkbenchContribution> {
+        self.resource_workbenches
+            .get(&format!("{extension_id}::{workbench_id}"))
+    }
+
+    pub fn resource_workbench_for_connection(
+        &self,
+        extension_id: &str,
+        connection_id: &str,
+    ) -> Option<&RegisteredResourceWorkbenchContribution> {
+        self.resource_workbenches.values().find(|workbench| {
+            workbench.extension_id == extension_id
+                && workbench
+                    .connection_ids
+                    .iter()
+                    .any(|id| id == connection_id)
+        })
     }
 
     pub fn document_renderer_for_kind(

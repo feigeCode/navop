@@ -2,7 +2,8 @@ use std::collections::HashSet;
 
 use anyhow::{Result, anyhow, bail};
 
-use crate::executor::{QueryCellRef, QueryResult};
+use super::cells::{RenderCell, ResultCells};
+use crate::executor::QueryResult;
 
 #[derive(Debug)]
 pub(super) enum ImportedValue {
@@ -36,12 +37,10 @@ pub(super) fn parse_rows(
 }
 
 pub(super) fn serialize_table(table: &str, result: &QueryResult) -> Result<String> {
-    let view = result
-        .typed_view()
-        .map_err(|error| anyhow!("Invalid query result for XML export: {error}"))?;
+    let cells = ResultCells::new(result, "XML")?;
     let mut output = String::new();
 
-    for row_index in 0..result.rows.len() {
+    for row_index in 0..cells.row_count() {
         output.push_str("  <row table=\"");
         output.push_str(&escape_xml(table)?);
         output.push_str("\">\n");
@@ -51,17 +50,17 @@ pub(super) fn serialize_table(table: &str, result: &QueryResult) -> Result<Strin
             output.push_str(&escape_xml(column)?);
             output.push('"');
 
-            match view.cell(row_index, column_index) {
-                Some(QueryCellRef::Null) => output.push_str(" null=\"true\">"),
-                Some(QueryCellRef::Text(value)) => {
+            match cells.cell(row_index, column_index) {
+                Some(RenderCell::Null) => output.push_str(" null=\"true\">"),
+                Some(RenderCell::Text(value)) => {
                     output.push('>');
                     output.push_str(&escape_xml(value)?);
                 }
-                Some(QueryCellRef::Binary(bytes)) => {
+                Some(RenderCell::Binary(bytes)) => {
                     output.push_str(" encoding=\"hex\">");
                     output.push_str(&hex::encode(bytes));
                 }
-                None => unreachable!("typed view validated row and column bounds"),
+                None => unreachable!("result cells validated row and column bounds"),
             }
             output.push_str("</field>\n");
         }
@@ -197,12 +196,57 @@ mod tests {
                 bytes: vec![0x00, 0xff],
             }],
             elapsed_ms: 1,
+            ..Default::default()
         };
 
         let output = serialize_table("t", &result).expect("valid query result should serialize");
 
         assert!(output.contains("<field name=\"a\" null=\"true\"></field>"));
         assert!(output.contains("<field name=\"b\"></field>"));
+        assert!(output.contains("<field name=\"c\" encoding=\"hex\">00ff</field>"));
+    }
+
+    #[test]
+    fn serialize_table_prefers_typed_batch_cells() {
+        let batch = db_value::ResultBatch::try_new(
+            0,
+            ["a", "b", "c"]
+                .into_iter()
+                .map(|label| db_value::ColumnDescriptor {
+                    id: label.to_string(),
+                    label: label.to_string(),
+                    native_type: "TEXT".to_string(),
+                    logical_type: "Text".to_string(),
+                    nullable: db_value::Nullability::Unknown,
+                    charset: None,
+                    collation: None,
+                    precision: None,
+                    scale: None,
+                })
+                .collect(),
+            vec![db_value::ResultRow {
+                id: 0,
+                cells: vec![
+                    db_value::CellState::Decoded(db_value::DbValue::Text("typed".to_string())),
+                    db_value::CellState::Decoded(db_value::DbValue::Null),
+                    db_value::CellState::Decoded(db_value::DbValue::Binary(vec![0x00, 0xff])),
+                ],
+            }],
+            true,
+        )
+        .unwrap();
+        let mut result = QueryResult::from_typed_batch("select".to_string(), batch, 0).unwrap();
+        result.rows = vec![vec![
+            Some("stale".to_string()),
+            Some("stale".to_string()),
+            Some("stale".to_string()),
+        ]];
+        result.binary_cells = Vec::new();
+
+        let output = serialize_table("t", &result).expect("typed cells should serialize");
+
+        assert!(output.contains("<field name=\"a\">typed</field>"));
+        assert!(output.contains("<field name=\"b\" null=\"true\"></field>"));
         assert!(output.contains("<field name=\"c\" encoding=\"hex\">00ff</field>"));
     }
 }

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::{
     BinaryCell, ColumnInfo, FieldType, QueryCellRef, QueryColumnMeta, QueryResult,
@@ -286,28 +287,32 @@ pub fn rows_from_query_result_with_mappings(
     mappings: &[DataCompareColumnMapping],
     case_sensitive_identifiers: bool,
 ) -> anyhow::Result<Vec<RowData>> {
-    let view = result
-        .typed_view()
-        .map_err(|error| anyhow::anyhow!("Invalid query result for data comparison: {error}"))?;
     let index_by_column = result
         .columns
         .iter()
         .enumerate()
         .map(|(index, column)| (identifier_key(column, case_sensitive_identifiers), index))
         .collect::<HashMap<_, _>>();
+    if let Some(batch) = result.typed_batch() {
+        return rows_from_typed_batch(
+            result,
+            batch,
+            mappings,
+            &index_by_column,
+            case_sensitive_identifiers,
+        );
+    }
+
+    let view = result
+        .typed_view()
+        .map_err(|error| anyhow::anyhow!("Invalid query result for data comparison: {error}"))?;
     (0..result.rows.len())
         .map(|row_index| {
             mappings
                 .iter()
                 .map(|mapping| {
-                    let index = *index_by_column
-                        .get(&identifier_key(&mapping.target, case_sensitive_identifiers))
-                        .ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "compare column mapping target {:?} is missing from query result",
-                                mapping.target
-                            )
-                        })?;
+                    let index =
+                        mapped_column_index(mapping, case_sensitive_identifiers, &index_by_column)?;
                     let cell = match view.cell(row_index, index) {
                         Some(QueryCellRef::Null) => {
                             value_to_cell(None, result.column_meta.get(index), None)
@@ -325,6 +330,66 @@ pub fn rows_from_query_result_with_mappings(
                 .collect()
         })
         .collect()
+}
+
+/// Projects a typed batch through the shared legacy rules before comparing.
+///
+/// This keeps decimal and temporal text exact and binary sidecars authoritative
+/// while producing the same cell text as the legacy projection, so the compare
+/// result does not change when a typed batch is present.
+fn rows_from_typed_batch(
+    result: &QueryResult,
+    batch: &db_value::ResultBatch,
+    mappings: &[DataCompareColumnMapping],
+    index_by_column: &HashMap<String, usize>,
+    case_sensitive_identifiers: bool,
+) -> anyhow::Result<Vec<RowData>> {
+    let (rows, binary_cells) =
+        crate::executor::project_batch_to_legacy(batch).map_err(|error| {
+            anyhow::anyhow!("Invalid typed query result for data comparison: {error}")
+        })?;
+    let mut binary = HashMap::with_capacity(binary_cells.len());
+    for cell in binary_cells {
+        binary.insert((cell.row_index, cell.column_index), cell.bytes);
+    }
+
+    (0..rows.len())
+        .map(|row_index| {
+            mappings
+                .iter()
+                .map(|mapping| {
+                    let index =
+                        mapped_column_index(mapping, case_sensitive_identifiers, index_by_column)?;
+                    let meta = result.column_meta.get(index);
+                    let cell = if let Some(bytes) = binary.get(&(row_index, index)) {
+                        value_to_cell(None, meta, Some(bytes.as_slice()))
+                    } else {
+                        match rows.get(row_index).and_then(|row| row.get(index)) {
+                            Some(Some(text)) => value_to_cell(Some(text), meta, None),
+                            _ => value_to_cell(None, meta, None),
+                        }
+                    };
+                    Ok((mapping.source.clone(), cell))
+                })
+                .collect()
+        })
+        .collect()
+}
+
+fn mapped_column_index(
+    mapping: &DataCompareColumnMapping,
+    case_sensitive_identifiers: bool,
+    index_by_column: &HashMap<String, usize>,
+) -> anyhow::Result<usize> {
+    index_by_column
+        .get(&identifier_key(&mapping.target, case_sensitive_identifiers))
+        .copied()
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "compare column mapping target {:?} is missing from query result",
+                mapping.target
+            )
+        })
 }
 
 /// Removes the synthetic row-id column injected by table-data query plugins.
@@ -414,6 +479,7 @@ pub fn strip_internal_compare_columns_if(
     response.query_result.column_meta = column_meta;
     response.query_result.rows = rows;
     response.query_result.binary_cells = binary_cells;
+    resync_typed_batch(&mut response.query_result, false);
     response
 }
 
@@ -434,6 +500,7 @@ pub(crate) fn normalize_compare_table_data_response(
         business_columns,
     )
     .map_err(|error| anyhow::anyhow!("Invalid query result for data comparison: {error}"))?;
+    resync_typed_batch(&mut response.query_result, false);
     Ok(response)
 }
 
@@ -450,6 +517,7 @@ pub fn append_table_data_page(
     page.query_result
         .typed_view()
         .map_err(|error| anyhow::anyhow!("Invalid table data page: {error}"))?;
+    let page_has_typed_batch = page.query_result.typed_batch().is_some();
 
     if let Some(existing) = accumulated.as_mut() {
         existing
@@ -505,6 +573,7 @@ pub fn append_table_data_page(
             .binary_cells
             .extend(adjusted_binary_cells);
         existing.duration = existing.duration.saturating_add(page.duration);
+        resync_typed_batch(&mut existing.query_result, page_has_typed_batch);
         existing
             .query_result
             .typed_view()
@@ -657,6 +726,25 @@ fn query_column_meta_eq(left: &[QueryColumnMeta], right: &[QueryColumnMeta]) -> 
                 && left.field_type == right.field_type
                 && left.nullable == right.nullable
         })
+}
+
+/// Rebuilds an in-process typed batch from the authoritative legacy projection.
+///
+/// Column trimming, schema normalization, and page accumulation rewrite
+/// `rows`/`binary_cells` directly, which would leave a stale
+/// [`QueryResult::typed_batch`] behind. Rebuilding it through
+/// [`db_value::ResultBatch`] keeps typed and legacy cells consistent. When the
+/// legacy projection cannot be modeled, the stale batch is dropped so consumers
+/// fall back to the legacy projection. Results without a typed batch are left
+/// untouched.
+pub(crate) fn resync_typed_batch(query_result: &mut QueryResult, force: bool) {
+    if !force && query_result.typed_batch().is_none() {
+        return;
+    }
+    match query_result.to_result_batch() {
+        Ok(batch) => query_result.typed_batch = Some(Arc::new(batch)),
+        Err(_) => query_result.invalidate_typed_batch(),
+    }
 }
 
 fn value_to_cell(
@@ -827,6 +915,7 @@ mod tests {
                     .collect(),
                 binary_cells: Vec::new(),
                 elapsed_ms: 0,
+                ..Default::default()
             },
         }
     }
@@ -1548,6 +1637,171 @@ mod tests {
         let accumulated = accumulated.unwrap();
         assert_eq!(accumulated.query_result.rows.len(), 2);
         assert_eq!(accumulated.query_result.binary_cells[0].row_index, 1);
+    }
+
+    fn typed_batch(
+        labels: &[&str],
+        rows: Vec<Vec<db_value::CellState>>,
+    ) -> Arc<db_value::ResultBatch> {
+        let columns = labels
+            .iter()
+            .map(|label| db_value::ColumnDescriptor {
+                id: (*label).to_string(),
+                label: (*label).to_string(),
+                native_type: "TEXT".to_string(),
+                logical_type: "Text".to_string(),
+                nullable: db_value::Nullability::Unknown,
+                charset: None,
+                collation: None,
+                precision: None,
+                scale: None,
+            })
+            .collect();
+        let rows = rows
+            .into_iter()
+            .enumerate()
+            .map(|(index, cells)| db_value::ResultRow {
+                id: index as u64,
+                cells,
+            })
+            .collect();
+        Arc::new(db_value::ResultBatch::try_new(0, columns, rows, true).unwrap())
+    }
+
+    #[test]
+    fn stripping_resyncs_typed_batch_columns_and_cells() {
+        let mut response = response(
+            vec!["__rowid__", "id", "payload"],
+            vec![
+                QueryColumnMeta::new("__rowid__", "bigint"),
+                QueryColumnMeta::new("id", "bigint"),
+                QueryColumnMeta::new("payload", "blob"),
+            ],
+            vec![vec![Some("99"), Some("1"), Some("<binary>")]],
+        );
+        response.query_result.binary_cells = vec![BinaryCell {
+            row_index: 0,
+            column_index: 2,
+            bytes: vec![1, 2, 3],
+        }];
+        response.query_result.typed_batch = Some(typed_batch(
+            &["__rowid__", "id", "payload"],
+            vec![vec![
+                db_value::CellState::Decoded(db_value::DbValue::Integer("99".to_string())),
+                db_value::CellState::Decoded(db_value::DbValue::Integer("1".to_string())),
+                db_value::CellState::Decoded(db_value::DbValue::Binary(vec![1, 2, 3])),
+            ]],
+        ));
+
+        let response = strip_internal_compare_columns(response);
+
+        assert_eq!(response.query_result.columns, vec!["id", "payload"]);
+        let batch = response
+            .query_result
+            .typed_batch()
+            .expect("typed batch must survive column stripping");
+        assert_eq!(
+            batch
+                .columns
+                .iter()
+                .map(|column| column.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["id", "payload"]
+        );
+        assert_eq!(batch.rows.len(), response.query_result.rows.len());
+        assert_eq!(
+            batch.rows[0].cells[1],
+            db_value::CellState::Decoded(db_value::DbValue::Binary(vec![1, 2, 3]))
+        );
+    }
+
+    #[test]
+    fn stripping_without_typed_batch_keeps_it_absent() {
+        let response = response(
+            vec!["__rowid__", "id"],
+            vec![
+                QueryColumnMeta::new("__rowid__", "bigint"),
+                QueryColumnMeta::new("id", "bigint"),
+            ],
+            vec![vec![Some("99"), Some("1")]],
+        );
+
+        let response = strip_internal_compare_columns(response);
+
+        assert!(response.query_result.typed_batch().is_none());
+    }
+
+    #[test]
+    fn appending_resyncs_typed_batch_rows_across_pages() {
+        let mut first = response(
+            vec!["id"],
+            vec![QueryColumnMeta::new("id", "int")],
+            vec![vec![Some("1")]],
+        );
+        first.total_count = 2;
+        first.query_result.typed_batch = Some(typed_batch(
+            &["id"],
+            vec![vec![db_value::CellState::Decoded(
+                db_value::DbValue::Integer("1".to_string()),
+            )]],
+        ));
+        let mut second = response(
+            vec!["id"],
+            vec![QueryColumnMeta::new("id", "int")],
+            vec![vec![Some("2")]],
+        );
+        second.total_count = 2;
+        second.query_result.typed_batch = Some(typed_batch(
+            &["id"],
+            vec![vec![db_value::CellState::Decoded(
+                db_value::DbValue::Integer("2".to_string()),
+            )]],
+        ));
+        let mut accumulated = None;
+
+        append_table_data_page(&mut accumulated, first).unwrap();
+        append_table_data_page(&mut accumulated, second).unwrap();
+
+        let accumulated = accumulated.unwrap();
+        let batch = accumulated
+            .query_result
+            .typed_batch()
+            .expect("typed batch must survive page accumulation");
+        assert_eq!(batch.rows.len(), accumulated.query_result.rows.len());
+        assert_eq!(batch.rows.len(), 2);
+    }
+
+    #[test]
+    fn appending_later_page_typed_batch_materializes_combined_batch() {
+        let mut first = response(
+            vec!["id"],
+            vec![QueryColumnMeta::new("id", "int")],
+            vec![vec![Some("1")]],
+        );
+        first.total_count = 2;
+        let mut second = response(
+            vec!["id"],
+            vec![QueryColumnMeta::new("id", "int")],
+            vec![vec![Some("2")]],
+        );
+        second.total_count = 2;
+        second.query_result.typed_batch = Some(typed_batch(
+            &["id"],
+            vec![vec![db_value::CellState::Decoded(
+                db_value::DbValue::Integer("2".to_string()),
+            )]],
+        ));
+        let mut accumulated = None;
+
+        append_table_data_page(&mut accumulated, first).unwrap();
+        append_table_data_page(&mut accumulated, second).unwrap();
+
+        let accumulated = accumulated.unwrap();
+        assert!(accumulated.query_result.typed_batch().is_some());
+        assert_eq!(
+            accumulated.query_result.typed_batch().unwrap().rows.len(),
+            2
+        );
     }
 
     #[test]

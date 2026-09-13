@@ -13,19 +13,8 @@ use gpui::{
     App, AppContext, AsyncApp, Axis, Context, Entity, EventEmitter, FocusHandle, Focusable,
     IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Window, div, px,
 };
-use gpui_component::{
-    ActiveTheme, IconName, Sizable, Size,
-    button::{Button, ButtonVariants as _},
-    checkbox::Checkbox,
-    form::{Field, field, v_form},
-    h_flex,
-    input::{Input, InputState, Textarea},
-    radio::Radio,
-    scroll::ScrollableElement,
-    select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
-    tab::{Tab, TabBar},
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Sizable, Size, button::{Button, ButtonVariants as _}, checkbox::Checkbox, form::{Field, field, v_form}, h_flex, input::{Input, InputState, Textarea}, radio::Radio, scroll::ScrollableElement, select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState}, tab::{Tab, TabBar}, v_flex};
+use one_assets::IconName;
 use one_core::cloud_sync::TeamOption;
 use one_core::storage::traits::Repository;
 use one_core::storage::{

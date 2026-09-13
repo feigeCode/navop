@@ -14,15 +14,8 @@ use gpui::{
     IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
     WeakEntity, Window, div, px,
 };
-use gpui_component::{
-    ActiveTheme, Disableable, IconName, IndexPath, Sizable,
-    button::{Button, ButtonVariants as _},
-    checkbox::Checkbox,
-    h_flex,
-    input::{Input, InputState, Textarea, TextareaState},
-    select::{Select, SelectItem, SelectState},
-    v_flex,
-};
+use gpui_component::{ActiveTheme, Disableable, IndexPath, Sizable, button::{Button, ButtonVariants as _}, checkbox::Checkbox, h_flex, input::{Input, InputState, Textarea, TextareaState}, select::{Select, SelectItem, SelectState}, v_flex};
+use one_assets::IconName;
 use one_core::cloud_sync::TeamOption;
 use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
 use one_core::gpui_tokio::Tokio;

@@ -32,9 +32,8 @@ use gpui_component::button::Button;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_component::notification::Notification;
-use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable, Size, h_flex, table::Column, tooltip::Tooltip, v_flex,
-};
+use gpui_component::{ActiveTheme, Icon, Sizable, Size, h_flex, table::Column, tooltip::Tooltip, v_flex};
+use one_assets::IconName;
 use gpui_component::{InteractiveElementExt, WindowExt};
 use one_core::storage::{
     ActiveConnections, ConnectionRepository, DatabaseType, DbConnectionConfig, GlobalStorageState,

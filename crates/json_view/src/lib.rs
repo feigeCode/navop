@@ -4,5 +4,9 @@ rust_i18n::i18n!("locales", fallback = "en");
 
 mod json_view;
 mod tab_content;
+mod tree;
+mod value_view;
+
+pub use value_view::{JsonDisplayMode, JsonValueView};
 
 pub use json_view::JsonFormatterView;

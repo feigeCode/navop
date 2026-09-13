@@ -13,10 +13,8 @@ use gpui::{
     InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled, WeakEntity,
     Window, div, prelude::FluentBuilder, px,
 };
-use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable, Size, WindowExt, dialog::DialogButtonProps,
-    notification::Notification, scroll::ScrollableElement as _, table::Column, v_flex,
-};
+use gpui_component::{ActiveTheme, Icon, Sizable, Size, WindowExt, dialog::DialogButtonProps, notification::Notification, scroll::ScrollableElement as _, table::Column, v_flex};
+use one_assets::IconName;
 use one_core::{
     storage::DbConnectionConfig,
     tab_container::{TabContent, TabContentEvent},

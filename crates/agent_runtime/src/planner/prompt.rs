@@ -179,6 +179,34 @@ fn push_context_message(messages: &mut Vec<Message>, text: String) {
     }
 }
 
+/// 归一化请求中的 system 消息,保证最终只保留唯一一条 system 且位于开头。
+///
+/// Qwen3 等 OpenAI 兼容模型的 chat template 要求 system 消息必须是第一条且只能
+/// 出现一次,否则会报 `System message must be at the beginning`。历史转换
+/// ([`history_to_messages`])会在前导位置产生额外的 system(例如上下文压缩摘要),
+/// 调用方拼接完 system 提示后需要用它做一次归一化。
+pub fn normalize_system_messages(messages: Vec<Message>) -> Vec<Message> {
+    let mut system_texts = Vec::new();
+    let mut non_system = Vec::with_capacity(messages.len());
+    for message in messages {
+        if message.role == Role::System {
+            let text = message.content_as_text();
+            if !text.trim().is_empty() {
+                system_texts.push(text);
+            }
+        } else {
+            non_system.push(message);
+        }
+    }
+    if system_texts.is_empty() {
+        return non_system;
+    }
+    let mut normalized = Vec::with_capacity(non_system.len() + 1);
+    normalized.push(Message::system(system_texts.join("\n\n")));
+    normalized.extend(non_system);
+    normalized
+}
+
 fn push_assistant_tool_call_message(
     messages: &mut Vec<Message>,
     call: &ToolCall,
@@ -410,6 +438,68 @@ mod tests {
         assert_eq!(messages[1].role, Role::Assistant);
         assert_eq!(messages[2].role, Role::User);
         assert!(messages[2].content_as_text().contains("count success"));
+    }
+
+    #[test]
+    fn normalize_system_messages_merges_leading_system_into_one() {
+        let messages = normalize_system_messages(vec![
+            Message::system("主系统提示"),
+            Message::system("上下文压缩摘要"),
+            Message::user("继续"),
+        ]);
+
+        let systems: Vec<&Message> = messages
+            .iter()
+            .filter(|message| message.role == Role::System)
+            .collect();
+        assert_eq!(1, systems.len());
+        assert_eq!(Role::System, messages[0].role);
+        assert!(systems[0].content_as_text().contains("主系统提示"));
+        assert!(systems[0].content_as_text().contains("上下文压缩摘要"));
+        assert_eq!(Role::User, messages[1].role);
+    }
+
+    #[test]
+    fn normalize_system_messages_moves_late_system_to_front() {
+        let messages = normalize_system_messages(vec![
+            Message::system("主系统提示"),
+            Message::user("你好"),
+            Message::system("迟到的系统说明"),
+        ]);
+
+        assert_eq!(2, messages.len());
+        assert_eq!(Role::System, messages[0].role);
+        assert!(messages[0].content_as_text().contains("迟到的系统说明"));
+        assert_eq!(Role::User, messages[1].role);
+    }
+
+    #[test]
+    fn normalize_system_messages_keeps_single_leading_system() {
+        let messages =
+            normalize_system_messages(vec![Message::system("主系统提示"), Message::user("你好")]);
+
+        assert_eq!(2, messages.len());
+        assert_eq!(Role::System, messages[0].role);
+        assert_eq!(Role::User, messages[1].role);
+    }
+
+    #[test]
+    fn compaction_summary_and_system_prompt_normalize_to_single_system() {
+        let mut history = RuntimeHistory::new();
+        history.record_context_summary("旧上下文摘要", 8);
+        history.record_user("继续");
+
+        let mut messages = vec![Message::system("主系统提示")];
+        messages.extend(history_to_messages(&history));
+        let messages = normalize_system_messages(messages);
+
+        let systems: Vec<&Message> = messages
+            .iter()
+            .filter(|message| message.role == Role::System)
+            .collect();
+        assert_eq!(1, systems.len());
+        assert!(systems[0].content_as_text().contains("旧上下文摘要"));
+        assert_eq!(Role::User, messages[1].role);
     }
 
     #[test]

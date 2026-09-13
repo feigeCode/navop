@@ -301,7 +301,8 @@ mod tests {
     }
 }
 use gpui::{App, SharedString};
-use gpui_component::{IconName, select::SelectItem};
+use gpui_component::{select::SelectItem};
+use one_assets::IconName;
 use one_core::storage::{
     ConnectionRepository, ConnectionType, GlobalStorageState, StoredConnection, traits::Repository,
 };
