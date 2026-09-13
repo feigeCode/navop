@@ -2082,7 +2082,11 @@ mod tests {
     fn native_data_driver_factories_only_keep_mongodb() {
         let source = include_str!("onetcli_app.rs");
         let init = source.find("fn init_native_data_driver_factories").unwrap();
-        let body = &source[init..];
+        let rest = &source[init..];
+        let end = rest
+            .find("pub fn refresh_keybindings")
+            .expect("next item boundary");
+        let body = &rest[..end];
 
         assert!(body.contains("MongoConnectionFactory::from_installed_root"));
         assert!(!body.contains("RedisConnectionFactory"));
