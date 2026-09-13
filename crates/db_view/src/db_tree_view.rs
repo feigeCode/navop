@@ -3209,14 +3209,14 @@ mod tests {
         let mut node = build_node(
             DbNodeType::Connection,
             "old",
-            &[(EXTERNAL_DRIVER_ICON_METADATA, "driver://old/icon")],
+            &[(EXTERNAL_DRIVER_ICON_METADATA, "driver-icons/old/icon")],
         );
         let config = external_config("demo");
         let metadata = HashMap::from([
             (EXTERNAL_DRIVER_ID_METADATA.to_string(), "demo".to_string()),
             (
                 EXTERNAL_DRIVER_ICON_METADATA.to_string(),
-                "driver://demo/icon".to_string(),
+                "driver-icons/demo/icon".to_string(),
             ),
         ]);
 
@@ -3225,7 +3225,7 @@ mod tests {
         assert_eq!("saved", node.name);
         assert_eq!(DatabaseType::external("demo"), node.database_type);
         assert_eq!(
-            Some(&"driver://demo/icon".to_string()),
+            Some(&"driver-icons/demo/icon".to_string()),
             node.metadata.get(EXTERNAL_DRIVER_ICON_METADATA)
         );
     }
@@ -3238,7 +3238,7 @@ mod tests {
             &[
                 (EXTERNAL_DRIVER_ID_METADATA, "demo"),
                 (EXTERNAL_DRIVER_NAME_METADATA, "DemoDB"),
-                (EXTERNAL_DRIVER_ICON_METADATA, "driver://demo/icon"),
+                (EXTERNAL_DRIVER_ICON_METADATA, "driver-icons/demo/icon"),
                 ("custom", "kept"),
             ],
         );

@@ -262,7 +262,7 @@ impl AssetSource for AppAssets {
 
         match self.driver.load(path) {
             Ok(Some(asset)) => {
-                if path.starts_with("driver://") {
+                if db::ipc::is_icon_asset_path(path) {
                     info!(
                         target: "driver_icon",
                         asset_path = path,
@@ -273,7 +273,7 @@ impl AssetSource for AppAssets {
                 Ok(Some(asset))
             }
             Ok(None) => {
-                if path.starts_with("driver://") {
+                if db::ipc::is_icon_asset_path(path) {
                     info!(
                         target: "driver_icon",
                         asset_path = path,

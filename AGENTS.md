@@ -617,6 +617,20 @@
 - **验证方式**：`cargo test -p redis_view`；端到端用 `simulate_input` + `advance_clock` 断言「停顿前 0 次、停顿后 1 次、回车后不再补发」，并单独加一个对照分支测试证明 `drop(Task)` 会取消定时器——这样「多写一个代次守卫」这类死代码才会在变异验证里暴露。
 - **适用范围**：`crates/redis_view/src/redis_tree_view.rs`，以及任何 GPUI 视图中的输入防抖、定时器 + 事件订阅组合。
 
+- **标题**：gpui 里「图标整块空白」先查 icon source 与 color mode 的组合，不要先怀疑布局或尺寸
+- **触发信号**：某个图标（尤其外部扩展 / 驱动 / 自定义 SVG）突然不显示，且是「什么都没有」而不是「颜色不对 / 太小」；全量替换为 `Icon::default().data(bytes)` 之后开始出现。
+- **根因 / 约束**：`gpui_component::Icon` 有两个正交维度：`IconSource::{Path, Data}` × `IconColorMode::{Mono, Color}`，其中 **`Data` + `Color` 是坏的组合**：`color_icon_content` 对 Data 走 `svg().data(data).size_full()`，而 gpui-pre 的 `Svg::paint` 把 data 分支写成 `if let Some(color) = style.text.color { paint_svg(..) }`，同时 `Interactivity::compute_style_internal` 只做 `Style::default().refine(base_style)`、**不继承父级 text color** → `None` → 整段 paint 被跳过（不是画错颜色，是根本没画）。Mono 之所以正常，是因为 `into_svg` 会显式 `.text_color(..)`。另一个独立坑：`gpui::img(path_str)` 用 `url::Url::from_str(..).is_ok()` 判 URI，`driver://x/y.svg` **会被判成 URI**（`driver://` 是合法 scheme），于是走 `Resource::Uri` 发 HTTP GET 必然失败；**同理 Windows 绝对路径 `C:\...` 也会被判成 scheme = `c`**（macOS 的 `/abs/path` 反而安全）。只有 `Resource::Embedded`（无冒号的路径串）或 `Resource::Path`（传 `PathBuf`，`Icon` 不暴露）才会进 AssetSource。此外 `svg()` 在 gpui 里本质是 alpha mask 单色着色，**想保留品牌原色只能走 `img()`**。
+- **正确做法**：图标不显示时先确认实际走了哪条来源分支（本仓 `db::ipc::display::preferred_icon_*` → `main/src/connection_visuals.rs::external_driver_icon_source` 是 **file 优先**，且 `icon_file_path_for` 不校验文件是否存在，所以 manifest 里有 `ui.icon` 就一定走 file）。修的时候让所有磁盘图标统一走 `img()`，即把「路径」表达成**无 scheme 的资产路径**再由 `AssetSource` 读盘：驱动包图标用 `db::ipc::DRIVER_ICON_ASSET_PREFIX`（`driver-icons/{id}/{resource}{ext}`，经 `IpcDriverRegistry` 解析到 `manifest_dir.join(ui.icon)`），任意本地文件用 `db::ipc::LOCAL_ICON_ASSET_PREFIX`（`local-icon/{path}`，跨平台都不会被 `is_uri` 命中），调用侧一律 `Icon::default().path(..).color()`（即 `img()`）。**禁止 `Icon::data(bytes)` + `.color()`**，也禁止 `xxx://` 形式与裸绝对路径。
+- **验证方式**：`cargo test -p db --lib ipc::`（新增 `driver_icon_asset_paths_are_never_uris`、`local_icon_asset_paths_are_never_uris_and_round_trip`、`driver_asset_source_serves_local_icon_files_and_driver_icons` 三组回归，用与 gpui 同一个 `url::Url::parse(..).is_ok()` 谓词钉住这个坑）+ `cargo test -p db_view`、`cargo test -p main --lib new_connection`；快速判定某串是否被当 URI，直接用 `target/debug/deps/liburl-*.rlib` 跑 `rustc --extern url=... probe.rs` 实测，比读 gpui 源码猜快。
+- **适用范围**：`crates/db/src/ipc/display.rs` / `resources.rs`、`main/src/connection_visuals.rs`、`main/src/new_connection/connection_kind.rs`、`crates/db_view/{database_tab,db_tree_view}.rs`，以及任何「外部扩展声明的自定义图标」「SSH 自定义图标文件」渲染路径。
+
+- **标题**：`cargo fmt` 不要带文件路径参数——本仓会重写整个 workspace，污染未提交改动
+- **触发信号**：想「只格式化我改的几个文件」而运行 `cargo fmt -- <paths>`（`--` 之后的路径**不是过滤器**，会被当成 rustfmt 附加参数作用于每个 workspace 成员的每个 target）；或想用 `rustfmt --config-path <repo>/rustfmt.toml /tmp/x.rs` 复现 rustfmt 行为、据此判断「某文件是否 rustfmt-clean」。
+- **根因 / 约束**：前者一次性改写了 172 个文件（其中 140+15 个当时是已提交、干净的文件）。后者**不可靠**：文件里若有 `mod x;`，rustfmt 在 `/tmp` 找不到同级模块会报错并跳过格式化，于是「rustfmt(副本) == 当前内容」的判据把这些文件误判成「含真实改动」。
+- **正确做法**：只格式化改动文件时用 `rustfmt --edition <edition> <file>`（直接调 rustfmt）或 `cargo fmt -p <crate>`。判断「某文件是否只是被格式化」要在**同一 crate 上下文**里做：`git worktree add --detach /tmp/wt HEAD` → 在 worktree 内 `rustfmt <file>` → 与工作区文件 `diff`；相等 ⇒ 该文件原本与 HEAD 只差格式化，可安全 `git checkout -- <file>` 精确回滚；不相等 ⇒ 含真实未提交改动，**不要回滚**，交还用户（RustRover Local History 里有「External change」版本可逐文件还原）。
+- **验证方式**：回滚后 `git diff --name-only` 只应剩下自己的改动 + 用户原有 WIP；再跑 `cargo check -p <受影响 crate>` 确认未破坏编译。
+- **适用范围**：任何 Rust 仓库的批量格式化；`rustfmt.toml` 带 `edition`/`style_edition` 时，务必用与 `cargo fmt` 相同的 `--edition` 复现行为。
+
 ### 执行原则
 
 1. 先澄清，再实现；先缩小边界，再扩展范围。

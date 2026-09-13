@@ -598,7 +598,7 @@ mod tests {
 
         assert_eq!(
             Some((
-                Some("driver://custom/icon.svg".to_string()),
+                Some("driver-icons/custom/icon.svg".to_string()),
                 Some(PathBuf::from("./icons/custom.svg"))
             )),
             icon_paths
