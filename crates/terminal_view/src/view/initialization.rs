@@ -12,6 +12,7 @@ impl TerminalView {
             stored_connection,
             sync_path_enabled,
             local_working_dir,
+            workspace_root,
             tab_index,
             duplicate_source,
             recording_playback_name,
@@ -79,7 +80,7 @@ impl TerminalView {
             );
             cx.new(|_| WorkspaceEditor::new(theme))
         });
-        let local_workspace = local_working_dir
+        let local_workspace = workspace_root
             .clone()
             .zip(workspace_editor.clone())
             .map(|(root, editor)| LocalWorkspaceSidebar { root, editor });
@@ -249,6 +250,7 @@ impl TerminalView {
             terminal_bounds: Bounds::default(),
             ime_state: None,
             history_prompt: HistoryPromptState::default(),
+            history_prompt_scroll_handle: ScrollHandle::new(),
             shell_prompt_input_active: false,
             local_command_running: false,
             last_connection_status: None,

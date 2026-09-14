@@ -638,6 +638,13 @@
 - **验证方式**：`cargo check -p one-core -p terminal_view`、`cargo test -p terminal_view --lib sidebar::tests`（含选区色 alpha 回归断言）、`cargo test -p one-core --lib tab_container sidebar`、`cargo clippy -p one-core -p terminal_view --all-targets`；手工验证需分别开终端侧边栏 AI 与数据库侧边栏 AI 拖选文字。
 - **适用范围**：`crates/terminal_view/src/sidebar/mod.rs`（终端主题 → AgentChatTheme 映射）、`crates/core/src/tab_container.rs`（贡献式侧边栏 dock）、`crates/ai_chat_view/src/theme.rs`（`text_selection` 消费点），以及任何向 gpui-component `TextViewStyle::with_selection` 传色、或在浮动覆盖容器上处理 mouse-down 的路径。
 
+- **标题**：独立 MSTSC 的凭据 target 是 `TERMSRV/<主机>`，不能带端口
+- **触发信号**：从 Navop 打开 RDP（`WindowsNative` / 独立窗口）后系统 `mstsc.exe` 仍弹「Windows 安全中心 / 输入你的凭据」要求手输密码，且用户名已预填；或反过来想把「同一主机不同端口各存一份 RDP 凭据」做成功能。
+- **根因 / 约束**：MSTSC 在 NLA 阶段查 Windows 凭据管理器时只按**主机名**匹配，`/v:<主机>:<端口>` 里的端口不参与 target，所以 `TERMSRV/192.168.111.245:3389` 永远查不到——默认端口 3389 与自定义端口都一样。截图里预填的用户名并非来自我们写入的凭据，而是 MSTSC 自己的注册表键 `HKCU\Software\Microsoft\Terminal Server Client\Servers\<主机>\UsernameHint`，因此「用户名有、密码没有」不能当凭据写对了的证据。另经对照实验确认：`CRED_TYPE_GENERIC + CRED_PERSIST_SESSION + 注释标记` 的写入方式本身能被 MSTSC 命中，问题只在 target 名。
+- **正确做法**：`mstsc_credentials()` 只拼 `TERMSRV/<host>`，`/v:` 参数继续带端口，连接目标不变；`MstscCredentialInput` 不需要 `port` 字段。副作用是同一主机不同端口无法保存不同凭据，这属 MSTSC 自身限制，不是本仓能解的。
+- **验证方式**：真机 MSTSC 无法单测，用本机 loopback + 假 RDP 服务端做对照实验：假服务端只完成 X.224 协商并声明 `PROTOCOL_HYBRID = 0x02`（**不是 0x0B，写错会被客户端回退成传统安全模式、根本不出凭据框**），按不同 target 写临时凭据后启动 `mstsc /v:127.0.0.1:<端口>`，以是否出现窗口类 `Credential Dialog Xaml Host` / 标题「Windows 安全中心」为判据：端口 3389 与 13389 下 `TERMSRV/host:port` 都弹框，`TERMSRV/host` 都不弹。单元测试用 `cargo test -p main --bin navop home::remote_desktop_window` 锁住 target 不含端口。
+- **适用范围**：`main/src/home/remote_desktop_window*`（独立 MSTSC 唤起路径），以及任何「替 MSTSC / 系统凭据管理器预写密码」的改造。
+
 ### 执行原则
 
 1. 先澄清，再实现；先缩小边界，再扩展范围。

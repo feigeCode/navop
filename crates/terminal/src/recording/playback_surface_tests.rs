@@ -163,6 +163,7 @@ fn malicious_terminal_sequences_cannot_escape_the_playback_surface() {
             | TerminalEvent::TitleChanged(_)
             | TerminalEvent::Bell
             | TerminalEvent::ChildExit(_)
+            | TerminalEvent::BackendStopped
             | TerminalEvent::ClipboardStore(_, _)
             | TerminalEvent::ClipboardLoad(_)
             | TerminalEvent::WorkingDirChanged(_)
