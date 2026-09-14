@@ -231,6 +231,7 @@ impl TerminalView {
         if command.is_none() {
             return false;
         }
+        self.scroll_history_prompt_selection_into_view();
         cx.notify();
         true
     }
@@ -239,6 +240,7 @@ impl TerminalView {
         let Some(_) = self.history_prompt.select_match(index) else {
             return;
         };
+        self.scroll_history_prompt_selection_into_view();
         cx.notify();
     }
 }

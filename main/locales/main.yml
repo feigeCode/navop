@@ -1538,6 +1538,11 @@ ConnectionType:
     en: "SSH/SFTP"
     zh-CN: "SSH/SFTP"
     zh-HK: "SSH/SFTP"
+  # 侧栏连接 tag 用短名：口语化、更易扫读
+  server:
+    en: "Server"
+    zh-CN: "服务器"
+    zh-HK: "服務器"
   redis:
     en: "Redis"
     zh-CN: "Redis"
