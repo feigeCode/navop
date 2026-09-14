@@ -3,7 +3,13 @@ use gpui::{
     FontWeight, IntoElement, ListSizingBehavior, ParentElement, Render, Styled, Window, div, px,
     uniform_list,
 };
-use gpui_component::{ActiveTheme, Disableable, Icon, Sizable, button::{Button, ButtonVariants as _}, h_flex, input::Input, v_flex};
+use gpui_component::{
+    ActiveTheme, Disableable, Icon, Sizable,
+    button::{Button, ButtonVariants as _},
+    h_flex,
+    input::Input,
+    v_flex,
+};
 use one_assets::IconName;
 use rust_i18n::t;
 use std::ops::Range;

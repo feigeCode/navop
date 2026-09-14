@@ -1,7 +1,7 @@
-use one_ui::IconSize;
 use super::*;
 use gpui_component::Selectable as _;
 use one_core::settings::ConnectionSortOrder;
+use one_ui::IconSize;
 
 impl HomePage {
     pub(super) fn render_toolbar(

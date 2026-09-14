@@ -1,8 +1,14 @@
 use gpui::prelude::FluentBuilder;
-use gpui::{
-    AnyElement, App, Context, IntoElement, ParentElement, Render, Styled, Window, div, px,
+use gpui::{AnyElement, App, Context, IntoElement, ParentElement, Render, Styled, Window, div, px};
+use gpui_component::{
+    ActiveTheme, Icon, Sizable, Size,
+    button::{Button, ButtonVariants},
+    clipboard::Clipboard,
+    h_flex,
+    popover::Popover,
+    scroll::ScrollableElement,
+    v_flex,
 };
-use gpui_component::{ActiveTheme, Icon, Sizable, Size, button::{Button, ButtonVariants}, clipboard::Clipboard, h_flex, popover::Popover, scroll::ScrollableElement, v_flex};
 use one_assets::IconName;
 use one_ui::IconButton;
 use rust_i18n::t;

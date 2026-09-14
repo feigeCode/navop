@@ -1,9 +1,9 @@
 rust_i18n::i18n!("locales", fallback = "en");
 
+mod blend;
 pub mod content_state;
 pub mod edit_table;
 pub mod file_conflict_prompt;
-mod blend;
 pub use blend::ColorMix;
 
 mod geometry;

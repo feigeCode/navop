@@ -5,9 +5,11 @@ use gpui::{
     ParentElement, RenderOnce, SharedString, Styled as _, Task, Window, div, px,
 };
 use gpui_component::list::{List, ListDelegate, ListState};
-use gpui_component::{ActiveTheme, Icon, IndexPath, Selectable, Sizable, Size, WindowExt as _, h_flex};
-use one_ui::IconSize;
+use gpui_component::{
+    ActiveTheme, Icon, IndexPath, Selectable, Sizable, Size, WindowExt as _, h_flex,
+};
 use one_assets::IconName;
+use one_ui::IconSize;
 use rust_i18n::t;
 
 const SWITCHER_WIDTH: f32 = 520.0;

@@ -6,7 +6,14 @@ use gpui::{
     App, AppContext, ClipboardItem, Context, Entity, InteractiveElement, IntoElement,
     ParentElement, Styled, Window, div, prelude::FluentBuilder, px,
 };
-use gpui_component::{ActiveTheme, IndexPath, Sizable, StyledExt, WindowExt, button::{Button, ButtonVariants}, h_flex, list::{List, ListDelegate, ListItem, ListState}, notification::Notification, v_flex};
+use gpui_component::{
+    ActiveTheme, IndexPath, Sizable, StyledExt, WindowExt,
+    button::{Button, ButtonVariants},
+    h_flex,
+    list::{List, ListDelegate, ListItem, ListState},
+    notification::Notification,
+    v_flex,
+};
 use one_assets::IconName;
 use rust_i18n::t;
 

@@ -10,6 +10,7 @@ async-trait = { workspace = true }
 gpui = { workspace = true }
 one-core = { workspace = true }
 sftp = { workspace = true }
+ftp = { workspace = true }
 ssh = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }

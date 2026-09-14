@@ -6,9 +6,9 @@ use gpui::{
 };
 use gpui_component::input::{InputEvent, InputState};
 use gpui_component::{ActiveTheme, Icon, Sizable, v_flex};
-use one_ui::IconSize;
 use one_assets::IconName;
 use one_core::tab_container::{TabContent, TabContentEvent};
+use one_ui::IconSize;
 use rust_i18n::t;
 
 use crate::state::MarketplaceLoadState;

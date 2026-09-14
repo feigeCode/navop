@@ -6,7 +6,12 @@ use gpui::{
     ParentElement, Pixels, Render, StatefulInteractiveElement, Styled, Window, div,
     prelude::FluentBuilder as _, px,
 };
-use gpui_component::{ActiveTheme, Icon, Selectable, Sizable, button::{Button, ButtonCustomVariant, ButtonVariants}, h_flex, input::Textarea};
+use gpui_component::{
+    ActiveTheme, Icon, Selectable, Sizable,
+    button::{Button, ButtonCustomVariant, ButtonVariants},
+    h_flex,
+    input::Textarea,
+};
 use one_assets::IconName;
 use rust_i18n::t;
 

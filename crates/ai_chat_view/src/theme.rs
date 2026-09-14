@@ -144,7 +144,7 @@ pub(crate) fn themed_html(
 #[cfg(test)]
 mod tests {
     use gpui::rgb;
-    
+
     use super::*;
 
     fn color(hex: u32) -> Hsla {

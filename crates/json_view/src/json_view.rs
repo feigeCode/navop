@@ -352,15 +352,7 @@ impl Render for JsonFormatterView {
                             return div().h(px(0.)).into_any_element();
                         };
                         render_flat_row(
-                            ix,
-                            row,
-                            &mono_font,
-                            fg,
-                            warn,
-                            muted_fg,
-                            success,
-                            info,
-                            &callbacks,
+                            ix, row, &mono_font, fg, warn, muted_fg, success, info, &callbacks,
                         )
                     })
                     .flex_grow_1()

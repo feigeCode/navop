@@ -1,5 +1,5 @@
-use one_ui::IconSize;
 use super::*;
+use one_ui::IconSize;
 
 /// 非卡片布局下最近区固定容量（历史行为：最多 4 条）。
 const RECENT_ROW_FALLBACK: usize = 4;

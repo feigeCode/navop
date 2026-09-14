@@ -1772,11 +1772,23 @@ fn indexed_color_to_hsla(idx: u8) -> Hsla {
                     (55.0 + v as f32 * 40.0) / 255.0
                 }
             };
-            Rgba { r: to_component(r), g: to_component(g), b: to_component(b), a: 1.0 }.into()
+            Rgba {
+                r: to_component(r),
+                g: to_component(g),
+                b: to_component(b),
+                a: 1.0,
+            }
+            .into()
         }
         232..=255 => {
             let shade = (8.0 + (idx - 232) as f32 * 10.0) / 255.0;
-            Rgba { r: shade, g: shade, b: shade, a: 1.0 }.into()
+            Rgba {
+                r: shade,
+                g: shade,
+                b: shade,
+                a: 1.0,
+            }
+            .into()
         }
     }
 }
@@ -1795,7 +1807,7 @@ mod tests {
     use alacritty_terminal::term::{Config as TermConfig, Term};
     use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor, StdSyncHandler};
     use gpui::{FontWeight, rgb};
-        use terminal::pty_backend::GpuiEventProxy;
+    use terminal::pty_backend::GpuiEventProxy;
     use tokio::sync::mpsc::unbounded_channel;
 
     struct TestTermDimensions {
@@ -2113,10 +2125,7 @@ mod tests {
             FontWeight::SEMIBOLD,
             terminal_bold_weight(rgb(0xFAFAFA).into())
         );
-        assert_eq!(
-            FontWeight::BOLD,
-            terminal_bold_weight(rgb(0x171717).into())
-        );
+        assert_eq!(FontWeight::BOLD, terminal_bold_weight(rgb(0x171717).into()));
     }
 
     #[test]

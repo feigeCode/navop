@@ -1,6 +1,6 @@
-use one_ui::IconSize;
 use super::*;
 use gpui_component::avatar::Avatar;
+use one_ui::IconSize;
 
 /// 用户行触发器：Popover 的 trigger 要求实现 Selectable，用本地包装承载。
 struct AccountTrigger {

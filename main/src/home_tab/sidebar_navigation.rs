@@ -1,7 +1,7 @@
-use one_ui::IconSize;
 use super::*;
 use crate::navigation_applications::{NavigationApplication, home_applications};
 use gpui_component::Icon;
+use one_ui::IconSize;
 
 /// 首页功能导航图标槽位尺寸（线性单色图标统一 16px）。
 const NAV_ICON_SIZE: IconSize = IconSize::Default;

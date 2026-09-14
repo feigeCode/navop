@@ -4,7 +4,7 @@ use gpui::{
     App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable, SharedString,
     Task, Window,
 };
-use gpui_component::{Icon};
+use gpui_component::Icon;
 use one_assets::IconName;
 use one_core::sidebar_contribution::SidebarContribution;
 use one_core::tab_container::{TabContent, TabContentEvent, TabContentView};

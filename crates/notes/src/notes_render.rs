@@ -6,7 +6,14 @@ use gpui::{
     Context, Entity, InteractiveElement, IntoElement, MouseButton, ParentElement, Render,
     SharedString, StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
 };
-use gpui_component::{ActiveTheme, Icon, Sizable, Size, StyledExt, button::{Button, ButtonVariants}, h_flex, menu::{ContextMenuExt, PopupMenu, PopupMenuItem}, scroll::ScrollableElement, v_flex};
+use gpui_component::{
+    ActiveTheme, Icon, Sizable, Size, StyledExt,
+    button::{Button, ButtonVariants},
+    h_flex,
+    menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
+    scroll::ScrollableElement,
+    v_flex,
+};
 use one_assets::IconName;
 use rust_i18n::t;
 use std::path::{Path, PathBuf};

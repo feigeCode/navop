@@ -2,9 +2,17 @@ use gpui::{
     Context, FontWeight, IntoElement, ParentElement, Styled, Window, div, prelude::FluentBuilder,
     px,
 };
-use gpui_component::{ActiveTheme, Disableable, Icon, Sizable, button::{Button, ButtonVariants}, h_flex, input::Input, progress::Progress, scroll::ScrollableElement, v_flex};
-use one_ui::IconSize;
+use gpui_component::{
+    ActiveTheme, Disableable, Icon, Sizable,
+    button::{Button, ButtonVariants},
+    h_flex,
+    input::Input,
+    progress::Progress,
+    scroll::ScrollableElement,
+    v_flex,
+};
 use one_assets::IconName;
+use one_ui::IconSize;
 use one_ui::{ContentState, PanelHeader, PanelHeaderVariant};
 use rust_i18n::t;
 

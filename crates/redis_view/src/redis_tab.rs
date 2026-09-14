@@ -17,7 +17,6 @@ use gpui::{
     Render, SharedString, Style, Styled, Subscription, Task, Window, div, px,
 };
 use gpui_component::{ActiveTheme, ElementExt as _, Icon, Sizable, h_flex};
-use one_ui::IconSize;
 use one_assets::IconName;
 use one_core::gpui_tokio::Tokio;
 use one_core::layout::{
@@ -31,6 +30,7 @@ use one_core::storage::{ActiveConnections, StoredConnection, Workspace};
 use one_core::tab_container::{
     TabContainer, TabContainerEvent, TabContent, TabContentEvent, TabItem,
 };
+use one_ui::IconSize;
 use one_ui::resize_handle::{HandlePlacement, ResizePanel, resize_handle};
 use tracing::warn;
 

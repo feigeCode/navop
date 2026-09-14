@@ -1,5 +1,5 @@
 use gpui::{Entity, Window};
-use gpui_component::{menu::{PopupMenu, PopupMenuItem}};
+use gpui_component::menu::{PopupMenu, PopupMenuItem};
 use one_assets::IconName;
 use rust_i18n::t;
 

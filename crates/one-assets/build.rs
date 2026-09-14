@@ -1,9 +1,4 @@
-use std::{
-    env,
-    fmt::Write,
-    fs,
-    path::PathBuf,
-};
+use std::{env, fmt::Write, fs, path::PathBuf};
 
 /// Convert an SVG filename to PascalCase identifier (see the fork's
 /// `icon_named!` macro for the original behavior).

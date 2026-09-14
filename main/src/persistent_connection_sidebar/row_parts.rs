@@ -1,6 +1,9 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::{AnyElement, IntoElement, ParentElement, Styled, div, px};
-use gpui_component::{ActiveTheme, Icon, Sizable, Size, button::{Button, ButtonVariants as _}};
+use gpui_component::{
+    ActiveTheme, Icon, Sizable, Size,
+    button::{Button, ButtonVariants as _},
+};
 use one_assets::IconName;
 use rust_i18n::t;
 

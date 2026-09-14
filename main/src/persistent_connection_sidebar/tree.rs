@@ -1,14 +1,11 @@
 use std::ops::Range;
 
 use gpui::prelude::FluentBuilder as _;
-use gpui::{
-    AnyElement, IntoElement, ListSizingBehavior, ParentElement, Styled, div,
-    uniform_list,
-};
+use gpui::{AnyElement, IntoElement, ListSizingBehavior, ParentElement, Styled, div, uniform_list};
 use gpui_component::{Icon, Sizable, StyledExt, h_flex, input::Input, v_flex};
 use one_assets::IconName;
-use one_ui::IconSize;
 use one_core::settings::{AppSettings, ConnectionSortOrder};
+use one_ui::IconSize;
 use rust_i18n::t;
 
 use crate::connection_sort::{connection_name_cmp, lru_sort_key};

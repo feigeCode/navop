@@ -89,10 +89,22 @@ mod tests {
         ] {
             assert_eq!(icon.color_mode(), gpui_component::IconColorMode::Color);
         }
-        assert_eq!(IconName::RdpLine.color_mode(), gpui_component::IconColorMode::Mono);
-        assert_eq!(IconName::VncLine.color_mode(), gpui_component::IconColorMode::Mono);
-        assert_eq!(IconName::Monitor.color_mode(), gpui_component::IconColorMode::Mono);
-        assert_eq!(IconName::Paste.color_mode(), gpui_component::IconColorMode::Mono);
+        assert_eq!(
+            IconName::RdpLine.color_mode(),
+            gpui_component::IconColorMode::Mono
+        );
+        assert_eq!(
+            IconName::VncLine.color_mode(),
+            gpui_component::IconColorMode::Mono
+        );
+        assert_eq!(
+            IconName::Monitor.color_mode(),
+            gpui_component::IconColorMode::Mono
+        );
+        assert_eq!(
+            IconName::Paste.color_mode(),
+            gpui_component::IconColorMode::Mono
+        );
     }
 
     #[test]

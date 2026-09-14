@@ -6,8 +6,8 @@ use crate::persistent_connection_sidebar::{
 };
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext, AsyncApp, Context, Entity, ExternalPaths, InteractiveElement,
-    IntoElement, KeyBinding, Keystroke, ParentElement, Render, Styled, Task, Window, actions, div,
+    App, AppContext, AsyncApp, Context, Entity, ExternalPaths, InteractiveElement, IntoElement,
+    KeyBinding, Keystroke, ParentElement, Render, Styled, Task, Window, actions, div,
 };
 use gpui_component::{WindowExt, dialog::DialogButtonProps, kbd::Kbd, notification::Notification};
 use one_core::gpui_tokio::{JoinError, Tokio};
@@ -1368,7 +1368,11 @@ impl OnetCliApp {
             {
                 container = container
                     .with_macos_titlebar_inset(true)
-                    .with_left_padding(one_ui::theme_geometry().layout.macos_title_bar_content_padding)
+                    .with_left_padding(
+                        one_ui::theme_geometry()
+                            .layout
+                            .macos_title_bar_content_padding,
+                    )
                     .with_top_padding(px(4.0));
             }
 
@@ -2294,7 +2298,9 @@ impl Render for OnetCliApp {
         #[cfg(target_os = "macos")]
         if sidebar_expanded {
             let tab_bar_left_padding = if auto_hide_tree {
-                one_ui::theme_geometry().layout.macos_title_bar_content_padding
+                one_ui::theme_geometry()
+                    .layout
+                    .macos_title_bar_content_padding
             } else {
                 px(0.0)
             };

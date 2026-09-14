@@ -34,12 +34,15 @@ use ai_chat_view::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, AnyView, App, AppContext as _, Context, Entity, EventEmitter,
-    FocusHandle, Focusable, IntoElement, ParentElement, Pixels, Render, SharedString, Styled,
-    Subscription, Window, div,
+    AnyElement, AnyView, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle,
+    Focusable, IntoElement, ParentElement, Pixels, Render, SharedString, Styled, Subscription,
+    Window, div,
 };
-use gpui_component::{ActiveTheme, Icon, Selectable, Sizable, Size, button::{ButtonCustomVariant, ButtonVariants}, h_flex, v_flex};
-use one_ui::IconSize;
+use gpui_component::{
+    ActiveTheme, Icon, Selectable, Sizable, Size,
+    button::{ButtonCustomVariant, ButtonVariants},
+    h_flex, v_flex,
+};
 use one_assets::IconName;
 use one_core::layout::TOOLBAR_WIDTH;
 use one_core::sidebar_contribution::SidebarPlacement;
@@ -47,6 +50,7 @@ use one_core::storage::{
     ConnectionRepository, GlobalStorageState, TerminalHistoryScope, models::StoredConnection,
     traits::Repository,
 };
+use one_ui::IconSize;
 use one_ui::{
     IconButton, IconButtonRole, IconSize as OneIconSize, PanelHeader, PanelHeaderVariant,
 };
@@ -1698,7 +1702,7 @@ mod tests {
     use gpui_component::{Theme, ThemeColor};
     use one_core::sidebar_contribution::SidebarPlacement;
     use one_core::storage::{ConnectionType, StoredConnection};
-        use terminal::terminal::TerminalConnectionKind;
+    use terminal::terminal::TerminalConnectionKind;
 
     fn stored_connection(id: i64, name: &str, connection_type: ConnectionType) -> StoredConnection {
         StoredConnection {

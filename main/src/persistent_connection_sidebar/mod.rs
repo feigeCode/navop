@@ -1,9 +1,8 @@
 use gpui::{
-    AnyElement, AppContext, Context, Entity, EventEmitter, Hsla, InteractiveElement,
-    IntoElement, ParentElement, Pixels, Styled, UniformListScrollHandle, Window, div, px, hsla};
-use gpui_component::{
-    input::{InputEvent, InputState},
+    AnyElement, AppContext, Context, Entity, EventEmitter, Hsla, InteractiveElement, IntoElement,
+    ParentElement, Pixels, Styled, UniformListScrollHandle, Window, div, hsla, px,
 };
+use gpui_component::input::{InputEvent, InputState};
 use terminal_view::TerminalColors;
 
 use crate::home_tab::HomePage;
@@ -91,7 +90,12 @@ impl From<&TerminalColors> for SidebarPalette {
 /// terminal themes.
 fn shade(color: Hsla, dark_mode: bool) -> Hsla {
     let amount = if dark_mode { -0.02 } else { -0.015 };
-    hsla(color.h, color.s, (color.l + amount).clamp(0.0, 1.0), color.a)
+    hsla(
+        color.h,
+        color.s,
+        (color.l + amount).clamp(0.0, 1.0),
+        color.a,
+    )
 }
 
 /// 浮动连接树卡片与窗口边缘的间距（像素）。

@@ -10,7 +10,18 @@ use gpui::{
     SharedString, StatefulInteractiveElement, Styled, Task, UniformListScrollHandle, Window, div,
     prelude::FluentBuilder, px, uniform_list,
 };
-use gpui_component::{ActiveTheme, Disableable, Icon, Side, Sizable, Size, button::{Button, ButtonVariants as _}, clipboard::Clipboard, h_flex, input::{Input, InputEvent, InputState}, menu::{ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem}, popover::Popover, scroll::ScrollableElement, spinner::Spinner, v_flex};
+use gpui_component::{
+    ActiveTheme, Disableable, Icon, Side, Sizable, Size,
+    button::{Button, ButtonVariants as _},
+    clipboard::Clipboard,
+    h_flex,
+    input::{Input, InputEvent, InputState},
+    menu::{ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem},
+    popover::Popover,
+    scroll::ScrollableElement,
+    spinner::Spinner,
+    v_flex,
+};
 use one_assets::IconName;
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::{ActiveConnections, StoredConnection};
@@ -1903,7 +1914,13 @@ impl RedisTreeView {
                         .iter()
                         .map(|child| child.id.clone())
                         .collect::<Vec<_>>();
-                    (node.is_expandable(), matches, child_ids, is_load_more, is_structural)
+                    (
+                        node.is_expandable(),
+                        matches,
+                        child_ids,
+                        is_load_more,
+                        is_structural,
+                    )
                 }
                 None => return,
             };
@@ -3477,13 +3494,7 @@ mod tests {
             tree.expanded_nodes.insert(db_node_id.clone());
             tree.nodes.insert(
                 "conn".to_string(),
-                RedisNode::new(
-                    "conn",
-                    "redis-master",
-                    RedisNodeType::Connection,
-                    "conn",
-                    0,
-                ),
+                RedisNode::new("conn", "redis-master", RedisNodeType::Connection, "conn", 0),
             );
             // 走真实挂载路径：set_current_database_node 也是把 db 节点挂到连接下
             tree.set_node_children(
