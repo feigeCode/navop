@@ -24,7 +24,10 @@ impl LoadedShellView {
     pub(crate) fn view(&self) -> &gpui::Entity<gpui_shell::ScriptView> {
         self.loaded.view()
     }
+    /// 先取消 mount 内所有在飞行中的 provider 调用,再 retire 脚本 view,
+    /// 避免迟到的 continuation 在关闭中的 session 上继续发请求。
     pub(crate) fn unload(&mut self, cx: &mut App) {
+        self.session.cancel();
         self.loaded.unload(cx);
     }
     pub(crate) fn session(&self) -> Arc<ShellMountSession> {
@@ -111,6 +114,7 @@ fn load_with_session_and_connection(
             handle,
             descriptor,
             page_context,
+            session.call_token(),
             host.tokio.clone(),
         ))?;
     }

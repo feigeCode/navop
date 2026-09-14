@@ -1,4 +1,23 @@
+use std::time::Duration;
+
 use super::*;
+
+/// provider 侧关闭的总预算;超时后放弃剩余句柄,交由 runtime 最终 shutdown 兜底。
+const CLOSE_ALL_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// 从 resource 记录派生、需要在 provider 侧一并关闭的子句柄。
+#[derive(Default)]
+pub(crate) struct ScopedHandles {
+    pub(super) blobs: Vec<ProviderHandle>,
+    pub(super) events: Vec<ProviderHandle>,
+    pub(super) jobs: Vec<JobHandle>,
+}
+
+impl ScopedHandles {
+    pub(crate) async fn close(self, service: &UniversalPluginService) {
+        close_all(service, Vec::new(), self.blobs, self.events, self.jobs).await;
+    }
+}
 
 pub(super) fn new_handle(kind: &str) -> String {
     format!("{kind}-{}", uuid::Uuid::new_v4())
@@ -28,21 +47,47 @@ pub(super) fn remove_matching(
     }
 }
 
+/// 取出派生自 `resource` 的所有记录;其余记录原位保留。
+pub(super) fn drain_scoped(
+    registry: &Mutex<HashMap<String, ProviderHandle>>,
+    resource: &str,
+) -> Vec<ProviderHandle> {
+    let Ok(mut records) = registry.lock() else {
+        return Vec::new();
+    };
+    let (scoped, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut *records)
+        .into_iter()
+        .partition(|(_, record)| record.resource.as_deref() == Some(resource));
+    records.extend(rest);
+    scoped.into_iter().map(|(_, record)| record).collect()
+}
+
 impl ShellMountSession {
+    /// 先取消所有在飞行中的调用,再在有界时间内关闭 provider 侧句柄。
     pub(crate) async fn close_all(&self) {
-        close_all(
+        self.cancel();
+        let closing = close_all(
             &self.service,
             take_provider_handles(&self.resources),
             take_provider_handles(&self.blobs),
             take_provider_handles(&self.events),
             take_jobs(&self.jobs),
-        )
-        .await;
+        );
+        if tokio::time::timeout(CLOSE_ALL_TIMEOUT, closing)
+            .await
+            .is_err()
+        {
+            tracing::warn!(
+                timeout_secs = CLOSE_ALL_TIMEOUT.as_secs(),
+                "shell mount cleanup timed out; remaining provider handles left to runtime shutdown"
+            );
+        }
     }
 }
 
 impl Drop for ShellMountSession {
     fn drop(&mut self) {
+        self.cancel();
         let resources = take_provider_handles(&self.resources);
         let blobs = take_provider_handles(&self.blobs);
         let events = take_provider_handles(&self.events);
@@ -52,7 +97,11 @@ impl Drop for ShellMountSession {
         }
         let service = self.service.clone();
         self.tokio.spawn(async move {
-            close_all(&service, resources, blobs, events, jobs).await;
+            let _ = tokio::time::timeout(
+                CLOSE_ALL_TIMEOUT,
+                close_all(&service, resources, blobs, events, jobs),
+            )
+            .await;
         });
     }
 }
@@ -154,6 +203,35 @@ fn current_client(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    fn record(resource: Option<&str>) -> ProviderHandle {
+        ProviderHandle {
+            alias: "search".into(),
+            runtime_id: "ext::provider".into(),
+            generation: 1,
+            provider_id: new_handle("p"),
+            owned: true,
+            resource: resource.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn drain_scoped_only_takes_records_derived_from_the_resource() {
+        let registry = Mutex::new(HashMap::from([
+            ("a".to_string(), record(Some("resource-1"))),
+            ("b".to_string(), record(Some("resource-2"))),
+            ("c".to_string(), record(Some("resource-1"))),
+        ]));
+
+        let drained = drain_scoped(&registry, "resource-1");
+
+        assert_eq!(drained.len(), 2);
+        let remaining = registry.lock().unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert!(remaining.contains_key("b"));
+    }
+
     #[test]
     fn borrowed_resource_cleanup_guard_is_present() {
         let source = include_str!("cleanup.rs");

@@ -8,9 +8,21 @@ pub(super) fn host_to_json(value: &HostValue) -> Result<serde_json::Value, HostE
     Ok(match value {
         HostValue::Null => serde_json::Value::Null,
         HostValue::Bool(value) => serde_json::Value::Bool(*value),
-        HostValue::Number(value) => serde_json::Number::from_f64(*value)
-            .map(serde_json::Value::Number)
-            .ok_or_else(|| HostError::new("number is not finite"))?,
+        HostValue::Number(value) => {
+            // JS 数字统一是 f64,但 JSON 语义下整数值必须序列化为整数
+            // (等价于 JSON.stringify(49.0) === "49"),否则字节体 `[49,49]`
+            // 会变成 `[49.0,49.0]`,对端 `Vec<u8>` 反序列化报 "invalid number"。
+            if value.is_finite()
+                && value.fract() == 0.0
+                && value.abs() <= MAX_SAFE_INTEGER as f64
+            {
+                serde_json::Value::Number(serde_json::Number::from(*value as i64))
+            } else {
+                serde_json::Number::from_f64(*value)
+                    .map(serde_json::Value::Number)
+                    .ok_or_else(|| HostError::new("number is not finite"))?
+            }
+        }
         HostValue::Str(value) => serde_json::Value::String(value.clone()),
         HostValue::Array(values) => {
             serde_json::Value::Array(values.iter().map(host_to_json).collect::<Result<_, _>>()?)
@@ -115,5 +127,29 @@ mod tests {
 
         assert_eq!(Some("u64"), host.get("$navop").and_then(HostValue::as_str));
         assert_eq!(json, host_to_json(&host).unwrap());
+    }
+
+    #[test]
+    fn integral_host_numbers_serialize_as_json_integers() {
+        // 字节体场景:UI 传来的 [49,49] 必须落成 JSON 整数,而不是 49.0。
+        let bytes = HostValue::Array(vec![
+            HostValue::Number(49.0),
+            HostValue::Number(49.0),
+            HostValue::Number(-1.0),
+        ]);
+        let json = host_to_json(&bytes).unwrap();
+        assert_eq!(serde_json::json!([49, 49, -1]), json);
+        assert!(json.to_string().contains("[49,49,-1]"));
+
+        // 整数值超出 JS 安全整数范围时保持浮点表示。
+        let huge = host_to_json(&HostValue::Number(9_007_199_254_740_992.0)).unwrap();
+        assert_eq!(huge.to_string(), "9007199254740992.0");
+
+        // 小数保持浮点表示。
+        let frac = host_to_json(&HostValue::Number(1.5)).unwrap();
+        assert_eq!(frac.to_string(), "1.5");
+
+        // 非有限数仍然报错。
+        assert!(host_to_json(&HostValue::Number(f64::NAN)).is_err());
     }
 }

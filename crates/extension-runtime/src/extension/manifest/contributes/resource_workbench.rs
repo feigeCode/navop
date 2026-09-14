@@ -297,6 +297,8 @@ pub struct ResourceWorkbenchColumn {
     pub style: Option<String>,
 }
 
+/// query 页面的输入字段。`editor` 取值:`text`(默认)/`textarea`/`password`/
+/// `number`/`select`/`checkbox`;`select` 需配 `options`,`checkbox` 提交 "true"/"false"。
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceWorkbenchInput {
@@ -308,4 +310,25 @@ pub struct ResourceWorkbenchInput {
     pub default: Option<String>,
     #[serde(default)]
     pub required: bool,
+    /// 显示名;缺省用 id。
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub placeholder: Option<String>,
+    /// 字段下方的提示文案。
+    #[serde(default)]
+    pub description: Option<String>,
+    /// `select` 编辑器的候选项。
+    #[serde(default)]
+    pub options: Vec<ResourceWorkbenchInputOption>,
+    /// `textarea` 行数;缺省 4。
+    #[serde(default)]
+    pub rows: Option<usize>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceWorkbenchInputOption {
+    pub value: String,
+    pub label: String,
 }

@@ -308,7 +308,16 @@ impl ManagedUniversalPluginClient {
         &self,
         params: &JobStartParams,
     ) -> Result<JobActivationHandle, HostError> {
-        let result = self.client.start_job(params).await?;
+        self.start_job_with_options(params, RequestOptions::default())
+            .await
+    }
+
+    pub async fn start_job_with_options(
+        &self,
+        params: &JobStartParams,
+        options: RequestOptions,
+    ) -> Result<JobActivationHandle, HostError> {
+        let result = self.client.start_job_with_options(params, options).await?;
         let Some(jobs) = &self.jobs else {
             return Ok(JobActivationHandle {
                 extension_id: self.extension_id.clone(),
@@ -341,12 +350,24 @@ impl ManagedUniversalPluginClient {
         &self,
         handle: &JobActivationHandle,
     ) -> Result<JobStatusResult, HostError> {
+        self.job_status_with_options(handle, RequestOptions::default())
+            .await
+    }
+
+    pub async fn job_status_with_options(
+        &self,
+        handle: &JobActivationHandle,
+        options: RequestOptions,
+    ) -> Result<JobStatusResult, HostError> {
         self.validate_job(handle)?;
         let result = self
             .client
-            .job_status(&JobStatusParams {
-                job_id: handle.job_id.clone(),
-            })
+            .job_status_with_options(
+                &JobStatusParams {
+                    job_id: handle.job_id.clone(),
+                },
+                options,
+            )
             .await?;
         if let Some(jobs) = &self.jobs {
             jobs.update_status(handle, &result)?;
@@ -355,11 +376,23 @@ impl ManagedUniversalPluginClient {
     }
 
     pub async fn cancel_job(&self, handle: &JobActivationHandle) -> Result<(), HostError> {
+        self.cancel_job_with_options(handle, RequestOptions::default())
+            .await
+    }
+
+    pub async fn cancel_job_with_options(
+        &self,
+        handle: &JobActivationHandle,
+        options: RequestOptions,
+    ) -> Result<(), HostError> {
         self.validate_job(handle)?;
         self.client
-            .cancel_job(&JobCancelParams {
-                job_id: handle.job_id.clone(),
-            })
+            .cancel_job_with_options(
+                &JobCancelParams {
+                    job_id: handle.job_id.clone(),
+                },
+                options,
+            )
             .await
     }
 
@@ -367,12 +400,24 @@ impl ManagedUniversalPluginClient {
         &self,
         handle: &JobActivationHandle,
     ) -> Result<JobResultResult, HostError> {
+        self.job_result_with_options(handle, RequestOptions::default())
+            .await
+    }
+
+    pub async fn job_result_with_options(
+        &self,
+        handle: &JobActivationHandle,
+        options: RequestOptions,
+    ) -> Result<JobResultResult, HostError> {
         self.validate_job(handle)?;
         let result = self
             .client
-            .job_result(&JobResultParams {
-                job_id: handle.job_id.clone(),
-            })
+            .job_result_with_options(
+                &JobResultParams {
+                    job_id: handle.job_id.clone(),
+                },
+                options,
+            )
             .await?;
         self.validate_job(handle)?;
         if let Some(jobs) = &self.jobs {
@@ -382,12 +427,24 @@ impl ManagedUniversalPluginClient {
     }
 
     pub async fn close_job(&self, handle: &JobActivationHandle) -> Result<(), HostError> {
+        self.close_job_with_options(handle, RequestOptions::default())
+            .await
+    }
+
+    pub async fn close_job_with_options(
+        &self,
+        handle: &JobActivationHandle,
+        options: RequestOptions,
+    ) -> Result<(), HostError> {
         self.validate_job(handle)?;
         let result = self
             .client
-            .close_job(&JobCloseParams {
-                job_id: handle.job_id.clone(),
-            })
+            .close_job_with_options(
+                &JobCloseParams {
+                    job_id: handle.job_id.clone(),
+                },
+                options,
+            )
             .await;
         self.cleanup_job(handle);
         result
@@ -431,7 +488,19 @@ impl ManagedUniversalPluginClient {
         &self,
         params: &EventOpenParams,
     ) -> Result<EventOpenResult, HostError> {
-        let result = self.client.open_event_stream(params).await?;
+        self.open_event_stream_with_options(params, RequestOptions::default())
+            .await
+    }
+
+    pub async fn open_event_stream_with_options(
+        &self,
+        params: &EventOpenParams,
+        options: RequestOptions,
+    ) -> Result<EventOpenResult, HostError> {
+        let result = self
+            .client
+            .open_event_stream_with_options(params, options)
+            .await?;
         if let Err(error) = self.register_event_stream(&result) {
             // Registration can fail after the provider has already allocated a
             // stream. Always attempt provider-side cleanup before surfacing the
@@ -480,8 +549,20 @@ impl ManagedUniversalPluginClient {
     /// Host cleanup happens even when provider close fails; the process may be
     /// gone, and retaining a permanently unusable stream would leak capacity.
     pub async fn close_event_stream(&self, params: &EventCloseParams) -> Result<(), HostError> {
+        self.close_event_stream_with_options(params, RequestOptions::default())
+            .await
+    }
+
+    pub async fn close_event_stream_with_options(
+        &self,
+        params: &EventCloseParams,
+        options: RequestOptions,
+    ) -> Result<(), HostError> {
         self.ensure_event_close(params)?;
-        let result = self.client.close_event_stream(params).await;
+        let result = self
+            .client
+            .close_event_stream_with_options(params, options)
+            .await;
         self.complete_event_stream(&params.stream_id);
         result
     }
@@ -542,6 +623,15 @@ impl ManagedUniversalPluginClient {
     /// a provider, which prevents a replacement process from minting an id that
     /// reads data from another generation's host cache.
     pub async fn read_blob(&self, params: &BlobReadParams) -> Result<BlobReadResult, HostError> {
+        self.read_blob_with_options(params, RequestOptions::default())
+            .await
+    }
+
+    pub async fn read_blob_with_options(
+        &self,
+        params: &BlobReadParams,
+        options: RequestOptions,
+    ) -> Result<BlobReadResult, HostError> {
         if let Some(blobs) = self
             .blobs
             .as_ref()
@@ -549,11 +639,20 @@ impl ManagedUniversalPluginClient {
         {
             return blobs.read(&self.owner(), params).map_err(host_blob_error);
         }
-        self.client.read_blob(params).await
+        self.client.read_blob_with_options(params, options).await
     }
 
     /// Closes either a provider-owned blob or the matching host-owned blob.
     pub async fn close_blob(&self, params: &BlobCloseParams) -> Result<(), HostError> {
+        self.close_blob_with_options(params, RequestOptions::default())
+            .await
+    }
+
+    pub async fn close_blob_with_options(
+        &self,
+        params: &BlobCloseParams,
+        options: RequestOptions,
+    ) -> Result<(), HostError> {
         if let Some(blobs) = self
             .blobs
             .as_ref()
@@ -561,7 +660,7 @@ impl ManagedUniversalPluginClient {
         {
             return blobs.close(&self.owner(), params).map_err(host_blob_error);
         }
-        self.client.close_blob(params).await
+        self.client.close_blob_with_options(params, options).await
     }
 
     fn owner(&self) -> crate::BlobOwner {

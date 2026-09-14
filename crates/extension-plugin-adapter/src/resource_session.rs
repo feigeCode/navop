@@ -184,11 +184,21 @@ impl ResourceSessionHandle {
     }
 
     pub fn scope(&self, page_id: impl Into<String>, mount_id: u64) -> ResourceScope {
+        self.scope_with_cancel(page_id, mount_id, CancellationToken::new())
+    }
+
+    /// 用调用方提供的取消令牌构造 scope;令牌取消时 scope 内的 dispatch 随之中断。
+    pub fn scope_with_cancel(
+        &self,
+        page_id: impl Into<String>,
+        mount_id: u64,
+        cancellation: CancellationToken,
+    ) -> ResourceScope {
         ResourceScope {
             session: self.clone(),
             page_id: page_id.into(),
             mount_id,
-            cancellation: CancellationToken::new(),
+            cancellation,
         }
     }
 
