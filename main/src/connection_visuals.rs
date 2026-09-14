@@ -2,11 +2,11 @@ use std::path::Path;
 
 use db::ipc::{IpcDriverRegistry, driver_icon_from_asset_path, driver_icon_from_file_path};
 use gpui_component::{Icon, Sizable};
-use one_ui::IconSize;
 use one_assets::IconName;
 use one_core::storage::{
     ConnectionType, DatabaseType, DbConnectionConfig, SshParams, StoredConnection,
 };
+use one_ui::IconSize;
 use rust_i18n::t;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,6 +60,7 @@ const fn connection_type_icon_name(kind: ConnectionType) -> IconName {
         ConnectionType::PortForwarding => IconName::PortForwardingColor,
         ConnectionType::Rdp => IconName::Rdp,
         ConnectionType::Vnc => IconName::Vnc,
+        ConnectionType::Ftp => IconName::Folder,
         ConnectionType::Extension => IconName::ExtensionsColor,
     }
 }
@@ -78,6 +79,7 @@ const fn connection_type_navigation_icon_name(kind: ConnectionType) -> IconName 
         ConnectionType::PortForwarding => IconName::PortForwardingLine,
         ConnectionType::Rdp => IconName::RdpLine,
         ConnectionType::Vnc => IconName::VncLine,
+        ConnectionType::Ftp => IconName::Folder,
         ConnectionType::Extension => IconName::ExtensionsLine,
     }
 }
@@ -118,6 +120,7 @@ pub(crate) fn connection_type_label(kind: ConnectionType) -> String {
         ConnectionType::PortForwarding => t!("ConnectionType.port_forwarding"),
         ConnectionType::Rdp => t!("ConnectionType.rdp"),
         ConnectionType::Vnc => t!("ConnectionType.vnc"),
+        ConnectionType::Ftp => t!("ConnectionType.ftp"),
         ConnectionType::Extension => t!("ConnectionType.extension"),
     }
     .to_string()
@@ -353,6 +356,7 @@ mod tests {
 
     fn ssh_params() -> SshParams {
         SshParams {
+                remote_file: None,
             sftp_default_directory: None,
             disabled_jump_server: None,
             sftp_account: None,

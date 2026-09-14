@@ -1,10 +1,14 @@
 //! 连接选择器（简化版 v2 - 支持选择和切换）
 
 use gpui::{
-    AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, IntoElement,
-    ParentElement, Render, Styled, Window, div,
+    AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, IntoElement, ParentElement,
+    Render, Styled, Window, div,
 };
-use gpui_component::{ActiveTheme, Icon, Sizable, button::{Button, ButtonVariants}, h_flex, v_flex};
+use gpui_component::{
+    ActiveTheme, Icon, Sizable,
+    button::{Button, ButtonVariants},
+    h_flex, v_flex,
+};
 use one_assets::IconName;
 use one_core::storage::{ConnectionType, StoredConnection};
 use rust_i18n::t;
@@ -127,6 +131,7 @@ fn connection_type_icon(conn_type: &ConnectionType) -> Icon {
         ConnectionType::Serial => IconName::SquareTerminal.mono(),
         ConnectionType::Telnet => IconName::SquareTerminal.mono(),
         ConnectionType::PortForwarding => IconName::Network.mono(),
+        ConnectionType::Ftp => IconName::Folder.mono(),
         ConnectionType::Extension => IconName::ExtensionsLine.mono(),
         ConnectionType::All => IconName::GalleryVerticalEnd.mono(),
     }

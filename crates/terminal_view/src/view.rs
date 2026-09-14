@@ -12,14 +12,17 @@ use gpui_component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_component::notification::Notification;
 use gpui_component::scroll::{Scrollbar, ScrollbarHandle, ScrollbarMode};
 use gpui_component::slider::{Slider, SliderEvent, SliderState, SliderValue};
-use gpui_component::{ActiveTheme, Disableable, ElementExt, Icon, Selectable, Sizable, WindowExt, h_flex, kbd::Kbd, v_flex};
-use one_ui::IconSize;
+use gpui_component::{
+    ActiveTheme, Disableable, ElementExt, Icon, Selectable, Sizable, WindowExt, h_flex, kbd::Kbd,
+    v_flex,
+};
 use one_assets::IconName;
 use one_core::gpui_tokio::Tokio;
 use one_core::keybindings::{
     action_id, keystroke_matches_shortcuts, rebind_keybindings, shortcuts_for,
 };
 use one_core::settings::{AppSettings, resolve_installed_grid_monospace_font_family};
+use one_ui::IconSize;
 use std::borrow::Cow;
 use std::cell::{Cell as StdCell, RefCell};
 use std::collections::{HashMap, VecDeque};
@@ -109,7 +112,7 @@ use paste_safety::{
 };
 use remote_image_preview::image_from_local_path;
 use rust_i18n::t;
-use sftp::{RusshSftpClient, SftpClient};
+use sftp::{RemoteFileClient, RusshSftpClient, SftpClient};
 use ssh::SshSessionManager;
 use std::ops::Deref;
 use terminal::GpuiEventProxy;

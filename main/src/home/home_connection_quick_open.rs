@@ -119,6 +119,7 @@ pub(crate) fn temporary_ssh_connection(input: &str) -> Option<StoredConnection> 
         }
     );
     let params = SshParams {
+                remote_file: None,
         host,
         port,
         prompt_username: username.is_empty().then_some(true),

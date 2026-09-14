@@ -1839,6 +1839,18 @@ Connection:
       en: Username
       zh-CN: 用户名
       zh-HK: 使用者名稱
+    ftp_host:
+      en: FTP Host
+      zh-CN: FTP 主机
+      zh-HK: FTP 主機
+    ftp_port:
+      en: FTP Port
+      zh-CN: FTP 端口
+      zh-HK: FTP 埠
+    ftp_username:
+      en: FTP Username
+      zh-CN: FTP 用户名
+      zh-HK: FTP 使用者名稱
     database:
       en: Database
       zh-CN: 数据库

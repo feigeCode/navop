@@ -2,10 +2,10 @@ use anyhow::{Result, bail};
 
 use crate::storage::traits::Repository;
 use crate::storage::{
-    ConnectionType, CredentialRepository, DbConnectionConfig, MongoDBParams, ProxyConfig,
-    RedisParams, ReferencedCredentialFields, RemoteDesktopParams, SshAccountExpect, SshAuthMethod,
-    SshParams, StoredConnection, TelnetLoginStep, TelnetParams,
-    resolve_credential_reference_strict,
+    ConnectionType, CredentialRepository, DbConnectionConfig, FtpParams, MongoDBParams,
+    ProxyConfig, RedisParams, ReferencedCredentialFields, RemoteDesktopParams, RemoteFileParams,
+    RemoteFileProtocol, SshAccountExpect, SshAuthMethod, SshParams, StoredConnection,
+    TelnetLoginStep, TelnetParams, resolve_credential_reference_strict,
 };
 
 impl CredentialRepository {
@@ -31,6 +31,9 @@ impl CredentialRepository {
             ConnectionType::Telnet => {
                 serde_json::to_string(&self.resolve_telnet(connection.to_telnet_params()?)?)?
             }
+            ConnectionType::Ftp => {
+                serde_json::to_string(&self.resolve_ftp(connection.to_ftp_params()?)?)?
+            }
             ConnectionType::Rdp | ConnectionType::Vnc => serde_json::to_string(
                 &self.resolve_remote_desktop(connection.to_remote_desktop_params()?)?,
             )?,
@@ -44,6 +47,7 @@ impl CredentialRepository {
         let Some(reference) = params.credential_reference.as_ref() else {
             self.resolve_optional_proxy(params.proxy.as_mut())?;
             self.resolve_optional_jump(params.jump_server.as_mut())?;
+            self.resolve_remote_file_ftp(params.remote_file.as_mut())?;
             return Ok(params);
         };
         reject_conflicting_ssh_fields(reference)?;
@@ -62,7 +66,29 @@ impl CredentialRepository {
         }
         self.resolve_optional_proxy(params.proxy.as_mut())?;
         self.resolve_optional_jump(params.jump_server.as_mut())?;
+        self.resolve_remote_file_ftp(params.remote_file.as_mut())?;
         Ok(params)
+    }
+
+    /// 解析 SSH 连接记录上远程文件配置中的 FTP 凭据引用。
+    ///
+    /// 仅当协议为 FTP 且携带 `FtpParams.credential_reference` 时生效；
+    /// 运行时副本会写入明文用户名/密码，但调用方不得将其持久化。
+    pub fn resolve_remote_file_ftp(
+        &self,
+        remote_file: Option<&mut RemoteFileParams>,
+    ) -> Result<()> {
+        let Some(remote_file) = remote_file else {
+            return Ok(());
+        };
+        if remote_file.protocol != RemoteFileProtocol::Ftp {
+            return Ok(());
+        }
+        let Some(ftp) = remote_file.ftp.as_mut() else {
+            bail!("remote_file protocol is FTP but ftp params are missing");
+        };
+        *ftp = self.resolve_ftp(ftp.clone())?;
+        Ok(())
     }
 
     pub fn resolve_telnet(&self, mut params: TelnetParams) -> Result<TelnetParams> {
@@ -84,6 +110,26 @@ impl CredentialRepository {
             params.login_script = telnet_login_script_from_credential(credential);
         }
         params.apply_login_credentials(username, password);
+        Ok(params)
+    }
+
+    pub fn resolve_ftp(&self, mut params: FtpParams) -> Result<FtpParams> {
+        let Some(reference) = params.credential_reference.as_ref() else {
+            return Ok(params);
+        };
+        let credential = self.resolve_reference_entry(reference)?;
+        let fields = resolve_credential_reference_strict(
+            ReferencedCredentialFields::new(
+                Some(params.username.clone()),
+                Some(params.password.clone()),
+                None,
+                None,
+            ),
+            reference,
+            credential.as_ref(),
+        )?;
+        params.username = fields.username.unwrap_or_default();
+        params.password = fields.password.unwrap_or_default();
         Ok(params)
     }
 

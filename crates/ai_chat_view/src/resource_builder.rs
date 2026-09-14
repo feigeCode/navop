@@ -313,6 +313,7 @@ fn connection_type_to_resource_kind(conn_type: &ConnectionType, params: &str) ->
         ConnectionType::Serial => ResourceKind::Terminal,
         ConnectionType::Telnet => ResourceKind::Terminal,
         ConnectionType::PortForwarding => ResourceKind::Other("port-forwarding".into()),
+        ConnectionType::Ftp => ResourceKind::Other("ftp".into()),
         ConnectionType::Rdp => ResourceKind::Other("rdp".into()),
         ConnectionType::Vnc => ResourceKind::Other("vnc".into()),
         ConnectionType::Extension => {

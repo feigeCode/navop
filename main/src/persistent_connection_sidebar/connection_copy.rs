@@ -165,7 +165,7 @@ pub(super) fn connection_copy_actions(
                 actions.push(ConnectionCopyAction::Username);
             }
         }
-        ConnectionType::All | ConnectionType::Extension => {}
+        ConnectionType::All | ConnectionType::Extension | ConnectionType::Ftp => {}
     }
     actions
 }
@@ -299,7 +299,10 @@ fn connection_address(connection: &StoredConnection) -> Option<String> {
             .to_mqtt_params()
             .ok()
             .and_then(|params| optional_host_port(&params.host, Some(params.port))),
-        ConnectionType::Serial | ConnectionType::PortForwarding | ConnectionType::Extension => None,
+        ConnectionType::Serial
+        | ConnectionType::PortForwarding
+        | ConnectionType::Extension
+        | ConnectionType::Ftp => None,
         ConnectionType::Telnet => connection
             .to_telnet_params()
             .ok()
@@ -416,6 +419,7 @@ mod tests {
         StoredConnection::new_ssh(
             "SSH".to_string(),
             SshParams {
+                remote_file: None,
                 sftp_default_directory: None,
                 disabled_jump_server: None,
                 sftp_account: None,

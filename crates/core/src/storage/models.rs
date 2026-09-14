@@ -85,6 +85,7 @@ pub enum ConnectionType {
     All,
     Database,
     SshSftp,
+    Ftp,
     Redis,
     MongoDB,
     Mqtt,
@@ -102,6 +103,7 @@ impl fmt::Display for ConnectionType {
             ConnectionType::All => "All",
             ConnectionType::Database => "Database",
             ConnectionType::SshSftp => "SshSftp",
+            ConnectionType::Ftp => "Ftp",
             ConnectionType::Redis => "Redis",
             ConnectionType::MongoDB => "MongoDB",
             ConnectionType::Mqtt => "Mqtt",
@@ -121,6 +123,7 @@ impl ConnectionType {
         vec![
             ConnectionType::All,
             ConnectionType::SshSftp,
+            ConnectionType::Ftp,
             ConnectionType::Database,
             ConnectionType::Redis,
             ConnectionType::MongoDB,
@@ -137,6 +140,7 @@ impl ConnectionType {
         match s {
             "Database" => ConnectionType::Database,
             "SshSftp" => ConnectionType::SshSftp,
+            "Ftp" => ConnectionType::Ftp,
             "Redis" => ConnectionType::Redis,
             "MongoDB" => ConnectionType::MongoDB,
             "Mqtt" => ConnectionType::Mqtt,
@@ -155,6 +159,7 @@ impl ConnectionType {
             ConnectionType::All => "All",
             ConnectionType::Database => "Database",
             ConnectionType::SshSftp => "SSH/SFTP",
+            ConnectionType::Ftp => "FTP",
             ConnectionType::Redis => "Redis",
             ConnectionType::MongoDB => "MongoDB",
             ConnectionType::Mqtt => "MQTT",
@@ -172,6 +177,8 @@ impl ConnectionType {
             ConnectionType::All => IconName::Server,
             ConnectionType::Database => IconName::Database,
             ConnectionType::SshSftp => IconName::TerminalColor,
+            // FTP 无品牌图标，先复用通用文件夹图标；后续可在应用资产中补充品牌 SVG。
+            ConnectionType::Ftp => IconName::Folder,
             ConnectionType::Redis => IconName::Redis,
             ConnectionType::MongoDB => IconName::MongoDB,
             // 外部 gpui-component 未提供 MQTT 品牌图标,
@@ -529,6 +536,9 @@ pub struct SshParams {
     /// 本机自定义连接图标的绝对路径（优先于内置图标）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon_file_path: Option<String>,
+    /// 远程文件面板配置（协议选择 + FTP 参数）；旧配置缺失时默认使用 SFTP。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_file: Option<RemoteFileParams>,
 }
 
 impl SshParams {
@@ -554,11 +564,38 @@ impl SshParams {
         {
             password.clear();
         }
+        // 嵌套 FTP 参数的临时凭据同样不能持久化：
+        // 当 FTP 配置了"连接时提示输入"时，已输入的用户名/密码必须清除。
+        if let Some(ftp) = self
+            .remote_file
+            .as_mut()
+            .and_then(|remote| remote.ftp.as_mut())
+        {
+            if ftp.prompts_for_username() {
+                ftp.username.clear();
+            }
+            if ftp.prompts_for_password() {
+                ftp.password.clear();
+            }
+        }
     }
 
     /// 选择连接图标：手动指定优先，其次按探测到的操作系统 ID，未识别时默认 Linux 企鹅。
     pub fn os_icon(&self) -> IconName {
         ssh_os_icon(self.icon.as_deref().or(self.os_id.as_deref()))
+    }
+
+    /// 远程文件面板使用的协议；旧配置缺失时默认 SFTP。
+    pub fn remote_file_protocol(&self) -> RemoteFileProtocol {
+        self.remote_file
+            .as_ref()
+            .map(|params| params.protocol)
+            .unwrap_or_default()
+    }
+
+    /// FTP 模式下的 FTP 参数；协议为 SFTP 或配置缺失时为 `None`。
+    pub fn ftp_params(&self) -> Option<&FtpParams> {
+        self.remote_file.as_ref()?.ftp.as_ref()
     }
 }
 
@@ -1511,6 +1548,95 @@ impl TelnetParams {
     }
 }
 
+/// FTP 连接参数。
+///
+/// 支持显式 FTPS（FTP over TLS，AUTH TLS）；旧配置缺少字段时按默认值回落，
+/// 与其他连接参数保持同一兼容策略。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FtpParams {
+    /// 主机地址
+    #[serde(default = "default_ftp_host")]
+    pub host: String,
+    /// 端口（FTP 默认 21）
+    #[serde(default = "default_ftp_port")]
+    pub port: u16,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub password: String,
+    /// Optional field-level reference to the local credential vault.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_reference: Option<CredentialReference>,
+    /// 当前设备缺少引用的钥匙串时，仅本次连接提示输入用户名。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_username: Option<bool>,
+    /// 当前设备缺少引用的钥匙串时，仅本次连接提示输入密码。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_password: Option<bool>,
+    /// 被动模式（PASV/EPSV）；默认开启，主动模式在 NAT/防火墙后通常不可用。
+    #[serde(default = "default_true")]
+    pub passive_mode: bool,
+    /// 显式 FTPS（AUTH TLS）；默认关闭即明文 FTP。
+    #[serde(default)]
+    pub use_tls: bool,
+    /// 连接超时（秒）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connect_timeout: Option<u64>,
+}
+
+fn default_ftp_host() -> String {
+    "127.0.0.1".to_string()
+}
+
+fn default_ftp_port() -> u16 {
+    21
+}
+
+impl FtpParams {
+    pub fn prompts_for_username(&self) -> bool {
+        self.prompt_username.unwrap_or(false)
+    }
+
+    pub fn prompts_for_password(&self) -> bool {
+        self.prompt_password.unwrap_or(false)
+    }
+}
+
+/// SSH/SFTP 连接记录上远程文件面板使用的协议。
+///
+/// 一条 `ConnectionType::SshSftp` 连接记录的 SSH terminal 始终走 SSH，
+/// 远程文件面板可以在 SFTP 与 FTP/FTPS 之间选择；旧配置缺少该字段时默认 SFTP。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RemoteFileProtocol {
+    #[default]
+    Sftp,
+    Ftp,
+}
+
+impl RemoteFileProtocol {
+    pub fn is_sftp(self) -> bool {
+        matches!(self, Self::Sftp)
+    }
+
+    pub fn is_ftp(self) -> bool {
+        matches!(self, Self::Ftp)
+    }
+}
+
+/// SSH/SFTP 连接记录的远程文件配置 envelope。
+///
+/// 独立于 SSH 连接本身：只影响远程文件面板使用的协议与 FTP 参数，
+/// 不改变连接的顶层类型，FTP 不复用 SSH socket。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RemoteFileParams {
+    /// 远程文件面板使用的协议；旧配置缺失时默认 SFTP。
+    #[serde(default)]
+    pub protocol: RemoteFileProtocol,
+    /// 协议为 FTP 时的 FTP 连接参数；协议为 SFTP 时应为 `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ftp: Option<FtpParams>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TelnetExpectCredentialKind {
     Username,
@@ -2104,6 +2230,17 @@ fn default_ssh_name(name: String, params: &SshParams) -> String {
     trimmed_or_default(name, default_name)
 }
 
+fn default_ftp_name(name: String, params: &FtpParams) -> String {
+    let username = params.username.trim();
+    let destination = host_port_name(&params.host, params.port);
+    let default_name = if username.is_empty() {
+        destination
+    } else {
+        format!("{username}@{destination}")
+    };
+    trimmed_or_default(name, default_name)
+}
+
 fn default_remote_desktop_name(name: String, params: &RemoteDesktopParams) -> String {
     trimmed_or_default(name, host_port_name(&params.host, params.port))
 }
@@ -2280,6 +2417,29 @@ impl StoredConnection {
         }
     }
 
+    pub fn new_ftp(name: String, params: FtpParams, workspace_id: Option<i64>) -> Self {
+        let name = default_ftp_name(name, &params);
+        Self {
+            id: None,
+            credential_revision: None,
+            name,
+            connection_type: ConnectionType::Ftp,
+            params: serde_json::to_string(&params).expect("FtpParams 序列化不应失败"),
+            workspace_id,
+            selected_databases: None,
+            remark: None,
+            sync_enabled: true,
+            cloud_id: None,
+            last_synced_at: None,
+            last_used_at: None,
+            sort_order: None,
+            created_at: None,
+            updated_at: None,
+            team_id: None,
+            owner_id: None,
+        }
+    }
+
     pub fn new_remote_desktop(
         name: String,
         params: RemoteDesktopParams,
@@ -2380,6 +2540,24 @@ impl StoredConnection {
         let mut params: SshParams = serde_json::from_str(&self.params)?;
         params.sanitize_for_storage();
         Ok(params)
+    }
+
+    /// 远程文件面板使用的协议（仅对 `ConnectionType::SshSftp` 有意义）。
+    ///
+    /// 旧配置缺失 `remote_file` 时默认 SFTP。
+    pub fn remote_file_protocol(&self) -> Result<RemoteFileProtocol, serde_json::Error> {
+        Ok(self.to_ssh_params()?.remote_file_protocol())
+    }
+
+    /// 远程文件配置 envelope（仅对 `ConnectionType::SshSftp` 有意义）。
+    ///
+    /// 旧配置缺失时返回默认值（SFTP 协议、无 FTP 参数）。
+    pub fn remote_file_params(&self) -> Result<RemoteFileParams, serde_json::Error> {
+        Ok(self.to_ssh_params()?.remote_file.unwrap_or_default())
+    }
+
+    pub fn to_ftp_params(&self) -> Result<FtpParams, serde_json::Error> {
+        serde_json::from_str(&self.params)
     }
 
     pub fn to_remote_desktop_params(&self) -> Result<RemoteDesktopParams, serde_json::Error> {
@@ -2647,8 +2825,17 @@ mod tests {
         assert_eq!(1883, migrated.config["port"].as_u64().unwrap());
         assert_eq!("user", migrated.config["username"].as_str().unwrap());
         assert_eq!("client-1", migrated.config["client_id"].as_str().unwrap());
-        assert_eq!(Some("45"), migrated.config["keep_alive_secs"].as_u64().map(|v| v.to_string()).as_deref());
-        assert_eq!(Some("pass"), migrated.secrets.get("password").map(String::as_str));
+        assert_eq!(
+            Some("45"),
+            migrated.config["keep_alive_secs"]
+                .as_u64()
+                .map(|v| v.to_string())
+                .as_deref()
+        );
+        assert_eq!(
+            Some("pass"),
+            migrated.secrets.get("password").map(String::as_str)
+        );
 
         // 幂等:迁移后不再是 Mqtt 类型,再次调用不再迁移
         assert!(!connection.try_migrate_legacy_middleware_connection());
@@ -2656,7 +2843,10 @@ mod tests {
 
     #[test]
     fn tdengine_routes_to_external_driver() {
-        assert_eq!(Some("tdengine"), DatabaseType::TDengine.external_driver_id());
+        assert_eq!(
+            Some("tdengine"),
+            DatabaseType::TDengine.external_driver_id()
+        );
         assert!(DatabaseType::TDengine.is_external() == false);
         assert_eq!(None, DatabaseType::MySQL.external_driver_id());
     }
@@ -2665,6 +2855,7 @@ mod tests {
         let mut connection = StoredConnection::new_ssh(
             "prod-bastion".to_string(),
             SshParams {
+                remote_file: None,
                 disabled_jump_server: None,
                 sftp_default_directory: None,
                 sftp_account: None,
@@ -2860,6 +3051,7 @@ mod tests {
         );
 
         let ssh = SshParams {
+            remote_file: None,
             disabled_jump_server: None,
             sftp_default_directory: None,
             sftp_account: None,
@@ -3846,6 +4038,7 @@ mod serial_tests {
     #[test]
     fn ssh_params_os_id_round_trips_through_json() {
         let mut params = SshParams {
+            remote_file: None,
             disabled_jump_server: None,
             sftp_default_directory: None,
             sftp_account: None,
@@ -4126,6 +4319,7 @@ mod serial_tests {
         let mut connection = StoredConnection::new_ssh(
             "example".to_string(),
             SshParams {
+                remote_file: None,
                 disabled_jump_server: None,
                 sftp_default_directory: None,
                 sftp_account: None,
@@ -4458,5 +4652,186 @@ mod serial_tests {
         assert_eq!(ConnectionType::from_str("Telnet"), ConnectionType::Telnet);
         assert_eq!(format!("{}", ConnectionType::Telnet), "Telnet");
         assert!(ConnectionType::all().contains(&ConnectionType::Telnet));
+    }
+
+    fn ssh_params_for_remote_file_tests() -> SshParams {
+        SshParams {
+            remote_file: None,
+            host: "ssh.example.com".to_string(),
+            port: 22,
+            username: "deploy".to_string(),
+            auth_method: SshAuthMethod::Password {
+                password: "secret".to_string(),
+            },
+            sftp_account: None,
+            sftp_default_directory: None,
+            credential_reference: None,
+            prompt_username: None,
+            prompt_password: None,
+            keyboard_interactive: None,
+            terminal_encoding: Default::default(),
+            terminal_type: Default::default(),
+            account_expect: Default::default(),
+            connect_timeout: None,
+            keepalive_interval: None,
+            keepalive_max: None,
+            default_directory: None,
+            init_script: None,
+            disable_shell_integration: None,
+            x11_forwarding: None,
+            allow_legacy_algorithms: None,
+            jump_server: None,
+            disabled_jump_server: None,
+            proxy: None,
+            os_id: None,
+            icon: None,
+            icon_file_path: None,
+        }
+    }
+
+    #[test]
+    fn old_ssh_params_default_to_sftp() {
+        let params = ssh_params_for_remote_file_tests();
+        assert!(params.remote_file.is_none());
+        assert_eq!(params.remote_file_protocol(), RemoteFileProtocol::Sftp);
+        assert!(params.remote_file_protocol().is_sftp());
+        assert!(params.ftp_params().is_none());
+
+        // 连接 JSON 顶层缺少 remote_file 时反序列化也应默认 SFTP。
+        let json = serde_json::to_string(&params).expect("serialize SshParams");
+        assert!(!json.contains("remote_file"));
+        let parsed: SshParams = serde_json::from_str(&json).expect("deserialize SshParams");
+        assert_eq!(parsed.remote_file_protocol(), RemoteFileProtocol::Sftp);
+    }
+
+    #[test]
+    fn ftp_remote_file_params_roundtrip() {
+        let mut params = ssh_params_for_remote_file_tests();
+        params.remote_file = Some(RemoteFileParams {
+            protocol: RemoteFileProtocol::Ftp,
+            ftp: Some(FtpParams {
+                host: "ftp.example.com".to_string(),
+                port: 2121,
+                username: "deploy".to_string(),
+                password: String::new(),
+                credential_reference: None,
+                prompt_username: None,
+                prompt_password: None,
+                passive_mode: true,
+                use_tls: false,
+                connect_timeout: Some(10),
+            }),
+        });
+
+        let json = serde_json::to_string(&params).expect("serialize SshParams");
+        let parsed: SshParams = serde_json::from_str(&json).expect("deserialize SshParams");
+        assert_eq!(parsed.remote_file_protocol(), RemoteFileProtocol::Ftp);
+        let ftp = parsed.ftp_params().expect("ftp params present");
+        assert_eq!(ftp.host, "ftp.example.com");
+        assert_eq!(ftp.port, 2121);
+        assert_eq!(ftp.username, "deploy");
+        assert!(ftp.passive_mode);
+        assert!(!ftp.use_tls);
+
+        // StoredConnection 层的便捷读取。
+        let connection = StoredConnection::new_ssh("ftp-host".to_string(), parsed, None);
+        assert_eq!(connection.connection_type, ConnectionType::SshSftp);
+        assert_eq!(
+            connection.remote_file_protocol().expect("protocol"),
+            RemoteFileProtocol::Ftp
+        );
+        let envelope = connection.remote_file_params().expect("params");
+        assert_eq!(envelope.protocol, RemoteFileProtocol::Ftp);
+        assert!(envelope.ftp.is_some());
+    }
+
+    #[test]
+    fn ftp_protocol_requires_ftp_params() {
+        // 协议声明为 FTP 但缺 ftp 参数：模型层可见 ftp_params() 为 None，
+        // 上层必须返回明确错误而不是静默回退 SFTP。
+        let mut params = ssh_params_for_remote_file_tests();
+        params.remote_file = Some(RemoteFileParams {
+            protocol: RemoteFileProtocol::Ftp,
+            ftp: None,
+        });
+        assert_eq!(params.remote_file_protocol(), RemoteFileProtocol::Ftp);
+        assert!(params.ftp_params().is_none());
+
+        // SFTP 协议默认不携带 ftp 参数。
+        let mut sftp_params = ssh_params_for_remote_file_tests();
+        sftp_params.remote_file = Some(RemoteFileParams {
+            protocol: RemoteFileProtocol::Sftp,
+            ftp: None,
+        });
+        assert_eq!(sftp_params.remote_file_protocol(), RemoteFileProtocol::Sftp);
+        assert!(sftp_params.ftp_params().is_none());
+    }
+
+    fn ftp_params_for_storage_tests() -> FtpParams {
+        FtpParams {
+            host: "ftp.example".to_string(),
+            port: 21,
+            username: "ftp-user".to_string(),
+            password: "ftp-secret".to_string(),
+            credential_reference: None,
+            prompt_username: None,
+            prompt_password: None,
+            passive_mode: true,
+            use_tls: false,
+            connect_timeout: None,
+        }
+    }
+
+    #[test]
+    fn sanitize_for_storage_clears_nested_ftp_prompt_credentials() {
+        let mut params = ssh_params_for_remote_file_tests();
+        let mut ftp = ftp_params_for_storage_tests();
+        ftp.prompt_username = Some(true);
+        ftp.prompt_password = Some(true);
+        params.remote_file = Some(RemoteFileParams {
+            protocol: RemoteFileProtocol::Ftp,
+            ftp: Some(ftp),
+        });
+
+        params.sanitize_for_storage();
+
+        let ftp = params.ftp_params().expect("ftp params");
+        assert_eq!(ftp.username, "", "FTP prompt 用户名不应持久化");
+        assert_eq!(ftp.password, "", "FTP prompt 密码不应持久化");
+        // SSH 顶层凭据不受嵌套 FTP prompt 标志影响。
+        assert_eq!(params.username, "deploy");
+    }
+
+    #[test]
+    fn sanitize_for_storage_keeps_nested_ftp_credentials_without_prompt_flags() {
+        let mut params = ssh_params_for_remote_file_tests();
+        params.remote_file = Some(RemoteFileParams {
+            protocol: RemoteFileProtocol::Ftp,
+            ftp: Some(ftp_params_for_storage_tests()),
+        });
+
+        params.sanitize_for_storage();
+
+        let ftp = params.ftp_params().expect("ftp params");
+        assert_eq!(ftp.username, "ftp-user");
+        assert_eq!(ftp.password, "ftp-secret");
+    }
+
+    #[test]
+    fn params_for_storage_clears_nested_ftp_prompt_credentials() {
+        let mut params = ssh_params_for_remote_file_tests();
+        let mut ftp = ftp_params_for_storage_tests();
+        ftp.prompt_password = Some(true);
+        params.remote_file = Some(RemoteFileParams {
+            protocol: RemoteFileProtocol::Ftp,
+            ftp: Some(ftp),
+        });
+        let connection = StoredConnection::new_ssh("ftp-over-ssh".to_string(), params, None);
+
+        let stored = connection.params_for_storage();
+        let params: SshParams = serde_json::from_str(&stored).unwrap();
+        let ftp = params.ftp_params().expect("ftp params");
+        assert_eq!(ftp.username, "ftp-user", "未启用 prompt 的字段保留");
+        assert_eq!(ftp.password, "", "启用了 prompt 的密码应被清除");
     }
 }

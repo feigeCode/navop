@@ -4,8 +4,8 @@ use anyhow::{Context, Result, bail};
 use rusqlite::{OptionalExtension, TransactionBehavior};
 
 use crate::storage::{
-    ConnectionType, CredentialReference, DbConnectionConfig, MongoDBParams, RedisParams,
-    RemoteDesktopParams, SshParams, TelnetParams,
+    ConnectionType, CredentialReference, DbConnectionConfig, FtpParams, MongoDBParams, RedisParams,
+    RemoteDesktopParams, RemoteFileProtocol, SshParams, TelnetParams,
 };
 
 use super::tunnel_reference_scanner::append_tunnel_hits;
@@ -135,6 +135,7 @@ fn parse_connection_type(value: &str) -> Result<ConnectionType> {
     match value {
         "Database" => Ok(ConnectionType::Database),
         "SshSftp" => Ok(ConnectionType::SshSftp),
+        "Ftp" => Ok(ConnectionType::Ftp),
         "Redis" => Ok(ConnectionType::Redis),
         "MongoDB" => Ok(ConnectionType::MongoDB),
         "Mqtt" => Ok(ConnectionType::Mqtt),
@@ -180,6 +181,7 @@ fn direct_locations(
 ) -> Result<Vec<CredentialReferenceLocation>> {
     let locations = match connection.connection_type {
         ConnectionType::SshSftp => ssh_locations(connection, identity)?,
+        ConnectionType::Ftp => ftp_locations(connection, identity)?,
         ConnectionType::Database => database_locations(connection, identity)?,
         ConnectionType::Redis => redis_locations(connection, identity)?,
         ConnectionType::MongoDB => mongodb_locations(connection, identity)?,
@@ -224,6 +226,18 @@ pub(super) fn ssh_locations(
                 .as_ref()
                 .and_then(|proxy| proxy.credential_reference.as_ref()),
         ),
+        // 远程文件协议为 FTP 时，FTP 参数可持有独立凭据引用，
+        // 删除凭据前必须一并提示（复用 Primary 位置语义：该凭据
+        // 是此连接记录实际使用的连接凭据）。
+        (
+            CredentialReferenceLocation::Primary,
+            params
+                .remote_file
+                .as_ref()
+                .filter(|remote| remote.protocol == RemoteFileProtocol::Ftp)
+                .and_then(|remote| remote.ftp.as_ref())
+                .and_then(|ftp| ftp.credential_reference.as_ref()),
+        ),
     ];
     Ok(matching_locations(references, identity))
 }
@@ -233,6 +247,20 @@ fn telnet_locations(
     identity: &CredentialIdentity,
 ) -> Result<Vec<CredentialReferenceLocation>> {
     let params: TelnetParams = parse_params(connection)?;
+    Ok(matching_locations(
+        [(
+            CredentialReferenceLocation::Primary,
+            params.credential_reference.as_ref(),
+        )],
+        identity,
+    ))
+}
+
+fn ftp_locations(
+    connection: &ScannedConnection,
+    identity: &CredentialIdentity,
+) -> Result<Vec<CredentialReferenceLocation>> {
+    let params: FtpParams = parse_params(connection)?;
     Ok(matching_locations(
         [(
             CredentialReferenceLocation::Primary,

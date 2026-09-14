@@ -8,7 +8,7 @@ use one_core::storage::{
     ProxyType as StorageProxyType, SshAuthMethod, SshParams, StoredConnection,
 };
 use serde_json::{Value, json};
-use sftp::{DirectoryConflictPolicy, RusshSftpClient, SftpClient};
+use sftp::{DirectoryConflictPolicy, RemoteFileClient, RusshSftpClient, SftpClient};
 use ssh::{
     HostKeyVerifier, JumpServerConnectConfig, ProxyConnectConfig, ProxyType, SshAuth,
     SshConnectConfig,

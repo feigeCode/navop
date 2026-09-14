@@ -8,13 +8,27 @@ use super::remote_path::{join_remote_path, normalize_remote_path, resolve_remote
 use crate::theme::TerminalColors;
 use chrono::{DateTime, Local};
 use gpui::{
-    Anchor, App, ClipboardItem, Context, Entity, EventEmitter, ExternalPaths,
-    FocusHandle, Focusable, Hsla, IntoElement, KeyBinding, ListSizingBehavior, MouseButton,
-    MouseDownEvent, ParentElement, PathPromptOptions, Render, SharedString, Styled,
-    UniformListScrollHandle, Window, actions, div, prelude::*, px, uniform_list,
+    Anchor, App, ClipboardItem, Context, Entity, EventEmitter, ExternalPaths, FocusHandle,
+    Focusable, Hsla, IntoElement, KeyBinding, ListSizingBehavior, MouseButton, MouseDownEvent,
+    ParentElement, PathPromptOptions, Render, SharedString, Styled, UniformListScrollHandle,
+    Window, actions, div, prelude::*, px, uniform_list,
 };
-use gpui_component::{ActiveTheme, Disableable, Icon, InteractiveElementExt, Sizable, Size, WindowExt, breadcrumb::{Breadcrumb, BreadcrumbItem}, button::{Button, ButtonVariants}, dialog::DialogButtonProps, h_flex, input::{Input, InputEvent, InputState}, menu::{ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem}, notification::Notification, popover::{Popover, PopoverState}, progress::Progress, scroll::ScrollableElement, spinner::Spinner, tooltip::Tooltip, v_flex};
-use one_ui::IconSize;
+use gpui_component::{
+    ActiveTheme, Disableable, Icon, InteractiveElementExt, Sizable, Size, WindowExt,
+    breadcrumb::{Breadcrumb, BreadcrumbItem},
+    button::{Button, ButtonVariants},
+    dialog::DialogButtonProps,
+    h_flex,
+    input::{Input, InputEvent, InputState},
+    menu::{ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem},
+    notification::Notification,
+    popover::{Popover, PopoverState},
+    progress::Progress,
+    scroll::ScrollableElement,
+    spinner::Spinner,
+    tooltip::Tooltip,
+    v_flex,
+};
 use one_assets::IconName;
 use one_core::background_tasks::{BackgroundTaskHandle, BackgroundTaskSpec};
 use one_core::gpui_tokio::Tokio;
@@ -24,6 +38,7 @@ use one_core::storage::{
     GlobalStorageState, SftpFavoritePathRepository, normalize_sftp_favorite_path,
     sftp_favorite_connection_key,
 };
+use one_ui::IconSize;
 use one_ui::file_conflict_prompt::{
     FileConflictChoice, FileConflictPrompt, FileConflictPromptLabels, FileConflictPromptSpec,
 };
@@ -38,9 +53,9 @@ use remote_image_preview::{
 };
 use rust_i18n::t;
 use sftp::{
-    DirectoryConflictPolicy, RemoteFileOperation, RusshSftpClient, ServerCopyItem, SftpClient,
-    TransferCancelled, TransferProgress, build_remote_file_command, calculate_directory_size,
-    remote_path_is_same_or_descendant,
+    DirectoryConflictPolicy, RemoteFileClient, RemoteFileOperation, RusshSftpClient,
+    ServerCopyItem, SharedRemoteFileClient, TransferCancelled, TransferProgress,
+    build_remote_file_command, calculate_directory_size, remote_path_is_same_or_descendant,
 };
 use sftp_transfer::{
     self, SftpConnectionIdentity, SftpDeleteRemoteRequest, SftpRemoteDeleteEntry,
@@ -229,7 +244,7 @@ struct CompletedUploadPreparation {
 
 struct UploadPreparationTask {
     request: UploadPreparation,
-    client: Arc<Mutex<RusshSftpClient>>,
+    client: SharedRemoteFileClient,
     view: Entity<FileManagerPanel>,
 }
 
@@ -870,7 +885,7 @@ fn transfer_progress_display_label(label: String, current_file: Option<String>) 
 }
 
 async fn load_upload_remote_names(
-    client: Arc<Mutex<RusshSftpClient>>,
+    client: SharedRemoteFileClient,
     remote_dir: String,
 ) -> Result<HashSet<String>, String> {
     let mut client = client.lock().await;
@@ -1217,7 +1232,7 @@ pub struct FileManagerPanel {
     /// 共享 SSH 会话管理器
     session_manager: Arc<SshSessionManager>,
     /// SFTP 客户端（浏览用）
-    sftp_client: Option<Arc<Mutex<RusshSftpClient>>>,
+    sftp_client: Option<SharedRemoteFileClient>,
     /// 浏览连接代次；新连接或重试会使旧连接 future 的结果失效。
     connection_generation: u64,
     /// 连接状态
@@ -1278,7 +1293,7 @@ pub struct FileManagerPanel {
     background_task_group: SharedString,
     /// 面板提交的、尚未终结的全局远程删除。
     pending_global_deletes: HashMap<SftpTransferId, GlobalDeleteView>,
-    transfer_client: Option<Arc<Mutex<RusshSftpClient>>>,
+    transfer_client: Option<SharedRemoteFileClient>,
     transfer_connecting: bool,
     transfer_generation: u64,
     transfer_queue: TransferQueue,
@@ -1483,7 +1498,7 @@ impl FileManagerPanel {
                     if this.connection_generation != connection_generation {
                         return;
                     }
-                    this.sftp_client = Some(Arc::new(Mutex::new(client)));
+                    this.sftp_client = Some(Arc::new(Mutex::new(Box::new(client))));
                     this.connection_state = ConnectionState::Connected;
                     let real_path = normalize_remote_path(&real_path);
                     this.current_path = real_path.clone();
@@ -1993,7 +2008,7 @@ impl FileManagerPanel {
         let path = self.current_path.clone();
         let listed_path = path.clone();
         let task = Tokio::spawn(cx, async move {
-            let mut client: tokio::sync::MutexGuard<'_, RusshSftpClient> = client.lock().await;
+            let mut client = client.lock().await;
             client.list_dir(&path).await
         });
 
@@ -2547,7 +2562,7 @@ impl FileManagerPanel {
                 this.transfer_connecting = false;
                 match result {
                     Ok(client) => {
-                        this.transfer_client = Some(Arc::new(Mutex::new(client)));
+                        this.transfer_client = Some(Arc::new(Mutex::new(Box::new(client))));
                         this.schedule_transfers(cx);
                     }
                     Err(e) => {
@@ -3931,9 +3946,7 @@ impl FileManagerPanel {
         let field_bg = self.colors.background;
         let foreground = self.colors.foreground;
         let muted_foreground = self.colors.muted_foreground;
-        let breadcrumb = self
-            .render_path_breadcrumb(cx)
-            ;
+        let breadcrumb = self.render_path_breadcrumb(cx);
         v_flex()
             .border_b_1()
             .border_color(border)
@@ -5734,6 +5747,7 @@ mod tests {
         let mut connection = one_core::storage::models::StoredConnection::new_ssh(
             "Terminal file manager test".to_string(),
             SshParams {
+                remote_file: None,
                 sftp_default_directory: None,
                 disabled_jump_server: None,
                 sftp_account: None,
@@ -6432,7 +6446,7 @@ mod tests {
         assert!(toolbar.contains(r#".id("fm-open-sftp")"#));
         assert!(toolbar.contains("FileManagerPanelEvent::OpenSftp("));
         assert!(toolbar.contains(r#"t!("FileManager.open_sftp")"#));
-        
+
         assert!(toolbar.contains(".text_color(muted_foreground)"));
     }
 

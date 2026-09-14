@@ -10,20 +10,35 @@ use connection_form::team::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, AsyncApp, Context, Div, Entity, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, ParentElement, PathPromptOptions, Render, SharedString,
+    App, AppContext, AsyncApp, Context, Div, Entity, FocusHandle, Focusable, InteractiveElement,
+    IntoElement, ParentElement, PathPromptOptions, Render, SharedString,
     StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div, img, px, relative,
 };
-use gpui_component::{ActiveTheme, Disableable, Icon, Sizable, Size, WindowExt, button::{Button, ButtonVariants as _}, checkbox::Checkbox, dialog::DialogFooter, h_flex, input::{Input, InputState, Textarea, TextareaState}, notification::Notification, radio::Radio, scroll::ScrollableElement, select::{Select, SelectItem, SelectState}, tab::{Tab, TabBar}, tooltip::Tooltip, v_flex};
+use gpui_component::{
+    ActiveTheme, Disableable, Icon, Sizable, Size, WindowExt,
+    button::{Button, ButtonVariants as _},
+    checkbox::Checkbox,
+    dialog::DialogFooter,
+    h_flex,
+    input::{Input, InputState, Textarea, TextareaState},
+    notification::Notification,
+    radio::Radio,
+    scroll::ScrollableElement,
+    select::{Select, SelectItem, SelectState},
+    tab::{Tab, TabBar},
+    tooltip::Tooltip,
+    v_flex,
+};
 use one_assets::IconName;
 use one_core::cloud_sync::TeamOption;
 use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::traits::Repository;
 use one_core::storage::{
-    JumpServerConfig, ProxyConfig, ProxyType as StorageProxyType, SSH_ICON_IDS, SftpAccount,
-    SshAccountExpect, SshAuthMethod, SshParams, StoredConnection, StoredTerminalEncoding,
-    StoredTerminalType, Workspace, ssh_os_icon,
+    FtpParams, JumpServerConfig, ProxyConfig, ProxyType as StorageProxyType, RemoteFileParams,
+    RemoteFileProtocol as StoredRemoteFileProtocol, SSH_ICON_IDS, SftpAccount, SshAccountExpect,
+    SshAuthMethod, SshParams, StoredConnection, StoredTerminalEncoding, StoredTerminalType,
+    Workspace, ssh_os_icon,
 };
 use rust_i18n::t;
 use ssh::{
@@ -142,6 +157,33 @@ impl SelectItem for TerminalEncodingSelectItem {
     }
 }
 
+/// 远程文件协议选择（同一连接记录内切换 SFTP / FTP）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RemoteFileProtocolSelection {
+    Sftp,
+    Ftp,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct RemoteFileProtocolSelectItem {
+    protocol: RemoteFileProtocolSelection,
+}
+
+impl SelectItem for RemoteFileProtocolSelectItem {
+    type Value = RemoteFileProtocolSelection;
+
+    fn title(&self) -> SharedString {
+        match self.protocol {
+            RemoteFileProtocolSelection::Sftp => t!("SSH.sftp").to_string().into(),
+            RemoteFileProtocolSelection::Ftp => t!("SSH.ftp").to_string().into(),
+        }
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.protocol
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct TerminalTypeSelectItem {
     terminal_type: StoredTerminalType,
@@ -204,6 +246,16 @@ pub struct SshFormWindow {
     jump_mfa_request: Option<FormMfaRequest>,
     jump_mfa_inputs: Vec<JumpMfaInput>,
     jump_mfa_signature: Option<String>,
+
+    // 远程文件协议（SFTP / FTP）
+    remote_file_protocol_select: Entity<SelectState<Vec<RemoteFileProtocolSelectItem>>>,
+    ftp_host_input: Entity<InputState>,
+    ftp_port_input: Entity<InputState>,
+    ftp_username_input: Entity<InputState>,
+    ftp_password_input: Entity<InputState>,
+    ftp_passive_mode: bool,
+    ftp_use_tls: bool,
+    ftp_credential_picker: Entity<CredentialReferencePicker>,
 
     // 独立 SFTP 账户设置
     sftp_account_use_custom: bool,
@@ -725,7 +777,37 @@ impl SshFormWindow {
             state
         });
 
+        let remote_file_protocol_items = [
+            RemoteFileProtocolSelection::Sftp,
+            RemoteFileProtocolSelection::Ftp,
+        ]
+        .iter()
+        .copied()
+        .map(|protocol| RemoteFileProtocolSelectItem { protocol })
+        .collect::<Vec<_>>();
+        let remote_file_protocol_select = cx.new(|cx| {
+            let mut state = SelectState::new(remote_file_protocol_items, None, window, cx);
+            state.set_selected_value(&RemoteFileProtocolSelection::Sftp, window, cx);
+            state
+        });
+        let ftp_host_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder(t!("SSH.ftp_host_placeholder")));
+        let ftp_port_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder(t!("SSH.ftp_port_placeholder")));
+        let ftp_username_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t!("SSH.ftp_username_placeholder"))
+        });
+        let ftp_password_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t!("SSH.ftp_password_placeholder"))
+                .masked(true)
+        });
+
         let team_select = create_team_select(&config.teams, None, window, cx);
+
+        let mut ftp_passive_mode = true;
+        let mut ftp_use_tls = false;
+        let mut ftp_credential_reference = None;
 
         let mut auth_method = AuthMethodSelection::Password;
         let mut save_username = true;
@@ -875,6 +957,33 @@ impl SshFormWindow {
                     );
                 }
 
+                // 加载远程文件协议与 FTP 参数
+                if let Some(remote_file) = params.remote_file.as_ref() {
+                    if remote_file.protocol == one_core::storage::models::RemoteFileProtocol::Ftp {
+                        remote_file_protocol_select.update(cx, |select, cx| {
+                            select.set_selected_value(
+                                &RemoteFileProtocolSelection::Ftp,
+                                window,
+                                cx,
+                            );
+                        });
+                        if let Some(ref ftp) = remote_file.ftp {
+                            ftp_host_input
+                                .update(cx, |s, cx| s.set_value(&ftp.host, window, cx));
+                            ftp_port_input.update(cx, |s, cx| {
+                                s.set_value(&ftp.port.to_string(), window, cx)
+                            });
+                            ftp_username_input
+                                .update(cx, |s, cx| s.set_value(&ftp.username, window, cx));
+                            ftp_password_input
+                                .update(cx, |s, cx| s.set_value(&ftp.password, window, cx));
+                            ftp_passive_mode = ftp.passive_mode;
+                            ftp_use_tls = ftp.use_tls;
+                            ftp_credential_reference = ftp.credential_reference.clone();
+                        }
+                    }
+                }
+
                 // 加载独立 SFTP 账户设置
                 if let Some(ref sftp_account) = params.sftp_account {
                     sftp_account_use_custom = true;
@@ -945,6 +1054,12 @@ impl SshFormWindow {
             window,
             cx,
         );
+        let ftp_credential_picker = create_credential_picker(
+            CredentialPickerConfig::new("ssh-ftp-credential", CredentialCapabilities::login())
+                .reference(ftp_credential_reference),
+            window,
+            cx,
+        );
         let subscriptions = vec![
             cx.subscribe(&credential_picker, |_, _, _: &CredentialPickerEvent, cx| {
                 cx.notify()
@@ -996,6 +1111,14 @@ impl SshFormWindow {
             jump_mfa_request: None,
             jump_mfa_inputs: Vec::new(),
             jump_mfa_signature: None,
+            remote_file_protocol_select,
+            ftp_host_input,
+            ftp_port_input,
+            ftp_username_input,
+            ftp_password_input,
+            ftp_passive_mode,
+            ftp_use_tls,
+            ftp_credential_picker,
             sftp_account_use_custom,
             sftp_username_input,
             sftp_password_input,
@@ -1267,7 +1390,56 @@ impl SshFormWindow {
             None
         };
 
+        // 远程文件协议：SFTP 保持旧行为（不写 remote_file）；FTP 写入独立 envelope。
+        let remote_file = {
+            let protocol = self
+                .remote_file_protocol_select
+                .read(cx)
+                .selected_value()
+                .copied()
+                .unwrap_or(RemoteFileProtocolSelection::Sftp);
+            match protocol {
+                RemoteFileProtocolSelection::Sftp => None,
+                RemoteFileProtocolSelection::Ftp => {
+                    let ftp_host =
+                        self.ftp_host_input.read(cx).text().to_string().trim().to_string();
+                    let ftp_username =
+                        self.ftp_username_input.read(cx).text().to_string().trim().to_string();
+                    if ftp_host.is_empty() || ftp_username.is_empty() {
+                        // FTP 主机/用户名缺失视为无效参数，交给上层提示校验失败。
+                        return None;
+                    }
+                    let ftp_port: u16 = self
+                        .ftp_port_input
+                        .read(cx)
+                        .text()
+                        .to_string()
+                        .parse()
+                        .unwrap_or(21);
+                    Some(RemoteFileParams {
+                        protocol: StoredRemoteFileProtocol::Ftp,
+                        ftp: Some(FtpParams {
+                            host: ftp_host,
+                            port: ftp_port,
+                            username: ftp_username,
+                            password: self.ftp_password_input.read(cx).text().to_string(),
+                            credential_reference: self
+                                .ftp_credential_picker
+                                .read(cx)
+                                .selected_reference(),
+                            prompt_username: None,
+                            prompt_password: None,
+                            passive_mode: self.ftp_passive_mode,
+                            use_tls: self.ftp_use_tls,
+                            connect_timeout: None,
+                        }),
+                    })
+                }
+            }
+        };
+
         Some(SshParams {
+            remote_file,
             sftp_account,
             host,
             port,
@@ -2045,7 +2217,11 @@ impl SshFormWindow {
             .custom_icon_file_path
             .as_ref()
             .map(|path| img(path.clone()).size_5().into_any_element())
-            .unwrap_or_else(|| Icon::new(IconName::Upload).with_size(px(18.0)).into_any_element());
+            .unwrap_or_else(|| {
+                Icon::new(IconName::Upload)
+                    .with_size(px(18.0))
+                    .into_any_element()
+            });
 
         div()
             .id("ssh-icon-local")
@@ -2419,6 +2595,12 @@ impl SshFormWindow {
 
     /// 渲染初始化标签页
     fn render_init_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let is_ftp = self
+            .remote_file_protocol_select
+            .read(cx)
+            .selected_value()
+            .copied()
+            .is_some_and(|protocol| protocol == RemoteFileProtocolSelection::Ftp);
         v_flex()
             .debug_selector(|| "ssh-init-tab".to_string())
             .w_full()
@@ -2444,6 +2626,83 @@ impl SshFormWindow {
                 )
                 .debug_selector(|| "ssh-sftp-default-directory-row".to_string()),
             )
+            .child(
+                self.render_form_row(
+                    &t!("SSH.remote_file_protocol"),
+                    Select::new(&self.remote_file_protocol_select).w_full(),
+                )
+                .debug_selector(|| "ssh-remote-file-protocol-row".to_string()),
+            )
+            .when(is_ftp, |this| {
+                this.child(
+                    self.render_form_row(
+                        &t!("SSH.ftp_host"),
+                        self.render_form_input(&self.ftp_host_input),
+                    ),
+                )
+                .child(
+                    self.render_form_row(
+                        &t!("SSH.ftp_port"),
+                        self.render_form_input(&self.ftp_port_input),
+                    ),
+                )
+                .child(
+                    self.render_form_row(
+                        &t!("SSH.ftp_username"),
+                        self.render_form_input(&self.ftp_username_input),
+                    ),
+                )
+                .child(
+                    self.render_form_row(
+                        &t!("SSH.ftp_password"),
+                        self.render_form_input(&self.ftp_password_input),
+                    ),
+                )
+                .child(
+                    self.render_form_row(
+                        &t!("SSH.ftp_passive_mode"),
+                        h_flex()
+                            .w_full()
+                            .gap_2()
+                            .items_start()
+                            .child(
+                                div().flex_shrink_0().child(
+                                    Checkbox::new("ftp-passive-mode")
+                                        .checked(self.ftp_passive_mode)
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.ftp_passive_mode = !this.ftp_passive_mode;
+                                            cx.notify();
+                                        })),
+                                ),
+                            ),
+                    ),
+                )
+                .child(
+                    self.render_form_row(
+                        &t!("SSH.ftp_tls"),
+                        h_flex()
+                            .w_full()
+                            .gap_2()
+                            .items_start()
+                            .child(
+                                div().flex_shrink_0().child(
+                                    Checkbox::new("ftp-use-tls")
+                                        .checked(self.ftp_use_tls)
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.ftp_use_tls = !this.ftp_use_tls;
+                                            cx.notify();
+                                        })),
+                                ),
+                            ),
+                    ),
+                )
+                .child(
+                    self.render_form_row(
+                        &t!("SSH.ftp_credential"),
+                        self.ftp_credential_picker.clone(),
+                    ),
+                )
+            })
             .child(
                 self.render_form_row(
                     &t!("SSH.x11_forwarding"),
@@ -3202,8 +3461,9 @@ mod tests {
     use gpui::{Modifiers, TestAppContext, VisualTestContext};
     use one_core::settings::AppSettings;
     use one_core::storage::{
-        JumpServerConfig, SftpAccount, SshAuthMethod, SshParams, StoredConnection,
-        StoredTerminalEncoding, StoredTerminalType,
+        ConnectionType, FtpParams, JumpServerConfig, RemoteFileParams,
+        RemoteFileProtocol as StoredRemoteFileProtocol, SftpAccount, SshAuthMethod, SshParams,
+        StoredConnection, StoredTerminalEncoding, StoredTerminalType,
     };
     use rust_i18n::t;
     use ssh::{HostKeyDetails, HostKeyIdentity, HostKeyRejection, HostKeyRoute};
@@ -3212,6 +3472,7 @@ mod tests {
 
     fn sample_params() -> SshParams {
         SshParams {
+                remote_file: None,
             sftp_account: None,
             sftp_default_directory: None,
             disabled_jump_server: None,
@@ -4072,5 +4333,59 @@ mod tests {
                 passphrase: Some(passphrase),
             } if private_key.contains("OPENSSH PRIVATE KEY") && passphrase == "secret"
         ));
+    }
+
+    #[gpui::test]
+    fn ssh_form_saves_ftp_protocol_inside_same_connection_type(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(AppSettings::default());
+            gpui_component::init(cx);
+        });
+        let mut params = sample_params();
+        params.remote_file = Some(RemoteFileParams {
+            protocol: StoredRemoteFileProtocol::Ftp,
+            ftp: Some(FtpParams {
+                host: "ftp.example.com".to_string(),
+                port: 2121,
+                username: "deploy".to_string(),
+                password: "secret".to_string(),
+                credential_reference: None,
+                prompt_username: None,
+                prompt_password: None,
+                passive_mode: true,
+                use_tls: false,
+                connect_timeout: None,
+            }),
+        });
+        let initial_connection = StoredConnection::new_ssh("ftp-file".to_string(), params, None);
+        let (form, cx) = cx.add_window_view(|window, cx| {
+            super::SshFormWindow::new(
+                super::SshFormWindowConfig {
+                    editing_connection: Some(initial_connection.clone()),
+                    initial_connection: None,
+                    on_saved: None,
+                    workspaces: Vec::new(),
+                    teams: Vec::new(),
+                },
+                window,
+                cx,
+            )
+        });
+
+        let built = form
+            .read_with(cx, |form, cx| form.build_ssh_params(cx))
+            .expect("FTP 连接应能构建参数");
+        assert_eq!(
+            built.remote_file_protocol(),
+            StoredRemoteFileProtocol::Ftp
+        );
+        let ftp = built.ftp_params().expect("ftp params preserved");
+        assert_eq!(ftp.host, "ftp.example.com");
+        assert_eq!(ftp.port, 2121);
+        assert_eq!(ftp.username, "deploy");
+
+        // 仍保存为 SshSftp 连接类型，不产生独立的 FTP 连接类型。
+        let conn = StoredConnection::new_ssh("same-record".to_string(), built, None);
+        assert_eq!(conn.connection_type, ConnectionType::SshSftp);
     }
 }

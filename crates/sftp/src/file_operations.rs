@@ -1,4 +1,4 @@
-use crate::{FileEntry, SftpClient, TransferCancelled};
+use crate::{FileEntry, RemoteFileClient, TransferCancelled};
 use anyhow::Result;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,7 +17,7 @@ pub async fn calculate_directory_size<C>(
     cancelled: Arc<AtomicBool>,
 ) -> Result<u64>
 where
-    C: SftpClient + ?Sized,
+    C: RemoteFileClient + ?Sized,
 {
     ensure_not_cancelled(&cancelled)?;
     let entries = client.list_dir_recursive(path, cancelled.clone()).await?;

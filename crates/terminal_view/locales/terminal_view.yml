@@ -527,6 +527,66 @@ SSH:
     en: Directory to open when SFTP connects
     zh-CN: SFTP 连接后打开的目录
     zh-HK: SFTP 連接後打開的目錄
+  remote_file_protocol:
+    en: Remote file protocol
+    zh-CN: 远程文件协议
+    zh-HK: 遠端檔案協定
+  sftp:
+    en: SFTP
+    zh-CN: SFTP
+    zh-HK: SFTP
+  ftp:
+    en: FTP / FTPS
+    zh-CN: FTP / FTPS
+    zh-HK: FTP / FTPS
+  ftp_host:
+    en: FTP host
+    zh-CN: FTP 主机
+    zh-HK: FTP 主機
+  ftp_host_placeholder:
+    en: e.g. ftp.example.com
+    zh-CN: 例如 ftp.example.com
+    zh-HK: 例如 ftp.example.com
+  ftp_port:
+    en: FTP port
+    zh-CN: FTP 端口
+    zh-HK: FTP 埠
+  ftp_port_placeholder:
+    en: Default 21
+    zh-CN: 默认 21
+    zh-HK: 預設 21
+  ftp_username:
+    en: FTP username
+    zh-CN: FTP 用户名
+    zh-HK: FTP 使用者名稱
+  ftp_username_placeholder:
+    en: FTP login username
+    zh-CN: FTP 登录用户名
+    zh-HK: FTP 登入使用者名稱
+  ftp_password:
+    en: FTP password
+    zh-CN: FTP 密码
+    zh-HK: FTP 密碼
+  ftp_password_placeholder:
+    en: FTP login password
+    zh-CN: FTP 登录密码
+    zh-HK: FTP 登入密碼
+  ftp_passive_mode:
+    en: Passive mode
+    zh-CN: 被动模式
+    zh-HK: 被動模式
+  ftp_tls:
+    en: Explicit TLS (FTPS)
+    zh-CN: 显式 TLS (FTPS)
+    zh-HK: 顯式 TLS (FTPS)
+  ftp_credential:
+    en: FTP credential reference
+    zh-CN: FTP 凭据引用
+    zh-HK: FTP 憑證引用
+  ftp_not_supported:
+    en: This FTP operation is not supported
+    zh-CN: FTP 不支持此操作
+    zh-HK: FTP 不支援此操作
   x11_forwarding:
     en: X11 Forwarding
     zh-CN: X11 转发

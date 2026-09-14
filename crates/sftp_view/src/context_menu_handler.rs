@@ -22,12 +22,21 @@ use gpui_component::{
 };
 use one_core::gpui_tokio::Tokio;
 use rust_i18n::t;
-use sftp::SftpClient;
+use sftp::RemoteFileClient;
 use ssh::SshSessionManager;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 impl SftpView {
+    /// FTP 协议不支持的操作统一在此拦截：已拦截时返回 true 并提示。
+    fn notify_unsupported_for_ftp(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.remote_file_ftp.is_some() {
+            window.push_notification(Notification::error(t!("Error.ftp_not_supported")), cx);
+            return true;
+        }
+        false
+    }
+
     fn handle_left_remote_context_menu_event(
         &mut self,
         event: &FileListPanelEvent,
@@ -784,6 +793,10 @@ impl ContextMenuHandler for SftpView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // FTP 不提供 chmod 能力，不展示该入口。
+        if self.notify_unsupported_for_ftp(window, cx) {
+            return;
+        }
         let input =
             cx.new(|cx| InputState::new(window, cx).placeholder(t!("Placeholder.permission")));
         let view = cx.entity().downgrade();
@@ -883,13 +896,17 @@ impl ContextMenuHandler for SftpView {
         });
     }
 
-    fn open_in_terminal(&self, side: PanelSide, _window: &mut Window, cx: &mut Context<Self>) {
+    fn open_in_terminal(&self, side: PanelSide, window: &mut Window, cx: &mut Context<Self>) {
         match side {
             PanelSide::Local => {
                 let path = self.local_current_path.to_string_lossy().to_string();
                 cx.emit(SftpViewEvent::OpenLocalTerminal { working_dir: path });
             }
             PanelSide::Remote => {
+                // FTP 没有可复用的 SSH 通道，远程终端仅对 SFTP 模式开放。
+                if self.notify_unsupported_for_ftp(window, cx) {
+                    return;
+                }
                 // 打开 SSH 终端连接到远程服务器
                 cx.emit(SftpViewEvent::OpenSshTerminal {
                     connection: self.stored_connection.clone(),
@@ -995,6 +1012,9 @@ impl ContextMenuHandler for SftpView {
             return;
         };
 
+        if self.notify_unsupported_for_ftp(window, cx) {
+            return;
+        }
         let session_manager = Arc::new(SshSessionManager::new(self.sftp_config.clone()));
         let view = cx.entity().clone();
         let task = Tokio::spawn(cx, async move {
@@ -1134,6 +1154,12 @@ impl ContextMenuHandler for SftpView {
         self.active_extract = Some(ActiveExtract { background_task });
         cx.notify();
 
+        if self.notify_unsupported_for_ftp(window, cx) {
+            return;
+        }
+        if self.notify_unsupported_for_ftp(window, cx) {
+            return;
+        }
         let session_manager = Arc::new(SshSessionManager::new(self.sftp_config.clone()));
         let view = cx.entity().clone();
         let task = Tokio::spawn(cx, async move {
