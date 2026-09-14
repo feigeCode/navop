@@ -68,6 +68,13 @@ mod windows_native_display_integration;
 mod windows_native_overlay;
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
 mod windows_native_policy;
+// The retirement queue's bookkeeping is pure data and is unit-tested
+// cross-platform; only its GPUI/native glue is Windows-only.
+//
+// `pub(crate)` because the shutdown drain reaches it as
+// `crate::view::windows_native_retirement::retire` from outside `view`.
+#[allow(dead_code)]
+pub(crate) mod windows_native_retirement;
 
 const RESIZE_DEBOUNCE: Duration = Duration::from_millis(800);
 const RESIZE_MIN_INTERVAL: Duration = Duration::from_millis(1200);
@@ -123,11 +130,14 @@ pub(crate) struct WindowsNativeCloseOperation {
 
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
 impl WindowsNativeCloseOperation {
-    /// Consumes the close operation and returns the adapter for intentional
-    /// leak-quarantine when a shutdown deadline hits. Leaking performs no COM
-    /// calls; pending callbacks must never observe a dropped host during
-    /// teardown.
-    pub(crate) fn into_leaked_adapter(self) -> windows_native::WindowsNativeAdapter {
+    /// Consumes the close operation and returns the adapter for owner-thread
+    /// retirement when a shutdown deadline hits.
+    ///
+    /// Handing the adapter over performs no COM calls: pending callbacks must
+    /// never observe a dropped host during teardown. The retirement queue keeps
+    /// ownership and retries destruction on the owner thread, instead of losing
+    /// the adapter to `Box::leak` the moment the deadline expires.
+    pub(crate) fn into_adapter(self) -> windows_native::WindowsNativeAdapter {
         self.native
     }
 }
@@ -217,6 +227,17 @@ enum SessionResetReason {
 pub(crate) enum WindowsNativeCloseRetryMode {
     WaitForConfirmation,
     ForceClose,
+}
+
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+impl WindowsNativeCloseRetryMode {
+    /// Stable label for correlated close diagnostics.
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::WaitForConfirmation => "wait_for_confirmation",
+            Self::ForceClose => "force_close",
+        }
+    }
 }
 
 /// Pure-Rust snapshot of everything the Windows native RDP COM stages need.
@@ -527,10 +548,16 @@ async fn cleanup_windows_native_initialization(
     cx: &mut gpui::AsyncApp,
 ) -> bool {
     let generation = native.generation();
-    let local_deadline = Instant::now() + WINDOWS_NATIVE_FORCE_CLOSE_TIMEOUT;
+    let started_at = Instant::now();
+    let local_deadline = started_at + WINDOWS_NATIVE_FORCE_CLOSE_TIMEOUT;
+    let mut retry_count: u32 = 0;
     loop {
+        retry_count = retry_count.saturating_add(1);
         let mut focus_parent = || {};
-        match native.force_close(&mut focus_parent) {
+        // Where this attempt stopped and why, for the deadline line below. Both
+        // are per-attempt values: the deadline is checked *after* the attempt,
+        // so nothing has to survive an iteration.
+        let (last_stage, last_error) = match native.force_close(&mut focus_parent) {
             Ok(windows_native::NativeDestroyProgress::Destroyed) => {
                 if let Some(registration) = registration {
                     record_detached_windows_native_terminal(
@@ -543,7 +570,9 @@ async fn cleanup_windows_native_initialization(
                 }
                 return true;
             }
-            Ok(windows_native::NativeDestroyProgress::PendingCallbacks) => {}
+            Ok(windows_native::NativeDestroyProgress::PendingCallbacks) => {
+                ("awaiting_callbacks", None)
+            }
             Err(_) if native.is_destroyed() => {
                 if let Some(registration) = registration {
                     record_detached_windows_native_terminal(
@@ -563,18 +592,26 @@ async fn cleanup_windows_native_initialization(
                     reason,
                     "failed to retry detached Windows native RDP cleanup"
                 );
+                ("force_close", Some(error.to_string()))
             }
-        }
+        };
 
         let deadline =
             crate::windows_native_shutdown::detached_cleanup_deadline(local_deadline, cx);
         if Instant::now() >= deadline {
             tracing::error!(
+                target: "remote_desktop_view::lifecycle",
+                stage = "detached_cleanup_timeout",
                 generation,
                 reason,
-                "leaking Windows native RDP adapter after detached cleanup timed out"
+                retry_count,
+                elapsed_ms = elapsed_millis(started_at),
+                last_stage,
+                last_error = last_error.as_deref().unwrap_or("<none>"),
+                "detached Windows native RDP cleanup timed out; handing the adapter to the \
+                 owner-thread retirement queue"
             );
-            let _ = Box::leak(Box::new(native));
+            windows_native_retirement::retire(cx, native, generation, reason);
             if let Some(registration) = registration {
                 record_detached_windows_native_terminal(
                     registration,
@@ -2240,9 +2277,9 @@ impl RemoteDesktopView {
 /// call `begin_close` / `close_confirmed` / `finish_destroy` / `force_close`.
 ///
 /// `hard_deadline` caps the total close budget (the shutdown drain passes its
-/// own deadline). On timeout the adapter is intentionally leaked so pending COM
-/// callbacks never run into a dropped host, and the registration is terminally
-/// recorded as `TimedOutLeaked`.
+/// own deadline). On timeout ownership is handed to the owner-thread retirement
+/// queue, which keeps retrying destruction; the registration is terminally
+/// recorded as `TimedOutLeaked` because native destruction was not *confirmed*.
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
 pub(crate) async fn close_windows_native_operation(
     this: &WeakEntity<RemoteDesktopView>,
@@ -2267,15 +2304,35 @@ pub(crate) async fn close_windows_native_operation(
         WindowsNativeCloseRetryMode::ForceClose => hard_deadline,
     });
     let mut mode = initial_mode;
+    // Correlated close diagnostics: the timeout line alone cannot distinguish
+    // "callbacks never quiesced" from "the close state machine kept failing",
+    // so each iteration records where it stopped and what it saw.
+    let mut retry_count: u32 = 0;
+    let mut last_stage: &'static str = "drain_events";
+    let mut last_error: Option<String> = None;
 
     loop {
         let now = Instant::now();
         if now >= hard_deadline {
             tracing::error!(
+                target: "remote_desktop_view::lifecycle",
+                stage = "close_timeout",
+                token = registration.token(),
                 generation,
-                "timed out waiting for Windows native RDP callback quiescence"
+                close_mode = mode.as_str(),
+                retry_count,
+                elapsed_ms = elapsed_millis(started_at),
+                last_stage,
+                last_error = last_error.as_deref().unwrap_or("<none>"),
+                "timed out waiting for Windows native RDP callback quiescence; \
+                 handing the adapter to the owner-thread retirement queue"
             );
-            let _ = Box::leak(Box::new(operation.native));
+            windows_native_retirement::retire(
+                cx,
+                operation.into_adapter(),
+                generation,
+                "close-timeout",
+            );
             record_detached_windows_native_terminal(
                 registration,
                 windows_rdp_host::WindowsRdpTerminalOutcome::TimedOutLeaked,
@@ -2291,6 +2348,7 @@ pub(crate) async fn close_windows_native_operation(
         {
             mode = WindowsNativeCloseRetryMode::ForceClose;
         }
+        retry_count = retry_count.saturating_add(1);
 
         // Feed native events (including CloseConfirmed) into the state machine
         // while the maintenance loop is stopped by the close request.
@@ -2301,6 +2359,8 @@ pub(crate) async fn close_windows_native_operation(
             WindowsNativeCloseRetryMode::WaitForConfirmation => {
                 match operation.native.begin_close(&mut || {}) {
                     Ok(windows_native::NativeCloseProgress::Ready) => {
+                        last_stage = "finish_destroy";
+                        last_error = None;
                         operation.native.finish_destroy()
                     }
                     Ok(windows_native::NativeCloseProgress::WaitingForEvents {
@@ -2313,11 +2373,19 @@ pub(crate) async fn close_windows_native_operation(
                                 close_generation,
                                 "Windows native RDP close generation changed unexpectedly"
                             );
+                            last_stage = "close_generation_mismatch";
+                            last_error = Some(format!(
+                                "close generation {close_generation} did not match {generation}"
+                            ));
                             switch_to_force = true;
                             Ok(windows_native::NativeDestroyProgress::PendingCallbacks)
                         } else if operation.native.close_confirmed(&mut operation.event_state) {
+                            last_stage = "finish_destroy";
+                            last_error = None;
                             operation.native.finish_destroy()
                         } else {
+                            last_stage = "awaiting_close_confirmation";
+                            last_error = None;
                             Ok(windows_native::NativeDestroyProgress::PendingCallbacks)
                         }
                     }
@@ -2326,12 +2394,17 @@ pub(crate) async fn close_windows_native_operation(
                             ?error,
                             "failed to request graceful Windows native RDP close"
                         );
+                        last_stage = "request_close";
+                        last_error = Some(error.to_string());
                         switch_to_force = true;
                         Ok(windows_native::NativeDestroyProgress::PendingCallbacks)
                     }
                 }
             }
-            WindowsNativeCloseRetryMode::ForceClose => operation.native.force_close(&mut || {}),
+            WindowsNativeCloseRetryMode::ForceClose => {
+                last_stage = "force_close";
+                operation.native.force_close(&mut || {})
+            }
         };
         if switch_to_force {
             mode = WindowsNativeCloseRetryMode::ForceClose;
@@ -2354,6 +2427,7 @@ pub(crate) async fn close_windows_native_operation(
                     generation,
                     "failed to destroy Windows native RDP; retrying the close"
                 );
+                last_error = Some(error.to_string());
                 if matches!(mode, WindowsNativeCloseRetryMode::WaitForConfirmation) {
                     mode = WindowsNativeCloseRetryMode::ForceClose;
                 }
@@ -2385,6 +2459,12 @@ pub(crate) async fn close_windows_native_operation(
 fn remote_desktop_diagnostics_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var_os(REMOTE_DESKTOP_DIAGNOSTICS_ENV).is_some())
+}
+
+/// Elapsed time as whole milliseconds, saturating instead of wrapping.
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+fn elapsed_millis(started_at: Instant) -> u64 {
+    u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 fn close_runtime_once(
@@ -2422,6 +2502,8 @@ fn remote_desktop_failure(error: &anyhow::Error) -> RemoteDesktopFailure {
 
 pub fn init(cx: &mut App) {
     crate::windows_native_shutdown::init(cx);
+    #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+    windows_native_retirement::init(cx);
     cx.bind_keys([
         KeyBinding::new("tab", SendTab, Some(REMOTE_DESKTOP_CONTEXT)),
         KeyBinding::new("shift-tab", SendShiftTab, Some(REMOTE_DESKTOP_CONTEXT)),

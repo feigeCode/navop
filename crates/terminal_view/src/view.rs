@@ -122,7 +122,7 @@ use terminal::terminal::{
     ConnectionState, HostKeyVerificationDecision, SshConnectionUpdate, Terminal,
     TerminalConnectionKind, TerminalMfaPrompt, TerminalMfaRequest, TerminalModelEvent,
     TerminalScrollProxy, TerminalScrollSnapshot, TerminalSshCredentials, TerminalTelnetCredentials,
-    resolve_local_working_dir,
+    resolve_local_working_dir, resolve_local_workspace_root,
 };
 use tokio::sync::Mutex;
 use workspace_explorer::{WorkspaceEditor, WorkspaceEditorEvent};
