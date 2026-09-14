@@ -10,8 +10,9 @@ use rust_i18n::t;
 
 use super::drag::DragConnection;
 use super::row_parts::{
-    child_group_button, connection_team_indicator, delete_group_button, edit_group_button,
-    tree_chevron, tree_connection_icon_slot, tree_count, tree_label,
+    child_group_button, connection_team_indicator, connection_type_tag, delete_group_button,
+    edit_group_button, tree_chevron, tree_connection_icon_slot, tree_connection_name_with_type_tag,
+    tree_count, tree_label,
 };
 use super::tree_model::ConnectionTreeRow;
 use super::{PersistentConnectionSidebar, SidebarPalette};
@@ -243,6 +244,9 @@ impl PersistentConnectionSidebar {
         let team_indicator = connection.as_ref().and_then(|connection| {
             connection_team_indicator(connection, home.read(cx).cached_team_options(), cx)
         });
+        let type_tag = connection
+            .as_ref()
+            .map(|connection| connection_type_tag(connection, cx));
         let icon = connection
             .as_ref()
             .map(|connection| {
@@ -367,7 +371,7 @@ impl PersistentConnectionSidebar {
                 ))
             })
             .child(tree_connection_icon_slot(icon, palette))
-            .child(tree_label(name))
+            .child(tree_connection_name_with_type_tag(name, type_tag))
             .when_some(team_indicator, |row, indicator| row.child(indicator))
             .into_any_element()
     }
@@ -412,5 +416,22 @@ mod tests {
         assert!(source.contains("if self.home_embedded"));
         assert!(source.contains("tree.row_height + gpui::px(4.0)"));
         assert!(source.contains("else {\n            tree.row_height"));
+    }
+
+    #[test]
+    fn connection_rows_show_typed_category_tag_after_name() {
+        let rows = include_str!("rows.rs");
+        let parts = include_str!("row_parts.rs");
+
+        assert!(rows.contains("connection_type_tag(connection, cx)"));
+        assert!(rows.contains("tree_connection_name_with_type_tag(name, type_tag)"));
+        assert!(parts.contains("fn connection_type_tag"));
+        assert!(parts.contains("fn tree_connection_name_with_type_tag"));
+        assert!(parts.contains("ConnectionType.server"));
+        assert!(parts.contains("ConnectionType::Database => cx.theme().blue"));
+        // 可读性：文案用 foreground，类型色只做圆点
+        assert!(parts.contains("text_color(cx.theme().foreground)"));
+        assert!(parts.contains("rounded_full()"));
+        assert!(!parts.contains("text_color(accent)"));
     }
 }
