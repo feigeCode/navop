@@ -7,6 +7,7 @@ use extension_protocol::event_stream::{
 use gpui_shell::{HostAsyncTask, HostError, HostModule, HostObject, HostValue};
 
 use super::{
+    error::{ErrorCode, navop_error},
     resource::task::{host_error, spawn_provider_task},
     session::ShellMountSession,
     value::json_to_host,
@@ -58,7 +59,10 @@ fn open_event(
                             stream_id: result.stream_id,
                         })
                         .await;
-                    return Err(HostError::new("event open cancelled"));
+                    return Err(navop_error(
+                        ErrorCode::RequestCancelled,
+                        "event open cancelled",
+                    ));
                 }
                 let handle =
                     task_session.register_event(alias, &resource, generation, &result.stream_id)?;
@@ -93,9 +97,9 @@ fn read_event(
                     )
                     .await
                     .map_err(host_error)?;
-                json_to_host(
-                    &serde_json::to_value(result).map_err(|e| HostError::new(e.to_string()))?,
-                )
+                json_to_host(&serde_json::to_value(result).map_err(|e| {
+                    navop_error(ErrorCode::ProtocolError, e.to_string())
+                })?)
             },
             cancel,
         ))
@@ -145,10 +149,10 @@ fn optional_u32(
                 .ok()
                 .filter(|value| *value <= max)
                 .ok_or_else(|| {
-                    HostError::new(format!(
-                        "argument {} must be between 0 and {max}",
-                        index + 1
-                    ))
+                    navop_error(
+                        ErrorCode::InvalidArgument,
+                        format!("argument {} must be between 0 and {max}", index + 1),
+                    )
                 })
         })
         .transpose()

@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use super::*;
+use crate::shell_plugin_host::error::{ErrorCode, navop_error, service_error};
 
 /// provider 侧关闭的总预算;超时后放弃剩余句柄,交由 runtime 最终 shutdown 兜底。
 const CLOSE_ALL_TIMEOUT: Duration = Duration::from_secs(5);
@@ -24,13 +25,17 @@ pub(super) fn new_handle(kind: &str) -> String {
 }
 
 pub(super) fn invalid_handle(kind: &str, handle: &str) -> HostError {
-    HostError::new(format!("invalid {kind} handle `{handle}`"))
+    navop_error(
+        ErrorCode::InvalidHandle,
+        format!("invalid {kind} handle `{handle}`"),
+    )
 }
 
 pub(super) fn stale_handle(kind: &str, handle: &str) -> HostError {
-    HostError::new(format!(
-        "stale {kind} handle `{handle}` after provider restart"
-    ))
+    navop_error(
+        ErrorCode::StaleHandle,
+        format!("stale {kind} handle `{handle}` after provider restart"),
+    )
 }
 
 pub(super) fn remove_matching(
@@ -194,9 +199,12 @@ fn current_client(
 ) -> Result<ManagedUniversalPluginClient, HostError> {
     let client = service
         .universal_plugin_client(&record.runtime_id)
-        .map_err(|error| HostError::new(error.to_string()))?;
+        .map_err(service_error)?;
     if client.generation != record.generation {
-        return Err(HostError::new("provider generation changed"));
+        return Err(navop_error(
+            ErrorCode::StaleHandle,
+            "provider generation changed",
+        ));
     }
     Ok(client)
 }

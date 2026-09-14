@@ -6,6 +6,7 @@ use extension_protocol::blob::{BlobCloseParams, BlobReadParams, MAX_BLOB_CHUNK_B
 use gpui_shell::{HostAsyncTask, HostError, HostModule, HostObject, HostValue};
 
 use super::{
+    error::{ErrorCode, navop_error},
     resource::task::{host_error, spawn_provider_task},
     session::ShellMountSession,
 };
@@ -48,7 +49,12 @@ fn read_blob(
                     .map_err(host_error)?;
                 let _ = base64::engine::general_purpose::STANDARD
                     .decode(&result.data)
-                    .map_err(|_| HostError::new("provider returned invalid blob base64"))?;
+                    .map_err(|_| {
+                        navop_error(
+                            ErrorCode::ProtocolError,
+                            "provider returned invalid blob base64",
+                        )
+                    })?;
                 Ok(HostObject::new()
                     .field("data", result.data)
                     .field("bytesRead", result.bytes_read)
@@ -94,8 +100,9 @@ fn valid_chunk_size(value: i64) -> Result<u32, HostError> {
         .ok()
         .filter(|value| (1..=MAX_BLOB_CHUNK_BYTES).contains(value))
         .ok_or_else(|| {
-            HostError::new(format!(
-                "maxBytes must be between 1 and {MAX_BLOB_CHUNK_BYTES}"
-            ))
+            navop_error(
+                ErrorCode::InvalidArgument,
+                format!("maxBytes must be between 1 and {MAX_BLOB_CHUNK_BYTES}"),
+            )
         })
 }

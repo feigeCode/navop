@@ -10,9 +10,10 @@
 //! - `fs:read:<path>` / `fs:write:<path>` → read/write roots（`~`、
 //!   `%USERPROFILE%` 等按 connection-import 相同规则展开；`${pluginDir}`
 //!   展开为扩展根，供工具打包静态资源）
-//! - `net:tcp:<host>:<port>` → network host（host 粒度；gpui-shell 的
-//!   `Capabilities::may_reach` 不做端口区分，端口约束仍由 provider IPC
-//!   的 endpoint preflight 承担）
+//! - `net:tcp:<host>:<port>` / `net:udp:<host>:<port>` → network host。脚本
+//!   runtime 的 capability 只有 host 粒度(`net.connect` 不传端口),端口约束由
+//!   provider IPC 的 endpoint preflight 承担;显式 `*` 通配脚本层无法表达,
+//!   按 fail-closed 跳过并上报。
 //! - `spawn:<path>` → execute allowlist（basename 粒度，与
 //!   `Capabilities::may_run` 匹配方式一致）
 //!
@@ -26,8 +27,8 @@ use gpui_shell::{Capabilities, ExecuteGrant};
 
 /// 从 manifest 权限装配 shell 运行时 capabilities。
 ///
-/// 返回 (capabilities, skipped)：skipped 是无法展开而被丢弃的权限原文，
-/// 供宿主日志透出，避免静默降权。
+/// 返回 (capabilities, skipped)：skipped 是被丢弃的权限原文(无法展开的路径,
+/// 或脚本层无法表达的显式 `*` 通配),供宿主日志透出,避免静默降权。
 pub(crate) fn capabilities_from_permissions(
     permissions: &[String],
     extension_root: &std::path::Path,
@@ -68,6 +69,12 @@ pub(crate) fn capabilities_from_permissions(
                 let Some(host) = split_net_host(&permission.raw) else {
                     continue;
                 };
+                // 显式高危通配:脚本 capability 只有 host 粒度、无法表达 `*`,
+                // fail-closed 跳过并上报,而不是塞进精确匹配的 network_hosts。
+                if host == "*" {
+                    skipped.push(permission.raw.clone());
+                    continue;
+                }
                 hosts.push(host.to_string());
             }
             PermissionKind::Spawn => {
@@ -146,12 +153,21 @@ fn join_expanded_path(base: std::ffi::OsString, rest: &str) -> PathBuf {
     path
 }
 
-/// `net:tcp:<host>:<port>` → host。
+/// `net:tcp:<host>:<port-range>` / `net:udp:<host>:<port-range>` → host。
+///
+/// 端口 range 不含 `:`,所以从右侧取一次即可;IPv6 host 使用 bracketed 形式
+/// (`net:tcp:[::1]:5432`),去掉方括号返回 `::1`。`net:unix:` 不是 host 权限,
+/// 返回 None。
 fn split_net_host(raw: &str) -> Option<&str> {
-    let mut parts = raw.splitn(4, ':');
-    let _net = parts.next()?;
-    let _proto = parts.next()?;
-    parts.next()
+    let rest = raw
+        .strip_prefix("net:tcp:")
+        .or_else(|| raw.strip_prefix("net:udp:"))?;
+    let (host, _port) = rest.rsplit_once(':')?;
+    Some(
+        host.strip_prefix('[')
+            .and_then(|host| host.strip_suffix(']'))
+            .unwrap_or(host),
+    )
 }
 
 /// spawn 权限路径 → `Capabilities::may_run` 匹配的命令名。
@@ -190,6 +206,36 @@ mod tests {
         );
         assert!(capabilities.may_reach("api.example.com"));
         assert!(!capabilities.may_reach("other.example.com"));
+    }
+
+    #[test]
+    fn wildcard_network_permission_is_skipped_not_silently_dropped() {
+        let (capabilities, skipped) = capabilities_from_permissions(
+            &permissions(&["net:tcp:*:9200"]),
+            std::path::Path::new("/tmp/ext"),
+        );
+        assert!(!capabilities.may_reach("any.example.com"));
+        assert!(!capabilities.may_reach("*"));
+        assert_eq!(skipped, vec!["net:tcp:*:9200".to_string()]);
+    }
+
+    #[test]
+    fn unix_socket_permission_grants_no_network_host() {
+        let (capabilities, skipped) = capabilities_from_permissions(
+            &permissions(&["net:unix:/var/run/example.sock"]),
+            std::path::Path::new("/tmp/ext"),
+        );
+        assert!(!capabilities.may_reach("/var/run/example.sock"));
+        assert!(skipped.is_empty());
+    }
+
+    #[test]
+    fn split_net_host_parses_host_and_bracketed_ipv6() {
+        assert_eq!(split_net_host("net:tcp:api.example.com:443"), Some("api.example.com"));
+        assert_eq!(split_net_host("net:udp:example.com:9200-9210"), Some("example.com"));
+        assert_eq!(split_net_host("net:tcp:*:443"), Some("*"));
+        assert_eq!(split_net_host("net:tcp:[::1]:5432"), Some("::1"));
+        assert_eq!(split_net_host("net:unix:/var/run/example.sock"), None);
     }
 
     #[test]

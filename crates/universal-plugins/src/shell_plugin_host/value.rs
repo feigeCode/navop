@@ -1,6 +1,8 @@
 use anyhow::Result;
 use gpui_shell::{HostError, HostObject, HostValue};
 
+use super::error::{ErrorCode, navop_error};
+
 pub(super) fn host_to_json(value: &HostValue) -> Result<serde_json::Value, HostError> {
     if let Some(tagged) = tagged_number_to_json(value)? {
         return Ok(tagged);
@@ -20,7 +22,7 @@ pub(super) fn host_to_json(value: &HostValue) -> Result<serde_json::Value, HostE
             } else {
                 serde_json::Number::from_f64(*value)
                     .map(serde_json::Value::Number)
-                    .ok_or_else(|| HostError::new("number is not finite"))?
+                    .ok_or_else(|| navop_error(ErrorCode::InvalidArgument, "number is not finite"))?
             }
         }
         HostValue::Str(value) => serde_json::Value::String(value.clone()),
@@ -70,7 +72,7 @@ fn number_to_host(value: &serde_json::Number) -> Result<HostValue, HostError> {
     value
         .as_f64()
         .map(HostValue::Number)
-        .ok_or_else(|| HostError::new("unsupported JSON number"))
+        .ok_or_else(|| navop_error(ErrorCode::ProtocolError, "unsupported JSON number"))
 }
 
 fn tagged_number(kind: &str, value: String) -> HostValue {
@@ -87,16 +89,19 @@ fn tagged_number_to_json(value: &HostValue) -> Result<Option<serde_json::Value>,
     let text = value
         .get("value")
         .and_then(HostValue::as_str)
-        .ok_or_else(|| HostError::new("tagged number requires a string value"))?;
+        .ok_or_else(|| {
+            navop_error(
+                ErrorCode::InvalidArgument,
+                "tagged number requires a string value",
+            )
+        })?;
     let number = match kind {
-        "i64" => serde_json::Number::from(
-            text.parse::<i64>()
-                .map_err(|_| HostError::new("invalid tagged i64 value"))?,
-        ),
-        "u64" => serde_json::Number::from(
-            text.parse::<u64>()
-                .map_err(|_| HostError::new("invalid tagged u64 value"))?,
-        ),
+        "i64" => serde_json::Number::from(text.parse::<i64>().map_err(|_| {
+            navop_error(ErrorCode::InvalidArgument, "invalid tagged i64 value")
+        })?),
+        "u64" => serde_json::Number::from(text.parse::<u64>().map_err(|_| {
+            navop_error(ErrorCode::InvalidArgument, "invalid tagged u64 value")
+        })?),
         _ => return Ok(None),
     };
     Ok(Some(serde_json::Value::Number(number)))

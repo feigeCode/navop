@@ -8,7 +8,7 @@ use extension_protocol::resource::{
 use gpui_shell::{HostAsyncTask, HostError, HostModule, HostValue};
 
 use self::task::{host_error, spawn_provider_task};
-use super::{session::ShellMountSession, value::host_to_json};
+use super::{error::{ErrorCode, navop_error}, session::ShellMountSession, value::host_to_json};
 
 pub(super) fn resource_module(session: Arc<ShellMountSession>) -> HostModule {
     HostModule::new("navop.resource")
@@ -58,7 +58,10 @@ fn open_resource(
                     .map_err(host_error)?;
                 if request_cancel.is_cancelled() {
                     compensate_open(&client, &result.resource_id).await;
-                    return Err(HostError::new("resource open cancelled"));
+                    return Err(navop_error(
+                        ErrorCode::RequestCancelled,
+                        "resource open cancelled",
+                    ));
                 }
                 task_session.register_resource(alias, &client, result)
             },

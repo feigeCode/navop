@@ -175,7 +175,7 @@ fn base_policy(
             extension_id = %contribution.extension_id,
             view_id = %contribution.id,
             skipped = skipped.join(", "),
-            "shell view permissions could not be expanded and were not granted"
+            "shell view permissions were not granted to the script runtime"
         );
     }
     let mut policy = Policy::new()

@@ -16,6 +16,8 @@ use gpui_shell::{HostError, HostObject, HostValue};
 use super::value::json_to_host;
 use crate::universal_plugins::UniversalPluginService;
 
+use super::error::{ErrorCode, navop_error, service_error};
+
 #[derive(Clone)]
 struct ProviderHandle {
     alias: String,
@@ -74,13 +76,15 @@ impl ShellMountSession {
     }
 
     pub(super) fn client(&self, alias: &str) -> Result<ManagedUniversalPluginClient, HostError> {
-        let runtime_id = self
-            .backends
-            .get(alias)
-            .ok_or_else(|| HostError::new(format!("unknown backend alias `{alias}`")))?;
+        let runtime_id = self.backends.get(alias).ok_or_else(|| {
+            navop_error(
+                ErrorCode::BackendNotFound,
+                format!("unknown backend alias `{alias}`"),
+            )
+        })?;
         self.service
             .universal_plugin_client(runtime_id)
-            .map_err(|error| HostError::new(error.to_string()))
+            .map_err(service_error)
     }
 
     pub(super) fn register_resource(
@@ -142,7 +146,9 @@ impl ShellMountSession {
         let record = self
             .resources
             .lock()
-            .map_err(|_| HostError::new("shell resource registry poisoned"))?
+            .map_err(|_| {
+                navop_error(ErrorCode::RuntimeUnavailable, "shell resource registry poisoned")
+            })?
             .get(handle)
             .cloned()
             .ok_or_else(|| invalid_handle("resource", handle))?;
@@ -268,7 +274,7 @@ impl ShellMountSession {
         let record = self
             .jobs
             .lock()
-            .map_err(|_| HostError::new("shell job registry poisoned"))?
+            .map_err(|_| navop_error(ErrorCode::RuntimeUnavailable, "shell job registry poisoned"))?
             .get(handle)
             .cloned()
             .ok_or_else(|| invalid_handle("job", handle))?;
@@ -346,11 +352,12 @@ impl ShellMountSession {
         generation: u64,
         provider_id: &str,
     ) -> Result<String, HostError> {
-        let runtime_id = self
-            .backends
-            .get(&alias)
-            .cloned()
-            .ok_or_else(|| HostError::new(format!("unknown backend alias `{alias}`")))?;
+        let runtime_id = self.backends.get(&alias).cloned().ok_or_else(|| {
+            navop_error(
+                ErrorCode::BackendNotFound,
+                format!("unknown backend alias `{alias}`"),
+            )
+        })?;
         let handle = new_handle(kind);
         registry
             .lock()
@@ -377,7 +384,9 @@ impl ShellMountSession {
     ) -> Result<(ManagedUniversalPluginClient, String), HostError> {
         let record = registry
             .lock()
-            .map_err(|_| HostError::new("shell handle registry poisoned"))?
+            .map_err(|_| {
+                navop_error(ErrorCode::RuntimeUnavailable, "shell handle registry poisoned")
+            })?
             .get(handle)
             .cloned()
             .ok_or_else(|| invalid_handle(kind, handle))?;

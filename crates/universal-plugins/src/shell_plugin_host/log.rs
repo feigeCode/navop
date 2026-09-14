@@ -1,5 +1,7 @@
 use gpui_shell::{HostError, HostModule, HostValue};
 
+use super::error::{ErrorCode, navop_error};
+
 pub(super) fn log_module(
     contribution: &extension_runtime::RegisteredShellViewContribution,
 ) -> HostModule {
@@ -45,7 +47,10 @@ fn logger(
     move |arguments| {
         let message = arguments.string(0)?;
         if message.len() > 16 * 1024 {
-            return Err(HostError::new("log message exceeds 16 KiB"));
+            return Err(navop_error(
+                ErrorCode::InvalidArgument,
+                "log message exceeds 16 KiB",
+            ));
         }
         match level {
             Level::Debug => tracing::debug!(extension_id, view_id, "{message}"),

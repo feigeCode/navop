@@ -2,9 +2,10 @@ use extension_host::CancellationToken;
 use extension_plugin_adapter::{
     BindingContext, ResourceSessionHandle, dispatch_invoke_scoped, dispatch_job_scoped,
 };
-use gpui_shell::{HostError, HostModule};
+use gpui_shell::HostModule;
 
 use super::{
+    error::{ErrorCode, navop_error, workbench_error},
     resource::task::spawn_provider_task,
     value::{host_to_json, json_to_host},
 };
@@ -61,7 +62,10 @@ pub(super) fn workbench_module(
                     .unwrap_or_else(|| serde_json::json!({"page": 1, "limit": 50, "cursor": null})),
             };
             let operation = descriptor.operations.get(&operation_id).ok_or_else(|| {
-                HostError::new(format!("unknown workbench operation `{operation_id}`"))
+                navop_error(
+                    ErrorCode::InvalidArgument,
+                    format!("unknown workbench operation `{operation_id}`"),
+                )
             })?;
             let is_job = matches!(
                 operation.mode,
@@ -86,7 +90,7 @@ pub(super) fn workbench_module(
                         )
                         .await
                     }
-                    .map_err(|error| HostError::new(error.to_string()))?;
+                    .map_err(workbench_error)?;
                     json_to_host(&result)
                 },
                 cancel,

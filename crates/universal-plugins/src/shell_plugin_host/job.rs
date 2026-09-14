@@ -5,6 +5,7 @@ use extension_protocol::job::JobStartParams;
 use gpui_shell::{HostAsyncTask, HostError, HostModule, HostObject, HostValue};
 
 use super::{
+    error::{ErrorCode, navop_error},
     resource::task::{host_error, spawn_provider_task},
     session::ShellMountSession,
     value::{host_to_json, json_to_host},
@@ -60,11 +61,15 @@ fn start_job(
                 if request_cancel.is_cancelled() {
                     let _ = client.cancel_job(&job).await;
                     let _ = client.close_job(&job).await;
-                    return Err(HostError::new("job start cancelled"));
+                    return Err(navop_error(
+                        ErrorCode::RequestCancelled,
+                        "job start cancelled",
+                    ));
                 }
                 let state = json_to_host(
-                    &serde_json::to_value(job_state(&job))
-                        .map_err(|e| HostError::new(e.to_string()))?,
+                    &serde_json::to_value(job_state(&job)).map_err(|e| {
+                        navop_error(ErrorCode::ProtocolError, e.to_string())
+                    })?,
                 )?;
                 let handle = task_session.register_job(alias, &resource, job);
                 Ok(HostObject::new()
@@ -95,9 +100,9 @@ fn status_job(
                     )
                     .await
                     .map_err(host_error)?;
-                json_to_host(
-                    &serde_json::to_value(status).map_err(|e| HostError::new(e.to_string()))?,
-                )
+                json_to_host(&serde_json::to_value(status).map_err(|e| {
+                    navop_error(ErrorCode::ProtocolError, e.to_string())
+                })?)
             },
             cancel,
         ))
