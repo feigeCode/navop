@@ -4225,7 +4225,7 @@ impl TabContainer {
                             .and_then(|_| self.rename_input.clone());
                         let (tab_min_width, tab_max_width) =
                             tab_width_bounds(tab_max_width, rename_input_for_tab.is_some());
-                        let show_title_tooltip = rename_input_for_tab.is_none();
+                        let show_title_tooltip = rename_input_for_tab.is_none() && !title.is_empty();
                         let tooltip_title = title.clone();
 
                         div()
