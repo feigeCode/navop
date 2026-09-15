@@ -1,2 +1,5 @@
 # 资助本项目的平台（显示在仓库页面的 Sponsor 按钮上）
 ko_fi: xiaofei99
+# 爱发电没有官方字段，走 custom 自定义链接
+custom:
+  - https://ifdian.net/a/xiaofei99
