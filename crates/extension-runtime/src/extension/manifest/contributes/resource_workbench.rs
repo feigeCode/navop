@@ -391,8 +391,11 @@ pub struct ResourceWorkbenchViewer {
 
 /// 终端原语。
 ///
-/// `command` 模式由宿主启动可嵌入的本地终端进程;`operation` 模式由 runtime
-/// 侧 pty operation 驱动(用于 SSH exec、kubectl exec 等远程终端)。
+/// 目前只有 `command` 模式可用:由宿主启动可嵌入的本地终端进程。
+/// `operation`(runtime pty 驱动)是**预留声明**,扩展协议还没有 provider
+/// PTY 流式通道,宿主侧必定返回 not supported —— 因此注册期直接拒绝声明了
+/// `operation` 的 manifest,让失败发生在安装时而不是用户点开时。
+/// 字段仍保留在 schema 里,是为了给出明确的拒绝理由,而不是一个 serde 未知字段错误。
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceWorkbenchTerminal {
@@ -408,7 +411,8 @@ pub struct ResourceWorkbenchTerminal {
     /// 工作目录。
     #[serde(default, rename = "workingDir")]
     pub working_dir: Option<String>,
-    /// runtime pty operation;与 `command` 二选一。
+    /// runtime pty operation;与 `command` 二选一。**尚未实现,注册期会拒绝**
+    /// (见类型文档)。
     #[serde(default)]
     pub operation: Option<ResourceWorkbenchTerminalOperation>,
 }

@@ -830,6 +830,7 @@ fn validate_resource_workbench(
                         if !page_exists(&open.page_id) {
                             return Err(invalid("table open references an unknown page"));
                         }
+                        validate_route_bindings(&open.route, "table open", &invalid)?;
                     }
                     for action in &table.actions {
                         if !operation_exists(&action.operation) {
@@ -865,6 +866,17 @@ fn validate_resource_workbench(
                         if !operation_exists(&operation.operation) {
                             return Err(invalid("terminal references an unknown operation"));
                         }
+                        // `operation` 形式是**预留声明**,宿主侧明确返回
+                        // "runtime terminal operation ... is not supported yet":
+                        // 扩展协议目前只有请求-响应与 job 两种形态,没有
+                        // provider PTY 流式通道,交互式 exec 无法复用。此前这里
+                        // 只校验 operation 存在,于是扩展能装成功、用户点开必定
+                        // 失败 —— 典型"声明了但不可用"。在校验期直接拒绝,让失败
+                        // 发生在安装而不是使用时。
+                        return Err(invalid(
+                            "terminal.operation is reserved but not implemented; \
+                             declare a local command instead",
+                        ));
                     }
                 }
                 m::ResourceWorkbenchPrimitive::Viewer(_)
@@ -876,6 +888,7 @@ fn validate_resource_workbench(
             if !page_exists(&link.page_id) {
                 return Err(invalid("page link references an unknown page"));
             }
+            validate_route_bindings(&link.route, "page link", &invalid)?;
         }
         // 页面 tabGroupId 必须命中 layout 中的某个组。
         if let Some(group_id) = page.tab_group_id.as_deref() {
@@ -902,6 +915,33 @@ fn validate_resource_workbench(
         }
     }
     validate_workbench_layout(manifest, workbench, &invalid)?;
+    Ok(())
+}
+
+/// route 绑定只接受**导航发生那一刻取得到值**的来源。
+///
+/// `input`(表单输入)与 `paging`(列表分页)只在 provider 参数侧有意义:导航
+/// 由行点击 / 链接触发,那时既没有表单输入也没有列表上下文。此前注册期不校验,
+/// 扩展声明了它们,`build_route` 只会静默产出空值 —— 与 `connection` 当初
+/// 在路由侧被无条件忽略是同一类"声明合法但永远拿不到值"。
+fn validate_route_bindings(
+    bindings: &std::collections::BTreeMap<
+        String,
+        crate::extension::manifest::ResourceWorkbenchBinding,
+    >,
+    location: &str,
+    invalid: &dyn Fn(&str) -> ExtensionRuntimeError,
+) -> Result<(), ExtensionRuntimeError> {
+    use crate::extension::manifest::ResourceWorkbenchBindingSource as S;
+
+    for (name, binding) in bindings {
+        if matches!(binding.source, S::Input | S::Paging) {
+            return Err(invalid(&format!(
+                "{location} route binding `{name}` uses an input/paging source, \
+                 which is only meaningful for operation params"
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -975,6 +1015,7 @@ fn validate_workbench_layout(
                                     "tree children open references an unknown page",
                                 ));
                             }
+                            validate_route_bindings(&open.route, "tree children open", invalid)?;
                         }
                         level = children.children.as_deref();
                     }
@@ -1004,6 +1045,7 @@ fn validate_workbench_layout(
                     if !page_exists(&tab.page_id) {
                         return Err(invalid("tab group references an unknown page"));
                     }
+                    validate_route_bindings(&tab.route, "tab group tab", invalid)?;
                 }
             }
         }
