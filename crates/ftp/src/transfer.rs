@@ -16,11 +16,11 @@
 //!   不确定——都必须将连接置毒，只有完整消费了终态响应才允许复用。
 
 use anyhow::{Result, anyhow};
-use async_ftp::FtpStream;
 use sftp::{DirectoryConflictPolicy, FileEntry, TransferCancelled, TransferProgress};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
+use suppaftp::FtpError;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::listing::is_valid_remote_name;
@@ -36,12 +36,6 @@ const IO_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 pub(super) const COMMAND_TIMEOUT: Duration = Duration::from_secs(15);
 /// 断开连接（QUIT）的超时上限。
 pub(super) const QUIT_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// put 传输的结果；取消时以 Cancelled 标记（future 中途丢弃，协议状态未知）。
-enum PutOutcome {
-    Done(std::result::Result<(), async_ftp::types::FtpError>),
-    Cancelled,
-}
 
 /// 数据连接停滞（空闲超时）标记；用于区分"可重试的路径错误"与"连接已坏"。
 #[derive(Debug)]
@@ -166,16 +160,13 @@ pub(super) async fn await_stage<T>(
     }
 }
 
-/// async_ftp 把非预期应答包装成 InvalidResponse("Expected code …, got response: 550 …")。
-/// 从中提取服务端状态码；连接层错误（ConnectionError 等）返回 `None`。
-pub(super) fn ftp_status_code(error: &async_ftp::types::FtpError) -> Option<u32> {
-    let text = match error {
-        async_ftp::types::FtpError::InvalidResponse(text) => text.as_str(),
-        _ => return None,
-    };
-    let marker = "got response: ";
-    let index = text.find(marker)? + marker.len();
-    text[index..].get(0..3)?.parse().ok()
+/// suppaftp 把服务端拒绝包装成 `UnexpectedResponse(Response)`，其中带类型化状态码。
+/// 连接层错误（ConnectionError 等）返回 `None`。
+pub(super) fn ftp_status_code(error: &FtpError) -> Option<u32> {
+    match error {
+        FtpError::UnexpectedResponse(response) => Some(response.status as u32),
+        _ => None,
+    }
 }
 
 /// 可取消、带 I/O 空闲超时的数据块读取。
@@ -202,6 +193,37 @@ pub(super) async fn read_chunk<R: tokio::io::AsyncRead + Unpin>(
                     *last_data = tokio::time::Instant::now();
                 }
                 return Ok(read);
+            }
+            _ = tokio::time::sleep(CANCEL_POLL_INTERVAL) => {
+                if last_data.elapsed() > IO_IDLE_TIMEOUT {
+                    return Err(anyhow::Error::new(ConnectionStalled).context(format!(
+                        "FTP data connection idle for over {}s",
+                        IO_IDLE_TIMEOUT.as_secs()
+                    )));
+                }
+            }
+        }
+    }
+}
+
+/// 可取消、带 I/O 空闲超时的数据块写入；与 [`read_chunk`] 镜像对称。
+pub(super) async fn write_chunk<W: tokio::io::AsyncWrite + Unpin>(
+    writer: &mut W,
+    chunk: &[u8],
+    cancelled: Option<&AtomicBool>,
+    last_data: &mut tokio::time::Instant,
+) -> Result<()> {
+    loop {
+        if let Some(cancelled) = cancelled {
+            if cancelled.load(Ordering::Relaxed) {
+                return Err(TransferCancelled.into());
+            }
+        }
+        tokio::select! {
+            written = writer.write_all(chunk) => {
+                written?;
+                *last_data = tokio::time::Instant::now();
+                return Ok(());
             }
             _ = tokio::time::sleep(CANCEL_POLL_INTERVAL) => {
                 if last_data.elapsed() > IO_IDLE_TIMEOUT {
@@ -316,10 +338,21 @@ impl crate::FtpClient {
     ) -> Result<()> {
         self.ensure_usable()?;
         // SIZE 探测（可选信息）：取消/超时时响应可能未被消费，连接置毒；
-        // 服务端拒绝（550 等）响应已被完整消费，忽略即可。
+        // 服务端拒绝（550 等，suppaftp 返回 UnexpectedResponse）响应已被完整
+        // 消费，按未知大小（0）继续即可。
         let stage = await_stage(self.stream.size(remote_path), Some(cancelled), "size query").await;
         let total = match stage {
-            Ok(size) => size.unwrap_or(None).unwrap_or(0) as u64,
+            Ok(Ok(size)) => size as u64,
+            Ok(Err(error)) => {
+                // 服务端拒绝 SIZE（550 等，suppaftp 返回 UnexpectedResponse）：
+                // 响应已被完整消费，连接可用，按未知大小（0）继续。
+                if ftp_status_code(&error).is_some() {
+                    0
+                } else {
+                    self.poison();
+                    return Err(error.into());
+                }
+            }
             Err(error) => {
                 self.poison();
                 return Err(error);
@@ -372,7 +405,7 @@ impl crate::FtpClient {
             .open(temp_local)
             .await?;
         let stage = await_stage(
-            self.stream.get(remote_path),
+            self.stream.retr_as_stream(remote_path),
             Some(cancelled),
             "download start",
         )
@@ -420,21 +453,17 @@ impl crate::FtpClient {
             self.poison();
             return Err(error);
         }
-        drop(reader);
         // 数据流结束后必须消费 226 完成响应，否则后续命令会读到残留应答。
+        // TransferStream::finish() 关闭数据连接并读取终态（消费 stream 本体）。
         // 等待响应加超时上限并响应取消，避免服务端停滞时挂死或取消失效。
         // 保守策略：传输开始后，终态响应只要不是"成功且完整消费"——
         // 服务端报错（可能是 426 后还跟着 226 的残留序列）、超时、取消——
         // 都无法证明控制通道已恢复同步，一律置毒禁止复用。
         let outcome = {
-            let mut response = std::pin::pin!(tokio::time::timeout(
-                COMMAND_TIMEOUT,
-                self.stream
-                    .read_response(async_ftp::status::CLOSING_DATA_CONNECTION),
-            ));
+            let mut finish = std::pin::pin!(tokio::time::timeout(COMMAND_TIMEOUT, reader.finish()));
             loop {
                 tokio::select! {
-                    result = response.as_mut() => break Some(result),
+                    result = finish.as_mut() => break Some(result),
                     _ = tokio::time::sleep(CANCEL_POLL_INTERVAL) => {
                         if cancelled.load(Ordering::Relaxed) {
                             break None;
@@ -448,7 +477,7 @@ impl crate::FtpClient {
                 self.poison();
                 return Err(TransferCancelled.into());
             }
-            Some(Ok(Ok(_))) => {}
+            Some(Ok(Ok(()))) => {}
             Some(Ok(Err(error))) => {
                 self.poison();
                 return Err(error.into());
@@ -483,18 +512,64 @@ impl crate::FtpClient {
             progress: &progress,
             current_file: remote_path.to_string(),
         };
-        // put 过程用 select! 轮询取消标志：停滞的上传也能被取消唤醒。
-        // 取消时丢弃 put future（数据连接中途断开，协议状态未知，连接置毒）。
-        // pin! 的 future 借用持续到作用域结束，因此整个 select 循环
-        // 放在独立的块作用域中，块结束后才能再次使用 self.stream。
+        // STOR 命令交换：取消/超时时响应可能未被消费，连接置毒；
+        // 服务端明确拒绝 STOR（响应已消费）→ 连接仍可用，直接报错。
+        let stage = await_stage(
+            self.stream.put_with_stream(&temp_remote),
+            Some(cancelled),
+            "upload start",
+        )
+        .await;
+        let mut data_stream = match stage {
+            Ok(Ok(stream)) => stream,
+            Ok(Err(error)) => return Err(error.into()),
+            Err(error) => {
+                self.poison();
+                return Err(error);
+            }
+        };
+        // 传输已开始：数据写入失败（取消/停滞/断线）或本地读取失败，
+        // 数据流都没有正常收尾，协议状态未知 → 连接置毒，拒绝复用。
+        // suppaftp 的 put_file() 无法中途取消，因此手动泵：分块读本地文件
+        // （ProgressReader 负责进度与取消）写入数据连接（write_chunk 提供
+        // 取消唤醒与空闲超时），完成后由 finish() 消费终态响应。
+        let pumped: Result<()> = async {
+            let mut chunk = vec![0u8; CHUNK_SIZE];
+            let mut last_data = tokio::time::Instant::now();
+            loop {
+                ensure_not_cancelled(cancelled)?;
+                let read =
+                    read_chunk(&mut reader, &mut chunk, Some(cancelled), &mut last_data).await?;
+                if read == 0 {
+                    break;
+                }
+                write_chunk(
+                    &mut data_stream,
+                    &chunk[..read],
+                    Some(cancelled),
+                    &mut last_data,
+                )
+                .await?;
+            }
+            Ok(())
+        }
+        .await;
+        if let Err(error) = pumped {
+            // 数据流未 finish 即被丢弃：终态响应被 suppaftp 延迟到下一条命令，
+            // 但连接已置毒，不会再复用。
+            self.poison();
+            return Err(error);
+        }
+        // finish 消费 226 完成响应；取消/超时/报错一律置毒。
         let outcome = {
-            let mut put = std::pin::pin!(self.stream.put(&temp_remote, &mut reader));
+            let mut finish =
+                std::pin::pin!(tokio::time::timeout(COMMAND_TIMEOUT, data_stream.finish()));
             loop {
                 tokio::select! {
-                    result = put.as_mut() => break PutOutcome::Done(result),
+                    result = finish.as_mut() => break Some(result),
                     _ = tokio::time::sleep(CANCEL_POLL_INTERVAL) => {
                         if cancelled.load(Ordering::Relaxed) {
-                            break PutOutcome::Cancelled;
+                            break None;
                         }
                     }
                 }
@@ -502,25 +577,29 @@ impl crate::FtpClient {
         };
         drop(reader);
         match outcome {
-            PutOutcome::Cancelled => {
+            None => {
                 // 连接已置毒：不要在状态不明的连接上同步等待清理命令
                 // （STOR 之后的响应可能仍未消费，再发 DELE 只会读到失步应答）。
                 // 远端临时文件留待重连后的清理或服务端垃圾回收。
                 self.poison();
                 return Err(TransferCancelled.into());
             }
-            PutOutcome::Done(Err(error)) => {
-                // 保守策略：无法区分错误发生在 STOR 被拒（响应已消费、
-                // 连接同步）还是数据传输已开始后的中途失败（可能残留
-                // 226/426 序列）——一律置毒，且不在该连接上继续清理。
+            Some(Ok(Err(error))) => {
+                // 与数据泵失败相同的保守策略：无法证明控制通道已恢复同步。
                 self.poison();
                 return Err(error.into());
             }
-            PutOutcome::Done(Ok(())) => {}
+            Some(Err(_)) => {
+                self.poison();
+                return Err(anyhow!(
+                    "Timed out waiting for FTP upload completion response"
+                ));
+            }
+            Some(Ok(Ok(()))) => {}
         }
         match tokio::time::timeout(
             COMMAND_TIMEOUT,
-            self.stream.rename(&temp_remote, remote_path),
+            self.stream.rename(temp_remote.as_str(), remote_path),
         )
         .await
         {
@@ -552,9 +631,15 @@ impl crate::FtpClient {
     pub(super) async fn write_file_safe(&mut self, path: &str, content: &[u8]) -> Result<()> {
         self.ensure_usable()?;
         let temp_remote = temp_path(path);
-        let mut cursor = std::io::Cursor::new(content);
-        let result =
-            tokio::time::timeout(COMMAND_TIMEOUT, self.stream.put(&temp_remote, &mut cursor)).await;
+        let result = tokio::time::timeout(COMMAND_TIMEOUT, async {
+            let mut data_stream = self.stream.put_with_stream(&temp_remote).await?;
+            data_stream
+                .write_all(content)
+                .await
+                .map_err(FtpError::ConnectionError)?;
+            data_stream.finish().await
+        })
+        .await;
         match result {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
@@ -568,7 +653,12 @@ impl crate::FtpClient {
                 return Err(anyhow!("Timed out uploading editor save"));
             }
         }
-        match tokio::time::timeout(COMMAND_TIMEOUT, self.stream.rename(&temp_remote, path)).await {
+        match tokio::time::timeout(
+            COMMAND_TIMEOUT,
+            self.stream.rename(temp_remote.as_str(), path),
+        )
+        .await
+        {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
                 let _ = tokio::time::timeout(COMMAND_TIMEOUT, self.stream.rm(&temp_remote)).await;
@@ -763,7 +853,7 @@ impl crate::FtpClient {
 
     /// 判断远程路径是否存在：SIZE 对目录通常失败，因此对目录用 CWD 探测。
     pub(super) async fn path_exists(&mut self, path: &str) -> Result<bool> {
-        if self.stream.size(path).await.unwrap_or(None).is_some() {
+        if self.stream.size(path).await.is_ok() {
             return Ok(true);
         }
         self.path_is_dir(path).await
@@ -771,10 +861,7 @@ impl crate::FtpClient {
 
     /// CWD 探测目录并恢复原工作目录。
     pub(super) async fn path_is_dir(&mut self, path: &str) -> Result<bool> {
-        let previous = match self.stream.pwd().await {
-            Ok(previous) => Some(previous),
-            Err(_) => None,
-        };
+        let previous = self.stream.pwd().await.ok();
         if self.stream.cwd(path).await.is_ok() {
             if let Some(previous) = previous {
                 let _ = self.stream.cwd(&previous).await;
@@ -818,7 +905,7 @@ impl crate::FtpClient {
         }
         // 2) SIZE 探测文件。
         match self.stream.size(path).await {
-            Ok(Some(size)) => {
+            Ok(size) => {
                 return Ok(Some(sftp::PathMetadata {
                     size: size as u64,
                     modified: self.mdtm_or_epoch(path).await,
@@ -826,7 +913,6 @@ impl crate::FtpClient {
                     permissions: 0,
                 }));
             }
-            Ok(None) => {}
             Err(error) => {
                 if ftp_status_code(&error).is_none() {
                     return Err(error.into());
@@ -862,9 +948,10 @@ impl crate::FtpClient {
         self.stream
             .mdtm(path)
             .await
-            .unwrap_or(None)
+            .ok()
             .map(|value| {
-                SystemTime::UNIX_EPOCH + Duration::from_secs(value.timestamp().max(0) as u64)
+                SystemTime::UNIX_EPOCH
+                    + Duration::from_secs(value.and_utc().timestamp().max(0) as u64)
             })
             .unwrap_or(SystemTime::UNIX_EPOCH)
     }
@@ -893,7 +980,7 @@ pub(super) fn split_remote_parent(path: &str) -> (String, String) {
 pub(super) fn deletion_order(entries: &[FileEntry]) -> (Vec<String>, Vec<String>) {
     let mut files = Vec::new();
     let mut dirs: Vec<&FileEntry> = entries.iter().filter(|entry| entry.is_dir).collect();
-    dirs.sort_by(|a, b| remote_path_depth(&b.path).cmp(&remote_path_depth(&a.path)));
+    dirs.sort_by_key(|entry| std::cmp::Reverse(remote_path_depth(&entry.path)));
     for entry in entries {
         if !entry.is_dir {
             files.push(entry.path.clone());
@@ -910,7 +997,7 @@ fn remote_path_depth(path: &str) -> usize {
 }
 
 /// 确保远端目录存在（mkdir 失败但目录已存在时视为成功）。
-async fn ensure_dir(client: &mut FtpStream, path: &str) -> Result<()> {
+async fn ensure_dir(client: &mut suppaftp::tokio::AsyncRustlsFtpStream, path: &str) -> Result<()> {
     if client.mkdir(path).await.is_err() {
         // 目录可能已存在：用 CWD 验证。
         let previous = client.pwd().await.ok();
@@ -976,6 +1063,7 @@ mod tests {
     use std::sync::atomic::Ordering;
     use std::sync::{Arc, Mutex};
     use std::time::SystemTime;
+    use suppaftp::FtpError;
 
     fn entry(path: &str, is_dir: bool) -> FileEntry {
         FileEntry {
@@ -1035,12 +1123,12 @@ mod tests {
 
     #[test]
     fn ftp_status_code_parses_server_replies_only() {
-        let reply = async_ftp::types::FtpError::InvalidResponse(
-            "Expected code [213], got response: 550 Could not get file size.".to_string(),
-        );
+        let reply = FtpError::UnexpectedResponse(suppaftp::types::Response::new(
+            suppaftp::Status::FileUnavailable,
+            b"550 Could not get file size.".to_vec(),
+        ));
         assert_eq!(ftp_status_code(&reply), Some(550));
-        let connection =
-            async_ftp::types::FtpError::ConnectionError(std::io::Error::other("connection reset"));
+        let connection = FtpError::ConnectionError(std::io::Error::other("connection reset"));
         assert_eq!(ftp_status_code(&connection), None);
     }
 

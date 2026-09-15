@@ -11,12 +11,13 @@ mod listing;
 mod transfer;
 
 use anyhow::{Result, anyhow};
-use async_ftp::{FtpStream, types::FileType};
 use async_trait::async_trait;
 use sftp::{DirectoryConflictPolicy, FileEntry, PathMetadata, ProgressCallback, RemoteFileClient};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
+use suppaftp::tokio::{AsyncRustlsConnector, AsyncRustlsFtpStream};
+use suppaftp::types::FileType;
 
 /// FTP 连接参数（与 `one_core::storage::FtpParams` 的运行时形态对应）。
 #[derive(Clone, Debug)]
@@ -33,7 +34,7 @@ pub struct FtpConnectConfig {
 }
 
 pub struct FtpClient {
-    stream: FtpStream,
+    stream: AsyncRustlsFtpStream,
     /// 取消/停滞/连接中断后协议状态未知；置位后拒绝继续复用。
     poisoned: bool,
 }
@@ -48,12 +49,14 @@ impl FtpClient {
             return Err(anyhow!("FTP active mode is not supported"));
         }
         let establish = async {
-            let mut stream = FtpStream::connect((config.host.as_str(), config.port)).await?;
+            let mut stream =
+                AsyncRustlsFtpStream::connect((config.host.as_str(), config.port)).await?;
             if config.use_tls {
                 let tls = tls_client_config()?;
-                let domain = tokio_rustls::rustls::ServerName::try_from(config.host.as_str())
-                    .map_err(|error| anyhow!("Invalid FTP host for TLS: {error}"))?;
-                stream = stream.into_secure(tls, domain).await?;
+                // suppaftp 内部用 rustls-pki-types 解析主机名：IP 与 DNS 名均可，
+                // 且 rustls 0.23 的 webpki 原生校验 IP SAN（rustls 0.20 不支持，
+                // 这正是从 async_ftp 迁移到 suppaftp 的原因）。
+                stream = stream.into_secure(tls, &config.host).await?;
             }
             stream.login(&config.username, &config.password).await?;
             stream.transfer_type(FileType::Binary).await?;
@@ -85,29 +88,37 @@ impl FtpClient {
         self.poisoned = true;
     }
 }
-fn tls_client_config() -> Result<tokio_rustls::rustls::ClientConfig> {
-    use tokio_rustls::rustls::{Certificate, ClientConfig, RootCertStore};
-    let mut roots = RootCertStore::empty();
+/// 系统钥匙串信任链 → TLS connector。
+///
+/// rustls 0.23 与 rustls-native-certs 0.8 共享 pki-types，证书无需转换。
+///
+/// 显式安装 ring CryptoProvider：本仓依赖图中 rustls 同时被启用了
+/// ring（suppaftp）与 aws-lc-rs（tiberius 等），进程级默认 provider
+/// 无法自动判定，必须手动指定。
+fn tls_client_config() -> Result<AsyncRustlsConnector> {
+    use tokio_rustls::rustls::ClientConfig;
+
+    let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
+
+    let mut roots = tokio_rustls::rustls::RootCertStore::empty();
     let loaded = rustls_native_certs::load_native_certs();
     for error in &loaded.errors {
         tracing::warn!("FTP TLS: loading system certificates warned: {error}");
     }
     let mut added = 0;
-    for cert in &loaded.certs {
-        // rustls-native-certs 0.8 输出 rustls 0.23 的 CertificateDer；
-        // async_ftp 的 secure feature 依赖 tokio-rustls 0.23（rustls 0.20），
-        // 这里转换为其 Certificate 原始 DER 形式。
-        if roots.add(&Certificate(cert.as_ref().to_vec())).is_ok() {
+    for cert in loaded.certs {
+        if roots.add(cert).is_ok() {
             added += 1;
         }
     }
     if added == 0 {
         return Err(anyhow!("No usable system certificates for FTPS"));
     }
-    Ok(ClientConfig::builder()
-        .with_safe_defaults()
+    let config = ClientConfig::builder()
         .with_root_certificates(roots)
-        .with_no_client_auth())
+        .with_no_client_auth();
+    let connector: tokio_rustls::TlsConnector = Arc::new(config).into();
+    Ok(AsyncRustlsConnector::from(connector))
 }
 
 #[async_trait]
@@ -192,7 +203,7 @@ impl RemoteFileClient for FtpClient {
         // 本地缓冲错误、超限退出——数据流都没有正常收尾，
         // 协议状态未知 → 连接置毒，拒绝复用（残留应答会让后续
         // 命令读到上一次传输的 226/426，造成命令失步）。
-        let mut reader = self.stream.get(path).await?;
+        let mut reader = self.stream.retr_as_stream(path).await?;
         let mut content: Vec<u8> = Vec::with_capacity(max_bytes.min(4 * 1024 * 1024));
         let mut chunk = vec![0u8; 64 * 1024];
         let mut last_data = tokio::time::Instant::now();
@@ -220,17 +231,9 @@ impl RemoteFileClient for FtpClient {
             }
             content.extend_from_slice(&chunk[..read]);
         }
-        drop(reader);
-        // 等待 226 完成响应加超时上限。保守策略与下载一致：传输开始后，
-        // 终态响应只要不是"成功且完整消费"——服务端报错（可能是 426 后
-        // 还跟着 226 的残留序列）、超时——一律置毒，禁止连接继续复用。
-        match tokio::time::timeout(
-            crate::transfer::COMMAND_TIMEOUT,
-            self.stream
-                .read_response(async_ftp::status::CLOSING_DATA_CONNECTION),
-        )
-        .await
-        {
+        // 数据流 EOF 后由 TransferStream::finish() 消费 226 完成响应；
+        // finish 同时关闭数据连接并读取终态，任何失败都视为失步 → 置毒。
+        match tokio::time::timeout(crate::transfer::COMMAND_TIMEOUT, reader.finish()).await {
             Ok(Ok(_)) => {}
             Ok(Err(error)) => {
                 self.poison();

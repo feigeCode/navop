@@ -58,7 +58,8 @@ edition = "2024"
 gpui-component = { git = "https://github.com/feigeCode/gpui-component", rev = "9be482334f33d4b491e91b24caa3c9880e1e7b21" }
 gpui-component-assets = { package = "gpui-kit-assets", git = "https://github.com/feigeCode/gpui-component", rev = "9be482334f33d4b491e91b24caa3c9880e1e7b21" }
 gpui-base = { git = "https://github.com/feigeCode/gpui-component", rev = "9be482334f33d4b491e91b24caa3c9880e1e7b21" }
-gpui-shell = { git = "https://github.com/feigeCode/gpui-component", rev = "9be482334f33d4b491e91b24caa3c9880e1e7b21" }
+# gpui-shell = { git = "https://github.com/feigeCode/gpui-component", rev = "9be482334f33d4b491e91b24caa3c9880e1e7b21" }
+gpui-shell = {path = "../gpui-component/crates/shell"}
 gpui-component-shell = { git = "https://github.com/feigeCode/gpui-component", rev = "9be482334f33d4b491e91b24caa3c9880e1e7b21" }
 gpui-wry = { git = "https://github.com/feigeCode/gpui-component", rev = "9be482334f33d4b491e91b24caa3c9880e1e7b21" }
 gpui-kit = { git = "https://github.com/feigeCode/gpui-component", rev = "9be482334f33d4b491e91b24caa3c9880e1e7b21" }
@@ -220,7 +221,6 @@ redis_client = { package = "redis", version = "0.27", features = ["tokio-comp", 
 russh = { version = "0.63.3", features = ["dsa"] }
 russh-sftp = "3.0.0"
 tokio-socks = "0.5"
-async_ftp = "6.0.0"
 
 # Encryption
 aes-gcm = "0.10"
