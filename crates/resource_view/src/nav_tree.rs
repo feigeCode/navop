@@ -15,6 +15,7 @@ use gpui_component::{
 };
 
 use crate::layout::{NavContent, ResolvedTreeRoot, TreeChildRow};
+use crate::route_binding::RouteSources;
 use crate::{NEXT_MOUNT_ID, NativeResourceWorkbench, collection_table, route_binding};
 
 const KEY_SEP: char = '\u{1}';
@@ -50,26 +51,23 @@ pub(crate) fn tree_child_is_active(
     root_page_id: &str,
     open: Option<&extension_runtime::extension::manifest::ResourceWorkbenchOpen>,
     row: &serde_json::Value,
-    parent_row: &serde_json::Value,
     selected_page: &str,
-    current_route: &serde_json::Value,
+    sources: &RouteSources<'_>,
 ) -> bool {
-    let (target_page, target_route) =
-        navigation_target(root_page_id, open, row, parent_row, current_route);
-    target_page == selected_page && target_route == *current_route
+    let (target_page, target_route) = navigation_target(root_page_id, open, row, sources);
+    target_page == selected_page && target_route == *sources.route
 }
 
 fn navigation_target(
     root_page_id: &str,
     open: Option<&extension_runtime::extension::manifest::ResourceWorkbenchOpen>,
     row: &serde_json::Value,
-    parent_row: &serde_json::Value,
-    current_route: &serde_json::Value,
+    sources: &RouteSources<'_>,
 ) -> (String, serde_json::Value) {
     match open {
         Some(open) => (
             open.page_id.clone(),
-            route_binding::build_route_with_parent(&open.route, current_route, row, parent_row),
+            route_binding::build_route(&open.route, sources),
         ),
         None => (root_page_id.to_string(), row.clone()),
     }
@@ -138,6 +136,10 @@ impl NativeResourceWorkbench {
         let context = BindingContext {
             paging: serde_json::json!({"page": 1, "limit": 200, "cursor": null}),
             parent: node.row.clone(),
+            // `..Default::default()` 会把 connection 留成 Null,于是树 lazy 展开的
+            // operation 一旦声明 `source: connection` 就报 BindingMissing ——
+            // 和其它构造点一样,这里必须填宿主注入的真实值。
+            connection: self.connection.clone(),
             ..Default::default()
         };
         let operation = children.operation.clone();
@@ -207,8 +209,7 @@ impl NativeResourceWorkbench {
             &node.root_page_id,
             node.open.as_ref(),
             &node.row,
-            &node.parent_row,
-            &self.route,
+            &self.route_sources(&node.row, &node.parent_row),
         );
         self.navigate(page, route, cx);
     }
@@ -299,9 +300,8 @@ impl NativeResourceWorkbench {
                 &node.root_page_id,
                 node.open.as_ref(),
                 &node.row,
-                &node.parent_row,
                 &self.selected_page,
-                &self.route,
+                &self.route_sources(&node.row, &node.parent_row),
             )
         };
         let has_children = node.children.is_some();
@@ -371,6 +371,23 @@ mod tests {
         }
     }
 
+    /// 测试里没有连接上下文;`RouteSources` 借的是引用,所以要一个真正的
+    /// `'static` 值而不是临时 `Value::Null`。
+    static NO_CONNECTION: serde_json::Value = serde_json::Value::Null;
+
+    fn sources<'a>(
+        current_route: &'a serde_json::Value,
+        selection: &'a serde_json::Value,
+        parent: &'a serde_json::Value,
+    ) -> RouteSources<'a> {
+        RouteSources {
+            route: current_route,
+            selection,
+            parent,
+            connection: &NO_CONNECTION,
+        }
+    }
+
     fn open_by_id() -> ResourceWorkbenchOpen {
         ResourceWorkbenchOpen {
             page_id: "container-detail".into(),
@@ -391,17 +408,15 @@ mod tests {
             "containers",
             Some(&open),
             &rows[0],
-            &null,
             "container-detail",
-            &current
+            &sources(&current, &rows[0], &null),
         ));
         assert!(!tree_child_is_active(
             "containers",
             Some(&open),
             &rows[1],
-            &null,
             "container-detail",
-            &current
+            &sources(&current, &rows[1], &null),
         ));
     }
 
@@ -414,17 +429,15 @@ mod tests {
             "containers",
             Some(&open),
             &row,
-            &null,
             "containers",
-            &json!({"id": "abc"})
+            &sources(&json!({"id": "abc"}), &row, &null),
         ));
         assert!(!tree_child_is_active(
             "containers",
             Some(&open),
             &row,
-            &null,
             "container-detail",
-            &json!({"id": "other"})
+            &sources(&json!({"id": "other"}), &row, &null),
         ));
     }
 
@@ -432,21 +445,20 @@ mod tests {
     fn child_without_open_matches_root_page_and_row_route() {
         let row = json!({"id": "abc"});
         let null = serde_json::Value::Null;
+        // 没有 open 声明时 route 直接取行数据,与 sources 无关。
         assert!(tree_child_is_active(
             "containers",
             None,
             &row,
-            &null,
             "containers",
-            &row
+            &sources(&row, &row, &null),
         ));
         assert!(!tree_child_is_active(
             "containers",
             None,
             &row,
-            &null,
             "containers",
-            &json!({"id": "zzz"})
+            &sources(&json!({"id": "zzz"}), &row, &null),
         ));
     }
 
@@ -472,17 +484,47 @@ mod tests {
             "namespaces",
             Some(&open),
             &row,
-            &parent,
             "pod-detail",
-            &current
+            &sources(&current, &row, &parent),
         ));
         assert!(!tree_child_is_active(
             "namespaces",
             Some(&open),
             &row,
-            &json!({"name": "kube-system"}),
             "pod-detail",
-            &current
+            &sources(&current, &row, &json!({"name": "kube-system"})),
+        ));
+    }
+
+    /// 树节点导航的 `source: connection` 绑定必须取到注入的连接上下文。
+    ///
+    /// 回归:路由侧的来源曾经把 connection 无条件当空处理,扩展声明了
+    /// "当前 namespace" 这类绑定也永远拿不到值。
+    #[test]
+    fn tree_child_route_keeps_connection_binding() {
+        let open = ResourceWorkbenchOpen {
+            page_id: "pod-detail".into(),
+            route: BTreeMap::from([(
+                "namespace".to_string(),
+                binding(ResourceWorkbenchBindingSource::Connection, "/namespace"),
+            )]),
+        };
+        let row = json!({"name": "api-0"});
+        let connection = json!({"namespace": "prod", "database": "orders"});
+        let current = json!({"namespace": "prod"});
+        let sources = RouteSources {
+            route: &current,
+            selection: &row,
+            parent: &NO_CONNECTION,
+            connection: &connection,
+        };
+
+        assert!(tree_child_is_active(
+            "namespaces",
+            Some(&open),
+            &row,
+            "pod-detail",
+            &sources,
         ));
     }
 }

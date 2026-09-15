@@ -61,7 +61,13 @@ pub(super) fn workbench_module(
                     .cloned()
                     .unwrap_or_else(|| serde_json::json!({"page": 1, "limit": 50, "cursor": null})),
                 parent: serde_json::Value::Null,
-                connection: serde_json::Value::Null,
+                // 与原生工作台同源:宿主把连接上下文放进 `page_context`,
+                // 这里原样取出。两边解析 `source: connection` 必须得到同一个值,
+                // 否则同一个 manifest 在 shell 页与原生页行为不一致。
+                connection: page_context
+                    .get("connection")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null),
             };
             let operation = descriptor.operations.get(&operation_id).ok_or_else(|| {
                 navop_error(

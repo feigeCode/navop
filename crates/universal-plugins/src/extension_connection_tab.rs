@@ -192,8 +192,17 @@ impl ExtensionConnectionTab {
                 };
                 let session = resource.into_session(identity);
                 let handle = session.handle();
+                // 连接上下文由宿主统一解析后注入:工作台拿不到 `StoredConnection`,
+                // 也不该自己去查。只投递非敏感的 `config`(见 `ui_connection_context`)。
+                let connection_context =
+                    crate::extension_resource::ui_connection_context(&self.connection);
                 let workbench = cx.new(|cx| {
-                    resource_view::NativeResourceWorkbench::new(self.workbench.clone(), handle, cx)
+                    resource_view::NativeResourceWorkbench::new(
+                        self.workbench.clone(),
+                        handle,
+                        connection_context,
+                        cx,
+                    )
                 });
                 State::Connected {
                     activation,
