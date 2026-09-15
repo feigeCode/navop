@@ -2594,13 +2594,11 @@ impl SshFormWindow {
     }
 
     /// 渲染初始化标签页
-    fn render_init_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let is_ftp = self
-            .remote_file_protocol_select
-            .read(cx)
-            .selected_value()
-            .copied()
-            .is_some_and(|protocol| protocol == RemoteFileProtocolSelection::Ftp);
+    /// 渲染初始化标签页：仅保留会话初始化本身。
+    ///
+    /// 远程文件相关（协议、SFTP 初始目录、FTP 参数）已收敛到「远程文件」页签，
+    /// X11 转发已移到「高级设置」，Shell 集成清理卡片已移到「其他设置」。
+    fn render_init_tab(&self) -> impl IntoElement {
         v_flex()
             .debug_selector(|| "ssh-init-tab".to_string())
             .w_full()
@@ -2618,184 +2616,6 @@ impl SshFormWindow {
                     self.render_form_textarea(&self.init_script_input),
                 )
                 .debug_selector(|| "ssh-init-script-row".to_string()),
-            )
-            .child(
-                self.render_form_row(
-                    &t!("SSH.sftp_default_directory"),
-                    self.render_form_input(&self.sftp_default_directory_input),
-                )
-                .debug_selector(|| "ssh-sftp-default-directory-row".to_string()),
-            )
-            .child(
-                self.render_form_row(
-                    &t!("SSH.remote_file_protocol"),
-                    Select::new(&self.remote_file_protocol_select).w_full(),
-                )
-                .debug_selector(|| "ssh-remote-file-protocol-row".to_string()),
-            )
-            .when(is_ftp, |this| {
-                this.child(
-                    self.render_form_row(
-                        &t!("SSH.ftp_host"),
-                        self.render_form_input(&self.ftp_host_input),
-                    ),
-                )
-                .child(
-                    self.render_form_row(
-                        &t!("SSH.ftp_port"),
-                        self.render_form_input(&self.ftp_port_input),
-                    ),
-                )
-                .child(
-                    self.render_form_row(
-                        &t!("SSH.ftp_username"),
-                        self.render_form_input(&self.ftp_username_input),
-                    ),
-                )
-                .child(
-                    self.render_form_row(
-                        &t!("SSH.ftp_password"),
-                        self.render_form_input(&self.ftp_password_input),
-                    ),
-                )
-                .child(
-                    self.render_form_row(
-                        &t!("SSH.ftp_passive_mode"),
-                        h_flex()
-                            .w_full()
-                            .gap_2()
-                            .items_start()
-                            .child(
-                                div().flex_shrink_0().child(
-                                    Checkbox::new("ftp-passive-mode")
-                                        .checked(self.ftp_passive_mode)
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.ftp_passive_mode = !this.ftp_passive_mode;
-                                            cx.notify();
-                                        })),
-                                ),
-                            ),
-                    ),
-                )
-                .child(
-                    self.render_form_row(
-                        &t!("SSH.ftp_tls"),
-                        h_flex()
-                            .w_full()
-                            .gap_2()
-                            .items_start()
-                            .child(
-                                div().flex_shrink_0().child(
-                                    Checkbox::new("ftp-use-tls")
-                                        .checked(self.ftp_use_tls)
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.ftp_use_tls = !this.ftp_use_tls;
-                                            cx.notify();
-                                        })),
-                                ),
-                            ),
-                    ),
-                )
-                .child(
-                    self.render_form_row(
-                        &t!("SSH.ftp_credential"),
-                        self.ftp_credential_picker.clone(),
-                    ),
-                )
-            })
-            .child(
-                self.render_form_row(
-                    &t!("SSH.x11_forwarding"),
-                    h_flex()
-                        .w_full()
-                        .gap_2()
-                        .items_start()
-                        .child(
-                            div().flex_shrink_0().child(
-                                Checkbox::new("x11-forwarding")
-                                    .checked(self.x11_forwarding)
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        let enabling_x11 = !this.x11_forwarding;
-                                        this.x11_forwarding = enabling_x11;
-                                        if xquartz_installation_warning_required(
-                                            cfg!(target_os = "macos"),
-                                            enabling_x11,
-                                            xquartz_is_installed(),
-                                        ) {
-                                            window.push_notification(
-                                                Notification::warning(t!(
-                                                    "SSH.xquartz_not_installed"
-                                                )),
-                                                cx,
-                                            );
-                                        }
-                                        cx.notify();
-                                    })),
-                            ),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .text_sm()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(t!("SSH.x11_forwarding_desc").to_string()),
-                        ),
-                ),
-            )
-            .child(
-                // 说明性区块不占表单 label 列，通栏卡片避免长标题挤压换行。
-                div()
-                    .id("ssh-shell-integration-card")
-                    .w_full()
-                    .flex()
-                    .items_start()
-                    .gap_3()
-                    .px_3()
-                    .py_2p5()
-                    .rounded_md()
-                    .bg(cx.theme().muted)
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .pt(px(1.0))
-                            .child(IconName::Info.color().with_size(px(14.0))),
-                    )
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .child(t!("SSH.remote_shell_integration").to_string()),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .line_height(relative(1.5))
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(t!("SSH.uninstall_shell_integration_desc").to_string()),
-                            ),
-                    )
-                    .child(
-                        div().flex_shrink_0().child(
-                            Button::new("uninstall-shell-integration")
-                                .icon(IconName::Remove)
-                                .ghost()
-                                .small()
-                                .label(if self.is_uninstalling_shell_integration {
-                                    t!("SSH.uninstalling_shell_integration").to_string()
-                                } else {
-                                    t!("SSH.uninstall_shell_integration").to_string()
-                                })
-                                .disabled(self.is_testing || self.is_uninstalling_shell_integration)
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.on_uninstall_shell_integration(window, cx);
-                                })),
-                        ),
-                    ),
             )
     }
 
@@ -3037,13 +2857,29 @@ impl SshFormWindow {
             })
     }
 
-    /// 渲染独立 SFTP 账户标签页
-    fn render_sftp_account_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// 渲染远程文件标签页：协议选择 + 该协议下的地址与凭据。
+    ///
+    /// SFTP 与 FTP 两个分支互斥渲染；切换协议只改变可见性，不会清空另一侧已填内容。
+    fn render_remote_files_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let is_ftp = self
+            .remote_file_protocol_select
+            .read(cx)
+            .selected_value()
+            .copied()
+            .is_some_and(|protocol| protocol == RemoteFileProtocolSelection::Ftp);
         let use_custom = self.sftp_account_use_custom;
 
-        v_flex()
+        let sftp_branch = v_flex()
+            .debug_selector(|| "ssh-remote-files-sftp-branch".to_string())
             .w_full()
             .gap_2()
+            .child(
+                self.render_form_row(
+                    &t!("SSH.sftp_default_directory"),
+                    self.render_form_input(&self.sftp_default_directory_input),
+                )
+                .debug_selector(|| "ssh-sftp-default-directory-row".to_string()),
+            )
             .child(
                 self.render_form_row(
                     &t!("SSH.sftp_account"),
@@ -3070,7 +2906,8 @@ impl SshFormWindow {
                                 .text_color(cx.theme().muted_foreground)
                                 .child(t!("SSH.sftp_account_desc").to_string()),
                         ),
-                ),
+                )
+                .debug_selector(|| "ssh-sftp-account-row".to_string()),
             )
             .when(use_custom, |this| {
                 this.child(self.render_form_row(
@@ -3084,7 +2921,79 @@ impl SshFormWindow {
                             .mask_toggle(),
                     ),
                 )
-            })
+            });
+
+        let ftp_branch = v_flex()
+            .debug_selector(|| "ssh-remote-files-ftp-branch".to_string())
+            .w_full()
+            .gap_2()
+            .child(
+                self.render_form_row(
+                    &t!("SSH.ftp_host"),
+                    self.render_form_input(&self.ftp_host_input),
+                )
+                .debug_selector(|| "ssh-ftp-host-row".to_string()),
+            )
+            .child(self.render_form_row(
+                &t!("SSH.ftp_port"),
+                self.render_form_input(&self.ftp_port_input),
+            ))
+            .child(self.render_form_row(
+                &t!("SSH.ftp_username"),
+                self.render_form_input(&self.ftp_username_input),
+            ))
+            .child(self.render_form_row(
+                &t!("SSH.ftp_password"),
+                self.render_form_input(&self.ftp_password_input),
+            ))
+            .child(
+                self.render_form_row(
+                    &t!("SSH.ftp_passive_mode"),
+                    h_flex().w_full().gap_2().items_start().child(
+                        div().flex_shrink_0().child(
+                            Checkbox::new("ftp-passive-mode")
+                                .checked(self.ftp_passive_mode)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.ftp_passive_mode = !this.ftp_passive_mode;
+                                    cx.notify();
+                                })),
+                        ),
+                    ),
+                ),
+            )
+            .child(
+                self.render_form_row(
+                    &t!("SSH.ftp_tls"),
+                    h_flex().w_full().gap_2().items_start().child(
+                        div().flex_shrink_0().child(
+                            Checkbox::new("ftp-use-tls")
+                                .checked(self.ftp_use_tls)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.ftp_use_tls = !this.ftp_use_tls;
+                                    cx.notify();
+                                })),
+                        ),
+                    ),
+                ),
+            )
+            .child(self.render_form_row(
+                &t!("SSH.ftp_credential"),
+                self.ftp_credential_picker.clone(),
+            ));
+
+        v_flex()
+            .debug_selector(|| "ssh-remote-files-tab".to_string())
+            .w_full()
+            .gap_2()
+            .child(
+                self.render_form_row(
+                    &t!("SSH.remote_file_protocol"),
+                    Select::new(&self.remote_file_protocol_select).w_full(),
+                )
+                .debug_selector(|| "ssh-remote-file-protocol-row".to_string()),
+            )
+            .when(!is_ftp, move |this| this.child(sftp_branch))
+            .when(is_ftp, move |this| this.child(ftp_branch))
     }
 
     /// 渲染代理标签页
@@ -3241,14 +3150,113 @@ impl SshFormWindow {
                         ),
                 ),
             )
+            .child(
+                self.render_form_row(
+                    &t!("SSH.x11_forwarding"),
+                    h_flex()
+                        .w_full()
+                        .gap_2()
+                        .items_start()
+                        .child(
+                            div().flex_shrink_0().child(
+                                Checkbox::new("x11-forwarding")
+                                    .checked(self.x11_forwarding)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        let enabling_x11 = !this.x11_forwarding;
+                                        this.x11_forwarding = enabling_x11;
+                                        if xquartz_installation_warning_required(
+                                            cfg!(target_os = "macos"),
+                                            enabling_x11,
+                                            xquartz_is_installed(),
+                                        ) {
+                                            window.push_notification(
+                                                Notification::warning(t!(
+                                                    "SSH.xquartz_not_installed"
+                                                )),
+                                                cx,
+                                            );
+                                        }
+                                        cx.notify();
+                                    })),
+                            ),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(t!("SSH.x11_forwarding_desc").to_string()),
+                        ),
+                )
+                .debug_selector(|| "ssh-x11-forwarding-row".to_string()),
+            )
     }
 
     /// 渲染其他设置标签页
-    fn render_other_tab(&self) -> impl IntoElement {
-        v_flex().w_full().gap_2().child(self.render_form_row(
-            &t!("SSH.remark"),
-            self.render_form_textarea(&self.remark_input),
-        ))
+    fn render_other_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
+            .w_full()
+            .gap_2()
+            .child(self.render_form_row(
+                &t!("SSH.remark"),
+                self.render_form_textarea(&self.remark_input),
+            ))
+            .child(
+                // 说明性区块不占表单 label 列，通栏卡片避免长标题挤压换行。
+                div()
+                    .id("ssh-shell-integration-card")
+                    .debug_selector(|| "ssh-shell-integration-card".to_string())
+                    .w_full()
+                    .flex()
+                    .items_start()
+                    .gap_3()
+                    .px_3()
+                    .py_2p5()
+                    .rounded_md()
+                    .bg(cx.theme().muted)
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .pt(px(1.0))
+                            .child(IconName::Info.color().with_size(px(14.0))),
+                    )
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .child(t!("SSH.remote_shell_integration").to_string()),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .line_height(relative(1.5))
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(t!("SSH.uninstall_shell_integration_desc").to_string()),
+                            ),
+                    )
+                    .child(
+                        div().flex_shrink_0().child(
+                            Button::new("uninstall-shell-integration")
+                                .icon(IconName::Remove)
+                                .ghost()
+                                .small()
+                                .label(if self.is_uninstalling_shell_integration {
+                                    t!("SSH.uninstalling_shell_integration").to_string()
+                                } else {
+                                    t!("SSH.uninstall_shell_integration").to_string()
+                                })
+                                .disabled(self.is_testing || self.is_uninstalling_shell_integration)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.on_uninstall_shell_integration(window, cx);
+                                })),
+                        ),
+                    ),
+            )
     }
 }
 
@@ -3354,7 +3362,7 @@ impl Render for SshFormWindow {
                         .child(Tab::new().label(t!("SSH.tab_basic").to_string()))
                         .child(Tab::new().label(t!("SSH.tab_init").to_string()))
                         .child(Tab::new().label(t!("SSH.tab_jump_server").to_string()))
-                        .child(Tab::new().label(t!("SSH.tab_sftp_account").to_string()))
+                        .child(Tab::new().label(t!("SSH.tab_remote_files").to_string()))
                         .child(Tab::new().label(t!("SSH.tab_proxy").to_string()))
                         .child(Tab::new().label(t!("SSH.tab_advanced").to_string()))
                         .child(Tab::new().label(t!("SSH.tab_other").to_string())),
@@ -3372,12 +3380,12 @@ impl Render for SshFormWindow {
                     .child(div().size_full().p_3().overflow_y_scrollbar().child(
                         match active_tab {
                             0 => self.render_basic_tab(cx).into_any_element(),
-                            1 => self.render_init_tab(cx).into_any_element(),
+                            1 => self.render_init_tab().into_any_element(),
                             2 => self.render_jump_server_tab(cx).into_any_element(),
-                            3 => self.render_sftp_account_tab(cx).into_any_element(),
+                            3 => self.render_remote_files_tab(cx).into_any_element(),
                             4 => self.render_proxy_tab(cx).into_any_element(),
                             5 => self.render_advanced_tab(cx).into_any_element(),
-                            6 => self.render_other_tab().into_any_element(),
+                            6 => self.render_other_tab(cx).into_any_element(),
                             _ => div().into_any_element(),
                         },
                     )),
@@ -3998,6 +4006,181 @@ mod tests {
         assert!(
             init_script_row.size.width >= init_tab.size.width - gpui::px(1.0),
             "initialization script row should fill the initialization tab: tab={init_tab:?}, row={init_script_row:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn ssh_remote_files_tab_shows_only_the_sftp_branch_by_default(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(AppSettings::default());
+            gpui_component::init(cx);
+        });
+        let (_form, cx) = cx.add_window_view(|window, cx| {
+            let mut form = super::SshFormWindow::new(
+                super::SshFormWindowConfig {
+                    editing_connection: None,
+                    initial_connection: None,
+                    on_saved: None,
+                    workspaces: Vec::new(),
+                    teams: Vec::new(),
+                },
+                window,
+                cx,
+            );
+            form.active_tab = 3;
+            form
+        });
+        let cx: &mut VisualTestContext = cx;
+
+        assert!(
+            cx.debug_bounds("ssh-remote-files-sftp-branch").is_some(),
+            "SFTP branch should be rendered while the protocol is SFTP"
+        );
+        assert!(
+            cx.debug_bounds("ssh-remote-files-ftp-branch").is_none(),
+            "FTP branch must stay hidden while the protocol is SFTP"
+        );
+        assert!(
+            cx.debug_bounds("ssh-remote-file-protocol-row").is_some(),
+            "remote file protocol selector should live in the remote files tab"
+        );
+    }
+
+    #[gpui::test]
+    fn ssh_remote_files_tab_swaps_to_the_ftp_branch_when_protocol_is_ftp(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(AppSettings::default());
+            gpui_component::init(cx);
+        });
+        let (_form, cx) = cx.add_window_view(|window, cx| {
+            let mut form = super::SshFormWindow::new(
+                super::SshFormWindowConfig {
+                    editing_connection: None,
+                    initial_connection: None,
+                    on_saved: None,
+                    workspaces: Vec::new(),
+                    teams: Vec::new(),
+                },
+                window,
+                cx,
+            );
+            form.remote_file_protocol_select.update(cx, |select, cx| {
+                select.set_selected_value(&super::RemoteFileProtocolSelection::Ftp, window, cx);
+            });
+            form.active_tab = 3;
+            form
+        });
+        let cx: &mut VisualTestContext = cx;
+
+        assert!(
+            cx.debug_bounds("ssh-remote-files-ftp-branch").is_some(),
+            "FTP branch should be rendered while the protocol is FTP"
+        );
+        assert!(
+            cx.debug_bounds("ssh-remote-files-sftp-branch").is_none(),
+            "SFTP branch must stay hidden while the protocol is FTP"
+        );
+    }
+
+    #[gpui::test]
+    fn ssh_init_tab_only_keeps_session_initialization(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(AppSettings::default());
+            gpui_component::init(cx);
+        });
+        let (form, cx) = cx.add_window_view(|window, cx| {
+            let mut form = super::SshFormWindow::new(
+                super::SshFormWindowConfig {
+                    editing_connection: None,
+                    initial_connection: None,
+                    on_saved: None,
+                    workspaces: Vec::new(),
+                    teams: Vec::new(),
+                },
+                window,
+                cx,
+            );
+            form.active_tab = 1;
+            form
+        });
+        let cx: &mut VisualTestContext = cx;
+
+        form.read_with(cx, |form, _| {
+            assert_eq!(form.active_tab, 1);
+        });
+        assert!(
+            cx.debug_bounds("ssh-default-directory-row").is_some(),
+            "default directory row stays in the initialization tab"
+        );
+        assert!(
+            cx.debug_bounds("ssh-init-script-row").is_some(),
+            "init script row stays in the initialization tab"
+        );
+        assert!(
+            cx.debug_bounds("ssh-remote-file-protocol-row").is_none(),
+            "remote file protocol selector must leave the initialization tab"
+        );
+        assert!(
+            cx.debug_bounds("ssh-x11-forwarding-row").is_none(),
+            "X11 forwarding must leave the initialization tab"
+        );
+    }
+
+    #[gpui::test]
+    fn ssh_advanced_tab_hosts_x11_forwarding(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(AppSettings::default());
+            gpui_component::init(cx);
+        });
+        let (_form, cx) = cx.add_window_view(|window, cx| {
+            let mut form = super::SshFormWindow::new(
+                super::SshFormWindowConfig {
+                    editing_connection: None,
+                    initial_connection: None,
+                    on_saved: None,
+                    workspaces: Vec::new(),
+                    teams: Vec::new(),
+                },
+                window,
+                cx,
+            );
+            form.active_tab = 5;
+            form
+        });
+        let cx: &mut VisualTestContext = cx;
+
+        assert!(
+            cx.debug_bounds("ssh-x11-forwarding-row").is_some(),
+            "X11 forwarding row should live in the advanced tab"
+        );
+    }
+
+    #[gpui::test]
+    fn ssh_other_tab_hosts_shell_integration_cleanup(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(AppSettings::default());
+            gpui_component::init(cx);
+        });
+        let (_form, cx) = cx.add_window_view(|window, cx| {
+            let mut form = super::SshFormWindow::new(
+                super::SshFormWindowConfig {
+                    editing_connection: None,
+                    initial_connection: None,
+                    on_saved: None,
+                    workspaces: Vec::new(),
+                    teams: Vec::new(),
+                },
+                window,
+                cx,
+            );
+            form.active_tab = 6;
+            form
+        });
+        let cx: &mut VisualTestContext = cx;
+
+        assert!(
+            cx.debug_bounds("ssh-shell-integration-card").is_some(),
+            "shell integration cleanup card should live in the other tab"
         );
     }
 

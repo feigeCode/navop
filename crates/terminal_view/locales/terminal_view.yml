@@ -366,10 +366,10 @@ SSH:
     en: Jump Server
     zh-CN: 跳板机
     zh-HK: 跳板機
-  tab_sftp_account:
-    en: SFTP Account
-    zh-CN: SFTP 账户
-    zh-HK: SFTP 賬戶
+  tab_remote_files:
+    en: Remote Files
+    zh-CN: 远程文件
+    zh-HK: 遠端檔案
   tab_proxy:
     en: Proxy
     zh-CN: 代理设置
