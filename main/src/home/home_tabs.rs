@@ -452,15 +452,17 @@ mod tests {
     }
 
     #[test]
-    fn both_type_dropdowns_share_the_stateless_menu() {
+    fn both_type_filters_share_the_stateless_menu() {
         let menu = include_str!("../connection_type_menu.rs");
-        assert!(menu.contains("ConnectionType::all()"));
         assert!(menu.contains("connection_type_rail_icon(filter)"));
         assert!(
             include_str!("../persistent_connection_sidebar/filter_bar.rs")
                 .contains("build_filter_menu")
         );
-        assert!(include_str!("../home_tab/toolbar.rs").contains("build_filter_menu"));
+        // 标题行的平铺筛选条与「更多」菜单复用同一无状态菜单构建器。
+        let bar = include_str!("../home_tab/connection_type_filter_bar.rs");
+        assert!(bar.contains("build_filter_menu"));
+        assert!(bar.contains("ConnectionType::all()"));
     }
 
     #[test]

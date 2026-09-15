@@ -296,12 +296,39 @@ fn home_toolbar_uses_a_continuous_secondary_action_strip() {
 
     // 搜索框之后只有一条连续工具带，不再给筛选和视图各套一个输入框式外框。
     assert_eq!(toolbar.matches(".bg(cx.theme().muted)").count(), 1);
-    assert!(toolbar.contains("render_home_type_filter(window, cx)"));
     assert!(toolbar.contains("render_sort_button(cx)"));
     assert!(toolbar.contains("render_layout_button(cx)"));
     assert!(toolbar.contains("render_batch_toggle(cx)"));
-    // 「全部类型」不再使用星号图标
-    assert!(toolbar.contains("IconName::Apps"));
+    // 类型筛选已平铺到「连接」标题行，工具栏不再保留下拉入口。
+    assert!(!toolbar.contains("render_home_type_filter"));
+    assert!(!toolbar.contains("build_filter_menu"));
+}
+
+#[test]
+fn home_heading_hosts_the_horizontal_type_filter_bar() {
+    let content = include_str!("../content.rs");
+    let bar = include_str!("../connection_type_filter_bar.rs");
+    let toolbar = include_str!("../toolbar.rs");
+
+    // 平铺筛选条挂在「连接」标题右侧，Tree 布局也提供同一标题行。
+    assert!(content.contains("render_connection_type_filter_bar(window, cx)"));
+    assert!(content.contains("render_tree_content_heading"));
+    assert!(!toolbar.contains("render_home_type_filter"));
+    // 类型来自 ConnectionType::all()，保留图标与单色线稿风格。
+    assert!(bar.contains("ConnectionType::all()"));
+    assert!(bar.contains("connection_type_navigation_icon"));
+    assert!(bar.contains("IconName::Apps"));
+    // 可见数量按容器实测宽度动态计算，溢出项只出现在「更多」菜单。
+    assert!(bar.contains("on_prepaint"));
+    assert!(bar.contains("on_children_prepainted"));
+    assert!(bar.contains("resolve_visible_count"));
+    assert!(bar.contains("home-type-filter-more"));
+    // chip 与「更多」都使用主题 full radius，形成胶囊外观。
+    assert!(bar.matches(".rounded(cx.theme().radius_full())").count() >= 2);
+    // 选中态有明显区分（浅蓝底、蓝字、蓝边）。
+    assert!(bar.contains(".outline()"));
+    assert!(!bar.contains(".ghost()"));
+    assert!(bar.contains(".primary()"));
 }
 
 #[test]
