@@ -114,6 +114,7 @@ const WSL_UNC_SERVERS: [&str; 2] = [WSL_UNC_SERVER, "wsl.localhost"];
 ///
 /// 目标发行版只体现在启动参数里（模型层把它当作普通本地终端），这里把它解析
 /// 出来供文件树定位发行版文件系统使用。
+#[cfg(any(test, target_os = "windows"))]
 pub(crate) fn wsl_distribution_for_config(config: &LocalConfig) -> Option<&str> {
     let shell = config.shell.as_deref()?;
     if !is_wsl_program(shell) {
@@ -196,6 +197,7 @@ pub fn resolve_reported_working_dir(current_root: &Path, reported: &str) -> Opti
 }
 
 /// 配置里的 shell 是否指向 `wsl.exe`；只比较文件名，允许写成完整路径或命令名。
+#[cfg(any(test, target_os = "windows"))]
 fn is_wsl_program(program: &str) -> bool {
     let file_name = program
         .rsplit(|ch| ch == '\\' || ch == '/')
@@ -205,6 +207,7 @@ fn is_wsl_program(program: &str) -> bool {
 }
 
 /// 从启动参数里取出 `--distribution` / `-d` 的取值。
+#[cfg(any(test, target_os = "windows"))]
 fn distribution_from_args(args: &[String]) -> Option<&str> {
     let mut args = args.iter();
     while let Some(arg) = args.next() {

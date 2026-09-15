@@ -1,8 +1,9 @@
 use super::{
     WslDistribution, decode_wsl_output, local_config_for_wsl_distro_with, parse_wsl_list_output,
-    resolve_reported_working_dir, wsl_distribution_for_config, wsl_distribution_from_root,
-    wsl_unc_path, wsl_unc_root,
+    resolve_reported_working_dir, wsl_distribution_for_config, wsl_unc_path, wsl_unc_root,
 };
+#[cfg(target_os = "windows")]
+use super::wsl_distribution_from_root;
 use crate::LocalConfig;
 use std::path::{Path, PathBuf};
 
