@@ -455,12 +455,14 @@ fn home_render_uses_cached_external_driver_registry() {
     let quick_open = include_str!("../../home/home_connection_quick_open.rs");
 
     assert!(home.contains("external_driver_registry: IpcDriverRegistry"));
-    assert!(icon.contains("stored_connection_icon"));
+    assert!(icon.contains("stored_connection_icon_with_catalog"));
+    assert!(icon.contains("extension_catalog_from_cx"));
     assert!(visuals.contains("external_driver_icon_for_config_with_registry"));
     assert!(visuals.contains("external_driver_icon_from_sources"));
+    assert!(visuals.contains("extension_connection_icon"));
     assert!(list_item.contains("connection_icon"));
     assert!(card.contains("connection_icon"));
-    assert!(quick_open.contains("stored_connection_icon"));
+    assert!(quick_open.contains("stored_connection_icon_with_catalog"));
     assert!(quick_open.contains("external_driver_registry: IpcDriverRegistry"));
     assert!(!icon.contains("IpcDriverRegistry::load_default()"));
     assert!(!quick_open.contains("IpcDriverRegistry::load_default()"));

@@ -251,7 +251,7 @@ impl PersistentConnectionSidebar {
             .as_ref()
             .map(|connection| {
                 home.read(cx)
-                    .connection_icon(connection, ConnectionVisualSize::Tree)
+                    .connection_icon(connection, ConnectionVisualSize::Tree, cx)
             })
             .unwrap_or_else(|| Icon::new(IconName::Apps).with_size(IconSize::Default));
         let drag = DragConnection {
@@ -427,7 +427,7 @@ mod tests {
         assert!(rows.contains("tree_connection_name_with_type_tag(name, type_tag)"));
         assert!(parts.contains("fn connection_type_tag"));
         assert!(parts.contains("fn tree_connection_name_with_type_tag"));
-        assert!(parts.contains("ConnectionType.server"));
+        assert!(parts.contains("connection_type_display_label(connection, cx)"));
         assert!(parts.contains("ConnectionType::Database => cx.theme().blue"));
         // 可读性：文案用 foreground，类型色只做圆点
         assert!(parts.contains("text_color(cx.theme().foreground)"));

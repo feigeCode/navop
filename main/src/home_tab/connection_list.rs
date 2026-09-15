@@ -122,7 +122,7 @@ impl HomePage {
                     .flex_shrink_0()
                     .items_center()
                     .justify_center()
-                    .child(self.connection_icon(&conn, ConnectionVisualSize::List)),
+                    .child(self.connection_icon(&conn, ConnectionVisualSize::List, cx)),
             )
             .child(
                 v_flex()

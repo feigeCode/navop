@@ -1564,62 +1564,6 @@ Workspace:
     zh-CN: 清除筛选
     zh-HK: 清除篩選
 
-# 连接类型（筛选器/菜单共用）
-ConnectionType:
-  all:
-    en: "All Types"
-    zh-CN: "全部类型"
-    zh-HK: "全部類型"
-  database:
-    en: "Database"
-    zh-CN: "数据库"
-    zh-HK: "資料庫"
-  ssh_sftp:
-    en: "SSH/SFTP"
-    zh-CN: "SSH/SFTP"
-    zh-HK: "SSH/SFTP"
-  # 侧栏连接 tag 用短名：口语化、更易扫读
-  server:
-    en: "Server"
-    zh-CN: "服务器"
-    zh-HK: "服務器"
-  redis:
-    en: "Redis"
-    zh-CN: "Redis"
-    zh-HK: "Redis"
-  mongodb:
-    en: "MongoDB"
-    zh-CN: "MongoDB"
-    zh-HK: "MongoDB"
-  mqtt:
-    en: "MQTT"
-    zh-CN: "MQTT"
-    zh-HK: "MQTT"
-  serial:
-    en: "Serial"
-    zh-CN: "串口"
-    zh-HK: "串口"
-  telnet:
-    en: "Telnet"
-    zh-CN: "Telnet"
-    zh-HK: "Telnet"
-  port_forwarding:
-    en: "Port Forwarding"
-    zh-CN: "端口转发"
-    zh-HK: "端口轉發"
-  rdp:
-    en: "RDP"
-    zh-CN: "RDP"
-    zh-HK: "RDP"
-  vnc:
-    en: "VNC"
-    zh-CN: "VNC"
-    zh-HK: "VNC"
-  extension:
-    en: "Extension"
-    zh-CN: "扩展"
-    zh-HK: "擴展"
-
 # 连接
 Connection:
   title:
