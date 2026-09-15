@@ -44,7 +44,6 @@ impl HomePage {
                     .flex_shrink_0()
                     .items_center()
                     .gap_1()
-                    .child(self.render_home_type_filter(window, cx))
                     .child(group_filter)
                     .child(self.render_sort_button(cx))
                     .child(self.render_layout_button(cx))
@@ -73,40 +72,6 @@ impl HomePage {
             )
             .child(self.render_new_connection_button(window, cx))
             .child(self.render_local_terminal_button(window, cx))
-            .into_any_element()
-    }
-
-    fn render_home_type_filter(&self, window: &Window, cx: &Context<Self>) -> AnyElement {
-        let selected = self.selected_filter;
-        let view = cx.entity();
-        Button::new("home-type-filter")
-            .ghost()
-            .flex_shrink_0()
-            // 窄窗口隐藏 label 后退化为图标按钮，同样需要保住 caret 宽度。
-            .min_w(px(52.0))
-            // 「全部类型」用 Apps 网格图标；星号在工具栏里像装饰符，语义不清。
-            .icon(if selected == ConnectionType::All {
-                IconName::Apps.mono().with_size(IconSize::Small)
-            } else {
-                connection_type_navigation_icon(selected, ConnectionVisualSize::Tree)
-                    .with_size(IconSize::Small)
-            })
-            .when(window.bounds().size.width > px(1100.0), |button| {
-                button.label(connection_type_label(selected))
-            })
-            .selected(selected != ConnectionType::All)
-            .dropdown_caret(true)
-            .tooltip(t!("Home.connection_filter"))
-            .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
-                let view = view.clone();
-                crate::connection_type_menu::build_filter_menu(
-                    menu,
-                    selected,
-                    std::rc::Rc::new(move |filter, _, cx| {
-                        view.update(cx, |home, cx| home.set_selected_filter(filter, cx));
-                    }),
-                )
-            })
             .into_any_element()
     }
 

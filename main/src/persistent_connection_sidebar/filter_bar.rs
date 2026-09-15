@@ -23,6 +23,7 @@ impl PersistentConnectionSidebar {
                 let view = view.clone();
                 crate::connection_type_menu::build_filter_menu(
                     menu,
+                    &ConnectionType::all(),
                     selected,
                     std::rc::Rc::new(move |filter, _, cx| {
                         view.update(cx, |tree, cx| {
