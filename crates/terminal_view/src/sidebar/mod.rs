@@ -34,12 +34,15 @@ use ai_chat_view::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, AnyView, App, AppContext as _, Context, Entity, EventEmitter,
-    FocusHandle, Focusable, IntoElement, ParentElement, Pixels, Render, SharedString, Styled,
-    Subscription, Window, div,
+    AnyElement, AnyView, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle,
+    Focusable, IntoElement, ParentElement, Pixels, Render, SharedString, Styled, Subscription,
+    Window, div,
 };
-use gpui_component::{ActiveTheme, Icon, Selectable, Sizable, Size, button::{ButtonCustomVariant, ButtonVariants}, h_flex, v_flex};
-use one_ui::IconSize;
+use gpui_component::{
+    ActiveTheme, Icon, Selectable, Sizable, Size,
+    button::{ButtonCustomVariant, ButtonVariants},
+    h_flex, v_flex,
+};
 use one_assets::IconName;
 use one_core::layout::TOOLBAR_WIDTH;
 use one_core::sidebar_contribution::SidebarPlacement;
@@ -47,6 +50,7 @@ use one_core::storage::{
     ConnectionRepository, GlobalStorageState, TerminalHistoryScope, models::StoredConnection,
     traits::Repository,
 };
+use one_ui::IconSize;
 use one_ui::{
     IconButton, IconButtonRole, IconSize as OneIconSize, PanelHeader, PanelHeaderVariant,
 };
@@ -83,6 +87,8 @@ pub(crate) fn workspace_theme_from_terminal_colors(
 pub(crate) struct LocalWorkspaceSidebar {
     pub(crate) root: PathBuf,
     pub(crate) editor: Entity<WorkspaceEditor>,
+    /// 文件系统后端(本机或容器);与 `WorkspaceEditor` 共用同一个实例。
+    pub(crate) backend: Arc<dyn workspace_explorer::WorkspaceBackend>,
 }
 
 fn explorer_frame_placement(placement: SidebarPlacement) -> ExplorerFramePlacement {
@@ -738,7 +744,11 @@ impl TerminalSidebar {
             });
         }
         let file_explorer_panel = local_workspace.map(|workspace| {
-            let LocalWorkspaceSidebar { root, editor } = workspace;
+            let LocalWorkspaceSidebar {
+                root,
+                editor,
+                backend,
+            } = workspace;
             let theme = workspace_theme_from_terminal_colors(&colors, cx.theme());
             cx.new(|cx| {
                 WorkspaceExplorer::new(
@@ -747,6 +757,7 @@ impl TerminalSidebar {
                         editor,
                         theme,
                         show_frame_controls: true,
+                        backend: Some(backend),
                     },
                     cx,
                 )
@@ -1714,7 +1725,7 @@ mod tests {
     use gpui_component::{Theme, ThemeColor};
     use one_core::sidebar_contribution::SidebarPlacement;
     use one_core::storage::{ConnectionType, StoredConnection};
-        use terminal::terminal::TerminalConnectionKind;
+    use terminal::terminal::TerminalConnectionKind;
 
     fn stored_connection(id: i64, name: &str, connection_type: ConnectionType) -> StoredConnection {
         StoredConnection {

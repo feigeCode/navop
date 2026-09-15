@@ -27,6 +27,7 @@ pub mod types;
 mod windows_environment;
 #[cfg(any(test, target_os = "windows"))]
 mod windows_shell_integration;
+mod workspace_source;
 mod wsl_distributions;
 pub mod zmodem;
 
@@ -34,10 +35,6 @@ pub use exec_supervisor::TerminalExecError;
 pub use local_shell::{
     local_config_from_custom_profile, local_config_from_settings,
     local_config_from_settings_with_profile,
-};
-pub use wsl_distributions::{
-    WslDistribution, list_wsl_distributions, local_config_for_wsl_distro,
-    resolve_reported_working_dir, wsl_unc_root,
 };
 pub use performance_metrics::{
     TERMINAL_PERFORMANCE_METRICS_ENV, TerminalActivity, TerminalInputMetricSource,
@@ -60,6 +57,15 @@ pub use types::{
     TerminalExecCompletion, TerminalExecHandle, TerminalExecObserver, TerminalExecOutput,
     TerminalExecProgress, TerminalExecRequest, TerminalInputHandle, TerminalSize,
     TerminalTransferCancelHandle,
+};
+pub use workspace_source::{
+    DockerExecResolver, DockerInvocation, HostResolver, LocalWorkspaceSource,
+    WorkspaceSourceResolver, WslResolver, default_workspace_resolvers, docker_exec_invocation,
+    resolve_local_workspace_source,
+};
+pub use wsl_distributions::{
+    WslDistribution, list_wsl_distributions, local_config_for_wsl_distro,
+    resolve_reported_working_dir, wsl_unc_root,
 };
 
 #[cfg(test)]

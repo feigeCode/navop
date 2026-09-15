@@ -1,4 +1,4 @@
-use crate::file_system::{canonical_workspace_root, read_directory, root_ignore_matcher};
+use crate::backend::WorkspaceBackend;
 use crate::git::{GitChange, GitRepository, discover_repository, load_changes};
 use crate::model::ExplorerEntry;
 use anyhow::Result;
@@ -18,9 +18,15 @@ pub(super) fn load_workspace(
     root: PathBuf,
     show_hidden: bool,
     show_ignored: bool,
+    backend: Arc<dyn WorkspaceBackend>,
 ) -> Result<WorkspaceSnapshot> {
-    let initial_root = canonical_workspace_root(root)?;
-    let repository = discover_repository(&initial_root)?;
+    let initial_root = backend.canonical_root(root)?;
+    // 容器后端没有本机 git 仓库,跳过仓库发现与变更视图。
+    let repository = if backend.supports_git() {
+        discover_repository(&initial_root)?
+    } else {
+        None
+    };
     let root = repository
         .as_ref()
         .map(|repository| repository.root.clone())
@@ -28,9 +34,10 @@ pub(super) fn load_workspace(
     let ignore_matcher = if show_ignored {
         None
     } else {
-        root_ignore_matcher(&root)
+        backend.root_ignore_matcher(&root)
     };
-    let entries = read_directory(&root, ignore_matcher.as_deref(), show_hidden, show_ignored)?;
+    let entries =
+        backend.read_directory(&root, ignore_matcher.as_deref(), show_hidden, show_ignored)?;
     let changes = repository
         .as_ref()
         .map(load_changes)

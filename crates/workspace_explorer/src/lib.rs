@@ -6,6 +6,7 @@
 
 rust_i18n::i18n!("locales", fallback = "en");
 
+mod backend;
 mod diff;
 mod editor;
 mod explorer;
@@ -14,6 +15,9 @@ mod git;
 mod model;
 mod theme;
 
+pub use backend::{
+    ContainerBackend, LocalBackend, WorkspaceBackend, container_backend, local_backend,
+};
 pub use editor::{WorkspaceEditor, WorkspaceEditorEvent};
 pub use explorer::{
     ExplorerFramePlacement, WorkspaceExplorer, WorkspaceExplorerConfig, WorkspaceExplorerEvent,

@@ -77,8 +77,6 @@ use crate::zmodem::{
     ZmodemPickerClaim, ZmodemPickerRequest, ZmodemPickerResponse, ZmodemResponder,
     ZmodemTransferId, ZmodemTransferOutcome, ZmodemTransferProgress,
 };
-#[cfg(target_os = "windows")]
-use crate::wsl_distributions::{wsl_distribution_for_config, wsl_unc_root};
 
 use crate::{
     LocalConfig, SerialBackend, SshBackend, TelnetBackend, TerminalBackend, TerminalControlHandle,
@@ -900,19 +898,18 @@ pub fn resolve_local_working_dir(working_dir: Option<String>) -> Option<PathBuf>
     }
 }
 
-/// 本地终端文件树的根目录。
+/// 本地终端文件树的根目录(仅本机/WSL 会话;容器会话返回 `None`)。
 ///
 /// WSL 会话以 `wsl.exe --distribution <发行版>` 启动，发行版文件系统在 Windows 侧
 /// 通过 `\\wsl$\<发行版>` 暴露；这类会话没有 Windows 工作目录，若沿用普通本地
 /// 会话的回落逻辑（`dirs::home_dir()`），文件树会显示本机磁盘而不是发行版里的
-/// 文件。因此这里优先取发行版文件系统根目录，其余情况与
-/// [`resolve_local_working_dir`] 保持一致。
+/// 文件。因此这里走 [`crate::workspace_source`] 的策略解析。容器 exec 会话的
+/// 文件系统不是本机路径，交由容器后端处理，此处不返回根目录。
 pub fn resolve_local_workspace_root(config: &LocalConfig) -> Option<PathBuf> {
-    #[cfg(target_os = "windows")]
-    if let Some(root) = wsl_distribution_for_config(config).and_then(wsl_unc_root) {
-        return Some(root);
+    match crate::workspace_source::resolve_local_workspace_source(config)? {
+        crate::workspace_source::LocalWorkspaceSource::Host { root } => Some(root),
+        crate::workspace_source::LocalWorkspaceSource::Container { .. } => None,
     }
-    resolve_local_working_dir(config.working_dir.clone())
 }
 
 /// 准备本地终端的 Shell Integration 环境
