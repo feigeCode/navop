@@ -265,8 +265,9 @@ mod tests {
     use extension_runtime::RegisteredResourceWorkbenchContribution;
     use extension_runtime::extension::manifest::{
         ResourceWorkbenchContrib, ResourceWorkbenchEffect, ResourceWorkbenchOperation,
-        ResourceWorkbenchOperationMode, ResourceWorkbenchPage, ResourceWorkbenchRenderer,
-        ResourceWorkbenchRendererKind, ResourceWorkbenchTemplate,
+        ResourceWorkbenchOperationMode, ResourceWorkbenchPage, ResourceWorkbenchPrimitive,
+        ResourceWorkbenchRenderer, ResourceWorkbenchRendererKind, ResourceWorkbenchViewer,
+        ResourceWorkbenchViewerFormat,
     };
     use std::collections::BTreeMap;
 
@@ -298,7 +299,6 @@ mod tests {
                 pages: vec![ResourceWorkbenchPage {
                     id: "overview".into(),
                     title: "Overview".into(),
-                    template: ResourceWorkbenchTemplate::Json,
                     renderer: ResourceWorkbenchRenderer {
                         kind: ResourceWorkbenchRendererKind::Native,
                         view_id: None,
@@ -306,13 +306,13 @@ mod tests {
                     },
                     tab_group_id: None,
                     load: None,
-                    execute: None,
-                    collection: None,
-                    inputs: vec![],
-                    scope: None,
-                    terminal: None,
-                    route: None,
                     links: vec![],
+                    route: None,
+                    stack: vec![ResourceWorkbenchPrimitive::Viewer(
+                        ResourceWorkbenchViewer {
+                            format: ResourceWorkbenchViewerFormat::Json,
+                        },
+                    )],
                 }],
             },
         )

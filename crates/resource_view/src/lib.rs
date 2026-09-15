@@ -35,8 +35,9 @@ use extension_plugin_adapter::{
 };
 use extension_runtime::RegisteredResourceWorkbenchContribution;
 use extension_runtime::extension::manifest::{
-    ResourceWorkbenchPage, ResourceWorkbenchPaginationKind, ResourceWorkbenchStatusFormat as F,
-    ResourceWorkbenchTemplate,
+    ResourceWorkbenchForm, ResourceWorkbenchPage, ResourceWorkbenchPaginationKind,
+    ResourceWorkbenchPrimitive, ResourceWorkbenchStatusFormat as F, ResourceWorkbenchTable,
+    ResourceWorkbenchTerminal, ResourceWorkbenchViewer, ResourceWorkbenchViewerFormat,
 };
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
@@ -47,6 +48,7 @@ use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, Sizable, Size, StyledExt as _,
     button::{Button, ButtonVariants as _},
     h_flex,
+    scroll::ScrollableElement as _,
     spinner::Spinner,
     table::{DataTable, TableState},
     tag::Tag,
@@ -111,6 +113,65 @@ static NEXT_MOUNT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU6
 /// 保留缓冲可以到 1000 条(`MAX_RETAINED_EVENTS`),但一帧渲染 1000 行会拖慢
 /// 高频事件流(每秒数次通知)的重绘;最近的 500 条对「盯实时」已经足够。
 const MAX_RENDERED_EVENTS: usize = 500;
+
+/// 页面 stack 中的 table 原语(取首个)。
+fn table_of(page: &ResourceWorkbenchPage) -> Option<&ResourceWorkbenchTable> {
+    page.stack.iter().find_map(|primitive| match primitive {
+        ResourceWorkbenchPrimitive::Table(table) => Some(table),
+        _ => None,
+    })
+}
+
+/// 页面 stack 中的 form 原语(取首个)。
+fn form_of(page: &ResourceWorkbenchPage) -> Option<&ResourceWorkbenchForm> {
+    page.stack.iter().find_map(|primitive| match primitive {
+        ResourceWorkbenchPrimitive::Form(form) => Some(form),
+        _ => None,
+    })
+}
+
+/// 页面 stack 中的 viewer 原语(取首个)。
+fn viewer_of(page: &ResourceWorkbenchPage) -> Option<&ResourceWorkbenchViewer> {
+    page.stack.iter().find_map(|primitive| match primitive {
+        ResourceWorkbenchPrimitive::Viewer(viewer) => Some(viewer),
+        _ => None,
+    })
+}
+
+/// 页面是否声明 viewer 的纯文本呈现(`format: text`)。
+///
+/// 缺少这个判断时 viewer 页面一律走 JSON 树视图,声明的 `text` 被静默忽略,
+/// 属于"schema 承诺 > renderer 兑现"。
+fn viewer_prefers_text(page: &ResourceWorkbenchPage) -> bool {
+    viewer_of(page).is_some_and(|viewer| viewer.format == ResourceWorkbenchViewerFormat::Text)
+}
+
+/// 页面 stack 中的 terminal 原语(取首个)。
+fn terminal_of(page: &ResourceWorkbenchPage) -> Option<&ResourceWorkbenchTerminal> {
+    page.stack.iter().find_map(|primitive| match primitive {
+        ResourceWorkbenchPrimitive::Terminal(terminal) => Some(terminal),
+        _ => None,
+    })
+}
+
+/// 页面是否为终端页(含 terminal 原语)。
+fn is_terminal_page(page: &ResourceWorkbenchPage) -> bool {
+    terminal_of(page).is_some()
+}
+
+/// 页面是否含 stream 原语(消费 load 返回的事件流)。
+fn has_stream(page: &ResourceWorkbenchPage) -> bool {
+    page.stack
+        .iter()
+        .any(|primitive| matches!(primitive, ResourceWorkbenchPrimitive::Stream))
+}
+
+/// 页面是否含 tasks 原语。
+fn has_tasks(page: &ResourceWorkbenchPage) -> bool {
+    page.stack
+        .iter()
+        .any(|primitive| matches!(primitive, ResourceWorkbenchPrimitive::Tasks))
+}
 
 pub struct NativeResourceWorkbench {
     descriptor: RegisteredResourceWorkbenchContribution,
@@ -258,19 +319,15 @@ impl NativeResourceWorkbench {
     }
 
     fn collection_page(&self, page: &ResourceWorkbenchPage) -> Option<u64> {
-        (page.template == ResourceWorkbenchTemplate::Collection)
-            .then(|| page.collection.as_ref())
-            .flatten()
-            .filter(|collection| collection.pagination.kind != ResourceWorkbenchPaginationKind::None)
+        table_of(page)
+            .filter(|table| table.pagination.kind != ResourceWorkbenchPaginationKind::None)
             .and_then(|_| self.paging.get("page").and_then(serde_json::Value::as_u64))
     }
 
     /// cursor 分页:上次 load 返回的 nextCursor;None 表示页码式或没有更多。
     fn collection_cursor(&self, page: &ResourceWorkbenchPage) -> Option<String> {
-        let collection = (page.template == ResourceWorkbenchTemplate::Collection)
-            .then(|| page.collection.as_ref())
-            .flatten()?;
-        if collection.pagination.kind != ResourceWorkbenchPaginationKind::Cursor {
+        let table = table_of(page)?;
+        if table.pagination.kind != ResourceWorkbenchPaginationKind::Cursor {
             return None;
         }
         self.paging
@@ -295,10 +352,9 @@ impl NativeResourceWorkbench {
             return;
         }
         let is_cursor_kind = self.collection_cursor(&page).is_some()
-            || page
-                .collection
-                .as_ref()
-                .is_some_and(|collection| collection.pagination.kind == ResourceWorkbenchPaginationKind::Cursor);
+            || table_of(&page).is_some_and(|table| {
+                table.pagination.kind == ResourceWorkbenchPaginationKind::Cursor
+            });
         let existing_cursor = self.paging.get("cursor").cloned();
         if let Some(object) = self.paging.as_object_mut() {
             object.insert("page".into(), serde_json::json!(next));
@@ -318,10 +374,8 @@ impl NativeResourceWorkbench {
         let Some(page) = self.current_page() else {
             return;
         };
-        if page
-            .collection
-            .as_ref()
-            .is_none_or(|collection| collection.pagination.kind != ResourceWorkbenchPaginationKind::Cursor)
+        if table_of(page)
+            .is_none_or(|table| table.pagination.kind != ResourceWorkbenchPaginationKind::Cursor)
         {
             return;
         }
@@ -344,14 +398,13 @@ impl NativeResourceWorkbench {
     /// 进入终端页前记录来源页;离开终端页时清除。
     /// 终端控制台隐藏了侧边栏,返回按钮是唯一的原路返回入口。
     fn track_terminal_return(&mut self, target_page_id: &str) {
-        let target_is_terminal = self.descriptor.pages.iter().any(|page| {
-            page.id == target_page_id && page.template == ResourceWorkbenchTemplate::Terminal
-        });
+        let target_is_terminal = self
+            .descriptor
+            .pages
+            .iter()
+            .any(|page| page.id == target_page_id && is_terminal_page(page));
         if target_is_terminal {
-            let already_terminal = self
-                .current_page()
-                .map(|page| page.template == ResourceWorkbenchTemplate::Terminal)
-                .unwrap_or(false);
+            let already_terminal = self.current_page().map(is_terminal_page).unwrap_or(false);
             if !already_terminal {
                 self.terminal_return = Some((self.selected_page.clone(), self.route.clone()));
             }
@@ -460,8 +513,8 @@ impl NativeResourceWorkbench {
         window: &mut Window,
         cx: &mut App,
     ) -> Option<gpui::AnyView> {
-        let Some(declaration) = page.terminal.as_ref() else {
-            self.terminal_error = Some("page declares no terminal block".into());
+        let Some(declaration) = terminal_of(page) else {
+            self.terminal_error = Some("page declares no terminal primitive".into());
             return None;
         };
         let Some(host) = terminal_host(cx) else {
@@ -480,7 +533,10 @@ impl NativeResourceWorkbench {
         let session_metadata = self.session.metadata().unwrap_or(serde_json::Value::Null);
         let request = TerminalMountRequest {
             title: page.title.clone(),
-            command: interpolate_with_session(&declaration.command, &self.route, &session_metadata),
+            command: declaration
+                .command
+                .as_deref()
+                .map(|command| interpolate_with_session(command, &self.route, &session_metadata)),
             args: declaration
                 .args
                 .iter()
@@ -500,6 +556,10 @@ impl NativeResourceWorkbench {
                 .working_dir
                 .as_deref()
                 .map(|dir| interpolate_with_session(dir, &self.route, &session_metadata)),
+            operation: declaration
+                .operation
+                .as_ref()
+                .map(|operation| operation.operation.clone()),
         };
         match host.mount(request, window, cx) {
             Ok(mount) => {
@@ -545,6 +605,7 @@ impl NativeResourceWorkbench {
             selection: serde_json::Value::Null,
             paging: serde_json::json!({"page": 1, "limit": 50, "cursor": null}),
             parent: serde_json::Value::Null,
+            connection: serde_json::Value::Null,
         };
         self.active_request_cancel = Some(scope.cancellation());
         let tokio = self.tokio.clone();
@@ -656,20 +717,12 @@ impl NativeResourceWorkbench {
             cx.notify();
             return;
         };
-        let template = page.template;
-        if matches!(
-            template,
-            ResourceWorkbenchTemplate::Tasks | ResourceWorkbenchTemplate::Query
-        ) {
-            self.page_state = PageState::Idle;
-            cx.notify();
-            return;
-        }
         let Some(action) = page.load.clone() else {
             self.page_state = PageState::Idle;
             cx.notify();
             return;
         };
+        let is_stream = has_stream(page);
         self.load_revision += 1;
         let revision = self.load_revision;
         self.page_state = PageState::Loading;
@@ -685,10 +738,11 @@ impl NativeResourceWorkbench {
             selection: serde_json::Value::Null,
             paging: self.paging_context(),
             parent: serde_json::Value::Null,
+            connection: serde_json::Value::Null,
         };
         let operation = action.operation;
         let tokio = self.tokio.clone();
-        if template == ResourceWorkbenchTemplate::Events {
+        if is_stream {
             let this_scope = scope;
             let this = cx.entity().downgrade();
             let workbench_for_event = workbench.clone();
@@ -821,7 +875,7 @@ impl NativeResourceWorkbench {
         let Some(page) = self.current_page().cloned() else {
             return;
         };
-        let Some(action) = page.execute.clone() else {
+        let Some(action) = form_of(&page).map(|form| form.submit.clone()) else {
             return;
         };
         if !self.descriptor.operations.contains_key(&action.operation) {
@@ -850,11 +904,7 @@ impl NativeResourceWorkbench {
                 let Some(page) = self.current_page().cloned() else {
                     return;
                 };
-                if !page
-                    .execute
-                    .as_ref()
-                    .is_some_and(|action| action.operation == operation)
-                {
+                if !form_of(&page).is_some_and(|form| form.submit.operation == operation) {
                     cx.notify();
                     return;
                 }
@@ -899,7 +949,12 @@ impl NativeResourceWorkbench {
             }
         };
         let values = input_state.read(cx).values(cx);
-        for field in &page.inputs {
+        let Some(form) = form_of(page) else {
+            self.query_result = Some(Err("page has no form primitive".into()));
+            cx.notify();
+            return;
+        };
+        for field in &form.inputs {
             let value = values.get(&field.id).cloned().unwrap_or_default();
             if field.required && value.is_empty() {
                 self.query_result = Some(Err(format!("`{}` is required", field.id)));
@@ -925,6 +980,7 @@ impl NativeResourceWorkbench {
             selection: serde_json::Value::Null,
             paging: self.paging_context(),
             parent: serde_json::Value::Null,
+            connection: serde_json::Value::Null,
         };
         let tokio = self.tokio.clone();
         cx.spawn(async move |this, cx| {
@@ -960,7 +1016,7 @@ impl NativeResourceWorkbench {
         let Some(page) = self.current_page() else {
             return;
         };
-        let Some(open) = page.collection.as_ref().and_then(|c| c.open.as_ref()) else {
+        let Some(open) = table_of(page).and_then(|table| table.open.as_ref()) else {
             return;
         };
         let route = route_binding::build_route(&open.route, &self.route, &row);
@@ -996,8 +1052,8 @@ impl NativeResourceWorkbench {
             operation: operation.clone(),
             row_key: self
                 .current_page()
-                .and_then(|page| page.collection.as_ref())
-                .map(|collection| collection_table::row_key(&row, &collection.key_paths))
+                .and_then(table_of)
+                .map(|table| collection_table::row_key(&row, &table.key_paths))
                 .unwrap_or_default(),
         });
         self.row_action_error = None;
@@ -1015,6 +1071,7 @@ impl NativeResourceWorkbench {
             selection: row,
             paging: self.paging_context(),
             parent: serde_json::Value::Null,
+            connection: serde_json::Value::Null,
         };
         let tokio = self.tokio.clone();
         cx.spawn(async move |this, cx| {
@@ -1174,20 +1231,20 @@ impl NativeResourceWorkbench {
                     .into_any_element();
             }
         }
-        if page.template == ResourceWorkbenchTemplate::Query {
-            return self.render_query_page(&page, window, cx).into_any_element();
-        }
-        if page.template == ResourceWorkbenchTemplate::Tasks {
+        if has_tasks(&page) {
             return self.render_tasks_page(&page, cx).into_any_element();
         }
-        if page.template == ResourceWorkbenchTemplate::Events {
+        if has_stream(&page) {
             return self.render_events_page(&page, cx).into_any_element();
         }
-        // terminal 模板由 render() 直接接管,不进入工作台框架。
+        if form_of(&page).is_some() && table_of(&page).is_none() {
+            return self.render_query_page(&page, window, cx).into_any_element();
+        }
+        // terminal 原语由 render() 直接接管,不进入工作台框架。
 
         let theme = cx.theme().clone();
         let state = self.page_state_snapshot();
-        let is_collection = page.template == ResourceWorkbenchTemplate::Collection;
+        let is_collection = table_of(&page).is_some();
         let busy =
             self.row_action_running.is_some() || matches!(self.page_state, PageState::Loading);
 
@@ -1209,10 +1266,8 @@ impl NativeResourceWorkbench {
                     .font_semibold()
                     .child(page.title.clone()),
             );
-        if let (Some(collection), PageStateSnapshot::Loaded(value)) =
-            (page.collection.as_ref(), &state)
-        {
-            let count = collection_table::items_of(collection, value).len();
+        if let (Some(table), PageStateSnapshot::Loaded(value)) = (table_of(&page), &state) {
+            let count = collection_table::items_of(table, value).len();
             toolbar = toolbar.child(
                 Tag::secondary()
                     .with_size(Size::Small)
@@ -1233,10 +1288,9 @@ impl NativeResourceWorkbench {
             // cursor 分页:没有 nextCursor 时禁用 Next,防止空翻页。
             let has_more = match self.collection_cursor(&page) {
                 Some(_) => true,
-                None => page
-                    .collection
-                    .as_ref()
-                    .is_some_and(|collection| collection.pagination.kind != ResourceWorkbenchPaginationKind::Cursor),
+                None => table_of(&page).is_some_and(|table| {
+                    table.pagination.kind != ResourceWorkbenchPaginationKind::Cursor
+                }),
             };
             toolbar = toolbar
                 .child(
@@ -1322,11 +1376,15 @@ impl NativeResourceWorkbench {
         if matches!(self.pending_confirm, Some(PendingConfirm::RowAction { .. })) {
             alerts.push(self.render_confirm_bar("row-action-confirm", cx));
         }
-        // 主体:collection 走表格卡片,其余模板维持自带滚动的全幅视图。
+        // 主体:collection 走表格卡片,其余原语维持自带滚动的全幅视图。
         let body: AnyElement = match state {
-            PageStateSnapshot::Loading if is_collection => {
-                self.render_collection(&page, &serde_json::Value::Null, window, cx)
-            }
+            PageStateSnapshot::Loading if is_collection => self.render_collection(
+                table_of(&page).expect("table primitive"),
+                &page.id,
+                &serde_json::Value::Null,
+                window,
+                cx,
+            ),
             PageStateSnapshot::Loading => loading_state(&theme),
             PageStateSnapshot::Failed(error) => self.render_failure(error, cx),
             PageStateSnapshot::Idle => empty_state(
@@ -1337,7 +1395,17 @@ impl NativeResourceWorkbench {
             ),
             PageStateSnapshot::Loaded(value) => {
                 if is_collection {
-                    self.render_collection(&page, &value, window, cx)
+                    self.render_collection(
+                        table_of(&page).expect("table primitive"),
+                        &page.id,
+                        &value,
+                        window,
+                        cx,
+                    )
+                } else if viewer_prefers_text(&page) {
+                    // viewer 声明了 format: text,就按纯文本呈现,
+                    // 不再退回 JSON 树视图。
+                    render_text_view(&page.id, &value, &theme)
                 } else {
                     self.render_json_value(&page.id, value, window, cx)
                 }
@@ -1564,22 +1632,30 @@ impl NativeResourceWorkbench {
                 .font_semibold()
                 .child(page.title.clone()),
         );
-        if let Some(command) = page.terminal.as_ref().map(|terminal| {
+        if let Some(terminal) = terminal_of(page) {
             let session_metadata = self.session.metadata().unwrap_or(serde_json::Value::Null);
-            let args = terminal
-                .args
-                .iter()
-                .map(|arg| interpolate_with_session(arg, &self.route, &session_metadata))
-                .collect::<Vec<_>>();
-            std::iter::once(interpolate_with_session(
-                &terminal.command,
-                &self.route,
-                &session_metadata,
-            ))
-            .chain(args)
-            .collect::<Vec<_>>()
-            .join(" ")
-        }) {
+            let command = match terminal.command.as_deref() {
+                Some(command) => {
+                    let args = terminal
+                        .args
+                        .iter()
+                        .map(|arg| interpolate_with_session(arg, &self.route, &session_metadata))
+                        .collect::<Vec<_>>();
+                    std::iter::once(interpolate_with_session(
+                        command,
+                        &self.route,
+                        &session_metadata,
+                    ))
+                    .chain(args)
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                }
+                None => terminal
+                    .operation
+                    .as_ref()
+                    .map(|operation| format!("operation · {}", operation.operation))
+                    .unwrap_or_default(),
+            };
             header = header.child(
                 div()
                     .flex_1()
@@ -1721,10 +1797,13 @@ impl NativeResourceWorkbench {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         // 懒初始化输入 state(保留已输入草稿)。
+        let inputs = form_of(page)
+            .map(|form| form.inputs.clone())
+            .unwrap_or_default();
         let input_state = self
             .query_inputs
             .entry(self.selected_page.clone())
-            .or_insert_with(|| cx.new(|cx| query_page::QueryInputState::new(page, window, cx)))
+            .or_insert_with(|| cx.new(|cx| query_page::QueryInputState::new(&inputs, window, cx)))
             .clone();
         let theme = cx.theme().clone();
         let result_view: AnyElement = match &self.query_result {
@@ -2224,6 +2303,33 @@ fn alert_bar(
         .into_any_element()
 }
 
+/// viewer 原语 `format: text` 的呈现:字符串原样显示,其他 JSON 值
+/// pretty 打印。声明了 text 就不再退回 JSON 树视图。
+fn render_text_view(
+    page_id: &str,
+    value: &serde_json::Value,
+    theme: &gpui_component::Theme,
+) -> AnyElement {
+    let text = match value {
+        serde_json::Value::String(text) => text.clone(),
+        other => serde_json::to_string_pretty(other).unwrap_or_else(|_| other.to_string()),
+    };
+    div()
+        .id(SharedString::from(format!("page-text-view-{page_id}")))
+        .size_full()
+        .min_w_0()
+        .min_h_0()
+        .overflow_y_scrollbar()
+        .p_4()
+        .child(
+            div()
+                .font_family(theme.mono_font_family.clone())
+                .text_sm()
+                .child(text),
+        )
+        .into_any_element()
+}
+
 /// 加载态:转圈 + 说明。
 fn loading_state(theme: &gpui_component::Theme) -> AnyElement {
     v_flex()
@@ -2453,14 +2559,13 @@ impl NativeResourceWorkbench {
     /// 行悬停 / 列缩放 / 本地排序 / 骨架加载),行操作按钮在操作列内渲染。
     fn render_collection(
         &mut self,
-        page: &ResourceWorkbenchPage,
+        table: &ResourceWorkbenchTable,
+        page_id: &str,
         value: &serde_json::Value,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let Some(collection) = page.collection.clone() else {
-            return self.render_json_value(&page.id, value.clone(), window, cx);
-        };
+        let collection = table.clone();
         let loading = matches!(self.page_state, PageState::Loading);
         let items = if loading {
             Vec::new()
@@ -2470,7 +2575,7 @@ impl NativeResourceWorkbench {
         // 表格实体按 (页面, 数据版本) 缓存:首次加载给骨架屏,已有数据时
         // 保留旧行(由工具栏刷新按钮表达进行中),避免每次操作都闪一次骨架。
         let stale = self.collection_table.as_ref().is_none_or(|cached| {
-            cached.page_id != page.id
+            cached.page_id != page_id
                 || (!loading && (cached.loading || cached.revision != self.load_revision))
         });
         if stale {
@@ -2499,7 +2604,7 @@ impl NativeResourceWorkbench {
             );
             let table = build_table_state(delegate, window, cx);
             self.collection_table = Some(CollectionTableView {
-                page_id: page.id.clone(),
+                page_id: page_id.to_string(),
                 revision: self.load_revision,
                 loading,
                 table,
@@ -2613,7 +2718,7 @@ impl Render for NativeResourceWorkbench {
                 // (如 Docker exec)会让左树/右栏整体消失。
                 let terminal_page = self
                     .current_page()
-                    .filter(|page| page.template == ResourceWorkbenchTemplate::Terminal)
+                    .filter(|page| is_terminal_page(page))
                     .cloned();
                 match terminal_page {
                     Some(page) => self.render_terminal_page(&page, window, cx),

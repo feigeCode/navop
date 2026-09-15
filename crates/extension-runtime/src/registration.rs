@@ -761,9 +761,9 @@ fn validate_resource_workbench(
     let invalid = |reason: &str| {
         ExtensionRuntimeError::InvalidResourceWorkbench(format!("{}: {reason}", workbench.id))
     };
-    if workbench.schema_version != 2 {
+    if workbench.schema_version != 3 {
         return Err(invalid(
-            "unsupported schemaVersion; migrate to layout (schemaVersion 2)",
+            "unsupported schemaVersion; migrate pages to primitives (schemaVersion 3)",
         ));
     }
     if workbench.id.trim().is_empty() || workbench.title.trim().is_empty() {
@@ -805,30 +805,71 @@ fn validate_resource_workbench(
         return Err(invalid("defaultPage references an unknown page"));
     }
     let page_exists = |page_id: &str| workbench.pages.iter().any(|page| page.id == page_id);
+    let operation_exists = |operation: &str| workbench.operations.contains_key(operation);
     for page in &workbench.pages {
-        for action in [page.load.as_ref(), page.execute.as_ref()]
-            .into_iter()
-            .flatten()
-        {
-            if !workbench.operations.contains_key(&action.operation) {
-                return Err(invalid("page references an unknown operation"));
+        if let Some(action) = page.load.as_ref() {
+            if !operation_exists(&action.operation) {
+                return Err(invalid("page load references an unknown operation"));
             }
         }
-        // collection open 与 links 的目标页必须存在。
-        if let Some(open) = page.collection.as_ref().and_then(|c| c.open.as_ref()) {
-            if !page_exists(&open.page_id) {
-                return Err(invalid("collection open references an unknown page"));
-            }
+        if page.stack.is_empty() {
+            return Err(invalid("page stack must declare at least one primitive"));
         }
-        // collection 行操作引用的 operation 必须存在。
-        if let Some(collection) = page.collection.as_ref() {
-            for action in &collection.actions {
-                if !workbench.operations.contains_key(&action.operation) {
-                    return Err(invalid("collection action references an unknown operation"));
+        // 渲染器一页只呈现一个内容原语(table/form/viewer/stream/tasks/terminal
+        // 择一)。多原语 stack 会被静默丢弃其中之一,造成"安装合法但界面不忠实
+        // 于声明"——在校验期明确拒绝,需要组合时拆成多个页面。
+        if page.stack.len() > 1 {
+            return Err(invalid(
+                "page stack must declare exactly one primitive; split the page instead",
+            ));
+        }
+        for primitive in &page.stack {
+            match primitive {
+                m::ResourceWorkbenchPrimitive::Table(table) => {
+                    if let Some(open) = table.open.as_ref() {
+                        if !page_exists(&open.page_id) {
+                            return Err(invalid("table open references an unknown page"));
+                        }
+                    }
+                    for action in &table.actions {
+                        if !operation_exists(&action.operation) {
+                            return Err(invalid("table action references an unknown operation"));
+                        }
+                        if action.id.trim().is_empty() || action.label.trim().is_empty() {
+                            return Err(invalid("table action id and label must not be empty"));
+                        }
+                    }
                 }
-                if action.id.trim().is_empty() || action.label.trim().is_empty() {
-                    return Err(invalid("collection action id and label must not be empty"));
+                m::ResourceWorkbenchPrimitive::Form(form) => {
+                    if !operation_exists(&form.submit.operation) {
+                        return Err(invalid("form submit references an unknown operation"));
+                    }
                 }
+                m::ResourceWorkbenchPrimitive::Terminal(terminal) => {
+                    let has_command = terminal
+                        .command
+                        .as_deref()
+                        .is_some_and(|command| !command.trim().is_empty());
+                    let has_operation = terminal.operation.is_some();
+                    if !has_command && !has_operation {
+                        return Err(invalid(
+                            "terminal requires either a command or an operation",
+                        ));
+                    }
+                    if has_command && has_operation {
+                        return Err(invalid(
+                            "terminal command and operation are mutually exclusive",
+                        ));
+                    }
+                    if let Some(operation) = terminal.operation.as_ref() {
+                        if !operation_exists(&operation.operation) {
+                            return Err(invalid("terminal references an unknown operation"));
+                        }
+                    }
+                }
+                m::ResourceWorkbenchPrimitive::Viewer(_)
+                | m::ResourceWorkbenchPrimitive::Stream
+                | m::ResourceWorkbenchPrimitive::Tasks => {}
             }
         }
         for link in &page.links {

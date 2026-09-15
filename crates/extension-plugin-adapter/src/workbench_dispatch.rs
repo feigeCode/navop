@@ -47,7 +47,7 @@ pub struct WorkbenchRequest {
     pub params: serde_json::Value,
 }
 
-/// 参数绑定上下文:literal/input/route/selection/paging/parent 六种来源。
+/// 参数绑定上下文:literal/input/route/selection/paging/parent/connection 七种来源。
 #[derive(Debug, Clone, Default)]
 pub struct BindingContext {
     pub input: serde_json::Value,
@@ -56,6 +56,8 @@ pub struct BindingContext {
     pub paging: serde_json::Value,
     /// 树 lazy 展开时的父节点行数据。
     pub parent: serde_json::Value,
+    /// 连接配置字段(来自连接的保存配置)。
+    pub connection: serde_json::Value,
 }
 
 impl BindingContext {
@@ -71,6 +73,7 @@ impl BindingContext {
             S::Selection => Some(&self.selection),
             S::Paging => Some(&self.paging),
             S::Parent => Some(&self.parent),
+            S::Connection => Some(&self.connection),
         }
     }
 }

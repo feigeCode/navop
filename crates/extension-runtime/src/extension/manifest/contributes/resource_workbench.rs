@@ -3,12 +3,13 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// 资源工作台贡献(schemaVersion 2)。
+/// 资源工作台贡献(schemaVersion 3)。
 ///
-/// v2 用单一 `layout` 声明取代 v1 的 `navigation`/`tree`/`statusBar`/
-/// `pages[].tabs`;区域内容源要么是 native 声明式模板,要么是 JS Shell 视图,
-/// 含整个工作台主体(`layout.renderer`)。规范见
-/// `docs/superpowers/specs/2026-09-14-resource-workbench-layout-v2.md`。
+/// v3 用 `pages[].stack`(可组合原语的有序 v-stack)取代 v2 的闭合
+/// `template` 枚举:每个页面由若干原语(table/form/viewer/stream/tasks/terminal)
+/// 纵向堆叠而成,新资源类型组合原语即可,无需宿主改动。数据面:页面持有一个
+/// `load` 操作产出结果,`form.submit` 可覆盖该结果,table/viewer/stream 消费结果。
+/// 布局仍由 `layout`(left/center/right/bottom 四区域 + root Shell)声明。
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceWorkbenchContrib {
@@ -99,11 +100,11 @@ pub struct ResourceWorkbenchBottomRegion {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
 pub enum ResourceWorkbenchNavSource {
-    /// 扁平页面列表(v1 `navigation` 的等价物):显式声明条目与顺序。
+    /// 扁平页面列表:显式声明条目与顺序。
     List {
         items: Vec<ResourceWorkbenchNavEntry>,
     },
-    /// 树:静态根 + 声明式 lazy children(v1 `tree` 的转正)。
+    /// 树:静态根 + 声明式 lazy children。
     Tree {
         roots: Vec<ResourceWorkbenchTreeRoot>,
     },
@@ -200,8 +201,7 @@ pub struct ResourceWorkbenchTreeChildren {
     pub children: Option<Box<ResourceWorkbenchTreeChildren>>,
 }
 
-/// 共享 tab 组:组内页面经 `pages[].tabGroupId` 引用,
-/// 取代 v1 每页复制完整 tabs 列表的做法。
+/// 共享 tab 组:组内页面经 `pages[].tabGroupId` 引用。
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceWorkbenchTabGroup {
@@ -288,6 +288,8 @@ pub enum ResourceWorkbenchBindingSource {
     Paging,
     /// 树 lazy 展开时的父节点行数据;非树上下文下为空。
     Parent,
+    /// 连接配置字段(来自连接的保存配置)。
+    Connection,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -299,47 +301,105 @@ pub enum ResourceWorkbenchValueType {
     Json,
 }
 
+/// 页面:声明式渲染的最小单位,内容为原语 v-stack。
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceWorkbenchPage {
     pub id: String,
     pub title: String,
-    pub template: ResourceWorkbenchTemplate,
     pub renderer: ResourceWorkbenchRenderer,
     /// 所属 tab 组(layout.center.tabGroups 中声明);缺省无 strip。
     #[serde(default, rename = "tabGroupId")]
     pub tab_group_id: Option<String>,
+    /// 页面数据操作:打开/刷新/翻页时执行,结果供 table/viewer/stream 消费。
     #[serde(default)]
     pub load: Option<ResourceWorkbenchAction>,
-    #[serde(default)]
-    pub execute: Option<ResourceWorkbenchAction>,
-    #[serde(default)]
-    pub collection: Option<ResourceWorkbenchCollection>,
-    #[serde(default)]
-    pub inputs: Vec<ResourceWorkbenchInput>,
-    #[serde(default)]
-    pub scope: Option<String>,
-    /// terminal 模板页面的终端声明。
-    #[serde(default)]
-    pub terminal: Option<ResourceWorkbenchTerminal>,
-    /// detail/query 页面的路由参数声明(如 {"name": {"type": "string", "required": true}})。
-    #[serde(default)]
-    pub route: Option<BTreeMap<String, ResourceWorkbenchRouteParam>>,
     /// 页面内跳转链接(如 Index → Mapping)。
     #[serde(default)]
     pub links: Vec<ResourceWorkbenchLink>,
+    /// detail/query 页面的路由参数声明(如 {"name": {"type": "string", "required": true}})。
+    #[serde(default)]
+    pub route: Option<BTreeMap<String, ResourceWorkbenchRouteParam>>,
+    /// 页面内容原语。当前宿主渲染器一页只呈现一个原语,声明多个会被安装
+    /// 校验拒绝(需要组合时拆成多个页面)。字段名保留 `stack` 以兼容线格式,
+    /// 待真正的堆叠渲染落地后再放宽该约束。
+    pub stack: Vec<ResourceWorkbenchPrimitive>,
 }
 
-/// terminal 页面要启动的终端进程声明。
+/// 页面内容原语:页面 stack 中的一项。当前一页只允许一个原语。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
+pub enum ResourceWorkbenchPrimitive {
+    /// 表格:按 itemsPath 从页面结果投影行,声明列/分页/行操作。
+    Table(ResourceWorkbenchTable),
+    /// 表单:输入字段 + 提交操作;提交结果覆盖页面结果,由同页 table/viewer 呈现。
+    Form(ResourceWorkbenchForm),
+    /// 只读视图:json / text。
+    Viewer(ResourceWorkbenchViewer),
+    /// 事件流:job 操作返回 EventStream,持续追加事件。
+    Stream,
+    /// 宿主任务列表。
+    Tasks,
+    /// 终端:本地进程或 runtime operation 驱动。
+    Terminal(ResourceWorkbenchTerminal),
+}
+
+/// table 原语:页面结果的表格投影。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceWorkbenchTable {
+    #[serde(rename = "itemsPath")]
+    pub items_path: String,
+    #[serde(rename = "keyPaths")]
+    pub key_paths: Vec<String>,
+    #[serde(default)]
+    pub pagination: ResourceWorkbenchPagination,
+    pub columns: Vec<ResourceWorkbenchColumn>,
+    /// 行点击跳转声明:按 selection 绑定构造目标页 route。
+    #[serde(default)]
+    pub open: Option<ResourceWorkbenchOpen>,
+    /// 行内操作按钮:点击后以该行为 selection 执行命名操作。
+    #[serde(default)]
+    pub actions: Vec<ResourceWorkbenchRowAction>,
+}
+
+/// form 原语:输入字段 + 提交操作。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceWorkbenchForm {
+    /// 提交操作:结果覆盖页面结果。
+    pub submit: ResourceWorkbenchAction,
+    #[serde(default)]
+    pub inputs: Vec<ResourceWorkbenchInput>,
+}
+
+/// viewer 原语:页面结果的只读呈现。
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ResourceWorkbenchViewerFormat {
+    #[default]
+    Json,
+    Text,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceWorkbenchViewer {
+    #[serde(default)]
+    pub format: ResourceWorkbenchViewerFormat,
+}
+
+/// 终端原语。
 ///
-/// 宿主按此启动一个可嵌入的原生终端组件;`args` 支持
-/// `{{route.xxx}}` 与 `{{xxx}}` 两种占位符,由宿主按当前路由插值。
+/// `command` 模式由宿主启动可嵌入的本地终端进程;`operation` 模式由 runtime
+/// 侧 pty operation 驱动(用于 SSH exec、kubectl exec 等远程终端)。
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceWorkbenchTerminal {
-    /// 可执行程序(如 `docker`)。
-    pub command: String,
-    /// 参数列表。
+    /// 本地进程可执行程序(如 `docker`);与 `operation` 二选一。
+    #[serde(default)]
+    pub command: Option<String>,
+    /// 本地进程参数列表;`{{route.xxx}}` 与 `{{xxx}}` 由宿主按当前路由插值。
     #[serde(default)]
     pub args: Vec<String>,
     /// 追加的环境变量。
@@ -348,6 +408,16 @@ pub struct ResourceWorkbenchTerminal {
     /// 工作目录。
     #[serde(default, rename = "workingDir")]
     pub working_dir: Option<String>,
+    /// runtime pty operation;与 `command` 二选一。
+    #[serde(default)]
+    pub operation: Option<ResourceWorkbenchTerminalOperation>,
+}
+
+/// runtime 侧 pty 会话声明。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceWorkbenchTerminalOperation {
+    pub operation: String,
 }
 
 /// tab 条中的一项。
@@ -380,19 +450,6 @@ pub struct ResourceWorkbenchLink {
     pub route: BTreeMap<String, ResourceWorkbenchBinding>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum ResourceWorkbenchTemplate {
-    Overview,
-    Collection,
-    Detail,
-    Query,
-    Json,
-    Events,
-    Tasks,
-    Terminal,
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceWorkbenchRenderer {
@@ -416,23 +473,6 @@ pub struct ResourceWorkbenchAction {
     pub operation: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct ResourceWorkbenchCollection {
-    #[serde(rename = "itemsPath")]
-    pub items_path: String,
-    #[serde(rename = "keyPaths")]
-    pub key_paths: Vec<String>,
-    pub pagination: ResourceWorkbenchPagination,
-    pub columns: Vec<ResourceWorkbenchColumn>,
-    /// 行点击跳转声明:按 selection 绑定构造目标页 route。
-    #[serde(default)]
-    pub open: Option<ResourceWorkbenchOpen>,
-    /// 行内操作按钮:点击后以该行为 selection 执行命名操作。
-    #[serde(default)]
-    pub actions: Vec<ResourceWorkbenchRowAction>,
-}
-
 /// collection 行内操作:operation 的 params 通常以 selection 来源绑定行字段。
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -450,15 +490,17 @@ pub struct ResourceWorkbenchOpen {
     pub route: BTreeMap<String, ResourceWorkbenchBinding>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceWorkbenchPagination {
+    #[serde(default)]
     pub kind: ResourceWorkbenchPaginationKind,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ResourceWorkbenchPaginationKind {
+    #[default]
     None,
     /// page/limit 页码式。
     Page,
@@ -472,10 +514,22 @@ pub struct ResourceWorkbenchColumn {
     pub id: String,
     pub title: String,
     pub path: String,
-    #[serde(rename = "type")]
-    pub value_type: String,
+    #[serde(rename = "type", default)]
+    pub value_type: ResourceWorkbenchColumnType,
     #[serde(default)]
     pub style: ResourceWorkbenchColumnStyle,
+}
+
+/// 列值类型:决定表格单元格的渲染与格式化。
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ResourceWorkbenchColumnType {
+    #[default]
+    Display,
+    String,
+    Number,
+    Boolean,
+    Json,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -496,8 +550,8 @@ pub enum ResourceWorkbenchColumnStyle {
 #[serde(deny_unknown_fields)]
 pub struct ResourceWorkbenchInput {
     pub id: String,
-    #[serde(rename = "type")]
-    pub value_type: String,
+    #[serde(rename = "type", default)]
+    pub value_type: ResourceWorkbenchInputType,
     #[serde(default)]
     pub editor: ResourceWorkbenchInputEditor,
     #[serde(default)]
@@ -518,6 +572,17 @@ pub struct ResourceWorkbenchInput {
     /// `textarea` 行数;缺省 4。
     #[serde(default)]
     pub rows: Option<usize>,
+}
+
+/// 输入值类型:提交时用于把文本强制转换为对应 JSON 类型。
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ResourceWorkbenchInputType {
+    #[default]
+    String,
+    Number,
+    Boolean,
+    Json,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]

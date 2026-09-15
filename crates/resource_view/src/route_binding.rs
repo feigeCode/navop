@@ -31,9 +31,9 @@ pub fn build_route_with_parent(
             ResourceWorkbenchBindingSource::Literal => {
                 binding.value.clone().unwrap_or(serde_json::Value::Null)
             }
-            ResourceWorkbenchBindingSource::Input | ResourceWorkbenchBindingSource::Paging => {
-                serde_json::Value::Null
-            }
+            ResourceWorkbenchBindingSource::Input
+            | ResourceWorkbenchBindingSource::Paging
+            | ResourceWorkbenchBindingSource::Connection => serde_json::Value::Null,
         };
         if !value.is_null() {
             route.insert(name.clone(), value);

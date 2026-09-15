@@ -1,7 +1,7 @@
 use std::fs;
 
 use super::{
-    ManifestError, RemoteFileEditorLaunchMode, ResourceWorkbenchTemplate, ShellHostModule,
+    ManifestError, RemoteFileEditorLaunchMode, ResourceWorkbenchPrimitive, ShellHostModule,
     ShellSurface, load_from_dir,
 };
 
@@ -165,7 +165,7 @@ fn manifest_loads_resource_workbench_with_route_and_navigation() {
                     "resourceType": "search"
                 }],
                 "resourceWorkbenches": [{
-                    "schemaVersion": 2,
+                    "schemaVersion": 3,
                     "id": "search",
                     "title": "Search",
                     "connectionIds": ["search9"],
@@ -193,10 +193,10 @@ fn manifest_loads_resource_workbench_with_route_and_navigation() {
                         {
                             "id": "overview",
                             "title": "Overview",
-                            "template": "collection",
                             "renderer": {"kind": "native"},
                             "load": {"operation": "list"},
-                            "collection": {
+                            "stack": [{
+                                "kind": "table",
                                 "itemsPath": "/items",
                                 "keyPaths": ["/name"],
                                 "pagination": {"kind": "none"},
@@ -209,12 +209,11 @@ fn manifest_loads_resource_workbench_with_route_and_navigation() {
                                         "name": {"source": "selection", "path": "/name", "type": "string"}
                                     }
                                 }
-                            }
+                            }]
                         },
                         {
                             "id": "detail",
                             "title": "Detail",
-                            "template": "json",
                             "renderer": {"kind": "native"},
                             "route": {"name": {"type": "string", "required": true}},
                             "load": {"operation": "list"},
@@ -224,23 +223,26 @@ fn manifest_loads_resource_workbench_with_route_and_navigation() {
                                 "route": {
                                     "name": {"source": "route", "path": "/name", "type": "string"}
                                 }
-                            }]
+                            }],
+                            "stack": [{"kind": "viewer", "format": "json"}]
                         },
                         {
                             "id": "mapping",
                             "title": "Mapping",
-                            "template": "json",
                             "renderer": {"kind": "native"},
                             "route": {"name": {"type": "string", "required": true}},
-                            "load": {"operation": "list"}
+                            "load": {"operation": "list"},
+                            "stack": [{"kind": "viewer", "format": "json"}]
                         },
                         {
                             "id": "search",
                             "title": "Search",
-                            "template": "query",
                             "renderer": {"kind": "shell", "viewId": "search-editor", "fallback": "native"},
-                            "inputs": [{"id": "q", "type": "string", "editor": "text", "default": "*", "required": true}],
-                            "execute": {"operation": "query"}
+                            "stack": [{
+                                "kind": "form",
+                                "submit": {"operation": "query"},
+                                "inputs": [{"id": "q", "type": "string", "editor": "text", "default": "*", "required": true}]
+                            }]
                         }
                     ]
                 }]
@@ -261,7 +263,14 @@ fn manifest_loads_resource_workbench_with_route_and_navigation() {
     assert_eq!(1, workbench.connection_ids.len());
     // collection open 声明。
     let overview = workbench.pages.iter().find(|p| p.id == "overview").unwrap();
-    let open = overview.collection.as_ref().unwrap().open.as_ref().unwrap();
+    let open = overview
+        .stack
+        .iter()
+        .find_map(|primitive| match primitive {
+            ResourceWorkbenchPrimitive::Table(table) => table.open.as_ref(),
+            _ => None,
+        })
+        .unwrap();
     assert_eq!("detail", open.page_id);
     assert!(open.route.contains_key("name"));
     // detail route 参数与 links。
@@ -272,8 +281,16 @@ fn manifest_loads_resource_workbench_with_route_and_navigation() {
     // query 页面输入与 job 操作。
     let search = workbench.pages.iter().find(|p| p.id == "search").unwrap();
     assert_eq!(Some("search-editor"), search.renderer.view_id.as_deref());
-    assert_eq!(1, search.inputs.len());
-    assert_eq!("query", search.execute.as_ref().unwrap().operation);
+    let form = search
+        .stack
+        .iter()
+        .find_map(|primitive| match primitive {
+            ResourceWorkbenchPrimitive::Form(form) => Some(form),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(1, form.inputs.len());
+    assert_eq!("query", form.submit.operation);
     let query_op = workbench.operations.get("query").unwrap();
     assert!(matches!(
         query_op.mode,
@@ -308,7 +325,7 @@ fn manifest_parses_v2_layout_tree_tabs_and_status_bar() {
                     "resourceType": "docker"
                 }],
                 "resourceWorkbenches": [{
-                    "schemaVersion": 2,
+                    "schemaVersion": 3,
                     "id": "docker",
                     "title": "Docker",
                     "connectionIds": ["docker-local"],
@@ -408,25 +425,25 @@ fn manifest_parses_v2_layout_tree_tabs_and_status_bar() {
                         {
                             "id": "container-inspect",
                             "title": "Inspect",
-                            "template": "json",
                             "renderer": {"kind": "native"},
                             "route": {"id": {"type": "string", "required": true}},
                             "load": {"operation": "inspectContainer"},
-                            "tabGroupId": "container"
+                            "tabGroupId": "container",
+                            "stack": [{"kind": "viewer", "format": "json"}]
                         },
                         {
                             "id": "container-exec",
                             "title": "Container Exec",
-                            "template": "terminal",
                             "renderer": {"kind": "native"},
                             "route": {"id": {"type": "string", "required": true}},
                             "tabGroupId": "container",
-                            "terminal": {
+                            "stack": [{
+                                "kind": "terminal",
                                 "command": "docker",
                                 "args": ["exec", "-it", "{{id}}", "sh"],
                                 "env": {"TERM": "xterm-256color"},
                                 "workingDir": "/"
-                            }
+                            }]
                         }
                     ]
                 }]
@@ -482,7 +499,10 @@ fn manifest_parses_v2_layout_tree_tabs_and_status_bar() {
         crate::extension::manifest::ResourceWorkbenchBottomSource::Status { operation, items } => {
             assert_eq!("systemUsage", operation);
             assert_eq!(3, items.len());
-            assert_eq!("pair", items[1].format);
+            assert!(matches!(
+                items[1].format,
+                crate::extension::manifest::ResourceWorkbenchStatusFormat::Pair
+            ));
             assert_eq!(Some("/containers_total"), items[1].other_path.as_deref());
         }
         other => panic!("expected status bottom, got {other:?}"),
@@ -493,9 +513,15 @@ fn manifest_parses_v2_layout_tree_tabs_and_status_bar() {
         .iter()
         .find(|page| page.id == "container-exec")
         .unwrap();
-    assert!(matches!(exec.template, ResourceWorkbenchTemplate::Terminal));
-    let terminal = exec.terminal.as_ref().unwrap();
-    assert_eq!("docker", terminal.command);
+    let terminal = exec
+        .stack
+        .iter()
+        .find_map(|primitive| match primitive {
+            ResourceWorkbenchPrimitive::Terminal(terminal) => Some(terminal),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(Some("docker"), terminal.command.as_deref());
     assert_eq!(terminal.args, ["exec", "-it", "{{id}}", "sh"]);
     assert_eq!(
         Some("xterm-256color"),

@@ -6,7 +6,7 @@
 
 use std::cmp::Ordering;
 
-use extension_runtime::extension::manifest::ResourceWorkbenchCollection;
+use extension_runtime::extension::manifest::ResourceWorkbenchTable;
 use gpui::{
     AnyElement, App, AppContext as _, ClickEvent, Context, Edges, Entity, InteractiveElement as _,
     IntoElement, ParentElement, Pixels, SharedString, Stateful, StatefulInteractiveElement as _,
@@ -70,7 +70,7 @@ pub(crate) struct CollectionTableDelegate {
 
 impl CollectionTableDelegate {
     pub(crate) fn new(
-        collection: &ResourceWorkbenchCollection,
+        collection: &ResourceWorkbenchTable,
         items: Vec<Value>,
         actions: Vec<RowActionView>,
         view: WeakEntity<NativeResourceWorkbench>,
@@ -461,7 +461,7 @@ pub(crate) fn row_key(row: &Value, key_paths: &[String]) -> String {
 }
 
 /// 从页面 load 结果中取出 collection 的行集。
-pub(crate) fn items_of(collection: &ResourceWorkbenchCollection, value: &Value) -> Vec<Value> {
+pub(crate) fn items_of(collection: &ResourceWorkbenchTable, value: &Value) -> Vec<Value> {
     items_at(value, &collection.items_path)
 }
 
