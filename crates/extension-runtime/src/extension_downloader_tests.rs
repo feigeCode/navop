@@ -23,6 +23,7 @@ fn marketplace_manifest_accepts_v2_universal_language_artifact() {
                 "release_tag": "rust-v0.24.0",
                 "description": "Rust syntax",
                 "file_extensions": ["rs"],
+                "screenshots": ["screenshots/rust-1.png", "https://cdn.example.test/rust-2.png"],
                 "artifacts": {
                     "universal": {
                         "file": "rust-universal.tar.gz",
@@ -34,7 +35,7 @@ fn marketplace_manifest_accepts_v2_universal_language_artifact() {
     )
     .unwrap();
 
-    let entries = manifest.into_entries();
+    let mut entries = manifest.into_entries();
 
     assert_eq!(1, entries.len());
     assert_eq!("rust", entries[0].id);
@@ -45,6 +46,27 @@ fn marketplace_manifest_accepts_v2_universal_language_artifact() {
     assert_eq!(
         "rust-universal.tar.gz",
         entries[0].artifacts["universal"].file
+    );
+    // 解析前：保留 manifest 原始声明（相对路径 + 绝对 URL 混合）。
+    assert_eq!(
+        vec![
+            "screenshots/rust-1.png".to_string(),
+            "https://cdn.example.test/rust-2.png".to_string()
+        ],
+        entries[0].screenshots
+    );
+
+    // 解析后：相对路径基于 manifest 所在目录补全，绝对 URL 原样保留。
+    entries[0].resolve_downloads_for_test(
+        "https://example.test/extensions/extension-manifest.json",
+        "https://github.com/feigeCode/navop-extensions/releases/download/manifest/extension-manifest.json",
+    );
+    assert_eq!(
+        vec![
+            "https://example.test/extensions/screenshots/rust-1.png".to_string(),
+            "https://cdn.example.test/rust-2.png".to_string()
+        ],
+        entries[0].screenshots
     );
 }
 
