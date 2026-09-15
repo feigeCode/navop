@@ -6,9 +6,10 @@
 
 use super::remote_path::{join_remote_path, normalize_remote_path, resolve_remote_path};
 use crate::theme::TerminalColors;
+use crate::transfer_notice::{TransferAction, transfer_finish_notification};
 use chrono::{DateTime, Local};
 use gpui::{
-    Anchor, App, ClipboardItem, Context, Entity, EventEmitter, ExternalPaths,
+    Anchor, AnyWindowHandle, App, ClipboardItem, Context, Entity, EventEmitter, ExternalPaths,
     FocusHandle, Focusable, Hsla, IntoElement, KeyBinding, ListSizingBehavior, MouseButton,
     MouseDownEvent, ParentElement, PathPromptOptions, Render, SharedString, Styled,
     UniformListScrollHandle, Window, actions, div, prelude::*, px, uniform_list,
@@ -128,6 +129,18 @@ enum TransferOperation {
         local_path: PathBuf,
         is_dir: bool,
     },
+}
+
+/// 全局传输操作对应的提示方向（issue #199）。
+///
+/// 上传和下载都要在终态给即时反馈；远程删除是用户当场的主动操作，
+/// 面板内已有反馈，不再额外弹通知。
+fn global_transfer_action(operation: &SftpTransferOperation) -> Option<TransferAction> {
+    match operation {
+        SftpTransferOperation::Upload => Some(TransferAction::Upload),
+        SftpTransferOperation::Download => Some(TransferAction::Download),
+        SftpTransferOperation::DeleteRemote => None,
+    }
 }
 
 #[derive(Clone, PartialEq)]
@@ -1295,6 +1308,11 @@ pub struct FileManagerPanel {
     colors: TerminalColors,
     /// 宿主工具面板当前所在位置
     frame_placement: SidebarPlacement,
+    /// 构造时记下的宿主窗口，用于在传输回调里补发终态通知（issue #199）。
+    ///
+    /// 传输完成发生在 `cx.spawn` / 订阅回调里，那里只有 `cx`、拿不到 `&mut Window`，
+    /// 而 `push_notification` 需要窗口，所以退回到记下的句柄。
+    window_handle: AnyWindowHandle,
 }
 
 impl FileManagerPanel {
@@ -1425,6 +1443,7 @@ impl FileManagerPanel {
             working_dir_hint: None,
             colors,
             frame_placement: SidebarPlacement::Right,
+            window_handle: window.window_handle(),
         }
     }
 
@@ -2491,8 +2510,55 @@ impl FileManagerPanel {
             {
                 self.refresh_dir(cx);
             }
+            self.notify_global_transfer_finish(&snapshot, cx);
         }
         cx.notify();
+    }
+
+    /// 全局执行器任务的终态 toast（issue #199）。
+    ///
+    /// 上传和下载都走全局执行器（`enqueue_upload` / `enqueue_download`），
+    /// 所以两个方向都要提示；面板里的远程删除是用户当场的主动操作，已经有面板内反馈。
+    fn notify_global_transfer_finish(
+        &self,
+        snapshot: &SftpTransferSnapshot,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(action) = global_transfer_action(&snapshot.operation) else {
+            return;
+        };
+        let file_name = Some(snapshot.display_name.as_str());
+        match snapshot.state {
+            SftpTransferState::Succeeded => {
+                self.notify_transfer_finish(action, file_name, None, cx);
+            }
+            SftpTransferState::Failed => {
+                let error = snapshot.error.as_deref().unwrap_or_default();
+                self.notify_transfer_finish(action, file_name, Some(error), cx);
+            }
+            // 进行中与用户主动取消都不打扰。
+            SftpTransferState::Queued
+            | SftpTransferState::Running
+            | SftpTransferState::Cancelling
+            | SftpTransferState::Cancelled => {}
+        }
+    }
+
+    /// 弹出一条传输终态通知。
+    ///
+    /// 传输回调里只有 `cx`、拿不到 `&mut Window`，所以走构造时记下的窗口句柄；
+    /// 窗口已关闭时静默放弃（终态在后台任务面板里依然可见）。
+    fn notify_transfer_finish(
+        &self,
+        action: TransferAction,
+        file_name: Option<&str>,
+        error: Option<&str>,
+        cx: &mut Context<Self>,
+    ) {
+        let notification = transfer_finish_notification(action, file_name, error);
+        let _ = self.window_handle.update(cx, |_root, window, cx| {
+            window.push_notification(notification, cx);
+        });
     }
 
     fn finish_global_delete(&mut self, snapshot: &SftpTransferSnapshot, cx: &mut Context<Self>) {
@@ -2685,7 +2751,10 @@ impl FileManagerPanel {
         .detach();
     }
 
-    /// 更新任务状态
+    /// 更新任务状态。
+    ///
+    /// 这条本地下载队列目前没有生产调用点（下载已改走全局执行器），终态提示统一放在
+    /// [`Self::notify_global_transfer_finish`]，避免两处实现各说各话。
     fn update_task_state(&mut self, task_id: usize, result: Result<(), anyhow::Error>) {
         if let Some(task) = self
             .transfer_queue
@@ -5661,10 +5730,11 @@ mod tests {
         RemoteClipboardEntry, RemoteClipboardKind, RemoteFileClipboard, SharedProgress,
         TransferCancelTarget, TransferOperation, TransferQueue, TransferTask, TransferTaskState,
         build_navigation_recovery_plan, build_retry_reset_plan, can_paste_remote_file_clipboard,
-        clear_remote_listing_state, frame_move_options, resolve_upload_conflict,
-        should_apply_directory_result, should_refresh_after_delete, should_refresh_after_upload,
-        transfer_progress_display_label,
+        clear_remote_listing_state, frame_move_options, global_transfer_action,
+        resolve_upload_conflict, should_apply_directory_result, should_refresh_after_delete,
+        should_refresh_after_upload, transfer_progress_display_label,
     };
+    use crate::transfer_notice::TransferAction;
     use anyhow::{Result, anyhow};
     use async_trait::async_trait;
     use gpui::{AppContext, Entity, TestAppContext, WindowHandle};
@@ -6588,6 +6658,23 @@ mod tests {
             "/srv/other",
             "/srv/app/file.txt"
         ));
+    }
+
+    #[test]
+    fn global_transfer_toasts_cover_upload_and_download_only() {
+        // issue #199：上传和下载都要在终态提示；远程删除是用户主动操作，不弹通知。
+        assert_eq!(
+            Some(TransferAction::Upload),
+            global_transfer_action(&SftpTransferOperation::Upload)
+        );
+        assert_eq!(
+            Some(TransferAction::Download),
+            global_transfer_action(&SftpTransferOperation::Download)
+        );
+        assert_eq!(
+            None,
+            global_transfer_action(&SftpTransferOperation::DeleteRemote)
+        );
     }
 
     #[test]

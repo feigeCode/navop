@@ -20,6 +20,7 @@ pub mod ssh_form_window;
 pub mod telnet_form_window;
 pub mod terminal_element;
 mod theme;
+mod transfer_notice;
 pub mod view;
 pub mod workspace;
 
