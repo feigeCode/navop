@@ -7,7 +7,16 @@
 use std::sync::Arc;
 
 use gpui::*;
-use gpui_component::{Icon, Sizable as _, Size, button::{Button as UiButton, ButtonVariants as _}, highlighter::LanguageRegistry, menu::{DropdownMenu as _, PopupMenuItem}, popover::Popover, spinner::Spinner, text::{TextView, TextViewStyle}, tooltip::Tooltip};
+use gpui_component::{
+    Icon, Sizable as _, Size,
+    button::{Button as UiButton, ButtonVariants as _},
+    highlighter::LanguageRegistry,
+    menu::{DropdownMenu as _, PopupMenuItem},
+    popover::Popover,
+    spinner::Spinner,
+    text::{TextView, TextViewStyle},
+    tooltip::Tooltip,
+};
 use one_assets::IconName;
 
 mod host_artifact;
@@ -3376,7 +3385,7 @@ mod tests {
     use crate::components::parse_html_document;
     use crate::theme::Theme;
     use gpui::{Hsla, Rgba};
-    
+
     fn assert_color_near(color: Hsla, red: u8, green: u8, blue: u8, alpha: u8) {
         let color: Rgba = color.into();
         let channel = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as i16;

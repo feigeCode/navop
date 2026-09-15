@@ -294,7 +294,7 @@ fn local_conflict_display(
                 .get(id)
                 .ok()
                 .flatten()
-                .map(|connection| connection_record_display(&connection))
+                .map(|connection| connection_record_display(&connection, cx))
         }
         data_type::WORKSPACE => {
             let id = parse_prefixed_id(&snapshot.local_id, "workspace:")?;
@@ -332,7 +332,7 @@ fn remote_conflict_display(
         data_type::CONNECTION => service
             .decrypt_sync_data_connection(&remote)
             .ok()
-            .map(|connection| connection_record_display(&connection)),
+            .map(|connection| connection_record_display(&connection, cx)),
         data_type::WORKSPACE => service
             .decrypt_sync_data_workspace(&remote)
             .ok()
@@ -353,7 +353,10 @@ fn remote_conflict_display(
     }
 }
 
-fn connection_record_display(connection: &StoredConnection) -> PersonalSyncRecordDisplay {
+fn connection_record_display(
+    connection: &StoredConnection,
+    cx: &App,
+) -> PersonalSyncRecordDisplay {
     PersonalSyncRecordDisplay {
         name: fallback_name(
             &connection.name,
@@ -361,7 +364,9 @@ fn connection_record_display(connection: &StoredConnection) -> PersonalSyncRecor
             "connection",
         ),
         info: record_info([
-            Some(connection.connection_type.label().to_string()),
+            Some(crate::connection_visuals::connection_type_display_label(
+                connection, cx,
+            )),
             connection_endpoint(connection),
         ]),
     }

@@ -1,9 +1,7 @@
 //! Redis 工具页签共享的 Table delegate。
 
 use crate::redis_tool_data::RedisToolKind;
-use gpui::{
-    App, Context, IntoElement, ParentElement, SharedString, Styled, Window, div, px,
-};
+use gpui::{App, Context, IntoElement, ParentElement, SharedString, Styled, Window, div, px};
 use gpui_component::{
     ActiveTheme, h_flex,
     table::{Column, ColumnFixed, TableDelegate, TableState},

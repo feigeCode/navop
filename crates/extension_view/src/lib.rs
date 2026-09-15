@@ -1,7 +1,13 @@
 rust_i18n::i18n!("locales", fallback = "en");
 
 mod actions;
+mod card_view;
+mod cards;
+mod chips;
+mod detail_dialog;
+mod grid;
 mod host;
+mod lists;
 mod model;
 mod offline_package_dialog;
 mod permissions;
@@ -190,6 +196,7 @@ mod tests {
             fallback_asset_url: None,
             manifest_url: None,
             manifest_fallback_url: None,
+            screenshots: Vec::new(),
         }
     }
 }

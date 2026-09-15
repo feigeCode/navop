@@ -303,3 +303,38 @@ void trace_native_utf16(
     static_cast<void>(std::fputs("\"\n", stderr));
     flush_trace();
 }
+
+void log_native_host_window_destroy(
+    const char* stage,
+    uintptr_t host_window,
+    uintptr_t parent_window,
+    uint64_t generation,
+    uint32_t window_thread_id,
+    int32_t destroyed,
+    uint32_t win32_code,
+    uint32_t window_still_alive) noexcept {
+    // A successful destroy is routine and stays behind the diagnostics switch.
+    // A failed one means the ATL host HWND outlives its owning object, which
+    // leaks a top-level window (and its subclasses) for the rest of the
+    // process, so it is always reported even in a release build.
+    if (destroyed != 0 && !native_trace_enabled()) {
+        return;
+    }
+    std::fprintf(
+        stderr,
+        "%s stage=%s host_window=0x%" PRIXPTR " parent_window=0x%" PRIXPTR
+        " generation=%" PRIu64 " destroy_window_called=1 destroy_window_result=%"
+        PRId32 " win32=0x%08" PRIX32 " owner_thread=%" PRIu32
+        " current_thread=%" PRIu32 " window_still_alive=%" PRIu32 "\n",
+        kTracePrefix,
+        stage == nullptr ? "<null>" : stage,
+        host_window,
+        parent_window,
+        generation,
+        destroyed,
+        win32_code,
+        window_thread_id,
+        static_cast<uint32_t>(GetCurrentThreadId()),
+        window_still_alive);
+    flush_trace();
+}

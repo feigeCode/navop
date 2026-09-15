@@ -94,6 +94,44 @@ fn history_prompt_dropdown_flips_above_when_cursor_is_near_bottom() {
 }
 
 #[test]
+fn history_prompt_dropdown_stays_near_cursor_when_match_count_is_huge() {
+    // 终端较高、光标靠上：即便 cd 补全返回上百条，高度封顶后仍应贴着光标下方展开，
+    // 而不是被未封顶高度夹到窗口顶部铺满整屏。
+    let terminal_bounds = Bounds::new(Point::new(px(0.0), px(0.0)), size(px(800.0), px(600.0)));
+    let line_height = px(20.0);
+    let cursor_line = 2;
+    let cursor_top = line_height * cursor_line as f32;
+
+    let origin = history_prompt_dropdown_origin(
+        terminal_bounds,
+        px(8.0),
+        line_height,
+        cursor_line,
+        4,
+        200,
+        false,
+    );
+
+    let below_top = cursor_top + line_height + px(6.0);
+    assert_eq!(origin.y, below_top);
+    assert!(origin.y + px(280.0) <= terminal_bounds.bottom());
+}
+
+#[test]
+fn history_prompt_overlay_renders_max_height_and_scrollbar() {
+    let render_source = include_str!("../history_render.rs");
+    let rules_source = include_str!("../history_prompt_rules.rs");
+    let actions_source = include_str!("../history_actions.rs");
+
+    assert!(rules_source.contains("HISTORY_PROMPT_DROPDOWN_MAX_HEIGHT"));
+    assert!(rules_source.contains("content_height.min(px(HISTORY_PROMPT_DROPDOWN_MAX_HEIGHT))"));
+    assert!(render_source.contains(".overflow_y_scroll()"));
+    assert!(render_source.contains(".track_scroll(&self.history_prompt_scroll_handle)"));
+    assert!(render_source.contains("scroll_to_item(index)"));
+    assert!(actions_source.contains("scroll_history_prompt_selection_into_view()"));
+}
+
+#[test]
 fn history_prompt_overlay_bounds_reset_origin_for_local_overlay_positioning() {
     let terminal_bounds = Bounds::new(Point::new(px(96.0), px(144.0)), size(px(800.0), px(280.0)));
 

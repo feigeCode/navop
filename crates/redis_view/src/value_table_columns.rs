@@ -145,8 +145,7 @@ pub(crate) const LIST_COLUMNS: &[ValueColumn] = &[
 ];
 
 /// Set 视图的列顺序
-pub(crate) const SET_COLUMNS: &[ValueColumn] =
-    &[ValueColumn::SetMember, ValueColumn::SetAction];
+pub(crate) const SET_COLUMNS: &[ValueColumn] = &[ValueColumn::SetMember, ValueColumn::SetAction];
 
 /// ZSet 视图的列顺序
 pub(crate) const ZSET_COLUMNS: &[ValueColumn] = &[
@@ -271,8 +270,8 @@ where
                 .bg(cx.theme().table_row_border)
                 .group_hover(&group_id, |el| el.bg(cx.theme().border)),
         )
-        .on_drag_move(
-            cx.listener(move |this, e: &DragMoveEvent<ResizeValueColumn>, _window, cx| {
+        .on_drag_move(cx.listener(
+            move |this, e: &DragMoveEvent<ResizeValueColumn>, _window, cx| {
                 let drag = e.drag(cx);
                 if drag.entity_id != cx.entity_id() || drag.column != column {
                     return;
@@ -282,8 +281,8 @@ where
                 let delta = e.event.position.x - e.bounds.center().x;
                 resize_column(this, column, width + delta);
                 cx.notify();
-            }),
-        )
+            },
+        ))
         .on_drag(
             ResizeValueColumn {
                 entity_id: cx.entity_id(),

@@ -133,6 +133,10 @@ Window:
     zh-HK: 視窗置頂
 
 Home:
+  open_connection:
+    en: Open Connection
+    zh-CN: 打开连接
+    zh-HK: 開啟連線
   title:
     en: Home
     zh-CN: 主页

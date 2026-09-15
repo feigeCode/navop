@@ -230,7 +230,10 @@ fn home_shortcuts_are_attached_to_their_actions() {
 fn sidebar_search_aligns_with_home_toolbar_height() {
     let tree = include_str!("../../persistent_connection_sidebar/tree.rs");
     assert!(tree.contains("fn render_tree_search"));
-    assert!(tree.contains(".h_10()"));
+    // 全局导航布局搜索区高 44px 与 Home toolbar 底边对齐；常驻侧栏 40px。
+    assert!(tree.contains("let search_height = if self.home_navigation_layout {"));
+    assert!(tree.contains("px(44.0)"));
+    assert!(tree.contains("px(40.0)"));
 }
 
 #[test]
@@ -369,18 +372,35 @@ fn workspace_filter_exposes_its_active_state() {
 }
 
 #[test]
+fn global_navigation_layout_combines_connection_tree_recent_connections_and_apps() {
+    let settings = include_str!("../../../../crates/core/src/settings.rs");
+    let home = include_str!("../home_layout.rs");
+    let content = include_str!("../content.rs");
+    let tree = include_str!("../../persistent_connection_sidebar/tree.rs");
+    let app = include_str!("../../onetcli_app.rs");
+
+    assert!(settings.contains("Navigation"));
+    assert!(home.contains("render_navigation_content"));
+    assert!(app.contains("docked_tree = sidebar_expanded"));
+    assert!(content.contains("render_navigation_home_content"));
+    assert!(content.contains("render_application_workbench(window, cx)"));
+    assert!(tree.contains("self.home_navigation_layout"));
+}
+
+#[test]
 fn recent_section_does_not_participate_in_search() {
     let content = include_str!("../content.rs");
     // 有搜索词时最近区整体隐藏，同一连接只出现在下方分组中
     assert!(content.contains("最近区不参与搜索"));
-    let gate = content
-        .find("recent::recent_connections")
-        .expect("最近区渲染点存在");
-    let mut start = gate.saturating_sub(220);
-    while !content.is_char_boundary(start) {
-        start -= 1;
-    }
-    assert!(content[start..gate].contains("query.is_empty()"));
+    // 分组内容区:有搜索词时最近区直接清空。
+    assert!(content.contains("let recent = if query.is_empty() {"));
+    // 导航主页:最近区始终按空搜索词取值,渲染仍受 query.is_empty() 门控。
+    let navigation = content
+        .split("fn render_navigation_home_content")
+        .nth(1)
+        .expect("navigation home content exists");
+    assert!(navigation.contains("recent_connections(&self.connections, &self.selected_filter, \"\","));
+    assert!(navigation.contains("if !query.is_empty()"));
 }
 
 #[test]
@@ -439,12 +459,14 @@ fn home_render_uses_cached_external_driver_registry() {
     let quick_open = include_str!("../../home/home_connection_quick_open.rs");
 
     assert!(home.contains("external_driver_registry: IpcDriverRegistry"));
-    assert!(icon.contains("stored_connection_icon"));
+    assert!(icon.contains("stored_connection_icon_with_catalog"));
+    assert!(icon.contains("extension_catalog_from_cx"));
     assert!(visuals.contains("external_driver_icon_for_config_with_registry"));
     assert!(visuals.contains("external_driver_icon_from_sources"));
+    assert!(visuals.contains("extension_connection_icon"));
     assert!(list_item.contains("connection_icon"));
     assert!(card.contains("connection_icon"));
-    assert!(quick_open.contains("stored_connection_icon"));
+    assert!(quick_open.contains("stored_connection_icon_with_catalog"));
     assert!(quick_open.contains("external_driver_registry: IpcDriverRegistry"));
     assert!(!icon.contains("IpcDriverRegistry::load_default()"));
     assert!(!quick_open.contains("IpcDriverRegistry::load_default()"));

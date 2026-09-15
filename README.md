@@ -180,12 +180,11 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete development guide.
 
 ## Community and support
 
-Navop is maintained independently. Stars, focused pull requests, bug reports, and donations all help sustain the project.
+Navop is maintained independently. Stars, focused pull requests, and bug reports all help sustain the project.
 
 - [Report a bug or request a feature](https://github.com/feigeCode/navop/issues)
 - QQ Group: [860670605](https://qm.qq.com/cgi-bin/qm/qr?k=&group_code=860670605)
 - WeChat Group: [Join](https://docs.qq.com/doc/DVEFFd2RnSnJLcFBD)
-- Optional donations: [DONATE.md](DONATE.md)
 - Legacy OnetCli repository: [feigeCode/onetcli](https://github.com/feigeCode/onetcli)
 
 ## Star History

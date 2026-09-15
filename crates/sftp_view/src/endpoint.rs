@@ -180,6 +180,7 @@ mod tests {
         let mut connection = StoredConnection::new_ssh(
             name.to_string(),
             SshParams {
+                remote_file: None,
                 sftp_default_directory: None,
                 disabled_jump_server: None,
                 sftp_account: None,
@@ -301,7 +302,7 @@ mod tests {
     }
 }
 use gpui::{App, SharedString};
-use gpui_component::{select::SelectItem};
+use gpui_component::select::SelectItem;
 use one_assets::IconName;
 use one_core::storage::{
     ConnectionRepository, ConnectionType, GlobalStorageState, StoredConnection, traits::Repository,

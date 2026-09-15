@@ -10,7 +10,7 @@ use rust_i18n::t;
 use super::Editor;
 use crate::components::{EnlargedBlockKind, HostRenderedArtifact};
 use crate::theme::Theme;
-use gpui_component::{Size};
+use gpui_component::Size;
 use one_assets::IconName;
 use one_ui::icon_button::IconButton;
 
@@ -295,7 +295,7 @@ mod tests {
     use std::sync::Arc;
 
     use gpui::{AppContext, Entity, Image, ImageFormat, Modifiers, TestAppContext, rgba};
-    
+
     use super::{
         ENLARGED_ZOOM_DEFAULT, ENLARGED_ZOOM_STEP, Editor, EnlargedPreviewLimit,
         enlarged_artifact_size,

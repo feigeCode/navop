@@ -128,7 +128,22 @@ fn database_fields(locale: &str, params: DbConnectionConfig) -> Vec<(&'static st
 }
 
 fn ssh_fields(locale: &str, params: SshParams) -> Vec<(&'static str, String)> {
-    vec![
+    // 远程文件协议为 FTP 时，FTP 连接信息属于该连接记录的分享内容。
+    let ftp_fields = if params.remote_file_protocol().is_ftp() {
+        params
+            .ftp_params()
+            .map(|ftp| {
+                vec![
+                    ("ftp_host", ftp.host.clone()),
+                    ("ftp_port", ftp.port.to_string()),
+                    ("ftp_username", ftp.username.clone()),
+                ]
+            })
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let mut fields = vec![
         ("host", params.host),
         ("port", params.port.to_string()),
         ("username", params.username),
@@ -137,7 +152,9 @@ fn ssh_fields(locale: &str, params: SshParams) -> Vec<(&'static str, String)> {
             "default_directory",
             params.default_directory.unwrap_or_default(),
         ),
-    ]
+    ];
+    fields.extend(ftp_fields);
+    fields
 }
 
 fn redis_fields(locale: &str, params: RedisParams) -> Vec<(&'static str, String)> {

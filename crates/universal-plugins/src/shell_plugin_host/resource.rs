@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use extension_host::{CancellationToken, RequestOptions};
+use extension_host::RequestOptions;
 use extension_plugin_adapter::ManagedUniversalPluginClient;
 use extension_protocol::resource::{
     ResourceCloseParams, ResourceInvokeParams, ResourceOpenParams, ResourcePingParams,
@@ -8,7 +8,11 @@ use extension_protocol::resource::{
 use gpui_shell::{HostAsyncTask, HostError, HostModule, HostValue};
 
 use self::task::{host_error, spawn_provider_task};
-use super::{session::ShellMountSession, value::host_to_json};
+use super::{
+    error::{ErrorCode, navop_error},
+    session::ShellMountSession,
+    value::host_to_json,
+};
 
 pub(super) fn resource_module(session: Arc<ShellMountSession>) -> HostModule {
     HostModule::new("navop.resource")
@@ -38,7 +42,7 @@ fn open_resource(
         let resource_type = arguments.string(1)?.to_owned();
         let config = host_to_json(arguments.value(2)?)?;
         let client = session.client(&alias)?;
-        let cancel = CancellationToken::new();
+        let cancel = session.call_token();
         let request_cancel = cancel.clone();
         let task_session = Arc::clone(&session);
         Ok(spawn_provider_task(
@@ -58,7 +62,10 @@ fn open_resource(
                     .map_err(host_error)?;
                 if request_cancel.is_cancelled() {
                     compensate_open(&client, &result.resource_id).await;
-                    return Err(HostError::new("resource open cancelled"));
+                    return Err(navop_error(
+                        ErrorCode::RequestCancelled,
+                        "resource open cancelled",
+                    ));
                 }
                 task_session.register_resource(alias, &client, result)
             },
@@ -89,7 +96,7 @@ fn invoke_resource(
             .unwrap_or(serde_json::Value::Null);
         let (alias, client, resource_id) = session.resource(&handle)?;
         let generation = client.generation;
-        let cancel = CancellationToken::new();
+        let cancel = session.call_token();
         let request_cancel = cancel.clone();
         let task_session = Arc::clone(&session);
         Ok(spawn_provider_task(
@@ -107,7 +114,7 @@ fn invoke_resource(
                     )
                     .await
                     .map_err(host_error)?;
-                task_session.result_ref(alias, generation, &result.result)
+                task_session.result_ref(alias, &handle, generation, &result.result)
             },
             cancel,
         ))
@@ -119,7 +126,7 @@ fn ping_resource(
 ) -> impl Fn(&gpui_shell::HostArguments) -> Result<HostAsyncTask, HostError> {
     move |arguments| {
         let (_, client, resource_id) = session.resource(arguments.string(0)?)?;
-        let cancel = CancellationToken::new();
+        let cancel = session.call_token();
         let request_cancel = cancel.clone();
         Ok(spawn_provider_task(
             &session.tokio,
@@ -145,12 +152,17 @@ fn close_resource(
     move |arguments| {
         let handle = arguments.string(0)?.to_owned();
         let (_, client, resource_id) = session.resource(&handle)?;
-        let cancel = CancellationToken::new();
+        let cancel = session.call_token();
         let request_cancel = cancel.clone();
         let task_session = Arc::clone(&session);
+        let service = session.service();
         Ok(spawn_provider_task(
             &session.tokio,
             async move {
+                task_session
+                    .take_resource_children(&handle)
+                    .close(&service)
+                    .await;
                 client
                     .client()
                     .close_resource_with_options(

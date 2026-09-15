@@ -8,7 +8,17 @@ use gpui::{
 };
 #[cfg(windows)]
 use gpui_component::radio::RadioGroup;
-use gpui_component::{ActiveTheme, button::{Button, ButtonVariants as _}, checkbox::Checkbox, h_flex, input::Input, radio::Radio, scroll::ScrollableElement, select::Select, v_flex};
+use gpui_component::{
+    ActiveTheme,
+    button::{Button, ButtonVariants as _},
+    checkbox::Checkbox,
+    h_flex,
+    input::Input,
+    radio::Radio,
+    scroll::ScrollableElement,
+    select::Select,
+    v_flex,
+};
 use one_assets::IconName;
 use rust_i18n::t;
 

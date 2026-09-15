@@ -12,14 +12,17 @@ use gpui_component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_component::notification::Notification;
 use gpui_component::scroll::{Scrollbar, ScrollbarHandle, ScrollbarMode};
 use gpui_component::slider::{Slider, SliderEvent, SliderState, SliderValue};
-use gpui_component::{ActiveTheme, Disableable, ElementExt, Icon, Selectable, Sizable, WindowExt, h_flex, kbd::Kbd, v_flex};
-use one_ui::IconSize;
+use gpui_component::{
+    ActiveTheme, Disableable, ElementExt, Icon, Selectable, Sizable, WindowExt, h_flex, kbd::Kbd,
+    v_flex,
+};
 use one_assets::IconName;
 use one_core::gpui_tokio::Tokio;
 use one_core::keybindings::{
     action_id, keystroke_matches_shortcuts, rebind_keybindings, shortcuts_for,
 };
 use one_core::settings::{AppSettings, resolve_installed_grid_monospace_font_family};
+use one_ui::IconSize;
 use std::borrow::Cow;
 use std::cell::{Cell as StdCell, RefCell};
 use std::collections::{HashMap, VecDeque};
@@ -80,12 +83,15 @@ use crate::view::block_selection::{
 #[cfg(test)]
 use history_prompt_rules::should_refresh_history_commands_for_terminal_event;
 use history_prompt_rules::{
-    HISTORY_PROMPT_DROPDOWN_MAX_WIDTH, HISTORY_PROMPT_DROPDOWN_MIN_WIDTH,
-    history_prompt_active_background, history_prompt_available, history_prompt_dropdown_background,
-    history_prompt_dropdown_origin, history_prompt_overlay_bounds,
-    should_confirm_local_terminal_close, should_dismiss_history_prompt_for_keystroke,
-    should_dismiss_history_prompt_for_mouse, should_dismiss_history_prompt_for_scroll,
-    should_reset_history_prompt_for_terminal_event, terminal_history_scope,
+    HISTORY_PROMPT_DROPDOWN_BORDER_Y, HISTORY_PROMPT_DROPDOWN_CONTAINER_PADDING_Y,
+    HISTORY_PROMPT_DROPDOWN_MAX_HEIGHT, HISTORY_PROMPT_DROPDOWN_MAX_WIDTH,
+    HISTORY_PROMPT_DROPDOWN_MIN_WIDTH, HISTORY_PROMPT_DROPDOWN_ROW_GAP,
+    HISTORY_PROMPT_DROPDOWN_SEARCH_HEADER_HEIGHT, history_prompt_active_background,
+    history_prompt_available, history_prompt_dropdown_background, history_prompt_dropdown_origin,
+    history_prompt_overlay_bounds, should_confirm_local_terminal_close,
+    should_dismiss_history_prompt_for_keystroke, should_dismiss_history_prompt_for_mouse,
+    should_dismiss_history_prompt_for_scroll, should_reset_history_prompt_for_terminal_event,
+    terminal_history_scope,
 };
 use mouse_input::{
     encode_mouse_modifiers, mouse_button_code, sgr_mouse_button_report, sgr_mouse_mode_enabled,
@@ -109,7 +115,7 @@ use paste_safety::{
 };
 use remote_image_preview::image_from_local_path;
 use rust_i18n::t;
-use sftp::{RusshSftpClient, SftpClient};
+use sftp::{RemoteFileClient, RusshSftpClient, SftpClient};
 use ssh::SshSessionManager;
 use std::ops::Deref;
 use terminal::GpuiEventProxy;
@@ -121,8 +127,9 @@ use terminal::terminal::{
     TerminalScrollProxy, TerminalScrollSnapshot, TerminalSshCredentials, TerminalTelnetCredentials,
     resolve_local_working_dir,
 };
+use terminal::{LocalWorkspaceSource, resolve_local_workspace_source};
 use tokio::sync::Mutex;
-use workspace_explorer::{WorkspaceEditor, WorkspaceEditorEvent};
+use workspace_explorer::{WorkspaceBackend, WorkspaceEditor, WorkspaceEditorEvent};
 
 mod actions;
 mod appearance;
@@ -268,6 +275,8 @@ pub struct TerminalView {
 
     ime_state: Option<ImeState>,
     history_prompt: HistoryPromptState,
+    /// 补全/历史浮层列表滚动句柄：键盘切换选中项时 scroll_to_item 跟随。
+    history_prompt_scroll_handle: ScrollHandle,
     /// shell prompt 当前是否处于可输入阶段，由 OSC 133 生命周期维护。
     shell_prompt_input_active: bool,
     /// 本地 shell 命令是否处于执行阶段，由 OSC 133;C 到下一次 prompt/input 维护。

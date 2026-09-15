@@ -3,6 +3,7 @@ use std::{
     sync::{Arc, atomic::AtomicBool},
 };
 
+use ftp::FtpConnectConfig;
 use gpui::SharedString;
 use one_core::storage::models::StoredConnection;
 use sftp::DirectoryConflictPolicy;
@@ -101,6 +102,7 @@ impl SftpTransferId {
 pub enum SftpUploadConnection {
     SessionManager(Arc<SshSessionManager>),
     Config(SshConnectConfig),
+    Ftp(FtpConnectConfig),
 }
 
 #[derive(Clone)]

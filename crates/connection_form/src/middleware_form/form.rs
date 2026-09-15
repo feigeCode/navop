@@ -13,7 +13,19 @@ use gpui::{
     App, AppContext, AsyncApp, Axis, Context, Entity, EventEmitter, FocusHandle, Focusable,
     IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Window, div, px,
 };
-use gpui_component::{ActiveTheme, Sizable, Size, button::{Button, ButtonVariants as _}, checkbox::Checkbox, form::{Field, field, v_form}, h_flex, input::{Input, InputState, Textarea}, radio::Radio, scroll::ScrollableElement, select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState}, tab::{Tab, TabBar}, v_flex};
+use gpui_component::{
+    ActiveTheme, Sizable, Size,
+    button::{Button, ButtonVariants as _},
+    checkbox::Checkbox,
+    form::{Field, field, v_form},
+    h_flex,
+    input::{Input, InputState, Textarea},
+    radio::Radio,
+    scroll::ScrollableElement,
+    select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
+    tab::{Tab, TabBar},
+    v_flex,
+};
 use one_assets::IconName;
 use one_core::cloud_sync::TeamOption;
 use one_core::storage::traits::Repository;
@@ -1229,6 +1241,7 @@ mod tests {
         let mut connection = StoredConnection::new_ssh(
             name.to_string(),
             SshParams {
+                remote_file: None,
                 sftp_default_directory: None,
                 disabled_jump_server: None,
                 sftp_account: None,

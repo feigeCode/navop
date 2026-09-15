@@ -116,39 +116,120 @@ impl UniversalPluginClient {
     }
 
     pub async fn start_job(&self, params: &JobStartParams) -> HostResult<JobStartResult> {
-        self.request(method::JOB_START, params).await
+        self.start_job_with_options(params, RequestOptions::default())
+            .await
+    }
+
+    pub async fn start_job_with_options(
+        &self,
+        params: &JobStartParams,
+        options: RequestOptions,
+    ) -> HostResult<JobStartResult> {
+        self.request_with_options(method::JOB_START, params, options)
+            .await
     }
 
     pub async fn job_status(&self, params: &JobStatusParams) -> HostResult<JobStatusResult> {
-        self.request(method::JOB_STATUS, params).await
+        self.job_status_with_options(params, RequestOptions::default())
+            .await
+    }
+
+    pub async fn job_status_with_options(
+        &self,
+        params: &JobStatusParams,
+        options: RequestOptions,
+    ) -> HostResult<JobStatusResult> {
+        self.request_with_options(method::JOB_STATUS, params, options)
+            .await
     }
 
     pub async fn cancel_job(&self, params: &JobCancelParams) -> HostResult<()> {
-        self.request(method::JOB_CANCEL, params).await
+        self.cancel_job_with_options(params, RequestOptions::default())
+            .await
+    }
+
+    pub async fn cancel_job_with_options(
+        &self,
+        params: &JobCancelParams,
+        options: RequestOptions,
+    ) -> HostResult<()> {
+        self.request_with_options(method::JOB_CANCEL, params, options)
+            .await
     }
 
     pub async fn job_result(&self, params: &JobResultParams) -> HostResult<JobResultResult> {
-        self.request(method::JOB_RESULT, params).await
+        self.job_result_with_options(params, RequestOptions::default())
+            .await
+    }
+
+    pub async fn job_result_with_options(
+        &self,
+        params: &JobResultParams,
+        options: RequestOptions,
+    ) -> HostResult<JobResultResult> {
+        self.request_with_options(method::JOB_RESULT, params, options)
+            .await
     }
 
     pub async fn close_job(&self, params: &JobCloseParams) -> HostResult<()> {
-        self.request(method::JOB_CLOSE, params).await
+        self.close_job_with_options(params, RequestOptions::default())
+            .await
+    }
+
+    pub async fn close_job_with_options(
+        &self,
+        params: &JobCloseParams,
+        options: RequestOptions,
+    ) -> HostResult<()> {
+        self.request_with_options(method::JOB_CLOSE, params, options)
+            .await
     }
 
     pub async fn open_blob(&self, params: &BlobOpenParams) -> HostResult<BlobOpenResult> {
-        self.request(method::BLOB_OPEN, params).await
+        self.request_with_options(method::BLOB_OPEN, params, RequestOptions::default())
+            .await
     }
 
     pub async fn read_blob(&self, params: &BlobReadParams) -> HostResult<BlobReadResult> {
-        self.request(method::BLOB_READ, params).await
+        self.read_blob_with_options(params, RequestOptions::default())
+            .await
+    }
+
+    pub async fn read_blob_with_options(
+        &self,
+        params: &BlobReadParams,
+        options: RequestOptions,
+    ) -> HostResult<BlobReadResult> {
+        self.request_with_options(method::BLOB_READ, params, options)
+            .await
     }
 
     pub async fn close_blob(&self, params: &BlobCloseParams) -> HostResult<()> {
-        self.request(method::BLOB_CLOSE, params).await
+        self.close_blob_with_options(params, RequestOptions::default())
+            .await
+    }
+
+    pub async fn close_blob_with_options(
+        &self,
+        params: &BlobCloseParams,
+        options: RequestOptions,
+    ) -> HostResult<()> {
+        self.request_with_options(method::BLOB_CLOSE, params, options)
+            .await
     }
 
     pub async fn open_event_stream(&self, params: &EventOpenParams) -> HostResult<EventOpenResult> {
-        self.request(method::EVENT_OPEN, params).await
+        self.open_event_stream_with_options(params, RequestOptions::default())
+            .await
+    }
+
+    pub async fn open_event_stream_with_options(
+        &self,
+        params: &EventOpenParams,
+        options: RequestOptions,
+    ) -> HostResult<EventOpenResult> {
+        self.request_with_options(method::EVENT_OPEN, params, options)
+            .await
     }
 
     pub async fn read_event_stream(&self, params: &EventReadParams) -> HostResult<EventReadResult> {
@@ -166,22 +247,16 @@ impl UniversalPluginClient {
     }
 
     pub async fn close_event_stream(&self, params: &EventCloseParams) -> HostResult<()> {
-        self.request(method::EVENT_CLOSE, params).await
+        self.close_event_stream_with_options(params, RequestOptions::default())
+            .await
     }
 
-    async fn request<P, R>(&self, method_name: &str, params: &P) -> HostResult<R>
-    where
-        P: Serialize + ?Sized,
-        R: DeserializeOwned,
-    {
-        let negotiated = self.session.session();
-        if negotiated.has_method_declarations() && !negotiated.declares_method(method_name) {
-            return Err(HostError::NotImplemented(format!(
-                "extension did not declare wire method `{method_name}`"
-            )));
-        }
-
-        self.request_with_options(method_name, params, RequestOptions::default())
+    pub async fn close_event_stream_with_options(
+        &self,
+        params: &EventCloseParams,
+        options: RequestOptions,
+    ) -> HostResult<()> {
+        self.request_with_options(method::EVENT_CLOSE, params, options)
             .await
     }
 

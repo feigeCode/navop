@@ -181,12 +181,11 @@ cargo fmt --check
 
 ## 社区与支持
 
-Navop 由个人长期维护。Star、聚焦的小型 PR、Bug 报告和捐赠都有助于项目持续发展。
+Navop 由个人长期维护。Star、聚焦的小型 PR 和 Bug 报告都有助于项目持续发展。
 
 - [反馈 Bug 或提出功能建议](https://github.com/feigeCode/navop/issues)
 - QQ 群：[860670605](https://qm.qq.com/cgi-bin/qm/qr?k=&group_code=860670605)
 - 微信群：[加入](https://docs.qq.com/doc/DVEFFd2RnSnJLcFBD)
-- 自愿捐赠：[DONATE_CN.md](DONATE_CN.md)
 - 旧版 OnetCli 仓库：[feigeCode/onetcli](https://github.com/feigeCode/onetcli)
 
 ## Star History

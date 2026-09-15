@@ -131,6 +131,18 @@ Home:
     en: "Sorted by last used · not affected by group filter"
     zh-CN: "按最近使用排序 · 不受分组筛选影响"
     zh-HK: "按最近使用排序 · 不受分組篩選影響"
+  workbench_title:
+    en: "Workbench"
+    zh-CN: "工作台"
+    zh-HK: "工作台"
+  workbench_hint:
+    en: "Open tools and workspace features"
+    zh-CN: "打开工具和工作区功能"
+    zh-HK: "開啟工具與工作區功能"
+  workbench_entry_hint:
+    en: "Open from Home"
+    zh-CN: "从主页打开"
+    zh-HK: "從主頁開啟"
   tree_filter_independent:
     en: "Filters are independent from Home"
     zh-CN: "筛选独立于主页"
@@ -671,6 +683,34 @@ Home:
     en: Tree View
     zh-CN: 树形视图
     zh-HK: 樹形視圖
+  navigation_view:
+    en: Global Navigation
+    zh-CN: 全局导航
+    zh-HK: 全局導覽
+  search_results:
+    en: Search Results
+    zh-CN: 搜索结果
+    zh-HK: 搜尋結果
+  workbench_tools:
+    en: Tools
+    zh-CN: 工具
+    zh-HK: 工具
+  workbench_management:
+    en: Management
+    zh-CN: 管理
+    zh-HK: 管理
+  more_options:
+    en: More options
+    zh-CN: 更多选项
+    zh-HK: 更多選項
+  status:
+    en: Status
+    zh-CN: 状态
+    zh-HK: 狀態
+  sync_ready:
+    en: Ready to sync
+    zh-CN: 同步已就绪
+    zh-HK: 同步已就緒
   refresh:
     en: Refresh
     zh-CN: 刷新
@@ -1524,57 +1564,6 @@ Workspace:
     zh-CN: 清除筛选
     zh-HK: 清除篩選
 
-# 连接类型（筛选器/菜单共用）
-ConnectionType:
-  all:
-    en: "All Types"
-    zh-CN: "全部类型"
-    zh-HK: "全部類型"
-  database:
-    en: "Database"
-    zh-CN: "数据库"
-    zh-HK: "資料庫"
-  ssh_sftp:
-    en: "SSH/SFTP"
-    zh-CN: "SSH/SFTP"
-    zh-HK: "SSH/SFTP"
-  redis:
-    en: "Redis"
-    zh-CN: "Redis"
-    zh-HK: "Redis"
-  mongodb:
-    en: "MongoDB"
-    zh-CN: "MongoDB"
-    zh-HK: "MongoDB"
-  mqtt:
-    en: "MQTT"
-    zh-CN: "MQTT"
-    zh-HK: "MQTT"
-  serial:
-    en: "Serial"
-    zh-CN: "串口"
-    zh-HK: "串口"
-  telnet:
-    en: "Telnet"
-    zh-CN: "Telnet"
-    zh-HK: "Telnet"
-  port_forwarding:
-    en: "Port Forwarding"
-    zh-CN: "端口转发"
-    zh-HK: "端口轉發"
-  rdp:
-    en: "RDP"
-    zh-CN: "RDP"
-    zh-HK: "RDP"
-  vnc:
-    en: "VNC"
-    zh-CN: "VNC"
-    zh-HK: "VNC"
-  extension:
-    en: "Extension"
-    zh-CN: "扩展"
-    zh-HK: "擴展"
-
 # 连接
 Connection:
   title:
@@ -1839,6 +1828,18 @@ Connection:
       en: Username
       zh-CN: 用户名
       zh-HK: 使用者名稱
+    ftp_host:
+      en: FTP Host
+      zh-CN: FTP 主机
+      zh-HK: FTP 主機
+    ftp_port:
+      en: FTP Port
+      zh-CN: FTP 端口
+      zh-HK: FTP 埠
+    ftp_username:
+      en: FTP Username
+      zh-CN: FTP 用户名
+      zh-HK: FTP 使用者名稱
     database:
       en: Database
       zh-CN: 数据库

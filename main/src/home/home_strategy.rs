@@ -1,6 +1,8 @@
 use crate::home_tab::HomePage;
 use extension_view::{ExtensionViewHost, MarketplaceInstallOutcome};
-use gpui::{App, AppContext, AsyncApp, ClickEvent, Context, ParentElement, SharedString, Styled, Window};
+use gpui::{
+    App, AppContext, AsyncApp, ClickEvent, Context, ParentElement, SharedString, Styled, Window,
+};
 use gpui_component::{WindowExt, notification::Notification};
 use one_core::storage::{ConnectionType, ExtensionConnectionParams, StoredConnection, Workspace};
 use one_core::tab_container::{TabItem, TabOpenMode};
@@ -282,7 +284,9 @@ fn install_middleware_extension(
     );
     let install_host = host.clone();
     let task = cx.background_spawn(async move {
-        let entries = install_host.load_marketplace_entries(http_client.clone()).await?;
+        let entries = install_host
+            .load_marketplace_entries(http_client.clone())
+            .await?;
         let entry = entries
             .into_iter()
             .find(|entry| extension_view::marketplace_entry_install_id(entry) == extension_id)
@@ -337,7 +341,9 @@ fn prompt_middleware_extension_install(
         let staging = staging.clone();
         let connection = connection.clone();
         dialog
-            .title(SharedString::from(format!("Install extension {entry_name}")))
+            .title(SharedString::from(format!(
+                "Install extension {entry_name}"
+            )))
             .child(
                 gpui::div()
                     .child(review_summary.clone())
@@ -379,8 +385,8 @@ fn open_extension_connection_now(
         window.push_notification("Extension runtime is unavailable", cx);
         return;
     };
-    let Some(workbench) = service
-        .resource_workbench_for_connection(&params.extension_id, &params.contribution_id)
+    let Some(workbench) =
+        service.resource_workbench_for_connection(&params.extension_id, &params.contribution_id)
     else {
         window.push_notification(
             "This extension connection requires the shell-plugins build",

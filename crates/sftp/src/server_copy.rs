@@ -1,7 +1,7 @@
 use crate::server_copy_direct::{execute_direct_copy, prepare_direct_copy};
 use crate::{
-    DirectoryConflictPolicy, FileEntry, ProgressCallback, RusshSftpClient, SftpClient,
-    TransferCancelled,
+    DirectoryConflictPolicy, FileEntry, ProgressCallback, RemoteFileClient, RusshSftpClient,
+    SftpClient, TransferCancelled,
 };
 use anyhow::Result;
 use ssh::{SshConnectConfig, SshSessionManager};

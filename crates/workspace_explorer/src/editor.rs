@@ -8,6 +8,7 @@ use crate::diff::SideBySideDiff;
 use crate::file_system::LoadedFile;
 use crate::git::{GitChange, GitRepository};
 use crate::theme::WorkspaceTheme;
+use crate::{WorkspaceBackend, local_backend};
 use gpui::{App, Context, Entity, EventEmitter, KeyBinding, Subscription, actions};
 use gpui_component::input::EditorState;
 use notes::NotesView;
@@ -15,6 +16,7 @@ use one_ui::StatusPresentation;
 use remote_file_editor::EditorMode;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 
 actions!(workspace_editor, [SaveDocument]);
 
@@ -211,10 +213,17 @@ pub struct WorkspaceEditor {
     close_prompt_open: bool,
     pending_close_tab: Option<usize>,
     theme: WorkspaceTheme,
+    /// 文件读写后端(本机或容器);与 `WorkspaceExplorer` 共用同一个实例。
+    backend: Arc<dyn WorkspaceBackend>,
 }
 
 impl WorkspaceEditor {
     pub fn new(theme: WorkspaceTheme) -> Self {
+        Self::with_backend(theme, local_backend())
+    }
+
+    /// 用指定后端构造(容器会话传入容器后端)。
+    pub fn with_backend(theme: WorkspaceTheme, backend: Arc<dyn WorkspaceBackend>) -> Self {
         Self {
             tabs: Vec::new(),
             active_tab: 0,
@@ -222,6 +231,7 @@ impl WorkspaceEditor {
             close_prompt_open: false,
             pending_close_tab: None,
             theme,
+            backend,
         }
     }
 

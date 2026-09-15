@@ -1,4 +1,5 @@
 use anyhow::{Context as _, Result, anyhow};
+use ftp::FtpConnectConfig;
 use one_core::storage::models::{ProxyType as StorageProxyType, SshAuthMethod, StoredConnection};
 use ssh::{
     HostKeyVerifier, JumpServerConnectConfig, ProxyConnectConfig, ProxyType, SshAuth,
@@ -103,6 +104,72 @@ pub(crate) fn sftp_initial_directory_of(connection: &StoredConnection) -> Option
         .and_then(|params| sftp_initial_directory(&params))
 }
 
+/// 连接记录的远程文件协议为 FTP 时，构造独立的 FTP 连接配置。
+///
+/// SFTP 协议返回 `None`；协议声明为 FTP 但缺少 FTP 参数时同样返回
+/// `None`（连接表单校验应阻止保存该状态）。
+pub(crate) fn ftp_config_from_connection(
+    connection: &StoredConnection,
+) -> Option<FtpConnectConfig> {
+    let params = connection.to_ssh_params().ok()?;
+    let remote_file = params.remote_file.as_ref()?;
+    if remote_file.protocol != one_core::storage::models::RemoteFileProtocol::Ftp {
+        return None;
+    }
+    let ftp = params.ftp_params()?;
+    Some(FtpConnectConfig {
+        host: ftp.host.clone(),
+        port: ftp.port,
+        username: ftp.username.clone(),
+        password: ftp.password.clone(),
+        passive_mode: ftp.passive_mode,
+        use_tls: ftp.use_tls,
+        connect_timeout: ftp.connect_timeout,
+    })
+}
+
+/// 远程文件协议为 FTP 时，凭据提示策略来自嵌套 FTP 参数，
+/// 而不是 SSH 顶层参数（FTP 不复用 SSH 的认证状态）。
+pub(crate) fn ftp_credential_prompt_policy(
+    connection: &StoredConnection,
+) -> SshCredentialPromptPolicy {
+    connection
+        .to_ssh_params()
+        .ok()
+        .and_then(|params| params.ftp_params().cloned())
+        .map(|ftp| SshCredentialPromptPolicy {
+            username: ftp.prompts_for_username(),
+            password: ftp.prompts_for_password(),
+        })
+        .unwrap_or_default()
+}
+
+/// 将连接时输入的运行时凭据注入 FTP 连接配置。
+pub(crate) fn ftp_config_with_runtime_credentials(
+    base_config: &FtpConnectConfig,
+    username: Option<&str>,
+    password: Option<&str>,
+) -> Result<FtpConnectConfig> {
+    let mut config = base_config.clone();
+
+    if let Some(username) = username {
+        let username = username.trim();
+        if username.is_empty() {
+            return Err(anyhow!("FTP username is empty"));
+        }
+        config.username = username.to_string();
+    }
+
+    if let Some(password) = password {
+        if password.is_empty() {
+            return Err(anyhow!("FTP password is empty"));
+        }
+        config.password = password.to_string();
+    }
+
+    Ok(config)
+}
+
 pub(crate) fn ssh_config_with_runtime_credentials(
     base_config: &SshConnectConfig,
     username: Option<&str>,
@@ -168,6 +235,7 @@ mod tests {
         resolve_ssh_connection, sftp_initial_directory, sftp_initial_directory_of, ssh_config_for,
         ssh_config_with_runtime_credentials,
     };
+    use one_core::storage::models::FtpParams;
     use one_core::storage::{SftpAccount, SshAuthMethod, SshParams, StoredConnection};
     use ssh::SshAuth;
 
@@ -175,6 +243,7 @@ mod tests {
         StoredConnection::new_ssh(
             "source".to_string(),
             SshParams {
+                remote_file: None,
                 sftp_default_directory: None,
                 disabled_jump_server: None,
                 sftp_account: None,
@@ -422,5 +491,94 @@ mod tests {
 
         connection.params = "not-json".to_string();
         assert_eq!(sftp_initial_directory_of(&connection), None);
+    }
+
+    fn connection_with_ftp_params(ftp: FtpParams) -> StoredConnection {
+        let mut connection = connection_with_auth(SshAuthMethod::Password {
+            password: "ssh-secret".to_string(),
+        });
+        let mut params = connection.to_ssh_params().expect("valid SSH params");
+        // SSH 顶层也配置为提示输入，用于验证 FTP 模式不借用该策略。
+        params.prompt_username = Some(true);
+        params.prompt_password = Some(true);
+        params.remote_file = Some(one_core::storage::models::RemoteFileParams {
+            protocol: one_core::storage::models::RemoteFileProtocol::Ftp,
+            ftp: Some(ftp),
+        });
+        connection.params = serde_json::to_string(&params).expect("serialize SSH params");
+        connection
+    }
+
+    #[test]
+    fn ftp_credential_prompt_policy_ignores_ssh_top_level_flags() {
+        let ftp = FtpParams {
+            host: "ftp.example".to_string(),
+            port: 21,
+            username: "ftp-user".to_string(),
+            password: "ftp-secret".to_string(),
+            credential_reference: None,
+            prompt_username: None,
+            prompt_password: Some(true),
+            passive_mode: true,
+            use_tls: false,
+            connect_timeout: None,
+        };
+        let connection = connection_with_ftp_params(ftp);
+
+        let policy = super::ftp_credential_prompt_policy(&connection);
+
+        // SSH 顶层 prompt 标志为 true，但 FTP 模式只看嵌套 FTP 参数。
+        assert!(!policy.username);
+        assert!(policy.password);
+    }
+
+    #[test]
+    fn ftp_runtime_credentials_are_injected_without_mutating_base_config() {
+        let base = super::FtpConnectConfig {
+            host: "ftp.example".to_string(),
+            port: 21,
+            username: "stored-user".to_string(),
+            password: String::new(),
+            passive_mode: true,
+            use_tls: false,
+            connect_timeout: None,
+        };
+
+        let runtime = super::ftp_config_with_runtime_credentials(
+            &base,
+            Some(" runtime-user "),
+            Some("ftp-secret"),
+        )
+        .expect("runtime credentials should be accepted");
+
+        assert_eq!(runtime.username, "runtime-user");
+        assert_eq!(runtime.password, "ftp-secret");
+        assert_eq!(base.username, "stored-user");
+        assert_eq!(base.password, "");
+    }
+
+    #[test]
+    fn ftp_runtime_empty_credentials_are_rejected() {
+        let base = super::FtpConnectConfig {
+            host: "ftp.example".to_string(),
+            port: 21,
+            username: "stored-user".to_string(),
+            password: String::new(),
+            passive_mode: true,
+            use_tls: false,
+            connect_timeout: None,
+        };
+
+        let error = match super::ftp_config_with_runtime_credentials(&base, Some("  "), None) {
+            Ok(_) => panic!("empty username should be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("username is empty"));
+
+        let error = match super::ftp_config_with_runtime_credentials(&base, None, Some("")) {
+            Ok(_) => panic!("empty password should be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("password is empty"));
     }
 }

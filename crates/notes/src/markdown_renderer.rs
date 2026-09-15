@@ -1,4 +1,3 @@
-
 pub(crate) fn block_render_provider(
     cx: &gpui::App,
 ) -> Option<markdown_editor::MarkdownBlockRenderProvider> {

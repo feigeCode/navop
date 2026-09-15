@@ -1,6 +1,6 @@
-use one_ui::IconSize;
 use super::*;
 use gpui_component::Selectable as _;
+use one_ui::IconSize;
 
 impl HomePage {
     pub(super) fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {

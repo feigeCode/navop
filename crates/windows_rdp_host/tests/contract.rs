@@ -1691,7 +1691,7 @@ fn active_x_host_subclasses_an_isolated_native_child_and_releases_owned_resource
             "in_place_object.Release();",
             "control.Release();",
             "container.Release();",
-            "DestroyWindow(host_window);",
+            "destroy_host_window();",
             "AtlAxWinTerm();",
             "OleUninitialize();",
         ],
@@ -2029,9 +2029,44 @@ fn active_x_event_sink_maps_known_dispids_and_unadvises_before_releasing_the_con
             "client.Release();",
             "control.Release();",
             "container.Release();",
-            "DestroyWindow(host_window);",
+            "destroy_host_window();",
             "AtlAxWinTerm();",
             "OleUninitialize();",
+        ],
+    );
+    // The host window destroy must observe its own result. `DestroyWindow` used
+    // to be called for its side effect only, which made a leaked host HWND
+    // indistinguishable from a clean teardown in the Rust-side logs.
+    assert_tokens_in_scope(
+        active_x,
+        "void destroy_host_window() noexcept",
+        "\n    }\n};",
+        &[
+            "const HWND window = host_window;",
+            // The owner thread has to be read before the window is gone.
+            "GetWindowThreadProcessId(window, nullptr)",
+            "SetLastError(ERROR_SUCCESS);",
+            "const BOOL destroyed = DestroyWindow(window);",
+            "GetLastError()",
+            "IsWindow(window)",
+            "log_native_host_window_destroy(",
+            "host_window = nullptr;",
+        ],
+    );
+    assert_contains_all(
+        active_x,
+        &[
+            // Correlates a destroy trace with one RDP session: Win32 recycles
+            // HWNDs, so the handle alone is ambiguous.
+            "uint64_t host_generation = 0;",
+            "resources->state.host_generation = owner->generation;",
+        ],
+    );
+    assert_contains_all(
+        internal,
+        &[
+            "void log_native_host_window_destroy(",
+            "uint32_t window_still_alive) noexcept;",
         ],
     );
     assert_contains_all(

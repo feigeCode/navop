@@ -92,7 +92,7 @@ extension-protocol = { workspace = true }
 tempfile = "3"
 
 [features]
-default = ["wasm-components", "embedded-webview", "windows-native-rdp"]
+default = ["wasm-components", "embedded-webview", "windows-native-rdp", "shell-plugins"]
 builtin-duckdb = ["db/builtin-duckdb", "db_view/builtin-duckdb", "onetcli_runtime/builtin-duckdb"]
 builtin-mongodb = ["mongodb_view/builtin-mongodb"]
 builtin-data-drivers = ["builtin-mongodb"]

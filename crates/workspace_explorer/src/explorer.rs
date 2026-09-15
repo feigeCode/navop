@@ -7,8 +7,8 @@ mod load;
 mod render;
 
 use crate::WorkspaceEditor;
+use crate::backend::{WorkspaceBackend, local_backend};
 use crate::editor::{GitDiffRequest, WorkspaceEditorEvent};
-use crate::file_system::read_directory;
 use crate::git::{GitChange, GitRepository, load_changes};
 use crate::model::ExplorerEntry;
 use crate::theme::WorkspaceTheme;
@@ -32,6 +32,8 @@ pub use frame::{ExplorerFramePlacement, WorkspaceExplorerEvent};
 
 pub struct WorkspaceExplorer {
     root: PathBuf,
+    /// 文件系统后端(本机或容器);与 `WorkspaceEditor` 共用同一个实例。
+    backend: Arc<dyn WorkspaceBackend>,
     listings: HashMap<PathBuf, Vec<ExplorerEntry>>,
     expanded: HashSet<PathBuf>,
     loading_directories: HashSet<PathBuf>,
@@ -71,6 +73,8 @@ pub struct WorkspaceExplorerConfig {
     pub editor: Entity<WorkspaceEditor>,
     pub theme: WorkspaceTheme,
     pub show_frame_controls: bool,
+    /// 文件系统后端;`None` 时使用本机后端。
+    pub backend: Option<Arc<dyn WorkspaceBackend>>,
 }
 
 impl WorkspaceExplorer {
@@ -80,7 +84,9 @@ impl WorkspaceExplorer {
             editor,
             theme,
             show_frame_controls,
+            backend,
         } = config;
+        let backend = backend.unwrap_or_else(local_backend);
         let editor_subscription =
             cx.subscribe(&editor, |this, _, event: &WorkspaceEditorEvent, cx| {
                 if matches!(event, WorkspaceEditorEvent::FileSaved(_)) {
@@ -89,6 +95,7 @@ impl WorkspaceExplorer {
             });
         let mut this = Self {
             root,
+            backend,
             listings: HashMap::new(),
             expanded: HashSet::new(),
             loading_directories: HashSet::new(),
@@ -249,8 +256,11 @@ impl WorkspaceExplorer {
         let root = self.root.clone();
         let show_hidden = self.show_hidden;
         let show_ignored = self.show_ignored;
+        let backend = self.backend.clone();
         let task =
-            cx.background_spawn(async move { load_workspace(root, show_hidden, show_ignored) });
+            cx.background_spawn(
+                async move { load_workspace(root, show_hidden, show_ignored, backend) },
+            );
         let entity = cx.entity().downgrade();
         cx.spawn(async move |_: WeakEntity<Self>, cx: &mut AsyncApp| {
             let result = task.await;
@@ -363,8 +373,9 @@ impl WorkspaceExplorer {
         let show_hidden = self.show_hidden;
         let show_ignored = self.show_ignored;
         let matcher = self.ignore_matcher.clone();
+        let backend = self.backend.clone();
         let task = cx.background_spawn(async move {
-            read_directory(&task_path, matcher.as_deref(), show_hidden, show_ignored)
+            backend.read_directory(&task_path, matcher.as_deref(), show_hidden, show_ignored)
         });
         let entity = cx.entity().downgrade();
         cx.spawn(async move |_: WeakEntity<Self>, cx: &mut AsyncApp| {

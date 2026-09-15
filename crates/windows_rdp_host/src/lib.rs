@@ -14,6 +14,7 @@ mod event;
 mod ffi;
 mod handle;
 mod lifecycle;
+mod lifecycle_stats;
 #[cfg(all(test, windows_rdp_host_native))]
 mod native_tests;
 mod options;
@@ -39,6 +40,9 @@ pub use error::{
 pub use event::{WindowsRdpEvent, WindowsRdpRawEvent};
 pub use handle::{WindowsRdpConnectionState, WindowsRdpHost, WindowsRdpRequestCloseStatus};
 pub use lifecycle::WindowsRdpHostLifecycle;
+pub use lifecycle_stats::{
+    WindowsRdpLifecycleCounters, WindowsRdpLifecycleSnapshot, global as lifecycle_counters,
+};
 pub use options::{
     WINDOWS_RDP_MAX_HOST_UTF16_CODE_UNITS, WindowsRdpColorDepth, WindowsRdpConnectionOptions,
     WindowsRdpHostOptions, WindowsRdpParentWindow,

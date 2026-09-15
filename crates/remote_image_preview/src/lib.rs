@@ -2,20 +2,18 @@ rust_i18n::i18n!("locales", fallback = "en");
 
 use anyhow::Context as _;
 use gpui::{
-    AnyWindowHandle, App, AsyncApp, ClipboardEntry, ClipboardItem, Context, Image,
-    ImageFormat, IntoElement, ObjectFit, ParentElement, Render, Styled, Window, div, img,
-    prelude::*,
+    AnyWindowHandle, App, AsyncApp, ClipboardEntry, ClipboardItem, Context, Image, ImageFormat,
+    IntoElement, ObjectFit, ParentElement, Render, Styled, Window, div, img, prelude::*,
 };
 use gpui_component::{ActiveTheme, WindowExt, notification::Notification};
 use one_core::gpui_tokio::Tokio;
 use one_core::popup_window::{PopupWindowOptions, open_popup_window};
 use rust_i18n::t;
-use sftp::{RusshSftpClient, SftpClient};
+use sftp::{RemoteFileClient, SharedRemoteFileClient};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::Mutex;
 
 const MAX_REMOTE_IMAGE_PREVIEW_BYTES: usize = 25 * 1024 * 1024;
 const CLIPBOARD_UPLOAD_IMAGE_PREFIX: &str = "onetcli-clipboard-upload";
@@ -93,7 +91,7 @@ pub fn clipboard_upload_paths(item: &ClipboardItem) -> anyhow::Result<ClipboardU
 
 pub fn open_remote_image_preview<T: 'static>(
     remote_path: String,
-    client: Arc<Mutex<RusshSftpClient>>,
+    client: SharedRemoteFileClient,
     window: &mut Window,
     cx: &mut Context<T>,
 ) {

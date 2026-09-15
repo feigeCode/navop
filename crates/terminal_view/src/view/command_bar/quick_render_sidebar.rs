@@ -60,19 +60,16 @@ impl TerminalCommandBar {
                     .child(t!("TerminalCommandBar.quick_commands").to_string()),
             )
             .trailing(
-                IconButton::new(
-                    "terminal-command-quick-close",
-                    one_assets::IconName::Close,
-                )
-                .role(IconButtonRole::Compact)
-                .custom(
-                    self.colors
-                        .icon_button_variant(self.colors.muted_foreground, cx),
-                )
-                .tooltip(t!("TerminalCommandBar.close_quick_commands").to_string())
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.toggle_quick_commands(window, cx);
-                })),
+                IconButton::new("terminal-command-quick-close", one_assets::IconName::Close)
+                    .role(IconButtonRole::Compact)
+                    .custom(
+                        self.colors
+                            .icon_button_variant(self.colors.muted_foreground, cx),
+                    )
+                    .tooltip(t!("TerminalCommandBar.close_quick_commands").to_string())
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.toggle_quick_commands(window, cx);
+                    })),
             )
             .into_any_element()
     }

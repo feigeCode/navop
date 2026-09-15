@@ -12,9 +12,23 @@ use gpui::{
     RenderOnce, ScrollStrategy, SharedString, StatefulInteractiveElement, Styled, Subscription,
     Task, UniformListScrollHandle, Window, div, prelude::FluentBuilder, px, uniform_list,
 };
-use gpui_component::{ActiveTheme, Icon, IndexPath, Selectable, Sizable, Size as ComponentSize, button::{Button, ButtonVariants as _}, checkbox::Checkbox, clipboard::Clipboard, h_flex, input::{Input, InputEvent, InputState}, list::{List, ListDelegate, ListState}, menu::{ContextMenuExt, PopupMenuItem}, popover::Popover, scroll::Scrollbar, spinner::Spinner, tooltip::Tooltip, v_flex};
-use one_ui::IconSize;
+use gpui_component::{
+    ActiveTheme, Icon, IndexPath, Selectable, Sizable, Size as ComponentSize,
+    button::{Button, ButtonVariants as _},
+    checkbox::Checkbox,
+    clipboard::Clipboard,
+    h_flex,
+    input::{Input, InputEvent, InputState},
+    list::{List, ListDelegate, ListState},
+    menu::{ContextMenuExt, PopupMenuItem},
+    popover::Popover,
+    scroll::Scrollbar,
+    spinner::Spinner,
+    tooltip::Tooltip,
+    v_flex,
+};
 use one_assets::IconName;
+use one_ui::IconSize;
 use one_ui::{ContentState, IconButton, IconSize as OneIconSize};
 use rust_i18n::t;
 use tracing::log::{error, info, trace, warn};
@@ -3209,14 +3223,14 @@ mod tests {
         let mut node = build_node(
             DbNodeType::Connection,
             "old",
-            &[(EXTERNAL_DRIVER_ICON_METADATA, "driver://old/icon")],
+            &[(EXTERNAL_DRIVER_ICON_METADATA, "driver-icons/old/icon")],
         );
         let config = external_config("demo");
         let metadata = HashMap::from([
             (EXTERNAL_DRIVER_ID_METADATA.to_string(), "demo".to_string()),
             (
                 EXTERNAL_DRIVER_ICON_METADATA.to_string(),
-                "driver://demo/icon".to_string(),
+                "driver-icons/demo/icon".to_string(),
             ),
         ]);
 
@@ -3225,7 +3239,7 @@ mod tests {
         assert_eq!("saved", node.name);
         assert_eq!(DatabaseType::external("demo"), node.database_type);
         assert_eq!(
-            Some(&"driver://demo/icon".to_string()),
+            Some(&"driver-icons/demo/icon".to_string()),
             node.metadata.get(EXTERNAL_DRIVER_ICON_METADATA)
         );
     }
@@ -3238,7 +3252,7 @@ mod tests {
             &[
                 (EXTERNAL_DRIVER_ID_METADATA, "demo"),
                 (EXTERNAL_DRIVER_NAME_METADATA, "DemoDB"),
-                (EXTERNAL_DRIVER_ICON_METADATA, "driver://demo/icon"),
+                (EXTERNAL_DRIVER_ICON_METADATA, "driver-icons/demo/icon"),
                 ("custom", "kept"),
             ],
         );

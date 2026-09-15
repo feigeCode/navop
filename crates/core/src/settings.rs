@@ -98,6 +98,7 @@ pub enum HomeConnectionLayout {
     Card,
     List,
     Tree,
+    Navigation,
 }
 
 /// SQL 格式化时的关键字大小写策略；Preserve 保持用户原文不改变大小写
@@ -196,6 +197,7 @@ impl HomeConnectionLayout {
             Self::Card => "card",
             Self::List => "list",
             Self::Tree => "tree",
+            Self::Navigation => "navigation",
         }
     }
 
@@ -203,6 +205,7 @@ impl HomeConnectionLayout {
         match value {
             "list" => Self::List,
             "tree" => Self::Tree,
+            "navigation" => Self::Navigation,
             _ => Self::Card,
         }
     }
@@ -570,7 +573,12 @@ impl AiChatSettings {
         if trimmed.chars().count() <= MAX_CUSTOM_SYSTEM_PROMPT_CHARS {
             return Some(trimmed.to_string());
         }
-        Some(trimmed.chars().take(MAX_CUSTOM_SYSTEM_PROMPT_CHARS).collect())
+        Some(
+            trimmed
+                .chars()
+                .take(MAX_CUSTOM_SYSTEM_PROMPT_CHARS)
+                .collect(),
+        )
     }
 }
 
@@ -1657,14 +1665,14 @@ mod tests {
 
     use super::{
         AiChatSettings, AiChatToolExecutionMode, AppSettings, ConnectionSortOrder, CustomFont,
-        MAX_CUSTOM_SYSTEM_PROMPT_CHARS,
         DEFAULT_MCP_APPROVAL_TIMEOUT_MS, DEFAULT_TERMINAL_THEME, HomeConnectionLayout,
         LOCALE_SYSTEM, LargeTextCellEditorOpenMode, LocalTerminalProfileKind,
-        LocalTerminalProfileSettings, MainWindowState, McpPermissionMode, McpServerMode,
-        PersonalSyncBackendKind, RemoteFileOpenMode, SqlFormatSettings, SqlIndentStyle,
-        SqlKeywordCase, StartupDefaultPage, SyncProvider, default_grid_font_fallback_families,
-        default_grid_monospace_font_family, grid_monospace_font, installed_grid_monospace_font,
-        is_installed_font_family, resolve_installed_grid_monospace_font_family,
+        LocalTerminalProfileSettings, MAX_CUSTOM_SYSTEM_PROMPT_CHARS, MainWindowState,
+        McpPermissionMode, McpServerMode, PersonalSyncBackendKind, RemoteFileOpenMode,
+        SqlFormatSettings, SqlIndentStyle, SqlKeywordCase, StartupDefaultPage, SyncProvider,
+        default_grid_font_fallback_families, default_grid_monospace_font_family,
+        grid_monospace_font, installed_grid_monospace_font, is_installed_font_family,
+        resolve_installed_grid_monospace_font_family,
     };
 
     #[test]
@@ -2046,8 +2054,8 @@ mod tests {
 
     #[test]
     fn ui_scale_percent_is_read_from_persisted_settings() {
-        let settings: AppSettings =
-            serde_json::from_str(r#"{ "ui_scale_percent": 175 }"#).expect("ui_scale_percent 应能读取");
+        let settings: AppSettings = serde_json::from_str(r#"{ "ui_scale_percent": 175 }"#)
+            .expect("ui_scale_percent 应能读取");
         assert_eq!(175, settings.ui_scale_percent);
         assert!((settings.ui_scale() - 1.75).abs() < f32::EPSILON);
 

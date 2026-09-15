@@ -1,7 +1,10 @@
 use super::{
-    copy_entry, create_directory, create_file, delete_entry, move_entry, read_directory,
-    rename_entry, root_ignore_matcher,
+    canonical_workspace_root, copy_entry, create_directory, create_file, delete_entry, move_entry,
+    read_directory, rename_entry, root_ignore_matcher,
 };
+// 只在 Windows 的两个守卫测试里使用，其他平台不引入以免 unused import 触发 -D warnings。
+#[cfg(target_os = "windows")]
+use super::normalize_canonical_root;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -164,4 +167,43 @@ fn rejects_pasting_directory_into_its_descendant() {
 
     assert!(copy_error.to_string().contains("inside itself"));
     assert!(move_error.to_string().contains("inside itself"));
+}
+
+#[test]
+fn canonical_workspace_root_resolves_an_existing_directory() {
+    let temp = TestDirectory::new("canonical-root");
+
+    let canonical = canonical_workspace_root(temp.path().to_path_buf()).unwrap();
+
+    assert!(canonical.is_dir());
+    assert!(canonical_workspace_root(temp.path().join("missing")).is_err());
+}
+
+/// Windows 上 `canonicalize()` 会把 UNC 路径规范化成 `\\?\UNC\server\share\...`，
+/// verbatim 前缀不会被剥掉：这种形式既不适合展示，也无法与 `\\server\share\...`
+/// 相等比较（工作区根目录要靠相等判断决定是否重新加载）。WSL 文件树依赖这里
+/// 还原成普通 UNC 形式。
+#[cfg(target_os = "windows")]
+#[test]
+fn canonical_root_drops_the_verbatim_unc_prefix() {
+    assert_eq!(
+        PathBuf::from(r"\\wsl$\Ubuntu-24.04"),
+        normalize_canonical_root(PathBuf::from(r"\\?\UNC\wsl$\Ubuntu-24.04"))
+    );
+    assert_eq!(
+        PathBuf::from(r"\\wsl$\Ubuntu-24.04\home\navop"),
+        normalize_canonical_root(PathBuf::from(r"\\?\UNC\wsl$\Ubuntu-24.04\home\navop"))
+    );
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn canonical_root_keeps_other_paths_untouched() {
+    for path in [r"C:\work\navop", r"\\server\share", r"\\?\C:\work\navop"] {
+        assert_eq!(
+            PathBuf::from(path),
+            normalize_canonical_root(PathBuf::from(path)),
+            "path={path}"
+        );
+    }
 }

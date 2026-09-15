@@ -163,6 +163,25 @@ fn credential_refs<'a>(
         .collect()
 }
 
+/// 工作台/Shell 可见的连接上下文:宿主解析后注入 `NativeResourceWorkbench`。
+///
+/// 取 `ExtensionConnectionParams::config` 而不是整条 `StoredConnection`:
+/// - `config` 与 `secrets` 按 `ExtensionConnectionParams::validate()` 不可能有
+///   同名键 ⇒ 密码/token 天然不在其中,**不需要**靠"过滤敏感键"这种会漏的黑名单;
+/// - `credential_refs`(provider 取密句柄)也不放进去 —— provider 侧的取密能力
+///   不该顺着 UI 通道漏出去。
+///
+/// 解析失败(非扩展连接 / schema 版本不符)时返回 `Null`:连接上下文是可选
+/// 增强,不该让工作台起不来。
+pub(crate) fn ui_connection_context(
+    connection: &one_core::storage::StoredConnection,
+) -> serde_json::Value {
+    connection
+        .to_extension_params()
+        .map(|params| serde_json::Value::Object(params.config))
+        .unwrap_or(serde_json::Value::Null)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -205,5 +224,51 @@ mod tests {
         );
         assert!(!launch.config.to_string().contains("secret-value"));
         assert_eq!(42, launch.connection_id());
+    }
+
+    #[test]
+    fn ui_connection_context_exposes_config_but_never_secrets() {
+        // 回归:`source: connection` 绑定此前完全没有真实值来源。这里固定住
+        // "能给 UI 的只有非敏感 config"——secrets 与取密句柄都不能出现在
+        // 任何投递给工作台/Shell 的上下文里。
+        let params = ExtensionConnectionParams::new(
+            "com.example.search",
+            "search",
+            serde_json::Map::from_iter([
+                ("url".into(), "https://example.test".into()),
+                ("namespace".into(), "prod".into()),
+            ]),
+            BTreeMap::from([("api_key".into(), "secret-value".into())]),
+        )
+        .unwrap();
+        let mut connection = StoredConnection::new_extension("Search".into(), params, None);
+        connection.id = Some(42);
+
+        let context = ui_connection_context(&connection);
+
+        assert_eq!(Some("prod"), context["namespace"].as_str());
+        assert_eq!(Some("https://example.test"), context["url"].as_str());
+        let rendered = context.to_string();
+        assert!(!rendered.contains("secret-value"), "context={rendered}");
+        assert!(!rendered.contains("api_key"), "context={rendered}");
+        assert!(!rendered.contains("secret://"), "context={rendered}");
+    }
+
+    #[test]
+    fn ui_connection_context_is_null_for_non_extension_connections() {
+        // 非扩展连接(内置 SSH/DB 等)的 params 不是 ExtensionConnectionParams;
+        // 返回 Null 而不是报错 —— 连接上下文是可选增强,不该让工作台起不来。
+        let params = ExtensionConnectionParams::new(
+            "com.example.search",
+            "search",
+            serde_json::Map::new(),
+            BTreeMap::new(),
+        )
+        .unwrap();
+        let mut connection = StoredConnection::new_extension("Host".into(), params, None);
+        connection.id = Some(7);
+        connection.connection_type = one_core::storage::ConnectionType::SshSftp;
+
+        assert_eq!(serde_json::Value::Null, ui_connection_context(&connection));
     }
 }
