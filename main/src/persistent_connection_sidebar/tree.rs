@@ -397,7 +397,9 @@ mod tests {
         let source = include_str!("tree.rs");
         let implementation = source.split("#[cfg(test)]").next().unwrap();
 
-        assert!(implementation.contains("self.home_embedded && query.is_empty()"));
+        // 仅普通嵌入树预置最近区；全局导航布局的最近区由内容区自己渲染。
+        assert!(implementation
+            .contains("self.home_embedded && !self.home_navigation_layout && query.is_empty()"));
         assert!(implementation.contains("home_tab::recent_connections"));
         assert!(implementation.contains("ConnectionTreeRow::RecentHeader"));
         assert!(implementation.contains("ConnectionTreeRow::RecentConnection"));

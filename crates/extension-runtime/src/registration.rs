@@ -709,16 +709,62 @@ fn validate_remote_file_editor(
     Ok(())
 }
 
+/// 校验嵌入 Shell 视图引用:viewId 必须在同扩展 shellViews 中声明,
+/// 且模块声明为 Context + Workbench、不含 raw 模块。
+/// 页面级 renderer、区域级 source 与 root `layout.renderer` 共用。
+fn validate_shell_renderer(
+    manifest: &Manifest,
+    view_id: &str,
+    invalid: &dyn Fn(&str) -> ExtensionRuntimeError,
+) -> Result<(), ExtensionRuntimeError> {
+    let Some(view) = manifest
+        .contributes
+        .shell_views
+        .iter()
+        .find(|view| view.id == view_id)
+    else {
+        return Err(invalid("shell renderer references an unknown shell view"));
+    };
+    let modules = &view.modules;
+    if !modules.contains(&crate::extension::manifest::ShellHostModule::Context)
+        || !modules.contains(&crate::extension::manifest::ShellHostModule::Workbench)
+    {
+        return Err(invalid(
+            "embedded shell renderer requires context and workbench modules",
+        ));
+    }
+    if modules.iter().any(|module| {
+        matches!(
+            module,
+            crate::extension::manifest::ShellHostModule::Resource
+                | crate::extension::manifest::ShellHostModule::Job
+                | crate::extension::manifest::ShellHostModule::Event
+                | crate::extension::manifest::ShellHostModule::Blob
+                | crate::extension::manifest::ShellHostModule::Runtime
+                | crate::extension::manifest::ShellHostModule::Dev
+        )
+    }) {
+        return Err(invalid(
+            "embedded shell renderer cannot request raw resource/job/event/blob/runtime/dev modules",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_resource_workbench(
     manifest: &Manifest,
     workbench: &crate::extension::manifest::ResourceWorkbenchContrib,
     bound_connections: &mut HashSet<String>,
 ) -> Result<(), ExtensionRuntimeError> {
+    use crate::extension::manifest as m;
+
     let invalid = |reason: &str| {
         ExtensionRuntimeError::InvalidResourceWorkbench(format!("{}: {reason}", workbench.id))
     };
-    if workbench.schema_version != 1 {
-        return Err(invalid("unsupported schemaVersion"));
+    if workbench.schema_version != 2 {
+        return Err(invalid(
+            "unsupported schemaVersion; migrate to layout (schemaVersion 2)",
+        ));
     }
     if workbench.id.trim().is_empty() || workbench.title.trim().is_empty() {
         return Err(invalid("id and title must not be empty"));
@@ -758,6 +804,7 @@ fn validate_resource_workbench(
     {
         return Err(invalid("defaultPage references an unknown page"));
     }
+    let page_exists = |page_id: &str| workbench.pages.iter().any(|page| page.id == page_id);
     for page in &workbench.pages {
         for action in [page.load.as_ref(), page.execute.as_ref()]
             .into_iter()
@@ -769,7 +816,7 @@ fn validate_resource_workbench(
         }
         // collection open 与 links 的目标页必须存在。
         if let Some(open) = page.collection.as_ref().and_then(|c| c.open.as_ref()) {
-            if !workbench.pages.iter().any(|page| page.id == open.page_id) {
+            if !page_exists(&open.page_id) {
                 return Err(invalid("collection open references an unknown page"));
             }
         }
@@ -785,67 +832,168 @@ fn validate_resource_workbench(
             }
         }
         for link in &page.links {
-            if !workbench.pages.iter().any(|page| page.id == link.page_id) {
+            if !page_exists(&link.page_id) {
                 return Err(invalid("page link references an unknown page"));
             }
         }
-        if matches!(
-            page.renderer.kind,
-            crate::extension::manifest::ResourceWorkbenchRendererKind::Shell
-        ) {
+        // 页面 tabGroupId 必须命中 layout 中的某个组。
+        if let Some(group_id) = page.tab_group_id.as_deref() {
+            let in_group = workbench
+                .layout
+                .as_ref()
+                .and_then(|layout| layout.center.as_ref())
+                .and_then(|center| match &center.source {
+                    m::ResourceWorkbenchCenterSource::Pages { tab_groups } => {
+                        Some(tab_groups.iter().any(|group| group.id == group_id))
+                    }
+                    _ => None,
+                })
+                .unwrap_or(false);
+            if !in_group {
+                return Err(invalid("page tabGroupId references an unknown tab group"));
+            }
+        }
+        if matches!(page.renderer.kind, m::ResourceWorkbenchRendererKind::Shell) {
             let Some(view_id) = page.renderer.view_id.as_deref() else {
                 return Err(invalid("shell renderer requires viewId"));
             };
-            let Some(view) = manifest
-                .contributes
-                .shell_views
-                .iter()
-                .find(|view| view.id == view_id)
-            else {
-                return Err(invalid("shell renderer references an unknown shell view"));
+            validate_shell_renderer(manifest, view_id, &invalid)?;
+        }
+    }
+    validate_workbench_layout(manifest, workbench, &invalid)?;
+    Ok(())
+}
+
+/// layout 声明校验:root Shell 与区域互斥;tab 组、树根、状态栏
+/// 引用的页面/操作必须存在;区域 Shell 源走嵌入校验。
+fn validate_workbench_layout(
+    manifest: &Manifest,
+    workbench: &crate::extension::manifest::ResourceWorkbenchContrib,
+    invalid: &dyn Fn(&str) -> ExtensionRuntimeError,
+) -> Result<(), ExtensionRuntimeError> {
+    use crate::extension::manifest as m;
+
+    let Some(layout) = workbench.layout.as_ref() else {
+        return Ok(());
+    };
+    let has_region = [
+        layout.left.is_some(),
+        layout.center.is_some(),
+        layout.right.is_some(),
+        layout.bottom.is_some(),
+    ]
+    .into_iter()
+    .any(|present| present);
+    if let Some(renderer) = layout.renderer.as_ref() {
+        if has_region {
+            return Err(invalid(
+                "layout renderer and regions are mutually exclusive",
+            ));
+        }
+        if renderer.kind == m::ResourceWorkbenchRendererKind::Shell {
+            let Some(view_id) = renderer.view_id.as_deref() else {
+                return Err(invalid("layout renderer requires viewId"));
             };
-            let modules = &view.modules;
-            if !modules.contains(&crate::extension::manifest::ShellHostModule::Context)
-                || !modules.contains(&crate::extension::manifest::ShellHostModule::Workbench)
-            {
-                return Err(invalid(
-                    "embedded shell renderer requires context and workbench modules",
-                ));
+            validate_shell_renderer(manifest, view_id, invalid)?;
+        } else {
+            return Err(invalid("layout renderer only supports the shell kind"));
+        }
+        return Ok(());
+    }
+    let page_exists = |page_id: &str| workbench.pages.iter().any(|page| page.id == page_id);
+    let check_shell_source =
+        |source: &m::ResourceWorkbenchShellSource,
+         invalid: &dyn Fn(&str) -> ExtensionRuntimeError| {
+            if let Some(fallback) = source.fallback.as_deref() {
+                if fallback != "none" {
+                    return Err(invalid(
+                        "region shell source only supports the `none` fallback",
+                    ));
+                }
             }
-            if modules.iter().any(|module| {
-                matches!(
-                    module,
-                    crate::extension::manifest::ShellHostModule::Resource
-                        | crate::extension::manifest::ShellHostModule::Job
-                        | crate::extension::manifest::ShellHostModule::Event
-                        | crate::extension::manifest::ShellHostModule::Blob
-                        | crate::extension::manifest::ShellHostModule::Runtime
-                        | crate::extension::manifest::ShellHostModule::Dev
-                )
-            }) {
-                return Err(invalid(
-                    "embedded shell renderer cannot request raw resource/job/event/blob/runtime/dev modules",
-                ));
+            validate_shell_renderer(manifest, &source.view_id, invalid)
+        };
+    if let Some(left) = layout.left.as_ref() {
+        match &left.source {
+            m::ResourceWorkbenchNavSource::Tree { roots } => {
+                if roots.is_empty() {
+                    return Err(invalid("tree nav requires at least one root"));
+                }
+                for root in roots {
+                    if !page_exists(&root.page_id) {
+                        return Err(invalid("tree root references an unknown page"));
+                    }
+                    let mut level = root.children.as_ref();
+                    while let Some(children) = level {
+                        if !workbench.operations.contains_key(&children.operation) {
+                            return Err(invalid("tree children references an unknown operation"));
+                        }
+                        if let Some(open) = children.open.as_ref() {
+                            if !page_exists(&open.page_id) {
+                                return Err(invalid(
+                                    "tree children open references an unknown page",
+                                ));
+                            }
+                        }
+                        level = children.children.as_deref();
+                    }
+                }
+            }
+            m::ResourceWorkbenchNavSource::List { items } => {
+                if items.is_empty() {
+                    return Err(invalid("list nav requires at least one entry"));
+                }
+                for entry in items {
+                    if !page_exists(&entry.page_id) {
+                        return Err(invalid("list nav references an unknown page"));
+                    }
+                }
+            }
+            m::ResourceWorkbenchNavSource::Shell(source) => check_shell_source(source, invalid)?,
+            m::ResourceWorkbenchNavSource::None => {}
+        }
+    }
+    if let Some(center) = layout.center.as_ref() {
+        if let m::ResourceWorkbenchCenterSource::Pages { tab_groups } = &center.source {
+            for group in tab_groups {
+                if group.id.trim().is_empty() {
+                    return Err(invalid("tab group id must not be empty"));
+                }
+                for tab in &group.tabs {
+                    if !page_exists(&tab.page_id) {
+                        return Err(invalid("tab group references an unknown page"));
+                    }
+                }
             }
         }
     }
-    for navigation in &workbench.navigation {
-        if !workbench
-            .pages
-            .iter()
-            .any(|page| page.id == navigation.page_id)
-        {
-            return Err(invalid("navigation references an unknown page"));
+    if let Some(side) = layout.right.as_ref() {
+        if let m::ResourceWorkbenchSideSource::Shell(source) = &side.source {
+            check_shell_source(source, invalid)?;
         }
     }
-    for tree in &workbench.tree {
-        if !workbench.pages.iter().any(|page| page.id == tree.page_id) {
-            return Err(invalid("tree references an unknown page"));
-        }
-        if let Some(children) = &tree.children {
-            if !workbench.operations.contains_key(&children.operation) {
-                return Err(invalid("tree references an unknown operation"));
+    if let Some(bottom) = layout.bottom.as_ref() {
+        match &bottom.source {
+            m::ResourceWorkbenchBottomSource::Status { operation, items } => {
+                let Some(op) = workbench.operations.get(operation) else {
+                    return Err(invalid("status bar references an unknown operation"));
+                };
+                if op.mode != m::ResourceWorkbenchOperationMode::Invoke {
+                    return Err(invalid("status bar operation must be an invoke operation"));
+                }
+                if items.is_empty() {
+                    return Err(invalid("status bar requires at least one item"));
+                }
+                for item in items {
+                    if item.format == m::ResourceWorkbenchStatusFormat::Pair
+                        && item.other_path.is_none()
+                    {
+                        return Err(invalid("pair format requires otherPath"));
+                    }
+                }
             }
+            m::ResourceWorkbenchBottomSource::Shell(source) => check_shell_source(source, invalid)?,
+            m::ResourceWorkbenchBottomSource::None => {}
         }
     }
     Ok(())

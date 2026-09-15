@@ -230,7 +230,10 @@ fn home_shortcuts_are_attached_to_their_actions() {
 fn sidebar_search_aligns_with_home_toolbar_height() {
     let tree = include_str!("../../persistent_connection_sidebar/tree.rs");
     assert!(tree.contains("fn render_tree_search"));
-    assert!(tree.contains(".h_10()"));
+    // 全局导航布局搜索区高 44px 与 Home toolbar 底边对齐；常驻侧栏 40px。
+    assert!(tree.contains("let search_height = if self.home_navigation_layout {"));
+    assert!(tree.contains("px(44.0)"));
+    assert!(tree.contains("px(40.0)"));
 }
 
 #[test]
@@ -389,14 +392,15 @@ fn recent_section_does_not_participate_in_search() {
     let content = include_str!("../content.rs");
     // 有搜索词时最近区整体隐藏，同一连接只出现在下方分组中
     assert!(content.contains("最近区不参与搜索"));
-    let gate = content
-        .find("recent::recent_connections")
-        .expect("最近区渲染点存在");
-    let mut start = gate.saturating_sub(220);
-    while !content.is_char_boundary(start) {
-        start -= 1;
-    }
-    assert!(content[start..gate].contains("query.is_empty()"));
+    // 分组内容区:有搜索词时最近区直接清空。
+    assert!(content.contains("let recent = if query.is_empty() {"));
+    // 导航主页:最近区始终按空搜索词取值,渲染仍受 query.is_empty() 门控。
+    let navigation = content
+        .split("fn render_navigation_content")
+        .nth(1)
+        .expect("navigation content exists");
+    assert!(navigation.contains("recent_connections(&self.connections, &self.selected_filter, \"\","));
+    assert!(navigation.contains("if !query.is_empty()"));
 }
 
 #[test]

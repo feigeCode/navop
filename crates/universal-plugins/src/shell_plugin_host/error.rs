@@ -148,9 +148,7 @@ pub(crate) fn host_error(error: extension_host::HostError) -> HostError {
 }
 
 /// 把激活/服务层错误映射为结构化 navop 错误。
-pub(crate) fn service_error(
-    error: extension_plugin_adapter::ActivationError,
-) -> HostError {
+pub(crate) fn service_error(error: extension_plugin_adapter::ActivationError) -> HostError {
     use extension_plugin_adapter::ActivationError as A;
     let (code, retryable) = match &error {
         A::RuntimeNotFound { .. } | A::InvalidRuntime { .. } => (ErrorCode::BackendNotFound, false),
@@ -246,7 +244,10 @@ mod tests {
 
     #[test]
     fn long_message_is_truncated_before_marker() {
-        let error = navop_error(ErrorCode::InvalidArgument, "y".repeat(MAX_MESSAGE_CHARS + 10));
+        let error = navop_error(
+            ErrorCode::InvalidArgument,
+            "y".repeat(MAX_MESSAGE_CHARS + 10),
+        );
         // marker 及其后的 base64 必须完整保留,message 前缀被截断。
         decode(&error);
         let message = error.message();

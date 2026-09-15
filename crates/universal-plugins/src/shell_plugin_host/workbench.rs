@@ -60,6 +60,7 @@ pub(super) fn workbench_module(
                     .get("paging")
                     .cloned()
                     .unwrap_or_else(|| serde_json::json!({"page": 1, "limit": 50, "cursor": null})),
+                parent: serde_json::Value::Null,
             };
             let operation = descriptor.operations.get(&operation_id).ok_or_else(|| {
                 navop_error(

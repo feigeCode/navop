@@ -1,6 +1,6 @@
-use anyhow::Result;
 #[cfg(any(test, target_os = "windows"))]
 use anyhow::Context;
+use anyhow::Result;
 use std::path::{Component, Path, PathBuf, Prefix};
 
 use crate::LocalConfig;
@@ -20,12 +20,7 @@ pub struct WslDistribution {
 
 #[cfg(any(test, target_os = "windows"))]
 impl WslDistribution {
-    fn new(
-        name: String,
-        state: Option<String>,
-        version: Option<u8>,
-        is_default: bool,
-    ) -> Self {
+    fn new(name: String, state: Option<String>, version: Option<u8>, is_default: bool) -> Self {
         Self {
             name,
             state,
@@ -78,10 +73,7 @@ pub fn local_config_for_wsl_distro(distro: &str) -> Result<LocalConfig> {
 }
 
 #[cfg(any(test, target_os = "windows"))]
-pub(crate) fn local_config_for_wsl_distro_with(
-    wsl: String,
-    distro: &str,
-) -> Result<LocalConfig> {
+pub(crate) fn local_config_for_wsl_distro_with(wsl: String, distro: &str) -> Result<LocalConfig> {
     let distro = distro.trim();
     anyhow::ensure!(!distro.is_empty(), "WSL distribution name is required");
     Ok(LocalConfig {
@@ -258,7 +250,9 @@ fn parse_distribution_row(line: &str) -> Option<WslDistribution> {
         return None;
     }
     let state = columns.get(1).map(|column| column.trim().to_string());
-    let version = columns.get(2).and_then(|column| column.trim().parse::<u8>().ok());
+    let version = columns
+        .get(2)
+        .and_then(|column| column.trim().parse::<u8>().ok());
     let recognized_state = state
         .as_deref()
         .is_some_and(|state| KNOWN_STATES.contains(&state));
@@ -269,7 +263,12 @@ fn parse_distribution_row(line: &str) -> Option<WslDistribution> {
             Some(version),
             is_default,
         )),
-        (None, true) => Some(WslDistribution::new(name.to_string(), state, None, is_default)),
+        (None, true) => Some(WslDistribution::new(
+            name.to_string(),
+            state,
+            None,
+            is_default,
+        )),
         // 表头（版本列为 "VERSION" 等非数字）或错误文本行
         (None, false) => None,
     }

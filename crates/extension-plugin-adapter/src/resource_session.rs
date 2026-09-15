@@ -29,6 +29,7 @@ pub struct ResourceSessionOwner {
     inner: Arc<ResourceSessionInner>,
 }
 
+#[derive(Clone)]
 pub struct ResourceScope {
     session: ResourceSessionHandle,
     page_id: String,

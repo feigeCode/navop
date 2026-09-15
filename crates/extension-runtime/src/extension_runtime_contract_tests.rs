@@ -517,7 +517,7 @@ fn runtime_catalog_resolves_collection_row_actions_and_badge_columns() {
         inputs: vec![],
         scope: None,
         terminal: None,
-        tabs: vec![],
+        tab_group_id: None,
         route: None,
         links: vec![],
     };
@@ -636,7 +636,7 @@ fn runtime_catalog_accepts_events_pages_and_paging_bindings() {
         inputs: vec![],
         scope: None,
         terminal: None,
-        tabs: vec![],
+        tab_group_id: None,
         route: None,
         links: vec![],
     };
@@ -666,7 +666,7 @@ fn runtime_catalog_accepts_events_pages_and_paging_bindings() {
         inputs: vec![],
         scope: None,
         terminal: None,
-        tabs: vec![],
+        tab_group_id: None,
         route: None,
         links: vec![],
     };
@@ -696,7 +696,7 @@ fn runtime_catalog_accepts_events_pages_and_paging_bindings() {
 
 fn resource_workbench() -> ResourceWorkbenchContrib {
     ResourceWorkbenchContrib {
-        schema_version: 1,
+        schema_version: 2,
         id: "search-workbench".into(),
         title: "Search".into(),
         connection_ids: vec!["search".into()],
@@ -715,8 +715,7 @@ fn resource_workbench() -> ResourceWorkbenchContrib {
         )]
         .into_iter()
         .collect(),
-        navigation: vec![],
-        tree: vec![],
+        layout: None,
         pages: vec![ResourceWorkbenchPage {
             id: "overview".into(),
             title: "Overview".into(),
@@ -734,11 +733,10 @@ fn resource_workbench() -> ResourceWorkbenchContrib {
             inputs: vec![],
             scope: None,
             terminal: None,
-            tabs: vec![],
+            tab_group_id: None,
             route: None,
             links: vec![],
         }],
-        status_bar: None,
     }
 }
 
@@ -1231,5 +1229,59 @@ fn catalog_toolbox_views_exclude_connection_owned_shell_views() {
     assert!(
         !ids.contains(&"explorer"),
         "连接关联的 shell view 不应进工具箱: {ids:?}"
+    );
+}
+
+#[test]
+fn catalog_toolbox_views_exclude_workbench_page_bodies() {
+    // 工作台页体(被 `pages[*].renderer.viewId` 引用的视图)与任何声明
+    // `workbench` 模块的视图,都只在工作台挂载会话里可运行;独立打开时
+    // 宿主必然失败("navop.workbench requires a borrowed resource-workbench
+    // session"),列进工具箱就是点了就报错的假卡片。
+    let mut page_body = shell_view("ui/page-body.js");
+    page_body.id = "page-body".into();
+    page_body.modules = vec![ShellHostModule::Context, ShellHostModule::Workbench];
+
+    // 没有被任何页面引用,但同样声明了 workbench 模块 —— 同样独立打不开。
+    let mut embedded_only = shell_view("ui/embedded-only.js");
+    embedded_only.id = "embedded-only".into();
+    embedded_only.modules = vec![ShellHostModule::Context, ShellHostModule::Workbench];
+
+    // 真独立工具:context + resource,不经工作台。
+    let mut standalone = shell_view("ui/standalone.js");
+    standalone.id = "standalone-tool".into();
+
+    let mut manifest = shell_manifest();
+    manifest.contributes.shell_views.push(page_body);
+    manifest.contributes.shell_views.push(embedded_only);
+    manifest.contributes.shell_views.push(standalone);
+    // 本用例只关心「页体/嵌入专用视图」的排除,连接一律不挂 shell 视图。
+    let mut connection = resource_connection();
+    connection.shell_view_id = None;
+    manifest.contributes.connections.push(connection);
+
+    let mut workbench = resource_workbench();
+    workbench.pages[0].renderer.kind = ResourceWorkbenchRendererKind::Shell;
+    workbench.pages[0].renderer.view_id = Some("page-body".into());
+    workbench.pages[0].renderer.fallback = Some("native".into());
+    manifest.contributes.resource_workbenches.push(workbench);
+
+    let catalog = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap();
+    let ids: Vec<&str> = catalog
+        .toolbox_views()
+        .iter()
+        .map(|view| view.id.as_str())
+        .collect();
+    assert!(
+        !ids.contains(&"page-body"),
+        "工作台页体不应作为独立工具进工具箱: {ids:?}"
+    );
+    assert!(
+        !ids.contains(&"embedded-only"),
+        "声明 workbench 模块的视图不应进工具箱: {ids:?}"
+    );
+    assert!(
+        ids.contains(&"standalone-tool"),
+        "独立工具仍应进工具箱: {ids:?}"
     );
 }

@@ -156,10 +156,8 @@ mod tests {
             resource_type: "example".into(),
             default_page: "items".into(),
             operations,
-            navigation: vec![],
-            tree: vec![],
+            layout: None,
             pages: vec![],
-            status_bar: None,
         }
     }
 

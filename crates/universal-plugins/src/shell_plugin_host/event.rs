@@ -97,9 +97,10 @@ fn read_event(
                     )
                     .await
                     .map_err(host_error)?;
-                json_to_host(&serde_json::to_value(result).map_err(|e| {
-                    navop_error(ErrorCode::ProtocolError, e.to_string())
-                })?)
+                json_to_host(
+                    &serde_json::to_value(result)
+                        .map_err(|e| navop_error(ErrorCode::ProtocolError, e.to_string()))?,
+                )
             },
             cancel,
         ))

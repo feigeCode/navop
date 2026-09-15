@@ -67,9 +67,8 @@ fn start_job(
                     ));
                 }
                 let state = json_to_host(
-                    &serde_json::to_value(job_state(&job)).map_err(|e| {
-                        navop_error(ErrorCode::ProtocolError, e.to_string())
-                    })?,
+                    &serde_json::to_value(job_state(&job))
+                        .map_err(|e| navop_error(ErrorCode::ProtocolError, e.to_string()))?,
                 )?;
                 let handle = task_session.register_job(alias, &resource, job);
                 Ok(HostObject::new()
@@ -100,9 +99,10 @@ fn status_job(
                     )
                     .await
                     .map_err(host_error)?;
-                json_to_host(&serde_json::to_value(status).map_err(|e| {
-                    navop_error(ErrorCode::ProtocolError, e.to_string())
-                })?)
+                json_to_host(
+                    &serde_json::to_value(status)
+                        .map_err(|e| navop_error(ErrorCode::ProtocolError, e.to_string()))?,
+                )
             },
             cancel,
         ))

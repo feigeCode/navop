@@ -3,6 +3,12 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// 资源工作台贡献(schemaVersion 2)。
+///
+/// v2 用单一 `layout` 声明取代 v1 的 `navigation`/`tree`/`statusBar`/
+/// `pages[].tabs`;区域内容源要么是 native 声明式模板,要么是 JS Shell 视图,
+/// 含整个工作台主体(`layout.renderer`)。规范见
+/// `docs/superpowers/specs/2026-09-14-resource-workbench-layout-v2.md`。
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceWorkbenchContrib {
@@ -19,22 +25,217 @@ pub struct ResourceWorkbenchContrib {
     #[serde(rename = "defaultPage")]
     pub default_page: String,
     pub operations: BTreeMap<String, ResourceWorkbenchOperation>,
+    /// 工作台布局声明;缺省等价 `{left: list, center: pages}`。
     #[serde(default)]
-    pub navigation: Vec<ResourceWorkbenchNavigation>,
-    #[serde(default)]
-    pub tree: Vec<ResourceWorkbenchTree>,
+    pub layout: Option<ResourceWorkbenchLayout>,
     pub pages: Vec<ResourceWorkbenchPage>,
-    /// 工作台底部常驻状态栏声明(如 Engine 状态/资源占用)。
-    #[serde(default, rename = "statusBar")]
-    pub status_bar: Option<ResourceWorkbenchStatusBar>,
 }
 
-/// 工作台底部状态栏:由一个命名操作提供状态数据。
+/// 工作台布局:root Shell 覆盖与四个区域槽。
+///
+/// `renderer` 存在时不得再声明任何区域(注册期校验互斥);
+/// 宿主永不可覆盖部分(连接 Header、session 所有权、权限、任务入口、关闭守卫)
+/// 不在 layout 表达范围内。
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct ResourceWorkbenchStatusBar {
-    /// 提供状态 JSON 的命名操作。
+pub struct ResourceWorkbenchLayout {
+    /// 整个工作台主体交给 JS Shell 视图;无 native fallback。
+    #[serde(default)]
+    pub renderer: Option<ResourceWorkbenchRenderer>,
+    #[serde(default)]
+    pub left: Option<ResourceWorkbenchLeftRegion>,
+    #[serde(default)]
+    pub center: Option<ResourceWorkbenchCenterRegion>,
+    #[serde(default)]
+    pub right: Option<ResourceWorkbenchSideRegion>,
+    #[serde(default)]
+    pub bottom: Option<ResourceWorkbenchBottomRegion>,
+}
+
+/// 左侧导航区域(list/tree/shell/none)。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceWorkbenchLeftRegion {
+    /// 像素宽;缺省 208。
+    #[serde(default)]
+    pub width: Option<u32>,
+    /// 预留;首版不做拖拽调宽。
+    #[serde(default)]
+    pub resizable: bool,
+    pub source: ResourceWorkbenchNavSource,
+}
+
+/// 右侧区域(首版仅 shell/none;DTO 开放 native 演进空间)。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceWorkbenchSideRegion {
+    #[serde(default)]
+    pub width: Option<u32>,
+    #[serde(default)]
+    pub resizable: bool,
+    pub source: ResourceWorkbenchSideSource,
+}
+
+/// 中央区域(pages/shell)。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceWorkbenchCenterRegion {
+    pub source: ResourceWorkbenchCenterSource,
+}
+
+/// 底部区域(status/shell/none)。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceWorkbenchBottomRegion {
+    /// 像素高;缺省 28。
+    #[serde(default)]
+    pub height: Option<u32>,
+    #[serde(default)]
+    pub resizable: bool,
+    pub source: ResourceWorkbenchBottomSource,
+}
+
+/// left/right 区域内容源。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
+pub enum ResourceWorkbenchNavSource {
+    /// 扁平页面列表(v1 `navigation` 的等价物):显式声明条目与顺序。
+    List {
+        items: Vec<ResourceWorkbenchNavEntry>,
+    },
+    /// 树:静态根 + 声明式 lazy children(v1 `tree` 的转正)。
+    Tree {
+        roots: Vec<ResourceWorkbenchTreeRoot>,
+    },
+    Shell(ResourceWorkbenchShellSource),
+    None,
+}
+
+/// 列表导航条目:引用 pages 中的页面 id。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceWorkbenchNavEntry {
+    #[serde(rename = "pageId")]
+    pub page_id: String,
+}
+
+/// right 区域内容源。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
+pub enum ResourceWorkbenchSideSource {
+    Shell(ResourceWorkbenchShellSource),
+    None,
+}
+
+/// center 区域内容源。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
+pub enum ResourceWorkbenchCenterSource {
+    /// 声明式页面区 + 共享 tab 组。
+    Pages {
+        #[serde(default, rename = "tabGroups")]
+        tab_groups: Vec<ResourceWorkbenchTabGroup>,
+    },
+    Shell(ResourceWorkbenchShellSource),
+}
+
+/// bottom 区域内容源。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
+pub enum ResourceWorkbenchBottomSource {
+    /// 单一操作驱动的 items 状态栏。
+    Status {
+        operation: String,
+        items: Vec<ResourceWorkbenchStatusItem>,
+    },
+    Shell(ResourceWorkbenchShellSource),
+    None,
+}
+
+/// Shell 视图源:挂载同扩展 shellViews 中的嵌入视图。
+///
+/// 区域级 fallback 只能 `none`(显示占位空态);root 级(`layout.renderer`)
+/// 无 fallback,viewId 不可用时渲染错误态说明。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceWorkbenchShellSource {
+    #[serde(rename = "viewId")]
+    pub view_id: String,
+    /// 仅接受 `"none"`;缺省即 none。
+    #[serde(default)]
+    pub fallback: Option<String>,
+}
+
+/// 树根节点:静态声明,lazy children 展开时按 operation 拉取。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceWorkbenchTreeRoot {
+    pub id: String,
+    pub title: String,
+    #[serde(rename = "pageId")]
+    pub page_id: String,
+    #[serde(default)]
+    pub children: Option<ResourceWorkbenchTreeChildren>,
+}
+
+/// 子节点拉取声明,可递归嵌套形成多级 lazy 树。
+///
+/// 每一层的 `operation` 参数可用 `parent` 绑定源引用父节点行数据
+/// (如 K8s namespace → pods 传 `{"source": "parent", "path": "/name"}`)。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceWorkbenchTreeChildren {
     pub operation: String,
+    #[serde(rename = "itemsPath")]
+    pub items_path: String,
+    #[serde(rename = "keyPaths")]
+    pub key_paths: Vec<String>,
+    #[serde(rename = "labelPath")]
+    pub label_path: String,
+    /// 子节点点击跳转声明;缺省回退根 pageId + 行数据作 route。
+    #[serde(default)]
+    pub open: Option<ResourceWorkbenchOpen>,
+    /// 下一级子节点声明;缺省为叶子。
+    #[serde(default)]
+    pub children: Option<Box<ResourceWorkbenchTreeChildren>>,
+}
+
+/// 共享 tab 组:组内页面经 `pages[].tabGroupId` 引用,
+/// 取代 v1 每页复制完整 tabs 列表的做法。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceWorkbenchTabGroup {
+    pub id: String,
+    #[serde(default)]
+    pub tabs: Vec<ResourceWorkbenchTab>,
+}
+
+/// 状态栏条目:JSON Pointer 取值 + 声明式格式化。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceWorkbenchStatusItem {
+    pub path: String,
+    /// `pair` 格式要求同时提供 `otherPath`。
+    #[serde(default, rename = "otherPath")]
+    pub other_path: Option<String>,
+    pub label: String,
+    #[serde(default)]
+    pub format: ResourceWorkbenchStatusFormat,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ResourceWorkbenchStatusFormat {
+    #[default]
+    Raw,
+    Number,
+    Bytes,
+    Percent,
+    Version,
+    /// 绿/红状态点 + label。
+    BooleanUp,
+    /// `x/y`,需配 `otherPath`。
+    Pair,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -85,6 +286,8 @@ pub enum ResourceWorkbenchBindingSource {
     Route,
     Selection,
     Paging,
+    /// 树 lazy 展开时的父节点行数据;非树上下文下为空。
+    Parent,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -98,41 +301,14 @@ pub enum ResourceWorkbenchValueType {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct ResourceWorkbenchNavigation {
-    #[serde(rename = "pageId")]
-    pub page_id: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct ResourceWorkbenchTree {
-    pub id: String,
-    pub title: String,
-    #[serde(rename = "pageId")]
-    pub page_id: String,
-    #[serde(default)]
-    pub children: Option<ResourceWorkbenchTreeChildren>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct ResourceWorkbenchTreeChildren {
-    pub operation: String,
-    #[serde(rename = "itemsPath")]
-    pub items_path: String,
-    #[serde(rename = "keyPaths")]
-    pub key_paths: Vec<String>,
-    #[serde(rename = "labelPath")]
-    pub label_path: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct ResourceWorkbenchPage {
     pub id: String,
     pub title: String,
     pub template: ResourceWorkbenchTemplate,
     pub renderer: ResourceWorkbenchRenderer,
+    /// 所属 tab 组(layout.center.tabGroups 中声明);缺省无 strip。
+    #[serde(default, rename = "tabGroupId")]
+    pub tab_group_id: Option<String>,
     #[serde(default)]
     pub load: Option<ResourceWorkbenchAction>,
     #[serde(default)]
@@ -146,10 +322,6 @@ pub struct ResourceWorkbenchPage {
     /// terminal 模板页面的终端声明。
     #[serde(default)]
     pub terminal: Option<ResourceWorkbenchTerminal>,
-    /// 页面 tab 条声明:同一 tab 组的每个页面都声明完整列表,
-    /// 渲染时按 `pageId == 当前页 id` 高亮当前项。
-    #[serde(default)]
-    pub tabs: Vec<ResourceWorkbenchTab>,
     /// detail/query 页面的路由参数声明(如 {"name": {"type": "string", "required": true}})。
     #[serde(default)]
     pub route: Option<BTreeMap<String, ResourceWorkbenchRouteParam>>,
@@ -281,7 +453,17 @@ pub struct ResourceWorkbenchOpen {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceWorkbenchPagination {
-    pub kind: String,
+    pub kind: ResourceWorkbenchPaginationKind,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ResourceWorkbenchPaginationKind {
+    None,
+    /// page/limit 页码式。
+    Page,
+    /// nextCursor 游标式。
+    Cursor,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -292,20 +474,32 @@ pub struct ResourceWorkbenchColumn {
     pub path: String,
     #[serde(rename = "type")]
     pub value_type: String,
-    /// 可选渲染样式:`badge` 按值渲染状态徽章(如容器 state)。
     #[serde(default)]
-    pub style: Option<String>,
+    pub style: ResourceWorkbenchColumnStyle,
 }
 
-/// query 页面的输入字段。`editor` 取值:`text`(默认)/`textarea`/`password`/
-/// `number`/`select`/`checkbox`;`select` 需配 `options`,`checkbox` 提交 "true"/"false"。
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ResourceWorkbenchColumnStyle {
+    #[default]
+    Plain,
+    /// 状态徽章(如容器 state)。
+    Badge,
+    /// 等宽(id、镜像名、路径)。
+    Mono,
+    /// 次要文本(时间、描述)。
+    Muted,
+}
+
+/// query 页面的输入字段。`select` 需配 `options`,`checkbox` 提交 "true"/"false"。
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceWorkbenchInput {
     pub id: String,
     #[serde(rename = "type")]
     pub value_type: String,
-    pub editor: String,
+    #[serde(default)]
+    pub editor: ResourceWorkbenchInputEditor,
     #[serde(default)]
     pub default: Option<String>,
     #[serde(default)]
@@ -324,6 +518,18 @@ pub struct ResourceWorkbenchInput {
     /// `textarea` 行数;缺省 4。
     #[serde(default)]
     pub rows: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ResourceWorkbenchInputEditor {
+    #[default]
+    Text,
+    Textarea,
+    Password,
+    Number,
+    Select,
+    Checkbox,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]

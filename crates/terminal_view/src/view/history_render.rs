@@ -116,9 +116,7 @@ impl TerminalView {
                                                 move |_, _, cx| {
                                                     cx.stop_propagation();
                                                     view.update(cx, |this, cx| {
-                                                        this.select_history_prompt_match(
-                                                            index, cx,
-                                                        );
+                                                        this.select_history_prompt_match(index, cx);
                                                     });
                                                 }
                                             })

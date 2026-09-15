@@ -147,7 +147,10 @@ impl ShellMountSession {
             .resources
             .lock()
             .map_err(|_| {
-                navop_error(ErrorCode::RuntimeUnavailable, "shell resource registry poisoned")
+                navop_error(
+                    ErrorCode::RuntimeUnavailable,
+                    "shell resource registry poisoned",
+                )
             })?
             .get(handle)
             .cloned()
@@ -385,7 +388,10 @@ impl ShellMountSession {
         let record = registry
             .lock()
             .map_err(|_| {
-                navop_error(ErrorCode::RuntimeUnavailable, "shell handle registry poisoned")
+                navop_error(
+                    ErrorCode::RuntimeUnavailable,
+                    "shell handle registry poisoned",
+                )
             })?
             .get(handle)
             .cloned()

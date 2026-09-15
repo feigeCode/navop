@@ -8,7 +8,11 @@ use extension_protocol::resource::{
 use gpui_shell::{HostAsyncTask, HostError, HostModule, HostValue};
 
 use self::task::{host_error, spawn_provider_task};
-use super::{error::{ErrorCode, navop_error}, session::ShellMountSession, value::host_to_json};
+use super::{
+    error::{ErrorCode, navop_error},
+    session::ShellMountSession,
+    value::host_to_json,
+};
 
 pub(super) fn resource_module(session: Arc<ShellMountSession>) -> HostModule {
     HostModule::new("navop.resource")

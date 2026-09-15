@@ -1770,8 +1770,8 @@ mod tests {
             "浮层连接树仅应在自动隐藏开启时渲染，避免遮挡终端"
         );
         assert!(
-            render.contains("sidebar_expanded && !auto_hide_tree"),
-            "非自动隐藏时应渲染并排的分割面板"
+            render.contains("sidebar_expanded && (!auto_hide_tree || home_has_navigation_sidebar)"),
+            "非自动隐藏或全局导航布局时应渲染并排的分割面板"
         );
     }
 

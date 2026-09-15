@@ -14,15 +14,14 @@ pub(super) fn host_to_json(value: &HostValue) -> Result<serde_json::Value, HostE
             // JS 数字统一是 f64,但 JSON 语义下整数值必须序列化为整数
             // (等价于 JSON.stringify(49.0) === "49"),否则字节体 `[49,49]`
             // 会变成 `[49.0,49.0]`,对端 `Vec<u8>` 反序列化报 "invalid number"。
-            if value.is_finite()
-                && value.fract() == 0.0
-                && value.abs() <= MAX_SAFE_INTEGER as f64
-            {
+            if value.is_finite() && value.fract() == 0.0 && value.abs() <= MAX_SAFE_INTEGER as f64 {
                 serde_json::Value::Number(serde_json::Number::from(*value as i64))
             } else {
                 serde_json::Number::from_f64(*value)
                     .map(serde_json::Value::Number)
-                    .ok_or_else(|| navop_error(ErrorCode::InvalidArgument, "number is not finite"))?
+                    .ok_or_else(|| {
+                        navop_error(ErrorCode::InvalidArgument, "number is not finite")
+                    })?
             }
         }
         HostValue::Str(value) => serde_json::Value::String(value.clone()),
@@ -95,15 +94,16 @@ fn tagged_number_to_json(value: &HostValue) -> Result<Option<serde_json::Value>,
                 "tagged number requires a string value",
             )
         })?;
-    let number = match kind {
-        "i64" => serde_json::Number::from(text.parse::<i64>().map_err(|_| {
-            navop_error(ErrorCode::InvalidArgument, "invalid tagged i64 value")
-        })?),
-        "u64" => serde_json::Number::from(text.parse::<u64>().map_err(|_| {
-            navop_error(ErrorCode::InvalidArgument, "invalid tagged u64 value")
-        })?),
-        _ => return Ok(None),
-    };
+    let number =
+        match kind {
+            "i64" => serde_json::Number::from(text.parse::<i64>().map_err(|_| {
+                navop_error(ErrorCode::InvalidArgument, "invalid tagged i64 value")
+            })?),
+            "u64" => serde_json::Number::from(text.parse::<u64>().map_err(|_| {
+                navop_error(ErrorCode::InvalidArgument, "invalid tagged u64 value")
+            })?),
+            _ => return Ok(None),
+        };
     Ok(Some(serde_json::Value::Number(number)))
 }
 

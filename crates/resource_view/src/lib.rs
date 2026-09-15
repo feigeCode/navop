@@ -6,9 +6,17 @@
 
 mod collection_table;
 pub mod custom_page_host;
+pub mod layout;
+mod message_event;
+mod nav_tree;
 pub mod query_page;
 pub mod route_binding;
 pub mod terminal_host;
+
+pub use layout::{
+    BottomContent, CenterContent, NavContent, RegionId, ResolvedLayout, ResolvedTreeRoot,
+    SideContent, TreeChildRow,
+};
 
 pub use custom_page_host::{
     CustomPageHost, DirtyGuardDecision, GlobalCustomPageHost, MountHandle, PageRenderer,
@@ -26,7 +34,10 @@ use extension_plugin_adapter::{
     dispatch_job_scoped as dispatch_job,
 };
 use extension_runtime::RegisteredResourceWorkbenchContribution;
-use extension_runtime::extension::manifest::{ResourceWorkbenchPage, ResourceWorkbenchTemplate};
+use extension_runtime::extension::manifest::{
+    ResourceWorkbenchPage, ResourceWorkbenchPaginationKind, ResourceWorkbenchStatusFormat as F,
+    ResourceWorkbenchTemplate,
+};
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement, IntoElement, ParentElement, Render, SharedString,
@@ -41,9 +52,11 @@ use gpui_component::{
     tag::Tag,
     v_flex,
 };
+use message_event::MessageEvent;
+use nav_tree::TreeChildrenState;
 
 struct ActiveShellMount {
-    page_id: String,
+    key: String,
     host: std::rc::Rc<dyn CustomPageHost>,
     mount: ShellPageMount,
 }
@@ -93,9 +106,16 @@ struct CollectionTableView {
 /// 挂载计数器,用于丢弃迟到结果(旧页面/旧请求的返回不得覆盖新状态)。
 static NEXT_MOUNT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
+/// events 页单帧最多渲染的事件行数。
+///
+/// 保留缓冲可以到 1000 条(`MAX_RETAINED_EVENTS`),但一帧渲染 1000 行会拖慢
+/// 高频事件流(每秒数次通知)的重绘;最近的 500 条对「盯实时」已经足够。
+const MAX_RENDERED_EVENTS: usize = 500;
+
 pub struct NativeResourceWorkbench {
     descriptor: RegisteredResourceWorkbenchContribution,
     session: ResourceSessionHandle,
+    layout: ResolvedLayout,
     selected_page: String,
     route: serde_json::Value,
     paging: serde_json::Value,
@@ -119,6 +139,10 @@ pub struct NativeResourceWorkbench {
     /// collection 页表格缓存。
     collection_table: Option<CollectionTableView>,
     shell_mount: Option<ActiveShellMount>,
+    /// 区域级 Shell 挂载(right/bottom 等常驻区域,按 RegionId 缓存)。
+    region_shell_mounts: std::collections::BTreeMap<&'static str, ActiveShellMount>,
+    /// 左侧树状态:节点键(根 id / 父键+行键)→ 展开数据。
+    tree_children: std::collections::BTreeMap<String, TreeChildrenState>,
     /// terminal 模板页面已挂载的终端。
     terminal_mount: Option<ActiveTerminalMount>,
     terminal_error: Option<String>,
@@ -167,9 +191,11 @@ impl NativeResourceWorkbench {
         cx: &mut Context<Self>,
     ) -> Self {
         let selected_page = descriptor.default_page.clone();
+        let layout = ResolvedLayout::resolve(&descriptor);
         let mut this = Self {
             descriptor,
             session,
+            layout,
             selected_page,
             route: serde_json::Value::Null,
             paging: serde_json::json!({"page": 1, "limit": 50, "cursor": null}),
@@ -186,6 +212,8 @@ impl NativeResourceWorkbench {
             row_action_error: None,
             collection_table: None,
             shell_mount: None,
+            region_shell_mounts: Default::default(),
+            tree_children: Default::default(),
             terminal_mount: None,
             terminal_error: None,
             terminal_return: None,
@@ -201,7 +229,7 @@ impl NativeResourceWorkbench {
             _subscriptions: Vec::new(),
         };
         this._subscriptions
-            .push(cx.on_release(|this, cx| this.dispose_shell_mount(cx)));
+            .push(cx.on_release(|this, cx| this.dispose_all_shell_mounts(cx)));
         this._subscriptions
             .push(cx.on_release(|this, cx| this.dispose_terminal_mount(cx)));
         this._subscriptions.push(cx.on_release(|this, _cx| {
@@ -233,7 +261,7 @@ impl NativeResourceWorkbench {
         (page.template == ResourceWorkbenchTemplate::Collection)
             .then(|| page.collection.as_ref())
             .flatten()
-            .filter(|collection| collection.pagination.kind != "none")
+            .filter(|collection| collection.pagination.kind != ResourceWorkbenchPaginationKind::None)
             .and_then(|_| self.paging.get("page").and_then(serde_json::Value::as_u64))
     }
 
@@ -242,7 +270,7 @@ impl NativeResourceWorkbench {
         let collection = (page.template == ResourceWorkbenchTemplate::Collection)
             .then(|| page.collection.as_ref())
             .flatten()?;
-        if collection.pagination.kind != "cursor" {
+        if collection.pagination.kind != ResourceWorkbenchPaginationKind::Cursor {
             return None;
         }
         self.paging
@@ -270,7 +298,7 @@ impl NativeResourceWorkbench {
             || page
                 .collection
                 .as_ref()
-                .is_some_and(|collection| collection.pagination.kind == "cursor");
+                .is_some_and(|collection| collection.pagination.kind == ResourceWorkbenchPaginationKind::Cursor);
         let existing_cursor = self.paging.get("cursor").cloned();
         if let Some(object) = self.paging.as_object_mut() {
             object.insert("page".into(), serde_json::json!(next));
@@ -293,7 +321,7 @@ impl NativeResourceWorkbench {
         if page
             .collection
             .as_ref()
-            .is_none_or(|collection| collection.pagination.kind != "cursor")
+            .is_none_or(|collection| collection.pagination.kind != ResourceWorkbenchPaginationKind::Cursor)
         {
             return;
         }
@@ -396,11 +424,20 @@ impl NativeResourceWorkbench {
             .find(|page| page.id == self.selected_page)
     }
 
+    /// 回收页面级 Shell 挂载;区域级挂载(右侧栏等)跨页面常驻。
     fn dispose_shell_mount(&mut self, cx: &mut App) {
         if let Some(active) = self.shell_mount.take() {
             active.host.dispose(active.mount, cx);
         }
         self.renderer_error = None;
+    }
+
+    /// 回收全部 Shell 挂载(页面级 + 区域级);仅工作台销毁时调用。
+    fn dispose_all_shell_mounts(&mut self, cx: &mut App) {
+        self.dispose_shell_mount(cx);
+        for (_, active) in std::mem::take(&mut self.region_shell_mounts) {
+            active.host.dispose(active.mount, cx);
+        }
     }
 
     /// 回收终端页面挂载:只释放终端实体,不触碰连接主会话。
@@ -483,20 +520,16 @@ impl NativeResourceWorkbench {
         }
     }
 
-    /// 拉取底部状态栏数据(statusBar.operation)。
+    /// 拉取底部状态栏数据(bottom status source 的 operation)。
     fn load_status_bar(&mut self, cx: &mut Context<Self>) {
-        let Some(status_bar) = self.descriptor.status_bar.clone() else {
+        let Some(BottomContent::Status { operation, .. }) =
+            self.layout.bottom.as_ref().map(|bottom| &bottom.content)
+        else {
             return;
         };
-        if !self
-            .descriptor
-            .operations
-            .contains_key(&status_bar.operation)
-        {
-            self.status_bar = Some(Err(format!(
-                "unknown status operation `{}`",
-                status_bar.operation
-            )));
+        let operation = operation.clone();
+        if !self.descriptor.operations.contains_key(&operation) {
+            self.status_bar = Some(Err(format!("unknown status operation `{operation}`")));
             cx.notify();
             return;
         }
@@ -511,8 +544,8 @@ impl NativeResourceWorkbench {
             route: serde_json::Value::Null,
             selection: serde_json::Value::Null,
             paging: serde_json::json!({"page": 1, "limit": 50, "cursor": null}),
+            parent: serde_json::Value::Null,
         };
-        let operation = status_bar.operation;
         self.active_request_cancel = Some(scope.cancellation());
         let tokio = self.tokio.clone();
         cx.spawn(async move |this, cx| {
@@ -540,8 +573,9 @@ impl NativeResourceWorkbench {
         window: &mut Window,
         cx: &mut App,
     ) -> Option<gpui::AnyView> {
+        let key = format!("page::{}", page.id);
         if let Some(active) = &self.shell_mount {
-            if active.page_id == page.id {
+            if active.key == key {
                 return Some(active.mount.view.clone());
             }
         }
@@ -565,11 +599,7 @@ impl NativeResourceWorkbench {
         match host.mount(request, window, cx) {
             Ok(mount) => {
                 let view = mount.view.clone();
-                self.shell_mount = Some(ActiveShellMount {
-                    page_id: page.id.clone(),
-                    host,
-                    mount,
-                });
+                self.shell_mount = Some(ActiveShellMount { key, host, mount });
                 Some(view)
             }
             Err(error) => {
@@ -577,6 +607,46 @@ impl NativeResourceWorkbench {
                 None
             }
         }
+    }
+
+    /// 区域级 Shell 挂载(right/bottom/left/center 的 shell source):
+    /// 按 RegionId 常驻缓存,页面导航不重挂;上下文带 regionId。
+    fn mount_region_shell(
+        &mut self,
+        region: RegionId,
+        view_id: &str,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<gpui::AnyView> {
+        let key = region.as_str();
+        if let Some(active) = self.region_shell_mounts.get(key) {
+            return Some(active.mount.view.clone());
+        }
+        let host = custom_page_host(cx)?;
+        let request = ShellPageMountRequest {
+            extension_id: self.descriptor.extension_id.clone(),
+            view_id: view_id.to_string(),
+            page_context: serde_json::json!({
+                "regionId": region.as_str(),
+                "pageId": self.selected_page,
+                "route": self.route,
+                "capabilities": self.session.capabilities(),
+            }),
+            resource_type: self.descriptor.resource_type.clone(),
+            session: Some(self.session.clone()),
+            workbench: self.descriptor.clone(),
+        };
+        let mount = host.mount(request, window, cx).ok()?;
+        let view = mount.view.clone();
+        self.region_shell_mounts.insert(
+            key,
+            ActiveShellMount {
+                key: key.to_string(),
+                host,
+                mount,
+            },
+        );
+        Some(view)
     }
 
     /// 触发当前页面的 load 操作。tasks 页面读宿主任务,不发 provider 请求。
@@ -614,6 +684,7 @@ impl NativeResourceWorkbench {
             route: self.route.clone(),
             selection: serde_json::Value::Null,
             paging: self.paging_context(),
+            parent: serde_json::Value::Null,
         };
         let operation = action.operation;
         let tokio = self.tokio.clone();
@@ -622,15 +693,26 @@ impl NativeResourceWorkbench {
             let this = cx.entity().downgrade();
             let workbench_for_event = workbench.clone();
             let context_for_event = context.clone();
+            // provider dispatch 必须落在应用 Tokio runtime 上:直接在这里 await
+            // 会让 client 内部的 tokio::time::timeout 在 GPUI foreground executor
+            // 上构造 Sleep 而 panic("no reactor running")。
+            let dispatch_scope = this_scope.clone();
             cx.spawn(async move |_, cx| {
-                let result = dispatch_invoke_result_scoped(
-                    &this_scope,
-                    &workbench_for_event,
-                    &operation,
-                    &context_for_event,
-                    false,
-                )
-                .await;
+                let result = tokio
+                    .spawn(async move {
+                        dispatch_invoke_result_scoped(
+                            &dispatch_scope,
+                            &workbench_for_event,
+                            &operation,
+                            &context_for_event,
+                            false,
+                        )
+                        .await
+                    })
+                    .await
+                    .unwrap_or_else(|join_error| {
+                        Err(WorkbenchDispatchError::Provider(join_error.to_string()))
+                    });
                 let stream_id = match result {
                     Ok(extension_protocol::resource::ResourceInvokeResult {
                         result: extension_protocol::result_ref::ResultRef::EventStream { id },
@@ -656,10 +738,28 @@ impl NativeResourceWorkbench {
                     }
                 };
                 let stream = extension_protocol::event_stream::EventOpenResult { stream_id };
-                let mut subscription = this_scope.subscribe_events(
-                    &stream,
-                    extension_plugin_adapter::EventStreamSubscriptionConfig::default(),
-                );
+                // subscribe_events 内部 tokio::spawn 出 pull loop,同样必须在应用
+                // Tokio runtime 上调用,否则 spawn 会在 GPUI foreground 上 panic。
+                let subscribe_scope = this_scope.clone();
+                let subscription = tokio
+                    .spawn(async move {
+                        subscribe_scope.subscribe_events(
+                            &stream,
+                            extension_plugin_adapter::EventStreamSubscriptionConfig::default(),
+                        )
+                    })
+                    .await;
+                let mut subscription = match subscription {
+                    Ok(subscription) => subscription,
+                    Err(join_error) => {
+                        let _ = this.update(cx, |this, cx| {
+                            this.event_error = Some(join_error.to_string());
+                            this.page_state = PageState::Failed(join_error.to_string());
+                            cx.notify();
+                        });
+                        return;
+                    }
+                };
                 while let Some(batch) = subscription.recv().await {
                     let _ = this.update(cx, |this, cx| {
                         match batch {
@@ -824,6 +924,7 @@ impl NativeResourceWorkbench {
             route: self.route.clone(),
             selection: serde_json::Value::Null,
             paging: self.paging_context(),
+            parent: serde_json::Value::Null,
         };
         let tokio = self.tokio.clone();
         cx.spawn(async move |this, cx| {
@@ -913,6 +1014,7 @@ impl NativeResourceWorkbench {
             route: self.route.clone(),
             selection: row,
             paging: self.paging_context(),
+            parent: serde_json::Value::Null,
         };
         let tokio = self.tokio.clone();
         cx.spawn(async move |this, cx| {
@@ -946,71 +1048,97 @@ impl NativeResourceWorkbench {
         .detach();
     }
 
-    /// 左侧页面导航:主题化的侧栏 + 选中态。
-    fn render_nav(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let selected = self.selected_page.clone();
+    /// 左侧导航区域:按 layout.left 内容源分派(list/tree/shell/none)。
+    fn render_nav(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let region = self.layout.left.clone()?;
+        let width = region.width;
         let theme = cx.theme().clone();
-        let entries = self.descriptor.navigation.iter().filter_map(|item| {
-            self.descriptor
-                .pages
-                .iter()
-                .find(|page| page.id == item.page_id)
-                .map(|page| (page.id.clone(), page.title.clone()))
-        });
-        let mut list = v_flex().w_full().gap_0p5();
-        for (page_id, title) in entries {
-            let is_selected = page_id == selected;
-            let target = page_id.clone();
-            list = list.child(
-                h_flex()
-                    .id(page_id)
-                    .w_full()
-                    .min_w_0()
-                    .px_2()
-                    .py_1()
-                    .rounded(theme.radius)
-                    .cursor_pointer()
-                    .text_sm()
-                    .text_color(if is_selected {
-                        theme.sidebar_accent_foreground
-                    } else {
-                        theme.sidebar_foreground
-                    })
-                    .when(is_selected, |this| {
-                        this.bg(theme.sidebar_accent).font_medium()
-                    })
-                    .when(!is_selected, |this| {
-                        let hover = theme.list_hover;
-                        this.hover(move |this| this.bg(hover))
-                    })
-                    .child(div().min_w_0().truncate().child(title))
-                    .on_click(cx.listener(
-                        move |this: &mut Self, _event: &gpui::ClickEvent, _window, cx| {
-                            this.select_page(target.clone(), cx);
-                        },
-                    )),
-            );
+        let frame = |list: gpui::Div| {
+            list.w(px(width as f32))
+                .h_full()
+                .flex_shrink_0()
+                .gap_1()
+                .px_2()
+                .py_3()
+                .bg(theme.sidebar)
+                .border_r_1()
+                .border_color(theme.sidebar_border)
+                .child(
+                    div()
+                        .px_2()
+                        .pb_1()
+                        .text_xs()
+                        .font_medium()
+                        .text_color(theme.muted_foreground)
+                        .child("Pages"),
+                )
+        };
+        match &region.content {
+            NavContent::List { entries } => {
+                let mut list = v_flex().w_full().gap_0p5();
+                for (page_id, title) in entries {
+                    let is_selected = page_id == &self.selected_page;
+                    let page_id = page_id.clone();
+                    list = list.child(
+                        h_flex()
+                            .id(page_id.clone())
+                            .w_full()
+                            .min_w_0()
+                            .px_2()
+                            .py_1()
+                            .rounded(theme.radius)
+                            .cursor_pointer()
+                            .text_sm()
+                            .text_color(if is_selected {
+                                theme.sidebar_accent_foreground
+                            } else {
+                                theme.sidebar_foreground
+                            })
+                            .when(is_selected, |this| {
+                                this.bg(theme.sidebar_accent).font_medium()
+                            })
+                            .when(!is_selected, |this| {
+                                let hover = theme.list_hover;
+                                this.hover(move |this| this.bg(hover))
+                            })
+                            .child(div().min_w_0().truncate().child(title.clone()))
+                            .on_click(cx.listener(
+                                move |this: &mut Self, _event: &gpui::ClickEvent, _window, cx| {
+                                    this.select_page(page_id.clone(), cx);
+                                },
+                            )),
+                    );
+                }
+                Some(frame(v_flex()).child(list).into_any_element())
+            }
+            NavContent::Tree { .. } => {
+                let tree = self.render_nav_tree(cx);
+                Some(frame(v_flex()).child(tree).into_any_element())
+            }
+            NavContent::Shell { view_id } => {
+                let view = self.mount_region_shell(RegionId::Left, view_id, window, cx)?;
+                Some(
+                    v_flex()
+                        .w(px(region.width as f32))
+                        .h_full()
+                        .flex_shrink_0()
+                        .overflow_hidden()
+                        .bg(theme.sidebar)
+                        .border_r_1()
+                        .border_color(theme.sidebar_border)
+                        .child(
+                            div()
+                                .id("nav-shell-region")
+                                .size_full()
+                                .min_w_0()
+                                .min_h_0()
+                                .child(view),
+                        )
+                        .into_any_element(),
+                )
+            }
+            NavContent::None => None,
         }
-        v_flex()
-            .w(px(208.))
-            .h_full()
-            .flex_shrink_0()
-            .gap_1()
-            .px_2()
-            .py_3()
-            .bg(theme.sidebar)
-            .border_r_1()
-            .border_color(theme.sidebar_border)
-            .child(
-                div()
-                    .px_2()
-                    .pb_1()
-                    .text_xs()
-                    .font_medium()
-                    .text_color(theme.muted_foreground)
-                    .child("Pages"),
-            )
-            .child(list)
     }
 
     fn render_page(
@@ -1108,7 +1236,7 @@ impl NativeResourceWorkbench {
                 None => page
                     .collection
                     .as_ref()
-                    .is_some_and(|collection| collection.pagination.kind != "cursor"),
+                    .is_some_and(|collection| collection.pagination.kind != ResourceWorkbenchPaginationKind::Cursor),
             };
             toolbar = toolbar
                 .child(
@@ -1310,14 +1438,15 @@ impl NativeResourceWorkbench {
     }
 
     /// 页面 tab 条:Docker Desktop 式下划线标签,当前页高亮。
-    /// 只有声明了 `tabs` 的页面才有;每个页面声明完整 tab 列表,
-    /// 渲染时按 `pageId == 当前页 id` 判定选中项。
+    /// tabs 来自 layout.center.tabGroups 中当前页所属的组(v2:组只声明
+    /// 一份,页面经 `tabGroupId` 引用),渲染时按 `pageId == 当前页 id` 判定选中。
     fn render_tab_strip(
         &self,
         page: &ResourceWorkbenchPage,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        if page.tabs.is_empty() {
+        let tabs = self.layout.tab_group_for(page)?;
+        if tabs.is_empty() {
             return None;
         }
         let theme = cx.theme().clone();
@@ -1330,7 +1459,7 @@ impl NativeResourceWorkbench {
             .px_4()
             .border_b_1()
             .border_color(theme.border);
-        for tab in &page.tabs {
+        for tab in tabs {
             let active = tab.page_id == page.id;
             let target = tab.page_id.clone();
             let route =
@@ -1475,24 +1604,19 @@ impl NativeResourceWorkbench {
             .into_any_element()
     }
 
-    /// 底部状态栏:engine 状态 + 资源计数 + 磁盘/容器占用。
-    /// 未声明 `statusBar` 的工作台不渲染。
+    /// 底部状态栏:bottom status source 的 items 声明驱动,
+    /// 数据由单一 operation 提供(纯 JSON Pointer 投影,无业务字段硬编码)。
     fn render_status_bar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        self.descriptor.status_bar.as_ref()?;
+        let region = self.layout.bottom.as_ref()?;
+        let BottomContent::Status { items, .. } = &region.content else {
+            return None;
+        };
         let theme = cx.theme().clone();
         let value = match &self.status_bar {
             Some(Ok(value)) => Some(value),
             _ => None,
         };
-        let number = |key: &str| {
-            value
-                .and_then(|value| value.get(key))
-                .and_then(serde_json::Value::as_i64)
-        };
-        let engine_ok = value
-            .and_then(|value| value.get("engine"))
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
+        let lookup = |path: &str| value.and_then(|value| value.pointer(path));
 
         let mut bar = h_flex()
             .w_full()
@@ -1500,71 +1624,76 @@ impl NativeResourceWorkbench {
             .items_center()
             .gap_3()
             .px_4()
-            .py_1p5()
             .border_t_1()
             .border_color(theme.border)
             .text_xs()
             .text_color(theme.muted_foreground);
 
-        // 左:引擎状态指示点 + 文案。
-        let dot_color = if engine_ok {
-            theme.success
-        } else {
-            theme.danger
-        };
-        bar = bar
-            .child(div().size(px(8.)).rounded_full().bg(dot_color))
-            .child(div().text_color(theme.foreground).child(if engine_ok {
-                "Engine running"
-            } else {
-                "Engine unavailable"
-            }));
-        if let Some(version) = value
-            .and_then(|value| value.get("server_version"))
-            .and_then(serde_json::Value::as_str)
-        {
-            bar = bar.child(div().child(format!("v{version}")));
+        for item in items {
+            let raw = lookup(&item.path);
+            let text = match item.format {
+                F::Bytes => raw
+                    .and_then(serde_json::Value::as_i64)
+                    .map(format_bytes)
+                    .unwrap_or_else(|| "-".into()),
+                F::Percent => raw
+                    .and_then(serde_json::Value::as_f64)
+                    .map(|value| format!("{value:.2}%"))
+                    .unwrap_or_else(|| "-".into()),
+                F::Number => raw
+                    .map(|value| match value {
+                        serde_json::Value::Number(number) => number.to_string(),
+                        other => plain_text(other),
+                    })
+                    .unwrap_or_else(|| "-".into()),
+                F::Version => raw
+                    .and_then(serde_json::Value::as_str)
+                    .map(|version| format!("v{version}"))
+                    .unwrap_or_default(),
+                F::Pair => {
+                    let current = raw.and_then(serde_json::Value::as_i64).unwrap_or_default();
+                    let other = item
+                        .other_path
+                        .as_deref()
+                        .and_then(lookup)
+                        .and_then(serde_json::Value::as_i64)
+                        .unwrap_or_default();
+                    format!("{current}/{other}")
+                }
+                F::BooleanUp => {
+                    let up = raw.and_then(serde_json::Value::as_bool).unwrap_or(false);
+                    let dot = if up { theme.success } else { theme.danger };
+                    bar = bar.child(div().size(px(8.)).rounded_full().bg(dot)).child(
+                        div()
+                            .text_color(if up { theme.foreground } else { theme.danger })
+                            .child(format!(
+                                "{} {}",
+                                item.label,
+                                if up { "running" } else { "unavailable" }
+                            )),
+                    );
+                    continue;
+                }
+                F::Raw => raw.map(plain_text).unwrap_or_default(),
+            };
+            if text.is_empty() {
+                continue;
+            }
+            bar = bar.child(
+                h_flex()
+                    .gap_1()
+                    .child(div().child(item.label.clone()))
+                    .child(div().text_color(theme.foreground).child(text)),
+            );
         }
 
-        // 中:资源计数与占用。数据未就绪时只显示加载提示。
         bar = bar.child(div().flex_1());
         if let Some(error) = match &self.status_bar {
             Some(Err(error)) => Some(error.clone()),
             _ => None,
         } {
             bar = bar.child(div().text_color(theme.danger).child(error));
-        } else if let Some(value) = value {
-            let containers_running = number("containers_running").unwrap_or(0);
-            let containers_total = number("containers_total").unwrap_or(0);
-            let images = number("images").unwrap_or(0);
-            let volumes = number("volumes").unwrap_or(0);
-            let networks = number("networks").unwrap_or(0);
-            let disk = number("disk_used_bytes").unwrap_or(0);
-            let memory = number("containers_memory_bytes").unwrap_or(0);
-            let cpu = value
-                .get("containers_cpu_percent")
-                .and_then(serde_json::Value::as_f64)
-                .unwrap_or(0.0);
-            for (label, text) in [
-                (
-                    "Containers",
-                    format!("{containers_running}/{containers_total}"),
-                ),
-                ("Images", images.to_string()),
-                ("Volumes", volumes.to_string()),
-                ("Networks", networks.to_string()),
-                ("Disk", format_bytes(disk)),
-                ("RAM", format_bytes(memory)),
-                ("CPU", format!("{cpu:.2}%")),
-            ] {
-                bar = bar.child(
-                    h_flex()
-                        .gap_1()
-                        .child(div().child(label))
-                        .child(div().text_color(theme.foreground).child(text)),
-                );
-            }
-        } else {
+        } else if value.is_none() {
             bar = bar.child(div().child("Loading usage…"));
         }
 
@@ -1947,6 +2076,13 @@ impl NativeResourceWorkbench {
                     .child(page.title.clone()),
             )
             .child(div().flex_1());
+        if !self.event_batches.is_empty() {
+            header = header.child(
+                Tag::secondary()
+                    .with_size(Size::Small)
+                    .child(format!("{} events", self.event_batches.len())),
+            );
+        }
         if self.event_dropped > 0 {
             header = header.child(
                 Tag::secondary()
@@ -1987,6 +2123,10 @@ impl NativeResourceWorkbench {
             .min_h_0()
             .bg(theme.background)
             .child(header);
+        // 实时页与原生/Shell 页共用同一套 tab 条:切到发布/订阅时导航不会突然消失。
+        if let Some(strip) = self.render_tab_strip(page, cx) {
+            view = view.child(strip);
+        }
         if let Some(error) = self.event_error.clone() {
             view = view.child(h_flex().w_full().px_4().py_2().child(alert_bar(
                 AlertTone::Danger,
@@ -2004,9 +2144,18 @@ impl NativeResourceWorkbench {
             )
         } else {
             let mut list = v_flex().w_full();
-            for (index, event) in self.event_batches.iter().rev().take(500).enumerate() {
-                list = list.child(
-                    div()
+            for (index, event) in self
+                .event_batches
+                .iter()
+                .rev()
+                .take(MAX_RENDERED_EVENTS)
+                .enumerate()
+            {
+                // 中间件消息模型渲染成可读行;其余事件(如运维事件)回落原始 JSON,
+                // 保证 events 模板对任意扩展都可用。
+                list = list.child(match MessageEvent::parse(event) {
+                    Some(message) => message_event_row(&message, index, &theme),
+                    None => div()
                         .id(("event-row", index))
                         .w_full()
                         .min_w_0()
@@ -2016,8 +2165,9 @@ impl NativeResourceWorkbench {
                         .border_color(theme.table_row_border)
                         .font_family(theme.mono_font_family.clone())
                         .text_xs()
-                        .child(plain_text(event)),
-                );
+                        .child(plain_text(event))
+                        .into_any_element(),
+                });
             }
             list.into_any_element()
         };
@@ -2136,6 +2286,103 @@ fn plain_text(value: &serde_json::Value) -> String {
         serde_json::Value::Null => "-".into(),
         other => other.to_string(),
     }
+}
+
+/// 一条实时消息事件的紧凑两行视图。
+///
+/// 首行:topic + QoS/Retain 徽章 + 右对齐的时间与消息 ID;
+/// 次行:消息体(单行截断)。
+///
+/// 消息体**截断而不换行**:events 列表是持续追加的流,长 JSON 体换行会把列表
+/// 冲散、并让滚动位置频繁跳变;要看完整内容用 message 查询页或消息详情。
+fn message_event_row(
+    event: &MessageEvent,
+    index: usize,
+    theme: &gpui_component::Theme,
+) -> AnyElement {
+    let mono = theme.mono_font_family.clone();
+    let mut header = h_flex().w_full().min_w_0().items_center().gap_2().child(
+        div()
+            .min_w_0()
+            .truncate()
+            .text_sm()
+            .font_medium()
+            .text_color(theme.foreground)
+            .child(event.topic.clone()),
+    );
+    if let Some(qos) = &event.qos {
+        header = header.child(Tag::secondary().with_size(Size::Small).child(qos.clone()));
+    }
+    if event.retain {
+        header = header.child(Tag::warning().with_size(Size::Small).child("Retain"));
+    }
+    header = header.child(div().flex_1());
+    if let Some(timestamp) = &event.timestamp {
+        header = header.child(
+            div()
+                .flex_shrink_0()
+                .font_family(mono.clone())
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(timestamp.clone()),
+        );
+    }
+    if let Some(message_id) = &event.message_id {
+        header = header.child(
+            div()
+                .flex_shrink_0()
+                .font_family(mono.clone())
+                .text_xs()
+                .text_color(theme.muted_foreground.opacity(0.7))
+                .child(message_id.clone()),
+        );
+    }
+    let body_color = if event.body.is_some() {
+        theme.foreground
+    } else {
+        theme.muted_foreground
+    };
+    let mut row = v_flex()
+        .id(("event-row", index))
+        .w_full()
+        .min_w_0()
+        .gap_1()
+        .px_4()
+        .py_2()
+        .border_b_1()
+        .border_color(theme.table_row_border)
+        .child(header)
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .font_family(mono)
+                .text_xs()
+                .text_color(body_color)
+                .child(
+                    event
+                        .body
+                        .clone()
+                        .unwrap_or_else(|| "no payload text".into()),
+                ),
+        );
+    if !event.extra.is_empty() {
+        let summary = event
+            .extra
+            .iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect::<Vec<_>>()
+            .join("  ");
+        row = row.child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(summary),
+        );
+    }
+    row.into_any_element()
 }
 
 /// 人类可读的字节数:1.2 GB / 340.5 MB / 12.0 KB。
@@ -2280,19 +2527,52 @@ impl Focusable for NativeResourceWorkbench {
 
 impl Render for NativeResourceWorkbench {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // terminal 模板页:独立的全区域终端控制台,不带侧边栏与底部状态栏。
-        if self
-            .current_page()
-            .map(|page| page.template == ResourceWorkbenchTemplate::Terminal)
-            .unwrap_or(false)
-        {
-            let page = self.current_page().cloned().unwrap_or_else(|| {
-                self.descriptor
-                    .pages
-                    .first()
-                    .cloned()
-                    .expect("workbench has at least one page")
-            });
+        let theme = cx.theme().clone();
+        // root Shell 覆盖:整个工作台主体交给 JS 视图,无 native 区域。
+        // 失败时显示错误态(root 级无 fallback,不伪装成可用 native 工作台)。
+        if let Some(view_id) = self.layout.root_shell.clone() {
+            let mut body = match self.mount_region_shell(RegionId::Root, &view_id, window, cx) {
+                Some(view) => div()
+                    .id("root-shell-body")
+                    .size_full()
+                    .min_w_0()
+                    .min_h_0()
+                    .child(view)
+                    .into_any_element(),
+                None => empty_state(
+                    IconName::TriangleAlert,
+                    "Workbench view unavailable",
+                    "This workbench is provided by an extension view that failed to load.",
+                    &theme,
+                ),
+            };
+            if let Some((return_page, return_route)) = self.terminal_return.clone() {
+                body = v_flex()
+                    .size_full()
+                    .min_h_0()
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .px_3()
+                            .py_1()
+                            .border_b_1()
+                            .border_color(theme.border)
+                            .child(
+                                Button::new("workbench-shell-back")
+                                    .with_size(Size::Small)
+                                    .ghost()
+                                    .icon(IconName::ArrowLeft)
+                                    .label("Back")
+                                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                                        let page_id = return_page.clone();
+                                        let route = return_route.clone();
+                                        this.navigate(page_id, route, cx);
+                                    })),
+                            ),
+                    )
+                    .child(body)
+                    .into_any_element();
+            }
             return div()
                 .id("resource-workbench")
                 .track_focus(&self.focus_handle)
@@ -2300,15 +2580,87 @@ impl Render for NativeResourceWorkbench {
                 .min_w_0()
                 .min_h_0()
                 .overflow_hidden()
-                .child(self.render_terminal_page(&page, window, cx));
+                .child(body);
         }
-        let page = self.render_page(window, cx);
-        let status_bar = self.render_status_bar(cx);
+        // 区域组合:h_flex = left + 中列(center + bottom) + right。
+        let left = self.render_nav(window, cx);
+        let center = self.layout.center.clone();
+        let page = match center.as_ref().map(|center| &center.content) {
+            Some(CenterContent::Shell { view_id }) => {
+                let view_id = view_id.clone();
+                self.mount_region_shell(RegionId::Center, &view_id, window, cx)
+                    .map(|view| {
+                        div()
+                            .id("center-shell-region")
+                            .size_full()
+                            .min_w_0()
+                            .min_h_0()
+                            .child(view)
+                            .into_any_element()
+                    })
+                    .unwrap_or_else(|| {
+                        empty_state(
+                            IconName::TriangleAlert,
+                            "Center view unavailable",
+                            "The center region is provided by an extension view that failed to load.",
+                            &theme,
+                        )
+                    })
+            }
+            _ => {
+                // terminal 模板页在 center 区域内渲染:保留 left/right/bottom
+                // 区域。若像早期实现那样提前 return 占满工作台,切到终端页
+                // (如 Docker exec)会让左树/右栏整体消失。
+                let terminal_page = self
+                    .current_page()
+                    .filter(|page| page.template == ResourceWorkbenchTemplate::Terminal)
+                    .cloned();
+                match terminal_page {
+                    Some(page) => self.render_terminal_page(&page, window, cx),
+                    None => self.render_page(window, cx).into_any_element(),
+                }
+            }
+        };
         let mut main_column = v_flex().flex_1().min_w_0().min_h_0().child(page);
-        if let Some(status_bar) = status_bar {
-            main_column = main_column.child(status_bar);
+        // bottom:status(宿主渲染)或 shell(JS 视图)。
+        let bottom_region = self.layout.bottom.clone();
+        if let Some(bottom) = bottom_region.as_ref() {
+            match &bottom.content {
+                BottomContent::Status { .. } => {
+                    if let Some(status_bar) = self.render_status_bar(cx) {
+                        main_column = main_column.child(status_bar);
+                    }
+                }
+                BottomContent::Shell { view_id } => {
+                    let view_id = view_id.clone();
+                    let height = bottom.height;
+                    if let Some(view) =
+                        self.mount_region_shell(RegionId::Bottom, &view_id, window, cx)
+                    {
+                        main_column = main_column.child(
+                            h_flex()
+                                .w_full()
+                                .h(px(height as f32))
+                                .min_h_0()
+                                .flex_shrink_0()
+                                .border_t_1()
+                                .border_color(theme.border)
+                                .overflow_hidden()
+                                .child(
+                                    div()
+                                        .id("bottom-shell-region")
+                                        .size_full()
+                                        .min_w_0()
+                                        .min_h_0()
+                                        .child(view),
+                                ),
+                        );
+                    }
+                }
+                BottomContent::None => {}
+            }
         }
-        div()
+        let mut root = div()
             .id("resource-workbench")
             .track_focus(&self.focus_handle)
             .size_full()
@@ -2316,7 +2668,60 @@ impl Render for NativeResourceWorkbench {
             .min_h_0()
             .overflow_hidden()
             .flex()
-            .child(self.render_nav(cx))
-            .child(main_column)
+            .children(left);
+        root = root.child(main_column);
+        let side_region = self.layout.right.clone();
+        if let Some(side) = side_region.as_ref() {
+            if let SideContent::Shell { view_id } = &side.content {
+                let width = side.width;
+                if let Some(view) = self.mount_region_shell(RegionId::Right, view_id, window, cx) {
+                    root = root.child(
+                        v_flex()
+                            .w(px(width as f32))
+                            .h_full()
+                            .flex_shrink_0()
+                            .overflow_hidden()
+                            .bg(theme.sidebar)
+                            .border_l_1()
+                            .border_color(theme.sidebar_border)
+                            .child(
+                                div()
+                                    .id("right-shell-region")
+                                    .size_full()
+                                    .min_w_0()
+                                    .min_h_0()
+                                    .child(view),
+                            ),
+                    );
+                }
+            }
+        }
+        root
+    }
+}
+
+#[cfg(test)]
+mod workbench_render_structure_tests {
+    /// 终端模板页必须在区域组合内渲染:左树/右栏/底栏要随终端页一起保留。
+    /// 回归:早期实现让终端页在 render 顶部提前 return 占满工作台,切到
+    /// Docker exec 这类 terminal 页时左树与右栏会整体消失。
+    #[test]
+    fn terminal_pages_render_inside_the_region_composition() {
+        let source = include_str!("lib.rs");
+        let render_impl = source
+            .split("impl Render for NativeResourceWorkbench")
+            .nth(1)
+            .expect("workbench Render impl exists");
+        let (before_regions, from_regions) = render_impl
+            .split_once("// 区域组合")
+            .expect("region composition marker exists");
+        assert!(
+            !before_regions.contains("self.render_terminal_page"),
+            "terminal page must not early-return before region composition"
+        );
+        assert!(
+            from_regions.contains("self.render_terminal_page"),
+            "terminal page must be rendered inside the center region"
+        );
     }
 }

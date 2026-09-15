@@ -15,7 +15,9 @@
 
 use std::collections::BTreeMap;
 
-use extension_runtime::extension::manifest::{ResourceWorkbenchInput, ResourceWorkbenchPage};
+use extension_runtime::extension::manifest::{
+    ResourceWorkbenchInput, ResourceWorkbenchInputEditor, ResourceWorkbenchPage,
+};
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement,
     ParentElement, Render, SharedString, Styled, Window, div, px,
@@ -73,7 +75,7 @@ struct QueryField {
 
 /// 该字段是否渲染为下拉(`editor = "select"` 且声明了候选项)。
 fn is_select_input(input: &ResourceWorkbenchInput) -> bool {
-    input.editor == "select" && !input.options.is_empty()
+    input.editor == ResourceWorkbenchInputEditor::Select && !input.options.is_empty()
 }
 
 /// 下拉字段的默认选中下标:命中 `default` 的候选项,否则第一项。
@@ -179,11 +181,9 @@ impl QueryInputState {
             .map(|field| {
                 let value = match &field.control {
                     QueryFieldControl::Text(state) => state.read(cx).text().to_string(),
-                    QueryFieldControl::Select(state) => state
-                        .read(cx)
-                        .selected_value()
-                        .cloned()
-                        .unwrap_or_default(),
+                    QueryFieldControl::Select(state) => {
+                        state.read(cx).selected_value().cloned().unwrap_or_default()
+                    }
                 };
                 (field.id.clone(), value)
             })
@@ -237,14 +237,14 @@ mod tests {
 
     fn input(
         id: &str,
-        editor: &str,
+        editor: ResourceWorkbenchInputEditor,
         default: Option<&str>,
         options: &[(&str, &str)],
     ) -> ResourceWorkbenchInput {
         ResourceWorkbenchInput {
             id: id.to_string(),
             value_type: "string".to_string(),
-            editor: editor.to_string(),
+            editor,
             default: default.map(str::to_string),
             required: false,
             label: None,
@@ -266,27 +266,36 @@ mod tests {
     #[test]
     fn select_editor_requires_options() {
         // 声明 select 但没有候选项:回落文本输入,避免渲染一个空下拉
-        assert!(!is_select_input(&input("qos", "select", None, &[])));
-        assert!(is_select_input(&input("qos", "select", None, QOS)));
-        assert!(!is_select_input(&input("topic", "text", None, QOS)));
+        assert!(!is_select_input(&input("qos", ResourceWorkbenchInputEditor::Select, None, &[])));
+        assert!(is_select_input(&input("qos", ResourceWorkbenchInputEditor::Select, None, QOS)));
+        assert!(!is_select_input(&input("topic", ResourceWorkbenchInputEditor::Text, None, QOS)));
     }
 
     #[test]
     fn select_defaults_to_the_matching_option() {
-        assert_eq!(1, select_initial_index(&input("qos", "select", Some("1"), QOS)));
-        assert_eq!(2, select_initial_index(&input("qos", "select", Some("2"), QOS)));
+        assert_eq!(
+            1,
+            select_initial_index(&input("qos", ResourceWorkbenchInputEditor::Select, Some("1"), QOS))
+        );
+        assert_eq!(
+            2,
+            select_initial_index(&input("qos", ResourceWorkbenchInputEditor::Select, Some("2"), QOS))
+        );
         // 缺省或未命中:取第一项(必填字段总有值,与查询前置校验一致)
-        assert_eq!(0, select_initial_index(&input("qos", "select", None, QOS)));
-        assert_eq!(0, select_initial_index(&input("qos", "select", Some("9"), QOS)));
+        assert_eq!(0, select_initial_index(&input("qos", ResourceWorkbenchInputEditor::Select, None, QOS)));
+        assert_eq!(
+            0,
+            select_initial_index(&input("qos", ResourceWorkbenchInputEditor::Select, Some("9"), QOS))
+        );
     }
 
     #[test]
     fn field_label_falls_back_to_id() {
-        assert_eq!("qos", field_label(&input("qos", "text", None, &[])));
-        let mut labelled = input("qos", "text", None, &[]);
+        assert_eq!("qos", field_label(&input("qos", ResourceWorkbenchInputEditor::Text, None, &[])));
+        let mut labelled = input("qos", ResourceWorkbenchInputEditor::Text, None, &[]);
         labelled.label = Some("  QoS  ".to_string());
         assert_eq!("  QoS  ", field_label(&labelled));
-        let mut blank = input("qos", "text", None, &[]);
+        let mut blank = input("qos", ResourceWorkbenchInputEditor::Text, None, &[]);
         blank.label = Some("   ".to_string());
         assert_eq!("qos", field_label(&blank));
     }

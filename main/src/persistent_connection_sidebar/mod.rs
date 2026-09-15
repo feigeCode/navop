@@ -323,7 +323,10 @@ mod tests {
         let implementation = include_str!("mod.rs");
 
         assert!(!content.contains("render_home_tree(cx)"));
-        assert!(content.contains("set_home_embedded(true, cx)"));
+        // Tree 布局经 set_home_embedded 让侧栏以子实体输出主页树；
+        // 全局导航布局由 home_navigation_layout 单独驱动，不走该入口。
+        assert!(content
+            .contains("set_home_embedded(self.connection_layout == ConnectionLayout::Tree, cx)"));
         assert!(implementation.contains("impl gpui::Render for PersistentConnectionSidebar"));
         assert!(implementation.contains("self.home_embedded"));
     }

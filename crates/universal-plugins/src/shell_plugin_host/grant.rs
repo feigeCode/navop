@@ -231,8 +231,14 @@ mod tests {
 
     #[test]
     fn split_net_host_parses_host_and_bracketed_ipv6() {
-        assert_eq!(split_net_host("net:tcp:api.example.com:443"), Some("api.example.com"));
-        assert_eq!(split_net_host("net:udp:example.com:9200-9210"), Some("example.com"));
+        assert_eq!(
+            split_net_host("net:tcp:api.example.com:443"),
+            Some("api.example.com")
+        );
+        assert_eq!(
+            split_net_host("net:udp:example.com:9200-9210"),
+            Some("example.com")
+        );
         assert_eq!(split_net_host("net:tcp:*:443"), Some("*"));
         assert_eq!(split_net_host("net:tcp:[::1]:5432"), Some("::1"));
         assert_eq!(split_net_host("net:unix:/var/run/example.sock"), None);

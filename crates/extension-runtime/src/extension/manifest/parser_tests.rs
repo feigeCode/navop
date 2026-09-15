@@ -165,7 +165,7 @@ fn manifest_loads_resource_workbench_with_route_and_navigation() {
                     "resourceType": "search"
                 }],
                 "resourceWorkbenches": [{
-                    "schemaVersion": 1,
+                    "schemaVersion": 2,
                     "id": "search",
                     "title": "Search",
                     "connectionIds": ["search9"],
@@ -282,7 +282,7 @@ fn manifest_loads_resource_workbench_with_route_and_navigation() {
 }
 
 #[test]
-fn manifest_parses_terminal_pages_tabs_and_status_bar() {
+fn manifest_parses_v2_layout_tree_tabs_and_status_bar() {
     let tmp = tempfile::TempDir::new().unwrap();
     write_manifest(
         tmp.path(),
@@ -308,14 +308,79 @@ fn manifest_parses_terminal_pages_tabs_and_status_bar() {
                     "resourceType": "docker"
                 }],
                 "resourceWorkbenches": [{
-                    "schemaVersion": 1,
+                    "schemaVersion": 2,
                     "id": "docker",
                     "title": "Docker",
                     "connectionIds": ["docker-local"],
                     "runtimeId": "main",
                     "resourceType": "docker",
                     "defaultPage": "container-inspect",
-                    "statusBar": { "operation": "systemUsage" },
+                    "layout": {
+                        "left": {
+                            "width": 260,
+                            "source": {
+                                "kind": "tree",
+                                "roots": [{
+                                    "id": "containers",
+                                    "title": "Containers",
+                                    "pageId": "container-inspect",
+                                    "children": {
+                                        "operation": "listContainers",
+                                        "itemsPath": "/containers",
+                                        "keyPaths": ["/id"],
+                                        "labelPath": "/name",
+                                        "open": {
+                                            "pageId": "container-inspect",
+                                            "route": {"id": {"source": "selection", "path": "/id", "type": "string"}}
+                                        },
+                                        "children": {
+                                            "operation": "listContainers",
+                                            "itemsPath": "/mounts",
+                                            "keyPaths": ["/path"],
+                                            "labelPath": "/path",
+                                            "open": {
+                                                "pageId": "container-inspect",
+                                                "route": {"id": {"source": "parent", "path": "/id", "type": "string"}}
+                                            }
+                                        }
+                                    }
+                                }]
+                            }
+                        },
+                        "center": {
+                            "source": {
+                                "kind": "pages",
+                                "tabGroups": [{
+                                    "id": "container",
+                                    "tabs": [
+                                        {
+                                            "id": "inspect",
+                                            "title": "Inspect",
+                                            "pageId": "container-inspect",
+                                            "route": {"id": {"source": "route", "path": "/id", "type": "string"}}
+                                        },
+                                        {
+                                            "id": "exec",
+                                            "title": "Exec",
+                                            "pageId": "container-exec",
+                                            "route": {"id": {"source": "route", "path": "/id", "type": "string"}}
+                                        }
+                                    ]
+                                }]
+                            }
+                        },
+                        "bottom": {
+                            "source": {
+                                "kind": "status",
+                                "operation": "systemUsage",
+                                "items": [
+                                    {"path": "/engine", "label": "Engine", "format": "boolean-up"},
+                                    {"path": "/containers_running", "label": "Containers", "format": "pair", "otherPath": "/containers_total"},
+                                    {"path": "/disk_used_bytes", "label": "Disk", "format": "bytes"}
+                                ]
+                            }
+                        }
+                    },
                     "operations": {
                         "systemUsage": {
                             "mode": "invoke",
@@ -331,6 +396,12 @@ fn manifest_parses_terminal_pages_tabs_and_status_bar() {
                             "params": {
                                 "id": {"source": "route", "path": "/id", "type": "string"}
                             }
+                        },
+                        "listContainers": {
+                            "mode": "invoke",
+                            "method": "docker/container/list",
+                            "requires": ["docker/container/list"],
+                            "effect": "read"
                         }
                     },
                     "pages": [
@@ -341,20 +412,7 @@ fn manifest_parses_terminal_pages_tabs_and_status_bar() {
                             "renderer": {"kind": "native"},
                             "route": {"id": {"type": "string", "required": true}},
                             "load": {"operation": "inspectContainer"},
-                            "tabs": [
-                                {
-                                    "id": "inspect",
-                                    "title": "Inspect",
-                                    "pageId": "container-inspect",
-                                    "route": {"id": {"source": "route", "path": "/id", "type": "string"}}
-                                },
-                                {
-                                    "id": "exec",
-                                    "title": "Exec",
-                                    "pageId": "container-exec",
-                                    "route": {"id": {"source": "route", "path": "/id", "type": "string"}}
-                                }
-                            ]
+                            "tabGroupId": "container"
                         },
                         {
                             "id": "container-exec",
@@ -362,6 +420,7 @@ fn manifest_parses_terminal_pages_tabs_and_status_bar() {
                             "template": "terminal",
                             "renderer": {"kind": "native"},
                             "route": {"id": {"type": "string", "required": true}},
+                            "tabGroupId": "container",
                             "terminal": {
                                 "command": "docker",
                                 "args": ["exec", "-it", "{{id}}", "sh"],
@@ -378,20 +437,56 @@ fn manifest_parses_terminal_pages_tabs_and_status_bar() {
     let manifest = load_from_dir(tmp.path()).unwrap();
     let workbench = &manifest.contributes.resource_workbenches[0];
 
-    assert_eq!(
-        "systemUsage",
-        workbench.status_bar.as_ref().unwrap().operation
-    );
-
+    let layout = workbench.layout.as_ref().unwrap();
+    // left tree 根节点 + lazy children 声明。
+    let left = layout.left.as_ref().unwrap();
+    assert_eq!(Some(260), left.width);
+    match &left.source {
+        crate::extension::manifest::ResourceWorkbenchNavSource::Tree { roots } => {
+            assert_eq!(1, roots.len());
+            let children = roots[0].children.as_ref().unwrap();
+            assert_eq!("listContainers", children.operation);
+            assert_eq!("/containers", children.items_path);
+            let open = children.open.as_ref().unwrap();
+            assert_eq!("container-inspect", open.page_id);
+            // 二级 lazy children:route 用 parent 绑定源引用父行。
+            let nested = children.children.as_deref().unwrap();
+            assert_eq!("/mounts", nested.items_path);
+            assert!(nested.children.is_none());
+            assert_eq!(
+                crate::extension::manifest::ResourceWorkbenchBindingSource::Parent,
+                nested.open.as_ref().unwrap().route["id"].source
+            );
+        }
+        other => panic!("expected tree nav, got {other:?}"),
+    }
+    // center tabGroups:组只声明一份,页面经 tabGroupId 引用。
+    let center = layout.center.as_ref().unwrap();
+    match &center.source {
+        crate::extension::manifest::ResourceWorkbenchCenterSource::Pages { tab_groups } => {
+            assert_eq!(1, tab_groups.len());
+            assert_eq!(2, tab_groups[0].tabs.len());
+            assert_eq!("container-exec", tab_groups[0].tabs[1].page_id);
+        }
+        other => panic!("expected pages center, got {other:?}"),
+    }
     let inspect = workbench
         .pages
         .iter()
         .find(|page| page.id == "container-inspect")
         .unwrap();
-    assert_eq!(2, inspect.tabs.len());
-    assert_eq!("exec", inspect.tabs[1].id);
-    assert_eq!("container-exec", inspect.tabs[1].page_id);
-    assert!(inspect.tabs[1].route.contains_key("id"));
+    assert_eq!(Some("container"), inspect.tab_group_id.as_deref());
+    // bottom status items 声明。
+    let bottom = layout.bottom.as_ref().unwrap();
+    match &bottom.source {
+        crate::extension::manifest::ResourceWorkbenchBottomSource::Status { operation, items } => {
+            assert_eq!("systemUsage", operation);
+            assert_eq!(3, items.len());
+            assert_eq!("pair", items[1].format);
+            assert_eq!(Some("/containers_total"), items[1].other_path.as_deref());
+        }
+        other => panic!("expected status bottom, got {other:?}"),
+    }
 
     let exec = workbench
         .pages

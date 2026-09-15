@@ -1,6 +1,6 @@
 use crate::extension::manifest::{
-    ResourceWorkbenchContrib, ResourceWorkbenchOperation, ResourceWorkbenchPage,
-    ResourceWorkbenchStatusBar, ResourceWorkbenchTree,
+    ResourceWorkbenchContrib, ResourceWorkbenchLayout, ResourceWorkbenchOperation,
+    ResourceWorkbenchPage,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -13,14 +13,13 @@ pub struct RegisteredResourceWorkbenchContribution {
     pub resource_type: String,
     pub default_page: String,
     pub operations: std::collections::BTreeMap<String, ResourceWorkbenchOperation>,
-    pub navigation: Vec<crate::extension::manifest::ResourceWorkbenchNavigation>,
-    pub tree: Vec<ResourceWorkbenchTree>,
+    pub layout: Option<ResourceWorkbenchLayout>,
     pub pages: Vec<ResourceWorkbenchPage>,
-    pub status_bar: Option<ResourceWorkbenchStatusBar>,
 }
 
 impl RegisteredResourceWorkbenchContribution {
-    pub(crate) fn from_manifest(extension_id: &str, workbench: &ResourceWorkbenchContrib) -> Self {
+    /// 由 manifest 贡献构造(注册期与测试共用)。
+    pub fn from_manifest(extension_id: &str, workbench: &ResourceWorkbenchContrib) -> Self {
         Self {
             extension_id: extension_id.to_string(),
             id: workbench.id.clone(),
@@ -30,10 +29,8 @@ impl RegisteredResourceWorkbenchContribution {
             resource_type: workbench.resource_type.clone(),
             default_page: workbench.default_page.clone(),
             operations: workbench.operations.clone(),
-            navigation: workbench.navigation.clone(),
-            tree: workbench.tree.clone(),
+            layout: workbench.layout.clone(),
             pages: workbench.pages.clone(),
-            status_bar: workbench.status_bar.clone(),
         }
     }
 
