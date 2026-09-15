@@ -231,3 +231,91 @@ Extension:
     en: Failed to load extension marketplace
     zh-CN: 加载扩展市场失败
     zh-HK: 載入擴展市場失敗
+  hero_badge_extension_count:
+    en: "%{count} EXTENSIONS"
+    zh-CN: "%{count} 个扩展"
+    zh-HK: "%{count} 個擴展"
+  hero_badge_updated:
+    en: UPDATED JUST NOW
+    zh-CN: 刚刚更新
+    zh-HK: 剛剛更新
+  hero_title_top:
+    en: Discover the best
+    zh-CN: 发现最佳
+    zh-HK: 發現最佳
+  hero_title_bottom:
+    en: Extensions
+    zh-CN: 扩展
+    zh-HK: 擴展
+  hero_title_installed_top:
+    en: Manage your
+    zh-CN: 管理你的
+    zh-HK: 管理你的
+  hero_title_installed_bottom:
+    en: Extensions
+    zh-CN: 扩展
+    zh-HK: 擴展
+  hero_subtitle:
+    en: A directory of quality extensions to connect AI agents with your favorite tools.
+    zh-CN: 优质扩展目录，帮助 AI 智能体连接到你喜爱的工具。
+    zh-HK: 優質擴展目錄，幫助 AI 智能體連接到你喜愛的工具。
+  hero_subtitle_installed:
+    en: View installed extensions, reload or uninstall them at any time.
+    zh-CN: 查看已安装的扩展，随时重新加载或卸载。
+    zh-HK: 查看已安裝的擴展，隨時重新載入或解除安裝。
+  view_all:
+    en: View all
+    zh-CN: 查看全部
+    zh-HK: 查看全部
+  view_all_count:
+    en: "View all %{count}"
+    zh-CN: "查看全部 %{count} 个"
+    zh-HK: "查看全部 %{count} 個"
+  chips_more:
+    en: More
+    zh-CN: 更多
+    zh-HK: 更多
+  chips_collapse:
+    en: Collapse
+    zh-CN: 收起
+    zh-HK: 收起
+  detail_title:
+    en: Extension Details
+    zh-CN: 扩展详情
+    zh-HK: 擴展詳情
+  detail_info:
+    en: Information
+    zh-CN: 基本信息
+    zh-HK: 基本資訊
+  detail_id:
+    en: ID
+    zh-CN: 标识
+    zh-HK: 標識
+  detail_kind:
+    en: Type
+    zh-CN: 类型
+    zh-HK: 類型
+  detail_version:
+    en: Version
+    zh-CN: 版本
+    zh-HK: 版本
+  detail_file_extensions:
+    en: File Types
+    zh-CN: 文件类型
+    zh-HK: 檔案類型
+  detail_requires_host:
+    en: Requires
+    zh-CN: 宿主要求
+    zh-HK: 宿主要求
+  detail_download:
+    en: Download
+    zh-CN: 下载地址
+    zh-HK: 下載地址
+  detail_screenshots:
+    en: Screenshots
+    zh-CN: 界面预览
+    zh-HK: 介面預覽
+  detail_no_screenshots:
+    en: No screenshots provided
+    zh-CN: 暂无截图
+    zh-HK: 暫無截圖
