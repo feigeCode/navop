@@ -4,7 +4,6 @@ members = [
     "crates/ai_chat_view",
     "crates/llm-connector",
     "crates/html-preview",
-    "crates/reqwest_client",
     "crates/db",
     "crates/db-value",
     "crates/connection-import-protocol",
@@ -110,7 +109,11 @@ sysinfo = { version = "0.31.4", default-features = false, features = ["user"] }
 tracing = "0.1.41"
 
 
-reqwest_client = { path = "crates/reqwest_client" }
+# Uses the gpui-pre fork's own `reqwest_client` crate (previously a local copy in
+# `crates/reqwest_client`, which had drifted 315 lines behind upstream and duplicated
+# the inlined `http_client_tls` module). The local crate's only fork-specific change —
+# `user_agent()` building a proxy-free client — now lives in the fork itself.
+reqwest_client = { package = "gpui-pre-reqwest-client", version = "0.3.99" }
 agent_runtime = { path = "crates/agent_runtime" }
 ai_chat_view = { path = "crates/ai_chat_view", default-features = false }
 html-preview = { path = "crates/html-preview" }
@@ -315,7 +318,7 @@ tree-sitter = { opt-level = 3 }
 gpui-pre-sum-tree = { opt-level = 3 }
 ropey = { opt-level = 3 }
 lsp-types = { opt-level = 3 }
-reqwest_client = { opt-level = 3 }
+gpui-pre-reqwest-client = { opt-level = 3 }
 markdown = { opt-level = 3 }
 xml5ever = { opt-level = 3 }
 
@@ -327,31 +330,31 @@ xml5ever = { opt-level = 3 }
 # path patch (dev workstation only), re-run
 # `script/migrate-to-git-fork.py --path`.
 [patch.crates-io]
-gpui-pre                   = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.106" }
-gpui-pre-apple             = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.106" }
-gpui-pre-collections       = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.106" }
-gpui-pre-derive-refineable = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.106" }
-gpui-pre-http-client       = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.106" }
-gpui-pre-http-client-tls   = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.106" }
-gpui-pre-linux             = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.106" }
-gpui-pre-macos             = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.106" }
-gpui-pre-macros            = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.106" }
-gpui-pre-media             = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.106" }
-gpui-pre-perf              = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.106" }
-gpui-pre-platform          = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.106" }
-gpui-pre-refineable        = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.106" }
-gpui-pre-reqwest-client    = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.106" }
-gpui-pre-scheduler         = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.106" }
-gpui-pre-shared-string     = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.106" }
-gpui-pre-sum-tree          = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.106" }
-gpui-pre-util              = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.106" }
-gpui-pre-util-macros       = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.106" }
-gpui-pre-web               = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.106" }
-gpui-pre-wgpu              = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.106" }
-gpui-pre-windows           = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.106" }
-gpui-pre-zlog              = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.106" }
-gpui-pre-ztracing          = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.106" }
-gpui-pre-ztracing-macro    = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.106" }
+gpui-pre                   = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.108" }
+gpui-pre-apple             = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.108" }
+gpui-pre-collections       = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.108" }
+gpui-pre-derive-refineable = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.108" }
+gpui-pre-http-client       = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.108" }
+gpui-pre-http-client-tls   = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.108" }
+gpui-pre-linux             = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.108" }
+gpui-pre-macos             = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.108" }
+gpui-pre-macros            = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.108" }
+gpui-pre-media             = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.108" }
+gpui-pre-perf              = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.108" }
+gpui-pre-platform          = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.108" }
+gpui-pre-refineable        = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.108" }
+gpui-pre-reqwest-client    = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.108" }
+gpui-pre-scheduler         = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.108" }
+gpui-pre-shared-string     = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.108" }
+gpui-pre-sum-tree          = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.108" }
+gpui-pre-util              = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.108" }
+gpui-pre-util-macros       = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.108" }
+gpui-pre-web               = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.108" }
+gpui-pre-wgpu              = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.108" }
+gpui-pre-windows           = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.108" }
+gpui-pre-zlog              = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.108" }
+gpui-pre-ztracing          = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.108" }
+gpui-pre-ztracing-macro    = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.108" }
 # <<< local gpui-pre patch <<<
 
 # gpui-shell binds quickjs via the `quickjs-jit` fork directly, while
