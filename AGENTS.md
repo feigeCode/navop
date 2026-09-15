@@ -645,6 +645,13 @@
 - **验证方式**：真机 MSTSC 无法单测，用本机 loopback + 假 RDP 服务端做对照实验：假服务端只完成 X.224 协商并声明 `PROTOCOL_HYBRID = 0x02`（**不是 0x0B，写错会被客户端回退成传统安全模式、根本不出凭据框**），按不同 target 写临时凭据后启动 `mstsc /v:127.0.0.1:<端口>`，以是否出现窗口类 `Credential Dialog Xaml Host` / 标题「Windows 安全中心」为判据：端口 3389 与 13389 下 `TERMSRV/host:port` 都弹框，`TERMSRV/host` 都不弹。单元测试用 `cargo test -p main --bin navop home::remote_desktop_window` 锁住 target 不含端口。
 - **适用范围**：`main/src/home/remote_desktop_window*`（独立 MSTSC 唤起路径），以及任何「替 MSTSC / 系统凭据管理器预写密码」的改造。
 
+- **标题**：长期分支合入主干用「反向合并」——在分支侧解冲突，主干 ff 快进
+- **触发信号**：把一个落后主干几十个提交的长期分支合入 `dev`，冲突文件多（含 `Cargo.toml` / `Cargo.lock`、共享 UI 文件），且主干上还有未提交的活跃改动；或已在主干 `git merge --no-commit` 后想撤退。
+- **根因 / 约束**：在主干上直接解冲突会让主干经历冲突中间态，解错的试错成本回灌主干；主干上用户的未提交改动也会被中间态牵连（要整体 `merge --abort` 才还原）。反向合并把风险全留在分支 worktree，主干全程干净。
+- **正确做法**：①预检 `git merge-tree --write-tree --name-only <trunk> <branch>` 拿冲突清单，再用 `comm -12` 求「主干未提交改动文件 ∩ 合并将引入文件」，非空则先停下确认；②在分支 worktree 里 `git merge <trunk>`（主干若残留中间态先 `git -C <trunk> merge --abort`）；③解冲突排序：语义差异（两侧实现同一功能的不同方案）先问用户 → 一侧为超集取超集 → import/重复块按**符号实际是否被使用**收口，不盲目取并集；④依赖 rev 冲突用 `git -C <dep-repo> merge-base --is-ancestor <a> <b>` 判定并取**后代**那个（而非日期更新的），`Cargo.lock` 里同一 rev 多处出现用一次 `replace_all`；⑤`cargo check --workspace --all-targets` 通过后，主干 `git merge --ff-only <branch>`，快进后**再跑一次主干 check**（叠加用户未提交改动，文件不重叠不代表 API 不冲突）。
+- **验证方式**：`cargo metadata --format-version 1 --locked --offline`（exit=0 即 toml/lock 一致）、`cargo check --workspace --all-targets`（分支侧、主干各一次）、核心 crate `--lib` 测试；回退用 `git reset --mixed <原 SHA>`（保留工作区改动）。
+- **适用范围**：任何「长期分支 → 主干」的合并。两个易踩的坑：①worktree 的 `MERGE_HEAD` / `ORIG_HEAD` 在 `<主仓>/.git/worktrees/<name>/` 下，不在 worktree 自己的 `.git`（那是 `gitdir:` 指针文件），查后者会误判「合并已结束」；②分支名与 worktree 目录名常不同（如 `impl/ftp-support-172` ↔ `navop-ftp-support-172`）。
+
 ### 执行原则
 
 1. 先澄清，再实现；先缩小边界，再扩展范围。
