@@ -30,7 +30,6 @@ pub(super) fn connection_share_text_for_locale(
             remote_desktop_fields(locale, connection.to_remote_desktop_params().ok()?)
         }
         ConnectionType::Extension => extension_fields(connection),
-        ConnectionType::Ftp => return None,
         ConnectionType::All => return None,
     };
     Some(render_share_template(connection, fields, locale))
@@ -396,7 +395,6 @@ fn connection_type_key(connection_type: ConnectionType) -> &'static str {
         ConnectionType::Rdp => "Connection.Share.type_rdp",
         ConnectionType::Vnc => "Connection.Share.type_vnc",
         ConnectionType::Extension => "Connection.Share.type_extension",
-        ConnectionType::Ftp => "Connection.Share.type_ftp",
     }
 }
 

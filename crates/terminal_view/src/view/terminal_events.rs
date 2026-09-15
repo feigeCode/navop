@@ -83,7 +83,13 @@ impl TerminalView {
                 outcome,
                 progress,
             } => {
-                self.finish_zmodem_background_task(*transfer_id, outcome, progress.clone(), cx);
+                self.finish_zmodem_background_task(
+                    *transfer_id,
+                    outcome,
+                    progress.clone(),
+                    window,
+                    cx,
+                );
                 cx.notify();
             }
             TerminalModelEvent::PromptStart

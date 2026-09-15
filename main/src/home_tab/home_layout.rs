@@ -31,6 +31,9 @@ impl HomePage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        if self.connection_layout == ConnectionLayout::Navigation {
+            return self.render_navigation_content(window, cx);
+        }
         h_flex()
             .size_full()
             .min_w_0()
@@ -59,6 +62,28 @@ impl HomePage {
                             .bg(cx.theme().muted)
                             .child(self.render_content_area(window, cx)),
                     ),
+            )
+            .into_any_element()
+    }
+
+    pub(super) fn render_navigation_content(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        v_flex()
+            .size_full()
+            .min_w_0()
+            .h_full()
+            .overflow_hidden()
+            .bg(cx.theme().background)
+            .child(self.render_toolbar(window, cx))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .child(self.render_navigation_home_content(window, cx)),
             )
             .into_any_element()
     }

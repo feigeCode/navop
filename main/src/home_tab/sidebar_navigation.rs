@@ -173,6 +173,7 @@ impl HomePage {
                     NavigationApplication::CredentialVault => "home-app-vault",
                     NavigationApplication::KnownHosts => "home-app-known-hosts",
                     NavigationApplication::Extensions => "home-app-extensions",
+                    NavigationApplication::Settings => "home-app-settings",
                 },
                 Icon::new(application.icon()).mono(),
                 label,

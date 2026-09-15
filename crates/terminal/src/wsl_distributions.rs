@@ -1,6 +1,7 @@
 #[cfg(any(test, target_os = "windows"))]
 use anyhow::Context;
 use anyhow::Result;
+use std::path::{Component, Path, PathBuf, Prefix};
 
 use crate::LocalConfig;
 
@@ -44,6 +45,7 @@ pub fn list_wsl_distributions() -> Result<Vec<WslDistribution>> {
 }
 
 #[cfg(any(test, target_os = "windows"))]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) fn list_wsl_distributions_with(wsl: &str) -> Result<Vec<WslDistribution>> {
     let output = std::process::Command::new(wsl)
         .args(["--list", "--verbose"])
@@ -80,6 +82,139 @@ pub(crate) fn local_config_for_wsl_distro_with(wsl: String, distro: &str) -> Res
         working_dir: None,
         ..LocalConfig::default()
     })
+}
+
+// ---------------------------------------------------------------------------
+// 会话 → 发行版文件系统
+//
+// WSL 终端在模型层只是一个跑 `wsl.exe` 的本地终端，没有 Windows 工作目录。
+// 如果文件树按普通本地会话回落，就会显示本机磁盘而不是发行版里的文件；下面
+// 这几个纯函数把「本地配置 → 发行版 → UNC 路径」的映射单独固化下来。
+// ---------------------------------------------------------------------------
+
+/// 生成 UNC 路径时使用的 WSL 服务器名。
+///
+/// `\\wsl$` 是随 WSL 提供的兼容别名，Windows 10 / 11 都可用；较新的
+/// `\\wsl.localhost` 在部分系统上只暴露运行中的发行版，因此统一用前者生成。
+const WSL_UNC_SERVER: &str = "wsl$";
+
+/// 识别 UNC 根目录时接受的全部 WSL 服务器名（`\\wsl.localhost` 是新形式，
+/// 用户手动选择根目录时可能命中）。
+const WSL_UNC_SERVERS: [&str; 2] = [WSL_UNC_SERVER, "wsl.localhost"];
+
+/// 若该本地配置以 `wsl.exe [--distribution|-d] <发行版>` 启动，返回发行版名。
+///
+/// 目标发行版只体现在启动参数里（模型层把它当作普通本地终端），这里把它解析
+/// 出来供文件树定位发行版文件系统使用。
+#[cfg(any(test, target_os = "windows"))]
+pub(crate) fn wsl_distribution_for_config(config: &LocalConfig) -> Option<&str> {
+    let shell = config.shell.as_deref()?;
+    if !is_wsl_program(shell) {
+        return None;
+    }
+    distribution_from_args(&config.args)
+}
+
+/// 发行版文件系统根目录在 Windows 侧的本机路径（`\\wsl$\<发行版>`）。
+///
+/// 发行版名必须是单个路径片段，否则会拼出指向别处的路径；因此非法名返回
+/// `None` 而不是构造一个可疑路径。
+pub fn wsl_unc_root(distro: &str) -> Option<PathBuf> {
+    let distro = distro.trim();
+    if !is_valid_distribution_name(distro) {
+        return None;
+    }
+    Some(PathBuf::from(format!(r"\\{WSL_UNC_SERVER}\{distro}")))
+}
+
+/// 把发行版内的 Linux 绝对路径映射为本机可访问的 UNC 路径。
+///
+/// 只接受以 `/` 开头的发行版内绝对路径；相对路径与含 `..` 的路径无法确定最终
+/// 落在发行版内，一律返回 `None`。
+pub fn wsl_unc_path(distro: &str, linux_path: &str) -> Option<PathBuf> {
+    let distro = distro.trim();
+    if !is_valid_distribution_name(distro) {
+        return None;
+    }
+    let relative = linux_path.trim().strip_prefix('/')?;
+    if relative.split('/').any(|segment| segment == "..") {
+        return None;
+    }
+    let mut mapped = format!(r"\\{WSL_UNC_SERVER}\{distro}");
+    for segment in relative
+        .split('/')
+        .filter(|segment| !segment.is_empty() && *segment != ".")
+    {
+        mapped.push('\\');
+        mapped.push_str(segment);
+    }
+    Some(PathBuf::from(mapped))
+}
+
+/// 从工作区根目录反查它指向的 WSL 发行版；非 WSL 根目录返回 `None`。
+///
+/// 同时识别 `\\wsl$\<发行版>` / `\\wsl.localhost\<发行版>` 与 `canonicalize()`
+/// 产出的 `\\?\UNC\wsl$\<发行版>`。非 Windows 平台上 `\\wsl$\x` 只是普通文件名，
+/// 不会被误判为 UNC 路径。
+pub(crate) fn wsl_distribution_from_root(root: &Path) -> Option<&str> {
+    let mut components = root.components();
+    let Component::Prefix(prefix) = components.next()? else {
+        return None;
+    };
+    let (server, share) = match prefix.kind() {
+        Prefix::UNC(server, share) | Prefix::VerbatimUNC(server, share) => (server, share),
+        _ => return None,
+    };
+    let server = server.to_str()?;
+    if !WSL_UNC_SERVERS
+        .iter()
+        .any(|known| server.eq_ignore_ascii_case(known))
+    {
+        return None;
+    }
+    let share = share.to_str()?;
+    (!share.is_empty()).then_some(share)
+}
+
+/// 把终端上报的工作目录映射成文件树可用的根目录。
+///
+/// WSL 会话里 shell 上报的是发行版内的 Linux 绝对路径（如 `/home/navop`）。
+/// 若直接当成本机路径使用，它会落到当前盘符下的 `/home/navop` 而指向错误的
+/// 目录；只有经 `\\wsl$\<发行版>` 映射才回到同一个文件系统。
+pub fn resolve_reported_working_dir(current_root: &Path, reported: &str) -> Option<PathBuf> {
+    match wsl_distribution_from_root(current_root) {
+        Some(distro) => wsl_unc_path(distro, reported),
+        None => Some(PathBuf::from(reported)),
+    }
+}
+
+/// 配置里的 shell 是否指向 `wsl.exe`；只比较文件名，允许写成完整路径或命令名。
+#[cfg(any(test, target_os = "windows"))]
+fn is_wsl_program(program: &str) -> bool {
+    let file_name = program
+        .rsplit(|ch| ch == '\\' || ch == '/')
+        .next()
+        .unwrap_or(program);
+    file_name.eq_ignore_ascii_case("wsl") || file_name.eq_ignore_ascii_case("wsl.exe")
+}
+
+/// 从启动参数里取出 `--distribution` / `-d` 的取值。
+#[cfg(any(test, target_os = "windows"))]
+fn distribution_from_args(args: &[String]) -> Option<&str> {
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if !matches!(arg.as_str(), "--distribution" | "-d") {
+            continue;
+        }
+        let name = args.next()?.trim();
+        return (!name.is_empty()).then_some(name);
+    }
+    None
+}
+
+/// 发行版名必须是单个路径片段（它会被直接拼进 UNC 路径）。
+fn is_valid_distribution_name(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.contains('/') && !name.contains('\\')
 }
 
 /// 解析 `wsl.exe --list --verbose` 的输出。

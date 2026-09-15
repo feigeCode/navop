@@ -1,5 +1,7 @@
 use extension_host::CancellationToken;
-use gpui_shell::{HostAsyncTask, HostError, HostResult};
+use gpui_shell::{HostAsyncTask, HostResult};
+
+use super::super::error::{ErrorCode, navop_error};
 
 pub(crate) fn spawn_provider_task<F>(
     tokio: &tokio::runtime::Handle,
@@ -12,13 +14,15 @@ where
     let task = tokio.spawn(future);
     HostAsyncTask::new(
         async move {
-            task.await
-                .map_err(|error| HostError::new(format!("provider task failed: {error}")))?
+            task.await.map_err(|error| {
+                navop_error(
+                    ErrorCode::RuntimeUnavailable,
+                    format!("provider task failed: {error}"),
+                )
+            })?
         },
         move || cancel.cancel(),
     )
 }
 
-pub(crate) fn host_error(error: extension_host::HostError) -> HostError {
-    HostError::new(error.to_string())
-}
+pub(crate) use super::super::error::host_error;

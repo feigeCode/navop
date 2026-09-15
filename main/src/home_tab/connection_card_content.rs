@@ -26,7 +26,7 @@ impl HomePage {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(self.connection_icon(conn, ConnectionVisualSize::Card)),
+                    .child(self.connection_icon(conn, ConnectionVisualSize::Card, cx)),
             )
             .child(
                 v_flex()

@@ -14,6 +14,8 @@ impl TerminalView {
         // 创建 Terminal Entity
         let duplicate_source = TerminalDuplicateSource::Local(config.clone());
         let local_working_dir = resolve_local_working_dir(config.working_dir.clone());
+        // WSL 会话没有 Windows 工作目录，文件树需要改指发行版文件系统
+        let workspace_source = resolve_local_workspace_source(&config);
         let init_error = Rc::new(RefCell::new(None));
         let init_error_clone = init_error.clone();
         let terminal = cx.new(move |cx| {
@@ -28,6 +30,7 @@ impl TerminalView {
                 stored_connection: None,
                 sync_path_enabled: true,
                 local_working_dir,
+                workspace_source,
                 tab_index,
                 duplicate_source: Some(duplicate_source),
                 recording_playback_name: None,
@@ -79,6 +82,7 @@ impl TerminalView {
                 stored_connection: Some(stored_conn),
                 sync_path_enabled: sync_path_with_terminal,
                 local_working_dir: None,
+                workspace_source: None,
                 tab_index,
                 duplicate_source: Some(duplicate_source),
                 recording_playback_name: None,
@@ -105,6 +109,7 @@ impl TerminalView {
                 stored_connection: None,
                 sync_path_enabled: false,
                 local_working_dir: None,
+                workspace_source: None,
                 tab_index: None,
                 duplicate_source: None,
                 recording_playback_name: Some(display_name),
@@ -131,6 +136,7 @@ impl TerminalView {
                 stored_connection: None,
                 sync_path_enabled: false,
                 local_working_dir: None,
+                workspace_source: None,
                 tab_index: None,
                 duplicate_source: None,
                 recording_playback_name: None,
@@ -162,6 +168,7 @@ impl TerminalView {
                 stored_connection: None,
                 sync_path_enabled: true,
                 local_working_dir: None,
+                workspace_source: None,
                 tab_index,
                 duplicate_source: Some(duplicate_source),
                 recording_playback_name: None,
@@ -193,6 +200,7 @@ impl TerminalView {
                 stored_connection: None,
                 sync_path_enabled: true,
                 local_working_dir: None,
+                workspace_source: None,
                 tab_index,
                 duplicate_source: Some(duplicate_source),
                 recording_playback_name: None,

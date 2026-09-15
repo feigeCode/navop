@@ -161,14 +161,24 @@ async fn poll_view_owner(
         }
         WindowsNativeCloseTake::Ready(operation) => {
             if deadline_elapsed {
-                // Leaking performs no COM calls; pending callbacks must never
-                // observe a dropped host during teardown.
-                let _ = Box::leak(Box::new(operation.into_leaked_adapter()));
+                // Handing the adapter over performs no COM calls; pending
+                // callbacks must never observe a dropped host during teardown.
+                // The retirement queue keeps ownership and retries destruction
+                // on the owner thread instead of leaking at the deadline.
+                crate::view::windows_native_retirement::retire(
+                    cx,
+                    operation.into_adapter(),
+                    registration.generation(),
+                    "drain-deadline",
+                );
                 tracing::error!(
+                    target: "remote_desktop_view::lifecycle",
+                    stage = "drain_deadline_retired",
                     token = registration.token(),
                     generation = registration.generation(),
+                    pending_retired = crate::view::windows_native_retirement::pending_count(cx),
                     "Windows native RDP shutdown drain deadline hit before close; \
-                     quarantining the adapter as timed-out-leaked"
+                     handing the adapter to the owner-thread retirement queue"
                 );
                 let dispatch = record_windows_native_rdp_terminal_async(
                     registration,

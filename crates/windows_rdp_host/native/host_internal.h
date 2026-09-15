@@ -68,6 +68,26 @@ void trace_native_utf16(
     const uint16_t* text,
     uint32_t text_len) noexcept;
 
+// Records the result of the ATL host `DestroyWindow` call.
+//
+// Navop used to call `DestroyWindow(host_window)` without checking the return
+// value, which left a blind spot: the Rust side reports the native host as
+// destroyed while the HWND may still own a window class instance and child
+// windows. A failed destroy is reported unconditionally (never gated on
+// NAVOP_REMOTE_DESKTOP_DIAGNOSTICS); a successful one stays behind the switch.
+//
+// `window_thread_id` must be captured *before* the destroy call, because Win32
+// no longer reports a thread id for a destroyed window.
+void log_native_host_window_destroy(
+    const char* stage,
+    uintptr_t host_window,
+    uintptr_t parent_window,
+    uint64_t generation,
+    uint32_t window_thread_id,
+    int32_t destroyed,
+    uint32_t win32_code,
+    uint32_t window_still_alive) noexcept;
+
 NavopRdpResult create_active_x_resources(
     NativeRdpHost* owner,
     uintptr_t parent_hwnd,

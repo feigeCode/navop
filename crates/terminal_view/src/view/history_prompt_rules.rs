@@ -111,15 +111,18 @@ pub(super) fn should_confirm_local_terminal_close(
 
 pub(super) const HISTORY_PROMPT_DROPDOWN_MIN_WIDTH: f32 = 300.0;
 pub(super) const HISTORY_PROMPT_DROPDOWN_MAX_WIDTH: f32 = 500.0;
+/// 浮层高度上限：cd 补全可能一次返回上百个目录，必须封顶并滚动，
+/// 否则 origin 计算会被撑满终端整窗。
+pub(super) const HISTORY_PROMPT_DROPDOWN_MAX_HEIGHT: f32 = 280.0;
 const HISTORY_PROMPT_DROPDOWN_BACKGROUND_OPACITY: f32 = 0.72;
 const HISTORY_PROMPT_ACTIVE_BACKGROUND_OPACITY: f32 = 0.32;
 const HISTORY_PROMPT_DROPDOWN_GAP_Y: f32 = 6.0;
 const HISTORY_PROMPT_DROPDOWN_EDGE_PADDING: f32 = 8.0;
 const HISTORY_PROMPT_DROPDOWN_ROW_PADDING_Y: f32 = 12.0;
-const HISTORY_PROMPT_DROPDOWN_CONTAINER_PADDING_Y: f32 = 16.0;
-const HISTORY_PROMPT_DROPDOWN_SEARCH_HEADER_HEIGHT: f32 = 20.0;
-const HISTORY_PROMPT_DROPDOWN_ROW_GAP: f32 = 4.0;
-const HISTORY_PROMPT_DROPDOWN_BORDER_Y: f32 = 2.0;
+pub(super) const HISTORY_PROMPT_DROPDOWN_CONTAINER_PADDING_Y: f32 = 16.0;
+pub(super) const HISTORY_PROMPT_DROPDOWN_SEARCH_HEADER_HEIGHT: f32 = 20.0;
+pub(super) const HISTORY_PROMPT_DROPDOWN_ROW_GAP: f32 = 4.0;
+pub(super) const HISTORY_PROMPT_DROPDOWN_BORDER_Y: f32 = 2.0;
 const HISTORY_PROMPT_DROPDOWN_INPUT_CLEARANCE: f32 = 8.0;
 
 pub(super) fn history_prompt_dropdown_background(background: Hsla) -> Hsla {
@@ -144,10 +147,13 @@ fn estimate_history_prompt_dropdown_height(
         px(0.0)
     };
 
-    px(HISTORY_PROMPT_DROPDOWN_CONTAINER_PADDING_Y + HISTORY_PROMPT_DROPDOWN_BORDER_Y)
-        + header_height
-        + rows_height
-        + row_gaps
+    let content_height =
+        px(HISTORY_PROMPT_DROPDOWN_CONTAINER_PADDING_Y + HISTORY_PROMPT_DROPDOWN_BORDER_Y)
+            + header_height
+            + rows_height
+            + row_gaps;
+    // 定位与渲染共用同一高度上限，保证 flip/夹取逻辑与可见区域一致。
+    content_height.min(px(HISTORY_PROMPT_DROPDOWN_MAX_HEIGHT))
 }
 
 pub(super) fn history_prompt_dropdown_origin(
@@ -192,8 +198,11 @@ pub(super) fn history_prompt_overlay_bounds(terminal_bounds: Bounds<Pixels>) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::{history_prompt_active_background, history_prompt_dropdown_background};
-    use gpui::{Hsla, rgb};
+    use super::{
+        HISTORY_PROMPT_DROPDOWN_MAX_HEIGHT, estimate_history_prompt_dropdown_height,
+        history_prompt_active_background, history_prompt_dropdown_background,
+    };
+    use gpui::{Hsla, px, rgb};
 
     #[test]
     fn history_prompt_dropdown_applies_translucent_background() {
@@ -217,5 +226,14 @@ mod tests {
         assert_eq!(foreground.s, active.s);
         assert_eq!(foreground.l, active.l);
         assert!((active.a - 0.32).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn history_prompt_dropdown_height_is_capped_for_large_match_sets() {
+        let uncapped = estimate_history_prompt_dropdown_height(px(20.0), 6, false);
+        let capped = estimate_history_prompt_dropdown_height(px(20.0), 200, false);
+
+        assert!(uncapped < px(HISTORY_PROMPT_DROPDOWN_MAX_HEIGHT));
+        assert_eq!(capped, px(HISTORY_PROMPT_DROPDOWN_MAX_HEIGHT));
     }
 }

@@ -12,6 +12,7 @@ pub use dev::{DevHostOps, GlobalDevHostOps, set_dev_host_ops};
 pub mod gpui_shell_reexport {
     pub use gpui_shell::{HostError, HostObject, HostValue, with_current_app};
 }
+mod error;
 mod event;
 mod grant;
 mod job;

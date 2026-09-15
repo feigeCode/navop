@@ -357,26 +357,15 @@ impl HistoryPromptState {
             return None;
         }
 
-        match self.mode {
-            HistoryPromptMode::InlineSuggest => {
-                let next_index = match self.selected {
-                    Some(index) => (index + 1).min(self.matches.len().saturating_sub(1)),
-                    None => 0,
-                };
-                self.selected = Some(next_index);
-                self.dropdown_visible = true;
-                Some(self.matches[next_index].clone())
-            }
-            HistoryPromptMode::Search => {
-                let next_index = match self.selected {
-                    Some(index) => (index + 1).min(self.matches.len().saturating_sub(1)),
-                    None => 0,
-                };
-                self.selected = Some(next_index);
-                self.dropdown_visible = true;
-                Some(self.matches[next_index].clone())
-            }
-        }
+        let last = self.matches.len() - 1;
+        let next_index = match self.selected {
+            None => 0,
+            Some(index) if index >= last => 0,
+            Some(index) => index + 1,
+        };
+        self.selected = Some(next_index);
+        self.dropdown_visible = true;
+        Some(self.matches[next_index].clone())
     }
 
     pub fn navigate_next(&mut self) -> Option<String> {
@@ -405,7 +394,12 @@ impl HistoryPromptState {
                 _ => None,
             },
             HistoryPromptMode::Search => {
-                let next_index = self.selected.unwrap_or(0).saturating_sub(1);
+                let last = self.matches.len() - 1;
+                let next_index = match self.selected {
+                    None => last,
+                    Some(0) => last,
+                    Some(index) => index - 1,
+                };
                 self.selected = Some(next_index);
                 self.dropdown_visible = true;
                 Some(self.matches[next_index].clone())
@@ -691,6 +685,22 @@ mod tests {
         assert_eq!(state.selected_index(), None);
         assert_eq!(state.selected_match(), Some("git status"));
 
+        assert_eq!(state.navigate_previous().as_deref(), Some("git status"));
+        assert_eq!(state.selected_index(), Some(0));
+    }
+
+    #[test]
+    fn down_navigation_wraps_from_last_match_to_first() {
+        let mut state = HistoryPromptState::from_input("git");
+        state.set_matches(vec![
+            "git status".to_string(),
+            "git stash".to_string(),
+            "git switch".to_string(),
+        ]);
+
+        assert_eq!(state.navigate_previous().as_deref(), Some("git status"));
+        assert_eq!(state.navigate_previous().as_deref(), Some("git stash"));
+        assert_eq!(state.navigate_previous().as_deref(), Some("git switch"));
         assert_eq!(state.navigate_previous().as_deref(), Some("git status"));
         assert_eq!(state.selected_index(), Some(0));
     }

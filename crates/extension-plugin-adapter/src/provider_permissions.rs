@@ -326,6 +326,7 @@ mod tests {
         ])
     }
 
+    #[cfg(unix)]
     #[test]
     fn unix_socket_permission_matches_exact_expanded_path() {
         let endpoint = NetworkEndpoint::parse(&format!(

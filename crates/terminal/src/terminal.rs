@@ -743,6 +743,13 @@ fn ssh_config_with_confirmed_host_key(
 const DEFAULT_COLS: usize = 80;
 const DEFAULT_ROWS: usize = 24;
 
+/// 本地 PTY 后端异常停止时写入 `child_exited` 的哨兵值。
+///
+/// 后端停止时子进程状态未知（PTY 读取线程可能已异常终止，而子进程本身仍然存在），
+/// 因此不能伪造正常的退出码；负值明确表示“没有可用的退出码”。界面只需要知道
+/// “这个会话已经结束”，从而不再把它当作可输入的活动会话。
+const LOCAL_BACKEND_STOPPED_EXIT_CODE: i32 = -1;
+
 /// 将路径安全地转为 POSIX shell 单参数，避免命令注入。
 pub(crate) fn shell_escape_arg(arg: &str) -> String {
     if arg.is_empty() {
@@ -888,6 +895,20 @@ pub fn resolve_local_working_dir(working_dir: Option<String>) -> Option<PathBuf>
         Some(dir) if dir.trim().is_empty() => default_local_working_dir(),
         Some(dir) => Some(PathBuf::from(dir)),
         None => default_local_working_dir(),
+    }
+}
+
+/// 本地终端文件树的根目录(仅本机/WSL 会话;容器会话返回 `None`)。
+///
+/// WSL 会话以 `wsl.exe --distribution <发行版>` 启动，发行版文件系统在 Windows 侧
+/// 通过 `\\wsl$\<发行版>` 暴露；这类会话没有 Windows 工作目录，若沿用普通本地
+/// 会话的回落逻辑（`dirs::home_dir()`），文件树会显示本机磁盘而不是发行版里的
+/// 文件。因此这里走 [`crate::workspace_source`] 的策略解析。容器 exec 会话的
+/// 文件系统不是本机路径，交由容器后端处理，此处不返回根目录。
+pub fn resolve_local_workspace_root(config: &LocalConfig) -> Option<PathBuf> {
+    match crate::workspace_source::resolve_local_workspace_source(config)? {
+        crate::workspace_source::LocalWorkspaceSource::Host { root } => Some(root),
+        crate::workspace_source::LocalWorkspaceSource::Container { .. } => None,
     }
 }
 
@@ -3190,6 +3211,17 @@ impl Terminal {
                 self.child_exited = Some(code);
                 cx.emit(TerminalModelEvent::ChildExit(code));
             }
+            TerminalEvent::BackendStopped => {
+                // 本地 PTY 后端已停止：既不会再产出输出，也不会接受输入。
+                // 必须显式结束会话，否则终端会停留在“看起来还在运行”的永久卡死状态，
+                // 用户既看不到错误也无法通过关闭/重连恢复。
+                tracing::warn!("本地终端后端已停止，标记会话结束");
+                self.backend = None;
+                self.child_exited = Some(LOCAL_BACKEND_STOPPED_EXIT_CODE);
+                cx.emit(TerminalModelEvent::ChildExit(
+                    LOCAL_BACKEND_STOPPED_EXIT_CODE,
+                ));
+            }
             TerminalEvent::ClipboardStore(_ty, data) => {
                 cx.emit(TerminalModelEvent::ClipboardStore(data));
             }
@@ -4512,7 +4544,7 @@ mod tests {
     use super::with_local_terminal_default_env;
     use super::{
         AutomaticSessionLogRequestInput, CommandRecordGate, ConnectionState,
-        HostKeyVerificationReason, HostKeyVerificationRequest, SessionLockState,
+        HostKeyVerificationReason, HostKeyVerificationRequest, LocalConfig, SessionLockState,
         SshConnectionUpdate, SshCredentialPromptPolicy, TermDimensions, Terminal,
         TerminalConnectionKind, TerminalMfaPrompt, TerminalMfaRequest, TerminalMfaResponder,
         TerminalScrollProxy, TerminalSessionMode, TerminalSshCredentials,
@@ -4522,9 +4554,10 @@ mod tests {
         is_reconnect_generation, is_ssh_password_prompt, keyboard_interactive_answers_for_terminal,
         merge_history_matches, normalize_history_matches, parse_stored_telnet_params,
         receive_terminal_event_for_gpui, recent_text_from_term,
-        resolve_default_windows_shell_from_env, resolve_local_working_dir, resolve_ssh_connection,
-        send_coalesced_wakeup, shell_escape_arg, should_install_connected_backend,
-        ssh_config_with_confirmed_host_key, ssh_config_with_runtime_credentials,
+        resolve_default_windows_shell_from_env, resolve_local_working_dir,
+        resolve_local_workspace_root, resolve_ssh_connection, send_coalesced_wakeup,
+        shell_escape_arg, should_install_connected_backend, ssh_config_with_confirmed_host_key,
+        ssh_config_with_runtime_credentials,
     };
     use crate::history::{
         HistoryEntry, ShellHistoryFormat, collect_history_suggestions, normalize_history_command,
@@ -6057,6 +6090,42 @@ mod tests {
         assert_eq!(
             dirs::home_dir(),
             resolve_local_working_dir(Some("  ".to_string()))
+        );
+    }
+
+    #[test]
+    fn resolve_local_workspace_root_keeps_the_working_dir_and_home_fallbacks() {
+        let explicit = LocalConfig {
+            shell: Some("cmd.exe".into()),
+            working_dir: Some("D:\\work".into()),
+            ..LocalConfig::default()
+        };
+        assert_eq!(
+            Some(std::path::PathBuf::from("D:\\work")),
+            resolve_local_workspace_root(&explicit)
+        );
+
+        let unspecified = LocalConfig {
+            shell: Some("cmd.exe".into()),
+            ..LocalConfig::default()
+        };
+        assert_eq!(dirs::home_dir(), resolve_local_workspace_root(&unspecified));
+    }
+
+    /// WSL 会话没有 Windows 工作目录；若按普通本地会话回落，文件树会指向本机
+    /// 主目录（issue：WSL 下文件树显示的不是发行版里的目录）。
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn resolve_local_workspace_root_points_wsl_sessions_at_the_distribution() {
+        let config = crate::wsl_distributions::local_config_for_wsl_distro_with(
+            "wsl.exe".into(),
+            "Ubuntu-24.04",
+        )
+        .unwrap();
+
+        assert_eq!(
+            Some(std::path::PathBuf::from(r"\\wsl$\Ubuntu-24.04")),
+            resolve_local_workspace_root(&config)
         );
     }
 

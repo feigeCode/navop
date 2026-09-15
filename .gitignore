@@ -18,6 +18,8 @@ docs-site/docs/public/images/
 target/
 **/target/
 crates/**/target/
+# 本机低内存构建用的独立 target 目录（CARGO_TARGET_DIR=target-native）
+target-native/
 
 # Debug artifacts
 **/*.rs.bk
@@ -61,3 +63,4 @@ commit-info.md
 .codegraph/
 .zcode/
 updates_latest.json
+.workbuddy/

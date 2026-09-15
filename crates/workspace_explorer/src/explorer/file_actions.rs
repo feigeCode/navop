@@ -2,9 +2,7 @@ use super::{
     WorkspaceExplorer,
     clipboard::{FileClipboard, FileClipboardKind},
 };
-use crate::file_system::{
-    copy_entry, create_directory, create_file, delete_entry, move_entry, rename_entry,
-};
+use crate::backend::WorkspaceBackend;
 use crate::git::{GitChange, GitRepository, discard_change, stage_change, unstage_change};
 use anyhow::Result;
 use gpui::{
@@ -93,29 +91,29 @@ struct FileTreeRefresh {
 }
 
 impl ExplorerOperation {
-    fn run(self) -> Result<()> {
+    fn run(self, backend: &std::sync::Arc<dyn WorkspaceBackend>) -> Result<()> {
         match self {
             Self::CreateFile { parent, name } => {
-                create_file(&parent, &name)?;
+                backend.create_file(&parent, &name)?;
             }
             Self::CreateDirectory { parent, name } => {
-                create_directory(&parent, &name)?;
+                backend.create_directory(&parent, &name)?;
             }
             Self::Rename { path, new_name } => {
-                rename_entry(&path, &new_name)?;
+                backend.rename_entry(&path, &new_name)?;
             }
-            Self::Delete(path) => delete_entry(&path)?,
+            Self::Delete(path) => backend.delete_entry(&path)?,
             Self::Copy {
                 source,
                 destination,
             } => {
-                copy_entry(&source, &destination)?;
+                backend.copy_entry(&source, &destination)?;
             }
             Self::Move {
                 source,
                 destination,
             } => {
-                move_entry(&source, &destination)?;
+                backend.move_entry(&source, &destination)?;
             }
             Self::Stage { repository, change } => stage_change(&repository, &change)?,
             Self::Unstage { repository, change } => unstage_change(&repository, &change)?,
@@ -418,7 +416,8 @@ impl WorkspaceExplorer {
         self.file_confirmation = None;
         self.file_action_subscription = None;
         let file_tree_refresh = operation.file_tree_refresh();
-        let task = cx.background_spawn(async move { operation.run() });
+        let backend = self.backend.clone();
+        let task = cx.background_spawn(async move { operation.run(&backend) });
         let entity = cx.entity().downgrade();
         let window_handle = window.window_handle();
         cx.spawn(async move |_: WeakEntity<Self>, cx: &mut AsyncApp| {
@@ -487,13 +486,9 @@ impl WorkspaceExplorer {
         let show_hidden = self.show_hidden;
         let show_ignored = self.show_ignored;
         let matcher = self.ignore_matcher.clone();
+        let backend = self.backend.clone();
         let task = cx.background_spawn(async move {
-            crate::file_system::read_directory(
-                &task_path,
-                matcher.as_deref(),
-                show_hidden,
-                show_ignored,
-            )
+            backend.read_directory(&task_path, matcher.as_deref(), show_hidden, show_ignored)
         });
         let entity = cx.entity().downgrade();
         cx.spawn(async move |_: WeakEntity<Self>, cx: &mut AsyncApp| {

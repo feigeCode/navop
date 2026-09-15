@@ -31,9 +31,6 @@ impl CredentialRepository {
             ConnectionType::Telnet => {
                 serde_json::to_string(&self.resolve_telnet(connection.to_telnet_params()?)?)?
             }
-            ConnectionType::Ftp => {
-                serde_json::to_string(&self.resolve_ftp(connection.to_ftp_params()?)?)?
-            }
             ConnectionType::Rdp | ConnectionType::Vnc => serde_json::to_string(
                 &self.resolve_remote_desktop(connection.to_remote_desktop_params()?)?,
             )?,

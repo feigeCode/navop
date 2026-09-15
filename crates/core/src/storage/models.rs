@@ -85,7 +85,6 @@ pub enum ConnectionType {
     All,
     Database,
     SshSftp,
-    Ftp,
     Redis,
     MongoDB,
     Mqtt,
@@ -103,7 +102,6 @@ impl fmt::Display for ConnectionType {
             ConnectionType::All => "All",
             ConnectionType::Database => "Database",
             ConnectionType::SshSftp => "SshSftp",
-            ConnectionType::Ftp => "Ftp",
             ConnectionType::Redis => "Redis",
             ConnectionType::MongoDB => "MongoDB",
             ConnectionType::Mqtt => "Mqtt",
@@ -123,7 +121,6 @@ impl ConnectionType {
         vec![
             ConnectionType::All,
             ConnectionType::SshSftp,
-            ConnectionType::Ftp,
             ConnectionType::Database,
             ConnectionType::Redis,
             ConnectionType::MongoDB,
@@ -140,7 +137,6 @@ impl ConnectionType {
         match s {
             "Database" => ConnectionType::Database,
             "SshSftp" => ConnectionType::SshSftp,
-            "Ftp" => ConnectionType::Ftp,
             "Redis" => ConnectionType::Redis,
             "MongoDB" => ConnectionType::MongoDB,
             "Mqtt" => ConnectionType::Mqtt,
@@ -159,7 +155,6 @@ impl ConnectionType {
             ConnectionType::All => "All",
             ConnectionType::Database => "Database",
             ConnectionType::SshSftp => "SSH/SFTP",
-            ConnectionType::Ftp => "FTP",
             ConnectionType::Redis => "Redis",
             ConnectionType::MongoDB => "MongoDB",
             ConnectionType::Mqtt => "MQTT",
@@ -177,8 +172,6 @@ impl ConnectionType {
             ConnectionType::All => IconName::Server,
             ConnectionType::Database => IconName::Database,
             ConnectionType::SshSftp => IconName::TerminalColor,
-            // FTP 无品牌图标，先复用通用文件夹图标；后续可在应用资产中补充品牌 SVG。
-            ConnectionType::Ftp => IconName::Folder,
             ConnectionType::Redis => IconName::Redis,
             ConnectionType::MongoDB => IconName::MongoDB,
             // 外部 gpui-component 未提供 MQTT 品牌图标,
@@ -2230,17 +2223,6 @@ fn default_ssh_name(name: String, params: &SshParams) -> String {
     trimmed_or_default(name, default_name)
 }
 
-fn default_ftp_name(name: String, params: &FtpParams) -> String {
-    let username = params.username.trim();
-    let destination = host_port_name(&params.host, params.port);
-    let default_name = if username.is_empty() {
-        destination
-    } else {
-        format!("{username}@{destination}")
-    };
-    trimmed_or_default(name, default_name)
-}
-
 fn default_remote_desktop_name(name: String, params: &RemoteDesktopParams) -> String {
     trimmed_or_default(name, host_port_name(&params.host, params.port))
 }
@@ -2417,29 +2399,6 @@ impl StoredConnection {
         }
     }
 
-    pub fn new_ftp(name: String, params: FtpParams, workspace_id: Option<i64>) -> Self {
-        let name = default_ftp_name(name, &params);
-        Self {
-            id: None,
-            credential_revision: None,
-            name,
-            connection_type: ConnectionType::Ftp,
-            params: serde_json::to_string(&params).expect("FtpParams 序列化不应失败"),
-            workspace_id,
-            selected_databases: None,
-            remark: None,
-            sync_enabled: true,
-            cloud_id: None,
-            last_synced_at: None,
-            last_used_at: None,
-            sort_order: None,
-            created_at: None,
-            updated_at: None,
-            team_id: None,
-            owner_id: None,
-        }
-    }
-
     pub fn new_remote_desktop(
         name: String,
         params: RemoteDesktopParams,
@@ -2554,10 +2513,6 @@ impl StoredConnection {
     /// 旧配置缺失时返回默认值（SFTP 协议、无 FTP 参数）。
     pub fn remote_file_params(&self) -> Result<RemoteFileParams, serde_json::Error> {
         Ok(self.to_ssh_params()?.remote_file.unwrap_or_default())
-    }
-
-    pub fn to_ftp_params(&self) -> Result<FtpParams, serde_json::Error> {
-        serde_json::from_str(&self.params)
     }
 
     pub fn to_remote_desktop_params(&self) -> Result<RemoteDesktopParams, serde_json::Error> {

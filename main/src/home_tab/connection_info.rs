@@ -31,10 +31,6 @@ pub(super) fn card_connection_info(conn: &StoredConnection) -> Option<String> {
             .to_extension_params()
             .ok()
             .map(|params| format!("{} / {}", params.extension_id, params.contribution_id)),
-        ConnectionType::Ftp => conn
-            .to_ftp_params()
-            .ok()
-            .map(|params| format!("{}:{}", params.host, params.port)),
         _ => None,
     }
 }
@@ -54,7 +50,6 @@ pub(super) fn screenshot_safe_connection_info(
         ConnectionType::Rdp => Some("user@localhost:3389"),
         ConnectionType::Vnc => Some("user@localhost:5900"),
         ConnectionType::Extension => Some("Local Extension"),
-        ConnectionType::Ftp => Some("localhost:21"),
         ConnectionType::All => None,
     }
 }
@@ -76,7 +71,6 @@ pub(super) fn connection_display_name(conn: &StoredConnection) -> String {
         ConnectionType::Rdp => "Local RDP",
         ConnectionType::Vnc => "Local VNC",
         ConnectionType::Extension => "Local Extension",
-        ConnectionType::Ftp => "Local FTP",
         ConnectionType::All => "Local Connection",
     }
     .to_owned()

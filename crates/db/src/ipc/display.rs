@@ -1,4 +1,6 @@
-use crate::ipc::{IpcDriverManifest, IpcDriverRegistry};
+use crate::ipc::{
+    DRIVER_ICON_ASSET_PREFIX, IpcDriverManifest, IpcDriverRegistry, local_icon_asset_path,
+};
 use gpui_component::{Icon, IconNamed, Sizable, Size};
 use one_assets::IconName;
 use one_core::storage::DbConnectionConfig;
@@ -46,8 +48,13 @@ impl IpcDriverManifest {
         if icon.is_empty() {
             return None;
         }
-        let asset_path = builtin_icon_asset_path(icon)
-            .unwrap_or_else(|| format!("driver://{}/{resource}{}", self.id, icon_extension(icon)));
+        let asset_path = builtin_icon_asset_path(icon).unwrap_or_else(|| {
+            format!(
+                "{DRIVER_ICON_ASSET_PREFIX}{}/{resource}{}",
+                self.id,
+                icon_extension(icon)
+            )
+        });
         Some(asset_path)
     }
 
@@ -65,10 +72,18 @@ pub fn driver_icon_from_asset_path(path: impl Into<String>, size: impl Into<Size
     Icon::default().path(path.into()).color().with_size(size)
 }
 
+/// 以品牌原色渲染一个本地图标文件。
+///
+/// 不能读成字节再交给 `Icon::data(bytes).color()`：`Icon` 的 Color 模式下
+/// Data 分支走 `svg()`，而 gpui 的 `svg()` 既只输出单色 alpha mask，又要求
+/// 显式 text color，叠加后图标整块不绘制（本仓提交 `c4eba02f7` 的回归）。
+///
+/// 正确路径是 `img()`：本地文件先转成无 scheme 的资产路径（见
+/// [`local_icon_asset_path`]），由应用 `AssetSource` 读盘后经 gpui 的图像
+/// 解码分支 `svg_renderer.render_single_frame(..)` 渲染，保留 SVG 原色。
 pub fn driver_icon_from_file_path(path: impl Into<PathBuf>, size: impl Into<Size>) -> Icon {
-    // gpui (main) 没有 file_path，直接读文件内容并以 SVG 字节提供
-    let data = std::fs::read(path.into()).unwrap_or_default();
-    Icon::default().data(&data).color().with_size(size)
+    let asset_path = local_icon_asset_path(&path.into());
+    Icon::default().path(asset_path).color().with_size(size)
 }
 
 impl IpcDriverRegistry {

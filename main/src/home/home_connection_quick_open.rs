@@ -1,4 +1,6 @@
-use crate::connection_visuals::{ConnectionVisualSize, stored_connection_icon};
+use crate::connection_visuals::{
+    ConnectionVisualSize, stored_connection_icon_with_catalog,
+};
 use crate::home_tab::{HomePage, connection_matches_query};
 use db::ipc::IpcDriverRegistry;
 use gpui::{
@@ -234,12 +236,15 @@ impl ListDelegate for ConnectionQuickOpenDelegate {
         let connection = self.filtered_items.get(ix.row)?.clone();
         let parent = self.parent.clone();
         let name = connection.name.clone();
-        let connection_type = connection.connection_type;
-        let icon = stored_connection_icon(
-            &connection,
-            ConnectionVisualSize::Tree,
-            &self.external_driver_registry,
-        );
+        let icon = {
+            let extension_catalog = crate::connection_visuals::extension_catalog_from_cx(cx);
+            stored_connection_icon_with_catalog(
+                &connection,
+                ConnectionVisualSize::Tree,
+                &self.external_driver_registry,
+                extension_catalog.as_deref(),
+            )
+        };
         let connection_for_open = connection.clone();
 
         Some(
@@ -274,7 +279,11 @@ impl ListDelegate for ConnectionQuickOpenDelegate {
                             div()
                                 .text_xs()
                                 .text_color(cx.theme().muted_foreground)
-                                .child(SharedString::from(connection_type.label())),
+                                .child(SharedString::from(
+                                    crate::connection_visuals::connection_type_display_label(
+                                        &connection, cx,
+                                    ),
+                                )),
                         ),
                 ),
         )

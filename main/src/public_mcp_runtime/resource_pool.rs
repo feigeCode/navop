@@ -194,7 +194,6 @@ fn connection_kind(connection: &StoredConnection) -> ResourceKind {
                 ))
             })
             .unwrap_or_else(|_| ResourceKind::Other("extension".into())),
-        ConnectionType::Ftp => ResourceKind::Other("ftp".into()),
         ConnectionType::All => ResourceKind::Other("all".into()),
     }
 }

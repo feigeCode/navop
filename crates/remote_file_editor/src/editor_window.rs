@@ -1,3 +1,4 @@
+use crate::diagnostics::{self, EditorTaskDetail, EditorTaskGuard, EditorTaskKind};
 use crate::file_policy::{
     EditorMode, FilePolicy, decode_text_content, determine_file_policy_with_limit,
 };
@@ -321,6 +322,15 @@ struct RemoteFileEditorWindow {
     next_tab_id: u64,
 }
 
+/// Releases the per-view and per-tab gauges at the true end of the view's
+/// lifetime — including every tab still open when the window is removed
+/// without ever going through [`RemoteFileEditorWindow::close_clean_tab`].
+impl Drop for RemoteFileEditorWindow {
+    fn drop(&mut self) {
+        let _ = diagnostics::record_editor_view_released_with_tabs(self.tabs.len());
+    }
+}
+
 impl RemoteFileEditorWindow {
     fn new(
         remote_path: String,
@@ -338,6 +348,7 @@ impl RemoteFileEditorWindow {
             close_window_after_saves: false,
             next_tab_id: 1,
         };
+        diagnostics::record_editor_view_created();
         this.register_close_guard(window, cx);
         this.open_or_focus_tab(remote_path, on_remote_changed, window, cx);
         this
@@ -365,6 +376,7 @@ impl RemoteFileEditorWindow {
             self.next_tab_id += 1;
             self.tabs
                 .push(RemoteEditorTab::new(tab_id, remote_path, on_remote_changed));
+            diagnostics::record_editor_tab_created();
             self.active_tab = active_index;
             self.reload_tab(active_index, window, cx);
         } else {
@@ -432,7 +444,17 @@ impl RemoteFileEditorWindow {
             let file_size = bytes.len();
             let policy = determine_file_policy_with_limit(file_size, max_bytes)?;
             let text = decode_text_content(&bytes)?;
-            let language = load_language_for_path(&task_remote_path, policy.is_large_file)?;
+            let language = {
+                let _parse_guard = EditorTaskGuard::begin(
+                    EditorTaskKind::Parse,
+                    tab_id,
+                    EditorTaskDetail {
+                        size_bytes: Some(file_size),
+                        language: None,
+                    },
+                );
+                load_language_for_path(&task_remote_path, policy.is_large_file)?
+            };
             Ok::<_, anyhow::Error>(LoadedFile {
                 text,
                 policy,
@@ -441,27 +463,52 @@ impl RemoteFileEditorWindow {
             })
         });
 
-        let view = cx.entity().clone();
+        // A weak reference keeps a slow remote read from pinning the whole
+        // editor window (and every tab it owns) after the user closed it, and
+        // the load guard keeps the draining work visible in diagnostics.
+        let view = cx.entity().downgrade();
         window
-            .spawn(cx, async move |cx| match task.await {
-                Ok(Ok(loaded)) => {
-                    let _ = view.update_in(cx, |this, window, cx| {
-                        this.apply_loaded_file(tab_id, &remote_path, loaded, window, cx);
-                    });
-                }
-                Ok(Err(error)) => {
-                    let message = error.to_string();
-                    let _ = view.update_in(cx, |this, window, cx| {
-                        this.apply_load_error(tab_id, &remote_path, message.clone(), cx);
-                        window.push_notification(Notification::error(message), cx);
-                    });
-                }
-                Err(error) => {
-                    let message = error.to_string();
-                    let _ = view.update_in(cx, |this, window, cx| {
-                        this.apply_load_error(tab_id, &remote_path, message.clone(), cx);
-                        window.push_notification(Notification::error(message), cx);
-                    });
+            .spawn(cx, async move |cx| {
+                let _load_guard = EditorTaskGuard::begin(
+                    EditorTaskKind::Load,
+                    tab_id,
+                    EditorTaskDetail::default(),
+                );
+                match task.await {
+                    Ok(Ok(loaded)) => {
+                        if view
+                            .update_in(cx, |this, window, cx| {
+                                this.apply_loaded_file(tab_id, &remote_path, loaded, window, cx);
+                            })
+                            .is_err()
+                        {
+                            diagnostics::log_task_result_discarded(EditorTaskKind::Load, tab_id);
+                        }
+                    }
+                    Ok(Err(error)) => {
+                        let message = error.to_string();
+                        if view
+                            .update_in(cx, |this, window, cx| {
+                                this.apply_load_error(tab_id, &remote_path, message.clone(), cx);
+                                window.push_notification(Notification::error(message), cx);
+                            })
+                            .is_err()
+                        {
+                            diagnostics::log_task_result_discarded(EditorTaskKind::Load, tab_id);
+                        }
+                    }
+                    Err(error) => {
+                        let message = error.to_string();
+                        if view
+                            .update_in(cx, |this, window, cx| {
+                                this.apply_load_error(tab_id, &remote_path, message.clone(), cx);
+                                window.push_notification(Notification::error(message), cx);
+                            })
+                            .is_err()
+                        {
+                            diagnostics::log_task_result_discarded(EditorTaskKind::Load, tab_id);
+                        }
+                    }
                 }
             })
             .detach();
@@ -583,6 +630,7 @@ impl RemoteFileEditorWindow {
         let remote_path = tab.remote_path.clone();
         let task_remote_path = remote_path.clone();
         let client = self.client.clone();
+        let save_bytes = text.len();
         let task = Tokio::spawn(cx, async move {
             let mut client = client.lock().await;
             client
@@ -591,34 +639,63 @@ impl RemoteFileEditorWindow {
             Ok::<_, anyhow::Error>(text)
         });
 
-        let view = cx.entity().clone();
+        // The write itself still runs to completion after the window is gone;
+        // only the UI update turns into a no-op. The weak reference stops the
+        // detached task from pinning the closed window while it drains, and the
+        // save guard keeps the in-flight write observable in diagnostics.
+        let view = cx.entity().downgrade();
         window
-            .spawn(cx, async move |cx| match task.await {
-                Ok(Ok(saved_text)) => {
-                    let _ = view.update_in(cx, |this, window, cx| {
-                        this.apply_saved_file(
-                            tab_id,
-                            &remote_path,
-                            saved_text,
-                            close_after_save,
-                            window,
-                            cx,
-                        );
-                    });
-                }
-                Ok(Err(error)) => {
-                    let message = error.to_string();
-                    let _ = view.update_in(cx, |this, window, cx| {
-                        this.apply_save_error(tab_id, &remote_path, message.clone(), cx);
-                        window.push_notification(Notification::error(message), cx);
-                    });
-                }
-                Err(error) => {
-                    let message = error.to_string();
-                    let _ = view.update_in(cx, |this, window, cx| {
-                        this.apply_save_error(tab_id, &remote_path, message.clone(), cx);
-                        window.push_notification(Notification::error(message), cx);
-                    });
+            .spawn(cx, async move |cx| {
+                let _save_guard = EditorTaskGuard::begin(
+                    EditorTaskKind::Save,
+                    tab_id,
+                    EditorTaskDetail {
+                        size_bytes: Some(save_bytes),
+                        language: None,
+                    },
+                );
+                match task.await {
+                    Ok(Ok(saved_text)) => {
+                        if view
+                            .update_in(cx, |this, window, cx| {
+                                this.apply_saved_file(
+                                    tab_id,
+                                    &remote_path,
+                                    saved_text,
+                                    close_after_save,
+                                    window,
+                                    cx,
+                                );
+                            })
+                            .is_err()
+                        {
+                            diagnostics::log_task_result_discarded(EditorTaskKind::Save, tab_id);
+                        }
+                    }
+                    Ok(Err(error)) => {
+                        let message = error.to_string();
+                        if view
+                            .update_in(cx, |this, window, cx| {
+                                this.apply_save_error(tab_id, &remote_path, message.clone(), cx);
+                                window.push_notification(Notification::error(message), cx);
+                            })
+                            .is_err()
+                        {
+                            diagnostics::log_task_result_discarded(EditorTaskKind::Save, tab_id);
+                        }
+                    }
+                    Err(error) => {
+                        let message = error.to_string();
+                        if view
+                            .update_in(cx, |this, window, cx| {
+                                this.apply_save_error(tab_id, &remote_path, message.clone(), cx);
+                                window.push_notification(Notification::error(message), cx);
+                            })
+                            .is_err()
+                        {
+                            diagnostics::log_task_result_discarded(EditorTaskKind::Save, tab_id);
+                        }
+                    }
                 }
             })
             .detach();
@@ -730,6 +807,7 @@ impl RemoteFileEditorWindow {
 
         let next_active = active_index_after_close(self.active_tab, index, self.tabs.len());
         self.tabs.remove(index);
+        diagnostics::record_editor_tab_dropped();
         if let Some(next_active) = next_active {
             self.active_tab = next_active;
             self.update_window_title(window);

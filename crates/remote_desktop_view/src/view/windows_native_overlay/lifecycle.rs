@@ -40,6 +40,7 @@ impl WindowsNativeOverlay {
             _thread_affinity: PhantomData,
         };
         diagnostics::log_created(&overlay);
+        windows_rdp_host::lifecycle_counters().record_overlay_created();
         Ok(overlay)
     }
 
@@ -103,13 +104,20 @@ impl WindowsNativeOverlay {
         if self.window == 0 {
             return Ok(());
         }
-        validate_thread(self.owner_thread, "destroy_child_overlay")?;
+        if let Err(error) = validate_thread(self.owner_thread, "destroy_child_overlay") {
+            // The overlay HWND survives, and it can only ever be destroyed from
+            // its owner thread, so this is a real leak rather than a retryable
+            // failure.
+            windows_rdp_host::lifecycle_counters().record_overlay_destroy_failed();
+            return Err(error);
+        }
         self.requested_visible = false;
         let hide_error = self.hide_actual().err();
 
         let window = window_pointer(self.window);
         if unsafe { IsWindow(window) } != 0 && unsafe { DestroyWindow(window) } == 0 {
             let destroy_error = last_error("destroy_child_overlay");
+            windows_rdp_host::lifecycle_counters().record_overlay_destroy_failed();
             if let Some(error) = hide_error {
                 tracing::warn!(
                     ?error,
@@ -132,6 +140,7 @@ impl WindowsNativeOverlay {
             overlay_hwnd = self.window,
             "destroyed Windows native RDP overlay"
         );
+        windows_rdp_host::lifecycle_counters().record_overlay_destroyed();
         self.window = 0;
         self.last_bounds = None;
         Ok(())
@@ -141,6 +150,7 @@ impl WindowsNativeOverlay {
         if self.window == 0 {
             return;
         }
+        windows_rdp_host::lifecycle_counters().record_overlay_abandoned();
         tracing::error!(
             stage = "overlay_abandoned",
             generation = self.generation,

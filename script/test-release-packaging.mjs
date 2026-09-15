@@ -189,7 +189,7 @@ test("Linux keeps full-feature standard packages and publishes portable variants
   assert.match(build, /if \[ "\$\{\{ matrix\.portable_linux \}\}" = "true" \]/);
   assert.match(
     build,
-    /cargo zigbuild[\s\S]*--release[\s\S]*-p main[\s\S]*--target "\$\{\{ matrix\.target \}\}\.2\.28"[\s\S]*--no-default-features[\s\S]*--features wasm-components/,
+    /cargo zigbuild[\s\S]*--release[\s\S]*-p main[\s\S]*--target "\$\{\{ matrix\.target \}\}\.2\.28"[\s\S]*--no-default-features[\s\S]*--features wasm-components,shell-plugins/,
   );
   assert.match(
     build,
@@ -256,7 +256,7 @@ test("portable Linux disables WebView while standard builds keep it", () => {
   assert.match(htmlCodeBlock, /HtmlPreview\.webview_unavailable/);
   assert.match(
     mainCargo,
-    /default = \["wasm-components", "embedded-webview", "windows-native-rdp"\]/,
+    /default = \["wasm-components", "embedded-webview", "windows-native-rdp", "shell-plugins"\]/,
   );
   assert.match(
     mainCargo,

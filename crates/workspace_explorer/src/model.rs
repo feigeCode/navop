@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ExplorerEntry {
+pub struct ExplorerEntry {
     pub(crate) path: PathBuf,
     pub(crate) name: String,
     pub(crate) is_dir: bool,

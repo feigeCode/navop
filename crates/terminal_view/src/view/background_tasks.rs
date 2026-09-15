@@ -1,14 +1,17 @@
 use super::*;
+use crate::transfer_notice::{TransferAction, transfer_finish_notification};
 use one_core::background_tasks::{
     self, BackgroundTaskCancellation, BackgroundTaskProgressUnit, BackgroundTaskSpec,
 };
-use terminal::zmodem::{ZmodemTransferDirection, ZmodemTransferId, ZmodemTransferOutcome};
+use terminal::zmodem::{
+    ZmodemTransferDirection, ZmodemTransferId, ZmodemTransferOutcome, ZmodemTransferProgress,
+};
 
 impl TerminalView {
     /// 将 ZMODEM 传输进度同步到全局后台任务面板。
     pub(super) fn sync_zmodem_background_task(
         &mut self,
-        progress: Option<terminal::zmodem::ZmodemTransferProgress>,
+        progress: Option<ZmodemTransferProgress>,
         cx: &mut Context<Self>,
     ) {
         let Some(progress) = progress.or_else(|| self.terminal.read(cx).zmodem_transfer_progress())
@@ -102,12 +105,16 @@ impl TerminalView {
         });
     }
 
-    /// 根据协议返回的真实终态更新全局后台任务。
+    /// 根据协议返回的真实终态更新全局后台任务，并补一条终态 toast（issue #199）。
+    ///
+    /// 后台任务面板在右上角、需要用户额外点开一次，所以完成/失败时另外弹一条通知，
+    /// 不必先展开面板才知道结果。
     pub(super) fn finish_zmodem_background_task(
         &mut self,
         transfer_id: ZmodemTransferId,
         outcome: &ZmodemTransferOutcome,
-        progress: Option<terminal::zmodem::ZmodemTransferProgress>,
+        progress: Option<ZmodemTransferProgress>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let manager = background_tasks::global(cx);
@@ -119,25 +126,31 @@ impl TerminalView {
             }
         }
         if id.is_none() {
-            if let Some(progress) = progress {
+            if let Some(progress) = progress.clone() {
                 self.sync_zmodem_background_task(Some(progress), cx);
                 id = self.zmodem_background_tasks.remove(&transfer_id);
             }
         }
-        let Some(id) = id else {
-            return;
-        };
-        manager.update(cx, |manager, cx| match outcome {
-            ZmodemTransferOutcome::Succeeded => manager.succeed(id, None, cx),
-            ZmodemTransferOutcome::Cancelled => manager.cancel_confirmed(id, None, cx),
-            ZmodemTransferOutcome::Failed(error) => manager.fail(id, error.clone(), cx),
-        });
+        if let Some(id) = id {
+            manager.update(cx, |manager, cx| match outcome {
+                ZmodemTransferOutcome::Succeeded => manager.succeed(id, None, cx),
+                ZmodemTransferOutcome::Cancelled => manager.cancel_confirmed(id, None, cx),
+                ZmodemTransferOutcome::Failed(error) => manager.fail(id, error.clone(), cx),
+            });
+        }
+
+        if let Some(progress) = progress.as_ref() {
+            if let Some(notification) = zmodem_finish_notification(
+                progress.direction(),
+                Some(progress.file_name()),
+                outcome,
+            ) {
+                window.push_notification(notification, cx);
+            }
+        }
     }
 
-    fn zmodem_background_task_key(
-        &self,
-        progress: &terminal::zmodem::ZmodemTransferProgress,
-    ) -> SharedString {
+    fn zmodem_background_task_key(&self, progress: &ZmodemTransferProgress) -> SharedString {
         let entity_id = self.terminal.entity_id().as_u64();
         SharedString::from(format!(
             "zmodem-{}:{entity_id}:{}",
@@ -158,6 +171,30 @@ impl TerminalView {
                 manager.cancel_confirmed(task_id, None, cx);
             }
         });
+    }
+}
+
+/// ZMODEM 传输终态 toast（issue #199）。
+///
+/// 取消是用户主动行为，不再额外打扰；只有完成和失败需要即时反馈。
+fn zmodem_finish_notification(
+    direction: ZmodemTransferDirection,
+    file_name: Option<&str>,
+    outcome: &ZmodemTransferOutcome,
+) -> Option<Notification> {
+    let action = match direction {
+        ZmodemTransferDirection::Upload => TransferAction::Upload,
+        ZmodemTransferDirection::Download => TransferAction::Download,
+    };
+
+    match outcome {
+        ZmodemTransferOutcome::Succeeded => {
+            Some(transfer_finish_notification(action, file_name, None))
+        }
+        ZmodemTransferOutcome::Failed(error) => {
+            Some(transfer_finish_notification(action, file_name, Some(error)))
+        }
+        ZmodemTransferOutcome::Cancelled => None,
     }
 }
 
@@ -197,9 +234,11 @@ fn zmodem_progress_values(
 
 #[cfg(test)]
 mod tests {
-    use super::{format_zmodem_bytes, zmodem_progress_values};
+    use super::{format_zmodem_bytes, zmodem_finish_notification, zmodem_progress_values};
     use std::collections::HashMap;
-    use terminal::zmodem::ZmodemTransferId;
+    use terminal::zmodem::{
+        ZmodemTransferDirection, ZmodemTransferId, ZmodemTransferOutcome,
+    };
 
     #[test]
     fn formats_zmodem_byte_counts() {
@@ -218,6 +257,35 @@ mod tests {
         assert_eq!(
             (1536, Some(4096)),
             zmodem_progress_values(1536, 4096, 512, 1024)
+        );
+    }
+
+    #[test]
+    fn zmodem_finish_notifies_on_success_and_failure_only() {
+        // issue #199：完成 / 失败要有即时提示；取消是用户主动操作，不再打扰。
+        assert!(
+            zmodem_finish_notification(
+                ZmodemTransferDirection::Download,
+                Some("archive.tar"),
+                &ZmodemTransferOutcome::Succeeded,
+            )
+            .is_some()
+        );
+        assert!(
+            zmodem_finish_notification(
+                ZmodemTransferDirection::Upload,
+                Some("archive.tar"),
+                &ZmodemTransferOutcome::Failed("connection reset".to_string()),
+            )
+            .is_some()
+        );
+        assert!(
+            zmodem_finish_notification(
+                ZmodemTransferDirection::Download,
+                Some("archive.tar"),
+                &ZmodemTransferOutcome::Cancelled,
+            )
+            .is_none()
         );
     }
 

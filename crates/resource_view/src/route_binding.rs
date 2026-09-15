@@ -12,17 +12,28 @@ pub fn build_route(
     current_route: &serde_json::Value,
     selection: &serde_json::Value,
 ) -> serde_json::Value {
+    build_route_with_parent(bindings, current_route, selection, &serde_json::Value::Null)
+}
+
+/// 树子节点点击的变体:额外提供父节点行数据供 `parent` 绑定源取值。
+pub fn build_route_with_parent(
+    bindings: &BTreeMap<String, ResourceWorkbenchBinding>,
+    current_route: &serde_json::Value,
+    selection: &serde_json::Value,
+    parent: &serde_json::Value,
+) -> serde_json::Value {
     let mut route = serde_json::Map::new();
     for (name, binding) in bindings {
         let value = match binding.source {
             ResourceWorkbenchBindingSource::Selection => pick(selection, &binding.path),
             ResourceWorkbenchBindingSource::Route => pick(current_route, &binding.path),
+            ResourceWorkbenchBindingSource::Parent => pick(parent, &binding.path),
             ResourceWorkbenchBindingSource::Literal => {
                 binding.value.clone().unwrap_or(serde_json::Value::Null)
             }
-            ResourceWorkbenchBindingSource::Input | ResourceWorkbenchBindingSource::Paging => {
-                serde_json::Value::Null
-            }
+            ResourceWorkbenchBindingSource::Input
+            | ResourceWorkbenchBindingSource::Paging
+            | ResourceWorkbenchBindingSource::Connection => serde_json::Value::Null,
         };
         if !value.is_null() {
             route.insert(name.clone(), value);
@@ -88,5 +99,30 @@ mod tests {
         let route = build_route(&bindings, &current, &serde_json::Value::Null);
 
         assert_eq!(current, route);
+    }
+
+    #[test]
+    fn merges_parent_and_selection_for_nested_tree_nodes() {
+        let bindings = [
+            (
+                "namespace".to_string(),
+                binding(ResourceWorkbenchBindingSource::Parent, "/name"),
+            ),
+            (
+                "pod".to_string(),
+                binding(ResourceWorkbenchBindingSource::Selection, "/name"),
+            ),
+        ]
+        .into_iter()
+        .collect();
+        let parent = serde_json::json!({"name": "default"});
+        let row = serde_json::json!({"name": "api-0"});
+
+        let route = build_route_with_parent(&bindings, &serde_json::Value::Null, &row, &parent);
+
+        assert_eq!(
+            serde_json::json!({"namespace": "default", "pod": "api-0"}),
+            route
+        );
     }
 }

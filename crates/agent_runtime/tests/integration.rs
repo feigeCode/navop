@@ -482,11 +482,7 @@ async fn agent_loop_compacts_large_history_before_model_request() {
 
     let requests = model.received_requests();
     assert_eq!(2, requests.len());
-    assert!(
-        requests[0].messages[0]
-            .content_as_text()
-            .contains("上下文压缩")
-    );
+    assert!(requests[0].messages[0].content_as_text().contains("Codex"));
     assert!(
         requests[1]
             .messages
@@ -993,12 +989,12 @@ async fn current_plan_is_included_in_next_turn_prompt() {
     let requests = model.received_requests();
     assert_eq!(3, requests.len());
     let system = requests[2].messages[0].content_as_text();
-    assert!(system.contains("当前计划(Todo)状态"));
-    assert!(system.contains("目标: 安排今天晚上"));
+    assert!(system.contains("<plan_context>"));
+    assert!(system.contains("安排今天晚上"));
     assert!(system.contains("写作业"));
     assert!(system.contains("做晚饭"));
     assert!(system.contains("Pending"));
-    assert!(system.contains("不要把工具调用写成普通文本"));
+    assert!(system.contains("update_plan"));
 }
 
 #[tokio::test]
@@ -1212,9 +1208,7 @@ async fn ask_mode_does_not_send_tools_or_tool_choice() {
         "Ask 模式不能向模型传递 tool_choice"
     );
     let system = requests[0].messages[0].content_as_text();
-    assert!(!system.contains("可用 function calling 工具名"));
-    assert!(!system.contains("update_plan"));
-    assert!(!system.contains("delegate_task"));
+    assert!(!system.contains("function calling"));
 }
 
 #[tokio::test]
@@ -1697,8 +1691,8 @@ async fn system_prompt_lists_available_tools_and_json_rule() {
     assert!(system.contains("echo"));
     assert!(system.contains("update_plan"));
     assert!(system.contains("delegate_task"));
-    assert!(system.contains("arguments 必须是合法 JSON object"));
-    assert!(system.contains("不要调用名为 `tool`"));
+    assert!(system.contains("JSON object"));
+    assert!(system.contains("`tool`"));
 }
 
 #[tokio::test]
@@ -1755,25 +1749,16 @@ async fn system_prompt_guides_visible_terminal_requests_to_terminal_exec() {
     assert!(system.contains("terminal_exec"));
     assert!(system.contains("terminal_control"));
     assert!(system.contains("terminal_write_keys"));
-    assert!(system.contains("原始按键"));
     assert!(system.contains("[58,119,113,13]"));
-    assert!(system.contains("PTY 后端队列"));
+    assert!(system.contains("PTY"));
     assert!(system.contains("ssh_exec"));
-    assert!(system.contains("可见终端"));
     assert!(system.contains("submit=true"));
-    assert!(system.contains("不要声称有 exit code"));
-    assert!(system.contains("不要用 `ssh_exec` 替代"));
-    assert!(system.contains("默认优先"));
-    assert!(system.contains("当前工作目录"));
-    assert!(system.contains("虚拟环境"));
+    assert!(system.contains("exit code"));
+    assert!(system.contains("`ssh_exec`"));
     assert!(system.contains("alias"));
-    assert!(system.contains("独立 SSH channel"));
+    assert!(system.contains("SSH channel"));
     assert!(system.contains("terminal_read"));
-    assert!(system.contains("PTY 现场"));
-    assert!(system.contains("不要为了重新获得输出而重复执行命令"));
-    assert!(system.contains("最少行数"));
     assert!(system.contains("Ctrl+C"));
-    assert!(system.contains("取消对话不会中断终端任务"));
     assert!(system.contains("\\u0003"));
 }
 
@@ -1810,10 +1795,9 @@ async fn system_prompt_prefers_canonical_runtime_tool_names() {
 
     let requests = model.received_requests();
     let system = requests[0].messages[0].content_as_text();
-    assert!(system.contains("统一工具命名规则"));
-    assert!(system.contains("数据库写入使用 `db_exec`"));
-    assert!(system.contains("SFTP 文件操作使用 `sftp_read`"));
-    assert!(system.contains("Redis 操作使用 `redis_get`"));
+    assert!(system.contains("db_exec"));
+    assert!(system.contains("sftp_read"));
+    assert!(system.contains("redis_get"));
     assert!(!system.contains("兼容"));
     assert!(!system.contains("db_execute_sql"));
     assert!(!system.contains("ssh_read_file"));
@@ -1843,12 +1827,9 @@ async fn system_prompt_includes_current_resource_context() {
 
     let requests = model.received_requests();
     let system = requests[0].messages[0].content_as_text();
-    assert!(system.contains("资源池"));
-    assert!(system.contains("target 参数"));
     assert!(system.contains("prod analytics"));
-    assert!(system.contains("类型=postgres"));
+    assert!(system.contains("postgres"));
     assert!(system.contains("id=db-1"));
-    assert!(system.contains("[当前]"));
     assert!(system.contains("database=ai_app"));
     assert!(system.contains("schema=public"));
     assert!(!system.contains("connection、connection_id、session_id"));

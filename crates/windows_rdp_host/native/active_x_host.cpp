@@ -77,6 +77,10 @@ struct ActiveXCleanup {
     bool atl_initialized = false;
     HWND parent_window = nullptr;
     HWND host_window = nullptr;
+    // Navop-side generation of the owning NativeRdpHost. HWNDs are recycled by
+    // Win32, so a destroy log without the generation cannot be correlated with
+    // one specific RDP session.
+    uint64_t host_generation = 0;
     CComPtr<IUnknown> container;
     CComPtr<IUnknown> control;
     CComPtr<IOleInPlaceObject> in_place_object;
@@ -96,15 +100,54 @@ struct ActiveXCleanup {
         in_place_object.Release();
         control.Release();
         container.Release();
-        if (host_window != nullptr) {
-            DestroyWindow(host_window);
-        }
+        destroy_host_window();
         if (atl_initialized) {
             AtlAxWinTerm();
         }
         if (ole_initialized) {
             OleUninitialize();
         }
+    }
+
+    // Destroys the ATL host window and records whether Win32 accepted the call.
+    //
+    // Returns nothing and never throws: the surrounding destructor is `noexcept`
+    // and there is no recovery for a failed `DestroyWindow`. What matters for
+    // diagnosis is that a failure is *visible* — previously the call site
+    // ignored both the return value and `GetLastError`, so a leaked host HWND
+    // looked identical to a clean teardown from the Rust side.
+    //
+    // Must run on the thread that created the window; Win32 fails the call when
+    // it does not, and that case is exactly what the thread fields expose.
+    void destroy_host_window() noexcept {
+        if (host_window == nullptr) {
+            return;
+        }
+        const HWND window = host_window;
+        // Win32 stops reporting a thread id once the window is gone, so the
+        // owner thread has to be captured first.
+        const uint32_t window_thread_id =
+            GetWindowThreadProcessId(window, nullptr);
+
+        trace_native_stage("destroy.host_window.before");
+        SetLastError(ERROR_SUCCESS);
+        const BOOL destroyed = DestroyWindow(window);
+        const DWORD destroy_error = destroyed ? ERROR_SUCCESS : GetLastError();
+        const uint32_t still_alive = IsWindow(window) != 0 ? UINT32_C(1) : UINT32_C(0);
+        log_native_host_window_destroy(
+            destroyed ? "destroy.host_window.after" : "destroy.host_window.failed",
+            reinterpret_cast<uintptr_t>(window),
+            reinterpret_cast<uintptr_t>(parent_window),
+            host_generation,
+            window_thread_id,
+            destroyed ? INT32_C(1) : INT32_C(0),
+            static_cast<uint32_t>(destroy_error),
+            still_alive);
+
+        // Never retry: a failed DestroyWindow means the window belongs to
+        // another thread or the handle is no longer valid. Retrying would only
+        // risk a double release through a recycled handle.
+        host_window = nullptr;
     }
 };
 
@@ -591,6 +634,9 @@ NavopRdpResult create_active_x_resources(
     }
     trace_native_stage("create.allocate.after");
     resources->state.parent_window = parent;
+    // Correlate this ActiveX host with one Navop RDP session in the destroy
+    // trace; the HWND alone is ambiguous because Win32 recycles handles.
+    resources->state.host_generation = owner->generation;
 
     trace_native_stage("create.ole_initialize.before");
     const HRESULT ole_result = OleInitialize(nullptr);

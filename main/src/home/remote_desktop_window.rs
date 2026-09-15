@@ -49,7 +49,6 @@ pub(crate) fn launch_mstsc_fullscreen(params: &RemoteDesktopParams) -> anyhow::R
     let plan = mstsc_launch_plan(&params.host, params.port);
     let credentials = mstsc_credentials(MstscCredentialInput {
         host: &params.host,
-        port: params.port,
         username: params.username.as_deref(),
         password: params.password.as_deref(),
         domain: params.domain.as_deref(),
@@ -141,23 +140,55 @@ mod tests {
     fn mstsc_credentials_use_termsrv_target_and_domain_username() {
         let credentials = super::mstsc_credentials(super::MstscCredentialInput {
             host: "rdp.example.com",
-            port: 3390,
             username: Some("operator"),
             password: Some("secret"),
             domain: Some("ACME"),
         })
         .expect("complete credentials should be prepared");
 
-        assert_eq!(credentials.target, "TERMSRV/rdp.example.com:3390");
+        assert_eq!(credentials.target, "TERMSRV/rdp.example.com");
         assert_eq!(credentials.username, "ACME\\operator");
         assert_eq!(credentials.password, "secret");
+    }
+
+    #[test]
+    fn mstsc_credential_target_never_includes_the_port() {
+        // 回归：MSTSC 在 NLA 阶段只按 `TERMSRV/<主机>` 查凭据，端口不参与 target。
+        // 曾经拼成 `TERMSRV/<主机>:<端口>`，导致默认端口与自定义端口下都弹「输入你的凭据」。
+        let credentials = super::mstsc_credentials(super::MstscCredentialInput {
+            host: "rdp.example.com",
+            username: Some("operator"),
+            password: Some("secret"),
+            domain: None,
+        })
+        .expect("complete credentials should be prepared");
+
+        assert_eq!(credentials.target, "TERMSRV/rdp.example.com");
+        assert!(!credentials.target.contains(':'));
+    }
+
+    #[test]
+    fn mstsc_launch_plan_keeps_default_port_for_credentials_lookup() {
+        // `/v:` 仍然带端口（连接目标不变），只是凭据 target 不含端口。
+        let credentials = super::mstsc_credentials(super::MstscCredentialInput {
+            host: "192.168.111.245",
+            username: Some("feige"),
+            password: Some("secret"),
+            domain: None,
+        })
+        .expect("complete credentials should be prepared");
+
+        assert_eq!(credentials.target, "TERMSRV/192.168.111.245");
+        assert_eq!(
+            super::mstsc_launch_plan("192.168.111.245", 3389).args,
+            vec!["/v:192.168.111.245:3389".to_string(), "/f".to_string()]
+        );
     }
 
     #[test]
     fn mstsc_credentials_require_username_and_password() {
         let input = |username, password| super::MstscCredentialInput {
             host: "server",
-            port: 3389,
             username,
             password,
             domain: None,

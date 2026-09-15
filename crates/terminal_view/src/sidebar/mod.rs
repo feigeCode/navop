@@ -59,6 +59,7 @@ use ssh::SshSessionManager;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use terminal::resolve_reported_working_dir;
 use terminal::terminal::{SshTerminalConfig, TerminalConnectionKind};
 use workspace_explorer::{
     ExplorerFramePlacement, WorkspaceEditor, WorkspaceExplorer, WorkspaceExplorerConfig,
@@ -86,6 +87,8 @@ pub(crate) fn workspace_theme_from_terminal_colors(
 pub(crate) struct LocalWorkspaceSidebar {
     pub(crate) root: PathBuf,
     pub(crate) editor: Entity<WorkspaceEditor>,
+    /// 文件系统后端(本机或容器);与 `WorkspaceEditor` 共用同一个实例。
+    pub(crate) backend: Arc<dyn workspace_explorer::WorkspaceBackend>,
 }
 
 fn explorer_frame_placement(placement: SidebarPlacement) -> ExplorerFramePlacement {
@@ -157,7 +160,15 @@ fn agent_theme_from_terminal_theme(
         table_row_alt: colors.muted.opacity(0.35),
         quote_border: colors.border,
         link: colors.accent,
-        text_selection: theme.selection,
+        // gpui-component 的 TextView 选区高亮绘制在文字字形上层（inline.rs
+        // Inline::paint），不透明色会完全盖住选中文本；应用主题的选区色在
+        // 组件内被钳制到 alpha<=0.3，而终端主题的选区色是不透明的，这里
+        // 统一压到同样的半透明水平（暗色 0.3 / 亮色 0.4，保证高亮可见）。
+        text_selection: if theme.is_dark() {
+            theme.selection.alpha(0.3)
+        } else {
+            theme.selection.alpha(0.4)
+        },
         surface_radius,
     }
 }
@@ -733,7 +744,11 @@ impl TerminalSidebar {
             });
         }
         let file_explorer_panel = local_workspace.map(|workspace| {
-            let LocalWorkspaceSidebar { root, editor } = workspace;
+            let LocalWorkspaceSidebar {
+                root,
+                editor,
+                backend,
+            } = workspace;
             let theme = workspace_theme_from_terminal_colors(&colors, cx.theme());
             cx.new(|cx| {
                 WorkspaceExplorer::new(
@@ -742,6 +757,7 @@ impl TerminalSidebar {
                         editor,
                         theme,
                         show_frame_controls: true,
+                        backend: Some(backend),
                     },
                     cx,
                 )
@@ -1437,11 +1453,18 @@ impl TerminalSidebar {
     }
 
     pub fn sync_workspace_explorer_path(&mut self, path: String, cx: &mut Context<Self>) {
-        if let Some(ref explorer) = self.file_explorer_panel {
-            explorer.update(cx, move |explorer, cx| {
-                explorer.set_root_from_terminal(PathBuf::from(path), cx);
-            });
-        }
+        let Some(explorer) = self.file_explorer_panel.as_ref() else {
+            return;
+        };
+        // WSL 会话上报的是发行版内的 Linux 路径，需要先映射回 `\\wsl$\<发行版>`，
+        // 否则会被当成 Windows 路径而把文件树指到错误目录。
+        let current_root = explorer.read(cx).root().to_path_buf();
+        let Some(root) = resolve_reported_working_dir(&current_root, &path) else {
+            return;
+        };
+        explorer.update(cx, move |explorer, cx| {
+            explorer.set_root_from_terminal(root, cx);
+        });
     }
 
     /// 渲染工具栏按钮
@@ -1864,6 +1887,10 @@ mod tests {
             agent_theme.muted_foreground
         );
         assert_eq!(markdown_style.link(), agent_theme.link);
+        // 回归保护：gpui-component TextView 的选区高亮绘制在文字字形上层，
+        // 选区色一旦不透明就会盖住选中文本（终端预设主题的选区色是不透明的）。
+        assert_eq!(markdown_style.selection(), agent_theme.text_selection);
+        assert_eq!(markdown_style.selection().a, 0.3);
         assert!(markdown_style.code_block().background.is_some());
         assert!(markdown_style.table_head().background.is_some());
     }

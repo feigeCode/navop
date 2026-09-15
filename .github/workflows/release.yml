@@ -335,7 +335,7 @@ jobs:
               -p main \
               --target "${{ matrix.target }}.2.28" \
               --no-default-features \
-              --features wasm-components
+              --features wasm-components,shell-plugins
           else
             cargo build --release -p main --target "${{ matrix.target }}"
           fi

@@ -1,5 +1,8 @@
 use super::*;
-use crate::ipc::{DriverAssetSource, DriverResourceLoader};
+use crate::ipc::{
+    DRIVER_ICON_ASSET_PREFIX, DriverAssetSource, DriverResourceLoader, LOCAL_ICON_ASSET_PREFIX,
+    is_icon_asset_path, local_icon_asset_path, local_icon_file_path,
+};
 use gpui::AssetSource;
 use one_core::storage::{DatabaseType, DbConnectionConfig};
 use std::collections::HashMap;
@@ -526,7 +529,7 @@ fn registry_resolves_external_driver_display_metadata() {
     manifest.manifest_dir = PathBuf::from("/drivers/demo");
 
     assert_eq!(
-        Some("driver://demo/icon_color.svg".to_string()),
+        Some("driver-icons/demo/icon_color.svg".to_string()),
         manifest.preferred_icon_asset_path()
     );
     assert_eq!(
@@ -536,7 +539,7 @@ fn registry_resolves_external_driver_display_metadata() {
 
     manifest.ui.icon_color = None;
     assert_eq!(
-        Some("driver://demo/icon.svg".to_string()),
+        Some("driver-icons/demo/icon.svg".to_string()),
         manifest.preferred_icon_asset_path()
     );
     assert_eq!(
@@ -594,7 +597,7 @@ fn custom_color_icon_path_is_preferred_over_icon_path() {
     manifest.manifest_dir = PathBuf::from("/drivers/demo");
 
     assert_eq!(
-        Some("driver://demo/icon.svg".to_string()),
+        Some("driver-icons/demo/icon.svg".to_string()),
         manifest.preferred_icon_asset_path()
     );
     assert_eq!(
@@ -605,7 +608,7 @@ fn custom_color_icon_path_is_preferred_over_icon_path() {
     manifest.ui.icon_color = Some("icons/demo-color.svg".to_string());
 
     assert_eq!(
-        Some("driver://demo/icon_color.svg".to_string()),
+        Some("driver-icons/demo/icon_color.svg".to_string()),
         manifest.preferred_icon_asset_path()
     );
     assert_eq!(
@@ -642,11 +645,14 @@ fn driver_asset_source_loads_declared_icon_resources() {
         Arc::new(IpcDriverRegistry::from_drivers(vec![manifest])),
     );
 
-    let mono = source.load("driver://demo/icon").unwrap().unwrap();
-    let color = source.load("driver://demo/icon_color").unwrap().unwrap();
-    let mono_with_ext = source.load("driver://demo/icon.svg").unwrap().unwrap();
+    let mono = source.load("driver-icons/demo/icon").unwrap().unwrap();
+    let color = source
+        .load("driver-icons/demo/icon_color")
+        .unwrap()
+        .unwrap();
+    let mono_with_ext = source.load("driver-icons/demo/icon.svg").unwrap().unwrap();
     let color_with_ext = source
-        .load("driver://demo/icon_color.svg")
+        .load("driver-icons/demo/icon_color.svg")
         .unwrap()
         .unwrap();
 
@@ -681,9 +687,127 @@ fn driver_asset_source_reloads_registry_for_new_driver_resources() {
         Arc::new(move || IpcDriverRegistry::from_drivers(vec![manifest.clone()])),
     );
 
-    let mono = source.load("driver://demo/icon").unwrap().unwrap();
+    let mono = source.load("driver-icons/demo/icon").unwrap().unwrap();
 
     assert_eq!(&*mono, b"mono");
+}
+
+/// gpui 判定 URI 的真实谓词（`img()` 用它把来源分成 `Resource::Uri` /
+/// `Resource::Embedded`），这里直接复用同一个实现，避免用 `contains("://")`
+/// 之类的近似判断漏掉 Windows 盘符这类"看起来不像 URL 但解析成功"的输入。
+fn is_uri(path: &str) -> bool {
+    url::Url::parse(path).is_ok()
+}
+
+/// 回归保护：驱动包图标的资产路径必须是**无 scheme 的相对路径**。
+///
+/// `Icon` 的 Color 模式下只有 `IconSource::Path`（即 `img()`）能保留品牌原色，
+/// 而 `img()` 会把合法 URL 判成 `Resource::Uri` 去发 HTTP 请求 —— 提交
+/// `c4eba02f7` 之前这里正是 `driver://{id}/{resource}{ext}`，图标必然加载不到。
+#[test]
+fn driver_icon_asset_paths_are_never_uris() {
+    let mut manifest: IpcDriverManifest = serde_json::from_str(
+        r#"{
+            "id": "demo",
+            "name": "DemoDB",
+            "entry": { "command": "driver" },
+            "transport": { "name": "demo.sock" },
+            "ui": {
+                "icon": "icons/demo.svg",
+                "icon_color": "icons/demo-color.svg"
+            }
+        }"#,
+    )
+    .unwrap();
+    manifest.manifest_dir = PathBuf::from("/drivers/demo");
+
+    let asset_paths = [
+        manifest.preferred_icon_asset_path().unwrap(),
+        manifest.icon_asset_path().unwrap(),
+        manifest.color_icon_asset_path().unwrap(),
+    ];
+
+    for asset_path in asset_paths {
+        assert!(
+            asset_path.starts_with(DRIVER_ICON_ASSET_PREFIX),
+            "driver asset path should stay in the driver namespace: {asset_path}"
+        );
+        assert!(
+            !is_uri(&asset_path),
+            "driver asset path must not be parsed as a URI: {asset_path}"
+        );
+    }
+}
+
+/// 回归保护：本地图标文件（SSH 自定义图标、扩展贡献图标）同样只能经无 scheme
+/// 的资产路径交给 `AssetSource` 读盘。直接丢绝对路径在 Windows 上会被
+/// `url::Url::parse` 判成 scheme = `c`，落进同一个 URI 陷阱。
+#[test]
+fn local_icon_asset_paths_are_never_uris_and_round_trip() {
+    for file in [
+        PathBuf::from("/drivers/demo/icons/demo.svg"),
+        PathBuf::from(r"C:\drivers\demo\icons\demo.svg"),
+        PathBuf::from("icons/demo.svg"),
+    ] {
+        let asset_path = local_icon_asset_path(&file);
+        assert!(
+            asset_path.starts_with(LOCAL_ICON_ASSET_PREFIX),
+            "local icon path should stay in the local namespace: {asset_path}"
+        );
+        assert!(
+            !is_uri(&asset_path),
+            "local icon asset path must not be parsed as a URI: {asset_path}"
+        );
+        assert_eq!(Some(file.clone()), local_icon_file_path(&asset_path));
+    }
+
+    assert_eq!(None, local_icon_file_path("driver-icons/demo/icon.svg"));
+    assert_eq!(None, local_icon_file_path(LOCAL_ICON_ASSET_PREFIX));
+    assert!(!is_icon_asset_path("icons/duckdb.svg"));
+}
+
+/// `AppAssets` 会把磁盘图标命名空间委派给同一个资产源，因此这里同时覆盖
+/// 驱动包图标与任意本地图标文件：只有返回字节，`img()` 才能保留 SVG 原色。
+#[test]
+fn driver_asset_source_serves_local_icon_files_and_driver_icons() {
+    let temp = tempfile::tempdir().unwrap();
+    let icons_dir = temp.path().join("icons");
+    fs::create_dir(&icons_dir).unwrap();
+    fs::write(icons_dir.join("demo.svg"), b"mono").unwrap();
+    let standalone = temp.path().join("ssh-custom.svg");
+    fs::write(&standalone, b"local").unwrap();
+
+    let mut manifest: IpcDriverManifest = serde_json::from_str(
+        r#"{
+            "id": "demo",
+            "name": "DemoDB",
+            "entry": { "command": "driver" },
+            "transport": { "name": "demo.sock" },
+            "ui": { "icon": "icons/demo.svg" }
+        }"#,
+    )
+    .unwrap();
+    manifest.manifest_dir = temp.path().to_path_buf();
+
+    let source = DriverAssetSource::new(
+        Arc::new(DriverResourceLoader::new()),
+        Arc::new(IpcDriverRegistry::from_drivers(vec![manifest.clone()])),
+    );
+
+    let local_asset_path = local_icon_asset_path(&standalone);
+    assert!(is_icon_asset_path(&local_asset_path));
+    assert_eq!(&*source.load(&local_asset_path).unwrap().unwrap(), b"local");
+    assert_eq!(
+        &*source
+            .load(&manifest.preferred_icon_asset_path().unwrap())
+            .unwrap()
+            .unwrap(),
+        b"mono"
+    );
+
+    // 内置（gpui-component / one-assets 打包）路径不能被磁盘图标源吞掉，
+    // 否则内置品牌图标会一起失效。
+    assert!(matches!(source.load("icons/duckdb.svg"), Ok(None)));
 }
 
 fn write_driver_manifest(root: &Path, dir_name: &str, id: &str, name: &str) {

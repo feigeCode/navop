@@ -47,13 +47,17 @@ pub struct WorkbenchRequest {
     pub params: serde_json::Value,
 }
 
-/// 参数绑定上下文:literal/input/route/selection/paging 五种来源。
+/// 参数绑定上下文:literal/input/route/selection/paging/parent/connection 七种来源。
 #[derive(Debug, Clone, Default)]
 pub struct BindingContext {
     pub input: serde_json::Value,
     pub route: serde_json::Value,
     pub selection: serde_json::Value,
     pub paging: serde_json::Value,
+    /// 树 lazy 展开时的父节点行数据。
+    pub parent: serde_json::Value,
+    /// 连接配置字段(来自连接的保存配置)。
+    pub connection: serde_json::Value,
 }
 
 impl BindingContext {
@@ -68,6 +72,8 @@ impl BindingContext {
             S::Route => Some(&self.route),
             S::Selection => Some(&self.selection),
             S::Paging => Some(&self.paging),
+            S::Parent => Some(&self.parent),
+            S::Connection => Some(&self.connection),
         }
     }
 }
@@ -148,11 +154,9 @@ fn coerce_binding(
             other => Ok(serde_json::Value::String(other.to_string())),
         },
         T::Number => match value {
+            // 已是数字的绑定(route/selection/paging)原样透传,保留其整数性。
             serde_json::Value::Number(_) => Ok(value),
-            serde_json::Value::String(text) => text
-                .parse::<f64>()
-                .map(|number| serde_json::json!(number))
-                .map_err(|_| "number"),
+            serde_json::Value::String(text) => parse_number(&text).map_err(|_| "number"),
             _ => Err("number"),
         },
         T::Boolean => match value {
@@ -165,6 +169,27 @@ fn coerce_binding(
         },
         T::Json => Ok(value),
     }
+}
+
+/// 文本 → JSON 数字:整数文本产出整数,其余产出浮点。
+///
+/// **必须区分整数与浮点**:provider 侧的计数/端口/QoS/分页等参数在契约里是
+/// `u32`/`u64`/`i64`,而 serde_json 拒绝把 `1.0` 反序列化进整数类型
+/// (`invalid type: floating point 1.0, expected u32`)。query 页的输入值都是
+/// **字符串**,若一律按 `f64` 转换,「订阅 QoS」这类整数参数就会在 provider
+/// 侧解析失败 —— 所以 `"1"` 必须先尝试整数解析。
+fn parse_number(text: &str) -> Result<serde_json::Value, ()> {
+    let text = text.trim();
+    if let Ok(integer) = text.parse::<i64>() {
+        return Ok(serde_json::json!(integer));
+    }
+    // 超出 i64 上限的无符号值(如 u64::MAX)。
+    if let Ok(unsigned) = text.parse::<u64>() {
+        return Ok(serde_json::json!(unsigned));
+    }
+    text.parse::<f64>()
+        .map(|number| serde_json::json!(number))
+        .map_err(|_| ())
 }
 
 /// 校验 operation 的 requires 能力是否全部在会话能力集中。
@@ -557,6 +582,26 @@ mod tests {
                 .collect(),
             },
         );
+        operations.insert(
+            "listPods".to_string(),
+            ResourceWorkbenchOperation {
+                mode: ResourceWorkbenchOperationMode::Invoke,
+                method: "example/pods".into(),
+                requires: vec![],
+                effect: ResourceWorkbenchEffect::Read,
+                params: [(
+                    "namespace".to_string(),
+                    ResourceWorkbenchBinding {
+                        source: ResourceWorkbenchBindingSource::Parent,
+                        path: "/name".into(),
+                        value_type: ResourceWorkbenchValueType::String,
+                        value: None,
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            },
+        );
         RegisteredResourceWorkbenchContribution {
             extension_id: "com.example".into(),
             id: "workbench".into(),
@@ -566,10 +611,8 @@ mod tests {
             resource_type: "example".into(),
             default_page: "overview".into(),
             operations,
-            navigation: vec![],
-            tree: vec![],
+            layout: None,
             pages: vec![],
-            status_bar: None,
         }
     }
 
@@ -591,6 +634,16 @@ mod tests {
         };
         let request = build_request(&workbench(), "pagedList", &context).unwrap();
         assert_eq!(serde_json::json!({"page": 3}), request.params);
+    }
+
+    #[test]
+    fn build_request_binds_parent_params() {
+        let context = BindingContext {
+            parent: serde_json::json!({"name": "default"}),
+            ..Default::default()
+        };
+        let request = build_request(&workbench(), "listPods", &context).unwrap();
+        assert_eq!(serde_json::json!({"namespace": "default"}), request.params);
     }
 
     #[test]
@@ -691,6 +744,40 @@ mod tests {
             ..Default::default()
         };
         let request = build_request(&wb, "createTopic", &context).unwrap();
-        assert_eq!(serde_json::json!({"queueCount": 8.0}), request.params);
+        // 整数文本必须落成 JSON 整数:provider 侧 queue_count 是 u32,
+        // serde 拒收 `8.0`(见 `parse_number` 的单测)。
+        assert_eq!(serde_json::json!({"queueCount": 8}), request.params);
+    }
+
+    #[test]
+    fn number_input_keeps_integers_integral() {
+        // 整数:走 i64/u64 分支,不能变成浮点。
+        assert_eq!(serde_json::json!(1), parse_number("1").unwrap());
+        assert_eq!(serde_json::json!(0), parse_number("0").unwrap());
+        assert_eq!(serde_json::json!(-3), parse_number("-3").unwrap());
+        assert_eq!(serde_json::json!(42), parse_number(" 42 ").unwrap());
+        assert_eq!(
+            serde_json::json!(u64::MAX),
+            parse_number("18446744073709551615").unwrap()
+        );
+        // 真浮点:保持浮点语义。
+        assert_eq!(serde_json::json!(2.5), parse_number("2.5").unwrap());
+        // 非数字:调用方转成 BindingType 错误。
+        assert!(parse_number("abc").is_err());
+        assert!(parse_number("").is_err());
+    }
+
+    #[test]
+    fn integral_number_roundtrips_into_unsigned_contract_fields() {
+        // 复现回归:query 页输入 "1" 绑到 provider 侧的 `Option<u32>` 字段
+        // (如 middleware/topic/create 的 queue_count)时,一旦产出 `1.0`
+        // 就会在 serde 反序列化阶段失败(`invalid type: floating point`),
+        // 因此强转结果必须是 JSON 整数(`as_u64()` 为 Some)。
+        let coerced = coerce_binding(
+            serde_json::Value::String("1".into()),
+            ResourceWorkbenchValueType::Number,
+        )
+        .unwrap();
+        assert_eq!(Some(1), coerced.as_u64(), "coerced={coerced}");
     }
 }
