@@ -396,9 +396,9 @@ fn recent_section_does_not_participate_in_search() {
     assert!(content.contains("let recent = if query.is_empty() {"));
     // 导航主页:最近区始终按空搜索词取值,渲染仍受 query.is_empty() 门控。
     let navigation = content
-        .split("fn render_navigation_content")
+        .split("fn render_navigation_home_content")
         .nth(1)
-        .expect("navigation content exists");
+        .expect("navigation home content exists");
     assert!(navigation.contains("recent_connections(&self.connections, &self.selected_filter, \"\","));
     assert!(navigation.contains("if !query.is_empty()"));
 }
