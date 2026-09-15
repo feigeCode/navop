@@ -5074,7 +5074,7 @@ dependencies = [
 [[package]]
 name = "gpui-base"
 version = "0.6.1"
-source = "git+https://github.com/feigeCode/gpui-component?rev=74dab4b410a4a533bb35f6063d54bb9ccf7cec71#74dab4b410a4a533bb35f6063d54bb9ccf7cec71"
+source = "git+https://github.com/feigeCode/gpui-component?rev=9be482334f33d4b491e91b24caa3c9880e1e7b21#9be482334f33d4b491e91b24caa3c9880e1e7b21"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -5108,7 +5108,7 @@ dependencies = [
 [[package]]
 name = "gpui-component"
 version = "0.6.1"
-source = "git+https://github.com/feigeCode/gpui-component?rev=74dab4b410a4a533bb35f6063d54bb9ccf7cec71#74dab4b410a4a533bb35f6063d54bb9ccf7cec71"
+source = "git+https://github.com/feigeCode/gpui-component?rev=9be482334f33d4b491e91b24caa3c9880e1e7b21#9be482334f33d4b491e91b24caa3c9880e1e7b21"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5158,7 +5158,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-macros"
 version = "0.6.1"
-source = "git+https://github.com/feigeCode/gpui-component?rev=74dab4b410a4a533bb35f6063d54bb9ccf7cec71#74dab4b410a4a533bb35f6063d54bb9ccf7cec71"
+source = "git+https://github.com/feigeCode/gpui-component?rev=9be482334f33d4b491e91b24caa3c9880e1e7b21#9be482334f33d4b491e91b24caa3c9880e1e7b21"
 dependencies = [
  "proc-macro-crate 3.5.0",
  "proc-macro2",
@@ -5169,7 +5169,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-shell"
 version = "0.6.1"
-source = "git+https://github.com/feigeCode/gpui-component?rev=74dab4b410a4a533bb35f6063d54bb9ccf7cec71#74dab4b410a4a533bb35f6063d54bb9ccf7cec71"
+source = "git+https://github.com/feigeCode/gpui-component?rev=9be482334f33d4b491e91b24caa3c9880e1e7b21#9be482334f33d4b491e91b24caa3c9880e1e7b21"
 dependencies = [
  "gpui-component",
  "gpui-shell",
@@ -5178,7 +5178,7 @@ dependencies = [
 [[package]]
 name = "gpui-fps"
 version = "0.6.1"
-source = "git+https://github.com/feigeCode/gpui-component?rev=74dab4b410a4a533bb35f6063d54bb9ccf7cec71#74dab4b410a4a533bb35f6063d54bb9ccf7cec71"
+source = "git+https://github.com/feigeCode/gpui-component?rev=9be482334f33d4b491e91b24caa3c9880e1e7b21#9be482334f33d4b491e91b24caa3c9880e1e7b21"
 dependencies = [
  "core-graphics 0.24.0",
  "gpui-pre",
@@ -5195,7 +5195,7 @@ dependencies = [
 [[package]]
 name = "gpui-kit-assets"
 version = "0.6.1"
-source = "git+https://github.com/feigeCode/gpui-component?rev=74dab4b410a4a533bb35f6063d54bb9ccf7cec71#74dab4b410a4a533bb35f6063d54bb9ccf7cec71"
+source = "git+https://github.com/feigeCode/gpui-component?rev=9be482334f33d4b491e91b24caa3c9880e1e7b21#9be482334f33d4b491e91b24caa3c9880e1e7b21"
 dependencies = [
  "anyhow",
  "gpui-pre",
@@ -5209,7 +5209,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre"
 version = "0.3.99"
-source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.104#3e87a3567ff6616ef8e5dd0c8a6eeb329955e3c6"
+source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.106#0ea864fc18b68588b3b9fee865e38385cef9e633"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -5281,7 +5281,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-apple"
 version = "0.3.99"
-source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.104#3e87a3567ff6616ef8e5dd0c8a6eeb329955e3c6"
+source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.106#0ea864fc18b68588b3b9fee865e38385cef9e633"
 dependencies = [
  "anyhow",
  "block",
@@ -5305,7 +5305,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-collections"
 version = "0.3.99"
-source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.104#3e87a3567ff6616ef8e5dd0c8a6eeb329955e3c6"
+source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.106#0ea864fc18b68588b3b9fee865e38385cef9e633"
 dependencies = [
  "gpui-pre-util",
  "indexmap 2.14.2",
@@ -5315,7 +5315,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-derive-refineable"
 version = "0.3.99"
-source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.104#3e87a3567ff6616ef8e5dd0c8a6eeb329955e3c6"
+source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.106#0ea864fc18b68588b3b9fee865e38385cef9e633"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5325,7 +5325,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-http-client"
 version = "0.3.99"
-source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.104#3e87a3567ff6616ef8e5dd0c8a6eeb329955e3c6"
+source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.106#0ea864fc18b68588b3b9fee865e38385cef9e633"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -5345,7 +5345,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-linux"
 version = "0.3.99"
-source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.104#3e87a3567ff6616ef8e5dd0c8a6eeb329955e3c6"
+source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.106#0ea864fc18b68588b3b9fee865e38385cef9e633"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -5391,7 +5391,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-macos"
 version = "0.3.99"
-source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.104#3e87a3567ff6616ef8e5dd0c8a6eeb329955e3c6"
+source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.106#0ea864fc18b68588b3b9fee865e38385cef9e633"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -5438,7 +5438,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-macros"
 version = "0.3.99"
-source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.104#3e87a3567ff6616ef8e5dd0c8a6eeb329955e3c6"
+source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.106#0ea864fc18b68588b3b9fee865e38385cef9e633"
 dependencies = [
  "heck 0.5.0",
  "proc-macro-crate 3.5.0",
@@ -5450,7 +5450,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-media"
 version = "0.3.99"
-source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.104#3e87a3567ff6616ef8e5dd0c8a6eeb329955e3c6"
+source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.106#0ea864fc18b68588b3b9fee865e38385cef9e633"
 dependencies = [
  "anyhow",
  "bindgen",
@@ -5464,7 +5464,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-perf"
 version = "0.3.99"
-source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.104#3e87a3567ff6616ef8e5dd0c8a6eeb329955e3c6"
+source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.106#0ea864fc18b68588b3b9fee865e38385cef9e633"
 dependencies = [
  "gpui-pre-collections",
  "serde",
@@ -5474,7 +5474,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-platform"
 version = "0.3.99"
-source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.104#3e87a3567ff6616ef8e5dd0c8a6eeb329955e3c6"
+source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.106#0ea864fc18b68588b3b9fee865e38385cef9e633"
 dependencies = [
  "console_error_panic_hook",
  "gpui-pre",
@@ -5487,7 +5487,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-refineable"
 version = "0.3.99"
-source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.104#3e87a3567ff6616ef8e5dd0c8a6eeb329955e3c6"
+source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.106#0ea864fc18b68588b3b9fee865e38385cef9e633"
 dependencies = [
  "gpui-pre-derive-refineable",
 ]
@@ -5546,7 +5546,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-scheduler"
 version = "0.3.99"
-source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.104#3e87a3567ff6616ef8e5dd0c8a6eeb329955e3c6"
+source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.106#0ea864fc18b68588b3b9fee865e38385cef9e633"
 dependencies = [
  "async-task",
  "backtrace",
@@ -5562,7 +5562,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-shared-string"
 version = "0.3.99"
-source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.104#3e87a3567ff6616ef8e5dd0c8a6eeb329955e3c6"
+source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.106#0ea864fc18b68588b3b9fee865e38385cef9e633"
 dependencies = [
  "schemars 1.2.2",
  "serde",
@@ -5572,7 +5572,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-sum-tree"
 version = "0.3.99"
-source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.104#3e87a3567ff6616ef8e5dd0c8a6eeb329955e3c6"
+source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.106#0ea864fc18b68588b3b9fee865e38385cef9e633"
 dependencies = [
  "gpui-pre-ztracing",
  "heapless",
@@ -5584,7 +5584,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-util"
 version = "0.3.99"
-source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.104#3e87a3567ff6616ef8e5dd0c8a6eeb329955e3c6"
+source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.106#0ea864fc18b68588b3b9fee865e38385cef9e633"
 dependencies = [
  "anyhow",
  "log",
@@ -5594,7 +5594,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-util-macros"
 version = "0.3.99"
-source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.104#3e87a3567ff6616ef8e5dd0c8a6eeb329955e3c6"
+source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.106#0ea864fc18b68588b3b9fee865e38385cef9e633"
 dependencies = [
  "gpui-pre-perf",
  "quote",
@@ -5604,7 +5604,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-web"
 version = "0.3.99"
-source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.104#3e87a3567ff6616ef8e5dd0c8a6eeb329955e3c6"
+source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.106#0ea864fc18b68588b3b9fee865e38385cef9e633"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
@@ -5632,7 +5632,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-wgpu"
 version = "0.3.99"
-source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.104#3e87a3567ff6616ef8e5dd0c8a6eeb329955e3c6"
+source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.106#0ea864fc18b68588b3b9fee865e38385cef9e633"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -5658,7 +5658,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-windows"
 version = "0.3.99"
-source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.104#3e87a3567ff6616ef8e5dd0c8a6eeb329955e3c6"
+source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.106#0ea864fc18b68588b3b9fee865e38385cef9e633"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -5686,7 +5686,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-zlog"
 version = "0.3.99"
-source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.104#3e87a3567ff6616ef8e5dd0c8a6eeb329955e3c6"
+source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.106#0ea864fc18b68588b3b9fee865e38385cef9e633"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5697,7 +5697,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-ztracing"
 version = "0.3.99"
-source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.104#3e87a3567ff6616ef8e5dd0c8a6eeb329955e3c6"
+source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.106#0ea864fc18b68588b3b9fee865e38385cef9e633"
 dependencies = [
  "gpui-pre-zlog",
  "gpui-pre-ztracing-macro",
@@ -5708,7 +5708,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-ztracing-macro"
 version = "0.3.99"
-source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.104#3e87a3567ff6616ef8e5dd0c8a6eeb329955e3c6"
+source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.106#0ea864fc18b68588b3b9fee865e38385cef9e633"
 
 [[package]]
 name = "gpui-rdp-smoke"
@@ -5723,7 +5723,7 @@ dependencies = [
 [[package]]
 name = "gpui-shell"
 version = "0.6.1"
-source = "git+https://github.com/feigeCode/gpui-component?rev=74dab4b410a4a533bb35f6063d54bb9ccf7cec71#74dab4b410a4a533bb35f6063d54bb9ccf7cec71"
+source = "git+https://github.com/feigeCode/gpui-component?rev=9be482334f33d4b491e91b24caa3c9880e1e7b21#9be482334f33d4b491e91b24caa3c9880e1e7b21"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -5755,7 +5755,7 @@ dependencies = [
 [[package]]
 name = "gpui-wry"
 version = "0.6.1"
-source = "git+https://github.com/feigeCode/gpui-component?rev=74dab4b410a4a533bb35f6063d54bb9ccf7cec71#74dab4b410a4a533bb35f6063d54bb9ccf7cec71"
+source = "git+https://github.com/feigeCode/gpui-component?rev=9be482334f33d4b491e91b24caa3c9880e1e7b21#9be482334f33d4b491e91b24caa3c9880e1e7b21"
 dependencies = [
  "anyhow",
  "gpui-pre",
@@ -11787,7 +11787,7 @@ dependencies = [
 [[package]]
 name = "rquickjs"
 version = "0.12.7"
-source = "git+https://github.com/feigeCode/gpui-component?rev=74dab4b410a4a533bb35f6063d54bb9ccf7cec71#74dab4b410a4a533bb35f6063d54bb9ccf7cec71"
+source = "git+https://github.com/feigeCode/gpui-component?rev=9be482334f33d4b491e91b24caa3c9880e1e7b21#9be482334f33d4b491e91b24caa3c9880e1e7b21"
 dependencies = [
  "quickjs-jit",
 ]
@@ -17866,9 +17866,9 @@ dependencies = [
 [[patch.unused]]
 name = "gpui-pre-http-client-tls"
 version = "0.3.99"
-source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.104#3e87a3567ff6616ef8e5dd0c8a6eeb329955e3c6"
+source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.106#0ea864fc18b68588b3b9fee865e38385cef9e633"
 
 [[patch.unused]]
 name = "gpui-pre-reqwest-client"
 version = "0.3.99"
-source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.104#3e87a3567ff6616ef8e5dd0c8a6eeb329955e3c6"
+source = "git+https://github.com/feigeCode/gpui-pre.git?tag=fork-0.3.106#0ea864fc18b68588b3b9fee865e38385cef9e633"
