@@ -170,7 +170,9 @@ pub(crate) fn workbench_error(
         W::UnknownOperation(_) | W::BindingMissing { .. } | W::BindingType { .. } => {
             ErrorCode::InvalidArgument
         }
-        W::ResultContract { .. } | W::Provider(_) => ErrorCode::ProtocolError,
+        W::ResultContract { .. }
+        | W::Provider(_)
+        | W::EventStreamRegistration { .. } => ErrorCode::ProtocolError,
     };
     NavopError::new(code, error.to_string()).into_host_error()
 }

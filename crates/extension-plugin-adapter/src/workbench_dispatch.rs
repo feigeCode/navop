@@ -4,6 +4,7 @@
 //! provider 调用都经过这里,保证权限/参数/结果契约只有一份实现。
 
 use extension_protocol::blob::BlobReadParams;
+use extension_protocol::event_stream::EventCloseParams;
 use extension_protocol::resource::{ResourceInvokeParams, ResourceInvokeResult};
 use extension_protocol::result_ref::ResultRef;
 use extension_runtime::extension::manifest::ResourceWorkbenchEffect;
@@ -34,6 +35,8 @@ pub enum WorkbenchDispatchError {
     },
     #[error("result contract violation for `{operation}`: {reason}")]
     ResultContract { operation: String, reason: String },
+    #[error("event stream registration failed: {reason}")]
+    EventStreamRegistration { reason: String },
     #[error("provider call failed: {0}")]
     Provider(String),
     #[error("operation `{0}` requires user confirmation before it can run")]
@@ -427,7 +430,37 @@ pub async fn dispatch_invoke_result_scoped(
         )
         .await
         .map_err(|error| WorkbenchDispatchError::Provider(error.to_string()))?;
+    register_invoked_event_stream(session.client(), &result).await?;
     Ok(result)
+}
+
+/// 把 provider 在 invoke 响应里交出的事件流登记为宿主所有的流。
+///
+/// 声明了 stream 原语的页(`load` 返回 `ResultRef::EventStream`)走的是普通
+/// invoke 通道,不经过 `ManagedUniversalPluginClient::open_event_stream`;
+/// 但流的身份/读取/关闭/清理都必须由宿主记账 —— 漏了这一步,`resource_view`
+/// 拿着流去订阅时,第一次 read 就会被 `EventActivationManager` 以
+/// *"event stream `…` is not open for this runtime generation"* 拒掉。
+///
+/// 登记失败(世代已换代、超出单 runtime 并发上限)时 provider 已经把流分配出去了,
+/// 必须回手关掉,否则这个流再也不会被任何一方认领。
+async fn register_invoked_event_stream(
+    client: &ManagedUniversalPluginClient,
+    result: &ResourceInvokeResult,
+) -> Result<(), WorkbenchDispatchError> {
+    let ResultRef::EventStream { id } = &result.result else {
+        return Ok(());
+    };
+    if let Err(error) = client.register_invoked_event_stream(id) {
+        let _ = client
+            .client()
+            .close_event_stream(&EventCloseParams { stream_id: id.clone() })
+            .await;
+        return Err(WorkbenchDispatchError::EventStreamRegistration {
+            reason: error.to_string(),
+        });
+    }
+    Ok(())
 }
 
 /// 副作用门控:非 read 操作未确认时 fail closed。
