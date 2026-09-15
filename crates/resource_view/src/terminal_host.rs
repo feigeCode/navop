@@ -11,17 +11,22 @@
 use gpui::{AnyView, App, Window};
 
 /// 终端启动请求:由 manifest 的 terminal 页面声明 + 当前路由插值得到。
+///
+/// `command` 与 `operation` 互斥:前者由宿主启动本地进程,后者请求 runtime
+/// 侧 pty operation(SSH exec / kubectl exec 等远程终端)。
 pub struct TerminalMountRequest {
     /// 终端标题(如 `exec · headroom`),供宿主做 tab/工具条标注。
     pub title: String,
-    /// 可执行程序(如 `docker`)。
-    pub command: String,
+    /// 本地进程可执行程序(如 `docker`);operation 模式为 None。
+    pub command: Option<String>,
     /// 参数列表(占位符已插值完成)。
     pub args: Vec<String>,
     /// 追加的环境变量。
     pub env: Vec<(String, String)>,
     /// 工作目录。
     pub working_dir: Option<String>,
+    /// runtime pty operation 标识;None 表示本地进程模式。
+    pub operation: Option<String>,
 }
 
 /// 挂载产物:可嵌入的终端视图 + 释放回调。

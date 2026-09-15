@@ -9,12 +9,14 @@ use crate::{
         DocumentExporterContrib, Engines, HtmlPreviewTransformContrib, IpcEntry, IpcRuntime,
         IpcTransport, Manifest, MenuCommandRef, MenuContrib, ResourceConnectionContrib,
         ResourceConnectionFieldType, ResourceConnectionForm, ResourceConnectionFormField,
-        ResourceConnectionFormTab, ResourceWorkbenchCollection, ResourceWorkbenchColumn,
-        ResourceWorkbenchContrib, ResourceWorkbenchEffect, ResourceWorkbenchOperation,
-        ResourceWorkbenchOperationMode, ResourceWorkbenchPage, ResourceWorkbenchPagination,
+        ResourceConnectionFormTab, ResourceWorkbenchColumn, ResourceWorkbenchColumnStyle,
+        ResourceWorkbenchColumnType, ResourceWorkbenchContrib, ResourceWorkbenchEffect,
+        ResourceWorkbenchOperation, ResourceWorkbenchOperationMode, ResourceWorkbenchPage,
+        ResourceWorkbenchPagination, ResourceWorkbenchPaginationKind, ResourceWorkbenchPrimitive,
         ResourceWorkbenchRenderer, ResourceWorkbenchRendererKind, ResourceWorkbenchRowAction,
-        ResourceWorkbenchTemplate, RuntimeSection, ShellHostModule, ShellSurface, ShellViewContrib,
-        WasmRuntime, WasmRuntimeKind,
+        ResourceWorkbenchTable, ResourceWorkbenchViewer, ResourceWorkbenchViewerFormat,
+        RuntimeSection, ShellHostModule, ShellSurface, ShellViewContrib, WasmRuntime,
+        WasmRuntimeKind,
         contributes::{
             RemoteFileEditorCommandContrib, RemoteFileEditorContrib, RemoteFileEditorLaunchMode,
         },
@@ -484,7 +486,6 @@ fn runtime_catalog_resolves_collection_row_actions_and_badge_columns() {
     workbench.pages[0] = ResourceWorkbenchPage {
         id: "items".into(),
         title: "Items".into(),
-        template: ResourceWorkbenchTemplate::Collection,
         renderer: ResourceWorkbenchRenderer {
             kind: ResourceWorkbenchRendererKind::Native,
             view_id: None,
@@ -493,19 +494,21 @@ fn runtime_catalog_resolves_collection_row_actions_and_badge_columns() {
         load: Some(crate::extension::manifest::ResourceWorkbenchAction {
             operation: "listItems".into(),
         }),
-        execute: None,
-        collection: Some(ResourceWorkbenchCollection {
+        tab_group_id: None,
+        route: None,
+        links: vec![],
+        stack: vec![ResourceWorkbenchPrimitive::Table(ResourceWorkbenchTable {
             items_path: "/items".into(),
             key_paths: vec!["/id".into()],
             pagination: ResourceWorkbenchPagination {
-                kind: "none".into(),
+                kind: ResourceWorkbenchPaginationKind::None,
             },
             columns: vec![ResourceWorkbenchColumn {
                 id: "state".into(),
                 title: "State".into(),
                 path: "/state".into(),
-                value_type: "display".into(),
-                style: Some("badge".into()),
+                value_type: ResourceWorkbenchColumnType::Display,
+                style: ResourceWorkbenchColumnStyle::Badge,
             }],
             open: None,
             actions: vec![ResourceWorkbenchRowAction {
@@ -513,13 +516,7 @@ fn runtime_catalog_resolves_collection_row_actions_and_badge_columns() {
                 label: "Start".into(),
                 operation: "startItem".into(),
             }],
-        }),
-        inputs: vec![],
-        scope: None,
-        terminal: None,
-        tabs: vec![],
-        route: None,
-        links: vec![],
+        })],
     };
     manifest.contributes.resource_workbenches.push(workbench);
 
@@ -527,10 +524,13 @@ fn runtime_catalog_resolves_collection_row_actions_and_badge_columns() {
     let workbench = catalog
         .resource_workbench_for_connection("com.example.tools", "search")
         .unwrap_or_else(|| panic!("workbench must resolve"));
-    let collection = workbench.pages[0].collection.as_ref().unwrap();
-    assert_eq!(1, collection.actions.len());
-    assert_eq!("startItem", collection.actions[0].operation);
-    assert_eq!(Some("badge"), collection.columns[0].style.as_deref());
+    let table = match &workbench.pages[0].stack[0] {
+        ResourceWorkbenchPrimitive::Table(table) => table,
+        other => panic!("expected table primitive, got {other:?}"),
+    };
+    assert_eq!(1, table.actions.len());
+    assert_eq!("startItem", table.actions[0].operation);
+    assert_eq!(ResourceWorkbenchColumnStyle::Badge, table.columns[0].style);
 }
 
 #[test]
@@ -545,15 +545,14 @@ fn runtime_catalog_rejects_collection_action_with_unknown_operation() {
     workbench.default_page = "items".into();
     let mut page = resource_workbench().pages.remove(0);
     page.id = "items".into();
-    page.template = ResourceWorkbenchTemplate::Collection;
     page.load = Some(crate::extension::manifest::ResourceWorkbenchAction {
         operation: "clusterInfo".into(),
     });
-    page.collection = Some(ResourceWorkbenchCollection {
+    page.stack = vec![ResourceWorkbenchPrimitive::Table(ResourceWorkbenchTable {
         items_path: "/items".into(),
         key_paths: vec!["/id".into()],
         pagination: ResourceWorkbenchPagination {
-            kind: "none".into(),
+            kind: ResourceWorkbenchPaginationKind::None,
         },
         columns: vec![],
         open: None,
@@ -562,7 +561,7 @@ fn runtime_catalog_rejects_collection_action_with_unknown_operation() {
             label: "Start".into(),
             operation: "missingOperation".into(),
         }],
-    });
+    })];
     workbench.pages = vec![page];
     manifest.contributes.resource_workbenches.push(workbench);
 
@@ -571,7 +570,39 @@ fn runtime_catalog_rejects_collection_action_with_unknown_operation() {
     assert!(
         error
             .to_string()
-            .contains("collection action references an unknown operation"),
+            .contains("table action references an unknown operation"),
+        "{error}"
+    );
+}
+/// 页面 stack 只支持一个内容原语:多原语会被渲染器静默丢弃其中之一,
+/// 注册阶段必须拒绝,而不是接受一份"界面不忠实于声明"的工作台。
+#[test]
+fn runtime_catalog_rejects_page_with_multiple_primitives() {
+    let mut manifest = shell_manifest();
+    manifest
+        .contributes
+        .shell_views
+        .push(shell_view("ui/explorer.js"));
+    manifest.contributes.connections.push(resource_connection());
+    let mut workbench = resource_workbench();
+    workbench.default_page = "items".into();
+    let mut page = resource_workbench().pages.remove(0);
+    page.id = "items".into();
+    page.stack = vec![
+        ResourceWorkbenchPrimitive::Viewer(ResourceWorkbenchViewer {
+            format: ResourceWorkbenchViewerFormat::Text,
+        }),
+        ResourceWorkbenchPrimitive::Stream,
+    ];
+    workbench.pages = vec![page];
+    manifest.contributes.resource_workbenches.push(workbench);
+
+    let error = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("page stack must declare exactly one primitive"),
         "{error}"
     );
 }
@@ -622,7 +653,6 @@ fn runtime_catalog_accepts_events_pages_and_paging_bindings() {
     let events_page = ResourceWorkbenchPage {
         id: "events".into(),
         title: "Events".into(),
-        template: ResourceWorkbenchTemplate::Events,
         renderer: ResourceWorkbenchRenderer {
             kind: ResourceWorkbenchRendererKind::Native,
             view_id: None,
@@ -631,19 +661,14 @@ fn runtime_catalog_accepts_events_pages_and_paging_bindings() {
         load: Some(crate::extension::manifest::ResourceWorkbenchAction {
             operation: "followLogs".into(),
         }),
-        execute: None,
-        collection: None,
-        inputs: vec![],
-        scope: None,
-        terminal: None,
-        tabs: vec![],
+        tab_group_id: None,
         route: None,
         links: vec![],
+        stack: vec![ResourceWorkbenchPrimitive::Stream],
     };
     let collection_page = ResourceWorkbenchPage {
         id: "items".into(),
         title: "Items".into(),
-        template: ResourceWorkbenchTemplate::Collection,
         renderer: ResourceWorkbenchRenderer {
             kind: ResourceWorkbenchRendererKind::Native,
             view_id: None,
@@ -652,23 +677,19 @@ fn runtime_catalog_accepts_events_pages_and_paging_bindings() {
         load: Some(crate::extension::manifest::ResourceWorkbenchAction {
             operation: "listItems".into(),
         }),
-        execute: None,
-        collection: Some(ResourceWorkbenchCollection {
+        tab_group_id: None,
+        route: None,
+        links: vec![],
+        stack: vec![ResourceWorkbenchPrimitive::Table(ResourceWorkbenchTable {
             items_path: "/items".into(),
             key_paths: vec!["/id".into()],
             pagination: ResourceWorkbenchPagination {
-                kind: "cursor".into(),
+                kind: ResourceWorkbenchPaginationKind::Cursor,
             },
             columns: vec![],
             open: None,
             actions: vec![],
-        }),
-        inputs: vec![],
-        scope: None,
-        terminal: None,
-        tabs: vec![],
-        route: None,
-        links: vec![],
+        })],
     };
     workbench.pages = vec![events_page, collection_page];
     workbench.default_page = "events".into();
@@ -679,24 +700,23 @@ fn runtime_catalog_accepts_events_pages_and_paging_bindings() {
         .resource_workbench_for_connection("com.example.tools", "search")
         .unwrap_or_else(|| panic!("workbench must resolve"));
     assert_eq!(2, workbench.pages.len());
+    assert!(matches!(
+        workbench.pages[0].stack[0],
+        ResourceWorkbenchPrimitive::Stream
+    ));
+    let table = match &workbench.pages[1].stack[0] {
+        ResourceWorkbenchPrimitive::Table(table) => table,
+        other => panic!("expected table primitive, got {other:?}"),
+    };
     assert_eq!(
-        ResourceWorkbenchTemplate::Events,
-        workbench.pages[0].template
-    );
-    assert_eq!(
-        "cursor",
-        workbench.pages[1]
-            .collection
-            .as_ref()
-            .unwrap()
-            .pagination
-            .kind
+        ResourceWorkbenchPaginationKind::Cursor,
+        table.pagination.kind
     );
 }
 
 fn resource_workbench() -> ResourceWorkbenchContrib {
     ResourceWorkbenchContrib {
-        schema_version: 1,
+        schema_version: 3,
         id: "search-workbench".into(),
         title: "Search".into(),
         connection_ids: vec!["search".into()],
@@ -715,12 +735,10 @@ fn resource_workbench() -> ResourceWorkbenchContrib {
         )]
         .into_iter()
         .collect(),
-        navigation: vec![],
-        tree: vec![],
+        layout: None,
         pages: vec![ResourceWorkbenchPage {
             id: "overview".into(),
             title: "Overview".into(),
-            template: ResourceWorkbenchTemplate::Json,
             renderer: ResourceWorkbenchRenderer {
                 kind: ResourceWorkbenchRendererKind::Native,
                 view_id: None,
@@ -729,16 +747,15 @@ fn resource_workbench() -> ResourceWorkbenchContrib {
             load: Some(crate::extension::manifest::ResourceWorkbenchAction {
                 operation: "clusterInfo".into(),
             }),
-            execute: None,
-            collection: None,
-            inputs: vec![],
-            scope: None,
-            terminal: None,
-            tabs: vec![],
+            tab_group_id: None,
             route: None,
             links: vec![],
+            stack: vec![ResourceWorkbenchPrimitive::Viewer(
+                ResourceWorkbenchViewer {
+                    format: ResourceWorkbenchViewerFormat::Json,
+                },
+            )],
         }],
-        status_bar: None,
     }
 }
 
@@ -1231,5 +1248,59 @@ fn catalog_toolbox_views_exclude_connection_owned_shell_views() {
     assert!(
         !ids.contains(&"explorer"),
         "连接关联的 shell view 不应进工具箱: {ids:?}"
+    );
+}
+
+#[test]
+fn catalog_toolbox_views_exclude_workbench_page_bodies() {
+    // 工作台页体(被 `pages[*].renderer.viewId` 引用的视图)与任何声明
+    // `workbench` 模块的视图,都只在工作台挂载会话里可运行;独立打开时
+    // 宿主必然失败("navop.workbench requires a borrowed resource-workbench
+    // session"),列进工具箱就是点了就报错的假卡片。
+    let mut page_body = shell_view("ui/page-body.js");
+    page_body.id = "page-body".into();
+    page_body.modules = vec![ShellHostModule::Context, ShellHostModule::Workbench];
+
+    // 没有被任何页面引用,但同样声明了 workbench 模块 —— 同样独立打不开。
+    let mut embedded_only = shell_view("ui/embedded-only.js");
+    embedded_only.id = "embedded-only".into();
+    embedded_only.modules = vec![ShellHostModule::Context, ShellHostModule::Workbench];
+
+    // 真独立工具:context + resource,不经工作台。
+    let mut standalone = shell_view("ui/standalone.js");
+    standalone.id = "standalone-tool".into();
+
+    let mut manifest = shell_manifest();
+    manifest.contributes.shell_views.push(page_body);
+    manifest.contributes.shell_views.push(embedded_only);
+    manifest.contributes.shell_views.push(standalone);
+    // 本用例只关心「页体/嵌入专用视图」的排除,连接一律不挂 shell 视图。
+    let mut connection = resource_connection();
+    connection.shell_view_id = None;
+    manifest.contributes.connections.push(connection);
+
+    let mut workbench = resource_workbench();
+    workbench.pages[0].renderer.kind = ResourceWorkbenchRendererKind::Shell;
+    workbench.pages[0].renderer.view_id = Some("page-body".into());
+    workbench.pages[0].renderer.fallback = Some("native".into());
+    manifest.contributes.resource_workbenches.push(workbench);
+
+    let catalog = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap();
+    let ids: Vec<&str> = catalog
+        .toolbox_views()
+        .iter()
+        .map(|view| view.id.as_str())
+        .collect();
+    assert!(
+        !ids.contains(&"page-body"),
+        "工作台页体不应作为独立工具进工具箱: {ids:?}"
+    );
+    assert!(
+        !ids.contains(&"embedded-only"),
+        "声明 workbench 模块的视图不应进工具箱: {ids:?}"
+    );
+    assert!(
+        ids.contains(&"standalone-tool"),
+        "独立工具仍应进工具箱: {ids:?}"
     );
 }

@@ -27,6 +27,8 @@ pub struct ExtensionManagerView {
     pub(crate) search: Entity<InputState>,
     pub(crate) selected_kind: Option<ExtensionKind>,
     pub(crate) updates_only: bool,
+    /// 分类 chips 是否展开为多行（折叠态点击“更多”后为 true）。
+    pub(crate) chips_expanded: bool,
     pub(crate) installed: Vec<ExtensionSummary>,
     pub(crate) marketplace_entries: Vec<MarketplaceEntry>,
     pub(crate) marketplace_load_attempted: bool,
@@ -122,6 +124,7 @@ impl ExtensionManagerView {
             search,
             selected_kind: None,
             updates_only: false,
+            chips_expanded: false,
             installed: Vec::new(),
             marketplace_entries: Vec::new(),
             marketplace_load_attempted: false,
@@ -165,7 +168,12 @@ impl TabContent for ExtensionManagerView {
 
 impl Render for ExtensionManagerView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div().track_focus(&self.focus_handle).size_full().child(
+        // 性能探针：整页 render 超过阈值时打日志，定位启动期卡顿来源。
+        let started = std::time::Instant::now();
+        let installed_count = self.installed.len();
+        let marketplace_count = self.marketplace_entries.len();
+        let loading_marketplace = self.marketplace_load_state.is_loading();
+        let element = div().track_focus(&self.focus_handle).size_full().child(
             v_flex()
                 .size_full()
                 .bg(cx.theme().background)
@@ -177,6 +185,21 @@ impl Render for ExtensionManagerView {
                         .p_4()
                         .child(self.render_body(window, cx)),
                 ),
-        )
+        );
+        let elapsed = started.elapsed();
+        if elapsed > std::time::Duration::from_millis(RENDER_SLOW_THRESHOLD_MS) {
+            tracing::info!(
+                target: "extension_perf",
+                elapsed_ms = elapsed.as_millis() as u64,
+                installed = installed_count,
+                marketplace = marketplace_count,
+                loading_marketplace,
+                "extension manager render: slow frame"
+            );
+        }
+        element
     }
 }
+
+/// render 慢帧日志阈值（毫秒）。
+const RENDER_SLOW_THRESHOLD_MS: u64 = 100;

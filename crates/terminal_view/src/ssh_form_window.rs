@@ -10,11 +10,25 @@ use connection_form::team::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, AsyncApp, Context, Div, Entity, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, ParentElement, PathPromptOptions, Render, SharedString,
+    App, AppContext, AsyncApp, Context, Div, Entity, FocusHandle, Focusable, InteractiveElement,
+    IntoElement, ParentElement, PathPromptOptions, Render, SharedString,
     StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div, img, px, relative,
 };
-use gpui_component::{ActiveTheme, Disableable, Icon, Sizable, Size, WindowExt, button::{Button, ButtonVariants as _}, checkbox::Checkbox, dialog::DialogFooter, h_flex, input::{Input, InputState, Textarea, TextareaState}, notification::Notification, radio::Radio, scroll::ScrollableElement, select::{Select, SelectItem, SelectState}, tab::{Tab, TabBar}, tooltip::Tooltip, v_flex};
+use gpui_component::{
+    ActiveTheme, Disableable, Icon, Sizable, Size, WindowExt,
+    button::{Button, ButtonVariants as _},
+    checkbox::Checkbox,
+    dialog::DialogFooter,
+    h_flex,
+    input::{Input, InputState, Textarea, TextareaState},
+    notification::Notification,
+    radio::Radio,
+    scroll::ScrollableElement,
+    select::{Select, SelectItem, SelectState},
+    tab::{Tab, TabBar},
+    tooltip::Tooltip,
+    v_flex,
+};
 use one_assets::IconName;
 use one_core::cloud_sync::TeamOption;
 use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
@@ -2045,7 +2059,11 @@ impl SshFormWindow {
             .custom_icon_file_path
             .as_ref()
             .map(|path| img(path.clone()).size_5().into_any_element())
-            .unwrap_or_else(|| Icon::new(IconName::Upload).with_size(px(18.0)).into_any_element());
+            .unwrap_or_else(|| {
+                Icon::new(IconName::Upload)
+                    .with_size(px(18.0))
+                    .into_any_element()
+            });
 
         div()
             .id("ssh-icon-local")

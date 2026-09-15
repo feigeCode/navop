@@ -3,7 +3,14 @@ use gpui::{
     Context, InteractiveElement, IntoElement, ListSizingBehavior, MouseButton, ParentElement,
     Render, SharedString, Styled, UniformListScrollHandle, Window, div, uniform_list,
 };
-use gpui_component::{ActiveTheme, Icon, Sizable, Size, button::{Button, ButtonVariants}, h_flex, input::Input, tooltip::Tooltip, v_flex};
+use gpui_component::{
+    ActiveTheme, Icon, Sizable, Size,
+    button::{Button, ButtonVariants},
+    h_flex,
+    input::Input,
+    tooltip::Tooltip,
+    v_flex,
+};
 use one_assets::IconName;
 use one_core::storage::{TerminalCommandHistory, TerminalCommandHistorySort};
 use one_ui::{IconButton, IconButtonRole};

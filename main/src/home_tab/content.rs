@@ -1,5 +1,5 @@
-use one_ui::IconSize;
 use super::*;
+use one_ui::IconSize;
 
 /// 非卡片布局下最近区固定容量（历史行为：最多 4 条）。
 const RECENT_ROW_FALLBACK: usize = 4;
@@ -16,25 +16,32 @@ impl HomePage {
     }
 
     /// 让常驻侧栏知道是否作为主页 Tree 布局嵌入渲染。
-    fn sync_sidebar_home_embedded(&self, cx: &mut Context<Self>) {
-        let embedded = self.connection_layout == ConnectionLayout::Tree;
+    pub(crate) fn sync_sidebar_home_embedded(&self, cx: &mut Context<Self>) {
         if let Some(sidebar) = &self.connection_sidebar {
-            sidebar.update(cx, |sidebar, cx| sidebar.set_home_embedded(embedded, cx));
+            if self.connection_layout == ConnectionLayout::Navigation {
+                sidebar.update(cx, |sidebar, cx| sidebar.set_home_navigation_layout(cx));
+            } else {
+                sidebar.update(cx, |sidebar, cx| {
+                    sidebar.set_home_embedded(self.connection_layout == ConnectionLayout::Tree, cx)
+                });
+            }
         }
     }
 
     pub(super) fn render_content_area(
         &mut self,
-        window: &Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if self.connection_layout == ConnectionLayout::Tree {
             if let Some(sidebar) = self.connection_sidebar.clone() {
                 // 作为子视图渲染侧栏实体：树在 Render 阶段自己 read(HomePage)，
                 // 不在本页租约内重入读自身（修复布局切换瞬间 panic）。
-                sidebar.update(cx, |sidebar, cx| sidebar.set_home_embedded(true, cx));
                 return sidebar.into_any_element();
             }
+        }
+        if self.connection_layout == ConnectionLayout::Navigation {
+            return self.render_navigation_home_content(window, cx);
         }
         let query = self.search_query.read(cx).to_lowercase();
         self.render_workspace_view(
@@ -44,6 +51,92 @@ impl HomePage {
             window,
             cx,
         )
+    }
+
+    pub(super) fn render_navigation_home_content(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let query = self.search_query.read(cx).trim().to_lowercase();
+        let recent = recent::recent_connections(&self.connections, &self.selected_filter, "", 6);
+        let matching = self
+            .home_groups(&query, cx)
+            .into_iter()
+            .flat_map(|(_, _, connections)| connections)
+            .collect::<Vec<_>>();
+        let right_width = window.bounds().size.width - GLOBAL_NAV_TREE_WIDTH;
+        let (_, card_width) = grid::card_grid_metrics(right_width, window.rem_size());
+        let mut body = v_flex()
+            .w_full()
+            .min_w_0()
+            .gap_5()
+            .child(self.render_navigation_heading(query.is_empty(), if query.is_empty() { recent.len() } else { matching.len() }, cx));
+        if !query.is_empty() {
+            if matching.is_empty() {
+                body = body.child(self.render_empty_home(cx));
+            } else {
+                body = body.child(self.render_connections_grid(
+                    matching,
+                    self.selected_connection_id,
+                    ConnectionLayout::Card,
+                    false,
+                    card_width,
+                    cx,
+                ));
+            }
+        } else if recent.is_empty() {
+            body = body.child(self.render_empty_home(cx));
+        } else {
+            body = body.child(self.render_recent_group(
+                recent,
+                self.selected_connection_id,
+                ConnectionLayout::Card,
+                card_width,
+                cx,
+            ));
+        }
+        if query.is_empty() {
+            body = body.child(self.render_application_workbench(window, cx));
+            body = body.child(self.render_navigation_status_panel(window, cx));
+        }
+        div()
+            .id("home-navigation-content")
+            .size_full()
+            .min_w_0()
+            .overflow_y_scroll()
+            .p_5()
+            .child(body)
+            .into_any_element()
+    }
+
+    fn render_navigation_heading(
+        &self,
+        is_recent: bool,
+        count: usize,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        h_flex()
+            .w_full()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .text_lg()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(if is_recent {
+                        t!("Home.recent_connections").to_string()
+                    } else {
+                        t!("Home.search_results").to_string()
+                    }),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(count.to_string()),
+            )
+            .into_any_element()
     }
 
     pub(super) fn home_groups(
@@ -107,7 +200,7 @@ impl HomePage {
         let groups = self.home_groups(query, cx);
         // 最近区不参与搜索：有搜索词时隐藏，避免同一连接在最近区与分组中重复出现。
         let recent = if query.is_empty() {
-            recent::recent_connections(&self.connections, self.selected_filter, query, columns)
+            recent::recent_connections(&self.connections, &self.selected_filter, query, columns)
         } else {
             Vec::new()
         };
@@ -245,7 +338,7 @@ impl HomePage {
                         if initial {
                             home.show_new_connection_dialog(window, cx);
                         } else {
-                            home.selected_filter = ConnectionType::All;
+                            home.selected_filter = ConnectionFilter::All;
                             home.clear_workspace_filter(cx);
                             home.search_input
                                 .update(cx, |input, cx| input.set_value("", window, cx));
@@ -403,7 +496,7 @@ impl HomePage {
         for (index, conn) in connections.into_iter().enumerate() {
             grid = grid.child(match layout {
                 // Tree 布局在 render_content_area 拦截；这里兜底按列表渲染。
-                ConnectionLayout::List | ConnectionLayout::Tree => {
+                ConnectionLayout::List | ConnectionLayout::Tree | ConnectionLayout::Navigation => {
                     self.render_connection_list_item(conn, selected, index, recent, cx)
                 }
                 // 固定共享列宽：单项组与末行不拉宽（redesign §4.1）。

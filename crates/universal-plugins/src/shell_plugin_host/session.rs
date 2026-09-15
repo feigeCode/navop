@@ -3,6 +3,7 @@ use std::{
     sync::Mutex,
 };
 
+use extension_host::CancellationToken;
 use extension_plugin_adapter::{JobActivationHandle, ManagedUniversalPluginClient};
 use extension_protocol::{
     blob::BlobCloseParams,
@@ -15,6 +16,8 @@ use gpui_shell::{HostError, HostObject, HostValue};
 use super::value::json_to_host;
 use crate::universal_plugins::UniversalPluginService;
 
+use super::error::{ErrorCode, navop_error, service_error};
+
 #[derive(Clone)]
 struct ProviderHandle {
     alias: String,
@@ -22,11 +25,14 @@ struct ProviderHandle {
     generation: u64,
     provider_id: String,
     owned: bool,
+    /// 派生自哪个 resource 句柄;resource 关闭时只回收属于它的子句柄。
+    resource: Option<String>,
 }
 
 #[derive(Clone)]
 struct JobHandle {
     alias: String,
+    resource: String,
     provider: JobActivationHandle,
 }
 
@@ -37,6 +43,7 @@ pub(crate) struct ShellMountSession {
     blobs: Mutex<HashMap<String, ProviderHandle>>,
     events: Mutex<HashMap<String, ProviderHandle>>,
     jobs: Mutex<HashMap<String, JobHandle>>,
+    root: CancellationToken,
     pub(super) tokio: tokio::runtime::Handle,
 }
 
@@ -53,18 +60,31 @@ impl ShellMountSession {
             blobs: Mutex::new(HashMap::new()),
             events: Mutex::new(HashMap::new()),
             jobs: Mutex::new(HashMap::new()),
+            root: CancellationToken::new(),
             tokio,
         }
     }
 
+    /// 每次 HostModule 调用派生的子令牌;mount 关闭时随根令牌一起取消。
+    pub(super) fn call_token(&self) -> CancellationToken {
+        self.root.child()
+    }
+
+    /// 取消所有仍在飞行中的 HostModule 调用。
+    pub(crate) fn cancel(&self) {
+        self.root.cancel();
+    }
+
     pub(super) fn client(&self, alias: &str) -> Result<ManagedUniversalPluginClient, HostError> {
-        let runtime_id = self
-            .backends
-            .get(alias)
-            .ok_or_else(|| HostError::new(format!("unknown backend alias `{alias}`")))?;
+        let runtime_id = self.backends.get(alias).ok_or_else(|| {
+            navop_error(
+                ErrorCode::BackendNotFound,
+                format!("unknown backend alias `{alias}`"),
+            )
+        })?;
         self.service
             .universal_plugin_client(runtime_id)
-            .map_err(|error| HostError::new(error.to_string()))
+            .map_err(service_error)
     }
 
     pub(super) fn register_resource(
@@ -106,6 +126,7 @@ impl ShellMountSession {
                     generation: client.generation,
                     provider_id: result.resource_id,
                     owned,
+                    resource: None,
                 },
             );
         Ok(HostObject::new()
@@ -125,7 +146,12 @@ impl ShellMountSession {
         let record = self
             .resources
             .lock()
-            .map_err(|_| HostError::new("shell resource registry poisoned"))?
+            .map_err(|_| {
+                navop_error(
+                    ErrorCode::RuntimeUnavailable,
+                    "shell resource registry poisoned",
+                )
+            })?
             .get(handle)
             .cloned()
             .ok_or_else(|| invalid_handle("resource", handle))?;
@@ -135,23 +161,35 @@ impl ShellMountSession {
 
     pub(super) fn close_resource_record(&self, handle: &str, provider_id: &str) {
         remove_matching(&self.resources, handle, provider_id);
-        self.blobs
-            .lock()
-            .expect("shell blob registry poisoned")
-            .clear();
-        self.events
-            .lock()
-            .expect("shell event registry poisoned")
-            .clear();
-        self.jobs
-            .lock()
-            .expect("shell job registry poisoned")
-            .clear();
+    }
+
+    /// 取出派生自该 resource 的 blob/event/job 句柄;其他 resource 的句柄不受影响。
+    pub(super) fn take_resource_children(&self, handle: &str) -> ScopedHandles {
+        ScopedHandles {
+            blobs: drain_scoped(&self.blobs, handle),
+            events: drain_scoped(&self.events, handle),
+            jobs: self
+                .jobs
+                .lock()
+                .map(|mut jobs| {
+                    let (scoped, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut *jobs)
+                        .into_iter()
+                        .partition(|(_, job)| job.resource == handle);
+                    jobs.extend(rest);
+                    scoped.into_iter().map(|(_, job)| job).collect()
+                })
+                .unwrap_or_default(),
+        }
+    }
+
+    pub(super) fn service(&self) -> UniversalPluginService {
+        self.service.clone()
     }
 
     pub(super) fn result_ref(
         &self,
         alias: String,
+        resource: &str,
         generation: u64,
         result: &ResultRef,
     ) -> Result<HostValue, HostError> {
@@ -161,16 +199,28 @@ impl ShellMountSession {
                 .field("value", json_to_host(value)?)
                 .into()),
             ResultRef::Blob { id } => {
-                let handle =
-                    self.insert_provider_handle(&self.blobs, "blob", alias, generation, id)?;
+                let handle = self.insert_provider_handle(
+                    &self.blobs,
+                    "blob",
+                    alias,
+                    resource,
+                    generation,
+                    id,
+                )?;
                 Ok(HostObject::new()
                     .field("kind", "blob")
                     .field("handle", handle)
                     .into())
             }
             ResultRef::EventStream { id } => {
-                let handle =
-                    self.insert_provider_handle(&self.events, "event", alias, generation, id)?;
+                let handle = self.insert_provider_handle(
+                    &self.events,
+                    "event",
+                    alias,
+                    resource,
+                    generation,
+                    id,
+                )?;
                 Ok(HostObject::new()
                     .field("kind", "event_stream")
                     .field("handle", handle)
@@ -190,23 +240,44 @@ impl ShellMountSession {
         remove_matching(&self.blobs, handle, provider_id);
     }
 
-    pub(super) fn register_job(&self, alias: String, provider: JobActivationHandle) -> String {
+    pub(super) fn register_job(
+        &self,
+        alias: String,
+        resource: &str,
+        provider: JobActivationHandle,
+    ) -> String {
         let handle = new_handle("job");
         self.jobs
             .lock()
             .expect("shell job registry poisoned")
-            .insert(handle.clone(), JobHandle { alias, provider });
+            .insert(
+                handle.clone(),
+                JobHandle {
+                    alias,
+                    resource: resource.to_string(),
+                    provider,
+                },
+            );
         handle
     }
 
+    /// 返回 `(alias, resource 句柄, client, provider job)`。
     pub(super) fn job(
         &self,
         handle: &str,
-    ) -> Result<(String, ManagedUniversalPluginClient, JobActivationHandle), HostError> {
+    ) -> Result<
+        (
+            String,
+            String,
+            ManagedUniversalPluginClient,
+            JobActivationHandle,
+        ),
+        HostError,
+    > {
         let record = self
             .jobs
             .lock()
-            .map_err(|_| HostError::new("shell job registry poisoned"))?
+            .map_err(|_| navop_error(ErrorCode::RuntimeUnavailable, "shell job registry poisoned"))?
             .get(handle)
             .cloned()
             .ok_or_else(|| invalid_handle("job", handle))?;
@@ -214,7 +285,7 @@ impl ShellMountSession {
         if client.generation != record.provider.generation {
             return Err(stale_handle("job", handle));
         }
-        Ok((record.alias, client, record.provider))
+        Ok((record.alias, record.resource, client, record.provider))
     }
 
     pub(super) fn close_job_record(&self, handle: &str) {
@@ -227,10 +298,18 @@ impl ShellMountSession {
     pub(super) fn register_event(
         &self,
         alias: String,
+        resource: &str,
         generation: u64,
         provider_id: &str,
     ) -> Result<String, HostError> {
-        self.insert_provider_handle(&self.events, "event", alias, generation, provider_id)
+        self.insert_provider_handle(
+            &self.events,
+            "event",
+            alias,
+            resource,
+            generation,
+            provider_id,
+        )
     }
 
     pub(super) fn event(
@@ -272,14 +351,16 @@ impl ShellMountSession {
         registry: &Mutex<HashMap<String, ProviderHandle>>,
         kind: &str,
         alias: String,
+        resource: &str,
         generation: u64,
         provider_id: &str,
     ) -> Result<String, HostError> {
-        let runtime_id = self
-            .backends
-            .get(&alias)
-            .cloned()
-            .ok_or_else(|| HostError::new(format!("unknown backend alias `{alias}`")))?;
+        let runtime_id = self.backends.get(&alias).cloned().ok_or_else(|| {
+            navop_error(
+                ErrorCode::BackendNotFound,
+                format!("unknown backend alias `{alias}`"),
+            )
+        })?;
         let handle = new_handle(kind);
         registry
             .lock()
@@ -292,6 +373,7 @@ impl ShellMountSession {
                     generation,
                     provider_id: provider_id.to_string(),
                     owned: true,
+                    resource: Some(resource.to_string()),
                 },
             );
         Ok(handle)
@@ -305,7 +387,12 @@ impl ShellMountSession {
     ) -> Result<(ManagedUniversalPluginClient, String), HostError> {
         let record = registry
             .lock()
-            .map_err(|_| HostError::new("shell handle registry poisoned"))?
+            .map_err(|_| {
+                navop_error(
+                    ErrorCode::RuntimeUnavailable,
+                    "shell handle registry poisoned",
+                )
+            })?
             .get(handle)
             .cloned()
             .ok_or_else(|| invalid_handle(kind, handle))?;
@@ -314,5 +401,6 @@ impl ShellMountSession {
     }
 }
 
-use cleanup::{invalid_handle, new_handle, remove_matching, stale_handle};
+pub(crate) use cleanup::ScopedHandles;
+use cleanup::{drain_scoped, invalid_handle, new_handle, remove_matching, stale_handle};
 mod cleanup;

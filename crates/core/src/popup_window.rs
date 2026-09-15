@@ -154,35 +154,41 @@ pub fn open_popup_window<F, E>(
     E: Into<AnyView>,
     F: FnOnce(&mut Window, &mut App) -> E + Send + 'static,
 {
-    // 解析父窗口 / 激活窗口所在显示器的 id。
-    let parent_display_id = match parent_window {
+    // 解析父窗口 / 激活窗口所在显示器的 id，并保留父窗口 bounds 用于相对居中。
+    let (parent_display_id, parent_window_bounds) = match parent_window {
         Some(window) => {
             window.bounds_changed(cx);
-            window.display(cx).map(|display| display.id())
+            let display_id = window.display(cx).map(|display| display.id());
+            (display_id, Some(window.bounds()))
         }
         None => {
             // 没有父窗口时，优先活动窗口；活动窗口取不到（仅持有 App 上下文的调用方）
             // 则回退到注册的主窗口 handle，保证弹窗落在用户实际所在屏幕。
-            let from_active = cx.active_window().and_then(|handle| {
-                handle
-                    .update(cx, |_, window, cx| {
-                        window.bounds_changed(cx);
-                        window.display(cx)
-                    })
-                    .ok()
-                    .flatten()
-                    .map(|display| display.id())
-            });
-            from_active.or_else(|| {
-                main_window_handle().and_then(|handle| {
+            let from_active: Option<(Option<gpui::DisplayId>, Option<Bounds<gpui::Pixels>>)> =
+                cx.active_window().and_then(|handle| {
+                    handle
+                        .update(cx, |_, window, cx| {
+                            window.bounds_changed(cx);
+                            window
+                                .display(cx)
+                                .map(|display| (Some(display.id()), Some(window.bounds())))
+                        })
+                        .ok()
+                        .flatten()
+                });
+            from_active
+                .or_else(|| {
+                    let handle = main_window_handle()?;
                     cx.update_window(handle, |_, window, cx| {
                         window.bounds_changed(cx);
-                        window.display(cx).map(|display| display.id())
+                        window
+                            .display(cx)
+                            .map(|display| (Some(display.id()), Some(window.bounds())))
                     })
                     .ok()
                     .flatten()
                 })
-            })
+                .unwrap_or((None, None::<Bounds<gpui::Pixels>>))
         }
     };
 
@@ -190,14 +196,35 @@ pub fn open_popup_window<F, E>(
     let display = parent_display_id
         .and_then(|id| cx.find_display(id))
         .or_else(|| cx.primary_display());
-    if let Some(display) = display {
-        let display_size = display.bounds().size;
+    if let Some(d) = display.as_ref() {
+        let display_size = d.bounds().size;
         window_size.width = window_size.width.min(display_size.width * 0.85);
         window_size.height = window_size.height.min(display_size.height * 0.85);
     }
-    // `Bounds::centered` 生成目标显示器局部坐标的居中 bounds，平台层会再叠加
-    // 该显示器 frame 原点；必须同时指定 display_id。
-    let window_bounds = Bounds::centered(parent_display_id, window_size, cx);
+    // 相对父窗口居中：以父窗口中心为锚点，弹窗尺寸不超出显示器可视范围。
+    // 没有父窗口 bounds 时回退到显示器居中（`Bounds::centered` 生成目标显示器
+    // 局部坐标的居中 bounds，平台层会再叠加该显示器 frame 原点）。
+    let window_bounds = match parent_window_bounds {
+        Some(parent_bounds) => {
+            let mut bounds = Bounds::centered_at(parent_bounds.center(), window_size);
+            // 钳制到所在显示器内，避免大弹窗溢出屏幕边缘。
+            if let Some(d) = display.as_ref() {
+                let visible = d.bounds();
+                bounds.origin.x = bounds
+                    .origin
+                    .x
+                    .max(visible.origin.x)
+                    .min(visible.right() - window_size.width);
+                bounds.origin.y = bounds
+                    .origin
+                    .y
+                    .max(visible.origin.y)
+                    .min(visible.bottom() - window_size.height);
+            }
+            bounds
+        }
+        None => Bounds::centered(parent_display_id, window_size, cx),
+    };
     let title = options.title.clone();
     let fullscreen_hint = options.fullscreen_hint.clone();
 

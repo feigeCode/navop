@@ -1,6 +1,6 @@
-use anyhow::Result;
 #[cfg(any(test, target_os = "windows"))]
 use anyhow::Context;
+use anyhow::Result;
 use std::path::{Component, Path, PathBuf, Prefix};
 
 use crate::LocalConfig;
@@ -20,12 +20,7 @@ pub struct WslDistribution {
 
 #[cfg(any(test, target_os = "windows"))]
 impl WslDistribution {
-    fn new(
-        name: String,
-        state: Option<String>,
-        version: Option<u8>,
-        is_default: bool,
-    ) -> Self {
+    fn new(name: String, state: Option<String>, version: Option<u8>, is_default: bool) -> Self {
         Self {
             name,
             state,
@@ -78,10 +73,7 @@ pub fn local_config_for_wsl_distro(distro: &str) -> Result<LocalConfig> {
 }
 
 #[cfg(any(test, target_os = "windows"))]
-pub(crate) fn local_config_for_wsl_distro_with(
-    wsl: String,
-    distro: &str,
-) -> Result<LocalConfig> {
+pub(crate) fn local_config_for_wsl_distro_with(wsl: String, distro: &str) -> Result<LocalConfig> {
     let distro = distro.trim();
     anyhow::ensure!(!distro.is_empty(), "WSL distribution name is required");
     Ok(LocalConfig {
@@ -114,6 +106,7 @@ const WSL_UNC_SERVERS: [&str; 2] = [WSL_UNC_SERVER, "wsl.localhost"];
 ///
 /// 目标发行版只体现在启动参数里（模型层把它当作普通本地终端），这里把它解析
 /// 出来供文件树定位发行版文件系统使用。
+#[cfg(any(test, target_os = "windows"))]
 pub(crate) fn wsl_distribution_for_config(config: &LocalConfig) -> Option<&str> {
     let shell = config.shell.as_deref()?;
     if !is_wsl_program(shell) {
@@ -196,6 +189,7 @@ pub fn resolve_reported_working_dir(current_root: &Path, reported: &str) -> Opti
 }
 
 /// 配置里的 shell 是否指向 `wsl.exe`；只比较文件名，允许写成完整路径或命令名。
+#[cfg(any(test, target_os = "windows"))]
 fn is_wsl_program(program: &str) -> bool {
     let file_name = program
         .rsplit(|ch| ch == '\\' || ch == '/')
@@ -205,6 +199,7 @@ fn is_wsl_program(program: &str) -> bool {
 }
 
 /// 从启动参数里取出 `--distribution` / `-d` 的取值。
+#[cfg(any(test, target_os = "windows"))]
 fn distribution_from_args(args: &[String]) -> Option<&str> {
     let mut args = args.iter();
     while let Some(arg) = args.next() {
@@ -255,7 +250,9 @@ fn parse_distribution_row(line: &str) -> Option<WslDistribution> {
         return None;
     }
     let state = columns.get(1).map(|column| column.trim().to_string());
-    let version = columns.get(2).and_then(|column| column.trim().parse::<u8>().ok());
+    let version = columns
+        .get(2)
+        .and_then(|column| column.trim().parse::<u8>().ok());
     let recognized_state = state
         .as_deref()
         .is_some_and(|state| KNOWN_STATES.contains(&state));
@@ -266,7 +263,12 @@ fn parse_distribution_row(line: &str) -> Option<WslDistribution> {
             Some(version),
             is_default,
         )),
-        (None, true) => Some(WslDistribution::new(name.to_string(), state, None, is_default)),
+        (None, true) => Some(WslDistribution::new(
+            name.to_string(),
+            state,
+            None,
+            is_default,
+        )),
         // 表头（版本列为 "VERSION" 等非数字）或错误文本行
         (None, false) => None,
     }

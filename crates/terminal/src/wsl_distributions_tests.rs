@@ -1,8 +1,9 @@
 use super::{
     WslDistribution, decode_wsl_output, local_config_for_wsl_distro_with, parse_wsl_list_output,
-    resolve_reported_working_dir, wsl_distribution_for_config, wsl_distribution_from_root,
-    wsl_unc_path, wsl_unc_root,
+    resolve_reported_working_dir, wsl_distribution_for_config, wsl_unc_path, wsl_unc_root,
 };
+#[cfg(target_os = "windows")]
+use super::wsl_distribution_from_root;
 use crate::LocalConfig;
 use std::path::{Path, PathBuf};
 
@@ -25,13 +26,21 @@ fn expected_distributions() -> Vec<WslDistribution> {
     vec![
         WslDistribution::new("Ubuntu-22.04".into(), Some("Running".into()), Some(2), true),
         WslDistribution::new("Debian".into(), Some("Stopped".into()), Some(1), false),
-        WslDistribution::new("openEuler-24.03".into(), Some("Stopped".into()), Some(2), false),
+        WslDistribution::new(
+            "openEuler-24.03".into(),
+            Some("Stopped".into()),
+            Some(2),
+            false,
+        ),
     ]
 }
 
 #[test]
 fn parses_verbose_utf16_output_with_default_marker() {
-    assert_eq!(expected_distributions(), parse_wsl_list_output(&utf16le(&verbose_sample())));
+    assert_eq!(
+        expected_distributions(),
+        parse_wsl_list_output(&utf16le(&verbose_sample()))
+    );
 }
 
 #[test]
@@ -43,14 +52,22 @@ fn parses_verbose_utf16_output_with_bom() {
 
 #[test]
 fn parses_utf8_output_without_bom() {
-    assert_eq!(expected_distributions(), parse_wsl_list_output(verbose_sample().as_bytes()));
+    assert_eq!(
+        expected_distributions(),
+        parse_wsl_list_output(verbose_sample().as_bytes())
+    );
 }
 
 #[test]
 fn parses_rows_missing_the_version_column_when_state_is_known() {
     let distributions = parse_wsl_list_output(b"Ubuntu-22.04  Running\r\n".as_slice());
     assert_eq!(
-        vec![WslDistribution::new("Ubuntu-22.04".into(), Some("Running".into()), None, false)],
+        vec![WslDistribution::new(
+            "Ubuntu-22.04".into(),
+            Some("Running".into()),
+            None,
+            false
+        )],
         distributions
     );
 }
@@ -58,9 +75,15 @@ fn parses_rows_missing_the_version_column_when_state_is_known() {
 #[test]
 fn localized_header_and_error_text_yield_no_distributions() {
     // 本地化表头的版本列不是数字，被稳定过滤；数据行不受表头本地化影响。
-    let localized = "\r\n  名称            状态            版本\r\n* Ubuntu-22.04    正在运行         2\r\n";
+    let localized =
+        "\r\n  名称            状态            版本\r\n* Ubuntu-22.04    正在运行         2\r\n";
     assert_eq!(
-        vec![WslDistribution::new("Ubuntu-22.04".into(), Some("正在运行".into()), Some(2), true)],
+        vec![WslDistribution::new(
+            "Ubuntu-22.04".into(),
+            Some("正在运行".into()),
+            Some(2),
+            true
+        )],
         parse_wsl_list_output(localized.as_bytes())
     );
     let error = "适用于 Linux 的 Windows 子系统没有已安装的分发版。\r\n";
@@ -94,15 +117,20 @@ fn distro_launch_config_uses_the_distribution_argument_form() {
     );
     assert!(config.working_dir.is_none());
     // 继承 LocalConfig::default() 的基础终端环境变量
-    assert!(config
-        .env
-        .contains(&("TERM".to_string(), "xterm-256color".to_string())));
+    assert!(
+        config
+            .env
+            .contains(&("TERM".to_string(), "xterm-256color".to_string()))
+    );
 }
 
 #[test]
 fn distro_launch_config_trims_names_and_rejects_blank_names() {
     let config = local_config_for_wsl_distro_with("wsl.exe".into(), "  Debian-12  ").unwrap();
-    assert_eq!(vec!["--distribution".to_string(), "Debian-12".to_string()], config.args);
+    assert_eq!(
+        vec!["--distribution".to_string(), "Debian-12".to_string()],
+        config.args
+    );
     assert!(local_config_for_wsl_distro_with("wsl.exe".into(), "   ").is_err());
 }
 
@@ -149,8 +177,14 @@ fn only_wsl_programs_with_a_distribution_argument_count_as_wsl_sessions() {
 
     // wsl.exe 会走进默认发行版，但不是「某个发行版会话」，无从确定根目录
     assert_eq!(None, wsl_distribution_for_config(&wsl_config(&[])));
-    assert_eq!(None, wsl_distribution_for_config(&wsl_config(&["--distribution"])));
-    assert_eq!(None, wsl_distribution_for_config(&wsl_config(&["-d", "   "])));
+    assert_eq!(
+        None,
+        wsl_distribution_for_config(&wsl_config(&["--distribution"]))
+    );
+    assert_eq!(
+        None,
+        wsl_distribution_for_config(&wsl_config(&["-d", "   "]))
+    );
 
     let without_shell = LocalConfig {
         shell: None,
@@ -167,7 +201,12 @@ fn distribution_argument_accepts_both_flags_and_ignores_other_arguments() {
     );
     assert_eq!(
         Some("Debian"),
-        wsl_distribution_for_config(&wsl_config(&["--cd", "/home/navop", "--distribution", "Debian"]))
+        wsl_distribution_for_config(&wsl_config(&[
+            "--cd",
+            "/home/navop",
+            "--distribution",
+            "Debian"
+        ]))
     );
 }
 

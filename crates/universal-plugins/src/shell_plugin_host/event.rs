@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
-use extension_host::{CancellationToken, RequestOptions};
+use extension_host::RequestOptions;
 use extension_protocol::event_stream::{
     EventCloseParams, EventOpenParams, EventReadParams, MAX_EVENT_MAX_EVENTS,
 };
 use gpui_shell::{HostAsyncTask, HostError, HostModule, HostObject, HostValue};
 
 use super::{
+    error::{ErrorCode, navop_error},
     resource::task::{host_error, spawn_provider_task},
     session::ShellMountSession,
     value::json_to_host,
@@ -36,19 +37,35 @@ fn open_event(
         let (alias, client, _) = session.resource(&resource)?;
         let generation = client.generation;
         let task_session = Arc::clone(&session);
-        let cancel = CancellationToken::new();
+        let cancel = session.call_token();
+        let request_cancel = cancel.clone();
         Ok(spawn_provider_task(
             &session.tokio,
             async move {
                 let result = client
-                    .open_event_stream(&EventOpenParams {
-                        conn_id: None,
-                        kind,
-                        capacity,
-                    })
+                    .open_event_stream_with_options(
+                        &EventOpenParams {
+                            conn_id: None,
+                            kind,
+                            capacity,
+                        },
+                        RequestOptions::default().with_cancel(request_cancel.clone()),
+                    )
                     .await
                     .map_err(host_error)?;
-                let handle = task_session.register_event(alias, generation, &result.stream_id)?;
+                if request_cancel.is_cancelled() {
+                    let _ = client
+                        .close_event_stream(&EventCloseParams {
+                            stream_id: result.stream_id,
+                        })
+                        .await;
+                    return Err(navop_error(
+                        ErrorCode::RequestCancelled,
+                        "event open cancelled",
+                    ));
+                }
+                let handle =
+                    task_session.register_event(alias, &resource, generation, &result.stream_id)?;
                 Ok(HostObject::new().field("handle", handle).into())
             },
             cancel,
@@ -64,7 +81,7 @@ fn read_event(
         let max_events = optional_u32(arguments, 1, MAX_EVENT_MAX_EVENTS)?;
         let wait_ms = optional_u32(arguments, 2, 60_000)?;
         let (client, stream_id) = session.event(&handle)?;
-        let cancel = CancellationToken::new();
+        let cancel = session.call_token();
         let request_cancel = cancel.clone();
         Ok(spawn_provider_task(
             &session.tokio,
@@ -81,7 +98,8 @@ fn read_event(
                     .await
                     .map_err(host_error)?;
                 json_to_host(
-                    &serde_json::to_value(result).map_err(|e| HostError::new(e.to_string()))?,
+                    &serde_json::to_value(result)
+                        .map_err(|e| navop_error(ErrorCode::ProtocolError, e.to_string()))?,
                 )
             },
             cancel,
@@ -96,14 +114,18 @@ fn close_event(
         let handle = arguments.string(0)?.to_owned();
         let (client, stream_id) = session.event(&handle)?;
         let task_session = Arc::clone(&session);
-        let cancel = CancellationToken::new();
+        let cancel = session.call_token();
+        let request_cancel = cancel.clone();
         Ok(spawn_provider_task(
             &session.tokio,
             async move {
                 client
-                    .close_event_stream(&EventCloseParams {
-                        stream_id: stream_id.clone(),
-                    })
+                    .close_event_stream_with_options(
+                        &EventCloseParams {
+                            stream_id: stream_id.clone(),
+                        },
+                        RequestOptions::default().with_cancel(request_cancel),
+                    )
                     .await
                     .map_err(host_error)?;
                 task_session.close_event_record(&handle, &stream_id);
@@ -128,10 +150,10 @@ fn optional_u32(
                 .ok()
                 .filter(|value| *value <= max)
                 .ok_or_else(|| {
-                    HostError::new(format!(
-                        "argument {} must be between 0 and {max}",
-                        index + 1
-                    ))
+                    navop_error(
+                        ErrorCode::InvalidArgument,
+                        format!("argument {} must be between 0 and {max}", index + 1),
+                    )
                 })
         })
         .transpose()

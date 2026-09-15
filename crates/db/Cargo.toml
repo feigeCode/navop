@@ -57,3 +57,6 @@ rust-i18n.workspace = true
 gpui = { workspace = true, features = ["test-support"] }
 proptest = { workspace = true }
 tempfile = "3"
+# 图标资产路径必须复现 gpui `img()` 的 URI 判定（`url::Url::parse(..).is_ok()`），
+# 见 crates/db/src/ipc/registry/tests.rs 的 is_uri 回归断言。
+url = { workspace = true }

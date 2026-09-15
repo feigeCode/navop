@@ -12,6 +12,7 @@ pub(crate) enum NavigationApplication {
     CredentialVault,
     KnownHosts,
     Extensions,
+    Settings,
 }
 
 pub(crate) fn home_applications(show_team: bool) -> Vec<NavigationApplication> {
@@ -45,6 +46,7 @@ impl NavigationApplication {
             Self::CredentialVault => t!("Home.credential_vault").to_string(),
             Self::KnownHosts => t!("Home.known_hosts").to_string(),
             Self::Extensions => t!("Home.extensions").to_string(),
+            Self::Settings => t!("Settings.title").to_string(),
         }
     }
 
@@ -61,6 +63,7 @@ impl NavigationApplication {
             // 已知主机使用线性图标，与侧栏其余 *_Line 图标风格一致。
             Self::KnownHosts => one_assets::IconName::ServerLine,
             Self::Extensions => one_assets::IconName::ExtensionsLine,
+            Self::Settings => one_assets::IconName::Settings,
         }
     }
 }

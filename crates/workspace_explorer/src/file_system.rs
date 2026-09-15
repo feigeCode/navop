@@ -13,7 +13,7 @@ mod clipboard;
 
 pub(crate) use clipboard::{copy_entry, move_entry};
 
-pub(crate) struct LoadedFile {
+pub struct LoadedFile {
     pub(crate) text: String,
     pub(crate) policy: FilePolicy,
     pub(crate) file_size: usize,
@@ -178,7 +178,7 @@ fn child_path(parent: &Path, name: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
-fn validated_child_path(parent: &Path, name: &str) -> Result<PathBuf> {
+pub(crate) fn validated_child_path(parent: &Path, name: &str) -> Result<PathBuf> {
     let name = name.trim();
     if name.is_empty()
         || name == "."

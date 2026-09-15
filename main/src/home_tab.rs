@@ -10,9 +10,22 @@ use gpui::{
     Pixels, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, WeakEntity,
     Window, actions, div, px,
 };
-use gpui_component::{ActiveTheme, Icon, InteractiveElementExt, Sizable, Size, WindowExt, button::{Button, ButtonVariants as _, DropdownButton}, checkbox::Checkbox, dialog::DialogButtonProps, h_flex, input::{Input, InputEvent, InputState}, list::{List, ListState}, menu::{ContextMenuExt, DropdownMenu as _, PopupMenuItem}, notification::Notification, popover::Popover, tooltip::Tooltip, v_flex};
-use one_assets::IconName;
+use gpui_component::{
+    ActiveTheme, Icon, InteractiveElementExt, Sizable, Size, WindowExt,
+    button::{Button, ButtonVariants as _, DropdownButton},
+    checkbox::Checkbox,
+    dialog::DialogButtonProps,
+    h_flex,
+    input::{Input, InputEvent, InputState},
+    list::{List, ListState},
+    menu::{ContextMenuExt, DropdownMenu as _, PopupMenuItem},
+    notification::Notification,
+    popover::Popover,
+    tooltip::Tooltip,
+    v_flex,
+};
 use mongodb_view::{MongoFormWindow, MongoFormWindowConfig};
+use one_assets::IconName;
 use one_core::cloud_sync::{
     CloudAccountScope, CloudApiClient, CloudSyncService, SyncConflict, SyncEngine, TeamOption,
     UserInfo, get_cached_team_display_options_for_scope, get_cached_team_options,
@@ -47,9 +60,7 @@ use terminal_view::{SshFormWindow, SshFormWindowConfig};
 use terminal_view::{TelnetFormWindow, TelnetFormWindowConfig};
 
 use crate::auth::{AuthService, load_auth_data, show_auth_dialog};
-use crate::connection_visuals::{
-    ConnectionVisualSize, connection_type_label, connection_type_navigation_icon,
-};
+use crate::connection_visuals::{ConnectionVisualSize, connection_type_navigation_icon};
 use crate::home::connection_import_window::show_connection_import_window;
 use crate::home::home_connection_quick_open::ConnectionQuickOpenDelegate;
 use crate::home::home_strategy::build_connection_open_strategy;
@@ -84,6 +95,7 @@ const HOME_SIDEBAR_COLLAPSED_WIDTH: gpui::Pixels = px(58.0);
 pub(crate) const NAVOP_HISTORY_ICON: &str = "navop/history.svg";
 /// 首页导航/Tab 的线性 Home 图标（依赖库 home.svg 为固定填充色，改用自有线稿）。
 pub(crate) const NAVOP_HOME_LINE_ICON: &str = "navop/home-line.svg";
+pub(crate) const GLOBAL_NAV_TREE_WIDTH: Pixels = px(248.0);
 // HomePage Entity - 管理 home 页面的所有状态
 
 /// 连接列表布局模式
@@ -95,6 +107,8 @@ pub enum ConnectionLayout {
     List,
     /// 分组树视图（复用常驻侧栏连接树）
     Tree,
+    /// 全局导航视图：左侧连接树，右侧主页功能入口。
+    Navigation,
 }
 
 impl From<HomeConnectionLayout> for ConnectionLayout {
@@ -103,6 +117,7 @@ impl From<HomeConnectionLayout> for ConnectionLayout {
             HomeConnectionLayout::Card => Self::Card,
             HomeConnectionLayout::List => Self::List,
             HomeConnectionLayout::Tree => Self::Tree,
+            HomeConnectionLayout::Navigation => Self::Navigation,
         }
     }
 }
@@ -113,6 +128,7 @@ impl From<ConnectionLayout> for HomeConnectionLayout {
             ConnectionLayout::Card => Self::Card,
             ConnectionLayout::List => Self::List,
             ConnectionLayout::Tree => Self::Tree,
+            ConnectionLayout::Navigation => Self::Navigation,
         }
     }
 }
@@ -121,8 +137,10 @@ impl HomePage {
     pub(crate) fn set_connection_sidebar(
         &mut self,
         sidebar: Entity<crate::persistent_connection_sidebar::PersistentConnectionSidebar>,
+        cx: &mut Context<Self>,
     ) {
         self.connection_sidebar = Some(sidebar);
+        self.sync_sidebar_home_embedded(cx);
     }
 
     pub(crate) fn recent_connections_collapsed(&self) -> bool {
@@ -133,11 +151,15 @@ impl HomePage {
         self.recent_collapsed = !self.recent_collapsed;
         cx.notify();
     }
+
+    pub(crate) fn uses_global_navigation_layout(&self) -> bool {
+        self.connection_layout == ConnectionLayout::Navigation
+    }
 }
 
 pub struct HomePage {
     focus_handle: FocusHandle,
-    pub(crate) selected_filter: ConnectionType,
+    pub(crate) selected_filter: ConnectionFilter,
     connection_layout: ConnectionLayout,
     sidebar_collapsed: bool,
     collapsed_groups: HashSet<Option<i64>>,
@@ -220,6 +242,7 @@ mod connection_card_actions;
 mod connection_card_content;
 mod connection_details;
 pub(crate) mod connection_filter;
+pub(crate) use connection_filter::ConnectionFilter;
 mod connection_form_title;
 mod connection_forms;
 mod connection_grouping;
@@ -249,6 +272,7 @@ mod sidebar_navigation;
 mod sync_route;
 mod team_permissions;
 mod toolbar;
+mod workbench;
 mod workspace;
 mod workspace_filter;
 

@@ -1,9 +1,8 @@
 use gpui::{
-    AnyElement, AppContext, Context, Entity, EventEmitter, Hsla, InteractiveElement,
-    IntoElement, ParentElement, Pixels, Styled, UniformListScrollHandle, Window, div, px, hsla};
-use gpui_component::{
-    input::{InputEvent, InputState},
+    AnyElement, AppContext, Context, Entity, EventEmitter, Hsla, InteractiveElement, IntoElement,
+    ParentElement, Pixels, Styled, UniformListScrollHandle, Window, div, hsla, px,
 };
+use gpui_component::input::{InputEvent, InputState};
 use terminal_view::TerminalColors;
 
 use crate::home_tab::HomePage;
@@ -91,7 +90,12 @@ impl From<&TerminalColors> for SidebarPalette {
 /// terminal themes.
 fn shade(color: Hsla, dark_mode: bool) -> Hsla {
     let amount = if dark_mode { -0.02 } else { -0.015 };
-    hsla(color.h, color.s, (color.l + amount).clamp(0.0, 1.0), color.a)
+    hsla(
+        color.h,
+        color.s,
+        (color.l + amount).clamp(0.0, 1.0),
+        color.a,
+    )
 }
 
 /// 浮动连接树卡片与窗口边缘的间距（像素）。
@@ -100,7 +104,7 @@ const FLOATING_CARD_MARGIN: f32 = 8.0;
 pub(crate) struct PersistentConnectionSidebar {
     pub(super) home_page: Entity<HomePage>,
     pub(super) tree_expanded: bool,
-    pub(super) selected_filter: one_core::storage::ConnectionType,
+    pub(super) selected_filter: crate::home_tab::ConnectionFilter,
     pub(super) hide_empty_workspaces: bool,
     pub(super) auto_hide_tree: bool,
     pub(super) search_input: Entity<InputState>,
@@ -112,6 +116,7 @@ pub(crate) struct PersistentConnectionSidebar {
     /// Tree 布局把侧栏作为主页内容渲染时为 true；渲染主体仍由 Render 承担，
     /// 避免在 HomePage 自身 render 租约内 read(home_page) 造成重入。
     home_embedded: bool,
+    home_navigation_layout: bool,
 }
 
 pub(crate) enum PersistentConnectionSidebarEvent {
@@ -122,7 +127,13 @@ impl EventEmitter<PersistentConnectionSidebarEvent> for PersistentConnectionSide
 
 impl gpui::Render for PersistentConnectionSidebar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.home_embedded {
+        if self.home_navigation_layout {
+            if self.tree_expanded {
+                self.render_home_navigation_tree(px(248.0), cx)
+            } else {
+                div().into_any_element()
+            }
+        } else if self.home_embedded {
             self.render_home_tree(cx)
         } else {
             // 侧栏由 App 外壳以停靠/浮动形式渲染；空占位避免误作窗口根。
@@ -199,7 +210,7 @@ impl PersistentConnectionSidebar {
         Self {
             home_page,
             tree_expanded,
-            selected_filter: one_core::storage::ConnectionType::All,
+            selected_filter: crate::home_tab::ConnectionFilter::All,
             hide_empty_workspaces: tree_state.hide_empty_workspaces,
             auto_hide_tree: tree_state.auto_hide_tree,
             search_input,
@@ -208,12 +219,22 @@ impl PersistentConnectionSidebar {
             terminal_colors: None,
             tree_scroll_handle: UniformListScrollHandle::new(),
             home_embedded: false,
+            home_navigation_layout: false,
         }
     }
 
     pub(crate) fn set_home_embedded(&mut self, embedded: bool, cx: &mut Context<Self>) {
-        if self.home_embedded != embedded {
+        if self.home_embedded != embedded || self.home_navigation_layout {
             self.home_embedded = embedded;
+            self.home_navigation_layout = false;
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn set_home_navigation_layout(&mut self, cx: &mut Context<Self>) {
+        if !self.home_embedded || !self.home_navigation_layout {
+            self.home_embedded = true;
+            self.home_navigation_layout = true;
             cx.notify();
         }
     }
@@ -302,7 +323,10 @@ mod tests {
         let implementation = include_str!("mod.rs");
 
         assert!(!content.contains("render_home_tree(cx)"));
-        assert!(content.contains("set_home_embedded(true, cx)"));
+        // Tree 布局经 set_home_embedded 让侧栏以子实体输出主页树；
+        // 全局导航布局由 home_navigation_layout 单独驱动，不走该入口。
+        assert!(content
+            .contains("set_home_embedded(self.connection_layout == ConnectionLayout::Tree, cx)"));
         assert!(implementation.contains("impl gpui::Render for PersistentConnectionSidebar"));
         assert!(implementation.contains("self.home_embedded"));
     }

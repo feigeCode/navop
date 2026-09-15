@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use gpui::App;
+
 use db::ipc::{IpcDriverRegistry, driver_icon_from_asset_path, driver_icon_from_file_path};
 use gpui_component::{Icon, Sizable};
 use one_ui::IconSize;
@@ -7,7 +9,6 @@ use one_assets::IconName;
 use one_core::storage::{
     ConnectionType, DatabaseType, DbConnectionConfig, SshParams, StoredConnection,
 };
-use rust_i18n::t;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExternalDriverIconSource<'a> {
@@ -31,14 +32,12 @@ pub(crate) enum ConnectionVisualSize {
     List,
     Card,
     Hero,
-    Rail,
 }
 
 impl ConnectionVisualSize {
     pub(crate) const fn icon_size(self) -> IconSize {
         match self {
             Self::Tree => IconSize::Default,
-            Self::Rail => IconSize::Medium,
             Self::List => IconSize::Large,
             Self::Card => IconSize::Large,
             Self::Hero => IconSize::Hero,
@@ -99,28 +98,29 @@ pub(crate) fn connection_type_navigation_icon(
         .with_size(size.icon_size())
 }
 
-/// Monochrome navigation-rail icon with the shared rail glyph size.
-pub(crate) fn connection_type_rail_icon(kind: ConnectionType) -> Icon {
-    connection_type_navigation_icon(kind, ConnectionVisualSize::Rail)
+/// English connection-type label，与「连接类型筛选」菜单一致（core 的 `label()` 为准）。
+pub(crate) fn connection_type_label(kind: ConnectionType) -> String {
+    kind.label().to_string()
 }
 
-/// Localized connection-type label (筛选器/菜单共用；core 的 `label()` 只有英文)。
-pub(crate) fn connection_type_label(kind: ConnectionType) -> String {
-    match kind {
-        ConnectionType::All => t!("ConnectionType.all"),
-        ConnectionType::Database => t!("ConnectionType.database"),
-        ConnectionType::SshSftp => t!("ConnectionType.ssh_sftp"),
-        ConnectionType::Redis => t!("ConnectionType.redis"),
-        ConnectionType::MongoDB => t!("ConnectionType.mongodb"),
-        ConnectionType::Mqtt => t!("ConnectionType.mqtt"),
-        ConnectionType::Serial => t!("ConnectionType.serial"),
-        ConnectionType::Telnet => t!("ConnectionType.telnet"),
-        ConnectionType::PortForwarding => t!("ConnectionType.port_forwarding"),
-        ConnectionType::Rdp => t!("ConnectionType.rdp"),
-        ConnectionType::Vnc => t!("ConnectionType.vnc"),
-        ConnectionType::Extension => t!("ConnectionType.extension"),
+/// 连接类型显示名：扩展连接展开为其扩展贡献显示名（真实类型），其余用内置英文名。
+/// 与「连接类型筛选」一致——筛选菜单也按扩展贡献逐项列出真实类型。
+pub(crate) fn connection_type_display_label(connection: &StoredConnection, cx: &App) -> String {
+    if connection.connection_type == ConnectionType::Extension {
+        if let Some(label) = extension_connection_label(connection, cx) {
+            return label;
+        }
     }
-    .to_string()
+    connection_type_label(connection.connection_type)
+}
+
+/// 从全局扩展目录读取 (extension_id, contribution_id) 对应的扩展贡献显示名。
+fn extension_connection_label(connection: &StoredConnection, cx: &App) -> Option<String> {
+    let params = connection.to_extension_params().ok()?;
+    let catalog = extension_catalog_from_cx(cx)?;
+    catalog
+        .resource_connection(&params.extension_id, &params.contribution_id)
+        .map(|contribution| contribution.label.clone())
 }
 
 /// Original-color protocol identity icon used by cards, lists, and connection pickers.
@@ -169,10 +169,15 @@ pub(crate) fn database_config_icon(
         .unwrap_or_else(|| database_type_icon(&config.database_type, size))
 }
 
-pub(crate) fn stored_connection_icon(
+/// Resolve the icon for a stored connection. Extension connections
+/// (`ConnectionType::Extension`) additionally resolve
+/// `contributes.connections[].icon` through the extension runtime catalog when
+/// one is available; other kinds use built-in or driver-provided icons.
+pub(crate) fn stored_connection_icon_with_catalog(
     connection: &StoredConnection,
     size: ConnectionVisualSize,
     registry: &IpcDriverRegistry,
+    extension_catalog: Option<&extension_runtime::ExtensionRuntimeCatalog>,
 ) -> Icon {
     match connection.connection_type {
         ConnectionType::Database => connection
@@ -183,8 +188,37 @@ pub(crate) fn stored_connection_icon(
             .to_ssh_params()
             .map(|params| ssh_icon(&params, size))
             .unwrap_or_else(|_| color_icon(IconName::LinuxPenguinColor, size)),
+        ConnectionType::Extension => extension_connection_icon(connection, size, extension_catalog)
+            .unwrap_or_else(|| connection_type_icon(ConnectionType::Extension, size)),
         kind => connection_type_icon(kind, size),
     }
+}
+
+/// 扩展连接图标：按 (extension_id, contribution_id) 从扩展目录取
+/// `contributes.connections[].icon` 指向的 SVG 文件渲染。任一环节缺失
+/// （非扩展连接、目录不可用、贡献不存在、未声明图标）都返回 None，
+/// 由调用方回退到通用扩展图标。
+fn extension_connection_icon(
+    connection: &StoredConnection,
+    size: ConnectionVisualSize,
+    extension_catalog: Option<&extension_runtime::ExtensionRuntimeCatalog>,
+) -> Option<Icon> {
+    let params = connection.to_extension_params().ok()?;
+    let contribution = extension_catalog?.resource_connection(
+        &params.extension_id,
+        &params.contribution_id,
+    )?;
+    let icon_path = contribution.icon_path.as_ref()?;
+    Some(driver_icon_from_file_path(icon_path.clone(), size.icon_size()))
+}
+
+/// 便捷读取全局扩展运行时目录（与 connection_forms / connection_type_menu 的
+/// 取用方式保持一致）。
+pub(crate) fn extension_catalog_from_cx(
+    cx: &App,
+) -> Option<std::sync::Arc<extension_runtime::ExtensionRuntimeCatalog>> {
+    cx.try_global::<extension_runtime::GlobalExtensionRuntimeCatalog>()
+        .and_then(|global| global.get())
 }
 
 fn ssh_icon(params: &SshParams, size: ConnectionVisualSize) -> Icon {
@@ -267,7 +301,6 @@ mod tests {
         assert_eq!(ConnectionVisualSize::List.icon_size(), IconSize::Large);
         assert_eq!(ConnectionVisualSize::Card.icon_size(), IconSize::Large);
         assert_eq!(ConnectionVisualSize::Hero.icon_size(), IconSize::Hero);
-        assert_eq!(ConnectionVisualSize::Rail.icon_size(), IconSize::Medium);
     }
 
     #[test]
@@ -381,5 +414,77 @@ mod tests {
             icon_file_path: None,
             account_expect: SshAccountExpect::default(),
         }
+    }
+
+    fn extension_connection() -> StoredConnection {
+        let params = one_core::storage::ExtensionConnectionParams::new(
+            "com.example.demo",
+            "demo",
+            serde_json::Map::new(),
+            Default::default(),
+        )
+        .expect("extension params should validate");
+        StoredConnection::new_extension("Demo".to_string(), params, None)
+    }
+
+    #[test]
+    fn extension_connection_without_catalog_falls_back() {
+        let connection = extension_connection();
+        // 目录不可用时不 panic，交由调用方回退通用扩展图标
+        assert!(extension_connection_icon(&connection, ConnectionVisualSize::List, None).is_none());
+    }
+
+    #[test]
+    fn extension_connection_resolves_icon_from_catalog() {
+        let directory = tempdir().expect("temporary directory should be created");
+        let icons = directory.path().join("icons");
+        std::fs::create_dir_all(&icons).expect("icons directory should be created");
+        std::fs::write(
+            icons.join("demo-color.svg"),
+            "<svg xmlns=\"http://www.w3.org/2000/svg\"/>",
+        )
+        .expect("temporary icon should be written");
+        std::fs::write(
+            directory.path().join("extension.json"),
+            r#"{
+                "schema_version": 1,
+                "id": "com.example.demo",
+                "name": "Demo",
+                "version": "0.1.0",
+                "engines": { "onetcli": ">=0.4.0" },
+                "permissions": ["shell:exec", "spawn:./bin/provider"],
+                "runtime": {
+                    "ipc": [{
+                        "id": "main",
+                        "entry": { "command": "./bin/provider" },
+                        "transport": { "kind": "local_socket" }
+                    }]
+                },
+                "contributes": {
+                    "connections": [{
+                        "id": "demo",
+                        "label": "Demo",
+                        "icon": "icons/demo-color.svg",
+                        "runtimeId": "main",
+                        "resourceType": "demo"
+                    }]
+                }
+            }"#,
+        )
+        .expect("temporary manifest should be written");
+
+        let manifest = extension_runtime::extension::manifest::load_from_dir(directory.path())
+            .expect("manifest should parse");
+        let catalog = extension_runtime::ExtensionRuntimeCatalog::from_manifests(vec![manifest])
+            .expect("catalog should build");
+
+        let connection = extension_connection();
+        // 目录中存在 (extension_id, contribution_id) 且声明了 icon → 解析成功
+        assert!(extension_connection_icon(
+            &connection,
+            ConnectionVisualSize::List,
+            Some(&catalog)
+        )
+        .is_some());
     }
 }

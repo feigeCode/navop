@@ -2,10 +2,58 @@ use gpui::SharedString;
 use rust_i18n::t;
 
 use crate::status_message::format_notification_error;
-use crate::{ExtensionManagerMode, ExtensionSummary, MarketplaceEntry};
+use crate::{ExtensionKind, ExtensionManagerMode, ExtensionSummary, MarketplaceEntry};
 
 const MANIFEST_JSON_SUFFIX: &str = ".json";
 const INSTALL_PROGRESS_VALUE: f32 = 28.0;
+/// 浏览态分区顺序，与过滤 chips 一致。
+pub(crate) const EXTENSION_KINDS: [ExtensionKind; 6] = [
+    ExtensionKind::Language,
+    ExtensionKind::LanguageBundle,
+    ExtensionKind::DatabaseDriver,
+    ExtensionKind::RemoteDesktopProvider,
+    ExtensionKind::AcpAgent,
+    ExtensionKind::Composite,
+];
+
+/// Market 分区：`kind` 为 `None` 表示扁平结果列表（搜索/有更新）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MarketplaceSection {
+    pub kind: Option<ExtensionKind>,
+    pub entries: Vec<MarketplaceEntry>,
+}
+
+/// 有搜索词 / 仅看更新 / 单类筛选时扁平展示；纯浏览时按 Kind 分区。
+pub(crate) fn marketplace_sections(
+    filtered: Vec<MarketplaceEntry>,
+    selected_kind: Option<ExtensionKind>,
+    query: &str,
+    updates_only: bool,
+) -> Vec<MarketplaceSection> {
+    if filtered.is_empty() {
+        return Vec::new();
+    }
+    if !query.trim().is_empty() || updates_only || selected_kind.is_some() {
+        return vec![MarketplaceSection {
+            kind: selected_kind,
+            entries: filtered,
+        }];
+    }
+    EXTENSION_KINDS
+        .into_iter()
+        .filter_map(|kind| {
+            let entries: Vec<_> = filtered
+                .iter()
+                .filter(|entry| entry.kind == kind)
+                .cloned()
+                .collect();
+            (!entries.is_empty()).then_some(MarketplaceSection {
+                kind: Some(kind),
+                entries,
+            })
+        })
+        .collect()
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) enum MarketplaceLoadState {
@@ -248,9 +296,13 @@ mod tests {
     }
 
     fn marketplace_entry(id: &str) -> MarketplaceEntry {
+        marketplace_entry_with_kind(id, ExtensionKind::Language)
+    }
+
+    fn marketplace_entry_with_kind(id: &str, kind: ExtensionKind) -> MarketplaceEntry {
         MarketplaceEntry {
             id: id.to_string(),
-            kind: ExtensionKind::Language,
+            kind,
             name: id.to_string(),
             version: "1.0.0".to_string(),
             description: String::new(),
@@ -262,6 +314,57 @@ mod tests {
             fallback_asset_url: None,
             manifest_url: None,
             manifest_fallback_url: None,
+            screenshots: Vec::new(),
         }
+    }
+
+    #[test]
+    fn browse_mode_groups_marketplace_by_kind_in_stable_order() {
+        let filtered = vec![
+            marketplace_entry_with_kind("pg", ExtensionKind::DatabaseDriver),
+            marketplace_entry_with_kind("rust", ExtensionKind::Language),
+            marketplace_entry_with_kind("mysql", ExtensionKind::DatabaseDriver),
+        ];
+
+        let sections = marketplace_sections(filtered, None, "", false);
+
+        assert_eq!(
+            [
+                Some(ExtensionKind::Language),
+                Some(ExtensionKind::DatabaseDriver)
+            ],
+            sections
+                .iter()
+                .map(|section| section.kind)
+                .collect::<Vec<_>>()
+                .as_slice()
+        );
+        assert_eq!(1, sections[0].entries.len());
+        assert_eq!(2, sections[1].entries.len());
+    }
+
+    #[test]
+    fn active_filter_flattens_marketplace_into_single_section() {
+        let filtered = vec![
+            marketplace_entry_with_kind("rust", ExtensionKind::Language),
+            marketplace_entry_with_kind("pg", ExtensionKind::DatabaseDriver),
+        ];
+
+        let by_query = marketplace_sections(filtered.clone(), None, "ru", false);
+        let by_updates = marketplace_sections(filtered.clone(), None, "", true);
+        let by_kind = marketplace_sections(filtered, Some(ExtensionKind::Language), "", false);
+
+        assert_eq!(1, by_query.len());
+        assert_eq!(None, by_query[0].kind);
+        assert_eq!(2, by_query[0].entries.len());
+        assert_eq!(1, by_updates.len());
+        assert_eq!(None, by_updates[0].kind);
+        assert_eq!(1, by_kind.len());
+        assert_eq!(Some(ExtensionKind::Language), by_kind[0].kind);
+    }
+
+    #[test]
+    fn empty_marketplace_filter_yields_no_sections() {
+        assert!(marketplace_sections(Vec::new(), None, "", false).is_empty());
     }
 }

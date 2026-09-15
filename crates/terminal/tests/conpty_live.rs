@@ -367,7 +367,9 @@ fn wait_for_stopped(backend: &LocalPtyBackend, timeout: Duration) -> bool {
 
 /// 向后端写入一条 marker 命令并等待其**输出**出现；返回会话是否仍然可读写。
 fn round_trip_marker(spawned: &Spawned, marker: &str) -> bool {
-    spawned.backend.write(marker_command(&spawned.target, marker));
+    spawned
+        .backend
+        .write(marker_command(&spawned.target, marker));
     wait_for_text(&spawned.term, ECHO_TIMEOUT, marker)
 }
 

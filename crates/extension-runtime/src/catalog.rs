@@ -170,12 +170,21 @@ impl ExtensionRuntimeCatalog {
         self.shell_views.values()
     }
 
-    /// 工具箱聚合的 shell 视图（`surface: "toolbox"`），按 title 排序。
-    /// 工具箱聚合的非连接 shell 视图:未被任何 connection 的
-    /// `shellViewId` 引用的 view(独立工具越 surface 都进工具箱,连接关联
-    /// 视图由连接打开)。按 title 排序。
+    /// 工具箱聚合的独立 shell 工具，按 title 排序。
+    ///
+    /// 成员 = 没有任何「非工具箱归属」引用的 shell 视图。三类视图必须排除：
+    ///
+    /// 1. 连接的 `shellViewId` 指向的视图（连接打开，不由工具箱打开）；
+    /// 2. 资源工作台页面的**页体**：`pages[*].renderer.viewId` 指向的视图；
+    /// 3. 声明了 `workbench` 模块的视图 —— `navop.workbench` 只在工作台挂载
+    ///    会话里可用，独立打开时宿主必然失败（"navop.workbench requires a
+    ///    borrowed resource-workbench session"）。把它列进工具箱只会产出
+    ///    「点了就报错」的假卡片。
+    ///
+    /// `surface` 不参与判定：`surface: "tab"` 的独立工具（如 dev-tools 的
+    /// `workbench`）同样要进工具箱，只有「被别的入口占用」才排除。
     pub fn toolbox_views(&self) -> Vec<&RegisteredShellViewContribution> {
-        let connection_view_keys: std::collections::HashSet<(&str, &str)> = self
+        let connection_view_keys: HashSet<(&str, &str)> = self
             .resource_connections()
             .filter_map(|conn| {
                 conn.shell_view_id
@@ -183,11 +192,28 @@ impl ExtensionRuntimeCatalog {
                     .map(|view_id| (conn.extension_id.as_str(), view_id))
             })
             .collect();
+        let embedded_view_keys: HashSet<(&str, &str)> = self
+            .resource_workbenches()
+            .flat_map(|workbench| {
+                workbench.pages.iter().filter_map(|page| {
+                    page.renderer
+                        .view_id
+                        .as_deref()
+                        .map(|view_id| (workbench.extension_id.as_str(), view_id))
+                })
+            })
+            .collect();
         let mut tools: Vec<_> = self
             .shell_views
             .values()
             .filter(|view| {
-                !connection_view_keys.contains(&(view.extension_id.as_str(), view.id.as_str()))
+                let key = (view.extension_id.as_str(), view.id.as_str());
+                if connection_view_keys.contains(&key) || embedded_view_keys.contains(&key) {
+                    return false;
+                }
+                !view
+                    .modules
+                    .contains(&crate::extension::manifest::ShellHostModule::Workbench)
             })
             .collect();
         tools.sort_by(|a, b| a.title.cmp(&b.title));
