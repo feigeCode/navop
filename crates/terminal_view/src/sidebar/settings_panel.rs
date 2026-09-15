@@ -96,6 +96,24 @@ fn terminal_font_options(
         fonts.push(TerminalFontOption::new(family, installed_font_names));
     }
 
+    // 系统里已安装的字体同样直接可选（issue #199）。
+    // 以前只有「导入字体」注册过的家族才会出现在这里，所以系统里已经装好的
+    // Sarasa 之类还得再导入一次；`TextSystem::all_font_names()` 拿到的就是
+    // 系统字体集合，GPUI 本身也解析得到，直接列出来即可。
+    // 仍然沿用 `is_supported_terminal_primary_font` 过滤 fallback-only 的 CJK
+    // 界面字体，避免选到会被 `normalize_grid_monospace_font_family` 静默重置的无效项。
+    for family in installed_font_names {
+        let family = family.trim();
+        if !is_supported_terminal_primary_font(family)
+            || fonts
+                .iter()
+                .any(|existing| existing.value.as_ref() == family)
+        {
+            continue;
+        }
+        fonts.push(TerminalFontOption::new(family, installed_font_names));
+    }
+
     fonts
 }
 
@@ -1749,6 +1767,43 @@ mod tests {
         assert!(values.iter().any(|font| font == "Custom Mono"));
         assert!(!values.iter().any(|font| font == "Noto Sans Mono CJK SC"));
         assert!(!values.iter().any(|font| font == "PingFang SC"));
+    }
+
+    #[test]
+    fn terminal_font_options_include_installed_system_fonts() {
+        // issue #199：系统里已装好的字体应该直接可选，不需要先「导入字体」。
+        let installed = vec!["Sarasa Mono SC".to_string(), "Consolas".to_string()];
+        let fonts = terminal_font_options(&[], &installed);
+        let values = fonts
+            .iter()
+            .map(|font| font.value.to_string())
+            .collect::<Vec<_>>();
+
+        assert!(values.iter().any(|font| font == "Sarasa Mono SC"));
+        // 内置精选列表已经含有 Consolas，不应重复出现。
+        assert_eq!(
+            1,
+            values.iter().filter(|font| font.as_str() == "Consolas").count()
+        );
+        // 系统字体是已安装状态，标签里不应带「(未安装)」。
+        assert!(fonts.iter().any(|font| {
+            font.value.as_ref() == "Sarasa Mono SC"
+                && font.label.as_ref() == "Sarasa Mono SC"
+        }));
+    }
+
+    #[test]
+    fn terminal_font_options_exclude_installed_fallback_only_fonts() {
+        // 这些字体只作为 fallback 使用，选成主字体后会被
+        // `normalize_grid_monospace_font_family` 静默重置，所以即使系统里装了也不列出来。
+        let installed = vec!["Microsoft YaHei".to_string(), "Sarasa Mono SC".to_string()];
+        let values = terminal_font_options(&[], &installed)
+            .into_iter()
+            .map(|font| font.value.to_string())
+            .collect::<Vec<_>>();
+
+        assert!(!values.iter().any(|font| font == "Microsoft YaHei"));
+        assert!(values.iter().any(|font| font == "Sarasa Mono SC"));
     }
 
     #[test]

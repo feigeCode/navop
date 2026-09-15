@@ -29,6 +29,11 @@ pub(super) enum PendingTerminalAction {
         accepts_live_input: bool,
         had_block_selection: bool,
     },
+    /// 复制完成后清空终端选区。
+    ///
+    /// 与 `ResolveClearSelection` 分开：后者在 VI 模式且无选区时会切换 VI 模式，
+    /// 而复制只应清掉选中背景，不能顺带改变模式或被当作 Escape。
+    ClearSelectionAfterCopy,
     SelectAll,
     ClearScreen,
 }
