@@ -40,7 +40,7 @@ pub use settings::{
     table_row_height_or,
 };
 pub use signature_help::{ExtendedEditor, ExtendedEditorState, SignatureHelpProvider};
-pub use status_bar::{StatusBar, StatusPresentation};
+pub use status_bar::{StatusBar, StatusBarColors, StatusPresentation};
 pub use time::datetime_picker::{DateTimePicker, DateTimePickerEvent, DateTimePickerState};
 pub use time::time_picker::{TimePicker, TimePickerEvent, TimePickerState};
 
