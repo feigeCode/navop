@@ -1026,6 +1026,7 @@ mod tests {
         StoredConnection::new_ssh(
             name.to_string(),
             SshParams {
+                remote_file: None,
                 sftp_default_directory: None,
                 disabled_jump_server: None,
                 sftp_account: None,
@@ -1505,6 +1506,7 @@ mod tests {
         let mut connection = ssh_connection("sensitive-readable");
         let connection_id = repo.insert(&mut connection).expect("connection");
         let plaintext_params = serde_json::to_string(&SshParams {
+                remote_file: None,
             sftp_default_directory: None,
             disabled_jump_server: None,
             sftp_account: None,

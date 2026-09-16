@@ -62,8 +62,9 @@ fn wsl_distro_menu_items_reuse_the_local_terminal_activation_path() {
     assert!(menu_source.contains("load_wsl_distributions"));
 
     let data_source = include_str!("../data.rs");
-    assert!(data_source.contains(
-        "#[cfg(target_os = \"windows\")]\n    pub(super) fn load_wsl_distributions"
-    ));
+    assert!(
+        data_source
+            .contains("#[cfg(target_os = \"windows\")]\n    pub(super) fn load_wsl_distributions")
+    );
     assert!(data_source.contains("terminal::list_wsl_distributions()"));
 }

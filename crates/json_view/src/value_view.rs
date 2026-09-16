@@ -75,12 +75,7 @@ impl JsonValueView {
     }
 
     /// 切换展示模式;首次进入 Raw 模式时惰性创建编辑器。
-    pub fn set_mode(
-        &mut self,
-        mode: JsonDisplayMode,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub fn set_mode(&mut self, mode: JsonDisplayMode, window: &mut Window, cx: &mut Context<Self>) {
         if self.mode == mode {
             return;
         }
@@ -205,18 +200,21 @@ impl JsonValueView {
             state
         });
         let editor_ref = editor.clone();
-        let sub = cx.subscribe(&editor, move |this: &mut Self, _src, ev: &InputEvent, cx| {
-            if !matches!(ev, InputEvent::Change | InputEvent::Blur) {
-                return;
-            }
-            let raw = editor_ref.read(cx).value().to_string();
-            this.raw = raw.clone();
-            match ev {
-                InputEvent::Change => this.schedule_parse(raw, cx),
-                InputEvent::Blur => this.parse_raw(raw, cx),
-                _ => {}
-            }
-        });
+        let sub = cx.subscribe(
+            &editor,
+            move |this: &mut Self, _src, ev: &InputEvent, cx| {
+                if !matches!(ev, InputEvent::Change | InputEvent::Blur) {
+                    return;
+                }
+                let raw = editor_ref.read(cx).value().to_string();
+                this.raw = raw.clone();
+                match ev {
+                    InputEvent::Change => this.schedule_parse(raw, cx),
+                    InputEvent::Blur => this.parse_raw(raw, cx),
+                    _ => {}
+                }
+            },
+        );
         self.editor = Some(editor);
         self._subs.push(sub);
     }
@@ -382,15 +380,7 @@ impl Render for JsonValueView {
                                 return div().h(px(0.)).into_any_element();
                             };
                             render_flat_row(
-                                ix,
-                                row,
-                                &mono_font,
-                                fg,
-                                warn,
-                                muted_fg,
-                                success,
-                                info,
-                                &callbacks,
+                                ix, row, &mono_font, fg, warn, muted_fg, success, info, &callbacks,
                             )
                         }
                     })

@@ -7,7 +7,26 @@ impl TerminalView {
         } else if let Some(text) = self.selection_text(cx) {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
+        // 复制后立刻清掉选中背景：留着高亮会让用户怀疑组合键没生效（issue #199）。
+        self.clear_selection_after_copy(cx);
         self.focus_terminal(window, cx);
+    }
+
+    /// 复制完成后清空终端选区与块选区。
+    ///
+    /// 走 `PendingTerminalAction` 而不是直接改 `term`，这样 `try_lock_unfair`
+    /// 失败时动作会进重试队列，不会在终端正忙时静默丢掉这次清理。
+    fn clear_selection_after_copy(&mut self, cx: &mut Context<Self>) {
+        let had_block_selection = self.block_selection.take().is_some();
+        self.mouse_state.block_selecting = false;
+        if had_block_selection {
+            cx.notify();
+        }
+        self.apply_or_queue_terminal_action(
+            PendingTerminalAction::ClearSelectionAfterCopy,
+            None,
+            cx,
+        );
     }
 
     pub(super) fn block_selection_text(&self, cx: &App) -> Option<String> {

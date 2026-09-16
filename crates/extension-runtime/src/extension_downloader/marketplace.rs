@@ -54,6 +54,9 @@ pub struct MarketplaceEntry {
     pub manifest: String,
     #[serde(default)]
     pub artifacts: HashMap<String, MarketplaceArtifact>,
+    /// 详情页截图 URL 列表，相对路径基于 manifest 所在目录解析。
+    #[serde(default)]
+    pub screenshots: Vec<String>,
     #[serde(skip)]
     resolved_download_urls: Vec<String>,
     #[serde(skip)]
@@ -87,6 +90,13 @@ impl MarketplaceEntry {
 
         self.source_manifest_url = Some(manifest_url.to_string());
         self.github_manifest_url = Some(github_manifest_url.to_string());
+
+        // 截图相对路径基于 manifest 所在目录解析，与资产同规则。
+        self.screenshots = self
+            .screenshots
+            .iter()
+            .map(|url| resolve_asset_url(manifest_url, url))
+            .collect();
 
         let Some(artifact) = self.artifact_for_keys(marketplace_target_keys()) else {
             return;
@@ -135,6 +145,7 @@ impl MarketplaceEntry {
             engines: MarketplaceEngines::default(),
             manifest: String::new(),
             artifacts: HashMap::new(),
+            screenshots: Vec::new(),
             resolved_download_urls: download_urls,
             resolved_sha256: sha256,
             source_manifest_url: None,
@@ -145,6 +156,12 @@ impl MarketplaceEntry {
 
     pub(crate) fn check_host_compatibility(&self) -> anyhow::Result<()> {
         self.check_host_compatibility_with(&current_host_version())
+    }
+
+    /// 测试专用：单条目执行 resolve_downloads，验证截图相对路径解析。
+    #[cfg(test)]
+    pub(crate) fn resolve_downloads_for_test(&mut self, manifest_url: &str, github_url: &str) {
+        self.resolve_downloads(manifest_url, github_url);
     }
 
     fn check_host_compatibility_with(&self, current: &Version) -> anyhow::Result<()> {
@@ -433,6 +450,7 @@ mod tests {
             file_extensions: Vec::new(),
             engines: Default::default(),
             manifest: String::new(),
+            screenshots: Vec::new(),
             artifacts: HashMap::from([
                 (
                     "linux".to_string(),
@@ -479,6 +497,7 @@ mod tests {
             file_extensions: Vec::new(),
             engines: Default::default(),
             manifest: String::new(),
+            screenshots: Vec::new(),
             artifacts: HashMap::from([
                 (
                     "universal".to_string(),

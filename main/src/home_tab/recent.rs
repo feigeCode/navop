@@ -1,11 +1,11 @@
 use super::connection_filter::{connection_matches_query, match_connection_type};
-use super::{ConnectionType, StoredConnection};
+use super::{ConnectionFilter, StoredConnection};
 
 /// Takes no workspace selection or global sort order, intentionally.
 /// `limit` 为当前布局一行容量（卡片视图=共享网格列数），由调用方决定。
 pub(crate) fn recent_connections(
     connections: &[StoredConnection],
-    filter: ConnectionType,
+    filter: &ConnectionFilter,
     query: &str,
     limit: usize,
 ) -> Vec<StoredConnection> {
@@ -24,6 +24,8 @@ pub(crate) fn recent_connections(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use one_core::storage::ConnectionType;
+
     fn connection(id: i64, kind: ConnectionType, used: Option<i64>) -> StoredConnection {
         serde_json::from_value(serde_json::json!({
             "id": id, "name": format!("Server {id}"), "connection_type": kind,
@@ -37,13 +39,13 @@ mod tests {
             .map(|id| connection(id, ConnectionType::Telnet, Some(id)))
             .collect();
         connections.push(connection(99, ConnectionType::Telnet, None));
-        let recent = recent_connections(&connections, ConnectionType::All, "", 4);
+        let recent = recent_connections(&connections, &ConnectionFilter::All, "", 4);
         assert_eq!(
             recent.iter().map(|c| c.id.unwrap()).collect::<Vec<_>>(),
             vec![6, 5, 4, 3]
         );
         assert_eq!(
-            recent_connections(&connections, ConnectionType::All, "", 2)
+            recent_connections(&connections, &ConnectionFilter::All, "", 2)
                 .iter()
                 .map(|c| c.id.unwrap())
                 .collect::<Vec<_>>(),
@@ -59,12 +61,26 @@ mod tests {
             connection(3, ConnectionType::Telnet, Some(3)),
         ];
         assert_eq!(
-            recent_connections(&connections, ConnectionType::Telnet, "", 4).len(),
+            recent_connections(
+                &connections,
+                &ConnectionFilter::Builtin(ConnectionType::Telnet),
+                "",
+                4
+            )
+            .len(),
             2
         );
-        let recent = recent_connections(&connections, ConnectionType::All, "SERVER 2", 4);
+        let recent = recent_connections(&connections, &ConnectionFilter::All, "SERVER 2", 4);
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0].id, Some(2));
-        assert!(recent_connections(&connections, ConnectionType::Redis, "missing", 4).is_empty());
+        assert!(
+            recent_connections(
+                &connections,
+                &ConnectionFilter::Builtin(ConnectionType::Redis),
+                "missing",
+                4
+            )
+            .is_empty()
+        );
     }
 }

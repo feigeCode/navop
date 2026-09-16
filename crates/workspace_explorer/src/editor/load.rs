@@ -4,7 +4,6 @@ use super::{
 };
 use crate::diff::{aligned_side_by_side, parse_side_by_side};
 use crate::editor::markdown::create_markdown_editor;
-use crate::file_system::load_file;
 use crate::git::load_diff;
 use crate::model::active_index_after_open;
 use gpui::{AppContext as _, AsyncApp, Context, Task, WeakEntity, Window};
@@ -155,8 +154,11 @@ impl WorkspaceEditor {
         let task = match &tab.load_request {
             LoadRequest::File(path) => {
                 let path = path.clone();
+                let backend = self.backend.clone();
                 cx.background_spawn(async move {
-                    load_file(&path).map(|file| LoadedDocument::from_file(&path, file))
+                    backend
+                        .load_file(&path)
+                        .map(|file| LoadedDocument::from_file(&path, file))
                 })
             }
             LoadRequest::Diff { repository, change } => {

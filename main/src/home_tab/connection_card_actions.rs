@@ -1,5 +1,5 @@
-use one_ui::IconSize;
 use super::*;
+use one_ui::IconSize;
 
 impl HomePage {
     pub(super) fn render_connection_card_actions(

@@ -16,9 +16,24 @@ use crate::{
 
 impl ExtensionManagerView {
     pub(crate) fn refresh_installed(&mut self, cx: &mut Context<Self>) {
+        let started = std::time::Instant::now();
+        tracing::info!(target: "extension_perf", "refresh_installed: begin");
         match self.host.list_installed() {
-            Ok(installed) => self.set_installed(installed),
+            Ok(installed) => {
+                tracing::info!(
+                    target: "extension_perf",
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    count = installed.len(),
+                    "refresh_installed: host scan done (blocking main thread)"
+                );
+                self.set_installed(installed);
+            }
             Err(err) => {
+                tracing::warn!(
+                    target: "extension_perf",
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    "refresh_installed: failed"
+                );
                 self.status = t!("Extension.read_installed_failed", error = err.to_string())
                     .to_string()
                     .into();
@@ -31,6 +46,8 @@ impl ExtensionManagerView {
         if self.marketplace_load_state.is_loading() {
             return;
         }
+        let started = std::time::Instant::now();
+        tracing::info!(target: "extension_perf", "marketplace load: begin");
         self.marketplace_load_attempted = true;
         self.marketplace_load_state = MarketplaceLoadState::Loading;
         self.status = t!("Extension.loading_marketplace").to_string().into();
@@ -45,7 +62,20 @@ impl ExtensionManagerView {
             None => cx.background_spawn(self.host.load_marketplace_entries(http_client)),
         };
         cx.spawn(async move |_: WeakEntity<Self>, cx: &mut AsyncApp| {
-            finish_marketplace_load(entity, task.await, cx);
+            let fetch_started = std::time::Instant::now();
+            let result = task.await;
+            tracing::info!(
+                target: "extension_perf",
+                fetch_ms = fetch_started.elapsed().as_millis() as u64,
+                ok = result.is_ok(),
+                "marketplace load: background fetch finished"
+            );
+            finish_marketplace_load(entity, result, cx);
+            tracing::info!(
+                target: "extension_perf",
+                total_ms = started.elapsed().as_millis() as u64,
+                "marketplace load: complete (incl. foreground apply)"
+            );
         })
         .detach();
         cx.notify();

@@ -1,11 +1,8 @@
-use std::sync::Arc;
-
 use gpui::{Context, Window};
 use gpui_component::{WindowExt as _, notification::Notification};
 use one_core::settings::{AppSettings, RemoteFileEditorUserSettings, RemoteFileOpenMode};
 use rust_i18n::t;
-use sftp::RusshSftpClient;
-use tokio::sync::Mutex;
+use sftp::SharedRemoteFileClient;
 
 use crate::{
     ExternalEditorOpenRequest, RemoteMutationCallback, open_remote_file_editor,
@@ -16,7 +13,7 @@ use crate::{
 #[derive(Clone)]
 pub struct OpenRemoteFileRequest {
     pub remote_path: String,
-    pub client: Arc<Mutex<RusshSftpClient>>,
+    pub client: SharedRemoteFileClient,
     pub on_remote_changed: RemoteMutationCallback,
 }
 

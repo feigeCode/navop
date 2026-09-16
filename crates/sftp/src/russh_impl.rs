@@ -1,7 +1,7 @@
 use crate::server_copy::CopyFileRequest;
 use crate::{
-    DirectoryConflictPolicy, FileEntry, PathMetadata, ProgressCallback, SftpClient,
-    TransferCancelled, TransferProgress, validate_read_size,
+    DirectoryConflictPolicy, FileEntry, PathMetadata, ProgressCallback, RemoteFileClient,
+    SftpClient, TransferCancelled, TransferProgress, validate_read_size,
 };
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -39,6 +39,23 @@ const PIPELINE_CHUNK_SIZE: u32 = 61440; // 60 KB per read request (within 65535 
 const MAX_INFLIGHT_REQUESTS: usize = 64; // 最多 64 个并发请求
 const PIPELINE_THRESHOLD: u64 = 512 * 1024; // 超过 512 KB 的文件才走流水线
 const SFTP_MAX_PACKET_LEN: u32 = 256 * 1024;
+/// In-flight read requests allowed per high-level SFTP file handle.
+///
+/// `russh-sftp` 3.0 pipelines reads, so this replaces the previous implicit
+/// "one read at a time" behavior. The budget mirrors the write budget, which
+/// keeps a single transfer inside the same bounded ~16 MiB window
+/// (256 KiB packet ceiling × 64 requests) the large-file pipeline already uses.
+const SFTP_MAX_CONCURRENT_READS: usize = MAX_INFLIGHT_REQUESTS;
+/// Framed WRITE packet ceiling, header + handle + payload included.
+///
+/// Kept at the packet ceiling so one `BUFFER_SIZE` (256 KiB) write becomes a
+/// single request and the 64-deep queue still spans the full 16 MiB window that
+/// `build_sftp_russh_config` aligns with its `window_size`. `russh-sftp` clamps
+/// the result to the server's own `limits@openssh.com` advertisement, so a
+/// server that only accepts smaller packets still shrinks this automatically;
+/// leaving it at the upstream default (32 KiB) or at `PIPELINE_CHUNK_SIZE`
+/// would shrink the in-flight write window by 2x-4x instead.
+const SFTP_MAX_WRITE_PACKET_LEN: u32 = SFTP_MAX_PACKET_LEN;
 const SFTP_REQUEST_TIMEOUT_SECS: u64 = 300;
 const OWNER_LOOKUP_BATCH_SIZE: usize = 128;
 const OWNER_LOOKUP_TIMEOUT: Duration = Duration::from_secs(3);
@@ -46,7 +63,9 @@ const OWNER_LOOKUP_TIMEOUT: Duration = Duration::from_secs(3);
 fn sftp_session_config() -> SftpConfig {
     SftpConfig {
         max_packet_len: SFTP_MAX_PACKET_LEN,
+        max_concurrent_reads: SFTP_MAX_CONCURRENT_READS,
         max_concurrent_writes: MAX_INFLIGHT_REQUESTS,
+        max_write_packet_len: SFTP_MAX_WRITE_PACKET_LEN,
         request_timeout_secs: SFTP_REQUEST_TIMEOUT_SECS,
     }
 }
@@ -2095,7 +2114,10 @@ impl SftpClient for RusshSftpClient {
             owner_lookup_disabled: false,
         })
     }
+}
 
+#[async_trait]
+impl RemoteFileClient for RusshSftpClient {
     async fn list_dir(&mut self, path: &str) -> Result<Vec<FileEntry>> {
         let dir_entries = self
             .sftp
@@ -3311,11 +3333,59 @@ mod tests {
         let config = sftp_session_config();
 
         assert_eq!(config.max_packet_len, SFTP_MAX_PACKET_LEN);
+        assert_eq!(config.max_concurrent_reads, SFTP_MAX_CONCURRENT_READS);
         assert_eq!(config.max_concurrent_writes, MAX_INFLIGHT_REQUESTS);
+        assert_eq!(config.max_write_packet_len, SFTP_MAX_WRITE_PACKET_LEN);
         assert_eq!(config.request_timeout_secs, SFTP_REQUEST_TIMEOUT_SECS);
+        assert_eq!(
+            config.max_packet_len as usize * config.max_concurrent_reads,
+            16 * 1024 * 1024
+        );
         assert_eq!(
             config.max_packet_len as usize * config.max_concurrent_writes,
             16 * 1024 * 1024
+        );
+        // A framed WRITE packet must leave room for the 25-byte header plus the
+        // file handle (255 bytes at most) inside the ceiling, and the ceiling
+        // itself must stay within server-advertised packet limits.
+        assert!(config.max_write_packet_len > 25 + 255);
+        assert_eq!(config.max_write_packet_len, config.max_packet_len);
+    }
+
+    #[test]
+    fn sftp_transfer_window_matches_ssh_channel_window() {
+        let identity = HostKeyIdentity::new("host.example", 22, ssh::HostKeyRoute::Direct);
+        let ssh_config = SshConnectConfig {
+            host: "host.example".to_owned(),
+            port: 22,
+            username: "tester".to_owned(),
+            auth: ssh::SshAuth::Agent,
+            timeout: None,
+            keepalive_interval: None,
+            keepalive_max: None,
+            jump_server: None,
+            proxy: None,
+            keyboard_interactive_responder: None,
+            host_key_verifier: HostKeyVerifier::default(),
+            x11_forwarding: false,
+            allow_legacy_algorithms: false,
+        };
+
+        let transport =
+            build_sftp_russh_config(&ssh_config, &identity).expect("SFTP config should build");
+        let config = sftp_session_config();
+
+        // Each direction must be able to fill the SSH channel window: a packet
+        // ceiling times the concurrent request budget that falls short of
+        // `window_size` throttles the transfer before the channel does, and a
+        // budget that overshoots it only wastes per-transfer memory.
+        assert_eq!(
+            config.max_packet_len as usize * config.max_concurrent_reads,
+            transport.window_size as usize
+        );
+        assert_eq!(
+            config.max_packet_len as usize * config.max_concurrent_writes,
+            transport.window_size as usize
         );
     }
 

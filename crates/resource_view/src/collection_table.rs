@@ -6,7 +6,7 @@
 
 use std::cmp::Ordering;
 
-use extension_runtime::extension::manifest::ResourceWorkbenchCollection;
+use extension_runtime::extension::manifest::ResourceWorkbenchTable;
 use gpui::{
     AnyElement, App, AppContext as _, ClickEvent, Context, Edges, Entity, InteractiveElement as _,
     IntoElement, ParentElement, Pixels, SharedString, Stateful, StatefulInteractiveElement as _,
@@ -30,29 +30,7 @@ const TEXT_ACTION_WIDTH: f32 = 84.;
 /// 行首"可进入"指示列宽度。
 const INDICATOR_WIDTH: f32 = 30.;
 
-/// 列声明的渲染语义,来自 manifest 的 `style` 字段。
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum CellStyle {
-    /// 默认文本。
-    Plain,
-    /// 状态徽章。
-    Badge,
-    /// 等宽字体(镜像名、id、路径)。
-    Mono,
-    /// 次要文本(时间、描述)。
-    Muted,
-}
-
-impl CellStyle {
-    fn parse(raw: Option<&str>) -> Self {
-        match raw.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
-            Some("badge") | Some("status") => Self::Badge,
-            Some("mono") | Some("code") | Some("id") => Self::Mono,
-            Some("muted") | Some("secondary") | Some("time") => Self::Muted,
-            _ => Self::Plain,
-        }
-    }
-}
+use extension_runtime::extension::manifest::ResourceWorkbenchColumnStyle as CellStyle;
 
 #[derive(Clone)]
 struct TableColumn {
@@ -92,7 +70,7 @@ pub(crate) struct CollectionTableDelegate {
 
 impl CollectionTableDelegate {
     pub(crate) fn new(
-        collection: &ResourceWorkbenchCollection,
+        collection: &ResourceWorkbenchTable,
         items: Vec<Value>,
         actions: Vec<RowActionView>,
         view: WeakEntity<NativeResourceWorkbench>,
@@ -112,7 +90,7 @@ impl CollectionTableDelegate {
             });
         }
         for column in &collection.columns {
-            let style = CellStyle::parse(column.style.as_deref());
+            let style = column.style;
             columns.push(TableColumn {
                 key: SharedString::from(column.id.clone()),
                 title: SharedString::from(column.title.clone()),
@@ -483,14 +461,19 @@ pub(crate) fn row_key(row: &Value, key_paths: &[String]) -> String {
 }
 
 /// 从页面 load 结果中取出 collection 的行集。
-pub(crate) fn items_of(collection: &ResourceWorkbenchCollection, value: &Value) -> Vec<Value> {
+pub(crate) fn items_of(collection: &ResourceWorkbenchTable, value: &Value) -> Vec<Value> {
+    items_at(value, &collection.items_path)
+}
+
+/// 按 JSON Pointer 风格 `itemsPath` 从结果中取数组(collection 与树子节点共用)。
+pub(crate) fn items_at(value: &Value, items_path: &str) -> Vec<Value> {
     if value.is_null() {
         return Vec::new();
     }
-    let pointer = if collection.items_path.starts_with('/') {
-        collection.items_path.clone()
+    let pointer = if items_path.starts_with('/') {
+        items_path.to_string()
     } else {
-        format!("/{}", collection.items_path)
+        format!("/{items_path}")
     };
     value
         .pointer(&pointer)

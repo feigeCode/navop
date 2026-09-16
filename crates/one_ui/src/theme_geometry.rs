@@ -1,5 +1,5 @@
-use gpui_component::Size;
 use gpui::{Edges, Pixels, px};
+use gpui_component::Size;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 

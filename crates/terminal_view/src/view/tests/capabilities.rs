@@ -835,3 +835,56 @@ fn sftp_status_badge_emits_state_changed_on_transition() {
         "SFTP badge must only notify on a real state transition",
     );
 }
+
+#[test]
+fn copy_writes_to_clipboard_before_dropping_the_selection() {
+    // issue #199：Ctrl+Shift+C 之后选中的块背景要立刻消失，
+    // 否则用户会怀疑组合键没生效。顺序上必须先把文案落到剪贴板再清选区。
+    let clipboard = include_str!("../clipboard.rs");
+    let copy = function_region(
+        clipboard,
+        "pub(super) fn copy(",
+        "pub(super) fn block_selection_text",
+    );
+    let clipboard_write = copy
+        .find("cx.write_to_clipboard")
+        .expect("copy must still write to the clipboard");
+    let clear = copy
+        .find("self.clear_selection_after_copy(cx)")
+        .expect("copy must drop the selection highlight afterwards");
+    assert!(
+        clipboard_write < clear,
+        "必须先复制再清选区，避免清空后取不到文案"
+    );
+
+    let clear_helper = function_region(
+        clipboard,
+        "fn clear_selection_after_copy",
+        "pub(super) fn block_selection_text",
+    );
+    assert!(
+        clear_helper.contains("self.block_selection.take()"),
+        "块选区也要一并清掉"
+    );
+    assert!(
+        clear_helper.contains("PendingTerminalAction::ClearSelectionAfterCopy"),
+        "清选区必须走非阻塞动作队列，终端忙时不能静默丢动作"
+    );
+
+    let vi_input = include_str!("../vi_input.rs");
+    let terminal_action = function_region(
+        vi_input,
+        "fn try_apply_terminal_action",
+        "fn finish_terminal_action",
+    );
+    let copy_clear = function_region(
+        terminal_action,
+        "PendingTerminalAction::ClearSelectionAfterCopy =>",
+        "PendingTerminalAction::SelectAll =>",
+    );
+    assert!(copy_clear.contains("term.selection.take()"));
+    assert!(
+        !copy_clear.contains("toggle_vi_mode"),
+        "复制只清选区，不能顺带切换 VI 模式（那是 Escape/ClearSelection 的语义）"
+    );
+}

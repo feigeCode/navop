@@ -454,15 +454,23 @@ mod tests {
     #[test]
     fn both_type_filters_share_the_stateless_menu() {
         let menu = include_str!("../connection_type_menu.rs");
-        assert!(menu.contains("connection_type_rail_icon(filter)"));
+        assert!(menu.contains("ConnectionType::all()"));
+        // 菜单项去图标、扩展按名称逐项列出（MQTT 与内置项合并去重）。
+        assert!(!menu.contains("connection_type_rail_icon"));
+        assert!(menu.contains("ConnectionFilter::Builtin"));
+        assert!(menu.contains("extension_filter_targets"));
+        // 菜单与筛选条共用同一份筛选项清单，避免两处顺序/命名分叉。
+        assert!(menu.contains("filter_targets"));
         assert!(
             include_str!("../persistent_connection_sidebar/filter_bar.rs")
                 .contains("build_filter_menu")
         );
         // 标题行的平铺筛选条与「更多」菜单复用同一无状态菜单构建器。
         let bar = include_str!("../home_tab/connection_type_filter_bar.rs");
-        assert!(bar.contains("build_filter_menu"));
-        assert!(bar.contains("ConnectionType::all()"));
+        assert!(bar.contains("build_filter_menu_for"));
+        assert!(bar.contains("filter_targets"));
+        // 工具栏不再保留类型筛选下拉入口。
+        assert!(!include_str!("../home_tab/toolbar.rs").contains("build_filter_menu"));
     }
 
     #[test]

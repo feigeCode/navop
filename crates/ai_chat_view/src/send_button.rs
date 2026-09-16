@@ -1,5 +1,8 @@
 use gpui::{AnyElement, App, IntoElement, Window};
-use gpui_component::{Sizable, Size, button::{Button, ButtonVariants}};
+use gpui_component::{
+    Sizable, Size,
+    button::{Button, ButtonVariants},
+};
 use one_assets::IconName;
 
 #[derive(Clone, Debug)]

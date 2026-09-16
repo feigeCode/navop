@@ -14,7 +14,18 @@ use gpui::{
     SharedString, StatefulInteractiveElement, Styled, Task, Window, div, prelude::FluentBuilder,
     px, relative,
 };
-use gpui_component::{ActiveTheme, Icon, IndexPath, Sizable, Size, WindowExt as _, button::{Button, ButtonVariants as _}, checkbox::Checkbox, dialog::DialogButtonProps, h_flex, input::{Input, InputEvent, InputState, Textarea, TextareaState}, notification::Notification, radio::Radio, select::{Select, SelectEvent, SelectItem, SelectState}, v_flex};
+use gpui_component::{
+    ActiveTheme, Icon, IndexPath, Sizable, Size, WindowExt as _,
+    button::{Button, ButtonVariants as _},
+    checkbox::Checkbox,
+    dialog::DialogButtonProps,
+    h_flex,
+    input::{Input, InputEvent, InputState, Textarea, TextareaState},
+    notification::Notification,
+    radio::Radio,
+    select::{Select, SelectEvent, SelectItem, SelectState},
+    v_flex,
+};
 use one_assets::IconName;
 use one_core::gpui_tokio::Tokio;
 use one_core::tab_container::{TabContent, TabContentEvent};
@@ -2711,7 +2722,14 @@ impl KeyValueView {
                                 .min_w_0()
                                 .gap_1()
                                 .items_center()
-                                .child(div().flex_1().min_w_0().text_base().truncate().child(display_value))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_base()
+                                        .truncate()
+                                        .child(display_value),
+                                )
                                 .when(binary_item.is_none(), |this| {
                                     this.child(
                                         IconButton::new(("preview-list", idx), IconName::Maximize)
@@ -2888,7 +2906,14 @@ impl KeyValueView {
                                         .with_size(Size::Small)
                                         .text_color(cx.theme().muted_foreground),
                                 )
-                                .child(div().flex_1().min_w_0().text_base().truncate().child(display_value))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_base()
+                                        .truncate()
+                                        .child(display_value),
+                                )
                                 .when(binary_member.is_none(), |this| {
                                     this.child(
                                         IconButton::new(("preview-set", idx), IconName::Maximize)
@@ -3133,7 +3158,9 @@ impl KeyValueView {
                                 .child(
                                     div()
                                         .id(format!("zset-score-text-{original_idx}"))
-                                        .debug_selector(|| format!("zset-score-text-{original_idx}"))
+                                        .debug_selector(|| {
+                                            format!("zset-score-text-{original_idx}")
+                                        })
                                         .flex_shrink_0()
                                         .text_sm()
                                         .text_color(cx.theme().primary)
@@ -3147,7 +3174,14 @@ impl KeyValueView {
                                 .min_w_0()
                                 .gap_1()
                                 .items_center()
-                                .child(div().flex_1().min_w_0().text_base().truncate().child(display_member))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_base()
+                                        .truncate()
+                                        .child(display_member),
+                                )
                                 .when(binary_member.is_none(), |this| {
                                     this.child(
                                         IconButton::new(
@@ -3352,7 +3386,14 @@ impl KeyValueView {
                                 .min_w_0()
                                 .gap_1()
                                 .items_center()
-                                .child(div().flex_1().min_w_0().text_base().truncate().child(value_display))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_base()
+                                        .truncate()
+                                        .child(value_display),
+                                )
                                 .when(binary_value.is_none(), |this| {
                                     this.child(
                                         IconButton::new(("preview-hash", idx), IconName::Maximize)
@@ -4250,7 +4291,7 @@ mod tests {
     #[gpui::test]
     fn dragging_the_zset_score_resize_handle_widens_the_column(cx: &mut TestAppContext) {
         use crate::value_table_columns::ValueColumn;
-        use gpui::{MouseButton, Modifiers, point};
+        use gpui::{Modifiers, MouseButton, point};
 
         cx.update(|cx| {
             gpui_component::init(cx);

@@ -19,4 +19,7 @@ pub use registry::{
     IpcDriverEngines, IpcDriverEntry, IpcDriverManifest, IpcDriverRegistry, IpcDriverTransport,
     LimitStyle, current_host_version, set_host_version,
 };
-pub use resources::{DriverAssetSource, DriverResourceLoader};
+pub use resources::{
+    DRIVER_ICON_ASSET_PREFIX, DriverAssetSource, DriverResourceLoader, LOCAL_ICON_ASSET_PREFIX,
+    is_icon_asset_path, local_icon_asset_path, local_icon_file_path,
+};

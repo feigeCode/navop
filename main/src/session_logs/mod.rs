@@ -7,7 +7,10 @@ use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, SharedString,
     Subscription, UniformListScrollHandle, Window,
 };
-use gpui_component::{Icon, input::{InputEvent, InputState}};
+use gpui_component::{
+    Icon,
+    input::{InputEvent, InputState},
+};
 use one_assets::IconName;
 use one_core::tab_container::{TabContent, TabContentEvent};
 use rust_i18n::t;

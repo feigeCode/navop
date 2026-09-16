@@ -171,6 +171,7 @@ mod tests {
             fallback_asset_url: None,
             manifest_url: None,
             manifest_fallback_url: None,
+            screenshots: Vec::new(),
         }
     }
 

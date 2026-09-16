@@ -344,12 +344,18 @@ impl WindowsRdpHost {
             // which keeps EventBridge alive for the full callback lifetime and
             // makes it safe to release after this call.
             let result = unsafe { (self.bindings.unregister_event_callback)(self.raw) };
-            check_host_result(self.bindings, self.raw, result)?;
+            if let Err(error) = check_host_result(self.bindings, self.raw, result) {
+                record_host_close_failure(self.generation, "unregister_event_callback", &error);
+                return Err(error);
+            }
             self.callback_registered = false;
         }
 
         if self.raw.is_null() {
+            // A previous attempt already destroyed (or never allocated) the
+            // native handle, so there is nothing left to release.
             self.finish_closing();
+            record_host_destroyed(self.generation, "close_after_null_handle");
             return Ok(());
         }
 
@@ -357,11 +363,20 @@ impl WindowsRdpHost {
         // registered. The opaque handle is still owned by this facade and the
         // native destroy contract accepts its address and clears it on success.
         let result = unsafe { (self.bindings.destroy)(&mut self.raw) };
-        check_host_result(self.bindings, self.raw, result)?;
+        if let Err(error) = check_host_result(self.bindings, self.raw, result) {
+            record_host_close_failure(self.generation, "destroy", &error);
+            return Err(error);
+        }
         if !self.raw.is_null() {
+            record_host_close_failure(
+                self.generation,
+                "destroy_did_not_clear_handle",
+                &WindowsRdpHostError::NativeDidNotClearHandle,
+            );
             return Err(WindowsRdpHostError::NativeDidNotClearHandle);
         }
         self.finish_closing();
+        record_host_destroyed(self.generation, "close");
         Ok(())
     }
 
@@ -477,6 +492,15 @@ impl WindowsRdpHost {
             owner_thread: std::thread::current().id(),
             _thread_affinity: PhantomData,
         })
+        .inspect(|host| {
+            crate::lifecycle_stats::global().record_host_created();
+            tracing::debug!(
+                target: "windows_rdp_host::lifecycle",
+                stage = "host_created",
+                generation = host.generation,
+                "Windows native RDP host created"
+            );
+        })
     }
 }
 
@@ -541,11 +565,16 @@ impl Drop for WindowsRdpHost {
     fn drop(&mut self) {
         let current_thread = std::thread::current().id();
         if current_thread != self.owner_thread {
+            let counters = crate::lifecycle_stats::global();
+            counters.record_wrong_thread_drop();
             tracing::error!(
+                target: "windows_rdp_host::lifecycle",
+                stage = "host_wrong_thread_drop",
                 generation = self.generation,
                 owner_thread = ?self.owner_thread,
                 ?current_thread,
                 callback_registered = self.callback_registered,
+                lifecycle_is_open = !self.is_closed(),
                 "leaking Windows native RDP host after wrong-thread drop"
             );
             if self.callback_registered
@@ -553,6 +582,9 @@ impl Drop for WindowsRdpHost {
             {
                 let _ = Box::leak(event_bridge);
             }
+            // The native allocation is now unreachable from Rust, so the live
+            // host count must be reported with the quarantine included.
+            counters.log_snapshot("host", "wrong_thread_drop");
             return;
         }
 
@@ -562,6 +594,39 @@ impl Drop for WindowsRdpHost {
             }
         }
     }
+}
+
+/// Records one failed native host close and emits a structured error line.
+///
+/// The counter matters because a failed close can still leave the native host
+/// alive while the Rust wrapper is dropped, which a `Drop`-only audit would
+/// misreport as a clean release.
+fn record_host_close_failure(
+    generation: u64,
+    stage: &'static str,
+    error: &WindowsRdpHostError,
+) {
+    crate::lifecycle_stats::global().record_host_close_failed();
+    tracing::error!(
+        target: "windows_rdp_host::lifecycle",
+        stage = "host_close_failed",
+        close_stage = stage,
+        generation,
+        ?error,
+        "failed to destroy the Windows native RDP host"
+    );
+}
+
+/// Records one confirmed native host destroy.
+fn record_host_destroyed(generation: u64, stage: &'static str) {
+    crate::lifecycle_stats::global().record_host_destroyed();
+    tracing::debug!(
+        target: "windows_rdp_host::lifecycle",
+        stage = "host_destroyed",
+        close_stage = stage,
+        generation,
+        "Windows native RDP host destroyed"
+    );
 }
 
 #[cfg(test)]

@@ -200,7 +200,8 @@ fn windows_native_close_waits_for_confirmation_and_keeps_a_release_fallback() {
         "operation.native.force_close(&mut || {})",
         "NativeDestroyProgress::Destroyed",
         "NativeDestroyProgress::PendingCallbacks",
-        "Box::leak(Box::new(operation.native))",
+        "windows_native_retirement::retire(",
+        "operation.into_adapter()",
         "WindowsRdpTerminalOutcome::TimedOutLeaked",
         "WindowsRdpTerminalOutcome::Destroyed",
         "finish_windows_native_close_in_view(this, registration, cx);",
@@ -212,15 +213,22 @@ fn windows_native_close_waits_for_confirmation_and_keeps_a_release_fallback() {
     }
     assert!(runner.contains("if now >= hard_deadline"));
     // PendingCallbacks is not terminal: the runner only exits through
-    // Destroyed or the timeout leak.
-    let leaked = runner
-        .find("Box::leak(Box::new(operation.native))")
-        .expect("fail-closed adapter leak");
-    let timeout = runner[leaked..]
+    // Destroyed or the timeout hand-off to the owner-thread retirement queue.
+    let retired = runner
+        .find("windows_native_retirement::retire(")
+        .expect("fail-closed adapter hand-off to the retirement queue");
+    let timeout = runner[retired..]
         .find("WindowsRdpTerminalOutcome::TimedOutLeaked")
-        .map(|offset| leaked + offset)
+        .map(|offset| retired + offset)
         .expect("timeout terminal completion");
-    assert!(leaked < timeout);
+    assert!(
+        retired < timeout,
+        "ownership must move to the retirement queue before the timeout outcome is recorded"
+    );
+    assert!(
+        !runner.contains("Box::leak"),
+        "the close runner must never leak the adapter; the retirement queue keeps retrying destruction"
+    );
     let timeout_branch_start = runner
         .find("if now >= hard_deadline")
         .expect("hard timeout branch");
@@ -288,13 +296,17 @@ fn windows_native_close_waits_for_confirmation_and_keeps_a_release_fallback() {
         "WindowsRdpTerminalOutcome::Destroyed",
         "WindowsRdpTerminalOutcome::TimedOutLeaked",
         "Duration::from_millis(16)",
-        "Box::leak(Box::new(native))",
+        "windows_native_retirement::retire(cx, native, generation, reason)",
     ] {
         assert!(
             cleanup.contains(token),
             "missing detached native cleanup token: {token}"
         );
     }
+    assert!(
+        !cleanup.contains("Box::leak"),
+        "detached cleanup must hand the adapter to the retirement queue instead of leaking it"
+    );
     assert!(!cleanup.contains("background_spawn"));
     assert!(!cleanup.contains("tokio::spawn"));
     let detached_cleanup = function_body(
@@ -342,9 +354,9 @@ fn windows_native_close_waits_for_confirmation_and_keeps_a_release_fallback() {
     let deadline = cleanup
         .find("if Instant::now() >= deadline")
         .expect("detached cleanup deadline");
-    let leak = cleanup
-        .find("Box::leak(Box::new(native))")
-        .expect("fail-closed adapter leak");
+    let retire = cleanup
+        .find("windows_native_retirement::retire(cx, native, generation, reason)")
+        .expect("fail-closed adapter hand-off");
     let timer = cleanup
         .find("timer(Duration::from_millis(16))")
         .expect("detached cleanup retry timer");
@@ -353,8 +365,8 @@ fn windows_native_close_waits_for_confirmation_and_keeps_a_release_fallback() {
     assert!(destroyed_terminal < destroyed_return);
     assert!(destroyed_return < already_destroyed_return);
     assert!(already_destroyed_return < deadline);
-    assert!(deadline < leak);
-    assert!(leak < timer);
+    assert!(deadline < retire);
+    assert!(retire < timer);
 
     for token in [
         "NativePresentationState::Closing",
@@ -613,15 +625,15 @@ fn windows_native_shutdown_controller_drains_on_the_foreground_and_leaks_before_
     assert!(
         detached_cleanup.contains("registration: Option<windows_rdp_host::WindowsRdpRegistration>")
     );
-    let leak = detached_cleanup
-        .find("Box::leak(Box::new(native))")
-        .expect("fail-closed adapter leak");
+    let retire = detached_cleanup
+        .find("windows_native_retirement::retire(cx, native, generation, reason)")
+        .expect("fail-closed adapter hand-off");
     let timed_out = detached_cleanup
         .find("WindowsRdpTerminalOutcome::TimedOutLeaked")
         .expect("timeout completion");
     assert!(
-        leak < timed_out,
-        "the complete adapter must be leaked before recording timeout completion"
+        retire < timed_out,
+        "ownership must move to the retirement queue before recording timeout completion"
     );
 
     let poll_view_owner = function_body(
@@ -646,14 +658,22 @@ fn windows_native_shutdown_controller_drains_on_the_foreground_and_leaks_before_
     assert!(poll_view_owner.contains("WindowsNativeCloseTake::Closed"));
     assert!(poll_view_owner.contains("WindowsNativeCloseTake::Pending"));
     assert!(poll_view_owner.contains("WindowsNativeCloseTake::Failed"));
-    let drain_leak = poll_view_owner
-        .find("Box::leak(Box::new(operation.into_leaked_adapter()))")
-        .expect("drain deadline adapter leak");
-    let drain_leak_terminal = poll_view_owner[drain_leak..]
+    let drain_retire = poll_view_owner
+        .find("crate::view::windows_native_retirement::retire(")
+        .expect("drain deadline adapter hand-off");
+    assert!(
+        !poll_view_owner.contains("Box::leak"),
+        "the drain deadline must retire the adapter instead of leaking it"
+    );
+    let drain_retire_terminal = poll_view_owner[drain_retire..]
         .find("WindowsRdpTerminalOutcome::TimedOutLeaked")
-        .map(|offset| drain_leak + offset)
+        .map(|offset| drain_retire + offset)
         .expect("drain deadline terminal completion");
-    assert!(drain_leak < drain_leak_terminal);
+    assert!(drain_retire < drain_retire_terminal);
+    assert!(
+        poll_view_owner[drain_retire..].contains("pending_count(cx)"),
+        "the drain deadline line must report how many adapters are queued for retirement"
+    );
 }
 
 #[test]
@@ -1414,7 +1434,7 @@ fn explicit_canvas_retry_requires_confirmed_native_cleanup_and_defers_runtime_st
     assert!(cleanup.contains("NativeDestroyProgress::Destroyed"));
     assert!(cleanup.contains("NativeDestroyProgress::PendingCallbacks"));
     assert!(cleanup.contains("WindowsRdpTerminalOutcome::TimedOutLeaked"));
-    assert!(cleanup.contains("Box::leak(Box::new(native))"));
+    assert!(cleanup.contains("windows_native_retirement::retire(cx, native, generation, reason)"));
     let completion = function_body(
         &view,
         "fn complete_windows_native_initialization_cleanup(",
@@ -1945,4 +1965,62 @@ fn windows_native_presentation_readiness_is_independent_of_canvas_frames() {
     // enum grows; this source check runs on every platform.
     assert!(capability.contains("WindowsRdpHostError::PresentationIncomplete =>"));
     assert!(!view.contains("rendered_frames.promote()\n            && self.rendered_frames"));
+}
+
+/// The close/cleanup runners hand a timed-out adapter to the owner-thread
+/// retirement queue instead of leaking it. These invariants are what make that
+/// hand-off safe, so they are pinned here rather than only in unit tests.
+#[test]
+fn windows_native_timeout_hands_off_to_the_owner_thread_retirement_queue() {
+    let view = include_str!("../view.rs").replace("\r\n", "\n");
+    let retirement = include_str!("windows_native_retirement.rs").replace("\r\n", "\n");
+    let drain =
+        include_str!("../windows_native_shutdown/platform/drain.rs").replace("\r\n", "\n");
+
+    // Every deadline path retires; none of them leaks.
+    for (name, source) in [("view.rs", &view), ("drain.rs", &drain)] {
+        assert!(
+            source.contains("windows_native_retirement::retire("),
+            "{name} must hand the timed-out adapter to the retirement queue"
+        );
+    }
+    assert!(!view.contains("into_leaked_adapter"));
+    assert!(!drain.contains("Box::leak"));
+
+    // The queue must be installed before the view can ever time out.
+    let init = function_body(&view, "pub fn init(", "pub fn refresh_keybindings(");
+    assert!(
+        init.contains("windows_native_retirement::init(cx);"),
+        "the retirement driver must be installed during view init"
+    );
+    assert!(
+        retirement.contains("on_app_quit("),
+        "queued adapters must be accounted for when the app quits"
+    );
+
+    // GPUI borrow discipline: the driver is spawned after the global update
+    // returns, because its native work pumps COM messages and would re-enter
+    // the app borrow if it ran inside it.
+    let retire = function_body(
+        &retirement,
+        "pub(crate) fn retire(",
+        "pub(crate) fn pending_count(",
+    );
+    let update = retire.find("update_global").expect("queue update");
+    let gate = retire
+        .find("if start_driver")
+        .expect("the driver spawn must be gated by the global update result");
+    assert!(update < gate);
+    assert!(
+        !retire[update..gate].contains("cx.spawn("),
+        "the retirement driver must never be spawned inside the app-borrow closure"
+    );
+
+    // A failed destruction attempt must be requeued with bounded grace so a
+    // stuck adapter cannot grow the queue forever.
+    assert!(retirement.contains("requeue"));
+    assert!(retirement.contains("RETIREMENT_MAX_AGE"));
+    assert!(retirement.contains("take_expired"));
+    // ...and the exit path is the only place allowed to leak.
+    assert!(retirement.contains("leak_unretirable"));
 }

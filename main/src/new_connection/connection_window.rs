@@ -5,7 +5,13 @@ use gpui::{
     InteractiveElement, IntoElement, KeyBinding, ParentElement, Render, SharedString,
     StatefulInteractiveElement, Styled, Window, actions, div, px,
 };
-use gpui_component::{ActiveTheme, Disableable, Icon, InteractiveElementExt, Sizable, button::{Button, ButtonVariants as _}, h_flex, scroll::ScrollableElement, v_flex};
+use gpui_component::{
+    ActiveTheme, Disableable, Icon, InteractiveElementExt, Sizable,
+    button::{Button, ButtonVariants as _},
+    h_flex,
+    scroll::ScrollableElement,
+    v_flex,
+};
 use one_ui::IconSize;
 use rust_i18n::t;
 

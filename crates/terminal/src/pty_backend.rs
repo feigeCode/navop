@@ -59,6 +59,19 @@ pub enum TerminalEvent {
     Bell,
     /// 子进程已退出
     ChildExit(i32),
+    /// 本地 PTY 后端在未被请求关闭、且子进程未退出的情况下停止工作
+    ///
+    /// 触发点是 alacritty 事件循环线程异常终止——读取线程 panic，或因 I/O / 轮询错误
+    /// 提前退出。终止后 PTY 既不再读取输出也不再接受输入，而进程仍然存活，用户看到的
+    /// 就是「终端静默卡死」。这个事件把这种不可恢复状态显式暴露给模型层，让会话结束而
+    /// 不是无限期地停在「看起来还在运行」。
+    ///
+    /// 已知可触发读取线程 panic 的路径之一：`Conpty::on_resize` 用
+    /// `assert_eq!(result, S_OK)` 断言 `ResizePseudoConsole` 成功，而该调用在句柄已失效
+    /// （`E_HANDLE`）时会返回失败，例如会话拆除后仍到达一次 resize。
+    ///
+    /// 模型层必须显式结束会话，而不是让面板停留在「看起来还在运行」的状态。
+    BackendStopped,
     /// 终端程序请求存储到剪贴板
     ClipboardStore(ClipboardType, String),
     /// 终端程序请求从剪贴板加载
@@ -328,6 +341,43 @@ impl PtyWriteBack {
     }
 }
 
+/// 判断事件循环的停止是否需要上报给模型层。
+///
+/// - 读取线程 panic：一定上报，终端已不可恢复；
+/// - 主动 `shutdown()` 或已经上报过子进程退出：属于正常结束，不上报；
+/// - 其余情况（事件循环因 I/O 或轮询错误提前退出）：上报。
+fn should_report_backend_stopped(panicked: bool, expected_stop: bool) -> bool {
+    panicked || !expected_stop
+}
+
+/// 把 UI 尺寸换算成可以提交给 ConPTY 的窗口尺寸。
+///
+/// 风险背景：`ResizePseudoConsole` 接受 `COORD`（i16 对），而 alacritty 的
+/// `Conpty::on_resize` 用 `assert_eq!(result, S_OK)` 断言调用成功——一旦返回失败
+/// HRESULT，整个 PTY 读取线程会被 panic 掉，此后终端不再产出输出、不再接受输入，
+/// 界面却仍显示为存活，表现为永久卡死。
+///
+/// 实测结论（Windows 10 19045 / 系统内置 ConPTY，本机无第三方 `conpty.dll`）：
+/// `0x0`、`-1`、`i16::MIN` 这类零/越界尺寸都会返回 `S_OK`，**不会**触发该断言；
+/// 目前唯一实测到的失败来源是**句柄已失效**（`ClosePseudoConsole` 之后）返回
+/// `E_HANDLE(0x80070006)`，即「会话拆除后又到达一次 resize」的竞态。
+///
+/// 所以本函数是**防御性**的：保证绝不把 0 或超出 `i16` 的尺寸写进 `COORD`，避免依赖
+/// 平台对越界值的行为，并顺手挡掉无意义的 0 尺寸。它是加固，不是已证实的故障根因。
+/// 无法安全提交时返回 `None`，由调用方保留旧尺寸。
+fn conpty_safe_window_size(size: TerminalSize) -> Option<WindowSize> {
+    const MAX_COORD: u16 = i16::MAX as u16;
+    if size.rows == 0 || size.cols == 0 || size.rows > MAX_COORD || size.cols > MAX_COORD {
+        return None;
+    }
+    Some(WindowSize {
+        num_lines: size.rows,
+        num_cols: size.cols,
+        cell_width: size.pixel_width / size.cols,
+        cell_height: size.pixel_height / size.rows,
+    })
+}
+
 /// Local PTY backend using alacritty_terminal's EventLoop
 ///
 /// EventLoop runs in background thread:
@@ -340,6 +390,10 @@ pub struct LocalPtyBackend {
     exec_ids: Arc<AtomicU64>,
     event_proxy: GpuiEventProxy,
     performance_metrics: Arc<TerminalPerformanceMetrics>,
+    /// alacritty 事件循环线程已经终止；终止后任何写入/尺寸调整都不会再被处理
+    stopped: Arc<AtomicBool>,
+    /// 由 `shutdown()` 置位，用于把“主动关闭”与“异常停止”区分开
+    shutdown_requested: Arc<AtomicBool>,
     _event_loop_handle: JoinHandle<()>,
     _supervisor_handle: JoinHandle<()>,
 }
@@ -377,6 +431,9 @@ impl LocalPtyBackend {
         let (command_tx, command_rx) = unbounded_channel();
         let capture_output = Arc::new(AtomicBool::new(false));
         let performance_metrics = event_proxy.performance_metrics();
+        let stopped = Arc::new(AtomicBool::new(false));
+        let shutdown_requested = Arc::new(AtomicBool::new(false));
+        let child_exit_reported = event_proxy.child_exit_reported_handle();
         let pty = tty::new(&pty_options, window_size, 0)?;
         let pty = OscTrackingPty::new(
             pty,
@@ -404,9 +461,27 @@ impl LocalPtyBackend {
                 recording_tap,
             );
         });
-        let event_loop_handle = thread::spawn(move || {
-            let _ = event_loop.spawn().join();
-        });
+        let event_loop_handle = {
+            let stopped = stopped.clone();
+            let shutdown_requested = shutdown_requested.clone();
+            let event_tx = event_proxy.event_tx.clone();
+            thread::spawn(move || {
+                // alacritty 的 EventLoop 在内层读取线程结束时把自身和状态一起返回；
+                // 内层 join 失败说明该线程 panic，此时终端已经不可恢复，
+                // 必须让模型层结束会话而不是静默卡死。
+                let panicked = event_loop.spawn().join().is_err();
+                let expected_stop = shutdown_requested.load(Ordering::Acquire)
+                    || child_exit_reported.load(Ordering::Acquire);
+                stopped.store(true, Ordering::Release);
+                if should_report_backend_stopped(panicked, expected_stop) {
+                    tracing::warn!(
+                        panicked,
+                        "本地 PTY 事件循环已停止且无预期关闭来源，标记会话结束"
+                    );
+                    let _ = event_tx.send(TerminalEvent::BackendStopped);
+                }
+            })
+        };
 
         Ok(Self {
             event_loop_sender,
@@ -414,12 +489,23 @@ impl LocalPtyBackend {
             exec_ids: Arc::new(AtomicU64::new(1)),
             event_proxy,
             performance_metrics,
+            stopped,
+            shutdown_requested,
             _event_loop_handle: event_loop_handle,
             _supervisor_handle: supervisor_handle,
         })
     }
 
+    /// 事件循环是否已经终止；终止后写入不会再被处理。
+    pub fn is_stopped(&self) -> bool {
+        self.stopped.load(Ordering::Acquire)
+    }
+
     pub fn write(&self, data: Vec<u8>) {
+        if self.is_stopped() {
+            tracing::debug!("本地 PTY 已停止，丢弃 {} 字节输入", data.len());
+            return;
+        }
         self.performance_metrics
             .record_input(TerminalInputMetricSource::User, data.len());
         let _ = self.command_tx.send(LocalPtyCommand::Write {
@@ -429,19 +515,20 @@ impl LocalPtyBackend {
     }
 
     pub fn resize(&self, size: TerminalSize) {
-        let window_size = WindowSize {
-            num_lines: size.rows,
-            num_cols: size.cols,
-            cell_width: if size.cols > 0 {
-                size.pixel_width / size.cols
-            } else {
-                8
-            },
-            cell_height: if size.rows > 0 {
-                size.pixel_height / size.rows
-            } else {
-                18
-            },
+        if self.is_stopped() {
+            tracing::debug!("本地 PTY 已停止，忽略尺寸调整 {}x{}", size.cols, size.rows);
+            return;
+        }
+        let Some(window_size) = conpty_safe_window_size(size) else {
+            // 防御性跳过：不把 0 / 越界尺寸提交给 ConPTY。注意本机实测表明这类尺寸
+            // 目前返回 S_OK（并不会触发 alacritty 的 assert），所以这里是加固而非根因修复。
+            // 保留旧尺寸，让后续合法尺寸仍有机会生效。
+            tracing::warn!(
+                cols = size.cols,
+                rows = size.rows,
+                "忽略无法提交给 ConPTY 的终端尺寸"
+            );
+            return;
         };
         tracing::debug!(
             "LocalPtyBackend::resize: {}x{}, cell={}x{}, pixel={}x{}",
@@ -457,6 +544,7 @@ impl LocalPtyBackend {
     }
 
     pub fn shutdown(&self) {
+        self.shutdown_requested.store(true, Ordering::Release);
         let _ = self.command_tx.send(LocalPtyCommand::Shutdown);
     }
 }
@@ -683,6 +771,8 @@ pub struct GpuiEventProxy {
     window_size: Arc<Mutex<WindowSize>>,
     /// Wakeup 去重标记：true 表示完整事件链路中已有尚未被 GPUI 消费的 Wakeup
     wakeup_pending: Arc<AtomicBool>,
+    /// 是否已上报过子进程退出；用于把“子进程退出”与“后端异常停止”区分开
+    child_exit_reported: Arc<AtomicBool>,
     metrics: Arc<TerminalPerformanceMetrics>,
 }
 
@@ -721,6 +811,7 @@ impl GpuiEventProxy {
                 cell_height: 18,
             })),
             wakeup_pending: Arc::new(AtomicBool::new(false)),
+            child_exit_reported: Arc::new(AtomicBool::new(false)),
             metrics,
         }
     }
@@ -761,6 +852,14 @@ impl GpuiEventProxy {
     /// 只有 GPUI 消费对应 Wakeup 后才能 reset，防止前台繁忙时渲染队列无限积压。
     pub(crate) fn wakeup_pending_handle(&self) -> Arc<AtomicBool> {
         self.wakeup_pending.clone()
+    }
+
+    /// 返回“子进程退出已上报”标记的句柄。
+    ///
+    /// 本地 PTY 后端用它区分正常结束（子进程退出、主动关闭）与异常停止，
+    /// 避免子进程正常退出后又补发一次后端停止。
+    fn child_exit_reported_handle(&self) -> Arc<AtomicBool> {
+        self.child_exit_reported.clone()
     }
 
     fn current_window_size(&self) -> WindowSize {
@@ -842,6 +941,9 @@ impl EventListener for GpuiEventProxy {
             AlacTermEvent::ClipboardStore(ty, data) => TerminalEvent::ClipboardStore(ty, data),
             AlacTermEvent::ClipboardLoad(ty, _) => TerminalEvent::ClipboardLoad(ty),
             AlacTermEvent::Exit => {
+                // 子进程退出是正常结束：记录后，后端读取线程随之结束时不再补发
+                // `BackendStopped`，以免把退出码覆盖成“无退出码”的哨兵值。
+                self.child_exit_reported.store(true, Ordering::Release);
                 self.disconnect_local_backend();
                 TerminalEvent::ChildExit(0)
             }
@@ -1350,6 +1452,72 @@ mod tests {
             events.get(3),
             Some(TerminalEvent::CommandFinished { exit_code: 7 })
         ));
+    }
+
+    #[test]
+    fn conpty_window_size_accepts_coord_expressible_dimensions() {
+        let window_size = conpty_safe_window_size(TerminalSize {
+            rows: 40,
+            cols: 132,
+            pixel_width: 1_320,
+            pixel_height: 800,
+        })
+        .expect("valid terminal size should be accepted");
+
+        assert_eq!(40, window_size.num_lines);
+        assert_eq!(132, window_size.num_cols);
+        assert_eq!(10, window_size.cell_width);
+        assert_eq!(20, window_size.cell_height);
+    }
+
+    #[test]
+    fn conpty_window_size_rejects_sizes_conpty_cannot_express() {
+        // ConPTY 的 COORD 只能表达 i16 内的正数。本机实测表明越界/零尺寸目前仍返回
+        // S_OK（不会触发 alacritty 的 assert_eq!），所以这里是防御性约束：
+        // 不把平台未定义行为的尺寸提交下去，并挡掉无意义的 0 尺寸。
+        for size in [
+            TerminalSize {
+                rows: 0,
+                cols: 132,
+                ..TerminalSize::default()
+            },
+            TerminalSize {
+                rows: 40,
+                cols: 0,
+                ..TerminalSize::default()
+            },
+            TerminalSize {
+                rows: i16::MAX as u16 + 1,
+                cols: 132,
+                ..TerminalSize::default()
+            },
+            TerminalSize {
+                rows: 40,
+                cols: i16::MAX as u16 + 1,
+                ..TerminalSize::default()
+            },
+            TerminalSize {
+                rows: u16::MAX,
+                cols: u16::MAX,
+                ..TerminalSize::default()
+            },
+        ] {
+            assert!(
+                conpty_safe_window_size(size).is_none(),
+                "size {size:?} must not reach ResizePseudoConsole"
+            );
+        }
+    }
+
+    #[test]
+    fn backend_stop_is_reported_unless_it_was_expected() {
+        // panic 一定上报：终端已经不可恢复。
+        assert!(should_report_backend_stopped(true, false));
+        assert!(should_report_backend_stopped(true, true));
+        // 主动关闭或子进程退出后自然结束：不再补发后端停止。
+        assert!(!should_report_backend_stopped(false, true));
+        // 其它提前退出（I/O 或轮询错误）：必须上报，否则界面永久卡死。
+        assert!(should_report_backend_stopped(false, false));
     }
 
     #[test]

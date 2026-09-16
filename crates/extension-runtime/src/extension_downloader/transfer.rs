@@ -47,9 +47,17 @@ pub async fn fetch_manifest_url(
     http_client: Arc<dyn HttpClient>,
     url: &str,
 ) -> Result<MarketplaceManifest> {
+    let started = std::time::Instant::now();
     let bytes = fetch_bytes(&http_client, url)
         .await
         .with_context(|| format!("fetch release manifest from {url}"))?;
+    tracing::info!(
+        target: "extension_perf",
+        download_ms = started.elapsed().as_millis() as u64,
+        bytes = bytes.len(),
+        url,
+        "manifest fetch: bytes downloaded"
+    );
     let mut manifest: MarketplaceManifest =
         serde_json::from_slice(&bytes).context("parse release manifest")?;
     let github_fallback_url = if url.trim() == LEGACY_GITHUB_EXTENSION_MANIFEST_URL {
@@ -58,6 +66,12 @@ pub async fn fetch_manifest_url(
         GITHUB_EXTENSION_MANIFEST_URL
     };
     manifest.resolve_downloads(url, github_fallback_url);
+    tracing::info!(
+        target: "extension_perf",
+        total_ms = started.elapsed().as_millis() as u64,
+        entries = manifest.extensions.len(),
+        "manifest fetch: parsed and resolved"
+    );
     Ok(manifest)
 }
 

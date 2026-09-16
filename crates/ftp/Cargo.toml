@@ -1,0 +1,22 @@
+[package]
+name = "ftp"
+version = "0.1.0"
+publish.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+async_ftp = { workspace = true, features = ["secure"] }
+async-trait = { workspace = true }
+sftp = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-util", "time"] }
+tokio-rustls = "0.23"
+rustls-native-certs = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+# 假 FTP 服务端交互测试：需要 TcpListener（net）与 #[tokio::test]（macros/rt）。
+tokio = { workspace = true, features = ["net", "macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

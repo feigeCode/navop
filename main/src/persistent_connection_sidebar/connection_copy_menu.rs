@@ -1,8 +1,8 @@
 use gpui::{ClipboardItem, Entity, Window};
-use gpui_component::{menu::{PopupMenu, PopupMenuItem}};
-use one_assets::IconName;
+use gpui_component::menu::{PopupMenu, PopupMenuItem};
 #[cfg(not(test))]
 use gpui_component::{WindowExt, notification::Notification};
+use one_assets::IconName;
 use one_core::storage::StoredConnection;
 use rust_i18n::t;
 
@@ -136,6 +136,7 @@ mod tests {
         StoredConnection::new_ssh(
             "SSH".to_string(),
             SshParams {
+                remote_file: None,
                 sftp_default_directory: None,
                 disabled_jump_server: None,
                 sftp_account: None,

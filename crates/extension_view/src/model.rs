@@ -108,6 +108,8 @@ pub struct MarketplaceEntry {
     pub fallback_asset_url: Option<String>,
     pub manifest_url: Option<String>,
     pub manifest_fallback_url: Option<String>,
+    /// 详情页截图 URL 列表（已解析为绝对地址，可为空）。
+    pub screenshots: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

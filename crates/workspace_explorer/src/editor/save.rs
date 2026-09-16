@@ -1,5 +1,4 @@
 use super::{DocumentKey, SaveDocument, WorkspaceEditor, WorkspaceEditorEvent};
-use crate::file_system::save_file;
 use gpui::{AppContext as _, AsyncApp, Context, WeakEntity, Window};
 use gpui_component::{WindowExt as _, notification::Notification};
 use one_ui::StatusPresentation;
@@ -33,7 +32,8 @@ impl WorkspaceEditor {
         };
         let task_path = attempt.outcome.path.clone();
         let task_text = attempt.outcome.text.clone();
-        let task = cx.background_spawn(async move { save_file(&task_path, &task_text) });
+        let backend = self.backend.clone();
+        let task = cx.background_spawn(async move { backend.save_file(&task_path, &task_text) });
         let entity = cx.entity().downgrade();
         let window_handle = window.window_handle();
         cx.spawn(async move |_: WeakEntity<Self>, cx: &mut AsyncApp| {

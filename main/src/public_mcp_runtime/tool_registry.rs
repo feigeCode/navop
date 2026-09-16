@@ -921,6 +921,7 @@ mod tests {
 
     fn ssh_params(host: &str) -> SshParams {
         SshParams {
+                remote_file: None,
             sftp_default_directory: None,
             disabled_jump_server: None,
             sftp_account: None,

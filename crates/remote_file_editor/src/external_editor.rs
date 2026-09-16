@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -12,8 +11,7 @@ use gpui_component::{WindowExt as _, notification::Notification};
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher as _};
 use one_core::{gpui_tokio::Tokio, settings::AppSettings};
 use rust_i18n::t;
-use sftp::{RusshSftpClient, SftpClient};
-use tokio::sync::Mutex;
+use sftp::{RemoteFileClient, SharedRemoteFileClient};
 
 use crate::external_edit_controller::{
     ExternalEditController, ExternalEditControllerConfig, ExternalEditSessionKey,
@@ -31,7 +29,7 @@ static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 pub struct ExternalEditorOpenRequest {
     pub remote_path: String,
     pub editor_key: String,
-    pub client: Arc<Mutex<RusshSftpClient>>,
+    pub client: SharedRemoteFileClient,
     pub on_remote_changed: RemoteMutationCallback,
 }
 
@@ -41,7 +39,7 @@ pub(crate) struct ExternalEditLaunch {
     pub(crate) program: String,
     pub(crate) launch_mode: RemoteFileEditorLaunchMode,
     pub(crate) templates: Vec<String>,
-    pub(crate) client: Arc<Mutex<RusshSftpClient>>,
+    pub(crate) client: SharedRemoteFileClient,
     pub(crate) check_conflict: bool,
     pub(crate) auto_upload: bool,
     pub(crate) on_remote_changed: RemoteMutationCallback,
@@ -231,7 +229,7 @@ impl ExternalEditLaunch {
 
 fn prepare_external_edit<T>(
     remote_path: String,
-    client: Arc<Mutex<RusshSftpClient>>,
+    client: SharedRemoteFileClient,
     cx: &Context<T>,
 ) -> gpui::Task<Result<PreparedExternalEdit>> {
     let local_path = session_temp_file(

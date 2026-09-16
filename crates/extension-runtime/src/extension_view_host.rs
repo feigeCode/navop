@@ -99,6 +99,7 @@ impl extension_view::ExtensionViewHost for MainExtensionViewHost {
             fallback_asset_url: None,
             manifest_url: None,
             manifest_fallback_url: None,
+            screenshots: Vec::new(),
         };
         review_downloaded_extension(staging, kind, entry)
     }
@@ -329,7 +330,7 @@ fn to_view_summary(summary: host_extension::ExtensionSummary) -> extension_view:
     .with_shell_views(shell_views)
 }
 
-fn to_view_entry(entry: host_downloader::MarketplaceEntry) -> extension_view::MarketplaceEntry {
+fn to_view_entry(mut entry: host_downloader::MarketplaceEntry) -> extension_view::MarketplaceEntry {
     let host_compatible = entry.check_host_compatibility().is_ok();
     let asset_url = entry.asset_url().unwrap_or_default();
     let fallback_asset_url = entry.fallback_asset_url();
@@ -337,6 +338,7 @@ fn to_view_entry(entry: host_downloader::MarketplaceEntry) -> extension_view::Ma
     let manifest_urls = entry.extension_manifest_urls();
     let manifest_url = manifest_urls.first().cloned();
     let manifest_fallback_url = manifest_urls.get(1).cloned();
+    let screenshots = std::mem::take(&mut entry.screenshots);
     extension_view::MarketplaceEntry {
         id: entry.id,
         kind: to_view_kind(entry.kind),
@@ -352,6 +354,7 @@ fn to_view_entry(entry: host_downloader::MarketplaceEntry) -> extension_view::Ma
         fallback_asset_url,
         manifest_url,
         manifest_fallback_url,
+        screenshots,
     }
 }
 

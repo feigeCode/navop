@@ -11,9 +11,8 @@ use gpui_component::{WindowExt as _, notification::Notification};
 use notify::RecommendedWatcher;
 use one_core::gpui_tokio::Tokio;
 use rust_i18n::t;
-use sftp::{RusshSftpClient, SftpClient};
+use sftp::{RemoteFileClient, SharedRemoteFileClient};
 use smol::Timer;
-use tokio::sync::Mutex;
 
 use crate::external_session::snapshot_from_metadata;
 use crate::{RemoteFileSnapshot, RemoteMutationCallback, UploadDecision, decide_upload};
@@ -45,7 +44,7 @@ struct SnapshotCompletion {
 }
 
 pub(crate) struct ExternalEditController {
-    client: Arc<Mutex<RusshSftpClient>>,
+    client: SharedRemoteFileClient,
     remote_path: String,
     local_path: PathBuf,
     snapshot: RemoteFileSnapshot,
@@ -59,7 +58,7 @@ pub(crate) struct ExternalEditController {
 }
 
 pub(crate) struct ExternalEditControllerConfig {
-    pub(crate) client: Arc<Mutex<RusshSftpClient>>,
+    pub(crate) client: SharedRemoteFileClient,
     pub(crate) remote_path: String,
     pub(crate) local_path: PathBuf,
     pub(crate) snapshot: RemoteFileSnapshot,
@@ -304,10 +303,7 @@ pub(crate) struct ExternalEditSessionKey {
 }
 
 impl ExternalEditSessionKey {
-    pub(crate) fn new(
-        client: &Arc<Mutex<RusshSftpClient>>,
-        remote_path: impl Into<String>,
-    ) -> Self {
+    pub(crate) fn new(client: &SharedRemoteFileClient, remote_path: impl Into<String>) -> Self {
         Self {
             client_id: Arc::as_ptr(client) as usize,
             remote_path: remote_path.into(),

@@ -1,4 +1,5 @@
 use super::*;
+use gpui::InteractiveElement;
 
 impl TerminalView {
     pub(super) fn render_history_prompt_overlay(
@@ -28,7 +29,7 @@ impl TerminalView {
 
         let selected_index = self.history_prompt.selected_index();
         let search_query = self.history_prompt.query_input().to_string();
-        let view = cx.entity().clone();
+        let view = cx.entity();
         let overlay_bounds = history_prompt_overlay_bounds(self.terminal_bounds);
         let ghost_left = self.cell_width * cursor_col as f32;
         let ghost_top = self.line_height * cursor_line as f32;
@@ -50,6 +51,7 @@ impl TerminalView {
                 .filter(|suffix| !suffix.is_empty())
                 .map(str::to_string)
         };
+        let list_max_h = history_prompt_match_list_max_height(search_mode);
 
         Some(
             div()
@@ -76,6 +78,7 @@ impl TerminalView {
                         .top(dropdown_origin.y)
                         .min_w(px(HISTORY_PROMPT_DROPDOWN_MIN_WIDTH))
                         .max_w(px(HISTORY_PROMPT_DROPDOWN_MAX_WIDTH))
+                        .max_h(px(HISTORY_PROMPT_DROPDOWN_MAX_HEIGHT))
                         .flex()
                         .flex_col()
                         .gap_1()
@@ -97,67 +100,103 @@ impl TerminalView {
                                     .child(format!("history search: {}", search_query)),
                             )
                         })
-                        .children(matches.into_iter().enumerate().map(|(index, command)| {
-                            let active = selected_index == Some(index);
-                            div()
-                                .on_mouse_move({
-                                    let view = view.clone();
-                                    move |_, _, cx| {
-                                        cx.stop_propagation();
-                                        view.update(cx, |this, cx| {
-                                            this.select_history_prompt_match(index, cx);
-                                        });
-                                    }
-                                })
-                                .on_mouse_down(MouseButton::Left, {
-                                    let view = view.clone();
-                                    move |_, _, cx| {
-                                        cx.stop_propagation();
-                                        view.update(cx, |this, cx| {
-                                            this.select_history_prompt_match(index, cx);
-                                            let _ = this.try_accept_history_prompt(cx);
-                                        });
-                                    }
-                                })
-                                .cursor_pointer()
-                                .px_3()
-                                .py_1p5()
-                                .rounded_sm()
-                                .bg(if active {
-                                    history_prompt_active_background(self.current_theme.foreground)
-                                } else {
-                                    transparent_black()
-                                })
-                                .text_color(if active {
-                                    self.current_theme.foreground
-                                } else {
-                                    self.current_theme.foreground.opacity(0.8)
-                                })
-                                .text_size(px(12.0))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap_2()
-                                        .child(Icon::new(IconName::Calendar).xsmall().text_color(
-                                            self.current_theme.foreground.opacity(if active {
-                                                0.85
+                        .child(
+                            v_flex()
+                                .id("history-prompt-match-scroll")
+                                .gap_1()
+                                .max_h(px(list_max_h))
+                                .track_scroll(&self.history_prompt_scroll_handle)
+                                .overflow_y_scroll()
+                                .children(matches.into_iter().enumerate().map(
+                                    |(index, command)| {
+                                        let active = selected_index == Some(index);
+                                        div()
+                                            .on_mouse_move({
+                                                let view = view.clone();
+                                                move |_, _, cx| {
+                                                    cx.stop_propagation();
+                                                    view.update(cx, |this, cx| {
+                                                        this.select_history_prompt_match(index, cx);
+                                                    });
+                                                }
+                                            })
+                                            .on_mouse_down(MouseButton::Left, {
+                                                let view = view.clone();
+                                                move |_, _, cx| {
+                                                    cx.stop_propagation();
+                                                    view.update(cx, |this, cx| {
+                                                        this.select_history_prompt_match(index, cx);
+                                                        let _ = this.try_accept_history_prompt(cx);
+                                                    });
+                                                }
+                                            })
+                                            .cursor_pointer()
+                                            .px_3()
+                                            .py_1p5()
+                                            .rounded_sm()
+                                            .bg(if active {
+                                                history_prompt_active_background(
+                                                    self.current_theme.foreground,
+                                                )
                                             } else {
-                                                0.55
-                                            }),
-                                        ))
-                                        .child(
-                                            div()
-                                                .flex_1()
-                                                .overflow_x_hidden()
-                                                .text_ellipsis()
-                                                .whitespace_nowrap()
-                                                .child(command),
-                                        ),
-                                )
-                        })),
+                                                transparent_black()
+                                            })
+                                            .text_color(if active {
+                                                self.current_theme.foreground
+                                            } else {
+                                                self.current_theme.foreground.opacity(0.8)
+                                            })
+                                            .text_size(px(12.0))
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_2()
+                                                    .child(
+                                                        Icon::new(IconName::Calendar)
+                                                            .xsmall()
+                                                            .text_color(
+                                                                self.current_theme
+                                                                    .foreground
+                                                                    .opacity(if active {
+                                                                        0.85
+                                                                    } else {
+                                                                        0.55
+                                                                    }),
+                                                            ),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .flex_1()
+                                                            .overflow_x_hidden()
+                                                            .text_ellipsis()
+                                                            .whitespace_nowrap()
+                                                            .child(command),
+                                                    ),
+                                            )
+                                    },
+                                )),
+                        ),
                 )
                 .into_any_element(),
         )
     }
+
+    pub(super) fn scroll_history_prompt_selection_into_view(&self) {
+        if let Some(index) = self.history_prompt.selected_index() {
+            self.history_prompt_scroll_handle.scroll_to_item(index);
+        }
+    }
+}
+
+fn history_prompt_match_list_max_height(search_mode: bool) -> f32 {
+    let header = if search_mode {
+        HISTORY_PROMPT_DROPDOWN_SEARCH_HEADER_HEIGHT + HISTORY_PROMPT_DROPDOWN_ROW_GAP
+    } else {
+        0.0
+    };
+    HISTORY_PROMPT_DROPDOWN_MAX_HEIGHT
+        - HISTORY_PROMPT_DROPDOWN_CONTAINER_PADDING_Y
+        - HISTORY_PROMPT_DROPDOWN_BORDER_Y
+        - header
 }

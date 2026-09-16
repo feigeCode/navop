@@ -123,6 +123,13 @@ impl TerminalView {
                     TerminalActionOutcome::Noop
                 }
             }
+            PendingTerminalAction::ClearSelectionAfterCopy => {
+                if term.selection.take().is_some() {
+                    TerminalActionOutcome::Notify
+                } else {
+                    TerminalActionOutcome::Noop
+                }
+            }
             PendingTerminalAction::SelectAll => {
                 let start = AlacPoint::new(Line(-(term.history_size() as i32)), Column(0));
                 let end = AlacPoint::new(

@@ -1,4 +1,5 @@
-//! 横向平铺的连接类型筛选条。容器与 chip 在 prepaint 阶段实测，窗口 Resize
+//! 横向平铺的连接类型筛选条。筛选项来自 `connection_type_menu::filter_targets`
+//! （All + 内置类型 + 扩展贡献），容器与 chip 在 prepaint 阶段实测，窗口 Resize
 //! 后自动重算；溢出的类型进入最右侧的「更多」菜单。
 
 use super::*;
@@ -19,11 +20,11 @@ const SELECTED_BORDER_OPACITY: f32 = 0.55;
 pub(crate) struct ConnectionTypeFilterBar {
     /// 容器实测可用宽度；`None` 表示尚未测量。
     available_width: Option<Pixels>,
-    /// 各类型 chip 的实测宽度，与 `ConnectionType::all()` 顺序一一对应。
+    /// 各 chip 的实测宽度，与 `filter_targets` 的顺序一一对应。
     chip_widths: Vec<Option<Pixels>>,
     /// 「更多」按钮的实测宽度。
     more_width: Option<Pixels>,
-    /// 当前应平铺展示的类型数量（`ConnectionType::all()` 的前 N 项）。
+    /// 当前应平铺展示的筛选项数量（`filter_targets` 的前 N 项）。
     visible_count: usize,
     /// 测量缓存对应的标签与 rem 尺寸；语言切换或缩放变化时整表重测。
     measured_labels: Vec<String>,
@@ -163,22 +164,19 @@ impl HomePage {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let kinds = ConnectionType::all();
-        let labels: Vec<String> = kinds
-            .iter()
-            .map(|kind| connection_type_label(*kind))
-            .collect();
+        let items = crate::connection_type_menu::filter_targets(cx);
+        let labels: Vec<String> = items.iter().map(ConnectionFilter::label).collect();
         let rem_size = window.rem_size();
         let stale = self
             .connection_type_filter
             .measurement_stale(&labels, rem_size);
-        let plan = self.connection_type_filter.plan(stale, kinds.len());
+        let plan = self.connection_type_filter.plan(stale, items.len());
         let mut chips: Vec<AnyElement> = Vec::with_capacity(plan.visible_count + 1);
-        for kind in kinds.iter().take(plan.visible_count) {
-            chips.push(self.render_connection_type_chip(*kind, cx));
+        for (index, filter) in items.iter().take(plan.visible_count).enumerate() {
+            chips.push(self.render_connection_type_chip(filter, index, cx));
         }
         if plan.show_more {
-            chips.push(self.render_connection_type_more(&kinds, plan.visible_count, cx));
+            chips.push(self.render_connection_type_more(&items, plan.visible_count, cx));
         }
         let view = cx.entity();
         let row_view = view.clone();
@@ -223,32 +221,37 @@ impl HomePage {
     /// 所有 chip 都保留 1px 胶囊边框，避免选中后宽度变化破坏测量缓存。
     fn render_connection_type_chip(
         &self,
-        kind: ConnectionType,
+        filter: &ConnectionFilter,
+        index: usize,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let selected = self.selected_filter == kind;
-        Button::new(SharedString::from(format!("home-type-filter-{kind}")))
+        let selected = self.selected_filter == *filter;
+        let label = filter.label();
+        let activate = filter.clone();
+        Button::new(SharedString::from(format!("home-type-filter-{index}")))
             .small()
             .rounded(cx.theme().radius_full())
             .outline()
-            .icon(connection_type_filter_icon(kind))
-            .label(connection_type_label(kind))
+            .icon(connection_filter_icon(filter))
+            .label(label)
             .selected(selected)
             .when(selected, |button| selected_filter_style(button, cx))
-            .on_click(cx.listener(move |home, _, _, cx| home.set_selected_filter(kind, cx)))
+            .on_click(cx.listener(move |home, _, _, cx| {
+                home.set_selected_filter(activate.clone(), cx)
+            }))
             .into_any_element()
     }
 
-    /// 「更多」：仅收纳当前放不下的类型；选中项被收纳时按钮保持选中态。
+    /// 「更多」：仅收纳当前放不下的筛选项；选中项被收纳时按钮保持选中态。
     fn render_connection_type_more(
         &self,
-        kinds: &[ConnectionType],
+        items: &[ConnectionFilter],
         visible_count: usize,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let selected = self.selected_filter;
-        let hidden: Vec<ConnectionType> = kinds.iter().skip(visible_count).copied().collect();
-        let hidden_selected = hidden.contains(&selected);
+        let selected = self.selected_filter.clone();
+        let hidden: Vec<ConnectionFilter> = items.iter().skip(visible_count).cloned().collect();
+        let hidden_selected = hidden.iter().any(|filter| *filter == selected);
         let view = cx.entity();
         Button::new("home-type-filter-more")
             .small()
@@ -262,10 +265,10 @@ impl HomePage {
             .tooltip(t!("Home.connection_filter"))
             .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
                 let view = view.clone();
-                crate::connection_type_menu::build_filter_menu(
+                crate::connection_type_menu::build_filter_menu_for(
                     menu,
                     &hidden,
-                    selected,
+                    &selected,
                     std::rc::Rc::new(move |filter, _, cx| {
                         view.update(cx, |home, cx| home.set_selected_filter(filter, cx));
                     }),
@@ -285,11 +288,15 @@ fn selected_filter_style(button: Button, cx: &App) -> Button {
 }
 
 /// 筛选 chip 的统一线稿图标；「全部类型」沿用工具栏的 Apps 网格图标。
-fn connection_type_filter_icon(kind: ConnectionType) -> Icon {
-    if kind == ConnectionType::All {
-        IconName::Apps.mono().with_size(IconSize::Small)
-    } else {
-        connection_type_navigation_icon(kind, ConnectionVisualSize::Tree)
+/// 内置类型沿用类型图标，扩展筛选用通用漏斗，与菜单中的扩展项呼应。
+fn connection_filter_icon(filter: &ConnectionFilter) -> Icon {
+    match filter {
+        ConnectionFilter::All => IconName::Apps.mono().with_size(IconSize::Small),
+        ConnectionFilter::Builtin(kind) => {
+            connection_type_navigation_icon(*kind, ConnectionVisualSize::Tree)
+                .with_size(IconSize::Small)
+        }
+        ConnectionFilter::Extension(_) => IconName::Filter.mono().with_size(IconSize::Small),
     }
 }
 

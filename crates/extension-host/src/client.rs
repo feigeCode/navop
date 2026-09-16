@@ -57,10 +57,13 @@ impl RequestOptions {
 }
 
 /// 可等待的取消令牌——多份 clone 共享状态并立即唤醒等待者。
+///
+/// 通过 [`Self::child`] 派生的子令牌随父令牌一起取消，但子令牌取消不影响父令牌。
 #[derive(Debug, Clone)]
 pub struct CancellationToken {
     flag: Arc<AtomicBool>,
     notify: Arc<Notify>,
+    parent: Option<Arc<CancellationToken>>,
 }
 
 impl Default for CancellationToken {
@@ -68,6 +71,7 @@ impl Default for CancellationToken {
         Self {
             flag: Arc::new(AtomicBool::new(false)),
             notify: Arc::new(Notify::new()),
+            parent: None,
         }
     }
 }
@@ -75,6 +79,14 @@ impl Default for CancellationToken {
 impl CancellationToken {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// 派生子令牌:父取消时子随之取消;子取消只影响自身。
+    pub fn child(&self) -> Self {
+        Self {
+            parent: Some(Arc::new(self.clone())),
+            ..Self::default()
+        }
     }
 
     /// 触发取消;所有 clone 立即可见。
@@ -85,15 +97,27 @@ impl CancellationToken {
     }
 
     pub fn is_cancelled(&self) -> bool {
-        self.flag.load(Ordering::SeqCst)
+        self.flag.load(Ordering::SeqCst) || self.parent.as_ref().is_some_and(|p| p.is_cancelled())
     }
 
-    pub async fn cancelled(&self) {
+    pub fn cancelled(&self) -> BoxFuture<'_, ()> {
+        Box::pin(async move {
+            match &self.parent {
+                Some(parent) => tokio::select! {
+                    _ = self.own_cancelled() => {}
+                    _ = parent.cancelled() => {}
+                },
+                None => self.own_cancelled().await,
+            }
+        })
+    }
+
+    async fn own_cancelled(&self) {
         loop {
             let notified = self.notify.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
-            if self.is_cancelled() {
+            if self.flag.load(Ordering::SeqCst) {
                 return;
             }
             notified.await;
@@ -510,6 +534,29 @@ mod tests {
     use extension_protocol::{conn::SecretRef, host};
     use tokio::io::duplex;
     use tokio::sync::mpsc;
+
+    #[tokio::test]
+    async fn child_token_follows_parent_but_not_the_reverse() {
+        let parent = CancellationToken::new();
+        let child = parent.child();
+        let sibling = parent.child();
+
+        child.cancel();
+        assert!(child.is_cancelled());
+        assert!(!parent.is_cancelled());
+        assert!(!sibling.is_cancelled());
+
+        let waiter = tokio::spawn({
+            let sibling = sibling.clone();
+            async move { sibling.cancelled().await }
+        });
+        parent.cancel();
+        assert!(sibling.is_cancelled());
+        tokio::time::timeout(Duration::from_secs(1), waiter)
+            .await
+            .expect("child waiter must wake when parent cancels")
+            .unwrap();
+    }
 
     async fn fake_extension_with_reverse_request(
         mut reader: tokio::io::ReadHalf<tokio::io::DuplexStream>,

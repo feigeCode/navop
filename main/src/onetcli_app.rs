@@ -6,8 +6,8 @@ use crate::persistent_connection_sidebar::{
 };
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext, AsyncApp, Context, Entity, ExternalPaths, InteractiveElement,
-    IntoElement, KeyBinding, Keystroke, ParentElement, Render, Styled, Task, Window, actions, div,
+    App, AppContext, AsyncApp, Context, Entity, ExternalPaths, InteractiveElement, IntoElement,
+    KeyBinding, Keystroke, ParentElement, Render, Styled, Task, Window, actions, div,
 };
 use gpui_component::{WindowExt, dialog::DialogButtonProps, kbd::Kbd, notification::Notification};
 use one_core::gpui_tokio::{JoinError, Tokio};
@@ -1368,7 +1368,11 @@ impl OnetCliApp {
             {
                 container = container
                     .with_macos_titlebar_inset(true)
-                    .with_left_padding(one_ui::theme_geometry().layout.macos_title_bar_content_padding)
+                    .with_left_padding(
+                        one_ui::theme_geometry()
+                            .layout
+                            .macos_title_bar_content_padding,
+                    )
                     .with_top_padding(px(4.0));
             }
 
@@ -1420,8 +1424,8 @@ impl OnetCliApp {
                 cx,
             )
         });
-        home_page.update(cx, |home, _| {
-            home.set_connection_sidebar(connection_sidebar.clone())
+        home_page.update(cx, |home, cx| {
+            home.set_connection_sidebar(connection_sidebar.clone(), cx)
         });
         cx.subscribe(
             &connection_sidebar,
@@ -1766,8 +1770,8 @@ mod tests {
             "浮层连接树仅应在自动隐藏开启时渲染，避免遮挡终端"
         );
         assert!(
-            render.contains("sidebar_expanded && !auto_hide_tree"),
-            "非自动隐藏时应渲染并排的分割面板"
+            render.contains("sidebar_expanded && (!auto_hide_tree || home_has_navigation_sidebar)"),
+            "非自动隐藏或全局导航布局时应渲染并排的分割面板"
         );
     }
 
@@ -2270,27 +2274,37 @@ impl Render for OnetCliApp {
         let dialog_layer = Root::render_dialog_layer(window, cx);
         let notification_layer = Root::render_notification_layer(window, cx);
         let main_content = self.tab_container.clone();
-        // 主页自带连接管理视图，常驻侧栏与收起/展开按钮只在非主页显示。
+        // 全局导航布局仍需要 TabContainer 的收起/展开按钮；其他主页布局不重复显示。
         // home 是 pinned tab，active_tab() 只查普通 tabs，必须用 pinned 通道判断。
         let home_active = self
             .tab_container
             .read(cx)
             .is_pinned_tab_active_by_id("home");
-        let sidebar_expanded = !home_active && self.connection_sidebar.read(cx).is_expanded();
         let auto_hide_tree = self.connection_sidebar.read(cx).is_auto_hide_tree();
+        let home_has_navigation_sidebar = home_active
+            && cx
+                .try_global::<GlobalHomePage>()
+                .is_some_and(|global| global.home_page.read(cx).uses_global_navigation_layout());
+        let sidebar_expanded = (!home_active || home_has_navigation_sidebar)
+            && self.connection_sidebar.read(cx).is_expanded();
         self.tab_container.update(cx, |tabs, cx| {
             tabs.set_navigation_sidebar_toggle(
-                (!home_active).then(|| self.connection_sidebar.read(cx).is_expanded()),
+                if home_has_navigation_sidebar {
+                    Some(self.connection_sidebar.read(cx).is_expanded())
+                } else {
+                    (!home_active).then(|| self.connection_sidebar.read(cx).is_expanded())
+                },
                 cx,
             );
         });
-        let docked_tree = sidebar_expanded && !auto_hide_tree;
+        // 全局导航布局把连接树固定到 TabContainer 左侧；不受自动隐藏设置影响。
+        let docked_tree = sidebar_expanded && (!auto_hide_tree || home_has_navigation_sidebar);
         let docked_tree_element = docked_tree.then(|| {
             self.connection_sidebar.update(cx, |sidebar, cx| {
                 sidebar.render_docked_connection_tree(window, cx)
             })
         });
-        let floating_tree = (sidebar_expanded && auto_hide_tree).then(|| {
+        let floating_tree = (sidebar_expanded && auto_hide_tree && !home_has_navigation_sidebar).then(|| {
             self.connection_sidebar
                 .update(cx, |sidebar, cx| sidebar.render_floating_tree(window, cx))
         });
@@ -2298,7 +2312,9 @@ impl Render for OnetCliApp {
         #[cfg(target_os = "macos")]
         if sidebar_expanded {
             let tab_bar_left_padding = if auto_hide_tree {
-                one_ui::theme_geometry().layout.macos_title_bar_content_padding
+                one_ui::theme_geometry()
+                    .layout
+                    .macos_title_bar_content_padding
             } else {
                 px(0.0)
             };
@@ -2362,8 +2378,8 @@ impl Render for OnetCliApp {
                             .child(main_content),
                     )
             })
-            .when(sidebar_expanded && auto_hide_tree, |this| {
-                this.child(floating_tree.unwrap())
+            .when(sidebar_expanded && auto_hide_tree && !home_has_navigation_sidebar, |this| {
+                this.when_some(floating_tree, |this, tree| this.child(tree))
             })
             .children(sheet_layer)
             .children(dialog_layer)

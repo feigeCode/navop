@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
-use objc2::rc::{autoreleasepool, Retained};
+use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::ProtocolObject;
 use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString, NSPasteboardWriting};
-use objc2_foundation::{NSArray, NSData, NSURL, NSString};
+use objc2_foundation::{NSArray, NSData, NSString, NSURL};
 
 /// Writes validated staging paths from a GPUI foreground callback.
 ///

@@ -107,7 +107,10 @@ fn visible_count_grows_back_when_the_container_widens() {
 #[test]
 fn filter_bar_renders_every_type_with_a_measured_overflow_menu() {
     let source = include_str!("connection_type_filter_bar.rs");
-    assert!(source.contains("ConnectionType::all()"));
+    // 筛选项来自共享清单：All + 内置类型 + 扩展贡献。
+    assert!(source.contains("filter_targets"));
+    assert!(source.contains("ConnectionFilter::Builtin"));
+    assert!(source.contains("ConnectionFilter::Extension"));
     assert!(source.contains("connection_type_navigation_icon"));
     assert!(source.contains("IconName::Apps"));
     assert!(source.contains(".rounded(cx.theme().radius_full())"));

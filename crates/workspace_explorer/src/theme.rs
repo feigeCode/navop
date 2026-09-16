@@ -65,7 +65,7 @@ impl WorkspaceTheme {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn highlight_theme_follows_workspace_background() {
         let dark = WorkspaceTheme {

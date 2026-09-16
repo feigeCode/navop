@@ -3,10 +3,11 @@ use std::collections::HashMap;
 use crate::storage::traits::Repository;
 use crate::storage::{
     ConnectionType, CredentialEntry, CredentialReference, DatabaseType, DbConnectionConfig,
-    JumpServerConfig, MongoDBParams, MongoDriverVariant, ProxyConfig, ProxyType, RedisMode,
-    RedisParams, RedisSentinelConfig, RemoteDesktopBackendPreference, RemoteDesktopParams,
-    RemoteDesktopProtocol, SshAccountExpect, SshAuthMethod, SshParams, StoredConnection,
-    TelnetLoginStep, TelnetParams, TerminalExpectSend,
+    FtpParams, JumpServerConfig, MongoDBParams, MongoDriverVariant, ProxyConfig, ProxyType,
+    RedisMode, RedisParams, RedisSentinelConfig, RemoteDesktopBackendPreference,
+    RemoteDesktopParams, RemoteDesktopProtocol, RemoteFileParams, RemoteFileProtocol,
+    SshAccountExpect, SshAuthMethod, SshParams, StoredConnection, TelnetLoginStep, TelnetParams,
+    TerminalExpectSend,
 };
 
 use super::with_master_key;
@@ -24,6 +25,7 @@ fn password_reference(id: i64) -> CredentialReference {
 
 fn ssh_params(reference: Option<CredentialReference>) -> SshParams {
     SshParams {
+        remote_file: None,
         sftp_default_directory: None,
         disabled_jump_server: None,
         sftp_account: None,
@@ -490,5 +492,118 @@ fn resolve_connection_returns_a_temporary_clone_and_rejects_conflicting_ssh_fiel
             .resolve_ssh(conflicting)
             .expect_err("password and private key cannot both be selected");
         assert!(error.to_string().contains("password and private key"));
+    });
+}
+
+fn ftp_remote_file(reference: Option<CredentialReference>) -> RemoteFileParams {
+    RemoteFileParams {
+        protocol: RemoteFileProtocol::Ftp,
+        ftp: Some(FtpParams {
+            host: "ftp.example.com".to_string(),
+            port: 21,
+            username: "manual-ftp-user".to_string(),
+            password: "manual-ftp-password".to_string(),
+            credential_reference: reference,
+            prompt_username: None,
+            prompt_password: None,
+            passive_mode: true,
+            use_tls: false,
+            connect_timeout: None,
+        }),
+    }
+}
+
+#[test]
+fn ftp_credential_reference_resolves_username_and_password() {
+    with_master_key(|| {
+        let (_temp, _connection, repository) = super::test_repository();
+        let credential_id = insert_password_credential(&repository);
+
+        // SSH 主凭据无引用，仅 FTP 侧持有引用。
+        let mut params = ssh_params(None);
+        params.remote_file = Some(ftp_remote_file(Some(password_reference(credential_id))));
+
+        let resolved = repository.resolve_ssh(params).expect("resolve ssh");
+
+        assert_eq!(resolved.username, "manual-user");
+        let ftp = resolved.ftp_params().expect("ftp params present");
+        assert_eq!(ftp.username, "vault-user");
+        assert_eq!(ftp.password, "vault-password");
+        // 凭据引用保留在运行时副本中，供上层判断，但明文不应回写持久化。
+        assert!(ftp.credential_reference.is_some());
+    });
+}
+
+#[test]
+fn old_ssh_json_defaults_to_sftp() {
+    with_master_key(|| {
+        let (_temp, _connection, repository) = super::test_repository();
+        let params = ssh_params(None);
+        let json = serde_json::to_string(&params).expect("serialize legacy ssh params");
+        assert!(!json.contains("remote_file"));
+
+        let parsed: SshParams = serde_json::from_str(&json).expect("deserialize legacy params");
+        assert_eq!(parsed.remote_file_protocol(), RemoteFileProtocol::Sftp);
+        assert!(parsed.ftp_params().is_none());
+
+        // resolve_connection 对旧配置保持 SFTP 语义且不报错。
+        let connection = StoredConnection::new_ssh("legacy".to_string(), parsed, None);
+        let resolved = repository
+            .resolve_connection(&connection)
+            .expect("resolve legacy connection");
+        assert_eq!(
+            resolved
+                .remote_file_protocol()
+                .expect("remote file protocol"),
+            RemoteFileProtocol::Sftp
+        );
+    });
+}
+
+#[test]
+fn ftp_remote_file_params_roundtrip() {
+    with_master_key(|| {
+        let (_temp, _connection, repository) = super::test_repository();
+        let credential_id = insert_password_credential(&repository);
+        let mut params = ssh_params(None);
+        params.remote_file = Some(ftp_remote_file(Some(password_reference(credential_id))));
+
+        let connection = StoredConnection::new_ssh("ftp-file".to_string(), params, None);
+        let original_params = connection.params.clone();
+
+        let resolved = repository
+            .resolve_connection(&connection)
+            .expect("resolve ftp file connection");
+
+        // 原始连接参数不被改动（明文密码不回写）。
+        assert_eq!(original_params, connection.params);
+        assert_ne!(original_params, resolved.params);
+
+        let resolved_ftp = resolved
+            .to_ssh_params()
+            .expect("parse resolved ssh params")
+            .ftp_params()
+            .expect("ftp params present")
+            .clone();
+        assert_eq!(resolved_ftp.username, "vault-user");
+        assert_eq!(resolved_ftp.password, "vault-password");
+        assert_eq!(resolved_ftp.host, "ftp.example.com");
+    });
+}
+
+#[test]
+fn ftp_protocol_without_ftp_params_is_rejected() {
+    with_master_key(|| {
+        let (_temp, _connection, repository) = super::test_repository();
+        let mut params = ssh_params(None);
+        params.remote_file = Some(RemoteFileParams {
+            protocol: RemoteFileProtocol::Ftp,
+            ftp: None,
+        });
+
+        let error = repository
+            .resolve_ssh(params)
+            .expect_err("ftp protocol requires ftp params");
+        assert!(error.to_string().contains("ftp params are missing"));
     });
 }

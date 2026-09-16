@@ -17,9 +17,11 @@ use gpui::{
     InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString, Styled as _,
     Task, Window, div, prelude::FluentBuilder,
 };
-use gpui_component::{ActiveTheme as _, Icon, Sizable as _, Size, button::Button, spinner::Spinner, v_flex};
-use one_assets::IconName;
+use gpui_component::{
+    ActiveTheme as _, Icon, Sizable as _, Size, button::Button, spinner::Spinner, v_flex,
+};
 use loader::load_er_diagram;
+use one_assets::IconName;
 use one_core::tab_container::{TabContainer, TabContent, TabContentEvent, TabItem};
 use rust_i18n::t;
 

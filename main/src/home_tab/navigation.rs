@@ -20,6 +20,7 @@ impl HomePage {
             }
             NavigationApplication::KnownHosts => self.add_known_hosts_tab(window, cx),
             NavigationApplication::Extensions => self.add_extensions_tab(window, cx),
+            NavigationApplication::Settings => self.add_settings_tab(window, cx),
         }
     }
 }

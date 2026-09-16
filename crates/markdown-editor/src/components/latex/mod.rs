@@ -219,8 +219,7 @@ mod tests {
 
     #[test]
     fn renders_basic_formula_svg() {
-        let svg =
-            render_latex_to_svg("\\frac{1}{2}", rgba(0xffffffff).into(), 18.0).expect("svg");
+        let svg = render_latex_to_svg("\\frac{1}{2}", rgba(0xffffffff).into(), 18.0).expect("svg");
         assert!(svg.contains("<svg"));
         assert!(svg.contains("</svg>"));
     }

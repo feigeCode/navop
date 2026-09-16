@@ -1,10 +1,16 @@
 use gpui::prelude::FluentBuilder as _;
-use gpui::{AnyElement, IntoElement, ParentElement, Styled, div, px};
-use gpui_component::{ActiveTheme, Icon, Sizable, Size, button::{Button, ButtonVariants as _}};
+use gpui::{AnyElement, Hsla, IntoElement, ParentElement, Styled, div, px};
+use gpui_component::{
+    ActiveTheme, Icon, Sizable, Size,
+    button::{Button, ButtonVariants as _},
+    h_flex,
+};
 use one_assets::IconName;
+use one_core::storage::{ConnectionType, StoredConnection};
 use rust_i18n::t;
 
 use super::SidebarPalette;
+use crate::connection_visuals::connection_type_display_label;
 use crate::home::home_workspace_filter::{WorkspaceDialogConfig, show_workspace_dialog};
 use crate::home_tab::connection_team_badge;
 
@@ -90,6 +96,30 @@ pub(super) fn tree_label(label: String) -> AnyElement {
         .into_any_element()
 }
 
+/// 名称 + 类型 tag 同一行：名称可截断，tag 紧跟其后，不会被推到行尾。
+pub(super) fn tree_connection_name_with_type_tag(
+    name: String,
+    type_tag: Option<AnyElement>,
+) -> AnyElement {
+    h_flex()
+        .flex_1()
+        .min_w_0()
+        .gap_1p5()
+        .items_center()
+        .child(
+            div()
+                .min_w_0()
+                .flex_1()
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_ellipsis()
+                .text_sm()
+                .child(name),
+        )
+        .when_some(type_tag, |row, tag| row.child(tag))
+        .into_any_element()
+}
+
 pub(super) fn tree_count(count: usize, palette: SidebarPalette) -> AnyElement {
     div()
         .px_1p5()
@@ -116,8 +146,63 @@ pub(super) fn tree_connection_icon_slot(icon: Icon, palette: SidebarPalette) -> 
         .into_any_element()
 }
 
+/// 连接类型小标签：类型色圆点 + 前景色文案 + muted 底。
+/// 文案始终用 foreground，避免 accent/灰字在侧栏里看不清。
+pub(super) fn connection_type_tag(connection: &StoredConnection, cx: &gpui::App) -> AnyElement {
+    let kind = connection.connection_type;
+    if kind == ConnectionType::All {
+        return div().into_any_element();
+    }
+    let dot = connection_type_tag_color(kind, cx);
+    h_flex()
+        .flex_shrink_0()
+        .max_w(px(96.0))
+        .gap_1()
+        .items_center()
+        .px_1p5()
+        .py_0p5()
+        .rounded(px(4.0))
+        .bg(cx.theme().muted)
+        .child(
+            div()
+                .size(px(6.0))
+                .flex_shrink_0()
+                .rounded_full()
+                .bg(dot),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .text_xs()
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(cx.theme().foreground)
+                .overflow_hidden()
+                .text_ellipsis()
+                .whitespace_nowrap()
+                .child(connection_type_display_label(connection, cx)),
+        )
+        .into_any_element()
+}
+
+fn connection_type_tag_color(kind: ConnectionType, cx: &gpui::App) -> Hsla {
+    match kind {
+        ConnectionType::Database => cx.theme().blue,
+        ConnectionType::SshSftp => cx.theme().success,
+        ConnectionType::Redis => cx.theme().warning,
+        ConnectionType::MongoDB => cx.theme().info,
+        ConnectionType::Mqtt => cx.theme().accent,
+        ConnectionType::Serial => cx.theme().info,
+        ConnectionType::Telnet => cx.theme().info,
+        ConnectionType::PortForwarding => cx.theme().warning,
+        ConnectionType::Rdp => cx.theme().blue,
+        ConnectionType::Vnc => cx.theme().accent,
+        ConnectionType::Extension => cx.theme().muted_foreground,
+        ConnectionType::All => cx.theme().muted_foreground,
+    }
+}
+
 pub(super) fn connection_team_indicator(
-    connection: &one_core::storage::StoredConnection,
+    connection: &StoredConnection,
     teams: &[one_core::cloud_sync::TeamOption],
     cx: &gpui::App,
 ) -> Option<AnyElement> {
