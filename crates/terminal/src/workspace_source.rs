@@ -21,10 +21,13 @@ use crate::wsl_distributions::{wsl_distribution_for_config, wsl_unc_root};
 /// 容器浏览所需的 docker 调用前缀(`program` + `exec` 之前的全局参数)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DockerInvocation {
-    /// `docker` 可执行文件名或路径。
+    /// `docker` 可执行文件名或路径;也可能是扩展自带的 `docker-provider`。
     pub program: String,
     /// `exec` 之前的全局参数,如 `--context prod` / `--host tcp://...`。
     pub global_args: Vec<String>,
+    /// 启动终端时的环境变量(含 `DOCKER_HOST` / `DOCKER_TLS_VERIFY` /
+    /// `DOCKER_CERT_PATH`),浏览容器文件时要一并传给子进程,才能命中同一个 daemon。
+    pub env: Vec<(String, String)>,
 }
 
 impl DockerInvocation {
@@ -71,7 +74,7 @@ pub trait WorkspaceSourceResolver {
     fn resolve(&self, config: &LocalConfig) -> Option<LocalWorkspaceSource>;
 }
 
-/// 容器 exec 会话:命中 `docker exec` 启动的本地终端。
+/// 容器 exec 会话:命中 `docker exec` 或 Navop provider 的 `exec` / `exec-bridge`。
 pub struct DockerExecResolver;
 
 /// WSL 会话:命中 `wsl.exe -d <发行版>`。
@@ -123,18 +126,29 @@ pub fn resolve_local_workspace_source(config: &LocalConfig) -> Option<LocalWorks
 
 /// 解析 `docker [全局参数] exec [选项] <容器> [命令...]`。
 ///
-/// 只识别以 `docker`/`docker.exe` 启动的本地终端;容器名要求是单个非空片段,
-/// 且不是 `-` 开头的选项,避免把命令拼到错误目标上。
+/// 同时识别 Navop Docker 扩展自带 provider 的两种写法:
+/// `docker-provider exec [-i] <容器> <命令...>` 与
+/// `docker-provider exec-bridge <容器> [命令...]`——两者都指向容器内,
+/// 侧边栏应走容器文件后端(provider 会以同样的 `exec` 语义响应)。
+///
+/// 容器名要求是单个非空片段,且不是 `-` 开头的选项,避免把命令拼到错误目标上。
 pub fn docker_exec_invocation(config: &LocalConfig) -> Option<(DockerInvocation, String)> {
     let program = config.shell.as_deref()?;
-    if !is_docker_program(program) {
+    let provider = is_docker_provider_program(program);
+    if !provider && !is_docker_program(program) {
         return None;
     }
+    // provider 的交互式入口是 `exec-bridge`,非交互文件操作用 docker 风格的 `exec`。
+    let subcommands: &[&str] = if provider {
+        &["exec", "exec-bridge"]
+    } else {
+        &["exec"]
+    };
     let mut args = config.args.iter().peekable();
     let mut global_args = Vec::new();
     loop {
         let arg = args.next()?;
-        if arg == "exec" {
+        if subcommands.contains(&arg.as_str()) {
             break;
         }
         global_args.push(arg.clone());
@@ -161,6 +175,7 @@ pub fn docker_exec_invocation(config: &LocalConfig) -> Option<(DockerInvocation,
         DockerInvocation {
             program: program.to_string(),
             global_args,
+            env: config.env.clone(),
         },
         container,
     ))
@@ -187,6 +202,13 @@ fn exec_option_takes_value(arg: &str) -> bool {
 fn is_docker_program(program: &str) -> bool {
     let file_name = program.rsplit(['\\', '/']).next().unwrap_or(program);
     file_name.eq_ignore_ascii_case("docker") || file_name.eq_ignore_ascii_case("docker.exe")
+}
+
+/// Navop Docker 扩展自带 provider 的可执行文件名(`docker-provider`)。
+fn is_docker_provider_program(program: &str) -> bool {
+    let file_name = program.rsplit(['\\', '/']).next().unwrap_or(program);
+    file_name.eq_ignore_ascii_case("docker-provider")
+        || file_name.eq_ignore_ascii_case("docker-provider.exe")
 }
 
 #[cfg(test)]
@@ -300,6 +322,7 @@ mod tests {
         let docker = DockerInvocation {
             program: "docker".into(),
             global_args: vec!["--context".into(), "prod".into()],
+            env: Vec::new(),
         };
         assert_eq!(
             vec![
@@ -312,5 +335,49 @@ mod tests {
             ],
             docker.exec_args("web", &["ls".to_string(), "-la".to_string()])
         );
+    }
+
+    #[test]
+    fn recognizes_provider_exec_bridge_as_container() {
+        let mut config = config(
+            "/Users/me/.config/navop/extensions/composite/com.navop.docker/bin/docker-provider",
+            &["exec-bridge", "abc123", "sh"],
+        );
+        config.env = vec![
+            ("DOCKER_HOST".into(), "tcp://10.0.0.3:2375".into()),
+            ("DOCKER_TLS_VERIFY".into(), String::new()),
+        ];
+        let (docker, container) =
+            docker_exec_invocation(&config).expect("provider exec-bridge should parse");
+        assert_eq!("abc123", container);
+        assert!(docker.global_args.is_empty());
+        // 终端 env 必须原样带给文件树后端,才能命中同一个远端 daemon。
+        assert_eq!(
+            docker.env,
+            vec![
+                ("DOCKER_HOST".to_string(), "tcp://10.0.0.3:2375".to_string()),
+                ("DOCKER_TLS_VERIFY".to_string(), String::new()),
+            ]
+        );
+        assert!(
+            resolve_local_workspace_source(&config)
+                .expect("container source")
+                .is_container()
+        );
+    }
+
+    #[test]
+    fn recognizes_provider_exec_with_flags() {
+        let (_, container) = docker_exec_invocation(&config(
+            "docker-provider",
+            &["exec", "-i", "svc", "ls", "-Ap"],
+        ))
+        .expect("provider exec should parse");
+        assert_eq!("svc", container);
+    }
+
+    #[test]
+    fn rejects_provider_without_exec_subcommand() {
+        assert!(docker_exec_invocation(&config("docker-provider", &[])).is_none());
     }
 }
