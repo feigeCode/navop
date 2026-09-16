@@ -330,6 +330,7 @@
 - **正确做法**：优先把异步任务完成后的 UI 状态变更提取为纯状态 contract，并用普通单元测试覆盖成功、失败、防重复加载、手动刷新等行为；网络解析和下载使用 fake HTTP client 覆盖。对纯 HTTP/IO 的 UI 加载，不要在 GPUI view 层额外包一层 `Tokio::spawn`，优先使用 `cx.background_spawn`，这样 `gpui` 的 `test-support` 能用 `TestAppContext`/`condition` 稳定驱动真实 view 测试。
 - **验证方式**：运行对应状态 contract 测试、fake HTTP 网络测试、真实 GPUI view 测试，以及相关 crate 的 `cargo check` / `cargo clippy -D warnings` / `cargo test`。
 - **适用范围**：`main/src/settings/*`、扩展市场加载、更新检查、数据库驱动安装等 GPUI UI 层异步加载路径。
+- **补充（拆分 init 的固定手法）**：当待测 `init(cx)` 同时做「注册 global」和「`Tokio::spawn` 启动后台任务」时，把注册部分抽成独立函数（如 `register_application_owner`），`#[gpui::test]` 只覆盖注册的纯状态契约（同一 owner、重复注册被拒），被 spawn 的后台任务改用普通 `#[tokio::test]` 直接覆盖（真实 runtime 里 start/stop 是确定性的，因为 `RuntimeMonitor::stop` 用 `select!` 抢在 `sleep` 前返回）。`Tokio::spawn` 完成时会在真实 worker 线程上唤醒 GPUI background executor，测试调度器直接以 “Detected activity on thread Some(\"tokio-rt-worker\")” 失败——这类报错一律按「拆 init」处理，不要加 sleep 或重试。
 
 - **标题**：GPUI `background_spawn` 不得直接轮询依赖 Tokio runtime 的数据库 Future
 - **触发信号**：macOS 上执行 SQL 转储、表导入或表导出时，在 `tokio::time::timeout`、数据库连接初始化或 Tokio socket/timer 路径出现“没有 reactor/runtime”类 panic，随后因 panic 穿过 GPUI 的 `extern "C"` 回调边界而触发 `SIGABRT`。

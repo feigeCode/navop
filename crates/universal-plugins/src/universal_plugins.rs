@@ -510,7 +510,14 @@ impl Drop for TransientSecretGuard {
     }
 }
 
-pub fn init(cx: &mut gpui::App) {
+/// Registers the single application-level owner of the plugin service.
+///
+/// Kept separate from [`init`] because `init` also starts the Tokio-backed
+/// monitor: `Tokio::spawn` completes on a real Tokio worker and wakes GPUI's
+/// background executor from that thread, which the GPUI test scheduler rejects
+/// as non-deterministic. Ownership is therefore asserted here, where no
+/// background work is involved.
+pub(crate) fn register_application_owner(cx: &mut gpui::App) -> UniversalPluginService {
     assert!(
         cx.try_global::<GlobalUniversalPluginService>().is_none(),
         "universal plugin service must have exactly one application owner"
@@ -525,9 +532,14 @@ pub fn init(cx: &mut gpui::App) {
         secrets,
     ));
     let service = global.service();
+    cx.set_global(global);
+    service
+}
+
+pub fn init(cx: &mut gpui::App) {
+    let service = register_application_owner(cx);
     let startup_service = service.clone();
     let quit_service = service.clone();
-    cx.set_global(global);
     #[cfg(feature = "shell-plugins")]
     {
         gpui_shell::init_embedded(cx);
@@ -577,22 +589,53 @@ pub fn spawn_shutdown(
 mod tests {
     use super::*;
 
+    /// Registration must be the only path to the global service, and it must
+    /// hand out clones of one owner. `init` is deliberately not used here: its
+    /// monitor task completes on a real Tokio worker and wakes GPUI's
+    /// background executor from that thread, which makes `#[gpui::test]` abort.
     #[gpui::test]
     fn universal_plugin_service_has_one_application_owner(cx: &mut gpui::TestAppContext) {
-        let (first, second, runtime) = cx.update(|cx| {
-            one_core::gpui_tokio::init(cx);
-            extension_runtime::init(cx);
-            init(cx);
-
+        cx.update(|cx| {
+            let registered = register_application_owner(cx);
             let first = cx.global::<GlobalUniversalPluginService>().service();
             let second = cx.global::<GlobalUniversalPluginService>().service();
-            let runtime = one_core::gpui_tokio::Tokio::handle(cx);
-            (first, second, runtime)
+
+            assert!(
+                first.same_owner(&second),
+                "every global read must resolve to the same owner"
+            );
+            assert!(
+                registered.same_owner(&first),
+                "the registered service must be the owner stored in the global"
+            );
         });
 
-        assert!(first.same_owner(&second));
-        runtime.block_on(first.shutdown());
-        runtime.block_on(second.shutdown());
+        let second_registration = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            cx.update(|cx| register_application_owner(cx))
+        }));
+        assert!(
+            second_registration.is_err(),
+            "a second registration must be rejected"
+        );
+    }
+
+    /// The monitor `init` starts on the Tokio runtime: it must start once and
+    /// stop through [`UniversalPluginService::shutdown`]. Covered with a plain
+    /// Tokio test because the GPUI test scheduler cannot observe Tokio worker
+    /// completions deterministically.
+    #[tokio::test]
+    async fn runtime_monitor_starts_and_stops_with_service() {
+        let service = UniversalPluginService::from_catalog_source(
+            GlobalExtensionRuntimeCatalog::default(),
+            None,
+        );
+
+        service.start_monitor().expect("monitor starts once");
+        service.shutdown().await;
+        assert!(
+            service.start_monitor().is_err(),
+            "a shut down service must not restart its monitor"
+        );
     }
 
     #[tokio::test]
