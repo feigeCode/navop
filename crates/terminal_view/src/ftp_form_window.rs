@@ -315,12 +315,24 @@ impl FtpFormWindow {
         if port == 0 {
             return None;
         }
+        // 与 SSH 一致：选择了钥匙串凭据时，被引用的字段以钥匙串为准，
+        // 手填值不落库。
+        let credential_reference = self.credential_picker.read(cx).selected_reference();
+        let credential_selected = credential_reference.is_some();
         Some(FtpParams {
             host,
             port,
-            username: self.username_input.read(cx).text().to_string(),
-            password: self.password_input.read(cx).text().to_string(),
-            credential_reference: self.credential_picker.read(cx).selected_reference(),
+            username: if credential_selected {
+                String::new()
+            } else {
+                self.username_input.read(cx).text().to_string()
+            },
+            password: if credential_selected {
+                String::new()
+            } else {
+                self.password_input.read(cx).text().to_string()
+            },
+            credential_reference,
             prompt_username: None,
             prompt_password: None,
             passive_mode: self.passive_mode,
@@ -519,6 +531,12 @@ impl Focusable for FtpFormWindow {
 impl Render for FtpFormWindow {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_testing = self.is_testing;
+        // 与 SSH 表单一致：选择了钥匙串凭据时隐藏用户名/密码行。
+        let credential_is_manual = self
+            .credential_picker
+            .read(cx)
+            .selected_reference()
+            .is_none();
 
         let test_result_element = match &self.test_result {
             Some(Ok(())) => Some(
@@ -576,18 +594,24 @@ impl Render for FtpFormWindow {
                                         ),
                                 ),
                             )
-                            .child(
-                                self.render_form_row(
-                                    &t!("Ftp.username"),
-                                    Input::new(&self.username_input),
-                                ),
-                            )
-                            .child(
-                                self.render_form_row(
-                                    &t!("Ftp.password"),
-                                    Input::new(&self.password_input),
-                                ),
-                            )
+                            .child(self.render_form_row(
+                                &t!("Ftp.keychain"),
+                                self.credential_picker.clone(),
+                            ))
+                            .when(credential_is_manual, |form| {
+                                form.child(
+                                    self.render_form_row(
+                                        &t!("Ftp.username"),
+                                        Input::new(&self.username_input),
+                                    ),
+                                )
+                                .child(
+                                    self.render_form_row(
+                                        &t!("Ftp.password"),
+                                        Input::new(&self.password_input),
+                                    ),
+                                )
+                            })
                             .child(self.render_form_row(
                                 &t!("Ftp.passive_mode"),
                                 h_flex()
@@ -625,10 +649,6 @@ impl Render for FtpFormWindow {
                                             .text_color(cx.theme().muted_foreground)
                                             .child(t!("Ftp.use_tls_desc").to_string()),
                                     ),
-                            ))
-                            .child(self.render_form_row(
-                                &t!("Ftp.keychain"),
-                                self.credential_picker.clone(),
                             ))
                             .child(self.render_form_row(
                                 &t!("Ftp.workspace"),
