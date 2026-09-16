@@ -32,8 +32,10 @@ const guideOrder = [
   "mongodb",
   "ssh-terminal",
   "sftp-remote-files",
+  "ftp-remote-files",
   "port-forwarding",
   "remote-access",
+  "resource-workbench",
   "notes",
   "ai-workbench",
   "public-mcp",
@@ -105,9 +107,9 @@ function guideItems(options: LocaleOptions): DefaultTheme.SidebarItem[] {
   const ranges: Array<[number, number]> = [
     [0, 3],
     [3, 10],
-    [10, 14],
-    [14, 18],
-    [18, 21]
+    [10, 16],
+    [16, 20],
+    [20, 23]
   ];
 
   return ranges.map(([start, end], index) => ({

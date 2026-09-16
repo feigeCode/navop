@@ -33,6 +33,7 @@
     <img src="https://img.shields.io/badge/MQTT-660066?logo=mqtt&logoColor=white" alt="MQTT" />
     <img src="https://img.shields.io/badge/SSH-111827?logo=gnubash&logoColor=white" alt="SSH" />
     <img src="https://img.shields.io/badge/SFTP-2563EB?logo=filezilla&logoColor=white" alt="SFTP" />
+    <img src="https://img.shields.io/badge/FTP%2FFTPS-3B82F6" alt="FTP/FTPS" />
     <img src="https://img.shields.io/badge/Port%20Forwarding-0F766E" alt="端口转发" />
     <img src="https://img.shields.io/badge/RDP-0078D4" alt="RDP" />
     <img src="https://img.shields.io/badge/VNC-5C2D91" alt="VNC" />
@@ -63,7 +64,7 @@
 ### 远程连接与运维
 
 - 可拖拽分屏的 SSH 与本地终端，支持快捷命令、广播输入、Shell integration、会话锁定、会话录制回放；会话日志支持搜索、批量删除与增量加载；同时支持 Telnet 与串口连接。
-- 通过 SFTP 上传下载、搜索、收藏、远程编辑（可配置大小上限与默认编辑器）、拖拽传输、ZMODEM 传输和跨服务器复制管理远程文件。
+- 通过 SFTP、FTP 与 FTPS 上传下载、搜索、收藏、远程编辑（可配置大小上限与默认编辑器）、拖拽传输、ZMODEM 传输和跨服务器复制管理远程文件。可单独创建 FTP/FTPS 连接，也可在 SSH 连接的远程文件面板中切换协议（终端仍走 SSH）；打开方式偏好可决定双击默认进入终端还是双栏文件视图。
 - 可复用的本地、远程（`ssh -R`）与动态 SOCKS 端口转发；X11 转发；主机密钥变更指纹确认；「已知主机」页面可查看、导入和移除信任的 SSH 主机密钥；可按连接启用旧版 SSH 算法。
 - 导入 SecureCRT 等外部工具的会话，进行服务器监控，并支持 RDP/VNC 远程桌面。Windows 上集成原生 MSTSC：通过 C++ 宿主将微软 RDP ActiveX 控件直接内嵌到应用中，可在页签内、全屏窗口中连接，也可一键启动原生 `mstsc.exe` 客户端；跨平台则由纯 Rust 的 IronRDP canvas 后端渲染 RDP 会话。
 
@@ -72,7 +73,7 @@
 - 本地 Markdown 笔记，支持 Mermaid 图、数学公式，并可导出为 HTML、PDF 或 DOCX；内置编辑器支持保存快捷键与 WASM 语言解析器语法高亮。
 - 使用 AI 生成和解释 SQL、分析数据、生成图表、辅助终端操作、调用工具和运行 Agent 工作流；通过 ACP 接入 Codex、Claude Code 和 OpenCode 等外部 Agent。
 - Agent Hub 在同一工作区查看终端 Agent、项目文件、Git 分支、变更列表和并排 Diff；工具箱聚合扩展小工具并与连接扩展区分。
-- 扩展市场提供数据库驱动、远程桌面 provider、文档渲染器、连接导入器和外部编辑器。官方扩展在 [navop-extensions](https://github.com/feigeCode/navop-extensions) 仓库独立构建发布。
+- 扩展市场提供数据库驱动、远程桌面 provider、文档渲染器、连接导入器、外部编辑器，以及由宿主原生渲染的资源工作台（首个为 Docker 工作台，管理容器、镜像、日志、进程与 exec 终端）。官方扩展在 [navop-extensions](https://github.com/feigeCode/navop-extensions) 仓库独立构建发布。
 - 快速打开支持临时 SSH 连接，标签栏提供新建连接入口，临时会话无需先保存连接。
 
 ### 原生桌面体验

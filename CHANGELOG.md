@@ -4,6 +4,58 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.18.0] - 2026-09-16
+
+#### 更新内容
+
+- 新增 FTP / FTPS 独立连接类型：可单独创建 FTP 连接，也可在同一条 SSH 连接记录的远程文件面板中选择 SFTP、FTP 或 FTPS；FTPS 使用显式 AUTH TLS，并修复无法通过 IP 地址直连的问题。
+- SSH 连接可配置打开方式偏好：双击时默认进入终端或双栏文件视图，双栏文件视图也支持独立的 FTP 连接。
+- 新增原生资源工作台：扩展可声明集合、表格、详情页与操作，宿主用原生 GPUI 渲染。首个发布 Docker 工作台，提供引擎概览、镜像管理与异步拉取、日志查看、容器进程、文件系统变更视图和 exec 终端；破坏性操作执行前需要用户确认。
+- 本地终端下拉自动识别并列出 WSL 发行版，可按发行版一键启动。
+- TDengine 与 MQTT 改为扩展提供：移除内置实现，旧数据自动迁移到扩展，并通过扩展市场按需安装。
+- Redis 移除 IPC sidecar，统一使用内嵌 redis-rs，并让大键加载保持内存有界。
+- 扩展 provider 进程重启后自动恢复已挂载的扩展连接；单个损坏扩展不再拖垮整个目录。
+
+#### 修复与优化
+
+- 修复 Redis 键树搜索对服务端结果二次过滤导致搜不到 key 的问题；搜索/过滤态保留连接与数据库锚点，集合值视图列宽支持拖拽，长 score 不再被压缩。
+- 修复 SSH Shell Integration 握手无兜底导致键盘输入被永久暂存；SSH 探测造成传输层断连后自动降级为单通道重连，改善受限设备登录。
+- 修复本地终端清屏后提示符消失与输入错位（清屏后补发 Ctrl+L）。
+- 修复远程命令执行在 EOF 处提前结束，导致解压成功却报错的问题。
+- 修复 Windows 原生 MSTSC 内嵌会话每帧重复 SetWindowPos 造成的光标抖动，并断开 resize 与 fallback 重连互相触发的循环。
+- 修复 AI 对话压缩上下文后残留多条 system 消息，现仅保留唯一一条以兼容 OpenAI 协议。
+- JSON 视图补全语法高亮并切换到 JSON 编辑器；工作区资源管理器的编辑器与状态栏配色跟随工作区主题。
+- 修复 AI 侧边栏执行模式下拉过宽挤压发送按钮，以及 SSH 表单弹窗宽度挤压表单内容的问题。
+- 资源工作台与扩展运行时：注册期拒绝未实现的终端 operation 与无效路由绑定，修正工作台连接绑定注入、异步状态归属与表单字段类型。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.18.0) 下载桌面端安装包
+
+---
+
+#### What's New
+
+- New standalone FTP / FTPS connection type: create FTP connections on their own, or switch the remote-file panel of an SSH connection between SFTP, FTP, and FTPS. FTPS uses explicit AUTH TLS and now connects directly by IP address.
+- SSH connections gain an open-mode preference: double-click opens either the terminal or the dual-pane file view by default, and the dual-pane file view can also host a standalone FTP connection.
+- New native resource workbench: extensions declare collections, tables, detail pages, and operations that the host renders with native GPUI. The first release is a Docker workbench with engine overview, image management and asynchronous pulls, log viewer, container processes, filesystem change views, and exec terminals. Destructive operations require user confirmation.
+- The local terminal launcher detects and lists WSL distributions for one-click launch.
+- TDengine and MQTT are now extension-provided: the built-in implementations are removed, existing data migrates to the extensions, and they install on demand from the marketplace.
+- Redis drops the IPC sidecar in favor of the embedded redis-rs client, with bounded memory when loading large keys.
+- Provider processes auto-recover mounted extension connections after a restart, and a single broken extension no longer takes down the whole catalog.
+
+#### Fixes and Improvements
+
+- Fixed Redis key-tree search double-filtering server results, which hid matching keys; search and filter states now keep connection and database anchors, collection value columns are resizable, and long scores are no longer compressed.
+- Fixed SSH keyboard input being permanently buffered when the shell-integration handshake had no fallback; SSH now degrades to a single-channel reconnect when probing drops the transport, improving login on restricted devices.
+- Fixed the local terminal prompt disappearing and input misalignment after clear (Ctrl+L is re-sent).
+- Fixed remote command execution ending early at EOF, which reported failures after a successful extraction.
+- Fixed cursor jitter from repeated per-frame SetWindowPos in embedded native MSTSC sessions on Windows, and broke the resize/fallback reconnect loop.
+- Fixed AI conversations retaining multiple system messages after context compaction; only a single system message is kept for OpenAI-protocol compatibility.
+- Restored JSON syntax highlighting and switched input to the JSON editor; the workspace explorer editor and status bar now follow the workspace theme.
+- Fixed the oversized AI sidebar execution-mode dropdown pushing out the send button, and an SSH form dialog width that squeezed form content.
+- Resource workbench and extension runtime: unimplemented terminal operations and invalid route bindings are rejected at registration, and workbench connection binding, async state ownership, and form field types are corrected.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.17.0...v0.18.0
+
 ## [v0.17.0] - 2026-09-08
 
 #### 更新内容
