@@ -35,10 +35,10 @@ use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::traits::Repository;
 use one_core::storage::{
-    FtpParams, JumpServerConfig, ProxyConfig, ProxyType as StorageProxyType, RemoteFileParams,
-    RemoteFileProtocol as StoredRemoteFileProtocol, SSH_ICON_IDS, SftpAccount, SshAccountExpect,
-    SshAuthMethod, SshParams, StoredConnection, StoredTerminalEncoding, StoredTerminalType,
-    Workspace, ssh_os_icon,
+    FtpParams, JumpServerConfig, PreferredOpenMode, ProxyConfig, ProxyType as StorageProxyType,
+    RemoteFileParams, RemoteFileProtocol as StoredRemoteFileProtocol, SSH_ICON_IDS, SftpAccount,
+    SshAccountExpect, SshAuthMethod, SshParams, StoredConnection, StoredTerminalEncoding,
+    StoredTerminalType, Workspace, ssh_os_icon,
 };
 use rust_i18n::t;
 use ssh::{
@@ -261,6 +261,9 @@ pub struct SshFormWindow {
     sftp_account_use_custom: bool,
     sftp_username_input: Entity<InputState>,
     sftp_password_input: Entity<InputState>,
+
+    // 打开方式偏好：双击/后台打开时默认进入双栏文件视图（而非终端）
+    open_dual_pane_by_default: bool,
 
     // 代理设置
     enable_proxy: bool,
@@ -823,6 +826,7 @@ impl SshFormWindow {
         let mut allow_legacy_algorithms = false;
         let mut disable_shell_integration = false;
         let mut sftp_account_use_custom = false;
+        let mut open_dual_pane_by_default = false;
         let mut detected_os_id: Option<String> = None;
         let mut manual_icon: Option<String> = None;
         let mut custom_icon_file_path: Option<String> = None;
@@ -833,6 +837,10 @@ impl SshFormWindow {
         if let Some(conn) = config.connection_to_load() {
             // 加载同步状态
             sync_enabled = conn.sync_enabled;
+
+            // 加载打开方式偏好
+            open_dual_pane_by_default =
+                conn.preferred_open_mode == Some(PreferredOpenMode::DualPane);
 
             if let Ok(params) = conn.to_ssh_params() {
                 credential_reference = params.credential_reference.clone();
@@ -1126,6 +1134,7 @@ impl SshFormWindow {
             sftp_account_use_custom,
             sftp_username_input,
             sftp_password_input,
+            open_dual_pane_by_default,
             enable_proxy,
             proxy_type,
             proxy_host_input,
@@ -3043,6 +3052,35 @@ impl SshFormWindow {
                 )
                 .debug_selector(|| "ssh-remote-file-protocol-row".to_string()),
             )
+            .child(
+                self.render_form_row(
+                    &t!("SSH.open_mode_dual_pane"),
+                    h_flex()
+                        .w_full()
+                        .gap_2()
+                        .items_start()
+                        .child(
+                            div().flex_shrink_0().child(
+                                Checkbox::new("open-dual-pane-by-default")
+                                    .checked(self.open_dual_pane_by_default)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.open_dual_pane_by_default =
+                                            !this.open_dual_pane_by_default;
+                                        cx.notify();
+                                    })),
+                            ),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(t!("SSH.open_mode_dual_pane_desc").to_string()),
+                        ),
+                )
+                .debug_selector(|| "ssh-open-mode-row".to_string()),
+            )
             .when(!is_ftp, move |this| this.child(sftp_branch))
             .when(is_ftp, move |this| this.child(ftp_branch))
     }
@@ -3520,9 +3558,9 @@ mod tests {
     use gpui::{Modifiers, TestAppContext, VisualTestContext};
     use one_core::settings::AppSettings;
     use one_core::storage::{
-        ConnectionType, CredentialReference, FtpParams, JumpServerConfig, RemoteFileParams,
-        RemoteFileProtocol as StoredRemoteFileProtocol, SftpAccount, SshAuthMethod, SshParams,
-        StoredConnection, StoredTerminalEncoding, StoredTerminalType,
+        ConnectionType, CredentialReference, FtpParams, JumpServerConfig, PreferredOpenMode,
+        RemoteFileParams, RemoteFileProtocol as StoredRemoteFileProtocol, SftpAccount,
+        SshAuthMethod, SshParams, StoredConnection, StoredTerminalEncoding, StoredTerminalType,
     };
     use rust_i18n::t;
     use ssh::{HostKeyDetails, HostKeyIdentity, HostKeyRejection, HostKeyRoute};
@@ -3848,6 +3886,55 @@ mod tests {
             built.sftp_default_directory,
             Some("/data/upload".to_string())
         );
+    }
+
+    #[gpui::test]
+    fn ssh_form_loads_open_mode_preference(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(AppSettings::default());
+            gpui_component::init(cx);
+        });
+
+        // 默认连接：未设置偏好，表单保持未勾选
+        let default_connection =
+            StoredConnection::new_ssh("default-mode".to_string(), sample_params(), None);
+        let (form, cx) = cx.add_window_view(|window, cx| {
+            super::SshFormWindow::new(
+                super::SshFormWindowConfig {
+                    editing_connection: None,
+                    initial_connection: Some(default_connection),
+                    on_saved: None,
+                    workspaces: Vec::new(),
+                    teams: Vec::new(),
+                },
+                window,
+                cx,
+            )
+        });
+        form.read_with(cx, |form, _| {
+            assert!(!form.open_dual_pane_by_default);
+        });
+
+        // 已设置 DualPane 偏好的连接：表单回填勾选
+        let mut dual_pane_connection =
+            StoredConnection::new_ssh("dual-pane".to_string(), sample_params(), None);
+        dual_pane_connection.preferred_open_mode = Some(PreferredOpenMode::DualPane);
+        let (form, cx) = cx.add_window_view(|window, cx| {
+            super::SshFormWindow::new(
+                super::SshFormWindowConfig {
+                    editing_connection: None,
+                    initial_connection: Some(dual_pane_connection),
+                    on_saved: None,
+                    workspaces: Vec::new(),
+                    teams: Vec::new(),
+                },
+                window,
+                cx,
+            )
+        });
+        form.read_with(cx, |form, _| {
+            assert!(form.open_dual_pane_by_default);
+        });
     }
 
     #[gpui::test]

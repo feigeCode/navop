@@ -440,6 +440,14 @@ SSH:
     en: SFTP Password
     zh-CN: SFTP 密码
     zh-HK: SFTP 密碼
+  open_mode_dual_pane:
+    en: Open Dual-Pane File View by Default
+    zh-CN: 默认打开双栏文件视图
+    zh-HK: 預設開啟雙欄檔案視圖
+  open_mode_dual_pane_desc:
+    en: When enabled, double-clicking or opening this connection in the background goes to the dual-pane SFTP file view instead of a terminal. You can still open a terminal from the right-click menu.
+    zh-CN: 启用后，双击或后台打开该连接时进入双栏 SFTP 文件视图而非终端；仍可通过右键菜单打开终端。
+    zh-HK: 啟用後，雙擊或後台開啟該連接時進入雙欄 SFTP 檔案視圖而非終端；仍可通過右鍵選單開啟終端。
   mfa_prompt_placeholder:
     en: MFA response
     zh-CN: MFA 响应
