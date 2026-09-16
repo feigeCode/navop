@@ -4,6 +4,72 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.18.0] - 2026-09-16
+
+#### 更新内容
+
+- 新增 FTP / FTPS 独立连接类型；SSH 连接可在同一条记录内切换 SFTP / FTP / FTPS 远程文件协议，终端仍走 SSH。FTPS 使用显式 AUTH TLS，并修复无法通过 IP 地址直连的问题；SSH 连接还可配置打开方式偏好，双击默认进入终端或双栏文件视图。
+- 新增原生资源工作台：扩展声明集合、表格、详情页与操作，宿主用原生 GPUI 渲染。首个发布 Docker 工作台，提供引擎概览、容器启停/重启/删除、镜像异步拉取、日志查看、容器进程、文件系统变更和 exec 终端，并收敛到区域化 v2 布局；破坏性操作执行前需要用户确认。
+- 数据库值模型重构：引入唯一 typed 值模型并贯通各驱动与消费端；MySQL BIT 以 BitString 保真、不再标为文本；PostgreSQL TIMESTAMPTZ 保留时区偏移；二进制预览统一为大写有界 hex。
+- 本地终端下拉自动识别并列出 WSL 发行版，可按发行版一键启动；WSL 与容器 exec 会话的文件树分别指向发行版文件系统与容器文件系统。
+- 主页新增全局导航布局与工作台卡片并持续精修；连接类型筛选改为纯文本英文菜单并按扩展贡献逐项列出；侧栏连接名后显示类型分类标签；扩展连接展示真实类型与贡献图标。
+- 扩展市场目录化改版并新增详情弹窗；扩展 provider 支持授权本地 Unix socket。
+- 设置新增界面缩放（issue #146）；字体下拉直接列出系统已安装字体。
+- AI：内置 Agent 支持自定义 system prompt（fix #173），系统提示词统一并国际化，用户自定义改为追加。
+- Redis 键树搜索改为输入停顿后自动扫描服务端（#181）；移除 IPC sidecar，统一使用内嵌 redis-rs。
+- TDengine 与 MQTT 改为扩展提供：移除内置实现，旧数据自动迁移到扩展，并通过扩展市场按需安装。
+- Shell 页纳入默认构建，四个发布产物统一带 Shell 页。
+- 终端上传、下载完成或失败时弹出即时提示。
+
+#### 修复与优化
+
+- Redis：键树搜索不再对服务端结果做二次过滤，过滤态保留连接与数据库锚点（#181）；集合值视图列宽支持拖拽，长 score 不再被压缩（#180）；大键加载内存有界。
+- 终端：修复 Shell Integration 握手无兜底导致 SSH 键盘输入被永久暂存（#206）；本地 PTY 后端异常停止时显式结束会话，避免终端卡死；清屏后补发 Ctrl+L 修复提示符消失与输入错位；SSH 探测造成传输层断连后自动降级为单通道重连（#183）；复制后立即清除选区高亮；浮层高度封顶、滚动跟随选中并支持下键循环。
+- SSH：远程命令执行不在 EOF 处提前结束，修复解压成功却报错的问题。
+- 远程桌面：MSTSC 凭据 target 去掉端口，修复原生 RDP 无法自动填入密码；收敛关闭超时与分离任务的生命周期；原生 mstscax 会话不再每帧重复 SetWindowPos，修复光标抖动（#171）；断开 resize 与 fallback 重连互相触发的死循环（#171）；通过自维护 gpui-pre fork 恢复动态纹理；macOS 剪贴板迁移到 objc2。
+- AI：压缩上下文后仅保留开头唯一 system 消息（#174）；修复侧边栏 AI 文字选区显示与贡献式侧边栏无法选中文字；执行模式下拉宽度自适应，发送按钮不再被挤压。
+- 数据库：外部驱动图标改用无 scheme 资产路径，修复 IPC 扩展图标整块空白；修复输入 SQL 时当前语句框选消失；为结果表 frame refresh 增加重入保护。
+- 扩展：打通 provider 调用取消、mount 根令牌与有界清理；结构化错误 envelope 与 shell 网络授权修正；单个损坏扩展不再拖垮整个 catalog；provider 重启后自动恢复已挂载连接。
+- JSON 视图补全语法高亮并切换到 JSON 编辑器；工作区资源管理器的编辑器与状态栏配色跟随工作区主题。
+- SFTP / 传输：升级 russh 0.63.3 与 russh-sftp 3.0.0，并对齐传输窗口。
+- 资源工作台与扩展运行时：注册期拒绝未实现的终端 operation 与无效路由绑定，修正连接绑定注入、异步状态归属与表单字段类型；修复 stream 页首读报 -32602。
+- 修复标签栏国际化与 tooltip 显示；修复 SSH 表单弹窗宽度挤压表单内容的问题。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.18.0) 下载桌面端安装包
+
+---
+
+#### What's New
+
+- New standalone FTP / FTPS connection type, and SFTP / FTP / FTPS switching on an existing SSH connection record while its terminal keeps using SSH. FTPS uses explicit AUTH TLS and now connects directly by IP address; SSH connections also gain an open-mode preference so a double-click opens the terminal or the dual-pane file view.
+- New native resource workbench: extensions declare collections, tables, detail pages, and operations that the host renders with native GPUI. The first release is a Docker workbench with engine overview, container start/stop/restart/remove, asynchronous image pulls, log viewer, container processes, filesystem changes, and exec terminals, refined into a region-based v2 layout. Destructive operations require user confirmation.
+- Database value-model refactor: a single typed value model now flows through every driver and consumer; MySQL BIT is preserved as BitString instead of text, PostgreSQL TIMESTAMPTZ keeps its timezone offset, and binary previews use bounded uppercase hex.
+- The local terminal launcher detects and lists WSL distributions for one-click launch; WSL and container exec sessions point the file tree at the distribution and container filesystems respectively.
+- New global-navigation home layout with workbench cards, refined over several passes; the connection-type filter is now a plain-text English menu listing each extension contribution, the sidebar shows a type tag after the connection name, and extension connections display their real type and contributed icon.
+- The extension marketplace gains a catalog-style redesign with a detail dialog; extension providers can be authorized for local Unix sockets.
+- Settings add an interface-scale option (issue #146) and a font dropdown that lists installed system fonts directly.
+- AI: the built-in Agent supports a custom system prompt (fix #173); the base system prompt is unified and localized, and user customization is applied as an addition.
+- Redis key-tree search now scans the server after a typing pause (#181); the IPC sidecar is removed in favor of the embedded redis-rs client.
+- TDengine and MQTT are now extension-provided: the built-in implementations are removed, existing data migrates to the extensions, and they install on demand from the marketplace.
+- The Shell page is included in the default build, so all four release artifacts ship with it.
+- Uploads and downloads in the terminal show immediate completion or failure toasts.
+
+#### Fixes and Improvements
+
+- Redis: key-tree search no longer double-filters server results and keeps connection and database anchors in filter mode (#181); collection value columns are resizable and long scores are no longer compressed (#180); large keys load with bounded memory.
+- Terminal: fixed SSH keyboard input being permanently buffered when the shell-integration handshake had no fallback (#206); a local PTY backend stopping abnormally now ends the session explicitly instead of hanging; Ctrl+L is re-sent after clear to fix a disappearing prompt and input misalignment; SSH degrades to a single-channel reconnect when probing drops the transport (#183); the selection highlight is cleared immediately after copy; overlays are height-capped with scroll-follow and down-key cycling.
+- SSH: remote command execution no longer ends early at EOF, which previously reported a failure after a successful extraction.
+- Remote desktop: the MSTSC credential target drops the port, fixing automatic password fill for native RDP; close timeouts and detached editor tasks are governed; embedded native mstscax sessions no longer call SetWindowPos every frame, fixing cursor jitter (#171); the resize/fallback reconnect loop is broken (#171); dynamic texture is restored through a self-maintained gpui-pre fork; the macOS clipboard migrates from cocoa to objc2.
+- AI: context compaction keeps only the leading system message (#174); fixed sidebar AI text-selection rendering and selection in contribution-based sidebars; the execution-mode dropdown now adapts its width instead of pushing out the send button.
+- Databases: external driver icons use scheme-free asset paths, fixing blank IPC extension icons; fixed the current-statement selection disappearing while typing SQL; added a reentry guard to result-grid frame refresh.
+- Extensions: provider call cancellation, mount root tokens, and bounded cleanup are wired through; structured error envelopes and shell network authorization are corrected; a single broken extension no longer takes down the whole catalog; providers auto-recover mounted connections after a restart.
+- JSON view restores syntax highlighting and switches input to the JSON editor; the workspace explorer editor and status bar follow the workspace theme.
+- SFTP / transfer: upgraded to russh 0.63.3 and russh-sftp 3.0.0 with an aligned transfer window.
+- Resource workbench and extension runtime: unimplemented terminal operations and invalid route bindings are rejected at registration, and connection binding, async state ownership, and form field types are corrected; fixed the stream page's first read returning -32602.
+- Fixed tab-bar localization and tooltips, and an SSH form dialog width that squeezed form content.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.17.0...v0.18.0
+
 ## [v0.17.0] - 2026-09-08
 
 #### 更新内容

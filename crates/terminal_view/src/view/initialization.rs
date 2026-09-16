@@ -82,6 +82,7 @@ impl TerminalView {
                         docker.program.clone(),
                         docker.global_args.clone(),
                         container.clone(),
+                        docker.env.clone(),
                     )
                 }
             });

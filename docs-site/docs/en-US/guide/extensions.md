@@ -1,10 +1,10 @@
 # Extension marketplace and local extensions
 
-Extensions add database drivers, ACP Agents, connection importers, remote desktop providers, language packs, and related capabilities. Extension code runs locally, so review source, permissions, platform, and compatibility as carefully as other desktop software.
+Extensions add database drivers, middleware, native resource workbenches, ACP Agents, connection importers, remote desktop providers, language packs, and related capabilities. Extension code runs locally, so review source, permissions, platform, and compatibility as carefully as other desktop software.
 
 ## Understand extension types
 
-Database drivers add connection types. ACP Agent extensions connect external agents. Import extensions read other applications. Remote desktop providers enable RDP/VNC. Language extensions add UI locales. An "updates available" filter in the marketplace shows only extensions with newer releases.
+Database drivers add connection types. ACP Agent extensions connect external agents. Import extensions read other applications. Remote desktop providers enable RDP/VNC. Language extensions add UI locales. Native resource workbench extensions (such as Docker) let the host render collections, detail pages, and operations. An "updates available" filter in the marketplace shows only extensions with newer releases.
 
 A product name in a compatibility list does not mean its driver is installed. Check the marketplace entry, current platform, and Navop version first.
 
@@ -12,7 +12,9 @@ A product name in a compatibility list does not mean its driver is installed. Ch
 
 First-party extensions are built and published independently from the [navop-extensions](https://github.com/feigeCode/navop-extensions) repository; official marketplace entries come from that repository. The current catalog, grouped by kind:
 
-- **Database drivers**: DuckDB, Redis, MongoDB (4.2+ / 3.6 / 3.2–3.4 tiers), Dameng DM, KingbaseES, GBase 8s, OceanBase, openGauss, Apache IoTDB, Oscar, and a pure-Go Oracle driver that needs no Oracle Instant Client.
+- **Database drivers**: TDengine, DuckDB, Redis, MongoDB (4.2+ / 3.6 / 3.2–3.4 tiers), Dameng DM, KingbaseES, GBase 8s, OceanBase, openGauss, Apache IoTDB, Oscar, and a pure-Go Oracle driver that needs no Oracle Instant Client.
+- **Middleware**: MQTT (subscribe, messages, and publish views, with SSH tunneling).
+- **Native resource workbenches**: Docker (engine overview, container and image management, logs, processes, filesystem changes, and exec terminals), where the host renders collections, detail pages, and operations natively.
 - **Remote desktop providers**: RDP and VNC.
 - **ACP Agents**: Codex, Claude Code, and OpenCode.
 - **Connection importers**: SecureCRT, Xshell, WindTerm, OpenSSH config, Navicat, DBeaver, JetBrains DataGrip, MongoDB Compass, Redis Desktop, and TablePlus.
