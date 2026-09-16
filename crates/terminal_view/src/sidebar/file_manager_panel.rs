@@ -52,6 +52,7 @@ use remote_file_editor::{
 use remote_image_preview::{
     clipboard_upload_paths, image_format_for_path, open_remote_image_preview,
 };
+use ftp::{FtpClient, FtpConnectConfig};
 use rust_i18n::t;
 use sftp::{
     DirectoryConflictPolicy, RemoteFileClient, RemoteFileOperation, RusshSftpClient,
@@ -1247,6 +1248,10 @@ pub struct FileManagerPanel {
     stored_connection: StoredConnection,
     /// 共享 SSH 会话管理器
     session_manager: Arc<SshSessionManager>,
+    /// 远程文件协议为 FTP 时的独立 FTP 连接配置；`None` 表示走 SFTP（借 SSH 会话）。
+    ///
+    /// FTP 与 SSH 会话完全解耦：独立建连、独立报错，SSH 连接失败不影响 FTP 面板。
+    ftp_config: Option<FtpConnectConfig>,
     /// SFTP 客户端（浏览用）
     sftp_client: Option<SharedRemoteFileClient>,
     /// 浏览连接代次；新连接或重试会使旧连接 future 的结果失效。
@@ -1362,6 +1367,7 @@ impl FileManagerPanel {
                 global_executor.update(cx, |executor, _| executor.allocate_runtime_connection())
             });
         let background_task_group = background_task_group_label(&stored_connection);
+        let ftp_config = sftp_transfer::ftp_connect_config_from_stored(&stored_connection);
 
         let mut subscriptions = Vec::new();
         subscriptions.push(
@@ -1415,6 +1421,7 @@ impl FileManagerPanel {
         Self {
             stored_connection,
             session_manager,
+            ftp_config,
             sftp_client: None,
             connection_generation: 0,
             connection_state: ConnectionState::Idle,
@@ -1486,7 +1493,15 @@ impl FileManagerPanel {
 
     // ── 连接管理 ──────────────────────────────────────────────
 
-    /// 建立 SFTP 连接
+    /// 传输请求的连接来源：FTP 协议走独立 FTP 连接，否则借共享 SSH 会话。
+    fn upload_connection_source(&self) -> SftpUploadConnection {
+        SftpUploadConnection::for_endpoint(self.ftp_config.as_ref(), self.session_manager.clone())
+    }
+
+    /// 建立远程文件连接
+    ///
+    /// FTP 协议：独立建连（不依赖 SSH 会话，SSH 失败不影响本面板）。
+    /// SFTP 协议：借共享 SSH 会话建立 SFTP 通道。
     pub fn connect(&mut self, cx: &mut Context<Self>) {
         if self.connection_state == ConnectionState::Connecting {
             return;
@@ -1499,17 +1514,35 @@ impl FileManagerPanel {
 
         let initial_dir = self.working_dir_hint.clone();
         let session_manager = self.session_manager.clone();
+        let ftp_config = self.ftp_config.clone();
         let task = Tokio::spawn(cx, async move {
-            let shared_client = session_manager.client().await?;
-            let mut client = RusshSftpClient::connect_with_client(shared_client).await?;
-            // 优先使用终端当前工作目录，否则回退到 realpath(".")
-            let real_path = if let Some(dir) = initial_dir {
-                dir
-            } else {
-                client
-                    .realpath(".")
-                    .await
-                    .unwrap_or_else(|_| "/".to_string())
+            // FTP 独立建连：终端工作目录（working_dir_hint 来自 SSH 会话）对 FTP 无意义，
+            // 初始路径使用服务器登录目录。
+            let (client, real_path) = match ftp_config {
+                Some(config) => {
+                    let mut client: Box<dyn RemoteFileClient> =
+                        Box::new(FtpClient::connect(config).await?);
+                    let real_path = client
+                        .realpath(".")
+                        .await
+                        .unwrap_or_else(|_| "/".to_string());
+                    (client, real_path)
+                }
+                None => {
+                    let shared_client = session_manager.client().await?;
+                    let mut client: Box<dyn RemoteFileClient> =
+                        Box::new(RusshSftpClient::connect_with_client(shared_client).await?);
+                    // 优先使用终端当前工作目录，否则回退到 realpath(".")
+                    let real_path = if let Some(dir) = initial_dir {
+                        dir
+                    } else {
+                        client
+                            .realpath(".")
+                            .await
+                            .unwrap_or_else(|_| "/".to_string())
+                    };
+                    (client, real_path)
+                }
             };
             Ok::<_, anyhow::Error>((client, real_path))
         });
@@ -2610,9 +2643,16 @@ impl FileManagerPanel {
         self.transfer_connecting = true;
         let transfer_generation = self.transfer_generation;
         let session_manager = self.session_manager.clone();
+        let ftp_config = self.ftp_config.clone();
         let connect_task = Tokio::spawn(cx, async move {
-            let shared_client = session_manager.client().await?;
-            let client = RusshSftpClient::connect_with_client(shared_client).await?;
+            // 传输连接与浏览连接同样按端点分流：FTP 独立建连，SFTP 借 SSH 会话
+            let client: Box<dyn RemoteFileClient> = match ftp_config {
+                Some(config) => Box::new(FtpClient::connect(config).await?),
+                None => {
+                    let shared_client = session_manager.client().await?;
+                    Box::new(RusshSftpClient::connect_with_client(shared_client).await?)
+                }
+            };
             Ok::<_, anyhow::Error>(client)
         });
 
@@ -2883,9 +2923,7 @@ impl FileManagerPanel {
             );
             let request = SftpUploadRequest {
                 connection: self.upload_connection_identity.clone(),
-                connection_source: SftpUploadConnection::SessionManager(
-                    self.session_manager.clone(),
-                ),
+                connection_source: self.upload_connection_source(),
                 local_path: upload.local_path,
                 remote_path: upload.remote_path,
                 is_dir: upload.is_dir,
@@ -3066,7 +3104,7 @@ impl FileManagerPanel {
             .to_string();
         let request = sftp_transfer::SftpDownloadRequest {
             connection: self.upload_connection_identity.clone(),
-            connection_source: SftpUploadConnection::SessionManager(self.session_manager.clone()),
+            connection_source: self.upload_connection_source(),
             remote_path: remote_path.clone(),
             local_path: local_path.clone(),
             is_dir,
@@ -3126,7 +3164,7 @@ impl FileManagerPanel {
         let display_name = remote_delete_display_name(&targets);
         let request = SftpDeleteRemoteRequest {
             connection: self.upload_connection_identity.clone(),
-            connection_source: SftpUploadConnection::SessionManager(self.session_manager.clone()),
+            connection_source: self.upload_connection_source(),
             entries,
             remote_dir: remote_dir.clone(),
             display_name: display_name.clone(),
@@ -5767,8 +5805,8 @@ mod tests {
     use sftp_transfer::{
         SftpConnectionIdentity, SftpDeleteRemoteExecution, SftpDownloadExecution,
         SftpRemoteDeleteEntry, SftpTransferEvent, SftpTransferExecutor, SftpTransferId,
-        SftpTransferOperation, SftpTransferProvider, SftpTransferState, SftpUploadExecution,
-        delete_remote_task_key,
+        SftpTransferOperation, SftpTransferProvider, SftpTransferState, SftpUploadConnection,
+        SftpUploadExecution, delete_remote_task_key,
     };
     use ssh::{HostKeyVerifier, SshAuth, SshConnectConfig, SshSessionManager};
     use std::collections::{HashMap, HashSet};
@@ -5852,6 +5890,59 @@ mod tests {
             None,
         );
         connection.id = Some(7);
+        connection
+    }
+
+    fn test_ftp_stored_connection() -> one_core::storage::models::StoredConnection {
+        let mut connection = one_core::storage::models::StoredConnection::new_ssh(
+            "Terminal file manager ftp test".to_string(),
+            SshParams {
+                remote_file: Some(one_core::storage::models::RemoteFileParams {
+                    protocol: one_core::storage::models::RemoteFileProtocol::Ftp,
+                    ftp: Some(one_core::storage::models::FtpParams {
+                        host: "localhost".to_string(),
+                        port: 2121,
+                        username: "testuser".to_string(),
+                        password: "testpass".to_string(),
+                        credential_reference: None,
+                        prompt_username: None,
+                        prompt_password: None,
+                        passive_mode: true,
+                        use_tls: true,
+                        connect_timeout: Some(3),
+                    }),
+                }),
+                sftp_default_directory: None,
+                disabled_jump_server: None,
+                sftp_account: None,
+                host: "terminal-file-manager-test.internal".to_string(),
+                port: 2222,
+                username: "deploy".to_string(),
+                auth_method: SshAuthMethod::Agent,
+                credential_reference: None,
+                prompt_username: None,
+                prompt_password: None,
+                keyboard_interactive: None,
+                terminal_encoding: Default::default(),
+                terminal_type: Default::default(),
+                connect_timeout: Some(1),
+                keepalive_interval: None,
+                keepalive_max: None,
+                default_directory: None,
+                init_script: None,
+                disable_shell_integration: None,
+                x11_forwarding: None,
+                allow_legacy_algorithms: None,
+                jump_server: None,
+                proxy: None,
+                os_id: None,
+                icon: None,
+                icon_file_path: None,
+                account_expect: Default::default(),
+            },
+            None,
+        );
+        connection.id = Some(8);
         connection
     }
 
@@ -6027,6 +6118,19 @@ mod tests {
         Entity<super::FileManagerPanel>,
         WindowHandle<Root>,
     ) {
+        file_manager_fixture_with_connection(cx, temp_dir, test_stored_connection())
+    }
+
+    fn file_manager_fixture_with_connection(
+        cx: &mut TestAppContext,
+        temp_dir: &tempfile::TempDir,
+        stored_connection: super::StoredConnection,
+    ) -> (
+        FileManagerTestProvider,
+        Entity<SftpTransferExecutor>,
+        Entity<super::FileManagerPanel>,
+        WindowHandle<Root>,
+    ) {
         cx.update(one_core::gpui_tokio::init);
         cx.update(one_core::background_tasks::init);
         cx.executor().allow_parking();
@@ -6052,7 +6156,7 @@ mod tests {
         let window = cx.open_window(Default::default(), |window, cx| {
             let panel = cx.new(|cx| {
                 super::FileManagerPanel::new(
-                    test_stored_connection(),
+                    stored_connection,
                     test_session_manager(),
                     super::TerminalColors {
                         background: gpui::black(),
@@ -6197,6 +6301,40 @@ mod tests {
         assert_eq!(snapshot.local_path, local_path);
         panel.read_with(cx, |panel, _| {
             assert!(!panel.transfer_queue.has_active());
+        });
+    }
+
+    #[gpui::test]
+    fn ftp_endpoint_panel_uses_independent_ftp_connection(mut cx: &mut TestAppContext) {
+        let temp_dir = tempfile::TempDir::new().expect("create fixture temp dir");
+        let (_provider, _executor, panel, _window) =
+            file_manager_fixture_with_connection(&mut cx, &temp_dir, test_ftp_stored_connection());
+
+        panel.read_with(cx, |panel, _| {
+            let ftp_config = panel.ftp_config.as_ref().expect("ftp config present");
+            assert_eq!(ftp_config.host, "localhost");
+            assert_eq!(ftp_config.port, 2121);
+            assert_eq!(ftp_config.username, "testuser");
+            assert!(ftp_config.passive_mode);
+            assert!(ftp_config.use_tls);
+            assert!(matches!(
+                panel.upload_connection_source(),
+                SftpUploadConnection::Ftp(_)
+            ));
+        });
+    }
+
+    #[gpui::test]
+    fn sftp_endpoint_panel_borrows_ssh_session(mut cx: &mut TestAppContext) {
+        let temp_dir = tempfile::TempDir::new().expect("create fixture temp dir");
+        let (_provider, _executor, panel, _window) = file_manager_fixture(&mut cx, &temp_dir);
+
+        panel.read_with(cx, |panel, _| {
+            assert!(panel.ftp_config.is_none());
+            assert!(matches!(
+                panel.upload_connection_source(),
+                SftpUploadConnection::SessionManager(_)
+            ));
         });
     }
 

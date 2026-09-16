@@ -111,21 +111,7 @@ pub(crate) fn sftp_initial_directory_of(connection: &StoredConnection) -> Option
 pub(crate) fn ftp_config_from_connection(
     connection: &StoredConnection,
 ) -> Option<FtpConnectConfig> {
-    let params = connection.to_ssh_params().ok()?;
-    let remote_file = params.remote_file.as_ref()?;
-    if remote_file.protocol != one_core::storage::models::RemoteFileProtocol::Ftp {
-        return None;
-    }
-    let ftp = params.ftp_params()?;
-    Some(FtpConnectConfig {
-        host: ftp.host.clone(),
-        port: ftp.port,
-        username: ftp.username.clone(),
-        password: ftp.password.clone(),
-        passive_mode: ftp.passive_mode,
-        use_tls: ftp.use_tls,
-        connect_timeout: ftp.connect_timeout,
-    })
+    sftp_transfer::ftp_connect_config_from_stored(connection)
 }
 
 /// 远程文件协议为 FTP 时，凭据提示策略来自嵌套 FTP 参数，

@@ -11,6 +11,7 @@ public_mcp = { workspace = true }
 ssh = { workspace = true }
 sftp = { workspace = true }
 sftp_transfer = { workspace = true }
+ftp = { workspace = true }
 remote_file_editor = { workspace = true }
 remote_image_preview = { workspace = true }
 workspace_explorer = { workspace = true }
