@@ -60,8 +60,8 @@ script/bootstrap
 # Install system dependencies (Windows PowerShell)
 .\script\install-window.ps1
 
-# Bump version for release
-./script/bump-version.sh x.y.z
+# Release (bump version in the dev → main PR, then tag on main; see .github/RELEASE.md)
+script/release-tag.sh vx.y.z
 ```
 
 ## Workspace Structure

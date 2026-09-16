@@ -93,28 +93,15 @@ Use `samply record` command to start rust development, and do some operations in
 
 ## Release crates version
 
-When we are ready to release a new version, please follow the steps below:
+When we are ready to release a new version, follow `.github/RELEASE.md`. In short:
 
-### Use the script to bump the version(Recommended)
-
-```bash
-./script/bump-version.sh x.y.z
-```
-
-### Manually bump the version
-
-1. Run `cargo set-version` to set the new version for all crates.
+1. Bump the application version (`main/Cargo.toml` and `Cargo.lock`) to `x.y.z` and add the bilingual `CHANGELOG.md` entry.
+2. Land both in `main` through a `dev` → `main` pull request. `main` is protected, so the version change cannot be pushed directly.
+3. After the pull request is merged and CI is green, tag the release from `main`:
 
    ```bash
-   cargo set-version x.y.z
+   script/release-tag.sh vx.y.z
    ```
 
-2. Git Commit the changes with message `Bump vx.y.z`.
-3. Create a new git tag with the version `vx.y.z` and push `main` branch and the tag to remote.
-
-   ```bash
-   git tag vx.y.z
-   git push origin vx.y.z
-   ```
-
-4. Then GitHub Actions will automatically publish the crates to crates.io and create a new release in GitHub.
+   The script refuses to run unless `main/Cargo.toml` already equals the tag and the changelog entry is valid, then creates and pushes the tag.
+4. GitHub Actions builds and publishes the release from the pushed tag.
