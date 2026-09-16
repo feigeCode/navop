@@ -2175,6 +2175,10 @@ NewConnection:
     en: Telnet network device connection
     zh-CN: Telnet 网络设备连接
     zh-HK: Telnet 網絡設備連線
+  description_ftp:
+    en: Standalone FTP / FTPS file transfer connection
+    zh-CN: 独立 FTP / FTPS 文件传输连接
+    zh-HK: 獨立 FTP / FTPS 檔案傳輸連線
   description_port_forwarding:
     en: SSH local, remote, or SOCKS port forwarding
     zh-CN: SSH 本地、远程端口转发或 SOCKS 隧道

@@ -7,6 +7,7 @@ pub mod cd_completion;
 pub mod highlight_presets;
 pub mod history_prompt;
 mod host_key_dialog;
+pub mod ftp_form_window;
 pub mod keys;
 pub mod public_mcp;
 pub mod public_mcp_remote_ops;
@@ -35,6 +36,7 @@ pub use settings::{
 pub use sidebar::{SettingsPanel, SidebarPanel, TerminalSidebar, TerminalSidebarEvent};
 pub use ssh_form_window::{SshFormPostSaveAction, SshFormWindow, SshFormWindowConfig};
 pub use telnet_form_window::{TelnetFormWindow, TelnetFormWindowConfig};
+pub use ftp_form_window::{FtpFormWindow, FtpFormWindowConfig};
 pub use terminal::terminal::{
     ConnectionState, SshTerminalConfig, Terminal, TerminalConnectionKind, TerminalModelEvent,
 };

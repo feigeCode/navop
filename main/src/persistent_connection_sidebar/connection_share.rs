@@ -19,7 +19,6 @@ pub(super) fn connection_share_text_for_locale(
         ConnectionType::Database => database_fields(locale, connection.to_db_connection().ok()?),
         ConnectionType::SshSftp => ssh_fields(locale, connection.to_ssh_params().ok()?),
         ConnectionType::Ftp => ftp_fields(locale, connection.to_ftp_params().ok()?),
-        ConnectionType::Ftp => ftp_fields(locale, connection.to_ftp_params().ok()?),
         ConnectionType::Redis => redis_fields(locale, connection.to_redis_params().ok()?),
         ConnectionType::MongoDB => mongodb_fields(locale, connection.to_mongodb_params().ok()?),
         ConnectionType::Mqtt => mqtt_fields(locale, connection.to_mqtt_params().ok()?),

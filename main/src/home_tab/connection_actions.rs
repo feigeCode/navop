@@ -48,6 +48,10 @@ impl HomePage {
                 self.editing_connection_id = Some(connection_id);
                 self.show_mongodb_form(window, cx);
             }
+            ConnectionType::Ftp => {
+                self.editing_connection_id = Some(connection_id);
+                self.show_ftp_form(window, cx);
+            }
             ConnectionType::Mqtt => {}
             ConnectionType::Serial => {
                 self.editing_connection_id = Some(connection_id);
