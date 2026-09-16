@@ -183,6 +183,7 @@ fn screenshot_safe_feature_replaces_all_home_connection_info() {
             updated_at: None,
             team_id: None,
             owner_id: None,
+            preferred_open_mode: None,
         };
 
         assert_eq!(
