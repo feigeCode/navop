@@ -27,6 +27,38 @@ impl StatusPresentation {
             Self::Error => cx.theme().danger,
         }
     }
+
+    /// The colour for this presentation, with a host palette winning over the
+    /// theme's semantic colour wherever it names one.
+    fn resolved_color(self, cx: &App, colors: Option<&StatusBarColors>) -> Hsla {
+        let from_palette = colors.and_then(|colors| match self {
+            Self::Neutral => colors.muted_foreground,
+            Self::Progress => colors.info,
+            Self::Success => colors.success,
+            Self::Warning => colors.warning,
+            Self::Error => colors.danger,
+        });
+
+        from_palette.unwrap_or_else(|| self.color(cx))
+    }
+}
+
+/// Colours a host projects onto a status bar.
+///
+/// Every field is optional and only the ones set take effect; the rest keep
+/// coming from the active theme. A workspace whose surfaces follow a palette
+/// other than the application theme's — a terminal theme, say — paints its bar
+/// with this, so the bar reads as part of the surface above it rather than as
+/// a strip of the application theme's chrome.
+#[derive(Clone, Debug, Default)]
+pub struct StatusBarColors {
+    pub background: Option<Hsla>,
+    pub border: Option<Hsla>,
+    pub muted_foreground: Option<Hsla>,
+    pub info: Option<Hsla>,
+    pub success: Option<Hsla>,
+    pub warning: Option<Hsla>,
+    pub danger: Option<Hsla>,
 }
 
 /// Shared status-bar shell with leading, center, and trailing slots.
@@ -40,6 +72,7 @@ pub struct StatusBar {
     status: Option<AnyElement>,
     trailing: Option<AnyElement>,
     muted_background: bool,
+    colors: Option<StatusBarColors>,
 }
 
 impl StatusBar {
@@ -53,6 +86,7 @@ impl StatusBar {
             status: None,
             trailing: None,
             muted_background: false,
+            colors: None,
         }
     }
 
@@ -85,6 +119,14 @@ impl StatusBar {
         self.muted_background = true;
         self
     }
+
+    /// Paint this bar with a palette of the caller's choosing.
+    ///
+    /// Only the fields set here win over the theme's colours.
+    pub fn colors(mut self, colors: StatusBarColors) -> Self {
+        self.colors = Some(colors);
+        self
+    }
 }
 
 impl Styled for StatusBar {
@@ -102,11 +144,21 @@ impl InteractiveElement for StatusBar {
 impl RenderOnce for StatusBar {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let spacing = geometry::spacing();
-        let background = if self.muted_background {
+        let palette = self.colors.as_ref();
+        let theme_background = if self.muted_background {
             cx.theme().muted
         } else {
             cx.theme().background
         };
+        let background = palette
+            .and_then(|colors| colors.background)
+            .unwrap_or(theme_background);
+        let border = palette
+            .and_then(|colors| colors.border)
+            .unwrap_or_else(|| cx.theme().border);
+        let foreground = palette
+            .and_then(|colors| colors.muted_foreground)
+            .unwrap_or_else(|| cx.theme().muted_foreground);
 
         self.base
             .h_flex()
@@ -116,10 +168,10 @@ impl RenderOnce for StatusBar {
             .gap(spacing.space_2)
             .px(spacing.space_3)
             .border_t_1()
-            .border_color(cx.theme().border)
+            .border_color(border)
             .bg(background)
             .text_xs()
-            .text_color(cx.theme().muted_foreground)
+            .text_color(foreground)
             .refine_style(&self.style)
             .when_some(self.leading, |this, leading| {
                 this.child(h_flex().flex_none().child(leading))
@@ -135,7 +187,7 @@ impl RenderOnce for StatusBar {
                 this.child(
                     h_flex()
                         .flex_none()
-                        .text_color(self.presentation.color(cx))
+                        .text_color(self.presentation.resolved_color(cx, palette))
                         .child(status),
                 )
             })
@@ -157,6 +209,38 @@ mod tests {
             assert_eq!(StatusPresentation::Success.color(cx), cx.theme().success);
             assert_eq!(StatusPresentation::Warning.color(cx), cx.theme().warning);
             assert_eq!(StatusPresentation::Error.color(cx), cx.theme().danger);
+        });
+    }
+
+    #[gpui::test]
+    fn a_host_palette_wins_where_it_is_set(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(gpui_component::Theme::default());
+            let colors = StatusBarColors {
+                warning: Some(gpui::rgb(0xffaa00).into()),
+                muted_foreground: Some(gpui::rgb(0x7788aa).into()),
+                ..Default::default()
+            };
+
+            assert_eq!(
+                StatusPresentation::Warning.resolved_color(cx, Some(&colors)),
+                gpui::rgb(0xffaa00).into()
+            );
+            assert_eq!(
+                StatusPresentation::Neutral.resolved_color(cx, Some(&colors)),
+                gpui::rgb(0x7788aa).into()
+            );
+            // A presentation the palette does not name keeps its semantic
+            // colour, so naming one state does not mute the others.
+            assert_eq!(
+                StatusPresentation::Error.resolved_color(cx, Some(&colors)),
+                cx.theme().danger
+            );
+            // Without a palette the theme answers, exactly as before.
+            assert_eq!(
+                StatusPresentation::Warning.resolved_color(cx, None),
+                cx.theme().warning
+            );
         });
     }
 }

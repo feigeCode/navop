@@ -1746,6 +1746,7 @@ mod tests {
             updated_at: None,
             team_id: None,
             owner_id: None,
+            preferred_open_mode: None,
         }
     }
 

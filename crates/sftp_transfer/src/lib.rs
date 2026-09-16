@@ -19,7 +19,7 @@ pub use model::{
     SftpDownloadExecution, SftpDownloadRequest, SftpRemoteDeleteEntry, SftpTransferEvent,
     SftpTransferId, SftpTransferOperation, SftpTransferSnapshot, SftpTransferState,
     SftpUploadConnection, SftpUploadExecution, SftpUploadRequest, delete_remote_task_key,
-    download_task_key, upload_task_key,
+    download_task_key, ftp_connect_config_from_stored, upload_task_key,
 };
 pub use provider::{RusshSftpTransferProvider, SftpTransferProvider};
 

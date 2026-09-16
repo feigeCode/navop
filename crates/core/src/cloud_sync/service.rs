@@ -362,6 +362,7 @@ impl CloudSyncService {
             params: serde_json::from_str(&conn.params_for_storage())
                 .unwrap_or(Value::Object(serde_json::Map::new())),
             owner_id: conn.owner_id.clone(),
+            preferred_open_mode: conn.preferred_open_mode,
         };
 
         let plaintext = serde_json::to_string(&plain_data)
@@ -505,6 +506,7 @@ impl CloudSyncService {
                 updated_at: None,
                 team_id: cloud_data.team_id.clone(),
                 owner_id: plain_data.owner_id,
+                preferred_open_mode: plain_data.preferred_open_mode,
             },
             workspace_cloud_id,
         ))
@@ -691,6 +693,7 @@ mod tests {
             updated_at: None,
             team_id: None,
             owner_id: None,
+            preferred_open_mode: None,
         };
 
         let cloud_data = service

@@ -111,37 +111,47 @@ pub(crate) fn sftp_initial_directory_of(connection: &StoredConnection) -> Option
 pub(crate) fn ftp_config_from_connection(
     connection: &StoredConnection,
 ) -> Option<FtpConnectConfig> {
-    let params = connection.to_ssh_params().ok()?;
-    let remote_file = params.remote_file.as_ref()?;
-    if remote_file.protocol != one_core::storage::models::RemoteFileProtocol::Ftp {
-        return None;
-    }
-    let ftp = params.ftp_params()?;
-    Some(FtpConnectConfig {
-        host: ftp.host.clone(),
-        port: ftp.port,
-        username: ftp.username.clone(),
-        password: ftp.password.clone(),
-        passive_mode: ftp.passive_mode,
-        use_tls: ftp.use_tls,
-        connect_timeout: ftp.connect_timeout,
-    })
+    sftp_transfer::ftp_connect_config_from_stored(connection)
 }
 
-/// 远程文件协议为 FTP 时，凭据提示策略来自嵌套 FTP 参数，
+/// 远程文件协议为 FTP 时，凭据提示策略来自 FTP 参数，
 /// 而不是 SSH 顶层参数（FTP 不复用 SSH 的认证状态）。
 pub(crate) fn ftp_credential_prompt_policy(
     connection: &StoredConnection,
 ) -> SshCredentialPromptPolicy {
-    connection
-        .to_ssh_params()
-        .ok()
-        .and_then(|params| params.ftp_params().cloned())
-        .map(|ftp| SshCredentialPromptPolicy {
-            username: ftp.prompts_for_username(),
-            password: ftp.prompts_for_password(),
-        })
-        .unwrap_or_default()
+    let ftp = match connection.connection_type {
+        one_core::storage::ConnectionType::Ftp => connection.to_ftp_params().ok(),
+        _ => connection
+            .to_ssh_params()
+            .ok()
+            .and_then(|params| params.ftp_params().cloned()),
+    };
+    ftp.map(|ftp| SshCredentialPromptPolicy {
+        username: ftp.prompts_for_username(),
+        password: ftp.prompts_for_password(),
+    })
+    .unwrap_or_default()
+}
+
+/// 纯 FTP 连接（`ConnectionType::Ftp`）没有 SSH 参数，但双栏视图的
+/// 结构体仍持有 SSH 配置字段。FTP 模式下所有建连路径都按 FTP 配置
+/// 分流，不会使用该字段；这里提供一个明确的占位值避免 panic。
+pub(crate) fn unused_ssh_config_placeholder() -> SshConnectConfig {
+    SshConnectConfig {
+        host: String::new(),
+        port: 0,
+        username: String::new(),
+        auth: SshAuth::Password(String::new()),
+        timeout: None,
+        keepalive_interval: None,
+        keepalive_max: None,
+        jump_server: None,
+        proxy: None,
+        keyboard_interactive_responder: None,
+        host_key_verifier: HostKeyVerifier::default(),
+        x11_forwarding: false,
+        allow_legacy_algorithms: false,
+    }
 }
 
 /// 将连接时输入的运行时凭据注入 FTP 连接配置。

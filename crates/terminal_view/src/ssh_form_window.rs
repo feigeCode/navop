@@ -35,10 +35,10 @@ use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::traits::Repository;
 use one_core::storage::{
-    FtpParams, JumpServerConfig, ProxyConfig, ProxyType as StorageProxyType, RemoteFileParams,
-    RemoteFileProtocol as StoredRemoteFileProtocol, SSH_ICON_IDS, SftpAccount, SshAccountExpect,
-    SshAuthMethod, SshParams, StoredConnection, StoredTerminalEncoding, StoredTerminalType,
-    Workspace, ssh_os_icon,
+    FtpParams, JumpServerConfig, PreferredOpenMode, ProxyConfig, ProxyType as StorageProxyType,
+    RemoteFileParams, RemoteFileProtocol as StoredRemoteFileProtocol, SSH_ICON_IDS, SftpAccount,
+    SshAccountExpect, SshAuthMethod, SshParams, StoredConnection, StoredTerminalEncoding,
+    StoredTerminalType, Workspace, ssh_os_icon,
 };
 use rust_i18n::t;
 use ssh::{
@@ -261,6 +261,9 @@ pub struct SshFormWindow {
     sftp_account_use_custom: bool,
     sftp_username_input: Entity<InputState>,
     sftp_password_input: Entity<InputState>,
+
+    // 打开方式偏好：双击/后台打开时默认进入双栏文件视图（而非终端）
+    open_dual_pane_by_default: bool,
 
     // 代理设置
     enable_proxy: bool,
@@ -823,6 +826,7 @@ impl SshFormWindow {
         let mut allow_legacy_algorithms = false;
         let mut disable_shell_integration = false;
         let mut sftp_account_use_custom = false;
+        let mut open_dual_pane_by_default = false;
         let mut detected_os_id: Option<String> = None;
         let mut manual_icon: Option<String> = None;
         let mut custom_icon_file_path: Option<String> = None;
@@ -833,6 +837,10 @@ impl SshFormWindow {
         if let Some(conn) = config.connection_to_load() {
             // 加载同步状态
             sync_enabled = conn.sync_enabled;
+
+            // 加载打开方式偏好
+            open_dual_pane_by_default =
+                conn.preferred_open_mode == Some(PreferredOpenMode::DualPane);
 
             if let Ok(params) = conn.to_ssh_params() {
                 credential_reference = params.credential_reference.clone();
@@ -1072,6 +1080,10 @@ impl SshFormWindow {
                 &proxy_credential_picker,
                 |_, _, _: &CredentialPickerEvent, cx| cx.notify(),
             ),
+            cx.subscribe(
+                &ftp_credential_picker,
+                |_, _, _: &CredentialPickerEvent, cx| cx.notify(),
+            ),
         ];
         Self {
             focus_handle: cx.focus_handle(),
@@ -1122,6 +1134,7 @@ impl SshFormWindow {
             sftp_account_use_custom,
             sftp_username_input,
             sftp_password_input,
+            open_dual_pane_by_default,
             enable_proxy,
             proxy_type,
             proxy_host_input,
@@ -1401,11 +1414,30 @@ impl SshFormWindow {
             match protocol {
                 RemoteFileProtocolSelection::Sftp => None,
                 RemoteFileProtocolSelection::Ftp => {
-                    let ftp_host =
-                        self.ftp_host_input.read(cx).text().to_string().trim().to_string();
-                    let ftp_username =
-                        self.ftp_username_input.read(cx).text().to_string().trim().to_string();
-                    if ftp_host.is_empty() || ftp_username.is_empty() {
+                    let ftp_host = self
+                        .ftp_host_input
+                        .read(cx)
+                        .text()
+                        .to_string()
+                        .trim()
+                        .to_string();
+                    let ftp_username = self
+                        .ftp_username_input
+                        .read(cx)
+                        .text()
+                        .to_string()
+                        .trim()
+                        .to_string();
+                    let ftp_username_referenced = self
+                        .ftp_credential_picker
+                        .read(cx)
+                        .field_referenced(CredentialField::Username);
+                    let ftp_password_referenced = self
+                        .ftp_credential_picker
+                        .read(cx)
+                        .field_referenced(CredentialField::Password);
+                    if ftp_host.is_empty() || (ftp_username.is_empty() && !ftp_username_referenced)
+                    {
                         // FTP 主机/用户名缺失视为无效参数，交给上层提示校验失败。
                         return None;
                     }
@@ -1421,8 +1453,17 @@ impl SshFormWindow {
                         ftp: Some(FtpParams {
                             host: ftp_host,
                             port: ftp_port,
-                            username: ftp_username,
-                            password: self.ftp_password_input.read(cx).text().to_string(),
+                            // 被引用的字段以钥匙串为准，手填值不落库。
+                            username: if ftp_username_referenced {
+                                String::new()
+                            } else {
+                                ftp_username
+                            },
+                            password: if ftp_password_referenced {
+                                String::new()
+                            } else {
+                                self.ftp_password_input.read(cx).text().to_string()
+                            },
                             credential_reference: self
                                 .ftp_credential_picker
                                 .read(cx)
@@ -2923,6 +2964,15 @@ impl SshFormWindow {
                 )
             });
 
+        let ftp_username_referenced = self
+            .ftp_credential_picker
+            .read(cx)
+            .field_referenced(CredentialField::Username);
+        let ftp_password_referenced = self
+            .ftp_credential_picker
+            .read(cx)
+            .field_referenced(CredentialField::Password);
+
         let ftp_branch = v_flex()
             .debug_selector(|| "ssh-remote-files-ftp-branch".to_string())
             .w_full()
@@ -2938,14 +2988,24 @@ impl SshFormWindow {
                 &t!("SSH.ftp_port"),
                 self.render_form_input(&self.ftp_port_input),
             ))
-            .child(self.render_form_row(
-                &t!("SSH.ftp_username"),
-                self.render_form_input(&self.ftp_username_input),
-            ))
-            .child(self.render_form_row(
-                &t!("SSH.ftp_password"),
-                self.render_form_input(&self.ftp_password_input),
-            ))
+            .when(!ftp_username_referenced, |this| {
+                this.child(
+                    self.render_form_row(
+                        &t!("SSH.ftp_username"),
+                        self.render_form_input(&self.ftp_username_input),
+                    )
+                    .debug_selector(|| "ssh-ftp-username-row".to_string()),
+                )
+            })
+            .when(!ftp_password_referenced, |this| {
+                this.child(
+                    self.render_form_row(
+                        &t!("SSH.ftp_password"),
+                        self.render_form_input(&self.ftp_password_input),
+                    )
+                    .debug_selector(|| "ssh-ftp-password-row".to_string()),
+                )
+            })
             .child(
                 self.render_form_row(
                     &t!("SSH.ftp_passive_mode"),
@@ -2991,6 +3051,35 @@ impl SshFormWindow {
                     Select::new(&self.remote_file_protocol_select).w_full(),
                 )
                 .debug_selector(|| "ssh-remote-file-protocol-row".to_string()),
+            )
+            .child(
+                self.render_form_row(
+                    &t!("SSH.open_mode_dual_pane"),
+                    h_flex()
+                        .w_full()
+                        .gap_2()
+                        .items_start()
+                        .child(
+                            div().flex_shrink_0().child(
+                                Checkbox::new("open-dual-pane-by-default")
+                                    .checked(self.open_dual_pane_by_default)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.open_dual_pane_by_default =
+                                            !this.open_dual_pane_by_default;
+                                        cx.notify();
+                                    })),
+                            ),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(t!("SSH.open_mode_dual_pane_desc").to_string()),
+                        ),
+                )
+                .debug_selector(|| "ssh-open-mode-row".to_string()),
             )
             .when(!is_ftp, move |this| this.child(sftp_branch))
             .when(is_ftp, move |this| this.child(ftp_branch))
@@ -3469,9 +3558,9 @@ mod tests {
     use gpui::{Modifiers, TestAppContext, VisualTestContext};
     use one_core::settings::AppSettings;
     use one_core::storage::{
-        ConnectionType, FtpParams, JumpServerConfig, RemoteFileParams,
-        RemoteFileProtocol as StoredRemoteFileProtocol, SftpAccount, SshAuthMethod, SshParams,
-        StoredConnection, StoredTerminalEncoding, StoredTerminalType,
+        ConnectionType, CredentialReference, FtpParams, JumpServerConfig, PreferredOpenMode,
+        RemoteFileParams, RemoteFileProtocol as StoredRemoteFileProtocol, SftpAccount,
+        SshAuthMethod, SshParams, StoredConnection, StoredTerminalEncoding, StoredTerminalType,
     };
     use rust_i18n::t;
     use ssh::{HostKeyDetails, HostKeyIdentity, HostKeyRejection, HostKeyRoute};
@@ -3800,6 +3889,55 @@ mod tests {
     }
 
     #[gpui::test]
+    fn ssh_form_loads_open_mode_preference(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(AppSettings::default());
+            gpui_component::init(cx);
+        });
+
+        // 默认连接：未设置偏好，表单保持未勾选
+        let default_connection =
+            StoredConnection::new_ssh("default-mode".to_string(), sample_params(), None);
+        let (form, cx) = cx.add_window_view(|window, cx| {
+            super::SshFormWindow::new(
+                super::SshFormWindowConfig {
+                    editing_connection: None,
+                    initial_connection: Some(default_connection),
+                    on_saved: None,
+                    workspaces: Vec::new(),
+                    teams: Vec::new(),
+                },
+                window,
+                cx,
+            )
+        });
+        form.read_with(cx, |form, _| {
+            assert!(!form.open_dual_pane_by_default);
+        });
+
+        // 已设置 DualPane 偏好的连接：表单回填勾选
+        let mut dual_pane_connection =
+            StoredConnection::new_ssh("dual-pane".to_string(), sample_params(), None);
+        dual_pane_connection.preferred_open_mode = Some(PreferredOpenMode::DualPane);
+        let (form, cx) = cx.add_window_view(|window, cx| {
+            super::SshFormWindow::new(
+                super::SshFormWindowConfig {
+                    editing_connection: None,
+                    initial_connection: Some(dual_pane_connection),
+                    on_saved: None,
+                    workspaces: Vec::new(),
+                    teams: Vec::new(),
+                },
+                window,
+                cx,
+            )
+        });
+        form.read_with(cx, |form, _| {
+            assert!(form.open_dual_pane_by_default);
+        });
+    }
+
+    #[gpui::test]
     fn ssh_form_preserves_disabled_jump_server_for_restore(cx: &mut TestAppContext) {
         cx.update(|cx| {
             cx.set_global(AppSettings::default());
@@ -4079,6 +4217,76 @@ mod tests {
         assert!(
             cx.debug_bounds("ssh-remote-files-sftp-branch").is_none(),
             "SFTP branch must stay hidden while the protocol is FTP"
+        );
+        assert!(
+            cx.debug_bounds("ssh-ftp-username-row").is_some(),
+            "FTP username input should be visible in manual credential mode"
+        );
+        assert!(
+            cx.debug_bounds("ssh-ftp-password-row").is_some(),
+            "FTP password input should be visible in manual credential mode"
+        );
+    }
+
+    #[gpui::test]
+    fn ssh_remote_files_tab_hides_ftp_username_and_password_when_referenced(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| {
+            cx.set_global(AppSettings::default());
+            gpui_component::init(cx);
+        });
+        let mut params = sample_params();
+        params.remote_file = Some(RemoteFileParams {
+            protocol: StoredRemoteFileProtocol::Ftp,
+            ftp: Some(FtpParams {
+                host: "ftp.example.com".to_string(),
+                port: 21,
+                username: "ftp-user".to_string(),
+                password: "ftp-secret".to_string(),
+                credential_reference: Some(CredentialReference {
+                    credential_id: 1,
+                    username: true,
+                    password: true,
+                    ..Default::default()
+                }),
+                prompt_username: None,
+                prompt_password: None,
+                passive_mode: true,
+                use_tls: false,
+                connect_timeout: None,
+            }),
+        });
+        let initial_connection =
+            StoredConnection::new_ssh("ftp-referenced".to_string(), params, None);
+        let (_form, cx) = cx.add_window_view(|window, cx| {
+            let mut form = super::SshFormWindow::new(
+                super::SshFormWindowConfig {
+                    editing_connection: None,
+                    initial_connection: Some(initial_connection),
+                    on_saved: None,
+                    workspaces: Vec::new(),
+                    teams: Vec::new(),
+                },
+                window,
+                cx,
+            );
+            form.active_tab = 3;
+            form
+        });
+        let cx: &mut VisualTestContext = cx;
+
+        assert!(
+            cx.debug_bounds("ssh-remote-files-ftp-branch").is_some(),
+            "FTP branch should be rendered when the connection carries FTP params"
+        );
+        assert!(
+            cx.debug_bounds("ssh-ftp-username-row").is_none(),
+            "FTP username input must be hidden while the username is referenced"
+        );
+        assert!(
+            cx.debug_bounds("ssh-ftp-password-row").is_none(),
+            "FTP password input must be hidden while the password is referenced"
         );
     }
 

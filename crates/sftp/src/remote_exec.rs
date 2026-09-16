@@ -200,7 +200,10 @@ fn handle_event(
             signal_name,
             error_message,
         }) => *exit_signal = Some((signal_name, error_message)),
-        Some(ChannelEvent::Eof | ChannelEvent::Close) | None => return true,
+        // RFC 4254: EOF only ends the data stream; the server still sends
+        // the exit status afterwards, so keep reading until the channel closes.
+        Some(ChannelEvent::Eof) => return false,
+        Some(ChannelEvent::Close) | None => return true,
     }
     false
 }
@@ -246,14 +249,17 @@ mod tests {
     impl FakeChannel {
         fn successful() -> Self {
             Self {
+                // Servers send EOF before the exit status (RFC 4254): EOF only
+                // ends the data stream, the status arrives right after it.
                 events: VecDeque::from([
                     ChannelEvent::Data(b"ok".to_vec()),
                     ChannelEvent::ExtendedData {
                         ext: 1,
                         data: b"warning".to_vec(),
                     },
-                    ChannelEvent::ExitStatus(0),
                     ChannelEvent::Eof,
+                    ChannelEvent::ExitStatus(0),
+                    ChannelEvent::Close,
                 ]),
                 recv_hangs: false,
                 close_hangs: false,

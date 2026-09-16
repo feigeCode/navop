@@ -178,5 +178,6 @@ fn stored_connection_for_event(id: i64) -> StoredConnection {
         updated_at: None,
         team_id: None,
         owner_id: None,
+        preferred_open_mode: None,
     }
 }

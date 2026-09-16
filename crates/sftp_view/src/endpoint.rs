@@ -100,7 +100,15 @@ pub(crate) fn connection_title(connection: &StoredConnection) -> String {
         .to_ssh_params()
         .ok()
         .map(|params| params.host)
-        .filter(|host| !host.trim().is_empty());
+        .filter(|host| !host.trim().is_empty())
+        .or_else(|| {
+            // 独立 FTP 连接没有 SSH 参数，标题回退到 FTP 主机。
+            connection
+                .to_ftp_params()
+                .ok()
+                .map(|params| params.host)
+                .filter(|host| !host.trim().is_empty())
+        });
     host.map_or_else(
         || connection.name.clone(),
         |host| format!("{} ({host})", connection.name),

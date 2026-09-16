@@ -4,7 +4,9 @@ use gpui::{
     App, AppContext, AsyncApp, ClickEvent, Context, ParentElement, SharedString, Styled, Window,
 };
 use gpui_component::{WindowExt, notification::Notification};
-use one_core::storage::{ConnectionType, ExtensionConnectionParams, StoredConnection, Workspace};
+use one_core::storage::{
+    ConnectionType, ExtensionConnectionParams, PreferredOpenMode, StoredConnection, Workspace,
+};
 use one_core::tab_container::{TabItem, TabOpenMode};
 use remote_desktop::RemoteDesktopProtocol;
 use std::sync::Arc;
@@ -40,6 +42,7 @@ pub(crate) fn build_connection_open_strategy(
         ConnectionType::Mqtt => Box::new(MiddlewareExtensionOpenStrategy { connection }),
         ConnectionType::Serial => Box::new(SerialOpenStrategy { connection }),
         ConnectionType::Telnet => Box::new(TelnetOpenStrategy { connection }),
+        ConnectionType::Ftp => Box::new(FtpOpenStrategy { connection }),
         ConnectionType::PortForwarding => Box::new(PortForwardingOpenStrategy { connection }),
         ConnectionType::Rdp => Box::new(RemoteDesktopOpenStrategy {
             connection,
@@ -481,7 +484,29 @@ impl ConnectionOpenStrategy for SshOpenStrategy {
         window: &mut Window,
         cx: &mut Context<HomePage>,
     ) {
-        home.open_ssh_terminal_with_mode(self.connection, mode, window, cx);
+        // SSH 条目同时具备终端与双栏文件视图两种形态，按打开方式偏好分流
+        if self.connection.effective_open_mode() == PreferredOpenMode::DualPane {
+            home.open_sftp_view(self.connection, window, cx);
+        } else {
+            home.open_ssh_terminal_with_mode(self.connection, mode, window, cx);
+        }
+    }
+}
+
+/// 独立 FTP 连接没有终端形态，固定打开双栏文件视图（内部按协议走 FTP 客户端）。
+struct FtpOpenStrategy {
+    connection: StoredConnection,
+}
+
+impl ConnectionOpenStrategy for FtpOpenStrategy {
+    fn open(
+        self: Box<Self>,
+        home: &mut HomePage,
+        _mode: TabOpenMode,
+        window: &mut Window,
+        cx: &mut Context<HomePage>,
+    ) {
+        home.open_sftp_view(self.connection, window, cx);
     }
 }
 

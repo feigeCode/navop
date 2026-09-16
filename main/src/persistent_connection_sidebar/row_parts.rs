@@ -188,6 +188,7 @@ fn connection_type_tag_color(kind: ConnectionType, cx: &gpui::App) -> Hsla {
     match kind {
         ConnectionType::Database => cx.theme().blue,
         ConnectionType::SshSftp => cx.theme().success,
+        ConnectionType::Ftp => cx.theme().cyan,
         ConnectionType::Redis => cx.theme().warning,
         ConnectionType::MongoDB => cx.theme().info,
         ConnectionType::Mqtt => cx.theme().accent,

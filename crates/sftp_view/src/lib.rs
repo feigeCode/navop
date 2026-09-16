@@ -646,36 +646,38 @@ impl TransferQueue {
 /// 按 `StoredConnection` 的远程文件协议建立共享客户端。
 ///
 /// SFTP 协议走 SSH 配置；FTP 协议走独立 FTP 连接（不复用 SSH socket）。
-/// 协议声明为 FTP 但缺少 FTP 参数时返回明确错误，不静默回退 SFTP。
+/// 覆盖独立 `ConnectionType::Ftp` 连接与 SSH 聚合（remote_file.ftp）
+/// 两种形态；协议声明为 FTP 但缺少 FTP 参数时返回明确错误，不静默
+/// 回退 SFTP。
 pub async fn connect_remote_file_client(
     connection: &StoredConnection,
 ) -> anyhow::Result<SharedRemoteFileClient> {
-    let params = connection.to_ssh_params()?;
-    match params.remote_file_protocol() {
-        one_core::storage::models::RemoteFileProtocol::Ftp => {
-            let ftp = params.ftp_params().ok_or_else(|| {
-                anyhow::anyhow!("remote_file protocol is FTP but ftp params are missing")
-            })?;
-            let config = ftp::FtpConnectConfig {
-                host: ftp.host.clone(),
-                port: ftp.port,
-                username: ftp.username.clone(),
-                password: ftp.password.clone(),
-                passive_mode: ftp.passive_mode,
-                use_tls: ftp.use_tls,
-                connect_timeout: ftp.connect_timeout,
-            };
-            Ok(Arc::new(Mutex::new(Box::new(
-                FtpClient::connect(config).await?,
-            ))))
-        }
-        _ => {
-            let config = ssh_config::ssh_config_for(connection)?;
-            Ok(Arc::new(Mutex::new(Box::new(
-                RusshSftpClient::connect(config).await?,
-            ))))
-        }
+    let ftp = match connection.connection_type {
+        one_core::storage::ConnectionType::Ftp => connection.to_ftp_params().ok(),
+        _ => connection
+            .to_ssh_params()
+            .ok()
+            .filter(|params| params.remote_file_protocol().is_ftp())
+            .and_then(|params| params.ftp_params().cloned()),
+    };
+    if let Some(ftp) = ftp {
+        let config = ftp::FtpConnectConfig {
+            host: ftp.host.clone(),
+            port: ftp.port,
+            username: ftp.username.clone(),
+            password: ftp.password.clone(),
+            passive_mode: ftp.passive_mode,
+            use_tls: ftp.use_tls,
+            connect_timeout: ftp.connect_timeout,
+        };
+        return Ok(Arc::new(Mutex::new(Box::new(
+            FtpClient::connect(config).await?,
+        ))));
     }
+    let config = ssh_config::ssh_config_for(connection)?;
+    Ok(Arc::new(Mutex::new(Box::new(
+        RusshSftpClient::connect(config).await?,
+    ))))
 }
 
 async fn acquire_transfer_client(
@@ -1029,7 +1031,10 @@ pub(crate) async fn exec_remote_command_output(
                 let _ = channel.close().await;
                 anyhow::bail!("remote command failed with signal {signal_name}: {error_message}");
             }
-            ChannelEvent::Eof | ChannelEvent::Close => break,
+            // RFC 4254: EOF only ends the data stream; the exit status
+            // arrives after it, so keep reading until the channel closes.
+            ChannelEvent::Eof => continue,
+            ChannelEvent::Close => break,
         }
     }
 
@@ -1651,18 +1656,37 @@ impl SftpView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let resolved = ssh_config::resolve_ssh_connection(&conn)
-            .expect("StoredConnection should contain valid SSH params");
-        let config = resolved.config;
-        let sftp_initial_directory = resolved.sftp_initial_directory;
-        let remote_file_ftp = ssh_config::ftp_config_from_connection(&conn);
-        // FTP 模式下凭据提示策略来自嵌套 FTP 参数，而不是 SSH 顶层参数：
-        // 提交的运行时凭据只作用于 FTP 连接，不借用 SSH 的认证状态。
-        let credential_prompt_policy = if remote_file_ftp.is_some() {
-            ssh_config::ftp_credential_prompt_policy(&conn)
-        } else {
-            resolved.credential_prompt_policy
-        };
+        // 独立 FTP 连接没有 SSH 参数：双栏视图全程走 FTP 分流，
+        // SSH 配置仅为占位，不做解析。
+        let is_ftp_only = conn.connection_type == one_core::storage::ConnectionType::Ftp;
+        let (config, sftp_initial_directory, credential_prompt_policy, remote_file_ftp) =
+            if is_ftp_only {
+                (
+                    ssh_config::unused_ssh_config_placeholder(),
+                    None,
+                    ssh_config::ftp_credential_prompt_policy(&conn),
+                    ssh_config::ftp_config_from_connection(&conn),
+                )
+            } else {
+                let resolved = ssh_config::resolve_ssh_connection(&conn)
+                    .expect("StoredConnection should contain valid SSH params");
+                let config = resolved.config;
+                let sftp_initial_directory = resolved.sftp_initial_directory;
+                let remote_file_ftp = ssh_config::ftp_config_from_connection(&conn);
+                // FTP 模式下凭据提示策略来自嵌套 FTP 参数，而不是 SSH 顶层参数：
+                // 提交的运行时凭据只作用于 FTP 连接，不借用 SSH 的认证状态。
+                let credential_prompt_policy = if remote_file_ftp.is_some() {
+                    ssh_config::ftp_credential_prompt_policy(&conn)
+                } else {
+                    resolved.credential_prompt_policy
+                };
+                (
+                    config,
+                    sftp_initial_directory,
+                    credential_prompt_policy,
+                    remote_file_ftp,
+                )
+            };
 
         let focus_handle = cx.focus_handle();
         let local_current_path = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));

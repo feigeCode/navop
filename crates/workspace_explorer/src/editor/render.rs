@@ -224,6 +224,7 @@ impl WorkspaceEditor {
                     Editor::new(editor)
                         .size_full()
                         .readonly(tab.read_only)
+                        .editor_style(self.theme.editor_style())
                         .bg(self.theme.background)
                         .text_color(self.theme.foreground)
                         .border_color(self.theme.border),
@@ -235,6 +236,9 @@ impl WorkspaceEditor {
 
     fn render_diff_view(&self, editors: &DiffEditors) -> AnyElement {
         let theme = self.theme;
+        // Built once: both panes paint the same palette, and the highlight
+        // theme behind it is not worth constructing twice a frame.
+        let editor_style = theme.editor_style();
         v_flex()
             .size_full()
             .min_h_0()
@@ -279,6 +283,7 @@ impl WorkspaceEditor {
                                 .size_full()
                                 .readonly(true)
                                 .bordered(false)
+                                .editor_style(editor_style.clone())
                                 .bg(theme.background)
                                 .text_color(theme.foreground),
                         ),
@@ -290,6 +295,7 @@ impl WorkspaceEditor {
                                 .size_full()
                                 .readonly(true)
                                 .bordered(false)
+                                .editor_style(editor_style.clone())
                                 .bg(theme.background)
                                 .text_color(theme.foreground),
                         ),
@@ -336,6 +342,7 @@ impl WorkspaceEditor {
 
         StatusBar::new("workspace-editor-status")
             .presentation(presentation)
+            .colors(self.theme.status_bar_colors())
             .leading(
                 div()
                     .min_w_0()

@@ -26,7 +26,9 @@ impl HomePage {
             .rounded(px(8.0))
             .group_hover("", |style| style.opacity(1.0))
             .opacity(0.0)
-            .when(conn.connection_type == ConnectionType::SshSftp, |this| {
+            .when(
+                matches!(conn.connection_type, ConnectionType::SshSftp | ConnectionType::Ftp),
+                |this| {
                 this.child(
                     IconButton::new(
                         SharedString::from(format!("sftp-list-conn-{}", conn.id.unwrap_or(0))),

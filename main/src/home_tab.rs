@@ -58,6 +58,7 @@ use rust_i18n::t;
 use terminal_view::{SerialFormWindow, SerialFormWindowConfig};
 use terminal_view::{SshFormWindow, SshFormWindowConfig};
 use terminal_view::{TelnetFormWindow, TelnetFormWindowConfig};
+use terminal_view::{FtpFormWindow, FtpFormWindowConfig};
 
 use crate::auth::{AuthService, load_auth_data, show_auth_dialog};
 use crate::connection_visuals::{ConnectionVisualSize, connection_type_navigation_icon};
@@ -159,7 +160,10 @@ impl HomePage {
 
 pub struct HomePage {
     focus_handle: FocusHandle,
+    /// 类型筛选目标：All / 内置类型 / 某个扩展连接贡献。
     pub(crate) selected_filter: ConnectionFilter,
+    /// 连接类型筛选条的动态布局状态（可见类型数量按容器宽度实测决定）。
+    connection_type_filter: connection_type_filter_bar::ConnectionTypeFilterBar,
     connection_layout: ConnectionLayout,
     sidebar_collapsed: bool,
     collapsed_groups: HashSet<Option<i64>>,
@@ -254,6 +258,7 @@ mod connection_open;
 pub(crate) use connection_open::resolve_connection_credentials;
 mod account_menu;
 pub(crate) mod connection_selection;
+mod connection_type_filter_bar;
 mod content;
 mod data;
 mod encryption;

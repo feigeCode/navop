@@ -341,6 +341,7 @@ mod tests {
             updated_at: Some(200),
             team_id: None,
             owner_id: None,
+            preferred_open_mode: None,
         };
 
         let copy = resolver.create_conflict_copy(&conn, "本地");

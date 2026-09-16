@@ -315,6 +315,10 @@ Home:
     en: Filter connections
     zh-CN: 筛选连接
     zh-HK: 篩選連線
+  connection_filter_more:
+    en: More
+    zh-CN: 更多
+    zh-HK: 更多
   credential_vault:
     en: Keychain
     zh-CN: 钥匙串
@@ -880,9 +884,13 @@ Home:
     zh-CN: AI 助手
     zh-HK: AI 助手
   open_sftp:
-    en: Open SFTP
-    zh-CN: 打开 SFTP
-    zh-HK: 打開 SFTP
+    en: Open in File View
+    zh-CN: 在文件视图中打开
+    zh-HK: 在檔案檢視中開啟
+  open_terminal:
+    en: Open in Terminal
+    zh-CN: 在终端中打开
+    zh-HK: 在終端中開啟
   open_connection:
     en: Open Connection
     zh-CN: 打开连接
@@ -1670,6 +1678,10 @@ Connection:
     en: Copy Telnet Address
     zh-CN: 复制 Telnet 地址
     zh-HK: 複製 Telnet 地址
+  copy_ftp_target:
+    en: Copy FTP Address
+    zh-CN: 复制 FTP 地址
+    zh-HK: 複製 FTP 位址
   copy_redis_target:
     en: Copy Redis Address
     zh-CN: 复制 Redis 地址
@@ -1988,6 +2000,10 @@ Connection:
       en: SSH/SFTP
       zh-CN: SSH/SFTP
       zh-HK: SSH/SFTP
+    type_ftp:
+      en: FTP
+      zh-CN: FTP
+      zh-HK: FTP
     type_redis:
       en: Redis
       zh-CN: Redis
@@ -2167,6 +2183,10 @@ NewConnection:
     en: Telnet network device connection
     zh-CN: Telnet 网络设备连接
     zh-HK: Telnet 網絡設備連線
+  description_ftp:
+    en: Standalone FTP / FTPS file transfer connection
+    zh-CN: 独立 FTP / FTPS 文件传输连接
+    zh-HK: 獨立 FTP / FTPS 檔案傳輸連線
   description_port_forwarding:
     en: SSH local, remote, or SOCKS port forwarding
     zh-CN: SSH 本地、远程端口转发或 SOCKS 隧道

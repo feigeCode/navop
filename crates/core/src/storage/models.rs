@@ -85,6 +85,7 @@ pub enum ConnectionType {
     All,
     Database,
     SshSftp,
+    Ftp,
     Redis,
     MongoDB,
     Mqtt,
@@ -102,6 +103,7 @@ impl fmt::Display for ConnectionType {
             ConnectionType::All => "All",
             ConnectionType::Database => "Database",
             ConnectionType::SshSftp => "SshSftp",
+            ConnectionType::Ftp => "Ftp",
             ConnectionType::Redis => "Redis",
             ConnectionType::MongoDB => "MongoDB",
             ConnectionType::Mqtt => "Mqtt",
@@ -121,6 +123,7 @@ impl ConnectionType {
         vec![
             ConnectionType::All,
             ConnectionType::SshSftp,
+            ConnectionType::Ftp,
             ConnectionType::Database,
             ConnectionType::Redis,
             ConnectionType::MongoDB,
@@ -137,6 +140,7 @@ impl ConnectionType {
         match s {
             "Database" => ConnectionType::Database,
             "SshSftp" => ConnectionType::SshSftp,
+            "Ftp" => ConnectionType::Ftp,
             "Redis" => ConnectionType::Redis,
             "MongoDB" => ConnectionType::MongoDB,
             "Mqtt" => ConnectionType::Mqtt,
@@ -155,6 +159,7 @@ impl ConnectionType {
             ConnectionType::All => "All",
             ConnectionType::Database => "Database",
             ConnectionType::SshSftp => "SSH/SFTP",
+            ConnectionType::Ftp => "FTP",
             ConnectionType::Redis => "Redis",
             ConnectionType::MongoDB => "MongoDB",
             ConnectionType::Mqtt => "MQTT",
@@ -172,6 +177,7 @@ impl ConnectionType {
             ConnectionType::All => IconName::Server,
             ConnectionType::Database => IconName::Database,
             ConnectionType::SshSftp => IconName::TerminalColor,
+            ConnectionType::Ftp => IconName::FtpColor,
             ConnectionType::Redis => IconName::Redis,
             ConnectionType::MongoDB => IconName::MongoDB,
             // 外部 gpui-component 未提供 MQTT 品牌图标,
@@ -1593,6 +1599,16 @@ impl FtpParams {
     pub fn prompts_for_password(&self) -> bool {
         self.prompt_password.unwrap_or(false)
     }
+
+    /// 清除「连接时输入」的临时凭据，防止落库（与 SshParams 同一策略）。
+    pub fn sanitize_for_storage(&mut self) {
+        if self.prompts_for_username() {
+            self.username = String::new();
+        }
+        if self.prompts_for_password() {
+            self.password = String::new();
+        }
+    }
 }
 
 /// SSH/SFTP 连接记录上远程文件面板使用的协议。
@@ -2020,6 +2036,19 @@ impl SyncableItem for Workspace {
     }
 }
 
+/// 连接的默认打开方式。
+///
+/// 仅对同时具备多种打开形态的类型有意义（当前为 SSH 终端 / 双栏文件视图）。
+/// FTP 无终端形态，只能打开双栏文件视图。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PreferredOpenMode {
+    /// 双击/后台打开时进终端
+    Terminal,
+    /// 双击/后台打开时进双栏文件视图（SFTP/FTP）
+    DualPane,
+}
+
 /// Stored connection with ID
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredConnection {
@@ -2069,6 +2098,9 @@ pub struct StoredConnection {
     /// 连接创建者 ID（用户 UUID，用于权限判断）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner_id: Option<String>,
+    /// 打开方式偏好（None = 按类型默认：SSH 终端、FTP 双栏）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_open_mode: Option<PreferredOpenMode>,
 }
 
 pub const EXTENSION_CONNECTION_SCHEMA_VERSION: u32 = 1;
@@ -2223,6 +2255,17 @@ fn default_ssh_name(name: String, params: &SshParams) -> String {
     trimmed_or_default(name, default_name)
 }
 
+fn default_ftp_name(name: String, params: &FtpParams) -> String {
+    let username = params.username.trim();
+    let destination = host_port_name(&params.host, params.port);
+    let default_name = if username.is_empty() {
+        destination
+    } else {
+        format!("{username}@{destination}")
+    };
+    trimmed_or_default(name, default_name)
+}
+
 fn default_remote_desktop_name(name: String, params: &RemoteDesktopParams) -> String {
     trimmed_or_default(name, host_port_name(&params.host, params.port))
 }
@@ -2271,6 +2314,18 @@ fn default_port_forwarding_name(name: String, params: &PortForwardingParams) -> 
 }
 
 impl StoredConnection {
+    /// 生效的打开方式：显式偏好优先，否则按类型默认。
+    ///
+    /// SSH/SFTP 默认终端、独立 FTP 默认双栏文件视图；其余类型一律按终端
+    /// 默认返回（调用方本就按类型分流，不会用到该值）。
+    pub fn effective_open_mode(&self) -> PreferredOpenMode {
+        self.preferred_open_mode
+            .unwrap_or(match self.connection_type {
+                ConnectionType::Ftp => PreferredOpenMode::DualPane,
+                _ => PreferredOpenMode::Terminal,
+            })
+    }
+
     pub fn new_extension(
         name: String,
         params: ExtensionConnectionParams,
@@ -2296,6 +2351,7 @@ impl StoredConnection {
             updated_at: None,
             team_id: None,
             owner_id: None,
+            preferred_open_mode: None,
         }
     }
 
@@ -2372,6 +2428,7 @@ impl StoredConnection {
             updated_at: None,
             team_id: None,
             owner_id: None,
+            preferred_open_mode: None,
         }
     }
 
@@ -2396,6 +2453,35 @@ impl StoredConnection {
             updated_at: None,
             team_id: None,
             owner_id: None,
+            preferred_open_mode: None,
+        }
+    }
+
+    /// 新建独立 FTP/FTPS 连接（无 SSH 主机）。
+    ///
+    /// 连接时输入用户名/密码的记录会清除对应字段，防止临时凭据落库。
+    pub fn new_ftp(name: String, mut params: FtpParams, workspace_id: Option<i64>) -> Self {
+        params.sanitize_for_storage();
+        let name = default_ftp_name(name, &params);
+        Self {
+            id: None,
+            credential_revision: None,
+            name,
+            connection_type: ConnectionType::Ftp,
+            params: serde_json::to_string(&params).expect("FtpParams 序列化不应失败"),
+            workspace_id,
+            selected_databases: None,
+            remark: None,
+            sync_enabled: true,
+            cloud_id: None,
+            last_synced_at: None,
+            last_used_at: None,
+            sort_order: None,
+            created_at: None,
+            updated_at: None,
+            team_id: None,
+            owner_id: None,
+            preferred_open_mode: None,
         }
     }
 
@@ -2423,6 +2509,7 @@ impl StoredConnection {
             updated_at: None,
             team_id: None,
             owner_id: None,
+            preferred_open_mode: None,
         }
     }
 
@@ -2446,6 +2533,7 @@ impl StoredConnection {
             updated_at: None,
             team_id: None,
             owner_id: None,
+            preferred_open_mode: None,
         }
     }
 
@@ -2469,6 +2557,7 @@ impl StoredConnection {
             updated_at: None,
             team_id: None,
             owner_id: None,
+            preferred_open_mode: None,
         }
     }
 
@@ -2492,6 +2581,7 @@ impl StoredConnection {
             updated_at: None,
             team_id: None,
             owner_id: None,
+            preferred_open_mode: None,
         }
     }
 
@@ -2499,6 +2589,11 @@ impl StoredConnection {
         let mut params: SshParams = serde_json::from_str(&self.params)?;
         params.sanitize_for_storage();
         Ok(params)
+    }
+
+    /// 独立 FTP/FTPS 连接的参数（仅对 `ConnectionType::Ftp` 有意义）。
+    pub fn to_ftp_params(&self) -> Result<FtpParams, serde_json::Error> {
+        serde_json::from_str(&self.params)
     }
 
     /// 远程文件面板使用的协议（仅对 `ConnectionType::SshSftp` 有意义）。
@@ -2551,6 +2646,7 @@ impl StoredConnection {
             updated_at: None,
             team_id: None,
             owner_id: None,
+            preferred_open_mode: None,
         }
     }
 
@@ -2574,6 +2670,7 @@ impl StoredConnection {
             updated_at: None,
             team_id: None,
             owner_id: None,
+            preferred_open_mode: None,
         }
     }
 
@@ -2601,6 +2698,7 @@ impl StoredConnection {
             updated_at: None,
             team_id: None,
             owner_id: None,
+            preferred_open_mode: None,
         }
     }
 
@@ -2675,15 +2773,23 @@ impl StoredConnection {
     /// SSH 连接若配置为连接时输入用户名或密码，会在此处再次清除对应字段，
     /// 防止绕过 `StoredConnection::new_ssh` 的调用路径意外泄漏临时凭据。
     pub fn params_for_storage(&self) -> String {
-        if self.connection_type != ConnectionType::SshSftp {
-            return self.params.clone();
+        match self.connection_type {
+            ConnectionType::SshSftp => {
+                let Ok(mut params) = serde_json::from_str::<SshParams>(&self.params) else {
+                    return self.params.clone();
+                };
+                params.sanitize_for_storage();
+                serde_json::to_string(&params).unwrap_or_else(|_| self.params.clone())
+            }
+            ConnectionType::Ftp => {
+                let Ok(mut params) = serde_json::from_str::<FtpParams>(&self.params) else {
+                    return self.params.clone();
+                };
+                params.sanitize_for_storage();
+                serde_json::to_string(&params).unwrap_or_else(|_| self.params.clone())
+            }
+            _ => self.params.clone(),
         }
-
-        let Ok(mut params) = serde_json::from_str::<SshParams>(&self.params) else {
-            return self.params.clone();
-        };
-        params.sanitize_for_storage();
-        serde_json::to_string(&params).unwrap_or_else(|_| self.params.clone())
     }
 
     /// 对 params 中的加密字段进行解密，返回解密后的 params 字符串。
@@ -4788,5 +4894,137 @@ mod serial_tests {
         let ftp = params.ftp_params().expect("ftp params");
         assert_eq!(ftp.username, "ftp-user", "未启用 prompt 的字段保留");
         assert_eq!(ftp.password, "", "启用了 prompt 的密码应被清除");
+    }
+
+    #[test]
+    fn ftp_connection_type_round_trips_and_defaults_name() {
+        let connection = StoredConnection::new_ftp(
+            String::new(),
+            ftp_params_for_storage_tests(),
+            None,
+        );
+        assert_eq!(connection.connection_type, ConnectionType::Ftp);
+        assert_eq!(connection.name, "ftp-user@ftp.example:21");
+
+        let parsed = connection.to_ftp_params().expect("ftp params");
+        assert_eq!(parsed.host, "ftp.example");
+        assert_eq!(parsed.port, 21);
+        assert_eq!(parsed.username, "ftp-user");
+        assert_eq!(parsed.password, "ftp-secret");
+        assert!(parsed.passive_mode);
+        assert!(!parsed.use_tls);
+    }
+
+    #[test]
+    fn ftp_connection_for_storage_clears_prompt_credentials() {
+        let mut ftp = ftp_params_for_storage_tests();
+        ftp.prompt_password = Some(true);
+        let connection = StoredConnection::new_ftp("测试 FTP".to_string(), ftp, None);
+
+        let params: FtpParams =
+            serde_json::from_str(&connection.params_for_storage()).unwrap();
+        assert_eq!(params.username, "ftp-user", "未启用 prompt 的字段保留");
+        assert_eq!(params.password, "", "启用了 prompt 的密码应被清除");
+    }
+
+    #[test]
+    fn ftp_connection_encrypt_and_decrypt_params_round_trips() {
+        let _crypto_guard = crate::crypto::crypto_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        crypto::set_master_key_for_session("ftp-connection-test-key").unwrap();
+        let connection = StoredConnection::new_ftp(
+            "测试 FTPS".to_string(),
+            ftp_params_for_storage_tests(),
+            None,
+        );
+
+        let encrypted = connection.try_encrypt_params().expect("encrypt params");
+        let value: Value = serde_json::from_str(&encrypted).unwrap();
+        assert_eq!(value["password"].as_str().map(|p| p.starts_with("ENC:")), Some(true));
+
+        let mut stored = connection.clone();
+        stored.params = encrypted;
+        let decrypted: FtpParams = serde_json::from_str(&stored.decrypt_params()).unwrap();
+        assert_eq!(decrypted.password, "ftp-secret");
+    }
+
+    #[test]
+    fn effective_open_mode_defaults_by_connection_type() {
+        let ssh = StoredConnection::new_ssh(
+            "ssh".to_string(),
+            SshParams {
+                remote_file: None,
+                sftp_default_directory: None,
+                disabled_jump_server: None,
+                sftp_account: None,
+                host: "h".to_string(),
+                port: 22,
+                username: "u".to_string(),
+                auth_method: SshAuthMethod::Password {
+                    password: "p".to_string(),
+                },
+                credential_reference: None,
+                prompt_username: None,
+                prompt_password: None,
+                keyboard_interactive: None,
+                terminal_encoding: Default::default(),
+                terminal_type: Default::default(),
+                connect_timeout: None,
+                keepalive_interval: None,
+                keepalive_max: None,
+                default_directory: None,
+                init_script: None,
+                disable_shell_integration: None,
+                x11_forwarding: None,
+                allow_legacy_algorithms: None,
+                jump_server: None,
+                proxy: None,
+                os_id: None,
+                icon: None,
+                icon_file_path: None,
+                account_expect: Default::default(),
+            },
+            None,
+        );
+        assert_eq!(ssh.effective_open_mode(), PreferredOpenMode::Terminal);
+
+        let ftp = StoredConnection::new_ftp("ftp".to_string(), ftp_params_for_storage_tests(), None);
+        assert_eq!(ftp.effective_open_mode(), PreferredOpenMode::DualPane);
+    }
+
+    #[test]
+    fn preferred_open_mode_round_trips_through_serde() {
+        let mut connection = StoredConnection::new_ftp(
+            "ftp".to_string(),
+            ftp_params_for_storage_tests(),
+            None,
+        );
+        connection.preferred_open_mode = Some(PreferredOpenMode::Terminal);
+
+        let json = serde_json::to_string(&connection).expect("serialize connection");
+        assert!(json.contains("preferred_open_mode"));
+        let restored: StoredConnection = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(
+            restored.preferred_open_mode,
+            Some(PreferredOpenMode::Terminal)
+        );
+        assert_eq!(restored.effective_open_mode(), PreferredOpenMode::Terminal);
+    }
+
+    #[test]
+    fn preferred_open_mode_absent_keeps_type_default() {
+        let connection = StoredConnection::new_ftp(
+            "ftp".to_string(),
+            ftp_params_for_storage_tests(),
+            None,
+        );
+        assert_eq!(connection.preferred_open_mode, None);
+        // 旧版云同步/数据库 JSON 不携带该字段时反序列化为 None
+        let legacy = serde_json::to_string(&connection).expect("serialize");
+        let value: Value = serde_json::from_str(&legacy).unwrap();
+        assert!(value.get("preferred_open_mode").is_none());
+        let restored: StoredConnection = serde_json::from_str(&legacy).expect("deserialize");
+        assert_eq!(restored.effective_open_mode(), PreferredOpenMode::DualPane);
     }
 }

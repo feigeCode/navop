@@ -1237,6 +1237,7 @@ mod tests {
             updated_at: Some(updated_at),
             team_id: None,
             owner_id: None,
+            preferred_open_mode: None,
         }
     }
 
