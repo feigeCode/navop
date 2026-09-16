@@ -50,7 +50,7 @@ const fn connection_type_icon_name(kind: ConnectionType) -> IconName {
         ConnectionType::All => IconName::Server,
         ConnectionType::Database => IconName::Database,
         ConnectionType::SshSftp => IconName::TerminalColor,
-        ConnectionType::Ftp => IconName::Network,
+        ConnectionType::Ftp => IconName::FtpColor,
         ConnectionType::Redis => IconName::Redis,
         ConnectionType::MongoDB => IconName::MongoDB,
         // 品牌 SVG 图标,见 connection_type_icon 的特判分支

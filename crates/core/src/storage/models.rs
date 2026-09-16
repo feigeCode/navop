@@ -177,7 +177,7 @@ impl ConnectionType {
             ConnectionType::All => IconName::Server,
             ConnectionType::Database => IconName::Database,
             ConnectionType::SshSftp => IconName::TerminalColor,
-            ConnectionType::Ftp => IconName::Network,
+            ConnectionType::Ftp => IconName::FtpColor,
             ConnectionType::Redis => IconName::Redis,
             ConnectionType::MongoDB => IconName::MongoDB,
             // 外部 gpui-component 未提供 MQTT 品牌图标,
