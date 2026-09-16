@@ -1205,7 +1205,10 @@ async fn exec_remote_command_output(
                 let _ = channel.close().await;
                 anyhow::bail!("remote command failed with signal {signal_name}: {error_message}");
             }
-            ChannelEvent::Eof | ChannelEvent::Close => break,
+            // RFC 4254: EOF only ends the data stream; the exit status
+            // arrives after it, so keep reading until the channel closes.
+            ChannelEvent::Eof => continue,
+            ChannelEvent::Close => break,
         }
     }
 
