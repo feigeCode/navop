@@ -41,6 +41,7 @@ pub(super) fn screenshot_safe_connection_info(
     match connection_type {
         ConnectionType::Database => Some("user@localhost:5432/example"),
         ConnectionType::SshSftp => Some("user@localhost:22"),
+        ConnectionType::Ftp => Some("user@localhost:21"),
         ConnectionType::Redis => Some("localhost:6379/0"),
         ConnectionType::MongoDB => Some("localhost:27017"),
         ConnectionType::Mqtt => Some("localhost:1883"),
@@ -62,6 +63,7 @@ pub(super) fn connection_display_name(conn: &StoredConnection) -> String {
     match conn.connection_type {
         ConnectionType::Database => "Local Database",
         ConnectionType::SshSftp => "Local SSH",
+        ConnectionType::Ftp => "Local FTP",
         ConnectionType::Redis => "Local Redis",
         ConnectionType::MongoDB => "Local MongoDB",
         ConnectionType::Mqtt => "Local MQTT",

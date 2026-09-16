@@ -18,6 +18,8 @@ pub(super) fn connection_share_text_for_locale(
     let fields = match connection.connection_type {
         ConnectionType::Database => database_fields(locale, connection.to_db_connection().ok()?),
         ConnectionType::SshSftp => ssh_fields(locale, connection.to_ssh_params().ok()?),
+        ConnectionType::Ftp => ftp_fields(locale, connection.to_ftp_params().ok()?),
+        ConnectionType::Ftp => ftp_fields(locale, connection.to_ftp_params().ok()?),
         ConnectionType::Redis => redis_fields(locale, connection.to_redis_params().ok()?),
         ConnectionType::MongoDB => mongodb_fields(locale, connection.to_mongodb_params().ok()?),
         ConnectionType::Mqtt => mqtt_fields(locale, connection.to_mqtt_params().ok()?),
@@ -230,6 +232,18 @@ fn telnet_fields(
     vec![("host", params.host), ("port", params.port.to_string())]
 }
 
+fn ftp_fields(_locale: &str, params: one_core::storage::FtpParams) -> Vec<(&'static str, String)> {
+    let mut fields = vec![
+        ("host", params.host),
+        ("port", params.port.to_string()),
+        ("username", params.username),
+    ];
+    if params.use_tls {
+        fields.push(("tls", "FTPS (AUTH TLS)".to_string()));
+    }
+    fields
+}
+
 fn forwarding_fields(locale: &str, params: PortForwardingParams) -> Vec<(&'static str, String)> {
     let mut fields = vec![
         ("mode", tr(locale, forwarding_mode_key(params.kind))),
@@ -386,6 +400,7 @@ fn connection_type_key(connection_type: ConnectionType) -> &'static str {
         ConnectionType::All => "Connection.Share.type_all",
         ConnectionType::Database => "Connection.Share.type_database",
         ConnectionType::SshSftp => "Connection.Share.type_ssh_sftp",
+        ConnectionType::Ftp => "Connection.Share.type_ftp",
         ConnectionType::Redis => "Connection.Share.type_redis",
         ConnectionType::MongoDB => "Connection.Share.type_mongodb",
         ConnectionType::Mqtt => "Connection.Share.type_mqtt",

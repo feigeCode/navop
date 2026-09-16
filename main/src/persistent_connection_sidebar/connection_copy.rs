@@ -26,6 +26,7 @@ pub(super) enum ConnectionCopyAction {
     SentinelConfig,
     ClusterNodes,
     MqttAddress,
+    FtpAddress,
 }
 
 pub(super) fn connection_copy_actions(
@@ -79,6 +80,14 @@ pub(super) fn connection_copy_actions(
                     ConnectionCopyAction::SshCommand,
                     ConnectionCopyAction::SftpCommand,
                 ]);
+            }
+        }
+        ConnectionType::Ftp => {
+            if connection_address(connection).is_some() {
+                actions.push(ConnectionCopyAction::FtpAddress);
+            }
+            if connection_username(connection).is_some() {
+                actions.push(ConnectionCopyAction::Username);
             }
         }
         ConnectionType::Redis => {
@@ -189,6 +198,7 @@ pub(super) fn connection_copy_text(
         ConnectionCopyAction::MqttAddress => connection_address(connection),
         ConnectionCopyAction::RemoteDesktopAddress => connection_address(connection),
         ConnectionCopyAction::TelnetAddress => connection_address(connection),
+        ConnectionCopyAction::FtpAddress => connection_address(connection),
         ConnectionCopyAction::Username => connection_username(connection),
         ConnectionCopyAction::SerialPort => serial_port(connection),
         ConnectionCopyAction::ForwardingRule => forwarding_rule(connection),
@@ -299,6 +309,10 @@ fn connection_address(connection: &StoredConnection) -> Option<String> {
             .to_mqtt_params()
             .ok()
             .and_then(|params| optional_host_port(&params.host, Some(params.port))),
+        ConnectionType::Ftp => connection
+            .to_ftp_params()
+            .ok()
+            .and_then(|params| optional_host_port(&params.host, Some(params.port))),
         ConnectionType::Serial
         | ConnectionType::PortForwarding
         | ConnectionType::Extension => None,
@@ -352,6 +366,7 @@ fn connection_username(connection: &StoredConnection) -> Option<String> {
     let username = match connection.connection_type {
         ConnectionType::Database => connection.to_db_connection().ok()?.username,
         ConnectionType::SshSftp => connection.to_ssh_params().ok()?.username,
+        ConnectionType::Ftp => connection.to_ftp_params().ok()?.username,
         ConnectionType::Redis => connection.to_redis_params().ok()?.username?,
         ConnectionType::MongoDB => connection.to_mongodb_params().ok()?.username?,
         ConnectionType::Mqtt => connection.to_mqtt_params().ok()?.username?,

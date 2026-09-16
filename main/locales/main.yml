@@ -1670,6 +1670,10 @@ Connection:
     en: Copy Telnet Address
     zh-CN: 复制 Telnet 地址
     zh-HK: 複製 Telnet 地址
+  copy_ftp_target:
+    en: Copy FTP Address
+    zh-CN: 复制 FTP 地址
+    zh-HK: 複製 FTP 位址
   copy_redis_target:
     en: Copy Redis Address
     zh-CN: 复制 Redis 地址
@@ -1988,6 +1992,10 @@ Connection:
       en: SSH/SFTP
       zh-CN: SSH/SFTP
       zh-HK: SSH/SFTP
+    type_ftp:
+      en: FTP
+      zh-CN: FTP
+      zh-HK: FTP
     type_redis:
       en: Redis
       zh-CN: Redis
