@@ -7922,7 +7922,7 @@ dependencies = [
 
 [[package]]
 name = "main"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "agent_runtime",
  "ai_chat_view",
