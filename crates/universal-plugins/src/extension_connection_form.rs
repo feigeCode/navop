@@ -54,6 +54,8 @@ pub struct ExtensionConnectionForm {
     pub(super) contribution: extension_runtime::RegisteredResourceConnectionContribution,
     pub(super) editing_connection: Option<StoredConnection>,
     pub(super) name: Entity<InputState>,
+    /// 当前页签;TabBar 由本表单托管,名称归入首个页签内容。
+    pub(super) active_tab: usize,
     pub(super) fields: Entity<DeclarativeForm>,
     pub(super) workspace: Entity<SelectState<Vec<WorkspaceItem>>>,
     pub(super) team: Entity<SelectState<Vec<connection_form::team::TeamSelectItem>>>,
@@ -119,6 +121,7 @@ impl ExtensionConnectionForm {
             contribution: config.contribution,
             editing_connection: config.editing_connection,
             name,
+            active_tab: 0,
             fields,
             workspace,
             team,
