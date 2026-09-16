@@ -383,10 +383,18 @@ jobs:
             $env:CARGO_PROFILE_RELEASE_CODEGEN_UNITS = "16"
             Write-Host "Fast build mode: LTO disabled, codegen-units=16"
           }
+          # 32 位 Windows 暂不支持 shell-plugins：其 gpui-shell 依赖的
+          # quickjs-jit 运行时代码与 cranelift 后端仅支持 64 位
+          # (x86_64/aarch64)，i686 无法编译。win32 构建先剔除该 feature。
+          $features = if ($target -eq "i686-pc-windows-msvc") {
+            @("--no-default-features", "--features", "wasm-components,embedded-webview,windows-native-rdp")
+          } else {
+            @("--features", "windows-native-rdp")
+          }
           cargo build `
             --release `
             -p main `
-            --features windows-native-rdp `
+            @features `
             --target $target
 
           $binary = "target\$target\release\${{ matrix.binary }}"
