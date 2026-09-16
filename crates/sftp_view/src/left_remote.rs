@@ -52,20 +52,25 @@ impl SftpView {
             window.push_notification(Notification::error(t!("Endpoint.connection_missing")), cx);
             return;
         };
-        let config = match crate::ssh_config::ssh_config_for(&connection) {
-            Ok(config) => config,
-            Err(error) => {
-                window.push_notification(
-                    Notification::error(t!("Endpoint.connection_invalid", error = error)),
-                    cx,
-                );
-                return;
+        let remote_file_ftp = crate::ssh_config::ftp_config_from_connection(&connection);
+        // 独立 FTP 连接没有 SSH 参数；FTP 模式下 SSH 配置不参与建连，用占位值。
+        let config = if connection.connection_type == one_core::storage::ConnectionType::Ftp {
+            crate::ssh_config::unused_ssh_config_placeholder()
+        } else {
+            match crate::ssh_config::ssh_config_for(&connection) {
+                Ok(config) => config,
+                Err(error) => {
+                    window.push_notification(
+                        Notification::error(t!("Endpoint.connection_invalid", error = error)),
+                        cx,
+                    );
+                    return;
+                }
             }
         };
 
         self.disconnect_left_remote(cx);
         let sftp_initial_directory = crate::ssh_config::sftp_initial_directory_of(&connection);
-        let remote_file_ftp = crate::ssh_config::ftp_config_from_connection(&connection);
         self.left_remote = Some(LeftRemoteEndpoint::connecting(
             connection,
             config,

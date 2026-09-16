@@ -121,17 +121,24 @@ impl SftpUploadConnection {
 
 /// 连接记录的远程文件协议为 FTP 时，构造独立 FTP 连接配置。
 ///
-/// SFTP 协议返回 `None`；协议声明为 FTP 但缺少 FTP 参数时同样返回
-/// `None`（连接表单校验应阻止保存该状态）。
+/// 覆盖两种形态：独立 `ConnectionType::Ftp` 连接（顶层即 FTP 参数），
+/// 以及 SSH 聚合连接（`remote_file.protocol == Ftp`）。SFTP 协议返回
+/// `None`；协议声明为 FTP 但缺少 FTP 参数时同样返回 `None`（连接
+/// 表单校验应阻止保存该状态）。
 pub fn ftp_connect_config_from_stored(
     connection: &StoredConnection,
 ) -> Option<FtpConnectConfig> {
-    let params = connection.to_ssh_params().ok()?;
-    let remote_file = params.remote_file.as_ref()?;
-    if remote_file.protocol != one_core::storage::models::RemoteFileProtocol::Ftp {
-        return None;
-    }
-    let ftp = params.ftp_params()?;
+    let ftp = match connection.connection_type {
+        one_core::storage::ConnectionType::Ftp => connection.to_ftp_params().ok()?,
+        _ => {
+            let params = connection.to_ssh_params().ok()?;
+            let remote_file = params.remote_file.as_ref()?;
+            if remote_file.protocol != one_core::storage::models::RemoteFileProtocol::Ftp {
+                return None;
+            }
+            params.ftp_params()?.clone()
+        }
+    };
     Some(FtpConnectConfig {
         host: ftp.host.clone(),
         port: ftp.port,
@@ -336,6 +343,37 @@ mod tests {
         assert_eq!(config.password, "testpass");
         assert!(config.passive_mode);
         assert!(config.use_tls);
+        assert_eq!(config.connect_timeout, Some(10));
+    }
+
+    #[test]
+    fn ftp_connect_config_is_extracted_from_ftp_type_connection() {
+        let params = one_core::storage::models::FtpParams {
+            host: "127.0.0.1".to_string(),
+            port: 2121,
+            username: "testuser".to_string(),
+            password: "testpass".to_string(),
+            credential_reference: None,
+            prompt_username: None,
+            prompt_password: None,
+            passive_mode: true,
+            use_tls: false,
+            connect_timeout: Some(10),
+        };
+        let connection = one_core::storage::models::StoredConnection::new_ftp(
+            "FTP测试".to_string(),
+            params,
+            None,
+        );
+
+        let config =
+            ftp_connect_config_from_stored(&connection).expect("ftp config present");
+        assert_eq!(config.host, "127.0.0.1");
+        assert_eq!(config.port, 2121);
+        assert_eq!(config.username, "testuser");
+        assert_eq!(config.password, "testpass");
+        assert!(config.passive_mode);
+        assert!(!config.use_tls);
         assert_eq!(config.connect_timeout, Some(10));
     }
 

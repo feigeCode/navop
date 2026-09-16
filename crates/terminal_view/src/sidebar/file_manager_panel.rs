@@ -119,6 +119,16 @@ fn background_task_group_label(connection: &StoredConnection) -> SharedString {
     let host = connection
         .to_ssh_params()
         .map(|params| params.host)
+        .ok()
+        .filter(|host| !host.trim().is_empty())
+        .or_else(|| {
+            // 独立 FTP 连接没有 SSH 参数，回退到 FTP 主机。
+            connection
+                .to_ftp_params()
+                .ok()
+                .map(|params| params.host)
+                .filter(|host| !host.trim().is_empty())
+        })
         .unwrap_or_default();
     if host.is_empty() {
         connection.name.clone().into()
