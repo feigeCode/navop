@@ -213,7 +213,7 @@ impl HomePage {
             },
         );
         open_popup_window(
-            PopupWindowOptions::new(title).size(800.0, 750.0),
+            PopupWindowOptions::new(title).size(820.0, 750.0),
             move |window, cx| cx.new(|cx| SshFormWindow::new(config, window, cx)),
             Some(_window),
             cx,
