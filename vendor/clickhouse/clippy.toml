@@ -1,0 +1,4 @@
+disallowed-macros = [
+    # https://github.com/tokio-rs/tracing/issues/2448
+    "tracing::enabled"
+]

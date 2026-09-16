@@ -365,3 +365,10 @@ gpui-pre-ztracing-macro    = { git = "https://github.com/feigeCode/gpui-pre.git"
 # workspace are ignored by cargo. Mirrors the same entry in gpui-component's
 # workspace root, pinned to the same revision as the gpui dependencies above.
 rquickjs = { git = "https://github.com/feigeCode/gpui-component", rev = "54e09003fa6757c77f380b4fe5e5903107ad786c" }
+
+# clickhouse 0.15.2 hardcodes `SAFE_ALLOCATION_LIMIT = 1 << 32` in
+# `src/native/reader.rs`, which overflows `usize` on 32-bit targets and breaks
+# the `i686-pc-windows-msvc` build (E0080). Upstream has no fix (master carries
+# the same constant), so vendor the crate and make the constant 32-bit safe.
+# Keep the vendored version in sync with the `clickhouse` requirement above.
+clickhouse = { path = "vendor/clickhouse" }

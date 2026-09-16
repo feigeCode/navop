@@ -1,0 +1,41 @@
+---
+source: src/native/tests/builder.rs
+assertion_line: 76
+expression: builder
+---
+BlockBuilder {
+    columns: [
+        ColumnBuilderRaw {
+            name: "foo",
+            data_type: Int32,
+            layout: LayoutBuilder {
+                kind: Fixed {
+                    data: [
+                        0x00000000,
+                        0x01000000,
+                        0x02000000,
+                        0x03000000,
+                        0x04000000,
+                    ],
+                },
+                nulls: None,
+            },
+        },
+        ColumnBuilderRaw {
+            name: "bar",
+            data_type: String,
+            layout: LayoutBuilder {
+                kind: Variable {
+                    data: [
+                        "lorem",
+                        "ipsum",
+                        "dolor",
+                        "sit",
+                        "amet",
+                    ],
+                },
+                nulls: None,
+            },
+        },
+    ],
+}
