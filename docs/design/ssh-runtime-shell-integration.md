@@ -108,6 +108,41 @@ AwaitingPrompt ──133;B──► Integrated              │
 - 在缓冲中跨 chunk 搜索完成标记 `OSC 1337;ShellIntegrationReady=1`，找到后标记之后的 suffix 恢复转发；
 - 注入期间 `accepts_terminal_input() == false`：actor 把用户 `Write`/`TerminalResponse` 命令压入 deferred 队列，就绪后按序重放。
 
+#### 就绪握手看门狗（Issue #206）
+
+握手态（`WaitingForFirstOutput` / `Injecting` / `AwaitingPrompt` / `PlainAwaitingOutput`）
+统一表现为 `accepts_terminal_input() == false`，即**所有用户键盘输入（含 Enter、Ctrl+C）
+都被压入 deferred 队列**。这四个状态只能靠远端输出推进：
+
+| 状态 | 解除条件 |
+|---|---|
+| `WaitingForFirstOutput` | `should_inject`（需登录 expect 完成）或 OSC 133;B |
+| `Injecting` | ready marker 或 5s 注入超时 |
+| `AwaitingPrompt` | 下一个 OSC 133;B |
+| `PlainAwaitingOutput` | 下一段输出 |
+
+当远端长时间不再产生可解除握手的输出时——登录 expect 永不匹配（`login_expect` 未完成，
+`should_inject` 便永不触发）、远端不复现 prompt 结束标记等——会话会永久停在暂存态：
+远端输出照常刷新、终端看起来完全正常，但键盘输入被静默吞掉，界面没有任何提示
+（Issue #206 的现象）。`Injecting` 有 5s 超时兜底，另外三个状态在引入本看门狗前没有任何超时。
+
+兜底实现（`SshBackend` actor）：
+
+- actor 启动时若 `accepts_terminal_input() == false`，武装
+  `SHELL_INTEGRATION_HANDSHAKE_TIMEOUT`（30s）看门狗；
+- 到期时 `RuntimeShellIntegration::force_release_input()` 把上述四个状态强制推进到
+  `Plain`（丢弃注入回显缓冲，此后不再抑制输出、不再注入），并置 `shell_ready = true`
+  让初始化命令不再等 OSC prompt 信号；
+- 下一轮循环按序重放 deferred 队列，用户输入恢复投递；
+- 已可输入的阶段返回 `false`，看门狗只生效一次，不干扰正常会话。
+
+30s 取值依据：正常连接的首段输出在毫秒级到达，慢链路注入由 5s 注入超时处理；30s 只用于
+「远端彻底沉默」的异常场景，同时兼顾慢登录脚本，不误伤正常会话。
+
+诊断提示：输入被暂存时打 `terminal.ssh.runtime` 的 debug 日志（含当前 `phase` 与队列长度），
+看门狗触发时打 `terminal.ssh.setup` 的 warn 日志，可据此定位输入被哪一阶段吞掉。
+
+
 ### 5. Actor 接入（`ssh_backend.rs` 连接循环）
 
 输出处理顺序：

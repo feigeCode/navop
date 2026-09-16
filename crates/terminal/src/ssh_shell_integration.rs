@@ -197,6 +197,40 @@ impl RuntimeShellIntegration {
                 | RuntimeShellIntegrationPhase::PlainAwaitingOutput
         )
     }
+
+    /// 当前阶段名，用于日志定位「输入被暂存」的原因。
+    pub fn phase_name(&self) -> &'static str {
+        match self.phase {
+            RuntimeShellIntegrationPhase::Disabled => "disabled",
+            RuntimeShellIntegrationPhase::WaitingForFirstOutput => "waiting-for-first-output",
+            RuntimeShellIntegrationPhase::Injecting { .. } => "injecting",
+            RuntimeShellIntegrationPhase::AwaitingPrompt => "awaiting-prompt",
+            RuntimeShellIntegrationPhase::Integrated => "integrated",
+            RuntimeShellIntegrationPhase::PlainAwaitingOutput => "plain-awaiting-output",
+            RuntimeShellIntegrationPhase::Plain => "plain",
+        }
+    }
+
+    /// 看门狗兜底：把仍会暂存用户输入的握手态强制推进到裸终端。
+    ///
+    /// 握手态只能靠远端输出推进（`should_inject` / ready marker / OSC 133;B）。
+    /// 远端不再产生可解除握手的输出时（登录 expect 永不完成、prompt 结束标记
+    /// 缺失等），用户输入会被永久暂存，正是 Issue #206 描述的现象。返回是否
+    /// 改变了状态；已可输入的阶段不会被降级。
+    pub fn force_release_input(&mut self) -> bool {
+        match self.phase {
+            RuntimeShellIntegrationPhase::WaitingForFirstOutput
+            | RuntimeShellIntegrationPhase::Injecting { .. }
+            | RuntimeShellIntegrationPhase::AwaitingPrompt
+            | RuntimeShellIntegrationPhase::PlainAwaitingOutput => {
+                self.phase = RuntimeShellIntegrationPhase::Plain;
+                true
+            }
+            RuntimeShellIntegrationPhase::Disabled
+            | RuntimeShellIntegrationPhase::Integrated
+            | RuntimeShellIntegrationPhase::Plain => false,
+        }
+    }
 }
 
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -290,6 +324,71 @@ mod tests {
             },
             integration.filter_output(b"prompt".to_vec())
         );
+    }
+
+    #[test]
+    fn handshake_watchdog_releases_stalled_waiting_for_first_output() {
+        // 登录 expect 未完成时 should_inject 永不触发，输入必须能被兜底放行。
+        let mut integration = RuntimeShellIntegration::new(true);
+        assert_eq!("waiting-for-first-output", integration.phase_name());
+        assert!(!integration.accepts_terminal_input());
+
+        assert!(integration.force_release_input());
+        assert!(integration.accepts_terminal_input());
+        assert_eq!("plain", integration.phase_name());
+        assert!(
+            !integration.should_inject(b"prompt", true, false),
+            "强制放行后不应再注入，否则暂存的用户输入会与注入命令混在一起"
+        );
+    }
+
+    #[test]
+    fn handshake_watchdog_releases_stalled_injection_and_prompt_wait() {
+        // 注入回显未出现完成标记：握手停在 Injecting。
+        let mut integration = RuntimeShellIntegration::new(true);
+        integration.begin_injection();
+        assert_eq!("injecting", integration.phase_name());
+        assert!(integration.force_release_input());
+        assert!(integration.accepts_terminal_input());
+
+        // 找到完成标记后远端迟迟不给 OSC 133;B：握手停在 AwaitingPrompt。
+        let mut integration = RuntimeShellIntegration::new(true);
+        integration.begin_injection();
+        assert_eq!(
+            FilteredShellOutput::Suppressed,
+            integration.filter_output(b"echoed setup without marker".to_vec())
+        );
+        let _ = integration.filter_output(
+            b"\x1b]1337;ShellIntegrationReady=1\x07prompt".to_vec(),
+        );
+        assert_eq!("awaiting-prompt", integration.phase_name());
+        assert!(!integration.accepts_terminal_input());
+        assert!(integration.force_release_input());
+        assert!(integration.accepts_terminal_input());
+        assert_eq!("plain", integration.phase_name());
+
+        // 注入超时后等待下一段输出：远端不再产出时同样需要兜底。
+        let mut integration = RuntimeShellIntegration::new(true);
+        integration.begin_injection();
+        assert!(integration.on_timeout());
+        assert_eq!("plain-awaiting-output", integration.phase_name());
+        assert!(!integration.accepts_terminal_input());
+        assert!(integration.force_release_input());
+        assert!(integration.accepts_terminal_input());
+    }
+
+    #[test]
+    fn handshake_watchdog_keeps_already_usable_phases_untouched() {
+        let mut integration = RuntimeShellIntegration::new(false);
+        assert!(!integration.force_release_input(), "未请求注入的会话无需降级");
+        assert!(integration.accepts_terminal_input());
+
+        let mut integration = RuntimeShellIntegration::new(true);
+        integration.on_input_start();
+        assert!(integration.is_integrated());
+        assert!(!integration.force_release_input(), "已集成会话不应被看门狗降级");
+        assert!(integration.is_integrated());
+        assert!(integration.accepts_terminal_input());
     }
 
     #[test]
