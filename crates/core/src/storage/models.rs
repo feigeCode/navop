@@ -2036,6 +2036,19 @@ impl SyncableItem for Workspace {
     }
 }
 
+/// 连接的默认打开方式。
+///
+/// 仅对同时具备多种打开形态的类型有意义（当前为 SSH 终端 / 双栏文件视图）。
+/// FTP 无终端形态，只能打开双栏文件视图。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PreferredOpenMode {
+    /// 双击/后台打开时进终端
+    Terminal,
+    /// 双击/后台打开时进双栏文件视图（SFTP/FTP）
+    DualPane,
+}
+
 /// Stored connection with ID
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredConnection {
@@ -2085,6 +2098,9 @@ pub struct StoredConnection {
     /// 连接创建者 ID（用户 UUID，用于权限判断）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner_id: Option<String>,
+    /// 打开方式偏好（None = 按类型默认：SSH 终端、FTP 双栏）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_open_mode: Option<PreferredOpenMode>,
 }
 
 pub const EXTENSION_CONNECTION_SCHEMA_VERSION: u32 = 1;
@@ -2298,6 +2314,18 @@ fn default_port_forwarding_name(name: String, params: &PortForwardingParams) -> 
 }
 
 impl StoredConnection {
+    /// 生效的打开方式：显式偏好优先，否则按类型默认。
+    ///
+    /// SSH/SFTP 默认终端、独立 FTP 默认双栏文件视图；其余类型一律按终端
+    /// 默认返回（调用方本就按类型分流，不会用到该值）。
+    pub fn effective_open_mode(&self) -> PreferredOpenMode {
+        self.preferred_open_mode
+            .unwrap_or(match self.connection_type {
+                ConnectionType::Ftp => PreferredOpenMode::DualPane,
+                _ => PreferredOpenMode::Terminal,
+            })
+    }
+
     pub fn new_extension(
         name: String,
         params: ExtensionConnectionParams,
@@ -2323,6 +2351,7 @@ impl StoredConnection {
             updated_at: None,
             team_id: None,
             owner_id: None,
+            preferred_open_mode: None,
         }
     }
 
@@ -2399,6 +2428,7 @@ impl StoredConnection {
             updated_at: None,
             team_id: None,
             owner_id: None,
+            preferred_open_mode: None,
         }
     }
 
@@ -2423,6 +2453,7 @@ impl StoredConnection {
             updated_at: None,
             team_id: None,
             owner_id: None,
+            preferred_open_mode: None,
         }
     }
 
@@ -2450,6 +2481,7 @@ impl StoredConnection {
             updated_at: None,
             team_id: None,
             owner_id: None,
+            preferred_open_mode: None,
         }
     }
 
@@ -2477,6 +2509,7 @@ impl StoredConnection {
             updated_at: None,
             team_id: None,
             owner_id: None,
+            preferred_open_mode: None,
         }
     }
 
@@ -2500,6 +2533,7 @@ impl StoredConnection {
             updated_at: None,
             team_id: None,
             owner_id: None,
+            preferred_open_mode: None,
         }
     }
 
@@ -2523,6 +2557,7 @@ impl StoredConnection {
             updated_at: None,
             team_id: None,
             owner_id: None,
+            preferred_open_mode: None,
         }
     }
 
@@ -2546,6 +2581,7 @@ impl StoredConnection {
             updated_at: None,
             team_id: None,
             owner_id: None,
+            preferred_open_mode: None,
         }
     }
 
@@ -2610,6 +2646,7 @@ impl StoredConnection {
             updated_at: None,
             team_id: None,
             owner_id: None,
+            preferred_open_mode: None,
         }
     }
 
@@ -2633,6 +2670,7 @@ impl StoredConnection {
             updated_at: None,
             team_id: None,
             owner_id: None,
+            preferred_open_mode: None,
         }
     }
 
@@ -2660,6 +2698,7 @@ impl StoredConnection {
             updated_at: None,
             team_id: None,
             owner_id: None,
+            preferred_open_mode: None,
         }
     }
 
@@ -4908,5 +4947,84 @@ mod serial_tests {
         stored.params = encrypted;
         let decrypted: FtpParams = serde_json::from_str(&stored.decrypt_params()).unwrap();
         assert_eq!(decrypted.password, "ftp-secret");
+    }
+
+    #[test]
+    fn effective_open_mode_defaults_by_connection_type() {
+        let ssh = StoredConnection::new_ssh(
+            "ssh".to_string(),
+            SshParams {
+                remote_file: None,
+                sftp_default_directory: None,
+                disabled_jump_server: None,
+                sftp_account: None,
+                host: "h".to_string(),
+                port: 22,
+                username: "u".to_string(),
+                auth_method: SshAuthMethod::Password {
+                    password: "p".to_string(),
+                },
+                credential_reference: None,
+                prompt_username: None,
+                prompt_password: None,
+                keyboard_interactive: None,
+                terminal_encoding: Default::default(),
+                terminal_type: Default::default(),
+                connect_timeout: None,
+                keepalive_interval: None,
+                keepalive_max: None,
+                default_directory: None,
+                init_script: None,
+                disable_shell_integration: None,
+                x11_forwarding: None,
+                allow_legacy_algorithms: None,
+                jump_server: None,
+                proxy: None,
+                os_id: None,
+                icon: None,
+                icon_file_path: None,
+                account_expect: Default::default(),
+            },
+            None,
+        );
+        assert_eq!(ssh.effective_open_mode(), PreferredOpenMode::Terminal);
+
+        let ftp = StoredConnection::new_ftp("ftp".to_string(), ftp_params_for_storage_tests(), None);
+        assert_eq!(ftp.effective_open_mode(), PreferredOpenMode::DualPane);
+    }
+
+    #[test]
+    fn preferred_open_mode_round_trips_through_serde() {
+        let mut connection = StoredConnection::new_ftp(
+            "ftp".to_string(),
+            ftp_params_for_storage_tests(),
+            None,
+        );
+        connection.preferred_open_mode = Some(PreferredOpenMode::Terminal);
+
+        let json = serde_json::to_string(&connection).expect("serialize connection");
+        assert!(json.contains("preferred_open_mode"));
+        let restored: StoredConnection = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(
+            restored.preferred_open_mode,
+            Some(PreferredOpenMode::Terminal)
+        );
+        assert_eq!(restored.effective_open_mode(), PreferredOpenMode::Terminal);
+    }
+
+    #[test]
+    fn preferred_open_mode_absent_keeps_type_default() {
+        let connection = StoredConnection::new_ftp(
+            "ftp".to_string(),
+            ftp_params_for_storage_tests(),
+            None,
+        );
+        assert_eq!(connection.preferred_open_mode, None);
+        // 旧版云同步/数据库 JSON 不携带该字段时反序列化为 None
+        let legacy = serde_json::to_string(&connection).expect("serialize");
+        let value: Value = serde_json::from_str(&legacy).unwrap();
+        assert!(value.get("preferred_open_mode").is_none());
+        let restored: StoredConnection = serde_json::from_str(&legacy).expect("deserialize");
+        assert_eq!(restored.effective_open_mode(), PreferredOpenMode::DualPane);
     }
 }

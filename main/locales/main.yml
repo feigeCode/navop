@@ -880,9 +880,13 @@ Home:
     zh-CN: AI 助手
     zh-HK: AI 助手
   open_sftp:
-    en: Open SFTP
-    zh-CN: 打开 SFTP
-    zh-HK: 打開 SFTP
+    en: Open in File View
+    zh-CN: 在文件视图中打开
+    zh-HK: 在檔案檢視中開啟
+  open_terminal:
+    en: Open in Terminal
+    zh-CN: 在终端中打开
+    zh-HK: 在終端中開啟
   open_connection:
     en: Open Connection
     zh-CN: 打开连接

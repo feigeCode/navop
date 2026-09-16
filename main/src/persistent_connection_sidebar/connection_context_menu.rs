@@ -57,7 +57,11 @@ pub(crate) fn build_connection_context_menu(
         resolved_ssh: resolved_ssh.as_ref(),
         home: &home,
     };
-    for action in connection_menu_actions(connection.connection_type, can_edit) {
+    for action in connection_menu_actions(
+        connection.connection_type,
+        can_edit,
+        connection.preferred_open_mode,
+    ) {
         menu = add_connection_action(menu, action, &action_context, window, cx);
     }
     menu
@@ -125,6 +129,7 @@ fn connection_menu_item(
             fullscreen_window_connection_item(connection, home)
         }
         ConnectionMenuAction::OpenSftp => open_sftp_item(connection, home),
+        ConnectionMenuAction::OpenTerminal => open_terminal_item(connection, home),
         ConnectionMenuAction::CopyConnection => {
             unreachable!("copy connection action renders a submenu")
         }
@@ -243,6 +248,27 @@ fn open_sftp_item(
         .on_click(move |_, window, cx| {
             home.update(cx, |home, cx| {
                 home.open_sftp_view(connection.clone(), window, cx);
+            });
+        })
+}
+
+/// SSH 条目偏好为双栏文件视图时的右键切换入口：临时按终端打开。
+fn open_terminal_item(
+    connection: &StoredConnection,
+    home: &Entity<crate::home_tab::HomePage>,
+) -> PopupMenuItem {
+    let connection = connection.clone();
+    let home = home.clone();
+    PopupMenuItem::new(t!("Home.open_terminal").to_string())
+        .icon(IconName::Terminal)
+        .on_click(move |_, window, cx| {
+            home.update(cx, |home, cx| {
+                home.open_ssh_terminal_with_mode(
+                    connection.clone(),
+                    TabOpenMode::Activate,
+                    window,
+                    cx,
+                );
             });
         })
 }
