@@ -33,17 +33,32 @@ impl HomePage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let query = self.search_query.read(cx).to_lowercase();
         if self.connection_layout == ConnectionLayout::Tree {
             if let Some(sidebar) = self.connection_sidebar.clone() {
                 // 作为子视图渲染侧栏实体：树在 Render 阶段自己 read(HomePage)，
                 // 不在本页租约内重入读自身（修复布局切换瞬间 panic）。
-                return sidebar.into_any_element();
+                sidebar.update(cx, |sidebar, cx| sidebar.set_home_embedded(true, cx));
+                let count = self.filtered_connection_count(&query);
+                return v_flex()
+                    .size_full()
+                    .min_w_0()
+                    .min_h_0()
+                    .child(self.render_tree_content_heading(count, window, cx))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .child(sidebar.into_any_element()),
+                    )
+                    .into_any_element();
             }
         }
         if self.connection_layout == ConnectionLayout::Navigation {
             return self.render_navigation_home_content(window, cx);
         }
-        let query = self.search_query.read(cx).to_lowercase();
         self.render_workspace_view(
             &query,
             self.selected_connection_id,
@@ -71,7 +86,16 @@ impl HomePage {
             .w_full()
             .min_w_0()
             .gap_5()
-            .child(self.render_navigation_heading(query.is_empty(), if query.is_empty() { recent.len() } else { matching.len() }, cx));
+            .child(self.render_navigation_heading(
+                query.is_empty(),
+                if query.is_empty() {
+                    recent.len()
+                } else {
+                    matching.len()
+                },
+                window,
+                cx,
+            ));
         if !query.is_empty() {
             if matching.is_empty() {
                 body = body.child(self.render_empty_home(cx));
@@ -114,14 +138,17 @@ impl HomePage {
         &self,
         is_recent: bool,
         count: usize,
-        cx: &Context<Self>,
+        window: &Window,
+        cx: &mut Context<Self>,
     ) -> AnyElement {
         h_flex()
             .w_full()
+            .min_w_0()
             .items_center()
             .gap_2()
             .child(
                 div()
+                    .flex_shrink_0()
                     .text_lg()
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(if is_recent {
@@ -132,10 +159,14 @@ impl HomePage {
             )
             .child(
                 div()
+                    .flex_shrink_0()
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
                     .child(count.to_string()),
             )
+            // 全局导航布局同样把类型筛选平铺在标题行：工具栏的筛选入口已随
+            // 筛选条统一收口，右侧内容不再依赖工具栏下拉。
+            .child(self.render_connection_type_filter_bar(window, cx))
             .into_any_element()
     }
 
@@ -216,7 +247,7 @@ impl HomePage {
             .w_full()
             .min_w_0()
             .gap_5()
-            .child(self.render_content_heading(visible_count, cx));
+            .child(self.render_content_heading(visible_count, true, window, cx));
         if visible_count == 0 {
             body = body.child(self.render_empty_home(cx));
         }
@@ -244,27 +275,66 @@ impl HomePage {
             .into_any_element()
     }
 
-    fn render_content_heading(&self, count: usize, cx: &mut Context<Self>) -> AnyElement {
+    /// 页面标题行：连接标题、计数、横向类型筛选条，以及（分组布局下的）分组菜单。
+    fn render_content_heading(
+        &self,
+        count: usize,
+        show_group_menu: bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         h_flex()
             .w_full()
+            .min_w_0()
             .gap_2()
             .items_center()
             .child(
                 div()
+                    .flex_shrink_0()
                     .text_lg()
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(t!("Connection.title").to_string()),
             )
             .child(
                 div()
+                    .flex_shrink_0()
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
                     .child(t!("Home.connection_count", count = count).to_string()),
             )
-            .child(div().flex_1())
-            // 展开/折叠命令归类进「分组」菜单，不再各占一个工具栏按钮（redesign §2.3/§4.3）。
-            .child(self.render_group_menu(cx))
+            // 类型筛选平铺在标题右侧；空间不足时由筛选条自行收入「更多」。
+            .child(self.render_connection_type_filter_bar(window, cx))
+            .when(show_group_menu, |row| {
+                // 展开/折叠命令归类进「分组」菜单，不再各占一个工具栏按钮（redesign §2.3/§4.3）。
+                row.child(self.render_group_menu(cx))
+            })
             .into_any_element()
+    }
+
+    /// Tree 布局的页面标题行：内容区顶部，与树列表共用同一标题、计数与筛选条。
+    fn render_tree_content_heading(
+        &self,
+        count: usize,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        div()
+            .flex_shrink_0()
+            .w_full()
+            .min_w_0()
+            .px_5()
+            .py_3()
+            .bg(cx.theme().background)
+            .child(self.render_content_heading(count, false, window, cx))
+            .into_any_element()
+    }
+
+    /// Tree 布局标题行的连接计数：与树一致，只按类型筛选与搜索词过滤。
+    fn filtered_connection_count(&self, query: &str) -> usize {
+        self.connections
+            .iter()
+            .filter(|conn| self.match_connection_type(conn) && self.match_connection(conn, query))
+            .count()
     }
 
     fn render_group_menu(&self, cx: &Context<Self>) -> AnyElement {

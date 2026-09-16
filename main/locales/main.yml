@@ -315,6 +315,10 @@ Home:
     en: Filter connections
     zh-CN: 筛选连接
     zh-HK: 篩選連線
+  connection_filter_more:
+    en: More
+    zh-CN: 更多
+    zh-HK: 更多
   credential_vault:
     en: Keychain
     zh-CN: 钥匙串
