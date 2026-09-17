@@ -145,7 +145,7 @@ impl gpui::Render for PersistentConnectionSidebar {
 impl PersistentConnectionSidebar {
     /// Render the connection tree as a floating card that overlays the main
     /// content instead of occupying flex space, so expanding it no longer
-    /// squeezes the terminal. The caller (OnetCliApp) positions it at the
+    /// squeezes the terminal. The caller (NavopApp) positions it at the
     /// left window edge, below the tab bar, and collapses it when the
     /// terminal regains focus.
     pub(crate) fn render_floating_tree(
@@ -325,8 +325,11 @@ mod tests {
         assert!(!content.contains("render_home_tree(cx)"));
         // Tree 布局经 set_home_embedded 让侧栏以子实体输出主页树；
         // 全局导航布局由 home_navigation_layout 单独驱动，不走该入口。
-        assert!(content
-            .contains("set_home_embedded(self.connection_layout == ConnectionLayout::Tree, cx)"));
+        assert!(
+            content.contains(
+                "set_home_embedded(self.connection_layout == ConnectionLayout::Tree, cx)"
+            )
+        );
         assert!(implementation.contains("impl gpui::Render for PersistentConnectionSidebar"));
         assert!(implementation.contains("self.home_embedded"));
     }

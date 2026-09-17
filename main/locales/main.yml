@@ -2949,6 +2949,14 @@ Settings:
         en: Maximum model and tool round trips in one built-in Agent turn (1-256). Changes apply from the next turn.
         zh-CN: 内置 Agent 单轮中模型与工具调用的最大往返次数（1-256）。修改从下一轮开始生效。
         zh-HK: 內建 Agent 單輪中模型與工具調用的最大往返次數（1-256）。修改從下一輪開始生效。
+      request_timeout:
+        en: Model Request Idle Timeout (seconds)
+        zh-CN: 模型请求空闲超时（秒）
+        zh-HK: 模型請求空閒逾時（秒）
+      request_timeout_desc:
+        en: Abort a model request only after this long without any data (10-3600). It does not cap total duration, so long streaming responses keep running. Changes apply from the next turn.
+        zh-CN: 仅在某次模型请求持续无数据超过该时长后中断（10-3600 秒）。不限制总时长，长流式响应不会被中途掐断。修改从下一轮开始生效。
+        zh-HK: 僅在某次模型請求持續無資料超過該時長後中斷（10-3600 秒）。不限制總時長，長串流回應不會被中途掐斷。修改從下一輪開始生效。
 
     ToolExposure:
       mcp_group_title:
@@ -3314,9 +3322,9 @@ Settings:
         zh-CN: 日志目录或文件
         zh-HK: 日誌目錄或文件
       file_path_desc:
-        en: Enter a directory to write onetcli.log, or a full log file path. Leave empty to use the default config directory logs folder. Restart the app after changing this path.
-        zh-CN: 可填写日志目录（文件名为 onetcli.log）或完整日志文件路径；留空时使用默认配置目录下的 logs 文件夹。修改后重启应用生效。
-        zh-HK: 可填寫日誌目錄（文件名為 onetcli.log）或完整日誌文件路徑；留空時使用默認配置目錄下的 logs 文件夾。修改後重啟應用生效。
+        en: Enter a directory to write navop.log, or a full log file path. Leave empty to use the default config directory logs folder. Restart the app after changing this path.
+        zh-CN: 可填写日志目录（文件名为 navop.log）或完整日志文件路径；留空时使用默认配置目录下的 logs 文件夹。修改后重启应用生效。
+        zh-HK: 可填寫日誌目錄（文件名為 navop.log）或完整日誌文件路徑；留空時使用默認配置目錄下的 logs 文件夾。修改後重啟應用生效。
 
     Proxy:
       group_title:

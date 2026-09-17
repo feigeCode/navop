@@ -55,10 +55,10 @@ use port_forwarding_view::{
 };
 use redis_view::{RedisFormWindow, RedisFormWindowConfig};
 use rust_i18n::t;
+use terminal_view::{FtpFormWindow, FtpFormWindowConfig};
 use terminal_view::{SerialFormWindow, SerialFormWindowConfig};
 use terminal_view::{SshFormWindow, SshFormWindowConfig};
 use terminal_view::{TelnetFormWindow, TelnetFormWindowConfig};
-use terminal_view::{FtpFormWindow, FtpFormWindowConfig};
 
 use crate::auth::{AuthService, load_auth_data, show_auth_dialog};
 use crate::connection_visuals::{ConnectionVisualSize, connection_type_navigation_icon};
@@ -171,7 +171,7 @@ pub struct HomePage {
     pub(crate) workspaces: Vec<Workspace>,
     pub(crate) connections: Vec<StoredConnection>,
     pub(crate) tab_container: Entity<TabContainer>,
-    /// 常驻连接侧栏（Tree 布局复用其树视图）；在 OnetCliApp 创建侧栏后注入。
+    /// 常驻连接侧栏（Tree 布局复用其树视图）；在 NavopApp 创建侧栏后注入。
     connection_sidebar:
         Option<Entity<crate::persistent_connection_sidebar::PersistentConnectionSidebar>>,
     search_input: Entity<InputState>,

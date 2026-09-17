@@ -163,13 +163,7 @@ pub(super) fn connection_type_tag(connection: &StoredConnection, cx: &gpui::App)
         .py_0p5()
         .rounded(px(4.0))
         .bg(cx.theme().muted)
-        .child(
-            div()
-                .size(px(6.0))
-                .flex_shrink_0()
-                .rounded_full()
-                .bg(dot),
-        )
+        .child(div().size(px(6.0)).flex_shrink_0().rounded_full().bg(dot))
         .child(
             div()
                 .min_w_0()

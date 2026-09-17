@@ -21,6 +21,10 @@ crates/**/target/
 # 本机低内存构建用的独立 target 目录（CARGO_TARGET_DIR=target-native）
 target-native/
 
+# 本地打包产物（script/bundle-macos-dmg.sh 写在仓库根）
+/navop-*.dmg
+/*.tar.gz
+
 # Debug artifacts
 **/*.rs.bk
 *.pdb

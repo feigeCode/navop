@@ -519,7 +519,7 @@
 - **根因 / 约束**：GPUI 的无上下文全局 `KeyBinding` 可能在终端 `on_key_down` 前分派 action；即使终端键码转换和 PTY 写入正确，冲突按键仍不会到达终端。`Ctrl+D`、`Ctrl+W`、`Ctrl+C`、`Ctrl+Z` 等是 shell/TTY 标准控制键，不适合作为终端聚焦时仍生效的全局默认快捷键。
 - **正确做法**：窗口、页签和面板 action 优先使用不与终端控制字符冲突的组合，或绑定到排除 `TerminalView` 的明确 key context；运行时默认值、设置页展示和可刷新绑定必须使用同一默认来源。
 - **验证方式**：回归测试同时断言全局默认绑定不包含目标控制键、设置页元数据与运行时一致，并运行 `terminal_view` 键码测试确认目标按键仍编码为预期控制字节。
-- **适用范围**：`main/src/onetcli_app.rs`、`main/src/setting_tab.rs`、`crates/terminal_view/src/view/keybindings.rs` 与所有无 context 的 GPUI 全局快捷键。
+- **适用范围**：`main/src/navop_app.rs`、`main/src/setting_tab.rs`、`crates/terminal_view/src/view/keybindings.rs` 与所有无 context 的 GPUI 全局快捷键。
 
 - **标题**：GPUI `Keystroke.key` 是键帽字符不是输入文本，凭据捕获必须用 `key_char`
 - **触发信号**：SSH/Telnet 连接时手动敲击输入密码一直提示认证失败，粘贴同样密码却正常；密码含大小写与特殊字符（issue #147）。
@@ -561,7 +561,7 @@
 - **根因 / 约束**：迁移对象只要引用了任何仍留在 main 的类型，就必须把它们一起搬出或先下沉到 crate，否则必然双向依赖。`shell_plugc`…具体到 Navop：`shell_plugin_host/shell_plugin_tab/universal_plugins/extension_connection_tab/extension_connection_form` 是一整簇互相 `crate::` 引用的单元，`cx.global::<GlobalTabContainer>()` 这类 app 级 tab 打开入口是所有 UI 共同的硬依赖，只能把 `GlobalTabContainer`（仅 `Entity<TabContainer>` 包装）下沉到 `one_core::tab_container`，不能反向注入。
 - **正确做法**：整簇 5 个模块一次搬入新 crate（`crates/universal-plugins`），功能开关用 crate 自带 `shell-plugins` optional dep feature 表达（main 的 `shell-plugins` 改为 `["universal-plugins/shell-plugins"]`）。该 feature 自 2026-09-15 起列入 `main` 的 `default`，所以默认构建就带 Shell 页；`crates/universal-plugins` 自身仍保持 `default = []`（给它也设 default 反而会让 `main --no-default-features` 漏进 Shell 页，因为该开关只能关掉当前被选中包的 default）。feature off 时 crate 内这簇为空。搬移时把 `pub(crate)`→`pub` 只改 main 真实消费的边界（global 类型、load/service/open_connection/resource_connection/register_headless_tab 与 `ConnectionShellOpen` 字段），簇内引用 `crate::` 路径在新 crate 里解析位置不变，多数文件零改动。main 侧只改 import 路径。
 - **验证方式**：双态验证默认构建 `cargo check -p main`（含 shell-plugins）与关闭态 `cargo check -p main --no-default-features --features wasm-components,embedded-webview,windows-native-rdp`，各带 `--tests`；`cargo clippy -p universal-plugins --features shell-plugins --all-targets`；`cargo test -p universal-plugins --features shell-plugins`。改共享契约（如 `BindingContext` 加字段）后两态都要跑：漏编发生在关闭态一侧（feature 未开时整个 `shell_plugin_host` 不参与编译），只跑默认构建会漏掉它。
-- **适用范围**：`crates/universal-plugins`、`main/src/{home_strategy,home_tab/connection_forms,new_connection/form_page,onetcli_app,file_open,extension_update,home/home_tabs}`、`crates/core/src/tab_container.rs`，以及任何计划从 main 抽 UI 逻辑到新 crate 的后续重构。
+- **适用范围**：`crates/universal-plugins`、`main/src/{home_strategy,home_tab/connection_forms,new_connection/form_page,navop_app,file_open,extension_update,home/home_tabs}`、`crates/core/src/tab_container.rs`，以及任何计划从 main 抽 UI 逻辑到新 crate 的后续重构。
 
 - **标题**：View 内联渲染自己的引用方会造成 GPUI 实体租约重入 panic
 - **触发信号**：运行时在 `entity_map.rs` 报 `cannot read X while it is already being updated`，场景为 A::render 中直接 `b.update(cx, |b, cx| b.render_something(cx))`，且该路径内部再 `this.a.read(cx)` / `this.a.update(cx)`。
@@ -652,6 +652,13 @@
 - **正确做法**：①预检 `git merge-tree --write-tree --name-only <trunk> <branch>` 拿冲突清单，再用 `comm -12` 求「主干未提交改动文件 ∩ 合并将引入文件」，非空则先停下确认；②在分支 worktree 里 `git merge <trunk>`（主干若残留中间态先 `git -C <trunk> merge --abort`）；③解冲突排序：语义差异（两侧实现同一功能的不同方案）先问用户 → 一侧为超集取超集 → import/重复块按**符号实际是否被使用**收口，不盲目取并集；④依赖 rev 冲突用 `git -C <dep-repo> merge-base --is-ancestor <a> <b>` 判定并取**后代**那个（而非日期更新的），`Cargo.lock` 里同一 rev 多处出现用一次 `replace_all`；⑤`cargo check --workspace --all-targets` 通过后，主干 `git merge --ff-only <branch>`，快进后**再跑一次主干 check**（叠加用户未提交改动，文件不重叠不代表 API 不冲突）。
 - **验证方式**：`cargo metadata --format-version 1 --locked --offline`（exit=0 即 toml/lock 一致）、`cargo check --workspace --all-targets`（分支侧、主干各一次）、核心 crate `--lib` 测试；回退用 `git reset --mixed <原 SHA>`（保留工作区改动）。
 - **适用范围**：任何「长期分支 → 主干」的合并。两个易踩的坑：①worktree 的 `MERGE_HEAD` / `ORIG_HEAD` 在 `<主仓>/.git/worktrees/<name>/` 下，不在 worktree 自己的 `.git`（那是 `gitdir:` 指针文件），查后者会误判「合并已结束」；②分支名与 worktree 目录名常不同（如 `impl/ftp-support-172` ↔ `navop-ftp-support-172`）。
+
+- **标题**：release profile 设 `panic = "abort"` 后，`catch_unwind` 既不能做契约断言也不能做隔离，契约要用返回值表达
+- **触发信号**：把 release profile 改成 `panic = "abort"` 后，用 `catch_unwind` 断言「重复注册 / 非法输入必须 panic」的测试在 `cargo test --release` 下把整个测试进程 abort；或看到 `catch_unwind` 包着调用方回调、就以为 release 里仍能隔离该回调的 panic。
+- **根因 / 约束**：`panic = "abort"` 下 panic 直接终止进程，没有展开可捕获，`catch_unwind` 照常编译但永不返回 `Err`。CI 只跑 dev profile（`unwind`），所以这类断言在 CI 里照常通过，只有 `cargo test --release` 或发布二进制才暴露；用 `#[cfg(panic = "unwind")]` 跳过用例会静默丢掉 release 模式的覆盖。尺寸收益是量出来的：`__eh_frame` 16.0MiB + `__gcc_except_tab` 8.6MiB ≈ 24.6MiB，所以改回 `unwind` 不是零成本。
+- **正确做法**：可表达为契约的重复注册 / 非法状态不用 `assert!` + panic，改为返回 `Option` / `Result`，调用方（如插件服务的 `init`）用 `expect` 保留「这是 bug」的强语义，测试直接断言 `is_none()` / `is_err()`，两个 profile 都能跑。跨 FFI / C ABI 边界或调用方回调处的 `catch_unwind` 在 abort 下是死代码，应确认被包住的主体本身 panic-free（如只做 poison-safe 锁、channel send、原子交换），并在注释里写明该守卫只对 `unwind` 构建生效。
+- **验证方式**：dev 与 release 两个 profile 跑同一用例：`cargo test -p universal-plugins --lib` 与 `cargo test --release -p universal-plugins --lib`（release 想省时间只覆盖 `CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16`，`panic` 仍取 profile 值），再用 `cargo test --release -p universal-plugins --lib -- --list` 确认用例不再被 cfg 掉。
+- **适用范围**：`crates/universal-plugins/src/universal_plugins.rs`、`crates/terminal/src/recording/runtime.rs`、`crates/windows_rdp_host/src/event.rs`，以及 profile 设了 `panic = "abort"` 后所有用 `catch_unwind`、`#[should_panic]`、`#[cfg(panic = "unwind")]` 表达契约或隔离的测试与调用点。
 
 ### 执行原则
 

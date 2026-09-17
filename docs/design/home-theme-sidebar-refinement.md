@@ -114,7 +114,7 @@ HEAD: 41c2ae07fa26b979906cffec8cfb857e3aed611e
 
 ### 3.3 组件版本与回退事实
 
-当前 `Cargo.toml:52–60` 的 `gpui-component` 实际 package 为 `gpui_ce_components`，git rev 为 `65bc4ab5`。不要照网络上其他版本的 API 编写。
+当前 `Cargo.toml:58–64` 的 `gpui-component` 实际 package 为 `gpui-component`，git rev 为 `6df86ef8`。不要照网络上其他版本的 API 编写。
 
 该版本依赖源码：
 

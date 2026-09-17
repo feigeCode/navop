@@ -374,6 +374,11 @@ pub(crate) unsafe extern "C" fn native_event_callback(
     event: *const NavopRdpEvent,
     payload: *const u8,
 ) {
+    // In `panic = "unwind"` builds this keeps a panic from unwinding across the
+    // C ABI boundary, which would be UB. The release profile is `panic = "abort"`,
+    // where the guard is inert and a panic aborts the process instead; the body
+    // below only validates the event prefix and calls `EventBridge::enqueue`,
+    // which is panic-free by construction.
     let _ = catch_unwind(AssertUnwindSafe(|| {
         if context.is_null() || event.is_null() {
             return;

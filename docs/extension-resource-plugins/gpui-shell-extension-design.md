@@ -58,8 +58,8 @@ UI RPC。已有 provider 协议保持不变，Elasticsearch、Kafka、Kubernetes
 
 ### 2.2 gpui-shell 已有能力
 
-固定 fork `e6459613910143b817eecbacc8767976e86cac84` 已合并最新上游并包含
-`gpui_ce_components_shell`，crate 名为 `gpui_shell`。它已经提供：
+固定 fork `6df86ef82b4b5f3b04723c0d1cf82ff57cdc7078` 已合并最新上游并包含
+`gpui-shell`，crate 名为 `gpui_shell`。它已经提供：
 
 - QuickJS ES module 执行和 `ScriptView`。
 - 每个插件独立的 `Policy`。
@@ -1248,7 +1248,7 @@ install extension
 
 ### Phase 3：宿主和 tab
 
-- `main` 引入 `gpui_ce_components_shell`。
+- `main` 引入 `gpui-shell`。
 - `gpui_component::init(cx)` 后调用 fork 新增的 `gpui_shell::init_embedded(cx)`；该入口只
   初始化 shell reflection/runtime，不重复调用 `gpui_base::init(cx)`。
 - 扩展 `ShellPluginHost`、mount state 和 lease rollback。

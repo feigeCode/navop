@@ -11,6 +11,8 @@ Download the latest stable release from the [official Download Center](https://n
 - The local terminal launcher detects and lists WSL distributions for one-click launch.
 - TDengine and MQTT are now extension-provided; the built-in implementations are removed, existing data migrates, and the extensions install on demand.
 - Redis uses the embedded redis-rs client with bounded memory for large keys; fixed key-tree search misses, keyboard input buffered by the shell-integration handshake, and MSTSC cursor jitter.
+- Closing the main window minimizes it to the system tray and keeps the app running; resource workbench trees support static children, decoupling expansion from navigation.
+- AI streaming requests now use an idle read timeout, so long tasks are no longer cut off by a fixed total timeout, and the idle timeout is configurable.
 
 ## Start here
 

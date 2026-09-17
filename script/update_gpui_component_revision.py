@@ -9,10 +9,10 @@ from pathlib import Path
 
 
 DEPENDENCIES = {
-    "gpui-component": "gpui_ce_components",
-    "gpui-component-assets": "gpui_ce_components_assets",
-    "gpui-base": "gpui_ce_components_base",
-    "gpui-shell": "gpui_ce_components_shell",
+    "gpui-component": "gpui-component",
+    "gpui-component-assets": "gpui-kit-assets",
+    "gpui-base": "gpui-base",
+    "gpui-shell": "gpui-shell",
     "gpui-component-shell": "gpui-component-shell",
 }
 

@@ -4,28 +4,28 @@ use std::fs;
 use std::path::Path;
 
 const POWERSHELL_SCRIPT: &str = r#"
-if ($global:__OnetCliShellIntegrated) {
+if ($global:__NavopShellIntegrated) {
     return
 }
-$global:__OnetCliShellIntegrated = $true
-$global:__OnetCliOriginalPrompt = $function:prompt
+$global:__NavopShellIntegrated = $true
+$global:__NavopOriginalPrompt = $function:prompt
 
-function global:__OnetCliWriteOsc([string] $Payload) {
+function global:__NavopWriteOsc([string] $Payload) {
     [Console]::Write(([char]27).ToString() + ']' + $Payload + [char]7)
 }
 
 function global:prompt {
     $path = (Get-Location).Path.Replace('\', '/')
-    __OnetCliWriteOsc "7;file://localhost/$path"
-    __OnetCliWriteOsc '133;A'
+    __NavopWriteOsc "7;file://localhost/$path"
+    __NavopWriteOsc '133;A'
 
-    if ($null -ne $global:__OnetCliOriginalPrompt) {
-        $promptText = & $global:__OnetCliOriginalPrompt
+    if ($null -ne $global:__NavopOriginalPrompt) {
+        $promptText = & $global:__NavopOriginalPrompt
     } else {
         $promptText = "PS $((Get-Location).Path)> "
     }
 
-    __OnetCliWriteOsc '133;B'
+    __NavopWriteOsc '133;B'
     return $promptText
 }
 "#;

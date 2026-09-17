@@ -446,8 +446,5 @@ fn build_ftp_form(
         return NewConnectionFormResult::Blocked;
     };
 
-    NewConnectionFormResult::Form(
-        cx.new(|cx| FtpFormWindow::new(config, window, cx))
-            .into(),
-    )
+    NewConnectionFormResult::Form(cx.new(|cx| FtpFormWindow::new(config, window, cx)).into())
 }

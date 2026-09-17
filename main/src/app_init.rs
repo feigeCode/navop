@@ -70,6 +70,14 @@ fn pick_active_non_main_window<T: Copy + PartialEq>(
     (active != registered_main).then_some(active)
 }
 
+/// 只返回注册时保存的主窗口 handle。
+///
+/// 托盘恢复必须作用在同一个主窗口上，而且必须幂等，所以刻意不做
+/// active window / window_stack 兜底——那样会把辅助窗口也拉出来。
+pub(crate) fn main_window_handle() -> Option<AnyWindowHandle> {
+    MAIN_WINDOW_HANDLE.get().copied()
+}
+
 pub(crate) fn resolve_navop_window(cx: &App) -> Option<AnyWindowHandle> {
     let window_stack = cx.window_stack();
     pick_navop_window(

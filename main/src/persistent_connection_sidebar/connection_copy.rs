@@ -313,9 +313,7 @@ fn connection_address(connection: &StoredConnection) -> Option<String> {
             .to_ftp_params()
             .ok()
             .and_then(|params| optional_host_port(&params.host, Some(params.port))),
-        ConnectionType::Serial
-        | ConnectionType::PortForwarding
-        | ConnectionType::Extension => None,
+        ConnectionType::Serial | ConnectionType::PortForwarding | ConnectionType::Extension => None,
         ConnectionType::Telnet => connection
             .to_telnet_params()
             .ok()

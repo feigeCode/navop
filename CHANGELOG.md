@@ -18,8 +18,10 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - AI：内置 Agent 支持自定义 system prompt（fix #173），系统提示词统一并国际化，用户自定义改为追加。
 - Redis 键树搜索改为输入停顿后自动扫描服务端（#181）；移除 IPC sidecar，统一使用内嵌 redis-rs。
 - TDengine 与 MQTT 改为扩展提供：移除内置实现，旧数据自动迁移到扩展，并通过扩展市场按需安装。
-- Shell 页纳入默认构建，四个发布产物统一带 Shell 页。
+- Shell 页纳入默认构建，除 32 位 Windows 外的发布产物都带 Shell 页（其 quickjs JIT 后端不支持 32 位）。
 - 终端上传、下载完成或失败时弹出即时提示。
+- 关闭主窗口最小化到系统托盘，应用继续在后台运行。
+- 资源工作台树支持静态子项：集合可声明无需请求的静态节点，树展开与导航解耦，子项树可直接展开浏览。
 
 #### 修复与优化
 
@@ -34,6 +36,10 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - SFTP / 传输：升级 russh 0.63.3 与 russh-sftp 3.0.0，并对齐传输窗口。
 - 资源工作台与扩展运行时：注册期拒绝未实现的终端 operation 与无效路由绑定，修正连接绑定注入、异步状态归属与表单字段类型；修复 stream 页首读报 -32602。
 - 修复标签栏国际化与 tooltip 显示；修复 SSH 表单弹窗宽度挤压表单内容的问题。
+- AI：流式请求改用空闲读超时，修复长任务被 120 秒总超时掐断；空闲超时值可在设置中配置。
+- 修复 SSH 彩色图标走 `img` 路径时内存暴涨（收缩图标固有尺寸）。
+- 发布包体积显著缩小：二进制约 -36%，DMG 安装包 68MB → 56MB（fat LTO、关闭展开、依赖去重）。
+- 日志文件改为 `navop.log`，超过 64MB 自动轮转（保留上一份 `.1`），避免长期使用把日志撑到 GB 级。
 
 国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.18.0) 下载桌面端安装包
 
@@ -51,8 +57,10 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - AI: the built-in Agent supports a custom system prompt (fix #173); the base system prompt is unified and localized, and user customization is applied as an addition.
 - Redis key-tree search now scans the server after a typing pause (#181); the IPC sidecar is removed in favor of the embedded redis-rs client.
 - TDengine and MQTT are now extension-provided: the built-in implementations are removed, existing data migrates to the extensions, and they install on demand from the marketplace.
-- The Shell page is included in the default build, so all four release artifacts ship with it.
+- The Shell page is included in the default build, so every release artifact ships with it except 32-bit Windows, where the quickjs JIT backend has no 32-bit support.
 - Uploads and downloads in the terminal show immediate completion or failure toasts.
+- Closing the main window minimizes it to the system tray and keeps the app running.
+- Resource workbench trees support static children declared without a request, decoupling tree expansion from navigation.
 
 #### Fixes and Improvements
 
@@ -67,6 +75,10 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - SFTP / transfer: upgraded to russh 0.63.3 and russh-sftp 3.0.0 with an aligned transfer window.
 - Resource workbench and extension runtime: unimplemented terminal operations and invalid route bindings are rejected at registration, and connection binding, async state ownership, and form field types are corrected; fixed the stream page's first read returning -32602.
 - Fixed tab-bar localization and tooltips, and an SSH form dialog width that squeezed form content.
+- AI: streaming requests now use an idle read timeout, fixing long tasks being cut off by the fixed 120-second total timeout; the idle timeout is configurable in settings.
+- Fixed the memory blow-up when the SSH color icon is loaded through the `img` path by shrinking its intrinsic size.
+- Release artifacts are significantly smaller: the binary is about 36% smaller and the DMG installer drops from 68 MB to 56 MB (fat LTO, unwinding disabled, deduplicated dependencies).
+- The log file is now `navop.log` and rotates past 64 MB (keeping one `.1` backup), so long-running installs no longer grow multi-GB logs.
 
 **Full Changelog**: https://github.com/feigeCode/navop/compare/v0.17.0...v0.18.0
 

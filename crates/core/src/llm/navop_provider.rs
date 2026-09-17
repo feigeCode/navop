@@ -14,11 +14,11 @@ use crate::cloud_sync::client::CloudApiClient;
 /// Onet CLI LLM Provider
 ///
 /// 使用 Supabase 边缘函数作为 AI 代理，委托给 CloudApiClient 实现。
-pub struct OnetCliLLMProvider {
+pub struct NavopLLMProvider {
     cloud_client: Arc<dyn CloudApiClient>,
 }
 
-impl OnetCliLLMProvider {
+impl NavopLLMProvider {
     /// 创建新的 Onet CLI LLM Provider
     pub fn new(cloud_client: Arc<dyn CloudApiClient>) -> Self {
         Self { cloud_client }
@@ -26,7 +26,7 @@ impl OnetCliLLMProvider {
 }
 
 #[async_trait]
-impl LlmProvider for OnetCliLLMProvider {
+impl LlmProvider for NavopLLMProvider {
     async fn chat(&self, request: &ChatRequest) -> Result<String> {
         self.cloud_client
             .chat(request)

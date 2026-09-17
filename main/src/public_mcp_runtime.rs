@@ -159,7 +159,7 @@ pub fn agent_runtime_tool_registry(cx: &mut App) -> anyhow::Result<agent_runtime
     );
     if agent_database_enabled {
         if let Some(repo) = connection_repository(cx) {
-            let runtime_db_registry = onetcli_runtime::database_tools::database_tool_registry(repo);
+            let runtime_db_registry = navop_runtime::database_tools::database_tool_registry(repo);
             let runtime_agent_db_registry = agent_runtime::tools::tool_runtime_agent_tool_registry(
                 runtime_db_registry,
                 tool_runtime::ToolAdapter::FunctionCalling,
@@ -190,7 +190,7 @@ fn register_runtime_redis_tools(
         tracing::warn!("Agent Redis runtime tools enabled without ConnectionRepository");
         return Ok(());
     };
-    let runtime_redis_registry = onetcli_runtime::redis_tools::redis_tool_registry(repo);
+    let runtime_redis_registry = navop_runtime::redis_tools::redis_tool_registry(repo);
     let runtime_agent_redis_registry = agent_runtime::tools::tool_runtime_agent_tool_registry(
         runtime_redis_registry,
         tool_runtime::ToolAdapter::FunctionCalling,
@@ -203,7 +203,7 @@ fn register_runtime_sftp_tools(
     repo: std::sync::Arc<one_core::storage::ConnectionRepository>,
     agent_registry: &mut agent_runtime::ToolRegistry,
 ) -> anyhow::Result<()> {
-    let runtime_sftp_registry = onetcli_runtime::sftp_tools::sftp_tool_registry(repo);
+    let runtime_sftp_registry = navop_runtime::sftp_tools::sftp_tool_registry(repo);
     let runtime_agent_sftp_registry = agent_runtime::tools::tool_runtime_agent_tool_registry(
         runtime_sftp_registry,
         tool_runtime::ToolAdapter::FunctionCalling,

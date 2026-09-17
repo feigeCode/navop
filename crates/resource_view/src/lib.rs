@@ -220,8 +220,21 @@ pub struct NativeResourceWorkbench {
     shell_mount: Option<ActiveShellMount>,
     /// 区域级 Shell 挂载(right/bottom 等常驻区域,按 RegionId 缓存)。
     region_shell_mounts: std::collections::BTreeMap<&'static str, ActiveShellMount>,
-    /// 左侧树状态:节点键(根 id / 父键+行键)→ 展开数据。
+    /// 左侧树数据缓存:节点键(根 id / 父键+行键)→ 子节点数据。
+    ///
+    /// 与 `tree_expanded` 分开是刻意的:折叠只改展开集合,**不删缓存**,
+    /// 否则"展开 → 折叠 → 展开"会重复请求同一层。
     tree_children: std::collections::BTreeMap<String, TreeChildrenState>,
+    /// 左侧树展开集合。只表达"这层是不是打开的",不含数据。
+    tree_expanded: std::collections::BTreeSet<String>,
+    /// 树节点级加载代次:节点键 → 当前在途轮次。旧轮次的迟到响应比不中就丢弃。
+    ///
+    /// 缓存不再随折叠失效,所以代次是唯一的作废手段(刷新时整表清空)。
+    tree_load_seq: std::collections::BTreeMap<String, u64>,
+    tree_load_generation: u64,
+    /// 刷新后待恢复的展开键。节点键是结构化的,清空缓存后深层键要等父层
+    /// 重新加载完才能解析,所以恢复是分批的(见 `nav_tree::resume_tree_expansions`)。
+    tree_pending_expand: std::collections::BTreeSet<String>,
     /// terminal 模板页面已挂载的终端。
     terminal_mount: Option<ActiveTerminalMount>,
     terminal_error: Option<String>,
@@ -307,6 +320,10 @@ impl NativeResourceWorkbench {
             shell_mount: None,
             region_shell_mounts: Default::default(),
             tree_children: Default::default(),
+            tree_expanded: Default::default(),
+            tree_load_seq: Default::default(),
+            tree_load_generation: 0,
+            tree_pending_expand: Default::default(),
             terminal_mount: None,
             terminal_error: None,
             terminal_return: None,
@@ -1075,16 +1092,18 @@ impl NativeResourceWorkbench {
             if trimmed.is_empty() && field.value_type != ResourceWorkbenchInputType::String {
                 continue;
             }
-            let value =
-                match extension_plugin_adapter::parse_form_input(&field.id, &text, field.value_type)
-                {
-                    Ok(value) => value,
-                    Err(message) => {
-                        self.query_result = Some(Err(message));
-                        cx.notify();
-                        return;
-                    }
-                };
+            let value = match extension_plugin_adapter::parse_form_input(
+                &field.id,
+                &text,
+                field.value_type,
+            ) {
+                Ok(value) => value,
+                Err(message) => {
+                    self.query_result = Some(Err(message));
+                    cx.notify();
+                    return;
+                }
+            };
             input.insert(field.id.clone(), value);
         }
 
@@ -1453,8 +1472,7 @@ impl NativeResourceWorkbench {
         // detail 页 links(如 Index → Mapping)。
         for (link_index, link) in page.links.iter().enumerate() {
             let target = link.page_id.clone();
-            let route =
-                route_binding::build_route(&link.route, &self.route_sources_without_row());
+            let route = route_binding::build_route(&link.route, &self.route_sources_without_row());
             toolbar = toolbar.child(
                 Button::new(gpui::SharedString::from(format!("page-link-{link_index}")))
                     .with_size(Size::Small)

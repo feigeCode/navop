@@ -22,7 +22,7 @@ on:
           - windows-x64
           - windows-x86
       build_mode:
-        description: "fast 关闭 LTO（构建更快、体积略大）；release 使用 thin LTO"
+        description: "fast 用 thin LTO（构建较快、体积略大）；release 用 fat LTO + panic=abort（体积最小）"
         required: true
         type: choice
         default: release
@@ -162,7 +162,8 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ matrix.target == 'aarch64-apple-darwin' && 180 || matrix.arm_linux && 180 || 120 }}
+    # fat LTO + codegen-units=1 让链接阶段更慢（Windows x64 基线已 64min），一律给 180min
+    timeout-minutes: 180
 
     steps:
       - uses: actions/checkout@v7
@@ -317,7 +318,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ "${{ needs.prepare.outputs.build_mode }}" = "fast" ]; then
-            export CARGO_PROFILE_RELEASE_LTO=false
+            export CARGO_PROFILE_RELEASE_LTO=thin
             export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
           elif [ "${{ matrix.arm_linux }}" = "true" ]; then
             export CARGO_BUILD_JOBS=2
@@ -340,6 +341,8 @@ jobs:
             cargo build --release -p main --target "${{ matrix.target }}"
           fi
           test -x "target/${{ matrix.target }}/release/${{ matrix.binary }}"
+          # 体积回归在日志里可见（fat LTO + panic=abort 后约 107MiB）
+          ls -lh "target/${{ matrix.target }}/release/${{ matrix.binary }}"
 
       - name: Build release binary (Windows)
         if: runner.os == 'Windows'
@@ -379,9 +382,9 @@ jobs:
           rustc --version
           Write-Host "Using MSVC linker for ${target}: $linker"
           if ("${{ needs.prepare.outputs.build_mode }}" -eq "fast") {
-            $env:CARGO_PROFILE_RELEASE_LTO = "false"
+            $env:CARGO_PROFILE_RELEASE_LTO = "thin"
             $env:CARGO_PROFILE_RELEASE_CODEGEN_UNITS = "16"
-            Write-Host "Fast build mode: LTO disabled, codegen-units=16"
+            Write-Host "Fast build mode: thin LTO, codegen-units=16"
           }
           # 32 位 Windows 暂不支持 shell-plugins：其 gpui-shell 依赖的
           # quickjs-jit 运行时代码与 cranelift 后端仅支持 64 位

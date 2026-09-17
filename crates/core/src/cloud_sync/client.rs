@@ -125,7 +125,7 @@ pub trait CloudApiClient: Send + Sync {
     async fn get_subscription(&self) -> Result<Option<SubscriptionInfo>, CloudApiError>;
 
     // ========================================================================
-    // OnetCli 模型列表
+    // Navop 模型列表
     // ========================================================================
 
     /// 获取当前可用模型列表
