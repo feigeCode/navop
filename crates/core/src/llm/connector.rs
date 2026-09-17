@@ -22,6 +22,8 @@ const VOLCENGINE_BASE_URL: &str = "https://ark.cn-beijing.volces.com/api/v3";
 const MOONSHOT_BASE_URL: &str = "https://api.moonshot.cn/v1";
 const DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com";
 const GOOGLE_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta";
+/// Idle timeout: aborts a request only after this long without any bytes, so
+/// long streaming responses (thinking/CoT, tool loops) are not cut off.
 const LLM_CLIENT_TIMEOUT_SECS: u64 = 120;
 
 pub use llm_connector::types::{

@@ -19,21 +19,53 @@ pub struct HttpClient {
     headers: HashMap<String, String>,
 }
 
+/// Default idle timeout between reads. It is applied per body read and resets on
+/// every chunk, so a healthy stream is never aborted merely for running long;
+/// only a stall with no bytes for this long fails the request.
+const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Bound the connection phase so an unreachable host cannot hang forever.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+
+fn build_http_client(
+    read_timeout: Duration,
+    proxy: Option<&str>,
+) -> Result<Client, LlmConnectorError> {
+    let mut builder = Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        // IMPORTANT: never use `ClientBuilder::timeout()` here. It is a *total*
+        // deadline that also covers the response body, so it would abort long
+        // LLM streams (thinking/CoT, tool loops) mid-flight. `read_timeout` is
+        // the correct guard: it only fires after this long without any bytes.
+        .read_timeout(read_timeout);
+
+    match proxy {
+        Some(proxy_url) => {
+            let proxy = reqwest::Proxy::all(proxy_url)
+                .map_err(|e| LlmConnectorError::ConfigError(format!("Invalid proxy URL: {}", e)))?;
+            builder = builder.proxy(proxy);
+        }
+        None => {
+            // Disable system proxy to avoid unexpected timeout/panic issues.
+            builder = builder.no_proxy();
+        }
+    }
+
+    builder
+        .build()
+        .map_err(|e| LlmConnectorError::ConfigError(format!("Failed to create HTTP client: {}", e)))
+}
+
 impl HttpClient {
     /// Create new HTTP client
     ///
-    /// Default timeout: 60 seconds (suitable for most requests including streaming)
+    /// Default idle timeout: 120 seconds. It only aborts a stream that stalls,
+    /// never one that keeps streaming.
     ///
     /// **Important**: System proxy is **disabled** by default to avoid unexpected timeout issues.
     /// If you need to use a proxy, use `with_config()` and explicitly set the proxy parameter.
     pub fn new(base_url: &str) -> Result<Self, LlmConnectorError> {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(120)) // Increased from 60 to 120 seconds for thinking/CoT
-            .no_proxy() // Disable system proxy by default to avoid timeout issues
-            .build()
-            .map_err(|e| {
-                LlmConnectorError::ConfigError(format!("Failed to create HTTP client: {}", e))
-            })?;
+        let client = build_http_client(DEFAULT_READ_TIMEOUT, None)?;
 
         Ok(Self {
             client,
@@ -46,7 +78,7 @@ impl HttpClient {
     ///
     /// # Parameters
     /// - `base_url`: Base URL for the API
-    /// - `timeout_secs`: Optional timeout in seconds (default: 60 seconds)
+    /// - `timeout_secs`: Optional idle timeout in seconds (default: 120 seconds)
     /// - `proxy`: Optional proxy URL
     ///
     /// # Proxy Behavior
@@ -60,29 +92,10 @@ impl HttpClient {
         timeout_secs: Option<u64>,
         proxy: Option<&str>,
     ) -> Result<Self, LlmConnectorError> {
-        let mut builder = Client::builder();
-
-        // Set timeout (default 120 seconds for thinking/CoT compatibility)
-        if let Some(timeout) = timeout_secs {
-            builder = builder.timeout(Duration::from_secs(timeout));
-        } else {
-            builder = builder.timeout(Duration::from_secs(120)); // Increased from 60 to 120 seconds
-        }
-
-        // Set proxy or disable system proxy
-        if let Some(proxy_url) = proxy {
-            // Use explicit proxy
-            let proxy = reqwest::Proxy::all(proxy_url)
-                .map_err(|e| LlmConnectorError::ConfigError(format!("Invalid proxy URL: {}", e)))?;
-            builder = builder.proxy(proxy);
-        } else {
-            // Disable system proxy to avoid timeout issues
-            builder = builder.no_proxy();
-        }
-
-        let client = builder.build().map_err(|e| {
-            LlmConnectorError::ConfigError(format!("Failed to create HTTP client: {}", e))
-        })?;
+        let read_timeout = timeout_secs
+            .map(Duration::from_secs)
+            .unwrap_or(DEFAULT_READ_TIMEOUT);
+        let client = build_http_client(read_timeout, proxy)?;
 
         Ok(Self {
             client,
@@ -158,10 +171,9 @@ impl HttpClient {
 
     /// Send streaming POST request
     ///
-    /// Note: Streaming requests use the same timeout as configured in the client.
-    /// For long-running streams, consider using `with_config()` to set a longer timeout.
-    ///
-    /// Recommended timeout for streaming: 60-300 seconds depending on expected response length.
+    /// Note: the configured timeout is an idle (per-read) timeout. A stream that
+    /// keeps emitting bytes is never aborted, no matter how long it runs; only a
+    /// stall longer than the timeout fails it.
     #[cfg(feature = "streaming")]
     pub async fn stream<T: Serialize>(
         &self,
@@ -183,7 +195,7 @@ impl HttpClient {
         request.send().await
             .map_err(|e| {
                 if e.is_timeout() {
-                    LlmConnectorError::TimeoutError(format!("Stream request timeout: {}. Consider increasing timeout for long-running streams.", e))
+                    LlmConnectorError::TimeoutError(format!("Stream request timed out after a period with no data: {}. Consider increasing the idle timeout for slow providers.", e))
                 } else if e.is_connect() {
                     LlmConnectorError::ConnectionError(format!("Stream connection failed: {}", e))
                 } else {
@@ -321,7 +333,7 @@ impl HttpClient {
         request.send().await.map_err(|e| {
             if e.is_timeout() {
                 LlmConnectorError::TimeoutError(format!(
-                    "Stream request timeout: {}. Consider increasing timeout for long-running streams.",
+                    "Stream request timed out after a period with no data: {}. Consider increasing the idle timeout for slow providers.",
                     e
                 ))
             } else if e.is_connect() {
@@ -434,5 +446,90 @@ mod tests {
         let client = client.with_header("X-Test".to_string(), "value\nwith\0bad".to_string());
         let stored = client.headers.get("X-Test").expect("header present");
         assert_eq!(stored, "value?with?bad");
+    }
+
+    use futures::StreamExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// Starts a raw HTTP server that streams `chunks` SSE frames with `gap`
+    /// between them. When `finish` is false it stalls (no bytes) instead of
+    /// closing, to exercise the idle timeout.
+    async fn spawn_sse_server(gap: Duration, chunks: usize, finish: bool) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let addr = listener.local_addr().expect("local addr");
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            let mut request = [0u8; 4096];
+            let _ = socket.read(&mut request).await;
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n",
+                )
+                .await
+                .expect("write headers");
+            for _ in 0..chunks {
+                tokio::time::sleep(gap).await;
+                let body = "data: {\"x\":1}\n\n";
+                let frame = format!("{:X}\r\n{body}\r\n", body.len());
+                socket
+                    .write_all(frame.as_bytes())
+                    .await
+                    .expect("write frame");
+            }
+            if finish {
+                let _ = socket.write_all(b"0\r\n\r\n").await;
+            } else {
+                tokio::time::sleep(Duration::from_secs(3)).await;
+            }
+            let _ = socket.shutdown().await;
+        });
+        format!("http://{addr}")
+    }
+
+    async fn open_stream(base: &str, idle_timeout_secs: u64) -> reqwest::Response {
+        let client = HttpClient::with_config(base, Some(idle_timeout_secs), None).expect("client");
+        client
+            .stream(
+                &format!("{base}/v1/chat/completions"),
+                &serde_json::json!({ "stream": true }),
+            )
+            .await
+            .expect("stream request should connect")
+    }
+
+    #[tokio::test]
+    async fn stream_survives_longer_than_the_idle_timeout() {
+        // 5 frames * 300ms = 1.5s total, which exceeds the 1s idle timeout.
+        // Only a total-timeout client would abort this; an idle-timeout client
+        // keeps going because bytes keep arriving.
+        let base = spawn_sse_server(Duration::from_millis(300), 5, true).await;
+        let response = open_stream(&base, 1).await;
+        let mut stream = response.bytes_stream();
+        let mut bytes = 0usize;
+        while let Some(chunk) = stream.next().await {
+            bytes += chunk
+                .expect("healthy stream must not be aborted by a total timeout")
+                .len();
+        }
+        assert_eq!(bytes, 5 * "data: {\"x\":1}\n\n".len());
+    }
+
+    #[tokio::test]
+    async fn stream_aborts_after_a_real_stall() {
+        let base = spawn_sse_server(Duration::from_millis(100), 1, false).await;
+        let response = open_stream(&base, 1).await;
+        let mut stream = response.bytes_stream();
+        let first = stream.next().await.expect("first frame").expect("ok");
+        assert!(!first.is_empty());
+        let stalled = stream
+            .next()
+            .await
+            .expect("stalled stream should yield an error, not end cleanly");
+        assert!(
+            stalled.is_err(),
+            "a stalled stream must time out: {stalled:?}"
+        );
     }
 }
