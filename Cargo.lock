@@ -7976,13 +7976,13 @@ dependencies = [
  "known_hosts_view",
  "mongodb-runtime",
  "mongodb_view",
+ "navop_runtime",
  "notes",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "one-assets",
  "one-core",
  "one-ui",
- "onetcli_runtime",
  "percent-encoding",
  "port_forwarding",
  "port_forwarding_view",
@@ -8673,6 +8673,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a51313c5820b0b02bd422f4b44776fbf47961755c74ce64afc73bfad10226c3"
 dependencies = [
  "getrandom 0.2.17",
+]
+
+[[package]]
+name = "navop_runtime"
+version = "0.15.2"
+dependencies = [
+ "agent_runtime",
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "db",
+ "futures",
+ "one-core",
+ "redis-runtime",
+ "rusqlite",
+ "serde_json",
+ "sftp",
+ "ssh",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tool_runtime",
 ]
 
 [[package]]
@@ -9567,28 +9589,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tracing",
-]
-
-[[package]]
-name = "onetcli_runtime"
-version = "0.15.2"
-dependencies = [
- "agent_runtime",
- "anyhow",
- "async-trait",
- "base64 0.22.1",
- "db",
- "futures",
- "one-core",
- "redis-runtime",
- "rusqlite",
- "serde_json",
- "sftp",
- "ssh",
- "tempfile",
- "tokio",
- "tokio-util",
- "tool_runtime",
 ]
 
 [[package]]

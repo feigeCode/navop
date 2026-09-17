@@ -672,7 +672,7 @@ impl AgentChatViewConfig {
 
     /// 用正式 provider 配置创建 Agent tab 配置。
     ///
-    /// 适用于普通 provider；`OnetCli` 这类需要 `GlobalProviderState` 的 provider 请使用
+    /// 适用于普通 provider；`Navop` 这类需要 `GlobalProviderState` 的 provider 请使用
     /// [`AgentChatViewConfig::from_provider_state`]。
     pub fn from_provider_configs(
         resources: ResourceContext,
@@ -684,7 +684,7 @@ impl AgentChatViewConfig {
         Self::from_runtime_specs(resources, mentions, specs)
     }
 
-    /// 用 `GlobalProviderState` 创建 Agent tab 配置,支持 OnetCli provider。
+    /// 用 `GlobalProviderState` 创建 Agent tab 配置,支持 Navop provider。
     pub async fn from_provider_state(
         resources: ResourceContext,
         mentions: Vec<MentionItem>,

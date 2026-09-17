@@ -145,7 +145,7 @@ impl gpui::Render for PersistentConnectionSidebar {
 impl PersistentConnectionSidebar {
     /// Render the connection tree as a floating card that overlays the main
     /// content instead of occupying flex space, so expanding it no longer
-    /// squeezes the terminal. The caller (OnetCliApp) positions it at the
+    /// squeezes the terminal. The caller (NavopApp) positions it at the
     /// left window edge, below the tab bar, and collapses it when the
     /// terminal regains focus.
     pub(crate) fn render_floating_tree(

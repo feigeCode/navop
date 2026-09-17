@@ -417,7 +417,7 @@ pub fn build_runtime_from_provider_config(
     )
 }
 
-/// 用 `GlobalProviderState` 异步装配 Runtime,支持 OnetCli 等需要 manager 的 provider。
+/// 用 `GlobalProviderState` 异步装配 Runtime,支持 Navop 等需要 manager 的 provider。
 pub async fn build_runtime_from_provider_state(
     provider_state: GlobalProviderState,
     config: &ProviderConfig,

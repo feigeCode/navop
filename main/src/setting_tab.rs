@@ -363,8 +363,8 @@ fn init_tracing(settings: &AppSettings) {
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
 
-    match crate::onetcli_app::configured_log_file_path(&settings.log_file_path) {
-        Ok(log_file_path) => match crate::onetcli_app::log_file_appender(&log_file_path) {
+    match crate::navop_app::configured_log_file_path(&settings.log_file_path) {
+        Ok(log_file_path) => match crate::navop_app::log_file_appender(&log_file_path) {
             Ok(file_appender) => {
                 let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
                 Box::leak(Box::new(guard));
@@ -3256,14 +3256,14 @@ fn set_custom_keybinding(action_id: &str, spec: String, cx: &mut App) {
             .custom_keybindings
             .insert(action_id.to_string(), vec![spec]);
     });
-    crate::onetcli_app::refresh_keybindings(cx);
+    crate::navop_app::refresh_keybindings(cx);
 }
 
 fn reset_custom_keybinding(action_id: &str, cx: &mut App) {
     AppSettings::update_and_save(cx, |settings| {
         settings.custom_keybindings.remove(action_id);
     });
-    crate::onetcli_app::refresh_keybindings(cx);
+    crate::navop_app::refresh_keybindings(cx);
 }
 
 fn clear_custom_keybinding(action_id: &str, cx: &mut App) {
@@ -3272,7 +3272,7 @@ fn clear_custom_keybinding(action_id: &str, cx: &mut App) {
             .custom_keybindings
             .insert(action_id.to_string(), Vec::new());
     });
-    crate::onetcli_app::refresh_keybindings(cx);
+    crate::navop_app::refresh_keybindings(cx);
 }
 
 fn shortcut_spec_from_keystroke(keystroke: &Keystroke) -> Option<String> {

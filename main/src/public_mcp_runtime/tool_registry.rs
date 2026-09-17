@@ -61,7 +61,7 @@ fn build_tool_registry_for_surface(
         }
     }
     if toolsets.internal_functions {
-        runtime_registries.push(onetcli_runtime::builtin_tool_registry_with_version(env!(
+        runtime_registries.push(navop_runtime::builtin_tool_registry_with_version(env!(
             "CARGO_PKG_VERSION"
         )));
         runtime_registries.push(internal_function_tool_registry(
@@ -83,16 +83,16 @@ fn build_tool_registry_for_surface(
                 );
                 let save_notifier = super::connection_sessions::connection_save_notifier(cx);
                 runtime_registries.push(
-                    onetcli_runtime::connections::connection_tool_registry_with_workspaces_and_hooks(
+                    navop_runtime::connections::connection_tool_registry_with_workspaces_and_hooks(
                         repo,
                         workspace_repo.clone(),
-                        onetcli_runtime::connections::ConnectionToolHooks::default()
+                        navop_runtime::connections::ConnectionToolHooks::default()
                             .with_session_opener(Some(session_opener))
                             .with_save_notifier(Some(save_notifier)),
                     ),
                 );
                 if let Some(workspace_repo) = workspace_repo {
-                    runtime_registries.push(onetcli_runtime::workspaces::workspace_tool_registry(
+                    runtime_registries.push(navop_runtime::workspaces::workspace_tool_registry(
                         workspace_repo,
                     ));
                 } else {
@@ -113,7 +113,7 @@ fn build_tool_registry_for_surface(
                 .storage
                 .get::<one_core::storage::ConnectionRepository>()
             {
-                runtime_registries.push(onetcli_runtime::sftp_tools::sftp_tool_registry(repo));
+                runtime_registries.push(navop_runtime::sftp_tools::sftp_tool_registry(repo));
             } else {
                 tracing::warn!("Public MCP SFTP tools enabled without ConnectionRepository");
             }
@@ -127,7 +127,7 @@ fn build_tool_registry_for_surface(
                 .storage
                 .get::<one_core::storage::ConnectionRepository>()
             {
-                runtime_registries.push(onetcli_runtime::database_tools::database_tool_registry(
+                runtime_registries.push(navop_runtime::database_tools::database_tool_registry(
                     repo,
                 ));
             } else {

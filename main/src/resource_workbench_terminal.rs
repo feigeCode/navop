@@ -66,7 +66,7 @@ impl TerminalHost for NativeTerminalHost {
 }
 
 /// 注入全局终端 host。应用启动时调用一次,须在 `terminal_view::init` 之后
-/// (由 `onetcli_app::init` 负责)。
+/// (由 `navop_app::init` 负责)。
 pub(crate) fn install_terminal_host(cx: &mut App) {
     cx.set_global(GlobalTerminalHost {
         host: Rc::new(NativeTerminalHost),

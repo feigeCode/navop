@@ -171,7 +171,7 @@ pub struct HomePage {
     pub(crate) workspaces: Vec<Workspace>,
     pub(crate) connections: Vec<StoredConnection>,
     pub(crate) tab_container: Entity<TabContainer>,
-    /// 常驻连接侧栏（Tree 布局复用其树视图）；在 OnetCliApp 创建侧栏后注入。
+    /// 常驻连接侧栏（Tree 布局复用其树视图）；在 NavopApp 创建侧栏后注入。
     connection_sidebar:
         Option<Entity<crate::persistent_connection_sidebar::PersistentConnectionSidebar>>,
     search_input: Entity<InputState>,

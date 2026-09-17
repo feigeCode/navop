@@ -26,7 +26,7 @@ static ALWAYS_ON_TOP: AtomicBool = AtomicBool::new(false);
 struct AlwaysOnTopNotification;
 
 actions!(
-    onetcli_app,
+    navop_app,
     [
         ActivateTab1,
         ActivateTab2,
@@ -58,11 +58,11 @@ pub struct GlobalHomePage {
 impl gpui::Global for GlobalHomePage {}
 
 #[derive(Clone)]
-pub struct GlobalOnetCliApp {
-    pub app: Entity<OnetCliApp>,
+pub struct GlobalNavopApp {
+    pub app: Entity<NavopApp>,
 }
 
-impl gpui::Global for GlobalOnetCliApp {}
+impl gpui::Global for GlobalNavopApp {}
 
 fn add_tab_button_handler() -> Arc<dyn Fn(&mut Window, &mut App) + Send + Sync> {
     Arc::new(|window: &mut Window, cx: &mut App| {
@@ -357,7 +357,7 @@ use gpui_component::dock::ToggleZoom;
 use gpui_component::{ActiveTheme, Root};
 use one_core::llm::manager::GlobalProviderState;
 use one_core::llm::notifier::emit_provider_config_changed;
-use one_core::llm::storage::{ProviderRepository, refresh_onetcli_models};
+use one_core::llm::storage::{ProviderRepository, refresh_navop_models};
 use one_core::settings::{AppSettings, GlobalCurrentUser, MainWindowState};
 use one_core::storage::manager::get_config_dir;
 use one_core::tab_container::{
@@ -797,7 +797,7 @@ fn request_active_window_quit(cx: &mut App) {
 /// 走既有退出流程的公共入口：托盘「退出 Navop」、`QuitApp` 快捷键、应用菜单都经过它。
 pub(crate) fn request_window_quit(window: &mut Window, cx: &mut App) {
     let Some(app) = cx
-        .try_global::<GlobalOnetCliApp>()
+        .try_global::<GlobalNavopApp>()
         .map(|global| global.app.clone())
     else {
         shutdown_application_resources_and_quit(cx, "quit without the application entity");
@@ -820,7 +820,7 @@ fn close_active_window_default_shortcut() -> &'static str {
     default_shortcut("cmd-w", "ctrl-shift-w")
 }
 
-const LOG_FILE_NAME: &str = "onetcli.log";
+const LOG_FILE_NAME: &str = "navop.log";
 
 /// 单个日志文件的大小上限。超过后会在下次打开时轮转到 `<文件名>.1`，
 /// 避免长期使用把日志撑到 GB 级（实测 48 天可到 1.2G）。
@@ -895,31 +895,31 @@ fn rotate_oversized_log(path: &Path) {
 }
 
 /// 内置 Navop AI 模型列表的定期刷新间隔（已登录时）。
-const ONETCLI_MODEL_REFRESH_INTERVAL: Duration = Duration::from_secs(15 * 60);
+const NAVOP_MODEL_REFRESH_INTERVAL: Duration = Duration::from_secs(15 * 60);
 /// 未登录时检查登录态的轮询间隔。
-const ONETCLI_MODEL_REFRESH_LOGIN_POLL: Duration = Duration::from_secs(30);
+const NAVOP_MODEL_REFRESH_LOGIN_POLL: Duration = Duration::from_secs(30);
 /// 应用启动后首次拉取前的延迟，等待会话恢复与云客户端就绪。
-const ONETCLI_MODEL_REFRESH_STARTUP_DELAY: Duration = Duration::from_secs(3);
+const NAVOP_MODEL_REFRESH_STARTUP_DELAY: Duration = Duration::from_secs(3);
 
 /// 启动后按固定间隔拉取内置 Navop AI 云端模型列表并持久化到本地。
 ///
 /// 模型列表依赖云账号：未登录时仅以较短间隔轮询登录态、不做拉取；
 /// 一旦登录立即拉取一次，之后按固定间隔定期刷新，并通知 AI 面板更新模型选项。
-fn spawn_onetcli_model_refresh(cx: &mut App) {
+fn spawn_navop_model_refresh(cx: &mut App) {
     let storage = cx.global::<GlobalStorageState>().storage.clone();
     let provider_state = cx.global::<GlobalProviderState>().clone();
 
     cx.spawn(async move |cx: &mut AsyncApp| {
         // 先等待云客户端 / 会话恢复就绪
         cx.background_executor()
-            .timer(ONETCLI_MODEL_REFRESH_STARTUP_DELAY)
+            .timer(NAVOP_MODEL_REFRESH_STARTUP_DELAY)
             .await;
 
         loop {
             let logged_in = cx.update(|cx| GlobalCurrentUser::get_user(cx).is_some());
             let interval = if logged_in {
                 if let Some(repo) = storage.get::<ProviderRepository>() {
-                    match refresh_onetcli_models(&repo, &provider_state).await {
+                    match refresh_navop_models(&repo, &provider_state).await {
                         Ok(Some(_)) => {
                             cx.update(|cx| emit_provider_config_changed(cx));
                         }
@@ -929,9 +929,9 @@ fn spawn_onetcli_model_refresh(cx: &mut App) {
                         }
                     }
                 }
-                ONETCLI_MODEL_REFRESH_INTERVAL
+                NAVOP_MODEL_REFRESH_INTERVAL
             } else {
-                ONETCLI_MODEL_REFRESH_LOGIN_POLL
+                NAVOP_MODEL_REFRESH_LOGIN_POLL
             };
             cx.background_executor().timer(interval).await;
         }
@@ -969,7 +969,7 @@ pub fn init(cx: &mut App) -> anyhow::Result<()> {
         global_provider_state
             .set_request_timeout_secs(Some(AppSettings::global(cx).ai_chat.request_timeout_secs));
     }
-    spawn_onetcli_model_refresh(cx);
+    spawn_navop_model_refresh(cx);
     db::init_cache(cx);
     // 启动后台磁盘缓存清理任务
     if let Some(cache) = cx.try_global::<db::GlobalNodeCache>() {
@@ -1358,7 +1358,7 @@ fn close_active_window(cx: &mut App) {
     one_core::window_close::request_close_window(active_window, cx);
 }
 
-pub struct OnetCliApp {
+pub struct NavopApp {
     tab_container: Entity<TabContainer>,
     connection_sidebar: Entity<PersistentConnectionSidebar>,
     quit_state: QuitRequestState,
@@ -1366,10 +1366,10 @@ pub struct OnetCliApp {
     _appearance_subscription: gpui::Subscription,
 }
 
-impl OnetCliApp {
+impl NavopApp {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let app_entity = cx.entity();
-        cx.set_global(GlobalOnetCliApp {
+        cx.set_global(GlobalNavopApp {
             app: app_entity.clone(),
         });
         let app = app_entity.downgrade();
@@ -1711,7 +1711,7 @@ mod tests {
         assert_eq!("home", layout.home_tab_id);
         assert_eq!(Some(0), layout.active_pinned_index);
 
-        let source = include_str!("onetcli_app.rs");
+        let source = include_str!("navop_app.rs");
         let constructor = source
             .split("pub fn new(window:")
             .nth(1)
@@ -1727,7 +1727,7 @@ mod tests {
 
     #[test]
     fn home_content_cannot_inherit_a_background_terminal_sidebar_theme() {
-        let source = include_str!("onetcli_app.rs");
+        let source = include_str!("navop_app.rs");
         assert!(source.contains("if tabs.is_pinned_tab_active()"));
     }
 
@@ -1742,7 +1742,7 @@ mod tests {
 
     #[test]
     fn startup_master_key_prompt_is_scheduled_even_when_home_is_not_active() {
-        let source = include_str!("onetcli_app.rs");
+        let source = include_str!("navop_app.rs");
         let constructor = source
             .split("pub fn new(window:")
             .nth(1)
@@ -1751,18 +1751,18 @@ mod tests {
                     .split("\n    pub(crate) fn set_home_page_style")
                     .next()
             })
-            .expect("OnetCliApp::new source");
+            .expect("NavopApp::new source");
 
         assert!(constructor.contains("home.show_pending_master_key_prompt(window, cx)"));
     }
 
     #[test]
     fn connection_and_terminal_shortcuts_cannot_replace_the_startup_lock_dialog() {
-        let source = include_str!("onetcli_app.rs");
+        let source = include_str!("navop_app.rs");
         let handlers = source
             .split("fn init_action_handlers(")
             .nth(1)
-            .and_then(|source| source.split("\npub struct OnetCliApp").next())
+            .and_then(|source| source.split("\npub struct NavopApp").next())
             .expect("init_action_handlers source");
 
         assert_eq!(
@@ -1775,7 +1775,7 @@ mod tests {
 
     #[test]
     fn platform_close_shortcut_closes_only_the_active_auxiliary_window() {
-        let source = include_str!("onetcli_app.rs");
+        let source = include_str!("navop_app.rs");
         let keybindings = source
             .split("fn init_keybindings(")
             .nth(1)
@@ -1820,8 +1820,8 @@ mod tests {
 
     #[test]
     fn tree_auto_hide_selects_floating_overlay_otherwise_docked_panel() {
-        let source = include_str!("onetcli_app.rs");
-        let render = source.rsplit("impl Render for OnetCliApp").next().unwrap();
+        let source = include_str!("navop_app.rs");
+        let render = source.rsplit("impl Render for NavopApp").next().unwrap();
         assert!(render.contains("render_floating_tree"));
         assert!(render.contains("render_docked_connection_tree"));
         assert!(render.contains("is_auto_hide_tree()"));
@@ -1837,7 +1837,7 @@ mod tests {
 
     #[test]
     fn startup_preserves_the_saved_connection_sidebar_state() {
-        let source = include_str!("onetcli_app.rs");
+        let source = include_str!("navop_app.rs");
         let constructor = source
             .split("pub fn new(window:")
             .nth(1)
@@ -1916,7 +1916,7 @@ mod tests {
 
     #[test]
     fn quit_action_routes_through_active_window_quit_request() {
-        let source = include_str!("onetcli_app.rs").replace("\r\n", "\n");
+        let source = include_str!("navop_app.rs").replace("\r\n", "\n");
         let start = source.find("fn quit_app").expect("quit_app function");
         let end = source[start..]
             .find("\n}\n\nfn request_active_window_quit")
@@ -1947,7 +1947,7 @@ mod tests {
 
     #[test]
     fn confirmed_and_update_quit_paths_await_all_application_resource_shutdown() {
-        let source = include_str!("onetcli_app.rs").replace("\r\n", "\n");
+        let source = include_str!("navop_app.rs").replace("\r\n", "\n");
         let helper_start = source
             .find("pub(crate) fn shutdown_application_resources_and_quit")
             .expect("shared application resource shutdown helper");
@@ -1990,7 +1990,7 @@ mod tests {
 
     #[test]
     fn platform_quit_fails_closed_native_rdp_before_ssh_without_recursive_quit() {
-        let source = include_str!("onetcli_app.rs").replace("\r\n", "\n");
+        let source = include_str!("navop_app.rs").replace("\r\n", "\n");
         let start = source
             .find("fn init_ssh_session_service")
             .expect("init_ssh_session_service");
@@ -2018,13 +2018,13 @@ mod tests {
     }
 
     #[test]
-    fn onetcli_app_registers_window_close_guard() {
-        let source = include_str!("onetcli_app.rs");
-        let start = source.find("pub fn new").expect("OnetCliApp::new");
+    fn navop_app_registers_window_close_guard() {
+        let source = include_str!("navop_app.rs");
+        let start = source.find("pub fn new").expect("NavopApp::new");
         let end = source[start..]
             .find("\n        let tab_container")
             .map(|offset| start + offset)
-            .expect("OnetCliApp::new setup");
+            .expect("NavopApp::new setup");
         let new_fn = &source[start..end];
 
         assert!(new_fn.contains("on_window_should_close"));
@@ -2033,12 +2033,12 @@ mod tests {
 
     #[test]
     fn main_window_close_consults_the_system_tray_policy() {
-        let source = include_str!("onetcli_app.rs");
-        let start = source.find("pub fn new").expect("OnetCliApp::new");
+        let source = include_str!("navop_app.rs");
+        let start = source.find("pub fn new").expect("NavopApp::new");
         let end = source[start..]
             .find("\n        let tab_container")
             .map(|offset| start + offset)
-            .expect("OnetCliApp::new setup");
+            .expect("NavopApp::new setup");
         let new_fn = &source[start..end];
         // needle 运行时拼接：断言字面量不能把 include_str! 守卫自己命中。
         let policy_fn = ["crate::system_tray::main_window_close_", "action("].concat();
@@ -2065,7 +2065,7 @@ mod tests {
 
     #[test]
     fn explicit_quit_still_reaches_the_main_window_after_hiding_to_the_tray() {
-        let source = include_str!("onetcli_app.rs");
+        let source = include_str!("navop_app.rs");
         let start = source
             .find("fn request_active_window_quit")
             .expect("request_active_window_quit");
@@ -2088,13 +2088,13 @@ mod tests {
     }
 
     #[test]
-    fn onetcli_app_persists_window_state_after_bounds_changes() {
-        let source = include_str!("onetcli_app.rs");
-        let start = source.find("pub fn new").expect("OnetCliApp::new");
+    fn navop_app_persists_window_state_after_bounds_changes() {
+        let source = include_str!("navop_app.rs");
+        let start = source.find("pub fn new").expect("NavopApp::new");
         let end = source[start..]
             .find("\n        let settings")
             .map(|offset| start + offset)
-            .expect("OnetCliApp::new window setup");
+            .expect("NavopApp::new window setup");
         let new_fn = &source[start..end];
 
         assert!(new_fn.contains("observe_window_bounds"));
@@ -2103,7 +2103,7 @@ mod tests {
 
     #[test]
     fn saved_main_window_state_includes_position_size_and_display() {
-        let source = include_str!("onetcli_app.rs");
+        let source = include_str!("navop_app.rs");
         let start = source
             .find("fn save_main_window_state")
             .expect("save_main_window_state");
@@ -2125,7 +2125,7 @@ mod tests {
 
     #[test]
     fn request_quit_skips_confirmation_when_no_tabs_are_open() {
-        let source = include_str!("onetcli_app.rs");
+        let source = include_str!("navop_app.rs");
         let request_start = source.find("fn request_quit").expect("request_quit");
         let request_end = source[request_start..]
             .find("\n    fn show_quit_confirmation")
@@ -2140,7 +2140,7 @@ mod tests {
 
     #[test]
     fn native_driver_factories_are_ready_before_public_mcp_init() {
-        let source = include_str!("onetcli_app.rs");
+        let source = include_str!("navop_app.rs");
         let redis_init = source.find("redis_view::init(cx);").unwrap();
         let mongo_init = source.find("mongodb_view::init(cx);").unwrap();
         let native_factories = source
@@ -2200,7 +2200,7 @@ mod tests {
 
     #[test]
     fn native_data_driver_factories_only_keep_mongodb() {
-        let source = include_str!("onetcli_app.rs");
+        let source = include_str!("navop_app.rs");
         let init = source.find("fn init_native_data_driver_factories").unwrap();
         let rest = &source[init..];
         let end = rest
@@ -2335,13 +2335,13 @@ mod tests {
     fn configured_log_file_path_accepts_windows_directory() {
         let path = configured_log_file_path(r"D:\Navop\logs").expect("应返回 Windows 日志文件路径");
 
-        assert_eq!(path, std::path::PathBuf::from(r"D:\Navop\logs\onetcli.log"));
+        assert_eq!(path, std::path::PathBuf::from(r"D:\Navop\logs\navop.log"));
     }
 
     #[test]
     fn log_file_appender_creates_parent_directories_and_appends() {
         let path = std::env::temp_dir()
-            .join(format!("onetcli-log-test-{}", std::process::id()))
+            .join(format!("navop-log-test-{}", std::process::id()))
             .join("nested")
             .join("app.log");
 
@@ -2438,7 +2438,7 @@ mod tests {
     }
 }
 
-impl Render for OnetCliApp {
+impl Render for NavopApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let sheet_layer = Root::render_sheet_layer(window, cx);
         let dialog_layer = Root::render_dialog_layer(window, cx);

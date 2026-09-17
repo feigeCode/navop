@@ -26,7 +26,7 @@ mod license;
 mod local_terminal_profiles;
 mod navigation_applications;
 pub mod new_connection;
-mod onetcli_app;
+mod navop_app;
 mod persistent_connection_sidebar;
 mod personal_sync_conflicts;
 mod personal_sync_runtime;
@@ -48,7 +48,7 @@ mod window_visibility;
 #[cfg(any(target_os = "windows", test))]
 mod windows_single_instance;
 
-use crate::onetcli_app::OnetCliApp;
+use crate::navop_app::NavopApp;
 use gpui::*;
 use one_core::tab_container::GlobalTabContainer;
 
@@ -435,7 +435,7 @@ fn main() {
             .expect("main package version must be valid semver");
         extension_runtime::set_current_host_version(env!("CARGO_PKG_VERSION"))
             .expect("main package version must be valid semver");
-        if let Err(error) = onetcli_app::init(cx) {
+        if let Err(error) = navop_app::init(cx) {
             tracing::error!(error = %error, "failed to initialize Navop application state");
             eprintln!("Failed to initialize Navop application state: {error:#}");
             cx.quit();
@@ -486,14 +486,14 @@ fn main() {
             let main_window = match cx.open_window(options, |window, cx| {
                 window.activate_window();
                 app_init::init_window_systems(window, cx);
-                // 托盘必须在主窗口 handle 保存之后、`OnetCliApp` 安装关闭
+                // 托盘必须在主窗口 handle 保存之后、`NavopApp` 安装关闭
                 // handler 之前初始化：关闭 handler 要按托盘可用性决定
                 // 「隐藏」还是「退出确认」。此处已在主线程且 GPUI 事件
                 // 循环已启动（macOS 的 NSStatusItem 要求如此）。
                 system_tray::init(cx);
                 update::schedule_update_check(window, cx);
                 extension_update::schedule_plugin_update_check(window, cx);
-                let view = cx.new(|cx| OnetCliApp::new(window, cx));
+                let view = cx.new(|cx| NavopApp::new(window, cx));
                 let root = cx.new(|cx| Root::new(view, window, cx));
                 let tab_container = cx.global::<GlobalTabContainer>().tab_container.clone();
                 cx.subscribe(&root, move |_, event: &DialogStateChanged, cx| {
@@ -509,7 +509,7 @@ fn main() {
                     tracing::error!(error = %error, "failed to open the Navop main window");
                     eprintln!("Failed to open the Navop main window: {error:#}");
                     let _ = cx.update(|cx| {
-                        onetcli_app::shutdown_application_resources_and_quit(
+                        navop_app::shutdown_application_resources_and_quit(
                             cx,
                             "main window initialization failed",
                         );
@@ -921,11 +921,11 @@ mod native_driver_feature_contract_tests {
     fn direct_native_database_sdks_are_optional_or_absent() {
         let redis_view = include_str!("../../crates/redis_view/Cargo.toml");
         let mongodb_view = include_str!("../../crates/mongodb_view/Cargo.toml");
-        let onetcli_runtime = include_str!("../../crates/onetcli_runtime/Cargo.toml");
+        let navop_runtime = include_str!("../../crates/navop_runtime/Cargo.toml");
 
         assert!(dependency_is_optional_or_absent(redis_view, "redis_client"));
         assert!(dependency_is_optional_or_absent(
-            onetcli_runtime,
+            navop_runtime,
             "redis_client"
         ));
         assert!(dependency_is_optional_or_absent(mongodb_view, "mongodb"));
@@ -961,7 +961,7 @@ mod system_tray_lifecycle_contract_tests {
             .find(&["system_tray::", "init(cx);"].concat())
             .expect("system tray initialization");
         let close_handler = source
-            .find("OnetCliApp::new(window, cx)")
+            .find("NavopApp::new(window, cx)")
             .expect("application entity creation");
 
         assert!(window_systems < tray);

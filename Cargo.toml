@@ -20,7 +20,7 @@ members = [
     "crates/extension-wasm",
     "crates/tool_runtime",
     "crates/universal-plugins",
-    "crates/onetcli_runtime",
+    "crates/navop_runtime",
     "crates/er_flow",
     "crates/public_mcp",
     "crates/modem-transfer",
@@ -149,7 +149,7 @@ windows_rdp_host = { path = "crates/windows_rdp_host" }
 sftp_view = { path = "crates/sftp_view" }
 one-core = { path = "crates/core" }
 mongodb_view = {path = "crates/mongodb_view"}
-onetcli_runtime = { path = "crates/onetcli_runtime" }
+navop_runtime = { path = "crates/navop_runtime" }
 remote_file_editor = { path = "crates/remote_file_editor" }
 remote_image_preview = { path = "crates/remote_image_preview" }
 notes = { path = "crates/notes" }

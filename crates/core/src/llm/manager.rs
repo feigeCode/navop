@@ -6,7 +6,7 @@ use gpui::Global;
 use parking_lot::RwLock;
 
 use super::connector::{LLM_CLIENT_TIMEOUT_SECS, LlmConnector, LlmProvider};
-use super::onet_cli_provider::OnetCliLLMProvider;
+use super::navop_provider::NavopLLMProvider;
 use super::types::{ProviderConfig, ProviderType};
 use crate::cloud_sync::client::CloudApiClient;
 use crate::settings::GlobalProxySettings;
@@ -33,7 +33,7 @@ impl ProviderManager {
         }
     }
 
-    /// 设置云端 API 客户端（用于 OnetCli Provider）
+    /// 设置云端 API 客户端（用于 Navop Provider）
     pub fn set_cloud_client(&self, client: Arc<dyn CloudApiClient>) {
         *self.cloud_client.write() = Some(client);
     }
@@ -84,10 +84,10 @@ impl ProviderManager {
         let provider: Arc<dyn LlmProvider> = match config.provider_type {
             ProviderType::OnetCli => {
                 let cloud_client = self.cloud_client.read().clone().ok_or_else(|| {
-                    anyhow::anyhow!("CloudApiClient not set for OnetCli provider")
+                    anyhow::anyhow!("CloudApiClient not set for Navop provider")
                 })?;
 
-                let onet_provider = OnetCliLLMProvider::new(cloud_client);
+                let onet_provider = NavopLLMProvider::new(cloud_client);
 
                 Arc::new(onet_provider)
             }

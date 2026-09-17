@@ -408,7 +408,7 @@ fn global_navigation_layout_combines_connection_tree_recent_connections_and_apps
     let home = include_str!("../home_layout.rs");
     let content = include_str!("../content.rs");
     let tree = include_str!("../../persistent_connection_sidebar/tree.rs");
-    let app = include_str!("../../onetcli_app.rs");
+    let app = include_str!("../../navop_app.rs");
 
     assert!(settings.contains("Navigation"));
     assert!(home.contains("render_navigation_content"));
@@ -463,7 +463,7 @@ fn persistent_sidebar_groups_expose_a_rename_interaction() {
 #[test]
 fn both_settings_entries_use_the_existing_tab_opener() {
     assert!(include_str!("../sidebar_navigation.rs").contains("home.add_settings_tab(window, cx)"));
-    assert!(include_str!("../../onetcli_app.rs").contains("home.add_settings_tab(window, cx)"));
+    assert!(include_str!("../../navop_app.rs").contains("home.add_settings_tab(window, cx)"));
 }
 
 #[test]

@@ -8,7 +8,7 @@ use tool_runtime::{ResourceKind, ToolAdapter, ToolContext, ToolError};
 
 #[test]
 fn runtime_tool_registry_exposes_redis_command_to_automation() {
-    let registry = onetcli_runtime::tool_registry_with_version(repo(), "test")
+    let registry = navop_runtime::tool_registry_with_version(repo(), "test")
         .expect("tool registry should build");
 
     let tool = registry
@@ -26,7 +26,7 @@ fn runtime_tool_registry_exposes_redis_command_to_automation() {
 
 #[test]
 fn runtime_tool_registry_rejects_redis_execute_command_alias() {
-    let registry = onetcli_runtime::tool_registry_with_version(repo(), "test")
+    let registry = navop_runtime::tool_registry_with_version(repo(), "test")
         .expect("tool registry should build");
 
     assert!(
@@ -38,7 +38,7 @@ fn runtime_tool_registry_rejects_redis_execute_command_alias() {
 
 #[test]
 fn runtime_tool_registry_exposes_redis_read_and_write_convenience_tools() {
-    let registry = onetcli_runtime::tool_registry_with_version(repo(), "test")
+    let registry = navop_runtime::tool_registry_with_version(repo(), "test")
         .expect("tool registry should build");
 
     let keys = registry
@@ -70,7 +70,7 @@ fn runtime_tool_registry_exposes_redis_read_and_write_convenience_tools() {
 
 #[test]
 fn onetcli_redis_tools_target_saved_redis_resources() {
-    let registry = onetcli_runtime::tool_registry_with_version(repo(), "test")
+    let registry = navop_runtime::tool_registry_with_version(repo(), "test")
         .expect("tool registry should build");
 
     for tool_id in ["redis.command", "redis.keys", "redis.get", "redis.set"] {
@@ -84,7 +84,7 @@ fn onetcli_redis_tools_target_saved_redis_resources() {
 
 #[test]
 fn onetcli_redis_read_tool_reaches_connection_resolution() {
-    let registry = onetcli_runtime::tool_registry_with_version(repo(), "test")
+    let registry = navop_runtime::tool_registry_with_version(repo(), "test")
         .expect("tool registry should build");
 
     let error = futures::executor::block_on(registry.call(
@@ -105,7 +105,7 @@ fn onetcli_redis_read_tool_reaches_connection_resolution() {
 
 #[test]
 fn onetcli_tool_call_rejects_redis_execute_command_alias() {
-    let registry = onetcli_runtime::tool_registry_with_version(repo(), "test")
+    let registry = navop_runtime::tool_registry_with_version(repo(), "test")
         .expect("tool registry should build");
 
     let error = futures::executor::block_on(registry.call(
@@ -128,7 +128,7 @@ fn onetcli_tool_call_rejects_redis_execute_command_alias() {
 fn onetcli_tool_call_resolves_saved_connection_before_executing_redis_command() {
     let repo = repo();
     insert_mysql(&repo);
-    let registry = onetcli_runtime::tool_registry_with_version(repo, "test")
+    let registry = navop_runtime::tool_registry_with_version(repo, "test")
         .expect("tool registry should build");
 
     let error = futures::executor::block_on(registry.call(

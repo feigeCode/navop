@@ -68,25 +68,6 @@ pub(crate) fn command_for_menu_id(id: &str) -> Option<TrayCommand> {
     }
 }
 
-/// 托盘图标点击 → 命令的纯映射。
-///
-/// 只认**左键抬起**：按下事件会先到，按下就显示会导致「右键弹出菜单时窗口被顺手
-/// 拉到前台」；左键抬起既覆盖单击也覆盖双击场景。
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-pub(crate) fn command_for_tray_click(
-    button: tray_icon::MouseButton,
-    state: tray_icon::MouseButtonState,
-) -> Option<TrayCommand> {
-    matches!(
-        (button, state),
-        (
-            tray_icon::MouseButton::Left,
-            tray_icon::MouseButtonState::Up
-        )
-    )
-    .then_some(TrayCommand::ShowMainWindow)
-}
-
 /// 初始化系统托盘。返回托盘是否可用。重复调用返回已有状态。
 ///
 /// 必须在「平台事件循环已经在跑」的主线程上调用（macOS 的 `NSStatusItem` 与
@@ -161,7 +142,7 @@ fn dispatch(command: TrayCommand) {
 }
 
 fn execute_command(command: TrayCommand, cx: &mut AsyncApp) -> anyhow::Result<()> {
-    tracing::info!(?command, "执行托盘命令");
+    tracing::debug!(?command, "执行托盘命令");
 
     let Some(handle) = resolve_main_window(cx) else {
         if command == TrayCommand::QuitApplication {
@@ -186,7 +167,7 @@ fn execute_command(command: TrayCommand, cx: &mut AsyncApp) -> anyhow::Result<()
             cx.update_window(handle, |_, window, cx| {
                 // 不直接终止进程：走既有退出入口（`request_window_quit` → 确认 →
                 // `close_all_tabs`），唯一的直接退出例外是上面 handle 失效的分支。
-                crate::onetcli_app::request_window_quit(window, cx);
+                crate::navop_app::request_window_quit(window, cx);
             })
             .context("托盘退出时无法请求关闭主窗口")?;
         }
@@ -213,7 +194,7 @@ fn restore_main_window(handle: AnyWindowHandle, cx: &mut AsyncApp) -> anyhow::Re
         .context("读取主窗口原生句柄失败")??;
 
     crate::window_visibility::show_main_window(target)?;
-    tracing::info!("主窗口已恢复显示");
+    tracing::debug!("主窗口已恢复显示");
     Ok(())
 }
 
@@ -222,7 +203,8 @@ fn restore_main_window(handle: AnyWindowHandle, cx: &mut AsyncApp) -> anyhow::Re
 /// 托盘的两条关键路径都只能由真实点击触发，本机/CI 没有任何自动化入口，而「借用重入」
 /// 这类缺陷恰恰只在「窗口已经隐藏再恢复」这一个状态迁移上出现。打开这个开关后进程会在
 /// 启动几秒后自动跑一遍「隐藏 → 托盘恢复 → 退出」，结果直接进日志：
-/// 只要没有 `RefCell already borrowed`、且看到「主窗口已恢复显示」，说明恢复路径干净。
+/// 只要没有 `RefCell already borrowed`、且（`RUST_LOG=debug` 下）看到「主窗口已恢复显示」，
+/// 说明恢复路径干净。
 #[cfg(debug_assertions)]
 fn install_smoke_hook(cx: &mut App) {
     // 独立函数而不是闭包：闭包会把 `cx` 借满整个 async 块，后面 `cx.update_window`
@@ -309,8 +291,8 @@ fn decode_tray_icon(png: &[u8]) -> anyhow::Result<(Vec<u8>, u32, u32)> {
 mod desktop {
     use super::*;
     use std::cell::RefCell;
+    use tray_icon::TrayIconBuilder;
     use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
-    use tray_icon::{TrayIconBuilder, TrayIconEvent};
 
     thread_local! {
         /// 托盘句柄必须留在**创建它的线程**上：`TrayIcon` 内部是
@@ -326,7 +308,6 @@ mod desktop {
 
         // 与 `receiver()` 互斥：一旦设置 handler，channel 就永远收不到事件。
         MenuEvent::set_event_handler(Some(handle_menu_event));
-        TrayIconEvent::set_event_handler(Some(handle_tray_event));
 
         let (rgba, width, height) = decode_tray_icon(TRAY_ICON_PNG)?;
         let icon = tray_icon::Icon::from_rgba(rgba, width, height)?;
@@ -343,8 +324,9 @@ mod desktop {
             .with_menu(Box::new(menu))
             .with_icon(icon)
             .with_tooltip("Navop")
-            // 左键留给「显示主窗口」，右键继续打开菜单。
-            .with_menu_on_left_click(false)
+            // 左键与右键都打开菜单，和 macOS/Windows 常驻托盘应用的惯例一致。
+            // 主窗口通过菜单里的「显示 Navop」恢复，不再占用左键单击。
+            .with_menu_on_left_click(true)
             .with_menu_on_right_click(true)
             .build()?;
 
@@ -354,20 +336,6 @@ mod desktop {
 
     fn handle_menu_event(event: MenuEvent) {
         if let Some(command) = command_for_menu_id(event.id().as_ref()) {
-            dispatch(command);
-        }
-    }
-
-    fn handle_tray_event(event: TrayIconEvent) {
-        let TrayIconEvent::Click {
-            button,
-            button_state,
-            ..
-        } = event
-        else {
-            return;
-        };
-        if let Some(command) = command_for_tray_click(button, button_state) {
             dispatch(command);
         }
     }
@@ -412,25 +380,18 @@ mod tests {
 
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     #[test]
-    fn tray_icon_click_shows_the_main_window_only_on_left_button_release() {
-        use tray_icon::{MouseButton, MouseButtonState};
+    fn tray_menu_opens_on_left_click_and_no_longer_hijacks_it_for_the_window() {
+        let source = include_str!("system_tray.rs");
 
-        assert_eq!(
-            Some(TrayCommand::ShowMainWindow),
-            command_for_tray_click(MouseButton::Left, MouseButtonState::Up)
-        );
-        assert_eq!(
-            None,
-            command_for_tray_click(MouseButton::Left, MouseButtonState::Down)
-        );
-        assert_eq!(
-            None,
-            command_for_tray_click(MouseButton::Right, MouseButtonState::Up)
-        );
-        assert_eq!(
-            None,
-            command_for_tray_click(MouseButton::Middle, MouseButtonState::Up)
-        );
+        assert!(source.contains(".with_menu_on_left_click(true)"));
+        assert!(source.contains(".with_menu_on_right_click(true)"));
+        // 左键被菜单占用后不能再派发「显示主窗口」：Windows 的后端会在弹出菜单的同一
+        // 次 WM_LBUTTONUP 里继续发点击事件，留着就会「菜单和窗口一起弹」。
+        let click_mapper = ["fn command_for_tray_", "click"].concat();
+        let click_handler = ["TrayIconEvent::set_event_", "handler"].concat();
+
+        assert!(!source.contains(&click_mapper));
+        assert!(!source.contains(&click_handler));
     }
 
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]

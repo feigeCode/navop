@@ -11,7 +11,7 @@ use tool_runtime::{ResourceCapability, ToolAdapter, ToolContext};
 
 #[test]
 fn database_tool_registry_exposes_schema_query_and_exec_tools() {
-    let registry = onetcli_runtime::database_tools::database_tool_registry(repo());
+    let registry = navop_runtime::database_tools::database_tool_registry(repo());
     let tools = registry.list(ToolAdapter::Mcp);
     let ids = tools.iter().map(|tool| tool.id.clone()).collect::<Vec<_>>();
 
@@ -56,7 +56,7 @@ fn database_tool_registry_exposes_schema_query_and_exec_tools() {
 
 #[test]
 fn database_read_tool_registry_exposes_only_schema_and_query() {
-    let registry = onetcli_runtime::database_tools::database_read_tool_registry(repo());
+    let registry = navop_runtime::database_tools::database_read_tool_registry(repo());
     let tools = registry.list(ToolAdapter::FunctionCalling);
     let ids = tools.iter().map(|tool| tool.id.clone()).collect::<Vec<_>>();
 
@@ -75,7 +75,7 @@ fn database_read_tool_registry_exposes_only_schema_and_query() {
 
 #[test]
 fn database_tools_target_database_resources_by_capability() {
-    let registry = onetcli_runtime::database_tools::database_tool_registry(repo());
+    let registry = navop_runtime::database_tools::database_tool_registry(repo());
 
     for tool_id in [
         "db.schema",
@@ -108,7 +108,7 @@ fn database_tools_target_database_resources_by_capability() {
 #[test]
 fn database_tools_reject_non_database_connections_before_connecting() {
     let repo = repo();
-    let registry = onetcli_runtime::database_tools::database_tool_registry(repo.clone());
+    let registry = navop_runtime::database_tools::database_tool_registry(repo.clone());
     let mut connection = StoredConnection::new_ssh("prod ssh".to_string(), ssh_params(), None);
     repo.insert(&mut connection)
         .expect("ssh connection should insert");
@@ -145,7 +145,7 @@ fn database_query_executes_saved_sqlite_connection() {
     );
     repo.insert(&mut connection)
         .expect("sqlite connection should insert");
-    let registry = onetcli_runtime::database_tools::database_tool_registry(repo);
+    let registry = navop_runtime::database_tools::database_tool_registry(repo);
 
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should start");
     let result = runtime
@@ -190,7 +190,7 @@ fn database_metadata_tools_execute_saved_sqlite_connection() {
     );
     repo.insert(&mut connection)
         .expect("sqlite connection should insert");
-    let registry = onetcli_runtime::database_tools::database_tool_registry(repo);
+    let registry = navop_runtime::database_tools::database_tool_registry(repo);
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should start");
 
     let tables = runtime
@@ -236,7 +236,7 @@ fn database_query_rejects_write_sql_before_connecting() {
     );
     repo.insert(&mut connection)
         .expect("sqlite connection should insert");
-    let registry = onetcli_runtime::database_tools::database_tool_registry(repo);
+    let registry = navop_runtime::database_tools::database_tool_registry(repo);
 
     let error = futures::executor::block_on(registry.call(
         "db.query",

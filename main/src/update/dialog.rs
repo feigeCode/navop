@@ -12,7 +12,7 @@ use super::download::{
 };
 use super::install::start_install_update;
 use super::util::{UpdateInstallAction, format_bytes};
-use crate::onetcli_app::shutdown_application_resources_and_quit;
+use crate::navop_app::shutdown_application_resources_and_quit;
 use crate::setting_tab::AppSettings;
 use crate::update::github_release::GITHUB_LATEST_RELEASE_URL;
 use gpui::{

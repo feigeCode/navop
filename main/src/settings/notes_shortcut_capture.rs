@@ -51,7 +51,7 @@ pub(super) fn reset_shortcut(command_id: &str, cx: &mut App) {
     AppSettings::update_and_save(cx, |settings| {
         settings.custom_keybindings.remove(command_id);
     });
-    crate::onetcli_app::refresh_keybindings(cx);
+    crate::navop_app::refresh_keybindings(cx);
 }
 
 pub(super) fn clear_shortcut(command_id: &str, cx: &mut App) {
@@ -60,7 +60,7 @@ pub(super) fn clear_shortcut(command_id: &str, cx: &mut App) {
             .custom_keybindings
             .insert(command_id.to_string(), Vec::new());
     });
-    crate::onetcli_app::refresh_keybindings(cx);
+    crate::navop_app::refresh_keybindings(cx);
 }
 
 pub(super) fn clear_capture(state: &Entity<NotesShortcutCaptureState>, cx: &mut App) {
@@ -77,7 +77,7 @@ fn save_shortcut(command_id: &str, spec: String, cx: &mut App) {
             .custom_keybindings
             .insert(command_id.to_string(), vec![spec]);
     });
-    crate::onetcli_app::refresh_keybindings(cx);
+    crate::navop_app::refresh_keybindings(cx);
 }
 
 fn mark_invalid(state: &Entity<NotesShortcutCaptureState>, cx: &mut App) {
