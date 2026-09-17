@@ -11,10 +11,27 @@ html-preview = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror.workspace = true
-wasmtime = "=36.0.14"
-wasmtime-wasi = "=36.0.14"
+# default 里塞了 wat/profiling/parallel-compilation/pooling-allocator/addr2line/
+# demangle/coredump/debug-builtins/stack-switching —— 本 crate 一个都没用，
+# 只保留实际调用的 API（async_support、component model、Cache、GC 回收器）。
+wasmtime = { version = "=36.0.14", default-features = false, features = [
+    "async",
+    "cache",
+    "component-model",
+    "cranelift",
+    "gc",
+    "gc-drc",
+    "gc-null",
+    "runtime",
+    "std",
+    "threads",
+] }
+# 只用 p2（wasmtime_wasi::p2::add_to_linker_async），不需要 default 的 preview1/wiggle。
+wasmtime-wasi = { version = "=36.0.14", default-features = false }
 
 [dev-dependencies]
+# 只有测试读 .wat 文本（fixtures/*.wat），wat 解析器按需在 dev 依赖里打开。
+wasmtime = { version = "=36.0.14", features = ["wat"] }
 async-trait = { workspace = true }
 futures = { workspace = true }
 tempfile = "3"

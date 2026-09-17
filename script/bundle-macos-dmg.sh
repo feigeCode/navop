@@ -27,15 +27,25 @@ ln -s /Applications "$TMP_DIR/Applications"
 create_dmg() {
     local attempt
     local tmp_dmg
+    local content_mb
+    local dmg_size_mb
+
+    # 显式给出镜像大小：hdiutil 自动估算偏小时会以
+    # "hdiutil: create failed - No space left on device" 失败（即使磁盘还有空位）。
+    # 首次 = 内容 + 512MB 余量，重试按倍数放大。
+    content_mb="$(du -sm "$TMP_DIR" | awk '{print $1}')"
 
     for attempt in $(seq 1 "$DMG_RETRIES"); do
         tmp_dmg="${PROJECT_DIR}/target/${DMG_NAME}.tmp.${attempt}.$$.dmg"
+        dmg_size_mb=$(( (content_mb + ${ONETCLI_DMG_SLACK_MB:-512}) * attempt ))
         rm -f "$tmp_dmg" "$DMG_PATH"
+        echo "hdiutil create: content=${content_mb}MB, image=${dmg_size_mb}MB (attempt ${attempt}/${DMG_RETRIES})"
 
         if hdiutil create \
             -volname "${APP_NAME}" \
             -srcfolder "$TMP_DIR" \
             -ov \
+            -size "${dmg_size_mb}m" \
             -format UDZO \
             "$tmp_dmg"; then
             mv -f "$tmp_dmg" "$DMG_PATH"
@@ -54,6 +64,9 @@ create_dmg() {
 }
 
 create_dmg
+
+# 释放 staging 拷贝（约等于 .app 大小），后续 tar/上传步骤会用到空间
+rm -rf "$TMP_DIR"
 
 # 可选：如果提供签名身份，则对 DMG 执行签名
 if [ -n "${MACOS_SIGN_IDENTITY:-}" ]; then
