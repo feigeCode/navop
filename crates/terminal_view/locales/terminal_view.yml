@@ -2093,9 +2093,25 @@ FileManager:
     zh-CN: "终端已进入 %{host}，文件面板仍连接 %{connection}。"
     zh-HK: "終端已進入 %{host}，檔案面板仍連線 %{connection}。"
   foreign_host_hint:
-    en: "Directory sync is paused: SFTP follows the connection's host, so nested SSH sessions are not tracked. Save the host as its own connection with this one as jump host to browse it here."
-    zh-CN: "已暂停目录同步：SFTP 跟随连接所在主机，嵌套 SSH 不会被跟踪。把该主机保存为独立连接、跳板机填当前主机即可在这里浏览它。"
-    zh-HK: "已暫停目錄同步：SFTP 跟隨連線所在主機，嵌套 SSH 不會被追蹤。將該主機存為獨立連線、跳板機填目前主機即可在此瀏覽。"
+    en: "Directory sync is paused: SFTP follows the connection's host, so nested SSH sessions are not tracked. If this host is saved as its own connection (with the current one as jump host), use the target picker in the toolbar to switch to it."
+    zh-CN: "已暂停目录同步：SFTP 跟随连接所在主机，嵌套 SSH 不会被跟踪。若该主机已保存为独立连接（跳板机填当前主机），可用工具栏的目标选择器直接切过去。"
+    zh-HK: "已暫停目錄同步：SFTP 跟隨連線所在主機，嵌套 SSH 不會被追蹤。若該主機已存為獨立連線（跳板機填目前主機），可用工具列的目標選擇器直接切過去。"
+  target_tooltip:
+    en: "Choose the remote target this panel browses"
+    zh-CN: "选择该面板浏览的远端目标"
+    zh-HK: "選擇該面板瀏覽的遠端目標"
+  target_empty:
+    en: "No saved SSH or FTP connection available"
+    zh-CN: "没有可用的 SSH 或 FTP 连接"
+    zh-HK: "沒有可用的 SSH 或 FTP 連線"
+  target_terminal_badge:
+    en: "Terminal"
+    zh-CN: "终端"
+    zh-HK: "終端"
+  target_switch_invalid:
+    en: "Cannot switch remote target"
+    zh-CN: "无法切换远端目标"
+    zh-HK: "無法切換遠端目標"
   retry:
     en: Retry
     zh-CN: 重试

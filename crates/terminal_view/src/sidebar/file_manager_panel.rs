@@ -8,6 +8,7 @@ use super::remote_path::{join_remote_path, normalize_remote_path, resolve_remote
 use crate::theme::TerminalColors;
 use crate::transfer_notice::{TransferAction, transfer_finish_notification};
 use chrono::{DateTime, Local};
+use ftp::{FtpClient, FtpConnectConfig};
 use gpui::{
     Anchor, AnyWindowHandle, App, ClipboardItem, Context, Entity, EventEmitter, ExternalPaths,
     FocusHandle, Focusable, Hsla, IntoElement, KeyBinding, ListSizingBehavior, MouseButton,
@@ -34,7 +35,7 @@ use one_assets::IconName;
 use one_core::background_tasks::{BackgroundTaskHandle, BackgroundTaskSpec};
 use one_core::gpui_tokio::Tokio;
 use one_core::sidebar_contribution::SidebarPlacement;
-use one_core::storage::models::StoredConnection;
+use one_core::storage::models::{ConnectionType, StoredConnection};
 use one_core::storage::{
     GlobalStorageState, SftpFavoritePathRepository, normalize_sftp_favorite_path,
     sftp_favorite_connection_key,
@@ -52,7 +53,6 @@ use remote_file_editor::{
 use remote_image_preview::{
     clipboard_upload_paths, image_format_for_path, open_remote_image_preview,
 };
-use ftp::{FtpClient, FtpConnectConfig};
 use rust_i18n::t;
 use sftp::{
     DirectoryConflictPolicy, RemoteFileClient, RemoteFileOperation, RusshSftpClient,
@@ -66,7 +66,6 @@ use sftp_transfer::{
     UploadConflictResolver, delete_remote_task_key, download_task_key, upload_task_key,
 };
 use ssh::{ChannelEvent, SshChannel, SshSessionManager};
-use terminal::ReportedWorkingDir;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::Range;
@@ -75,6 +74,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
+use terminal::ReportedWorkingDir;
 use tokio::sync::Mutex;
 
 actions!(terminal_file_manager, [PasteUpload, NavigateParent]);
@@ -116,6 +116,35 @@ fn upload_progress_state(state: &SftpTransferState) -> TransferProgressState {
 }
 
 /// 后台任务分组标题：只保留「连接名称 - IP」，同一连接的面板合并到同一分组。
+/// 目标选择器按钮上的名字：过长时截断，避免挤占路径栏。
+fn truncate_target_label(name: &str, max_chars: usize) -> String {
+    if name.chars().count() <= max_chars {
+        return name.to_string();
+    }
+    let mut label: String = name.chars().take(max_chars.saturating_sub(1)).collect();
+    label.push('…');
+    label
+}
+
+/// 能否作为远端文件浏览目标：SSH/SFTP 与 FTP 可以，数据库、Redis 之类不行。
+fn is_file_browsable_connection(connection: &StoredConnection) -> bool {
+    matches!(
+        connection.connection_type,
+        ConnectionType::SshSftp | ConnectionType::Ftp
+    )
+}
+
+/// 目标选择器里显示的 `user@host:port`；参数取不到时返回空串。
+fn target_endpoint_label(connection: &StoredConnection) -> String {
+    if let Some(config) = sftp_transfer::ftp_connect_config_from_stored(connection) {
+        return format!("{}@{}:{}", config.username, config.host, config.port);
+    }
+    connection
+        .to_ssh_params()
+        .map(|params| format!("{}@{}:{}", params.username, params.host, params.port))
+        .unwrap_or_default()
+}
+
 fn background_task_group_label(connection: &StoredConnection) -> SharedString {
     let host = connection
         .to_ssh_params()
@@ -1409,6 +1438,20 @@ pub struct FileManagerPanel {
     working_dir_hint: Option<String>,
     /// 终端上报主机跟踪：判定 OSC 7 上报是否属于当前远程文件会话
     reported_host_tracker: ReportedHostTracker,
+    /// 面板初始绑定的终端连接 id。
+    ///
+    /// 与 `stored_connection.id` 不一致时，说明用户已把浏览目标切到了另一台
+    /// 主机：此时终端上报的 OSC 7 属于终端那台机器，与本面板无关。
+    terminal_connection_id: Option<i64>,
+    /// 可选远端目标缓存，在选择器打开时按需从存储刷新
+    target_connections: Vec<StoredConnection>,
+    /// 远端目标选择器是否展开
+    target_picker_open: bool,
+    /// 终端那条共享会话。
+    ///
+    /// 面板切到其他目标时会新建独立会话；靠指针身份区分"切走时该断开的自有
+    /// 会话"与"绝不能动的终端共享会话"（终端、SFTP、监控面板共用同一条）。
+    terminal_session_manager: Arc<SshSessionManager>,
     /// 终端主题配色，用于嵌入侧边栏时保持和终端一致
     colors: TerminalColors,
     /// 宿主工具面板当前所在位置
@@ -1441,6 +1484,8 @@ impl FileManagerPanel {
             InputState::new(window, cx).placeholder(t!("FileManager.favorite_edit_placeholder"))
         });
         let favorite_connection_id = stored_connection.id;
+        let terminal_connection_id = stored_connection.id;
+        let terminal_session_manager = session_manager.clone();
         let favorite_connection_key = sftp_favorite_connection_key(&stored_connection);
         let favorite_paths = Self::load_favorite_paths(&favorite_connection_key, cx);
         let global_executor = sftp_transfer::global(cx);
@@ -1549,6 +1594,10 @@ impl FileManagerPanel {
             test_refresh_count: Arc::new(AtomicU64::new(0)),
             working_dir_hint: None,
             reported_host_tracker: ReportedHostTracker::default(),
+            terminal_connection_id,
+            target_connections: Vec::new(),
+            target_picker_open: false,
+            terminal_session_manager,
             colors,
             frame_placement: SidebarPlacement::Right,
             window_handle: window.window_handle(),
@@ -1796,6 +1845,10 @@ impl FileManagerPanel {
     ///
     /// 仅在尚未连接时有效，连接后应使用 `sync_navigate_to`。
     pub fn set_initial_working_dir(&mut self, reported: ReportedWorkingDir) {
+        // 同上：切换过目标后，终端上报的初始目录不能作为本面板的起点。
+        if self.is_foreign_target() {
+            return;
+        }
         let (accepted, _) = self.observe_reported_host(&reported);
         if !accepted {
             return;
@@ -1822,6 +1875,10 @@ impl FileManagerPanel {
     /// 上报来自另一台机器（多跳会话）时只更新提示态、不导航：
     /// 把内层主机的目录拿去当前远程会话打开只会读失败并回退。
     pub fn sync_navigate_to(&mut self, reported: ReportedWorkingDir, cx: &mut Context<Self>) {
+        // 目标已切到别的机器、或跟随被关闭：终端上报的目录不该驱动本面板。
+        if !self.terminal_follow_active() {
+            return;
+        }
         let (accepted, host_state_changed) = self.observe_reported_host(&reported);
         if host_state_changed {
             cx.notify();
@@ -1838,6 +1895,106 @@ impl FileManagerPanel {
             return;
         }
         self.navigate_to(path, cx);
+    }
+
+    /// 面板当前浏览的目标是否已离开终端所在主机。
+    ///
+    /// 终端可能停在堡垒机上（默认面板显示的就是堡垒机的文件系统），用户也可以
+    /// 把面板切到另一条已保存连接。后者意味着终端的 OSC 7 上报属于另一台机器。
+    pub fn is_foreign_target(&self) -> bool {
+        self.stored_connection.id != self.terminal_connection_id
+    }
+
+    /// 目录跟随是否真正生效：宿主设置里开着跟随，且面板仍在终端那台机器上。
+    fn terminal_follow_active(&self) -> bool {
+        self.follow_terminal_cwd && !self.is_foreign_target()
+    }
+
+    /// 面板当前浏览目标的显示名。
+    pub fn target_name(&self) -> &str {
+        self.stored_connection.name.as_str()
+    }
+
+    /// 把面板的浏览目标切到另一条已保存连接。
+    ///
+    /// 终端仍连着它自己那台机器，所以切换只影响本面板：丢弃当前通道，用新目标
+    /// 的配置重建一条独立会话（`SshSessionManager::new` 只是包一层，握手发生在
+    /// 首次 `client()`）。切到非终端连接后目录跟随自动停用——终端上报的 OSC 7
+    /// 属于终端那台机器，套到本面板只会读到无关目录。
+    ///
+    /// 已经提交到全局传输执行器的任务不受影响：它们带着提交时的连接配置。
+    pub fn switch_target(&mut self, connection: StoredConnection, cx: &mut Context<Self>) {
+        if connection.id.is_some() && connection.id == self.stored_connection.id {
+            return;
+        }
+
+        let ftp_config = sftp_transfer::ftp_connect_config_from_stored(&connection);
+        let session_manager = if ftp_config.is_some() {
+            // FTP 目标独立建连，不经过 SSH 会话；沿用现有 manager 仅作占位，
+            // `connect()` 会按 `ftp_config` 走 FTP 分支。
+            self.session_manager.clone()
+        } else {
+            match sftp_transfer::ssh_config_for(&connection) {
+                Ok(config) => Arc::new(SshSessionManager::new(config)),
+                Err(error) => {
+                    self.connection_state = ConnectionState::Error(format!(
+                        "{}: {}",
+                        t!("FileManager.target_switch_invalid"),
+                        error
+                    ));
+                    cx.notify();
+                    return;
+                }
+            }
+        };
+
+        // 当前这条会话是不是"切换出来的自有会话"（而非终端的共享会话）？
+        // 自有会话在切走时必须主动断开：`SessionPool` 没有 Drop 实现，不主动断
+        // 会一直悬挂到进程结束。终端那条共享会话绝不能动。
+        let previous_is_own_session =
+            !Arc::ptr_eq(&self.session_manager, &self.terminal_session_manager);
+        let previous_manager = self.session_manager.clone();
+
+        self.stored_connection = connection;
+        self.session_manager = session_manager;
+        self.ftp_config = ftp_config;
+        self.favorite_connection_id = self.stored_connection.id;
+        self.favorite_connection_key = sftp_favorite_connection_key(&self.stored_connection);
+        self.favorite_paths = Self::load_favorite_paths(&self.favorite_connection_key, cx);
+        self.background_task_group = background_task_group_label(&self.stored_connection);
+        self.upload_connection_identity =
+            SftpConnectionIdentity::from_stored(&self.stored_connection).unwrap_or_else(|| {
+                self.global_executor
+                    .update(cx, |executor, _| executor.allocate_runtime_connection())
+            });
+
+        // 换了机器：旧目标的目录状态、跟随基线与待用初始目录全部作废。
+        self.reported_host_tracker = ReportedHostTracker::default();
+        // 注意不能走 `reset_connection_for_retry(None)`：那个 helper 在 working_dir 为
+        // `None` 时会回退到**当前**路径（`build_retry_reset_plan` 的
+        // `or_else(|| Some(current_path))`），等于把上一台机器的目录当成新目标的
+        // 起点，必然读目录失败。这里改用新目标自己配置的 SFTP 初始目录，没配置
+        // 就交给服务器登录目录（`connect()` 里的 `realpath(".")`）。
+        self.apply_retry_reset_plan(RetryResetPlan {
+            next_state: ConnectionState::Idle,
+            initial_working_dir: sftp_transfer::sftp_initial_directory_of(&self.stored_connection),
+            clear_listing: true,
+        });
+        // 目录历史同样属于上一台机器，全部丢弃；连接成功后由 `connect()` 落到真实路径。
+        self.current_path = "/".to_string();
+        self.history = vec!["/".to_string()];
+        self.history_index = 0;
+        self.connect(cx);
+
+        if previous_is_own_session {
+            // 放到后台执行器上断开，不阻塞 UI。这里不能用 `Context::spawn`：它要求
+            // `AsyncFnOnce(WeakEntity<T>, &mut AsyncApp)`，无参 async 块会被解析成
+            // 无参的 `App::spawn`，类型不匹配。
+            cx.background_spawn(async move {
+                let _ = previous_manager.disconnect().await;
+            })
+            .detach();
+        }
     }
 
     fn start_path_editing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -4524,6 +4681,7 @@ impl FileManagerPanel {
                     .pb_2()
                     .gap_1()
                     .items_center()
+                    .child(self.render_target_picker(cx))
                     .child(if self.path_editing {
                         h_flex()
                             .id("fm-path-editor")
@@ -4604,6 +4762,144 @@ impl FileManagerPanel {
             .tooltip(t!("FileManager.panel_options").to_string())
             .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, window, cx| {
                 build_frame_options_menu(menu, panel.clone(), placement, window, cx)
+            })
+    }
+
+    /// 远端目标选择器：指明面板正在浏览哪台主机，并允许切换。
+    ///
+    /// 终端可能停在堡垒机上，此时面板默认展示的就是堡垒机的文件系统。把当前目标
+    /// 显性化，用户才不会把堡垒机的目录误当成内层主机的；要浏览内层主机，就在这里
+    /// 选一台已保存的连接（例如配好跳板机的那台）。
+    fn render_target_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let panel_bg = self.colors.muted;
+        let hover = self.colors.muted.opacity(0.72);
+        let foreground = self.colors.foreground;
+        let muted_foreground = self.colors.muted_foreground;
+        let current_id = self.stored_connection.id;
+        let terminal_id = self.terminal_connection_id;
+        let current_name = self.stored_connection.name.clone();
+        let targets: Vec<StoredConnection> = self
+            .target_connections
+            .iter()
+            .filter(|connection| is_file_browsable_connection(connection))
+            .cloned()
+            .collect();
+        let has_targets = !targets.is_empty();
+        let view = cx.entity();
+
+        Popover::new("fm-target-picker")
+            .open(self.target_picker_open)
+            .on_open_change(cx.listener(|this, open, _window, cx| {
+                this.target_picker_open = *open;
+                if *open {
+                    // 打开时才读存储：终端启动之后用户可能刚新建过连接。
+                    this.target_connections = super::load_terminal_ai_connections(cx);
+                }
+                cx.notify();
+            }))
+            .trigger(
+                Button::new("fm-target")
+                    .ghost()
+                    .small()
+                    .compact()
+                    .icon(IconName::Server)
+                    .label(truncate_target_label(&current_name, 12))
+                    .text_color(foreground)
+                    .tooltip(t!("FileManager.target_tooltip").to_string()),
+            )
+            .content(move |_state, window, cx| {
+                let mut list = v_flex().gap_1().max_h(px(320.0)).overflow_y_scrollbar();
+                if !has_targets {
+                    list = list.child(
+                        div()
+                            .px_2()
+                            .py_3()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(t!("FileManager.target_empty").to_string()),
+                    );
+                }
+
+                for connection in targets.iter().cloned() {
+                    let is_current = connection.id.is_some() && connection.id == current_id;
+                    let is_terminal_host = connection.id.is_some() && connection.id == terminal_id;
+                    let endpoint = target_endpoint_label(&connection);
+                    let connection_id = connection.id.unwrap_or(-1);
+                    let click_panel = view.clone();
+                    let click_connection = connection.clone();
+                    list = list.child(
+                        h_flex()
+                            .id(SharedString::from(format!("fm-target-{connection_id}")))
+                            .w_full()
+                            .px_2()
+                            .py_1()
+                            .gap_2()
+                            .items_center()
+                            .rounded_md()
+                            .cursor_pointer()
+                            .when(!is_current, |element| {
+                                element.hover(move |style| style.bg(hover))
+                            })
+                            .on_click(window.listener_for(
+                                &click_panel,
+                                move |this, _, _window, cx| {
+                                    this.target_picker_open = false;
+                                    this.switch_target(click_connection.clone(), cx);
+                                },
+                            ))
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .min_w(px(0.))
+                                    .child(
+                                        h_flex()
+                                            .gap_1()
+                                            .items_center()
+                                            .child(
+                                                div()
+                                                    .truncate()
+                                                    .text_sm()
+                                                    .child(connection.name.clone()),
+                                            )
+                                            .when(is_terminal_host, |element| {
+                                                element.child(
+                                                    div()
+                                                        .px_1()
+                                                        .rounded_sm()
+                                                        .text_xs()
+                                                        .bg(panel_bg)
+                                                        .text_color(muted_foreground)
+                                                        .child(
+                                                            t!("FileManager.target_terminal_badge")
+                                                                .to_string(),
+                                                        ),
+                                                )
+                                            }),
+                                    )
+                                    .child(
+                                        div()
+                                            .truncate()
+                                            .text_xs()
+                                            .text_color(muted_foreground)
+                                            .child(endpoint),
+                                    ),
+                            )
+                            .when(is_current, |element| {
+                                element.child(
+                                    Icon::new(IconName::Check)
+                                        .small()
+                                        .text_color(muted_foreground),
+                                )
+                            }),
+                    );
+                }
+
+                v_flex()
+                    .w(px(300.0))
+                    .max_h(px(420.0))
+                    .gap_1()
+                    .p_2()
+                    .child(list)
             })
     }
 
@@ -5959,8 +6255,9 @@ mod tests {
         TransferOperation, TransferQueue, TransferTask, TransferTaskState,
         build_navigation_recovery_plan, build_retry_reset_plan, can_paste_remote_file_clipboard,
         classify_reported_host, clear_remote_listing_state, frame_move_options,
-        global_transfer_action, resolve_upload_conflict, should_apply_directory_result,
-        should_refresh_after_delete, should_refresh_after_upload, transfer_progress_display_label,
+        global_transfer_action, is_file_browsable_connection, resolve_upload_conflict,
+        should_apply_directory_result, should_refresh_after_delete, should_refresh_after_upload,
+        target_endpoint_label, transfer_progress_display_label, truncate_target_label,
     };
     use crate::transfer_notice::TransferAction;
     use anyhow::{Result, anyhow};
@@ -6118,6 +6415,158 @@ mod tests {
         );
         connection.id = Some(8);
         connection
+    }
+
+    fn test_other_host_connection() -> one_core::storage::models::StoredConnection {
+        let mut connection = one_core::storage::models::StoredConnection::new_ssh(
+            "主机 B".to_string(),
+            SshParams {
+                remote_file: None,
+                sftp_default_directory: None,
+                disabled_jump_server: None,
+                sftp_account: None,
+                host: "host-b.internal".to_string(),
+                port: 22,
+                username: "deploy".to_string(),
+                auth_method: SshAuthMethod::Agent,
+                credential_reference: None,
+                prompt_username: None,
+                prompt_password: None,
+                keyboard_interactive: None,
+                terminal_encoding: Default::default(),
+                terminal_type: Default::default(),
+                connect_timeout: Some(1),
+                keepalive_interval: None,
+                keepalive_max: None,
+                default_directory: None,
+                init_script: None,
+                disable_shell_integration: None,
+                x11_forwarding: None,
+                allow_legacy_algorithms: None,
+                jump_server: None,
+                proxy: None,
+                os_id: None,
+                icon: None,
+                icon_file_path: None,
+                account_expect: Default::default(),
+            },
+            None,
+        );
+        connection.id = Some(9);
+        connection
+    }
+
+    #[test]
+    fn file_browsable_targets_are_ssh_and_ftp_only() {
+        assert!(is_file_browsable_connection(&test_stored_connection()));
+        assert!(is_file_browsable_connection(&test_ftp_stored_connection()));
+
+        // 数据库连接同样带 host 字段，但不能当作文件浏览目标。
+        let mut database = test_stored_connection();
+        database.connection_type = one_core::storage::ConnectionType::Database;
+        assert!(!is_file_browsable_connection(&database));
+    }
+
+    #[test]
+    fn target_endpoint_label_reads_ftp_params_for_ftp_connections() {
+        assert_eq!(
+            target_endpoint_label(&test_stored_connection()),
+            "deploy@terminal-file-manager-test.internal:2222"
+        );
+        assert_eq!(
+            target_endpoint_label(&test_ftp_stored_connection()),
+            "testuser@localhost:2121"
+        );
+    }
+
+    #[test]
+    fn target_label_is_truncated_on_char_boundaries() {
+        assert_eq!(truncate_target_label("bastion", 12), "bastion");
+        // 恰好等于上限：不截断。
+        assert_eq!(
+            truncate_target_label("堡垒机跳板服务器生产环境", 12),
+            "堡垒机跳板服务器生产环境"
+        );
+        // 超出一个字符：按字符而不是字节截断，避免切碎多字节字符。
+        assert_eq!(
+            truncate_target_label("堡垒机跳板服务器生产环境测试", 12),
+            "堡垒机跳板服务器生产环…"
+        );
+    }
+
+    /// 切到另一台主机后必须停用目录跟随，并且不能在切回时留下外来状态。
+    #[gpui::test]
+    async fn switching_target_leaves_the_terminal_host_and_suspends_following(
+        mut cx: &mut TestAppContext,
+    ) {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let (_provider, _executor, panel, _window) = file_manager_fixture(&mut cx, &temp_dir);
+
+        // 初始：面板就绑在终端那条连接上，跟随可用。
+        assert!(!panel.read_with(cx, |panel, _| panel.is_foreign_target()));
+        assert!(panel.read_with(cx, |panel, _| panel.terminal_follow_active()));
+
+        panel.update(cx, |panel, cx| {
+            panel.switch_target(test_other_host_connection(), cx)
+        });
+
+        assert!(panel.read_with(cx, |panel, _| panel.is_foreign_target()));
+        assert!(!panel.read_with(cx, |panel, _| panel.terminal_follow_active()));
+        assert_eq!(
+            panel.read_with(cx, |panel, _| panel.target_name().to_string()),
+            "主机 B"
+        );
+
+        // 切回终端那条连接：跟随恢复。
+        panel.update(cx, |panel, cx| {
+            panel.switch_target(test_stored_connection(), cx)
+        });
+
+        assert!(!panel.read_with(cx, |panel, _| panel.is_foreign_target()));
+        assert!(panel.read_with(cx, |panel, _| panel.terminal_follow_active()));
+    }
+
+    /// 切换目标必须丢掉上一台机器的目录状态。
+    ///
+    /// 这条用例专门挡一个回归：`build_retry_reset_plan` 在 `working_dir` 为 `None`
+    /// 时会回退到**当前**路径，所以直接复用 `reset_connection_for_retry(None)`
+    /// 会把旧主机的目录当成新目标的起点。
+    #[gpui::test]
+    async fn switching_target_drops_the_previous_host_path(mut cx: &mut TestAppContext) {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let (_provider, _executor, panel, _window) = file_manager_fixture(&mut cx, &temp_dir);
+
+        // 先让面板处于"上一台机器"的目录（未连接时 set_initial_working_dir 会落到
+        // current_path / working_dir_hint）。
+        panel.update(cx, |panel, _cx| {
+            panel.set_initial_working_dir(ReportedWorkingDir::new(
+                None,
+                "/srv/previous-host".to_string(),
+            ));
+        });
+        assert_eq!(
+            panel.read_with(cx, |panel, _| panel.working_dir_hint.clone()),
+            Some("/srv/previous-host".to_string())
+        );
+
+        panel.update(cx, |panel, cx| {
+            panel.switch_target(test_other_host_connection(), cx)
+        });
+
+        // 新目标没有配置 sftp_default_directory：起点必须为空（交给服务器登录目录），
+        // 绝不能是上一台机器的路径。
+        assert_eq!(
+            panel.read_with(cx, |panel, _| panel.working_dir_hint.clone()),
+            None
+        );
+        assert_eq!(
+            panel.read_with(cx, |panel, _| panel.current_path.clone()),
+            "/"
+        );
+        assert_eq!(
+            panel.read_with(cx, |panel, _| panel.history.clone()),
+            vec!["/".to_string()]
+        );
     }
 
     fn test_session_manager() -> Arc<SshSessionManager> {

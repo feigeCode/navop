@@ -59,9 +59,9 @@ use ssh::SshSessionManager;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use terminal::ReportedWorkingDir;
 use terminal::resolve_reported_working_dir;
 use terminal::terminal::{SshTerminalConfig, TerminalConnectionKind};
-use terminal::ReportedWorkingDir;
 use workspace_explorer::{
     ExplorerFramePlacement, WorkspaceEditor, WorkspaceExplorer, WorkspaceExplorerConfig,
     WorkspaceExplorerEvent, WorkspaceTheme,
@@ -1414,11 +1414,7 @@ impl TerminalSidebar {
     /// 从终端 OSC 7 同步路径到文件管理器
     ///
     /// 检查 `sync_path_enabled` 且存在文件管理器面板时，导航到指定路径。
-    pub fn sync_file_manager_path(
-        &mut self,
-        reported: ReportedWorkingDir,
-        cx: &mut Context<Self>,
-    ) {
+    pub fn sync_file_manager_path(&mut self, reported: ReportedWorkingDir, cx: &mut Context<Self>) {
         if !self.sync_path_enabled {
             return;
         }
