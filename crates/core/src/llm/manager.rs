@@ -5,7 +5,7 @@ use dashmap::DashMap;
 use gpui::Global;
 use parking_lot::RwLock;
 
-use super::connector::{LlmConnector, LlmProvider};
+use super::connector::{LLM_CLIENT_TIMEOUT_SECS, LlmConnector, LlmProvider};
 use super::onet_cli_provider::OnetCliLLMProvider;
 use super::types::{ProviderConfig, ProviderType};
 use crate::cloud_sync::client::CloudApiClient;
@@ -20,6 +20,7 @@ pub struct ProviderManager {
     providers: Arc<DashMap<i64, ProviderCacheEntry>>,
     cloud_client: RwLock<Option<Arc<dyn CloudApiClient>>>,
     proxy_url: RwLock<Option<String>>,
+    request_timeout_secs: RwLock<Option<u64>>,
 }
 
 impl ProviderManager {
@@ -28,6 +29,7 @@ impl ProviderManager {
             providers: Arc::new(DashMap::new()),
             cloud_client: RwLock::new(None),
             proxy_url: RwLock::new(None),
+            request_timeout_secs: RwLock::new(None),
         }
     }
 
@@ -49,6 +51,19 @@ impl ProviderManager {
 
     pub fn proxy_url(&self) -> Option<String> {
         self.proxy_url.read().clone()
+    }
+
+    /// 设置模型请求空闲超时（秒）；`None` 时回落到 LLM 客户端默认值。
+    pub fn set_request_timeout_secs(&self, request_timeout_secs: Option<u64>) {
+        let mut current = self.request_timeout_secs.write();
+        if *current != request_timeout_secs {
+            *current = request_timeout_secs;
+            self.clear_cache();
+        }
+    }
+
+    pub fn request_timeout_secs(&self) -> Option<u64> {
+        *self.request_timeout_secs.read()
     }
 
     pub async fn get_provider(&self, config: &ProviderConfig) -> Result<Arc<dyn LlmProvider>> {
@@ -77,7 +92,12 @@ impl ProviderManager {
                 Arc::new(onet_provider)
             }
             _ => {
-                let connector = LlmConnector::from_config_with_proxy(config, proxy_url.as_deref())?;
+                let connector = LlmConnector::from_config_with_proxy_and_timeout(
+                    config,
+                    proxy_url.as_deref(),
+                    self.request_timeout_secs()
+                        .unwrap_or(LLM_CLIENT_TIMEOUT_SECS),
+                )?;
                 Arc::new(connector)
             }
         };
@@ -162,6 +182,11 @@ impl GlobalProviderState {
     pub fn set_proxy_url(&self, proxy_url: Option<String>) {
         self.manager.set_proxy_url(proxy_url);
     }
+
+    /// 设置模型请求空闲超时（秒）；`None` 时使用 LLM 客户端默认值。
+    pub fn set_request_timeout_secs(&self, request_timeout_secs: Option<u64>) {
+        self.manager.set_request_timeout_secs(request_timeout_secs);
+    }
 }
 
 impl Default for GlobalProviderState {
@@ -226,6 +251,19 @@ mod tests {
 
         manager.set_proxy_url(None);
         assert_eq!(manager.proxy_url(), None);
+    }
+
+    #[test]
+    fn provider_manager_tracks_current_request_timeout() {
+        let manager = ProviderManager::new();
+
+        assert_eq!(manager.request_timeout_secs(), None);
+
+        manager.set_request_timeout_secs(Some(600));
+        assert_eq!(manager.request_timeout_secs(), Some(600));
+
+        manager.set_request_timeout_secs(None);
+        assert_eq!(manager.request_timeout_secs(), None);
     }
 
     #[test]

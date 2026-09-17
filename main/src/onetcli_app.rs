@@ -933,6 +933,8 @@ pub fn init(cx: &mut App) -> anyhow::Result<()> {
         global_provider_state
             .set_proxy_settings(&AppSettings::global(cx).global_proxy)
             .expect("LLM 代理初始化失败");
+        global_provider_state
+            .set_request_timeout_secs(Some(AppSettings::global(cx).ai_chat.request_timeout_secs));
     }
     spawn_onetcli_model_refresh(cx);
     db::init_cache(cx);

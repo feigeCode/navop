@@ -555,10 +555,26 @@ pub struct AiChatSettings {
     /// 空串表示不追加；旧配置缺少该字段时按空串回落。
     #[serde(default)]
     pub custom_system_prompt: String,
+    /// 模型请求空闲超时（秒）。
+    ///
+    /// 仅在某次请求持续无数据超过该时长时中断，不限制总时长，避免长流式响应
+    /// （思考/工具循环）被总超时中途掐断。旧配置缺少该字段时按默认值回落。
+    #[serde(
+        default = "default_ai_request_timeout_secs",
+        deserialize_with = "deserialize_ai_request_timeout_secs"
+    )]
+    pub request_timeout_secs: u64,
 }
 
 /// 自定义系统提示词的最大字符数（按 chars 计），防止拖垮上下文长度。
 pub const MAX_CUSTOM_SYSTEM_PROMPT_CHARS: usize = 8000;
+
+/// 模型请求空闲超时的默认值（秒）。
+pub const DEFAULT_AI_REQUEST_TIMEOUT_SECS: u64 = 120;
+/// 模型请求空闲超时允许的最小值（秒）。
+pub const MIN_AI_REQUEST_TIMEOUT_SECS: u64 = 10;
+/// 模型请求空闲超时允许的最大值（秒），1 小时。
+pub const MAX_AI_REQUEST_TIMEOUT_SECS: u64 = 3600;
 
 impl AiChatSettings {
     /// 返回规范化后的自定义系统提示词；空白内容返回 `None`。
@@ -594,12 +610,25 @@ where
     Ok(value.clamp(MIN_AGENT_MAX_ITERATIONS, MAX_AGENT_MAX_ITERATIONS))
 }
 
+fn default_ai_request_timeout_secs() -> u64 {
+    DEFAULT_AI_REQUEST_TIMEOUT_SECS
+}
+
+fn deserialize_ai_request_timeout_secs<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = u64::deserialize(deserializer)?;
+    Ok(value.clamp(MIN_AI_REQUEST_TIMEOUT_SECS, MAX_AI_REQUEST_TIMEOUT_SECS))
+}
+
 impl Default for AiChatSettings {
     fn default() -> Self {
         Self {
             tool_execution_mode: AiChatToolExecutionMode::default(),
             max_iterations: default_agent_max_iterations(),
             custom_system_prompt: String::new(),
+            request_timeout_secs: default_ai_request_timeout_secs(),
         }
     }
 }
@@ -1665,14 +1694,14 @@ mod tests {
 
     use super::{
         AiChatSettings, AiChatToolExecutionMode, AppSettings, ConnectionSortOrder, CustomFont,
-        DEFAULT_MCP_APPROVAL_TIMEOUT_MS, DEFAULT_TERMINAL_THEME, HomeConnectionLayout,
-        LOCALE_SYSTEM, LargeTextCellEditorOpenMode, LocalTerminalProfileKind,
-        LocalTerminalProfileSettings, MAX_CUSTOM_SYSTEM_PROMPT_CHARS, MainWindowState,
-        McpPermissionMode, McpServerMode, PersonalSyncBackendKind, RemoteFileOpenMode,
-        SqlFormatSettings, SqlIndentStyle, SqlKeywordCase, StartupDefaultPage, SyncProvider,
-        default_grid_font_fallback_families, default_grid_monospace_font_family,
-        grid_monospace_font, installed_grid_monospace_font, is_installed_font_family,
-        resolve_installed_grid_monospace_font_family,
+        DEFAULT_AI_REQUEST_TIMEOUT_SECS, DEFAULT_MCP_APPROVAL_TIMEOUT_MS, DEFAULT_TERMINAL_THEME,
+        HomeConnectionLayout, LOCALE_SYSTEM, LargeTextCellEditorOpenMode, LocalTerminalProfileKind,
+        LocalTerminalProfileSettings, MAX_AI_REQUEST_TIMEOUT_SECS, MAX_CUSTOM_SYSTEM_PROMPT_CHARS,
+        MIN_AI_REQUEST_TIMEOUT_SECS, MainWindowState, McpPermissionMode, McpServerMode,
+        PersonalSyncBackendKind, RemoteFileOpenMode, SqlFormatSettings, SqlIndentStyle,
+        SqlKeywordCase, StartupDefaultPage, SyncProvider, default_grid_font_fallback_families,
+        default_grid_monospace_font_family, grid_monospace_font, installed_grid_monospace_font,
+        is_installed_font_family, resolve_installed_grid_monospace_font_family,
     };
 
     #[test]
@@ -2716,6 +2745,47 @@ mod tests {
         assert_eq!(
             agent_runtime::MAX_AGENT_MAX_ITERATIONS,
             above_maximum.max_iterations
+        );
+    }
+
+    #[test]
+    fn ai_request_timeout_defaults_for_legacy_settings() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({"locale": "zh-CN"}))
+            .expect("旧版设置应能反序列化");
+
+        assert_eq!(
+            DEFAULT_AI_REQUEST_TIMEOUT_SECS,
+            settings.ai_chat.request_timeout_secs
+        );
+    }
+
+    #[test]
+    fn ai_request_timeout_round_trip_is_preserved() {
+        let mut settings = AppSettings::default();
+        settings.ai_chat.request_timeout_secs = 600;
+
+        let json = serde_json::to_string(&settings).expect("应序列化 Agent 设置");
+        let restored: AppSettings = serde_json::from_str(&json).expect("应反序列化 Agent 设置");
+
+        assert_eq!(600, restored.ai_chat.request_timeout_secs);
+    }
+
+    #[test]
+    fn ai_request_timeout_is_clamped_when_deserialized() {
+        let below_minimum: AiChatSettings =
+            serde_json::from_value(serde_json::json!({"request_timeout_secs": 0}))
+                .expect("应读取低于下限的 Agent 设置");
+        let above_maximum: AiChatSettings =
+            serde_json::from_value(serde_json::json!({"request_timeout_secs": 999_999}))
+                .expect("应读取高于上限的 Agent 设置");
+
+        assert_eq!(
+            MIN_AI_REQUEST_TIMEOUT_SECS,
+            below_minimum.request_timeout_secs
+        );
+        assert_eq!(
+            MAX_AI_REQUEST_TIMEOUT_SECS,
+            above_maximum.request_timeout_secs
         );
     }
 
