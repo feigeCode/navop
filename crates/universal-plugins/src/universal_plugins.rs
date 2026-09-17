@@ -593,6 +593,9 @@ mod tests {
     /// hand out clones of one owner. `init` is deliberately not used here: its
     /// monitor task completes on a real Tokio worker and wakes GPUI's
     /// background executor from that thread, which makes `#[gpui::test]` abort.
+    // `catch_unwind` 观察「重复注册必须 panic」；panic=abort（release profile）下
+    // 没有展开可捕获，这个用例只能直接 abort 测试进程，所以按 profile 跳过。
+    #[cfg(panic = "unwind")]
     #[gpui::test]
     fn universal_plugin_service_has_one_application_owner(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
