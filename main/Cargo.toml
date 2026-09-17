@@ -74,8 +74,36 @@ sha2 = { workspace = true }
 zeroize = { workspace = true }
 flate2 = "1"
 tar = "0.4"
-raw-window-handle = { workspace = true }
+# `window_visibility` 要拿 AppKit/Win32/Xcb 原生句柄，并对 `HandleError` 用
+# `anyhow::Context`；`raw-window-handle` 0.6 没有默认特性，`std` 必须显式开，
+# 否则 `HandleError` 不实现 `std::error::Error`（今天靠别的 crate 顺带开启）。
+raw-window-handle = { workspace = true, features = ["std"] }
+image = { workspace = true }
 font-kit = { git = "https://github.com/zed-industries/font-kit", rev = "110523127440aefb11ce0cf280ae7c5071337ec5", package = "zed-font-kit", version = "0.14.1-zed" }
+
+# 窗口可见性适配（`window_visibility`）：AppKit 的 orderOut/makeKeyAndOrderFront。
+# objc2 生态版本与 gpui-pre 及 crates/remote_desktop_view 保持一致，避免重复版本。
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "NSApplication",
+    "NSResponder",
+    "NSView",
+    "NSWindow",
+] }
+
+# 系统托盘（`system_tray`）。macOS/Windows 用 tray-icon 的原生后端；
+# Linux 只启用它的 ksni 后端（freedesktop StatusNotifierItem），必须关掉默认的
+# libappindicator/libxdo —— 否则会把 GTK 事件循环和 libappindicator/libxdo
+# 系统依赖带进 Linux 构建。
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+tray-icon = { version = "0.25", default-features = false }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+tray-icon = { version = "0.25", default-features = false, features = ["ksni"] }
+# X11 的真正隐藏（unmap/map）：raw-window-handle 0.6 的 Xcb 句柄不带连接，
+# 所以自己建一条到同一 X server 的连接。
+x11rb = "0.13"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 interprocess.workspace = true

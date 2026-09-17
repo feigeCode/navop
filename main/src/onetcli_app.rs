@@ -777,7 +777,13 @@ fn quit_app(cx: &mut App) {
 }
 
 fn request_active_window_quit(cx: &mut App) {
-    let Some(active_window) = cx.active_window() else {
+    // 主窗口隐藏到托盘后没有 key window，但「显式退出」仍然必须落在主窗口上走
+    // 退出确认与标签页关闭检查，不能直接拆资源退出（那会绕过确认）。
+    // 只在完全没有活动窗口时回退到注册的主窗口，辅助窗口语义不变。
+    let Some(active_window) = cx
+        .active_window()
+        .or_else(crate::app_init::main_window_handle)
+    else {
         shutdown_application_resources_and_quit(cx, "quit without an active window");
         return;
     };
@@ -788,7 +794,8 @@ fn request_active_window_quit(cx: &mut App) {
     });
 }
 
-fn request_window_quit(window: &mut Window, cx: &mut App) {
+/// 走既有退出流程的公共入口：托盘「退出 Navop」、`QuitApp` 快捷键、应用菜单都经过它。
+pub(crate) fn request_window_quit(window: &mut Window, cx: &mut App) {
     let Some(app) = cx
         .try_global::<GlobalOnetCliApp>()
         .map(|global| global.app.clone())
@@ -1332,9 +1339,27 @@ impl OnetCliApp {
         });
         let app = app_entity.downgrade();
         window.on_window_should_close(cx, move |window, cx| {
-            let _ = app.update(cx, |app, cx| {
-                app.request_quit(window, cx);
-            });
+            match crate::system_tray::main_window_close_action(crate::system_tray::is_available()) {
+                crate::system_tray::MainWindowCloseAction::HideToTray => {
+                    // 隐藏失败必须回退到退出确认：宁可直接退出，也不能留下一个
+                    // 用户找不到、也没法恢复的隐藏窗口。
+                    if let Err(error) = crate::window_visibility::hide_main_window(window) {
+                        tracing::warn!(%error, "隐藏主窗口失败，回退到退出确认");
+                        let _ = app.update(cx, |app, cx| {
+                            app.request_quit(window, cx);
+                        });
+                    } else {
+                        // 冒烟与排障的唯一可观测点：窗口不可见之后，日志是唯一能证明
+                        // 「关闭按钮走的是托盘路径、而不是退出路径」的证据。
+                        tracing::info!("主窗口已隐藏到系统托盘，进程继续在后台运行");
+                    }
+                }
+                crate::system_tray::MainWindowCloseAction::RequestQuit => {
+                    let _ = app.update(cx, |app, cx| {
+                        app.request_quit(window, cx);
+                    });
+                }
+            }
             false
         });
         cx.observe_window_bounds(window, |app, window, cx| {
@@ -1969,6 +1994,62 @@ mod tests {
 
         assert!(new_fn.contains("on_window_should_close"));
         assert!(new_fn.contains("request_quit(window, cx)"));
+    }
+
+    #[test]
+    fn main_window_close_consults_the_system_tray_policy() {
+        let source = include_str!("onetcli_app.rs");
+        let start = source.find("pub fn new").expect("OnetCliApp::new");
+        let end = source[start..]
+            .find("\n        let tab_container")
+            .map(|offset| start + offset)
+            .expect("OnetCliApp::new setup");
+        let new_fn = &source[start..end];
+        // needle 运行时拼接：断言字面量不能把 include_str! 守卫自己命中。
+        let policy_fn = ["crate::system_tray::main_window_close_", "action("].concat();
+        let availability_fn = ["crate::system_tray::is_", "available()"].concat();
+
+        assert!(
+            contains_code(new_fn, &policy_fn),
+            "关闭按钮必须按托盘可用性分流"
+        );
+        assert!(contains_code(new_fn, &availability_fn));
+        assert!(contains_code(new_fn, "MainWindowCloseAction::HideToTray"));
+        assert!(contains_code(new_fn, "window_visibility::hide_main_window"));
+        assert!(contains_code(new_fn, "MainWindowCloseAction::RequestQuit"));
+    }
+
+    /// 源码守卫比对用：两侧都去掉全部空白再比对，避免 rustfmt 折行或补空格让断言
+    /// 静默失效（`(window, cx)` 这类参数列表也会被 rustfmt 重新折行）。
+    fn contains_code(source: &str, needle: &str) -> bool {
+        fn compact(text: &str) -> String {
+            text.split_whitespace().collect()
+        }
+        compact(source).contains(&compact(needle))
+    }
+
+    #[test]
+    fn explicit_quit_still_reaches_the_main_window_after_hiding_to_the_tray() {
+        let source = include_str!("onetcli_app.rs");
+        let start = source
+            .find("fn request_active_window_quit")
+            .expect("request_active_window_quit");
+        let end = source[start..]
+            .find("\n/// 走既有退出流程的公共入口")
+            .map(|offset| start + offset)
+            .expect("request_active_window_quit end");
+        let body = &source[start..end];
+        let fallback = [
+            "cx.active_window().or_else(crate::app_init::",
+            "main_window_handle)",
+        ]
+        .concat();
+
+        assert!(
+            contains_code(body, &fallback),
+            "隐藏到托盘后没有 key window，显式退出必须回退到主窗口而不是直接拆资源"
+        );
+        assert!(contains_code(body, "request_window_quit(window, cx)"));
     }
 
     #[test]
