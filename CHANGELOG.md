@@ -39,6 +39,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - AI：流式请求改用空闲读超时，修复长任务被 120 秒总超时掐断；空闲超时值可在设置中配置。
 - 修复 SSH 彩色图标走 `img` 路径时内存暴涨（收缩图标固有尺寸）。
 - 发布包体积显著缩小：二进制约 -36%，DMG 安装包 68MB → 56MB（fat LTO、关闭展开、依赖去重）。
+- 日志文件改为 `navop.log`，超过 64MB 自动轮转（保留上一份 `.1`），避免长期使用把日志撑到 GB 级。
 
 国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.18.0) 下载桌面端安装包
 
@@ -77,6 +78,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 - AI: streaming requests now use an idle read timeout, fixing long tasks being cut off by the fixed 120-second total timeout; the idle timeout is configurable in settings.
 - Fixed the memory blow-up when the SSH color icon is loaded through the `img` path by shrinking its intrinsic size.
 - Release artifacts are significantly smaller: the binary is about 36% smaller and the DMG installer drops from 68 MB to 56 MB (fat LTO, unwinding disabled, deduplicated dependencies).
+- The log file is now `navop.log` and rotates past 64 MB (keeping one `.1` backup), so long-running installs no longer grow multi-GB logs.
 
 **Full Changelog**: https://github.com/feigeCode/navop/compare/v0.17.0...v0.18.0
 
