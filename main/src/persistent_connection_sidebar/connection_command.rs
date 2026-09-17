@@ -432,7 +432,7 @@ mod tests {
 
     fn ssh_params(auth_method: SshAuthMethod) -> SshParams {
         SshParams {
-                remote_file: None,
+            remote_file: None,
             sftp_default_directory: None,
             disabled_jump_server: None,
             sftp_account: None,

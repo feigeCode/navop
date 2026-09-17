@@ -1,6 +1,4 @@
-use crate::connection_visuals::{
-    ConnectionVisualSize, stored_connection_icon_with_catalog,
-};
+use crate::connection_visuals::{ConnectionVisualSize, stored_connection_icon_with_catalog};
 use crate::home_tab::{HomePage, connection_matches_query};
 use db::ipc::IpcDriverRegistry;
 use gpui::{
@@ -121,7 +119,7 @@ pub(crate) fn temporary_ssh_connection(input: &str) -> Option<StoredConnection> 
         }
     );
     let params = SshParams {
-                remote_file: None,
+        remote_file: None,
         host,
         port,
         prompt_username: username.is_empty().then_some(true),
@@ -281,7 +279,8 @@ impl ListDelegate for ConnectionQuickOpenDelegate {
                                 .text_color(cx.theme().muted_foreground)
                                 .child(SharedString::from(
                                     crate::connection_visuals::connection_type_display_label(
-                                        &connection, cx,
+                                        &connection,
+                                        cx,
                                     ),
                                 )),
                         ),

@@ -320,10 +320,7 @@ mod tests {
 }
 
 /// Stateless predicate: home and tree must each supply their own selection.
-pub(crate) fn match_connection_type(
-    filter: &ConnectionFilter,
-    conn: &StoredConnection,
-) -> bool {
+pub(crate) fn match_connection_type(filter: &ConnectionFilter, conn: &StoredConnection) -> bool {
     match filter {
         ConnectionFilter::All => true,
         ConnectionFilter::Builtin(kind) => {
@@ -343,8 +340,12 @@ fn extension_connection_matches(target: &ExtensionFilterTarget, conn: &StoredCon
         return conn
             .to_extension_params()
             .map(|params| {
-                params.extension_id.eq_ignore_ascii_case(&target.extension_id)
-                    && params.contribution_id.eq_ignore_ascii_case(&target.contribution_id)
+                params
+                    .extension_id
+                    .eq_ignore_ascii_case(&target.extension_id)
+                    && params
+                        .contribution_id
+                        .eq_ignore_ascii_case(&target.contribution_id)
             })
             .unwrap_or(false);
     }

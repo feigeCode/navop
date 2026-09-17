@@ -127,7 +127,11 @@ fn monospace_font_options(
         FontFamilyKind::Monospace,
         Some(installed_font_names),
     );
-    merge_installed_font_options(&mut options, installed_font_names, FontFamilyKind::Monospace);
+    merge_installed_font_options(
+        &mut options,
+        installed_font_names,
+        FontFamilyKind::Monospace,
+    );
     options
 }
 
@@ -4114,7 +4118,11 @@ mod tests {
             .into_iter()
             .map(|(value, _)| value.to_string())
             .collect::<Vec<_>>();
-        assert!(monospace_values.iter().any(|value| value == "Sarasa Mono SC"));
+        assert!(
+            monospace_values
+                .iter()
+                .any(|value| value == "Sarasa Mono SC")
+        );
         // 内置精选列表里的 `Consolas` 不应因为合并而重复出现。
         assert_eq!(
             1,
@@ -4141,7 +4149,11 @@ mod tests {
             .into_iter()
             .map(|(value, _)| value.to_string())
             .collect::<Vec<_>>();
-        assert!(!monospace_values.iter().any(|value| value == "Microsoft YaHei"));
+        assert!(
+            !monospace_values
+                .iter()
+                .any(|value| value == "Microsoft YaHei")
+        );
         assert!(!monospace_values.iter().any(|value| value == "SimSun"));
         assert!(!monospace_values.iter().any(|value| value == "Kaiti SC"));
 

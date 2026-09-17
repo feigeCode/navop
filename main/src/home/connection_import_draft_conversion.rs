@@ -180,7 +180,7 @@ fn to_ssh_connection(
         t!("Home.ConnectionImport.field_connection_name").as_ref(),
     )?;
     let params = SshParams {
-                remote_file: None,
+        remote_file: None,
         sftp_default_directory: None,
         disabled_jump_server: None,
         sftp_account: None,

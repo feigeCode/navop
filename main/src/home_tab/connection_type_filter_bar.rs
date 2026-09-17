@@ -236,9 +236,9 @@ impl HomePage {
             .label(label)
             .selected(selected)
             .when(selected, |button| selected_filter_style(button, cx))
-            .on_click(cx.listener(move |home, _, _, cx| {
-                home.set_selected_filter(activate.clone(), cx)
-            }))
+            .on_click(
+                cx.listener(move |home, _, _, cx| home.set_selected_filter(activate.clone(), cx)),
+            )
             .into_any_element()
     }
 
