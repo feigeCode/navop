@@ -1004,20 +1004,14 @@ fn validate_workbench_layout(
                     if !page_exists(&root.page_id) {
                         return Err(invalid("tree root references an unknown page"));
                     }
-                    let mut level = root.children.as_ref();
-                    while let Some(children) = level {
-                        if !workbench.operations.contains_key(&children.operation) {
-                            return Err(invalid("tree children references an unknown operation"));
-                        }
-                        if let Some(open) = children.open.as_ref() {
-                            if !page_exists(&open.page_id) {
-                                return Err(invalid(
-                                    "tree children open references an unknown page",
-                                ));
-                            }
-                            validate_route_bindings(&open.route, "tree children open", invalid)?;
-                        }
-                        level = children.children.as_deref();
+                    if let Some(children) = root.children.as_ref() {
+                        validate_tree_children(
+                            children,
+                            &|operation| workbench.operations.contains_key(operation),
+                            &page_exists,
+                            &invalid,
+                            TREE_CHILDREN_MAX_DEPTH,
+                        )?;
                     }
                 }
             }
@@ -1077,6 +1071,120 @@ fn validate_workbench_layout(
             }
             m::ResourceWorkbenchBottomSource::Shell(source) => check_shell_source(source, invalid)?,
             m::ResourceWorkbenchBottomSource::None => {}
+        }
+    }
+    Ok(())
+}
+
+/// 树 children 递归深度上限。
+///
+/// 树的形状是值而不是引用,循环在类型上不可能出现;上限挡的是病态 manifest
+/// (例如机器生成的几十层嵌套),让它在安装期被拒绝,而不是渲染时递归爆栈。
+const TREE_CHILDREN_MAX_DEPTH: usize = 8;
+
+/// 校验一层树 children 声明(remote 或 static),并递归到下一层。
+///
+/// 两种形态的字段是**互斥**的:同一个结构体承载了两套字段,如果只校验"该有的
+/// 有",写错形态(比如 static 里混了 `operation`)会静默按其中一侧解释,表现成
+/// "点开是空的"。因此这里两个方向都查。
+///
+/// 依赖只收两个闭包(页面是否存在 / 操作是否存在)而不是整个 workbench:
+/// 校验逻辑本身与 workbench 的其它字段无关,收窄依赖才能单独跑契约测试。
+fn validate_tree_children(
+    children: &crate::extension::manifest::ResourceWorkbenchTreeChildren,
+    operation_exists: &dyn Fn(&str) -> bool,
+    page_exists: &dyn Fn(&str) -> bool,
+    invalid: &dyn Fn(&str) -> ExtensionRuntimeError,
+    depth: usize,
+) -> Result<(), ExtensionRuntimeError> {
+    use crate::extension::manifest as m;
+
+    if depth == 0 {
+        return Err(invalid(
+            "tree children nest deeper than the supported depth",
+        ));
+    }
+    let validate_open =
+        |open: &m::ResourceWorkbenchOpen, location: &str| -> Result<(), ExtensionRuntimeError> {
+            if !page_exists(&open.page_id) {
+                return Err(invalid(&format!("{location} references an unknown page")));
+            }
+            validate_route_bindings(&open.route, location, invalid)
+        };
+
+    if children.is_remote() {
+        if !children.items.is_empty() {
+            return Err(invalid(
+                "tree children declare `items` without `kind: \"static\"`",
+            ));
+        }
+        let operation = children
+            .operation
+            .as_deref()
+            .filter(|op| !op.trim().is_empty());
+        let Some(operation) = operation else {
+            return Err(invalid("tree children require an operation"));
+        };
+        if !operation_exists(operation) {
+            return Err(invalid("tree children references an unknown operation"));
+        }
+        for (field, value) in [
+            ("itemsPath", children.items_path.as_deref()),
+            ("labelPath", children.label_path.as_deref()),
+        ] {
+            if !value.is_some_and(|value| !value.trim().is_empty()) {
+                return Err(invalid(&format!(
+                    "tree children require a non-empty {field}"
+                )));
+            }
+        }
+        if let Some(open) = children.open.as_ref() {
+            validate_open(open, "tree children open")?;
+        }
+        if let Some(next) = children.children.as_deref() {
+            validate_tree_children(next, operation_exists, page_exists, invalid, depth - 1)?;
+        }
+        return Ok(());
+    }
+
+    // `kind: "static"`:零请求展开的功能子节点。
+    for (field, present) in [
+        ("operation", children.operation.is_some()),
+        ("itemsPath", children.items_path.is_some()),
+        ("labelPath", children.label_path.is_some()),
+        ("keyPaths", !children.key_paths.is_empty()),
+        ("open", children.open.is_some()),
+        ("children", children.children.is_some()),
+    ] {
+        if present {
+            return Err(invalid(&format!(
+                "static tree children must not declare `{field}`; put it on the item instead"
+            )));
+        }
+    }
+    if children.items.is_empty() {
+        return Err(invalid("static tree children require at least one item"));
+    }
+    let mut ids = HashSet::new();
+    for item in &children.items {
+        if item.id.trim().is_empty() || item.title.trim().is_empty() {
+            return Err(invalid("static tree item id and title must not be empty"));
+        }
+        // 节点键 = 父键 + `\u{1}` + 行键。id 里出现控制字符会让键无法再拆回去
+        // (父键与行键的边界丢失),所以在这里挡住,而不是在渲染时错位。
+        if item.id.chars().any(char::is_control) {
+            return Err(invalid(
+                "static tree item id must not contain control characters",
+            ));
+        }
+        if !ids.insert(item.id.as_str()) {
+            return Err(invalid(
+                "static tree item ids must be unique within a level",
+            ));
+        }
+        validate_open(&item.open, "static tree item open")?;
+        if let Some(next) = item.children.as_deref() {
+            validate_tree_children(next, operation_exists, page_exists, invalid, depth - 1)?;
         }
     }
     Ok(())
@@ -1192,4 +1300,236 @@ fn command_titles(manifest: &Manifest) -> BTreeMap<&str, String> {
         .iter()
         .map(|command| (command.id.as_str(), command.title.clone()))
         .collect()
+}
+
+#[cfg(test)]
+mod tree_children_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn reason(result: Result<(), ExtensionRuntimeError>) -> String {
+        match result {
+            Err(ExtensionRuntimeError::InvalidResourceWorkbench(reason)) => reason,
+            other => panic!("expected an invalid-resource-workbench error, got {other:?}"),
+        }
+    }
+
+    /// 只依赖「页面存在吗 / 操作存在吗」两个谓词,不需要构造整个 workbench。
+    fn validate_children(
+        declaration: serde_json::Value,
+        pages: &[&str],
+        operations: &[&str],
+    ) -> Result<(), ExtensionRuntimeError> {
+        let children: crate::extension::manifest::ResourceWorkbenchTreeChildren =
+            serde_json::from_value(declaration).expect("declaration must parse");
+        let invalid =
+            |reason: &str| ExtensionRuntimeError::InvalidResourceWorkbench(reason.to_string());
+        validate_tree_children(
+            &children,
+            &|operation| operations.contains(&operation),
+            &|page| pages.contains(&page),
+            &invalid,
+            TREE_CHILDREN_MAX_DEPTH,
+        )
+    }
+
+    fn static_item(id: &str, page: &str) -> serde_json::Value {
+        json!({"id": id, "title": id, "open": {"pageId": page, "route": {}}})
+    }
+
+    /// 静态形态的整个意义就是"不发请求"。校验若要求存在某个 operation,
+    /// 扩展就只能声明一个用不到的操作来凑数 —— 能力等于没实现。
+    #[test]
+    fn static_children_need_no_operation_at_all() {
+        assert!(
+            validate_children(
+                json!({"kind": "static", "items": [static_item("mapping", "index-mapping")]}),
+                &["index-mapping"],
+                &[],
+            )
+            .is_ok()
+        );
+    }
+
+    /// 旧 manifest(不写 `kind`)必须继续按 remote 校验:缺 operation 就是非法,
+    /// 而不是"被当成 static 然后零请求展开"。
+    #[test]
+    fn remote_children_without_an_operation_are_rejected() {
+        let message = reason(validate_children(
+            json!({"itemsPath": "/items", "labelPath": "/name"}),
+            &["page"],
+            &["list"],
+        ));
+        assert!(message.contains("require an operation"), "{message}");
+    }
+
+    #[test]
+    fn remote_children_must_reference_a_declared_operation() {
+        let message = reason(validate_children(
+            json!({"operation": "nope", "itemsPath": "/items", "labelPath": "/name"}),
+            &["page"],
+            &["list"],
+        ));
+        assert!(message.contains("unknown operation"), "{message}");
+    }
+
+    #[test]
+    fn remote_children_require_non_empty_paths() {
+        for declaration in [
+            json!({"operation": "list", "labelPath": "/name"}),
+            json!({"operation": "list", "itemsPath": "/items"}),
+            json!({"operation": "list", "itemsPath": "  ", "labelPath": "/name"}),
+        ] {
+            let message = reason(validate_children(declaration, &["page"], &["list"]));
+            assert!(message.contains("non-empty"), "{message}");
+        }
+    }
+
+    /// 形态互斥的两个方向都要查。写错一侧时若静默按另一侧解释,
+    /// 表现是"点开是空的",而安装期不会有任何提示。
+    #[test]
+    fn the_two_child_shapes_are_mutually_exclusive() {
+        let remote_with_items = reason(validate_children(
+            json!({
+                "operation": "list",
+                "itemsPath": "/items",
+                "labelPath": "/name",
+                "items": [static_item("mapping", "index-mapping")],
+            }),
+            &["index-mapping"],
+            &["list"],
+        ));
+        assert!(
+            remote_with_items.contains("without `kind"),
+            "{remote_with_items}"
+        );
+
+        for field in [
+            "operation",
+            "itemsPath",
+            "labelPath",
+            "keyPaths",
+            "open",
+            "children",
+        ] {
+            let mut declaration = json!({
+                "kind": "static",
+                "items": [static_item("mapping", "index-mapping")],
+            });
+            declaration[field] = match field {
+                "keyPaths" => json!(["/name"]),
+                "open" => json!({"pageId": "index-mapping", "route": {}}),
+                "children" => {
+                    json!({"kind": "static", "items": [static_item("x", "index-mapping")]})
+                }
+                _ => json!("value"),
+            };
+            let message = reason(validate_children(
+                declaration,
+                &["index-mapping"],
+                &["list"],
+            ));
+            assert!(
+                message.contains(&format!("must not declare `{field}`")),
+                "declaring `{field}` on a static collection must fail: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn static_children_require_at_least_one_item() {
+        let message = reason(validate_children(
+            json!({"kind": "static", "items": []}),
+            &["page"],
+            &[],
+        ));
+        assert!(message.contains("at least one item"), "{message}");
+    }
+
+    #[test]
+    fn static_item_ids_are_unique_per_level() {
+        let message = reason(validate_children(
+            json!({"kind": "static", "items": [
+                static_item("mapping", "index-mapping"),
+                static_item("mapping", "index-settings"),
+            ]}),
+            &["index-mapping", "index-settings"],
+            &[],
+        ));
+        assert!(message.contains("unique within a level"), "{message}");
+
+        // 不同层之间重名是允许的:节点键带父键前缀。
+        assert!(validate_children(
+            json!({"kind": "static", "items": [{
+                "id": "group",
+                "title": "Group",
+                "open": {"pageId": "index-mapping", "route": {}},
+                "children": {"kind": "static", "items": [static_item("group", "index-mapping")]},
+            }]}),
+            &["index-mapping"],
+            &[],
+        )
+        .is_ok());
+    }
+
+    /// 节点键 = 父键 + `\u{1}` + 行键。id 里带分隔符会让键拆不回去。
+    #[test]
+    fn static_item_ids_must_not_contain_control_characters() {
+        let message = reason(validate_children(
+            json!({"kind": "static", "items": [
+                {"id": "a\u{1}b", "title": "A", "open": {"pageId": "page", "route": {}}},
+            ]}),
+            &["page"],
+            &[],
+        ));
+        assert!(message.contains("control characters"), "{message}");
+    }
+
+    #[test]
+    fn static_and_remote_open_targets_must_exist() {
+        let message = reason(validate_children(
+            json!({"kind": "static", "items": [static_item("mapping", "ghost")]}),
+            &["index-mapping"],
+            &[],
+        ));
+        assert!(message.contains("unknown page"), "{message}");
+
+        let message = reason(validate_children(
+            json!({"operation": "list", "itemsPath": "/i", "labelPath": "/n",
+                   "children": {"kind": "static", "items": [static_item("m", "ghost")]}}),
+            &["page"],
+            &["list"],
+        ));
+        assert!(message.contains("unknown page"), "{message}");
+    }
+
+    #[test]
+    fn nesting_beyond_the_depth_limit_is_rejected() {
+        let leaf = json!({"kind": "static", "items": [static_item("leaf", "page")]});
+        let mut within_limit = leaf.clone();
+        for _ in 0..TREE_CHILDREN_MAX_DEPTH - 1 {
+            within_limit = json!({"kind": "static", "items": [{
+                "id": "group",
+                "title": "Group",
+                "open": {"pageId": "page", "route": {}},
+                "children": within_limit,
+            }]});
+        }
+        assert!(validate_children(within_limit.clone(), &["page"], &[]).is_ok());
+
+        let mut too_deep = within_limit;
+        for _ in 0..2 {
+            too_deep = json!({"kind": "static", "items": [{
+                "id": "group",
+                "title": "Group",
+                "open": {"pageId": "page", "route": {}},
+                "children": too_deep,
+            }]});
+        }
+        let message = reason(validate_children(too_deep, &["page"], &[]));
+        assert!(
+            message.contains("deeper than the supported depth"),
+            "{message}"
+        );
+    }
 }
