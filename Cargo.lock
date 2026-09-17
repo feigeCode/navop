@@ -4829,16 +4829,6 @@ dependencies = [
 
 [[package]]
 name = "gif"
-version = "0.13.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ae047235e33e2829703574b54fdec96bfbad892062d97fed2f76022287de61b"
-dependencies = [
- "color_quant",
- "weezl",
-]
-
-[[package]]
-name = "gif"
 version = "0.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee8cfcc411d9adbbaba82fb72661cc1bcca13e8bba98b364e62b2dba8f960159"
@@ -5087,7 +5077,7 @@ dependencies = [
 [[package]]
 name = "gpui-base"
 version = "0.6.1"
-source = "git+https://github.com/feigeCode/gpui-component?rev=54e09003fa6757c77f380b4fe5e5903107ad786c#54e09003fa6757c77f380b4fe5e5903107ad786c"
+source = "git+https://github.com/feigeCode/gpui-component?rev=6df86ef82b4b5f3b04723c0d1cf82ff57cdc7078#6df86ef82b4b5f3b04723c0d1cf82ff57cdc7078"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -5121,7 +5111,7 @@ dependencies = [
 [[package]]
 name = "gpui-component"
 version = "0.6.1"
-source = "git+https://github.com/feigeCode/gpui-component?rev=54e09003fa6757c77f380b4fe5e5903107ad786c#54e09003fa6757c77f380b4fe5e5903107ad786c"
+source = "git+https://github.com/feigeCode/gpui-component?rev=6df86ef82b4b5f3b04723c0d1cf82ff57cdc7078#6df86ef82b4b5f3b04723c0d1cf82ff57cdc7078"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5147,7 +5137,7 @@ dependencies = [
  "paste",
  "raw-window-handle",
  "regex",
- "resvg 0.45.1",
+ "resvg",
  "ropey",
  "rust-i18n",
  "schemars 1.2.2",
@@ -5171,7 +5161,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-macros"
 version = "0.6.1"
-source = "git+https://github.com/feigeCode/gpui-component?rev=54e09003fa6757c77f380b4fe5e5903107ad786c#54e09003fa6757c77f380b4fe5e5903107ad786c"
+source = "git+https://github.com/feigeCode/gpui-component?rev=6df86ef82b4b5f3b04723c0d1cf82ff57cdc7078#6df86ef82b4b5f3b04723c0d1cf82ff57cdc7078"
 dependencies = [
  "proc-macro-crate 3.5.0",
  "proc-macro2",
@@ -5182,7 +5172,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-shell"
 version = "0.6.1"
-source = "git+https://github.com/feigeCode/gpui-component?rev=54e09003fa6757c77f380b4fe5e5903107ad786c#54e09003fa6757c77f380b4fe5e5903107ad786c"
+source = "git+https://github.com/feigeCode/gpui-component?rev=6df86ef82b4b5f3b04723c0d1cf82ff57cdc7078#6df86ef82b4b5f3b04723c0d1cf82ff57cdc7078"
 dependencies = [
  "gpui-component",
  "gpui-shell",
@@ -5191,7 +5181,7 @@ dependencies = [
 [[package]]
 name = "gpui-fps"
 version = "0.6.1"
-source = "git+https://github.com/feigeCode/gpui-component?rev=54e09003fa6757c77f380b4fe5e5903107ad786c#54e09003fa6757c77f380b4fe5e5903107ad786c"
+source = "git+https://github.com/feigeCode/gpui-component?rev=6df86ef82b4b5f3b04723c0d1cf82ff57cdc7078#6df86ef82b4b5f3b04723c0d1cf82ff57cdc7078"
 dependencies = [
  "core-graphics 0.24.0",
  "gpui-pre",
@@ -5208,7 +5198,7 @@ dependencies = [
 [[package]]
 name = "gpui-kit-assets"
 version = "0.6.1"
-source = "git+https://github.com/feigeCode/gpui-component?rev=54e09003fa6757c77f380b4fe5e5903107ad786c#54e09003fa6757c77f380b4fe5e5903107ad786c"
+source = "git+https://github.com/feigeCode/gpui-component?rev=6df86ef82b4b5f3b04723c0d1cf82ff57cdc7078#6df86ef82b4b5f3b04723c0d1cf82ff57cdc7078"
 dependencies = [
  "anyhow",
  "gpui-pre",
@@ -5268,7 +5258,7 @@ dependencies = [
  "rand 0.9.5",
  "raw-window-handle",
  "regex",
- "resvg 0.46.0",
+ "resvg",
  "schemars 1.2.2",
  "seahash",
  "serde",
@@ -5282,7 +5272,7 @@ dependencies = [
  "tracing",
  "ttf-parser",
  "url",
- "usvg 0.46.0",
+ "usvg",
  "uuid",
  "waker-fn",
  "web-time",
@@ -5764,7 +5754,7 @@ dependencies = [
 [[package]]
 name = "gpui-shell"
 version = "0.6.1"
-source = "git+https://github.com/feigeCode/gpui-component?rev=54e09003fa6757c77f380b4fe5e5903107ad786c#54e09003fa6757c77f380b4fe5e5903107ad786c"
+source = "git+https://github.com/feigeCode/gpui-component?rev=6df86ef82b4b5f3b04723c0d1cf82ff57cdc7078#6df86ef82b4b5f3b04723c0d1cf82ff57cdc7078"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -5796,7 +5786,7 @@ dependencies = [
 [[package]]
 name = "gpui-wry"
 version = "0.6.1"
-source = "git+https://github.com/feigeCode/gpui-component?rev=54e09003fa6757c77f380b4fe5e5903107ad786c#54e09003fa6757c77f380b4fe5e5903107ad786c"
+source = "git+https://github.com/feigeCode/gpui-component?rev=6df86ef82b4b5f3b04723c0d1cf82ff57cdc7078#6df86ef82b4b5f3b04723c0d1cf82ff57cdc7078"
 dependencies = [
  "anyhow",
  "gpui-pre",
@@ -6509,7 +6499,7 @@ dependencies = [
  "byteorder-lite",
  "color_quant",
  "exr",
- "gif 0.14.2",
+ "gif",
  "image-webp",
  "moxcms",
  "num-traits",
@@ -6519,8 +6509,8 @@ dependencies = [
  "rayon",
  "rgb",
  "tiff",
- "zune-core 0.5.3",
- "zune-jpeg 0.5.15",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -6532,12 +6522,6 @@ dependencies = [
  "byteorder-lite",
  "quick-error 2.0.1",
 ]
-
-[[package]]
-name = "imagesize"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "edcd27d72f2f071c64249075f42e205ff93c9a4c5f6c6da53e79ed9f9832c285"
 
 [[package]]
 name = "imagesize"
@@ -7139,17 +7123,6 @@ dependencies = [
  "html5ever 0.29.1",
  "indexmap 2.14.2",
  "selectors",
-]
-
-[[package]]
-name = "kurbo"
-version = "0.11.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c62026ae44756f8a599ba21140f350303d4f08dcdcc71b5ad9c9bb8128c13c62"
-dependencies = [
- "arrayvec",
- "euclid",
- "smallvec",
 ]
 
 [[package]]
@@ -8855,7 +8828,7 @@ dependencies = [
  "one-assets",
  "one-core",
  "palette",
- "resvg 0.46.0",
+ "resvg",
  "rust-i18n",
  "serde",
  "serde_json",
@@ -11797,36 +11770,19 @@ dependencies = [
 
 [[package]]
 name = "resvg"
-version = "0.45.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8928798c0a55e03c9ca6c4c6846f76377427d2c1e1f7e6de3c06ae57942df43"
-dependencies = [
- "gif 0.13.3",
- "image-webp",
- "log",
- "pico-args",
- "rgb",
- "svgtypes 0.15.3",
- "tiny-skia",
- "usvg 0.45.1",
- "zune-jpeg 0.4.21",
-]
-
-[[package]]
-name = "resvg"
 version = "0.46.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b563218631706d614e23059436526d005b50ab5f2d506b55a17eb65c5eb83419"
 dependencies = [
- "gif 0.14.2",
+ "gif",
  "image-webp",
  "log",
  "pico-args",
  "rgb",
- "svgtypes 0.16.1",
+ "svgtypes",
  "tiny-skia",
- "usvg 0.46.0",
- "zune-jpeg 0.5.15",
+ "usvg",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -11924,7 +11880,7 @@ dependencies = [
 [[package]]
 name = "rquickjs"
 version = "0.12.7"
-source = "git+https://github.com/feigeCode/gpui-component?rev=54e09003fa6757c77f380b4fe5e5903107ad786c#54e09003fa6757c77f380b4fe5e5903107ad786c"
+source = "git+https://github.com/feigeCode/gpui-component?rev=6df86ef82b4b5f3b04723c0d1cf82ff57cdc7078#6df86ef82b4b5f3b04723c0d1cf82ff57cdc7078"
 dependencies = [
  "quickjs-jit",
 ]
@@ -13720,21 +13676,11 @@ checksum = "0193cc4331cfd2f3d2011ef287590868599a2f33c3e69bc22c1a3d3acf9e02fb"
 
 [[package]]
 name = "svgtypes"
-version = "0.15.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68c7541fff44b35860c1a7a47a7cadf3e4a304c457b58f9870d9706ece028afc"
-dependencies = [
- "kurbo 0.11.3",
- "siphasher 1.0.3",
-]
-
-[[package]]
-name = "svgtypes"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "695b5790b3131dafa99b3bbfd25a216edb3d216dad9ca208d4657bfb8f2abc3d"
 dependencies = [
- "kurbo 0.13.1",
+ "kurbo",
  "siphasher 1.0.3",
 ]
 
@@ -14207,7 +14153,7 @@ dependencies = [
  "half",
  "quick-error 2.0.1",
  "weezl",
- "zune-jpeg 0.5.15",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -15091,33 +15037,6 @@ dependencies = [
 
 [[package]]
 name = "usvg"
-version = "0.45.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80be9b06fbae3b8b303400ab20778c80bbaf338f563afe567cf3c9eea17b47ef"
-dependencies = [
- "base64 0.22.1",
- "data-url",
- "flate2",
- "fontdb",
- "imagesize 0.13.0",
- "kurbo 0.11.3",
- "log",
- "pico-args",
- "roxmltree 0.20.0",
- "rustybuzz",
- "simplecss",
- "siphasher 1.0.3",
- "strict-num",
- "svgtypes 0.15.3",
- "tiny-skia-path",
- "unicode-bidi",
- "unicode-script",
- "unicode-vo",
- "xmlwriter",
-]
-
-[[package]]
-name = "usvg"
 version = "0.46.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e419dff010bb12512b0ae9e3d2f318dfbdf0167fde7eb05465134d4e8756076f"
@@ -15126,8 +15045,8 @@ dependencies = [
  "data-url",
  "flate2",
  "fontdb",
- "imagesize 0.14.0",
- "kurbo 0.13.1",
+ "imagesize",
+ "kurbo",
  "log",
  "pico-args",
  "roxmltree 0.21.1",
@@ -15135,7 +15054,7 @@ dependencies = [
  "simplecss",
  "siphasher 1.0.3",
  "strict-num",
- "svgtypes 0.16.1",
+ "svgtypes",
  "tiny-skia-path",
  "unicode-bidi",
  "unicode-script",
@@ -17899,12 +17818,6 @@ dependencies = [
 
 [[package]]
 name = "zune-core"
-version = "0.4.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f423a2c17029964870cfaabb1f13dfab7d092a62a29a89264f4d36990ca414a"
-
-[[package]]
-name = "zune-core"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d56377fd46368984a170bc5aac5567e52ca5da874caa60bea39fcbca78fb658b"
@@ -17920,20 +17833,11 @@ dependencies = [
 
 [[package]]
 name = "zune-jpeg"
-version = "0.4.21"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29ce2c8a9384ad323cf564b67da86e21d3cfdff87908bc1223ed5c99bc792713"
-dependencies = [
- "zune-core 0.4.12",
-]
-
-[[package]]
-name = "zune-jpeg"
 version = "0.5.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
 dependencies = [
- "zune-core 0.5.3",
+ "zune-core",
 ]
 
 [[package]]
