@@ -2286,8 +2286,8 @@ mod tests {
 
     #[test]
     fn configured_log_file_path_trims_value() {
-        let path = configured_log_file_path("  /tmp/onetcli.log  ").expect("应返回日志路径");
-        assert_eq!(path, std::path::PathBuf::from("/tmp/onetcli.log"));
+        let path = configured_log_file_path("  /tmp/navop.log  ").expect("应返回日志路径");
+        assert_eq!(path, std::path::PathBuf::from("/tmp/navop.log"));
     }
 
     #[test]
