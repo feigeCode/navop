@@ -11,6 +11,15 @@ __onetcli_prompt_start() {
     __onetcli_emit_osc '133;A'
 }
 
+# 提示符时间戳：由 Navop 通过 _ONETCLI_TIMESTAMP 开启，便于对照相邻时间戳看命令耗时。
+__onetcli_prompt_timestamp() {
+    [[ -n "${_ONETCLI_TIMESTAMP:-}" ]] || return 0
+    local now
+    now="$(date +%H:%M:%S 2>/dev/null)" || return 0
+    [[ -n "$now" ]] || return 0
+    printf '\033[2m[%s]\033[0m ' "$now"
+}
+
 __onetcli_prompt_end() {
     __onetcli_emit_osc '133;B'
 }
@@ -59,6 +68,7 @@ __onetcli_precmd_common() {
         unset __ONETCLI_COMMAND_STARTED
     fi
     __onetcli_update_cwd
+    __onetcli_prompt_timestamp
     __onetcli_prompt_start
 }
 

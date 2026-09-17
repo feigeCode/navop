@@ -363,6 +363,8 @@ struct SshConnectTask {
     init_commands: Option<String>,
     recording_tap: Option<RecordingTap>,
     generation: u64,
+    /// 提示符时间戳（`AppSettings::terminal_show_timestamps`）
+    show_timestamps: bool,
 }
 
 fn ssh_auth_from_storage(auth: SshAuthMethod) -> SshAuth {
@@ -918,7 +920,10 @@ pub fn resolve_local_workspace_root(config: &LocalConfig) -> Option<PathBuf> {
 /// 仅对当前 Navop 进程内的终端会话生效，不污染全局配置。
 /// 返回 `(额外环境变量, shell 额外参数)`。
 #[cfg(not(target_os = "windows"))]
-fn prepare_shell_integration(shell: Option<&str>) -> (Vec<(String, String)>, Vec<String>) {
+fn prepare_shell_integration(
+    shell: Option<&str>,
+    show_timestamps: bool,
+) -> (Vec<(String, String)>, Vec<String>) {
     // 使用进程级临时目录，确保不影响其他会话或工具
     let session_dir = std::env::temp_dir().join(format!("onetcli-{}", std::process::id()));
     if fs::create_dir_all(&session_dir).is_err() {
@@ -938,6 +943,9 @@ fn prepare_shell_integration(shell: Option<&str>) -> (Vec<(String, String)>, Vec
 
     let mut extra_env: Vec<(String, String)> =
         vec![("ONETCLI_SHELL_INTEGRATION".into(), "1".into())];
+    if show_timestamps {
+        extra_env.push(("_ONETCLI_TIMESTAMP".into(), "1".into()));
+    }
     let mut extra_args: Vec<String> = Vec::new();
 
     // 判断 shell 类型：优先用显式参数，否则读 $SHELL
@@ -1009,9 +1017,12 @@ fn prepare_shell_integration(shell: Option<&str>) -> (Vec<(String, String)>, Vec
 }
 
 #[cfg(target_os = "windows")]
-fn prepare_shell_integration(shell: Option<&str>) -> (Vec<(String, String)>, Vec<String>) {
+fn prepare_shell_integration(
+    shell: Option<&str>,
+    show_timestamps: bool,
+) -> (Vec<(String, String)>, Vec<String>) {
     let program = shell.unwrap_or("cmd.exe");
-    crate::windows_shell_integration::prepare(program)
+    crate::windows_shell_integration::prepare(program, show_timestamps)
 }
 
 fn history_file_candidates(preferred_shell: Option<&str>) -> Vec<(PathBuf, ShellHistoryFormat)> {
@@ -1771,7 +1782,8 @@ impl Terminal {
         let working_directory = resolve_local_working_dir(working_dir);
 
         // 准备 Shell Integration 环境（写入集成脚本、生成 wrapper 配置）
-        let (integration_env, integration_args) = prepare_shell_integration(shell.as_deref());
+        let (integration_env, integration_args) =
+            prepare_shell_integration(shell.as_deref(), app_settings.terminal_show_timestamps);
         let mut shell_args = args;
         shell_args.extend(integration_args);
 
@@ -2664,6 +2676,7 @@ impl Terminal {
             init_commands,
             recording_tap,
             generation,
+            show_timestamps,
         } = task;
         let task = Tokio::spawn(cx, async move {
             let expect_username = config.ssh_config.username.clone();
@@ -2692,6 +2705,7 @@ impl Terminal {
                     expect_username,
                     expect_password,
                     disable_shell_integration: config.disable_shell_integration,
+                    show_timestamps,
                 },
                 recording_tap,
                 zmodem_responder,
@@ -2807,6 +2821,7 @@ impl Terminal {
                 init_commands: self.init_commands.clone(),
                 recording_tap: self.recording_tap(),
                 generation,
+                show_timestamps: AppSettings::current(cx).terminal_show_timestamps,
             },
             cx,
         );
@@ -6258,7 +6273,7 @@ mod tests {
         let integration_path = session_dir.join("shell_integration.sh");
         let _ = fs::remove_dir_all(&session_dir);
 
-        let (_env, _args) = super::prepare_shell_integration(Some("/bin/bash"));
+        let (_env, _args) = super::prepare_shell_integration(Some("/bin/bash"), false);
 
         let script = fs::read_to_string(&integration_path).expect("应写入本地 integration 脚本");
         assert!(
@@ -6284,7 +6299,7 @@ mod tests {
         let _ = fs::remove_dir_all(&home_dir);
         fs::create_dir_all(&home_dir).expect("应创建临时 HOME");
 
-        let (env_pairs, args) = super::prepare_shell_integration(Some("/bin/zsh"));
+        let (env_pairs, args) = super::prepare_shell_integration(Some("/bin/zsh"), false);
         assert!(args.is_empty(), "zsh 注入不应依赖额外启动参数");
 
         let mut command = Command::new(zsh);

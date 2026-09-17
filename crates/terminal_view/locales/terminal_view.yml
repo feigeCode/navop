@@ -770,6 +770,10 @@ Settings:
     en: Highlight matching text on selection
     zh-CN: 选中文本后高亮相同内容
     zh-HK: 選取文字後高亮相同內容
+  show_timestamps:
+    en: Show [HH:MM:SS] before each prompt (applies to new sessions)
+    zh-CN: 每条提示符前显示 [HH:MM:SS] 时间戳（新会话生效）
+    zh-HK: 每條提示符前顯示 [HH:MM:SS] 時間戳（新工作階段生效）
   file_manager_section:
     en: FILE MANAGER
     zh-CN: 文件管理器

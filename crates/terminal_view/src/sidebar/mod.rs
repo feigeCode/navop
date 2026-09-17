@@ -600,6 +600,8 @@ pub enum TerminalSidebarEvent {
     VimScrollToArrowKeysChanged(bool),
     /// 选中文本高亮相同内容开关
     SelectionHighlightChanged(bool),
+    /// 提示符时间戳开关
+    ShowTimestampsChanged(bool),
     /// 路径与终端同步开关
     SyncPathChanged(bool),
     /// 自定义高亮规则变更
@@ -871,6 +873,9 @@ impl TerminalSidebar {
                 }
                 settings_panel::SettingsPanelEvent::SelectionHighlightChanged(enabled) => {
                     cx.emit(TerminalSidebarEvent::SelectionHighlightChanged(*enabled));
+                }
+                settings_panel::SettingsPanelEvent::ShowTimestampsChanged(enabled) => {
+                    cx.emit(TerminalSidebarEvent::ShowTimestampsChanged(*enabled));
                 }
                 settings_panel::SettingsPanelEvent::SyncPathChanged(enabled) => {
                     this.sync_path_enabled = *enabled;

@@ -16,6 +16,9 @@ function global:__NavopWriteOsc([string] $Payload) {
 
 function global:prompt {
     $path = (Get-Location).Path.Replace('\', '/')
+    if ($env:_ONETCLI_TIMESTAMP) {
+        [Console]::Write("[{0}] " -f [DateTime]::Now.ToString('HH:mm:ss'))
+    }
     __NavopWriteOsc "7;file://localhost/$path"
     __NavopWriteOsc '133;A'
 
@@ -42,13 +45,20 @@ enum WindowsShellKind {
 }
 
 #[cfg(target_os = "windows")]
-pub(crate) fn prepare(program: &str) -> (Vec<(String, String)>, Vec<String>) {
+pub(crate) fn prepare(
+    program: &str,
+    show_timestamps: bool,
+) -> (Vec<(String, String)>, Vec<String>) {
     let session_dir = std::env::temp_dir().join(format!("onetcli-{}", std::process::id()));
-    prepare_in_dir(program, &session_dir)
+    prepare_in_dir(program, &session_dir, show_timestamps)
 }
 
 #[cfg(any(test, target_os = "windows"))]
-fn prepare_in_dir(program: &str, session_dir: &Path) -> (Vec<(String, String)>, Vec<String>) {
+fn prepare_in_dir(
+    program: &str,
+    session_dir: &Path,
+    show_timestamps: bool,
+) -> (Vec<(String, String)>, Vec<String>) {
     let kind = detect_shell_kind(program);
     let Some((extension, script)) = integration_file(kind) else {
         tracing::debug!("未知 Windows shell 类型 '{program}'，跳过 Shell Integration 注入");
@@ -65,10 +75,11 @@ fn prepare_in_dir(program: &str, session_dir: &Path) -> (Vec<(String, String)>, 
     }
 
     tracing::debug!("已配置 Windows {kind:?} Shell Integration");
-    (
-        vec![("ONETCLI_SHELL_INTEGRATION".into(), "1".into())],
-        integration_args(kind, &path.to_string_lossy()),
-    )
+    let mut env_pairs = vec![("ONETCLI_SHELL_INTEGRATION".into(), "1".into())];
+    if show_timestamps {
+        env_pairs.push(("_ONETCLI_TIMESTAMP".into(), "1".into()));
+    }
+    (env_pairs, integration_args(kind, &path.to_string_lossy()))
 }
 
 #[cfg(any(test, target_os = "windows"))]
@@ -232,7 +243,7 @@ mod tests {
         ));
         let _ = fs::remove_dir_all(&session_dir);
 
-        let (env, args) = prepare_in_dir("pwsh.exe", &session_dir);
+        let (env, args) = prepare_in_dir("pwsh.exe", &session_dir, false);
 
         assert_eq!(env, vec![("ONETCLI_SHELL_INTEGRATION".into(), "1".into())]);
         assert_eq!(args.first().map(String::as_str), Some("-NoLogo"));
@@ -268,7 +279,7 @@ mod tests {
         fs::set_permissions(&integration_path, permissions)
             .expect("should make integration script read-only");
 
-        let (env, args) = prepare_in_dir("pwsh.exe", &session_dir);
+        let (env, args) = prepare_in_dir("pwsh.exe", &session_dir, false);
 
         assert_eq!(env, vec![("ONETCLI_SHELL_INTEGRATION".into(), "1".into())]);
         assert_eq!(
