@@ -822,6 +822,13 @@ fn close_active_window_default_shortcut() -> &'static str {
 
 const LOG_FILE_NAME: &str = "onetcli.log";
 
+/// 单个日志文件的大小上限。超过后会在下次打开时轮转到 `<文件名>.1`，
+/// 避免长期使用把日志撑到 GB 级（实测 48 天可到 1.2G）。
+pub(crate) const LOG_FILE_MAX_BYTES: u64 = 64 * 1024 * 1024;
+
+/// 轮转后保留的历史文件后缀，只保留最近一份，所以磁盘上限约为 2 × `LOG_FILE_MAX_BYTES`。
+const LOG_FILE_ROTATED_SUFFIX: &str = ".1";
+
 pub(crate) fn configured_log_file_path(value: &str) -> anyhow::Result<PathBuf> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -854,11 +861,37 @@ pub(crate) fn log_file_appender(path: &Path) -> std::io::Result<std::fs::File> {
         std::fs::create_dir_all(parent)?;
     }
 
+    // 在打开之前轮转：改名后重新创建同名文件，本次写入照常落到干净的日志里。
+    rotate_oversized_log(path);
+
     let mut options = std::fs::OpenOptions::new();
     options.create(true).append(true);
     #[cfg(unix)]
     options.mode(0o600);
     options.open(path)
+}
+
+/// 日志超过 [`LOG_FILE_MAX_BYTES`] 时把它改名为 `<文件名>.1`（覆盖上一份）。
+///
+/// 改名走 inode，因此即使另有实例正持有旧文件也不会丢日志——对方继续写 `.1`，
+/// 本实例写新文件。轮转失败（权限、磁盘满等）只意味着体积不收敛，绝不能挡住日志本身。
+fn rotate_oversized_log(path: &Path) {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return;
+    };
+    if metadata.len() < LOG_FILE_MAX_BYTES {
+        return;
+    }
+
+    let mut rotated = path.as_os_str().to_os_string();
+    rotated.push(LOG_FILE_ROTATED_SUFFIX);
+    let rotated = PathBuf::from(rotated);
+
+    // Unix 上 `rename` 会覆盖已存在的目标，Windows 上不保证，先删更稳。
+    let _ = std::fs::remove_file(&rotated);
+    if let Err(error) = std::fs::rename(path, &rotated) {
+        tracing::warn!(%error, path = %path.display(), "日志轮转失败，继续追加到原文件");
+    }
 }
 
 /// 内置 Navop AI 模型列表的定期刷新间隔（已登录时）。
@@ -1663,9 +1696,9 @@ impl OnetCliApp {
 #[cfg(test)]
 mod tests {
     use super::{
-        GlobalSshSessionService, LOG_FILE_NAME, close_active_window_default_shortcut,
-        configured_log_file_path, default_log_file_path, init_ssh_session_service,
-        initial_content_layout, log_file_appender,
+        GlobalSshSessionService, LOG_FILE_MAX_BYTES, LOG_FILE_NAME,
+        close_active_window_default_shortcut, configured_log_file_path, default_log_file_path,
+        init_ssh_session_service, initial_content_layout, log_file_appender,
     };
     use one_core::gpui_tokio::Tokio;
     use ssh::SshSessionServiceState;
@@ -2348,6 +2381,60 @@ mod tests {
         assert_eq!(mode, 0o600);
 
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn log_file_appender_rotates_oversized_log() {
+        let dir =
+            std::env::temp_dir().join(format!("onetcli-log-rotate-test-{}", std::process::id()));
+        let path = dir.join("app.log");
+        std::fs::create_dir_all(&dir).expect("应创建测试目录");
+
+        // 用 set_len 撑到上限，避免真的写 64MB。
+        let oversized = std::fs::File::create(&path).expect("应创建测试日志");
+        oversized
+            .set_len(LOG_FILE_MAX_BYTES)
+            .expect("应把测试日志撑到大小上限");
+        drop(oversized);
+
+        let _file = log_file_appender(&path).expect("应轮转后重新创建日志文件");
+
+        let rotated = dir.join("app.log.1");
+        assert_eq!(
+            LOG_FILE_MAX_BYTES,
+            std::fs::metadata(&rotated)
+                .expect("应保留轮转后的历史日志")
+                .len()
+        );
+        assert_eq!(
+            0,
+            std::fs::metadata(&path).expect("应新建空日志").len(),
+            "轮转后本次运行写入的应是干净文件"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn log_file_appender_keeps_undersized_log_in_place() {
+        let dir =
+            std::env::temp_dir().join(format!("onetcli-log-keep-test-{}", std::process::id()));
+        let path = dir.join("app.log");
+        std::fs::create_dir_all(&dir).expect("应创建测试目录");
+        std::fs::write(&path, "0123456789\n").expect("应写入测试日志");
+
+        let _file = log_file_appender(&path).expect("应追加到原日志");
+
+        assert_eq!(
+            "0123456789\n",
+            std::fs::read_to_string(&path).expect("应读取日志")
+        );
+        assert!(
+            !dir.join("app.log.1").exists(),
+            "未达上限不得轮转，否则会丢日志"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
