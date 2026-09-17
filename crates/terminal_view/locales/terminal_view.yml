@@ -2088,6 +2088,14 @@ FileManager:
     en: "Failed to read directory: %{error}. Returned to your working directory."
     zh-CN: "读取目录失败：%{error}。已返回你的工作目录。"
     zh-HK: "讀取目錄失敗：%{error}。已返回你的工作目錄。"
+  foreign_host_notice:
+    en: "Terminal is now on %{host}; the file panel is still connected to %{connection}."
+    zh-CN: "终端已进入 %{host}，文件面板仍连接 %{connection}。"
+    zh-HK: "終端已進入 %{host}，檔案面板仍連線 %{connection}。"
+  foreign_host_hint:
+    en: "Directory sync is paused: SFTP follows the connection's host, so nested SSH sessions are not tracked. Save the host as its own connection with this one as jump host to browse it here."
+    zh-CN: "已暂停目录同步：SFTP 跟随连接所在主机，嵌套 SSH 不会被跟踪。把该主机保存为独立连接、跳板机填当前主机即可在这里浏览它。"
+    zh-HK: "已暫停目錄同步：SFTP 跟隨連線所在主機，嵌套 SSH 不會被追蹤。將該主機存為獨立連線、跳板機填目前主機即可在此瀏覽。"
   retry:
     en: Retry
     zh-CN: 重试

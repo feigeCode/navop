@@ -132,8 +132,8 @@ pub enum TerminalModelEvent {
     CommandHistoryChanged,
     /// 终端程序请求存储到剪贴板
     ClipboardStore(String),
-    /// 远程工作目录变更（OSC 7）
-    WorkingDirChanged(String),
+    /// 远程工作目录变更（OSC 7），带上报主机名
+    WorkingDirChanged(crate::osc::ReportedWorkingDir),
     /// 会话锁定/解锁状态变化
     LockStateChanged,
 }
@@ -1180,7 +1180,8 @@ pub struct Terminal {
     /// 终端标题
     title: String,
     /// 当前工作目录（由 OSC 7 更新，仅 SSH 终端）
-    current_working_dir: Option<String>,
+    /// 最近一次 OSC 7 上报的远程工作目录（含上报主机名）
+    reported_working_dir: Option<crate::osc::ReportedWorkingDir>,
     /// 子进程退出码
     child_exited: Option<i32>,
     /// 连接状态
@@ -1660,7 +1661,7 @@ impl Terminal {
             recording_session_id,
             recording_session_metadata: local_recording_session_metadata(),
             title: String::new(),
-            current_working_dir: None,
+            reported_working_dir: None,
             child_exited: None,
             connection_state: ConnectionState::Disconnected { error: Some(error) },
             session_lock: None,
@@ -1813,7 +1814,7 @@ impl Terminal {
             recording_session_id,
             recording_session_metadata,
             title: String::new(),
-            current_working_dir: None,
+            reported_working_dir: None,
             child_exited: None,
             connection_state: ConnectionState::Connected,
             session_lock: None,
@@ -1958,7 +1959,7 @@ impl Terminal {
             recording_session_id,
             recording_session_metadata,
             title: String::new(),
-            current_working_dir: None,
+            reported_working_dir: None,
             child_exited: None,
             connection_state: ConnectionState::Connecting,
             session_lock: None,
@@ -2092,7 +2093,7 @@ impl Terminal {
             recording_session_id,
             recording_session_metadata,
             title: String::new(),
-            current_working_dir: None,
+            reported_working_dir: None,
             child_exited: None,
             connection_state: ConnectionState::Connecting,
             session_lock: None,
@@ -2212,7 +2213,7 @@ impl Terminal {
             recording_session_id,
             recording_session_metadata,
             title: String::new(),
-            current_working_dir: None,
+            reported_working_dir: None,
             child_exited: None,
             connection_state: ConnectionState::Connecting,
             session_lock: None,
@@ -2354,7 +2355,7 @@ impl Terminal {
                 recording_session_id: Self::new_recording_session_id(),
                 recording_session_metadata: RecordingSessionMetadata::default(),
                 title: String::new(),
-                current_working_dir: None,
+                reported_working_dir: None,
                 child_exited: None,
                 // Connected suppresses the live reconnect overlay. Capability
                 // checks still fail closed through `session_mode`.
@@ -3107,7 +3108,7 @@ impl Terminal {
         let Some(command) = normalize_recorded_command(command, history_user.as_deref()) else {
             return;
         };
-        let cwd = self.current_working_dir.clone();
+        let cwd = self.current_working_dir().map(str::to_string);
         let entry = HistoryEntry::new(command.clone())
             .with_cwd(cwd.clone())
             .with_exit_code(Some(exit_code));
@@ -3228,9 +3229,9 @@ impl Terminal {
             TerminalEvent::ClipboardLoad(_ty) => {
                 // 剪贴板加载由 TerminalView 处理
             }
-            TerminalEvent::WorkingDirChanged(path) => {
-                self.current_working_dir = Some(path.clone());
-                cx.emit(TerminalModelEvent::WorkingDirChanged(path));
+            TerminalEvent::WorkingDirChanged(reported) => {
+                self.reported_working_dir = Some(reported.clone());
+                cx.emit(TerminalModelEvent::WorkingDirChanged(reported));
             }
             TerminalEvent::CommandFinished { exit_code } => {
                 tracing::debug!("命令执行完毕，退出码: {}", exit_code);
@@ -3278,7 +3279,17 @@ impl Terminal {
 
     /// 获取当前工作目录（由 OSC 7 更新，仅 SSH 终端）
     pub fn current_working_dir(&self) -> Option<&str> {
-        self.current_working_dir.as_deref()
+        self.reported_working_dir
+            .as_ref()
+            .map(|reported| reported.path.as_str())
+    }
+
+    /// 获取最近一次 OSC 7 上报的完整信息（路径 + 上报主机名）。
+    ///
+    /// 多跳会话里主机名是判断"这条路径属于哪台机器"的唯一依据，
+    /// 需要主机信息的下游（如侧边栏文件面板）应使用本方法。
+    pub fn reported_working_dir(&self) -> Option<&crate::osc::ReportedWorkingDir> {
+        self.reported_working_dir.as_ref()
     }
 
     pub fn rows(&self) -> usize {
@@ -3308,7 +3319,7 @@ impl Terminal {
             &self.persisted_history,
             prefix,
             limit,
-            self.current_working_dir.as_deref(),
+            self.current_working_dir(),
         );
         merge_history_matches(db_matches, fallback, limit)
     }
@@ -4205,7 +4216,7 @@ impl Terminal {
         }
         drop(term);
         self.child_exited = None;
-        self.current_working_dir = None;
+        self.reported_working_dir = None;
     }
 
     pub fn host_key_verification_request(&self) -> Option<HostKeyVerificationRequest> {
@@ -4714,7 +4725,7 @@ mod tests {
                 ..RecordingSessionMetadata::default()
             },
             title: String::new(),
-            current_working_dir: None,
+            reported_working_dir: None,
             child_exited: None,
             connection_state: ConnectionState::Connected,
             session_lock: None,
@@ -6866,7 +6877,10 @@ mod tests {
             recording_session_id: "surface-reset-test-session".to_string(),
             recording_session_metadata: RecordingSessionMetadata::default(),
             title: "old title".to_string(),
-            current_working_dir: Some("/tmp/project".to_string()),
+            reported_working_dir: Some(crate::osc::ReportedWorkingDir::new(
+                Some("host"),
+                "/tmp/project".to_string(),
+            )),
             child_exited: Some(255),
             connection_state: ConnectionState::Connected,
             session_lock: None,
@@ -7150,7 +7164,7 @@ mod tests {
             recording_session_id: "scrollback-test-session".to_string(),
             recording_session_metadata: RecordingSessionMetadata::default(),
             title: String::new(),
-            current_working_dir: None,
+            reported_working_dir: None,
             child_exited: None,
             connection_state: ConnectionState::Connected,
             session_lock: None,
