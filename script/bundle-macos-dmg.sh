@@ -36,7 +36,6 @@ create_dmg() {
             -volname "${APP_NAME}" \
             -srcfolder "$TMP_DIR" \
             -ov \
-            -size 200m \
             -format UDZO \
             "$tmp_dmg"; then
             mv -f "$tmp_dmg" "$DMG_PATH"

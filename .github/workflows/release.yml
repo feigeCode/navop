@@ -443,6 +443,12 @@ jobs:
           chmod +x script/bundle-macos.sh
           chmod +x script/bundle-macos-dmg.sh
           script/bundle-macos.sh ${{ matrix.target }}
+          # 释放磁盘：release target 目录很大，DMG 制作（在 target/ 下写入镜像）
+          # 会因 runner 空间不足而失败（hdiutil: No space left on device）。
+          df -h
+          rm -rf target/release/deps target/release/build target/release/incremental target/release/.fingerprint
+          rm -rf "target/${{ matrix.target }}/release/deps" "target/${{ matrix.target }}/release/build" "target/${{ matrix.target }}/release/incremental" "target/${{ matrix.target }}/release/.fingerprint"
+          df -h
           script/bundle-macos-dmg.sh ${{ matrix.target }}
           tar czf ${{ matrix.archive }} -C target Navop.app
           cp "${{ matrix.archive }}" "${PUBLIC_BASENAME}.tar.gz"
