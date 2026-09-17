@@ -370,7 +370,13 @@ fn init_tracing(settings: &AppSettings) {
                 Box::leak(Box::new(guard));
                 tracing_subscriber::registry()
                     .with(tracing_subscriber::fmt::layer())
-                    .with(tracing_subscriber::fmt::layer().with_writer(non_blocking))
+                    // 写文件的那一层必须关掉颜色：终端里的样式码落到文件里就是每行
+                    // 前后裹一层转义序列，肉眼读不了、grep 也过滤不干净。
+                    .with(
+                        tracing_subscriber::fmt::layer()
+                            .with_ansi(false)
+                            .with_writer(non_blocking),
+                    )
                     .with(env_filter)
                     .init();
             }
@@ -3600,6 +3606,32 @@ mod tests {
         assert_eq!(shortcut.keys_other, &["ctrl-shift-w"]);
         assert!(!shortcut.keys_macos.contains(&"ctrl-d"));
         assert!(!shortcut.keys_other.contains(&"ctrl-d"));
+    }
+
+    #[test]
+    fn file_log_layer_disables_ansi_escapes() {
+        let source = include_str!("setting_tab.rs");
+        let compact: String = source.split_whitespace().collect();
+
+        // needle 运行时拼接：写成字面量的话，这个守卫会命中它自己。
+        let file_layer = [
+            "fmt::layer()",
+            ".with_ansi(",
+            "false)",
+            ".with_writer(non_blocking)",
+        ]
+        .concat();
+        assert!(
+            compact.contains(&file_layer),
+            "写文件的那一层必须关掉 ANSI，否则日志每行都裹着转义序列"
+        );
+
+        let ansi_off = [".with_ansi(", "false)"].concat();
+        assert_eq!(
+            1,
+            compact.matches(&ansi_off).count(),
+            "只该对写文件的那一层关 ANSI；终端那一层要保留颜色"
+        );
     }
 
     #[test]
