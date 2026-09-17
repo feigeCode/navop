@@ -162,7 +162,8 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ matrix.target == 'aarch64-apple-darwin' && 180 || matrix.arm_linux && 180 || 120 }}
+    # fat LTO + codegen-units=1 让链接阶段更慢（Windows x64 基线已 64min），一律给 180min
+    timeout-minutes: 180
 
     steps:
       - uses: actions/checkout@v7
