@@ -118,7 +118,51 @@ pub(crate) fn connection_title(connection: &StoredConnection) -> String {
 pub(crate) fn load_connection(id: i64, cx: &App) -> Option<StoredConnection> {
     let storage = cx.try_global::<GlobalStorageState>()?;
     let repository = storage.storage.get::<ConnectionRepository>()?;
-    repository.get(id).ok().flatten()
+    let connection = repository.get(id).ok().flatten()?;
+    Some(with_runtime_credentials(&repository, connection))
+}
+
+/// 解析左侧端点建连所需的运行时凭据。
+///
+/// 记住的密码只存在于凭据库里，直接用存储记录会拿空密码建连并连接失败；
+/// 凭据库拿不到（例如本机缺少该钥匙串）时退化为「本次连接输入」，
+/// 由切换流程弹窗收集。
+fn with_runtime_credentials(
+    repository: &ConnectionRepository,
+    connection: StoredConnection,
+) -> StoredConnection {
+    match repository.resolve_runtime_connection(&connection) {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            tracing::warn!(
+                connection_id = ?connection.id,
+                error = %error,
+                "解析左侧端点凭据失败，改为本次连接输入"
+            );
+            prompt_for_credentials(connection)
+        }
+    }
+}
+
+fn prompt_for_credentials(mut connection: StoredConnection) -> StoredConnection {
+    if connection.connection_type != ConnectionType::SshSftp {
+        return connection;
+    }
+    let Ok(mut params) = connection.to_ssh_params() else {
+        return connection;
+    };
+    params.credential_reference = None;
+    params.username.clear();
+    params.auth_method = SshAuthMethod::Password {
+        password: String::new(),
+    };
+    params.prompt_username = Some(true);
+    params.prompt_password = Some(true);
+    match serde_json::to_string(&params) {
+        Ok(params) => connection.params = params,
+        Err(error) => tracing::warn!(error = %error, "构造待录入凭据的连接参数失败"),
+    }
+    connection
 }
 
 fn ssh_connections(cx: &App) -> Vec<StoredConnection> {
@@ -313,5 +357,6 @@ use gpui::{App, SharedString};
 use gpui_component::select::SelectItem;
 use one_assets::IconName;
 use one_core::storage::{
-    ConnectionRepository, ConnectionType, GlobalStorageState, StoredConnection, traits::Repository,
+    ConnectionRepository, ConnectionType, GlobalStorageState, SshAuthMethod, StoredConnection,
+    traits::Repository,
 };

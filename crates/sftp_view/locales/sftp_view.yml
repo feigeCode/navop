@@ -522,6 +522,10 @@ Credentials:
     en: Connect
     zh-CN: 连接
     zh-HK: 連線
+  cancel:
+    en: Cancel
+    zh-CN: 取消
+    zh-HK: 取消
   username_required:
     en: Username is required.
     zh-CN: 请输入用户名。

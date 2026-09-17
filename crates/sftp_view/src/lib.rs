@@ -9,6 +9,7 @@ mod file_clipboard;
 mod file_list_panel;
 mod file_list_preferences;
 mod host_key_prompt;
+mod left_credential_prompt;
 mod left_remote;
 mod left_remote_state;
 mod ssh_config;
@@ -95,6 +96,7 @@ use std::time::{Duration, SystemTime};
 use tokio::sync::Mutex;
 
 use host_key_prompt::{HostKeyPromptTarget, host_key_prompt_request};
+use left_credential_prompt::LeftCredentialInputs;
 use left_remote_state::{LeftRemoteConnectionState, LeftRemoteEndpoint};
 
 actions!(
@@ -1580,6 +1582,8 @@ pub struct SftpView {
     /// 连接成功后进入的 SFTP 初始目录（配置的 `sftp_default_directory`）；`None` 时回退到服务器登录目录。
     sftp_initial_directory: Option<String>,
     credential_inputs: Option<SftpCredentialInputs>,
+    /// 左侧端点切换时用于录入临时凭据的弹窗状态；`None` 表示不需要提示。
+    left_credential_inputs: Option<LeftCredentialInputs>,
     /// 远程文件协议为 FTP 时的独立 FTP 连接配置；`None` 表示走 SFTP。
     remote_file_ftp: Option<FtpConnectConfig>,
     sftp_client: Option<SharedRemoteFileClient>,
@@ -1900,6 +1904,7 @@ impl SftpView {
             sftp_initial_directory,
             remote_file_ftp,
             credential_inputs,
+            left_credential_inputs: None,
             sftp_client: None,
             connection_generation: ConnectionGeneration::default(),
             left_connection_generation: ConnectionGeneration::default(),
@@ -6980,6 +6985,24 @@ impl SftpView {
                                             .child(Spinner::new().with_size(Size::Large)),
                                     )
                                 })
+                                .into_any_element(),
+                            LeftRemoteConnectionState::AwaitingCredentials => v_flex()
+                                .size_full()
+                                .justify_center()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    Icon::new(IconName::Key)
+                                        .with_size(IconSize::Medium)
+                                        .text_color(cx.theme().muted_foreground),
+                                )
+                                .child(t!("Credentials.title").to_string())
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(t!("Credentials.hint").to_string()),
+                                )
                                 .into_any_element(),
                             LeftRemoteConnectionState::Connecting => h_flex()
                                 .size_full()
