@@ -402,6 +402,20 @@ fn activate_tab_by_number(number: usize, cx: &mut App) {
     });
 }
 
+/// 按标签 id 激活（托盘「会话」菜单项入口）。id 已消失时静默忽略。
+pub(crate) fn activate_tab_by_id(id: &str, window: &mut Window, cx: &mut App) {
+    let Some(container) = cx.try_global::<GlobalTabContainer>() else {
+        return;
+    };
+    let container = container.tab_container.clone();
+
+    container.update(cx, |tc, cx| {
+        if let Some(index) = tc.tabs().iter().position(|tab| tab.id().as_ref() == id) {
+            tc.set_active_index(index, window, cx);
+        }
+    });
+}
+
 fn switch_tab(direction: TabCycleDirection, cx: &mut App) {
     let Some(active_window) = cx.active_window() else {
         return;
@@ -1534,6 +1548,14 @@ impl NavopApp {
                 }
             }
         })
+        .detach();
+        // 标签集合/激活态变化 → 重建托盘「会话」菜单。菜单展开与否不可观测，只能推送。
+        cx.subscribe(
+            &tab_container,
+            |_this, _, _event: &TabContainerEvent, cx| {
+                cx.defer(|cx| crate::system_tray::sync_sessions_from(cx));
+            },
+        )
         .detach();
         if let Some(active_pinned_index) = layout.active_pinned_index {
             let tabs = tab_container.clone();

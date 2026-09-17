@@ -496,6 +496,7 @@ fn main() {
                 let view = cx.new(|cx| NavopApp::new(window, cx));
                 let root = cx.new(|cx| Root::new(view, window, cx));
                 let tab_container = cx.global::<GlobalTabContainer>().tab_container.clone();
+                system_tray::sync_sessions_from(cx);
                 cx.subscribe(&root, move |_, event: &DialogStateChanged, cx| {
                     tab_container.update(cx, |tabs, cx| {
                         tabs.set_active_presentation_obscured_by_dialog(event.active_count > 0, cx);

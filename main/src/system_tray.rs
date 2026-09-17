@@ -24,15 +24,20 @@
 
 use anyhow::Context as _;
 use gpui::{AnyWindowHandle, App, AppContext as _, AsyncApp};
+use one_core::tab_container::GlobalTabContainer;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(debug_assertions)]
 use std::time::Duration;
 
 /// 托盘回调允许产出的命令。刻意保持最小集合。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TrayCommand {
     ShowMainWindow,
+    /// 激活指定 id 的已打开标签（托盘菜单里的「会话」项）。
+    ActivateSession {
+        id: String,
+    },
     QuitApplication,
 }
 
@@ -48,6 +53,13 @@ pub(crate) enum MainWindowCloseAction {
 /// 托盘菜单项 id。
 pub(crate) const MENU_ID_SHOW: &str = "navop.tray.show";
 pub(crate) const MENU_ID_QUIT: &str = "navop.tray.quit";
+/// 「会话」菜单项 id 前缀，后面直接拼标签 id。
+pub(crate) const MENU_ID_SESSION_PREFIX: &str = "navop.tray.session.";
+
+/// 菜单里最多列出的会话数：托盘菜单是一级平铺列表，放着不管会高到点不动。
+pub(crate) const TRAY_SESSION_LIMIT: usize = 8;
+/// 会话标题最长保留的字符数，超出用省略号收尾。
+pub(crate) const TRAY_SESSION_LABEL_MAX_CHARS: usize = 40;
 
 /// 关闭按钮的纯策略：只有托盘确实可用时才隐藏窗口，否则必须回退到退出确认，
 /// 不能制造一个无法恢复的隐藏窗口。
@@ -59,12 +71,45 @@ pub(crate) const fn main_window_close_action(tray_ready: bool) -> MainWindowClos
     }
 }
 
+/// 标签列表 → 托盘菜单项 `(菜单 id, 显示文案)` 的纯映射：截断数量、压平换行、
+/// 超长标题加省略号。超出上限的会话直接丢掉（托盘不是完整的标签管理器）。
+pub(crate) fn session_menu_entries(sessions: &[(String, String)]) -> Vec<(String, String)> {
+    sessions
+        .iter()
+        .take(TRAY_SESSION_LIMIT)
+        .map(|(id, title)| {
+            (
+                format!("{MENU_ID_SESSION_PREFIX}{id}"),
+                truncate_session_label(title),
+            )
+        })
+        .collect()
+}
+
+fn truncate_session_label(title: &str) -> String {
+    let single_line: String = title
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let trimmed = single_line.trim();
+    if trimmed.chars().count() <= TRAY_SESSION_LABEL_MAX_CHARS {
+        return trimmed.to_owned();
+    }
+    let head: String = trimmed.chars().take(TRAY_SESSION_LABEL_MAX_CHARS).collect();
+    format!("{head}…")
+}
+
 /// 菜单项 id → 命令的纯映射。未知 id（例如未来新增菜单项）一律忽略。
 pub(crate) fn command_for_menu_id(id: &str) -> Option<TrayCommand> {
     match id {
         MENU_ID_SHOW => Some(TrayCommand::ShowMainWindow),
         MENU_ID_QUIT => Some(TrayCommand::QuitApplication),
-        _ => None,
+        _ => id
+            .strip_prefix(MENU_ID_SESSION_PREFIX)
+            .filter(|tab_id| !tab_id.is_empty())
+            .map(|tab_id| TrayCommand::ActivateSession {
+                id: tab_id.to_owned(),
+            }),
     }
 }
 
@@ -104,6 +149,36 @@ pub(crate) fn is_available() -> bool {
     TRAY_READY.load(Ordering::SeqCst)
 }
 
+/// 把当前打开的标签同步进托盘菜单的「会话」段。
+///
+/// 只该在 GPUI 主线程上调用：托盘句柄是线程本地的，菜单操作必须留在创建它的
+/// 线程（macOS 的 AppKit 硬要求，Windows 的 `set_menu` 也只是给自己 hwnd 发消息）。
+pub(crate) fn sync_sessions_from(cx: &mut App) {
+    if !is_available() {
+        return;
+    }
+    let Some(global) = cx.try_global::<GlobalTabContainer>() else {
+        return;
+    };
+    let container = global.tab_container.clone();
+    let sessions: Vec<(String, String)> = container
+        .read(cx)
+        .tabs()
+        .iter()
+        .map(|tab| (tab.id().to_string(), tab.title(cx).to_string()))
+        .collect();
+
+    sync_sessions(&sessions);
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+fn sync_sessions(sessions: &[(String, String)]) {
+    desktop::sync_sessions(sessions);
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+fn sync_sessions(_sessions: &[(String, String)]) {}
+
 static COMMAND_TX: OnceLock<smol::channel::Sender<TrayCommand>> = OnceLock::new();
 static TRAY_READY: AtomicBool = AtomicBool::new(false);
 static INITIALIZED: OnceLock<()> = OnceLock::new();
@@ -121,8 +196,9 @@ fn install_dispatcher(cx: &mut App) {
     cx.spawn(async move |cx: &mut AsyncApp| {
         let mut cx = cx.clone();
         while let Ok(command) = rx.recv().await {
+            let attempted = command.clone();
             if let Err(error) = execute_command(command, &mut cx) {
-                tracing::warn!(%error, ?command, "托盘命令执行失败");
+                tracing::warn!(%error, ?attempted, "托盘命令执行失败");
             }
         }
         tracing::debug!("托盘命令通道已关闭，停止消费");
@@ -136,8 +212,10 @@ fn dispatch(command: TrayCommand) {
         tracing::warn!(?command, "托盘命令通道尚未安装，丢弃命令");
         return;
     };
+    // `TrayCommand` 不再 `Copy`（会话 id 是 `String`），失败日志要留一份副本。
+    let attempted = command.clone();
     if let Err(error) = tx.try_send(command) {
-        tracing::warn!(%error, ?command, "托盘命令入队失败");
+        tracing::warn!(%error, ?attempted, "托盘命令入队失败");
     }
 }
 
@@ -157,6 +235,16 @@ fn execute_command(command: TrayCommand, cx: &mut AsyncApp) -> anyhow::Result<()
     match command {
         TrayCommand::ShowMainWindow => {
             restore_main_window(handle, cx)?;
+        }
+        TrayCommand::ActivateSession { id } => {
+            // 会话在窗口不可见时也可能被选中，先恢复窗口再切标签。
+            restore_main_window(handle, cx)?;
+            // 用刚恢复的 handle，而不是 `cx.active_window()`：窗口刚从隐藏状态激活时
+            // 激活请求还挂在 GPUI 前台执行器上，此刻 active_window 可能是 None。
+            cx.update_window(handle, |_, window, cx| {
+                crate::navop_app::activate_tab_by_id(&id, window, cx);
+            })
+            .context("托盘切换会话时无法操作主窗口")?;
         }
         TrayCommand::QuitApplication => {
             // 退出确认必须落在用户看得见的窗口上。恢复失败也继续往下走：用户已经
@@ -312,13 +400,7 @@ mod desktop {
         let (rgba, width, height) = decode_tray_icon(TRAY_ICON_PNG)?;
         let icon = tray_icon::Icon::from_rgba(rgba, width, height)?;
 
-        let show = MenuItem::with_id(MENU_ID_SHOW, "显示 Navop", true, None);
-        let quit = MenuItem::with_id(MENU_ID_QUIT, "退出 Navop", true, None);
-        let separator = PredefinedMenuItem::separator();
-        let menu = Menu::new();
-        menu.append(&show)?;
-        menu.append(&separator)?;
-        menu.append(&quit)?;
+        let menu = build_menu(&[])?;
 
         let tray = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
@@ -334,6 +416,43 @@ mod desktop {
         Ok(())
     }
 
+    /// 会话段 → 分隔线 → 显示/退出。会话段为空时不留下孤立分隔线。
+    fn build_menu(sessions: &[(String, String)]) -> anyhow::Result<Menu> {
+        let menu = Menu::new();
+        let entries = session_menu_entries(sessions);
+        for (id, label) in &entries {
+            menu.append(&MenuItem::with_id(id.clone(), label.clone(), true, None))?;
+        }
+        if !entries.is_empty() {
+            menu.append(&PredefinedMenuItem::separator())?;
+        }
+
+        let show = MenuItem::with_id(MENU_ID_SHOW, "显示 Navop", true, None);
+        let quit = MenuItem::with_id(MENU_ID_QUIT, "退出 Navop", true, None);
+        let separator = PredefinedMenuItem::separator();
+        menu.append(&show)?;
+        menu.append(&separator)?;
+        menu.append(&quit)?;
+        Ok(menu)
+    }
+
+    /// 原地换菜单。`TrayIcon` 是 `!Send`，这里只在创建它的线程上被调用。
+    pub(super) fn sync_sessions(sessions: &[(String, String)]) {
+        let menu = match build_menu(sessions) {
+            Ok(menu) => menu,
+            Err(error) => {
+                tracing::warn!(%error, "重建托盘会话菜单失败");
+                return;
+            }
+        };
+
+        TRAY_ICON.with(|slot| {
+            if let Some(tray) = slot.borrow().as_ref() {
+                tray.set_menu(Some(Box::new(menu)));
+            }
+        });
+    }
+
     fn handle_menu_event(event: MenuEvent) {
         if let Some(command) = command_for_menu_id(event.id().as_ref()) {
             dispatch(command);
@@ -346,6 +465,8 @@ mod desktop {
     pub(super) fn install() -> anyhow::Result<()> {
         anyhow::bail!("当前平台未实现系统托盘")
     }
+
+    pub(super) fn sync_sessions(_sessions: &[(String, String)]) {}
 }
 
 #[cfg(test)]
@@ -376,6 +497,41 @@ mod tests {
         );
         assert_eq!(None, command_for_menu_id("navop.tray.unknown"));
         assert_eq!(None, command_for_menu_id(""));
+    }
+
+    #[test]
+    fn session_menu_ids_round_trip_into_activation_commands() {
+        assert_eq!(
+            Some(TrayCommand::ActivateSession {
+                id: "tab-42".to_owned()
+            }),
+            command_for_menu_id(&format!("{MENU_ID_SESSION_PREFIX}tab-42"))
+        );
+        // 前缀后面的 id 不能为空，否则「空会话」会变成可点击的幽灵菜单项
+        // （历史上 `menu_ids_map_to_the_minimal_command_set` 就把 "" 当成未知 id）。
+        assert_eq!(None, command_for_menu_id(MENU_ID_SESSION_PREFIX));
+    }
+
+    #[test]
+    fn session_entries_are_capped_and_their_labels_are_flattened() {
+        let sessions: Vec<(String, String)> = (0..TRAY_SESSION_LIMIT + 5)
+            .map(|index| (format!("tab-{index}"), format!("会话 {index}")))
+            .collect();
+        let entries = session_menu_entries(&sessions);
+
+        assert_eq!(TRAY_SESSION_LIMIT, entries.len());
+        assert_eq!(format!("{MENU_ID_SESSION_PREFIX}tab-0"), entries[0].0);
+
+        let long = "标".repeat(TRAY_SESSION_LABEL_MAX_CHARS + 10);
+        let entries = session_menu_entries(&[("tab-long".to_owned(), long.clone())]);
+        assert_eq!(
+            format!("{}…", "标".repeat(TRAY_SESSION_LABEL_MAX_CHARS)),
+            entries[0].1
+        );
+
+        let entries =
+            session_menu_entries(&[("tab-multi".to_owned(), "第一行\n第二行".to_owned())]);
+        assert_eq!("第一行 第二行", entries[0].1);
     }
 
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
