@@ -517,11 +517,17 @@ impl Drop for TransientSecretGuard {
 /// background executor from that thread, which the GPUI test scheduler rejects
 /// as non-deterministic. Ownership is therefore asserted here, where no
 /// background work is involved.
-pub(crate) fn register_application_owner(cx: &mut gpui::App) -> UniversalPluginService {
-    assert!(
-        cx.try_global::<GlobalUniversalPluginService>().is_none(),
-        "universal plugin service must have exactly one application owner"
-    );
+/// Returns `None` when a previous call already registered the owner.
+///
+/// `panic` is not used because the release profile is `panic = "abort"`, where
+/// `catch_unwind` cannot observe it. Callers that treat a duplicate as a bug
+/// should `expect` the returned `Option`.
+pub(crate) fn register_application_owner(
+    cx: &mut gpui::App,
+) -> Option<UniversalPluginService> {
+    if cx.try_global::<GlobalUniversalPluginService>().is_some() {
+        return None;
+    }
 
     let catalog_source = cx.default_global::<GlobalExtensionRuntimeCatalog>().clone();
     let secrets = cx
@@ -533,11 +539,12 @@ pub(crate) fn register_application_owner(cx: &mut gpui::App) -> UniversalPluginS
     ));
     let service = global.service();
     cx.set_global(global);
-    service
+    Some(service)
 }
 
 pub fn init(cx: &mut gpui::App) {
-    let service = register_application_owner(cx);
+    let service = register_application_owner(cx)
+        .expect("universal plugin service must have exactly one application owner");
     let startup_service = service.clone();
     let quit_service = service.clone();
     #[cfg(feature = "shell-plugins")]
@@ -593,13 +600,15 @@ mod tests {
     /// hand out clones of one owner. `init` is deliberately not used here: its
     /// monitor task completes on a real Tokio worker and wakes GPUI's
     /// background executor from that thread, which makes `#[gpui::test]` abort.
-    // `catch_unwind` 观察「重复注册必须 panic」；panic=abort（release profile）下
-    // 没有展开可捕获，这个用例只能直接 abort 测试进程，所以按 profile 跳过。
-    #[cfg(panic = "unwind")]
+    ///
+    /// The duplicate-registration contract is a returned `None`, not a panic:
+    /// the release profile is `panic = "abort"`, where `catch_unwind` cannot
+    /// observe a panic.
     #[gpui::test]
     fn universal_plugin_service_has_one_application_owner(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
-            let registered = register_application_owner(cx);
+            let registered = register_application_owner(cx)
+                .expect("the first registration must install the global owner");
             let first = cx.global::<GlobalUniversalPluginService>().service();
             let second = cx.global::<GlobalUniversalPluginService>().service();
 
@@ -611,15 +620,11 @@ mod tests {
                 registered.same_owner(&first),
                 "the registered service must be the owner stored in the global"
             );
+            assert!(
+                register_application_owner(cx).is_none(),
+                "a second registration must be rejected"
+            );
         });
-
-        let second_registration = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            cx.update(|cx| register_application_owner(cx))
-        }));
-        assert!(
-            second_registration.is_err(),
-            "a second registration must be rejected"
-        );
     }
 
     /// The monitor `init` starts on the Tokio runtime: it must start once and

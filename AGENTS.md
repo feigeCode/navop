@@ -653,6 +653,13 @@
 - **验证方式**：`cargo metadata --format-version 1 --locked --offline`（exit=0 即 toml/lock 一致）、`cargo check --workspace --all-targets`（分支侧、主干各一次）、核心 crate `--lib` 测试；回退用 `git reset --mixed <原 SHA>`（保留工作区改动）。
 - **适用范围**：任何「长期分支 → 主干」的合并。两个易踩的坑：①worktree 的 `MERGE_HEAD` / `ORIG_HEAD` 在 `<主仓>/.git/worktrees/<name>/` 下，不在 worktree 自己的 `.git`（那是 `gitdir:` 指针文件），查后者会误判「合并已结束」；②分支名与 worktree 目录名常不同（如 `impl/ftp-support-172` ↔ `navop-ftp-support-172`）。
 
+- **标题**：release profile 设 `panic = "abort"` 后，`catch_unwind` 既不能做契约断言也不能做隔离，契约要用返回值表达
+- **触发信号**：把 release profile 改成 `panic = "abort"` 后，用 `catch_unwind` 断言「重复注册 / 非法输入必须 panic」的测试在 `cargo test --release` 下把整个测试进程 abort；或看到 `catch_unwind` 包着调用方回调、就以为 release 里仍能隔离该回调的 panic。
+- **根因 / 约束**：`panic = "abort"` 下 panic 直接终止进程，没有展开可捕获，`catch_unwind` 照常编译但永不返回 `Err`。CI 只跑 dev profile（`unwind`），所以这类断言在 CI 里照常通过，只有 `cargo test --release` 或发布二进制才暴露；用 `#[cfg(panic = "unwind")]` 跳过用例会静默丢掉 release 模式的覆盖。尺寸收益是量出来的：`__eh_frame` 16.0MiB + `__gcc_except_tab` 8.6MiB ≈ 24.6MiB，所以改回 `unwind` 不是零成本。
+- **正确做法**：可表达为契约的重复注册 / 非法状态不用 `assert!` + panic，改为返回 `Option` / `Result`，调用方（如插件服务的 `init`）用 `expect` 保留「这是 bug」的强语义，测试直接断言 `is_none()` / `is_err()`，两个 profile 都能跑。跨 FFI / C ABI 边界或调用方回调处的 `catch_unwind` 在 abort 下是死代码，应确认被包住的主体本身 panic-free（如只做 poison-safe 锁、channel send、原子交换），并在注释里写明该守卫只对 `unwind` 构建生效。
+- **验证方式**：dev 与 release 两个 profile 跑同一用例：`cargo test -p universal-plugins --lib` 与 `cargo test --release -p universal-plugins --lib`（release 想省时间只覆盖 `CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16`，`panic` 仍取 profile 值），再用 `cargo test --release -p universal-plugins --lib -- --list` 确认用例不再被 cfg 掉。
+- **适用范围**：`crates/universal-plugins/src/universal_plugins.rs`、`crates/terminal/src/recording/runtime.rs`、`crates/windows_rdp_host/src/event.rs`，以及 profile 设了 `panic = "abort"` 后所有用 `catch_unwind`、`#[should_panic]`、`#[cfg(panic = "unwind")]` 表达契约或隔离的测试与调用点。
+
 ### 执行原则
 
 1. 先澄清，再实现；先缩小边界，再扩展范围。
