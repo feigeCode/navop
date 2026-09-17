@@ -72,22 +72,24 @@ enum TrayCommand {
 
 ### 托盘平台后端
 
-macOS 和 Windows 使用 target-specific `tray-icon` 依赖：
+macOS、Windows、Linux 统一使用 `tray-icon` 的 target-specific 依赖，但 Linux 走它的
+**`ksni` 后端**：
 
-- 在 GPUI 平台事件循环已经启动后创建托盘图标；
-- 使用 `tray_icon::menu` 创建“显示 Navop”和“退出 Navop”；
-- 关闭 `tray-icon` 默认的左键菜单行为，使左键单击只发送 `ShowMainWindow`，右键继续打开菜单；
-- 使用 `TrayIconEvent` 和 `MenuEvent` 转发命令；
-- 托盘对象保存在创建它的平台线程上。
+- macOS / Windows 用原生后端（`NSStatusItem` / `Shell_NotifyIcon`），
+  依赖声明为 `default-features = false`；
+- Linux 依赖声明为 `default-features = false, features = ["ksni"]`：`tray-icon`
+  的默认特性会启用 `libappindicator`（连带 GTK 3 事件循环与 `libappindicator`）
+  和 `libxdo`，两者都不需要；
+- 关掉默认特性后，`tray-icon` 在 Linux 上选择的正是 ksni 后端
+  （`platform_impl/mod.rs` 里 `feature = "ksni"` 才 `mod platform`），
+  运行时仍是 freedesktop/KDE StatusNotifierItem D-Bus 协议，
+  但不需要为 GPUI 引入 GTK，也不需要维护一套 Linux-only 的 `Tray` 实现；
+- 三个平台共用同一套 `TrayIconBuilder` / `TrayIconEvent` / `menu::MenuEvent`
+  API，事件语义差异由平台文档给定（KSNI 只发左/中键激活事件，右键归宿主，
+  `rect` 为空；AppIndicator 后端完全不发事件——本实现不启用它）。
 
-Linux 使用 target-specific `ksni` blocking API：
-
-- 通过 freedesktop/KDE StatusNotifierItem D-Bus 协议提供托盘；
-- 避免为 GPUI 引入 GTK main loop、`libappindicator` 和 `libxdo` 系统依赖；
-- 左键激活和菜单 item 回调只发送统一命令；
-- 桌面环境没有 StatusNotifierItem watcher 时，初始化视为失败，主窗口关闭行为回退到退出确认。
-
-不在本次实现中增加托盘开关、启动时隐藏、通知气泡、动态菜单或后台启动选项。
+不做的事：不改变 `tray-icon` 的图标语义，不启用 `serde`，不使用
+`TrayIconEvent::receiver()`。
 
 ### `window_visibility` 模块
 
@@ -95,17 +97,42 @@ Linux 使用 target-specific `ksni` blocking API：
 
 ```rust
 pub(crate) fn hide_main_window(window: &Window) -> anyhow::Result<()>;
-pub(crate) fn show_main_window(window: &Window, cx: &mut App) -> anyhow::Result<()>;
+pub(crate) fn main_window_target(window: &Window) -> anyhow::Result<NativeMainWindow>;
+pub(crate) fn show_main_window(target: NativeMainWindow) -> anyhow::Result<()>;
 ```
+
+不需要 `cx: &mut App`：恢复窗口用 `Window::activate_window(&self)`，macOS 的整应用
+激活由模块内部用 `NSApplication::activate` 完成。这样调用点（`AsyncApp` 的
+`update_window` 闭包）不必额外借入应用上下文。
+
+**恢复路径刻意拆成两步**（`main_window_target` 取句柄 → 借用释放后 `show_main_window`
+改原生状态）。原生可见性/激活修改会**同步**回调进 GPUI：
+`gpui/src/window.rs` 的 `on_active_status_change` / `on_visibility_change` 直接调
+`handle.update(...)`。若在 `cx.update_window(...)` 的借用内改原生状态，回调会回头抢同一个
+App 借用 ⇒ 二次借用失败，日志只剩 `ERROR gpui::window: RefCell already borrowed`
+（2026-09-17 真机实测：仅在「窗口已隐藏再恢复」这一步出现）。隐藏路径不受影响——
+`orderOut:` 的可见性回调由 AppKit 异步投递（实测隐藏无报错），所以仍可在借用内直接调用。
 
 各平台行为：
 
-- macOS：通过 AppKit `NSWindow` 执行 `orderOut:` 隐藏；恢复时执行 `makeKeyAndOrderFront:` 并激活应用；
-- Windows：使用 `ShowWindow(SW_HIDE)` 隐藏；恢复时使用 `SW_RESTORE`、`SetForegroundWindow` 和 GPUI 激活入口；
-- Linux X11：从 raw XCB handle 获取连接和 window id，使用 `xcb_unmap_window` 隐藏、`xcb_map_window` 恢复并 flush；恢复后调用 GPUI `activate_window`；
-- Linux Wayland：Wayland 没有允许客户端任意隐藏并重新映射现有 xdg-toplevel 的通用协议，使用 `minimize_window` 和 `activate_window` 作为明确的平台回退。
+- macOS：`NSWindow::orderOut:` 隐藏；恢复时 `makeKeyAndOrderFront:` 并
+  `NSApplication::activate`。获取 `NSWindow` 的路径是
+  `HasWindowHandle::window_handle(window)` → `RawWindowHandle::AppKit.ns_view`
+  → `NSView::window()`；注意 GPUI 的 `Window::window_handle()` 返回的是
+  `AnyWindowHandle`，会遮蔽同名 trait 方法，必须显式限定 trait；
+- Windows：使用 `ShowWindow(SW_HIDE)` 隐藏；恢复时 `SW_RESTORE`、
+  `SetForegroundWindow` 和 GPUI 激活入口；
+- Linux X11：从 `RawWindowHandle::Xcb` / `Xlib` 取 window id，用
+  `x11rb` 的 `unmap_window` / `map_window` 隐藏与恢复并 `flush`。
+  `raw-window-handle` 0.6 的句柄不带 X 连接，所以每次调用新建一条连接
+  （unmap/map 只按全局唯一的 window id 寻址）；
+- Linux Wayland：Wayland 没有允许客户端任意隐藏并重新映射现有 xdg-toplevel
+  的通用协议，使用 `minimize_window` 和 `activate_window` 作为明确的平台回退。
+  `NativeMainWindow` 在此情况下取 0（无 X11 句柄），`show` 变成空操作。
 
-隐藏或恢复失败时返回错误并记录平台和操作上下文。关闭事件中的隐藏失败必须回退现有退出确认，不能吞掉关闭请求。
+隐藏或恢复**必须校验结果**：macOS 用 `NSWindow::isVisible`、Windows 用
+`IsWindowVisible` 复核目标状态，不一致即返回错误。关闭事件中的隐藏失败必须回退
+现有退出确认，不能吞掉关闭请求。
 
 ### 主窗口生命周期
 
@@ -152,9 +179,13 @@ enum MainWindowCloseAction {
 
 托盘图标使用仓库现有 `resources/navop-icon.png`，通过 `include_bytes!` 编译进二进制，避免依赖运行目录或安装包中的相对路径。
 
-- macOS/Windows 将 PNG 解码为 RGBA，并构造 `tray_icon::Icon`；
-- Linux 将同一 RGBA 数据转换为 StatusNotifierItem 要求的 ARGB32 pixmap；
-- 解码和颜色通道转换放在独立纯函数中，便于单元测试。
+该资源是 1024×1024 的应用图标，直接交给平台会被按菜单栏/通知区域高度做一次质量
+不可控的缩放，所以先解码为 RGBA、按最长边缩到 32px 再构造 `tray_icon::Icon`
+（`Icon::from_rgba` 内部完成各平台需要的通道/位深转换，无需手写 ARGB32 变换）。
+解码与缩放放在独立纯函数 `decode_tray_icon` 中，便于单元测试。
+
+解码失败即托盘初始化失败——宁可不显示托盘，也不做一个没有图标、用户找不到的
+隐形入口。
 
 本次不修改品牌图标，不生成新的视觉资产。
 
@@ -184,24 +215,28 @@ enum MainWindowCloseAction {
 
 - 托盘可用时关闭策略返回 `HideToTray`；
 - 托盘不可用时关闭策略返回 `RequestQuit`；
-- 托盘图标点击映射为 `ShowMainWindow`；
+- 托盘图标点击（左键抬起）映射为 `ShowMainWindow`；左键按下、右键、中键都不映射；
 - “显示 Navop”映射为 `ShowMainWindow`；
 - “退出 Navop”映射为 `QuitApplication`；
-- PNG 图标可解码为正确尺寸的 RGBA；
-- Linux RGBA 到 ARGB32 转换保持 alpha、red、green、blue 通道顺序。
+- 未知菜单 id 不产生命令；
+- 内嵌 PNG 图标可解码为 32×32 RGBA（像素总数 = 宽×高×4，且不是全透明）；
+- 非图像载荷解码失败。
 
 ### 结构与集成测试
 
 - 主应用使用 `QuitMode::Explicit`；
-- 主窗口关闭 handler 不再无条件调用 `request_quit`；
+- 托盘初始化发生在窗口系统初始化之后、`OnetCliApp` 安装关闭 handler 之前；
+- 主窗口关闭 handler 不再无条件调用 `request_quit`，而是先过托盘策略；
 - 托盘退出路径调用现有 `request_window_quit`，不直接调用 `cx.quit()`；
-- target-specific dependency 不让 Linux 编译 `tray-icon`，也不让 macOS/Windows 编译 `ksni`。
+- 平台回调只入队命令，不触碰 `Window` / `update_window`；
+- `TrayIcon` 保存在 `thread_local!` 中而不是任何 `Send` 容器里；
+- Linux 依赖只启用 tray-icon 的 `ksni` 后端，`libappindicator` / `libxdo` 不出现在依赖里。
 
 ### 验证命令
 
 - 运行 `main` 的托盘和窗口生命周期定向测试；
 - 运行 `cargo test -p main`；
-- 运行 `cargo check -p main`；
+- 运行 `cargo check -p main --all-targets`；
 - 运行 `cargo clippy -p main --all-targets -- -D warnings`；
 - 运行 `cargo fmt --all -- --check`；
 - 使用可用 target 执行平台编译检查；无法在本机运行的平台必须明确报告验证边界。
