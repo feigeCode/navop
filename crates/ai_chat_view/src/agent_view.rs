@@ -266,6 +266,56 @@ fn acp_connection_is_unavailable(phase: Option<&AcpConnectionPhase>) -> bool {
     )
 }
 
+/// 自动重连上限。超过后不再拉起子进程，改为把决定权交回用户。
+const ACP_RECONNECT_MAX_ATTEMPTS: u32 = 3;
+/// 首次重连延迟；之后按 2 倍退避，避免 agent 反复崩溃时打转。
+const ACP_RECONNECT_BASE_DELAY_MS: u64 = 600;
+/// 空闲连接的健康检查间隔。agent 进程空闲退出不会产生轮次事件，只能靠轮询发现。
+#[cfg_attr(test, allow(dead_code))]
+const ACP_HEALTH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AcpReconnectDecision {
+    Reconnect,
+    GiveUp,
+    Idle,
+}
+
+/// 是否应该自动重连。纯决策，便于单测；不触碰任何进程或 GPUI 状态。
+///
+/// 只有「ACP 后端 + 连接确实不可用 + 没有正在进行的连接动作 + 有明确目标」才重连，
+/// 且受尝试次数上限约束。用户主动切走（`has_target == false`）时永不重连。
+fn acp_reconnect_decision(
+    is_acp_backend: bool,
+    connection_unavailable: bool,
+    busy: bool,
+    has_target: bool,
+    attempts: u32,
+) -> AcpReconnectDecision {
+    if !is_acp_backend || !connection_unavailable || busy || !has_target {
+        return AcpReconnectDecision::Idle;
+    }
+    if attempts >= ACP_RECONNECT_MAX_ATTEMPTS {
+        AcpReconnectDecision::GiveUp
+    } else {
+        AcpReconnectDecision::Reconnect
+    }
+}
+
+/// 第 `attempts` 次（从 0 起）重连前的等待时长。
+fn acp_reconnect_delay(attempts: u32) -> std::time::Duration {
+    let shift = attempts.min(3);
+    std::time::Duration::from_millis(ACP_RECONNECT_BASE_DELAY_MS << shift)
+}
+
+/// 自动重连状态。`generation` 让被取代的定时器无法生效。
+#[derive(Default)]
+struct AcpReconnectState {
+    attempts: u32,
+    scheduled: bool,
+    generation: u64,
+}
+
 fn submission_start_for_acp_availability(
     has_connection: bool,
     connecting: bool,
@@ -900,6 +950,10 @@ pub struct AgentChatView {
     ///
     /// 没有它，「先挑模型再连接」会变成点了没反应的假控件。
     pending_acp_model: Option<String>,
+    /// 断线自动重连的尝试计数、待触发标记与代次。
+    acp_reconnect: AcpReconnectState,
+    /// 空闲 ACP 连接的健康检查任务；随连接建立与失效启停。
+    _acp_health_task: Option<Task<()>>,
     /// 正在连接 ACP agent(拉起子进程中)。
     acp_connecting: bool,
     /// 正在连接的 ACP agent id,用于忽略已取消连接的异步回调。
@@ -1192,6 +1246,8 @@ impl AgentChatView {
             acp_auth_methods: Vec::new(),
             current_acp_id: None,
             pending_acp_model: None,
+            acp_reconnect: AcpReconnectState::default(),
+            _acp_health_task: None,
             acp_connecting: false,
             acp_connecting_id: None,
             acp_connect_origin_session: None,
@@ -2483,6 +2539,180 @@ impl AgentChatView {
         true
     }
 
+    /// 连接不可用时先丢弃旧连接，再按有界退避尝试自动重连。
+    ///
+    /// 测试构建下健康检查不启动，因此这里可能未被调用；决策本身由纯函数覆盖。
+    #[cfg_attr(test, allow(dead_code))]
+    fn handle_acp_unavailable(&mut self, cx: &mut Context<Self>) {
+        if self.invalidate_unavailable_acp_connection(cx) {
+            self.schedule_acp_auto_reconnect(cx);
+        }
+    }
+
+    /// 当前连接是否已进入不可恢复的终态。
+    #[cfg_attr(test, allow(dead_code))]
+    fn acp_connection_unavailable(&self) -> bool {
+        match self.acp.as_ref() {
+            Some(connection) => acp_connection_is_unavailable(Some(&connection.phase())),
+            None => false,
+        }
+    }
+
+    /// 自动重连的目标 agent；用户主动切走（换后端 / 关闭会话）时为 `None`。
+    #[cfg_attr(test, allow(dead_code))]
+    fn acp_reconnect_target(&self) -> Option<SharedString> {
+        if self.backend != Backend::Acp || self.closed_sessions.contains(&self.current_session) {
+            return None;
+        }
+        self.current_acp_id.clone()
+    }
+
+    /// 取消待触发的自动重连，但不改尝试计数（新连接在飞时使用）。
+    fn invalidate_acp_reconnect_schedule(&mut self) {
+        self.acp_reconnect.scheduled = false;
+        self.acp_reconnect.generation = self.acp_reconnect.generation.wrapping_add(1);
+    }
+
+    /// 用户主动离开 ACP：清空重连预算并停止健康检查。
+    fn cancel_acp_auto_reconnect(&mut self) {
+        self.invalidate_acp_reconnect_schedule();
+        self.acp_reconnect.attempts = 0;
+        self._acp_health_task = None;
+    }
+
+    /// 按尝试次数决定自动重连、放弃还是不动。
+    #[cfg_attr(test, allow(dead_code))]
+    fn schedule_acp_auto_reconnect(&mut self, cx: &mut Context<Self>) {
+        let busy = self.acp_connecting
+            || self.acp_pending.is_some()
+            || self.acp_session_transition.is_some()
+            || self.acp_turn_owner.is_some();
+        let decision = acp_reconnect_decision(
+            self.backend == Backend::Acp,
+            true,
+            busy,
+            self.acp_reconnect_target().is_some(),
+            self.acp_reconnect.attempts,
+        );
+        match decision {
+            AcpReconnectDecision::Idle => {}
+            AcpReconnectDecision::GiveUp => {
+                self.acp_reconnect.scheduled = false;
+                let agent_id = self
+                    .current_acp_id
+                    .clone()
+                    .unwrap_or_else(|| SharedString::from("acp"));
+                let agent_name = self.acp_agent_name(&agent_id);
+                let error = AcpError::new(
+                    AcpErrorKind::ConnectionClosed,
+                    agent_id.to_string(),
+                    agent_name.to_string(),
+                    t!("AgentUi.acp_reconnect_exhausted").to_string(),
+                )
+                .with_recovery(AcpRecoveryAction::Retry);
+                self.transcript.set_acp_error(&error);
+                self.sync_composer(cx);
+                cx.notify();
+            }
+            AcpReconnectDecision::Reconnect => {
+                if self.acp_reconnect.scheduled {
+                    return;
+                }
+                self.acp_reconnect.scheduled = true;
+                let attempt = self.acp_reconnect.attempts;
+                self.acp_reconnect.attempts = self.acp_reconnect.attempts.saturating_add(1);
+                let generation = self.acp_reconnect.generation.wrapping_add(1);
+                self.acp_reconnect.generation = generation;
+                self.transcript.set_acp_status(
+                    t!(
+                        "AgentUi.acp_reconnecting",
+                        attempt = attempt + 1,
+                        max = ACP_RECONNECT_MAX_ATTEMPTS
+                    )
+                    .to_string(),
+                );
+                self.sync_composer(cx);
+                cx.notify();
+                self.spawn_acp_reconnect_after(acp_reconnect_delay(attempt), generation, cx);
+            }
+        }
+    }
+
+    /// 延迟后重试连接；代次不匹配说明已被更新的操作取代。
+    #[cfg(not(test))]
+    fn spawn_acp_reconnect_after(
+        &mut self,
+        delay: std::time::Duration,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(delay).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.acp_reconnect.generation != generation {
+                    return;
+                }
+                this.acp_reconnect.scheduled = false;
+                if this.acp_connection_unavailable() {
+                    this.invalidate_unavailable_acp_connection(cx);
+                }
+                if this.acp.is_some() || this.acp_connecting || this.acp_pending.is_some() {
+                    return;
+                }
+                let Some(agent_id) = this.acp_reconnect_target() else {
+                    return;
+                };
+                // 不重置尝试计数：本次重试本身就是预算的一次消耗。
+                if let Some((operation, permission_provider)) =
+                    this.prepare_acp_connect(agent_id, cx)
+                {
+                    this.spawn_acp_connect(operation, permission_provider, cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// 测试构建下不拉子进程：自动重连只走纯决策，不产生真实连接。
+    #[cfg(test)]
+    fn spawn_acp_reconnect_after(
+        &mut self,
+        _delay: std::time::Duration,
+        _generation: u64,
+        _cx: &mut Context<Self>,
+    ) {
+    }
+
+    /// 空闲连接的健康检查。agent 进程空闲退出不会产生轮次事件，只能靠轮询发现。
+    #[cfg(not(test))]
+    fn spawn_acp_health(&mut self, agent_id: SharedString, cx: &mut Context<Self>) {
+        self._acp_health_task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(ACP_HEALTH_INTERVAL).await;
+                let keep_going = this
+                    .update(cx, |this, cx| {
+                        if this.backend != Backend::Acp
+                            || this.current_acp_id.as_ref() != Some(&agent_id)
+                        {
+                            return false;
+                        }
+                        if this.acp_connection_unavailable() {
+                            this.handle_acp_unavailable(cx);
+                        }
+                        // 连接已丢弃且没有在飞动作时收工；重连成功会再起一个新任务。
+                        this.acp.is_some()
+                            || this.acp_connecting
+                            || this.acp_pending.is_some()
+                            || this.acp_session_transition.is_some()
+                    })
+                    .unwrap_or(false);
+                if !keep_going {
+                    break;
+                }
+            }
+        }));
+    }
+
     fn acp_turn_error(&self, reason: &str) -> AcpError {
         let agent_id = self
             .current_acp_id
@@ -2801,6 +3031,7 @@ impl AgentChatView {
         });
         // 换工作区会丢弃旧连接；连接前的模型选择也不再适用于新 agent 会话。
         self.pending_acp_model = None;
+        self.cancel_acp_auto_reconnect();
         self.acp = None;
         self.acp_pending = None;
         self.acp_connecting = false;
@@ -11301,5 +11532,76 @@ mod acp_preconnect_model_tests {
     #[test]
     fn empty_probe_models_produce_no_options() {
         assert!(acp_model_options_from_probe(&SharedString::from("a"), &[]).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod acp_reconnect_tests {
+    use super::{
+        ACP_RECONNECT_MAX_ATTEMPTS, AcpReconnectDecision, acp_reconnect_decision,
+        acp_reconnect_delay,
+    };
+    use std::time::Duration;
+
+    #[test]
+    fn reconnects_only_for_an_unavailable_owned_acp_target() {
+        assert_eq!(
+            AcpReconnectDecision::Reconnect,
+            acp_reconnect_decision(true, true, false, true, 0)
+        );
+    }
+
+    #[test]
+    fn never_reconnects_without_a_target_or_when_not_acp() {
+        // 用户切到内置 Agent：has_target 为 false，永不自动重连。
+        assert_eq!(
+            AcpReconnectDecision::Idle,
+            acp_reconnect_decision(true, true, false, false, 0)
+        );
+        assert_eq!(
+            AcpReconnectDecision::Idle,
+            acp_reconnect_decision(false, true, false, true, 0)
+        );
+    }
+
+    #[test]
+    fn healthy_or_busy_connections_are_left_alone() {
+        // 连接仍可用：不重连。
+        assert_eq!(
+            AcpReconnectDecision::Idle,
+            acp_reconnect_decision(true, false, false, true, 0)
+        );
+        // 已有连接动作在飞：不并发拉起第二个进程。
+        assert_eq!(
+            AcpReconnectDecision::Idle,
+            acp_reconnect_decision(true, true, true, true, 0)
+        );
+    }
+
+    #[test]
+    fn gives_up_after_the_attempt_budget() {
+        let below = ACP_RECONNECT_MAX_ATTEMPTS - 1;
+        assert_eq!(
+            AcpReconnectDecision::Reconnect,
+            acp_reconnect_decision(true, true, false, true, below)
+        );
+        assert_eq!(
+            AcpReconnectDecision::GiveUp,
+            acp_reconnect_decision(true, true, false, true, ACP_RECONNECT_MAX_ATTEMPTS)
+        );
+        assert_eq!(
+            AcpReconnectDecision::GiveUp,
+            acp_reconnect_decision(true, true, false, true, ACP_RECONNECT_MAX_ATTEMPTS + 5)
+        );
+    }
+
+    #[test]
+    fn backoff_doubles_and_is_bounded() {
+        assert_eq!(Duration::from_millis(600), acp_reconnect_delay(0));
+        assert_eq!(Duration::from_millis(1200), acp_reconnect_delay(1));
+        assert_eq!(Duration::from_millis(2400), acp_reconnect_delay(2));
+        // 上限：继续翻倍没有意义，且会撑大延迟。
+        assert_eq!(Duration::from_millis(4800), acp_reconnect_delay(3));
+        assert_eq!(Duration::from_millis(4800), acp_reconnect_delay(99));
     }
 }
