@@ -216,6 +216,11 @@ pub struct TerminalView {
     blink_manager: Entity<BlinkCursor>,
     /// 侧边栏
     sidebar: Entity<TerminalSidebar>,
+    /// SSH 工具面板（文件管理器 / 服务器监控）是否还没建好。
+    ///
+    /// 需要运行时输入凭据的 SSH 连接在构造时拿不到 `SshSessionManager`，
+    /// 面板要等凭据提交后再补建，否则这类连接完全没有文件侧边栏。
+    ssh_tool_panels_pending: bool,
     /// 本地工作区文件编辑器（仅本地终端）
     workspace_editor: Option<Entity<WorkspaceEditor>>,
     /// 终端底部命令输入栏

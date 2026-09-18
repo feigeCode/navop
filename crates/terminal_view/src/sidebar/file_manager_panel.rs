@@ -8,6 +8,7 @@ use super::remote_path::{join_remote_path, normalize_remote_path, resolve_remote
 use crate::theme::TerminalColors;
 use crate::transfer_notice::{TransferAction, transfer_finish_notification};
 use chrono::{DateTime, Local};
+use ftp::{FtpClient, FtpConnectConfig};
 use gpui::{
     Anchor, AnyWindowHandle, App, ClipboardItem, Context, Entity, EventEmitter, ExternalPaths,
     FocusHandle, Focusable, Hsla, IntoElement, KeyBinding, ListSizingBehavior, MouseButton,
@@ -52,7 +53,6 @@ use remote_file_editor::{
 use remote_image_preview::{
     clipboard_upload_paths, image_format_for_path, open_remote_image_preview,
 };
-use ftp::{FtpClient, FtpConnectConfig};
 use rust_i18n::t;
 use sftp::{
     DirectoryConflictPolicy, RemoteFileClient, RemoteFileOperation, RusshSftpClient,

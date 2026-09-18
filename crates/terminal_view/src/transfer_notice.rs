@@ -62,11 +62,8 @@ pub(crate) fn transfer_finish_notification(
     file_name: Option<&str>,
     error: Option<&str>,
 ) -> Notification {
-    let mut message = transfer_finish_message(
-        &action.label(),
-        file_name,
-        &finish_state_label(error),
-    );
+    let mut message =
+        transfer_finish_message(&action.label(), file_name, &finish_state_label(error));
     append_failure_reason(&mut message, error);
 
     match error {

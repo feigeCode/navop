@@ -1,0 +1,23 @@
+{
+  "allow": [
+    {
+      "toolName": "Bash",
+      "key": "python3"
+    },
+    {
+      "toolName": "Bash",
+      "key": "cargo test"
+    },
+    {
+      "toolName": "Bash",
+      "key": "ruby"
+    },
+    {
+      "toolName": "Bash",
+      "key": "sed"
+    }
+  ],
+  "ask": [],
+  "deny": [],
+  "tempDeleteDirectories": []
+}
