@@ -223,6 +223,22 @@ AgentUi:
     en: Built-in Agent
     zh-CN: 内置 Agent
     zh-HK: 內建 Agent
+  agent_probing:
+    en: Checking agent...
+    zh-CN: 正在检测 Agent…
+    zh-HK: 正在檢測 Agent…
+  agent_probe_failed:
+    en: "Unavailable: %{error}"
+    zh-CN: "无法使用：%{error}"
+    zh-HK: "無法使用：%{error}"
+  agent_model_count:
+    en: "%{count} models"
+    zh-CN: "%{count} 个模型"
+    zh-HK: "%{count} 個模型"
+  agent_login_required:
+    en: Login required
+    zh-CN: 需要登录
+    zh-HK: 需要登入
   awaiting_approval:
     en: Awaiting approval
     zh-CN: 等待审批

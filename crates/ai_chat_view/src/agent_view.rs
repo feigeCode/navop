@@ -46,7 +46,8 @@ use rust_i18n::t;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 
 use crate::acp::{
-    AcpAgentEntry, AcpConnectOutcome, AcpConnection, AcpConnectionPhase, AcpError, AcpErrorKind,
+    AcpAgentEntry, AcpAgentProbe, AcpConnectOutcome, AcpConnection, AcpConnectionPhase, AcpError,
+    AcpErrorKind,
     AcpPendingConnection, AcpPermissionEnvelope, AcpPermissionMessage, AcpPermissionOutcome,
     AcpPermissionProvider, AcpPromptStartError, AcpPublicMcpApprovalEnvelope,
     AcpPublicMcpApprovalMessage, AcpPublicMcpApprovalOutcome, AcpPublicMcpApprovalProvider,
@@ -55,6 +56,9 @@ use crate::acp::{
     acp_session_summaries, acquire_acp_permission_grant, build_acp_agent_entries,
     current_acp_tool_mode, set_current_acp_tool_mode,
 };
+/// 仅后台探测路径使用（测试构建下探测被禁用以避免真实子进程）。
+#[cfg(not(test))]
+use crate::acp::AcpAgentConfig;
 use crate::agent_cards::{
     ApproveToolCall, PlanCardData, RejectToolCall, SelectAcpPermissionOption, SubAgentCardData,
 };
@@ -92,7 +96,10 @@ mod acp_ui;
 mod decision_dock;
 mod findbar;
 
-use acp_options::{agent_option_disabled, composer_agent_options, current_agent_label};
+use acp_options::{
+    agent_option_disabled, composer_agent_options, composer_agent_options_with_status,
+    current_agent_label,
+};
 use acp_sessions::{acp_session_placeholder, acp_session_row, acp_session_section_header};
 use acp_ui::AcpConnectOperation;
 
@@ -873,6 +880,10 @@ pub struct AgentChatView {
     backend: Backend,
     /// 可接入的外部 ACP agent 列表。
     acp_agents: Vec<AcpAgentEntry>,
+    /// 每个 ACP agent 的一次性探测结果；缺失表示尚未探测。
+    acp_probes: HashMap<SharedString, AcpAgentProbe>,
+    /// 正在探测的 agent id；用于渲染「探测中」并防止重复启动。
+    acp_probe_inflight: HashSet<SharedString>,
     /// 本地 Codex-style Skill 管理状态。
     skills: AgentSkillState,
     /// 已建立的 ACP 连接(backend == Acp 时存在)。
@@ -1168,6 +1179,8 @@ impl AgentChatView {
             history_popover_open: false,
             backend: Backend::Local,
             acp_agents,
+            acp_probes: HashMap::new(),
+            acp_probe_inflight: HashSet::new(),
             skills,
             acp: None,
             acp_turn_owner: None,
@@ -2858,16 +2871,79 @@ impl AgentChatView {
 
     fn refresh_acp_agents_from(&mut self, agents: Vec<AcpAgentEntry>, cx: &mut Context<Self>) {
         self.acp_agents = agents;
+        #[cfg(not(test))]
+        self.spawn_acp_probes(cx);
         self.sync_composer(cx);
         cx.notify();
     }
 
+    /// 为尚未探测的 ACP agent 各起一次后台探测。
+    ///
+    /// 探测会真的拉起子进程，因此只在 agent 列表刷新（打开切换器）时触发，并按 id
+    /// 缓存结果；已探测过的 agent 不会重复拉起。
+    #[cfg(not(test))]
+    fn spawn_acp_probes(&mut self, cx: &mut Context<Self>) {
+        let targets: Vec<(SharedString, AcpAgentConfig)> = self
+            .acp_agents
+            .iter()
+            .filter_map(|entry| entry.config.clone().map(|config| (entry.id.clone(), config)))
+            .filter(|(id, _)| {
+                !self.acp_probes.contains_key(id) && !self.acp_probe_inflight.contains(id)
+            })
+            .collect();
+        if targets.is_empty() {
+            return;
+        }
+        let handle = Tokio::handle(cx);
+        for (id, config) in targets {
+            self.acp_probe_inflight.insert(id.clone());
+            let handle = handle.clone();
+            cx.spawn(async move |this, cx| {
+                let probe = crate::acp::probe_agent(&config, handle).await;
+                if !probe.identified() {
+                    tracing::warn!(
+                        agent = %id,
+                        error = probe.error.as_deref().unwrap_or("unknown"),
+                        "ACP agent probe failed"
+                    );
+                }
+                let _ = this.update(cx, |this, cx| {
+                    this.acp_probe_inflight.remove(&id);
+                    this.acp_probes.insert(id, probe);
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+    }
+
+    /// 当前 agent 列表对应的探测状态文案，供切换器直接展示。
+    fn agent_probe_statuses(&self) -> HashMap<SharedString, SharedString> {
+        self.acp_agents
+            .iter()
+            .filter_map(|entry| {
+                let status = self.acp_probe_status(&entry.id)?;
+                Some((entry.id.clone(), status))
+            })
+            .collect()
+    }
+
+    fn acp_probe_status(&self, id: &SharedString) -> Option<SharedString> {
+        if self.acp_probe_inflight.contains(id) {
+            return Some(SharedString::from(
+                t!("AgentUi.agent_probing").to_string(),
+            ));
+        }
+        Some(probe_status_label(self.acp_probes.get(id)?))
+    }
+
     fn agent_switcher_options(&self) -> Vec<ComposerAgentOption> {
-        composer_agent_options(
+        composer_agent_options_with_status(
             self.backend,
             &self.acp_agents,
             self.current_acp_id.as_ref(),
             self.acp_connecting,
+            &self.agent_probe_statuses(),
         )
     }
 
@@ -4332,28 +4408,15 @@ fn acp_model_options(
     let Some(agent_id) = agent_id else {
         return Vec::new();
     };
-    let Some(option) = state.current_model_config() else {
+    let Some(config) = state.current_model_config() else {
         return Vec::new();
     };
-    let agent_client_protocol::schema::SessionConfigKind::Select(select) = &option.kind else {
-        return Vec::new();
-    };
-    let values = match &select.options {
-        agent_client_protocol::schema::SessionConfigSelectOptions::Ungrouped(values) => {
-            values.iter().map(|value| (value.value.to_string(), value.name.clone())).collect()
-        }
-        agent_client_protocol::schema::SessionConfigSelectOptions::Grouped(groups) => groups
-            .iter()
-            .flat_map(|group| group.options.iter())
-            .map(|value| (value.value.to_string(), value.name.clone()))
-            .collect(),
-        _ => Vec::new(),
-    };
-    values
+    state
+        .model_options()
         .into_iter()
         .map(|(value, label)| {
             ComposerModelOption::new(
-                format!("acp:{}:{}:{}", agent_id, option.id, value),
+                format!("acp:{}:{}:{}", agent_id, config.id, value),
                 agent_id.clone(),
                 agent_id.clone(),
                 value,
@@ -4383,6 +4446,50 @@ fn select_config_value(
         .iter()
         .find(|option| option.value == *value)
         .map(|option| option.name.clone())
+}
+
+/// 把一次探测结论压成切换器副标题。
+///
+/// 已识别时优先「名称 版本 · N 个模型」；只有鉴权要求时退化为「需要登录」。
+/// 失败时只保留错误首行并截断，避免撑破菜单行。
+fn probe_status_label(probe: &AcpAgentProbe) -> SharedString {
+    if let Some(error) = probe.error.as_deref() {
+        return SharedString::from(
+            t!("AgentUi.agent_probe_failed", error = truncate_probe_error(error)).to_string(),
+        );
+    }
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(name) = probe.name.as_deref().filter(|name| !name.trim().is_empty()) {
+        parts.push(
+            match probe
+                .version
+                .as_deref()
+                .filter(|version| !version.trim().is_empty())
+            {
+                Some(version) => format!("{name} {version}"),
+                None => name.to_string(),
+            },
+        );
+    }
+    if !probe.models.is_empty() {
+        parts.push(t!("AgentUi.agent_model_count", count = probe.models.len()).to_string());
+    } else if !probe.auth_methods.is_empty() {
+        parts.push(t!("AgentUi.agent_login_required").to_string());
+    }
+    if parts.is_empty() {
+        return SharedString::from("ACP Agent");
+    }
+    SharedString::from(parts.join(" · "))
+}
+
+/// 探测错误取首行并按字符上限截断。
+fn truncate_probe_error(error: &str) -> String {
+    const MAX_CHARS: usize = 80;
+    let first_line = error.lines().next().unwrap_or(error).trim();
+    if first_line.chars().count() <= MAX_CHARS {
+        return first_line.to_string();
+    }
+    first_line.chars().take(MAX_CHARS).collect::<String>() + "…"
 }
 
 impl EventEmitter<AgentChatViewEvent> for AgentChatView {}
@@ -10993,5 +11100,78 @@ mod tests {
             cx.debug_bounds("ai-chat-messages").is_some(),
             "the workbench content area must lay out the chat transcript"
         );
+    }
+}
+
+#[cfg(test)]
+mod acp_probe_status_tests {
+    use super::{AcpAgentProbe, probe_status_label, truncate_probe_error};
+    use crate::acp::AcpModelInfo;
+
+    fn model(id: &str) -> AcpModelInfo {
+        AcpModelInfo {
+            id: id.to_string(),
+            label: id.to_string(),
+        }
+    }
+
+    #[test]
+    fn identified_agent_reports_name_version_and_model_count() {
+        let probe = AcpAgentProbe {
+            name: Some("Codex".to_string()),
+            version: Some("1.2.3".to_string()),
+            models: vec![model("gpt-5"), model("gpt-5-mini")],
+            ..Default::default()
+        };
+
+        let label = probe_status_label(&probe).to_string();
+
+        assert!(label.contains("Codex"), "{label}");
+        assert!(label.contains("1.2.3"), "{label}");
+        assert!(label.contains('2'), "{label}");
+    }
+
+    #[test]
+    fn login_only_probe_marks_login_required() {
+        let probe = AcpAgentProbe {
+            name: Some("Kimi".to_string()),
+            auth_methods: vec!["oauth".to_string()],
+            ..Default::default()
+        };
+
+        let label = probe_status_label(&probe).to_string();
+
+        assert!(label.contains("Kimi"), "{label}");
+        assert_ne!("ACP Agent", label);
+    }
+
+    #[test]
+    fn failed_probe_keeps_the_error_text() {
+        let probe = AcpAgentProbe {
+            error: Some("spawn failed: no such file".to_string()),
+            ..Default::default()
+        };
+
+        let label = probe_status_label(&probe).to_string();
+
+        assert!(label.contains("spawn failed"), "{label}");
+    }
+
+    #[test]
+    fn empty_probe_falls_back_to_generic_label() {
+        assert_eq!(
+            "ACP Agent",
+            probe_status_label(&AcpAgentProbe::default()).as_ref()
+        );
+    }
+
+    #[test]
+    fn probe_error_is_first_line_only_and_bounded() {
+        let error = format!("{}\nsecond line", "x".repeat(200));
+        let label = truncate_probe_error(&error);
+
+        assert!(label.starts_with("xxx"), "{label}");
+        assert!(!label.contains("second line"));
+        assert_eq!(81, label.chars().count());
     }
 }
