@@ -69,6 +69,25 @@ fn display_name(info: &agent_client_protocol::schema::Implementation) -> String 
         .unwrap_or_else(|| info.name.clone())
 }
 
+/// 同步执行一次探测，供 GPUI background executor 调用。
+///
+/// 用 `Handle::block_on` 在调用线程上进入 runtime，而不是把 async 探测直接放在
+/// GPUI foreground future 里 await。原因有两条：
+/// - Tokio timer 的创建与轮询要求已进入 runtime context；
+/// - 多个并发探测若都在 GPUI 主线程上 await，就会在同一线程上交错持有/释放
+///   `EnterGuard`，触发 Tokio 的
+///   `EnterGuard values dropped out of order` panic。
+///
+/// 放到各自的调用线程后，guard 只属于该线程，跨探测不再互相干扰。
+#[cfg_attr(test, allow(dead_code))]
+pub fn probe_agent_blocking(
+    config: &AcpAgentConfig,
+    handle: tokio::runtime::Handle,
+) -> AcpAgentProbe {
+    let inner_handle = handle.clone();
+    handle.block_on(probe_agent(config, inner_handle))
+}
+
 /// 在独立临时目录跑一次 ACP 会话，返回 agent 身份与模型候选。
 ///
 /// 这里**不**自行包一层 `tokio::time::timeout`：GPUI foreground executor 不是
@@ -76,8 +95,10 @@ fn display_name(info: &agent_client_protocol::schema::Implementation) -> String 
 /// 而该连接 future 不是 `Send`，也无法整体 spawn 到 Tokio。超时改由
 /// `config.timeouts.connect`（见下）在 `connect_with_runtime` 内部完成——那里已经
 /// 用 `handle.enter()` 覆盖了 timer 的创建与轮询。
-#[cfg_attr(test, allow(dead_code))]
-pub async fn probe_agent(config: &AcpAgentConfig, handle: tokio::runtime::Handle) -> AcpAgentProbe {
+///
+/// 调用约束：不要在同一线程上并发 poll 两个探测 future（guard 交错），
+/// 改用 [`probe_agent_blocking`]。
+async fn probe_agent(config: &AcpAgentConfig, handle: tokio::runtime::Handle) -> AcpAgentProbe {
     let Ok(cwd) = probe_directory() else {
         return AcpAgentProbe {
             error: Some("ACP probe directory is unavailable".to_string()),
@@ -230,6 +251,30 @@ mod tests {
                     std::thread::park_timeout(std::time::Duration::from_secs(10));
                 }
             }
+        }
+    }
+
+    /// 每个探测在各自线程上 `block_on`：多个探测并发时不会共享 `EnterGuard`。
+    #[test]
+    fn concurrent_probes_keep_runtime_guards_on_their_own_threads() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let config = AcpAgentConfig::new(
+            "probe-mt",
+            "Probe MT",
+            "/nonexistent/navop-acp-probe-test",
+        );
+
+        let joins: Vec<_> = (0..3)
+            .map(|_| {
+                let handle = runtime.handle().clone();
+                let config = config.clone();
+                std::thread::spawn(move || probe_agent_blocking(&config, handle))
+            })
+            .collect();
+
+        for join in joins {
+            let probe = join.join().expect("probe thread must not panic");
+            assert!(probe.error.is_some(), "{probe:?}");
         }
     }
 
