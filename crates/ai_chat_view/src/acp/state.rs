@@ -1,6 +1,7 @@
 use agent_client_protocol::schema::{
-    AgentCapabilities, AvailableCommand, LoadSessionResponse, NewSessionResponse,
-    ResumeSessionResponse, SessionConfigOption, SessionMode, SessionModeId, SessionUpdate,
+    AgentCapabilities, AvailableCommand, Implementation, LoadSessionResponse, NewSessionResponse,
+    ResumeSessionResponse, SessionConfigKind, SessionConfigOption, SessionConfigSelectOptions,
+    SessionMode, SessionModeId, SessionUpdate,
 };
 use agent_runtime::TurnId;
 
@@ -32,6 +33,7 @@ pub enum AcpConnectionPhase {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct AcpSessionState {
     phase: AcpConnectionPhase,
+    agent_info: Option<Implementation>,
     agent_capabilities: AgentCapabilities,
     available_commands: Vec<AvailableCommand>,
     current_mode_id: Option<SessionModeId>,
@@ -67,6 +69,10 @@ impl AcpSessionState {
         &self.agent_capabilities
     }
 
+    pub(crate) fn agent_info(&self) -> Option<&Implementation> {
+        self.agent_info.as_ref()
+    }
+
     pub(crate) fn available_commands(&self) -> &[AvailableCommand] {
         &self.available_commands
     }
@@ -93,6 +99,31 @@ impl AcpSessionState {
         })
     }
 
+    /// agent 广告的模型候选 `(value_id, label)`,按 agent 给出的顺序。
+    ///
+    /// 只读 `model` 类配置的 select 值;没有该配置或不是 select 时返回空,
+    /// 不伪造候选。分组与平面列表都展开成同一顺序。
+    pub(crate) fn model_options(&self) -> Vec<(String, String)> {
+        let Some(option) = self.current_model_config() else {
+            return Vec::new();
+        };
+        let SessionConfigKind::Select(select) = &option.kind else {
+            return Vec::new();
+        };
+        match &select.options {
+            SessionConfigSelectOptions::Ungrouped(values) => values
+                .iter()
+                .map(|value| (value.value.to_string(), value.name.clone()))
+                .collect(),
+            SessionConfigSelectOptions::Grouped(groups) => groups
+                .iter()
+                .flat_map(|group| group.options.iter())
+                .map(|value| (value.value.to_string(), value.name.clone()))
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
     pub(crate) fn title(&self) -> Option<&str> {
         self.title.as_deref()
     }
@@ -107,6 +138,10 @@ impl AcpSessionState {
 
     pub(crate) fn set_agent_capabilities(&mut self, capabilities: AgentCapabilities) {
         self.agent_capabilities = capabilities;
+    }
+
+    pub(crate) fn set_agent_info(&mut self, info: Option<Implementation>) {
+        self.agent_info = info;
     }
 
     pub(crate) fn set_current_mode(&mut self, mode_id: SessionModeId) {

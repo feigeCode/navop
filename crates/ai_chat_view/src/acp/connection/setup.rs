@@ -31,6 +31,7 @@ pub(super) async fn setup_connection(
         .await?;
     if let Ok(mut state) = state.lock() {
         state.set_agent_capabilities(init.agent_capabilities.clone());
+        state.set_agent_info(init.agent_info.clone());
     }
     let advertised = init
         .auth_methods
