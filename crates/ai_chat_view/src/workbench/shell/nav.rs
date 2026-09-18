@@ -6,7 +6,10 @@ use gpui::{
     Context, InteractiveElement, IntoElement, ParentElement, SharedString,
     StatefulInteractiveElement, Styled, div, prelude::FluentBuilder, px,
 };
-use gpui_component::{ActiveTheme as _, h_flex, scroll::ScrollableElement as _, v_flex};
+use gpui_component::{
+    ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex,
+    scroll::ScrollableElement as _, v_flex,
+};
 use one_assets::IconName;
 use one_ui::{IconButton, IconButtonRole};
 use rust_i18n::t;
@@ -207,6 +210,39 @@ impl WorkbenchShell {
                 .into_any_element()
             }));
 
+        // 当前工作区常显：工作台的核心上下文，切换入口在文件面板的工作区菜单。
+        let workspace = self.workspace_root.as_ref().map(|root| {
+            let name = root
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| root.display().to_string());
+            let path = root.display().to_string();
+            h_flex()
+                .min_w_0()
+                .items_center()
+                .gap_1()
+                .child(
+                    Icon::new(IconName::FolderOpen)
+                        .xsmall()
+                        .text_color(theme.muted_foreground),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .font_semibold()
+                        .text_color(theme.foreground)
+                        .child(name),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(path),
+                )
+        });
+
         h_flex()
             .h(px(HEADER_HEIGHT))
             .flex_shrink_0()
@@ -218,6 +254,7 @@ impl WorkbenchShell {
             .when_some(nav_toggle, |this, toggle| this.child(toggle))
             .child(segments)
             .child(div().flex_1())
+            .when_some(workspace, |this, workspace| this.child(workspace))
     }
 
     pub(super) fn render_rail(

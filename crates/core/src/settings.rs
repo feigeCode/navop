@@ -570,6 +570,9 @@ pub struct AiChatSettings {
     pub acp_models: HashMap<String, String>,
     #[serde(default)]
     pub last_workspace_root: Option<PathBuf>,
+    /// 最近使用的工作区根目录，最近在前。
+    #[serde(default)]
+    pub recent_workspace_roots: Vec<PathBuf>,
 }
 
 /// 自定义系统提示词的最大字符数（按 chars 计），防止拖垮上下文长度。
@@ -582,7 +585,20 @@ pub const MIN_AI_REQUEST_TIMEOUT_SECS: u64 = 10;
 /// 模型请求空闲超时允许的最大值（秒），1 小时。
 pub const MAX_AI_REQUEST_TIMEOUT_SECS: u64 = 3600;
 
+/// 最近工作区列表上限，避免设置文件无界增长。
+pub const MAX_RECENT_WORKSPACE_ROOTS: usize = 8;
+
 impl AiChatSettings {
+    /// 记录一个工作区：去重、置顶、限长，并同步 `last_workspace_root`。
+    pub fn remember_workspace_root(&mut self, root: &std::path::Path) {
+        let root = root.to_path_buf();
+        self.recent_workspace_roots
+            .retain(|existing| existing != &root);
+        self.recent_workspace_roots.insert(0, root);
+        self.recent_workspace_roots.truncate(MAX_RECENT_WORKSPACE_ROOTS);
+        self.last_workspace_root = self.recent_workspace_roots.first().cloned();
+    }
+
     /// 返回规范化后的自定义系统提示词；空白内容返回 `None`。
     ///
     /// 超长内容按 [`MAX_CUSTOM_SYSTEM_PROMPT_CHARS`] 截断，避免配置文件里
@@ -638,6 +654,7 @@ impl Default for AiChatSettings {
             last_acp_agent_id: None,
             acp_models: HashMap::new(),
             last_workspace_root: None,
+            recent_workspace_roots: Vec::new(),
         }
     }
 }
@@ -1707,6 +1724,7 @@ mod tests {
         DEFAULT_AI_REQUEST_TIMEOUT_SECS, DEFAULT_MCP_APPROVAL_TIMEOUT_MS, DEFAULT_TERMINAL_THEME,
         HomeConnectionLayout, LOCALE_SYSTEM, LargeTextCellEditorOpenMode, LocalTerminalProfileKind,
         LocalTerminalProfileSettings, MAX_AI_REQUEST_TIMEOUT_SECS, MAX_CUSTOM_SYSTEM_PROMPT_CHARS,
+        MAX_RECENT_WORKSPACE_ROOTS,
         MIN_AI_REQUEST_TIMEOUT_SECS, MainWindowState, McpPermissionMode, McpServerMode,
         PersonalSyncBackendKind, RemoteFileOpenMode, SqlFormatSettings, SqlIndentStyle,
         SqlKeywordCase, StartupDefaultPage, SyncProvider, default_grid_font_fallback_families,
@@ -2733,6 +2751,35 @@ mod tests {
         assert_eq!(settings.ai_chat.last_acp_agent_id, restored.ai_chat.last_acp_agent_id);
         assert_eq!(settings.ai_chat.acp_models, restored.ai_chat.acp_models);
         assert_eq!(settings.ai_chat.last_workspace_root, restored.ai_chat.last_workspace_root);
+    }
+
+    #[test]
+    fn remembering_a_workspace_dedupes_moves_to_front_and_caps() {
+        let mut settings = AiChatSettings::default();
+        settings.remember_workspace_root(PathBuf::from("/a").as_path());
+        settings.remember_workspace_root(PathBuf::from("/b").as_path());
+        settings.remember_workspace_root(PathBuf::from("/a").as_path());
+
+        assert_eq!(
+            vec![PathBuf::from("/a"), PathBuf::from("/b")],
+            settings.recent_workspace_roots
+        );
+        assert_eq!(Some(PathBuf::from("/a")), settings.last_workspace_root);
+
+        for index in 0..(MAX_RECENT_WORKSPACE_ROOTS + 4) {
+            settings.remember_workspace_root(PathBuf::from(format!("/extra/{index}")).as_path());
+        }
+        assert_eq!(
+            MAX_RECENT_WORKSPACE_ROOTS,
+            settings.recent_workspace_roots.len()
+        );
+        assert_eq!(
+            Some(PathBuf::from(format!(
+                "/extra/{}",
+                MAX_RECENT_WORKSPACE_ROOTS + 3
+            ))),
+            settings.last_workspace_root
+        );
     }
 
     #[test]

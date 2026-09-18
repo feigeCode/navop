@@ -45,6 +45,8 @@ pub struct WorkspaceExplorer {
     changes: Vec<GitChange>,
     /// 仓库已注册的 worktree，来自 `git worktree list`。
     worktrees: Vec<WorktreeEntry>,
+    /// 宿主注入的最近工作区根目录，最近在前。
+    recent_roots: Vec<PathBuf>,
     changes_expanded: bool,
     files_expanded: bool,
     loading: bool,
@@ -108,6 +110,7 @@ impl WorkspaceExplorer {
             branch_manager: None,
             changes: Vec::new(),
             worktrees: Vec::new(),
+            recent_roots: Vec::new(),
             changes_expanded: true,
             files_expanded: true,
             loading: false,
@@ -160,6 +163,16 @@ impl WorkspaceExplorer {
         &self.worktrees
     }
 
+    /// 宿主注入的最近工作区列表（最近在前）。不落盘，持久化由宿主负责。
+    pub fn set_recent_roots(&mut self, roots: Vec<PathBuf>, cx: &mut Context<Self>) {
+        self.recent_roots = roots;
+        cx.notify();
+    }
+
+    pub fn recent_roots(&self) -> &[PathBuf] {
+        &self.recent_roots
+    }
+
     pub fn create_worktree(&mut self, cx: &mut Context<Self>) {
         let Some(repository) = self.repository.clone() else {
             return;
@@ -190,6 +203,15 @@ impl WorkspaceExplorer {
             return;
         }
         self.apply_root_change(worktree_root, cx);
+    }
+
+    /// 切换到最近列表里的任意工作区根目录。
+    pub fn switch_workspace(&mut self, root: PathBuf, cx: &mut Context<Self>) {
+        if root == self.root {
+            cx.notify();
+            return;
+        }
+        self.apply_root_change(root, cx);
     }
 
     /// 删除 worktree 前的确认（会丢弃该工作区未提交的改动）。

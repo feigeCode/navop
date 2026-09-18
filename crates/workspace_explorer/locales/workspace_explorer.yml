@@ -352,6 +352,19 @@ WorkspaceExplorer:
       en: Unable to open document
       zh-CN: 无法打开文档
       zh-HK: 無法打開文件
+  workspace:
+    tooltip:
+      en: Workspace
+      zh-CN: 工作区
+      zh-HK: 工作區
+    choose:
+      en: Choose workspace folder…
+      zh-CN: 选择工作区目录…
+      zh-HK: 選擇工作區目錄…
+    recent:
+      en: Recent workspaces
+      zh-CN: 最近工作区
+      zh-HK: 最近工作區
   worktree:
     create:
       en: Create isolated worktree
