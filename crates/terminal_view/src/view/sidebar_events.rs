@@ -169,6 +169,18 @@ impl TerminalView {
                     settings.selection_highlight = enabled;
                 });
             }
+            TerminalSidebarEvent::ShowLineTimestampsChanged(enabled) => {
+                let enabled = *enabled;
+                let _ = update_settings(cx, move |settings| {
+                    settings.show_line_timestamps = enabled;
+                });
+            }
+            TerminalSidebarEvent::ShowLineNumbersChanged(enabled) => {
+                let enabled = *enabled;
+                let _ = update_settings(cx, move |settings| {
+                    settings.show_line_numbers = enabled;
+                });
+            }
             TerminalSidebarEvent::ConfirmMultilinePasteChanged(enabled) => {
                 let enabled = *enabled;
                 let _ = update_settings(cx, move |settings| {

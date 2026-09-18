@@ -31,10 +31,11 @@ impl TerminalView {
         let search_query = self.history_prompt.query_input().to_string();
         let view = cx.entity();
         let overlay_bounds = history_prompt_overlay_bounds(self.terminal_bounds);
-        let ghost_left = self.cell_width * cursor_col as f32;
+        let ghost_left = self.line_margin_width() + self.cell_width * cursor_col as f32;
         let ghost_top = self.line_height * cursor_line as f32;
         let dropdown_origin = history_prompt_dropdown_origin(
             overlay_bounds,
+            self.line_margin_width(),
             self.cell_width,
             self.line_height,
             cursor_line,
