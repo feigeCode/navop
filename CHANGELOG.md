@@ -4,6 +4,48 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.18.2] - 2026-09-19
+
+#### 更新内容
+
+- 托盘：点击窗口关闭按钮不再默默隐藏，改为询问「最小化到托盘 / 退出应用」，可勾选记住选择；设置页新增「关闭窗口行为」下拉。托盘不可用时仍直接退出，不会留下找不到也恢复不了的隐藏窗口。同时修复 Windows 重复启动：第二个实例此前误判自己就是主实例，会起出完整进程。
+- 终端文件面板支持切换远端目标主机：面板顶栏新增目标选择器，只列出 SSH / SFTP / FTP 连接，并分别标记当前目标与终端所在主机；切换后清空原主机的路径与历史，跨主机时暂停跟随终端上报的目录。
+- 临时 SSH 连接（每次输入凭据）现在可以「保存为连接」：终端工具栏与首页快速连接结果项都提供入口，预填用户名与密码，密码随连接写入凭据库；同时补上临时连接的文件侧边栏与服务器监控面板，凭据就绪后按需创建。
+- 终端网格左侧新增每行时间戳与行号，两项可在设置里分别开关。
+- 远端目标与 SFTP 端点切换统一为同一套候选弹窗：图标 + 连接名 + user@host:port，支持搜索、上下键选择与滚动，行样式与「快捷打开」一致。
+
+#### 修复与优化
+
+- 终端文件面板跨主机守卫：在堡垒机里嵌套 ssh 到内层主机时，内层 shell 上报的路径不再被当作面板所属主机的路径使用——此前会表现为目录列不出来、刷新也过不来，甚至可能在堡垒机上误删或误传文件；面板改为显示提示条，说明「终端已进入 X，面板仍连接 Y」。
+- 修复 shell 集成钩子被继承到子 shell 后，每个提示符都多输出一行「bash: __onetcli_precmd_bash：未找到命令」的问题（#217）：钩子改自带函数存在性判断，函数缺失时静默跳过，同时保证退出码仍正确上报。
+- 修复表数据过滤条按回车会插入换行再触发查询的问题（macOS 上表现为回车变成空行 + 查询）；Shift+Enter 仍保留换行。
+- 修复 AI 对话在上下文压缩后请求里不再含任何 user 消息、被 OpenAI 兼容网关以 400 拒绝导致整轮任务失败的问题。
+- 终端里远端目标下拉的气泡底色不再跟随浅色应用主题（恢复使用终端配色），列表过长时也会出现滚动条。
+- Linux：升级 gpui-pre fork 到 fork-0.3.109，修掉 XIM 握手完成前发送 im_id=0 导致 fcitx5 输入法被永久禁用的问题。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.18.2) 下载桌面端安装包
+
+---
+
+#### What's New
+
+- Tray: the window close button no longer hides the window silently — it asks whether to minimize to the tray or quit, with a "remember my choice" checkbox and a new "Close button behavior" dropdown in Settings. When no tray is available the app still quits directly, so it can never leave a hidden window the user cannot find or restore. Windows duplicate launches are fixed as well: a second instance used to mistake itself for the primary one and start a full process.
+- The terminal's file panel can now switch its remote target host: a picker in the panel header lists SSH / SFTP / FTP connections, marks the current target and the terminal's own host separately, clears the previous host's path and history on switch, and pauses terminal-path following across hosts.
+- Temporary SSH connections (credentials typed per session) can be saved as a connection, from the terminal toolbar and from the home quick-connect result. Username and password are prefilled and the password goes into the credential store. These connections also gain the file sidebar and server monitor panels, created on demand once credentials are ready.
+- The terminal grid now shows a per-line timestamp and line number in the left margin, each toggleable in Settings.
+- Remote-target and SFTP-endpoint switching now share one picker dialog: icon, connection name and user@host:port, with search, arrow-key selection and scrolling, styled like Quick Open.
+
+#### Fixes and Improvements
+
+- Cross-host guard for the terminal file panel: when a jump host nests an ssh into an inner machine, paths reported by that inner shell are no longer used as the panel's own host paths. Previously the directory would not list or refresh at all, and files could be deleted or uploaded on the jump host by mistake. The panel now shows a notice explaining that the terminal has entered X while the panel is still connected to Y.
+- Fixed the shell integration hook being inherited into sub-shells, where every prompt printed "bash: __onetcli_precmd_bash: command not found" (#217). The hook now checks for its own function and stays silent when it is missing, while exit codes are still reported correctly.
+- Fixed the table data filter bar inserting a newline on Enter before running the query (on macOS Enter became a blank line plus a query). Shift+Enter still inserts a newline.
+- Fixed AI conversations failing the whole turn after context compaction: the compacted request no longer contained any user message and OpenAI-compatible gateways rejected it with a 400 error.
+- The terminal's remote-target dropdown no longer inherits the light application theme for its popover background (it uses the terminal palette again), and long lists now show a scrollbar.
+- Linux: bumped the gpui-pre fork to fork-0.3.109, fixing fcitx5 input methods being permanently disabled by an im_id=0 frame sent before the XIM handshake finished.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.18.1...v0.18.2
+
 ## [v0.18.1] - 2026-09-18
 
 #### 修复与优化
