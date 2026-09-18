@@ -368,3 +368,88 @@ fn run_test_git(root: &Path, args: &[&str]) {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn worktrees_are_created_listed_and_removed_with_their_branch() {
+    let root = initialized_repository();
+    let repository = discover_repository(&root).unwrap().unwrap();
+    let worktree_root = unique_test_path();
+
+    let created = create_worktree_in(&worktree_root, &repository, &root, None).unwrap();
+    assert!(created.branch.starts_with("navop/"));
+    assert!(created.worktree_root.is_dir());
+    assert_eq!(created.worktree_root, created.path, "repo 根即项目根");
+
+    let listed = list_worktrees(&repository).unwrap();
+    assert!(listed.iter().any(|entry| entry.is_main), "主工作区应被标记");
+    let linked = listed
+        .iter()
+        .find(|entry| entry.path == created.worktree_root)
+        .expect("新建 worktree 应出现在列表里");
+    assert!(linked.managed);
+    assert!(!linked.is_main);
+
+    remove_worktree(&repository, &created.worktree_root).unwrap();
+
+    let after = list_worktrees(&repository).unwrap();
+    assert!(
+        after
+            .iter()
+            .all(|entry| entry.path != created.worktree_root),
+        "删除后不应再出现在列表里"
+    );
+    let branches = run_git_stdout(&root, &["branch", "--list", &created.branch]);
+    assert!(branches.trim().is_empty(), "受管分支应一并删除");
+
+    std::fs::remove_dir_all(&worktree_root).ok();
+}
+
+#[test]
+fn removing_the_main_worktree_is_refused() {
+    let root = initialized_repository();
+    let repository = discover_repository(&root).unwrap().unwrap();
+
+    let error = remove_worktree(&repository, &repository.root).unwrap_err();
+
+    assert!(error.to_string().contains("main worktree"), "{error}");
+}
+
+#[test]
+fn worktree_parser_marks_managed_and_main_entries() {
+    let output = "\
+worktree /repo
+HEAD abc
+branch refs/heads/main
+
+worktree /wt/one
+HEAD def
+branch refs/heads/navop/one
+
+worktree /wt/detached
+HEAD 0123
+detached
+";
+    let entries = parse_worktrees(output, Path::new("/repo"));
+
+    assert_eq!(3, entries.len());
+    assert!(entries[0].is_main);
+    assert!(!entries[0].managed);
+    assert_eq!(Some("navop/one".to_string()), entries[1].branch);
+    assert!(entries[1].managed);
+    assert_eq!(None, entries[2].branch);
+    assert!(!entries[2].managed);
+}
+
+fn run_git_stdout(root: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .current_dir(root)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}

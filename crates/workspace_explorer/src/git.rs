@@ -69,15 +69,65 @@ pub fn discover_repository(path: &Path) -> Result<Option<GitRepository>> {
     Ok(Some(GitRepository { root, branch }))
 }
 
-pub fn create_worktree(repository: &GitRepository, project_root: &Path) -> Result<PathBuf> {
+/// 本应用创建的 worktree 分支前缀。
+///
+/// 删除时只清理该前缀下的分支，绝不碰用户自己的分支。
+const MANAGED_WORKTREE_BRANCH_PREFIX: &str = "navop/";
+
+/// 新建 worktree 的结果：包含被注册到仓库里的真实路径。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CreatedWorktree {
+    /// 从当前项目映射到新 worktree 内的路径（可能不是 worktree 根）。
+    pub path: PathBuf,
+    /// 新 worktree 的根目录。
+    pub worktree_root: PathBuf,
+    pub branch: String,
+}
+
+/// 仓库已注册的一个 worktree。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorktreeEntry {
+    pub path: PathBuf,
+    /// `None` 表示 detached HEAD。
+    pub branch: Option<String>,
+    /// 是否是仓库主工作区（不可删除）。
+    pub is_main: bool,
+    /// 是否受本应用管理（分支带 `navop/` 前缀）。
+    pub managed: bool,
+}
+
+pub fn create_worktree(
+    repository: &GitRepository,
+    project_root: &Path,
+    base_branch: Option<&str>,
+) -> Result<CreatedWorktree> {
+    let worktree_root = dirs::home_dir()
+        .ok_or_else(|| anyhow!("Home directory is unavailable"))?
+        .join(".navop/worktrees");
+    create_worktree_in(&worktree_root, repository, project_root, base_branch)
+}
+
+/// 在指定根目录下创建 worktree；根目录可注入，便于测试不污染用户目录。
+pub(crate) fn create_worktree_in(
+    worktree_root: &Path,
+    repository: &GitRepository,
+    project_root: &Path,
+    base_branch: Option<&str>,
+) -> Result<CreatedWorktree> {
     let relative_project = project_root
         .strip_prefix(&repository.root)
         .unwrap_or(Path::new(""));
-    let base = repository
-        .branch
-        .as_deref()
-        .filter(|branch| !branch.starts_with("detached@"))
-        .unwrap_or("HEAD");
+    let base = base_branch
+        .map(str::trim)
+        .filter(|branch| !branch.is_empty())
+        .map(str::to_owned)
+        .or_else(|| {
+            repository
+                .branch
+                .clone()
+                .filter(|branch| !branch.starts_with("detached@"))
+        })
+        .unwrap_or_else(|| "HEAD".to_string());
     let name = format!(
         "{}-{}",
         repository
@@ -87,27 +137,137 @@ pub fn create_worktree(repository: &GitRepository, project_root: &Path) -> Resul
             .unwrap_or("project"),
         &uuid::Uuid::new_v4().simple().to_string()[..8]
     );
-    let root = dirs::home_dir()
-        .ok_or_else(|| anyhow!("Home directory is unavailable"))?
-        .join(".navop/worktrees")
-        .join(&name);
-    fs::create_dir_all(root.parent().expect("worktree root has parent"))?;
+    let worktree_root = worktree_root.join(&name);
+    fs::create_dir_all(
+        worktree_root
+            .parent()
+            .ok_or_else(|| anyhow!("Worktree root has no parent"))?,
+    )?;
+    let branch = format!("{MANAGED_WORKTREE_BRANCH_PREFIX}{name}");
     let output = run_git_vec(
         &repository.root,
         vec![
             "worktree".to_string(),
             "add".to_string(),
             "-b".to_string(),
-            format!("navop/{name}"),
-            root.to_string_lossy().into_owned(),
-            base.to_string(),
+            branch.clone(),
+            worktree_root.to_string_lossy().into_owned(),
+            base,
         ],
     )?;
     if !output.status.success() {
         return Err(git_command_error("git worktree add", &output));
     }
-    Ok(root.join(relative_project))
+    // 统一使用真实路径：macOS 的 `/var` → `/private/var` 等符号链接会让字符串比较失配。
+    let worktree_root = fs::canonicalize(&worktree_root).unwrap_or(worktree_root);
+    Ok(CreatedWorktree {
+        path: worktree_root.join(relative_project),
+        worktree_root,
+        branch,
+    })
 }
+
+/// 列出仓库已注册的 worktree。数据来自 git 自身，跨重启保持有效。
+pub fn list_worktrees(repository: &GitRepository) -> Result<Vec<WorktreeEntry>> {
+    let output = run_git(&repository.root, ["worktree", "list", "--porcelain"])?;
+    if !output.status.success() {
+        return Err(git_command_error("git worktree list", &output));
+    }
+    let main_root = canonical_or_self(&repository.root);
+    Ok(parse_worktrees(&String::from_utf8_lossy(&output.stdout), &main_root))
+}
+
+fn canonical_or_self(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// 删除一个受管理的 worktree：先移除工作目录，再删除其分支。
+///
+/// 主工作区与不受管理的 worktree 会被拒绝，避免误删用户自己的检出。
+pub fn remove_worktree(repository: &GitRepository, path: &Path) -> Result<()> {
+    let target = canonical_or_self(path);
+    let entry = list_worktrees(repository)?
+        .into_iter()
+        .find(|entry| entry.path == target)
+        .ok_or_else(|| anyhow!("Worktree is not registered: {}", path.display()))?;
+    if entry.is_main {
+        return Err(anyhow!("Refusing to remove the main worktree"));
+    }
+    if !entry.managed {
+        return Err(anyhow!(
+            "Refusing to remove a worktree this app did not create: {}",
+            path.display()
+        ));
+    }
+    let output = run_git_vec(
+        &repository.root,
+        vec![
+            "worktree".to_string(),
+            "remove".to_string(),
+            "--force".to_string(),
+            path.to_string_lossy().into_owned(),
+        ],
+    )?;
+    if !output.status.success() {
+        return Err(git_command_error("git worktree remove", &output));
+    }
+    if let Some(branch) = entry.branch.as_deref().filter(|branch| is_managed_branch(branch)) {
+        let output = run_git_vec(
+            &repository.root,
+            vec![
+                "branch".to_string(),
+                "-D".to_string(),
+                branch.to_string(),
+            ],
+        )?;
+        if !output.status.success() {
+            return Err(git_command_error("git branch -D", &output));
+        }
+    }
+    // 清理 git 侧残留的 worktree 记录。
+    let _ = run_git(&repository.root, ["worktree", "prune"]);
+    Ok(())
+}
+
+fn is_managed_branch(branch: &str) -> bool {
+    branch.starts_with(MANAGED_WORKTREE_BRANCH_PREFIX)
+}
+
+fn parse_worktrees(output: &str, main_root: &Path) -> Vec<WorktreeEntry> {
+    let mut entries = Vec::new();
+    let mut path: Option<PathBuf> = None;
+    let mut branch: Option<String> = None;
+    let mut flush = |path: &mut Option<PathBuf>, branch: &mut Option<String>| {
+        if let Some(path) = path.take() {
+            let canonical = canonical_or_self(&path);
+            let branch = branch.take();
+            entries.push(WorktreeEntry {
+                is_main: canonical == main_root,
+                managed: branch.as_deref().is_some_and(is_managed_branch),
+                path: canonical,
+                branch,
+            });
+        }
+    };
+    for line in output.lines() {
+        if line.is_empty() {
+            flush(&mut path, &mut branch);
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("worktree ") {
+            flush(&mut path, &mut branch);
+            path = Some(PathBuf::from(value));
+        } else if let Some(value) = line.strip_prefix("branch ") {
+            branch = value
+                .strip_prefix("refs/heads/")
+                .map(str::to_owned)
+                .or_else(|| Some(value.to_owned()));
+        }
+    }
+    flush(&mut path, &mut branch);
+    entries
+}
+
 
 pub fn load_changes(repository: &GitRepository) -> Result<Vec<GitChange>> {
     let output = run_git(
