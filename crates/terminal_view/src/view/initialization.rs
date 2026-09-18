@@ -127,6 +127,9 @@ impl TerminalView {
             )
         });
         let sidebar_toolbar = cx.new(|_| TerminalSidebarToolbar::new(sidebar.clone()));
+        // 临时连接等需要运行时凭据的 SSH 会话此时还没有 SSH 工具面板，
+        // 等凭据提交后再补建（见 `TerminalView::ensure_ssh_tool_panels`）。
+        let ssh_tool_panels_pending = !sidebar.read(cx).ssh_tool_panels_ready();
         let sidebar_tool_panels = SidebarPanel::all()
             .iter()
             .copied()
@@ -232,6 +235,7 @@ impl TerminalView {
             },
             blink_manager,
             sidebar,
+            ssh_tool_panels_pending,
             workspace_editor,
             command_bar,
             sidebar_toolbar,

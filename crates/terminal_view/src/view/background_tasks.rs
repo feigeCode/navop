@@ -236,9 +236,7 @@ fn zmodem_progress_values(
 mod tests {
     use super::{format_zmodem_bytes, zmodem_finish_notification, zmodem_progress_values};
     use std::collections::HashMap;
-    use terminal::zmodem::{
-        ZmodemTransferDirection, ZmodemTransferId, ZmodemTransferOutcome,
-    };
+    use terminal::zmodem::{ZmodemTransferDirection, ZmodemTransferId, ZmodemTransferOutcome};
 
     #[test]
     fn formats_zmodem_byte_counts() {

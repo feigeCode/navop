@@ -1254,6 +1254,10 @@ TerminalSidebar:
     en: Server Monitor
     zh-CN: 服务器监控
     zh-HK: 伺服器監控
+  save_as_connection:
+    en: Save as connection
+    zh-CN: 保存为连接
+    zh-HK: 儲存為連線
 
 LocalTerminalClose:
   title:

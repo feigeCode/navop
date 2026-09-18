@@ -126,6 +126,14 @@ Home:
     en: "Connections"
     zh-CN: "连接"
     zh-HK: "連線"
+  save_as_connection:
+    en: "Save as connection"
+    zh-CN: "保存为连接"
+    zh-HK: "儲存為連線"
+  save_as_connection_done:
+    en: "Saved “%{name}” as a connection"
+    zh-CN: "已将「%{name}」保存为连接"
+    zh-HK: "已將「%{name}」儲存為連線"
   toggle_sidebar:
     en: "Collapse or expand application sidebar"
     zh-CN: "折叠或展开应用侧栏"

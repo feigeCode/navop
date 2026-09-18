@@ -740,6 +740,9 @@ impl HomePage {
                 TerminalWorkspaceEvent::OpenSftp(connection) => {
                     this.open_sftp_view(connection.clone(), window, cx);
                 }
+                TerminalWorkspaceEvent::SaveAsConnection(connection) => {
+                    this.show_save_temporary_connection_form(connection.clone(), window, cx);
+                }
             },
         );
         self._subscriptions.push(subscription);
