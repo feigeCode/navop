@@ -23,7 +23,7 @@ pub(crate) struct TerminalWorkspaceSidebarSnapshot {
 }
 
 impl TerminalView {
-    pub(crate) fn with_workspace_pane(mut self) -> Self {
+    pub fn with_workspace_pane(mut self) -> Self {
         self.render_mode = TerminalRenderMode::WorkspacePane;
         self.set_performance_pane_active(false);
         self
