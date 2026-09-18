@@ -47,7 +47,7 @@ use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 
 use crate::acp::{
     AcpAgentEntry, AcpAgentProbe, AcpConnectOutcome, AcpConnection, AcpConnectionPhase, AcpError,
-    AcpErrorKind,
+    AcpErrorKind, AcpModelInfo,
     AcpPendingConnection, AcpPermissionEnvelope, AcpPermissionMessage, AcpPermissionOutcome,
     AcpPermissionProvider, AcpPromptStartError, AcpPublicMcpApprovalEnvelope,
     AcpPublicMcpApprovalMessage, AcpPublicMcpApprovalOutcome, AcpPublicMcpApprovalProvider,
@@ -896,6 +896,10 @@ pub struct AgentChatView {
     acp_auth_methods: Vec<String>,
     /// 当前选中的 ACP agent id(用于头部切换控件高亮)。
     current_acp_id: Option<SharedString>,
+    /// 连接前选中的模型值；连接成功后自动补一次 `session/set_config_option`。
+    ///
+    /// 没有它，「先挑模型再连接」会变成点了没反应的假控件。
+    pending_acp_model: Option<String>,
     /// 正在连接 ACP agent(拉起子进程中)。
     acp_connecting: bool,
     /// 正在连接的 ACP agent id,用于忽略已取消连接的异步回调。
@@ -1187,6 +1191,7 @@ impl AgentChatView {
             acp_pending: None,
             acp_auth_methods: Vec::new(),
             current_acp_id: None,
+            pending_acp_model: None,
             acp_connecting: false,
             acp_connecting_id: None,
             acp_connect_origin_session: None,
@@ -2794,6 +2799,8 @@ impl AgentChatView {
         AppSettings::update_and_save(cx, |settings| {
             settings.ai_chat.last_workspace_root = Some(root);
         });
+        // 换工作区会丢弃旧连接；连接前的模型选择也不再适用于新 agent 会话。
+        self.pending_acp_model = None;
         self.acp = None;
         self.acp_pending = None;
         self.acp_connecting = false;
@@ -2823,15 +2830,26 @@ impl AgentChatView {
         let Some(agent_id) = self.current_acp_id.clone() else {
             return;
         };
-        let Some(model) = AppSettings::current(cx)
-            .ai_chat
-            .acp_models
-            .get(agent_id.as_ref())
-            .cloned()
-        else {
+        self.apply_initial_acp_model(&agent_id, cx);
+    }
+
+    /// 连接建立后决定首个模型：优先连接前的选择，其次上次为该 agent 保存的模型。
+    fn apply_initial_acp_model(&mut self, agent_id: &SharedString, cx: &mut Context<Self>) {
+        let desired = self.pending_acp_model.take().or_else(|| {
+            AppSettings::current(cx)
+                .ai_chat
+                .acp_models
+                .get(agent_id.as_ref())
+                .cloned()
+        });
+        let Some(model) = desired else {
             return;
         };
-        let Some(option) = self.model_options.iter().find(|option| option.model == model).cloned()
+        let Some(option) = self
+            .model_options
+            .iter()
+            .find(|option| option.model.as_ref() == model)
+            .cloned()
         else {
             return;
         };
@@ -2841,6 +2859,43 @@ impl AgentChatView {
             option.model.as_ref(),
             cx,
         );
+    }
+
+    /// 连接建立前，用探测到的模型填充选择器。
+    ///
+    /// 仅在「当前就是该 ACP agent 且尚未连接」时生效；真正连接后由
+    /// [`acp_model_options`] 覆盖成带配置项 id 的权威列表。
+    fn apply_probe_model_options(&mut self, agent_id: &SharedString, cx: &mut Context<Self>) {
+        if self.acp.is_some() {
+            return;
+        }
+        let Some(probe) = self.acp_probes.get(agent_id) else {
+            return;
+        };
+        if probe.models.is_empty() {
+            return;
+        }
+        let options = acp_model_options_from_probe(agent_id, &probe.models);
+        self.selected_model = self
+            .pending_acp_model
+            .as_deref()
+            .and_then(|model| {
+                options
+                    .iter()
+                    .find(|option| option.model.as_ref() == model)
+                    .cloned()
+            })
+            .or_else(|| {
+                self.selected_model
+                    .clone()
+                    .filter(|selected| options.iter().any(|option| option.id == selected.id))
+            })
+            .or_else(|| options.first().cloned());
+        self.model_options = options.clone();
+        self.input.update(cx, |input, cx| {
+            input.set_menu_options(options, self.tool_options.clone(), cx);
+        });
+        self.sync_composer(cx);
     }
 
     /// 当前会话可补全的 `/` 命令。
@@ -2909,7 +2964,10 @@ impl AgentChatView {
                 }
                 let _ = this.update(cx, |this, cx| {
                     this.acp_probe_inflight.remove(&id);
-                    this.acp_probes.insert(id, probe);
+                    this.acp_probes.insert(id.clone(), probe);
+                    if this.backend == Backend::Acp && this.current_acp_id.as_ref() == Some(&id) {
+                        this.apply_probe_model_options(&id, cx);
+                    }
                     cx.notify();
                 });
             })
@@ -3099,7 +3157,13 @@ impl AgentChatView {
         }) else {
             return;
         };
+        let option = option.clone();
+        // 尚未连接：先记住选择，等 `activate_acp` 拿到真实配置项后再下发。
         let Some(acp) = self.acp.take() else {
+            self.pending_acp_model = Some(option.model.to_string());
+            self.selected_model = Some(option);
+            self.sync_composer(cx);
+            cx.notify();
             return;
         };
         let Some(config) = acp.state().current_model_config().cloned() else {
@@ -3108,7 +3172,6 @@ impl AgentChatView {
         };
         let value = agent_client_protocol::schema::SessionConfigValueId::new(model);
         let config_id = config.id.clone();
-        let option = option.clone();
         let provider_id = provider_id.to_string();
         let model = model.to_string();
         cx.spawn(async move |this, cx| {
@@ -4399,6 +4462,28 @@ fn acp_model_option(
         )
         .with_hint(selected),
     )
+}
+
+/// 由探测结果构造连接前可用的模型候选。
+///
+/// 探测拿不到配置项 id，这里用一个稳定的占位段；真正连接后
+/// [`acp_model_options`] 会用 agent 给出的配置项 id 覆盖这批选项。
+fn acp_model_options_from_probe(
+    agent_id: &SharedString,
+    models: &[AcpModelInfo],
+) -> Vec<ComposerModelOption> {
+    models
+        .iter()
+        .map(|model| {
+            ComposerModelOption::new(
+                format!("acp:{}:probe:{}", agent_id, model.id),
+                agent_id.clone(),
+                agent_id.clone(),
+                model.id.clone(),
+            )
+            .with_hint(model.label.clone())
+        })
+        .collect()
 }
 
 fn acp_model_options(
@@ -11173,5 +11258,48 @@ mod acp_probe_status_tests {
         assert!(label.starts_with("xxx"), "{label}");
         assert!(!label.contains("second line"));
         assert_eq!(81, label.chars().count());
+    }
+}
+
+#[cfg(test)]
+mod acp_preconnect_model_tests {
+    use super::acp_model_options_from_probe;
+    use crate::acp::AcpModelInfo;
+    use gpui::SharedString;
+
+    fn model(id: &str, label: &str) -> AcpModelInfo {
+        AcpModelInfo {
+            id: id.to_string(),
+            label: label.to_string(),
+        }
+    }
+
+    #[test]
+    fn probe_models_become_preconnect_options_with_distinct_ids() {
+        let agent = SharedString::from("builtin.codex");
+        let models = vec![model("gpt-5", "GPT-5"), model("gpt-5-mini", "GPT-5 mini")];
+
+        let options = acp_model_options_from_probe(&agent, &models);
+
+        assert_eq!(2, options.len());
+        assert_eq!("gpt-5", options[0].model.as_ref());
+        assert_eq!("builtin.codex", options[0].provider_id.as_ref());
+        assert_eq!("GPT-5", options[0].hint.as_ref().map(AsRef::as_ref).unwrap_or(""));
+        assert_ne!(options[0].id, options[1].id, "选项 id 必须唯一");
+    }
+
+    #[test]
+    fn probe_options_are_scoped_to_their_agent() {
+        let options = acp_model_options_from_probe(
+            &SharedString::from("builtin.gemini"),
+            &[model("gemini-2.5-pro", "Gemini 2.5 Pro")],
+        );
+
+        assert!(options[0].id.starts_with("acp:builtin.gemini:"));
+    }
+
+    #[test]
+    fn empty_probe_models_produce_no_options() {
+        assert!(acp_model_options_from_probe(&SharedString::from("a"), &[]).is_empty());
     }
 }

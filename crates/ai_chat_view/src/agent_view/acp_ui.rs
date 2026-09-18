@@ -39,6 +39,7 @@ impl AgentChatView {
         self.acp_pending = None;
         self.acp_auth_methods.clear();
         self.current_acp_id = None;
+        self.pending_acp_model = None;
         self.backend = Backend::Local;
         self.acp_connecting = false;
         self.acp_connecting_id = None;
@@ -145,6 +146,10 @@ impl AgentChatView {
         let permission_provider = self.start_acp_permission_session(cx);
         self.backend = Backend::Acp;
         self.current_acp_id = Some(config.id.clone());
+        // 换 agent 时丢弃上一个 agent 的连接前选择，并对新 agent 立刻展示探测到的模型。
+        self.pending_acp_model = None;
+        let connected_agent_id = config.id.clone();
+        self.apply_probe_model_options(&connected_agent_id, cx);
         self.acp_turn_owner = None;
         self.clear_acp_sessions();
         self.acp = None;

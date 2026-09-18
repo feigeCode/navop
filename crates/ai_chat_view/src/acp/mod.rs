@@ -52,8 +52,6 @@ pub use public_mcp_approval::{
 };
 pub use state::AcpConnectionPhase;
 pub(crate) use probe::AcpAgentProbe;
-/// 仅测试构造探测结果时用到；生产路径只经 [`AcpAgentProbe`] 间接持有。
-#[cfg_attr(not(test), allow(unused_imports))]
 pub(crate) use probe::AcpModelInfo;
 /// 仅后台探测路径使用（测试构建下探测被禁用以避免真实子进程）。
 #[cfg_attr(test, allow(unused_imports))]
