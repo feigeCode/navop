@@ -1,6 +1,112 @@
 use super::clipboard::block_selection_text_from_term;
 use super::*;
+use crate::terminal_element::LineMargin;
 use alacritty_terminal::sync::FairMutex;
+use terminal::line_timeline::SharedLineTimeline;
+
+/// 时间戳列宽（`[HH:MM:SS]`）
+const TIMESTAMP_COLUMNS: usize = 10;
+/// 无时间戳的行用空格占位
+const TIMESTAMP_BLANK: &str = "          ";
+/// 时间戳与行号之间、边距文本与终端内容之间的固定间隔（照 WindTerm 实测 3 格）
+const MARGIN_GAP: usize = 3;
+/// 行号列最小宽度（跟随当前最大行号位数）
+pub(super) const MIN_LINE_NUMBER_DIGITS: usize = 1;
+
+/// 行号列宽：按当前最大行号定宽，不为还没用到的量级预留空白。
+/// 行号进位（跳 10/100/1000）时会重算网格列数，触发一次 PTY resize。
+pub(super) fn line_number_digits(max_line_number: usize) -> usize {
+    max_line_number
+        .max(1)
+        .to_string()
+        .len()
+        .max(MIN_LINE_NUMBER_DIGITS)
+}
+
+/// 左边距占用的文本列数；两列均关闭时为 0。
+/// 布局照 WindTerm：`[HH:MM:SS]` + 3 格 + 行号 + 3 格 + 内容。
+pub(super) fn line_margin_columns(
+    show_timestamps: bool,
+    show_numbers: bool,
+    number_digits: usize,
+) -> usize {
+    if !show_timestamps && !show_numbers {
+        return 0;
+    }
+    let mut columns = MARGIN_GAP;
+    if show_timestamps {
+        columns += TIMESTAMP_COLUMNS;
+        if show_numbers {
+            columns += MARGIN_GAP;
+        }
+    }
+    if show_numbers {
+        columns += number_digits;
+    }
+    columns
+}
+
+/// 生成左边距每行文本；时间戳与行号均关闭或处于备用屏幕时返回空。
+fn build_line_margin(
+    term: &Term<GpuiEventProxy>,
+    timeline: &SharedLineTimeline,
+    show_timestamps: bool,
+    show_numbers: bool,
+    number_digits: usize,
+) -> LineMargin {
+    let columns = line_margin_columns(show_timestamps, show_numbers, number_digits);
+    if columns == 0 {
+        return LineMargin::default();
+    }
+
+    let history_size = term.history_size();
+    let display_offset = term.grid().display_offset();
+    let screen_lines = term.screen_lines();
+    // 备用屏幕（vim/less 等 TUI）不展示边距内容。
+    let alternate_screen = term.mode().contains(TermMode::ALT_SCREEN);
+    let mut rows = Vec::with_capacity(screen_lines);
+    for row in 0..screen_lines {
+        if alternate_screen {
+            rows.push(SharedString::default());
+            continue;
+        }
+        let id = history_size as i64 + row as i64 - display_offset as i64;
+        let mut text = String::with_capacity(columns);
+        if show_timestamps {
+            // 方括号照 WindTerm，时间线侧只存 `HH:MM:SS`。
+            text.push('[');
+            match timeline.label(id) {
+                Some(label) => text.push_str(&label),
+                None => text.push_str(TIMESTAMP_BLANK),
+            }
+            text.push(']');
+            text.extend(std::iter::repeat_n(' ', MARGIN_GAP));
+        }
+        if show_numbers {
+            text.push_str(&format!(
+                "{:>width$}",
+                (id + 1).max(1),
+                width = number_digits
+            ));
+            text.extend(std::iter::repeat_n(' ', MARGIN_GAP));
+        }
+        rows.push(text.into());
+    }
+
+    LineMargin { columns, rows }
+}
+
+impl TerminalView {
+    /// 左边距占用的像素宽度
+    pub(super) fn line_margin_width(&self) -> Pixels {
+        let columns = line_margin_columns(
+            self.show_line_timestamps,
+            self.show_line_numbers,
+            self.line_number_digits,
+        );
+        self.cell_width * columns as f32
+    }
+}
 
 fn with_terminal_if_ready<T, R>(
     term: &FairMutex<T>,
@@ -32,11 +138,12 @@ impl TerminalView {
         font_family: SharedString,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let (is_local, term) = {
+        let (is_local, term, timeline) = {
             let terminal = self.terminal.read(cx);
             (
                 terminal.live_connection_kind() == Some(TerminalConnectionKind::Local),
                 terminal.term().clone(),
+                terminal.line_timeline(),
             )
         };
 
@@ -88,6 +195,21 @@ impl TerminalView {
                     .filter(|selection| !selection.is_empty())
                     .map(|selection| selection.bounds()),
             );
+
+            // 行号列宽跟随当前最大行号（会话内只增不减），
+            // 不为还没用到的量级预留空白；进位时下一帧的 resize_if_needed 会重算列数。
+            let max_line_number = term.history_size() + term.screen_lines();
+            self.line_number_digits = self
+                .line_number_digits
+                .max(super::terminal_render::line_number_digits(max_line_number));
+
+            self.line_margin = build_line_margin(
+                term,
+                &timeline,
+                self.show_line_timestamps,
+                self.show_line_numbers,
+                self.line_number_digits,
+            );
         });
         if updated.is_none() {
             // A skipped frame must arrange another attempt: the Wakeup that
@@ -112,6 +234,7 @@ impl TerminalView {
             self.cell_width, // 传入预计算的 cell_width，确保与 resize 一致
             self.performance_metrics.clone(),
             self.focus_handle.clone(),
+            &self.line_margin,
         )
         .into_element()
     }
@@ -266,8 +389,25 @@ impl TerminalView {
 
 #[cfg(test)]
 mod tests {
-    use super::with_terminal_if_ready;
+    use super::{line_margin_columns, line_number_digits, with_terminal_if_ready};
     use alacritty_terminal::sync::FairMutex;
+
+    #[test]
+    fn line_number_column_grows_with_line_count() {
+        assert_eq!(1, line_number_digits(1));
+        assert_eq!(2, line_number_digits(99));
+        assert_eq!(3, line_number_digits(100));
+        assert_eq!(5, line_number_digits(12345));
+    }
+
+    #[test]
+    fn line_margin_columns_matches_windterm_layout() {
+        assert_eq!(0, line_margin_columns(false, false, 2));
+        assert_eq!(13, line_margin_columns(true, false, 2));
+        assert_eq!(5, line_margin_columns(false, true, 2));
+        assert_eq!(18, line_margin_columns(true, true, 2));
+        assert_eq!(21, line_margin_columns(true, true, 5));
+    }
 
     #[test]
     fn terminal_frame_lock_attempt_never_waits_for_parser() {

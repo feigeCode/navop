@@ -3,6 +3,7 @@ pub(crate) mod exec_capture;
 pub(crate) mod exec_supervisor;
 pub mod history;
 pub mod ingress_queue;
+pub mod line_timeline;
 mod local_shell;
 pub mod osc;
 pub mod performance_metrics;
@@ -32,6 +33,7 @@ mod wsl_distributions;
 pub mod zmodem;
 
 pub use exec_supervisor::TerminalExecError;
+pub use line_timeline::{LineTimelineSample, SharedLineTimeline};
 pub use local_shell::{
     local_config_from_custom_profile, local_config_from_settings,
     local_config_from_settings_with_profile,
