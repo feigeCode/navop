@@ -39,6 +39,8 @@ pub(super) struct FileActionEditor {
 pub(super) enum ExplorerConfirmationOperation {
     Delete(PathBuf),
     Discard(GitChange),
+    /// 删除受管理的 worktree（会丢弃该工作区里未提交的改动）。
+    RemoveWorktree(PathBuf),
 }
 
 #[derive(Clone)]
@@ -389,6 +391,11 @@ impl WorkspaceExplorer {
                     ExplorerOperation::Discard { repository, change },
                     t!("WorkspaceExplorer.git_action.discarded").to_string(),
                 )
+            }
+            ExplorerConfirmationOperation::RemoveWorktree(path) => {
+                // 走 worktree 专用清理路径：移除目录 + 删除其分支。
+                self.remove_worktree(path, cx);
+                return;
             }
         };
         self.execute_explorer_operation(operation, success_message, window, cx);

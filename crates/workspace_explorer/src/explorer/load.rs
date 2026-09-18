@@ -1,5 +1,7 @@
 use crate::backend::WorkspaceBackend;
-use crate::git::{GitChange, GitRepository, discover_repository, load_changes};
+use crate::git::{
+    GitChange, GitRepository, WorktreeEntry, discover_repository, list_worktrees, load_changes,
+};
 use crate::model::ExplorerEntry;
 use anyhow::Result;
 use ignore::gitignore::Gitignore;
@@ -11,6 +13,8 @@ pub(super) struct WorkspaceSnapshot {
     pub(super) entries: Vec<ExplorerEntry>,
     pub(super) repository: Option<GitRepository>,
     pub(super) changes: Vec<GitChange>,
+    /// 仓库已注册的 worktree；非 Git 后端为空。
+    pub(super) worktrees: Vec<WorktreeEntry>,
     pub(super) ignore_matcher: Option<Arc<Gitignore>>,
 }
 
@@ -43,11 +47,17 @@ pub(super) fn load_workspace(
         .map(load_changes)
         .transpose()?
         .unwrap_or_default();
+    let worktrees = repository
+        .as_ref()
+        .map(list_worktrees)
+        .transpose()?
+        .unwrap_or_default();
     Ok(WorkspaceSnapshot {
         root,
         entries,
         repository,
         changes,
+        worktrees,
         ignore_matcher,
     })
 }

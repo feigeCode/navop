@@ -1,5 +1,7 @@
 use super::WorkspaceExplorer;
 use super::frame::{ExplorerFramePlacement, WorkspaceExplorerEvent};
+use std::path::Path;
+
 use gpui::{
     Anchor, Context, Entity, Focusable as _, InteractiveElement as _, IntoElement,
     ParentElement as _, StatefulInteractiveElement as _, Styled as _, Window, div,
@@ -107,7 +109,14 @@ impl WorkspaceExplorer {
                 IconButton::new("workspace-create-worktree", IconName::GitBranch)
                     .tooltip(t!("WorkspaceExplorer.tooltip.create_worktree").to_string())
                     .when(self.repository.is_none(), |button| button.disabled(true))
-                    .on_click(cx.listener(|this, _, _, cx| this.create_worktree(cx))),
+                    .dropdown_menu_with_anchor(Anchor::TopRight, {
+                        let view = cx.entity();
+                        let worktrees = self.worktrees.clone();
+                        let current_root = self.root.clone();
+                        move |menu, _window, _cx| {
+                            build_worktree_menu(menu, view.clone(), &worktrees, &current_root)
+                        }
+                    }),
             )
             .when(self.show_frame_controls, |this| {
                 this.child(self.render_frame_options_button(cx))
@@ -205,6 +214,79 @@ impl WorkspaceExplorer {
         }
         cx.notify();
     }
+}
+
+/// worktree 菜单：创建、切换、删除。
+///
+/// 列表来自 `git worktree list`，所以应用重启后依然有效；删除只对带 `navop/`
+/// 前缀的受管 worktree 开放，主工作区不可删。
+fn build_worktree_menu(
+    mut menu: PopupMenu,
+    view: Entity<WorkspaceExplorer>,
+    worktrees: &[crate::git::WorktreeEntry],
+    current_root: &Path,
+) -> PopupMenu {
+    let create_view = view.clone();
+    menu = menu.min_w(px(240.0)).item(
+        PopupMenuItem::new(t!("WorkspaceExplorer.worktree.create").to_string())
+            .icon(IconName::GitBranch)
+            .on_click(move |_, _, cx| {
+                create_view.update(cx, |this, cx| this.create_worktree(cx));
+            }),
+    );
+    if worktrees.is_empty() {
+        return menu.label(t!("WorkspaceExplorer.worktree.empty").to_string());
+    }
+    menu = menu.separator().label(
+        t!(
+            "WorkspaceExplorer.worktree.section",
+            count = worktrees.len()
+        )
+        .to_string(),
+    );
+    for entry in worktrees {
+        let label = worktree_label(entry);
+        let is_current = entry.path == current_root;
+        let switch_view = view.clone();
+        let switch_root = entry.path.clone();
+        menu = menu.item(
+            PopupMenuItem::new(label.clone())
+                .icon(IconName::FolderOpen)
+                .checked(is_current)
+                .on_click(move |_, _, cx| {
+                    let root = switch_root.clone();
+                    switch_view.update(cx, |this, cx| this.switch_worktree(root, cx));
+                }),
+        );
+        if entry.managed && !entry.is_main {
+            let remove_view = view.clone();
+            let remove_root = entry.path.clone();
+            menu = menu.item(
+                PopupMenuItem::new(
+                    t!("WorkspaceExplorer.worktree.remove", name = label).to_string(),
+                )
+                .icon(IconName::Delete)
+                .on_click(move |_, _, cx| {
+                    let root = remove_root.clone();
+                    remove_view.update(cx, |this, cx| this.confirm_remove_worktree(root, cx));
+                }),
+            );
+        }
+    }
+    menu
+}
+
+fn worktree_label(entry: &crate::git::WorktreeEntry) -> String {
+    entry
+        .branch
+        .clone()
+        .unwrap_or_else(|| {
+            entry
+                .path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| entry.path.display().to_string())
+        })
 }
 
 fn build_frame_options_menu(

@@ -352,6 +352,27 @@ WorkspaceExplorer:
       en: Unable to open document
       zh-CN: 无法打开文档
       zh-HK: 無法打開文件
+  worktree:
+    create:
+      en: Create isolated worktree
+      zh-CN: 创建隔离工作区
+      zh-HK: 建立隔離工作區
+    empty:
+      en: No worktrees yet
+      zh-CN: 还没有隔离工作区
+      zh-HK: 還沒有隔離工作區
+    section:
+      en: "Worktrees (%{count})"
+      zh-CN: "隔离工作区（%{count}）"
+      zh-HK: "隔離工作區（%{count}）"
+    remove:
+      en: "Remove %{name}"
+      zh-CN: "删除 %{name}"
+      zh-HK: "刪除 %{name}"
+    remove_confirm:
+      en: "Remove worktree %{name} and its branch? Uncommitted changes in it are lost."
+      zh-CN: "删除隔离工作区 %{name} 及其分支？其中未提交的改动会丢失。"
+      zh-HK: "刪除隔離工作區 %{name} 及其分支？其中未提交的變更會遺失。"
   tooltip:
     create_worktree:
       en: Create isolated worktree

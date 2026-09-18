@@ -24,9 +24,9 @@ pub use explorer::{
     ExplorerFramePlacement, WorkspaceExplorer, WorkspaceExplorerConfig, WorkspaceExplorerEvent,
 };
 pub use git::{
-    GitBranch, GitBranchKind, GitChange, GitChangeKind, GitRepository, create_worktree,
-    discover_repository,
-    discard_change, load_branches, load_changes, load_diff, stage_change, unstage_change,
+    CreatedWorktree, GitBranch, GitBranchKind, GitChange, GitChangeKind, GitRepository,
+    WorktreeEntry, create_worktree, discover_repository, discard_change, list_worktrees,
+    load_branches, load_changes, load_diff, remove_worktree, stage_change, unstage_change,
 };
 pub use theme::WorkspaceTheme;
 

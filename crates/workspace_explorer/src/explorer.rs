@@ -9,7 +9,7 @@ mod render;
 use crate::WorkspaceEditor;
 use crate::backend::{WorkspaceBackend, local_backend};
 use crate::editor::{GitDiffRequest, WorkspaceEditorEvent};
-use crate::git::{GitChange, GitRepository, create_worktree, load_changes};
+use crate::git::{GitChange, GitRepository, WorktreeEntry, create_worktree, load_changes};
 use crate::model::ExplorerEntry;
 use crate::theme::WorkspaceTheme;
 use gpui::{
@@ -25,7 +25,7 @@ use std::sync::Arc;
 use self::load::{WorkspaceSnapshot, load_workspace};
 use branches::BranchManager;
 use clipboard::FileClipboard;
-use file_actions::{ExplorerConfirmation, FileActionEditor};
+use file_actions::{ExplorerConfirmation, ExplorerConfirmationOperation, FileActionEditor};
 
 pub(crate) use clipboard::keybindings;
 pub use frame::{ExplorerFramePlacement, WorkspaceExplorerEvent};
@@ -43,6 +43,8 @@ pub struct WorkspaceExplorer {
     repository: Option<GitRepository>,
     branch_manager: Option<Entity<BranchManager>>,
     changes: Vec<GitChange>,
+    /// 仓库已注册的 worktree，来自 `git worktree list`。
+    worktrees: Vec<WorktreeEntry>,
     changes_expanded: bool,
     files_expanded: bool,
     loading: bool,
@@ -105,6 +107,7 @@ impl WorkspaceExplorer {
             repository: None,
             branch_manager: None,
             changes: Vec::new(),
+            worktrees: Vec::new(),
             changes_expanded: true,
             files_expanded: true,
             loading: false,
@@ -152,21 +155,73 @@ impl WorkspaceExplorer {
         self.refresh_git(cx);
     }
 
+    /// 仓库已注册的 worktree；非 Git 目录时为空。
+    pub fn worktrees(&self) -> &[WorktreeEntry] {
+        &self.worktrees
+    }
+
     pub fn create_worktree(&mut self, cx: &mut Context<Self>) {
         let Some(repository) = self.repository.clone() else {
             return;
         };
         let project_root = self.root.clone();
-        let task = cx.background_spawn(async move { create_worktree(&repository, &project_root) });
+        let task = cx.background_spawn(async move {
+            create_worktree(&repository, &project_root, None)
+        });
         let entity = cx.entity().downgrade();
         cx.spawn(async move |_: WeakEntity<Self>, cx: &mut AsyncApp| {
             let result = task.await;
             let _ = entity.update(cx, |this, cx| match result {
-                Ok(root) => this.apply_root_change(root, cx),
+                Ok(created) => this.apply_root_change(created.path, cx),
                 Err(error) => {
                     this.error = Some(error.to_string());
                     cx.notify();
                 }
+            });
+        })
+        .detach();
+    }
+
+    /// 切换到某个已注册 worktree 的工作目录。
+    pub fn switch_worktree(&mut self, worktree_root: PathBuf, cx: &mut Context<Self>) {
+        // 主工作区的 `path` 即根；链接 worktree 的 `path` 就是其目录。
+        if worktree_root == self.root {
+            cx.notify();
+            return;
+        }
+        self.apply_root_change(worktree_root, cx);
+    }
+
+    /// 删除 worktree 前的确认（会丢弃该工作区未提交的改动）。
+    pub(super) fn confirm_remove_worktree(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string());
+        self.file_confirmation = Some(ExplorerConfirmation {
+            operation: ExplorerConfirmationOperation::RemoveWorktree(path),
+            message: t!("WorkspaceExplorer.worktree.remove_confirm", name = name).to_string(),
+        });
+        cx.notify();
+    }
+
+    /// 删除一个受管理的 worktree，并刷新列表。
+    pub fn remove_worktree(&mut self, worktree_root: PathBuf, cx: &mut Context<Self>) {
+        let Some(repository) = self.repository.clone() else {
+            return;
+        };
+        let entity = cx.entity().downgrade();
+        let task = cx.background_spawn(async move {
+            crate::git::remove_worktree(&repository, &worktree_root)
+        });
+        cx.spawn(async move |_: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let result = task.await;
+            let _ = entity.update(cx, |this, cx| {
+                match result {
+                    Ok(()) => this.error = None,
+                    Err(error) => this.error = Some(error.to_string()),
+                }
+                this.refresh_workspace(cx);
             });
         })
         .detach();
@@ -248,6 +303,7 @@ impl WorkspaceExplorer {
         self.repository = None;
         self.branch_manager = None;
         self.changes.clear();
+        self.worktrees.clear();
         self.ignore_matcher = None;
         self.git_loading = false;
         self.git_refresh_pending = false;
@@ -328,6 +384,7 @@ impl WorkspaceExplorer {
         self.selected_path = None;
         self.repository = snapshot.repository;
         self.changes = snapshot.changes;
+        self.worktrees = snapshot.worktrees;
         if self
             .selected_change_path
             .as_ref()
