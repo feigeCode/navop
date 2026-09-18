@@ -888,12 +888,48 @@ fn default_connection_sidebar_tree_width() -> u32 {
     DEFAULT_CONNECTION_SIDEBAR_TREE_WIDTH
 }
 
+/// 点击主窗口关闭按钮时的行为。
+///
+/// 只在系统托盘可用时生效：托盘不可用时一律回退到退出确认，不制造无法恢复的隐藏窗口。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CloseButtonBehavior {
+    /// 弹窗询问：最小化到托盘，还是退出应用（弹窗内可记住选择）
+    #[default]
+    Ask,
+    /// 直接最小化到托盘
+    MinimizeToTray,
+    /// 直接走退出确认
+    Quit,
+}
+
+impl CloseButtonBehavior {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CloseButtonBehavior::Ask => "ask",
+            CloseButtonBehavior::MinimizeToTray => "minimize_to_tray",
+            CloseButtonBehavior::Quit => "quit",
+        }
+    }
+
+    /// 未知取值回退到 [`CloseButtonBehavior::Ask`]：旧版本写下的值不能把新版本卡死。
+    pub fn from_str(value: &str) -> Self {
+        match value {
+            "minimize_to_tray" => CloseButtonBehavior::MinimizeToTray,
+            "quit" => CloseButtonBehavior::Quit,
+            _ => CloseButtonBehavior::Ask,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     #[serde(default)]
     pub main_window_size: Option<MainWindowSize>,
     #[serde(default)]
     pub main_window_state: Option<MainWindowState>,
+    #[serde(default)]
+    pub close_button_behavior: CloseButtonBehavior,
     #[serde(default = "default_locale")]
     pub locale: String,
     #[serde(default = "default_theme_mode")]
@@ -1312,6 +1348,7 @@ impl Default for AppSettings {
         Self {
             main_window_size: None,
             main_window_state: None,
+            close_button_behavior: CloseButtonBehavior::default(),
             locale: default_locale(),
             theme_mode: default_theme_mode(),
             auto_switch_theme: false,
@@ -1693,9 +1730,10 @@ mod tests {
     use gpui_component::{Theme, ThemeMode};
 
     use super::{
-        AiChatSettings, AiChatToolExecutionMode, AppSettings, ConnectionSortOrder, CustomFont,
-        DEFAULT_AI_REQUEST_TIMEOUT_SECS, DEFAULT_MCP_APPROVAL_TIMEOUT_MS, DEFAULT_TERMINAL_THEME,
-        HomeConnectionLayout, LOCALE_SYSTEM, LargeTextCellEditorOpenMode, LocalTerminalProfileKind,
+        AiChatSettings, AiChatToolExecutionMode, AppSettings, CloseButtonBehavior,
+        ConnectionSortOrder, CustomFont, DEFAULT_AI_REQUEST_TIMEOUT_SECS,
+        DEFAULT_MCP_APPROVAL_TIMEOUT_MS, DEFAULT_TERMINAL_THEME, HomeConnectionLayout,
+        LOCALE_SYSTEM, LargeTextCellEditorOpenMode, LocalTerminalProfileKind,
         LocalTerminalProfileSettings, MAX_AI_REQUEST_TIMEOUT_SECS, MAX_CUSTOM_SYSTEM_PROMPT_CHARS,
         MIN_AI_REQUEST_TIMEOUT_SECS, MainWindowState, McpPermissionMode, McpServerMode,
         PersonalSyncBackendKind, RemoteFileOpenMode, SqlFormatSettings, SqlIndentStyle,
@@ -1777,6 +1815,57 @@ mod tests {
             serde_json::from_value(serde_json::json!({})).expect("旧版设置应能反序列化");
 
         assert!(settings.main_window_state.is_none());
+    }
+
+    #[test]
+    fn close_button_behavior_defaults_to_asking_every_time() {
+        assert_eq!(
+            CloseButtonBehavior::Ask,
+            AppSettings::default().close_button_behavior
+        );
+    }
+
+    #[test]
+    fn legacy_app_settings_without_close_button_behavior_ask_every_time() {
+        let settings: AppSettings =
+            serde_json::from_value(serde_json::json!({})).expect("旧版设置应能反序列化");
+
+        assert_eq!(CloseButtonBehavior::Ask, settings.close_button_behavior);
+    }
+
+    #[test]
+    fn close_button_behavior_round_trips_through_settings_json() {
+        for behavior in [
+            CloseButtonBehavior::Ask,
+            CloseButtonBehavior::MinimizeToTray,
+            CloseButtonBehavior::Quit,
+        ] {
+            let mut settings = AppSettings::default();
+            settings.close_button_behavior = behavior;
+
+            let json = serde_json::to_value(&settings).expect("serialize settings");
+            let restored: AppSettings = serde_json::from_value(json).expect("deserialize settings");
+
+            assert_eq!(behavior, restored.close_button_behavior);
+        }
+    }
+
+    #[test]
+    fn close_button_behavior_strings_are_closed_and_fall_back_to_asking() {
+        for behavior in [
+            CloseButtonBehavior::Ask,
+            CloseButtonBehavior::MinimizeToTray,
+            CloseButtonBehavior::Quit,
+        ] {
+            assert_eq!(behavior, CloseButtonBehavior::from_str(behavior.as_str()));
+        }
+
+        // 未知取值必须回退到询问，而不是静默变成「退出应用」。
+        assert_eq!(
+            CloseButtonBehavior::Ask,
+            CloseButtonBehavior::from_str("something_else")
+        );
+        assert_eq!(CloseButtonBehavior::Ask, CloseButtonBehavior::from_str(""));
     }
 
     #[test]
