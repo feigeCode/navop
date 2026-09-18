@@ -600,6 +600,10 @@ pub enum TerminalSidebarEvent {
     VimScrollToArrowKeysChanged(bool),
     /// 选中文本高亮相同内容开关
     SelectionHighlightChanged(bool),
+    /// 左边距显示每行到达时间开关
+    ShowLineTimestampsChanged(bool),
+    /// 左边距显示行号开关
+    ShowLineNumbersChanged(bool),
     /// 路径与终端同步开关
     SyncPathChanged(bool),
     /// 自定义高亮规则变更
@@ -871,6 +875,12 @@ impl TerminalSidebar {
                 }
                 settings_panel::SettingsPanelEvent::SelectionHighlightChanged(enabled) => {
                     cx.emit(TerminalSidebarEvent::SelectionHighlightChanged(*enabled));
+                }
+                settings_panel::SettingsPanelEvent::ShowLineTimestampsChanged(enabled) => {
+                    cx.emit(TerminalSidebarEvent::ShowLineTimestampsChanged(*enabled));
+                }
+                settings_panel::SettingsPanelEvent::ShowLineNumbersChanged(enabled) => {
+                    cx.emit(TerminalSidebarEvent::ShowLineNumbersChanged(*enabled));
                 }
                 settings_panel::SettingsPanelEvent::SyncPathChanged(enabled) => {
                     this.sync_path_enabled = *enabled;
@@ -1353,6 +1363,18 @@ impl TerminalSidebar {
     pub fn set_selection_highlight(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.settings_panel.update(cx, |panel, cx| {
             panel.set_selection_highlight(enabled, cx);
+        });
+    }
+
+    pub fn set_show_line_timestamps(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.settings_panel.update(cx, |panel, cx| {
+            panel.set_show_line_timestamps(enabled, cx);
+        });
+    }
+
+    pub fn set_show_line_numbers(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.settings_panel.update(cx, |panel, cx| {
+            panel.set_show_line_numbers(enabled, cx);
         });
     }
 

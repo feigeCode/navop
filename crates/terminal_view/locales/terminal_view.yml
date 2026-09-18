@@ -770,6 +770,14 @@ Settings:
     en: Highlight matching text on selection
     zh-CN: 选中文本后高亮相同内容
     zh-HK: 選取文字後高亮相同內容
+  show_line_timestamps:
+    en: Show line timestamps
+    zh-CN: 显示每行时间戳
+    zh-HK: 顯示每行時間戳
+  show_line_numbers:
+    en: Show line numbers
+    zh-CN: 显示行号
+    zh-HK: 顯示行號
   file_manager_section:
     en: FILE MANAGER
     zh-CN: 文件管理器
