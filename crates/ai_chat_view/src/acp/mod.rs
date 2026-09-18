@@ -19,6 +19,7 @@ mod permission;
 mod provider;
 mod public_mcp_approval;
 mod state;
+mod sessions;
 mod translate;
 mod turn;
 #[cfg(test)]
@@ -49,4 +50,8 @@ pub use public_mcp_approval::{
     AcpPublicMcpApprovalRequest,
 };
 pub use state::AcpConnectionPhase;
-pub(crate) use state::AcpSessionState;
+pub(crate) use sessions::{
+    AcpSessionOpen, AcpSessionSummary, acp_session_list_supported, acp_session_open_kind,
+    acp_session_summaries,
+};
+pub(crate) use state::{AcpSessionState, AcpUsage};

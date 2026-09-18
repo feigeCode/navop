@@ -83,6 +83,16 @@ impl AcpSessionState {
         &self.config_options
     }
 
+    pub(crate) fn current_model_config(&self) -> Option<&SessionConfigOption> {
+        self.config_options.iter().find(|option| {
+            matches!(
+                option.category,
+                Some(agent_client_protocol::schema::SessionConfigOptionCategory::Model)
+            ) || option.id.0.eq_ignore_ascii_case("model")
+                || option.name.to_ascii_lowercase().contains("model")
+        })
+    }
+
     pub(crate) fn title(&self) -> Option<&str> {
         self.title.as_deref()
     }

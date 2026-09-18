@@ -185,6 +185,7 @@ async fn permission_request_reaches_connection_provider_and_returns_original_opt
     });
     let connection = match AcpConnection::connect_with_runtime_and_permission_provider(
         &fake_config(Mode::Permission, Duration::from_secs(2)),
+        std::env::current_dir().expect("current directory"),
         tokio::runtime::Handle::current(),
         provider,
     )
@@ -230,6 +231,7 @@ async fn ready_connection(mode: Mode, prompt_timeout: Duration) -> AcpConnection
 async fn connect_fake(mode: Mode, prompt_timeout: Duration) -> anyhow::Result<AcpConnectOutcome> {
     AcpConnection::connect_with_runtime(
         &fake_config(mode, prompt_timeout),
+        std::env::current_dir().expect("current directory"),
         tokio::runtime::Handle::current(),
     )
     .await

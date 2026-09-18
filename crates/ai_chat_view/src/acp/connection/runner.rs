@@ -55,42 +55,47 @@ struct ClientTaskContext {
 
 pub(super) async fn connect(
     config: &AcpAgentConfig,
+    workspace_root: PathBuf,
     cx: &mut AsyncApp,
 ) -> anyhow::Result<AcpConnectOutcome> {
     let handle = cx.update(|cx| Tokio::handle(cx));
-    connect_with_parts(config, handle, None).await
+    connect_with_parts(config, workspace_root, handle, None).await
 }
 
 pub(super) async fn connect_with_permission_provider(
     config: &AcpAgentConfig,
+    workspace_root: PathBuf,
     permission_provider: AcpPermissionProvider,
     cx: &mut AsyncApp,
 ) -> anyhow::Result<AcpConnectOutcome> {
     let handle = cx.update(|cx| Tokio::handle(cx));
-    connect_with_parts(config, handle, Some(permission_provider)).await
+    connect_with_parts(config, workspace_root, handle, Some(permission_provider)).await
 }
 
 pub(super) async fn connect_with_runtime(
     config: &AcpAgentConfig,
+    workspace_root: PathBuf,
     handle: tokio::runtime::Handle,
 ) -> anyhow::Result<AcpConnectOutcome> {
-    connect_with_parts(config, handle, None).await
+    connect_with_parts(config, workspace_root, handle, None).await
 }
 
 pub(super) async fn connect_with_runtime_and_permission_provider(
     config: &AcpAgentConfig,
+    workspace_root: PathBuf,
     handle: tokio::runtime::Handle,
     permission_provider: AcpPermissionProvider,
 ) -> anyhow::Result<AcpConnectOutcome> {
-    connect_with_parts(config, handle, Some(permission_provider)).await
+    connect_with_parts(config, workspace_root, handle, Some(permission_provider)).await
 }
 
 async fn connect_with_parts(
     config: &AcpAgentConfig,
+    workspace_root: PathBuf,
     handle: tokio::runtime::Handle,
     permission_provider: Option<AcpPermissionProvider>,
 ) -> anyhow::Result<AcpConnectOutcome> {
-    let shared = prepare_shared(config, handle);
+    let shared = prepare_shared(config, workspace_root, handle);
     let mut spawned = spawn_client(shared.clone(), permission_provider);
     let ready_rx = spawned.ready_rx.take().expect("ready receiver must exist");
     let ready = wait_for_ready(&shared.handle, config.timeouts.connect, ready_rx).await;
@@ -106,7 +111,11 @@ async fn wait_for_ready(
     tokio::time::timeout(timeout, ready_rx).await
 }
 
-fn prepare_shared(config: &AcpAgentConfig, handle: tokio::runtime::Handle) -> ConnectShared {
+fn prepare_shared(
+    config: &AcpAgentConfig,
+    workspace_root: PathBuf,
+    handle: tokio::runtime::Handle,
+) -> ConnectShared {
     let (events_tx, _keep) = broadcast::channel(512);
     let state = Arc::new(Mutex::new(AcpSessionState::default()));
     transition_state(&state, AcpConnectionPhase::Initializing);
@@ -116,7 +125,7 @@ fn prepare_shared(config: &AcpAgentConfig, handle: tokio::runtime::Handle) -> Co
         session_id: SessionId::from_string(format!("acp:{}", uuid::Uuid::new_v4())),
         state,
         active_turn: Arc::new(Mutex::new(None)),
-        workspace_root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
+        workspace_root,
         config: config.clone(),
     }
 }
