@@ -1,5 +1,5 @@
 use super::{
-    acp_agent_config_from_extension_agent, acp_agent_entries_from_agents,
+    acp_agent_config_from_extension_agent, acp_agent_entries_from_agents, builtin_agent_configs,
     normalize_acp_agent_config_ids,
 };
 use ai_chat_view::{AcpAgentConfig, AcpTransport};
@@ -172,4 +172,51 @@ fn extension_agent(id: &str) -> AcpAgentExtensionAgent {
         Vec::new(),
         BTreeMap::new(),
     )
+}
+
+#[test]
+fn builtin_agents_use_real_acp_entrypoints() {
+    let configs = builtin_agent_configs();
+
+    let codex = configs
+        .iter()
+        .find(|config| config.id.as_ref() == "builtin.codex")
+        .expect("codex builtin");
+    match &codex.transport {
+        AcpTransport::Stdio { command, args, .. } => {
+            // 与仓库内 acp_agent.json 约定一致：走 codex-acp 适配器，而不是 `codex` 普通子命令。
+            assert_eq!("codex-acp", command);
+            assert_eq!(vec!["--stdio".to_string()], *args);
+        }
+        other => panic!("codex must be stdio, got {other:?}"),
+    }
+
+    // 不能把普通 CLI 名字当成 ACP 入口：那会拉起一个不实现 ACP 的进程。
+    for config in &configs {
+        let AcpTransport::Stdio { command, .. } = &config.transport else {
+            panic!("builtin agents must use stdio transport");
+        };
+        assert_ne!("codex", command);
+        assert_ne!("claude", command);
+        assert!(!config.name.is_empty());
+    }
+}
+
+#[test]
+fn builtin_agent_ids_are_unique_and_namespaced() {
+    let configs = builtin_agent_configs();
+    let mut ids = configs
+        .iter()
+        .map(|config| config.id.to_string())
+        .collect::<Vec<_>>();
+    let total = ids.len();
+    ids.sort();
+    ids.dedup();
+    assert_eq!(total, ids.len(), "builtin agent ids must be unique");
+    assert!(
+        configs
+            .iter()
+            .all(|config| config.id.as_ref().starts_with("builtin.")),
+        "builtin agents must be namespaced to avoid clashing with extension ids"
+    );
 }

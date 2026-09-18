@@ -44,35 +44,61 @@ fn acp_agent_entries_from_registry() -> anyhow::Result<Vec<AcpAgentEntry>> {
     Ok(dedupe_agent_entries(entries))
 }
 
+/// 内置 ACP 入口候选。
+///
+/// 只列真实 ACP 入口，而不是各 CLI 的普通子命令：Codex 走 Zed 生态的
+/// `codex-acp --stdio` 适配器（与仓库内 `acp_agent.json` 约定一致），Claude 走
+/// `claude-code-acp`，Gemini 用 `--experimental-acp`，OpenCode 用 `acp` 子命令。
+/// 是否真的可用由后台探测（`acp::probe`）判定，这里不做假设。
+const BUILTIN_ACP_AGENTS: [(&str, &str, &str, &[&str]); 5] = [
+    ("builtin.claude", "Claude Code", "claude-code-acp", &[]),
+    ("builtin.codex", "Codex CLI", "codex-acp", &["--stdio"]),
+    (
+        "builtin.gemini",
+        "Gemini CLI",
+        "gemini",
+        &["--experimental-acp"],
+    ),
+    ("builtin.opencode", "OpenCode", "opencode", &["acp"]),
+    ("builtin.copilot", "GitHub Copilot", "copilot", &["--acp"]),
+];
+
+/// 内置 ACP agent 的启动配置，不做 PATH 检查（便于测试启动契约本身）。
+fn builtin_agent_configs() -> Vec<AcpAgentConfig> {
+    BUILTIN_ACP_AGENTS
+        .iter()
+        .map(|(id, name, command, args)| {
+            AcpAgentConfig::new(*id, *name, *command)
+                .with_args(args.iter().map(|arg| arg.to_string()).collect())
+        })
+        .collect()
+}
+
 fn builtin_agent_entries(config: &user_config::AcpUserConfig) -> Vec<AcpAgentEntry> {
-    [
-        ("builtin.claude", "Claude Code", "claude", vec!["--acp"]),
-        ("builtin.codex", "Codex CLI", "codex", vec!["--acp"]),
-        ("builtin.gemini", "Gemini CLI", "gemini", vec!["--acp"]),
-        ("builtin.opencode", "OpenCode", "opencode", vec!["acp"]),
-        ("builtin.copilot", "GitHub Copilot", "copilot", vec!["--acp"]),
-    ]
-    .into_iter()
-    .filter_map(|(id, name, command, args)| {
-        command_on_path(command).then(|| {
-            let mut agent = AcpAgentConfig::new(id, name, command)
-                .with_args(args.into_iter().map(String::from).collect());
-            if let Some(override_config) = config.agents.get(id) {
+    builtin_agent_configs()
+        .into_iter()
+        .filter_map(|mut agent| {
+            let AcpTransport::Stdio { command, .. } = &agent.transport else {
+                return None;
+            };
+            if !command_on_path(command) {
+                return None;
+            }
+            if let Some(override_config) = config.agents.get(agent.id.as_ref()) {
                 match resolve_override(override_config, |name| std::env::var(name).ok()) {
                     Ok(resolved) => apply_user_override(&mut agent, resolved),
                     Err(error) => {
-                        return AcpAgentEntry::invalid(
-                            id,
-                            name,
+                        return Some(AcpAgentEntry::invalid(
+                            agent.id.clone(),
+                            agent.name.clone(),
                             AcpConfigDiagnostic::new(error.to_string()),
-                        );
+                        ));
                     }
                 }
             }
-            AcpAgentEntry::ready(agent)
+            Some(AcpAgentEntry::ready(agent))
         })
-    })
-    .collect()
+        .collect()
 }
 
 fn command_on_path(command: &str) -> bool {
