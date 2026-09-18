@@ -16,9 +16,13 @@ async fn installed_acp_agent_returns_output_or_actionable_failure() {
             prompt: Duration::from_secs(120),
         });
 
-    let outcome = AcpConnection::connect_with_runtime(&config, tokio::runtime::Handle::current())
-        .await
-        .unwrap_or_else(|error| panic!("{name} connect failed: {error:#}"));
+    let outcome = AcpConnection::connect_with_runtime(
+        &config,
+        std::env::current_dir().expect("current directory"),
+        tokio::runtime::Handle::current(),
+    )
+    .await
+    .unwrap_or_else(|error| panic!("{name} connect failed: {error:#}"));
     let connection = match outcome {
         AcpConnectOutcome::Ready(connection) => connection,
         AcpConnectOutcome::AuthenticationRequired(pending) => {

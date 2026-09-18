@@ -49,34 +49,38 @@ pub struct AcpConnection {
 impl AcpConnection {
     pub async fn connect(
         config: &AcpAgentConfig,
+        workspace_root: std::path::PathBuf,
         cx: &mut AsyncApp,
     ) -> anyhow::Result<AcpConnectOutcome> {
-        runner::connect(config, cx).await
+        runner::connect(config, workspace_root, cx).await
     }
 
     pub async fn connect_with_permission_provider(
         config: &AcpAgentConfig,
+        workspace_root: std::path::PathBuf,
         permission_provider: AcpPermissionProvider,
         cx: &mut AsyncApp,
     ) -> anyhow::Result<AcpConnectOutcome> {
-        runner::connect_with_permission_provider(config, permission_provider, cx).await
+        runner::connect_with_permission_provider(config, workspace_root, permission_provider, cx).await
     }
 
     #[doc(hidden)]
     pub async fn connect_with_runtime(
         config: &AcpAgentConfig,
+        workspace_root: std::path::PathBuf,
         handle: tokio::runtime::Handle,
     ) -> anyhow::Result<AcpConnectOutcome> {
-        runner::connect_with_runtime(config, handle).await
+        runner::connect_with_runtime(config, workspace_root, handle).await
     }
 
     #[doc(hidden)]
     pub async fn connect_with_runtime_and_permission_provider(
         config: &AcpAgentConfig,
+        workspace_root: std::path::PathBuf,
         handle: tokio::runtime::Handle,
         permission_provider: AcpPermissionProvider,
     ) -> anyhow::Result<AcpConnectOutcome> {
-        runner::connect_with_runtime_and_permission_provider(config, handle, permission_provider)
+        runner::connect_with_runtime_and_permission_provider(config, workspace_root, handle, permission_provider)
             .await
     }
 
@@ -93,6 +97,14 @@ impl AcpConnection {
             .lock()
             .map(|state| state.phase().clone())
             .unwrap_or(AcpConnectionPhase::Closed)
+    }
+
+    pub async fn set_model(
+        &self,
+        config_id: agent_client_protocol::schema::SessionConfigId,
+        value: agent_client_protocol::schema::SessionConfigValueId,
+    ) -> anyhow::Result<()> {
+        self.set_config_option(config_id, value).await.map(|_| ())
     }
 
     pub(crate) fn state(&self) -> AcpSessionState {
