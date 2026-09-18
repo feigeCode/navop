@@ -4,6 +4,28 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.18.1] - 2026-09-18
+
+#### 修复与优化
+
+- 扩展市场：修复卡片上「安装 / 更新 / 卸载 / 重载」按钮与「点卡片查看详情」全部无响应的问题（v0.18.0 改版引入）；同时修好已安装卡片的悬停高亮，安装动作在窗口已关闭或标签页关不掉时不再把页面卡在忙碌状态。
+- SFTP：左侧切换服务器时，若目标连接要求连接时输入密码且此前未记住，改为弹窗录入本次凭据（不落库）；认证失败会把原因回填到弹窗里重试，不再让左侧直接断开。
+- 资源工作台：查询页合并页面初始加载结果与本次手动执行的结果，进入「表单 + 加载」类页面（如索引的 Documents 页）即可直接看到内容，不再停在 "No result yet" 必须先手动执行一次；加载失败也会如实展示在结果区。
+- 修复标签页右键菜单「复制」项把占位符渲染成 `{{label}}` 的问题，现在正常显示「复制标签」等文案。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.18.1) 下载桌面端安装包
+
+---
+
+#### Fixes and Improvements
+
+- Extension marketplace: fixed the release-blocking bug where none of the card actions worked — the install / update / uninstall / reload buttons and clicking a card to open its details were all unresponsive (regression from the v0.18.0 redesign). Installed cards now also show their hover highlight, and an install that loses its window or fails to close its tabs no longer leaves the page stuck in a busy state.
+- SFTP: switching the left pane to a server that requires a password at connect time and has not saved one now prompts for credentials in a dialog for that connection only (nothing is persisted). A failed authentication feeds the reason back into the dialog for a retry instead of dropping the left pane.
+- Resource workbench: query pages now merge the page's initial load result with the result of a manual run, so "form + load" pages (such as a collection's Documents page) show their content immediately instead of sitting on "No result yet" until the user runs something; a failed load is likewise surfaced in the result area.
+- Fixed the tab context menu's "Copy" item rendering its placeholder as `{{label}}`; it now reads "Copy Tab" and similar labels correctly.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.18.0...v0.18.1
+
 ## [v0.18.0] - 2026-09-16
 
 #### 更新内容
