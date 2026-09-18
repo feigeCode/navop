@@ -9,7 +9,7 @@ mod render;
 use crate::WorkspaceEditor;
 use crate::backend::{WorkspaceBackend, local_backend};
 use crate::editor::{GitDiffRequest, WorkspaceEditorEvent};
-use crate::git::{GitChange, GitRepository, load_changes};
+use crate::git::{GitChange, GitRepository, create_worktree, load_changes};
 use crate::model::ExplorerEntry;
 use crate::theme::WorkspaceTheme;
 use gpui::{
@@ -137,6 +137,41 @@ impl WorkspaceExplorer {
         &self.root
     }
 
+    /// 当前已加载的 Git 变更列表。
+    pub fn changes(&self) -> &[GitChange] {
+        &self.changes
+    }
+
+    /// 当前工作区根对应的 Git 仓库；非 Git 目录时为 `None`。
+    pub fn repository(&self) -> Option<&GitRepository> {
+        self.repository.as_ref()
+    }
+
+    /// 重新加载 Git 变更（外部容器在切换工作台后调用）。
+    pub fn refresh_git_changes(&mut self, cx: &mut Context<Self>) {
+        self.refresh_git(cx);
+    }
+
+    pub fn create_worktree(&mut self, cx: &mut Context<Self>) {
+        let Some(repository) = self.repository.clone() else {
+            return;
+        };
+        let project_root = self.root.clone();
+        let task = cx.background_spawn(async move { create_worktree(&repository, &project_root) });
+        let entity = cx.entity().downgrade();
+        cx.spawn(async move |_: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let result = task.await;
+            let _ = entity.update(cx, |this, cx| match result {
+                Ok(root) => this.apply_root_change(root, cx),
+                Err(error) => {
+                    this.error = Some(error.to_string());
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     pub fn follows_terminal_cwd(&self) -> bool {
         self.follow_terminal_cwd
     }
@@ -200,6 +235,7 @@ impl WorkspaceExplorer {
         self.root = root;
         self.reset_workspace_state();
         self.refresh(cx);
+        cx.emit(WorkspaceExplorerEvent::RootChanged(self.root.clone()));
     }
 
     fn reset_workspace_state(&mut self) {
@@ -398,20 +434,22 @@ impl WorkspaceExplorer {
         cx.notify();
     }
 
-    fn open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+    /// 打开（或聚焦已打开的）某个文件编辑器标签页。
+    pub fn open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         self.selected_path = Some(path.clone());
         self.editor
             .update(cx, |editor, cx| editor.open_file(path, window, cx));
         cx.notify();
     }
 
-    fn open_change(&mut self, change: GitChange, window: &mut Window, cx: &mut Context<Self>) {
+    /// 打开（或聚焦已打开的）某条 Git 变更的 diff 标签页。
+    pub fn open_change(&mut self, change: GitChange, window: &mut Window, cx: &mut Context<Self>) {
         let Some(repository) = self.repository.clone() else {
             return;
         };
         self.selected_change_path = Some(change.path.clone());
         self.editor.update(cx, |editor, cx| {
-            editor.open_git_change(GitDiffRequest { repository, change }, window, cx);
+            editor.open_diff(GitDiffRequest { repository, change }, window, cx);
         });
         cx.notify();
     }

@@ -72,9 +72,14 @@ pub(super) enum LoadRequest {
     },
 }
 
-pub(crate) struct GitDiffRequest {
-    pub(crate) repository: GitRepository,
-    pub(crate) change: GitChange,
+/// 请求编辑器展示某条 Git 变更的 diff。
+///
+/// 供工作台审阅面板等外部容器构造；`repository` 与 `change` 均来自
+/// [`crate::git`] 的公开查询函数。
+#[derive(Clone, Debug)]
+pub struct GitDiffRequest {
+    pub repository: GitRepository,
+    pub change: GitChange,
 }
 
 pub(super) struct PendingDocument {
