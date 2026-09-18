@@ -3181,11 +3181,21 @@ impl AgentChatView {
             return;
         }
         let handle = Tokio::handle(cx);
-        for (id, config) in targets {
+        for (id, _) in &targets {
             self.acp_probe_inflight.insert(id.clone());
-            let handle = handle.clone();
-            cx.spawn(async move |this, cx| {
-                let probe = crate::acp::probe_agent(&config, handle).await;
+        }
+        // 串行探测，且每个探测在 GPUI 后台线程上用 `Handle::block_on` 跑：
+        // 一次只拉起一个 CLI，`EnterGuard` 也不会落到 GPUI 主线程上交错。
+        let probe_task = cx.background_spawn(async move {
+            let mut results = Vec::with_capacity(targets.len());
+            for (id, config) in targets {
+                let probe = crate::acp::probe_agent_blocking(&config, handle.clone());
+                results.push((id, probe));
+            }
+            results
+        });
+        cx.spawn(async move |this, cx| {
+            for (id, probe) in probe_task.await {
                 if !probe.identified() {
                     tracing::warn!(
                         agent = %id,
@@ -3193,17 +3203,22 @@ impl AgentChatView {
                         "ACP agent probe failed"
                     );
                 }
-                let _ = this.update(cx, |this, cx| {
-                    this.acp_probe_inflight.remove(&id);
-                    this.acp_probes.insert(id.clone(), probe);
-                    if this.backend == Backend::Acp && this.current_acp_id.as_ref() == Some(&id) {
-                        this.apply_probe_model_options(&id, cx);
-                    }
-                    cx.notify();
-                });
-            })
-            .detach();
-        }
+                let alive = this
+                    .update(cx, |this, cx| {
+                        this.acp_probe_inflight.remove(&id);
+                        this.acp_probes.insert(id.clone(), probe);
+                        if this.backend == Backend::Acp && this.current_acp_id.as_ref() == Some(&id) {
+                            this.apply_probe_model_options(&id, cx);
+                        }
+                        cx.notify();
+                    })
+                    .is_ok();
+                if !alive {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
     /// 当前 agent 列表对应的探测状态文案，供切换器直接展示。
@@ -11603,5 +11618,41 @@ mod acp_reconnect_tests {
         // 上限：继续翻倍没有意义，且会撑大延迟。
         assert_eq!(Duration::from_millis(4800), acp_reconnect_delay(3));
         assert_eq!(Duration::from_millis(4800), acp_reconnect_delay(99));
+    }
+}
+
+#[cfg(test)]
+mod acp_probe_hosting_tests {
+    /// 回归：探测曾经直接在 GPUI foreground future 里 await，导致
+    /// ① 在非 Tokio 线程创建 timer → `there is no reactor running`；
+    /// ② 多个探测在同一线程交错持有 `EnterGuard` →
+    ///    `EnterGuard values dropped out of order`。
+    ///
+    /// 因此探测必须放到 GPUI 后台线程，并用 `Handle::block_on` 进入 runtime。
+    #[test]
+    fn probes_run_off_the_gpui_thread() {
+        let source = include_str!("agent_view.rs").replace("\r\n", "\n");
+        let start = source
+            .find("fn spawn_acp_probes")
+            .expect("spawn_acp_probes should exist");
+        let rest = &source[start + 1..];
+        let end = rest
+            .find("\n    fn ")
+            .map(|offset| start + 1 + offset)
+            .unwrap_or(source.len());
+        let region = &source[start..end];
+
+        assert!(
+            region.contains("background_spawn"),
+            "探测必须跑在 GPUI 后台线程上"
+        );
+        assert!(
+            region.contains("probe_agent_blocking"),
+            "必须用 block_on 进入 runtime，避免 EnterGuard 在同线程交错"
+        );
+        assert!(
+            !region.contains("crate::acp::probe_agent("),
+            "不要在 GPUI foreground future 里直接 await 异步探测"
+        );
     }
 }

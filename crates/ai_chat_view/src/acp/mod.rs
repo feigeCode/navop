@@ -55,7 +55,7 @@ pub(crate) use probe::AcpAgentProbe;
 pub(crate) use probe::AcpModelInfo;
 /// 仅后台探测路径使用（测试构建下探测被禁用以避免真实子进程）。
 #[cfg_attr(test, allow(unused_imports))]
-pub(crate) use probe::probe_agent;
+pub(crate) use probe::probe_agent_blocking;
 pub(crate) use sessions::{
     AcpSessionOpen, AcpSessionSummary, acp_session_list_supported, acp_session_open_kind,
     acp_session_summaries,
