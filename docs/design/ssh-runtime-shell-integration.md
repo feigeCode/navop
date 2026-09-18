@@ -64,6 +64,25 @@ OSC 133 A/B/C/D + OSC 7 + OSC 1337 协议与旧版完全一致
 - 跳过文件头部的交互守卫与 `_ONETCLI_SHELL_INTEGRATED` 幂等守卫（前 3 行，运行时注入天然满足这些条件）；
 - `__onetcli_precmd_common` 中注入轮次识别：`_ONETCLI_RUNTIME_SETUP` 存在时跳过命令记录（避免把注入命令自己记为"用户命令"）。
 
+#### bash 钩子必须自带存在性判断（Issue #217）
+
+bash 分支注册到 `PROMPT_COMMAND` 的不是裸函数名，而是自带判断的命令串：
+
+```sh
+__ONETCLI_EXIT=$?; command -v __onetcli_precmd_bash >/dev/null 2>&1 && __onetcli_precmd_bash "$__ONETCLI_EXIT"
+```
+
+`PROMPT_COMMAND` 是 shell 局部机制，但它的值可以被导出并被后续 shell 继承
+（服务器 profile 里显式 `export PROMPT_COMMAND=...`，再叠加 `su`、`tmux`、`exec bash`、
+嵌套 ssh 等链路）。继承它的 shell 里并没有本文件的函数定义，裸函数名会让这些 shell 的
+每个提示符都多输出一行 `bash: __onetcli_precmd_bash: 未找到命令`，即 Issue #217。
+
+两点实现约束：退出码必须在钩子里先取好再显式传给函数——钩子里的 `command -v` 会覆盖 `$?`，
+若还像以前那样让函数自己去读 `$?`，上报的 exit code 会恒为 0，`133;D` 失效；
+`command -v` 是内建命令，不产生 fork。
+另注意 `set -a`（allexport）会把函数定义一并导出，那种环境下子 shell 反而能拿到函数、
+不会报错——所以只有判断存在性才是通用兜底，不能依赖某一种导出方式。
+
 ### 3. 探测（`ssh_backend.rs`）
 
 ```sh

@@ -1257,8 +1257,9 @@ impl SshBackend {
                 }
                 for osc_event in &osc_events {
                     match osc_event {
-                        OscEvent::WorkingDirChanged(path) => {
-                            let _ = event_tx.send(TerminalEvent::WorkingDirChanged(path.clone()));
+                        OscEvent::WorkingDirChanged(reported) => {
+                            let _ =
+                                event_tx.send(TerminalEvent::WorkingDirChanged(reported.clone()));
                         }
                         OscEvent::PromptStart => {
                             let _ = event_tx.send(TerminalEvent::PromptStart);

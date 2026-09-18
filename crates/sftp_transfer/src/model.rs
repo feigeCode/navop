@@ -150,6 +150,20 @@ pub fn ftp_connect_config_from_stored(
     })
 }
 
+/// 连接在列表里显示的目标：`user@host:port`。参数取不到时返回空串。
+///
+/// 主机选择器（终端文件面板的远端目标、SFTP 的端点切换）共用它，避免同一条
+/// 连接在两处显示成不同样子。
+pub fn connection_endpoint_label(connection: &StoredConnection) -> String {
+    if let Some(config) = ftp_connect_config_from_stored(connection) {
+        return format!("{}@{}:{}", config.username, config.host, config.port);
+    }
+    connection
+        .to_ssh_params()
+        .map(|params| format!("{}@{}:{}", params.username, params.host, params.port))
+        .unwrap_or_default()
+}
+
 #[derive(Clone)]
 pub struct SftpUploadRequest {
     pub connection: SftpConnectionIdentity,

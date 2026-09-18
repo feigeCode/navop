@@ -43,6 +43,7 @@ pub use performance_metrics::{
     TerminalPerformanceMetrics, TerminalPerformanceSnapshot, TerminalPerformanceWindow,
     terminal_performance_metrics_enabled,
 };
+pub use osc::ReportedWorkingDir;
 pub use pty_backend::{GpuiEventProxy, TerminalEvent};
 pub use selection_text::selection_text_from_term;
 pub use serial_backend::SerialBackend;

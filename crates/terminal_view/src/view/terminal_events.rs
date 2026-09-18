@@ -111,12 +111,13 @@ impl TerminalView {
             TerminalModelEvent::ClipboardStore(data) => {
                 cx.write_to_clipboard(ClipboardItem::new_string(data.clone()));
             }
-            TerminalModelEvent::WorkingDirChanged(path) => {
-                let path = path.clone();
+            TerminalModelEvent::WorkingDirChanged(reported) => {
+                let reported = reported.clone();
+                let path = reported.path.clone();
                 self.sidebar.update(cx, |sidebar, cx| {
-                    sidebar.sync_workspace_explorer_path(path.clone(), cx);
-                    sidebar.set_file_manager_initial_dir(path.clone(), cx);
-                    sidebar.sync_file_manager_path(path, cx);
+                    sidebar.sync_workspace_explorer_path(path, cx);
+                    sidebar.set_file_manager_initial_dir(reported.clone(), cx);
+                    sidebar.sync_file_manager_path(reported, cx);
                 });
             }
             TerminalModelEvent::LockStateChanged => {
