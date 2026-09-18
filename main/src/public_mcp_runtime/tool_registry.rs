@@ -127,9 +127,8 @@ fn build_tool_registry_for_surface(
                 .storage
                 .get::<one_core::storage::ConnectionRepository>()
             {
-                runtime_registries.push(navop_runtime::database_tools::database_tool_registry(
-                    repo,
-                ));
+                runtime_registries
+                    .push(navop_runtime::database_tools::database_tool_registry(repo));
             } else {
                 tracing::warn!("Public MCP database tools enabled without ConnectionRepository");
             }
@@ -921,7 +920,7 @@ mod tests {
 
     fn ssh_params(host: &str) -> SshParams {
         SshParams {
-                remote_file: None,
+            remote_file: None,
             sftp_default_directory: None,
             disabled_jump_server: None,
             sftp_account: None,

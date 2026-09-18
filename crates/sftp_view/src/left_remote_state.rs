@@ -5,6 +5,8 @@ use ssh::SshConnectConfig;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum LeftRemoteConnectionState {
+    /// 连接记录没有记住密码，等待人工录入本次连接使用的凭据。
+    AwaitingCredentials,
     Connecting,
     Connected,
     Disconnected(String),

@@ -78,6 +78,29 @@ Quit:
     zh-CN: 退出
     zh-HK: 結束
 
+# 系统托盘
+Tray:
+  close_title:
+    en: Close Navop?
+    zh-CN: 关闭 Navop？
+    zh-HK: 關閉 Navop？
+  close_message:
+    en: Minimize Navop to the system tray and keep everything running, or quit the application.
+    zh-CN: 可以最小化到系统托盘并保持连接与后台任务继续运行，也可以直接退出应用。
+    zh-HK: 可以最小化到系統匣並保持連線與背景工作繼續執行，也可以直接結束應用程式。
+  close_minimize:
+    en: Minimize to tray
+    zh-CN: 最小化到托盘
+    zh-HK: 最小化到系統匣
+  close_quit:
+    en: Quit
+    zh-CN: 退出应用
+    zh-HK: 結束應用程式
+  close_remember:
+    en: Remember my choice and stop asking
+    zh-CN: 记住我的选择，不再询问
+    zh-HK: 記住我的選擇，不再詢問
+
 # MCP 审批
 McpApproval:
   dialog_title:
@@ -2355,6 +2378,33 @@ Settings:
         zh-CN: 可用时提供服务器间直接传输；关闭后，服务器间复制将始终通过 Navop 中转。
         zh-HK: 可用時提供伺服器間直接傳輸；關閉後，伺服器間複製將始終透過 Navop 中轉。
 
+    # 关闭主窗口行为
+    CloseBehavior:
+      group_title:
+        en: Closing the Window
+        zh-CN: 关闭窗口行为
+        zh-HK: 關閉視窗行為
+      behavior:
+        en: When Closing the Main Window
+        zh-CN: 点击关闭按钮时
+        zh-HK: 點擊關閉按鈕時
+      behavior_desc:
+        en: Only applies when the system tray is available. "Ask" shows a dialog with the choice to minimize to the tray or quit, and you can remember that choice there.
+        zh-CN: 仅在系统托盘可用时生效。「每次询问」会弹窗让你选择最小化到托盘还是退出应用，并可在弹窗里记住选择。
+        zh-HK: 僅在系統匣可用時生效。「每次詢問」會彈窗讓你選擇最小化到系統匣還是結束應用程式，並可在彈窗裡記住選擇。
+      ask:
+        en: Ask every time
+        zh-CN: 每次询问
+        zh-HK: 每次詢問
+      minimize_to_tray:
+        en: Minimize to tray
+        zh-CN: 最小化到托盘
+        zh-HK: 最小化到系統匣
+      quit:
+        en: Quit the application
+        zh-CN: 退出应用
+        zh-HK: 結束應用程式
+
     # 笔记设置
     Notes:
       group_title:
@@ -3322,9 +3372,9 @@ Settings:
         zh-CN: 日志目录或文件
         zh-HK: 日誌目錄或文件
       file_path_desc:
-        en: Enter a directory to write onetcli.log, or a full log file path. Leave empty to use the default config directory logs folder. Restart the app after changing this path.
-        zh-CN: 可填写日志目录（文件名为 onetcli.log）或完整日志文件路径；留空时使用默认配置目录下的 logs 文件夹。修改后重启应用生效。
-        zh-HK: 可填寫日誌目錄（文件名為 onetcli.log）或完整日誌文件路徑；留空時使用默認配置目錄下的 logs 文件夾。修改後重啟應用生效。
+        en: Enter a directory to write navop.log, or a full log file path. Leave empty to use the default config directory logs folder. Restart the app after changing this path.
+        zh-CN: 可填写日志目录（文件名为 navop.log）或完整日志文件路径；留空时使用默认配置目录下的 logs 文件夹。修改后重启应用生效。
+        zh-HK: 可填寫日誌目錄（文件名為 navop.log）或完整日誌文件路徑；留空時使用默認配置目錄下的 logs 文件夾。修改後重啟應用生效。
 
     Proxy:
       group_title:

@@ -66,10 +66,10 @@ const TEAM_KEYS_SETTINGS_PAGE_INDEX: usize = 6;
 
 use gpui_component::input::InputEvent;
 pub use one_core::settings::{
-    AppSettings, CustomFont, DatabaseOpenMode, GlobalCurrentUser, GlobalProxySettings, LOCALE_EN,
-    LOCALE_SYSTEM, LOCALE_ZH_CN, LOCALE_ZH_HK, PersonalSyncBackendKind, PersonalSyncSettings,
-    ProxyType, SyncProvider, effective_locale_for_setting, is_installed_font_family,
-    is_supported_grid_monospace_font,
+    AppSettings, CloseButtonBehavior, CustomFont, DatabaseOpenMode, GlobalCurrentUser,
+    GlobalProxySettings, LOCALE_EN, LOCALE_SYSTEM, LOCALE_ZH_CN, LOCALE_ZH_HK,
+    PersonalSyncBackendKind, PersonalSyncSettings, ProxyType, SyncProvider,
+    effective_locale_for_setting, is_installed_font_family, is_supported_grid_monospace_font,
 };
 use one_core::tab_container::{TabContent, TabContentEvent};
 use one_core::utils::auto_save_config::AutoSaveConfig;
@@ -127,7 +127,11 @@ fn monospace_font_options(
         FontFamilyKind::Monospace,
         Some(installed_font_names),
     );
-    merge_installed_font_options(&mut options, installed_font_names, FontFamilyKind::Monospace);
+    merge_installed_font_options(
+        &mut options,
+        installed_font_names,
+        FontFamilyKind::Monospace,
+    );
     options
 }
 
@@ -628,6 +632,7 @@ impl SettingsPanel {
                                     .to_string(),
                             ),
                         ),
+                    close_behavior_setting_group(default_settings.close_button_behavior),
                     notes_setting_group(),
                     SettingGroup::new()
                         .title(t!("Settings.General.Appearance.group_title"))
@@ -1002,6 +1007,44 @@ impl SettingsPanel {
         }
         pages
     }
+}
+
+/// 关闭主窗口时的行为。托盘不可用时该设置不生效，仍走退出确认。
+fn close_behavior_setting_group(default: CloseButtonBehavior) -> SettingGroup {
+    SettingGroup::new()
+        .title(t!("Settings.General.CloseBehavior.group_title"))
+        .item(
+            SettingItem::new(
+                t!("Settings.General.CloseBehavior.behavior"),
+                SettingField::dropdown(
+                    vec![
+                        (
+                            SharedString::from(CloseButtonBehavior::Ask.as_str()),
+                            t!("Settings.General.CloseBehavior.ask").into(),
+                        ),
+                        (
+                            SharedString::from(CloseButtonBehavior::MinimizeToTray.as_str()),
+                            t!("Settings.General.CloseBehavior.minimize_to_tray").into(),
+                        ),
+                        (
+                            SharedString::from(CloseButtonBehavior::Quit.as_str()),
+                            t!("Settings.General.CloseBehavior.quit").into(),
+                        ),
+                    ],
+                    |cx: &App| {
+                        SharedString::from(AppSettings::global(cx).close_button_behavior.as_str())
+                    },
+                    |val: SharedString, cx: &mut App| {
+                        AppSettings::update_and_save(cx, |settings| {
+                            settings.close_button_behavior =
+                                CloseButtonBehavior::from_str(val.as_ref());
+                        });
+                    },
+                )
+                .default_value(SharedString::from(default.as_str())),
+            )
+            .description(t!("Settings.General.CloseBehavior.behavior_desc").to_string()),
+        )
 }
 
 fn sync_setting_group(
@@ -4114,7 +4157,11 @@ mod tests {
             .into_iter()
             .map(|(value, _)| value.to_string())
             .collect::<Vec<_>>();
-        assert!(monospace_values.iter().any(|value| value == "Sarasa Mono SC"));
+        assert!(
+            monospace_values
+                .iter()
+                .any(|value| value == "Sarasa Mono SC")
+        );
         // 内置精选列表里的 `Consolas` 不应因为合并而重复出现。
         assert_eq!(
             1,
@@ -4141,7 +4188,11 @@ mod tests {
             .into_iter()
             .map(|(value, _)| value.to_string())
             .collect::<Vec<_>>();
-        assert!(!monospace_values.iter().any(|value| value == "Microsoft YaHei"));
+        assert!(
+            !monospace_values
+                .iter()
+                .any(|value| value == "Microsoft YaHei")
+        );
         assert!(!monospace_values.iter().any(|value| value == "SimSun"));
         assert!(!monospace_values.iter().any(|value| value == "Kaiti SC"));
 

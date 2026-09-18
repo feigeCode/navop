@@ -1178,6 +1178,17 @@ impl Clone for CellData {
     }
 }
 
+/// 终端左边距（时间戳 / 行号）在当前帧的排版结果。
+///
+/// 由 view 侧按每屏幕行生成后交给 `TerminalElement` 绘制，元素自身不关心数据来源。
+#[derive(Default, Clone)]
+pub struct LineMargin {
+    /// 左边距占用的文本列数；0 表示不显示边距。
+    pub columns: usize,
+    /// 每屏幕行一条已排好的文本，长度应与终端行数一致。
+    pub rows: Vec<SharedString>,
+}
+
 /// Terminal element that renders from cached data
 pub struct TerminalElement<'a> {
     cache: &'a RenderCache,
@@ -1190,6 +1201,8 @@ pub struct TerminalElement<'a> {
     cell_width: Pixels,
     performance_metrics: Option<Arc<TerminalPerformanceMetrics>>,
     focus_handle: FocusHandle,
+    /// 左边距内容；`columns == 0` 时不绘制。
+    margin: &'a LineMargin,
 }
 
 impl<'a> TerminalElement<'a> {
@@ -1203,6 +1216,7 @@ impl<'a> TerminalElement<'a> {
         cell_width: Pixels,
         performance_metrics: Option<Arc<TerminalPerformanceMetrics>>,
         focus_handle: FocusHandle,
+        margin: &'a LineMargin,
     ) -> Self {
         Self {
             cache,
@@ -1214,6 +1228,7 @@ impl<'a> TerminalElement<'a> {
             cell_width,
             performance_metrics,
             focus_handle,
+            margin,
         }
     }
 }
@@ -1227,6 +1242,7 @@ impl<'a> IntoElement for TerminalElement<'a> {
             cursor: self.cache.cursor.clone(),
             num_cols: self.cache.num_cols,
             custom_background: self.cache.custom_background,
+            custom_foreground: self.cache.custom_foreground,
             custom_cursor: self.cache.custom_cursor,
             font_family: self.font_family,
             font_size: self.font_size,
@@ -1236,6 +1252,8 @@ impl<'a> IntoElement for TerminalElement<'a> {
             cell_width: self.cell_width,
             performance_metrics: self.performance_metrics,
             focus_handle: self.focus_handle,
+            margin_columns: self.margin.columns,
+            margin_rows: self.margin.rows.clone(),
         }
     }
 }
@@ -1246,6 +1264,8 @@ pub struct TerminalElementImpl {
     num_cols: usize,
     /// 主题定义的背景色
     custom_background: Hsla,
+    /// 主题定义的文本前景色（左边距文字用其淡化色）
+    custom_foreground: Hsla,
     /// 主题定义的光标颜色
     custom_cursor: Hsla,
     font_family: SharedString,
@@ -1257,6 +1277,10 @@ pub struct TerminalElementImpl {
     cell_width: Pixels,
     performance_metrics: Option<Arc<TerminalPerformanceMetrics>>,
     focus_handle: FocusHandle,
+    /// 左边距占用的文本列数
+    margin_columns: usize,
+    /// 每屏幕行的左边距文本
+    margin_rows: Vec<SharedString>,
 }
 
 pub struct TerminalLayout {
@@ -1355,7 +1379,11 @@ impl Element for TerminalElementImpl {
             bounds: TerminalBounds {
                 cell_width,
                 cell_height: line_height,
-                origin: bounds.origin,
+                // 左边距整体右移网格原点，行高与列宽与网格保持一致。
+                origin: Point::new(
+                    bounds.origin.x + cell_width * self.margin_columns as f32,
+                    bounds.origin.y,
+                ),
             },
             fonts,
         }
@@ -1432,6 +1460,46 @@ impl Element for TerminalElementImpl {
                     );
                     window.paint_quad(fill(rect, glyph.color));
                 }
+            }
+        }
+
+        // Paint line margin（时间戳 / 行号），固定在网格左侧。
+        if self.margin_columns > 0 {
+            let font = fonts.get(TextRunFontRole::Primary, false, false);
+            let margin_color = self.custom_foreground.opacity(0.5);
+            let margin_width = tb.cell_width * self.margin_columns as f32;
+            let margin_origin_x = tb.origin.x - margin_width;
+            for line_idx in first_visible..visible_end {
+                let Some(row) = self.margin_rows.get(line_idx) else {
+                    continue;
+                };
+                if row.is_empty() {
+                    continue;
+                }
+                let shaped = window.text_system().shape_line(
+                    row.clone(),
+                    self.font_size,
+                    &[TextRun {
+                        len: row.len(),
+                        font: font.clone(),
+                        color: margin_color,
+                        background_color: None,
+                        underline: None,
+                        strikethrough: None,
+                    }],
+                    // `shape_line` 的第四参是**单个字形的推进宽度**，不是整行宽度。
+                    // 传整行宽度会把第 6 个字形起的字形吸附到 `n × 整行宽`，
+                    // 时间戳尾部就会画到网格内容上（与内容重叠）。
+                    Some(tb.cell_width),
+                );
+                let _ = shaped.paint(
+                    Point::new(margin_origin_x, tb.cell_origin(line_idx, 0).y),
+                    tb.cell_height,
+                    TextAlign::Left,
+                    None,
+                    window,
+                    cx,
+                );
             }
         }
 

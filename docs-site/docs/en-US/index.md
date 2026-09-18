@@ -2,10 +2,11 @@
 
 Navop is the dev and ops workspace for the AI era, bringing databases, Redis, MongoDB, SSH, SFTP, terminals, remote desktops, Notes, AI, and team sync into one native workspace.
 
-## Current release: v0.18.0
+## Current release: v0.18.1
 
 Download the latest stable release from the [official Download Center](https://navop.dev/en-US/extensions).
 
+- Fixed the v0.18.0 regression that left extension marketplace cards unresponsive — the install / update / uninstall / reload buttons and clicking a card for its details work again. SFTP now prompts for credentials when the left pane switches to a server with no saved password, and "form + load" query pages in the resource workbench show their content as soon as they open.
 - New standalone FTP / FTPS connection type, plus SFTP / FTP / FTPS switching on the remote-file panel of an SSH connection; SSH connections can default a double-click to the terminal or the dual-pane file view.
 - New native resource workbench: extensions declare collections, tables, and operations that the host renders natively. The first release is a Docker workbench with engine overview, container and image management, logs, processes, filesystem changes, and exec terminals.
 - The local terminal launcher detects and lists WSL distributions for one-click launch.

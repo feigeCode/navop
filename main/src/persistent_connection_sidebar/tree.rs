@@ -1,7 +1,9 @@
 use std::ops::Range;
 
 use gpui::prelude::FluentBuilder as _;
-use gpui::{AnyElement, IntoElement, ListSizingBehavior, ParentElement, Styled, div, px, uniform_list};
+use gpui::{
+    AnyElement, IntoElement, ListSizingBehavior, ParentElement, Styled, div, px, uniform_list,
+};
 use gpui_component::{Icon, Sizable, StyledExt, h_flex, input::Input, v_flex};
 use one_assets::IconName;
 use one_core::settings::{AppSettings, ConnectionSortOrder};
@@ -218,7 +220,8 @@ impl PersistentConnectionSidebar {
             },
         );
         if self.home_embedded && !self.home_navigation_layout && query.is_empty() {
-            let recent = crate::home_tab::recent_connections(&home.connections, &type_filter, "", 4);
+            let recent =
+                crate::home_tab::recent_connections(&home.connections, &type_filter, "", 4);
             if !recent.is_empty() {
                 let expanded = !home.recent_connections_collapsed();
                 let mut recent_rows = vec![ConnectionTreeRow::RecentHeader {
@@ -398,8 +401,10 @@ mod tests {
         let implementation = source.split("#[cfg(test)]").next().unwrap();
 
         // 仅普通嵌入树预置最近区；全局导航布局的最近区由内容区自己渲染。
-        assert!(implementation
-            .contains("self.home_embedded && !self.home_navigation_layout && query.is_empty()"));
+        assert!(
+            implementation
+                .contains("self.home_embedded && !self.home_navigation_layout && query.is_empty()")
+        );
         assert!(implementation.contains("home_tab::recent_connections"));
         assert!(implementation.contains("ConnectionTreeRow::RecentHeader"));
         assert!(implementation.contains("ConnectionTreeRow::RecentConnection"));

@@ -51,6 +51,7 @@ use crate::history::{
     collect_history_search_results, collect_history_suggestions_with_cwd, collect_recent_history,
     normalize_recorded_command, parse_shell_history, push_rich_history_entry,
 };
+use crate::line_timeline::{LineTimelineSample, SharedLineTimeline};
 use crate::pty_backend::{GpuiEventProxy, LocalPtyBackend};
 use crate::recording::{
     RecordingArtifactKind, RecordingBackend, RecordingCompleteness, RecordingMetadata,
@@ -1251,6 +1252,8 @@ pub struct Terminal {
     connection_kind: TerminalConnectionKind,
     /// 终端滚屏历史最多保留的行数
     scrollback_lines: usize,
+    /// 逐行到达时间；只用于左边距的时间戳展示，不进网格。
+    line_timeline: SharedLineTimeline,
 }
 
 #[derive(Clone)]
@@ -1651,6 +1654,7 @@ impl Terminal {
         Self::spawn_event_loop(event_rx, wakeup_pending.clone(), cx);
 
         Self {
+            line_timeline: Default::default(),
             term,
             session_mode: TerminalSessionMode::Live,
             performance_metrics,
@@ -1804,6 +1808,7 @@ impl Terminal {
         let history_repository = Self::history_repository(cx);
 
         Ok(Self {
+            line_timeline: Default::default(),
             term,
             session_mode: TerminalSessionMode::Live,
             performance_metrics,
@@ -1949,6 +1954,7 @@ impl Terminal {
             });
 
         let mut terminal = Self {
+            line_timeline: Default::default(),
             term,
             session_mode: TerminalSessionMode::Live,
             performance_metrics,
@@ -2083,6 +2089,7 @@ impl Terminal {
         );
 
         Self {
+            line_timeline: Default::default(),
             term,
             session_mode: TerminalSessionMode::Live,
             performance_metrics,
@@ -2203,6 +2210,7 @@ impl Terminal {
         }
 
         Self {
+            line_timeline: Default::default(),
             term,
             session_mode: TerminalSessionMode::Live,
             performance_metrics,
@@ -2345,6 +2353,7 @@ impl Terminal {
 
         (
             Self {
+                line_timeline: Default::default(),
                 term,
                 session_mode,
                 performance_metrics,
@@ -3166,9 +3175,31 @@ impl Terminal {
         }
     }
 
+    /// 采样一次行时间轴。解析器繁忙时跳过，下一个 Wakeup 会补上。
+    fn sample_line_timeline(&self) {
+        let Some(term) = self.term.try_lock_unfair() else {
+            return;
+        };
+        let sample = LineTimelineSample {
+            history_size: term.history_size(),
+            screen_lines: term.screen_lines(),
+            cursor_line: term.grid().cursor.point.line.0,
+            alternate_screen: term.mode().contains(TermMode::ALT_SCREEN),
+            scrollback_lines: self.scrollback_lines,
+        };
+        drop(term);
+        self.line_timeline.observe(sample);
+    }
+
+    /// 行时间轴句柄，视图侧用于查每行时间戳。
+    pub fn line_timeline(&self) -> SharedLineTimeline {
+        self.line_timeline.clone()
+    }
+
     fn handle_terminal_event(&mut self, event: TerminalEvent, cx: &mut Context<Self>) {
         match event {
             TerminalEvent::Wakeup => {
+                self.sample_line_timeline();
                 cx.emit(TerminalModelEvent::Wakeup);
             }
             TerminalEvent::SshMfaChanged => {
@@ -4708,6 +4739,7 @@ mod tests {
         let wakeup_pending = event_proxy.wakeup_pending_handle();
 
         Terminal {
+            line_timeline: Default::default(),
             term,
             session_mode: TerminalSessionMode::Live,
             performance_metrics,
@@ -6864,6 +6896,7 @@ mod tests {
         let shared_metrics = performance_metrics.clone();
         let original_term = term.clone();
         let mut terminal = Terminal {
+            line_timeline: Default::default(),
             term,
             session_mode: TerminalSessionMode::Live,
             performance_metrics,
@@ -7151,6 +7184,7 @@ mod tests {
             Terminal::create_term(80, 24, 10_000, event_tx.clone());
         let wakeup_pending = event_proxy.wakeup_pending_handle();
         let mut terminal = Terminal {
+            line_timeline: Default::default(),
             term,
             session_mode: TerminalSessionMode::Live,
             performance_metrics,

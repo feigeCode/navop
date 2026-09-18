@@ -315,7 +315,12 @@ fn home_heading_hosts_the_horizontal_type_filter_bar() {
 
     // 平铺筛选条挂在「连接」标题右侧，Tree 布局也提供同一标题行；
     // 全局导航布局的右侧标题行同样复用筛选条（工具栏入口已移除）。
-    assert!(content.matches("render_connection_type_filter_bar(window, cx)").count() >= 2);
+    assert!(
+        content
+            .matches("render_connection_type_filter_bar(window, cx)")
+            .count()
+            >= 2
+    );
     assert!(content.contains("render_tree_content_heading"));
     assert!(content.contains("render_navigation_heading"));
     assert!(!toolbar.contains("render_home_type_filter"));
@@ -430,7 +435,9 @@ fn recent_section_does_not_participate_in_search() {
         .split("fn render_navigation_home_content")
         .nth(1)
         .expect("navigation home content exists");
-    assert!(navigation.contains("recent_connections(&self.connections, &self.selected_filter, \"\","));
+    assert!(
+        navigation.contains("recent_connections(&self.connections, &self.selected_filter, \"\",")
+    );
     assert!(navigation.contains("if !query.is_empty()"));
 }
 

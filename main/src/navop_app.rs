@@ -9,9 +9,17 @@ use gpui::{
     App, AppContext, AsyncApp, Context, Entity, ExternalPaths, InteractiveElement, IntoElement,
     KeyBinding, Keystroke, ParentElement, Render, Styled, Task, Window, actions, div,
 };
-use gpui_component::{WindowExt, dialog::DialogButtonProps, kbd::Kbd, notification::Notification};
+use gpui_component::{
+    WindowExt,
+    button::{Button, ButtonVariant, ButtonVariants as _},
+    checkbox::Checkbox,
+    dialog::{DialogButtonProps, DialogFooter},
+    kbd::Kbd,
+    notification::Notification,
+};
 use one_core::gpui_tokio::{JoinError, Tokio};
 use one_core::keybindings::{action_id, rebind_keybindings, shortcuts_for};
+use one_core::settings::CloseButtonBehavior;
 use raw_window_handle::HasWindowHandle;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use raw_window_handle::RawWindowHandle;
@@ -1376,8 +1384,31 @@ pub struct NavopApp {
     tab_container: Entity<TabContainer>,
     connection_sidebar: Entity<PersistentConnectionSidebar>,
     quit_state: QuitRequestState,
+    /// 「最小化到托盘 / 退出应用」弹窗是否已经打开：标题栏关闭按钮可能被连点，
+    /// 不能叠出第二个完全相同的弹窗。
+    close_choice_prompt_open: bool,
     main_window_size_save_task: Option<Task<()>>,
     _appearance_subscription: gpui::Subscription,
+}
+
+/// 关闭弹窗里「记住我的选择」勾选框的状态。
+///
+/// 刻意做成独立实体而不是直接读 [`NavopApp`] 的字段：弹窗 body 由 `Root` 渲染，
+/// `NavopApp` 的 `notify()` 不会重绘它，勾选框必须自己负责刷新。
+struct CloseChoiceRememberState {
+    remember: bool,
+}
+
+impl Render for CloseChoiceRememberState {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        Checkbox::new("tray-close-remember")
+            .checked(self.remember)
+            .label(t!("Tray.close_remember").to_string())
+            .on_click(cx.listener(|this, checked, _, cx| {
+                this.remember = *checked;
+                cx.notify();
+            }))
+    }
 }
 
 impl NavopApp {
@@ -1388,20 +1419,21 @@ impl NavopApp {
         });
         let app = app_entity.downgrade();
         window.on_window_should_close(cx, move |window, cx| {
-            match crate::system_tray::main_window_close_action(crate::system_tray::is_available()) {
+            match crate::system_tray::main_window_close_action(
+                crate::system_tray::is_available(),
+                AppSettings::current(cx).close_button_behavior,
+            ) {
+                crate::system_tray::MainWindowCloseAction::AskUser => {
+                    // 托盘可用但用户还没固化偏好：先问「最小化到托盘还是退出」，
+                    // 窗口一律保留（返回 false），由弹窗里的选择决定下一步。
+                    let _ = app.update(cx, |app, cx| {
+                        app.show_close_choice_prompt(window, cx);
+                    });
+                }
                 crate::system_tray::MainWindowCloseAction::HideToTray => {
-                    // 隐藏失败必须回退到退出确认：宁可直接退出，也不能留下一个
-                    // 用户找不到、也没法恢复的隐藏窗口。
-                    if let Err(error) = crate::window_visibility::hide_main_window(window) {
-                        tracing::warn!(%error, "隐藏主窗口失败，回退到退出确认");
-                        let _ = app.update(cx, |app, cx| {
-                            app.request_quit(window, cx);
-                        });
-                    } else {
-                        // 冒烟与排障的唯一可观测点：窗口不可见之后，日志是唯一能证明
-                        // 「关闭按钮走的是托盘路径、而不是退出路径」的证据。
-                        tracing::info!("主窗口已隐藏到系统托盘，进程继续在后台运行");
-                    }
+                    let _ = app.update(cx, |app, cx| {
+                        app.hide_main_window_to_tray(window, cx);
+                    });
                 }
                 crate::system_tray::MainWindowCloseAction::RequestQuit => {
                     let _ = app.update(cx, |app, cx| {
@@ -1576,6 +1608,7 @@ impl NavopApp {
             tab_container,
             connection_sidebar,
             quit_state: QuitRequestState::default(),
+            close_choice_prompt_open: false,
             main_window_size_save_task: None,
             _appearance_subscription: appearance_subscription,
         }
@@ -1645,6 +1678,124 @@ impl NavopApp {
         AppSettings::update_and_save(cx, |settings| {
             settings.main_window_state = Some(state);
         });
+    }
+
+    /// 关闭按钮的「最小化到托盘 / 退出应用」弹窗。
+    ///
+    /// 只在托盘可用且用户没有固化过偏好时打开；两条去向都复用既有流程
+    /// （隐藏到托盘 / 退出确认），弹窗本身只负责让用户选一次。
+    fn show_close_choice_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.close_choice_prompt_open {
+            return;
+        }
+        self.close_choice_prompt_open = true;
+
+        let remember = cx.new(|_| CloseChoiceRememberState { remember: false });
+        let app_for_minimize = cx.entity().downgrade();
+        let app_for_quit = cx.entity().downgrade();
+        let app_for_close = cx.entity().downgrade();
+
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let remember_for_minimize = remember.clone();
+            let remember_for_quit = remember.clone();
+            let app_for_minimize = app_for_minimize.clone();
+            let app_for_quit = app_for_quit.clone();
+            let app_for_close = app_for_close.clone();
+
+            // 两条出路都自己渲染，不用默认的 ok/cancel footer：默认 footer 只有两个固定
+            // 按钮，「取消」一旦被当成第二条出路，Esc 和点遮罩也会走成退出应用；并且
+            // button_props 若在 confirm 之后设置，还会把 show_cancel 重置、吞掉第二个按钮。
+            let minimize_button = Button::new("tray-close-minimize")
+                .label(t!("Tray.close_minimize").to_string())
+                .with_variant(ButtonVariant::Primary)
+                .on_click(move |_, window, cx| {
+                    let remember = remember_for_minimize.read(cx).remember;
+                    window.close_dialog(cx);
+                    let _ = app_for_minimize.update(cx, |app, cx| {
+                        app.minimize_main_window_to_tray(remember, window, cx);
+                    });
+                });
+            let quit_button = Button::new("tray-close-quit")
+                .label(t!("Tray.close_quit").to_string())
+                .on_click(move |_, window, cx| {
+                    let remember = remember_for_quit.read(cx).remember;
+                    window.close_dialog(cx);
+                    let _ = app_for_quit.update(cx, |app, cx| {
+                        app.quit_from_close_choice_prompt(remember, window, cx);
+                    });
+                });
+
+            dialog
+                .title(t!("Tray.close_title").to_string())
+                .child(t!("Tray.close_message").to_string())
+                .child(remember.clone())
+                .footer(
+                    DialogFooter::new()
+                        .child(quit_button)
+                        .child(minimize_button),
+                )
+                .on_close(move |_, _, cx| {
+                    // Esc 或点遮罩只是关掉询问，不做任何动作；但不能留下「弹窗还开着」
+                    // 的标记，否则下次点关闭按钮再也不弹。
+                    let _ = app_for_close.update(cx, |app, _cx| {
+                        app.close_choice_prompt_open = false;
+                    });
+                })
+        });
+    }
+
+    /// 弹窗选择「最小化到托盘」。
+    fn minimize_main_window_to_tray(
+        &mut self,
+        remember: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_choice_prompt_open = false;
+        if remember {
+            self.remember_close_button_behavior(CloseButtonBehavior::MinimizeToTray, cx);
+        }
+        self.hide_main_window_to_tray(window, cx);
+    }
+
+    /// 弹窗选择「退出应用」。
+    fn quit_from_close_choice_prompt(
+        &mut self,
+        remember: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_choice_prompt_open = false;
+        if remember {
+            self.remember_close_button_behavior(CloseButtonBehavior::Quit, cx);
+        }
+        self.request_quit(window, cx);
+    }
+
+    fn remember_close_button_behavior(
+        &mut self,
+        behavior: CloseButtonBehavior,
+        cx: &mut Context<Self>,
+    ) {
+        AppSettings::update_and_save(cx, |settings| {
+            settings.close_button_behavior = behavior;
+        });
+    }
+
+    /// 隐藏主窗口到托盘。
+    ///
+    /// 隐藏失败必须回退到退出确认：宁可直接退出，也不能留下一个用户找不到、
+    /// 也没法恢复的隐藏窗口。
+    fn hide_main_window_to_tray(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match crate::window_visibility::hide_main_window(window) {
+            // 冒烟与排障的唯一可观测点：窗口不可见之后，日志是唯一能证明
+            // 「关闭按钮走的是托盘路径、而不是退出路径」的证据。
+            Ok(()) => tracing::info!("主窗口已隐藏到系统托盘，进程继续在后台运行"),
+            Err(error) => {
+                tracing::warn!(%error, "隐藏主窗口失败，回退到退出确认");
+                self.request_quit(window, cx);
+            }
+        }
     }
 
     fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2071,9 +2222,87 @@ mod tests {
             "关闭按钮必须按托盘可用性分流"
         );
         assert!(contains_code(new_fn, &availability_fn));
+        assert!(contains_code(new_fn, "MainWindowCloseAction::AskUser"));
+        assert!(contains_code(new_fn, "show_close_choice_prompt"));
         assert!(contains_code(new_fn, "MainWindowCloseAction::HideToTray"));
-        assert!(contains_code(new_fn, "window_visibility::hide_main_window"));
+        assert!(contains_code(new_fn, "hide_main_window_to_tray"));
         assert!(contains_code(new_fn, "MainWindowCloseAction::RequestQuit"));
+    }
+
+    /// 弹窗必须真的给用户两条出路（最小化 / 退出），并且「记住我的选择」写回设置；
+    /// 少了任一条，用户点关闭按钮就会被卡在一个只有默认按钮的弹窗里。
+    #[test]
+    fn close_choice_prompt_offers_both_destinations_and_remembers_the_choice() {
+        let source = include_str!("navop_app.rs");
+        let prompt = fn_body(source, "fn show_close_choice_prompt");
+        let remember_label = ["Tray.close_", "remember"].concat();
+        let minimize_label = ["Tray.close_", "minimize"].concat();
+        let quit_label = ["Tray.close_", "quit"].concat();
+
+        // 两条出路必须是各自独立的按钮：默认 footer 只有 ok/cancel，
+        // button_props 跟在 confirm 后面还会把 show_cancel 重置掉、吞掉第二个按钮，
+        // 所以这里禁止回退到默认 footer。
+        assert!(contains_code(prompt, "DialogFooter::new()"));
+        assert!(contains_code(
+            prompt,
+            r#"Button::new("tray-close-minimize")"#
+        ));
+        assert!(contains_code(prompt, r#"Button::new("tray-close-quit")"#));
+        assert!(!contains_code(prompt, ".confirm()"));
+        assert!(!contains_code(prompt, ".button_props("));
+        assert!(contains_code(prompt, &minimize_label));
+        assert!(contains_code(prompt, &quit_label));
+        assert!(contains_code(prompt, "window.close_dialog(cx)"));
+        assert!(contains_code(prompt, "CloseChoiceRememberState"));
+        assert!(contains_code(prompt, "minimize_main_window_to_tray"));
+        assert!(contains_code(prompt, "quit_from_close_choice_prompt"));
+        // 连点关闭按钮不能叠出第二个弹窗。
+        assert!(contains_code(prompt, "if self.close_choice_prompt_open"));
+
+        // 「记住我的选择」勾选框自带实体，标签与受控回写都在它的 render 里。
+        let checkbox = fn_body(source, "impl Render for CloseChoiceRememberState");
+        assert!(contains_code(checkbox, &remember_label));
+        assert!(contains_code(checkbox, "Checkbox::new"));
+        assert!(contains_code(checkbox, "cx.listener"));
+
+        let minimize = fn_body(source, "fn minimize_main_window_to_tray");
+        assert!(contains_code(
+            minimize,
+            "CloseButtonBehavior::MinimizeToTray"
+        ));
+        let quit = fn_body(source, "fn quit_from_close_choice_prompt");
+        assert!(contains_code(quit, "CloseButtonBehavior::Quit"));
+        // 记住选择必须落盘，否则下次启动又被问一遍。
+        let remember = fn_body(source, "fn remember_close_button_behavior");
+        assert!(contains_code(remember, "AppSettings::update_and_save"));
+        assert!(contains_code(
+            remember,
+            "settings.close_button_behavior = behavior"
+        ));
+    }
+
+    /// 隐藏失败必须回退到退出确认，不能留下一个用户找不到、也没法恢复的窗口。
+    #[test]
+    fn hiding_to_the_tray_falls_back_to_quit_when_it_fails() {
+        let source = include_str!("navop_app.rs");
+        let body = fn_body(source, "fn hide_main_window_to_tray");
+        let hide = ["crate::window_visibility::", "hide_main_window(window)"].concat();
+
+        assert!(contains_code(body, &hide));
+        assert!(contains_code(body, "Err(error) =>"));
+        assert!(contains_code(body, "self.request_quit(window, cx)"));
+    }
+
+    /// 取一个顶层方法的完整函数体（从签名到下一个同缩进的 `\n    }`）。
+    fn fn_body<'a>(source: &'a str, signature: &str) -> &'a str {
+        let start = source
+            .find(signature)
+            .unwrap_or_else(|| panic!("{signature}"));
+        let end = source[start..]
+            .find("\n    }\n")
+            .map(|offset| start + offset)
+            .unwrap_or_else(|| panic!("{signature} end"));
+        &source[start..end]
     }
 
     /// 源码守卫比对用：两侧都去掉全部空白再比对，避免 rustfmt 折行或补空格让断言
@@ -2496,10 +2725,11 @@ impl Render for NavopApp {
                 sidebar.render_docked_connection_tree(window, cx)
             })
         });
-        let floating_tree = (sidebar_expanded && auto_hide_tree && !home_has_navigation_sidebar).then(|| {
-            self.connection_sidebar
-                .update(cx, |sidebar, cx| sidebar.render_floating_tree(window, cx))
-        });
+        let floating_tree = (sidebar_expanded && auto_hide_tree && !home_has_navigation_sidebar)
+            .then(|| {
+                self.connection_sidebar
+                    .update(cx, |sidebar, cx| sidebar.render_floating_tree(window, cx))
+            });
         // macOS：浮动树覆盖 tab 栏左侧，需要给红绿灯占位；停靠模式并排渲染则不需要。
         #[cfg(target_os = "macos")]
         if sidebar_expanded {
@@ -2570,9 +2800,10 @@ impl Render for NavopApp {
                             .child(main_content),
                     )
             })
-            .when(sidebar_expanded && auto_hide_tree && !home_has_navigation_sidebar, |this| {
-                this.when_some(floating_tree, |this, tree| this.child(tree))
-            })
+            .when(
+                sidebar_expanded && auto_hide_tree && !home_has_navigation_sidebar,
+                |this| this.when_some(floating_tree, |this, tree| this.child(tree)),
+            )
             .children(sheet_layer)
             .children(dialog_layer)
             .children(notification_layer)

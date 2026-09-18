@@ -162,6 +162,25 @@ fn invalid_data(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
 
+/// Windows 命名管道 `ERROR_ACCESS_DENIED`：interprocess 给监听器加了
+/// `FILE_FLAG_FIRST_PIPE_INSTANCE`，名字已存在时 `CreateNamedPipeW` 返回它。
+const WINDOWS_ERROR_ACCESS_DENIED: i32 = 5;
+/// Windows 命名管道 `ERROR_PIPE_BUSY`：所有实例都在忙，同样说明名字已被占用。
+const WINDOWS_ERROR_PIPE_BUSY: i32 = 231;
+
+/// 创建监听器失败是否意味着「这个名字已经被占用」。
+///
+/// interprocess 的 Windows 分支会原样透传系统错误、不做 error kind 归一化，
+/// 所以只看 `AddrInUse` 会漏掉真实的「已占用」，第二个实例遂误判成主实例、
+/// 起出两个完整进程。这里把两种形态都认下来。
+fn instance_name_taken(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::AddrInUse
+        || matches!(
+            error.raw_os_error(),
+            Some(WINDOWS_ERROR_ACCESS_DENIED) | Some(WINDOWS_ERROR_PIPE_BUSY)
+        )
+}
+
 #[cfg(target_os = "windows")]
 pub(crate) fn claim_or_forward(
     config_dir: &Path,
@@ -198,7 +217,7 @@ pub(crate) fn claim_or_forward(
                 })?;
             Ok(SingleInstanceOutcome::Primary)
         }
-        Err(error) if error.kind() == io::ErrorKind::AddrInUse => {
+        Err(error) if instance_name_taken(&error) => {
             forward_request::<Stream>(&instance_name, &request)?;
             Ok(SingleInstanceOutcome::Forwarded)
         }
@@ -321,5 +340,28 @@ mod tests {
 
         let oversized_payload = vec![0; MAX_PAYLOAD_BYTES + 1];
         assert!(decode_request(&oversized_payload).is_err());
+    }
+
+    #[test]
+    fn taken_instance_name_includes_windows_pipe_errors() {
+        // 名字已存在的两种真实形态：Windows 命名管道返回 ACCESS_DENIED / PIPE_BUSY，
+        // 其它平台返回 AddrInUse。
+        assert!(instance_name_taken(&io::Error::new(
+            io::ErrorKind::AddrInUse,
+            "in use"
+        )));
+        assert!(instance_name_taken(&io::Error::from_raw_os_error(
+            WINDOWS_ERROR_ACCESS_DENIED
+        )));
+        assert!(instance_name_taken(&io::Error::from_raw_os_error(
+            WINDOWS_ERROR_PIPE_BUSY
+        )));
+
+        // 其它错误不能被当成「已占用」，否则主实例会把启动请求转发给不存在的管道。
+        assert!(!instance_name_taken(&io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "denied"
+        )));
+        assert!(!instance_name_taken(&io::Error::from_raw_os_error(2)));
     }
 }

@@ -63,7 +63,9 @@ impl CustomSystemPromptEditor {
         let input = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .auto_grow(4, 12)
-                .placeholder(t!("Settings.General.Agent.custom_system_prompt_placeholder"))
+                .placeholder(t!(
+                    "Settings.General.Agent.custom_system_prompt_placeholder"
+                ))
                 .default_value(AppSettings::global(cx).ai_chat.custom_system_prompt.clone())
         });
         let subscription = cx.subscribe(&input, |editor: &mut Self, _, event: &InputEvent, cx| {

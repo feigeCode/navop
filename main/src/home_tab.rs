@@ -55,10 +55,10 @@ use port_forwarding_view::{
 };
 use redis_view::{RedisFormWindow, RedisFormWindowConfig};
 use rust_i18n::t;
+use terminal_view::{FtpFormWindow, FtpFormWindowConfig};
 use terminal_view::{SerialFormWindow, SerialFormWindowConfig};
 use terminal_view::{SshFormWindow, SshFormWindowConfig};
 use terminal_view::{TelnetFormWindow, TelnetFormWindowConfig};
-use terminal_view::{FtpFormWindow, FtpFormWindowConfig};
 
 use crate::auth::{AuthService, load_auth_data, show_auth_dialog};
 use crate::connection_visuals::{ConnectionVisualSize, connection_type_navigation_icon};
