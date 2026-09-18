@@ -1841,12 +1841,14 @@ mod tests {
         // 内置精选列表已经含有 Consolas，不应重复出现。
         assert_eq!(
             1,
-            values.iter().filter(|font| font.as_str() == "Consolas").count()
+            values
+                .iter()
+                .filter(|font| font.as_str() == "Consolas")
+                .count()
         );
         // 系统字体是已安装状态，标签里不应带「(未安装)」。
         assert!(fonts.iter().any(|font| {
-            font.value.as_ref() == "Sarasa Mono SC"
-                && font.label.as_ref() == "Sarasa Mono SC"
+            font.value.as_ref() == "Sarasa Mono SC" && font.label.as_ref() == "Sarasa Mono SC"
         }));
     }
 

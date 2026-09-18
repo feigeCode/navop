@@ -41,6 +41,7 @@ impl TerminalView {
             TerminalModelEvent::Wakeup => {
                 self.sync_recording_ticker(cx);
                 self.sync_credential_capture(cx);
+                self.ensure_ssh_tool_panels(window, cx);
                 self.sync_zmodem_background_task(None, cx);
                 self.focus_terminal_after_connect_if_ready(window, cx);
                 self.refresh_history_prompt_matches(cx);
@@ -58,6 +59,7 @@ impl TerminalView {
             }
             TerminalModelEvent::SshCredentialChanged => {
                 self.sync_credential_capture(cx);
+                self.ensure_ssh_tool_panels(window, cx);
                 self.focus_terminal_after_connect_if_ready(window, cx);
                 cx.notify();
             }
