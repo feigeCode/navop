@@ -3138,6 +3138,34 @@ const REDIS_CLI_SHORTCUTS: &[ShortcutEntry] = &[
     },
 ];
 
+/// AI 会话（agent 聊天 / 工作台）快捷键。
+///
+/// 默认值直接引用绑定层的常量（`ai_chat_view::find_shortcut`），
+/// 不在这里再写一份字面量——设置页展示的与真正生效的必须是同一份数据。
+const AI_CHAT_SHORTCUTS: &[ShortcutEntry] = &[
+    ShortcutEntry {
+        keys_macos: ai_chat_view::FIND_MACOS,
+        keys_other: ai_chat_view::FIND_OTHER,
+        label_key: "Settings.Shortcuts.ai_chat_find",
+        action_id: Some(action_id::AI_CHAT_FIND),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: ai_chat_view::FIND_NEXT_MACOS,
+        keys_other: ai_chat_view::FIND_NEXT_OTHER,
+        label_key: "Settings.Shortcuts.ai_chat_find_next",
+        action_id: Some(action_id::AI_CHAT_FIND_NEXT),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: ai_chat_view::FIND_PREVIOUS_MACOS,
+        keys_other: ai_chat_view::FIND_PREVIOUS_OTHER,
+        label_key: "Settings.Shortcuts.ai_chat_find_previous",
+        action_id: Some(action_id::AI_CHAT_FIND_PREVIOUS),
+        system_hotkey: false,
+    },
+];
+
 const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
     ShortcutGroup {
         title_key: "Settings.Shortcuts.window",
@@ -3170,6 +3198,10 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
     ShortcutGroup {
         title_key: "Settings.Shortcuts.redis_cli",
         entries: REDIS_CLI_SHORTCUTS,
+    },
+    ShortcutGroup {
+        title_key: "Settings.Shortcuts.ai_chat",
+        entries: AI_CHAT_SHORTCUTS,
     },
 ];
 

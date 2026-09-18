@@ -971,6 +971,7 @@ pub fn init(cx: &mut App) -> anyhow::Result<()> {
     one_ui::init(cx, table_keybindings);
     db_view::search_shortcut::init(cx);
     db_view::sql_editor_view::init(cx);
+    // ai_chat_view 的会话搜索快捷键随 `ai_chat_view::init(cx)` 一起注册（见该 crate 的 lib.rs）。
     crate::auth::init(cx);
     crate::license::init(cx);
     {
@@ -1031,6 +1032,7 @@ pub fn refresh_keybindings(cx: &mut App) {
     crate::home_tab::refresh_keybindings(cx);
     db_view::search_shortcut::refresh_keybindings(cx);
     db_view::sql_editor_view::refresh_keybindings(cx);
+    ai_chat_view::find_shortcut::refresh_keybindings(cx);
     terminal_view::refresh_keybindings(cx);
     redis_view::refresh_keybindings(cx);
     remote_desktop_view::refresh_keybindings(cx);

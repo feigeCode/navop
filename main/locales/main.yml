@@ -3623,6 +3623,22 @@ Settings:
       en: Redis CLI
       zh-CN: Redis CLI
       zh-HK: Redis CLI
+    ai_chat:
+      en: AI Chat
+      zh-CN: AI 会话
+      zh-HK: AI 會話
+    ai_chat_find:
+      en: Find in Conversation
+      zh-CN: 在会话中查找
+      zh-HK: 在會話中查找
+    ai_chat_find_next:
+      en: Next Match in Conversation
+      zh-CN: 下一个匹配（会话）
+      zh-HK: 下一個匹配（會話）
+    ai_chat_find_previous:
+      en: Previous Match in Conversation
+      zh-CN: 上一个匹配（会话）
+      zh-HK: 上一個匹配（會話）
     notes_editor:
       en: Notes Editor
       zh-CN: 笔记编辑器

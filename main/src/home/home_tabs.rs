@@ -1348,16 +1348,9 @@ impl HomePage {
                 tabs.activate_or_add_tab_lazy(
                     "ai-workbench",
                     |window, cx| {
-                        let workbench = cx.new(|cx| {
-                            ai_chat_view::DefaultAgentChatPanel::new_workbench_with_scope_and_catalog(
-                                scope,
-                                catalog,
-                                mentions,
-                                window,
-                                cx,
-                            )
-                            .with_tab_closeable(true)
-                        });
+                        let workbench = crate::home::ai_workbench::build_ai_workbench_shell(
+                            scope, catalog, mentions, window, cx,
+                        );
                         TabItem::new("ai-workbench", "home", workbench)
                     },
                     window,
