@@ -2772,7 +2772,7 @@ fn build_is_windows_hosted_msvc_only_and_ci_runs_host_tests() {
     assert_tokens_in_scope(
         ".github/workflows/ci.yml",
         "  test:",
-        "  ci-gate:",
+        "  windows-rdp-probe:",
         &[
             "- uses: actions/checkout@v7",
             "- name: Install NASM",
@@ -2781,8 +2781,28 @@ fn build_is_windows_hosted_msvc_only_and_ci_runs_host_tests() {
             "$nasmDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append",
             "nasm -v",
             "- name: Setup Rust toolchain",
-            "- name: Build ATL/MSVC probe (x64 + x86)",
+            "run: ./script/test-windows.ps1",
         ],
+    );
+    // The ATL/MSVC probe is its own job so the Windows workspace test job stays short;
+    // it must still gate CI and cover both probe architectures.
+    assert_tokens_in_scope(
+        ".github/workflows/ci.yml",
+        "  windows-rdp-probe:",
+        "  ci-gate:",
+        &[
+            "- uses: actions/checkout@v7",
+            "- name: Install NASM",
+            "choco install nasm --no-progress --yes",
+            "$nasmDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append",
+            "- name: Setup Rust toolchain",
+            "- name: Build ATL/MSVC probe",
+            "-Target \"${{ matrix.target }}\"",
+        ],
+    );
+    assert_contains_all(
+        ".github/workflows/ci.yml",
+        &["needs: [prepare, test, windows-rdp-probe]"],
     );
     assert_contains_all(
         ".github/workflows/release.yml",

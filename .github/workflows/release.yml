@@ -176,13 +176,22 @@ jobs:
           target: ${{ matrix.target }}
           cache: false
 
+      # sccache 只是构建加速器：GitHub Release CDN 偶发 504 会让下载安装失败，
+      # 此时必须退化成无缓存构建，而不是让整个发布 job 失败。
       - name: Setup sccache
+        id: sccache
         uses: mozilla-actions/sccache-action@v0.0.10
+        continue-on-error: true
 
       - name: Initialize sccache
         shell: bash
         run: |
           set -euo pipefail
+          if [ "${{ steps.sccache.outcome }}" != "success" ]; then
+            echo "::warning::sccache 安装失败，本次构建退化为无编译器缓存"
+            echo "RUSTC_WRAPPER=" >> "$GITHUB_ENV"
+            exit 0
+          fi
           sccache --start-server
           sccache --zero-stats
           sccache --show-stats

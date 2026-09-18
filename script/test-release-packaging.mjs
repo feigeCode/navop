@@ -955,6 +955,15 @@ test("Rust workflows share one cache strategy without archiving target", () => {
     assert.match(workflow, /mozilla-actions\/sccache-action@v0\.0\.10/);
     assert.match(workflow, /RUSTC_WRAPPER: sccache/);
     assert.match(workflow, /SCCACHE_GHA_ENABLED: "true"/);
+    // sccache is only a build accelerator. A transient GitHub release CDN
+    // failure while installing it must degrade to an uncached build instead of
+    // failing the job, so the step stays best-effort and unsets the wrapper.
+    assert.match(
+      workflow,
+      /uses: mozilla-actions\/sccache-action@v0\.0\.10\s+continue-on-error: true/,
+    );
+    assert.match(workflow, /steps\.sccache\.outcome/);
+    assert.match(workflow, /echo "RUSTC_WRAPPER=" >> "\$GITHUB_ENV"/);
     assert.match(
       workflow,
       /key: navop-cargo-inputs-v1-\$\{\{ runner\.os \}\}-\$\{\{ hashFiles\('\*\*\/Cargo\.lock'\) \}\}/,

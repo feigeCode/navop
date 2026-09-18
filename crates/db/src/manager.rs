@@ -1164,6 +1164,16 @@ fn successful_streaming_sql(result: &SqlResult) -> Option<&str> {
     .filter(|sql| !sql.trim().is_empty())
 }
 
+/// Streaming is mandatory for file sources because the executor reads them
+/// incrementally instead of loading the whole file into memory.
+fn streaming_exec_opts(source: &SqlSource, opts: Option<ExecOptions>) -> ExecOptions {
+    let mut opts = opts.unwrap_or_default();
+    if source.is_file() {
+        opts.streaming = true;
+    }
+    opts
+}
+
 fn should_conservatively_invalidate_streaming(
     source: &SqlSource,
     transactional: bool,
@@ -2084,10 +2094,7 @@ impl GlobalDbState {
             }
         }
 
-        let mut opts = opts.unwrap_or_default();
-        if source.is_file() {
-            opts.streaming = true;
-        }
+        let opts = streaming_exec_opts(&source, opts);
 
         let cache = cx.update(|cx| cx.try_global::<GlobalNodeCache>().cloned());
         let notifier = cx.update(|cx| cx.try_global::<GlobalConnectionNotifier>().cloned());
@@ -3784,7 +3791,6 @@ mod tests {
     use crate::types::*;
     use crate::{DatabaseOperationRequest, ExportProgressSender, ImportProgressSender};
     use async_trait::async_trait;
-    use gpui::TestAppContext;
     use one_core::storage::DatabaseType;
     use sqlparser::dialect::{Dialect, GenericDialect};
     use std::path::PathBuf;
@@ -4468,17 +4474,20 @@ mod tests {
         config: DbConnectionConfig,
     }
 
-    fn setup_streaming_cache_test(
-        cx: &mut TestAppContext,
-        connection_id: &str,
-    ) -> StreamingCacheTestContext {
-        setup_streaming_cache_test_with_connection(cx, connection_id, |config| {
+    /// Streaming cache tests run on a plain Tokio runtime instead of the
+    /// deterministic GPUI test scheduler: the production path hands the request
+    /// to Tokio and waits for its join handle on the GPUI background executor,
+    /// so a worker thread completes the request and wakes that executor, which
+    /// the test scheduler reports as non-deterministic activity. Building the
+    /// request directly keeps the cache assertions deterministic.
+    async fn setup_streaming_cache_test(connection_id: &str) -> StreamingCacheTestContext {
+        setup_streaming_cache_test_with_connection(connection_id, |config| {
             MockConnection::new(config, true)
         })
+        .await
     }
 
-    fn setup_streaming_cache_test_with_connection(
-        cx: &mut TestAppContext,
+    async fn setup_streaming_cache_test_with_connection(
         connection_id: &str,
         build_connection: impl FnOnce(DbConnectionConfig) -> MockConnection,
     ) -> StreamingCacheTestContext {
@@ -4491,38 +4500,23 @@ mod tests {
         let config = test_config(connection_id);
         state.register_connection(config.clone());
 
-        let runtime = cx.update(|cx| {
-            one_core::gpui_tokio::init(cx);
-            cx.set_global(cache.clone());
-            cx.set_global(state.clone());
-            Tokio::handle(cx)
-        });
+        let session = ConnectionSession::new(
+            Box::new(build_connection(config.clone())),
+            format!("{}:session:1", config.id),
+            false,
+        );
+        state
+            .connection_manager
+            .sessions
+            .write()
+            .await
+            .entry(config.id.clone())
+            .or_default()
+            .push(session);
 
-        let session_state = state.clone();
-        let session_config = config.clone();
-        runtime.block_on(async move {
-            let session = ConnectionSession::new(
-                Box::new(build_connection(session_config.clone())),
-                format!("{}:session:1", session_config.id),
-                false,
-            );
-            session_state
-                .connection_manager
-                .sessions
-                .write()
-                .await
-                .entry(session_config.id.clone())
-                .or_default()
-                .push(session);
-        });
-
-        let cache_for_setup = cache.clone();
-        let connection_id = connection_id.to_string();
-        runtime.block_on(async move {
-            cache_for_setup
-                .cache_tables(&connection_id, "postgres", Some("public"), Vec::new())
-                .await;
-        });
+        cache
+            .cache_tables(connection_id, "postgres", Some("public"), Vec::new())
+            .await;
 
         StreamingCacheTestContext {
             state,
@@ -4531,46 +4525,41 @@ mod tests {
         }
     }
 
-    async fn run_streaming_source(
-        cx: &mut TestAppContext,
-        test: &StreamingCacheTestContext,
-        source: SqlSource,
-    ) -> bool {
-        run_streaming_source_with_options(cx, test, source, None).await
+    async fn run_streaming_source(test: &StreamingCacheTestContext, source: SqlSource) -> bool {
+        run_streaming_source_with_options(test, source, None).await
     }
 
+    /// Mirrors `GlobalDbState::execute_streaming_cancellable` without the GPUI
+    /// layer: same request fields, same progress channel, same Tokio runtime.
     async fn run_streaming_source_with_options(
-        cx: &mut TestAppContext,
         test: &StreamingCacheTestContext,
         source: SqlSource,
         options: Option<ExecOptions>,
     ) -> bool {
-        let state = test.state.clone();
-        let connection_id = test.config.id.clone();
-        let mut progress = cx
-            .spawn(move |mut cx| async move {
-                state
-                    .execute_streaming(
-                        &mut cx,
-                        connection_id,
-                        source,
-                        Some("postgres".to_string()),
-                        Some("public".to_string()),
-                        options,
-                    )
-                    .unwrap()
-            })
-            .await;
-        let runtime = cx.update(|cx| Tokio::handle(cx));
-        let cache = test.cache.clone();
-        let connection_id = test.config.id.clone();
-        runtime.block_on(async move {
-            while progress.recv().await.is_some() {}
-            cache
-                .get_tables(&connection_id, "postgres", Some("public"))
-                .await
-                .is_some()
-        })
+        let invalidation_source = source.clone();
+        let opts = streaming_exec_opts(&source, options);
+        let (tx, mut progress) = mpsc::channel::<StreamingProgress>(100);
+        let request = StreamingExecutionRequest {
+            state: test.state.clone(),
+            config: test.config.clone(),
+            source: Some(source),
+            invalidation_source,
+            schema: Some("public".to_string()),
+            opts,
+            tx,
+            cache: Some(test.cache.clone()),
+            cancellation: CancellationToken::new(),
+        };
+        let execution = tokio::spawn(request.run());
+        while progress.recv().await.is_some() {}
+        execution
+            .await
+            .expect("streaming execution task must not panic");
+
+        test.cache
+            .get_tables(&test.config.id, "postgres", Some("public"))
+            .await
+            .is_some()
     }
 
     #[test]
@@ -4856,11 +4845,10 @@ mod tests {
         ));
     }
 
-    #[gpui::test]
-    async fn streaming_ddl_invalidates_cached_schema_metadata(cx: &mut TestAppContext) {
-        let test = setup_streaming_cache_test(cx, "streaming-ddl-cache-test");
+    #[tokio::test]
+    async fn streaming_ddl_invalidates_cached_schema_metadata() {
+        let test = setup_streaming_cache_test("streaming-ddl-cache-test").await;
         let tables_cached = run_streaming_source(
-            cx,
             &test,
             SqlSource::Script("CREATE TABLE widgets (id INT)".to_string()),
         )
@@ -4872,11 +4860,11 @@ mod tests {
         );
     }
 
-    #[gpui::test]
-    async fn streaming_query_keeps_schema_metadata_cache(cx: &mut TestAppContext) {
-        let test = setup_streaming_cache_test(cx, "streaming-query-cache-test");
+    #[tokio::test]
+    async fn streaming_query_keeps_schema_metadata_cache() {
+        let test = setup_streaming_cache_test("streaming-query-cache-test").await;
         let tables_cached =
-            run_streaming_source(cx, &test, SqlSource::Script("SELECT 1".to_string())).await;
+            run_streaming_source(&test, SqlSource::Script("SELECT 1".to_string())).await;
 
         assert!(
             tables_cached,
@@ -4884,11 +4872,10 @@ mod tests {
         );
     }
 
-    #[gpui::test]
-    async fn streaming_file_conservatively_invalidates_connection_cache(cx: &mut TestAppContext) {
-        let test = setup_streaming_cache_test(cx, "streaming-file-cache-test");
+    #[tokio::test]
+    async fn streaming_file_conservatively_invalidates_connection_cache() {
+        let test = setup_streaming_cache_test("streaming-file-cache-test").await;
         let tables_cached = run_streaming_source(
-            cx,
             &test,
             SqlSource::File(PathBuf::from("streaming-cache-test.sql")),
         )
@@ -4900,12 +4887,9 @@ mod tests {
         );
     }
 
-    #[gpui::test]
-    async fn nontransactional_streaming_only_invalidates_confirmed_successful_ddl(
-        cx: &mut TestAppContext,
-    ) {
+    #[tokio::test]
+    async fn nontransactional_streaming_only_invalidates_confirmed_successful_ddl() {
         let test = setup_streaming_cache_test_with_connection(
-            cx,
             "streaming-partial-ddl-cache-test",
             |config| {
                 MockConnection::with_streaming_results(
@@ -4924,18 +4908,13 @@ mod tests {
                     ],
                 )
             },
-        );
-        let runtime = cx.update(|cx| Tokio::handle(cx));
-        let cache = test.cache.clone();
-        let connection_id = test.config.id.clone();
-        runtime.block_on(async move {
-            cache
-                .cache_tables(&connection_id, "postgres", Some("audit"), Vec::new())
-                .await;
-        });
+        )
+        .await;
+        test.cache
+            .cache_tables(&test.config.id, "postgres", Some("audit"), Vec::new())
+            .await;
 
         let public_cached = run_streaming_source(
-            cx,
             &test,
             SqlSource::Script(
                 "CREATE TABLE public.widgets (id INT); \
@@ -4945,15 +4924,11 @@ mod tests {
         )
         .await;
 
-        let runtime = cx.update(|cx| Tokio::handle(cx));
-        let cache = test.cache.clone();
-        let connection_id = test.config.id.clone();
-        let audit_cached = runtime.block_on(async move {
-            cache
-                .get_tables(&connection_id, "postgres", Some("audit"))
-                .await
-                .is_some()
-        });
+        let audit_cached = test
+            .cache
+            .get_tables(&test.config.id, "postgres", Some("audit"))
+            .await
+            .is_some();
 
         assert!(
             !public_cached,
@@ -4965,12 +4940,9 @@ mod tests {
         );
     }
 
-    #[gpui::test]
-    async fn failed_transactional_streaming_conservatively_invalidates_connection_cache(
-        cx: &mut TestAppContext,
-    ) {
+    #[tokio::test]
+    async fn failed_transactional_streaming_conservatively_invalidates_connection_cache() {
         let test = setup_streaming_cache_test_with_connection(
-            cx,
             "streaming-transaction-error-cache-test",
             |config| {
                 MockConnection::with_streaming_results(
@@ -4989,18 +4961,13 @@ mod tests {
                     ],
                 )
             },
-        );
-        let runtime = cx.update(|cx| Tokio::handle(cx));
-        let cache = test.cache.clone();
-        let connection_id = test.config.id.clone();
-        runtime.block_on(async move {
-            cache
-                .cache_tables(&connection_id, "postgres", Some("audit"), Vec::new())
-                .await;
-        });
+        )
+        .await;
+        test.cache
+            .cache_tables(&test.config.id, "postgres", Some("audit"), Vec::new())
+            .await;
 
         let public_cached = run_streaming_source_with_options(
-            cx,
             &test,
             SqlSource::Script(
                 "CREATE TABLE public.widgets (id INT); \
@@ -5014,15 +4981,11 @@ mod tests {
         )
         .await;
 
-        let runtime = cx.update(|cx| Tokio::handle(cx));
-        let cache = test.cache.clone();
-        let connection_id = test.config.id.clone();
-        let audit_cached = runtime.block_on(async move {
-            cache
-                .get_tables(&connection_id, "postgres", Some("audit"))
-                .await
-                .is_some()
-        });
+        let audit_cached = test
+            .cache
+            .get_tables(&test.config.id, "postgres", Some("audit"))
+            .await
+            .is_some();
 
         assert!(!public_cached);
         assert!(

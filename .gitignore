@@ -68,3 +68,6 @@ commit-info.md
 .zcode/
 updates_latest.json
 .workbuddy/
+
+# Finch 本地工作区状态（权限等）
+.finch/
