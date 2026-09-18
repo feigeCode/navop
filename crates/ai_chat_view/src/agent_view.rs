@@ -11398,6 +11398,7 @@ mod tests {
                     initial_active: crate::workbench::WorkbenchPanelKind::Chat,
                     theme: None,
                     subscriptions: Vec::new(),
+                    workspace_root: None,
                 },
                 window,
                 cx,

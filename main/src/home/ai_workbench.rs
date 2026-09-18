@@ -34,22 +34,42 @@ fn workspace_theme(cx: &App) -> WorkspaceTheme {
     }
 }
 
+/// 工作台初始工作区。
+///
+/// 顺序：上次保存的工作区 → 进程当前目录 → 用户主目录。绝不回退到 `/`：
+/// 那会得到一个不是工作区的"工作区"，用户也无从判断当前上下文。
 fn workspace_root(cx: &App) -> std::path::PathBuf {
-    let settings = one_core::settings::AppSettings::current(cx);
-    settings
+    let saved = one_core::settings::AppSettings::current(cx)
         .ai_chat
-        .last_workspace_root
+        .last_workspace_root;
+    saved
         .filter(|path| path.is_dir())
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+        .or_else(|| std::env::current_dir().ok().filter(|path| path.is_dir()))
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
 }
 
-fn default_terminal_config() -> LocalConfig {
+fn recent_workspace_roots(cx: &App) -> Vec<std::path::PathBuf> {
+    one_core::settings::AppSettings::current(cx)
+        .ai_chat
+        .recent_workspace_roots
+        .into_iter()
+        .filter(|path| path.is_dir())
+        .collect()
+}
+
+/// 把当前工作区记入最近列表；由 Explorer 的根目录变化驱动。
+fn remember_workspace_root(root: &std::path::Path, cx: &mut App) {
+    one_core::settings::AppSettings::update_and_save(cx, |settings| {
+        settings.ai_chat.remember_workspace_root(root);
+    });
+}
+
+fn default_terminal_config(root: &std::path::Path) -> LocalConfig {
     LocalConfig {
         shell: None,
         args: Vec::new(),
-        working_dir: std::env::current_dir()
-            .ok()
-            .map(|path| path.to_string_lossy().into_owned()),
+        working_dir: Some(root.to_string_lossy().into_owned()),
         env: Vec::new(),
     }
 }
@@ -82,26 +102,17 @@ pub(crate) fn build_ai_workbench_shell(
             .with_tab_closeable(true)
             .with_workspace_root(workspace_root.clone())
     });
-    let chat_for_root = chat.clone();
-    let root_subscription: Subscription = cx.subscribe(
-        &explorer,
-        move |_, event: &WorkspaceExplorerEvent, cx| {
-            if let WorkspaceExplorerEvent::RootChanged(root) = event {
-                chat_for_root.update(cx, |panel, cx| {
-                    panel.set_workspace_root(root.clone(), cx);
-                });
-            }
-        },
-    );
+    let recents = recent_workspace_roots(cx);
+    explorer.update(cx, |explorer, cx| explorer.set_recent_roots(recents, cx));
+    // 初始工作区也要进入最近列表，否则第一次打开时菜单里是空的。
+    remember_workspace_root(&workspace_root, cx);
     chat.update(cx, |panel, cx| panel.set_sidebar_suppressed(true, cx));
     let terminal_root = workspace_root.clone();
     let terminal = cx.new(|cx| {
-        let mut config = default_terminal_config();
-        config.working_dir = Some(terminal_root.to_string_lossy().into_owned());
-        TerminalView::new(config, window, cx).with_workspace_pane()
+        TerminalView::new(default_terminal_config(&terminal_root), window, cx).with_workspace_pane()
     });
 
-    cx.new(|cx| {
+    let shell = cx.new(|cx| {
         WorkbenchShell::new(
             WorkbenchShellConfig {
                 panels: vec![
@@ -114,10 +125,30 @@ pub(crate) fn build_ai_workbench_shell(
                 session_source: Some(chat.clone()),
                 initial_active: WorkbenchPanelKind::Chat,
                 theme: None,
-                subscriptions: vec![root_subscription],
+                subscriptions: Vec::new(),
+                workspace_root: Some(workspace_root.clone()),
             },
             window,
             cx,
         )
-    })
+    });
+
+    // 外壳先于订阅存在：这里在构造之后再接线，根目录变化同时刷新外壳标题与聊天面板。
+    let chat_for_root = chat.clone();
+    let shell_for_root = shell.clone();
+    let root_subscription: Subscription = cx.subscribe(
+        &explorer,
+        move |_, event: &WorkspaceExplorerEvent, cx| {
+            if let WorkspaceExplorerEvent::RootChanged(root) = event {
+                remember_workspace_root(root, cx);
+                chat_for_root.update(cx, |panel, cx| {
+                    panel.set_workspace_root(root.clone(), cx);
+                });
+                let root = root.clone();
+                shell_for_root.update(cx, |shell, cx| shell.set_workspace_root(root, cx));
+            }
+        },
+    );
+    shell.update(cx, |shell, cx| shell.add_subscription(root_subscription, cx));
+    shell
 }

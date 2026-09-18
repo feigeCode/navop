@@ -51,6 +51,8 @@ pub struct WorkbenchShellConfig {
     /// 主题覆盖；`None` 时取 `cx.theme()`。
     pub theme: Option<AgentChatTheme>,
     pub subscriptions: Vec<Subscription>,
+    /// 当前工作区根目录；仅用于在顶部常显，切换由宿主驱动。
+    pub workspace_root: Option<std::path::PathBuf>,
 }
 
 /// 外壳对外事件：面板内请求“在内容区打开某个标签”。
@@ -67,6 +69,8 @@ pub struct WorkbenchShell {
     pub(super) theme: Option<AgentChatTheme>,
     pub(super) tab_closeable: bool,
     pub(super) focus_handle: FocusHandle,
+    /// 当前工作区根目录；`None` 表示宿主未提供。
+    pub(super) workspace_root: Option<std::path::PathBuf>,
     pub(super) _subscriptions: Vec<Subscription>,
 }
 
@@ -83,6 +87,7 @@ impl WorkbenchShell {
             initial_active,
             theme,
             subscriptions: mut external_subscriptions,
+            workspace_root,
         } = config;
         let mut subscriptions = Vec::new();
         subscriptions.append(&mut external_subscriptions);
@@ -100,8 +105,24 @@ impl WorkbenchShell {
             theme,
             tab_closeable: true,
             focus_handle: cx.focus_handle(),
+            workspace_root,
             _subscriptions: subscriptions,
         }
+    }
+
+    /// 宿主在根目录变化后同步显示；不参与任何面板状态。
+    pub fn set_workspace_root(&mut self, root: std::path::PathBuf, cx: &mut Context<Self>) {
+        if self.workspace_root.as_ref() == Some(&root) {
+            return;
+        }
+        self.workspace_root = Some(root);
+        cx.notify();
+    }
+
+    /// 追加一个由宿主在构造之后创建的订阅（外壳创建早于其依赖时使用）。
+    pub fn add_subscription(&mut self, subscription: Subscription, cx: &mut Context<Self>) {
+        self._subscriptions.push(subscription);
+        cx.notify();
     }
 
     /// 作为标签页内容时是否允许关闭。
