@@ -35,6 +35,11 @@ impl MessageExtension for NoExtension {}
 #[derive(Clone, Debug)]
 pub struct ChatMessageUIGeneric<E: MessageExtension = NoExtension> {
     pub id: String,
+    /// 该消息归属的运行时轮次（`RuntimeEvent` 一律携带）。
+    ///
+    /// 本地合成、或事件未带轮次（例如历史恢复）时为 `None`。轮次投影据此把消息
+    /// 归组，因此该字段必须由事件落值，**不得**用数组下标或渲染顺序推断。
+    pub turn_id: Option<String>,
     pub role: ChatRole,
     pub content: String,
     pub reasoning_content: String,
@@ -105,6 +110,7 @@ impl<E: MessageExtension + Default> ChatMessageUIGeneric<E> {
     ) -> Self {
         Self {
             id: Uuid::new_v4().to_string(),
+            turn_id: None,
             role,
             content: content.into(),
             reasoning_content: String::new(),
@@ -121,6 +127,12 @@ impl<E: MessageExtension + Default> ChatMessageUIGeneric<E> {
 impl<E: MessageExtension> ChatMessageUIGeneric<E> {
     pub fn with_id(mut self, id: impl Into<String>) -> Self {
         self.id = id.into();
+        self
+    }
+
+    /// 绑定归属轮次；`None` 表示该消息不属于任何运行时轮次。
+    pub fn with_turn_id(mut self, turn_id: Option<impl Into<String>>) -> Self {
+        self.turn_id = turn_id.map(Into::into);
         self
     }
 
@@ -235,5 +247,17 @@ mod tests {
 
         assert!(!msg.is_streaming);
         assert!(!msg.is_reasoning_expanded);
+    }
+
+    #[test]
+    fn messages_start_without_a_turn_and_can_be_bound_to_one() {
+        let unbound = ChatMessageUI::user("hi");
+        assert_eq!(None, unbound.turn_id);
+
+        let bound = ChatMessageUI::assistant("yo").with_turn_id(Some("turn_1"));
+        assert_eq!(Some("turn_1".to_string()), bound.turn_id);
+
+        let cleared = bound.with_turn_id(None::<String>);
+        assert_eq!(None, cleared.turn_id);
     }
 }

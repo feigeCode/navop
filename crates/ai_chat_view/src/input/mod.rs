@@ -2,10 +2,13 @@
 
 mod agent_input;
 mod attachment;
+mod completion;
 mod context;
 mod history;
 mod mention;
+mod model_picker;
 mod skill;
+mod slash;
 
 pub use agent_input::{AgentInput, AgentInputEvent, QueuedPromptPreview};
 pub use attachment::ImageAttachment;
@@ -19,3 +22,4 @@ pub use context::{
 pub(crate) use history::PromptHistory;
 pub use mention::{MentionCompletionProvider, MentionItem};
 pub use skill::{ComposerSkillItem, ComposerSkillSummary};
+pub use slash::SlashCommandItem;

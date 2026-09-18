@@ -42,6 +42,36 @@ impl PendingSubmissions {
             .unwrap_or_default()
     }
 
+    /// 删除队列中第 `index` 条；越界返回 `None`。删除不改变其余条目的相对顺序。
+    pub(crate) fn remove_at(
+        &mut self,
+        session_uid: &str,
+        index: usize,
+    ) -> Option<PendingSubmission> {
+        let queue = self.by_session.get_mut(session_uid)?;
+        let removed = queue.remove(index);
+        if queue.is_empty() {
+            self.by_session.remove(session_uid);
+        }
+        removed
+    }
+
+    /// 用编辑后的条目替换第 `index` 条，**不改变队列位置**；越界返回 `None`。
+    ///
+    /// 「编辑」的语义是**取回输入框**（见 [`Self::remove_at`]），所以生产路径不经过这里；
+    /// 保留它是为了让「就地改文案、位置不动」这条后续路径有落点，且已有单测锁住语义。
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn replace_at(
+        &mut self,
+        session_uid: &str,
+        index: usize,
+        submission: PendingSubmission,
+    ) -> Option<PendingSubmission> {
+        let queue = self.by_session.get_mut(session_uid)?;
+        let slot = queue.get_mut(index)?;
+        Some(std::mem::replace(slot, submission))
+    }
+
     pub(crate) fn clear_session(&mut self, session_uid: &str) {
         self.by_session.remove(session_uid);
     }
@@ -160,6 +190,60 @@ mod tests {
         pending.remove_session("session-a");
         assert_eq!(0, pending.len("session-a"));
         assert_eq!(1, pending.len("session-b"));
+    }
+
+    #[test]
+    fn remove_at_drops_one_entry_and_keeps_order() {
+        let mut pending = PendingSubmissions::default();
+        pending.enqueue("session-a", submission("a1"));
+        pending.enqueue("session-a", submission("a2"));
+        pending.enqueue("session-a", submission("a3"));
+        pending.enqueue("session-b", submission("b1"));
+
+        let removed = pending.remove_at("session-a", 1).expect("removed entry");
+        assert_eq!("a2", removed.text);
+        assert_eq!(
+            vec!["a1", "a3"],
+            pending
+                .items("session-a")
+                .into_iter()
+                .map(|item| item.text.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(1, pending.len("session-b"));
+        assert!(pending.remove_at("session-a", 9).is_none());
+    }
+
+    #[test]
+    fn remove_at_drops_the_session_when_the_queue_empties() {
+        let mut pending = PendingSubmissions::default();
+        pending.enqueue("session-a", submission("only"));
+
+        assert!(pending.remove_at("session-a", 0).is_some());
+        assert_eq!(0, pending.len("session-a"));
+        assert!(pending.items("session-a").is_empty());
+    }
+
+    #[test]
+    fn replace_at_edits_in_place_without_reordering() {
+        let mut pending = PendingSubmissions::default();
+        pending.enqueue("session-a", submission("a1"));
+        pending.enqueue("session-a", submission("a2"));
+        pending.enqueue("session-a", submission("a3"));
+
+        let previous = pending
+            .replace_at("session-a", 1, submission("a2-edited"))
+            .expect("replaced entry");
+        assert_eq!("a2", previous.text);
+        assert_eq!(
+            vec!["a1", "a2-edited", "a3"],
+            pending
+                .items("session-a")
+                .into_iter()
+                .map(|item| item.text.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert!(pending.replace_at("session-a", 9, submission("nope")).is_none());
     }
 
     #[test]

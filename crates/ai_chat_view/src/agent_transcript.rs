@@ -73,6 +73,17 @@ enum TerminalEventKey {
 pub struct AgentTranscript {
     /// 渲染用的消息列表。
     pub messages: Vec<ChatMessageUI>,
+    /// 当前轮次；`apply` 入口从事件统一提取，其后所有新消息据此打标。
+    ///
+    /// 不做「按下标推断」：轮次归属必须来自 `RuntimeEvent::*::turn_id`，否则
+    /// 迟到的旧轮次事件会被算进当前轮。
+    current_turn: Option<String>,
+    /// 因预算被淘汰的消息条数；>0 时 UI 应显式提示历史被裁断。
+    dropped_messages: usize,
+    /// 内容修订号：任何可能改变**可搜索文本**的写入都会 +1。
+    ///
+    /// 会话内搜索不必每帧全量重算，只在这个号变化时刷新。
+    revision: u64,
     /// 当前流式助手消息 id(若正在流式)。
     streaming_id: Option<String>,
     /// 当前轻量状态消息 id(若存在未完成状态)。
@@ -89,6 +100,12 @@ pub struct AgentTranscript {
     tool_inputs: HashMap<String, serde_json::Value>,
     /// 原始工具入参插入顺序,用于淘汰长期未完成的陈旧调用。
     tool_input_order: VecDeque<String>,
+    /// Public MCP 审批请求 id 集合。
+    ///
+    /// Public MCP 审批与本地工具确认共用 `agent.confirm` 卡片，只靠卡片本身分不出授权域。
+    /// 这里记下身份，供 [`AgentTranscript::pending_decisions`] 标注正确的来源，
+    /// **不参与任何解析路径**——三个授权域各自走各自的入口，绝不合并。
+    public_mcp_ids: HashSet<String>,
     /// 已归约的审批/终态事件,防止重复事件写入转录或触发持久化。
     terminal_events: HashSet<TerminalEventKey>,
     /// 已归约事件插入顺序,只保留有限的近期去重窗口。
@@ -146,6 +163,9 @@ impl AgentTranscript {
     /// 清空(切换 / 新建会话)。
     pub fn clear(&mut self) {
         self.messages.clear();
+        self.dropped_messages = 0;
+        self.touch();
+        self.current_turn = None;
         self.streaming_id = None;
         self.active_status_id = None;
         self.acp_status_id = None;
@@ -153,8 +173,18 @@ impl AgentTranscript {
         self.active_subagents.clear();
         self.tool_inputs.clear();
         self.tool_input_order.clear();
+        self.public_mcp_ids.clear();
         self.terminal_events.clear();
         self.terminal_event_order.clear();
+    }
+
+    /// 当前未决的决策清单：时间线卡片与输入区决策栏**共用**这一份。
+    ///
+    /// 顺序即出现顺序；同一身份只出现一次（卡片就地替换时不会重复）。
+    pub fn pending_decisions(&self) -> Vec<crate::PendingDecision> {
+        crate::pending_decision::pending_decisions(&self.messages, |call_id| {
+            self.public_mcp_ids.contains(call_id)
+        })
     }
 
     /// 当前轮的最新计划(供输入框上方的 Tasks 面板渲染;不进消息流)。
@@ -220,8 +250,7 @@ impl AgentTranscript {
             selected_option_name: String::new(),
         };
         bound_acp_permission_data(&mut data, self.card_field_limit());
-        self.messages
-            .push(ChatMessageUI::card(ACP_PERMISSION_CARD, data.to_json()));
+        self.push_message(ChatMessageUI::card(ACP_PERMISSION_CARD, data.to_json()));
         self.enforce_budget();
     }
 
@@ -313,7 +342,7 @@ impl AgentTranscript {
 
     /// 追加一条系统提示。
     pub fn push_system(&mut self, text: impl Into<String>) {
-        self.messages.push(ChatMessageUI::system(text));
+        self.push_message(ChatMessageUI::system(text));
         self.enforce_budget();
     }
 
@@ -329,17 +358,25 @@ impl AgentTranscript {
         } else {
             text.to_string()
         };
-        self.messages.push(ChatMessageUI::user(content));
+        self.push_message(ChatMessageUI::user(content));
         self.enforce_budget();
     }
 
     /// 应用一个运行时事件,更新消息列表。
     pub fn apply(&mut self, event: &RuntimeEvent) -> bool {
+        // 轮次归属：先更新当前轮，再归约，保证本轮所有消息都带上正确的 `turn_id`。
+        if let Some(turn_id) = event_turn_id(event) {
+            self.current_turn = Some(turn_id.as_str().to_string());
+        }
         if let Some(key) = terminal_event_key(event)
             && !self.record_terminal_event(key)
         {
             return false;
         }
+        // 内容修订号在这里统一推进：`apply` 是运行时驱动变更的**唯一**入口
+        // （含流式增量），把 `touch` 放在各分支里迟早会漏一个。
+        // 幂等事件已在上面提前返回，不会白白计数。
+        self.touch();
         match event {
             RuntimeEvent::TurnStarted { .. }
             | RuntimeEvent::AssistantMessageDelta { .. }
@@ -460,8 +497,7 @@ impl AgentTranscript {
             status: "pending".into(),
         };
         bound_tool_confirm_data(&mut data, self.card_field_limit());
-        self.messages
-            .push(ChatMessageUI::card(TOOL_CONFIRM_CARD, data.to_json()));
+        self.push_message(ChatMessageUI::card(TOOL_CONFIRM_CARD, data.to_json()));
         self.enforce_budget();
     }
 
@@ -469,6 +505,7 @@ impl AgentTranscript {
         if self.has_pending_tool_confirm(&request.request_id) {
             return;
         }
+        self.public_mcp_ids.insert(request.request_id.clone());
         self.finish_active_status();
         self.close_streaming_segment();
         let arguments = request
@@ -490,8 +527,7 @@ impl AgentTranscript {
             status: "pending".into(),
         };
         bound_tool_confirm_data(&mut data, self.card_field_limit());
-        self.messages
-            .push(ChatMessageUI::card(TOOL_CONFIRM_CARD, data.to_json()));
+        self.push_message(ChatMessageUI::card(TOOL_CONFIRM_CARD, data.to_json()));
         self.enforce_budget();
     }
 
@@ -500,13 +536,13 @@ impl AgentTranscript {
         match event {
             RuntimeEvent::TurnFailed { reason, .. } => {
                 self.streaming_id = None;
-                self.messages.push(ChatMessageUI::system(
+                self.push_message(ChatMessageUI::system(
                     t!("AgentUi.task_failed_warning", error = reason).to_string(),
                 ));
             }
             RuntimeEvent::TurnCancelled { .. } => {
                 self.close_streaming_segment();
-                self.messages.push(ChatMessageUI::system(
+                self.push_message(ChatMessageUI::system(
                     t!("AgentUi.task_cancelled").to_string(),
                 ));
             }
@@ -529,7 +565,7 @@ impl AgentTranscript {
         append_bounded(&mut content, delta, self.budget.max_field_bytes);
         let msg = ChatMessageUI::streaming_assistant().with_content(content);
         self.streaming_id = Some(msg.id.clone());
-        self.messages.push(msg);
+        self.push_message(msg);
     }
 
     fn append_reasoning_delta(&mut self, delta: &str) {
@@ -551,7 +587,7 @@ impl AgentTranscript {
             self.budget.max_field_bytes,
         );
         self.streaming_id = Some(msg.id.clone());
-        self.messages.push(msg);
+        self.push_message(msg);
     }
 
     fn finalize_assistant(&mut self, text: &str) {
@@ -563,11 +599,13 @@ impl AgentTranscript {
                 if let Some(first) = messages.first_mut() {
                     first.reasoning_content = reasoning;
                 }
+                let messages = self.stamp_turn(messages);
                 self.messages.splice(index..=index, messages);
                 return;
             }
         }
-        self.messages.extend(assistant_messages_from_content(text));
+        let messages = self.stamp_turn(assistant_messages_from_content(text));
+        self.messages.extend(messages);
     }
 
     fn close_streaming_segment(&mut self) {
@@ -580,6 +618,7 @@ impl AgentTranscript {
             if let Some(first) = messages.first_mut() {
                 first.reasoning_content = reasoning;
             }
+            let messages = self.stamp_turn(messages);
             self.messages.splice(index..=index, messages);
         }
     }
@@ -602,7 +641,7 @@ impl AgentTranscript {
         if !is_done {
             self.active_status_id = Some(msg.id.clone());
         }
-        self.messages.push(msg);
+        self.push_message(msg);
     }
 
     fn finish_active_status(&mut self) {
@@ -637,8 +676,7 @@ impl AgentTranscript {
             data_text: String::new(),
         };
         bound_tool_card_data(&mut data, self.card_field_limit());
-        self.messages
-            .push(ChatMessageUI::card(TOOL_CARD, data.to_json()));
+                self.push_message(ChatMessageUI::card(TOOL_CARD, data.to_json()));
     }
 
     fn apply_observation(&mut self, obs: &ToolObservation) {
@@ -675,8 +713,7 @@ impl AgentTranscript {
                 summary,
                 data_text,
             };
-            self.messages
-                .push(ChatMessageUI::card(TOOL_CARD, data.to_json()));
+            self.push_message(ChatMessageUI::card(TOOL_CARD, data.to_json()));
         }
     }
 
@@ -843,8 +880,7 @@ impl AgentTranscript {
         };
         bound_subagent_data(&mut data, self.card_field_limit());
         self.upsert_active_subagent(data.clone());
-        self.messages
-            .push(ChatMessageUI::card(SUBAGENT_CARD, data.to_json()));
+        self.push_message(ChatMessageUI::card(SUBAGENT_CARD, data.to_json()));
     }
 
     fn update_subagent(&mut self, subagent_id: &str, summary: &str) {
@@ -920,6 +956,9 @@ impl AgentTranscript {
     }
 
     fn enforce_budget(&mut self) {
+        // 预算是**所有写入路径的汇合点**（`apply`、各 `push_*`、卡片就地替换都经过它），
+        // 因此修订号在这里递增，就不必在每个写入点各记一次、也不会漏。
+        self.touch();
         if self.budget_deferred {
             return;
         }
@@ -997,8 +1036,50 @@ impl AgentTranscript {
         true
     }
 
+    /// 累计被预算淘汰的消息条数。
+    pub fn dropped_messages(&self) -> usize {
+        self.dropped_messages
+    }
+
+    /// 内容修订号。写入路径每变更一次 +1；会话内搜索据此决定是否重算命中。
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// 标记内容已变更。
+    fn touch(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    /// 当前轮次（无运行时轮次时为 `None`）。
+    pub fn current_turn_id(&self) -> Option<&str> {
+        self.current_turn.as_deref()
+    }
+
+    /// 给消息打上当前轮次并推入列表。
+    ///
+    /// 所有新消息都走这里：**唯一**的轮次落值点，避免某个分支漏打标。
+    /// 对外公开是为了让「直接往 `messages` 里塞」这件事没有存在的必要
+    /// —— 那样会绕过修订号，会话内搜索就永远不知道内容变了。
+    pub fn push_message(&mut self, msg: ChatMessageUI) {
+        self.messages
+            .push(msg.with_turn_id(self.current_turn.clone()));
+        self.touch();
+    }
+
+    /// 批量打标（`splice` / `extend` 路径用）。
+    fn stamp_turn(&self, messages: Vec<ChatMessageUI>) -> Vec<ChatMessageUI> {
+        let turn = self.current_turn.clone();
+        messages
+            .into_iter()
+            .map(|msg| msg.with_turn_id(turn.clone()))
+            .collect()
+    }
+
     fn remove_message(&mut self, index: usize) {
+        self.dropped_messages += 1;
         let removed = self.messages.remove(index);
+        self.touch();
         if self.streaming_id.as_deref() == Some(removed.id.as_str()) {
             self.streaming_id = None;
         }
@@ -1012,6 +1093,12 @@ impl AgentTranscript {
             && let Some(data) = ToolCardData::from_json(&removed.content)
         {
             self.remove_tool_input(&data.call_id);
+        }
+        if removed.variant.card_kind() == Some(TOOL_CONFIRM_CARD)
+            && let Some(data) = ToolConfirmCardData::from_json(&removed.content)
+        {
+            // 卡片被预算淘汰后，授权域标注也必须一起消失，避免身份集合无界增长。
+            self.public_mcp_ids.remove(&data.call_id);
         }
     }
 }
@@ -1217,6 +1304,33 @@ fn utf8_suffix(text: &str, max_bytes: usize) -> &str {
     &text[start..]
 }
 
+/// 取出事件归属的轮次。
+///
+/// **穷举** `RuntimeEvent` 全部变体（当前 18 个一律带 `turn_id`）：这样以后新增变体
+/// 时编译器会强制在这里表态，不会静默漏掉一个轮次来源。
+fn event_turn_id(event: &RuntimeEvent) -> Option<&TurnId> {
+    match event {
+        RuntimeEvent::TurnStarted { turn_id, .. }
+        | RuntimeEvent::PlanUpdated { turn_id, .. }
+        | RuntimeEvent::ToolCallStarted { turn_id, .. }
+        | RuntimeEvent::ToolCallFinished { turn_id, .. }
+        | RuntimeEvent::SubAgentStarted { turn_id, .. }
+        | RuntimeEvent::SubAgentUpdated { turn_id, .. }
+        | RuntimeEvent::SubAgentFinished { turn_id, .. }
+        | RuntimeEvent::ObservationAdded { turn_id, .. }
+        | RuntimeEvent::AssistantMessageDelta { turn_id, .. }
+        | RuntimeEvent::ReasoningDelta { turn_id, .. }
+        | RuntimeEvent::AssistantMessage { turn_id, .. }
+        | RuntimeEvent::UserMessage { turn_id, .. }
+        | RuntimeEvent::Status { turn_id, .. }
+        | RuntimeEvent::NeedUserInput { turn_id, .. }
+        | RuntimeEvent::ToolApprovalResolved { turn_id, .. }
+        | RuntimeEvent::TurnCompleted { turn_id, .. }
+        | RuntimeEvent::TurnCancelled { turn_id, .. }
+        | RuntimeEvent::TurnFailed { turn_id, .. } => Some(turn_id),
+    }
+}
+
 fn terminal_event_key(event: &RuntimeEvent) -> Option<TerminalEventKey> {
     match event {
         RuntimeEvent::NeedUserInput {
@@ -1363,6 +1477,165 @@ mod tests {
     }
     fn tid() -> TurnId {
         TurnId::from_string("t1")
+    }
+
+    /// 第 `n` 个轮次（用于跨轮归属测试）。
+    fn turn(n: usize) -> TurnId {
+        TurnId::from_string(format!("t{n}"))
+    }
+
+    /// 从事件流归约出的消息轮次标签。
+    fn turn_labels(tr: &AgentTranscript) -> Vec<Option<&str>> {
+        tr.messages
+            .iter()
+            .map(|message| message.turn_id.as_deref())
+            .collect()
+    }
+
+    #[test]
+    fn messages_carry_the_turn_id_of_the_event_that_produced_them() {
+        let mut tr = AgentTranscript::new();
+
+        tr.apply(&RuntimeEvent::TurnStarted {
+            session_id: sid(),
+            turn_id: turn(1),
+        });
+        tr.apply(&RuntimeEvent::UserMessage {
+            session_id: sid(),
+            turn_id: turn(1),
+            text: "第一轮".into(),
+        });
+        tr.apply(&RuntimeEvent::ToolCallStarted {
+            session_id: sid(),
+            turn_id: turn(1),
+            call_id: ToolCallId::from_string("c1"),
+            tool_name: ToolName::new("fs.read"),
+            arguments: serde_json::json!({ "path": "a.rs" }),
+        });
+        tr.apply(&RuntimeEvent::AssistantMessageDelta {
+            session_id: sid(),
+            turn_id: turn(1),
+            delta: "答案一".into(),
+        });
+        tr.apply(&RuntimeEvent::TurnCompleted {
+            session_id: sid(),
+            turn_id: turn(1),
+            answer: Some("答案一".into()),
+        });
+
+        tr.apply(&RuntimeEvent::TurnStarted {
+            session_id: sid(),
+            turn_id: turn(2),
+        });
+        tr.apply(&RuntimeEvent::UserMessage {
+            session_id: sid(),
+            turn_id: turn(2),
+            text: "第二轮".into(),
+        });
+        tr.apply(&RuntimeEvent::AssistantMessageDelta {
+            session_id: sid(),
+            turn_id: turn(2),
+            delta: "答案二".into(),
+        });
+
+        assert_eq!(
+            vec![
+                Some("t1"), // user
+                Some("t1"), // tool card
+                Some("t1"), // assistant
+                Some("t2"), // user
+                Some("t2"), // assistant
+            ],
+            turn_labels(&tr)
+        );
+        assert_eq!(Some("t2"), tr.current_turn_id());
+    }
+
+    #[test]
+    fn streaming_message_keeps_its_turn_after_splice_and_finalize() {
+        let mut tr = AgentTranscript::new();
+        let text = r#"下面是图表:
+
+```chart-json
+{"chart_type":"bar","data":[{"x":"Jan","y":1}]}
+```
+
+结论如上。"#;
+
+        tr.apply(&RuntimeEvent::TurnStarted {
+            session_id: sid(),
+            turn_id: turn(7),
+        });
+        tr.apply(&RuntimeEvent::AssistantMessageDelta {
+            session_id: sid(),
+            turn_id: turn(7),
+            delta: "流式".into(),
+        });
+        // 结算会把流式消息替换成按图表块切分的多条消息，轮次必须跟着走。
+        tr.apply(&RuntimeEvent::AssistantMessage {
+            session_id: sid(),
+            turn_id: turn(7),
+            text: text.to_string(),
+        });
+
+        assert_eq!(3, tr.messages.len(), "chart block should split messages");
+        assert!(turn_labels(&tr).iter().all(|label| *label == Some("t7")));
+    }
+
+    #[test]
+    fn tool_cards_and_confirmations_inherit_the_current_turn() {
+        let mut tr = AgentTranscript::new();
+
+        tr.apply(&RuntimeEvent::TurnStarted {
+            session_id: sid(),
+            turn_id: turn(3),
+        });
+        tr.apply(&RuntimeEvent::ToolCallStarted {
+            session_id: sid(),
+            turn_id: turn(3),
+            call_id: ToolCallId::from_string("c1"),
+            tool_name: ToolName::new("ssh.exec"),
+            arguments: serde_json::json!({ "command": "df -h" }),
+        });
+        tr.apply(&RuntimeEvent::NeedUserInput {
+            session_id: sid(),
+            turn_id: turn(3),
+            pending_tool_call_id: Some(ToolCallId::from_string("c1")),
+            question: "允许执行?".into(),
+            tool_name: Some(ToolName::new("ssh.exec")),
+            arguments: Some(serde_json::json!({ "command": "df -h" })),
+            pending_tool_calls: Vec::new(),
+        });
+
+        // load_history / 本地合成路径清空当前轮，历史消息不带轮次。
+        assert!(turn_labels(&tr).iter().all(|label| *label == Some("t3")));
+
+        tr.clear();
+        assert_eq!(None, tr.current_turn_id());
+        tr.push_system("本地提示");
+        assert_eq!(vec![None], turn_labels(&tr));
+    }
+
+    #[test]
+    fn history_replay_leaves_turn_ids_empty() {
+        let mut tr = AgentTranscript::new();
+        tr.apply(&RuntimeEvent::TurnStarted {
+            session_id: sid(),
+            turn_id: turn(9),
+        });
+
+        tr.load_history(
+            &[
+                HistoryItem::User {
+                    text: "旧问题".into(),
+                    images: Vec::new(),
+                },
+                HistoryItem::Assistant("旧回答".into()),
+            ],
+            None,
+        );
+
+        assert_eq!(vec![None, None], turn_labels(&tr));
     }
 
     #[test]

@@ -61,11 +61,21 @@ impl MessageRenderItem<'_> {
 }
 
 pub(crate) fn message_render_items(messages: &[ChatMessageUI]) -> Vec<MessageRenderItem<'_>> {
+    let refs: Vec<&ChatMessageUI> = messages.iter().collect();
+    message_render_items_for(&refs)
+}
+
+/// 与 [`message_render_items`] 相同，但直接消费引用切片。
+///
+/// 轮次投影已经把消息按轮次切成 `Vec<&ChatMessageUI>`，这里避免为此再拷贝一份。
+pub(crate) fn message_render_items_for<'a>(
+    messages: &[&'a ChatMessageUI],
+) -> Vec<MessageRenderItem<'a>> {
     let mut items = Vec::new();
     let mut index = 0;
     while index < messages.len() {
-        let Some(target) = tool_message_target(&messages[index]) else {
-            items.push(MessageRenderItem::Single(&messages[index]));
+        let Some(target) = tool_message_target(messages[index]) else {
+            items.push(MessageRenderItem::Single(messages[index]));
             index += 1;
             continue;
         };
@@ -73,17 +83,17 @@ pub(crate) fn message_render_items(messages: &[ChatMessageUI]) -> Vec<MessageRen
             id: String::new(),
             target_id: target.id,
             target_label: target.label,
-            messages: vec![&messages[index]],
+            messages: vec![messages[index]],
         };
         index += 1;
         while index < messages.len() {
-            let Some(next_target) = tool_message_target(&messages[index]) else {
+            let Some(next_target) = tool_message_target(messages[index]) else {
                 break;
             };
             if next_target.key != target.key {
                 break;
             }
-            group.messages.push(&messages[index]);
+            group.messages.push(messages[index]);
             index += 1;
         }
         group.id = tool_target_group_id(&target.key, &group.messages);
