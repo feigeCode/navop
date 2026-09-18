@@ -19,8 +19,8 @@ pub use model::{
     SftpConnectionIdentity, SftpDeleteRemoteExecution, SftpDeleteRemoteRequest,
     SftpDownloadExecution, SftpDownloadRequest, SftpRemoteDeleteEntry, SftpTransferEvent,
     SftpTransferId, SftpTransferOperation, SftpTransferSnapshot, SftpTransferState,
-    SftpUploadConnection, SftpUploadExecution, SftpUploadRequest, delete_remote_task_key,
-    download_task_key, ftp_connect_config_from_stored, upload_task_key,
+    SftpUploadConnection, SftpUploadExecution, SftpUploadRequest, connection_endpoint_label,
+    delete_remote_task_key, download_task_key, ftp_connect_config_from_stored, upload_task_key,
 };
 pub use provider::{RusshSftpTransferProvider, SftpTransferProvider};
 pub use ssh_config::{

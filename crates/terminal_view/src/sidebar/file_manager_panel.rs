@@ -134,17 +134,6 @@ fn is_file_browsable_connection(connection: &StoredConnection) -> bool {
     )
 }
 
-/// 目标选择器里显示的 `user@host:port`；参数取不到时返回空串。
-fn target_endpoint_label(connection: &StoredConnection) -> String {
-    if let Some(config) = sftp_transfer::ftp_connect_config_from_stored(connection) {
-        return format!("{}@{}:{}", config.username, config.host, config.port);
-    }
-    connection
-        .to_ssh_params()
-        .map(|params| format!("{}@{}:{}", params.username, params.host, params.port))
-        .unwrap_or_default()
-}
-
 fn background_task_group_label(connection: &StoredConnection) -> SharedString {
     let host = connection
         .to_ssh_params()
@@ -1443,10 +1432,6 @@ pub struct FileManagerPanel {
     /// 与 `stored_connection.id` 不一致时，说明用户已把浏览目标切到了另一台
     /// 主机：此时终端上报的 OSC 7 属于终端那台机器，与本面板无关。
     terminal_connection_id: Option<i64>,
-    /// 可选远端目标缓存，在选择器打开时按需从存储刷新
-    target_connections: Vec<StoredConnection>,
-    /// 远端目标选择器是否展开
-    target_picker_open: bool,
     /// 终端那条共享会话。
     ///
     /// 面板切到其他目标时会新建独立会话；靠指针身份区分"切走时该断开的自有
@@ -1595,8 +1580,6 @@ impl FileManagerPanel {
             working_dir_hint: None,
             reported_host_tracker: ReportedHostTracker::default(),
             terminal_connection_id,
-            target_connections: Vec::new(),
-            target_picker_open: false,
             terminal_session_manager,
             colors,
             frame_placement: SidebarPlacement::Right,
@@ -4765,142 +4748,67 @@ impl FileManagerPanel {
             })
     }
 
-    /// 远端目标选择器：指明面板正在浏览哪台主机，并允许切换。
+    /// 远端目标选择器：指明面板正在浏览哪台主机，点击后切换。
     ///
     /// 终端可能停在堡垒机上，此时面板默认展示的就是堡垒机的文件系统。把当前目标
     /// 显性化，用户才不会把堡垒机的目录误当成内层主机的；要浏览内层主机，就在这里
     /// 选一台已保存的连接（例如配好跳板机的那台）。
     fn render_target_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let panel_bg = self.colors.muted;
-        let hover = self.colors.muted.opacity(0.72);
-        let foreground = self.colors.foreground;
-        let muted_foreground = self.colors.muted_foreground;
+        Button::new("fm-target")
+            // 同 `icon_button_variant` 的说明：ghost 变体的前景/悬停背景读全局
+            // 应用主题，必须用 custom variant 显式给终端配色。
+            .custom(self.colors.icon_button_variant(self.colors.foreground, cx))
+            .small()
+            .compact()
+            .icon(IconName::Server)
+            .label(truncate_target_label(&self.stored_connection.name, 12))
+            .tooltip(t!("FileManager.target_tooltip").to_string())
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.open_target_picker(window, cx);
+            }))
+    }
+
+    /// 打开目标选择弹窗：候选与 SFTP 的端点切换共用 `one_ui` 那套列表
+    /// （搜索、键盘选择、滚动都由它负责）。
+    fn open_target_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let current_id = self.stored_connection.id;
         let terminal_id = self.terminal_connection_id;
-        let current_name = self.stored_connection.name.clone();
-        let targets: Vec<StoredConnection> = self
-            .target_connections
-            .iter()
-            .filter(|connection| is_file_browsable_connection(connection))
-            .cloned()
-            .collect();
-        let has_targets = !targets.is_empty();
-        let view = cx.entity();
+        // 读存储放在打开时：终端启动之后用户可能刚新建过连接。
+        let entries: Vec<one_ui::PickerEntry<StoredConnection>> =
+            super::load_terminal_ai_connections(cx)
+                .into_iter()
+                .filter(is_file_browsable_connection)
+                .filter_map(|connection| {
+                    let id = connection.id?;
+                    // 行内容与 SFTP 端点切换对齐：名称 + 行尾 `user@host:port`。
+                    let endpoint = sftp_transfer::connection_endpoint_label(&connection);
+                    Some(one_ui::PickerEntry {
+                        id: SharedString::from(format!("fm-target-{id}")),
+                        title: connection.name.clone().into(),
+                        subtitle: (!endpoint.is_empty()).then(|| endpoint.into()),
+                        badge: (Some(id) == terminal_id)
+                            .then(|| t!("FileManager.target_terminal_badge").to_string().into()),
+                        icon: Icon::new(connection.connection_type.icon()),
+                        active: Some(id) == current_id,
+                        value: connection.clone(),
+                    })
+                })
+                .collect();
+        let panel = cx.entity();
 
-        Popover::new("fm-target-picker")
-            .open(self.target_picker_open)
-            .on_open_change(cx.listener(|this, open, _window, cx| {
-                this.target_picker_open = *open;
-                if *open {
-                    // 打开时才读存储：终端启动之后用户可能刚新建过连接。
-                    this.target_connections = super::load_terminal_ai_connections(cx);
-                }
-                cx.notify();
-            }))
-            .trigger(
-                Button::new("fm-target")
-                    .ghost()
-                    .small()
-                    .compact()
-                    .icon(IconName::Server)
-                    .label(truncate_target_label(&current_name, 12))
-                    .text_color(foreground)
-                    .tooltip(t!("FileManager.target_tooltip").to_string()),
-            )
-            .content(move |_state, window, cx| {
-                let mut list = v_flex().gap_1().max_h(px(320.0)).overflow_y_scrollbar();
-                if !has_targets {
-                    list = list.child(
-                        div()
-                            .px_2()
-                            .py_3()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(t!("FileManager.target_empty").to_string()),
-                    );
-                }
-
-                for connection in targets.iter().cloned() {
-                    let is_current = connection.id.is_some() && connection.id == current_id;
-                    let is_terminal_host = connection.id.is_some() && connection.id == terminal_id;
-                    let endpoint = target_endpoint_label(&connection);
-                    let connection_id = connection.id.unwrap_or(-1);
-                    let click_panel = view.clone();
-                    let click_connection = connection.clone();
-                    list = list.child(
-                        h_flex()
-                            .id(SharedString::from(format!("fm-target-{connection_id}")))
-                            .w_full()
-                            .px_2()
-                            .py_1()
-                            .gap_2()
-                            .items_center()
-                            .rounded_md()
-                            .cursor_pointer()
-                            .when(!is_current, |element| {
-                                element.hover(move |style| style.bg(hover))
-                            })
-                            .on_click(window.listener_for(
-                                &click_panel,
-                                move |this, _, _window, cx| {
-                                    this.target_picker_open = false;
-                                    this.switch_target(click_connection.clone(), cx);
-                                },
-                            ))
-                            .child(
-                                v_flex()
-                                    .flex_1()
-                                    .min_w(px(0.))
-                                    .child(
-                                        h_flex()
-                                            .gap_1()
-                                            .items_center()
-                                            .child(
-                                                div()
-                                                    .truncate()
-                                                    .text_sm()
-                                                    .child(connection.name.clone()),
-                                            )
-                                            .when(is_terminal_host, |element| {
-                                                element.child(
-                                                    div()
-                                                        .px_1()
-                                                        .rounded_sm()
-                                                        .text_xs()
-                                                        .bg(panel_bg)
-                                                        .text_color(muted_foreground)
-                                                        .child(
-                                                            t!("FileManager.target_terminal_badge")
-                                                                .to_string(),
-                                                        ),
-                                                )
-                                            }),
-                                    )
-                                    .child(
-                                        div()
-                                            .truncate()
-                                            .text_xs()
-                                            .text_color(muted_foreground)
-                                            .child(endpoint),
-                                    ),
-                            )
-                            .when(is_current, |element| {
-                                element.child(
-                                    Icon::new(IconName::Check)
-                                        .small()
-                                        .text_color(muted_foreground),
-                                )
-                            }),
-                    );
-                }
-
-                v_flex()
-                    .w(px(300.0))
-                    .max_h(px(420.0))
-                    .gap_1()
-                    .p_2()
-                    .child(list)
-            })
+        one_ui::open_picker_dialog(
+            one_ui::PickerDialogLabels {
+                title: t!("FileManager.target_picker_title").to_string().into(),
+                search_placeholder: t!("FileManager.target_search").to_string().into(),
+                empty: t!("FileManager.target_empty").to_string().into(),
+            },
+            entries,
+            window,
+            cx,
+            move |connection, _window, cx| {
+                panel.update(cx, |this, cx| this.switch_target(connection.clone(), cx));
+            },
+        );
     }
 
     fn render_favorites_menu(
@@ -6257,7 +6165,7 @@ mod tests {
         classify_reported_host, clear_remote_listing_state, frame_move_options,
         global_transfer_action, is_file_browsable_connection, resolve_upload_conflict,
         should_apply_directory_result, should_refresh_after_delete, should_refresh_after_upload,
-        target_endpoint_label, transfer_progress_display_label, truncate_target_label,
+        transfer_progress_display_label, truncate_target_label,
     };
     use crate::transfer_notice::TransferAction;
     use anyhow::{Result, anyhow};
@@ -6470,11 +6378,11 @@ mod tests {
     #[test]
     fn target_endpoint_label_reads_ftp_params_for_ftp_connections() {
         assert_eq!(
-            target_endpoint_label(&test_stored_connection()),
+            sftp_transfer::connection_endpoint_label(&test_stored_connection()),
             "deploy@terminal-file-manager-test.internal:2222"
         );
         assert_eq!(
-            target_endpoint_label(&test_ftp_stored_connection()),
+            sftp_transfer::connection_endpoint_label(&test_ftp_stored_connection()),
             "testuser@localhost:2121"
         );
     }

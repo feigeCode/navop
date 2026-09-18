@@ -134,6 +134,10 @@ Endpoint:
     en: Search servers
     zh-CN: 搜索服务器
     zh-HK: 搜尋伺服器
+  no_results:
+    en: No matching server
+    zh-CN: 没有匹配的服务器
+    zh-HK: 沒有符合的伺服器
   switch_title:
     en: Choose endpoint
     zh-CN: 选择端点

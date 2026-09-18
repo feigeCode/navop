@@ -2100,6 +2100,14 @@ FileManager:
     en: "Choose the remote target this panel browses"
     zh-CN: "选择该面板浏览的远端目标"
     zh-HK: "選擇該面板瀏覽的遠端目標"
+  target_picker_title:
+    en: Choose remote target
+    zh-CN: 选择远端目标
+    zh-HK: 選擇遠端目標
+  target_search:
+    en: Search hosts
+    zh-CN: 搜索主机
+    zh-HK: 搜尋主機
   target_empty:
     en: "No saved SSH or FTP connection available"
     zh-CN: "没有可用的 SSH 或 FTP 连接"

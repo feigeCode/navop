@@ -14,6 +14,7 @@ mod icon_size;
 pub mod large_text_editor;
 pub mod marquee_text;
 pub mod panel_header;
+pub mod picker_dialog;
 pub mod resize_handle;
 mod settings;
 pub mod signature_help;
@@ -35,6 +36,7 @@ pub use large_text_editor::{
     create_large_text_editor_with_content, large_text_values_equivalent,
 };
 pub use panel_header::{PanelHeader, PanelHeaderVariant};
+pub use picker_dialog::{PickerDialogLabels, PickerEntry, open_picker_dialog};
 pub use settings::{
     TableDisplaySettings, init_table_display_settings, set_table_row_height, table_row_height,
     table_row_height_or,

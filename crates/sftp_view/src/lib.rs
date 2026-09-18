@@ -6600,6 +6600,7 @@ impl SftpView {
             active: item.value() == &active_value,
             value: item.value().clone(),
             title: item.title_text().to_string().into(),
+            subtitle: item.subtitle().map(Into::into),
             icon: item.icon(),
         })
         .collect();
