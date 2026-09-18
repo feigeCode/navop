@@ -13,8 +13,8 @@ use crate::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, Div, InteractiveElement, IntoElement, ParentElement, ScrollHandle,
-    SharedString, StatefulInteractiveElement, Styled, Window, div, px,
+    AnyElement, App, Div, InteractiveElement, IntoElement, ParentElement,
+    ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme, Icon, Sizable, Size, clipboard::Clipboard, h_flex, scroll::Scrollbar,
@@ -173,10 +173,78 @@ pub fn render_sidebar_messages_with_code_actions_and_activity(
     )
 }
 
-#[derive(Clone, Copy)]
-enum MessageListLayout {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MessageListLayout {
     Centered,
     EdgeToEdge,
+}
+
+/// 消息列表的外层滚动容器。
+///
+/// 三个 `debug_selector` 是布局测试的断言目标（`ai-chat-messages` /
+/// `ai-chat-messages-scroll` / `ai-chat-message-column`），**两条渲染路径共用**
+/// 这一份实现，避免轮次视图与扁平视图的宽度约束漂移。
+///
+/// # 为什么条目是滚动容器的**直接子元素**
+///
+/// GPUI 在滚动容器 prepaint 时会把**每个直接子元素**的布局边界填进
+/// `ScrollHandle` 的 `child_bounds`（`elements/div.rs` 里 `tracked_scroll_handle` 分支），
+/// `scroll_to_item` / `bounds_for_item` / `top_item` 全都以这个数组为索引。
+/// 早先这里只有一层「列」包装，直接子元素恒为 1 个 ⇒ 索引不到具体条目，
+/// 「跳到第 N 轮」只能自己抓几何再算偏移。让条目直接做子元素之后，
+/// 跳转复用 GPUI 自己的最小滚动策略（`ScrollStrategy::FirstVisible`），
+/// 不再维护第二套坐标换算。
+///
+/// 代价是两点必须显式写：
+/// - 容器得是 `v_flex()`（`div()` 默认 `display: block`，拿不到 `gap`）；
+/// - 每个条目要 `flex_shrink_0`，否则高条目在定高容器里会被压扁而不是撑出滚动区。
+pub(crate) fn message_scroll_container(
+    scroll_handle: &ScrollHandle,
+    layout: MessageListLayout,
+    items: Vec<AnyElement>,
+    overlays: Vec<AnyElement>,
+) -> AnyElement {
+    let items: Vec<AnyElement> = items
+        .into_iter()
+        .map(|item| {
+            message_column(layout)
+                .flex_shrink_0()
+                .child(item)
+                .into_any_element()
+        })
+        .collect();
+    div()
+        .id("ai-chat-messages")
+        .debug_selector(|| "ai-chat-messages".to_string())
+        .flex_1()
+        .min_h_0()
+        .min_w_0()
+        .w_full()
+        .relative()
+        .overflow_hidden()
+        .child(
+            v_flex()
+                .id("ai-chat-messages-scroll")
+                .debug_selector(|| "ai-chat-messages-scroll".to_string())
+                .size_full()
+                .min_w_0()
+                .overflow_y_scroll()
+                .track_scroll(scroll_handle)
+                .p_4()
+                .gap_3()
+                .children(items),
+        )
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .right_0()
+                .bottom_0()
+                .w(px(16.0))
+                .child(Scrollbar::vertical(scroll_handle)),
+        )
+        .children(overlays)
+        .into_any_element()
 }
 
 struct MessageListExtras {
@@ -219,39 +287,10 @@ fn render_messages_with_layout(
         );
     }
 
-    div()
-        .id("ai-chat-messages")
-        .debug_selector(|| "ai-chat-messages".to_string())
-        .flex_1()
-        .min_h_0()
-        .min_w_0()
-        .w_full()
-        .relative()
-        .overflow_hidden()
-        .child(
-            div()
-                .id("ai-chat-messages-scroll")
-                .debug_selector(|| "ai-chat-messages-scroll".to_string())
-                .size_full()
-                .min_w_0()
-                .overflow_y_scroll()
-                .track_scroll(scroll_handle)
-                .p_4()
-                .child(message_column(layout).gap_3().children(items)),
-        )
-        .child(
-            div()
-                .absolute()
-                .top_0()
-                .right_0()
-                .bottom_0()
-                .w(px(16.0))
-                .child(Scrollbar::vertical(scroll_handle)),
-        )
-        .into_any_element()
+    message_scroll_container(scroll_handle, layout, items, Vec::new())
 }
 
-fn message_column(layout: MessageListLayout) -> Div {
+pub(crate) fn message_column(layout: MessageListLayout) -> Div {
     let column = v_flex()
         .debug_selector(|| "ai-chat-message-column".to_string())
         .w_full()
@@ -263,7 +302,7 @@ fn message_column(layout: MessageListLayout) -> Div {
     }
 }
 
-fn render_item(
+pub(crate) fn render_item(
     item: MessageRenderItem<'_>,
     code_actions: Option<&CodeBlockActionRegistry>,
     theme: &AgentChatTheme,
@@ -283,7 +322,7 @@ fn render_item(
     }
 }
 
-fn render_one(
+pub(crate) fn render_one(
     msg: &ChatMessageUI,
     code_actions: Option<&CodeBlockActionRegistry>,
     theme: &AgentChatTheme,

@@ -35,7 +35,10 @@ use crate::input::context::{
     ComposerResourcePoolItem, ComposerResourceSourceOption, ComposerResourceTypeFilter,
     ComposerScope, ComposerSubAgentItem, ComposerTarget,
 };
+use crate::input::completion::ComposerCompletionProvider;
 use crate::input::mention::{MentionCompletionProvider, MentionItem};
+use crate::input::slash::{SlashCommandItem, SlashCompletionProvider};
+use crate::input::model_picker::group_models;
 use crate::input::skill::{render_skill_mode_content, skill_trigger_label};
 use crate::theme::{AgentChatTheme, active_agent_chat_theme};
 
@@ -77,6 +80,10 @@ pub enum AgentInputEvent {
     SelectExecutionMode { id: SharedString },
     /// 在顶部「Agent」面板中选择内置 Agent 或 ACP Agent。
     SelectAgentBackend { id: Option<SharedString> },
+    /// 删除队列中第 `index` 条待执行提交。
+    RemoveQueued { index: usize },
+    /// 把队列中第 `index` 条拉回输入框继续编辑（由上层负责从队列移除）。
+    EditQueued { index: usize },
 }
 
 /// 内置下拉的种类(用于受控开合状态)。
@@ -229,6 +236,8 @@ pub struct AgentInput {
     input_state: Entity<EditorState>,
     /// 可被 `@` 引用的条目(同时用于补全 provider 与提交时解析)。
     mentions: Arc<Vec<MentionItem>>,
+    /// 可被 `/` 补全的命令；来源是 ACP agent 推送的 `available_commands`。
+    slash_commands: Vec<SlashCommandItem>,
     /// 当前图片附件。
     attachments: Vec<ImageAttachment>,
     /// 已提交过的文本历史，用于在输入框中通过上下键浏览。
@@ -292,8 +301,9 @@ impl AgentInput {
                 .soft_wrap(true)
                 .submit_on_enter(true)
                 .placeholder(placeholder);
-            state.lsp_mut().completion_provider =
-                Some(Rc::new(MentionCompletionProvider::new(provider_items)));
+            state.lsp_mut().completion_provider = Some(Rc::new(
+                ComposerCompletionProvider::new(provider_items, Vec::new()),
+            ));
             state
         });
 
@@ -349,6 +359,7 @@ impl AgentInput {
                     && state.marked_text_range(window, cx).is_none()
                     && MentionCompletionProvider::extract_mention_query(&text, state.cursor())
                         .is_none()
+                    && SlashCompletionProvider::extract_slash_query(&text, state.cursor()).is_none()
                     && cursor_is_at_history_boundary(direction, &text, state.cursor())
             });
             if !can_navigate {
@@ -386,6 +397,7 @@ impl AgentInput {
             focus_handle: cx.focus_handle(),
             input_state,
             mentions,
+            slash_commands: Vec::new(),
             attachments: Vec::new(),
             history: PromptHistory::default(),
             queued_submissions: Vec::new(),
@@ -427,10 +439,30 @@ impl AgentInput {
     /// 更新可引用的提及条目(同时刷新补全 provider)。
     pub fn set_mentions(&mut self, mentions: Vec<MentionItem>, cx: &mut Context<Self>) {
         self.mentions = Arc::new(mentions);
-        let items = (*self.mentions).clone();
+        self.refresh_completion_provider(cx);
+    }
+
+    /// 更新 `/` 命令补全来源(Acp agent 推送的 `available_commands`)。
+    pub fn set_slash_commands(
+        &mut self,
+        commands: Vec<SlashCommandItem>,
+        cx: &mut Context<Self>,
+    ) {
+        // 推送可能很频繁(每次 `session/update` 都可能带),内容没变就不重建 provider。
+        if self.slash_commands == commands {
+            return;
+        }
+        self.slash_commands = commands;
+        self.refresh_completion_provider(cx);
+    }
+
+    fn refresh_completion_provider(&self, cx: &mut Context<Self>) {
+        let mentions = (*self.mentions).clone();
+        let commands = self.slash_commands.clone();
         self.input_state.update(cx, |state, _| {
-            state.lsp_mut().completion_provider =
-                Some(Rc::new(MentionCompletionProvider::new(items)));
+            state.lsp_mut().completion_provider = Some(Rc::new(
+                ComposerCompletionProvider::new(mentions, commands),
+            ));
         });
     }
 
@@ -496,6 +528,33 @@ impl AgentInput {
     pub fn focus_input(&self, window: &mut Window, cx: &mut App) {
         let handle = self.input_state.read(cx).focus_handle(cx);
         handle.focus(window, cx);
+    }
+
+    /// 当前输入框文本。
+    pub fn composer_text(&self, cx: &App) -> String {
+        self.input_state.read(cx).value().to_string()
+    }
+
+    /// 把一段排队提交放回输入框并聚焦（供「编辑队列项」使用）。
+    ///
+    /// 文本与附件一起回填，避免「编辑」变成静默丢附件。
+    /// **从队列中移除由上层完成**：队列事实源在 `AgentChatView::pending_submissions`，
+    /// 输入框只是渲染副本。
+    pub fn restore_to_composer(
+        &mut self,
+        text: &str,
+        images: Vec<ImageAttachment>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.input_state.update(cx, |state, cx| {
+            state.set_value(text, window, cx);
+        });
+        if !images.is_empty() {
+            self.add_attachments(images, cx);
+        }
+        self.focus_input(window, cx);
+        cx.notify();
     }
 
     fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -921,6 +980,7 @@ impl AgentInput {
     ) -> impl IntoElement + use<> {
         let view = cx.entity();
         let is_open = self.open_menu == Some(ComposerMenuKind::Model);
+        let selected_model = self.context.model.clone();
 
         let theme = self.local_theme(cx);
         let trigger = themed_outline_button(
@@ -960,52 +1020,77 @@ impl AgentInput {
                     let muted = theme.muted_foreground;
                     let hover_bg = theme.hover_background();
                     let radius = cx.theme().radius;
+                    let selected = selected_model.clone();
                     let mut col = v_flex()
                         .p_1()
                         .gap(px(2.0))
                         .min_w(px(240.0))
                         .bg(theme.background)
                         .text_color(theme.foreground);
-                    for opt in &options {
-                        let view = view.clone();
-                        let id = opt.id.clone();
-                        let provider_id = opt.provider_id.clone();
-                        let model = opt.model.clone();
-                        let mut inner = v_flex()
-                            .gap(px(1.0))
-                            .child(div().text_sm().child(opt.display_label()));
-                        if let Some(hint) = &opt.hint {
-                            inner =
-                                inner.child(div().text_xs().text_color(muted).child(hint.clone()));
-                        }
+                    for group in group_models(&options) {
                         col = col.child(
-                            h_flex()
-                                .id(SharedString::from(format!("agent-model-opt-{id}")))
+                            div()
                                 .w_full()
                                 .px_2()
-                                .py_1()
-                                .rounded(radius)
-                                .cursor_pointer()
-                                .hover(move |s| s.bg(hover_bg))
-                                .child(inner)
-                                .on_click(move |_, _window, cx| {
-                                    let id = id.clone();
-                                    let provider_id = provider_id.clone();
-                                    let model = model.clone();
-                                    view.update(cx, |this, cx| {
-                                        if this.is_running {
-                                            return;
-                                        }
-                                        this.open_menu = None;
-                                        cx.emit(AgentInputEvent::SelectModel {
-                                            id,
-                                            provider_id,
-                                            model,
-                                        });
-                                        cx.notify();
-                                    });
-                                }),
+                                .pt_2()
+                                .pb_1()
+                                .text_xs()
+                                .text_color(muted)
+                                .child(group.provider_label.clone()),
                         );
+                        for opt in group.options {
+                            let view = view.clone();
+                            let id = opt.id.clone();
+                            let provider_id = opt.provider_id.clone();
+                            let model = opt.model.clone();
+                            let is_current = selected.as_ref().is_some_and(|current| {
+                                current.provider == opt.provider_label && current.model == opt.model
+                            });
+                            let mut inner = v_flex()
+                                .gap(px(1.0))
+                                .child(div().text_sm().child(opt.display_label()));
+                            if let Some(hint) = &opt.hint {
+                                inner = inner
+                                    .child(div().text_xs().text_color(muted).child(hint.clone()));
+                            }
+                            col = col.child(
+                                h_flex()
+                                    .id(SharedString::from(format!("agent-model-opt-{id}")))
+                                    .w_full()
+                                    .items_center()
+                                    .gap_2()
+                                    .px_2()
+                                    .py_1()
+                                    .rounded(radius)
+                                    .cursor_pointer()
+                                    .hover(move |s| s.bg(hover_bg))
+                                    .child(div().flex_1().min_w_0().child(inner))
+                                    .when(is_current, |this| {
+                                        this.child(
+                                            Icon::new(IconName::Check)
+                                                .xsmall()
+                                                .text_color(cx.theme().success),
+                                        )
+                                    })
+                                    .on_click(move |_, _window, cx| {
+                                        let id = id.clone();
+                                        let provider_id = provider_id.clone();
+                                        let model = model.clone();
+                                        view.update(cx, |this, cx| {
+                                            if this.is_running {
+                                                return;
+                                            }
+                                            this.open_menu = None;
+                                            cx.emit(AgentInputEvent::SelectModel {
+                                                id,
+                                                provider_id,
+                                                model,
+                                            });
+                                            cx.notify();
+                                        });
+                                    }),
+                            );
+                        }
                     }
                     col
                 }
@@ -1065,8 +1150,10 @@ impl AgentInput {
         }
 
         let theme = self.local_theme(cx);
+        let danger = cx.theme().danger;
+        let count = self.queued_submissions.len();
         let mut items = v_flex().w_full().gap_1();
-        for submission in &self.queued_submissions {
+        for (index, submission) in self.queued_submissions.iter().enumerate() {
             let text = if submission.text.trim().is_empty() {
                 t!("AgentUi.attachment_count", count = submission.image_count).to_string()
             } else if submission.image_count == 0 {
@@ -1083,13 +1170,48 @@ impl AgentInput {
                     .debug_selector(|| "agent-input-queued-item".to_string())
                     .w_full()
                     .min_w_0()
+                    .items_center()
+                    .gap_1()
                     .px_2()
                     .py_1()
                     .rounded(cx.theme().radius)
                     .bg(theme.panel)
                     .text_xs()
                     .text_color(theme.muted_foreground)
-                    .child(div().min_w_0().truncate().child(text)),
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(format!("{}", index + 1)),
+                    )
+                    .child(div().flex_1().min_w_0().truncate().child(text))
+                    .child(
+                        Button::new(SharedString::from(format!("agent-queued-edit-{index}")))
+                            .icon(IconName::Edit)
+                            .ghost()
+                            .small()
+                            .tooltip(t!("AgentUi.edit_queued_item").to_string())
+                            .on_click(cx.listener(move |_this, _, window, cx| {
+                                cx.emit(AgentInputEvent::EditQueued { index });
+                                // 焦点在此刻转移由上层回填文本后再落定；
+                                // 这里只负责把窗口从按钮上摘下来。
+                                window.refresh();
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new(SharedString::from(format!("agent-queued-remove-{index}")))
+                            .icon(IconName::Delete)
+                            .ghost()
+                            .small()
+                            .text_color(danger)
+                            .tooltip(t!("AgentUi.remove_queued_item").to_string())
+                            .on_click(cx.listener(move |_this, _, _window, cx| {
+                                cx.emit(AgentInputEvent::RemoveQueued { index });
+                                cx.notify();
+                            })),
+                    ),
             );
         }
 
@@ -1102,13 +1224,10 @@ impl AgentInput {
                 .px_3()
                 .pt_1()
                 .child(
-                    div().text_xs().text_color(theme.foreground).child(
-                        t!(
-                            "AgentUi.queued_for_next_turn",
-                            count = self.queued_submissions.len()
-                        )
-                        .to_string(),
-                    ),
+                    div()
+                        .text_xs()
+                        .text_color(theme.foreground)
+                        .child(t!("AgentUi.queued_for_next_turn", count = count).to_string()),
                 )
                 .child(items)
                 .into_any_element(),

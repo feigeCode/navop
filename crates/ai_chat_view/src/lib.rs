@@ -40,13 +40,17 @@ mod connection_selector;
 mod default_panel;
 #[cfg(test)]
 mod default_panel_tests;
+mod expansion_state;
+pub mod find_shortcut;
 mod html_code_block;
 mod input;
 mod message;
 mod message_code_actions;
 mod message_tool_group;
+mod message_turn_view;
 mod message_view;
 mod model_settings;
+mod pending_decision;
 mod pending_submission;
 mod persistence;
 mod plan_tools;
@@ -60,6 +64,10 @@ mod send_button;
 mod session_service;
 mod session_sidebar;
 mod theme;
+mod transcript_scroll;
+mod transcript_search;
+mod turn;
+mod workbench;
 
 pub use acp::{
     AcpAgentConfig, AcpAgentEntry, AcpAuthConfig, AcpAuthMethodConfig, AcpConfigDiagnostic,
@@ -76,6 +84,10 @@ pub use agent_cards::{PlanCardData, PlanStepData, SubAgentCardData, ToolCardData
 pub use agent_tool_config::emit_agent_tool_config_changed;
 pub use agent_transcript::AgentTranscript;
 pub use agent_view::{AgentChatView, AgentChatViewConfig, AgentChatViewEvent, AgentRuntimeFactory};
+// 工作台外壳也要画同一份 ACP 会话行，所以把行构造器和模型提到 crate 可见。
+pub(crate) use agent_view::acp_sessions::{
+    AcpSessionListModel, acp_session_placeholder, acp_session_row, acp_session_section_header,
+};
 pub use ask_ai::{
     AskAiButton, AskAiEvent, AskAiNotifier, emit_ask_ai_event, emit_ask_ai_event_app,
     format_ask_ai_message, get_ask_ai_notifier, init_ask_ai_notifier,
@@ -100,14 +112,17 @@ pub use default_panel::{DefaultAgentChatPanel, DefaultAgentChatPanelEvent};
 pub use input::{
     AgentComposerContext, AgentInput, AgentInputEvent, ComposerAgentOption, ComposerMenuOption,
     ComposerModel, ComposerModelOption, ComposerPlanItem, ComposerScope, ComposerTarget,
-    ImageAttachment, MentionCompletionProvider, MentionItem,
+    ImageAttachment, MentionCompletionProvider, MentionItem, SlashCommandItem,
 };
 pub use message::{
     ChatMessageUI, ChatMessageUIGeneric, ChatRole, MESSAGE_RENDER_LIMIT, MESSAGE_RENDER_STEP,
     MessageExtension, MessageVariant, NoExtension,
 };
+pub use message_turn_view::{
+    MessageListAction, MessageListActionHandler, MessageListContext, render_message_list,
+};
 pub use message_view::{
-    render_assistant_text, render_messages, render_messages_with_code_actions,
+    MessageListLayout, render_assistant_text, render_messages, render_messages_with_code_actions,
     render_messages_with_code_actions_and_activity, render_running_activity,
     render_sidebar_messages_with_code_actions,
     render_sidebar_messages_with_code_actions_and_activity, render_status_message,
@@ -115,6 +130,10 @@ pub use message_view::{
 };
 pub use model_settings::{
     ModelSettings, ModelSettingsEvent, ModelSettingsLabels, ModelSettingsPanel,
+};
+pub use pending_decision::{
+    DecisionAuthority, DecisionCardSource, DecisionOption, DecisionOptionKind, PendingDecision,
+    pending_decisions,
 };
 pub use plan_tools::{
     PlanToolRegistryProvider, build_plan_tool_registry, set_plan_tool_registry_provider,
@@ -130,7 +149,26 @@ pub use resource_builder::{
 pub use send_button::{SendButton, SendButtonEvent, SendButtonState};
 pub use session_service::{SessionError, SessionService, extract_session_name};
 pub use session_sidebar::{SessionSummary, format_timestamp, session_row};
+pub use expansion_state::ExpansionState;
+pub use find_shortcut::{
+    AI_CHAT_COMPOSER_CONTEXT, AI_CHAT_FINDBAR_CONTEXT, AI_CHAT_SEARCH_CONTEXT, CloseTranscriptFind,
+    FIND_MACOS, FIND_NEXT_MACOS, FIND_NEXT_OTHER, FIND_OTHER, FIND_PREVIOUS_MACOS,
+    FIND_PREVIOUS_OTHER, FindNextInTranscript, FindPreviousInTranscript, ToggleTranscriptFind,
+    find_defaults_for_platform,
+};
 pub use theme::AgentChatTheme;
+pub use transcript_scroll::{FollowState, TranscriptScrollState};
+pub use transcript_search::{
+    MAX_SEARCH_HITS, SearchHit, TranscriptSearch, count_matches, message_search_text, turn_texts,
+};
+pub use turn::{
+    TurnProjection, TurnTiming, TurnTimings, breakdown_text, is_pending_decision, is_risk_message,
+    project_turns,
+};
+pub use workbench::{
+    WorkbenchDockLayout, WorkbenchPanelEntry, WorkbenchPanelKind, WorkbenchShell,
+    WorkbenchShellConfig, WorkbenchShellEvent, WorkbenchState, dock_region_width,
+};
 
 /// 初始化 `ai_chat_view`:确保全局卡片注册表存在。
 ///
@@ -141,4 +179,8 @@ pub fn init(cx: &mut App) {
     CardRegistry::init_global(cx);
     cards::register_builtin_cards(cx);
     agent_cards::register_agent_cards(cx);
+    // 本 crate 自己的快捷键随 `init` 一起注册，而不是留给宿主单独调用：
+    // 漏调不会报错、只会「快捷键静默不生效」，这种失效模式不值得赌。
+    // 设置变更后的重绑定仍由宿主显式调 `find_shortcut::refresh_keybindings`。
+    find_shortcut::init(cx);
 }

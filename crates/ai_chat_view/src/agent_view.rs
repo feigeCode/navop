@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use agent_client_protocol::schema::{ContentBlock, ImageContent, TextContent};
+use agent_client_protocol::schema::{AvailableCommandInput, ContentBlock, ImageContent, TextContent};
 use agent_runtime::{
     AgentResourceScope, ResourceCatalog, ResourceContext, ResourceId, ResourceKind, ResourceRef,
     Runtime, RuntimeEvent, RuntimeEventReceiver, SessionId, TaskKind, ToolCallId,
@@ -29,7 +29,7 @@ use gpui_component::{
     button::{Button, ButtonCustomVariant, ButtonVariants},
     dialog::DialogButtonProps,
     h_flex,
-    input::{Input, InputState},
+    input::{Input, InputEvent, InputState},
     menu::{DropdownMenu, PopupMenu, PopupMenuItem},
     popover::Popover,
     spinner::Spinner,
@@ -50,9 +50,10 @@ use crate::acp::{
     AcpPendingConnection, AcpPermissionEnvelope, AcpPermissionMessage, AcpPermissionOutcome,
     AcpPermissionProvider, AcpPromptStartError, AcpPublicMcpApprovalEnvelope,
     AcpPublicMcpApprovalMessage, AcpPublicMcpApprovalOutcome, AcpPublicMcpApprovalProvider,
-    AcpRecoveryAction, AcpSessionState, acp_permission_channel, acp_public_mcp_approval_channel,
-    acquire_acp_permission_grant, build_acp_agent_entries, current_acp_tool_mode,
-    set_current_acp_tool_mode,
+    AcpRecoveryAction, AcpSessionState, AcpSessionSummary, AcpUsage, acp_permission_channel,
+    acp_public_mcp_approval_channel, acp_session_list_supported, acp_session_open_kind,
+    acp_session_summaries, acquire_acp_permission_grant, build_acp_agent_entries,
+    current_acp_tool_mode, set_current_acp_tool_mode,
 };
 use crate::agent_cards::{
     ApproveToolCall, PlanCardData, RejectToolCall, SelectAcpPermissionOption, SubAgentCardData,
@@ -66,21 +67,33 @@ use crate::input::{
     ComposerModelOption, ComposerPlanItem, ComposerResourcePoolItem, ComposerResourcePoolSummary,
     ComposerResourceSourceOption, ComposerResourceTypeFilter, ComposerScope, ComposerSkillItem,
     ComposerSkillSummary, ComposerSubAgentItem, ComposerTarget, MentionItem, QueuedPromptPreview,
+    SlashCommandItem,
 };
-use crate::message_view::{
-    render_messages_with_code_actions_and_activity, render_running_activity,
-    render_sidebar_messages_with_code_actions_and_activity,
+use crate::message_turn_view::{
+    MessageListAction, MessageListActionHandler, MessageListContext, render_message_list,
 };
+use crate::message_view::{MessageListLayout, render_running_activity};
 use crate::pending_submission::{PendingSubmission, PendingSubmissions};
 use crate::persistence;
 use crate::resource_display::first_visible_alias;
+use crate::expansion_state::ExpansionState;
+use crate::find_shortcut::{
+    AI_CHAT_SEARCH_CONTEXT, FindNextInTranscript, FindPreviousInTranscript, ToggleTranscriptFind,
+};
 use crate::session_sidebar::{self, SessionRowStyle, SessionSummary};
+use crate::transcript_scroll::TranscriptScrollState;
+use crate::transcript_search::TranscriptSearch;
+use crate::turn::TurnTimings;
 use crate::theme::{AgentChatTheme, resolve_agent_chat_theme};
 
 mod acp_options;
+pub(crate) mod acp_sessions;
 mod acp_ui;
+mod decision_dock;
+mod findbar;
 
 use acp_options::{agent_option_disabled, composer_agent_options, current_agent_label};
+use acp_sessions::{acp_session_placeholder, acp_session_row, acp_session_section_header};
 use acp_ui::AcpConnectOperation;
 
 /// Agent 聊天视图事件。
@@ -161,6 +174,12 @@ struct AcpOperationToken(u64);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AcpSessionTransitionPhase {
     Creating,
+    /// 正在拉历史会话列表。
+    ///
+    /// 复用同一个状态机而不是另起一个标志位：渲染层靠它在列表在飞的时候把提交
+    /// 排成 `RetryLater`（见 [`submission_start_for_acp_availability`]）——
+    /// 此时连接被 `take()` 走了，若不放行排队就会弹「未连接」误报。
+    Listing,
     Failed,
 }
 
@@ -581,6 +600,8 @@ pub struct AgentChatViewConfig {
     pub acp_agents: Vec<AcpAgentEntry>,
     /// 可选的局部聊天主题。用于终端侧边栏等嵌入场景,普通 Agent tab 保持应用主题。
     pub theme: Option<AgentChatTheme>,
+    /// ACP、资源浏览和工作区工具共用根目录。
+    pub workspace_root: Option<std::path::PathBuf>,
 }
 
 impl AgentChatViewConfig {
@@ -605,6 +626,7 @@ impl AgentChatViewConfig {
             sidebar_frame_placement: SidebarPlacement::Right,
             acp_agents: Vec::new(),
             theme: None,
+            workspace_root: None,
         }
     }
 
@@ -650,6 +672,11 @@ impl AgentChatViewConfig {
     /// 注入局部聊天主题。
     pub fn with_theme(mut self, theme: AgentChatTheme) -> Self {
         self.theme = Some(theme);
+        self
+    }
+
+    pub fn with_workspace_root(mut self, root: std::path::PathBuf) -> Self {
+        self.workspace_root = Some(root);
         self
     }
 
@@ -786,6 +813,7 @@ impl AutoScrollState {
 pub struct AgentChatView {
     runtime: Arc<Runtime>,
     session_id: SessionId,
+    workspace_root: std::path::PathBuf,
     resources: ResourceContext,
     available_resources: Vec<ResourceRef>,
     transcript: AgentTranscript,
@@ -809,6 +837,26 @@ pub struct AgentChatView {
     pending_submissions: PendingSubmissions,
     current_session: String,
     sidebar_collapsed: bool,
+    /// 工作台外壳接管左侧会话栏时整块隐藏内建侧栏（不渲染折叠 rail）。
+    sidebar_suppressed: bool,
+    /// 滚动三态（跟随尾巴 / 阅读历史 / 锚点跳转中）。
+    scroll: TranscriptScrollState,
+    /// 过程块展开态覆盖表；按稳定 id 记录用户的显式展开/收起。
+    expansion: ExpansionState,
+    /// 轮次起止时间；折叠头里的「用时 Ns」只来自这里，缺失就不显示。
+    turn_timings: TurnTimings,
+    /// 决策栏里**显式展开详情**的那一项 id；`None` 表示全部收起。
+    ///
+    /// 详情展开是纯展示动作，不取键盘焦点——绝不让「用户正在打字」时 Enter 变成「允许」。
+    decision_details: Option<String>,
+    /// 会话内搜索状态（纯逻辑）；渲染层只读它。
+    search: TranscriptSearch,
+    /// 上次重算命中时的转录版本号；正文没变不重算。
+    search_revision: u64,
+    /// findbar 是否打开。
+    findbar_open: bool,
+    /// findbar 的查询输入框。
+    findbar_input: Entity<InputState>,
     /// 侧边栏是否显示「已归档」会话(否则显示活跃会话)。
     show_archived: bool,
     /// 侧边栏视图(窄面板)模式:头部走新建对话 / 历史记录紧凑布局,不常驻会话列表。
@@ -847,6 +895,18 @@ pub struct AgentChatView {
     acp_operation_generation: u64,
     /// ACP 新会话创建中的操作，或创建失败后等待重试的操作。
     acp_session_transition: Option<AcpSessionTransition>,
+    /// 从 agent 拉到的历史会话列表（仅在 agent 声明支持 `session/list` 时有意义）。
+    acp_sessions: Vec<AcpSessionSummary>,
+    /// 拉列表/开会话失败的可见原因。清空表示上次是成功的——不拿空列表冒充失败。
+    acp_sessions_error: Option<String>,
+    /// 列表请求在飞。渲染层据此区分「还没拉」和「拉完了是空的」。
+    acp_sessions_loading: bool,
+    /// 列表请求的代次；迟到响应靠它判归属（不变量 5）。
+    acp_sessions_generation: u64,
+    /// 当前 agent 声明支持 `session/list`。连接被 take 走做请求时也保持稳定——
+    /// 否则列表会在刷新过程中整个闪掉（不变量 11 说的是「能力缺失就不显示」，
+    /// 不是「连接不在就不显示」）。
+    acp_sessions_supported: bool,
     /// 当前 ACP 连接尚未响应的权限请求。
     pending_acp_permissions: HashMap<String, AcpPermissionEnvelope>,
     /// 安全确认模式下，实际 Public MCP 调用尚未响应的二次审批。
@@ -964,6 +1024,9 @@ impl AgentChatView {
         let sidebar_frame_placement = config.sidebar_frame_placement;
         let theme = config.theme;
         let acp_agents = config.acp_agents;
+        let workspace_root = config
+            .workspace_root
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/")));
         let resources = config.resources;
         let available_resources = config.available_resources;
         let mentions = config.mentions;
@@ -1032,7 +1095,24 @@ impl AgentChatView {
             inp.set_context(init_ctx, cx);
         });
 
-        let subscriptions = vec![cx.subscribe_in(&input, window, Self::on_input_event)];
+        // 会话内搜索的查询框。
+        //
+        // **不**设 `clean_on_escape()`：那会让 `InputBaseState::escape` 走 `clean()` 分支
+        // 提前 `return`（不再 `cx.propagate()`），findbar 容器上的 `escape` 关闭动作就永远收不到。
+        // 保留查询、由 findbar 自己决定关闭后的语义。
+        let findbar_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t!("AgentUi.findbar_placeholder").to_string())
+        });
+
+        let subscriptions = vec![
+            cx.subscribe_in(&input, window, Self::on_input_event),
+            cx.subscribe(
+                &findbar_input,
+                |this: &mut Self, _, event: &InputEvent, cx| {
+                    this.on_findbar_input_event(event, cx);
+                },
+            ),
+        ];
         let event_task = Self::spawn_event_pump(runtime.subscribe(), None, cx);
         let current_session = session_id.to_string();
         let mut transcript = AgentTranscript::new();
@@ -1071,6 +1151,15 @@ impl AgentChatView {
             pending_submissions: PendingSubmissions::default(),
             current_session,
             sidebar_collapsed: false,
+            sidebar_suppressed: false,
+            scroll: TranscriptScrollState::default(),
+            expansion: ExpansionState::default(),
+            turn_timings: TurnTimings::new(),
+            decision_details: None,
+            search: TranscriptSearch::new(),
+            search_revision: 0,
+            findbar_open: false,
+            findbar_input,
             show_archived: false,
             sidebar_mode,
             show_sidebar_header,
@@ -1090,6 +1179,11 @@ impl AgentChatView {
             acp_connect_origin_session: None,
             acp_operation_generation: 0,
             acp_session_transition: None,
+            acp_sessions: Vec::new(),
+            acp_sessions_error: None,
+            acp_sessions_loading: false,
+            acp_sessions_generation: 0,
+            acp_sessions_supported: false,
             pending_acp_permissions: HashMap::new(),
             pending_public_mcp_approvals: HashMap::new(),
             acp_public_mcp_approval_provider: None,
@@ -1109,6 +1203,7 @@ impl AgentChatView {
             _event_task: event_task,
             _acp_permission_task: None,
             _acp_public_mcp_approval_task: None,
+            workspace_root,
         };
         if new_view.system_instruction.is_some() {
             new_view.apply_system_instruction_to_current_session();
@@ -1417,17 +1512,55 @@ impl AgentChatView {
         for event in events {
             self.apply_runtime_event_with_deferred_budget(event, cx);
         }
+        if self.backend == Backend::Acp {
+            self.refresh_acp_model_options(cx);
+        }
         self.transcript.flush_deferred_budget();
         for transcript in self.session_transcripts.values_mut() {
             transcript.flush_deferred_budget();
         }
     }
 
+    fn refresh_acp_model_options(&mut self, cx: &mut Context<Self>) {
+        let Some(acp) = self.acp.as_ref() else {
+            return;
+        };
+        let options = acp_model_options(&acp.state(), self.current_acp_id.as_ref());
+        if options == self.model_options {
+            return;
+        }
+        self.model_options = options.clone();
+        self.input.update(cx, |input, cx| {
+            input.set_menu_options(options, self.tool_options.clone(), cx);
+        });
+    }
+
+    /// findbar 查询框的事件。
+    ///
+    /// `Enter` / `Shift+Enter` 走 `InputEvent::PressEnter`，不额外绑键——
+    /// 输入组件已经替我们区分了「有/无修饰键」两种回车。
+    fn on_findbar_input_event(&mut self, event: &InputEvent, cx: &mut Context<Self>) {
+        match event {
+            InputEvent::Change => {
+                let query = self.findbar_input.read(cx).value().to_string();
+                self.search.set_query(query, &self.transcript.messages);
+                self.search_revision = self.transcript.revision();
+                // 查询变化把游标复位到第一个命中：顺手把视图也拉过去。
+                self.jump_to_current_search_hit();
+                cx.notify();
+            }
+            InputEvent::PressEnter { shift, .. } => {
+                self.step_search(!shift, cx);
+            }
+            _ => {}
+        }
+    }
+
     fn on_input_event(
         &mut self,
-        _input: &Entity<AgentInput>,
+        input: &Entity<AgentInput>,
         event: &AgentInputEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         match event.clone() {
@@ -1476,13 +1609,39 @@ impl AgentChatView {
                 model,
             } => {
                 if !self.is_running {
-                    self.select_model(&id, &provider_id, &model, cx);
+                    if self.backend == Backend::Acp {
+                        self.select_acp_model(&id, &provider_id, &model, cx);
+                    } else {
+                        self.select_model(&id, &provider_id, &model, cx);
+                    }
                 }
             }
             AgentInputEvent::SelectExecutionMode { id } => self.select_execution_mode(&id, cx),
             AgentInputEvent::SelectAgentBackend { id } => {
                 if !self.is_running {
                     self.select_backend(id, cx);
+                }
+            }
+            AgentInputEvent::RemoveQueued { index } => {
+                let session_uid = self.current_session.clone();
+                if self.pending_submissions.remove_at(&session_uid, index).is_some() {
+                    self.sync_pending_preview(cx);
+                    cx.notify();
+                }
+            }
+            AgentInputEvent::EditQueued { index } => {
+                let session_uid = self.current_session.clone();
+                if let Some(submission) = self.pending_submissions.remove_at(&session_uid, index) {
+                    self.sync_pending_preview(cx);
+                    input.update(cx, |input, cx| {
+                        input.restore_to_composer(
+                            &submission.text,
+                            submission.images,
+                            window,
+                            cx,
+                        );
+                    });
+                    cx.notify();
                 }
             }
         }
@@ -1495,6 +1654,9 @@ impl AgentChatView {
         images: Vec<crate::ImageAttachment>,
         cx: &mut Context<Self>,
     ) {
+        // 新提交：跨轮的展开态与滚动跟随都要重置。
+        self.expansion.clear();
+        self.scroll.jump_to_tail();
         let session_uid = self.current_session.clone();
         let submission = PendingSubmission {
             text,
@@ -2181,6 +2343,7 @@ impl AgentChatView {
             RuntimeEvent::TurnCompleted { .. } | RuntimeEvent::TurnFailed { .. }
         );
         let is_real_terminal = is_cancelled || is_completed_or_failed;
+        self.record_turn_timing(&event);
         let acp_terminal_phase = if backend == Backend::Acp && is_real_terminal {
             self.acp.as_ref().map(AcpConnection::phase)
         } else {
@@ -2321,12 +2484,44 @@ impl AgentChatView {
         .with_recovery(AcpRecoveryAction::Retry)
     }
 
-    fn request_scroll_to_bottom(&mut self) {
+    /// 记录轮次起止时间。
+    ///
+    /// 只认真实事件时刻；折叠头里的「用时 Ns」不足以凭猜显示。
+    fn record_turn_timing(&mut self, event: &RuntimeEvent) {
+        let now = unix_now_secs();
+        match event {
+            RuntimeEvent::TurnStarted { turn_id, .. } => {
+                self.turn_timings.note_started(turn_id.as_str(), now);
+            }
+            RuntimeEvent::TurnCompleted { turn_id, .. }
+            | RuntimeEvent::TurnCancelled { turn_id, .. }
+            | RuntimeEvent::TurnFailed { turn_id, .. } => {
+                self.turn_timings.note_finished(turn_id.as_str(), now);
+            }
+            _ => {}
+        }
+    }
+
+    /// 处理轮次视图抛出的交互请求。
+    fn apply_message_list_action(&mut self, action: MessageListAction, cx: &mut Context<Self>) {
+        match action {
+            MessageListAction::SetProcessExpanded { key, expanded } => {
+                self.expansion.set(key, expanded);
+            }
+            MessageListAction::ScrollToLatest => {
+                self.request_scroll_to_bottom();
+            }
+        }
+        cx.notify();
+    }
+
+    fn request_scroll_to_bottom(&mut self) {        self.scroll.jump_to_tail();
         self.auto_scroll.request();
         self.scroll_handle.scroll_to_bottom();
     }
 
     fn request_scroll_to_bottom_until_layout_settles(&mut self) {
+        self.scroll.jump_to_tail();
         self.auto_scroll.request_settle();
         self.scroll_handle.scroll_to_bottom();
     }
@@ -2415,12 +2610,26 @@ impl AgentChatView {
         agent_id: SharedString,
         session_uid: String,
     ) -> AcpOperationToken {
+        self.begin_acp_session_transition_with_phase(
+            agent_id,
+            session_uid,
+            AcpSessionTransitionPhase::Creating,
+        )
+    }
+
+    /// 带阶段参数的版本。`Listing` 走这条:它同属「连接被 take 走了」的窗口。
+    fn begin_acp_session_transition_with_phase(
+        &mut self,
+        agent_id: SharedString,
+        session_uid: String,
+        phase: AcpSessionTransitionPhase,
+    ) -> AcpOperationToken {
         let operation = self.next_acp_operation();
         self.acp_session_transition = Some(AcpSessionTransition {
             operation,
             agent_id,
             session_uid,
-            phase: AcpSessionTransitionPhase::Creating,
+            phase,
         });
         operation
     }
@@ -2538,10 +2747,15 @@ impl AgentChatView {
 
     /// 重建并把展示上下文推给输入框。
     fn sync_composer(&self, cx: &mut Context<Self>) {
+        let model = self
+            .acp
+            .as_ref()
+            .and_then(|acp| acp_model_option(&acp.state(), self.current_acp_id.as_ref()))
+            .or_else(|| self.selected_model.clone());
         let ctx = build_composer_context(
             &self.resources,
             self.tool_execution_mode,
-            self.selected_model.as_ref(),
+            model.as_ref(),
             self.transcript.latest_plan(),
             self.transcript.active_subagents(),
             self.backend,
@@ -2553,7 +2767,84 @@ impl AgentChatView {
             self.skills.summary(),
             self.skills.items(),
         );
-        self.input.update(cx, |inp, cx| inp.set_context(ctx, cx));
+        self.input.update(cx, |inp, cx| {
+            inp.set_slash_commands(self.composer_slash_commands(), cx);
+            inp.set_context(ctx, cx);
+        });
+    }
+
+    pub fn set_workspace_root(&mut self, root: std::path::PathBuf, cx: &mut Context<Self>) {
+        if self.workspace_root == root {
+            return;
+        }
+        self.workspace_root = root.clone();
+        AppSettings::update_and_save(cx, |settings| {
+            settings.ai_chat.last_workspace_root = Some(root);
+        });
+        self.acp = None;
+        self.acp_pending = None;
+        self.acp_connecting = false;
+        self.clear_acp_sessions();
+        self.sync_composer(cx);
+        cx.notify();
+    }
+
+    pub fn restore_persisted_acp(&mut self, cx: &mut Context<Self>) {
+        let Some(agent_id) = AppSettings::current(cx)
+            .ai_chat
+            .last_acp_agent_id
+            .map(SharedString::from)
+        else {
+            return;
+        };
+        if self
+            .acp_agents
+            .iter()
+            .any(|entry| entry.id == agent_id && entry.config.is_some())
+        {
+            self.select_acp_backend(agent_id, cx);
+        }
+    }
+
+    pub(crate) fn restore_persisted_acp_model(&mut self, cx: &mut Context<Self>) {
+        let Some(agent_id) = self.current_acp_id.clone() else {
+            return;
+        };
+        let Some(model) = AppSettings::current(cx)
+            .ai_chat
+            .acp_models
+            .get(agent_id.as_ref())
+            .cloned()
+        else {
+            return;
+        };
+        let Some(option) = self.model_options.iter().find(|option| option.model == model).cloned()
+        else {
+            return;
+        };
+        self.select_acp_model(
+            option.id.as_ref(),
+            option.provider_id.as_ref(),
+            option.model.as_ref(),
+            cx,
+        );
+    }
+
+    /// 当前会话可补全的 `/` 命令。
+    ///
+    /// 命令只来自 Acp agent 的 `available_commands`：内置 agent 没有这套协议，返回空向量，
+    /// 输入框里打 `/` 就不弹菜单（不造假的命令表）。
+    fn composer_slash_commands(&self) -> Vec<SlashCommandItem> {
+        if self.backend != Backend::Acp {
+            return Vec::new();
+        }
+        self.acp
+            .as_ref()
+            .map(|acp| {
+                let state = acp.state();
+                slash_commands_from_acp_state(&state)
+            })
+            .unwrap_or_default()
     }
 
     fn refresh_acp_agents(&mut self, cx: &mut Context<Self>) {
@@ -2718,6 +3009,57 @@ impl AgentChatView {
         cx.notify();
     }
 
+    fn select_acp_model(
+        &mut self,
+        id: &str,
+        provider_id: &str,
+        model: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(option) = self.model_options.iter().find(|option| {
+            option.id.as_ref() == id
+                && option.provider_id.as_ref() == provider_id
+                && option.model.as_ref() == model
+        }) else {
+            return;
+        };
+        let Some(acp) = self.acp.take() else {
+            return;
+        };
+        let Some(config) = acp.state().current_model_config().cloned() else {
+            self.acp = Some(acp);
+            return;
+        };
+        let value = agent_client_protocol::schema::SessionConfigValueId::new(model);
+        let config_id = config.id.clone();
+        let option = option.clone();
+        let provider_id = provider_id.to_string();
+        let model = model.to_string();
+        cx.spawn(async move |this, cx| {
+            let result = acp.set_model(config_id, value).await;
+            let _ = this.update(cx, |this, cx| {
+                this.acp = Some(acp);
+                match result {
+                    Ok(()) => {
+                        this.selected_model = Some(option);
+                        AppSettings::update_and_save(cx, |settings| {
+                            settings
+                                .ai_chat
+                                .acp_models
+                                .insert(provider_id.to_string(), model.to_string());
+                        });
+                        this.sync_composer(cx);
+                    }
+                    Err(error) => this.transcript.push_system(format!(
+                        "ACP model switch failed: {error}"
+                    )),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     fn select_execution_mode(&mut self, id: &str, cx: &mut Context<Self>) {
         if self.is_running {
             return;
@@ -2792,9 +3134,9 @@ impl AgentChatView {
             self.sync_pending_preview(cx);
             self.request_scroll_to_bottom();
             cx.notify();
+            let workspace_root = self.workspace_root.clone();
             cx.spawn(async move |this, cx| {
-                let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"));
-                let result = acp.create_session(cwd).await;
+                let result = acp.create_session(workspace_root).await;
                 let _ = this.update(cx, |this, cx| {
                     if !this.is_current_acp_session_transition(operation, &agent_id, &session_uid) {
                         return;
@@ -3547,34 +3889,7 @@ impl AgentChatView {
                 .into_any_element();
         }
 
-        let body = if self.backend == Backend::Acp {
-            v_flex()
-                .flex_1()
-                .min_h_0()
-                .p_3()
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(t!("AgentUi.acp_external_managed").to_string()),
-                )
-                .into_any_element()
-        } else {
-            let sessions = self.sessions.clone();
-            let rows: Vec<gpui::AnyElement> = sessions
-                .iter()
-                .map(|session| self.render_session_row(session, cx))
-                .collect();
-            v_flex()
-                .id("agent-session-list")
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scroll()
-                .p_2()
-                .gap_1()
-                .children(rows)
-                .into_any_element()
-        };
+        let body = self.render_sidebar_body(cx);
 
         v_flex()
             .w(one_ui::theme_geometry().layout.context_sidebar_default)
@@ -3586,6 +3901,68 @@ impl AgentChatView {
             .bg(cx.theme().muted)
             .child(self.render_sidebar_header(cx))
             .child(body)
+            .into_any_element()
+    }
+
+    /// 侧栏主体：内置 agent 会话 ∪ ACP 历史会话。
+    ///
+    /// 方案 §7.1 要的「统一列表」：ACP 会话不再把整个侧栏换成一句「externally managed」，
+    /// 而是和内置会话并排，只是额外标出来源。ACP 能力不支持时才退回那句说明。
+    fn render_sidebar_body(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let sessions = self.sessions.clone();
+        let mut rows: Vec<gpui::AnyElement> = Vec::with_capacity(sessions.len() + 4);
+        for session in &sessions {
+            rows.push(self.render_session_row(session, cx));
+        }
+
+        let theme = resolve_agent_chat_theme(self.theme.as_ref(), cx);
+        if self.acp_session_list_visible() {
+            rows.push(acp_session_section_header(
+                &theme,
+                SharedString::from("agent-acp-sessions-refresh"),
+                cx.listener(|this, _, _, cx| this.reload_acp_sessions(cx)),
+            ));
+            if let Some(model) = self.acp_session_list_model() {
+                let current = self.acp_session_id_snapshot();
+                for summary in &model.sessions {
+                    let id = summary.id.clone();
+                    rows.push(acp_session_row(
+                        &theme,
+                        summary,
+                        current.as_deref() == Some(summary.id.as_str()),
+                        SharedString::from(format!("agent-acp-session-{}", summary.id)),
+                        cx.listener(move |this, _, _, cx| this.open_acp_session(&id, cx)),
+                    ));
+                }
+                if let Some(placeholder) = acp_session_placeholder(
+                    &theme,
+                    cx.theme().danger,
+                    model.loading,
+                    model.error.as_deref(),
+                    !model.sessions.is_empty(),
+                ) {
+                    rows.push(placeholder);
+                }
+            }
+        } else if self.backend == Backend::Acp {
+            rows.push(
+                div()
+                    .p_2()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(t!("AgentUi.acp_external_managed").to_string())
+                    .into_any_element(),
+            );
+        }
+
+        v_flex()
+            .id("agent-session-list")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .p_2()
+            .gap_1()
+            .children(rows)
             .into_any_element()
     }
 
@@ -3716,6 +4093,40 @@ impl AgentChatView {
         cx.notify();
     }
 
+    /// 当前可见会话列表（已合并实时运行中的会话）。
+    pub fn session_summaries(&self) -> Vec<SessionSummary> {
+        self.sessions.clone()
+    }
+
+    /// 当前会话标识。
+    pub fn current_session_id(&self) -> &str {
+        &self.current_session
+    }
+
+    /// 内建侧栏是否已被工作台外壳接管。
+    pub fn sidebar_suppressed(&self) -> bool {
+        self.sidebar_suppressed
+    }
+
+    /// 工作台外壳接管左侧会话栏时调用；隐藏内建侧栏后由外壳渲染会话列表。
+    pub fn set_sidebar_suppressed(&mut self, suppressed: bool, cx: &mut Context<Self>) {
+        if self.sidebar_suppressed == suppressed {
+            return;
+        }
+        self.sidebar_suppressed = suppressed;
+        cx.notify();
+    }
+
+    /// 切换到指定会话；未知 id 由 [`Self::switch_session`] 自行兜底。
+    pub fn select_session(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.switch_session(id, cx);
+    }
+
+    /// 新建会话。
+    pub fn create_session(&mut self, cx: &mut Context<Self>) {
+        self.new_session(cx);
+    }
+
     /// 历史记录 Popover 内容:小标题 + 活跃/归档切换 + 会话行列表(复用行渲染)。
     fn render_history_list(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let theme = resolve_agent_chat_theme(self.theme.as_ref(), cx);
@@ -3808,12 +4219,28 @@ impl AgentChatView {
 
     fn render_toolbar(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let theme = resolve_agent_chat_theme(self.theme.as_ref(), cx);
+        // 会话内搜索入口。findbar 是浮层，打开状态本身已经很明显，
+        // 这里只用 outline 做一次状态复核（图标按钮没有 selected 语义）。
+        let mut search_button = IconButton::new("agent-chat-find", IconName::Search)
+            .role(IconButtonRole::Compact)
+            .custom(agent_header_icon_variant(&theme, cx))
+            .tooltip(t!("AgentUi.find_in_transcript").to_string())
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_findbar(window, cx)));
+        if self.findbar_open {
+            search_button = search_button.outline();
+        }
+        // `IconButton` 不接受 `debug_selector`，包一层拿测试锚点。
+        let search_entry = div()
+            .debug_selector(|| "agent-chat-find".to_string())
+            .flex_shrink_0()
+            .child(search_button);
         PanelHeader::new("agent-chat-toolbar")
             .variant(PanelHeaderVariant::Toolbar)
             .horizontal_padding(one_ui::theme_geometry().spacing.space_4)
             .background(theme.background)
             .border_color(theme.border)
             .title(self.render_agent_switcher(cx))
+            .trailing(search_entry)
             .into_any_element()
     }
 
@@ -3876,38 +4303,154 @@ impl AgentChatView {
     }
 }
 
+fn acp_model_option(
+    state: &AcpSessionState,
+    agent_id: Option<&SharedString>,
+) -> Option<ComposerModelOption> {
+    let agent_id = agent_id?;
+    let option = state.current_model_config()?;
+    let agent_client_protocol::schema::SessionConfigKind::Select(select) = &option.kind else {
+        return None;
+    };
+    let value = &select.current_value;
+    let selected = select_config_value(&select.options, value)?;
+    Some(
+        ComposerModelOption::new(
+            format!("acp:{}:{}:{}", agent_id, option.id, value),
+            agent_id.clone(),
+            agent_id.clone(),
+            value.to_string(),
+        )
+        .with_hint(selected),
+    )
+}
+
+fn acp_model_options(
+    state: &AcpSessionState,
+    agent_id: Option<&SharedString>,
+) -> Vec<ComposerModelOption> {
+    let Some(agent_id) = agent_id else {
+        return Vec::new();
+    };
+    let Some(option) = state.current_model_config() else {
+        return Vec::new();
+    };
+    let agent_client_protocol::schema::SessionConfigKind::Select(select) = &option.kind else {
+        return Vec::new();
+    };
+    let values = match &select.options {
+        agent_client_protocol::schema::SessionConfigSelectOptions::Ungrouped(values) => {
+            values.iter().map(|value| (value.value.to_string(), value.name.clone())).collect()
+        }
+        agent_client_protocol::schema::SessionConfigSelectOptions::Grouped(groups) => groups
+            .iter()
+            .flat_map(|group| group.options.iter())
+            .map(|value| (value.value.to_string(), value.name.clone()))
+            .collect(),
+        _ => Vec::new(),
+    };
+    values
+        .into_iter()
+        .map(|(value, label)| {
+            ComposerModelOption::new(
+                format!("acp:{}:{}:{}", agent_id, option.id, value),
+                agent_id.clone(),
+                agent_id.clone(),
+                value,
+            )
+            .with_hint(label)
+        })
+        .collect()
+}
+
+fn select_config_value(
+    options: &agent_client_protocol::schema::SessionConfigSelectOptions,
+    value: &agent_client_protocol::schema::SessionConfigValueId,
+) -> Option<String> {
+    use agent_client_protocol::schema::SessionConfigSelectOptions;
+    let values = match options {
+        SessionConfigSelectOptions::Ungrouped(values) => values,
+        SessionConfigSelectOptions::Grouped(groups) => {
+            return groups
+                .iter()
+                .flat_map(|group| group.options.iter())
+                .find(|option| option.value == *value)
+                .map(|option| option.name.clone());
+        }
+        _ => return None,
+    };
+    values
+        .iter()
+        .find(|option| option.value == *value)
+        .map(|option| option.name.clone())
+}
+
 impl EventEmitter<AgentChatViewEvent> for AgentChatView {}
+
+/// 当前 Unix 秒；时钟异常时退化为 0（时长会被判为未知而不是负值）。
+fn unix_now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs() as i64)
+        .unwrap_or(0)
+}
 
 impl Render for AgentChatView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.auto_scroll.take_pending_for_render() {
             self.scroll_handle.scroll_to_bottom();
         }
+        // 正文变化（含流式输出）后按当前查询重算命中。
+        // 这里刻意用无通知版本：渲染期间 notify 会把「重算 → 通知 → 再渲染」转起来。
+        self.refresh_search_if_stale();
         let chat_theme = resolve_agent_chat_theme(self.theme.as_ref(), cx);
         let running_activity = self
             .is_running
             .then(|| render_running_activity(&chat_theme));
-        let messages = if self.sidebar_mode {
-            render_sidebar_messages_with_code_actions_and_activity(
-                &self.transcript.messages,
-                &self.scroll_handle,
-                Some(&self.code_block_actions),
-                Some(&chat_theme),
-                running_activity,
-                window,
-                cx,
+
+        // 滚动几何观测。「内容变长」不算用户移动阅读位置，否则流式输出会把
+        // 跟随态自己关掉（见 `TranscriptScrollState::observe`）。
+        let show_scroll_to_latest = self
+            .scroll
+            .observe(
+                self.scroll_handle.offset().y,
+                self.scroll_handle.max_offset().y,
             )
+            .unwrap_or(false)
+            && !self.sidebar_mode;
+
+        let list_layout = if self.sidebar_mode {
+            MessageListLayout::EdgeToEdge
         } else {
-            render_messages_with_code_actions_and_activity(
-                &self.transcript.messages,
-                &self.scroll_handle,
-                Some(&self.code_block_actions),
-                Some(&chat_theme),
-                running_activity,
-                window,
-                cx,
-            )
+            MessageListLayout::Centered
         };
+        let action_listener = cx.listener(
+            |this, action: &MessageListAction, _window, cx| {
+                this.apply_message_list_action(action.clone(), cx);
+            },
+        );
+        let on_action: MessageListActionHandler =
+            std::rc::Rc::new(move |action, window, cx| action_listener(&action, window, cx));
+
+        let findbar = self.render_findbar(&chat_theme, cx);
+        let messages = render_message_list(
+            &self.transcript.messages,
+            &self.scroll_handle,
+            MessageListContext::new(list_layout)
+                .with_activity(running_activity)
+                .with_code_actions(Some(&self.code_block_actions))
+                .with_theme(Some(&chat_theme))
+                .with_expansion(Some(&self.expansion))
+                .with_timings(Some(&self.turn_timings))
+                .with_action_handler(Some(on_action))
+                .with_turn_chrome(!self.sidebar_mode)
+                .with_search(Some(&self.search))
+                .with_findbar(findbar)
+                .with_scroll_to_latest(show_scroll_to_latest),
+            window,
+            cx,
+        );
+        let decision_dock = self.render_decision_dock(&chat_theme, cx);
         let input_area = div()
             .id("agent-input-area")
             .debug_selector(|| "agent-input-area".to_string())
@@ -3927,8 +4470,16 @@ impl Render for AgentChatView {
                     .w_full()
                     .min_w_0()
                     .when(self.sidebar_mode, |this| this.min_h_0().overflow_hidden())
-                    .when(!self.sidebar_mode, |this| this.p_3())
-                    .child(self.input.clone()),
+                    // 决策栏贴输入区顶部、通栏铺开（与内联卡片同一决策源）。
+                    .when_some(decision_dock, |this, dock| this.child(dock))
+                    .child(
+                        v_flex()
+                            .w_full()
+                            .min_w_0()
+                            .when(self.sidebar_mode, |this| this.min_h_0().overflow_hidden())
+                            .when(!self.sidebar_mode, |this| this.p_3())
+                            .child(self.input.clone()),
+                    ),
             );
         let auth_actions = self.render_acp_auth_actions(cx);
 
@@ -3944,8 +4495,24 @@ impl Render for AgentChatView {
                 .overflow_hidden()
                 .text_color(chat_theme.foreground)
                 .bg(chat_theme.background)
+                .key_context(AI_CHAT_SEARCH_CONTEXT)
                 .on_action(cx.listener(Self::approve_tool_call))
                 .on_action(cx.listener(Self::reject_tool_call))
+                .on_action(
+                    cx.listener(|this, _: &ToggleTranscriptFind, window, cx| {
+                        this.open_findbar(window, cx);
+                    }),
+                )
+                .on_action(
+                    cx.listener(|this, _: &FindNextInTranscript, _, cx| {
+                        this.step_search(true, cx);
+                    }),
+                )
+                .on_action(
+                    cx.listener(|this, _: &FindPreviousInTranscript, _, cx| {
+                        this.step_search(false, cx);
+                    }),
+                )
                 .child(
                     v_flex()
                         .debug_selector(|| "agent-sidebar-stack".to_string())
@@ -3960,20 +4527,49 @@ impl Render for AgentChatView {
                 )
         } else {
             // 普通全宽视图:常驻左侧会话栏 + 主区(标题 / 消息 / 输入)。
-            let sidebar = self.render_sidebar(cx);
+            // 工作台外壳接管会话栏时整块隐藏（`sidebar_suppressed`）。
+            let sidebar = (!self.sidebar_suppressed).then(|| self.render_sidebar(cx));
             let toolbar = self.render_toolbar(cx);
+            let dropped = self.transcript.dropped_messages();
+            let truncation_hint = (dropped > 0).then(|| {
+                div()
+                    .w_full()
+                    .px_3()
+                    .py_1()
+                    .text_xs()
+                    .text_color(cx.theme().warning)
+                    .child(t!("AgentUi.history_truncated", count = dropped).to_string())
+                    .into_any_element()
+            });
             div()
                 .size_full()
                 .text_color(chat_theme.foreground)
                 .bg(chat_theme.background)
+                .key_context(AI_CHAT_SEARCH_CONTEXT)
                 .on_action(cx.listener(Self::approve_tool_call))
                 .on_action(cx.listener(Self::reject_tool_call))
+                .on_action(
+                    cx.listener(|this, _: &ToggleTranscriptFind, window, cx| {
+                        this.open_findbar(window, cx);
+                    }),
+                )
+                .on_action(
+                    cx.listener(|this, _: &FindNextInTranscript, _, cx| {
+                        this.step_search(true, cx);
+                    }),
+                )
+                .on_action(
+                    cx.listener(|this, _: &FindPreviousInTranscript, _, cx| {
+                        this.step_search(false, cx);
+                    }),
+                )
                 .child(
-                    h_flex().size_full().child(sidebar).child(
+                    h_flex().size_full().when_some(sidebar, |this, sidebar| this.child(sidebar)).child(
                         div().flex_1().h_full().min_w_0().child(
                             v_flex()
                                 .size_full()
                                 .child(toolbar)
+                                .when_some(truncation_hint, |this, hint| this.child(hint))
                                 .child(messages)
                                 .when_some(auth_actions, |this, actions| this.child(actions))
                                 .child(input_area),
@@ -4057,10 +4653,44 @@ fn acp_scopes(state: &AcpSessionState) -> Vec<ComposerScope> {
         scopes.push(ComposerScope::new(
             "acp-usage",
             t!("AgentUi.usage").to_string(),
-            format!("{}/{} tokens", usage.used, usage.size),
+            format_acp_usage(usage),
         ));
     }
     scopes
+}
+
+/// 用量文案：`used/size tokens`，agent 报了费用就在后面追加。
+///
+/// 货币代码原样透传（协议给什么写什么，不自己拼符号）；小数位先按 4 位截掉尾随零，
+/// 免得到处是 `0.0120`。
+fn format_acp_usage(usage: &AcpUsage) -> String {
+    let mut text = format!("{}/{} tokens", usage.used, usage.size);
+    if let Some(cost) = usage.cost.as_ref() {
+        let amount = format!("{:.4}", cost.amount);
+        let amount = amount.trim_end_matches('0').trim_end_matches('.');
+        text.push_str(&format!(" · {} {}", amount, cost.currency));
+    }
+    text
+}
+
+/// 把 Acp agent 推送的 `available_commands` 转成 composer 的 `/` 补全项。
+///
+/// 命令名原样使用（补全插入的就是它）；`input` 只取非空提示，空的当成没有参数说明。
+fn slash_commands_from_acp_state(state: &AcpSessionState) -> Vec<SlashCommandItem> {
+    state
+        .available_commands()
+        .iter()
+        .map(|command| {
+            let item = SlashCommandItem::new(command.name.clone(), command.description.clone());
+            match command.input.as_ref() {
+                Some(AvailableCommandInput::Unstructured(input)) => {
+                    item.with_input_hint(input.hint.clone())
+                }
+                // 协议枚举标了 non_exhaustive：未来新增的输入形态先当无提示处理。
+                _ => item,
+            }
+        })
+        .collect()
 }
 
 fn acp_capabilities(state: &AcpSessionState) -> Vec<SharedString> {
@@ -4864,6 +5494,7 @@ fn now_secs() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::find_shortcut::CloseTranscriptFind;
     use crate::agent_cards::{
         ACP_PERMISSION_CARD, AcpPermissionCardData, AcpPermissionOptionData, TOOL_CARD,
         TOOL_CONFIRM_CARD, ToolCardData, ToolConfirmCardData,
@@ -5196,6 +5827,95 @@ mod tests {
         assert!(!owner.mark_cancel_requested("session-a", true));
     }
 
+    fn acp_session_summary(id: &str, title: Option<&str>) -> AcpSessionSummary {
+        AcpSessionSummary {
+            id: id.to_string(),
+            title: title.map(str::to_string),
+            updated_at: None,
+            cwd: std::path::PathBuf::from("/work"),
+        }
+    }
+
+    /// 列表只在「ACP 后端 + agent 声明支持 session/list」时出现；两个条件任一不满足就不显示。
+    #[gpui::test]
+    fn acp_session_list_model_needs_backend_and_capability(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update(cx, |view, _| {
+            view.acp_sessions = vec![acp_session_summary("s-1", Some("Plan review"))];
+
+            // 后端不是 ACP:能力有了也不显示,否则本地会话侧栏会冒出别的 agent 的历史。
+            view.acp_sessions_supported = true;
+            assert!(view.acp_session_list_model().is_none());
+
+            view.backend = Backend::Acp;
+            let model = view.acp_session_list_model().expect("visible on acp backend");
+            assert_eq!(1, model.sessions.len());
+            assert_eq!("Plan review", model.sessions[0].label());
+
+            // 能力缺失就不显示(不变量 11)。
+            view.acp_sessions_supported = false;
+            assert!(view.acp_session_list_model().is_none());
+        });
+    }
+
+    /// 切后端 / 换 agent 时抹状态必须顺带推进世代，否则在飞的旧响应还能把列表写回来。
+    #[gpui::test]
+    fn clearing_acp_sessions_drops_rows_and_in_flight_generation(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update(cx, |view, _| {
+            view.backend = Backend::Acp;
+            view.acp_sessions_supported = true;
+            view.acp_sessions = vec![acp_session_summary("s-1", None)];
+            view.acp_sessions_error = Some("boom".to_string());
+            view.acp_sessions_loading = true;
+            let generation = view.acp_sessions_generation;
+
+            view.clear_acp_sessions();
+
+            assert!(view.acp_sessions.is_empty());
+            assert!(view.acp_sessions_error.is_none());
+            assert!(!view.acp_sessions_loading);
+            assert!(!view.acp_sessions_supported);
+            assert_ne!(
+                generation, view.acp_sessions_generation,
+                "in-flight list responses must be invalidated"
+            );
+            assert!(view.acp_session_list_model().is_none());
+        });
+    }
+
+    /// 拿不到打开方式(既不能 load 也不能 resume)时点击必须是哑的：
+    /// 留下半截 transition 会把后续提交全卡在排队里。
+    #[gpui::test]
+    fn open_acp_session_is_inert_without_a_supported_open_kind(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update(cx, |view, cx| {
+            view.backend = Backend::Acp;
+            view.acp_sessions_supported = true;
+
+            view.open_acp_session("s-1", cx);
+
+            assert!(view.acp_session_transition.is_none());
+            assert!(view.acp.is_none());
+            assert!(view.acp_session_id_snapshot().is_none());
+        });
+    }
+
     #[gpui::test]
     fn cached_session_transcripts_evict_oldest_idle_entry(cx: &mut TestAppContext) {
         init_test_ui(cx);
@@ -5307,8 +6027,78 @@ mod tests {
     }
 
     #[gpui::test]
-    fn acp_connecting_keeps_pending_submission_for_retry(cx: &mut TestAppContext) {
+    fn removing_a_queued_item_drops_only_that_entry(cx: &mut TestAppContext) {
         init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update_in(cx, |view, window, cx| {
+            let session_uid = view.current_session.clone();
+            let queue = |view: &AgentChatView| {
+                view.pending_submissions
+                    .items(&session_uid)
+                    .into_iter()
+                    .map(|item| item.text.clone())
+                    .collect::<Vec<_>>()
+            };
+            view.pending_submissions
+                .enqueue(&session_uid, pending_submission("第一条"));
+            view.pending_submissions
+                .enqueue(&session_uid, pending_submission("第二条"));
+            view.pending_submissions
+                .enqueue(&session_uid, pending_submission("第三条"));
+            let input = view.input.clone();
+
+            view.on_input_event(&input, &AgentInputEvent::RemoveQueued { index: 1 }, window, cx);
+
+            assert_eq!(vec!["第一条", "第三条"], queue(view));
+
+            // 越界删除必须是 no-op，不能把队首误删。
+            view.on_input_event(&input, &AgentInputEvent::RemoveQueued { index: 9 }, window, cx);
+            assert_eq!(vec!["第一条", "第三条"], queue(view));
+        });
+    }
+
+    #[gpui::test]
+    fn editing_a_queued_item_pulls_it_back_into_the_composer_and_dequeues_it(
+        cx: &mut TestAppContext,
+    ) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update_in(cx, |view, window, cx| {
+            let session_uid = view.current_session.clone();
+            view.pending_submissions
+                .enqueue(&session_uid, pending_submission("要改的这条"));
+            view.pending_submissions
+                .enqueue(&session_uid, pending_submission("留在队列里"));
+            view.sync_pending_preview(cx);
+            let input = view.input.clone();
+
+            view.on_input_event(&input, &AgentInputEvent::EditQueued { index: 0 }, window, cx);
+
+            // 队列里只剩没被编辑的那条，且编辑项已从队列移除而不是复制一份。
+            let remaining: Vec<String> = view
+                .pending_submissions
+                .items(&session_uid)
+                .into_iter()
+                .map(|item| item.text.clone())
+                .collect();
+            assert_eq!(vec!["留在队列里"], remaining);
+
+            // 文本回到输入框，用户可以改完再发。
+            let restored = view.input.read(cx).composer_text(cx);
+            assert_eq!("要改的这条", restored);
+        });
+    }
+
+    #[gpui::test]
+    fn acp_connecting_keeps_pending_submission_for_retry(cx: &mut TestAppContext) {        init_test_ui(cx);
         let config =
             AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
         let (view, cx) =
@@ -7644,6 +8434,67 @@ mod tests {
         );
     }
 
+    #[test]
+    fn slash_commands_come_from_acp_state_verbatim() {
+        use agent_client_protocol::schema::{
+            AvailableCommand, AvailableCommandInput, AvailableCommandsUpdate, SessionUpdate,
+            UnstructuredCommandInput,
+        };
+
+        let state = AcpSessionState::default();
+        assert!(slash_commands_from_acp_state(&state).is_empty());
+
+        let mut state = AcpSessionState::default();
+        state.apply_session_update(&SessionUpdate::AvailableCommandsUpdate(
+            AvailableCommandsUpdate::new(vec![
+                AvailableCommand::new("plan", "Create plan"),
+                AvailableCommand::new("research", "Research the repo").input(
+                    AvailableCommandInput::Unstructured(UnstructuredCommandInput::new(
+                        "what to research",
+                    )),
+                ),
+            ]),
+        ));
+
+        let items = slash_commands_from_acp_state(&state);
+        assert_eq!(
+            vec!["plan", "research"],
+            items
+                .iter()
+                .map(|item| item.name.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(None, items[0].input_hint);
+        assert_eq!(Some("what to research"), items[1].input_hint.as_deref());
+        assert_eq!("/research ", items[1].insert_text());
+    }
+
+    #[test]
+    fn usage_scope_appends_cost_when_the_agent_reports_one() {
+        use agent_client_protocol::schema::Cost;
+
+        let unbilled = AcpUsage {
+            used: 42,
+            size: 100,
+            cost: None,
+        };
+        assert_eq!("42/100 tokens", format_acp_usage(&unbilled));
+
+        let billed = AcpUsage {
+            used: 42,
+            size: 100,
+            cost: Some(Cost::new(0.0123, "USD")),
+        };
+        assert_eq!("42/100 tokens · 0.0123 USD", format_acp_usage(&billed));
+
+        let fractional = AcpUsage {
+            used: 1,
+            size: 2,
+            cost: Some(Cost::new(2.5, "EUR")),
+        };
+        assert_eq!("1/2 tokens · 2.5 EUR", format_acp_usage(&fractional));
+    }
+
     #[gpui::test]
     fn gpui_defaults_to_manual_execution_mode(cx: &mut TestAppContext) {
         init_test_ui(cx);
@@ -9514,8 +10365,546 @@ mod tests {
         assert!(condition(), "GPUI test condition was not reached");
     }
 
-    struct NamedModelClient(String);
+    // ===== 决策栏（DecisionDock）=====
 
+    /// 决策栏与时间线卡片是**同一个决策**：点决策栏的按钮，走的就是内联卡片用的那个 action。
+    #[gpui::test]
+    fn gpui_decision_dock_mirrors_the_inline_confirm_card(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let model = Arc::new(MockModelClient::new([
+            ModelResponse::tool_call(function_tool_call(
+                "c_write",
+                "write_data",
+                json!({"value": "x"}).to_string(),
+            )),
+            ModelResponse::text("写入已完成。"),
+        ]));
+        let runtime = test_runtime_with_model_and_write_tool(model.clone());
+        let config = AgentChatViewConfig::new(runtime, ResourceContext::new(), vec![]);
+
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        view.update_in(cx, |view, window, cx| {
+            view.tool_execution_mode = ToolExecutionMode::Manual;
+            let input = view.input.clone();
+            view.on_input_event(
+                &input,
+                &AgentInputEvent::Submit {
+                    text: "写入 x".into(),
+                    mentions: Vec::new(),
+                    images: Vec::new(),
+                },
+                window,
+                cx,
+            );
+        });
+        run_gpui_until(cx, || model.request_count() >= 1);
+        cx.run_until_parked();
+
+        // 决策栏出现，且与内联确认卡是同一条决策。
+        cx.debug_bounds("ai-chat-decision-dock")
+            .expect("decision dock should render while the tool awaits approval");
+        let pending = view.read_with(cx, |view, _| view.transcript.pending_decisions());
+        assert_eq!(1, pending.len());
+        assert_eq!("c_write", pending[0].id);
+        assert_eq!(
+            crate::DecisionAuthority::LocalTool,
+            pending[0].authority
+        );
+
+        let allow = cx
+            .debug_bounds("decision-option-c_write-allow")
+            .expect("dock allow button should render");
+        let deny = cx
+            .debug_bounds("decision-option-c_write-deny")
+            .expect("dock deny button should render");
+        assert_eq!(allow.origin.y, deny.origin.y, "options share one row");
+        // 详情默认收起；展开是显式动作，不抢焦点。
+        assert!(cx.debug_bounds("ai-chat-decision-details").is_none());
+
+        // 真点决策栏的按钮 —— 与点内联卡片走同一个命令入口。
+        cx.simulate_click(allow.center(), Modifiers::default());
+        run_gpui_until(cx, || model.request_count() >= 2);
+
+        assert_eq!(2, model.request_count());
+        // 决策落地后决策栏整条消失，不留空条。
+        assert!(cx.debug_bounds("ai-chat-decision-dock").is_none());
+    }
+
+    /// ACP 权限：决策栏只做来源标注与转发，落地仍是 `SelectAcpPermissionOption`，
+    /// 且 provider 下发的 `option_id` 原样回传（不虚构、不本地化改写）。
+    #[gpui::test]
+    fn gpui_decision_dock_forwards_the_provider_option_id_for_acp(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let (envelope, mut outcome_rx) = AcpPermissionEnvelope::new(test_acp_permission_request());
+
+        view.update(cx, |view, cx| view.receive_acp_permission(envelope, cx));
+        let cx: &mut VisualTestContext = cx;
+
+        cx.debug_bounds("ai-chat-decision-dock")
+            .expect("decision dock should render for a pending ACP permission");
+
+        // 内联卡片的选项 id 之一；决策栏必须把同一个 id 转发出去。
+        let option = view.read_with(cx, |view, _| {
+            view.transcript
+                .messages
+                .iter()
+                .find(|message| message.variant.card_kind() == Some(ACP_PERMISSION_CARD))
+                .and_then(|message| AcpPermissionCardData::from_json(&message.content))
+                .expect("ACP permission card")
+                .options
+                .first()
+                .cloned()
+                .expect("provider option")
+        });
+        cx.dispatch_action(SelectAcpPermissionOption {
+            request_id: "session:call".into(),
+            option_id: option.option_id.clone(),
+        });
+        cx.run_until_parked();
+
+        assert!(matches!(
+            outcome_rx.try_recv(),
+            Ok(AcpPermissionOutcome::Selected { option_id }) if option_id == option.option_id
+        ));
+        assert!(cx.debug_bounds("ai-chat-decision-dock").is_none());
+    }
+
+    /// 详情展开是纯展示动作：显式点开才有内容，且不影响决策本身。
+    #[gpui::test]
+    fn gpui_decision_dock_details_expand_only_on_request(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        view.update(cx, |view, cx| {
+            view.transcript.messages.push(crate::ChatMessageUI::card(
+                TOOL_CONFIRM_CARD,
+                ToolConfirmCardData {
+                    call_id: "call_details".into(),
+                    tool_name: "fs.write".into(),
+                    items: Vec::new(),
+                    input_summary: "navop/.env".into(),
+                    input_json: r#"{"path":".env","token":"••••"}"#.into(),
+                    question: "需要确认".into(),
+                    status: "pending".into(),
+                }
+                .to_json(),
+            ));
+            cx.notify();
+        });
+        let cx: &mut VisualTestContext = cx;
+
+        assert!(cx.debug_bounds("ai-chat-decision-details").is_none());
+        view.update(cx, |view, cx| {
+            view.decision_details = Some("call_details".into());
+            cx.notify();
+        });
+        assert!(
+            cx.debug_bounds("ai-chat-decision-details").is_some(),
+            "explicitly opening details should render them"
+        );
+        // 展开详情不解算决策：卡片仍是 pending。
+        assert!(view.read_with(cx, |view, _| {
+            view.transcript.has_pending_tool_confirm("call_details")
+        }));
+    }
+
+    /// Public MCP 与本地工具共用 `agent.confirm` 卡，但**授权域不合并**：
+    /// 同一个按钮只作用于它自己那一域，落地路径也各走各的。
+    #[gpui::test]
+    fn gpui_decision_dock_keeps_public_mcp_in_its_own_authority(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let request_id = "public-mcp:approval-dock";
+        let (envelope, mut outcome_rx) =
+            AcpPublicMcpApprovalEnvelope::new(AcpPublicMcpApprovalRequest {
+                request_id: request_id.into(),
+                tool_name: "terminal.exec".into(),
+                summary: "Call Execute in terminal".into(),
+                details: json!({"requestArguments": {"command": "du -xhd1 /"}}),
+            });
+        view.update(cx, |view, cx| view.receive_public_mcp_approval(envelope, cx));
+        cx.run_until_parked();
+
+        let authority = view.read_with(cx, |view, _| {
+            view.transcript
+                .pending_decisions()
+                .into_iter()
+                .find(|decision| decision.id == request_id)
+                .map(|decision| decision.authority)
+        });
+        assert_eq!(
+            Some(crate::DecisionAuthority::PublicMcp),
+            authority
+        );
+
+        cx.dispatch_action(ApproveToolCall {
+            call_id: request_id.into(),
+        });
+        cx.run_until_parked();
+
+        assert_eq!(
+            AcpPublicMcpApprovalOutcome::Approved,
+            outcome_rx.try_recv().expect("Public MCP approval response")
+        );
+    }
+
+    // ===== 会话内搜索（findbar）=====
+
+    /// 生成足够长的回复，让消息列表真的产生滚动区——否则「跳转」无从验证。
+    fn long_reply(tag: &str) -> String {
+        (0..12)
+            .map(|index| {
+                format!(
+                    "{tag} 第 {index} 段：{}",
+                    "让这一轮长得足以撑出滚动区".repeat(6)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
+
+    /// 铺一段多轮对话；`needle_turns` 里的轮次额外带上 `needle`。
+    fn push_conversation(
+        view: &mut AgentChatView,
+        turns: usize,
+        needle_turns: &[usize],
+        needle: &str,
+    ) {
+        for index in 0..turns {
+            view.transcript
+                .push_message(crate::ChatMessageUI::user(format!("问题 {index}")));
+            let body = if needle_turns.contains(&index) {
+                format!("{needle}\n\n{}", long_reply(&format!("回答 {index}")))
+            } else {
+                long_reply(&format!("回答 {index}"))
+            };
+            view.transcript
+                .push_message(crate::ChatMessageUI::assistant(body));
+        }
+    }
+
+    /// 强制跑一帧。`run_until_parked` 只跑后台任务，不落帧；
+    /// 需要把焦点 / 滚动这类「下一帧才生效」的状态推进时，用一次 `debug_bounds` 触发绘制。
+    fn draw_frame(cx: &mut VisualTestContext) {
+        let _ = cx.debug_bounds("ai-chat-messages-scroll");
+        cx.run_until_parked();
+    }
+
+    fn open_find_keystroke() -> &'static str {
+        crate::find_shortcut::find_defaults_for_platform(cfg!(target_os = "macos")).0[0]
+    }
+
+    fn focus_composer(view: &Entity<AgentChatView>, cx: &mut VisualTestContext) {
+        view.update_in(cx, |view, window, cx| {
+            let input = view.input.clone();
+            input.update(cx, |input, cx| input.focus_input(window, cx));
+        });
+    }
+
+    /// 快捷键打开 → 输入即搜 → Escape 关闭并清空命中。
+    #[gpui::test]
+    fn gpui_findbar_opens_with_shortcut_searches_and_closes_with_escape(
+        cx: &mut TestAppContext,
+    ) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        view.update(cx, |view, cx| {
+            push_conversation(view, 3, &[2], "预算审批");
+            cx.notify();
+        });
+        let cx: &mut VisualTestContext = cx;
+        cx.run_until_parked();
+
+        assert!(
+            cx.debug_bounds("ai-chat-findbar").is_none(),
+            "findbar must stay hidden until asked for"
+        );
+
+        // 真实姿势：用户正在输入框里打字，然后按 Cmd/Ctrl+F。
+        // 焦点要等一帧才算落到已渲染帧上，否则按键派发的起点是空的。
+        focus_composer(&view, cx);
+        draw_frame(cx);
+
+        // 先单独确认 action 接线本身是通的（与按键绑定解耦，失败时好定位）。
+        cx.dispatch_action(ToggleTranscriptFind);
+        draw_frame(cx);
+        assert!(
+            view.read_with(cx, |view, _| view.findbar_open),
+            "the toggle action itself must open the findbar"
+        );
+        cx.dispatch_action(CloseTranscriptFind);
+        draw_frame(cx);
+        assert!(!view.read_with(cx, |view, _| view.findbar_open));
+
+        cx.simulate_keystrokes(open_find_keystroke());
+        draw_frame(cx);
+        assert!(
+            cx.debug_bounds("ai-chat-findbar").is_some(),
+            "the find shortcut should open the findbar"
+        );
+
+        // 打开时焦点已在搜索框上，直接输入即可（不再额外点击）。
+        cx.simulate_input("预算审批");
+        cx.run_until_parked();
+        assert_eq!(
+            Some(2),
+            view.read_with(cx, |view, _| view.search.current_turn_index()),
+            "the only hit lives in the last turn"
+        );
+        assert_eq!(1, view.read_with(cx, |view, _| view.search.total()));
+
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("ai-chat-findbar").is_none(),
+            "escape should close the findbar"
+        );
+        assert!(!view.read_with(cx, |view, _| view.findbar_open));
+        assert!(
+            !view.read_with(cx, |view, _| view.search.is_active()),
+            "closing must drop the hit set, not leave stale highlights"
+        );
+    }
+
+    /// 跳转要真的把目标轮次滚到视口顶部。
+    ///
+    /// 这条同时钉住一个**结构性不变量**：滚动容器的第 N 个直接子元素就是第 N 轮
+    /// （`ScrollHandle::scroll_to_item` 以直接子元素为索引）。一旦有人再往里塞一层
+    /// 包装，跳转会静默失效，这里会先炸。
+    #[gpui::test]
+    fn gpui_findbar_jump_scrolls_the_target_turn_to_the_top(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        view.update(cx, |view, cx| {
+            // needle 放在中间轮：跳它不会被「滚到底」夹住，断言才是确定的。
+            push_conversation(view, 12, &[5], "预算审批");
+            cx.notify();
+        });
+        let cx: &mut VisualTestContext = cx;
+        cx.run_until_parked();
+
+        assert_eq!(
+            px(0.0),
+            view.read_with(cx, |view, _| view.scroll_handle.offset().y),
+            "the list should start at the top"
+        );
+
+        view.update(cx, |view, cx| {
+            view.findbar_open = true;
+            view.search.set_query("预算审批", &view.transcript.messages);
+            view.jump_to_current_search_hit();
+            cx.notify();
+        });
+        // 滚动是在 prepaint 里落地的：至少跑一帧，再读偏移。
+        draw_frame(cx);
+        draw_frame(cx);
+
+        assert_eq!(
+            Some(5),
+            view.read_with(cx, |view, _| view.search.current_turn_index()),
+            "the query must resolve to the middle turn"
+        );
+        assert!(
+            view.read_with(cx, |view, _| view.scroll_handle.bounds_for_item(5))
+                .is_some(),
+            "the scroll container must index its turns directly, otherwise \
+             `scroll_to_item` silently does nothing"
+        );
+
+        let (top_item, offset_y) = view.read_with(cx, |view, _| {
+            (
+                view.scroll_handle.top_item(),
+                view.scroll_handle.offset().y,
+            )
+        });
+        // GPUI 把滚动偏移夹在 `[-max_offset, 0]`（见 `gpui` 的 `div.rs::compute_scroll_offset`），
+        // 向下滚动时它是**负数**，所以这里不能断言「大于 0」。真正判方向的是下面的 `top_item`。
+        assert_ne!(px(0.0), offset_y, "jumping must actually scroll");
+        assert_eq!(
+            5, top_item,
+            "the hit turn should sit at the top of the viewport"
+        );
+    }
+
+    /// 前后跳转按轮次推进，且**不碰 composer**。
+    #[gpui::test]
+    fn gpui_findbar_stepping_advances_hits_without_touching_the_composer(
+        cx: &mut TestAppContext,
+    ) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        view.update(cx, |view, cx| {
+            push_conversation(view, 4, &[0, 3], "预算审批");
+            cx.notify();
+        });
+        let cx: &mut VisualTestContext = cx;
+        cx.run_until_parked();
+
+        view.update(cx, |view, cx| {
+            view.findbar_open = true;
+            view.search.set_query("预算审批", &view.transcript.messages);
+            cx.notify();
+        });
+        cx.run_until_parked();
+
+        assert_eq!(2, view.read_with(cx, |view, _| view.search.total()));
+        let first = view.read_with(cx, |view, _| view.search.current_turn_index());
+        assert_eq!(Some(0), first);
+
+        let next = cx
+            .debug_bounds("ai-chat-findbar-next")
+            .expect("next button should render");
+        cx.simulate_click(next.center(), Modifiers::default());
+        cx.run_until_parked();
+
+        let second = view.read_with(cx, |view, _| view.search.current_turn_index());
+        assert_ne!(first, second, "next must move to a different turn");
+        assert_eq!(Some(3), second, "the second hit lives in the last turn");
+
+        // composer 完全没被动过。
+        assert!(
+            view.read_with(cx, |view, cx| view.input.read(cx).composer_text(cx))
+                .is_empty(),
+            "searching must not write into the composer"
+        );
+
+        // 反向要能绕回第一条。
+        let previous = cx
+            .debug_bounds("ai-chat-findbar-prev")
+            .expect("prev button should render");
+        cx.simulate_click(previous.center(), Modifiers::default());
+        cx.run_until_parked();
+        assert_eq!(Some(0), view.read_with(cx, |view, _| view.search.current_turn_index()));
+    }
+
+    /// 正文变化（流式追加）后命中要重算，而不是停在旧结果上。
+    #[gpui::test]
+    fn gpui_findbar_recounts_hits_when_the_transcript_grows(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        view.update(cx, |view, cx| {
+            push_conversation(view, 2, &[0], "预算审批");
+            cx.notify();
+        });
+        let cx: &mut VisualTestContext = cx;
+        cx.run_until_parked();
+
+        view.update(cx, |view, cx| {
+            view.findbar_open = true;
+            view.search.set_query("预算审批", &view.transcript.messages);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert_eq!(1, view.read_with(cx, |view, _| view.search.total()));
+        // 追加一轮含命中的对话：不重新 set_query，也要靠 revision 变更自动重算。
+        view.update(cx, |view, cx| {
+            view.transcript
+                .push_message(crate::ChatMessageUI::user("再问一句".to_string()));
+            view.transcript
+                .push_message(crate::ChatMessageUI::assistant("预算审批 追加".to_string()));
+            cx.notify();
+        });
+        // 命中重算发生在渲染里（按修订号判新），必须真落一帧。
+        draw_frame(cx);
+
+        assert_eq!(2, view.read_with(cx, |view, _| view.search.total()));
+        assert!(
+            view.read_with(cx, |view, _| view.search.hits_turn(2)),
+            "the appended message belongs to a new turn and must be marked as a hit"
+        );
+    }
+
+    /// 工具栏入口与「关闭」按钮走鼠标路径，同样可用。
+    #[gpui::test]
+    fn gpui_findbar_toolbar_button_toggles_and_close_button_closes(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        view.update(cx, |view, cx| {
+            push_conversation(view, 2, &[1], "预算审批");
+            cx.notify();
+        });
+        let cx: &mut VisualTestContext = cx;
+        cx.run_until_parked();
+
+        let toggle = cx
+            .debug_bounds("agent-chat-find")
+            .expect("toolbar search entry should render");
+        cx.simulate_click(toggle.center(), Modifiers::default());
+        cx.run_until_parked();
+        assert!(view.read_with(cx, |view, _| view.findbar_open));
+        assert!(cx.debug_bounds("ai-chat-findbar").is_some());
+
+        let close = cx
+            .debug_bounds("ai-chat-findbar-close")
+            .expect("close button should render");
+        cx.simulate_click(close.center(), Modifiers::default());
+        cx.run_until_parked();
+        assert!(!view.read_with(cx, |view, _| view.findbar_open));
+        assert!(cx.debug_bounds("ai-chat-findbar").is_none());
+    }
+
+    /// 快捷键打开的 findbar，再按一次同样的键**不能关掉它**。
+    ///
+    /// `Cmd/Ctrl+F` 的语义是「找东西」而不是「别找了」：用户连按两下是常见姿势，
+    /// 把面板和命中一起收掉属于误操作。关闭只走 `escape` / 关闭按钮 / 工具栏按钮。
+    #[gpui::test]
+    fn gpui_findbar_shortcut_refocuses_instead_of_closing(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        view.update(cx, |view, cx| {
+            push_conversation(view, 3, &[2], "预算审批");
+            cx.notify();
+        });
+        let cx: &mut VisualTestContext = cx;
+        cx.run_until_parked();
+
+        focus_composer(&view, cx);
+        draw_frame(cx);
+        cx.simulate_keystrokes(open_find_keystroke());
+        draw_frame(cx);
+        assert!(view.read_with(cx, |view, _| view.findbar_open));
+
+        // 焦点此时已经在 findbar 的搜索框里，再按一次同样的键。
+        cx.simulate_keystrokes(open_find_keystroke());
+        draw_frame(cx);
+        assert!(
+            view.read_with(cx, |view, _| view.findbar_open),
+            "pressing the find shortcut again must not close the findbar"
+        );
+        assert!(cx.debug_bounds("ai-chat-findbar").is_some());
+
+        // 真正关掉之后，快捷键要能再打开：它是「打开/聚焦」，不是单向开关。
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert!(!view.read_with(cx, |view, _| view.findbar_open));
+        cx.simulate_keystrokes(open_find_keystroke());
+        draw_frame(cx);
+        assert!(
+            cx.debug_bounds("ai-chat-findbar").is_some(),
+            "the shortcut must still open the findbar after it was closed"
+        );
+    }
+
+    struct NamedModelClient(String);
     #[async_trait]
     impl ModelClient for NamedModelClient {
         async fn complete(
@@ -9535,5 +10924,74 @@ mod tests {
         fn model_name(&self) -> &str {
             &self.0
         }
+    }
+
+    /// 工作台把聊天面板当普通子视图塞进内容区。聊天框与聊天记录都必须在里面真正排布出来，
+    /// 否则「工作台里没有输入框 / 看不到聊天记录」这类问题不会在面板自身的测试里暴露。
+    #[gpui::test]
+    fn gpui_workbench_content_hosts_the_chat_composer_and_transcript(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let runtime = test_runtime("m");
+        let config =
+            AgentChatViewConfig::new(runtime, ResourceContext::new(), vec![]).sidebar_mode(false);
+
+        struct NavStub;
+
+        impl Render for NavStub {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().size_full()
+            }
+        }
+
+        let (shell, cx) = cx.add_window_view(move |window, cx| {
+            let chat = AgentChatView::view_with_config(config, window, cx);
+            // 宿主会压掉内建侧栏（会话列表由外壳统一渲染），测试必须跟宿主同形。
+            chat.update(cx, |chat, cx| chat.set_sidebar_suppressed(true, cx));
+            let nav: gpui::AnyView = cx.new(|_| NavStub).into();
+            crate::workbench::WorkbenchShell::new(
+                crate::workbench::WorkbenchShellConfig {
+                    panels: vec![crate::workbench::WorkbenchPanelEntry::new(
+                        crate::workbench::WorkbenchPanelKind::Chat,
+                        chat,
+                    )],
+                    // 宿主给的是内建会话列表；这里用等宽占位视图走同一条布局分支。
+                    session_nav: Some(nav),
+                    session_source: None,
+                    initial_active: crate::workbench::WorkbenchPanelKind::Chat,
+                    theme: None,
+                    subscriptions: Vec::new(),
+                },
+                window,
+                cx,
+            )
+        });
+
+        let cx: &mut VisualTestContext = cx;
+        cx.run_until_parked();
+        let _ = shell;
+
+        // 内容区必须自己拿到高度：外壳的行容器默认 items_center，不写 h_full 的高
+        // 会在真机上塔成 0（子元素还在，但全被 overflow_hidden 裁掉 = 一片空白）。
+        let content = cx
+            .debug_bounds("workbench-content")
+            .expect("the workbench content area must be laid out");
+        assert!(
+            content.size.height > px(0.0) && content.size.width > px(0.0),
+            "the workbench content area must get a real size, got {:?}",
+            content.size
+        );
+
+        let composer = cx
+            .debug_bounds("agent-input-area")
+            .expect("the workbench content area must lay out the chat composer");
+        assert!(
+            composer.size.height > px(0.0),
+            "the chat composer must have a real height inside the workbench, got {:?}",
+            composer.size
+        );
+        assert!(
+            cx.debug_bounds("ai-chat-messages").is_some(),
+            "the workbench content area must lay out the chat transcript"
+        );
     }
 }

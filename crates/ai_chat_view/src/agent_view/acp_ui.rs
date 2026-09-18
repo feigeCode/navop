@@ -7,6 +7,7 @@ pub(super) struct AcpConnectOperation {
     pub(super) token: AcpOperationToken,
     config: AcpAgentConfig,
     pub(super) session_uid: String,
+    workspace_root: std::path::PathBuf,
 }
 
 struct AcpAuthOperation {
@@ -33,6 +34,7 @@ impl AgentChatView {
         self.invalidate_acp_operation();
         self.reset_acp_permission_session(cx);
         self.acp_turn_owner = None;
+        self.clear_acp_sessions();
         self.acp = None;
         self.acp_pending = None;
         self.acp_auth_methods.clear();
@@ -71,6 +73,7 @@ impl AgentChatView {
         cx.spawn(async move |this, cx| {
             let outcome = AcpConnection::connect_with_permission_provider(
                 &operation.config,
+                operation.workspace_root.clone(),
                 permission_provider,
                 cx,
             )
@@ -104,6 +107,7 @@ impl AgentChatView {
             token: self.next_acp_operation(),
             config: config.with_skill_context(&self.skills.selected_context()),
             session_uid,
+            workspace_root: self.workspace_root.clone(),
         };
         let permission_provider =
             self.begin_acp_connect(&operation.config, &operation.session_uid, cx);
@@ -142,6 +146,7 @@ impl AgentChatView {
         self.backend = Backend::Acp;
         self.current_acp_id = Some(config.id.clone());
         self.acp_turn_owner = None;
+        self.clear_acp_sessions();
         self.acp = None;
         self.acp_pending = None;
         self.acp_auth_methods.clear();
@@ -337,6 +342,9 @@ impl AgentChatView {
         self.reset_acp_permission_session(cx);
         self.acp_connect_origin_session = None;
         self.current_acp_id = Some(agent_id);
+        AppSettings::update_and_save(cx, |settings| {
+            settings.ai_chat.last_acp_agent_id = self.current_acp_id.as_ref().map(ToString::to_string);
+        });
         if let Some(transcript) = self.transcript_for_open_session_mut(origin_session_uid) {
             transcript.set_acp_error(&error);
         }
@@ -355,7 +363,20 @@ impl AgentChatView {
     ) {
         let receiver = connection.subscribe();
         let session_id = connection.session_id();
+        self.acp_sessions_supported =
+            acp_session_list_supported(connection.state().agent_capabilities());
+        let acp_state = connection.state();
+        self.model_options = acp_model_options(&acp_state, Some(&agent_id));
+        self.selected_model = acp_model_option(&acp_state, Some(&agent_id));
+        self.input.update(cx, |input, cx| {
+            input.set_menu_options(
+                self.model_options.clone(),
+                self.tool_options.clone(),
+                cx,
+            );
+        });
         self.acp = Some(connection);
+        self.restore_persisted_acp_model(cx);
         self.acp_turn_owner = None;
         self.acp_session_transition = None;
         self.backend = Backend::Acp;
@@ -368,6 +389,9 @@ impl AgentChatView {
         self.sync_pending_preview(cx);
         self.sync_composer(cx);
         self.advance_acp_pending_after_origin(&origin_session_uid, cx);
+        // 连接就绪后立刻拉一次历史会话，让统一列表能马上和内置会话并排。
+        // 上一轮已经在跑的话 `reload_acp_sessions` 自己会让路。
+        self.reload_acp_sessions(cx);
         cx.notify();
     }
 

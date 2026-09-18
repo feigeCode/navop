@@ -24,8 +24,8 @@ use one_core::{
 use rust_i18n::t;
 
 use crate::{
-    AcpAgentEntry, AgentChatTheme, AgentChatView, AgentChatViewConfig, AgentChatViewEvent,
-    CodeBlockAction, MentionItem,
+    AcpAgentEntry, AcpSessionListModel, AgentChatTheme, AgentChatView, AgentChatViewConfig,
+    AgentChatViewEvent, CodeBlockAction, MentionItem, SessionSummary,
     agent_tool_config::{AgentToolConfigEvent, get_notifier as get_agent_tool_config_notifier},
     build_acp_agent_entries, build_plan_tool_registry,
 };
@@ -98,9 +98,12 @@ pub struct DefaultAgentChatPanel {
     window_handle: AnyWindowHandle,
     theme: Option<AgentChatTheme>,
     show_sidebar_header: bool,
+    /// 工作台外壳接管会话栏时隐藏内建侧栏。
+    sidebar_suppressed: bool,
     show_sidebar_frame_controls: bool,
     sidebar_frame_placement: SidebarPlacement,
     tab_closeable: bool,
+    workspace_root: Option<std::path::PathBuf>,
     error: Option<String>,
 }
 
@@ -245,9 +248,11 @@ impl DefaultAgentChatPanel {
             window_handle: window.window_handle(),
             theme: None,
             show_sidebar_header: true,
+            sidebar_suppressed: false,
             show_sidebar_frame_controls: false,
             sidebar_frame_placement: SidebarPlacement::Right,
             tab_closeable: false,
+            workspace_root: None,
             error: None,
         };
         panel.subscribe_connection_events(cx);
@@ -261,6 +266,18 @@ impl DefaultAgentChatPanel {
     pub fn with_tab_closeable(mut self, closeable: bool) -> Self {
         self.tab_closeable = closeable;
         self
+    }
+
+    pub fn with_workspace_root(mut self, root: std::path::PathBuf) -> Self {
+        self.workspace_root = Some(root);
+        self
+    }
+
+    pub fn set_workspace_root(&mut self, root: std::path::PathBuf, cx: &mut Context<Self>) {
+        self.workspace_root = Some(root.clone());
+        if let Some(view) = &self.view {
+            view.update(cx, |view, cx| view.set_workspace_root(root, cx));
+        }
     }
 
     fn subscribe_provider_events(&mut self, cx: &mut Context<Self>) {
@@ -477,6 +494,76 @@ impl DefaultAgentChatPanel {
         cx.notify();
     }
 
+    /// 隐藏内建会话侧栏，把会话列表交给工作台外壳渲染。
+    pub fn set_sidebar_suppressed(&mut self, suppressed: bool, cx: &mut Context<Self>) {
+        if self.sidebar_suppressed == suppressed {
+            return;
+        }
+        self.sidebar_suppressed = suppressed;
+        if let Some(view) = &self.view {
+            view.update(cx, |view, cx| view.set_sidebar_suppressed(suppressed, cx));
+        }
+        cx.notify();
+    }
+
+    pub fn sidebar_suppressed(&self) -> bool {
+        self.sidebar_suppressed
+    }
+
+    /// 当前可见会话列表；视图尚未建好时为空。
+    pub fn session_summaries(&self, cx: &App) -> Vec<SessionSummary> {
+        self.view
+            .as_ref()
+            .map(|view| view.read(cx).session_summaries())
+            .unwrap_or_default()
+    }
+
+    pub fn current_session_id(&self, cx: &App) -> Option<String> {
+        self.view
+            .as_ref()
+            .map(|view| view.read(cx).current_session_id().to_string())
+    }
+
+    pub fn select_session(&mut self, id: &str, cx: &mut Context<Self>) {
+        if let Some(view) = &self.view {
+            let id = id.to_string();
+            view.update(cx, |view, cx| view.select_session(&id, cx));
+        }
+    }
+
+    /// ACP 历史会话列表；不在 ACP 后端或 agent 不支持时是 `None`。
+    pub(crate) fn acp_session_list_model(&self, cx: &App) -> Option<AcpSessionListModel> {
+        self.view
+            .as_ref()
+            .and_then(|view| view.read(cx).acp_session_list_model())
+    }
+
+    /// 当前连接指向的 ACP 会话 id。
+    pub(crate) fn acp_session_id(&self, cx: &App) -> Option<String> {
+        self.view
+            .as_ref()
+            .and_then(|view| view.read(cx).acp_session_id_snapshot())
+    }
+
+    pub(crate) fn open_acp_session(&mut self, id: &str, cx: &mut Context<Self>) {
+        if let Some(view) = &self.view {
+            let id = id.to_string();
+            view.update(cx, |view, cx| view.open_acp_session(&id, cx));
+        }
+    }
+
+    pub(crate) fn refresh_acp_sessions(&mut self, cx: &mut Context<Self>) {
+        if let Some(view) = &self.view {
+            view.update(cx, |view, cx| view.reload_acp_sessions(cx));
+        }
+    }
+
+    pub fn create_session(&mut self, cx: &mut Context<Self>) {
+        if let Some(view) = &self.view {
+            view.update(cx, |view, cx| view.create_session(cx));
+        }
+    }
+
     pub fn set_theme(&mut self, theme: Option<AgentChatTheme>, cx: &mut Context<Self>) {
         self.theme = theme.clone();
         if let Some(view) = &self.view {
@@ -540,6 +627,9 @@ impl DefaultAgentChatPanel {
                                 panel.show_sidebar_frame_controls,
                                 panel.sidebar_frame_placement,
                             );
+                            if let Some(root) = panel.workspace_root.clone() {
+                                config = config.with_workspace_root(root);
+                            }
                             let view = AgentChatView::view_with_config(config, window, cx);
                             let view_subscription =
                                 cx.subscribe(&view, |_, _, event: &AgentChatViewEvent, cx| {
@@ -586,15 +676,22 @@ impl DefaultAgentChatPanel {
                                     view.send_external_message(message, cx);
                                 });
                             }
+                            if panel.sidebar_suppressed {
+                                view.update(cx, |view, cx| {
+                                    view.set_sidebar_suppressed(true, cx);
+                                });
+                            }
                             if std::mem::take(&mut panel.pending_sidebar_shown) {
                                 view.update(cx, |view, cx| view.on_sidebar_shown(cx));
                             }
+                            view.update(cx, |view, cx| view.restore_persisted_acp(cx));
                             panel.view = Some(view);
                             panel.view_subscription = Some(view_subscription);
                             panel.error = None;
                             cx.notify();
                         }
                         Err(error) => {
+                            tracing::warn!(%error, mode = ?panel.mode, "AI chat panel view build failed");
                             panel.error = Some(error.to_string());
                             cx.notify();
                         }
