@@ -59,6 +59,7 @@ use ssh::SshSessionManager;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use terminal::ReportedWorkingDir;
 use terminal::resolve_reported_working_dir;
 use terminal::terminal::{SshTerminalConfig, TerminalConnectionKind};
 use workspace_explorer::{
@@ -1435,13 +1436,13 @@ impl TerminalSidebar {
     /// 从终端 OSC 7 同步路径到文件管理器
     ///
     /// 检查 `sync_path_enabled` 且存在文件管理器面板时，导航到指定路径。
-    pub fn sync_file_manager_path(&mut self, path: String, cx: &mut Context<Self>) {
+    pub fn sync_file_manager_path(&mut self, reported: ReportedWorkingDir, cx: &mut Context<Self>) {
         if !self.sync_path_enabled {
             return;
         }
         if let Some(ref fm_panel) = self.file_manager_panel {
             fm_panel.update(cx, |panel, cx| {
-                panel.sync_navigate_to(path, cx);
+                panel.sync_navigate_to(reported, cx);
             });
         }
     }
@@ -1449,10 +1450,14 @@ impl TerminalSidebar {
     /// 设置文件管理器的初始工作目录（连接前调用）
     ///
     /// 当终端收到 OSC 7 但文件管理器尚未连接时，缓存路径供首次连接使用。
-    pub fn set_file_manager_initial_dir(&mut self, path: String, cx: &mut Context<Self>) {
+    pub fn set_file_manager_initial_dir(
+        &mut self,
+        reported: ReportedWorkingDir,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(ref fm_panel) = self.file_manager_panel {
             fm_panel.update(cx, |panel, _cx| {
-                panel.set_initial_working_dir(path);
+                panel.set_initial_working_dir(reported);
             });
         }
     }

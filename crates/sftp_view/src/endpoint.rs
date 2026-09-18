@@ -34,6 +34,7 @@ pub(crate) enum LeftEndpointValue {
 pub(crate) struct LeftEndpointItem {
     value: LeftEndpointValue,
     title: String,
+    subtitle: Option<String>,
     icon: IconName,
 }
 
@@ -42,6 +43,7 @@ impl LeftEndpointItem {
         Self {
             value: LeftEndpointValue::Local,
             title,
+            subtitle: None,
             icon: IconName::HardDrive,
         }
     }
@@ -50,7 +52,9 @@ impl LeftEndpointItem {
         let id = connection.id?;
         Some(Self {
             value: LeftEndpointValue::Remote(id),
-            title: connection_title(connection),
+            // 列表里不重复拼主机名，主机走行尾的副标题。
+            title: connection.name.clone(),
+            subtitle: connection_endpoint(connection),
             icon: connection.connection_type.icon(),
         })
     }
@@ -63,9 +67,20 @@ impl LeftEndpointItem {
         &self.title
     }
 
+    /// 副标题与终端文件面板的目标选择器一致：`user@host:port`。
+    pub(crate) fn subtitle(&self) -> Option<&str> {
+        self.subtitle.as_deref()
+    }
+
     pub(crate) fn icon(&self) -> IconName {
         self.icon.clone()
     }
+}
+
+/// `user@host:port`；连接记录不完整（参数取不到）时返回 `None`。
+fn connection_endpoint(connection: &StoredConnection) -> Option<String> {
+    let endpoint = connection_endpoint_label(connection);
+    (!endpoint.is_empty()).then_some(endpoint)
 }
 
 impl SelectItem for LeftEndpointItem {
@@ -360,3 +375,4 @@ use one_core::storage::{
     ConnectionRepository, ConnectionType, GlobalStorageState, SshAuthMethod, StoredConnection,
     traits::Repository,
 };
+use sftp_transfer::connection_endpoint_label;

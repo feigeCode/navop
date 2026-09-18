@@ -76,8 +76,8 @@ pub enum TerminalEvent {
     ClipboardStore(ClipboardType, String),
     /// 终端程序请求从剪贴板加载
     ClipboardLoad(ClipboardType),
-    /// 远程工作目录变更（OSC 7）
-    WorkingDirChanged(String),
+    /// 远程工作目录变更（OSC 7），带上报主机名
+    WorkingDirChanged(crate::osc::ReportedWorkingDir),
     /// 命令执行完毕（OSC 133;D）
     CommandFinished { exit_code: i32 },
     /// 记录 shell 实际执行过的命令
@@ -178,7 +178,7 @@ fn terminal_event_from_osc_event(event: OscEvent) -> TerminalEvent {
         OscEvent::InputStart => TerminalEvent::InputStart,
         OscEvent::CommandStart => TerminalEvent::CommandStart,
         OscEvent::CommandFinished { exit_code } => TerminalEvent::CommandFinished { exit_code },
-        OscEvent::WorkingDirChanged(path) => TerminalEvent::WorkingDirChanged(path),
+        OscEvent::WorkingDirChanged(reported) => TerminalEvent::WorkingDirChanged(reported),
         OscEvent::CommandRecorded(command) => TerminalEvent::CommandRecorded(command),
     }
 }
@@ -1529,7 +1529,8 @@ mod tests {
 
         assert!(matches!(
             events.first(),
-            Some(TerminalEvent::WorkingDirChanged(path)) if path == "/tmp/project"
+            Some(TerminalEvent::WorkingDirChanged(reported))
+                if reported.path == "/tmp/project" && reported.host.as_deref() == Some("host")
         ));
         assert!(matches!(
             events.get(1),
