@@ -564,6 +564,12 @@ pub struct AiChatSettings {
         deserialize_with = "deserialize_ai_request_timeout_secs"
     )]
     pub request_timeout_secs: u64,
+    #[serde(default)]
+    pub last_acp_agent_id: Option<String>,
+    #[serde(default)]
+    pub acp_models: HashMap<String, String>,
+    #[serde(default)]
+    pub last_workspace_root: Option<PathBuf>,
 }
 
 /// 自定义系统提示词的最大字符数（按 chars 计），防止拖垮上下文长度。
@@ -629,6 +635,9 @@ impl Default for AiChatSettings {
             max_iterations: default_agent_max_iterations(),
             custom_system_prompt: String::new(),
             request_timeout_secs: default_ai_request_timeout_secs(),
+            last_acp_agent_id: None,
+            acp_models: HashMap::new(),
+            last_workspace_root: None,
         }
     }
 }
@@ -1691,6 +1700,7 @@ impl AppSettings {
 mod tests {
     use gpui::px;
     use gpui_component::{Theme, ThemeMode};
+    use std::path::PathBuf;
 
     use super::{
         AiChatSettings, AiChatToolExecutionMode, AppSettings, ConnectionSortOrder, CustomFont,
@@ -2705,6 +2715,24 @@ mod tests {
             AiChatToolExecutionMode::ReadOnly,
             restored.ai_chat.tool_execution_mode
         );
+    }
+
+    #[test]
+    fn ai_chat_acp_workspace_selection_round_trip_is_preserved() {
+        let mut settings = AppSettings::default();
+        settings.ai_chat.last_acp_agent_id = Some("builtin.codex".to_string());
+        settings
+            .ai_chat
+            .acp_models
+            .insert("builtin.codex".to_string(), "gpt-5".to_string());
+        settings.ai_chat.last_workspace_root = Some(PathBuf::from("/tmp/project"));
+
+        let json = serde_json::to_string(&settings).expect("serialize AI ACP settings");
+        let restored: AppSettings = serde_json::from_str(&json).expect("deserialize AI ACP settings");
+
+        assert_eq!(settings.ai_chat.last_acp_agent_id, restored.ai_chat.last_acp_agent_id);
+        assert_eq!(settings.ai_chat.acp_models, restored.ai_chat.acp_models);
+        assert_eq!(settings.ai_chat.last_workspace_root, restored.ai_chat.last_workspace_root);
     }
 
     #[test]

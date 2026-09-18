@@ -51,6 +51,9 @@ pub mod action_id {
     pub const TABLE_PASTE: &str = "table.paste";
     pub const TABLE_SELECT_ALL: &str = "table.select_all";
     pub const TABLE_CANCEL: &str = "table.cancel";
+    pub const AI_CHAT_FIND: &str = "ai_chat.find";
+    pub const AI_CHAT_FIND_NEXT: &str = "ai_chat.find_next";
+    pub const AI_CHAT_FIND_PREVIOUS: &str = "ai_chat.find_previous";
 }
 
 pub fn shortcuts_for(cx: &App, action_id: &str, defaults: &[&str]) -> Vec<String> {
