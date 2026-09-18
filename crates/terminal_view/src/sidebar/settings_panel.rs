@@ -160,8 +160,6 @@ pub enum SettingsPanelEvent {
     VimScrollToArrowKeysChanged(bool),
     /// 选中文本高亮相同内容开关
     SelectionHighlightChanged(bool),
-    /// 提示符时间戳开关
-    ShowTimestampsChanged(bool),
     /// 路径同步开关变更
     SyncPathChanged(bool),
     /// 自定义高亮规则变更
@@ -214,8 +212,6 @@ pub struct SettingsPanel {
     vim_scroll_to_arrow_keys: bool,
     /// 选中文本高亮相同内容
     selection_highlight: bool,
-    /// 提示符时间戳
-    show_timestamps: bool,
     /// 路径与终端同步开关
     sync_path: bool,
     /// 全局自定义高亮规则
@@ -258,7 +254,6 @@ impl SettingsPanel {
         let scrollback_lines = AppSettings::global(cx).terminal_scrollback_lines;
         let auto_session_logging = AppSettings::global(cx).terminal_auto_session_logging;
         let selection_highlight = AppSettings::global(cx).terminal_selection_highlight;
-        let show_timestamps = AppSettings::global(cx).terminal_show_timestamps;
         let scrollback_lines_input_state = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder(AppSettings::DEFAULT_TERMINAL_SCROLLBACK_LINES.to_string())
@@ -429,7 +424,6 @@ impl SettingsPanel {
             sync_path,
             vim_scroll_to_arrow_keys,
             selection_highlight,
-            show_timestamps,
             custom_highlights: Vec::new(),
             has_file_manager,
             focus_handle: cx.focus_handle(),
@@ -1092,7 +1086,6 @@ impl SettingsPanel {
         let paste_image_upload = self.paste_image_upload;
         let vim_scroll_to_arrow_keys = self.vim_scroll_to_arrow_keys;
         let selection_highlight = self.selection_highlight;
-        let show_timestamps = self.show_timestamps;
 
         v_flex()
             .gap_3()
@@ -1282,23 +1275,6 @@ impl SettingsPanel {
                                     .on_click(cx.listener(|this, checked: &bool, _window, cx| {
                                         this.selection_highlight = *checked;
                                         cx.emit(SettingsPanelEvent::SelectionHighlightChanged(
-                                            *checked,
-                                        ));
-                                    })),
-                            ),
-                    )
-                    .child(
-                        h_flex()
-                            .items_center()
-                            .justify_between()
-                            .child(div().text_sm().child(t!("Settings.show_timestamps")))
-                            .child(
-                                Switch::new("show-timestamps-switch")
-                                    .checked(show_timestamps)
-                                    .small()
-                                    .on_click(cx.listener(|this, checked: &bool, _window, cx| {
-                                        this.show_timestamps = *checked;
-                                        cx.emit(SettingsPanelEvent::ShowTimestampsChanged(
                                             *checked,
                                         ));
                                     })),

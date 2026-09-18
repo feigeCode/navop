@@ -129,7 +129,7 @@ async fn live_ssh_runtime_injection_completes_without_remote_writes() -> Result<
         FilteredShellOutput, RuntimeShellIntegration, ShellIntegrationReady,
     };
 
-    let mut integration = RuntimeShellIntegration::new(shell_integration_requested, false);
+    let mut integration = RuntimeShellIntegration::new(shell_integration_requested);
     let mut saw_input_start = false;
     let mut injected = false;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);

@@ -524,8 +524,6 @@ pub struct SshBackendConnect {
     pub expect_username: String,
     pub expect_password: Option<String>,
     pub disable_shell_integration: bool,
-    /// 提示符时间戳（`AppSettings::terminal_show_timestamps`）
-    pub show_timestamps: bool,
 }
 
 type ExecResultSender = oneshot::Sender<Result<TerminalExecOutput, TerminalExecError>>;
@@ -782,7 +780,6 @@ impl SshBackend {
             expect_username,
             expect_password,
             disable_shell_integration,
-            show_timestamps,
         } = request;
         let login_expect = SshLoginExpect::new(
             &account_expect,
@@ -833,8 +830,7 @@ impl SshBackend {
             let mut osc_parser = OscStreamParser::default();
             let mut zmodem_detector = ZmodemDetector::default();
             let mut zmodem_probe_flush = None;
-            let mut shell_integration =
-                RuntimeShellIntegration::new(shell_integration_requested, show_timestamps);
+            let mut shell_integration = RuntimeShellIntegration::new(shell_integration_requested);
             let mut shell_integration_timeout = None;
             // 只有在握手态（输入被暂存）才需要看门狗；已可输入的会话不额外养定时器。
             let mut shell_integration_handshake =
@@ -2540,7 +2536,7 @@ mod tests {
         // 请求了运行时注入 → 启动即处于 WaitingForFirstOutput，输入被暂存，必须武装看门狗。
         // 反向条件（写成 accepts_terminal_input().then(..)）会让看门狗永不生效，
         // 而 release 测试只覆盖兜底函数本身，覆盖不到这处接线。
-        let integration = RuntimeShellIntegration::new(true, false);
+        let integration = RuntimeShellIntegration::new(true);
         assert!(!integration.accepts_terminal_input());
         assert!(
             arm_shell_integration_handshake_watchdog(&integration).is_some(),
@@ -2548,7 +2544,7 @@ mod tests {
         );
 
         // 未请求注入（裸终端）→ 输入从不被暂存，不该多养一个定时器。
-        let integration = RuntimeShellIntegration::new(false, false);
+        let integration = RuntimeShellIntegration::new(false);
         assert!(integration.accepts_terminal_input());
         assert!(arm_shell_integration_handshake_watchdog(&integration).is_none());
     }
@@ -2556,7 +2552,7 @@ mod tests {
     #[test]
     fn stalled_shell_integration_handshake_releases_deferred_input_once() {
         // 握手态会暂存用户输入；看门狗必须把它推回可输入态，且只生效一次。
-        let mut integration = RuntimeShellIntegration::new(true, false);
+        let mut integration = RuntimeShellIntegration::new(true);
         assert!(!integration.accepts_terminal_input());
 
         assert!(release_stalled_shell_integration_handshake(&mut integration));
@@ -2570,7 +2566,7 @@ mod tests {
         );
 
         // 未请求注入（纯裸终端）的会话不适用看门狗。
-        let mut integration = RuntimeShellIntegration::new(false, false);
+        let mut integration = RuntimeShellIntegration::new(false);
         assert!(!release_stalled_shell_integration_handshake(&mut integration));
         assert!(integration.accepts_terminal_input());
     }

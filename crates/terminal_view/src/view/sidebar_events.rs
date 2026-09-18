@@ -169,14 +169,6 @@ impl TerminalView {
                     settings.selection_highlight = enabled;
                 });
             }
-            // 提示符时间戳只由终端 crate 在会话启动时读取，直接落盘到 AppSettings，
-            // 无需经过 TerminalSettings（新会话生效）。
-            TerminalSidebarEvent::ShowTimestampsChanged(enabled) => {
-                let enabled = *enabled;
-                AppSettings::update_and_save(cx, move |settings| {
-                    settings.terminal_show_timestamps = enabled;
-                });
-            }
             TerminalSidebarEvent::ConfirmMultilinePasteChanged(enabled) => {
                 let enabled = *enabled;
                 let _ = update_settings(cx, move |settings| {
