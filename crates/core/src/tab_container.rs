@@ -5376,6 +5376,14 @@ mod tests {
     }
 
     #[test]
+    fn core_locales_only_use_rust_i18n_percent_placeholders() {
+        // rust-i18n 只替换 `%{name}`；写成 `{{name}}` 会原样渲染到界面上。
+        let locales = include_str!("../locales/core.yml");
+        assert!(!locales.contains("{{"), "locale files must use %{{name}} placeholders");
+        assert!(locales.contains(r#"zh-CN: "复制 \"%{label}\"""#));
+    }
+
+    #[test]
     fn tab_titles_expose_full_text_on_hover() {
         let source = include_str!("tab_container.rs");
         let tooltip_builder = ["Tool", "tip::new(tool", "tip_title.clone())"].concat();
