@@ -70,6 +70,12 @@ fn display_name(info: &agent_client_protocol::schema::Implementation) -> String 
 }
 
 /// 在独立临时目录跑一次 ACP 会话，返回 agent 身份与模型候选。
+///
+/// 这里**不**自行包一层 `tokio::time::timeout`：GPUI foreground executor 不是
+/// Tokio runtime，在其上创建 Tokio timer 会以 `there is no reactor running` panic；
+/// 而该连接 future 不是 `Send`，也无法整体 spawn 到 Tokio。超时改由
+/// `config.timeouts.connect`（见下）在 `connect_with_runtime` 内部完成——那里已经
+/// 用 `handle.enter()` 覆盖了 timer 的创建与轮询。
 #[cfg_attr(test, allow(dead_code))]
 pub async fn probe_agent(config: &AcpAgentConfig, handle: tokio::runtime::Handle) -> AcpAgentProbe {
     let Ok(cwd) = probe_directory() else {
@@ -82,25 +88,15 @@ pub async fn probe_agent(config: &AcpAgentConfig, handle: tokio::runtime::Handle
     probe_config.timeouts.connect = PROBE_TIMEOUT;
     probe_config.timeouts.authenticate = PROBE_TIMEOUT;
 
-    let attempt = tokio::time::timeout(
-        PROBE_TIMEOUT + Duration::from_secs(3),
-        AcpConnection::connect_with_runtime(&probe_config, cwd, handle),
-    )
-    .await;
-
-    match attempt {
-        Ok(Ok(AcpConnectOutcome::Ready(connection))) => probe_from_state(&connection.state()),
+    match AcpConnection::connect_with_runtime(&probe_config, cwd, handle).await {
+        Ok(AcpConnectOutcome::Ready(connection)) => probe_from_state(&connection.state()),
         // 需要登录也能证明命令确实是一个 ACP agent；模型留待真正连接后再取。
-        Ok(Ok(AcpConnectOutcome::AuthenticationRequired(pending))) => AcpAgentProbe {
+        Ok(AcpConnectOutcome::AuthenticationRequired(pending)) => AcpAgentProbe {
             auth_methods: pending.methods(),
             ..Default::default()
         },
-        Ok(Err(error)) => AcpAgentProbe {
+        Err(error) => AcpAgentProbe {
             error: Some(error.to_string()),
-            ..Default::default()
-        },
-        Err(_) => AcpAgentProbe {
-            error: Some("ACP agent probe timed out".to_string()),
             ..Default::default()
         },
     }
@@ -167,6 +163,74 @@ mod tests {
         assert_eq!(None, probe.name);
         assert_eq!(None, probe.version);
         assert!(probe.models.is_empty());
+    }
+
+    /// 回归：探测被 GPUI foreground executor await（不是 Tokio runtime），
+    /// 自行创建 Tokio timer 或在 Tokio 上 spawn 都会在运行期炸掉/编译不过。
+    #[test]
+    fn probe_creates_no_tokio_timer_outside_the_runtime() {
+        let source = include_str!("probe.rs").replace("\r\n", "\n");
+        let production = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("probe.rs should have production code");
+
+        assert!(
+            !production.contains("tokio::time::timeout("),
+            "probe 不能自行创建 Tokio timer：GPUI foreground executor 不是 Tokio runtime"
+        );
+        assert!(
+            !production.contains("handle.spawn"),
+            "ACP 连接 future 不是 Send，不能整体 spawn 到 Tokio"
+        );
+    }
+
+    /// 回归：在**非** Tokio 线程上驱动探测早先会 panic：
+    /// `there is no reactor running, must be called from the context of a Tokio 1.x runtime`。
+    /// 这里用一个不进入 runtime 的线程来 poll，复现 GPUI foreground executor 的处境。
+    #[test]
+    fn probe_survives_a_non_tokio_executor() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let config = AcpAgentConfig::new(
+            "probe-test",
+            "Probe Test",
+            "/nonexistent/navop-acp-probe-test",
+        );
+
+        let probe = block_on_without_reactor(probe_agent(&config, runtime.handle().clone()));
+
+        // 命令不存在时应返回可读错误，而不是 panic。
+        assert!(
+            probe.error.is_some(),
+            "missing binary should surface an error: {probe:?}"
+        );
+        assert!(!probe.identified());
+    }
+
+    /// 单线程驱动 future，且刻意不调用 `Handle::enter()`，
+    /// 因此任何 Tokio timer 创建都会 panic。
+    fn block_on_without_reactor<F: std::future::Future>(future: F) -> F::Output {
+        struct ThreadWaker(std::thread::Thread);
+        impl std::task::Wake for ThreadWaker {
+            fn wake(self: std::sync::Arc<Self>) {
+                self.0.unpark();
+            }
+            fn wake_by_ref(self: &std::sync::Arc<Self>) {
+                self.0.unpark();
+            }
+        }
+        let waker: std::task::Waker =
+            std::sync::Arc::new(ThreadWaker(std::thread::current())).into();
+        let mut context = std::task::Context::from_waker(&waker);
+        let mut future = std::pin::pin!(future);
+        loop {
+            match future.as_mut().poll(&mut context) {
+                std::task::Poll::Ready(output) => return output,
+                std::task::Poll::Pending => {
+                    std::thread::park_timeout(std::time::Duration::from_secs(10));
+                }
+            }
+        }
     }
 
     #[test]
