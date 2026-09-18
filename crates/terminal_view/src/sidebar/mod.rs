@@ -985,6 +985,7 @@ impl TerminalSidebar {
                     WorkspaceExplorerEvent::SyncTerminalCwd => {
                         cx.emit(TerminalSidebarEvent::SyncWorkingDir);
                     }
+                    WorkspaceExplorerEvent::RootChanged(_) => {}
                 },
             );
             subs.push(explorer_sub);

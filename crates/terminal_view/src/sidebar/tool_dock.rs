@@ -12,53 +12,17 @@ use gpui_component::{
     v_flex,
 };
 use one_assets::IconName;
-use one_core::layout::TOOLBAR_WIDTH;
+use one_core::dock::ToolDockLayout;
 use one_core::sidebar_contribution::SidebarPlacement;
 use one_ui::IconSize;
 use one_ui::{IconButton, PanelHeader};
 use rust_i18n::t;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct TerminalToolDockLayout {
-    pub(crate) left: Option<SidebarPanel>,
-    pub(crate) right: Option<SidebarPanel>,
-    pub(crate) bottom: Option<SidebarPanel>,
-}
+/// 终端侧栏的三边停靠布局。模型与几何与工作台外壳共用 [`one_core::dock`]。
+pub(crate) type TerminalToolDockLayout = ToolDockLayout<SidebarPanel>;
 
-impl TerminalToolDockLayout {
-    pub(crate) fn from_open_panels(
-        open_panels: impl IntoIterator<Item = (SidebarPanel, SidebarPlacement)>,
-    ) -> Self {
-        let mut layout = Self::default();
-        for (panel, placement) in open_panels {
-            match placement {
-                SidebarPlacement::Left => layout.left = Some(panel),
-                SidebarPlacement::Right => layout.right = Some(panel),
-                SidebarPlacement::Bottom => layout.bottom = Some(panel),
-            }
-        }
-        layout
-    }
-
-    pub(crate) fn has_right(&self) -> bool {
-        self.right.is_some()
-    }
-}
-
-pub(crate) fn right_tool_region_width(
-    layout: &TerminalToolDockLayout,
-    panel_size: Pixels,
-) -> Pixels {
-    if layout.has_right() {
-        panel_size + TOOLBAR_WIDTH
-    } else {
-        TOOLBAR_WIDTH
-    }
-}
-
-pub(crate) fn right_sidebar_width(outer_right: Pixels, mouse_x: Pixels) -> Pixels {
-    outer_right - TOOLBAR_WIDTH - mouse_x
-}
+pub(crate) use one_core::dock::dock_region_width as right_tool_region_width;
+pub(crate) use one_core::dock::right_sidebar_width;
 
 pub(crate) fn render_internal_tool_panel_frame(
     sidebar: Entity<TerminalSidebar>,
@@ -278,6 +242,7 @@ fn build_options_menu(
 mod tests {
     use super::*;
     use gpui::px;
+    use one_core::layout::TOOLBAR_WIDTH;
 
     #[test]
     fn layout_maps_open_panels_to_edges() {
