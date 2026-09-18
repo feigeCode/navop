@@ -10,11 +10,12 @@ pub enum ExplorerFramePlacement {
 }
 
 /// 工作区浏览器向宿主发出的框架事件。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WorkspaceExplorerEvent {
     Close,
     MoveTo(ExplorerFramePlacement),
     SyncTerminalCwd,
+    RootChanged(std::path::PathBuf),
 }
 
 impl EventEmitter<WorkspaceExplorerEvent> for WorkspaceExplorer {}

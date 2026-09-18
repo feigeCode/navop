@@ -11,17 +11,17 @@ pub struct GitRepository {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum GitBranchKind {
+pub enum GitBranchKind {
     Local,
     Remote,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct GitBranch {
-    pub(crate) name: String,
-    pub(crate) kind: GitBranchKind,
-    pub(crate) current: bool,
-    pub(crate) upstream: Option<String>,
+pub struct GitBranch {
+    pub name: String,
+    pub kind: GitBranchKind,
+    pub current: bool,
+    pub upstream: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,7 +55,7 @@ pub struct GitChange {
     pub staged: bool,
 }
 
-pub(crate) fn discover_repository(path: &Path) -> Result<Option<GitRepository>> {
+pub fn discover_repository(path: &Path) -> Result<Option<GitRepository>> {
     let output = run_git(path, ["rev-parse", "--show-toplevel"])?;
     if !output.status.success() {
         return Ok(None);
@@ -69,7 +69,47 @@ pub(crate) fn discover_repository(path: &Path) -> Result<Option<GitRepository>> 
     Ok(Some(GitRepository { root, branch }))
 }
 
-pub(crate) fn load_changes(repository: &GitRepository) -> Result<Vec<GitChange>> {
+pub fn create_worktree(repository: &GitRepository, project_root: &Path) -> Result<PathBuf> {
+    let relative_project = project_root
+        .strip_prefix(&repository.root)
+        .unwrap_or(Path::new(""));
+    let base = repository
+        .branch
+        .as_deref()
+        .filter(|branch| !branch.starts_with("detached@"))
+        .unwrap_or("HEAD");
+    let name = format!(
+        "{}-{}",
+        repository
+            .root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("project"),
+        &uuid::Uuid::new_v4().simple().to_string()[..8]
+    );
+    let root = dirs::home_dir()
+        .ok_or_else(|| anyhow!("Home directory is unavailable"))?
+        .join(".navop/worktrees")
+        .join(&name);
+    fs::create_dir_all(root.parent().expect("worktree root has parent"))?;
+    let output = run_git_vec(
+        &repository.root,
+        vec![
+            "worktree".to_string(),
+            "add".to_string(),
+            "-b".to_string(),
+            format!("navop/{name}"),
+            root.to_string_lossy().into_owned(),
+            base.to_string(),
+        ],
+    )?;
+    if !output.status.success() {
+        return Err(git_command_error("git worktree add", &output));
+    }
+    Ok(root.join(relative_project))
+}
+
+pub fn load_changes(repository: &GitRepository) -> Result<Vec<GitChange>> {
     let output = run_git(
         &repository.root,
         ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
@@ -80,13 +120,13 @@ pub(crate) fn load_changes(repository: &GitRepository) -> Result<Vec<GitChange>>
     parse_porcelain_v1_z(&output.stdout)
 }
 
-pub(crate) fn stage_change(repository: &GitRepository, change: &GitChange) -> Result<()> {
+pub fn stage_change(repository: &GitRepository, change: &GitChange) -> Result<()> {
     let mut args = vec!["add".to_string(), "-A".to_string(), "--".to_string()];
     append_change_path_args(&mut args, change);
     run_git_operation(repository, "git add", args)
 }
 
-pub(crate) fn unstage_change(repository: &GitRepository, change: &GitChange) -> Result<()> {
+pub fn unstage_change(repository: &GitRepository, change: &GitChange) -> Result<()> {
     let mut args = if repository_has_head(repository)? {
         vec![
             "reset".to_string(),
@@ -113,7 +153,7 @@ pub(crate) fn unstage_change(repository: &GitRepository, change: &GitChange) -> 
 /// paths are removed from the working tree after their index entries have been
 /// reset. Handling each rename path independently avoids `git restore`
 /// rejecting the new side of a rename because it does not exist in HEAD.
-pub(crate) fn discard_change(repository: &GitRepository, change: &GitChange) -> Result<()> {
+pub fn discard_change(repository: &GitRepository, change: &GitChange) -> Result<()> {
     if change.kind == GitChangeKind::Untracked {
         let path = repository.root.join(&change.path);
         remove_worktree_path(&path)?;
@@ -164,7 +204,7 @@ pub(crate) fn discard_change(repository: &GitRepository, change: &GitChange) -> 
     Ok(())
 }
 
-pub(crate) fn load_branches(repository: &GitRepository) -> Result<Vec<GitBranch>> {
+pub fn load_branches(repository: &GitRepository) -> Result<Vec<GitBranch>> {
     let output = run_git(
         &repository.root,
         [
@@ -181,7 +221,7 @@ pub(crate) fn load_branches(repository: &GitRepository) -> Result<Vec<GitBranch>
     parse_branches(&String::from_utf8_lossy(&output.stdout))
 }
 
-pub(crate) fn switch_branch(repository: &GitRepository, branch: &GitBranch) -> Result<()> {
+pub fn switch_branch(repository: &GitRepository, branch: &GitBranch) -> Result<()> {
     let args = match branch.kind {
         GitBranchKind::Local => vec!["switch".to_string(), branch.name.clone()],
         GitBranchKind::Remote => vec![
@@ -193,7 +233,7 @@ pub(crate) fn switch_branch(repository: &GitRepository, branch: &GitBranch) -> R
     run_git_operation(repository, "git switch", args)
 }
 
-pub(crate) fn create_branch(repository: &GitRepository, name: &str) -> Result<()> {
+pub fn create_branch(repository: &GitRepository, name: &str) -> Result<()> {
     validate_branch_name(repository, name)?;
     run_git_operation(
         repository,
@@ -202,7 +242,7 @@ pub(crate) fn create_branch(repository: &GitRepository, name: &str) -> Result<()
     )
 }
 
-pub(crate) fn rename_branch(
+pub fn rename_branch(
     repository: &GitRepository,
     old_name: &str,
     new_name: &str,
@@ -220,7 +260,7 @@ pub(crate) fn rename_branch(
     )
 }
 
-pub(crate) fn merge_branch(repository: &GitRepository, name: &str) -> Result<()> {
+pub fn merge_branch(repository: &GitRepository, name: &str) -> Result<()> {
     run_git_operation(
         repository,
         "git merge",
@@ -232,7 +272,7 @@ pub(crate) fn merge_branch(repository: &GitRepository, name: &str) -> Result<()>
     )
 }
 
-pub(crate) fn delete_branch(repository: &GitRepository, branch: &GitBranch) -> Result<()> {
+pub fn delete_branch(repository: &GitRepository, branch: &GitBranch) -> Result<()> {
     let args = match branch.kind {
         GitBranchKind::Local => vec!["branch".to_string(), "-d".to_string(), branch.name.clone()],
         GitBranchKind::Remote => {
@@ -251,7 +291,7 @@ pub(crate) fn delete_branch(repository: &GitRepository, branch: &GitBranch) -> R
     run_git_operation(repository, "git branch delete", args)
 }
 
-pub(crate) fn fetch_branches(repository: &GitRepository) -> Result<()> {
+pub fn fetch_branches(repository: &GitRepository) -> Result<()> {
     run_git_operation(
         repository,
         "git fetch",
@@ -262,7 +302,7 @@ pub(crate) fn fetch_branches(repository: &GitRepository) -> Result<()> {
     )
 }
 
-pub(crate) fn push_branch(repository: &GitRepository, branch: &GitBranch) -> Result<()> {
+pub fn push_branch(repository: &GitRepository, branch: &GitBranch) -> Result<()> {
     if branch.kind != GitBranchKind::Local {
         return Err(anyhow!("Only local branches can be pushed"));
     }
@@ -287,7 +327,7 @@ pub(crate) fn push_branch(repository: &GitRepository, branch: &GitBranch) -> Res
     run_git_operation(repository, "git push", args)
 }
 
-pub(crate) fn load_diff(repository: &GitRepository, change: &GitChange) -> Result<String> {
+pub fn load_diff(repository: &GitRepository, change: &GitChange) -> Result<String> {
     if change.kind == GitChangeKind::Untracked {
         return untracked_file_diff(repository, change);
     }

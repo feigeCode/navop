@@ -353,6 +353,10 @@ WorkspaceExplorer:
       zh-CN: 无法打开文档
       zh-HK: 無法打開文件
   tooltip:
+    create_worktree:
+      en: Create isolated worktree
+      zh-CN: 创建隔离工作区
+      zh-HK: 建立隔離工作區
     close_tab:
       en: Close tab
       zh-CN: 关闭标签页

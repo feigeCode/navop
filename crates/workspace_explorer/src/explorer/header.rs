@@ -6,7 +6,7 @@ use gpui::{
     prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    Icon, Sizable as _, Size, StyledExt as _,
+    Disableable as _, Icon, Sizable as _, Size, StyledExt as _,
     button::{Button, ButtonVariants as _},
     h_flex,
     menu::{DropdownMenu, PopupMenu, PopupMenuItem},
@@ -102,6 +102,12 @@ impl WorkspaceExplorer {
                         this.expanded.clear();
                         cx.notify();
                     })),
+            )
+            .child(
+                IconButton::new("workspace-create-worktree", IconName::GitBranch)
+                    .tooltip(t!("WorkspaceExplorer.tooltip.create_worktree").to_string())
+                    .when(self.repository.is_none(), |button| button.disabled(true))
+                    .on_click(cx.listener(|this, _, _, cx| this.create_worktree(cx))),
             )
             .when(self.show_frame_controls, |this| {
                 this.child(self.render_frame_options_button(cx))

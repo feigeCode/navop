@@ -2,41 +2,41 @@
 //! render the old and new file contents next to each other.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DiffLineKind {
+pub enum DiffLineKind {
     Context,
     Added,
     Removed,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct DiffLine {
-    pub(crate) number: usize,
-    pub(crate) text: String,
-    pub(crate) kind: DiffLineKind,
+pub struct DiffLine {
+    pub number: usize,
+    pub text: String,
+    pub kind: DiffLineKind,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct DiffRow {
-    pub(crate) left: Option<DiffLine>,
-    pub(crate) right: Option<DiffLine>,
+pub struct DiffRow {
+    pub left: Option<DiffLine>,
+    pub right: Option<DiffLine>,
 }
 
 #[derive(Clone, Debug, Default)]
-pub(crate) struct SideBySideDiff {
-    pub(crate) rows: Vec<DiffRow>,
-    pub(crate) old_line_count: usize,
-    pub(crate) new_line_count: usize,
+pub struct SideBySideDiff {
+    pub rows: Vec<DiffRow>,
+    pub old_line_count: usize,
+    pub new_line_count: usize,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct AlignedDiffSide {
-    pub(crate) text: String,
-    pub(crate) line_numbers: Vec<Option<usize>>,
-    pub(crate) changed: Vec<bool>,
-    pub(crate) placeholders: Vec<bool>,
+pub struct AlignedDiffSide {
+    pub text: String,
+    pub line_numbers: Vec<Option<usize>>,
+    pub changed: Vec<bool>,
+    pub placeholders: Vec<bool>,
 }
 
-pub(crate) fn parse_side_by_side(diff: &str) -> SideBySideDiff {
+pub fn parse_side_by_side(diff: &str) -> SideBySideDiff {
     let mut result = SideBySideDiff::default();
     let mut old_line = 0usize;
     let mut new_line = 0usize;
@@ -99,7 +99,7 @@ pub(crate) fn parse_side_by_side(diff: &str) -> SideBySideDiff {
     result
 }
 
-pub(crate) fn aligned_side_by_side(diff: &SideBySideDiff) -> (AlignedDiffSide, AlignedDiffSide) {
+pub fn aligned_side_by_side(diff: &SideBySideDiff) -> (AlignedDiffSide, AlignedDiffSide) {
     let mut left = AlignedDiffSide::default();
     let mut right = AlignedDiffSide::default();
 
@@ -117,7 +117,7 @@ pub(crate) fn aligned_side_by_side(diff: &SideBySideDiff) -> (AlignedDiffSide, A
 }
 
 /// Returns the aligned row index where each contiguous change block starts.
-pub(crate) fn change_starts(diff: &SideBySideDiff) -> Vec<usize> {
+pub fn change_starts(diff: &SideBySideDiff) -> Vec<usize> {
     let mut previous_changed = false;
     let mut starts = Vec::new();
 

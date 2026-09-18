@@ -30,7 +30,8 @@ impl WorkspaceEditor {
         );
     }
 
-    pub(crate) fn open_git_change(
+    /// 打开（或聚焦已打开的）某条 Git 变更的 diff 标签页。
+    pub fn open_diff(
         &mut self,
         request: GitDiffRequest,
         window: &mut Window,

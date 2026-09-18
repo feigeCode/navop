@@ -7,6 +7,7 @@ edition.workspace = true
 [dependencies]
 one-assets = { workspace = true }
 anyhow = { workspace = true }
+dirs = { workspace = true }
 gpui = { workspace = true }
 gpui-component = { workspace = true }
 one-ui.workspace = true
@@ -17,6 +18,7 @@ process-util = { workspace = true }
 remote_file_editor = { workspace = true }
 rust-i18n = { workspace = true }
 tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
