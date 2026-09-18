@@ -8,6 +8,7 @@ use extension_runtime::extension::{
 };
 use gpui::App;
 use std::collections::HashSet;
+use std::path::Path;
 use std::time::Duration;
 
 mod user_config;
@@ -23,20 +24,89 @@ pub fn init(cx: &mut App) {
 }
 
 fn acp_agent_entries_from_registry() -> anyhow::Result<Vec<AcpAgentEntry>> {
-    let Some(registry) = ExtensionRegistry::global() else {
-        return Ok(Vec::new());
-    };
-    let registry = registry
-        .read()
-        .map_err(|err| anyhow::anyhow!("extension registry lock poisoned: {err}"))?;
-    let root = registry.root_for(ExtensionKind::AcpAgent);
     let user_config = load_user_config()?;
-    let agents = AcpAgentExtensionProvider::load_agents_from_root(&root)?;
-    Ok(acp_agent_entries_from_agents(
-        &agents,
-        &user_config,
-        |name| std::env::var(name).ok(),
-    ))
+    let mut entries = ExtensionRegistry::global()
+        .map(|registry| {
+            let registry = registry
+                .read()
+                .map_err(|err| anyhow::anyhow!("extension registry lock poisoned: {err}"))?;
+            let root = registry.root_for(ExtensionKind::AcpAgent);
+            let agents = AcpAgentExtensionProvider::load_agents_from_root(&root)?;
+            Ok::<_, anyhow::Error>(acp_agent_entries_from_agents(
+                &agents,
+                &user_config,
+                |name| std::env::var(name).ok(),
+            ))
+        })
+        .transpose()?
+        .unwrap_or_default();
+    entries.extend(builtin_agent_entries(&user_config));
+    Ok(dedupe_agent_entries(entries))
+}
+
+fn builtin_agent_entries(config: &user_config::AcpUserConfig) -> Vec<AcpAgentEntry> {
+    [
+        ("builtin.claude", "Claude Code", "claude", vec!["--acp"]),
+        ("builtin.codex", "Codex CLI", "codex", vec!["--acp"]),
+        ("builtin.gemini", "Gemini CLI", "gemini", vec!["--acp"]),
+        ("builtin.opencode", "OpenCode", "opencode", vec!["acp"]),
+        ("builtin.copilot", "GitHub Copilot", "copilot", vec!["--acp"]),
+    ]
+    .into_iter()
+    .filter_map(|(id, name, command, args)| {
+        command_on_path(command).then(|| {
+            let mut agent = AcpAgentConfig::new(id, name, command)
+                .with_args(args.into_iter().map(String::from).collect());
+            if let Some(override_config) = config.agents.get(id) {
+                match resolve_override(override_config, |name| std::env::var(name).ok()) {
+                    Ok(resolved) => apply_user_override(&mut agent, resolved),
+                    Err(error) => {
+                        return AcpAgentEntry::invalid(
+                            id,
+                            name,
+                            AcpConfigDiagnostic::new(error.to_string()),
+                        );
+                    }
+                }
+            }
+            AcpAgentEntry::ready(agent)
+        })
+    })
+    .collect()
+}
+
+fn command_on_path(command: &str) -> bool {
+    let path = Path::new(command);
+    if path.is_absolute() {
+        return path.is_file();
+    }
+    let mut paths = std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+        .unwrap_or_default();
+    if cfg!(target_os = "macos") {
+        paths.extend([
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/opt/homebrew/sbin",
+            "/usr/local/sbin",
+        ].into_iter().map(Path::new).map(Path::to_path_buf));
+    }
+    paths.into_iter().any(|dir| dir.join(command).is_file())
+}
+
+fn dedupe_agent_entries(entries: Vec<AcpAgentEntry>) -> Vec<AcpAgentEntry> {
+    let mut used = HashSet::new();
+    entries
+        .into_iter()
+        .map(|mut entry| {
+            let id = unique_id(entry.id.to_string(), &mut used);
+            entry.id = id.clone().into();
+            if let Some(config) = &mut entry.config {
+                config.id = id.into();
+            }
+            entry
+        })
+        .collect()
 }
 
 fn acp_agent_entries_from_agents(

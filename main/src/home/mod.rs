@@ -1,3 +1,4 @@
+pub(crate) mod ai_workbench;
 pub(crate) mod connection_import_actions;
 mod connection_import_database_conversion;
 pub(crate) mod connection_import_draft;
