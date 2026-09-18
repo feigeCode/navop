@@ -3,8 +3,8 @@ use std::rc::Rc;
 use anyhow::Result;
 use db::ColumnInfo;
 use gpui::{
-    App, AppContext, Context, Entity, EventEmitter, IntoElement, Render, Styled as _, Subscription,
-    Task, Window,
+    App, AppContext, Context, Entity, EventEmitter, InteractiveElement as _, IntoElement,
+    KeyDownEvent, ParentElement as _, Render, Styled as _, Subscription, Task, Window, div,
 };
 use gpui_component::input::{CompletionProvider, Editor, EditorState, InputEvent};
 use gpui_component::{ActiveTheme, Rope, RopeExt};
@@ -885,7 +885,17 @@ impl EventEmitter<FilterEditorEvent> for SimpleCodeEditor {}
 
 impl Render for SimpleCodeEditor {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        Editor::new(&self.editor).bg(cx.theme().background).size_full()
+        div()
+            .size_full()
+            // Enter 提交后平台仍会把 key_char（macOS 上是 "\n"）塞进输入框：keymap 动作
+            // 分发早于 key_down 监听，`submit_on_enter` 只保证编辑态不自己插换行，随后那次
+            // 平台文本插入要在这里消费掉，单行语义才完整（Shift+Enter 仍保留换行）。
+            .on_key_down(|event: &KeyDownEvent, _, cx| {
+                if event.keystroke.key == "enter" && !event.keystroke.modifiers.shift {
+                    cx.stop_propagation();
+                }
+            })
+            .child(Editor::new(&self.editor).bg(cx.theme().background).size_full())
     }
 }
 
@@ -897,6 +907,10 @@ pub fn create_simple_editor(
         let editor = EditorState::new(window, cx)
             .language("sql")
             .line_number(false)
+            // 过滤条件按单行语义使用：Enter 直接查询，Shift+Enter 才换行。
+            // `EditorState` 恒为多行（`EditorMode::MULTI_LINE`），旧版 `InputState`
+            // 的 `.multi_line(false)` 已无对应 API，用 `submit_on_enter` 等价表达。
+            .submit_on_enter(true)
             .clean_on_escape();
         editor
     });
@@ -1028,6 +1042,9 @@ impl EventEmitter<FilterEditorEvent> for TableFilterEditor {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::{Focusable as _, TestAppContext, VisualTestContext, WindowOptions};
+    use gpui_component::Root;
+    use std::cell::Cell;
 
     fn sample_schema() -> TableSchema {
         TableSchema {
@@ -1116,5 +1133,59 @@ mod tests {
     fn suggests_between_end_value_after_and() {
         let labels = labels_for("age BETWEEN 1 AND ", "");
         assert_eq!(labels.first().map(String::as_str), Some("0"));
+    }
+
+    /// 回归：过滤条按单行语义使用，Enter 应直接查询。
+    ///
+    /// 外部化 gpui-component 时 `InputState.multi_line(false)` 被换成恒为
+    /// 多行的 `EditorState`，Enter 变成插入换行（查询仍会发，但输入框被撑成两行）。
+    #[gpui::test]
+    fn enter_applies_the_filter_without_inserting_a_newline(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+
+        let (window, editor) = cx.update(|cx| {
+            let mut editor = None;
+            let window = cx
+                .open_window(WindowOptions::default(), |window, cx| {
+                    let entity = cx.new(|cx| create_simple_editor(window, cx));
+                    editor = Some(entity.clone());
+                    cx.new(|cx| Root::new(entity, window, cx))
+                })
+                .expect("open filter editor test window");
+            (window, editor.expect("filter editor"))
+        });
+
+        let applied = Rc::new(Cell::new(0usize));
+        let sink = applied.clone();
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.update(|_window, cx| {
+            cx.subscribe(&editor, move |_, _: &FilterEditorEvent, _| {
+                sink.set(sink.get() + 1);
+            })
+            .detach();
+        });
+
+        let input = editor.read_with(&cx, |editor, _| editor.editor.clone());
+        let focus_handle = cx.read(|cx| input.read(cx).focus_handle(cx));
+        cx.update(|window, cx| window.focus(&focus_handle, cx));
+
+        cx.simulate_input("age > 18");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+
+        assert_eq!(
+            "age > 18",
+            cx.read(|cx| editor.read(cx).get_text_from_app(cx)),
+            "回车应按单行语义直接查询，而不是在输入框里插入换行"
+        );
+        assert!(applied.get() >= 1, "回车应触发一次查询");
+
+        cx.simulate_keystrokes("shift-enter");
+        cx.run_until_parked();
+        assert_eq!(
+            "age > 18\n",
+            cx.read(|cx| editor.read(cx).get_text_from_app(cx)),
+            "Shift+Enter 应保留换行"
+        );
     }
 }
