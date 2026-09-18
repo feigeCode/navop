@@ -33,6 +33,7 @@ impl AgentChatView {
         }
         self.invalidate_acp_operation();
         self.reset_acp_permission_session(cx);
+        self.cancel_acp_auto_reconnect();
         self.acp_turn_owner = None;
         self.clear_acp_sessions();
         self.acp = None;
@@ -59,6 +60,9 @@ impl AgentChatView {
     }
 
     pub(super) fn select_acp_backend(&mut self, id: SharedString, cx: &mut Context<Self>) {
+        // 用户主动选择后端：重新给自动重连一次完整预算。
+        self.invalidate_acp_reconnect_schedule();
+        self.acp_reconnect.attempts = 0;
         let Some((operation, permission_provider)) = self.prepare_acp_connect(id, cx) else {
             return;
         };
@@ -148,6 +152,8 @@ impl AgentChatView {
         self.current_acp_id = Some(config.id.clone());
         // 换 agent 时丢弃上一个 agent 的连接前选择，并对新 agent 立刻展示探测到的模型。
         self.pending_acp_model = None;
+        // 已有新连接在飞：取消任何待触发的自动重连，避免并发拉起两个进程。
+        self.invalidate_acp_reconnect_schedule();
         let connected_agent_id = config.id.clone();
         self.apply_probe_model_options(&connected_agent_id, cx);
         self.acp_turn_owner = None;
@@ -385,8 +391,13 @@ impl AgentChatView {
         self.acp_turn_owner = None;
         self.acp_session_transition = None;
         self.backend = Backend::Acp;
-        self.current_acp_id = Some(agent_id);
+        self.current_acp_id = Some(agent_id.clone());
         self.acp_connect_origin_session = None;
+        // 连接健康：清空上一轮的重连预算，并开始空闲健康检查。
+        self.acp_reconnect.attempts = 0;
+        self.acp_reconnect.scheduled = false;
+        #[cfg(not(test))]
+        self.spawn_acp_health(agent_id, cx);
         if let Some(transcript) = self.transcript_for_open_session_mut(&origin_session_uid) {
             transcript.clear_acp_status();
         }

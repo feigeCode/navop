@@ -75,6 +75,14 @@ AgentUi:
     en: "Required environment variables: %{names}"
     zh-CN: "需要环境变量：%{names}"
     zh-HK: "需要環境變數：%{names}"
+  acp_reconnecting:
+    en: "ACP agent disconnected, reconnecting (%{attempt}/%{max})…"
+    zh-CN: "ACP Agent 已断开，正在重连（%{attempt}/%{max}）…"
+    zh-HK: "ACP Agent 已中斷，正在重新連線（%{attempt}/%{max}）…"
+  acp_reconnect_exhausted:
+    en: ACP agent disconnected and could not be reconnected
+    zh-CN: ACP Agent 已断开，且无法自动重连
+    zh-HK: ACP Agent 已中斷，且無法自動重新連線
   acp_responding:
     en: "%{name} is responding…"
     zh-CN: "%{name} 正在响应…"
