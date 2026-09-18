@@ -8018,6 +8018,7 @@ dependencies = [
  "uuid",
  "windows 0.62.2",
  "winresource",
+ "workspace_explorer",
  "x11rb",
  "zed-font-kit 0.14.1-zed (git+https://github.com/zed-industries/font-kit?rev=110523127440aefb11ce0cf280ae7c5071337ec5)",
  "zeroize",
@@ -17122,6 +17123,7 @@ name = "workspace_explorer"
 version = "0.15.2"
 dependencies = [
  "anyhow",
+ "dirs 6.0.0",
  "gpui-component",
  "gpui-pre",
  "ignore",
@@ -17133,6 +17135,7 @@ dependencies = [
  "remote_file_editor",
  "rust-i18n",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
