@@ -96,13 +96,37 @@ pub(crate) struct CardShell {
     pub actions: Vec<Button>,
 }
 
-/// 渲染卡片外壳（虚线饰线 + 实体卡片）。
-/// `on_card_click` 存在时整卡可点（调用方构造 listener）。
-pub(crate) fn render_card_shell(
+/// 渲染不可点击的卡片外壳（已安装页）。`card_id` 必须由数据推导且跨帧稳定。
+pub(crate) fn card_shell(shell: CardShell, card_id: String, cx: &App) -> gpui::AnyElement {
+    wrap_with_dashed_rule(build_card(shell, cx).id(card_id), cx)
+}
+
+/// 渲染整卡可点的卡片外壳（市场页：点卡片打开详情弹窗）。
+pub(crate) fn clickable_card_shell(
     shell: CardShell,
-    on_card_click: Option<impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static>,
+    card_id: String,
+    on_card_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
     cx: &App,
 ) -> gpui::AnyElement {
+    wrap_with_dashed_rule(
+        build_card(shell, cx)
+            .id(card_id)
+            .on_click(on_card_click)
+            .cursor_pointer(),
+        cx,
+    )
+}
+
+fn wrap_with_dashed_rule(card: impl IntoElement, cx: &App) -> gpui::AnyElement {
+    v_flex()
+        .w_full()
+        .gap_1()
+        .child(dashed_rule(cx))
+        .child(card)
+        .into_any_element()
+}
+
+fn build_card(shell: CardShell, cx: &App) -> gpui::Div {
     let CardShell {
         icon,
         kind,
@@ -120,7 +144,7 @@ pub(crate) fn render_card_shell(
     // hover 用边框+底色高亮：阴影模糊层的进出会触发大面积重绘，扫过卡片时明显迟滞。
     let hover_border = cx.theme().primary.opacity(0.45);
     let hover_bg = cx.theme().list_hover;
-    let card = v_flex()
+    v_flex()
         .min_h(rems(9.75))
         .gap_3()
         .p_4()
@@ -138,21 +162,7 @@ pub(crate) fn render_card_shell(
                 .line_clamp(2)
                 .child(description),
         )
-        .child(card_footer(vec![tag], actions));
-    let card = match on_card_click {
-        Some(on_click) => card
-            .id(format!("ext-card-{name}"))
-            .on_click(on_click)
-            .cursor_pointer()
-            .into_any_element(),
-        None => card.into_any_element(),
-    };
-    v_flex()
-        .w_full()
-        .gap_1()
-        .child(dashed_rule(cx))
-        .child(card)
-        .into_any_element()
+        .child(card_footer(vec![tag], actions))
 }
 
 fn dashed_rule(cx: &App) -> impl IntoElement {

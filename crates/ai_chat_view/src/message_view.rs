@@ -16,7 +16,10 @@ use gpui::{
     AnyElement, App, Div, InteractiveElement, IntoElement, ParentElement, ScrollHandle,
     SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
-use gpui_component::{ActiveTheme, Icon, Sizable, Size, clipboard::Clipboard, h_flex, scroll::Scrollbar, spinner::Spinner, v_flex};
+use gpui_component::{
+    ActiveTheme, Icon, Sizable, Size, clipboard::Clipboard, h_flex, scroll::Scrollbar,
+    spinner::Spinner, v_flex,
+};
 use one_assets::IconName;
 use rust_i18n::t;
 

@@ -41,12 +41,25 @@ pub struct ResolvedTreeRoot {
     pub children: Option<extension_runtime::extension::manifest::ResourceWorkbenchTreeChildren>,
 }
 
-/// 导航树子节点数据:一次 lazy 拉取的行数据快照。
+/// 导航树的子行:lazy 拉取的 provider 行与静态功能子项归一到同一形态。
+///
+/// 归一放在这里而不是渲染期,是为了让"点击/高亮/展开键"三条逻辑只认一种行,
+/// 不必每处都分叉成 remote/static 两支 —— 分叉漏一支不会报错,只会让某一类
+/// 节点点不动或高亮错人。
 #[derive(Debug, Clone)]
 pub struct TreeChildRow {
+    /// 同一层内稳定的行键(静态项用 item id)。
     pub key: String,
     pub label: String,
+    /// 该行自身的行数据。静态项没有 provider 行,用 `{"id": <item id>}` 作稳定
+    /// 元数据 —— 它只用于身份与高亮,不冒充领域行,因此 `source: parent` 取的是
+    /// **父节点**的领域行而不是它。
     pub value: serde_json::Value,
+    /// 点击该行的跳转声明。远程形态来自集合级 `open`(所有行共用一份),
+    /// 静态项来自 item 自身(每项都可以指向不同的功能页)。
+    pub open: Option<extension_runtime::extension::manifest::ResourceWorkbenchOpen>,
+    /// 该行展开后的子节点声明。静态形态与远程形态在这里又分成两支。
+    pub children: Option<extension_runtime::extension::manifest::ResourceWorkbenchTreeChildren>,
 }
 
 #[derive(Debug, Clone)]

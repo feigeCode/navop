@@ -1,7 +1,74 @@
 use super::*;
+use one_core::storage::models::SshAuthMethod;
+use ssh::SshAuth;
+use terminal::terminal::SshTerminalConfig;
 
 const MAX_PENDING_TERMINAL_SEARCH_RUNS: usize = 64;
 const MAX_PENDING_TERMINAL_SEARCH_REQUESTS: usize = 256;
+
+/// “保存为连接”时用于补全临时连接的目标信息与运行时凭据。
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RuntimeSshTarget {
+    host: String,
+    port: u16,
+    username: String,
+    password: Option<String>,
+}
+
+/// 从终端的运行时会话配置中取出目标信息与运行时输入的凭据。
+///
+/// 临时连接在提交凭据后会把运行时配置写回 `Terminal::ssh_config`，
+/// 这里的密码只应存在于内存中，用于预填保存表单并写入凭据库。
+fn runtime_ssh_target(ssh_config: Option<&SshTerminalConfig>) -> Option<RuntimeSshTarget> {
+    let runtime = ssh_config?;
+    let password = match &runtime.ssh_config.auth {
+        SshAuth::Password(password) => Some(password.clone()).filter(|value| !value.is_empty()),
+        _ => None,
+    };
+    Some(RuntimeSshTarget {
+        host: runtime.ssh_config.host.clone(),
+        port: runtime.ssh_config.port,
+        username: runtime.ssh_config.username.clone(),
+        password,
+    })
+}
+
+/// 把运行时目标信息与凭据合并进临时连接，得到可直接交给保存表单的连接。
+///
+/// 临时连接默认每次连接都要求输入用户名 / 密码，这里已经有运行时值，
+/// 因此清空对应的 `prompt_*` 标记，让保存表单默认勾选“保存用户名 / 密码”。
+fn temporary_connection_with_runtime_target(
+    connection: &StoredConnection,
+    target: &RuntimeSshTarget,
+) -> StoredConnection {
+    let Ok(mut params) = connection.to_ssh_params() else {
+        return connection.clone();
+    };
+
+    if !target.host.is_empty() {
+        params.host = target.host.clone();
+        params.port = target.port;
+    }
+    if !target.username.is_empty() {
+        params.username = target.username.clone();
+        params.prompt_username = None;
+    }
+    if let Some(password) = target.password.as_deref() {
+        params.auth_method = SshAuthMethod::Password {
+            password: password.to_string(),
+        };
+        params.prompt_password = None;
+    }
+
+    // 名称交给 `new_ssh` 生成，避免带上临时连接的 “(temporary)” 后缀。
+    let mut merged = StoredConnection::new_ssh(String::new(), params, connection.workspace_id);
+    merged.remark = connection.remark.clone();
+    merged.sync_enabled = connection.sync_enabled;
+    merged.team_id = connection.team_id.clone();
+    merged.owner_id = connection.owner_id.clone();
+    merged.preferred_open_mode = connection.preferred_open_mode;
+    merged
+}
 
 struct TerminalSearchCompletion {
     generation: u64,
@@ -89,6 +156,37 @@ impl TerminalView {
         self.apply_theme(&theme, window, cx);
     }
 
+    /// 构造“保存为连接”所需的连接信息。
+    ///
+    /// 返回 `None` 表示当前终端不是临时连接（已有数据库记录）。
+    fn temporary_connection_for_save(&self, cx: &Context<Self>) -> Option<StoredConnection> {
+        let connection = self.sidebar.read(cx).temporary_connection()?;
+        let ssh_config = self.terminal.read(cx).ssh_config().cloned();
+        Some(match runtime_ssh_target(ssh_config.as_ref()) {
+            Some(target) => temporary_connection_with_runtime_target(&connection, &target),
+            None => connection,
+        })
+    }
+
+    /// SSH 凭据就绪后补建文件管理器 / 服务器监控面板。
+    ///
+    /// 需要运行时输入凭据的 SSH 连接在构造时拿不到 `SshSessionManager`，
+    /// 这两个面板只能等凭据提交后再创建。
+    pub(super) fn ensure_ssh_tool_panels(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.ssh_tool_panels_pending {
+            return;
+        }
+        let Some(session_manager) = self.terminal.read(cx).ssh_session_manager().cloned() else {
+            return;
+        };
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.install_ssh_tool_panels(session_manager, window, cx);
+        });
+        if self.sidebar.read(cx).ssh_tool_panels_ready() {
+            self.ssh_tool_panels_pending = false;
+        }
+    }
+
     /// 处理侧边栏事件
     pub(super) fn handle_sidebar_event(
         &mut self,
@@ -169,6 +267,18 @@ impl TerminalView {
                     settings.selection_highlight = enabled;
                 });
             }
+            TerminalSidebarEvent::ShowLineTimestampsChanged(enabled) => {
+                let enabled = *enabled;
+                let _ = update_settings(cx, move |settings| {
+                    settings.show_line_timestamps = enabled;
+                });
+            }
+            TerminalSidebarEvent::ShowLineNumbersChanged(enabled) => {
+                let enabled = *enabled;
+                let _ = update_settings(cx, move |settings| {
+                    settings.show_line_numbers = enabled;
+                });
+            }
             TerminalSidebarEvent::ConfirmMultilinePasteChanged(enabled) => {
                 let enabled = *enabled;
                 let _ = update_settings(cx, move |settings| {
@@ -223,20 +333,27 @@ impl TerminalView {
             TerminalSidebarEvent::OpenSftp(connection) => {
                 cx.emit(TerminalPaneEvent::OpenSftp(connection.clone()));
             }
+            TerminalSidebarEvent::SaveAsConnection => {
+                if let Some(connection) = self.temporary_connection_for_save(cx) {
+                    cx.emit(TerminalPaneEvent::SaveAsConnection(connection));
+                }
+            }
             TerminalSidebarEvent::CdToTerminal(path) => {
                 // 向终端发送 cd 命令并回车
                 let cmd = format!("cd {}\n", shell_escape(path));
                 self.write_to_pty(cmd.into_bytes(), cx);
             }
             TerminalSidebarEvent::SyncWorkingDir => {
-                if let Some(path) = self
+                // 手动同步同样要带上上报主机名：跨主机时面板需要拒收路径，
+                // 而不是把别台机器的目录套到当前远程会话上。
+                if let Some(reported) = self
                     .terminal
                     .read(cx)
-                    .current_working_dir()
-                    .map(str::to_string)
+                    .reported_working_dir()
+                    .cloned()
                 {
                     self.sidebar.update(cx, |sidebar, cx| {
-                        sidebar.sync_file_manager_path(path, cx);
+                        sidebar.sync_file_manager_path(reported, cx);
                     });
                 }
             }
@@ -400,5 +517,83 @@ impl TerminalView {
     /// 内部搜索：向后搜索
     pub(super) fn search_backward_internal(&mut self, cx: &mut Context<Self>) {
         self.enqueue_terminal_search(TerminalSearchDirection::Backward, cx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RuntimeSshTarget, temporary_connection_with_runtime_target};
+    use one_core::storage::StoredConnection;
+    use one_core::storage::models::{SshAuthMethod, SshParams};
+
+    /// 与主页快速连接生成的临时连接保持一致：默认每次连接都输入用户名 / 密码。
+    fn temporary_ssh_connection() -> StoredConnection {
+        let params: SshParams = serde_json::from_value(serde_json::json!({
+            "host": "example.com",
+            "port": 22,
+            "username": "",
+            "auth_method": { "Password": { "password": "" } },
+            "prompt_username": true,
+            "prompt_password": true,
+        }))
+        .expect("临时连接的参数 JSON 应可解析");
+        StoredConnection::new_ssh("SSH example.com (temporary)".to_string(), params, None)
+    }
+
+    fn runtime_target() -> RuntimeSshTarget {
+        RuntimeSshTarget {
+            host: "10.0.0.5".to_string(),
+            port: 2222,
+            username: "alice".to_string(),
+            password: Some("s3cret".to_string()),
+        }
+    }
+
+    #[test]
+    fn runtime_credentials_replace_temporary_prompts() {
+        let merged = temporary_connection_with_runtime_target(
+            &temporary_ssh_connection(),
+            &runtime_target(),
+        );
+        let params = merged.to_ssh_params().expect("合并后的参数应可解析");
+
+        assert_eq!("10.0.0.5", params.host);
+        assert_eq!(2222, params.port);
+        assert_eq!("alice", params.username);
+        match &params.auth_method {
+            SshAuthMethod::Password { password } => assert_eq!("s3cret", password),
+            other => panic!("运行时凭据应合并为密码认证，实际为 {other:?}"),
+        }
+        // 运行时已有值，保存表单应默认勾选保存用户名 / 密码。
+        assert!(!params.prompts_for_username());
+        assert!(!params.prompts_for_password());
+        // 新连接没有数据库 ID，名称也不带临时标记。
+        assert_eq!(None, merged.id);
+        assert_eq!("alice@10.0.0.5:2222", merged.name);
+    }
+
+    #[test]
+    fn missing_runtime_password_keeps_password_prompt() {
+        let target = RuntimeSshTarget {
+            password: None,
+            ..runtime_target()
+        };
+        let merged = temporary_connection_with_runtime_target(&temporary_ssh_connection(), &target);
+        let params = merged.to_ssh_params().expect("合并后的参数应可解析");
+
+        assert_eq!("alice", params.username);
+        assert!(!params.prompts_for_username());
+        // 没有拿到运行时密码，仍保留每次输入密码的行为。
+        assert!(params.prompts_for_password());
+    }
+
+    #[test]
+    fn unparsable_params_are_left_untouched() {
+        let mut connection = temporary_ssh_connection();
+        connection.params = "{not json".to_string();
+
+        let merged = temporary_connection_with_runtime_target(&connection, &runtime_target());
+
+        assert_eq!("{not json", merged.params);
     }
 }

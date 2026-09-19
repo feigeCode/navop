@@ -6,16 +6,16 @@ workspace manifest:
 
 ```text
 https://github.com/feigeCode/gpui-component.git
-rev e6459613910143b817eecbacc8767976e86cac84
+rev 6df86ef82b4b5f3b04723c0d1cf82ff57cdc7078
 ```
 
 The checkout belongs to `https://github.com/feigeCode/gpui-component` and the
-Navop compatibility branch is `navop-gpui-ce`. It is based on the
-`gpui-ce/gpui-component` adaptation and pins GPUI to:
+Navop compatibility branch is `navop-gpui-ce`. It is based on the upstream
+`gpui-component` adaptation and pins GPUI to:
 
 ```text
-https://github.com/feigeCode/gpui-ce.git
-c13e489375c7cd93838bdabef0213771bc2fe456
+https://github.com/feigeCode/gpui-pre.git
+tag fork-0.3.108
 ```
 
 ## Ownership Boundary

@@ -69,6 +69,7 @@ impl HomePage {
         let mut page = Self {
             focus_handle: cx.focus_handle(),
             selected_filter: ConnectionFilter::All,
+            connection_type_filter: Default::default(),
             connection_layout: AppSettings::current(cx).home_connection_layout.into(),
             sidebar_collapsed: false,
             collapsed_groups: HashSet::new(),

@@ -1,7 +1,6 @@
 use gpui::{
-    App, AppContext, ClickEvent, Context, Entity, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, ParentElement, Render, Styled, Window, div,
-    prelude::FluentBuilder, px,
+    App, AppContext, ClickEvent, Context, Entity, FocusHandle, Focusable, InteractiveElement,
+    IntoElement, ParentElement, Render, Styled, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
     ActiveTheme, VirtualListScrollHandle,

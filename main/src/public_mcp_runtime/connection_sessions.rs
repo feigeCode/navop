@@ -1,4 +1,4 @@
-use crate::{app_init::resolve_navop_window, onetcli_app::GlobalHomePage};
+use crate::{app_init::resolve_navop_window, navop_app::GlobalHomePage};
 use gpui::{App, AsyncApp};
 use gpui_component::WindowExt;
 use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 use tool_runtime::{ToolError, ToolFuture, ToolResult};
 
-use onetcli_runtime::connections::{
+use navop_runtime::connections::{
     ConnectionSaveEvent, ConnectionSaveNotifier, ConnectionSaveNotifyFuture,
 };
 
@@ -35,7 +35,7 @@ struct GpuiConnectionSaveNotifier {
 pub(super) fn connection_session_opener(
     cx: &mut App,
     open_mode: TabOpenMode,
-) -> Arc<dyn onetcli_runtime::connections::ConnectionSessionOpener> {
+) -> Arc<dyn navop_runtime::connections::ConnectionSessionOpener> {
     let (tx, mut rx) = mpsc::unbounded_channel::<OpenConnectionRequest>();
     cx.spawn(async move |cx: &mut AsyncApp| {
         while let Some(request) = rx.recv().await {
@@ -62,7 +62,7 @@ pub(super) fn connection_save_notifier(cx: &mut App) -> Arc<dyn ConnectionSaveNo
     Arc::new(GpuiConnectionSaveNotifier { requests: tx })
 }
 
-impl onetcli_runtime::connections::ConnectionSessionOpener for GpuiConnectionSessionOpener {
+impl navop_runtime::connections::ConnectionSessionOpener for GpuiConnectionSessionOpener {
     fn open_session(&self, connection: StoredConnection) -> ToolFuture {
         let requests = self.requests.clone();
         Box::pin(async move {

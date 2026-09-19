@@ -35,6 +35,7 @@ pub(super) fn ssh_connection(id: i64) -> StoredConnection {
     StoredConnection::new_ssh(
         "SSH".to_string(),
         SshParams {
+                remote_file: None,
             sftp_default_directory: None,
             disabled_jump_server: None,
             sftp_account: None,

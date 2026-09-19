@@ -353,10 +353,7 @@ fn remote_conflict_display(
     }
 }
 
-fn connection_record_display(
-    connection: &StoredConnection,
-    cx: &App,
-) -> PersonalSyncRecordDisplay {
+fn connection_record_display(connection: &StoredConnection, cx: &App) -> PersonalSyncRecordDisplay {
     PersonalSyncRecordDisplay {
         name: fallback_name(
             &connection.name,

@@ -555,10 +555,26 @@ pub struct AiChatSettings {
     /// 空串表示不追加；旧配置缺少该字段时按空串回落。
     #[serde(default)]
     pub custom_system_prompt: String,
+    /// 模型请求空闲超时（秒）。
+    ///
+    /// 仅在某次请求持续无数据超过该时长时中断，不限制总时长，避免长流式响应
+    /// （思考/工具循环）被总超时中途掐断。旧配置缺少该字段时按默认值回落。
+    #[serde(
+        default = "default_ai_request_timeout_secs",
+        deserialize_with = "deserialize_ai_request_timeout_secs"
+    )]
+    pub request_timeout_secs: u64,
 }
 
 /// 自定义系统提示词的最大字符数（按 chars 计），防止拖垮上下文长度。
 pub const MAX_CUSTOM_SYSTEM_PROMPT_CHARS: usize = 8000;
+
+/// 模型请求空闲超时的默认值（秒）。
+pub const DEFAULT_AI_REQUEST_TIMEOUT_SECS: u64 = 120;
+/// 模型请求空闲超时允许的最小值（秒）。
+pub const MIN_AI_REQUEST_TIMEOUT_SECS: u64 = 10;
+/// 模型请求空闲超时允许的最大值（秒），1 小时。
+pub const MAX_AI_REQUEST_TIMEOUT_SECS: u64 = 3600;
 
 impl AiChatSettings {
     /// 返回规范化后的自定义系统提示词；空白内容返回 `None`。
@@ -594,12 +610,25 @@ where
     Ok(value.clamp(MIN_AGENT_MAX_ITERATIONS, MAX_AGENT_MAX_ITERATIONS))
 }
 
+fn default_ai_request_timeout_secs() -> u64 {
+    DEFAULT_AI_REQUEST_TIMEOUT_SECS
+}
+
+fn deserialize_ai_request_timeout_secs<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = u64::deserialize(deserializer)?;
+    Ok(value.clamp(MIN_AI_REQUEST_TIMEOUT_SECS, MAX_AI_REQUEST_TIMEOUT_SECS))
+}
+
 impl Default for AiChatSettings {
     fn default() -> Self {
         Self {
             tool_execution_mode: AiChatToolExecutionMode::default(),
             max_iterations: default_agent_max_iterations(),
             custom_system_prompt: String::new(),
+            request_timeout_secs: default_ai_request_timeout_secs(),
         }
     }
 }
@@ -859,12 +888,48 @@ fn default_connection_sidebar_tree_width() -> u32 {
     DEFAULT_CONNECTION_SIDEBAR_TREE_WIDTH
 }
 
+/// 点击主窗口关闭按钮时的行为。
+///
+/// 只在系统托盘可用时生效：托盘不可用时一律回退到退出确认，不制造无法恢复的隐藏窗口。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CloseButtonBehavior {
+    /// 弹窗询问：最小化到托盘，还是退出应用（弹窗内可记住选择）
+    #[default]
+    Ask,
+    /// 直接最小化到托盘
+    MinimizeToTray,
+    /// 直接走退出确认
+    Quit,
+}
+
+impl CloseButtonBehavior {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CloseButtonBehavior::Ask => "ask",
+            CloseButtonBehavior::MinimizeToTray => "minimize_to_tray",
+            CloseButtonBehavior::Quit => "quit",
+        }
+    }
+
+    /// 未知取值回退到 [`CloseButtonBehavior::Ask`]：旧版本写下的值不能把新版本卡死。
+    pub fn from_str(value: &str) -> Self {
+        match value {
+            "minimize_to_tray" => CloseButtonBehavior::MinimizeToTray,
+            "quit" => CloseButtonBehavior::Quit,
+            _ => CloseButtonBehavior::Ask,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     #[serde(default)]
     pub main_window_size: Option<MainWindowSize>,
     #[serde(default)]
     pub main_window_state: Option<MainWindowState>,
+    #[serde(default)]
+    pub close_button_behavior: CloseButtonBehavior,
     #[serde(default = "default_locale")]
     pub locale: String,
     #[serde(default = "default_theme_mode")]
@@ -938,6 +1003,12 @@ pub struct AppSettings {
     /// 选中文本后高亮可见区域内所有相同文本
     #[serde(default = "default_true")]
     pub terminal_selection_highlight: bool,
+    /// 终端左边距展示每行到达时间
+    #[serde(default)]
+    pub terminal_show_timestamps: bool,
+    /// 终端左边距展示行号
+    #[serde(default)]
+    pub terminal_show_line_numbers: bool,
     #[serde(default)]
     pub local_terminal_profile: LocalTerminalProfileSettings,
     #[serde(default)]
@@ -1283,6 +1354,7 @@ impl Default for AppSettings {
         Self {
             main_window_size: None,
             main_window_state: None,
+            close_button_behavior: CloseButtonBehavior::default(),
             locale: default_locale(),
             theme_mode: default_theme_mode(),
             auto_switch_theme: false,
@@ -1315,6 +1387,8 @@ impl Default for AppSettings {
             terminal_confirm_high_risk_command: default_true(),
             terminal_auto_session_logging: default_true(),
             terminal_selection_highlight: default_true(),
+            terminal_show_timestamps: false,
+            terminal_show_line_numbers: false,
             local_terminal_profile: LocalTerminalProfileSettings::default(),
             log_file_path: String::new(),
             auto_update: true,
@@ -1664,15 +1738,16 @@ mod tests {
     use gpui_component::{Theme, ThemeMode};
 
     use super::{
-        AiChatSettings, AiChatToolExecutionMode, AppSettings, ConnectionSortOrder, CustomFont,
+        AiChatSettings, AiChatToolExecutionMode, AppSettings, CloseButtonBehavior,
+        ConnectionSortOrder, CustomFont, DEFAULT_AI_REQUEST_TIMEOUT_SECS,
         DEFAULT_MCP_APPROVAL_TIMEOUT_MS, DEFAULT_TERMINAL_THEME, HomeConnectionLayout,
         LOCALE_SYSTEM, LargeTextCellEditorOpenMode, LocalTerminalProfileKind,
-        LocalTerminalProfileSettings, MAX_CUSTOM_SYSTEM_PROMPT_CHARS, MainWindowState,
-        McpPermissionMode, McpServerMode, PersonalSyncBackendKind, RemoteFileOpenMode,
-        SqlFormatSettings, SqlIndentStyle, SqlKeywordCase, StartupDefaultPage, SyncProvider,
-        default_grid_font_fallback_families, default_grid_monospace_font_family,
-        grid_monospace_font, installed_grid_monospace_font, is_installed_font_family,
-        resolve_installed_grid_monospace_font_family,
+        LocalTerminalProfileSettings, MAX_AI_REQUEST_TIMEOUT_SECS, MAX_CUSTOM_SYSTEM_PROMPT_CHARS,
+        MIN_AI_REQUEST_TIMEOUT_SECS, MainWindowState, McpPermissionMode, McpServerMode,
+        PersonalSyncBackendKind, RemoteFileOpenMode, SqlFormatSettings, SqlIndentStyle,
+        SqlKeywordCase, StartupDefaultPage, SyncProvider, default_grid_font_fallback_families,
+        default_grid_monospace_font_family, grid_monospace_font, installed_grid_monospace_font,
+        is_installed_font_family, resolve_installed_grid_monospace_font_family,
     };
 
     #[test]
@@ -1748,6 +1823,57 @@ mod tests {
             serde_json::from_value(serde_json::json!({})).expect("旧版设置应能反序列化");
 
         assert!(settings.main_window_state.is_none());
+    }
+
+    #[test]
+    fn close_button_behavior_defaults_to_asking_every_time() {
+        assert_eq!(
+            CloseButtonBehavior::Ask,
+            AppSettings::default().close_button_behavior
+        );
+    }
+
+    #[test]
+    fn legacy_app_settings_without_close_button_behavior_ask_every_time() {
+        let settings: AppSettings =
+            serde_json::from_value(serde_json::json!({})).expect("旧版设置应能反序列化");
+
+        assert_eq!(CloseButtonBehavior::Ask, settings.close_button_behavior);
+    }
+
+    #[test]
+    fn close_button_behavior_round_trips_through_settings_json() {
+        for behavior in [
+            CloseButtonBehavior::Ask,
+            CloseButtonBehavior::MinimizeToTray,
+            CloseButtonBehavior::Quit,
+        ] {
+            let mut settings = AppSettings::default();
+            settings.close_button_behavior = behavior;
+
+            let json = serde_json::to_value(&settings).expect("serialize settings");
+            let restored: AppSettings = serde_json::from_value(json).expect("deserialize settings");
+
+            assert_eq!(behavior, restored.close_button_behavior);
+        }
+    }
+
+    #[test]
+    fn close_button_behavior_strings_are_closed_and_fall_back_to_asking() {
+        for behavior in [
+            CloseButtonBehavior::Ask,
+            CloseButtonBehavior::MinimizeToTray,
+            CloseButtonBehavior::Quit,
+        ] {
+            assert_eq!(behavior, CloseButtonBehavior::from_str(behavior.as_str()));
+        }
+
+        // 未知取值必须回退到询问，而不是静默变成「退出应用」。
+        assert_eq!(
+            CloseButtonBehavior::Ask,
+            CloseButtonBehavior::from_str("something_else")
+        );
+        assert_eq!(CloseButtonBehavior::Ask, CloseButtonBehavior::from_str(""));
     }
 
     #[test]
@@ -2716,6 +2842,47 @@ mod tests {
         assert_eq!(
             agent_runtime::MAX_AGENT_MAX_ITERATIONS,
             above_maximum.max_iterations
+        );
+    }
+
+    #[test]
+    fn ai_request_timeout_defaults_for_legacy_settings() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({"locale": "zh-CN"}))
+            .expect("旧版设置应能反序列化");
+
+        assert_eq!(
+            DEFAULT_AI_REQUEST_TIMEOUT_SECS,
+            settings.ai_chat.request_timeout_secs
+        );
+    }
+
+    #[test]
+    fn ai_request_timeout_round_trip_is_preserved() {
+        let mut settings = AppSettings::default();
+        settings.ai_chat.request_timeout_secs = 600;
+
+        let json = serde_json::to_string(&settings).expect("应序列化 Agent 设置");
+        let restored: AppSettings = serde_json::from_str(&json).expect("应反序列化 Agent 设置");
+
+        assert_eq!(600, restored.ai_chat.request_timeout_secs);
+    }
+
+    #[test]
+    fn ai_request_timeout_is_clamped_when_deserialized() {
+        let below_minimum: AiChatSettings =
+            serde_json::from_value(serde_json::json!({"request_timeout_secs": 0}))
+                .expect("应读取低于下限的 Agent 设置");
+        let above_maximum: AiChatSettings =
+            serde_json::from_value(serde_json::json!({"request_timeout_secs": 999_999}))
+                .expect("应读取高于上限的 Agent 设置");
+
+        assert_eq!(
+            MIN_AI_REQUEST_TIMEOUT_SECS,
+            below_minimum.request_timeout_secs
+        );
+        assert_eq!(
+            MAX_AI_REQUEST_TIMEOUT_SECS,
+            above_maximum.request_timeout_secs
         );
     }
 

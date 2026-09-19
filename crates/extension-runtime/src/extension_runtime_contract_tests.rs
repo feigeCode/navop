@@ -9,12 +9,14 @@ use crate::{
         DocumentExporterContrib, Engines, HtmlPreviewTransformContrib, IpcEntry, IpcRuntime,
         IpcTransport, Manifest, MenuCommandRef, MenuContrib, ResourceConnectionContrib,
         ResourceConnectionFieldType, ResourceConnectionForm, ResourceConnectionFormField,
-        ResourceConnectionFormTab, ResourceWorkbenchColumn, ResourceWorkbenchColumnStyle,
-        ResourceWorkbenchColumnType, ResourceWorkbenchContrib, ResourceWorkbenchEffect,
+        ResourceConnectionFormTab, ResourceWorkbenchBinding, ResourceWorkbenchBindingSource,
+        ResourceWorkbenchColumn, ResourceWorkbenchColumnStyle, ResourceWorkbenchColumnType,
+        ResourceWorkbenchContrib, ResourceWorkbenchEffect, ResourceWorkbenchOpen,
         ResourceWorkbenchOperation, ResourceWorkbenchOperationMode, ResourceWorkbenchPage,
         ResourceWorkbenchPagination, ResourceWorkbenchPaginationKind, ResourceWorkbenchPrimitive,
         ResourceWorkbenchRenderer, ResourceWorkbenchRendererKind, ResourceWorkbenchRowAction,
-        ResourceWorkbenchTable, ResourceWorkbenchViewer, ResourceWorkbenchViewerFormat,
+        ResourceWorkbenchTable, ResourceWorkbenchTerminal, ResourceWorkbenchTerminalOperation,
+        ResourceWorkbenchValueType, ResourceWorkbenchViewer, ResourceWorkbenchViewerFormat,
         RuntimeSection, ShellHostModule, ShellSurface, ShellViewContrib, WasmRuntime,
         WasmRuntimeKind,
         contributes::{
@@ -1302,5 +1304,141 @@ fn catalog_toolbox_views_exclude_workbench_page_bodies() {
     assert!(
         ids.contains(&"standalone-tool"),
         "独立工具仍应进工具箱: {ids:?}"
+    );
+}
+
+/// `terminal.operation` 是**预留声明**:扩展协议目前只有请求-响应与 job
+/// 两种形态,没有 provider PTY 流式通道,宿主侧必然返回
+/// "runtime terminal operation ... is not supported yet"。
+///
+/// 回归:注册期只校验 operation 存在就放行,于是扩展能装成功、用户点开
+/// 必定失败 —— 失败发生在使用而不是安装。这里固定住"在校验期拒绝"。
+#[test]
+fn runtime_catalog_rejects_terminal_operation_declaration() {
+    let mut manifest = shell_manifest();
+    manifest
+        .contributes
+        .shell_views
+        .push(shell_view("ui/explorer.js"));
+    manifest.contributes.connections.push(resource_connection());
+
+    let mut workbench = resource_workbench();
+    // operation 存在,所以拒绝原因必须是"未实现"而不是"未知操作"。
+    workbench.operations.insert(
+        "openShell".to_string(),
+        ResourceWorkbenchOperation {
+            mode: ResourceWorkbenchOperationMode::Invoke,
+            method: "example/exec/open".into(),
+            requires: vec!["example/exec/open".into()],
+            effect: ResourceWorkbenchEffect::Read,
+            params: Default::default(),
+        },
+    );
+    workbench.pages[0].load = None;
+    workbench.pages[0].stack = vec![ResourceWorkbenchPrimitive::Terminal(
+        ResourceWorkbenchTerminal {
+            command: None,
+            args: vec![],
+            env: Default::default(),
+            working_dir: None,
+            operation: Some(ResourceWorkbenchTerminalOperation {
+                operation: "openShell".into(),
+            }),
+        },
+    )];
+    manifest.contributes.resource_workbenches.push(workbench);
+
+    let error = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap_err();
+
+    assert!(
+        error.to_string().contains("terminal.operation is reserved"),
+        "{error}"
+    );
+}
+
+/// 反向守卫:本地 command 形式的终端是**已实现**的,不能被上面的拒绝误伤。
+#[test]
+fn runtime_catalog_accepts_local_command_terminal() {
+    let mut manifest = shell_manifest();
+    manifest
+        .contributes
+        .shell_views
+        .push(shell_view("ui/explorer.js"));
+    manifest.contributes.connections.push(resource_connection());
+
+    let mut workbench = resource_workbench();
+    workbench.pages[0].load = None;
+    workbench.pages[0].stack = vec![ResourceWorkbenchPrimitive::Terminal(
+        ResourceWorkbenchTerminal {
+            command: Some("docker".into()),
+            args: vec!["exec".into(), "-it".into(), "{{id}}".into(), "sh".into()],
+            env: Default::default(),
+            working_dir: None,
+            operation: None,
+        },
+    )];
+    manifest.contributes.resource_workbenches.push(workbench);
+
+    let catalog =
+        ExtensionRuntimeCatalog::from_manifests(vec![manifest]).expect("command terminal is valid");
+    let page = &catalog
+        .resource_workbench_for_connection("com.example.tools", "search")
+        .expect("workbench must resolve")
+        .pages[0];
+    assert!(matches!(
+        page.stack[0],
+        ResourceWorkbenchPrimitive::Terminal(_)
+    ));
+}
+
+/// route 绑定只接受导航那一刻取得到值的来源:`input`/`paging` 在行点击
+/// 与链接导航中既没有表单输入也没有列表上下文,声明了只会静默产出空值。
+#[test]
+fn runtime_catalog_rejects_route_binding_with_input_source() {
+    let mut manifest = shell_manifest();
+    manifest
+        .contributes
+        .shell_views
+        .push(shell_view("ui/explorer.js"));
+    manifest.contributes.connections.push(resource_connection());
+
+    let mut workbench = resource_workbench();
+    workbench.default_page = "items".into();
+    let mut page = resource_workbench().pages.remove(0);
+    page.id = "items".into();
+    page.load = None;
+    page.stack = vec![ResourceWorkbenchPrimitive::Table(ResourceWorkbenchTable {
+        items_path: "/items".into(),
+        key_paths: vec!["/id".into()],
+        pagination: ResourceWorkbenchPagination {
+            kind: ResourceWorkbenchPaginationKind::None,
+        },
+        columns: vec![],
+        open: Some(ResourceWorkbenchOpen {
+            page_id: "items".into(),
+            route: [(
+                "id".to_string(),
+                ResourceWorkbenchBinding {
+                    source: ResourceWorkbenchBindingSource::Input,
+                    path: "/id".into(),
+                    value_type: ResourceWorkbenchValueType::String,
+                    value: None,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        }),
+        actions: vec![],
+    })];
+    workbench.pages = vec![page];
+    manifest.contributes.resource_workbenches.push(workbench);
+
+    let error = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("table open route binding `id` uses an input/paging source"),
+        "{error}"
     );
 }

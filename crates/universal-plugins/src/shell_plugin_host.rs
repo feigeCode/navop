@@ -26,6 +26,9 @@ pub(crate) mod session;
 mod value;
 mod workbench;
 
+#[cfg(test)]
+mod extension_pages_render_tests;
+
 pub(crate) use context::ShellConnectionContext;
 pub(crate) use policy::LoadedShellView;
 pub(crate) use policy::load_borrowed;

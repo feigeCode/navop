@@ -1,0 +1,29 @@
+[package]
+name = "ftp"
+version = "0.1.0"
+publish.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+sftp = { workspace = true }
+# suppaftp = async-ftp 的维护后继；tokio-rustls 走 rustls 0.23+，
+# 其 webpki 原生支持 IP SAN（IP 直连 FTPS 的前提）。
+suppaftp = { version = "12", default-features = false, features = [
+    "tokio",
+    "tokio-rustls-ring",
+] }
+tokio = { workspace = true, features = ["fs", "io-util", "time"] }
+# suppaftp 内部使用同一版本的 tokio-rustls（0.26 / rustls 0.23），
+# 这里直接引用其 re-export 的 rustls 构造 TLS 配置，保证类型一致。
+tokio-rustls = "0.26"
+rustls-native-certs = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+# 假 FTP 服务端交互测试：需要 TcpListener（net）与 #[tokio::test]（macros/rt）。
+tokio = { workspace = true, features = ["net", "macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

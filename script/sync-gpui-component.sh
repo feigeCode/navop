@@ -118,12 +118,12 @@ echo "Candidate revision: ${RESULT_REVISION}"
 
 if [[ "${SKIP_VERIFY}" != "true" ]]; then
   cargo check --manifest-path "${TEMP_WORKTREE}/Cargo.toml" --locked \
-    -p gpui_ce_components_base \
-    -p gpui_ce_components \
-    -p gpui_ce_components_shell \
+    -p gpui-base \
+    -p gpui-component \
+    -p gpui-shell \
     -p gpui-component-shell
   cargo test --manifest-path "${TEMP_WORKTREE}/Cargo.toml" --locked \
-    -p gpui_ce_components_shell --lib --no-fail-fast
+    -p gpui-shell --lib --no-fail-fast
 fi
 
 if [[ "${DRY_RUN}" == "true" ]]; then

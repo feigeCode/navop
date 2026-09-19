@@ -2,7 +2,11 @@ use std::sync::{Arc, atomic::Ordering};
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use sftp::{ProgressCallback, RusshSftpClient, SftpClient, TransferCancelled, TransferProgress};
+use ftp::FtpClient;
+use sftp::{
+    ProgressCallback, RemoteFileClient, RusshSftpClient, SftpClient, TransferCancelled,
+    TransferProgress,
+};
 
 use super::{
     SftpDeleteRemoteExecution, SftpDownloadExecution, SftpUploadConnection, SftpUploadExecution,
@@ -31,6 +35,27 @@ pub trait SftpTransferProvider: Send + Sync {
 
 pub struct RusshSftpTransferProvider;
 
+/// 按连接来源建立协议无关的远程文件客户端。
+///
+/// FTP 来源走 `FtpClient`，SSH 来源走 `RusshSftpClient`；provider
+/// 内部只依赖 `RemoteFileClient`，不感知底层协议。
+pub(crate) async fn connect_remote(
+    source: SftpUploadConnection,
+) -> Result<Box<dyn RemoteFileClient>> {
+    match source {
+        SftpUploadConnection::SessionManager(session_manager) => {
+            let shared_client = session_manager.client().await?;
+            Ok(Box::new(
+                RusshSftpClient::connect_with_client(shared_client).await?,
+            ))
+        }
+        SftpUploadConnection::Config(config) => {
+            Ok(Box::new(RusshSftpClient::connect(config).await?))
+        }
+        SftpUploadConnection::Ftp(config) => Ok(Box::new(FtpClient::connect(config).await?)),
+    }
+}
+
 #[async_trait]
 impl SftpTransferProvider for RusshSftpTransferProvider {
     async fn upload(
@@ -38,14 +63,14 @@ impl SftpTransferProvider for RusshSftpTransferProvider {
         execution: SftpUploadExecution,
         progress: ProgressCallback,
     ) -> Result<()> {
-        let mut client = connect(execution.connection_source).await?;
+        let mut client = connect_remote(execution.connection_source).await?;
         let local_path = execution.local_path.to_string_lossy().into_owned();
         tracing::debug!(
             transfer_id = execution.id.as_u64(),
             local_path = %local_path,
             remote_path = %execution.remote_path,
             is_dir = execution.is_dir,
-            "starting SFTP upload"
+            "starting remote file upload"
         );
 
         if execution.is_dir {
@@ -75,14 +100,14 @@ impl SftpTransferProvider for RusshSftpTransferProvider {
         execution: SftpDownloadExecution,
         progress: ProgressCallback,
     ) -> Result<()> {
-        let mut client = connect(execution.connection_source).await?;
+        let mut client = connect_remote(execution.connection_source).await?;
         let local_path = execution.local_path.to_string_lossy().into_owned();
         tracing::debug!(
             transfer_id = execution.id.as_u64(),
             local_path = %local_path,
             remote_path = %execution.remote_path,
             is_dir = execution.is_dir,
-            "starting SFTP download"
+            "starting remote file download"
         );
 
         if execution.is_dir {
@@ -111,19 +136,19 @@ impl SftpTransferProvider for RusshSftpTransferProvider {
         execution: SftpDeleteRemoteExecution,
         progress: ProgressCallback,
     ) -> Result<()> {
-        let mut client = connect(execution.connection_source.clone()).await?;
+        let mut client = connect_remote(execution.connection_source.clone()).await?;
         tracing::debug!(
             transfer_id = execution.id.as_u64(),
             remote_dir = %execution.remote_dir,
             entry_count = execution.entries.len(),
-            "starting SFTP remote delete"
+            "starting remote file delete"
         );
-        delete_remote_entries(&mut client, &execution, progress).await
+        delete_remote_entries(&mut *client, &execution, progress).await
     }
 }
 
 async fn delete_remote_entries(
-    client: &mut RusshSftpClient,
+    client: &mut dyn RemoteFileClient,
     execution: &SftpDeleteRemoteExecution,
     progress: ProgressCallback,
 ) -> Result<()> {
@@ -154,7 +179,7 @@ async fn delete_remote_entries(
 }
 
 async fn delete_remote_entry(
-    client: &mut RusshSftpClient,
+    client: &mut dyn RemoteFileClient,
     execution: &SftpDeleteRemoteExecution,
     entry: &super::SftpRemoteDeleteEntry,
     index: usize,
@@ -207,12 +232,29 @@ fn report_delete_entry_progress(
     });
 }
 
-async fn connect(source: SftpUploadConnection) -> Result<RusshSftpClient> {
-    match source {
-        SftpUploadConnection::SessionManager(session_manager) => {
-            let shared_client = session_manager.client().await?;
-            RusshSftpClient::connect_with_client(shared_client).await
-        }
-        SftpUploadConnection::Config(config) => RusshSftpClient::connect(config).await,
+#[cfg(test)]
+mod tests {
+    use super::{connect_remote, SftpUploadConnection};
+    use ftp::FtpConnectConfig;
+
+    #[tokio::test]
+    async fn transfer_provider_routes_ftp_source_to_ftp_client() {
+        // passive_mode=false 会让 FtpClient::connect 在发起任何网络请求前
+        // 直接拒绝主动模式；错误信息匹配即证明 FTP 来源被路由到了
+        // FtpClient，而不是 SSH 路径或 "not implemented" 兜底。
+        let source = SftpUploadConnection::Ftp(FtpConnectConfig {
+            host: "127.0.0.1".to_string(),
+            port: 21,
+            username: "user".to_string(),
+            password: String::new(),
+            passive_mode: false,
+            use_tls: false,
+            connect_timeout: Some(1),
+        });
+        let result = connect_remote(source).await;
+        let Err(error) = result else {
+            panic!("active mode should be rejected before any network I/O");
+        };
+        assert!(error.to_string().contains("active mode"));
     }
 }

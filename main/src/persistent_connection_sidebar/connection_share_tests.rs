@@ -9,6 +9,7 @@ fn ssh_connection() -> StoredConnection {
     StoredConnection::new_ssh(
         "Production SSH".to_string(),
         SshParams {
+            remote_file: None,
             sftp_default_directory: None,
             disabled_jump_server: None,
             sftp_account: None,
@@ -96,6 +97,7 @@ fn basic_info_omits_nested_credentials_and_embedded_private_keys() {
     let connection = StoredConnection::new_ssh(
         "Nested SSH".to_string(),
         SshParams {
+            remote_file: None,
             sftp_default_directory: None,
             disabled_jump_server: None,
             sftp_account: None,
@@ -161,6 +163,7 @@ fn full_info_keeps_credentials_but_always_redacts_embedded_private_key_contents(
     let mut connection = StoredConnection::new_ssh(
         "Sensitive SSH".to_string(),
         SshParams {
+            remote_file: None,
             sftp_default_directory: None,
             disabled_jump_server: None,
             sftp_account: None,

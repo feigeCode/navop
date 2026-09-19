@@ -72,6 +72,7 @@ impl NewConnectionCategory {
 #[derive(Clone, PartialEq, Eq)]
 pub(super) enum NewConnectionKind {
     Ssh,
+    Ftp,
     Rdp,
     Vnc,
     Redis,
@@ -104,6 +105,7 @@ impl NewConnectionKind {
             Self::MongoDB,
             Self::Serial,
             Self::Telnet,
+            Self::Ftp,
             Self::PortForwarding,
         ];
         items.extend(
@@ -153,6 +155,7 @@ impl NewConnectionKind {
     pub(super) fn label(&self) -> String {
         match self {
             Self::Ssh => "SSH / SFTP".to_string(),
+            Self::Ftp => "FTP / FTPS".to_string(),
             Self::Rdp => "RDP".to_string(),
             Self::Vnc => "VNC".to_string(),
             Self::Redis => "Redis".to_string(),
@@ -178,6 +181,7 @@ impl NewConnectionKind {
     pub(super) fn description(&self) -> String {
         match self {
             Self::Ssh => t!("NewConnection.description_ssh").to_string(),
+            Self::Ftp => t!("NewConnection.description_ftp").to_string(),
             Self::Rdp => t!("NewConnection.description_rdp").to_string(),
             Self::Vnc => t!("NewConnection.description_vnc").to_string(),
             Self::Redis => t!("NewConnection.description_redis").to_string(),
@@ -203,6 +207,7 @@ impl NewConnectionKind {
             | Self::Vnc
             | Self::Serial
             | Self::Telnet
+            | Self::Ftp
             | Self::PortForwarding => NewConnectionCategory::Terminal,
             Self::MoreConnections => NewConnectionCategory::All,
             // 「+」安装入口归属于其目标类目,侧栏选中该类目时可见
@@ -249,6 +254,7 @@ impl NewConnectionKind {
             Self::Telnet => {
                 connection_type_icon(ConnectionType::Telnet, ConnectionVisualSize::Hero)
             }
+            Self::Ftp => connection_type_icon(ConnectionType::Ftp, ConnectionVisualSize::Hero),
             Self::PortForwarding => {
                 connection_type_icon(ConnectionType::PortForwarding, ConnectionVisualSize::Hero)
             }

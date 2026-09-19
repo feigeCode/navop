@@ -1,12 +1,12 @@
 # 扩展市场与本地扩展
 
-扩展为 Navop 增加数据库驱动、ACP Agent、连接导入、远程桌面 Provider 和语言包等能力。扩展代码在本机运行，应像安装桌面软件一样审查来源、权限、平台与版本兼容性。
+扩展为 Navop 增加数据库驱动、中间件、原生资源工作台、ACP Agent、连接导入、远程桌面 Provider 和语言包等能力。扩展代码在本机运行，应像安装桌面软件一样审查来源、权限、平台与版本兼容性。
 
 ![扩展市场](/images/extension.png)
 
 ## 浏览市场与扩展类型
 
-从扩展市场按类型或名称查找组件，也可使用「有更新」过滤只看有可更新版本的扩展。数据库驱动增加新的连接类型；ACP Agent 接入外部 Agent；连接导入扩展读取其他应用配置；远程桌面扩展提供 RDP/VNC Provider；语言扩展增加界面语言。
+从扩展市场按类型或名称查找组件，也可使用「有更新」过滤只看有可更新版本的扩展。数据库驱动增加新的连接类型；ACP Agent 接入外部 Agent；连接导入扩展读取其他应用配置；远程桌面扩展提供 RDP/VNC Provider；语言扩展增加界面语言；原生资源工作台扩展（如 Docker）由宿主渲染集合、详情页与操作界面。
 
 市场条目会说明版本、平台和 Navop 兼容范围。某种连接出现在宣传列表中，不代表未安装驱动时即可创建，应先确认相应扩展已启用。
 
@@ -14,7 +14,9 @@
 
 第一方扩展在 [navop-extensions](https://github.com/feigeCode/navop-extensions) 仓库独立构建与发布，市场中的官方扩展均来自该仓库。当前目录按类型分组如下：
 
-- **数据库驱动**：DuckDB、Redis、MongoDB（4.2+ / 3.6 / 3.2–3.4 三档）、达梦 DM、金仓 KingbaseES、GBase 8s、OceanBase、openGauss、Apache IoTDB、神通 Oscar，以及免 Oracle Instant Client 的纯 Go Oracle 驱动。
+- **数据库驱动**：TDengine、DuckDB、Redis、MongoDB（4.2+ / 3.6 / 3.2–3.4 三档）、达梦 DM、金仓 KingbaseES、GBase 8s、OceanBase、openGauss、Apache IoTDB、神通 Oscar，以及免 Oracle Instant Client 的纯 Go Oracle 驱动。
+- **中间件**：MQTT（订阅、消息、发布三个视图，支持 SSH 隧道）。
+- **原生资源工作台**：Docker（引擎概览、容器与镜像管理、日志、进程、文件系统变更与 exec 终端），由宿主原生渲染集合、详情页与操作。
 - **远程桌面 Provider**：RDP、VNC。
 - **ACP Agent**：Codex、Claude Code、OpenCode。
 - **连接导入**：SecureCRT、Xshell、WindTerm、OpenSSH config、Navicat、DBeaver、JetBrains DataGrip、MongoDB Compass、Redis Desktop、TablePlus。

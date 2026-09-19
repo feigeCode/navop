@@ -110,6 +110,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "20260827000001",
         include_str!("../../migrations/20260827000001_redis_empty_username.sql"),
     ),
+    (
+        "20260915000001",
+        include_str!("../../migrations/20260915000001_connection_preferred_open_mode.sql"),
+    ),
 ];
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {

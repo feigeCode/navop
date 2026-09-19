@@ -1,4 +1,4 @@
-use crate::onetcli_app::GlobalHomePage;
+use crate::navop_app::GlobalHomePage;
 use anyhow::{Context as _, Result, bail};
 use gpui::{App, AppContext, Window};
 use gpui_component::{WindowExt, notification::Notification};

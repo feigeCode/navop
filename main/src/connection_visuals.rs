@@ -4,11 +4,11 @@ use gpui::App;
 
 use db::ipc::{IpcDriverRegistry, driver_icon_from_asset_path, driver_icon_from_file_path};
 use gpui_component::{Icon, Sizable};
-use one_ui::IconSize;
 use one_assets::IconName;
 use one_core::storage::{
     ConnectionType, DatabaseType, DbConnectionConfig, SshParams, StoredConnection,
 };
+use one_ui::IconSize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExternalDriverIconSource<'a> {
@@ -50,6 +50,7 @@ const fn connection_type_icon_name(kind: ConnectionType) -> IconName {
         ConnectionType::All => IconName::Server,
         ConnectionType::Database => IconName::Database,
         ConnectionType::SshSftp => IconName::TerminalColor,
+        ConnectionType::Ftp => IconName::FtpColor,
         ConnectionType::Redis => IconName::Redis,
         ConnectionType::MongoDB => IconName::MongoDB,
         // 品牌 SVG 图标,见 connection_type_icon 的特判分支
@@ -68,6 +69,7 @@ const fn connection_type_navigation_icon_name(kind: ConnectionType) -> IconName 
         ConnectionType::All => IconName::Asterisk,
         ConnectionType::Database => IconName::DatabaseLine,
         ConnectionType::SshSftp => IconName::TerminalLine,
+        ConnectionType::Ftp => IconName::Network,
         ConnectionType::Redis => IconName::RedisLine,
         ConnectionType::MongoDB => IconName::MongoDBLine,
         // 品牌 SVG 图标,见 connection_type_navigation_icon 的特判分支
@@ -204,12 +206,13 @@ fn extension_connection_icon(
     extension_catalog: Option<&extension_runtime::ExtensionRuntimeCatalog>,
 ) -> Option<Icon> {
     let params = connection.to_extension_params().ok()?;
-    let contribution = extension_catalog?.resource_connection(
-        &params.extension_id,
-        &params.contribution_id,
-    )?;
+    let contribution =
+        extension_catalog?.resource_connection(&params.extension_id, &params.contribution_id)?;
     let icon_path = contribution.icon_path.as_ref()?;
-    Some(driver_icon_from_file_path(icon_path.clone(), size.icon_size()))
+    Some(driver_icon_from_file_path(
+        icon_path.clone(),
+        size.icon_size(),
+    ))
 }
 
 /// 便捷读取全局扩展运行时目录（与 connection_forms / connection_type_menu 的
@@ -386,6 +389,7 @@ mod tests {
 
     fn ssh_params() -> SshParams {
         SshParams {
+            remote_file: None,
             sftp_default_directory: None,
             disabled_jump_server: None,
             sftp_account: None,
@@ -480,11 +484,9 @@ mod tests {
 
         let connection = extension_connection();
         // 目录中存在 (extension_id, contribution_id) 且声明了 icon → 解析成功
-        assert!(extension_connection_icon(
-            &connection,
-            ConnectionVisualSize::List,
-            Some(&catalog)
-        )
-        .is_some());
+        assert!(
+            extension_connection_icon(&connection, ConnectionVisualSize::List, Some(&catalog))
+                .is_some()
+        );
     }
 }

@@ -7,8 +7,13 @@ use extension_host::{
     FramedTransport, JsonRpcClient, NegotiationConfig, ProcessRpcSession, ProcessRpcSessionConfig,
     SpawnConfig, UniversalPluginClient,
 };
-use extension_protocol::resource::ResourceInvokeParams;
+use extension_protocol::resource::{ResourceInvokeParams, ResourceOpenResult};
+use extension_protocol::result_ref::ResultRef;
 use extension_runtime::ExtensionRuntimeCatalog;
+use extension_runtime::RegisteredResourceWorkbenchContribution;
+use extension_runtime::extension::manifest::{
+    ResourceWorkbenchEffect, ResourceWorkbenchOperation, ResourceWorkbenchOperationMode,
+};
 use extension_runtime::extension::manifest::load_from_dir;
 use futures::future::BoxFuture;
 use tokio::io::duplex;
@@ -121,6 +126,20 @@ where
                     .with_method(method::EVENT_CLOSE),
             )
             .expect("serialize fake init"),
+            method::RESOURCE_INVOKE
+                if request
+                    .params
+                    .get("method")
+                    .and_then(|value| value.as_str())
+                    == Some("test/stream") =>
+            {
+                serde_json::json!({
+                    "result": {
+                        "kind": "event_stream",
+                        "id": "stream-invoked"
+                    }
+                })
+            }
             method::RESOURCE_INVOKE => serde_json::json!({
                 "result": {
                     "kind": "inline",
@@ -1210,6 +1229,104 @@ async fn provider_event_streams_are_lifecycle_managed_by_the_host() {
         .deactivate_runtime("com.navop.kafka::main")
         .await
         .unwrap();
+}
+
+/// workbench 的 stream 页(`load` 返回 `ResultRef::EventStream`)走普通 invoke
+/// 通道,不经过 `open_event_stream`;宿主必须在 dispatch 边界把这个流登记进
+/// `EventActivationManager`,否则订阅后的第一次 read 会被
+/// *"not open for this runtime generation"* 拒掉。
+#[tokio::test]
+async fn workbench_invoked_event_streams_are_registered_by_the_host() {
+    let manager = activation_universal_manager().await;
+    let runtime_id = "com.navop.kafka::main";
+    manager.activate_runtime(runtime_id).await.unwrap();
+    let client = manager.universal_plugin_client(runtime_id).unwrap();
+
+    let owner = ResourceSessionOwner::new(
+        ResourceSessionIdentity {
+            extension_id: "com.navop.kafka".into(),
+            runtime_id: runtime_id.into(),
+            runtime_generation: client.runtime_generation(),
+            session_epoch: 1,
+        },
+        client.clone(),
+        ResourceOpenResult {
+            resource_id: "resource-1".into(),
+            capabilities: Vec::new(),
+            metadata: None,
+        },
+    );
+    let scope = owner.handle().scope("live", 1);
+
+    let stream = dispatch_invoke_result_scoped(
+        &scope,
+        &stream_workbench(),
+        "messageStream",
+        &BindingContext::default(),
+        false,
+    )
+    .await
+    .unwrap();
+    let ResultRef::EventStream { id } = stream.result else {
+        panic!("a stream operation must return an event stream");
+    };
+    assert_eq!("stream-invoked", id);
+
+    // 关键断言:登记过才读得动。去掉 dispatch 里的登记,这次 read 会报
+    // "event stream `stream-invoked` is not open for this runtime generation"
+    // —— 正是 stream 页在 UI 上显示的那条 protocol error。
+    let read = client
+        .read_event_stream(&extension_protocol::event_stream::EventReadParams {
+            stream_id: id.clone(),
+            max_events: Some(1),
+            wait_ms: Some(0),
+        })
+        .await
+        .unwrap();
+    assert_eq!(1, read.events.len());
+    assert_eq!(
+        1,
+        manager.event_activation().unwrap().open_count(runtime_id)
+    );
+
+    client
+        .close_event_stream(&extension_protocol::event_stream::EventCloseParams {
+            stream_id: id,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        0,
+        manager.event_activation().unwrap().open_count(runtime_id)
+    );
+
+    manager.deactivate_runtime(runtime_id).await.unwrap();
+}
+
+fn stream_workbench() -> RegisteredResourceWorkbenchContribution {
+    let mut operations = BTreeMap::new();
+    operations.insert(
+        "messageStream".to_string(),
+        ResourceWorkbenchOperation {
+            mode: ResourceWorkbenchOperationMode::Invoke,
+            method: "test/stream".into(),
+            requires: Vec::new(),
+            effect: ResourceWorkbenchEffect::Read,
+            params: BTreeMap::new(),
+        },
+    );
+    RegisteredResourceWorkbenchContribution {
+        extension_id: "com.navop.kafka".into(),
+        id: "workbench".into(),
+        title: "Stream".into(),
+        connection_ids: vec!["connection".into()],
+        runtime_id: "main".into(),
+        resource_type: "example".into(),
+        default_page: "live".into(),
+        operations,
+        layout: None,
+        pages: Vec::new(),
+    }
 }
 
 #[tokio::test]

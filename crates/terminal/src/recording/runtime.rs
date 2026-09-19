@@ -907,6 +907,11 @@ impl RuntimeShared {
 
     fn notify(&self, snapshot: RecordingSnapshot) {
         let observer = self.observer.clone();
+        // Isolates an observer panic in `panic = "unwind"` builds (dev/test).
+        // The release profile is `panic = "abort"`, where this guard is inert and
+        // a panic aborts the process instead; the observer installed by
+        // `Terminal::create_recording_runtime` only wakes the pane, so it is
+        // panic-free by construction.
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             observer(snapshot);
         }));

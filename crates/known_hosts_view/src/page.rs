@@ -1,5 +1,5 @@
 use gpui::{App, AppContext, Context, EventEmitter, FocusHandle, Focusable, SharedString, Window};
-use gpui_component::{Icon};
+use gpui_component::Icon;
 use one_assets::IconName;
 use one_core::tab_container::{TabContent, TabContentEvent};
 use rust_i18n::t;

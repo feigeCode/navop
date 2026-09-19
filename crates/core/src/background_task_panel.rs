@@ -17,7 +17,11 @@ use gpui::{
     Window, prelude::FluentBuilder, px,
 };
 use gpui_component::progress::Progress;
-use gpui_component::{ActiveTheme, Disableable, Icon, Sizable as _, WindowExt as _, button::{Button, ButtonVariants as _}, h_flex, v_flex};
+use gpui_component::{
+    ActiveTheme, Disableable, Icon, Sizable as _, WindowExt as _,
+    button::{Button, ButtonVariants as _},
+    h_flex, v_flex,
+};
 use one_assets::IconName;
 use one_ui::marquee_text::marquee_text;
 use rust_i18n::t;

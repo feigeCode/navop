@@ -298,7 +298,7 @@ impl Repository for ProviderRepository {
 /// - 拉取失败或云端模型列表为空时不改动已有配置，避免离线时清空本地模型列表；
 /// - 成功后更新 `models`（完整模型列表）与默认 `model`（列表首项或保留现有默认模型），
 ///   并写回 SQLite `llm_providers` 表。
-pub async fn refresh_onetcli_models(
+pub async fn refresh_navop_models(
     repo: &ProviderRepository,
     provider_state: &GlobalProviderState,
 ) -> Result<Option<ProviderConfig>> {

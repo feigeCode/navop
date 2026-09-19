@@ -11,6 +11,7 @@ gpui-component = { workspace = true }
 one-ui.workspace = true
 one-core = { workspace = true }
 sftp = { workspace = true }
+ftp = { workspace = true }
 sftp_transfer = { workspace = true }
 remote_file_editor = { workspace = true }
 remote_image_preview = { workspace = true }

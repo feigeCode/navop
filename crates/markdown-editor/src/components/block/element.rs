@@ -1081,7 +1081,7 @@ mod tests {
         SharedString, TestAppContext, TextAlign, TextRun, VisualTestContext, font, point, px, rgba,
         size,
     };
-        use std::sync::Arc;
+    use std::sync::Arc;
 
     fn shaped_lines(
         text: &str,
@@ -1349,10 +1349,7 @@ mod tests {
             assert_eq!(block.display_text(), "before marked");
             assert_eq!(marked_run.len, "marked".len());
             assert_eq!(marked_run.color, rgba(0x0000ffff).into());
-            assert_eq!(
-                marked_run.background_color,
-                Some(rgba(0xffff00ff).into())
-            );
+            assert_eq!(marked_run.background_color, Some(rgba(0xffff00ff).into()));
         });
     }
 

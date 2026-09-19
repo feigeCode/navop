@@ -1,16 +1,18 @@
-use crate::connection_visuals::{
-    ConnectionVisualSize, stored_connection_icon_with_catalog,
-};
+use crate::connection_visuals::{ConnectionVisualSize, stored_connection_icon_with_catalog};
 use crate::home_tab::{HomePage, connection_matches_query};
 use db::ipc::IpcDriverRegistry;
+use gpui::prelude::FluentBuilder;
 use gpui::{
     App, Context, Entity, FontWeight, ParentElement, SharedString, Styled, Task, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, IndexPath, WindowExt, h_flex,
+    ActiveTheme, Icon, IndexPath, Sizable, WindowExt, h_flex,
     list::{ListDelegate, ListItem, ListState},
 };
+use one_assets::IconName;
 use one_core::storage::{SshAuthMethod, SshParams, StoredConnection};
+use one_ui::{IconButton, IconButtonRole, IconSize};
+use rust_i18n::t;
 
 pub(crate) struct ConnectionQuickOpenDelegate {
     parent: Entity<HomePage>,
@@ -121,6 +123,7 @@ pub(crate) fn temporary_ssh_connection(input: &str) -> Option<StoredConnection> 
         }
     );
     let params = SshParams {
+        remote_file: None,
         host,
         port,
         prompt_username: username.is_empty().then_some(true),
@@ -245,6 +248,9 @@ impl ListDelegate for ConnectionQuickOpenDelegate {
             )
         };
         let connection_for_open = connection.clone();
+        let save_parent = parent.clone();
+        // 临时连接（无数据库 ID）提供“保存为连接”入口。
+        let temporary_connection = connection.id.is_none().then(|| connection.clone());
 
         Some(
             ListItem::new(ix)
@@ -280,10 +286,31 @@ impl ListDelegate for ConnectionQuickOpenDelegate {
                                 .text_color(cx.theme().muted_foreground)
                                 .child(SharedString::from(
                                     crate::connection_visuals::connection_type_display_label(
-                                        &connection, cx,
+                                        &connection,
+                                        cx,
                                     ),
                                 )),
-                        ),
+                        )
+                        .when_some(temporary_connection, |this, connection| {
+                            this.child(
+                                IconButton::new(
+                                    SharedString::from("quick-open-save-connection"),
+                                    Icon::new(IconName::Save).mono().with_size(IconSize::Small),
+                                )
+                                .role(IconButtonRole::Compact)
+                                .tooltip(t!("Home.save_as_connection"))
+                                .on_click(move |_, window, cx| {
+                                    cx.stop_propagation();
+                                    let connection = connection.clone();
+                                    save_parent.update(cx, |this, cx| {
+                                        this.show_save_temporary_connection_form(
+                                            connection, window, cx,
+                                        );
+                                    });
+                                    window.close_dialog(cx);
+                                }),
+                            )
+                        }),
                 ),
         )
     }

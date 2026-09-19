@@ -9,11 +9,21 @@ use gpui::{
     SharedString, Styled, Subscription, UniformListScrollHandle, Window, div,
     prelude::FluentBuilder, px, uniform_list,
 };
-use gpui_component::{ActiveTheme, Icon, Sizable, Size, WindowExt as _, dialog::DialogButtonProps, h_flex, input::{Editor, EditorState, Input, InputEvent, InputState, Textarea, TextareaState}, menu::{ContextMenuExt, PopupMenu, PopupMenuItem}, notification::Notification, scroll::Scrollbar, spinner::Spinner, v_flex};
-use one_ui::IconSize;
+use gpui_component::{
+    ActiveTheme, Icon, Sizable, Size, WindowExt as _,
+    dialog::DialogButtonProps,
+    h_flex,
+    input::{Editor, EditorState, Input, InputEvent, InputState, Textarea, TextareaState},
+    menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
+    notification::Notification,
+    scroll::Scrollbar,
+    spinner::Spinner,
+    v_flex,
+};
 use one_assets::IconName;
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::{ActiveConnections, StoredConnection};
+use one_ui::IconSize;
 use rust_i18n::t;
 use tracing::{error, info, warn};
 

@@ -1,0 +1,436 @@
+use super::{
+    OverwritePolicy, SftpTool, SftpToolHandler, file_entry_json, parse_overwrite_policy,
+    prepare_local_target, prepare_remote_upload_target, remote_upload_directory_policy,
+    sftp_tool_registry, ssh_config_from_params,
+};
+use one_core::storage::connection::SqliteConnection;
+use one_core::storage::migration::run_migrations;
+use one_core::storage::traits::Repository;
+use one_core::storage::{
+    ConnectionRepository, CredentialEntry, CredentialReference, DatabaseType, DbConnectionConfig,
+    SftpAccount, SshAuthMethod, SshParams, StoredConnection,
+};
+use serde_json::json;
+use sftp::{DirectoryConflictPolicy, FileEntry, PathMetadata};
+use std::fs;
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tool_runtime::{ResourceCapability, ToolAdapter, ToolContext};
+
+#[test]
+fn sftp_list_entry_json_exposes_remote_owner_metadata() {
+    let value = file_entry_json(FileEntry {
+        name: "report.txt".to_string(),
+        path: "/srv/report.txt".to_string(),
+        size: 42,
+        modified: UNIX_EPOCH,
+        is_dir: false,
+        permissions: 0o100640,
+        uid: Some(1001),
+        gid: Some(1002),
+        user: Some("deploy".to_string()),
+        group: Some("operators".to_string()),
+    });
+
+    assert_eq!(json!("deploy"), value["owner"]);
+    assert_eq!(json!(1001), value["uid"]);
+    assert_eq!(json!(1002), value["gid"]);
+    assert_eq!(json!("deploy"), value["user"]);
+    assert_eq!(json!("operators"), value["group"]);
+}
+
+#[test]
+fn sftp_registry_exposes_file_transfer_tools() {
+    let registry = sftp_tool_registry(repo());
+    let tools = registry.list(ToolAdapter::Mcp);
+    let ids = tools.iter().map(|tool| tool.id.clone()).collect::<Vec<_>>();
+
+    assert!(ids.contains(&"sftp.list".to_string()));
+    assert!(ids.contains(&"sftp.read".to_string()));
+    assert!(ids.contains(&"sftp.write".to_string()));
+    assert!(ids.contains(&"sftp.stat".to_string()));
+    assert!(ids.contains(&"sftp.upload".to_string()));
+    assert!(ids.contains(&"sftp.download".to_string()));
+
+    let write = tools
+        .iter()
+        .find(|tool| tool.id == "sftp.write")
+        .expect("write tool should be registered");
+    assert_eq!(
+        json!(["connection", "content_base64"]),
+        write.input_schema["required"]
+    );
+    assert!(write.description.contains("canonical file operation"));
+    assert!(!write.description.contains("ssh.remote_exec"));
+
+    let upload = tools
+        .iter()
+        .find(|tool| tool.id == "sftp.upload")
+        .expect("upload tool should be registered");
+    assert_eq!(
+        json!(["connection", "local_path", "remote_path"]),
+        upload.input_schema["required"]
+    );
+    assert_eq!(
+        json!(["fail", "overwrite", "skip"]),
+        upload.input_schema["properties"]["on_exists"]["enum"]
+    );
+    assert!(upload.description.contains("on_exists"));
+
+    let download = tools
+        .iter()
+        .find(|tool| tool.id == "sftp.download")
+        .expect("download tool should be registered");
+    assert_eq!(
+        json!(["connection", "remote_path", "local_path"]),
+        download.input_schema["required"]
+    );
+    assert_eq!(
+        json!(["fail", "overwrite", "skip"]),
+        download.input_schema["properties"]["on_exists"]["enum"]
+    );
+    assert!(download.description.contains("on_exists"));
+
+    let stat = tools
+        .iter()
+        .find(|tool| tool.id == "sftp.stat")
+        .expect("stat tool should be registered");
+    assert_eq!(json!(["connection", "path"]), stat.input_schema["required"]);
+    assert!(stat.description.contains("exists"));
+}
+
+#[test]
+fn sftp_tools_target_ssh_sftp_resources_by_capability() {
+    let registry = sftp_tool_registry(repo());
+
+    for (tool_id, capability) in [
+        ("sftp.list", ResourceCapability::List),
+        ("sftp.read", ResourceCapability::ReadFile),
+        ("sftp.write", ResourceCapability::WriteFile),
+        ("sftp.stat", ResourceCapability::ReadFile),
+        ("sftp.upload", ResourceCapability::WriteFile),
+        ("sftp.download", ResourceCapability::ReadFile),
+    ] {
+        let tool = registry
+            .get_runtime(tool_id, ToolAdapter::FunctionCalling)
+            .expect("sftp tool should be registered");
+        assert!(tool.target.required, "{tool_id} should require target");
+        assert_eq!(
+            vec![capability],
+            tool.target.required_capabilities,
+            "{tool_id} should target resources with the expected file capability"
+        );
+    }
+}
+
+#[test]
+fn sftp_overwrite_policy_defaults_to_fail() {
+    let input = json!({});
+
+    let policy = parse_overwrite_policy(&input).expect("default policy should parse");
+
+    assert_eq!(OverwritePolicy::Fail, policy);
+}
+
+#[test]
+fn sftp_overwrite_policy_accepts_explicit_values() {
+    assert_eq!(
+        OverwritePolicy::Fail,
+        parse_overwrite_policy(&json!({ "on_exists": "fail" })).unwrap()
+    );
+    assert_eq!(
+        OverwritePolicy::Overwrite,
+        parse_overwrite_policy(&json!({ "on_exists": "overwrite" })).unwrap()
+    );
+    assert_eq!(
+        OverwritePolicy::Skip,
+        parse_overwrite_policy(&json!({ "on_exists": "skip" })).unwrap()
+    );
+}
+
+#[test]
+fn sftp_overwrite_policy_rejects_unknown_values() {
+    let error = parse_overwrite_policy(&json!({ "on_exists": "merge" }))
+        .expect_err("unknown overwrite policy should fail");
+
+    assert!(error.to_string().contains("invalid on_exists"));
+}
+
+#[test]
+fn sftp_remote_upload_overwrite_preserves_target_for_staged_replace() {
+    let remote_directory = PathMetadata {
+        size: 0,
+        modified: SystemTime::UNIX_EPOCH,
+        is_dir: true,
+        permissions: 0,
+    };
+
+    assert!(
+        !prepare_remote_upload_target(
+            "/srv/app",
+            OverwritePolicy::Overwrite,
+            Some(&remote_directory)
+        )
+        .expect("overwrite should continue without deleting the target")
+    );
+    assert_eq!(
+        DirectoryConflictPolicy::Replace,
+        remote_upload_directory_policy(OverwritePolicy::Overwrite, Some(&remote_directory))
+    );
+}
+
+#[test]
+fn sftp_remote_upload_uses_merge_without_an_existing_directory_conflict() {
+    assert_eq!(
+        DirectoryConflictPolicy::Merge,
+        remote_upload_directory_policy(OverwritePolicy::Overwrite, None)
+    );
+    assert_eq!(
+        DirectoryConflictPolicy::Merge,
+        remote_upload_directory_policy(
+            OverwritePolicy::Fail,
+            Some(&PathMetadata {
+                size: 0,
+                modified: SystemTime::UNIX_EPOCH,
+                is_dir: true,
+                permissions: 0,
+            })
+        )
+    );
+}
+
+#[test]
+fn sftp_remote_upload_fail_and_skip_policies_still_apply_before_transfer() {
+    let remote_file = PathMetadata {
+        size: 1,
+        modified: SystemTime::UNIX_EPOCH,
+        is_dir: false,
+        permissions: 0,
+    };
+
+    let error =
+        prepare_remote_upload_target("/srv/app.txt", OverwritePolicy::Fail, Some(&remote_file))
+            .expect_err("fail policy must reject an existing target");
+    assert!(error.to_string().contains("target already exists"));
+    assert!(
+        prepare_remote_upload_target("/srv/app.txt", OverwritePolicy::Skip, Some(&remote_file))
+            .expect("skip policy should be accepted")
+    );
+}
+
+#[test]
+fn sftp_prepare_local_target_fails_when_target_exists_by_default() {
+    let dir = temp_dir();
+    let target = dir.join("download.txt");
+    fs::write(&target, "existing").unwrap();
+
+    let error = prepare_local_target(target.to_str().unwrap(), OverwritePolicy::Fail)
+        .expect_err("existing local target should require explicit policy");
+
+    assert!(error.to_string().contains("target already exists"));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn sftp_prepare_local_target_skips_existing_target() {
+    let dir = temp_dir();
+    let target = dir.join("download.txt");
+    fs::write(&target, "existing").unwrap();
+
+    let skipped = prepare_local_target(target.to_str().unwrap(), OverwritePolicy::Skip).unwrap();
+
+    assert!(skipped);
+    assert!(target.exists());
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn sftp_prepare_local_target_removes_existing_directory_for_overwrite() {
+    let dir = temp_dir();
+    let target = dir.join("download");
+    fs::create_dir_all(&target).unwrap();
+    fs::write(target.join("stale.txt"), "stale").unwrap();
+
+    let skipped = prepare_local_target(target.to_str().unwrap(), OverwritePolicy::Overwrite)
+        .expect("overwrite should prepare target");
+
+    assert!(!skipped);
+    assert!(!target.exists());
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn sftp_tools_reject_non_sftp_connections_before_connecting() {
+    let repo = repo();
+    let registry = sftp_tool_registry(repo.clone());
+    let mut connection =
+        StoredConnection::new_database("prod mysql".to_string(), mysql_config(), None);
+    repo.insert(&mut connection)
+        .expect("database connection should insert");
+
+    let error = futures::executor::block_on(registry.call(
+        "sftp.list",
+        json!({ "connection": "prod mysql", "path": "/" }),
+        ToolContext::for_adapter(ToolAdapter::Mcp),
+    ))
+    .expect_err("non-sftp connection should be rejected");
+
+    assert!(
+        error
+            .to_string()
+            .contains("connection is not ssh_sftp: prod mysql")
+    );
+}
+
+#[test]
+fn sftp_tools_resolve_connections_by_id_before_type_check() {
+    let repo = repo();
+    let registry = sftp_tool_registry(repo.clone());
+    let mut connection =
+        StoredConnection::new_database("prod mysql".to_string(), mysql_config(), None);
+    repo.insert(&mut connection)
+        .expect("database connection should insert");
+
+    let error = futures::executor::block_on(registry.call(
+        "sftp.list",
+        json!({ "connection": connection.id.unwrap().to_string(), "path": "/" }),
+        ToolContext::for_adapter(ToolAdapter::Mcp),
+    ))
+    .expect_err("non-sftp connection should be rejected");
+
+    assert!(!error.to_string().contains("unknown connection"));
+    assert!(error.to_string().contains("connection is not ssh_sftp"));
+}
+
+#[test]
+fn sftp_config_resolves_vault_username_before_connecting() {
+    let repo = repo();
+    let credentials = repo.credential_repository();
+    let mut credential = CredentialEntry::new("shared ssh account");
+    credential.username = Some("vault-user".to_string());
+    let credential_id = credentials
+        .insert(&mut credential)
+        .expect("credential should insert");
+    let mut params = ssh_params();
+    params.credential_reference = Some(username_reference(credential_id));
+    let mut connection = StoredConnection::new_ssh("vault ssh".to_string(), params, None);
+    repo.insert(&mut connection)
+        .expect("ssh connection should insert");
+
+    let handler = SftpToolHandler::new(repo, SftpTool::List);
+    let config = handler
+        .ssh_config(&json!({ "connection": "vault ssh" }))
+        .expect("vault reference should resolve");
+
+    assert_eq!("vault-user", config.username);
+}
+
+#[test]
+fn sftp_config_applies_separate_sftp_account_credentials() {
+    let mut params = ssh_params();
+    params.sftp_account = Some(SftpAccount {
+        username: "sftp-user".to_string(),
+        password: "sftp-secret".to_string(),
+    });
+
+    let config = ssh_config_from_params(&params);
+
+    assert_eq!("sftp-user", config.username);
+    assert!(matches!(
+        &config.auth,
+        ssh::SshAuth::Password(password) if password == "sftp-secret"
+    ));
+}
+
+#[test]
+fn sftp_config_falls_back_to_main_credentials_without_sftp_account() {
+    let params = ssh_params();
+
+    let config = ssh_config_from_params(&params);
+
+    assert_eq!("manual-user", config.username);
+    assert!(matches!(&config.auth, ssh::SshAuth::AutoPublicKey));
+}
+
+fn repo() -> Arc<ConnectionRepository> {
+    let conn = SqliteConnection::open_with_pool_size(":memory:", 1).expect("sqlite should open");
+    conn.with_connection(|db| {
+        run_migrations(db)?;
+        Ok(())
+    })
+    .expect("migrations should run");
+    Arc::new(ConnectionRepository::new(conn))
+}
+
+fn ssh_params() -> SshParams {
+    SshParams {
+                remote_file: None,
+        sftp_default_directory: None,
+        disabled_jump_server: None,
+        sftp_account: None,
+        host: "127.0.0.1".to_string(),
+        port: 22,
+        username: "manual-user".to_string(),
+        auth_method: SshAuthMethod::AutoPublicKey,
+        credential_reference: None,
+        prompt_username: None,
+        prompt_password: None,
+        keyboard_interactive: None,
+        terminal_encoding: Default::default(),
+        terminal_type: Default::default(),
+        connect_timeout: None,
+        keepalive_interval: None,
+        keepalive_max: None,
+        default_directory: None,
+        init_script: None,
+        disable_shell_integration: None,
+        x11_forwarding: None,
+        allow_legacy_algorithms: None,
+        jump_server: None,
+        proxy: None,
+        os_id: None,
+        icon: None,
+        icon_file_path: None,
+        account_expect: Default::default(),
+    }
+}
+
+fn username_reference(credential_id: i64) -> CredentialReference {
+    CredentialReference {
+        credential_id,
+        credential_cloud_id: None,
+        username: true,
+        password: false,
+        private_key: false,
+        passphrase: false,
+    }
+}
+
+fn mysql_config() -> DbConnectionConfig {
+    DbConnectionConfig {
+        id: String::new(),
+        database_type: DatabaseType::MySQL,
+        name: "prod mysql".to_string(),
+        host: "127.0.0.1".to_string(),
+        port: 3306,
+        username: "app".to_string(),
+        password: String::new(),
+        credential_reference: None,
+        database: None,
+        service_name: None,
+        sid: None,
+        workspace_id: None,
+        proxy: None,
+        extra_params: Default::default(),
+    }
+}
+
+fn temp_dir() -> std::path::PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("onetcli-sftp-tools-test-{nanos}"));
+    fs::create_dir_all(&path).unwrap();
+    path
+}

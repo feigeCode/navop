@@ -1,6 +1,4 @@
-use gpui::{
-    InteractiveElement, IntoElement, ParentElement, Render, Styled, Window, div, px,
-};
+use gpui::{InteractiveElement, IntoElement, ParentElement, Render, Styled, Window, div, px};
 use gpui_component::{
     ActiveTheme, Sizable, Size, h_flex,
     input::{Input, Textarea},

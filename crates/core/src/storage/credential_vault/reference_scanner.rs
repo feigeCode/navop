@@ -5,7 +5,7 @@ use rusqlite::{OptionalExtension, TransactionBehavior};
 
 use crate::storage::{
     ConnectionType, CredentialReference, DbConnectionConfig, MongoDBParams, RedisParams,
-    RemoteDesktopParams, SshParams, TelnetParams,
+    RemoteDesktopParams, RemoteFileProtocol, SshParams, TelnetParams,
 };
 
 use super::tunnel_reference_scanner::append_tunnel_hits;
@@ -223,6 +223,18 @@ pub(super) fn ssh_locations(
                 .proxy
                 .as_ref()
                 .and_then(|proxy| proxy.credential_reference.as_ref()),
+        ),
+        // 远程文件协议为 FTP 时，FTP 参数可持有独立凭据引用，
+        // 删除凭据前必须一并提示（复用 Primary 位置语义：该凭据
+        // 是此连接记录实际使用的连接凭据）。
+        (
+            CredentialReferenceLocation::Primary,
+            params
+                .remote_file
+                .as_ref()
+                .filter(|remote| remote.protocol == RemoteFileProtocol::Ftp)
+                .and_then(|remote| remote.ftp.as_ref())
+                .and_then(|ftp| ftp.credential_reference.as_ref()),
         ),
     ];
     Ok(matching_locations(references, identity))

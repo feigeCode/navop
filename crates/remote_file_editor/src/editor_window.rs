@@ -27,9 +27,8 @@ use one_core::{
     window_close::set_window_close_handler,
 };
 use rust_i18n::t;
-use sftp::{RusshSftpClient, SftpClient};
-use std::sync::{Arc, Mutex as StdMutex, Once, OnceLock};
-use tokio::sync::Mutex;
+use sftp::{RemoteFileClient, SharedRemoteFileClient};
+use std::sync::{Mutex as StdMutex, Once, OnceLock};
 
 actions!(remote_file_editor, [OpenSearch, OpenReplace]);
 
@@ -54,7 +53,7 @@ struct RemoteEditorWindowRef {
 
 pub fn open_remote_file_editor<T: 'static>(
     remote_path: String,
-    client: Arc<Mutex<RusshSftpClient>>,
+    client: SharedRemoteFileClient,
     on_remote_changed: RemoteMutationCallback,
     cx: &mut Context<T>,
 ) {
@@ -314,7 +313,7 @@ impl RemoteEditorTab {
 }
 
 struct RemoteFileEditorWindow {
-    client: Arc<Mutex<RusshSftpClient>>,
+    client: SharedRemoteFileClient,
     tabs: Vec<RemoteEditorTab>,
     active_tab: usize,
     close_prompt_open: bool,
@@ -335,7 +334,7 @@ impl Drop for RemoteFileEditorWindow {
 impl RemoteFileEditorWindow {
     fn new(
         remote_path: String,
-        client: Arc<Mutex<RusshSftpClient>>,
+        client: SharedRemoteFileClient,
         on_remote_changed: RemoteMutationCallback,
         window: &mut Window,
         cx: &mut Context<Self>,

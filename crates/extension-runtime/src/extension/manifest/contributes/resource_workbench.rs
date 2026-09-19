@@ -179,25 +179,91 @@ pub struct ResourceWorkbenchTreeRoot {
     pub children: Option<ResourceWorkbenchTreeChildren>,
 }
 
+/// 子节点来源。
+///
+/// `remote` 是原有形态:按 `operation` lazy 拉取集合。`static` 是增补形态:
+/// 由宿主直接渲染的**功能子节点**(如「索引 → Mapping/设置/分片」),不发任何
+/// provider 请求。两者共用同一个字段名,旧 manifest 不写 `kind` 即等价 `remote`,
+/// 因此宿主向后兼容;反过来,旧宿主因为 `deny_unknown_fields` 会拒绝 `kind`/`items`,
+/// 于是"新声明装进旧宿主"必定在解析期失败,而不是静默少渲染一层。
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ResourceWorkbenchTreeChildrenKind {
+    #[default]
+    Remote,
+    Static,
+}
+
 /// 子节点拉取声明,可递归嵌套形成多级 lazy 树。
 ///
 /// 每一层的 `operation` 参数可用 `parent` 绑定源引用父节点行数据
 /// (如 K8s namespace → pods 传 `{"source": "parent", "path": "/name"}`)。
+///
+/// 两种形态互斥:`remote` 需要 `operation`/`itemsPath`/`labelPath`,`static`
+/// 需要 `items`。注册期按 `kind` 分别校验,写错形态在安装时报错,不会到渲染期
+/// 才表现为"点开是空的"。
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceWorkbenchTreeChildren {
-    pub operation: String,
-    #[serde(rename = "itemsPath")]
-    pub items_path: String,
-    #[serde(rename = "keyPaths")]
+    /// 子节点来源;缺省 `remote`。
+    #[serde(default, skip_serializing_if = "is_remote_children")]
+    pub kind: ResourceWorkbenchTreeChildrenKind,
+    // ---- remote 形态 ----
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation: Option<String>,
+    #[serde(default, rename = "itemsPath", skip_serializing_if = "Option::is_none")]
+    pub items_path: Option<String>,
+    #[serde(default, rename = "keyPaths", skip_serializing_if = "Vec::is_empty")]
     pub key_paths: Vec<String>,
-    #[serde(rename = "labelPath")]
-    pub label_path: String,
-    /// 子节点点击跳转声明;缺省回退根 pageId + 行数据作 route。
-    #[serde(default)]
+    #[serde(default, rename = "labelPath", skip_serializing_if = "Option::is_none")]
+    pub label_path: Option<String>,
+    /// 点击该层任意子行的跳转声明;缺省回退根 pageId + 行数据作 route。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub open: Option<ResourceWorkbenchOpen>,
-    /// 下一级子节点声明;缺省为叶子。
-    #[serde(default)]
+    /// 远程形态的下一级子节点声明;缺省为叶子。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub children: Option<Box<ResourceWorkbenchTreeChildren>>,
+    // ---- static 形态 ----
+    /// 静态功能子节点。零请求展开,顺序即渲染顺序。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<ResourceWorkbenchStaticTreeItem>,
+}
+
+fn is_remote_children(kind: &ResourceWorkbenchTreeChildrenKind) -> bool {
+    *kind == ResourceWorkbenchTreeChildrenKind::Remote
+}
+
+impl ResourceWorkbenchTreeChildren {
+    /// 静态集合的子项;远程形态返回 `None`。
+    ///
+    /// 只看 `kind` 而不看 `items` 是否为空:形态由 `kind` 决定,`items` 存在
+    /// 但 `kind` 不是 static 是非法声明(注册期拒绝),读取侧不该悄悄兼容它。
+    pub fn static_items(&self) -> Option<&[ResourceWorkbenchStaticTreeItem]> {
+        (self.kind == ResourceWorkbenchTreeChildrenKind::Static).then(|| self.items.as_slice())
+    }
+
+    /// 该层是否按 provider 请求 lazy 拉取(远程形态)。
+    pub fn is_remote(&self) -> bool {
+        self.kind == ResourceWorkbenchTreeChildrenKind::Remote
+    }
+}
+
+/// 静态树项:宿主直接渲染的功能子节点,不是 provider 资源。
+///
+/// 身份只来自 `id`(同一层内唯一),不依赖 provider 行数据;点击目标由 `open`
+/// 给定,其 `parent` 绑定源指向**直接父节点**的领域行 —— 例如「索引 → Mapping」
+/// 的 parent 是索引行 `{name, ...}`,于是 `{"source":"parent","path":"/name"}`
+/// 能拿到索引名。需要继承更远的祖先上下文时不要隐式穿透,应显式扩展契约。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceWorkbenchStaticTreeItem {
+    pub id: String,
+    pub title: String,
+    /// 点击目标。静态项必须能导航:声明了却点不到目标页的节点在树里就是死节点,
+    /// 所以这里不是 `Option`,注册期也不接受缺失。
+    pub open: ResourceWorkbenchOpen,
+    /// 该静态项自身的子节点声明(可再是 static 或 remote)。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub children: Option<Box<ResourceWorkbenchTreeChildren>>,
 }
 
@@ -391,8 +457,11 @@ pub struct ResourceWorkbenchViewer {
 
 /// 终端原语。
 ///
-/// `command` 模式由宿主启动可嵌入的本地终端进程;`operation` 模式由 runtime
-/// 侧 pty operation 驱动(用于 SSH exec、kubectl exec 等远程终端)。
+/// 目前只有 `command` 模式可用:由宿主启动可嵌入的本地终端进程。
+/// `operation`(runtime pty 驱动)是**预留声明**,扩展协议还没有 provider
+/// PTY 流式通道,宿主侧必定返回 not supported —— 因此注册期直接拒绝声明了
+/// `operation` 的 manifest,让失败发生在安装时而不是用户点开时。
+/// 字段仍保留在 schema 里,是为了给出明确的拒绝理由,而不是一个 serde 未知字段错误。
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceWorkbenchTerminal {
@@ -408,7 +477,8 @@ pub struct ResourceWorkbenchTerminal {
     /// 工作目录。
     #[serde(default, rename = "workingDir")]
     pub working_dir: Option<String>,
-    /// runtime pty operation;与 `command` 二选一。
+    /// runtime pty operation;与 `command` 二选一。**尚未实现,注册期会拒绝**
+    /// (见类型文档)。
     #[serde(default)]
     pub operation: Option<ResourceWorkbenchTerminalOperation>,
 }

@@ -307,6 +307,7 @@ fn stored_connection() -> StoredConnection {
     StoredConnection::new_ssh(
         "test".to_string(),
         SshParams {
+                remote_file: None,
             host: "localhost".to_string(),
             port: 22,
             username: "user".to_string(),

@@ -1,0 +1,32 @@
+[package]
+name = "navop_runtime"
+version = "0.15.2"
+publish.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+agent_runtime = { workspace = true }
+async-trait = { workspace = true }
+base64 = { workspace = true }
+db = { workspace = true }
+futures = { workspace = true }
+one-core = { workspace = true }
+redis-runtime.workspace = true
+serde_json = { workspace = true }
+sftp = { workspace = true }
+ssh = { workspace = true }
+tool_runtime = { workspace = true }
+
+[features]
+default = []
+builtin-duckdb = ["db/builtin-duckdb"]
+
+[dev-dependencies]
+rusqlite = { workspace = true }
+tempfile = "3"
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+tokio-util = { workspace = true }
+
+[lints]
+workspace = true

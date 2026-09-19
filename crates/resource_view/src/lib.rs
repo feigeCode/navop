@@ -35,9 +35,10 @@ use extension_plugin_adapter::{
 };
 use extension_runtime::RegisteredResourceWorkbenchContribution;
 use extension_runtime::extension::manifest::{
-    ResourceWorkbenchForm, ResourceWorkbenchPage, ResourceWorkbenchPaginationKind,
-    ResourceWorkbenchPrimitive, ResourceWorkbenchStatusFormat as F, ResourceWorkbenchTable,
-    ResourceWorkbenchTerminal, ResourceWorkbenchViewer, ResourceWorkbenchViewerFormat,
+    ResourceWorkbenchForm, ResourceWorkbenchInputType, ResourceWorkbenchPage,
+    ResourceWorkbenchPaginationKind, ResourceWorkbenchPrimitive,
+    ResourceWorkbenchStatusFormat as F, ResourceWorkbenchTable, ResourceWorkbenchTerminal,
+    ResourceWorkbenchViewer, ResourceWorkbenchViewerFormat,
 };
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
@@ -96,11 +97,11 @@ pub(crate) struct RunningRowAction {
     pub row_key: String,
 }
 
-/// collection 页表格的缓存:按 (页面, 数据版本, 加载态) 重建,
+/// collection 页表格的缓存:按 (页面, 页面世代, 加载态) 重建,
 /// 避免每次重绘重建实体,同时保证 load 完成时确实刷新成新数据。
 struct CollectionTableView {
     page_id: String,
-    revision: u64,
+    generation: u64,
     loading: bool,
     table: Entity<TableState<CollectionTableDelegate>>,
 }
@@ -180,8 +181,25 @@ pub struct NativeResourceWorkbench {
     selected_page: String,
     route: serde_json::Value,
     paging: serde_json::Value,
+    /// 连接的**非敏感**配置(`ExtensionConnectionParams::config` 原样),
+    /// 供 `source: connection` 绑定取值。
+    ///
+    /// 由宿主在创建连接 tab 时注入:工作台自身拿不到连接记录,也不该自己去查。
+    /// 取 `config` 而不是整条 `StoredConnection`,是因为 `config` 与 `secrets`
+    /// 按 `ExtensionConnectionParams::validate()` 不可能有同名键——密码/token
+    /// 天然不在这里,不需要靠"过滤敏感键"这种会漏的黑名单。没有连接上下文时
+    /// 是 `Null`。
+    connection: serde_json::Value,
     page_state: PageState,
-    load_revision: u64,
+    /// 页面实例世代:每次导航或重新加载都推进。
+    ///
+    /// 所有异步回写先比对它,不匹配即丢弃。**取消请求不能代替归属检查**:
+    /// 取消与回调真正到达之间有窗口期,迟到的回调会把旧页面的结果写进新页面
+    /// (结果串页),或者把新页面的运行态留在原地(Run 一直转)。
+    ///
+    /// 推进点必须在**导航入口**而不是 `load_current_page` 里:目标页没有 `load`
+    /// 时后者会提前返回,世代不变,旧页面的迟到回调就有了写进新页面的机会。
+    page_generation: u64,
     focus_handle: FocusHandle,
     tokio: tokio::runtime::Handle,
     /// query 页面输入状态(按页面 id 保存,切换页面不丢失草稿)。
@@ -202,8 +220,21 @@ pub struct NativeResourceWorkbench {
     shell_mount: Option<ActiveShellMount>,
     /// 区域级 Shell 挂载(right/bottom 等常驻区域,按 RegionId 缓存)。
     region_shell_mounts: std::collections::BTreeMap<&'static str, ActiveShellMount>,
-    /// 左侧树状态:节点键(根 id / 父键+行键)→ 展开数据。
+    /// 左侧树数据缓存:节点键(根 id / 父键+行键)→ 子节点数据。
+    ///
+    /// 与 `tree_expanded` 分开是刻意的:折叠只改展开集合,**不删缓存**,
+    /// 否则"展开 → 折叠 → 展开"会重复请求同一层。
     tree_children: std::collections::BTreeMap<String, TreeChildrenState>,
+    /// 左侧树展开集合。只表达"这层是不是打开的",不含数据。
+    tree_expanded: std::collections::BTreeSet<String>,
+    /// 树节点级加载代次:节点键 → 当前在途轮次。旧轮次的迟到响应比不中就丢弃。
+    ///
+    /// 缓存不再随折叠失效,所以代次是唯一的作废手段(刷新时整表清空)。
+    tree_load_seq: std::collections::BTreeMap<String, u64>,
+    tree_load_generation: u64,
+    /// 刷新后待恢复的展开键。节点键是结构化的,清空缓存后深层键要等父层
+    /// 重新加载完才能解析,所以恢复是分批的(见 `nav_tree::resume_tree_expansions`)。
+    tree_pending_expand: std::collections::BTreeSet<String>,
     /// terminal 模板页面已挂载的终端。
     terminal_mount: Option<ActiveTerminalMount>,
     terminal_error: Option<String>,
@@ -214,7 +245,15 @@ pub struct NativeResourceWorkbench {
     status_bar_loading: bool,
     renderer_error: Option<String>,
     task_error: Option<String>,
+    /// 当前**页面级**请求的取消令牌(load/query/行操作共用一个槽位)。
+    ///
+    /// 页面导航会取消它——这几个请求的结果按页面归属。状态栏是工作台级的,
+    /// 用独立的 `status_bar_cancel`,否则切页会把还没回来的状态栏请求一起掐掉。
     active_request_cancel: Option<extension_host::CancellationToken>,
+    /// 状态栏请求的取消令牌:只在重新拉取与视图销毁时取消,导航不碰。
+    status_bar_cancel: Option<extension_host::CancellationToken>,
+    /// 状态栏世代:手动刷新可以连点,迟到的回调不能覆盖新结果。
+    status_bar_generation: u64,
     event_batches: Vec<serde_json::Value>,
     event_dropped: u64,
     event_closed: bool,
@@ -236,6 +275,46 @@ enum PageStateSnapshot {
     Failed(String),
 }
 
+/// query 页面结果区应该展示什么。
+#[derive(Debug, Clone, PartialEq)]
+enum QueryResultSource {
+    /// 用户本次执行的结果(失败也是结果)。
+    Query(Result<serde_json::Value, String>),
+    /// 页面 `load` 的结果:声明了 `load` 的查询页打开即应有初始结果集。
+    PageLoad(Result<serde_json::Value, String>),
+    /// 初始结果还在路上。
+    Loading,
+    /// 还没有任何结果可展示。
+    Empty,
+}
+
+/// 决定 query 页面结果区的来源。
+///
+/// 用户执行的结果优先;没执行过且页面声明了 `load` 时,回落到 `load` 的结果。
+///
+/// 没有 `load` 的页面**必须**保持空状态:两个结果存在不同字段里
+/// (`query_result` / `page_state`),而 `begin_page_transition` 只清前者不清后者 ——
+/// 不卡 `has_load` 这一道,打开一个没有 `load` 的查询页就会看到上一个页面的残留结果。
+fn query_result_source(
+    query_result: &Option<Result<serde_json::Value, String>>,
+    has_load: bool,
+    page_state: &PageStateSnapshot,
+) -> QueryResultSource {
+    if let Some(result) = query_result {
+        return QueryResultSource::Query(result.clone());
+    }
+    if !has_load {
+        return QueryResultSource::Empty;
+    }
+    match page_state {
+        PageStateSnapshot::Loaded(value) => QueryResultSource::PageLoad(Ok(value.clone())),
+        PageStateSnapshot::Failed(error) => QueryResultSource::PageLoad(Err(error.clone())),
+        // Idle 说明首屏那次 load 还没发生;Loading 说明正在进行。
+        PageStateSnapshot::Loading => QueryResultSource::Loading,
+        PageStateSnapshot::Idle => QueryResultSource::Empty,
+    }
+}
+
 impl NativeResourceWorkbench {
     fn page_state_snapshot(&self) -> PageStateSnapshot {
         match &self.page_state {
@@ -246,9 +325,14 @@ impl NativeResourceWorkbench {
         }
     }
 
+    /// `connection` 是宿主解析出的**非敏感**连接配置(见字段文档)。
+    ///
+    /// 做成构造函数参数而不是后来的 setter:构造函数内部就会发起首次
+    /// `load`,若连接上下文晚一步注入,首屏那次调用拿到的就是 `Null`。
     pub fn new(
         descriptor: RegisteredResourceWorkbenchContribution,
         session: ResourceSessionHandle,
+        connection: serde_json::Value,
         cx: &mut Context<Self>,
     ) -> Self {
         let selected_page = descriptor.default_page.clone();
@@ -260,8 +344,9 @@ impl NativeResourceWorkbench {
             selected_page,
             route: serde_json::Value::Null,
             paging: serde_json::json!({"page": 1, "limit": 50, "cursor": null}),
+            connection,
             page_state: PageState::Idle,
-            load_revision: 0,
+            page_generation: 0,
             focus_handle: cx.focus_handle(),
             tokio: one_core::gpui_tokio::Tokio::handle(cx),
             query_inputs: Default::default(),
@@ -275,6 +360,10 @@ impl NativeResourceWorkbench {
             shell_mount: None,
             region_shell_mounts: Default::default(),
             tree_children: Default::default(),
+            tree_expanded: Default::default(),
+            tree_load_seq: Default::default(),
+            tree_load_generation: 0,
+            tree_pending_expand: Default::default(),
             terminal_mount: None,
             terminal_error: None,
             terminal_return: None,
@@ -283,6 +372,8 @@ impl NativeResourceWorkbench {
             renderer_error: None,
             task_error: None,
             active_request_cancel: None,
+            status_bar_cancel: None,
+            status_bar_generation: 0,
             event_batches: Vec::new(),
             event_dropped: 0,
             event_closed: false,
@@ -295,6 +386,7 @@ impl NativeResourceWorkbench {
             .push(cx.on_release(|this, cx| this.dispose_terminal_mount(cx)));
         this._subscriptions.push(cx.on_release(|this, _cx| {
             this.cancel_active_request();
+            this.cancel_status_bar_request();
         }));
         this.load_current_page(cx);
         this.load_status_bar(cx);
@@ -316,6 +408,60 @@ impl NativeResourceWorkbench {
         if let Some(cancel) = self.active_request_cancel.take() {
             cancel.cancel();
         }
+    }
+
+    fn cancel_status_bar_request(&mut self) {
+        if let Some(cancel) = self.status_bar_cancel.take() {
+            cancel.cancel();
+        }
+    }
+
+    /// 导航时的取值来源:route 取当前页,selection/parent 由调用点给出,
+    /// connection 一律来自宿主注入的连接上下文。
+    ///
+    /// 集中在这里构造而不是各调用点自己拼 `BindingContext`/`RouteSources`:
+    /// 漏一个来源不会报错,只会静默丢弃(`source: connection` 就是这么在
+    /// 路由侧被忽略过一轮)。
+    fn route_sources<'a>(
+        &'a self,
+        selection: &'a serde_json::Value,
+        parent: &'a serde_json::Value,
+    ) -> route_binding::RouteSources<'a> {
+        route_binding::RouteSources {
+            route: &self.route,
+            selection,
+            parent,
+            connection: &self.connection,
+        }
+    }
+
+    /// 没有行上下文的导航(links / tabs):只透传 route 与 connection。
+    fn route_sources_without_row(&self) -> route_binding::RouteSources<'_> {
+        route_binding::RouteSources::without_row_context(&self.route, &self.connection)
+    }
+
+    /// 推进页面世代并复位瞬态状态。**每个导航入口都要调用**。
+    ///
+    /// 世代必须在这里无条件推进,不能指望 `load_current_page`:目标页没有
+    /// `load` 时它会提前返回(不推进世代),旧页面的迟到回调就会写进新页面。
+    fn begin_page_transition(&mut self) {
+        self.page_generation = self.page_generation.wrapping_add(1);
+        self.cancel_active_request();
+        self.event_batches.clear();
+        self.event_dropped = 0;
+        self.event_closed = false;
+        self.event_error = None;
+        self.query_result = None;
+        // 运行态是**页面级**瞬态:旧页面的请求已被上面的取消打断,它的回调
+        // 因为世代不匹配不会再来清这个标志,必须在这里复位,否则回到该页
+        // 会一直显示"运行中"。
+        self.query_running = false;
+        self.json_views.clear();
+        self.collection_table = None;
+        self.pending_confirm = None;
+        self.row_action_running = None;
+        self.row_action_error = None;
+        self.terminal_error = None;
     }
 
     fn collection_page(&self, page: &ResourceWorkbenchPage) -> Option<u64> {
@@ -419,23 +565,12 @@ impl NativeResourceWorkbench {
             return;
         }
         self.track_terminal_return(&page_id);
-        self.cancel_active_request();
-        self.event_batches.clear();
-        self.event_dropped = 0;
-        self.event_closed = false;
-        self.event_error = None;
+        self.begin_page_transition();
         self.dispose_shell_mount(cx);
         self.dispose_terminal_mount(cx);
         self.selected_page = page_id;
         self.route = serde_json::Value::Null;
         self.paging = serde_json::json!({"page": 1, "limit": 50, "cursor": null});
-        self.query_result = None;
-        self.json_views.clear();
-        self.collection_table = None;
-        self.pending_confirm = None;
-        self.row_action_running = None;
-        self.row_action_error = None;
-        self.terminal_error = None;
         self.load_current_page(cx);
     }
 
@@ -450,23 +585,12 @@ impl NativeResourceWorkbench {
             return;
         }
         self.track_terminal_return(&page_id);
-        self.cancel_active_request();
-        self.event_batches.clear();
-        self.event_dropped = 0;
-        self.event_closed = false;
-        self.event_error = None;
+        self.begin_page_transition();
         self.dispose_shell_mount(cx);
         self.dispose_terminal_mount(cx);
         self.selected_page = page_id;
         self.route = route;
         self.paging = serde_json::json!({"page": 1, "limit": 50, "cursor": null});
-        self.query_result = None;
-        self.json_views.clear();
-        self.collection_table = None;
-        self.pending_confirm = None;
-        self.row_action_running = None;
-        self.row_action_error = None;
-        self.terminal_error = None;
         self.load_current_page(cx);
     }
 
@@ -594,6 +718,9 @@ impl NativeResourceWorkbench {
             return;
         }
         self.status_bar_loading = true;
+        // 世代在发请求**之前**推进:上一次请求的迟到回调据此判定已被顶替。
+        self.status_bar_generation = self.status_bar_generation.wrapping_add(1);
+        let status_generation = self.status_bar_generation;
         cx.notify();
 
         let mount_id = NEXT_MOUNT_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -601,13 +728,16 @@ impl NativeResourceWorkbench {
         let workbench = self.descriptor.clone();
         let context = BindingContext {
             input: serde_json::Value::Null,
+            // 状态栏跨页面常驻,不重挂也不随导航重拉 ⇒ 任何一页的 route 都不是
+            // 它的权威上下文,保持 Null;`connection` 则与页面无关,照常提供。
             route: serde_json::Value::Null,
             selection: serde_json::Value::Null,
             paging: serde_json::json!({"page": 1, "limit": 50, "cursor": null}),
             parent: serde_json::Value::Null,
-            connection: serde_json::Value::Null,
+            connection: self.connection.clone(),
         };
-        self.active_request_cancel = Some(scope.cancellation());
+        self.cancel_status_bar_request();
+        self.status_bar_cancel = Some(scope.cancellation());
         let tokio = self.tokio.clone();
         cx.spawn(async move |this, cx| {
             let result = tokio
@@ -619,6 +749,9 @@ impl NativeResourceWorkbench {
                     Err(WorkbenchDispatchError::Provider(join_error.to_string()))
                 });
             let _ = this.update(cx, |this, cx| {
+                if this.status_bar_generation != status_generation {
+                    return;
+                }
                 this.status_bar_loading = false;
                 this.status_bar = Some(result.map_err(|error| error.to_string()));
                 cx.notify();
@@ -651,6 +784,9 @@ impl NativeResourceWorkbench {
             page_context: serde_json::json!({
                 "pageId": page.id,
                 "route": self.route,
+                // 与 `BindingContext.connection` 同源:Shell 的 navop.workbench.dispatch
+                // 也按这份上下文解析 `source: connection`,两边必须是同一份值。
+                "connection": self.connection,
                 "capabilities": self.session.capabilities(),
             }),
             resource_type: self.descriptor.resource_type.clone(),
@@ -691,6 +827,7 @@ impl NativeResourceWorkbench {
                 "regionId": region.as_str(),
                 "pageId": self.selected_page,
                 "route": self.route,
+                "connection": self.connection,
                 "capabilities": self.session.capabilities(),
             }),
             resource_type: self.descriptor.resource_type.clone(),
@@ -723,8 +860,13 @@ impl NativeResourceWorkbench {
             return;
         };
         let is_stream = has_stream(page);
-        self.load_revision += 1;
-        let revision = self.load_revision;
+        // 重新加载同一页时也要推进世代:行操作成功后会回到这里刷新列表,
+        // 上一次 load 的迟到回调必须被作废。
+        self.page_generation = self.page_generation.wrapping_add(1);
+        let generation = self.page_generation;
+        // 同一次推进也作废了本页在飞的 query —— 它的回调会被世代检查丢掉,
+        // 不会再来清运行态,所以在这里补上,否则"运行中"会永远转下去。
+        self.query_running = false;
         self.page_state = PageState::Loading;
         cx.notify();
 
@@ -738,7 +880,7 @@ impl NativeResourceWorkbench {
             selection: serde_json::Value::Null,
             paging: self.paging_context(),
             parent: serde_json::Value::Null,
-            connection: serde_json::Value::Null,
+            connection: self.connection.clone(),
         };
         let operation = action.operation;
         let tokio = self.tokio.clone();
@@ -773,6 +915,9 @@ impl NativeResourceWorkbench {
                     }) => id,
                     Ok(_) => {
                         let _ = this.update(cx, |this, cx| {
+                            if this.page_generation != generation {
+                                return;
+                            }
                             this.event_error =
                                 Some("events operation did not return an event stream".into());
                             this.page_state = PageState::Failed(
@@ -784,6 +929,9 @@ impl NativeResourceWorkbench {
                     }
                     Err(error) => {
                         let _ = this.update(cx, |this, cx| {
+                            if this.page_generation != generation {
+                                return;
+                            }
                             this.event_error = Some(error.to_string());
                             this.page_state = PageState::Failed(error.to_string());
                             cx.notify();
@@ -807,6 +955,9 @@ impl NativeResourceWorkbench {
                     Ok(subscription) => subscription,
                     Err(join_error) => {
                         let _ = this.update(cx, |this, cx| {
+                            if this.page_generation != generation {
+                                return;
+                            }
                             this.event_error = Some(join_error.to_string());
                             this.page_state = PageState::Failed(join_error.to_string());
                             cx.notify();
@@ -815,7 +966,15 @@ impl NativeResourceWorkbench {
                     }
                 };
                 while let Some(batch) = subscription.recv().await {
+                    let mut stale = false;
                     let _ = this.update(cx, |this, cx| {
+                        // 事件流的消费循环是本次 load 启动的;**切页不会自动让
+                        // provider 停止推送**,所以每一批都要判归属,不能只判
+                        // 第一批。不匹配就跳出循环释放订阅。
+                        if this.page_generation != generation {
+                            stale = true;
+                            return;
+                        }
                         match batch {
                             Ok(EventStreamBatch {
                                 events,
@@ -836,6 +995,9 @@ impl NativeResourceWorkbench {
                         }
                         cx.notify();
                     });
+                    if stale {
+                        return;
+                    }
                 }
             })
             .detach();
@@ -851,7 +1013,7 @@ impl NativeResourceWorkbench {
                     Err(WorkbenchDispatchError::Provider(join_error.to_string()))
                 });
             let _ = this.update(cx, |this, cx| {
-                if this.load_revision != revision {
+                if this.page_generation != generation {
                     return;
                 }
                 this.page_state = match result {
@@ -955,21 +1117,42 @@ impl NativeResourceWorkbench {
             return;
         };
         for field in &form.inputs {
-            let value = values.get(&field.id).cloned().unwrap_or_default();
-            if field.required && value.is_empty() {
+            let text = values.get(&field.id).cloned().unwrap_or_default();
+            let trimmed = text.trim();
+            if field.required && trimmed.is_empty() {
                 self.query_result = Some(Err(format!("`{}` is required", field.id)));
                 cx.notify();
                 return;
             }
-            input.insert(field.id.clone(), serde_json::Value::String(value));
+            // 字段声明的类型必须在这里兑现:`type: json` 的输入是一段**文本**,
+            // 得解析成真 JSON 对象再交给 provider,否则对象契约拿到的是
+            // `"{\"a\":1}"` 这种字符串。空的可选字段按类型分别处理 ——
+            // 空串对 string 是合法值,对 number/boolean/json 不是,后者直接跳过
+            // 该参数而不是塞一个必然转换失败的空串(required 且空的情况上面已返回)。
+            if trimmed.is_empty() && field.value_type != ResourceWorkbenchInputType::String {
+                continue;
+            }
+            let value = match extension_plugin_adapter::parse_form_input(
+                &field.id,
+                &text,
+                field.value_type,
+            ) {
+                Ok(value) => value,
+                Err(message) => {
+                    self.query_result = Some(Err(message));
+                    cx.notify();
+                    return;
+                }
+            };
+            input.insert(field.id.clone(), value);
         }
 
         self.query_running = true;
         self.query_result = None;
         cx.notify();
 
-        self.load_revision += 1;
-        let revision = self.load_revision;
+        self.page_generation = self.page_generation.wrapping_add(1);
+        let generation = self.page_generation;
         let mount_id = NEXT_MOUNT_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let scope = self.session.scope(self.selected_page.clone(), mount_id);
         self.active_request_cancel = Some(scope.cancellation());
@@ -980,7 +1163,7 @@ impl NativeResourceWorkbench {
             selection: serde_json::Value::Null,
             paging: self.paging_context(),
             parent: serde_json::Value::Null,
-            connection: serde_json::Value::Null,
+            connection: self.connection.clone(),
         };
         let tokio = self.tokio.clone();
         cx.spawn(async move |this, cx| {
@@ -997,7 +1180,7 @@ impl NativeResourceWorkbench {
                     Err(WorkbenchDispatchError::Provider(join_error.to_string()))
                 });
             let _ = this.update(cx, |this, cx| {
-                if this.load_revision != revision {
+                if this.page_generation != generation {
                     return;
                 }
                 this.query_running = false;
@@ -1019,7 +1202,10 @@ impl NativeResourceWorkbench {
         let Some(open) = table_of(page).and_then(|table| table.open.as_ref()) else {
             return;
         };
-        let route = route_binding::build_route(&open.route, &self.route, &row);
+        let route = route_binding::build_route(
+            &open.route,
+            &self.route_sources(&row, &serde_json::Value::Null),
+        );
         self.navigate(open.page_id.clone(), route, cx);
     }
 
@@ -1059,7 +1245,10 @@ impl NativeResourceWorkbench {
         self.row_action_error = None;
         cx.notify();
 
-        let revision = self.load_revision;
+        // 不给世代加一:行操作**不改变页面归属**,它只是当前页的一次动作,
+        // 加一反而会让本次 load 的迟到回调被自己作废。归属由下面回调里的
+        // `page_generation != generation` 判定 —— 任何导航/重载都会推进世代。
+        let generation = self.page_generation;
         let page_id = self.selected_page.clone();
         let mount_id = NEXT_MOUNT_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let scope = self.session.scope(page_id.clone(), mount_id);
@@ -1071,7 +1260,7 @@ impl NativeResourceWorkbench {
             selection: row,
             paging: self.paging_context(),
             parent: serde_json::Value::Null,
-            connection: serde_json::Value::Null,
+            connection: self.connection.clone(),
         };
         let tokio = self.tokio.clone();
         cx.spawn(async move |this, cx| {
@@ -1085,7 +1274,7 @@ impl NativeResourceWorkbench {
                 });
             let _ = this.update(cx, |this, cx| {
                 // 页面已切换或已重新加载:丢弃迟到结果。
-                if this.load_revision != revision || this.selected_page != page_id {
+                if this.page_generation != generation || this.selected_page != page_id {
                     return;
                 }
                 this.row_action_running = None;
@@ -1323,8 +1512,7 @@ impl NativeResourceWorkbench {
         // detail 页 links(如 Index → Mapping)。
         for (link_index, link) in page.links.iter().enumerate() {
             let target = link.page_id.clone();
-            let route =
-                route_binding::build_route(&link.route, &self.route, &serde_json::Value::Null);
+            let route = route_binding::build_route(&link.route, &self.route_sources_without_row());
             toolbar = toolbar.child(
                 Button::new(gpui::SharedString::from(format!("page-link-{link_index}")))
                     .with_size(Size::Small)
@@ -1530,8 +1718,7 @@ impl NativeResourceWorkbench {
         for tab in tabs {
             let active = tab.page_id == page.id;
             let target = tab.page_id.clone();
-            let route =
-                route_binding::build_route(&tab.route, &self.route, &serde_json::Value::Null);
+            let route = route_binding::build_route(&tab.route, &self.route_sources_without_row());
             let label_color = if active {
                 theme.foreground
             } else {
@@ -1806,15 +1993,25 @@ impl NativeResourceWorkbench {
             .or_insert_with(|| cx.new(|cx| query_page::QueryInputState::new(&inputs, window, cx)))
             .clone();
         let theme = cx.theme().clone();
-        let result_view: AnyElement = match &self.query_result {
-            None => empty_state(
+        let source = query_result_source(
+            &self.query_result,
+            page.load.is_some(),
+            &self.page_state_snapshot(),
+        );
+        let result_view: AnyElement = match source {
+            QueryResultSource::Query(result) | QueryResultSource::PageLoad(result) => {
+                match result {
+                    Ok(value) => self.render_embedded_json(value, window, cx),
+                    Err(error) => self.render_failure(error, cx),
+                }
+            }
+            QueryResultSource::Loading => loading_state(&theme),
+            QueryResultSource::Empty => empty_state(
                 IconName::Info,
                 "No result yet",
                 "Run the operation to see its output here.",
                 &theme,
             ),
-            Some(Ok(value)) => self.render_embedded_json(value.clone(), window, cx),
-            Some(Err(error)) => self.render_failure(error.clone(), cx),
         };
         let mut view = v_flex()
             .flex_1()
@@ -2576,7 +2773,7 @@ impl NativeResourceWorkbench {
         // 保留旧行(由工具栏刷新按钮表达进行中),避免每次操作都闪一次骨架。
         let stale = self.collection_table.as_ref().is_none_or(|cached| {
             cached.page_id != page_id
-                || (!loading && (cached.loading || cached.revision != self.load_revision))
+                || (!loading && (cached.loading || cached.generation != self.page_generation))
         });
         if stale {
             let actions = collection
@@ -2605,7 +2802,7 @@ impl NativeResourceWorkbench {
             let table = build_table_state(delegate, window, cx);
             self.collection_table = Some(CollectionTableView {
                 page_id: page_id.to_string(),
-                revision: self.load_revision,
+                generation: self.page_generation,
                 loading,
                 table,
             });
@@ -2828,5 +3025,204 @@ mod workbench_render_structure_tests {
             from_regions.contains("self.render_terminal_page"),
             "terminal page must be rendered inside the center region"
         );
+    }
+
+    /// 取 `marker` 之后、外层函数体结束之前的那段源码。
+    fn body_after(source: &str, marker: &str) -> String {
+        let after = source
+            .split(marker)
+            .nth(1)
+            .unwrap_or_else(|| panic!("`{marker}` exists"));
+        // 函数体以 4 空格缩进的 `}` 收尾;体内嵌套块是 8 空格,不会误切。
+        after
+            .split("\n    }\n")
+            .next()
+            .expect("function body terminates")
+            .to_string()
+    }
+
+    /// 拼接要搜索的字面量。
+    ///
+    /// 这些测试用 `include_str!("lib.rs")` 扫自己所在的文件,直接写字面量会让
+    /// 断言命中测试自身的源码(要么假通过,要么必然失败)。拆成片段在运行期拼接,
+    /// 被测源码里就不会出现连续的目标串。
+    fn needle(parts: &[&str]) -> String {
+        parts.concat()
+    }
+
+    /// 每个导航入口都要**无条件**推进页面世代。
+    ///
+    /// 回归(旧的「加载修订号」计数时代):世代只在 `load_current_page` 里推进,而
+    /// 目标页没有 `load` 时它会提前返回 —— 世代不变,旧页面的迟到回调因此
+    /// 通过校验,把结果与错误写进新页面(结果串页)。
+    #[test]
+    fn every_navigation_entry_point_advances_the_page_generation() {
+        let source = include_str!("lib.rs");
+
+        let transition = body_after(source, "fn begin_page_transition");
+        assert!(
+            transition.contains(&needle(&[
+                "self.page_generation = self.page_generation.",
+                "wrapping_add(1)"
+            ])),
+            "begin_page_transition must advance the generation"
+        );
+        assert!(
+            transition.contains(&needle(&["self.query_running = ", "false"])),
+            "begin_page_transition must clear the per-page run state: \
+             the cancelled request's callback returns early on the generation check \
+             and would otherwise never clear it"
+        );
+
+        for entry in ["pub fn select_page", "pub fn navigate"] {
+            let body = body_after(source, entry);
+            assert!(
+                body.contains("self.begin_page_transition()"),
+                "{entry} must advance the generation instead of resetting state by hand"
+            );
+        }
+    }
+
+    /// 所有异步回写都要按**发起时的世代**判归属。
+    ///
+    /// 取消请求不能代替归属检查:取消与回调真正到达之间有窗口期。
+    #[test]
+    fn every_async_writeback_checks_its_page_generation() {
+        let source = include_str!("lib.rs");
+        let guard = needle(&["this.page_generation != ", "generation"]);
+        assert!(
+            !source.contains(&needle(&["load_", "revision"])),
+            "the counter must be named for the page instance generation, \
+             not for a data revision: the old name invited exactly the confusion \
+             that let a stale callback pass the check"
+        );
+        // 回写点:load 完成、query 完成、行操作完成,以及 stream 的四个分支。
+        let guards = source.matches(&guard).count();
+        assert!(
+            guards >= 6,
+            "expected every async writeback to check its page generation, found {guards}"
+        );
+
+        // stream 消费循环最容易只判第一批:切页不会让 provider 停止推送。
+        // 循环体到它所在 spawn 块结束为止(`.detach()` 收口),不按字符数截断 ——
+        // 窗口太短会在没人改动行为的情况下假失败。
+        let after_loop = source
+            .split("while let Some(batch) = subscription.recv().await")
+            .nth(1)
+            .expect("event stream consumption loop exists");
+        let loop_body = after_loop
+            .split(".detach()")
+            .next()
+            .expect("the stream task terminates");
+        assert!(
+            loop_body.contains(&guard),
+            "each event batch must be checked against the generation"
+        );
+        assert!(
+            loop_body.contains(&needle(&["if stale ", "{"])),
+            "a stale batch must break out of the loop and release the subscription"
+        );
+    }
+
+    /// `source: connection` 必须在每一个 `BindingContext` 构造点填真实值。
+    ///
+    /// 回归:`connection` 加进契约后,6 个构造点里 5 个补了字段但都填 `Null`,
+    /// 于是"扩展声明合法、调用永远拿不到值"。
+    #[test]
+    fn every_binding_context_carries_the_injected_connection() {
+        let source = include_str!("lib.rs");
+        assert!(
+            !source.contains(&needle(&["connection: serde_json::Value::", "Null"])),
+            "no binding context may hard-code a null connection: the host injects it"
+        );
+        let injected = needle(&["connection: self.connection", ".clone()"]);
+        assert!(
+            source.matches(&injected).count() >= 3,
+            "load / query / row-action contexts must all carry the connection"
+        );
+        // route 侧来源与 shell 页上下文同样要带上,否则同一个 manifest
+        // 在"参数绑定"和"路由绑定"两边行为不一致。
+        assert!(source.contains(&needle(&["connection: &self.", "connection"])));
+        assert!(source.contains(&needle(&["\"connection\": self.", "connection"])));
+    }
+
+    /// 树 lazy 展开的上下文也必须带连接:它走 `..Default::default()`,
+    /// 少写一行不会编译失败,只会让 `source: connection` 报 BindingMissing。
+    #[test]
+    fn tree_children_context_carries_the_injected_connection() {
+        let source = include_str!("nav_tree.rs");
+        let context = body_after(source, "let context = BindingContext {");
+        assert!(
+            context.contains(&needle(&["connection: self.connection", ".clone()"])),
+            "tree children load must carry the connection context"
+        );
+    }
+}
+
+/// query 页结果区来源的决策。
+///
+/// 单独抽成纯函数是因为这里要合流两份状态,而两者生命周期不同:
+/// `query_result` 每次导航都被清,`page_state` 不会。
+#[cfg(test)]
+mod query_result_source_tests {
+    use super::*;
+
+    fn loaded(value: serde_json::Value) -> PageStateSnapshot {
+        PageStateSnapshot::Loaded(value)
+    }
+
+    /// 用户这次执行的结果永远优先于 load 的结果。
+    #[test]
+    fn a_user_run_overrides_the_load_result() {
+        let source = query_result_source(
+            &Some(Ok(serde_json::json!({"ran": true}))),
+            true,
+            &loaded(serde_json::json!({"loaded": true})),
+        );
+        assert_eq!(
+            QueryResultSource::Query(Ok(serde_json::json!({"ran": true}))),
+            source
+        );
+    }
+
+    /// 声明了 `load` 的查询页,打开即应以 load 结果为初始结果集。
+    #[test]
+    fn a_load_declaring_page_shows_the_load_result_first() {
+        let source = query_result_source(&None, true, &loaded(serde_json::json!({"hits": 3})));
+        assert_eq!(
+            QueryResultSource::PageLoad(Ok(serde_json::json!({"hits": 3}))),
+            source
+        );
+    }
+
+    /// 没有 `load` 的查询页必须保持空状态。
+    ///
+    /// 回归:`page_state` 是跨页共享字段,`begin_page_transition` 只清 `query_result`。
+    /// 不卡这一道,从上个页面切过来就会看到别人的 load 结果。
+    #[test]
+    fn a_page_without_load_stays_empty_even_with_a_stale_page_state() {
+        let source = query_result_source(&None, false, &loaded(serde_json::json!({"stale": 1})));
+        assert_eq!(QueryResultSource::Empty, source);
+    }
+
+    /// load 失败要出现在结果区,而不是被吞成"还没有结果"。
+    #[test]
+    fn a_failed_load_surfaces_in_the_result_area() {
+        let source = query_result_source(&None, true, &PageStateSnapshot::Failed("boom".into()));
+        assert_eq!(QueryResultSource::PageLoad(Err("boom".into())), source);
+    }
+
+    /// 初始 load 还在路上时显示加载态,而不是"运行一次才有结果"的误导提示。
+    #[test]
+    fn an_in_flight_load_shows_the_loading_state() {
+        let source = query_result_source(&None, true, &PageStateSnapshot::Loading);
+        assert_eq!(QueryResultSource::Loading, source);
+    }
+
+    /// 还没开始 load 的页面仍然是空状态。
+    #[test]
+    fn an_idle_load_declaring_page_stays_empty() {
+        let source = query_result_source(&None, true, &PageStateSnapshot::Idle);
+        assert_eq!(QueryResultSource::Empty, source);
     }
 }

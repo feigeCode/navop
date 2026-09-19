@@ -1,7 +1,10 @@
 use super::{
     canonical_workspace_root, copy_entry, create_directory, create_file, delete_entry, move_entry,
-    normalize_canonical_root, read_directory, rename_entry, root_ignore_matcher,
+    read_directory, rename_entry, root_ignore_matcher,
 };
+// 只在 Windows 的两个守卫测试里使用，其他平台不引入以免 unused import 触发 -D warnings。
+#[cfg(target_os = "windows")]
+use super::normalize_canonical_root;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};

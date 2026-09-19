@@ -322,6 +322,9 @@ pub struct ConnectionPlainData {
     /// 连接创建者 ID
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner_id: Option<String>,
+    /// 打开方式偏好（终端 / 双栏文件视图）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preferred_open_mode: Option<crate::storage::PreferredOpenMode>,
 }
 
 /// 工作空间明文数据结构（加密前 / 解密后的 JSON blob）

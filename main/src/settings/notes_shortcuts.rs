@@ -2,9 +2,15 @@ use gpui::{
     App, Entity, FocusHandle, InteractiveElement, IntoElement, Keystroke, ParentElement, Styled,
     Window, div,
 };
-use gpui_component::{ActiveTheme, Sizable, StyledExt, button::{Button, ButtonVariants}, h_flex, kbd::Kbd, v_flex};
-use one_assets::IconName;
+use gpui_component::{
+    ActiveTheme, Sizable, StyledExt,
+    button::{Button, ButtonVariants},
+    h_flex,
+    kbd::Kbd,
+    v_flex,
+};
 use notes::NotesShortcutDescriptor;
+use one_assets::IconName;
 use one_core::settings::AppSettings;
 use rust_i18n::t;
 

@@ -29,10 +29,23 @@ use gpui::{
     FontWeight, InteractiveElement, IntoElement, KeyDownEvent, Keystroke, ParentElement,
     PathPromptOptions, Render, SharedString, Styled, WeakEntity, Window, div,
 };
-use gpui_component::{ActiveTheme, AxisExt, Disableable, Icon, IndexPath, Sizable, Size, WindowExt, button::{Button, ButtonVariants as _}, clipboard::Clipboard, group_box::GroupBoxVariant, h_flex, input::{Input, InputState}, kbd::Kbd, scroll::ScrollableElement, select::{Select, SelectItem, SelectState}, setting::{
+use gpui_component::{
+    ActiveTheme, AxisExt, Disableable, Icon, IndexPath, Sizable, Size, WindowExt,
+    button::{Button, ButtonVariants as _},
+    clipboard::Clipboard,
+    group_box::GroupBoxVariant,
+    h_flex,
+    input::{Input, InputState},
+    kbd::Kbd,
+    scroll::ScrollableElement,
+    select::{Select, SelectItem, SelectState},
+    setting::{
         NumberFieldOptions, SelectIndex, SettingField, SettingGroup, SettingItem, SettingPage,
         Settings,
-    }, switch::Switch, v_flex};
+    },
+    switch::Switch,
+    v_flex,
+};
 use one_assets::IconName;
 use one_core::cloud_sync::{
     CloudSyncService, GlobalCloudUser, SyncEngine, TeamKeyCacheStatus, TeamOption,
@@ -53,10 +66,10 @@ const TEAM_KEYS_SETTINGS_PAGE_INDEX: usize = 6;
 
 use gpui_component::input::InputEvent;
 pub use one_core::settings::{
-    AppSettings, CustomFont, DatabaseOpenMode, GlobalCurrentUser, GlobalProxySettings, LOCALE_EN,
-    LOCALE_SYSTEM, LOCALE_ZH_CN, LOCALE_ZH_HK, PersonalSyncBackendKind, PersonalSyncSettings,
-    ProxyType, SyncProvider, effective_locale_for_setting, is_installed_font_family,
-    is_supported_grid_monospace_font,
+    AppSettings, CloseButtonBehavior, CustomFont, DatabaseOpenMode, GlobalCurrentUser,
+    GlobalProxySettings, LOCALE_EN, LOCALE_SYSTEM, LOCALE_ZH_CN, LOCALE_ZH_HK,
+    PersonalSyncBackendKind, PersonalSyncSettings, ProxyType, SyncProvider,
+    effective_locale_for_setting, is_installed_font_family, is_supported_grid_monospace_font,
 };
 use one_core::tab_container::{TabContent, TabContentEvent};
 use one_core::utils::auto_save_config::AutoSaveConfig;
@@ -114,7 +127,11 @@ fn monospace_font_options(
         FontFamilyKind::Monospace,
         Some(installed_font_names),
     );
-    merge_installed_font_options(&mut options, installed_font_names, FontFamilyKind::Monospace);
+    merge_installed_font_options(
+        &mut options,
+        installed_font_names,
+        FontFamilyKind::Monospace,
+    );
     options
 }
 
@@ -350,14 +367,20 @@ fn init_tracing(settings: &AppSettings) {
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
 
-    match crate::onetcli_app::configured_log_file_path(&settings.log_file_path) {
-        Ok(log_file_path) => match crate::onetcli_app::log_file_appender(&log_file_path) {
+    match crate::navop_app::configured_log_file_path(&settings.log_file_path) {
+        Ok(log_file_path) => match crate::navop_app::log_file_appender(&log_file_path) {
             Ok(file_appender) => {
                 let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
                 Box::leak(Box::new(guard));
                 tracing_subscriber::registry()
                     .with(tracing_subscriber::fmt::layer())
-                    .with(tracing_subscriber::fmt::layer().with_writer(non_blocking))
+                    // 写文件的那一层必须关掉颜色：终端里的样式码落到文件里就是每行
+                    // 前后裹一层转义序列，肉眼读不了、grep 也过滤不干净。
+                    .with(
+                        tracing_subscriber::fmt::layer()
+                            .with_ansi(false)
+                            .with_writer(non_blocking),
+                    )
                     .with(env_filter)
                     .init();
             }
@@ -609,6 +632,7 @@ impl SettingsPanel {
                                     .to_string(),
                             ),
                         ),
+                    close_behavior_setting_group(default_settings.close_button_behavior),
                     notes_setting_group(),
                     SettingGroup::new()
                         .title(t!("Settings.General.Appearance.group_title"))
@@ -983,6 +1007,44 @@ impl SettingsPanel {
         }
         pages
     }
+}
+
+/// 关闭主窗口时的行为。托盘不可用时该设置不生效，仍走退出确认。
+fn close_behavior_setting_group(default: CloseButtonBehavior) -> SettingGroup {
+    SettingGroup::new()
+        .title(t!("Settings.General.CloseBehavior.group_title"))
+        .item(
+            SettingItem::new(
+                t!("Settings.General.CloseBehavior.behavior"),
+                SettingField::dropdown(
+                    vec![
+                        (
+                            SharedString::from(CloseButtonBehavior::Ask.as_str()),
+                            t!("Settings.General.CloseBehavior.ask").into(),
+                        ),
+                        (
+                            SharedString::from(CloseButtonBehavior::MinimizeToTray.as_str()),
+                            t!("Settings.General.CloseBehavior.minimize_to_tray").into(),
+                        ),
+                        (
+                            SharedString::from(CloseButtonBehavior::Quit.as_str()),
+                            t!("Settings.General.CloseBehavior.quit").into(),
+                        ),
+                    ],
+                    |cx: &App| {
+                        SharedString::from(AppSettings::global(cx).close_button_behavior.as_str())
+                    },
+                    |val: SharedString, cx: &mut App| {
+                        AppSettings::update_and_save(cx, |settings| {
+                            settings.close_button_behavior =
+                                CloseButtonBehavior::from_str(val.as_ref());
+                        });
+                    },
+                )
+                .default_value(SharedString::from(default.as_str())),
+            )
+            .description(t!("Settings.General.CloseBehavior.behavior_desc").to_string()),
+        )
 }
 
 fn sync_setting_group(
@@ -3237,14 +3299,14 @@ fn set_custom_keybinding(action_id: &str, spec: String, cx: &mut App) {
             .custom_keybindings
             .insert(action_id.to_string(), vec![spec]);
     });
-    crate::onetcli_app::refresh_keybindings(cx);
+    crate::navop_app::refresh_keybindings(cx);
 }
 
 fn reset_custom_keybinding(action_id: &str, cx: &mut App) {
     AppSettings::update_and_save(cx, |settings| {
         settings.custom_keybindings.remove(action_id);
     });
-    crate::onetcli_app::refresh_keybindings(cx);
+    crate::navop_app::refresh_keybindings(cx);
 }
 
 fn clear_custom_keybinding(action_id: &str, cx: &mut App) {
@@ -3253,7 +3315,7 @@ fn clear_custom_keybinding(action_id: &str, cx: &mut App) {
             .custom_keybindings
             .insert(action_id.to_string(), Vec::new());
     });
-    crate::onetcli_app::refresh_keybindings(cx);
+    crate::navop_app::refresh_keybindings(cx);
 }
 
 fn shortcut_spec_from_keystroke(keystroke: &Keystroke) -> Option<String> {
@@ -3587,6 +3649,32 @@ mod tests {
         assert_eq!(shortcut.keys_other, &["ctrl-shift-w"]);
         assert!(!shortcut.keys_macos.contains(&"ctrl-d"));
         assert!(!shortcut.keys_other.contains(&"ctrl-d"));
+    }
+
+    #[test]
+    fn file_log_layer_disables_ansi_escapes() {
+        let source = include_str!("setting_tab.rs");
+        let compact: String = source.split_whitespace().collect();
+
+        // needle 运行时拼接：写成字面量的话，这个守卫会命中它自己。
+        let file_layer = [
+            "fmt::layer()",
+            ".with_ansi(",
+            "false)",
+            ".with_writer(non_blocking)",
+        ]
+        .concat();
+        assert!(
+            compact.contains(&file_layer),
+            "写文件的那一层必须关掉 ANSI，否则日志每行都裹着转义序列"
+        );
+
+        let ansi_off = [".with_ansi(", "false)"].concat();
+        assert_eq!(
+            1,
+            compact.matches(&ansi_off).count(),
+            "只该对写文件的那一层关 ANSI；终端那一层要保留颜色"
+        );
     }
 
     #[test]
@@ -4069,7 +4157,11 @@ mod tests {
             .into_iter()
             .map(|(value, _)| value.to_string())
             .collect::<Vec<_>>();
-        assert!(monospace_values.iter().any(|value| value == "Sarasa Mono SC"));
+        assert!(
+            monospace_values
+                .iter()
+                .any(|value| value == "Sarasa Mono SC")
+        );
         // 内置精选列表里的 `Consolas` 不应因为合并而重复出现。
         assert_eq!(
             1,
@@ -4096,7 +4188,11 @@ mod tests {
             .into_iter()
             .map(|(value, _)| value.to_string())
             .collect::<Vec<_>>();
-        assert!(!monospace_values.iter().any(|value| value == "Microsoft YaHei"));
+        assert!(
+            !monospace_values
+                .iter()
+                .any(|value| value == "Microsoft YaHei")
+        );
         assert!(!monospace_values.iter().any(|value| value == "SimSun"));
         assert!(!monospace_values.iter().any(|value| value == "Kaiti SC"));
 
