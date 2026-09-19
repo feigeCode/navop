@@ -54,9 +54,30 @@ jobs:
           esac
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
+  # 发布 PR 只改 CHANGELOG + 版本号，跑全平台测试没有意义：这一层只做分类，
+  # 并在判定为发布改动时就地校验 changelog 与版本号；其余 PR 照旧跑全量测试。
+  classify:
+    name: Classify changes
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    outputs:
+      release_only: ${{ steps.check.outputs.release_only }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Classify and validate release-only changes
+        id: check
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 script/release_pr.py check
+
   test:
     name: Test (${{ matrix.platform }}, ${{ matrix.target }})
-    needs: prepare
+    needs: [prepare, classify]
+    if: ${{ needs.classify.outputs.release_only != 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -144,11 +165,13 @@ jobs:
 
   windows-rdp-probe:
     name: Windows RDP probe (${{ matrix.target }})
+    needs: [classify]
     if: >-
       ${{
-        inputs.platform == '' ||
-        inputs.platform == 'all' ||
-        inputs.platform == 'windows'
+        (inputs.platform == '' ||
+         inputs.platform == 'all' ||
+         inputs.platform == 'windows') &&
+        needs.classify.outputs.release_only != 'true'
       }}
     runs-on: windows-2022
     env:
@@ -186,7 +209,7 @@ jobs:
 
   ci-gate:
     name: CI gate
-    needs: [prepare, test, windows-rdp-probe]
+    needs: [prepare, classify, test, windows-rdp-probe]
     if: always()
     runs-on: ubuntu-latest
     steps:
