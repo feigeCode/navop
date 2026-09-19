@@ -660,6 +660,13 @@
 - **验证方式**：dev 与 release 两个 profile 跑同一用例：`cargo test -p universal-plugins --lib` 与 `cargo test --release -p universal-plugins --lib`（release 想省时间只覆盖 `CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16`，`panic` 仍取 profile 值），再用 `cargo test --release -p universal-plugins --lib -- --list` 确认用例不再被 cfg 掉。
 - **适用范围**：`crates/universal-plugins/src/universal_plugins.rs`、`crates/terminal/src/recording/runtime.rs`、`crates/windows_rdp_host/src/event.rs`，以及 profile 设了 `panic = "abort"` 后所有用 `catch_unwind`、`#[should_panic]`、`#[cfg(panic = "unwind")]` 表达契约或隔离的测试与调用点。
 
+- **标题**：Windows GUI 进程 spawn 控制台子程序必须走 `process-util` 隐藏控制台，否则启动/操作时闪黑框
+- **触发信号**：Windows 上启动应用闪一下控制台窗口（本次是启动期 `wsl.exe --list --verbose`），或打开某个功能（HTML 预览、容器文件树、设置页装 skill）时闪一个 cmd 黑框；也适用于新增任何 `std::process::Command::new` / `tokio::process::Command::new` 后台调用点时。
+- **根因 / 约束**：Navop 是 windows 子系统 GUI 进程，自身没有控制台。spawn 控制台子系统程序（`wsl.exe`、`cmd.exe`、`docker.exe`、`npx.cmd`、`git.exe`、`reg.exe`…）时若未设 `CREATE_NO_WINDOW`（`0x0800_0000`），Windows 会为子进程新建一个控制台窗口并显示——即使 stdout/stderr 都已重定向到管道也一样，所以「反正输出走管道」不能当作不闪的理由。GUI 子系统程序（`mstsc.exe`、自身 exe）不需要处理。
+- **正确做法**：统一用 `crates/process-util`：`process_util::configure_background_child(&mut std_command)`（std）或 `configure_tokio_background_child(&mut tokio_command)`（tokio）。写法必须是「先 `let mut command = Command::new(..)`、配好 args/env/stdio，再 configure，最后 `spawn()` / `output()`」，不能保留链式 `.spawn()`，否则没有可变绑定可配。仅当纯逻辑小 crate 不想为 `process-util`（它硬依赖 `tokio/process`）拉进 tokio 时，按 `main/src/file_association.rs` 先例内联 `#[cfg(windows)]` 的 `creation_flags(CREATE_NO_WINDOW)` helper，并配 `#[cfg(not(windows))]` 空实现避免 unused 告警。
+- **验证方式**：四条结构 contract（`include_str!` 断言源码里存在对应的 `configure_background_child` / `creation_flags`，沿用 `workspace_explorer/src/git/tests.rs` 风格）——`cargo test -p terminal --lib wsl_distributions`、`cargo test -p html-preview`、`cargo test -p workspace_explorer --lib backend`、`cargo test -p main --bin navop mcp_skill`；再跑受影响 crate 的 `cargo check --tests` 与 `cargo clippy --all-targets`（只比对改动文件是否有新增告警）。**macOS 上 `cfg(windows)` 分支根本不参与编译，本机无法验证「不闪窗」**，最终必须 Windows 实机启动一次确认。
+- **适用范围**：`crates/terminal/src/wsl_distributions.rs`（启动期 WSL 识别，commit 57e31731b 引入的遗漏）、`crates/html-preview/src/browser.rs`（Windows 走 `cmd /C start`）、`crates/workspace_explorer/src/backend.rs`（容器后端 `docker exec`）、`main/src/settings/mcp_skill_install.rs`（`npx`/`node` 启动器），以及所有新增后台外部命令调用点；`workspace_explorer/src/git.rs`、`core/cloud_sync/personal/git_store.rs`、`extension-host/src/process.rs`、`remote_desktop/src/backends/rdp/transport.rs`、`remote_file_editor/src/external_launcher.rs`、`main/src/file_association.rs` 是已按此约定收口的正确样例。
+
 ### 执行原则
 
 1. 先澄清，再实现；先缩小边界，再扩展范围。

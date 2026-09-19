@@ -70,6 +70,7 @@ db.workspace = true
 connection-import-protocol.workspace = true
 connection-form.workspace = true
 global-hotkey.workspace = true
+process-util.workspace = true
 sha2 = { workspace = true }
 zeroize = { workspace = true }
 flate2 = "1"
