@@ -7971,7 +7971,6 @@ dependencies = [
  "gpui-pre-platform",
  "gpui-pre-reqwest-client",
  "image",
- "interprocess",
  "json_view",
  "known_hosts_view",
  "mongodb-runtime",

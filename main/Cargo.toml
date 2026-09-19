@@ -20,7 +20,7 @@ chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 semver = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "net"] }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
@@ -107,7 +107,6 @@ tray-icon = { version = "0.25", default-features = false, features = ["ksni"] }
 x11rb = "0.13"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-interprocess.workspace = true
 zip = { version = "2", default-features = false, features = ["deflate"] }
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Security_Credentials", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
