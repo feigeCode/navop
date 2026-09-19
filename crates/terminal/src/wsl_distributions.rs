@@ -47,8 +47,13 @@ pub fn list_wsl_distributions() -> Result<Vec<WslDistribution>> {
 #[cfg(any(test, target_os = "windows"))]
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) fn list_wsl_distributions_with(wsl: &str) -> Result<Vec<WslDistribution>> {
-    let output = std::process::Command::new(wsl)
-        .args(["--list", "--verbose"])
+    let mut command = std::process::Command::new(wsl);
+    command.args(["--list", "--verbose"]);
+    // `wsl.exe` 是控制台程序：无控制台的 GUI 进程直接 spawn 会新建一个控制台
+    // 窗口（应用启动时表现为闪一下黑框），即使 stdout 已被重定向到管道也一样。
+    // 统一走后台子进程约定隐藏控制台（Windows 上设置 CREATE_NO_WINDOW）。
+    process_util::configure_background_child(&mut command);
+    let output = command
         .output()
         .with_context(|| format!("failed to run {wsl} --list --verbose"))?;
     if !output.status.success() {

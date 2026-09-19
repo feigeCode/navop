@@ -134,7 +134,8 @@ impl ContainerBackend {
 
     /// 运行 `docker <global...> exec -i <容器> <命令...>`,可选写入 stdin。
     fn run(&self, command: &[String], stdin: Option<&[u8]>) -> Result<std::process::Output> {
-        let mut child = Command::new(&self.program)
+        let mut child_command = Command::new(&self.program);
+        child_command
             .args(&self.global_args)
             .arg("exec")
             .arg("-i")
@@ -147,7 +148,11 @@ impl ContainerBackend {
                 Stdio::null()
             })
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::piped());
+        // 容器命令跑的是 `docker.exe` 这类控制台程序：无控制台的 GUI 进程直接
+        // spawn 会在 Windows 上闪一个控制台窗口，统一走后台子进程约定隐藏。
+        process_util::configure_background_child(&mut child_command);
+        let mut child = child_command
             .spawn()
             .with_context(|| format!("Unable to run {}", self.program))?;
         if let Some(bytes) = stdin {
@@ -425,5 +430,16 @@ mod tests {
             PathBuf::from("/etc"),
             container.canonical_root(PathBuf::from("/etc")).unwrap()
         );
+    }
+
+    /// 结构契约：容器命令必须走后台子进程约定隐藏控制台窗口。
+    ///
+    /// `docker.exe` 这类控制台程序被无控制台的 GUI 进程直接 spawn 时，Windows 会
+    /// 新建一个控制台窗口（表现为闪一下黑框）。
+    #[test]
+    fn container_commands_hide_the_background_console() {
+        let source = include_str!("backend.rs");
+
+        assert!(source.contains("process_util::configure_background_child(&mut child_command)"));
     }
 }
