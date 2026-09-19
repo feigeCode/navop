@@ -4,7 +4,9 @@
 //! 隐藏/显示入口——只有 `minimize_window` / `activate_window`。托盘要求关闭按钮后
 //! 主窗口从 Dock/任务栏消失、标签页与后台任务全部保留，所以这里直连各平台原生 API：
 //!
-//! - macOS：`NSWindow::orderOut:` 隐藏；`makeKeyAndOrderFront:` + `NSApplication::activate` 恢复
+//! - macOS：`NSWindow::orderOut:` 隐藏；`makeKeyAndOrderFront:` + 激活进程恢复。
+//!   激活入口**不能**写死：`-activate` 是 macOS 14 才引入的选择器，旧系统上会直接
+//!   SIGABRT，详见 `platform::activate_app`。
 //! - Windows：`ShowWindow(SW_HIDE)` / `ShowWindow(SW_RESTORE)` + `SetForegroundWindow`
 //! - Linux X11：`unmap_window` / `map_window`
 //! - Linux Wayland：协议不允许客户端任意隐藏并重映射已有 xdg-toplevel，
@@ -69,6 +71,11 @@ mod platform {
     // `raw_window_handle::HasWindowHandle::window_handle`，所以下面一律显式限定 trait。
     use raw_window_handle::HasWindowHandle;
 
+    // 提到模块级而不是 `show()` 里：`activate_app` / `activate_legacy` 的函数签名也要用它，
+    // 而函数签名是在外层作用域解析的，写在函数体内的 `use` 覆盖不到。
+    #[cfg(target_os = "macos")]
+    use objc2_app_kit::NSApplication;
+
     #[cfg(target_os = "macos")]
     pub(super) fn target(window: &Window) -> anyhow::Result<NativeMainWindow> {
         let handle =
@@ -82,7 +89,7 @@ mod platform {
     #[cfg(target_os = "macos")]
     pub(super) fn show(target: NativeMainWindow) -> anyhow::Result<()> {
         use objc2::MainThreadMarker;
-        use objc2_app_kit::{NSApplication, NSView};
+        use objc2_app_kit::NSView;
 
         let Some(mtm) = MainThreadMarker::new() else {
             anyhow::bail!("AppKit 窗口可见性只能在主线程修改");
@@ -97,12 +104,55 @@ mod platform {
             view.window().context("NSView 尚未挂到 NSWindow 上")?;
 
         native.makeKeyAndOrderFront(None);
-        NSApplication::sharedApplication(mtm).activate();
+        let app = NSApplication::sharedApplication(mtm);
+        activate_app(&app);
 
         if !native.isVisible() {
             anyhow::bail!("AppKit 未能显示主窗口（visibility=false）");
         }
         Ok(())
+    }
+
+    /// 把进程激活到前台。**必须按运行时选择器可用性分派，不能写死 `-activate`。**
+    ///
+    /// `-activate` 是 **macOS 14 才新增**的选择器：Apple 的 AppKit 14 发行说明写着
+    /// `NSApplication.activate(ignoringOtherApps:)` 与 `ActivationOptions.ignoringOtherApps`
+    /// 在 macOS 14 已废弃、`NSApplication` 有一个**新方法** `activate`；objc2-app-kit 里前者
+    /// 也确实带着 `#[deprecated = "... Use NSApp.activate instead."]`，替代品就是这个新方法。
+    ///
+    /// 而 navop 声明的最低支持版本是 **macOS 12**（`resources/macos/Info.plist` 的
+    /// `LSMinimumSystemVersion`）。在 macOS 13 及更早的系统上发这个选择器会走到
+    /// `doesNotRecognizeSelector:`；抛出的 ObjC 异常在 Rust 侧没有任何 `@try` 接住，经
+    /// `_objc_terminate` → `std::terminate` 直接变成 SIGABRT。
+    ///
+    /// 现场证据（2026-09-19 用户崩溃报告，macOS 12.7.6）：关闭按钮最小化到托盘后再从托盘
+    /// 恢复主窗口**必现**崩溃；崩溃线程栈正是
+    /// `__exceptionPreprocess → objc_exception_throw → ___forwarding___ → _CF_forwarding_prep_0`，
+    /// 同一时刻 `procRole` 为 `Background`（说明窗口确实处于隐藏态）。本函数是该选择器在全仓
+    /// 唯一的调用点，且该特性随托盘一起在 v0.18.3 引入。
+    ///
+    /// 所以两个入口都保留：能探测到新 API 就用 Apple 推荐的新方法，否则退回自 10.0 起就存在
+    /// 的 `-activateIgnoringOtherApps:`（gpui 的 macOS 后端也走这个入口）。
+    #[cfg(target_os = "macos")]
+    fn activate_app(app: &NSApplication) {
+        use objc2::runtime::NSObjectProtocol as _;
+        use objc2::sel;
+
+        if app.respondsToSelector(sel!(activate)) {
+            app.activate();
+        } else {
+            activate_legacy(app);
+        }
+    }
+
+    /// macOS 13 及更早系统唯一可用的激活入口。
+    ///
+    /// 该入口在 macOS 14+ 被 Apple 弃用（弃用只影响「忽略其它应用」的语义，调用本身仍有效），
+    /// 所以调用点单独收进本函数，把 `#[allow(deprecated)]` 的影响范围压到最小。
+    #[cfg(target_os = "macos")]
+    #[allow(deprecated)]
+    fn activate_legacy(app: &NSApplication) {
+        app.activateIgnoringOtherApps(true);
     }
 
     #[cfg(target_os = "macos")]
@@ -257,5 +307,86 @@ mod platform {
 
     pub(super) fn hide(_window: &Window) -> anyhow::Result<()> {
         anyhow::bail!("当前平台未实现托盘窗口可见性适配")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// 回归守卫：主窗口激活**不能**写死 `-activate`。
+    ///
+    /// `-activate` 是 macOS 14 才新增的选择器，而 `LSMinimumSystemVersion` 声明的是
+    /// macOS 12。无条件调用会让 macOS 13 及更早的系统在「托盘恢复主窗口」时直接 SIGABRT：
+    /// 消息走到 `doesNotRecognizeSelector:`，未捕获的 ObjC 异常被 `std::terminate` 接住。
+    /// 2026-09-19 用户崩溃报告（macOS 12.7.6）就是这个形态，且必现。
+    ///
+    /// 守卫必须用**运行时拼接**的 needle：直接写字面量会被 `include_str!` 把断言自己
+    /// 也扫进来，让守卫变成永远通过的空断言（本仓已有同类教训）。
+    #[test]
+    fn macos_window_activation_is_gated_on_runtime_selector_availability() {
+        let source = include_str!("window_visibility.rs");
+
+        let availability_check = ["responds", "ToSelector"].concat();
+        let new_entry = [".acti", "vate()"].concat();
+        let legacy_entry = ["activateIgnoring", "OtherApps"].concat();
+
+        let activate_fn = source
+            .split("fn activate_app(")
+            .nth(1)
+            .and_then(|rest| rest.split("\n    }\n").next())
+            .expect("activate_app 源码");
+
+        assert!(
+            activate_fn.contains(&availability_check),
+            "调用 `-activate` 前必须先用 respondsToSelector 探测它是否存在"
+        );
+        assert_eq!(
+            1,
+            activate_fn.matches(&new_entry).count(),
+            "新选择器 `-activate` 在 activate_app 里只允许有一个调用点"
+        );
+        // 回退允许收进独立函数（`activate_legacy`），所以这里只要求「探测失败时有回退可走」；
+        // 回退实现本身是否还在，由下面对全文件的计数保证。
+        assert!(
+            activate_fn.contains(&legacy_entry) || activate_fn.contains("activate_legacy"),
+            "探测失败时必须回退到 macOS 13 及更早系统可用的 `-activateIgnoringOtherApps:`"
+        );
+        let legacy_fn = source
+            .split("fn activate_legacy(")
+            .nth(1)
+            .and_then(|rest| rest.split("\n    }\n").next())
+            .expect("activate_legacy 源码");
+        // 计数范围收进函数体，而不是全文件：断言消息和文档注释里也会出现这个字面量，
+        // 按全文件计数会被它们污染（本轮实测全文 4 处、真代码只有 1 处）。
+        assert_eq!(
+            1,
+            legacy_fn.matches(&legacy_entry).count(),
+            "回退实现里只允许有一个旧选择器调用点"
+        );
+
+        // 全文件也只能有这一处：show() 直接调用（旧写法）会在这里被拦下。
+        assert_eq!(
+            1,
+            source.matches(&new_entry).count(),
+            "`-activate` 只能出现在 activate_app 的可用性分支内，show() 不得直接调用"
+        );
+
+        let check_offset = activate_fn.find(&availability_check).expect("可用性判断");
+        let call_offset = activate_fn.find(&new_entry).expect("新选择器调用点");
+        assert!(
+            check_offset < call_offset,
+            "`-activate` 必须落在可用性判断之后"
+        );
+
+        // 可用性判断必须真的在 show() 之前生效：show() 只允许通过 activate_app 激活。
+        let show_fn = source
+            .split("pub(super) fn show(")
+            .nth(1)
+            .and_then(|rest| rest.split("\n    }\n").next())
+            .expect("macOS show() 源码");
+        assert!(show_fn.contains("activate_app"));
+        assert!(
+            !show_fn.contains(&new_entry),
+            "show() 不得绕过 activate_app 直接调用 `-activate`"
+        );
     }
 }
