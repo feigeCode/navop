@@ -4,6 +4,22 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.18.3] - 2026-09-19
+
+#### 修复与优化
+
+- Windows：修复打开应用时闪一下控制台窗口的问题。启动阶段识别 WSL 发行版，以及打开 HTML 预览、浏览容器文件树、在设置页安装技能这些后台操作，此前会直接拉起控制台子进程（`wsl.exe`、`cmd`、`docker`、`npx`）；Windows 会为它们新建并显示一个控制台窗口，即使输出已经重定向到管道也一样。这些调用现在统一以隐藏控制台的方式运行，不再闪窗。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.18.3) 下载桌面端安装包
+
+---
+
+#### Fixes and Improvements
+
+- Windows: fixed a console window flashing when the app starts. Background helpers — WSL distribution detection during startup, opening an HTML preview, browsing container files, and installing skills from Settings — used to spawn console child processes (`wsl.exe`, `cmd`, `docker`, `npx`); Windows created and displayed a console window for each of them, even though their output was already redirected into pipes. They now all run with a hidden console window, so nothing flashes anymore.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.18.2...v0.18.3
+
 ## [v0.18.2] - 2026-09-19
 
 #### 更新内容
