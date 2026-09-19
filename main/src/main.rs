@@ -312,6 +312,30 @@ impl AssetSource for AppAssets {
     }
 }
 
+/// 单实例门禁失败时的用户可见提示。
+///
+/// release 构建是 `windows_subsystem = "windows"`，没有控制台，`eprintln!` 用户
+/// 看不到；这里必须用系统对话框，否则表现为“双击了但没有反应”。
+#[cfg(target_os = "windows")]
+fn report_single_instance_failure(message: &str) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        MB_ICONERROR, MB_OK, MB_SETFOREGROUND, MessageBoxW,
+    };
+    use windows::core::HSTRING;
+
+    let text = HSTRING::from(message);
+    let caption = HSTRING::from(NAVOP_WINDOW_TITLE);
+    // SAFETY: 两个字符串在调用期间保持存活；无属主窗口时句柄传 None。
+    unsafe {
+        MessageBoxW(
+            None,
+            &text,
+            &caption,
+            MB_OK | MB_ICONERROR | MB_SETFOREGROUND,
+        );
+    }
+}
+
 fn main() {
     env_file::load_env_files();
 
@@ -371,24 +395,32 @@ fn main() {
         use windows_single_instance::{SingleInstanceOutcome, StartupRequest};
 
         let forwarded_request_tx = startup_request_tx.clone();
-        match windows_single_instance::claim_or_forward(
+        let outcome = windows_single_instance::claim_or_forward(
             resolved_paths.config_dir(),
             StartupRequest::new(startup_paths.clone()),
             move |request| {
+                // 返回 false 会让主实例回拒绝 ACK：只有真正进入启动队列的请求才算
+                // 被接管，第二个进程不会因为一次失败入队而静默退出。
                 if let Err(error) = forwarded_request_tx
                     .try_send(AppOpenRequest::ActivateAndOpenPaths(request.into_paths()))
                 {
                     tracing::warn!(%error, "failed to enqueue forwarded startup request");
+                    return false;
                 }
+                true
             },
-        ) {
+        );
+
+        match outcome {
             Ok(SingleInstanceOutcome::Primary) => {}
             Ok(SingleInstanceOutcome::Forwarded) => return,
             Err(error) => {
-                tracing::warn!(
-                    %error,
-                    "failed to establish Windows single-instance listener; continuing startup"
-                );
+                // 不能把“无法建立通信”解释成“可以另开一个实例”：放行会直接产出
+                // 第二个 GUI，而第二个窗口既没有单实例语义、也分不清谁该处理启动
+                // 文件。这里明确报错并退出。
+                tracing::error!(%error, "failed to establish the Windows single instance");
+                report_single_instance_failure(error.user_message());
+                std::process::exit(1);
             }
         }
     }
@@ -553,6 +585,19 @@ mod embedded_cli_removal_tests {
     use gpui::{px, size};
     use one_core::settings::{MainWindowSize, MainWindowState};
 
+    /// 只取 `main.rs` 的**生产代码**部分（去掉本测试模块）。
+    ///
+    /// 源文本断言必须只看生产代码：否则断言里的字面量本身就在 `include_str!`
+    /// 的范围内，`assert!(source.contains(...))` 会自己满足自己，而
+    /// `assert!(!source.contains(...))` 会永远失败。
+    fn production_source() -> String {
+        let source = include_str!("main.rs").replace("\r\n", "\n");
+        let tests = source
+            .find("\n#[cfg(test)]\nmod embedded_cli_removal_tests")
+            .expect("embedded_cli_removal_tests module marker");
+        source[..tests].to_string()
+    }
+
     #[test]
     fn main_does_not_route_business_cli() {
         let source = include_str!("main.rs");
@@ -598,7 +643,7 @@ mod embedded_cli_removal_tests {
 
     #[test]
     fn windows_single_instance_gate_precedes_application_creation() {
-        let source = include_str!("main.rs");
+        let source = production_source();
         let gate = source
             .find("windows_single_instance::claim_or_forward")
             .expect("Windows single-instance gate");
@@ -607,7 +652,12 @@ mod embedded_cli_removal_tests {
             .expect("GPUI application creation");
 
         assert!(gate < application);
-        assert!(source.contains("SingleInstanceOutcome::Forwarded => return"));
+        // 只有确认取得主实例资格（或成功转交）才允许继续；判定失败必须退出，
+        // 否则同一个配置目录会出现第二个 GUI。
+        assert!(source.contains("Ok(SingleInstanceOutcome::Forwarded) => return"));
+        assert!(source.contains("std::process::exit(1)"));
+        assert!(source.contains("report_single_instance_failure(error.user_message())"));
+        assert!(!source.contains("continuing startup"));
     }
 
     #[test]
