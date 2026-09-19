@@ -4,6 +4,24 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.18.4] - 2026-09-19
+
+#### 修复与优化
+
+- macOS：修复在 macOS 13 及更早系统上，从托盘恢复主窗口会直接崩溃退出的问题。恢复窗口时调用了一个只在 macOS 14 及以上提供的系统接口，低版本系统上会因找不到该接口而终止进程；现在按系统版本选择可用的接口，macOS 12 / 13 也能正常恢复。
+- Windows：修复重复启动——双击应用图标会开出第二个窗口。原先第二个实例判断「是否已有实例在运行」时用错了系统错误码，导致转发分支从未真正执行过；即便执行，它依赖的等待超时在 Windows 命名管道上也不被支持。本次按原生命名管道重写实例检测与启动转发，并收紧启动门禁：既拿不到主实例身份、转发也失败时，明确提示后退出，不再默默再开一个窗口。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.18.4) 下载桌面端安装包
+
+---
+
+#### Fixes and Improvements
+
+- macOS: fixed a crash when restoring the main window from the tray on macOS 13 and earlier, where the app terminated the process. The restore path called a system API that only exists on macOS 14 and newer. It now picks the API available on the running system, so macOS 12 and 13 restore the window normally.
+- Windows: fixed duplicate launches, where double-clicking the app icon opened a second window. The second instance compared the wrong system error code when checking whether another instance was running, so the forwarding branch never executed; even when it did, the wait timeout it relied on is unsupported on Windows named pipes. The instance check and startup forwarding are rewritten on native named pipes, and the startup gate is tightened: when the process can neither claim the primary instance nor forward its request, it reports the failure and exits instead of silently starting a second window.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.18.3...v0.18.4
+
 ## [v0.18.3] - 2026-09-19
 
 #### 修复与优化

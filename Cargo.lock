@@ -7943,7 +7943,7 @@ checksum = "fc04a4c58212d57930a24bf47d3fa87485264a3a054e9c10e042eb373573ad3c"
 
 [[package]]
 name = "main"
-version = "0.18.3"
+version = "0.18.4"
 dependencies = [
  "agent_runtime",
  "ai_chat_view",
