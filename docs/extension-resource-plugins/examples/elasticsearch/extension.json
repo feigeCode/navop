@@ -6,7 +6,7 @@
   "description": "Reference IPC provider for Elasticsearch indices, mappings, search and documents.",
   "engines": {
     "onetcli": ">=0.15.1",
-    "gpui_shell": "0.6.1"
+    "gpui_shell": "0.6.4"
   },
   "api": {
     "extension": "1.0",
