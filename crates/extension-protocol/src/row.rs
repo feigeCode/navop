@@ -138,6 +138,11 @@ impl ColumnSpec {
 ///
 /// 序列化为 `{ "type": "...", "value": ... }` 的 tagged union。
 /// `Null` 没有 `value` 字段。
+///
+/// 数值 variant(`i64` / `u64` / `f64`)的 `value` 序列化后是 JSON number,但读取时
+/// 也接受等值的十进制文本——部分第三方驱动(如 MySQL 文本协议实现)习惯把无符号
+/// 整数发成十进制字符串,文本与 number 在宿主侧等价且无损,详见
+/// [`crate::cell_number`]。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CellValue {
@@ -146,12 +151,15 @@ pub enum CellValue {
         value: bool,
     },
     I64 {
+        #[serde(deserialize_with = "crate::cell_number::i64_value")]
         value: i64,
     },
     U64 {
+        #[serde(deserialize_with = "crate::cell_number::u64_value")]
         value: u64,
     },
     F64 {
+        #[serde(deserialize_with = "crate::cell_number::f64_value")]
         value: f64,
     },
     /// `decimal` 以字符串保留精度。
@@ -281,6 +289,75 @@ mod tests {
         let su = serde_json::to_string(&u).unwrap();
         assert_eq!(si, r#"{"type":"i64","value":-42}"#);
         assert_eq!(su, r#"{"type":"u64","value":18000000000000000000}"#);
+    }
+
+    #[test]
+    fn numeric_cells_read_equivalent_decimal_text() {
+        // 驱动把无符号整数发成十进制文本时宿主必须照常读入(issue #249/#207):
+        // 文本与 JSON number 在宿主侧等价,`u64::MAX` 也不丢精度。
+        let parsed: CellValue = serde_json::from_str(r#"{"type":"u64","value":"4"}"#).unwrap();
+        assert_eq!(parsed, CellValue::U64 { value: 4 });
+
+        let row: Row = serde_json::from_str(
+            r#"[{"type":"u64","value":"18446744073709551615"},{"type":"i64","value":"-42"},{"type":"f64","value":"1.5"}]"#,
+        )
+        .unwrap();
+        assert_eq!(
+            row,
+            vec![
+                CellValue::U64 { value: u64::MAX },
+                CellValue::I64 { value: -42 },
+                CellValue::F64 { value: 1.5 },
+            ]
+        );
+
+        // number 写法照旧(浮点在 serde_json 的 arbitrary_precision 下走私有
+        // number map,不能因为改读取器而回归)。
+        let numbers: Row = serde_json::from_str(
+            r#"[{"type":"u64","value":4},{"type":"i64","value":-42},{"type":"f64","value":1.5}]"#,
+        )
+        .unwrap();
+        assert_eq!(
+            numbers,
+            vec![
+                CellValue::U64 { value: 4 },
+                CellValue::I64 { value: -42 },
+                CellValue::F64 { value: 1.5 },
+            ]
+        );
+
+        // 嵌套容器里的数值 cell 同样走同一条读取路径。
+        let array: CellValue = serde_json::from_str(
+            r#"{"type":"array","element_type":"u64","value":[{"type":"u64","value":"4"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            array,
+            CellValue::Array {
+                element_type: ColumnTypeKind::U64,
+                value: vec![CellValue::U64 { value: 4 }],
+            }
+        );
+    }
+
+    #[test]
+    fn numeric_cells_reject_unparsable_text() {
+        let error = serde_json::from_str::<CellValue>(r#"{"type":"u64","value":"abc"}"#)
+            .expect_err("非数字文本不能被静默接受");
+        assert!(
+            error
+                .to_string()
+                .contains("an u64 number or a decimal integer string"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn numeric_cells_serialize_back_as_numbers() {
+        let cell = CellValue::U64 { value: 4 };
+        let wire: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&cell).unwrap()).unwrap();
+        assert_eq!(wire["value"], serde_json::json!(4));
     }
 
     #[test]

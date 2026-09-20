@@ -31,6 +31,7 @@
 //! - [`event`][]: 单向事件通知
 
 pub mod blob;
+mod cell_number;
 pub mod conn;
 pub mod data;
 pub mod ddl;

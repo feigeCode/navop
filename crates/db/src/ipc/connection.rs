@@ -1122,6 +1122,23 @@ mod tests {
     }
 
     #[test]
+    fn cursor_fetch_accepts_unsigned_cells_encoded_as_decimal_text() {
+        // 复现 issue #249/#207:MySQL 文本协议驱动把 `BIGINT UNSIGNED` 列按十进制
+        // 文本发送,宿主曾在此处以 `invalid type: string "4", expected u64` 让整张
+        // 表都读不出来。
+        let fetched: CursorFetchOutput = serde_json::from_value(
+            json!({"rows": [[{"type": "u64", "value": "4"}]], "done": true}),
+        )
+        .expect("decimal-text u64 cell must decode");
+
+        assert_eq!(fetched.rows, vec![vec![CellValue::U64 { value: 4 }]]);
+        assert_eq!(
+            crate::ipc::value_adapter::cell_to_cell_state(fetched.rows[0][0].clone()).unwrap(),
+            db_value::CellState::Decoded(db_value::DbValue::Unsigned("4".to_string()))
+        );
+    }
+
+    #[test]
     fn is_query_sql_handles_common_prefixes() {
         assert!(is_query_sql("SELECT 1"));
         assert!(is_query_sql("  with cte as (...)"));
