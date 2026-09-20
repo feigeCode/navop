@@ -5,8 +5,8 @@
 //! 会话列表由外壳直接读会话面板，所以内建侧栏会被压制。
 
 use ai_chat_view::{
-    DefaultAgentChatPanel, MentionItem, WorkbenchPanelEntry, WorkbenchPanelKind, WorkbenchShell,
-    WorkbenchShellConfig,
+    DefaultAgentChatPanel, DefaultAgentChatPanelEvent, MentionItem, WorkbenchPanelEntry,
+    WorkbenchPanelKind, WorkbenchShell, WorkbenchShellConfig,
 };
 use gpui::{App, AppContext as _, Entity, Subscription, Window};
 use gpui_component::ActiveTheme as _;
@@ -149,6 +149,28 @@ pub(crate) fn build_ai_workbench_shell(
             }
         },
     );
+    let explorer_for_turns = explorer.clone();
+    let turn_subscription: Subscription = cx.subscribe(
+        &chat,
+        move |_, event: &DefaultAgentChatPanelEvent, cx| {
+            if let DefaultAgentChatPanelEvent::TurnFinished {
+                session_id,
+                turn_id,
+                success,
+            } = event
+            {
+                explorer_for_turns.update(cx, |explorer, cx| {
+                    explorer.capture_turn_finished(
+                        session_id.clone(),
+                        turn_id.clone(),
+                        *success,
+                        cx,
+                    );
+                });
+            }
+        },
+    );
+    shell.update(cx, |shell, cx| shell.add_subscription(turn_subscription, cx));
     shell.update(cx, |shell, cx| shell.add_subscription(root_subscription, cx));
     shell
 }

@@ -110,6 +110,15 @@ pub enum AgentChatViewEvent {
     Close,
     /// 请求宿主把面板移动到指定位置。
     MoveTo(SidebarPlacement),
+    TurnStarted {
+        session_id: String,
+        turn_id: String,
+    },
+    TurnFinished {
+        session_id: String,
+        turn_id: String,
+        success: bool,
+    },
 }
 
 /// 根据模型选项构建对应运行时。
@@ -2418,6 +2427,24 @@ impl AgentChatView {
         );
         let is_real_terminal = is_cancelled || is_completed_or_failed;
         self.record_turn_timing(&event);
+        match &event {
+            RuntimeEvent::TurnStarted { turn_id, .. } => {
+                cx.emit(AgentChatViewEvent::TurnStarted {
+                    session_id: session_uid.clone(),
+                    turn_id: turn_id.to_string(),
+                });
+            }
+            RuntimeEvent::TurnCompleted { turn_id, .. }
+            | RuntimeEvent::TurnCancelled { turn_id, .. }
+            | RuntimeEvent::TurnFailed { turn_id, .. } => {
+                cx.emit(AgentChatViewEvent::TurnFinished {
+                    session_id: session_uid.clone(),
+                    turn_id: turn_id.to_string(),
+                    success: matches!(&event, RuntimeEvent::TurnCompleted { .. }),
+                });
+            }
+            _ => {}
+        }
         let acp_terminal_phase = if backend == Backend::Acp && is_real_terminal {
             self.acp.as_ref().map(AcpConnection::phase)
         } else {
@@ -7083,6 +7110,61 @@ mod tests {
                 .len(&view.current_session))
         );
         assert!(!view.read_with(cx, |view, _| view.is_running));
+    }
+
+    #[gpui::test]
+    fn turn_boundaries_emit_host_events_for_workspace_checkpoints(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        use std::sync::{Arc, Mutex};
+        let seen: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
+        let seen_for_subscribe = seen.clone();
+        cx.update(|_window: &mut gpui::Window, cx: &mut gpui::App| {
+            cx.subscribe(&view, move |_, event: &AgentChatViewEvent, _cx| match event {
+                AgentChatViewEvent::TurnStarted { .. } => {
+                    seen_for_subscribe.lock().unwrap().push("started");
+                }
+                AgentChatViewEvent::TurnFinished { success, .. } => {
+                    seen_for_subscribe
+                        .lock()
+                        .unwrap()
+                        .push(if *success { "finished:ok" } else { "finished:fail" });
+                }
+                _ => {}
+            })
+            .detach();
+        });
+
+        view.update(cx, |view, cx| {
+            let session_id = view.session_id.clone();
+            view.apply_runtime_event(
+                RuntimeEvent::TurnStarted {
+                    session_id: session_id.clone(),
+                    turn_id: agent_runtime::TurnId::from_string("turn-checkpoint"),
+                },
+                cx,
+            );
+            view.apply_runtime_event(
+                RuntimeEvent::TurnCompleted {
+                    session_id,
+                    turn_id: agent_runtime::TurnId::from_string("turn-checkpoint"),
+                    answer: None,
+                },
+                cx,
+            );
+        });
+
+        cx.run_until_parked();
+        let events = seen.lock().unwrap().clone();
+        assert_eq!(
+            vec!["started", "finished:ok"],
+            events,
+            "宿主依赖这些事件捕获 worktree checkpoint"
+        );
     }
 
     #[gpui::test]

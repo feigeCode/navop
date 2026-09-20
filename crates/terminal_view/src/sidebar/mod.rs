@@ -924,6 +924,8 @@ impl TerminalSidebar {
                 DefaultAgentChatPanelEvent::MoveTo(placement) => {
                     this.move_tool(SidebarPanel::AiChat, *placement, cx);
                 }
+                DefaultAgentChatPanelEvent::TurnStarted { .. }
+                | DefaultAgentChatPanelEvent::TurnFinished { .. } => {}
             },
         );
 
