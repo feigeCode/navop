@@ -150,11 +150,16 @@ impl PersistentConnectionSidebar {
         let mut workspaces = home
             .workspaces
             .iter()
-            .filter_map(|workspace| {
+            .enumerate()
+            .filter_map(|(position, workspace)| {
                 Some(WorkspaceNodeInput {
                     id: workspace.id?,
                     parent_id: workspace.parent_id,
-                    name: workspace.name.clone(),
+                    name: if cfg!(feature = "screenshot-safe") {
+                        crate::screenshot_safe::workspace_name(position)
+                    } else {
+                        workspace.name.clone()
+                    },
                 })
             })
             .collect::<Vec<_>>();
@@ -173,7 +178,11 @@ impl PersistentConnectionSidebar {
                 Some(ConnectionNodeInput {
                     id,
                     workspace_id: connection.workspace_id,
-                    name: connection.name.clone(),
+                    name: if cfg!(feature = "screenshot-safe") {
+                        crate::screenshot_safe::connection_name(connection.connection_type, Some(id))
+                    } else {
+                        connection.name.clone()
+                    },
                     last_used_at: connection.last_used_at,
                     updated_at: connection.updated_at,
                     created_at: connection.created_at,
@@ -232,7 +241,14 @@ impl PersistentConnectionSidebar {
                     recent_rows.extend(recent.into_iter().filter_map(|connection| {
                         Some(ConnectionTreeRow::RecentConnection {
                             id: connection.id?,
-                            name: connection.name,
+                            name: if cfg!(feature = "screenshot-safe") {
+                                crate::screenshot_safe::connection_name(
+                                    connection.connection_type,
+                                    connection.id,
+                                )
+                            } else {
+                                connection.name
+                            },
                         })
                     }));
                 }
