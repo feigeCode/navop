@@ -245,7 +245,11 @@ impl LlmClientBuilder {
         self
     }
 
-    /// Set request timeout in seconds
+    /// Set idle (per-read) timeout in seconds
+    ///
+    /// This bounds how long a request may go without receiving any bytes. It
+    /// does not cap the total duration, so long streaming responses keep working
+    /// as long as data keeps flowing.
     pub fn timeout(mut self, secs: u64) -> Self {
         self.timeout_secs = Some(secs);
         self

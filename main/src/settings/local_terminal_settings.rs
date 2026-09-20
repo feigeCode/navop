@@ -2,7 +2,14 @@ use gpui::{
     App, AppContext, Context, Entity, IntoElement, ParentElement, Render, SharedString, Styled,
     Window, div,
 };
-use gpui_component::{ActiveTheme, Selectable, Sizable, button::{Button, ButtonVariants as _}, h_flex, input::{Input, InputEvent, InputState}, setting::{SettingField, SettingGroup, SettingItem}, v_flex};
+use gpui_component::{
+    ActiveTheme, Selectable, Sizable,
+    button::{Button, ButtonVariants as _},
+    h_flex,
+    input::{Input, InputEvent, InputState},
+    setting::{SettingField, SettingGroup, SettingItem},
+    v_flex,
+};
 use one_assets::IconName;
 use one_core::settings::{
     AppSettings, LocalTerminalCustomProfile, LocalTerminalProfileKind, LocalTerminalProfileSettings,

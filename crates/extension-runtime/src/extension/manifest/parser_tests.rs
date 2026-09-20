@@ -462,13 +462,17 @@ fn manifest_parses_v2_layout_tree_tabs_and_status_bar() {
         crate::extension::manifest::ResourceWorkbenchNavSource::Tree { roots } => {
             assert_eq!(1, roots.len());
             let children = roots[0].children.as_ref().unwrap();
-            assert_eq!("listContainers", children.operation);
-            assert_eq!("/containers", children.items_path);
+            // 旧 manifest 不写 `kind`:必须解析成 remote,行为与改动前逐字一致。
+            assert!(children.is_remote());
+            assert!(children.static_items().is_none());
+            assert!(children.items.is_empty());
+            assert_eq!(Some("listContainers"), children.operation.as_deref());
+            assert_eq!(Some("/containers"), children.items_path.as_deref());
             let open = children.open.as_ref().unwrap();
             assert_eq!("container-inspect", open.page_id);
             // 二级 lazy children:route 用 parent 绑定源引用父行。
             let nested = children.children.as_deref().unwrap();
-            assert_eq!("/mounts", nested.items_path);
+            assert_eq!(Some("/mounts"), nested.items_path.as_deref());
             assert!(nested.children.is_none());
             assert_eq!(
                 crate::extension::manifest::ResourceWorkbenchBindingSource::Parent,
@@ -528,6 +532,147 @@ fn manifest_parses_v2_layout_tree_tabs_and_status_bar() {
         terminal.env.get("TERM").map(String::as_str)
     );
     assert_eq!(Some("/"), terminal.working_dir.as_deref());
+}
+
+/// 静态树子项:`kind: "static"` + `items`,展开即得、零请求。
+///
+/// 同一个 `children` 结构体承载两套字段,靠 `kind` 判形。这里把两件事钉在一起:
+/// 静态形态能解析出来,且静态项各自持有自己的 `open`(集合级 `open` 只属于
+/// 远程形态)。写错形态由注册期拒绝,不在解析期静默兜底。
+#[test]
+fn manifest_parses_static_tree_children() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_manifest(
+        tmp.path(),
+        r#"{
+            "schema_version": 1,
+            "id": "com.example.indexstore",
+            "name": "Index Store",
+            "version": "1.0.0",
+            "engines": { "onetcli": ">=0.1.0" },
+            "permissions": ["spawn:./bin/provider"],
+            "runtime": {
+                "ipc": [{
+                    "id": "main",
+                    "entry": { "command": "./bin/provider" },
+                    "transport": { "kind": "local_socket" }
+                }]
+            },
+            "contributes": {
+                "connections": [{
+                    "id": "store",
+                    "label": "Store",
+                    "runtimeId": "main",
+                    "resourceType": "search"
+                }],
+                "resourceWorkbenches": [{
+                    "schemaVersion": 3,
+                    "id": "store",
+                    "title": "Store",
+                    "connectionIds": ["store"],
+                    "runtimeId": "main",
+                    "resourceType": "search",
+                    "defaultPage": "indices",
+                    "operations": {
+                        "listIndices": {
+                            "mode": "invoke",
+                            "method": "store/index/list",
+                            "requires": ["store/index/list"],
+                            "effect": "read"
+                        }
+                    },
+                    "pages": [{
+                        "id": "indices",
+                        "title": "Indices",
+                        "renderer": {"kind": "native"},
+                        "load": {"operation": "listIndices"},
+                        "stack": [{"kind": "viewer", "format": "json"}]
+                    }, {
+                        "id": "index-mapping",
+                        "title": "Mapping",
+                        "renderer": {"kind": "native"},
+                        "route": {"name": {"type": "string", "required": true}},
+                        "stack": [{"kind": "viewer", "format": "json"}]
+                    }, {
+                        "id": "index-settings",
+                        "title": "Settings",
+                        "renderer": {"kind": "native"},
+                        "route": {"name": {"type": "string", "required": true}},
+                        "stack": [{"kind": "viewer", "format": "json"}]
+                    }],
+                    "layout": {
+                        "left": {
+                            "width": 260,
+                            "source": {
+                                "kind": "tree",
+                                "roots": [{
+                                    "id": "indices",
+                                    "title": "Indices",
+                                    "pageId": "indices",
+                                    "children": {
+                                        "operation": "listIndices",
+                                        "itemsPath": "/indices",
+                                        "keyPaths": ["/name"],
+                                        "labelPath": "/name",
+                                        "open": {
+                                            "pageId": "indices",
+                                            "route": {"name": {"source": "selection", "path": "/name", "type": "string"}}
+                                        },
+                                        "children": {
+                                            "kind": "static",
+                                            "items": [
+                                                {
+                                                    "id": "mapping",
+                                                    "title": "Mapping",
+                                                    "open": {
+                                                        "pageId": "index-mapping",
+                                                        "route": {"name": {"source": "parent", "path": "/name", "type": "string"}}
+                                                    }
+                                                },
+                                                {
+                                                    "id": "settings",
+                                                    "title": "Settings",
+                                                    "open": {
+                                                        "pageId": "index-settings",
+                                                        "route": {"name": {"source": "parent", "path": "/name", "type": "string"}}
+                                                    }
+                                                }
+                                            ]
+                                        }
+                                    }
+                                }]
+                            }
+                        }
+                    }
+                }]
+            }
+        }"#,
+    );
+
+    let manifest = load_from_dir(tmp.path()).unwrap();
+    let workbench = &manifest.contributes.resource_workbenches[0];
+    let layout = workbench.layout.as_ref().unwrap();
+    match &layout.left.as_ref().unwrap().source {
+        crate::extension::manifest::ResourceWorkbenchNavSource::Tree { roots } => {
+            let children = roots[0].children.as_ref().unwrap();
+            assert!(children.is_remote());
+            let static_children = children.children.as_deref().unwrap();
+            assert!(!static_children.is_remote());
+            let items = static_children.static_items().unwrap();
+            assert_eq!(2, items.len());
+            assert_eq!("mapping", items[0].id);
+            assert_eq!("settings", items[1].id);
+            // 静态项各带自己的 open:同一层可以指向不同页面。
+            assert_eq!("index-mapping", items[0].open.page_id);
+            assert_eq!("index-settings", items[1].open.page_id);
+            assert_eq!(
+                crate::extension::manifest::ResourceWorkbenchBindingSource::Parent,
+                items[0].open.route["name"].source
+            );
+            assert!(items[0].children.is_none());
+        }
+        other => panic!("expected tree nav, got {other:?}"),
+    }
 }
 
 #[test]

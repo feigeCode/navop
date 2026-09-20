@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Navop** is a cross-platform desktop application built on [GPUI](https://gpui.rs) that provides a unified interface for database management, SSH/SFTP, terminal, and AI tools. The project was migrated from OnetCli, so some compatibility-sensitive protocols, persisted identifiers, and internal Rust names still use the historical `onetcli` / `OnetCli` spelling.
+**Navop** is a cross-platform desktop application built on [GPUI](https://gpui.rs) that provides a unified interface for database management, SSH/SFTP, terminal, and AI tools. The project was migrated from OnetCli, so some compatibility-sensitive protocols, persisted identifiers (such as `ProviderType::OnetCli` and its `onet_cli` value), upgrade entries, and public environment variables still use the historical `onetcli` / `OnetCli` spelling.
 
 Key capabilities:
 
@@ -60,8 +60,8 @@ script/bootstrap
 # Install system dependencies (Windows PowerShell)
 .\script\install-window.ps1
 
-# Bump version for release
-./script/bump-version.sh x.y.z
+# Release (bump version in the dev → main PR, then tag on main; see .github/RELEASE.md)
+script/release-tag.sh vx.y.z
 ```
 
 ## Workspace Structure
@@ -70,7 +70,7 @@ The workspace uses an external `gpui-component` checkout plus `main` and the Nav
 
 ### Application Layer
 
-- **`main/`** — Application entry point and main UI. Orchestrates all subsystems: auth, settings, licensing, updates, home page. Entry: `main/src/main.rs` → `OnetCliApp`.
+- **`main/`** — Application entry point and main UI. Orchestrates all subsystems: auth, settings, licensing, updates, home page. Entry: `main/src/main.rs` → `NavopApp`.
 
 The `navop` executable is GUI/update-only and does not embed database, SSH, SFTP, or tool business subcommands. A future standalone `navop-cli` should connect to the running application through Public MCP discovery and its authenticated tool interface instead of linking directly to `main` or application state.
 
@@ -92,7 +92,9 @@ The `navop` executable is GUI/update-only and does not embed database, SSH, SFTP
 
 ### Utilities
 
-- **`crates/reqwest_client`** — HTTP client wrapper around Zed's custom reqwest fork.
+- **`reqwest_client`** — HTTP client wrapper around Zed's custom reqwest fork. Comes from the
+  `gpui-pre` fork as the package `gpui-pre-reqwest-client` (lib name `reqwest_client`), patched in
+  the root `Cargo.toml`; there is no longer a local `crates/reqwest_client` copy.
 - **`crates/webview` (gpui-wry)** — WebView integration via Wry.
 - **`crates/license_tool`** — License key generation and management.
 - **`crates/story`** — Component gallery/showcase app (runs with `cargo run` from default members).
@@ -100,12 +102,12 @@ The `navop` executable is GUI/update-only and does not embed database, SSH, SFTP
 
 ## Application Initialization Flow
 
-The startup sequence in `main/src/main.rs` and `main/src/onetcli_app.rs` is order-sensitive:
+The startup sequence in `main/src/main.rs` and `main/src/navop_app.rs` is order-sensitive:
 
 1. `update::handle_update_command()` — handle self-update CLI commands
 2. `load_env_files()` — 仅开发构建从 CWD / 工作区加载 `.env.local` / `.env`
 3. `Application::new().with_assets(Assets)` — create app with bundled assets
-4. `onetcli_app::init(cx)` — tracing, HTTP client, then subsystem init:
+4. `navop_app::init(cx)` — tracing, HTTP client, then subsystem init:
   - `gpui_component::init(cx)` — **must be called before any UI component usage**
   - `one_core::init(cx)`, `one_ui::init(cx)` — core and UI subsystem init
   - `db_view::chatdb::agents::init(cx)` — chat DB agents
@@ -118,7 +120,7 @@ The startup sequence in `main/src/main.rs` and `main/src/onetcli_app.rs` is orde
 6. `GlobalDbState::new()` + cleanup task → `cx.set_global()`
 7. `db_view::init_ask_ai_notifier(cx)` — Ask AI notifier
 8. `DatabaseViewPluginRegistry` → `cx.set_global()`
-9. Open window with `Root::new(OnetCliApp, window, cx)` — **Root must be the outermost view**
+9. Open window with `Root::new(NavopApp, window, cx)` — **Root must be the outermost view**
 
 ## Architecture Patterns
 

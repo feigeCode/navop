@@ -12,7 +12,7 @@ use gpui_component::{
 use one_core::llm::{
     GlobalProviderState,
     notifier::emit_provider_config_changed,
-    storage::{ProviderRepository, refresh_onetcli_models},
+    storage::{ProviderRepository, refresh_navop_models},
     types::ProviderConfig,
 };
 use one_core::storage::{GlobalStorageState, StorageManager, traits::Repository};
@@ -71,7 +71,7 @@ impl LlmProvidersView {
 
         if is_logged_in {
             if let Err(e) = repo.ensure_onetcli_provider() {
-                tracing::error!("Failed to ensure OnetCli provider: {}", e);
+                tracing::error!("Failed to ensure Navop provider: {}", e);
             }
         }
 
@@ -80,7 +80,7 @@ impl LlmProvidersView {
         // 登录后从云端实时拉取内置 Navop AI 模型列表并持久化，
         // 拉取完成后刷新面板模型选项与当前列表。
         if is_logged_in {
-            self.spawn_refresh_onetcli_models(cx);
+            self.spawn_refresh_navop_models(cx);
         }
     }
 
@@ -105,7 +105,7 @@ impl LlmProvidersView {
         cx.notify();
     }
 
-    fn spawn_refresh_onetcli_models(&mut self, cx: &mut Context<Self>) {
+    fn spawn_refresh_navop_models(&mut self, cx: &mut Context<Self>) {
         let storage_manager = self.storage_manager.clone();
         let provider_state = cx.global::<GlobalProviderState>().clone();
 
@@ -113,7 +113,7 @@ impl LlmProvidersView {
             let Some(repo) = storage_manager.get::<ProviderRepository>() else {
                 return;
             };
-            match refresh_onetcli_models(&repo, &provider_state).await {
+            match refresh_navop_models(&repo, &provider_state).await {
                 Ok(Some(_)) => {
                     cx.update(|cx| {
                         emit_provider_config_changed(cx);
@@ -550,7 +550,7 @@ impl LlmProvidersView {
             })
     }
 
-    /// 内置 provider（OnetCli）支持设置/取消默认和编辑，不可删除和禁用
+    /// 内置 provider（Navop）支持设置/取消默认和编辑，不可删除和禁用
     fn render_builtin_actions(
         &self,
         provider: &ProviderConfig,

@@ -222,5 +222,6 @@ fn connection_source_kind(source: &SftpUploadConnection) -> TestConnectionSource
     match source {
         SftpUploadConnection::SessionManager(_) => TestConnectionSourceKind::SessionManager,
         SftpUploadConnection::Config(_) => TestConnectionSourceKind::Config,
+        SftpUploadConnection::Ftp(_) => TestConnectionSourceKind::Config,
     }
 }

@@ -4,6 +4,7 @@ pub mod addon;
 pub mod broadcast_input;
 mod broadcast_registry;
 pub mod cd_completion;
+pub mod ftp_form_window;
 pub mod highlight_presets;
 pub mod history_prompt;
 mod host_key_dialog;
@@ -25,6 +26,7 @@ pub mod view;
 pub mod workspace;
 
 pub use addon::{AddonManager, HoveredLink, SearchAddon, TerminalAddon, WebLinksAddon};
+pub use ftp_form_window::{FtpFormWindow, FtpFormWindowConfig};
 pub use one_core::layout::{
     SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, TOOLBAR_WIDTH,
 };

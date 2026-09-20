@@ -8,15 +8,15 @@ use gpui_component::{WindowExt, h_flex, notification::Notification, v_flex};
 use one_core::gpui_tokio::Tokio;
 use rust_i18n::t;
 use sftp::{
-    DirectoryConflictPolicy, RemoteFileOperation, ServerCopyItem, SftpClient,
-    build_remote_file_command, calculate_directory_size, remote_path_is_same_or_descendant,
+    DirectoryConflictPolicy, RemoteFileClient, RemoteFileOperation, ServerCopyItem,
+    SharedRemoteFileClient, build_remote_file_command, calculate_directory_size,
+    remote_path_is_same_or_descendant,
 };
 use ssh::SshSessionManager;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use tokio::sync::Mutex;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ClipboardEndpoint {
@@ -305,6 +305,14 @@ impl SftpView {
             return;
         }
 
+        let endpoint_is_ftp = match clipboard.endpoint {
+            ClipboardEndpoint::RemoteLeft => self
+                .left_remote
+                .as_ref()
+                .is_some_and(|left| left.remote_file_ftp.is_some()),
+            ClipboardEndpoint::RemoteRight => self.remote_file_ftp.is_some(),
+            ClipboardEndpoint::Local => false,
+        };
         let (client, config) = match clipboard.endpoint {
             ClipboardEndpoint::RemoteLeft => {
                 let Some(left) = self.left_remote.as_ref() else {
@@ -324,6 +332,11 @@ impl SftpView {
             ClipboardEndpoint::Local => return,
         };
 
+        // 远程命令复制/粘贴依赖 SSH 通道，FTP 模式不支持。
+        if endpoint_is_ftp {
+            window.push_notification(Notification::error(t!("Error.ftp_not_supported")), cx);
+            return;
+        }
         let session_manager = Arc::new(SshSessionManager::new(config));
         let endpoint = clipboard.endpoint;
         let kind = clipboard.kind;
@@ -492,7 +505,7 @@ impl SftpView {
                 Self::finish_directory_size_task(panel, full_path, task, window, cx);
             }
             ClipboardEndpoint::RemoteLeft | ClipboardEndpoint::RemoteRight => {
-                let client: Option<Arc<Mutex<sftp::RusshSftpClient>>> = match endpoint {
+                let client: Option<SharedRemoteFileClient> = match endpoint {
                     ClipboardEndpoint::RemoteLeft => self
                         .left_remote
                         .as_ref()

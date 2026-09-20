@@ -9,6 +9,7 @@ mod file_clipboard;
 mod file_list_panel;
 mod file_list_preferences;
 mod host_key_prompt;
+mod left_credential_prompt;
 mod left_remote;
 mod left_remote_state;
 mod ssh_config;
@@ -23,13 +24,28 @@ pub use file_list_panel::{
     FileListPanelEvent,
 };
 
+use ftp::{FtpClient, FtpConnectConfig};
 use gpui::{
     Anchor, AnyElement, AnyWindowHandle, App, AsyncApp, Context, Entity, EventEmitter,
     ExternalPaths, FocusHandle, Focusable, FontWeight, IntoElement, MouseButton, ParentElement,
     Render, SharedString, Styled, WeakEntity, Window, actions, div, prelude::*, px,
 };
-use gpui_component::{ActiveTheme, Disableable, Icon, Sizable, Size, WindowExt, breadcrumb::{Breadcrumb, BreadcrumbItem}, button::{Button, ButtonVariants}, dialog::{DialogButtonProps, DialogFooter}, h_flex, input::{Input, InputEvent, InputState}, menu::{DropdownMenu, PopupMenuItem}, notification::Notification, popover::{Popover, PopoverState}, progress::Progress, scroll::ScrollableElement, spinner::Spinner, tooltip::Tooltip, v_flex};
-use one_ui::IconSize;
+use gpui_component::{
+    ActiveTheme, Disableable, Icon, Sizable, Size, WindowExt,
+    breadcrumb::{Breadcrumb, BreadcrumbItem},
+    button::{Button, ButtonVariants},
+    dialog::{DialogButtonProps, DialogFooter},
+    h_flex,
+    input::{Input, InputEvent, InputState},
+    menu::{DropdownMenu, PopupMenuItem},
+    notification::Notification,
+    popover::{Popover, PopoverState},
+    progress::Progress,
+    scroll::ScrollableElement,
+    spinner::Spinner,
+    tooltip::Tooltip,
+    v_flex,
+};
 use one_assets::IconName;
 use one_core::background_tasks::{
     BackgroundTaskCancellation, BackgroundTaskHandle, BackgroundTaskProgressUnit,
@@ -43,6 +59,7 @@ use one_core::storage::{
     sftp_favorite_connection_key,
 };
 use one_core::tab_container::{TabContent, TabContentEvent};
+use one_ui::IconSize;
 use one_ui::file_conflict_prompt::{
     FileConflictChoice, FileConflictPrompt, FileConflictPromptLabels, FileConflictPromptSpec,
 };
@@ -57,7 +74,10 @@ use remote_image_preview::{
 };
 use rust_i18n::t;
 use sftp::{DirectoryConflictPolicy, ServerCopyItem, ServerCopyRequest, copy_between_servers};
-use sftp::{RusshSftpClient, SftpClient, TransferCancelled, TransferProgress};
+use sftp::{
+    RemoteFileClient, RusshSftpClient, SftpClient, SharedRemoteFileClient, TransferCancelled,
+    TransferProgress,
+};
 use sftp_transfer::{
     SftpConnectionIdentity, SftpDeleteRemoteRequest, SftpDownloadRequest, SftpRemoteDeleteEntry,
     SftpTransferEvent, SftpTransferExecutor, SftpTransferId, SftpTransferOperation,
@@ -76,6 +96,7 @@ use std::time::{Duration, SystemTime};
 use tokio::sync::Mutex;
 
 use host_key_prompt::{HostKeyPromptTarget, host_key_prompt_request};
+use left_credential_prompt::LeftCredentialInputs;
 use left_remote_state::{LeftRemoteConnectionState, LeftRemoteEndpoint};
 
 actions!(
@@ -199,10 +220,36 @@ const BREADCRUMB_ITEM_MAX_WIDTH: f32 = 180.0;
 const LOCAL_FAVORITE_CONNECTION_KEY: &str = "local-file-list:global";
 
 struct TransferClientPool {
-    config: SshConnectConfig,
+    source: TransferClientSource,
     max_size: usize,
     retired: AtomicBool,
-    state: Mutex<TransferClientPoolState<Arc<Mutex<RusshSftpClient>>>>,
+    state: Mutex<TransferClientPoolState<SharedRemoteFileClient>>,
+}
+
+/// 传输连接池的建连来源：SFTP 走 SSH，FTP 走独立 FTP 连接。
+#[derive(Clone)]
+enum TransferClientSource {
+    Ssh(SshConnectConfig),
+    Ftp(FtpConnectConfig),
+}
+
+impl TransferClientSource {
+    fn connect(
+        &self,
+    ) -> impl std::future::Future<Output = anyhow::Result<Box<dyn RemoteFileClient>>> + Send {
+        let source = self.clone();
+        Box::pin(async move {
+            match source {
+                TransferClientSource::Ssh(config) => {
+                    Ok(Box::new(RusshSftpClient::connect(config).await?)
+                        as Box<dyn RemoteFileClient>)
+                }
+                TransferClientSource::Ftp(config) => {
+                    Ok(Box::new(FtpClient::connect(config).await?) as Box<dyn RemoteFileClient>)
+                }
+            }
+        })
+    }
 }
 
 struct TransferClientPoolState<Client> {
@@ -418,9 +465,9 @@ struct PendingServerCopy {
 }
 
 impl TransferClientPool {
-    fn new(config: SshConnectConfig, max_size: usize) -> Self {
+    fn new(source: TransferClientSource, max_size: usize) -> Self {
         Self {
-            config,
+            source,
             max_size,
             retired: AtomicBool::new(false),
             state: Mutex::new(TransferClientPoolState::default()),
@@ -598,14 +645,51 @@ impl TransferQueue {
     }
 }
 
+/// 按 `StoredConnection` 的远程文件协议建立共享客户端。
+///
+/// SFTP 协议走 SSH 配置；FTP 协议走独立 FTP 连接（不复用 SSH socket）。
+/// 覆盖独立 `ConnectionType::Ftp` 连接与 SSH 聚合（remote_file.ftp）
+/// 两种形态；协议声明为 FTP 但缺少 FTP 参数时返回明确错误，不静默
+/// 回退 SFTP。
+pub async fn connect_remote_file_client(
+    connection: &StoredConnection,
+) -> anyhow::Result<SharedRemoteFileClient> {
+    let ftp = match connection.connection_type {
+        one_core::storage::ConnectionType::Ftp => connection.to_ftp_params().ok(),
+        _ => connection
+            .to_ssh_params()
+            .ok()
+            .filter(|params| params.remote_file_protocol().is_ftp())
+            .and_then(|params| params.ftp_params().cloned()),
+    };
+    if let Some(ftp) = ftp {
+        let config = ftp::FtpConnectConfig {
+            host: ftp.host.clone(),
+            port: ftp.port,
+            username: ftp.username.clone(),
+            password: ftp.password.clone(),
+            passive_mode: ftp.passive_mode,
+            use_tls: ftp.use_tls,
+            connect_timeout: ftp.connect_timeout,
+        };
+        return Ok(Arc::new(Mutex::new(Box::new(
+            FtpClient::connect(config).await?,
+        ))));
+    }
+    let config = ssh_config::ssh_config_for(connection)?;
+    Ok(Arc::new(Mutex::new(Box::new(
+        RusshSftpClient::connect(config).await?,
+    ))))
+}
+
 async fn acquire_transfer_client(
     pool: Arc<TransferClientPool>,
-) -> anyhow::Result<Arc<Mutex<RusshSftpClient>>> {
+) -> anyhow::Result<SharedRemoteFileClient> {
     if pool.is_retired() {
         return Err(anyhow::anyhow!("Transfer client pool retired"));
     }
 
-    let config = {
+    let source = {
         let mut state = pool.state.lock().await;
         if pool.is_retired() {
             return Err(anyhow::anyhow!("Transfer client pool retired"));
@@ -618,12 +702,12 @@ async fn acquire_transfer_client(
             return Err(anyhow::anyhow!("Transfer client pool exhausted"));
         }
 
-        pool.config.clone()
+        pool.source.clone()
     };
 
-    match RusshSftpClient::connect(config).await {
+    match source.connect().await {
         Ok(client) => {
-            let client = Arc::new(Mutex::new(client));
+            let client: SharedRemoteFileClient = Arc::new(Mutex::new(client));
             let disconnect = {
                 let mut state = pool.state.lock().await;
                 if pool.is_retired() {
@@ -648,13 +732,19 @@ async fn acquire_transfer_client(
     }
 }
 
-async fn release_transfer_client(
-    pool: Arc<TransferClientPool>,
-    client: Arc<Mutex<RusshSftpClient>>,
-) {
+async fn release_transfer_client(pool: Arc<TransferClientPool>, client: SharedRemoteFileClient) {
+    // 协议状态不可复用的连接（如 FTP 传输被取消后置毒）不允许回池：
+    // 否则下一个任务取到该连接后会在 ensure_usable 上反复失败。
+    // 这里 discard 并释放连接额度，下一个任务按需建立新连接。
+    let reusable = client.lock().await.is_reusable();
     let disconnect = {
         let mut state = pool.state.lock().await;
-        state.return_client(client, pool.is_retired())
+        if reusable {
+            state.return_client(client, pool.is_retired())
+        } else {
+            state.discard_one();
+            Some(client)
+        }
     };
     if let Some(client) = disconnect {
         disconnect_sftp_client(client).await;
@@ -672,7 +762,7 @@ where
     }
 }
 
-pub(crate) async fn disconnect_sftp_client(client: Arc<Mutex<RusshSftpClient>>) {
+pub(crate) async fn disconnect_sftp_client(client: SharedRemoteFileClient) {
     let disconnect = async move {
         let mut client = client.lock().await;
         client.disconnect().await
@@ -943,7 +1033,10 @@ pub(crate) async fn exec_remote_command_output(
                 let _ = channel.close().await;
                 anyhow::bail!("remote command failed with signal {signal_name}: {error_message}");
             }
-            ChannelEvent::Eof | ChannelEvent::Close => break,
+            // RFC 4254: EOF only ends the data stream; the exit status
+            // arrives after it, so keep reading until the channel closes.
+            ChannelEvent::Eof => continue,
+            ChannelEvent::Close => break,
         }
     }
 
@@ -1489,7 +1582,11 @@ pub struct SftpView {
     /// 连接成功后进入的 SFTP 初始目录（配置的 `sftp_default_directory`）；`None` 时回退到服务器登录目录。
     sftp_initial_directory: Option<String>,
     credential_inputs: Option<SftpCredentialInputs>,
-    sftp_client: Option<Arc<Mutex<RusshSftpClient>>>,
+    /// 左侧端点切换时用于录入临时凭据的弹窗状态；`None` 表示不需要提示。
+    left_credential_inputs: Option<LeftCredentialInputs>,
+    /// 远程文件协议为 FTP 时的独立 FTP 连接配置；`None` 表示走 SFTP。
+    remote_file_ftp: Option<FtpConnectConfig>,
+    sftp_client: Option<SharedRemoteFileClient>,
     /// 当前主 SFTP 连接尝试的代次；迟到的异步结果不能覆盖更新的连接。
     connection_generation: ConnectionGeneration,
     /// 左侧远程 SFTP 连接尝试的代次；即使切走后又选回同一连接，也不能应用旧结果。
@@ -1563,11 +1660,37 @@ impl SftpView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let resolved = ssh_config::resolve_ssh_connection(&conn)
-            .expect("StoredConnection should contain valid SSH params");
-        let config = resolved.config;
-        let credential_prompt_policy = resolved.credential_prompt_policy;
-        let sftp_initial_directory = resolved.sftp_initial_directory;
+        // 独立 FTP 连接没有 SSH 参数：双栏视图全程走 FTP 分流，
+        // SSH 配置仅为占位，不做解析。
+        let is_ftp_only = conn.connection_type == one_core::storage::ConnectionType::Ftp;
+        let (config, sftp_initial_directory, credential_prompt_policy, remote_file_ftp) =
+            if is_ftp_only {
+                (
+                    ssh_config::unused_ssh_config_placeholder(),
+                    None,
+                    ssh_config::ftp_credential_prompt_policy(&conn),
+                    ssh_config::ftp_config_from_connection(&conn),
+                )
+            } else {
+                let resolved = ssh_config::resolve_ssh_connection(&conn)
+                    .expect("StoredConnection should contain valid SSH params");
+                let config = resolved.config;
+                let sftp_initial_directory = resolved.sftp_initial_directory;
+                let remote_file_ftp = ssh_config::ftp_config_from_connection(&conn);
+                // FTP 模式下凭据提示策略来自嵌套 FTP 参数，而不是 SSH 顶层参数：
+                // 提交的运行时凭据只作用于 FTP 连接，不借用 SSH 的认证状态。
+                let credential_prompt_policy = if remote_file_ftp.is_some() {
+                    ssh_config::ftp_credential_prompt_policy(&conn)
+                } else {
+                    resolved.credential_prompt_policy
+                };
+                (
+                    config,
+                    sftp_initial_directory,
+                    credential_prompt_policy,
+                    remote_file_ftp,
+                )
+            };
 
         let focus_handle = cx.focus_handle();
         let local_current_path = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
@@ -1762,7 +1885,10 @@ impl SftpView {
         });
 
         let transfer_client_pool = Arc::new(TransferClientPool::new(
-            config.clone(),
+            remote_file_ftp
+                .clone()
+                .map(TransferClientSource::Ftp)
+                .unwrap_or_else(|| TransferClientSource::Ssh(config.clone())),
             MAX_CONCURRENT_TRANSFERS,
         ));
 
@@ -1776,7 +1902,9 @@ impl SftpView {
             close_state: CloseState::Open,
             sftp_config: config,
             sftp_initial_directory,
+            remote_file_ftp,
             credential_inputs,
+            left_credential_inputs: None,
             sftp_client: None,
             connection_generation: ConnectionGeneration::default(),
             left_connection_generation: ConnectionGeneration::default(),
@@ -1862,17 +1990,29 @@ impl SftpView {
         let generation = self.next_connection_generation();
         self.set_connection_state(ConnectionState::Connecting, cx);
         let config = self.sftp_config.clone();
+        let ftp_config = self.remote_file_ftp.clone();
         let window_handle = self.window_handle.clone();
         let initial_directory = self.sftp_initial_directory.clone();
 
-        tracing::info!(
-            "Connecting to SFTP server: {}@{}",
-            config.username,
-            config.host
-        );
+        if ftp_config.is_some() {
+            tracing::info!(
+                "Connecting to FTP server: {}:{}",
+                ftp_config.as_ref().expect("checked").host,
+                ftp_config.as_ref().expect("checked").port
+            );
+        } else {
+            tracing::info!(
+                "Connecting to SFTP server: {}@{}",
+                config.username,
+                config.host
+            );
+        }
 
         let task = Tokio::spawn(cx, async move {
-            let mut client = RusshSftpClient::connect(config).await?;
+            let mut client: Box<dyn RemoteFileClient> = match ftp_config {
+                Some(ftp_config) => Box::new(FtpClient::connect(ftp_config).await?),
+                None => Box::new(RusshSftpClient::connect(config).await?),
+            };
             // 连接成功后确定远端工作目录：优先使用配置的初始目录，否则使用服务器登录目录
             let real_path = match initial_directory {
                 Some(dir) => match client.realpath(&dir).await.ok() {
@@ -1892,7 +2032,7 @@ impl SftpView {
         cx.spawn(async move |this, cx| match task.await {
             Ok(Ok((client, real_path))) => {
                 tracing::info!("SFTP connection established successfully");
-                let client = Arc::new(Mutex::new(client));
+                let client: SharedRemoteFileClient = Arc::new(Mutex::new(client));
 
                 let installed = this
                     .update(cx, |this, cx| {
@@ -2040,12 +2180,14 @@ impl SftpView {
     }
 
     fn replace_transfer_client_pool(&mut self, cx: &mut Context<Self>) {
+        let source = self
+            .remote_file_ftp
+            .clone()
+            .map(TransferClientSource::Ftp)
+            .unwrap_or_else(|| TransferClientSource::Ssh(self.sftp_config.clone()));
         let retired_pool = std::mem::replace(
             &mut self.transfer_client_pool,
-            Arc::new(TransferClientPool::new(
-                self.sftp_config.clone(),
-                MAX_CONCURRENT_TRANSFERS,
-            )),
+            Arc::new(TransferClientPool::new(source, MAX_CONCURRENT_TRANSFERS)),
         );
         retired_pool.retire();
         Tokio::spawn(cx, disconnect_transfer_pool(retired_pool)).detach();
@@ -2063,6 +2205,41 @@ impl SftpView {
             .password
             .as_ref()
             .map(|input| input.read(cx).text().to_string());
+        let policy = inputs.policy;
+
+        // FTP 模式：运行时凭据作用于 FTP 连接配置（不借用 SSH 认证状态），
+        // 否则输入的用户名/密码对真正的 FTP 连接不生效。
+        if self.remote_file_ftp.is_some() {
+            let base = self
+                .remote_file_ftp
+                .clone()
+                .expect("FTP mode checked above");
+            match ssh_config::ftp_config_with_runtime_credentials(
+                &base,
+                username.as_deref(),
+                password.as_deref(),
+            ) {
+                Ok(config) => {
+                    self.remote_file_ftp = Some(config);
+                    if let Some(inputs) = self.credential_inputs.as_mut() {
+                        inputs.error = None;
+                    }
+                    self.replace_transfer_client_pool(cx);
+                    self.connect(cx);
+                }
+                Err(error) => {
+                    self.apply_credential_error(
+                        policy,
+                        &error,
+                        username.as_deref(),
+                        password.as_deref(),
+                        window,
+                        cx,
+                    );
+                }
+            }
+            return;
+        }
 
         match ssh_config::ssh_config_with_runtime_credentials(
             &self.sftp_config,
@@ -2078,36 +2255,52 @@ impl SftpView {
                 self.connect(cx);
             }
             Err(error) => {
-                let error = if inputs.policy.username
-                    && username
-                        .as_deref()
-                        .is_some_and(|value| value.trim().is_empty())
-                {
-                    t!("Credentials.username_required").to_string()
-                } else if inputs.policy.password && password.as_deref().is_some_and(str::is_empty) {
-                    t!("Credentials.password_required").to_string()
-                } else {
-                    error.to_string()
-                };
-                if let Some(inputs) = self.credential_inputs.as_mut() {
-                    inputs.error = Some(error);
-                }
-                if let Some(input) =
-                    self.credential_inputs.as_ref().and_then(|inputs| {
-                        if inputs.username.as_ref().is_some_and(|input| {
-                            input.read(cx).text().to_string().trim().is_empty()
-                        }) {
-                            inputs.username.clone()
-                        } else {
-                            inputs.password.clone()
-                        }
-                    })
-                {
-                    input.update(cx, |state, cx| state.focus(window, cx));
-                }
-                cx.notify();
+                self.apply_credential_error(
+                    policy,
+                    &error,
+                    username.as_deref(),
+                    password.as_deref(),
+                    window,
+                    cx,
+                );
             }
         }
+    }
+
+    /// 将凭据提交错误映射为输入框提示，并聚焦首个待填输入。
+    fn apply_credential_error(
+        &mut self,
+        policy: ssh_config::SshCredentialPromptPolicy,
+        error: &anyhow::Error,
+        username: Option<&str>,
+        password: Option<&str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let error = if policy.username && username.is_some_and(|value| value.trim().is_empty()) {
+            t!("Credentials.username_required").to_string()
+        } else if policy.password && password.is_some_and(str::is_empty) {
+            t!("Credentials.password_required").to_string()
+        } else {
+            error.to_string()
+        };
+        if let Some(inputs) = self.credential_inputs.as_mut() {
+            inputs.error = Some(error);
+        }
+        if let Some(input) = self.credential_inputs.as_ref().and_then(|inputs| {
+            if inputs
+                .username
+                .as_ref()
+                .is_some_and(|input| input.read(cx).text().to_string().trim().is_empty())
+            {
+                inputs.username.clone()
+            } else {
+                inputs.password.clone()
+            }
+        }) {
+            input.update(cx, |state, cx| state.focus(window, cx));
+        }
+        cx.notify();
     }
 
     fn refresh_local_dir(&mut self, cx: &mut Context<Self>) {
@@ -3267,13 +3460,21 @@ impl SftpView {
             .detach();
     }
 
+    /// 传输队列的连接来源：FTP 协议走独立 FTP 连接，SFTP 走 SSH 配置。
+    fn remote_file_connection_source(&self) -> SftpUploadConnection {
+        match self.remote_file_ftp.as_ref() {
+            Some(ftp) => SftpUploadConnection::Ftp(ftp.clone()),
+            None => SftpUploadConnection::Config(self.sftp_config.clone()),
+        }
+    }
+
     /// 将指定的本地路径上传到远程目录
     /// 用于文件选择器选择后的上传
     pub fn upload_paths_to_remote(
         &mut self,
         paths: Vec<PathBuf>,
         remote_base_path: String,
-        client: Arc<Mutex<RusshSftpClient>>,
+        client: SharedRemoteFileClient,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -4238,7 +4439,7 @@ impl SftpView {
         }
         let upload_context = SftpUploadContext {
             connection: self.upload_connection_identity.clone(),
-            connection_source: SftpUploadConnection::Config(self.sftp_config.clone()),
+            connection_source: self.remote_file_connection_source(),
             task_group: self.background_task_group(),
         };
         for transfer in transfers {
@@ -4266,7 +4467,12 @@ impl SftpView {
     }
     fn background_task_group(&self) -> SharedString {
         // 分组标题只保留「连接名称 - IP」，同一连接的多个面板合并到同一分组。
-        format!("{} - {}", self.connection_name, self.sftp_config.host).into()
+        let host = self
+            .remote_file_ftp
+            .as_ref()
+            .map(|ftp| ftp.host.clone())
+            .unwrap_or_else(|| self.sftp_config.host.clone());
+        format!("{} - {}", self.connection_name, host).into()
     }
     fn register_local_background_task(
         &self,
@@ -4545,7 +4751,7 @@ impl SftpView {
         }
         let download_context = SftpUploadContext {
             connection: self.upload_connection_identity.clone(),
-            connection_source: SftpUploadConnection::Config(self.sftp_config.clone()),
+            connection_source: self.remote_file_connection_source(),
             task_group: self.background_task_group(),
         };
         for transfer in transfers {
@@ -4830,7 +5036,7 @@ impl SftpView {
         }
         let context = SftpUploadContext {
             connection: self.upload_connection_identity.clone(),
-            connection_source: SftpUploadConnection::Config(self.sftp_config.clone()),
+            connection_source: self.remote_file_connection_source(),
             task_group: self.background_task_group(),
         };
         let prepared = prepare_global_remote_delete(&entries, &remote_path, &context);
@@ -6399,6 +6605,7 @@ impl SftpView {
             active: item.value() == &active_value,
             value: item.value().clone(),
             title: item.title_text().to_string().into(),
+            subtitle: item.subtitle().map(Into::into),
             icon: item.icon(),
         })
         .collect();
@@ -6770,14 +6977,33 @@ impl SftpView {
                                         div()
                                             .absolute()
                                             .inset_0()
-                                            .bg(gpui::black()
-                                                .opacity(one_ui::theme_geometry().opacity.loading_scrim))
+                                            .bg(gpui::black().opacity(
+                                                one_ui::theme_geometry().opacity.loading_scrim,
+                                            ))
                                             .flex()
                                             .items_center()
                                             .justify_center()
                                             .child(Spinner::new().with_size(Size::Large)),
                                     )
                                 })
+                                .into_any_element(),
+                            LeftRemoteConnectionState::AwaitingCredentials => v_flex()
+                                .size_full()
+                                .justify_center()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    Icon::new(IconName::Key)
+                                        .with_size(IconSize::Medium)
+                                        .text_color(cx.theme().muted_foreground),
+                                )
+                                .child(t!("Credentials.title").to_string())
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(t!("Credentials.hint").to_string()),
+                                )
                                 .into_any_element(),
                             LeftRemoteConnectionState::Connecting => h_flex()
                                 .size_full()
@@ -7075,8 +7301,9 @@ impl SftpView {
                                     div()
                                         .absolute()
                                         .inset_0()
-                                        .bg(gpui::black()
-                                            .opacity(one_ui::theme_geometry().opacity.loading_scrim))
+                                        .bg(gpui::black().opacity(
+                                            one_ui::theme_geometry().opacity.loading_scrim,
+                                        ))
                                         .flex()
                                         .items_center()
                                         .justify_center()
@@ -7458,17 +7685,18 @@ mod tests {
         BoundedDisconnectOutcome, CloseState, ConnectionGeneration, ConnectionState,
         DirectorySizeState, FileConflictChoice, FileItem, GlobalStorageState, PendingTransfer,
         PendingUploadDecision, SftpFavoritePathRepository, SftpUploadContext, SftpView,
-        SharedProgress, StoredConnection, TransferAdmission, TransferClientPool,
-        TransferClientPoolState, TransferOperation, TransferQueue, TransferRefreshTarget,
-        TransferTask, TransferTaskState, UploadConflictResolver, UploadConflictSession,
-        acquire_transfer_client, active_external_transfer_ids, apply_global_transfer_snapshot,
-        bounded_disconnect, breadcrumb_item_min_width, is_valid_entry_name, join_remote_path,
+        SharedProgress, SharedRemoteFileClient, StoredConnection, TransferAdmission,
+        TransferClientPool, TransferClientPoolState, TransferClientSource, TransferOperation,
+        TransferQueue, TransferRefreshTarget, TransferTask, TransferTaskState,
+        UploadConflictResolver, UploadConflictSession, acquire_transfer_client,
+        active_external_transfer_ids, apply_global_transfer_snapshot, bounded_disconnect,
+        breadcrumb_item_min_width, is_valid_entry_name, join_remote_path,
         mark_server_copy_directory_replacements, prepare_global_download,
         prepare_global_remote_delete, prepare_global_upload, reconcile_global_transfer_snapshot,
-        remote_path_parent, resolve_upload_conflict, resolve_upload_conflicts,
-        server_copy_conflict_flags, should_apply_local_listing, should_apply_remote_listing,
-        should_refresh_transfer_target, tab_connection_status, transfer_error_summary,
-        transfer_task_state_from_global, upload_directory_conflict_policy,
+        release_transfer_client, remote_path_parent, resolve_upload_conflict,
+        resolve_upload_conflicts, server_copy_conflict_flags, should_apply_local_listing,
+        should_apply_remote_listing, should_refresh_transfer_target, tab_connection_status,
+        transfer_error_summary, transfer_task_state_from_global, upload_directory_conflict_policy,
     };
     use anyhow::{Result, anyhow};
     use async_trait::async_trait;
@@ -7707,6 +7935,7 @@ mod tests {
         StoredConnection::new_ssh(
             "SFTP entity test".to_string(),
             SshParams {
+                remote_file: None,
                 sftp_default_directory: None,
                 disabled_jump_server: None,
                 sftp_account: None,
@@ -9025,7 +9254,10 @@ mod tests {
 
     #[tokio::test]
     async fn retired_transfer_pool_rejects_acquire_before_dial() {
-        let pool = Arc::new(TransferClientPool::new(transfer_pool_config(), 1));
+        let pool = Arc::new(TransferClientPool::new(
+            TransferClientSource::Ssh(transfer_pool_config()),
+            1,
+        ));
         pool.retire();
 
         let error = match acquire_transfer_client(pool).await {
@@ -9185,8 +9417,164 @@ mod tests {
         .unwrap();
         assert!(tar_command.contains("tar -tf '/tmp/release.tar.gz'"));
     }
-}
 
+    /// 池测试用的最小远程文件客户端：只携带可复用状态，其余操作直接报错。
+    struct FakePoolClient {
+        reusable: bool,
+    }
+
+    #[async_trait]
+    impl sftp::RemoteFileClient for FakePoolClient {
+        async fn list_dir(&mut self, _path: &str) -> Result<Vec<sftp::FileEntry>> {
+            Err(anyhow!("fake client"))
+        }
+        async fn stat(&mut self, _path: &str) -> Result<Option<sftp::PathMetadata>> {
+            Err(anyhow!("fake client"))
+        }
+        async fn download_with_progress(
+            &mut self,
+            _remote_path: &str,
+            _local_path: &str,
+            _cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+            _progress: ProgressCallback,
+        ) -> Result<()> {
+            Err(anyhow!("fake client"))
+        }
+        async fn upload_with_progress(
+            &mut self,
+            _local_path: &str,
+            _remote_path: &str,
+            _cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+            _progress: ProgressCallback,
+        ) -> Result<()> {
+            Err(anyhow!("fake client"))
+        }
+        async fn delete(&mut self, _path: &str, _is_dir: bool) -> Result<()> {
+            Err(anyhow!("fake client"))
+        }
+        async fn delete_recursive(
+            &mut self,
+            _path: &str,
+            _cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+            _progress: ProgressCallback,
+        ) -> Result<()> {
+            Err(anyhow!("fake client"))
+        }
+        async fn mkdir(&mut self, _path: &str) -> Result<()> {
+            Err(anyhow!("fake client"))
+        }
+        async fn rename(&mut self, _old_path: &str, _new_path: &str) -> Result<()> {
+            Err(anyhow!("fake client"))
+        }
+        async fn chmod(&mut self, _path: &str, _mode: u32) -> Result<()> {
+            Err(anyhow!("fake client"))
+        }
+        async fn read_file(&mut self, _path: &str, _max_bytes: usize) -> Result<Vec<u8>> {
+            Err(anyhow!("fake client"))
+        }
+        async fn write_file(&mut self, _path: &str, _content: &[u8]) -> Result<()> {
+            Err(anyhow!("fake client"))
+        }
+        async fn list_dir_recursive(
+            &mut self,
+            _path: &str,
+            _cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        ) -> Result<Vec<sftp::FileEntry>> {
+            Err(anyhow!("fake client"))
+        }
+        async fn download_dir_with_progress(
+            &mut self,
+            _remote_path: &str,
+            _local_path: &str,
+            _cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+            _progress: ProgressCallback,
+        ) -> Result<()> {
+            Err(anyhow!("fake client"))
+        }
+        async fn upload_dir_with_progress(
+            &mut self,
+            _local_path: &str,
+            _remote_path: &str,
+            _conflict_policy: sftp::DirectoryConflictPolicy,
+            _cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+            _progress: ProgressCallback,
+        ) -> Result<()> {
+            Err(anyhow!("fake client"))
+        }
+        async fn disconnect(&mut self) -> Result<()> {
+            Ok(())
+        }
+        async fn realpath(&mut self, _path: &str) -> Result<String> {
+            Err(anyhow!("fake client"))
+        }
+        fn is_reusable(&self) -> bool {
+            self.reusable
+        }
+    }
+
+    fn fake_ftp_source() -> TransferClientSource {
+        TransferClientSource::Ftp(ftp::FtpConnectConfig {
+            host: "127.0.0.1".to_string(),
+            port: 21,
+            username: "user".to_string(),
+            password: "pass".to_string(),
+            passive_mode: true,
+            use_tls: false,
+            connect_timeout: Some(1),
+        })
+    }
+
+    /// 回归：置毒连接不允许归还连接池——否则下一个任务取到它后会在
+    /// ensure_usable 上反复失败。归还时必须 discard 并释放连接额度。
+    #[tokio::test]
+    async fn release_transfer_client_discards_unusable_connections() {
+        let pool = Arc::new(TransferClientPool::new(fake_ftp_source(), 2));
+        {
+            let mut state = pool.state.lock().await;
+            state.total_created = 1;
+        }
+
+        let client: SharedRemoteFileClient =
+            Arc::new(tokio::sync::Mutex::new(Box::new(FakePoolClient {
+                reusable: false,
+            })));
+        release_transfer_client(pool.clone(), client).await;
+
+        let state = pool.state.lock().await;
+        assert!(
+            state.available.is_empty(),
+            "unusable connections must not return to the pool"
+        );
+        assert_eq!(
+            state.total_created, 0,
+            "discarding an unusable connection must release its quota"
+        );
+    }
+
+    /// 对照：可复用连接照常归还池，额度不变。
+    #[tokio::test]
+    async fn release_transfer_client_returns_reusable_connections_to_pool() {
+        let pool = Arc::new(TransferClientPool::new(fake_ftp_source(), 2));
+        {
+            let mut state = pool.state.lock().await;
+            state.total_created = 1;
+        }
+
+        let client: SharedRemoteFileClient =
+            Arc::new(tokio::sync::Mutex::new(Box::new(FakePoolClient {
+                reusable: true,
+            })));
+        release_transfer_client(pool.clone(), client).await;
+
+        let state = pool.state.lock().await;
+        assert_eq!(
+            state.available.len(),
+            1,
+            "reusable connections stay in pool"
+        );
+        assert_eq!(state.total_created, 1);
+    }
+}
 /// 默认（双击）打开入口的接线契约：普通文件按用户模式路由，显式菜单仍保有各自入口。
 #[cfg(test)]
 mod default_open_wiring_tests {

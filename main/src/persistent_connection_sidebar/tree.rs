@@ -1,7 +1,9 @@
 use std::ops::Range;
 
 use gpui::prelude::FluentBuilder as _;
-use gpui::{AnyElement, IntoElement, ListSizingBehavior, ParentElement, Styled, div, px, uniform_list};
+use gpui::{
+    AnyElement, IntoElement, ListSizingBehavior, ParentElement, Styled, div, px, uniform_list,
+};
 use gpui_component::{Icon, Sizable, StyledExt, h_flex, input::Input, v_flex};
 use one_assets::IconName;
 use one_core::settings::{AppSettings, ConnectionSortOrder};
@@ -148,11 +150,16 @@ impl PersistentConnectionSidebar {
         let mut workspaces = home
             .workspaces
             .iter()
-            .filter_map(|workspace| {
+            .enumerate()
+            .filter_map(|(position, workspace)| {
                 Some(WorkspaceNodeInput {
                     id: workspace.id?,
                     parent_id: workspace.parent_id,
-                    name: workspace.name.clone(),
+                    name: if cfg!(feature = "screenshot-safe") {
+                        crate::screenshot_safe::workspace_name(position)
+                    } else {
+                        workspace.name.clone()
+                    },
                 })
             })
             .collect::<Vec<_>>();
@@ -171,7 +178,11 @@ impl PersistentConnectionSidebar {
                 Some(ConnectionNodeInput {
                     id,
                     workspace_id: connection.workspace_id,
-                    name: connection.name.clone(),
+                    name: if cfg!(feature = "screenshot-safe") {
+                        crate::screenshot_safe::connection_name(connection.connection_type, Some(id))
+                    } else {
+                        connection.name.clone()
+                    },
                     last_used_at: connection.last_used_at,
                     updated_at: connection.updated_at,
                     created_at: connection.created_at,
@@ -218,7 +229,8 @@ impl PersistentConnectionSidebar {
             },
         );
         if self.home_embedded && !self.home_navigation_layout && query.is_empty() {
-            let recent = crate::home_tab::recent_connections(&home.connections, &type_filter, "", 4);
+            let recent =
+                crate::home_tab::recent_connections(&home.connections, &type_filter, "", 4);
             if !recent.is_empty() {
                 let expanded = !home.recent_connections_collapsed();
                 let mut recent_rows = vec![ConnectionTreeRow::RecentHeader {
@@ -229,7 +241,14 @@ impl PersistentConnectionSidebar {
                     recent_rows.extend(recent.into_iter().filter_map(|connection| {
                         Some(ConnectionTreeRow::RecentConnection {
                             id: connection.id?,
-                            name: connection.name,
+                            name: if cfg!(feature = "screenshot-safe") {
+                                crate::screenshot_safe::connection_name(
+                                    connection.connection_type,
+                                    connection.id,
+                                )
+                            } else {
+                                connection.name
+                            },
                         })
                     }));
                 }
@@ -398,8 +417,10 @@ mod tests {
         let implementation = source.split("#[cfg(test)]").next().unwrap();
 
         // 仅普通嵌入树预置最近区；全局导航布局的最近区由内容区自己渲染。
-        assert!(implementation
-            .contains("self.home_embedded && !self.home_navigation_layout && query.is_empty()"));
+        assert!(
+            implementation
+                .contains("self.home_embedded && !self.home_navigation_layout && query.is_empty()")
+        );
         assert!(implementation.contains("home_tab::recent_connections"));
         assert!(implementation.contains("ConnectionTreeRow::RecentHeader"));
         assert!(implementation.contains("ConnectionTreeRow::RecentConnection"));

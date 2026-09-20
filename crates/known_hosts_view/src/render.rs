@@ -2,7 +2,13 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::{
     ClipboardItem, FontWeight, IntoElement, ParentElement, Render, Styled, Window, div, px,
 };
-use gpui_component::{ActiveTheme as _, Disableable as _, Icon, Sizable, button::{Button, ButtonVariants as _}, h_flex, scroll::ScrollableElement, v_flex};
+use gpui_component::{
+    ActiveTheme as _, Disableable as _, Icon, Sizable,
+    button::{Button, ButtonVariants as _},
+    h_flex,
+    scroll::ScrollableElement,
+    v_flex,
+};
 use one_assets::IconName;
 use rust_i18n::t;
 use ssh::KnownHost;

@@ -25,8 +25,8 @@ mod home_tab;
 mod license;
 mod local_terminal_profiles;
 mod navigation_applications;
+mod navop_app;
 pub mod new_connection;
-mod onetcli_app;
 mod persistent_connection_sidebar;
 mod personal_sync_conflicts;
 mod personal_sync_runtime;
@@ -36,17 +36,20 @@ mod personal_sync_status;
 mod public_mcp_approval;
 mod public_mcp_runtime;
 mod resource_workbench_terminal;
+mod screenshot_safe;
 mod session_logs;
 mod setting_tab;
 mod settings;
 mod sync_conflict_dialog;
+mod system_tray;
 mod team_management;
 mod toolbox_tab;
 mod update;
+mod window_visibility;
 #[cfg(any(target_os = "windows", test))]
 mod windows_single_instance;
 
-use crate::onetcli_app::OnetCliApp;
+use crate::navop_app::NavopApp;
 use gpui::*;
 use one_core::tab_container::GlobalTabContainer;
 
@@ -443,7 +446,10 @@ fn main() {
 
     let app = gpui_platform::application()
         .with_assets(AppAssets::new())
-        .with_quit_mode(QuitMode::LastWindowClosed);
+        // 主窗口可以被关闭 handler 保留（隐藏到托盘），所以不能再靠
+        // 「最后一个窗口关掉就退出」来决定进程生死；真正退出只走既有
+        // `cx.quit()` 路径（退出确认 → `close_all_tabs` 成功）。
+        .with_quit_mode(QuitMode::Explicit);
     app.on_open_urls({
         let startup_request_tx = startup_request_tx.clone();
         move |urls| {
@@ -462,7 +468,7 @@ fn main() {
             .expect("main package version must be valid semver");
         extension_runtime::set_current_host_version(env!("CARGO_PKG_VERSION"))
             .expect("main package version must be valid semver");
-        if let Err(error) = onetcli_app::init(cx) {
+        if let Err(error) = navop_app::init(cx) {
             tracing::error!(error = %error, "failed to initialize Navop application state");
             eprintln!("Failed to initialize Navop application state: {error:#}");
             cx.quit();
@@ -513,11 +519,17 @@ fn main() {
             let main_window = match cx.open_window(options, |window, cx| {
                 window.activate_window();
                 app_init::init_window_systems(window, cx);
+                // 托盘必须在主窗口 handle 保存之后、`NavopApp` 安装关闭
+                // handler 之前初始化：关闭 handler 要按托盘可用性决定
+                // 「隐藏」还是「退出确认」。此处已在主线程且 GPUI 事件
+                // 循环已启动（macOS 的 NSStatusItem 要求如此）。
+                system_tray::init(cx);
                 update::schedule_update_check(window, cx);
                 extension_update::schedule_plugin_update_check(window, cx);
-                let view = cx.new(|cx| OnetCliApp::new(window, cx));
+                let view = cx.new(|cx| NavopApp::new(window, cx));
                 let root = cx.new(|cx| Root::new(view, window, cx));
                 let tab_container = cx.global::<GlobalTabContainer>().tab_container.clone();
+                system_tray::sync_sessions_from(cx);
                 cx.subscribe(&root, move |_, event: &DialogStateChanged, cx| {
                     tab_container.update(cx, |tabs, cx| {
                         tabs.set_active_presentation_obscured_by_dialog(event.active_count > 0, cx);
@@ -531,7 +543,7 @@ fn main() {
                     tracing::error!(error = %error, "failed to open the Navop main window");
                     eprintln!("Failed to open the Navop main window: {error:#}");
                     let _ = cx.update(|cx| {
-                        onetcli_app::shutdown_application_resources_and_quit(
+                        navop_app::shutdown_application_resources_and_quit(
                             cx,
                             "main window initialization failed",
                         );
@@ -961,13 +973,53 @@ mod native_driver_feature_contract_tests {
     fn direct_native_database_sdks_are_optional_or_absent() {
         let redis_view = include_str!("../../crates/redis_view/Cargo.toml");
         let mongodb_view = include_str!("../../crates/mongodb_view/Cargo.toml");
-        let onetcli_runtime = include_str!("../../crates/onetcli_runtime/Cargo.toml");
+        let navop_runtime = include_str!("../../crates/navop_runtime/Cargo.toml");
 
         assert!(dependency_is_optional_or_absent(redis_view, "redis_client"));
         assert!(dependency_is_optional_or_absent(
-            onetcli_runtime,
+            navop_runtime,
             "redis_client"
         ));
         assert!(dependency_is_optional_or_absent(mongodb_view, "mongodb"));
+    }
+}
+
+/// 托盘把主窗口的生死从「窗口关闭即退出」改成了显式退出，这组守卫钉住那条
+/// 生命周期契约。所有断言的字面量都在运行时拼接，避免 include_str! 守卫命中
+/// 自己的断言文本。
+#[cfg(test)]
+mod system_tray_lifecycle_contract_tests {
+    fn source() -> &'static str {
+        include_str!("main.rs")
+    }
+
+    #[test]
+    fn hidden_main_window_does_not_terminate_the_process() {
+        let needle = ["with_quit_mode(QuitMode", "::Explicit)"].concat();
+
+        assert!(
+            source().contains(&needle),
+            "主窗口会被隐藏而不是销毁，退出必须改为显式"
+        );
+    }
+
+    #[test]
+    fn tray_initializes_after_window_systems_and_before_the_close_handler() {
+        let source = source();
+        let window_systems = source
+            .find(&["app_init::init_window_systems(window, ", "cx);"].concat())
+            .expect("window systems initialization");
+        let tray = source
+            .find(&["system_tray::", "init(cx);"].concat())
+            .expect("system tray initialization");
+        let close_handler = source
+            .find("NavopApp::new(window, cx)")
+            .expect("application entity creation");
+
+        assert!(window_systems < tray);
+        assert!(
+            tray < close_handler,
+            "关闭 handler 要按托盘可用性分流，托盘必须先在主窗口上初始化"
+        );
     }
 }

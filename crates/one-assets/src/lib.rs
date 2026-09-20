@@ -89,10 +89,22 @@ mod tests {
         ] {
             assert_eq!(icon.color_mode(), gpui_component::IconColorMode::Color);
         }
-        assert_eq!(IconName::RdpLine.color_mode(), gpui_component::IconColorMode::Mono);
-        assert_eq!(IconName::VncLine.color_mode(), gpui_component::IconColorMode::Mono);
-        assert_eq!(IconName::Monitor.color_mode(), gpui_component::IconColorMode::Mono);
-        assert_eq!(IconName::Paste.color_mode(), gpui_component::IconColorMode::Mono);
+        assert_eq!(
+            IconName::RdpLine.color_mode(),
+            gpui_component::IconColorMode::Mono
+        );
+        assert_eq!(
+            IconName::VncLine.color_mode(),
+            gpui_component::IconColorMode::Mono
+        );
+        assert_eq!(
+            IconName::Monitor.color_mode(),
+            gpui_component::IconColorMode::Mono
+        );
+        assert_eq!(
+            IconName::Paste.color_mode(),
+            gpui_component::IconColorMode::Mono
+        );
     }
 
     #[test]
@@ -118,5 +130,42 @@ mod tests {
     fn generated_paths_match_the_asset_source() {
         assert_eq!(IconName::MongoDB.path().as_ref(), "icons/mongodb.svg");
         assert_eq!(IconName::ArrowUp.path().as_ref(), "icons/arrow-up.svg");
+    }
+
+    // Color icons go through gpui-component's `img(...)` path, which decodes
+    // SVGs at their intrinsic size and rasterizes at 2x (SMOOTH_SVG_SCALE_FACTOR).
+    // A 1024x1024 icon costs ~16 MiB of retained BGRA memory per icon. Keep
+    // intrinsic dimensions small; see issue #185.
+    #[test]
+    fn icon_assets_are_not_oversized() {
+        const MAX_DIMENSION: f32 = 256.0;
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/icons");
+        for entry in std::fs::read_dir(&dir).expect("read icons dir") {
+            let path = entry.expect("dir entry").path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("svg") {
+                continue;
+            }
+            let svg = std::fs::read_to_string(&path).expect("read svg");
+            let root = svg
+                .split_once("<svg")
+                .and_then(|(_, rest)| rest.split_once('>'))
+                .map(|(tag, _)| tag)
+                .expect("svg root tag");
+            for attr in ["width", "height"] {
+                let prefix = format!("{attr}=\"");
+                let value = root
+                    .split_whitespace()
+                    .find_map(|part| part.strip_prefix(&prefix))
+                    .and_then(|rest| rest.split('"').next())
+                    .and_then(|value| value.parse::<f32>().ok());
+                if let Some(value) = value {
+                    assert!(
+                        value <= MAX_DIMENSION,
+                        "{} has intrinsic {attr}={value}; oversized color icons leak memory (issue #185)",
+                        path.display()
+                    );
+                }
+            }
+        }
     }
 }

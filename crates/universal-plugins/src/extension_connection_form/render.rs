@@ -1,10 +1,12 @@
+use std::collections::HashSet;
+
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, Axis, Context, FocusHandle, Focusable, IntoElement, ParentElement, Render, Styled, Window,
-    div, px,
+    App, Axis, Context, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
+    ParentElement, Render, Styled, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Sizable,
+    ActiveTheme, Disableable, Sizable, Size,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     form::{field, v_form},
@@ -12,6 +14,7 @@ use gpui_component::{
     input::Input,
     scroll::ScrollableElement,
     select::Select,
+    tab::{Tab, TabBar},
     v_flex,
 };
 use one_assets::IconName;
@@ -45,21 +48,38 @@ impl Render for ExtensionConnectionForm {
 
 impl ExtensionConnectionForm {
     fn render_fields(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        v_flex()
-            .gap_4()
-            .child(
-                v_form()
-                    .layout(Axis::Horizontal)
-                    .columns(1)
-                    .label_width(px(120.))
+        // 页签由本表单托管,引擎只渲染当前页签字段(与 DB/中间件表单一致:
+        // TabBar 在最上,名称作为首个页签的第一个字段)。
+        self.fields.update(cx, |fields, _| {
+            fields.host_content(self.active_tab, HashSet::new())
+        });
+
+        let tabs = &self.contribution.form.tabs;
+        let mut content = v_flex().gap_4();
+        if tabs.len() > 1 {
+            content = content.child(self.render_tab_bar(cx));
+        }
+        if self.active_tab == 0 {
+            content = content.child(
+                div()
+                    .id("extension-connection-name-row")
+                    .debug_selector(|| "extension-connection-name-row".to_string())
                     .child(
-                        field()
-                            .label(t!("ExtensionConnectionForm.name").to_string())
-                            .required(true)
-                            .items_center()
-                            .child(Input::new(&self.name).w_full()),
+                        v_form()
+                            .layout(Axis::Horizontal)
+                            .columns(1)
+                            .label_width(px(120.))
+                            .child(
+                                field()
+                                    .label(t!("ExtensionConnectionForm.name").to_string())
+                                    .required(true)
+                                    .items_center()
+                                    .child(Input::new(&self.name).w_full()),
+                            ),
                     ),
-            )
+            );
+        }
+        content
             .child(self.fields.clone())
             .child(
                 v_form()
@@ -123,6 +143,31 @@ impl ExtensionConnectionForm {
                                         });
                                     })),
                             ),
+                    ),
+            )
+    }
+
+    fn render_tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("extension-connection-tabs-bar")
+            .debug_selector(|| "extension-connection-tabs-bar".to_string())
+            .flex()
+            .justify_center()
+            .child(
+                TabBar::new("extension-connection-tabs")
+                    .with_size(Size::Large)
+                    .underline()
+                    .selected_index(self.active_tab)
+                    .on_click(cx.listener(|this, index: &usize, _, cx| {
+                        this.active_tab = *index;
+                        cx.notify();
+                    }))
+                    .children(
+                        self.contribution
+                            .form
+                            .tabs
+                            .iter()
+                            .map(|tab| Tab::new().label(tab.label.clone())),
                     ),
             )
     }
@@ -200,4 +245,95 @@ fn action_buttons(testing: bool, cx: &mut Context<ExtensionConnectionForm>) -> i
                 .disabled(testing)
                 .on_click(cx.listener(|this, _, window, cx| this.on_save(window, cx))),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use extension_runtime::RegisteredResourceConnectionContribution;
+    use extension_runtime::extension::manifest::{
+        ResourceConnectionFieldType, ResourceConnectionForm, ResourceConnectionFormField,
+        ResourceConnectionFormTab,
+    };
+    use gpui::{TestAppContext, VisualTestContext, px};
+    use one_core::settings::AppSettings;
+
+    use super::super::ExtensionConnectionFormConfig;
+    use super::ExtensionConnectionForm;
+
+    /// 两个页签 + 一个常规字段,复刻 MQTT 这类复合扩展的连接表单形状。
+    fn two_tab_contribution() -> RegisteredResourceConnectionContribution {
+        RegisteredResourceConnectionContribution {
+            extension_id: "com.navop.middleware.mqtt".to_string(),
+            extension_root: PathBuf::from("/tmp"),
+            id: "mqtt".to_string(),
+            label: "MQTT".to_string(),
+            description: None,
+            icon_path: None,
+            runtime_id: "main".to_string(),
+            resource_type: "middleware".to_string(),
+            shell_view_id: None,
+            form: ResourceConnectionForm {
+                tabs: vec![
+                    ResourceConnectionFormTab {
+                        id: "general".to_string(),
+                        label: "常规".to_string(),
+                        fields: vec![ResourceConnectionFormField {
+                            id: "host".to_string(),
+                            label: "主机".to_string(),
+                            field_type: ResourceConnectionFieldType::Text,
+                            required: false,
+                            default_value: None,
+                            placeholder: None,
+                            secret: false,
+                            options: Vec::new(),
+                            visible_when: Vec::new(),
+                            rows: None,
+                        }],
+                    },
+                    ResourceConnectionFormTab {
+                        id: "session".to_string(),
+                        label: "会话".to_string(),
+                        fields: Vec::new(),
+                    },
+                ],
+            },
+        }
+    }
+
+    /// 真实布局:页签(宿主渲染)必须在名称之上,两者都有非零高度。
+    #[gpui::test]
+    fn tab_bar_sits_above_the_name_field(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(AppSettings::default());
+            gpui_component::init(cx);
+        });
+        let (_form, cx) = cx.add_window_view(|window, cx| {
+            ExtensionConnectionForm::new(
+                ExtensionConnectionFormConfig {
+                    contribution: two_tab_contribution(),
+                    editing_connection: None,
+                    workspaces: Vec::new(),
+                    teams: Vec::new(),
+                },
+                window,
+                cx,
+            )
+        });
+        let cx: &mut VisualTestContext = cx;
+
+        let tab_bar = cx
+            .debug_bounds("extension-connection-tabs-bar")
+            .expect("页签应由宿主渲染");
+        let name = cx
+            .debug_bounds("extension-connection-name-row")
+            .expect("名称字段应渲染");
+        assert!(tab_bar.size.height > px(0.0), "页签高度应为正: {tab_bar:?}");
+        assert!(name.size.height > px(0.0), "名称高度应为正: {name:?}");
+        assert!(
+            tab_bar.bottom() <= name.top(),
+            "页签必须位于名称之上: tab_bar={tab_bar:?} name={name:?}"
+        );
+    }
 }

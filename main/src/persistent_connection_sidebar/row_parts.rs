@@ -163,13 +163,7 @@ pub(super) fn connection_type_tag(connection: &StoredConnection, cx: &gpui::App)
         .py_0p5()
         .rounded(px(4.0))
         .bg(cx.theme().muted)
-        .child(
-            div()
-                .size(px(6.0))
-                .flex_shrink_0()
-                .rounded_full()
-                .bg(dot),
-        )
+        .child(div().size(px(6.0)).flex_shrink_0().rounded_full().bg(dot))
         .child(
             div()
                 .min_w_0()
@@ -188,6 +182,7 @@ fn connection_type_tag_color(kind: ConnectionType, cx: &gpui::App) -> Hsla {
     match kind {
         ConnectionType::Database => cx.theme().blue,
         ConnectionType::SshSftp => cx.theme().success,
+        ConnectionType::Ftp => cx.theme().cyan,
         ConnectionType::Redis => cx.theme().warning,
         ConnectionType::MongoDB => cx.theme().info,
         ConnectionType::Mqtt => cx.theme().accent,

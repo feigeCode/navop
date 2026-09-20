@@ -1,9 +1,9 @@
 rust_i18n::i18n!("locales", fallback = "en");
 
+mod blend;
 pub mod content_state;
 pub mod edit_table;
 pub mod file_conflict_prompt;
-mod blend;
 pub use blend::ColorMix;
 
 mod geometry;
@@ -14,6 +14,7 @@ mod icon_size;
 pub mod large_text_editor;
 pub mod marquee_text;
 pub mod panel_header;
+pub mod picker_dialog;
 pub mod resize_handle;
 mod settings;
 pub mod signature_help;
@@ -35,12 +36,13 @@ pub use large_text_editor::{
     create_large_text_editor_with_content, large_text_values_equivalent,
 };
 pub use panel_header::{PanelHeader, PanelHeaderVariant};
+pub use picker_dialog::{PickerDialogLabels, PickerEntry, open_picker_dialog};
 pub use settings::{
     TableDisplaySettings, init_table_display_settings, set_table_row_height, table_row_height,
     table_row_height_or,
 };
 pub use signature_help::{ExtendedEditor, ExtendedEditorState, SignatureHelpProvider};
-pub use status_bar::{StatusBar, StatusPresentation};
+pub use status_bar::{StatusBar, StatusBarColors, StatusPresentation};
 pub use time::datetime_picker::{DateTimePicker, DateTimePickerEvent, DateTimePickerState};
 pub use time::time_picker::{TimePicker, TimePickerEvent, TimePickerState};
 

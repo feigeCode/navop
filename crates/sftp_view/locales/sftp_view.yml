@@ -134,6 +134,10 @@ Endpoint:
     en: Search servers
     zh-CN: 搜索服务器
     zh-HK: 搜尋伺服器
+  no_results:
+    en: No matching server
+    zh-CN: 没有匹配的服务器
+    zh-HK: 沒有符合的伺服器
   switch_title:
     en: Choose endpoint
     zh-CN: 选择端点
@@ -522,6 +526,10 @@ Credentials:
     en: Connect
     zh-CN: 连接
     zh-HK: 連線
+  cancel:
+    en: Cancel
+    zh-CN: 取消
+    zh-HK: 取消
   username_required:
     en: Username is required.
     zh-CN: 请输入用户名。
@@ -674,6 +682,10 @@ Error:
     en: "Paste failed: %{error}"
     zh-CN: "粘贴失败：%{error}"
     zh-HK: "貼上失敗：%{error}"
+  ftp_not_supported:
+    en: This FTP operation is not supported
+    zh-CN: FTP 不支持此操作
+    zh-HK: FTP 不支援此操作
   calculate_size_failed:
     en: "Failed to calculate folder size: %{error}"
     zh-CN: "计算文件夹大小失败：%{error}"

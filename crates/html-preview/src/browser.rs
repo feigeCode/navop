@@ -46,9 +46,28 @@ pub fn open_html_preview_document_in_browser(
     let dir = std::env::temp_dir().join("onetcli-html-preview");
     let path = write_browser_html_preview_document_to_dir(document, dir)?;
     let command = system_browser_open_command(&path);
-    Command::new(&command.program).args(&command.args).spawn()?;
+    let mut process = Command::new(&command.program);
+    process.args(&command.args);
+    hide_background_console(&mut process);
+    process.spawn()?;
     Ok(path)
 }
+
+/// 后台拉起外部程序时隐藏控制台窗口。
+///
+/// Windows 上 `cmd.exe` 这类控制台程序被无控制台的 GUI 进程直接 spawn 时，
+/// 系统会为它新建一个控制台窗口（表现为闪一下黑框），`CREATE_NO_WINDOW` 抑制
+/// 这个行为；macOS / Linux 无需处理。
+#[cfg(windows)]
+fn hide_background_console(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn hide_background_console(_command: &mut Command) {}
 
 pub fn system_browser_open_command(path: &Path) -> BrowserOpenCommand {
     let path = path.display().to_string();

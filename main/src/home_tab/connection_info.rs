@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) fn card_connection_info(conn: &StoredConnection) -> Option<String> {
     if cfg!(feature = "screenshot-safe") {
-        return screenshot_safe_connection_info(conn.connection_type).map(str::to_owned);
+        return crate::screenshot_safe::connection_info(conn.connection_type, conn.id);
     }
 
     match conn.connection_type {
@@ -35,45 +35,12 @@ pub(super) fn card_connection_info(conn: &StoredConnection) -> Option<String> {
     }
 }
 
-pub(super) fn screenshot_safe_connection_info(
-    connection_type: ConnectionType,
-) -> Option<&'static str> {
-    match connection_type {
-        ConnectionType::Database => Some("user@localhost:5432/example"),
-        ConnectionType::SshSftp => Some("user@localhost:22"),
-        ConnectionType::Redis => Some("localhost:6379/0"),
-        ConnectionType::MongoDB => Some("localhost:27017"),
-        ConnectionType::Mqtt => Some("localhost:1883"),
-        ConnectionType::Serial => Some("COM1 (115200, 8N1)"),
-        ConnectionType::Telnet => Some("localhost:23"),
-        ConnectionType::PortForwarding => Some("localhost:8080 -> localhost:80"),
-        ConnectionType::Rdp => Some("user@localhost:3389"),
-        ConnectionType::Vnc => Some("user@localhost:5900"),
-        ConnectionType::Extension => Some("Local Extension"),
-        ConnectionType::All => None,
-    }
-}
-
 pub(super) fn connection_display_name(conn: &StoredConnection) -> String {
-    if !cfg!(feature = "screenshot-safe") {
-        return conn.name.clone();
+    if cfg!(feature = "screenshot-safe") {
+        return crate::screenshot_safe::connection_name(conn.connection_type, conn.id);
     }
 
-    match conn.connection_type {
-        ConnectionType::Database => "Local Database",
-        ConnectionType::SshSftp => "Local SSH",
-        ConnectionType::Redis => "Local Redis",
-        ConnectionType::MongoDB => "Local MongoDB",
-        ConnectionType::Mqtt => "Local MQTT",
-        ConnectionType::Serial => "Local Serial",
-        ConnectionType::Telnet => "Local Telnet",
-        ConnectionType::PortForwarding => "Local Port Forwarding",
-        ConnectionType::Rdp => "Local RDP",
-        ConnectionType::Vnc => "Local VNC",
-        ConnectionType::Extension => "Local Extension",
-        ConnectionType::All => "Local Connection",
-    }
-    .to_owned()
+    conn.name.clone()
 }
 
 fn database_connection_info(params: one_core::storage::DbConnectionConfig) -> String {

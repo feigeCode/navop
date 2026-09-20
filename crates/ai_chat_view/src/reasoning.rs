@@ -1,10 +1,12 @@
 use crate::theme::{AgentChatTheme, resolve_agent_chat_theme, themed_markdown};
 use crate::{ChatMessageUIGeneric, MessageExtension};
 use gpui::prelude::FluentBuilder;
-use gpui::{
-    AnyElement, App, IntoElement, ParentElement, SharedString, Styled, Window, div,
+use gpui::{AnyElement, App, IntoElement, ParentElement, SharedString, Styled, Window, div};
+use gpui_component::{
+    Disableable, Sizable,
+    button::{Button, ButtonVariants},
+    h_flex, v_flex,
 };
-use gpui_component::{Disableable, Sizable, button::{Button, ButtonVariants}, h_flex, v_flex};
 use one_assets::IconName;
 use rust_i18n::t;
 

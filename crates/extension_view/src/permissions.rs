@@ -114,14 +114,23 @@ impl ExtensionManagerView {
                 let _ = cx.update(|cx| {
                     crate::shell::finish_shell_extension(&gate_id, cx);
                     cleanup_staging(staging);
+                    // 必须同时清 busy：否则扩展页所有安装/卸载按钮会永久禁用。
+                    let _ = entity.update(cx, |view, cx| {
+                        view.busy = None;
+                        view.status = t!("Extension.tabs_close_failed").to_string().into();
+                        cx.notify();
+                    });
                 });
                 return;
             }
             let install =
                 cx.background_spawn(async move { host.install_confirmed_staging(staging) });
-            let outcome = install.await;
+            let mut outcome = Some(install.await);
             let mut view_alive = false;
             let updated = cx.update_window(window_handle, |_, window, cx| {
+                let Some(outcome) = outcome.take() else {
+                    return;
+                };
                 let Some(entity) = entity.upgrade() else {
                     return;
                 };
@@ -157,6 +166,30 @@ impl ExtensionManagerView {
                     refresh_host
                         .refresh_after_extension_change(crate::ExtensionKind::Composite, cx);
                     crate::shell::finish_shell_extension(&gate_id, cx);
+                    // 窗口已关闭时结果投递不到视图，但必须解开 busy，否则整个扩展页
+                    // 的安装/卸载按钮会永久禁用。
+                    if let Some(outcome) = outcome {
+                        let _ = entity.update(cx, |view, cx| {
+                            view.busy = None;
+                            match outcome {
+                                Ok(summary) => {
+                                    view.status =
+                                        t!("Extension.installed_name", name = summary.name.clone())
+                                            .to_string()
+                                            .into();
+                                    view.refresh_after_extension_change(summary.kind, cx);
+                                }
+                                Err(err) => {
+                                    view.status = format_status_error(
+                                        &t!("Extension.install_failed_short").to_string(),
+                                        &err,
+                                    )
+                                    .into();
+                                }
+                            }
+                            cx.notify();
+                        });
+                    }
                 });
             } else {
                 let _ = cx.update(|cx| crate::shell::finish_shell_extension(&gate_id, cx));
@@ -166,7 +199,7 @@ impl ExtensionManagerView {
     }
 }
 
-fn cleanup_staging(staging: PathBuf) {
+pub(crate) fn cleanup_staging(staging: PathBuf) {
     let _ = std::fs::remove_dir_all(staging);
 }
 

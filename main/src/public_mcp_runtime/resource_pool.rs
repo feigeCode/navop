@@ -177,6 +177,7 @@ fn connection_kind(connection: &StoredConnection) -> ResourceKind {
     match connection.connection_type {
         ConnectionType::Database => database_kind(connection),
         ConnectionType::SshSftp => ResourceKind::Ssh,
+        ConnectionType::Ftp => ResourceKind::Other("ftp".into()),
         ConnectionType::Redis => ResourceKind::Redis,
         ConnectionType::MongoDB => ResourceKind::Mongo,
         ConnectionType::Mqtt => ResourceKind::Other("mqtt".into()),
@@ -391,6 +392,7 @@ mod tests {
             updated_at: None,
             team_id: None,
             owner_id: None,
+            preferred_open_mode: None,
         }
     }
 }

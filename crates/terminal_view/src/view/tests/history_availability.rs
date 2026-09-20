@@ -81,6 +81,7 @@ fn history_prompt_dropdown_flips_above_when_cursor_is_near_bottom() {
 
     let origin = history_prompt_dropdown_origin(
         terminal_bounds,
+        px(0.0),
         px(8.0),
         line_height,
         cursor_line,
@@ -104,6 +105,7 @@ fn history_prompt_dropdown_stays_near_cursor_when_match_count_is_huge() {
 
     let origin = history_prompt_dropdown_origin(
         terminal_bounds,
+        px(0.0),
         px(8.0),
         line_height,
         cursor_line,

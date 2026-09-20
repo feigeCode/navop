@@ -2,18 +2,42 @@ use super::*;
 
 const ORACLE_GO_DRIVER_ID: &str = "oracle-go";
 
+/// 扩展连接表单覆盖的连接类型:原生扩展连接,以及可迁移的历史内置中间件连接。
+fn is_extension_form_type(connection_type: &ConnectionType) -> bool {
+    matches!(
+        connection_type,
+        ConnectionType::Extension | ConnectionType::Mqtt
+    )
+}
+
+/// 把连接归一为可编辑的扩展连接形态(历史内置 MQTT 按需迁移)。
+///
+/// 非扩展表单覆盖的类型、或迁移/参数解析失败时返回 `None`。
+fn editable_extension_connection(connection: &StoredConnection) -> Option<StoredConnection> {
+    if !is_extension_form_type(&connection.connection_type) {
+        return None;
+    }
+    let mut connection = connection.clone();
+    connection.try_migrate_legacy_middleware_connection();
+    connection.to_extension_params().ok().map(|_| connection)
+}
+
 impl HomePage {
     pub(crate) fn show_extension_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let editing = self.editing_connection_id.and_then(|id| {
-            self.connections
-                .iter()
-                .find(|connection| {
-                    connection.id == Some(id)
-                        && connection.connection_type == ConnectionType::Extension
-                })
-                .cloned()
-        });
-        let Some(connection) = editing else {
+        let editing = self
+            .editing_connection_id
+            .and_then(|id| {
+                self.connections
+                    .iter()
+                    .find(|connection| connection.id == Some(id))
+            })
+            .filter(|connection| is_extension_form_type(&connection.connection_type))
+            .cloned();
+        let Some(editing) = editing else {
+            return;
+        };
+        let Some(connection) = editable_extension_connection(&editing) else {
+            window.push_notification("Extension connection data is invalid", cx);
             return;
         };
         let Ok(params) = connection.to_extension_params() else {
@@ -181,6 +205,40 @@ impl HomePage {
         );
     }
 
+    /// 把临时连接保存为正式连接。
+    ///
+    /// 连接信息已由终端侧补全运行时用户名 / 密码，保存时会一并写入凭据库。
+    pub(crate) fn show_save_temporary_connection_form(
+        &mut self,
+        connection: StoredConnection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.is_master_key_ready_for_new_connection() {
+            return;
+        }
+
+        let config = SshFormWindowConfig {
+            editing_connection: None,
+            initial_connection: Some(connection),
+            on_saved: Some(Arc::new(|saved, _action, window, cx| {
+                window.push_notification(
+                    t!("Home.save_as_connection_done", name = saved.name.clone()).to_string(),
+                    cx,
+                );
+            })),
+            workspaces: self.workspaces.clone(),
+            teams: get_cached_team_options(cx),
+        };
+
+        open_popup_window(
+            PopupWindowOptions::new(t!("Home.save_as_connection").to_string()).size(820.0, 750.0),
+            move |window, cx| cx.new(|cx| SshFormWindow::new(config, window, cx)),
+            Some(window),
+            cx,
+        );
+    }
+
     pub(crate) fn show_ssh_form(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if self.editing_connection_id.is_none() && !self.is_master_key_ready_for_new_connection() {
             return;
@@ -213,7 +271,7 @@ impl HomePage {
             },
         );
         open_popup_window(
-            PopupWindowOptions::new(title).size(800.0, 750.0),
+            PopupWindowOptions::new(title).size(820.0, 750.0),
             move |window, cx| cx.new(|cx| SshFormWindow::new(config, window, cx)),
             Some(_window),
             cx,
@@ -257,6 +315,43 @@ impl HomePage {
         open_popup_window(
             PopupWindowOptions::new(title).size(700.0, 650.0),
             move |window, cx| cx.new(|cx| RedisFormWindow::new(config, window, cx)),
+            Some(_window),
+            cx,
+        );
+    }
+
+    pub(crate) fn show_ftp_form(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.editing_connection_id.is_none() && !self.is_master_key_ready_for_new_connection() {
+            return;
+        }
+
+        let editing_conn = self.editing_connection_id.and_then(|id| {
+            self.connections
+                .iter()
+                .find(|c| c.id == Some(id) && c.connection_type == ConnectionType::Ftp)
+                .cloned()
+        });
+
+        let config = FtpFormWindowConfig {
+            editing_connection: editing_conn,
+            workspaces: self.workspaces.clone(),
+            teams: get_cached_team_options(cx),
+        };
+
+        self.editing_connection_id = None;
+
+        let title = Self::editing_title_or_default(
+            rust_i18n::locale().as_ref(),
+            config.editing_connection.as_ref(),
+            if config.editing_connection.is_some() {
+                t!("Ftp.edit").to_string()
+            } else {
+                t!("Ftp.new").to_string()
+            },
+        );
+        open_popup_window(
+            PopupWindowOptions::new(title).size(700.0, 650.0),
+            move |window, cx| cx.new(|cx| FtpFormWindow::new(config, window, cx)),
             Some(_window),
             cx,
         );
@@ -371,5 +466,55 @@ impl HomePage {
             Some(_window),
             cx,
         );
+    }
+}
+
+#[cfg(test)]
+mod extension_form_tests {
+    use one_core::storage::{
+        ConnectionType, ExtensionConnectionParams, MQTT_EXTENSION_ID, MqttParams, StoredConnection,
+    };
+
+    use super::{editable_extension_connection, is_extension_form_type};
+
+    #[test]
+    fn extension_form_covers_extension_and_legacy_mqtt_only() {
+        assert!(is_extension_form_type(&ConnectionType::Extension));
+        assert!(is_extension_form_type(&ConnectionType::Mqtt));
+        assert!(!is_extension_form_type(&ConnectionType::Redis));
+    }
+
+    #[test]
+    fn legacy_mqtt_connection_is_editable_through_the_extension_form() {
+        let legacy = StoredConnection::new_mqtt("旧 MQTT".to_string(), MqttParams::default(), None);
+
+        let migrated = editable_extension_connection(&legacy)
+            .expect("旧内置 MQTT 连接应迁移为可编辑的扩展连接");
+
+        assert_eq!(ConnectionType::Extension, migrated.connection_type);
+        let params: ExtensionConnectionParams = migrated
+            .to_extension_params()
+            .expect("迁移后应产出扩展参数");
+        assert_eq!(MQTT_EXTENSION_ID, params.extension_id);
+        assert_eq!("mqtt", params.contribution_id);
+        // 保留原行 id:保存时更新原连接而不是新建。
+        assert_eq!(legacy.id, migrated.id);
+    }
+
+    #[test]
+    fn non_extension_connection_is_not_editable_through_the_extension_form() {
+        let mut connection =
+            StoredConnection::new_mqtt("x".to_string(), MqttParams::default(), None);
+        connection.connection_type = ConnectionType::Redis;
+
+        assert!(editable_extension_connection(&connection).is_none());
+    }
+
+    #[test]
+    fn unparsable_legacy_mqtt_is_rejected_instead_of_reported_as_editable() {
+        let mut legacy = StoredConnection::new_mqtt("bad".to_string(), MqttParams::default(), None);
+        legacy.params = "{not json".to_string();
+
+        assert!(editable_extension_connection(&legacy).is_none());
     }
 }

@@ -104,13 +104,17 @@ impl WorkspaceBackend for LocalBackend {
     }
 }
 
-/// 容器文件系统后端:通过 `docker exec` 在容器内执行文件操作。
+/// 容器文件系统后端:通过 `docker exec`(或扩展自带 provider 的等价命令)
+/// 在容器内执行文件操作。
 ///
-/// 路径都是容器内绝对路径,只交给 `docker exec`,不经过本机 `std::fs`。
+/// 路径都是容器内绝对路径,只交给该命令,不经过本机 `std::fs`。
 pub struct ContainerBackend {
     program: String,
     global_args: Vec<String>,
     container: String,
+    /// 终端会话的环境变量(`DOCKER_HOST` / TLS 证书路径等),透传给子进程,
+    /// 保证浏览的容器与终端连接的是同一个 daemon(尤其远程 TCP/TLS)。
+    env: Vec<(String, String)>,
 }
 
 impl ContainerBackend {
@@ -118,29 +122,37 @@ impl ContainerBackend {
         program: impl Into<String>,
         global_args: Vec<String>,
         container: impl Into<String>,
+        env: Vec<(String, String)>,
     ) -> Self {
         Self {
             program: program.into(),
             global_args,
             container: container.into(),
+            env,
         }
     }
 
     /// 运行 `docker <global...> exec -i <容器> <命令...>`,可选写入 stdin。
     fn run(&self, command: &[String], stdin: Option<&[u8]>) -> Result<std::process::Output> {
-        let mut child = Command::new(&self.program)
+        let mut child_command = Command::new(&self.program);
+        child_command
             .args(&self.global_args)
             .arg("exec")
             .arg("-i")
             .arg(&self.container)
             .args(command)
+            .envs(self.env.iter().cloned())
             .stdin(if stdin.is_some() {
                 Stdio::piped()
             } else {
                 Stdio::null()
             })
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::piped());
+        // 容器命令跑的是 `docker.exe` 这类控制台程序：无控制台的 GUI 进程直接
+        // spawn 会在 Windows 上闪一个控制台窗口，统一走后台子进程约定隐藏。
+        process_util::configure_background_child(&mut child_command);
+        let mut child = child_command
             .spawn()
             .with_context(|| format!("Unable to run {}", self.program))?;
         if let Some(bytes) = stdin {
@@ -356,8 +368,9 @@ pub fn container_backend(
     program: impl Into<String>,
     global_args: Vec<String>,
     container: impl Into<String>,
+    env: Vec<(String, String)>,
 ) -> Arc<dyn WorkspaceBackend> {
-    Arc::new(ContainerBackend::new(program, global_args, container))
+    Arc::new(ContainerBackend::new(program, global_args, container, env))
 }
 
 #[cfg(test)]
@@ -405,13 +418,28 @@ mod tests {
     #[test]
     fn local_backend_has_git_container_does_not() {
         assert!(LocalBackend.supports_git());
-        let container =
-            ContainerBackend::new("docker", vec!["--context".into(), "prod".into()], "web");
+        let container = ContainerBackend::new(
+            "docker",
+            vec!["--context".into(), "prod".into()],
+            "web",
+            vec![],
+        );
         assert!(!container.supports_git());
         // 容器路径不做本机 canonicalize。
         assert_eq!(
             PathBuf::from("/etc"),
             container.canonical_root(PathBuf::from("/etc")).unwrap()
         );
+    }
+
+    /// 结构契约：容器命令必须走后台子进程约定隐藏控制台窗口。
+    ///
+    /// `docker.exe` 这类控制台程序被无控制台的 GUI 进程直接 spawn 时，Windows 会
+    /// 新建一个控制台窗口（表现为闪一下黑框）。
+    #[test]
+    fn container_commands_hide_the_background_console() {
+        let source = include_str!("backend.rs");
+
+        assert!(source.contains("process_util::configure_background_child(&mut child_command)"));
     }
 }

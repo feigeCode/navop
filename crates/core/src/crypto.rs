@@ -836,7 +836,9 @@ mod tests {
     fn crypto_guard() -> std::sync::MutexGuard<'static, ()> {
         // Tolerate poisoning: a panic in any test while holding the shared
         // master-key lock must not cascade-fail every other lock acquisition.
-        test_mutex().lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        test_mutex()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     #[test]

@@ -630,13 +630,9 @@ impl<'de> Deserialize<'de> for ThemeColors {
                 .source_mode_block_bg
                 .or(raw.block_focused_bg)
                 .unwrap_or_else(|| rgba(0x313131ff).into()),
-            comment_bg: raw
-                .comment_bg
-                .unwrap_or_else(|| rgba(0xfbbf2426).into()),
+            comment_bg: raw.comment_bg.unwrap_or_else(|| rgba(0xfbbf2426).into()),
             text_default: raw.text_default,
-            text_link: raw
-                .text_link
-                .unwrap_or_else(|| rgba(0x60a5faff).into()),
+            text_link: raw.text_link.unwrap_or_else(|| rgba(0x60a5faff).into()),
             text_placeholder: raw.text_placeholder,
             text_h1: raw.text_h1,
             text_h2: raw.text_h2,
@@ -645,9 +641,7 @@ impl<'de> Deserialize<'de> for ThemeColors {
             text_h5: raw.text_h5,
             text_h6: raw.text_h6,
             border_h1: raw.border_h1,
-            border_h2: raw
-                .border_h2
-                .unwrap_or_else(|| rgba(0xe0e0e0cc).into()),
+            border_h2: raw.border_h2.unwrap_or_else(|| rgba(0xe0e0e0cc).into()),
             text_quote: raw.text_quote,
             border_quote: raw.border_quote,
             callout_note_bg: raw
@@ -680,9 +674,7 @@ impl<'de> Deserialize<'de> for ThemeColors {
             callout_caution_border: raw
                 .callout_caution_border
                 .unwrap_or_else(|| rgba(0xf87171ff).into()),
-            footnote_bg: raw
-                .footnote_bg
-                .unwrap_or_else(|| rgba(0x212124ff).into()),
+            footnote_bg: raw.footnote_bg.unwrap_or_else(|| rgba(0x212124ff).into()),
             footnote_border: raw
                 .footnote_border
                 .unwrap_or_else(|| rgba(0x71717a52).into()),
@@ -757,15 +749,11 @@ impl<'de> Deserialize<'de> for ThemeColors {
             code_syntax_punctuation: raw
                 .code_syntax_punctuation
                 .unwrap_or_else(|| rgba(0x9aa5ceff).into()),
-            table_border: raw
-                .table_border
-                .unwrap_or_else(|| rgba(0x3f3f46ff).into()),
+            table_border: raw.table_border.unwrap_or_else(|| rgba(0x3f3f46ff).into()),
             table_header_bg: raw
                 .table_header_bg
                 .unwrap_or_else(|| rgba(0x232326ff).into()),
-            table_cell_bg: raw
-                .table_cell_bg
-                .unwrap_or_else(|| rgba(0x1d1d20ff).into()),
+            table_cell_bg: raw.table_cell_bg.unwrap_or_else(|| rgba(0x1d1d20ff).into()),
             table_cell_active_outline: raw
                 .table_cell_active_outline
                 .unwrap_or_else(|| rgba(0x60a5faff).into()),
@@ -1091,11 +1079,7 @@ pub struct Theme {
 }
 
 fn host_surface(background: Hsla, amount: f32) -> Hsla {
-    let direction = if background.l < 0.5 {
-        1.0
-    } else {
-        -1.0
-    };
+    let direction = if background.l < 0.5 { 1.0 } else { -1.0 };
     hsla(
         background.h,
         background.s,
@@ -1991,7 +1975,7 @@ mod tests {
     use crate::config::VelotypeConfigDirs;
     use crate::host_services::EditorHostTheme;
     use gpui::rgba;
-    
+
     #[test]
     fn host_palette_overrides_editor_semantic_colors() {
         let host = EditorHostTheme {
@@ -2192,14 +2176,8 @@ mod tests {
 
         assert_eq!(theme.colors.footnote_bg, rgba(0x212124ff).into());
         assert_eq!(theme.colors.footnote_border, rgba(0x71717a52).into());
-        assert_eq!(
-            theme.colors.footnote_badge_bg,
-            rgba(0xa1a1aa24).into()
-        );
-        assert_eq!(
-            theme.colors.footnote_badge_text,
-            rgba(0xd4d4d8cc).into()
-        );
+        assert_eq!(theme.colors.footnote_badge_bg, rgba(0xa1a1aa24).into());
+        assert_eq!(theme.colors.footnote_badge_text, rgba(0xd4d4d8cc).into());
         assert_eq!(theme.colors.footnote_backref, rgba(0xa1a1aaff).into());
         assert_eq!(theme.dimensions.footnote_padding_x, 10.0);
         assert_eq!(theme.dimensions.footnote_padding_y, 6.0);
@@ -2235,10 +2213,7 @@ mod tests {
             Theme::from_json(&json).expect("theme without code language palette should load");
 
         assert_eq!(theme.colors.code_bg, rgba(0x111827ff).into());
-        assert_eq!(
-            theme.colors.code_language_input_bg,
-            rgba(0x343941ff).into()
-        );
+        assert_eq!(theme.colors.code_language_input_bg, rgba(0x343941ff).into());
         assert_eq!(
             theme.colors.code_language_input_border,
             rgba(0x4b5563cc).into()
@@ -2256,10 +2231,7 @@ mod tests {
     #[test]
     fn important_callout_defaults_use_purple_palette() {
         let theme = Theme::default_theme();
-        assert_eq!(
-            theme.colors.callout_important_bg,
-            rgba(0xa78bfa1f).into()
-        );
+        assert_eq!(theme.colors.callout_important_bg, rgba(0xa78bfa1f).into());
         assert_eq!(
             theme.colors.callout_important_border,
             rgba(0xa78bfaff).into()
@@ -2268,10 +2240,7 @@ mod tests {
         assert_eq!(theme.colors.footnote_bg, rgba(0x212124ff).into());
         assert_eq!(theme.dimensions.footnote_padding_x, 10.0);
         assert_eq!(theme.colors.code_bg, rgba(0x23272eff).into());
-        assert_eq!(
-            theme.colors.code_language_input_bg,
-            rgba(0x343941ff).into()
-        );
+        assert_eq!(theme.colors.code_language_input_bg, rgba(0x343941ff).into());
         assert_eq!(
             theme.colors.code_language_input_border,
             rgba(0x4b5563cc).into()
@@ -2284,10 +2253,7 @@ mod tests {
         let light = Theme::light_theme();
 
         assert_eq!(light.name, "Velotype Light");
-        assert_eq!(
-            light.colors.editor_background,
-            rgba(0xf7f8fbff).into()
-        );
+        assert_eq!(light.colors.editor_background, rgba(0xf7f8fbff).into());
         assert_eq!(light.colors.text_default, rgba(0x1f2937ff).into());
         assert_eq!(light.colors.text_link, rgba(0x2563ebff).into());
         assert_eq!(light.colors.code_bg, rgba(0xf1f5f9ff).into());

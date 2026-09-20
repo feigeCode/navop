@@ -59,6 +59,7 @@ use ssh::SshSessionManager;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use terminal::ReportedWorkingDir;
 use terminal::resolve_reported_working_dir;
 use terminal::terminal::{SshTerminalConfig, TerminalConnectionKind};
 use workspace_explorer::{
@@ -373,6 +374,32 @@ fn terminal_toolbar_icon_button(
         .tooltip(panel.title())
 }
 
+fn terminal_toolbar_save_as_connection_button(
+    sidebar: Entity<TerminalSidebar>,
+    colors: &TerminalColors,
+    item_size: Size,
+    cx: &App,
+) -> IconButton {
+    let style = ButtonCustomVariant::new(cx)
+        .foreground(colors.foreground)
+        .hover(colors.muted)
+        .active(colors.muted);
+
+    IconButton::new(
+        SharedString::from("terminal-toolbar-save-as-connection"),
+        IconName::Save,
+    )
+    .hit_size(item_size)
+    .glyph_size(OneIconSize::Small)
+    .custom(style)
+    .tooltip(t!("TerminalSidebar.save_as_connection").to_string())
+    .on_click(move |_, _window, cx| {
+        sidebar.update(cx, |sidebar, cx| {
+            sidebar.request_save_as_connection(cx);
+        });
+    })
+}
+
 fn terminal_sidebar_available_panels(
     has_file_explorer: bool,
     has_file_manager: bool,
@@ -435,6 +462,33 @@ impl TerminalToolDockState {
             .map(|panel| (panel, ToolPanelState::default()))
             .collect();
         Self { panels, states }
+    }
+
+    /// 重算可用面板集合，保留已有面板的展开状态与位置。
+    ///
+    /// 需要运行时输入凭据的 SSH 连接（临时连接等）在构造侧边栏时还没有
+    /// `SshSessionManager`，文件管理器与服务器监控面板只能在凭据就绪后补建，
+    /// 因此可用面板集合必须允许在生命周期内变化。
+    pub fn update_available_panels(
+        &mut self,
+        panels: impl IntoIterator<Item = SidebarPanel>,
+    ) -> bool {
+        let mut seen = HashSet::new();
+        let next = panels
+            .into_iter()
+            .filter(|panel| seen.insert(*panel))
+            .collect::<Vec<_>>();
+        if next == self.panels {
+            return false;
+        }
+        self.states.retain(|panel, _| next.contains(panel));
+        for panel in &next {
+            self.states
+                .entry(*panel)
+                .or_insert_with(ToolPanelState::default);
+        }
+        self.panels = next;
+        true
     }
 
     pub fn toolbar_visible(&self) -> bool {
@@ -600,6 +654,10 @@ pub enum TerminalSidebarEvent {
     VimScrollToArrowKeysChanged(bool),
     /// 选中文本高亮相同内容开关
     SelectionHighlightChanged(bool),
+    /// 左边距显示每行到达时间开关
+    ShowLineTimestampsChanged(bool),
+    /// 左边距显示行号开关
+    ShowLineNumbersChanged(bool),
     /// 路径与终端同步开关
     SyncPathChanged(bool),
     /// 自定义高亮规则变更
@@ -608,8 +666,30 @@ pub enum TerminalSidebarEvent {
     OpenSftp(StoredConnection),
     /// 在终端中 cd 到指定路径
     CdToTerminal(String),
+    /// 把当前临时连接保存为正式连接
+    SaveAsConnection,
     /// 请求将终端当前工作目录同步到文件管理器
     SyncWorkingDir,
+}
+
+/// 需要等凭据就绪才能补建的 SSH 工具面板所需的构造输入。
+///
+/// 临时连接这类“运行时输入凭据”的 SSH 会话在构造侧边栏时还没有
+/// `SshSessionManager`，文件管理器与服务器监控面板只能在凭据提交后创建。
+#[derive(Clone)]
+struct PendingSshToolPanels {
+    connection_id: Option<i64>,
+    auto_show_server_monitor: bool,
+    /// 服务器监控依赖 SSH 会话配置，非 SSH 会话不创建
+    ssh_session: bool,
+    /// 文件管理器需要完整连接信息（含 host/端口/用户名）
+    stored_connection: Option<StoredConnection>,
+}
+
+impl PendingSshToolPanels {
+    fn is_empty(&self) -> bool {
+        self.stored_connection.is_none() && !self.ssh_session
+    }
 }
 
 /// 终端侧边栏组件
@@ -634,6 +714,10 @@ pub struct TerminalSidebar {
     server_monitor_panel: Option<Entity<ServerMonitorPanel>>,
     /// 路径与终端同步开关（默认开启）
     sync_path_enabled: bool,
+    /// 当前终端对应的连接；临时连接的 `id` 为空，可用于“保存为连接”
+    stored_connection: Option<StoredConnection>,
+    /// 尚未创建的 SSH 工具面板（凭据就绪后补建）
+    pending_ssh_tool_panels: Option<PendingSshToolPanels>,
     /// 焦点句柄
     focus_handle: FocusHandle,
     /// 终端主题配色（用于侧边栏工具栏）
@@ -642,10 +726,179 @@ pub struct TerminalSidebar {
     _subs: Vec<Subscription>,
 }
 
+fn subscribe_file_manager_panel(
+    cx: &mut Context<TerminalSidebar>,
+    panel: &Entity<FileManagerPanel>,
+) -> Subscription {
+    cx.subscribe(panel, |this, _, event: &FileManagerPanelEvent, cx| {
+        this.handle_file_manager_event(event, cx);
+    })
+}
+
+fn subscribe_server_monitor_panel(
+    cx: &mut Context<TerminalSidebar>,
+    panel: &Entity<ServerMonitorPanel>,
+) -> Subscription {
+    cx.subscribe(panel, |this, _, event: &ServerMonitorPanelEvent, cx| {
+        this.handle_server_monitor_event(event, cx);
+    })
+}
+
 impl TerminalSidebar {
     pub(crate) fn refresh_quick_commands(&mut self, cx: &mut Context<Self>) {
         self.quick_command_panel
             .update(cx, |panel, cx| panel.load_commands(cx));
+    }
+
+    fn handle_file_manager_event(&mut self, event: &FileManagerPanelEvent, cx: &mut Context<Self>) {
+        match event {
+            FileManagerPanelEvent::Close => {
+                self.close_tool(SidebarPanel::FileManager, cx);
+            }
+            FileManagerPanelEvent::MoveTo(placement) => {
+                self.move_tool(SidebarPanel::FileManager, *placement, cx);
+            }
+            FileManagerPanelEvent::OpenSftp(connection) => {
+                cx.emit(TerminalSidebarEvent::OpenSftp(connection.clone()));
+            }
+            FileManagerPanelEvent::CdToTerminal(path) => {
+                cx.emit(TerminalSidebarEvent::CdToTerminal(path.clone()));
+            }
+            FileManagerPanelEvent::SyncWorkingDir => {
+                cx.emit(TerminalSidebarEvent::SyncWorkingDir);
+            }
+            FileManagerPanelEvent::ToggleFollowTerminalCwd => {
+                let enabled = !self.sync_path_enabled;
+                self.set_sync_path_enabled(enabled, cx);
+                if let Some(fm_panel) = &self.file_manager_panel {
+                    fm_panel.update(cx, |panel, cx| {
+                        panel.set_follow_terminal_cwd(enabled, cx);
+                    });
+                }
+                cx.emit(TerminalSidebarEvent::SyncPathChanged(enabled));
+            }
+        }
+    }
+
+    fn handle_server_monitor_event(
+        &mut self,
+        event: &ServerMonitorPanelEvent,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            ServerMonitorPanelEvent::Close => {
+                self.close_tool(SidebarPanel::ServerMonitor, cx);
+            }
+        }
+    }
+
+    /// 当前终端是否为需要保存的临时连接（无数据库 ID）。
+    pub(crate) fn save_as_connection_available(&self) -> bool {
+        self.stored_connection
+            .as_ref()
+            .is_some_and(|connection| connection.id.is_none())
+    }
+
+    /// 临时连接的连接信息；已是正式连接时返回 `None`。
+    pub(crate) fn temporary_connection(&self) -> Option<StoredConnection> {
+        self.stored_connection
+            .as_ref()
+            .filter(|connection| connection.id.is_none())
+            .cloned()
+    }
+
+    /// 请求把当前临时连接保存为正式连接。
+    pub(crate) fn request_save_as_connection(&self, cx: &mut Context<Self>) {
+        if !self.save_as_connection_available() {
+            return;
+        }
+        cx.emit(TerminalSidebarEvent::SaveAsConnection);
+    }
+
+    /// 文件管理器 / 服务器监控面板是否都已可用（或本来就不适用）。
+    pub(crate) fn ssh_tool_panels_ready(&self) -> bool {
+        let Some(pending) = self.pending_ssh_tool_panels.as_ref() else {
+            return true;
+        };
+        let file_manager_ready =
+            pending.stored_connection.is_none() || self.file_manager_panel.is_some();
+        let server_monitor_ready = !pending.ssh_session || self.server_monitor_panel.is_some();
+        file_manager_ready && server_monitor_ready
+    }
+
+    /// 凭据就绪后补建 SSH 工具面板。
+    ///
+    /// 只补建缺失的面板，重复调用是幂等的；新面板会重新计算工具栏可用项。
+    pub(crate) fn install_ssh_tool_panels(
+        &mut self,
+        session_manager: Arc<SshSessionManager>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(pending) = self.pending_ssh_tool_panels.clone() else {
+            return;
+        };
+        let colors = self.colors.clone();
+        let mut installed = false;
+
+        let file_manager_connection = pending
+            .stored_connection
+            .clone()
+            .filter(|_| self.file_manager_panel.is_none());
+        if let Some(connection) = file_manager_connection {
+            let panel = cx.new(|cx| {
+                FileManagerPanel::new(
+                    connection,
+                    session_manager.clone(),
+                    colors.clone(),
+                    window,
+                    cx,
+                )
+            });
+            let sync_path_enabled = self.sync_path_enabled;
+            panel.update(cx, |panel, cx| {
+                panel.set_follow_terminal_cwd(sync_path_enabled, cx);
+            });
+            self._subs.push(subscribe_file_manager_panel(cx, &panel));
+            self.file_manager_panel = Some(panel);
+            installed = true;
+        }
+
+        if self.server_monitor_panel.is_none() && pending.ssh_session {
+            let panel = cx.new(|cx| {
+                ServerMonitorPanel::new(
+                    pending.connection_id,
+                    session_manager,
+                    pending.auto_show_server_monitor,
+                    colors,
+                    cx,
+                )
+            });
+            self._subs.push(subscribe_server_monitor_panel(cx, &panel));
+            self.server_monitor_panel = Some(panel);
+            installed = true;
+        }
+
+        if installed {
+            self.refresh_available_panels(cx);
+        }
+    }
+
+    /// 按当前实际存在的面板刷新工具栏可用项。
+    fn refresh_available_panels(&mut self, cx: &mut Context<Self>) -> bool {
+        let changed = self
+            .tool_dock
+            .update_available_panels(terminal_sidebar_available_panels(
+                self.file_explorer_panel.is_some(),
+                self.file_manager_panel.is_some(),
+                self.server_monitor_panel.is_some(),
+                self.history_command_panel.is_some(),
+                self.broadcast_input_panel.is_some(),
+            ));
+        if changed {
+            cx.notify();
+        }
+        changed
     }
 
     pub(crate) fn new(
@@ -666,6 +919,8 @@ impl TerminalSidebar {
     ) -> Self {
         let colors = initial_theme.colors();
         let has_file_manager = stored_connection.is_some();
+        // 保留一份连接信息：临时连接（`id` 为空）据此支持“保存为连接”。
+        let sidebar_connection = stored_connection.clone();
         let broadcast_supported = ssh_config.is_some();
         if broadcast_supported {
             init_broadcast_input_registry(cx);
@@ -675,6 +930,14 @@ impl TerminalSidebar {
             .map(|config| config.ssh_config.username.clone())
             .or_else(|| std::env::var("USER").ok());
         let auto_show_server_monitor = ServerMonitorPanel::load_monitor_enabled(connection_id);
+        // 临时连接等需要运行时输入凭据的 SSH 会话在这里还拿不到
+        // `SshSessionManager`，文件管理器 / 服务器监控面板要等凭据提交后补建。
+        let pending_ssh_tool_panels = PendingSshToolPanels {
+            connection_id,
+            auto_show_server_monitor,
+            ssh_session: ssh_config.is_some(),
+            stored_connection: stored_connection.clone(),
+        };
         let settings_panel = cx.new(|cx| {
             SettingsPanel::new(
                 initial_theme,
@@ -872,6 +1135,12 @@ impl TerminalSidebar {
                 settings_panel::SettingsPanelEvent::SelectionHighlightChanged(enabled) => {
                     cx.emit(TerminalSidebarEvent::SelectionHighlightChanged(*enabled));
                 }
+                settings_panel::SettingsPanelEvent::ShowLineTimestampsChanged(enabled) => {
+                    cx.emit(TerminalSidebarEvent::ShowLineTimestampsChanged(*enabled));
+                }
+                settings_panel::SettingsPanelEvent::ShowLineNumbersChanged(enabled) => {
+                    cx.emit(TerminalSidebarEvent::ShowLineNumbersChanged(*enabled));
+                }
                 settings_panel::SettingsPanelEvent::SyncPathChanged(enabled) => {
                     this.sync_path_enabled = *enabled;
                     if let Some(fm_panel) = &this.file_manager_panel {
@@ -934,38 +1203,7 @@ impl TerminalSidebar {
 
         // 订阅文件管理器面板事件
         if let Some(ref fm_panel) = file_manager_panel {
-            let fm_sub =
-                cx.subscribe(
-                    fm_panel,
-                    |this, _, event: &FileManagerPanelEvent, cx| match event {
-                        FileManagerPanelEvent::Close => {
-                            this.close_tool(SidebarPanel::FileManager, cx);
-                        }
-                        FileManagerPanelEvent::MoveTo(placement) => {
-                            this.move_tool(SidebarPanel::FileManager, *placement, cx);
-                        }
-                        FileManagerPanelEvent::OpenSftp(connection) => {
-                            cx.emit(TerminalSidebarEvent::OpenSftp(connection.clone()));
-                        }
-                        FileManagerPanelEvent::CdToTerminal(path) => {
-                            cx.emit(TerminalSidebarEvent::CdToTerminal(path.clone()));
-                        }
-                        FileManagerPanelEvent::SyncWorkingDir => {
-                            cx.emit(TerminalSidebarEvent::SyncWorkingDir);
-                        }
-                        FileManagerPanelEvent::ToggleFollowTerminalCwd => {
-                            let enabled = !this.sync_path_enabled;
-                            this.set_sync_path_enabled(enabled, cx);
-                            if let Some(fm_panel) = &this.file_manager_panel {
-                                fm_panel.update(cx, |panel, cx| {
-                                    panel.set_follow_terminal_cwd(enabled, cx);
-                                });
-                            }
-                            cx.emit(TerminalSidebarEvent::SyncPathChanged(enabled));
-                        }
-                    },
-                );
-            subs.push(fm_sub);
+            subs.push(subscribe_file_manager_panel(cx, fm_panel));
         }
 
         if let Some(ref explorer) = file_explorer_panel {
@@ -991,15 +1229,7 @@ impl TerminalSidebar {
         }
 
         if let Some(ref monitor_panel) = server_monitor_panel {
-            let monitor_sub = cx.subscribe(
-                monitor_panel,
-                |this, _, event: &ServerMonitorPanelEvent, cx| match event {
-                    ServerMonitorPanelEvent::Close => {
-                        this.close_tool(SidebarPanel::ServerMonitor, cx);
-                    }
-                },
-            );
-            subs.push(monitor_sub);
+            subs.push(subscribe_server_monitor_panel(cx, monitor_panel));
         }
 
         let available_panels = terminal_sidebar_available_panels(
@@ -1020,6 +1250,9 @@ impl TerminalSidebar {
             file_explorer_panel,
             server_monitor_panel,
             sync_path_enabled,
+            stored_connection: sidebar_connection,
+            pending_ssh_tool_panels: (!pending_ssh_tool_panels.is_empty())
+                .then_some(pending_ssh_tool_panels),
             focus_handle: cx.focus_handle(),
             colors,
             _subs: subs,
@@ -1126,6 +1359,7 @@ impl TerminalSidebar {
                     open: self.tool_dock.is_tool_open(panel),
                 })
                 .collect(),
+            save_as_connection: self.save_as_connection_available(),
         }
     }
 
@@ -1356,6 +1590,18 @@ impl TerminalSidebar {
         });
     }
 
+    pub fn set_show_line_timestamps(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.settings_panel.update(cx, |panel, cx| {
+            panel.set_show_line_timestamps(enabled, cx);
+        });
+    }
+
+    pub fn set_show_line_numbers(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.settings_panel.update(cx, |panel, cx| {
+            panel.set_show_line_numbers(enabled, cx);
+        });
+    }
+
     pub fn set_confirm_multiline_paste(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.settings_panel.update(cx, |panel, cx| {
             panel.set_confirm_multiline_paste(enabled, cx);
@@ -1413,13 +1659,13 @@ impl TerminalSidebar {
     /// 从终端 OSC 7 同步路径到文件管理器
     ///
     /// 检查 `sync_path_enabled` 且存在文件管理器面板时，导航到指定路径。
-    pub fn sync_file_manager_path(&mut self, path: String, cx: &mut Context<Self>) {
+    pub fn sync_file_manager_path(&mut self, reported: ReportedWorkingDir, cx: &mut Context<Self>) {
         if !self.sync_path_enabled {
             return;
         }
         if let Some(ref fm_panel) = self.file_manager_panel {
             fm_panel.update(cx, |panel, cx| {
-                panel.sync_navigate_to(path, cx);
+                panel.sync_navigate_to(reported, cx);
             });
         }
     }
@@ -1427,10 +1673,14 @@ impl TerminalSidebar {
     /// 设置文件管理器的初始工作目录（连接前调用）
     ///
     /// 当终端收到 OSC 7 但文件管理器尚未连接时，缓存路径供首次连接使用。
-    pub fn set_file_manager_initial_dir(&mut self, path: String, cx: &mut Context<Self>) {
+    pub fn set_file_manager_initial_dir(
+        &mut self,
+        reported: ReportedWorkingDir,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(ref fm_panel) = self.file_manager_panel {
             fm_panel.update(cx, |panel, _cx| {
-                panel.set_initial_working_dir(path);
+                panel.set_initial_working_dir(reported);
             });
         }
     }
@@ -1589,6 +1839,8 @@ impl TerminalSidebar {
 struct TerminalToolbarSnapshot {
     colors: TerminalColors,
     buttons: Vec<TerminalToolbarButtonSnapshot>,
+    /// 当前是临时连接（无数据库 ID）时展示“保存为连接”
+    save_as_connection: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -1636,6 +1888,14 @@ impl Render for TerminalSidebarToolbar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let snapshot = self.sidebar.read(cx).toolbar_snapshot();
         let item_size = Size::Size(one_ui::theme_geometry().layout.global_rail_item);
+        let save_button = snapshot.save_as_connection.then(|| {
+            terminal_toolbar_save_as_connection_button(
+                self.sidebar.clone(),
+                &snapshot.colors,
+                item_size,
+                cx,
+            )
+        });
 
         v_flex()
             .flex_shrink_0()
@@ -1653,6 +1913,9 @@ impl Render for TerminalSidebarToolbar {
                         .map(|button| self.render_button(button, item_size, &snapshot.colors, cx)),
                 ),
             )
+            .when_some(save_button, |this, button| {
+                this.child(v_flex().w_full().items_center().pb_2().child(button))
+            })
     }
 }
 
@@ -1746,7 +2009,40 @@ mod tests {
             updated_at: None,
             team_id: None,
             owner_id: None,
+            preferred_open_mode: None,
         }
+    }
+
+    #[test]
+    fn available_panels_can_grow_and_shrink_after_construction() {
+        let mut dock = TerminalToolDockState::new([SidebarPanel::Settings, SidebarPanel::AiChat]);
+        assert!(!dock.panels.contains(&SidebarPanel::FileManager));
+
+        // 临时连接提交凭据后补建文件管理器面板
+        assert!(dock.update_available_panels([
+            SidebarPanel::Settings,
+            SidebarPanel::AiChat,
+            SidebarPanel::FileManager,
+        ]));
+        assert_eq!(
+            vec![
+                SidebarPanel::Settings,
+                SidebarPanel::AiChat,
+                SidebarPanel::FileManager
+            ],
+            dock.panels
+        );
+
+        // 重复调用等价，不重复添加面板
+        assert!(!dock.update_available_panels([
+            SidebarPanel::Settings,
+            SidebarPanel::AiChat,
+            SidebarPanel::FileManager,
+        ]));
+
+        // 收缩时移除不再可用的面板
+        assert!(dock.update_available_panels([SidebarPanel::Settings]));
+        assert_eq!(vec![SidebarPanel::Settings], dock.panels);
     }
 
     #[test]

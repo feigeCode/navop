@@ -8,11 +8,14 @@ import sys
 from pathlib import Path
 
 
+COMPONENT_REPO = "https://github.com/feigeCode/gpui-kit"
+COMPONENT_REPO_SLUG = "feigeCode/gpui-kit"
+
 DEPENDENCIES = {
-    "gpui-component": "gpui_ce_components",
-    "gpui-component-assets": "gpui_ce_components_assets",
-    "gpui-base": "gpui_ce_components_base",
-    "gpui-shell": "gpui_ce_components_shell",
+    "gpui-component": "gpui-component",
+    "gpui-component-assets": "gpui-kit-assets",
+    "gpui-base": "gpui-base",
+    "gpui-shell": "gpui-shell",
     "gpui-component-shell": "gpui-component-shell",
 }
 
@@ -69,19 +72,22 @@ def update_manifest(text: str, revision: str, versions: dict[str, str]) -> str:
     updated = set()
     for index, line in enumerate(lines):
         for alias, version in versions.items():
-            if not line.startswith(f"{alias} = ") or "gpui-component.git" not in line:
+            if not line.startswith(f"{alias} = ") or COMPONENT_REPO_SLUG not in line:
                 continue
             next_line, rev_count = re.subn(
                 r'\brev\s*=\s*"[^"]+"', f'rev = "{revision}"', line, count=1
             )
-            next_line, version_count = re.subn(
-                r'\bversion\s*=\s*"[^"]+"',
-                f'version = "{version}"',
-                next_line,
-                count=1,
-            )
-            if rev_count != 1 or version_count != 1:
+            if rev_count != 1:
                 raise ValueError(f"cannot update dependency line for {alias}")
+            if re.search(r'\bversion\s*=\s*"[^"]+"', next_line):
+                next_line, version_count = re.subn(
+                    r'\bversion\s*=\s*"[^"]+"',
+                    f'version = "{version}"',
+                    next_line,
+                    count=1,
+                )
+                if version_count != 1:
+                    raise ValueError(f"cannot update dependency line for {alias}")
             lines[index] = next_line
             updated.add(alias)
             break
@@ -175,7 +181,7 @@ def update_lock(navop_root: Path, offline: bool) -> None:
 def lock_matches(navop_root: Path, revision: str) -> bool:
     lock = (navop_root / "Cargo.lock").read_text()
     pattern = re.compile(
-        rf'git\+https://github\.com/feigeCode/gpui-component\.git\?rev={revision}#{revision}'
+        rf'{re.escape(COMPONENT_REPO)}(?:\.git)?\?rev={revision}#{revision}'
     )
     return len(pattern.findall(lock)) >= len(DEPENDENCIES)
 

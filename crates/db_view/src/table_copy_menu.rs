@@ -1,6 +1,10 @@
 use db::{DbNode, DbNodeType};
 use gpui::ClipboardItem;
-use gpui_component::{WindowExt, menu::{PopupMenu, PopupMenuItem}, notification::Notification};
+use gpui_component::{
+    WindowExt,
+    menu::{PopupMenu, PopupMenuItem},
+    notification::Notification,
+};
 use one_assets::IconName;
 use rust_i18n::t;
 

@@ -77,7 +77,9 @@ if [[ -n "${ZSH_VERSION:-}" ]]; then
     PROMPT="${PROMPT}"$'%{\033]133;B\007%}'
 else
     __onetcli_precmd_bash() {
-        local exit_code="$?"
+        # 退出码由 PROMPT_COMMAND 钩子显式传入；直接调用（无参数）时回退到 $?。
+        local exit_code="${1:-$?}"
+        unset __ONETCLI_EXIT
         __ONETCLI_IN_PRECMD=1
         __onetcli_precmd_common "$exit_code"
         __ONETCLI_IN_PRECMD=0
@@ -90,10 +92,16 @@ else
         __onetcli_command_start
     }
 
+    # PROMPT_COMMAND 的值可能被环境导出，并被之后的子 shell（su、tmux、exec bash 等）
+    # 继承，而那些 shell 里并没有本文件的函数定义；钩子若只放裸函数名，它们的每个提示符
+    # 都会多输出一行“未找到命令”（issue #217）。因此钩子自带存在性判断：
+    # 函数缺失时静默跳过，退出码先取好再显式传给函数。
+    __ONETCLI_PROMPT_HOOK='__ONETCLI_EXIT=$?;command -v __onetcli_precmd_bash >/dev/null 2>&1&&__onetcli_precmd_bash "$__ONETCLI_EXIT"'
+
     if [[ -z "${PROMPT_COMMAND:-}" ]]; then
-        PROMPT_COMMAND='__onetcli_precmd_bash'
+        PROMPT_COMMAND="$__ONETCLI_PROMPT_HOOK"
     else
-        PROMPT_COMMAND="__onetcli_precmd_bash;${PROMPT_COMMAND}"
+        PROMPT_COMMAND="$__ONETCLI_PROMPT_HOOK;${PROMPT_COMMAND}"
     fi
 
     PS1="${PS1}"$'\\[\033]133;B\007\\]'

@@ -1,9 +1,15 @@
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render,
-    Styled, Window, div, px,
+    App, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render, Styled,
+    Window, div, px,
 };
-use gpui_component::{ActiveTheme, Disableable, Sizable, button::{Button, ButtonVariants as _}, h_flex, scroll::ScrollableElement, v_flex};
+use gpui_component::{
+    ActiveTheme, Disableable, Sizable,
+    button::{Button, ButtonVariants as _},
+    h_flex,
+    scroll::ScrollableElement,
+    v_flex,
+};
 use one_assets::IconName;
 use one_core::cloud_sync::TeamOption;
 use one_core::connection_notifier::{ConnectionDataEvent, emit_connection_event};

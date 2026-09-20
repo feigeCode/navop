@@ -230,7 +230,7 @@ mod tests {
     use super::*;
     use gpui::px;
     use gpui_component::{Theme, button::ButtonCustomVariant};
-use one_assets::IconName;
+    use one_assets::IconName;
 
     #[test]
     fn icon_button_roles_keep_hit_targets_and_glyphs_independent() {

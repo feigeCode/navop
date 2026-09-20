@@ -1,5 +1,5 @@
-use one_ui::IconSize;
 use super::*;
+use one_ui::IconSize;
 
 impl HomePage {
     pub(super) fn render_connection_card_actions(
@@ -27,22 +27,30 @@ impl HomePage {
             .bg(cx.theme().background)
             .group_hover("", |style| style.opacity(1.0))
             .opacity(0.0)
-            .when(conn.connection_type == ConnectionType::SshSftp, |this| {
-                this.child(
-                    IconButton::new(
-                        SharedString::from(format!("{card_id}-sftp")),
-                        Icon::new(IconName::FolderOpen)
-                            .mono()
-                            .with_size(IconSize::Small),
+            .when(
+                matches!(
+                    conn.connection_type,
+                    ConnectionType::SshSftp | ConnectionType::Ftp
+                ),
+                |this| {
+                    this.child(
+                        IconButton::new(
+                            SharedString::from(format!("{card_id}-sftp")),
+                            Icon::new(IconName::FolderOpen)
+                                .mono()
+                                .with_size(IconSize::Small),
+                        )
+                        .role(IconButtonRole::Compact)
+                        .tooltip(t!("Home.open_sftp"))
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                cx.stop_propagation();
+                                this.open_sftp_view(sftp_connection.clone(), window, cx);
+                            },
+                        )),
                     )
-                    .role(IconButtonRole::Compact)
-                    .tooltip(t!("Home.open_sftp"))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        cx.stop_propagation();
-                        this.open_sftp_view(sftp_connection.clone(), window, cx);
-                    })),
-                )
-            })
+                },
+            )
             .when(can_edit, |this| {
                 this.child(
                     IconButton::new(

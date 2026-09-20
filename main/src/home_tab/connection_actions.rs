@@ -48,7 +48,10 @@ impl HomePage {
                 self.editing_connection_id = Some(connection_id);
                 self.show_mongodb_form(window, cx);
             }
-            ConnectionType::Mqtt => {}
+            ConnectionType::Ftp => {
+                self.editing_connection_id = Some(connection_id);
+                self.show_ftp_form(window, cx);
+            }
             ConnectionType::Serial => {
                 self.editing_connection_id = Some(connection_id);
                 self.show_serial_form(window, cx);
@@ -70,7 +73,8 @@ impl HomePage {
                 self.editing_connection_id = Some(connection_id);
                 self.show_remote_desktop_form(protocol, window, cx);
             }
-            ConnectionType::Extension => {
+            // 旧内置 MQTT 连接与原生扩展连接共用扩展表单(历史参数先迁移为扩展形态)。
+            ConnectionType::Extension | ConnectionType::Mqtt => {
                 if cx.global::<ActiveConnections>().is_active(connection_id) {
                     let name = connection.name;
                     window.open_dialog(cx, move |dialog, _window, _cx| {
@@ -417,6 +421,28 @@ impl HomePage {
 }
 
 #[cfg(test)]
+mod edit_routing_tests {
+    /// 旧内置 MQTT 曾落在 `ConnectionType::Mqtt => {}` 空实现里,导致老连接无法编辑。
+    #[test]
+    fn legacy_mqtt_edit_routes_to_the_extension_form() {
+        let source = include_str!("connection_actions.rs");
+        // 只看生产代码;测试模块自身的字面量不算。
+        let production = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production source");
+        assert!(
+            !production.contains("ConnectionType::Mqtt => {}"),
+            "旧内置 MQTT 不能是编辑空实现"
+        );
+        assert!(
+            production.contains("ConnectionType::Extension | ConnectionType::Mqtt =>"),
+            "旧内置 MQTT 应与扩展连接共用扩展表单入口"
+        );
+    }
+}
+
+#[cfg(test)]
 mod sensitive_copy_tests {
     use one_core::storage::{SshAuthMethod, SshParams};
 
@@ -426,6 +452,7 @@ mod sensitive_copy_tests {
         StoredConnection::new_ssh(
             "Sensitive SSH".to_string(),
             SshParams {
+                remote_file: None,
                 sftp_default_directory: None,
                 disabled_jump_server: None,
                 sftp_account: None,

@@ -310,6 +310,7 @@ fn connection_type_to_resource_kind(conn_type: &ConnectionType, params: &str) ->
         ConnectionType::MongoDB => ResourceKind::Mongo,
         ConnectionType::Mqtt => ResourceKind::Other("mqtt".into()),
         ConnectionType::SshSftp => ResourceKind::Ssh,
+        ConnectionType::Ftp => ResourceKind::Other("ftp".into()),
         ConnectionType::Serial => ResourceKind::Terminal,
         ConnectionType::Telnet => ResourceKind::Terminal,
         ConnectionType::PortForwarding => ResourceKind::Other("port-forwarding".into()),

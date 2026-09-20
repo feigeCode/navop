@@ -2,7 +2,8 @@ use std::{
     collections::HashSet,
     ops::{Range, RangeInclusive},
     rc::Rc,
-    time::Duration};
+    time::Duration,
+};
 
 use super::filter_state::FilterState;
 use super::selection::{CellCoord, TableSelection};
@@ -14,10 +15,17 @@ use gpui::{
     ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, Pixels, Point, Render,
     ScrollStrategy, ScrollWheelEvent, SharedString, Stateful, StatefulInteractiveElement as _,
     Styled, Subscription, Task, UniformListScrollHandle, Window, canvas, div,
-    prelude::FluentBuilder, px, uniform_list};
+    prelude::FluentBuilder, px, uniform_list,
+};
 use gpui_component::list::{List, ListState};
 use gpui_component::scroll::ScrollbarHandle;
-use gpui_component::{ActiveTheme,  Icon, StyleSized as _, StyledExt, VirtualListScrollHandle, h_flex, input::{IndentInline, OutdentInline}, menu::{ContextMenuExt, PopupMenu}, scroll::{ScrollableMask, Scrollbar, ScrollbarMode}, v_flex};
+use gpui_component::{
+    ActiveTheme, Icon, StyleSized as _, StyledExt, VirtualListScrollHandle, h_flex,
+    input::{IndentInline, OutdentInline},
+    menu::{ContextMenuExt, PopupMenu},
+    scroll::{ScrollableMask, Scrollbar, ScrollbarMode},
+    v_flex,
+};
 use one_assets::IconName;
 use rust_i18n::t;
 
@@ -76,7 +84,8 @@ gpui::actions!(
 enum SelectionState {
     Column,
     Row,
-    Cell}
+    Cell,
+}
 
 #[derive(Clone)]
 pub enum EditTableEvent {
@@ -97,12 +106,15 @@ pub enum EditTableEvent {
     /// 粘贴数据事件
     PasteData {
         data: Vec<Vec<String>>,
-        start: CellCoord}}
+        start: CellCoord,
+    },
+}
 
 #[derive(Debug, Default)]
 pub struct TableVisibleRange {
     rows: Range<usize>,
-    cols: Range<usize>}
+    cols: Range<usize>,
+}
 
 impl TableVisibleRange {
     pub fn rows(&self) -> &Range<usize> {
@@ -118,7 +130,8 @@ impl TableVisibleRange {
 struct DeletedRowSelectionCleanup {
     clear_selection: bool,
     clear_drag_end: bool,
-    clear_drag_start: bool}
+    clear_drag_start: bool,
+}
 
 fn deleted_row_selection_cleanup(
     selected_row: Option<usize>,
@@ -140,7 +153,8 @@ fn deleted_row_selection_cleanup(
             || selected_deleted_cell
             || selection_contains_deleted_row,
         clear_drag_end: drag_end_cell.is_some_and(|(row, _)| row == row_ix),
-        clear_drag_start: drag_start.is_some_and(|(row, _, _)| row == row_ix)}
+        clear_drag_start: drag_start.is_some_and(|(row, _, _)| row == row_ix),
+    }
 }
 
 pub struct EditTableState<D: EditTableDelegate> {
@@ -194,7 +208,8 @@ pub struct EditTableState<D: EditTableDelegate> {
     /// 拖选起始位置和是否添加到选区
     drag_start: Option<(usize, usize, bool)>,
     /// 单元格边界缓存（用于拖选时的命中测试）
-    cell_bounds: std::collections::HashMap<(usize, usize), Bounds<Pixels>>}
+    cell_bounds: std::collections::HashMap<(usize, usize), Bounds<Pixels>>,
+}
 
 impl<D> EditTableState<D>
 where
@@ -238,7 +253,8 @@ where
             is_selecting: false,
             drag_end_cell: None,
             drag_start: None,
-            cell_bounds: std::collections::HashMap::new()};
+            cell_bounds: std::collections::HashMap::new(),
+        };
 
         this.prepare_col_groups(cx);
         this
@@ -332,7 +348,8 @@ where
     pub fn set_selected_row(&mut self, row_ix: usize, cx: &mut Context<Self>) {
         let is_down = match self.selected_row {
             Some(selected_row) => row_ix > selected_row,
-            None => true};
+            None => true,
+        };
 
         self.selection_state = SelectionState::Row;
         self.right_clicked_row = None;
@@ -372,7 +389,8 @@ where
             self.selection_state == SelectionState::Row && self.selection.anchor.is_some();
         let is_down = match self.selected_row {
             Some(selected_row) => row_ix > selected_row,
-            None => true};
+            None => true,
+        };
         let row_number_offset = if self.delegate.row_number_enabled(cx) {
             1
         } else {
@@ -1063,7 +1081,8 @@ where
                     .resizable(false)
                     .movable(false)
                     .selectable(false)
-                    .text_right()});
+                    .text_right(),
+            });
         }
 
         col_groups.extend((0..self.delegate.columns_count(cx)).map(|col_ix| {
@@ -1071,7 +1090,8 @@ where
             ColGroup {
                 width: column.width,
                 bounds: Bounds::default(),
-                column: column.clone()}
+                column: column.clone(),
+            }
         }));
 
         self.col_groups = col_groups;
@@ -1461,7 +1481,8 @@ where
                     selected_row
                 }
             }
-            _ => 0};
+            _ => 0,
+        };
 
         self.set_selected_row(selected_row, cx);
     }
@@ -1952,7 +1973,8 @@ where
         let sort = match sort {
             ColumnSort::Ascending => ColumnSort::Default,
             ColumnSort::Descending => ColumnSort::Ascending,
-            ColumnSort::Default => ColumnSort::Descending};
+            ColumnSort::Default => ColumnSort::Descending,
+        };
 
         for (ix, col_group) in self.col_groups.iter_mut().enumerate() {
             if ix == col_ix {
@@ -2106,7 +2128,8 @@ where
         // 旧的单选逻辑（向后兼容）
         let is_select_cell = match self.selected_cell {
             None => false,
-            Some(cell) => row_ix.is_some() && row_ix.unwrap() == cell.0 && col_ix == cell.1};
+            Some(cell) => row_ix.is_some() && row_ix.unwrap() == cell.0 && col_ix == cell.1,
+        };
 
         let col_width = col_group.width;
         let col_padding = col_group.column.paddings;
@@ -2129,7 +2152,8 @@ where
 
         let cell_id = match row_ix {
             Some(r) => ("cell", r * 10000 + col_ix),
-            None => ("cell-header", col_ix)};
+            None => ("cell-header", col_ix),
+        };
 
         let is_editing = row_ix.is_some() && self.editing_cell == Some((row_ix.unwrap(), col_ix));
         let selection_border_color = cx.theme().table_active_border;
@@ -2198,7 +2222,8 @@ where
         let size_pad = self.options.size.table_cell_padding();
         let (target_pt, target_pb, target_pl, target_pr) = match col_padding {
             Some(p) => (p.top, p.bottom, p.left, p.right),
-            None => (size_pad.top, size_pad.bottom, size_pad.left, size_pad.right)};
+            None => (size_pad.top, size_pad.bottom, size_pad.left, size_pad.right),
+        };
 
         // 边框补偿：编辑态始终有 border_2；显示态仅选中时有
         let (has_t, has_b, has_l, has_r) = if is_editing {
@@ -2467,7 +2492,8 @@ where
         let (icon, is_on) = match sort {
             ColumnSort::Ascending => (IconName::SortAscending, true),
             ColumnSort::Descending => (IconName::SortDescending, true),
-            ColumnSort::Default => (IconName::ChevronsUpDown, false)};
+            ColumnSort::Default => (IconName::ChevronsUpDown, false),
+        };
 
         Some(
             div()
@@ -2476,7 +2502,8 @@ where
                 .rounded(cx.theme().radius / 2.)
                 .map(|this| match is_on {
                     true => this,
-                    false => this.opacity(0.5)})
+                    false => this.opacity(0.5),
+                })
                 .hover(|this| this.bg(cx.theme().secondary).opacity(7.))
                 .active(|this| this.bg(cx.theme().secondary_active).opacity(1.))
                 .on_click(
@@ -2505,7 +2532,8 @@ where
         let table_entity = cx.entity().clone();
 
         use gpui_component::{
-            Sizable, Size, button::Button, button::ButtonVariants, popover::Popover};
+            Sizable, Size, button::Button, button::ButtonVariants, popover::Popover,
+        };
 
         let filter_content = if is_open {
             Some(self.render_filter_panel_content(col_ix, _window, cx))
@@ -2554,7 +2582,8 @@ where
 
         let filter_list = match &self.filter_list {
             Some(list) => list.clone(),
-            None => return div().into_any_element()};
+            None => return div().into_any_element(),
+        };
 
         v_flex()
             .w(px(280.))
@@ -2701,7 +2730,8 @@ where
                                 entity_id,
                                 col_ix: delegate_col_ix,
                                 name,
-                                width: col_group.width},
+                                width: col_group.width,
+                            },
                             |drag, _, _, cx| {
                                 cx.stop_propagation();
                                 cx.new(|_| drag.clone())
@@ -3120,7 +3150,8 @@ mod tests {
             DeletedRowSelectionCleanup {
                 clear_selection: true,
                 clear_drag_end: true,
-                clear_drag_start: true},
+                clear_drag_start: true
+            },
             cleanup
         );
     }
@@ -3289,7 +3320,8 @@ where
                             menu.delegate_mut()
                                 .header_context_menu(col_ix, this, window, cx)
                         }),
-                        (None, None) => this}
+                        (None, None) => this,
+                    }
                 }
             })
             .map(|this| {

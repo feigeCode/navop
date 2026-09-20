@@ -1,10 +1,11 @@
-use one_core::storage::ConnectionType;
+use one_core::storage::{ConnectionType, PreferredOpenMode};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ConnectionMenuAction {
     OpenInBackground,
     OpenFullscreenWindow,
     OpenSftp,
+    OpenTerminal,
     CopyConnection,
     MoveToGroup,
     Edit,
@@ -15,13 +16,22 @@ pub(super) enum ConnectionMenuAction {
 pub(super) fn connection_menu_actions(
     connection_type: ConnectionType,
     can_edit: bool,
+    preferred_open_mode: Option<PreferredOpenMode>,
 ) -> Vec<ConnectionMenuAction> {
     let mut actions = vec![ConnectionMenuAction::OpenInBackground];
     if matches!(connection_type, ConnectionType::Rdp | ConnectionType::Vnc) {
         actions.push(ConnectionMenuAction::OpenFullscreenWindow);
     }
-    if connection_type == ConnectionType::SshSftp {
-        actions.push(ConnectionMenuAction::OpenSftp);
+    match connection_type {
+        // 双击默认进双栏文件视图的 SSH 条目，右键提供「在终端中打开」切换入口
+        ConnectionType::SshSftp => {
+            if preferred_open_mode == Some(PreferredOpenMode::DualPane) {
+                actions.push(ConnectionMenuAction::OpenTerminal);
+            }
+            actions.push(ConnectionMenuAction::OpenSftp);
+        }
+        ConnectionType::Ftp => actions.push(ConnectionMenuAction::OpenSftp),
+        _ => {}
     }
     if connection_type != ConnectionType::All {
         actions.push(ConnectionMenuAction::CopyConnection);
@@ -67,6 +77,7 @@ mod tests {
             updated_at: None,
             team_id: Some("team-1".to_string()),
             owner_id: Some("user-1".to_string()),
+            preferred_open_mode: None,
         }
     }
 
@@ -86,7 +97,7 @@ mod tests {
     #[test]
     fn ssh_menu_has_terminal_sftp_and_management_actions() {
         assert_eq!(
-            connection_menu_actions(ConnectionType::SshSftp, true),
+            connection_menu_actions(ConnectionType::SshSftp, true, None),
             vec![
                 ConnectionMenuAction::OpenInBackground,
                 ConnectionMenuAction::OpenSftp,
@@ -145,14 +156,14 @@ mod tests {
                 can_manage_connection_with_permissions(&connections, visible_ids[0], &permissions);
             assert_eq!(
                 expected,
-                connection_menu_actions(ConnectionType::SshSftp, can_edit)
+                connection_menu_actions(ConnectionType::SshSftp, can_edit, None)
             );
         }
     }
 
     #[test]
     fn non_ssh_menu_does_not_offer_sftp() {
-        let actions = connection_menu_actions(ConnectionType::Database, true);
+        let actions = connection_menu_actions(ConnectionType::Database, true, None);
         assert!(actions.contains(&ConnectionMenuAction::OpenInBackground));
         assert!(actions.contains(&ConnectionMenuAction::CopyConnection));
         assert!(!actions.contains(&ConnectionMenuAction::OpenSftp));
@@ -161,7 +172,7 @@ mod tests {
     #[test]
     fn read_only_connection_menu_keeps_copy_submenu_without_management_actions() {
         assert_eq!(
-            connection_menu_actions(ConnectionType::Rdp, false),
+            connection_menu_actions(ConnectionType::Rdp, false, None),
             vec![
                 ConnectionMenuAction::OpenInBackground,
                 ConnectionMenuAction::OpenFullscreenWindow,
@@ -172,7 +183,7 @@ mod tests {
 
     #[test]
     fn every_real_connection_type_uses_one_top_level_copy_submenu() {
-        let actions = connection_menu_actions(ConnectionType::Rdp, true);
+        let actions = connection_menu_actions(ConnectionType::Rdp, true, None);
         assert_eq!(
             1,
             actions
@@ -187,17 +198,43 @@ mod tests {
     #[test]
     fn only_remote_desktop_connections_offer_fullscreen_window() {
         assert!(
-            connection_menu_actions(ConnectionType::Rdp, true)
+            connection_menu_actions(ConnectionType::Rdp, true, None)
                 .contains(&ConnectionMenuAction::OpenFullscreenWindow)
         );
         assert!(
-            connection_menu_actions(ConnectionType::Vnc, true)
+            connection_menu_actions(ConnectionType::Vnc, true, None)
                 .contains(&ConnectionMenuAction::OpenFullscreenWindow)
         );
         assert!(
-            !connection_menu_actions(ConnectionType::SshSftp, true)
+            !connection_menu_actions(ConnectionType::SshSftp, true, None)
                 .contains(&ConnectionMenuAction::OpenFullscreenWindow)
         );
+    }
+
+    #[test]
+    fn ftp_menu_offers_file_view_but_never_terminal() {
+        let actions = connection_menu_actions(ConnectionType::Ftp, true, None);
+        assert!(actions.contains(&ConnectionMenuAction::OpenSftp));
+        assert!(!actions.contains(&ConnectionMenuAction::OpenTerminal));
+    }
+
+    #[test]
+    fn ssh_preferred_dual_pane_menu_offers_terminal_switch() {
+        let actions = connection_menu_actions(
+            ConnectionType::SshSftp,
+            true,
+            Some(PreferredOpenMode::DualPane),
+        );
+        assert!(actions.contains(&ConnectionMenuAction::OpenTerminal));
+        assert!(actions.contains(&ConnectionMenuAction::OpenSftp));
+
+        let default = connection_menu_actions(
+            ConnectionType::SshSftp,
+            true,
+            Some(PreferredOpenMode::Terminal),
+        );
+        assert!(!default.contains(&ConnectionMenuAction::OpenTerminal));
+        assert!(default.contains(&ConnectionMenuAction::OpenSftp));
     }
 
     #[test]

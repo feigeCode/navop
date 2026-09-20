@@ -9,7 +9,7 @@ use crate::server_copy_command::{
     scp_item_is_safe, source_ssh_options_probe_command, target_ssh_command, validate_endpoint,
 };
 use crate::{
-    DirectoryConflictPolicy, RusshSftpClient, ServerCopyItem, SftpClient, TransferCancelled,
+    DirectoryConflictPolicy, RemoteFileClient, RusshSftpClient, ServerCopyItem, TransferCancelled,
     TransferProgress,
 };
 use anyhow::{Result, anyhow, bail};

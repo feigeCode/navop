@@ -580,6 +580,21 @@ impl ManagedUniversalPluginClient {
         Ok(())
     }
 
+    /// Registers an event stream that a provider handed back from a plain
+    /// `resource/invoke` call.
+    ///
+    /// Workbench pages that declare the `stream` primitive get their stream
+    /// from the `load` operation's result (`ResultRef::EventStream`), so they
+    /// never pass through [`Self::open_event_stream`]. Stream identity, reads,
+    /// closes and cleanup are still host-owned, though: without this
+    /// registration the very first `read` is rejected with
+    /// *"event stream `…` is not open for this runtime generation"*.
+    pub fn register_invoked_event_stream(&self, stream_id: &str) -> Result<(), HostError> {
+        self.register_event_stream(&EventOpenResult {
+            stream_id: stream_id.to_owned(),
+        })
+    }
+
     fn ensure_event_read(&self, params: &EventReadParams) -> Result<(), HostError> {
         let Some(events) = &self.events else {
             return Ok(());

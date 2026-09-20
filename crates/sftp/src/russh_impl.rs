@@ -1,7 +1,7 @@
 use crate::server_copy::CopyFileRequest;
 use crate::{
-    DirectoryConflictPolicy, FileEntry, PathMetadata, ProgressCallback, SftpClient,
-    TransferCancelled, TransferProgress, validate_read_size,
+    DirectoryConflictPolicy, FileEntry, PathMetadata, ProgressCallback, RemoteFileClient,
+    SftpClient, TransferCancelled, TransferProgress, validate_read_size,
 };
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -2114,7 +2114,10 @@ impl SftpClient for RusshSftpClient {
             owner_lookup_disabled: false,
         })
     }
+}
 
+#[async_trait]
+impl RemoteFileClient for RusshSftpClient {
     async fn list_dir(&mut self, path: &str) -> Result<Vec<FileEntry>> {
         let dir_entries = self
             .sftp

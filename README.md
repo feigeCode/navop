@@ -32,6 +32,7 @@
     <img src="https://img.shields.io/badge/MQTT-660066?logo=mqtt&logoColor=white" alt="MQTT" />
     <img src="https://img.shields.io/badge/SSH-111827?logo=gnubash&logoColor=white" alt="SSH" />
     <img src="https://img.shields.io/badge/SFTP-2563EB?logo=filezilla&logoColor=white" alt="SFTP" />
+    <img src="https://img.shields.io/badge/FTP%2FFTPS-3B82F6" alt="FTP/FTPS" />
     <img src="https://img.shields.io/badge/Port%20Forwarding-0F766E" alt="Port Forwarding" />
     <img src="https://img.shields.io/badge/RDP-0078D4" alt="RDP" />
     <img src="https://img.shields.io/badge/VNC-5C2D91" alt="VNC" />
@@ -62,7 +63,7 @@
 ### Remote access and operations
 
 - SSH and local terminals with draggable split panes, quick commands, broadcast input, shell integration, session lock, recording and replay, searchable session logs with batch delete and incremental loading; Telnet and serial connections are also supported.
-- Manage remote files with SFTP uploads, downloads, search, favorites, remote editing (configurable size limits and default editor), drag-and-drop, ZMODEM transfer, and server-to-server copy.
+- Manage remote files with SFTP, FTP, and FTPS: uploads, downloads, search, favorites, remote editing (configurable size limits and default editor), drag-and-drop, ZMODEM transfer, and server-to-server copy. Create standalone FTP/FTPS connections, or switch the remote-file protocol on an SSH connection while its terminal keeps using SSH; an open-mode preference decides whether a double-click opens the terminal or the dual-pane file view.
 - Reusable local, remote (`ssh -R`), and dynamic SOCKS port forwarding; X11 forwarding; host-key change warnings with explicit fingerprints; a Known Hosts page for reviewing, importing, and removing trusted SSH host keys; optional legacy SSH algorithms.
 - Import SecureCRT sessions, monitor servers with native charts, and connect to remote desktops over RDP and VNC. On Windows, native MSTSC integration embeds the Microsoft RDP ActiveX control directly in the app via a C++ host, so you can use it inside a tab, in a fullscreen window, or launch the native `mstsc.exe` client; across platforms a pure-Rust IronRDP canvas backend renders RDP sessions.
 
@@ -71,7 +72,7 @@
 - Local Markdown notes with Mermaid diagrams, math rendering, and export to HTML, PDF, or DOCX; the built-in editor supports save shortcuts and WASM language parsers for syntax highlighting.
 - AI for SQL generation and explanation, data analysis, charts, terminal assistance, tool calling, and agent workflows; connect external agents through ACP for Codex, Claude Code, and OpenCode.
 - Agent Hub keeps a terminal agent, project files, Git branches, changes, and side-by-side diffs in one workspace; the toolbox aggregates extension tools alongside connection extensions.
-- The extension marketplace adds database drivers, remote desktop providers, document renderers, connection importers, and external editors. First-party extensions are built and published from the [navop-extensions](https://github.com/feigeCode/navop-extensions) repository.
+- The extension marketplace adds database drivers, remote desktop providers, document renderers, connection importers, external editors, and native resource workbenches rendered by the host (starting with a Docker workbench for containers, images, logs, processes, and exec terminals). First-party extensions are built and published from the [navop-extensions](https://github.com/feigeCode/navop-extensions) repository.
 - Quick open supports ad-hoc SSH connections from the tab bar, so throwaway sessions no longer need a saved connection.
 
 ### Native desktop experience
@@ -180,12 +181,11 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete development guide.
 
 ## Community and support
 
-Navop is maintained independently. Stars, focused pull requests, bug reports, and donations all help sustain the project.
+Navop is maintained independently. Stars, focused pull requests, and bug reports all help sustain the project.
 
 - [Report a bug or request a feature](https://github.com/feigeCode/navop/issues)
 - QQ Group: [860670605](https://qm.qq.com/cgi-bin/qm/qr?k=&group_code=860670605)
 - WeChat Group: [Join](https://docs.qq.com/doc/DVEFFd2RnSnJLcFBD)
-- Optional donations: [DONATE.md](DONATE.md)
 - Legacy OnetCli repository: [feigeCode/onetcli](https://github.com/feigeCode/onetcli)
 
 ## Star History

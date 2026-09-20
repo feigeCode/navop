@@ -42,6 +42,13 @@ use crate::{
 const SHELL_INTEGRATION_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
 /// 运行时注入必须快速完成；超时后中断内部命令并降级为裸终端。
 const SHELL_INTEGRATION_RUNTIME_TIMEOUT: Duration = Duration::from_secs(5);
+/// 就绪握手（等待首个输出 / 注入回显 / 首个 OSC 133;B）的看门狗。
+///
+/// 握手期间 actor 会暂存用户输入，等待远端输出把状态机推到可输入态。远端一旦
+/// 长时间不再产生输出（登录 expect 永不完成、shell 不回 prompt 结束标记等），
+/// 握手就会永久停在暂存态，用户键盘输入被静默吞掉（Issue #206）。看门狗到期
+/// 后强制降级为裸终端并放行暂存输入，保证输入路径不会无限期失效。
+const SHELL_INTEGRATION_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 /// 显式卸载属于用户主动操作，允许比自动探测更长的完成时间。
 const SHELL_INTEGRATION_UNINSTALL_TIMEOUT: Duration = Duration::from_secs(10);
 /// 没有 OSC prompt 信号时，多行初始化命令之间留出设备处理和显示交互提示的时间。
@@ -52,6 +59,7 @@ const ZMODEM_PROBE_FLUSH_DELAY: Duration = Duration::from_millis(20);
 
 type ZmodemProbeFlush = Pin<Box<Sleep>>;
 type ShellIntegrationTimeout = Pin<Box<Sleep>>;
+type ShellIntegrationHandshakeWatchdog = Pin<Box<Sleep>>;
 
 fn sync_zmodem_probe_flush(
     detector: &ZmodemDetector,
@@ -78,6 +86,47 @@ async fn wait_for_shell_integration_timeout(timeout: &mut Option<ShellIntegratio
         .expect("shell integration timeout should exist when polled")
         .as_mut()
         .await;
+}
+
+async fn wait_for_shell_integration_handshake(
+    watchdog: &mut Option<ShellIntegrationHandshakeWatchdog>,
+) {
+    watchdog
+        .as_mut()
+        .expect("shell integration handshake watchdog should exist when polled")
+        .as_mut()
+        .await;
+}
+
+/// 只有仍会暂存用户输入的握手态才需要看门狗。
+///
+/// 注意 `bool::then` 是「为真才取」，这里必须在 `accepts_terminal_input() == false`
+/// （即 `WaitingForFirstOutput` / `Injecting` / `AwaitingPrompt` /
+/// `PlainAwaitingOutput`）时武装；写成 `accepts_terminal_input().then(..)` 会正好
+/// 反过来，让看门狗只在不需要它的会话里到期。
+///
+/// 状态机推进是单向的（可输入态不会再退回握手态），因此启动时判定一次即可。
+fn arm_shell_integration_handshake_watchdog(
+    shell_integration: &RuntimeShellIntegration,
+) -> Option<ShellIntegrationHandshakeWatchdog> {
+    (!shell_integration.accepts_terminal_input())
+        .then(|| Box::pin(tokio::time::sleep(SHELL_INTEGRATION_HANDSHAKE_TIMEOUT)))
+}
+
+/// 看门狗到期时的兜底：握手态必须降级为裸终端并放行暂存输入。
+///
+/// 返回是否真的改变了状态（已可输入或已降级的会话不会重复触发）。
+fn release_stalled_shell_integration_handshake(
+    shell_integration: &mut RuntimeShellIntegration,
+) -> bool {
+    if !shell_integration.force_release_input() {
+        return false;
+    }
+    tracing::warn!(
+        target: "terminal.ssh.setup",
+        "Shell Integration 就绪握手超时，强制放行暂存输入并降级为裸终端"
+    );
+    true
 }
 
 fn should_poll_zmodem_probe_flush(
@@ -248,6 +297,7 @@ enum SshRuntimeInput<Command> {
     FlushZmodemProbe,
     FlushTerminalInput,
     ShellIntegrationTimeout,
+    ShellIntegrationHandshakeTimeout,
 }
 
 enum DeferredSshActorInput {
@@ -782,6 +832,9 @@ impl SshBackend {
             let mut zmodem_probe_flush = None;
             let mut shell_integration = RuntimeShellIntegration::new(shell_integration_requested);
             let mut shell_integration_timeout = None;
+            // 只有在握手态（输入被暂存）才需要看门狗；已可输入的会话不额外养定时器。
+            let mut shell_integration_handshake =
+                arm_shell_integration_handshake_watchdog(&shell_integration);
             let mut output_decoder = TerminalOutputDecoder::new(terminal_encoding);
             let mut exec_results = HashMap::new();
             let mut shell_ready = shell_integration.accepts_terminal_input();
@@ -833,6 +886,11 @@ impl SshBackend {
                         {
                             SshRuntimeInput::ShellIntegrationTimeout
                         }
+                        _ = wait_for_shell_integration_handshake(&mut shell_integration_handshake),
+                            if shell_integration_handshake.is_some() =>
+                        {
+                            SshRuntimeInput::ShellIntegrationHandshakeTimeout
+                        }
                     }
                 };
                 let mut raw_terminal_data = None;
@@ -872,10 +930,25 @@ impl SshBackend {
                             }
                         }
                     }
+                    SshRuntimeInput::ShellIntegrationHandshakeTimeout => {
+                        shell_integration_handshake.take();
+                        if release_stalled_shell_integration_handshake(&mut shell_integration) {
+                            // 降级为裸终端后，初始化命令不再等 OSC prompt 信号。
+                            shell_ready = true;
+                        }
+                    }
                     SshRuntimeInput::Actor(input) => match input {
                         SshActorInput::Command(cmd) => match cmd {
                             SshCommand::Write { source, data } => {
                                 if !shell_integration.accepts_terminal_input() {
+                                    tracing::debug!(
+                                        target: "terminal.ssh.runtime",
+                                        connection_id,
+                                        phase = shell_integration.phase_name(),
+                                        queued = deferred_actor_inputs.len(),
+                                        bytes = data.len(),
+                                        "Shell Integration 就绪前暂存用户输入"
+                                    );
                                     deferred_actor_inputs.push_back(
                                         DeferredSshActorInput::Command(SshCommand::Write {
                                             source,
@@ -1184,8 +1257,9 @@ impl SshBackend {
                 }
                 for osc_event in &osc_events {
                     match osc_event {
-                        OscEvent::WorkingDirChanged(path) => {
-                            let _ = event_tx.send(TerminalEvent::WorkingDirChanged(path.clone()));
+                        OscEvent::WorkingDirChanged(reported) => {
+                            let _ =
+                                event_tx.send(TerminalEvent::WorkingDirChanged(reported.clone()));
                         }
                         OscEvent::PromptStart => {
                             let _ = event_tx.send(TerminalEvent::PromptStart);
@@ -2456,6 +2530,46 @@ mod tests {
         )
         .await;
         assert!(!res, "探测超时后应降级为不注入");
+    }
+
+    #[tokio::test]
+    async fn handshake_watchdog_arms_exactly_when_input_is_deferred() {
+        // 请求了运行时注入 → 启动即处于 WaitingForFirstOutput，输入被暂存，必须武装看门狗。
+        // 反向条件（写成 accepts_terminal_input().then(..)）会让看门狗永不生效，
+        // 而 release 测试只覆盖兜底函数本身，覆盖不到这处接线。
+        let integration = RuntimeShellIntegration::new(true);
+        assert!(!integration.accepts_terminal_input());
+        assert!(
+            arm_shell_integration_handshake_watchdog(&integration).is_some(),
+            "握手期间必须武装看门狗，否则 Issue #206 的输入暂存无法自动解除"
+        );
+
+        // 未请求注入（裸终端）→ 输入从不被暂存，不该多养一个定时器。
+        let integration = RuntimeShellIntegration::new(false);
+        assert!(integration.accepts_terminal_input());
+        assert!(arm_shell_integration_handshake_watchdog(&integration).is_none());
+    }
+
+    #[test]
+    fn stalled_shell_integration_handshake_releases_deferred_input_once() {
+        // 握手态会暂存用户输入；看门狗必须把它推回可输入态，且只生效一次。
+        let mut integration = RuntimeShellIntegration::new(true);
+        assert!(!integration.accepts_terminal_input());
+
+        assert!(release_stalled_shell_integration_handshake(&mut integration));
+        assert!(
+            integration.accepts_terminal_input(),
+            "看门狗到期后用户输入必须立刻可发送"
+        );
+        assert!(
+            !release_stalled_shell_integration_handshake(&mut integration),
+            "已放行的会话不应重复触发兜底"
+        );
+
+        // 未请求注入（纯裸终端）的会话不适用看门狗。
+        let mut integration = RuntimeShellIntegration::new(false);
+        assert!(!release_stalled_shell_integration_handshake(&mut integration));
+        assert!(integration.accepts_terminal_input());
     }
 
     #[test]

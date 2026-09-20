@@ -5,17 +5,17 @@ workspace. CI, release, and normal development use the fork pinned in the
 workspace manifest:
 
 ```text
-https://github.com/feigeCode/gpui-component.git
-rev e6459613910143b817eecbacc8767976e86cac84
+https://github.com/feigeCode/gpui-kit.git
+rev 6df86ef82b4b5f3b04723c0d1cf82ff57cdc7078
 ```
 
-The checkout belongs to `https://github.com/feigeCode/gpui-component` and the
-Navop compatibility branch is `navop-gpui-ce`. It is based on the
-`gpui-ce/gpui-component` adaptation and pins GPUI to:
+The checkout belongs to `https://github.com/feigeCode/gpui-kit` and the
+Navop compatibility branch is `navop-gpui-ce`. It is based on the upstream
+`gpui-component` adaptation and pins GPUI to:
 
 ```text
-https://github.com/feigeCode/gpui-ce.git
-c13e489375c7cd93838bdabef0213771bc2fe456
+https://github.com/feigeCode/gpui-pre.git
+tag fork-0.3.108
 ```
 
 ## Ownership Boundary
@@ -47,7 +47,7 @@ script/sync-gpui-component.sh \
 # package versions, shell compatibility constants, examples, docs, and lockfile.
 script/sync-gpui-component.sh \
   --component-dir /path/to/gpui-component \
-  --fetch-source git@github.com:feigeCode/gpui-component.git \
+  --fetch-source git@github.com:feigeCode/gpui-kit.git \
   --push \
   --update-navop
 ```

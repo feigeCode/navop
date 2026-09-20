@@ -1,10 +1,10 @@
 # 擴充市場與本機擴充
 
-擴充可加入資料庫驅動、ACP Agent、連線匯入、遠端桌面 Provider 和語言套件。擴充程式碼在本機執行，應像其他桌面軟體一樣審查來源、權限、平台與版本相容性。
+擴充可加入資料庫驅動、中介軟體、原生資源工作台、ACP Agent、連線匯入、遠端桌面 Provider 和語言套件。擴充程式碼在本機執行，應像其他桌面軟體一樣審查來源、權限、平台與版本相容性。
 
 ## 擴充類型
 
-資料庫驅動增加連線類型；ACP Agent 接入外部 Agent；匯入擴充讀取其他應用程式；遠端桌面擴充提供 RDP/VNC；語言擴充加入介面語系。市場頁提供「有更新」篩選，可只看有可更新版本的擴充。
+資料庫驅動增加連線類型；ACP Agent 接入外部 Agent；匯入擴充讀取其他應用程式；遠端桌面擴充提供 RDP/VNC；語言擴充加入介面語系；原生資源工作台擴充（如 Docker）由宿主渲染集合、詳情頁與操作介面。市場頁提供「有更新」篩選，可只看有可更新版本的擴充。
 
 相容清單中的產品名稱不代表驅動已安裝，建立連線前先檢查市場項目、平台和 Navop 版本。
 
@@ -12,7 +12,9 @@
 
 第一方擴充在 [navop-extensions](https://github.com/feigeCode/navop-extensions) 倉庫獨立建置與發佈，市場中的官方擴充均來自該倉庫。目前目錄依類型分組如下：
 
-- **資料庫驅動**：DuckDB、Redis、MongoDB（4.2+ / 3.6 / 3.2–3.4 三檔）、達夢 DM、金倉 KingbaseES、GBase 8s、OceanBase、openGauss、Apache IoTDB、神通 Oscar，以及免 Oracle Instant Client 的純 Go Oracle 驅動。
+- **資料庫驅動**：TDengine、DuckDB、Redis、MongoDB（4.2+ / 3.6 / 3.2–3.4 三檔）、達夢 DM、金倉 KingbaseES、GBase 8s、OceanBase、openGauss、Apache IoTDB、神通 Oscar，以及免 Oracle Instant Client 的純 Go Oracle 驅動。
+- **中介軟體**：MQTT（訂閱、訊息、發佈三個檢視，支援 SSH 通道）。
+- **原生資源工作台**：Docker（引擎總覽、容器與映像管理、日誌、處理程序、檔案系統變更與 exec 終端），由宿主原生渲染集合、詳情頁與操作。
 - **遠端桌面 Provider**：RDP、VNC。
 - **ACP Agent**：Codex、Claude Code、OpenCode。
 - **連線匯入**：SecureCRT、Xshell、WindTerm、OpenSSH config、Navicat、DBeaver、JetBrains DataGrip、MongoDB Compass、Redis Desktop、TablePlus。

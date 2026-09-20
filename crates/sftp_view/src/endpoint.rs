@@ -34,6 +34,7 @@ pub(crate) enum LeftEndpointValue {
 pub(crate) struct LeftEndpointItem {
     value: LeftEndpointValue,
     title: String,
+    subtitle: Option<String>,
     icon: IconName,
 }
 
@@ -42,6 +43,7 @@ impl LeftEndpointItem {
         Self {
             value: LeftEndpointValue::Local,
             title,
+            subtitle: None,
             icon: IconName::HardDrive,
         }
     }
@@ -50,7 +52,9 @@ impl LeftEndpointItem {
         let id = connection.id?;
         Some(Self {
             value: LeftEndpointValue::Remote(id),
-            title: connection_title(connection),
+            // 列表里不重复拼主机名，主机走行尾的副标题。
+            title: connection.name.clone(),
+            subtitle: connection_endpoint(connection),
             icon: connection.connection_type.icon(),
         })
     }
@@ -63,9 +67,20 @@ impl LeftEndpointItem {
         &self.title
     }
 
+    /// 副标题与终端文件面板的目标选择器一致：`user@host:port`。
+    pub(crate) fn subtitle(&self) -> Option<&str> {
+        self.subtitle.as_deref()
+    }
+
     pub(crate) fn icon(&self) -> IconName {
         self.icon.clone()
     }
+}
+
+/// `user@host:port`；连接记录不完整（参数取不到）时返回 `None`。
+fn connection_endpoint(connection: &StoredConnection) -> Option<String> {
+    let endpoint = connection_endpoint_label(connection);
+    (!endpoint.is_empty()).then_some(endpoint)
 }
 
 impl SelectItem for LeftEndpointItem {
@@ -100,7 +115,15 @@ pub(crate) fn connection_title(connection: &StoredConnection) -> String {
         .to_ssh_params()
         .ok()
         .map(|params| params.host)
-        .filter(|host| !host.trim().is_empty());
+        .filter(|host| !host.trim().is_empty())
+        .or_else(|| {
+            // 独立 FTP 连接没有 SSH 参数，标题回退到 FTP 主机。
+            connection
+                .to_ftp_params()
+                .ok()
+                .map(|params| params.host)
+                .filter(|host| !host.trim().is_empty())
+        });
     host.map_or_else(
         || connection.name.clone(),
         |host| format!("{} ({host})", connection.name),
@@ -110,7 +133,51 @@ pub(crate) fn connection_title(connection: &StoredConnection) -> String {
 pub(crate) fn load_connection(id: i64, cx: &App) -> Option<StoredConnection> {
     let storage = cx.try_global::<GlobalStorageState>()?;
     let repository = storage.storage.get::<ConnectionRepository>()?;
-    repository.get(id).ok().flatten()
+    let connection = repository.get(id).ok().flatten()?;
+    Some(with_runtime_credentials(&repository, connection))
+}
+
+/// 解析左侧端点建连所需的运行时凭据。
+///
+/// 记住的密码只存在于凭据库里，直接用存储记录会拿空密码建连并连接失败；
+/// 凭据库拿不到（例如本机缺少该钥匙串）时退化为「本次连接输入」，
+/// 由切换流程弹窗收集。
+fn with_runtime_credentials(
+    repository: &ConnectionRepository,
+    connection: StoredConnection,
+) -> StoredConnection {
+    match repository.resolve_runtime_connection(&connection) {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            tracing::warn!(
+                connection_id = ?connection.id,
+                error = %error,
+                "解析左侧端点凭据失败，改为本次连接输入"
+            );
+            prompt_for_credentials(connection)
+        }
+    }
+}
+
+fn prompt_for_credentials(mut connection: StoredConnection) -> StoredConnection {
+    if connection.connection_type != ConnectionType::SshSftp {
+        return connection;
+    }
+    let Ok(mut params) = connection.to_ssh_params() else {
+        return connection;
+    };
+    params.credential_reference = None;
+    params.username.clear();
+    params.auth_method = SshAuthMethod::Password {
+        password: String::new(),
+    };
+    params.prompt_username = Some(true);
+    params.prompt_password = Some(true);
+    match serde_json::to_string(&params) {
+        Ok(params) => connection.params = params,
+        Err(error) => tracing::warn!(error = %error, "构造待录入凭据的连接参数失败"),
+    }
+    connection
 }
 
 fn ssh_connections(cx: &App) -> Vec<StoredConnection> {
@@ -180,6 +247,7 @@ mod tests {
         let mut connection = StoredConnection::new_ssh(
             name.to_string(),
             SshParams {
+                remote_file: None,
                 sftp_default_directory: None,
                 disabled_jump_server: None,
                 sftp_account: None,
@@ -301,8 +369,10 @@ mod tests {
     }
 }
 use gpui::{App, SharedString};
-use gpui_component::{select::SelectItem};
+use gpui_component::select::SelectItem;
 use one_assets::IconName;
 use one_core::storage::{
-    ConnectionRepository, ConnectionType, GlobalStorageState, StoredConnection, traits::Repository,
+    ConnectionRepository, ConnectionType, GlobalStorageState, SshAuthMethod, StoredConnection,
+    traits::Repository,
 };
+use sftp_transfer::connection_endpoint_label;

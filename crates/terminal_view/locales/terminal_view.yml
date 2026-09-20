@@ -366,10 +366,10 @@ SSH:
     en: Jump Server
     zh-CN: 跳板机
     zh-HK: 跳板機
-  tab_sftp_account:
-    en: SFTP Account
-    zh-CN: SFTP 账户
-    zh-HK: SFTP 賬戶
+  tab_remote_files:
+    en: Remote Files
+    zh-CN: 远程文件
+    zh-HK: 遠端檔案
   tab_proxy:
     en: Proxy
     zh-CN: 代理设置
@@ -440,6 +440,14 @@ SSH:
     en: SFTP Password
     zh-CN: SFTP 密码
     zh-HK: SFTP 密碼
+  open_mode_dual_pane:
+    en: Open Dual-Pane File View by Default
+    zh-CN: 默认打开双栏文件视图
+    zh-HK: 預設開啟雙欄檔案視圖
+  open_mode_dual_pane_desc:
+    en: When enabled, double-clicking or opening this connection in the background goes to the dual-pane SFTP file view instead of a terminal. You can still open a terminal from the right-click menu.
+    zh-CN: 启用后，双击或后台打开该连接时进入双栏 SFTP 文件视图而非终端；仍可通过右键菜单打开终端。
+    zh-HK: 啟用後，雙擊或後台開啟該連接時進入雙欄 SFTP 檔案視圖而非終端；仍可通過右鍵選單開啟終端。
   mfa_prompt_placeholder:
     en: MFA response
     zh-CN: MFA 响应
@@ -527,6 +535,66 @@ SSH:
     en: Directory to open when SFTP connects
     zh-CN: SFTP 连接后打开的目录
     zh-HK: SFTP 連接後打開的目錄
+  remote_file_protocol:
+    en: Remote file protocol
+    zh-CN: 远程文件协议
+    zh-HK: 遠端檔案協定
+  sftp:
+    en: SFTP
+    zh-CN: SFTP
+    zh-HK: SFTP
+  ftp:
+    en: FTP / FTPS
+    zh-CN: FTP / FTPS
+    zh-HK: FTP / FTPS
+  ftp_host:
+    en: FTP host
+    zh-CN: FTP 主机
+    zh-HK: FTP 主機
+  ftp_host_placeholder:
+    en: e.g. ftp.example.com
+    zh-CN: 例如 ftp.example.com
+    zh-HK: 例如 ftp.example.com
+  ftp_port:
+    en: FTP port
+    zh-CN: FTP 端口
+    zh-HK: FTP 埠
+  ftp_port_placeholder:
+    en: Default 21
+    zh-CN: 默认 21
+    zh-HK: 預設 21
+  ftp_username:
+    en: FTP username
+    zh-CN: FTP 用户名
+    zh-HK: FTP 使用者名稱
+  ftp_username_placeholder:
+    en: FTP login username
+    zh-CN: FTP 登录用户名
+    zh-HK: FTP 登入使用者名稱
+  ftp_password:
+    en: FTP password
+    zh-CN: FTP 密码
+    zh-HK: FTP 密碼
+  ftp_password_placeholder:
+    en: FTP login password
+    zh-CN: FTP 登录密码
+    zh-HK: FTP 登入密碼
+  ftp_passive_mode:
+    en: Passive mode
+    zh-CN: 被动模式
+    zh-HK: 被動模式
+  ftp_tls:
+    en: Explicit TLS (FTPS)
+    zh-CN: 显式 TLS (FTPS)
+    zh-HK: 顯式 TLS (FTPS)
+  ftp_credential:
+    en: FTP credential reference
+    zh-CN: FTP 凭据引用
+    zh-HK: FTP 憑證引用
+  ftp_not_supported:
+    en: This FTP operation is not supported
+    zh-CN: FTP 不支持此操作
+    zh-HK: FTP 不支援此操作
   x11_forwarding:
     en: X11 Forwarding
     zh-CN: X11 转发
@@ -702,6 +770,14 @@ Settings:
     en: Highlight matching text on selection
     zh-CN: 选中文本后高亮相同内容
     zh-HK: 選取文字後高亮相同內容
+  show_line_timestamps:
+    en: Show line timestamps
+    zh-CN: 显示每行时间戳
+    zh-HK: 顯示每行時間戳
+  show_line_numbers:
+    en: Show line numbers
+    zh-CN: 显示行号
+    zh-HK: 顯示行號
   file_manager_section:
     en: FILE MANAGER
     zh-CN: 文件管理器
@@ -1178,6 +1254,10 @@ TerminalSidebar:
     en: Server Monitor
     zh-CN: 服务器监控
     zh-HK: 伺服器監控
+  save_as_connection:
+    en: Save as connection
+    zh-CN: 保存为连接
+    zh-HK: 儲存為連線
 
 LocalTerminalClose:
   title:
@@ -2020,6 +2100,38 @@ FileManager:
     en: "Failed to read directory: %{error}. Returned to your working directory."
     zh-CN: "读取目录失败：%{error}。已返回你的工作目录。"
     zh-HK: "讀取目錄失敗：%{error}。已返回你的工作目錄。"
+  foreign_host_notice:
+    en: "Terminal is now on %{host}; the file panel is still connected to %{connection}."
+    zh-CN: "终端已进入 %{host}，文件面板仍连接 %{connection}。"
+    zh-HK: "終端已進入 %{host}，檔案面板仍連線 %{connection}。"
+  foreign_host_hint:
+    en: "Directory sync is paused: SFTP follows the connection's host, so nested SSH sessions are not tracked. If this host is saved as its own connection (with the current one as jump host), use the target picker in the toolbar to switch to it."
+    zh-CN: "已暂停目录同步：SFTP 跟随连接所在主机，嵌套 SSH 不会被跟踪。若该主机已保存为独立连接（跳板机填当前主机），可用工具栏的目标选择器直接切过去。"
+    zh-HK: "已暫停目錄同步：SFTP 跟隨連線所在主機，嵌套 SSH 不會被追蹤。若該主機已存為獨立連線（跳板機填目前主機），可用工具列的目標選擇器直接切過去。"
+  target_tooltip:
+    en: "Choose the remote target this panel browses"
+    zh-CN: "选择该面板浏览的远端目标"
+    zh-HK: "選擇該面板瀏覽的遠端目標"
+  target_picker_title:
+    en: Choose remote target
+    zh-CN: 选择远端目标
+    zh-HK: 選擇遠端目標
+  target_search:
+    en: Search hosts
+    zh-CN: 搜索主机
+    zh-HK: 搜尋主機
+  target_empty:
+    en: "No saved SSH or FTP connection available"
+    zh-CN: "没有可用的 SSH 或 FTP 连接"
+    zh-HK: "沒有可用的 SSH 或 FTP 連線"
+  target_terminal_badge:
+    en: "Terminal"
+    zh-CN: "终端"
+    zh-HK: "終端"
+  target_switch_invalid:
+    en: "Cannot switch remote target"
+    zh-CN: "无法切换远端目标"
+    zh-HK: "無法切換遠端目標"
   retry:
     en: Retry
     zh-CN: 重试
@@ -2624,3 +2736,100 @@ TerminalZmodem:
     en: Select a folder for the ZMODEM download
     zh-CN: 选择 ZMODEM 下载保存目录
     zh-HK: 選擇 ZMODEM 下載儲存目錄
+Ftp:
+  new:
+    en: New FTP Connection
+    zh-CN: 新建 FTP 连接
+    zh-HK: 新建 FTP 連接
+  edit:
+    en: Edit FTP Connection
+    zh-CN: 编辑 FTP 连接
+    zh-HK: 編輯 FTP 連接
+  name:
+    en: Connection Name
+    zh-CN: 连接名称
+    zh-HK: 連線名稱
+  name_placeholder:
+    en: e.g. intranet FTP
+    zh-CN: 例如：内网 FTP
+    zh-HK: 例如：內網 FTP
+  host:
+    en: Host
+    zh-CN: 主机
+    zh-HK: 主機
+  host_placeholder:
+    en: Hostname or IP address
+    zh-CN: 主机名或 IP 地址
+    zh-HK: 主機名稱或 IP 位址
+  port:
+    en: Port
+    zh-CN: 端口
+    zh-HK: 連接埠
+  port_placeholder:
+    en: Port
+    zh-CN: 端口
+    zh-HK: 連接埠
+  username:
+    en: Username
+    zh-CN: 用户名
+    zh-HK: 使用者名稱
+  username_placeholder:
+    en: Username
+    zh-CN: 用户名
+    zh-HK: 使用者名稱
+  password:
+    en: Password
+    zh-CN: 密码
+    zh-HK: 密碼
+  password_placeholder:
+    en: Password
+    zh-CN: 密码
+    zh-HK: 密碼
+  passive_mode:
+    en: Passive Mode
+    zh-CN: 被动模式
+    zh-HK: 被動模式
+  passive_mode_desc:
+    en: Recommended behind NAT/firewall
+    zh-CN: NAT/防火墙后建议开启
+    zh-HK: NAT/防火牆後建議開啟
+  use_tls:
+    en: FTPS (Explicit TLS)
+    zh-CN: FTPS（显式 TLS）
+    zh-HK: FTPS（顯式 TLS）
+  use_tls_desc:
+    en: Encrypt control and data connections via AUTH TLS
+    zh-CN: 通过 AUTH TLS 加密控制与数据连接
+    zh-HK: 透過 AUTH TLS 加密控制與資料連線
+  keychain:
+    en: Keychain
+    zh-CN: 钥匙串
+    zh-HK: 鑰匙圈
+  workspace:
+    en: Workspace
+    zh-CN: 工作区
+    zh-HK: 工作區
+  remark:
+    en: Remark
+    zh-CN: 备注
+    zh-HK: 備註
+  remark_placeholder:
+    en: Optional notes for this connection
+    zh-CN: 可选的连接备注
+    zh-HK: 可選的連線備註
+  validation_error:
+    en: Host is required and port must be valid
+    zh-CN: 请填写主机并确保端口有效
+    zh-HK: 請填寫主機並確保連接埠有效
+  test:
+    en: Test Connection
+    zh-CN: 测试连接
+    zh-HK: 測試連線
+  test_success:
+    en: FTP connection established
+    zh-CN: FTP 连接成功
+    zh-HK: FTP 連線成功
+  save_failed:
+    en: "Failed to save connection: %{error}"
+    zh-CN: "保存连接失败：%{error}"
+    zh-HK: "儲存連線失敗：%{error}"

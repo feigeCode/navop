@@ -1,5 +1,5 @@
 use gpui::{Anchor, AnyElement, Entity, IntoElement};
-use gpui_component::{menu::{DropdownMenu as _, PopupMenu, PopupMenuItem}};
+use gpui_component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use one_assets::IconName;
 use one_ui::{IconButton, IconButtonRole};
 use rust_i18n::t;

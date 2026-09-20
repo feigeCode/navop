@@ -20,11 +20,21 @@ use agent_runtime::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Anchor, App, AppContext as _, Context, Entity, EventEmitter, FontWeight,
-    InteractiveElement, IntoElement, ParentElement, Render, ScrollHandle, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, Task, Window, div, px,
+    Anchor, App, AppContext as _, Context, Entity, EventEmitter, FontWeight, InteractiveElement,
+    IntoElement, ParentElement, Render, ScrollHandle, SharedString, StatefulInteractiveElement,
+    Styled, Subscription, Task, Window, div, px,
 };
-use gpui_component::{ActiveTheme, Disableable, Icon, Selectable, Sizable, WindowExt as _, button::{Button, ButtonCustomVariant, ButtonVariants}, dialog::DialogButtonProps, h_flex, input::{Input, InputState}, menu::{DropdownMenu, PopupMenu, PopupMenuItem}, popover::Popover, spinner::Spinner, v_flex};
+use gpui_component::{
+    ActiveTheme, Disableable, Icon, Selectable, Sizable, WindowExt as _,
+    button::{Button, ButtonCustomVariant, ButtonVariants},
+    dialog::DialogButtonProps,
+    h_flex,
+    input::{Input, InputState},
+    menu::{DropdownMenu, PopupMenu, PopupMenuItem},
+    popover::Popover,
+    spinner::Spinner,
+    v_flex,
+};
 use one_assets::IconName;
 #[cfg(not(test))]
 use one_core::gpui_tokio::Tokio;
@@ -662,7 +672,7 @@ impl AgentChatViewConfig {
 
     /// 用正式 provider 配置创建 Agent tab 配置。
     ///
-    /// 适用于普通 provider；`OnetCli` 这类需要 `GlobalProviderState` 的 provider 请使用
+    /// 适用于普通 provider；`Navop` 这类需要 `GlobalProviderState` 的 provider 请使用
     /// [`AgentChatViewConfig::from_provider_state`]。
     pub fn from_provider_configs(
         resources: ResourceContext,
@@ -674,7 +684,7 @@ impl AgentChatViewConfig {
         Self::from_runtime_specs(resources, mentions, specs)
     }
 
-    /// 用 `GlobalProviderState` 创建 Agent tab 配置,支持 OnetCli provider。
+    /// 用 `GlobalProviderState` 创建 Agent tab 配置,支持 Navop provider。
     pub async fn from_provider_state(
         resources: ResourceContext,
         mentions: Vec<MentionItem>,
@@ -4879,7 +4889,7 @@ mod tests {
         point, px,
     };
     use one_core::llm::{ProviderConfig, ProviderType};
-        use serde_json::json;
+    use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct WriteTool;

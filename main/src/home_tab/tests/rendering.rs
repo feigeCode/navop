@@ -299,12 +299,48 @@ fn home_toolbar_uses_a_continuous_secondary_action_strip() {
 
     // 搜索框之后只有一条连续工具带，不再给筛选和视图各套一个输入框式外框。
     assert_eq!(toolbar.matches(".bg(cx.theme().muted)").count(), 1);
-    assert!(toolbar.contains("render_home_type_filter(window, cx)"));
     assert!(toolbar.contains("render_sort_button(cx)"));
     assert!(toolbar.contains("render_layout_button(cx)"));
     assert!(toolbar.contains("render_batch_toggle(cx)"));
-    // 「全部类型」不再使用星号图标
-    assert!(toolbar.contains("IconName::Apps"));
+    // 类型筛选已平铺到「连接」标题行，工具栏不再保留下拉入口。
+    assert!(!toolbar.contains("render_home_type_filter"));
+    assert!(!toolbar.contains("build_filter_menu"));
+}
+
+#[test]
+fn home_heading_hosts_the_horizontal_type_filter_bar() {
+    let content = include_str!("../content.rs");
+    let bar = include_str!("../connection_type_filter_bar.rs");
+    let toolbar = include_str!("../toolbar.rs");
+
+    // 平铺筛选条挂在「连接」标题右侧，Tree 布局也提供同一标题行；
+    // 全局导航布局的右侧标题行同样复用筛选条（工具栏入口已移除）。
+    assert!(
+        content
+            .matches("render_connection_type_filter_bar(window, cx)")
+            .count()
+            >= 2
+    );
+    assert!(content.contains("render_tree_content_heading"));
+    assert!(content.contains("render_navigation_heading"));
+    assert!(!toolbar.contains("render_home_type_filter"));
+    // 筛选项来自共享清单（All + 内置类型 + 扩展贡献），保留图标与单色线稿风格。
+    assert!(bar.contains("filter_targets"));
+    assert!(bar.contains("ConnectionFilter::Builtin"));
+    assert!(bar.contains("ConnectionFilter::Extension"));
+    assert!(bar.contains("connection_type_navigation_icon"));
+    assert!(bar.contains("IconName::Apps"));
+    // 可见数量按容器实测宽度动态计算，溢出项只出现在「更多」菜单。
+    assert!(bar.contains("on_prepaint"));
+    assert!(bar.contains("on_children_prepainted"));
+    assert!(bar.contains("resolve_visible_count"));
+    assert!(bar.contains("home-type-filter-more"));
+    // chip 与「更多」都使用主题 full radius，形成胶囊外观。
+    assert!(bar.matches(".rounded(cx.theme().radius_full())").count() >= 2);
+    // 选中态有明显区分（浅蓝底、蓝字、蓝边）。
+    assert!(bar.contains(".outline()"));
+    assert!(!bar.contains(".ghost()"));
+    assert!(bar.contains(".primary()"));
 }
 
 #[test]
@@ -377,7 +413,7 @@ fn global_navigation_layout_combines_connection_tree_recent_connections_and_apps
     let home = include_str!("../home_layout.rs");
     let content = include_str!("../content.rs");
     let tree = include_str!("../../persistent_connection_sidebar/tree.rs");
-    let app = include_str!("../../onetcli_app.rs");
+    let app = include_str!("../../navop_app.rs");
 
     assert!(settings.contains("Navigation"));
     assert!(home.contains("render_navigation_content"));
@@ -396,10 +432,12 @@ fn recent_section_does_not_participate_in_search() {
     assert!(content.contains("let recent = if query.is_empty() {"));
     // 导航主页:最近区始终按空搜索词取值,渲染仍受 query.is_empty() 门控。
     let navigation = content
-        .split("fn render_navigation_content")
+        .split("fn render_navigation_home_content")
         .nth(1)
-        .expect("navigation content exists");
-    assert!(navigation.contains("recent_connections(&self.connections, &self.selected_filter, \"\","));
+        .expect("navigation home content exists");
+    assert!(
+        navigation.contains("recent_connections(&self.connections, &self.selected_filter, \"\",")
+    );
     assert!(navigation.contains("if !query.is_empty()"));
 }
 
@@ -432,7 +470,7 @@ fn persistent_sidebar_groups_expose_a_rename_interaction() {
 #[test]
 fn both_settings_entries_use_the_existing_tab_opener() {
     assert!(include_str!("../sidebar_navigation.rs").contains("home.add_settings_tab(window, cx)"));
-    assert!(include_str!("../../onetcli_app.rs").contains("home.add_settings_tab(window, cx)"));
+    assert!(include_str!("../../navop_app.rs").contains("home.add_settings_tab(window, cx)"));
 }
 
 #[test]

@@ -64,6 +64,25 @@ OSC 133 A/B/C/D + OSC 7 + OSC 1337 协议与旧版完全一致
 - 跳过文件头部的交互守卫与 `_ONETCLI_SHELL_INTEGRATED` 幂等守卫（前 3 行，运行时注入天然满足这些条件）；
 - `__onetcli_precmd_common` 中注入轮次识别：`_ONETCLI_RUNTIME_SETUP` 存在时跳过命令记录（避免把注入命令自己记为"用户命令"）。
 
+#### bash 钩子必须自带存在性判断（Issue #217）
+
+bash 分支注册到 `PROMPT_COMMAND` 的不是裸函数名，而是自带判断的命令串：
+
+```sh
+__ONETCLI_EXIT=$?; command -v __onetcli_precmd_bash >/dev/null 2>&1 && __onetcli_precmd_bash "$__ONETCLI_EXIT"
+```
+
+`PROMPT_COMMAND` 是 shell 局部机制，但它的值可以被导出并被后续 shell 继承
+（服务器 profile 里显式 `export PROMPT_COMMAND=...`，再叠加 `su`、`tmux`、`exec bash`、
+嵌套 ssh 等链路）。继承它的 shell 里并没有本文件的函数定义，裸函数名会让这些 shell 的
+每个提示符都多输出一行 `bash: __onetcli_precmd_bash: 未找到命令`，即 Issue #217。
+
+两点实现约束：退出码必须在钩子里先取好再显式传给函数——钩子里的 `command -v` 会覆盖 `$?`，
+若还像以前那样让函数自己去读 `$?`，上报的 exit code 会恒为 0，`133;D` 失效；
+`command -v` 是内建命令，不产生 fork。
+另注意 `set -a`（allexport）会把函数定义一并导出，那种环境下子 shell 反而能拿到函数、
+不会报错——所以只有判断存在性才是通用兜底，不能依赖某一种导出方式。
+
 ### 3. 探测（`ssh_backend.rs`）
 
 ```sh
@@ -107,6 +126,41 @@ AwaitingPrompt ──133;B──► Integrated              │
 - `Injecting` 期间所有输出进 `suppressed` 缓冲（上限 64KB，防止挂死 shell 无限撑内存）；
 - 在缓冲中跨 chunk 搜索完成标记 `OSC 1337;ShellIntegrationReady=1`，找到后标记之后的 suffix 恢复转发；
 - 注入期间 `accepts_terminal_input() == false`：actor 把用户 `Write`/`TerminalResponse` 命令压入 deferred 队列，就绪后按序重放。
+
+#### 就绪握手看门狗（Issue #206）
+
+握手态（`WaitingForFirstOutput` / `Injecting` / `AwaitingPrompt` / `PlainAwaitingOutput`）
+统一表现为 `accepts_terminal_input() == false`，即**所有用户键盘输入（含 Enter、Ctrl+C）
+都被压入 deferred 队列**。这四个状态只能靠远端输出推进：
+
+| 状态 | 解除条件 |
+|---|---|
+| `WaitingForFirstOutput` | `should_inject`（需登录 expect 完成）或 OSC 133;B |
+| `Injecting` | ready marker 或 5s 注入超时 |
+| `AwaitingPrompt` | 下一个 OSC 133;B |
+| `PlainAwaitingOutput` | 下一段输出 |
+
+当远端长时间不再产生可解除握手的输出时——登录 expect 永不匹配（`login_expect` 未完成，
+`should_inject` 便永不触发）、远端不复现 prompt 结束标记等——会话会永久停在暂存态：
+远端输出照常刷新、终端看起来完全正常，但键盘输入被静默吞掉，界面没有任何提示
+（Issue #206 的现象）。`Injecting` 有 5s 超时兜底，另外三个状态在引入本看门狗前没有任何超时。
+
+兜底实现（`SshBackend` actor）：
+
+- actor 启动时若 `accepts_terminal_input() == false`，武装
+  `SHELL_INTEGRATION_HANDSHAKE_TIMEOUT`（30s）看门狗；
+- 到期时 `RuntimeShellIntegration::force_release_input()` 把上述四个状态强制推进到
+  `Plain`（丢弃注入回显缓冲，此后不再抑制输出、不再注入），并置 `shell_ready = true`
+  让初始化命令不再等 OSC prompt 信号；
+- 下一轮循环按序重放 deferred 队列，用户输入恢复投递；
+- 已可输入的阶段返回 `false`，看门狗只生效一次，不干扰正常会话。
+
+30s 取值依据：正常连接的首段输出在毫秒级到达，慢链路注入由 5s 注入超时处理；30s 只用于
+「远端彻底沉默」的异常场景，同时兼顾慢登录脚本，不误伤正常会话。
+
+诊断提示：输入被暂存时打 `terminal.ssh.runtime` 的 debug 日志（含当前 `phase` 与队列长度），
+看门狗触发时打 `terminal.ssh.setup` 的 warn 日志，可据此定位输入被哪一阶段吞掉。
+
 
 ### 5. Actor 接入（`ssh_backend.rs` 连接循环）
 

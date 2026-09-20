@@ -4,6 +4,7 @@
 //! provider 调用都经过这里,保证权限/参数/结果契约只有一份实现。
 
 use extension_protocol::blob::BlobReadParams;
+use extension_protocol::event_stream::EventCloseParams;
 use extension_protocol::resource::{ResourceInvokeParams, ResourceInvokeResult};
 use extension_protocol::result_ref::ResultRef;
 use extension_runtime::extension::manifest::ResourceWorkbenchEffect;
@@ -34,6 +35,8 @@ pub enum WorkbenchDispatchError {
     },
     #[error("result contract violation for `{operation}`: {reason}")]
     ResultContract { operation: String, reason: String },
+    #[error("event stream registration failed: {reason}")]
+    EventStreamRegistration { reason: String },
     #[error("provider call failed: {0}")]
     Provider(String),
     #[error("operation `{0}` requires user confirmation before it can run")]
@@ -169,6 +172,52 @@ fn coerce_binding(
         },
         T::Json => Ok(value),
     }
+}
+
+/// 表单字段的**文本输入** → 声明的 JSON 类型。
+///
+/// 与 `coerce_binding` 分开是必要的,两者处理的是不同性质的值:
+///
+/// - `coerce_binding` 处理 route/selection/paging 这类**已经是 JSON** 的来源,
+///   它的 `T::Json` 必须原样透传 —— 那里的值本身可能就是字符串;
+/// - 这里处理 query 页的**文本框**,`type: json` 的语义是"用户输入了一段 JSON
+///   文本",必须解析成真正的 JSON 值(否则 `{"a":1}` 会以字符串形式发给
+///   provider,`{"kind":"object"}` 之类的契约直接失败)。
+///
+/// 空值不在这里补空串:调用方按 `required` 决定是报错还是跳过该参数。
+pub fn parse_input_text(
+    text: &str,
+    value_type: extension_runtime::extension::manifest::ResourceWorkbenchInputType,
+) -> Result<serde_json::Value, &'static str> {
+    use extension_runtime::extension::manifest::ResourceWorkbenchInputType as T;
+    match value_type {
+        T::String => Ok(serde_json::Value::String(text.to_string())),
+        // 复用同一条整数/浮点判定:表单里的 "8" 必须落成 JSON 整数。
+        T::Number => parse_number(text).map_err(|_| "number"),
+        T::Boolean => match text.trim() {
+            "true" => Ok(serde_json::Value::Bool(true)),
+            "false" => Ok(serde_json::Value::Bool(false)),
+            _ => Err("boolean"),
+        },
+        T::Json => serde_json::from_str(text).map_err(|_| "json"),
+    }
+}
+
+/// 表单字段提交:`parse_input_text` 的**面向用户**包装。
+///
+/// 与裸 `parse_input_text` 分开,是因为失败信息要说清是哪个字段、错在哪:
+/// 表单校验失败是用户可见的错误,不能只报 "number"。
+///
+/// 空串的处置由调用方负责(见 `resource_view` 的 `run_query`):空串对
+/// `string` 是合法值,对另外三种类型不是,调用方会跳过该参数而不是在这里
+/// 造一个必然转换失败的空值。
+pub fn parse_form_input(
+    field_id: &str,
+    text: &str,
+    value_type: extension_runtime::extension::manifest::ResourceWorkbenchInputType,
+) -> Result<serde_json::Value, String> {
+    parse_input_text(text, value_type)
+        .map_err(|kind| format!("`{field_id}` must be a valid {kind}"))
 }
 
 /// 文本 → JSON 数字:整数文本产出整数,其余产出浮点。
@@ -381,7 +430,37 @@ pub async fn dispatch_invoke_result_scoped(
         )
         .await
         .map_err(|error| WorkbenchDispatchError::Provider(error.to_string()))?;
+    register_invoked_event_stream(session.client(), &result).await?;
     Ok(result)
+}
+
+/// 把 provider 在 invoke 响应里交出的事件流登记为宿主所有的流。
+///
+/// 声明了 stream 原语的页(`load` 返回 `ResultRef::EventStream`)走的是普通
+/// invoke 通道,不经过 `ManagedUniversalPluginClient::open_event_stream`;
+/// 但流的身份/读取/关闭/清理都必须由宿主记账 —— 漏了这一步,`resource_view`
+/// 拿着流去订阅时,第一次 read 就会被 `EventActivationManager` 以
+/// *"event stream `…` is not open for this runtime generation"* 拒掉。
+///
+/// 登记失败(世代已换代、超出单 runtime 并发上限)时 provider 已经把流分配出去了,
+/// 必须回手关掉,否则这个流再也不会被任何一方认领。
+async fn register_invoked_event_stream(
+    client: &ManagedUniversalPluginClient,
+    result: &ResourceInvokeResult,
+) -> Result<(), WorkbenchDispatchError> {
+    let ResultRef::EventStream { id } = &result.result else {
+        return Ok(());
+    };
+    if let Err(error) = client.register_invoked_event_stream(id) {
+        let _ = client
+            .client()
+            .close_event_stream(&EventCloseParams { stream_id: id.clone() })
+            .await;
+        return Err(WorkbenchDispatchError::EventStreamRegistration {
+            reason: error.to_string(),
+        });
+    }
+    Ok(())
 }
 
 /// 副作用门控:非 read 操作未确认时 fail closed。
@@ -536,7 +615,8 @@ mod tests {
     use extension_runtime::RegisteredResourceWorkbenchContribution;
     use extension_runtime::extension::manifest::{
         ResourceWorkbenchBinding, ResourceWorkbenchBindingSource, ResourceWorkbenchEffect,
-        ResourceWorkbenchOperation, ResourceWorkbenchOperationMode, ResourceWorkbenchValueType,
+        ResourceWorkbenchInputType, ResourceWorkbenchOperation, ResourceWorkbenchOperationMode,
+        ResourceWorkbenchValueType,
     };
     use std::collections::BTreeMap;
 
@@ -779,5 +859,68 @@ mod tests {
         )
         .unwrap();
         assert_eq!(Some(1), coerced.as_u64(), "coerced={coerced}");
+    }
+
+    #[test]
+    fn json_input_parses_into_real_json_value() {
+        // 回归:`type: json` 的字段此前一律以字符串提交,`{"enabled":true}`
+        // 到 provider 手里是 `"{\"enabled\":true}"`,对象契约直接失败。
+        assert_eq!(
+            serde_json::json!({"enabled": true}),
+            parse_input_text(r#"{"enabled":true}"#, ResourceWorkbenchInputType::Json).unwrap()
+        );
+        // 顶层非对象也合法(数组/标量都是 JSON)。
+        assert_eq!(
+            serde_json::json!([1, 2]),
+            parse_input_text("[1,2]", ResourceWorkbenchInputType::Json).unwrap()
+        );
+        // 非法 JSON 必须报错,而不是被当成字符串放行。
+        assert!(parse_input_text("{oops}", ResourceWorkbenchInputType::Json).is_err());
+    }
+
+    #[test]
+    fn string_input_is_never_parsed_as_json() {
+        // `type: string` 的输入哪怕长得像 JSON 也是字面量:自动解析会改变
+        // 合法字符串的含义(与 `coerce_binding` 的 `T::Json` 透传同理)。
+        assert_eq!(
+            serde_json::json!("{\"enabled\":true}"),
+            parse_input_text(r#"{"enabled":true}"#, ResourceWorkbenchInputType::String).unwrap()
+        );
+    }
+
+    #[test]
+    fn number_and_boolean_inputs_are_typed() {
+        // 表单里的整数文本必须保持整数性(provider 侧是 u32)。
+        let parsed = parse_input_text("8", ResourceWorkbenchInputType::Number).unwrap();
+        assert_eq!(Some(8), parsed.as_u64(), "parsed={parsed}");
+        assert_eq!(
+            serde_json::json!(true),
+            parse_input_text("true", ResourceWorkbenchInputType::Boolean).unwrap()
+        );
+        assert_eq!(
+            serde_json::json!(false),
+            parse_input_text("false", ResourceWorkbenchInputType::Boolean).unwrap()
+        );
+        // 空值与垃圾值交给调用方转成字段级错误(空的可选字段不提交)。
+        assert!(parse_input_text("", ResourceWorkbenchInputType::Number).is_err());
+        assert!(parse_input_text("maybe", ResourceWorkbenchInputType::Boolean).is_err());
+    }
+
+    #[test]
+    fn form_input_errors_name_the_field() {
+        // 字段级错误必须能定位到具体输入框,否则用户只知道"某个字段错了"。
+        let error = parse_form_input("replicas", "abc", ResourceWorkbenchInputType::Number)
+            .expect_err("non-numeric text must not parse");
+        assert!(error.contains("replicas"), "error={error}");
+        assert!(error.contains("number"), "error={error}");
+
+        let error = parse_form_input("payload", "{oops}", ResourceWorkbenchInputType::Json)
+            .expect_err("invalid json must not parse");
+        assert!(error.contains("payload") && error.contains("json"), "error={error}");
+
+        assert_eq!(
+            serde_json::json!(true),
+            parse_form_input("force", "true", ResourceWorkbenchInputType::Boolean).unwrap()
+        );
     }
 }
