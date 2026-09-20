@@ -101,7 +101,7 @@ fn navop_brand_icon(path: &str) -> Option<std::borrow::Cow<'static, [u8]>> {
 }
 
 const NAVOP_APP_ID: &str = "navop";
-const NAVOP_WINDOW_TITLE: &str = "Navop";
+pub(crate) const NAVOP_WINDOW_TITLE: &str = "Navop";
 const DEFAULT_MAIN_WINDOW_WIDTH: f32 = 1800.0;
 const DEFAULT_MAIN_WINDOW_HEIGHT: f32 = 1260.0;
 const MAIN_WINDOW_DISPLAY_RATIO: f32 = 0.9;
