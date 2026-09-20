@@ -58,7 +58,7 @@ UI RPC。已有 provider 协议保持不变，Elasticsearch、Kafka、Kubernetes
 
 ### 2.2 gpui-shell 已有能力
 
-固定 fork `6df86ef82b4b5f3b04723c0d1cf82ff57cdc7078` 已合并最新上游并包含
+固定 fork `23c8e5b787baa06b08a84e1d3f80c241eb07fc0b` 已合并最新上游并包含
 `gpui-shell`，crate 名为 `gpui_shell`。它已经提供：
 
 - QuickJS ES module 执行和 `ScriptView`。
@@ -192,7 +192,7 @@ Navop 只读取根目录的 `extension.json`。shell entry 是 contribution 的�
   "version": "1.0.0",
   "engines": {
     "onetcli": ">=0.14.0",
-    "gpui_shell": "0.2.0"
+    "gpui_shell": "0.6.4"
   },
   "api": {
     "extension": "1.0",

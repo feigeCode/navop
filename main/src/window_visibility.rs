@@ -7,7 +7,8 @@
 //! - macOS：`NSWindow::orderOut:` 隐藏；`makeKeyAndOrderFront:` + 激活进程恢复。
 //!   激活入口**不能**写死：`-activate` 是 macOS 14 才引入的选择器，旧系统上会直接
 //!   SIGABRT，详见 `platform::activate_app`。
-//! - Windows：`ShowWindow(SW_HIDE)` / `ShowWindow(SW_RESTORE)` + `SetForegroundWindow`
+//! - Windows：`ShowWindow(SW_HIDE)` 隐藏；恢复用 `SW_SHOW`（只有被最小化时才用
+//!   `SW_RESTORE`，理由见 `platform::show`）+ `SetForegroundWindow`
 //! - Linux X11：`unmap_window` / `map_window`
 //! - Linux Wayland：协议不允许客户端任意隐藏并重映射已有 xdg-toplevel，
 //!   隐藏退化为 `minimize_window`（恢复仍由 `activate_window` 完成）
@@ -198,14 +199,25 @@ mod platform {
     pub(super) fn show(target: NativeMainWindow) -> anyhow::Result<()> {
         use windows::Win32::Foundation::HWND;
         use windows::Win32::UI::WindowsAndMessaging::{
-            IsWindowVisible, SW_RESTORE, SetForegroundWindow, ShowWindow,
+            IsIconic, IsWindowVisible, SW_RESTORE, SW_SHOW, SetForegroundWindow, ShowWindow,
         };
 
         let hwnd = HWND(target.0 as *mut core::ffi::c_void);
         // SAFETY: `hwnd` 是本进程存活主窗口的句柄；两个调用对已处于目标状态的窗口都是
         // 幂等的，返回值只表示「之前的可见性」或「是否抢到前台」，不作为成功判据。
         unsafe {
-            let _ = ShowWindow(hwnd, SW_RESTORE);
+            // 只有被**最小化**时才用 `SW_RESTORE`：Win32 文档写明它对最大化窗口会
+            // 「还原到原始尺寸与位置」，也就是会**取消最大化**。2026-09-20 真机实测：
+            // 隐藏前 `IsZoomed=true`，`SW_RESTORE` 后 `IsZoomed=false` —— 窗口虽然重新
+            // 可见，却被缩回原始大小。本函数现在还服务于「已有实例时再次启动」这条高频
+            // 路径，那里的窗口往往正处在最大化状态，用 `SW_RESTORE` 会把用户的窗口缩掉。
+            // `SW_SHOW` 是「按当前尺寸与位置显示」，实测对隐藏+最大化的窗口能恢复可见且
+            // 保住最大化，对已经可见的窗口则是无操作。
+            if IsIconic(hwnd).as_bool() {
+                let _ = ShowWindow(hwnd, SW_RESTORE);
+            } else {
+                let _ = ShowWindow(hwnd, SW_SHOW);
+            }
             let _ = SetForegroundWindow(hwnd);
             if !IsWindowVisible(hwnd).as_bool() {
                 anyhow::bail!("ShowWindow 未能显示主窗口");
