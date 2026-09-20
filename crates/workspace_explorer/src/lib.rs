@@ -21,11 +21,13 @@ pub use backend::{
 pub use diff::{AlignedDiffSide, DiffLine, DiffLineKind, DiffRow, SideBySideDiff};
 pub use editor::{GitDiffRequest, WorkspaceEditor, WorkspaceEditorEvent};
 pub use explorer::{
-    ExplorerFramePlacement, WorkspaceExplorer, WorkspaceExplorerConfig, WorkspaceExplorerEvent,
+    ExplorerFramePlacement, WorktreeReviewSnapshot, WorkspaceExplorer, WorkspaceExplorerConfig,
+    WorkspaceExplorerEvent,
 };
 pub use git::{
     CreatedWorktree, GitBranch, GitBranchKind, GitChange, GitChangeKind, GitRepository,
-    WorktreeEntry, create_worktree, discover_repository, discard_change, list_worktrees,
+    WorktreeEntry, create_worktree, discover_repository, discard_change,
+    list_worktrees,
     capture_worktree_snapshot, diff_snapshots, load_branches, load_changes, load_diff,
     remove_worktree, stage_change, unstage_change,
 };

@@ -34,6 +34,8 @@ use crate::{
 pub enum DefaultAgentChatPanelEvent {
     Close,
     MoveTo(SidebarPlacement),
+    TurnStarted { session_id: String, turn_id: String },
+    TurnFinished { session_id: String, turn_id: String, success: bool },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -639,6 +641,19 @@ impl DefaultAgentChatPanel {
                                         }
                                         AgentChatViewEvent::MoveTo(placement) => {
                                             cx.emit(DefaultAgentChatPanelEvent::MoveTo(*placement));
+                                        }
+                                        AgentChatViewEvent::TurnStarted { session_id, turn_id } => {
+                                            cx.emit(DefaultAgentChatPanelEvent::TurnStarted {
+                                                session_id: session_id.clone(),
+                                                turn_id: turn_id.clone(),
+                                            });
+                                        }
+                                        AgentChatViewEvent::TurnFinished { session_id, turn_id, success } => {
+                                            cx.emit(DefaultAgentChatPanelEvent::TurnFinished {
+                                                session_id: session_id.clone(),
+                                                turn_id: turn_id.clone(),
+                                                success: *success,
+                                            });
                                         }
                                     }
                                 });

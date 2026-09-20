@@ -9,7 +9,10 @@ mod render;
 use crate::WorkspaceEditor;
 use crate::backend::{WorkspaceBackend, local_backend};
 use crate::editor::{GitDiffRequest, WorkspaceEditorEvent};
-use crate::git::{GitChange, GitRepository, WorktreeEntry, create_worktree, load_changes};
+use crate::git::{
+    GitChange, GitRepository, WorktreeEntry, capture_worktree_snapshot, create_worktree,
+    diff_snapshots, load_changes,
+};
 use crate::model::ExplorerEntry;
 use crate::theme::WorkspaceTheme;
 use gpui::{
@@ -45,6 +48,8 @@ pub struct WorkspaceExplorer {
     changes: Vec<GitChange>,
     /// 仓库已注册的 worktree，来自 `git worktree list`。
     worktrees: Vec<WorktreeEntry>,
+    last_checkpoint: Option<String>,
+    last_turn_review: Option<WorktreeReviewSnapshot>,
     /// 宿主注入的最近工作区根目录，最近在前。
     recent_roots: Vec<PathBuf>,
     changes_expanded: bool,
@@ -70,6 +75,14 @@ pub struct WorkspaceExplorer {
     file_operation_running: bool,
     file_action_subscription: Option<Subscription>,
     _subscriptions: Vec<Subscription>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorktreeReviewSnapshot {
+    pub session_id: String,
+    pub turn_id: String,
+    pub diff: String,
+    pub success: bool,
 }
 
 pub struct WorkspaceExplorerConfig {
@@ -110,6 +123,8 @@ impl WorkspaceExplorer {
             branch_manager: None,
             changes: Vec::new(),
             worktrees: Vec::new(),
+            last_checkpoint: None,
+            last_turn_review: None,
             recent_roots: Vec::new(),
             changes_expanded: true,
             files_expanded: true,
@@ -171,6 +186,53 @@ impl WorkspaceExplorer {
 
     pub fn recent_roots(&self) -> &[PathBuf] {
         &self.recent_roots
+    }
+
+    pub fn last_turn_review(&self) -> Option<&WorktreeReviewSnapshot> {
+        self.last_turn_review.as_ref()
+    }
+
+    /// 在 turn 结束时捕获工作区快照，并与上一轮结束快照比较。
+    ///
+    /// 捕获使用临时 index，不会修改用户暂存区。首轮没有基线时只保存快照，
+    /// 后续轮次即可得到上一轮到当前轮的 diff。
+    pub fn capture_turn_finished(
+        &mut self,
+        session_id: String,
+        turn_id: String,
+        success: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(repository) = self.repository.clone() else {
+            return;
+        };
+        let before = self.last_checkpoint.clone();
+        let task = cx.background_spawn(async move {
+            let after = capture_worktree_snapshot(&repository)?;
+            let diff = before
+                .as_deref()
+                .map(|before| diff_snapshots(&repository, before, &after))
+                .transpose()?
+                .unwrap_or_default();
+            anyhow::Ok((after, diff))
+        });
+        let entity = cx.entity().downgrade();
+        cx.spawn(async move |_: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let result = task.await;
+            let _ = entity.update(cx, |this, cx| {
+                if let Ok((after, diff)) = result {
+                    this.last_checkpoint = Some(after);
+                    this.last_turn_review = Some(WorktreeReviewSnapshot {
+                        session_id,
+                        turn_id,
+                        diff,
+                        success,
+                    });
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub fn create_worktree(&mut self, cx: &mut Context<Self>) {
