@@ -11,6 +11,41 @@ const CURRENT_APP_BUNDLE_NAME: &str = "Navop.app";
 #[cfg(target_os = "macos")]
 const LEGACY_APP_BUNDLE_NAME: &str = "OnetCli.app";
 
+/// 等旧版本进程释放可执行文件的上限。
+///
+/// 更新替换可以**在旧进程仍然存活时**完成（Windows 允许重命名正在运行的 exe），
+/// 所以替换成功并不代表旧实例已经退出。见 `wait_for_previous_instance_exit`。
+#[cfg(target_os = "windows")]
+const PREVIOUS_INSTANCE_EXIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+#[cfg(target_os = "windows")]
+const PREVIOUS_INSTANCE_EXIT_POLL_INTERVAL: std::time::Duration =
+    std::time::Duration::from_millis(200);
+
+/// 文件仍被占用时 Windows 返回的错误码。
+///
+/// 必须按**原始错误码**判断，不能按 `ErrorKind`：std 把 5 映射成 `PermissionDenied`，
+/// 却把 32 映射成 `Uncategorized`（实测 `fs::remove_file` 在两种占用下分别返回
+/// `raw_os_error()==Some(5)` / `Some(32)`）。这与单实例模块按原始码分类的理由相同。
+#[cfg(target_os = "windows")]
+const ERROR_ACCESS_DENIED: i32 = 5;
+/// 句柄未共享 `FILE_SHARE_DELETE` 时的占用错误码。
+#[cfg(target_os = "windows")]
+const ERROR_SHARING_VIOLATION: i32 = 32;
+
+/// 备份是否仍被某个进程占用（因此还不能拉起新版本）。
+///
+/// - `ERROR_ACCESS_DENIED(5)`：被映射为运行中映像的 exe，实测 `DeleteFileW` 返回 5，
+///   进程退出后转为 0 —— 这正是"旧版本实例是否还活着"的探针。
+/// - `ERROR_SHARING_VIOLATION(32)`：句柄存在但未共享删除权限（安全软件扫描等）。
+///   同属"现在别重启"，等其释放即可。
+#[cfg(target_os = "windows")]
+fn file_is_still_in_use(error: &std::io::Error) -> bool {
+    matches!(
+        error.raw_os_error(),
+        Some(ERROR_ACCESS_DENIED) | Some(ERROR_SHARING_VIOLATION)
+    )
+}
+
 pub(crate) fn start_install_update(download_path: PathBuf) -> Result<UpdateInstallAction, String> {
     if one_core::app_paths::is_portable() {
         return Err("便携模式不支持应用内安装更新，请下载新的便携版并保留 data 目录".to_string());
@@ -131,7 +166,10 @@ fn apply_update_windows(source_path: &Path, target_path: &Path) -> Result<(), St
             replace_via_staging_copy(source_path, target_path)
         }) {
             Ok(()) => {
-                let _ = remove_file_if_exists(&backup_path);
+                // 必须先确认旧实例已退出，再拉起新版本：替换成功并不代表旧进程
+                // 已经消失，而新版本一旦在旧实例仍持有单实例管道时启动，就会走
+                // "转发给已有实例"分支后立刻退出，表现为"更新完成后应用不再出现"。
+                wait_for_previous_instance_exit(&backup_path, PREVIOUS_INSTANCE_EXIT_TIMEOUT);
                 restart_application(target_path)?;
                 return Ok(());
             }
@@ -149,6 +187,48 @@ fn apply_update_windows(source_path: &Path, target_path: &Path) -> Result<(), St
             .map(|err| err.to_string())
             .unwrap_or_else(|| "未知原因".to_string())
     ))
+}
+
+/// 等到被替换掉的旧版本进程真正退出，再让调用方拉起新版本。
+///
+/// 更新替换过程可以在旧进程**仍然存活**时走完：Windows 允许重命名正在运行的
+/// exe（实测 `MoveFileW` 返回 0），于是 `rename` + 拷贝新文件都能成功，而旧进程
+/// 直到 `restart_application` 之后才真正消失。旧进程此刻仍占着 Windows 单实例
+/// 管道，新版本一旦在此时启动就会走进"转发给已有实例"分支、拿到确认后立刻退出
+/// —— 用户看到的是"更新完成后应用不再出现"。
+///
+/// 运行中的 exe 无法被删除（实测 `DeleteFileW` 返回 `ERROR_ACCESS_DENIED(5)`），
+/// 因此"备份文件变成可删除"就是旧进程已退出的可靠探针。等待是有界的：超时不再
+/// 阻断更新，避免旧进程异常不退时把更新永久卡在替换之后。
+#[cfg(target_os = "windows")]
+fn wait_for_previous_instance_exit(backup_path: &Path, timeout: std::time::Duration) {
+    if !backup_path.exists() {
+        // 没有旧文件可删（首次安装，或备份已被清理）：没有任何东西需要等待。
+        return;
+    }
+
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match remove_file_if_exists(backup_path) {
+            // 备份转为可删除 = 旧进程已退出，管道名已经空闲。
+            Ok(()) => return,
+            Err(err) if file_is_still_in_use(&err) => {
+                if std::time::Instant::now() >= deadline {
+                    eprintln!(
+                        "旧版本进程在 {:?} 内未释放 {}，仍继续重启新版本",
+                        timeout,
+                        backup_path.display()
+                    );
+                    return;
+                }
+                std::thread::sleep(PREVIOUS_INSTANCE_EXIT_POLL_INTERVAL);
+            }
+            Err(err) => {
+                eprintln!("清理更新备份失败，仍继续重启新版本: {err}");
+                return;
+            }
+        }
+    }
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -518,6 +598,64 @@ mod tests {
         let target_bytes = std::fs::read(&target_path).expect("回滚后旧版本应仍存在");
         assert_eq!(target_bytes, b"old-binary");
         assert!(!backup_path.exists());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn restart_waits_until_the_previous_instance_releases_the_executable() {
+        use super::wait_for_previous_instance_exit;
+        use std::fs;
+        use std::os::windows::fs::OpenOptionsExt;
+        use std::time::Duration;
+
+        const FILE_SHARE_READ: u32 = 0x0000_0001;
+        const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+
+        let temp_dir = TestDir::new("wait-previous-instance");
+        let backup_path = temp_dir.path.join("navop.old");
+        fs::write(&backup_path, b"old-binary").expect("写入备份失败");
+
+        // 模拟"旧 exe 仍在运行"：被映射为映像的 exe 会拒绝删除（实测 `DeleteFileW`
+        // 返回 ERROR_ACCESS_DENIED=5）。注意 std 的 `File::open` 默认共享
+        // `FILE_SHARE_DELETE`，那样是锁不住的（实测此时删除会成功），必须显式去掉它
+        // ——实测该句柄下删除返回 ERROR_SHARING_VIOLATION=32，与"仍被占用"同属一类。
+        let occupied = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .open(&backup_path)
+            .expect("打开备份失败");
+
+        wait_for_previous_instance_exit(&backup_path, Duration::from_millis(500));
+        assert!(
+            backup_path.exists(),
+            "旧实例尚未退出时不能放行重启，否则新版本会转发给旧实例后立刻退出"
+        );
+
+        drop(occupied);
+        wait_for_previous_instance_exit(&backup_path, Duration::from_millis(500));
+        assert!(
+            !backup_path.exists(),
+            "旧实例退出后必须立刻放行重启，并把备份清理掉"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn restart_does_not_wait_when_there_is_no_previous_executable() {
+        use super::wait_for_previous_instance_exit;
+        use std::time::{Duration, Instant};
+
+        let temp_dir = TestDir::new("no-previous-instance");
+        let backup_path = temp_dir.path.join("navop.old");
+
+        let started = Instant::now();
+        wait_for_previous_instance_exit(&backup_path, Duration::from_secs(30));
+
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "没有旧可执行文件时不应等待，实际耗时 {:?}",
+            started.elapsed()
+        );
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
