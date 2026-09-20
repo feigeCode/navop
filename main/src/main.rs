@@ -36,6 +36,7 @@ mod personal_sync_status;
 mod public_mcp_approval;
 mod public_mcp_runtime;
 mod resource_workbench_terminal;
+mod screenshot_safe;
 mod session_logs;
 mod setting_tab;
 mod settings;
