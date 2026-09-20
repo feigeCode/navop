@@ -1480,6 +1480,35 @@ impl DbTreeView {
         }
     }
 
+    /// 取已加载到树中的节点。
+    pub fn node(&self, node_id: &str) -> Option<DbNode> {
+        self.db_nodes.get(node_id).cloned()
+    }
+
+    /// 把外部加载到的子节点写回树缓存。
+    ///
+    /// 用于对象页签全选时复用同一份加载结果，避免重复请求数据库。
+    pub fn store_loaded_children(&mut self, node_id: &str, children: Vec<DbNode>) {
+        self.loaded_children.insert(node_id.to_string());
+        self.loading_nodes.remove(node_id);
+        self.error_nodes.remove(node_id);
+
+        fn insert_nodes_recursive(db_nodes: &mut HashMap<String, DbNode>, node: &DbNode) {
+            db_nodes.insert(node.id.clone(), node.clone());
+            for child in &node.children {
+                insert_nodes_recursive(db_nodes, child);
+            }
+        }
+        for child in &children {
+            insert_nodes_recursive(&mut self.db_nodes, child);
+        }
+
+        if let Some(parent) = self.db_nodes.get_mut(node_id) {
+            parent.children = children;
+            parent.children_loaded = true;
+        }
+    }
+
     /// 刷新指定节点及其子节点
     ///
     /// 这个方法会：

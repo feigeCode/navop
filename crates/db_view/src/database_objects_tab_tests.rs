@@ -42,3 +42,35 @@ fn object_name_highlights_preserve_identifier_boundaries() {
         object_name_highlight_ranges(text, "")
     );
 }
+
+#[test]
+fn object_rows_wire_keyboard_and_mouse_range_selection() {
+    let source = include_str!("database_objects_tab.rs");
+
+    // Ctrl/Cmd+A 走 key context action，保证列表聚焦时即可全选可见行
+    assert!(source.contains(".key_context(DB_SEARCH_CONTEXT)"));
+    assert!(source.contains(".on_action(cx.listener(Self::on_action_select_all_objects))"));
+    assert!(source.contains("select_all_rows(&mut self.selected_indices"));
+
+    // Shift 点击扩到区间，拖选走 mouse_move/mouse_up
+    assert!(source.contains("event.modifiers.shift"));
+    assert!(source.contains("apply_row_range(&mut self.selected_indices"));
+    assert!(source.contains("apply_drag_selection("));
+    assert!(source.contains("exceeds_drag_threshold("));
+    assert!(source.contains(".on_mouse_move(cx.listener("));
+    // 行内释放走 on_row_mouse_up，面板根节点兜住“拖到行外松手”
+    assert!(
+        source.contains(".on_mouse_up(MouseButton::Left, cx.listener(Self::on_panel_mouse_up))")
+    );
+    assert!(source.contains("fn on_panel_mouse_up("));
+    assert!(source.contains("fn end_row_drag("));
+}
+
+#[test]
+fn select_all_asks_host_to_load_rows_that_have_no_open_tab() {
+    let source = include_str!("database_objects_tab.rs");
+
+    assert!(source.contains("DatabaseObjectsEvent::SelectAllInScope"));
+    assert!(source.contains("fn selection_scope(&self)"));
+    assert!(source.contains("fn select_rows_matching_nodes("));
+}
