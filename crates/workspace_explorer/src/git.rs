@@ -229,6 +229,101 @@ pub fn remove_worktree(repository: &GitRepository, path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Capture current worktree, including untracked files, without touching user's index.
+pub fn capture_worktree_snapshot(repository: &GitRepository) -> Result<String> {
+    let common_dir = git_stdout(&repository.root, &["rev-parse", "--git-common-dir"])?;
+    let common_dir = PathBuf::from(common_dir.trim());
+    let common_dir = if common_dir.is_absolute() {
+        common_dir
+    } else {
+        repository.root.join(common_dir)
+    };
+    let temporary_index = common_dir.join(format!("navop-checkpoint-index-{}", uuid::Uuid::new_v4()));
+    let result = (|| {
+        let head = git_stdout(&repository.root, &["rev-parse", "--verify", "HEAD"])?;
+        run_git_with_index(&repository.root, &temporary_index, &["read-tree", &head])?;
+        run_git_with_index(&repository.root, &temporary_index, &["add", "-A", "--", "."])?;
+        let tree = git_stdout_with_index(&repository.root, &temporary_index, &["write-tree"])?;
+        let commit = git_output_with_index(
+            &repository.root,
+            &temporary_index,
+            &["commit-tree", tree.trim(), "-p", &head, "-m", "Navop worktree checkpoint"],
+        )?;
+        let commit = commit.trim();
+        (!commit.is_empty())
+            .then(|| commit.to_string())
+            .ok_or_else(|| anyhow!("git commit-tree returned no object id"))
+    })();
+    let _ = fs::remove_file(&temporary_index);
+    let _ = fs::remove_file(temporary_index.with_extension("lock"));
+    result
+}
+
+/// Compare two checkpoint/tree-ish values without changing working files or index.
+pub fn diff_snapshots(repository: &GitRepository, before: &str, after: &str) -> Result<String> {
+    let output = run_git_vec(
+        &repository.root,
+        vec![
+            "diff".to_string(),
+            "--binary".to_string(),
+            "--find-renames".to_string(),
+            before.to_string(),
+            after.to_string(),
+        ],
+    )?;
+    if !output.status.success() {
+        return Err(git_command_error("git diff snapshots", &output));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn run_git_with_index(cwd: &Path, index: &Path, args: &[&str]) -> Result<()> {
+    let output = git_command(cwd, args).env("GIT_INDEX_FILE", index).output()?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(git_command_error("git checkpoint", &output))
+    }
+}
+
+fn git_stdout_with_index(cwd: &Path, index: &Path, args: &[&str]) -> Result<String> {
+    let output = git_command(cwd, args).env("GIT_INDEX_FILE", index).output()?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    } else {
+        Err(git_command_error("git checkpoint", &output))
+    }
+}
+
+fn git_output_with_index(cwd: &Path, index: &Path, args: &[&str]) -> Result<String> {
+    let output = git_command(cwd, &[])
+        .env("GIT_INDEX_FILE", index)
+        .args(["-c", "user.name=Navop", "-c", "user.email=navop@localhost"])
+        .args(args)
+        .output()?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    } else {
+        Err(git_command_error("git commit-tree", &output))
+    }
+}
+
+fn git_command(cwd: &Path, args: &[&str]) -> Command {
+    let mut command = Command::new("git");
+    configure_background_child(&mut command);
+    command.current_dir(cwd).args(args);
+    command
+}
+
+fn git_stdout(cwd: &Path, args: &[&str]) -> Result<String> {
+    let output = git_command(cwd, args).output()?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    } else {
+        Err(git_command_error("git", &output))
+    }
+}
+
 fn is_managed_branch(branch: &str) -> bool {
     branch.starts_with(MANAGED_WORKTREE_BRANCH_PREFIX)
 }
