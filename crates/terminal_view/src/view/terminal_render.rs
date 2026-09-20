@@ -6,8 +6,6 @@ use terminal::line_timeline::SharedLineTimeline;
 
 /// 时间戳列宽（`[HH:MM:SS]`）
 const TIMESTAMP_COLUMNS: usize = 10;
-/// 无时间戳的行用空格占位
-const TIMESTAMP_BLANK: &str = "          ";
 /// 时间戳与行号之间、边距文本与终端内容之间的固定间隔（照 WindTerm 实测 3 格）
 const MARGIN_GAP: usize = 3;
 /// 行号列最小宽度（跟随当前最大行号位数）
@@ -46,6 +44,45 @@ pub(super) fn line_margin_columns(
     columns
 }
 
+/// 单个屏幕行的边距文本：`[HH:MM:SS]` + 3 格 + 行号 + 3 格，长度恒等于
+/// [`line_margin_columns`]。
+///
+/// 尚未有输出的行不画 `[          ]` 占位符：只显示行号时补足时间戳列宽的空白，
+/// 保证行号仍然对齐；时间戳与行号都不显示时返回空串（元素侧会跳过绘制）。
+fn line_margin_row_text(
+    timestamp: Option<&str>,
+    line_number: usize,
+    show_timestamps: bool,
+    show_numbers: bool,
+    number_digits: usize,
+) -> String {
+    let mut text = String::with_capacity(line_margin_columns(
+        show_timestamps,
+        show_numbers,
+        number_digits,
+    ));
+    if show_timestamps {
+        match timestamp {
+            // 方括号照 WindTerm，时间线侧只存 `HH:MM:SS`。
+            Some(label) => {
+                text.push('[');
+                text.push_str(label);
+                text.push(']');
+                text.extend(std::iter::repeat_n(' ', MARGIN_GAP));
+            }
+            None if show_numbers => {
+                text.extend(std::iter::repeat_n(' ', TIMESTAMP_COLUMNS + MARGIN_GAP));
+            }
+            None => {}
+        }
+    }
+    if show_numbers {
+        text.push_str(&format!("{:>width$}", line_number, width = number_digits));
+        text.extend(std::iter::repeat_n(' ', MARGIN_GAP));
+    }
+    text
+}
+
 /// 生成左边距每行文本；时间戳与行号均关闭或处于备用屏幕时返回空。
 fn build_line_margin(
     term: &Term<GpuiEventProxy>,
@@ -71,25 +108,18 @@ fn build_line_margin(
             continue;
         }
         let id = history_size as i64 + row as i64 - display_offset as i64;
-        let mut text = String::with_capacity(columns);
-        if show_timestamps {
-            // 方括号照 WindTerm，时间线侧只存 `HH:MM:SS`。
-            text.push('[');
-            match timeline.label(id) {
-                Some(label) => text.push_str(&label),
-                None => text.push_str(TIMESTAMP_BLANK),
-            }
-            text.push(']');
-            text.extend(std::iter::repeat_n(' ', MARGIN_GAP));
-        }
-        if show_numbers {
-            text.push_str(&format!(
-                "{:>width$}",
-                (id + 1).max(1),
-                width = number_digits
-            ));
-            text.extend(std::iter::repeat_n(' ', MARGIN_GAP));
-        }
+        let label = if show_timestamps {
+            timeline.label(id)
+        } else {
+            None
+        };
+        let text = line_margin_row_text(
+            label.as_deref(),
+            (id + 1).max(1) as usize,
+            show_timestamps,
+            show_numbers,
+            number_digits,
+        );
         rows.push(text.into());
     }
 
@@ -389,7 +419,9 @@ impl TerminalView {
 
 #[cfg(test)]
 mod tests {
-    use super::{line_margin_columns, line_number_digits, with_terminal_if_ready};
+    use super::{
+        line_margin_columns, line_margin_row_text, line_number_digits, with_terminal_if_ready,
+    };
     use alacritty_terminal::sync::FairMutex;
 
     #[test]
@@ -407,6 +439,45 @@ mod tests {
         assert_eq!(5, line_margin_columns(false, true, 2));
         assert_eq!(18, line_margin_columns(true, true, 2));
         assert_eq!(21, line_margin_columns(true, true, 5));
+    }
+
+    #[test]
+    fn timestamped_row_keeps_brackets_and_number() {
+        let text = line_margin_row_text(Some("14:45:38"), 2, true, true, 2);
+        assert_eq!("[14:45:38]    2   ", text.as_str());
+        assert_eq!(
+            line_margin_columns(true, true, 2),
+            text.len(),
+            "边距行文本必须始终填满列宽，否则行号与内容会对不齐"
+        );
+    }
+
+    #[test]
+    fn row_without_output_renders_no_placeholder_brackets() {
+        // 有行号：只留时间戳列宽的空白，不画 `[          ]` 占位符。
+        let with_number = line_margin_row_text(None, 3, true, true, 2);
+        assert_eq!("              3   ", with_number.as_str());
+        assert!(
+            !with_number.contains(['[', ']']),
+            "没有输出的行不应出现时间戳占位括号：{with_number:?}"
+        );
+        assert_eq!(
+            line_margin_columns(true, true, 2),
+            with_number.len(),
+            "去掉占位符后行号仍须按列宽对齐"
+        );
+
+        // 只有时间戳列：整行留空，交给元素侧跳过绘制。
+        assert!(
+            line_margin_row_text(None, 3, true, false, 2).is_empty(),
+            "仅时间戳模式下的空行不应产生任何可绘制文本"
+        );
+
+        // 只有行号列（时间戳关闭）：依旧只有行号。
+        assert_eq!(
+            " 3   ",
+            line_margin_row_text(None, 3, false, true, 2).as_str()
+        );
     }
 
     #[test]
