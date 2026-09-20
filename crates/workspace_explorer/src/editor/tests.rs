@@ -166,3 +166,41 @@ fn test_theme() -> WorkspaceTheme {
         success: gpui::rgb(0x00aa00).into(),
     }
 }
+
+#[test]
+fn snapshot_diff_documents_are_read_only_without_side_by_side() {
+    let document = LoadedDocument::from_snapshot_diff("diff --git a/x b/x\n".to_string());
+
+    assert!(document.read_only);
+    assert!(matches!(document.policy, DocumentPolicy::Diff));
+    assert_eq!(None, document.diff_language, "整轮多文件不做双栏对齐");
+}
+
+#[gpui::test]
+fn snapshot_diff_reuses_one_tab_across_turns(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        notes::init(cx);
+    });
+    let (window, editor) = open_test_editor(cx);
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+
+    for turn in 0..3 {
+        editor.update_in(&mut cx, |editor, window, cx| {
+            editor.open_snapshot_diff(
+                format!("turn {turn}"),
+                "diff --git a/x b/x\n--- a/x\n+++ b/x\n".to_string(),
+                window,
+                cx,
+            );
+        });
+        cx.run_until_parked();
+    }
+
+    let tab_count = editor.read_with(&cx, |editor, _| editor.tabs.len());
+    assert_eq!(
+        1,
+        tab_count,
+        "last-turn review 必须复用同一标签页，而不是每轮开新页"
+    );
+}

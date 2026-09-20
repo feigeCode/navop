@@ -30,6 +30,28 @@ impl WorkspaceEditor {
         );
     }
 
+    /// 打开（或聚焦已打开的）整轮快照 diff 标签页。
+    ///
+    /// 同一 `navop://last-turn-review` key 复用标签页：每轮刷新同一页，
+    /// 不会为每一轮开出新标签。
+    pub fn open_snapshot_diff(
+        &mut self,
+        display_name: String,
+        diff_text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_document(
+            PendingDocument {
+                key: DocumentKey::SnapshotDiff,
+                display_name,
+                load_request: LoadRequest::SnapshotDiff { text: diff_text },
+            },
+            window,
+            cx,
+        );
+    }
+
     /// 打开（或聚焦已打开的）某条 Git 变更的 diff 标签页。
     pub fn open_diff(
         &mut self,
@@ -173,6 +195,10 @@ impl WorkspaceEditor {
                     load_diff(&repository, &change)
                         .map(|diff| LoadedDocument::from_diff(diff, language))
                 })
+            }
+            LoadRequest::SnapshotDiff { text } => {
+                let document = LoadedDocument::from_snapshot_diff(text.clone());
+                cx.background_spawn(async move { anyhow::Ok(document) })
             }
         };
 
