@@ -554,6 +554,31 @@ fn main() {
             let main_window = main_window.into();
 
             while let Ok(request) = startup_request_rx.recv().await {
+                // 主窗口被「关闭按钮 → 最小化到托盘」隐藏（`ShowWindow(SW_HIDE)`）之后，
+                // 光调 `window.activate_window()` 是叫不回来的：gpui_windows 的
+                // `activate()` 只在 `IsIconic`（系统最小化）时才补一次
+                // `ShowWindowAsync(SW_RESTORE)`，而隐藏窗口不是 iconic，于是一次
+                // ShowWindow 都不会发出。2026-09-20 真机实测：二次启动确实转发成功
+                // （转发方退出码 0、没有开出第二个窗口），但主窗口 `IsWindowVisible`
+                // 仍然是 false —— 用户看到的就是"更新/启动之后应用不再出现"。
+                // 所以这里复用托盘自己的可见性适配器，它对隐藏窗口是恢复、对已可见窗口
+                // 是无操作（`SW_SHOW`，见 `window_visibility::platform::show`）。
+                //
+                // 句柄必须在窗口借用内取、原生调用必须在借用外做：原生激活回调会同步
+                // 重入 GPUI 抢同一个 App 借用，否则现场只剩一行 `RefCell already borrowed`
+                // （`window_visibility` 模块头有实测记录）。
+                let main_window_target = cx.update_window(main_window, |_, window, _| {
+                    window_visibility::main_window_target(window)
+                });
+                if let Ok(Ok(target)) = main_window_target {
+                    if let Err(error) = window_visibility::show_main_window(target) {
+                        tracing::warn!(
+                            error = %error,
+                            "failed to restore the main window for a forwarded startup request"
+                        );
+                    }
+                }
+
                 if cx
                     .update_window(main_window, |_, window, cx| {
                         window.activate_window();
@@ -693,6 +718,43 @@ mod embedded_cli_removal_tests {
             .expect("forwarded file open");
 
         assert!(activation < open);
+    }
+
+    /// 转发的启动请求必须能叫回一个被托盘隐藏的主窗口。
+    ///
+    /// `window.activate_window()` 做不到：gpui_windows 的 `activate()` 只在 `IsIconic`
+    /// （系统最小化）时才补一次 `ShowWindowAsync(SW_RESTORE)`，而托盘隐藏用的是
+    /// `ShowWindow(SW_HIDE)`，隐藏窗口不是 iconic，一次 ShowWindow 都不会发出。
+    /// 2026-09-20 真机实测（安装版 v0.18.4）：二次启动转发成功、窗口数不变，但
+    /// `IsWindowVisible` 仍为 false；此时外部直接 `ShowWindow(SW_SHOW)` 立刻可见。
+    ///
+    /// 这条断言同时钉住「借用外改原生状态」：`show_main_window` 一旦被写进
+    /// `cx.update_window(...)` 的闭包里，原生激活回调会同步重入 GPUI 抢同一个 App
+    /// 借用，现场只剩一行 `RefCell already borrowed`（`window_visibility` 模块头有记录）。
+    #[test]
+    fn forwarded_startup_request_restores_a_tray_hidden_window() {
+        let source = production_source();
+        let receiver = source
+            .find("startup_request_rx.recv().await")
+            .expect("forwarded startup request receiver");
+        let forwarded = &source[receiver..];
+        // 去掉所有空白再断言形态：只关心语句结构，不被缩进与换行绑死。
+        let compact: String = forwarded.chars().filter(|c| !c.is_whitespace()).collect();
+
+        let handle = compact
+            .find(
+                "cx.update_window(main_window,|_,window,_|{window_visibility::main_window_target(window)})",
+            )
+            .expect("转发路径必须在窗口借用内取原生句柄，且闭包内不做原生状态修改");
+        let restore = compact
+            .find("window_visibility::show_main_window(target)")
+            .expect("转发路径必须通过 window_visibility::show_main_window 恢复主窗口");
+        let open = compact
+            .find("file_open::open_input(input,window,cx)")
+            .expect("forwarded file open");
+
+        assert!(handle < restore, "必须先取到句柄、再在借用之外恢复窗口");
+        assert!(restore < open, "恢复主窗口要发生在打开文件之前");
     }
 
     #[test]
