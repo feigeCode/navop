@@ -1197,7 +1197,7 @@ fn base_manifest() -> Manifest {
         keywords: vec![],
         engines: Engines {
             onetcli: ">=0.1.0".to_string(),
-            gpui_shell: "0.2.0".to_string(),
+            gpui_shell: "0.6.1".to_string(),
         },
         api: ApiVersions::default(),
         activation: vec![],
