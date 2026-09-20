@@ -8,7 +8,7 @@ use super::{Manifest, ShellHostModule, ShellViewContrib};
 
 const SHELL_EXEC_PERMISSION: &str = "shell:exec";
 const RESERVED_BACKEND_ALIASES: &[&str] = &["host", "navop", "default"];
-const GPUI_SHELL_VERSION: &str = "0.6.1";
+const GPUI_SHELL_VERSION: &str = "0.6.4";
 
 pub(crate) fn validate_shell_views(manifest: &Manifest) -> Result<(), ShellViewValidationError> {
     if manifest.contributes.shell_views.is_empty() {
