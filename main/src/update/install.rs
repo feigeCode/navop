@@ -15,8 +15,11 @@ const LEGACY_APP_BUNDLE_NAME: &str = "OnetCli.app";
 ///
 /// 更新替换可以**在旧进程仍然存活时**完成（Windows 允许重命名正在运行的 exe），
 /// 所以替换成功并不代表旧实例已经退出。见 `wait_for_previous_instance_exit`。
+///
+/// 取 10 秒：正常退出是亚秒级的，到这个量级基本可以判定旧实例卡住了；再等下去只会拉长
+/// "更新完成后桌面上什么都没有"的空窗期。超时不再盲重启，见 `restart_after_replacement`。
 #[cfg(target_os = "windows")]
-const PREVIOUS_INSTANCE_EXIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const PREVIOUS_INSTANCE_EXIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 #[cfg(target_os = "windows")]
 const PREVIOUS_INSTANCE_EXIT_POLL_INTERVAL: std::time::Duration =
     std::time::Duration::from_millis(200);
@@ -44,6 +47,16 @@ fn file_is_still_in_use(error: &std::io::Error) -> bool {
         error.raw_os_error(),
         Some(ERROR_ACCESS_DENIED) | Some(ERROR_SHARING_VIOLATION)
     )
+}
+
+/// `wait_for_previous_instance_exit` 的结论。
+#[cfg(target_os = "windows")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PreviousInstanceExit {
+    /// 备份已可删除：旧实例确实退出了，拉起新版本是安全的。
+    Released,
+    /// 超时或探测失败：**无法确认**旧实例已退出，此时绝不能拉起新版本。
+    Unconfirmed,
 }
 
 pub(crate) fn start_install_update(download_path: PathBuf) -> Result<UpdateInstallAction, String> {
@@ -169,8 +182,7 @@ fn apply_update_windows(source_path: &Path, target_path: &Path) -> Result<(), St
                 // 必须先确认旧实例已退出，再拉起新版本：替换成功并不代表旧进程
                 // 已经消失，而新版本一旦在旧实例仍持有单实例管道时启动，就会走
                 // "转发给已有实例"分支后立刻退出，表现为"更新完成后应用不再出现"。
-                wait_for_previous_instance_exit(&backup_path, PREVIOUS_INSTANCE_EXIT_TIMEOUT);
-                restart_application(target_path)?;
+                restart_after_replacement(&backup_path, target_path)?;
                 return Ok(());
             }
             Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
@@ -189,6 +201,53 @@ fn apply_update_windows(source_path: &Path, target_path: &Path) -> Result<(), St
     ))
 }
 
+/// 替换成功后的收尾：确认旧实例已退出才拉起新版本。
+///
+/// `Unconfirmed` 说明旧实例可能还占着单实例管道，这时拉起新版本，新版本要么把启动请求
+/// 转发给它然后自己退出（用户什么也看不到），要么直接弹"启动请求没能交给它"。两种结果
+/// 都比"让用户手动启动一次"更糟，所以超时不再盲重启，只弹框说清楚。
+#[cfg(target_os = "windows")]
+fn restart_after_replacement(backup_path: &Path, target_path: &Path) -> Result<(), String> {
+    if wait_for_previous_instance_exit(backup_path, PREVIOUS_INSTANCE_EXIT_TIMEOUT)
+        == PreviousInstanceExit::Unconfirmed
+    {
+        report_previous_instance_still_running();
+        return Err(format!(
+            "旧版本实例没有在 {} 秒内退出，新版本文件已就位，请结束 Navop 进程后手动启动",
+            PREVIOUS_INSTANCE_EXIT_TIMEOUT.as_secs()
+        ));
+    }
+
+    restart_application(target_path)
+}
+
+/// 等不到旧实例退出时的用户可见提示。
+///
+/// 更新 helper 没有自己的窗口，release 构建又是 `windows_subsystem = "windows"`（没有
+/// 控制台），`eprintln!` 用户看不到：这里必须弹系统对话框，否则这次更新的结果就只剩
+/// "桌面上什么都没出现"。
+#[cfg(target_os = "windows")]
+fn report_previous_instance_still_running() {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        MB_ICONINFORMATION, MB_OK, MB_SETFOREGROUND, MessageBoxW,
+    };
+    use windows::core::HSTRING;
+
+    let text = HSTRING::from(
+        "更新已经完成，但旧版本的 Navop 进程还没有退出。\n\n请在任务管理器中结束 Navop 进程，然后重新启动，即可使用新版本。",
+    );
+    let caption = HSTRING::from(crate::NAVOP_WINDOW_TITLE);
+    // SAFETY: 两个字符串在调用期间保持存活；更新 helper 没有属主窗口，句柄传 None。
+    unsafe {
+        MessageBoxW(
+            None,
+            &text,
+            &caption,
+            MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND,
+        );
+    }
+}
+
 /// 等到被替换掉的旧版本进程真正退出，再让调用方拉起新版本。
 ///
 /// 更新替换过程可以在旧进程**仍然存活**时走完：Windows 允许重命名正在运行的
@@ -198,35 +257,36 @@ fn apply_update_windows(source_path: &Path, target_path: &Path) -> Result<(), St
 /// —— 用户看到的是"更新完成后应用不再出现"。
 ///
 /// 运行中的 exe 无法被删除（实测 `DeleteFileW` 返回 `ERROR_ACCESS_DENIED(5)`），
-/// 因此"备份文件变成可删除"就是旧进程已退出的可靠探针。等待是有界的：超时不再
-/// 阻断更新，避免旧进程异常不退时把更新永久卡在替换之后。
+/// 因此"备份文件变成可删除"就是旧进程已退出的可靠探针。超时或探测失败都返回
+/// `Unconfirmed`：**不能**把"等不到"当成"可以重启"，否则又回到上面那条链路。
 #[cfg(target_os = "windows")]
-fn wait_for_previous_instance_exit(backup_path: &Path, timeout: std::time::Duration) {
+fn wait_for_previous_instance_exit(
+    backup_path: &Path,
+    timeout: std::time::Duration,
+) -> PreviousInstanceExit {
     if !backup_path.exists() {
         // 没有旧文件可删（首次安装，或备份已被清理）：没有任何东西需要等待。
-        return;
+        return PreviousInstanceExit::Released;
     }
 
     let deadline = std::time::Instant::now() + timeout;
     loop {
         match remove_file_if_exists(backup_path) {
             // 备份转为可删除 = 旧进程已退出，管道名已经空闲。
-            Ok(()) => return,
-            Err(err) if file_is_still_in_use(&err) => {
-                if std::time::Instant::now() >= deadline {
-                    eprintln!(
-                        "旧版本进程在 {:?} 内未释放 {}，仍继续重启新版本",
-                        timeout,
-                        backup_path.display()
-                    );
-                    return;
-                }
-                std::thread::sleep(PREVIOUS_INSTANCE_EXIT_POLL_INTERVAL);
+            Ok(()) => return PreviousInstanceExit::Released,
+            Err(err) if !file_is_still_in_use(&err) => {
+                eprintln!("清理更新备份失败，无法确认旧实例已退出: {err}");
+                return PreviousInstanceExit::Unconfirmed;
             }
-            Err(err) => {
-                eprintln!("清理更新备份失败，仍继续重启新版本: {err}");
-                return;
+            Err(_) if std::time::Instant::now() >= deadline => {
+                eprintln!(
+                    "旧版本进程在 {:?} 内未释放 {}",
+                    timeout,
+                    backup_path.display()
+                );
+                return PreviousInstanceExit::Unconfirmed;
             }
+            Err(_) => std::thread::sleep(PREVIOUS_INSTANCE_EXIT_POLL_INTERVAL),
         }
     }
 }
@@ -603,6 +663,7 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn restart_waits_until_the_previous_instance_releases_the_executable() {
+        use super::PreviousInstanceExit;
         use super::wait_for_previous_instance_exit;
         use std::fs;
         use std::os::windows::fs::OpenOptionsExt;
@@ -625,14 +686,22 @@ mod tests {
             .open(&backup_path)
             .expect("打开备份失败");
 
-        wait_for_previous_instance_exit(&backup_path, Duration::from_millis(500));
+        assert_eq!(
+            wait_for_previous_instance_exit(&backup_path, Duration::from_millis(500)),
+            PreviousInstanceExit::Unconfirmed,
+            "等不到旧实例退出时必须报 Unconfirmed，调用方据此拒绝重启"
+        );
         assert!(
             backup_path.exists(),
             "旧实例尚未退出时不能放行重启，否则新版本会转发给旧实例后立刻退出"
         );
 
         drop(occupied);
-        wait_for_previous_instance_exit(&backup_path, Duration::from_millis(500));
+        assert_eq!(
+            wait_for_previous_instance_exit(&backup_path, Duration::from_millis(500)),
+            PreviousInstanceExit::Released,
+            "旧实例退出后必须放行重启"
+        );
         assert!(
             !backup_path.exists(),
             "旧实例退出后必须立刻放行重启，并把备份清理掉"
@@ -642,6 +711,8 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn restart_does_not_wait_when_there_is_no_previous_executable() {
+        use super::PREVIOUS_INSTANCE_EXIT_TIMEOUT;
+        use super::PreviousInstanceExit;
         use super::wait_for_previous_instance_exit;
         use std::time::{Duration, Instant};
 
@@ -649,12 +720,44 @@ mod tests {
         let backup_path = temp_dir.path.join("navop.old");
 
         let started = Instant::now();
-        wait_for_previous_instance_exit(&backup_path, Duration::from_secs(30));
+        assert_eq!(
+            wait_for_previous_instance_exit(&backup_path, PREVIOUS_INSTANCE_EXIT_TIMEOUT),
+            PreviousInstanceExit::Released,
+            "没有旧可执行文件时必须直接放行重启"
+        );
 
         assert!(
             started.elapsed() < Duration::from_secs(1),
             "没有旧可执行文件时不应等待，实际耗时 {:?}",
             started.elapsed()
+        );
+    }
+
+    /// 超时（`Unconfirmed`）绝不允许走到 `restart_application`。
+    ///
+    /// 用源文本钉住分支形态：这条分支只有在旧实例卡住时才会走到，而 Windows 侧代码在
+    /// macOS 上不参与编译，所以只能这样把它锁住——"超时仍然继续重启"正是这次要改掉的旧行为。
+    #[test]
+    fn restart_is_refused_when_the_previous_instance_has_not_exited() {
+        let source = include_str!("install.rs").replace("\r\n", "\n");
+        let compact: String = source.chars().filter(|c| !c.is_whitespace()).collect();
+        let function = compact
+            .find("fnrestart_after_replacement")
+            .expect("restart_after_replacement");
+        let body = &compact[function..];
+        let unconfirmed = body
+            .find("==PreviousInstanceExit::Unconfirmed")
+            .expect("超时必须判定为 Unconfirmed");
+        let report = body
+            .find("report_previous_instance_still_running()")
+            .expect("超时必须给用户可见提示");
+        let restart = body
+            .find("restart_application(target_path)")
+            .expect("确认旧实例退出后才允许拉起新版本");
+
+        assert!(
+            unconfirmed < report && report < restart,
+            "超时必须在重启之前提示；不得在未确认旧实例退出时直接拉起新版本"
         );
     }
 
