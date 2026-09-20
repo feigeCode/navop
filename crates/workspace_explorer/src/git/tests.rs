@@ -453,3 +453,20 @@ fn run_git_stdout(root: &Path, args: &[&str]) -> String {
     );
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
+
+#[test]
+fn worktree_snapshot_captures_dirty_and_untracked_files_without_touching_index() {
+    let root = initialized_repository();
+    let repository = discover_repository(&root).unwrap().unwrap();
+    std::fs::write(root.join("main.rs"), "fn main() { println!(\"changed\"); }\n").unwrap();
+    std::fs::write(root.join("untracked.txt"), "new\n").unwrap();
+
+    let snapshot = capture_worktree_snapshot(&repository).unwrap();
+    let diff = diff_snapshots(&repository, "HEAD", &snapshot).unwrap();
+    let status = run_git_stdout(&root, &["status", "--porcelain"]);
+
+    assert!(diff.contains("main.rs"));
+    assert!(diff.contains("untracked.txt"));
+    assert!(status.contains(" M main.rs"));
+    assert!(status.contains("?? untracked.txt"));
+}
