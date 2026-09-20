@@ -140,7 +140,7 @@ fn manifest_loads_resource_workbench_with_route_and_navigation() {
             "version": "1.0.0",
             "engines": {
                 "onetcli": ">=0.1.0",
-                "gpui_shell": "0.2.0"
+                "gpui_shell": "0.6.1"
             },
             "permissions": ["shell:exec", "spawn:./bin/provider"],
             "runtime": {
@@ -1185,7 +1185,7 @@ fn write_shell_manifest(dir: &std::path::Path, view: serde_json::Value) {
         "id": "com.example.resources",
         "name": "Resources",
         "version": "0.1.0",
-        "engines": { "onetcli": ">=0.1.0", "gpui_shell": "0.2.0" },
+        "engines": { "onetcli": ">=0.1.0", "gpui_shell": "0.6.1" },
         "api": { "shell": "1.0" },
         "permissions": ["shell:exec", "spawn:./bin/provider"],
         "runtime": {

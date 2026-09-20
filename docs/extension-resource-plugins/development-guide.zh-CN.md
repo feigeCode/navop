@@ -172,7 +172,7 @@ uuid = { workspace = true }
   "keywords": ["provider"],
   "engines": {
     "onetcli": ">=0.15.2",
-    "gpui_shell": "0.2.0"
+    "gpui_shell": "0.6.1"
   },
   "api": {
     "extension": "1.0",
