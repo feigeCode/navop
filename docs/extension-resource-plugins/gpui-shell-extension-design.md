@@ -58,7 +58,7 @@ UI RPC。已有 provider 协议保持不变，Elasticsearch、Kafka、Kubernetes
 
 ### 2.2 gpui-shell 已有能力
 
-固定 fork `329a064abfd3630765e11e3b8e7301d35809067c` 已合并最新上游并包含
+固定 fork `8caa3aeeeb836cd808795c6c778ce70daabd9649` 已合并最新上游并包含
 `gpui-shell`，crate 名为 `gpui_shell`。它已经提供：
 
 - QuickJS ES module 执行和 `ScriptView`。

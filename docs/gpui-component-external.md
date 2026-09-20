@@ -6,7 +6,7 @@ workspace manifest:
 
 ```text
 https://github.com/feigeCode/gpui-kit.git
-rev 329a064abfd3630765e11e3b8e7301d35809067c
+rev 8caa3aeeeb836cd808795c6c778ce70daabd9649
 ```
 
 The checkout belongs to `https://github.com/feigeCode/gpui-kit` and the
