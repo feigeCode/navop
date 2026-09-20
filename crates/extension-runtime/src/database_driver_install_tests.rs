@@ -106,7 +106,8 @@ fn marketplace_driver_must_satisfy_the_host_minimum_version() {
 fn duckdb_requires_duckdb_marketplace_driver() {
     assert_eq!(
         DriverRequirement::Required {
-            driver_id: "duckdb".to_string()
+            driver_id: "duckdb".to_string(),
+            minimum_version: None,
         },
         required_driver_for_config(&config(DatabaseType::DuckDB))
     );
@@ -116,10 +117,27 @@ fn duckdb_requires_duckdb_marketplace_driver() {
 fn external_database_requires_its_driver_id() {
     assert_eq!(
         DriverRequirement::Required {
-            driver_id: "custom".to_string()
+            driver_id: "custom".to_string(),
+            minimum_version: None,
         },
         required_driver_for_config(&external_config(" custom "))
     );
+}
+
+#[test]
+fn oceanbase_external_driver_requires_a_minimum_version() {
+    // oceanbase 0.1.12 起才按宿主契约发 JSON 数字(navop-extensions#9),
+    // 更早版本读无符号列会直接类型不匹配,所以宿主必须要求最低版本。
+    assert_eq!(
+        DriverRequirement::Required {
+            driver_id: "oceanbase".to_string(),
+            minimum_version: Some("0.1.12".to_string()),
+        },
+        required_driver_for_config(&external_config("oceanbase"))
+    );
+    assert!(!driver_version_meets_minimum("0.1.11", Some("0.1.12")));
+    assert!(driver_version_meets_minimum("0.1.12", Some("0.1.12")));
+    assert!(driver_version_meets_minimum("0.1.13", Some("0.1.12")));
 }
 
 #[test]
