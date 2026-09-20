@@ -50,6 +50,8 @@ pub struct WorkspaceExplorer {
     worktrees: Vec<WorktreeEntry>,
     last_checkpoint: Option<String>,
     last_turn_review: Option<WorktreeReviewSnapshot>,
+    /// 捕获完成、等待下一帧打开 Review 的 diff。
+    pending_review_open: bool,
     /// 宿主注入的最近工作区根目录，最近在前。
     recent_roots: Vec<PathBuf>,
     changes_expanded: bool,
@@ -125,6 +127,7 @@ impl WorkspaceExplorer {
             worktrees: Vec::new(),
             last_checkpoint: None,
             last_turn_review: None,
+            pending_review_open: false,
             recent_roots: Vec::new(),
             changes_expanded: true,
             files_expanded: true,
@@ -228,6 +231,7 @@ impl WorkspaceExplorer {
                         diff,
                         success,
                     });
+                    this.pending_review_open = true;
                 }
                 cx.notify();
             });
@@ -388,6 +392,9 @@ impl WorkspaceExplorer {
         self.branch_manager = None;
         self.changes.clear();
         self.worktrees.clear();
+        self.last_checkpoint = None;
+        self.last_turn_review = None;
+        self.pending_review_open = false;
         self.ignore_matcher = None;
         self.git_loading = false;
         self.git_refresh_pending = false;

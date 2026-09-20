@@ -161,6 +161,10 @@ WorkspaceExplorer:
       zh-CN: 更改已放弃
       zh-HK: 變更已放棄
   editor:
+    last_turn_tab:
+      en: "Last turn (%{turn})"
+      zh-CN: "上一轮（%{turn}）"
+      zh-HK: "上一輪（%{turn}）"
     diff_tab:
       en: "%{name} (diff)"
       zh-CN: "%{name}（差异）"

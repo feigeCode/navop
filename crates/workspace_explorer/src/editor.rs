@@ -41,6 +41,8 @@ pub enum WorkspaceEditorEvent {
 pub(super) enum DocumentKey {
     File(PathBuf),
     Diff { repository: PathBuf, path: PathBuf },
+    /// 稳定单例 key：同一会话的 last-turn review 复用同一标签页刷新。
+    SnapshotDiff,
 }
 
 impl DocumentKey {
@@ -51,6 +53,7 @@ impl DocumentKey {
                 .join(".git")
                 .join("workspace-explorer-diff")
                 .join(path),
+            Self::SnapshotDiff => PathBuf::from("navop://last-turn-review"),
         }
     }
 
@@ -60,6 +63,7 @@ impl DocumentKey {
             Self::Diff { repository, path } => {
                 format!("{} · {}", repository.display(), path.display())
             }
+            Self::SnapshotDiff => "last-turn".to_string(),
         }
     }
 }
@@ -70,6 +74,8 @@ pub(super) enum LoadRequest {
         repository: GitRepository,
         change: GitChange,
     },
+    /// 已就绪的整轮 diff 文本（如 last-turn checkpoint diff），无需再查 git。
+    SnapshotDiff { text: String },
 }
 
 /// 请求编辑器展示某条 Git 变更的 diff。
@@ -131,6 +137,18 @@ impl LoadedDocument {
             text: diff,
             language: "diff".to_string(),
             diff_language: Some(language),
+            policy: DocumentPolicy::Diff,
+            read_only: true,
+        }
+    }
+
+    /// 整轮快照 diff：多文件不适合双栏对齐，按 diff 语法只读展示。
+    pub(super) fn from_snapshot_diff(diff: String) -> Self {
+        Self {
+            file_size: diff.len(),
+            text: diff,
+            language: "diff".to_string(),
+            diff_language: None,
             policy: DocumentPolicy::Diff,
             read_only: true,
         }
