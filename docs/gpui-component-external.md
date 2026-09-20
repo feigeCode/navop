@@ -5,11 +5,11 @@ workspace. CI, release, and normal development use the fork pinned in the
 workspace manifest:
 
 ```text
-https://github.com/feigeCode/gpui-component.git
+https://github.com/feigeCode/gpui-kit.git
 rev 6df86ef82b4b5f3b04723c0d1cf82ff57cdc7078
 ```
 
-The checkout belongs to `https://github.com/feigeCode/gpui-component` and the
+The checkout belongs to `https://github.com/feigeCode/gpui-kit` and the
 Navop compatibility branch is `navop-gpui-ce`. It is based on the upstream
 `gpui-component` adaptation and pins GPUI to:
 
@@ -47,7 +47,7 @@ script/sync-gpui-component.sh \
 # package versions, shell compatibility constants, examples, docs, and lockfile.
 script/sync-gpui-component.sh \
   --component-dir /path/to/gpui-component \
-  --fetch-source git@github.com:feigeCode/gpui-component.git \
+  --fetch-source git@github.com:feigeCode/gpui-kit.git \
   --push \
   --update-navop
 ```
