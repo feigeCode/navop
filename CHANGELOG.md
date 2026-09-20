@@ -4,6 +4,32 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.18.5] - 2026-09-20
+
+#### 修复与优化
+
+- Windows：修复应用内更新完成后新版本不再出现的问题。替换安装包时，Windows 允许重命名正在运行的 exe，替换会在旧实例仍然存活的情况下就完成，紧接着拉起的新版本发现单实例管道还被旧实例占着，只做一次启动转发便自己退出，用户看到的现象就是「更新完成后应用不再出现」。现在替换完成后会先等待旧实例真正退出（备份文件重新变成可删除即视为已退出）再启动新版本；等待超时或探测失败时不再盲目重启，改为弹出系统提示，请用户结束 Navop 进程后手动启动。
+- Windows：修复主窗口最小化到托盘后，再次启动应用无法把窗口叫回来的问题。转发启动请求时只调用了窗口激活，而托盘隐藏用的是隐藏窗口，不属于系统最小化状态，激活逻辑不会发出任何显示调用；同时恢复路径区分了「被最小化」与「被隐藏」，二次启动后窗口既可见、又保持最大化，不会把最大化的窗口缩回去。
+- AI 助手：修复内置对话中让模型保存连接时整个任务失败的问题。保存连接的工具参数 schema 使用了顶层 `oneOf`，OpenAI 兼容网关会拒绝整个模型请求，而不是只拒绝这一个工具；现在改为扁平的 object schema，并在本地校验阶段提前拦截顶层的组合关键字，报错也会带上具体工具名。
+- 数据库：外部驱动增加最低版本门。此前只判断驱动是否已安装、不校验版本，而 OceanBase 0.1.12 之前的驱动对无符号列返回十进制文本，宿主反序列化直接失败（`invalid type: string "4", expected u64`），整张表都读不出来；现在版本低于要求时同样进入安装/更新引导，提示中带上最低版本号。
+- 终端：左边距的空行不再显示时间戳占位括号和一串孤立行号，改为「这一行有输出才显示时间戳与行号」，两列共用同一个判定。
+- 随带跟进 UI 依赖链：gpui-kit 上游合入到 0.6.4，gpui-pre 快照更新到 `fork-0.3.110`。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.18.5) 下载桌面端安装包
+
+---
+
+#### Fixes and Improvements
+
+- Windows: fixed the new version not coming back after an in-app update. While replacing the package the updater can rename the running executable on Windows, so the replacement completes while the old instance is still alive; the new version started right afterwards found the single-instance pipe still held by that instance, forwarded the startup request once and exited — which looked like "the app disappears after updating". The updater now waits until the previous instance really exits (the backup file becoming deletable is that signal) before starting the new version. When the wait times out or the probe fails it no longer restarts blindly: it shows a system dialog asking the user to end the Navop process and start the app manually.
+- Windows: fixed the main window not being restored when the app is started again after being minimized to the tray. The forwarded startup request only asked the window to activate, while tray hiding uses a hidden window, which is not the minimized state, so no show call was ever issued. The restore path now distinguishes minimized from hidden windows, so the restored window is both visible and still maximized instead of being shrunk back.
+- AI assistant: fixed a whole task failing when the model saved a connection in the built-in chat. The tool parameter schema for saving a connection used a top-level `oneOf`, and OpenAI-compatible gateways reject the entire model request instead of just that tool. It is now a flat object schema, and the local validator rejects top-level composition keywords up front and reports the offending tool.
+- Database: external drivers now have a minimum version gate. Previously only the presence of a driver was checked, not its version, while drivers older than OceanBase 0.1.12 return unsigned columns as decimal text, which made host deserialization fail (`invalid type: string "4", expected u64`) and the whole table unreadable. Drivers below the required version now go through the same install/update guidance, with the minimum version shown in the message.
+- Terminal: blank lines in the left margin no longer show timestamp placeholder brackets and a trail of stray line numbers. A line shows its timestamp and number only once it has output, and both columns share the same check.
+- Bundled UI dependency refresh: gpui-kit upstream merged to 0.6.4, and the gpui-pre snapshot updated to `fork-0.3.110`.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.18.4...v0.18.5
+
 ## [v0.18.4] - 2026-09-19
 
 #### 修复与优化
