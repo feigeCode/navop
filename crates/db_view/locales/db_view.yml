@@ -2626,6 +2626,22 @@ TableDataGrid:
     en: Open table designer
     zh-CN: 打开表设计
     zh-HK: 開啟表設計
+  column_visibility:
+    en: Filter fields
+    zh-CN: 字段过滤
+    zh-HK: 欄位過濾
+  column_visibility_hint:
+    en: Choose fields to display
+    zh-CN: 选择要显示的字段
+    zh-HK: 選擇要顯示的欄位
+  show_all_columns:
+    en: Show all fields
+    zh-CN: 显示全部字段
+    zh-HK: 顯示全部欄位
+  unnamed_column:
+    en: (unnamed field)
+    zh-CN: （未命名字段）
+    zh-HK: （未命名欄位）
   large_text_editor:
     en: Large Text Editor
     zh-CN: 大文本编辑器
