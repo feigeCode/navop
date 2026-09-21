@@ -988,6 +988,7 @@ impl TerminalSidebar {
                         cx.emit(TerminalSidebarEvent::SyncWorkingDir);
                     }
                     WorkspaceExplorerEvent::RootChanged(_) => {}
+                    WorkspaceExplorerEvent::CommitMessageRequested => {}
                 },
             );
             subs.push(explorer_sub);

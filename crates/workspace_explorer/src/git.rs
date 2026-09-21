@@ -634,6 +634,46 @@ pub fn fetch_branches(repository: &GitRepository) -> Result<()> {
     )
 }
 
+/// 为提交信息生成收集变更摘要：numstat + 上下文 diff + untracked 列表（有界）。
+///
+/// 只读操作；输出会交给 LLM，因此限制体量。
+pub fn commit_context(repository: &GitRepository, max_bytes: usize) -> Result<String> {
+    let numstat = git_stdout(&repository.root, &["diff", "--numstat", "HEAD"])?;
+    let mut context = String::from("Changed files (added\tdeleted\tpath):\n");
+    context.push_str(&numstat);
+    let untracked = untracked_files(repository)?;
+    if !untracked.is_empty() {
+        context.push_str("\n\nNew files:\n");
+        for path in &untracked {
+            context.push_str(&format!("- {}\n", path.display()));
+        }
+    }
+    context.push_str("\n\nDiff (unified=3, truncated):\n");
+    let full = git_stdout(&repository.root, &["diff", "HEAD", "--unified=3"])?;
+    let remaining = max_bytes.saturating_sub(context.len());
+    context.push_str(&full[..full.len().min(remaining)]);
+    if context.len() >= max_bytes || full.len() > remaining {
+        context.push_str("\n... (truncated)");
+    }
+    Ok(context)
+}
+
+/// untracked 文件相对路径列表。
+fn untracked_files(repository: &GitRepository) -> Result<Vec<PathBuf>> {
+    let output = run_git(
+        &repository.root,
+        ["ls-files", "--others", "--exclude-standard"],
+    )?;
+    if !output.status.success() {
+        return Err(git_command_error("git ls-files", &output));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(PathBuf::from)
+        .collect())
+}
+
 /// 推送当前分支；无上游时按默认 remote 建立 `-u` 跟踪。
 ///
 /// detached HEAD 直接拒绝，不猜测目标。

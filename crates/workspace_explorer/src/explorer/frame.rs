@@ -16,6 +16,8 @@ pub enum WorkspaceExplorerEvent {
     MoveTo(ExplorerFramePlacement),
     SyncTerminalCwd,
     RootChanged(std::path::PathBuf),
+    /// 请求宿主用已配置的 LLM 生成提交信息（Explorer 不依赖 LLM 层）。
+    CommitMessageRequested,
 }
 
 impl EventEmitter<WorkspaceExplorerEvent> for WorkspaceExplorer {}

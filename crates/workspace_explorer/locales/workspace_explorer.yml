@@ -382,6 +382,18 @@ WorkspaceExplorer:
       en: Changes committed
       zh-CN: 已提交
       zh-HK: 已提交
+    generate:
+      en: AI message
+      zh-CN: AI 生成
+      zh-HK: AI 生成
+    generating:
+      en: Generating…
+      zh-CN: 生成中…
+      zh-HK: 生成中…
+    generate_failed:
+      en: "Could not generate a commit message: %{error}"
+      zh-CN: "生成提交信息失败：%{error}"
+      zh-HK: "產生提交訊息失敗：%{error}"
   push:
     menu:
       en: Push current branch

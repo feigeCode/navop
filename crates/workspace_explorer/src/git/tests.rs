@@ -566,3 +566,25 @@ fn push_current_branch_refuses_without_current_branch() {
 
     assert!(error.to_string().contains("detached"), "{error}");
 }
+
+#[test]
+fn commit_context_lists_changes_untracked_and_bounds_size() {
+    let root = initialized_repository();
+    let repository = discover_repository(&root).unwrap().unwrap();
+    std::fs::write(root.join("main.rs"), "fn main() {}\n// changed\n").unwrap();
+    std::fs::write(root.join("brand_new.rs"), "pub fn new() {}\n").unwrap();
+
+    let context = commit_context(&repository, 4 * 1024).unwrap();
+
+    assert!(context.contains("main.rs"), "{context}");
+    assert!(context.contains("New files:"), "{context}");
+    assert!(context.contains("brand_new.rs"), "{context}");
+    assert!(context.contains("Diff"), "{context}");
+
+    let tiny = commit_context(&repository, 120).unwrap();
+    assert!(
+        tiny.contains("truncated"),
+        "小上限必须截断: {tiny}"
+    );
+    assert!(tiny.len() <= 140);
+}
