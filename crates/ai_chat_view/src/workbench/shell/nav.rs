@@ -19,7 +19,6 @@ use crate::{acp_session_placeholder, acp_session_row, acp_session_section_header
 use super::super::state::WorkbenchPanelKind;
 use crate::theme::AgentChatTheme;
 use super::{HEADER_HEIGHT, WorkbenchShell};
-use super::widgets::seg_button;
 use one_core::layout::TOOLBAR_WIDTH;
 
 impl WorkbenchShell {
@@ -197,20 +196,7 @@ impl WorkbenchShell {
             .on_click(cx.listener(|this, _, _, cx| this.toggle_session_nav(cx)))
         });
 
-        let segments = h_flex()
-            .gap_1()
-            .children(WorkbenchPanelKind::ALL.into_iter().map(|kind| {
-                let active = self.state.active() == kind;
-                seg_button(
-                    kind,
-                    active,
-                    theme,
-                    cx.listener(move |this, _, _, cx| this.set_active(kind, cx)),
-                )
-                .into_any_element()
-            }));
-
-        // 当前工作区常显：工作台的核心上下文，切换入口在文件面板的工作区菜单。
+        // 当前工作区常显且可点击切换：这是新建对话选择上下文的主入口。
         let workspace = self.workspace_root.as_ref().map(|root| {
             let name = root
                 .file_name()
@@ -218,9 +204,21 @@ impl WorkbenchShell {
                 .unwrap_or_else(|| root.display().to_string());
             let path = root.display().to_string();
             h_flex()
+                .id("workbench-workspace-button")
                 .min_w_0()
                 .items_center()
                 .gap_1()
+                .px_2()
+                .py_1()
+                .rounded_md()
+                .cursor_pointer()
+                .hover(|style| style.bg(theme.panel_hover))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    if let Some(picker) = this.workspace_picker.take() {
+                        (picker)(window, cx);
+                        this.workspace_picker = Some(picker);
+                    }
+                }))
                 .child(
                     Icon::new(IconName::FolderOpen)
                         .xsmall()
@@ -237,6 +235,7 @@ impl WorkbenchShell {
                     div()
                         .min_w_0()
                         .truncate()
+                        .max_w(px(260.0))
                         .text_xs()
                         .text_color(theme.muted_foreground)
                         .child(path),
@@ -252,7 +251,6 @@ impl WorkbenchShell {
             .border_b_1()
             .border_color(theme.border)
             .when_some(nav_toggle, |this, toggle| this.child(toggle))
-            .child(segments)
             .child(div().flex_1())
             .when_some(workspace, |this, workspace| this.child(workspace))
     }
@@ -272,7 +270,12 @@ impl WorkbenchShell {
             .border_l_1()
             .border_color(theme.border)
             .bg(theme.background)
-            .children(WorkbenchPanelKind::ALL.into_iter().map(|kind| {
+            // 中心区固定是对话；其余面板只作为侧边 dock，从 rail 开关。
+            .children(
+                WorkbenchPanelKind::ALL
+                    .into_iter()
+                    .filter(|kind| *kind != WorkbenchPanelKind::Chat)
+                    .map(|kind| {
                 let open = self.state.is_panel_open(kind);
                 IconButton::new(
                     SharedString::from(format!("workbench-rail-{}", kind.id())),
@@ -287,11 +290,13 @@ impl WorkbenchShell {
                 })
                 .on_click(cx.listener(move |this, _, _, cx| this.toggle_dock_panel(kind, cx)))
                 .into_any_element()
-            }))
+                    }),
+            )
     }
 
     pub(super) fn render_content(&self, theme: &AgentChatTheme) -> gpui::AnyElement {
-        match self.panels.get(&self.state.active()) {
+        // 中心区只有对话；Review/文件/终端经侧边 dock 展示。
+        match self.panels.get(&WorkbenchPanelKind::Chat) {
             Some(view) => div()
                 .debug_selector(|| "workbench-content".to_string())
                 .flex_1()

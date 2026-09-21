@@ -167,7 +167,7 @@ pub use turn::{
 };
 pub use workbench::{
     WorkbenchDockLayout, WorkbenchPanelEntry, WorkbenchPanelKind, WorkbenchShell,
-    WorkbenchShellConfig, WorkbenchShellEvent, WorkbenchState, dock_region_width,
+    WorkbenchShellConfig, WorkbenchState, dock_region_width,
 };
 
 /// 初始化 `ai_chat_view`:确保全局卡片注册表存在。

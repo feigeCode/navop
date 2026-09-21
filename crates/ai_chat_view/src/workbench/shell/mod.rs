@@ -55,12 +55,6 @@ pub struct WorkbenchShellConfig {
     pub workspace_root: Option<std::path::PathBuf>,
 }
 
-/// 外壳对外事件：面板内请求“在内容区打开某个标签”。
-#[derive(Clone, Copy, Debug)]
-pub enum WorkbenchShellEvent {
-    RequestOpenTab(WorkbenchPanelKind),
-}
-
 pub struct WorkbenchShell {
     pub(super) state: WorkbenchState,
     pub(super) panels: HashMap<WorkbenchPanelKind, AnyView>,
@@ -71,6 +65,8 @@ pub struct WorkbenchShell {
     pub(super) focus_handle: FocusHandle,
     /// 当前工作区根目录；`None` 表示宿主未提供。
     pub(super) workspace_root: Option<std::path::PathBuf>,
+    /// 宿主注入的工作区选择动作（弹目录选择器并切换根）。
+    pub(super) workspace_picker: Option<Box<dyn Fn(&mut gpui::Window, &mut gpui::App) + 'static>>,
     pub(super) _subscriptions: Vec<Subscription>,
 }
 
@@ -106,6 +102,7 @@ impl WorkbenchShell {
             tab_closeable: true,
             focus_handle: cx.focus_handle(),
             workspace_root,
+            workspace_picker: None,
             _subscriptions: subscriptions,
         }
     }
@@ -116,6 +113,16 @@ impl WorkbenchShell {
             return;
         }
         self.workspace_root = Some(root);
+        cx.notify();
+    }
+
+    /// 注入「选择工作区」动作；点击顶部工作区标签时触发。
+    pub fn set_workspace_picker(
+        &mut self,
+        picker: impl Fn(&mut gpui::Window, &mut gpui::App) + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        self.workspace_picker = Some(Box::new(picker));
         cx.notify();
     }
 
@@ -150,13 +157,6 @@ impl WorkbenchShell {
     pub fn set_panel(&mut self, kind: WorkbenchPanelKind, view: AnyView, cx: &mut Context<Self>) {
         self.panels.insert(kind, view);
         cx.notify();
-    }
-
-    pub fn set_active(&mut self, kind: WorkbenchPanelKind, cx: &mut Context<Self>) {
-        if self.has_panel(kind) {
-            self.state.set_active(kind);
-            cx.notify();
-        }
     }
 
     pub fn toggle_session_nav(&mut self, cx: &mut Context<Self>) {
