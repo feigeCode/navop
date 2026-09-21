@@ -1,5 +1,6 @@
 mod column;
 mod delegate;
+pub mod find;
 pub mod filter_panel;
 mod filter_state;
 pub(crate) mod loading;
@@ -16,10 +17,11 @@ pub use column::{Column, ColumnFixed, ColumnSort};
 pub use delegate::{CellEditor, EditTableDelegate};
 pub use filter_panel::{FilterValue, FilterValueKey};
 pub use filter_state::FilterState;
+pub use find::{FindMatch, FindOutcome, SearchPanel, SearchPanelEvent};
 pub use selection::{CellCoord, CellRange, TableSelection};
 use state::{
-    Cancel, Copy, Paste, SelectAll, SelectDown, SelectFirst, SelectLast, SelectPageDown,
-    SelectPageUp, SelectUp,
+    Cancel, Copy, Find, FindNext, FindPrevious, Paste, SelectAll, SelectDown, SelectFirst,
+    SelectLast, SelectPageDown, SelectPageUp, SelectUp,
 };
 pub use state::{EditTableEvent, EditTableState, TableVisibleRange};
 
@@ -42,6 +44,9 @@ pub struct TableKeybindings {
     copy: Vec<String>,
     paste: Vec<String>,
     select_all: Vec<String>,
+    find: Vec<String>,
+    find_next: Vec<String>,
+    find_previous: Vec<String>,
 }
 
 impl TableKeybindings {
@@ -51,23 +56,56 @@ impl TableKeybindings {
         paste: Vec<String>,
         select_all: Vec<String>,
     ) -> Self {
+        let defaults = Self::default();
         Self {
             cancel,
             copy,
             paste,
             select_all,
+            ..defaults
         }
+    }
+
+    /// 覆盖表格查找键位（Cmd/Ctrl+F、Cmd/Ctrl+G、Cmd/Ctrl+Shift+G）。
+    pub fn with_find(
+        mut self,
+        find: Vec<String>,
+        find_next: Vec<String>,
+        find_previous: Vec<String>,
+    ) -> Self {
+        self.find = find;
+        self.find_next = find_next;
+        self.find_previous = find_previous;
+        self
+    }
+
+    /// 打开查找的键位（供设置页与契约测试共用默认值来源）。
+    pub fn find_shortcuts(&self) -> Vec<String> {
+        self.find.clone()
+    }
+
+    /// 跳到下一个命中的键位。
+    pub fn find_next_shortcuts(&self) -> Vec<String> {
+        self.find_next.clone()
+    }
+
+    /// 跳到上一个命中的键位。
+    pub fn find_previous_shortcuts(&self) -> Vec<String> {
+        self.find_previous.clone()
     }
 }
 
 impl Default for TableKeybindings {
     fn default() -> Self {
-        Self::new(
-            vec!["escape".to_string()],
-            vec![table_platform_shortcut("cmd-c", "ctrl-c").to_string()],
-            vec![table_platform_shortcut("cmd-v", "ctrl-v").to_string()],
-            vec![table_platform_shortcut("cmd-a", "ctrl-a").to_string()],
-        )
+        Self {
+            cancel: vec!["escape".to_string()],
+            copy: vec![table_platform_shortcut("cmd-c", "ctrl-c").to_string()],
+            paste: vec![table_platform_shortcut("cmd-v", "ctrl-v").to_string()],
+            select_all: vec![table_platform_shortcut("cmd-a", "ctrl-a").to_string()],
+            find: vec![table_platform_shortcut("cmd-f", "ctrl-f").to_string()],
+            find_next: vec![table_platform_shortcut("cmd-g", "ctrl-g").to_string()],
+            find_previous: vec![table_platform_shortcut("cmd-shift-g", "ctrl-shift-g").to_string()],
+        }
     }
 }
 
@@ -111,6 +149,24 @@ fn init_keybindings(bindings: &TableKeybindings) -> Vec<KeyBinding> {
         KeyBinding::new("tab", SelectNextColumn, Some(CONTEXT)),
         KeyBinding::new("shift-tab", SelectPrevColumn, Some(CONTEXT)),
     ]);
+    keybindings.extend(
+        bindings
+            .find
+            .iter()
+            .map(|key| KeyBinding::new(key, Find, Some(CONTEXT))),
+    );
+    keybindings.extend(
+        bindings
+            .find_next
+            .iter()
+            .map(|key| KeyBinding::new(key, FindNext, Some(CONTEXT))),
+    );
+    keybindings.extend(
+        bindings
+            .find_previous
+            .iter()
+            .map(|key| KeyBinding::new(key, FindPrevious, Some(CONTEXT))),
+    );
     keybindings
 }
 
@@ -143,6 +199,27 @@ fn refreshable_keybindings(cx: &App, bindings: &TableKeybindings) -> Vec<KeyBind
         &bindings.select_all,
         Some(CONTEXT),
         SelectAll,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        &[table_platform_shortcut("cmd-f", "ctrl-f")],
+        &bindings.find,
+        Some(CONTEXT),
+        Find,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        &[table_platform_shortcut("cmd-g", "ctrl-g")],
+        &bindings.find_next,
+        Some(CONTEXT),
+        FindNext,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        &[table_platform_shortcut("cmd-shift-g", "ctrl-shift-g")],
+        &bindings.find_previous,
+        Some(CONTEXT),
+        FindPrevious,
     ));
     keybindings
 }

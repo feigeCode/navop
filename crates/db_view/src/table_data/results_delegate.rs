@@ -3077,6 +3077,20 @@ impl EditTableDelegate for EditorTableDelegate {
         true
     }
 
+    fn find_in_table_enabled(&self, _cx: &App) -> bool {
+        true
+    }
+
+    /// 二进制列画的是「大小描述」而不是原始字节，查找必须命中同一段
+    /// 文本，否则用户在界面上看到的和搜到的会对不上。
+    fn find_cell_text(&self, row_ix: usize, col_ix: usize, cx: &App) -> Option<String> {
+        let actual_row = self.map_display_to_actual_row(row_ix);
+        if let Some(bytes) = self.current_binary_arc(actual_row, col_ix) {
+            return Some(t!("TableData.binary_value", size = bytes.len()).to_string());
+        }
+        self.get_optional_cell_value(row_ix, col_ix, cx)
+    }
+
     fn get_cell_value(&self, row_ix: usize, col_ix: usize, _cx: &App) -> String {
         // Map display row index to actual row index
         let actual_row = self.map_display_to_actual_row(row_ix);
