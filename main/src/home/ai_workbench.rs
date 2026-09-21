@@ -173,6 +173,19 @@ pub(crate) fn build_ai_workbench_shell(
     shell.update(cx, |shell, cx| shell.add_subscription(turn_subscription, cx));
     shell.update(cx, |shell, cx| shell.add_subscription(root_subscription, cx));
 
+    // 顶部工作区标签点击 → 打开目录选择器（复用 Explorer 的最近列表与广播）。
+    let explorer_for_picker = explorer.clone();
+    shell.update(cx, |shell, cx| {
+        shell.set_workspace_picker(
+            move |window: &mut gpui::Window, cx: &mut gpui::App| {
+                explorer_for_picker.update(cx, |explorer, cx| {
+                    explorer.choose_root(window, cx);
+                });
+            },
+            cx,
+        );
+    });
+
     // AI 提交信息：Explorer 发请求，这里取已配置 provider 生成后回填。
     let explorer_for_message = explorer.clone();
     let commit_message_subscription: Subscription = cx.subscribe(
