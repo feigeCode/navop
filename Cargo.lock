@@ -11740,13 +11740,17 @@ name = "remote_file_editor"
 version = "0.15.2"
 dependencies = [
  "anyhow",
+ "async-trait",
  "extension-runtime",
  "futures",
  "gpui-component",
  "gpui-pre",
  "notify",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
  "one-core",
  "process-util",
+ "raw-window-handle",
  "rust-i18n",
  "sftp",
  "smol",
