@@ -369,6 +369,19 @@ WorkspaceExplorer:
       en: Recent workspaces
       zh-CN: 最近工作区
       zh-HK: 最近工作區
+  commit:
+    menu:
+      en: Commit all changes…
+      zh-CN: 提交全部变更…
+      zh-HK: 提交全部變更…
+    placeholder:
+      en: Commit message
+      zh-CN: 提交信息
+      zh-HK: 提交訊息
+    committed:
+      en: Changes committed
+      zh-CN: 已提交
+      zh-HK: 已提交
   worktree:
     create:
       en: Create isolated worktree

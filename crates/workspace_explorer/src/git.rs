@@ -277,6 +277,37 @@ pub fn diff_snapshots(repository: &GitRepository, before: &str, after: &str) -> 
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+/// 提交全部变更（含 untracked）。
+///
+/// 走用户真实 index：`add -A` 后 `git commit`。与快照路径不同——checkpoint 是
+/// dangling commit 不动分支；这里必须真正推进分支，绕过 index 直接 update-ref
+/// 会让真实 index 与新 HEAD 脱节（staged 状态错乱、出现假删除）。
+pub fn commit_all(repository: &GitRepository, message: &str) -> Result<()> {
+    let message = message.trim();
+    if message.is_empty() {
+        return Err(anyhow!("Commit message cannot be empty"));
+    }
+    run_git_operation(
+        repository,
+        "git add -A",
+        vec![
+            "add".to_string(),
+            "-A".to_string(),
+            "--".to_string(),
+            ".".to_string(),
+        ],
+    )?;
+    run_git_operation(
+        repository,
+        "git commit",
+        vec![
+            "commit".to_string(),
+            "-m".to_string(),
+            message.to_string(),
+        ],
+    )
+}
+
 fn run_git_with_index(cwd: &Path, index: &Path, args: &[&str]) -> Result<()> {
     let output = git_command(cwd, args).env("GIT_INDEX_FILE", index).output()?;
     if output.status.success() {

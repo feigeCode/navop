@@ -271,15 +271,26 @@ fn build_workspace_menu(
         }
     }
 
+    let commit_view = view.clone();
     let create_view = view.clone();
-    menu = menu.separator().item(
-        PopupMenuItem::new(t!("WorkspaceExplorer.worktree.create").to_string())
-            .icon(IconName::GitBranch)
-            .disabled(!has_repository)
-            .on_click(move |_, _, cx| {
-                create_view.update(cx, |this, cx| this.create_worktree(cx));
-            }),
-    );
+    menu = menu
+        .separator()
+        .item(
+            PopupMenuItem::new(t!("WorkspaceExplorer.commit.menu").to_string())
+                .icon(IconName::Upload)
+                .disabled(!has_repository)
+                .on_click(move |_, window, cx| {
+                    commit_view.update(cx, |this, cx| this.prompt_commit(window, cx));
+                }),
+        )
+        .item(
+            PopupMenuItem::new(t!("WorkspaceExplorer.worktree.create").to_string())
+                .icon(IconName::GitBranch)
+                .disabled(!has_repository)
+                .on_click(move |_, _, cx| {
+                    create_view.update(cx, |this, cx| this.create_worktree(cx));
+                }),
+        );
 
     let linked: Vec<&crate::git::WorktreeEntry> = worktrees
         .iter()
