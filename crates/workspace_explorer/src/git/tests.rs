@@ -498,3 +498,34 @@ fn commit_all_rejects_blank_messages() {
 
     assert!(error.to_string().contains("empty"), "{error}");
 }
+
+#[test]
+fn checkpoints_survive_restart_via_anchored_refs() {
+    let root = initialized_repository();
+    let repository = discover_repository(&root).unwrap().unwrap();
+    std::fs::write(root.join("turn1.txt"), "one\n").unwrap();
+
+    let snapshot = capture_worktree_snapshot(&repository).unwrap();
+    anchor_checkpoint(&repository, &snapshot).unwrap();
+
+    // "重启"：只从仓库 ref 恢复，不再依赖内存值。
+    let restored = anchored_checkpoint(&repository)
+        .unwrap()
+        .expect("checkpoint should survive via ref");
+    assert_eq!(snapshot, restored);
+
+    // ref 不占分支名空间。
+    let branches = run_git_stdout(&root, &["branch", "--list"]);
+    assert!(
+        !branches.contains("navop/checkpoints"),
+        "checkpoint ref 不应出现在分支列表: {branches}"
+    );
+}
+
+#[test]
+fn anchored_checkpoint_is_none_before_first_capture() {
+    let root = initialized_repository();
+    let repository = discover_repository(&root).unwrap().unwrap();
+
+    assert_eq!(None, anchored_checkpoint(&repository).unwrap());
+}

@@ -1,6 +1,7 @@
 use crate::backend::WorkspaceBackend;
 use crate::git::{
-    GitChange, GitRepository, WorktreeEntry, discover_repository, list_worktrees, load_changes,
+    GitChange, GitRepository, WorktreeEntry, anchored_checkpoint, discover_repository,
+    list_worktrees, load_changes,
 };
 use crate::model::ExplorerEntry;
 use anyhow::Result;
@@ -15,6 +16,8 @@ pub(super) struct WorkspaceSnapshot {
     pub(super) changes: Vec<GitChange>,
     /// 仓库已注册的 worktree；非 Git 后端为空。
     pub(super) worktrees: Vec<WorktreeEntry>,
+    /// 上次锚定的 checkpoint（重启恢复的 last-turn 基线）。
+    pub(super) anchored_checkpoint: Option<String>,
     pub(super) ignore_matcher: Option<Arc<Gitignore>>,
 }
 
@@ -52,12 +55,18 @@ pub(super) fn load_workspace(
         .map(list_worktrees)
         .transpose()?
         .unwrap_or_default();
+    let anchored_checkpoint = repository
+        .as_ref()
+        .map(anchored_checkpoint)
+        .transpose()?
+        .unwrap_or_default();
     Ok(WorkspaceSnapshot {
         root,
         entries,
         repository,
         changes,
         worktrees,
+        anchored_checkpoint,
         ignore_matcher,
     })
 }
