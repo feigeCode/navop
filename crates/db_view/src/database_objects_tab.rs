@@ -423,7 +423,13 @@ impl DatabaseObjects {
         }
 
         let node = nodes[0].clone();
-        if matches!(node.node_type, DbNodeType::Table | DbNodeType::View) {
+        if matches!(
+            node.node_type,
+            DbNodeType::Table
+                | DbNodeType::ForeignTable
+                | DbNodeType::View
+                | DbNodeType::MaterializedView
+        ) {
             cx.emit(DatabaseObjectsEvent::CreateNewQuery { node });
         }
     }
@@ -540,8 +546,12 @@ impl DatabaseObjects {
         supports_action: impl Fn(DatabaseActionId) -> bool,
     ) -> Option<DatabaseObjectsEvent> {
         Some(match node.node_type {
-            DbNodeType::Table => DatabaseObjectsEvent::OpenTableData { node },
-            DbNodeType::View => DatabaseObjectsEvent::OpenViewData { node },
+            DbNodeType::Table | DbNodeType::ForeignTable => {
+                DatabaseObjectsEvent::OpenTableData { node }
+            }
+            DbNodeType::View | DbNodeType::MaterializedView => {
+                DatabaseObjectsEvent::OpenViewData { node }
+            }
             DbNodeType::Function if supports_action(DatabaseActionId::OpenFunction) => {
                 DatabaseObjectsEvent::OpenFunction { node }
             }
@@ -570,8 +580,11 @@ impl DatabaseObjects {
             | DbNodeType::Schema
             | DbNodeType::TablesFolder
             | DbNodeType::Table
+            | DbNodeType::ForeignTable
             | DbNodeType::ViewsFolder
             | DbNodeType::View
+            | DbNodeType::MaterializedViewsFolder
+            | DbNodeType::MaterializedView
             | DbNodeType::FunctionsFolder
             | DbNodeType::Function
             | DbNodeType::ProceduresFolder
@@ -886,7 +899,7 @@ impl DatabaseObjects {
                     )
                 }
             }
-            DbNodeType::TablesFolder | DbNodeType::Table => {
+            DbNodeType::TablesFolder | DbNodeType::Table | DbNodeType::ForeignTable => {
                 let schema = current_node.get_schema_name();
                 metadata.insert("database".to_string(), database.clone());
                 if let Some(schema) = schema.as_ref().filter(|schema| !schema.trim().is_empty()) {
@@ -908,7 +921,7 @@ impl DatabaseObjects {
                 } else {
                     format!("{}:table_folder:{}", current_node.id, name)
                 };
-                (node_id, DbNodeType::Table)
+                (node_id, Self::table_row_node_type(columns, row_data))
             }
             DbNodeType::Schema => {
                 if current_node.node_type == DbNodeType::Connection {
@@ -937,23 +950,43 @@ impl DatabaseObjects {
                     metadata.insert("table".to_string(), name.clone());
                     (
                         format!("{}:{}:{}:table_folder:{}", connection_id, db, schema, name),
-                        DbNodeType::Table,
+                        Self::table_row_node_type(columns, row_data),
                     )
                 }
             }
-            DbNodeType::ViewsFolder | DbNodeType::View => {
+            DbNodeType::ViewsFolder
+            | DbNodeType::View
+            | DbNodeType::MaterializedViewsFolder
+            | DbNodeType::MaterializedView => {
+                let is_materialized = matches!(
+                    db_node_type,
+                    DbNodeType::MaterializedViewsFolder | DbNodeType::MaterializedView
+                );
                 let schema = current_node.get_schema_name();
                 metadata.insert("database".to_string(), database.clone());
                 if let Some(schema) = schema.as_ref().filter(|schema| !schema.trim().is_empty()) {
                     metadata.insert("schema".to_string(), schema.clone());
                 }
+                let folder_key = if is_materialized {
+                    "matviews_folder"
+                } else {
+                    "views_folder"
+                };
                 metadata.insert("view".to_string(), name.clone());
-                let node_id = if current_node.node_type == DbNodeType::ViewsFolder {
+                let node_id = if matches!(
+                    current_node.node_type,
+                    DbNodeType::ViewsFolder | DbNodeType::MaterializedViewsFolder
+                ) {
                     format!("{}:{}", current_node.id, name)
                 } else {
-                    format!("{}:views_folder:{}", current_node.id, name)
+                    format!("{}:{}:{}", current_node.id, folder_key, name)
                 };
-                (node_id, DbNodeType::View)
+                let node_type = if is_materialized {
+                    DbNodeType::MaterializedView
+                } else {
+                    DbNodeType::View
+                };
+                (node_id, node_type)
             }
             DbNodeType::FunctionsFolder | DbNodeType::Function => {
                 let schema = current_node.get_schema_name();
@@ -1060,6 +1093,17 @@ impl DatabaseObjects {
             .iter()
             .position(|column| column.key.as_ref().eq_ignore_ascii_case(key))?;
         row_data.get(index).cloned()
+    }
+
+    /// 「表」目录对象行的真实节点类型。
+    ///
+    /// 外部表与普通表共用同一个列表，必须靠类型列区分，否则右键菜单与
+    /// 删除/重命名会按普通表生成 DDL。
+    fn table_row_node_type(columns: &[Column], row_data: &[String]) -> DbNodeType {
+        match Self::row_value_for_column(columns, row_data, "type").as_deref() {
+            Some("Foreign Table") => DbNodeType::ForeignTable,
+            _ => DbNodeType::Table,
+        }
     }
 
     fn build_nodes_for_selected_rows(&self) -> Vec<DbNode> {
@@ -2424,6 +2468,93 @@ mod tests {
             DatabaseType::Oracle,
         )
         .with_metadata(HashMap::from([("database".to_string(), String::new())]))
+    }
+
+    fn postgres_tables_folder_node() -> DbNode {
+        DbNode::new(
+            "1:app:public:table_folder",
+            "DbTree.Tables",
+            DbNodeType::TablesFolder,
+            "1".to_string(),
+            DatabaseType::PostgreSQL,
+        )
+        .with_metadata(HashMap::from([
+            ("database".to_string(), "app".to_string()),
+            ("schema".to_string(), "public".to_string()),
+        ]))
+    }
+
+    fn object_columns_with_type() -> Vec<Column> {
+        vec![Column::new("name", "Name"), Column::new("type", "Type")]
+    }
+
+    #[test]
+    fn postgres_foreign_table_row_builds_foreign_table_node() {
+        let columns = object_columns_with_type();
+        let row = vec!["remote_orders".to_string(), "Foreign Table".to_string()];
+
+        let node = DatabaseObjects::build_node_from_object_row(
+            DbNodeType::Table,
+            Some(&postgres_tables_folder_node()),
+            &columns,
+            &row,
+        )
+        .expect("foreign table row should produce a node");
+
+        // 外部表与普通表同在「表」目录，但节点类型必须区分，
+        // 否则右键菜单与删除/重命名会按普通表生成 DDL。
+        assert_eq!(DbNodeType::ForeignTable, node.node_type);
+        assert_eq!("1:app:public:table_folder:remote_orders", node.id);
+        assert_eq!(
+            Some("remote_orders"),
+            node.metadata.get("table").map(String::as_str)
+        );
+    }
+
+    #[test]
+    fn postgres_regular_table_row_stays_table_node() {
+        let columns = object_columns_with_type();
+        let row = vec!["users".to_string(), "Table".to_string()];
+
+        let node = DatabaseObjects::build_node_from_object_row(
+            DbNodeType::Table,
+            Some(&postgres_tables_folder_node()),
+            &columns,
+            &row,
+        )
+        .expect("table row should produce a node");
+
+        assert_eq!(DbNodeType::Table, node.node_type);
+        assert_eq!("1:app:public:table_folder:users", node.id);
+    }
+
+    #[test]
+    fn postgres_matviews_folder_row_builds_materialized_view_node() {
+        let current_node = DbNode::new(
+            "1:app:public:matviews_folder",
+            "DbTree.MaterializedViews",
+            DbNodeType::MaterializedViewsFolder,
+            "1".to_string(),
+            DatabaseType::PostgreSQL,
+        )
+        .with_metadata(HashMap::from([
+            ("database".to_string(), "app".to_string()),
+            ("schema".to_string(), "public".to_string()),
+        ]));
+        let columns = vec![Column::new("name", "Name")];
+        let row = vec!["mv_orders".to_string()];
+
+        let node = DatabaseObjects::build_node_from_object_row(
+            DbNodeType::MaterializedViewsFolder,
+            Some(&current_node),
+            &columns,
+            &row,
+        )
+        .expect("materialized view row should produce a node");
+
+        assert_eq!(DbNodeType::MaterializedView, node.node_type);
+        // 与树中 build_materialized_views_folder 生成的 id 保持一致。
+        assert_eq!("1:app:public:matviews_folder:mv_orders", node.id);
     }
 
     #[test]

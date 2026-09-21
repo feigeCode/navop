@@ -643,6 +643,8 @@ async fn fetch_foreign_schema_metadata(
                 object_type: match table.object_type {
                     TableObjectType::Table => SqlObjectType::Table,
                     TableObjectType::View => SqlObjectType::View,
+                    // 外部表参与 SQL 补全时按表处理，避免从候选中消失。
+                    TableObjectType::ForeignTable => SqlObjectType::Table,
                 },
                 schema: table.schema.clone(),
                 comment: table.comment.clone(),
@@ -3010,6 +3012,8 @@ impl SqlEditorTab {
                     object_type: match table.object_type {
                         TableObjectType::Table => SqlObjectType::Table,
                         TableObjectType::View => SqlObjectType::View,
+                        // 外部表参与 SQL 补全时按表处理，避免从候选中消失。
+                        TableObjectType::ForeignTable => SqlObjectType::Table,
                     },
                     schema: table.schema.clone(),
                     comment: table.comment.clone(),

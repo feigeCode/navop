@@ -20,7 +20,7 @@ use crate::runtime_contract::require_tokio_runtime;
 use crate::sqlite::SqlitePlugin;
 use crate::{
     DbNode, DbNodeType, ExecOptions, SqlErrorInfo, SqlResult, SqlSource, TableDesign,
-    TableSaveResponse,
+    TableObjectType, TableSaveResponse,
 };
 use dashmap::DashMap;
 use gpui::{AppContext, AsyncApp, Global, Task};
@@ -1613,11 +1613,39 @@ impl GlobalDbState {
         schema: Option<String>,
         table_name: String,
     ) -> anyhow::Result<SqlResult> {
+        self.drop_table_like(
+            cx,
+            config_id,
+            database,
+            schema,
+            table_name,
+            TableObjectType::Table,
+        )
+        .await
+    }
+
+    /// 删除「表」目录下的对象。
+    ///
+    /// 外部表必须使用 `DROP FOREIGN TABLE`，否则 PostgreSQL 会拒绝执行。
+    pub async fn drop_table_like(
+        &self,
+        cx: &mut AsyncApp,
+        config_id: String,
+        database: String,
+        schema: Option<String>,
+        table_name: String,
+        object_type: TableObjectType,
+    ) -> anyhow::Result<SqlResult> {
         let mut config = self
             .get_config(&config_id)
             .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", config_id))?;
         let plugin = self.get_plugin(&config.database_type)?;
-        let sql = plugin.drop_table(&database, schema.as_deref(), &table_name);
+        let sql = match object_type {
+            TableObjectType::ForeignTable => {
+                plugin.drop_foreign_table(&database, schema.as_deref(), &table_name)
+            }
+            _ => plugin.drop_table(&database, schema.as_deref(), &table_name),
+        };
 
         // For non-Oracle databases, modify config.database to switch database
         if config.database_type != DatabaseType::Oracle {
@@ -1679,11 +1707,63 @@ impl GlobalDbState {
         old_name: String,
         new_name: String,
     ) -> anyhow::Result<SqlResult> {
+        self.rename_table_like(
+            cx,
+            config_id,
+            database,
+            None,
+            old_name,
+            new_name,
+            TableObjectType::Table,
+        )
+        .await
+    }
+
+    /// 重命名「表」目录下的对象（外部表需 `ALTER FOREIGN TABLE`）。
+    pub async fn rename_table_like(
+        &self,
+        cx: &mut AsyncApp,
+        config_id: String,
+        database: String,
+        schema: Option<String>,
+        old_name: String,
+        new_name: String,
+        object_type: TableObjectType,
+    ) -> anyhow::Result<SqlResult> {
         let mut config = self
             .get_config(&config_id)
             .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", config_id))?;
         let plugin = self.get_plugin(&config.database_type)?;
-        let sql = plugin.rename_table(&database, &old_name, &new_name);
+        let sql = match object_type {
+            TableObjectType::ForeignTable => {
+                plugin.rename_foreign_table(&database, schema.as_deref(), &old_name, &new_name)
+            }
+            _ => plugin.rename_table(&database, &old_name, &new_name),
+        };
+
+        if config.database_type != DatabaseType::Oracle {
+            config.database = Some(database);
+        }
+
+        let result = self.execute_with_session(cx, config, sql, None).await?;
+
+        Self::wrapper_operation_result(result)
+    }
+
+    /// 删除物化视图（`DROP MATERIALIZED VIEW`）。
+    pub async fn drop_materialized_view(
+        &self,
+        cx: &mut AsyncApp,
+        config_id: String,
+        database: String,
+        schema: Option<String>,
+        view_name: String,
+    ) -> anyhow::Result<SqlResult> {
+        let mut config = self
+            .get_config(&config_id)
+            .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", config_id))?;
+        let plugin = self.get_plugin(&config.database_type)?;
+        let sql = plugin.drop_materialized_view(&database, schema.as_deref(), &view_name);
 
         if config.database_type != DatabaseType::Oracle {
             config.database = Some(database);
@@ -3049,6 +3129,21 @@ impl GlobalDbState {
         })
     }
 
+    /// List materialized views（仅 PostgreSQL 等支持物化视图的数据库）
+    pub async fn list_materialized_views_view(
+        &self,
+        cx: &mut AsyncApp,
+        connection_id: String,
+        database: String,
+        schema: Option<String>,
+    ) -> anyhow::Result<crate::types::ObjectView> {
+        with_plugin_session_db!(self, cx, connection_id, database.clone(), |plugin, conn| {
+            plugin
+                .list_materialized_views_view(&*conn, &database, schema)
+                .await
+        })
+    }
+
     /// List functions view
     pub async fn list_functions_view(
         &self,
@@ -3305,11 +3400,17 @@ impl GlobalDbState {
                         .list_tables_view(&*conn, &database, schema)
                         .await
                         .ok(),
-                    DbNodeType::Table | DbNodeType::ColumnsFolder => plugin
-                        .list_columns_view(&*conn, &database, schema, &table)
+                    DbNodeType::Table | DbNodeType::ForeignTable | DbNodeType::ColumnsFolder => {
+                        plugin
+                            .list_columns_view(&*conn, &database, schema, &table)
+                            .await
+                            .ok()
+                    }
+                    DbNodeType::ViewsFolder => plugin.list_views_view(&*conn, &database).await.ok(),
+                    DbNodeType::MaterializedViewsFolder => plugin
+                        .list_materialized_views_view(&*conn, &database, schema)
                         .await
                         .ok(),
-                    DbNodeType::ViewsFolder => plugin.list_views_view(&*conn, &database).await.ok(),
                     DbNodeType::FunctionsFolder => plugin
                         .list_functions_view_in_schema(&*conn, &database, schema)
                         .await

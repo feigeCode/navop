@@ -507,7 +507,10 @@ pub fn get_icon_for_node_type(node_type: &DbNodeType, _theme: &gpui_component::T
         DbNodeType::Schema => object_icon(IconName::Schema),
         DbNodeType::Database => object_icon(IconName::Database),
         DbNodeType::Table => object_icon(IconName::Table),
+        // 外部表沿用普通表图标（Navicat 中同样归在「表」目录）
+        DbNodeType::ForeignTable => object_icon(IconName::Table),
         DbNodeType::View => object_icon(IconName::View),
+        DbNodeType::MaterializedView => object_icon(IconName::View),
         DbNodeType::Function => object_icon(IconName::Function),
         DbNodeType::Procedure => object_icon(IconName::Procedure),
         DbNodeType::Column => object_icon(IconName::Column),
@@ -594,7 +597,13 @@ impl DbTreeView {
         let Some(node) = self.db_nodes.get(&node_id) else {
             return;
         };
-        if matches!(node.node_type, DbNodeType::Table | DbNodeType::View) {
+        if matches!(
+            node.node_type,
+            DbNodeType::Table
+                | DbNodeType::ForeignTable
+                | DbNodeType::View
+                | DbNodeType::MaterializedView
+        ) {
             cx.emit(DbTreeViewEvent::CreateNewQuery { node_id });
         }
     }
@@ -1497,7 +1506,9 @@ impl DbTreeView {
             .db_nodes
             .get(&node_id)
             .and_then(|node| match node.node_type {
-                DbNodeType::View | DbNodeType::Function => node.parent_context.clone(),
+                DbNodeType::View | DbNodeType::MaterializedView | DbNodeType::Function => {
+                    node.parent_context.clone()
+                }
                 _ => None,
             })
             .unwrap_or_else(|| node_id.clone());
@@ -1944,8 +1955,10 @@ impl DbTreeView {
                 return matches!(
                     node.node_type,
                     DbNodeType::Table
+                        | DbNodeType::ForeignTable
                         | DbNodeType::TablesFolder
                         | DbNodeType::ViewsFolder
+                        | DbNodeType::MaterializedViewsFolder
                         | DbNodeType::ColumnsFolder
                         | DbNodeType::IndexesFolder
                         | DbNodeType::FunctionsFolder
@@ -2080,7 +2093,10 @@ impl DbTreeView {
             Some(DbNodeType::SequencesFolder) => object_icon(IconName::FolderSequences),
 
             Some(DbNodeType::Table) => object_icon(IconName::Table),
+            Some(DbNodeType::ForeignTable) => object_icon(IconName::Table),
             Some(DbNodeType::View) => object_icon(IconName::View),
+            Some(DbNodeType::MaterializedView) => object_icon(IconName::View),
+            Some(DbNodeType::MaterializedViewsFolder) => object_icon(IconName::FolderViews),
             Some(DbNodeType::Function) => object_icon(IconName::Function),
             Some(DbNodeType::Procedure) => object_icon(IconName::Procedure),
             Some(DbNodeType::Column) => {
@@ -2118,7 +2134,7 @@ impl DbTreeView {
         if let Some(node) = self.db_nodes.get(node_id).cloned() {
             let database = node.get_database_name().unwrap_or_default();
             match node.node_type {
-                DbNodeType::Table => {
+                DbNodeType::Table | DbNodeType::ForeignTable => {
                     // 查找所属数据库
 
                     info!(
@@ -2129,7 +2145,7 @@ impl DbTreeView {
                         node_id: node.id.clone(),
                     });
                 }
-                DbNodeType::View => {
+                DbNodeType::View | DbNodeType::MaterializedView => {
                     info!(
                         "DbTreeView: opening view data tab: {}.{}",
                         database, node.name
@@ -2188,7 +2204,8 @@ impl DbTreeView {
                 | DbNodeType::QueriesFolder
                 | DbNodeType::QueryFolder
                 | DbNodeType::TablesFolder
-                | DbNodeType::ViewsFolder => {
+                | DbNodeType::ViewsFolder
+                | DbNodeType::MaterializedViewsFolder => {
                     let is_expanded = self.expanded_nodes.contains(node_id);
 
                     // 切换展开状态
@@ -2674,6 +2691,7 @@ impl DbTreeView {
                     n.node_type,
                     DbNodeType::TablesFolder
                         | DbNodeType::ViewsFolder
+                        | DbNodeType::MaterializedViewsFolder
                         | DbNodeType::FunctionsFolder
                         | DbNodeType::ProceduresFolder
                         | DbNodeType::SequencesFolder
@@ -2688,7 +2706,7 @@ impl DbTreeView {
                 } else {
                     n.name.clone()
                 };
-                let comment = if n.node_type == DbNodeType::Table {
+                let comment = if n.is_table_like() {
                     n.metadata.get("comment").cloned()
                 } else {
                     None
@@ -2710,6 +2728,7 @@ impl DbTreeView {
             node_type,
             Some(DbNodeType::TablesFolder)
                 | Some(DbNodeType::ViewsFolder)
+                | Some(DbNodeType::MaterializedViewsFolder)
                 | Some(DbNodeType::FunctionsFolder)
                 | Some(DbNodeType::ProceduresFolder)
                 | Some(DbNodeType::TriggersFolder)

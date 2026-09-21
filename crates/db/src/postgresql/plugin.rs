@@ -91,6 +91,20 @@ impl PostgresPlugin {
         Self
     }
 
+    /// `schema.table` 引用；无 schema 时仅限定表名。
+    ///
+    /// 固有方法（非 trait 方法），供本插件构造外部表等 SQL 时复用。
+    fn qualify_table_reference(&self, schema: Option<&str>, table: &str) -> String {
+        match schema {
+            Some(schema) => format!(
+                "{}.{}",
+                self.quote_identifier(schema),
+                self.quote_identifier(table)
+            ),
+            None => self.quote_identifier(table),
+        }
+    }
+
     fn comment_literal(comment: &str) -> String {
         if comment.is_empty() {
             "NULL".to_string()
@@ -322,6 +336,7 @@ fn build_postgresql_ui_manifest() -> DatabaseUiManifest {
             supports_table_charset: true,
             supports_table_collation: true,
             supports_tablespace: true,
+            supports_materialized_views: true,
             ..DatabaseUiCapabilities::default()
         },
         forms,
@@ -342,6 +357,31 @@ fn postgres_metadata_row_value(row: &[Option<String>], index: usize) -> String {
     row.get(index)
         .and_then(|value| value.clone())
         .unwrap_or_default()
+}
+
+/// 「表」目录覆盖的 `pg_class.relkind`：普通表 / 分区表 / 外部表。
+const POSTGRES_TABLE_RELKINDS: &str = "'r', 'p', 'f'";
+
+/// 把 `pg_class.relkind` 映射为表对象类型。
+///
+/// 分区表按普通表处理（`DROP/ALTER TABLE` 均适用）；外部表必须单独区分，
+/// 否则会生成适配普通表的 `DROP/ALTER TABLE` DDL 并报错。
+fn postgres_table_object_type(relkind: Option<&str>) -> TableObjectType {
+    match relkind {
+        Some("f") => TableObjectType::ForeignTable,
+        _ => TableObjectType::Table,
+    }
+}
+
+/// 对象列表「类型」列的展示文案。
+fn postgres_relation_type_label(relkind: Option<&str>) -> &'static str {
+    match relkind {
+        Some("v") => "View",
+        Some("m") => "Materialized View",
+        Some("p") => "Partitioned Table",
+        Some("f") => "Foreign Table",
+        _ => "Table",
+    }
 }
 
 fn parse_postgres_foreign_keys(rows: Vec<Vec<Option<String>>>) -> Vec<ForeignKeyDefinition> {
@@ -1018,6 +1058,111 @@ fn postgresql_action_manifest() -> DatabaseActionManifest {
                 vec![DbNodeType::Table],
                 DatabaseActionPlacement::ContextMenu,
             ),
+            // === 外部表 ===
+            // 外部表与普通表并列在「表」目录，动作 id 复用 Table/View 系列，
+            // 由 db_tree_event 按节点类型改走 DROP/ALTER FOREIGN TABLE；
+            // 设计表、复制表、结构转储对 PostgreSQL 外部表均不适用。
+            action_with_scope(
+                DatabaseActionId::OpenTableData,
+                "Table.view_data",
+                vec![DbNodeType::ForeignTable],
+                DatabaseActionPlacement::Both,
+                true,
+                Some(DatabaseActionToolbarScope::SelectedRow),
+            ),
+            action_with_scope(
+                DatabaseActionId::OpenTableData,
+                "Table.view_data",
+                vec![DbNodeType::ForeignTable],
+                DatabaseActionPlacement::Toolbar,
+                true,
+                Some(DatabaseActionToolbarScope::CurrentNode),
+            ),
+            action(
+                DatabaseActionId::RenameTable,
+                "Table.rename_table",
+                vec![DbNodeType::ForeignTable],
+                DatabaseActionPlacement::ContextMenu,
+            ),
+            action(
+                DatabaseActionId::TruncateTable,
+                "Table.truncate_table",
+                vec![DbNodeType::ForeignTable],
+                DatabaseActionPlacement::ContextMenu,
+            ),
+            action_with_scope(
+                DatabaseActionId::DeleteTable,
+                "Table.delete_table",
+                vec![DbNodeType::ForeignTable],
+                DatabaseActionPlacement::Both,
+                true,
+                Some(DatabaseActionToolbarScope::SelectedRow),
+            ),
+            action_with_scope(
+                DatabaseActionId::DeleteTable,
+                "Table.delete_table",
+                vec![DbNodeType::ForeignTable],
+                DatabaseActionPlacement::Toolbar,
+                true,
+                Some(DatabaseActionToolbarScope::CurrentNode),
+            ),
+            action(
+                DatabaseActionId::DumpSqlData,
+                "ImportExport.export_data",
+                vec![DbNodeType::ForeignTable],
+                DatabaseActionPlacement::ContextMenu,
+            ),
+            action(
+                DatabaseActionId::ImportData,
+                "ImportExport.import_data",
+                vec![DbNodeType::ForeignTable],
+                DatabaseActionPlacement::ContextMenu,
+            ),
+            action(
+                DatabaseActionId::ExportData,
+                "ImportExport.export_table",
+                vec![DbNodeType::ForeignTable],
+                DatabaseActionPlacement::ContextMenu,
+            ),
+            // === 物化视图 ===
+            action_with_scope(
+                DatabaseActionId::OpenViewData,
+                "View.view_data",
+                vec![DbNodeType::MaterializedView],
+                DatabaseActionPlacement::Both,
+                true,
+                Some(DatabaseActionToolbarScope::SelectedRow),
+            ),
+            action_with_scope(
+                DatabaseActionId::OpenViewData,
+                "View.view_data",
+                vec![DbNodeType::MaterializedView],
+                DatabaseActionPlacement::Toolbar,
+                true,
+                Some(DatabaseActionToolbarScope::CurrentNode),
+            ),
+            action_with_scope(
+                DatabaseActionId::DeleteView,
+                "View.delete_view",
+                vec![DbNodeType::MaterializedView],
+                DatabaseActionPlacement::Both,
+                true,
+                Some(DatabaseActionToolbarScope::SelectedRow),
+            ),
+            action_with_scope(
+                DatabaseActionId::DeleteView,
+                "View.delete_view",
+                vec![DbNodeType::MaterializedView],
+                DatabaseActionPlacement::Toolbar,
+                true,
+                Some(DatabaseActionToolbarScope::CurrentNode),
+            ),
+            action(
+                DatabaseActionId::DumpSqlData,
+                "ImportExport.export_data",
+                vec![DbNodeType::MaterializedView],
+                DatabaseActionPlacement::ContextMenu,
+            ),
             action_with_scope(
                 DatabaseActionId::OpenViewData,
                 "View.view_data",
@@ -1139,6 +1284,7 @@ impl DatabasePlugin for PostgresPlugin {
             supports_table_charset: true,
             supports_table_collation: true,
             supports_tablespace: true,
+            supports_materialized_views: true,
             ..DatabaseUiCapabilities::default()
         }
     }
@@ -1582,15 +1728,19 @@ impl DatabasePlugin for PostgresPlugin {
         schema: Option<String>,
     ) -> Result<Vec<TableInfo>> {
         let schema_val = schema.unwrap_or_else(|| "public".to_string());
+        // 普通表 r / 分区表 p / 外部表 f 都属于「表」目录；视图与物化视图另有目录。
         let sql = format!(
             "SELECT
                 c.relname AS tablename,
                 n.nspname AS schemaname,
+                c.relkind AS relation_kind,
                 obj_description(c.oid, 'pg_class') AS table_comment
              FROM pg_class c
              JOIN pg_namespace n ON c.relnamespace = n.oid
-             WHERE n.nspname = '{}' AND c.relkind = 'r'",
-            schema_val.replace("'", "''")
+             WHERE n.nspname = '{}' AND c.relkind IN ({})
+             ORDER BY c.relname",
+            schema_val.replace("'", "''"),
+            POSTGRES_TABLE_RELKINDS
         );
 
         let result = connection
@@ -1609,7 +1759,15 @@ impl DatabasePlugin for PostgresPlugin {
                         "utf8mb4",
                     )?
                     .unwrap_or_default(),
-                    object_type: TableObjectType::Table,
+                    object_type: postgres_table_object_type(
+                        crate::metadata_read::metadata_text(
+                            &query_result,
+                            row_index,
+                            2,
+                            "utf8mb4",
+                        )?
+                        .as_deref(),
+                    ),
                     schema: crate::metadata_read::metadata_text(
                         &query_result,
                         row_index,
@@ -1619,7 +1777,7 @@ impl DatabasePlugin for PostgresPlugin {
                     comment: crate::metadata_read::metadata_text(
                         &query_result,
                         row_index,
-                        2,
+                        3,
                         "utf8mb4",
                     )?
                     .filter(|s| !s.is_empty()),
@@ -1680,9 +1838,9 @@ impl DatabasePlugin for PostgresPlugin {
              JOIN pg_namespace n ON c.relnamespace = n.oid
              LEFT JOIN pg_tablespace ts ON c.reltablespace = ts.oid
              WHERE n.nspname = '{}'
-               AND c.relkind = 'r'
+               AND c.relkind IN ({})
              ORDER BY c.relname",
-            safe_schema
+            safe_schema, POSTGRES_TABLE_RELKINDS
         );
 
         let result = connection
@@ -1710,12 +1868,7 @@ impl DatabasePlugin for PostgresPlugin {
                         .unwrap_or_else(|| "-".to_string());
 
                 // 类型转换
-                let object_type = match cell(2)?.as_deref() {
-                    Some("v") => "View",
-                    Some("m") => "Materialized View",
-                    Some("p") => "Partitioned Table",
-                    _ => "Table",
-                };
+                let object_type = postgres_relation_type_label(cell(2)?.as_deref());
 
                 object_view_rows.push(vec![
                     cell(0)?.unwrap_or_default(),                // Name (index 0)
@@ -2164,6 +2317,88 @@ impl DatabasePlugin for PostgresPlugin {
         Ok(ObjectView {
             db_node_type: DbNodeType::View,
             title: t!("ObjectView.counts.views", count = views.len()).to_string(),
+            columns,
+            rows,
+        })
+    }
+
+    async fn list_materialized_views(
+        &self,
+        connection: &dyn DbConnection,
+        _database: &str,
+        schema: Option<String>,
+    ) -> Result<Vec<ViewInfo>> {
+        let schema_val = schema.unwrap_or_else(|| "public".to_string());
+        // information_schema 不包含物化视图，必须回退到 pg_class（relkind = 'm'）。
+        let sql = format!(
+            "SELECT c.relname AS matview_name, \
+                n.nspname AS schemaname, \
+                pg_get_viewdef(c.oid, true) AS view_definition, \
+                obj_description(c.oid, 'pg_class') AS view_comment \
+             FROM pg_class c \
+             JOIN pg_namespace n ON c.relnamespace = n.oid \
+             WHERE n.nspname = '{}' AND c.relkind = 'm' \
+             ORDER BY c.relname",
+            schema_val.replace("'", "''")
+        );
+
+        let result = connection
+            .query(&sql)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to list materialized views: {}", e))?;
+
+        if let SqlResult::Query(query_result) = result {
+            let mut views = Vec::new();
+            for row_index in 0..query_result.rows.len() {
+                let cell = |column_index| {
+                    crate::metadata_read::metadata_text(
+                        &query_result,
+                        row_index,
+                        column_index,
+                        "utf8mb4",
+                    )
+                };
+                views.push(ViewInfo {
+                    name: cell(0)?.unwrap_or_default(),
+                    schema: cell(1)?,
+                    definition: cell(2)?,
+                    comment: cell(3)?.filter(|comment| !comment.is_empty()),
+                });
+            }
+            Ok(views)
+        } else {
+            Err(anyhow::anyhow!("Unexpected result type"))
+        }
+    }
+
+    async fn list_materialized_views_view(
+        &self,
+        connection: &dyn DbConnection,
+        database: &str,
+        schema: Option<String>,
+    ) -> Result<ObjectView> {
+        let views = self
+            .list_materialized_views(connection, database, schema)
+            .await?;
+
+        let columns = vec![
+            Column::localized("name", "ObjectView.columns.name").width(200.0),
+            Column::localized("definition", "ObjectView.columns.definition").width(400.0),
+        ];
+
+        let rows: Vec<Vec<String>> = views
+            .iter()
+            .map(|view| {
+                vec![
+                    view.name.clone(),
+                    view.definition.as_deref().unwrap_or("").to_string(),
+                ]
+            })
+            .collect();
+
+        Ok(ObjectView {
+            db_node_type: DbNodeType::MaterializedView,
+            title: t!("ObjectView.counts.materialized_views", count = views.len()).to_string(),
             columns,
             rows,
         })
@@ -3044,6 +3279,36 @@ ORDER BY rolname;"#
         )
     }
 
+    fn drop_foreign_table(&self, _database: &str, schema: Option<&str>, table: &str) -> String {
+        format!(
+            "DROP FOREIGN TABLE IF EXISTS {}",
+            self.qualify_table_reference(schema, table)
+        )
+    }
+
+    fn rename_foreign_table(
+        &self,
+        _database: &str,
+        schema: Option<&str>,
+        old_name: &str,
+        new_name: &str,
+    ) -> String {
+        // `ALTER ... RENAME TO` 只能命名一个对象，旧名必须限定 schema。
+        format!(
+            "ALTER FOREIGN TABLE {} RENAME TO {}",
+            self.qualify_table_reference(schema, old_name),
+            self.quote_identifier(new_name)
+        )
+    }
+
+    fn drop_materialized_view(&self, _database: &str, schema: Option<&str>, view: &str) -> String {
+        // 与外部表同理，限定 schema 才能不依赖会话 search_path。
+        format!(
+            "DROP MATERIALIZED VIEW IF EXISTS {}",
+            self.qualify_table_reference(schema, view)
+        )
+    }
+
     fn build_backup_table_sql(
         &self,
         _database: &str,
@@ -3648,10 +3913,26 @@ mod tests {
                 .push(query.to_string());
 
             let rows = if query.contains("table_comment") {
+                vec![
+                    vec![
+                        Some("users".to_string()),
+                        Some("public".to_string()),
+                        Some("r".to_string()),
+                        Some("Application users".to_string()),
+                    ],
+                    vec![
+                        Some("remote_orders".to_string()),
+                        Some("public".to_string()),
+                        Some("f".to_string()),
+                        Some("Orders on the remote server".to_string()),
+                    ],
+                ]
+            } else if query.contains("matview_name") {
                 vec![vec![
-                    Some("users".to_string()),
+                    Some("mv_orders".to_string()),
                     Some("public".to_string()),
-                    Some("Application users".to_string()),
+                    Some("SELECT order_id FROM orders".to_string()),
+                    Some("Orders rollup".to_string()),
                 ]]
             } else if query.contains("column_name") {
                 vec![vec![
@@ -4033,17 +4314,202 @@ mod tests {
             .await
             .expect("list tables");
 
-        assert_eq!(1, tables.len());
+        assert_eq!(2, tables.len());
         assert_eq!(crate::TableObjectType::Table, tables[0].object_type);
         assert_eq!(Some("Application users"), tables[0].comment.as_deref());
+        // 外部表（relkind = 'f'）列入「表」目录，但必须带独立的对象类型。
+        assert_eq!("remote_orders", tables[1].name);
+        assert_eq!(crate::TableObjectType::ForeignTable, tables[1].object_type);
+        assert_eq!(
+            Some("Orders on the remote server"),
+            tables[1].comment.as_deref()
+        );
+
         let queries = connection.queries();
         let table_query = queries
             .iter()
             .find(|query| query.contains("table_comment"))
             .expect("table metadata query");
         assert!(table_query.contains("obj_description(c.oid, 'pg_class')"));
-        assert!(table_query.contains("c.relkind = 'r'"));
-        assert!(!table_query.contains("c.relkind IN"));
+        assert!(table_query.contains("c.relkind IN ('r', 'p', 'f')"));
+    }
+
+    #[tokio::test]
+    async fn test_postgres_materialized_views_use_pg_class() {
+        let plugin = create_plugin();
+        let connection = CommentMetadataConnection::new();
+
+        // 测试用伪连接只识别部分 SQL，这里同时验证能力位与查询文本。
+        let views = plugin
+            .list_materialized_views(&connection, "app", Some("public".to_string()))
+            .await
+            .expect("list materialized views");
+        assert_eq!(1, views.len());
+        assert_eq!("mv_orders", views[0].name);
+        assert_eq!(Some("public"), views[0].schema.as_deref());
+        assert_eq!(
+            Some("SELECT order_id FROM orders"),
+            views[0].definition.as_deref()
+        );
+        assert_eq!(Some("Orders rollup"), views[0].comment.as_deref());
+        assert!(plugin.capabilities().supports_materialized_views);
+
+        let queries = connection.queries();
+        let matview_query = queries
+            .iter()
+            .find(|query| query.contains("matview_name"))
+            .expect("materialized view query");
+        assert!(matview_query.contains("c.relkind = 'm'"));
+        assert!(matview_query.contains("pg_get_viewdef"));
+    }
+
+    #[test]
+    fn test_postgres_foreign_table_ddl_uses_foreign_table_statements() {
+        let plugin = create_plugin();
+
+        assert_eq!(
+            "DROP FOREIGN TABLE IF EXISTS \"public\".\"remote_orders\"",
+            plugin.drop_foreign_table("app", Some("public"), "remote_orders")
+        );
+        assert_eq!(
+            "ALTER FOREIGN TABLE \"public\".\"remote_orders\" RENAME TO \"orders_2024\"",
+            plugin.rename_foreign_table("app", Some("public"), "remote_orders", "orders_2024")
+        );
+        assert_eq!(
+            "DROP MATERIALIZED VIEW IF EXISTS \"public\".\"mv_orders\"",
+            plugin.drop_materialized_view("app", Some("public"), "mv_orders")
+        );
+        // 没有 schema 时退化为仅限定对象名（与其它 DDL 生成方法一致）。
+        assert_eq!(
+            "ALTER FOREIGN TABLE \"remote_orders\" RENAME TO \"orders_2024\"",
+            plugin.rename_foreign_table("app", None, "remote_orders", "orders_2024")
+        );
+    }
+
+    #[test]
+    fn test_postgres_manifest_scopes_table_actions_per_node_type() {
+        let manifest = create_plugin().ui_manifest();
+        let supports = |node_type: DbNodeType, action_id: DatabaseActionId| {
+            manifest.actions.actions.iter().any(|action| {
+                action.id == action_id
+                    && action
+                        .targets
+                        .iter()
+                        .any(|target| target.node_type == node_type)
+            })
+        };
+
+        // 外部表：只能查看数据 / 重命名 / 删除 / 数据转储 / 导入导出；
+        // 不能当作普通表设计、复制或做结构转储。
+        assert!(supports(
+            DbNodeType::ForeignTable,
+            DatabaseActionId::OpenTableData
+        ));
+        assert!(supports(
+            DbNodeType::ForeignTable,
+            DatabaseActionId::RenameTable
+        ));
+        assert!(supports(
+            DbNodeType::ForeignTable,
+            DatabaseActionId::DeleteTable
+        ));
+        assert!(supports(
+            DbNodeType::ForeignTable,
+            DatabaseActionId::DumpSqlData
+        ));
+        assert!(supports(
+            DbNodeType::ForeignTable,
+            DatabaseActionId::ExportData
+        ));
+        assert!(!supports(
+            DbNodeType::ForeignTable,
+            DatabaseActionId::DesignTable
+        ));
+        assert!(!supports(
+            DbNodeType::ForeignTable,
+            DatabaseActionId::CopyTable
+        ));
+        assert!(!supports(
+            DbNodeType::ForeignTable,
+            DatabaseActionId::DumpSqlStructure
+        ));
+        assert!(!supports(
+            DbNodeType::ForeignTable,
+            DatabaseActionId::DumpSqlStructureAndData
+        ));
+
+        // 物化视图：查看数据 / 删除 / 数据转储。
+        assert!(supports(
+            DbNodeType::MaterializedView,
+            DatabaseActionId::OpenViewData
+        ));
+        assert!(supports(
+            DbNodeType::MaterializedView,
+            DatabaseActionId::DeleteView
+        ));
+        assert!(supports(
+            DbNodeType::MaterializedView,
+            DatabaseActionId::DumpSqlData
+        ));
+        assert!(!supports(
+            DbNodeType::MaterializedView,
+            DatabaseActionId::DesignTable
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_postgres_schema_tree_separates_foreign_tables_and_materialized_views() {
+        let plugin = create_plugin();
+        let connection = CommentMetadataConnection::new();
+        let schema_node = DbNode::new(
+            "conn:app:public",
+            "public",
+            DbNodeType::Schema,
+            "conn".to_string(),
+            DatabaseType::PostgreSQL,
+        )
+        .with_metadata(HashMap::from([("database".to_string(), "app".to_string())]));
+
+        let children = plugin
+            .build_database_or_schema_children(
+                &connection,
+                &schema_node,
+                Some("public".to_string()),
+            )
+            .await
+            .expect("build schema children");
+
+        let tables = children
+            .iter()
+            .find(|node| node.node_type == DbNodeType::TablesFolder)
+            .expect("tables folder");
+        let table_nodes: Vec<(&str, DbNodeType)> = tables
+            .children
+            .iter()
+            .map(|node| (node.name.as_str(), node.node_type))
+            .collect();
+        assert_eq!(
+            // `DbNode::Ord` 先按节点类型再按名称排序：普通表在前，外部表紧随其后。
+            vec![
+                ("users", DbNodeType::Table),
+                ("remote_orders", DbNodeType::ForeignTable),
+            ],
+            table_nodes
+        );
+
+        let matviews = children
+            .iter()
+            .find(|node| node.node_type == DbNodeType::MaterializedViewsFolder)
+            .expect("materialized views folder");
+        assert_eq!("DbTree.MaterializedViews", matviews.name);
+        assert_eq!(
+            vec![("mv_orders", DbNodeType::MaterializedView)],
+            matviews
+                .children
+                .iter()
+                .map(|node| (node.name.as_str(), node.node_type))
+                .collect::<Vec<_>>()
+        );
     }
 
     #[tokio::test]

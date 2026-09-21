@@ -7931,7 +7931,7 @@ checksum = "fc04a4c58212d57930a24bf47d3fa87485264a3a054e9c10e042eb373573ad3c"
 
 [[package]]
 name = "main"
-version = "0.18.5"
+version = "0.18.6"
 dependencies = [
  "agent_runtime",
  "ai_chat_view",
@@ -11740,13 +11740,17 @@ name = "remote_file_editor"
 version = "0.15.2"
 dependencies = [
  "anyhow",
+ "async-trait",
  "extension-runtime",
  "futures",
  "gpui-component",
  "gpui-pre",
  "notify",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
  "one-core",
  "process-util",
+ "raw-window-handle",
  "rust-i18n",
  "sftp",
  "smol",
