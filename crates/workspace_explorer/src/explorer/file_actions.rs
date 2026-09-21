@@ -595,9 +595,28 @@ impl WorkspaceExplorer {
         confirmation: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let is_commit_editor = self
+            .file_action_editor
+            .as_ref()
+            .is_some_and(|editor| matches!(editor.mode, FileActionEditorMode::CommitAll));
         h_flex()
             .justify_end()
             .gap_1()
+            .when(is_commit_editor && !confirmation, |this| {
+                this.child(
+                    Button::new("workspace-commit-generate")
+                        .label(t!("WorkspaceExplorer.commit.generate"))
+                        .small()
+                        .custom(self.theme.icon_button_style(cx))
+                        .disabled(self.file_operation_running || self.commit_message_generating)
+                        .when(self.commit_message_generating, |button| {
+                            button.label(t!("WorkspaceExplorer.commit.generating"))
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.request_commit_message(cx);
+                        })),
+                )
+            })
             .child(
                 Button::new("workspace-file-action-cancel")
                     .label(t!("WorkspaceExplorer.action.cancel"))

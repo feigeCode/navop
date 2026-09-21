@@ -172,5 +172,103 @@ pub(crate) fn build_ai_workbench_shell(
     );
     shell.update(cx, |shell, cx| shell.add_subscription(turn_subscription, cx));
     shell.update(cx, |shell, cx| shell.add_subscription(root_subscription, cx));
+
+    // AI 提交信息：Explorer 发请求，这里取已配置 provider 生成后回填。
+    let explorer_for_message = explorer.clone();
+    let commit_message_subscription: Subscription = cx.subscribe(
+        &explorer,
+        move |_, _: &WorkspaceExplorerEvent, cx| {
+            spawn_commit_message_generation(&explorer_for_message, cx);
+        },
+    );
+    shell.update(cx, |shell, cx| {
+        shell.add_subscription(commit_message_subscription, cx)
+    });
     shell
+}
+
+/// 用已配置的默认 provider 生成提交信息并回填输入框。
+fn spawn_commit_message_generation(
+    explorer: &gpui::Entity<WorkspaceExplorer>,
+    cx: &mut gpui::App,
+) {
+    use one_core::llm::storage::ProviderRepository;
+    use one_core::llm::{LlmConnector, LlmProvider};
+    use one_core::storage::traits::Repository;
+    use one_core::storage::GlobalStorageState;
+
+    let Some(storage_state) = cx.try_global::<GlobalStorageState>() else {
+        return;
+    };
+    let Some(repo) = storage_state.storage.get::<ProviderRepository>() else {
+        return;
+    };
+    let Some(config) = repo
+        .list()
+        .unwrap_or_default()
+        .into_iter()
+        .find(|config| config.enabled && config.is_default)
+    else {
+        return;
+    };
+    let Ok(provider) = LlmConnector::from_config(&config) else {
+        return;
+    };
+    let model = config.model.clone();
+    let window_handle = cx.active_window();
+    let explorer = explorer.clone();
+    cx.spawn(async move |cx| {
+        let fail = |cx: &mut gpui::AsyncApp| {
+            let _ = explorer.update(cx, |explorer, cx| {
+                explorer.commit_message_generation_failed(cx);
+            });
+        };
+        let repository = explorer.update(cx, |explorer, _| explorer.repository().cloned());
+        let Some(repository) = repository else {
+            fail(cx);
+            return;
+        };
+        // diff 摘要是 git 只读操作，放后台线程；LLM 调用本身也是 IO。
+        let context = match cx
+            .background_spawn(async move {
+                workspace_explorer::commit_context(&repository, 16 * 1024)
+            })
+            .await
+        {
+            Ok(context) => context,
+            Err(error) => {
+                tracing::warn!(%error, "Failed to collect commit context");
+                fail(cx);
+                return;
+            }
+        };
+        let request = one_core::llm::ChatRequest {
+            model,
+            messages: vec![one_core::llm::Message::user(format!(
+                "Write a concise conventional commit message (one line, imperative mood, \
+                 no scope prefix, under 72 characters) for these changes. \
+                 Reply with the message only.\n\n{context}"
+            ))],
+            temperature: Some(0.2),
+            max_tokens: Some(100),
+            ..Default::default()
+        };
+        let generated = provider.chat(&request).await;
+        let Some(window_handle) = window_handle else {
+            return;
+        };
+        let _ = cx.update_window(window_handle, |_, window, cx| {
+            explorer.update(cx, |explorer, cx| match generated {
+                Ok(message) => {
+                    let message = message.trim().trim_matches('`').to_string();
+                    explorer.set_commit_message(message, window, cx);
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "Commit message generation failed");
+                    explorer.commit_message_generation_failed(cx);
+                }
+            });
+        });
+    })
+    .detach();
 }

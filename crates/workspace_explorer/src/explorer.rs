@@ -10,8 +10,8 @@ use crate::WorkspaceEditor;
 use crate::backend::{WorkspaceBackend, local_backend};
 use crate::editor::{GitDiffRequest, WorkspaceEditorEvent};
 use crate::git::{
-    GitChange, GitRepository, WorktreeEntry, anchor_checkpoint, anchored_checkpoint,
-    capture_worktree_snapshot, create_worktree, diff_snapshots, load_changes,
+    GitChange, GitRepository, WorktreeEntry, anchor_checkpoint, capture_worktree_snapshot,
+    create_worktree, diff_snapshots, load_changes,
 };
 use crate::model::ExplorerEntry;
 use crate::theme::WorkspaceTheme;
@@ -55,6 +55,8 @@ pub struct WorkspaceExplorer {
     last_turn_review: Option<WorktreeReviewSnapshot>,
     /// 捕获完成、等待下一帧打开 Review 的 diff。
     pending_review_open: bool,
+    /// 提交信息生成中（按钮防重复触发）。
+    commit_message_generating: bool,
     /// 宿主注入的最近工作区根目录，最近在前。
     recent_roots: Vec<PathBuf>,
     changes_expanded: bool,
@@ -131,6 +133,7 @@ impl WorkspaceExplorer {
             last_checkpoint: None,
             last_turn_review: None,
             pending_review_open: false,
+            commit_message_generating: false,
             recent_roots: Vec::new(),
             changes_expanded: true,
             files_expanded: true,
@@ -259,6 +262,40 @@ impl WorkspaceExplorer {
         });
         self.file_confirmation = None;
         input.update(cx, |input, cx| input.focus(window, cx));
+        cx.notify();
+    }
+
+    /// 请求宿主生成提交信息；Explorer 只发事件，LLM 调用由宿主完成。
+    pub fn request_commit_message(&mut self, cx: &mut Context<Self>) {
+        let Some(editor) = self.file_action_editor.as_ref() else {
+            return;
+        };
+        if !matches!(editor.mode, FileActionEditorMode::CommitAll)
+            || self.commit_message_generating
+        {
+            return;
+        }
+        self.commit_message_generating = true;
+        cx.emit(WorkspaceExplorerEvent::CommitMessageRequested);
+        cx.notify();
+    }
+
+    /// 宿主生成完成后回填输入框（覆盖已有草稿，用户仍可编辑再提交）。
+    pub fn set_commit_message(&mut self, message: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.commit_message_generating = false;
+        if let Some(editor) = self.file_action_editor.as_ref() {
+            if matches!(editor.mode, FileActionEditorMode::CommitAll) {
+                editor
+                    .input
+                    .update(cx, |input, cx| input.set_value(message, window, cx));
+            }
+        }
+        cx.notify();
+    }
+
+    /// 生成失败时仅复位按钮状态，不打断用户手写。
+    pub fn commit_message_generation_failed(&mut self, cx: &mut Context<Self>) {
+        self.commit_message_generating = false;
         cx.notify();
     }
 
