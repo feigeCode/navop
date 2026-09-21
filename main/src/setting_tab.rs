@@ -3041,6 +3041,13 @@ const DATABASE_SHORTCUTS: &[ShortcutEntry] = &[
         system_hotkey: false,
     },
     ShortcutEntry {
+        keys_macos: &["cmd-a"],
+        keys_other: &["ctrl-a"],
+        label_key: "Settings.Shortcuts.database_select_all_objects",
+        action_id: Some(action_id::DB_SELECT_ALL_OBJECTS),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
         keys_macos: &["cmd-enter", "ctrl-enter"],
         keys_other: &["cmd-enter", "ctrl-enter"],
         label_key: "Settings.Shortcuts.sql_run_query",
@@ -3622,12 +3629,13 @@ mod tests {
     use rust_i18n::t;
 
     use super::{
-        AppSettings, CustomFont, FontFamilyKind, GlobalProxySettings, ProxyType, WINDOW_SHORTCUTS,
-        app_font_options, build_app_http_client, builtin_monospace_font_options,
-        emit_team_key_change_event, is_supported_font_file, master_key_setting_enabled,
-        merge_font_options_with_custom_fonts, monospace_font_options, parse_font_families,
-        personal_sync_backend_options, personal_sync_status_label, personal_sync_status_view_model,
-        team_key_refresh_success_message, team_key_rotation_inputs_valid,
+        AppSettings, CustomFont, DATABASE_SHORTCUTS, FontFamilyKind, GlobalProxySettings,
+        ProxyType, WINDOW_SHORTCUTS, app_font_options, build_app_http_client,
+        builtin_monospace_font_options, emit_team_key_change_event, is_supported_font_file,
+        master_key_setting_enabled, merge_font_options_with_custom_fonts, monospace_font_options,
+        parse_font_families, personal_sync_backend_options, personal_sync_status_label,
+        personal_sync_status_view_model, team_key_refresh_success_message,
+        team_key_rotation_inputs_valid,
     };
     use crate::local_terminal_profiles::setting_options as local_terminal_profile_options;
     use crate::personal_sync_status::PersonalSyncRuntimeStatus;
@@ -3649,6 +3657,20 @@ mod tests {
         assert_eq!(shortcut.keys_other, &["ctrl-shift-w"]);
         assert!(!shortcut.keys_macos.contains(&"ctrl-d"));
         assert!(!shortcut.keys_other.contains(&"ctrl-d"));
+    }
+
+    #[test]
+    fn object_list_select_all_entry_matches_runtime_defaults() {
+        use one_core::keybindings::action_id;
+
+        let entry = DATABASE_SHORTCUTS
+            .iter()
+            .find(|entry| entry.action_id == Some(action_id::DB_SELECT_ALL_OBJECTS))
+            .expect("select all objects shortcut entry");
+
+        assert_eq!(entry.keys_macos, &["cmd-a"]);
+        assert_eq!(entry.keys_other, &["ctrl-a"]);
+        assert!(!entry.system_hotkey);
     }
 
     #[test]

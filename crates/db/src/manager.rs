@@ -27,8 +27,8 @@ use gpui::{AppContext, AsyncApp, Global, Task};
 use one_core::connection_notifier::{ConnectionDataEvent, GlobalConnectionNotifier};
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::{ConnectionRepository, DatabaseType, DbConnectionConfig};
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex as StdMutex};
 
 type ExternalRegistryReloader = dyn Fn() -> IpcDriverRegistry + Send + Sync;
 use std::time::{Duration, Instant};
@@ -280,13 +280,70 @@ impl Clone for DbManager {
 }
 
 /// Connection session - represents a single database connection
+///
+/// The physical connection lives behind its own mutex, so a running statement only
+/// locks the connection it uses. Bookkeeping lives in [`SessionState`] instead of the
+/// session itself so status reads never wait for an in-flight statement. Reuse checks
+/// read the cached [`DatabaseIdentity`] for the same reason: picking a candidate must
+/// not wait for a session that is busy with a statement.
 struct ConnectionSession {
-    connection: Box<dyn DbConnection + Send + Sync>,
+    connection: Arc<AsyncMutex<Box<dyn DbConnection + Send + Sync>>>,
     close_on_release: bool,
-    last_active: Instant,
     created_at: Instant,
     session_id: String,
-    in_use: bool,
+    state: StdMutex<SessionState>,
+    identity: StdMutex<DatabaseIdentity>,
+}
+
+/// Mutable per-session bookkeeping kept separate from the connection lock.
+struct SessionState {
+    /// Statements currently holding this session.
+    ///
+    /// A bool would lose a claim: a release that finishes after the next statement
+    /// already took the session would mark a busy session idle, and the cleanup task
+    /// could then recycle the connection of a running statement.
+    in_flight: usize,
+    /// Set when a session is handed to a caller that has not taken the connection yet
+    /// (`create_session`). The matching `get_session_connection` consumes it, so one
+    /// statement is never counted twice while the hand-off stays protected against
+    /// concurrent reuse.
+    reserved: bool,
+    last_active: Instant,
+}
+
+/// Identity fields that decide whether a session can serve a request.
+///
+/// Cached on the session so the pool can pick a reuse candidate without waiting for
+/// the connection lock. `verify_and_sync_database` is the only place that rewrites
+/// `DbConnectionConfig::database`, and it refreshes this snapshot, so the cache cannot
+/// silently drift from the live connection.
+struct DatabaseIdentity {
+    database_type: DatabaseType,
+    database: Option<String>,
+    sid: Option<String>,
+    service_name: Option<String>,
+}
+
+impl DatabaseIdentity {
+    fn from_config(config: &DbConnectionConfig) -> Self {
+        Self {
+            database_type: config.database_type.clone(),
+            database: config.database.clone(),
+            sid: config.sid.clone(),
+            service_name: config.service_name.clone(),
+        }
+    }
+
+    /// Whether a session with this identity can serve `config`.
+    fn matches(&self, config: &DbConnectionConfig) -> bool {
+        match self.database_type {
+            DatabaseType::Oracle => {
+                (self.sid.is_some() && self.sid == config.sid)
+                    || (self.service_name.is_some() && self.service_name == config.service_name)
+            }
+            _ => self.database.is_some() && self.database == config.database,
+        }
+    }
 }
 
 impl ConnectionSession {
@@ -295,58 +352,132 @@ impl ConnectionSession {
         session_id: String,
         close_on_release: bool,
     ) -> Self {
+        let identity = DatabaseIdentity::from_config(connection.config());
         let now = Instant::now();
         Self {
-            connection,
+            connection: Arc::new(AsyncMutex::new(connection)),
             close_on_release,
-            last_active: now,
             created_at: now,
             session_id,
-            in_use: false,
+            state: StdMutex::new(SessionState {
+                in_flight: 0,
+                reserved: false,
+                last_active: now,
+            }),
+            identity: StdMutex::new(identity),
         }
     }
 
-    fn mark_in_use(&mut self) {
-        self.in_use = true;
-        self.update_last_active();
+    fn state(&self) -> std::sync::MutexGuard<'_, SessionState> {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn release(&mut self) {
-        self.in_use = false;
-        self.update_last_active();
+    /// Cached identity used to pick reuse candidates without the connection lock.
+    fn identity(&self) -> std::sync::MutexGuard<'_, DatabaseIdentity> {
+        self.identity
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn update_last_active(&mut self) {
-        self.last_active = Instant::now();
+    /// Refresh the cached identity from the live connection config.
+    fn refresh_identity(&self, connection: &(dyn DbConnection + Send + Sync)) {
+        *self.identity() = DatabaseIdentity::from_config(connection.config());
     }
 
+    /// Whether the cached identity says this session can serve `config`.
+    fn can_serve(&self, config: &DbConnectionConfig) -> bool {
+        self.identity().matches(config)
+    }
+
+    /// Hand the session to a statement that is about to take its connection.
+    fn reserve(&self) {
+        let mut state = self.state();
+        state.reserved = true;
+        state.last_active = Instant::now();
+    }
+
+    /// Claim the session for the statement that is taking its connection now.
+    ///
+    /// Consumes a reservation made by [`Self::reserve`], so create_session and the
+    /// following statement do not count the same use twice.
+    fn mark_in_use(&self) {
+        let mut state = self.state();
+        state.reserved = false;
+        state.in_flight += 1;
+        state.last_active = Instant::now();
+    }
+
+    /// Release one claim (or undo one reservation).
+    fn release(&self) {
+        let mut state = self.state();
+        state.reserved = false;
+        state.in_flight = state.in_flight.saturating_sub(1);
+        state.last_active = Instant::now();
+    }
+
+    fn in_use(&self) -> bool {
+        let state = self.state();
+        state.in_flight > 0 || state.reserved
+    }
+
+    fn last_active(&self) -> Instant {
+        self.state().last_active
+    }
+
+    /// Idle long enough to be recycled.
+    ///
+    /// Ignores `reserved` on purpose: a reservation that is never consumed (its caller
+    /// died in between) must not pin the session forever. A live reservation is young,
+    /// so it is still protected by the timeout.
     fn is_expired(&self, timeout: Duration) -> bool {
-        if self.in_use {
-            return false;
-        }
-        self.last_active.elapsed() > timeout
+        let state = self.state();
+        state.in_flight == 0 && state.last_active.elapsed() > timeout
     }
 
     fn is_lifetime_expired(&self, max_lifetime: Duration) -> bool {
         self.created_at.elapsed() > max_lifetime
     }
 
+    /// Lock the physical connection for one exclusive statement.
+    async fn lock_connection(&self) -> OwnedMutexGuard<Box<dyn DbConnection + Send + Sync>> {
+        Arc::clone(&self.connection).lock_owned().await
+    }
+
+    /// Validate that this session can serve `config` before it is reused.
+    ///
+    /// Takes the connection lock, so the caller must not hold the session table lock.
+    /// Returns `Ok(false)` when the live database no longer matches `config`, in which
+    /// case the refreshed identity is kept so the next loop can pick another candidate.
+    async fn validate_reuse(&self, config: &DbConnectionConfig) -> Result<bool, DbError> {
+        let connection = self.lock_connection().await;
+        self.refresh_identity(&**connection);
+        if !self.can_serve(config) {
+            return Ok(false);
+        }
+        connection.ping().await?;
+        Ok(true)
+    }
+
     /// Check if current database matches config database
     /// Returns Ok(true) if consistent, Ok(false) if updated config, Err if check failed
-    async fn verify_and_sync_database(&mut self) -> Result<bool, DbError> {
+    async fn verify_and_sync_database(&self) -> Result<bool, DbError> {
+        let mut connection = self.lock_connection().await;
         // Skip check for databases that don't support switching
-        if !self.connection.supports_database_switch() {
+        if !connection.supports_database_switch() {
             return Ok(true);
         }
 
-        let config_db = self.connection.config().database.clone();
-        let current_db = self.connection.current_database().await?;
+        let config_db = connection.config().database.clone();
+        let current_db = connection.current_database().await?;
 
         if config_db == current_db {
             Ok(true)
         } else {
-            // Database changed, update config
-            self.connection.set_config_database(current_db.clone());
+            // Database changed: update the config together with the cached identity
+            connection.set_config_database(current_db.clone());
+            self.refresh_identity(&**connection);
             info!(
                 "Session {} database changed: {:?} -> {:?}",
                 self.session_id, config_db, current_db
@@ -355,8 +486,8 @@ impl ConnectionSession {
         }
     }
 
-    async fn close(&mut self) {
-        if let Err(e) = self.connection.disconnect().await {
+    async fn close(&self) {
+        if let Err(e) = self.lock_connection().await.disconnect().await {
             error!("Failed to disconnect session {}: {}", self.session_id, e);
         } else {
             info!("Closed session: {}", self.session_id);
@@ -367,7 +498,10 @@ impl ConnectionSession {
 /// Connection manager - manages database connections for a client application
 pub struct ConnectionManager {
     /// config_id -> list of sessions for that config
-    sessions: Arc<RwLock<HashMap<String, Vec<ConnectionSession>>>>,
+    ///
+    /// The map lock only guards the pool itself. A running statement locks its own
+    /// session's connection instead, so sessions never serialize each other.
+    sessions: Arc<RwLock<HashMap<String, Vec<Arc<ConnectionSession>>>>>,
     /// Per file-backed database lock used to serialize physical opens before a session is visible.
     physical_open_locks: Arc<AsyncMutex<HashMap<String, Arc<AsyncMutex<()>>>>>,
     /// Converts stored connection configs into runtime configs before opening sessions.
@@ -471,16 +605,19 @@ impl ConnectionManager {
             session_id, config.database
         );
 
-        // Store session
-        let mut session =
+        // Store session, reserved for the caller that is about to take its connection.
+        // The matching `get_session_connection` consumes the reservation, so every
+        // statement adds exactly one claim and its release brings the counter back to
+        // zero, while two concurrent create_session calls never share a session.
+        let session =
             ConnectionSession::new(connection, session_id.clone(), lifecycle.close_on_release);
-        session.mark_in_use();
+        session.reserve();
 
         let mut sessions = self.sessions.write().await;
         sessions
             .entry(config_id)
             .or_insert_with(Vec::new)
-            .push(session);
+            .push(Arc::new(session));
 
         info!(
             "[DB][Timing] create_session total database_type={:?} database={:?} session_id={} elapsed={}ms",
@@ -506,145 +643,208 @@ impl ConnectionManager {
         Some(lock.lock_owned().await)
     }
 
-    /// Get mutable access to a session's connection
-    /// Returns the connection wrapped in the write guard to maintain lock
+    /// Get exclusive access to a session's connection for one statement
+    ///
+    /// The pool lock is only held long enough to locate the session and claim it;
+    /// the returned guard holds that session's connection lock, so another tab on
+    /// another connection keeps running in parallel.
     pub async fn get_session_connection(
         &self,
         session_id: &str,
-    ) -> Result<SessionConnectionGuard<'_>, DbError> {
-        let sessions = self.sessions.write().await;
+    ) -> Result<SessionConnectionGuard, DbError> {
+        let session = {
+            let sessions = self.sessions.read().await;
+            let session = sessions
+                .values()
+                .flat_map(|list| list.iter())
+                .find(|session| session.session_id == session_id)
+                .cloned()
+                .ok_or_else(|| DbError::Internal(format!("session not found: {}", session_id)))?;
+            // Claim it before dropping the pool lock so cleanup cannot close it underneath.
+            session.mark_in_use();
+            session
+        };
 
-        // Check if session exists
-        let exists = sessions
-            .values()
-            .any(|list| list.iter().any(|s| s.session_id == session_id));
-
-        if !exists {
+        // The session may have been detached (and its connection closed) while we queued
+        // behind a running statement; never hand out a connection the pool lost.
+        //
+        // This nests the connection lock and the session table lock. It cannot deadlock:
+        // no path holds the session table lock while awaiting a connection lock
+        // (`try_acquire_session` releases it before validating a candidate).
+        let connection = session.lock_connection().await;
+        if !self.is_pooled(session_id).await {
+            session.release();
             return Err(DbError::Internal(format!(
                 "session not found: {}",
                 session_id
             )));
         }
 
-        Ok(SessionConnectionGuard {
-            sessions,
-            session_id: session_id.to_string(),
-        })
+        Ok(SessionConnectionGuard { connection })
     }
 
-    fn db_equals(db1: &DbConnectionConfig, db2: &DbConnectionConfig) -> bool {
-        match db1.database_type {
-            DatabaseType::Oracle => {
-                (db1.sid.is_some() && db1.sid == db2.sid)
-                    || (db1.service_name.is_some() && db1.service_name == db2.service_name)
+    /// Clone the shared handle of one session without holding the pool lock.
+    async fn find_session(&self, session_id: &str) -> Option<Arc<ConnectionSession>> {
+        let sessions = self.sessions.read().await;
+        sessions
+            .values()
+            .flat_map(|list| list.iter())
+            .find(|session| session.session_id == session_id)
+            .cloned()
+    }
+
+    /// Remove one session from the pool so no new statement can claim it.
+    ///
+    /// The caller owns closing the returned session outside the pool lock.
+    async fn detach_session(&self, session_id: &str) -> Option<Arc<ConnectionSession>> {
+        let mut sessions = self.sessions.write().await;
+        let mut detached = None;
+        for session_list in sessions.values_mut() {
+            if let Some(index) = session_list
+                .iter()
+                .position(|session| session.session_id == session_id)
+            {
+                detached = Some(session_list.remove(index));
+                break;
             }
-            _ => db1.database.is_some() && db1.database == db2.database,
         }
+        if detached.is_some() {
+            sessions.retain(|_, session_list| !session_list.is_empty());
+        }
+        detached
     }
 
     /// Try to acquire an existing idle session with matching database
+    ///
+    /// The session table lock is held only to pick and claim a candidate: every wait —
+    /// the live database check and the ping — happens after it is released. A session
+    /// busy with a long statement therefore never stalls the pool for other connections.
     async fn try_acquire_session(
         &self,
         config: &DbConnectionConfig,
     ) -> Result<Option<String>, DbError> {
-        loop {
-            let mut sessions = self.sessions.write().await;
-            let mut has_busy_close_on_release_session = false;
+        // Candidates already rejected by the out-of-lock checks below.
+        let mut rejected: HashSet<String> = HashSet::new();
 
-            let remove_config_entry = {
+        loop {
+            let (candidate, waiting_for_busy_session) = {
+                let mut sessions = self.sessions.write().await;
                 let Some(session_list) = sessions.get_mut(&config.id) else {
                     return Ok(None);
                 };
 
-                let mut index = 0;
-                while index < session_list.len() {
-                    let session = &session_list[index];
-                    let matches_database = Self::db_equals(session.connection.config(), config);
-                    if matches_database && session.in_use && session.close_on_release {
-                        has_busy_close_on_release_session = true;
-                        index += 1;
+                let mut candidate: Option<Arc<ConnectionSession>> = None;
+                let mut waiting_for_busy_session = false;
+
+                for session in session_list.iter() {
+                    if rejected.contains(&session.session_id) || !session.can_serve(config) {
                         continue;
                     }
-                    let matches_config = !session.in_use && matches_database;
-
-                    if !matches_config {
-                        index += 1;
+                    if session.in_use() {
+                        waiting_for_busy_session |= session.close_on_release;
                         continue;
                     }
-
-                    if let Err(error) = session.connection.ping().await {
-                        let mut session = session_list.remove(index);
-                        warn!(
-                            "Discarding stale session {} before reuse: {}",
-                            session.session_id, error
-                        );
-                        session.close().await;
-                        continue;
-                    }
-
-                    let session = &mut session_list[index];
-                    session.mark_in_use();
-
-                    debug!(
-                        "Reusing session: {} (database: {:?})",
-                        session.session_id, config.database
-                    );
-                    return Ok(Some(session.session_id.clone()));
+                    candidate = Some(Arc::clone(session));
+                    break;
                 }
 
-                session_list.is_empty()
+                if let Some(session) = &candidate {
+                    session.reserve();
+                }
+
+                let empty = session_list.is_empty();
+                if empty {
+                    sessions.remove(&config.id);
+                }
+
+                (candidate, waiting_for_busy_session)
             };
 
-            if remove_config_entry {
-                sessions.remove(&config.id);
+            let Some(session) = candidate else {
+                if waiting_for_busy_session {
+                    sleep(BUSY_CLOSE_ON_RELEASE_RETRY_DELAY).await;
+                    continue;
+                }
+                return Ok(None);
+            };
+
+            let session_id = session.session_id.clone();
+
+            match session.validate_reuse(config).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    // The live database drifted from the request; the refreshed identity
+                    // stays cached, so look for another candidate.
+                    session.release();
+                    rejected.insert(session_id);
+                    continue;
+                }
+                Err(error) => {
+                    warn!(
+                        "Discarding stale session {} before reuse: {}",
+                        session_id, error
+                    );
+                    session.release();
+                    self.detach_and_close(&session_id).await;
+                    continue;
+                }
             }
 
-            drop(sessions);
-
-            if has_busy_close_on_release_session {
-                sleep(BUSY_CLOSE_ON_RELEASE_RETRY_DELAY).await;
+            if !self.is_pooled(&session_id).await {
+                // Removed while we were waiting for the connection; never hand it out.
+                session.release();
                 continue;
             }
 
-            return Ok(None);
+            debug!(
+                "Reusing session: {} (database: {:?})",
+                session_id, config.database
+            );
+            return Ok(Some(session_id));
         }
+    }
+
+    /// Whether a session is still part of the pool.
+    ///
+    /// Borrows the session table only, so a caller holding a connection lock can use it
+    /// to re-check ownership before handing the connection out.
+    async fn is_pooled(&self, session_id: &str) -> bool {
+        let sessions = self.sessions.read().await;
+        sessions
+            .values()
+            .any(|list| list.iter().any(|session| session.session_id == session_id))
+    }
+
+    /// Detach a session from the pool and close it.
+    ///
+    /// Returns `false` when another task detached it first: that task owns the close, so
+    /// the physical connection is disconnected exactly once.
+    async fn detach_and_close(&self, session_id: &str) -> bool {
+        let Some(session) = self.detach_session(session_id).await else {
+            return false;
+        };
+        session.close().await;
+        true
     }
 }
 
-/// Guard that holds the write lock and provides access to a session's connection
-pub struct SessionConnectionGuard<'a> {
-    sessions: tokio::sync::RwLockWriteGuard<'a, HashMap<String, Vec<ConnectionSession>>>,
-    session_id: String,
+/// Guard that locks one session's connection for the duration of a statement
+pub struct SessionConnectionGuard {
+    connection: OwnedMutexGuard<Box<dyn DbConnection + Send + Sync>>,
 }
 
-impl<'a> SessionConnectionGuard<'a> {
-    /// Get mutable reference to the connection and update last active time
+impl SessionConnectionGuard {
+    /// Get mutable reference to the connection
     pub fn connection(&mut self) -> Option<&mut (dyn DbConnection + Send + Sync)> {
-        for session_list in self.sessions.values_mut() {
-            if let Some(session) = session_list
-                .iter_mut()
-                .find(|s| s.session_id == self.session_id)
-            {
-                session.mark_in_use();
-                return Some(&mut *session.connection);
-            }
-        }
-        None
+        Some(&mut **self.connection)
     }
 }
 
 impl ConnectionManager {
     /// Get session config
     pub async fn get_session_config(&self, session_id: &str) -> Option<DbConnectionConfig> {
-        let sessions = self.sessions.read().await;
-
-        for session_list in sessions.values() {
-            if let Some(session) = session_list.iter().find(|s| s.session_id == session_id) {
-                return Some(session.connection.config().clone());
-            }
-        }
-
-        None
+        let session = self.find_session(session_id).await?;
+        Some(session.lock_connection().await.config().clone())
     }
 
     pub async fn release_session(&self, session_id: &str) -> Result<(), DbError> {
@@ -660,142 +860,120 @@ impl ConnectionManager {
         session_id: &str,
         close_idle_file_connection: bool,
     ) -> Result<(), DbError> {
-        let mut sessions = self.sessions.write().await;
+        let Some(session) = self.find_session(session_id).await else {
+            return Err(DbError::Internal(format!(
+                "session not found: {}",
+                session_id
+            )));
+        };
 
-        let mut removed_session: Option<ConnectionSession> = None;
-        let mut empty_config_id: Option<String> = None;
-
-        for (config_id, session_list) in sessions.iter_mut() {
-            if let Some(pos) = session_list.iter().position(|s| s.session_id == session_id) {
-                let session = &mut session_list[pos];
-                match session.verify_and_sync_database().await {
-                    Ok(_) => {
-                        if close_idle_file_connection && session.close_on_release {
-                            removed_session = Some(session_list.remove(pos));
-                            if session_list.is_empty() {
-                                empty_config_id = Some(config_id.clone());
-                            }
-                            break;
-                        }
-                        session.release();
-                        debug!("Session {} released", session_id);
-                        return Ok(());
-                    }
-                    Err(e) => {
-                        // Check failed, mark for closing
-                        warn!(
-                            "Session {} database check failed: {}, closing connection",
-                            session_id, e
-                        );
-                        removed_session = Some(session_list.remove(pos));
-                        if session_list.is_empty() {
-                            empty_config_id = Some(config_id.clone());
-                        }
-                        break;
-                    }
-                }
+        let should_close = match session.verify_and_sync_database().await {
+            Ok(_) => close_idle_file_connection && session.close_on_release,
+            Err(e) => {
+                // Check failed, mark for closing
+                warn!(
+                    "Session {} database check failed: {}, closing connection",
+                    session_id, e
+                );
+                true
             }
-        }
+        };
 
-        if let Some(config_id) = empty_config_id {
-            sessions.remove(&config_id);
-        }
+        let detached = should_close && self.detach_session(session_id).await.is_some();
 
-        if let Some(mut session) = removed_session {
+        if detached {
+            // This task removed the session from the pool, so it owns the disconnect.
             session.release();
             session.close().await;
             return Ok(());
         }
 
-        Err(DbError::Internal(format!(
-            "session not found: {}",
-            session_id
-        )))
+        session.release();
+        if should_close {
+            debug!("Session {} was already detached", session_id);
+        } else {
+            debug!("Session {} released", session_id);
+        }
+        Ok(())
     }
 
     /// Close a specific session
     pub async fn close_session(&self, session_id: &str) -> Result<(), DbError> {
-        let mut sessions = self.sessions.write().await;
+        let Some(session) = self.detach_session(session_id).await else {
+            return Err(DbError::Internal(format!(
+                "session not found: {}",
+                session_id
+            )));
+        };
 
-        let mut found_config_id: Option<String> = None;
-        let mut removed_session: Option<ConnectionSession> = None;
-
-        for (config_id, session_list) in sessions.iter_mut() {
-            if let Some(pos) = session_list.iter().position(|s| s.session_id == session_id) {
-                removed_session = Some(session_list.remove(pos));
-                if session_list.is_empty() {
-                    found_config_id = Some(config_id.clone());
-                }
-                break;
-            }
-        }
-
-        // Remove empty config entry after iteration
-        if let Some(config_id) = found_config_id {
-            sessions.remove(&config_id);
-        }
-
-        // Close session after releasing iteration
-        if let Some(mut session) = removed_session {
-            session.release();
-            session.close().await;
-            return Ok(());
-        }
-
-        Err(DbError::Internal(format!(
-            "session not found: {}",
-            session_id
-        )))
+        session.release();
+        session.close().await;
+        Ok(())
     }
 
     /// Remove all sessions for a connection config
     pub async fn remove_all_sessions(&self, config_id: &str) {
-        let mut sessions = self.sessions.write().await;
+        let session_list = {
+            let mut sessions = self.sessions.write().await;
+            sessions.remove(config_id)
+        };
 
-        if let Some(mut session_list) = sessions.remove(config_id) {
-            info!(
-                "Closing {} sessions for config: {}",
-                session_list.len(),
-                config_id
-            );
+        let Some(session_list) = session_list else {
+            return;
+        };
 
-            for session in session_list.iter_mut() {
-                session.close().await;
-            }
+        info!(
+            "Closing {} sessions for config: {}",
+            session_list.len(),
+            config_id
+        );
+
+        for session in session_list.iter() {
+            session.close().await;
         }
     }
 
     /// Clean up expired sessions
     async fn cleanup_expired_sessions(&self) {
-        let mut sessions = self.sessions.write().await;
         let idle_timeout = self.idle_timeout;
         let max_lifetime = self.max_lifetime;
 
-        for (config_id, session_list) in sessions.iter_mut() {
-            let mut i = 0;
-            while i < session_list.len() {
-                let should_remove = session_list[i].is_expired(idle_timeout)
-                    || session_list[i].is_lifetime_expired(max_lifetime);
+        let expired = {
+            let mut sessions = self.sessions.write().await;
+            let mut expired = Vec::new();
 
-                if should_remove {
-                    let mut session = session_list.remove(i);
-                    warn!(
-                        "Closing expired session {} for config {} (in_use: {}, idle: {}s, lifetime: {}s)",
-                        session.session_id,
-                        config_id,
-                        session.in_use,
-                        session.last_active.elapsed().as_secs(),
-                        session.created_at.elapsed().as_secs()
-                    );
-                    session.close().await;
-                } else {
-                    i += 1;
+            for (config_id, session_list) in sessions.iter_mut() {
+                let mut i = 0;
+                while i < session_list.len() {
+                    let session = &session_list[i];
+                    let should_remove = session.is_expired(idle_timeout)
+                        || session.is_lifetime_expired(max_lifetime);
+
+                    if should_remove {
+                        let session = session_list.remove(i);
+                        warn!(
+                            "Closing expired session {} for config {} (in_use: {}, idle: {}s, lifetime: {}s)",
+                            session.session_id,
+                            config_id,
+                            session.in_use(),
+                            session.last_active().elapsed().as_secs(),
+                            session.created_at.elapsed().as_secs()
+                        );
+                        expired.push(session);
+                    } else {
+                        i += 1;
+                    }
                 }
             }
-        }
 
-        // Remove empty config entries
-        sessions.retain(|_, list| !list.is_empty());
+            // Remove empty config entries
+            sessions.retain(|_, list| !list.is_empty());
+            expired
+        };
+
+        for session in expired {
+            session.close().await;
+        }
     }
 
     /// Get connection statistics
@@ -806,7 +984,7 @@ impl ConnectionManager {
 
         for session_list in sessions.values() {
             total += session_list.len();
-            in_use_count += session_list.iter().filter(|s| s.in_use).count();
+            in_use_count += session_list.iter().filter(|s| s.in_use()).count();
         }
 
         ConnectionStats {
@@ -818,22 +996,25 @@ impl ConnectionManager {
 
     /// List all sessions for a config
     pub async fn list_sessions(&self, config_id: &str) -> Vec<SessionInfo> {
-        let sessions = self.sessions.read().await;
+        let session_list = {
+            let sessions = self.sessions.read().await;
+            sessions.get(config_id).cloned().unwrap_or_default()
+        };
 
-        sessions
-            .get(config_id)
-            .map(|list| {
-                list.iter()
-                    .map(|s| SessionInfo {
-                        session_id: s.session_id.clone(),
-                        database: s.connection.config().database.clone(),
-                        in_use: s.in_use,
-                        idle_time: s.last_active.elapsed(),
-                        lifetime: s.created_at.elapsed(),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
+        let mut infos = Vec::with_capacity(session_list.len());
+        for session in session_list {
+            let last_active = session.last_active();
+            infos.push(SessionInfo {
+                session_id: session.session_id.clone(),
+                // Cached identity instead of the live config: listing sessions must not
+                // wait for a session that is busy with a statement.
+                database: session.identity().database.clone(),
+                in_use: session.in_use(),
+                idle_time: last_active.elapsed(),
+                lifetime: session.created_at.elapsed(),
+            });
+        }
+        infos
     }
 }
 
@@ -4613,7 +4794,7 @@ mod tests {
             .await
             .entry(config.id.clone())
             .or_default()
-            .push(session);
+            .push(Arc::new(session));
 
         cache
             .cache_tables(connection_id, "postgres", Some("public"), Vec::new())
@@ -5121,7 +5302,7 @@ mod tests {
             .await
             .entry(config.id.clone())
             .or_default()
-            .push(session);
+            .push(Arc::new(session));
 
         let cancellation = CancellationToken::new();
         let (tx, mut progress) = mpsc::channel(1);
@@ -5183,7 +5364,7 @@ mod tests {
         let config = test_config("conn1");
         let session_id = "conn1:session:test".to_string();
         let executed_sql = Arc::new(StdMutex::new(Vec::new()));
-        let mut session = ConnectionSession::new(
+        let session = ConnectionSession::new(
             Box::new(MockConnection::with_executed_sql(
                 config.clone(),
                 executed_sql.clone(),
@@ -5199,7 +5380,7 @@ mod tests {
             .await
             .entry(config.id.clone())
             .or_default()
-            .push(session);
+            .push(Arc::new(session));
 
         let result = state
             .execute_session(session_id.clone(), "select 1".to_string(), None)
@@ -5217,6 +5398,413 @@ mod tests {
         );
     }
 
+    async fn insert_test_session(
+        manager: &ConnectionManager,
+        config: &DbConnectionConfig,
+        session_id: &str,
+        connection: MockConnection,
+    ) {
+        manager
+            .sessions
+            .write()
+            .await
+            .entry(config.id.clone())
+            .or_default()
+            .push(Arc::new(ConnectionSession::new(
+                Box::new(connection),
+                session_id.to_string(),
+                false,
+            )));
+    }
+
+    /// 一个 session 正在执行时，另一个 session 仍必须能拿到自己的连接。
+    /// 历史行为是整张会话表被写锁占住，导致 A 页签执行时 B 页签（哪怕连的是
+    /// 另一台库）完全无法执行。
+    #[tokio::test]
+    async fn session_connection_guards_do_not_serialize_different_sessions() {
+        let manager = ConnectionManager::new();
+        let first = test_config("session-lock-first");
+        let second = test_config("session-lock-second");
+        let first_id = "session-lock-first:session:1";
+        let second_id = "session-lock-second:session:1";
+
+        insert_test_session(
+            &manager,
+            &first,
+            first_id,
+            MockConnection::new(first.clone(), true),
+        )
+        .await;
+        insert_test_session(
+            &manager,
+            &second,
+            second_id,
+            MockConnection::new(second.clone(), true),
+        )
+        .await;
+
+        let mut first_guard = manager.get_session_connection(first_id).await.unwrap();
+        assert!(first_guard.connection().is_some());
+
+        let mut second_guard = tokio::time::timeout(
+            Duration::from_millis(200),
+            manager.get_session_connection(second_id),
+        )
+        .await
+        .expect("another session must not wait for the first session's statement")
+        .expect("second session should be found");
+        assert!(second_guard.connection().is_some());
+
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(200),
+                manager.get_session_connection(first_id),
+            )
+            .await
+            .is_err(),
+            "the same session must stay exclusive while a statement runs"
+        );
+    }
+
+    /// 页签 A 的长查询不得阻塞页签 B 的执行（端到端版本）。
+    #[tokio::test]
+    async fn executing_on_one_session_does_not_block_another_session() {
+        let state = GlobalDbState::new();
+        let blocked = test_config("blocked-conn");
+        let free = test_config("free-conn");
+        let blocked_id = "blocked-conn:session:1";
+        let free_id = "free-conn:session:1";
+
+        let execution_started = Arc::new(AtomicBool::new(false));
+        let execution_dropped = Arc::new(AtomicBool::new(false));
+        let executed_sql = Arc::new(StdMutex::new(Vec::new()));
+
+        state
+            .connection_manager
+            .sessions
+            .write()
+            .await
+            .entry(blocked.id.clone())
+            .or_default()
+            .push(Arc::new(ConnectionSession::new(
+                Box::new(MockConnection::with_blocking_execution(
+                    blocked.clone(),
+                    Arc::new(AtomicUsize::new(0)),
+                    execution_started.clone(),
+                    execution_dropped.clone(),
+                )),
+                blocked_id.to_string(),
+                false,
+            )));
+        state
+            .connection_manager
+            .sessions
+            .write()
+            .await
+            .entry(free.id.clone())
+            .or_default()
+            .push(Arc::new(ConnectionSession::new(
+                Box::new(MockConnection::with_executed_sql(
+                    free.clone(),
+                    executed_sql.clone(),
+                )),
+                free_id.to_string(),
+                false,
+            )));
+
+        let blocked_state = state.clone();
+        let blocked_execution = tokio::spawn(async move {
+            blocked_state
+                .execute_session(
+                    blocked_id.to_string(),
+                    "SELECT pg_sleep(60)".to_string(),
+                    None,
+                )
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !execution_started.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("blocked session execution should start");
+
+        let result = tokio::time::timeout(
+            Duration::from_millis(500),
+            state.execute_session(free_id.to_string(), "select 1".to_string(), None),
+        )
+        .await
+        .expect("a statement on another session must run while the first one is executing")
+        .expect("second session execution should succeed");
+        assert_eq!(1, result.len());
+        assert_eq!(vec!["select 1".to_string()], *executed_sql.lock().unwrap());
+
+        blocked_execution.abort();
+        assert!(blocked_execution.await.unwrap_err().is_cancelled());
+        assert!(execution_dropped.load(Ordering::SeqCst));
+    }
+
+    /// 一个语句的释放不能清掉下一条语句对同一个 session 的占用。
+    /// 占用必须按计数维护：释放与下一次获取会交错，布尔量会把正在执行的
+    /// session 记为空闲，进而被清理任务回收。
+    #[tokio::test]
+    async fn overlapping_release_keeps_the_next_statement_claim() {
+        let session = ConnectionSession::new(
+            Box::new(MockConnection::new(test_config("claim"), true)),
+            "claim:session:1".to_string(),
+            false,
+        );
+
+        session.mark_in_use();
+        session.mark_in_use();
+        session.release();
+        assert!(
+            session.in_use(),
+            "finishing the first statement must not clear the claim of the next one"
+        );
+
+        session.release();
+        assert!(!session.in_use());
+    }
+
+    /// 一次语句只占用一个单位：取连接时占用，释放后退回空闲并重新可回收。
+    #[tokio::test]
+    async fn a_statement_claims_and_releases_a_session_exactly_once() {
+        let manager = ConnectionManager::new();
+        let config = test_config("balanced-claim");
+        let session_id = "balanced-claim:session:1";
+        let session = Arc::new(ConnectionSession::new(
+            Box::new(MockConnection::new(config.clone(), true)),
+            session_id.to_string(),
+            false,
+        ));
+        manager
+            .sessions
+            .write()
+            .await
+            .entry(config.id.clone())
+            .or_default()
+            .push(Arc::clone(&session));
+
+        let guard = manager.get_session_connection(session_id).await.unwrap();
+        assert!(session.in_use());
+        drop(guard);
+        manager.release_session(session_id).await.unwrap();
+
+        assert!(
+            !session.in_use(),
+            "a released session must go back to idle so it can be reused"
+        );
+        assert!(
+            session.is_expired(Duration::ZERO),
+            "a released session must be eligible for idle cleanup"
+        );
+
+        // 复用成功后再走一遍语句的占用/释放，占用计数必须重新回到 0。
+        let acquired = manager.try_acquire_session(&config).await.unwrap();
+        assert_eq!(Some(session_id.to_string()), acquired);
+
+        let guard = manager.get_session_connection(session_id).await.unwrap();
+        assert!(session.in_use());
+        drop(guard);
+        manager.release_session(session_id).await.unwrap();
+        assert!(
+            !session.in_use(),
+            "reusing a session must not leave a claim behind"
+        );
+    }
+
+    /// 释放任务先排队等连接锁、下一条语句随后拿到连接时，session 不能被记为 idle。
+    #[tokio::test]
+    async fn releasing_a_session_does_not_report_the_next_statement_as_idle() {
+        let manager = ConnectionManager::new();
+        let config = test_config("claim-race");
+        let session_id = "claim-race:session:1";
+
+        let session = Arc::new(ConnectionSession::new(
+            Box::new(MockConnection::new(config.clone(), true)),
+            session_id.to_string(),
+            false,
+        ));
+        manager
+            .sessions
+            .write()
+            .await
+            .entry(config.id.clone())
+            .or_default()
+            .push(Arc::clone(&session));
+
+        let mut first = manager.get_session_connection(session_id).await.unwrap();
+        assert!(first.connection().is_some());
+
+        // 释放任务先进连接锁队列；连接锁是 FIFO，sleep 只用来固定队列顺序。
+        let release = {
+            let manager = manager.clone();
+            let session_id = session_id.to_string();
+            tokio::spawn(async move { manager.release_session(&session_id).await })
+        };
+        sleep(Duration::from_millis(20)).await;
+
+        // 下一条语句随后取同一 session：先标记占用，然后排在释放之后拿到连接。
+        let next = {
+            let manager = manager.clone();
+            let session_id = session_id.to_string();
+            tokio::spawn(async move { manager.get_session_connection(&session_id).await })
+        };
+        sleep(Duration::from_millis(20)).await;
+
+        drop(first);
+
+        let mut next = tokio::time::timeout(Duration::from_secs(2), next)
+            .await
+            .expect("next statement should not hang")
+            .expect("join")
+            .expect("next statement should get the connection");
+        assert!(next.connection().is_some());
+        tokio::time::timeout(Duration::from_secs(2), release)
+            .await
+            .expect("release should not hang")
+            .expect("join")
+            .expect("release should succeed");
+
+        // 直接读 session 状态：读会话表需要写锁，旧实现里会被 guard 挡住而挂住。
+        assert!(
+            session.in_use(),
+            "a session holding a connection for a statement must not be reported as idle"
+        );
+        drop(next);
+    }
+
+    /// 复用会话时不得在持有会话表锁的情况下等待某条会话的连接锁，
+    /// 否则一个正在跑长查询的会话会重新堵住所有页签（含其它连接）。
+    #[tokio::test]
+    async fn try_acquire_session_does_not_block_the_pool_while_a_session_is_busy() {
+        let manager = ConnectionManager::new();
+        let busy = test_config("busy-config");
+        let other = test_config("other-config");
+        let busy_id = "busy-config:session:1";
+        let other_id = "other-config:session:1";
+
+        insert_test_session(
+            &manager,
+            &busy,
+            busy_id,
+            MockConnection::new(busy.clone(), true),
+        )
+        .await;
+        insert_test_session(
+            &manager,
+            &other,
+            other_id,
+            MockConnection::new(other.clone(), true),
+        )
+        .await;
+
+        // busy 会话正在执行：它的连接锁被长期持有。
+        let mut busy_guard = manager.get_session_connection(busy_id).await.unwrap();
+        assert!(busy_guard.connection().is_some());
+
+        let acquire = {
+            let manager = manager.clone();
+            let config = busy.clone();
+            tokio::spawn(async move { manager.try_acquire_session(&config).await })
+        };
+        sleep(Duration::from_millis(20)).await;
+
+        // 复用扫描进行中，其它连接仍必须能取到自己的会话。
+        tokio::time::timeout(
+            Duration::from_millis(300),
+            manager.get_session_connection(other_id),
+        )
+        .await
+        .expect("a busy session must not block the pool for other connections")
+        .expect("other session should be found");
+
+        let acquired = tokio::time::timeout(Duration::from_secs(2), acquire)
+            .await
+            .expect("acquire should not block on a busy session's connection lock")
+            .expect("join")
+            .expect("acquire");
+        assert_eq!(
+            None, acquired,
+            "a session that is executing a statement must not be handed out again"
+        );
+
+        drop(busy_guard);
+        manager.release_session(busy_id).await.unwrap();
+
+        let acquired =
+            tokio::time::timeout(Duration::from_secs(2), manager.try_acquire_session(&busy))
+                .await
+                .expect("acquire should not hang")
+                .expect("acquire");
+        assert_eq!(Some(busy_id.to_string()), acquired);
+    }
+
+    /// 并发释放与关闭同一个 session 时，物理连接只能断开一次。
+    #[tokio::test]
+    async fn concurrent_release_and_close_disconnect_the_session_once() {
+        let manager = ConnectionManager::new();
+        let config = test_config("double-close");
+        let session_id = "double-close:session:1";
+        let disconnect_count = Arc::new(AtomicUsize::new(0));
+
+        manager
+            .sessions
+            .write()
+            .await
+            .entry(config.id.clone())
+            .or_default()
+            .push(Arc::new(ConnectionSession::new(
+                Box::new(MockConnection::with_disconnect_count(
+                    config.clone(),
+                    true,
+                    Arc::clone(&disconnect_count),
+                )),
+                session_id.to_string(),
+                true,
+            )));
+
+        let mut guard = manager.get_session_connection(session_id).await.unwrap();
+        assert!(guard.connection().is_some());
+
+        // 释放任务先排队等连接锁，随后 close_session 把同一个 session 摘走。
+        let release = {
+            let manager = manager.clone();
+            let session_id = session_id.to_string();
+            tokio::spawn(async move { manager.release_session(&session_id).await })
+        };
+        sleep(Duration::from_millis(20)).await;
+
+        let close = {
+            let manager = manager.clone();
+            let session_id = session_id.to_string();
+            tokio::spawn(async move { manager.close_session(&session_id).await })
+        };
+        sleep(Duration::from_millis(20)).await;
+
+        drop(guard);
+
+        tokio::time::timeout(Duration::from_secs(2), release)
+            .await
+            .expect("release should not hang")
+            .expect("join")
+            .expect("release should succeed");
+        tokio::time::timeout(Duration::from_secs(2), close)
+            .await
+            .expect("close should not hang")
+            .expect("join")
+            .expect("close should succeed");
+
+        assert_eq!(
+            1,
+            disconnect_count.load(Ordering::SeqCst),
+            "the physical connection must be disconnected exactly once"
+        );
+        assert!(manager.list_sessions(&config.id).await.is_empty());
+    }
+
     #[tokio::test]
     async fn closing_an_executing_session_waits_for_cancellation_and_disconnects_once() {
         let state = GlobalDbState::new();
@@ -5225,7 +5813,7 @@ mod tests {
         let disconnect_count = Arc::new(AtomicUsize::new(0));
         let execution_started = Arc::new(AtomicBool::new(false));
         let execution_dropped = Arc::new(AtomicBool::new(false));
-        let mut session = ConnectionSession::new(
+        let session = ConnectionSession::new(
             Box::new(MockConnection::with_blocking_execution(
                 config.clone(),
                 disconnect_count.clone(),
@@ -5243,7 +5831,7 @@ mod tests {
             .await
             .entry(config.id.clone())
             .or_default()
-            .push(session);
+            .push(Arc::new(session));
 
         let execution_state = state.clone();
         let execution_session_id = session_id.clone();
@@ -5366,7 +5954,7 @@ mod tests {
         let config = test_config("conn1");
         let session_id = "conn1:session:test".to_string();
         let switched_schemas = Arc::new(StdMutex::new(Vec::new()));
-        let mut session = ConnectionSession::new(
+        let session = ConnectionSession::new(
             Box::new(MockConnection::with_switched_schemas(
                 config.clone(),
                 switched_schemas.clone(),
@@ -5382,7 +5970,7 @@ mod tests {
             .await
             .entry(config.id.clone())
             .or_default()
-            .push(session);
+            .push(Arc::new(session));
 
         state
             .switch_session_schema(session_id, "analytics".to_string())
@@ -5432,7 +6020,7 @@ mod tests {
             .await
             .entry(config.id.clone())
             .or_default()
-            .push(session);
+            .push(Arc::new(session));
 
         let acquired = manager.try_acquire_session(&config).await.unwrap();
         let remaining = manager.list_sessions(&config.id).await;
@@ -5508,7 +6096,7 @@ mod tests {
         let mut config = test_config("duckdb-conn");
         config.database_type = DatabaseType::DuckDB;
         let disconnect_count = Arc::new(AtomicUsize::new(0));
-        let mut session = ConnectionSession::new(
+        let session = ConnectionSession::new(
             Box::new(MockConnection::with_disconnect_count(
                 config.clone(),
                 true,
@@ -5525,7 +6113,7 @@ mod tests {
             .await
             .entry(config.id.clone())
             .or_default()
-            .push(session);
+            .push(Arc::new(session));
 
         manager
             .release_session("duckdb-conn:session:1")
@@ -5543,7 +6131,7 @@ mod tests {
         let mut config = test_config("duckdb-transaction");
         config.database_type = DatabaseType::DuckDB;
         let disconnect_count = Arc::new(AtomicUsize::new(0));
-        let mut session = ConnectionSession::new(
+        let session = ConnectionSession::new(
             Box::new(MockConnection::with_disconnect_count(
                 config.clone(),
                 true,
@@ -5560,7 +6148,7 @@ mod tests {
             .await
             .entry(config.id.clone())
             .or_default()
-            .push(session);
+            .push(Arc::new(session));
 
         manager
             .release_session_for_reuse("duckdb-transaction:session:1")
@@ -5579,7 +6167,7 @@ mod tests {
             ConnectionManager::with_config(Duration::from_secs(300), Duration::from_secs(1800));
         let mut config = test_config("duckdb-busy");
         config.database_type = DatabaseType::DuckDB;
-        let mut session = ConnectionSession::new(
+        let session = ConnectionSession::new(
             Box::new(MockConnection::new(config.clone(), true)),
             "duckdb-busy:session:1".to_string(),
             true,
@@ -5592,7 +6180,7 @@ mod tests {
             .await
             .entry(config.id.clone())
             .or_default()
-            .push(session);
+            .push(Arc::new(session));
 
         let (release_tx, release_rx) = tokio::sync::oneshot::channel();
         let release_manager = manager.clone();

@@ -12909,6 +12909,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "base64 0.22.1",
+ "futures",
  "russh",
  "russh-sftp",
  "rust-i18n",

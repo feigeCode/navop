@@ -1489,6 +1489,11 @@ impl DbTreeView {
         }
     }
 
+    /// 取已加载到树中的节点。
+    pub fn node(&self, node_id: &str) -> Option<DbNode> {
+        self.db_nodes.get(node_id).cloned()
+    }
+
     /// 刷新指定节点及其子节点
     ///
     /// 这个方法会：
