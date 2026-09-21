@@ -11,7 +11,7 @@ use crate::extension_menu::{
     DbTreeExtensionMenuRegistry, GlobalDbTreeExtensionActionHandler,
 };
 use crate::object_list_selection::{
-    RowDragState, apply_drag_selection, apply_row_range, exceeds_drag_threshold, select_all_rows,
+    RowDragState, VisibleRowSpan, exceeds_drag_threshold, replace_with_span, select_all_rows,
 };
 use crate::search_shortcut::{
     DB_SEARCH_CONTEXT, FocusSearchInput, OpenSelectedTableQuery, SelectAllObjects,
@@ -266,24 +266,6 @@ pub enum DatabaseObjectsEvent {
         action: DatabaseObjectsBatchAction,
         nodes: Vec<DbNode>,
     },
-
-    /// 全选当前对象列表：请求宿主补全“未打开对象页签”的其他节点
-    SelectAllInScope {
-        scope: DatabaseObjectsSelectionScope,
-    },
-}
-
-/// 对象列表当前展示的节点范围。
-///
-/// 部分列表（如数据库下的表清单）只对应树中的目录节点，而这些节点未展开时
-/// 没有 `children_loaded`，因此无法从行数据反推出真实节点。这里把范围显式传给
-/// 宿主，由宿主负责加载并回填。
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DatabaseObjectsSelectionScope {
-    /// 数据库/schema 容器节点 ID，缺失表示当前列表不是可枚举的对象清单
-    pub container_node_id: Option<String>,
-    /// 列表对应的对象类型
-    pub node_type: DbNodeType,
 }
 
 #[derive(Clone, Debug)]
@@ -312,13 +294,13 @@ pub struct DatabaseObjects {
     current_node: Option<DbNode>,
     selected_indices: HashSet<usize>,
     context_menu_row: Option<usize>,
-    /// 鼠标按下但尚未判定为拖选的行
+    /// 鼠标行选择的交互状态（按下行、拖选锚点、加选快照）
     drag_state: RowDragState,
     /// 按下点在窗口中的位置，用于判定拖选阈值
     drag_origin: Option<Point<Pixels>>,
-    /// 列表滚动句柄，支持拖出可视区或按 Shift 时滚动到目标行
+    /// 列表滚动句柄：Shift 点击时把目标行滚入可视区
     list_scroll_handle: UniformListScrollHandle,
-    /// 拖选过程中最近悬停的可见行
+    /// 拖选过程中最近悬停的可见行，用来避免同一行重复重算选择集
     drag_hover_row: Option<usize>,
     _subscriptions: Vec<Subscription>,
 }
@@ -348,18 +330,15 @@ impl DatabaseObjects {
         if event.modifiers.shift {
             self.drag_state.cancel();
             self.drag_origin = None;
+            self.drag_hover_row = None;
             self.extend_selection_to(row_ix, cx);
             return;
         }
 
-        if !self
-            .drag_state
-            .pressed()
-            .is_some_and(|pressed| pressed == row_ix)
-        {
-            self.toggle_selection(row_ix, additive);
-        }
-        self.drag_state.press(row_ix, additive);
+        self.toggle_selection(row_ix, additive);
+        // Cmd/Ctrl 拖选在按下快照之上叠加区间，普通拖选直接替换选择集
+        let additive_base = additive.then(|| self.selected_indices.clone());
+        self.drag_state.press(row_ix, additive_base);
         self.drag_origin = Some(event.position);
         self.drag_hover_row = Some(row_ix);
         cx.notify();
@@ -382,22 +361,18 @@ impl DatabaseObjects {
             }
         }
 
-        self.drag_state.hover(row_ix);
+        // 先确立锚点，再判断是否需要重算区间：首个越过阈值的悬停行也要参与计算
+        if self.drag_state.start_drag().is_none() {
+            return;
+        }
         if self.drag_hover_row == Some(row_ix) {
             return;
         }
         self.drag_hover_row = Some(row_ix);
 
-        let Some(anchor) = self.drag_state.pressed() else {
-            return;
-        };
         let visible_row_count = self.visible_row_count();
-        apply_drag_selection(
-            &mut self.selected_indices,
-            anchor,
-            row_ix,
-            visible_row_count,
-        );
+        self.drag_state
+            .apply_drag_to(row_ix, &mut self.selected_indices, visible_row_count);
         cx.notify();
     }
 
@@ -422,8 +397,9 @@ impl DatabaseObjects {
 
     /// 结束拖选但不改变已确认的选择集。
     ///
-    /// 指针在行外释放（拖出列表、切到别的面板）时不会触发行级 `on_mouse_up`，
-    /// 由面板根节点的释放事件收尾。
+    /// 指针在列表外松开（拖出列表、切到别的面板）时，gpui 只把 `mouse_up` 发给
+    /// 命中路径上的元素，本视图收不到，因此 `RowDragState::press` 会自己丢弃旧锚点，
+    /// 这里的收尾只负责清掉拖选过程中的临时状态。
     fn end_row_drag(&mut self, cx: &mut Context<Self>) {
         let was_active = self.drag_state.pressed().is_some() || self.drag_state.is_dragging();
         self.drag_state.cancel();
@@ -687,49 +663,14 @@ impl DatabaseObjects {
     }
 
     /// 全选当前可见行（Ctrl/Cmd + A）。
+    ///
+    /// 列表本身已是当前范围的全量数据（`ObjectView` 不做截断），可见行即全部对象，
+    /// 因此全选不需要再去请求宿主补全。
     fn select_all_visible_rows(&mut self, cx: &mut Context<Self>) {
         let visible_row_count = self.visible_row_count();
         select_all_rows(&mut self.selected_indices, visible_row_count);
         self.context_menu_row = None;
         cx.notify();
-        cx.emit(DatabaseObjectsEvent::SelectAllInScope {
-            scope: self.selection_scope(),
-        });
-    }
-
-    /// 把指定节点对应的可见行纳入选择集（全选补全后回填）。
-    pub fn select_rows_matching_nodes(&mut self, node_ids: &[String], cx: &mut Context<Self>) {
-        if node_ids.is_empty() {
-            return;
-        }
-        let wanted: HashSet<&str> = node_ids.iter().map(String::as_str).collect();
-        let matched: Vec<usize> = (0..self.filtered_rows.len())
-            .filter(|row_ix| {
-                self.build_node_for_row(*row_ix)
-                    .is_some_and(|node| wanted.contains(node.id.as_str()))
-            })
-            .collect();
-        if matched.is_empty() {
-            return;
-        }
-        self.selected_indices.extend(matched);
-        self.context_menu_row = None;
-        cx.notify();
-    }
-
-    /// 当前列表可枚举的对象范围；不可枚举时返回 `None` 容器。
-    pub(crate) fn selection_scope(&self) -> DatabaseObjectsSelectionScope {
-        // 行数据本身已带完整身份（连接/库/schema/表）时才可以直接枚举
-        let enumerable = matches!(
-            self.db_node_type,
-            DbNodeType::Table | DbNodeType::View | DbNodeType::NamedQuery
-        );
-        DatabaseObjectsSelectionScope {
-            container_node_id: enumerable
-                .then(|| self.current_node.as_ref().map(|node| node.id.clone()))
-                .flatten(),
-            node_type: self.db_node_type,
-        }
     }
 
     /// Shift 点击：从当前锚点行扩展到目标行。
@@ -744,14 +685,17 @@ impl DatabaseObjects {
             .min()
             .filter(|_| !self.selected_indices.is_empty());
         match anchor {
-            Some(anchor) => apply_row_range(&mut self.selected_indices, anchor, row_ix),
+            Some(anchor) => {
+                let span = VisibleRowSpan::new(anchor, row_ix, self.visible_row_count());
+                replace_with_span(&mut self.selected_indices, span);
+            }
             None => {
                 self.selected_indices.clear();
                 self.selected_indices.insert(row_ix);
             }
         }
         self.list_scroll_handle
-            .scroll_to_item(row_ix, ScrollStrategy::Top);
+            .scroll_to_item(row_ix, ScrollStrategy::Nearest);
         cx.notify();
     }
 

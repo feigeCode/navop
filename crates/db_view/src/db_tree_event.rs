@@ -1,6 +1,4 @@
-use crate::database_objects_tab::{
-    DatabaseObjectsBatchAction, DatabaseObjectsEvent, DatabaseObjectsSelectionScope,
-};
+use crate::database_objects_tab::{DatabaseObjectsBatchAction, DatabaseObjectsEvent};
 use crate::db_tree_view::SqlDumpMode;
 use crate::{
     database_objects_tab::DatabaseObjectsPanel,
@@ -560,7 +558,6 @@ impl DatabaseEventHandler {
                 let global_state = global_state_for_objects.clone();
                 let tree_view = tree_view_for_objects.clone();
                 let execution_history = execution_history_for_objects.clone();
-                let db_objects_for_scope = _db_objects.clone();
 
                 match event {
                     DatabaseObjectsEvent::TreeEvent { event } => {
@@ -773,14 +770,6 @@ impl DatabaseEventHandler {
                             tree_view,
                             Some(objects_panel.clone()),
                             window,
-                            cx,
-                        );
-                    }
-                    DatabaseObjectsEvent::SelectAllInScope { scope } => {
-                        Self::handle_select_all_in_scope(
-                            scope.clone(),
-                            tree_view,
-                            db_objects_for_scope.clone(),
                             cx,
                         );
                     }
@@ -2633,58 +2622,6 @@ impl DatabaseEventHandler {
                     }
                 })
         });
-    }
-
-    /// 全选当前对象列表时，补全树中“尚未展开”的同级对象节点。
-    ///
-    /// 对象页签只在树节点已加载子节点后才展示完整清单，因此用户刚切到某个
-    /// 数据库/schema 时可能只看到部分对象。这里按范围重新加载容器子节点，
-    /// 让 Ctrl+A 覆盖到全部对象。
-    fn handle_select_all_in_scope(
-        scope: DatabaseObjectsSelectionScope,
-        tree_view: Entity<DbTreeView>,
-        database_objects: Entity<crate::database_objects_tab::DatabaseObjects>,
-        cx: &mut App,
-    ) {
-        let Some(container_node_id) = scope.container_node_id else {
-            return;
-        };
-        let Some(container) = tree_view.read(cx).node(&container_node_id) else {
-            return;
-        };
-        if container.children_loaded {
-            return;
-        }
-
-        let expected_type = scope.node_type;
-        let connection_id = container.connection_id.clone();
-        let global_state = cx.global::<GlobalDbState>().clone();
-
-        cx.spawn(async move |cx: &mut AsyncApp| {
-            let children = global_state
-                .load_node_children(cx, connection_id, container)
-                .await;
-            let Ok(children) = children else {
-                return;
-            };
-            let node_ids: Vec<String> = children
-                .iter()
-                .filter(|child| child.node_type == expected_type)
-                .map(|child| child.id.clone())
-                .collect();
-            if node_ids.is_empty() {
-                return;
-            }
-
-            // 树节点缓存复用同一份 children，避免重复请求
-            let _ = tree_view.update(cx, |tree, _cx| {
-                tree.store_loaded_children(&container_node_id, children);
-            });
-            let _ = database_objects.update(cx, |objects, cx| {
-                objects.select_rows_matching_nodes(&node_ids, cx);
-            });
-        })
-        .detach();
     }
 
     fn handle_batch_action(
