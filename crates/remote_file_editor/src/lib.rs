@@ -3,6 +3,7 @@ rust_i18n::i18n!("locales", fallback = "en");
 mod close_guard;
 mod diagnostics;
 mod editor_window;
+mod editor_window_visibility;
 mod external_edit_controller;
 mod external_editor;
 mod external_editor_confirmation;
