@@ -3,7 +3,9 @@ name: Windows Portable (临时验证)
 # 临时 workflow：只构建 Windows x64 便携包（navop.exe + navop.portable 标记），
 # 供他人验证某个改动，不发布 GitHub Release。验证结束后可直接删除本文件。
 #
-# 用法：Actions → 本 workflow → Run workflow，选择分支与 build_mode。
+# 说明：workflow_dispatch 要求本文件先存在于默认分支 main，所以当前验证期靠 push 触发；
+# 本分支任何 push 都会重新构建（同分支并发会取消上一次）。合入 main 后：
+# Actions → 本 workflow → Run workflow。
 
 on:
   workflow_dispatch:
@@ -22,16 +24,22 @@ on:
         default: verify
         type: string
       include_rdp:
-        description: "是否带 windows-native-rdp（与正式发布一致；关闭可显著缩短构建时间）"
+        description: "是否带 windows-native-rdp（与正式发布一致；false 可显著缩短构建时间）"
         required: true
-        type: boolean
-        default: true
+        type: choice
+        default: "true"
+        options:
+          - "true"
+          - "false"
+  push:
+    branches:
+      - feat/db-objects-batch-select
 
 permissions:
   contents: read
 
 concurrency:
-  group: win-portable-${{ github.ref_name }}-${{ inputs.label }}
+  group: win-portable-${{ github.ref_name }}
   cancel-in-progress: true
 
 env:
@@ -40,6 +48,10 @@ env:
   RUSTC_WRAPPER: sccache
   SCCACHE_GHA_ENABLED: "true"
   SCCACHE_IDLE_TIMEOUT: "7200"
+  # push 触发时 inputs 为空，这里给出与 workflow_dispatch 一致的默认值。
+  BUILD_MODE: ${{ inputs.build_mode || 'fast' }}
+  INCLUDE_RDP: ${{ inputs.include_rdp || 'true' }}
+  LABEL: ${{ inputs.label || 'mysql-binary' }}
 
 jobs:
   build:
@@ -110,7 +122,7 @@ jobs:
           arch: x64
 
       - name: Build Windows RDP toolchain probe
-        if: inputs.include_rdp
+        if: env.INCLUDE_RDP == 'true'
         shell: pwsh
         run: >-
           ./script/build-windows-rdp-probe.ps1
@@ -120,7 +132,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          label="$(printf '%s' '${{ inputs.label }}' | tr -cd 'A-Za-z0-9._-')"
+          label="$(printf '%s' "${LABEL}" | tr -cd 'A-Za-z0-9._-')"
           if [ -z "$label" ]; then
             label="verify"
           fi
@@ -155,13 +167,13 @@ jobs:
 
           cargo --version
           rustc --version
-          if ("${{ inputs.build_mode }}" -eq "fast") {
+          if ($env:BUILD_MODE -eq "fast") {
             $env:CARGO_PROFILE_RELEASE_LTO = "thin"
             $env:CARGO_PROFILE_RELEASE_CODEGEN_UNITS = "16"
             Write-Host "Fast build mode: thin LTO, codegen-units=16"
           }
 
-          $features = if ("${{ inputs.include_rdp }}" -eq "true") {
+          $features = if ($env:INCLUDE_RDP -eq "true") {
             @("--features", "windows-native-rdp")
           } else {
             @("--no-default-features", "--features", "wasm-components,embedded-webview")
@@ -221,7 +233,7 @@ jobs:
             echo ''
             echo "- 分支：\`${GITHUB_REF_NAME}\`"
             echo "- commit：\`${GITHUB_SHA}\`"
-            echo "- 构建模式：\`${{ inputs.build_mode }}\`（RDP：${{ inputs.include_rdp }}）"
+            echo "- 构建模式：\`${BUILD_MODE}\`（RDP：${INCLUDE_RDP}）"
             echo "- 产物：\`${PACKAGE_NAME}.zip\`（解压后得到 \`navop.exe\` + \`navop.portable\`）"
             echo "- 校验：\`${PACKAGE_NAME}.zip.sha256\`"
             echo ''
