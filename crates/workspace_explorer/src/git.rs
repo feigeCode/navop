@@ -259,6 +259,52 @@ pub fn capture_worktree_snapshot(repository: &GitRepository) -> Result<String> {
     result
 }
 
+/// checkpoint 锚定 ref 的命名空间。落在 refs/navop/ 下：
+/// 不占分支名、`git branch` 不显示、不会被普通 push 带走，且能防 gc。
+const CHECKPOINT_REF_PREFIX: &str = "refs/navop/checkpoints/";
+
+/// 为一个仓库生成稳定的 checkpoint ref 名。
+///
+/// 用 canonical 化后的仓库根生成 FNV-1a 哈希：同仓库跨重启同名，
+/// 不同仓库互不冲突。
+fn checkpoint_ref_name(repository: &GitRepository) -> String {
+    let root = repository.root.display().to_string();
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in root.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{CHECKPOINT_REF_PREFIX}{hash:016x}")
+}
+
+/// 把一次快照锚定为持久 ref，防止被 gc，并让重启后可恢复。
+pub fn anchor_checkpoint(repository: &GitRepository, commit: &str) -> Result<()> {
+    let reference = checkpoint_ref_name(repository);
+    run_git_operation(
+        repository,
+        "git update-ref checkpoint",
+        vec![
+            "update-ref".to_string(),
+            reference,
+            commit.to_string(),
+        ],
+    )
+}
+
+/// 读取该仓库上次锚定的 checkpoint；从未记录时返回 `None`。
+pub fn anchored_checkpoint(repository: &GitRepository) -> Result<Option<String>> {
+    let reference = checkpoint_ref_name(repository);
+    let output = run_git(
+        &repository.root,
+        ["rev-parse", "--verify", "--quiet", &reference],
+    )?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let commit = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok((!commit.is_empty()).then_some(commit))
+}
+
 /// Compare two checkpoint/tree-ish values without changing working files or index.
 pub fn diff_snapshots(repository: &GitRepository, before: &str, after: &str) -> Result<String> {
     let output = run_git_vec(

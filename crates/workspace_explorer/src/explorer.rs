@@ -10,8 +10,8 @@ use crate::WorkspaceEditor;
 use crate::backend::{WorkspaceBackend, local_backend};
 use crate::editor::{GitDiffRequest, WorkspaceEditorEvent};
 use crate::git::{
-    GitChange, GitRepository, WorktreeEntry, capture_worktree_snapshot, create_worktree,
-    diff_snapshots, load_changes,
+    GitChange, GitRepository, WorktreeEntry, anchor_checkpoint, anchored_checkpoint,
+    capture_worktree_snapshot, create_worktree, diff_snapshots, load_changes,
 };
 use crate::model::ExplorerEntry;
 use crate::theme::WorkspaceTheme;
@@ -215,6 +215,8 @@ impl WorkspaceExplorer {
         let before = self.last_checkpoint.clone();
         let task = cx.background_spawn(async move {
             let after = capture_worktree_snapshot(&repository)?;
+            // 锚定成持久 ref：防 gc，重启后 Explorer 能恢复基线。
+            anchor_checkpoint(&repository, &after)?;
             let diff = before
                 .as_deref()
                 .map(|before| diff_snapshots(&repository, before, &after))
@@ -546,6 +548,10 @@ impl WorkspaceExplorer {
         self.repository = snapshot.repository;
         self.changes = snapshot.changes;
         self.worktrees = snapshot.worktrees;
+        // 重启恢复：内存没有更新的基线时，采用仓库锚定的 checkpoint。
+        if self.last_checkpoint.is_none() {
+            self.last_checkpoint = snapshot.anchored_checkpoint;
+        }
         if self
             .selected_change_path
             .as_ref()
