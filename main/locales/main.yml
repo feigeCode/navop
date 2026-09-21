@@ -4081,6 +4081,10 @@ Settings:
       en: Design Current Table
       zh-CN: 设计当前表
       zh-HK: 設計當前表
+    database_select_all_objects:
+      en: Select All Objects
+      zh-CN: 全选对象
+      zh-HK: 全選物件
     sql_run_query:
       en: Run Current Query
       zh-CN: 执行当前查询
