@@ -16,9 +16,8 @@ use super::super::state::WorkbenchPanelKind;
 use crate::theme::{AgentChatTheme, with_agent_chat_theme};
 use super::widgets::{next_placement, placement_icon, placement_tooltip};
 use super::{DOCK_PANEL_HEIGHT, DOCK_PANEL_WIDTH, PANEL_HEADER_HEIGHT};
-use super::{WorkbenchShell, WorkbenchShellEvent};
+use super::WorkbenchShell;
 
-impl EventEmitter<WorkbenchShellEvent> for WorkbenchShell {}
 
 impl EventEmitter<TabContentEvent> for WorkbenchShell {}
 

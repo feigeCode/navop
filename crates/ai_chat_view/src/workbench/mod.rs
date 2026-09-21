@@ -10,6 +10,6 @@ mod shell;
 mod state;
 
 pub use shell::{
-    WorkbenchPanelEntry, WorkbenchShell, WorkbenchShellConfig, WorkbenchShellEvent,
+    WorkbenchPanelEntry, WorkbenchShell, WorkbenchShellConfig,
 };
 pub use state::{WorkbenchDockLayout, WorkbenchPanelKind, WorkbenchState, dock_region_width};
