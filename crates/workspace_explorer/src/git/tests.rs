@@ -470,3 +470,31 @@ fn worktree_snapshot_captures_dirty_and_untracked_files_without_touching_index()
     assert!(status.contains(" M main.rs"));
     assert!(status.contains("?? untracked.txt"));
 }
+
+#[test]
+fn commit_all_commits_dirty_and_untracked_and_leaves_a_clean_tree() {
+    let root = initialized_repository();
+    let repository = discover_repository(&root).unwrap().unwrap();
+    std::fs::write(root.join("main.rs"), "fn main() { println!(\"v2\"); }\n").unwrap();
+    std::fs::write(root.join("added.txt"), "new file\n").unwrap();
+
+    commit_all(&repository, "navop: commit all test").unwrap();
+
+    let log = run_git_stdout(&root, &["log", "-1", "--format=%s"]);
+    assert_eq!("navop: commit all test", log.trim());
+    let committed = run_git_stdout(&root, &["show", "--stat", "--format=", "HEAD"]);
+    assert!(committed.contains("main.rs"), "{committed}");
+    assert!(committed.contains("added.txt"), "{committed}");
+    let status = run_git_stdout(&root, &["status", "--porcelain"]);
+    assert!(status.trim().is_empty(), "提交后工作区应干净: {status}");
+}
+
+#[test]
+fn commit_all_rejects_blank_messages() {
+    let root = initialized_repository();
+    let repository = discover_repository(&root).unwrap().unwrap();
+
+    let error = commit_all(&repository, "   ").unwrap_err();
+
+    assert!(error.to_string().contains("empty"), "{error}");
+}

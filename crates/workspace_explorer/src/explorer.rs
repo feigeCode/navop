@@ -19,6 +19,7 @@ use gpui::{
     AppContext as _, AsyncApp, Context, Entity, FocusHandle, PathPromptOptions, ScrollHandle,
     Subscription, WeakEntity, Window,
 };
+use gpui_component::{notification::Notification, input::InputState, WindowExt as _};
 use ignore::gitignore::Gitignore;
 use rust_i18n::t;
 use std::collections::{HashMap, HashSet};
@@ -28,7 +29,9 @@ use std::sync::Arc;
 use self::load::{WorkspaceSnapshot, load_workspace};
 use branches::BranchManager;
 use clipboard::FileClipboard;
-use file_actions::{ExplorerConfirmation, ExplorerConfirmationOperation, FileActionEditor};
+use file_actions::{
+    ExplorerConfirmation, ExplorerConfirmationOperation, FileActionEditor, FileActionEditorMode,
+};
 
 pub(crate) use clipboard::keybindings;
 pub use frame::{ExplorerFramePlacement, WorkspaceExplorerEvent};
@@ -237,6 +240,73 @@ impl WorkspaceExplorer {
             });
         })
         .detach();
+    }
+
+    /// 弹出提交信息输入框，提交当前全部变更。
+    pub fn prompt_commit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.repository.is_none() || self.file_operation_running {
+            return;
+        }
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t!("WorkspaceExplorer.commit.placeholder").to_string())
+        });
+        self.file_action_editor = Some(FileActionEditor {
+            mode: FileActionEditorMode::CommitAll,
+            input: input.clone(),
+        });
+        self.file_confirmation = None;
+        input.update(cx, |input, cx| input.focus(window, cx));
+        cx.notify();
+    }
+
+    fn commit_all(&mut self, message: String, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(repository) = self.repository.clone() else {
+            return;
+        };
+        if self.file_operation_running {
+            return;
+        }
+        self.file_operation_running = true;
+        let task = cx.background_spawn(async move {
+            crate::git::commit_all(&repository, &message)
+        });
+        let entity = cx.entity().downgrade();
+        let window_handle = window.window_handle();
+        cx.spawn(async move |_: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let result = task.await;
+            let _ = cx.update_window(window_handle, |_, window, cx| {
+                let Some(entity) = entity.upgrade() else {
+                    return;
+                };
+                entity.update(cx, |this, cx| {
+                    this.file_operation_running = false;
+                    match result {
+                        Ok(()) => {
+                            window.push_notification(
+                                Notification::success(
+                                    t!("WorkspaceExplorer.commit.committed").to_string(),
+                                )
+                                .autohide(true),
+                                cx,
+                            );
+                        }
+                        Err(error) => {
+                            let message = error.to_string();
+                            this.error = Some(message.clone());
+                            window.push_notification(
+                                Notification::error(message).autohide(false),
+                                cx,
+                            );
+                        }
+                    }
+                    this.refresh_after_branch_operation(cx);
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
+        cx.notify();
     }
 
     pub fn create_worktree(&mut self, cx: &mut Context<Self>) {

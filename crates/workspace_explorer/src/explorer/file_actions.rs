@@ -27,6 +27,8 @@ pub(super) enum FileActionEditorMode {
     CreateFile { parent: PathBuf },
     CreateDirectory { parent: PathBuf },
     Rename { path: PathBuf },
+    /// 提交当前全部变更（含 untracked）。
+    CommitAll,
 }
 
 #[derive(Clone)]
@@ -368,6 +370,12 @@ impl WorkspaceExplorer {
                     t!("WorkspaceExplorer.file_action.renamed").to_string(),
                 )
             }
+            FileActionEditorMode::CommitAll => {
+                self.file_action_editor = None;
+                self.file_action_subscription = None;
+                self.commit_all(name, window, cx);
+                return;
+            }
         };
         self.file_action_editor = None;
         self.file_action_subscription = None;
@@ -538,6 +546,7 @@ impl WorkspaceExplorer {
                     FileActionEditorMode::Rename { .. } => {
                         t!("WorkspaceExplorer.file_action.rename")
                     }
+                    FileActionEditorMode::CommitAll => t!("WorkspaceExplorer.commit.menu"),
                 };
                 this.child(
                     v_flex()
