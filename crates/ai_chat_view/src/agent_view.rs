@@ -1146,7 +1146,7 @@ impl AgentChatView {
         let system_instruction_from_settings = true;
         let tool_options = default_tool_options();
 
-        let skills = AgentSkillState::load_default();
+        let skills = AgentSkillState::load_for_workspace(&workspace_root);
         let init_ctx = build_composer_context(
             &resources,
             tool_execution_mode,
@@ -3053,6 +3053,9 @@ impl AgentChatView {
             return;
         }
         self.workspace_root = root.clone();
+        // 项目级 skills 跟随工作区；选择集合只保留仍然存在的路径。
+        self.skills.reload_for_workspace(&root);
+        self.sync_session_skills();
         AppSettings::update_and_save(cx, |settings| {
             settings.ai_chat.last_workspace_root = Some(root);
         });
