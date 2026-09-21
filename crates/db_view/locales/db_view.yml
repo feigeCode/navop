@@ -1941,6 +1941,10 @@ DbTree:
     en: Views
     zh-CN: 视图
     zh-HK: 視圖
+  MaterializedViews:
+    en: Materialized Views
+    zh-CN: 物化视图
+    zh-HK: 實體化檢視
   Functions:
     en: Functions
     zh-CN: 函数
@@ -2792,6 +2796,10 @@ SqlDump:
     en: "Found %{count} tables"
     zh-CN: "找到 %{count} 个表"
     zh-HK: "找到 %{count} 個表"
+  skipped_non_ddl_tables:
+    en: "Skipped %{count} object(s) without a plain table structure (foreign tables, etc.)"
+    zh-CN: "已跳过 %{count} 个没有普通表结构的对象（如外部表）"
+    zh-HK: "已略過 %{count} 個沒有普通資料表結構的物件（如外部表）"
   fetch_tables_failed:
     en: "Failed to fetch table list: %{error}"
     zh-CN: "获取表列表失败: %{error}"

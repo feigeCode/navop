@@ -200,7 +200,22 @@ impl SqlDumpView {
                     .await;
                 match tables_result {
                     Ok(table_infos) => {
-                        let tables: Vec<_> = table_infos.into_iter().map(|t| t.name).collect();
+                        // 外部表没有普通表结构：按普通表生成 CREATE TABLE 会产出无法
+                        // 执行的脚本，因此整库/整模式转储时跳过。
+                        let (tables_infos, skipped): (Vec<_>, Vec<_>) = table_infos
+                            .into_iter()
+                            .partition(|info| info.object_type.is_ddl_comparable());
+                        if !skipped.is_empty() {
+                            Self::add_log(
+                                &cx,
+                                &logs,
+                                &scroll_handle,
+                                "".to_string(),
+                                t!("SqlDump.skipped_non_ddl_tables", count = skipped.len())
+                                    .to_string(),
+                            );
+                        }
+                        let tables: Vec<_> = tables_infos.into_iter().map(|t| t.name).collect();
                         Self::add_log(
                             &cx,
                             &logs,
