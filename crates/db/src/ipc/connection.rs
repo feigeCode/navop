@@ -254,6 +254,14 @@ impl ExternalDbConnection {
 
         // 先把 wire cell 收进带类型的 batch,再从 batch 统一投影 legacy 兼容表示。
         // 类型权威留在 `typed_batch`;投影仅供未迁移消费者。
+        // 排查用：外部驱动把文本列当成字节下发时，这里直接给出驱动 id/版本与样本。
+        let ipc_diagnostics =
+            super::diagnostics::ipc_binary_cells(&start_resp.columns, &fetched.rows);
+        super::diagnostics::log_ipc_result(
+            &format!("{}@{}", self.driver.id, self.driver.version),
+            &start_resp.columns,
+            &ipc_diagnostics,
+        );
         let batch =
             super::value_adapter::result_batch_from_columns(0, &start_resp.columns, fetched.rows)?;
         let mut result =

@@ -17,6 +17,7 @@ pub mod metadata_read;
 pub mod plugin;
 pub mod plugin_manifest;
 pub mod query_result_normalization;
+mod result_diagnostics;
 mod runtime_contract;
 pub mod rustls_provider;
 pub mod schema_preferences;

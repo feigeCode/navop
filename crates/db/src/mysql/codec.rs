@@ -254,6 +254,28 @@ pub(crate) fn is_binary_wire_value(
         )
 }
 
+/// 排查用：解释某一列会从哪条分支产出值，用于判断“文本被显示成二进制”时责任在哪一层。
+///
+/// - `wire-binary`：列带 binary flag 且 collation 为 63，wire 元数据本身就声明是字节列
+///   （结果集编码为 binary，或该列真的是 BLOB/VARBINARY）；
+/// - `charset-decode`：列属于字符族，只有字节不符合该列 charset 时才会降级成二进制 sidecar；
+/// - `bit` / `json` / `scalar`：其他分支，不会产出 wire 二进制值。
+pub(crate) fn describe_binary_cause(column: &mysql_async::Column) -> &'static str {
+    if column.column_type() == ColumnType::MYSQL_TYPE_BIT {
+        return "bit";
+    }
+    if is_binary_wire_value(column.column_type(), column.flags(), column.character_set()) {
+        return "wire-binary";
+    }
+    if column.column_type() == ColumnType::MYSQL_TYPE_JSON {
+        return "json";
+    }
+    if is_character_wire_type(column.column_type()) {
+        return "charset-decode";
+    }
+    "scalar"
+}
+
 fn format_bit_bytes(bytes: &[u8], bit_length: u32) -> String {
     let bits_per_byte = u8::BITS as usize;
     let available_bits = bytes.len().saturating_mul(bits_per_byte);
@@ -413,6 +435,26 @@ mod tests {
                 "{column_type:?} must remain a typed non-binary value"
             );
         }
+    }
+
+    #[test]
+    fn binary_cause_separates_wire_metadata_from_charset_fallbacks() {
+        let byte_column = mysql_async::Column::new(ColumnType::MYSQL_TYPE_LONG_BLOB)
+            .with_flags(ColumnFlags::BINARY_FLAG | ColumnFlags::BLOB_FLAG)
+            .with_character_set(MYSQL_BINARY_COLLATION_ID);
+        assert_eq!(describe_binary_cause(&byte_column), "wire-binary");
+
+        let text_column = column_with_charset(ColumnType::MYSQL_TYPE_VAR_STRING, 45);
+        assert_eq!(describe_binary_cause(&text_column), "charset-decode");
+
+        let bit_column = mysql_async::Column::new(ColumnType::MYSQL_TYPE_BIT);
+        assert_eq!(describe_binary_cause(&bit_column), "bit");
+
+        let json_column = mysql_async::Column::new(ColumnType::MYSQL_TYPE_JSON);
+        assert_eq!(describe_binary_cause(&json_column), "json");
+
+        let int_column = mysql_async::Column::new(ColumnType::MYSQL_TYPE_LONGLONG);
+        assert_eq!(describe_binary_cause(&int_column), "scalar");
     }
 
     #[test]

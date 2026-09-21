@@ -5,7 +5,7 @@ use one_core::storage::DatabaseType;
 
 use crate::{
     ColumnInfo, DatabasePlugin, FieldType, QueryColumnMeta, QueryResult, connection::DbConnection,
-    executor::QueryResultError,
+    executor::QueryResultError, result_diagnostics::ReconciliationDiagnostic,
 };
 
 /// Errors raised while reconciling runtime query values with authoritative table schema metadata.
@@ -112,9 +112,18 @@ pub fn normalize_query_result_binary_semantics(
         .collect::<Vec<_>>();
 
     if query_result.binary_cells.is_empty() {
+        crate::result_diagnostics::log_mysql_reconciliation_without_binary_cells(
+            query_result.columns.len(),
+        );
         apply_schema_column_metadata(query_result, &schema_mapping);
         return Ok(());
     }
+
+    let diagnostics = reconciliation_diagnostics(query_result, &schema_mapping, &text_decoders);
+    crate::result_diagnostics::log_mysql_reconciliation(
+        &diagnostics,
+        query_result.binary_cells.len(),
+    );
 
     // Validate the entire page before mutating it, preserving atomic failure
     // semantics without retaining another full page of decoded LONGTEXT
@@ -153,8 +162,39 @@ pub fn normalize_query_result_binary_semantics(
     if query_result.binary_cells.len() < binary_before {
         query_result.invalidate_typed_batch();
     }
+    crate::result_diagnostics::log_mysql_reconciliation_outcome(
+        binary_before,
+        query_result.binary_cells.len(),
+    );
 
     Ok(())
+}
+
+/// 排查用：把每列“结果集 charset / 表 schema 类型与 charset / 最终选中的解码器”拼起来。
+///
+/// `decoder=none` 就是二进制值保留到界面的直接原因：列不是字符文本、schema charset 未知，
+/// 或 charset 不在支持列表里。
+fn reconciliation_diagnostics(
+    query_result: &QueryResult,
+    schema_mapping: &[ColumnInfo],
+    text_decoders: &[Option<MySqlTextDecoderSelection>],
+) -> Vec<ReconciliationDiagnostic> {
+    schema_mapping
+        .iter()
+        .enumerate()
+        .map(|(column_index, column)| ReconciliationDiagnostic {
+            label: column.name.clone(),
+            result_charset: query_result
+                .column_meta
+                .get(column_index)
+                .and_then(|metadata| metadata.result_charset.clone()),
+            schema_type: column.data_type.clone(),
+            schema_charset: mysql_text_charset(column),
+            decoder: text_decoders[column_index]
+                .as_ref()
+                .map(|selection| selection.charset.clone()),
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy)]

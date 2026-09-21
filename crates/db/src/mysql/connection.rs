@@ -8,23 +8,35 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::connection::{DbConnection, DbError, StreamingProgress};
 use crate::executor::{
     ExecOptions, ExecResult, QueryColumnMeta, QueryResult, SqlErrorInfo, SqlResult, SqlSource,
 };
 use crate::mysql::codec;
+use crate::result_diagnostics::{BinarySample, ColumnDiagnostic, DIAG_PREFIX, MAX_BINARY_SAMPLES};
 use crate::rustls_provider::ensure_rustls_crypto_provider;
 use crate::ssh_tunnel::{resolve_connection_target, resolve_tunnel_destination};
 use crate::{DatabasePlugin, FieldType, format_message, truncate_str};
 use connection_tunnel::TunnelGuard;
-use db_value::{ColumnDescriptor, Nullability, ResultBatch, ResultRow};
+use db_value::{CellState, ColumnDescriptor, DbValue, Nullability, ResultBatch, ResultRow};
 
 fn is_mysql_access_denied(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
     lower.contains("access denied for user")
 }
+
+/// [`MysqlDbConnection::SESSION_DIAGNOSTIC_SQL`] 返回的一行。
+type MysqlSessionDiagnosticRow = (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
 
 pub struct MysqlDbConnection {
     config: DbConnectionConfig,
@@ -36,6 +48,12 @@ impl MysqlDbConnection {
     const DEFAULT_MYSQL_CHARSET: &str = "utf8mb4";
     const LEGACY_MYSQL_CHARSET: &str = "utf8";
     const MYSQL_UTF8MB4_MIN_VERSION: (u16, u16, u16) = (5, 5, 3);
+    /// 排查用：连接建立后读取服务端版本与字符集会话变量。
+    const SESSION_DIAGNOSTIC_SQL: &str = "SELECT VERSION(), @@version_comment, @@character_set_client, \
+         @@character_set_connection, @@character_set_results, @@collation_connection, \
+         @@collation_server";
+    /// 排查用：诊断本身不得拖住连接建立（部分兼容引擎没有这些系统变量）。
+    const SESSION_DIAGNOSTIC_TIMEOUT: Duration = Duration::from_secs(5);
 
     pub fn new(config: DbConnectionConfig) -> Self {
         Self {
@@ -172,6 +190,90 @@ impl MysqlDbConnection {
         })
     }
 
+    /// 排查用：打印服务端版本与字符集会话变量。
+    ///
+    /// `character_set_results` 为 binary（或 NULL）时，服务端会把文本结果按字节下发，结果列带
+    /// collation 63——这正是“VARCHAR/TEXT 显示成二进制”的第一类根因；这行日志是把它与“列本身
+    /// 就是 BLOB/VARBINARY”区分开的第二手证据。诊断失败不得影响连接，所以只 warn 不返回错。
+    async fn log_session_diagnostics(
+        conn: &mut Conn,
+        config: &DbConnectionConfig,
+        init_commands: &[String],
+    ) {
+        let row = timeout(
+            Self::SESSION_DIAGNOSTIC_TIMEOUT,
+            conn.query_first::<MysqlSessionDiagnosticRow, _>(Self::SESSION_DIAGNOSTIC_SQL),
+        )
+        .await;
+
+        let row = match row {
+            Ok(Ok(row)) => row,
+            Ok(Err(error)) => {
+                warn!("{DIAG_PREFIX}[mysql] session diagnostic query failed: {error}");
+                return;
+            }
+            Err(_) => {
+                warn!("{DIAG_PREFIX}[mysql] session diagnostic query timed out");
+                return;
+            }
+        };
+
+        let Some((
+            version,
+            comment,
+            client,
+            connection,
+            results,
+            collation_connection,
+            collation_server,
+        )) = row
+        else {
+            warn!("{DIAG_PREFIX}[mysql] session diagnostic returned no row");
+            return;
+        };
+
+        let results = results.unwrap_or_else(|| "NULL".to_string());
+        info!(
+            "{DIAG_PREFIX}[mysql] session: version={} version_comment={} character_set_client={} character_set_connection={} character_set_results={} collation_connection={} collation_server={} configured_charset={:?} configured_collation={:?} init_commands={:?}",
+            version.as_deref().unwrap_or("unknown"),
+            comment.as_deref().unwrap_or("unknown"),
+            client.as_deref().unwrap_or("unknown"),
+            connection.as_deref().unwrap_or("unknown"),
+            results,
+            collation_connection.as_deref().unwrap_or("unknown"),
+            collation_server.as_deref().unwrap_or("unknown"),
+            Self::configured_charset(config),
+            config.get_param("collation"),
+            init_commands,
+        );
+        if results.eq_ignore_ascii_case("binary") || results.eq_ignore_ascii_case("NULL") {
+            warn!(
+                "{DIAG_PREFIX}[mysql] character_set_results={results}: 文本列会以 collation 63 返回，\
+                 初始化命令未生效（服务端或代理忽略了它）"
+            );
+        }
+    }
+
+    /// 排查用：把结果集的列 wire 元数据提成诊断记录。
+    fn column_diagnostics(
+        columns: &[mysql_async::Column],
+        encodings: &[codec::MysqlResultEncoding],
+    ) -> Vec<ColumnDiagnostic> {
+        columns
+            .iter()
+            .zip(encodings)
+            .map(|(column, encoding)| ColumnDiagnostic {
+                label: column.name_str().to_string(),
+                native_type: format!("{:?}", column.column_type()),
+                flags: column.flags().bits(),
+                collation_id: encoding.collation_id,
+                charset: encoding.charset.clone(),
+                collation: encoding.collation.clone(),
+                cause: codec::describe_binary_cause(column),
+            })
+            .collect()
+    }
+
     async fn process_query_result<'a, 't, P>(
         mut query_result: mysql_async::QueryResult<'a, 't, P>,
         sql: String,
@@ -197,6 +299,7 @@ impl MysqlDbConnection {
             .iter()
             .map(|col: &mysql_async::Column| codec::result_encoding(col.character_set()))
             .collect();
+        let diagnostics = Self::column_diagnostics(&columns_arc, &encodings);
 
         let column_meta: Vec<QueryColumnMeta> = columns_arc
             .iter()
@@ -234,6 +337,8 @@ impl MysqlDbConnection {
 
         let mut batch_rows = Vec::new();
         let mut display_rows = Vec::new();
+        let mut binary_cells_total = 0usize;
+        let mut binary_samples = Vec::new();
         loop {
             let Some(row) = query_result
                 .next()
@@ -247,6 +352,19 @@ impl MysqlDbConnection {
             let mut display_row = Vec::with_capacity(columns_arc.len());
             for (column_index, value) in row.unwrap().into_iter().enumerate() {
                 let (state, display) = codec::decode_cell(value, columns_arc.get(column_index));
+                if matches!(&state, CellState::Decoded(DbValue::Binary(_))) {
+                    binary_cells_total += 1;
+                }
+                if binary_samples.len() < MAX_BINARY_SAMPLES {
+                    if let CellState::Decoded(DbValue::Binary(bytes)) = &state {
+                        let label = columns_arc[column_index].name_str();
+                        binary_samples.push(BinarySample::new(
+                            row_index as u64,
+                            label.as_ref(),
+                            bytes,
+                        ));
+                    }
+                }
                 cells.push(state);
                 display_row.push(display);
             }
@@ -256,6 +374,12 @@ impl MysqlDbConnection {
             });
             display_rows.push(display_row);
         }
+
+        crate::result_diagnostics::log_mysql_result(
+            &diagnostics,
+            binary_cells_total,
+            &binary_samples,
+        );
 
         let batch = ResultBatch::try_new(0, descriptors, batch_rows, true).map_err(|error| {
             DbError::query(format!("failed to build typed result batch: {error}"))
@@ -378,13 +502,13 @@ impl DbConnection for MysqlDbConnection {
 
         let init_commands = Self::build_init_commands(config, conn.server_version())?;
         debug!("[MySQL] Applying init commands: {:?}", init_commands);
-        for command in init_commands {
+        for command in init_commands.iter() {
             let Some(remaining) = connect_timeout.checked_sub(connect_started.elapsed()) else {
                 return Err(DbError::connection(format!(
                     "MySQL connection initialization timed out after {connect_timeout_secs}s"
                 )));
             };
-            match timeout(remaining, conn.query_drop(&command)).await {
+            match timeout(remaining, conn.query_drop(command.as_str())).await {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => {
                     return Err(DbError::connection_with_source(
@@ -399,6 +523,7 @@ impl DbConnection for MysqlDbConnection {
                 }
             }
         }
+        Self::log_session_diagnostics(&mut conn, config, &init_commands).await;
         {
             let mut guard = self.conn.lock().await;
             *guard = Some(conn);

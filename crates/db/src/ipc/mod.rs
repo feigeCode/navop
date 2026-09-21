@@ -1,5 +1,6 @@
 pub mod client;
 pub mod connection;
+mod diagnostics;
 pub mod display;
 pub mod export;
 pub mod import;
