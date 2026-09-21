@@ -382,6 +382,15 @@ WorkspaceExplorer:
       en: Changes committed
       zh-CN: 已提交
       zh-HK: 已提交
+  push:
+    menu:
+      en: Push current branch
+      zh-CN: 推送当前分支
+      zh-HK: 推送目前分支
+    pushed:
+      en: Branch pushed
+      zh-CN: 已推送
+      zh-HK: 已推送
   worktree:
     create:
       en: Create isolated worktree

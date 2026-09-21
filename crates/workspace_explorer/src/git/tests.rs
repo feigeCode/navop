@@ -529,3 +529,40 @@ fn anchored_checkpoint_is_none_before_first_capture() {
 
     assert_eq!(None, anchored_checkpoint(&repository).unwrap());
 }
+
+#[test]
+fn push_current_branch_publishes_to_default_remote_and_sets_upstream() {
+    let root = initialized_repository();
+    let repository = discover_repository(&root).unwrap().unwrap();
+    // 本地 bare 仓库当远端，测试不触网。
+    let remote_path = unique_test_path();
+    std::fs::create_dir_all(&remote_path).unwrap();
+    run_test_git(&remote_path, &["init", "-q", "--bare"]);
+    run_test_git(&root, &["remote", "add", "origin", remote_path.to_str().unwrap()]);
+    run_test_git(&root, &["commit", "-q", "--allow-empty", "-m", "to push"]);
+
+    push_current_branch(&repository).unwrap();
+
+    let upstream = run_git_stdout(&root, &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]);
+    assert_eq!(
+        "origin/master",
+        upstream.trim(),
+        "首次 push 应建立上游跟踪"
+    );
+    let remote_head = run_git_stdout(&remote_path, &["rev-parse", "HEAD"]);
+    let local_head = run_git_stdout(&root, &["rev-parse", "HEAD"]);
+    assert_eq!(local_head.trim(), remote_head.trim());
+
+    std::fs::remove_dir_all(&remote_path).ok();
+}
+
+#[test]
+fn push_current_branch_refuses_without_current_branch() {
+    let root = initialized_repository();
+    run_test_git(&root, &["checkout", "-q", "--detach"]);
+    let repository = discover_repository(&root).unwrap().unwrap();
+
+    let error = push_current_branch(&repository).unwrap_err();
+
+    assert!(error.to_string().contains("detached"), "{error}");
+}

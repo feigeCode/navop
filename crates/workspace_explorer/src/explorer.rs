@@ -262,6 +262,56 @@ impl WorkspaceExplorer {
         cx.notify();
     }
 
+    /// 推送当前分支；无上游时按默认 remote 建立跟踪。
+    pub fn push_current(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(repository) = self.repository.clone() else {
+            return;
+        };
+        if self.file_operation_running {
+            return;
+        }
+        self.file_operation_running = true;
+        let task = cx.background_spawn(async move {
+            crate::git::push_current_branch(&repository)
+        });
+        let entity = cx.entity().downgrade();
+        let window_handle = window.window_handle();
+        cx.spawn(async move |_: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let result = task.await;
+            let _ = cx.update_window(window_handle, |_, window, cx| {
+                let Some(entity) = entity.upgrade() else {
+                    return;
+                };
+                entity.update(cx, |this, cx| {
+                    this.file_operation_running = false;
+                    match result {
+                        Ok(()) => {
+                            window.push_notification(
+                                Notification::success(
+                                    t!("WorkspaceExplorer.push.pushed").to_string(),
+                                )
+                                .autohide(true),
+                                cx,
+                            );
+                        }
+                        Err(error) => {
+                            let message = error.to_string();
+                            this.error = Some(message.clone());
+                            window.push_notification(
+                                Notification::error(message).autohide(false),
+                                cx,
+                            );
+                        }
+                    }
+                    this.refresh_after_branch_operation(cx);
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
     fn commit_all(&mut self, message: String, window: &mut Window, cx: &mut Context<Self>) {
         let Some(repository) = self.repository.clone() else {
             return;

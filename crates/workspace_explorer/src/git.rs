@@ -634,6 +634,17 @@ pub fn fetch_branches(repository: &GitRepository) -> Result<()> {
     )
 }
 
+/// 推送当前分支；无上游时按默认 remote 建立 `-u` 跟踪。
+///
+/// detached HEAD 直接拒绝，不猜测目标。
+pub fn push_current_branch(repository: &GitRepository) -> Result<()> {
+    let branch = load_branches(repository)?
+        .into_iter()
+        .find(|branch| branch.current && branch.kind == GitBranchKind::Local)
+        .ok_or_else(|| anyhow!("No current branch to push (detached HEAD?)"))?;
+    push_branch(repository, &branch)
+}
+
 pub fn push_branch(repository: &GitRepository, branch: &GitBranch) -> Result<()> {
     if branch.kind != GitBranchKind::Local {
         return Err(anyhow!("Only local branches can be pushed"));

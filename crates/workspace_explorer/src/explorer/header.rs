@@ -272,6 +272,7 @@ fn build_workspace_menu(
     }
 
     let commit_view = view.clone();
+    let push_view = view.clone();
     let create_view = view.clone();
     menu = menu
         .separator()
@@ -281,6 +282,14 @@ fn build_workspace_menu(
                 .disabled(!has_repository)
                 .on_click(move |_, window, cx| {
                     commit_view.update(cx, |this, cx| this.prompt_commit(window, cx));
+                }),
+        )
+        .item(
+            PopupMenuItem::new(t!("WorkspaceExplorer.push.menu").to_string())
+                .icon(IconName::ArrowUp)
+                .disabled(!has_repository)
+                .on_click(move |_, window, cx| {
+                    push_view.update(cx, |this, cx| this.push_current(window, cx));
                 }),
         )
         .item(
