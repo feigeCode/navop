@@ -1043,6 +1043,10 @@ HtmlPreview:
     zh-HK: "建立 HTML 預覽 webview 失敗: %{error}"
 
 Workbench:
+  choose_workspace:
+    en: Choose workspace
+    zh-CN: 选择工作区
+    zh-HK: 選擇工作區
   panel_chat:
     en: AI Chat
     zh-CN: AI 对话
