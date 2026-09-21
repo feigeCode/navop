@@ -12,7 +12,10 @@ use crate::{
     sql_editor_view::SqlEditorTab,
     table_designer_tab::{TableDesigner, TableDesignerConfig},
 };
-use db::{DbNode, DbNodeType, GlobalDbState, RoutineIdentity, SqlResult, schema_for_new_query};
+use db::{
+    DbNode, DbNodeType, GlobalDbState, RoutineIdentity, SqlResult, TableObjectType,
+    schema_for_new_query,
+};
 use gpui::{
     App, AppContext, AsyncApp, Context, Entity, ParentElement, PathPromptOptions, Styled,
     Subscription, Window, div, px,
@@ -116,8 +119,8 @@ impl DatabaseEventHandler {
 
     fn format_query_table_reference(node: &DbNode, global_state: &GlobalDbState) -> Option<String> {
         let table = match node.node_type {
-            DbNodeType::Table => node.get_table_name()?,
-            DbNodeType::View => node.name.clone(),
+            DbNodeType::Table | DbNodeType::ForeignTable => node.get_table_name()?,
+            DbNodeType::View | DbNodeType::MaterializedView => node.name.clone(),
             _ => return None,
         };
         let plugin = global_state
@@ -140,9 +143,19 @@ impl DatabaseEventHandler {
         })
     }
 
+    fn table_object_type_for_node(node: &DbNode) -> TableObjectType {
+        match node.node_type {
+            DbNodeType::ForeignTable => TableObjectType::ForeignTable,
+            _ => TableObjectType::Table,
+        }
+    }
+
     fn query_title_for_node(node: &DbNode, database: Option<&str>) -> String {
         match node.node_type {
-            DbNodeType::Table | DbNodeType::View => format!("{} - Query", node.name),
+            DbNodeType::Table
+            | DbNodeType::ForeignTable
+            | DbNodeType::View
+            | DbNodeType::MaterializedView => format!("{} - Query", node.name),
             _ => format!("{} - Query", database.unwrap_or("New Query")),
         }
     }
@@ -3092,12 +3105,13 @@ impl DatabaseEventHandler {
                                 };
 
                             let task = state
-                                .drop_table(
+                                .drop_table_like(
                                     &mut cx.clone(),
                                     node.connection_id.clone(),
                                     database,
                                     schema,
                                     table_name.clone(),
+                                    Self::table_object_type_for_node(&node),
                                 )
                                 .await;
 
@@ -3204,14 +3218,27 @@ impl DatabaseEventHandler {
                                 .get("database")
                                 .map(|s| s.to_string())
                                 .unwrap_or_default();
-                            let result = state
-                                .drop_view(
-                                    cx,
-                                    node.connection_id.clone(),
-                                    database,
-                                    node.name.clone(),
-                                )
-                                .await;
+                            let schema = node.get_schema_name();
+                            let result = if node.node_type == DbNodeType::MaterializedView {
+                                state
+                                    .drop_materialized_view(
+                                        cx,
+                                        node.connection_id.clone(),
+                                        database,
+                                        schema,
+                                        node.name.clone(),
+                                    )
+                                    .await
+                            } else {
+                                state
+                                    .drop_view(
+                                        cx,
+                                        node.connection_id.clone(),
+                                        database,
+                                        node.name.clone(),
+                                    )
+                                    .await
+                            };
                             match result {
                                 Ok(_) => removed.push(node.id.clone()),
                                 Err(error) => {
@@ -3388,6 +3415,7 @@ impl DatabaseEventHandler {
         let database_name = node.get_database_name();
         let schema_name = node.get_schema_name();
         let table_name = node.get_table_name();
+        let object_type = Self::table_object_type_for_node(&node);
         let window_id = cx.active_window();
 
         window.open_dialog(cx, move |dialog, _window, _cx| {
@@ -3443,12 +3471,13 @@ impl DatabaseEventHandler {
                         };
 
                         let task = state
-                            .drop_table(
+                            .drop_table_like(
                                 &mut cx.clone(),
                                 conn_id.clone(),
                                 database,
                                 schema,
                                 tbl_name_value.clone(),
+                                object_type,
                             )
                             .await;
 
@@ -3509,6 +3538,8 @@ impl DatabaseEventHandler {
         let connection_id = node.connection_id.clone();
         let old_table_name = node.name.clone();
         let metadata = node.metadata.clone();
+        let object_type = Self::table_object_type_for_node(&node);
+        let schema = node.get_schema_name();
 
         // 创建输入框状态
         let input_state = cx.new(|cx| {
@@ -3522,6 +3553,7 @@ impl DatabaseEventHandler {
             let conn_id = connection_id.clone();
             let old_name = old_table_name.clone();
             let meta = metadata.clone();
+            let schema = schema.clone();
             let state = global_state.clone();
             let input = input_state.clone();
             let tree = tree_view.clone();
@@ -3566,6 +3598,7 @@ impl DatabaseEventHandler {
                     let conn_id = conn_id.clone();
                     let old_name = old_name.clone();
                     let meta = meta.clone();
+                    let schema = schema.clone();
                     let state = state.clone();
                     let tree = tree.clone();
 
@@ -3579,12 +3612,14 @@ impl DatabaseEventHandler {
                         let db_node_id = format!("{}:{}", conn_id, database);
 
                         let task = state
-                            .rename_table(
+                            .rename_table_like(
                                 cx,
                                 conn_id.clone(),
                                 database,
+                                schema,
                                 old_name.clone(),
                                 new_name.clone(),
+                                object_type,
                             )
                             .await;
                         match task {
@@ -3919,12 +3954,15 @@ impl DatabaseEventHandler {
         let view_name = node.name.clone();
         let view_node_id = node.id.clone();
         let metadata = node.metadata.clone();
+        let schema = node.get_schema_name();
+        let is_materialized = node.node_type == DbNodeType::MaterializedView;
 
         window.open_dialog(cx, move |dialog, _window, _cx| {
             let conn_id = connection_id.clone();
             let v_name = view_name.clone();
             let v_node_id = view_node_id.clone();
             let meta = metadata.clone();
+            let schema = schema.clone();
             let state = global_state.clone();
             let v_name_display = view_name.clone();
             let tree = tree_view.clone();
@@ -3951,6 +3989,7 @@ impl DatabaseEventHandler {
                     let v_name = v_name.clone();
                     let v_node_id = v_node_id.clone();
                     let meta = meta.clone();
+                    let schema = schema.clone();
                     let state = state.clone();
                     let v_name_log = v_name.clone();
                     let tree = tree.clone();
@@ -3961,9 +4000,21 @@ impl DatabaseEventHandler {
                             .get("database")
                             .map(|s| s.to_string())
                             .unwrap_or_default();
-                        let result = state
-                            .drop_view(cx, conn_id.clone(), database, v_name.clone())
-                            .await;
+                        let result = if is_materialized {
+                            state
+                                .drop_materialized_view(
+                                    cx,
+                                    conn_id.clone(),
+                                    database,
+                                    schema,
+                                    v_name.clone(),
+                                )
+                                .await
+                        } else {
+                            state
+                                .drop_view(cx, conn_id.clone(), database, v_name.clone())
+                                .await
+                        };
 
                         match result {
                             Ok(_) => {
