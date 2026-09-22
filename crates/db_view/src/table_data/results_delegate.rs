@@ -3084,8 +3084,10 @@ impl EditTableDelegate for EditorTableDelegate {
     /// 二进制列画的是「大小描述」而不是原始字节，查找必须命中同一段
     /// 文本，否则用户在界面上看到的和搜到的会对不上。
     fn find_cell_text(&self, row_ix: usize, col_ix: usize, cx: &App) -> Option<String> {
+        // col_ix 是显示层索引，内部数据结构一律用原始列索引。
+        let original_col = self.original_column_index(col_ix)?;
         let actual_row = self.map_display_to_actual_row(row_ix);
-        if let Some(bytes) = self.current_binary_arc(actual_row, col_ix) {
+        if let Some(bytes) = self.current_binary_arc(actual_row, original_col) {
             return Some(t!("TableData.binary_value", size = bytes.len()).to_string());
         }
         self.get_optional_cell_value(row_ix, col_ix, cx)
