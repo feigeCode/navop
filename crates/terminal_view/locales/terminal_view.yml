@@ -314,9 +314,9 @@ SSH:
     zh-CN: 请等待远端 Shell 集成卸载完成后再保存。
     zh-HK: 請等待遠端 Shell 整合解除安裝完成後再儲存。
   workspace:
-    en: Workspace
-    zh-CN: 工作区
-    zh-HK: 工作區
+    en: Group
+    zh-CN: 分组
+    zh-HK: 分組
   validation_error:
     en: Please fill in all required fields
     zh-CN: 请填写所有必填字段
@@ -1750,9 +1750,9 @@ Telnet:
     zh-CN: 钥匙串
     zh-HK: 鑰匙圈
   workspace:
-    en: Workspace
-    zh-CN: 工作区
-    zh-HK: 工作區
+    en: Group
+    zh-CN: 分组
+    zh-HK: 分組
   remark:
     en: Remark
     zh-CN: 备注
@@ -1891,9 +1891,9 @@ Serial:
     zh-CN: 流控
     zh-HK: 流控
   workspace:
-    en: Workspace
-    zh-CN: 工作区
-    zh-HK: 工作區
+    en: Group
+    zh-CN: 分组
+    zh-HK: 分組
   remark:
     en: Remark
     zh-CN: 备注
@@ -2806,9 +2806,9 @@ Ftp:
     zh-CN: 钥匙串
     zh-HK: 鑰匙圈
   workspace:
-    en: Workspace
-    zh-CN: 工作区
-    zh-HK: 工作區
+    en: Group
+    zh-CN: 分组
+    zh-HK: 分組
   remark:
     en: Remark
     zh-CN: 备注

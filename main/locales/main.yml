@@ -859,9 +859,9 @@ Home:
     zh-CN: 钥匙串
     zh-HK: 鑰匙串
   personal_sync_conflict_workspace:
-    en: Workspace
-    zh-CN: 工作区
-    zh-HK: 工作區
+    en: Group
+    zh-CN: 分组
+    zh-HK: 分組
   personal_sync_conflict_local:
     en: "Local: %{record}"
     zh-CN: "本地: %{record}"
