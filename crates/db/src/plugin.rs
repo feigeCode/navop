@@ -437,6 +437,22 @@ pub trait DatabasePlugin: Send + Sync {
         false
     }
 
+    /// Whether the given table actually exposes the rowid pseudo-column.
+    ///
+    /// `supports_rowid()` is a per-database default; some tables may still
+    /// lack the pseudo-column (e.g. SQLite `WITHOUT ROWID` tables and views).
+    /// Returning `false` makes `query_table_data` fall back to a plain
+    /// `SELECT *` projection instead of failing the whole preview.
+    async fn table_supports_rowid_projection(
+        &self,
+        _connection: &dyn DbConnection,
+        _database: &str,
+        _schema: Option<&str>,
+        _table: &str,
+    ) -> Result<bool> {
+        Ok(self.supports_rowid())
+    }
+
     /// Get the rowid column name for this database
     fn rowid_column_name(&self) -> &'static str {
         "rowid"
@@ -2183,12 +2199,24 @@ pub trait DatabasePlugin: Send + Sync {
             }
         };
 
-        // Query with pagination, include rowid if supported
-        let base_sql = if self.supports_rowid() {
+        // Query with pagination, project rowid only when the table exposes it
+        let rowid_projection = self
+            .table_supports_rowid_projection(
+                connection,
+                &request.database,
+                request.schema.as_deref(),
+                &request.table,
+            )
+            .await?;
+        let base_sql = if rowid_projection {
             let rowid_col = self.rowid_column_name();
             format!(
-                "SELECT {} AS __rowid__, t.* FROM {} t{}{}",
-                rowid_col, table_ref, where_clause, order_clause
+                "SELECT {} AS {}, t.* FROM {} t{}{}",
+                rowid_col,
+                self.rowid_column_alias(),
+                table_ref,
+                where_clause,
+                order_clause
             )
         } else {
             format!(
