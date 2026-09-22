@@ -3422,9 +3422,10 @@ impl GlobalDbState {
                     DbNodeType::TriggersFolder => {
                         plugin.list_triggers_view(&*conn, &database).await.ok()
                     }
-                    DbNodeType::SequencesFolder => {
-                        plugin.list_sequences_view(&*conn, &database).await.ok()
-                    }
+                    DbNodeType::SequencesFolder => plugin
+                        .list_sequences_view_in_schema(&*conn, &database, schema)
+                        .await
+                        .ok(),
                     _ => None,
                 };
                 Ok::<_, anyhow::Error>(view)

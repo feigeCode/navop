@@ -965,6 +965,19 @@ pub trait DatabasePlugin: Send + Sync {
         database: &str,
     ) -> Result<ObjectView>;
 
+    /// 带 schema 的序列对象视图：不传 schema 的实现会退回默认实现，
+    /// 但支持 schema 的驱动（如 PostgreSQL）必须用它，否则非 public schema
+    /// 下会列出 public 的序列。
+    async fn list_sequences_view_in_schema(
+        &self,
+        connection: &dyn DbConnection,
+        database: &str,
+        schema: Option<String>,
+    ) -> Result<ObjectView> {
+        let _ = schema;
+        self.list_sequences_view(connection, database).await
+    }
+
     // === Helper Methods ===
     fn build_column_definition(&self, column: &ColumnInfo, include_name: bool) -> String;
 
