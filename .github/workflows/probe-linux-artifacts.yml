@@ -133,12 +133,34 @@ jobs:
           fi
           cargo --version
           rustc --version
+          # Mirror the published Linux shape: the release build leaves out
+          # `embedded-webview`, so WebKitGTK 4.1 is not a load-time requirement.
+          linux_features="$(script/linux-release-features.sh)"
+          echo "Linux features: ${linux_features}"
           cargo zigbuild \
             --release \
             -p main \
+            --no-default-features \
+            --features "${linux_features}" \
             --target "${{ matrix.target }}.2.28"
           test -x "target/${{ matrix.target }}/release/navop"
           ls -lh "target/${{ matrix.target }}/release/navop"
+
+      - name: Assert the binary does not link WebKitGTK
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Hosts that only carry WebKitGTK 4.0 (UOS, Kylin) die at load time if
+          # the binary asks for 4.1, so this is the regression the probe exists
+          # to prove gone.
+          needed="$(readelf -d "target/${{ matrix.target }}/release/navop" \
+            | grep '(NEEDED)' || true)"
+          echo "${needed}"
+          if grep -qE 'webkit|javascriptcore' <<<"${needed}"; then
+            echo "::error::release binary still links the webview stack"
+            exit 1
+          fi
+          echo "No webview stack in the NEEDED entries"
 
       - name: Verify Linux glibc baseline
         shell: bash
