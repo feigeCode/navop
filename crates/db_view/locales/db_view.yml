@@ -303,9 +303,9 @@ ConnectionForm:
     zh-CN: 数据库文件路径
     zh-HK: 資料庫檔案路徑
   workspace:
-    en: Workspace
-    zh-CN: 工作区
-    zh-HK: 工作區
+    en: Group
+    zh-CN: 分组
+    zh-HK: 分組
   cloud_sync:
     en: Cloud Sync
     zh-CN: 云同步
