@@ -1,33 +1,94 @@
 //! 命中高亮绘制元素
 //!
-//! 整行文本只 shape 一次，再按字符下标取出命中区间的真实像素位置，
+//! 整行文本只 shape 一次，再按命中区间取出真实像素位置，
 //! 这样 CJK 宽字符、比例字体和单元格内滚动都不会让高亮错位。
+//!
+//! ⚠️ 下标空间：gpui 的 `LineLayout::x_for_index` 与 `TextRun::len` 都按
+//! **UTF-8 字节**下标定位（`LineLayout::len` 的文档写的是 "the length of the
+//! line in utf-8 bytes"），而查找的匹配与计数按**字符**下标做。两者混用会让
+//! 矩形落到别的字符上；当命中区间首尾落在同一个字形的字节范围内时，两端取到
+//! 同一个 x、宽度变成 0 而被丢弃——表现就是「有命中却完全看不到高亮」。
+//! 所以字符 → 字节的换算集中在 [`highlight_bands`] 里做。
 
 use std::ops::Range;
 use std::rc::Rc;
 
 use gpui::{
     App, Bounds, Corners, Element, ElementId, GlobalElementId, Hsla, InspectorElementId,
-    IntoElement, LayoutId, Pixels, SharedString, Style, TextRun, Window, fill, point,
+    IntoElement, LayoutId, Pixels, SharedString, Size, Style, TextRun, Window, fill, point, size,
 };
 
-use super::{MATCH_RADIUS, find_highlight_color};
+use super::{MATCH_RADIUS, char_range_to_byte_range, find_highlight_color};
 
-/// 一行里的高亮片段（整行文本中的字符区间 + 是否当前命中）
+/// 一行里的高亮片段（整行文本中的**字符**区间 + 是否当前命中）
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HighlightSegment {
     pub char_range: Range<usize>,
     pub is_current: bool,
 }
 
-/// 把整行文本中的命中区间绘制成高亮背景。
+/// 一条命中高亮的横向条带。
 ///
-/// `cell_range` 指定当前单元格在整行文本中的字符区间：元素把自己的
-/// 原点上移到该区间的起点，因此高亮天然落在单元格坐标里。
+/// `left` 是相对**单元格内容区左边界**的偏移，`width` 是条带宽度。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HighlightBand {
+    pub left: Pixels,
+    pub width: Pixels,
+    pub is_current: bool,
+}
+
+/// 计算单元格内的所有命中条带。
+///
+/// `x_for_index` 是布局的「字节下标 → 像素 x」查询（生产路径传
+/// `LineLayout::x_for_index`）。`cell_range` 与 `segments` 都是整行文本的
+/// **字符**下标，这里先换算成字节下标再查询；落在单元格外的片段会被裁掉。
+pub fn highlight_bands(
+    x_for_index: impl Fn(usize) -> Pixels,
+    text: &str,
+    cell_range: &Range<usize>,
+    segments: &[HighlightSegment],
+) -> Vec<HighlightBand> {
+    let cell = char_range_to_byte_range(text, cell_range.clone());
+    if cell.start >= cell.end {
+        return Vec::new();
+    }
+
+    // 单元格内容从自己左上角开始，所以以 cell.start 为原点。
+    let origin_x = x_for_index(cell.start);
+    let mut bands = Vec::new();
+
+    for segment in segments {
+        let range = char_range_to_byte_range(text, segment.char_range.clone());
+        let start = range.start.max(cell.start);
+        let end = range.end.min(cell.end);
+        if start >= end {
+            continue;
+        }
+
+        let left = x_for_index(start) - origin_x;
+        let right = x_for_index(end) - origin_x;
+        if left >= right {
+            continue;
+        }
+
+        bands.push(HighlightBand {
+            left,
+            width: right - left,
+            is_current: segment.is_current,
+        });
+    }
+
+    bands
+}
+
+/// 把整行文本中的命中区间绘制成高亮底色。
+///
+/// `cell_range` 指定当前单元格在整行文本中的字符区间，条带的横向位置相对该
+/// 单元格的内容区；纵向铺满元素自身高度——元素与 td 内容同处一个「内容区」
+/// 盒子，所以 bounds 天然就是内容区。
 pub struct FindHighlightElement {
     text: SharedString,
     font_size: Pixels,
-    line_height: Pixels,
     cell_range: Range<usize>,
     segments: Rc<Vec<HighlightSegment>>,
     selection_color: Hsla,
@@ -38,7 +99,6 @@ impl FindHighlightElement {
     pub fn new(
         text: SharedString,
         font_size: Pixels,
-        line_height: Pixels,
         cell_range: Range<usize>,
         segments: Rc<Vec<HighlightSegment>>,
         selection_color: Hsla,
@@ -47,7 +107,6 @@ impl FindHighlightElement {
         Self {
             text,
             font_size,
-            line_height,
             cell_range,
             segments,
             selection_color,
@@ -83,8 +142,19 @@ impl Element for FindHighlightElement {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
-        // 只负责绘制，尺寸由单元格容器给出，不参与布局计算。
-        (window.request_layout(Style::default(), None, cx), ())
+        // 铺满宿主给的内容区盒子：paint 时既要拿到内容区左边界（横向原点），
+        // 也要拿到内容区高度（条带高度），所以不能是 0×0 的叶子。
+        (
+            window.request_layout(
+                Style {
+                    size: Size::full(),
+                    ..Style::default()
+                },
+                None,
+                cx,
+            ),
+            (),
+        )
     }
 
     fn prepaint(
@@ -125,59 +195,24 @@ impl Element for FindHighlightElement {
             return;
         };
 
-        for quad in collect_quads(
-            line,
-            bounds,
-            self.line_height,
+        let layout = &line.unwrapped_layout;
+        let bands = highlight_bands(
+            |byte_index| layout.x_for_index(byte_index),
+            &self.text,
             &self.cell_range,
             &self.segments,
-            self.selection_color,
-        ) {
+        );
+
+        for band in bands {
+            let mut quad = fill(
+                Bounds::new(
+                    point(bounds.left() + band.left, bounds.top()),
+                    size(band.width, bounds.size.height),
+                ),
+                find_highlight_color(self.selection_color, band.is_current),
+            );
+            quad.corner_radii = Corners::all(MATCH_RADIUS);
             window.paint_quad(quad);
         }
     }
-}
-
-fn collect_quads(
-    line: &gpui::WrappedLine,
-    bounds: Bounds<Pixels>,
-    line_height: Pixels,
-    cell_range: &Range<usize>,
-    segments: &[HighlightSegment],
-    selection_color: Hsla,
-) -> Vec<gpui::PaintQuad> {
-    let layout = &line.unwrapped_layout;
-    let cell_start = cell_range.start;
-    let cell_end = cell_range.end;
-    if cell_start >= cell_end {
-        return Vec::new();
-    }
-
-    // 单元格内容从自己左上角开始，所以以 cell_start 为原点。
-    let origin_x = layout.x_for_index(cell_start);
-    let top = bounds.top();
-    let mut quads = Vec::new();
-
-    for segment in segments {
-        let start = segment.char_range.start.max(cell_start);
-        let end = segment.char_range.end.min(cell_end);
-        if start >= end {
-            continue;
-        }
-
-        let left = bounds.left() + (layout.x_for_index(start) - origin_x);
-        let right = bounds.left() + (layout.x_for_index(end) - origin_x);
-        if left >= right {
-            continue;
-        }
-
-        let mut quad = fill(
-            Bounds::from_corners(point(left, top), point(right, top + line_height)),
-            find_highlight_color(selection_color, segment.is_current),
-        );
-        quad.corner_radii = Corners::all(MATCH_RADIUS);
-        quads.push(quad);
-    }
-
-    quads
 }

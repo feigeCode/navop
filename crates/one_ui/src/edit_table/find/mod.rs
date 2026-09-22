@@ -7,7 +7,7 @@
 mod element;
 mod panel;
 
-pub use element::{FindHighlightElement, HighlightSegment};
+pub use element::{FindHighlightElement, HighlightBand, HighlightSegment, highlight_bands};
 pub use panel::{SearchPanel, SearchPanelEvent};
 
 use std::ops::Range;
@@ -143,6 +143,27 @@ pub fn normalize_find_query(query: &str) -> String {
     query.trim().to_lowercase()
 }
 
+/// 把整行文本的字符下标换算成 gpui 布局查询需要的 UTF-8 字节下标。
+///
+/// gpui 的 `LineLayout::x_for_index`（以及 `TextRun::len`）都按**字节**下标
+/// 定位——`LineLayout::len` 的文档写的是 "the length of the line in utf-8
+/// bytes"，`x_for_index` 比对的也是字形的起始字节。而查找的匹配与计数按
+/// **字符**下标做（CJK 一个字符占 3 字节）。两者混用会让高亮矩形落到别的
+/// 字符上；当命中区间首尾落在同一个字形的字节范围内时，两端取到同一个 x，
+/// 矩形宽度变成 0 被丢弃，表现就是「明明有命中，却完全看不到高亮」。
+///
+/// 下标越界（例如 `to_lowercase` 改变了字符数）时退回文本末尾，不 panic。
+pub fn char_index_to_byte_index(text: &str, char_index: usize) -> usize {
+    text.char_indices()
+        .nth(char_index)
+        .map_or(text.len(), |(byte_index, _)| byte_index)
+}
+
+/// 把整行文本的字符区间换算成字节区间（坐标系同 [`char_index_to_byte_index`]）。
+pub fn char_range_to_byte_range(text: &str, range: Range<usize>) -> Range<usize> {
+    char_index_to_byte_index(text, range.start)..char_index_to_byte_index(text, range.end)
+}
+
 /// 把单元格内的命中区间平移到整行文本的字符坐标。
 fn match_row_range(cell_match: &FindMatch) -> Range<usize> {
     let start = cell_match.row_offset + cell_match.char_range.start;
@@ -248,6 +269,9 @@ pub const MATCH_RADIUS: Pixels = px(2.);
 
 #[cfg(test)]
 mod find_tests;
+
+#[cfg(test)]
+mod highlight_geometry_tests;
 
 #[cfg(test)]
 mod find_keyboard_tests;
