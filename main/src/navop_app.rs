@@ -52,6 +52,7 @@ actions!(
         OpenTabSwitcher,
         SwitchNextTab,
         SwitchPreviousTab,
+        CloseActiveTab,
         ToggleConnectionSidebar,
         CloseActiveWindow,
         QuitApp,
@@ -776,6 +777,24 @@ fn set_windows_always_on_top(hwnd: isize, always_on_top: bool) -> anyhow::Result
     Ok(())
 }
 
+fn close_active_tab(cx: &mut App) {
+    let Some(active_window) = cx.active_window() else {
+        return;
+    };
+    let Some(home) = cx.try_global::<GlobalHomePage>() else {
+        return;
+    };
+    let home_page = home.home_page.clone();
+
+    cx.defer(move |cx| {
+        _ = active_window.update(cx, |_, window, cx| {
+            home_page.update(cx, |hp, cx| {
+                hp.close_active_tab(window, cx);
+            });
+        });
+    });
+}
+
 fn duplicate_tab(cx: &mut App) {
     let Some(active_window) = cx.active_window() else {
         return;
@@ -1191,6 +1210,15 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
     keybindings.extend(
         shortcuts_for(
             cx,
+            action_id::APP_CLOSE_ACTIVE_TAB,
+            &[default_shortcut("cmd-shift-w", "alt-shift-w")],
+        )
+        .into_iter()
+        .map(|key| KeyBinding::new(&key, CloseActiveTab, None)),
+    );
+    keybindings.extend(
+        shortcuts_for(
+            cx,
             action_id::APP_QUIT,
             &[default_shortcut("cmd-q", "alt-f4")],
         )
@@ -1278,6 +1306,13 @@ fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
     ));
     keybindings.extend(rebind_keybindings(
         cx,
+        action_id::APP_CLOSE_ACTIVE_TAB,
+        &[default_shortcut("cmd-shift-w", "alt-shift-w")],
+        None,
+        CloseActiveTab,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
         action_id::APP_QUIT,
         &[default_shortcut("cmd-q", "alt-f4")],
         None,
@@ -1302,6 +1337,7 @@ fn init_action_handlers(cx: &mut App) {
     cx.on_action(|_: &OpenTabSwitcher, cx| open_tab_switcher(cx));
     cx.on_action(|_: &SwitchNextTab, cx| switch_tab(TabCycleDirection::Next, cx));
     cx.on_action(|_: &SwitchPreviousTab, cx| switch_tab(TabCycleDirection::Previous, cx));
+    cx.on_action(|_: &CloseActiveTab, cx| close_active_tab(cx));
     cx.on_action(|_: &CloseActiveWindow, cx| close_active_window(cx));
     cx.on_action(|_: &QuitApp, cx| quit_app(cx));
     cx.on_action(|_: &OpenConnectionQuickOpen, cx| {
@@ -1989,6 +2025,35 @@ mod tests {
         assert!(close_handler.contains("one_core::window_close::request_close_window"));
         assert!(!close_handler.contains("remote_file_editor"));
         assert!(!close_handler.contains("window.remove_window()"));
+    }
+
+    #[test]
+    fn close_active_tab_shortcut_is_registered_and_avoids_single_ctrl_letter_defaults() {
+        let source = include_str!("navop_app.rs");
+        let keybindings = source
+            .split("fn init_keybindings(")
+            .nth(1)
+            .and_then(|source| source.split("\nfn refreshable_keybindings").next())
+            .expect("init_keybindings source");
+        let refreshable_keybindings = source
+            .split("fn refreshable_keybindings(")
+            .nth(1)
+            .and_then(|source| source.split("\nfn init_action_handlers").next())
+            .expect("refreshable_keybindings source");
+        let close_tab_handler = source
+            .split("fn close_active_tab(")
+            .nth(1)
+            .and_then(|source| source.split("\n}\n\n").next())
+            .expect("close_active_tab source");
+
+        assert!(keybindings.contains("action_id::APP_CLOSE_ACTIVE_TAB"));
+        assert!(keybindings.contains("CloseActiveTab"));
+        assert!(refreshable_keybindings.contains("action_id::APP_CLOSE_ACTIVE_TAB"));
+        assert!(keybindings.contains(r#"default_shortcut("cmd-shift-w", "alt-shift-w")"#));
+        assert!(
+            refreshable_keybindings.contains(r#"default_shortcut("cmd-shift-w", "alt-shift-w")"#)
+        );
+        assert!(close_tab_handler.contains("hp.close_active_tab(window, cx)"));
     }
 
     #[test]

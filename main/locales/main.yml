@@ -3993,6 +3993,10 @@ Settings:
       en: Duplicate Tab
       zh-CN: 复制标签页
       zh-HK: 複製標籤頁
+    close_active_tab:
+      en: Close Tab
+      zh-CN: 关闭当前标签页
+      zh-HK: 關閉目前標籤頁
     quick_open:
       en: Quick Open Connection
       zh-CN: 快速打开连接

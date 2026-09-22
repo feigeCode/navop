@@ -2864,6 +2864,13 @@ const TAB_SHORTCUTS: &[ShortcutEntry] = &[
         system_hotkey: false,
     },
     ShortcutEntry {
+        keys_macos: &["cmd-shift-w"],
+        keys_other: &["alt-shift-w"],
+        label_key: "Settings.Shortcuts.close_active_tab",
+        action_id: Some(action_id::APP_CLOSE_ACTIVE_TAB),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
         keys_macos: &["ctrl-tab"],
         keys_other: &["ctrl-tab"],
         label_key: "Settings.Shortcuts.switch_next_tab",
@@ -3655,6 +3662,24 @@ mod tests {
 
         assert_eq!(shortcut.keys_macos, &["cmd-w"]);
         assert_eq!(shortcut.keys_other, &["ctrl-shift-w"]);
+        assert!(!shortcut.keys_macos.contains(&"ctrl-d"));
+        assert!(!shortcut.keys_other.contains(&"ctrl-d"));
+    }
+
+    #[test]
+    fn close_active_tab_shortcut_avoids_single_ctrl_letter_defaults() {
+        let shortcut = super::TAB_SHORTCUTS
+            .iter()
+            .find(|entry| {
+                entry.action_id == Some(one_core::keybindings::action_id::APP_CLOSE_ACTIVE_TAB)
+            })
+            .expect("close active tab shortcut");
+
+        assert_eq!(shortcut.keys_macos, &["cmd-shift-w"]);
+        assert_eq!(shortcut.keys_other, &["alt-shift-w"]);
+        assert_eq!("Settings.Shortcuts.close_active_tab", shortcut.label_key);
+        assert!(!shortcut.keys_macos.contains(&"ctrl-w"));
+        assert!(!shortcut.keys_other.contains(&"ctrl-w"));
         assert!(!shortcut.keys_macos.contains(&"ctrl-d"));
         assert!(!shortcut.keys_other.contains(&"ctrl-d"));
     }
