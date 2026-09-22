@@ -248,3 +248,6 @@ pub const MATCH_RADIUS: Pixels = px(2.);
 
 #[cfg(test)]
 mod find_tests;
+
+#[cfg(test)]
+mod find_keyboard_tests;

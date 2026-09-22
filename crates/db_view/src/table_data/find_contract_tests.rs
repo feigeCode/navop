@@ -12,6 +12,10 @@ fn results_delegate_source() -> &'static str {
     include_str!("results_delegate.rs")
 }
 
+fn table_data_tab_source() -> &'static str {
+    include_str!("../table_data_tab.rs")
+}
+
 #[test]
 fn results_grid_enables_in_table_find() {
     let delegate = results_delegate_source();
@@ -45,4 +49,20 @@ fn table_search_owns_cmd_f_inside_the_results_grid() {
     // 「打开表格查询 / 设计器」这类工具栏动作，不再重复绑定 Cmd+F。
     assert!(grid.contains("EditTable::new(&self.table)"));
     assert!(grid.contains(".on_action(cx.listener(Self::on_action_open_table_designer))"));
+}
+
+#[test]
+fn table_data_tab_hands_focus_to_the_table_inside_the_grid() {
+    let tab = table_data_tab_source();
+    let start = tab
+        .find("impl Focusable for TableDataTabContent {")
+        .expect("TableDataTabContent 的可聚焦实现");
+    let body = &tab[start..];
+    let end = body.find("\n}").expect("impl 结束");
+    let body = &body[..end];
+
+    // 页签容器激活页签时聚焦的是「页签内容」的 focus handle。如果这里返回
+    // 页签外壳自己的句柄，焦点路径里就没有 `EditTable` 键盘上下文，
+    // 表内查找（Cmd/Ctrl+F）会完全没反应——必须指向网格内部的表格。
+    assert!(body.contains("self.data_grid.read(cx).table_focus_handle(cx)"));
 }

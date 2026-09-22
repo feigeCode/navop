@@ -851,6 +851,20 @@ impl DataGrid {
         &self.table
     }
 
+    /// 网格内部表格的焦点句柄。
+    ///
+    /// 表内查找（Cmd/Ctrl+F）等快捷键绑定在 `EditTable` 键盘上下文上，
+    /// 宿主页签激活时必须把焦点交给这个句柄，否则焦点停在页签外壳上，
+    /// `EditTable` 不在焦点路径里，按 Cmd/Ctrl+F 不会有任何反应。
+    pub fn table_focus_handle(&self, cx: &App) -> FocusHandle {
+        self.table.read(cx).table_focus_handle()
+    }
+
+    /// 网格内表格的查找面板是否已打开。
+    pub fn find_panel_open(&self, cx: &App) -> bool {
+        self.table.read(cx).find_panel_open()
+    }
+
     pub fn update_data(
         &self,
         columns: Vec<Column>,

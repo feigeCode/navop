@@ -693,6 +693,20 @@ where
         &mut self.selection
     }
 
+    /// 表格内部接收键盘的焦点句柄。
+    ///
+    /// 宿主（页签、面板）在激活时应当把焦点交给它：`EditTable` 键盘上下文
+    /// 挂在表格自身节点上，焦点只落在宿主外壳时不在焦点路径里，
+    /// Cmd/Ctrl+F 这类表格快捷键会完全派发不到。
+    pub fn table_focus_handle(&self) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+
+    /// 表内查找面板是否已打开。
+    pub fn find_panel_open(&self) -> bool {
+        self.find_open
+    }
+
     /// 选择单个单元格（替换现有选区）
     pub fn select_cell(&mut self, row_ix: usize, col_ix: usize, cx: &mut Context<Self>) {
         self.selection.select_single((row_ix, col_ix));
