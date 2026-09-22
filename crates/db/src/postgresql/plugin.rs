@@ -113,6 +113,49 @@ impl PostgresPlugin {
         }
     }
 
+    /// 序列对象面板的列定义与行；数据源固定为 `list_sequences`。
+    fn sequences_object_view(sequences: Vec<SequenceInfo>) -> ObjectView {
+        let columns = vec![
+            Column::localized("name", "ObjectView.columns.name").width(180.0),
+            Column::localized("start", "ObjectView.columns.start")
+                .width(100.0)
+                .text_right(),
+            Column::localized("increment", "ObjectView.columns.increment")
+                .width(100.0)
+                .text_right(),
+            Column::localized("min", "ObjectView.columns.minimum")
+                .width(120.0)
+                .text_right(),
+            Column::localized("max", "ObjectView.columns.maximum")
+                .width(120.0)
+                .text_right(),
+        ];
+        let rows: Vec<Vec<String>> = sequences
+            .iter()
+            .map(|seq| {
+                let number = |value: Option<i64>| {
+                    value
+                        .map(|n| n.to_string())
+                        .unwrap_or_else(|| "-".to_string())
+                };
+                vec![
+                    seq.name.clone(),
+                    number(seq.start_value),
+                    number(seq.increment),
+                    number(seq.min_value),
+                    number(seq.max_value),
+                ]
+            })
+            .collect();
+
+        ObjectView {
+            db_node_type: DbNodeType::Sequence,
+            title: t!("ObjectView.counts.sequences", count = sequences.len()).to_string(),
+            columns,
+            rows,
+        }
+    }
+
     fn table_comment_sql(&self, table_name: &str, comment: &str) -> String {
         format!(
             "COMMENT ON TABLE {} IS {};",
@@ -2788,8 +2831,10 @@ impl DatabasePlugin for PostgresPlugin {
         schema: Option<String>,
     ) -> Result<Vec<SequenceInfo>> {
         let schema_val = schema.unwrap_or_else(|| "public".to_string());
+        // information_schema.sequences 的列名是 minimum_value / maximum_value，
+        // 不是 min_value / max_value；写错会直接报列不存在，调用侧会把错误吞成空列表。
         let sql = format!(
-            "SELECT sequence_name, start_value::bigint, increment::bigint, min_value::bigint, max_value::bigint \
+            "SELECT sequence_name, start_value::bigint, increment::bigint, minimum_value::bigint, maximum_value::bigint \
              FROM information_schema.sequences \
              WHERE sequence_schema = '{}' \
              ORDER BY sequence_name",
@@ -2835,51 +2880,18 @@ impl DatabasePlugin for PostgresPlugin {
         connection: &dyn DbConnection,
         database: &str,
     ) -> Result<ObjectView> {
-        let sequences = self.list_sequences(connection, database, None).await?;
+        self.list_sequences_view_in_schema(connection, database, None)
+            .await
+    }
 
-        let columns = vec![
-            Column::localized("name", "ObjectView.columns.name").width(180.0),
-            Column::localized("start", "ObjectView.columns.start")
-                .width(100.0)
-                .text_right(),
-            Column::localized("increment", "ObjectView.columns.increment")
-                .width(100.0)
-                .text_right(),
-            Column::localized("min", "ObjectView.columns.minimum")
-                .width(120.0)
-                .text_right(),
-            Column::localized("max", "ObjectView.columns.maximum")
-                .width(120.0)
-                .text_right(),
-        ];
-
-        let rows: Vec<Vec<String>> = sequences
-            .iter()
-            .map(|seq| {
-                vec![
-                    seq.name.clone(),
-                    seq.start_value
-                        .map(|n| n.to_string())
-                        .unwrap_or_else(|| "-".to_string()),
-                    seq.increment
-                        .map(|n| n.to_string())
-                        .unwrap_or_else(|| "-".to_string()),
-                    seq.min_value
-                        .map(|n| n.to_string())
-                        .unwrap_or_else(|| "-".to_string()),
-                    seq.max_value
-                        .map(|n| n.to_string())
-                        .unwrap_or_else(|| "-".to_string()),
-                ]
-            })
-            .collect();
-
-        Ok(ObjectView {
-            db_node_type: DbNodeType::Sequence,
-            title: t!("ObjectView.counts.sequences", count = sequences.len()).to_string(),
-            columns,
-            rows,
-        })
+    async fn list_sequences_view_in_schema(
+        &self,
+        connection: &dyn DbConnection,
+        database: &str,
+        schema: Option<String>,
+    ) -> Result<ObjectView> {
+        let sequences = self.list_sequences(connection, database, schema).await?;
+        Ok(Self::sequences_object_view(sequences))
     }
 
     fn build_column_definition(&self, column: &ColumnInfo, include_name: bool) -> String {
@@ -3934,6 +3946,24 @@ mod tests {
                     Some("SELECT order_id FROM orders".to_string()),
                     Some("Orders rollup".to_string()),
                 ]]
+            } else if query.contains("information_schema.sequences") {
+                vec![
+                    vec![
+                        Some("big".to_string()),
+                        Some("5".to_string()),
+                        Some("3".to_string()),
+                        Some("2".to_string()),
+                        Some("999".to_string()),
+                    ],
+                    // 空值单元：解析不出数字时必须退化显示 "-" 而不是报错。
+                    vec![
+                        Some("plain".to_string()),
+                        Some("1".to_string()),
+                        Some(String::new()),
+                        Some("1".to_string()),
+                        Some(i64::MAX.to_string()),
+                    ],
+                ]
             } else if query.contains("column_name") {
                 vec![vec![
                     Some("id".to_string()),
@@ -4361,6 +4391,64 @@ mod tests {
             .expect("materialized view query");
         assert!(matview_query.contains("c.relkind = 'm'"));
         assert!(matview_query.contains("pg_get_viewdef"));
+    }
+
+    #[tokio::test]
+    async fn test_postgres_sequences_use_information_schema_minimum_columns() {
+        let plugin = create_plugin();
+        let connection = CommentMetadataConnection::new();
+
+        let sequences = plugin
+            .list_sequences(&connection, "app", Some("app_schema".to_string()))
+            .await
+            .expect("list sequences");
+        assert_eq!(2, sequences.len());
+        assert_eq!("big", sequences[0].name);
+        assert_eq!(Some(5), sequences[0].start_value);
+        assert_eq!(Some(3), sequences[0].increment);
+        assert_eq!(Some(2), sequences[0].min_value);
+        assert_eq!(Some(999), sequences[0].max_value);
+        // 取不到数字时只丢这一个值，不能让整张列表失败。
+        assert_eq!(Some(1), sequences[1].start_value);
+        assert_eq!(None, sequences[1].increment);
+
+        let sequence_query = connection
+            .queries()
+            .into_iter()
+            .find(|query| query.contains("information_schema.sequences"))
+            .expect("sequence query");
+        // information_schema.sequences 没有 min_value / max_value 这两列，
+        // 写错会直接报列不存在，调用方又把错误吞成空列表——序列目录就是这么空的。
+        assert!(sequence_query.contains("minimum_value::bigint"));
+        assert!(sequence_query.contains("maximum_value::bigint"));
+        assert!(!sequence_query.contains("min_value::bigint"));
+        assert!(!sequence_query.contains("max_value::bigint"));
+        assert!(sequence_query.contains("sequence_schema = 'app_schema'"));
+
+        let view = plugin
+            .list_sequences_view_in_schema(&connection, "app", Some("app_schema".to_string()))
+            .await
+            .expect("sequence object view");
+        assert_eq!(DbNodeType::Sequence, view.db_node_type);
+        assert_eq!(vec!["big", "5", "3", "2", "999"], view.rows[0]);
+        assert_eq!(
+            vec!["plain", "1", "-", "1", &i64::MAX.to_string()],
+            view.rows[1]
+        );
+
+        // 不带 schema 的对象面板必须仍然落在 public 上，别把 schema 丢了。
+        let public_view = plugin
+            .list_sequences_view(&connection, "app")
+            .await
+            .expect("sequence object view without schema");
+        assert_eq!(2, public_view.rows.len());
+        let queries = connection.queries();
+        let public_query = queries
+            .iter()
+            .rev()
+            .find(|query| query.contains("information_schema.sequences"))
+            .expect("sequence query");
+        assert!(public_query.contains("sequence_schema = 'public'"));
     }
 
     #[test]
