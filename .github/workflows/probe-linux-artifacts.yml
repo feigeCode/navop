@@ -133,15 +133,13 @@ jobs:
           fi
           cargo --version
           rustc --version
-          # Mirror the published Linux shape: the release build leaves out
-          # `embedded-webview`, so WebKitGTK 4.1 is not a load-time requirement.
-          linux_features="$(script/linux-release-features.sh)"
-          echo "Linux features: ${linux_features}"
+          # Mirror the published shape: it is the plain default feature set, the
+          # same one macOS and Windows build, and `embedded-webview` is off in
+          # that set itself (see main/Cargo.toml), so WebKitGTK 4.1 is not a
+          # load-time requirement.
           cargo zigbuild \
             --release \
             -p main \
-            --no-default-features \
-            --features "${linux_features}" \
             --target "${{ matrix.target }}.2.28"
           test -x "target/${{ matrix.target }}/release/navop"
           ls -lh "target/${{ matrix.target }}/release/navop"
