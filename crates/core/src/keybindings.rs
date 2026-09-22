@@ -52,6 +52,9 @@ pub mod action_id {
     pub const TABLE_PASTE: &str = "table.paste";
     pub const TABLE_SELECT_ALL: &str = "table.select_all";
     pub const TABLE_CANCEL: &str = "table.cancel";
+    pub const TABLE_FIND: &str = "table.find";
+    pub const TABLE_FIND_NEXT: &str = "table.find_next";
+    pub const TABLE_FIND_PREVIOUS: &str = "table.find_previous";
 }
 
 pub fn shortcuts_for(cx: &App, action_id: &str, defaults: &[&str]) -> Vec<String> {

@@ -4125,6 +4125,18 @@ Settings:
       en: Cancel Selection
       zh-CN: 取消选择
       zh-HK: 取消選擇
+    table_find:
+      en: Find in Table
+      zh-CN: 表格内查找
+      zh-HK: 表格內尋找
+    table_find_next:
+      en: Find Next Match
+      zh-CN: 下一个匹配
+      zh-HK: 下一個符合
+    table_find_previous:
+      en: Find Previous Match
+      zh-CN: 上一个匹配
+      zh-HK: 上一個符合
     remote_editor_search:
       en: Search
       zh-CN: 搜索

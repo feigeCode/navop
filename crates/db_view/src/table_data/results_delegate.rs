@@ -119,6 +119,14 @@ pub struct EditorTableDelegate {
     column_filters: HashMap<usize, HashSet<FilterValueKey>>,
     /// Local table data search query. Empty means no row search.
     row_search_query: String,
+    /// 列显示顺序（元素为 `columns` 中的原始列索引）。
+    ///
+    /// 内部数据结构（行数据、二进制单元格、变更追踪、主键、列元数据）始终以
+    /// 原始列索引为准，仅在委托给表格 UI 的显示层边界处通过
+    /// [`Self::original_column_index`] 换算。列拖拽排序与隐藏列都只改写这里。
+    column_order: Vec<usize>,
+    /// 被用户隐藏的列（按原始列索引记录）。
+    hidden_columns: HashSet<usize>,
     /// Whether cells are editable
     editable: bool,
     /// Whether the table is currently loading data
@@ -226,6 +234,8 @@ impl Clone for EditorTableDelegate {
             filtered_row_indices: self.filtered_row_indices.clone(),
             column_filters: self.column_filters.clone(),
             row_search_query: self.row_search_query.clone(),
+            column_order: self.column_order.clone(),
+            hidden_columns: self.hidden_columns.clone(),
             editable: self.editable,
             loading: self.loading,
             database_type: self.database_type.clone(),
@@ -269,6 +279,8 @@ impl EditorTableDelegate {
             filtered_row_indices: None,
             column_filters: HashMap::new(),
             row_search_query: String::new(),
+            column_order: Vec::new(),
+            hidden_columns: HashSet::new(),
             editable,
             loading: false,
             database_type,
@@ -678,6 +690,133 @@ impl EditorTableDelegate {
         &self.column_meta
     }
 
+    // ========== 列显示/隐藏 ==========
+
+    /// 确保 `column_order` 覆盖当前所有原始列，并保持已有顺序。
+    fn ensure_column_order(&mut self) {
+        let column_count = self.columns.len();
+        self.column_order.retain(|ix| *ix < column_count);
+        for ix in 0..column_count {
+            if !self.column_order.contains(&ix) {
+                self.column_order.push(ix);
+            }
+        }
+    }
+
+    /// 原始列索引序列中，当前可见的列（即展示顺序）。
+    pub fn visible_column_indices(&self) -> Vec<usize> {
+        self.ordered_column_indices()
+            .filter(|ix| !self.hidden_columns.contains(ix))
+            .collect()
+    }
+
+    /// 按展示顺序迭代全部原始列索引（含隐藏列）。
+    ///
+    /// `column_order` 未初始化或长度过期时回退为 `0..columns.len()` 的自然顺序。
+    fn ordered_column_indices(&self) -> Box<dyn Iterator<Item = usize> + '_> {
+        if self.column_order.len() == self.columns.len() {
+            Box::new(self.column_order.iter().copied())
+        } else {
+            Box::new(0..self.columns.len())
+        }
+    }
+
+    /// 指定的原始列是否可见。
+    pub fn is_column_visible(&self, original_ix: usize) -> bool {
+        !self.hidden_columns.contains(&original_ix)
+    }
+
+    /// 是否存在被隐藏的列。
+    pub fn has_hidden_columns(&self) -> bool {
+        !self.hidden_columns.is_empty()
+    }
+
+    /// 按当前展示顺序返回所有列（含隐藏列）及其可见状态，供列过滤菜单渲染。
+    pub fn column_visibility_entries(&self) -> Vec<(usize, SharedString, bool)> {
+        self.ordered_column_indices()
+            .map(|ix| {
+                let name = self
+                    .columns
+                    .get(ix)
+                    .map(|column| column.name.clone())
+                    .unwrap_or_default();
+                (ix, name, !self.hidden_columns.contains(&ix))
+            })
+            .collect()
+    }
+
+    /// 把显示层列索引换算为原始列索引。
+    ///
+    /// 越界时返回 `None`。表格 UI 只感知显示层索引，所有内部读写
+    /// （行数据、二进制单元格、变更追踪、主键）都必须用原始列索引。
+    pub fn original_column_index(&self, display_ix: usize) -> Option<usize> {
+        self.ordered_column_indices()
+            .filter(|ix| !self.hidden_columns.contains(ix))
+            .nth(display_ix)
+    }
+
+    /// 把显示位置 `col_ix` 的列移动到显示位置 `to_ix`。
+    ///
+    /// 只重排展示顺序表，原始列索引与数据坐标保持不变。越界或空操作直接忽略。
+    pub fn reorder_visible_columns(&mut self, col_ix: usize, to_ix: usize) -> bool {
+        if col_ix == to_ix {
+            return false;
+        }
+        self.ensure_column_order();
+        let visible = self.visible_column_indices();
+        if col_ix >= visible.len() || to_ix >= visible.len() {
+            return false;
+        }
+        let Some(original_from) = visible.get(col_ix).copied() else {
+            return false;
+        };
+        let Some(original_to) = visible.get(to_ix).copied() else {
+            return false;
+        };
+        let Some(from_pos) = self.column_order.iter().position(|ix| *ix == original_from) else {
+            return false;
+        };
+        let Some(to_pos) = self.column_order.iter().position(|ix| *ix == original_to) else {
+            return false;
+        };
+        let moved = self.column_order.remove(from_pos);
+        self.column_order.insert(to_pos, moved);
+        true
+    }
+
+    /// 切换某一原始列的可见性。
+    ///
+    /// 返回是否实际发生变更。为保证表格始终有列可展示，拒绝隐藏最后一列。
+    pub fn set_column_visible(&mut self, original_ix: usize, visible: bool) -> bool {
+        if original_ix >= self.columns.len() {
+            return false;
+        }
+        if visible {
+            return self.hidden_columns.remove(&original_ix);
+        }
+        if self.hidden_columns.contains(&original_ix) || self.visible_column_indices().len() <= 1 {
+            return false;
+        }
+        self.hidden_columns.insert(original_ix)
+    }
+
+    /// 显示全部列。
+    pub fn show_all_columns(&mut self) -> bool {
+        let changed = !self.hidden_columns.is_empty();
+        self.hidden_columns.clear();
+        changed
+    }
+
+    /// 丢弃超出当前列数的隐藏记录，并修复顺序表。
+    fn prune_hidden_columns(&mut self) {
+        let column_count = self.columns.len();
+        self.hidden_columns.retain(|ix| *ix < column_count);
+        self.ensure_column_order();
+        if self.visible_column_indices().is_empty() && column_count > 0 {
+            self.hidden_columns.clear();
+        }
+    }
+
     /// Get field type for a column
     pub fn get_field_type(&self, col_ix: usize) -> FieldType {
         self.column_meta
@@ -933,6 +1072,9 @@ impl EditorTableDelegate {
         self.original_binary_cells = binary_cells.clone();
         self.binary_cells = binary_cells;
         self.typed_batch = typed_batch;
+
+        // 列集合可能变化，裁剪失效的隐藏记录，避免整表无列可显示。
+        self.prune_hidden_columns();
 
         // Clear all change tracking
         self.clear_changes();
@@ -1296,6 +1438,17 @@ impl EditTableDelegate for EditorTableDelegate {
         true
     }
 
+    /// 列拖拽排序：只改写展示顺序，不影响内部原始列索引。
+    fn move_column(
+        &mut self,
+        col_ix: usize,
+        to_ix: usize,
+        _window: &mut Window,
+        _cx: &mut Context<EditTableState<Self>>,
+    ) {
+        self.reorder_visible_columns(col_ix, to_ix);
+    }
+
     fn header_context_menu(
         &mut self,
         col_ix: usize,
@@ -1303,7 +1456,10 @@ impl EditTableDelegate for EditorTableDelegate {
         _window: &mut Window,
         _cx: &mut Context<EditTableState<Self>>,
     ) -> PopupMenu {
-        let Some(column) = self.columns.get(col_ix) else {
+        let Some(original_ix) = self.original_column_index(col_ix) else {
+            return menu;
+        };
+        let Some(column) = self.columns.get(original_ix) else {
             return menu;
         };
         let name = column.name.to_string();
@@ -1312,7 +1468,7 @@ impl EditTableDelegate for EditorTableDelegate {
         }
         let comment = self
             .column_meta
-            .get(col_ix)
+            .get(original_ix)
             .and_then(|meta| meta.comment.clone())
             .map(|comment| comment.trim().to_string())
             .filter(|comment| !comment.is_empty());
@@ -1346,7 +1502,7 @@ impl EditTableDelegate for EditorTableDelegate {
         menu
     }
     fn columns_count(&self, _cx: &App) -> usize {
-        self.columns.len()
+        self.visible_column_indices().len()
     }
 
     fn rows_count(&self, _cx: &App) -> usize {
@@ -1355,7 +1511,9 @@ impl EditTableDelegate for EditorTableDelegate {
     }
 
     fn column(&self, col_ix: usize, _cx: &App) -> Column {
-        self.columns[col_ix].clone()
+        self.original_column_index(col_ix)
+            .and_then(|original_ix| self.columns.get(original_ix).cloned())
+            .unwrap_or_default()
     }
 
     fn perform_sort(
@@ -1366,8 +1524,8 @@ impl EditTableDelegate for EditorTableDelegate {
         cx: &mut Context<EditTableState<Self>>,
     ) {
         let Some(column_name) = self
-            .columns
-            .get(col_ix)
+            .original_column_index(col_ix)
+            .and_then(|original_ix| self.columns.get(original_ix))
             .map(|column| column.name.to_string())
         else {
             return;
@@ -1394,15 +1552,14 @@ impl EditTableDelegate for EditorTableDelegate {
         _window: &mut Window,
         cx: &mut Context<EditTableState<Self>>,
     ) -> impl IntoElement {
-        let col_name = self
-            .columns
-            .get(col_ix)
+        let original_ix = self.original_column_index(col_ix);
+        let col_name = original_ix
+            .and_then(|ix| self.columns.get(ix))
             .map(|c| c.name.clone())
             .unwrap_or_default();
 
-        let tooltip_text = self
-            .column_meta
-            .get(col_ix)
+        let tooltip_text = original_ix
+            .and_then(|ix| self.column_meta.get(ix))
             .map(|meta| {
                 let mut text = meta.data_type.to_lowercase().clone();
                 if let Some(comment) = &meta.comment {
@@ -1464,7 +1621,13 @@ impl EditTableDelegate for EditorTableDelegate {
                     );
                     return;
                 };
-                let indices = state.get_selection_column_indices(cx);
+                // `get_selection_column_indices` 返回的是显示层列索引，复制链路内部
+                // 需要数据层（原始）列索引，否则隐藏/拖拽列后取值会错位。
+                let indices = state
+                    .get_selection_column_indices(cx)
+                    .into_iter()
+                    .filter_map(|display_ix| state.delegate().original_column_index(display_ix))
+                    .collect::<Vec<_>>();
                 if indices.is_empty() {
                     window.push_notification(
                         Notification::warning(t!("TableData.select_cell").to_string()),
@@ -1601,7 +1764,11 @@ impl EditTableDelegate for EditorTableDelegate {
 
             let mut changed = false;
             let delegate = state.delegate_mut();
-            for (row_ix, col_ix) in selected_cells {
+            for (row_ix, display_col_ix) in selected_cells {
+                // 选区列索引属于显示层，写入前统一换算为原始列索引。
+                let Some(col_ix) = delegate.original_column_index(display_col_ix) else {
+                    continue;
+                };
                 let Some(actual_row_ix) = delegate.resolve_display_row(row_ix) else {
                     continue;
                 };
@@ -1994,6 +2161,9 @@ impl EditTableDelegate for EditorTableDelegate {
     ) -> impl IntoElement {
         // Map display row index to actual row index
         let actual_row = self.map_display_to_actual_row(row);
+        let Some(col) = self.original_column_index(col) else {
+            return div().into_any_element();
+        };
 
         let value = self
             .rows
@@ -2157,6 +2327,9 @@ impl EditTableDelegate for EditorTableDelegate {
 
         // Map display row index to actual row index
         let actual_row = self.map_display_to_actual_row(row_ix);
+        let Some(col_ix) = self.original_column_index(col_ix) else {
+            return None;
+        };
 
         if self.is_deleted_row(actual_row) {
             return None;
@@ -2539,6 +2712,9 @@ impl EditTableDelegate for EditorTableDelegate {
     ) -> bool {
         // Map display row index to actual row index
         let actual_row = self.map_display_to_actual_row(row_ix);
+        let Some(col_ix) = self.original_column_index(col_ix) else {
+            return false;
+        };
         let new_opt_value = self.edit_value(actual_row, col_ix, new_value.clone());
 
         tracing::debug!(
@@ -2734,7 +2910,8 @@ impl EditTableDelegate for EditorTableDelegate {
     fn is_cell_modified(&self, row_ix: usize, col_ix: usize, _cx: &App) -> bool {
         // Map display row index to actual row index
         let actual_row = self.map_display_to_actual_row(row_ix);
-        self.modified_cells.contains(&(actual_row, col_ix))
+        self.original_column_index(col_ix)
+            .is_some_and(|ix| self.modified_cells.contains(&(actual_row, ix)))
     }
 
     fn is_row_deleted(&self, row_ix: usize, _cx: &App) -> bool {
@@ -2819,6 +2996,10 @@ impl EditTableDelegate for EditorTableDelegate {
     fn get_column_filter_values(&self, col_ix: usize, _cx: &App) -> Vec<FilterValue> {
         use std::collections::HashMap;
 
+        let Some(col_ix) = self.original_column_index(col_ix) else {
+            return Vec::new();
+        };
+
         let mut value_counts: HashMap<FilterValueKey, usize> = HashMap::new();
 
         // 获取其他列的筛选条件（排除当前列）
@@ -2861,7 +3042,8 @@ impl EditTableDelegate for EditorTableDelegate {
     }
 
     fn is_column_filtered(&self, col_ix: usize, _cx: &App) -> bool {
-        self.active_filter_columns.contains(&col_ix)
+        self.original_column_index(col_ix)
+            .is_some_and(|ix| self.active_filter_columns.contains(&ix))
     }
 
     fn on_column_filter_changed(
@@ -2871,7 +3053,9 @@ impl EditTableDelegate for EditorTableDelegate {
         _window: &mut Window,
         _cx: &mut Context<EditTableState<Self>>,
     ) {
-        self.apply_filter(col_ix, selected_values);
+        if let Some(original_ix) = self.original_column_index(col_ix) {
+            self.apply_filter(original_ix, selected_values);
+        }
     }
 
     // ============================================================================
@@ -2884,16 +3068,37 @@ impl EditTableDelegate for EditorTableDelegate {
         _window: &mut Window,
         _cx: &mut Context<EditTableState<Self>>,
     ) {
-        self.clear_column_filter(col_ix);
+        if let Some(original_ix) = self.original_column_index(col_ix) {
+            self.clear_column_filter(original_ix);
+        }
     }
 
     fn multi_select_enabled(&self, _cx: &App) -> bool {
         true
     }
 
+    fn find_in_table_enabled(&self, _cx: &App) -> bool {
+        true
+    }
+
+    /// 二进制列画的是「大小描述」而不是原始字节，查找必须命中同一段
+    /// 文本，否则用户在界面上看到的和搜到的会对不上。
+    fn find_cell_text(&self, row_ix: usize, col_ix: usize, cx: &App) -> Option<String> {
+        // col_ix 是显示层索引，内部数据结构一律用原始列索引。
+        let original_col = self.original_column_index(col_ix)?;
+        let actual_row = self.map_display_to_actual_row(row_ix);
+        if let Some(bytes) = self.current_binary_arc(actual_row, original_col) {
+            return Some(t!("TableData.binary_value", size = bytes.len()).to_string());
+        }
+        self.get_optional_cell_value(row_ix, col_ix, cx)
+    }
+
     fn get_cell_value(&self, row_ix: usize, col_ix: usize, _cx: &App) -> String {
         // Map display row index to actual row index
         let actual_row = self.map_display_to_actual_row(row_ix);
+        let Some(col_ix) = self.original_column_index(col_ix) else {
+            return String::new();
+        };
 
         if self.modified_cells.contains(&(actual_row, col_ix)) {
             return self
@@ -2917,6 +3122,7 @@ impl EditTableDelegate for EditorTableDelegate {
 
     fn get_optional_cell_value(&self, row_ix: usize, col_ix: usize, _cx: &App) -> Option<String> {
         let actual_row = self.map_display_to_actual_row(row_ix);
+        let col_ix = self.original_column_index(col_ix)?;
 
         if self.modified_cells.contains(&(actual_row, col_ix)) {
             return self
@@ -2951,6 +3157,9 @@ impl EditTableDelegate for EditorTableDelegate {
         for (row_ix, col_ix, value) in changes {
             // Map display row index to actual row index
             let actual_row = self.map_display_to_actual_row(row_ix);
+            let Some(col_ix) = self.original_column_index(col_ix) else {
+                continue;
+            };
 
             // Skip if row is deleted
             if self.is_deleted_row(actual_row) {
@@ -3333,6 +3542,8 @@ mod tests {
             filtered_row_indices: None,
             column_filters: HashMap::new(),
             row_search_query: String::new(),
+            column_order: Vec::new(),
+            hidden_columns: HashSet::new(),
             editable: true,
             loading: false,
             database_type: DatabaseType::MySQL,
@@ -4019,5 +4230,235 @@ mod tests {
             Some(gpui::ImageFormat::Png)
         );
         assert_eq!(binary_cell_image_format(b"not an image"), None);
+    }
+    // ========== 列显示/隐藏 ==========
+
+    /// 按显示列索引读取单元格文本，等价于表格 UI 走 `get_cell_value` 的路径。
+    fn display_cell_text(
+        delegate: &EditorTableDelegate,
+        row: usize,
+        display_col: usize,
+    ) -> Option<String> {
+        let original = delegate.original_column_index(display_col)?;
+        delegate.rows.get(row)?.get(original)?.clone()
+    }
+
+    #[test]
+    fn hiding_columns_maps_display_indices_to_original_columns() {
+        let mut delegate =
+            test_delegate(vec![vec![Some("1".to_string()), Some("Alice".to_string())]]);
+
+        assert_eq!(2, delegate.visible_column_indices().len());
+        assert_eq!(vec![0, 1], delegate.visible_column_indices());
+        assert_eq!(Some(0), delegate.original_column_index(0));
+        assert_eq!(Some(1), delegate.original_column_index(1));
+
+        assert!(delegate.set_column_visible(1, false));
+        assert_eq!(vec![0], delegate.visible_column_indices());
+        assert_eq!(Some(0), delegate.original_column_index(0));
+        assert_eq!(None, delegate.original_column_index(1));
+        assert!(delegate.has_hidden_columns());
+        assert!(!delegate.is_column_visible(1));
+    }
+
+    #[test]
+    fn hiding_first_column_shifts_display_mapping() {
+        let mut delegate =
+            test_delegate(vec![vec![Some("1".to_string()), Some("Alice".to_string())]]);
+
+        assert!(delegate.set_column_visible(0, false));
+
+        // 显示第 0 列现在是原始第 1 列（name），取值必须按原始列读取。
+        assert_eq!(Some(1), delegate.original_column_index(0));
+        assert_eq!(
+            Some("Alice".to_string()),
+            display_cell_text(&delegate, 0, 0)
+        );
+    }
+
+    #[test]
+    fn last_visible_column_cannot_be_hidden() {
+        let mut delegate =
+            test_delegate(vec![vec![Some("1".to_string()), Some("Alice".to_string())]]);
+
+        assert!(delegate.set_column_visible(1, false));
+        // 只剩一列可见时拒绝继续隐藏，避免整表无列可显示。
+        assert!(!delegate.set_column_visible(0, false));
+        assert_eq!(vec![0], delegate.visible_column_indices());
+        // 本来就隐藏的列重复隐藏也不产生变更。
+        assert!(!delegate.set_column_visible(1, false));
+
+        // 恢复后可以再隐藏另一列。
+        assert!(delegate.set_column_visible(1, true));
+        assert!(delegate.set_column_visible(0, false));
+        assert_eq!(vec![1], delegate.visible_column_indices());
+        // 越界索引直接忽略。
+        assert!(!delegate.set_column_visible(9, false));
+        assert!(!delegate.set_column_visible(9, true));
+    }
+
+    #[test]
+    fn show_all_columns_restores_full_order() {
+        let mut delegate =
+            test_delegate(vec![vec![Some("1".to_string()), Some("Alice".to_string())]]);
+
+        assert!(delegate.set_column_visible(1, false));
+        assert!(delegate.show_all_columns());
+        assert_eq!(vec![0, 1], delegate.visible_column_indices());
+        assert!(!delegate.has_hidden_columns());
+        // 重复调用无副作用。
+        assert!(!delegate.show_all_columns());
+    }
+
+    #[test]
+    fn moving_columns_reorders_display_without_touching_data_indices() {
+        let mut delegate = test_delegate(vec![vec![
+            Some("1".to_string()),
+            Some("Alice".to_string()),
+            Some("42".to_string()),
+        ]]);
+        delegate.columns.push(Column::new("age", "age"));
+
+        assert_eq!(vec![0, 1, 2], delegate.visible_column_indices());
+        assert!(delegate.reorder_visible_columns(2, 0));
+        // 显示顺序变为 age, id, name，但原始列索引不变。
+        assert_eq!(vec![2, 0, 1], delegate.visible_column_indices());
+        assert_eq!(Some(2), delegate.original_column_index(0));
+        assert_eq!(Some("42".to_string()), display_cell_text(&delegate, 0, 0));
+        // 同位置或越界移动是空操作。
+        assert!(!delegate.reorder_visible_columns(1, 1));
+        assert!(!delegate.reorder_visible_columns(0, 9));
+
+        // 隐藏仍按原始索引生效，不受拖拽顺序影响。
+        assert!(delegate.set_column_visible(0, false));
+        assert_eq!(vec![2, 1], delegate.visible_column_indices());
+    }
+
+    #[test]
+    fn replacing_data_prunes_stale_hidden_indices() {
+        let mut delegate =
+            test_delegate(vec![vec![Some("1".to_string()), Some("Alice".to_string())]]);
+        assert!(delegate.set_column_visible(1, false));
+
+        // 用更少列的新结果集替换：越界的隐藏记录必须被裁剪，且至少保留一列可见。
+        delegate.columns = vec![Column::new("id", "id")];
+        delegate.prune_hidden_columns();
+
+        assert_eq!(vec![0], delegate.visible_column_indices());
+        assert!(!delegate.has_hidden_columns());
+    }
+
+    #[test]
+    fn replacing_data_keeps_valid_hidden_columns() {
+        let mut delegate = test_delegate(vec![vec![
+            Some("1".to_string()),
+            Some("Alice".to_string()),
+            Some("42".to_string()),
+        ]]);
+        delegate.columns.push(Column::new("age", "age"));
+        assert!(delegate.set_column_visible(1, false));
+
+        // 列数不变（同表刷新）时，隐藏状态与顺序都应保留。
+        delegate.prune_hidden_columns();
+        assert_eq!(vec![0, 2], delegate.visible_column_indices());
+    }
+
+    #[test]
+    fn hidden_column_entries_report_original_order_and_visibility() {
+        let mut delegate = test_delegate(vec![vec![
+            Some("1".to_string()),
+            Some("Alice".to_string()),
+            Some("42".to_string()),
+        ]]);
+        delegate.columns.push(Column::new("age", "age"));
+        assert!(delegate.set_column_visible(1, false));
+
+        let entries = delegate.column_visibility_entries();
+        // 菜单按展示顺序列出全部字段（含隐藏项），并带原始索引用于切换。
+        let all: Vec<(usize, String, bool)> = entries
+            .iter()
+            .map(|(ix, name, visible)| (*ix, name.to_string(), *visible))
+            .collect();
+        assert_eq!(
+            vec![
+                (0, "id".to_string(), true),
+                (1, "name".to_string(), false),
+                (2, "age".to_string(), true),
+            ],
+            all
+        );
+    }
+    #[test]
+    fn display_boundary_methods_translate_to_original_column_indices() {
+        let source = include_str!("results_delegate.rs");
+
+        // 每个接收列索引的委托方法都必须先经过 `original_column_index` 换算，
+        // 否则隐藏/拖拽列后显示索引与数据坐标会错位。
+        let fn_body = |name: &str, end_marker: &str| -> String {
+            source
+                .split(name)
+                .nth(1)
+                .unwrap_or_else(|| panic!("{name} exists"))
+                .split(end_marker)
+                .next()
+                .unwrap_or_else(|| panic!("{name} has an end marker"))
+                .to_string()
+        };
+
+        let checks = [
+            ("fn column(&self, col_ix: usize", "fn perform_sort("),
+            ("fn render_th(", "fn context_menu("),
+            ("fn render_td(", "fn loading("),
+            ("fn build_input(", "fn on_cell_edited("),
+            ("fn on_cell_edited(", "fn is_cell_modified("),
+            ("fn get_cell_value(", "fn get_optional_cell_value("),
+            ("fn get_optional_cell_value(", "fn set_cell_values("),
+            ("fn get_column_filter_values(", "fn is_column_filtered("),
+            ("fn is_column_filtered(", "fn on_column_filter_changed("),
+            (
+                "fn on_column_filter_changed(",
+                "fn on_column_filter_cleared(",
+            ),
+            ("fn on_column_filter_cleared(", "fn multi_select_enabled("),
+            ("fn is_cell_modified(", "fn is_row_deleted("),
+            ("fn perform_sort(", "fn render_th("),
+            ("fn header_context_menu(", "fn columns_count("),
+            ("fn set_cell_values(", "fn on_copy("),
+        ];
+        for (start, end) in checks {
+            let body = fn_body(start, end);
+            assert!(
+                body.contains("original_column_index"),
+                "{start} must translate display column indices to original ones"
+            );
+        }
+
+        // 复制链路同样要把选区（显示层）列索引换算为数据层列索引。
+        assert!(source.contains("`get_selection_column_indices` 返回的是显示层列索引"));
+        // 列过滤菜单的勾选切换必须使用原始列索引。
+        assert!(source.contains("pub fn set_column_visible(&mut self, original_ix: usize"));
+    }
+
+    #[test]
+    fn hidden_and_reordered_columns_map_to_the_same_data_cell() {
+        let mut delegate = test_delegate(vec![vec![
+            Some("1".to_string()),
+            Some("Alice".to_string()),
+            Some("42".to_string()),
+        ]]);
+        delegate.columns.push(Column::new("age", "age"));
+
+        // age 移到最前并隐藏 name：可见列顺序应为 age, id。
+        assert!(delegate.reorder_visible_columns(2, 0));
+        assert!(delegate.set_column_visible(1, false));
+        assert_eq!(vec![2, 0], delegate.visible_column_indices());
+
+        // 显示第 1 列现在映射回原始第 0 列（id），而不是显示位置对应的列。
+        assert_eq!(Some(0), delegate.original_column_index(1));
+        assert_eq!(Some(2), delegate.original_column_index(0));
+        assert_eq!(
+            Some("Alice".to_string()),
+            delegate.rows[0].get(1).cloned().flatten()
+        );
     }
 }

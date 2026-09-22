@@ -3120,6 +3120,27 @@ const TABLE_SHORTCUTS: &[ShortcutEntry] = &[
         action_id: Some(action_id::TABLE_CANCEL),
         system_hotkey: false,
     },
+    ShortcutEntry {
+        keys_macos: &["cmd-f"],
+        keys_other: &["ctrl-f"],
+        label_key: "Settings.Shortcuts.table_find",
+        action_id: Some(action_id::TABLE_FIND),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["cmd-g"],
+        keys_other: &["ctrl-g"],
+        label_key: "Settings.Shortcuts.table_find_next",
+        action_id: Some(action_id::TABLE_FIND_NEXT),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["cmd-shift-g"],
+        keys_other: &["ctrl-shift-g"],
+        label_key: "Settings.Shortcuts.table_find_previous",
+        action_id: Some(action_id::TABLE_FIND_PREVIOUS),
+        system_hotkey: false,
+    },
 ];
 
 const REMOTE_EDITOR_SHORTCUTS: &[ShortcutEntry] = &[

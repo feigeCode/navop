@@ -6,15 +6,20 @@ use std::{
 };
 
 use super::filter_state::FilterState;
+use super::find::{
+    FindHighlightElement, FindMatch, FindOutcome, HighlightSegment, SearchPanel,
+    SearchPanelEvent, mark_current_match_at, resolve_find, row_highlight_ranges, row_matches,
+    scroll_target_for_match,
+};
 use super::selection::{CellCoord, TableSelection};
 use super::*;
 use crate::edit_table::filter_panel::FilterPanel;
 use gpui::{
-    AppContext, Axis, Bounds, ClickEvent, ClipboardItem, Context, Div, DragMoveEvent, ElementId,
-    Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, IsZero,
-    ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, Pixels, Point, Render,
+    AnyElement, AppContext, Axis, Bounds, ClickEvent, ClipboardItem, Context, Div, DragMoveEvent,
+    ElementId, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement,
+    IsZero, ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, Pixels, Point, Render,
     ScrollStrategy, ScrollWheelEvent, SharedString, Stateful, StatefulInteractiveElement as _,
-    Styled, Subscription, Task, UniformListScrollHandle, Window, canvas, div,
+    Styled, Subscription, Task, TextRun, UniformListScrollHandle, Window, canvas, div,
     prelude::FluentBuilder, px, uniform_list,
 };
 use gpui_component::list::{List, ListState};
@@ -60,6 +65,14 @@ fn batch_edit_changes(
         .collect()
 }
 
+/// 单元格参与查找的文本长度（NULL 按 `NULL` 计）。
+fn cell_text_len(cell: &Option<String>) -> usize {
+    cell.as_deref()
+        .unwrap_or(super::find::NULL_TEXT)
+        .chars()
+        .count()
+}
+
 const SCROLLBAR_WIDTH: Pixels = px(16.);
 const COLUMN_SEPARATOR_WIDTH: Pixels = px(1.);
 
@@ -76,7 +89,10 @@ gpui::actions!(
         SelectPageDown,
         Copy,
         Paste,
-        SelectAll
+        SelectAll,
+        Find,
+        FindNext,
+        FindPrevious
     ]
 );
 
@@ -209,13 +225,29 @@ pub struct EditTableState<D: EditTableDelegate> {
     drag_start: Option<(usize, usize, bool)>,
     /// 单元格边界缓存（用于拖选时的命中测试）
     cell_bounds: std::collections::HashMap<(usize, usize), Bounds<Pixels>>,
+
+    /// 表格内查找面板（Cmd/Ctrl+F）
+    find_panel: Entity<SearchPanel>,
+    /// 查找面板是否打开（打开后即使查询词为空也保持可见，等待输入）
+    find_open: bool,
+    _find_subscription: Option<Subscription>,
+    /// 当前查找的命中统计
+    find_outcome: FindOutcome,
+    /// 当前命中的显示行
+    find_current_row: Option<usize>,
+    /// 当前命中在全部命中中的序号（从 1 开始，0 表示尚未开始导航）
+    find_current_index: usize,
+    /// 每行的命中区间缓存（显示行 -> 命中）
+    find_rows: std::collections::HashMap<usize, Vec<FindMatch>>,
 }
 
 impl<D> EditTableState<D>
 where
     D: EditTableDelegate,
 {
-    pub fn new(delegate: D, _: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(delegate: D, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        // 面板必须在测试上下文之外也能创建，因此把 window 透传给 InputState。
+        let find_panel = cx.new(|cx| SearchPanel::new(window, cx));
         let mut this = Self {
             focus_handle: cx.focus_handle(),
             options: TableOptions::default(),
@@ -254,8 +286,22 @@ where
             drag_end_cell: None,
             drag_start: None,
             cell_bounds: std::collections::HashMap::new(),
+            find_panel: find_panel.clone(),
+            find_open: false,
+            _find_subscription: None,
+            find_outcome: FindOutcome::default(),
+            find_current_row: None,
+            find_current_index: 0,
+            find_rows: std::collections::HashMap::new(),
         };
 
+        this._find_subscription = Some(cx.subscribe_in(
+            &find_panel,
+            window,
+            |this: &mut Self, _, event: &SearchPanelEvent, window, cx| {
+                this.on_find_panel_event(event, window, cx);
+            },
+        ));
         this.prepare_col_groups(cx);
         this
     }
@@ -1098,6 +1144,223 @@ where
         cx.notify();
     }
 
+    // ========================================================================
+    // 表格内查找（Cmd/Ctrl+F）
+    // ========================================================================
+
+    /// 打开查找面板并把焦点交给查询输入框。
+    ///
+    /// 已经在查找时重复按 Cmd/Ctrl+F 只重新聚焦，不清空已有查询词。
+    fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.delegate.find_in_table_enabled(cx) {
+            return;
+        }
+        self.find_open = true;
+        self.find_panel.update(cx, |panel, cx| panel.focus(window, cx));
+        cx.notify();
+    }
+
+    /// 关闭查找面板并清除高亮与缓存。
+    fn close_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.find_open = false;
+        self.find_panel.update(cx, |panel, cx| panel.clear(window, cx));
+        self.clear_find_state();
+        self.focus_handle.focus(window, cx);
+        cx.notify();
+    }
+
+    fn clear_find_state(&mut self) {
+        self.find_rows.clear();
+        self.find_outcome = FindOutcome::default();
+        self.find_current_row = None;
+        self.find_current_index = 0;
+    }
+
+    /// 跳到下一个命中（末尾回绕到第一个）。
+    fn find_next(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.find_rows.is_empty() {
+            self.refresh_find(window, cx);
+        }
+        let total = self.find_outcome.total;
+        if total == 0 {
+            return;
+        }
+        let next = if self.find_current_index == 0 || self.find_current_index >= total {
+            1
+        } else {
+            self.find_current_index + 1
+        };
+        self.navigate_to_find_index(next, window, cx);
+    }
+
+    /// 跳到上一个命中（开头回绕到最后一个）。
+    fn find_previous(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.find_rows.is_empty() {
+            self.refresh_find(window, cx);
+        }
+        let total = self.find_outcome.total;
+        if total == 0 {
+            return;
+        }
+        let previous = if self.find_current_index <= 1 {
+            total
+        } else {
+            self.find_current_index - 1
+        };
+        self.navigate_to_find_index(previous, window, cx);
+    }
+
+    /// 按「第几个命中」定位：同行多个命中也能逐个走到。
+    fn navigate_to_find_index(
+        &mut self,
+        index: usize,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((row, _)) = self.find_row_of_index(index) else {
+            return;
+        };
+        self.find_current_index = index;
+        self.find_current_row = Some(row);
+        self.find_panel
+            .update(cx, |panel, cx| panel.set_current_match(index, cx));
+        self.scroll_to_find_row(row, cx);
+        cx.notify();
+    }
+
+    /// 把命中序号映射回（显示行，行内第几个命中）。
+    fn find_row_of_index(&self, index: usize) -> Option<(usize, usize)> {
+        if index == 0 {
+            return None;
+        }
+        let mut remaining = index;
+        for row in &self.find_outcome.rows {
+            let count = self.find_rows.get(row).map_or(0, Vec::len);
+            if remaining <= count {
+                return Some((*row, remaining - 1));
+            }
+            remaining -= count;
+        }
+        None
+    }
+
+    fn scroll_to_find_row(&mut self, row: usize, cx: &mut Context<Self>) {
+        let rows_count = self.delegate.rows_count(cx);
+        let current_top = self.visible_range.rows.start;
+        let visible = self.visible_range.rows.clone();
+        if let Some(target) = scroll_target_for_match(row, &visible, current_top, rows_count) {
+            self.vertical_scroll_handle
+                .scroll_to_item(target, ScrollStrategy::Top);
+        }
+    }
+
+    fn on_find_panel_event(
+        &mut self,
+        event: &SearchPanelEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            SearchPanelEvent::QueryChanged(_) => self.refresh_find(window, cx),
+            SearchPanelEvent::NextMatch => self.find_next(window, cx),
+            SearchPanelEvent::PreviousMatch => self.find_previous(window, cx),
+            SearchPanelEvent::Dismissed => {
+                self.find_open = false;
+                self.clear_find_state();
+                self.focus_handle.focus(window, cx);
+                cx.notify();
+            }
+        }
+    }
+
+    /// 重新扫描 delegate 的显示行，重建命中缓存并跳到第一个命中。
+    fn refresh_find(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.clear_find_state();
+
+        if !self.delegate.find_in_table_enabled(cx) {
+            self.find_panel
+                .update(cx, |panel, cx| panel.set_outcome(FindOutcome::default(), cx));
+            cx.notify();
+            return;
+        }
+
+        let query = self.find_panel.read(cx).query(cx);
+        let rows_count = self.delegate.rows_count(cx);
+        let columns_count = self.delegate.columns_count(cx);
+
+        // 先把每行的命中算出来，再交给纯函数做统计与序号解析。
+        let per_row_matches = (0..rows_count)
+            .map(|row| {
+                let row_cells = (0..columns_count)
+                    .map(|col_ix| self.delegate.find_cell_text(row, col_ix, cx))
+                    .collect::<Vec<_>>();
+                (row, row_matches(&row_cells, &query))
+            })
+            .collect::<Vec<_>>();
+
+        let outcome = resolve_find(rows_count, &query, |row| {
+            per_row_matches.get(row).map_or(0, |(_, m)| m.len())
+        });
+        let matches_by_row: std::collections::HashMap<usize, Vec<FindMatch>> = per_row_matches
+            .into_iter()
+            .filter(|(_, matches)| !matches.is_empty())
+            .collect();
+
+        self.find_rows = matches_by_row;
+        self.find_outcome = outcome;
+
+        // 有命中就直接停在第一个命中上，用户不必再按一次 Cmd+G。
+        let first_index = usize::from(self.find_outcome.total > 0);
+        self.find_current_row = self
+            .find_row_of_index(first_index)
+            .map(|(row, _)| row);
+        self.find_current_index = first_index;
+
+        let outcome = self.find_outcome.clone();
+        self.find_panel.update(cx, |panel, cx| {
+            panel.set_outcome(outcome, cx);
+            panel.set_current_match(first_index, cx);
+        });
+
+        if let Some(row) = self.find_current_row {
+            self.scroll_to_find_row(row, cx);
+        }
+        cx.notify();
+    }
+
+    /// 该行的高亮片段（按整行文本的字符区间合并相邻命中）。
+    ///
+    /// 当前命中由「全局第几个命中」反解到行内下标，所以同一行里按
+    /// Cmd+G 也能逐个移动当前高亮。
+    fn find_highlight_segments(&self, row_ix: usize) -> Vec<HighlightSegment> {
+        // 先算出「当前命中是不是在本行的第几个」，再借用 find_rows，
+        // 避免同时持有两处不可变借用以外的可变借用。
+        let current_in_row = self
+            .find_row_of_index(self.find_current_index)
+            .and_then(|(row, offset)| (row == row_ix).then_some(offset));
+        let Some(matches) = self.find_rows.get(&row_ix) else {
+            return Vec::new();
+        };
+
+        let mut matches = matches.clone();
+        mark_current_match_at(&mut matches, current_in_row);
+        let char_count = matches
+            .last()
+            .map_or(0, |m| m.row_offset + m.char_range.end);
+        row_highlight_ranges(&matches, char_count)
+            .into_iter()
+            .map(|(char_range, is_current)| HighlightSegment {
+                char_range,
+                is_current,
+            })
+            .collect()
+    }
+
+    /// 查找面板是否可见（打开态即算可见，与查询词是否为空无关）
+    fn find_panel_visible(&self, _cx: &App) -> bool {
+        self.find_open
+    }
+
     fn fixed_left_cols_count(&self) -> usize {
         if !self.col_fixed {
             return 0;
@@ -1391,7 +1654,48 @@ where
         }
     }
 
-    pub(super) fn action_cancel(&mut self, _: &Cancel, _: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn action_find(&mut self, _: &Find, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.delegate.find_in_table_enabled(cx) {
+            // 未开启查找的表格把按键让给外层（例如页签的其它 Cmd/Ctrl+F 语义）。
+            cx.propagate();
+            return;
+        }
+        self.open_find(window, cx);
+    }
+
+    pub(super) fn action_find_next(
+        &mut self,
+        _: &FindNext,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.find_panel_visible(cx) {
+            cx.propagate();
+            return;
+        }
+        self.find_next(window, cx);
+    }
+
+    pub(super) fn action_find_previous(
+        &mut self,
+        _: &FindPrevious,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.find_panel_visible(cx) {
+            cx.propagate();
+            return;
+        }
+        self.find_previous(window, cx);
+    }
+
+    pub(super) fn action_cancel(&mut self, _: &Cancel, window: &mut Window, cx: &mut Context<Self>) {
+        // 查找面板优先吃掉 Escape：先关查找，再退回到清除选区。
+        if self.find_panel_visible(cx) {
+            self.close_find(window, cx);
+            return;
+        }
+
         if self.editing_cell.is_some() {
             self.cancel_cell_edit(cx);
             return;
@@ -2361,10 +2665,93 @@ where
             });
 
         if is_editing {
-            cell
-        } else {
-            cell.child(self.measure_render_td(row_ix, col_ix, window, cx))
+            return cell;
         }
+
+        // 命中高亮画在文本下方，绝对定位于单元格内容区。
+        cell.child(self.render_find_highlight(row_ix, col_ix, window, cx))
+            .child(self.measure_render_td(row_ix, col_ix, window, cx))
+    }
+
+    /// 绘制该单元格内的查找命中高亮。
+    ///
+    /// 命中区间是「整行文本」的字符坐标，所以这里按单元格在行内的
+    /// 起始偏移做平移，只把落在本单元格内的片段交给绘制元素。
+    fn render_find_highlight(
+        &self,
+        row_ix: usize,
+        col_ix: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        if self.find_rows.is_empty() {
+            return div().into_any_element();
+        }
+
+        let segments = self.find_highlight_segments(row_ix);
+        if segments.is_empty() {
+            return div().into_any_element();
+        }
+
+        let row_number_offset = if self.delegate.row_number_enabled(cx) { 1 } else { 0 };
+        if col_ix < row_number_offset {
+            return div().into_any_element();
+        }
+        let delegate_col_ix = col_ix - row_number_offset;
+
+        let cells: Vec<Option<String>> = (0..self.delegate.columns_count(cx))
+            .map(|ix| self.delegate.find_cell_text(row_ix, ix, cx))
+            .collect();
+        let row_text: SharedString = super::find::row_text(&cells).into();
+        let cell_start: usize = cells
+            .iter()
+            .take(delegate_col_ix)
+            .map(|cell| cell_text_len(cell) + super::find::CELL_SEPARATOR_CHARS)
+            .sum();
+        let cell_char_count = cells.get(delegate_col_ix).map_or(0, cell_text_len);
+        let cell_range = cell_start..cell_start + cell_char_count;
+
+        let visible: Vec<HighlightSegment> = segments
+            .into_iter()
+            .filter_map(|segment| {
+                let start = segment.char_range.start.max(cell_range.start);
+                let end = segment.char_range.end.min(cell_range.end);
+                (start < end).then_some(HighlightSegment {
+                    char_range: start..end,
+                    is_current: segment.is_current,
+                })
+            })
+            .collect();
+        if visible.is_empty() {
+            return div().into_any_element();
+        }
+
+        let line_height = crate::table_row_height_or(cx, self.options.size.table_row_height());
+        let font = window.text_style().font();
+        let font_size = window.text_style().font_size.to_pixels(window.rem_size());
+        let run = TextRun {
+            len: row_text.len(),
+            font,
+            color: cx.theme().foreground,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+
+        div()
+            .absolute()
+            .inset_0()
+            .overflow_hidden()
+            .child(FindHighlightElement::new(
+                row_text,
+                font_size,
+                line_height,
+                cell_range,
+                std::rc::Rc::new(visible),
+                cx.theme().selection,
+                std::rc::Rc::new(vec![run]),
+            ))
+            .into_any_element()
     }
 
     fn render_col_wrap(&self, col_ix: usize, _: &mut Window, cx: &mut Context<Self>) -> Div {
@@ -3261,6 +3648,7 @@ where
         };
         let right_clicked_row = self.right_clicked_row;
         let is_filled = total_height > Pixels::ZERO && total_height <= actual_height;
+        let find_panel = self.find_panel_visible(cx).then(|| self.find_panel.clone());
 
         let loading_view = if loading {
             Some(
@@ -3287,6 +3675,9 @@ where
             .id("table-inner")
             .key_context("EditTable")
             .track_focus(&self.focus_handle)
+            .on_action(cx.listener(Self::action_find))
+            .on_action(cx.listener(Self::action_find_next))
+            .on_action(cx.listener(Self::action_find_previous))
             .on_action(cx.listener(Self::action_copy))
             .on_action(cx.listener(Self::action_paste))
             .on_action(cx.listener(Self::action_select_all))
@@ -3431,6 +3822,16 @@ where
                 },
                 |_, _, _, _| {},
             ))
+            .when_some(find_panel, |this, panel| {
+                this.child(
+                    div()
+                        .absolute()
+                        .top_1()
+                        .right_3()
+                        .occlude()
+                        .child(panel),
+                )
+            })
             .when(!window.is_inspector_picking(cx), |this| {
                 this.child(
                     div()

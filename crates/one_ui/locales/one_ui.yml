@@ -39,6 +39,26 @@ EditTable:
     en: Clear
     zh-CN: 清除
     zh-HK: 清除
+  find_placeholder:
+    en: Find in table...
+    zh-CN: 在表格中查找...
+    zh-HK: 在表格中尋找...
+  find_no_match:
+    en: No results
+    zh-CN: 无结果
+    zh-HK: 無結果
+  find_next:
+    en: Next match
+    zh-CN: 下一个匹配
+    zh-HK: 下一個符合
+  find_previous:
+    en: Previous match
+    zh-CN: 上一个匹配
+    zh-HK: 上一個符合
+  find_close:
+    en: Close find
+    zh-CN: 关闭查找
+    zh-HK: 關閉尋找
 
 TimePicker:
   placeholder:

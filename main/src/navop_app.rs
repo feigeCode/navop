@@ -1069,6 +1069,19 @@ fn table_keybindings(cx: &App) -> one_ui::TableKeybindings {
             &[table_shortcut("cmd-a", "ctrl-a")],
         ),
     )
+    .with_find(
+        shortcuts_for(cx, action_id::TABLE_FIND, &[table_shortcut("cmd-f", "ctrl-f")]),
+        shortcuts_for(
+            cx,
+            action_id::TABLE_FIND_NEXT,
+            &[table_shortcut("cmd-g", "ctrl-g")],
+        ),
+        shortcuts_for(
+            cx,
+            action_id::TABLE_FIND_PREVIOUS,
+            &[table_shortcut("cmd-shift-g", "ctrl-shift-g")],
+        ),
+    )
 }
 
 fn table_shortcut(macos: &'static str, other: &'static str) -> &'static str {

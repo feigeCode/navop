@@ -1,0 +1,185 @@
+//! 表格内查找的单元测试与结构契约
+
+use super::{
+    FindMatch, NULL_TEXT, normalize_find_query, resolve_find, row_highlight_ranges, row_matches,
+    row_text, scroll_target_for_match,
+};
+use crate::edit_table::TableKeybindings;
+
+fn cells(values: &[&str]) -> Vec<Option<String>> {
+    values.iter().map(|value| Some(value.to_string())).collect()
+}
+
+fn ranges(matches: &[FindMatch]) -> Vec<(usize, usize)> {
+    matches
+        .iter()
+        .map(|m| (m.row_offset + m.char_range.start, m.char_range.end))
+        .collect()
+}
+
+#[test]
+fn query_is_normalized_to_trimmed_lowercase() {
+    assert_eq!("alice", normalize_find_query("  ALIce  "));
+    assert_eq!("", normalize_find_query("   "));
+}
+
+#[test]
+fn matches_are_case_insensitive_and_include_null_cells() {
+    let cells = vec![Some("Alice".to_string()), None];
+    let matches = row_matches(&cells, "alice");
+    assert_eq!(1, matches.len());
+    assert_eq!(0, matches[0].char_range.start);
+
+    // 用户看到的是 NULL，查找也必须能命中它。
+    let null_matches = row_matches(&cells, "null");
+    assert_eq!(1, null_matches.len());
+    assert_eq!("alice  null", row_text(&cells));
+    assert_eq!(NULL_TEXT, "NULL");
+}
+
+#[test]
+fn row_offsets_are_relative_to_the_whole_row_text() {
+    let matches = row_matches(&cells(&["ab", "cd"]), "cd");
+
+    assert_eq!(1, matches.len());
+    // "ab" + 两个空格分隔符 => 第二个单元格从第 4 个字符开始。
+    assert_eq!(4, matches[0].row_offset);
+    assert_eq!(vec![(4, 2)], ranges(&matches));
+}
+
+#[test]
+fn overlapping_needles_do_not_produce_overlapping_matches() {
+    // "aa" 在 "aaa" 里只算一次命中，避免高亮区间交叠。
+    assert_eq!(1, row_matches(&cells(&["aaa"]), "aa").len());
+}
+
+#[test]
+fn adjacent_matches_merge_into_one_highlight_range() {
+    let mut matches = row_matches(&cells(&["aaa"]), "a");
+    assert_eq!(3, matches.len());
+    matches[1].is_current = true;
+
+    let merged = row_highlight_ranges(&matches, 3);
+    assert_eq!(vec![(0..3, true)], merged);
+}
+
+#[test]
+fn separated_matches_stay_as_separate_highlight_ranges() {
+    let mut combined = row_matches(&cells(&["a b"]), "a");
+    combined.extend(row_matches(&cells(&["a b"]), "b"));
+    combined.sort_by_key(|m| m.row_offset + m.char_range.start);
+
+    let merged = row_highlight_ranges(&combined, 3);
+
+    assert_eq!(2, merged.len());
+    assert_eq!(0..1, merged[0].0);
+    assert_eq!(2..3, merged[1].0);
+}
+
+#[test]
+fn empty_query_yields_no_outcome_and_no_matches() {
+    let outcome = resolve_find(5, "", |_| 1);
+    assert_eq!(0, outcome.total);
+    assert!(outcome.rows.is_empty());
+    assert!(row_matches(&cells(&["a"]), "").is_empty());
+}
+
+#[test]
+fn resolve_find_collects_hit_rows_and_totals() {
+    // 行 1 有 2 个命中，行 3 有 1 个命中。
+    let outcome = resolve_find(4, "a", |row| match row {
+        1 => 2,
+        3 => 1,
+        _ => 0,
+    });
+
+    assert_eq!(3, outcome.total);
+    assert_eq!(vec![1, 3], outcome.rows);
+}
+
+#[test]
+fn resolve_find_ignores_rows_outside_the_display_range() {
+    let outcome = resolve_find(2, "a", |_| 1);
+    assert_eq!(2, outcome.total);
+    assert_eq!(vec![0, 1], outcome.rows);
+}
+
+#[test]
+fn scroll_keeps_the_viewport_when_the_match_is_visible() {
+    assert_eq!(None, scroll_target_for_match(5, &(3..10), 3, 100));
+}
+
+#[test]
+fn scroll_moves_up_when_the_match_is_above_the_viewport() {
+    assert_eq!(Some(2), scroll_target_for_match(2, &(5..15), 5, 100));
+}
+
+#[test]
+fn scroll_clamps_the_last_page_at_the_end_of_the_table() {
+    // 命中最靠后时不能滚过表格末尾，否则视口会被拉出空白。
+    assert_eq!(Some(90), scroll_target_for_match(99, &(5..15), 5, 100));
+}
+
+#[test]
+fn scroll_returns_none_for_an_empty_table() {
+    assert_eq!(None, scroll_target_for_match(0, &(0..0), 0, 0));
+}
+
+#[test]
+fn find_shortcuts_are_bound_in_the_edit_table_context() {
+    let source = include_str!("../mod.rs");
+
+    assert!(source.contains("KeyBinding::new(key, Find, Some(CONTEXT))"));
+    assert!(source.contains("KeyBinding::new(key, FindNext, Some(CONTEXT))"));
+    assert!(source.contains("KeyBinding::new(key, FindPrevious, Some(CONTEXT))"));
+}
+
+#[test]
+fn default_find_shortcuts_follow_the_platform_convention() {
+    let bindings = TableKeybindings::default();
+    let expected = if cfg!(target_os = "macos") {
+        ("cmd-f", "cmd-g", "cmd-shift-g")
+    } else {
+        ("ctrl-f", "ctrl-g", "ctrl-shift-g")
+    };
+
+    assert_eq!(vec![expected.0.to_string()], bindings.find_shortcuts());
+    assert_eq!(vec![expected.1.to_string()], bindings.find_next_shortcuts());
+    assert_eq!(
+        vec![expected.2.to_string()],
+        bindings.find_previous_shortcuts()
+    );
+}
+
+#[test]
+fn highlight_is_painted_under_the_cell_text() {
+    let state = include_str!("../state.rs");
+    let start = state
+        .find("fn render_find_highlight(")
+        .expect("find highlight renderer");
+    let body = &state[start..];
+    let end = body.find("\n    fn render_col_wrap(").expect("next method");
+    let body = &body[..end];
+
+    assert!(body.contains("FindHighlightElement::new("));
+    assert!(body.contains("segment.char_range.start.max(cell_range.start)"));
+    assert!(body.contains("segment.char_range.end.min(cell_range.end)"));
+}
+
+#[test]
+fn highlight_element_uses_char_offsets_not_fixed_width() {
+    let element = include_str!("element.rs");
+
+    // 按字符下标取真实像素位置，才能在中英文混排下对齐。
+    assert!(element.contains("x_for_index("));
+    assert!(!element.contains("char_width *"));
+}
+
+#[test]
+fn panel_is_hosted_by_the_table_itself() {
+    let state = include_str!("../state.rs");
+
+    assert!(state.contains("find_panel: Entity<SearchPanel>"));
+    assert!(state.contains("SearchPanelEvent::QueryChanged"));
+    assert!(state.contains("find_panel_visible(cx).then(|| self.find_panel.clone())"));
+}
