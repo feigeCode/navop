@@ -73,10 +73,10 @@ HOST_PROVIDED_PATTERNS = (
 # the accessibility bus, dconf, input methods, font configuration. Shipping one
 # distribution's copy of that stack onto another distribution's desktop is not
 # supportable, and it would dwarf the renderer this archive exists to deliver.
-# These names are only reached by a binary built with `embedded-webview`, which
-# the Linux release deliberately leaves out -- see
-# `script/linux-release-features.sh` -- so keeping them listed is what makes the
-# classification hold for a self-built binary that opts the feature back in.
+# These names are only reached by a binary built with `embedded-webview`, which is
+# off by default on every platform -- see main/Cargo.toml -- so keeping them listed
+# is what makes the classification hold for a self-built binary that opts the
+# feature back in.
 HOST_DESKTOP_PATTERNS = (
     "libwebkit2gtk-4*.so.*",
     "libjavascriptcoregtk-4*.so.*",

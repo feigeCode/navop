@@ -2,12 +2,11 @@
 
 set -e
 
-# 说明：`webkit2gtk-4.1` 开发包只服务于 `embedded-webview` feature（AI 对话里的
-# HTML 预览弹窗）。官方 Linux 发布包刻意不带它 —— 带 WebKitGTK 4.1 的发行版与发布
-# 包的 glibc 2.28 基线不相配，也没法随依赖包提供，见
-# `script/linux-release-features.sh`。但它仍是默认 feature 之一，所以从源码
-# `cargo build` 时这些开发包还是需要的；只想要发布形态的话可以用
-# `cargo build --no-default-features --features "$(script/linux-release-features.sh)"`。
+# 说明：`webkit2gtk-4.1` 开发包只服务于可选的 `embedded-webview` feature（AI 对话里的
+# HTML 预览弹窗），它默认关闭、三平台一致，原因见 `main/Cargo.toml`。默认构建不装它
+# 也编得过，这里仍然装上只是为了 `cargo build --features embedded-webview` 能开箱即用。
+# 官方发布包不带它 —— 带 WebKitGTK 4.1 的发行版与发布包的 glibc 2.28 基线不相配，
+# 也没法随依赖包提供。
 
 detect_distro() {
   if [ -f /etc/os-release ]; then
@@ -76,7 +75,7 @@ case "$DISTRO" in
     echo "  - gcc, g++, clang"
     echo "  - fontconfig 开发包"
     echo "  - wayland 开发包"
-    echo "  - webkit2gtk-4.1 开发包"
+    echo "  - webkit2gtk-4.1 开发包（可选，只有显式开启 embedded-webview 时才需要）"
     echo "  - libxkbcommon-x11 开发包"
     echo "  - libx11-xcb 或 libxcb 开发包"
     echo "  - openssl 开发包"

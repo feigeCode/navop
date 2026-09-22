@@ -5,7 +5,11 @@ publish.workspace = true
 edition.workspace = true
 
 [features]
-default = ["embedded-webview"]
+# 默认关闭，见 main/Cargo.toml：宿主 WebView（Linux 的 WebKitGTK 4.1）无法随发布包
+# 提供，三个平台统一不带。所有依赖方都以 `default-features = false` 引入本 crate，
+# 需要时显式打开（`--features ai_chat_view/embedded-webview`，或 main 的
+# `--features embedded-webview`）。
+default = []
 embedded-webview = ["dep:gpui-wry", "dep:wry"]
 
 [dependencies]

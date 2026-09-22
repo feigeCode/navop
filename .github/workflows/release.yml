@@ -313,7 +313,6 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           NAVOP_PUBLIC_BASE_URL: ${{ vars.NAVOP_PUBLIC_BASE_URL }}
           NAVOP_WEBSITE_BASE_URL: ${{ vars.NAVOP_WEBSITE_BASE_URL }}
-          NAVOP_LINUX_EMBEDDED_WEBVIEW: ${{ vars.NAVOP_LINUX_EMBEDDED_WEBVIEW }}
           ONETCLI_TEAM_MANAGEMENT_URL_TEMPLATE: ${{ vars.ONETCLI_TEAM_MANAGEMENT_URL_TEMPLATE }}
         run: |
           set -euo pipefail
@@ -335,19 +334,15 @@ jobs:
             # hosts that predate the runner image; the dependency archive is
             # built against the same baseline.
             #
-            # The Linux package ships *without* `embedded-webview`: the HTML
-            # preview host is WebKitGTK 4.1, which cannot be provided alongside
-            # the package. `script/linux-release-features.sh` is the single
-            # source of truth for the resulting feature list and carries the full
-            # reasoning; NAVOP_LINUX_EMBEDDED_WEBVIEW=1 opts the feature back in
-            # once the build host really can link it.
-            linux_features="$(script/linux-release-features.sh)"
-            echo "Linux features: ${linux_features}"
+            # No platform overrides the feature set: the default set is the one
+            # shape all three platforms ship, and it leaves `embedded-webview`
+            # out (see main/Cargo.toml). The HTML preview host on Linux is
+            # WebKitGTK 4.1, which cannot be provided with the package, and an
+            # in-app HTML preview that works on two platforms but not the third
+            # is not worth a second shape to test and release.
             cargo zigbuild \
               --release \
               -p main \
-              --no-default-features \
-              --features "${linux_features}" \
               --target "${{ matrix.target }}.2.28"
           else
             cargo build --release -p main --target "${{ matrix.target }}"
@@ -401,8 +396,11 @@ jobs:
           # 32 位 Windows 暂不支持 shell-plugins：其 gpui-shell 依赖的
           # quickjs-jit 运行时代码与 cranelift 后端仅支持 64 位
           # (x86_64/aarch64)，i686 无法编译。win32 构建先剔除该 feature。
+          # 这是唯一一处显式写 feature 列表的地方，内容是「默认集减去 shell-plugins」，
+          # 所以不要在这里补回 `embedded-webview`：默认集本身已经不带它了
+          # （见 main/Cargo.toml），补回来会让 win32 成为唯一的另一种形态。
           $features = if ($target -eq "i686-pc-windows-msvc") {
-            @("--no-default-features", "--features", "wasm-components,embedded-webview,windows-native-rdp")
+            @("--no-default-features", "--features", "wasm-components,windows-native-rdp")
           } else {
             @("--features", "windows-native-rdp")
           }
