@@ -1292,11 +1292,7 @@ where
         let per_row_matches = (0..rows_count)
             .map(|row| {
                 let row_cells = (0..columns_count)
-                    .map(|col_ix| {
-                        self.delegate
-                            .find_cell_text(row, col_ix, cx)
-                            .map(|text| Some(text.to_string()))
-                    })
+                    .map(|col_ix| self.delegate.find_cell_text(row, col_ix, cx))
                     .collect::<Vec<_>>();
                 (row, row_matches(&row_cells, &query))
             })
@@ -2731,8 +2727,8 @@ where
         }
 
         let line_height = crate::table_row_height_or(cx, self.options.size.table_row_height());
-        let font = self.delegate.cell_font(cx).unwrap_or_else(|| window.text_style().font());
-        let font_size = window.text_style().font_size;
+        let font = window.text_style().font();
+        let font_size = window.text_style().font_size.to_pixels(window.rem_size());
         let run = TextRun {
             len: row_text.len(),
             font,

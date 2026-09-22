@@ -4,13 +4,13 @@
 //! 真正的行匹配由 delegate（知道数据的那一侧）在查询变化时完成。
 
 use gpui::{
-    App, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement as _,
-    IntoElement, ParentElement as _, Render, SharedString, Styled as _, Subscription, Window, div,
-    px,
+    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString, Styled as _,
+    Subscription, Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Icon, Sizable as _, Size,
-    button::Button,
+    ActiveTheme as _, Disableable as _, Icon, Sizable as _,
+    button::{Button, ButtonVariants as _},
     h_flex,
     input::{Input, InputEvent, InputState},
 };
@@ -95,7 +95,7 @@ impl SearchPanel {
 
     /// 查询词（已规范化）
     pub fn query(&self, cx: &App) -> String {
-        normalize_find_query(&self.input.read(cx).text())
+        normalize_find_query(&self.input.read(cx).text().to_string())
     }
 
     /// 更新命中统计。
