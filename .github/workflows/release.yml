@@ -313,6 +313,7 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           NAVOP_PUBLIC_BASE_URL: ${{ vars.NAVOP_PUBLIC_BASE_URL }}
           NAVOP_WEBSITE_BASE_URL: ${{ vars.NAVOP_WEBSITE_BASE_URL }}
+          NAVOP_LINUX_EMBEDDED_WEBVIEW: ${{ vars.NAVOP_LINUX_EMBEDDED_WEBVIEW }}
           ONETCLI_TEAM_MANAGEMENT_URL_TEMPLATE: ${{ vars.ONETCLI_TEAM_MANAGEMENT_URL_TEMPLATE }}
         run: |
           set -euo pipefail
@@ -332,11 +333,21 @@ jobs:
           if [ "${{ runner.os }}" = "Linux" ]; then
             # The glibc 2.28 target is what makes the single Linux package run on
             # hosts that predate the runner image; the dependency archive is
-            # built against the same baseline. Features stay at their defaults so
-            # this package is the one the updater has always served.
+            # built against the same baseline.
+            #
+            # The Linux package ships *without* `embedded-webview`: the HTML
+            # preview host is WebKitGTK 4.1, which cannot be provided alongside
+            # the package. `script/linux-release-features.sh` is the single
+            # source of truth for the resulting feature list and carries the full
+            # reasoning; NAVOP_LINUX_EMBEDDED_WEBVIEW=1 opts the feature back in
+            # once the build host really can link it.
+            linux_features="$(script/linux-release-features.sh)"
+            echo "Linux features: ${linux_features}"
             cargo zigbuild \
               --release \
               -p main \
+              --no-default-features \
+              --features "${linux_features}" \
               --target "${{ matrix.target }}.2.28"
           else
             cargo build --release -p main --target "${{ matrix.target }}"

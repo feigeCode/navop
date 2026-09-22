@@ -73,9 +73,10 @@ HOST_PROVIDED_PATTERNS = (
 # the accessibility bus, dconf, input methods, font configuration. Shipping one
 # distribution's copy of that stack onto another distribution's desktop is not
 # supportable, and it would dwarf the renderer this archive exists to deliver.
-# Navop's release binary links the embedded webview, so these names are reached
-# on every walk; they are recorded as host requirements and belong in the
-# package's declared dependencies instead.
+# These names are only reached by a binary built with `embedded-webview`, which
+# the Linux release deliberately leaves out -- see
+# `script/linux-release-features.sh` -- so keeping them listed is what makes the
+# classification hold for a self-built binary that opts the feature back in.
 HOST_DESKTOP_PATTERNS = (
     "libwebkit2gtk-4*.so.*",
     "libjavascriptcoregtk-4*.so.*",
@@ -816,8 +817,9 @@ def main() -> None:
             "X11 or Wayland display sockets",
             "GPU devices and host vendor drivers",
             "system fonts and font configuration",
-            "the distribution's GTK and WebKitGTK stack, which the release "
-            "binary links for the embedded webview",
+            "the distribution's GTK stack when the binary links it, plus "
+            "WebKitGTK for a binary built with the opt-in embedded webview "
+            "feature",
         ],
         "files": manifest_files(output, {manifest_path}),
     }
