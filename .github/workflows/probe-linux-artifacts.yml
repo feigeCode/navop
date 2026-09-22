@@ -1,0 +1,374 @@
+name: Probe Linux artifacts
+
+# Throwaway probe for PR #274. It builds the Linux packages the very same way
+# release.yml does and uploads them as workflow artifacts, so they can be tried
+# on a real Linux host before the pull request is merged. It publishes no
+# release and never touches the PR branch.
+#
+# Delete this file together with the ci/linux-artifacts-probe branch once the
+# artifacts have been validated.
+
+on:
+  push:
+    branches:
+      - ci/linux-artifacts-probe
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: probe-linux-artifacts-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: "true"
+  SCCACHE_IDLE_TIMEOUT: "7200"
+
+jobs:
+  build:
+    name: Linux artifacts (${{ matrix.public_label }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            public_label: linux-x64
+            arm_linux: false
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+            public_label: linux-arm64
+            arm_linux: true
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.target }}
+          cache: false
+
+      # sccache only accelerates the build. A flaky Release CDN must degrade
+      # into a cache-less build instead of failing the probe.
+      - name: Setup sccache
+        id: sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+        continue-on-error: true
+
+      - name: Initialize sccache
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.sccache.outcome }}" != "success" ]; then
+            echo "::warning::sccache unavailable, building without compiler cache"
+            echo "RUSTC_WRAPPER=" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          sccache --start-server
+          sccache --zero-stats
+          sccache --show-stats
+
+      - name: Restore shared Cargo inputs
+        id: cargo-inputs-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: navop-cargo-inputs-v1-Linux-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            navop-cargo-inputs-v1-Linux-
+            release-cargo-inputs-Linux-${{ matrix.target }}-
+
+      - name: Install system dependencies
+        run: script/bootstrap
+
+      - name: Install Zig toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/ziglang"
+          "$RUNNER_TEMP/ziglang/bin/python" -m pip install ziglang==0.14.1
+          cargo install --locked cargo-zigbuild --version 0.23.0
+          echo "CARGO_ZIGBUILD_PYTHON_PATH=$RUNNER_TEMP/ziglang/bin/python" >> "$GITHUB_ENV"
+          "$RUNNER_TEMP/ziglang/bin/python" -m ziglang version
+          cargo-zigbuild --version
+
+      - name: Set version environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          # release.yml takes the version from the release tag; the probe has no
+          # tag, so it reads the very same number from the main crate manifest.
+          VERSION="$(sed -nE 's/^version = "([^"]+)"/\1/p' main/Cargo.toml | head -n1)"
+          test -n "$VERSION"
+          echo "ONETCLI_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "PUBLIC_BASENAME=navop-${VERSION}-${{ matrix.public_label }}" >> "$GITHUB_ENV"
+          echo "Probing navop ${VERSION} for ${{ matrix.target }}"
+
+      - name: Build release binary
+        shell: bash
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          NAVOP_PUBLIC_BASE_URL: ${{ vars.NAVOP_PUBLIC_BASE_URL }}
+          NAVOP_WEBSITE_BASE_URL: ${{ vars.NAVOP_WEBSITE_BASE_URL }}
+          ONETCLI_TEAM_MANAGEMENT_URL_TEMPLATE: ${{ vars.ONETCLI_TEAM_MANAGEMENT_URL_TEMPLATE }}
+        run: |
+          set -euo pipefail
+          # Thin LTO keeps the probe quick. A published release uses fat LTO
+          # with panic=abort, so only the size differs, never the behaviour or
+          # any of the packaging steps below.
+          export CARGO_PROFILE_RELEASE_LTO=thin
+          export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
+          if [ "${{ matrix.arm_linux }}" = "true" ]; then
+            export CARGO_BUILD_JOBS=2
+          fi
+          cargo --version
+          rustc --version
+          cargo zigbuild \
+            --release \
+            -p main \
+            --target "${{ matrix.target }}.2.28"
+          test -x "target/${{ matrix.target }}/release/navop"
+          ls -lh "target/${{ matrix.target }}/release/navop"
+
+      - name: Verify Linux glibc baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          script/check-linux-glibc-baseline.sh \
+            "target/${{ matrix.target }}/release/navop" \
+            "2.28"
+
+      - name: Package (Linux)
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf package
+          mkdir -p package/usr/bin
+          cp "target/${{ matrix.target }}/release/navop" package/usr/bin/
+
+          mkdir -p package/usr/share/applications
+          mkdir -p package/usr/share/mime/packages
+          mkdir -p package/usr/share/icons/hicolor/128x128/apps
+          mkdir -p package/usr/share/icons/hicolor/256x256/apps
+          mkdir -p package/usr/share/icons/hicolor/512x515/apps
+          cp resources/linux/navop.desktop package/usr/share/applications/
+          cp resources/linux/navop.xml package/usr/share/mime/packages/
+          cp resources/linux/navop-128.png package/usr/share/icons/hicolor/128x128/apps/navop.png
+          cp resources/linux/navop-256.png package/usr/share/icons/hicolor/256x256/apps/navop.png
+          cp resources/linux/navop-512.png package/usr/share/icons/hicolor/512x515/apps/navop.png
+          tar \
+            --sort=name \
+            --mtime='UTC 1970-01-01' \
+            --owner=0 \
+            --group=0 \
+            --numeric-owner \
+            -czf "navop-${{ matrix.target }}.tar.gz" \
+            -C package .
+          cp "navop-${{ matrix.target }}.tar.gz" "${PUBLIC_BASENAME}.tar.gz"
+
+          # The portable archive is the identical binary plus the marker file
+          # the application looks for next to the executable.
+          PORTABLE_MARKER_FILE="navop.portable"
+          rm -rf portable-package
+          mkdir -p portable-package
+          cp "target/${{ matrix.target }}/release/navop" portable-package/
+          : > "portable-package/${PORTABLE_MARKER_FILE}"
+          tar \
+            --sort=name \
+            --mtime='UTC 1970-01-01' \
+            --owner=0 \
+            --group=0 \
+            --numeric-owner \
+            -czf "${PUBLIC_BASENAME}-portable.tar.gz" \
+            -C portable-package .
+
+      - name: Package Linux GPU dependency stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          script/package-linux-gpu-stack-docker.sh \
+            --binary "target/${{ matrix.target }}/release/navop" \
+            --target "${{ matrix.target }}" \
+            --output dist-gpu-stack
+          cp dist-gpu-stack/navop-gpu-stack-linux-*.tar.gz "${PUBLIC_BASENAME}-gpu-stack.tar.gz"
+
+      - name: Install Linux packaging dependencies
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm
+
+      - name: Package Linux installers (x86_64)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PACKAGE_VERSION="${ONETCLI_VERSION//-/.}"
+          DEB_NAME="navop_${PACKAGE_VERSION}_amd64.deb"
+          RPM_NAME="navop-${PACKAGE_VERSION}-1.x86_64.rpm"
+
+          rm -rf package-deb rpmbuild
+
+          mkdir -p package-deb/DEBIAN
+          cp -a package/. package-deb/
+          cat > package-deb/DEBIAN/control <<EOF
+          Package: navop
+          Version: ${PACKAGE_VERSION}
+          Section: utils
+          Priority: optional
+          Architecture: amd64
+          Provides: onetcli
+          Replaces: onetcli
+          Conflicts: onetcli
+          Maintainer: feigeCode <noreply@github.com>
+          Homepage: https://github.com/feigeCode/navop
+          Description: Navop - Database, SSH, Terminal, AI Tools
+          EOF
+          cat > package-deb/DEBIAN/postinst <<'EOF'
+          #!/bin/sh
+          set -e
+          if command -v update-mime-database >/dev/null 2>&1; then
+            update-mime-database /usr/share/mime
+          fi
+          if command -v update-desktop-database >/dev/null 2>&1; then
+            update-desktop-database /usr/share/applications
+          fi
+          EOF
+          cat > package-deb/DEBIAN/postrm <<'EOF'
+          #!/bin/sh
+          set -e
+          if command -v update-mime-database >/dev/null 2>&1; then
+            update-mime-database /usr/share/mime
+          fi
+          if command -v update-desktop-database >/dev/null 2>&1; then
+            update-desktop-database /usr/share/applications
+          fi
+          EOF
+          chmod 0755 package-deb/DEBIAN/postinst package-deb/DEBIAN/postrm
+          dpkg-deb --root-owner-group --build package-deb "${DEB_NAME}"
+
+          RPM_ROOT="${PWD}/rpmbuild"
+          mkdir -p "${RPM_ROOT}"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+          tar czf "${RPM_ROOT}/SOURCES/navop-${PACKAGE_VERSION}.tar.gz" -C package .
+          cat > "${RPM_ROOT}/SPECS/navop.spec" <<EOF
+          Name: navop
+          Version: ${PACKAGE_VERSION}
+          Release: 1%{?dist}
+          Summary: Navop - Database, SSH, Terminal, AI Tools
+          License: Apache-2.0
+          URL: https://github.com/feigeCode/navop
+          BuildArch: x86_64
+          Provides: onetcli = %{version}-%{release}
+          Obsoletes: onetcli < %{version}-%{release}
+          Source0: %{name}-%{version}.tar.gz
+
+          %description
+          Navop - Database, SSH, Terminal, AI Tools.
+
+          %prep
+          mkdir -p %{_builddir}/%{name}-%{version}
+          tar -xzf %{SOURCE0} -C %{_builddir}/%{name}-%{version}
+
+          %build
+
+          %install
+          mkdir -p %{buildroot}
+          cp -a %{_builddir}/%{name}-%{version}/* %{buildroot}/
+
+          %post
+          update-mime-database /usr/share/mime >/dev/null 2>&1 || :
+          update-desktop-database /usr/share/applications >/dev/null 2>&1 || :
+
+          %postun
+          update-mime-database /usr/share/mime >/dev/null 2>&1 || :
+          update-desktop-database /usr/share/applications >/dev/null 2>&1 || :
+
+          %files
+          /usr/bin/navop
+          /usr/share/applications/navop.desktop
+          /usr/share/mime/packages/navop.xml
+          /usr/share/icons/hicolor/128x128/apps/navop.png
+          /usr/share/icons/hicolor/256x256/apps/navop.png
+          /usr/share/icons/hicolor/512x515/apps/navop.png
+          EOF
+          rpmbuild --define "_topdir ${RPM_ROOT}" -bb "${RPM_ROOT}/SPECS/navop.spec"
+          generated_rpm="$(find "${RPM_ROOT}/RPMS" -name "navop-${PACKAGE_VERSION}-1*.x86_64.rpm" -print -quit)"
+          test -n "${generated_rpm}"
+          cp "${generated_rpm}" "${RPM_NAME}"
+
+      # The AppImage is packaged from the same tree but depends on downloading
+      # linuxdeploy, so it must not sink the whole probe when the download
+      # fails. Everything else in this job is required to succeed.
+      - name: Package AppImage (x86_64, non-blocking)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PACKAGE_VERSION="${ONETCLI_VERSION//-/.}"
+          APPIMAGE_NAME="navop_${PACKAGE_VERSION}_amd64.AppImage"
+
+          rm -rf Navop.AppDir linuxdeploy-x86_64.AppImage
+          mkdir -p Navop.AppDir
+          cp -a package/. Navop.AppDir/
+          curl -L -o linuxdeploy-x86_64.AppImage \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          chmod +x linuxdeploy-x86_64.AppImage
+          VERSION="${PACKAGE_VERSION}" APPIMAGE_EXTRACT_AND_RUN=1 ./linuxdeploy-x86_64.AppImage \
+            --appdir Navop.AppDir \
+            --executable Navop.AppDir/usr/bin/navop \
+            --desktop-file resources/linux/navop.desktop \
+            --icon-file package/usr/share/icons/hicolor/512x515/apps/navop.png \
+            --output appimage
+          generated_appimage="$(find . -maxdepth 1 -name '*.AppImage' ! -name 'linuxdeploy-x86_64.AppImage' -print -quit)"
+          test -n "${generated_appimage}"
+          mv "${generated_appimage}" "${APPIMAGE_NAME}"
+
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf dist
+          mkdir -p dist
+          cp "${PUBLIC_BASENAME}.tar.gz" dist/
+          cp "${PUBLIC_BASENAME}-portable.tar.gz" dist/
+          cp "${PUBLIC_BASENAME}-gpu-stack.tar.gz" dist/
+          PACKAGE_VERSION="${ONETCLI_VERSION//-/.}"
+          for optional in \
+            "navop_${PACKAGE_VERSION}_amd64.deb" \
+            "navop-${PACKAGE_VERSION}-1.x86_64.rpm" \
+            "navop_${PACKAGE_VERSION}_amd64.AppImage"
+          do
+            if [ -f "${optional}" ]; then
+              cp "${optional}" dist/
+            else
+              echo "::warning::optional artifact missing: ${optional}"
+            fi
+          done
+          ( cd dist && sha256sum ./* > SHA256SUMS.txt )
+          du -sh dist
+          ls -lh dist/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: navop-${{ matrix.public_label }}-probe
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Show sccache statistics
+        if: always()
+        shell: bash
+        run: sccache --show-stats || true
