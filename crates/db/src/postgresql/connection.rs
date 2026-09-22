@@ -981,7 +981,11 @@ impl DbConnection for PostgresDbConnection {
             .host(&target.host)
             .port(target.port)
             .user(&config.username)
-            .password(&config.password);
+            .password(&config.password)
+            // TCP keepalive：空闲期让中间设备/NAT 看到 probe，尽早暴露被丢弃的死连接，
+            // 避免长时间挂机后第一次查询才挂在已死 socket 上（与 SSH/MySQL 侧 30s 对齐）。
+            .keepalives(true)
+            .keepalives_idle(std::time::Duration::from_secs(30));
 
         if let Some(ref db) = config.database {
             pg_config.dbname(db);

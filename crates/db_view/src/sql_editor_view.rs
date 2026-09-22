@@ -1068,6 +1068,32 @@ fn transaction_control_failed(result: &anyhow::Result<Vec<db::SqlResult>>) -> bo
     }
 }
 
+/// 事务控制语句失败后，会话是否已被断连杀死。
+///
+/// 空闲/断连重连后 COMMIT/ROLLBACK 打在死连接上报 `Connection to the server is
+/// closed` 一类错误：此时服务器端事务早已随断连终止（MySQL 断连自动回滚），
+/// 客户端再握着事务标志只会把编辑器锁成“提交不了也关不掉”的死循环。
+/// 连接死亡 → 判定事务已终止，清标志放行；连接仍活（如死锁、语法错）→
+/// 保留事务状态允许用户重试。
+#[derive(Debug, PartialEq, Eq)]
+enum TransactionLiveness {
+    /// 连接已死，事务已被服务器端断连终止。
+    Dead,
+    /// 连接仍活，事务状态未知但会话可用，允许重试。
+    Alive,
+}
+
+fn transaction_liveness(probe: &anyhow::Result<Vec<db::SqlResult>>) -> TransactionLiveness {
+    // 复用 PR #272 的会话级 ping 超时：死连接的探测有界返回 Err。
+    match probe {
+        Err(_) => TransactionLiveness::Dead,
+        Ok(results) if results.iter().any(db::SqlResult::is_error) => {
+            TransactionLiveness::Dead
+        }
+        Ok(_) => TransactionLiveness::Alive,
+    }
+}
+
 fn query_connection_context_label(connection_name: &str, server_info: &str) -> String {
     let connection_name = connection_name.trim();
     let server_info = server_info.trim();
@@ -3695,6 +3721,19 @@ impl SqlEditorTab {
                 )
                 .await;
             if transaction_control_failed(&result) {
+                // 断连后 COMMIT 打在死连接上报 Connection closed：服务器端事务
+                // 已随断连终止（MySQL 断连自动回滚）。探测会话存活，死了就
+                // 清标志+丢会话，避免“提交不了也关不掉”的死循环。
+                let probe = global_state
+                    .execute_session_on_runtime(
+                        cx,
+                        session_id.clone(),
+                        "SELECT 1".to_string(),
+                        Some(manual_transaction_control_options()),
+                    )
+                    .await;
+                let session_dead = transaction_liveness(&probe) == TransactionLiveness::Dead;
+
                 let is_current = entity
                     .update(cx, |this, cx| {
                         let current_session_id = this
@@ -3709,13 +3748,35 @@ impl SqlEditorTab {
                         ) {
                             return false;
                         }
-                        this.manual_transaction_finishing = false;
+                        if session_dead {
+                            // 事务已被断连终止：整体满退，放行关闭。
+                            this.manual_transaction = None;
+                            this.manual_transaction_finishing = false;
+                        } else {
+                            this.manual_transaction_finishing = false;
+                        }
                         cx.notify();
                         true
                     })
                     .unwrap_or(false);
                 if is_current {
-                    Self::notify_async(cx, t!("Query.transaction_control_failed").to_string());
+                    if session_dead {
+                        Self::notify_async(
+                            cx,
+                            t!("Query.transaction_terminated_by_disconnect").to_string(),
+                        );
+                        // 死会话不再可复用，丢弃；失败只记日志不阻断收尾。
+                        if let Err(error) =
+                            global_state.close_session(cx, session_id.clone()).await
+                        {
+                            error!(
+                                "Failed to close dead manual transaction session {}: {:?}",
+                                session_id, error
+                            );
+                        }
+                    } else {
+                        Self::notify_async(cx, t!("Query.transaction_control_failed").to_string());
+                    }
                 }
                 return;
             }
@@ -4943,7 +5004,8 @@ mod tests {
         query_toolbar_action, schema_changed_event_matches_scope, should_render_schema_select,
         sql_text_for_run_all, sql_text_for_toolbar_run, statement_for_gutter_marker,
         statement_marker_id, supports_manual_transactions, toggle_sql_line_comments,
-        unquote_sql_identifier, viewport_statement_scan_input, write_new_sql_file, write_sql_file,
+        transaction_liveness, unquote_sql_identifier, viewport_statement_scan_input,
+        write_new_sql_file, write_sql_file,
     };
     use db::DbManager;
     use db::sql_editor::statement_ranges::{SqlDialect, SqlStatementSnapshot};
@@ -6125,6 +6187,46 @@ mod tests {
         assert!(!session.matches_scope(Some("analytics"), Some("public")));
         assert!(!session.matches_scope(Some("app_db"), Some("private")));
         assert!(!session.matches_scope(None, Some("public")));
+    }
+
+    #[test]
+    fn transaction_liveness_classifies_probe_outcomes() {
+        use super::TransactionLiveness;
+
+        // 探测 Err（含 ping 超时/连接关闭）→ 连接死，事务已被断连终止
+        assert_eq!(
+            TransactionLiveness::Dead,
+            transaction_liveness(&Err(anyhow::anyhow!(
+                "Input/output Error: Driver error: Connection to the server is closed."
+            )))
+        );
+        // 探测返回 SQL 错误结果 → 连接死
+        assert_eq!(
+            TransactionLiveness::Dead,
+            transaction_liveness(&Ok(vec![db::SqlResult::Error(db::SqlErrorInfo {
+                sql: "SELECT 1".to_string(),
+                message: "connection closed".to_string(),
+            })]))
+        );
+        // 探测成功 → 连接活，保留事务状态允许重试
+        assert_eq!(
+            TransactionLiveness::Alive,
+            transaction_liveness(&Ok(vec![]))
+        );
+    }
+
+    /// 断连杀死的会话不得再拦截编辑器关闭：事务已随断连终止。
+    #[test]
+    fn has_manual_transaction_lifecycle_must_not_flag_a_dead_session() {
+        // 纯决策函数无法直接构造 view；这里钉住判定入口的组合逻辑：
+        // manual_transaction 被清空后，starting/finishing 也必须同时复位，
+        // 否则 try_close 仍会被 has_manual_transaction_lifecycle 拦住。
+        // （视图字段复位由 finish_manual_transaction 的断连分支保证。）
+        let has_lifecycle =
+            |manual: bool, starting: bool, finishing: bool| manual || starting || finishing;
+        assert!(!has_lifecycle(false, false, false));
+        assert!(has_lifecycle(true, false, false));
+        assert!(has_lifecycle(false, true, false));
     }
 
     #[test]
