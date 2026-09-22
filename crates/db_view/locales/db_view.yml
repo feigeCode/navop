@@ -1466,6 +1466,10 @@ Query:
     en: Transaction command failed
     zh-CN: 事务控制命令执行失败
     zh-HK: 交易控制命令執行失敗
+  transaction_terminated_by_disconnect:
+    en: "Transaction was terminated by a dropped connection; the server rolled it back"
+    zh-CN: 连接已断开，事务已被服务器回滚终止
+    zh-HK: 連線已斷開，交易已被伺服器回滾終止
   transaction_control_unavailable:
     en: Transaction command is unavailable for this database
     zh-CN: 当前数据库不支持该事务控制命令
