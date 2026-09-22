@@ -4331,8 +4331,12 @@ mod tests {
         assert!(proxy_url.is_none());
     }
 
+    /// 关闭应用内代理时，navop 不传自己的代理，而是把代理决定权交回客户端：
+    /// `ReqwestClient::user_agent` 会跟随系统代理与环境变量代理（与浏览器一致），
+    /// 因此这里断言的是「navop 自己没有指定代理」，不是「不走任何代理」。
+    /// 需要强制直连时应改用 `ReqwestClient::user_agent_direct`。
     #[test]
-    fn build_app_http_client_uses_no_app_proxy_when_proxy_disabled() {
+    fn build_app_http_client_defers_to_system_proxy_when_proxy_disabled() {
         let settings = GlobalProxySettings {
             enabled: false,
             host: "127.0.0.1".to_string(),

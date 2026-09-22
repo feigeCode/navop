@@ -176,8 +176,14 @@
 - 若无明确要求，则按当前任务所需执行最小准备，不做额外环境工程。
 - macOS 上 `reqwest` 默认系统代理探测可能在测试进程里触发
   `system-configuration` 的 NULL object panic；应用内需要“无应用代理”的
-  HTTP client 时，优先使用 `ReqwestClient::user_agent("onetcli")` 这类显式
+  HTTP client 时，使用 `ReqwestClient::user_agent_direct("onetcli")` 这类显式
   direct client 构造路径，并用相关 `setting_tab`/CLI 测试验证。
+- **默认客户端跟随系统/环境变量代理（2026-09-22 起）**：`ReqwestClient::user_agent` 不再强制
+  `.no_proxy()`，它跟随操作系统的系统代理与 `ALL_PROXY`/`HTTP_PROXY`/`HTTPS_PROXY`
+  （gpui-pre `fork-0.3.111` 起；此前该路径被改成 direct，导致「浏览器能上网、navop 登录报
+  `error sending request`」——用户把代理开在系统代理里，navop 却直连）。`proxy.enabled = false`
+  的语义因此是「交给系统/环境变量代理」而不是「直连」。需要强制直连时用 `user_agent_direct`。
+  排查该类问题的顺序见 skill `navop-cloud-login-network-diagnose`。
 
 ### Command Verification Rules
 
