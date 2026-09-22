@@ -18,8 +18,11 @@ If Gatekeeper blocks the first macOS launch, verify the official release source 
 | Windows | x86_64 | `navop-<version>-windows-x64.exe` | EXE installer wrapping the same standard per-user MSI installation |
 | Windows | x86_64 | `navop-<version>-windows-x64.zip` | No-install use with data kept in the normal Windows user directories |
 | Windows | x86_64 | `navop-<version>-windows-x64-portable.zip` | Keep the application and data together in a movable folder |
-| Linux | x86_64 | `navop-<version>-linux-x64.tar.gz`, `navop-<version>-linux-x64-portable.tar.gz`, `navop_<version>_amd64.deb`, `navop-<version>-1.x86_64.rpm`, `navop_<version>_amd64.AppImage` | Select for the distribution and desktop environment |
-| Linux | ARM64 | `navop-<version>-linux-arm64.tar.gz`, `navop-<version>-linux-arm64-portable.tar.gz` | ARM64 devices |
+| Linux | x86_64 | `navop-<version>-linux-x64.tar.gz`, `navop_<version>_amd64.deb`, `navop-<version>-1.x86_64.rpm`, `navop_<version>_amd64.AppImage` | Select for the distribution and desktop environment |
+| Linux | x86_64 | `navop-<version>-linux-x64-portable.tar.gz` | Keep the application and data together in a movable folder; see "Linux portable archive" below |
+| Linux | ARM64 | `navop-<version>-linux-arm64.tar.gz` | ARM64 devices |
+| Linux | ARM64 | `navop-<version>-linux-arm64-portable.tar.gz` | Keep the application and data together in a movable folder; see "Linux portable archive" below |
+| Linux | x86_64 / ARM64 | `navop-<version>-linux-x64-gpu-stack.tar.gz`, `navop-<version>-linux-arm64-gpu-stack.tar.gz` | Only when the system lacks a usable Mesa/EGL renderer; combines with any Linux package above |
 
 Use `sha256sums.txt` from the same release to verify download integrity.
 
@@ -157,6 +160,93 @@ $env:NAVOP_DATA_DIR = "E:\NavopData"
 
 `NAVOP_PORTABLE` accepts `1`, `true`, `yes`, or `on`. Data-location precedence is `--data-dir`, `--portable`, `NAVOP_DATA_DIR`, `NAVOP_PORTABLE`/`navop.portable`, and finally standard installed mode. The selected directory must be writable. Prefer an absolute path because a relative path is resolved from the process's current working directory.
 
+## Linux portable archive
+
+`navop-<version>-linux-x64-portable.tar.gz` (and `navop-<version>-linux-arm64-portable.tar.gz` on ARM64) **ships the very same binary** as the regular package for that architecture. The only difference is the extra `navop.portable` marker file inside the archive. When Navop finds that marker next to the executable, it relocates its data directories from the system user directories to a `data` folder beside the program, which makes the installation install-free and movable as a whole:
+
+```bash
+mkdir navop-portable
+tar -xzf navop-<version>-linux-x64-portable.tar.gz -C navop-portable
+cd navop-portable
+./navop
+```
+
+```text
+navop-portable/
+├── navop
+├── navop.portable
+└── data/          <- created on first launch
+    ├── config/
+    ├── state/
+    └── cache/
+```
+
+Keep the following in mind:
+
+- **The portable archive carries no graphics dependencies.** Exactly like the regular package it still relies on the host for its graphics stack; install the "Linux graphics dependency package" below when that stack is missing, and the two combine.
+- Portable mode registers no `.db`, `.duckdb`, or `.md` file associations, and it supports neither in-app installation nor automatic update checks. Use `.deb`, `.rpm`, or the AppImage when you need those.
+- The portable directory must be writable. Placing it on read-only media makes Navop fail to start.
+- Portable mode does not remember the master key by default, so it is requested on every launch. You can opt in to remembering it; the key stays inside the portable directory.
+- Move or back up the whole directory as a unit, but quit Navop completely first and never let two instances write to the same `data`.
+
+### Updating a portable copy
+
+The portable archive has no in-app updater. To upgrade, extract the new `-portable.tar.gz` into a fresh directory and copy the old `data` over:
+
+```bash
+mkdir navop-portable-new
+tar -xzf navop-<version>-linux-x64-portable.tar.gz -C navop-portable-new
+cp -a navop-portable/data navop-portable-new/data
+```
+
+Delete the old directory only after confirming that the new one starts and that your connections and extensions are intact.
+
+### Advanced launch options
+
+The official `-portable.tar.gz` already contains `navop.portable`, so everyday use needs no extra arguments. For debugging or custom deployments you can also enable portable mode or point at a data directory explicitly:
+
+```bash
+# Enable portable mode for this run; the data directory sits beside navop
+./navop --portable
+
+# Use a specific data directory; the flag also enables portable paths
+./navop --data-dir /data/navop
+
+# Enable portable mode through the environment
+NAVOP_PORTABLE=1 ./navop
+
+# Use a specific data directory through the environment
+NAVOP_DATA_DIR=/data/navop ./navop
+```
+
+`NAVOP_PORTABLE` accepts `1`, `true`, `yes`, or `on`. The data directory is chosen in this order: `--data-dir`, `--portable`, `NAVOP_DATA_DIR`, then `NAVOP_PORTABLE`/`navop.portable`, and finally the regular installed layout. The chosen directory must be writable, and a relative path is resolved against the working directory Navop was started from.
+
+## Linux graphics dependency package
+
+The Linux `navop-<version>-linux-x64.tar.gz`, `.deb`, `.rpm`, and `.AppImage` packages contain Navop only. Desktops normally already provide the graphics stack Navop needs, and nothing extra is required. Minimal containers, stripped-down server installs, WSL, and trimmed distributions can be missing the Mesa software renderer or the EGL client libraries, which shows up as an immediate exit with this in the log:
+
+```text
+Failed to create surface: Failed to create surface for any enabled backend: {}
+```
+
+In that case download the **graphics dependency package** from the same release page (`navop-<version>-linux-x64-gpu-stack.tar.gz` or `navop-<version>-linux-arm64-gpu-stack.tar.gz`), extract it, and run the installer it carries:
+
+```bash
+mkdir navop-gpu-stack
+tar -xzf navop-<version>-linux-x64-gpu-stack.tar.gz -C navop-gpu-stack
+sudo navop-gpu-stack/install.sh
+```
+
+The installer is additive: it only supplies libraries the host cannot already resolve. It therefore combines with every Linux package form and needs no environment variables.
+
+- A file whose SONAME the host already resolves is skipped, so the system copy always wins. When the host already exposes a usable EGL plus a DRI driver, the entire Mesa renderer is skipped.
+- `./install.sh --dry-run` prints the plan first, and `./install.sh --force` overwrites existing files of the same name.
+- Files land in the directories the dynamic loader already searches (`/usr/lib64` and friends). Debian-style distributions additionally get `/etc/ld.so.conf.d/navop-gpu-stack.conf` and a refreshed loader cache.
+- `sudo ./install.sh --uninstall` removes only what this installer actually wrote, recorded in `/usr/lib/navop-gpu-stack/installed.tsv`; it never touches the host's own libraries, and any file modified since installation is kept with a warning. Because uninstall needs the extracted directory, keep it if you want that option later.
+- Every bundled `.so` is built to the same glibc 2.28 baseline as the Linux Navop binary.
+
+The dependency package is architecture specific: download the one matching your Navop package. The installer refuses to run when the architectures differ. After installing, start Navop again; no other configuration is required.
+
 ## Linux Flatpak
 
 Navop is also available from [FlatPark](https://flatpark.org/apps/dev.navop.Navop/) as a developer-endorsed community Flatpak package. Add the FlatPark remote and install Navop for the current user:
@@ -176,7 +266,7 @@ Create a non-production test connection before importing real credentials. Insta
 
 ## Update and roll back
 
-For the MSI, EXE installer, and standard ZIP edition, enable automatic update checks in Settings or check manually. Close active connections, commit or roll back manual transactions, and finish SFTP transfers before applying an update. After restart, verify important connections, extensions, and keyboard shortcuts. Follow the separate portable update procedure above for the Windows `-portable.zip` edition.
+For the MSI, EXE installer, and standard ZIP edition, enable automatic update checks in Settings or check manually. Close active connections, commit or roll back manual transactions, and finish SFTP transfers before applying an update. After restart, verify important connections, extensions, and keyboard shortcuts. The Windows `-portable.zip` and Linux `-portable.tar.gz` editions have no in-app update; follow their separate portable update procedures above.
 
 If a new release is incompatible with a critical extension, back up the Navop data directory and reinstall a known stable package from Releases. Downgrading is not a substitute for backup: local configuration formats may evolve, so confirm compatibility before opening older versions.
 
