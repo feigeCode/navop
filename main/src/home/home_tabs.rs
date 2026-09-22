@@ -1567,6 +1567,25 @@ impl HomePage {
         });
     }
 
+    /// 关闭当前活动标签（pinned tab 不支持通过快捷键关闭）
+    pub(crate) fn close_active_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let tab_container = self.active_tab_container(cx);
+        let tc = tab_container.read(cx);
+
+        if tc.is_pinned_tab_active() {
+            return;
+        }
+
+        if tc.active_tab().is_none() {
+            return;
+        }
+        let index = tc.active_index();
+
+        tab_container.update(cx, |tc, cx| {
+            tc.close_tab(index, window, cx).detach();
+        });
+    }
+
     /// 复制当前活动标签并打开
     pub(crate) fn duplicate_active_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let tab_container = self.active_tab_container(cx);
