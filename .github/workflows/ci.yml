@@ -150,6 +150,16 @@ jobs:
         if: ${{ matrix.platform == 'linux' }}
         run: |
           cargo test --all
+      # `cargo test --all` 编的是默认特性全开的形态，而 Linux 发布包刻意关掉了
+      # `embedded-webview`（原因见 script/linux-release-features.sh）。这条关掉的
+      # 分支没有别的地方会编到，因此在这里补编一次发布形态，避免它腐烂到发版才炸。
+      - name: Check Linux release feature set
+        if: ${{ matrix.platform == 'linux' }}
+        run: |
+          set -euo pipefail
+          cargo check -p main \
+            --no-default-features \
+            --features "$(script/linux-release-features.sh)"
       - name: Test Windows
         if: ${{ matrix.platform == 'windows' }}
         shell: pwsh

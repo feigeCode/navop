@@ -2,6 +2,13 @@
 
 set -e
 
+# 说明：`webkit2gtk-4.1` 开发包只服务于 `embedded-webview` feature（AI 对话里的
+# HTML 预览弹窗）。官方 Linux 发布包刻意不带它 —— 带 WebKitGTK 4.1 的发行版与发布
+# 包的 glibc 2.28 基线不相配，也没法随依赖包提供，见
+# `script/linux-release-features.sh`。但它仍是默认 feature 之一，所以从源码
+# `cargo build` 时这些开发包还是需要的；只想要发布形态的话可以用
+# `cargo build --no-default-features --features "$(script/linux-release-features.sh)"`。
+
 detect_distro() {
   if [ -f /etc/os-release ]; then
     . /etc/os-release

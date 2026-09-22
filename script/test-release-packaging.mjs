@@ -175,14 +175,14 @@ test("Linux publishes one package per architecture plus a separate GPU dependenc
     build,
     /cargo zigbuild[\s\S]*--release[\s\S]*-p main[\s\S]*--target "\$\{\{ matrix\.target \}\}\.2\.28"/,
   );
-  // The single Linux package serves the updater, so it must keep the default
-  // feature set instead of quietly dropping the embedded webview.
-  const linuxBranch = build.slice(
-    build.indexOf('if [ "${{ runner.os }}" = "Linux" ]'),
-  );
-  assert.doesNotMatch(
-    linuxBranch.slice(0, linuxBranch.indexOf("else")),
-    /--no-default-features/,
+  // The single Linux package serves the updater, but it does not keep the
+  // default feature set: the shape it publishes comes from
+  // `script/linux-release-features.sh`, which drops `embedded-webview` because
+  // WebKitGTK 4.1 cannot be provided with the package. That shape has its own
+  // test below.
+  assert.match(
+    build,
+    /linux_features="\$\(script\/linux-release-features\.sh\)"/,
   );
   assert.match(
     build,
@@ -335,6 +335,93 @@ test("the embedded webview stays an opt-in crate feature", () => {
       `${manifest} must not implicitly enable ai_chat_view defaults`,
     );
   }
+});
+
+test("the Linux release build leaves the embedded webview out", () => {
+  const release = read(".github/workflows/release.yml");
+  const ci = read(".github/workflows/ci.yml");
+  const featuresScriptPath = "script/linux-release-features.sh";
+  const featuresScript = read(featuresScriptPath);
+
+  // WebKitGTK 4.1 cannot travel with the package: the distributions that carry
+  // it sit on glibc 2.39+, and `WebKitWebProcess` is resolved through a
+  // compile-time path. The Linux release binary therefore must not link it. The
+  // feature list lives in one script because the release build and CI have to
+  // agree on the shape being published.
+  assert.match(
+    featuresScript,
+    /^features="wasm-components,windows-native-rdp,shell-plugins"$/m,
+  );
+  assert.match(featuresScript, /\$\{NAVOP_LINUX_EMBEDDED_WEBVIEW:-0\}" = "1"/);
+  assert.match(featuresScript, /pkg-config --exists webkit2gtk-4\.1/);
+  assert.match(featuresScript, /features="\$\{features\},embedded-webview"/);
+
+  const linuxBuild = workflowStep(release, "Build release binary");
+  assert.match(
+    linuxBuild,
+    /linux_features="\$\(script\/linux-release-features\.sh\)"/,
+  );
+  assert.match(linuxBuild, /--no-default-features/);
+  assert.match(linuxBuild, /--features "\$\{linux_features\}"/);
+  assert.doesNotMatch(linuxBuild, /--features "[^"]*embedded-webview/);
+
+  // `cargo test --all` compiles the default feature set, so nothing else would
+  // ever compile the shape that is actually published.
+  const linuxCheck = workflowStep(ci, "Check Linux release feature set");
+  assert.match(linuxCheck, /cargo check -p main/);
+  assert.match(linuxCheck, /--no-default-features/);
+  assert.match(linuxCheck, /script\/linux-release-features\.sh/);
+
+  // Running the script is the real contract: the default path never emits the
+  // feature, and the opt-in path only adds it when pkg-config can see WebKitGTK
+  // 4.1 in the build environment.
+  const plain = spawnSync("bash", [featuresScriptPath], {
+    encoding: "utf8",
+    env: { ...process.env, NAVOP_LINUX_EMBEDDED_WEBVIEW: "0" },
+  });
+  assert.equal(plain.status, 0, plain.stderr);
+  assert.equal(
+    plain.stdout.trim(),
+    "wasm-components,windows-native-rdp,shell-plugins",
+  );
+
+  const stubDir = fs.mkdtempSync(path.join(os.tmpdir(), "navop-pkg-config-"));
+  const missingDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), "navop-pkg-config-missing-"),
+  );
+  fs.writeFileSync(path.join(stubDir, "pkg-config"), "#!/bin/sh\nexit 0\n", {
+    mode: 0o755,
+  });
+  fs.writeFileSync(
+    path.join(missingDir, "pkg-config"),
+    "#!/bin/sh\nexit 1\n",
+    { mode: 0o755 },
+  );
+
+  const optedIn = spawnSync("bash", [featuresScriptPath], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      NAVOP_LINUX_EMBEDDED_WEBVIEW: "1",
+      PATH: `${stubDir}:${process.env.PATH}`,
+    },
+  });
+  assert.equal(optedIn.status, 0, optedIn.stderr);
+  assert.equal(
+    optedIn.stdout.trim(),
+    "wasm-components,windows-native-rdp,shell-plugins,embedded-webview",
+  );
+
+  const unavailable = spawnSync("bash", [featuresScriptPath], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      NAVOP_LINUX_EMBEDDED_WEBVIEW: "1",
+      PATH: `${missingDir}:${process.env.PATH}`,
+    },
+  });
+  assert.equal(unavailable.status, 1);
+  assert.equal(unavailable.stdout.trim(), "");
 });
 
 test("Linux GPU dependency stack replaces the retired portable runtime", () => {
