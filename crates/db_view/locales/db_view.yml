@@ -1374,6 +1374,14 @@ Query:
     en: Run Statement at Cursor
     zh-CN: 运行当前光标的语句
     zh-HK: 執行目前游標的語句
+  show_hover_details:
+    en: Show Details
+    zh-CN: 查看对象详情
+    zh-HK: 查看物件詳情
+  no_hover_details_at_cursor:
+    en: No database object details at the cursor
+    zh-CN: 光标处没有可查看的数据库对象详情
+    zh-HK: 游標處沒有可查看的資料庫物件詳情
   please_select_sql_to_run:
     en: Please select SQL to run
     zh-CN: 请先选中要运行的 SQL

@@ -28,6 +28,7 @@ use gpui_component::input::{
 use gpui_component::native_menu::NativeMenu as PlatformNativeMenu;
 use gpui_component::spinner::Spinner;
 use gpui_component::tooltip::Tooltip;
+use gpui_component::WindowExt as _;
 use gpui_component::{Icon, Rope, RopeExt, Sizable as _, Size};
 use lsp_types::{
     CompletionContext, CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit,
@@ -40,7 +41,7 @@ use one_ui::{ExtendedEditor, ExtendedEditorState, SignatureHelpProvider};
 use rust_i18n::t;
 use sum_tree::Bias;
 
-gpui::actions!(sql_editor, [RunSelectedSql, RunCursorStatementSql]);
+gpui::actions!(sql_editor, [RunSelectedSql, RunCursorStatementSql, ShowHoverDetails]);
 
 pub(crate) const SQL_GUTTER_IDLE: &str = "idle";
 pub(crate) const SQL_GUTTER_RUNNING: &str = "running";
@@ -2441,7 +2442,6 @@ impl SqlEditor {
         let default_provider_trait: Rc<dyn CompletionProvider> =
             default_completion_provider.clone();
         let default_hover_provider = Rc::new(DefaultSqlHoverProvider::new(SqlSchema::default()));
-        let default_hover_provider_trait: Rc<dyn HoverProvider> = default_hover_provider.clone();
         let default_signature_help_provider =
             Rc::new(DefaultSqlSignatureHelpProvider::new(SqlSchema::default()));
         let default_signature_help_provider_trait: Rc<dyn SignatureHelpProvider> =
@@ -2460,7 +2460,10 @@ impl SqlEditor {
                 .placeholder(t!("Query.editor_placeholder").to_string());
 
             editor.lsp_mut().completion_provider = Some(default_provider_trait);
-            editor.lsp_mut().hover_provider = Some(default_hover_provider_trait);
+            // The default hover provider is intentionally NOT installed as a
+            // mouse-hover trigger: hover details are shown on demand from the
+            // context menu (ShowHoverDetails) instead, so pointer movement
+            // over identifiers never pops a popover.
 
             editor
         });
@@ -2595,16 +2598,12 @@ impl SqlEditor {
         let Some(default_hover_provider) = self.default_hover_provider.clone() else {
             return;
         };
-        let default_hover_provider_trait: Rc<dyn HoverProvider> = default_hover_provider.clone();
-        self.editor.update(cx, |state, _| {
-            let is_default_provider_installed = state
-                .lsp()
-                .hover_provider
-                .as_ref()
-                .is_some_and(|provider| Rc::ptr_eq(provider, &default_hover_provider_trait));
-            if is_default_provider_installed {
-                default_hover_provider.set_schema(schema);
-            }
+        self.editor.update(cx, |_, _| {
+            // Always refresh the default provider's snapshot: it backs the
+            // context-menu hover even though it is not installed as a
+            // mouse-hover trigger. A custom provider installed via
+            // `set_hover_provider` keeps its own sources and stays untouched.
+            default_hover_provider.set_schema(schema);
         });
     }
 
@@ -2762,9 +2761,52 @@ impl SqlEditor {
         self.editor.read(cx).cursor()
     }
 
+    /// Resolve the identifier under the cursor against the current schema
+    /// snapshot and present it as a hover popover.
+    ///
+    /// Unlike mouse-driven hover, this is triggered explicitly from the
+    /// editor context menu, so the popover appears without the default hover
+    /// provider being installed (mouse movement never pops it).
+    pub fn show_hover_details(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let schema = self.current_schema();
+        let (text, offset) = self.editor.update(cx, |state, _| {
+            (state.text().to_string(), state.cursor())
+        });
+        let Some(hover) = crate::sql_editor_hover::build_lsp_hover(&text, offset, &schema) else {
+            window.push_notification(
+                t!("Query.no_hover_details_at_cursor").to_string(),
+                cx,
+            );
+            return;
+        };
+        let (range_start, range_end) = hover
+            .range
+            .as_ref()
+            .map(|range| {
+                let text = self.editor.read(cx).text();
+                (
+                    text.position_to_offset(&range.start),
+                    text.position_to_offset(&range.end),
+                )
+            })
+            .unwrap_or((offset, offset));
+        self.editor.update(cx, |state, cx| {
+            state.present_hover(range_start..range_end, hover, cx);
+        });
+    }
+
     /// Get the current selection as UTF-8 byte offsets.
     pub fn selected_range(&self, cx: &App) -> Range<usize> {
         self.editor.read(cx).selected_range()
+    }
+
+    fn handle_show_hover_details_action(
+        &mut self,
+        _: &ShowHoverDetails,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.show_hover_details(window, cx);
     }
 
     pub fn document_revision(&self, cx: &App) -> u64 {
@@ -2784,7 +2826,9 @@ impl Render for SqlEditor {
         // inside the callback panics — snapshot the capabilities here, where
         // the editor is quiescent, and reuse the copy at click time.
         let capabilities = self.editor.read(cx).context_menu_capabilities();
-        div().size_full().child(
+        div().size_full()
+            .on_action(cx.listener(Self::handle_show_hover_details_action))
+            .child(
             ExtendedEditor::new(&self.extended_editor)
                 .context_menu(move |_, _, cx| {
                     sql_editor_native_menu(capabilities, cx.read_from_clipboard().is_some())
@@ -2830,6 +2874,10 @@ fn sql_editor_context_menu(
         .menu(
             t!("Query.run_cursor_statement").to_string(),
             Box::new(RunCursorStatementSql),
+        )
+        .menu(
+            t!("Query.show_hover_details").to_string(),
+            Box::new(ShowHoverDetails),
         )
         .separator()
         .menu_with_disabled(t!("Input.Cut"), !(editable && copyable), Box::new(Cut))
@@ -2883,8 +2931,8 @@ fn render_sql_gutter_marker(marker: &GutterMarker) -> gpui::AnyElement {
 #[cfg(test)]
 mod tests {
     use super::{
-        RunCursorStatementSql, RunSelectedSql, SQL_GUTTER_IDLE, SqlContext, SqlEditor, SqlSchema,
-        analyze_diagnostics_pure, completion_priority, identifier_match_rank,
+        RunCursorStatementSql, RunSelectedSql, ShowHoverDetails, SQL_GUTTER_IDLE, SqlContext,
+        SqlEditor, SqlSchema, analyze_diagnostics_pure, completion_priority, identifier_match_rank,
         schema_to_metadata_view, sql_diagnostic_to_input, sql_editor_context_menu,
     };
     use db::sql_editor::diagnostics::{
@@ -2978,6 +3026,105 @@ mod tests {
         assert_eq!(Some((0, 0)), *clicked_marker.borrow());
         visual.read(|cx| {
             assert_eq!(1, sql_editor.read(cx).gutter_lane().get_markers(cx).len());
+        });
+    }
+
+    #[test]
+    fn sql_context_menu_offers_show_hover_details() {
+        let capabilities = gpui_base::input::InputContextMenuCapabilities::new()
+            .code_editor(true)
+            .selection(true);
+        let menu = sql_editor_context_menu(capabilities, true);
+        let has_hover_item = menu
+            .items
+            .iter()
+            .any(|item| matches!(item, gpui_base::input::NativeMenuItem::Action { action, .. } if action.partial_eq(&ShowHoverDetails)));
+        assert!(has_hover_item);
+    }
+
+    #[gpui::test]
+    fn sql_editor_does_not_install_mouse_hover_provider(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_global(AppSettings::default());
+        });
+        let mut sql_editor = None;
+        let (_, visual) = cx.add_window_view(|window, cx| {
+            let editor = cx.new(|cx| SqlEditor::new(window, cx));
+            sql_editor = Some(editor.clone());
+            SqlEditorHarness {
+                editor,
+                _subscription: None,
+            }
+        });
+        let sql_editor = sql_editor.expect("SQL editor should be created");
+
+        visual.read(|cx| {
+            let input = sql_editor.read(cx).input();
+            // Mouse movement only pops a hover popover when a hover provider is
+            // installed; the default SQL editor resolves hovers from the context
+            // menu instead, so no provider must be installed.
+            assert!(input.read(cx).lsp().hover_provider.is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn sql_editor_show_hover_details_presents_popover(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_global(AppSettings::default());
+        });
+        let mut sql_editor = None;
+        let (_, visual) = cx.add_window_view(|window, cx| {
+            let editor = cx.new(|cx| SqlEditor::new(window, cx));
+            sql_editor = Some(editor.clone());
+            SqlEditorHarness {
+                editor,
+                _subscription: None,
+            }
+        });
+        let sql_editor = sql_editor.expect("SQL editor should be created");
+
+        VisualTestContext::update(visual, |window, cx| {
+            sql_editor.update(cx, |editor, cx| {
+                editor.set_schema(
+                    SqlSchema::default()
+                        .with_scope(Some("app".into()), Some("public".into()))
+                        .with_tables(vec![("users".to_string(), "doc".to_string())])
+                        .with_table_detail(
+                            "users",
+                            crate::sql_editor::SqlTableDetail {
+                                object_type: crate::sql_editor::SqlObjectType::Table,
+                                schema: Some("public".into()),
+                                comment: None,
+                                engine: None,
+                                columns: vec![crate::sql_editor::SqlColumnDetail {
+                                    name: "id".into(),
+                                    data_type: "INT".into(),
+                                    is_nullable: false,
+                                    is_primary_key: true,
+                                    default_value: None,
+                                    comment: None,
+                                }],
+                            },
+                        ),
+                    window,
+                    cx,
+                );
+                editor.set_value("select * from users".to_string(), window, cx);
+                let input = editor.input();
+                input.update(cx, |state, cx| {
+                    let cursor = "select * from ".len();
+                    state.set_selected_range(cursor..cursor, cx);
+                });
+                editor.show_hover_details(window, cx);
+            });
+        });
+        visual.run_until_parked();
+
+        visual.read(|cx| {
+            let input = sql_editor.read(cx).input();
+            input.read(cx).hover_popover().expect("hover popover should be presented for the identifier under the cursor");
         });
     }
 
