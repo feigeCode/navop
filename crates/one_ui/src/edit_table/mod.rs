@@ -20,12 +20,21 @@ pub use filter_state::FilterState;
 pub use find::{FindMatch, FindOutcome, SearchPanel, SearchPanelEvent};
 pub use selection::{CellCoord, CellRange, TableSelection};
 use state::{
-    Cancel, Copy, Find, FindNext, FindPrevious, Paste, SelectAll, SelectDown, SelectFirst,
-    SelectLast, SelectPageDown, SelectPageUp, SelectUp,
+    Cancel, Copy, Find, Paste, SelectAll, SelectDown, SelectFirst, SelectLast, SelectPageDown,
+    SelectPageUp, SelectUp,
 };
 pub use state::{EditTableEvent, EditTableState, TableVisibleRange};
+pub use state::{FindNext, FindPrevious};
 
 const CONTEXT: &str = "EditTable";
+
+/// 宿主自己渲染查找输入框时用的键盘上下文。
+///
+/// 输入框在宿主（例如数据网格工具栏）那边，不在 [`CONTEXT`] 的节点下，
+/// 所以表格那套 Cmd/Ctrl+G、Cmd/Ctrl+Shift+G 绑定落不到它头上——焦点在框里
+/// 时按 Cmd+G 会静默落空。宿主给输入框所在容器挂上这个上下文，就能复用
+/// 同一份动作与（可重绑的）键位继续上下跳。
+pub const HOSTED_FIND_CONTEXT: &str = "EditTableHostedFind";
 
 gpui::actions!(edit_table, [SelectPrevColumn, SelectNextColumn]);
 
@@ -167,6 +176,18 @@ fn init_keybindings(bindings: &TableKeybindings) -> Vec<KeyBinding> {
             .iter()
             .map(|key| KeyBinding::new(key, FindPrevious, Some(CONTEXT))),
     );
+    keybindings.extend(
+        bindings
+            .find_next
+            .iter()
+            .map(|key| KeyBinding::new(key, FindNext, Some(HOSTED_FIND_CONTEXT))),
+    );
+    keybindings.extend(
+        bindings
+            .find_previous
+            .iter()
+            .map(|key| KeyBinding::new(key, FindPrevious, Some(HOSTED_FIND_CONTEXT))),
+    );
     keybindings
 }
 
@@ -219,6 +240,21 @@ fn refreshable_keybindings(cx: &App, bindings: &TableKeybindings) -> Vec<KeyBind
         &[table_platform_shortcut("cmd-shift-g", "ctrl-shift-g")],
         &bindings.find_previous,
         Some(CONTEXT),
+        FindPrevious,
+    ));
+    // 宿主渲染的查找输入框同样要能上下跳，键位跟随同一份用户配置。
+    keybindings.extend(rebind_keybindings(
+        cx,
+        &[table_platform_shortcut("cmd-g", "ctrl-g")],
+        &bindings.find_next,
+        Some(HOSTED_FIND_CONTEXT),
+        FindNext,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        &[table_platform_shortcut("cmd-shift-g", "ctrl-shift-g")],
+        &bindings.find_previous,
+        Some(HOSTED_FIND_CONTEXT),
         FindPrevious,
     ));
     keybindings

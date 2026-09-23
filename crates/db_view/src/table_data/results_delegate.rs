@@ -117,8 +117,6 @@ pub struct EditorTableDelegate {
     filtered_row_indices: Option<Vec<usize>>,
     /// Column filter conditions: col_ix -> selected values
     column_filters: HashMap<usize, HashSet<FilterValueKey>>,
-    /// Local table data search query. Empty means no row search.
-    row_search_query: String,
     /// 列显示顺序（元素为 `columns` 中的原始列索引）。
     ///
     /// 内部数据结构（行数据、二进制单元格、变更追踪、主键、列元数据）始终以
@@ -233,7 +231,6 @@ impl Clone for EditorTableDelegate {
             active_filter_columns: self.active_filter_columns.clone(),
             filtered_row_indices: self.filtered_row_indices.clone(),
             column_filters: self.column_filters.clone(),
-            row_search_query: self.row_search_query.clone(),
             column_order: self.column_order.clone(),
             hidden_columns: self.hidden_columns.clone(),
             editable: self.editable,
@@ -278,7 +275,6 @@ impl EditorTableDelegate {
             active_filter_columns: HashSet::new(),
             filtered_row_indices: None,
             column_filters: HashMap::new(),
-            row_search_query: String::new(),
             column_order: Vec::new(),
             hidden_columns: HashSet::new(),
             editable,
@@ -1367,13 +1363,8 @@ impl EditorTableDelegate {
         self.recalculate_filtered_indices();
     }
 
-    pub fn set_row_search_query(&mut self, query: impl Into<String>) {
-        self.row_search_query = normalize_row_search_query(&query.into());
-        self.recalculate_filtered_indices();
-    }
-
     fn has_active_filters(&self) -> bool {
-        !self.column_filters.is_empty() || !self.row_search_query.is_empty()
+        !self.column_filters.is_empty()
     }
 
     fn row_matches_column_filters(&self, row: &[Option<String>]) -> bool {
@@ -1390,7 +1381,7 @@ impl EditorTableDelegate {
             })
     }
 
-    /// 重新计算筛选后的行索引（列筛选和本地搜索使用 AND 组合）
+    /// 重新计算列筛选后的行索引
     fn recalculate_filtered_indices(&mut self) {
         if !self.has_active_filters() {
             self.filtered_row_indices = None;
@@ -1402,7 +1393,6 @@ impl EditorTableDelegate {
             .iter()
             .enumerate()
             .filter(|(_, row)| self.row_matches_column_filters(row))
-            .filter(|(_, row)| row_matches_search_query(row, &self.row_search_query))
             .map(|(ix, _)| ix)
             .collect();
 
@@ -1413,18 +1403,6 @@ impl EditorTableDelegate {
             self.filtered_row_indices = Some(filtered_indices);
         }
     }
-}
-
-fn normalize_row_search_query(query: &str) -> String {
-    query.trim().to_lowercase()
-}
-
-fn row_matches_search_query(row: &[Option<String>], normalized_query: &str) -> bool {
-    normalized_query.is_empty()
-        || row.iter().any(|cell| {
-            let value = cell.as_deref().unwrap_or("NULL").to_lowercase();
-            value.contains(normalized_query)
-        })
 }
 
 impl EditTableDelegate for EditorTableDelegate {
@@ -3022,7 +3000,7 @@ impl EditTableDelegate for EditorTableDelegate {
                 selected_values.contains(&cell_value)
             });
 
-            if passes_other_filters && row_matches_search_query(row, &self.row_search_query) {
+            if passes_other_filters {
                 let value = row
                     .get(col_ix)
                     .cloned()
@@ -3513,8 +3491,8 @@ impl EditorTableDelegate {
 mod tests {
     use super::{
         EditorTableDelegate, RowStatus, binary_cell_copy_text, binary_cell_image_format,
-        binary_download_file_name, binary_edit_values_equal, normalize_row_search_query,
-        normalize_sort_identifier, parse_primary_order_by_clause, row_matches_search_query,
+        binary_download_file_name, binary_edit_values_equal, normalize_sort_identifier,
+        parse_primary_order_by_clause,
     };
     use db::{ColumnInfo, FieldType, TableCellValue, binary_value::parse_binary_input};
     use gpui::SharedString;
@@ -3541,7 +3519,6 @@ mod tests {
             active_filter_columns: HashSet::new(),
             filtered_row_indices: None,
             column_filters: HashMap::new(),
-            row_search_query: String::new(),
             column_order: Vec::new(),
             hidden_columns: HashSet::new(),
             editable: true,
@@ -3876,57 +3853,22 @@ mod tests {
     }
 
     #[test]
-    fn row_search_normalizes_whitespace_and_case() {
-        assert_eq!(normalize_row_search_query("  ALIce  "), "alice");
-    }
-
-    #[test]
-    fn row_search_matches_cells_case_insensitively() {
-        let row = vec![Some("1".to_string()), Some("Alice Zhang".to_string())];
-
-        assert!(row_matches_search_query(&row, "alice"));
-        assert!(row_matches_search_query(&row, "zhang"));
-        assert!(!row_matches_search_query(&row, "bob"));
-    }
-
-    #[test]
-    fn row_search_matches_null_cells() {
-        let row = vec![Some("1".to_string()), None];
-
-        assert!(row_matches_search_query(&row, "null"));
-    }
-
-    #[test]
-    fn row_search_filters_visible_rows() {
-        let mut delegate = test_delegate(vec![
-            vec![Some("1".to_string()), Some("Alice".to_string())],
-            vec![Some("2".to_string()), Some("Bob".to_string())],
-        ]);
-
-        delegate.set_row_search_query("ali");
-
-        assert_eq!(1, delegate.filtered_row_count());
-        assert_eq!(Some(0), delegate.resolve_display_row(0));
-        assert_eq!(None, delegate.resolve_display_row(1));
-    }
-
-    #[test]
-    fn row_search_combines_with_column_filters() {
+    fn column_filters_hide_non_matching_rows() {
         let mut delegate = test_delegate(vec![
             vec![Some("active".to_string()), Some("Alice".to_string())],
-            vec![Some("inactive".to_string()), Some("Alice".to_string())],
-            vec![Some("active".to_string()), Some("Bob".to_string())],
+            vec![Some("inactive".to_string()), Some("Bob".to_string())],
+            vec![Some("active".to_string()), Some("Carol".to_string())],
         ]);
 
         delegate.apply_filter(
             0,
             HashSet::from([FilterValueKey::Text("active".to_string())]),
         );
-        delegate.set_row_search_query("alice");
 
-        assert_eq!(1, delegate.filtered_row_count());
+        assert_eq!(2, delegate.filtered_row_count());
         assert_eq!(Some(0), delegate.resolve_display_row(0));
-        assert_eq!(None, delegate.resolve_display_row(1));
+        assert_eq!(Some(2), delegate.resolve_display_row(1));
+        assert_eq!(None, delegate.resolve_display_row(2));
     }
 
     #[test]
