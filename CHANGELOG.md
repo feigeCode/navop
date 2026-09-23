@@ -4,6 +4,56 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.19.0] - 2026-09-23
+
+#### 更新内容
+
+- 表格数据支持查找：浏览表数据时按 Cmd/Ctrl+F 打开查找面板，命中单元格高亮描边，Cmd/Ctrl+G / Cmd/Ctrl+Shift+G 在命中间跳转并把所在列横向滚入视口，换页/刷新后按当前词重扫。修复了两个前置缺陷：焦点停在页签外壳时按 Cmd/Ctrl+F 完全无反应（现在页签打开后焦点直接落在表格）；工具栏搜索框不再过滤行、改为高亮匹配，两种入口合并为单一查找框。
+- 表数据预览支持字段过滤隐藏列：列头下拉可选可见字段，宽表只看关心的列。
+- SQL 编辑器对象详情体验重做：鼠标悬停弹详情默认关闭（设置里可开，开启后须停驻 600ms 才显示），改由右键菜单「查看对象详情」打开独立弹窗，内容可选中复制；右键新增「复制 DDL」，一键拷贝选中/光标处表的 CREATE TABLE/VIEW 语句；选中表名右键也能解析。
+- 新增关闭当前页签快捷键 Cmd/Ctrl+Shift+W，可在设置里改绑。
+- 连接表单「工作区」字段统一改称「分组」，与实际语义一致。
+
+#### 修复与优化
+
+- 修复 SSH MFA 登录把保存的密码当作验证码应答导致认证失败的问题：现在先用 RFC 4252 "none" 探测服务器是否提供 keyboard-interactive，提供则验证码由用户输入、密码仍在密码提示处用保存凭据应答；用户作答的验证码被拒直接报 MFA 失败不再无意义重试；无该方法时保持原有密码认证顺序。
+- 修复老设备（华为 VRP 系等）SSH 连接报 `` `mpint` encoding invalid `` 失败的问题：这些设备的主机公钥在 RSA e/n 里带 RFC 4251 禁止的多余前导零字节，OpenSSH 一直容忍而我们严格拒绝，现在读对端报文时同样裁剪归一化。
+- 修复 SQLite WITHOUT ROWID 表、视图预览整页空白的问题：预览 SQL 硬编码投影 rowid 伪列，这类对象没有该列直接报 no such column，现在翻页前先探测可用性，不可用回退普通 SELECT *。
+- 修复 PostgreSQL 序列目录一直为空的问题：序列列表查询用了不存在的列，整张表查不出来。
+- 数据库连接健壮性：长时间挂机后 TCP 被 NAT/防火墙静默丢弃，复用会话的 ping 与退出路径的断开在死 socket 上永久挂起（查询转圈、关 tab 卡死，只能杀进程）。现在复用前 ping 10 秒上限、超时判死并丢弃会话，断开 5 秒上限、超时放弃优雅断开强制回收；MySQL/PostgreSQL 连接启用 TCP keepalive 30 秒，空闲期由 OS 尽早暴露死连接。
+- 修复断连杀死的手工事务卡在「关不掉也提交不了」死循环：现在自动收尾。
+- 修复 MCP 客户端配置写入已废弃的 mcp 位置参数（影响 Claude Desktop/Code、Codex 启动）。
+- 默认 HTTP 客户端改为跟随系统代理与环境变量代理：浏览器能上网而 Navop 登录报 error sending request 的场景（代理开在系统代理里而应用直连）不再出现。
+- Linux 发布包不再链接 WebKitGTK 4.1，渲染依赖独立成 gpu-stack 包按需安装（安装脚本只补宿主缺失的库，支持 --dry-run/--uninstall）；HTML 预览 webview 改为全平台默认关闭，弹窗降级提示「用浏览器打开」「下载 HTML」不受影响。
+- 依赖链：gpui-pre 升到 fork-0.3.114（图片 atlas 与字形/emoji atlas 分离，丢弃图片可释放 GPU 页；顺带修复 Windows directx 编译错误）。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.19.0) 下载桌面端安装包
+
+---
+
+#### What's New
+
+- Table data find: press Cmd/Ctrl+F while browsing table data to open the find bar; matched cells get an outlined highlight, Cmd/Ctrl+G / Cmd/Ctrl+Shift+G jump between matches and scroll the hit column into view horizontally, and hits are re-scanned after paging/refresh using the current term. Two prerequisite defects are fixed: Cmd/Ctrl+F did nothing while focus sat on the tab shell (focus now lands on the grid right after the tab opens), and the toolbar search box no longer filters rows — it highlights matches instead, with both entries merged into a single find bar.
+- Field filtering for table data preview: a column-header dropdown selects visible fields, so wide tables can show only the columns you care about.
+- SQL editor object details reworked: hover popups are off by default (enable in settings; when on they require a 600ms dwell instead of firing on mouse pass), replaced by a right-click "View object details" that opens a standalone dialog with selectable, copyable content. Right-click also gains "Copy DDL", which copies the CREATE TABLE/VIEW statement of the table under the cursor or selection; selecting a table name and right-clicking resolves it too.
+- New shortcut Cmd/Ctrl+Shift+W closes the active tab, rebindable in settings.
+- The "Workspace" field in connection forms is now consistently called "Group", matching what it actually does.
+
+#### Fixes and Improvements
+
+- Fixed SSH MFA logins answering the verification-code prompt with the saved password and failing auth. The client now probes with the RFC 4252 "none" method first: when the server offers keyboard-interactive, the code is entered by the user while the password is still answered from saved credentials at the password prompt; a user-answered code being rejected fails MFA immediately instead of retrying pointlessly; servers without the method keep the original password-first order.
+- Fixed SSH connections to legacy devices (Huawei VRP etc.) dying with `` `mpint` encoding invalid ``: their host keys carry redundant leading zero bytes in the RSA e/n, which RFC 4251 forbids but OpenSSH has always tolerated on read. Peer-message parsing now trims and normalizes them the same way.
+- Fixed SQLite WITHOUT ROWID tables and views showing an empty page in the data preview: the preview SQL hard-coded a rowid pseudo-column that these objects lack, failing with no such column. Availability is now probed before paging, falling back to a plain SELECT * when unavailable.
+- Fixed the PostgreSQL sequence catalogue always being empty: the listing query referenced a column that does not exist.
+- Database connection robustness: after long idle periods TCP connections get silently dropped by NAT/firewalls, and both the pre-reuse ping and the shutdown-path disconnect hung forever on the dead socket (spinning queries, uncloseable tabs, process kill as the only way out). The ping now has a 10-second cap that declares the session dead and discards it (the next query opens a fresh connection), the disconnect has a 5-second cap after which the socket is force-reclaimed, and MySQL/PostgreSQL connections enable 30s TCP keepalive so the OS surfaces dead connections early.
+- Fixed manually-started transactions killed by a disconnect getting stuck in a "can neither commit nor close" loop; they are now finalized automatically.
+- Fixed MCP client configs being written with a removed `mcp` positional argument (affecting Claude Desktop/Code and Codex launchers).
+- The default HTTP client now follows system and environment-variable proxies: the "browser can reach the internet but Navop login says error sending request" scenario (proxy configured at system level while the app connected directly) no longer occurs.
+- Linux packages no longer link WebKitGTK 4.1; rendering dependencies ship as a separate gpu-stack package installed on demand (the installer only adds libraries the host is missing, with --dry-run/--uninstall support). The HTML preview webview is off by default on all platforms; the dialog degrades gracefully while "Open in browser" and "Download HTML" keep working.
+- Dependencies: gpui-pre upgraded to fork-0.3.114 (image atlas split from the glyph/emoji atlas so dropping images releases GPU pages; also fixes a Windows directx compile error).
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.18.6...v0.19.0
+
 ## [v0.18.6] - 2026-09-21
 
 #### 更新内容
