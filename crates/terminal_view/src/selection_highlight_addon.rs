@@ -11,9 +11,7 @@ use gpui::{Hsla, hsla};
 use std::any::Any;
 use std::ops::Range;
 
-use crate::addon::{
-    CellDecoration, DecorationSpan, TerminalAddon, TerminalAddonFrameContext, TerminalDamageHint,
-};
+use crate::addon::{CellDecoration, DecorationSpan, TerminalAddon, TerminalAddonFrameContext};
 use terminal::pty_backend::GpuiEventProxy;
 
 /// 触发高亮的选中文本最大字符数，避免超长选区造成大面积误匹配
@@ -162,7 +160,9 @@ fn match_columns(line_text: &str, needle: &str) -> Vec<Range<usize>> {
 #[cfg(test)]
 mod tests {
     use super::{SelectionHighlightAddon, grid_line_text, match_columns, selection_needle};
-    use crate::addon::{TerminalAddon, TerminalAddonFrameContext};
+    use crate::addon::{
+        TerminalAddon, TerminalAddonFrameContext, TerminalDamageHint,
+    };
     use alacritty_terminal::grid::Dimensions;
     use alacritty_terminal::index::{Column, Line, Point};
     use alacritty_terminal::selection::{Selection, SelectionType};
