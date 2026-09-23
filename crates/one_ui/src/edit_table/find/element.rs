@@ -88,29 +88,23 @@ pub fn highlight_bands(
 /// 盒子，所以 bounds 天然就是内容区。
 pub struct FindHighlightElement {
     text: SharedString,
-    font_size: Pixels,
     cell_range: Range<usize>,
     segments: Rc<Vec<HighlightSegment>>,
     selection_color: Hsla,
-    text_runs: Rc<Vec<TextRun>>,
 }
 
 impl FindHighlightElement {
     pub fn new(
         text: SharedString,
-        font_size: Pixels,
         cell_range: Range<usize>,
         segments: Rc<Vec<HighlightSegment>>,
         selection_color: Hsla,
-        text_runs: Rc<Vec<TextRun>>,
     ) -> Self {
         Self {
             text,
-            font_size,
             cell_range,
             segments,
             selection_color,
-            text_runs,
         }
     }
 }
@@ -182,13 +176,26 @@ impl Element for FindHighlightElement {
             return;
         }
 
-        let Ok(lines) = window.text_system().shape_text(
-            self.text.clone(),
-            self.font_size,
-            &self.text_runs,
-            None,
-            None,
-        ) else {
+        // 字体/字号必须在这里（paint 内）从 `window.text_style()` 现场解析：
+        // gpui 的 Div 只在 paint 子元素前才把 `.font()` / `.text_sm()` 推进
+        // text_style_stack，所以这里拿到的是单元格（含 td 内容）实际渲染用的
+        // 样式。若在 render 期烘焙，会拿到环境 UI 字体，与 td 的网格等宽字体
+        // advance 不同，条带随命中前缀线性漂移、盖到错误的字符上。
+        let text_style = window.text_style();
+        let font_size = text_style.font_size.to_pixels(window.rem_size());
+        let run = TextRun {
+            len: self.text.len(),
+            font: text_style.font(),
+            color: Hsla::default(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+
+        let Ok(lines) = window
+            .text_system()
+            .shape_text(self.text.clone(), font_size, &[run], None, None)
+        else {
             return;
         };
         let Some(line) = lines.first() else {

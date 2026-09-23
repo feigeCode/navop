@@ -19,7 +19,7 @@ use gpui::{
     ElementId, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement,
     IsZero, ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, Pixels, Point, Render,
     ScrollStrategy, ScrollWheelEvent, SharedString, Stateful, StatefulInteractiveElement as _,
-    Styled, Subscription, Task, TextRun, UniformListScrollHandle, Window, canvas, div,
+    Styled, Subscription, Task, UniformListScrollHandle, Window, canvas, div,
     prelude::FluentBuilder, px, uniform_list,
 };
 use gpui_component::list::{List, ListState};
@@ -2882,7 +2882,7 @@ where
         &self,
         row_ix: usize,
         col_ix: usize,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if self.find_rows.is_empty() {
@@ -2927,24 +2927,13 @@ where
             return div().into_any_element();
         }
 
-        let font = window.text_style().font();
-        let font_size = window.text_style().font_size.to_pixels(window.rem_size());
-        let run = TextRun {
-            len: row_text.len(),
-            font,
-            color: cx.theme().foreground,
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
-
+        // 字体/字号由元素在 paint 期从 text_style_stack 现场解析（见 element.rs），
+        // 这里不再传：render 期的环境字体与 td 实际渲染字体不同，会导致高亮漂移。
         FindHighlightElement::new(
             row_text,
-            font_size,
             cell_range,
             std::rc::Rc::new(visible),
             cx.theme().selection,
-            std::rc::Rc::new(vec![run]),
         )
         .into_any_element()
     }

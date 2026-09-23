@@ -238,6 +238,46 @@ fn highlight_element_looks_up_pixel_positions_by_byte_index() {
 }
 
 #[test]
+fn highlight_shapes_text_with_the_style_active_at_paint_time() {
+    let element = include_str!("element.rs");
+    let state = include_str!("../state.rs");
+
+    // 字体/字号必须在元素 paint 内从 `window.text_style()` 解析：gpui 的 Div
+    // 只在 paint 子元素前才把 `.font()` / `.text_sm()` 推进 text_style_stack
+    //（fork-0.3.111 div.rs `window.with_text_style(style.text_style()...)`）。
+    // 若在 render 期（构建 cell div 之前）就烘焙死字体，td 用网格等宽字体渲染，
+    // 高亮却按环境 UI 字体测宽度，两侧字形 advance 不同，条带会随命中前缀
+    // 长度线性漂移（截图实测：URL 列第 19/32 字符处左偏 37/65px），高亮盖到
+    // 错误的字符上。
+    let paint = element
+        .split("fn paint(")
+        .nth(1)
+        .expect("FindHighlightElement::paint");
+    assert!(
+        paint.contains("window.text_style()"),
+        "paint 内必须现场解析 text_style（字体与字号），不能用 render 期烘焙的值"
+    );
+
+    // 构造函数不得再收字体/字号/text_runs：一旦收了，调用方就会在 render 期
+    // 把环境样式传进来，paint 期的修正无从谈起。
+    let signature = element
+        .split("impl FindHighlightElement {")
+        .nth(1)
+        .expect("impl block");
+    assert!(
+        !signature.contains("font_size: Pixels,"),
+        "构造函数不应接收 font_size"
+    );
+    assert!(!signature.contains("text_runs"), "构造函数不应接收 text_runs");
+
+    // render 侧也不得再从环境 text_style 取字体去构造 TextRun。
+    assert!(
+        !state.contains("let font = window.text_style().font();"),
+        "render_find_highlight 不得在 render 期取环境字体"
+    );
+}
+
+#[test]
 fn char_offsets_are_converted_to_byte_offsets_for_layout_lookup() {
     // "张三ab"：CJK 一字 3 字节，ASCII 一字 1 字节。
     assert_eq!(0, char_index_to_byte_index("张三ab", 0));
