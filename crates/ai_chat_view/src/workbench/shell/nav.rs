@@ -43,6 +43,7 @@ impl WorkbenchShell {
             )
         };
 
+        let showing_archived = panel.read(cx).showing_archived_sessions(cx);
         let new_button = {
             let panel = panel.clone();
             IconButton::new("workbench-session-new", IconName::Plus)
@@ -50,6 +51,23 @@ impl WorkbenchShell {
                 .tooltip(t!("AgentUi.new_conversation").to_string())
                 .on_click(cx.listener(move |_, _, _, cx| {
                     panel.update(cx, |panel, cx| panel.create_session(cx));
+                }))
+        };
+        let archive_toggle = {
+            let panel = panel.clone();
+            IconButton::new("workbench-session-archived", IconName::WindowRestore)
+                .role(IconButtonRole::Compact)
+                .when(showing_archived, |button| button.outline())
+                .tooltip(
+                    if showing_archived {
+                        t!("Workbench.show_active_conversations")
+                    } else {
+                        t!("Workbench.show_archived_conversations")
+                    }
+                    .to_string(),
+                )
+                .on_click(cx.listener(move |_, _, _, cx| {
+                    panel.update(cx, |panel, cx| panel.toggle_archived_sessions(cx));
                 }))
         };
 
@@ -60,6 +78,8 @@ impl WorkbenchShell {
             let hover = theme.hover_background();
             let panel = panel.clone();
             let element_id = SharedString::from(format!("workbench-session-{}", summary.id));
+            let archive_panel = panel.clone();
+            let archive_uid = id.clone();
             rows.push(
                 v_flex()
                     .id(element_id)
@@ -72,13 +92,36 @@ impl WorkbenchShell {
                     .when(selected, |this| this.bg(theme.panel_hover))
                     .hover(move |style| style.bg(hover))
                     .child(
-                        div()
+                        h_flex()
                             .w_full()
                             .min_w_0()
-                            .truncate()
-                            .text_sm()
-                            .text_color(theme.foreground)
-                            .child(summary.name.clone()),
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_sm()
+                                    .text_color(theme.foreground)
+                                    .child(summary.name.clone()),
+                            )
+                            .child(
+                                IconButton::new(
+                                    SharedString::from(format!(
+                                        "workbench-session-archive-{id}"
+                                    )),
+                                    IconName::Delete,
+                                )
+                                .role(IconButtonRole::Compact)
+                                .tooltip(t!("Workbench.archive_conversation").to_string())
+                                .on_click(move |_, _window, cx| {
+                                    let uid = archive_uid.clone();
+                                    archive_panel.update(cx, |panel, cx| {
+                                        panel.archive_session(&uid, cx);
+                                    });
+                                }),
+                            ),
                     )
                     .child(
                         div()
@@ -153,6 +196,7 @@ impl WorkbenchShell {
                                 .text_color(theme.foreground)
                                 .child(t!("Workbench.sessions").to_string()),
                         )
+                        .child(archive_toggle)
                         .child(new_button),
                 )
                 .child(

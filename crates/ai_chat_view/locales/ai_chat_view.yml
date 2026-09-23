@@ -1043,6 +1043,18 @@ HtmlPreview:
     zh-HK: "建立 HTML 預覽 webview 失敗: %{error}"
 
 Workbench:
+  archive_conversation:
+    en: Archive conversation
+    zh-CN: 归档会话
+    zh-HK: 封存工作階段
+  show_active_conversations:
+    en: Show active conversations
+    zh-CN: 显示活跃会话
+    zh-HK: 顯示活躍工作階段
+  show_archived_conversations:
+    en: Show archived conversations
+    zh-CN: 显示已归档会话
+    zh-HK: 顯示已封存工作階段
   choose_workspace:
     en: Choose workspace
     zh-CN: 选择工作区

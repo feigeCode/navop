@@ -566,6 +566,26 @@ impl DefaultAgentChatPanel {
         }
     }
 
+    /// 归档（软删除）一个内置会话。
+    pub fn archive_session(&mut self, uid: &str, cx: &mut Context<Self>) {
+        if let Some(view) = &self.view {
+            view.update(cx, |view, cx| view.apply_archive(uid, cx));
+        }
+    }
+
+    /// 切换「活跃 / 已归档」会话视图。
+    pub fn toggle_archived_sessions(&mut self, cx: &mut Context<Self>) {
+        if let Some(view) = &self.view {
+            view.update(cx, |view, cx| view.toggle_archived(cx));
+        }
+    }
+
+    pub fn showing_archived_sessions(&self, cx: &App) -> bool {
+        self.view
+            .as_ref()
+            .is_some_and(|view| view.read(cx).showing_archived_sessions())
+    }
+
     pub fn set_theme(&mut self, theme: Option<AgentChatTheme>, cx: &mut Context<Self>) {
         self.theme = theme.clone();
         if let Some(view) = &self.view {

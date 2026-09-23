@@ -3671,15 +3671,19 @@ impl AgentChatView {
         );
     }
 
+    pub(crate) fn showing_archived_sessions(&self) -> bool {
+        self.show_archived
+    }
+
     /// 切换「活跃 / 已归档」视图。
-    fn toggle_archived(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_archived(&mut self, cx: &mut Context<Self>) {
         self.show_archived = !self.show_archived;
         self.reload_sessions(cx);
         cx.notify();
     }
 
     /// 归档(软删除)一个会话;归档当前会话时自动新建空会话顶上。
-    fn apply_archive(&mut self, uid: &str, cx: &mut Context<Self>) {
+    pub(crate) fn apply_archive(&mut self, uid: &str, cx: &mut Context<Self>) {
         if !persistence::set_archived(cx, uid, true) {
             return;
         }
