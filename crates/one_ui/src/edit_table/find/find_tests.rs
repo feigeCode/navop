@@ -205,6 +205,28 @@ fn highlight_shares_the_cell_content_box_with_the_td_content() {
 }
 
 #[test]
+fn the_current_match_cell_is_outlined_because_long_text_clips_the_highlight() {
+    let state = include_str!("../state.rs");
+    let start = state
+        .find("fn render_interactive_cell(")
+        .expect("interactive cell renderer");
+    let body = &state[start..];
+    let end = body
+        .find("\n    fn render_find_highlight(")
+        .expect("next method");
+    let body = &body[..end];
+
+    // 单元格是单行截断显示的（`nowrap` + `text_ellipsis`），命中落在截断区之后时
+    // 条带会被 `overflow_hidden` 整条裁掉，屏幕上再没有别的提示——所以必须给
+    // 「当前命中的单元格」整体描边，用户才看得出命中在哪个格子里。
+    assert!(body.contains("self.find_current_cell == Some((row_ix, col_ix))"));
+    // 描边与当前命中的条带同色系。
+    assert!(body.contains("find_highlight_color(cx.theme().selection, true)"));
+    // 描边必须是叠加绘制：走 `border_2` + padding 补偿那条路会让单元格内容跳动。
+    assert!(body.contains(".border_2()"));
+}
+
+#[test]
 fn highlight_element_looks_up_pixel_positions_by_byte_index() {
     let element = include_str!("element.rs");
 
@@ -213,6 +235,46 @@ fn highlight_element_looks_up_pixel_positions_by_byte_index() {
     assert!(element.contains("x_for_index("));
     assert!(element.contains("char_range_to_byte_range("));
     assert!(!element.contains("char_width *"));
+}
+
+#[test]
+fn highlight_shapes_text_with_the_style_active_at_paint_time() {
+    let element = include_str!("element.rs");
+    let state = include_str!("../state.rs");
+
+    // 字体/字号必须在元素 paint 内从 `window.text_style()` 解析：gpui 的 Div
+    // 只在 paint 子元素前才把 `.font()` / `.text_sm()` 推进 text_style_stack
+    //（fork-0.3.111 div.rs `window.with_text_style(style.text_style()...)`）。
+    // 若在 render 期（构建 cell div 之前）就烘焙死字体，td 用网格等宽字体渲染，
+    // 高亮却按环境 UI 字体测宽度，两侧字形 advance 不同，条带会随命中前缀
+    // 长度线性漂移（截图实测：URL 列第 19/32 字符处左偏 37/65px），高亮盖到
+    // 错误的字符上。
+    let paint = element
+        .split("fn paint(")
+        .nth(1)
+        .expect("FindHighlightElement::paint");
+    assert!(
+        paint.contains("window.text_style()"),
+        "paint 内必须现场解析 text_style（字体与字号），不能用 render 期烘焙的值"
+    );
+
+    // 构造函数不得再收字体/字号/text_runs：一旦收了，调用方就会在 render 期
+    // 把环境样式传进来，paint 期的修正无从谈起。
+    let signature = element
+        .split("impl FindHighlightElement {")
+        .nth(1)
+        .expect("impl block");
+    assert!(
+        !signature.contains("font_size: Pixels,"),
+        "构造函数不应接收 font_size"
+    );
+    assert!(!signature.contains("text_runs"), "构造函数不应接收 text_runs");
+
+    // render 侧也不得再从环境 text_style 取字体去构造 TextRun。
+    assert!(
+        !state.contains("let font = window.text_style().font();"),
+        "render_find_highlight 不得在 render 期取环境字体"
+    );
 }
 
 #[test]

@@ -414,6 +414,65 @@ fn navigating_to_a_match_outside_the_viewport_scrolls_the_columns_too(cx: &mut T
 }
 
 #[gpui::test]
+fn the_current_match_cell_points_at_the_column_the_match_lives_in(cx: &mut TestAppContext) {
+    // 「2」在第二列：描边目标必须落在那一列上。算错了就会描到第一列，
+    // 也就是描在数值完全对不上的格子上，等于没解决「看不出是哪个格子」。
+    let (mut cx, host) = open_host(cx, true);
+
+    let cell = cx.update(|_window, cx| {
+        host.update(cx, |host, cx| {
+            host.table.update(cx, |table, cx| {
+                table.set_find_hosted(true, cx);
+                table.set_find_query("2", cx);
+                assert_eq!(1, table.find_total());
+                table.find_current_cell()
+            })
+        })
+    });
+
+    assert_eq!(Some((1, 1)), cell, "当前命中单元格应指向命中所在的列");
+}
+
+#[gpui::test]
+fn the_current_match_cell_tracks_a_match_far_to_the_right(cx: &mut TestAppContext) {
+    // 长文本/远列的场景：命中落在 8 列里的最后一列。这种命中在单元格里
+    // 常常已经被截断（高亮被裁掉），描边就是唯一能指认位置的线索。
+    let (mut cx, host) = open_wide_host(cx);
+
+    let cell = cx.update(|_window, cx| {
+        host.update(cx, |host, cx| {
+            host.table.update(cx, |table, cx| {
+                table.set_find_hosted(true, cx);
+                table.set_find_query("needle", cx);
+                assert_eq!(1, table.find_total());
+                table.find_current_cell()
+            })
+        })
+    });
+
+    assert_eq!(Some((1, 7)), cell, "命中在最后一列时描边目标必须是最后一列");
+}
+
+#[gpui::test]
+fn clearing_the_query_drops_the_current_match_cell(cx: &mut TestAppContext) {
+    let (mut cx, host) = open_host(cx, true);
+
+    let cell = cx.update(|_window, cx| {
+        host.update(cx, |host, cx| {
+            host.table.update(cx, |table, cx| {
+                table.set_find_hosted(true, cx);
+                table.set_find_query("2", cx);
+                assert!(table.find_current_cell().is_some());
+                table.set_find_query("", cx);
+                table.find_current_cell()
+            })
+        })
+    });
+
+    assert_eq!(None, cell, "清空查询后不应再给任何单元格描边");
+}
+
+#[gpui::test]
 fn find_panel_opens_when_the_host_hands_focus_to_the_table(cx: &mut TestAppContext) {
     let (mut cx, host) = open_host(cx, true);
     activate_host(&mut cx, &host);
