@@ -13424,8 +13424,7 @@ dependencies = [
 [[package]]
 name = "ssh-encoding"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b54d0ed0498daf3f78d82e00e28c8eec9d75a067c4cfbcc7a0f7d0f4077749e"
+source = "git+https://github.com/feigeCode/SSH.git?tag=ssh-encoding%2Fv0.3.0-navop.1#f37bd0fcc412c517a14273438af94f2f0e4a2e2c"
 dependencies = [
  "base64ct",
  "bytes",
