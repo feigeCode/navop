@@ -120,7 +120,20 @@ extension-protocol = { workspace = true }
 tempfile = "3"
 
 [features]
-default = ["wasm-components", "embedded-webview", "windows-native-rdp", "shell-plugins"]
+# `embedded-webview`（AI 对话里的 HTML 预览弹窗）默认关闭，三个平台一致。
+#
+# 它要宿主的系统 WebView，Linux 上是 WebKitGTK 4.1，而这个库无法随发布包提供：
+# 带 WebKitGTK 4.1 的发行版都构建在 glibc 2.39+ 上、与发布包的 2.28 基线不相配，
+# 且 `WebKitWebProcess` 是按编译期路径解析的独立 ELF，外挂不了 —— 所以 Linux 上
+# 带它就直接起不来（`error while loading shared libraries: libwebkit2gtk-4.1.so.0`）。
+# macOS/Windows 的系统 WebView 不受此限，但只有 Linux 关掉会让三个平台各发一种形态，
+# 因此统一关默认。
+#
+# 关闭时弹窗降级为「无法创建 HTML 预览 webview，已保留源码视图」（`HtmlPreview.webview_unavailable`），
+# 「用浏览器打开」与「下载 HTML」两条路径不受影响。
+# 需要时显式开启：`cargo build -p main --features embedded-webview`
+# （Linux 另需 `webkit2gtk-4.1` 开发包，见 `script/install-linux.sh`）。
+default = ["wasm-components", "windows-native-rdp", "shell-plugins"]
 builtin-duckdb = ["db/builtin-duckdb", "db_view/builtin-duckdb", "navop_runtime/builtin-duckdb"]
 builtin-mongodb = ["mongodb_view/builtin-mongodb"]
 builtin-data-drivers = ["builtin-mongodb"]

@@ -150,6 +150,17 @@ jobs:
         if: ${{ matrix.platform == 'linux' }}
         run: |
           cargo test --all
+      # 默认构建（三平台一致）不带 `embedded-webview`：它的宿主 WebView 在 Linux 上
+      # 无法随发布包提供（原因见 main/Cargo.toml）。`cargo test --all` 编的正是这个
+      # 默认形态，所以「显式打开该 feature」的那一半反而没有地方会编到 —— 在这里补一次
+      # check，免得它悄悄腐烂到有人真要用时才发现。
+      # 本步骤依赖 `script/install-linux.sh` 装上的 webkit2gtk-4.1 开发包。
+      - name: Check the opt-in embedded webview feature
+        if: ${{ matrix.platform == 'linux' }}
+        run: |
+          set -euo pipefail
+          cargo check -p ai_chat_view --features embedded-webview --tests
+          cargo check -p main --features embedded-webview
       - name: Test Windows
         if: ${{ matrix.platform == 'windows' }}
         shell: pwsh

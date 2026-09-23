@@ -176,8 +176,14 @@
 - 若无明确要求，则按当前任务所需执行最小准备，不做额外环境工程。
 - macOS 上 `reqwest` 默认系统代理探测可能在测试进程里触发
   `system-configuration` 的 NULL object panic；应用内需要“无应用代理”的
-  HTTP client 时，优先使用 `ReqwestClient::user_agent("onetcli")` 这类显式
+  HTTP client 时，使用 `ReqwestClient::user_agent_direct("onetcli")` 这类显式
   direct client 构造路径，并用相关 `setting_tab`/CLI 测试验证。
+- **默认客户端跟随系统/环境变量代理（2026-09-22 起）**：`ReqwestClient::user_agent` 不再强制
+  `.no_proxy()`，它跟随操作系统的系统代理与 `ALL_PROXY`/`HTTP_PROXY`/`HTTPS_PROXY`
+  （gpui-pre `fork-0.3.111` 起；此前该路径被改成 direct，导致「浏览器能上网、navop 登录报
+  `error sending request`」——用户把代理开在系统代理里，navop 却直连）。`proxy.enabled = false`
+  的语义因此是「交给系统/环境变量代理」而不是「直连」。需要强制直连时用 `user_agent_direct`。
+  排查该类问题的顺序见 skill `navop-cloud-login-network-diagnose`。
 
 ### Command Verification Rules
 
@@ -560,7 +566,7 @@
 - **触发信号**：想把 `main/src/shell_plugin_host` + `shell_plugin_tab` 之类“插件机制”抽出到新 crate，却发现 host 依赖 `UniversalPluginService`、`GlobalTabContainer`、headless `ExtensionConnectionTab` 等仍在 main 里的符号，而 Rust 库 crate 无法 `use main`（bin）。
 - **根因 / 约束**：迁移对象只要引用了任何仍留在 main 的类型，就必须把它们一起搬出或先下沉到 crate，否则必然双向依赖。`shell_plugc`…具体到 Navop：`shell_plugin_host/shell_plugin_tab/universal_plugins/extension_connection_tab/extension_connection_form` 是一整簇互相 `crate::` 引用的单元，`cx.global::<GlobalTabContainer>()` 这类 app 级 tab 打开入口是所有 UI 共同的硬依赖，只能把 `GlobalTabContainer`（仅 `Entity<TabContainer>` 包装）下沉到 `one_core::tab_container`，不能反向注入。
 - **正确做法**：整簇 5 个模块一次搬入新 crate（`crates/universal-plugins`），功能开关用 crate 自带 `shell-plugins` optional dep feature 表达（main 的 `shell-plugins` 改为 `["universal-plugins/shell-plugins"]`）。该 feature 自 2026-09-15 起列入 `main` 的 `default`，所以默认构建就带 Shell 页；`crates/universal-plugins` 自身仍保持 `default = []`（给它也设 default 反而会让 `main --no-default-features` 漏进 Shell 页，因为该开关只能关掉当前被选中包的 default）。feature off 时 crate 内这簇为空。搬移时把 `pub(crate)`→`pub` 只改 main 真实消费的边界（global 类型、load/service/open_connection/resource_connection/register_headless_tab 与 `ConnectionShellOpen` 字段），簇内引用 `crate::` 路径在新 crate 里解析位置不变，多数文件零改动。main 侧只改 import 路径。
-- **验证方式**：双态验证默认构建 `cargo check -p main`（含 shell-plugins）与关闭态 `cargo check -p main --no-default-features --features wasm-components,embedded-webview,windows-native-rdp`，各带 `--tests`；`cargo clippy -p universal-plugins --features shell-plugins --all-targets`；`cargo test -p universal-plugins --features shell-plugins`。改共享契约（如 `BindingContext` 加字段）后两态都要跑：漏编发生在关闭态一侧（feature 未开时整个 `shell_plugin_host` 不参与编译），只跑默认构建会漏掉它。
+- **验证方式**：双态验证默认构建 `cargo check -p main`（含 shell-plugins）与关闭态 `cargo check -p main --no-default-features --features wasm-components,windows-native-rdp`，各带 `--tests`；`cargo clippy -p universal-plugins --features shell-plugins --all-targets`；`cargo test -p universal-plugins --features shell-plugins`。改共享契约（如 `BindingContext` 加字段）后两态都要跑：漏编发生在关闭态一侧（feature 未开时整个 `shell_plugin_host` 不参与编译），只跑默认构建会漏掉它。（注意 `main` 的默认集自 2026-09-22 起不含 `embedded-webview`，它已改为全平台 opt-in，原因见 `main/Cargo.toml`。）
 - **适用范围**：`crates/universal-plugins`、`main/src/{home_strategy,home_tab/connection_forms,new_connection/form_page,navop_app,file_open,extension_update,home/home_tabs}`、`crates/core/src/tab_container.rs`，以及任何计划从 main 抽 UI 逻辑到新 crate 的后续重构。
 
 - **标题**：View 内联渲染自己的引用方会造成 GPUI 实体租约重入 panic

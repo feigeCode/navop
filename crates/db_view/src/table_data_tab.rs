@@ -40,7 +40,6 @@ pub struct TableDataTabContent {
     database_name: String,
     schema_name: Option<String>,
     table_name: String,
-    focus_handle: FocusHandle,
     _data_grid_sub: Option<Subscription>,
 }
 
@@ -72,7 +71,6 @@ impl TableDataTabContent {
         let data_grid =
             cx.new(|cx| DataGrid::new(config, Some(params.execution_history.clone()), window, cx));
         let content = cx.new(|cx| CellPreviewHost::new(data_grid.clone(), window, cx));
-        let focus_handle = cx.focus_handle();
         let data_grid_sub = cx.subscribe_in(
             &data_grid,
             window,
@@ -92,7 +90,6 @@ impl TableDataTabContent {
                 .map(|schema| schema.trim().to_string())
                 .filter(|schema| !schema.is_empty()),
             table_name: params.table_name,
-            focus_handle,
             _data_grid_sub: Some(data_grid_sub),
         }
     }
@@ -105,8 +102,14 @@ impl Render for TableDataTabContent {
 }
 
 impl Focusable for TableDataTabContent {
-    fn focus_handle(&self, _cx: &App) -> FocusHandle {
-        self.focus_handle.clone()
+    /// 焦点直接落到网格内部的表格上。
+    ///
+    /// 页签容器在新建/激活页签时会 `focus(content.focus_handle())`。如果这里
+    /// 返回页签外壳自己的句柄，焦点路径里就没有 `EditTable` 键盘上下文，
+    /// 表格内查找（Cmd/Ctrl+F）以及方向键、复制粘贴等快捷键全部派发不到，
+    /// 表现为「浏览表时按 Cmd/Ctrl+F 没反应」。
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        self.data_grid.read(cx).table_focus_handle(cx)
     }
 }
 
@@ -230,7 +233,6 @@ impl Clone for TableDataTabContent {
             database_name: self.database_name.clone(),
             schema_name: self.schema_name.clone(),
             table_name: self.table_name.clone(),
-            focus_handle: self.focus_handle.clone(),
             _data_grid_sub: None,
         }
     }

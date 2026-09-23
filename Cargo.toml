@@ -334,30 +334,30 @@ xml5ever = { opt-level = 3 }
 # path patch (dev workstation only), re-run
 # `script/migrate-to-git-fork.py --path`.
 [patch.crates-io]
-gpui-pre                   = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.110" }
-gpui-pre-apple             = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.110" }
-gpui-pre-collections       = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.110" }
-gpui-pre-derive-refineable = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.110" }
-gpui-pre-http-client       = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.110" }
-gpui-pre-http-client-tls   = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.110" }
-gpui-pre-linux             = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.110" }
-gpui-pre-macos             = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.110" }
-gpui-pre-macros            = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.110" }
-gpui-pre-perf              = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.110" }
-gpui-pre-platform          = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.110" }
-gpui-pre-refineable        = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.110" }
-gpui-pre-reqwest-client    = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.110" }
-gpui-pre-scheduler         = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.110" }
-gpui-pre-shared-string     = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.110" }
-gpui-pre-sum-tree          = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.110" }
-gpui-pre-util              = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.110" }
-gpui-pre-util-macros       = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.110" }
-gpui-pre-web               = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.110" }
-gpui-pre-wgpu              = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.110" }
-gpui-pre-windows           = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.110" }
-gpui-pre-zlog              = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.110" }
-gpui-pre-ztracing          = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.110" }
-gpui-pre-ztracing-macro    = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.110" }
+gpui-pre                   = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.114" }
+gpui-pre-apple             = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.114" }
+gpui-pre-collections       = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.114" }
+gpui-pre-derive-refineable = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.114" }
+gpui-pre-http-client       = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.114" }
+gpui-pre-http-client-tls   = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.114" }
+gpui-pre-linux             = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.114" }
+gpui-pre-macos             = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.114" }
+gpui-pre-macros            = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.114" }
+gpui-pre-perf              = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.114" }
+gpui-pre-platform          = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.114" }
+gpui-pre-refineable        = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.114" }
+gpui-pre-reqwest-client    = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.114" }
+gpui-pre-scheduler         = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.114" }
+gpui-pre-shared-string     = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.114" }
+gpui-pre-sum-tree          = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.114" }
+gpui-pre-util              = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.114" }
+gpui-pre-util-macros       = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.114" }
+gpui-pre-web               = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.114" }
+gpui-pre-wgpu              = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.114" }
+gpui-pre-windows           = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.114" }
+gpui-pre-zlog              = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.114" }
+gpui-pre-ztracing          = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.114" }
+gpui-pre-ztracing-macro    = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.114" }
 # <<< local gpui-pre patch <<<
 
 # gpui-shell binds quickjs via the `quickjs-jit` fork directly, while
@@ -368,3 +368,12 @@ gpui-pre-ztracing-macro    = { git = "https://github.com/feigeCode/gpui-pre.git"
 # workspace are ignored by cargo. Mirrors the same entry in gpui-component's
 # workspace root, pinned to the same revision as the gpui dependencies above.
 rquickjs = { git = "https://github.com/feigeCode/gpui-kit", rev = "23c8e5b787baa06b08a84e1d3f80c241eb07fc0b" }
+
+# Legacy devices (e.g. Huawei VRP gear) put redundant leading `0x00` bytes in the
+# RSA exponent/modulus of their `ssh-rsa` host key, which RFC 4251 § 5 forbids but
+# OpenSSH tolerates when reading a peer's message. Without this patch the whole
+# host key fails to parse and the connection dies with
+# `SshKey: \`mpint\` encoding invalid`. Fork of RustCrypto/SSH carrying tag
+# `ssh-encoding/v0.3.0-navop.1`; drop once the change lands upstream.
+# Regression test: crates/ssh/tests/legacy_hostkey_mpint.rs
+ssh-encoding = { git = "https://github.com/feigeCode/SSH.git", tag = "ssh-encoding/v0.3.0-navop.1" }

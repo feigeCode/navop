@@ -711,6 +711,27 @@ impl SettingsPanel {
                         )
                         .item(
                             SettingItem::new(
+                                t!("Settings.General.Font.sql_editor_hover_enabled"),
+                                SettingField::switch(
+                                    |cx: &App| {
+                                        AppSettings::global(cx).sql_editor_hover_enabled
+                                    },
+                                    |value: bool, cx: &mut App| {
+                                        AppSettings::update_and_save(cx, |settings| {
+                                            settings.sql_editor_hover_enabled = value;
+                                        });
+                                        cx.refresh_windows();
+                                    },
+                                )
+                                .default_value(default_settings.sql_editor_hover_enabled),
+                            )
+                            .description(
+                                t!("Settings.General.Font.sql_editor_hover_enabled_desc")
+                                    .to_string(),
+                            ),
+                        )
+                        .item(
+                            SettingItem::new(
                                 t!("Settings.General.Font.table_preview_font_family"),
                                 SettingField::scrollable_dropdown(
                                     font_options.clone(),
@@ -2864,6 +2885,13 @@ const TAB_SHORTCUTS: &[ShortcutEntry] = &[
         system_hotkey: false,
     },
     ShortcutEntry {
+        keys_macos: &["cmd-shift-w"],
+        keys_other: &["alt-shift-w"],
+        label_key: "Settings.Shortcuts.close_active_tab",
+        action_id: Some(action_id::APP_CLOSE_ACTIVE_TAB),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
         keys_macos: &["ctrl-tab"],
         keys_other: &["ctrl-tab"],
         label_key: "Settings.Shortcuts.switch_next_tab",
@@ -3118,6 +3146,27 @@ const TABLE_SHORTCUTS: &[ShortcutEntry] = &[
         keys_other: &["escape"],
         label_key: "Settings.Shortcuts.table_cancel",
         action_id: Some(action_id::TABLE_CANCEL),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["cmd-f"],
+        keys_other: &["ctrl-f"],
+        label_key: "Settings.Shortcuts.table_find",
+        action_id: Some(action_id::TABLE_FIND),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["cmd-g"],
+        keys_other: &["ctrl-g"],
+        label_key: "Settings.Shortcuts.table_find_next",
+        action_id: Some(action_id::TABLE_FIND_NEXT),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["cmd-shift-g"],
+        keys_other: &["ctrl-shift-g"],
+        label_key: "Settings.Shortcuts.table_find_previous",
+        action_id: Some(action_id::TABLE_FIND_PREVIOUS),
         system_hotkey: false,
     },
 ];
@@ -3655,6 +3704,24 @@ mod tests {
 
         assert_eq!(shortcut.keys_macos, &["cmd-w"]);
         assert_eq!(shortcut.keys_other, &["ctrl-shift-w"]);
+        assert!(!shortcut.keys_macos.contains(&"ctrl-d"));
+        assert!(!shortcut.keys_other.contains(&"ctrl-d"));
+    }
+
+    #[test]
+    fn close_active_tab_shortcut_avoids_single_ctrl_letter_defaults() {
+        let shortcut = super::TAB_SHORTCUTS
+            .iter()
+            .find(|entry| {
+                entry.action_id == Some(one_core::keybindings::action_id::APP_CLOSE_ACTIVE_TAB)
+            })
+            .expect("close active tab shortcut");
+
+        assert_eq!(shortcut.keys_macos, &["cmd-shift-w"]);
+        assert_eq!(shortcut.keys_other, &["alt-shift-w"]);
+        assert_eq!("Settings.Shortcuts.close_active_tab", shortcut.label_key);
+        assert!(!shortcut.keys_macos.contains(&"ctrl-w"));
+        assert!(!shortcut.keys_other.contains(&"ctrl-w"));
         assert!(!shortcut.keys_macos.contains(&"ctrl-d"));
         assert!(!shortcut.keys_other.contains(&"ctrl-d"));
     }
@@ -4285,8 +4352,12 @@ mod tests {
         assert!(proxy_url.is_none());
     }
 
+    /// 关闭应用内代理时，navop 不传自己的代理，而是把代理决定权交回客户端：
+    /// `ReqwestClient::user_agent` 会跟随系统代理与环境变量代理（与浏览器一致），
+    /// 因此这里断言的是「navop 自己没有指定代理」，不是「不走任何代理」。
+    /// 需要强制直连时应改用 `ReqwestClient::user_agent_direct`。
     #[test]
-    fn build_app_http_client_uses_no_app_proxy_when_proxy_disabled() {
+    fn build_app_http_client_defers_to_system_proxy_when_proxy_disabled() {
         let settings = GlobalProxySettings {
             enabled: false,
             host: "127.0.0.1".to_string(),

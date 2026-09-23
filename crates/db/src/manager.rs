@@ -346,6 +346,35 @@ impl DatabaseIdentity {
     }
 }
 
+/// 空闲期被中间设备丢弃的 TCP 连接不会回包：任何验证/关闭网络调用都必须有界，
+/// 否则复用或退出路径会永久挂起（issue：长时间挂机后查询转圈、关不掉）。
+pub(crate) mod network_deadline {
+    use std::future::Future;
+    use std::time::Duration;
+
+    use crate::connection::DbError;
+
+    /// 复用前 ping 的上限；超时即判死，直接丢弃会话。
+    pub(crate) const VALIDATE_PING_TIMEOUT: Duration = Duration::from_secs(10);
+    /// 关闭连接的上限；超时放弃优雅断开，等 socket drop 强制回收。
+    pub(crate) const DISCONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+    /// 包装一次空闲期网络调用，超时映射为连接错误而不是永久挂起。
+    pub(crate) async fn bound(
+        what: &'static str,
+        timeout: Duration,
+        fut: impl Future<Output = Result<(), DbError>>,
+    ) -> Result<(), DbError> {
+        match tokio::time::timeout(timeout, fut).await {
+            Ok(result) => result,
+            Err(_) => Err(DbError::connection(format!(
+                "{what} timed out after {}s (connection likely dropped while idle)",
+                timeout.as_secs()
+            ))),
+        }
+    }
+}
+
 impl ConnectionSession {
     fn new(
         connection: Box<dyn DbConnection + Send + Sync>,
@@ -450,13 +479,20 @@ impl ConnectionSession {
     /// Takes the connection lock, so the caller must not hold the session table lock.
     /// Returns `Ok(false)` when the live database no longer matches `config`, in which
     /// case the refreshed identity is kept so the next loop can pick another candidate.
+    ///
+    /// 空闲期死连接的 ping 永远不回包，必须按超时判死，由调用方丢弃会话。
     async fn validate_reuse(&self, config: &DbConnectionConfig) -> Result<bool, DbError> {
         let connection = self.lock_connection().await;
         self.refresh_identity(&**connection);
         if !self.can_serve(config) {
             return Ok(false);
         }
-        connection.ping().await?;
+        network_deadline::bound(
+            "reuse ping",
+            network_deadline::VALIDATE_PING_TIMEOUT,
+            connection.ping(),
+        )
+        .await?;
         Ok(true)
     }
 
@@ -487,10 +523,20 @@ impl ConnectionSession {
     }
 
     async fn close(&self) {
-        if let Err(e) = self.lock_connection().await.disconnect().await {
-            error!("Failed to disconnect session {}: {}", self.session_id, e);
-        } else {
-            info!("Closed session: {}", self.session_id);
+        let mut connection = self.lock_connection().await;
+        let disconnect = connection.disconnect();
+        let outcome =
+            tokio::time::timeout(network_deadline::DISCONNECT_TIMEOUT, disconnect).await;
+        match outcome {
+            Ok(Ok(())) => info!("Closed session: {}", self.session_id),
+            Ok(Err(e)) => error!("Failed to disconnect session {}: {}", self.session_id, e),
+            // 死连接的优雅断开不会回包：放弃等待，锁随 guard drop 释放，
+            // socket 由驱动在 drop 时强制回收。
+            Err(_) => warn!(
+                "Disconnect of session {} timed out after {}s; abandoning graceful close",
+                self.session_id,
+                network_deadline::DISCONNECT_TIMEOUT.as_secs()
+            ),
         }
     }
 }
@@ -4102,6 +4148,8 @@ mod tests {
         streaming_started: Option<Arc<AtomicBool>>,
         streaming_dropped: Option<Arc<AtomicBool>>,
         streaming_results: Option<Vec<SqlResult>>,
+        /// 模拟空闲期被中间设备丢弃的 TCP 连接：任何网络调用永远挂起。
+        dead_socket: bool,
     }
 
     impl MockConnection {
@@ -4117,6 +4165,7 @@ mod tests {
                 streaming_started: None,
                 streaming_dropped: None,
                 streaming_results: None,
+                dead_socket: false,
             }
         }
 
@@ -4136,6 +4185,14 @@ mod tests {
                 streaming_started: None,
                 streaming_dropped: None,
                 streaming_results: None,
+                dead_socket: false,
+            }
+        }
+
+        fn with_dead_socket(config: DbConnectionConfig) -> Self {
+            Self {
+                dead_socket: true,
+                ..Self::new(config, true)
             }
         }
 
@@ -4154,6 +4211,7 @@ mod tests {
                 streaming_started: None,
                 streaming_dropped: None,
                 streaming_results: None,
+                dead_socket: false,
             }
         }
 
@@ -4172,6 +4230,7 @@ mod tests {
                 streaming_started: None,
                 streaming_dropped: None,
                 streaming_results: None,
+                dead_socket: false,
             }
         }
 
@@ -4192,6 +4251,7 @@ mod tests {
                 streaming_started: None,
                 streaming_dropped: None,
                 streaming_results: None,
+                dead_socket: false,
             }
         }
 
@@ -4212,6 +4272,7 @@ mod tests {
                 streaming_started: Some(streaming_started),
                 streaming_dropped: Some(streaming_dropped),
                 streaming_results: None,
+                dead_socket: false,
             }
         }
 
@@ -4230,6 +4291,7 @@ mod tests {
                 streaming_started: None,
                 streaming_dropped: None,
                 streaming_results: Some(streaming_results),
+                dead_socket: false,
             }
         }
     }
@@ -4622,6 +4684,10 @@ mod tests {
         }
 
         async fn disconnect(&mut self) -> Result<(), DbError> {
+            if self.dead_socket {
+                std::future::pending::<()>().await;
+                unreachable!("dead socket disconnect must be timed out by the caller");
+            }
             self.disconnect_count.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
@@ -4652,6 +4718,10 @@ mod tests {
         }
 
         async fn query(&self, query: &str) -> Result<SqlResult, DbError> {
+            if self.dead_socket {
+                std::future::pending::<()>().await;
+                unreachable!("dead socket query must be timed out by the caller");
+            }
             if self.healthy {
                 Ok(SqlResult::Exec(ExecResult {
                     sql: query.to_string(),
@@ -6028,6 +6098,55 @@ mod tests {
 
         assert!(acquired.is_none());
         assert!(remaining.is_empty());
+    }
+
+    /// 空闲期被中间设备丢弃的连接：复用时的 ping 永远不返回。
+    /// 复用路径必须在有界时间内判死并丢弃会话，而不是永远等待。
+    #[tokio::test]
+    async fn try_acquire_session_times_out_a_hung_ping_and_discards_the_session() {
+        let manager =
+            ConnectionManager::with_config(Duration::from_secs(300), Duration::from_secs(1800));
+        let config = test_config("dead-socket");
+        let session = ConnectionSession::new(
+            Box::new(MockConnection::with_dead_socket(config.clone())),
+            "dead-socket:session:1".to_string(),
+            false,
+        );
+
+        manager
+            .sessions
+            .write()
+            .await
+            .entry(config.id.clone())
+            .or_default()
+            .push(Arc::new(session));
+
+        let acquired = tokio::time::timeout(
+            Duration::from_secs(20),
+            manager.try_acquire_session(&config),
+        )
+        .await
+        .expect("reuse validation must not hang on a dead socket")
+        .unwrap();
+        let remaining = manager.list_sessions(&config.id).await;
+
+        assert!(acquired.is_none());
+        assert!(remaining.is_empty(), "dead session must be discarded");
+    }
+
+    /// 关闭挂死的连接也必须有界：清理/退出路径不能被一个不回包的 disconnect 卡住。
+    #[tokio::test]
+    async fn close_times_out_a_hung_disconnect() {
+        let config = test_config("dead-socket-close");
+        let session = ConnectionSession::new(
+            Box::new(MockConnection::with_dead_socket(config.clone())),
+            "dead-socket-close:session:1".to_string(),
+            false,
+        );
+
+        tokio::time::timeout(Duration::from_secs(20), session.close())
+            .await
+            .expect("closing a dead socket must be bounded");
     }
 
     #[tokio::test]

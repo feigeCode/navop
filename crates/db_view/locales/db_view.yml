@@ -303,9 +303,9 @@ ConnectionForm:
     zh-CN: 数据库文件路径
     zh-HK: 資料庫檔案路徑
   workspace:
-    en: Workspace
-    zh-CN: 工作区
-    zh-HK: 工作區
+    en: Group
+    zh-CN: 分组
+    zh-HK: 分組
   cloud_sync:
     en: Cloud Sync
     zh-CN: 云同步
@@ -1374,6 +1374,22 @@ Query:
     en: Run Statement at Cursor
     zh-CN: 运行当前光标的语句
     zh-HK: 執行目前游標的語句
+  show_hover_details:
+    en: Show Details
+    zh-CN: 查看对象详情
+    zh-HK: 查看物件詳情
+  copy_hover_ddl:
+    en: Copy DDL
+    zh-CN: 复制 DDL
+    zh-HK: 複製 DDL
+  ddl_copied:
+    en: DDL copied to clipboard
+    zh-CN: DDL 已复制到剪贴板
+    zh-HK: DDL 已複製到剪貼簿
+  no_hover_details_at_cursor:
+    en: No database object details at the cursor
+    zh-CN: 光标处没有可查看的数据库对象详情
+    zh-HK: 游標處沒有可查看的資料庫物件詳情
   please_select_sql_to_run:
     en: Please select SQL to run
     zh-CN: 请先选中要运行的 SQL
@@ -1466,6 +1482,10 @@ Query:
     en: Transaction command failed
     zh-CN: 事务控制命令执行失败
     zh-HK: 交易控制命令執行失敗
+  transaction_terminated_by_disconnect:
+    en: "Transaction was terminated by a dropped connection; the server rolled it back"
+    zh-CN: 连接已断开，事务已被服务器回滚终止
+    zh-HK: 連線已斷開，交易已被伺服器回滾終止
   transaction_control_unavailable:
     en: Transaction command is unavailable for this database
     zh-CN: 当前数据库不支持该事务控制命令
@@ -2599,9 +2619,21 @@ TableDataGrid:
     zh-CN: 刷新
     zh-HK: 重新整理
   search_placeholder:
-    en: Search current page
-    zh-CN: 搜索当前页
-    zh-HK: 搜尋當前頁
+    en: Find in table...
+    zh-CN: 在表格中查找...
+    zh-HK: 在表格中尋找...
+  search_no_match:
+    en: No results
+    zh-CN: 无结果
+    zh-HK: 無結果
+  search_next:
+    en: Next match
+    zh-CN: 下一个匹配
+    zh-HK: 下一個符合
+  search_previous:
+    en: Previous match
+    zh-CN: 上一个匹配
+    zh-HK: 上一個符合
   add_row:
     en: Add Row
     zh-CN: 添加行
@@ -2626,6 +2658,22 @@ TableDataGrid:
     en: Open table designer
     zh-CN: 打开表设计
     zh-HK: 開啟表設計
+  column_visibility:
+    en: Filter fields
+    zh-CN: 字段过滤
+    zh-HK: 欄位過濾
+  column_visibility_hint:
+    en: Choose fields to display
+    zh-CN: 选择要显示的字段
+    zh-HK: 選擇要顯示的欄位
+  show_all_columns:
+    en: Show all fields
+    zh-CN: 显示全部字段
+    zh-HK: 顯示全部欄位
+  unnamed_column:
+    en: (unnamed field)
+    zh-CN: （未命名字段）
+    zh-HK: （未命名欄位）
   large_text_editor:
     en: Large Text Editor
     zh-CN: 大文本编辑器

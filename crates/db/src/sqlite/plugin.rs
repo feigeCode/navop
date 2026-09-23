@@ -752,6 +752,29 @@ impl DatabasePlugin for SqlitePlugin {
         "rowid"
     }
 
+    async fn table_supports_rowid_projection(
+        &self,
+        connection: &dyn DbConnection,
+        database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<bool> {
+        // WITHOUT ROWID 表、视图与部分虚拟表没有 rowid 伪列，
+        // 直接投影会让整条预览 SQL 报 no such column 而整页空白。
+        // 探测一次，不可用则回退到普通 SELECT *。
+        let table_ref = self.format_table_reference(database, schema, table);
+        let probe = format!(
+            "SELECT {} FROM {} LIMIT 0",
+            self.rowid_column_name(),
+            table_ref
+        );
+        // SQLite 连接在 SQL 错误时返回 Ok(SqlResult::Error)，只有 Query 才代表 rowid 可用
+        Ok(matches!(
+            connection.query(&probe).await,
+            Ok(SqlResult::Query(_))
+        ))
+    }
+
     fn sql_dialect(&self) -> Box<dyn sqlparser::dialect::Dialect> {
         Box::new(sqlparser::dialect::SQLiteDialect {})
     }

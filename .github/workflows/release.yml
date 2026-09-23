@@ -16,9 +16,7 @@ on:
           - macos-arm64
           - macos-x64
           - linux-x64
-          - linux-x64-portable
           - linux-arm64
-          - linux-arm64-portable
           - windows-x64
           - windows-x86
       build_mode:
@@ -131,23 +129,23 @@ jobs:
           RELEASE_PLATFORM: ${{ inputs.platform }}
         run: |
           set -euo pipefail
-          macos_arm64='{"target":"aarch64-apple-darwin","os":"macos-latest","binary":"navop","archive":"navop-aarch64-apple-darwin.tar.gz","public_label":"macos-arm64","variant":"standard","arm_linux":false,"windows_native_rdp":false,"portable_linux":false}'
-          macos_x64='{"target":"x86_64-apple-darwin","os":"macos-15-intel","binary":"navop","archive":"navop-x86_64-apple-darwin.tar.gz","public_label":"macos-x64","variant":"standard","arm_linux":false,"windows_native_rdp":false,"portable_linux":false}'
-          linux_x64='{"target":"x86_64-unknown-linux-gnu","os":"ubuntu-latest","binary":"navop","archive":"navop-x86_64-unknown-linux-gnu.tar.gz","public_label":"linux-x64","variant":"standard","arm_linux":false,"windows_native_rdp":false,"portable_linux":false}'
-          linux_x64_portable='{"target":"x86_64-unknown-linux-gnu","os":"ubuntu-22.04","binary":"navop","archive":"navop-x86_64-unknown-linux-gnu-portable.tar.gz","public_label":"linux-x64-portable","variant":"portable","arm_linux":false,"windows_native_rdp":false,"portable_linux":true}'
-          linux_arm64='{"target":"aarch64-unknown-linux-gnu","os":"ubuntu-24.04-arm","binary":"navop","archive":"navop-aarch64-unknown-linux-gnu.tar.gz","public_label":"linux-arm64","variant":"standard","arm_linux":true,"windows_native_rdp":false,"portable_linux":false}'
-          linux_arm64_portable='{"target":"aarch64-unknown-linux-gnu","os":"ubuntu-24.04-arm","binary":"navop","archive":"navop-aarch64-unknown-linux-gnu-portable.tar.gz","public_label":"linux-arm64-portable","variant":"portable","arm_linux":true,"windows_native_rdp":false,"portable_linux":true}'
-          windows_x64='{"target":"x86_64-pc-windows-msvc","os":"windows-latest","binary":"navop.exe","archive":"navop-x86_64-pc-windows-msvc.zip","public_label":"windows-x64","variant":"standard","arm_linux":false,"windows_native_rdp":true,"portable_linux":false,"windows_arch":"x64"}'
-          windows_x86='{"target":"i686-pc-windows-msvc","os":"windows-latest","binary":"navop.exe","archive":"navop-i686-pc-windows-msvc.zip","public_label":"win32","variant":"standard","arm_linux":false,"windows_native_rdp":true,"portable_linux":false,"windows_arch":"x86"}'
+          # Linux ships one package per architecture. It is built with
+          # cargo-zigbuild against glibc 2.28 so it also runs on hosts that
+          # predate the runner image, and the Mesa stack it may need is a
+          # separate dependency archive rather than a second app package.
+          macos_arm64='{"target":"aarch64-apple-darwin","os":"macos-latest","binary":"navop","archive":"navop-aarch64-apple-darwin.tar.gz","public_label":"macos-arm64","arm_linux":false,"windows_native_rdp":false}'
+          macos_x64='{"target":"x86_64-apple-darwin","os":"macos-15-intel","binary":"navop","archive":"navop-x86_64-apple-darwin.tar.gz","public_label":"macos-x64","arm_linux":false,"windows_native_rdp":false}'
+          linux_x64='{"target":"x86_64-unknown-linux-gnu","os":"ubuntu-latest","binary":"navop","archive":"navop-x86_64-unknown-linux-gnu.tar.gz","public_label":"linux-x64","arm_linux":false,"windows_native_rdp":false}'
+          linux_arm64='{"target":"aarch64-unknown-linux-gnu","os":"ubuntu-24.04-arm","binary":"navop","archive":"navop-aarch64-unknown-linux-gnu.tar.gz","public_label":"linux-arm64","arm_linux":true,"windows_native_rdp":false}'
+          windows_x64='{"target":"x86_64-pc-windows-msvc","os":"windows-latest","binary":"navop.exe","archive":"navop-x86_64-pc-windows-msvc.zip","public_label":"windows-x64","arm_linux":false,"windows_native_rdp":true,"windows_arch":"x64"}'
+          windows_x86='{"target":"i686-pc-windows-msvc","os":"windows-latest","binary":"navop.exe","archive":"navop-i686-pc-windows-msvc.zip","public_label":"win32","arm_linux":false,"windows_native_rdp":true,"windows_arch":"x86"}'
 
           case "$RELEASE_PLATFORM" in
-            all) matrix="[$macos_arm64,$macos_x64,$linux_x64,$linux_x64_portable,$linux_arm64,$linux_arm64_portable,$windows_x64,$windows_x86]" ;;
+            all) matrix="[$macos_arm64,$macos_x64,$linux_x64,$linux_arm64,$windows_x64,$windows_x86]" ;;
             macos-arm64) matrix="[$macos_arm64]" ;;
             macos-x64) matrix="[$macos_x64]" ;;
-            linux-x64) matrix="[$linux_x64,$linux_x64_portable]" ;;
-            linux-x64-portable) matrix="[$linux_x64_portable]" ;;
-            linux-arm64) matrix="[$linux_arm64,$linux_arm64_portable]" ;;
-            linux-arm64-portable) matrix="[$linux_arm64_portable]" ;;
+            linux-x64) matrix="[$linux_x64]" ;;
+            linux-arm64) matrix="[$linux_arm64]" ;;
             windows-x64) matrix="[$windows_x64]" ;;
             windows-x86) matrix="[$windows_x86]" ;;
             *) echo "::error::Unsupported platform: $RELEASE_PLATFORM"; exit 1 ;;
@@ -155,7 +153,7 @@ jobs:
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
   build:
-    name: Build (${{ matrix.target }} / ${{ matrix.variant }})
+    name: Build (${{ matrix.target }})
     needs: prepare
     strategy:
       fail-fast: false
@@ -260,8 +258,8 @@ jobs:
           $nasmDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           nasm -v
 
-      - name: Install Zig toolchain (portable Linux)
-        if: matrix.portable_linux
+      - name: Install Zig toolchain (Linux)
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           set -euo pipefail
@@ -271,14 +269,6 @@ jobs:
           echo "CARGO_ZIGBUILD_PYTHON_PATH=$RUNNER_TEMP/ziglang/bin/python" >> "$GITHUB_ENV"
           "$RUNNER_TEMP/ziglang/bin/python" -m ziglang version
           cargo-zigbuild --version
-
-      - name: Install portable packaging dependencies
-        if: matrix.portable_linux
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y binutils musl-tools
 
       - name: Configure MSVC environment
         if: runner.os == 'Windows'
@@ -339,13 +329,21 @@ jobs:
           echo "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-}"
           echo "CARGO_PROFILE_RELEASE_LTO=${CARGO_PROFILE_RELEASE_LTO:-}"
           echo "CARGO_PROFILE_RELEASE_CODEGEN_UNITS=${CARGO_PROFILE_RELEASE_CODEGEN_UNITS:-}"
-          if [ "${{ matrix.portable_linux }}" = "true" ]; then
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            # The glibc 2.28 target is what makes the single Linux package run on
+            # hosts that predate the runner image; the dependency archive is
+            # built against the same baseline.
+            #
+            # No platform overrides the feature set: the default set is the one
+            # shape all three platforms ship, and it leaves `embedded-webview`
+            # out (see main/Cargo.toml). The HTML preview host on Linux is
+            # WebKitGTK 4.1, which cannot be provided with the package, and an
+            # in-app HTML preview that works on two platforms but not the third
+            # is not worth a second shape to test and release.
             cargo zigbuild \
               --release \
               -p main \
-              --target "${{ matrix.target }}.2.28" \
-              --no-default-features \
-              --features wasm-components,shell-plugins
+              --target "${{ matrix.target }}.2.28"
           else
             cargo build --release -p main --target "${{ matrix.target }}"
           fi
@@ -398,8 +396,11 @@ jobs:
           # 32 位 Windows 暂不支持 shell-plugins：其 gpui-shell 依赖的
           # quickjs-jit 运行时代码与 cranelift 后端仅支持 64 位
           # (x86_64/aarch64)，i686 无法编译。win32 构建先剔除该 feature。
+          # 这是唯一一处显式写 feature 列表的地方，内容是「默认集减去 shell-plugins」，
+          # 所以不要在这里补回 `embedded-webview`：默认集本身已经不带它了
+          # （见 main/Cargo.toml），补回来会让 win32 成为唯一的另一种形态。
           $features = if ($target -eq "i686-pc-windows-msvc") {
-            @("--no-default-features", "--features", "wasm-components,embedded-webview,windows-native-rdp")
+            @("--no-default-features", "--features", "wasm-components,windows-native-rdp")
           } else {
             @("--features", "windows-native-rdp")
           }
@@ -414,8 +415,8 @@ jobs:
             throw "Release binary was not created: '$binary'"
           }
 
-      - name: Verify portable Linux glibc baseline
-        if: matrix.portable_linux
+      - name: Verify Linux glibc baseline
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           set -euo pipefail
@@ -472,18 +473,8 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf package
-
-          if [ "${{ matrix.portable_linux }}" = "true" ]; then
-            script/package-linux-portable.sh \
-              --binary "target/${{ matrix.target }}/release/${{ matrix.binary }}" \
-              --output package \
-              --launcher-source script/linux-portable-launcher.c \
-              --target "${{ matrix.target }}" \
-              --glibc-baseline "2.28"
-          else
-            mkdir -p package/usr/bin
-            cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" package/usr/bin/
-          fi
+          mkdir -p package/usr/bin
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" package/usr/bin/
 
           mkdir -p package/usr/share/applications
           mkdir -p package/usr/share/mime/packages
@@ -505,14 +496,55 @@ jobs:
             -C package .
           cp "${{ matrix.archive }}" "${PUBLIC_BASENAME}.tar.gz"
 
+          # Portable variant: the very same binary plus the marker file the
+          # application looks for next to the executable. With the marker
+          # present Navop keeps config, state and cache under ./data instead of
+          # the host user directories, so the extracted directory can be moved
+          # around as a whole. External dependencies are still required, exactly
+          # like the regular package.
+          # Keep this in sync with PORTABLE_MARKER_FILE in
+          # crates/core/src/app_paths.rs; script/test-release-packaging.mjs
+          # asserts the two never drift apart.
+          PORTABLE_MARKER_FILE="navop.portable"
+          rm -rf portable-package
+          mkdir -p portable-package
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" portable-package/
+          : > "portable-package/${PORTABLE_MARKER_FILE}"
+          tar \
+            --sort=name \
+            --mtime='UTC 1970-01-01' \
+            --owner=0 \
+            --group=0 \
+            --numeric-owner \
+            -czf "${PUBLIC_BASENAME}-portable.tar.gz" \
+            -C portable-package .
+
+      - name: Package Linux GPU dependency stack
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The Mesa software renderer and the X11/Wayland client libraries ship
+          # as a separate dependency archive rather than inside this package, so
+          # the download stays small for hosts that already render. It is built
+          # against the same glibc 2.28 baseline as the binary above, because the
+          # host loader resolves the collected libraries directly.
+          script/package-linux-gpu-stack-docker.sh \
+            --binary "target/${{ matrix.target }}/release/${{ matrix.binary }}" \
+            --target "${{ matrix.target }}" \
+            --output dist-gpu-stack
+          # Publish it under the same versioned public name as every other
+          # asset, so a download page cannot mistake it for an unversioned file.
+          cp dist-gpu-stack/navop-gpu-stack-linux-*.tar.gz "${PUBLIC_BASENAME}-gpu-stack.tar.gz"
+
       - name: Install Linux packaging dependencies
-        if: matrix.target == 'x86_64-unknown-linux-gnu' && !matrix.portable_linux
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
           sudo apt-get update
           sudo apt-get install -y rpm
 
       - name: Package Linux installers (x86_64)
-        if: matrix.target == 'x86_64-unknown-linux-gnu' && !matrix.portable_linux
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
         shell: bash
         run: |
           set -euo pipefail
@@ -682,7 +714,6 @@ jobs:
             -ExpectedLanguage 1033
 
       - name: Upload artifact
-        if: matrix.variant == 'standard'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.archive }}
@@ -694,6 +725,8 @@ jobs:
           name: navop-${{ matrix.public_label }}-packages
           path: |
             navop-*-${{ matrix.public_label }}.tar.gz
+            navop-*-${{ matrix.public_label }}-portable.tar.gz
+            navop-*-${{ matrix.public_label }}-gpu-stack.tar.gz
             navop-*-${{ matrix.public_label }}.dmg
             navop-*-${{ matrix.public_label }}.zip
             navop-*-${{ matrix.public_label }}-portable.zip
@@ -702,7 +735,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload Linux installer artifacts
-        if: matrix.target == 'x86_64-unknown-linux-gnu' && !matrix.portable_linux
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
         uses: actions/upload-artifact@v4
         with:
           name: navop-linux-x86_64-installers

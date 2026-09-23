@@ -859,9 +859,9 @@ Home:
     zh-CN: 钥匙串
     zh-HK: 鑰匙串
   personal_sync_conflict_workspace:
-    en: Workspace
-    zh-CN: 工作区
-    zh-HK: 工作區
+    en: Group
+    zh-CN: 分组
+    zh-HK: 分組
   personal_sync_conflict_local:
     en: "Local: %{record}"
     zh-CN: "本地: %{record}"
@@ -2557,6 +2557,14 @@ Settings:
         en: Adjust the SQL editor font size independently (8-72)
         zh-CN: 单独调整 SQL 编辑器字体大小（8-72）
         zh-HK: 單獨調整 SQL 編輯器字型大小（8-72）
+      sql_editor_hover_enabled:
+        en: SQL Editor Hover Details
+        zh-CN: SQL 编辑器悬停显示对象详情
+        zh-HK: SQL 編輯器懸停顯示物件詳情
+      sql_editor_hover_enabled_desc:
+        en: Show table/column details after the pointer rests on an identifier for a moment
+        zh-CN: 鼠标在表名/列名上停留片刻后显示详情（右键菜单可随时查看）
+        zh-HK: 滑鼠在表名/列名上停留片刻後顯示詳情（右鍵選單可隨時查看）
       table_preview_font_family:
         en: Table Preview Font
         zh-CN: 表预览字体
@@ -3993,6 +4001,10 @@ Settings:
       en: Duplicate Tab
       zh-CN: 复制标签页
       zh-HK: 複製標籤頁
+    close_active_tab:
+      en: Close Tab
+      zh-CN: 关闭当前标签页
+      zh-HK: 關閉目前標籤頁
     quick_open:
       en: Quick Open Connection
       zh-CN: 快速打开连接
@@ -4125,6 +4137,18 @@ Settings:
       en: Cancel Selection
       zh-CN: 取消选择
       zh-HK: 取消選擇
+    table_find:
+      en: Find in Table
+      zh-CN: 表格内查找
+      zh-HK: 表格內尋找
+    table_find_next:
+      en: Find Next Match
+      zh-CN: 下一个匹配
+      zh-HK: 下一個符合
+    table_find_previous:
+      en: Find Previous Match
+      zh-CN: 上一个匹配
+      zh-HK: 上一個符合
     remote_editor_search:
       en: Search
       zh-CN: 搜索

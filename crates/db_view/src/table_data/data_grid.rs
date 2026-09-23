@@ -13,7 +13,9 @@ use gpui_component::{
     v_flex,
 };
 use one_assets::IconName;
-use one_ui::edit_table::{Column, EditTable, EditTableEvent, EditTableState};
+use one_ui::edit_table::{
+    Column, EditTable, EditTableEvent, EditTableState, FindNext, FindPrevious, HOSTED_FIND_CONTEXT,
+};
 use one_ui::{create_large_text_editor_with_content, large_text_values_equivalent};
 use rust_i18n::t;
 use rust_xlsxwriter::Workbook;
@@ -38,7 +40,7 @@ use db::{
 };
 use gpui_component::button::ButtonVariants;
 use gpui_component::dialog::DialogButtonProps;
-use gpui_component::menu::{DropdownMenu, PopupMenuItem};
+use gpui_component::menu::{DropdownMenu, PopupMenu, PopupMenuItem};
 use one_core::gpui_tokio::Tokio;
 use one_core::popup_window::{PopupWindowOptions, open_popup_window};
 use one_core::settings::{AppSettings, LargeTextCellEditorOpenMode};
@@ -56,6 +58,55 @@ actions!(
     data_grid,
     [Page500, Page1000, Page2000, Page10000, Page100000]
 );
+
+/// 构建「字段过滤」菜单：先给出“显示全部字段”快捷项，再按展示顺序列出每个字段。
+///
+/// 菜单在点击时构建，因此可以读到最新的列可见状态。
+fn build_column_visibility_menu(
+    menu: PopupMenu,
+    data_grid: &Entity<DataGrid>,
+    cx: &mut Context<PopupMenu>,
+) -> PopupMenu {
+    let entries = data_grid.read(cx).column_visibility_entries(cx);
+    let total = entries.len();
+    let visible_total = entries.iter().filter(|(_, _, visible)| *visible).count();
+
+    let reset_grid = data_grid.clone();
+    let mut menu = menu
+        .label(t!("TableDataGrid.column_visibility_hint").to_string())
+        .separator()
+        .item(
+            PopupMenuItem::new(t!("TableDataGrid.show_all_columns").to_string())
+                .checked(visible_total == total)
+                .disabled(visible_total == total)
+                .on_click(move |_, _window, cx| {
+                    reset_grid.update(cx, |grid, cx| grid.show_all_columns(cx));
+                }),
+        )
+        .separator();
+
+    for (original_ix, name, visible) in entries {
+        let label = if name.trim().is_empty() {
+            t!("TableDataGrid.unnamed_column").to_string()
+        } else {
+            name.to_string()
+        };
+        // 只剩最后一个可见字段时禁止继续隐藏，避免整表无列。
+        let is_last_visible = visible && visible_total <= 1;
+        let grid = data_grid.clone();
+        menu = menu.item(
+            PopupMenuItem::new(label)
+                .checked(visible)
+                .disabled(is_last_visible)
+                .on_click(move |_, _window, cx| {
+                    grid.update(cx, |grid, cx| {
+                        grid.toggle_column_visibility(original_ix, cx)
+                    });
+                }),
+        );
+    }
+    menu
+}
 
 fn build_header_order_by_clause(
     db_manager: &DbManager,
@@ -582,10 +633,10 @@ pub struct DataGrid {
     filter_editor: Entity<TableFilterEditor>,
     /// 过滤器事件订阅
     _filter_sub: Option<Subscription>,
-    /// 当前页本地搜索输入框
-    search_input: Entity<InputState>,
-    /// 搜索输入框事件订阅
-    _search_sub: Option<Subscription>,
+    /// 表内查找输入框（输入即高亮，计数与上下跳并排放在工具栏）
+    find_input: Entity<InputState>,
+    /// 查找输入框事件订阅
+    _find_sub: Option<Subscription>,
     /// 当前数据库 tab 的共享 SQL 执行记录
     execution_history: Option<Entity<ExecutionHistoryPanel>>,
     /// 侧边栏大文本编辑器是否已为当前表格打开
@@ -618,7 +669,7 @@ impl DataGrid {
         });
         let focus_handle = cx.focus_handle();
         let filter_editor = cx.new(|cx| TableFilterEditor::new(window, cx));
-        let search_input = cx.new(|cx| {
+        let find_input = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder(t!("TableDataGrid.search_placeholder").to_string())
                 .clean_on_escape()
@@ -632,16 +683,21 @@ impl DataGrid {
             table_data_info,
             filter_editor,
             _filter_sub: None,
-            search_input,
-            _search_sub: None,
+            find_input,
+            _find_sub: None,
             execution_history,
             is_large_text_editor_sidebar_open: false,
             data_generation: Arc::new(AtomicU64::new(0)),
         };
         result.bind_table_event(window, cx);
         if is_table_data {
+            // 表格数据页的查找输入框就在工具栏里（同页唯一一个搜索框），
+            // 表格自身不再浮出查找面板。
+            result
+                .table
+                .update(cx, |state, cx| state.set_find_hosted(true, cx));
             result.bind_filter_event(window, cx);
-            result.bind_search_event(window, cx);
+            result.bind_find_event(window, cx);
             result.load_data_with_clauses(1, cx);
         }
         result
@@ -651,7 +707,7 @@ impl DataGrid {
         let sub = cx.subscribe_in(
             &self.table,
             window,
-            |_this, _, evt: &EditTableEvent, _window, cx| match evt {
+            |this, _, evt: &EditTableEvent, window, cx| match evt {
                 EditTableEvent::SelectCell(row, col) => {
                     trace!("select cell: {:?}", (row, col));
                     cx.emit(DataGridEvent::LargeTextSelectionChanged);
@@ -659,6 +715,12 @@ impl DataGrid {
                 EditTableEvent::SelectionChanged(_) | EditTableEvent::CellEdited(_, _) => {
                     cx.emit(DataGridEvent::LargeTextSelectionChanged);
                 }
+                // 在表格里按 Cmd/Ctrl+F：输入框在工具栏这边，聚焦只能由宿主完成。
+                EditTableEvent::FindRequested => {
+                    focus_search_input(&this.find_input, window, cx);
+                }
+                // 命中计数与当前序号由表格算，这里只负责重新渲染工具栏。
+                EditTableEvent::FindStateChanged => cx.notify(),
                 _ => {}
             },
         );
@@ -679,26 +741,116 @@ impl DataGrid {
         self._filter_sub = Some(sub);
     }
 
-    fn bind_search_event(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// 工具栏查找框 → 表格内的命中高亮。
+    ///
+    /// 输入框只是入口：查询词、命中统计、当前序号与滚动都在表格状态里，
+    /// 表格算完通过 `EditTableEvent::FindStateChanged` 让这里重新渲染计数。
+    fn bind_find_event(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let sub = cx.subscribe_in(
-            &self.search_input,
+            &self.find_input,
             window,
             |this: &mut DataGrid, input, evt: &InputEvent, _window, cx| {
                 if let InputEvent::Change = evt {
                     let query = input.read(cx).text().to_string();
-                    this.apply_row_search_query(query, cx);
+                    this.table
+                        .update(cx, |state, cx| state.set_find_query(&query, cx));
+                    cx.notify();
                 }
             },
         );
-        self._search_sub = Some(sub);
+        self._find_sub = Some(sub);
     }
 
-    fn apply_row_search_query(&mut self, query: String, cx: &mut Context<Self>) {
-        self.table.update(cx, |state, cx| {
-            state.delegate_mut().set_row_search_query(query);
-            cx.notify();
-        });
+    /// 跳到下（上）一个命中。
+    fn goto_next_find_match(&mut self, cx: &mut Context<Self>) {
+        self.table.update(cx, |state, cx| state.find_next(cx));
         cx.notify();
+    }
+
+    fn goto_previous_find_match(&mut self, cx: &mut Context<Self>) {
+        self.table.update(cx, |state, cx| state.find_previous(cx));
+        cx.notify();
+    }
+
+    fn handle_find_next(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.goto_next_find_match(cx);
+    }
+
+    fn handle_find_previous(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.goto_previous_find_match(cx);
+    }
+
+    /// Cmd/Ctrl+G、Cmd/Ctrl+Shift+G 在查找框里也应当上下跳（见
+    /// [`HOSTED_FIND_CONTEXT`]）。
+    pub(crate) fn on_action_find_next(
+        &mut self,
+        _: &FindNext,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.goto_next_find_match(cx);
+    }
+
+    pub(crate) fn on_action_find_previous(
+        &mut self,
+        _: &FindPrevious,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.goto_previous_find_match(cx);
+    }
+
+    // ========== 字段（列）过滤 ==========
+
+    /// 当前所有列的展示名称与可见状态，供「字段过滤」菜单渲染。
+    pub fn column_visibility_entries(&self, cx: &App) -> Vec<(usize, SharedString, bool)> {
+        self.table.read(cx).delegate().column_visibility_entries()
+    }
+
+    /// 是否存在被隐藏的列。
+    pub fn has_hidden_columns(&self, cx: &App) -> bool {
+        self.table.read(cx).delegate().has_hidden_columns()
+    }
+
+    /// 切换某一列的可见性，成功后刷新表头与列布局。
+    pub fn toggle_column_visibility(&mut self, original_ix: usize, cx: &mut Context<Self>) {
+        let visible = self
+            .table
+            .read(cx)
+            .delegate()
+            .is_column_visible(original_ix);
+        self.set_column_visibility(original_ix, !visible, cx);
+    }
+
+    /// 显示全部列。
+    pub fn show_all_columns(&mut self, cx: &mut Context<Self>) {
+        let changed = self.table.update(cx, |state, cx| {
+            let changed = state.delegate_mut().show_all_columns();
+            if changed {
+                cx.notify();
+            }
+            changed
+        });
+        if changed {
+            self.table.update(cx, |state, cx| state.refresh(cx));
+            cx.notify();
+        }
+    }
+
+    fn set_column_visibility(&mut self, original_ix: usize, visible: bool, cx: &mut Context<Self>) {
+        let changed = self.table.update(cx, |state, cx| {
+            let changed = state
+                .delegate_mut()
+                .set_column_visible(original_ix, visible);
+            if changed {
+                cx.notify();
+            }
+            changed
+        });
+        if changed {
+            self.table.update(cx, |state, cx| state.refresh(cx));
+            cx.notify();
+        }
     }
 
     fn execution_context(&self) -> ExecutionContext {
@@ -739,7 +891,7 @@ impl DataGrid {
         cx: &mut Context<Self>,
     ) {
         if self.config.usage == DataGridUsage::TableData {
-            focus_search_input(&self.search_input, window, cx);
+            focus_search_input(&self.find_input, window, cx);
         }
     }
 
@@ -747,6 +899,15 @@ impl DataGrid {
 
     pub fn table(&self) -> &Entity<EditTableState<EditorTableDelegate>> {
         &self.table
+    }
+
+    /// 网格内部表格的焦点句柄。
+    ///
+    /// 表内查找（Cmd/Ctrl+F）等快捷键绑定在 `EditTable` 键盘上下文上，
+    /// 宿主页签激活时必须把焦点交给这个句柄，否则焦点停在页签外壳上，
+    /// `EditTable` 不在焦点路径里，按 Cmd/Ctrl+F 不会有任何反应。
+    pub fn table_focus_handle(&self, cx: &App) -> FocusHandle {
+        self.table.read(cx).table_focus_handle()
     }
 
     pub fn update_data(
@@ -790,6 +951,9 @@ impl DataGrid {
                 cx,
             );
             state.refresh(cx);
+            // 命中缓存按「显示行」存，换页/刷新后整批失效；查询框会跨页保留，
+            // 所以必须按当前查询词重扫一遍，否则高亮会留在错误的行上。
+            state.refresh_find(cx);
         });
     }
 
@@ -2906,10 +3070,99 @@ impl DataGrid {
 
     // ========== 渲染辅助方法 ==========
 
+    /// 「字段过滤」入口：按当前可见状态渲染每个字段的勾选项。
+    ///
+    /// 菜单在点击时构建，因此可以从捕获的实体读出最新列状态，避免缓存过期。
+    fn render_column_visibility_button(&self, cx: &Context<Self>) -> AnyElement {
+        let data_grid = cx.entity().clone();
+        let loading = self.table.read(cx).delegate().is_loading();
+        let has_hidden = self.table.read(cx).delegate().has_hidden_columns();
+
+        Button::new("column-visibility")
+            .with_size(Size::Medium)
+            .icon(IconName::Column)
+            .when(has_hidden, |this| this.primary())
+            .tooltip(t!("TableDataGrid.column_visibility").to_string())
+            .disabled(loading)
+            .dropdown_menu(move |menu, _window, cx| {
+                build_column_visibility_menu(menu, &data_grid, cx)
+            })
+            .into_any_element()
+    }
+
+    /// 工具栏里的查找框：输入即高亮命中，右侧并排给出计数与上下跳。
+    ///
+    /// 这是表数据页里唯一的搜索输入框——表格不再浮出查找面板，所以
+    /// 计数与导航必须和输入框同处一行。计数与当前序号都从表格状态读，
+    /// 保证「输入了什么」和「高亮了什么」永远是同一份数据。
+    fn render_find_bar(&self, cx: &Context<Self>) -> AnyElement {
+        let (total, current, has_query) = {
+            let table = self.table.read(cx);
+            (
+                table.find_total(),
+                table.find_current(),
+                !table.find_query().is_empty(),
+            )
+        };
+
+        let mut bar = h_flex()
+            .gap_1()
+            .items_center()
+            // 输入框在工具栏，不在表格的 `EditTable` 上下文下，这里补一份
+            // 上下跳绑定，让「在框里按 Cmd+G」与「在表格里按」行为一致。
+            .key_context(HOSTED_FIND_CONTEXT)
+            .on_action(cx.listener(Self::on_action_find_next))
+            .on_action(cx.listener(Self::on_action_find_previous))
+            .child(
+                div().w(px(200.)).child(
+                    Input::new(&self.find_input)
+                        .prefix(Icon::new(IconName::Search).text_color(cx.theme().muted_foreground))
+                        .cleanable(true)
+                        .w_full(),
+                ),
+            );
+
+        if has_query {
+            let counter: SharedString = if total == 0 {
+                t!("TableDataGrid.search_no_match").to_string().into()
+            } else {
+                format!("{}/{}", current.max(1).min(total), total).into()
+            };
+            bar = bar
+                .child(
+                    div()
+                        .min_w(px(48.))
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(counter),
+                )
+                .child(
+                    Button::new("find-previous")
+                        .with_size(Size::Small)
+                        .icon(IconName::ChevronUp)
+                        .tooltip(t!("TableDataGrid.search_previous").to_string())
+                        .disabled(total == 0)
+                        .on_click(cx.listener(Self::handle_find_previous)),
+                )
+                .child(
+                    Button::new("find-next")
+                        .with_size(Size::Small)
+                        .icon(IconName::ChevronDown)
+                        .tooltip(t!("TableDataGrid.search_next").to_string())
+                        .disabled(total == 0)
+                        .on_click(cx.listener(Self::handle_find_next)),
+                );
+        }
+
+        bar.into_any_element()
+    }
+
     pub fn render_toolbar(&self, _window: &mut Window, cx: &Context<Self>) -> AnyElement {
         let editable = self.config.editable;
         let loading = self.table.read(cx).delegate().is_loading();
         let data_grid = cx.entity().clone();
+        let find_bar =
+            (self.config.usage == DataGridUsage::TableData).then(|| self.render_find_bar(cx));
         let settings = cx.global::<AppSettings>();
         let large_text_button_selected = settings.large_text_cell_editor_open_mode
             == LargeTextCellEditorOpenMode::SidebarPreview
@@ -2982,18 +3235,8 @@ impl DataGrid {
                 )
             })
             .child(div().flex_1())
-            .when(self.config.usage == DataGridUsage::TableData, |this| {
-                this.child(
-                    div().w(px(220.)).child(
-                        Input::new(&self.search_input)
-                            .prefix(
-                                Icon::new(IconName::Search).text_color(cx.theme().muted_foreground),
-                            )
-                            .cleanable(true)
-                            .w_full(),
-                    ),
-                )
-            })
+            .child(self.render_column_visibility_button(cx))
+            .when_some(find_bar, |this, bar| this.child(bar))
             .when(
                 self.config.usage == DataGridUsage::TableData && editable,
                 |this| {
@@ -3345,8 +3588,8 @@ impl Clone for DataGrid {
             table_data_info: self.table_data_info.clone(),
             filter_editor: self.filter_editor.clone(),
             _filter_sub: None,
-            search_input: self.search_input.clone(),
-            _search_sub: None,
+            find_input: self.find_input.clone(),
+            _find_sub: None,
             execution_history: self.execution_history.clone(),
             is_large_text_editor_sidebar_open: self.is_large_text_editor_sidebar_open,
             data_generation: self.data_generation.clone(),
