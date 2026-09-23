@@ -205,6 +205,28 @@ fn highlight_shares_the_cell_content_box_with_the_td_content() {
 }
 
 #[test]
+fn the_current_match_cell_is_outlined_because_long_text_clips_the_highlight() {
+    let state = include_str!("../state.rs");
+    let start = state
+        .find("fn render_interactive_cell(")
+        .expect("interactive cell renderer");
+    let body = &state[start..];
+    let end = body
+        .find("\n    fn render_find_highlight(")
+        .expect("next method");
+    let body = &body[..end];
+
+    // 单元格是单行截断显示的（`nowrap` + `text_ellipsis`），命中落在截断区之后时
+    // 条带会被 `overflow_hidden` 整条裁掉，屏幕上再没有别的提示——所以必须给
+    // 「当前命中的单元格」整体描边，用户才看得出命中在哪个格子里。
+    assert!(body.contains("self.find_current_cell == Some((row_ix, col_ix))"));
+    // 描边与当前命中的条带同色系。
+    assert!(body.contains("find_highlight_color(cx.theme().selection, true)"));
+    // 描边必须是叠加绘制：走 `border_2` + padding 补偿那条路会让单元格内容跳动。
+    assert!(body.contains(".border_2()"));
+}
+
+#[test]
 fn highlight_element_looks_up_pixel_positions_by_byte_index() {
     let element = include_str!("element.rs");
 

@@ -8,8 +8,8 @@ use std::{
 use super::filter_state::FilterState;
 use super::find::{
     FindHighlightElement, FindMatch, FindOutcome, HighlightSegment, SearchPanel,
-    SearchPanelEvent, mark_current_match_at, normalize_find_query, resolve_find,
-    row_highlight_ranges, row_matches, scroll_target_for_match,
+    SearchPanelEvent, find_highlight_color, mark_current_match_at, normalize_find_query,
+    resolve_find, row_highlight_ranges, row_matches, scroll_target_for_match,
 };
 use super::selection::{CellCoord, TableSelection};
 use super::*;
@@ -271,6 +271,13 @@ pub struct EditTableState<D: EditTableDelegate> {
     find_outcome: FindOutcome,
     /// 当前命中的显示行
     find_current_row: Option<usize>,
+    /// 当前命中所在的单元格（显示行，`col_groups` 列坐标）。
+    ///
+    /// 单元格是「单行截断」显示的（`overflow_hidden` + `text_ellipsis`），
+    /// 而高亮的横向位置按整行文本算，可以远超单元格宽度——命中落在截断区
+    /// 之后时整条高亮会被裁掉，屏幕上一点提示都没有。所以导航时把命中的
+    /// 单元格记下来，渲染时给这个格子整体描边，用户才看得出是哪个格子。
+    find_current_cell: Option<(usize, usize)>,
     /// 当前命中在全部命中中的序号（从 1 开始，0 表示尚未开始导航）
     find_current_index: usize,
     /// 每行的命中区间缓存（显示行 -> 命中）
@@ -329,6 +336,7 @@ where
             _find_subscription: None,
             find_outcome: FindOutcome::default(),
             find_current_row: None,
+            find_current_cell: None,
             find_current_index: 0,
             find_rows: std::collections::HashMap::new(),
         };
@@ -1247,6 +1255,13 @@ where
         self.find_current_index
     }
 
+    /// 当前命中所在的单元格（显示行，`col_groups` 列坐标）。
+    ///
+    /// 没有命中或尚未导航时为 `None`。
+    pub fn find_current_cell(&self) -> Option<(usize, usize)> {
+        self.find_current_cell
+    }
+
     /// 打开查找并把焦点交给查询输入框。
     ///
     /// 已经在查找时重复按 Cmd/Ctrl+F 只重新聚焦，不清空已有查询词。
@@ -1293,6 +1308,7 @@ where
         self.find_rows.clear();
         self.find_outcome = FindOutcome::default();
         self.find_current_row = None;
+        self.find_current_cell = None;
         self.find_current_index = 0;
     }
 
@@ -1344,13 +1360,17 @@ where
         cx.notify();
     }
 
-    /// 把某个命中带到可见处：纵向滚到它的行，横向把它的列带进视口。
+    /// 把某个命中带到可见处：纵向滚到它的行，横向把它的列带进视口，
+    /// 并记下它是哪个单元格好让渲染层给它描边。
     ///
     /// 只滚行不滚列时，命中在视口右侧以外的列上就只会看到行在动、
-    /// 高亮始终停在屏幕之外。
+    /// 高亮始终停在屏幕之外；而记下单元格是为了应对「单元格长文本被截断、
+    /// 高亮整条被裁掉」的情况——那时屏幕上唯一还能指认位置的就是这个描边。
     fn focus_find_match(&mut self, row: usize, offset_in_row: usize, cx: &mut Context<Self>) {
         self.scroll_to_find_row(row, cx);
-        if let Some(col_group_ix) = self.find_column_of_match(row, offset_in_row, cx) {
+        let col_group_ix = self.find_column_of_match(row, offset_in_row, cx);
+        self.find_current_cell = col_group_ix.map(|col_ix| (row, col_ix));
+        if let Some(col_group_ix) = col_group_ix {
             self.ensure_col_visible(col_group_ix, cx);
         }
     }
@@ -2818,7 +2838,7 @@ where
         let highlight = self.render_find_highlight(row_ix, col_ix, window, cx);
         let content = self.measure_render_td(row_ix, col_ix, window, cx);
 
-        cell.child(
+        let mut cell = cell.child(
             h_flex()
                 .size_full()
                 .relative()
@@ -2830,7 +2850,27 @@ where
                         .child(highlight),
                 )
                 .child(content),
-        )
+        );
+
+        // 当前命中的单元格整体描边。
+        //
+        // 单元格是单行截断显示的（`nowrap` + `text_ellipsis`），命中落在截断区
+        // 之后时，上面那条高亮会被 `overflow_hidden` 整条裁掉——屏幕上再没有
+        // 任何提示，用户就判断不出命中在哪个格子里。描边用 absolute 叠加，不参与
+        // 布局，所以不会让单元格内容跳动。
+        if self.find_current_cell == Some((row_ix, col_ix)) {
+            let accent = find_highlight_color(cx.theme().selection, true);
+            cell = cell.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .border_2()
+                    .border_color(accent)
+                    .bg(accent.opacity(0.12)),
+            );
+        }
+
+        cell
     }
 
     /// 绘制该单元格内的查找命中高亮。
