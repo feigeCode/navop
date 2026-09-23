@@ -1134,9 +1134,17 @@ impl CwdEntryCache {
             .is_none_or(|loaded_at| loaded_at.elapsed() > CWD_ENTRY_CACHE_TTL)
     }
 
-    /// 异步刷新：在后台线程读取目录项，避免在 UI 线程同步 `read_dir`
-    /// 大目录造成鼠标悬停卡顿。扫描期间沿用旧缓存。
+    /// 刷新缓存：首次填充同步读取（悬停首发即命中），TTL 过期刷新走后台线程。
+    ///
+    /// 后台化只解决 UI 线程卡顿：目录切换后首次悬停同样同步读取，代价一次
+    /// `read_dir`（上限 [`CWD_ENTRY_CACHE_LIMIT`]），只在 TTL 到期后的刷新路径上
+    /// 才让出 UI 线程、旧缓存先垫着。
     fn refresh(&mut self, base_dir: &Path) {
+        if self.base_dir.is_none() {
+            self.load_sync(base_dir);
+            return;
+        }
+
         if self
             .pending
             .as_ref()
@@ -1163,11 +1171,16 @@ impl CwdEntryCache {
             Err(error) => {
                 // 线程创建失败时退化为同步读取，保证功能不缺席。
                 tracing::warn!("cwd 目录扫描线程创建失败，退化为同步读取: {error}");
-                self.base_dir = Some(base_dir.to_path_buf());
-                self.entries = read_dir_names(base_dir);
-                self.loaded_at = Some(Instant::now());
+                self.load_sync(base_dir);
             }
         }
+    }
+
+    /// 同步读取目录项并立即填充缓存。
+    fn load_sync(&mut self, base_dir: &Path) {
+        self.base_dir = Some(base_dir.to_path_buf());
+        self.entries = read_dir_names(base_dir);
+        self.loaded_at = Some(Instant::now());
     }
 
     /// 回收已完成的在途扫描结果；目录已切换时丢弃过期结果。
@@ -1849,13 +1862,26 @@ mod tests {
         fs::create_dir_all(&dir).expect("temp dir should be created");
         fs::write(dir.join("marker.txt"), b"x").expect("marker file should be created");
 
+        // 冷启动同步填充：首次悬停（以及既有测试的单次调用链）必须直接命中，
+        // 否则高亮会闪一拍。
         let mut cache = CwdEntryCache::default();
-        cache.refresh(&dir);
+        assert!(
+            cache.pending.is_none(),
+            "cold start should not spawn a scan"
+        );
+        assert!(cache.contains(&dir, "marker.txt"));
+        assert!(cache.pending.is_none());
 
-        // 刷新应立即返回（后台在途），而不是同步读完才返回。
+        // TTL 过期刷新走后台线程：refresh 立即返回，旧缓存先垫着。
+        cache.loaded_at = None;
+        cache.refresh(&dir);
         assert!(
             cache.pending.is_some(),
-            "refresh should hand off to a background scan"
+            "TTL refresh should hand off to a background scan"
+        );
+        assert!(
+            cache.contains(&dir, "marker.txt"),
+            "stale cache should still serve hits while a scan is in flight"
         );
 
         cache.wait_for_pending_for_tests();
