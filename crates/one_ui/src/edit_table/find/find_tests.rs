@@ -1,8 +1,9 @@
 //! 表格内查找的单元测试与结构契约
 
 use super::{
-    FindMatch, NULL_TEXT, normalize_find_query, resolve_find, row_highlight_ranges, row_matches,
-    row_text, scroll_target_for_match,
+    FindMatch, NULL_TEXT, char_index_to_byte_index, char_range_to_byte_range,
+    normalize_find_query, resolve_find, row_highlight_ranges, row_matches, row_text,
+    scroll_target_for_match,
 };
 use crate::edit_table::TableKeybindings;
 
@@ -152,27 +153,48 @@ fn default_find_shortcuts_follow_the_platform_convention() {
 }
 
 #[test]
-fn highlight_is_painted_under_the_cell_text() {
+fn highlight_shares_the_cell_content_box_with_the_td_content() {
     let state = include_str!("../state.rs");
     let start = state
-        .find("fn render_find_highlight(")
-        .expect("find highlight renderer");
+        .find("fn render_interactive_cell(")
+        .expect("interactive cell renderer");
     let body = &state[start..];
-    let end = body.find("\n    fn render_col_wrap(").expect("next method");
+    let end = body.find("\n    fn render_find_highlight(").expect("next method");
     let body = &body[..end];
 
-    assert!(body.contains("FindHighlightElement::new("));
-    assert!(body.contains("segment.char_range.start.max(cell_range.start)"));
-    assert!(body.contains("segment.char_range.end.min(cell_range.end)"));
+    // 高亮与 td 内容必须挂在同一个「内容区」盒子里（相对 `relative` 容器绝对定位）：
+    // 单元格 padding 会把内容推离 padding box，而高亮的横向原点取自自身 bounds，
+    // 不放在内容区里就会整条左移一个 padding 的宽度。
+    assert!(body.contains("self.render_find_highlight(row_ix, col_ix, window, cx)"));
+    assert!(body.contains("self.measure_render_td(row_ix, col_ix, window, cx)"));
+    assert!(body.contains(".relative()"));
+    assert!(body.contains(".inset_0()"));
 }
 
 #[test]
-fn highlight_element_uses_char_offsets_not_fixed_width() {
+fn highlight_element_looks_up_pixel_positions_by_byte_index() {
     let element = include_str!("element.rs");
 
-    // 按字符下标取真实像素位置，才能在中英文混排下对齐。
+    // gpui 的 x_for_index 按字节下标定位，所以必须先把字符区间换算成字节区间；
+    // 用固定字符宽度估算则会在中英文混排下错位。
     assert!(element.contains("x_for_index("));
+    assert!(element.contains("char_range_to_byte_range("));
     assert!(!element.contains("char_width *"));
+}
+
+#[test]
+fn char_offsets_are_converted_to_byte_offsets_for_layout_lookup() {
+    // "张三ab"：CJK 一字 3 字节，ASCII 一字 1 字节。
+    assert_eq!(0, char_index_to_byte_index("张三ab", 0));
+    assert_eq!(3, char_index_to_byte_index("张三ab", 1));
+    assert_eq!(6, char_index_to_byte_index("张三ab", 2));
+    assert_eq!(7, char_index_to_byte_index("张三ab", 3));
+    assert_eq!(8, char_index_to_byte_index("张三ab", 4));
+    // 越界（例如 to_lowercase 改变了字符数）退回文本末尾，不 panic。
+    assert_eq!(8, char_index_to_byte_index("张三ab", 99));
+
+    assert_eq!(6..7, char_range_to_byte_range("张三ab", 2..3));
+    assert_eq!(6..8, char_range_to_byte_range("张三ab", 2..4));
 }
 
 #[test]

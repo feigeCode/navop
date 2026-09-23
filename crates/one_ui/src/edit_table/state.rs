@@ -693,6 +693,20 @@ where
         &mut self.selection
     }
 
+    /// 表格内部接收键盘的焦点句柄。
+    ///
+    /// 宿主（页签、面板）在激活时应当把焦点交给它：`EditTable` 键盘上下文
+    /// 挂在表格自身节点上，焦点只落在宿主外壳时不在焦点路径里，
+    /// Cmd/Ctrl+F 这类表格快捷键会完全派发不到。
+    pub fn table_focus_handle(&self) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+
+    /// 表内查找面板是否已打开。
+    pub fn find_panel_open(&self) -> bool {
+        self.find_open
+    }
+
     /// 选择单个单元格（替换现有选区）
     pub fn select_cell(&mut self, row_ix: usize, col_ix: usize, cx: &mut Context<Self>) {
         self.selection.select_single((row_ix, col_ix));
@@ -2668,15 +2682,32 @@ where
             return cell;
         }
 
-        // 命中高亮画在文本下方，绝对定位于单元格内容区。
-        cell.child(self.render_find_highlight(row_ix, col_ix, window, cx))
-            .child(self.measure_render_td(row_ix, col_ix, window, cx))
+        // 高亮与 td 内容必须共用同一个坐标系：单元格的 padding 会把内容推离
+        // padding box，而高亮的横向原点取的是自身 bounds，所以两者要一起放进
+        // 「内容区」盒子里，否则整条高亮会左移一个 padding 的宽度。
+        let highlight = self.render_find_highlight(row_ix, col_ix, window, cx);
+        let content = self.measure_render_td(row_ix, col_ix, window, cx);
+
+        cell.child(
+            h_flex()
+                .size_full()
+                .relative()
+                .child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .overflow_hidden()
+                        .child(highlight),
+                )
+                .child(content),
+        )
     }
 
     /// 绘制该单元格内的查找命中高亮。
     ///
-    /// 命中区间是「整行文本」的字符坐标，所以这里按单元格在行内的
-    /// 起始偏移做平移，只把落在本单元格内的片段交给绘制元素。
+    /// 命中区间是「整行文本」的**字符**坐标，所以这里按单元格在行内的
+    /// 起始偏移做平移，只把落在本单元格内的片段交给绘制元素；
+    /// 字符 → 字节的换算由 [`super::find::highlight_bands`] 统一负责。
     fn render_find_highlight(
         &self,
         row_ix: usize,
@@ -2726,7 +2757,6 @@ where
             return div().into_any_element();
         }
 
-        let line_height = crate::table_row_height_or(cx, self.options.size.table_row_height());
         let font = window.text_style().font();
         let font_size = window.text_style().font_size.to_pixels(window.rem_size());
         let run = TextRun {
@@ -2738,20 +2768,15 @@ where
             strikethrough: None,
         };
 
-        div()
-            .absolute()
-            .inset_0()
-            .overflow_hidden()
-            .child(FindHighlightElement::new(
-                row_text,
-                font_size,
-                line_height,
-                cell_range,
-                std::rc::Rc::new(visible),
-                cx.theme().selection,
-                std::rc::Rc::new(vec![run]),
-            ))
-            .into_any_element()
+        FindHighlightElement::new(
+            row_text,
+            font_size,
+            cell_range,
+            std::rc::Rc::new(visible),
+            cx.theme().selection,
+            std::rc::Rc::new(vec![run]),
+        )
+        .into_any_element()
     }
 
     fn render_col_wrap(&self, col_ix: usize, _: &mut Window, cx: &mut Context<Self>) -> Div {
