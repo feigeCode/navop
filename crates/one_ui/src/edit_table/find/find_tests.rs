@@ -49,6 +49,27 @@ fn row_offsets_are_relative_to_the_whole_row_text() {
 }
 
 #[test]
+fn matches_remember_the_column_they_were_found_in() {
+    // 命中所在列必须随命中一起保留：导航到命中时靠它横向滚列，
+    // 否则命中在视口右侧以外的列上时，用户只看到行在动、高亮在屏幕外。
+    let second_column = row_matches(&cells(&["aa", "bb"]), "b");
+    assert_eq!(2, second_column.len());
+    assert!(
+        second_column
+            .iter()
+            .all(|cell_match| cell_match.col_ix == 1)
+    );
+
+    let first_column = row_matches(&cells(&["aa", "bb"]), "aa");
+    assert_eq!(0, first_column[0].col_ix);
+
+    // NULL 单元格的命中同样要带上它所在的列。
+    let null_cell = row_matches(&[Some("x".to_string()), None], "null");
+    assert_eq!(1, null_cell.len());
+    assert_eq!(1, null_cell[0].col_ix);
+}
+
+#[test]
 fn overlapping_needles_do_not_produce_overlapping_matches() {
     // "aa" 在 "aaa" 里只算一次命中，避免高亮区间交叠。
     assert_eq!(1, row_matches(&cells(&["aaa"]), "aa").len());
@@ -133,6 +154,18 @@ fn find_shortcuts_are_bound_in_the_edit_table_context() {
     assert!(source.contains("KeyBinding::new(key, Find, Some(CONTEXT))"));
     assert!(source.contains("KeyBinding::new(key, FindNext, Some(CONTEXT))"));
     assert!(source.contains("KeyBinding::new(key, FindPrevious, Some(CONTEXT))"));
+}
+
+#[test]
+fn hosted_find_bar_binds_the_same_navigation_shortcuts() {
+    let source = include_str!("../mod.rs");
+
+    // 宿主渲染的输入框要能复用同一份（可重绑的）上下跳键位。
+    assert!(source.contains("pub const HOSTED_FIND_CONTEXT: &str = \"EditTableHostedFind\";"));
+    assert!(source.contains("KeyBinding::new(key, FindNext, Some(HOSTED_FIND_CONTEXT))"));
+    assert!(source.contains("KeyBinding::new(key, FindPrevious, Some(HOSTED_FIND_CONTEXT))"));
+    assert!(source.contains("Some(HOSTED_FIND_CONTEXT),\n        FindNext,"));
+    assert!(source.contains("Some(HOSTED_FIND_CONTEXT),\n        FindPrevious,"));
 }
 
 #[test]

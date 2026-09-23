@@ -2611,9 +2611,21 @@ TableDataGrid:
     zh-CN: 刷新
     zh-HK: 重新整理
   search_placeholder:
-    en: Search current page
-    zh-CN: 搜索当前页
-    zh-HK: 搜尋當前頁
+    en: Find in table...
+    zh-CN: 在表格中查找...
+    zh-HK: 在表格中尋找...
+  search_no_match:
+    en: No results
+    zh-CN: 无结果
+    zh-HK: 無結果
+  search_next:
+    en: Next match
+    zh-CN: 下一个匹配
+    zh-HK: 下一個符合
+  search_previous:
+    en: Previous match
+    zh-CN: 上一个匹配
+    zh-HK: 上一個符合
   add_row:
     en: Add Row
     zh-CN: 添加行

@@ -74,6 +74,10 @@ pub fn resolve_find(
 pub struct FindMatch {
     /// 在单元格文本中的字符下标区间
     pub char_range: Range<usize>,
+    /// 该命中所在的数据列（显示层索引，不含行号列）。
+    ///
+    /// 导航到命中时需要把这一列横向滚进视口，所以列坐标必须随命中一起保留。
+    pub col_ix: usize,
     /// 该单元格在整行文本中的字符起点
     pub row_offset: usize,
     /// 是否为当前导航到的命中
@@ -90,10 +94,10 @@ pub fn row_matches(cells: &[Option<String>], query: &str) -> Vec<FindMatch> {
 
     let mut matches = Vec::new();
     let mut offset = 0usize;
-    for cell in cells {
+    for (col_ix, cell) in cells.iter().enumerate() {
         let text = cell_text(cell);
         let lowered: Vec<char> = text.to_lowercase().chars().collect();
-        matches.extend(collect_cell_matches(&lowered, query, offset));
+        matches.extend(collect_cell_matches(&lowered, query, col_ix, offset));
         offset += text.chars().count() + CELL_SEPARATOR_CHARS;
     }
     matches
@@ -114,7 +118,12 @@ fn cell_text(cell: &Option<String>) -> &str {
     cell.as_deref().unwrap_or(NULL_TEXT)
 }
 
-fn collect_cell_matches(lowered: &[char], query: &str, offset: usize) -> Vec<FindMatch> {
+fn collect_cell_matches(
+    lowered: &[char],
+    query: &str,
+    col_ix: usize,
+    offset: usize,
+) -> Vec<FindMatch> {
     let needle: Vec<char> = query.chars().collect();
     if needle.is_empty() || needle.len() > lowered.len() {
         return Vec::new();
@@ -126,6 +135,7 @@ fn collect_cell_matches(lowered: &[char], query: &str, offset: usize) -> Vec<Fin
         if lowered[index..index + needle.len()] == needle[..] {
             matches.push(FindMatch {
                 char_range: index..index + needle.len(),
+                col_ix,
                 row_offset: offset,
                 is_current: false,
             });

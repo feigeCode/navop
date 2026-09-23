@@ -8,8 +8,8 @@ use std::{
 use super::filter_state::FilterState;
 use super::find::{
     FindHighlightElement, FindMatch, FindOutcome, HighlightSegment, SearchPanel,
-    SearchPanelEvent, mark_current_match_at, resolve_find, row_highlight_ranges, row_matches,
-    scroll_target_for_match,
+    SearchPanelEvent, mark_current_match_at, normalize_find_query, resolve_find,
+    row_highlight_ranges, row_matches, scroll_target_for_match,
 };
 use super::selection::{CellCoord, TableSelection};
 use super::*;
@@ -73,6 +73,30 @@ fn cell_text_len(cell: &Option<String>) -> usize {
         .count()
 }
 
+/// 把某一列横向滚进视口所需的偏移量。
+///
+/// 列已经在视口内时返回 `None`（不动视口）；在左侧露出不足时只往左贴边、
+/// 在右侧时只往右贴边，不做居中——居中会让每次切换命中都整屏横移。
+/// 纵向的对应逻辑见 [`super::find::scroll_target_for_match`]。
+fn column_scroll_offset(
+    col_left: Pixels,
+    col_right: Pixels,
+    viewport_left: Pixels,
+    viewport_right: Pixels,
+    offset_x: Pixels,
+) -> Option<Pixels> {
+    if viewport_right <= viewport_left {
+        return None;
+    }
+    if col_left < viewport_left {
+        return Some(offset_x + (viewport_left - col_left));
+    }
+    if col_right > viewport_right {
+        return Some(offset_x + (viewport_right - col_right));
+    }
+    None
+}
+
 const SCROLLBAR_WIDTH: Pixels = px(16.);
 const COLUMN_SEPARATOR_WIDTH: Pixels = px(1.);
 
@@ -124,6 +148,10 @@ pub enum EditTableEvent {
         data: Vec<Vec<String>>,
         start: CellCoord,
     },
+    /// 宿主渲染查找输入框时，表格请求宿主把焦点交给它（Cmd/Ctrl+F）
+    FindRequested,
+    /// 查找状态（查询词、命中统计、当前命中）发生变化，宿主应重新渲染计数
+    FindStateChanged,
 }
 
 #[derive(Debug, Default)]
@@ -230,6 +258,14 @@ pub struct EditTableState<D: EditTableDelegate> {
     find_panel: Entity<SearchPanel>,
     /// 查找面板是否打开（打开后即使查询词为空也保持可见，等待输入）
     find_open: bool,
+    /// 查找输入框是否由宿主（例如数据网格工具栏）渲染。
+    ///
+    /// 为真时表格不再浮出查找面板，查询词由宿主通过
+    /// [`Self::set_find_query`] 送入，命中状态通过
+    /// [`EditTableEvent::FindStateChanged`] 通知宿主重新渲染。
+    find_hosted: bool,
+    /// 当前查询词（已规范化），是命中的唯一真源
+    find_query: String,
     _find_subscription: Option<Subscription>,
     /// 当前查找的命中统计
     find_outcome: FindOutcome,
@@ -288,6 +324,8 @@ where
             cell_bounds: std::collections::HashMap::new(),
             find_panel: find_panel.clone(),
             find_open: false,
+            find_hosted: false,
+            find_query: String::new(),
             _find_subscription: None,
             find_outcome: FindOutcome::default(),
             find_current_row: None,
@@ -596,16 +634,18 @@ where
         }
 
         let col_bounds = col_group.bounds;
-        let mut offset = self.horizontal_scroll_handle.offset();
-
-        if col_bounds.left() < viewport_left {
-            offset.x += viewport_left - col_bounds.left();
-        } else if col_bounds.right() > viewport_right {
-            offset.x += viewport_right - col_bounds.right();
-        } else {
+        let Some(offset_x) = column_scroll_offset(
+            col_bounds.left(),
+            col_bounds.right(),
+            viewport_left,
+            viewport_right,
+            self.horizontal_scroll_handle.offset().x,
+        ) else {
             return;
-        }
+        };
 
+        let mut offset = self.horizontal_scroll_handle.offset();
+        offset.x = offset_x;
         self.horizontal_scroll_handle.set_offset(offset);
     }
 
@@ -702,9 +742,12 @@ where
         self.focus_handle.clone()
     }
 
-    /// 表内查找面板是否已打开。
+    /// 查找面板是否已打开。
+    ///
+    /// 宿主自己渲染查找输入框时，表格不浮出面板，所以这里恒为 `false`——
+    /// 面板的输入框与宿主的输入框不可能同时存在。
     pub fn find_panel_open(&self) -> bool {
-        self.find_open
+        self.find_open && !self.find_hosted
     }
 
     /// 选择单个单元格（替换现有选区）
@@ -1162,7 +1205,49 @@ where
     // 表格内查找（Cmd/Ctrl+F）
     // ========================================================================
 
-    /// 打开查找面板并把焦点交给查询输入框。
+    /// 宿主自己渲染查找输入框（例如数据网格工具栏的搜索框）。
+    ///
+    /// 为真时表格不再浮出查找面板：
+    /// - 查询词经 [`Self::set_find_query`] 送入；
+    /// - 命中状态经 [`EditTableEvent::FindStateChanged`] 回报，宿主据此渲染计数；
+    /// - Cmd/Ctrl+F 经 [`EditTableEvent::FindRequested`] 请宿主聚焦它的输入框。
+    pub fn set_find_hosted(&mut self, hosted: bool, cx: &mut Context<Self>) {
+        if self.find_hosted == hosted {
+            return;
+        }
+        self.find_hosted = hosted;
+        cx.notify();
+    }
+
+    /// 宿主设置查询词（空串表示清空查找）。
+    ///
+    /// 面板渲染时的输入走 `SearchPanelEvent::QueryChanged`，这里只服务
+    /// 宿主渲染的输入框；两条路径都汇入 [`Self::apply_find_query`]，
+    /// 命中只按这里保存的查询词计算。
+    pub fn set_find_query(&mut self, raw: &str, cx: &mut Context<Self>) {
+        let query = normalize_find_query(raw);
+        if self.find_hosted {
+            self.find_open = !query.is_empty();
+        }
+        self.apply_find_query(query, cx);
+    }
+
+    /// 查询词（已规范化）。
+    pub fn find_query(&self) -> &str {
+        &self.find_query
+    }
+
+    /// 命中总数。
+    pub fn find_total(&self) -> usize {
+        self.find_outcome.total
+    }
+
+    /// 当前命中序号（从 1 开始，0 表示没有命中或尚未导航）。
+    pub fn find_current(&self) -> usize {
+        self.find_current_index
+    }
+
+    /// 打开查找并把焦点交给查询输入框。
     ///
     /// 已经在查找时重复按 Cmd/Ctrl+F 只重新聚焦，不清空已有查询词。
     fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1170,17 +1255,38 @@ where
             return;
         }
         self.find_open = true;
-        self.find_panel.update(cx, |panel, cx| panel.focus(window, cx));
+        if self.find_hosted {
+            // 输入框在宿主那边，焦点只能由宿主来给。
+            cx.emit(EditTableEvent::FindRequested);
+        } else {
+            self.find_panel.update(cx, |panel, cx| panel.focus(window, cx));
+        }
         cx.notify();
     }
 
-    /// 关闭查找面板并清除高亮与缓存。
+    /// 关闭查找并清除查询词、高亮与缓存。
     fn close_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.find_open = false;
+        self.find_query.clear();
         self.find_panel.update(cx, |panel, cx| panel.clear(window, cx));
         self.clear_find_state();
         self.focus_handle.focus(window, cx);
+        cx.emit(EditTableEvent::FindStateChanged);
         cx.notify();
+    }
+
+    /// 查询词变化后重算命中（查询词进入表格状态的唯一入口）。
+    fn apply_find_query(&mut self, query: String, cx: &mut Context<Self>) {
+        self.find_query = query;
+        self.refresh_find(cx);
+    }
+
+    /// 查找是否在进行中（有非空查询词）。
+    ///
+    /// 与 [`Self::find_panel_visible`] 不同：宿主渲染输入框时面板不显示，
+    /// 但 Cmd+G / Cmd+Shift+G 仍然应当跳到下（上）一个命中。
+    fn find_active(&self) -> bool {
+        !self.find_query.is_empty()
     }
 
     fn clear_find_state(&mut self) {
@@ -1191,9 +1297,9 @@ where
     }
 
     /// 跳到下一个命中（末尾回绕到第一个）。
-    fn find_next(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn find_next(&mut self, cx: &mut Context<Self>) {
         if self.find_rows.is_empty() {
-            self.refresh_find(window, cx);
+            self.refresh_find(cx);
         }
         let total = self.find_outcome.total;
         if total == 0 {
@@ -1204,13 +1310,13 @@ where
         } else {
             self.find_current_index + 1
         };
-        self.navigate_to_find_index(next, window, cx);
+        self.navigate_to_find_index(next, cx);
     }
 
     /// 跳到上一个命中（开头回绕到最后一个）。
-    fn find_previous(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn find_previous(&mut self, cx: &mut Context<Self>) {
         if self.find_rows.is_empty() {
-            self.refresh_find(window, cx);
+            self.refresh_find(cx);
         }
         let total = self.find_outcome.total;
         if total == 0 {
@@ -1221,25 +1327,38 @@ where
         } else {
             self.find_current_index - 1
         };
-        self.navigate_to_find_index(previous, window, cx);
+        self.navigate_to_find_index(previous, cx);
     }
 
     /// 按「第几个命中」定位：同行多个命中也能逐个走到。
-    fn navigate_to_find_index(
-        &mut self,
-        index: usize,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some((row, _)) = self.find_row_of_index(index) else {
+    fn navigate_to_find_index(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some((row, offset)) = self.find_row_of_index(index) else {
             return;
         };
         self.find_current_index = index;
         self.find_current_row = Some(row);
         self.find_panel
             .update(cx, |panel, cx| panel.set_current_match(index, cx));
-        self.scroll_to_find_row(row, cx);
+        self.focus_find_match(row, offset, cx);
+        cx.emit(EditTableEvent::FindStateChanged);
         cx.notify();
+    }
+
+    /// 把某个命中带到可见处：纵向滚到它的行，横向把它的列带进视口。
+    ///
+    /// 只滚行不滚列时，命中在视口右侧以外的列上就只会看到行在动、
+    /// 高亮始终停在屏幕之外。
+    fn focus_find_match(&mut self, row: usize, offset_in_row: usize, cx: &mut Context<Self>) {
+        self.scroll_to_find_row(row, cx);
+        if let Some(col_group_ix) = self.find_column_of_match(row, offset_in_row, cx) {
+            self.ensure_col_visible(col_group_ix, cx);
+        }
+    }
+
+    /// 命中所在列的 `col_groups` 坐标（数据列索引 + 行号列偏移）。
+    fn find_column_of_match(&self, row: usize, offset_in_row: usize, cx: &App) -> Option<usize> {
+        let cell_match = self.find_rows.get(&row)?.get(offset_in_row)?;
+        Some(cell_match.col_ix + self.first_data_col_ix(cx))
     }
 
     /// 把命中序号映射回（显示行，行内第几个命中）。
@@ -1275,30 +1394,40 @@ where
         cx: &mut Context<Self>,
     ) {
         match event {
-            SearchPanelEvent::QueryChanged(_) => self.refresh_find(window, cx),
-            SearchPanelEvent::NextMatch => self.find_next(window, cx),
-            SearchPanelEvent::PreviousMatch => self.find_previous(window, cx),
+            SearchPanelEvent::QueryChanged(query) => {
+                self.apply_find_query(query.clone().unwrap_or_default(), cx)
+            }
+            SearchPanelEvent::NextMatch => self.find_next(cx),
+            SearchPanelEvent::PreviousMatch => self.find_previous(cx),
             SearchPanelEvent::Dismissed => {
                 self.find_open = false;
+                self.find_query.clear();
                 self.clear_find_state();
                 self.focus_handle.focus(window, cx);
+                cx.emit(EditTableEvent::FindStateChanged);
                 cx.notify();
             }
         }
     }
 
     /// 重新扫描 delegate 的显示行，重建命中缓存并跳到第一个命中。
-    fn refresh_find(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    ///
+    /// 命中缓存是「显示行 -> 命中」，数据一换（翻页、刷新、重新查询）就整体
+    /// 失效；查询框会跨页保留，所以宿主替换数据后必须再调一次，否则高亮会落在
+    /// 错误的行上。空查询词时只清缓存，不扫表。
+    pub fn refresh_find(&mut self, cx: &mut Context<Self>) {
         self.clear_find_state();
 
-        if !self.delegate.find_in_table_enabled(cx) {
+        let query = self.find_query.clone();
+        if !self.delegate.find_in_table_enabled(cx) || query.is_empty() {
+            // 空查询不必扫全表，直接回到「没有命中」的状态。
             self.find_panel
                 .update(cx, |panel, cx| panel.set_outcome(FindOutcome::default(), cx));
+            cx.emit(EditTableEvent::FindStateChanged);
             cx.notify();
             return;
         }
 
-        let query = self.find_panel.read(cx).query(cx);
         let rows_count = self.delegate.rows_count(cx);
         let columns_count = self.delegate.columns_count(cx);
 
@@ -1325,10 +1454,8 @@ where
 
         // 有命中就直接停在第一个命中上，用户不必再按一次 Cmd+G。
         let first_index = usize::from(self.find_outcome.total > 0);
-        self.find_current_row = self
-            .find_row_of_index(first_index)
-            .map(|(row, _)| row);
         self.find_current_index = first_index;
+        self.find_current_row = self.find_row_of_index(first_index).map(|(row, _)| row);
 
         let outcome = self.find_outcome.clone();
         self.find_panel.update(cx, |panel, cx| {
@@ -1336,9 +1463,10 @@ where
             panel.set_current_match(first_index, cx);
         });
 
-        if let Some(row) = self.find_current_row {
-            self.scroll_to_find_row(row, cx);
+        if let Some((row, offset)) = self.find_row_of_index(first_index) {
+            self.focus_find_match(row, offset, cx);
         }
+        cx.emit(EditTableEvent::FindStateChanged);
         cx.notify();
     }
 
@@ -1370,9 +1498,11 @@ where
             .collect()
     }
 
-    /// 查找面板是否可见（打开态即算可见，与查询词是否为空无关）
+    /// 查找面板是否可见。
+    ///
+    /// 宿主渲染输入框时只有计数与导航留在宿主那边，表格不再浮出面板。
     fn find_panel_visible(&self, _cx: &App) -> bool {
-        self.find_open
+        self.find_panel_open()
     }
 
     fn fixed_left_cols_count(&self) -> usize {
@@ -1680,27 +1810,27 @@ where
     pub(super) fn action_find_next(
         &mut self,
         _: &FindNext,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.find_panel_visible(cx) {
+        if !self.find_active() {
             cx.propagate();
             return;
         }
-        self.find_next(window, cx);
+        self.find_next(cx);
     }
 
     pub(super) fn action_find_previous(
         &mut self,
         _: &FindPrevious,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.find_panel_visible(cx) {
+        if !self.find_active() {
             cx.propagate();
             return;
         }
-        self.find_previous(window, cx);
+        self.find_previous(cx);
     }
 
     pub(super) fn action_cancel(&mut self, _: &Cancel, window: &mut Window, cx: &mut Context<Self>) {
@@ -3591,6 +3721,46 @@ mod tests {
         assert_eq!(Some((0, 3)), data_column_selection_bounds(4, 0));
         assert_eq!(None, data_column_selection_bounds(0, 1));
         assert_eq!(None, data_column_selection_bounds(1, 1));
+    }
+
+    #[test]
+    fn column_already_in_view_keeps_the_horizontal_offset() {
+        // 视口 [100, 400]，列 [120, 220] 完全在视口内。
+        assert_eq!(
+            None,
+            column_scroll_offset(px(120.), px(220.), px(100.), px(400.), px(0.))
+        );
+    }
+
+    #[test]
+    fn column_left_of_the_viewport_moves_the_content_right() {
+        // 列整体在视口左侧 => 偏移量增加（内容右移）。
+        assert_eq!(
+            Some(px(40.)),
+            column_scroll_offset(px(60.), px(160.), px(100.), px(400.), px(0.))
+        );
+        // 已有偏移时是相对当前偏移叠加，不是直接覆盖。
+        assert_eq!(
+            Some(px(130.)),
+            column_scroll_offset(px(-60.), px(40.), px(0.), px(300.), px(70.))
+        );
+    }
+
+    #[test]
+    fn column_right_of_the_viewport_moves_the_content_left() {
+        // 列整体在视口右侧 => 偏移量减少（内容左移），只贴到右边缘。
+        assert_eq!(
+            Some(px(-200.)),
+            column_scroll_offset(px(400.), px(500.), px(0.), px(300.), px(0.))
+        );
+    }
+
+    #[test]
+    fn zero_width_viewport_never_scrolls() {
+        assert_eq!(
+            None,
+            column_scroll_offset(px(0.), px(10.), px(0.), px(0.), px(0.))
+        );
     }
 
     #[test]
