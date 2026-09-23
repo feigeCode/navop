@@ -962,6 +962,9 @@ pub struct AppSettings {
     pub sql_editor_font_family: String,
     #[serde(default = "default_sql_editor_font_size")]
     pub sql_editor_font_size: f64,
+    /// SQL 编辑器鼠标 hover 是否显示对象详情（需停留约 0.6s）。
+    #[serde(default = "default_sql_editor_hover_enabled")]
+    pub sql_editor_hover_enabled: bool,
     #[serde(default = "default_monospace_font_family")]
     pub table_preview_font_family: String,
     #[serde(default = "default_monospace_font_family")]
@@ -1133,6 +1136,11 @@ fn default_ui_scale_percent() -> u32 {
 
 fn default_sql_editor_font_size() -> f64 {
     14.0
+}
+
+/// hover 默认关闭：用户此前反馈鼠标滑过即弹详情太吵，需在设置里显式开启。
+fn default_sql_editor_hover_enabled() -> bool {
+    false
 }
 
 fn default_monospace_font_family() -> String {
@@ -1369,6 +1377,7 @@ impl Default for AppSettings {
             ui_scale_percent: default_ui_scale_percent(),
             sql_editor_font_family: default_monospace_font_family(),
             sql_editor_font_size: default_sql_editor_font_size(),
+            sql_editor_hover_enabled: default_sql_editor_hover_enabled(),
             table_preview_font_family: default_monospace_font_family(),
             terminal_font_family: default_monospace_font_family(),
             custom_fonts: Vec::new(),

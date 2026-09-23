@@ -2557,6 +2557,14 @@ Settings:
         en: Adjust the SQL editor font size independently (8-72)
         zh-CN: 单独调整 SQL 编辑器字体大小（8-72）
         zh-HK: 單獨調整 SQL 編輯器字型大小（8-72）
+      sql_editor_hover_enabled:
+        en: SQL Editor Hover Details
+        zh-CN: SQL 编辑器悬停显示对象详情
+        zh-HK: SQL 編輯器懸停顯示物件詳情
+      sql_editor_hover_enabled_desc:
+        en: Show table/column details after the pointer rests on an identifier for a moment
+        zh-CN: 鼠标在表名/列名上停留片刻后显示详情（右键菜单可随时查看）
+        zh-HK: 滑鼠在表名/列名上停留片刻後顯示詳情（右鍵選單可隨時查看）
       table_preview_font_family:
         en: Table Preview Font
         zh-CN: 表预览字体

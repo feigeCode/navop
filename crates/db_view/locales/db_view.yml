@@ -1378,6 +1378,14 @@ Query:
     en: Show Details
     zh-CN: 查看对象详情
     zh-HK: 查看物件詳情
+  copy_hover_ddl:
+    en: Copy DDL
+    zh-CN: 复制 DDL
+    zh-HK: 複製 DDL
+  ddl_copied:
+    en: DDL copied to clipboard
+    zh-CN: DDL 已复制到剪贴板
+    zh-HK: DDL 已複製到剪貼簿
   no_hover_details_at_cursor:
     en: No database object details at the cursor
     zh-CN: 光标处没有可查看的数据库对象详情

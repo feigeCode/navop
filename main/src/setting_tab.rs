@@ -711,6 +711,27 @@ impl SettingsPanel {
                         )
                         .item(
                             SettingItem::new(
+                                t!("Settings.General.Font.sql_editor_hover_enabled"),
+                                SettingField::switch(
+                                    |cx: &App| {
+                                        AppSettings::global(cx).sql_editor_hover_enabled
+                                    },
+                                    |value: bool, cx: &mut App| {
+                                        AppSettings::update_and_save(cx, |settings| {
+                                            settings.sql_editor_hover_enabled = value;
+                                        });
+                                        cx.refresh_windows();
+                                    },
+                                )
+                                .default_value(default_settings.sql_editor_hover_enabled),
+                            )
+                            .description(
+                                t!("Settings.General.Font.sql_editor_hover_enabled_desc")
+                                    .to_string(),
+                            ),
+                        )
+                        .item(
+                            SettingItem::new(
                                 t!("Settings.General.Font.table_preview_font_family"),
                                 SettingField::scrollable_dropdown(
                                     font_options.clone(),
