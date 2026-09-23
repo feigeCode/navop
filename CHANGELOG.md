@@ -4,6 +4,22 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.19.1] - 2026-09-24
+
+#### 修复与优化
+
+- 修复 Windows 下终端频繁卡顿的问题（git bash、PowerShell，操作后切换界面即卡、过会才恢复）。三个热点一并处理：存在高亮/搜索等装饰时每次重绘都整屏重建文本缓存，现在只重建装饰发生变化的行；自定义高亮规则不再每帧全屏扫描，改为只重扫本帧发生变化的行；本地终端悬停检测目录条目的同步读盘移到后台线程，不再阻塞 UI 线程。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.19.1) 下载桌面端安装包
+
+---
+
+#### Fixes and Improvements
+
+- Fixed terminals freezing frequently on Windows (git bash, PowerShell — stalling right after switching views, recovering after a while). Three hotspots are addressed together: whenever decorations such as highlights or search marks existed, every repaint rebuilt the entire text cache for the whole screen; now only the lines whose decorations actually changed are rebuilt. Custom highlight rules no longer rescan the full visible grid every frame — only lines damaged this frame are rescanned. And the directory-entry lookup for hover detection on local terminals moved its synchronous disk read to a background thread, off the UI thread.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.19.0...v0.19.1
+
 ## [v0.19.0] - 2026-09-23
 
 #### 更新内容
