@@ -1,7 +1,9 @@
 use super::clipboard::block_selection_text_from_term;
 use super::*;
+use crate::addon::TerminalDamageHint;
 use crate::terminal_element::LineMargin;
 use alacritty_terminal::sync::FairMutex;
+use alacritty_terminal::term::TermDamage;
 use terminal::line_timeline::SharedLineTimeline;
 
 /// 时间戳列宽（`[HH:MM:SS]`）
@@ -205,12 +207,21 @@ impl TerminalView {
             {
                 let display_offset = term.grid().display_offset();
                 let visible_lines = 0..term.screen_lines();
+                // 采集本帧 damage 快照分发给 addon（不消费 damage；
+                // RenderCache::update 内部仍会读取并复位）。
+                let damage = match term.damage() {
+                    TermDamage::Full => TerminalDamageHint::Full,
+                    TermDamage::Partial(lines) => {
+                        TerminalDamageHint::Partial(lines.map(|line| line.line).collect())
+                    }
+                };
                 let context = TerminalAddonFrameContext {
                     term,
                     visible_lines,
                     display_offset,
                     is_local,
                     base_dir: self.local_working_dir.as_deref(),
+                    damage,
                 };
                 self.addon_manager.dispatch_frame(&context);
             }
