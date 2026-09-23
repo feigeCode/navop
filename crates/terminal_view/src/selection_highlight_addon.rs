@@ -11,7 +11,9 @@ use gpui::{Hsla, hsla};
 use std::any::Any;
 use std::ops::Range;
 
-use crate::addon::{CellDecoration, DecorationSpan, TerminalAddon, TerminalAddonFrameContext};
+use crate::addon::{
+    CellDecoration, DecorationSpan, TerminalAddon, TerminalAddonFrameContext, TerminalDamageHint,
+};
 use terminal::pty_backend::GpuiEventProxy;
 
 /// 触发高亮的选中文本最大字符数，避免超长选区造成大面积误匹配
@@ -211,6 +213,7 @@ mod tests {
             display_offset: term.grid().display_offset(),
             is_local: false,
             base_dir: None,
+            damage: TerminalDamageHint::Full,
         }
     }
 

@@ -13,6 +13,7 @@ use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::ops::{Range, RangeInclusive};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex as StdMutex, mpsc};
 use std::time::{Duration, Instant};
 use url::Url;
 
@@ -26,7 +27,7 @@ const CWD_ENTRY_CACHE_LIMIT: usize = 2_000;
 // ============================================================================
 
 /// Cell decoration type - defines how to decorate terminal cells
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum CellDecoration {
     /// Background color decoration
     Background {
@@ -64,7 +65,7 @@ impl CellDecoration {
 }
 
 /// Decoration span - defines where a decoration applies
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct DecorationSpan {
     pub line: usize,             // Screen line number
     pub col_range: Range<usize>, // Column range
@@ -125,12 +126,26 @@ pub struct HoverUpdate {
     pub exclusive: bool,
 }
 
+/// 终端 damage 提示：告诉 addon 本帧哪些屏幕行发生了变化。
+///
+/// 行号是视口（屏幕）行索引，与 `RenderCache` 增量重建使用的坐标一致；
+/// 滚动、resize 等整屏变化统一上报 [`TerminalDamageHint::Full`]。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TerminalDamageHint {
+    /// 全部可见行都可能已变化。
+    Full,
+    /// 只有这些屏幕行发生了变化。
+    Partial(Vec<usize>),
+}
+
 pub struct TerminalAddonFrameContext<'a> {
     pub term: &'a Term<GpuiEventProxy>,
     pub visible_lines: Range<usize>,
     pub display_offset: usize,
     pub is_local: bool,
     pub base_dir: Option<&'a Path>,
+    /// 本帧 damage 快照；由渲染层在分发前统一采集（不消费、不复位 damage）。
+    pub damage: TerminalDamageHint,
 }
 
 // ============================================================================
@@ -906,6 +921,11 @@ fn search_match_decorations(
 pub struct CustomHighlightAddon {
     compiled_rules: Vec<CompiledHighlightRule>,
     cached_matches: Vec<CustomHighlightMatch>,
+    /// 上一帧的视口几何 (display_offset, columns, screen_lines)；
+    /// 几何变化时行内容整体移位，必须全量重扫。
+    last_geometry: Option<(usize, usize, usize)>,
+    /// 诊断/测试用：累计重扫的屏幕行数。
+    scanned_lines: u64,
 }
 
 impl CustomHighlightAddon {
@@ -913,12 +933,16 @@ impl CustomHighlightAddon {
         Self {
             compiled_rules: Vec::new(),
             cached_matches: Vec::new(),
+            last_geometry: None,
+            scanned_lines: 0,
         }
     }
 
     pub fn set_rules(&mut self, rules: &[TerminalHighlightRule]) {
         self.compiled_rules = compile_custom_highlight_rules(rules);
         self.cached_matches.clear();
+        // 规则变化后所有行的缓存匹配都不可信，下一帧强制全量重扫。
+        self.last_geometry = None;
     }
 
     fn detect_matches_in_line(&self, line_text: &str, line: usize) -> Vec<CustomHighlightMatch> {
@@ -975,41 +999,66 @@ impl TerminalAddon for CustomHighlightAddon {
         "custom_highlights"
     }
 
+    /// 增量扫描：只重扫本帧 damage 覆盖的屏幕行，其余行沿用缓存匹配。
+    ///
+    /// 之前的实现每帧清空并重扫全部可见行（逐 cell 拼串 + 全部规则正则），
+    /// 在内置高亮规则常驻命中的情况下，每次重绘都是一次全网格扫描。
     fn on_frame(&mut self, context: &TerminalAddonFrameContext) {
-        self.cached_matches.clear();
         if self.compiled_rules.is_empty() {
+            self.cached_matches.clear();
+            self.last_geometry = None;
             return;
         }
 
         let term = context.term;
-        let content = term.renderable_content();
-        let display_offset = content.display_offset;
-        let mut seen_lines = std::collections::HashSet::new();
+        let display_offset = context.display_offset;
+        let columns = term.columns();
+        let screen_lines = term.screen_lines();
+        let geometry = (display_offset, columns, screen_lines);
+        let geometry_changed = self.last_geometry != Some(geometry);
+        self.last_geometry = Some(geometry);
 
-        for cell in content.display_iter {
-            let screen_line = cell.point.line.0 + display_offset as i32;
-            if screen_line < 0 {
-                continue;
+        let scan_lines: Vec<usize> = match (&context.damage, geometry_changed) {
+            (TerminalDamageHint::Full, _) | (_, true) => (0..screen_lines).collect(),
+            (TerminalDamageHint::Partial(damaged), false) => {
+                let mut dirty: Vec<usize> = damaged
+                    .iter()
+                    .copied()
+                    .filter(|line| context.visible_lines.contains(line))
+                    .collect();
+                dirty.sort_unstable();
+                dirty.dedup();
+                dirty
             }
-            let line_idx = screen_line as usize;
+        };
 
-            if !context.visible_lines.contains(&line_idx) || seen_lines.contains(&line_idx) {
-                continue;
-            }
-            seen_lines.insert(line_idx);
+        // 几何收缩时清理越界行的旧匹配。
+        self.cached_matches
+            .retain(|matched| matched.line < screen_lines);
 
+        if scan_lines.is_empty() {
+            return;
+        }
+
+        let scan_set: HashSet<usize> = scan_lines.iter().copied().collect();
+        self.cached_matches
+            .retain(|matched| !scan_set.contains(&matched.line));
+        self.scanned_lines += scan_lines.len() as u64;
+
+        let mut new_matches = Vec::new();
+        for line_idx in scan_lines {
+            let grid_line = Line(line_idx as i32 - display_offset as i32);
             let grid = term.grid();
             let mut line_text = String::new();
-            for col in 0..term.columns() {
-                let cell = &grid[cell.point.line][Column(col)];
+            for col in 0..columns {
+                let cell = &grid[grid_line][Column(col)];
                 if cell.c != '\0' {
                     line_text.push(cell.c);
                 }
             }
-
-            self.cached_matches
-                .extend(self.detect_matches_in_line(&line_text, line_idx));
+            new_matches.extend(self.detect_matches_in_line(&line_text, line_idx));
         }
+        self.cached_matches.extend(new_matches);
     }
 
     fn provide_decorations(
@@ -1052,11 +1101,20 @@ pub struct HoveredPath {
     pub col_range: Range<usize>,
 }
 
+/// 在途的目录扫描任务：后台线程读目录项，结果经 channel 回收。
+#[derive(Clone, Debug)]
+struct PendingDirEntries {
+    base_dir: PathBuf,
+    receiver: Arc<StdMutex<mpsc::Receiver<HashSet<String>>>>,
+}
+
 #[derive(Clone, Debug, Default)]
 struct CwdEntryCache {
     base_dir: Option<PathBuf>,
     entries: HashSet<String>,
     loaded_at: Option<Instant>,
+    /// 正在后台扫描的目录；期间 `contains` 沿用旧缓存，不阻塞调用方。
+    pending: Option<PendingDirEntries>,
 }
 
 impl CwdEntryCache {
@@ -1064,6 +1122,7 @@ impl CwdEntryCache {
         if self.should_refresh(base_dir) {
             self.refresh(base_dir);
         }
+        self.poll_pending();
         self.entries.contains(name)
     }
 
@@ -1075,23 +1134,101 @@ impl CwdEntryCache {
             .is_none_or(|loaded_at| loaded_at.elapsed() > CWD_ENTRY_CACHE_TTL)
     }
 
+    /// 异步刷新：在后台线程读取目录项，避免在 UI 线程同步 `read_dir`
+    /// 大目录造成鼠标悬停卡顿。扫描期间沿用旧缓存。
     fn refresh(&mut self, base_dir: &Path) {
-        let mut next = HashSet::new();
-        if let Ok(entries) = std::fs::read_dir(base_dir) {
-            for (index, entry) in entries.flatten().enumerate() {
-                if index >= CWD_ENTRY_CACHE_LIMIT {
-                    next.clear();
-                    break;
-                }
-                if let Ok(name) = entry.file_name().into_string() {
-                    next.insert(name);
-                }
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.base_dir == base_dir)
+        {
+            // 同一目录已在途，等 poll_pending 回收结果即可。
+            return;
+        }
+
+        let (tx, rx) = mpsc::channel();
+        let scan_dir = base_dir.to_path_buf();
+        let spawn_result = std::thread::Builder::new()
+            .name("cwd-entry-scan".into())
+            .spawn(move || tx.send(read_dir_names(&scan_dir)));
+
+        match spawn_result {
+            Ok(_) => {
+                self.base_dir = Some(base_dir.to_path_buf());
+                self.pending = Some(PendingDirEntries {
+                    base_dir: base_dir.to_path_buf(),
+                    receiver: Arc::new(StdMutex::new(rx)),
+                });
+            }
+            Err(error) => {
+                // 线程创建失败时退化为同步读取，保证功能不缺席。
+                tracing::warn!("cwd 目录扫描线程创建失败，退化为同步读取: {error}");
+                self.base_dir = Some(base_dir.to_path_buf());
+                self.entries = read_dir_names(base_dir);
+                self.loaded_at = Some(Instant::now());
             }
         }
-        self.base_dir = Some(base_dir.to_path_buf());
-        self.entries = next;
-        self.loaded_at = Some(Instant::now());
     }
+
+    /// 回收已完成的在途扫描结果；目录已切换时丢弃过期结果。
+    fn poll_pending(&mut self) {
+        let Some(pending) = &self.pending else {
+            return;
+        };
+        let received = pending.receiver.lock().ok().and_then(|receiver| {
+            match receiver.try_recv() {
+                Ok(entries) => Some(entries),
+                // 扫描线程异常退出：按空目录处理，避免 pending 永久卡住。
+                Err(mpsc::TryRecvError::Disconnected) => Some(HashSet::new()),
+                Err(mpsc::TryRecvError::Empty) => None,
+            }
+        });
+        let Some(entries) = received else {
+            return;
+        };
+        if self.base_dir.as_deref() == Some(pending.base_dir.as_path()) {
+            self.entries = entries;
+            self.loaded_at = Some(Instant::now());
+        }
+        self.pending = None;
+    }
+
+    /// 阻塞等待在途扫描完成；仅供测试使用。
+    #[cfg(test)]
+    fn wait_for_pending_for_tests(&mut self) {
+        let Some(pending) = &self.pending else {
+            return;
+        };
+        let received = pending
+            .receiver
+            .lock()
+            .ok()
+            .and_then(|receiver| receiver.recv().ok());
+        if let Some(entries) = received {
+            if self.base_dir.as_deref() == Some(pending.base_dir.as_path()) {
+                self.entries = entries;
+                self.loaded_at = Some(Instant::now());
+            }
+        }
+        self.pending = None;
+    }
+}
+
+/// 读取目录项名称；条目数达到上限时返回空集合（视为不可信，不做 cwd 高亮）。
+fn read_dir_names(base_dir: &Path) -> HashSet<String> {
+    let mut names = HashSet::new();
+    if let Ok(entries) = std::fs::read_dir(base_dir) {
+        for (index, entry) in entries.flatten().enumerate() {
+            if index >= CWD_ENTRY_CACHE_LIMIT {
+                names.clear();
+                break;
+            }
+            if let Ok(name) = entry.file_name().into_string() {
+                names.insert(name);
+            }
+        }
+    }
+    names
 }
 
 impl FilePathAddon {
@@ -1488,7 +1625,8 @@ fn file_path_to_url(path: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AddonManager, FilePathAddon, SearchAddon, TerminalAddon, TerminalAddonFrameContext,
+        AddonManager, CustomHighlightAddon, CwdEntryCache, FilePathAddon, SearchAddon,
+        TerminalAddon, TerminalAddonFrameContext, TerminalDamageHint,
         compile_custom_highlight_rules, register_default_addons,
     };
     use crate::settings::TerminalHighlightRule;
@@ -1582,6 +1720,7 @@ mod tests {
             display_offset: term.grid().display_offset(),
             is_local: false,
             base_dir: None,
+            damage: TerminalDamageHint::Full,
         });
 
         let decorations =
@@ -1605,6 +1744,7 @@ mod tests {
             display_offset: term.grid().display_offset(),
             is_local: false,
             base_dir: None,
+            damage: TerminalDamageHint::Full,
         });
 
         let priorities = addon
@@ -1614,6 +1754,115 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(vec![90, 90, 100], priorities);
+    }
+
+    #[test]
+    fn custom_highlight_rescans_only_damaged_lines() {
+        let term = test_term_with_content(b"ERROR: a\r\nplain\r\nERROR: b");
+        let mut addon = CustomHighlightAddon::new();
+        addon.set_rules(&[TerminalHighlightRule {
+            id: "rule-1".into(),
+            enabled: true,
+            pattern: "ERROR".into(),
+            foreground: Some("#ff0000".into()),
+            background: None,
+            priority: 10,
+            note: String::new(),
+        }]);
+
+        let frame_context = |damage| TerminalAddonFrameContext {
+            term: &term,
+            visible_lines: 0..term.screen_lines(),
+            display_offset: term.grid().display_offset(),
+            is_local: false,
+            base_dir: None,
+            damage,
+        };
+
+        // 首帧 Full：全量扫描，两行各命中一次。
+        addon.on_frame(&frame_context(TerminalDamageHint::Full));
+        assert_eq!(2, addon.cached_matches.len());
+        let scanned_after_full = addon.scanned_lines;
+
+        // 中间行受损：不重扫两行命中行，缓存匹配保留。
+        addon.on_frame(&frame_context(TerminalDamageHint::Partial(vec![1])));
+        assert_eq!(2, addon.cached_matches.len());
+        assert_eq!(scanned_after_full + 1, addon.scanned_lines);
+
+        // 命中行受损：重扫该行并重新产出匹配。
+        addon.on_frame(&frame_context(TerminalDamageHint::Partial(vec![0])));
+        assert_eq!(2, addon.cached_matches.len());
+        assert!(addon.cached_matches.iter().any(|matched| matched.line == 0));
+        assert_eq!(scanned_after_full + 2, addon.scanned_lines);
+    }
+
+    #[test]
+    fn custom_highlight_full_rescan_on_geometry_change_and_rule_update() {
+        let term = test_term_with_content(b"foo\r\nERROR: bad\r\nplain");
+        let mut addon = CustomHighlightAddon::new();
+        addon.set_rules(&[TerminalHighlightRule {
+            id: "rule-1".into(),
+            enabled: true,
+            pattern: "ERROR".into(),
+            foreground: None,
+            background: Some("#330000".into()),
+            priority: 10,
+            note: String::new(),
+        }]);
+
+        let frame_context = |damage| TerminalAddonFrameContext {
+            term: &term,
+            visible_lines: 0..term.screen_lines(),
+            display_offset: term.grid().display_offset(),
+            is_local: false,
+            base_dir: None,
+            damage,
+        };
+
+        addon.on_frame(&frame_context(TerminalDamageHint::Full));
+        let scanned_after_full = addon.scanned_lines;
+
+        // 规则更新后所有缓存失效：即使 damage 是空的也必须全量重扫。
+        addon.set_rules(&[TerminalHighlightRule {
+            id: "rule-2".into(),
+            enabled: true,
+            pattern: "plain".into(),
+            foreground: None,
+            background: Some("#003300".into()),
+            priority: 10,
+            note: String::new(),
+        }]);
+        addon.on_frame(&frame_context(TerminalDamageHint::Partial(vec![])));
+
+        assert_eq!(1, addon.cached_matches.len());
+        assert_eq!(2, addon.cached_matches[0].line);
+        let scanned_after_rule_update = addon.scanned_lines;
+        assert_eq!(
+            scanned_after_full + term.screen_lines() as u64,
+            scanned_after_rule_update
+        );
+    }
+
+    #[test]
+    fn cwd_entry_cache_scans_in_background_and_recovers_results() {
+        let dir = unique_temp_dir("cwd-cache");
+        fs::create_dir_all(&dir).expect("temp dir should be created");
+        fs::write(dir.join("marker.txt"), b"x").expect("marker file should be created");
+
+        let mut cache = CwdEntryCache::default();
+        cache.refresh(&dir);
+
+        // 刷新应立即返回（后台在途），而不是同步读完才返回。
+        assert!(
+            cache.pending.is_some(),
+            "refresh should hand off to a background scan"
+        );
+
+        cache.wait_for_pending_for_tests();
+        assert!(cache.contains(&dir, "marker.txt"));
+
+        // 清理临时目录（Windows 上文件句柄已全部关闭，可直接删除）。
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
