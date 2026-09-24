@@ -16,17 +16,14 @@ pub(super) fn cycle_placement_tooltip(next: WorkbenchPlacement) -> String {
     .to_string()
 }
 
-/// 工具条按钮的提示，按面板当前落位区分三种含义。
+/// 工具条按钮的提示（页签模型：点击打开/激活右侧标签组）。
 pub(super) fn rail_tooltip(
     kind: WorkbenchPanelKind,
     placement: Option<WorkbenchPlacement>,
 ) -> String {
     let panel = kind.title().to_string();
     match placement {
-        None => t!("Workbench.rail_open_center", panel = panel).to_string(),
-        Some(WorkbenchPlacement::Center) => {
-            t!("Workbench.rail_close_center", panel = panel).to_string()
-        }
+        None => t!("Workbench.rail_open", panel = panel).to_string(),
         Some(_) => t!("Workbench.rail_focus_center", panel = panel).to_string(),
     }
 }
@@ -46,20 +43,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rail_tooltip_distinguishes_the_three_states() {
+    fn rail_tooltip_distinguishes_open_and_focus_states() {
         let closed = rail_tooltip(WorkbenchPanelKind::Files, None);
-        let centered = rail_tooltip(
-            WorkbenchPanelKind::Files,
-            Some(WorkbenchPlacement::Center),
-        );
-        let docked = rail_tooltip(
+        let open = rail_tooltip(
             WorkbenchPanelKind::Files,
             Some(WorkbenchPlacement::Right),
         );
 
         assert!(!closed.is_empty());
-        assert_ne!(closed, centered);
-        assert_ne!(closed, docked);
-        assert_ne!(centered, docked);
+        assert!(!open.is_empty());
+        assert_ne!(closed, open);
     }
 }

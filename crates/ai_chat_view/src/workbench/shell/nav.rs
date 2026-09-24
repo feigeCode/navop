@@ -3,23 +3,28 @@
 //! 与 `shell/mod.rs` 共用同一个 `impl WorkbenchShell`。
 
 use gpui::{
-    Context, Entity, InteractiveElement, IntoElement, ParentElement, SharedString,
+    Anchor, Context, Entity, InteractiveElement, IntoElement, ParentElement, SharedString,
     StatefulInteractiveElement, Styled, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
     ActiveTheme as _, Icon, Sizable as _, Size, StyledExt as _, h_flex,
+    button::Button,
     input::Input,
+    menu::{DropdownMenu as _, PopupMenuItem},
     scroll::ScrollableElement as _, v_flex,
 };
 use one_assets::IconName;
 use one_ui::{IconButton, IconButtonRole};
 use rust_i18n::t;
 
-use crate::session_sidebar::{SessionSummary, filter_sessions, format_timestamp, group_sessions};
+use crate::session_sidebar::{
+    SessionSummary, WorkspaceGroup, filter_sessions, format_timestamp,
+    group_sessions_by_workspace,
+};
 use crate::{
     DefaultAgentChatPanel, acp_session_placeholder, acp_session_row, acp_session_section_header,
 };
-use super::super::state::{WorkbenchPanelKind, WorkbenchPlacement};
+use super::super::state::WorkbenchPanelKind;
 use super::widgets::rail_tooltip;
 use crate::theme::AgentChatTheme;
 use super::{HEADER_HEIGHT, WorkbenchShell};
@@ -48,39 +53,12 @@ impl WorkbenchShell {
         };
 
         let showing_archived = panel.read(cx).showing_archived_sessions(cx);
-        // 底部固定区的「新对话」主入口（Finch 式：整宽按钮 + 归档开关）。
-        let new_button = {
-            let panel = panel.clone();
-            h_flex()
-                .id("workbench-session-new")
-                .flex_1()
-                .min_w_0()
-                .h(px(30.0))
-                .items_center()
-                .justify_center()
-                .gap_1p5()
-                .rounded(theme.surface_radius)
-                .border_1()
-                .border_color(theme.border)
-                .bg(theme.panel)
-                .cursor_pointer()
-                .hover(|style| style.bg(theme.panel_hover))
-                .on_click(cx.listener(move |_, _, _, cx| {
-                    panel.update(cx, |panel, cx| panel.create_session(cx));
-                }))
-                .child(
-                    Icon::new(IconName::Plus)
-                        .xsmall()
-                        .text_color(theme.foreground),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .font_medium()
-                        .text_color(theme.foreground)
-                        .child(t!("AgentUi.new_conversation").to_string()),
-                )
-        };
+
+        // 搜索过滤 + 按工作区分组（组内近期优先，未分组垫底）。
+        let query = self.search_query.clone();
+        let filtered = filter_sessions(&summaries, &query);
+        let groups = group_sessions_by_workspace(&filtered);
+
         let archive_toggle = {
             let panel = panel.clone();
             IconButton::new("workbench-session-archived", IconName::WindowRestore)
@@ -99,14 +77,125 @@ impl WorkbenchShell {
                 }))
         };
 
-        // 侧栏：搜索过滤 + 按本地日历日分组。输入按更新时间降序。
-        let query = self.search_query.clone();
-        let filtered = filter_sessions(&summaries, &query);
-        let now = chrono::Local::now().fixed_offset();
-        let sections = group_sessions(&filtered, now);
+        // 底部固定区「新对话」：下拉选工作区（已添加过的分组都在里面），
+        // 归属在会话首次落盘时定格，之后不可再切换工作区。
+        let workspace_items: Vec<(SharedString, String)> = groups
+            .iter()
+            .filter_map(|group| group.root.clone().map(|root| (group.label(), root)))
+            .collect();
+        let new_button = {
+            let this = cx.entity();
+            Button::new("workbench-session-new")
+                .icon(IconName::Plus)
+                .label(t!("AgentUi.new_conversation").to_string())
+                .small()
+                .flex_1()
+                .min_w_0()
+                .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _window, _cx| {
+                    let this = this.clone();
+                    let mut menu = menu.item(
+                        PopupMenuItem::new(t!("Workbench.new_chat_here").to_string())
+                            .icon(IconName::Plus)
+                            .on_click({
+                                let this = this.clone();
+                                move |_, _, cx| {
+                                    this.update(cx, |this, cx| {
+                                        if let Some(panel) = this.session_source.clone() {
+                                            panel.update(cx, |panel, cx| panel.create_session(cx));
+                                        }
+                                    });
+                                }
+                            }),
+                    );
+                    for (label, root) in &workspace_items {
+                        let this = this.clone();
+                        let root = root.clone();
+                        menu = menu.item(
+                            PopupMenuItem::new(
+                                t!(
+                                    "Workbench.new_chat_in_workspace",
+                                    workspace = label.to_string()
+                                )
+                                .to_string(),
+                            )
+                            .icon(IconName::FolderOpen)
+                            .on_click(move |_, _, cx| {
+                                let root = root.clone();
+                                this.update(cx, |this, cx| {
+                                    this.create_session_in_workspace(
+                                        std::path::Path::new(&root),
+                                        cx,
+                                    );
+                                });
+                            }),
+                        );
+                    }
+                    menu
+                })
+        };
+
+        // 工作区行：当前工作区 + 新增按钮（Finch 式，工作区入口在侧栏内）。
+        let workspace_row = self.workspace_root.as_ref().map(|root| {
+            let name = root
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| root.display().to_string());
+            h_flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap_1()
+                .px_2()
+                .pt_2()
+                .pb_1()
+                .child(
+                    h_flex()
+                        .id("workbench-workspace-button")
+                        .flex_1()
+                        .min_w_0()
+                        .h(px(28.0))
+                        .items_center()
+                        .gap_1()
+                        .px_2()
+                        .rounded(theme.surface_radius)
+                        .bg(theme.panel)
+                        .cursor_pointer()
+                        .hover(|style| style.bg(theme.panel_hover))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            if let Some(picker) = this.workspace_picker.take() {
+                                (picker)(window, cx);
+                                this.workspace_picker = Some(picker);
+                            }
+                        }))
+                        .child(
+                            Icon::new(IconName::FolderOpen)
+                                .xsmall()
+                                .text_color(theme.muted_foreground),
+                        )
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_xs()
+                                .font_semibold()
+                                .text_color(theme.foreground)
+                                .child(name),
+                        ),
+                )
+                .child(
+                    IconButton::new("workbench-workspace-add", IconName::Plus)
+                        .role(IconButtonRole::Compact)
+                        .tooltip(t!("Workbench.choose_workspace").to_string())
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            if let Some(picker) = this.workspace_picker.take() {
+                                (picker)(window, cx);
+                                this.workspace_picker = Some(picker);
+                            }
+                        })),
+                )
+        });
 
         let mut rows: Vec<gpui::AnyElement> = Vec::new();
-        if sections.is_empty() {
+        if groups.is_empty() {
             if !query.trim().is_empty() {
                 rows.push(
                     div()
@@ -119,32 +208,9 @@ impl WorkbenchShell {
                 );
             }
         } else {
-            for (group, items) in sections {
-                // Finch 式分组标题：左侧组名，右侧「N 个会话」计数。
-                let count = items.len();
-                rows.push(
-                    h_flex()
-                        .pt_2()
-                        .px_2()
-                        .pb_0p5()
-                        .items_center()
-                        .justify_between()
-                        .child(
-                            div()
-                                .text_xs()
-                                .font_semibold()
-                                .text_color(theme.muted_foreground)
-                                .child(group.label()),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(theme.muted_foreground)
-                                .child(t!("Workbench.session_count", count = count).to_string()),
-                        )
-                        .into_any_element(),
-                );
-                for summary in items {
+            for group in &groups {
+                rows.push(self.workspace_group_header(group, theme, cx));
+                for summary in &group.sessions {
                     rows.push(Self::session_row(
                         summary,
                         current.as_deref() == Some(summary.id.as_str()),
@@ -196,7 +262,8 @@ impl WorkbenchShell {
             v_flex()
                 .size_full()
                 .min_h_0()
-                // 顶部搜索行：圆角搜索框（无输入能力时整行省略）。
+                .children(workspace_row)
+                // 搜索行：圆角搜索框（无输入能力时整行省略）。
                 .when(self.search_input.is_some(), |this| {
                     this.child(
                         h_flex()
@@ -204,7 +271,7 @@ impl WorkbenchShell {
                             .items_center()
                             .gap_1()
                             .px_2()
-                            .py_1()
+                            .pb_1()
                             .child(
                                 h_flex()
                                     .flex_1()
@@ -245,7 +312,7 @@ impl WorkbenchShell {
                         .gap_0p5()
                         .children(rows),
                 )
-                // 底部固定区：归档开关 + 「新对话」主入口。
+                // 底部固定区：「新对话」下拉 + 归档开关。
                 .child(
                     h_flex()
                         .flex_shrink_0()
@@ -262,7 +329,81 @@ impl WorkbenchShell {
         )
     }
 
+    /// 工作区分组标题：目录名 + hover 出「新建对话」+ 右侧会话计数。
+    fn workspace_group_header(
+        &self,
+        group: &WorkspaceGroup,
+        theme: &AgentChatTheme,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let count = group.sessions.len();
+        let hover_group = SharedString::from(format!(
+            "ws-group-hover-{}",
+            group.root.as_deref().unwrap_or("ungrouped")
+        ));
+        let new_button = group.root.clone().map(|root| {
+            let this = cx.entity();
+            let tooltip = t!(
+                "Workbench.new_chat_in_workspace",
+                workspace = group.label().to_string()
+            )
+            .to_string();
+            // 平时隐藏，hover 分组时浮现（opacity 不影响命中，区域很小）。
+            div()
+                .opacity(0.0)
+                .group_hover(hover_group.clone(), |style| style.opacity(1.0))
+                .child(
+                    IconButton::new(
+                        SharedString::from(format!("workbench-ws-new-{hover_group}")),
+                        IconName::Plus,
+                    )
+                    .role(IconButtonRole::Compact)
+                    .tooltip(tooltip)
+                    .on_click(move |_, _, cx| {
+                        let root = root.clone();
+                        this.update(cx, |this, cx| {
+                            this.create_session_in_workspace(std::path::Path::new(&root), cx);
+                        });
+                    }),
+                )
+        });
+
+        h_flex()
+            .group(hover_group)
+            .pt_2()
+            .px_2()
+            .pb_0p5()
+            .items_center()
+            .gap_1()
+            .child(
+                Icon::new(IconName::Folder)
+                    .xsmall()
+                    .text_color(theme.muted_foreground),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_xs()
+                    .font_semibold()
+                    .text_color(theme.muted_foreground)
+                    .child(group.label()),
+            )
+            .when_some(new_button, |this, button| this.child(button))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(t!("Workbench.session_count", count = count).to_string()),
+            )
+            .into_any_element()
+    }
+
     /// 内建会话列表的一行：名称 + 归档按钮 + 相对时间。
+    ///
+    /// 点击即打开会话；若它属于另一个工作区，外壳先经宿主切根再切换。
     fn session_row(
         summary: &SessionSummary,
         selected: bool,
@@ -271,6 +412,7 @@ impl WorkbenchShell {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let id = summary.id.clone();
+        let workspace_root = summary.workspace_root.clone();
         let hover = theme.hover_background();
         let panel = panel.clone();
         let element_id = SharedString::from(format!("workbench-session-{}", summary.id));
@@ -319,8 +461,8 @@ impl WorkbenchShell {
                     .text_color(theme.muted_foreground)
                     .child(format_timestamp(summary.updated_at)),
             )
-            .on_click(cx.listener(move |_, _, _, cx| {
-                panel.update(cx, |panel, cx| panel.select_session(&id, cx));
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.open_session_from_list(&id, workspace_root.as_deref(), cx);
             }))
             .into_any_element()
     }
@@ -330,6 +472,19 @@ impl WorkbenchShell {
         theme: &AgentChatTheme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
+        let session_name = self.session_source.as_ref().and_then(|panel| {
+            let view = panel.read(cx);
+            let current = view.current_session_id(cx)?;
+            view.session_summaries(cx)
+                .into_iter()
+                .find(|summary| summary.id == current)
+                .map(|summary| summary.name)
+        });
+
+        // 中间的两个侧栏开关：左=会话导航栏，右=页签组。右栏「打开」指
+        // 有标签且未被顶栏开关收起（放大视为打开）。
+        let right_open = self.state.right_maximized()
+            || (!self.state.right_collapsed() && !self.state.right_tabs().is_empty());
         let nav_toggle = self.has_nav().then(|| {
             let collapsed = self.state.nav_collapsed();
             IconButton::new(
@@ -349,80 +504,49 @@ impl WorkbenchShell {
             .to_string())
             .on_click(cx.listener(|this, _, _, cx| this.toggle_session_nav(cx)))
         });
+        let right_toggle = IconButton::new(
+            "workbench-right-toggle",
+            if right_open {
+                IconName::PanelRightClose
+            } else {
+                IconName::PanelRightOpen
+            },
+        )
+        .role(IconButtonRole::Compact)
+        .tooltip(if right_open {
+            t!("Workbench.collapse_right_sidebar").to_string()
+        } else {
+            t!("Workbench.expand_right_sidebar").to_string()
+        })
+        .on_click(cx.listener(|this, _, _, cx| this.toggle_right_sidebar(cx)));
 
-        // Finch 式顶栏：「工作区 > 会话」面包屑。工作区常显可点（切换上下文
-        // 的主入口），会话段只读、随当前会话变化。
-        let session_name = self.session_source.as_ref().and_then(|panel| {
-            let view = panel.read(cx);
-            let current = view.current_session_id(cx)?;
-            view.session_summaries(cx)
-                .into_iter()
-                .find(|summary| summary.id == current)
-                .map(|summary| summary.name)
-        });
-
+        // 顶栏：会话名居左，两个侧栏开关严格居中（左右等宽占位）。
+        // 工作区入口已移入侧栏顶部的工作区行。
         h_flex()
             .h(px(HEADER_HEIGHT))
             .flex_shrink_0()
             .items_center()
-            .gap_1()
             .px_2()
             .border_b_1()
             .border_color(theme.border)
-            .when_some(nav_toggle, |this, toggle| this.child(toggle))
-            .when_some(self.workspace_root.as_ref(), |this, root| {
-                let name = root
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| root.display().to_string());
-                this.child(
-                    h_flex()
-                        .id("workbench-workspace-button")
-                        .min_w_0()
-                        .flex_shrink_0()
-                        .items_center()
-                        .gap_1()
-                        .px_2()
-                        .py_1()
-                        .rounded_md()
-                        .cursor_pointer()
-                        .hover(|style| style.bg(theme.panel_hover))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            if let Some(picker) = this.workspace_picker.take() {
-                                (picker)(window, cx);
-                                this.workspace_picker = Some(picker);
-                            }
-                        }))
-                        .child(
-                            Icon::new(IconName::FolderOpen)
-                                .xsmall()
-                                .text_color(theme.muted_foreground),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .font_semibold()
-                                .text_color(theme.foreground)
-                                .child(name),
-                        ),
-                )
-                .when_some(session_name, |this, name| {
-                    this.child(
-                        Icon::new(IconName::ChevronRight)
-                            .xsmall()
-                            .text_color(theme.muted_foreground),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(name),
-                    )
-                })
-            })
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .when_some(session_name, |this, name| this.child(name)),
+            )
+            .child(
+                h_flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .gap_1()
+                    .when_some(nav_toggle, |this, toggle| this.child(toggle))
+                    .child(right_toggle),
+            )
+            .child(div().flex_1())
     }
 
     pub(super) fn render_rail(
@@ -430,6 +554,8 @@ impl WorkbenchShell {
         theme: &AgentChatTheme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
+        // 页签模型：rail 只放可停靠面板（对话是中心区主场，不进 rail），
+        // 点击一律打开/激活右侧标签组。
         v_flex()
             .w(TOOLBAR_WIDTH)
             .flex_shrink_0()
@@ -440,21 +566,19 @@ impl WorkbenchShell {
             .border_l_1()
             .border_color(theme.border)
             .bg(theme.background)
-            .children(WorkbenchPanelKind::ALL.into_iter().map(|kind| {
-                let placement = self.state.placement_of(kind);
-                // 在中心区的面板是当前主角，用强调色；停靠中的用前景色；
-                // 未打开的用弱色。点击统一走 activate_panel（开/提焦点/关）。
-                let color = match placement {
-                    Some(WorkbenchPlacement::Center) => theme.accent,
-                    Some(_) => theme.foreground,
-                    None => theme.muted_foreground,
+            .children(WorkbenchPanelKind::DOCKABLE.into_iter().map(|kind| {
+                let open = self.state.placement_of(kind).is_some();
+                let color = if open {
+                    theme.foreground
+                } else {
+                    theme.muted_foreground
                 };
                 IconButton::new(
                     SharedString::from(format!("workbench-rail-{}", kind.id())),
                     kind.icon(),
                 )
                 .role(IconButtonRole::Compact)
-                .tooltip(rail_tooltip(kind, placement))
+                .tooltip(rail_tooltip(kind, self.state.placement_of(kind)))
                 .text_color(color)
                 .on_click(cx.listener(move |this, _, _, cx| this.activate_panel(kind, cx)))
                 .into_any_element()

@@ -1,12 +1,11 @@
 use gpui::{
-    App, Context, EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement,
-    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Window, div,
-    prelude::FluentBuilder, px,
+    App, AppContext as _, Context, DragMoveEvent, EntityId, EventEmitter, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, ParentElement, Render, SharedString,
+    StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
 };
 
 use gpui_component::{Icon, Sizable as _, Size, h_flex, v_flex};
 use one_assets::IconName;
-use one_core::layout::SIDEBAR_DEFAULT_WIDTH;
 use one_core::tab_container::{TabContent, TabContentEvent};
 use one_ui::{IconButton, IconButtonRole};
 use rust_i18n::t;
@@ -16,6 +15,33 @@ use super::super::state::{WorkbenchPanelKind, WorkbenchPlacement};
 use super::widgets::{close_tab_tooltip, cycle_placement_tooltip, pin_tooltip};
 use super::{DOCK_PANEL_HEIGHT, DOCK_PANEL_WIDTH, PANEL_HEADER_HEIGHT};
 use crate::theme::{AgentChatTheme, with_agent_chat_theme};
+
+/// 拖拽调宽把手的命中宽度。
+const RESIZE_HANDLE_WIDTH: f32 = 6.0;
+
+/// 左侧导航栏的拖拽标记（GPUI 拖拽载荷）。
+#[derive(Clone)]
+struct ResizeNav {
+    entity_id: EntityId,
+}
+
+impl Render for ResizeNav {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div().size(px(0.0))
+    }
+}
+
+/// 右侧标签组的拖拽标记。
+#[derive(Clone)]
+struct ResizeRight {
+    entity_id: EntityId,
+}
+
+impl Render for ResizeRight {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div().size(px(0.0))
+    }
+}
 
 impl EventEmitter<TabContentEvent> for WorkbenchShell {}
 
@@ -62,17 +88,23 @@ impl Render for WorkbenchShell {
             .flatten();
         let left_panel = self.state.left();
         let bottom_panel = self.state.bottom();
-        let has_right_group = !self.state.right_tabs().is_empty();
+        let maximized = self.state.right_maximized();
+        let show_right_group =
+            !self.state.right_collapsed() && !self.state.right_tabs().is_empty();
+        let nav_width = self.state.nav_width();
+        let right_width = self.state.right_width();
+        let hover = theme.hover_background();
 
         let body = with_agent_chat_theme(&theme, || {
             h_flex()
                 .flex_1()
                 .min_h_0()
                 .min_w_0()
-                .when_some(nav, |this, nav| {
+                // 放大占满时只有右侧标签组（见下），其余区域全部让位。
+                .when_some((!maximized).then_some(nav).flatten(), |this, nav| {
                     this.child(
                         v_flex()
-                            .w(SIDEBAR_DEFAULT_WIDTH)
+                            .w(px(nav_width))
                             .flex_shrink_0()
                             .h_full()
                             .min_h_0()
@@ -87,30 +119,110 @@ impl Render for WorkbenchShell {
                                     .child(nav),
                             ),
                     )
-                })
-                .when_some(left_panel, |this, kind| {
-                    this.child(
+                    .child(
                         div()
-                            .w(px(DOCK_PANEL_WIDTH))
-                            .flex_shrink_0()
+                            .id("workbench-nav-resize")
+                            .w(px(RESIZE_HANDLE_WIDTH))
                             .h_full()
-                            .min_h_0()
-                            .border_r_1()
-                            .border_color(theme.border)
-                            .child(self.render_dock(kind, &theme, cx)),
+                            .flex_shrink_0()
+                            .cursor_col_resize()
+                            .hover(move |style| style.bg(hover))
+                            .on_drag_move(cx.listener(
+                                move |this, event: &DragMoveEvent<ResizeNav>, _, cx| {
+                                    if event.drag(cx).entity_id != cx.entity_id() {
+                                        return;
+                                    }
+                                    let delta = f32::from(
+                                        event.event.position.x - event.bounds.center().x,
+                                    );
+                                    this.set_nav_width(this.state.nav_width() + delta, cx);
+                                },
+                            ))
+                            .on_drag(
+                                ResizeNav {
+                                    entity_id: cx.entity_id(),
+                                },
+                                |drag, _, _, cx| {
+                                    cx.stop_propagation();
+                                    cx.new(|_| drag.clone())
+                                },
+                            ),
                     )
                 })
-                .child(self.render_content(&theme))
-                .when(has_right_group, |this| {
-                    this.child(
-                        div()
-                            .w(px(DOCK_PANEL_WIDTH))
-                            .flex_shrink_0()
-                            .h_full()
-                            .min_h_0()
-                            .border_l_1()
-                            .border_color(theme.border)
-                            .child(self.render_right_group(&theme, cx)),
+                .when_some(
+                    (!maximized).then_some(left_panel).flatten(),
+                    |this, kind| {
+                        this.child(
+                            div()
+                                .w(px(DOCK_PANEL_WIDTH))
+                                .flex_shrink_0()
+                                .h_full()
+                                .min_h_0()
+                                .border_r_1()
+                                .border_color(theme.border)
+                                .child(self.render_dock(kind, &theme, cx)),
+                        )
+                    },
+                )
+                .when(!maximized, |this| this.child(self.render_content(&theme)))
+                .when(show_right_group, |this| {
+                    this.when(!maximized, |this| {
+                        this.child(
+                            div()
+                                .id("workbench-right-resize")
+                                .w(px(RESIZE_HANDLE_WIDTH))
+                                .h_full()
+                                .flex_shrink_0()
+                                .cursor_col_resize()
+                                .hover(move |style| style.bg(hover))
+                                .on_drag_move(cx.listener(
+                                    move |this, event: &DragMoveEvent<ResizeRight>, _, cx| {
+                                        if event.drag(cx).entity_id != cx.entity_id() {
+                                            return;
+                                        }
+                                        // 把手在标签组左缘：光标左移 = 加宽。
+                                        let delta = f32::from(
+                                            event.event.position.x - event.bounds.center().x,
+                                        );
+                                        this.set_right_width(
+                                            this.state.right_width() - delta,
+                                            cx,
+                                        );
+                                    },
+                                ))
+                                .on_drag(
+                                    ResizeRight {
+                                        entity_id: cx.entity_id(),
+                                    },
+                                    |drag, _, _, cx| {
+                                        cx.stop_propagation();
+                                        cx.new(|_| drag.clone())
+                                    },
+                                ),
+                        )
+                    })
+                    .child(
+                        if maximized {
+                            v_flex()
+                                .flex_1()
+                                .h_full()
+                                .min_h_0()
+                                .min_w_0()
+                                .border_r_1()
+                                .border_color(theme.border)
+                                .child(self.render_right_group(&theme, cx))
+                                .into_any_element()
+                        } else {
+                            div()
+                                .w(px(right_width))
+                                .flex_shrink_0()
+                                .h_full()
+                                .min_h_0()
+                                .border_l_1()
+                                .border_color(theme.border)
+                                .child(self.render_right_group(&theme, cx))
+                                .into_any_element()
+                        },
                     )
                 })
                 .child(self.render_rail(&theme, cx))
@@ -204,24 +316,41 @@ impl WorkbenchShell {
             bar = bar.child(self.render_tab(*kind, Some(*kind) == active, theme, cx));
         }
         // 还没并排打开的面板：点一下就进标签组，避免再叠一层下拉菜单。
-        if !unpinned.is_empty() {
-            bar = bar.child(div().flex_1());
-            for kind in unpinned {
-                let on_pin = cx.listener(move |this, _, _, cx| {
-                    this.open_panel(kind, WorkbenchPlacement::Right, cx);
-                });
-                bar = bar.child(
-                    IconButton::new(
-                        SharedString::from(format!("workbench-pin-{}", kind.id())),
-                        kind.icon(),
-                    )
-                    .role(IconButtonRole::Compact)
-                    .tooltip(pin_tooltip(kind))
-                    .text_color(theme.muted_foreground)
-                    .on_click(on_pin),
-                );
-            }
+        bar = bar.child(div().flex_1());
+        for kind in unpinned {
+            let on_pin = cx.listener(move |this, _, _, cx| {
+                this.open_panel(kind, WorkbenchPlacement::Right, cx);
+            });
+            bar = bar.child(
+                IconButton::new(
+                    SharedString::from(format!("workbench-pin-{}", kind.id())),
+                    kind.icon(),
+                )
+                .role(IconButtonRole::Compact)
+                .tooltip(pin_tooltip(kind))
+                .text_color(theme.muted_foreground)
+                .on_click(on_pin),
+            );
         }
+        // 放大占满 / 还原。
+        let maximized = self.state.right_maximized();
+        bar = bar.child(
+            IconButton::new("workbench-right-maximize", {
+                if maximized {
+                    IconName::WindowRestore
+                } else {
+                    IconName::Maximize
+                }
+            })
+            .role(IconButtonRole::Compact)
+            .tooltip(if maximized {
+                t!("Workbench.restore_right_sidebar").to_string()
+            } else {
+                t!("Workbench.maximize_right_sidebar").to_string()
+            })
+            .text_color(theme.muted_foreground)
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_right_maximized(cx))),
+        );
 
         let content = active
             .and_then(|kind| self.panels.get(&kind).cloned())

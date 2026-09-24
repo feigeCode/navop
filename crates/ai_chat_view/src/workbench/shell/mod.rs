@@ -5,6 +5,7 @@
 //! 本模块只做渲染与状态编排。
 
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use gpui::{AnyView, AppContext as _, Context, Entity, FocusHandle, Subscription, Window};
 use gpui_component::input::{InputEvent, InputState};
@@ -72,6 +73,11 @@ pub struct WorkbenchShell {
     pub(super) workspace_root: Option<std::path::PathBuf>,
     /// 宿主注入的工作区选择动作（弹目录选择器并切换根）。
     pub(super) workspace_picker: Option<Box<dyn Fn(&mut gpui::Window, &mut gpui::App) + 'static>>,
+    /// 宿主注入的工作区切换动作（把 explorer 等宿主侧视图切到指定根，
+    /// 经 `RootChanged` 级联回外壳与聊天面板）。侧栏分组的新建/选择依赖它。
+    pub(super) workspace_switcher: Option<Box<dyn Fn(&std::path::Path, &mut gpui::App) + 'static>>,
+    /// 宽度拖拽时落盘的节流时间戳（拖拽每帧都会触发，不能每帧写盘）。
+    pub(super) last_width_persist: Option<Instant>,
     pub(super) _subscriptions: Vec<Subscription>,
 }
 
@@ -130,6 +136,8 @@ impl WorkbenchShell {
             focus_handle: cx.focus_handle(),
             workspace_root,
             workspace_picker: None,
+            workspace_switcher: None,
+            last_width_persist: None,
             _subscriptions: subscriptions,
         }
     }
@@ -151,6 +159,91 @@ impl WorkbenchShell {
     ) {
         self.workspace_picker = Some(Box::new(picker));
         cx.notify();
+    }
+
+    /// 注入「切换到指定工作区」动作。侧栏分组的新建对话 / 选择跨工作区会话
+    /// 时调用；宿主应把 explorer 等切到该根（`RootChanged` 会级联回外壳）。
+    pub fn set_workspace_switcher(
+        &mut self,
+        switcher: impl Fn(&std::path::Path, &mut gpui::App) + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        self.workspace_switcher = Some(Box::new(switcher));
+        cx.notify();
+    }
+
+    /// 切换到指定工作区（经宿主级联）。返回是否发出了切换。
+    pub fn switch_to_workspace(
+        &mut self,
+        root: &std::path::Path,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.workspace_root.as_deref() == Some(root) {
+            return false;
+        }
+        match self.workspace_switcher.as_ref() {
+            Some(switcher) => {
+                switcher(root, cx);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// 在指定工作区新建对话：先经宿主切根（级联同步），再开新会话。
+    /// 新会话的归属在首次落盘时定格为该工作区。
+    pub fn create_session_in_workspace(
+        &mut self,
+        root: &std::path::Path,
+        cx: &mut Context<Self>,
+    ) {
+        self.switch_to_workspace(root, cx);
+        if let Some(panel) = self.session_source.clone() {
+            panel.update(cx, |panel, cx| panel.create_session(cx));
+        }
+    }
+
+    /// 打开侧栏列表里的会话；若它属于另一个工作区，先经宿主切根。
+    pub fn open_session_from_list(
+        &mut self,
+        uid: &str,
+        workspace_root: Option<&str>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(root) = workspace_root
+            && self.workspace_root.as_deref() != Some(std::path::Path::new(root))
+        {
+            self.switch_to_workspace(std::path::Path::new(root), cx);
+        }
+        if let Some(panel) = self.session_source.clone() {
+            panel.update(cx, |panel, cx| panel.select_session(uid, cx));
+        }
+    }
+
+    /// 顶栏右侧栏开关：无标签时展开即打开第一个可用面板；有标签时在
+    /// 收起/展开间切换；放大中先退出放大。
+    pub fn toggle_right_sidebar(&mut self, cx: &mut Context<Self>) {
+        if self.state.right_maximized() {
+            let changed = self.state.toggle_right_maximized();
+            self.commit(changed, cx);
+        } else if self.state.right_tabs().is_empty() && !self.state.right_collapsed() {
+            let kind = WorkbenchPanelKind::DOCKABLE
+                .into_iter()
+                .find(|kind| self.has_panel(*kind));
+            if let Some(kind) = kind {
+                self.open_panel(kind, WorkbenchPlacement::Right, cx);
+            }
+        } else {
+            let collapsed = !self.state.right_collapsed();
+            let changed = self.state.set_right_collapsed(collapsed);
+            self.commit(changed, cx);
+        }
+    }
+
+    /// 右侧标签组「放大占满」开关。
+    pub fn toggle_right_maximized(&mut self, cx: &mut Context<Self>) {
+        let changed = self.state.toggle_right_maximized();
+        self.commit(changed, cx);
     }
 
     /// 追加一个由宿主在构造之后创建的订阅（外壳创建早于其依赖时使用）。
@@ -188,14 +281,15 @@ impl WorkbenchShell {
 
     /// 工具条与面板头共用的唯一入口。
     ///
-    /// - 面板未打开 → 打开到中心区。
-    /// - 面板已打开但不在中心区 → 提到中心区。
-    /// - 面板在中心区 → 关闭它（「对话」是中心区主场，关不掉）。
+    /// 页签模型：rail / 工具条打开的面板一律进右侧标签组并激活；已在其他
+    /// 落位（左/底/中心）的面板会被摘下来放进标签组。
     pub fn activate_panel(&mut self, kind: WorkbenchPanelKind, cx: &mut Context<Self>) {
-        let changed = if self.state.center() == Some(kind) {
-            self.state.close(kind)
+        let changed = if self.state.placement_of(kind) == Some(WorkbenchPlacement::Right)
+            && self.state.right_active() == Some(kind)
+        {
+            false
         } else {
-            self.state.open(kind, WorkbenchPlacement::Center)
+            self.state.open(kind, WorkbenchPlacement::Right)
         };
         self.commit(changed, cx);
     }
@@ -232,6 +326,37 @@ impl WorkbenchShell {
     pub fn toggle_session_nav(&mut self, cx: &mut Context<Self>) {
         let changed = self.state.toggle_nav();
         self.commit(changed, cx);
+    }
+
+    /// 拖拽调宽：立即重绘；落盘按 [`WIDTH_PERSIST_THROTTLE`] 节流，
+    /// 拖拽中的中间值不值得每帧写盘。
+    pub fn set_nav_width(&mut self, width: f32, cx: &mut Context<Self>) {
+        if self.state.set_nav_width(width) {
+            self.persist_width_throttled(cx);
+            cx.notify();
+        }
+    }
+
+    pub fn set_right_width(&mut self, width: f32, cx: &mut Context<Self>) {
+        if self.state.set_right_width(width) {
+            self.persist_width_throttled(cx);
+            cx.notify();
+        }
+    }
+
+    const fn width_persist_throttle() -> Duration {
+        Duration::from_millis(250)
+    }
+
+    fn persist_width_throttled(&mut self, cx: &mut Context<Self>) {
+        let now = Instant::now();
+        let due = self
+            .last_width_persist
+            .is_none_or(|last| now.duration_since(last) >= Self::width_persist_throttle());
+        if due {
+            self.last_width_persist = Some(now);
+            self.persist_layout(cx);
+        }
     }
 
     /// 状态变更的统一出口：落盘 + 重绘。

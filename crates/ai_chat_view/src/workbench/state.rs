@@ -121,8 +121,21 @@ impl WorkbenchPlacement {
     }
 }
 
+/// 会话导航栏默认宽度（像素）。
+pub const DEFAULT_NAV_WIDTH: f32 = 260.0;
+/// 会话导航栏允许的宽度范围。
+pub const NAV_WIDTH_RANGE: (f32, f32) = (180.0, 480.0);
+/// 右侧标签组默认宽度（像素）。
+pub const DEFAULT_RIGHT_WIDTH: f32 = 400.0;
+/// 右侧标签组允许的宽度范围。
+pub const RIGHT_WIDTH_RANGE: (f32, f32) = (240.0, 720.0);
+
+fn clamp_width(width: f32, range: (f32, f32)) -> f32 {
+    width.clamp(range.0, range.1)
+}
+
 /// 工作台外壳的纯状态。
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct WorkbenchState {
     nav_collapsed: bool,
     /// 中心区当前面板。`None` 只在「对话被别的面板顶掉、且用户把它关掉」的瞬间出现。
@@ -133,6 +146,14 @@ pub struct WorkbenchState {
     right: Vec<WorkbenchPanelKind>,
     /// 标签组当前显示的面板。非空标签组一定有激活项。
     right_active: Option<WorkbenchPanelKind>,
+    /// 会话导航栏宽度（像素），已收敛到允许范围。
+    nav_width: f32,
+    /// 右侧标签组宽度（像素），已收敛到允许范围。
+    right_width: f32,
+    /// 右侧标签组被顶栏开关收起（标签保留，仅隐藏）。
+    right_collapsed: bool,
+    /// 右侧标签组放大占满工作台行。
+    right_maximized: bool,
 }
 
 impl WorkbenchState {
@@ -144,6 +165,10 @@ impl WorkbenchState {
             bottom: None,
             right: Vec::new(),
             right_active: None,
+            nav_width: DEFAULT_NAV_WIDTH,
+            right_width: DEFAULT_RIGHT_WIDTH,
+            right_collapsed: false,
+            right_maximized: false,
         }
     }
 
@@ -163,6 +188,63 @@ impl WorkbenchState {
     pub fn toggle_nav(&mut self) -> bool {
         self.nav_collapsed = !self.nav_collapsed;
         self.nav_collapsed
+    }
+
+    pub fn nav_width(&self) -> f32 {
+        self.nav_width
+    }
+
+    /// 设置导航栏宽度（越界收敛）。返回是否真的变化。
+    pub fn set_nav_width(&mut self, width: f32) -> bool {
+        let width = clamp_width(width, NAV_WIDTH_RANGE);
+        if (self.nav_width - width).abs() < f32::EPSILON {
+            return false;
+        }
+        self.nav_width = width;
+        true
+    }
+
+    pub fn right_width(&self) -> f32 {
+        self.right_width
+    }
+
+    /// 设置右侧标签组宽度（越界收敛）。返回是否真的变化。
+    pub fn set_right_width(&mut self, width: f32) -> bool {
+        let width = clamp_width(width, RIGHT_WIDTH_RANGE);
+        if (self.right_width - width).abs() < f32::EPSILON {
+            return false;
+        }
+        self.right_width = width;
+        true
+    }
+
+    pub fn right_collapsed(&self) -> bool {
+        self.right_collapsed
+    }
+
+    /// 收起/展开右侧标签组。放大状态下收起等于退出放大并收起。
+    pub fn set_right_collapsed(&mut self, collapsed: bool) -> bool {
+        if self.right_collapsed == collapsed {
+            return false;
+        }
+        self.right_collapsed = collapsed;
+        if collapsed {
+            self.right_maximized = false;
+        }
+        true
+    }
+
+    pub fn right_maximized(&self) -> bool {
+        self.right_maximized
+    }
+
+    /// 切换右侧标签组「放大占满」。放大时自动展开（不能放大一个收起的栏）。
+    pub fn toggle_right_maximized(&mut self) -> bool {
+        self.right_maximized = !self.right_maximized;
+        if self.right_maximized {
+            self.right_collapsed = false;
+        }
+        true
     }
 
     pub fn center(&self) -> Option<WorkbenchPanelKind> {
@@ -344,6 +426,10 @@ impl WorkbenchState {
                 .map(|kind| kind.id().to_string())
                 .collect(),
             right_active: self.right_active.map(|kind| kind.id().to_string()),
+            nav_width: Some(self.nav_width),
+            right_width: Some(self.right_width),
+            right_collapsed: self.right_collapsed,
+            right_maximized: self.right_maximized,
         }
     }
 
@@ -383,6 +469,16 @@ impl WorkbenchState {
             .and_then(WorkbenchPanelKind::from_id)
             .filter(|kind| state.right.contains(kind))
             .or_else(|| state.right.first().copied());
+        state.nav_width = settings
+            .nav_width
+            .map(|width| clamp_width(width, NAV_WIDTH_RANGE))
+            .unwrap_or(DEFAULT_NAV_WIDTH);
+        state.right_width = settings
+            .right_width
+            .map(|width| clamp_width(width, RIGHT_WIDTH_RANGE))
+            .unwrap_or(DEFAULT_RIGHT_WIDTH);
+        state.right_collapsed = settings.right_collapsed;
+        state.right_maximized = settings.right_maximized && !state.right_collapsed;
         state
     }
 }
@@ -711,6 +807,7 @@ mod tests {
             bottom: Some("unreleased-panel".into()),
             right: vec!["files".into(), "review".into(), "review".into()],
             right_active: None,
+            ..Default::default()
         };
 
         let state = WorkbenchState::from_settings(&settings);
@@ -768,5 +865,71 @@ mod tests {
             Some(WorkbenchPanelKind::Review),
             WorkbenchState::from_settings(&settings).right_active()
         );
+    }
+
+    #[test]
+    fn sidebar_widths_clamp_and_persist() {
+        let mut state = WorkbenchState::new(WorkbenchPanelKind::Chat);
+
+        assert!(state.set_nav_width(50.0), "低于下限应收敛到下限");
+        assert_eq!(NAV_WIDTH_RANGE.0, state.nav_width());
+        assert!(state.set_right_width(10_000.0));
+        assert_eq!(RIGHT_WIDTH_RANGE.1, state.right_width());
+        assert!(!state.set_nav_width(state.nav_width()), "同值不报变化");
+
+        let restored = WorkbenchState::from_settings(&state.to_settings());
+        assert_eq!(state.nav_width(), restored.nav_width());
+        assert_eq!(state.right_width(), restored.right_width());
+    }
+
+    #[test]
+    fn restoring_widths_from_bad_or_missing_values_falls_back() {
+        let mut settings = WorkbenchLayoutSettings::default();
+        settings.nav_width = Some(-3.0);
+        settings.right_width = Some(99_999.0);
+
+        let state = WorkbenchState::from_settings(&settings);
+
+        assert_eq!(NAV_WIDTH_RANGE.0, state.nav_width());
+        assert_eq!(RIGHT_WIDTH_RANGE.1, state.right_width());
+
+        let state = WorkbenchState::from_settings(&WorkbenchLayoutSettings::default());
+        assert_eq!(DEFAULT_NAV_WIDTH, state.nav_width());
+        assert_eq!(DEFAULT_RIGHT_WIDTH, state.right_width());
+    }
+
+    #[test]
+    fn right_collapse_and_maximize_interplay() {
+        let mut state = WorkbenchState::new(WorkbenchPanelKind::Chat);
+
+        assert!(state.toggle_right_maximized());
+        assert!(state.right_maximized());
+        // 收起会退出放大。
+        assert!(state.set_right_collapsed(true));
+        assert!(!state.right_maximized());
+        assert!(state.right_collapsed());
+
+        // 放大收起中的栏会自动展开。
+        assert!(state.toggle_right_maximized());
+        assert!(state.right_maximized());
+        assert!(!state.right_collapsed());
+
+        let restored = WorkbenchState::from_settings(&state.to_settings());
+        assert!(restored.right_maximized());
+        assert!(!restored.right_collapsed());
+    }
+
+    #[test]
+    fn restoring_maximized_and_collapsed_prefers_collapsed() {
+        let settings = WorkbenchLayoutSettings {
+            right_collapsed: true,
+            right_maximized: true,
+            ..Default::default()
+        };
+
+        let state = WorkbenchState::from_settings(&settings);
+
+        assert!(state.right_collapsed());
+        assert!(!state.right_maximized(), "收起优先于放大");
     }
 }

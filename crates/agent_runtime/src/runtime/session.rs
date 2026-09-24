@@ -40,6 +40,12 @@ pub struct SessionSnapshot {
     pub system_instruction: Option<String>,
     #[serde(default)]
     pub skills: SkillContext,
+    /// 会话创建时所在的工作区根目录（规范化字符串）。
+    ///
+    /// 会话归属在工作区**首次落盘时定格**，之后不随外壳切换工作区而改变；
+    /// 旧快照没有该字段，反序列化为 `None`（侧栏归入「未分组」）。
+    #[serde(default)]
+    pub workspace_root: Option<String>,
 }
 
 /// 一次会话。
@@ -107,6 +113,9 @@ impl Session {
             history,
             plan,
             system_instruction,
+            // 会话归属由持久化层在落盘时按「首存定格」规则补写，见
+            // ai_chat_view::persistence::save_session_with_workspace。
+            workspace_root: None,
         }
     }
 

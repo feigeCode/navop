@@ -25,9 +25,27 @@ const MAX_TITLE_CHARS: usize = 40;
 ///
 /// 返回用于刷新侧边栏摘要的 `(标题, 更新时间秒)`;未保存时返回 `None`。
 pub fn save_session(cx: &App, session: &Session) -> Option<(String, i64)> {
-    let snapshot = session.snapshot();
+    save_session_with_workspace(cx, session, None)
+}
+
+/// 带「工作区归属定格」的保存。
+///
+/// 归属规则：快照里已有 `workspace_root`（此前落过盘 / 从别处载入）则原样保留；
+/// 否则写本次传入的当前工作区。之后无论外壳切到哪个工作区，该会话都留在
+/// 首次落盘时的工作区（侧栏分组与底部新建对话下拉都以此为准）。
+pub fn save_session_with_workspace(
+    cx: &App,
+    session: &Session,
+    workspace_root: Option<&str>,
+) -> Option<(String, i64)> {
+    let mut snapshot = session.snapshot();
     if snapshot.history.is_empty() {
         return None;
+    }
+    if snapshot.workspace_root.is_none()
+        && let Some(root) = workspace_root_non_empty(workspace_root)
+    {
+        snapshot.workspace_root = Some(root);
     }
     let title = derive_title(&snapshot);
     let snapshot_json = serde_json::to_string(&snapshot).ok()?;
@@ -36,6 +54,12 @@ pub fn save_session(cx: &App, session: &Session) -> Option<(String, i64)> {
         .save_snapshot(&snapshot.id.to_string(), &title, &snapshot_json)
         .ok()?;
     Some((saved.title, saved.updated_at))
+}
+
+fn workspace_root_non_empty(root: Option<&str>) -> Option<String> {
+    root.map(str::trim)
+        .filter(|root| !root.is_empty())
+        .map(str::to_string)
 }
 
 /// 列出全部**未归档**会话,按更新时间倒序映射为侧边栏摘要。
@@ -96,7 +120,12 @@ fn list_summaries_by_archived(cx: &App, archived: bool) -> Vec<SessionSummary> {
         .and_then(|repo| repo.list_by_archived(archived).ok())
         .unwrap_or_default()
         .into_iter()
-        .map(|session| SessionSummary::new(session.uid, session.title, session.updated_at))
+        .map(|session| {
+            SessionSummary::new(session.uid, session.title, session.updated_at)
+                .with_workspace_root(crate::session_sidebar::workspace_root_from_snapshot_json(
+                    &session.snapshot_json,
+                ))
+        })
         .collect()
 }
 
@@ -113,6 +142,7 @@ fn load_legacy_chat_snapshot(cx: &App, uid: &str) -> Option<SessionSnapshot> {
         plan: None,
         system_instruction: None,
         skills: agent_runtime::SkillContext::new(),
+        workspace_root: None,
     })
 }
 
@@ -181,6 +211,7 @@ mod tests {
             plan: None,
             system_instruction: None,
             skills: agent_runtime::SkillContext::new(),
+            workspace_root: None,
         }
     }
 
@@ -253,6 +284,7 @@ mod tests {
             plan: None,
             system_instruction: None,
             skills: agent_runtime::SkillContext::new(),
+            workspace_root: None,
         };
         assert_eq!(derive_title(&snap), "新 Agent 会话");
     }

@@ -573,7 +573,7 @@ pub enum AiChatToolExecutionMode {
     Manual,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AiChatSettings {
     #[serde(default)]
     pub tool_execution_mode: AiChatToolExecutionMode,
@@ -615,7 +615,7 @@ pub struct AiChatSettings {
 /// 面板用**稳定字符串 id** 记录，这样 `one_core` 不必反向依赖 `ai_chat_view`；
 /// 悬空 id（面板已下线、或配置被手改坏）由消费方在还原时忽略，见
 /// `ai_chat_view::workbench::WorkbenchState::from_settings`。
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct WorkbenchLayoutSettings {
     /// 会话导航栏是否折叠。默认展开，所以 `false` 是正确缺省。
     #[serde(default)]
@@ -635,6 +635,18 @@ pub struct WorkbenchLayoutSettings {
     /// 右侧标签组当前显示的面板 id。
     #[serde(default)]
     pub right_active: Option<String>,
+    /// 会话导航栏宽度（像素）。`None` 用内置默认值。
+    #[serde(default)]
+    pub nav_width: Option<f32>,
+    /// 右侧标签组宽度（像素）。`None` 用内置默认值。
+    #[serde(default)]
+    pub right_width: Option<f32>,
+    /// 右侧标签组是否被顶栏开关收起（标签保留，仅隐藏）。
+    #[serde(default)]
+    pub right_collapsed: bool,
+    /// 右侧标签组是否放大占满工作台行。
+    #[serde(default)]
+    pub right_maximized: bool,
 }
 
 /// 自定义系统提示词的最大字符数（按 chars 计），防止拖垮上下文长度。

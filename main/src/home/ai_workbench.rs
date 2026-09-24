@@ -196,6 +196,20 @@ pub(crate) fn build_ai_workbench_shell(
         );
     });
 
+    // 侧栏跨工作区操作（分组 hover 新建 / 底部下拉新建 / 跨工作区选择会话）
+    // → 把 explorer 切到指定根，RootChanged 级联回外壳与聊天面板。
+    let explorer_for_switch = explorer.clone();
+    shell.update(cx, |shell, cx| {
+        shell.set_workspace_switcher(
+            move |root: &std::path::Path, cx: &mut gpui::App| {
+                explorer_for_switch.update(cx, |explorer, cx| {
+                    explorer.set_root_manually(root.to_path_buf(), cx);
+                });
+            },
+            cx,
+        );
+    });
+
     // AI 提交信息：Explorer 发请求，这里取已配置 provider 生成后回填。
     let explorer_for_message = explorer.clone();
     let commit_message_subscription: Subscription = cx.subscribe(

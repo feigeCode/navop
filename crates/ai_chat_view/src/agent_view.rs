@@ -885,6 +885,8 @@ pub struct AgentChatView {
     transcript: AgentTranscript,
     input: Entity<AgentInput>,
     sessions: Vec<SessionSummary>,
+    /// 会话 id → 归属工作区。创建/载入时定格，落盘时随快照写出。
+    session_roots: HashMap<String, String>,
     /// 尚未完全由持久化历史覆盖的实时会话摘要（当前会话和后台运行会话）。
     live_sessions: Vec<SessionSummary>,
     /// 非当前会话的实时转录，切换回来时可继续看到流式进度。
@@ -1278,6 +1280,7 @@ impl AgentChatView {
             tool_options,
             runtime_factory,
             is_running: false,
+            session_roots: HashMap::new(),
             system_instruction: seed_system_instruction,
             system_instruction_from_settings,
             theme,
@@ -3631,6 +3634,11 @@ impl AgentChatView {
         self.stash_current_transcript();
         let session = self.runtime.create_session(self.resources.clone());
         self.session_id = session.id().clone();
+        // 归属定格：新会话记住创建时的工作区，之后不随外壳切换而漂移。
+        self.session_roots.insert(
+            self.session_id.to_string(),
+            self.workspace_root.to_string_lossy().into_owned(),
+        );
         if self.system_instruction_from_settings {
             // 新会话跟随设置的最新值（含清空）；外部显式指令保持不变。
             self.system_instruction = AppSettings::current(cx)
@@ -3717,15 +3725,27 @@ impl AgentChatView {
         let Some(session) = self.runtime.session(&session_id) else {
             return;
         };
-        if let Some((title, updated_at)) = persistence::save_session(cx, &session) {
+        // 归属定格：优先创建/载入时记录的工作区；缺失（旧数据在本次升级后
+        // 首次落盘）才用当前工作区补。
+        let workspace_root = self
+            .session_roots
+            .get(uid)
+            .cloned()
+            .unwrap_or_else(|| self.workspace_root.to_string_lossy().into_owned());
+        if let Some((title, updated_at)) =
+            persistence::save_session_with_workspace(cx, &session, Some(&workspace_root))
+        {
             self.upsert_live_summary(uid.to_string(), title, updated_at);
         }
     }
 
     fn upsert_live_summary(&mut self, uid: String, title: String, updated_at: i64) {
         self.live_sessions.retain(|summary| summary.id != uid);
-        self.live_sessions
-            .insert(0, SessionSummary::new(uid, title, updated_at));
+        let workspace_root = self.session_roots.get(&uid).cloned();
+        self.live_sessions.insert(
+            0,
+            SessionSummary::new(uid, title, updated_at).with_workspace_root(workspace_root),
+        );
     }
 
     fn touch_session_transcript(&mut self, uid: &str) {
@@ -3860,6 +3880,13 @@ impl AgentChatView {
                 cx.notify();
                 return;
             };
+            // 载入即定格：优先快照里记录的工作区；旧快照没有则归入当前工作区。
+            let restored_root = snapshot
+                .workspace_root
+                .clone()
+                .unwrap_or_else(|| self.workspace_root.to_string_lossy().into_owned());
+            self.session_roots
+                .insert(uid.to_string(), restored_root);
             let restored = self.runtime.restore_session(snapshot);
             restored.set_resources(self.resources.clone());
             restored

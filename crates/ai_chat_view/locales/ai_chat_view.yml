@@ -1167,3 +1167,35 @@ Workbench:
     en: "%{count} sessions"
     zh-CN: "%{count} 个会话"
     zh-HK: "%{count} 個會話"
+  workspace_ungrouped:
+    en: Ungrouped
+    zh-CN: 未分组
+    zh-HK: 未分組
+  new_chat_here:
+    en: "New conversation"
+    zh-CN: "新建对话"
+    zh-HK: "新建對話"
+  new_chat_in_workspace:
+    en: "New conversation in %{workspace}"
+    zh-CN: "在「%{workspace}」新建对话"
+    zh-HK: "在「%{workspace}」新建對話"
+  expand_right_sidebar:
+    en: "Expand sidebar"
+    zh-CN: "展开侧边栏"
+    zh-HK: "展開側邊欄"
+  collapse_right_sidebar:
+    en: "Collapse sidebar"
+    zh-CN: "收起侧边栏"
+    zh-HK: "收起側邊欄"
+  maximize_right_sidebar:
+    en: "Maximize sidebar"
+    zh-CN: "放大占满"
+    zh-HK: "放大佔滿"
+  restore_right_sidebar:
+    en: "Restore sidebar"
+    zh-CN: "还原侧边栏"
+    zh-HK: "還原側邊欄"
+  rail_open:
+    en: "Open %{panel}"
+    zh-CN: "打开「%{panel}」"
+    zh-HK: "打開「%{panel}」"
