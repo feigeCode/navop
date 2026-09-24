@@ -1235,72 +1235,39 @@ impl AgentInput {
     }
 
     fn render_editor_top_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let theme = self.local_theme(cx);
-        let muted = theme.muted_foreground;
-        let count = self.attachments.len();
-
+        // Finch 式改版：附件入口迁到底部 chips 行（render_toolbar），顶栏只留
+        // 能力折叠与撤销，靠右排布。
         h_flex()
-            .debug_selector(|| "agent-input-toolbar".to_string())
             .w_full()
             .items_center()
-            .justify_between()
+            .justify_end()
             .px_3()
             .pt_2()
             .pb_1()
             .child(
-                h_flex()
-                    .items_center()
-                    .gap_1()
-                    .child(
-                        Button::new("agent-attach")
-                            .icon(IconName::File)
-                            .ghost()
-                            .small()
-                            .tooltip(t!("AgentUi.attach_images").to_string())
-                            .on_click(
-                                cx.listener(|this, _, window, cx| {
-                                    this.open_file_picker(window, cx)
-                                }),
-                            ),
-                    )
-                    .child(Icon::new(IconName::LoaderCircle).xsmall().text_color(muted))
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(muted)
-                            .child(t!("AgentUi.attachment_count", count = count).to_string()),
-                    )
-                    .child(div().h(px(18.0)).w(px(1.0)).bg(theme.border)),
+                Button::new("agent-editor-menu")
+                    .icon(if self.top_capabilities_collapsed {
+                        IconName::ChevronUp
+                    } else {
+                        IconName::ChevronDown
+                    })
+                    .ghost()
+                    .small()
+                    .tooltip(t!("AgentUi.collapse_capabilities").to_string())
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.top_capabilities_collapsed = !this.top_capabilities_collapsed;
+                        if this.top_capabilities_collapsed {
+                            this.open_menu = None;
+                        }
+                        cx.notify();
+                    })),
             )
             .child(
-                h_flex()
-                    .items_center()
-                    .gap_0p5()
-                    .child(
-                        Button::new("agent-editor-menu")
-                            .icon(if self.top_capabilities_collapsed {
-                                IconName::ChevronUp
-                            } else {
-                                IconName::ChevronDown
-                            })
-                            .ghost()
-                            .small()
-                            .tooltip(t!("AgentUi.collapse_capabilities").to_string())
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.top_capabilities_collapsed = !this.top_capabilities_collapsed;
-                                if this.top_capabilities_collapsed {
-                                    this.open_menu = None;
-                                }
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        Button::new("agent-editor-undo")
-                            .icon(IconName::Undo)
-                            .ghost()
-                            .small()
-                            .tooltip(t!("AgentUi.undo").to_string()),
-                    ),
+                Button::new("agent-editor-undo")
+                    .icon(IconName::Undo)
+                    .ghost()
+                    .small()
+                    .tooltip(t!("AgentUi.undo").to_string()),
             )
     }
 
@@ -1316,7 +1283,9 @@ impl AgentInput {
         let execution_width = execution_trigger_width(&execution_label, queue_mode);
         let model_min_width = if queue_mode { 96.0 } else { 150.0 };
         let action_button_size = px(TOOLBAR_ACTION_BUTTON_SIZE);
+        let attach_count = self.attachments.len();
         let mut toolbar = h_flex()
+            .debug_selector(|| "agent-input-toolbar".to_string())
             .w_full()
             .min_w_0()
             .items_center()
@@ -1325,6 +1294,24 @@ impl AgentInput {
             .px_3()
             .py_2()
             .flex_shrink_0()
+            // Finch 式 chips 行：附件入口在最左，附附件计数。
+            .child(
+                Button::new("agent-attach")
+                    .icon(IconName::File)
+                    .ghost()
+                    .small()
+                    .tooltip(t!("AgentUi.attach_images").to_string())
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.open_file_picker(window, cx)),
+                    ),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(t!("AgentUi.attachment_count", count = attach_count).to_string()),
+            )
+            .child(div().h(px(18.0)).w(px(1.0)).bg(theme.border))
             .child(
                 div()
                     .w(execution_width)

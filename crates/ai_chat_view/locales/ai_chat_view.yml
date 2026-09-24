@@ -1163,3 +1163,7 @@ Workbench:
     en: No conversations match the search.
     zh-CN: 没有匹配的会话。
     zh-HK: 沒有符合的會話。
+  session_count:
+    en: "%{count} sessions"
+    zh-CN: "%{count} 个会话"
+    zh-HK: "%{count} 個會話"

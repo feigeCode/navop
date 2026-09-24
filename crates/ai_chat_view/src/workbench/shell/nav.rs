@@ -48,14 +48,38 @@ impl WorkbenchShell {
         };
 
         let showing_archived = panel.read(cx).showing_archived_sessions(cx);
+        // 底部固定区的「新对话」主入口（Finch 式：整宽按钮 + 归档开关）。
         let new_button = {
             let panel = panel.clone();
-            IconButton::new("workbench-session-new", IconName::Plus)
-                .role(IconButtonRole::Compact)
-                .tooltip(t!("AgentUi.new_conversation").to_string())
+            h_flex()
+                .id("workbench-session-new")
+                .flex_1()
+                .min_w_0()
+                .h(px(30.0))
+                .items_center()
+                .justify_center()
+                .gap_1p5()
+                .rounded(theme.surface_radius)
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.panel)
+                .cursor_pointer()
+                .hover(|style| style.bg(theme.panel_hover))
                 .on_click(cx.listener(move |_, _, _, cx| {
                     panel.update(cx, |panel, cx| panel.create_session(cx));
                 }))
+                .child(
+                    Icon::new(IconName::Plus)
+                        .xsmall()
+                        .text_color(theme.foreground),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .font_medium()
+                        .text_color(theme.foreground)
+                        .child(t!("AgentUi.new_conversation").to_string()),
+                )
         };
         let archive_toggle = {
             let panel = panel.clone();
@@ -96,15 +120,28 @@ impl WorkbenchShell {
             }
         } else {
             for (group, items) in sections {
+                // Finch 式分组标题：左侧组名，右侧「N 个会话」计数。
+                let count = items.len();
                 rows.push(
-                    div()
+                    h_flex()
                         .pt_2()
                         .px_2()
                         .pb_0p5()
-                        .text_xs()
-                        .font_semibold()
-                        .text_color(theme.muted_foreground)
-                        .child(group.label())
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_semibold()
+                                .text_color(theme.muted_foreground)
+                                .child(group.label()),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child(t!("Workbench.session_count", count = count).to_string()),
+                        )
                         .into_any_element(),
                 );
                 for summary in items {
@@ -159,44 +196,43 @@ impl WorkbenchShell {
             v_flex()
                 .size_full()
                 .min_h_0()
-                .child(
-                    h_flex()
-                        .h(px(HEADER_HEIGHT))
-                        .flex_shrink_0()
-                        .items_center()
-                        .gap_2()
-                        .px_2()
-                        .border_b_1()
-                        .border_color(theme.border)
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .text_sm()
-                                .text_color(theme.foreground)
-                                .child(t!("Workbench.sessions").to_string()),
-                        )
-                        .child(archive_toggle)
-                        .child(new_button),
-                )
-                .children(self.search_input.as_ref().map(|state| {
-                    // 搜索行：无占位文案（该 Input 组件不支持），放大镜图标表明用途。
-                    h_flex()
-                        .h(px(HEADER_HEIGHT - 6.0))
-                        .flex_shrink_0()
-                        .items_center()
-                        .gap_1()
-                        .px_2()
-                        .border_b_1()
-                        .border_color(theme.border)
-                        .child(
-                            Icon::new(IconName::Search)
-                                .small()
-                                .text_color(theme.muted_foreground),
-                        )
-                        .child(Input::new(state).with_size(Size::Small).appearance(false))
-                }))
+                // 顶部搜索行：圆角搜索框（无输入能力时整行省略）。
+                .when(self.search_input.is_some(), |this| {
+                    this.child(
+                        h_flex()
+                            .flex_shrink_0()
+                            .items_center()
+                            .gap_1()
+                            .px_2()
+                            .py_1()
+                            .child(
+                                h_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .h(px(28.0))
+                                    .items_center()
+                                    .gap_1()
+                                    .px_2()
+                                    .rounded(theme.surface_radius)
+                                    .bg(theme.panel)
+                                    .when_some(
+                                        self.search_input.as_ref(),
+                                        |row, state| {
+                                            row.child(
+                                                Icon::new(IconName::Search)
+                                                    .small()
+                                                    .text_color(theme.muted_foreground),
+                                            )
+                                            .child(
+                                                Input::new(state)
+                                                    .with_size(Size::Small)
+                                                    .appearance(false),
+                                            )
+                                        },
+                                    ),
+                            ),
+                    )
+                })
                 .child(
                     v_flex()
                         .flex_1()
@@ -205,9 +241,22 @@ impl WorkbenchShell {
                         .size_full()
                         .overflow_y_scrollbar()
                         .px_1()
-                        .py_1()
+                        .pb_1()
                         .gap_0p5()
                         .children(rows),
+                )
+                // 底部固定区：归档开关 + 「新对话」主入口。
+                .child(
+                    h_flex()
+                        .flex_shrink_0()
+                        .items_center()
+                        .gap_1()
+                        .px_2()
+                        .py_2()
+                        .border_t_1()
+                        .border_color(theme.border)
+                        .child(new_button)
+                        .child(archive_toggle),
                 )
                 .into_any_element(),
         )
@@ -228,50 +277,44 @@ impl WorkbenchShell {
         let archive_panel = panel.clone();
         let archive_uid = id.clone();
 
-        v_flex()
+        // Finch 式单行会话条目：名称居左，归档按钮与相对时间居右。
+        h_flex()
             .id(element_id)
             .w_full()
+            .items_center()
+            .gap_2()
             .px_2()
-            .py_1p5()
-            .gap_0p5()
+            .py_1()
             .rounded(theme.surface_radius)
             .cursor_pointer()
             .when(selected, |this| this.bg(theme.panel_hover))
             .hover(move |style| style.bg(hover))
             .child(
-                h_flex()
-                    .w_full()
+                div()
+                    .flex_1()
                     .min_w_0()
-                    .items_center()
-                    .gap_1()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_sm()
-                            .text_color(theme.foreground)
-                            .child(summary.name.clone()),
-                    )
-                    .child(
-                        IconButton::new(
-                            SharedString::from(format!("workbench-session-archive-{id}")),
-                            IconName::Delete,
-                        )
-                        .role(IconButtonRole::Compact)
-                        .tooltip(t!("Workbench.archive_conversation").to_string())
-                        .on_click(move |_, _window, cx| {
-                            let uid = archive_uid.clone();
-                            archive_panel.update(cx, |panel, cx| {
-                                panel.archive_session(&uid, cx);
-                            });
-                        }),
-                    ),
+                    .truncate()
+                    .text_sm()
+                    .text_color(theme.foreground)
+                    .child(summary.name.clone()),
+            )
+            .child(
+                IconButton::new(
+                    SharedString::from(format!("workbench-session-archive-{id}")),
+                    IconName::Delete,
+                )
+                .role(IconButtonRole::Compact)
+                .tooltip(t!("Workbench.archive_conversation").to_string())
+                .on_click(move |_, _window, cx| {
+                    let uid = archive_uid.clone();
+                    archive_panel.update(cx, |panel, cx| {
+                        panel.archive_session(&uid, cx);
+                    });
+                }),
             )
             .child(
                 div()
-                    .w_full()
-                    .truncate()
+                    .flex_shrink_0()
                     .text_xs()
                     .text_color(theme.muted_foreground)
                     .child(format_timestamp(summary.updated_at)),
@@ -307,63 +350,79 @@ impl WorkbenchShell {
             .on_click(cx.listener(|this, _, _, cx| this.toggle_session_nav(cx)))
         });
 
-        // 当前工作区常显且可点击切换：这是新建对话选择上下文的主入口。
-        let workspace = self.workspace_root.as_ref().map(|root| {
-            let name = root
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| root.display().to_string());
-            let path = root.display().to_string();
-            h_flex()
-                .id("workbench-workspace-button")
-                .min_w_0()
-                .items_center()
-                .gap_1()
-                .px_2()
-                .py_1()
-                .rounded_md()
-                .cursor_pointer()
-                .hover(|style| style.bg(theme.panel_hover))
-                .on_click(cx.listener(|this, _, window, cx| {
-                    if let Some(picker) = this.workspace_picker.take() {
-                        (picker)(window, cx);
-                        this.workspace_picker = Some(picker);
-                    }
-                }))
-                .child(
-                    Icon::new(IconName::FolderOpen)
-                        .xsmall()
-                        .text_color(theme.muted_foreground),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .font_semibold()
-                        .text_color(theme.foreground)
-                        .child(name),
-                )
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .max_w(px(260.0))
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(path),
-                )
+        // Finch 式顶栏：「工作区 > 会话」面包屑。工作区常显可点（切换上下文
+        // 的主入口），会话段只读、随当前会话变化。
+        let session_name = self.session_source.as_ref().and_then(|panel| {
+            let view = panel.read(cx);
+            let current = view.current_session_id(cx)?;
+            view.session_summaries(cx)
+                .into_iter()
+                .find(|summary| summary.id == current)
+                .map(|summary| summary.name)
         });
 
         h_flex()
             .h(px(HEADER_HEIGHT))
             .flex_shrink_0()
             .items_center()
-            .gap_2()
+            .gap_1()
             .px_2()
             .border_b_1()
             .border_color(theme.border)
             .when_some(nav_toggle, |this, toggle| this.child(toggle))
-            .child(div().flex_1())
-            .when_some(workspace, |this, workspace| this.child(workspace))
+            .when_some(self.workspace_root.as_ref(), |this, root| {
+                let name = root
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| root.display().to_string());
+                this.child(
+                    h_flex()
+                        .id("workbench-workspace-button")
+                        .min_w_0()
+                        .flex_shrink_0()
+                        .items_center()
+                        .gap_1()
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .hover(|style| style.bg(theme.panel_hover))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            if let Some(picker) = this.workspace_picker.take() {
+                                (picker)(window, cx);
+                                this.workspace_picker = Some(picker);
+                            }
+                        }))
+                        .child(
+                            Icon::new(IconName::FolderOpen)
+                                .xsmall()
+                                .text_color(theme.muted_foreground),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_semibold()
+                                .text_color(theme.foreground)
+                                .child(name),
+                        ),
+                )
+                .when_some(session_name, |this, name| {
+                    this.child(
+                        Icon::new(IconName::ChevronRight)
+                            .xsmall()
+                            .text_color(theme.muted_foreground),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(name),
+                    )
+                })
+            })
     }
 
     pub(super) fn render_rail(
