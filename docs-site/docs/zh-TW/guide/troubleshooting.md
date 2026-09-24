@@ -20,6 +20,8 @@ Redis 確認單機、Sentinel、Cluster 模式與節點可達。MongoDB 檢查�
 
 RDP/VNC 問題可能涉及 Provider、Domain、憑證、會話政策或網路。Serial 亂碼則核對裝置、鮑率、資料位元、停止位元、同位檢查和流量控制。
 
+Linux 啟動報「無法建立表面」（Failed to create surface）代表主機缺少 Mesa/EGL 渲染程式库：從下載中心取得對應架構的 GPU 相依包，解壓後執行其中的 `install.sh`（可用 `--dry-run` 預覽、`--uninstall` 解除安裝），無需重裝應用本體。詳見[安裝與更新](./install-update)的 Linux 圖形相依包一節。
+
 ## AI、ACP 與 Public MCP
 
 模型失敗時檢查 Provider、API key、base URL、模型、網路與額度。工具缺少可能來自模式、資源或權限；ACP 授權不會移除 Public MCP 的審批。

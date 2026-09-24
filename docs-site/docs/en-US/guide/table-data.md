@@ -6,7 +6,9 @@ Table data views provide paging, filtering, copying, and row editing. Committing
 
 Open Data from a table or view and use paging to control load. Search on the current page filters only rows already loaded; use SQL for server-wide filtering or aggregation. Refresh to read the latest server state.
 
-Keep page size and maximum rows reasonable for large tables. Whether a view is editable depends on the database and view definition; use the base table or explicit SQL when it is read-only.
+Press Cmd/Ctrl+F while browsing to open the find bar: matched cells get an outlined highlight, and Cmd/Ctrl+G / Cmd/Ctrl+Shift+G jump between matches and scroll the hit column into view. Hits are re-scanned after paging or refresh. Finding highlights matches — it never filters or modifies data.
+
+Wide tables can hide columns via the column-header dropdown that selects visible fields. Field filtering affects display only; exports and SQL preview still use the full column set. Keep page size and maximum rows reasonable for large tables. Whether a view is editable depends on the database and view definition; use the base table or explicit SQL when it is read-only.
 
 ## Edit values correctly
 
