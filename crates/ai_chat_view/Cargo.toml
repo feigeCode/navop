@@ -36,6 +36,7 @@ base64.workspace = true
 image.workspace = true
 uuid.workspace = true
 lsp-types.workspace = true
+chrono.workspace = true
 sum-tree.workspace = true
 gpui-wry = { workspace = true, optional = true }
 wry = { version = "0.53.3", package = "lb-wry", optional = true }

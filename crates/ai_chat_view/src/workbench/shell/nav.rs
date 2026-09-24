@@ -3,20 +3,24 @@
 //! 与 `shell/mod.rs` 共用同一个 `impl WorkbenchShell`。
 
 use gpui::{
-    Context, InteractiveElement, IntoElement, ParentElement, SharedString,
+    Context, Entity, InteractiveElement, IntoElement, ParentElement, SharedString,
     StatefulInteractiveElement, Styled, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
-    ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex,
+    ActiveTheme as _, Icon, Sizable as _, Size, StyledExt as _, h_flex,
+    input::Input,
     scroll::ScrollableElement as _, v_flex,
 };
 use one_assets::IconName;
 use one_ui::{IconButton, IconButtonRole};
 use rust_i18n::t;
 
-use crate::session_sidebar::format_timestamp;
-use crate::{acp_session_placeholder, acp_session_row, acp_session_section_header};
-use super::super::state::WorkbenchPanelKind;
+use crate::session_sidebar::{SessionSummary, filter_sessions, format_timestamp, group_sessions};
+use crate::{
+    DefaultAgentChatPanel, acp_session_placeholder, acp_session_row, acp_session_section_header,
+};
+use super::super::state::{WorkbenchPanelKind, WorkbenchPlacement};
+use super::widgets::rail_tooltip;
 use crate::theme::AgentChatTheme;
 use super::{HEADER_HEIGHT, WorkbenchShell};
 use one_core::layout::TOOLBAR_WIDTH;
@@ -71,71 +75,48 @@ impl WorkbenchShell {
                 }))
         };
 
-        let mut rows: Vec<gpui::AnyElement> = Vec::with_capacity(summaries.len() + 4);
-        for summary in summaries {
-            let selected = current.as_deref() == Some(summary.id.as_str());
-            let id = summary.id.clone();
-            let hover = theme.hover_background();
-            let panel = panel.clone();
-            let element_id = SharedString::from(format!("workbench-session-{}", summary.id));
-            let archive_panel = panel.clone();
-            let archive_uid = id.clone();
-            rows.push(
-                v_flex()
-                    .id(element_id)
-                    .w_full()
-                    .px_2()
-                    .py_1p5()
-                    .gap_0p5()
-                    .rounded(theme.surface_radius)
-                    .cursor_pointer()
-                    .when(selected, |this| this.bg(theme.panel_hover))
-                    .hover(move |style| style.bg(hover))
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .min_w_0()
-                            .items_center()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_sm()
-                                    .text_color(theme.foreground)
-                                    .child(summary.name.clone()),
-                            )
-                            .child(
-                                IconButton::new(
-                                    SharedString::from(format!(
-                                        "workbench-session-archive-{id}"
-                                    )),
-                                    IconName::Delete,
-                                )
-                                .role(IconButtonRole::Compact)
-                                .tooltip(t!("Workbench.archive_conversation").to_string())
-                                .on_click(move |_, _window, cx| {
-                                    let uid = archive_uid.clone();
-                                    archive_panel.update(cx, |panel, cx| {
-                                        panel.archive_session(&uid, cx);
-                                    });
-                                }),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .w_full()
-                            .truncate()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(format_timestamp(summary.updated_at)),
-                    )
-                    .on_click(cx.listener(move |_, _, _, cx| {
-                        panel.update(cx, |panel, cx| panel.select_session(&id, cx));
-                    }))
-                    .into_any_element(),
-            );
+        // 侧栏：搜索过滤 + 按本地日历日分组。输入按更新时间降序。
+        let query = self.search_query.clone();
+        let filtered = filter_sessions(&summaries, &query);
+        let now = chrono::Local::now().fixed_offset();
+        let sections = group_sessions(&filtered, now);
+
+        let mut rows: Vec<gpui::AnyElement> = Vec::new();
+        if sections.is_empty() {
+            if !query.trim().is_empty() {
+                rows.push(
+                    div()
+                        .px_2()
+                        .py_3()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(t!("Workbench.no_matching_sessions").to_string())
+                        .into_any_element(),
+                );
+            }
+        } else {
+            for (group, items) in sections {
+                rows.push(
+                    div()
+                        .pt_2()
+                        .px_2()
+                        .pb_0p5()
+                        .text_xs()
+                        .font_semibold()
+                        .text_color(theme.muted_foreground)
+                        .child(group.label())
+                        .into_any_element(),
+                );
+                for summary in items {
+                    rows.push(Self::session_row(
+                        summary,
+                        current.as_deref() == Some(summary.id.as_str()),
+                        theme,
+                        &panel,
+                        cx,
+                    ));
+                }
+            }
         }
 
         // ACP 历史会话：和内置会话并排，只额外标出来源（方案 §7.1 的统一列表）。
@@ -199,6 +180,23 @@ impl WorkbenchShell {
                         .child(archive_toggle)
                         .child(new_button),
                 )
+                .children(self.search_input.as_ref().map(|state| {
+                    // 搜索行：无占位文案（该 Input 组件不支持），放大镜图标表明用途。
+                    h_flex()
+                        .h(px(HEADER_HEIGHT - 6.0))
+                        .flex_shrink_0()
+                        .items_center()
+                        .gap_1()
+                        .px_2()
+                        .border_b_1()
+                        .border_color(theme.border)
+                        .child(
+                            Icon::new(IconName::Search)
+                                .small()
+                                .text_color(theme.muted_foreground),
+                        )
+                        .child(Input::new(state).with_size(Size::Small).appearance(false))
+                }))
                 .child(
                     v_flex()
                         .flex_1()
@@ -213,6 +211,75 @@ impl WorkbenchShell {
                 )
                 .into_any_element(),
         )
+    }
+
+    /// 内建会话列表的一行：名称 + 归档按钮 + 相对时间。
+    fn session_row(
+        summary: &SessionSummary,
+        selected: bool,
+        theme: &AgentChatTheme,
+        panel: &Entity<DefaultAgentChatPanel>,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let id = summary.id.clone();
+        let hover = theme.hover_background();
+        let panel = panel.clone();
+        let element_id = SharedString::from(format!("workbench-session-{}", summary.id));
+        let archive_panel = panel.clone();
+        let archive_uid = id.clone();
+
+        v_flex()
+            .id(element_id)
+            .w_full()
+            .px_2()
+            .py_1p5()
+            .gap_0p5()
+            .rounded(theme.surface_radius)
+            .cursor_pointer()
+            .when(selected, |this| this.bg(theme.panel_hover))
+            .hover(move |style| style.bg(hover))
+            .child(
+                h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_sm()
+                            .text_color(theme.foreground)
+                            .child(summary.name.clone()),
+                    )
+                    .child(
+                        IconButton::new(
+                            SharedString::from(format!("workbench-session-archive-{id}")),
+                            IconName::Delete,
+                        )
+                        .role(IconButtonRole::Compact)
+                        .tooltip(t!("Workbench.archive_conversation").to_string())
+                        .on_click(move |_, _window, cx| {
+                            let uid = archive_uid.clone();
+                            archive_panel.update(cx, |panel, cx| {
+                                panel.archive_session(&uid, cx);
+                            });
+                        }),
+                    ),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .truncate()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(format_timestamp(summary.updated_at)),
+            )
+            .on_click(cx.listener(move |_, _, _, cx| {
+                panel.update(cx, |panel, cx| panel.select_session(&id, cx));
+            }))
+            .into_any_element()
     }
 
     pub(super) fn render_header(
@@ -314,33 +381,36 @@ impl WorkbenchShell {
             .border_l_1()
             .border_color(theme.border)
             .bg(theme.background)
-            // 中心区固定是对话；其余面板只作为侧边 dock，从 rail 开关。
-            .children(
-                WorkbenchPanelKind::ALL
-                    .into_iter()
-                    .filter(|kind| *kind != WorkbenchPanelKind::Chat)
-                    .map(|kind| {
-                let open = self.state.is_panel_open(kind);
+            .children(WorkbenchPanelKind::ALL.into_iter().map(|kind| {
+                let placement = self.state.placement_of(kind);
+                // 在中心区的面板是当前主角，用强调色；停靠中的用前景色；
+                // 未打开的用弱色。点击统一走 activate_panel（开/提焦点/关）。
+                let color = match placement {
+                    Some(WorkbenchPlacement::Center) => theme.accent,
+                    Some(_) => theme.foreground,
+                    None => theme.muted_foreground,
+                };
                 IconButton::new(
                     SharedString::from(format!("workbench-rail-{}", kind.id())),
                     kind.icon(),
                 )
                 .role(IconButtonRole::Compact)
-                .tooltip(kind.title())
-                .text_color(if open {
-                    theme.accent
-                } else {
-                    theme.muted_foreground
-                })
-                .on_click(cx.listener(move |this, _, _, cx| this.toggle_dock_panel(kind, cx)))
+                .tooltip(rail_tooltip(kind, placement))
+                .text_color(color)
+                .on_click(cx.listener(move |this, _, _, cx| this.activate_panel(kind, cx)))
                 .into_any_element()
-                    }),
-            )
+            }))
     }
 
     pub(super) fn render_content(&self, theme: &AgentChatTheme) -> gpui::AnyElement {
-        // 中心区只有对话；Review/文件/终端经侧边 dock 展示。
-        match self.panels.get(&WorkbenchPanelKind::Chat) {
+        // 中心区跟随状态单选；「对话」不可关闭，所以正常路径总有面板可显示。
+        let center = self.state.center().unwrap_or(WorkbenchPanelKind::Chat);
+        let body = self
+            .panels
+            .get(&center)
+            .map(|view| view.clone().into_any_element());
+
+        match body {
             Some(view) => div()
                 .debug_selector(|| "workbench-content".to_string())
                 .flex_1()
@@ -348,7 +418,7 @@ impl WorkbenchShell {
                 .min_w_0()
                 .min_h_0()
                 .overflow_hidden()
-                .child(view.clone())
+                .child(view)
                 .into_any_element(),
             None => div()
                 .debug_selector(|| "workbench-content".to_string())

@@ -67,6 +67,7 @@ mod theme;
 mod transcript_scroll;
 mod transcript_search;
 mod turn;
+pub mod workspace_files;
 mod workbench;
 
 pub use acp::{
@@ -166,8 +167,8 @@ pub use turn::{
     project_turns,
 };
 pub use workbench::{
-    WorkbenchDockLayout, WorkbenchPanelEntry, WorkbenchPanelKind, WorkbenchShell,
-    WorkbenchShellConfig, WorkbenchState, dock_region_width,
+    WorkbenchPanelEntry, WorkbenchPanelKind, WorkbenchPlacement, WorkbenchShell,
+    WorkbenchShellConfig, WorkbenchState,
 };
 
 /// 初始化 `ai_chat_view`:确保全局卡片注册表存在。

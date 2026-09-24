@@ -605,6 +605,36 @@ pub struct AiChatSettings {
     /// 最近使用的工作区根目录，最近在前。
     #[serde(default)]
     pub recent_workspace_roots: Vec<PathBuf>,
+    /// AI 工作台外壳的布局（面板落位、会话栏折叠）。
+    #[serde(default)]
+    pub workbench_layout: WorkbenchLayoutSettings,
+}
+
+/// AI 工作台外壳的布局。
+///
+/// 面板用**稳定字符串 id** 记录，这样 `one_core` 不必反向依赖 `ai_chat_view`；
+/// 悬空 id（面板已下线、或配置被手改坏）由消费方在还原时忽略，见
+/// `ai_chat_view::workbench::WorkbenchState::from_settings`。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkbenchLayoutSettings {
+    /// 会话导航栏是否折叠。默认展开，所以 `false` 是正确缺省。
+    #[serde(default)]
+    pub nav_collapsed: bool,
+    /// 中心区显示的面板 id。
+    #[serde(default)]
+    pub center: Option<String>,
+    /// 左侧单槽的面板 id。
+    #[serde(default)]
+    pub left: Option<String>,
+    /// 底部单槽的面板 id。
+    #[serde(default)]
+    pub bottom: Option<String>,
+    /// 右侧标签组的面板 id，顺序即标签顺序。
+    #[serde(default)]
+    pub right: Vec<String>,
+    /// 右侧标签组当前显示的面板 id。
+    #[serde(default)]
+    pub right_active: Option<String>,
 }
 
 /// 自定义系统提示词的最大字符数（按 chars 计），防止拖垮上下文长度。
@@ -687,6 +717,7 @@ impl Default for AiChatSettings {
             acp_models: HashMap::new(),
             last_workspace_root: None,
             recent_workspace_roots: Vec::new(),
+            workbench_layout: WorkbenchLayoutSettings::default(),
         }
     }
 }

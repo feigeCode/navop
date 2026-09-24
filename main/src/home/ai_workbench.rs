@@ -6,7 +6,7 @@
 
 use ai_chat_view::{
     DefaultAgentChatPanel, DefaultAgentChatPanelEvent, MentionItem, WorkbenchPanelEntry,
-    WorkbenchPanelKind, WorkbenchShell, WorkbenchShellConfig,
+    WorkbenchPanelKind, WorkbenchShell, WorkbenchShellConfig, WorkbenchState,
 };
 use gpui::{App, AppContext as _, Entity, Subscription, Window};
 use gpui_component::ActiveTheme as _;
@@ -84,6 +84,11 @@ pub(crate) fn build_ai_workbench_shell(
 ) -> Entity<WorkbenchShell> {
     let theme = workspace_theme(cx);
     let workspace_root = workspace_root(cx);
+    // 工作区文件进 `@` 菜单：连接提及（调用方传入）之后追加，有界收集不拖慢输入框。
+    let mut mentions = mentions;
+    mentions.extend(ai_chat_view::workspace_files::collect_workspace_files_default(
+        &workspace_root,
+    ));
     let editor = cx.new(|_| WorkspaceEditor::new(theme));
     let explorer = cx.new(|cx| {
         WorkspaceExplorer::new(
@@ -123,7 +128,12 @@ pub(crate) fn build_ai_workbench_shell(
                 ],
                 session_nav: None,
                 session_source: Some(chat.clone()),
-                initial_active: WorkbenchPanelKind::Chat,
+                // 布局从持久化设置还原；坏字段/空配置由 from_settings 容错。
+                initial_state: WorkbenchState::from_settings(
+                    &one_core::settings::AppSettings::current(cx)
+                        .ai_chat
+                        .workbench_layout,
+                ),
                 theme: None,
                 subscriptions: Vec::new(),
                 workspace_root: Some(workspace_root.clone()),

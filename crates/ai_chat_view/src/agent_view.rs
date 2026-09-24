@@ -11484,7 +11484,9 @@ mod tests {
                     // 宿主给的是内建会话列表；这里用等宽占位视图走同一条布局分支。
                     session_nav: Some(nav),
                     session_source: None,
-                    initial_active: crate::workbench::WorkbenchPanelKind::Chat,
+                    initial_state: crate::workbench::WorkbenchState::new(
+                        crate::workbench::WorkbenchPanelKind::Chat,
+                    ),
                     theme: None,
                     subscriptions: Vec::new(),
                     workspace_root: None,
