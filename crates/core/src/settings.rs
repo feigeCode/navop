@@ -83,6 +83,17 @@ pub enum LargeTextCellEditorOpenMode {
     Dialog,
 }
 
+/// 数据表格的显示方式
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TableViewMode {
+    /// 网格：行列平铺，可编辑、可排序
+    #[default]
+    Grid,
+    /// 纵向：每条记录按「列名：值」逐行展开，宽表更易读
+    Vertical,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StartupDefaultPage {
@@ -240,6 +251,27 @@ impl LargeTextCellEditorOpenMode {
             "dialog" => LargeTextCellEditorOpenMode::Dialog,
             _ => LargeTextCellEditorOpenMode::SidebarPreview,
         }
+    }
+}
+
+impl TableViewMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TableViewMode::Grid => "grid",
+            TableViewMode::Vertical => "vertical",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "vertical" => TableViewMode::Vertical,
+            _ => TableViewMode::Grid,
+        }
+    }
+
+    /// 是否处于纵向「列：值」形态。
+    pub fn is_vertical(&self) -> bool {
+        matches!(self, TableViewMode::Vertical)
     }
 }
 
@@ -914,12 +946,48 @@ fn default_connection_sidebar_tree_width() -> u32 {
     DEFAULT_CONNECTION_SIDEBAR_TREE_WIDTH
 }
 
+/// 点击主窗口关闭按钮时的行为。
+///
+/// 只在系统托盘可用时生效：托盘不可用时一律回退到退出确认，不制造无法恢复的隐藏窗口。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CloseButtonBehavior {
+    /// 弹窗询问：最小化到托盘，还是退出应用（弹窗内可记住选择）
+    #[default]
+    Ask,
+    /// 直接最小化到托盘
+    MinimizeToTray,
+    /// 直接走退出确认
+    Quit,
+}
+
+impl CloseButtonBehavior {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CloseButtonBehavior::Ask => "ask",
+            CloseButtonBehavior::MinimizeToTray => "minimize_to_tray",
+            CloseButtonBehavior::Quit => "quit",
+        }
+    }
+
+    /// 未知取值回退到 [`CloseButtonBehavior::Ask`]：旧版本写下的值不能把新版本卡死。
+    pub fn from_str(value: &str) -> Self {
+        match value {
+            "minimize_to_tray" => CloseButtonBehavior::MinimizeToTray,
+            "quit" => CloseButtonBehavior::Quit,
+            _ => CloseButtonBehavior::Ask,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     #[serde(default)]
     pub main_window_size: Option<MainWindowSize>,
     #[serde(default)]
     pub main_window_state: Option<MainWindowState>,
+    #[serde(default)]
+    pub close_button_behavior: CloseButtonBehavior,
     #[serde(default = "default_locale")]
     pub locale: String,
     #[serde(default = "default_theme_mode")]
@@ -952,6 +1020,9 @@ pub struct AppSettings {
     pub sql_editor_font_family: String,
     #[serde(default = "default_sql_editor_font_size")]
     pub sql_editor_font_size: f64,
+    /// SQL 编辑器鼠标 hover 是否显示对象详情（需停留约 0.6s）。
+    #[serde(default = "default_sql_editor_hover_enabled")]
+    pub sql_editor_hover_enabled: bool,
     #[serde(default = "default_monospace_font_family")]
     pub table_preview_font_family: String,
     #[serde(default = "default_monospace_font_family")]
@@ -993,6 +1064,12 @@ pub struct AppSettings {
     /// 选中文本后高亮可见区域内所有相同文本
     #[serde(default = "default_true")]
     pub terminal_selection_highlight: bool,
+    /// 终端左边距展示每行到达时间
+    #[serde(default)]
+    pub terminal_show_timestamps: bool,
+    /// 终端左边距展示行号
+    #[serde(default)]
+    pub terminal_show_line_numbers: bool,
     #[serde(default)]
     pub local_terminal_profile: LocalTerminalProfileSettings,
     #[serde(default)]
@@ -1057,9 +1134,18 @@ pub struct AppSettings {
     /// 表格行高（像素），默认44
     #[serde(default = "default_table_row_height")]
     pub table_row_height: u32,
+    /// 数据表格的显示方式：网格（默认）或纵向「列：值」
+    #[serde(default)]
+    pub table_view_mode: TableViewMode,
     /// SQL 查询默认最大返回行数，0 表示不限制
     #[serde(default = "default_sql_query_max_rows")]
     pub sql_query_max_rows: u32,
+    /// 导出/转储 SQL 时每一条 INSERT 语句合并的数据行数，`1` 表示一行一条语句。
+    ///
+    /// 用作「导出 SQL 文件」窗口里该参数的初始值，并在每次导出时写回，默认与
+    /// Navicat 的「每条语句的数据行数」一致（100）。
+    #[serde(default = "default_sql_export_rows_per_statement")]
+    pub sql_export_rows_per_statement: usize,
     /// SQL 美化格式化设置
     #[serde(default)]
     pub sql_format: SqlFormatSettings,
@@ -1070,6 +1156,8 @@ pub struct AppSettings {
 pub(crate) const DEFAULT_SYSTEM_HOTKEY_MACOS: &str = "cmd-alt-m";
 pub(crate) const DEFAULT_SYSTEM_HOTKEY_OTHER: &str = "ctrl-alt-m";
 pub const DEFAULT_SQL_QUERY_MAX_ROWS: u32 = 1000;
+/// SQL 导出每条语句默认合并的数据行数，与 Navicat 的默认值一致。
+pub const DEFAULT_SQL_EXPORT_ROWS_PER_STATEMENT: usize = 100;
 pub const DEFAULT_TERMINAL_THEME: &str = "application";
 
 fn default_font_family() -> String {
@@ -1117,6 +1205,11 @@ fn default_ui_scale_percent() -> u32 {
 
 fn default_sql_editor_font_size() -> f64 {
     14.0
+}
+
+/// hover 默认关闭：用户此前反馈鼠标滑过即弹详情太吵，需在设置里显式开启。
+fn default_sql_editor_hover_enabled() -> bool {
+    false
 }
 
 fn default_monospace_font_family() -> String {
@@ -1333,11 +1426,16 @@ fn default_sql_query_max_rows() -> u32 {
     DEFAULT_SQL_QUERY_MAX_ROWS
 }
 
+fn default_sql_export_rows_per_statement() -> usize {
+    DEFAULT_SQL_EXPORT_ROWS_PER_STATEMENT
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
             main_window_size: None,
             main_window_state: None,
+            close_button_behavior: CloseButtonBehavior::default(),
             locale: default_locale(),
             theme_mode: default_theme_mode(),
             auto_switch_theme: false,
@@ -1352,6 +1450,7 @@ impl Default for AppSettings {
             ui_scale_percent: default_ui_scale_percent(),
             sql_editor_font_family: default_monospace_font_family(),
             sql_editor_font_size: default_sql_editor_font_size(),
+            sql_editor_hover_enabled: default_sql_editor_hover_enabled(),
             table_preview_font_family: default_monospace_font_family(),
             terminal_font_family: default_monospace_font_family(),
             custom_fonts: Vec::new(),
@@ -1370,6 +1469,8 @@ impl Default for AppSettings {
             terminal_confirm_high_risk_command: default_true(),
             terminal_auto_session_logging: default_true(),
             terminal_selection_highlight: default_true(),
+            terminal_show_timestamps: false,
+            terminal_show_line_numbers: false,
             local_terminal_profile: LocalTerminalProfileSettings::default(),
             log_file_path: String::new(),
             auto_update: true,
@@ -1398,7 +1499,9 @@ impl Default for AppSettings {
             system_hotkey_macos: default_system_hotkey_macos(),
             system_hotkey_other: default_system_hotkey_other(),
             table_row_height: default_table_row_height(),
+            table_view_mode: TableViewMode::default(),
             sql_query_max_rows: default_sql_query_max_rows(),
+            sql_export_rows_per_statement: default_sql_export_rows_per_statement(),
             sql_format: SqlFormatSettings::default(),
             custom_keybindings: HashMap::new(),
         }
@@ -1720,16 +1823,42 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        AiChatSettings, AiChatToolExecutionMode, AppSettings, ConnectionSortOrder, CustomFont,
-        DEFAULT_AI_REQUEST_TIMEOUT_SECS, DEFAULT_MCP_APPROVAL_TIMEOUT_MS, DEFAULT_TERMINAL_THEME,
-        HomeConnectionLayout, LOCALE_SYSTEM, LargeTextCellEditorOpenMode, LocalTerminalProfileKind,
-        LocalTerminalProfileSettings, MAX_AI_REQUEST_TIMEOUT_SECS, MAX_CUSTOM_SYSTEM_PROMPT_CHARS,
+        AiChatSettings,
+        AiChatToolExecutionMode,
+        AppSettings,
+        CloseButtonBehavior,
+        ConnectionSortOrder,
+        CustomFont,
+        DEFAULT_AI_REQUEST_TIMEOUT_SECS,
+        default_grid_font_fallback_families,
+        default_grid_monospace_font_family,
+        DEFAULT_MCP_APPROVAL_TIMEOUT_MS,
+        DEFAULT_SQL_EXPORT_ROWS_PER_STATEMENT,
+        DEFAULT_TERMINAL_THEME,
+        grid_monospace_font,
+        HomeConnectionLayout,
+        installed_grid_monospace_font,
+        is_installed_font_family,
+        LargeTextCellEditorOpenMode,
+        LOCALE_SYSTEM,
+        LocalTerminalProfileKind,
+        LocalTerminalProfileSettings,
+        MainWindowState,
+        MAX_AI_REQUEST_TIMEOUT_SECS,
+        MAX_CUSTOM_SYSTEM_PROMPT_CHARS,
         MAX_RECENT_WORKSPACE_ROOTS,
-        MIN_AI_REQUEST_TIMEOUT_SECS, MainWindowState, McpPermissionMode, McpServerMode,
-        PersonalSyncBackendKind, RemoteFileOpenMode, SqlFormatSettings, SqlIndentStyle,
-        SqlKeywordCase, StartupDefaultPage, SyncProvider, default_grid_font_fallback_families,
-        default_grid_monospace_font_family, grid_monospace_font, installed_grid_monospace_font,
-        is_installed_font_family, resolve_installed_grid_monospace_font_family,
+        McpPermissionMode,
+        McpServerMode,
+        MIN_AI_REQUEST_TIMEOUT_SECS,
+        PersonalSyncBackendKind,
+        RemoteFileOpenMode,
+        resolve_installed_grid_monospace_font_family,
+        SqlFormatSettings,
+        SqlIndentStyle,
+        SqlKeywordCase,
+        StartupDefaultPage,
+        SyncProvider,
+        TableViewMode,
     };
 
     #[test]
@@ -1805,6 +1934,57 @@ mod tests {
             serde_json::from_value(serde_json::json!({})).expect("旧版设置应能反序列化");
 
         assert!(settings.main_window_state.is_none());
+    }
+
+    #[test]
+    fn close_button_behavior_defaults_to_asking_every_time() {
+        assert_eq!(
+            CloseButtonBehavior::Ask,
+            AppSettings::default().close_button_behavior
+        );
+    }
+
+    #[test]
+    fn legacy_app_settings_without_close_button_behavior_ask_every_time() {
+        let settings: AppSettings =
+            serde_json::from_value(serde_json::json!({})).expect("旧版设置应能反序列化");
+
+        assert_eq!(CloseButtonBehavior::Ask, settings.close_button_behavior);
+    }
+
+    #[test]
+    fn close_button_behavior_round_trips_through_settings_json() {
+        for behavior in [
+            CloseButtonBehavior::Ask,
+            CloseButtonBehavior::MinimizeToTray,
+            CloseButtonBehavior::Quit,
+        ] {
+            let mut settings = AppSettings::default();
+            settings.close_button_behavior = behavior;
+
+            let json = serde_json::to_value(&settings).expect("serialize settings");
+            let restored: AppSettings = serde_json::from_value(json).expect("deserialize settings");
+
+            assert_eq!(behavior, restored.close_button_behavior);
+        }
+    }
+
+    #[test]
+    fn close_button_behavior_strings_are_closed_and_fall_back_to_asking() {
+        for behavior in [
+            CloseButtonBehavior::Ask,
+            CloseButtonBehavior::MinimizeToTray,
+            CloseButtonBehavior::Quit,
+        ] {
+            assert_eq!(behavior, CloseButtonBehavior::from_str(behavior.as_str()));
+        }
+
+        // 未知取值必须回退到询问，而不是静默变成「退出应用」。
+        assert_eq!(
+            CloseButtonBehavior::Ask,
+            CloseButtonBehavior::from_str("something_else")
+        );
+        assert_eq!(CloseButtonBehavior::Ask, CloseButtonBehavior::from_str(""));
     }
 
     #[test]
@@ -2050,6 +2230,58 @@ mod tests {
         let settings = AppSettings::default();
 
         assert_eq!(1000, settings.sql_query_max_rows);
+    }
+
+    #[test]
+    fn app_settings_default_batches_sql_export_statements() {
+        let settings = AppSettings::default();
+
+        assert_eq!(DEFAULT_SQL_EXPORT_ROWS_PER_STATEMENT, 100);
+        assert_eq!(
+            DEFAULT_SQL_EXPORT_ROWS_PER_STATEMENT,
+            settings.sql_export_rows_per_statement
+        );
+    }
+
+    #[test]
+    fn table_view_mode_round_trips_between_str_and_enum() {
+        // 设置页下拉用字符串读写，枚举与字符串必须一一对应；
+        // 认不出的值一律退回网格，避免坏掉的配置把表格渲成空白。
+        assert_eq!("grid", TableViewMode::Grid.as_str());
+        assert_eq!("vertical", TableViewMode::Vertical.as_str());
+        assert_eq!(TableViewMode::Grid, TableViewMode::from_str("grid"));
+        assert_eq!(TableViewMode::Vertical, TableViewMode::from_str("vertical"));
+        assert_eq!(TableViewMode::Grid, TableViewMode::from_str("unknown"));
+        assert!(!TableViewMode::Grid.is_vertical());
+        assert!(TableViewMode::Vertical.is_vertical());
+    }
+
+    #[test]
+    fn app_settings_defaults_to_the_grid_view() {
+        let settings = AppSettings::default();
+
+        assert_eq!(TableViewMode::Grid, settings.table_view_mode);
+    }
+
+    #[test]
+    fn app_settings_deserializes_missing_table_view_mode_as_grid() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "locale": "en",
+            "theme_mode": "dark"
+        }))
+        .expect("缺少 table_view_mode 的旧版 settings.json 应能读取");
+
+        assert_eq!(TableViewMode::Grid, settings.table_view_mode);
+    }
+
+    #[test]
+    fn app_settings_deserializes_the_vertical_table_view_mode() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "table_view_mode": "vertical"
+        }))
+        .expect("table_view_mode 应能从 settings.json 读回");
+
+        assert_eq!(TableViewMode::Vertical, settings.table_view_mode);
     }
 
     #[test]
@@ -2333,6 +2565,20 @@ mod tests {
         .expect("旧版 settings.json 应能读取");
 
         assert_eq!(1000, settings.sql_query_max_rows);
+    }
+
+    #[test]
+    fn app_settings_deserializes_missing_sql_export_rows_per_statement() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "locale": "en",
+            "theme_mode": "dark"
+        }))
+        .expect("旧版 settings.json 应能读取");
+
+        assert_eq!(
+            DEFAULT_SQL_EXPORT_ROWS_PER_STATEMENT,
+            settings.sql_export_rows_per_statement
+        );
     }
 
     #[test]

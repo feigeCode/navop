@@ -91,6 +91,24 @@ impl Default for CsvExportConfig {
     }
 }
 
+/// SQL 导出时每一条 INSERT 语句合并的默认数据行数。
+///
+/// 取值与 Navicat「每条语句的数据行数」默认值一致；设为 `1` 即回到
+/// 「一行一条 INSERT 语句」的形态。
+pub const DEFAULT_ROWS_PER_INSERT_STATEMENT: usize = 100;
+
+/// 每一条 INSERT 语句可合并的数据行数上限。
+///
+/// 批量导出时一页最多取一条语句所需的行数，因此这个上限同时约束了导出期间
+/// 单页驻留内存（`max(SQL_EXPORT_PAGE_SIZE, 上限)` 行）。10 万行一条语句已经
+/// 是几十 MB 级别的文本，再大对导出文件没有实际收益。
+pub const MAX_ROWS_PER_INSERT_STATEMENT: usize = 100_000;
+
+/// 把「每条语句的数据行数」规整到受支持的区间 `1..=MAX_ROWS_PER_INSERT_STATEMENT`。
+pub fn normalize_rows_per_statement(rows_per_statement: usize) -> usize {
+    rows_per_statement.clamp(1, MAX_ROWS_PER_INSERT_STATEMENT)
+}
+
 /// 导入配置
 #[derive(Debug, Clone)]
 pub struct ImportConfig {
@@ -131,6 +149,10 @@ pub struct ExportConfig {
     pub include_data: bool,
     pub where_clause: Option<String>,
     pub limit: Option<usize>,
+    /// SQL 导出时每一条 INSERT 语句合并的数据行数，`1` 表示一行一条语句。
+    ///
+    /// 仅 [`DataFormat::Sql`] 使用；其他格式忽略该值。
+    pub rows_per_statement: usize,
     pub csv_config: Option<CsvExportConfig>,
 }
 
@@ -146,6 +168,7 @@ impl Default for ExportConfig {
             include_data: true,
             where_clause: None,
             limit: None,
+            rows_per_statement: DEFAULT_ROWS_PER_INSERT_STATEMENT,
             csv_config: None,
         }
     }

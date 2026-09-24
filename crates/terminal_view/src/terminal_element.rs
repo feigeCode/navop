@@ -278,14 +278,18 @@ impl DecorationManager {
         }
     }
 
-    /// Collect decorations from all addons
+    /// Collect decorations from all addons.
+    ///
+    /// 返回装饰内容发生变化的屏幕行（新增、删除或内容不同），
+    /// 供 `RenderCache::update` 把这些行并入增量重建集合，
+    /// 避免只要存在装饰就整屏重建。
     pub fn collect_from_addons(
         &mut self,
         addon_manager: &AddonManager,
         visible_lines: Range<usize>,
         display_offset: usize,
-    ) {
-        self.decorations_by_line.clear();
+    ) -> Vec<usize> {
+        let previous = std::mem::take(&mut self.decorations_by_line);
 
         // Collect decorations from each addon
         for addon in addon_manager.iter_addons() {
@@ -303,6 +307,21 @@ impl DecorationManager {
         for decorations in self.decorations_by_line.values_mut() {
             decorations.sort_by_key(|d| d.decoration.priority());
         }
+
+        // 找出与上一帧不同的行（新增 / 删除 / 内容变化）
+        let mut changed_lines: Vec<usize> = self
+            .decorations_by_line
+            .iter()
+            .filter_map(|(line, decorations)| {
+                (previous.get(line) != Some(decorations)).then_some(*line)
+            })
+            .collect();
+        changed_lines.extend(
+            previous
+                .into_keys()
+                .filter(|line| !self.decorations_by_line.contains_key(line)),
+        );
+        changed_lines
     }
 
     /// Get all decorations for a specific cell
@@ -422,6 +441,9 @@ pub struct RenderCache {
     // Decoration system replaces all addon-specific fields
     decoration_manager: DecorationManager,
 
+    /// 诊断/测试用：累计重建的行数（rebuild_all 计满屏、rebuild_lines 计实际行数）。
+    rebuilt_line_count: u64,
+
     custom_foreground: Hsla,
     custom_background: Hsla,
     /// 主题定义的光标颜色（确保与背景色不同）
@@ -514,6 +536,7 @@ impl RenderCache {
             colors,
             default_bg,
             decoration_manager: DecorationManager::new(),
+            rebuilt_line_count: 0,
             custom_foreground: default_theme.foreground,
             custom_background: default_theme.background,
             custom_cursor: default_theme.cursor,
@@ -543,10 +566,13 @@ impl RenderCache {
         let damage = DamageSnapshot::from_term_damage(term.damage());
         term.reset_damage();
 
-        // Collect decorations from all addons
+        // Collect decorations from all addons；同时拿到装饰发生变化的行
         let display_offset = term.grid().display_offset();
-        self.decoration_manager
-            .collect_from_addons(addon_manager, 0..num_lines, display_offset);
+        let deco_changed_lines = self.decoration_manager.collect_from_addons(
+            addon_manager,
+            0..num_lines,
+            display_offset,
+        );
 
         // Check if custom foreground changed
         let fg_changed = theme.foreground != self.custom_foreground;
@@ -574,9 +600,9 @@ impl RenderCache {
             self.default_bg = convert_color(Color::Named(NamedColor::Background), &self.colors);
         }
 
-        // 主题颜色变化或存在装饰时保守全量重建。
-        let has_decorations = !self.decoration_manager.decorations_by_line.is_empty();
-        if fg_changed || bg_changed || selection_changed || colors_changed || has_decorations {
+        // 主题/调色板颜色变化时全量重建（装饰颜色参与行缓存烘焙）；
+        // 仅有装饰变化时走增量路径：装饰行并入下方 dirty_lines。
+        if fg_changed || bg_changed || selection_changed || colors_changed {
             self.rebuild_all_and_update_state(term, block_selection);
             return;
         }
@@ -630,6 +656,9 @@ impl RenderCache {
             dirty_lines.insert(*line);
         }
 
+        // 装饰变化的行并入增量重建（装饰颜色在 build_line_cache 内烘焙）。
+        dirty_lines.extend(deco_changed_lines);
+
         // Rebuild dirty lines or just update cursor
         if dirty_lines.is_empty() {
             self.update_cursor(term);
@@ -670,6 +699,7 @@ impl RenderCache {
         term: &Term<GpuiEventProxy>,
         block_selection: Option<BlockSelectionBounds>,
     ) {
+        self.rebuilt_line_count += self.num_lines as u64;
         let content = term.renderable_content();
         let display_offset = content.display_offset;
         let selection = &content.selection;
@@ -733,6 +763,7 @@ impl RenderCache {
         let selection = &content.selection;
 
         let lines_set: std::collections::HashSet<usize> = lines.iter().copied().collect();
+        self.rebuilt_line_count += lines_set.len() as u64;
 
         // Collect cells for specified lines
         let mut line_cells: Vec<Vec<CellData>> = (0..self.num_lines).map(|_| Vec::new()).collect();
@@ -1178,6 +1209,17 @@ impl Clone for CellData {
     }
 }
 
+/// 终端左边距（时间戳 / 行号）在当前帧的排版结果。
+///
+/// 由 view 侧按每屏幕行生成后交给 `TerminalElement` 绘制，元素自身不关心数据来源。
+#[derive(Default, Clone)]
+pub struct LineMargin {
+    /// 左边距占用的文本列数；0 表示不显示边距。
+    pub columns: usize,
+    /// 每屏幕行一条已排好的文本，长度应与终端行数一致。
+    pub rows: Vec<SharedString>,
+}
+
 /// Terminal element that renders from cached data
 pub struct TerminalElement<'a> {
     cache: &'a RenderCache,
@@ -1190,6 +1232,8 @@ pub struct TerminalElement<'a> {
     cell_width: Pixels,
     performance_metrics: Option<Arc<TerminalPerformanceMetrics>>,
     focus_handle: FocusHandle,
+    /// 左边距内容；`columns == 0` 时不绘制。
+    margin: &'a LineMargin,
 }
 
 impl<'a> TerminalElement<'a> {
@@ -1203,6 +1247,7 @@ impl<'a> TerminalElement<'a> {
         cell_width: Pixels,
         performance_metrics: Option<Arc<TerminalPerformanceMetrics>>,
         focus_handle: FocusHandle,
+        margin: &'a LineMargin,
     ) -> Self {
         Self {
             cache,
@@ -1214,6 +1259,7 @@ impl<'a> TerminalElement<'a> {
             cell_width,
             performance_metrics,
             focus_handle,
+            margin,
         }
     }
 }
@@ -1227,6 +1273,7 @@ impl<'a> IntoElement for TerminalElement<'a> {
             cursor: self.cache.cursor.clone(),
             num_cols: self.cache.num_cols,
             custom_background: self.cache.custom_background,
+            custom_foreground: self.cache.custom_foreground,
             custom_cursor: self.cache.custom_cursor,
             font_family: self.font_family,
             font_size: self.font_size,
@@ -1236,6 +1283,8 @@ impl<'a> IntoElement for TerminalElement<'a> {
             cell_width: self.cell_width,
             performance_metrics: self.performance_metrics,
             focus_handle: self.focus_handle,
+            margin_columns: self.margin.columns,
+            margin_rows: self.margin.rows.clone(),
         }
     }
 }
@@ -1246,6 +1295,8 @@ pub struct TerminalElementImpl {
     num_cols: usize,
     /// 主题定义的背景色
     custom_background: Hsla,
+    /// 主题定义的文本前景色（左边距文字用其淡化色）
+    custom_foreground: Hsla,
     /// 主题定义的光标颜色
     custom_cursor: Hsla,
     font_family: SharedString,
@@ -1257,6 +1308,10 @@ pub struct TerminalElementImpl {
     cell_width: Pixels,
     performance_metrics: Option<Arc<TerminalPerformanceMetrics>>,
     focus_handle: FocusHandle,
+    /// 左边距占用的文本列数
+    margin_columns: usize,
+    /// 每屏幕行的左边距文本
+    margin_rows: Vec<SharedString>,
 }
 
 pub struct TerminalLayout {
@@ -1355,7 +1410,11 @@ impl Element for TerminalElementImpl {
             bounds: TerminalBounds {
                 cell_width,
                 cell_height: line_height,
-                origin: bounds.origin,
+                // 左边距整体右移网格原点，行高与列宽与网格保持一致。
+                origin: Point::new(
+                    bounds.origin.x + cell_width * self.margin_columns as f32,
+                    bounds.origin.y,
+                ),
             },
             fonts,
         }
@@ -1432,6 +1491,46 @@ impl Element for TerminalElementImpl {
                     );
                     window.paint_quad(fill(rect, glyph.color));
                 }
+            }
+        }
+
+        // Paint line margin（时间戳 / 行号），固定在网格左侧。
+        if self.margin_columns > 0 {
+            let font = fonts.get(TextRunFontRole::Primary, false, false);
+            let margin_color = self.custom_foreground.opacity(0.5);
+            let margin_width = tb.cell_width * self.margin_columns as f32;
+            let margin_origin_x = tb.origin.x - margin_width;
+            for line_idx in first_visible..visible_end {
+                let Some(row) = self.margin_rows.get(line_idx) else {
+                    continue;
+                };
+                if row.is_empty() {
+                    continue;
+                }
+                let shaped = window.text_system().shape_line(
+                    row.clone(),
+                    self.font_size,
+                    &[TextRun {
+                        len: row.len(),
+                        font: font.clone(),
+                        color: margin_color,
+                        background_color: None,
+                        underline: None,
+                        strikethrough: None,
+                    }],
+                    // `shape_line` 的第四参是**单个字形的推进宽度**，不是整行宽度。
+                    // 传整行宽度会把第 6 个字形起的字形吸附到 `n × 整行宽`，
+                    // 时间戳尾部就会画到网格内容上（与内容重叠）。
+                    Some(tb.cell_width),
+                );
+                let _ = shaped.paint(
+                    Point::new(margin_origin_x, tb.cell_origin(line_idx, 0).y),
+                    tb.cell_height,
+                    TextAlign::Left,
+                    None,
+                    window,
+                    cx,
+                );
             }
         }
 
@@ -1800,15 +1899,45 @@ mod tests {
         block_cursor_glyph_from_cell, block_element_geometry, ensure_minimum_contrast,
         terminal_bold_weight, terminal_text_font_role,
     };
+    use crate::addon::{CellDecoration, DecorationSpan, TerminalAddon};
     use crate::theme::TerminalTheme;
     use alacritty_terminal::grid::Dimensions;
     use alacritty_terminal::term::cell::{Cell, Flags};
     use alacritty_terminal::term::color::Colors;
     use alacritty_terminal::term::{Config as TermConfig, Term};
     use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor, StdSyncHandler};
-    use gpui::{FontWeight, rgb};
+    use gpui::{FontWeight, hsla, rgb};
+    use std::any::Any;
+    use std::ops::Range;
     use terminal::pty_backend::GpuiEventProxy;
     use tokio::sync::mpsc::unbounded_channel;
+
+    /// 测试 addon：固定产出一组装饰，用于驱动装饰管线。
+    struct FixedDecorationAddon {
+        spans: Vec<DecorationSpan>,
+    }
+
+    impl TerminalAddon for FixedDecorationAddon {
+        fn id(&self) -> &'static str {
+            "fixed_deco"
+        }
+
+        fn provide_decorations(
+            &self,
+            _visible_lines: Range<usize>,
+            _display_offset: usize,
+        ) -> Vec<DecorationSpan> {
+            self.spans.clone()
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
+    }
 
     struct TestTermDimensions {
         columns: usize,
@@ -1899,6 +2028,59 @@ mod tests {
             flags,
             is_selected: false,
         }
+    }
+
+    #[test]
+    fn decorations_only_rebuild_their_affected_lines() {
+        let dimensions = TestTermDimensions {
+            columns: 16,
+            screen_lines: 4,
+        };
+        let (event_tx, _event_rx) = unbounded_channel();
+        let mut term = Term::new(
+            TermConfig::default(),
+            &dimensions,
+            GpuiEventProxy::new(event_tx),
+        );
+        let mut processor: Processor<StdSyncHandler> = Processor::new();
+        processor.advance(&mut term, b"hello\r\nworld\r\nmore");
+
+        let theme = TerminalTheme::midnight();
+        let mut addon_manager = AddonManager::new();
+        let mut cache =
+            RenderCache::new(term.screen_lines(), term.columns(), term.colors().clone());
+
+        // 首帧：初始 Full damage → 整屏重建（4 行）。
+        cache.update(&mut term, &addon_manager, &theme, None);
+        assert_eq!(4, cache.rebuilt_line_count);
+
+        // 新增仅覆盖第 1 行的装饰：只重建该行 + 光标行（damage 恒标记光标行），
+        // 而不是像旧实现那样 has_decorations 触发整屏重建。
+        addon_manager.load(Box::new(FixedDecorationAddon {
+            spans: vec![DecorationSpan {
+                line: 1,
+                col_range: 0..2,
+                decoration: CellDecoration::Background {
+                    color: hsla(0.0, 0.8, 0.5, 1.0),
+                    priority: 10,
+                },
+            }],
+        }));
+        term.reset_damage();
+        cache.update(&mut term, &addon_manager, &theme, None);
+        // damage=光标行(2) + 装饰行(1) → 恰好重建 2 行。
+        assert_eq!(6, cache.rebuilt_line_count);
+
+        // 装饰无变化：下一帧只剩光标行的常规 damage，装饰行不再重建。
+        term.reset_damage();
+        cache.update(&mut term, &addon_manager, &theme, None);
+        assert_eq!(7, cache.rebuilt_line_count);
+
+        // 移除装饰：旧行必须重建一次以去掉装饰颜色。
+        addon_manager.unload("fixed_deco");
+        term.reset_damage();
+        cache.update(&mut term, &addon_manager, &theme, None);
+        assert_eq!(9, cache.rebuilt_line_count);
     }
 
     #[test]

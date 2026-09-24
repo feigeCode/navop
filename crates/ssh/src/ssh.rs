@@ -498,6 +498,33 @@ impl client::Handler for RusshHandler {
         }
     }
 
+    /// 远端（设备/服务器）主动发 `SSH_MSG_DISCONNECT` 时的回调。
+    ///
+    /// russh 把它映射成无载荷的 `Error::Disconnect`（Display 只有 "Disconnected"），
+    /// 默认实现也只在 debug 级别打印，于是「为何被断开」在最需要它的默认日志里丢失。
+    /// 这里按 warn 记录原因码与原因文本：受限设备（防火墙/交换机）正是用这条消息踢连接，
+    /// 例如 VTY/会话数限制、账号并发登录、设备侧认证超时。
+    async fn disconnected(
+        &mut self,
+        reason: client::DisconnectReason<Self::Error>,
+    ) -> Result<(), Self::Error> {
+        if let client::DisconnectReason::ReceivedDisconnect(info) = &reason {
+            tracing::warn!(
+                target: "ssh.disconnect",
+                identity = %self.identity,
+                reason_code = ?info.reason_code,
+                message = %info.message,
+                lang_tag = %info.lang_tag,
+                "SSH 服务器主动断开连接"
+            );
+        }
+
+        match reason {
+            client::DisconnectReason::ReceivedDisconnect(_) => Ok(()),
+            client::DisconnectReason::Error(err) => Err(err),
+        }
+    }
+
     /// sshd 为远端 X client 回连的 `x11` 通道：按 fake cookie 找到注册会话，
     /// 改写为本机 real cookie 后桥接到本机 X server。
     async fn server_channel_open_x11(
@@ -679,15 +706,8 @@ where
 
     match auth {
         SshAuth::Password(password) => {
-            let auth_result = session.authenticate_password(username, password).await?;
-            finish_auth_result_or_keyboard_interactive(
-                session,
-                username,
-                auth_result,
-                target,
-                responder,
-                &messages,
-                &messages.password_failed,
+            authenticate_password_with_mfa_priority(
+                session, username, password, target, responder, &messages,
             )
             .await?;
         }
@@ -758,6 +778,76 @@ fn private_key_for_auth(auth: &SshAuth) -> Result<PrivateKey> {
     }
 }
 
+/// 密码认证，并在连接启用了 MFA 回调时优先把认证交给 keyboard-interactive。
+///
+/// PAM 栈要求「先验证码、后密码」时（issue #284），password 方法无法区分各个提示的
+/// 内容：sshd 会把保存的密码当作第一个提示（验证码）的应答提交，服务器记一次无效验证码
+/// 后，本次认证就再无机会让用户输入验证码。因此只要服务器提供了 keyboard-interactive
+/// 方法，就先用它驱动交互：验证码由用户输入，密码仍在 password 提示处用保存的凭据应答。
+/// 服务器未提供该方法、或该方法要求先完成密码认证时，保持原有的密码认证顺序。
+async fn authenticate_password_with_mfa_priority<H>(
+    session: &mut client::Handle<H>,
+    username: &str,
+    password: &str,
+    target: KeyboardInteractiveTarget,
+    responder: Option<Arc<dyn KeyboardInteractiveResponder>>,
+    messages: &AuthFailureMessages,
+) -> Result<()>
+where
+    H: client::Handler,
+{
+    if responder.is_some() {
+        match probe_keyboard_interactive_support(session, username).await? {
+            KeyboardInteractiveSupport::Anonymous => return Ok(()),
+            KeyboardInteractiveSupport::Unsupported => {}
+            KeyboardInteractiveSupport::Supported => {
+                tracing::debug!(
+                    target = ?target,
+                    "SSH connection enables MFA responder, try keyboard-interactive first"
+                );
+                let attempt = authenticate_keyboard_interactive(
+                    session,
+                    username,
+                    target,
+                    responder.clone(),
+                    messages,
+                )
+                .await?;
+
+                match attempt {
+                    KeyboardInteractiveAttempt::Authenticated => return Ok(()),
+                    // 服务器已经拒绝了用户实际作答的验证码，再试密码只会得到同一个结果。
+                    KeyboardInteractiveAttempt::Rejected => {
+                        anyhow::bail!(messages.keyboard_interactive_failed.clone());
+                    }
+                    // 服务器还没下发过任何提示，说明这条链上要先完成密码认证。
+                    KeyboardInteractiveAttempt::Unavailable => {
+                        tracing::debug!(
+                            target = ?target,
+                            "SSH keyboard-interactive sent no prompt, fall back to password authentication"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    let auth_result = session
+        .authenticate_password(username, password)
+        .await
+        .context("SSH password authentication exchange failed")?;
+    finish_auth_result_or_keyboard_interactive(
+        session,
+        username,
+        auth_result,
+        target,
+        responder,
+        messages,
+        &messages.password_failed,
+    )
+    .await
+}
+
 async fn finish_auth_result_or_keyboard_interactive<H>(
     session: &mut client::Handle<H>,
     username: &str,
@@ -775,8 +865,16 @@ where
     }
 
     if auth_result_allows_keyboard_interactive(&auth_result) {
-        return authenticate_keyboard_interactive(session, username, target, responder, messages)
-            .await;
+        return match authenticate_keyboard_interactive(
+            session, username, target, responder, messages,
+        )
+        .await?
+        {
+            KeyboardInteractiveAttempt::Authenticated => Ok(()),
+            KeyboardInteractiveAttempt::Unavailable | KeyboardInteractiveAttempt::Rejected => {
+                anyhow::bail!(messages.keyboard_interactive_failed.clone());
+            }
+        };
     }
 
     anyhow::bail!(failure_message.to_string());
@@ -793,6 +891,57 @@ fn auth_result_allows_keyboard_interactive(auth_result: &client::AuthResult) -> 
 
 const MAX_KEYBOARD_INTERACTIVE_RESTARTS: usize = 3;
 
+/// RFC 4252 的 "none" 探测结果。
+///
+/// OpenSSH 的 PAM 栈要求「先验证码、后密码」时 password 方法注定失败，因此启用 MFA 回调的
+/// 连接需要先确认服务器是否提供 keyboard-interactive，再决定认证顺序。探测请求不会被
+/// sshd 记为一次认证失败。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyboardInteractiveSupport {
+    /// 服务器提供了 keyboard-interactive（可能附加了前置认证要求）。
+    Supported,
+    /// 服务器没有提供 keyboard-interactive 方法。
+    Unsupported,
+    /// "none" 方法已经直接通过认证，不需要再提交任何凭据。
+    Anonymous,
+}
+
+async fn probe_keyboard_interactive_support<H>(
+    session: &mut client::Handle<H>,
+    username: &str,
+) -> Result<KeyboardInteractiveSupport>
+where
+    H: client::Handler,
+{
+    match session
+        .authenticate_none(username)
+        .await
+        .context("SSH server capability probe (none authentication) failed")?
+    {
+        client::AuthResult::Success => Ok(KeyboardInteractiveSupport::Anonymous),
+        client::AuthResult::Failure {
+            remaining_methods, ..
+        } => Ok(
+            if remaining_methods.contains(&MethodKind::KeyboardInteractive) {
+                KeyboardInteractiveSupport::Supported
+            } else {
+                KeyboardInteractiveSupport::Unsupported
+            },
+        ),
+    }
+}
+
+/// keyboard-interactive 尝试的结果，供调用方判断是否需要回退到其它认证方法。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyboardInteractiveAttempt {
+    /// 已在 keyboard-interactive 方法上完成认证。
+    Authenticated,
+    /// 服务器拒绝了该方法且从未下发过提示，可改试其它认证方法。
+    Unavailable,
+    /// 用户已经作答过验证码，但服务器仍拒绝认证。
+    Rejected,
+}
+
 fn keyboard_interactive_failure_can_retry(
     remaining_methods: &russh::MethodSet,
     restart_count: usize,
@@ -807,22 +956,30 @@ async fn authenticate_keyboard_interactive<H>(
     target: KeyboardInteractiveTarget,
     responder: Option<Arc<dyn KeyboardInteractiveResponder>>,
     messages: &AuthFailureMessages,
-) -> Result<()>
+) -> Result<KeyboardInteractiveAttempt>
 where
     H: client::Handler,
 {
     let mut response = session
         .authenticate_keyboard_interactive_start(username, None::<String>)
-        .await?;
+        .await
+        .context("SSH keyboard-interactive start failed")?;
     let mut restart_count = 0;
+    // 服务器是否已经下发过提示。没有下发提示就失败，说明该方法在当前认证链里还用不上，
+    // 而不是用户输入有误：此时重新发起只会重复同一个结果。
+    let mut prompted = false;
 
     loop {
         response = match response {
-            client::KeyboardInteractiveAuthResponse::Success => return Ok(()),
+            client::KeyboardInteractiveAuthResponse::Success => {
+                return Ok(KeyboardInteractiveAttempt::Authenticated);
+            }
             client::KeyboardInteractiveAuthResponse::Failure {
                 remaining_methods,
                 partial_success,
-            } if keyboard_interactive_failure_can_retry(&remaining_methods, restart_count) => {
+            } if prompted
+                && keyboard_interactive_failure_can_retry(&remaining_methods, restart_count) =>
+            {
                 restart_count += 1;
                 tracing::debug!(
                     target = ?target,
@@ -834,7 +991,8 @@ where
                 );
                 session
                     .authenticate_keyboard_interactive_start(username, None::<String>)
-                    .await?
+                    .await
+                    .context("SSH keyboard-interactive restart failed")?
             }
             client::KeyboardInteractiveAuthResponse::Failure {
                 remaining_methods,
@@ -848,13 +1006,25 @@ where
                     max_restarts = MAX_KEYBOARD_INTERACTIVE_RESTARTS,
                     "SSH keyboard-interactive authentication failed"
                 );
-                anyhow::bail!(messages.keyboard_interactive_failed.clone());
+                return Ok(if prompted {
+                    KeyboardInteractiveAttempt::Rejected
+                } else {
+                    KeyboardInteractiveAttempt::Unavailable
+                });
             }
             client::KeyboardInteractiveAuthResponse::InfoRequest {
                 name,
                 instructions,
                 prompts,
             } => {
+                prompted = true;
+                // 服务器在此下发提示：一旦这里成功应答后传输中断，日志至少要能指出
+                // 「认证往返已经开始」，而不是只剩一个裸的 russh 传输错误。
+                tracing::debug!(
+                    target = ?target,
+                    prompt_count = prompts.len(),
+                    "SSH keyboard-interactive prompt received"
+                );
                 let request =
                     build_keyboard_interactive_request(target, name, instructions, prompts);
                 let answers = request_keyboard_interactive_responses(
@@ -865,7 +1035,8 @@ where
                 .await?;
                 session
                     .authenticate_keyboard_interactive_respond(answers)
-                    .await?
+                    .await
+                    .context("SSH keyboard-interactive response failed")?
             }
         };
     }

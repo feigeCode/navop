@@ -2,6 +2,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use mysql_async::{Conn, Opts, OptsBuilder, SslOpts, prelude::*};
+
 use one_core::storage::DbConnectionConfig;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -9,6 +10,9 @@ use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tracing::{debug, error, info};
+
+/// TCP keepalive 空闲间隔（毫秒）：与 SSH 侧 keepalive 默认 30s 对齐。
+const TCP_KEEPALIVE_MS: u32 = 30_000;
 
 use crate::connection::{DbConnection, DbError, StreamingProgress};
 use crate::executor::{
@@ -328,7 +332,10 @@ impl DbConnection for MysqlDbConnection {
             // 禁用 prefer_socket：远程数据库管理工具始终走 TCP,
             // 同时避免驱动在握手后查询 `@@socket`,从而兼容 StarRocks/Doris
             // 等不支持该系统变量的 MySQL 协议兼容引擎(GitHub issue #36)。
-            .prefer_socket(false);
+            .prefer_socket(false)
+            // TCP keepalive：空闲期让中间设备/NAT 看到 probe，尽早暴露被丢弃的死连接，
+            // 避免长时间挂机后第一次查询才挂在已死 socket 上。
+            .tcp_keepalive(Some(TCP_KEEPALIVE_MS));
 
         if let Some(ref db) = config.database {
             opts_builder = opts_builder.db_name(Some(db));

@@ -291,6 +291,58 @@ impl SqlCompletionInfo {
     }
 }
 
+fn table_like_node_type(object_type: TableObjectType) -> DbNodeType {
+    match object_type {
+        TableObjectType::ForeignTable => DbNodeType::ForeignTable,
+        _ => DbNodeType::Table,
+    }
+}
+
+/// 构建「物化视图」目录节点及其子节点。
+///
+/// `folder_id` 同时作为子节点 id 前缀，与其他目录（Views/Functions）保持一致。
+fn build_materialized_views_folder(
+    node: &DbNode,
+    base_metadata: &HashMap<String, String>,
+    views: Vec<ViewInfo>,
+    folder_id: String,
+) -> DbNode {
+    let mut folder = DbNode::new(
+        folder_id.clone(),
+        "DbTree.MaterializedViews".to_string(),
+        DbNodeType::MaterializedViewsFolder,
+        node.connection_id.clone(),
+        node.database_type.clone(),
+    )
+    .with_parent_context(node.id.clone())
+    .with_metadata(base_metadata.clone());
+
+    if !views.is_empty() {
+        let mut children: Vec<DbNode> = views
+            .into_iter()
+            .map(|view| {
+                let mut metadata = base_metadata.clone();
+                if let Some(comment) = view.comment.filter(|comment| !comment.is_empty()) {
+                    metadata.insert("comment".to_string(), comment);
+                }
+                DbNode::new(
+                    format!("{}:{}", folder_id, view.name),
+                    view.name.clone(),
+                    DbNodeType::MaterializedView,
+                    node.connection_id.clone(),
+                    node.database_type.clone(),
+                )
+                .with_parent_context(folder_id.clone())
+                .with_metadata(metadata)
+            })
+            .collect();
+        children.sort();
+        folder.set_children(children);
+    }
+
+    folder
+}
+
 fn routine_node(
     routine: FunctionInfo,
     node_type: DbNodeType,
@@ -383,6 +435,22 @@ pub trait DatabasePlugin: Send + Sync {
     /// Whether this database supports rowid for row identification (e.g., Oracle, SQLite)
     fn supports_rowid(&self) -> bool {
         false
+    }
+
+    /// Whether the given table actually exposes the rowid pseudo-column.
+    ///
+    /// `supports_rowid()` is a per-database default; some tables may still
+    /// lack the pseudo-column (e.g. SQLite `WITHOUT ROWID` tables and views).
+    /// Returning `false` makes `query_table_data` fall back to a plain
+    /// `SELECT *` projection instead of failing the whole preview.
+    async fn table_supports_rowid_projection(
+        &self,
+        _connection: &dyn DbConnection,
+        _database: &str,
+        _schema: Option<&str>,
+        _table: &str,
+    ) -> Result<bool> {
+        Ok(self.supports_rowid())
     }
 
     /// Get the rowid column name for this database
@@ -685,6 +753,30 @@ pub trait DatabasePlugin: Send + Sync {
         database: &str,
     ) -> Result<ObjectView>;
 
+    // === Materialized View Operations ===
+    /// 列举物化视图。
+    ///
+    /// 默认返回空集：只有支持物化视图的数据库（如 PostgreSQL）才需要重写，
+    /// 并需同时打开 `DatabaseUiCapabilities::supports_materialized_views`。
+    async fn list_materialized_views(
+        &self,
+        _connection: &dyn DbConnection,
+        _database: &str,
+        _schema: Option<String>,
+    ) -> Result<Vec<ViewInfo>> {
+        Ok(Vec::new())
+    }
+
+    /// 物化视图对象列表视图（表格形式）。
+    async fn list_materialized_views_view(
+        &self,
+        _connection: &dyn DbConnection,
+        _database: &str,
+        _schema: Option<String>,
+    ) -> Result<ObjectView> {
+        Ok(ObjectView::default())
+    }
+
     // === Function Operations ===
 
     async fn list_functions(
@@ -888,6 +980,19 @@ pub trait DatabasePlugin: Send + Sync {
         connection: &dyn DbConnection,
         database: &str,
     ) -> Result<ObjectView>;
+
+    /// 带 schema 的序列对象视图：不传 schema 的实现会退回默认实现，
+    /// 但支持 schema 的驱动（如 PostgreSQL）必须用它，否则非 public schema
+    /// 下会列出 public 的序列。
+    async fn list_sequences_view_in_schema(
+        &self,
+        connection: &dyn DbConnection,
+        database: &str,
+        schema: Option<String>,
+    ) -> Result<ObjectView> {
+        let _ = schema;
+        self.list_sequences_view(connection, database).await
+    }
 
     // === Helper Methods ===
     fn build_column_definition(&self, column: &ColumnInfo, include_name: bool) -> String;
@@ -1104,7 +1209,7 @@ pub trait DatabasePlugin: Send + Sync {
                     DbNode::new(
                         format!("{}:table_folder:{}", id, table_info.name),
                         table_info.name.clone(),
-                        DbNodeType::Table,
+                        table_like_node_type(table_info.object_type),
                         node.connection_id.clone(),
                         node.database_type.clone(),
                     )
@@ -1160,6 +1265,20 @@ pub trait DatabasePlugin: Send + Sync {
                 views_folder.set_children(children);
             }
             nodes.push(views_folder);
+        }
+
+        // Materialized views folder（仅支持物化视图的数据库，如 PostgreSQL）
+        if capabilities.supports_materialized_views {
+            let matviews = self
+                .list_materialized_views(connection, database, schema.clone())
+                .await
+                .unwrap_or_default();
+            nodes.push(build_materialized_views_folder(
+                node,
+                &metadata,
+                matviews,
+                format!("{}:matviews_folder", id),
+            ));
         }
 
         // Functions folder
@@ -1341,6 +1460,7 @@ pub trait DatabasePlugin: Send + Sync {
             }
             DbNodeType::TablesFolder
             | DbNodeType::ViewsFolder
+            | DbNodeType::MaterializedViewsFolder
             | DbNodeType::FunctionsFolder
             | DbNodeType::ProceduresFolder
             | DbNodeType::SequencesFolder => {
@@ -1393,7 +1513,35 @@ pub trait DatabasePlugin: Send + Sync {
                         DbNode::new(
                             format!("{}:{}", id, t.name),
                             t.name.clone(),
-                            DbNodeType::Table,
+                            table_like_node_type(t.object_type),
+                            node.connection_id.clone(),
+                            node.database_type.clone(),
+                        )
+                        .with_parent_context(id)
+                        .with_metadata(meta)
+                    })
+                    .collect();
+                children.sort();
+                Ok(children)
+            }
+            DbNodeType::MaterializedViewsFolder => {
+                if !self.capabilities().supports_materialized_views {
+                    return Ok(Vec::new());
+                }
+                let views = self
+                    .list_materialized_views(connection, database, schema)
+                    .await?;
+                let mut children: Vec<DbNode> = views
+                    .into_iter()
+                    .map(|v| {
+                        let mut meta = node.metadata.clone();
+                        if let Some(comment) = v.comment.filter(|comment| !comment.is_empty()) {
+                            meta.insert("comment".to_string(), comment);
+                        }
+                        DbNode::new(
+                            format!("{}:{}", id, v.name),
+                            v.name.clone(),
+                            DbNodeType::MaterializedView,
                             node.connection_id.clone(),
                             node.database_type.clone(),
                         )
@@ -2051,12 +2199,24 @@ pub trait DatabasePlugin: Send + Sync {
             }
         };
 
-        // Query with pagination, include rowid if supported
-        let base_sql = if self.supports_rowid() {
+        // Query with pagination, project rowid only when the table exposes it
+        let rowid_projection = self
+            .table_supports_rowid_projection(
+                connection,
+                &request.database,
+                request.schema.as_deref(),
+                &request.table,
+            )
+            .await?;
+        let base_sql = if rowid_projection {
             let rowid_col = self.rowid_column_name();
             format!(
-                "SELECT {} AS __rowid__, t.* FROM {} t{}{}",
-                rowid_col, table_ref, where_clause, order_clause
+                "SELECT {} AS {}, t.* FROM {} t{}{}",
+                rowid_col,
+                self.rowid_column_alias(),
+                table_ref,
+                where_clause,
+                order_clause
             )
         } else {
             format!(
@@ -2683,6 +2843,7 @@ pub trait DatabasePlugin: Send + Sync {
             self,
             &table_ident,
             &query_result,
+            crate::import_export::DEFAULT_ROWS_PER_INSERT_STATEMENT,
         )
     }
 
@@ -2825,6 +2986,31 @@ pub trait DatabasePlugin: Send + Sync {
 
     /// Rename table
     fn rename_table(&self, database: &str, old_name: &str, new_name: &str) -> String;
+
+    /// 删除外部表（`DROP FOREIGN TABLE`）。
+    ///
+    /// 默认退化为 `drop_table`：没有外部表概念的数据库不会走到这个分支。
+    fn drop_foreign_table(&self, database: &str, schema: Option<&str>, table: &str) -> String {
+        self.drop_table(database, schema, table)
+    }
+
+    /// 重命名外部表（`ALTER FOREIGN TABLE ... RENAME TO ...`）。
+    ///
+    /// `schema` 非空时限定旧表名，避免依赖会话 `search_path` 而改错 schema 下的同名表。
+    fn rename_foreign_table(
+        &self,
+        database: &str,
+        _schema: Option<&str>,
+        old_name: &str,
+        new_name: &str,
+    ) -> String {
+        self.rename_table(database, old_name, new_name)
+    }
+
+    /// 删除物化视图（`DROP MATERIALIZED VIEW`）。
+    fn drop_materialized_view(&self, database: &str, _schema: Option<&str>, view: &str) -> String {
+        self.drop_view(database, view)
+    }
 
     /// Build native backup-table SQL.
     /// 默认实现使用 `CREATE TABLE ... AS SELECT ...`，数据库插件可按方言覆盖。

@@ -101,9 +101,9 @@ Redis:
     zh-CN: "数据库索引（0-15）"
     zh-HK: "數據庫索引（0-15）"
   workspace:
-    en: "Workspace"
-    zh-CN: "工作区"
-    zh-HK: "工作區"
+    en: "Group"
+    zh-CN: "分组"
+    zh-HK: "分組"
   validation_error:
     en: "Please fill in all required fields"
     zh-CN: "请填写所有必填字段"

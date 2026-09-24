@@ -17,6 +17,7 @@ pub mod action_id {
     pub const APP_OPEN_TAB_SWITCHER: &str = "app.open_tab_switcher";
     pub const APP_SWITCH_NEXT_TAB: &str = "app.switch_next_tab";
     pub const APP_SWITCH_PREVIOUS_TAB: &str = "app.switch_previous_tab";
+    pub const APP_CLOSE_ACTIVE_TAB: &str = "app.close_active_tab";
     pub const APP_QUIT: &str = "app.quit";
     pub const HOME_QUICK_OPEN: &str = "home.quick_open";
     pub const HOME_NEW_CONNECTION: &str = "home.new_connection";
@@ -24,8 +25,10 @@ pub mod action_id {
     pub const DB_FOCUS_SEARCH: &str = "db.focus_search";
     pub const DB_OPEN_TABLE_QUERY: &str = "db.open_table_query";
     pub const DB_OPEN_TABLE_DESIGNER: &str = "db.open_table_designer";
+    pub const DB_SELECT_ALL_OBJECTS: &str = "db.select_all_objects";
     pub const SQL_RUN_QUERY: &str = "sql.run_query";
     pub const SQL_RUN_ALL_QUERY: &str = "sql.run_all_query";
+    pub const SQL_TOGGLE_COMMENT: &str = "sql.toggle_comment";
     pub const TERMINAL_SEND_TAB: &str = "terminal.send_tab";
     pub const TERMINAL_SEND_SHIFT_TAB: &str = "terminal.send_shift_tab";
     pub const TERMINAL_COPY: &str = "terminal.copy";
@@ -51,6 +54,9 @@ pub mod action_id {
     pub const TABLE_PASTE: &str = "table.paste";
     pub const TABLE_SELECT_ALL: &str = "table.select_all";
     pub const TABLE_CANCEL: &str = "table.cancel";
+    pub const TABLE_FIND: &str = "table.find";
+    pub const TABLE_FIND_NEXT: &str = "table.find_next";
+    pub const TABLE_FIND_PREVIOUS: &str = "table.find_previous";
     pub const AI_CHAT_FIND: &str = "ai_chat.find";
     pub const AI_CHAT_FIND_NEXT: &str = "ai_chat.find_next";
     pub const AI_CHAT_FIND_PREVIOUS: &str = "ai_chat.find_previous";

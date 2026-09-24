@@ -54,9 +54,30 @@ jobs:
           esac
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
+  # 发布 PR 只改 CHANGELOG + 版本号，跑全平台测试没有意义：这一层只做分类，
+  # 并在判定为发布改动时就地校验 changelog 与版本号；其余 PR 照旧跑全量测试。
+  classify:
+    name: Classify changes
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    outputs:
+      release_only: ${{ steps.check.outputs.release_only }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Classify and validate release-only changes
+        id: check
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 script/release_pr.py check
+
   test:
     name: Test (${{ matrix.platform }}, ${{ matrix.target }})
-    needs: prepare
+    needs: [prepare, classify]
+    if: ${{ needs.classify.outputs.release_only != 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -85,12 +106,21 @@ jobs:
         with:
           target: ${{ matrix.target }}
           cache: false
+      # sccache 只是构建加速器：GitHub Release CDN 偶发 504 会让下载安装失败，
+      # 此时必须退化成无缓存构建，而不是让整个测试 job 失败。
       - name: Setup sccache
+        id: sccache
         uses: mozilla-actions/sccache-action@v0.0.10
+        continue-on-error: true
       - name: Initialize sccache
         shell: bash
         run: |
           set -euo pipefail
+          if [ "${{ steps.sccache.outcome }}" != "success" ]; then
+            echo "::warning::sccache 安装失败，本次构建退化为无编译器缓存"
+            echo "RUSTC_WRAPPER=" >> "$GITHUB_ENV"
+            exit 0
+          fi
           sccache --start-server
           sccache --zero-stats
           sccache --show-stats
@@ -120,18 +150,21 @@ jobs:
         if: ${{ matrix.platform == 'linux' }}
         run: |
           cargo test --all
+      # 默认构建（三平台一致）不带 `embedded-webview`：它的宿主 WebView 在 Linux 上
+      # 无法随发布包提供（原因见 main/Cargo.toml）。`cargo test --all` 编的正是这个
+      # 默认形态，所以「显式打开该 feature」的那一半反而没有地方会编到 —— 在这里补一次
+      # check，免得它悄悄腐烂到有人真要用时才发现。
+      # 本步骤依赖 `script/install-linux.sh` 装上的 webkit2gtk-4.1 开发包。
+      - name: Check the opt-in embedded webview feature
+        if: ${{ matrix.platform == 'linux' }}
+        run: |
+          set -euo pipefail
+          cargo check -p ai_chat_view --features embedded-webview --tests
+          cargo check -p main --features embedded-webview
       - name: Test Windows
         if: ${{ matrix.platform == 'windows' }}
         shell: pwsh
         run: ./script/test-windows.ps1
-      - name: Build ATL/MSVC probe (x64 + x86)
-        if: ${{ matrix.platform == 'windows' }}
-        shell: pwsh
-        env:
-          RUSTC_WRAPPER: ""
-        run: |
-          rustup target add i686-pc-windows-msvc
-          ./script/build-windows-rdp-probe.ps1
       - name: Test MacOS
         if: ${{ matrix.platform == 'macos' }}
         run: |
@@ -141,9 +174,53 @@ jobs:
         shell: bash
         run: sccache --show-stats || true
 
+  windows-rdp-probe:
+    name: Windows RDP probe (${{ matrix.target }})
+    needs: [classify]
+    if: >-
+      ${{
+        (inputs.platform == '' ||
+         inputs.platform == 'all' ||
+         inputs.platform == 'windows') &&
+        needs.classify.outputs.release_only != 'true'
+      }}
+    runs-on: windows-2022
+    env:
+      RUSTC_WRAPPER: ""
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-pc-windows-msvc
+          - i686-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install NASM
+        shell: pwsh
+        run: |
+          choco install nasm --no-progress --yes
+          $nasmDir = Join-Path $env:ProgramFiles "NASM"
+          $nasmExe = Join-Path $nasmDir "nasm.exe"
+          if (-not (Test-Path -LiteralPath $nasmExe -PathType Leaf)) {
+            throw "NASM executable was not found at '$nasmExe'"
+          }
+          $env:Path = "$nasmDir;$env:Path"
+          $nasmDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          nasm -v
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.target }}
+          cache: false
+      - name: Build ATL/MSVC probe
+        shell: pwsh
+        run: >-
+          ./script/build-windows-rdp-probe.ps1
+          -Target "${{ matrix.target }}"
+
   ci-gate:
     name: CI gate
-    needs: [prepare, test]
+    needs: [prepare, classify, test, windows-rdp-probe]
     if: always()
     runs-on: ubuntu-latest
     steps:

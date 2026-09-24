@@ -72,7 +72,7 @@ use crate::sidebar::{
     LocalWorkspaceSidebar, SidebarPanel, TerminalSidebar, TerminalSidebarEvent,
     TerminalSidebarToolPanel, TerminalSidebarToolbar,
 };
-use crate::terminal_element::{RenderCache, TerminalElement};
+use crate::terminal_element::{LineMargin, RenderCache, TerminalElement};
 use crate::theme::{
     DEFAULT_LINE_HEIGHT_SCALE, MAX_FONT_SIZE, MIN_FONT_SIZE, TerminalTheme, default_font_fallbacks,
     default_monospace_font, normalize_terminal_primary_font, terminal_cell_width_from_advances,
@@ -216,6 +216,11 @@ pub struct TerminalView {
     blink_manager: Entity<BlinkCursor>,
     /// 侧边栏
     sidebar: Entity<TerminalSidebar>,
+    /// SSH 工具面板（文件管理器 / 服务器监控）是否还没建好。
+    ///
+    /// 需要运行时输入凭据的 SSH 连接在构造时拿不到 `SshSessionManager`，
+    /// 面板要等凭据提交后再补建，否则这类连接完全没有文件侧边栏。
+    ssh_tool_panels_pending: bool,
     /// 本地工作区文件编辑器（仅本地终端）
     workspace_editor: Option<Entity<WorkspaceEditor>>,
     /// 终端底部命令输入栏
@@ -339,6 +344,14 @@ pub struct TerminalView {
     paste_image_upload: bool,
     /// 在 vim/less/man 等 alt-screen TUI 中,把鼠标滚轮转为方向键发送到 PTY
     vim_scroll_to_arrow_keys: bool,
+    /// 左边距显示每行到达时间
+    show_line_timestamps: bool,
+    /// 左边距显示行号
+    show_line_numbers: bool,
+    /// 行号列宽，按滚屏历史量级定宽，避免行号进位引发网格 reflow
+    line_number_digits: usize,
+    /// 当前帧的左边距内容（时间戳 / 行号）
+    line_margin: LineMargin,
     broadcast_client_id: Option<BroadcastClientId>,
 
     /// 侧边栏面板大小

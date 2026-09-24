@@ -13,6 +13,7 @@ async-trait = { workspace = true }
 one-core = { workspace = true }
 gpui = { workspace = true }
 ssh = { workspace = true }
+process-util = { workspace = true }
 
 # Terminal emulation
 alacritty_terminal.workspace = true

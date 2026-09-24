@@ -598,6 +598,9 @@ impl DataExportView {
                 include_data: true,
                 where_clause: None,
                 limit: None,
+                // 本视图只导出 Txt/Csv/Json/Xml（见 `DataExportFormat`），不含
+                // SQL 格式，该参数不生效；保持默认值以免误以为这里可以配批量。
+                rows_per_statement: db::DEFAULT_ROWS_PER_INSERT_STATEMENT,
                 csv_config,
             };
 

@@ -164,7 +164,34 @@ fn is_timeout_failure(err: &anyhow::Error) -> bool {
         || msg.contains("i/o timeout")
 }
 
+/// 认证往返中客户端的回复通道先关闭（russh `Error::RecvError`）：认证请求已经发出，
+/// 但服务器既没回 `USERAUTH_SUCCESS` 也没回 `USERAUTH_FAILURE`，而是直接关掉了 SSH 传输。
+/// 该错误在 russh 里只产生于认证路径，因此不会与会话期的通道关闭混淆。
+fn is_auth_transport_closed_failure(err: &anyhow::Error) -> bool {
+    let msg = format!("{err:#}").to_ascii_lowercase();
+    msg.contains("unable to receive more messages from the channel")
+}
+
+/// 认证往返中传输层被设备掐断，且失败点落在 keyboard-interactive 交换内。
+///
+/// 与 [`is_auth_transport_closed_failure`] 的区别：这个判定要求错误链里出现
+/// keyboard-interactive 步骤的上下文（认证请求已下发但被设备直接断开），用于触发
+/// 「降级为纯密码认证重试」的兜底。
+pub(crate) fn is_keyboard_interactive_transport_closed_failure(error: &anyhow::Error) -> bool {
+    is_auth_transport_closed_failure(error) && format!("{error:#}").contains("keyboard-interactive")
+}
+
 fn add_connect_error_context(err: anyhow::Error) -> anyhow::Error {
+    if is_auth_transport_closed_failure(&err) {
+        return err.context(
+            "the remote device closed the SSH connection while authentication was still in \
+             progress; network devices often do this when the password (or one-time code) was \
+             rejected, when the account is already logged in (VTY / concurrent session limit), \
+             when the authentication server (RADIUS/TACACS/LDAP) is unreachable, or when the \
+             device's authentication timeout is shorter than the login exchange",
+        );
+    }
+
     if is_channel_open_failure(&err) {
         return err.context(
             "the server refused to open an SSH session channel; check the account's \
@@ -1257,8 +1284,9 @@ impl SshBackend {
                 }
                 for osc_event in &osc_events {
                     match osc_event {
-                        OscEvent::WorkingDirChanged(path) => {
-                            let _ = event_tx.send(TerminalEvent::WorkingDirChanged(path.clone()));
+                        OscEvent::WorkingDirChanged(reported) => {
+                            let _ =
+                                event_tx.send(TerminalEvent::WorkingDirChanged(reported.clone()));
                         }
                         OscEvent::PromptStart => {
                             let _ = event_tx.send(TerminalEvent::PromptStart);
@@ -1475,19 +1503,27 @@ impl SshBackend {
                 }
             };
 
+            // 受限设备可能在「探测通道之后、交互通道打开时」才把传输层捆断：russh 会报
+            // `Error::Disconnect` / 死 transport 上的 `Error::SendError`，而此时
+            // `is_connected()` 可能仍是 true（设备的 SSH_MSG_DISCONNECT 还没落到本地状态），
+            // 单看 `probe_killed_transport` 会漏判——这正是同一台设备「有时连上、有时直接
+            // 报 Disconnected」的竞态来源。此类错误因此与 channel open 被拒同等处理：失效
+            // 该 transport generation，并用单个裸交互 channel 重连一次（重连时跳过探测）。
             match result {
                 Ok((channel, shell_integration_requested)) => {
                     return Ok((client, channel, shell_integration_requested));
                 }
                 Err(err)
                     if attempt == 0
-                        && (probe_killed_transport || is_channel_open_failure(&err)) =>
+                        && (probe_killed_transport
+                            || is_channel_open_failure(&err)
+                            || is_transport_disconnect_failure(&err)) =>
                 {
                     if !probe_killed_transport {
                         tracing::warn!(
                             target: "terminal.ssh.connect",
                             error = %err,
-                            "SSH session channel 被拒绝，重建连接并降级为单个裸交互 channel"
+                            "SSH session channel 建立失败，重建连接并降级为单个裸交互 channel"
                         );
                     }
                     let invalidated = session_manager.invalidate_client(&client).await;
@@ -2358,6 +2394,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn establish_channel_reconnects_when_interactive_open_reports_disconnect() {
+        // 设备在探测通道之后才把传输层捆断：`is_connected()` 可能还没更新（用
+        // `new_with_open_error` 而非 `new_disconnected_on_open_error`），于是探测只降级，
+        // 真正失败的是交互通道 open，且错误是 russh 的 `Disconnected`。
+        let (probe_channel, probe_state) = MockChannel::new(
+            [
+                ChannelEvent::Data(b"__ONETCLI_SHELL_SUPPORTED__=1\n".to_vec()),
+                ChannelEvent::Close,
+            ],
+            false,
+        );
+        let first_client = MockClient::new_with_open_error([probe_channel], "Disconnected");
+
+        let (fallback_channel, fallback_state) = MockChannel::new([], false);
+        let second_client = MockClient::new([fallback_channel]);
+        let manager = MockSessionManager::new([first_client, second_client]);
+
+        let (_client, _channel, shell_integration_requested) =
+            SshBackend::establish_channel_with_manager(
+                &manager,
+                &PtyConfig::default(),
+                Some(42),
+                false,
+            )
+            .await
+            .expect("交互通道 open 报 Disconnected 时应失效重建，而不是直接失败");
+
+        assert!(
+            !shell_integration_requested,
+            "传输层断开后重连必须以纯裸终端模式建立交互通道"
+        );
+        assert_eq!(
+            manager.invalidation_count(),
+            1,
+            "应失效报 Disconnected 的 transport generation"
+        );
+        assert_eq!(
+            recorded_ops(&probe_state),
+            vec![ChannelOp::Exec, ChannelOp::Close],
+            "首次连接仍按默认配置尝试 integration 探测"
+        );
+        assert_eq!(
+            recorded_ops(&fallback_state),
+            vec![ChannelOp::RequestPty, ChannelOp::RequestShell],
+            "重连后只开一个交互 channel，不再探测"
+        );
+    }
+
+    #[tokio::test]
     async fn establish_channel_reconnects_with_one_plain_channel_when_probe_kills_transport() {
         // 模拟华为 USG 等受限设备：探测通道 open 直接被设备回
         // SSH_MSG_DISCONNECT，传输层被一起掐断。
@@ -2623,6 +2708,67 @@ mod tests {
                 "russh「{raw}」错误应补充受限设备会话限制排查提示，实际: {message}"
             );
         }
+    }
+
+    #[test]
+    fn auth_transport_closed_failure_recognizes_russh_recv_error_text() {
+        assert!(
+            is_auth_transport_closed_failure(&anyhow!(
+                "Unable to receive more messages from the channel"
+            )),
+            "应识别截图中的 russh RecvError 文本"
+        );
+        assert!(
+            !is_auth_transport_closed_failure(&anyhow!("Channel send error")),
+            "SendError 不应被误判为认证阶段 RecvError"
+        );
+    }
+
+    #[test]
+    fn auth_transport_closed_failure_recognizes_contextualized_error_chain() {
+        let err = anyhow!("Unable to receive more messages from the channel")
+            .context("SSH keyboard-interactive response failed");
+
+        assert!(
+            is_auth_transport_closed_failure(&err),
+            "认证步骤 context 不应影响 RecvError 的识别"
+        );
+    }
+
+    #[test]
+    fn keyboard_interactive_transport_closed_failure_requires_keyboard_interactive_context() {
+        let keyboard_interactive = anyhow!("Unable to receive more messages from the channel")
+            .context("SSH keyboard-interactive response failed");
+        assert!(
+            is_keyboard_interactive_transport_closed_failure(&keyboard_interactive),
+            "keyboard-interactive 步骤的 RecvError 应触发降级兜底"
+        );
+
+        let password = anyhow!("Unable to receive more messages from the channel")
+            .context("SSH password authentication exchange failed");
+        assert!(
+            !is_keyboard_interactive_transport_closed_failure(&password),
+            "密码认证步骤的 RecvError 不应触发 keyboard-interactive 降级"
+        );
+
+        let required = anyhow!("server requires keyboard-interactive authentication");
+        assert!(
+            !is_keyboard_interactive_transport_closed_failure(&required),
+            "没有传输层中断的「需要 keyboard-interactive」提示不应触发降级"
+        );
+    }
+
+    #[test]
+    fn add_connect_error_context_wraps_auth_transport_closed_failures() {
+        let err = anyhow!("Unable to receive more messages from the channel")
+            .context("SSH password authentication exchange failed");
+        let message = add_connect_error_context(err).to_string();
+
+        assert!(
+            message
+                .contains("closed the SSH connection while authentication was still in progress"),
+            "认证阶段传输被关闭应补充设备侧排查提示，实际: {message}"
+        );
     }
 
     #[test]

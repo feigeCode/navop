@@ -275,6 +275,46 @@ enum PageStateSnapshot {
     Failed(String),
 }
 
+/// query 页面结果区应该展示什么。
+#[derive(Debug, Clone, PartialEq)]
+enum QueryResultSource {
+    /// 用户本次执行的结果(失败也是结果)。
+    Query(Result<serde_json::Value, String>),
+    /// 页面 `load` 的结果:声明了 `load` 的查询页打开即应有初始结果集。
+    PageLoad(Result<serde_json::Value, String>),
+    /// 初始结果还在路上。
+    Loading,
+    /// 还没有任何结果可展示。
+    Empty,
+}
+
+/// 决定 query 页面结果区的来源。
+///
+/// 用户执行的结果优先;没执行过且页面声明了 `load` 时,回落到 `load` 的结果。
+///
+/// 没有 `load` 的页面**必须**保持空状态:两个结果存在不同字段里
+/// (`query_result` / `page_state`),而 `begin_page_transition` 只清前者不清后者 ——
+/// 不卡 `has_load` 这一道,打开一个没有 `load` 的查询页就会看到上一个页面的残留结果。
+fn query_result_source(
+    query_result: &Option<Result<serde_json::Value, String>>,
+    has_load: bool,
+    page_state: &PageStateSnapshot,
+) -> QueryResultSource {
+    if let Some(result) = query_result {
+        return QueryResultSource::Query(result.clone());
+    }
+    if !has_load {
+        return QueryResultSource::Empty;
+    }
+    match page_state {
+        PageStateSnapshot::Loaded(value) => QueryResultSource::PageLoad(Ok(value.clone())),
+        PageStateSnapshot::Failed(error) => QueryResultSource::PageLoad(Err(error.clone())),
+        // Idle 说明首屏那次 load 还没发生;Loading 说明正在进行。
+        PageStateSnapshot::Loading => QueryResultSource::Loading,
+        PageStateSnapshot::Idle => QueryResultSource::Empty,
+    }
+}
+
 impl NativeResourceWorkbench {
     fn page_state_snapshot(&self) -> PageStateSnapshot {
         match &self.page_state {
@@ -1953,15 +1993,25 @@ impl NativeResourceWorkbench {
             .or_insert_with(|| cx.new(|cx| query_page::QueryInputState::new(&inputs, window, cx)))
             .clone();
         let theme = cx.theme().clone();
-        let result_view: AnyElement = match &self.query_result {
-            None => empty_state(
+        let source = query_result_source(
+            &self.query_result,
+            page.load.is_some(),
+            &self.page_state_snapshot(),
+        );
+        let result_view: AnyElement = match source {
+            QueryResultSource::Query(result) | QueryResultSource::PageLoad(result) => {
+                match result {
+                    Ok(value) => self.render_embedded_json(value, window, cx),
+                    Err(error) => self.render_failure(error, cx),
+                }
+            }
+            QueryResultSource::Loading => loading_state(&theme),
+            QueryResultSource::Empty => empty_state(
                 IconName::Info,
                 "No result yet",
                 "Run the operation to see its output here.",
                 &theme,
             ),
-            Some(Ok(value)) => self.render_embedded_json(value.clone(), window, cx),
-            Some(Err(error)) => self.render_failure(error.clone(), cx),
         };
         let mut view = v_flex()
             .flex_1()
@@ -3106,5 +3156,73 @@ mod workbench_render_structure_tests {
             context.contains(&needle(&["connection: self.connection", ".clone()"])),
             "tree children load must carry the connection context"
         );
+    }
+}
+
+/// query 页结果区来源的决策。
+///
+/// 单独抽成纯函数是因为这里要合流两份状态,而两者生命周期不同:
+/// `query_result` 每次导航都被清,`page_state` 不会。
+#[cfg(test)]
+mod query_result_source_tests {
+    use super::*;
+
+    fn loaded(value: serde_json::Value) -> PageStateSnapshot {
+        PageStateSnapshot::Loaded(value)
+    }
+
+    /// 用户这次执行的结果永远优先于 load 的结果。
+    #[test]
+    fn a_user_run_overrides_the_load_result() {
+        let source = query_result_source(
+            &Some(Ok(serde_json::json!({"ran": true}))),
+            true,
+            &loaded(serde_json::json!({"loaded": true})),
+        );
+        assert_eq!(
+            QueryResultSource::Query(Ok(serde_json::json!({"ran": true}))),
+            source
+        );
+    }
+
+    /// 声明了 `load` 的查询页,打开即应以 load 结果为初始结果集。
+    #[test]
+    fn a_load_declaring_page_shows_the_load_result_first() {
+        let source = query_result_source(&None, true, &loaded(serde_json::json!({"hits": 3})));
+        assert_eq!(
+            QueryResultSource::PageLoad(Ok(serde_json::json!({"hits": 3}))),
+            source
+        );
+    }
+
+    /// 没有 `load` 的查询页必须保持空状态。
+    ///
+    /// 回归:`page_state` 是跨页共享字段,`begin_page_transition` 只清 `query_result`。
+    /// 不卡这一道,从上个页面切过来就会看到别人的 load 结果。
+    #[test]
+    fn a_page_without_load_stays_empty_even_with_a_stale_page_state() {
+        let source = query_result_source(&None, false, &loaded(serde_json::json!({"stale": 1})));
+        assert_eq!(QueryResultSource::Empty, source);
+    }
+
+    /// load 失败要出现在结果区,而不是被吞成"还没有结果"。
+    #[test]
+    fn a_failed_load_surfaces_in_the_result_area() {
+        let source = query_result_source(&None, true, &PageStateSnapshot::Failed("boom".into()));
+        assert_eq!(QueryResultSource::PageLoad(Err("boom".into())), source);
+    }
+
+    /// 初始 load 还在路上时显示加载态,而不是"运行一次才有结果"的误导提示。
+    #[test]
+    fn an_in_flight_load_shows_the_loading_state() {
+        let source = query_result_source(&None, true, &PageStateSnapshot::Loading);
+        assert_eq!(QueryResultSource::Loading, source);
+    }
+
+    /// 还没开始 load 的页面仍然是空状态。
+    #[test]
+    fn an_idle_load_declaring_page_stays_empty() {
+        let source = query_result_source(&None, true, &PageStateSnapshot::Idle);
+        assert_eq!(QueryResultSource::Empty, source);
     }
 }

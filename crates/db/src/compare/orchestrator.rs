@@ -541,6 +541,9 @@ pub fn table_schema_from_metadata(
         object_type: match table.object_type {
             TableObjectType::Table => SchemaObjectType::Table,
             TableObjectType::View => SchemaObjectType::View,
+            // 外部表不在结构比较范围内（调用方按 `is_ddl_comparable` 过滤），
+            // 万一传入也按表处理，避免凭空生成新对象类型。
+            TableObjectType::ForeignTable => SchemaObjectType::Table,
         },
         columns: columns
             .into_iter()

@@ -24,6 +24,7 @@
 
 use anyhow::Context as _;
 use gpui::{AnyWindowHandle, App, AppContext as _, AsyncApp};
+use one_core::settings::CloseButtonBehavior;
 use one_core::tab_container::GlobalTabContainer;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -44,9 +45,11 @@ pub(crate) enum TrayCommand {
 /// 主窗口关闭按钮的行为。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MainWindowCloseAction {
-    /// 托盘可用：隐藏窗口，保留进程、标签页和后台任务。
+    /// 托盘可用但用户还没固化偏好：弹窗让用户当场选「最小化到托盘 / 退出应用」。
+    AskUser,
+    /// 用户已选择最小化到托盘：隐藏窗口，保留进程、标签页和后台任务。
     HideToTray,
-    /// 托盘不可用（或初始化/隐藏失败）：走既有退出确认。
+    /// 托盘不可用（或用户已选择退出）：走既有退出确认。
     RequestQuit,
 }
 
@@ -61,13 +64,22 @@ pub(crate) const TRAY_SESSION_LIMIT: usize = 8;
 /// 会话标题最长保留的字符数，超出用省略号收尾。
 pub(crate) const TRAY_SESSION_LABEL_MAX_CHARS: usize = 40;
 
-/// 关闭按钮的纯策略：只有托盘确实可用时才隐藏窗口，否则必须回退到退出确认，
+/// 关闭按钮的纯策略：只有托盘确实可用时才可能隐藏窗口，否则必须回退到退出确认，
 /// 不能制造一个无法恢复的隐藏窗口。
-pub(crate) const fn main_window_close_action(tray_ready: bool) -> MainWindowCloseAction {
-    if tray_ready {
-        MainWindowCloseAction::HideToTray
-    } else {
-        MainWindowCloseAction::RequestQuit
+///
+/// 托盘可用时再按用户偏好细分：`Ask` 交回弹窗由用户当场选择（并可在弹窗里记住），
+/// `MinimizeToTray` / `Quit` 是用户已经固化过的选择，不再打扰。
+pub(crate) const fn main_window_close_action(
+    tray_ready: bool,
+    behavior: CloseButtonBehavior,
+) -> MainWindowCloseAction {
+    if !tray_ready {
+        return MainWindowCloseAction::RequestQuit;
+    }
+    match behavior {
+        CloseButtonBehavior::Ask => MainWindowCloseAction::AskUser,
+        CloseButtonBehavior::MinimizeToTray => MainWindowCloseAction::HideToTray,
+        CloseButtonBehavior::Quit => MainWindowCloseAction::RequestQuit,
     }
 }
 
@@ -474,15 +486,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn close_action_hides_only_when_the_tray_is_ready() {
+    fn close_action_asks_the_user_until_a_choice_is_remembered() {
+        assert_eq!(
+            MainWindowCloseAction::AskUser,
+            main_window_close_action(true, CloseButtonBehavior::Ask)
+        );
         assert_eq!(
             MainWindowCloseAction::HideToTray,
-            main_window_close_action(true)
+            main_window_close_action(true, CloseButtonBehavior::MinimizeToTray)
         );
         assert_eq!(
             MainWindowCloseAction::RequestQuit,
-            main_window_close_action(false)
+            main_window_close_action(true, CloseButtonBehavior::Quit)
         );
+    }
+
+    #[test]
+    fn close_action_without_a_tray_never_hides_the_window() {
+        for behavior in [
+            CloseButtonBehavior::Ask,
+            CloseButtonBehavior::MinimizeToTray,
+            CloseButtonBehavior::Quit,
+        ] {
+            assert_eq!(
+                MainWindowCloseAction::RequestQuit,
+                main_window_close_action(false, behavior),
+                "托盘不可用时任何偏好都不能隐藏窗口"
+            );
+        }
     }
 
     #[test]

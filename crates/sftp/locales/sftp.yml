@@ -38,9 +38,9 @@ Sftp:
     zh-CN: 请加载 SSH Agent，或切换为「私钥文件」模式手动指定私钥
     zh-HK: 請加載 SSH Agent，或切換為「私鑰文件」模式手動指定私鑰
   auth_keyboard_interactive_required:
-    en: SSH server requires MFA/keyboard-interactive authentication
-    zh-CN: SSH 服务器需要 MFA/keyboard-interactive 二次认证
-    zh-HK: SSH 伺服器需要 MFA/keyboard-interactive 二次認證
+    en: The server rejected the current authentication method and requires keyboard-interactive to finish signing in. If this server really uses OTP/second-factor, enable "Two-factor authentication" for this connection and try again; otherwise re-check that the saved password or credentials are correct.
+    zh-CN: 服务器拒绝了当前认证方式，并要求用 keyboard-interactive 完成登录。若该服务器确实需要 OTP/二次认证，请在此连接中启用「双因素认证」后重试；若不需要，请先确认密码或凭据是否正确。
+    zh-HK: 伺服器拒絕了目前認證方式，並要求以 keyboard-interactive 完成登入。若該伺服器確實需要 OTP/二次認證，請在此連線中啟用「雙因素認證」後重試；若不需要，請先確認密碼或憑據是否正確。
   auth_keyboard_interactive_failed:
     en: MFA/keyboard-interactive authentication failed
     zh-CN: MFA/keyboard-interactive 二次认证失败

@@ -4,6 +4,228 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.19.1] - 2026-09-24
+
+#### 修复与优化
+
+- 修复 Windows 下终端频繁卡顿的问题（git bash、PowerShell，操作后切换界面即卡、过会才恢复）。三个热点一并处理：存在高亮/搜索等装饰时每次重绘都整屏重建文本缓存，现在只重建装饰发生变化的行；自定义高亮规则不再每帧全屏扫描，改为只重扫本帧发生变化的行；本地终端悬停检测目录条目的同步读盘移到后台线程，不再阻塞 UI 线程。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.19.1) 下载桌面端安装包
+
+---
+
+#### Fixes and Improvements
+
+- Fixed terminals freezing frequently on Windows (git bash, PowerShell — stalling right after switching views, recovering after a while). Three hotspots are addressed together: whenever decorations such as highlights or search marks existed, every repaint rebuilt the entire text cache for the whole screen; now only the lines whose decorations actually changed are rebuilt. Custom highlight rules no longer rescan the full visible grid every frame — only lines damaged this frame are rescanned. And the directory-entry lookup for hover detection on local terminals moved its synchronous disk read to a background thread, off the UI thread.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.19.0...v0.19.1
+
+## [v0.19.0] - 2026-09-23
+
+#### 更新内容
+
+- 表格数据支持查找：浏览表数据时按 Cmd/Ctrl+F 打开查找面板，命中单元格高亮描边，Cmd/Ctrl+G / Cmd/Ctrl+Shift+G 在命中间跳转并把所在列横向滚入视口，换页/刷新后按当前词重扫。修复了两个前置缺陷：焦点停在页签外壳时按 Cmd/Ctrl+F 完全无反应（现在页签打开后焦点直接落在表格）；工具栏搜索框不再过滤行、改为高亮匹配，两种入口合并为单一查找框。
+- 表数据预览支持字段过滤隐藏列：列头下拉可选可见字段，宽表只看关心的列。
+- SQL 编辑器对象详情体验重做：鼠标悬停弹详情默认关闭（设置里可开，开启后须停驻 600ms 才显示），改由右键菜单「查看对象详情」打开独立弹窗，内容可选中复制；右键新增「复制 DDL」，一键拷贝选中/光标处表的 CREATE TABLE/VIEW 语句；选中表名右键也能解析。
+- 新增关闭当前页签快捷键 Cmd/Ctrl+Shift+W，可在设置里改绑。
+- 连接表单「工作区」字段统一改称「分组」，与实际语义一致。
+
+#### 修复与优化
+
+- 修复 SSH MFA 登录把保存的密码当作验证码应答导致认证失败的问题：现在先用 RFC 4252 "none" 探测服务器是否提供 keyboard-interactive，提供则验证码由用户输入、密码仍在密码提示处用保存凭据应答；用户作答的验证码被拒直接报 MFA 失败不再无意义重试；无该方法时保持原有密码认证顺序。
+- 修复老设备（华为 VRP 系等）SSH 连接报 `` `mpint` encoding invalid `` 失败的问题：这些设备的主机公钥在 RSA e/n 里带 RFC 4251 禁止的多余前导零字节，OpenSSH 一直容忍而我们严格拒绝，现在读对端报文时同样裁剪归一化。
+- 修复 SQLite WITHOUT ROWID 表、视图预览整页空白的问题：预览 SQL 硬编码投影 rowid 伪列，这类对象没有该列直接报 no such column，现在翻页前先探测可用性，不可用回退普通 SELECT *。
+- 修复 PostgreSQL 序列目录一直为空的问题：序列列表查询用了不存在的列，整张表查不出来。
+- 数据库连接健壮性：长时间挂机后 TCP 被 NAT/防火墙静默丢弃，复用会话的 ping 与退出路径的断开在死 socket 上永久挂起（查询转圈、关 tab 卡死，只能杀进程）。现在复用前 ping 10 秒上限、超时判死并丢弃会话，断开 5 秒上限、超时放弃优雅断开强制回收；MySQL/PostgreSQL 连接启用 TCP keepalive 30 秒，空闲期由 OS 尽早暴露死连接。
+- 修复断连杀死的手工事务卡在「关不掉也提交不了」死循环：现在自动收尾。
+- 修复 MCP 客户端配置写入已废弃的 mcp 位置参数（影响 Claude Desktop/Code、Codex 启动）。
+- 默认 HTTP 客户端改为跟随系统代理与环境变量代理：浏览器能上网而 Navop 登录报 error sending request 的场景（代理开在系统代理里而应用直连）不再出现。
+- Linux 发布包不再链接 WebKitGTK 4.1，渲染依赖独立成 gpu-stack 包按需安装（安装脚本只补宿主缺失的库，支持 --dry-run/--uninstall）；HTML 预览 webview 改为全平台默认关闭，弹窗降级提示「用浏览器打开」「下载 HTML」不受影响。
+- 依赖链：gpui-pre 升到 fork-0.3.114（图片 atlas 与字形/emoji atlas 分离，丢弃图片可释放 GPU 页；顺带修复 Windows directx 编译错误）。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.19.0) 下载桌面端安装包
+
+---
+
+#### What's New
+
+- Table data find: press Cmd/Ctrl+F while browsing table data to open the find bar; matched cells get an outlined highlight, Cmd/Ctrl+G / Cmd/Ctrl+Shift+G jump between matches and scroll the hit column into view horizontally, and hits are re-scanned after paging/refresh using the current term. Two prerequisite defects are fixed: Cmd/Ctrl+F did nothing while focus sat on the tab shell (focus now lands on the grid right after the tab opens), and the toolbar search box no longer filters rows — it highlights matches instead, with both entries merged into a single find bar.
+- Field filtering for table data preview: a column-header dropdown selects visible fields, so wide tables can show only the columns you care about.
+- SQL editor object details reworked: hover popups are off by default (enable in settings; when on they require a 600ms dwell instead of firing on mouse pass), replaced by a right-click "View object details" that opens a standalone dialog with selectable, copyable content. Right-click also gains "Copy DDL", which copies the CREATE TABLE/VIEW statement of the table under the cursor or selection; selecting a table name and right-clicking resolves it too.
+- New shortcut Cmd/Ctrl+Shift+W closes the active tab, rebindable in settings.
+- The "Workspace" field in connection forms is now consistently called "Group", matching what it actually does.
+
+#### Fixes and Improvements
+
+- Fixed SSH MFA logins answering the verification-code prompt with the saved password and failing auth. The client now probes with the RFC 4252 "none" method first: when the server offers keyboard-interactive, the code is entered by the user while the password is still answered from saved credentials at the password prompt; a user-answered code being rejected fails MFA immediately instead of retrying pointlessly; servers without the method keep the original password-first order.
+- Fixed SSH connections to legacy devices (Huawei VRP etc.) dying with `` `mpint` encoding invalid ``: their host keys carry redundant leading zero bytes in the RSA e/n, which RFC 4251 forbids but OpenSSH has always tolerated on read. Peer-message parsing now trims and normalizes them the same way.
+- Fixed SQLite WITHOUT ROWID tables and views showing an empty page in the data preview: the preview SQL hard-coded a rowid pseudo-column that these objects lack, failing with no such column. Availability is now probed before paging, falling back to a plain SELECT * when unavailable.
+- Fixed the PostgreSQL sequence catalogue always being empty: the listing query referenced a column that does not exist.
+- Database connection robustness: after long idle periods TCP connections get silently dropped by NAT/firewalls, and both the pre-reuse ping and the shutdown-path disconnect hung forever on the dead socket (spinning queries, uncloseable tabs, process kill as the only way out). The ping now has a 10-second cap that declares the session dead and discards it (the next query opens a fresh connection), the disconnect has a 5-second cap after which the socket is force-reclaimed, and MySQL/PostgreSQL connections enable 30s TCP keepalive so the OS surfaces dead connections early.
+- Fixed manually-started transactions killed by a disconnect getting stuck in a "can neither commit nor close" loop; they are now finalized automatically.
+- Fixed MCP client configs being written with a removed `mcp` positional argument (affecting Claude Desktop/Code and Codex launchers).
+- The default HTTP client now follows system and environment-variable proxies: the "browser can reach the internet but Navop login says error sending request" scenario (proxy configured at system level while the app connected directly) no longer occurs.
+- Linux packages no longer link WebKitGTK 4.1; rendering dependencies ship as a separate gpu-stack package installed on demand (the installer only adds libraries the host is missing, with --dry-run/--uninstall support). The HTML preview webview is off by default on all platforms; the dialog degrades gracefully while "Open in browser" and "Download HTML" keep working.
+- Dependencies: gpui-pre upgraded to fork-0.3.114 (image atlas split from the glyph/emoji atlas so dropping images releases GPU pages; also fixes a Windows directx compile error).
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.18.6...v0.19.0
+
+## [v0.18.6] - 2026-09-21
+
+#### 更新内容
+
+- 数据库对象列表支持全选与拖选。表、视图、存储过程等对象现在可以 Shift 点击或用鼠标拖选多行，Cmd/Ctrl 拖选在已有选择上继续追加，来回拖动区间可正常收缩。修掉了两处交互问题：在列表外松开鼠标时不再沿用旧锚点截出错误区间；Shift 点击只把目标行滚动到最近位置，不会再把可见行整块顶走。
+- PostgreSQL 支持外部表和物化视图。此前 PG 连接的表目录写死只列普通表，外部表与分区表根本列不出来，物化视图也没有入口（视图列表不含它），用户已经建好的对象在 Navop 里等于不存在。现在外部表与普通表、分区表同处「表」目录，类型列分别显示 Table / Partitioned Table / Foreign Table，物化视图单独一个目录；重命名、清空、删除、转储等右键动作按对象类型分别生成 SQL，非 public schema 下也带 schema 限定名，不会把 `DROP TABLE` 打到外部表上。外部表不参与结构比较、数据比较、ER 图与整库 DDL 转储（数据转储仍可用）。
+
+#### 修复与优化
+
+- 修复 SQL 页签无法并发执行的问题。A 页签执行时 B 页签就连不上，即使 B 连的是另一台库——根因是整张会话表共用一把锁，取到连接后要一直持有到语句执行结束，等于所有页签排队。会话池的复用与释放还有三处并发缺陷：释放与下一条语句交错时会把正在执行的会话标成空闲，随后被清理回收（报 session not found）；复用扫描一个正在跑长语句的会话会连带堵住其它页签；会话被并发摘除时会重复断开连接。现在锁粒度降到每个会话各自的连接，会话状态查询不再等待执行中的语句，复用与生命周期按引用计数同步，一条语句恰好占用与释放一次。同一会话内仍保持互斥。
+- 修复 MySQL 文本列被显示成二进制的问题。连接某些 MySQL 兼容实现或代理时，结果列元数据里的字符集为 0，取不到解码器就一律降级成二进制，文本列在网格里显示为「二进制 · N B」，表结构元数据、自定义 SQL 与 UNION ALL 结果同样受影响，而这些字节其实是合法 UTF-8。现在字符集未知时按严格 UTF-8 兜底解码，非法 UTF-8 或含控制字符的字节仍保留二进制。
+- 修复 SSH 目录上传小文件过慢的问题。上传每个文件固定要付 6 次控制往返（stat / open / fsync / fstat / close / rename），串行执行时吞吐由网络往返延迟决定而不是带宽，且任何时刻只有一个文件在传。现在小文件走受限并发（并发度 6），超过 512 KiB 的文件独占预算、行为与串行时一致，不会在内存里堆积未确认字节；失败语义不变，出错后不再接纳新任务、等在飞任务跑完再返回，避免残留暂存文件。进度累计改为全局原子量，并发上报时不再回跳。
+- 修复 macOS 上关闭内置远程编辑器导致应用崩溃的问题。Intel Touch Bar 机型上关闭编辑器弹窗必现崩溃：原生窗口被销毁后，系统在显示周期里注销 Touch Bar 观察者时抛出未捕获异常，进程被直接终止。现在 macOS 上关闭不再销毁原生窗口，改为隐藏并复用，下次打开直接复用该窗口；同时把连接改为按标签持有，修掉跨会话复用会走错连接的问题，旧弹窗的确认也不会作用到复用后的新会话上。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.18.6) 下载桌面端安装包
+
+---
+
+#### What's New
+
+- Database object lists now support select all and drag-select. Tables, views and stored procedures can be Shift-clicked or drag-selected as multiple rows, Cmd/Ctrl drag-select adds to the existing selection, and dragging back and forth shrinks the range as expected. Two interaction bugs are fixed as well: releasing the mouse outside the list no longer reuses a stale anchor and cuts out a wrong range, and Shift-click scrolls the target row just into view instead of pushing the visible rows away.
+- PostgreSQL foreign tables and materialized views are now supported. The table catalogue for PG connections was hard-coded to ordinary tables only, so foreign and partitioned tables simply never showed up, and materialized views had no entry point at all because the view list does not include them — objects the user had already created did not exist in Navop. Foreign tables now live in the same "Tables" folder as ordinary and partitioned tables, with the type column showing Table / Partitioned Table / Foreign Table, and materialized views get their own folder. Rename, truncate, drop and dump actions generate SQL according to the object type and are schema-qualified outside `public`, so `DROP TABLE` is never issued against a foreign table. Foreign tables are excluded from schema comparison, data comparison, ER diagrams and whole-database DDL dumps (data dumps still work).
+
+#### Fixes and Improvements
+
+- Fixed SQL tabs not being able to execute concurrently. While one tab was running, no other tab could execute even when connected to a different database: the whole session table shared a single lock, held from acquiring the connection until the statement finished, so every tab queued behind it. The session pool also had three concurrency defects: releasing a session interleaved with the next statement could mark a running session as idle, which was then reclaimed by the idle sweep (surfacing as "session not found"); scanning for a reusable session blocked other tabs when it hit one running a long statement; and a concurrently detached session could be disconnected twice. Locking is now per-session on the connection itself, session state queries no longer wait for a running statement, and reuse and lifecycle are synchronized by reference counting so a statement acquires and releases exactly once. Mutual exclusion within the same session is preserved.
+- Fixed MySQL text columns being displayed as binary. When connecting to some MySQL-compatible implementations or proxies, the character set in the result column metadata is 0, so with no decoder available every column was downgraded to binary and text columns showed up as "二进制 · N B" in the grid. Table structure metadata, custom SQL and UNION ALL results were affected in the same way, even though the bytes were valid UTF-8. Unknown character sets now fall back to strict UTF-8 decoding; bytes that are not valid UTF-8 or contain control characters still stay binary.
+- Fixed SSH directory uploads being slow with many small files. Every uploaded file costs six control round trips (stat / open / fsync / fstat / close / rename), so serial execution made throughput depend on round-trip latency rather than bandwidth, and only one file was ever in flight. Small files now use bounded concurrency (6 in flight), while files above 512 KiB take the whole budget and behave exactly as before, so unacknowledged bytes are not piled up in memory. Failure semantics are unchanged: after the first error no new task is accepted and in-flight ones are awaited before returning, which keeps temporary files from being left behind. Progress accumulation is now a global atomic counter, so concurrent reports no longer jump backwards.
+- Fixed the app crashing on macOS when closing the built-in remote editor. On Intel Touch Bar models closing the editor dialog crashed every time: after the native window was destroyed, the system unregistered the Touch Bar observer during a display cycle and threw an uncaught exception, terminating the process. Closing no longer destroys the native window on macOS — it is hidden and reused, and reopening reuses that window. Connections are now held per tab, fixing cross-session reuse hitting the wrong connection, and a confirmation from a previous dialog can no longer act on the reused session.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.18.5...v0.18.6
+
+## [v0.18.5] - 2026-09-20
+
+#### 修复与优化
+
+- Windows：修复应用内更新完成后新版本不再出现的问题。替换安装包时，Windows 允许重命名正在运行的 exe，替换会在旧实例仍然存活的情况下就完成，紧接着拉起的新版本发现单实例管道还被旧实例占着，只做一次启动转发便自己退出，用户看到的现象就是「更新完成后应用不再出现」。现在替换完成后会先等待旧实例真正退出（备份文件重新变成可删除即视为已退出）再启动新版本；等待超时或探测失败时不再盲目重启，改为弹出系统提示，请用户结束 Navop 进程后手动启动。
+- Windows：修复主窗口最小化到托盘后，再次启动应用无法把窗口叫回来的问题。转发启动请求时只调用了窗口激活，而托盘隐藏用的是隐藏窗口，不属于系统最小化状态，激活逻辑不会发出任何显示调用；同时恢复路径区分了「被最小化」与「被隐藏」，二次启动后窗口既可见、又保持最大化，不会把最大化的窗口缩回去。
+- AI 助手：修复内置对话中让模型保存连接时整个任务失败的问题。保存连接的工具参数 schema 使用了顶层 `oneOf`，OpenAI 兼容网关会拒绝整个模型请求，而不是只拒绝这一个工具；现在改为扁平的 object schema，并在本地校验阶段提前拦截顶层的组合关键字，报错也会带上具体工具名。
+- 数据库：外部驱动增加最低版本门。此前只判断驱动是否已安装、不校验版本，而 OceanBase 0.1.12 之前的驱动对无符号列返回十进制文本，宿主反序列化直接失败（`invalid type: string "4", expected u64`），整张表都读不出来；现在版本低于要求时同样进入安装/更新引导，提示中带上最低版本号。
+- 终端：左边距的空行不再显示时间戳占位括号和一串孤立行号，改为「这一行有输出才显示时间戳与行号」，两列共用同一个判定。
+- 随带跟进 UI 依赖链：gpui-kit 上游合入到 0.6.4，gpui-pre 快照更新到 `fork-0.3.110`。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.18.5) 下载桌面端安装包
+
+---
+
+#### Fixes and Improvements
+
+- Windows: fixed the new version not coming back after an in-app update. While replacing the package the updater can rename the running executable on Windows, so the replacement completes while the old instance is still alive; the new version started right afterwards found the single-instance pipe still held by that instance, forwarded the startup request once and exited — which looked like "the app disappears after updating". The updater now waits until the previous instance really exits (the backup file becoming deletable is that signal) before starting the new version. When the wait times out or the probe fails it no longer restarts blindly: it shows a system dialog asking the user to end the Navop process and start the app manually.
+- Windows: fixed the main window not being restored when the app is started again after being minimized to the tray. The forwarded startup request only asked the window to activate, while tray hiding uses a hidden window, which is not the minimized state, so no show call was ever issued. The restore path now distinguishes minimized from hidden windows, so the restored window is both visible and still maximized instead of being shrunk back.
+- AI assistant: fixed a whole task failing when the model saved a connection in the built-in chat. The tool parameter schema for saving a connection used a top-level `oneOf`, and OpenAI-compatible gateways reject the entire model request instead of just that tool. It is now a flat object schema, and the local validator rejects top-level composition keywords up front and reports the offending tool.
+- Database: external drivers now have a minimum version gate. Previously only the presence of a driver was checked, not its version, while drivers older than OceanBase 0.1.12 return unsigned columns as decimal text, which made host deserialization fail (`invalid type: string "4", expected u64`) and the whole table unreadable. Drivers below the required version now go through the same install/update guidance, with the minimum version shown in the message.
+- Terminal: blank lines in the left margin no longer show timestamp placeholder brackets and a trail of stray line numbers. A line shows its timestamp and number only once it has output, and both columns share the same check.
+- Bundled UI dependency refresh: gpui-kit upstream merged to 0.6.4, and the gpui-pre snapshot updated to `fork-0.3.110`.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.18.4...v0.18.5
+
+## [v0.18.4] - 2026-09-19
+
+#### 修复与优化
+
+- macOS：修复在 macOS 13 及更早系统上，从托盘恢复主窗口会直接崩溃退出的问题。恢复窗口时调用了一个只在 macOS 14 及以上提供的系统接口，低版本系统上会因找不到该接口而终止进程；现在按系统版本选择可用的接口，macOS 12 / 13 也能正常恢复。
+- Windows：修复重复启动——双击应用图标会开出第二个窗口。原先第二个实例判断「是否已有实例在运行」时用错了系统错误码，导致转发分支从未真正执行过；即便执行，它依赖的等待超时在 Windows 命名管道上也不被支持。本次按原生命名管道重写实例检测与启动转发，并收紧启动门禁：既拿不到主实例身份、转发也失败时，明确提示后退出，不再默默再开一个窗口。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.18.4) 下载桌面端安装包
+
+---
+
+#### Fixes and Improvements
+
+- macOS: fixed a crash when restoring the main window from the tray on macOS 13 and earlier, where the app terminated the process. The restore path called a system API that only exists on macOS 14 and newer. It now picks the API available on the running system, so macOS 12 and 13 restore the window normally.
+- Windows: fixed duplicate launches, where double-clicking the app icon opened a second window. The second instance compared the wrong system error code when checking whether another instance was running, so the forwarding branch never executed; even when it did, the wait timeout it relied on is unsupported on Windows named pipes. The instance check and startup forwarding are rewritten on native named pipes, and the startup gate is tightened: when the process can neither claim the primary instance nor forward its request, it reports the failure and exits instead of silently starting a second window.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.18.3...v0.18.4
+
+## [v0.18.3] - 2026-09-19
+
+#### 修复与优化
+
+- Windows：修复打开应用时闪一下控制台窗口的问题。启动阶段识别 WSL 发行版，以及打开 HTML 预览、浏览容器文件树、在设置页安装技能这些后台操作，此前会直接拉起控制台子进程（`wsl.exe`、`cmd`、`docker`、`npx`）；Windows 会为它们新建并显示一个控制台窗口，即使输出已经重定向到管道也一样。这些调用现在统一以隐藏控制台的方式运行，不再闪窗。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.18.3) 下载桌面端安装包
+
+---
+
+#### Fixes and Improvements
+
+- Windows: fixed a console window flashing when the app starts. Background helpers — WSL distribution detection during startup, opening an HTML preview, browsing container files, and installing skills from Settings — used to spawn console child processes (`wsl.exe`, `cmd`, `docker`, `npx`); Windows created and displayed a console window for each of them, even though their output was already redirected into pipes. They now all run with a hidden console window, so nothing flashes anymore.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.18.2...v0.18.3
+
+## [v0.18.2] - 2026-09-19
+
+#### 更新内容
+
+- 托盘：点击窗口关闭按钮不再默默隐藏，改为询问「最小化到托盘 / 退出应用」，可勾选记住选择；设置页新增「关闭窗口行为」下拉。托盘不可用时仍直接退出，不会留下找不到也恢复不了的隐藏窗口。同时修复 Windows 重复启动：第二个实例此前误判自己就是主实例，会起出完整进程。
+- 终端文件面板支持切换远端目标主机：面板顶栏新增目标选择器，只列出 SSH / SFTP / FTP 连接，并分别标记当前目标与终端所在主机；切换后清空原主机的路径与历史，跨主机时暂停跟随终端上报的目录。
+- 临时 SSH 连接（每次输入凭据）现在可以「保存为连接」：终端工具栏与首页快速连接结果项都提供入口，预填用户名与密码，密码随连接写入凭据库；同时补上临时连接的文件侧边栏与服务器监控面板，凭据就绪后按需创建。
+- 终端网格左侧新增每行时间戳与行号，两项可在设置里分别开关。
+- 远端目标与 SFTP 端点切换统一为同一套候选弹窗：图标 + 连接名 + user@host:port，支持搜索、上下键选择与滚动，行样式与「快捷打开」一致。
+
+#### 修复与优化
+
+- 终端文件面板跨主机守卫：在堡垒机里嵌套 ssh 到内层主机时，内层 shell 上报的路径不再被当作面板所属主机的路径使用——此前会表现为目录列不出来、刷新也过不来，甚至可能在堡垒机上误删或误传文件；面板改为显示提示条，说明「终端已进入 X，面板仍连接 Y」。
+- 修复 shell 集成钩子被继承到子 shell 后，每个提示符都多输出一行「bash: __onetcli_precmd_bash：未找到命令」的问题（#217）：钩子改自带函数存在性判断，函数缺失时静默跳过，同时保证退出码仍正确上报。
+- 修复表数据过滤条按回车会插入换行再触发查询的问题（macOS 上表现为回车变成空行 + 查询）；Shift+Enter 仍保留换行。
+- 修复 AI 对话在上下文压缩后请求里不再含任何 user 消息、被 OpenAI 兼容网关以 400 拒绝导致整轮任务失败的问题。
+- 终端里远端目标下拉的气泡底色不再跟随浅色应用主题（恢复使用终端配色），列表过长时也会出现滚动条。
+- Linux：升级 gpui-pre fork 到 fork-0.3.109，修掉 XIM 握手完成前发送 im_id=0 导致 fcitx5 输入法被永久禁用的问题。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.18.2) 下载桌面端安装包
+
+---
+
+#### What's New
+
+- Tray: the window close button no longer hides the window silently — it asks whether to minimize to the tray or quit, with a "remember my choice" checkbox and a new "Close button behavior" dropdown in Settings. When no tray is available the app still quits directly, so it can never leave a hidden window the user cannot find or restore. Windows duplicate launches are fixed as well: a second instance used to mistake itself for the primary one and start a full process.
+- The terminal's file panel can now switch its remote target host: a picker in the panel header lists SSH / SFTP / FTP connections, marks the current target and the terminal's own host separately, clears the previous host's path and history on switch, and pauses terminal-path following across hosts.
+- Temporary SSH connections (credentials typed per session) can be saved as a connection, from the terminal toolbar and from the home quick-connect result. Username and password are prefilled and the password goes into the credential store. These connections also gain the file sidebar and server monitor panels, created on demand once credentials are ready.
+- The terminal grid now shows a per-line timestamp and line number in the left margin, each toggleable in Settings.
+- Remote-target and SFTP-endpoint switching now share one picker dialog: icon, connection name and user@host:port, with search, arrow-key selection and scrolling, styled like Quick Open.
+
+#### Fixes and Improvements
+
+- Cross-host guard for the terminal file panel: when a jump host nests an ssh into an inner machine, paths reported by that inner shell are no longer used as the panel's own host paths. Previously the directory would not list or refresh at all, and files could be deleted or uploaded on the jump host by mistake. The panel now shows a notice explaining that the terminal has entered X while the panel is still connected to Y.
+- Fixed the shell integration hook being inherited into sub-shells, where every prompt printed "bash: __onetcli_precmd_bash: command not found" (#217). The hook now checks for its own function and stays silent when it is missing, while exit codes are still reported correctly.
+- Fixed the table data filter bar inserting a newline on Enter before running the query (on macOS Enter became a blank line plus a query). Shift+Enter still inserts a newline.
+- Fixed AI conversations failing the whole turn after context compaction: the compacted request no longer contained any user message and OpenAI-compatible gateways rejected it with a 400 error.
+- The terminal's remote-target dropdown no longer inherits the light application theme for its popover background (it uses the terminal palette again), and long lists now show a scrollbar.
+- Linux: bumped the gpui-pre fork to fork-0.3.109, fixing fcitx5 input methods being permanently disabled by an im_id=0 frame sent before the XIM handshake finished.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.18.1...v0.18.2
+
+## [v0.18.1] - 2026-09-18
+
+#### 修复与优化
+
+- 扩展市场：修复卡片上「安装 / 更新 / 卸载 / 重载」按钮与「点卡片查看详情」全部无响应的问题（v0.18.0 改版引入）；同时修好已安装卡片的悬停高亮，安装动作在窗口已关闭或标签页关不掉时不再把页面卡在忙碌状态。
+- SFTP：左侧切换服务器时，若目标连接要求连接时输入密码且此前未记住，改为弹窗录入本次凭据（不落库）；认证失败会把原因回填到弹窗里重试，不再让左侧直接断开。
+- 资源工作台：查询页合并页面初始加载结果与本次手动执行的结果，进入「表单 + 加载」类页面（如索引的 Documents 页）即可直接看到内容，不再停在 "No result yet" 必须先手动执行一次；加载失败也会如实展示在结果区。
+- 修复标签页右键菜单「复制」项把占位符渲染成 `{{label}}` 的问题，现在正常显示「复制标签」等文案。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.18.1) 下载桌面端安装包
+
+---
+
+#### Fixes and Improvements
+
+- Extension marketplace: fixed the release-blocking bug where none of the card actions worked — the install / update / uninstall / reload buttons and clicking a card to open its details were all unresponsive (regression from the v0.18.0 redesign). Installed cards now also show their hover highlight, and an install that loses its window or fails to close its tabs no longer leaves the page stuck in a busy state.
+- SFTP: switching the left pane to a server that requires a password at connect time and has not saved one now prompts for credentials in a dialog for that connection only (nothing is persisted). A failed authentication feeds the reason back into the dialog for a retry instead of dropping the left pane.
+- Resource workbench: query pages now merge the page's initial load result with the result of a manual run, so "form + load" pages (such as a collection's Documents page) show their content immediately instead of sitting on "No result yet" until the user runs something; a failed load is likewise surfaced in the result area.
+- Fixed the tab context menu's "Copy" item rendering its placeholder as `{{label}}`; it now reads "Copy Tab" and similar labels correctly.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.18.0...v0.18.1
+
 ## [v0.18.0] - 2026-09-16
 
 #### 更新内容

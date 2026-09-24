@@ -176,8 +176,14 @@
 - 若无明确要求，则按当前任务所需执行最小准备，不做额外环境工程。
 - macOS 上 `reqwest` 默认系统代理探测可能在测试进程里触发
   `system-configuration` 的 NULL object panic；应用内需要“无应用代理”的
-  HTTP client 时，优先使用 `ReqwestClient::user_agent("onetcli")` 这类显式
+  HTTP client 时，使用 `ReqwestClient::user_agent_direct("onetcli")` 这类显式
   direct client 构造路径，并用相关 `setting_tab`/CLI 测试验证。
+- **默认客户端跟随系统/环境变量代理（2026-09-22 起）**：`ReqwestClient::user_agent` 不再强制
+  `.no_proxy()`，它跟随操作系统的系统代理与 `ALL_PROXY`/`HTTP_PROXY`/`HTTPS_PROXY`
+  （gpui-pre `fork-0.3.111` 起；此前该路径被改成 direct，导致「浏览器能上网、navop 登录报
+  `error sending request`」——用户把代理开在系统代理里，navop 却直连）。`proxy.enabled = false`
+  的语义因此是「交给系统/环境变量代理」而不是「直连」。需要强制直连时用 `user_agent_direct`。
+  排查该类问题的顺序见 skill `navop-cloud-login-network-diagnose`。
 
 ### Command Verification Rules
 
@@ -560,7 +566,7 @@
 - **触发信号**：想把 `main/src/shell_plugin_host` + `shell_plugin_tab` 之类“插件机制”抽出到新 crate，却发现 host 依赖 `UniversalPluginService`、`GlobalTabContainer`、headless `ExtensionConnectionTab` 等仍在 main 里的符号，而 Rust 库 crate 无法 `use main`（bin）。
 - **根因 / 约束**：迁移对象只要引用了任何仍留在 main 的类型，就必须把它们一起搬出或先下沉到 crate，否则必然双向依赖。`shell_plugc`…具体到 Navop：`shell_plugin_host/shell_plugin_tab/universal_plugins/extension_connection_tab/extension_connection_form` 是一整簇互相 `crate::` 引用的单元，`cx.global::<GlobalTabContainer>()` 这类 app 级 tab 打开入口是所有 UI 共同的硬依赖，只能把 `GlobalTabContainer`（仅 `Entity<TabContainer>` 包装）下沉到 `one_core::tab_container`，不能反向注入。
 - **正确做法**：整簇 5 个模块一次搬入新 crate（`crates/universal-plugins`），功能开关用 crate 自带 `shell-plugins` optional dep feature 表达（main 的 `shell-plugins` 改为 `["universal-plugins/shell-plugins"]`）。该 feature 自 2026-09-15 起列入 `main` 的 `default`，所以默认构建就带 Shell 页；`crates/universal-plugins` 自身仍保持 `default = []`（给它也设 default 反而会让 `main --no-default-features` 漏进 Shell 页，因为该开关只能关掉当前被选中包的 default）。feature off 时 crate 内这簇为空。搬移时把 `pub(crate)`→`pub` 只改 main 真实消费的边界（global 类型、load/service/open_connection/resource_connection/register_headless_tab 与 `ConnectionShellOpen` 字段），簇内引用 `crate::` 路径在新 crate 里解析位置不变，多数文件零改动。main 侧只改 import 路径。
-- **验证方式**：双态验证默认构建 `cargo check -p main`（含 shell-plugins）与关闭态 `cargo check -p main --no-default-features --features wasm-components,embedded-webview,windows-native-rdp`，各带 `--tests`；`cargo clippy -p universal-plugins --features shell-plugins --all-targets`；`cargo test -p universal-plugins --features shell-plugins`。改共享契约（如 `BindingContext` 加字段）后两态都要跑：漏编发生在关闭态一侧（feature 未开时整个 `shell_plugin_host` 不参与编译），只跑默认构建会漏掉它。
+- **验证方式**：双态验证默认构建 `cargo check -p main`（含 shell-plugins）与关闭态 `cargo check -p main --no-default-features --features wasm-components,windows-native-rdp`，各带 `--tests`；`cargo clippy -p universal-plugins --features shell-plugins --all-targets`；`cargo test -p universal-plugins --features shell-plugins`。改共享契约（如 `BindingContext` 加字段）后两态都要跑：漏编发生在关闭态一侧（feature 未开时整个 `shell_plugin_host` 不参与编译），只跑默认构建会漏掉它。（注意 `main` 的默认集自 2026-09-22 起不含 `embedded-webview`，它已改为全平台 opt-in，原因见 `main/Cargo.toml`。）
 - **适用范围**：`crates/universal-plugins`、`main/src/{home_strategy,home_tab/connection_forms,new_connection/form_page,navop_app,file_open,extension_update,home/home_tabs}`、`crates/core/src/tab_container.rs`，以及任何计划从 main 抽 UI 逻辑到新 crate 的后续重构。
 
 - **标题**：View 内联渲染自己的引用方会造成 GPUI 实体租约重入 panic
@@ -659,6 +665,13 @@
 - **正确做法**：可表达为契约的重复注册 / 非法状态不用 `assert!` + panic，改为返回 `Option` / `Result`，调用方（如插件服务的 `init`）用 `expect` 保留「这是 bug」的强语义，测试直接断言 `is_none()` / `is_err()`，两个 profile 都能跑。跨 FFI / C ABI 边界或调用方回调处的 `catch_unwind` 在 abort 下是死代码，应确认被包住的主体本身 panic-free（如只做 poison-safe 锁、channel send、原子交换），并在注释里写明该守卫只对 `unwind` 构建生效。
 - **验证方式**：dev 与 release 两个 profile 跑同一用例：`cargo test -p universal-plugins --lib` 与 `cargo test --release -p universal-plugins --lib`（release 想省时间只覆盖 `CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16`，`panic` 仍取 profile 值），再用 `cargo test --release -p universal-plugins --lib -- --list` 确认用例不再被 cfg 掉。
 - **适用范围**：`crates/universal-plugins/src/universal_plugins.rs`、`crates/terminal/src/recording/runtime.rs`、`crates/windows_rdp_host/src/event.rs`，以及 profile 设了 `panic = "abort"` 后所有用 `catch_unwind`、`#[should_panic]`、`#[cfg(panic = "unwind")]` 表达契约或隔离的测试与调用点。
+
+- **标题**：Windows GUI 进程 spawn 控制台子程序必须走 `process-util` 隐藏控制台，否则启动/操作时闪黑框
+- **触发信号**：Windows 上启动应用闪一下控制台窗口（本次是启动期 `wsl.exe --list --verbose`），或打开某个功能（HTML 预览、容器文件树、设置页装 skill）时闪一个 cmd 黑框；也适用于新增任何 `std::process::Command::new` / `tokio::process::Command::new` 后台调用点时。
+- **根因 / 约束**：Navop 是 windows 子系统 GUI 进程，自身没有控制台。spawn 控制台子系统程序（`wsl.exe`、`cmd.exe`、`docker.exe`、`npx.cmd`、`git.exe`、`reg.exe`…）时若未设 `CREATE_NO_WINDOW`（`0x0800_0000`），Windows 会为子进程新建一个控制台窗口并显示——即使 stdout/stderr 都已重定向到管道也一样，所以「反正输出走管道」不能当作不闪的理由。GUI 子系统程序（`mstsc.exe`、自身 exe）不需要处理。
+- **正确做法**：统一用 `crates/process-util`：`process_util::configure_background_child(&mut std_command)`（std）或 `configure_tokio_background_child(&mut tokio_command)`（tokio）。写法必须是「先 `let mut command = Command::new(..)`、配好 args/env/stdio，再 configure，最后 `spawn()` / `output()`」，不能保留链式 `.spawn()`，否则没有可变绑定可配。仅当纯逻辑小 crate 不想为 `process-util`（它硬依赖 `tokio/process`）拉进 tokio 时，按 `main/src/file_association.rs` 先例内联 `#[cfg(windows)]` 的 `creation_flags(CREATE_NO_WINDOW)` helper，并配 `#[cfg(not(windows))]` 空实现避免 unused 告警。
+- **验证方式**：四条结构 contract（`include_str!` 断言源码里存在对应的 `configure_background_child` / `creation_flags`，沿用 `workspace_explorer/src/git/tests.rs` 风格）——`cargo test -p terminal --lib wsl_distributions`、`cargo test -p html-preview`、`cargo test -p workspace_explorer --lib backend`、`cargo test -p main --bin navop mcp_skill`；再跑受影响 crate 的 `cargo check --tests` 与 `cargo clippy --all-targets`（只比对改动文件是否有新增告警）。**macOS 上 `cfg(windows)` 分支根本不参与编译，本机无法验证「不闪窗」**，最终必须 Windows 实机启动一次确认。
+- **适用范围**：`crates/terminal/src/wsl_distributions.rs`（启动期 WSL 识别，commit 57e31731b 引入的遗漏）、`crates/html-preview/src/browser.rs`（Windows 走 `cmd /C start`）、`crates/workspace_explorer/src/backend.rs`（容器后端 `docker exec`）、`main/src/settings/mcp_skill_install.rs`（`npx`/`node` 启动器），以及所有新增后台外部命令调用点；`workspace_explorer/src/git.rs`、`core/cloud_sync/personal/git_store.rs`、`extension-host/src/process.rs`、`remote_desktop/src/backends/rdp/transport.rs`、`remote_file_editor/src/external_launcher.rs`、`main/src/file_association.rs` 是已按此约定收口的正确样例。
 
 ### 执行原则
 

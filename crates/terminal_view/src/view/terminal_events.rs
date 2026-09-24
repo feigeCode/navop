@@ -41,6 +41,7 @@ impl TerminalView {
             TerminalModelEvent::Wakeup => {
                 self.sync_recording_ticker(cx);
                 self.sync_credential_capture(cx);
+                self.ensure_ssh_tool_panels(window, cx);
                 self.sync_zmodem_background_task(None, cx);
                 self.focus_terminal_after_connect_if_ready(window, cx);
                 self.refresh_history_prompt_matches(cx);
@@ -58,6 +59,7 @@ impl TerminalView {
             }
             TerminalModelEvent::SshCredentialChanged => {
                 self.sync_credential_capture(cx);
+                self.ensure_ssh_tool_panels(window, cx);
                 self.focus_terminal_after_connect_if_ready(window, cx);
                 cx.notify();
             }
@@ -109,12 +111,13 @@ impl TerminalView {
             TerminalModelEvent::ClipboardStore(data) => {
                 cx.write_to_clipboard(ClipboardItem::new_string(data.clone()));
             }
-            TerminalModelEvent::WorkingDirChanged(path) => {
-                let path = path.clone();
+            TerminalModelEvent::WorkingDirChanged(reported) => {
+                let reported = reported.clone();
+                let path = reported.path.clone();
                 self.sidebar.update(cx, |sidebar, cx| {
-                    sidebar.sync_workspace_explorer_path(path.clone(), cx);
-                    sidebar.set_file_manager_initial_dir(path.clone(), cx);
-                    sidebar.sync_file_manager_path(path, cx);
+                    sidebar.sync_workspace_explorer_path(path, cx);
+                    sidebar.set_file_manager_initial_dir(reported.clone(), cx);
+                    sidebar.sync_file_manager_path(reported, cx);
                 });
             }
             TerminalModelEvent::LockStateChanged => {

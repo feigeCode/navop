@@ -22,7 +22,13 @@ pub(crate) fn resolve_sql_dump_target(node: &DbNode) -> Option<SqlDumpTarget> {
             schema: non_empty(node.get_schema_name()),
             table: None,
         }),
-        DbNodeType::Table => Some(SqlDumpTarget {
+        DbNodeType::Table | DbNodeType::ForeignTable => Some(SqlDumpTarget {
+            database: non_empty(node.get_database_name())?,
+            schema: non_empty(node.get_schema_name()),
+            table: Some(node.name.clone()),
+        }),
+        // 物化视图在数据层面上就是一张可查询的表，只支持数据转储（结构转储未注册）。
+        DbNodeType::MaterializedView => Some(SqlDumpTarget {
             database: non_empty(node.get_database_name())?,
             schema: non_empty(node.get_schema_name()),
             table: Some(node.name.clone()),
@@ -126,6 +132,28 @@ mod tests {
         assert_eq!("analytics", target.database);
         assert_eq!(Some("public"), target.schema.as_deref());
         assert_eq!(None, target.table.as_deref());
+    }
+
+    #[test]
+    fn resolves_foreign_table_and_matview_data_dump_targets() {
+        let foreign = node_with_metadata(
+            DbNodeType::ForeignTable,
+            "remote_orders",
+            &[("database", "sales"), ("schema", "public")],
+        );
+        let target =
+            resolve_sql_dump_target(&foreign).expect("foreign table target should resolve");
+        assert_eq!("sales", target.database);
+        assert_eq!(Some("public"), target.schema.as_deref());
+        assert_eq!(Some("remote_orders"), target.table.as_deref());
+
+        let matview = node_with_metadata(
+            DbNodeType::MaterializedView,
+            "mv_orders",
+            &[("database", "sales"), ("schema", "public")],
+        );
+        let target = resolve_sql_dump_target(&matview).expect("matview target should resolve");
+        assert_eq!(Some("mv_orders"), target.table.as_deref());
     }
 
     #[test]

@@ -54,6 +54,12 @@ pub struct TerminalSettings {
     pub auto_session_logging: bool,
     #[serde(default = "default_selection_highlight")]
     pub selection_highlight: bool,
+    /// 左边距展示每行到达时间
+    #[serde(default)]
+    pub show_line_timestamps: bool,
+    /// 左边距展示行号
+    #[serde(default)]
+    pub show_line_numbers: bool,
     /// 在 alt-screen TUI(vim/less/man 等)中把鼠标滚轮事件转为方向键发送给 PTY,
     /// 让 vim 等程序不开启鼠标报告也能滚动,同时保留终端原生选区/复制能力。
     #[serde(default = "default_vim_scroll_to_arrow_keys")]
@@ -109,6 +115,8 @@ impl TerminalSettings {
             confirm_high_risk_command: app_settings.terminal_confirm_high_risk_command,
             auto_session_logging: app_settings.terminal_auto_session_logging,
             selection_highlight: app_settings.terminal_selection_highlight,
+            show_line_timestamps: app_settings.terminal_show_timestamps,
+            show_line_numbers: app_settings.terminal_show_line_numbers,
             vim_scroll_to_arrow_keys: local_settings.vim_scroll_to_arrow_keys,
             builtin_highlights_initialized: local_settings.builtin_highlights_initialized,
             custom_highlights: local_settings.custom_highlights.clone(),
@@ -316,6 +324,8 @@ fn update_app_settings<T>(
         settings.terminal_confirm_high_risk_command = next.confirm_high_risk_command;
         settings.terminal_auto_session_logging = next.auto_session_logging;
         settings.terminal_selection_highlight = next.selection_highlight;
+        settings.terminal_show_timestamps = next.show_line_timestamps;
+        settings.terminal_show_line_numbers = next.show_line_numbers;
     });
 }
 
@@ -336,6 +346,8 @@ fn terminal_app_fields_equal(left: &TerminalSettings, right: &TerminalSettings) 
         && left.confirm_high_risk_command == right.confirm_high_risk_command
         && left.auto_session_logging == right.auto_session_logging
         && left.selection_highlight == right.selection_highlight
+        && left.show_line_timestamps == right.show_line_timestamps
+        && left.show_line_numbers == right.show_line_numbers
 }
 
 #[cfg(test)]

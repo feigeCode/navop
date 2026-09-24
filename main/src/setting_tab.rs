@@ -66,10 +66,10 @@ const TEAM_KEYS_SETTINGS_PAGE_INDEX: usize = 6;
 
 use gpui_component::input::InputEvent;
 pub use one_core::settings::{
-    AppSettings, CustomFont, DatabaseOpenMode, GlobalCurrentUser, GlobalProxySettings, LOCALE_EN,
-    LOCALE_SYSTEM, LOCALE_ZH_CN, LOCALE_ZH_HK, PersonalSyncBackendKind, PersonalSyncSettings,
-    ProxyType, SyncProvider, effective_locale_for_setting, is_installed_font_family,
-    is_supported_grid_monospace_font,
+    AppSettings, CloseButtonBehavior, CustomFont, DatabaseOpenMode, GlobalCurrentUser,
+    GlobalProxySettings, LOCALE_EN, LOCALE_SYSTEM, LOCALE_ZH_CN, LOCALE_ZH_HK,
+    PersonalSyncBackendKind, PersonalSyncSettings, ProxyType, SyncProvider,
+    effective_locale_for_setting, is_installed_font_family, is_supported_grid_monospace_font,
 };
 use one_core::tab_container::{TabContent, TabContentEvent};
 use one_core::utils::auto_save_config::AutoSaveConfig;
@@ -632,6 +632,7 @@ impl SettingsPanel {
                                     .to_string(),
                             ),
                         ),
+                    close_behavior_setting_group(default_settings.close_button_behavior),
                     notes_setting_group(),
                     SettingGroup::new()
                         .title(t!("Settings.General.Appearance.group_title"))
@@ -706,6 +707,27 @@ impl SettingsPanel {
                             )
                             .description(
                                 t!("Settings.General.Font.sql_editor_font_size_desc").to_string(),
+                            ),
+                        )
+                        .item(
+                            SettingItem::new(
+                                t!("Settings.General.Font.sql_editor_hover_enabled"),
+                                SettingField::switch(
+                                    |cx: &App| {
+                                        AppSettings::global(cx).sql_editor_hover_enabled
+                                    },
+                                    |value: bool, cx: &mut App| {
+                                        AppSettings::update_and_save(cx, |settings| {
+                                            settings.sql_editor_hover_enabled = value;
+                                        });
+                                        cx.refresh_windows();
+                                    },
+                                )
+                                .default_value(default_settings.sql_editor_hover_enabled),
+                            )
+                            .description(
+                                t!("Settings.General.Font.sql_editor_hover_enabled_desc")
+                                    .to_string(),
                             ),
                         )
                         .item(
@@ -1006,6 +1028,44 @@ impl SettingsPanel {
         }
         pages
     }
+}
+
+/// 关闭主窗口时的行为。托盘不可用时该设置不生效，仍走退出确认。
+fn close_behavior_setting_group(default: CloseButtonBehavior) -> SettingGroup {
+    SettingGroup::new()
+        .title(t!("Settings.General.CloseBehavior.group_title"))
+        .item(
+            SettingItem::new(
+                t!("Settings.General.CloseBehavior.behavior"),
+                SettingField::dropdown(
+                    vec![
+                        (
+                            SharedString::from(CloseButtonBehavior::Ask.as_str()),
+                            t!("Settings.General.CloseBehavior.ask").into(),
+                        ),
+                        (
+                            SharedString::from(CloseButtonBehavior::MinimizeToTray.as_str()),
+                            t!("Settings.General.CloseBehavior.minimize_to_tray").into(),
+                        ),
+                        (
+                            SharedString::from(CloseButtonBehavior::Quit.as_str()),
+                            t!("Settings.General.CloseBehavior.quit").into(),
+                        ),
+                    ],
+                    |cx: &App| {
+                        SharedString::from(AppSettings::global(cx).close_button_behavior.as_str())
+                    },
+                    |val: SharedString, cx: &mut App| {
+                        AppSettings::update_and_save(cx, |settings| {
+                            settings.close_button_behavior =
+                                CloseButtonBehavior::from_str(val.as_ref());
+                        });
+                    },
+                )
+                .default_value(SharedString::from(default.as_str())),
+            )
+            .description(t!("Settings.General.CloseBehavior.behavior_desc").to_string()),
+        )
 }
 
 fn sync_setting_group(
@@ -2825,6 +2885,13 @@ const TAB_SHORTCUTS: &[ShortcutEntry] = &[
         system_hotkey: false,
     },
     ShortcutEntry {
+        keys_macos: &["cmd-shift-w"],
+        keys_other: &["alt-shift-w"],
+        label_key: "Settings.Shortcuts.close_active_tab",
+        action_id: Some(action_id::APP_CLOSE_ACTIVE_TAB),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
         keys_macos: &["ctrl-tab"],
         keys_other: &["ctrl-tab"],
         label_key: "Settings.Shortcuts.switch_next_tab",
@@ -3002,6 +3069,13 @@ const DATABASE_SHORTCUTS: &[ShortcutEntry] = &[
         system_hotkey: false,
     },
     ShortcutEntry {
+        keys_macos: &["cmd-a"],
+        keys_other: &["ctrl-a"],
+        label_key: "Settings.Shortcuts.database_select_all_objects",
+        action_id: Some(action_id::DB_SELECT_ALL_OBJECTS),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
         keys_macos: &["cmd-enter", "ctrl-enter"],
         keys_other: &["cmd-enter", "ctrl-enter"],
         label_key: "Settings.Shortcuts.sql_run_query",
@@ -3013,6 +3087,13 @@ const DATABASE_SHORTCUTS: &[ShortcutEntry] = &[
         keys_other: &["cmd-shift-enter", "ctrl-shift-enter"],
         label_key: "Settings.Shortcuts.sql_run_all_query",
         action_id: Some(action_id::SQL_RUN_ALL_QUERY),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["cmd-/", "ctrl-/"],
+        keys_other: &["cmd-/", "ctrl-/"],
+        label_key: "Settings.Shortcuts.sql_toggle_comment",
+        action_id: Some(action_id::SQL_TOGGLE_COMMENT),
         system_hotkey: false,
     },
 ];
@@ -3072,6 +3153,27 @@ const TABLE_SHORTCUTS: &[ShortcutEntry] = &[
         keys_other: &["escape"],
         label_key: "Settings.Shortcuts.table_cancel",
         action_id: Some(action_id::TABLE_CANCEL),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["cmd-f"],
+        keys_other: &["ctrl-f"],
+        label_key: "Settings.Shortcuts.table_find",
+        action_id: Some(action_id::TABLE_FIND),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["cmd-g"],
+        keys_other: &["ctrl-g"],
+        label_key: "Settings.Shortcuts.table_find_next",
+        action_id: Some(action_id::TABLE_FIND_NEXT),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["cmd-shift-g"],
+        keys_other: &["ctrl-shift-g"],
+        label_key: "Settings.Shortcuts.table_find_previous",
+        action_id: Some(action_id::TABLE_FIND_PREVIOUS),
         system_hotkey: false,
     },
 ];
@@ -3615,12 +3717,13 @@ mod tests {
     use rust_i18n::t;
 
     use super::{
-        AppSettings, CustomFont, FontFamilyKind, GlobalProxySettings, ProxyType, WINDOW_SHORTCUTS,
-        app_font_options, build_app_http_client, builtin_monospace_font_options,
-        emit_team_key_change_event, is_supported_font_file, master_key_setting_enabled,
-        merge_font_options_with_custom_fonts, monospace_font_options, parse_font_families,
-        personal_sync_backend_options, personal_sync_status_label, personal_sync_status_view_model,
-        team_key_refresh_success_message, team_key_rotation_inputs_valid,
+        AppSettings, CustomFont, DATABASE_SHORTCUTS, FontFamilyKind, GlobalProxySettings,
+        ProxyType, WINDOW_SHORTCUTS, app_font_options, build_app_http_client,
+        builtin_monospace_font_options, emit_team_key_change_event, is_supported_font_file,
+        master_key_setting_enabled, merge_font_options_with_custom_fonts, monospace_font_options,
+        parse_font_families, personal_sync_backend_options, personal_sync_status_label,
+        personal_sync_status_view_model, team_key_refresh_success_message,
+        team_key_rotation_inputs_valid,
     };
     use crate::local_terminal_profiles::setting_options as local_terminal_profile_options;
     use crate::personal_sync_status::PersonalSyncRuntimeStatus;
@@ -3642,6 +3745,38 @@ mod tests {
         assert_eq!(shortcut.keys_other, &["ctrl-shift-w"]);
         assert!(!shortcut.keys_macos.contains(&"ctrl-d"));
         assert!(!shortcut.keys_other.contains(&"ctrl-d"));
+    }
+
+    #[test]
+    fn close_active_tab_shortcut_avoids_single_ctrl_letter_defaults() {
+        let shortcut = super::TAB_SHORTCUTS
+            .iter()
+            .find(|entry| {
+                entry.action_id == Some(one_core::keybindings::action_id::APP_CLOSE_ACTIVE_TAB)
+            })
+            .expect("close active tab shortcut");
+
+        assert_eq!(shortcut.keys_macos, &["cmd-shift-w"]);
+        assert_eq!(shortcut.keys_other, &["alt-shift-w"]);
+        assert_eq!("Settings.Shortcuts.close_active_tab", shortcut.label_key);
+        assert!(!shortcut.keys_macos.contains(&"ctrl-w"));
+        assert!(!shortcut.keys_other.contains(&"ctrl-w"));
+        assert!(!shortcut.keys_macos.contains(&"ctrl-d"));
+        assert!(!shortcut.keys_other.contains(&"ctrl-d"));
+    }
+
+    #[test]
+    fn object_list_select_all_entry_matches_runtime_defaults() {
+        use one_core::keybindings::action_id;
+
+        let entry = DATABASE_SHORTCUTS
+            .iter()
+            .find(|entry| entry.action_id == Some(action_id::DB_SELECT_ALL_OBJECTS))
+            .expect("select all objects shortcut entry");
+
+        assert_eq!(entry.keys_macos, &["cmd-a"]);
+        assert_eq!(entry.keys_other, &["ctrl-a"]);
+        assert!(!entry.system_hotkey);
     }
 
     #[test]
@@ -4256,8 +4391,12 @@ mod tests {
         assert!(proxy_url.is_none());
     }
 
+    /// 关闭应用内代理时，navop 不传自己的代理，而是把代理决定权交回客户端：
+    /// `ReqwestClient::user_agent` 会跟随系统代理与环境变量代理（与浏览器一致），
+    /// 因此这里断言的是「navop 自己没有指定代理」，不是「不走任何代理」。
+    /// 需要强制直连时应改用 `ReqwestClient::user_agent_direct`。
     #[test]
-    fn build_app_http_client_uses_no_app_proxy_when_proxy_disabled() {
+    fn build_app_http_client_defers_to_system_proxy_when_proxy_disabled() {
         let settings = GlobalProxySettings {
             enabled: false,
             host: "127.0.0.1".to_string(),

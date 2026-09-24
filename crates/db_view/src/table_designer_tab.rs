@@ -164,7 +164,9 @@ pub(crate) fn build_table_design_from_metadata(
             let parsed = plugin
                 .map(|plugin| plugin.parse_column_type(&col.data_type))
                 .unwrap_or_else(|| fallback_parse_column_type(&col.data_type));
-            column_info_to_definition(database_type.clone(), col, parsed)
+            let primary_key_count =
+                columns.iter().filter(|col| col.is_primary_key).count();
+            column_info_to_definition(database_type.clone(), col, parsed, primary_key_count)
         })
         .collect();
 
@@ -200,6 +202,7 @@ fn column_info_to_definition(
     database_type: DatabaseType,
     col: &ColumnInfo,
     parsed: ParsedColumnType,
+    primary_key_count: usize,
 ) -> ColumnDefinition {
     let base_type = parsed.base_type;
     let data_type = if let Some(enum_values) = parsed.enum_values {
@@ -207,8 +210,12 @@ fn column_info_to_definition(
     } else {
         base_type.clone()
     };
+    // SQLite 没有独立的自增元数据：仅当主键是「单列 INTEGER 主键」时才是 rowid 别名，
+    // 才允许当作自增；联合主键（含 WITHOUT ROWID 表）不成立。
     let is_auto_increment = if matches!(database_type, DatabaseType::SQLite) {
-        col.is_primary_key && base_type.eq_ignore_ascii_case("INTEGER")
+        col.is_primary_key
+            && base_type.eq_ignore_ascii_case("INTEGER")
+            && primary_key_count == 1
     } else {
         parsed.is_auto_increment
     };
@@ -2251,6 +2258,7 @@ impl ColumnsEditor {
 
         let global_state = cx.global::<GlobalDbState>();
         let plugin = global_state.db_manager.get_plugin(&self.database_type).ok();
+        let primary_key_count = columns.iter().filter(|col| col.is_primary_key).count();
 
         for col in columns {
             let name_input = cx.new(|cx| {
@@ -2472,7 +2480,11 @@ impl ColumnsEditor {
                 nullable: col.is_nullable,
                 is_pk: col.is_primary_key,
                 auto_increment: if matches!(self.database_type, DatabaseType::SQLite) {
-                    col.is_primary_key && parsed_type.base_type.eq_ignore_ascii_case("INTEGER")
+                    // 仅单列 INTEGER 主键是 rowid 别名（SQLite 的隐式自增）；
+                    // 联合主键（含 WITHOUT ROWID 表）不能勾选自增。
+                    col.is_primary_key
+                        && parsed_type.base_type.eq_ignore_ascii_case("INTEGER")
+                        && primary_key_count == 1
                 } else {
                     parsed_type.is_auto_increment
                 },
@@ -4812,7 +4824,8 @@ mod tests {
         };
         let parsed = MySqlPlugin::new().parse_column_type(&column.data_type);
 
-        let definition = column_info_to_definition(DatabaseType::MySQL, &column, parsed);
+        let definition =
+            column_info_to_definition(DatabaseType::MySQL, &column, parsed, 0);
 
         assert_eq!(definition.data_type, "varchar");
         assert_eq!(definition.length, Some(255));
@@ -4848,11 +4861,13 @@ mod tests {
             DatabaseType::MySQL,
             &numeric,
             MySqlPlugin::new().parse_column_type(&numeric.data_type),
+            0,
         );
         let enum_definition = column_info_to_definition(
             DatabaseType::MySQL,
             &enum_col,
             MySqlPlugin::new().parse_column_type(&enum_col.data_type),
+            0,
         );
 
         assert!(numeric_definition.is_unsigned);
@@ -4904,6 +4919,120 @@ mod tests {
             charset: None,
             collation: None,
         }
+    }
+
+    #[test]
+    fn sqlite_composite_pk_first_column_is_not_auto_increment() {
+        // 复现 issue #301：WITHOUT ROWID 联合主键表的元数据。
+        let columns = vec![
+            ColumnInfo {
+                name: "device_id".to_string(),
+                data_type: "INTEGER".to_string(),
+                is_nullable: false,
+                is_primary_key: true,
+                default_value: None,
+                comment: None,
+                charset: None,
+                collation: None,
+            },
+            ColumnInfo {
+                name: "tag_id".to_string(),
+                data_type: "INTEGER".to_string(),
+                is_nullable: false,
+                is_primary_key: true,
+                default_value: None,
+                comment: None,
+                charset: None,
+                collation: None,
+            },
+            ColumnInfo {
+                name: "ts".to_string(),
+                data_type: "INTEGER".to_string(),
+                is_nullable: false,
+                is_primary_key: true,
+                default_value: None,
+                comment: None,
+                charset: None,
+                collation: None,
+            },
+            ColumnInfo {
+                name: "value".to_string(),
+                data_type: "REAL".to_string(),
+                is_nullable: true,
+                is_primary_key: false,
+                default_value: None,
+                comment: None,
+                charset: None,
+                collation: None,
+            },
+        ];
+
+        let design = build_table_design_from_metadata(
+            DatabaseType::SQLite,
+            "main".to_string(),
+            "datapoints".to_string(),
+            &columns,
+            &[],
+            None,
+            Some(&SqlitePlugin::new()),
+        );
+
+        let device_id = design
+            .columns
+            .iter()
+            .find(|col| col.name == "device_id")
+            .expect("device_id column should exist");
+        assert!(
+            !device_id.is_auto_increment,
+            "联合主键首列不应被当作自增，否则 DDL 渲染成 INTEGER PRIMARY KEY AUTOINCREMENT"
+        );
+        assert!(device_id.is_primary_key);
+    }
+
+    #[test]
+    fn sqlite_single_integer_pk_still_auto_increment() {
+        let columns = vec![
+            ColumnInfo {
+                name: "id".to_string(),
+                data_type: "INTEGER".to_string(),
+                is_nullable: true,
+                is_primary_key: true,
+                default_value: None,
+                comment: None,
+                charset: None,
+                collation: None,
+            },
+            ColumnInfo {
+                name: "name".to_string(),
+                data_type: "TEXT".to_string(),
+                is_nullable: true,
+                is_primary_key: false,
+                default_value: None,
+                comment: None,
+                charset: None,
+                collation: None,
+            },
+        ];
+
+        let design = build_table_design_from_metadata(
+            DatabaseType::SQLite,
+            "main".to_string(),
+            "users".to_string(),
+            &columns,
+            &[],
+            None,
+            Some(&SqlitePlugin::new()),
+        );
+
+        let id = design
+            .columns
+            .iter()
+            .find(|col| col.name == "id")
+            .expect("id column should exist");
+        assert!(
+            id.is_auto_increment,
+            "单列 INTEGER 主键仍是 rowid 别名，应保留自增语义"
+        );
     }
 
     #[test]

@@ -243,6 +243,28 @@ fn register_connection_repository(cx: &mut gpui::App) {
     cx.set_global(GlobalStorageState { storage });
 }
 
+/// 所有暴露给模型的工具 schema 必须能被 function-calling 接受。
+///
+/// `connections.save` 曾在顶层用 `oneOf` 表达"创建 or 更新"，provider 会拒绝整个模型
+/// 请求（`Invalid schema for function 'connections_save'`），表现为任务直接失败。这里把
+/// "已暴露工具都能转换成 llm-connector 工具定义"固化为 LLM 边界契约。
+#[gpui::test]
+fn agent_runtime_tool_schemas_convert_to_function_calling(cx: &mut TestAppContext) {
+    let specs = cx.update(|cx| {
+        register_connection_repository(cx);
+        cx.set_global(AppSettings::default());
+        agent_runtime_tool_registry(cx)
+            .expect("agent registry should build")
+            .specs(&ResourceContext::new())
+    });
+
+    assert!(!specs.is_empty(), "agent registry should expose tools");
+    for spec in specs {
+        spec.to_llm_tool()
+            .unwrap_or_else(|error| panic!("{error}"));
+    }
+}
+
 fn assert_tool_risk(registry: &agent_runtime::ToolRegistry, name: &str, risk: RiskLevel) {
     let tool = registry.get(&ToolName::new(name)).expect(name);
     assert_eq!(risk, tool.spec(&ResourceContext::new()).risk, "{name} risk");

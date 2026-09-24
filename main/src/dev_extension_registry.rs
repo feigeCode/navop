@@ -684,7 +684,7 @@ mod tests {
                 "id": id,
                 "name": id,
                 "version": "0.1.0",
-                "engines": { "onetcli": ">=0.1.0", "gpui_shell": "0.2.0" },
+                "engines": { "onetcli": ">=0.1.0", "gpui_shell": "0.6.4" },
                 "api": { "shell": "1.0" },
                 "permissions": ["shell:exec"],
                 "contributes": { "shellViews": [{

@@ -484,25 +484,30 @@ fn create_schema() -> Value {
     })
 }
 
+/// `connections.save` 的 function-calling 用法说明。
+///
+/// 创建与更新无法用顶层 `oneOf` / `not` 表达：provider 要求工具参数 schema 顶层是
+/// 纯 object，出现组合关键字会直接拒绝整个模型请求。因此这里保留扁平 object
+/// schema，把"二选一"的约束写进描述，并由 `ConnectionToolHandler::save` 在运行时
+/// 按是否携带 `id` 分流。
+const SAVE_SCHEMA_DESCRIPTION: &str = "Create a connection by passing kind and values without id. Update a saved connection by passing id and patch, for example id plus patch.name; do not send kind or values together with id.";
+
 fn save_schema() -> Value {
     let mut schema = create_schema();
-    if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
-        properties.insert("id".to_string(), json!({ "type": "integer" }));
-        properties.insert("patch".to_string(), update_patch_schema());
-    }
-    if let Some(object) = schema.as_object_mut() {
-        object.remove("required");
-        object.insert(
-            "oneOf".to_string(),
-            json!([
-                {
-                    "type": "object",
-                    "required": ["kind", "values"],
-                    "not": { "required": ["id"] }
-                },
-                { "type": "object", "required": ["id", "patch"] }
-            ]),
+    let Some(object) = schema.as_object_mut() else {
+        return schema;
+    };
+    object.remove("required");
+    object.insert("description".to_string(), json!(SAVE_SCHEMA_DESCRIPTION));
+    if let Some(properties) = object.get_mut("properties").and_then(Value::as_object_mut) {
+        properties.insert(
+            "id".to_string(),
+            json!({
+                "type": "integer",
+                "description": "Existing connection id to update. Omit it to create a new connection."
+            }),
         );
+        properties.insert("patch".to_string(), update_patch_schema());
     }
     schema
 }
@@ -510,6 +515,7 @@ fn save_schema() -> Value {
 fn update_patch_schema() -> Value {
     json!({
         "type": "object",
+        "description": "Fields to update when id is set. Use values for connection params, and top-level name, remark, workspace_id, sync_enabled, or database_type for the rest.",
         "properties": {
             "name": { "type": "string" },
             "remark": { "type": ["string", "null"] },

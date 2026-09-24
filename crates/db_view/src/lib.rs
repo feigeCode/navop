@@ -22,6 +22,7 @@ pub mod extension_menu;
 #[cfg(test)]
 mod extension_menu_contract_tests;
 mod import_export;
+mod object_list_selection;
 pub mod search_shortcut;
 pub mod settings;
 mod sidebar;
