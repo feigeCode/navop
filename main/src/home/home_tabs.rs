@@ -619,6 +619,64 @@ mod tests {
     }
 
     #[test]
+    fn remote_desktop_tab_id_is_stable_per_connection() {
+        // Tab 身份稳定 = 标签可复用。一旦有人把时间戳/序号塞回 id，双击
+        // 就会重新开始「每点一次多一个标签」，这两个断言会立刻挂（#288）。
+        assert_eq!(
+            remote_desktop_tab_id(RemoteDesktopProtocol::Rdp, 42),
+            "rdp-42"
+        );
+        assert_eq!(
+            remote_desktop_tab_id(RemoteDesktopProtocol::Vnc, 42),
+            "vnc-42"
+        );
+        assert_ne!(
+            remote_desktop_tab_id(RemoteDesktopProtocol::Rdp, 42),
+            remote_desktop_tab_id(RemoteDesktopProtocol::Rdp, 43),
+            "不同连接必须落在不同标签"
+        );
+        assert_ne!(
+            remote_desktop_tab_id(RemoteDesktopProtocol::Rdp, 42),
+            remote_desktop_tab_id(RemoteDesktopProtocol::Vnc, 42),
+            "同一连接 id 的不同协议不能互相顶掉"
+        );
+    }
+
+    #[test]
+    fn remote_desktop_opener_reuses_the_opened_tab() {
+        let source = include_str!("home_tabs.rs").replace("\r\n", "\n");
+        let implementation = source
+            .split_once("\nimpl HomePage {\n")
+            .expect("HomePage implementation")
+            .1;
+        let method_start = implementation
+            .find("pub(crate) fn open_remote_desktop_with_mode")
+            .expect("remote desktop open method");
+        let method_end = implementation[method_start..]
+            .find("pub(crate) fn open_redis_tab_with_mode")
+            .map(|offset| method_start + offset)
+            .expect("next method");
+        let method = &implementation[method_start..method_end];
+
+        assert!(
+            method.contains("remote_desktop_tab_id(protocol, conn_id)"),
+            "远程桌面标签 id 必须来自 remote_desktop_tab_id"
+        );
+        assert!(
+            method.contains("activate_or_add_tab_lazy_with_mode("),
+            "双击已打开的远程桌面连接必须复用标签页而不是新建"
+        );
+        assert!(
+            !method.contains("as_millis"),
+            "带时间戳的 tab id 会让标签复用彻底失效"
+        );
+        assert!(
+            !method.contains("add_tab_with_mode("),
+            "远程桌面不再走无条件新建的 add_tab_with_mode"
+        );
+    }
+
+    #[test]
     fn terminal_tabs_do_not_request_external_sidebar_mode() {
         let source = include_str!("home_tabs.rs");
         let external_sidebar_call = concat!(".with_", "external_sidebar");
@@ -1005,41 +1063,39 @@ impl HomePage {
             return;
         };
         let conn_id = conn.id.unwrap_or(0);
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
         let tab_kind = remote_desktop_tab_kind(protocol);
-        let tab_id = format!("{tab_kind}-{conn_id}-{timestamp}");
-        let prefix = format!("{tab_kind}-{conn_id}-");
-        let tab_container = self.active_tab_container(cx);
-        let existing_count = tab_container
-            .read(cx)
-            .tabs()
-            .iter()
-            .filter(|tab| tab.id().starts_with(&prefix))
-            .count();
+        // 远程桌面标签的身份只由「协议 + 连接」决定，不含时间戳：同一连接
+        // 重复打开时复用已存在的标签页，双击只切换不新建（#288），与数据库
+        // 标签页的稳定 id 一致。
+        let tab_id = remote_desktop_tab_id(protocol, conn_id);
         let base_title = conn.name.clone();
-        let tab_index = self
-            .next_available_tab_index(&base_title, cx)
-            .or_else(|| (existing_count > 0).then_some(existing_count));
+        let tab_container = self.active_tab_container(cx);
+        let tab_index = self.next_available_tab_index(&base_title, cx);
         let title = conn.name.clone();
         let window_handle = window.window_handle();
-        let view = cx.new(move |cx| {
-            RemoteDesktopView::new(
-                RemoteDesktopViewConfig {
-                    options,
-                    title,
-                    tab_index,
-                },
-                window_handle,
-                cx,
-            )
-        });
         window.defer(cx, move |window, cx| {
+            let tab_id_for_view = tab_id.clone();
             tab_container.update(cx, |tc, cx| {
-                let tab = TabItem::new(tab_id, tab_kind, view);
-                tc.add_tab_with_mode(tab, mode, window, cx);
+                tc.activate_or_add_tab_lazy_with_mode(
+                    tab_id,
+                    mode,
+                    move |_window, cx| {
+                        let view = cx.new(move |cx| {
+                            RemoteDesktopView::new(
+                                RemoteDesktopViewConfig {
+                                    options,
+                                    title,
+                                    tab_index,
+                                },
+                                window_handle,
+                                cx,
+                            )
+                        });
+                        TabItem::new(tab_id_for_view, tab_kind, view)
+                    },
+                    window,
+                    cx,
+                );
             });
         });
     }
@@ -1693,4 +1749,12 @@ fn remote_desktop_tab_kind(protocol: RemoteDesktopProtocol) -> &'static str {
         RemoteDesktopProtocol::Rdp => "rdp",
         RemoteDesktopProtocol::Vnc => "vnc",
     }
+}
+
+/// 远程桌面标签的稳定身份（不含时间戳、不含序号）。
+///
+/// 只有 id 稳定，`activate_or_add_tab_lazy_with_mode` 才能在标签已打开时复用
+/// 而不是再建一个（#288）。不同连接、不同协议互不干扰。
+fn remote_desktop_tab_id(protocol: RemoteDesktopProtocol, conn_id: i64) -> String {
+    format!("{}-{}", remote_desktop_tab_kind(protocol), conn_id)
 }

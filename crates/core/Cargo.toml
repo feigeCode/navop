@@ -50,6 +50,11 @@ image.workspace = true
 smallvec.workspace = true
 tempfile = "3"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSResponder", "NSView", "NSWindow"] }
+raw-window-handle = { workspace = true, features = ["std"] }
+
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = [
     "Win32_Storage_FileSystem",

@@ -1,6 +1,8 @@
 use gpui::{App, SharedString};
 use gpui_component::setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem};
-use one_core::settings::{AppSettings, DatabaseOpenMode, LargeTextCellEditorOpenMode};
+use one_core::settings::{
+    AppSettings, DatabaseOpenMode, LargeTextCellEditorOpenMode, TableViewMode,
+};
 use rust_i18n::t;
 
 /// 数据库设置分组：打开模式、大文本编辑器打开方式、自动保存、查询上限与行高。
@@ -145,5 +147,31 @@ pub fn database_setting_group() -> SettingGroup {
                 .default_value(default_settings.table_row_height as f64),
             )
             .description(t!("Settings.General.Database.table_row_height_desc").to_string()),
+            SettingItem::new(
+                t!("Settings.General.Database.table_view_mode"),
+                SettingField::dropdown(
+                    vec![
+                        (
+                            "grid".into(),
+                            t!("Settings.General.Database.table_view_mode_grid").into(),
+                        ),
+                        (
+                            "vertical".into(),
+                            t!("Settings.General.Database.table_view_mode_vertical").into(),
+                        ),
+                    ],
+                    |cx: &App| SharedString::from(AppSettings::global(cx).table_view_mode.as_str()),
+                    |val: SharedString, cx: &mut App| {
+                        let mode = TableViewMode::from_str(val.as_ref());
+                        AppSettings::update_and_save(cx, |settings| {
+                            settings.table_view_mode = mode;
+                        });
+                    },
+                )
+                .default_value(SharedString::from(
+                    default_settings.table_view_mode.as_str(),
+                )),
+            )
+            .description(t!("Settings.General.Database.table_view_mode_desc").to_string()),
         ])
 }

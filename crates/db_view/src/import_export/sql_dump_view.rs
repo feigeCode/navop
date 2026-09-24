@@ -5,18 +5,27 @@ use gpui::{
 use gpui_component::{
     ActiveTheme, VirtualListScrollHandle,
     button::{Button, ButtonVariants as _},
-    h_flex, v_flex, v_virtual_list,
+    h_flex,
+    input::{Input, InputState},
+    v_flex, v_virtual_list,
 };
 use std::rc::Rc;
 
 use crate::db_tree_view::SqlDumpMode;
 use crate::import_export::sql_dump_target::sql_dump_filename;
-use db::{DataFormat, ExportConfig, ExportProgressEvent, GlobalDbState};
+use db::{
+    DEFAULT_ROWS_PER_INSERT_STATEMENT, DataFormat, ExportConfig, ExportProgressEvent,
+    GlobalDbState, normalize_rows_per_statement,
+};
+use one_core::settings::AppSettings;
 use rust_i18n::t;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use tokio::sync::mpsc;
+
+/// 「每条语句的数据行数」输入框宽度。
+const ROWS_PER_STATEMENT_INPUT_WIDTH: f32 = 120.0;
 
 #[derive(Debug, Clone)]
 struct LogEntry {
@@ -32,6 +41,8 @@ pub struct SqlDumpView {
     table: Option<String>,
     output_path: PathBuf,
     mode: SqlDumpMode,
+    /// 每一条 INSERT 语句合并的数据行数，默认取上次导出时使用的值。
+    rows_per_statement: Entity<InputState>,
 
     logs: Entity<Vec<LogEntry>>,
     scroll_handle: VirtualListScrollHandle,
@@ -60,7 +71,8 @@ pub struct SqlDumpViewParams {
 }
 
 impl SqlDumpView {
-    pub fn new(params: SqlDumpViewParams, _window: &mut Window, cx: &mut App) -> Entity<Self> {
+    pub fn new(params: SqlDumpViewParams, window: &mut Window, cx: &mut App) -> Entity<Self> {
+        let rows_per_statement = AppSettings::current(cx).sql_export_rows_per_statement;
         cx.new(|cx| Self {
             connection_id: params.connection_id,
             server_info: params.server_info,
@@ -69,6 +81,10 @@ impl SqlDumpView {
             table: params.table,
             output_path: params.output_path,
             mode: params.mode,
+            rows_per_statement: cx.new(|cx| {
+                InputState::new(window, cx)
+                    .default_value(normalize_rows_per_statement(rows_per_statement).to_string())
+            }),
 
             logs: cx.new(|_| Vec::new()),
             scroll_handle: VirtualListScrollHandle::new(),
@@ -85,6 +101,21 @@ impl SqlDumpView {
 
             focus_handle: cx.focus_handle(),
         })
+    }
+
+    /// 解析「每条语句的数据行数」：空白或非法输入回落到默认值，其余规整到
+    /// 受支持区间。返回本次真正生效的值。
+    fn resolve_rows_per_statement(input: &str) -> usize {
+        let parsed = input
+            .trim()
+            .parse::<usize>()
+            .unwrap_or(DEFAULT_ROWS_PER_INSERT_STATEMENT);
+        normalize_rows_per_statement(parsed)
+    }
+
+    /// 仅导出数据时才需要「每条语句的数据行数」。
+    fn shows_rows_per_statement(mode: SqlDumpMode) -> bool {
+        mode.includes_data()
     }
 
     fn add_log(
@@ -126,10 +157,22 @@ impl SqlDumpView {
         !is_running
     }
 
-    fn start_dump(&mut self, _window: &mut Window, cx: &mut App) {
+    fn start_dump(&mut self, window: &mut Window, cx: &mut App) {
         if *self.is_running.read(cx) {
             return;
         }
+
+        let rows_input = self.rows_per_statement.read(cx).value().to_string();
+        let rows_per_statement = Self::resolve_rows_per_statement(&rows_input);
+        // 把规整后的值回写输入框：界面上显示的就是本次导出真正生效的值。
+        if rows_input != rows_per_statement.to_string() {
+            let normalized = rows_per_statement.to_string();
+            self.rows_per_statement
+                .update(cx, |input, cx| input.set_value(normalized, window, cx));
+        }
+        AppSettings::update_and_save(cx, |settings| {
+            settings.sql_export_rows_per_statement = rows_per_statement;
+        });
 
         self.is_running.update(cx, |r, cx| {
             *r = true;
@@ -270,6 +313,7 @@ impl SqlDumpView {
                 include_data,
                 where_clause: None,
                 limit: None,
+                rows_per_statement,
                 csv_config: None,
             };
 
@@ -515,6 +559,7 @@ impl Clone for SqlDumpView {
             table: self.table.clone(),
             output_path: self.output_path.clone(),
             mode: self.mode,
+            rows_per_statement: self.rows_per_statement.clone(),
             logs: self.logs.clone(),
             scroll_handle: self.scroll_handle.clone(),
             processed_records: self.processed_records.clone(),
@@ -581,7 +626,25 @@ impl Render for SqlDumpView {
                                     .child(t!("SqlDump.dump_to_label").to_string()),
                             )
                             .child(div().child(self.output_path.display().to_string())),
-                    ),
+                    )
+                    .when(Self::shows_rows_per_statement(self.mode), |this| {
+                        this.child(
+                            h_flex()
+                                .gap_2()
+                                .items_center()
+                                .child(
+                                    div()
+                                        .w_24()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(t!("SqlDump.rows_per_statement").to_string()),
+                                )
+                                .child(
+                                    Input::new(&self.rows_per_statement)
+                                        .disabled(is_running)
+                                        .w(px(ROWS_PER_STATEMENT_INPUT_WIDTH)),
+                                ),
+                        )
+                    }),
             )
             .child(div().h_px().bg(cx.theme().border))
             .child(
@@ -737,8 +800,9 @@ impl Render for SqlDumpView {
                         this.child(
                             Button::new("close")
                                 .child(t!("SqlDump.close").to_string())
-                                .on_click(|_, window, _cx| {
-                                    window.remove_window();
+                                .on_click(|_, window, cx| {
+                                    let _ =
+                                        one_core::window_close::close_window_for_reuse(window, cx);
                                 }),
                         )
                     }),
@@ -760,5 +824,42 @@ mod tests {
     #[test]
     fn start_button_is_hidden_while_sql_dump_is_running() {
         assert!(!SqlDumpView::should_show_start_button(true));
+    }
+
+    #[test]
+    fn rows_per_statement_accepts_positive_input() {
+        assert_eq!(500, SqlDumpView::resolve_rows_per_statement("500"));
+        assert_eq!(1, SqlDumpView::resolve_rows_per_statement(" 1 "));
+    }
+
+    #[test]
+    fn rows_per_statement_falls_back_to_default_for_blank_or_invalid_input() {
+        for input in ["", "   ", "abc", "-5", "12.5", "1e3"] {
+            assert_eq!(
+                DEFAULT_ROWS_PER_INSERT_STATEMENT,
+                SqlDumpView::resolve_rows_per_statement(input),
+                "input {input:?} should fall back to the default"
+            );
+        }
+    }
+
+    #[test]
+    fn rows_per_statement_clamps_zero_and_oversized_input() {
+        assert_eq!(1, SqlDumpView::resolve_rows_per_statement("0"));
+        assert_eq!(
+            db::MAX_ROWS_PER_INSERT_STATEMENT,
+            SqlDumpView::resolve_rows_per_statement("999999999999")
+        );
+    }
+
+    #[test]
+    fn rows_per_statement_input_only_shows_for_data_exports() {
+        assert!(!SqlDumpView::shows_rows_per_statement(
+            SqlDumpMode::StructureOnly
+        ));
+        assert!(SqlDumpView::shows_rows_per_statement(SqlDumpMode::DataOnly));
+        assert!(SqlDumpView::shows_rows_per_statement(
+            SqlDumpMode::StructureAndData
+        ));
     }
 }

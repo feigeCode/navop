@@ -7,7 +7,7 @@ use gpui::{
 };
 use gpui_component::{ActiveTheme, WindowExt, notification::Notification};
 use one_core::gpui_tokio::Tokio;
-use one_core::popup_window::{PopupWindowOptions, open_popup_window};
+use one_core::popup_window::{PopupWindowOptions, open_reusable_popup_window};
 use rust_i18n::t;
 use sftp::{RemoteFileClient, SharedRemoteFileClient};
 use std::path::{Path, PathBuf};
@@ -213,16 +213,25 @@ fn open_remote_image_preview_window(
     let title = format!("{title} · {}", format_image_preview_size(bytes.len()));
     let image = Image::from_bytes(format, bytes);
 
-    open_popup_window(
+    // 关闭即隐藏、复用重建（macOS 上销毁原生窗口会踩到 Touch Bar KVO 竞态）。
+    // factory 会被多次调用，所以在里面 clone，让外层闭包保持 `Fn`。
+    open_reusable_popup_window(
         PopupWindowOptions::new(title)
             .size(960.0, 720.0)
             .min_width(480.0)
             .min_height(360.0),
-        move |_window, cx| cx.new(|_| RemoteImagePreview::new(image)),
+        REMOTE_IMAGE_PREVIEW_WINDOW_KEY,
+        move |_window, cx| {
+            let image = image.clone();
+            cx.new(move |_| RemoteImagePreview::new(image))
+        },
         None,
         cx,
     );
 }
+
+/// 复用键（见 [`open_reusable_popup_window`]）。
+const REMOTE_IMAGE_PREVIEW_WINDOW_KEY: &str = "sftp.remote-image-preview";
 
 fn notify_remote_image_preview_error(
     window_handle: AnyWindowHandle,

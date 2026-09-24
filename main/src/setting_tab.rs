@@ -57,7 +57,7 @@ use one_core::gpui_tokio::Tokio;
 use one_core::keybindings::action_id;
 use one_core::license::Feature;
 use one_core::llm::manager::GlobalProviderState;
-use one_core::popup_window::{PopupWindowOptions, open_popup_window};
+use one_core::popup_window::{PopupWindowOptions, open_reusable_popup_window};
 use one_core::storage::GlobalStorageState;
 pub const DEFAULT_SYSTEM_HOTKEY_MACOS: &str = "cmd-alt-m";
 pub const DEFAULT_SYSTEM_HOTKEY_OTHER: &str = "ctrl-alt-m";
@@ -73,6 +73,7 @@ pub use one_core::settings::{
 };
 use one_core::tab_container::{TabContent, TabContentEvent};
 use one_core::utils::auto_save_config::AutoSaveConfig;
+use one_core::window_close::close_window_for_reuse;
 use reqwest_client::ReqwestClient;
 use rust_i18n::t;
 use terminal_view::{MAX_FONT_SIZE, MIN_FONT_SIZE, available_monospace_fonts};
@@ -2416,14 +2417,17 @@ impl GlobalProxySettingsView {
         apply_global_proxy_settings(proxy_settings, new_client, cx);
 
         window.push_notification(t!("Settings.General.Proxy.save_success").to_string(), cx);
-        window.remove_window();
+        // macOS 上「关」只是隐藏原生窗口，业务会话当场卸载（view 连同表单一起释放），
+        // 下次打开才会用 `GlobalProxySettingsView::new` 重建 —— 表单自然回到生效值，
+        // 不需要在关闭前手工复位。
+        let _ = close_window_for_reuse(window, cx);
     }
 
-    fn on_cancel(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
+    fn on_cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.testing {
             return;
         }
-        window.remove_window();
+        let _ = close_window_for_reuse(window, cx);
     }
 }
 
@@ -2562,10 +2566,19 @@ impl Render for GlobalProxySettingsView {
     }
 }
 
+/// 全局代理设置弹窗的复用键：关闭时隐藏、再次打开时复用同一个窗口。
+///
+/// 不复用（关闭即销毁）会让 macOS 上 AppKit 的 Touch Bar 观察者去注销一个已经释放的
+/// 窗口而抛异常闪退（`EXC_CRASH (SIGABRT)`）。机制说明见
+/// [`one_core::window_close::hide_for_reuse`] 与 skill
+/// `navop-macos-selector-availability-crash` §9.11。
+const GLOBAL_PROXY_SETTINGS_WINDOW_KEY: &str = "settings.global-proxy";
+
 fn show_global_proxy_settings_window(cx: &mut App) {
-    open_popup_window(
+    open_reusable_popup_window(
         PopupWindowOptions::new(t!("Settings.General.Proxy.dialog_title").to_string())
             .size(560.0, 460.0),
+        GLOBAL_PROXY_SETTINGS_WINDOW_KEY,
         move |window, cx| cx.new(|cx| GlobalProxySettingsView::new(window, cx)),
         None,
         cx,
@@ -3087,6 +3100,13 @@ const DATABASE_SHORTCUTS: &[ShortcutEntry] = &[
         keys_other: &["cmd-shift-enter", "ctrl-shift-enter"],
         label_key: "Settings.Shortcuts.sql_run_all_query",
         action_id: Some(action_id::SQL_RUN_ALL_QUERY),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["cmd-/"],
+        keys_other: &["ctrl-/"],
+        label_key: "Settings.Shortcuts.sql_toggle_comment",
+        action_id: Some(action_id::SQL_TOGGLE_COMMENT),
         system_hotkey: false,
     },
 ];
@@ -3691,6 +3711,95 @@ mod tests {
     use one_core::settings::LocalTerminalProfileKind;
     use std::path::Path;
     use std::sync::{Arc, Mutex};
+
+    /// `include_str!` 的源码契约必须先截掉测试模块本身，否则断言会命中测试自己写的字面量。
+    fn implementation_source() -> &'static str {
+        include_str!("setting_tab.rs")
+            .split_once("\n#[cfg(test)]\nmod tests {")
+            .map(|(implementation, _)| implementation)
+            .expect("setting_tab.rs has a tests module")
+    }
+
+    /// 截出 `signature` 开头、到同一 impl 块里下一个方法（或该 impl 块结尾）为止的源码。
+    fn method_source<'a>(source: &'a str, signature: &str) -> &'a str {
+        let start = source.find(signature).expect(signature);
+        let body_start = start + signature.len();
+        let rest = &source[body_start..];
+        let end = rest
+            .find("\n    fn ")
+            .or_else(|| rest.find("\n}\n"))
+            .map(|offset| body_start + offset)
+            .unwrap_or(source.len());
+        &source[start..end]
+    }
+
+    /// 在 macOS 上销毁原生窗口，会让 AppKit 的 Touch Bar 观察者去注销一个已经释放的对象，
+    /// 抛出的 ObjC 异常无人接住 ⇒ 闪退（`EXC_CRASH (SIGABRT)`）。代理设置弹窗因此改成
+    /// 「关闭即隐藏 + 复用」。这个契约必须锁住：打开要走可复用入口，两个关闭入口都不能
+    /// 再销毁窗口。
+    #[test]
+    fn global_proxy_settings_window_is_reused_instead_of_destroyed() {
+        let source = implementation_source();
+
+        let opener = method_source(source, "fn show_global_proxy_settings_window(");
+        assert!(
+            opener.contains("open_reusable_popup_window("),
+            "the proxy window must go through the reusable opener, otherwise closing destroys it"
+        );
+        assert!(
+            opener.contains("GLOBAL_PROXY_SETTINGS_WINDOW_KEY"),
+            "the proxy window must declare a reuse key, otherwise reopening creates a new window"
+        );
+
+        for signature in ["fn on_cancel(", "fn on_save("] {
+            let body = method_source(source, signature);
+            // 必须走带 `cx` 的关闭入口：只有它能在隐藏原生窗口的同时卸载业务会话。
+            assert!(
+                body.contains("close_window_for_reuse(window, cx)"),
+                "{signature} must close through the session-ending reuse route"
+            );
+            assert!(
+                !body.contains("window.remove_window()"),
+                "{signature} must not destroy the native window (Touch Bar KVO crash)"
+            );
+        }
+    }
+
+    /// 复用窗口时会用**本次**的 factory 重建 view，所以「复位」这件事落在
+    /// `GlobalProxySettingsView::new` 上：它必须从当前生效的设置读出全部字段，
+    /// 否则隐藏窗口里的上一次编辑会被重新显示出来。
+    #[test]
+    fn reused_proxy_window_rebuilds_every_field_from_settings() {
+        let source = implementation_source();
+        let impl_start = source
+            .find("impl GlobalProxySettingsView {")
+            .expect("setting_tab.rs defines GlobalProxySettingsView");
+        let new_body = method_source(&source[impl_start..], "fn new(");
+
+        assert!(
+            new_body.contains("AppSettings::global(cx).global_proxy.clone()"),
+            "`new` must read the effective settings: the reused window has no other chance to reset"
+        );
+
+        for field in [
+            "enabled: current.enabled",
+            "proxy_type_select",
+            "host_input",
+            "port_input",
+            "username_input",
+            "password_input",
+        ] {
+            assert!(
+                new_body.contains(field),
+                "`new` must initialize {field} from the effective settings"
+            );
+        }
+
+        assert!(
+            new_body.contains("testing: false") && new_body.contains("status_message: None"),
+            "`new` must start from a clean transient state"
+        );
+    }
 
     #[test]
     fn close_window_shortcut_does_not_reserve_terminal_ctrl_d() {

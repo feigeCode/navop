@@ -23,13 +23,19 @@ pub(super) fn show_offline_package_dialog(cx: &mut App) {
     let options =
         one_core::popup_window::PopupWindowOptions::new(t!("Extension.offline_package_title"))
             .size(520.0, 320.0);
-    one_core::popup_window::open_popup_window(
+    // 关闭即隐藏、复用重建：macOS 上销毁原生窗口会踩到 Touch Bar KVO 竞态
+    // （`EXC_CRASH (SIGABRT)`）。这个弹窗内容恒定，复用没有额外代价。
+    one_core::popup_window::open_reusable_popup_window(
         options,
+        OFFLINE_PACKAGE_DIALOG_WINDOW_KEY,
         |_window, cx| cx.new(|cx| OfflinePackageDialogView::new(cx)),
         None,
         cx,
     );
 }
+
+/// 复用键（见 [`one_core::popup_window::open_reusable_popup_window`]）。
+const OFFLINE_PACKAGE_DIALOG_WINDOW_KEY: &str = "extension.offline-package";
 
 struct OfflinePackageDialogView {
     focus_handle: FocusHandle,
@@ -99,8 +105,8 @@ impl Render for OfflinePackageDialogView {
                             .small()
                             .primary()
                             .label(t!("Common.confirm").to_string())
-                            .on_click(cx.listener(|_view, _, window, _cx| {
-                                window.remove_window();
+                            .on_click(cx.listener(|_view, _, window, cx| {
+                                let _ = one_core::window_close::close_window_for_reuse(window, cx);
                             })),
                     ),
             )

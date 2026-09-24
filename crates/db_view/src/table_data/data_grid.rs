@@ -1,20 +1,25 @@
 use gpui::prelude::*;
 use gpui::{
-    Anchor, AnyElement, App, AsyncApp, ClickEvent, Context, Entity, EventEmitter, FocusHandle,
-    Focusable, Image, ImageFormat, IntoElement, ObjectFit, ParentElement, PathPromptOptions,
-    SharedString, Styled, Subscription, Window, actions, div, img, px,
+    Anchor, AnyElement, App, AsyncApp, ClickEvent, ClipboardItem, Context, Entity, EventEmitter,
+    FocusHandle, Focusable, Font, Image, ImageFormat, IntoElement, ListSizingBehavior, ObjectFit,
+    ParentElement, PathPromptOptions, Pixels, ScrollHandle, SharedString, Styled, Subscription,
+    TextRun, UniformListScrollHandle, Window, actions, div, img, px, uniform_list,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, Sizable as _, Size, WindowExt,
     button::Button,
+    checkbox::Checkbox,
     h_flex,
     input::{Input, InputEvent, InputState},
     notification::Notification,
+    popover::Popover,
+    scroll::{Scrollbar, ScrollbarMode},
     v_flex,
 };
 use one_assets::IconName;
 use one_ui::edit_table::{
-    Column, EditTable, EditTableEvent, EditTableState, FindNext, FindPrevious, HOSTED_FIND_CONTEXT,
+    Column, EditTable, EditTableDelegate as _, EditTableEvent, EditTableState, FindNext,
+    FindPrevious, HOSTED_FIND_CONTEXT,
 };
 use one_ui::{create_large_text_editor_with_content, large_text_values_equivalent};
 use rust_i18n::t;
@@ -31,7 +36,7 @@ use crate::sidebar::execution_history_panel::ExecutionHistoryPanel;
 use crate::sql_editor::SqlEditor;
 use crate::table_data::copy_format::{CopyFormat, CopyFormatContext, CopyFormatter, TableMetadata};
 use crate::table_data::filter_editor::{FilterEditorEvent, TableFilterEditor, TableSchema};
-use crate::table_data::results_delegate::{EditorTableDelegate, RowChange};
+use crate::table_data::results_delegate::{EditorTableDelegate, RowChange, VerticalCellValue};
 use chrono::Local;
 use db::{
     BinaryCell, ColumnInfo, DatabasePlugin, DbManager, ExecOptions, GlobalDbState, IndexInfo,
@@ -43,11 +48,14 @@ use gpui_component::dialog::DialogButtonProps;
 use gpui_component::menu::{DropdownMenu, PopupMenu, PopupMenuItem};
 use one_core::gpui_tokio::Tokio;
 use one_core::popup_window::{PopupWindowOptions, open_popup_window};
-use one_core::settings::{AppSettings, LargeTextCellEditorOpenMode};
+use one_core::settings::{
+    AppSettings, LargeTextCellEditorOpenMode, TableViewMode, installed_grid_monospace_font,
+};
 use one_core::storage::DatabaseType;
 use one_core::tab_container::TabContainer;
 use one_ui::edit_table::ColumnSort;
 use std::collections::HashMap;
+use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::{
     Arc,
@@ -59,49 +67,222 @@ actions!(
     [Page500, Page1000, Page2000, Page10000, Page100000]
 );
 
-/// 构建「字段过滤」菜单：先给出“显示全部字段”快捷项，再按展示顺序列出每个字段。
+/// 「字段过滤」面板的尺寸与行高。
 ///
-/// 菜单在点击时构建，因此可以读到最新的列可见状态。
-fn build_column_visibility_menu(
-    menu: PopupMenu,
-    data_grid: &Entity<DataGrid>,
-    cx: &mut Context<PopupMenu>,
-) -> PopupMenu {
-    let entries = data_grid.read(cx).column_visibility_entries(cx);
-    let total = entries.len();
-    let visible_total = entries.iter().filter(|(_, _, visible)| *visible).count();
+/// 面板固定宽度；字段列表的高度按行数算、封顶后再内部滚动。行高必须是确定值：
+/// 滚动区的高度由它乘出来，行高一变列表就会被撑开、滚动条也跟着失效。
+pub(super) const COLUMN_VISIBILITY_PANEL_WIDTH: Pixels = px(240.);
+pub(super) const COLUMN_VISIBILITY_PANEL_MAX_HEIGHT: Pixels = px(320.);
+pub(super) const COLUMN_VISIBILITY_ROW_HEIGHT: Pixels = px(28.);
 
-    let reset_grid = data_grid.clone();
-    let mut menu = menu
-        .label(t!("TableDataGrid.column_visibility_hint").to_string())
-        .separator()
-        .item(
-            PopupMenuItem::new(t!("TableDataGrid.show_all_columns").to_string())
-                .checked(visible_total == total)
-                .disabled(visible_total == total)
-                .on_click(move |_, _window, cx| {
-                    reset_grid.update(cx, |grid, cx| grid.show_all_columns(cx));
-                }),
+/// 「字段过滤」面板要渲染的全部数据。
+///
+/// `rows` 已经过搜索词过滤，而计数要用全量字段数当分母：搜索时也要能看出
+/// 「匹配了几个 / 一共多少列、当前显示几个」。
+pub(super) struct ColumnVisibilityPanelState {
+    /// 当前搜索词过滤后、按展示顺序排列的字段：`(原始列索引, 名称, 是否可见)`。
+    pub rows: Vec<(usize, SharedString, bool)>,
+    /// 字段总数（不受搜索影响）。
+    pub total: usize,
+    /// 当前可见字段数。
+    pub visible_total: usize,
+}
+
+/// 按搜索词过滤字段条目。
+///
+/// 空串不过滤；命中规则是不区分大小写的子串匹配——字段名多是 snake_case，
+/// 用户输入 `id` 时不应被迫记住大小写。
+pub(super) fn filter_column_visibility_entries(
+    entries: &[(usize, SharedString, bool)],
+    query: &str,
+) -> Vec<(usize, SharedString, bool)> {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return entries.to_vec();
+    }
+    entries
+        .iter()
+        .filter(|(_, name, _)| name.to_lowercase().contains(&query))
+        .cloned()
+        .collect()
+}
+
+/// 构建「字段过滤」面板：标题与计数、字段搜索框、勾选列表（限高滚动）、
+/// 底部提示与「显示全部字段」。
+///
+/// 面板内容每次渲染都会重建，因此读到的搜索词与列可见状态永远是最新的。
+pub(super) fn build_column_visibility_panel(data_grid: &Entity<DataGrid>, cx: &App) -> AnyElement {
+    let state = data_grid.read(cx).column_visibility_panel_state(cx);
+    let ColumnVisibilityPanelState {
+        rows,
+        total,
+        visible_total,
+    } = state;
+    let row_hover_bg = cx.theme().muted;
+    let search_input = data_grid.read(cx).column_visibility_search.clone();
+
+    let header = h_flex()
+        .w_full()
+        .items_center()
+        .justify_between()
+        .gap_2()
+        .px_3()
+        .pt_2()
+        .pb_1()
+        .child(
+            div()
+                .text_sm()
+                .child(t!("TableDataGrid.column_visibility").to_string()),
         )
-        .separator();
+        .child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                // 与查找框同款计数写法：显示几个 / 一共几列。
+                .child(format!("{visible_total}/{total}")),
+        );
 
-    for (original_ix, name, visible) in entries {
-        let label = if name.trim().is_empty() {
-            t!("TableDataGrid.unnamed_column").to_string()
+    let search = div().w_full().px_3().pb_2().child(
+        Input::new(&search_input)
+            .prefix(Icon::new(IconName::Search).text_color(cx.theme().muted_foreground))
+            .cleanable(true)
+            .w_full(),
+    );
+
+    let mut list = v_flex().id("column-visibility-list").w_full();
+    if rows.is_empty() {
+        list = list.child(
+            div()
+                .h(COLUMN_VISIBILITY_ROW_HEIGHT)
+                .px_3()
+                .flex()
+                .items_center()
+                .text_sm()
+                .text_color(cx.theme().muted_foreground)
+                .child(t!("TableDataGrid.search_no_match").to_string()),
+        );
+    }
+    for (ix, (original_ix, name, visible)) in rows.iter().cloned().enumerate() {
+        let label: SharedString = if name.trim().is_empty() {
+            t!("TableDataGrid.unnamed_column").to_string().into()
         } else {
-            name.to_string()
+            name
         };
         // 只剩最后一个可见字段时禁止继续隐藏，避免整表无列。
         let is_last_visible = visible && visible_total <= 1;
         let grid = data_grid.clone();
-        menu = menu.item(
-            PopupMenuItem::new(label)
-                .checked(visible)
-                .disabled(is_last_visible)
+        list = list.child(
+            h_flex()
+                .id(("column-visibility-row", ix))
+                .w_full()
+                .h(COLUMN_VISIBILITY_ROW_HEIGHT)
+                .items_center()
+                .gap_2()
+                .px_3()
+                .when(!is_last_visible, |this| {
+                    this.hover(move |style| style.bg(row_hover_bg)).on_click(
+                        move |_, _window, cx| {
+                            grid.update(cx, |grid, cx| {
+                                grid.set_column_visibility(original_ix, !visible, cx)
+                            });
+                        },
+                    )
+                })
+                // 勾选框只负责显示，点击交给整行：勾选框与文字都能点，
+                // 两个都挂处理器会让一次点击翻转两遍。
+                .child(
+                    Checkbox::new(("column-visibility-check", ix))
+                        .checked(visible)
+                        .disabled(is_last_visible),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .text_sm()
+                        .child(label),
+                ),
+        );
+    }
+
+    // 列表高度按行数算出来再封顶：滚动区必须有确定高度，否则内容会把容器
+    // 撑到全部展开——滚动条永远不出现，看起来就像“根本不能滚”。
+    let list_height = (COLUMN_VISIBILITY_ROW_HEIGHT * rows.len().max(1) as f32)
+        .min(COLUMN_VISIBILITY_PANEL_MAX_HEIGHT);
+    let list = list
+        .h(list_height)
+        .overflow_y_scroll()
+        .track_scroll(&data_grid.read(cx).column_visibility_scroll.clone());
+
+    let reset_grid = data_grid.clone();
+    let footer = h_flex()
+        .w_full()
+        .items_center()
+        .justify_between()
+        .gap_2()
+        .px_3()
+        .py_2()
+        .border_t_1()
+        .border_color(cx.theme().border)
+        .child(
+            div()
+                .min_w_0()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(t!("TableDataGrid.column_visibility_keep_one_hint").to_string()),
+        )
+        .child(
+            Button::new("column-visibility-all")
+                .ghost()
+                .with_size(Size::XSmall)
+                .label(t!("TableDataGrid.show_all_columns").to_string())
+                .disabled(visible_total == total)
                 .on_click(move |_, _window, cx| {
-                    grid.update(cx, |grid, cx| {
-                        grid.toggle_column_visibility(original_ix, cx)
-                    });
+                    reset_grid.update(cx, |grid, cx| grid.show_all_columns(cx));
+                }),
+        );
+
+    v_flex()
+        .child(header)
+        .child(search)
+        // 滚动条放在非滚动容器上：它是绝对定位的，放进滚动容器会跟着内容跑。
+        .child(
+            div().relative().child(list).child(
+                div().absolute().inset_0().child(
+                    Scrollbar::vertical(&data_grid.read(cx).column_visibility_scroll)
+                        .mode(ScrollbarMode::Always)
+                        .viewport_from_layout(),
+                ),
+            ),
+        )
+        .child(footer)
+        .into_any_element()
+}
+
+/// 构建「显示方式」菜单：网格 / 纵向「列：值」。
+///
+/// 与字段过滤菜单同样在点击时构建，因此读到的一定是最新的设置值。
+fn build_view_mode_menu(
+    menu: PopupMenu,
+    data_grid: &Entity<DataGrid>,
+    cx: &mut Context<PopupMenu>,
+) -> PopupMenu {
+    let current = AppSettings::global(cx).table_view_mode;
+
+    let mut menu = menu;
+    for (mode, label_key) in [
+        (TableViewMode::Grid, "TableDataGrid.view_mode_grid"),
+        (TableViewMode::Vertical, "TableDataGrid.view_mode_vertical"),
+    ] {
+        let grid = data_grid.clone();
+        menu = menu.item(
+            PopupMenuItem::new(t!(label_key).to_string())
+                .checked(current == mode)
+                .on_click(move |_, _window, cx| {
+                    grid.update(cx, |grid, cx| grid.switch_view_mode(mode, cx));
                 }),
         );
     }
@@ -617,6 +798,311 @@ fn data_generation_is_current(generation: &AtomicU64, expected: u64) -> bool {
     generation.load(Ordering::Acquire) == expected
 }
 
+/// 纵向「列：值」视图里的一行。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum VerticalLine {
+    /// 记录头：每条数据占一行
+    Record {
+        /// 显示行下标
+        row: usize,
+    },
+    /// 字段行：一条「列名 + 值」
+    Field {
+        /// 显示行下标
+        row: usize,
+        /// 展示层列下标（不是原始列下标）
+        col: usize,
+    },
+}
+
+/// 纵向视图里「列名」列的固定宽度。
+///
+/// 标签列固定在横向滚动区之外，值区再长也不会把列名推出视野。
+const VERTICAL_LABEL_WIDTH: f32 = 200.;
+
+/// 值区内容宽度的额外余量：用等宽口径估算，留一点避免最后一个字被吃掉。
+const VERTICAL_VALUE_WIDTH_PADDING: f32 = 16.;
+
+/// 底部横向滚动条的高度（`one_ui` 里的同名常量是私有的）。
+const HORIZONTAL_SCROLLBAR_THICKNESS: Pixels = px(16.);
+
+/// 量值文本宽度时最多扫到的字符数。
+///
+/// 每帧只量可见行，但一个几 MB 的字段逐帧全量扫描并不合适；超长值按已量
+/// 部分的字节数外推即可——这个宽度只用来撑开横向滚动区，不必像素级精确。
+const VERTICAL_VALUE_MEASURE_CHARS: usize = 4096;
+
+/// 纵向「字段行」的展示列号 → 网格列号。
+///
+/// `EditTableState` 的选中/编辑坐标是网格坐标，开了行号列时整体右移一位；
+/// 纵向视图只列可见字段、没有行号列。两处换算必须一致，否则点击/编辑会
+/// 落到隔壁列。
+pub(super) fn vertical_field_grid_column(display_col: usize, row_number_enabled: bool) -> usize {
+    if row_number_enabled {
+        display_col + 1
+    } else {
+        display_col
+    }
+}
+
+/// 等宽口径下值文本的像素宽度估算。
+///
+/// 纵向视图的横向滚动区靠它撑开。宁可略宽也不能偏窄：偏窄会让长值被截断，
+/// 而「滚到底能看到全文」正是这个滚动条存在的理由。
+pub(super) fn vertical_value_text_width(
+    text: &str,
+    ascii_advance: Pixels,
+    wide_advance: Pixels,
+) -> Pixels {
+    let mut width = px(0.);
+    let mut measured_bytes = 0usize;
+
+    for (measured_chars, (offset, ch)) in text.char_indices().enumerate() {
+        if measured_chars >= VERTICAL_VALUE_MEASURE_CHARS {
+            break;
+        }
+        width += if ch.is_ascii() {
+            ascii_advance
+        } else {
+            wide_advance
+        };
+        measured_bytes = offset + ch.len_utf8();
+    }
+
+    if measured_bytes < text.len() && measured_bytes > 0 {
+        width *= text.len() as f32 / measured_bytes as f32;
+    }
+
+    width
+}
+
+/// 量一次数据字体的单字符宽度：返回（ASCII、全宽）两个 advance。
+///
+/// 字体族与字号都要和值文本一致，否则估算出来的宽度对不上。等宽字体里 ASCII
+/// 字符一个格宽、中日韩字符两个格宽，分开量才能两种页面都不偏。
+fn vertical_char_advances(font: &Font, window: &Window) -> (Pixels, Pixels) {
+    let font_size = window.text_style().font_size.to_pixels(window.rem_size());
+    let advance = |sample: &str| {
+        let chars = sample.chars().count().max(1) as f32;
+        let run = vertical_measure_run(sample, font);
+        window
+            .text_system()
+            .shape_line(sample.to_string().into(), font_size, &[run], None)
+            .width()
+            / chars
+    };
+
+    (advance("0000000000"), advance("中中中中中中中中中中"))
+}
+
+/// 量宽度时用的文本 run（颜色等样式与宽度无关）。
+fn vertical_measure_run(text: &str, font: &Font) -> TextRun {
+    TextRun {
+        len: text.len(),
+        font: font.clone(),
+        color: gpui::black(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    }
+}
+
+/// 纵向视图的总行数：每条记录一行记录头 + 每个可见列一行。
+///
+/// `column_count` 必须是**可见列数**——隐藏列在纵向视图里同样不出现。
+pub(super) fn vertical_line_count(row_count: usize, column_count: usize) -> usize {
+    if column_count == 0 {
+        return 0;
+    }
+    row_count.saturating_mul(column_count + 1)
+}
+
+/// 把纵向视图的扁平行号还原成「记录头 / 字段行」。
+///
+/// 纵向视图靠 `uniform_list` 虚拟化，要求所有行等高，所以记录头与字段行
+/// 共用同一个行号空间：每 `column_count + 1` 行构成一条记录。
+pub(super) fn vertical_line_at(line_ix: usize, column_count: usize) -> Option<VerticalLine> {
+    if column_count == 0 {
+        return None;
+    }
+
+    let lines_per_record = column_count + 1;
+    let row = line_ix / lines_per_record;
+    let slot = line_ix % lines_per_record;
+
+    Some(if slot == 0 {
+        VerticalLine::Record { row }
+    } else {
+        VerticalLine::Field { row, col: slot - 1 }
+    })
+}
+
+/// 纵向视图里一个字段的显示文本。
+///
+/// 与网格单元格共用口径：NULL 用弱化斜体标出，二进制给大小描述。
+fn render_vertical_value(value: &VerticalCellValue, font: &Font, cx: &App) -> AnyElement {
+    let base = div()
+        .w_full()
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .text_ellipsis()
+        .font(font.clone());
+
+    match value {
+        // 与网格单元格一致：NULL 弱化成斜体，不能被当成空字符串。
+        VerticalCellValue::Null => base
+            .text_color(cx.theme().muted_foreground.opacity(0.5))
+            .italic()
+            .child(SharedString::from(value.display_text().into_owned()))
+            .into_any_element(),
+        VerticalCellValue::Binary { .. } | VerticalCellValue::Text(_) => base
+            .child(SharedString::from(value.display_text().into_owned()))
+            .into_any_element(),
+    }
+}
+
+/// 纵向视图里一条字段行的状态快照。
+///
+/// 一次性把需要的东西从表格状态里取出来，避免渲染元素时还持有表格读锁。
+struct VerticalFieldLine {
+    name: SharedString,
+    value: VerticalCellValue,
+    /// 网格列号（含行号列偏移），选中与编辑都用它
+    grid_col: usize,
+    /// 可编辑（只读结果集、已删除行等情况为 false）
+    editable: bool,
+    selected: bool,
+    editing: bool,
+    modified: bool,
+}
+
+/// 画纵向视图的一行：记录头，或一条「列名 + 值」。
+///
+/// 值区与网格同一套共享横滚机制：标签列固定在滚动区外，值区用一个显式的
+/// 内容宽度（全页最宽值）撑开，所有行同步横滚，滚到底就能看到长值全文。
+///
+/// `line_ix` 只用来给可交互元素造稳定 ID（值区与行都需要 ID 才能变成
+/// `Stateful`、拿到点击与滚动跟踪）。
+fn render_vertical_line(
+    line: VerticalLine,
+    line_ix: usize,
+    grid: &DataGrid,
+    font: &Font,
+    line_height: Pixels,
+    cx: &mut Context<DataGrid>,
+    window: &mut Window,
+) -> AnyElement {
+    match line {
+        VerticalLine::Record { row } => h_flex()
+            .h(line_height)
+            .w_full()
+            .items_center()
+            .px_2()
+            .bg(cx.theme().muted)
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t!("TableDataGrid.vertical_record", index = row + 1).to_string()),
+            )
+            .into_any_element(),
+        VerticalLine::Field { row, col } => {
+            let Some(line) = grid.vertical_field_line(row, col, cx) else {
+                return div().h(line_height).w_full().into_any_element();
+            };
+
+            // 编辑态的编辑器不放进横滚容器：值区可能已经横向滚到一半，编辑器
+            // 若跟着偏移，光标会跑到视野外。
+            let editor = line.editing.then(|| {
+                grid.table.update(cx, |table, cx| {
+                    table
+                        .editing_input()
+                        .map(|editor| editor.render(window, cx))
+                })
+            });
+            let editor = editor.flatten();
+
+            let value_area = div()
+                .id(gpui::ElementId::named_usize("vertical-value", line_ix))
+                .flex_1()
+                .h_full()
+                .min_w_0()
+                // 横向必须是 Scroll 而不是 Hidden：gpui 只把滚轮/触控板增量应用在
+                // `Overflow::Scroll` 的轴上，隐藏溢出的话横向手势不会生效。
+                // 再限制到手势轴：否则纯竖向滚轮会被当成横向滚动，值区会自己跑。
+                .overflow_x_scroll()
+                .restrict_scroll_to_axis()
+                .when(editor.is_none(), |this| {
+                    this.track_scroll(&grid.vertical_horizontal_scroll_handle)
+                        .child(
+                            div()
+                                .flex_none()
+                                .h_full()
+                                .w(grid.vertical_value_width)
+                                .overflow_hidden()
+                                .child(render_vertical_value(&line.value, font, cx)),
+                        )
+                })
+                .when_some(editor, |this, editor| this.child(editor));
+
+            let mut row_element = h_flex()
+                .id(gpui::ElementId::named_usize("vertical-field", line_ix))
+                .h(line_height)
+                .w_full()
+                .min_w_0()
+                .items_center()
+                .gap_2()
+                .px_2()
+                .border_b_1()
+                .border_color(cx.theme().border)
+                .when(line.modified, |this| {
+                    this.bg(cx.theme().warning.opacity(0.15))
+                })
+                .when(line.selected && !line.editing, |this| {
+                    this.bg(cx.theme().table_active)
+                })
+                .when(line.editing, |this| {
+                    this.bg(cx.theme().background)
+                        .border_2()
+                        .border_color(cx.theme().ring)
+                })
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(VERTICAL_LABEL_WIDTH))
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(line.name),
+                )
+                .child(value_area);
+
+            if line.editable {
+                let grid_col = line.grid_col;
+                row_element = row_element.on_click(cx.listener(
+                    move |grid: &mut DataGrid, _: &ClickEvent, window, cx| {
+                        grid.handle_vertical_field_click(row, grid_col, window, cx);
+                    },
+                ));
+            }
+
+            row_element.into_any_element()
+        }
+    }
+}
+
+/// 纵向视图的数据字体缓存。
+///
+/// 字体族解析要走系统字体枚举（macOS 上是 CoreText 全量枚举），不能按行
+/// 调用；纵向视图每次渲染只解析一次，之后命中这里的缓存。
+#[derive(Clone)]
+struct VerticalFontCache {
+    requested_family: String,
+    font: Font,
+}
+
 /// 数据表格组件
 pub struct DataGrid {
     /// 组件配置
@@ -625,6 +1111,9 @@ pub struct DataGrid {
     pub(crate) table: Entity<EditTableState<EditorTableDelegate>>,
     /// 表格事件订阅
     _table_sub: Option<Subscription>,
+    /// 表格实体的通知订阅：纵向视图的行是自绘的，部分状态变化（例如 Escape
+    /// 取消编辑）只 `notify` 不 `emit`，只能靠观察实体补上重画。
+    _table_observe_sub: Option<Subscription>,
     /// 焦点句柄
     focus_handle: FocusHandle,
     /// 表格数据信息（分页、总数等）
@@ -637,12 +1126,29 @@ pub struct DataGrid {
     find_input: Entity<InputState>,
     /// 查找输入框事件订阅
     _find_sub: Option<Subscription>,
+    /// 「字段过滤」面板里的字段搜索框（面板关着时也一直是同一个实体，
+    /// 打开时才能直接接着上次的搜索词）
+    column_visibility_search: Entity<InputState>,
+    /// 字段搜索框事件订阅
+    _column_visibility_search_sub: Option<Subscription>,
+    /// 「字段过滤」面板的字段列表滚动句柄
+    column_visibility_scroll: ScrollHandle,
     /// 当前数据库 tab 的共享 SQL 执行记录
     execution_history: Option<Entity<ExecutionHistoryPanel>>,
     /// 侧边栏大文本编辑器是否已为当前表格打开
     is_large_text_editor_sidebar_open: bool,
     /// Invalidates stale asynchronous data and metadata callbacks.
     data_generation: Arc<AtomicU64>,
+    /// 纵向「列：值」视图的滚动句柄
+    vertical_scroll_handle: UniformListScrollHandle,
+    /// 纵向视图值区的横向滚动句柄（标签列固定在滚动区外，值区整列同步横滚）
+    vertical_horizontal_scroll_handle: ScrollHandle,
+    /// 纵向视图值区的内容宽度（取量到过的最宽值）
+    vertical_value_width: Pixels,
+    /// 上面那个宽度属于哪一屏数据（行数、可见列数），换页或换列可见性时重置
+    vertical_value_width_key: (usize, usize),
+    /// 纵向视图的数据字体（按字体族缓存，字体枚举是系统级全量调用）
+    vertical_font_cache: Option<VerticalFontCache>,
 }
 
 impl DataGrid {
@@ -674,22 +1180,39 @@ impl DataGrid {
                 .placeholder(t!("TableDataGrid.search_placeholder").to_string())
                 .clean_on_escape()
         });
+        // 字段搜索框在弹出面板里，不能等面板打开再建：弹出面板的内容闭包
+        // 每次渲染都会重跑，在那里建实体会每次换一个新的、光标也跟着丢。
+        let column_visibility_search = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t!("TableDataGrid.column_visibility_search_placeholder").to_string())
+                .clean_on_escape()
+        });
         let table_data_info = cx.new(|_| TableDataInfo::default());
         let mut result = Self {
             config,
             table,
             _table_sub: None,
+            _table_observe_sub: None,
             focus_handle,
             table_data_info,
             filter_editor,
             _filter_sub: None,
             find_input,
             _find_sub: None,
+            column_visibility_search,
+            _column_visibility_search_sub: None,
+            column_visibility_scroll: ScrollHandle::default(),
             execution_history,
             is_large_text_editor_sidebar_open: false,
             data_generation: Arc::new(AtomicU64::new(0)),
+            vertical_scroll_handle: UniformListScrollHandle::default(),
+            vertical_horizontal_scroll_handle: ScrollHandle::default(),
+            vertical_value_width: px(0.),
+            vertical_value_width_key: (0, 0),
+            vertical_font_cache: None,
         };
         result.bind_table_event(window, cx);
+        result.bind_column_visibility_search_event(window, cx);
         if is_table_data {
             // 表格数据页的查找输入框就在工具栏里（同页唯一一个搜索框），
             // 表格自身不再浮出查找面板。
@@ -711,9 +1234,12 @@ impl DataGrid {
                 EditTableEvent::SelectCell(row, col) => {
                     trace!("select cell: {:?}", (row, col));
                     cx.emit(DataGridEvent::LargeTextSelectionChanged);
+                    // 纵向视图的行是自绘的：表格状态变了不会自动让 DataGrid 重画。
+                    cx.notify();
                 }
                 EditTableEvent::SelectionChanged(_) | EditTableEvent::CellEdited(_, _) => {
                     cx.emit(DataGridEvent::LargeTextSelectionChanged);
+                    cx.notify();
                 }
                 // 在表格里按 Cmd/Ctrl+F：输入框在工具栏这边，聚焦只能由宿主完成。
                 EditTableEvent::FindRequested => {
@@ -725,6 +1251,24 @@ impl DataGrid {
             },
         );
         self._table_sub = Some(sub);
+        self._table_observe_sub = Some(cx.observe(&self.table, |_, _, cx| cx.notify()));
+    }
+
+    /// 字段搜索框 → 「字段过滤」面板的列表过滤。
+    ///
+    /// 搜索词只影响面板自己的列表，不碰表格：这里只需要让宿主重画，
+    /// 面板在下一次渲染里自己读最新的输入值。
+    fn bind_column_visibility_search_event(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let sub = cx.subscribe_in(
+            &self.column_visibility_search,
+            window,
+            |_this: &mut DataGrid, _input, evt: &InputEvent, _window, cx| {
+                if let InputEvent::Change = evt {
+                    cx.notify();
+                }
+            },
+        );
+        self._column_visibility_search_sub = Some(sub);
     }
 
     fn bind_filter_event(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -802,24 +1346,27 @@ impl DataGrid {
 
     // ========== 字段（列）过滤 ==========
 
-    /// 当前所有列的展示名称与可见状态，供「字段过滤」菜单渲染。
-    pub fn column_visibility_entries(&self, cx: &App) -> Vec<(usize, SharedString, bool)> {
-        self.table.read(cx).delegate().column_visibility_entries()
+    /// 「字段过滤」面板的展示数据：搜索词过滤后的字段，以及计数要用到的
+    /// 总数与当前可见数。
+    ///
+    /// 过滤是纯函数（`filter_column_visibility_entries`），这里只负责把
+    /// 搜索框里的字和列状态凑到一起。
+    fn column_visibility_panel_state(&self, cx: &App) -> ColumnVisibilityPanelState {
+        let entries = self.table.read(cx).delegate().column_visibility_entries();
+        let total = entries.len();
+        let visible_total = entries.iter().filter(|(_, _, visible)| *visible).count();
+        let query = self.column_visibility_search.read(cx).text().to_string();
+
+        ColumnVisibilityPanelState {
+            rows: filter_column_visibility_entries(&entries, &query),
+            total,
+            visible_total,
+        }
     }
 
     /// 是否存在被隐藏的列。
     pub fn has_hidden_columns(&self, cx: &App) -> bool {
         self.table.read(cx).delegate().has_hidden_columns()
-    }
-
-    /// 切换某一列的可见性，成功后刷新表头与列布局。
-    pub fn toggle_column_visibility(&mut self, original_ix: usize, cx: &mut Context<Self>) {
-        let visible = self
-            .table
-            .read(cx)
-            .delegate()
-            .is_column_visible(original_ix);
-        self.set_column_visibility(original_ix, !visible, cx);
     }
 
     /// 显示全部列。
@@ -2029,6 +2576,23 @@ impl DataGrid {
         self.show_sql_preview(window, cx);
     }
 
+    /// 复制底部状态栏里那条实际执行的 SQL（#290）。
+    ///
+    /// 宽表场景下这条 SQL 常被省略号截断，复制的是**完整文本**，不是屏幕上看到的那一截。
+    fn handle_copy_current_sql(
+        &mut self,
+        _: &ClickEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let sql = self.table_data_info.read(cx).current_sql.clone();
+        if sql.trim().is_empty() {
+            return;
+        }
+        cx.write_to_clipboard(ClipboardItem::new_string(sql));
+        window.push_notification(t!("TableDataGrid.sql_copied").to_string(), cx);
+    }
+
     fn handle_commit_changes(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         cx.emit(DataGridEvent::SaveChangesRequested);
     }
@@ -3070,6 +3634,275 @@ impl DataGrid {
 
     // ========== 渲染辅助方法 ==========
 
+    /// 当前是否处于纵向「列：值」形态。
+    fn is_vertical_view(&self, cx: &App) -> bool {
+        AppSettings::global(cx).table_view_mode.is_vertical()
+    }
+
+    /// 纵向视图的数据字体（按字体族缓存，命中后不再走系统字体枚举）。
+    fn vertical_view_font(&mut self, cx: &App) -> Font {
+        let requested_family = AppSettings::global(cx).table_preview_font_family.clone();
+        if let Some(cache) = &self.vertical_font_cache
+            && cache.requested_family == requested_family
+        {
+            return cache.font.clone();
+        }
+
+        let font =
+            installed_grid_monospace_font(&requested_family, &cx.text_system().all_font_names());
+        self.vertical_font_cache = Some(VerticalFontCache {
+            requested_family,
+            font: font.clone(),
+        });
+        font
+    }
+
+    /// 切换显示方式：网格 ⇄ 纵向「列：值」。
+    ///
+    /// 偏好写回 `AppSettings` 而不是留在实例上：SQL 结果页每执行一次查询都会
+    /// 新建一个 `DataGrid`，只存实例状态会让用户每次查询都被打回网格形态。
+    fn switch_view_mode(&mut self, mode: TableViewMode, cx: &mut Context<Self>) {
+        if AppSettings::global(cx).table_view_mode == mode {
+            return;
+        }
+        AppSettings::update_and_save(cx, |settings| {
+            settings.table_view_mode = mode;
+        });
+        cx.notify();
+    }
+
+    /// 「显示方式」入口：网格 / 纵向「列：值」。
+    fn render_view_mode_button(&self, cx: &Context<Self>) -> AnyElement {
+        let data_grid = cx.entity().clone();
+        let vertical = self.is_vertical_view(cx);
+
+        Button::new("view-mode")
+            .with_size(Size::Medium)
+            .icon(IconName::Table)
+            .when(vertical, |this| this.primary())
+            .tooltip(t!("TableDataGrid.view_mode").to_string())
+            .dropdown_menu(move |menu, _window, cx| build_view_mode_menu(menu, &data_grid, cx))
+            .into_any_element()
+    }
+
+    /// 纵向「列：值」视图：每条记录展开成「列名 + 值」逐行展示。
+    ///
+    /// 用 `uniform_list` 虚拟化——一页可能上千条记录、每列一行，全量铺开会在
+    /// 每帧重建上万个文本元素。行高取表格行高设置，与网格保持同一节奏。
+    ///
+    /// 值区横向滚动：标签列固定在滚动区外（再长的值也不会把列名推出去），
+    /// 值区所有行共用同一个横滚句柄，底部常驻横向滚动条。
+    fn render_vertical_view(&mut self, font: &Font, cx: &mut Context<Self>) -> AnyElement {
+        let (row_count, column_count, loading) = {
+            let table = self.table.read(cx);
+            let delegate = table.delegate();
+            (
+                delegate.filtered_row_count(),
+                delegate.visible_column_indices().len(),
+                delegate.is_loading(),
+            )
+        };
+        let line_count = vertical_line_count(row_count, column_count);
+
+        if line_count == 0 {
+            // 首次加载时 `rows` 本来就是空的，这时候说「暂无数据」是错的。
+            let message = if loading {
+                t!("TableDataGrid.vertical_loading")
+            } else {
+                t!("TableDataGrid.vertical_empty")
+            };
+            return div()
+                .flex_1()
+                .w_full()
+                .h_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(message.to_string()),
+                )
+                .into_any_element();
+        }
+
+        let line_height = one_ui::table_row_height(cx);
+        let font = font.clone();
+        div()
+            .relative()
+            .flex_1()
+            .size_full()
+            .overflow_hidden()
+            .child(
+                // 给常驻的横向滚动条留出高度，否则它会永久盖住最后一行的那一条。
+                div().size_full().pb(HORIZONTAL_SCROLLBAR_THICKNESS).child(
+                    uniform_list(
+                        "table-vertical-list",
+                        line_count,
+                        cx.processor(
+                            move |grid: &mut DataGrid, range: Range<usize>, window, cx| {
+                                // 先量宽度再画行：值区内容宽度要所有行一致，量到的
+                                // 最大值下一帧才生效（见 `measure_visible_vertical_values`）。
+                                grid.measure_visible_vertical_values(
+                                    &range,
+                                    column_count,
+                                    line_count,
+                                    &font,
+                                    window,
+                                    cx,
+                                );
+
+                                let grid_ref: &DataGrid = grid;
+                                range
+                                    .filter_map(|line_ix| {
+                                        vertical_line_at(line_ix, column_count)
+                                            .map(|line| (line_ix, line))
+                                    })
+                                    .map(|(line_ix, line)| {
+                                        render_vertical_line(
+                                            line,
+                                            line_ix,
+                                            grid_ref,
+                                            &font,
+                                            line_height,
+                                            cx,
+                                            window,
+                                        )
+                                    })
+                                    .collect::<Vec<_>>()
+                            },
+                        ),
+                    )
+                    .flex_grow_1()
+                    .size_full()
+                    .track_scroll(&self.vertical_scroll_handle)
+                    .with_sizing_behavior(ListSizingBehavior::Auto),
+                ),
+            )
+            .child(Scrollbar::vertical(&self.vertical_scroll_handle))
+            .child(
+                // 常驻而不是悬停才现：用户特意来找长值全文时，该知道可以左右滚。
+                // 包一层定位容器是因为滚动条要跟标签列错开，而标签列不在滚动区里。
+                div()
+                    .occlude()
+                    .absolute()
+                    .left(px(VERTICAL_LABEL_WIDTH))
+                    .right_0()
+                    .bottom_0()
+                    .h(HORIZONTAL_SCROLLBAR_THICKNESS)
+                    .child(
+                        Scrollbar::horizontal(&self.vertical_horizontal_scroll_handle)
+                            .mode(ScrollbarMode::Always)
+                            .viewport_from_layout(),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    /// 量一遍可见「字段行」的值宽度，把值区内容宽度撑到最宽的一条。
+    ///
+    /// 所有值行必须共用同一个内容宽度：共享横滚句柄的 `max_offset` 由每一行的
+    /// 滚动容器写回，宽度参差不齐时，最短的那行会把整列偏移夹回 0。所以这里把
+    /// 量到的最大宽度写回实例，下一帧所有行一起变宽。
+    ///
+    /// 只增不减：每帧都按当前可见行重算的话，宽值横向滚出视野时宽度会缩回去、
+    /// 偏移被夹断，用户看到的就是「滚到一半自己弹回」。
+    fn measure_visible_vertical_values(
+        &mut self,
+        range: &Range<usize>,
+        column_count: usize,
+        line_count: usize,
+        font: &Font,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        let key = (line_count, column_count);
+        if self.vertical_value_width_key != key {
+            // 换了数据（翻页 / 过滤 / 列可见性变化）：旧宽度可能来自另一超宽
+            // 字段，不重置会让新数据顶着一个虚高的滚动范围。
+            self.vertical_value_width_key = key;
+            self.vertical_value_width = px(0.);
+        }
+
+        let (ascii_advance, wide_advance) = vertical_char_advances(font, window);
+        let mut widest = px(0.);
+        {
+            let table = self.table.read(cx);
+            let delegate = table.delegate();
+            for line_ix in range.clone() {
+                let Some(VerticalLine::Field { row, col }) =
+                    vertical_line_at(line_ix, column_count)
+                else {
+                    continue;
+                };
+                let Some(field) = delegate.vertical_field(row, col) else {
+                    continue;
+                };
+                widest = widest.max(vertical_value_text_width(
+                    &field.value.display_text(),
+                    ascii_advance,
+                    wide_advance,
+                ));
+            }
+        }
+
+        let padded = widest + px(VERTICAL_VALUE_WIDTH_PADDING);
+        if padded > self.vertical_value_width {
+            self.vertical_value_width = padded;
+            cx.notify();
+        }
+    }
+
+    /// 读一条字段行的渲染状态。
+    ///
+    /// 显示行 → 实际行、展示列 → 原始列只能由 delegate 换算；选中与编辑坐标
+    /// 是网格坐标（含行号列），因此展示列要过 [`vertical_field_grid_column`]。
+    fn vertical_field_line(&self, row: usize, col: usize, cx: &App) -> Option<VerticalFieldLine> {
+        let table = self.table.read(cx);
+        let delegate = table.delegate();
+        let field = delegate.vertical_field(row, col)?;
+        let grid_col = vertical_field_grid_column(col, delegate.row_number_enabled(cx));
+
+        Some(VerticalFieldLine {
+            name: field.name,
+            value: field.value,
+            grid_col,
+            editable: self.config.editable && delegate.cell_edit_enabled(cx),
+            selected: table.selected_cell() == Some((row, grid_col)),
+            editing: table.editing_cell() == Some((row, grid_col)),
+            modified: delegate.is_cell_modified(row, col, cx),
+        })
+    }
+
+    /// 纵向视图里点一条「列：值」：先落地手上那条编辑，再选中；在已选中的字段
+    /// 上再点一次进入编辑——与网格「单击选中、再点编辑」的手感保持一致。
+    fn handle_vertical_field_click(
+        &mut self,
+        row: usize,
+        grid_col: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.table.update(cx, |table, cx| {
+            // 点别的字段等于“改完了”：不提交就直接换编辑目标，会把用户刚
+            // 输入的内容无声丢弃。
+            if table
+                .editing_cell()
+                .is_some_and(|editing| editing != (row, grid_col))
+            {
+                table.commit_cell_edit(window, cx);
+            }
+
+            if table.selected_cell() == Some((row, grid_col)) {
+                table.start_editing(row, grid_col, window, cx);
+            } else {
+                table.select_cell(row, grid_col, cx);
+            }
+        });
+        cx.notify();
+    }
+
     /// 「字段过滤」入口：按当前可见状态渲染每个字段的勾选项。
     ///
     /// 菜单在点击时构建，因此可以从捕获的实体读出最新列状态，避免缓存过期。
@@ -3078,15 +3911,20 @@ impl DataGrid {
         let loading = self.table.read(cx).delegate().is_loading();
         let has_hidden = self.table.read(cx).delegate().has_hidden_columns();
 
-        Button::new("column-visibility")
-            .with_size(Size::Medium)
-            .icon(IconName::Column)
-            .when(has_hidden, |this| this.primary())
-            .tooltip(t!("TableDataGrid.column_visibility").to_string())
-            .disabled(loading)
-            .dropdown_menu(move |menu, _window, cx| {
-                build_column_visibility_menu(menu, &data_grid, cx)
-            })
+        // 用弹出面板而不是下拉菜单：字段多的时候菜单会一路顶到窗口底部，
+        // 面板可以固定尺寸、把字段列表关在内部滚动区里。
+        Popover::new("column-visibility")
+            .trigger(
+                Button::new("column-visibility")
+                    .with_size(Size::Medium)
+                    .icon(IconName::Column)
+                    .when(has_hidden, |this| this.primary())
+                    .tooltip(t!("TableDataGrid.column_visibility").to_string())
+                    .disabled(loading),
+            )
+            .content(move |_state, _window, cx| build_column_visibility_panel(&data_grid, cx))
+            .w(COLUMN_VISIBILITY_PANEL_WIDTH)
+            .p_0()
             .into_any_element()
     }
 
@@ -3161,8 +3999,13 @@ impl DataGrid {
         let editable = self.config.editable;
         let loading = self.table.read(cx).delegate().is_loading();
         let data_grid = cx.entity().clone();
-        let find_bar =
-            (self.config.usage == DataGridUsage::TableData).then(|| self.render_find_bar(cx));
+        // 纵向「列：值」形态没有「行 × 列」的二维落点：行增删、表内查找、
+        // 大文本编辑器收起。但单元格编辑本身在纵向视图里是有落点的（一条
+        // 「列：值」就是一个单元格），所以撤销、提交、SQL 预览跟着可编辑状态
+        // 走，不再看形态。
+        let grid_affordances = !self.is_vertical_view(cx);
+        let find_bar = (self.config.usage == DataGridUsage::TableData && grid_affordances)
+            .then(|| self.render_find_bar(cx));
         let settings = cx.global::<AppSettings>();
         let large_text_button_selected = settings.large_text_cell_editor_open_mode
             == LargeTextCellEditorOpenMode::SidebarPreview
@@ -3184,7 +4027,7 @@ impl DataGrid {
                     .disabled(loading)
                     .on_click(cx.listener(Self::handle_toolbar_refresh)),
             )
-            .when(editable, |this| {
+            .when(editable && grid_affordances, |this| {
                 this.child(
                     Button::new("add-row")
                         .with_size(Size::Medium)
@@ -3194,7 +4037,7 @@ impl DataGrid {
                         .on_click(cx.listener(Self::handle_add_row)),
                 )
             })
-            .when(editable, |this| {
+            .when(editable && grid_affordances, |this| {
                 this.child(
                     Button::new("delete-row")
                         .with_size(Size::Medium)
@@ -3235,6 +4078,7 @@ impl DataGrid {
                 )
             })
             .child(div().flex_1())
+            .child(self.render_view_mode_button(cx))
             .child(self.render_column_visibility_button(cx))
             .when_some(find_bar, |this, bar| this.child(bar))
             .when(
@@ -3250,15 +4094,17 @@ impl DataGrid {
                     )
                 },
             )
-            .child(
-                Button::new("toggle-editor")
-                    .with_size(Size::Medium)
-                    .icon(IconName::EditBorder)
-                    .when(large_text_button_selected, |this| this.primary())
-                    .tooltip(t!("TableDataGrid.large_text_editor").to_string())
-                    .disabled(loading)
-                    .on_click(cx.listener(Self::handle_large_text_editor)),
-            )
+            .when(grid_affordances, |this| {
+                this.child(
+                    Button::new("toggle-editor")
+                        .with_size(Size::Medium)
+                        .icon(IconName::EditBorder)
+                        .when(large_text_button_selected, |this| this.primary())
+                        .tooltip(t!("TableDataGrid.large_text_editor").to_string())
+                        .disabled(loading)
+                        .on_click(cx.listener(Self::handle_large_text_editor)),
+                )
+            })
             .child(
                 Button::new("export-data")
                     .with_size(Size::Medium)
@@ -3364,7 +4210,7 @@ impl DataGrid {
             .into_any_element()
     }
 
-    pub fn render_table_area(&self, _window: &mut Window, cx: &App) -> AnyElement {
+    pub fn render_table_area(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let error_message = self.table_data_info.read(cx).error_message.clone();
 
         if let Some(error) = error_message {
@@ -3384,6 +4230,23 @@ impl DataGrid {
                         .text_sm()
                         .child(error),
                 )
+                .into_any_element();
+        }
+
+        if self.is_vertical_view(cx) {
+            // 数据字体只在纵向形态下解析（要过系统字体枚举），且在渲染入口
+            // 解析一次后缓存，不做成按行解析。
+            let font = self.vertical_view_font(cx);
+            return div()
+                .flex_1()
+                .w_full()
+                .h_full()
+                .bg(cx.theme().background)
+                .border_1()
+                .border_color(cx.theme().border)
+                .overflow_hidden()
+                .flex()
+                .child(self.render_vertical_view(&font, cx))
                 .into_any_element();
         }
 
@@ -3446,13 +4309,29 @@ impl DataGrid {
                     ),
             )
             .child(
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
+                h_flex()
                     .flex_1()
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .child(table_data_info.current_sql.clone()),
+                    .min_w_0()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .child(table_data_info.current_sql.clone()),
+                    )
+                    .child(
+                        Button::new("copy-current-sql")
+                            .with_size(Size::Small)
+                            .ghost()
+                            .icon(IconName::Copy)
+                            .tooltip(t!("TableDataGrid.copy_sql").to_string())
+                            .on_click(cx.listener(Self::handle_copy_current_sql)),
+                    ),
             )
             .child(
                 h_flex()
@@ -3535,6 +4414,12 @@ impl DataGrid {
 impl Render for DataGrid {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_table_data = self.config.usage == DataGridUsage::TableData;
+        // 纵向形态下查找框被收起，这里也要一起摘掉「聚焦搜索框」的绑定，
+        // 否则 Cmd/Ctrl+F 会把焦点塞进一个看不见的输入框。
+        let grid_affordances = !self.is_vertical_view(cx);
+        // 表格区域先算好：纵向视图要走 `&mut self` 刷新字体缓存，
+        // 放进 builder 链里会和下面闭包对 `self` 的借用打架。
+        let table_area = self.render_table_area(cx);
 
         v_flex()
             .when(is_table_data, |this| {
@@ -3543,7 +4428,9 @@ impl Render for DataGrid {
                     .on_action(cx.listener(Self::handle_page_change_2000))
                     .on_action(cx.listener(Self::handle_page_change_10000))
                     .on_action(cx.listener(Self::handle_page_change_100000))
-                    .on_action(cx.listener(Self::on_action_focus_search))
+                    .when(grid_affordances, |this| {
+                        this.on_action(cx.listener(Self::on_action_focus_search))
+                    })
                     .on_action(cx.listener(Self::on_action_open_table_designer))
                     .on_action(cx.listener(Self::on_action_open_table_query))
                     .key_context(DB_SEARCH_CONTEXT)
@@ -3568,7 +4455,7 @@ impl Render for DataGrid {
                     .w_full()
                     .h_full()
                     .overflow_hidden()
-                    .child(self.render_table_area(window, cx)),
+                    .child(table_area),
             )
             .child(if is_table_data {
                 self.render_status_bar(cx)
@@ -3584,15 +4471,26 @@ impl Clone for DataGrid {
             config: self.config.clone(),
             table: self.table.clone(),
             _table_sub: None,
+            _table_observe_sub: None,
             focus_handle: self.focus_handle.clone(),
             table_data_info: self.table_data_info.clone(),
             filter_editor: self.filter_editor.clone(),
             _filter_sub: None,
             find_input: self.find_input.clone(),
             _find_sub: None,
+            column_visibility_search: self.column_visibility_search.clone(),
+            _column_visibility_search_sub: None,
+            column_visibility_scroll: self.column_visibility_scroll.clone(),
             execution_history: self.execution_history.clone(),
             is_large_text_editor_sidebar_open: self.is_large_text_editor_sidebar_open,
             data_generation: self.data_generation.clone(),
+            vertical_scroll_handle: self.vertical_scroll_handle.clone(),
+            // 句柄与已量到的宽度跟着走：clone 出来的副本指向同一张表，
+            // 横向滚到一半时不应又从头开始量（见 `measure_visible_vertical_values`）。
+            vertical_horizontal_scroll_handle: self.vertical_horizontal_scroll_handle.clone(),
+            vertical_value_width: self.vertical_value_width,
+            vertical_value_width_key: self.vertical_value_width_key,
+            vertical_font_cache: self.vertical_font_cache.clone(),
         }
     }
 }

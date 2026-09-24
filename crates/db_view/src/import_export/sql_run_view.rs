@@ -695,8 +695,9 @@ impl Render for SqlRunView {
                         this.child(
                             Button::new("close")
                                 .child(t!("SqlRun.close").to_string())
-                                .on_click(|_, window, _cx| {
-                                    window.remove_window();
+                                .on_click(|_, window, cx| {
+                                    let _ =
+                                        one_core::window_close::close_window_for_reuse(window, cx);
                                 }),
                         )
                     }),

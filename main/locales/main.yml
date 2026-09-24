@@ -2989,6 +2989,22 @@ Settings:
         en: Set the height of database table and editable grid rows (24-100 pixels)
         zh-CN: 设置数据库表和可编辑表格的行高（24-100像素）
         zh-HK: 設置資料庫表和可編輯表格的行高（24-100像素）
+      table_view_mode:
+        en: Result Display Mode
+        zh-CN: 结果显示方式
+        zh-HK: 結果顯示方式
+      table_view_mode_desc:
+        en: Show database results as a grid, or as one "column - value" line per field, which reads better for wide tables
+        zh-CN: 数据库结果按网格展示，或把每条记录的每个字段展开成一行「列名 - 值」，宽表更易读
+        zh-HK: 資料庫結果按網格展示，或把每條記錄的每個欄位展開成一行「欄名 - 值」，寬表更易讀
+      table_view_mode_grid:
+        en: Grid
+        zh-CN: 表格
+        zh-HK: 表格
+      table_view_mode_vertical:
+        en: "Column: Value"
+        zh-CN: "列：值"
+        zh-HK: "欄：值"
 
     Agent:
       group_title:
@@ -4105,6 +4121,10 @@ Settings:
       en: Run All Queries
       zh-CN: 执行全部查询
       zh-HK: 執行全部查詢
+    sql_toggle_comment:
+      en: Toggle Line Comment
+      zh-CN: 注释/取消注释
+      zh-HK: 註解/取消註解
     table_move_selection:
       en: Move Selection
       zh-CN: 移动选区

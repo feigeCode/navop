@@ -191,7 +191,11 @@ fn to_ssh_connection(
         credential_reference: None,
         prompt_username: None,
         prompt_password: None,
-        keyboard_interactive: None,
+        // 导入协议不携带 keyboard-interactive 信息：迁移源里的「支持多种认证方式」只是服务器
+        // 返回的方法列表，不等于需要二次认证。此字段留空会落到全局默认 `true`，使每个迁移进来的
+        // 连接都走 keyboard-interactive 优先；而受限设备（交换机/防火墙）上这条路径可能直接被
+        // 设备捆断。因此迁移时显式关闭，需要二次认证的设备由用户在连接设置里手动开启。
+        keyboard_interactive: Some(false),
         terminal_encoding: Default::default(),
         terminal_type: Default::default(),
         connect_timeout: None,

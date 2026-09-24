@@ -2538,6 +2538,30 @@ TableData:
     zh-CN: 无法刷新数据
     zh-HK: 無法重新整理資料
 TableDataGrid:
+  view_mode:
+    en: Display mode
+    zh-CN: 显示方式
+    zh-HK: 顯示方式
+  view_mode_grid:
+    en: Grid
+    zh-CN: 表格
+    zh-HK: 表格
+  view_mode_vertical:
+    en: "Column: Value"
+    zh-CN: "列：值"
+    zh-HK: "欄：值"
+  vertical_record:
+    en: "Record %{index}"
+    zh-CN: "记录 %{index}"
+    zh-HK: "記錄 %{index}"
+  vertical_empty:
+    en: No rows to display
+    zh-CN: 暂无可显示的数据
+    zh-HK: 暫無可顯示的資料
+  vertical_loading:
+    en: Loading…
+    zh-CN: 正在加载…
+    zh-HK: 正在載入…
   load_data_failed:
     en: "Failed to load data: %{error}"
     zh-CN: "数据加载失败: %{error}"
@@ -2650,6 +2674,14 @@ TableDataGrid:
     en: SQL Preview
     zh-CN: SQL预览
     zh-HK: SQL預覽
+  copy_sql:
+    en: Copy SQL
+    zh-CN: 复制 SQL
+    zh-HK: 複製 SQL
+  sql_copied:
+    en: SQL copied to clipboard
+    zh-CN: SQL 已复制到剪贴板
+    zh-HK: SQL 已複製到剪貼簿
   commit_changes:
     en: Commit Changes
     zh-CN: 提交更改
@@ -2662,10 +2694,14 @@ TableDataGrid:
     en: Filter fields
     zh-CN: 字段过滤
     zh-HK: 欄位過濾
-  column_visibility_hint:
-    en: Choose fields to display
-    zh-CN: 选择要显示的字段
-    zh-HK: 選擇要顯示的欄位
+  column_visibility_search_placeholder:
+    en: Search fields…
+    zh-CN: 搜索字段…
+    zh-HK: 搜尋欄位…
+  column_visibility_keep_one_hint:
+    en: At least one field stays visible.
+    zh-CN: 至少保留一列可见。
+    zh-HK: 至少保留一欄可見。
   show_all_columns:
     en: Show all fields
     zh-CN: 显示全部字段
@@ -2864,6 +2900,10 @@ SqlDump:
     en: "Dump to:"
     zh-CN: "转储到:"
     zh-HK: "轉儲到:"
+  rows_per_statement:
+    en: "Rows per statement:"
+    zh-CN: "每条语句的数据行数:"
+    zh-HK: "每條語句的資料行數:"
   processed_records:
     en: "Processed records:"
     zh-CN: "已处理记录:"

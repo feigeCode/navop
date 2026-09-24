@@ -24,6 +24,7 @@ pub(super) async fn export_table_data_in_pages(
 ) -> Result<u64> {
     let table_ident =
         plugin.format_export_table_reference(&config.database, config.schema.as_deref(), table);
+    let rows_per_statement = config.rows_per_statement.max(1);
     let mut offset = 0usize;
     let mut total_rows = 0u64;
     let mut remaining = config.limit;
@@ -31,7 +32,7 @@ pub(super) async fn export_table_data_in_pages(
     let mut schema_columns: Option<Vec<ColumnInfo>> = None;
 
     loop {
-        let Some(page_limit) = next_export_page_limit(remaining) else {
+        let Some(page_limit) = next_export_page_limit(remaining, rows_per_statement) else {
             break;
         };
         let paginated_query = export_page_select_sql(plugin, config, table, page_limit, offset);
@@ -58,6 +59,7 @@ pub(super) async fn export_table_data_in_pages(
             table,
             &query_result,
             &mut wrote_header,
+            rows_per_statement,
         )?;
 
         append_or_send_export_page(
@@ -80,10 +82,19 @@ pub(super) async fn export_table_data_in_pages(
     Ok(total_rows)
 }
 
-fn next_export_page_limit(remaining: Option<usize>) -> Option<usize> {
+/// 计算下一页要取多少行。
+///
+/// 页大小向下取整成 `rows_per_statement` 的整数倍，这样除最后一页（不足一页，
+/// 必然是表的尾部）以外的每一页都恰好由若干条完整语句组成，批量 INSERT 不会在
+/// 分页边界被拆成两条语句。批量行数超过 [`SQL_EXPORT_PAGE_SIZE`] 时按批量行数
+/// 取一页——一条语句本来就需要这么多行同时在手。
+fn next_export_page_limit(remaining: Option<usize>, rows_per_statement: usize) -> Option<usize> {
+    let rows_per_statement = rows_per_statement.max(1);
+    let statements_per_page = (SQL_EXPORT_PAGE_SIZE / rows_per_statement).max(1);
+    let page_size = rows_per_statement * statements_per_page;
     let page_limit = remaining
-        .map(|limit| limit.min(SQL_EXPORT_PAGE_SIZE))
-        .unwrap_or(SQL_EXPORT_PAGE_SIZE);
+        .map(|limit| limit.min(page_size))
+        .unwrap_or(page_size);
     (page_limit > 0).then_some(page_limit)
 }
 
@@ -141,46 +152,85 @@ fn sql_dump_page(
     table: &str,
     query_result: &QueryResult,
     wrote_header: &mut bool,
+    rows_per_statement: usize,
 ) -> Result<String> {
     if query_result.rows.is_empty() {
         ResultCells::new(query_result, "SQL")?;
         return Ok(String::new());
     }
 
-    let mut output = String::new();
-    if !*wrote_header {
-        output.push_str("-- Data for table ");
-        output.push_str(table);
-        output.push('\n');
-        *wrote_header = true;
-    }
-    output.push_str(&render_insert_statements(
+    render_insert_statements_with_table_comment(
         plugin,
         table_ident,
+        Some(table),
         query_result,
-    )?);
-    Ok(output)
+        wrote_header,
+        rows_per_statement,
+    )
 }
 
+/// 把结果集渲染成 INSERT 语句，`rows_per_statement` 行合并成一条。
 pub(crate) fn render_insert_statements<P>(
     plugin: &P,
     table_ident: &str,
     query_result: &QueryResult,
+    rows_per_statement: usize,
+) -> Result<String>
+where
+    P: DatabasePlugin + ?Sized,
+{
+    let mut wrote_header = true;
+    render_insert_statements_with_table_comment(
+        plugin,
+        table_ident,
+        None,
+        query_result,
+        &mut wrote_header,
+        rows_per_statement,
+    )
+}
+
+fn render_insert_statements_with_table_comment<P>(
+    plugin: &P,
+    table_ident: &str,
+    table_comment: Option<&str>,
+    query_result: &QueryResult,
+    wrote_header: &mut bool,
+    rows_per_statement: usize,
 ) -> Result<String>
 where
     P: DatabasePlugin + ?Sized,
 {
     let cells = ResultCells::new(query_result, "SQL")?;
+    let quoted_columns = query_result
+        .columns
+        .iter()
+        .map(|column| plugin.quote_identifier(column))
+        .collect::<Vec<_>>()
+        .join(", ");
     let context = InsertRenderContext {
         plugin,
         table_ident,
         columns: &query_result.columns,
+        quoted_columns: &quoted_columns,
         column_meta: &query_result.column_meta,
         cells: &cells,
     };
+    let rows_per_statement = rows_per_statement.max(1);
+    let row_count = cells.row_count();
     let mut output = String::new();
-    for row_index in 0..cells.row_count() {
-        push_insert_statement(&mut output, &context, row_index);
+    let mut batch_start = 0usize;
+    while batch_start < row_count {
+        let batch_end = row_count.min(batch_start + rows_per_statement);
+        let mut values = String::new();
+        for row_index in batch_start..batch_end {
+            if row_index > batch_start {
+                values.push_str(", ");
+            }
+            values.push_str(&format_row_values(&context, row_index));
+        }
+        push_insert_statement(&mut output, &context, table_comment, wrote_header, &values);
+        batch_start = batch_end;
     }
     Ok(output)
 }
@@ -189,6 +239,8 @@ struct InsertRenderContext<'a, 'b, P: DatabasePlugin + ?Sized> {
     plugin: &'a P,
     table_ident: &'a str,
     columns: &'a [String],
+    /// 已按方言引用好的列清单，避免每一行重复拼接。
+    quoted_columns: &'a str,
     column_meta: &'a [crate::executor::QueryColumnMeta],
     cells: &'b ResultCells<'a>,
 }
@@ -196,29 +248,45 @@ struct InsertRenderContext<'a, 'b, P: DatabasePlugin + ?Sized> {
 fn push_insert_statement<P>(
     output: &mut String,
     context: &InsertRenderContext<'_, '_, P>,
-    row_index: usize,
+    table_comment: Option<&str>,
+    wrote_header: &mut bool,
+    values: &str,
 ) where
     P: DatabasePlugin + ?Sized,
 {
+    if values.is_empty() {
+        return;
+    }
+    if let Some(table) = table_comment {
+        if !*wrote_header {
+            output.push_str("-- Data for table ");
+            output.push_str(table);
+            output.push('\n');
+            *wrote_header = true;
+        }
+    }
     output.push_str("INSERT INTO ");
     output.push_str(context.table_ident);
     output.push_str(" (");
-    output.push_str(
-        &context
-            .columns
-            .iter()
-            .map(|column| context.plugin.quote_identifier(column))
-            .collect::<Vec<_>>()
-            .join(", "),
-    );
-    output.push_str(") VALUES (");
+    output.push_str(context.quoted_columns);
+    output.push_str(") VALUES ");
+    output.push_str(values);
+    output.push_str(";\n");
+}
+
+fn format_row_values<P>(context: &InsertRenderContext<'_, '_, P>, row_index: usize) -> String
+where
+    P: DatabasePlugin + ?Sized,
+{
+    let mut values = String::from("(");
     for column_index in 0..context.columns.len() {
         if column_index > 0 {
-            output.push_str(", ");
+            values.push_str(", ");
         }
-        output.push_str(&format_export_value(context, row_index, column_index));
+        values.push_str(&format_export_value(context, row_index, column_index));
     }
-    output.push_str(");\n");
+    values.push(')');
+    values
 }
 
 fn format_export_value<P>(

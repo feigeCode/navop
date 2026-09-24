@@ -4,6 +4,48 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.19.2] - 2026-09-24
+
+#### 更新内容
+
+- 数据库结果新增纵向「列：值」显示方式：宽表横向铺满几十列后没法读，现在可以按「列名：值」逐字段竖排（表数据页与 SQL 结果页共用），工具栏「显示方式」或「设置 → 通用 → 数据库 → 结果显示方式」切换。长值不再被截断——标签列固定、值区单独横向滚动且滚动条常驻；单击值行选中、在选中行上再点一次进入编辑（Enter 提交、Esc 取消），提交前工具栏会亮出撤销 / SQL 预览 / 提交。
+- 字段过滤面板重做：新增字段搜索框（不区分大小写的子串匹配，输入 `id` 同时命中 `id` 与 `tenant_id`）、列表限高滚动并常驻滚动条、标题显示「已显示字段数 / 字段总数」，底部固定「至少保留一列可见」提示与「显示全部字段」。此前是下拉菜单，高度只由条目数决定，几十列的表会一路顶到窗口底部，最后几个字段点不到。
+- 表数据页底部状态栏的 SQL 可以整条复制：宽表下这行总被省略号截断，复制到的是完整语句；空 SQL 不写剪贴板，避免把上次的内容悄悄清掉。SQL 编辑器的「注释/取消注释」纳入「设置 → 快捷键 → 数据库」，默认 macOS 为 `Cmd+/`、Windows/Linux 为 `Ctrl+/`，改键后立即生效（此前改键不生效、默认键在编辑器里按不出来）；空白行也能先生成 `-- ` 再写 SQL，光标停在标记之后可直接续写。
+- SQL 转储支持每条 INSERT 合并多行数据：转储窗口在「转储到」下方新增「每条语句的数据行数」，默认 100（与 Navicat 的「每条语句的数据行数」一致），分页按整批对齐，一批数据不会被页边界拆成两条语句。
+- 双击已打开的 RDP/VNC 连接改为切换已有标签页，不再堆出多个指向同一主机的会话，标签身份按「协议 + 连接 id」钉死。同一连接因此不再能开出第二个标签页（需要第二条同主机会话时，可复制一份连接）。
+
+#### 修复与优化
+
+- 修复 macOS 上关闭部分弹窗就闪退的问题（带 Touch Bar 的机型，崩溃栈落在 AppKit 的 Touch Bar 观察者注销上）：弹窗关闭改为隐藏并复用，不再销毁原生窗口。本次接入全局代理设置、更新提示、扩展离线包下载与扩展详情、远程图片预览、SQL 悬停详情、导入数据、导出表、运行 SQL 文件、转储 SQL 文件、数据比较、结构比较共 12 个窗口。需要注意的行为变化：同类弹窗（导入数据、导出表、数据比较等）由「可同时开多个」变为「一次一个」。
+- 在单元格里编辑时用鼠标拖选文本，网格不再同时开始自己的拖选：此前指针扫过相邻单元格就会把它们纳入选区，提交时把新值批量写到整片选区，现象是「不小心把隔壁一起编辑了」。
+- 修复 SQLite 联合主键表的 DDL 显示错误：表设计器打开 WITHOUT ROWID 联合主键表时，DDL 会被渲染成 `"device_id" INTEGER PRIMARY KEY AUTOINCREMENT` 并重复声明主键。现在联合主键的每一列都能正确识别，只有单列 INTEGER 主键才视作自增，生成的建表语句也不再多写一个表级主键。
+- SSH 连接：设备在认证阶段掐断连接时，报错不再只有 `Unable to receive more messages from the channel` 或裸 `Disconnected`。现在会记录设备给出的断开原因码与文本（warn 日志），报错里点出常见原因（密码被拒、账号已在别处登录、VTY/并发达上限、RADIUS・TACACS・LDAP 不可达、设备认证超时短于登录往返）；若设备是在 keyboard-interactive 往返中断开传输层，会自动改用纯密码认证重试一次（仅本会话生效，一次连接序列最多降级一次）。
+- 从 SecureCRT 等工具迁移/导入进来的连接不再默认勾选「双因素认证」：此前每个迁移连接都会优先走 keyboard-interactive，在交换机、防火墙这类设备上一认证就被掐断。迁移源里的「支持多种认证方式」只是服务器返回的方法列表，不等于需要二次认证；确实需要二次认证的设备请手动开启。
+- 认证失败的提示文案不再断言「服务器需要 MFA/二次认证」——交换机往往只是声明支持多种认证方式。现在改为说明当前认证方式被拒绝并提示先核对凭据，双因素开关的悬停说明也补充了自动降级的说明。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.19.2) 下载桌面端安装包
+
+---
+
+#### What's New
+
+- Query results can now use a vertical "column: value" layout: a wide result set that spans dozens of columns becomes readable when shown field by field, shared by the table data page and the SQL result tabs, and switchable from "Display mode" in the toolbar or Settings → General → Database → Result display mode. Long values are no longer truncated — the label column stays fixed while the value area scrolls horizontally with an always-visible scrollbar. Click a value row to select it, click a selected row again to edit it (Enter commits, Esc cancels), and the toolbar reveals undo / SQL preview / commit while editing.
+- The field filter panel was rebuilt: it now has a field search box (case-insensitive substring, so `id` also matches `tenant_id`), a height-capped list with an always-visible scrollbar, a "shown fields / total fields" counter in the title, and a fixed footer with the "at least one field stays visible" hint and "Show all fields". Previously it was a dropdown menu whose height was decided purely by the number of entries, so a table with dozens of columns pushed it past the bottom of the window and the last fields could not be reached.
+- The SQL shown in the table data page status bar can now be copied in full: the line is ellipsized on wide tables, and the copy contains the whole statement. An empty statement no longer overwrites the clipboard. "Toggle comment" in the SQL editor is now listed under Settings → Shortcuts → Database, defaulting to `Cmd+/` on macOS and `Ctrl+/` on Windows/Linux, and re-binding takes effect immediately (previously a new binding did not take effect and the default never fired inside the editor). Blank lines can generate `-- ` so you can write the comment before the SQL, with the caret left right after the marker.
+- SQL dumps can merge multiple rows into a single INSERT: the dump window gains a "rows per statement" field next to the destination, defaulting to 100 (matching Navicat's equivalent setting), and paging is aligned to whole batches so a batch is never split across two statements.
+- Double-clicking an RDP/VNC connection that is already open now switches to its existing tab instead of stacking several sessions for the same host, with the tab identity pinned to "protocol + connection id". The same connection can no longer open a second tab (copy the connection if you need a second session to the same host).
+
+#### Fixes and Improvements
+
+- Fixed Navop crashing on macOS when closing some dialogs on Touch Bar Macs, where the crash frames land in AppKit's Touch Bar observer deregistration: dialogs now hide and get reused instead of destroying the native window. 12 windows are covered — global proxy settings, the update prompt, extension offline package download and extension details, remote image preview, SQL hover details, import data, export table, run SQL file, dump SQL file, data comparison and schema comparison. Note the deliberate behavior change: dialogs such as import data, export table and data comparison now open one at a time instead of allowing several at once.
+- Dragging to select text inside a cell that is being edited no longer starts the grid's own drag selection: the pointer used to sweep neighbouring cells into the selection, and committing wrote the new value across the whole selection — effectively editing the neighbours by accident.
+- Fixed the DDL shown for SQLite tables with a composite primary key: the table designer used to render `"device_id" INTEGER PRIMARY KEY AUTOINCREMENT` and declare the primary key twice for WITHOUT ROWID tables. Every composite key column is now detected, only a single-column INTEGER primary key counts as auto-increment, and the generated CREATE TABLE statement no longer adds a duplicated table-level primary key.
+- SSH: when a device drops the connection during authentication, the error is no longer just `Unable to receive more messages from the channel` or a bare `Disconnected`. The reason code and text sent by the device are now logged as a warning, and the error points at the common causes (rejected credentials, an account already logged in elsewhere, VTY/concurrency limits, unreachable RADIUS・TACACS・LDAP, or a device authentication timeout shorter than the login round trip). If the device drops the transport during the keyboard-interactive exchange, Navop retries once with password authentication only, scoped to that session and at most once per connection sequence.
+- Connections migrated or imported from SecureCRT and similar tools no longer enable two-factor authentication by default: every imported connection used to prefer keyboard-interactive and was dropped by switches and firewalls on the first authentication round. The "supports multiple authentication methods" reported by the migration source is just the method list returned by the server, not a requirement for a second factor; devices that genuinely need one can be switched on manually.
+- Authentication failures no longer claim that "the server requires MFA / a second factor" — switches often just advertise several authentication methods. The message now states that the current authentication method was rejected and suggests verifying the credentials first, and the two-factor tooltip explains the automatic fallback.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.19.1...v0.19.2
+
 ## [v0.19.1] - 2026-09-24
 
 #### 修复与优化

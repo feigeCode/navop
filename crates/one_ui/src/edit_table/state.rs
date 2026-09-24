@@ -97,6 +97,22 @@ fn column_scroll_offset(
     None
 }
 
+/// 决定一次鼠标拖动是否由网格接管为「拖选单元格」。
+///
+/// 有单元格处于编辑态时应返回 `None`：此时用户按下拖动是在**单元格内的编辑器里选文本**，
+/// 若网格同时开始拖选，指针扫过相邻单元格就会把它们纳入选区，而 `commit_cell_edit`
+/// 会把新值批量写回选区内的**所有**单元格 —— 现象就是「不小心把隔壁一起编辑了」（#302）。
+/// 选中态（没有格子在编辑）下拖动照旧多选。
+fn pending_grid_drag(
+    editing_cell: Option<CellCoord>,
+    pending: Option<(usize, usize, bool)>,
+) -> Option<(usize, usize, bool)> {
+    if editing_cell.is_some() {
+        return None;
+    }
+    pending
+}
+
 const SCROLLBAR_WIDTH: Pixels = px(16.);
 const COLUMN_SEPARATOR_WIDTH: Pixels = px(1.);
 
@@ -856,6 +872,8 @@ where
     }
 
     /// 准备拖选（记录起始位置，但不立即开始选区）
+    ///
+    /// 编辑态下不记录：此时按下是要在单元格内的编辑器里选文本（#302）。
     pub fn prepare_drag_selection(
         &mut self,
         row_ix: usize,
@@ -863,10 +881,13 @@ where
         add_to_selection: bool,
         _cx: &mut Context<Self>,
     ) {
-        self.drag_start = Some((row_ix, col_ix, add_to_selection));
+        self.drag_start =
+            pending_grid_drag(self.editing_cell, Some((row_ix, col_ix, add_to_selection)));
     }
 
     /// 开始拖选
+    ///
+    /// 与拖选链路其它入口同一规则：编辑态下网格不接管拖动（#302）。
     pub fn start_drag_selection(
         &mut self,
         row_ix: usize,
@@ -874,6 +895,10 @@ where
         add_to_selection: bool,
         cx: &mut Context<Self>,
     ) {
+        if self.editing_cell.is_some() {
+            self.drag_start = None;
+            return;
+        }
         self.is_selecting = true;
         self.drag_start = None;
         self.selection
@@ -883,7 +908,15 @@ where
     }
 
     /// 更新拖选
+    ///
+    /// 编辑态下直接早退：拖到一半才进入编辑时，指针扫过的单元格也不该再被纳入选区（#302）。
     pub fn update_drag_selection(&mut self, row_ix: usize, col_ix: usize, cx: &mut Context<Self>) {
+        if self.editing_cell.is_some() {
+            self.drag_start = None;
+            self.is_selecting = false;
+            return;
+        }
+
         // 如果有待处理的拖选起始位置（备用路径，正常情况下 on_drag 已经消耗了）
         if let Some((start_row, start_col, add_to_selection)) = self.drag_start.take() {
             tracing::debug!(
@@ -2772,10 +2805,11 @@ where
                 let view = view.clone();
                 move |drag, _, _, cx| {
                     cx.stop_propagation();
-                    // 开始拖动时立即开始选区
+                    // 开始拖动时立即开始选区。编辑态下放弃这次拖选：起点可能是在
+                    // 进入编辑之前就记录下来的，而拖动本身是编辑器在选文本（#302）。
                     view.update(cx, |this, cx| {
                         if let Some((start_row, start_col, add_to_selection)) =
-                            this.drag_start.take()
+                            pending_grid_drag(this.editing_cell, this.drag_start.take())
                         {
                             this.is_selecting = true;
                             this.selection
@@ -3703,6 +3737,14 @@ impl<D> EventEmitter<EditTableEvent> for EditTableState<D> where D: EditTableDel
 mod tests {
     use super::*;
 
+    /// 取 `source` 中 `start` 之后、`end` 之前的片段（含 `start`，不含 `end`）。
+    fn slice_between<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
+        let from = source.find(start).expect("起始标记");
+        let rest = &source[from..];
+        let to = rest.find(end).expect("结束标记");
+        &rest[..to]
+    }
+
     #[test]
     fn deleted_row_cleanup_clears_cell_selection_and_drag_state() {
         let mut selection = TableSelection::new();
@@ -3742,6 +3784,71 @@ mod tests {
         );
 
         assert_eq!(DeletedRowSelectionCleanup::default(), cleanup);
+    }
+
+    /// #302：选中态（没有格子在编辑）下，鼠标按下即记录网格拖选起点。
+    #[test]
+    fn grid_drag_starts_from_a_press_while_not_editing() {
+        assert_eq!(
+            Some((3, 2, false)),
+            pending_grid_drag(None, Some((3, 2, false)))
+        );
+        assert_eq!(
+            Some((3, 2, true)),
+            pending_grid_drag(None, Some((3, 2, true)))
+        );
+    }
+
+    /// #302：编辑态下按下**不**记录起点，这次拖动完全交给单元格内的编辑器。
+    #[test]
+    fn grid_drag_is_not_recorded_while_a_cell_is_being_edited() {
+        assert_eq!(None, pending_grid_drag(Some((3, 2)), Some((3, 2, false))));
+    }
+
+    /// #302：即使按下时还没进入编辑（起点已记录），只要拖动真正开始时已在编辑，
+    /// 这次拖选也必须被放弃 —— 否则编辑器里的文本拖选照样会把隔壁选进选区。
+    #[test]
+    fn pending_grid_drag_is_discarded_when_editing_began_after_the_press() {
+        assert_eq!(None, pending_grid_drag(Some((0, 0)), Some((3, 2, false))));
+    }
+
+    /// 没有按下记录就永远不启动拖选（与是否编辑无关）。
+    #[test]
+    fn grid_drag_never_starts_without_a_press() {
+        assert_eq!(None, pending_grid_drag(None, None));
+        assert_eq!(None, pending_grid_drag(Some((0, 0)), None));
+    }
+
+    /// #302 的守卫必须留在拖选链路的每一段上：①按下记录起点 ②拖动启动 ③拖动中扩展。
+    /// 任何一段漏掉，编辑态下的拖动都会重新把相邻单元格纳入选区，而
+    /// `commit_cell_edit` 会把新值写回选区内的所有单元格。
+    #[test]
+    fn the_grid_drag_chain_is_guarded_against_cell_editing() {
+        let source = include_str!("state.rs").replace("\r\n", "\n");
+        // 源码守卫只能看实现区：`include_str!` 会把本测试模块一起读进来，
+        // 直接数全文会「自我命中」。
+        let implementation = source
+            .split_once("\n#[cfg(test)]\nmod tests {")
+            .expect("tests 模块起始标记")
+            .0;
+
+        // 1 处定义 + 2 处调用（on_mouse_down 的记录、on_drag 的启动）。
+        assert_eq!(
+            3,
+            implementation.matches("pending_grid_drag(").count(),
+            "按下记录与拖动启动都必须经 pending_grid_drag"
+        );
+
+        // update_drag_selection 在编辑态下早退，拖到一半也不继续扩展。
+        let update = slice_between(
+            implementation,
+            "pub fn update_drag_selection(",
+            "\n    /// 结束拖选",
+        );
+        assert!(
+            update.contains("editing_cell.is_some()") && update.contains("return;"),
+            "update_drag_selection 必须在编辑态下早退"
+        );
     }
 
     #[test]

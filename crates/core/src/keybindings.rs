@@ -28,6 +28,7 @@ pub mod action_id {
     pub const DB_SELECT_ALL_OBJECTS: &str = "db.select_all_objects";
     pub const SQL_RUN_QUERY: &str = "sql.run_query";
     pub const SQL_RUN_ALL_QUERY: &str = "sql.run_all_query";
+    pub const SQL_TOGGLE_COMMENT: &str = "sql.toggle_comment";
     pub const TERMINAL_SEND_TAB: &str = "terminal.send_tab";
     pub const TERMINAL_SEND_SHIFT_TAB: &str = "terminal.send_shift_tab";
     pub const TERMINAL_COPY: &str = "terminal.copy";

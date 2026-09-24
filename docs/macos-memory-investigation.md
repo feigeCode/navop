@@ -115,13 +115,23 @@ gpui-ce/crates/gpui/src/app.rs:1881-1924
 navop/crates/core/src/popup_window.rs:148-256
 ```
 
-创建为普通 GPUI window，并注册窗口关闭处理。默认关闭路径最终也是：
+创建为普通 GPUI window，并注册窗口关闭处理。
 
-```rust
-window.remove_window();
+复用弹窗（`open_reusable_popup_window`，登记了复用键）的关闭路径**不再是** `remove_window()`：
+
+- **原生窗口**：`orderOut` 隐藏后登记复用。原因是在 macOS 上销毁原生窗口会触发 AppKit
+  Touch Bar 观察者向已 dealloc 的对象注销，抛出的 ObjC 异常无人接住 ⇒ 闪退（issue #262）。
+- **业务会话**：关闭时立即结束 —— 卸载业务 view 及它持有的数据、连接与任务句柄，清掉焦点与通知。
+
+```text
+navop/crates/core/src/window_close.rs      # close_window_for_reuse(window, cx)
+navop/crates/core/src/popup_window.rs      # end_reusable_popup_session / PopupWindowContent::end_session
+navop/crates/core/src/popup_lifecycle.rs   # live_windows / live_sessions 计数与日志
 ```
 
-不要使用 `minimize_window()` 或仅隐藏窗口代替关闭。
+关键约束：**复用窗口不等于复用业务状态**。只隐藏不卸载，业务 view 会被仍然存活的内容树一直强引用着 ——
+用户不再打开那类窗口时就是纯泄漏（注册表里只存 `WeakEntity`，管不到它）。
+没有登记复用键的窗口仍然走 `remove_window()`；不要用 `minimize_window()` 代替关闭。
 
 ### 3.3 macOS 平台层
 
@@ -196,7 +206,9 @@ gpui-ce/crates/gpui_macos/src/metal_renderer.rs:496-573
 - 仍有多个独立弹窗实际存活但不可见。
 - native window 已关闭，但 Objective-C retain/autorelease 尚未完成。
 - renderer 尚存于 GPUI/平台层引用中。
-- 某些窗口在使用过程中被隐藏或最小化，而不是走 remove 流程。
+- 某些窗口在使用过程中被隐藏，而不是走 remove 流程。复用弹窗是**有意如此**（见 3.2）：
+  它属于「受控的固定保留」，上限是复用键数量；用 `popup_lifecycle` 的 `live_windows` / `live_sessions`
+  计数把它跟「持续增长」区分开。
 
 需要加入窗口创建、关闭、`MacWindow::drop` 和 renderer 数量日志，才能把这 8 个 renderer 映射到具体窗口。
 
@@ -409,3 +421,24 @@ leaks --noContent <PID>
 2. 再验证关闭后 8 个 renderer 是否下降到 1 个。
 3. 若 renderer 数量不下降，继续修复 macOS native window/renderer 生命周期。
 4. 最后将 blur/filter 离屏纹理改为惰性创建，降低正常多窗口场景的 GPU 基线。
+
+## 9. 复用弹窗的现状与判据
+
+复用弹窗（登记了复用键的那些）在关闭时**不销毁原生窗口**，而是 `orderOut` 隐藏并结束业务会话（见 3.2）。
+这不是「泄漏」，但必须有判据，否则无法把它和真正的增长区分开。`crates/core/src/popup_lifecycle.rs` 提供：
+
+| 计数 | 含义 | 正常表现 |
+|---|---|---|
+| `live_windows` | 登记在册（隐藏后等待复用）的原生窗口 | 每类弹窗首次打开 +1，之后开关不再增长；上限＝复用键数量 |
+| `live_sessions` | 当前仍持有业务 view 的弹窗 | 关闭后回落到 0；随开关次数持续上涨＝旧会话没卸载 |
+| `opened_windows` | 累计创建的原生窗口 | 只在复用没命中（退化成每次新建）时随开关次数上涨 |
+| `opened_sessions` | 累计打开的业务会话 | 每次打开 +1，属预期 |
+
+日志 target 为 `one_core::popup_lifecycle`（stage 取 `popup_window_registered` / `popup_window_unregistered` /
+`popup_session_ended` / `popup_session_reopened`），只记数字，不记标题、路径或业务内容。
+
+采样时的判断顺序：先看 `opened_windows` 是否随开关次数上涨（是 ⇒ 复用没命中，问题不在保留策略）；
+再看 `live_sessions` 是否回落（否 ⇒ 会话没卸载）；两者都正常但 footprint 仍涨，才回到第 4、5 节找 GPU/renderer 侧原因。
+
+注意：不要给复用注册表加 LRU 淘汰来「限制保留」——淘汰即销毁，等于把 Touch Bar 崩溃挪到淘汰路径上。
+注册表按 `&'static str` 复用键组织，结构上已有上限。

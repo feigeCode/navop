@@ -673,6 +673,13 @@
 - **验证方式**：四条结构 contract（`include_str!` 断言源码里存在对应的 `configure_background_child` / `creation_flags`，沿用 `workspace_explorer/src/git/tests.rs` 风格）——`cargo test -p terminal --lib wsl_distributions`、`cargo test -p html-preview`、`cargo test -p workspace_explorer --lib backend`、`cargo test -p main --bin navop mcp_skill`；再跑受影响 crate 的 `cargo check --tests` 与 `cargo clippy --all-targets`（只比对改动文件是否有新增告警）。**macOS 上 `cfg(windows)` 分支根本不参与编译，本机无法验证「不闪窗」**，最终必须 Windows 实机启动一次确认。
 - **适用范围**：`crates/terminal/src/wsl_distributions.rs`（启动期 WSL 识别，commit 57e31731b 引入的遗漏）、`crates/html-preview/src/browser.rs`（Windows 走 `cmd /C start`）、`crates/workspace_explorer/src/backend.rs`（容器后端 `docker exec`）、`main/src/settings/mcp_skill_install.rs`（`npx`/`node` 启动器），以及所有新增后台外部命令调用点；`workspace_explorer/src/git.rs`、`core/cloud_sync/personal/git_store.rs`、`extension-host/src/process.rs`、`remote_desktop/src/backends/rdp/transport.rs`、`remote_file_editor/src/external_launcher.rs`、`main/src/file_association.rs` 是已按此约定收口的正确样例。
 
+- **标题**：macOS 弹窗「关闭即复用」必须同时结束业务会话，并用计数把受控保留和泄漏分开
+- **触发信号**：把弹窗关闭从 `remove_window()` 改成隐藏复用（`orderOut`）后，内存采样里 `GPUIView`/`CAMetalLayer` 只增不减；或反过来为了「彻底释放」把复用窗口改回销毁，于是 Touch Bar 机型又出现关闭闪退（issue #262）。
+- **根因 / 约束**：隐藏的窗口仍然活在 GPUI 内容树里，而内容树**强引用** `PopupWindowContent.view`；复用注册表只存 `WeakEntity`，管不到这份强引用。所以「只隐藏不卸载」＝上一次的业务 view（含数据、任务句柄）被一直扣着，用户不再打开那类窗口时就是纯泄漏；而销毁原生窗口又会触发 AppKit Touch Bar 观察者向已 dealloc 的对象注销并抛 ObjC 异常。两件事必须拆开：**原生窗口**隐藏复用（受控保留，上限＝复用键数量），**业务会话**关闭即结束。
+- **正确做法**：`PopupWindowContent.view: Option<AnyView>`；`close_window_for_reuse(window, cx)` 在 `hide_for_reuse` 成功后**同步**调 `end_reusable_popup_session`（`window.blur` + `clear_notifications` + `end_session` 置 `None`），并靠 `Drop` 归还计数（非 macOS、隐藏失败回落、窗口真销毁）。清理不能交给 `defer`：延后清理存在「上一轮清理删掉刚打开的新会话」的窗口期，同步卸载没有这个窗口。未登记复用键的窗口照旧 `remove_window()`。计数看 `popup_lifecycle`（`live_windows`/`live_sessions` 存量，`opened_*` 累计），日志 target `one_core::popup_lifecycle`；**不要**给复用注册表加 LRU 淘汰（淘汰即销毁，把崩溃挪到淘汰路径上）。
+- **验证方式**：`cargo test -p one-core --lib`（`popup_window::reuse_contract_tests`、`popup_lifecycle::tests`）、`cargo check -p main -p db_view -p extension_view --all-targets`、`cargo test -p main --bin navop setting_tab`。计数判据：每类弹窗首次打开 `live_windows` +1 后不再增长、关闭后 `live_sessions` 回落；`opened_windows` 随开关次数上涨说明复用没命中。**本机无 Touch Bar，崩溃无法本地复现**，行为层面必须真机验证，自动化只能靠 `include_str!` 源码契约守住「关闭路径必须走会话卸载」。注意这类契约对格式敏感：`popup_window_tests.rs` 用 `find("struct PopupWindowContent")` 切片，改结构体可见性或字段会让它的 `expect` 直接 panic，锚点要跟着改。
+- **适用范围**：`crates/core/src/{window_close,popup_window,popup_lifecycle}.rs`、`crates/core/src/popup_window_tests.rs`，以及所有 `open_reusable_popup_window` 调用点（更新对话框、代理设置、表导入/导出、SQL 运行/转储、比较窗口、离线扩展包对话框）。
+
 ### 执行原则
 
 1. 先澄清，再实现；先缩小边界，再扩展范围。

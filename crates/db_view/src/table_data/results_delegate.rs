@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -83,6 +84,51 @@ pub enum RowChange {
         /// Row ID from database (if available)
         rowid: Option<String>,
     },
+}
+
+/// 纵向「列：值」视图里一个单元格的显示内容。
+///
+/// 与网格单元格共用同一份显示口径：NULL 单独成态，二进制单元格给的是
+/// 大小描述而不是原始字节。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum VerticalCellValue {
+    /// SQL NULL
+    Null,
+    /// 二进制单元格：与网格单元格同一句大小描述
+    Binary {
+        /// 原始字节数
+        byte_len: usize,
+    },
+    /// 普通文本
+    Text(String),
+}
+
+impl VerticalCellValue {
+    /// 纵向视图里这条值最终显示出来的文本。
+    ///
+    /// 渲染与横向宽度估算共用同一口径，避免两处漂移（二进制值显示的是大小
+    /// 描述而不是原始字节，宽度也得按描述算）。
+    pub fn display_text(&self) -> Cow<'_, str> {
+        match self {
+            VerticalCellValue::Null => Cow::Borrowed(VERTICAL_NULL_TEXT),
+            VerticalCellValue::Binary { byte_len } => {
+                Cow::Owned(t!("TableData.binary_value", size = byte_len).to_string())
+            }
+            VerticalCellValue::Text(text) => Cow::Borrowed(text.as_str()),
+        }
+    }
+}
+
+/// 纵向视图里 NULL 的占位文本（与网格单元格一致）。
+pub const VERTICAL_NULL_TEXT: &str = "NULL";
+
+/// 纵向「列：值」视图里的一行：一个可见字段的列名与值。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerticalRowField {
+    /// 列名
+    pub name: SharedString,
+    /// 显示内容
+    pub value: VerticalCellValue,
 }
 
 pub struct EditorTableDelegate {
@@ -1330,6 +1376,57 @@ impl EditorTableDelegate {
             Some(display_row_ix)
         } else {
             None
+        }
+    }
+
+    // ============================================================================
+    // Vertical (column: value) view
+    // ============================================================================
+
+    /// 取纵向「列：值」视图里某一行的一个可见字段。
+    ///
+    /// 「显示行 → 实际行」与「展示列 → 原始列」两次换算都在这里完成，视图层
+    /// 只拿列名与已解析好的显示内容，不碰原始坐标（与
+    /// [`Self::original_column_index`] 同一纪律）。
+    pub fn vertical_field(
+        &self,
+        display_row_ix: usize,
+        display_col_ix: usize,
+    ) -> Option<VerticalRowField> {
+        let actual_row = self.resolve_display_row(display_row_ix)?;
+        let original_ix = self.original_column_index(display_col_ix)?;
+        let name = self
+            .columns
+            .get(original_ix)
+            .map(|column| column.name.clone())
+            .unwrap_or_default();
+
+        Some(VerticalRowField {
+            name,
+            value: self.vertical_cell_value(actual_row, original_ix),
+        })
+    }
+
+    /// 纵向视图里某单元格的显示内容。
+    ///
+    /// 与网格单元格同一口径：未编辑过的二进制单元格显示大小描述（而不是把
+    /// 原始字节塞进文本），其余取已解析好的文本，NULL 单独成态。
+    fn vertical_cell_value(&self, actual_row: usize, original_ix: usize) -> VerticalCellValue {
+        if !self.modified_cells.contains(&(actual_row, original_ix))
+            && let Some(bytes) = self.current_binary_arc(actual_row, original_ix)
+        {
+            return VerticalCellValue::Binary {
+                byte_len: bytes.len(),
+            };
+        }
+
+        match self
+            .rows
+            .get(actual_row)
+            .and_then(|row| row.get(original_ix))
+        {
+            Some(Some(text)) => VerticalCellValue::Text(text.clone()),
+            _ => VerticalCellValue::Null,
         }
     }
 
@@ -3490,9 +3587,9 @@ impl EditorTableDelegate {
 #[cfg(test)]
 mod tests {
     use super::{
-        EditorTableDelegate, RowStatus, binary_cell_copy_text, binary_cell_image_format,
-        binary_download_file_name, binary_edit_values_equal, normalize_sort_identifier,
-        parse_primary_order_by_clause,
+        EditorTableDelegate, RowStatus, VerticalCellValue, VerticalRowField, binary_cell_copy_text,
+        binary_cell_image_format, binary_download_file_name, binary_edit_values_equal,
+        normalize_sort_identifier, parse_primary_order_by_clause,
     };
     use db::{ColumnInfo, FieldType, TableCellValue, binary_value::parse_binary_input};
     use gpui::SharedString;
@@ -4401,6 +4498,87 @@ mod tests {
         assert_eq!(
             Some("Alice".to_string()),
             delegate.rows[0].get(1).cloned().flatten()
+        );
+    }
+
+    #[test]
+    fn vertical_fields_follow_the_display_order_and_hidden_columns() {
+        let mut delegate = test_delegate(vec![vec![
+            Some("1".to_string()),
+            Some("Alice".to_string()),
+            Some("42".to_string()),
+        ]]);
+        delegate.columns.push(Column::new("age", "age"));
+
+        // age 移到最前并隐藏 name：纵向视图必须只展示 age、id 两行。
+        assert!(delegate.reorder_visible_columns(2, 0));
+        assert!(delegate.set_column_visible(1, false));
+
+        assert_eq!(
+            Some(VerticalRowField {
+                name: "age".into(),
+                value: VerticalCellValue::Text("42".to_string()),
+            }),
+            delegate.vertical_field(0, 0)
+        );
+        assert_eq!(
+            Some(VerticalRowField {
+                name: "id".into(),
+                value: VerticalCellValue::Text("1".to_string()),
+            }),
+            delegate.vertical_field(0, 1)
+        );
+
+        // 越界（隐藏列已被跳过，第 2 个显示列不存在）与越界行都返回 None。
+        assert_eq!(None, delegate.vertical_field(0, 2));
+        assert_eq!(None, delegate.vertical_field(1, 0));
+    }
+
+    #[test]
+    fn vertical_fields_resolve_filtered_rows_and_null_cells() {
+        let mut delegate = test_delegate(vec![
+            vec![Some("1".to_string()), Some("Alice".to_string())],
+            vec![Some("2".to_string()), None],
+        ]);
+        delegate.apply_filter(1, HashSet::from([FilterValueKey::Null]));
+
+        // 第 0 个显示行是原始第 1 行：NULL 必须是独立状态，
+        // 否则视图会把 SQL NULL 画成空字符串。
+        assert_eq!(1, delegate.filtered_row_count());
+        assert_eq!(
+            Some(VerticalRowField {
+                name: "name".into(),
+                value: VerticalCellValue::Null,
+            }),
+            delegate.vertical_field(0, 1)
+        );
+    }
+
+    #[test]
+    fn vertical_fields_reuse_the_grid_binary_description() {
+        let mut delegate = test_delegate(vec![vec![
+            Some("1".to_string()),
+            Some("binary display value".to_string()),
+        ]]);
+        set_binary_cell(&mut delegate, 0, 1, vec![1, 2, 3]);
+
+        // 二进制单元格给的是大小描述（与网格一致），不是原始字节。
+        assert_eq!(
+            Some(VerticalRowField {
+                name: "name".into(),
+                value: VerticalCellValue::Binary { byte_len: 3 },
+            }),
+            delegate.vertical_field(0, 1)
+        );
+
+        // 一旦该单元格被编辑过，网格就不再画二进制描述，纵向视图同步退回文本。
+        delegate.modified_cells.insert((0, 1));
+        assert_eq!(
+            Some(VerticalRowField {
+                name: "name".into(),
+                value: VerticalCellValue::Text("binary display value".to_string()),
+            }),
+            delegate.vertical_field(0, 1)
         );
     }
 }

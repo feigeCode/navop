@@ -274,9 +274,9 @@ SSH:
     zh-CN: 启用
     zh-HK: 啟用
   keyboard_interactive_desc:
-    en: Allow Keyboard-Interactive prompts such as OTP, hardware tokens, and challenge-response.
-    zh-CN: 允许服务器通过 Keyboard-Interactive 请求 OTP、硬件令牌或质询响应。
-    zh-HK: 允許伺服器透過 Keyboard-Interactive 要求 OTP、硬件權杖或質詢回應。
+    en: Allow Keyboard-Interactive prompts such as OTP, hardware tokens, and challenge-response. Enable it when the server demands keyboard-interactive (MFA/OTP authentication); some switches deliver the normal password prompt this way, but most devices accept plain password authentication. If the server drops the connection during the keyboard-interactive exchange, navop retries once with password authentication.
+    zh-CN: 允许服务器通过 Keyboard-Interactive 请求 OTP、硬件令牌或质询响应。服务器要求 keyboard-interactive（二次认证/OTP）时请开启；部分交换机用它下发普通密码提示，但多数设备也支持普通密码认证。若服务器在 keyboard-interactive 往返中直接断开连接，navop 会自动改用密码认证重试一次。
+    zh-HK: 允許伺服器透過 Keyboard-Interactive 要求 OTP、硬體權杖或質詢回應。伺服器要求 keyboard-interactive（二次認證/OTP）時請開啟；部分交換器用它下發一般密碼提示，但多數設備也支援一般密碼認證。若伺服器在 keyboard-interactive 往返中直接中斷連線，navop 會自動改用密碼認證重試一次。
   terminal_encoding:
     en: Terminal Encoding
     zh-CN: 终端字符集

@@ -73,6 +73,13 @@ pub enum SqlDumpMode {
     StructureAndData,
 }
 
+impl SqlDumpMode {
+    /// 是否会导出表数据（决定是否需要「每条语句的数据行数」等数据侧参数）。
+    pub fn includes_data(self) -> bool {
+        !matches!(self, Self::StructureOnly)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RefreshMetadataScope {
     None,

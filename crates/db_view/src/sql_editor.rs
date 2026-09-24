@@ -2922,11 +2922,15 @@ impl Render for SqlHoverDetailsView {
 }
 
 fn open_sql_hover_details_window(markdown: String, window: &mut Window, cx: &mut App) {
-    one_core::popup_window::open_popup_window(
+    // 关闭即隐藏、复用重建（macOS 上销毁原生窗口会踩到 Touch Bar KVO 竞态）。
+    // factory 会被多次调用（每次 hover 到新的对象都要重建），所以在里面 clone。
+    one_core::popup_window::open_reusable_popup_window(
         one_core::popup_window::PopupWindowOptions::new(t!("Query.show_hover_details").to_string())
             .size(560.0, 480.0),
+        SQL_HOVER_DETAILS_WINDOW_KEY,
         move |_, cx| {
-            cx.new(|_| SqlHoverDetailsView {
+            let markdown = markdown.clone();
+            cx.new(move |_| SqlHoverDetailsView {
                 markdown: markdown.into(),
             })
         },
@@ -2934,6 +2938,9 @@ fn open_sql_hover_details_window(markdown: String, window: &mut Window, cx: &mut
         cx,
     );
 }
+
+/// 复用键（见 [`one_core::popup_window::open_reusable_popup_window`]）。
+const SQL_HOVER_DETAILS_WINDOW_KEY: &str = "db.sql-hover-details";
 
 fn sql_editor_native_menu(
     capabilities: gpui_base::input::InputContextMenuCapabilities,

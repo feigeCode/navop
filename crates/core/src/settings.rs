@@ -83,6 +83,17 @@ pub enum LargeTextCellEditorOpenMode {
     Dialog,
 }
 
+/// 数据表格的显示方式
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TableViewMode {
+    /// 网格：行列平铺，可编辑、可排序
+    #[default]
+    Grid,
+    /// 纵向：每条记录按「列名：值」逐行展开，宽表更易读
+    Vertical,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StartupDefaultPage {
@@ -240,6 +251,27 @@ impl LargeTextCellEditorOpenMode {
             "dialog" => LargeTextCellEditorOpenMode::Dialog,
             _ => LargeTextCellEditorOpenMode::SidebarPreview,
         }
+    }
+}
+
+impl TableViewMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TableViewMode::Grid => "grid",
+            TableViewMode::Vertical => "vertical",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "vertical" => TableViewMode::Vertical,
+            _ => TableViewMode::Grid,
+        }
+    }
+
+    /// 是否处于纵向「列：值」形态。
+    pub fn is_vertical(&self) -> bool {
+        matches!(self, TableViewMode::Vertical)
     }
 }
 
@@ -1076,9 +1108,18 @@ pub struct AppSettings {
     /// 表格行高（像素），默认44
     #[serde(default = "default_table_row_height")]
     pub table_row_height: u32,
+    /// 数据表格的显示方式：网格（默认）或纵向「列：值」
+    #[serde(default)]
+    pub table_view_mode: TableViewMode,
     /// SQL 查询默认最大返回行数，0 表示不限制
     #[serde(default = "default_sql_query_max_rows")]
     pub sql_query_max_rows: u32,
+    /// 导出/转储 SQL 时每一条 INSERT 语句合并的数据行数，`1` 表示一行一条语句。
+    ///
+    /// 用作「导出 SQL 文件」窗口里该参数的初始值，并在每次导出时写回，默认与
+    /// Navicat 的「每条语句的数据行数」一致（100）。
+    #[serde(default = "default_sql_export_rows_per_statement")]
+    pub sql_export_rows_per_statement: usize,
     /// SQL 美化格式化设置
     #[serde(default)]
     pub sql_format: SqlFormatSettings,
@@ -1089,6 +1130,8 @@ pub struct AppSettings {
 pub(crate) const DEFAULT_SYSTEM_HOTKEY_MACOS: &str = "cmd-alt-m";
 pub(crate) const DEFAULT_SYSTEM_HOTKEY_OTHER: &str = "ctrl-alt-m";
 pub const DEFAULT_SQL_QUERY_MAX_ROWS: u32 = 1000;
+/// SQL 导出每条语句默认合并的数据行数，与 Navicat 的默认值一致。
+pub const DEFAULT_SQL_EXPORT_ROWS_PER_STATEMENT: usize = 100;
 pub const DEFAULT_TERMINAL_THEME: &str = "application";
 
 fn default_font_family() -> String {
@@ -1357,6 +1400,10 @@ fn default_sql_query_max_rows() -> u32 {
     DEFAULT_SQL_QUERY_MAX_ROWS
 }
 
+fn default_sql_export_rows_per_statement() -> usize {
+    DEFAULT_SQL_EXPORT_ROWS_PER_STATEMENT
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -1426,7 +1473,9 @@ impl Default for AppSettings {
             system_hotkey_macos: default_system_hotkey_macos(),
             system_hotkey_other: default_system_hotkey_other(),
             table_row_height: default_table_row_height(),
+            table_view_mode: TableViewMode::default(),
             sql_query_max_rows: default_sql_query_max_rows(),
+            sql_export_rows_per_statement: default_sql_export_rows_per_statement(),
             sql_format: SqlFormatSettings::default(),
             custom_keybindings: HashMap::new(),
         }
@@ -1749,14 +1798,15 @@ mod tests {
     use super::{
         AiChatSettings, AiChatToolExecutionMode, AppSettings, CloseButtonBehavior,
         ConnectionSortOrder, CustomFont, DEFAULT_AI_REQUEST_TIMEOUT_SECS,
-        DEFAULT_MCP_APPROVAL_TIMEOUT_MS, DEFAULT_TERMINAL_THEME, HomeConnectionLayout,
-        LOCALE_SYSTEM, LargeTextCellEditorOpenMode, LocalTerminalProfileKind,
-        LocalTerminalProfileSettings, MAX_AI_REQUEST_TIMEOUT_SECS, MAX_CUSTOM_SYSTEM_PROMPT_CHARS,
-        MIN_AI_REQUEST_TIMEOUT_SECS, MainWindowState, McpPermissionMode, McpServerMode,
-        PersonalSyncBackendKind, RemoteFileOpenMode, SqlFormatSettings, SqlIndentStyle,
-        SqlKeywordCase, StartupDefaultPage, SyncProvider, default_grid_font_fallback_families,
-        default_grid_monospace_font_family, grid_monospace_font, installed_grid_monospace_font,
-        is_installed_font_family, resolve_installed_grid_monospace_font_family,
+        DEFAULT_MCP_APPROVAL_TIMEOUT_MS, DEFAULT_SQL_EXPORT_ROWS_PER_STATEMENT,
+        DEFAULT_TERMINAL_THEME, HomeConnectionLayout, LOCALE_SYSTEM, LargeTextCellEditorOpenMode,
+        LocalTerminalProfileKind, LocalTerminalProfileSettings, MAX_AI_REQUEST_TIMEOUT_SECS,
+        MAX_CUSTOM_SYSTEM_PROMPT_CHARS, MIN_AI_REQUEST_TIMEOUT_SECS, MainWindowState,
+        McpPermissionMode, McpServerMode, PersonalSyncBackendKind, RemoteFileOpenMode,
+        SqlFormatSettings, SqlIndentStyle, SqlKeywordCase, StartupDefaultPage, SyncProvider,
+        TableViewMode, default_grid_font_fallback_families, default_grid_monospace_font_family,
+        grid_monospace_font, installed_grid_monospace_font, is_installed_font_family,
+        resolve_installed_grid_monospace_font_family,
     };
 
     #[test]
@@ -2131,6 +2181,58 @@ mod tests {
     }
 
     #[test]
+    fn app_settings_default_batches_sql_export_statements() {
+        let settings = AppSettings::default();
+
+        assert_eq!(DEFAULT_SQL_EXPORT_ROWS_PER_STATEMENT, 100);
+        assert_eq!(
+            DEFAULT_SQL_EXPORT_ROWS_PER_STATEMENT,
+            settings.sql_export_rows_per_statement
+        );
+    }
+
+    #[test]
+    fn table_view_mode_round_trips_between_str_and_enum() {
+        // 设置页下拉用字符串读写，枚举与字符串必须一一对应；
+        // 认不出的值一律退回网格，避免坏掉的配置把表格渲成空白。
+        assert_eq!("grid", TableViewMode::Grid.as_str());
+        assert_eq!("vertical", TableViewMode::Vertical.as_str());
+        assert_eq!(TableViewMode::Grid, TableViewMode::from_str("grid"));
+        assert_eq!(TableViewMode::Vertical, TableViewMode::from_str("vertical"));
+        assert_eq!(TableViewMode::Grid, TableViewMode::from_str("unknown"));
+        assert!(!TableViewMode::Grid.is_vertical());
+        assert!(TableViewMode::Vertical.is_vertical());
+    }
+
+    #[test]
+    fn app_settings_defaults_to_the_grid_view() {
+        let settings = AppSettings::default();
+
+        assert_eq!(TableViewMode::Grid, settings.table_view_mode);
+    }
+
+    #[test]
+    fn app_settings_deserializes_missing_table_view_mode_as_grid() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "locale": "en",
+            "theme_mode": "dark"
+        }))
+        .expect("缺少 table_view_mode 的旧版 settings.json 应能读取");
+
+        assert_eq!(TableViewMode::Grid, settings.table_view_mode);
+    }
+
+    #[test]
+    fn app_settings_deserializes_the_vertical_table_view_mode() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "table_view_mode": "vertical"
+        }))
+        .expect("table_view_mode 应能从 settings.json 读回");
+
+        assert_eq!(TableViewMode::Vertical, settings.table_view_mode);
+    }
+
+    #[test]
     fn app_settings_default_enables_terminal_file_manager_path_sync() {
         let settings = AppSettings::default();
 
@@ -2411,6 +2513,20 @@ mod tests {
         .expect("旧版 settings.json 应能读取");
 
         assert_eq!(1000, settings.sql_query_max_rows);
+    }
+
+    #[test]
+    fn app_settings_deserializes_missing_sql_export_rows_per_statement() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "locale": "en",
+            "theme_mode": "dark"
+        }))
+        .expect("旧版 settings.json 应能读取");
+
+        assert_eq!(
+            DEFAULT_SQL_EXPORT_ROWS_PER_STATEMENT,
+            settings.sql_export_rows_per_statement
+        );
     }
 
     #[test]

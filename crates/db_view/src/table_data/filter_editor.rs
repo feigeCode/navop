@@ -895,7 +895,11 @@ impl Render for SimpleCodeEditor {
                     cx.stop_propagation();
                 }
             })
-            .child(Editor::new(&self.editor).bg(cx.theme().background).size_full())
+            .child(
+                Editor::new(&self.editor)
+                    .bg(cx.theme().background)
+                    .size_full(),
+            )
     }
 }
 

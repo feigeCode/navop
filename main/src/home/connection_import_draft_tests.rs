@@ -536,6 +536,23 @@ fn imported_ssh_extended_options_are_converted_to_stored_connection() {
 }
 
 #[test]
+fn imported_ssh_connection_does_not_enable_keyboard_interactive() {
+    // 迁移源里的「支持多种认证方式」只是服务器返回的方法列表，不等于需要二次认证。
+    // 该字段留空会落到全局默认 true，使迁移进来的连接统一走 keyboard-interactive 优先，
+    // 而受限设备（交换机/防火墙）上这条路径会被设备直接捆断。
+    let record = ssh_import("keyboard-interactive");
+    let stored =
+        selected_import_drafts_to_connections(&[EditableImportDraft::new(record)]).unwrap();
+    let params = stored[0].to_ssh_params().unwrap();
+
+    assert_eq!(Some(false), params.keyboard_interactive);
+    assert!(
+        !params.keyboard_interactive_enabled(),
+        "迁移进来的 SSH 连接不应默认启用 keyboard-interactive 优先"
+    );
+}
+
+#[test]
 fn imported_jump_server_private_key_uses_its_own_key_path() {
     let mut record = ssh_import("jump-key");
     let ssh = record.ssh.as_mut().expect("ssh record should exist");

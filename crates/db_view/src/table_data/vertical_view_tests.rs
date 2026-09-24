@@ -1,0 +1,341 @@
+//! 纵向「列：值」显示方式的契约测试
+//!
+//! 纵向形态与网格共用同一份数据、同一套列可见性，但渲染入口完全不同。
+//! 这里锁住几处不能漂移的接线：
+//!
+//! 1. 扁平行号 ↔「记录头 / 字段行」的映射（`uniform_list` 要求等高，
+//!    记录头与字段行必须共用同一个行号空间）；
+//! 2. 工具栏必须有显示方式入口，且当前形态要打勾；
+//! 3. 渲染入口按模式分支，网格形态仍然走 `EditTable`；
+//! 4. 纵向列表必须虚拟化，并且复用表格行高设置；
+//! 5. 单元格值只经 delegate 的换算接口取，视图层不碰原始行/列坐标；
+//! 6. 数据字体在渲染入口解析一次（字体枚举是系统级全量调用），不按行解析；
+//! 7. 网格专属的交互入口（行增删、表内查找、大文本编辑器）在纵向形态下收起，
+//!    而单元格编辑在纵向视图里有落点，对应入口继续保留；
+//! 8. 显示方式是跨结果集保留的偏好，不能只存在 `DataGrid` 实例上；
+//! 9. 值区横向滚动：所有值行共用一个内容宽度与一个横滚句柄（宽度不齐会把
+//!    共享偏移夹回 0），标签列固定在滚动区之外；
+//! 10. 纵向视图的点击/编辑坐标是网格坐标，展示列必须补上行号列偏移。
+
+use super::data_grid::{
+    VerticalLine, vertical_field_grid_column, vertical_line_at, vertical_line_count,
+    vertical_value_text_width,
+};
+use gpui::px;
+use rust_i18n::t;
+
+fn data_grid_source() -> &'static str {
+    include_str!("data_grid.rs")
+}
+
+fn slice_between<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
+    let start = source
+        .find(start)
+        .unwrap_or_else(|| panic!("找不到起点 `{start}`"));
+    let body = &source[start..];
+    let end = body
+        .find(end)
+        .unwrap_or_else(|| panic!("找不到终点 `{end}`"));
+    &body[..end]
+}
+
+fn count_matches(haystack: &str, needle: &str) -> usize {
+    haystack.matches(needle).count()
+}
+
+#[test]
+fn vertical_line_count_adds_one_header_line_per_record() {
+    assert_eq!(0, vertical_line_count(0, 3));
+    assert_eq!(4, vertical_line_count(1, 3));
+    assert_eq!(8, vertical_line_count(2, 3));
+    // 没有可见列就没有任何一行，而不是只剩记录头。
+    assert_eq!(0, vertical_line_count(10, 0));
+}
+
+#[test]
+fn vertical_lines_map_back_to_records_and_fields() {
+    // 3 个可见列：记录头 + 3 条字段，共 4 行构成一条记录。
+    let expected = [
+        VerticalLine::Record { row: 0 },
+        VerticalLine::Field { row: 0, col: 0 },
+        VerticalLine::Field { row: 0, col: 1 },
+        VerticalLine::Field { row: 0, col: 2 },
+        VerticalLine::Record { row: 1 },
+        VerticalLine::Field { row: 1, col: 0 },
+        VerticalLine::Field { row: 1, col: 1 },
+        VerticalLine::Field { row: 1, col: 2 },
+    ];
+
+    assert_eq!(expected.len(), vertical_line_count(2, 3));
+    for (line_ix, line) in expected.into_iter().enumerate() {
+        assert_eq!(Some(line), vertical_line_at(line_ix, 3), "第 {line_ix} 行");
+    }
+}
+
+#[test]
+fn vertical_lines_are_empty_without_visible_columns() {
+    assert_eq!(None, vertical_line_at(0, 0));
+    assert_eq!(None, vertical_line_at(7, 0));
+}
+
+#[test]
+fn vertical_view_labels_resolve_to_translations() {
+    // `t!` 在词条缺失时会把 key 原样返回 —— 界面上就会直接出现
+    // `TableDataGrid.view_mode` 这种字样。key 打错必须在这里炸。
+    for key in [
+        "TableDataGrid.view_mode",
+        "TableDataGrid.view_mode_grid",
+        "TableDataGrid.view_mode_vertical",
+        "TableDataGrid.vertical_record",
+        "TableDataGrid.vertical_empty",
+        "TableDataGrid.vertical_loading",
+    ] {
+        assert_ne!(key, t!(key).as_ref(), "词条 `{key}` 缺失");
+    }
+}
+
+#[test]
+fn the_toolbar_exposes_the_display_mode_switch() {
+    let grid = data_grid_source();
+
+    // 两个形态都要能选到，且当前形态要打勾，否则切换进得去出不来。
+    assert!(grid.contains("fn render_view_mode_button("));
+    assert!(grid.contains("Button::new(\"view-mode\")"));
+    assert!(grid.contains("build_view_mode_menu("));
+    assert!(grid.contains("TableDataGrid.view_mode_grid"));
+    assert!(grid.contains("TableDataGrid.view_mode_vertical"));
+    assert!(grid.contains(".checked(current == mode)"));
+}
+
+#[test]
+fn the_render_entry_branches_on_the_display_mode() {
+    let grid = data_grid_source();
+    let body = slice_between(
+        grid,
+        "pub fn render_table_area(",
+        "\n    fn render_status_bar(",
+    );
+
+    assert!(body.contains("self.is_vertical_view(cx)"));
+    assert!(body.contains("self.render_vertical_view(&font, cx)"));
+    // 网格形态仍然是 `EditTable`（`find_contract_tests` 依赖这一行）。
+    assert!(body.contains("EditTable::new(&self.table)"));
+    // 纵向形态先解析数据字体再渲染，解析动作不允许下放到按行渲染里。
+    assert!(body.contains("let font = self.vertical_view_font(cx);"));
+}
+
+#[test]
+fn the_vertical_list_is_virtualized_with_the_table_row_height() {
+    let grid = data_grid_source();
+    let body = slice_between(
+        grid,
+        "fn render_vertical_view(",
+        "\n    /// 「字段过滤」入口",
+    );
+
+    // 一页可能上千条记录、每列一行：不虚拟化会在每帧重建上万个文本元素。
+    assert!(body.contains("uniform_list("));
+    assert!(body.contains("\"table-vertical-list\""));
+    assert!(body.contains("vertical_line_at(line_ix, column_count)"));
+    // 行高沿用表格行高设置，纵向视图与网格保持同一节奏。
+    assert!(body.contains("one_ui::table_row_height(cx)"));
+    assert!(body.contains("render_vertical_line("));
+    assert!(body.contains("grid_ref,"));
+    assert!(body.contains(".track_scroll(&self.vertical_scroll_handle)"));
+}
+
+#[test]
+fn the_vertical_view_reads_cells_through_the_delegate_boundary() {
+    let grid = data_grid_source();
+    let row = slice_between(
+        grid,
+        "fn render_vertical_line(",
+        "/// 纵向视图的数据字体缓存。",
+    );
+    let field = slice_between(
+        grid,
+        "fn vertical_field_line(",
+        "\n    /// 纵向视图里点一条",
+    );
+
+    // 显示行 → 实际行、展示列 → 原始列只能由 delegate 完成换算；
+    // 视图层直接读 `delegate.rows[...]` 会把两套坐标混在一起。
+    assert!(field.contains("delegate.vertical_field(row, col)"));
+    for body in [row, field] {
+        assert!(!body.contains("delegate.rows"));
+        assert!(!body.contains("original_column_index"));
+    }
+}
+
+#[test]
+fn vertical_field_columns_skip_the_row_number_column() {
+    // 开了行号列时，展示列 0 对应网格列 1；`EditTableState` 的选中与编辑
+    // 都用网格坐标，算错一位就会点中隔壁字段。
+    assert_eq!(1, vertical_field_grid_column(0, true));
+    assert_eq!(3, vertical_field_grid_column(2, true));
+    assert_eq!(0, vertical_field_grid_column(0, false));
+    assert_eq!(2, vertical_field_grid_column(2, false));
+}
+
+#[test]
+fn vertical_value_width_measures_ascii_and_wide_characters() {
+    let ascii = px(8.);
+    let wide = px(16.);
+
+    assert_eq!(px(0.), vertical_value_text_width("", ascii, wide));
+    assert_eq!(px(40.), vertical_value_text_width("12345", ascii, wide));
+    assert_eq!(px(32.), vertical_value_text_width("列名", ascii, wide));
+    assert_eq!(px(48.), vertical_value_text_width("id=中x", ascii, wide));
+
+    // 超长值按已量部分外推：字符数翻倍，量出来的宽度也要跟着翻倍。
+    let long_ascii = "0".repeat(8192);
+    assert_eq!(
+        px(65536.),
+        vertical_value_text_width(&long_ascii, ascii, wide)
+    );
+}
+
+#[test]
+fn the_vertical_view_shares_one_horizontal_scroll_across_value_rows() {
+    let grid = data_grid_source();
+    let view = slice_between(
+        grid,
+        "fn render_vertical_view(",
+        "\n    /// 「字段过滤」入口",
+    );
+    let line = slice_between(
+        grid,
+        "fn render_vertical_line(",
+        "/// 纵向视图的数据字体缓存。",
+    );
+
+    // 底部常驻横向滚动条：长值滚到底能看到全文，不用猜能不能滚。
+    assert!(view.contains("Scrollbar::horizontal(&self.vertical_horizontal_scroll_handle)"));
+    assert!(view.contains("ScrollbarMode::Always"));
+    // 滚动条与标签列错开，且用自身布局当视口（多个容器共用一个句柄时，
+    // 句柄的布局尺寸是各容器写回的最后一个，不能拿来当视口）。
+    assert!(view.contains(".left(px(VERTICAL_LABEL_WIDTH))"));
+    assert!(view.contains(".viewport_from_layout()"));
+    // 常驻滚动条要占位：不留空会永久盖住最后一行的那一条。
+    assert!(view.contains("pb(HORIZONTAL_SCROLLBAR_THICKNESS)"));
+    // 所有值行共用同一个内容宽度：宽度参差不齐时，最短的那行会把共享水平
+    // 偏移夹回 0（`max_offset` 由每一行的滚动容器写回）。
+    assert!(line.contains(".w(grid.vertical_value_width)"));
+    assert!(line.contains(".track_scroll(&grid.vertical_horizontal_scroll_handle)"));
+    // 横向滚动要真的能触发：gpui 只对 `Overflow::Scroll` 的轴应用手势增量，
+    // 而 `restrict_scroll_to_axis` 拦住「竖向滚轮被当成横向滚动」的默认行为。
+    assert!(line.contains(".overflow_x_scroll()"));
+    assert!(line.contains(".restrict_scroll_to_axis()"));
+    // 宽度在画行之前量（量到的值下一帧生效），且只增不减。
+    assert!(view.contains("grid.measure_visible_vertical_values("));
+    let measure = slice_between(
+        grid,
+        "fn measure_visible_vertical_values(",
+        "\n    /// 读一条字段行的渲染状态。",
+    );
+    assert!(measure.contains("if padded > self.vertical_value_width"));
+    assert!(measure.contains("self.vertical_value_width = padded;"));
+    assert!(measure.contains("cx.notify();"));
+    // 标签列固定在滚动区外：值区滚到底也不会把列名推出去。
+    assert!(line.contains("w(px(VERTICAL_LABEL_WIDTH))"));
+}
+
+#[test]
+fn the_vertical_view_edits_cells_through_the_grid_editing_pipeline() {
+    let grid = data_grid_source();
+    let line = slice_between(
+        grid,
+        "fn render_vertical_line(",
+        "/// 纵向视图的数据字体缓存。",
+    );
+    let click = slice_between(
+        grid,
+        "fn handle_vertical_field_click(",
+        "\n    /// 「字段过滤」入口",
+    );
+
+    // 编辑不能另起一套：提交、撤销、SQL 预览都读表格状态，必须走同一套流程。
+    assert!(click.contains("table.commit_cell_edit(window, cx);"));
+    assert!(click.contains("table.start_editing(row, grid_col, window, cx);"));
+    assert!(click.contains("table.select_cell(row, grid_col, cx);"));
+    // 表格状态的所有变化都要能重画：Escape 取消编辑只 notify 不 emit。
+    assert!(grid.contains("cx.observe(&self.table, |_, _, cx| cx.notify())"));
+    // 编辑中的行渲染表格给出的编辑器，而不是在视图层重建一个输入框。
+    assert!(line.contains(".editing_input()"));
+    assert!(line.contains(".map(|editor| editor.render(window, cx))"));
+    // 编辑器不放进横滚容器：值区横向滚到一半时，光标不能跟着跑出视野。
+    let editor = line
+        .find("let editor = line.editing.then(")
+        .expect("纵向视图要先取出编辑器");
+    let value_area = line
+        .find("let value_area = div()")
+        .expect("纵向视图要有值区");
+    assert!(editor < value_area);
+    assert!(line.contains(".when_some(editor, |this, editor| this.child(editor));"));
+}
+
+#[test]
+fn the_vertical_data_font_is_resolved_once_per_render_and_cached() {
+    let grid = data_grid_source();
+    let font = slice_between(grid, "fn vertical_view_font(", "\n    /// 切换显示方式");
+    let vertical = slice_between(
+        grid,
+        "fn render_vertical_view(",
+        "\n    /// 「字段过滤」入口",
+    );
+
+    // 字体族解析要走系统字体枚举，必须命中缓存，且不能在按行渲染里再解析一次。
+    assert!(font.contains("cache.requested_family == requested_family"));
+    assert!(font.contains("installed_grid_monospace_font("));
+    assert!(font.contains("cx.text_system().all_font_names()"));
+    assert!(!vertical.contains("all_font_names"));
+    assert!(!vertical.contains("installed_grid_monospace_font"));
+}
+
+#[test]
+fn grid_only_affordances_are_hidden_in_the_vertical_view() {
+    let grid = data_grid_source();
+    let body = slice_between(
+        grid,
+        "pub fn render_toolbar(",
+        "\n    pub fn render_table_area(",
+    );
+
+    // 纵向形态没有「第几行第几列」这个落点：行增删、表内查找、大文本编辑器
+    // 全部收起来，不留点了没反应的按钮。
+    assert!(body.contains("let grid_affordances = !self.is_vertical_view(cx);"));
+    assert_eq!(
+        2,
+        count_matches(body, ".when(editable && grid_affordances, |this| {")
+    );
+    assert_eq!(1, count_matches(body, ".when(grid_affordances, |this| {"));
+    // 单元格编辑在纵向视图里有落点（一条「列：值」就是一个单元格），
+    // 所以撤销 / SQL 预览 / 提交只跟可编辑状态走，两种形态都保留。
+    assert_eq!(3, count_matches(body, ".when(editable, |this| {"));
+    assert!(body.contains("Button::new(\"undo-changes\")"));
+    assert!(body.contains("Button::new(\"sql-preview\")"));
+    assert!(body.contains("Button::new(\"commit-changes\")"));
+    assert!(
+        body.contains("(self.config.usage == DataGridUsage::TableData && grid_affordances)"),
+        "表内查找框只在网格形态下出现"
+    );
+
+    // 与显示方式无关的入口必须保留：刷新、字段过滤、导出、表设计器。
+    assert!(body.contains("Button::new(\"refresh-data\")"));
+    assert!(body.contains("self.render_view_mode_button(cx)"));
+    assert!(body.contains("self.render_column_visibility_button(cx)"));
+    assert!(body.contains("Button::new(\"open-table-designer\")"));
+    assert!(body.contains("Button::new(\"export-data\")"));
+}
+
+#[test]
+fn the_display_mode_is_persisted_beyond_the_data_grid_instance() {
+    let grid = data_grid_source();
+    let body = slice_between(grid, "fn switch_view_mode(", "\n    /// 「显示方式」入口");
+
+    // SQL 结果页每执行一次查询都会新建一个 `DataGrid`，只改实例状态会让用户
+    // 每次查询都被打回网格形态，所以必须写回 `AppSettings`。
+    assert!(body.contains("AppSettings::update_and_save(cx,"));
+    assert!(body.contains("settings.table_view_mode = mode;"));
+    assert!(body.contains("cx.notify();"));
+}

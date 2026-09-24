@@ -598,6 +598,9 @@ impl DataExportView {
                 include_data: true,
                 where_clause: None,
                 limit: None,
+                // 本视图只导出 Txt/Csv/Json/Xml（见 `DataExportFormat`），不含
+                // SQL 格式，该参数不生效；保持默认值以免误以为这里可以配批量。
+                rows_per_statement: db::DEFAULT_ROWS_PER_INSERT_STATEMENT,
                 csv_config,
             };
 
@@ -1307,8 +1310,8 @@ impl Render for DataExportView {
                     .child(
                         Button::new("cancel")
                             .child(t!("Common.cancel").to_string())
-                            .on_click(|_, window, _cx| {
-                                window.remove_window();
+                            .on_click(|_, window, cx| {
+                                let _ = one_core::window_close::close_window_for_reuse(window, cx);
                             })
                     )
                     .when(current_step == ExportStep::Execute && !is_running, |this| {
@@ -1355,8 +1358,8 @@ impl Render for DataExportView {
                             Button::new("close")
                                 .primary()
                                 .child(t!("Common.finish").to_string())
-                                .on_click(|_, window, _cx| {
-                                    window.remove_window();
+                                .on_click(|_, window, cx| {
+                                    let _ = one_core::window_close::close_window_for_reuse(window, cx);
                                 })
                         )
                     }),

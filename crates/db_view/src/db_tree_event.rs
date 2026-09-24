@@ -28,13 +28,24 @@ use one_core::storage::{
     import_query_sql_files,
 };
 use one_core::{
-    popup_window::{PopupWindowOptions, open_popup_window},
+    popup_window::{PopupWindowOptions, open_reusable_popup_window},
     tab_container::{TabContainer, TabItem},
 };
 use rust_i18n::t;
 use std::collections::{HashMap, HashSet};
 use tracing::log::{error, warn};
 use uuid::Uuid;
+
+/// 「导入数据 / 导出数据 / 运行 SQL 文件 / 转储 SQL 文件 / 数据比较 / 结构比较」这些弹窗的
+/// 复用键。macOS 上销毁原生窗口会踩到 Touch Bar KVO 竞态（`EXC_CRASH (SIGABRT)`），
+/// 所以它们统一改成关闭即隐藏；重新打开时用本次的参数重建 view，不会残留上一个表/连接的内容。
+/// 见 [`one_core::popup_window::open_reusable_popup_window`]。
+const IMPORT_DATA_WINDOW_KEY: &str = "db.import-data";
+const EXPORT_TABLE_WINDOW_KEY: &str = "db.export-table";
+const RUN_SQL_FILE_WINDOW_KEY: &str = "db.run-sql-file";
+const DUMP_SQL_FILE_WINDOW_KEY: &str = "db.dump-sql-file";
+const COMPARE_DATA_WINDOW_KEY: &str = "db.compare-data";
+const COMPARE_SCHEMA_WINDOW_KEY: &str = "db.compare-schema";
 
 const TAB_META_NODE_ID: &str = "node_id";
 const TAB_META_KIND: &str = "kind";
@@ -1676,9 +1687,10 @@ impl DatabaseEventHandler {
             cx,
         );
 
-        open_popup_window(
+        open_reusable_popup_window(
             PopupWindowOptions::new(t!("Table.import_data_to_table").to_string())
                 .size(900.0, 600.0),
+            IMPORT_DATA_WINDOW_KEY,
             move |_window, _cx| import_view.clone(),
             Some(window),
             cx,
@@ -1739,8 +1751,9 @@ impl DatabaseEventHandler {
         })
         .detach();
 
-        open_popup_window(
+        open_reusable_popup_window(
             PopupWindowOptions::new(t!("ImportExport.export_table").to_string()).size(800.0, 600.0),
+            EXPORT_TABLE_WINDOW_KEY,
             move |_window, _cx| export_view.clone(),
             Some(window),
             cx,
@@ -4368,9 +4381,20 @@ impl DatabaseEventHandler {
             None
         };
 
-        open_popup_window(
+        open_reusable_popup_window(
             PopupWindowOptions::new(t!("ImportExport.run_sql_file").to_string()).size(800.0, 520.0),
-            move |window, cx| SqlRunView::new(connection_id, database, schema, window, cx),
+            RUN_SQL_FILE_WINDOW_KEY,
+            // factory 会被多次调用（每次重新显示都重建 view），所以在里面 clone，
+            // 让外层闭包保持 `Fn`。
+            move |window, cx| {
+                SqlRunView::new(
+                    connection_id.clone(),
+                    database.clone(),
+                    schema.clone(),
+                    window,
+                    cx,
+                )
+            },
             Some(_window),
             cx,
         );
@@ -4429,18 +4453,20 @@ impl DatabaseEventHandler {
                     let table = table.clone();
 
                     cx.update_window(window_id, |_entity, _window, cx| {
-                        open_popup_window(
+                        open_reusable_popup_window(
                             PopupWindowOptions::new(t!("ImportExport.dump_sql_file").to_string())
                                 .size(800.0, 510.0),
+                            DUMP_SQL_FILE_WINDOW_KEY,
+                            // factory 会被多次调用（每次重新显示都重建 view），所以在里面 clone。
                             move |window, cx| {
                                 SqlDumpView::new(
                                     crate::import_export::sql_dump_view::SqlDumpViewParams {
-                                        connection_id: config_id,
-                                        server_info,
-                                        database,
-                                        schema,
-                                        table,
-                                        output_path,
+                                        connection_id: config_id.clone(),
+                                        server_info: server_info.clone(),
+                                        database: database.clone(),
+                                        schema: schema.clone(),
+                                        table: table.clone(),
+                                        output_path: output_path.clone(),
                                         mode,
                                     },
                                     window,
@@ -4494,8 +4520,9 @@ impl DatabaseEventHandler {
 
         let title = DataCompareWindow::popup_title_for(&node);
         let compare_view = DataCompareWindow::new(node, window, cx);
-        open_popup_window(
+        open_reusable_popup_window(
             PopupWindowOptions::new(title).size(1100.0, 780.0),
+            COMPARE_DATA_WINDOW_KEY,
             move |_window, _cx| compare_view.clone(),
             Some(window),
             cx,
@@ -4508,8 +4535,9 @@ impl DatabaseEventHandler {
 
         let title = SchemaCompareWindow::popup_title_for(&node);
         let compare_view = SchemaCompareWindow::new(node, window, cx);
-        open_popup_window(
+        open_reusable_popup_window(
             PopupWindowOptions::new(title).size(1100.0, 780.0),
+            COMPARE_SCHEMA_WINDOW_KEY,
             move |_window, _cx| compare_view.clone(),
             Some(window),
             cx,
