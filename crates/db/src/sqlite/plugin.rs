@@ -887,12 +887,14 @@ impl DatabasePlugin for SqlitePlugin {
                     )?
                     .map(|value| value == 0)
                     .unwrap_or(true),
+                    // PRAGMA table_info 的 pk 列是联合主键内的 1-based 序号（0 = 非主键），
+                    // 不能按布尔处理：`== 1` 会漏掉联合主键的第 2、3 列。
                     is_primary_key: crate::metadata_read::metadata_integer(
                         &query_result,
                         row_index,
                         5,
                     )?
-                    .map(|value| value == 1)
+                    .map(|value| value > 0)
                     .unwrap_or(false),
                     default_value: cell(4)?,
                     comment: None,
@@ -980,7 +982,7 @@ impl DatabasePlugin for SqlitePlugin {
                 let index_name = cell(1)?.unwrap_or_default();
                 let is_unique =
                     crate::metadata_read::metadata_integer(&query_result, row_index, 2)?
-                        .map(|value| value == 1)
+                        .map(|value| value > 0)
                         .unwrap_or(false);
 
                 let info_sql = format!("PRAGMA index_info(\"{}\")", index_name);
@@ -1469,7 +1471,13 @@ impl DatabasePlugin for SqlitePlugin {
             .filter(|c| c.is_primary_key)
             .map(|c| c.name.as_str())
             .collect();
-        if !pk_columns.is_empty() {
+        // 单列自增主键已由 build_column_def 内联为 "PRIMARY KEY AUTOINCREMENT"，
+        // 不能再追加表级 PRIMARY KEY，否则主键声明两次（SQLite 会报 more than one primary key）。
+        let pk_inlined_in_column = design
+            .columns
+            .iter()
+            .any(|c| c.is_primary_key && c.is_auto_increment);
+        if !pk_columns.is_empty() && !pk_inlined_in_column {
             let pk_cols: Vec<String> = pk_columns
                 .iter()
                 .map(|c| self.quote_identifier(c))
@@ -1777,6 +1785,110 @@ mod tests {
             .disconnect()
             .await
             .expect("sqlite should disconnect");
+    }
+
+    #[tokio::test]
+    async fn list_columns_marks_all_composite_primary_key_columns() {
+        let (_temp_dir, mut connection) = create_connection().await;
+        connection
+            .query(
+                "CREATE TABLE datapoints (
+                    device_id INTEGER NOT NULL,
+                    tag_id INTEGER NOT NULL,
+                    ts INTEGER NOT NULL,
+                    value REAL,
+                    PRIMARY KEY (device_id, tag_id, ts)
+                ) WITHOUT ROWID;",
+            )
+            .await
+            .expect("WITHOUT ROWID composite-key table creation should succeed");
+
+        let columns = create_plugin()
+            .list_columns(&connection, "main", None, "datapoints")
+            .await
+            .expect("column listing should succeed");
+
+        let pk_flags: Vec<(&str, bool)> = columns
+            .iter()
+            .map(|col| (col.name.as_str(), col.is_primary_key))
+            .collect();
+        assert_eq!(
+            pk_flags,
+            vec![
+                ("device_id", true),
+                ("tag_id", true),
+                ("ts", true),
+                ("value", false),
+            ],
+            "PRAGMA table_info 的 pk 是联合主键 1-based 序号，全部主键列都应被标记"
+        );
+    }
+
+    #[test]
+    fn test_build_create_table_sql_composite_pk_not_autoincrement() {
+        let plugin = create_plugin();
+        // 表设计器从元数据重建 design：联合主键三列，无自增。
+        let design = TableDesign {
+            database_name: "main".to_string(),
+            table_name: "datapoints".to_string(),
+            columns: vec![
+                ColumnDefinition::new("device_id")
+                    .data_type("INTEGER")
+                    .nullable(false)
+                    .primary_key(true),
+                ColumnDefinition::new("tag_id")
+                    .data_type("INTEGER")
+                    .nullable(false)
+                    .primary_key(true),
+                ColumnDefinition::new("ts")
+                    .data_type("INTEGER")
+                    .nullable(false)
+                    .primary_key(true),
+                ColumnDefinition::new("value").data_type("REAL"),
+            ],
+            indexes: vec![],
+            foreign_keys: vec![],
+            options: TableOptions::default(),
+        };
+
+        let sql = plugin.build_create_table_sql(&design);
+
+        assert!(
+            !sql.contains("AUTOINCREMENT"),
+            "联合主键不应渲染 AUTOINCREMENT: {sql}"
+        );
+        assert!(
+            sql.contains("PRIMARY KEY (\"device_id\", \"tag_id\", \"ts\")"),
+            "联合主键应完整出现在表级约束: {sql}"
+        );
+    }
+
+    #[test]
+    fn test_build_create_table_sql_single_autoincrement_pk_no_duplicate_pk() {
+        let plugin = create_plugin();
+        let design = TableDesign {
+            database_name: "main".to_string(),
+            table_name: "users".to_string(),
+            columns: vec![ColumnDefinition::new("id")
+                .data_type("INTEGER")
+                .primary_key(true)
+                .auto_increment(true)],
+            indexes: vec![],
+            foreign_keys: vec![],
+            options: TableOptions::default(),
+        };
+
+        let sql = plugin.build_create_table_sql(&design);
+
+        assert!(
+            sql.contains("PRIMARY KEY AUTOINCREMENT"),
+            "单列自增主键应内联在列定义中: {sql}"
+        );
+        assert_eq!(
+            sql.matches("PRIMARY KEY").count(),
+            1,
+            "主键只应声明一次，否则 SQLite 报 more than one primary key: {sql}"
+        );
     }
 
     #[test]
