@@ -19,7 +19,13 @@ smol = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSResponder", "NSView", "NSWindow"] }
+raw-window-handle = { workspace = true, features = ["std"] }
+
 [dev-dependencies]
+async-trait = { workspace = true }
 gpui = { workspace = true, features = ["test-support"] }
 
 [lints]

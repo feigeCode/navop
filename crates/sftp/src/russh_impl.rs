@@ -1,4 +1,7 @@
 use crate::server_copy::CopyFileRequest;
+use crate::upload_batch::{
+    MAX_CONCURRENT_SMALL_FILE_UPLOADS, ProgressHighWater, job_weight, run_bounded,
+};
 use crate::{
     DirectoryConflictPolicy, FileEntry, PathMetadata, ProgressCallback, RemoteFileClient,
     SftpClient, TransferCancelled, TransferProgress, validate_read_size,
@@ -26,7 +29,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
@@ -2878,88 +2881,119 @@ impl RemoteFileClient for RusshSftpClient {
                 self.ensure_copy_directory(&remote_dir).await?;
             }
 
-            let files: Vec<_> = entries.iter().filter(|(_, is_dir, _)| !*is_dir).collect();
+            let files: Vec<_> = entries
+                .iter()
+                .filter(|(_, is_dir, _)| !*is_dir)
+                .cloned()
+                .collect();
             let start_time = Instant::now();
-            let mut transferred: u64 = 0;
+            // 每个文件都要付固定的控制往返（stat/open/fsync/fstat/close/rename），
+            // 串行执行时小文件吞吐由 RTT 而不是带宽决定，所以让小文件互相重叠；
+            // 大文件仍然独占预算，保持原有的串行与内存语义。
+            //
+            // 共享状态一律先取成 Copy 引用：run_bounded 接受 `Fn` 闭包（会被多次调用），
+            // 非 Copy 值（例如 `progress: Box<dyn Fn>`）不能被每个文件的 future 各自拿走。
+            let sftp = &self.sftp;
+            let cancelled = &cancelled;
+            let progress = &progress;
+            let upload_root = upload_root.as_str();
+            let written = AtomicU64::new(0);
+            let written = &written;
+            let published = ProgressHighWater::new();
+            let published = &published;
 
-            for (file_path, _, file_size) in files {
-                ensure_not_cancelled(&cancelled)?;
-                let relative = file_path
-                    .strip_prefix(local_base)
-                    .map_err(|e| anyhow!("Failed to strip prefix: {}", e))?;
-                let relative_str = relative.to_string_lossy().replace('\\', "/");
-                let remote_file_path =
-                    format!("{}/{}", upload_root.trim_end_matches('/'), relative_str);
+            let job_result: Result<(), anyhow::Error> = run_bounded(
+                files,
+                MAX_CONCURRENT_SMALL_FILE_UPLOADS,
+                |entry: &(PathBuf, bool, u64)| {
+                    job_weight(entry.2, MAX_CONCURRENT_SMALL_FILE_UPLOADS)
+                },
+                |(file_path, _, file_size)| async move {
+                    ensure_not_cancelled(cancelled)?;
 
-                let current_file_name = relative_str.clone();
+                    let relative = file_path
+                        .strip_prefix(local_base)
+                        .map_err(|e| anyhow!("Failed to strip prefix: {}", e))?;
+                    let relative_str = relative.to_string_lossy().replace('\\', "/");
+                    let remote_file_path =
+                        format!("{}/{}", upload_root.trim_end_matches('/'), relative_str);
 
-                let local_file = File::open(file_path)
-                    .await
-                    .map_err(|e| anyhow!("Failed to open local file {:?}: {}", file_path, e))?;
-                let mut local_file = BufReader::with_capacity(BUFFER_SIZE, local_file);
-                let committed_before = transferred;
-                let expected_size = *file_size;
-                let current_file_transferred = with_remote_replace(
-                    &self.sftp,
-                    &remote_file_path,
-                    expected_size,
-                    |mut remote_file| async {
-                        let mut buffer = vec![0u8; BUFFER_SIZE];
-                        let mut current_file_transferred: u64 = 0;
+                    let local_file = File::open(&file_path)
+                        .await
+                        .map_err(|e| anyhow!("Failed to open local file {:?}: {}", file_path, e))?;
+                    let mut local_file = BufReader::with_capacity(BUFFER_SIZE, local_file);
+                    let expected_size = file_size;
+                    let current_file_name = relative_str;
 
-                        loop {
-                            ensure_not_cancelled(&cancelled)?;
-                            let bytes_read = local_file
-                                .read(&mut buffer)
-                                .await
-                                .map_err(|e| anyhow!("Failed to read from local file: {}", e))?;
+                    with_remote_replace(
+                        sftp,
+                        &remote_file_path,
+                        expected_size,
+                        |mut remote_file| async {
+                            let mut buffer = vec![0u8; BUFFER_SIZE];
+                            let mut current_file_transferred: u64 = 0;
 
-                            if bytes_read == 0 {
-                                break;
+                            loop {
+                                ensure_not_cancelled(cancelled)?;
+                                let bytes_read =
+                                    local_file.read(&mut buffer).await.map_err(|e| {
+                                        anyhow!("Failed to read from local file: {}", e)
+                                    })?;
+
+                                if bytes_read == 0 {
+                                    break;
+                                }
+
+                                remote_file.write_all(&buffer[..bytes_read]).await.map_err(
+                                    |e| anyhow!("Failed to write to remote file: {}", e),
+                                )?;
+
+                                current_file_transferred += bytes_read as u64;
+
+                                // 多个文件交错上报，先汇总成全局进度再走高水位，
+                                // 否则后到的回调会带着更小的值把进度条拽回去。
+                                let written_so_far = written
+                                    .fetch_add(bytes_read as u64, Ordering::Relaxed)
+                                    + bytes_read as u64;
+                                let displayed_transferred = published.publish(written_so_far);
+                                let elapsed = start_time.elapsed().as_secs_f64();
+                                let speed = if elapsed > 0.0 {
+                                    displayed_transferred as f64 / elapsed
+                                } else {
+                                    0.0
+                                };
+
+                                progress(TransferProgress {
+                                    transferred: displayed_transferred,
+                                    total: total_size,
+                                    speed,
+                                    current_file: Some(current_file_name.clone()),
+                                    current_file_transferred,
+                                    current_file_total: expected_size,
+                                });
                             }
 
-                            remote_file
-                                .write_all(&buffer[..bytes_read])
-                                .await
-                                .map_err(|e| anyhow!("Failed to write to remote file: {}", e))?;
-
-                            current_file_transferred += bytes_read as u64;
-
-                            let elapsed = start_time.elapsed().as_secs_f64();
-                            let displayed_transferred = committed_before + current_file_transferred;
-                            let speed = if elapsed > 0.0 {
-                                displayed_transferred as f64 / elapsed
-                            } else {
-                                0.0
-                            };
-
-                            progress(TransferProgress {
-                                transferred: displayed_transferred,
-                                total: total_size,
-                                speed,
-                                current_file: Some(current_file_name.clone()),
-                                current_file_transferred,
-                                current_file_total: expected_size,
-                            });
-                        }
-
-                        ensure_not_cancelled(&cancelled)?;
-                        Ok((remote_file, current_file_transferred))
-                    },
-                )
-                .await
-                .map_err(|error| {
-                    anyhow!(
-                        "Failed to upload {} without replacing the original: {}",
-                        remote_file_path,
-                        error
+                            ensure_not_cancelled(cancelled)?;
+                            Ok((remote_file, current_file_transferred))
+                        },
                     )
-                })?;
-                transferred = committed_before + current_file_transferred;
-            }
+                    .await
+                    .map_err(|error| {
+                        anyhow!(
+                            "Failed to upload {} without replacing the original: {}",
+                            remote_file_path,
+                            error
+                        )
+                    })?;
 
-            ensure_not_cancelled(&cancelled)?;
-            Ok(transferred)
+                    Ok(())
+                },
+            )
+            .await;
+            job_result?;
+
+            ensure_not_cancelled(cancelled)?;
+            Ok(written.load(Ordering::Relaxed))
         }
         .await;
 

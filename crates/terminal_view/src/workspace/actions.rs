@@ -51,6 +51,9 @@ impl TerminalWorkspace {
                 TerminalPaneEvent::OpenSftp(connection) => {
                     cx.emit(TerminalWorkspaceEvent::OpenSftp(connection.clone()));
                 }
+                TerminalPaneEvent::SaveAsConnection(connection) => {
+                    cx.emit(TerminalWorkspaceEvent::SaveAsConnection(connection.clone()));
+                }
             },
         );
         let content_subscription = cx.subscribe_in(

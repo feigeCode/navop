@@ -36,6 +36,11 @@ pub enum DbNodeType {
     Schema,
     TablesFolder,
     Table,
+    /// PostgreSQL 外部表（`pg_class.relkind = 'f'`）。
+    ///
+    /// 与 `Table` 并列显示在「表」目录中，但拥有独立的动作范围：
+    /// 删除/重命名必须使用 `DROP/ALTER FOREIGN TABLE`，设计表等不适用。
+    ForeignTable,
     ColumnsFolder,
     Column,
     IndexesFolder,
@@ -48,6 +53,8 @@ pub enum DbNodeType {
     Check,
     ViewsFolder,
     View,
+    MaterializedViewsFolder,
+    MaterializedView,
     FunctionsFolder,
     Function,
     ProceduresFolder,
@@ -67,6 +74,7 @@ impl fmt::Display for DbNodeType {
             DbNodeType::Schema => write!(f, "Schema"),
             DbNodeType::TablesFolder => write!(f, "Tables"),
             DbNodeType::Table => write!(f, "Table"),
+            DbNodeType::ForeignTable => write!(f, "Foreign Table"),
             DbNodeType::ColumnsFolder => write!(f, "Columns"),
             DbNodeType::Column => write!(f, "Column"),
             DbNodeType::IndexesFolder => write!(f, "Indexes"),
@@ -79,6 +87,8 @@ impl fmt::Display for DbNodeType {
             DbNodeType::Check => write!(f, "Check"),
             DbNodeType::ViewsFolder => write!(f, "Views"),
             DbNodeType::View => write!(f, "View"),
+            DbNodeType::MaterializedViewsFolder => write!(f, "Materialized Views"),
+            DbNodeType::MaterializedView => write!(f, "Materialized View"),
             DbNodeType::FunctionsFolder => write!(f, "Functions"),
             DbNodeType::Function => write!(f, "Function"),
             DbNodeType::ProceduresFolder => write!(f, "Procedures"),
@@ -203,11 +213,16 @@ impl DbNode {
     }
 
     pub fn get_table_name(&self) -> Option<String> {
-        if self.node_type == DbNodeType::Table {
+        if matches!(self.node_type, DbNodeType::Table | DbNodeType::ForeignTable) {
             Some(self.name.clone())
         } else {
             self.metadata.get("table").cloned()
         }
+    }
+
+    /// 是否属于「表」目录下的对象（普通表 / 外部表 / 分区表）。
+    pub fn is_table_like(&self) -> bool {
+        matches!(self.node_type, DbNodeType::Table | DbNodeType::ForeignTable)
     }
 }
 
@@ -275,6 +290,15 @@ pub enum TableObjectType {
     #[default]
     Table,
     View,
+    /// 外部表属于「表」目录，但结构比较、结构转储不能按普通表生成 DDL。
+    ForeignTable,
+}
+
+impl TableObjectType {
+    /// 是否可作为普通表参与 DDL 生成（结构比较、结构转储、ER 图）。
+    pub fn is_ddl_comparable(self) -> bool {
+        matches!(self, TableObjectType::Table)
+    }
 }
 
 /// Table-like object information with description/metadata.

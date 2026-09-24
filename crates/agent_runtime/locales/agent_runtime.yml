@@ -25,6 +25,10 @@ AgentRuntime:
     en: Compressing context...
     zh-CN: 正在压缩上下文...
     zh-HK: 正在壓縮上下文...
+  continue_after_compaction:
+    en: Continue the current task from the compressed context above.
+    zh-CN: 请根据上方压缩后的上下文继续完成当前任务。
+    zh-HK: 請根據上方壓縮後的上下文繼續完成當前任務。
   compaction_system_prompt:
     en: |-
       You are performing Codex-style context compaction.

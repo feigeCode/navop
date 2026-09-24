@@ -2772,7 +2772,7 @@ fn build_is_windows_hosted_msvc_only_and_ci_runs_host_tests() {
     assert_tokens_in_scope(
         ".github/workflows/ci.yml",
         "  test:",
-        "  ci-gate:",
+        "  windows-rdp-probe:",
         &[
             "- uses: actions/checkout@v7",
             "- name: Install NASM",
@@ -2781,8 +2781,28 @@ fn build_is_windows_hosted_msvc_only_and_ci_runs_host_tests() {
             "$nasmDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append",
             "nasm -v",
             "- name: Setup Rust toolchain",
-            "- name: Build ATL/MSVC probe (x64 + x86)",
+            "run: ./script/test-windows.ps1",
         ],
+    );
+    // The ATL/MSVC probe is its own job so the Windows workspace test job stays short;
+    // it must still gate CI and cover both probe architectures.
+    assert_tokens_in_scope(
+        ".github/workflows/ci.yml",
+        "  windows-rdp-probe:",
+        "  ci-gate:",
+        &[
+            "- uses: actions/checkout@v7",
+            "- name: Install NASM",
+            "choco install nasm --no-progress --yes",
+            "$nasmDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append",
+            "- name: Setup Rust toolchain",
+            "- name: Build ATL/MSVC probe",
+            "-Target \"${{ matrix.target }}\"",
+        ],
+    );
+    assert_contains_all(
+        ".github/workflows/ci.yml",
+        &["needs: [prepare, classify, test, windows-rdp-probe]"],
     );
     assert_contains_all(
         ".github/workflows/release.yml",
@@ -2801,6 +2821,54 @@ fn build_is_windows_hosted_msvc_only_and_ci_runs_host_tests() {
             "vcvarsall.bat",
             "\"call `\"$vcvarsall`\" x64\"",
             "\"cargo test --all\"",
+        ],
+    );
+}
+
+// A release pull request only carries the CHANGELOG entry and the version bump,
+// so it must skip the platform matrix and be validated by script/release_pr.py
+// instead. `ci-gate` stays the single required check and still fails the merge
+// when the release metadata is invalid.
+#[test]
+fn release_only_pull_requests_skip_the_platform_matrix() {
+    let ci = ".github/workflows/ci.yml";
+    assert_tokens_in_scope(
+        ci,
+        "  classify:",
+        "  test:",
+        &[
+            "if: ${{ github.event_name == 'pull_request' }}",
+            "release_only: ${{ steps.check.outputs.release_only }}",
+            "- uses: actions/checkout@v7",
+            "fetch-depth: 0",
+            "BASE_SHA: ${{ github.event.pull_request.base.sha }}",
+            "python3 script/release_pr.py check",
+        ],
+    );
+    assert_contains_all(
+        ci,
+        &[
+            "needs: [prepare, classify]",
+            "if: ${{ needs.classify.outputs.release_only != 'true' }}",
+            "needs: [classify]",
+        ],
+    );
+    // The classifier must keep the release diff allow-list and validate the
+    // bilingual entry plus the version pair itself.
+    assert_contains_all(
+        "script/release_pr.py",
+        &[
+            "ALLOWED_FILES = (\"CHANGELOG.md\", \"main/Cargo.toml\", \"Cargo.lock\")",
+            "def classify(",
+            "def verify_release_metadata(",
+            "def validate_changelog_entry(",
+        ],
+    );
+    assert_contains_all(
+        "script/tests/test_release_pr.py",
+        &[
+            "class CheckCommandTests(unittest.TestCase)",
+            "test_code_changes_require_the_full_matrix",
         ],
     );
 }

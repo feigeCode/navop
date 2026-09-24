@@ -217,3 +217,15 @@ fn action_ids_are_stable_and_ordered_for_html_toolbar() {
         HtmlPreviewAction::toolbar_ids()
     );
 }
+
+/// 结构契约：拉起系统浏览器必须隐藏控制台窗口。
+///
+/// Windows 分支通过 `cmd /C start` 打开预览，直接 spawn 会让系统新建一个控制台
+/// 窗口（表现为闪一下 cmd 黑框）。
+#[test]
+fn browser_launch_hides_the_console_window() {
+    let source = include_str!("../src/browser.rs");
+
+    assert!(source.contains("hide_background_console(&mut process)"));
+    assert!(source.contains("command.creation_flags(CREATE_NO_WINDOW)"));
+}

@@ -15,73 +15,19 @@ use tool_runtime::{ResourceCapability, RiskLevel, ToolAdapter, ToolContext};
 mod create_extended;
 mod management;
 
-fn save_variants() -> Value {
-    json!([
-        {
-            "type": "object",
-            "required": ["kind", "values"],
-            "not": { "required": ["id"] }
-        },
-        { "type": "object", "required": ["id", "patch"] }
-    ])
-}
-
-fn required_fields_present(schema: &Value, input: &serde_json::Map<String, Value>) -> bool {
-    schema["required"].as_array().is_none_or(|required| {
-        required
-            .iter()
-            .all(|key| input.contains_key(key.as_str().unwrap()))
-    })
-}
-
-fn value_matches_type(value: &Value, schema_type: &Value) -> bool {
-    match schema_type {
-        Value::Array(types) => types
-            .iter()
-            .any(|schema_type| value_matches_type(value, schema_type)),
-        Value::String(schema_type) => match schema_type.as_str() {
-            "array" => value.is_array(),
-            "boolean" => value.is_boolean(),
-            "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
-            "null" => value.is_null(),
-            "number" => value.is_number(),
-            "object" => value.is_object(),
-            "string" => value.is_string(),
-            _ => true,
-        },
-        _ => true,
+/// provider 会拒绝顶层带组合/兼容关键字的 function-calling schema。
+///
+/// 曾经 `connections.save` 在顶层用 `oneOf` 表达"创建 or 更新"，导致 OpenAI 直接
+/// 拒绝整个模型请求（`Invalid schema for function 'connections_save'`）。这里把
+/// 该约束固化为回归契约。
+fn assert_provider_safe_root_schema(schema: &Value) {
+    assert_eq!(json!("object"), schema["type"]);
+    for keyword in ["oneOf", "anyOf", "allOf", "enum", "const", "not"] {
+        assert!(
+            schema.get(keyword).is_none(),
+            "root schema must not contain `{keyword}`: {schema}"
+        );
     }
-}
-
-fn matching_save_variant_indexes(schema: &Value, input: &Value) -> Vec<usize> {
-    let Some(input) = input.as_object() else {
-        return Vec::new();
-    };
-    let root_properties_match = schema["properties"].as_object().is_none_or(|properties| {
-        properties.iter().all(|(key, property_schema)| {
-            input
-                .get(key)
-                .is_none_or(|value| value_matches_type(value, &property_schema["type"]))
-        })
-    });
-    if !root_properties_match {
-        return Vec::new();
-    }
-
-    schema["oneOf"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .enumerate()
-        .filter_map(|(index, variant)| {
-            let is_object = variant["type"] == "object";
-            let required_match = required_fields_present(variant, input);
-            let excluded_by_not = variant
-                .get("not")
-                .is_some_and(|not| required_fields_present(not, input));
-            (is_object && required_match && !excluded_by_not).then_some(index)
-        })
-        .collect()
 }
 
 #[derive(Default)]
@@ -116,7 +62,7 @@ fn connection_registry_lists_save_tools() {
         .find(|tool| tool.id == "connections.open_session")
         .expect("open_session tool should be registered");
 
-    assert_eq!(save_variants(), save.input_schema["oneOf"]);
+    assert_provider_safe_root_schema(&save.input_schema);
     assert!(
         save.description
             .contains("Call connections.get_schema first")
@@ -173,7 +119,7 @@ fn connection_registry_exposes_save_tools_to_function_calling() {
     let tool_ids = tools.iter().map(|tool| tool.id.clone()).collect::<Vec<_>>();
 
     assert_eq!(json!("object"), save.input_schema["type"]);
-    assert_eq!(save_variants(), save.input_schema["oneOf"]);
+    assert_provider_safe_root_schema(&save.input_schema);
     assert!(tool_ids.contains(&"connections.list".to_string()));
     assert!(tool_ids.contains(&"connections.show".to_string()));
     assert!(tool_ids.contains(&"connections.list_kinds".to_string()));
@@ -182,44 +128,39 @@ fn connection_registry_exposes_save_tools_to_function_calling() {
 }
 
 #[test]
-fn connection_save_schema_keeps_create_and_update_variants_mutually_exclusive() {
+fn connection_save_schema_documents_create_and_update_without_root_combinators() {
     let registry = connection_tool_registry(repo());
 
     for adapter in [ToolAdapter::Mcp, ToolAdapter::FunctionCalling] {
         let save = registry
             .get("connections.save", adapter)
             .expect("save tool should be exposed");
+        let schema = &save.input_schema;
 
-        assert_eq!(
-            vec![0],
-            matching_save_variant_indexes(
-                &save.input_schema,
-                &json!({ "kind": "database", "values": {} })
-            )
-        );
-        assert_eq!(
-            vec![1],
-            matching_save_variant_indexes(
-                &save.input_schema,
-                &json!({ "id": 1, "patch": { "name": "updated" } })
-            )
-        );
-        assert_eq!(
-            vec![1],
-            matching_save_variant_indexes(
-                &save.input_schema,
-                &json!({
-                    "kind": "database",
-                    "values": {},
-                    "id": 1,
-                    "patch": {}
-                })
-            )
-        );
+        assert_provider_safe_root_schema(schema);
+        // 创建与更新的"二选一"改由描述承载，避免 provider 拒绝整个模型请求。
+        assert!(schema.get("required").is_none());
         assert!(
-            matching_save_variant_indexes(&save.input_schema, &json!({ "id": null, "patch": {} }))
-                .is_empty()
+            schema["description"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("without id")
         );
+        assert!(schema["properties"]["id"]["description"].is_string());
+        assert!(schema["properties"]["patch"]["properties"]["name"].is_object());
+        assert!(schema["properties"]["kind"]["enum"].is_array());
+        assert!(schema["properties"]["values"].is_object());
+    }
+}
+
+#[test]
+fn all_connection_tool_schemas_stay_provider_safe_at_the_root() {
+    let registry = connection_tool_registry(repo());
+
+    for adapter in [ToolAdapter::Mcp, ToolAdapter::FunctionCalling] {
+        for tool in registry.list(adapter) {
+            assert_provider_safe_root_schema(&tool.input_schema);
+        }
     }
 }
 

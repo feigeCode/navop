@@ -4,8 +4,7 @@ use crate::file_policy::{
 };
 use crate::language::load_language_for_path;
 use crate::{
-    CloseIntercept, RemoteMutationCallback, active_index_after_close, active_index_after_open,
-    decide_close_intercept,
+    CloseIntercept, RemoteMutationCallback, active_index_after_close, decide_close_intercept,
 };
 use gpui::{
     AnyWindowHandle, App, AppContext, Context, Entity, InteractiveElement as _, IntoElement,
@@ -28,7 +27,7 @@ use one_core::{
 };
 use rust_i18n::t;
 use sftp::{RemoteFileClient, SharedRemoteFileClient};
-use std::sync::{Mutex as StdMutex, Once, OnceLock};
+use std::sync::{Arc, Mutex as StdMutex, Once, OnceLock};
 
 actions!(remote_file_editor, [OpenSearch, OpenReplace]);
 
@@ -63,6 +62,7 @@ pub fn open_remote_file_editor<T: 'static>(
         let result = cx.update(|cx| {
             if open_in_existing_window(
                 remote_path.clone(),
+                client.clone(),
                 on_remote_changed.clone(),
                 cx,
             )? {
@@ -105,6 +105,7 @@ pub fn open_remote_file_editor<T: 'static>(
 
 fn open_in_existing_window(
     remote_path: String,
+    client: SharedRemoteFileClient,
     on_remote_changed: RemoteMutationCallback,
     cx: &mut App,
 ) -> anyhow::Result<bool> {
@@ -117,7 +118,7 @@ fn open_in_existing_window(
         editor_window
             .view
             .update(cx, |this, cx| {
-                this.open_or_focus_tab(remote_path, on_remote_changed, window, cx);
+                this.open_or_focus_tab(remote_path, client, on_remote_changed, window, cx);
             })
             .is_ok()
     });
@@ -254,11 +255,12 @@ struct LoadedFile {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PendingCloseAction {
     Window,
-    Tab(usize),
+    Tab(u64),
 }
 
 struct RemoteEditorTab {
     id: u64,
+    client: SharedRemoteFileClient,
     remote_path: String,
     display_name: String,
     editor: Option<Entity<EditorState>>,
@@ -275,9 +277,15 @@ struct RemoteEditorTab {
 }
 
 impl RemoteEditorTab {
-    fn new(id: u64, remote_path: String, on_remote_changed: RemoteMutationCallback) -> Self {
+    fn new(
+        id: u64,
+        remote_path: String,
+        client: SharedRemoteFileClient,
+        on_remote_changed: RemoteMutationCallback,
+    ) -> Self {
         Self {
             id,
+            client,
             display_name: display_name_from_path(&remote_path),
             remote_path,
             editor: None,
@@ -313,13 +321,13 @@ impl RemoteEditorTab {
 }
 
 struct RemoteFileEditorWindow {
-    client: SharedRemoteFileClient,
     tabs: Vec<RemoteEditorTab>,
     active_tab: usize,
     close_prompt_open: bool,
     pending_close_action: Option<PendingCloseAction>,
     close_window_after_saves: bool,
     next_tab_id: u64,
+    prompt_generation: u64,
 }
 
 /// Releases the per-view and per-tab gauges at the true end of the view's
@@ -340,17 +348,17 @@ impl RemoteFileEditorWindow {
         cx: &mut Context<Self>,
     ) -> Self {
         let mut this = Self {
-            client,
             tabs: Vec::new(),
             active_tab: 0,
             close_prompt_open: false,
             pending_close_action: None,
             close_window_after_saves: false,
             next_tab_id: 1,
+            prompt_generation: 0,
         };
         diagnostics::record_editor_view_created();
         this.register_close_guard(window, cx);
-        this.open_or_focus_tab(remote_path, on_remote_changed, window, cx);
+        this.open_or_focus_tab(remote_path, client, on_remote_changed, window, cx);
         this
     }
 
@@ -365,17 +373,25 @@ impl RemoteFileEditorWindow {
     fn open_or_focus_tab(
         &mut self,
         remote_path: String,
+        client: SharedRemoteFileClient,
         on_remote_changed: RemoteMutationCallback,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let paths = self.tab_paths();
-        let active_index = active_index_after_open(&paths, &remote_path);
+        let active_index = self
+            .tabs
+            .iter()
+            .position(|tab| tab.remote_path == remote_path && Arc::ptr_eq(&tab.client, &client))
+            .unwrap_or(self.tabs.len());
         if active_index == self.tabs.len() {
             let tab_id = self.next_tab_id;
             self.next_tab_id += 1;
-            self.tabs
-                .push(RemoteEditorTab::new(tab_id, remote_path, on_remote_changed));
+            self.tabs.push(RemoteEditorTab::new(
+                tab_id,
+                remote_path,
+                client,
+                on_remote_changed,
+            ));
             diagnostics::record_editor_tab_created();
             self.active_tab = active_index;
             self.reload_tab(active_index, window, cx);
@@ -386,13 +402,6 @@ impl RemoteFileEditorWindow {
             cx.notify();
         }
         self.update_window_title(window);
-    }
-
-    fn tab_paths(&self) -> Vec<String> {
-        self.tabs
-            .iter()
-            .map(|tab| tab.remote_path.clone())
-            .collect()
     }
 
     fn tab_index_by_identity(&self, tab_id: u64, remote_path: &str) -> Option<usize> {
@@ -432,7 +441,7 @@ impl RemoteFileEditorWindow {
         let tab_id = tab.id;
         let remote_path = tab.remote_path.clone();
         let task_remote_path = remote_path.clone();
-        let client = self.client.clone();
+        let client = tab.client.clone();
         let max_bytes = one_core::settings::AppSettings::current(cx)
             .remote_file_editor
             .max_file_size_bytes();
@@ -489,8 +498,10 @@ impl RemoteFileEditorWindow {
                         let message = error.to_string();
                         if view
                             .update_in(cx, |this, window, cx| {
-                                this.apply_load_error(tab_id, &remote_path, message.clone(), cx);
-                                window.push_notification(Notification::error(message), cx);
+                                if this.apply_load_error(tab_id, &remote_path, message.clone(), cx)
+                                {
+                                    window.push_notification(Notification::error(message), cx);
+                                }
                             })
                             .is_err()
                         {
@@ -501,8 +512,10 @@ impl RemoteFileEditorWindow {
                         let message = error.to_string();
                         if view
                             .update_in(cx, |this, window, cx| {
-                                this.apply_load_error(tab_id, &remote_path, message.clone(), cx);
-                                window.push_notification(Notification::error(message), cx);
+                                if this.apply_load_error(tab_id, &remote_path, message.clone(), cx)
+                                {
+                                    window.push_notification(Notification::error(message), cx);
+                                }
                             })
                             .is_err()
                         {
@@ -583,17 +596,18 @@ impl RemoteFileEditorWindow {
         remote_path: &str,
         message: String,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         let Some(index) = self.tab_index_by_identity(tab_id, remote_path) else {
-            return;
+            return false;
         };
         let Some(tab) = self.tabs.get_mut(index) else {
-            return;
+            return false;
         };
         tab.loading = false;
         tab.load_error = Some(message);
         tab.status_message = t!("RemoteFileEditor.status.load_failed").to_string();
         cx.notify();
+        true
     }
 
     fn save(&mut self, close_after_save: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -629,7 +643,7 @@ impl RemoteFileEditorWindow {
         let tab_id = tab.id;
         let remote_path = tab.remote_path.clone();
         let task_remote_path = remote_path.clone();
-        let client = self.client.clone();
+        let client = tab.client.clone();
         let save_bytes = text.len();
         let task = Tokio::spawn(cx, async move {
             let mut client = client.lock().await;
@@ -676,8 +690,10 @@ impl RemoteFileEditorWindow {
                         let message = error.to_string();
                         if view
                             .update_in(cx, |this, window, cx| {
-                                this.apply_save_error(tab_id, &remote_path, message.clone(), cx);
-                                window.push_notification(Notification::error(message), cx);
+                                if this.apply_save_error(tab_id, &remote_path, message.clone(), cx)
+                                {
+                                    window.push_notification(Notification::error(message), cx);
+                                }
                             })
                             .is_err()
                         {
@@ -688,8 +704,10 @@ impl RemoteFileEditorWindow {
                         let message = error.to_string();
                         if view
                             .update_in(cx, |this, window, cx| {
-                                this.apply_save_error(tab_id, &remote_path, message.clone(), cx);
-                                window.push_notification(Notification::error(message), cx);
+                                if this.apply_save_error(tab_id, &remote_path, message.clone(), cx)
+                                {
+                                    window.push_notification(Notification::error(message), cx);
+                                }
                             })
                             .is_err()
                         {
@@ -724,8 +742,7 @@ impl RemoteFileEditorWindow {
 
         if self.close_window_after_saves && !self.has_dirty_tabs(cx) {
             self.close_window_after_saves = false;
-            clear_editor_window();
-            window.remove_window();
+            self.finish_window_close(window, cx);
         } else if close_after_save {
             self.close_clean_tab(index, window, cx);
         } else {
@@ -744,25 +761,73 @@ impl RemoteFileEditorWindow {
         remote_path: &str,
         _message: String,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         let Some(index) = self.tab_index_by_identity(tab_id, remote_path) else {
-            return;
+            return false;
         };
         let Some(tab) = self.tabs.get_mut(index) else {
-            return;
+            return false;
         };
         tab.saving = false;
         tab.status_message = t!("RemoteFileEditor.status.save_failed").to_string();
         self.close_window_after_saves = false;
         cx.notify();
+        true
     }
 
-    fn handle_window_should_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        match decide_close_intercept(self.has_dirty_tabs(cx), self.close_prompt_open) {
-            CloseIntercept::Allow => {
+    /// Return whether the native/GPUI close may proceed. Keeping the registry
+    /// and the GPUI window alive also keeps AppKit's NSWindow out of dealloc.
+    fn prepare_window_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        match crate::editor_window_visibility::hide_for_reuse(window) {
+            Ok(true) => {
+                window.blur(cx);
+                window.clear_notifications(cx);
+                self.reset_for_reuse();
+                diagnostics::log_snapshot("editor_window_hidden");
+                cx.notify();
+                false
+            }
+            Ok(false) => {
                 clear_editor_window();
                 true
             }
+            Err(error) => {
+                tracing::warn!(
+                    ?error,
+                    "failed to hide remote editor; falling back to window removal"
+                );
+                clear_editor_window();
+                true
+            }
+        }
+    }
+
+    fn finish_window_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.prepare_window_close(window, cx) {
+            window.remove_window();
+        }
+    }
+
+    fn reset_for_reuse(&mut self) {
+        for _ in &self.tabs {
+            diagnostics::record_editor_tab_dropped();
+        }
+        self.tabs.clear();
+        self.active_tab = 0;
+        self.close_prompt_open = false;
+        self.pending_close_action = None;
+        self.close_window_after_saves = false;
+        self.prompt_generation += 1;
+        // Do NOT reset next_tab_id: late I/O from a discarded tab must never
+        // match a newly opened tab, even when its remote path is identical.
+    }
+
+    fn handle_window_should_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.close_prompt_open {
+            return false;
+        }
+        match decide_close_intercept(self.has_dirty_tabs(cx), self.close_prompt_open) {
+            CloseIntercept::Allow => self.prepare_window_close(window, cx),
             CloseIntercept::Ignore => false,
             CloseIntercept::Prompt => {
                 if let Some(index) = self.first_dirty_tab(cx) {
@@ -795,7 +860,11 @@ impl RemoteFileEditorWindow {
             CloseIntercept::Allow => self.close_clean_tab(index, window, cx),
             CloseIntercept::Ignore => {}
             CloseIntercept::Prompt => {
-                self.show_unsaved_changes_prompt(PendingCloseAction::Tab(index), window, cx);
+                self.show_unsaved_changes_prompt(
+                    PendingCloseAction::Tab(self.tabs[index].id),
+                    window,
+                    cx,
+                );
             }
         }
     }
@@ -814,8 +883,7 @@ impl RemoteFileEditorWindow {
             self.focus_editor(window, cx);
             cx.notify();
         } else {
-            clear_editor_window();
-            window.remove_window();
+            self.finish_window_close(window, cx);
         }
     }
 
@@ -826,11 +894,12 @@ impl RemoteFileEditorWindow {
         cx: &mut Context<Self>,
     ) {
         match action {
-            PendingCloseAction::Window => {
-                clear_editor_window();
-                window.remove_window();
+            PendingCloseAction::Window => self.finish_window_close(window, cx),
+            PendingCloseAction::Tab(id) => {
+                if let Some(index) = self.tabs.iter().position(|tab| tab.id == id) {
+                    self.close_clean_tab(index, window, cx);
+                }
             }
-            PendingCloseAction::Tab(index) => self.close_clean_tab(index, window, cx),
         }
     }
 
@@ -842,7 +911,11 @@ impl RemoteFileEditorWindow {
     ) {
         match action {
             PendingCloseAction::Window => self.save_dirty_tabs_and_close_window(window, cx),
-            PendingCloseAction::Tab(index) => self.save_tab(index, true, window, cx),
+            PendingCloseAction::Tab(id) => {
+                if let Some(index) = self.tabs.iter().position(|tab| tab.id == id) {
+                    self.save_tab(index, true, window, cx);
+                }
+            }
         }
     }
 
@@ -855,8 +928,7 @@ impl RemoteFileEditorWindow {
             .collect::<Vec<_>>();
 
         if dirty_indexes.is_empty() {
-            clear_editor_window();
-            window.remove_window();
+            self.finish_window_close(window, cx);
             return;
         }
 
@@ -874,6 +946,8 @@ impl RemoteFileEditorWindow {
     ) {
         self.close_prompt_open = true;
         self.pending_close_action = Some(action);
+        self.prompt_generation += 1;
+        let prompt_generation = self.prompt_generation;
         let prompt_title = t!("RemoteFileEditor.prompt.unsaved_title").to_string();
         let prompt_message = t!("RemoteFileEditor.prompt.unsaved_message").to_string();
         let save_label = t!("RemoteFileEditor.action.save").to_string();
@@ -897,6 +971,9 @@ impl RemoteFileEditorWindow {
             let selection = answer.await.ok();
             let _ = cx.update_window(window_handle, |_, window, cx| {
                 let _ = this.update(cx, |this, cx| {
+                    if this.prompt_generation != prompt_generation {
+                        return;
+                    }
                     let action = this.pending_close_action.take();
                     this.close_prompt_open = false;
                     match (selection, action) {
@@ -1255,6 +1332,10 @@ fn format_size(size: usize) -> String {
         format!("{} B", size)
     }
 }
+
+#[cfg(test)]
+#[path = "editor_window_reuse_tests.rs"]
+mod reuse_tests;
 
 #[cfg(test)]
 mod tests {

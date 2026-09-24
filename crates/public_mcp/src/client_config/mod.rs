@@ -62,7 +62,6 @@ impl ClientConfigInstall {
         let args = vec![
             "-y".to_string(),
             format!("{PACKAGE_NAME}@{version}"),
-            "mcp".to_string(),
             "--discovery".to_string(),
             path_string(&discovery_path),
         ];

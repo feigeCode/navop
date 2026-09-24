@@ -4,6 +4,8 @@ use super::*;
 pub(crate) enum TerminalPaneEvent {
     Focused,
     OpenSftp(StoredConnection),
+    /// 把临时连接保存为正式连接（由上层写入数据库）
+    SaveAsConnection(StoredConnection),
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

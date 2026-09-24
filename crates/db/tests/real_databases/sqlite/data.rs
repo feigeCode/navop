@@ -150,3 +150,54 @@ async fn execute_generated_crud(plugin: &SqlitePlugin, connection: &SqliteDbConn
     assert_eq!(result.rows[1][0].as_deref(), Some("O'Reilly 🚀"));
     assert_eq!(result.rows[1][2].as_deref(), Some("00FF"));
 }
+
+#[tokio::test]
+async fn sqlite_real_table_data_without_rowid_and_view_fallback() {
+    let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+    let path = temp_dir.path().join("without_rowid.db");
+    let plugin = SqlitePlugin::new();
+    let mut connection = SqliteDbConnection::new(config(&path));
+    connection.connect().await.expect("SQLite should connect");
+    let setup = "CREATE TABLE kv (k TEXT PRIMARY KEY, v INTEGER) WITHOUT ROWID;
+        INSERT INTO kv VALUES ('a', 1), ('b', 2), ('c', 3);
+        CREATE VIEW kv_view AS SELECT k, v FROM kv;";
+    assert_no_sql_errors(
+        &connection
+            .execute(&plugin, setup, ExecOptions::default())
+            .await
+            .expect("setup"),
+        "setup",
+    );
+
+    // WITHOUT ROWID 表：不能投影 rowid，分页应回退到普通 SELECT，数据可见
+    let first_page = db::types::TableDataRequest::new("main", "kv").with_page(1, 2);
+    let response = plugin
+        .query_table_data(&connection, first_page)
+        .await
+        .expect("WITHOUT ROWID table data");
+    assert_eq!(response.total_count, 3);
+    assert_eq!(response.query_result.columns, vec!["k", "v"]);
+    assert_eq!(response.query_result.rows.len(), 2);
+
+    let second_page = db::types::TableDataRequest::new("main", "kv")
+        .with_page(2, 2)
+        .with_known_total_count(3);
+    let response = plugin
+        .query_table_data(&connection, second_page)
+        .await
+        .expect("WITHOUT ROWID second page");
+    assert_eq!(response.query_result.rows.len(), 1);
+    assert_eq!(response.query_result.rows[0][0].as_deref(), Some("c"));
+
+    // 视图同样没有 rowid，应回退后正常返回数据
+    let view_request = db::types::TableDataRequest::new("main", "kv_view").with_page(1, 2);
+    let response = plugin
+        .query_table_data(&connection, view_request)
+        .await
+        .expect("view table data");
+    assert_eq!(response.total_count, 3);
+    assert_eq!(response.query_result.columns, vec!["k", "v"]);
+    assert_eq!(response.query_result.rows.len(), 2);
+
+    connection.disconnect().await.expect("disconnect");
+}

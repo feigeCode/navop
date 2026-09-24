@@ -18,8 +18,11 @@ Navop 提供 macOS、Windows 與 Linux 桌面版本。安裝包必須符合系�
 | Windows | x86_64 | `navop-<version>-windows-x64.exe` | EXE 安裝包，封裝同一套目前使用者 MSI 安裝流程 |
 | Windows | x86_64 | `navop-<version>-windows-x64.zip` | 免安裝執行；資料仍儲存在 Windows 使用者目錄 |
 | Windows | x86_64 | `navop-<version>-windows-x64-portable.zip` | 將程式與資料放在同一個可搬移目錄 |
-| Linux | x86_64 | `navop-<version>-linux-x64.tar.gz`、`navop-<version>-linux-x64-portable.tar.gz`、`navop_<version>_amd64.deb`、`navop-<version>-1.x86_64.rpm`、`navop_<version>_amd64.AppImage` | 依發行版與桌面環境選擇 |
-| Linux | ARM64 | `navop-<version>-linux-arm64.tar.gz`、`navop-<version>-linux-arm64-portable.tar.gz` | ARM64 裝置 |
+| Linux | x86_64 | `navop-<version>-linux-x64.tar.gz`、`navop_<version>_amd64.deb`、`navop-<version>-1.x86_64.rpm`、`navop_<version>_amd64.AppImage` | 依發行版與桌面環境選擇 |
+| Linux | x86_64 | `navop-<version>-linux-x64-portable.tar.gz` | 將程式與資料放在同一個可搬移目錄；詳見下文「Linux 可攜版」 |
+| Linux | ARM64 | `navop-<version>-linux-arm64.tar.gz` | ARM64 裝置 |
+| Linux | ARM64 | `navop-<version>-linux-arm64-portable.tar.gz` | 將程式與資料放在同一個可搬移目錄；詳見下文「Linux 可攜版」 |
+| Linux | x86_64 / ARM64 | `navop-<version>-linux-x64-gpu-stack.tar.gz`、`navop-<version>-linux-arm64-gpu-stack.tar.gz` | 僅在系統缺少可用的 Mesa/EGL 繪圖堆疊時補充安裝，可搭配上述任一 Linux 套件使用 |
 
 可使用同一發佈版本中的 `sha256sums.txt` 驗證下載完整性。
 
@@ -157,6 +160,93 @@ $env:NAVOP_DATA_DIR = "E:\NavopData"
 
 `NAVOP_PORTABLE` 支援 `1`、`true`、`yes` 或 `on`。資料目錄的選擇優先順序為 `--data-dir`、`--portable`、`NAVOP_DATA_DIR`、`NAVOP_PORTABLE`/`navop.portable`，最後才是一般安裝模式。指定的資料目錄必須可寫入；建議使用絕對路徑，因為相對路徑會按照啟動 Navop 時的目前工作目錄解析。
 
+## Linux 可攜版
+
+`navop-<version>-linux-x64-portable.tar.gz`（ARM64 為 `navop-<version>-linux-arm64-portable.tar.gz`）與同架構的一般套件**共用同一個執行檔**，差別只在壓縮檔內多了一個 `navop.portable` 標記檔。Navop 啟動時若發現執行檔同層存在這個檔案，就會把資料目錄從系統使用者目錄改到程式旁的 `data` 目錄，因而能免安裝、整包搬移地執行：
+
+```bash
+mkdir navop-portable
+tar -xzf navop-<version>-linux-x64-portable.tar.gz -C navop-portable
+cd navop-portable
+./navop
+```
+
+```text
+navop-portable/
+├── navop
+├── navop.portable
+└── data/          ← 首次啟動時自動建立
+    ├── config/
+    ├── state/
+    └── cache/
+```
+
+請注意：
+
+- **可攜版不含圖形相依套件。** 與一般套件相同，繪圖堆疊仍由主機提供；缺少時依下文「Linux 圖形相依套件」補充安裝即可，兩者可搭配使用。
+- 可攜模式不會註冊 `.db`、`.duckdb`、`.md` 的系統檔案關聯，也不支援應用程式內安裝更新或自動檢查更新；需要這些能力請改用 `.deb`、`.rpm` 或 AppImage。
+- 可攜目錄必須可寫入，放在唯讀位置會導致啟動直接失敗。
+- 可攜模式預設不記住主金鑰，每次啟動都需輸入；可在設定中開啟記住，金鑰同樣只保存在可攜目錄內。
+- 搬移或備份時整包移動目錄即可，但要先完全結束 Navop，也不要讓兩個實例同時寫入同一份 `data`。
+
+### 更新可攜版
+
+可攜版沒有應用程式內更新。升級時把新版本的 `-portable.tar.gz` 解壓縮到新目錄，再把舊目錄的 `data` 整份複製過去：
+
+```bash
+mkdir navop-portable-new
+tar -xzf navop-<version>-linux-x64-portable.tar.gz -C navop-portable-new
+cp -a navop-portable/data navop-portable-new/data
+```
+
+確認新目錄能正常啟動、連線與擴充都在之後，再刪除舊目錄。
+
+### 進階啟動方式
+
+官方 `-portable.tar.gz` 已包含 `navop.portable`，一般使用不需額外參數。除錯或自訂部署時，也可以用下列方式啟用可攜模式或指定資料目錄：
+
+```bash
+# 臨時啟用可攜模式，預設使用 navop 旁的 data 目錄
+./navop --portable
+
+# 指定資料目錄；此參數本身也會啟用可攜路徑模式
+./navop --data-dir /data/navop
+
+# 透過環境變數啟用可攜模式
+NAVOP_PORTABLE=1 ./navop
+
+# 透過環境變數指定資料目錄
+NAVOP_DATA_DIR=/data/navop ./navop
+```
+
+`NAVOP_PORTABLE` 支援 `1`、`true`、`yes` 或 `on`。資料目錄的選擇優先序為 `--data-dir`、`--portable`、`NAVOP_DATA_DIR`、`NAVOP_PORTABLE`/`navop.portable`，最後才是一般安裝模式。指定的資料目錄必須可寫入；相對路徑會依啟動 Navop 時的目前工作目錄解析。
+
+## Linux 圖形相依套件
+
+Linux 版的 `navop-<version>-linux-x64.tar.gz`、`.deb`、`.rpm` 與 `.AppImage` 都只包含 Navop 本身。桌面環境通常已提供 Navop 需要的繪圖堆疊，不需要任何額外步驟。但精簡容器、最小化伺服器安裝、WSL 以及部分裁剪過的發行版可能缺少 Mesa 軟體渲染器或 EGL 客戶端函式庫，表現為啟動即結束，日誌中出現：
+
+```text
+Failed to create surface: Failed to create surface for any enabled backend: {}
+```
+
+這種情況下再下載同一發佈頁面上的**圖形相依套件**（`navop-<version>-linux-x64-gpu-stack.tar.gz` 或 `navop-<version>-linux-arm64-gpu-stack.tar.gz`），解壓縮後執行隨附的安裝腳本：
+
+```bash
+mkdir navop-gpu-stack
+tar -xzf navop-<version>-linux-x64-gpu-stack.tar.gz -C navop-gpu-stack
+sudo navop-gpu-stack/install.sh
+```
+
+安裝腳本是**增量式**的，只補齊系統目前解析不到的函式庫，因此可以搭配任何一種 Linux 安裝形態，也不需要設定任何環境變數：
+
+- 系統已能解析某個 SONAME 時，該檔案會被跳過，主機自帶的版本一律優先；系統已具備可用的 EGL 與 DRI 驅動時，整個 Mesa 渲染器都會被跳過。
+- `./install.sh --dry-run` 可先印出即將安裝哪些檔案，`./install.sh --force` 會覆寫已存在的同名檔案。
+- 相依檔案會放到動態載入器預設搜尋的目錄（`/usr/lib64` 等），Debian 系發行版會額外寫入 `/etc/ld.so.conf.d/navop-gpu-stack.conf` 並重新整理快取。
+- `sudo ./install.sh --uninstall` 只刪除該腳本實際寫入的檔案（記錄於 `/usr/lib/navop-gpu-stack/installed.tsv`），不會碰觸主機原有的函式庫；若某個檔案在安裝後被修改過，卸載時會保留並提示。卸載需要這個解壓縮目錄，想保留回復能力時就先不要刪除它。
+- 套件內所有 `.so` 都依 glibc 2.28 基線建置，與 Linux 版 Navop 執行檔一致。
+
+相依套件依 CPU 架構區分，必須下載與 Navop 套件相同的架構；架構不符時安裝腳本會直接報錯結束。安裝完成後重新啟動 Navop 即可。
+
 ## Linux Flatpak
 
 Navop 也在 [FlatPark](https://flatpark.org/apps/dev.navop.Navop/) 上架為開發者認可的社群 Flatpak 軟體包。新增 FlatPark 軟體源並為目前使用者安裝：
@@ -176,7 +266,7 @@ Flatpak 軟體包在沙盒中執行，部分整合功能可能需要額外權限
 
 ## 應用程式內更新與回退
 
-MSI、EXE 安裝版與一般 ZIP 版可在設定開啟自動檢查，或手動檢查更新。更新前關閉活動連線，提交或回復手動交易並完成 SFTP 傳輸；重新啟動後測試重要連線、擴充與快捷鍵。Windows `-portable.zip` 便攜版請依照上方的獨立更新流程手動升級。
+MSI、EXE 安裝版與一般 ZIP 版可在設定開啟自動檢查，或手動檢查更新。更新前關閉活動連線，提交或回復手動交易並完成 SFTP 傳輸；重新啟動後測試重要連線、擴充與快捷鍵。Windows `-portable.zip` 與 Linux `-portable.tar.gz` 可攜版沒有應用程式內更新，請依照上方各自的獨立更新流程手動升級。
 
 若新版本與關鍵擴充不相容，先備份 Navop 資料目錄，再從 Releases 安裝上一個穩定版。降版不能取代備份，因本機設定格式可能已變更。
 

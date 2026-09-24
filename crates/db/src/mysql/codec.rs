@@ -193,6 +193,15 @@ fn decode_character(bytes: Vec<u8>, column: &mysql_async::Column) -> (CellState,
             Some(display),
         );
     }
+    // 服务端没有下发可识别的结果字符集（collation id 为 0 / 未映射）时没有 decoder 可用，
+    // 此前一律降级成二进制，字符列因此在网格里显示为「二进制 · N B」。
+    // 这类服务端（MySQL 兼容实现或中间代理）下按严格 UTF-8 兜底：能解出可打印文本就当文本，
+    // 解不出（非法 UTF-8 或含控制字符）的字节仍保持二进制 sidecar。
+    if has_unknown_result_charset(column) {
+        if let Some(text) = decode_utf8_text_without_charset(&bytes) {
+            return (CellState::Decoded(DbValue::Text(text.clone())), Some(text));
+        }
+    }
     let display = format_as_hex(&bytes);
     (CellState::Decoded(DbValue::Binary(bytes)), Some(display))
 }
@@ -203,6 +212,20 @@ fn column_text_decoder(column: &mysql_async::Column) -> Option<MySqlTextDecoder>
         .charset
         .as_deref()
         .and_then(mysql_text_decoder_for_charset)
+}
+
+/// 列元数据没有给出可识别的字符集，客户端无法按声明编码解码。
+fn has_unknown_result_charset(column: &mysql_async::Column) -> bool {
+    result_encoding(column.character_set()).charset.is_none()
+}
+
+/// 字符集未知时的兜底解码：只接受严格 UTF-8 且不含控制字符的字节，
+/// 与 `decode_untyped_bytes` 对无类型字节的判定保持一致。
+fn decode_utf8_text_without_charset(bytes: &[u8]) -> Option<String> {
+    if !is_valid_utf8_text(bytes) {
+        return None;
+    }
+    std::str::from_utf8(bytes).ok().map(str::to_string)
 }
 
 fn is_character_wire_type(column_type: ColumnType) -> bool {
@@ -490,6 +513,54 @@ mod tests {
     #[test]
     fn invalid_text_bytes_remain_lossless_in_a_binary_sidecar() {
         let column = column_with_charset(ColumnType::MYSQL_TYPE_LONG_BLOB, 45);
+        let bytes = vec![0xff, 0xfe];
+
+        let (state, display) = decode_cell(Value::Bytes(bytes.clone()), Some(&column));
+
+        assert_eq!(display.as_deref(), Some("0xFFFE"));
+        assert_eq!(state, CellState::Decoded(DbValue::Binary(bytes)));
+    }
+
+    // 回归：服务端结果列没有下发可识别字符集（collation 0 / 未映射）时，
+    // 字符列曾一律降级成二进制，在网格里显示为「二进制 · N B」。
+    #[test]
+    fn unknown_result_charset_text_bytes_decode_as_text() {
+        let zero_collation = column_with_charset(ColumnType::MYSQL_TYPE_VAR_STRING, 0);
+        let unmapped_collation = column_with_charset(ColumnType::MYSQL_TYPE_VAR_STRING, u16::MAX);
+
+        let (ascii_state, ascii_display) =
+            decode_cell(Value::Bytes(b"00029".to_vec()), Some(&zero_collation));
+        let (cjk_state, cjk_display) = decode_cell(
+            Value::Bytes("中企".as_bytes().to_vec()),
+            Some(&unmapped_collation),
+        );
+
+        assert_eq!(ascii_display.as_deref(), Some("00029"));
+        assert_eq!(
+            ascii_state,
+            CellState::Decoded(DbValue::Text("00029".to_string()))
+        );
+        assert_eq!(cjk_display.as_deref(), Some("中企"));
+        assert_eq!(
+            cjk_state,
+            CellState::Decoded(DbValue::Text("中企".to_string()))
+        );
+    }
+
+    #[test]
+    fn unknown_result_charset_control_bytes_stay_binary() {
+        let column = column_with_charset(ColumnType::MYSQL_TYPE_BLOB, 0);
+        let bytes = vec![0x01, 0x02];
+
+        let (state, display) = decode_cell(Value::Bytes(bytes.clone()), Some(&column));
+
+        assert_eq!(display.as_deref(), Some("0x0102"));
+        assert_eq!(state, CellState::Decoded(DbValue::Binary(bytes)));
+    }
+
+    #[test]
+    fn unknown_result_charset_invalid_utf8_stays_binary() {
+        let column = column_with_charset(ColumnType::MYSQL_TYPE_VAR_STRING, 0);
         let bytes = vec![0xff, 0xfe];
 
         let (state, display) = decode_cell(Value::Bytes(bytes.clone()), Some(&column));

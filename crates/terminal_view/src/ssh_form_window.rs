@@ -797,9 +797,8 @@ impl SshFormWindow {
             cx.new(|cx| InputState::new(window, cx).placeholder(t!("SSH.ftp_host_placeholder")));
         let ftp_port_input =
             cx.new(|cx| InputState::new(window, cx).placeholder(t!("SSH.ftp_port_placeholder")));
-        let ftp_username_input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder(t!("SSH.ftp_username_placeholder"))
-        });
+        let ftp_username_input = cx
+            .new(|cx| InputState::new(window, cx).placeholder(t!("SSH.ftp_username_placeholder")));
         let ftp_password_input = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder(t!("SSH.ftp_password_placeholder"))
@@ -976,11 +975,9 @@ impl SshFormWindow {
                             );
                         });
                         if let Some(ref ftp) = remote_file.ftp {
-                            ftp_host_input
-                                .update(cx, |s, cx| s.set_value(&ftp.host, window, cx));
-                            ftp_port_input.update(cx, |s, cx| {
-                                s.set_value(&ftp.port.to_string(), window, cx)
-                            });
+                            ftp_host_input.update(cx, |s, cx| s.set_value(&ftp.host, window, cx));
+                            ftp_port_input
+                                .update(cx, |s, cx| s.set_value(&ftp.port.to_string(), window, cx));
                             ftp_username_input
                                 .update(cx, |s, cx| s.set_value(&ftp.username, window, cx));
                             ftp_password_input
@@ -3569,7 +3566,7 @@ mod tests {
 
     fn sample_params() -> SshParams {
         SshParams {
-                remote_file: None,
+            remote_file: None,
             sftp_account: None,
             sftp_default_directory: None,
             disabled_jump_server: None,
@@ -4766,10 +4763,7 @@ mod tests {
         let built = form
             .read_with(cx, |form, cx| form.build_ssh_params(cx))
             .expect("FTP 连接应能构建参数");
-        assert_eq!(
-            built.remote_file_protocol(),
-            StoredRemoteFileProtocol::Ftp
-        );
+        assert_eq!(built.remote_file_protocol(), StoredRemoteFileProtocol::Ftp);
         let ftp = built.ftp_params().expect("ftp params preserved");
         assert_eq!(ftp.host, "ftp.example.com");
         assert_eq!(ftp.port, 2121);

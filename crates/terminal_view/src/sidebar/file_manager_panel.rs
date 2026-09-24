@@ -8,6 +8,7 @@ use super::remote_path::{join_remote_path, normalize_remote_path, resolve_remote
 use crate::theme::TerminalColors;
 use crate::transfer_notice::{TransferAction, transfer_finish_notification};
 use chrono::{DateTime, Local};
+use ftp::{FtpClient, FtpConnectConfig};
 use gpui::{
     Anchor, AnyWindowHandle, App, ClipboardItem, Context, Entity, EventEmitter, ExternalPaths,
     FocusHandle, Focusable, Hsla, IntoElement, KeyBinding, ListSizingBehavior, MouseButton,
@@ -34,7 +35,7 @@ use one_assets::IconName;
 use one_core::background_tasks::{BackgroundTaskHandle, BackgroundTaskSpec};
 use one_core::gpui_tokio::Tokio;
 use one_core::sidebar_contribution::SidebarPlacement;
-use one_core::storage::models::StoredConnection;
+use one_core::storage::models::{ConnectionType, StoredConnection};
 use one_core::storage::{
     GlobalStorageState, SftpFavoritePathRepository, normalize_sftp_favorite_path,
     sftp_favorite_connection_key,
@@ -52,7 +53,6 @@ use remote_file_editor::{
 use remote_image_preview::{
     clipboard_upload_paths, image_format_for_path, open_remote_image_preview,
 };
-use ftp::{FtpClient, FtpConnectConfig};
 use rust_i18n::t;
 use sftp::{
     DirectoryConflictPolicy, RemoteFileClient, RemoteFileOperation, RusshSftpClient,
@@ -74,6 +74,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
+use terminal::ReportedWorkingDir;
 use tokio::sync::Mutex;
 
 actions!(terminal_file_manager, [PasteUpload, NavigateParent]);
@@ -115,6 +116,24 @@ fn upload_progress_state(state: &SftpTransferState) -> TransferProgressState {
 }
 
 /// 后台任务分组标题：只保留「连接名称 - IP」，同一连接的面板合并到同一分组。
+/// 目标选择器按钮上的名字：过长时截断，避免挤占路径栏。
+fn truncate_target_label(name: &str, max_chars: usize) -> String {
+    if name.chars().count() <= max_chars {
+        return name.to_string();
+    }
+    let mut label: String = name.chars().take(max_chars.saturating_sub(1)).collect();
+    label.push('…');
+    label
+}
+
+/// 能否作为远端文件浏览目标：SSH/SFTP 与 FTP 可以，数据库、Redis 之类不行。
+fn is_file_browsable_connection(connection: &StoredConnection) -> bool {
+    matches!(
+        connection.connection_type,
+        ConnectionType::SshSftp | ConnectionType::Ftp
+    )
+}
+
 fn background_task_group_label(connection: &StoredConnection) -> SharedString {
     let host = connection
         .to_ssh_params()
@@ -468,6 +487,75 @@ fn build_navigation_recovery_plan(
         .unwrap_or_else(|| "/".to_string());
 
     NavigationRecoveryPlan { fallback_path }
+}
+
+/// 一条 OSC 7 上报相对于当前远程文件会话的归属判定。
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ReportedHostDecision {
+    /// 首次拿到主机名：把它当作本会话所在机器，路径可用。
+    LearnSessionHost(String),
+    /// 与本会话机器同名（或上报方没给主机名），路径可用。
+    SameSessionHost,
+    /// 上报来自另一台机器：多跳会话（堡垒机里再 `ssh`）已切走，路径不可用。
+    ForeignHost(String),
+}
+
+/// 判断一条 OSC 7 上报是否属于当前远程文件会话。
+///
+/// 只与**本会话历次上报之间**比较，而不是与连接配置里的 host 比较：
+/// 用 IP 连接的机器对自身的称呼可能是 hostname，拿配置值硬比会把正常的
+/// 同机跟随全部误判成跨主机。会话内同一个 shell 对自身的称呼是稳定的，
+/// 所以出现不同主机名就意味着 shell 换了机器。
+fn classify_reported_host(
+    session_host: Option<&str>,
+    reported: &ReportedWorkingDir,
+) -> ReportedHostDecision {
+    let Some(host) = reported.host.as_deref() else {
+        return ReportedHostDecision::SameSessionHost;
+    };
+    match session_host {
+        None => ReportedHostDecision::LearnSessionHost(host.to_string()),
+        Some(known) if known.eq_ignore_ascii_case(host) => ReportedHostDecision::SameSessionHost,
+        Some(_) => ReportedHostDecision::ForeignHost(host.to_string()),
+    }
+}
+
+/// 跨主机跟踪状态：本会话主机基线 + 最近一次被拒收的外来主机。
+///
+/// 独立成纯状态对象，使"学习基线 / 同机跟随 / 跨主机拒收 / 回到本机复位"
+/// 四条路径都能直接单测，不依赖 GPUI 上下文。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ReportedHostTracker {
+    /// 本会话首次上报的主机名
+    session_host: Option<String>,
+    /// 最近一次被拒收的外来主机名（`None` 表示当前上报属于本会话）
+    foreign_host: Option<String>,
+}
+
+impl ReportedHostTracker {
+    /// 记录一次上报；返回该上报的路径能否用于当前远程文件会话。
+    fn observe(&mut self, reported: &ReportedWorkingDir) -> bool {
+        match classify_reported_host(self.session_host.as_deref(), reported) {
+            ReportedHostDecision::LearnSessionHost(host) => {
+                self.session_host = Some(host);
+                self.foreign_host = None;
+                true
+            }
+            ReportedHostDecision::SameSessionHost => {
+                self.foreign_host = None;
+                true
+            }
+            ReportedHostDecision::ForeignHost(host) => {
+                self.foreign_host = Some(host);
+                false
+            }
+        }
+    }
+
+    /// 是否处于"终端在别的机器上"的状态。
+    fn is_foreign(&self) -> bool {
+        self.foreign_host.is_some()
+    }
 }
 
 fn clear_remote_listing_state<T>(
@@ -1337,6 +1425,18 @@ pub struct FileManagerPanel {
     test_refresh_count: Arc<AtomicU64>,
     /// 终端当前工作目录缓存，用于首次连接和导航失败恢复
     working_dir_hint: Option<String>,
+    /// 终端上报主机跟踪：判定 OSC 7 上报是否属于当前远程文件会话
+    reported_host_tracker: ReportedHostTracker,
+    /// 面板初始绑定的终端连接 id。
+    ///
+    /// 与 `stored_connection.id` 不一致时，说明用户已把浏览目标切到了另一台
+    /// 主机：此时终端上报的 OSC 7 属于终端那台机器，与本面板无关。
+    terminal_connection_id: Option<i64>,
+    /// 终端那条共享会话。
+    ///
+    /// 面板切到其他目标时会新建独立会话；靠指针身份区分"切走时该断开的自有
+    /// 会话"与"绝不能动的终端共享会话"（终端、SFTP、监控面板共用同一条）。
+    terminal_session_manager: Arc<SshSessionManager>,
     /// 终端主题配色，用于嵌入侧边栏时保持和终端一致
     colors: TerminalColors,
     /// 宿主工具面板当前所在位置
@@ -1369,6 +1469,8 @@ impl FileManagerPanel {
             InputState::new(window, cx).placeholder(t!("FileManager.favorite_edit_placeholder"))
         });
         let favorite_connection_id = stored_connection.id;
+        let terminal_connection_id = stored_connection.id;
+        let terminal_session_manager = session_manager.clone();
         let favorite_connection_key = sftp_favorite_connection_key(&stored_connection);
         let favorite_paths = Self::load_favorite_paths(&favorite_connection_key, cx);
         let global_executor = sftp_transfer::global(cx);
@@ -1476,6 +1578,9 @@ impl FileManagerPanel {
             #[cfg(test)]
             test_refresh_count: Arc::new(AtomicU64::new(0)),
             working_dir_hint: None,
+            reported_host_tracker: ReportedHostTracker::default(),
+            terminal_connection_id,
+            terminal_session_manager,
             colors,
             frame_placement: SidebarPlacement::Right,
             window_handle: window.window_handle(),
@@ -1692,15 +1797,46 @@ impl FileManagerPanel {
             return;
         }
 
+        // 跨主机（终端已在别的机器上）时不能用终端上报的目录做初始路径，
+        // 否则重连后会去当前会话里打开一台无关机器的目录并立刻读目录失败。
+        let working_dir = if self.reported_host_tracker.is_foreign() {
+            None
+        } else {
+            working_dir
+        };
+
         self.reset_connection_for_retry(working_dir);
         self.connect(cx);
+    }
+
+    /// 记录一条 OSC 7 上报的主机归属。
+    ///
+    /// 返回 `(是否接受这条上报, 提示态是否变化)`。跨主机时必须返回
+    /// `false`：内层 shell 的路径属于另一台机器，套到当前远程会话上只会
+    /// 读到无关目录（旧版本 navop 会把集成写进远端 rc，这些机器仍会发
+    /// OSC 7，因此这条守卫是必需的）。
+    fn observe_reported_host(&mut self, reported: &ReportedWorkingDir) -> (bool, bool) {
+        let previous_foreign = self.reported_host_tracker.foreign_host.clone();
+        let accepted = self.reported_host_tracker.observe(reported);
+        (
+            accepted,
+            previous_foreign != self.reported_host_tracker.foreign_host,
+        )
     }
 
     /// 设置初始工作目录（连接前由终端 OSC 7 提供）
     ///
     /// 仅在尚未连接时有效，连接后应使用 `sync_navigate_to`。
-    pub fn set_initial_working_dir(&mut self, path: String) {
-        let path = resolve_remote_path(&self.current_path, &path);
+    pub fn set_initial_working_dir(&mut self, reported: ReportedWorkingDir) {
+        // 同上：切换过目标后，终端上报的初始目录不能作为本面板的起点。
+        if self.is_foreign_target() {
+            return;
+        }
+        let (accepted, _) = self.observe_reported_host(&reported);
+        if !accepted {
+            return;
+        }
+        let path = resolve_remote_path(&self.current_path, &reported.path);
         self.working_dir_hint = Some(path.clone());
         if self.connection_state == ConnectionState::Idle {
             self.current_path = path;
@@ -1718,8 +1854,22 @@ impl FileManagerPanel {
     /// 从终端 OSC 7 同步导航到指定路径
     ///
     /// 仅在已连接且路径不同时才导航，避免不必要的刷新。
-    pub fn sync_navigate_to(&mut self, path: String, cx: &mut Context<Self>) {
-        let path = resolve_remote_path(&self.current_path, &path);
+    ///
+    /// 上报来自另一台机器（多跳会话）时只更新提示态、不导航：
+    /// 把内层主机的目录拿去当前远程会话打开只会读失败并回退。
+    pub fn sync_navigate_to(&mut self, reported: ReportedWorkingDir, cx: &mut Context<Self>) {
+        // 目标已切到别的机器、或跟随被关闭：终端上报的目录不该驱动本面板。
+        if !self.terminal_follow_active() {
+            return;
+        }
+        let (accepted, host_state_changed) = self.observe_reported_host(&reported);
+        if host_state_changed {
+            cx.notify();
+        }
+        if !accepted {
+            return;
+        }
+        let path = resolve_remote_path(&self.current_path, &reported.path);
         self.working_dir_hint = Some(path.clone());
         if self.connection_state != ConnectionState::Connected {
             return;
@@ -1728,6 +1878,106 @@ impl FileManagerPanel {
             return;
         }
         self.navigate_to(path, cx);
+    }
+
+    /// 面板当前浏览的目标是否已离开终端所在主机。
+    ///
+    /// 终端可能停在堡垒机上（默认面板显示的就是堡垒机的文件系统），用户也可以
+    /// 把面板切到另一条已保存连接。后者意味着终端的 OSC 7 上报属于另一台机器。
+    pub fn is_foreign_target(&self) -> bool {
+        self.stored_connection.id != self.terminal_connection_id
+    }
+
+    /// 目录跟随是否真正生效：宿主设置里开着跟随，且面板仍在终端那台机器上。
+    fn terminal_follow_active(&self) -> bool {
+        self.follow_terminal_cwd && !self.is_foreign_target()
+    }
+
+    /// 面板当前浏览目标的显示名。
+    pub fn target_name(&self) -> &str {
+        self.stored_connection.name.as_str()
+    }
+
+    /// 把面板的浏览目标切到另一条已保存连接。
+    ///
+    /// 终端仍连着它自己那台机器，所以切换只影响本面板：丢弃当前通道，用新目标
+    /// 的配置重建一条独立会话（`SshSessionManager::new` 只是包一层，握手发生在
+    /// 首次 `client()`）。切到非终端连接后目录跟随自动停用——终端上报的 OSC 7
+    /// 属于终端那台机器，套到本面板只会读到无关目录。
+    ///
+    /// 已经提交到全局传输执行器的任务不受影响：它们带着提交时的连接配置。
+    pub fn switch_target(&mut self, connection: StoredConnection, cx: &mut Context<Self>) {
+        if connection.id.is_some() && connection.id == self.stored_connection.id {
+            return;
+        }
+
+        let ftp_config = sftp_transfer::ftp_connect_config_from_stored(&connection);
+        let session_manager = if ftp_config.is_some() {
+            // FTP 目标独立建连，不经过 SSH 会话；沿用现有 manager 仅作占位，
+            // `connect()` 会按 `ftp_config` 走 FTP 分支。
+            self.session_manager.clone()
+        } else {
+            match sftp_transfer::ssh_config_for(&connection) {
+                Ok(config) => Arc::new(SshSessionManager::new(config)),
+                Err(error) => {
+                    self.connection_state = ConnectionState::Error(format!(
+                        "{}: {}",
+                        t!("FileManager.target_switch_invalid"),
+                        error
+                    ));
+                    cx.notify();
+                    return;
+                }
+            }
+        };
+
+        // 当前这条会话是不是"切换出来的自有会话"（而非终端的共享会话）？
+        // 自有会话在切走时必须主动断开：`SessionPool` 没有 Drop 实现，不主动断
+        // 会一直悬挂到进程结束。终端那条共享会话绝不能动。
+        let previous_is_own_session =
+            !Arc::ptr_eq(&self.session_manager, &self.terminal_session_manager);
+        let previous_manager = self.session_manager.clone();
+
+        self.stored_connection = connection;
+        self.session_manager = session_manager;
+        self.ftp_config = ftp_config;
+        self.favorite_connection_id = self.stored_connection.id;
+        self.favorite_connection_key = sftp_favorite_connection_key(&self.stored_connection);
+        self.favorite_paths = Self::load_favorite_paths(&self.favorite_connection_key, cx);
+        self.background_task_group = background_task_group_label(&self.stored_connection);
+        self.upload_connection_identity =
+            SftpConnectionIdentity::from_stored(&self.stored_connection).unwrap_or_else(|| {
+                self.global_executor
+                    .update(cx, |executor, _| executor.allocate_runtime_connection())
+            });
+
+        // 换了机器：旧目标的目录状态、跟随基线与待用初始目录全部作废。
+        self.reported_host_tracker = ReportedHostTracker::default();
+        // 注意不能走 `reset_connection_for_retry(None)`：那个 helper 在 working_dir 为
+        // `None` 时会回退到**当前**路径（`build_retry_reset_plan` 的
+        // `or_else(|| Some(current_path))`），等于把上一台机器的目录当成新目标的
+        // 起点，必然读目录失败。这里改用新目标自己配置的 SFTP 初始目录，没配置
+        // 就交给服务器登录目录（`connect()` 里的 `realpath(".")`）。
+        self.apply_retry_reset_plan(RetryResetPlan {
+            next_state: ConnectionState::Idle,
+            initial_working_dir: sftp_transfer::sftp_initial_directory_of(&self.stored_connection),
+            clear_listing: true,
+        });
+        // 目录历史同样属于上一台机器，全部丢弃；连接成功后由 `connect()` 落到真实路径。
+        self.current_path = "/".to_string();
+        self.history = vec!["/".to_string()];
+        self.history_index = 0;
+        self.connect(cx);
+
+        if previous_is_own_session {
+            // 放到后台执行器上断开，不阻塞 UI。这里不能用 `Context::spawn`：它要求
+            // `AsyncFnOnce(WeakEntity<T>, &mut AsyncApp)`，无参 async 块会被解析成
+            // 无参的 `App::spawn`，类型不匹配。
+            cx.background_spawn(async move {
+                let _ = previous_manager.disconnect().await;
+            })
+            .detach();
+        }
     }
 
     fn start_path_editing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -4414,6 +4664,7 @@ impl FileManagerPanel {
                     .pb_2()
                     .gap_1()
                     .items_center()
+                    .child(self.render_target_picker(cx))
                     .child(if self.path_editing {
                         h_flex()
                             .id("fm-path-editor")
@@ -4495,6 +4746,69 @@ impl FileManagerPanel {
             .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, window, cx| {
                 build_frame_options_menu(menu, panel.clone(), placement, window, cx)
             })
+    }
+
+    /// 远端目标选择器：指明面板正在浏览哪台主机，点击后切换。
+    ///
+    /// 终端可能停在堡垒机上，此时面板默认展示的就是堡垒机的文件系统。把当前目标
+    /// 显性化，用户才不会把堡垒机的目录误当成内层主机的；要浏览内层主机，就在这里
+    /// 选一台已保存的连接（例如配好跳板机的那台）。
+    fn render_target_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        Button::new("fm-target")
+            // 同 `icon_button_variant` 的说明：ghost 变体的前景/悬停背景读全局
+            // 应用主题，必须用 custom variant 显式给终端配色。
+            .custom(self.colors.icon_button_variant(self.colors.foreground, cx))
+            .small()
+            .compact()
+            .icon(IconName::Server)
+            .label(truncate_target_label(&self.stored_connection.name, 12))
+            .tooltip(t!("FileManager.target_tooltip").to_string())
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.open_target_picker(window, cx);
+            }))
+    }
+
+    /// 打开目标选择弹窗：候选与 SFTP 的端点切换共用 `one_ui` 那套列表
+    /// （搜索、键盘选择、滚动都由它负责）。
+    fn open_target_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let current_id = self.stored_connection.id;
+        let terminal_id = self.terminal_connection_id;
+        // 读存储放在打开时：终端启动之后用户可能刚新建过连接。
+        let entries: Vec<one_ui::PickerEntry<StoredConnection>> =
+            super::load_terminal_ai_connections(cx)
+                .into_iter()
+                .filter(is_file_browsable_connection)
+                .filter_map(|connection| {
+                    let id = connection.id?;
+                    // 行内容与 SFTP 端点切换对齐：名称 + 行尾 `user@host:port`。
+                    let endpoint = sftp_transfer::connection_endpoint_label(&connection);
+                    Some(one_ui::PickerEntry {
+                        id: SharedString::from(format!("fm-target-{id}")),
+                        title: connection.name.clone().into(),
+                        subtitle: (!endpoint.is_empty()).then(|| endpoint.into()),
+                        badge: (Some(id) == terminal_id)
+                            .then(|| t!("FileManager.target_terminal_badge").to_string().into()),
+                        icon: Icon::new(connection.connection_type.icon()),
+                        active: Some(id) == current_id,
+                        value: connection.clone(),
+                    })
+                })
+                .collect();
+        let panel = cx.entity();
+
+        one_ui::open_picker_dialog(
+            one_ui::PickerDialogLabels {
+                title: t!("FileManager.target_picker_title").to_string().into(),
+                search_placeholder: t!("FileManager.target_search").to_string().into(),
+                empty: t!("FileManager.target_empty").to_string().into(),
+            },
+            entries,
+            window,
+            cx,
+            move |connection, _window, cx| {
+                panel.update(cx, |this, cx| this.switch_target(connection.clone(), cx));
+            },
+        );
     }
 
     fn render_favorites_menu(
@@ -4732,6 +5046,54 @@ impl FileManagerPanel {
                         .child(format!("{}/{}", filtered_count, total_count)),
                 )
             })
+    }
+
+    /// 渲染「终端已切到另一台机器」的提示条。
+    ///
+    /// 多跳会话（堡垒机里再 `ssh`）无法自动跟随：远程文件会话建在导航用的
+    /// 那条 SSH 传输上，目标始终是配置里那台机器。这里显式说明状态并暂停
+    /// 目录同步，避免用户以为列表属于内层主机而对错误的主机做上传/删除。
+    fn render_foreign_host_notice(&self, host: String) -> impl IntoElement {
+        let muted = self.colors.muted;
+        let border = self.colors.border;
+        let foreground = self.colors.foreground;
+        let muted_foreground = self.colors.muted_foreground;
+        let connection_name = self.stored_connection.name.clone();
+
+        h_flex()
+            .id("fm-foreign-host-notice")
+            .px_2()
+            .py_1p5()
+            .gap_2()
+            .items_start()
+            .border_b_1()
+            .border_color(border)
+            .bg(muted)
+            .text_xs()
+            .child(
+                Icon::new(IconName::Info)
+                    .xsmall()
+                    .text_color(muted_foreground),
+            )
+            .child(
+                v_flex()
+                    .flex_1()
+                    .gap_0p5()
+                    .text_color(foreground)
+                    .child(
+                        t!(
+                            "FileManager.foreign_host_notice",
+                            host = host,
+                            connection = connection_name
+                        )
+                        .to_string(),
+                    )
+                    .child(
+                        div()
+                            .text_color(muted_foreground)
+                            .child(t!("FileManager.foreign_host_hint").to_string()),
+                    ),
+            )
     }
 
     /// 渲染排序表头
@@ -5764,7 +6126,7 @@ impl Render for FileManagerPanel {
         let background = self.colors.background;
         let foreground = self.colors.foreground;
 
-        v_flex()
+        let mut root = v_flex()
             .size_full()
             .track_focus(&self.focus_handle)
             .key_context(FILE_MANAGER_CONTEXT)
@@ -5777,13 +6139,18 @@ impl Render for FileManagerPanel {
                 }
             }))
             .bg(background)
-            .text_color(foreground)
-            .child(match state {
-                ConnectionState::Idle => self.render_idle(cx).into_any_element(),
-                ConnectionState::Connecting => self.render_connecting(cx).into_any_element(),
-                ConnectionState::Connected => self.render_file_list(cx).into_any_element(),
-                ConnectionState::Error(ref msg) => self.render_error(msg, cx).into_any_element(),
-            })
+            .text_color(foreground);
+
+        if let Some(host) = self.reported_host_tracker.foreign_host.clone() {
+            root = root.child(self.render_foreign_host_notice(host));
+        }
+
+        root.child(match state {
+            ConnectionState::Idle => self.render_idle(cx).into_any_element(),
+            ConnectionState::Connecting => self.render_connecting(cx).into_any_element(),
+            ConnectionState::Connected => self.render_file_list(cx).into_any_element(),
+            ConnectionState::Error(ref msg) => self.render_error(msg, cx).into_any_element(),
+        })
     }
 }
 
@@ -5791,12 +6158,14 @@ impl Render for FileManagerPanel {
 mod tests {
     use super::{
         ConnectionState, FileConflictChoice, NavigationRecoveryPlan, PendingUpload,
-        RemoteClipboardEntry, RemoteClipboardKind, RemoteFileClipboard, SharedProgress,
-        TransferCancelTarget, TransferOperation, TransferQueue, TransferTask, TransferTaskState,
+        RemoteClipboardEntry, RemoteClipboardKind, RemoteFileClipboard, ReportedHostDecision,
+        ReportedHostTracker, ReportedWorkingDir, SharedProgress, TransferCancelTarget,
+        TransferOperation, TransferQueue, TransferTask, TransferTaskState,
         build_navigation_recovery_plan, build_retry_reset_plan, can_paste_remote_file_clipboard,
-        clear_remote_listing_state, frame_move_options, global_transfer_action,
-        resolve_upload_conflict, should_apply_directory_result, should_refresh_after_delete,
-        should_refresh_after_upload, transfer_progress_display_label,
+        classify_reported_host, clear_remote_listing_state, frame_move_options,
+        global_transfer_action, is_file_browsable_connection, resolve_upload_conflict,
+        should_apply_directory_result, should_refresh_after_delete, should_refresh_after_upload,
+        transfer_progress_display_label, truncate_target_label,
     };
     use crate::transfer_notice::TransferAction;
     use anyhow::{Result, anyhow};
@@ -5954,6 +6323,158 @@ mod tests {
         );
         connection.id = Some(8);
         connection
+    }
+
+    fn test_other_host_connection() -> one_core::storage::models::StoredConnection {
+        let mut connection = one_core::storage::models::StoredConnection::new_ssh(
+            "主机 B".to_string(),
+            SshParams {
+                remote_file: None,
+                sftp_default_directory: None,
+                disabled_jump_server: None,
+                sftp_account: None,
+                host: "host-b.internal".to_string(),
+                port: 22,
+                username: "deploy".to_string(),
+                auth_method: SshAuthMethod::Agent,
+                credential_reference: None,
+                prompt_username: None,
+                prompt_password: None,
+                keyboard_interactive: None,
+                terminal_encoding: Default::default(),
+                terminal_type: Default::default(),
+                connect_timeout: Some(1),
+                keepalive_interval: None,
+                keepalive_max: None,
+                default_directory: None,
+                init_script: None,
+                disable_shell_integration: None,
+                x11_forwarding: None,
+                allow_legacy_algorithms: None,
+                jump_server: None,
+                proxy: None,
+                os_id: None,
+                icon: None,
+                icon_file_path: None,
+                account_expect: Default::default(),
+            },
+            None,
+        );
+        connection.id = Some(9);
+        connection
+    }
+
+    #[test]
+    fn file_browsable_targets_are_ssh_and_ftp_only() {
+        assert!(is_file_browsable_connection(&test_stored_connection()));
+        assert!(is_file_browsable_connection(&test_ftp_stored_connection()));
+
+        // 数据库连接同样带 host 字段，但不能当作文件浏览目标。
+        let mut database = test_stored_connection();
+        database.connection_type = one_core::storage::ConnectionType::Database;
+        assert!(!is_file_browsable_connection(&database));
+    }
+
+    #[test]
+    fn target_endpoint_label_reads_ftp_params_for_ftp_connections() {
+        assert_eq!(
+            sftp_transfer::connection_endpoint_label(&test_stored_connection()),
+            "deploy@terminal-file-manager-test.internal:2222"
+        );
+        assert_eq!(
+            sftp_transfer::connection_endpoint_label(&test_ftp_stored_connection()),
+            "testuser@localhost:2121"
+        );
+    }
+
+    #[test]
+    fn target_label_is_truncated_on_char_boundaries() {
+        assert_eq!(truncate_target_label("bastion", 12), "bastion");
+        // 恰好等于上限：不截断。
+        assert_eq!(
+            truncate_target_label("堡垒机跳板服务器生产环境", 12),
+            "堡垒机跳板服务器生产环境"
+        );
+        // 超出一个字符：按字符而不是字节截断，避免切碎多字节字符。
+        assert_eq!(
+            truncate_target_label("堡垒机跳板服务器生产环境测试", 12),
+            "堡垒机跳板服务器生产环…"
+        );
+    }
+
+    /// 切到另一台主机后必须停用目录跟随，并且不能在切回时留下外来状态。
+    #[gpui::test]
+    async fn switching_target_leaves_the_terminal_host_and_suspends_following(
+        mut cx: &mut TestAppContext,
+    ) {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let (_provider, _executor, panel, _window) = file_manager_fixture(&mut cx, &temp_dir);
+
+        // 初始：面板就绑在终端那条连接上，跟随可用。
+        assert!(!panel.read_with(cx, |panel, _| panel.is_foreign_target()));
+        assert!(panel.read_with(cx, |panel, _| panel.terminal_follow_active()));
+
+        panel.update(cx, |panel, cx| {
+            panel.switch_target(test_other_host_connection(), cx)
+        });
+
+        assert!(panel.read_with(cx, |panel, _| panel.is_foreign_target()));
+        assert!(!panel.read_with(cx, |panel, _| panel.terminal_follow_active()));
+        assert_eq!(
+            panel.read_with(cx, |panel, _| panel.target_name().to_string()),
+            "主机 B"
+        );
+
+        // 切回终端那条连接：跟随恢复。
+        panel.update(cx, |panel, cx| {
+            panel.switch_target(test_stored_connection(), cx)
+        });
+
+        assert!(!panel.read_with(cx, |panel, _| panel.is_foreign_target()));
+        assert!(panel.read_with(cx, |panel, _| panel.terminal_follow_active()));
+    }
+
+    /// 切换目标必须丢掉上一台机器的目录状态。
+    ///
+    /// 这条用例专门挡一个回归：`build_retry_reset_plan` 在 `working_dir` 为 `None`
+    /// 时会回退到**当前**路径，所以直接复用 `reset_connection_for_retry(None)`
+    /// 会把旧主机的目录当成新目标的起点。
+    #[gpui::test]
+    async fn switching_target_drops_the_previous_host_path(mut cx: &mut TestAppContext) {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let (_provider, _executor, panel, _window) = file_manager_fixture(&mut cx, &temp_dir);
+
+        // 先让面板处于"上一台机器"的目录（未连接时 set_initial_working_dir 会落到
+        // current_path / working_dir_hint）。
+        panel.update(cx, |panel, _cx| {
+            panel.set_initial_working_dir(ReportedWorkingDir::new(
+                None,
+                "/srv/previous-host".to_string(),
+            ));
+        });
+        assert_eq!(
+            panel.read_with(cx, |panel, _| panel.working_dir_hint.clone()),
+            Some("/srv/previous-host".to_string())
+        );
+
+        panel.update(cx, |panel, cx| {
+            panel.switch_target(test_other_host_connection(), cx)
+        });
+
+        // 新目标没有配置 sftp_default_directory：起点必须为空（交给服务器登录目录），
+        // 绝不能是上一台机器的路径。
+        assert_eq!(
+            panel.read_with(cx, |panel, _| panel.working_dir_hint.clone()),
+            None
+        );
+        assert_eq!(
+            panel.read_with(cx, |panel, _| panel.current_path.clone()),
+            "/"
+        );
+        assert_eq!(
+            panel.read_with(cx, |panel, _| panel.history.clone()),
+            vec!["/".to_string()]
+        );
     }
 
     fn test_session_manager() -> Arc<SshSessionManager> {
@@ -7252,6 +7773,81 @@ mod tests {
             "terminal_file_manager::NavigateParent",
             backspace.action().name()
         );
+    }
+
+    fn reported(host: Option<&str>, path: &str) -> ReportedWorkingDir {
+        ReportedWorkingDir::new(host, path.to_string())
+    }
+
+    #[test]
+    fn first_report_learns_the_session_host_and_is_accepted() {
+        assert_eq!(
+            classify_reported_host(None, &reported(Some("bastion"), "/root")),
+            ReportedHostDecision::LearnSessionHost("bastion".to_string())
+        );
+        // 没有基线时任何上报都只能被当作基线（信息不足时的最优解）。
+        let mut tracker = ReportedHostTracker::default();
+        assert!(tracker.observe(&reported(Some("host-a"), "/")));
+        assert_eq!(tracker.session_host.as_deref(), Some("host-a"));
+        assert!(!tracker.is_foreign());
+    }
+
+    #[test]
+    fn same_host_reports_are_accepted_case_insensitively() {
+        assert_eq!(
+            classify_reported_host(Some("bastion"), &reported(Some("BASTION"), "/root")),
+            ReportedHostDecision::SameSessionHost
+        );
+    }
+
+    #[test]
+    fn reports_from_another_host_are_rejected() {
+        // 堡垒机里再 ssh 进主机 B：内层上报的目录属于另一台机器。
+        assert_eq!(
+            classify_reported_host(Some("bastion"), &reported(Some("ip-10-0-0-5"), "/root")),
+            ReportedHostDecision::ForeignHost("ip-10-0-0-5".to_string())
+        );
+    }
+
+    #[test]
+    fn reports_without_a_host_keep_following() {
+        // `7;file:///path` 没有主机段：不能因为缺信息就停止跟随。
+        assert_eq!(
+            classify_reported_host(Some("bastion"), &reported(None, "/root")),
+            ReportedHostDecision::SameSessionHost
+        );
+        assert_eq!(
+            classify_reported_host(None, &reported(None, "/root")),
+            ReportedHostDecision::SameSessionHost
+        );
+    }
+
+    #[test]
+    fn tracker_rejects_nested_host_and_recovers_after_returning_to_the_session_host() {
+        let mut tracker = ReportedHostTracker::default();
+        assert!(tracker.observe(&reported(Some("bastion"), "/root")));
+        assert!(!tracker.is_foreign());
+
+        assert!(!tracker.observe(&reported(Some("ip-10-0-0-5"), "/home/app")));
+        assert!(tracker.is_foreign());
+        assert_eq!(tracker.foreign_host.as_deref(), Some("ip-10-0-0-5"));
+
+        // 回到堡垒机（外层 shell 重新发提示符）后恢复跟随。
+        assert!(tracker.observe(&reported(Some("bastion"), "/root")));
+        assert!(!tracker.is_foreign());
+    }
+
+    #[test]
+    fn tracker_keeps_the_outer_host_as_baseline_across_several_nested_hosts() {
+        // 群友的复现路径：进主机 A → exit → 再进主机 B，基线必须始终是堡垒机。
+        let mut tracker = ReportedHostTracker::default();
+        assert!(tracker.observe(&reported(Some("bastion"), "/root")));
+        assert!(!tracker.observe(&reported(Some("host-a"), "/")));
+        assert!(tracker.observe(&reported(Some("bastion"), "/root")));
+        assert!(!tracker.observe(&reported(Some("host-b"), "/")));
+
+        assert_eq!(tracker.session_host.as_deref(), Some("bastion"));
+        assert_eq!(tracker.foreign_host.as_deref(), Some("host-b"));
     }
 }
 

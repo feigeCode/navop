@@ -131,7 +131,12 @@ fn install_skill(target: SkillTarget, force: bool, window: &mut Window, cx: &mut
     let args = skill_install_args(target, force);
     let target_window = window.window_handle();
     let task = cx.background_spawn(smol::unblock(move || {
-        Command::new(launcher).args(args).output()
+        // `npx` / `node` 这类启动器是控制台程序：无控制台的 GUI 进程直接 spawn
+        // 会在 Windows 上闪一个控制台窗口，统一走后台子进程约定隐藏。
+        let mut command = Command::new(launcher);
+        command.args(args);
+        process_util::configure_background_child(&mut command);
+        command.output()
     }));
 
     window
@@ -189,5 +194,16 @@ mod tests {
 
         assert!(args.iter().any(|arg| arg == "--force"));
         assert!(args.windows(2).any(|args| args == ["--target", "agents"]));
+    }
+
+    /// 结构契约：安装技能的外部启动器必须隐藏控制台窗口。
+    ///
+    /// `npx` / `node` 这类控制台程序被无控制台的 GUI 进程直接 spawn 时，Windows
+    /// 会新建一个控制台窗口。
+    #[test]
+    fn skill_install_hides_the_background_console() {
+        let source = include_str!("mcp_skill_install.rs");
+
+        assert!(source.contains("process_util::configure_background_child(&mut command)"));
     }
 }

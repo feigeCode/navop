@@ -228,15 +228,30 @@ jobs:
             const publicTargets = [
               ["macos-arm64", "aarch64-apple-darwin"],
               ["macos-x64", "x86_64-apple-darwin"],
-              ["linux-x64-portable", "x86_64-unknown-linux-gnu"],
-              ["linux-arm64-portable", "aarch64-unknown-linux-gnu"],
               ["linux-x64", "x86_64-unknown-linux-gnu"],
               ["linux-arm64", "aarch64-unknown-linux-gnu"],
               ["windows-x64", "x86_64-pc-windows-msvc"],
               ["win32", "i686-pc-windows-msvc"],
             ];
-            const publicTarget = publicTargets.find(([label]) => fileName.includes(`-${label}.`) || fileName.includes(`-${label}-portable.`));
-            if (publicTarget) return fileName.includes("-portable.") ? `${publicTarget[1]}-portable` : publicTarget[1];
+            // The portable variants and the Linux GPU dependency stack are
+            // published next to the app archive as extra assets for the same
+            // target, so they have to map onto that target instead of falling
+            // through to "universal".
+            const publicTarget = publicTargets.find(
+              ([label]) =>
+                fileName.includes(`-${label}.`) ||
+                fileName.includes(`-${label}-portable.`) ||
+                fileName.includes(`-${label}-gpu-stack.`),
+            );
+            if (publicTarget) {
+              if (fileName.includes("-portable.")) {
+                return `${publicTarget[1]}-portable`;
+              }
+              if (fileName.includes("-gpu-stack.")) {
+                return `${publicTarget[1]}-gpu-stack`;
+              }
+              return publicTarget[1];
+            }
             const knownTargets = [
               "aarch64-apple-darwin",
               "x86_64-apple-darwin",
@@ -246,7 +261,7 @@ jobs:
               "i686-pc-windows-msvc",
             ];
             const target = knownTargets.find((candidate) => fileName.includes(candidate));
-            if (target) return fileName.includes("-portable.") ? `${target}-portable` : target;
+            if (target) return target;
             if (/_(?:[^_]+)_amd64\.(?:deb|AppImage)$/.test(fileName) || /\.x86_64\.rpm$/.test(fileName)) {
               return "x86_64-unknown-linux-gnu";
             }

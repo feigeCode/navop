@@ -1,6 +1,11 @@
-//! 常驻守卫：扩展的 shell 页面（`navop-extensions/extensions/composite/*/ui/*.js`）
-//! 必须能在 `gpui-component` 的组件目录下渲染，且输入控件来自 `gpui-component`
-//! 而**状态仍来自 `gpui-base`**（元素换、状态不换）。
+//! 常驻守卫：相邻仓 `navop-extensions` 的扩展产物必须能被**本仓的宿主**接受。
+//!
+//! 两件事：
+//!
+//! 1. `extension.json` 能过宿主的清单 schema（`deny_unknown_fields` ⇒ 字段名写错
+//!    是解析期硬失败，整个扩展消失）；
+//! 2. `ui/*.js` 页面能在 `gpui-component` 的组件目录下真渲染出来，且输入控件来自
+//!    `gpui-component` 而**状态仍来自 `gpui-base`**（元素换、状态不换）。
 //!
 //! 为什么不是静态检查：组件调用契约（构造签名、方法名、state 形状、主题 token 名）
 //! 的错误只有在真渲染时才暴露，`node --test` 与 diff 都看不见。
@@ -12,7 +17,7 @@
 //!
 //! 需要 `--features shell-plugins`（`gpui-shell` / `gpui-component-shell` 是可选依赖）：
 //! ```bash
-//! cargo test -p universal-plugins --features shell-plugins -- extension_pages_render
+//! cargo test -p universal-plugins --features shell-plugins -- extension_
 //! ```
 
 #[cfg(test)]
@@ -28,6 +33,14 @@ mod tests {
     use gpui_shell::policy::Policy;
     use gpui_shell::{HostArguments, HostModule, HostResult, HostValue, ViewLoadOptions};
 
+    /// 渲染树里出现这些字样，说明页面的模板拼接漏了一个字段
+    /// （`${missing}` → `undefined`、没被 `?? 0` 兜住的算术 → `NaN`、
+    /// 忘了取属性的对象 → `[object Object]`）。空数据台子里页面**不该**
+    /// 出现它们，所以是比"节点名存在"更强的断言：
+    /// 2026-09-18 就是这样抓到 rocketmq 消息页表头印出 `共 undefined 条`
+    /// （`run()` 写的是 `this.returned`，表头读的是 `this.total`）。
+    const PLACEHOLDER_TEXT: &[&str] = &["undefined", "NaN", "[object Object]"];
+
     /// 已迁移的页面：入口相对路径 + 必须物化出来的组件节点名。
     ///
     /// `Input` / `Textarea` 是这次迁移的对象（元素从 `gpui-component` 取、
@@ -36,7 +49,9 @@ mod tests {
         ("mqtt/ui/messages.js", &["Input", "Select", "Button"]),
         ("mqtt/ui/publish.js", &["Input", "Textarea", "Switch"]),
         ("mqtt/ui/subscriptions.js", &["Input", "Select"]),
-        ("rocketmq/ui/send-message.js", &["Input"]),
+        ("rocketmq/ui/overview.js", &["Tag", "Button"]),
+        ("rocketmq/ui/messages.js", &["Input", "Select", "Button"]),
+        ("rocketmq/ui/send-message.js", &["Input", "Select", "Textarea"]),
         ("docker/ui/log-viewer.js", &["Input"]),
         ("dev-tools/ui/workbench.js", &["Input"]),
     ];
@@ -332,6 +347,13 @@ export default class Base extends View {
                     "{entry}: 树里没有任何注册方法，组件目录可能没供上这一页:\n{tree}"
                 ));
             }
+            for placeholder in PLACEHOLDER_TEXT {
+                if tree.contains(placeholder) {
+                    failures.push(format!(
+                        "{entry}: 渲染树里出现了 `{placeholder}`，多半是模板漏了字段兜底:\n{tree}"
+                    ));
+                }
+            }
         }
 
         assert!(
@@ -340,6 +362,41 @@ export default class Base extends View {
             failures.len(),
             MIGRATED_PAGES.len(),
             failures.join("\n\n")
+        );
+    }
+
+    /// 相邻仓的扩展清单必须能被**本仓的宿主 schema** 解析。
+    ///
+    /// `contributes.*` 全是 `deny_unknown_fields`：写错一个字段名就是**解析期**
+    /// 硬失败，整个扩展消失（用户侧看到的是"列表里没有这个扩展"，不是报错弹窗）。
+    /// 相邻仓自己的门禁盖不住这一层 —— `tests/scripts.test.mjs` 只读 `ui/*.js`，
+    /// `scripts/verify-composite-package.sh` 的字段清单里**根本没有
+    /// `resourceWorkbenches`**。所以这里借宿主自己的 loader 过一遍。
+    #[test]
+    fn extension_manifests_load_against_this_host() {
+        let Some(root) = extension_ui_root() else {
+            eprintln!(
+                "SKIP extension_manifests_load_against_this_host: \
+                 ../../../navop-extensions/extensions/composite 不存在"
+            );
+            return;
+        };
+
+        let mut failures: Vec<String> = Vec::new();
+        for id in ["docker", "mqtt", "rocketmq", "elasticsearch"] {
+            let dir = root.join(id);
+            if !dir.is_dir() {
+                continue;
+            }
+            if let Err(error) = extension_runtime::extension::manifest::load_from_dir(&dir) {
+                failures.push(format!("{id}: {error}"));
+            }
+        }
+
+        assert!(
+            failures.is_empty(),
+            "相邻仓的扩展清单在本仓宿主 schema 下解析失败:\n{}",
+            failures.join("\n")
         );
     }
 }

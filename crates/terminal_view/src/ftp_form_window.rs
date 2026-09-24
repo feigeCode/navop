@@ -8,11 +8,6 @@ use connection_form::team::{
     refresh_teams_tooltip, resolve_team_assignment, selected_team_id, team_label,
     team_management_enabled,
 };
-use one_core::cloud_sync::TeamOption;
-use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
-use one_core::gpui_tokio::Tokio;
-use one_core::storage::traits::Repository;
-use one_core::storage::{FtpParams, StoredConnection, Workspace};
 use ftp::FtpClient;
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -30,6 +25,11 @@ use gpui_component::{
     v_flex,
 };
 use one_assets::IconName;
+use one_core::cloud_sync::TeamOption;
+use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
+use one_core::gpui_tokio::Tokio;
+use one_core::storage::traits::Repository;
+use one_core::storage::{FtpParams, StoredConnection, Workspace};
 use rust_i18n::t;
 
 pub struct FtpFormWindowConfig {
@@ -121,11 +121,7 @@ pub struct FtpFormWindow {
 }
 
 impl FtpFormWindow {
-    pub fn new(
-        config: FtpFormWindowConfig,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    pub fn new(config: FtpFormWindowConfig, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let is_editing = config.editing_connection.is_some();
         let editing_id = config.editing_connection.as_ref().and_then(|c| c.id);
         let editing_cloud_id = config
@@ -568,16 +564,10 @@ impl Render for FtpFormWindow {
                         v_flex()
                             .gap_2()
                             .child(
-                                self.render_form_row(
-                                    &t!("Ftp.name"),
-                                    Input::new(&self.name_input),
-                                ),
+                                self.render_form_row(&t!("Ftp.name"), Input::new(&self.name_input)),
                             )
                             .child(
-                                self.render_form_row(
-                                    &t!("Ftp.host"),
-                                    Input::new(&self.host_input),
-                                ),
+                                self.render_form_row(&t!("Ftp.host"), Input::new(&self.host_input)),
                             )
                             .child(
                                 self.render_form_row(
@@ -599,57 +589,57 @@ impl Render for FtpFormWindow {
                                 self.credential_picker.clone(),
                             ))
                             .when(credential_is_manual, |form| {
-                                form.child(
-                                    self.render_form_row(
-                                        &t!("Ftp.username"),
-                                        Input::new(&self.username_input),
-                                    ),
-                                )
-                                .child(
-                                    self.render_form_row(
-                                        &t!("Ftp.password"),
-                                        Input::new(&self.password_input),
-                                    ),
-                                )
+                                form.child(self.render_form_row(
+                                    &t!("Ftp.username"),
+                                    Input::new(&self.username_input),
+                                ))
+                                .child(self.render_form_row(
+                                    &t!("Ftp.password"),
+                                    Input::new(&self.password_input),
+                                ))
                             })
-                            .child(self.render_form_row(
-                                &t!("Ftp.passive_mode"),
-                                h_flex()
-                                    .gap_2()
-                                    .child(
-                                        Checkbox::new("passive-mode")
-                                            .checked(self.passive_mode)
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.passive_mode = !this.passive_mode;
-                                                cx.notify();
-                                            })),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(t!("Ftp.passive_mode_desc").to_string()),
-                                    ),
-                            ))
-                            .child(self.render_form_row(
-                                &t!("Ftp.use_tls"),
-                                h_flex()
-                                    .gap_2()
-                                    .child(
-                                        Checkbox::new("use-tls")
-                                            .checked(self.use_tls)
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.use_tls = !this.use_tls;
-                                                cx.notify();
-                                            })),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(t!("Ftp.use_tls_desc").to_string()),
-                                    ),
-                            ))
+                            .child(
+                                self.render_form_row(
+                                    &t!("Ftp.passive_mode"),
+                                    h_flex()
+                                        .gap_2()
+                                        .child(
+                                            Checkbox::new("passive-mode")
+                                                .checked(self.passive_mode)
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.passive_mode = !this.passive_mode;
+                                                    cx.notify();
+                                                })),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child(t!("Ftp.passive_mode_desc").to_string()),
+                                        ),
+                                ),
+                            )
+                            .child(
+                                self.render_form_row(
+                                    &t!("Ftp.use_tls"),
+                                    h_flex()
+                                        .gap_2()
+                                        .child(
+                                            Checkbox::new("use-tls")
+                                                .checked(self.use_tls)
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.use_tls = !this.use_tls;
+                                                    cx.notify();
+                                                })),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child(t!("Ftp.use_tls_desc").to_string()),
+                                        ),
+                                ),
+                            )
                             .child(self.render_form_row(
                                 &t!("Ftp.workspace"),
                                 Select::new(&self.workspace_select).w_full(),
@@ -705,12 +695,10 @@ impl Render for FtpFormWindow {
                                     ),
                                 )
                             })
-                            .child(
-                                self.render_form_row(
-                                    &t!("Ftp.remark"),
-                                    Textarea::new(&self.remark_input),
-                                ),
-                            ),
+                            .child(self.render_form_row(
+                                &t!("Ftp.remark"),
+                                Textarea::new(&self.remark_input),
+                            )),
                     ),
             )
             // 测试结果

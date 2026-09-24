@@ -234,6 +234,24 @@ fn npx_install_uses_latest_package_tag_and_navop_server_name() {
 }
 
 #[test]
+fn npx_install_launcher_args_match_the_published_contract() {
+    let install = ClientConfigInstall::from_npx_command("/tmp/navop/public-mcp.json", "latest");
+
+    // The `@navop/mcp` launcher is the bridge itself since 0.2.0 and only accepts
+    // `--discovery`; the former `mcp` subcommand positional makes it exit before
+    // the MCP handshake, which clients report as connected with no tools.
+    assert_eq!(
+        install.launch_spec.args,
+        [
+            "-y",
+            "@navop/mcp@latest",
+            "--discovery",
+            "/tmp/navop/public-mcp.json"
+        ]
+    );
+}
+
+#[test]
 fn install_from_helper_path_is_independent_from_app_bundle() {
     let install = ClientConfigInstall::from_helper_path(
         "/Users/me/.config/one-hub/extensions/mcp_helpers/onetcli-public-mcp/onetcli-public-mcp",

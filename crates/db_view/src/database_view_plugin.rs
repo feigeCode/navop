@@ -556,6 +556,22 @@ fn context_menu_rank(node_type: DbNodeType, action_id: DatabaseActionId) -> usiz
             DatabaseActionId::DeleteView => 20,
             _ => 900,
         },
+        DbNodeType::ForeignTable => match action_id {
+            DatabaseActionId::OpenTableData => 10,
+            DatabaseActionId::RenameTable => 30,
+            DatabaseActionId::TruncateTable => 50,
+            DatabaseActionId::DeleteTable => 60,
+            DatabaseActionId::DumpSqlData => 71,
+            DatabaseActionId::ImportData => 80,
+            DatabaseActionId::ExportData => 90,
+            _ => 900,
+        },
+        DbNodeType::MaterializedView => match action_id {
+            DatabaseActionId::OpenViewData => 10,
+            DatabaseActionId::DeleteView => 20,
+            DatabaseActionId::DumpSqlData => 71,
+            _ => 900,
+        },
         DbNodeType::Function => match action_id {
             DatabaseActionId::OpenFunction => 10,
             _ => 900,
@@ -588,7 +604,13 @@ fn insert_query_table_context_menu_item(
     node_type: DbNodeType,
     node_id: &str,
 ) {
-    if !matches!(node_type, DbNodeType::Table | DbNodeType::View) {
+    if !matches!(
+        node_type,
+        DbNodeType::Table
+            | DbNodeType::ForeignTable
+            | DbNodeType::View
+            | DbNodeType::MaterializedView
+    ) {
         return;
     }
 
@@ -649,6 +671,21 @@ fn context_menu_group(node_type: DbNodeType, action: &DatabaseActionDescriptor) 
             DbNodeType::View => match action.id {
                 DatabaseActionId::OpenViewData => Some("open"),
                 DatabaseActionId::DeleteView => Some("view"),
+                _ => None,
+            },
+            DbNodeType::ForeignTable => match action.id {
+                DatabaseActionId::OpenTableData => Some("open"),
+                DatabaseActionId::RenameTable
+                | DatabaseActionId::TruncateTable
+                | DatabaseActionId::DeleteTable => Some("table"),
+                DatabaseActionId::DumpSqlData => Some("dump"),
+                DatabaseActionId::ImportData | DatabaseActionId::ExportData => Some("io"),
+                _ => None,
+            },
+            DbNodeType::MaterializedView => match action.id {
+                DatabaseActionId::OpenViewData => Some("open"),
+                DatabaseActionId::DeleteView => Some("view"),
+                DatabaseActionId::DumpSqlData => Some("dump"),
                 _ => None,
             },
             DbNodeType::Function => match action.id {

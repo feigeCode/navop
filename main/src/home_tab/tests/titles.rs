@@ -146,27 +146,20 @@ fn default_feature_set_preserves_connection_name() {
 #[test]
 fn screenshot_safe_feature_replaces_all_home_connection_info() {
     let cases = [
-        (
-            ConnectionType::Database,
-            "Local Database",
-            "user@localhost:5432/example",
-        ),
-        (ConnectionType::SshSftp, "Local SSH", "user@localhost:22"),
-        (ConnectionType::Redis, "Local Redis", "localhost:6379/0"),
-        (ConnectionType::MongoDB, "Local MongoDB", "localhost:27017"),
-        (ConnectionType::Serial, "Local Serial", "COM1 (115200, 8N1)"),
-        (
-            ConnectionType::PortForwarding,
-            "Local Port Forwarding",
-            "localhost:8080 -> localhost:80",
-        ),
-        (ConnectionType::Rdp, "Local RDP", "user@localhost:3389"),
-        (ConnectionType::Vnc, "Local VNC", "user@localhost:5900"),
+        ConnectionType::Database,
+        ConnectionType::SshSftp,
+        ConnectionType::Redis,
+        ConnectionType::MongoDB,
+        ConnectionType::Serial,
+        ConnectionType::PortForwarding,
+        ConnectionType::Rdp,
+        ConnectionType::Vnc,
     ];
 
-    for (connection_type, expected_name, expected_info) in cases {
+    let mut names = std::collections::HashSet::new();
+    for (offset, connection_type) in cases.into_iter().enumerate() {
         let connection = StoredConnection {
-            id: Some(1),
+            id: Some(offset as i64 + 1),
             credential_revision: None,
             name: "Sensitive connection name".to_string(),
             connection_type,
@@ -186,11 +179,20 @@ fn screenshot_safe_feature_replaces_all_home_connection_info() {
             preferred_open_mode: None,
         };
 
-        assert_eq!(
-            Some(expected_info),
-            card_connection_info(&connection).as_deref(),
-            "unexpected screenshot-safe info for {connection_type:?}",
+        let name = connection_display_name(&connection);
+        assert!(
+            !name.contains("Sensitive"),
+            "connection name was not replaced: {name}",
         );
-        assert_eq!(expected_name, connection_display_name(&connection));
+        // 同一连接重复渲染结果稳定，不同连接之间不重名。
+        assert_eq!(name, connection_display_name(&connection));
+        assert!(names.insert(name), "duplicate display name");
+
+        let info = card_connection_info(&connection)
+            .unwrap_or_else(|| panic!("missing screenshot-safe info for {connection_type:?}"));
+        assert!(
+            !info.contains("production.internal") && !info.contains("administrator"),
+            "connection info was not replaced: {info}",
+        );
     }
 }

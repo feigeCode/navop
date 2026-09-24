@@ -469,11 +469,11 @@ fn clipped_terminal_surface_uses_the_visible_width_for_grid_columns() {
         Bounds::new(Point::new(px(12.0), px(12.0)), size(px(800.0), px(380.0)))
     );
     assert_eq!(
-        terminal_grid_size(viewport_bounds.size, px(10.0), px(20.0)),
+        terminal_grid_size(viewport_bounds.size, px(0.0), px(10.0), px(20.0)),
         (80, 19)
     );
     assert_eq!(
-        terminal_grid_size(surface_bounds.size, px(10.0), px(20.0)),
+        terminal_grid_size(surface_bounds.size, px(0.0), px(10.0), px(20.0)),
         (100, 21),
         "the unclipped surface would tell the PTY to wrap twenty columns too late"
     );
@@ -494,7 +494,10 @@ fn terminal_viewport_bounds_preserves_the_grid_origin_when_clipped() {
     let empty = terminal_viewport_bounds(surface_bounds, disjoint_mask);
     assert_eq!(empty.origin, surface_bounds.origin);
     assert_eq!(empty.size, size(px(0.0), px(0.0)));
-    assert_eq!(terminal_grid_size(empty.size, px(10.0), px(20.0)), (1, 1));
+    assert_eq!(
+        terminal_grid_size(empty.size, px(0.0), px(10.0), px(20.0)),
+        (1, 1)
+    );
 }
 
 #[test]

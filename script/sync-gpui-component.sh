@@ -6,7 +6,7 @@ NAVOP_ROOT="$(git -C "${SCRIPT_DIR}" rev-parse --show-toplevel)"
 TARGET_BRANCH="navop-gpui-ce"
 FETCH_SOURCE="origin"
 UPSTREAM_BRANCH="main"
-PUSH_TARGET="git@github.com:feigeCode/gpui-component.git"
+PUSH_TARGET="git@github.com:feigeCode/gpui-kit.git"
 COMPONENT_DIR="${GPUI_COMPONENT_DIR:-}"
 DRY_RUN="false"
 NO_FETCH="false"
@@ -37,7 +37,7 @@ Options:
 
 Recommended full sync:
   script/sync-gpui-component.sh --component-dir PATH \
-    --fetch-source git@github.com:feigeCode/gpui-component.git \
+    --fetch-source git@github.com:feigeCode/gpui-kit.git \
     --push --update-navop
 EOF
 }

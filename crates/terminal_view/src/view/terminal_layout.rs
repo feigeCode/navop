@@ -2,17 +2,25 @@ use super::*;
 
 pub(super) fn terminal_grid_size(
     viewport_size: Size<Pixels>,
+    line_margin_width: Pixels,
     cell_width: Pixels,
     line_height: Pixels,
 ) -> (usize, usize) {
-    let cols = (viewport_size.width / cell_width).floor() as usize;
+    // 左边距占用网格左侧空间，列数需扣除，否则最后一列会被挤出可视区。
+    let width = (viewport_size.width - line_margin_width).max(cell_width);
+    let cols = (width / cell_width).floor() as usize;
     let rows = (viewport_size.height / line_height).floor() as usize;
     (cols.max(1), rows.max(1))
 }
 
 impl TerminalView {
     pub(super) fn resize_if_needed(&mut self, bounds: Bounds<Pixels>, cx: &mut Context<Self>) {
-        let (cols, rows) = terminal_grid_size(bounds.size, self.cell_width, self.line_height);
+        let (cols, rows) = terminal_grid_size(
+            bounds.size,
+            self.line_margin_width(),
+            self.cell_width,
+            self.line_height,
+        );
 
         let new_size = (cols, rows);
         if self.last_size != Some(new_size) {

@@ -205,6 +205,40 @@ impl HomePage {
         );
     }
 
+    /// 把临时连接保存为正式连接。
+    ///
+    /// 连接信息已由终端侧补全运行时用户名 / 密码，保存时会一并写入凭据库。
+    pub(crate) fn show_save_temporary_connection_form(
+        &mut self,
+        connection: StoredConnection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.is_master_key_ready_for_new_connection() {
+            return;
+        }
+
+        let config = SshFormWindowConfig {
+            editing_connection: None,
+            initial_connection: Some(connection),
+            on_saved: Some(Arc::new(|saved, _action, window, cx| {
+                window.push_notification(
+                    t!("Home.save_as_connection_done", name = saved.name.clone()).to_string(),
+                    cx,
+                );
+            })),
+            workspaces: self.workspaces.clone(),
+            teams: get_cached_team_options(cx),
+        };
+
+        open_popup_window(
+            PopupWindowOptions::new(t!("Home.save_as_connection").to_string()).size(820.0, 750.0),
+            move |window, cx| cx.new(|cx| SshFormWindow::new(config, window, cx)),
+            Some(window),
+            cx,
+        );
+    }
+
     pub(crate) fn show_ssh_form(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if self.editing_connection_id.is_none() && !self.is_master_key_ready_for_new_connection() {
             return;

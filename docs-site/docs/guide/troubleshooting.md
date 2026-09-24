@@ -20,6 +20,8 @@ SSH 依次检查主机指纹、用户名、密码或私钥、文件权限、SSH 
 
 RDP/VNC 黑屏或认证失败需检查 Provider、Domain、证书、远端会话策略和网络。Serial 乱码则核对设备占用、波特率、数据位、停止位、校验位与流控。
 
+Linux 启动报“无法创建表面”（Failed to create surface）说明宿主缺少 Mesa/EGL 渲染库：从下载中心获取对应架构的 GPU 依赖包，解压后运行其中的 `install.sh`（可用 `--dry-run` 预览，`--uninstall` 卸载），无需重装应用本体。详见[安装与更新](./install-update)的 Linux 图形依赖包一节。
+
 ## AI、ACP 与 Public MCP
 
 模型请求失败时检查 Provider 状态、API key、base URL、模型名、网络和额度。工具未出现时确认当前模式、资源引用和权限。ACP 登录或授权成功不保证 Public MCP 自动放行，二次审批属于正常设计。

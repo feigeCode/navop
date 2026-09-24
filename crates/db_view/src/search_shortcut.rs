@@ -9,10 +9,17 @@ const MACOS_TABLE_QUERY_SHORTCUT: &str = "cmd-shift-enter";
 const OTHER_TABLE_QUERY_SHORTCUT: &str = "ctrl-shift-enter";
 const MACOS_TABLE_DESIGNER_SHORTCUT: &str = "cmd-shift-d";
 const OTHER_TABLE_DESIGNER_SHORTCUT: &str = "ctrl-shift-d";
+const MACOS_SELECT_ALL_SHORTCUT: &str = "cmd-a";
+const OTHER_SELECT_ALL_SHORTCUT: &str = "ctrl-a";
 
 gpui::actions!(
     db_search,
-    [FocusSearchInput, OpenSelectedTableQuery, OpenTableDesigner]
+    [
+        FocusSearchInput,
+        OpenSelectedTableQuery,
+        OpenTableDesigner,
+        SelectAllObjects
+    ]
 );
 
 pub fn init(cx: &mut App) {
@@ -41,6 +48,10 @@ fn default_table_designer_shortcuts() -> [&'static str; 1] {
     default_table_designer_shortcuts_for_platform(cfg!(target_os = "macos"))
 }
 
+fn default_select_all_shortcuts() -> [&'static str; 1] {
+    default_select_all_shortcuts_for_platform(cfg!(target_os = "macos"))
+}
+
 fn default_search_shortcuts_for_platform(is_macos: bool) -> [&'static str; 1] {
     if is_macos {
         [MACOS_SEARCH_SHORTCUT]
@@ -62,6 +73,14 @@ fn default_table_designer_shortcuts_for_platform(is_macos: bool) -> [&'static st
         [MACOS_TABLE_DESIGNER_SHORTCUT]
     } else {
         [OTHER_TABLE_DESIGNER_SHORTCUT]
+    }
+}
+
+fn default_select_all_shortcuts_for_platform(is_macos: bool) -> [&'static str; 1] {
+    if is_macos {
+        [MACOS_SELECT_ALL_SHORTCUT]
+    } else {
+        [OTHER_SELECT_ALL_SHORTCUT]
     }
 }
 
@@ -90,6 +109,15 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
         .into_iter()
         .map(|key| KeyBinding::new(&key, OpenTableDesigner, Some(DB_SEARCH_CONTEXT))),
     );
+    keybindings.extend(
+        shortcuts_for(
+            cx,
+            action_id::DB_SELECT_ALL_OBJECTS,
+            &default_select_all_shortcuts(),
+        )
+        .into_iter()
+        .map(|key| KeyBinding::new(&key, SelectAllObjects, Some(DB_SEARCH_CONTEXT))),
+    );
     keybindings
 }
 
@@ -115,14 +143,21 @@ fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
         Some(DB_SEARCH_CONTEXT),
         OpenTableDesigner,
     ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::DB_SELECT_ALL_OBJECTS,
+        &default_select_all_shortcuts(),
+        Some(DB_SEARCH_CONTEXT),
+        SelectAllObjects,
+    ));
     keybindings
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        default_search_shortcuts_for_platform, default_table_designer_shortcuts_for_platform,
-        default_table_query_shortcuts_for_platform,
+        default_search_shortcuts_for_platform, default_select_all_shortcuts_for_platform,
+        default_table_designer_shortcuts_for_platform, default_table_query_shortcuts_for_platform,
     };
 
     #[test]
@@ -145,6 +180,16 @@ mod tests {
             ["ctrl-shift-enter"],
             default_table_query_shortcuts_for_platform(false)
         );
+    }
+
+    #[test]
+    fn object_list_select_all_uses_cmd_a_on_macos() {
+        assert_eq!(["cmd-a"], default_select_all_shortcuts_for_platform(true));
+    }
+
+    #[test]
+    fn object_list_select_all_uses_ctrl_a_on_windows_and_linux() {
+        assert_eq!(["ctrl-a"], default_select_all_shortcuts_for_platform(false));
     }
 
     #[test]

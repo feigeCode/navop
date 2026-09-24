@@ -191,6 +191,10 @@ Extension:
     en: Install cancelled
     zh-CN: 已取消安装
     zh-HK: 已取消安裝
+  tabs_close_failed:
+    en: Extension tabs could not be closed
+    zh-CN: 扩展标签页无法关闭，操作已中止
+    zh-HK: 擴展標籤頁無法關閉，操作已中止
   high_risk_permission_summary:
     en: "This extension declares %{count} high-risk permission(s). Confirm that you trust its source."
     zh-CN: "该扩展声明了 %{count} 个高危权限。请确认你信任该扩展来源。"

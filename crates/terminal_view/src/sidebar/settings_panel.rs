@@ -160,6 +160,10 @@ pub enum SettingsPanelEvent {
     VimScrollToArrowKeysChanged(bool),
     /// 选中文本高亮相同内容开关
     SelectionHighlightChanged(bool),
+    /// 左边距显示每行到达时间开关
+    ShowLineTimestampsChanged(bool),
+    /// 左边距显示行号开关
+    ShowLineNumbersChanged(bool),
     /// 路径同步开关变更
     SyncPathChanged(bool),
     /// 自定义高亮规则变更
@@ -212,6 +216,10 @@ pub struct SettingsPanel {
     vim_scroll_to_arrow_keys: bool,
     /// 选中文本高亮相同内容
     selection_highlight: bool,
+    /// 左边距展示每行到达时间
+    show_line_timestamps: bool,
+    /// 左边距展示行号
+    show_line_numbers: bool,
     /// 路径与终端同步开关
     sync_path: bool,
     /// 全局自定义高亮规则
@@ -254,6 +262,8 @@ impl SettingsPanel {
         let scrollback_lines = AppSettings::global(cx).terminal_scrollback_lines;
         let auto_session_logging = AppSettings::global(cx).terminal_auto_session_logging;
         let selection_highlight = AppSettings::global(cx).terminal_selection_highlight;
+        let show_line_timestamps = AppSettings::global(cx).terminal_show_timestamps;
+        let show_line_numbers = AppSettings::global(cx).terminal_show_line_numbers;
         let scrollback_lines_input_state = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder(AppSettings::DEFAULT_TERMINAL_SCROLLBACK_LINES.to_string())
@@ -424,6 +434,8 @@ impl SettingsPanel {
             sync_path,
             vim_scroll_to_arrow_keys,
             selection_highlight,
+            show_line_timestamps,
+            show_line_numbers,
             custom_highlights: Vec::new(),
             has_file_manager,
             focus_handle: cx.focus_handle(),
@@ -543,6 +555,16 @@ impl SettingsPanel {
 
     pub fn set_selection_highlight(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.selection_highlight = enabled;
+        cx.notify();
+    }
+
+    pub fn set_show_line_timestamps(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.show_line_timestamps = enabled;
+        cx.notify();
+    }
+
+    pub fn set_show_line_numbers(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.show_line_numbers = enabled;
         cx.notify();
     }
 
@@ -1086,6 +1108,8 @@ impl SettingsPanel {
         let paste_image_upload = self.paste_image_upload;
         let vim_scroll_to_arrow_keys = self.vim_scroll_to_arrow_keys;
         let selection_highlight = self.selection_highlight;
+        let show_line_timestamps = self.show_line_timestamps;
+        let show_line_numbers = self.show_line_numbers;
 
         v_flex()
             .gap_3()
@@ -1275,6 +1299,40 @@ impl SettingsPanel {
                                     .on_click(cx.listener(|this, checked: &bool, _window, cx| {
                                         this.selection_highlight = *checked;
                                         cx.emit(SettingsPanelEvent::SelectionHighlightChanged(
+                                            *checked,
+                                        ));
+                                    })),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .justify_between()
+                            .child(div().text_sm().child(t!("Settings.show_line_timestamps")))
+                            .child(
+                                Switch::new("show-line-timestamps-switch")
+                                    .checked(show_line_timestamps)
+                                    .small()
+                                    .on_click(cx.listener(|this, checked: &bool, _window, cx| {
+                                        this.show_line_timestamps = *checked;
+                                        cx.emit(SettingsPanelEvent::ShowLineTimestampsChanged(
+                                            *checked,
+                                        ));
+                                    })),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .justify_between()
+                            .child(div().text_sm().child(t!("Settings.show_line_numbers")))
+                            .child(
+                                Switch::new("show-line-numbers-switch")
+                                    .checked(show_line_numbers)
+                                    .small()
+                                    .on_click(cx.listener(|this, checked: &bool, _window, cx| {
+                                        this.show_line_numbers = *checked;
+                                        cx.emit(SettingsPanelEvent::ShowLineNumbersChanged(
                                             *checked,
                                         ));
                                     })),
@@ -1783,12 +1841,14 @@ mod tests {
         // 内置精选列表已经含有 Consolas，不应重复出现。
         assert_eq!(
             1,
-            values.iter().filter(|font| font.as_str() == "Consolas").count()
+            values
+                .iter()
+                .filter(|font| font.as_str() == "Consolas")
+                .count()
         );
         // 系统字体是已安装状态，标签里不应带「(未安装)」。
         assert!(fonts.iter().any(|font| {
-            font.value.as_ref() == "Sarasa Mono SC"
-                && font.label.as_ref() == "Sarasa Mono SC"
+            font.value.as_ref() == "Sarasa Mono SC" && font.label.as_ref() == "Sarasa Mono SC"
         }));
     }
 

@@ -34,6 +34,17 @@ The normal release sequence is:
 
 The build workflow checks out the requested tag, while the workflow itself runs from `main`. This keeps Cargo input caches and sccache data reusable across tags and repair runs.
 
+## Release-only pull requests
+
+A pull request that only carries the `CHANGELOG.md` entry and the version bump does not need the platform matrix. `.github/workflows/ci.yml` classifies every pull request in the `classify` job through `script/release_pr.py check`:
+
+- The pull request qualifies only when every changed file is `CHANGELOG.md`, `main/Cargo.toml`, or `Cargo.lock`, and the `Cargo.toml` / `Cargo.lock` diff contains nothing but `version = "..."` lines. Any other file, or a dependency change in `main/Cargo.toml`, keeps the full matrix.
+- When it qualifies, the `test` and `windows-rdp-probe` jobs are skipped and the release metadata is validated instead: `main/Cargo.toml` and the `main` package in `Cargo.lock` must agree, and the bilingual entry for that version must exist, be complete (`更新内容` / `修复与优化` plus `What's New` / `Fixes and Improvements`) and carry the CNB mirror line.
+- `CI gate` stays the only required status check, and it still fails the pull request when the classification itself fails, so an invalid release entry cannot reach `main`.
+- If the diff cannot be computed (for example a fork pull request whose head commit was not fetched), the classifier falls back to the full matrix.
+
+A release pull request keeps the fast path after `main` is merged back into `dev`, because the classifier only looks at the diff against the base branch.
+
 ## Branch model
 
 - `dev` is the beta development branch. Changes are pushed and validated here before a release.

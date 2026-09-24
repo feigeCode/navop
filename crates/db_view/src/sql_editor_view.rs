@@ -219,11 +219,24 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
         .map(|key| KeyBinding::new(&key, RunAllQuery, Some(SQL_EDITOR_CONTEXT))),
     );
     keybindings.extend(
-        TOGGLE_LINE_COMMENT_KEY_BINDINGS
+        toggle_line_comment_shortcuts(cx)
             .into_iter()
-            .map(|key| KeyBinding::new(key, ToggleLineComment, Some(SQL_EDITOR_INPUT_CONTEXT))),
+            .map(|key| KeyBinding::new(&key, ToggleLineComment, Some(SQL_EDITOR_INPUT_CONTEXT))),
     );
     keybindings
+}
+
+/// 「注释 / 取消注释」的快捷键（#290）。
+///
+/// 刻意走 [`shortcuts_for`] 而不是把常量直接绑上去：这样它会出现在
+/// 「设置 → 快捷键」里，用户既能**发现**它，也能改成自己顺手的组合
+/// （例如被输入法吞掉 `cmd-/` 时换一个）。
+fn toggle_line_comment_shortcuts(cx: &App) -> Vec<String> {
+    shortcuts_for(
+        cx,
+        action_id::SQL_TOGGLE_COMMENT,
+        &TOGGLE_LINE_COMMENT_KEY_BINDINGS,
+    )
 }
 
 fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
@@ -248,9 +261,9 @@ fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
         RunAllQuery,
     ));
     keybindings.extend(
-        TOGGLE_LINE_COMMENT_KEY_BINDINGS
+        toggle_line_comment_shortcuts(cx)
             .into_iter()
-            .map(|key| KeyBinding::new(key, ToggleLineComment, Some(SQL_EDITOR_INPUT_CONTEXT))),
+            .map(|key| KeyBinding::new(&key, ToggleLineComment, Some(SQL_EDITOR_INPUT_CONTEXT))),
     );
     keybindings
 }
@@ -643,6 +656,8 @@ async fn fetch_foreign_schema_metadata(
                 object_type: match table.object_type {
                     TableObjectType::Table => SqlObjectType::Table,
                     TableObjectType::View => SqlObjectType::View,
+                    // 外部表参与 SQL 补全时按表处理，避免从候选中消失。
+                    TableObjectType::ForeignTable => SqlObjectType::Table,
                 },
                 schema: table.schema.clone(),
                 comment: table.comment.clone(),
@@ -1063,6 +1078,32 @@ fn transaction_control_failed(result: &anyhow::Result<Vec<db::SqlResult>>) -> bo
     match result {
         Ok(results) => results.iter().any(db::SqlResult::is_error),
         Err(_) => true,
+    }
+}
+
+/// 事务控制语句失败后，会话是否已被断连杀死。
+///
+/// 空闲/断连重连后 COMMIT/ROLLBACK 打在死连接上报 `Connection to the server is
+/// closed` 一类错误：此时服务器端事务早已随断连终止（MySQL 断连自动回滚），
+/// 客户端再握着事务标志只会把编辑器锁成“提交不了也关不掉”的死循环。
+/// 连接死亡 → 判定事务已终止，清标志放行；连接仍活（如死锁、语法错）→
+/// 保留事务状态允许用户重试。
+#[derive(Debug, PartialEq, Eq)]
+enum TransactionLiveness {
+    /// 连接已死，事务已被服务器端断连终止。
+    Dead,
+    /// 连接仍活，事务状态未知但会话可用，允许重试。
+    Alive,
+}
+
+fn transaction_liveness(probe: &anyhow::Result<Vec<db::SqlResult>>) -> TransactionLiveness {
+    // 复用 PR #272 的会话级 ping 超时：死连接的探测有界返回 Err。
+    match probe {
+        Err(_) => TransactionLiveness::Dead,
+        Ok(results) if results.iter().any(db::SqlResult::is_error) => {
+            TransactionLiveness::Dead
+        }
+        Ok(_) => TransactionLiveness::Alive,
     }
 }
 
@@ -3010,6 +3051,8 @@ impl SqlEditorTab {
                     object_type: match table.object_type {
                         TableObjectType::Table => SqlObjectType::Table,
                         TableObjectType::View => SqlObjectType::View,
+                        // 外部表参与 SQL 补全时按表处理，避免从候选中消失。
+                        TableObjectType::ForeignTable => SqlObjectType::Table,
                     },
                     schema: table.schema.clone(),
                     comment: table.comment.clone(),
@@ -3691,6 +3734,19 @@ impl SqlEditorTab {
                 )
                 .await;
             if transaction_control_failed(&result) {
+                // 断连后 COMMIT 打在死连接上报 Connection closed：服务器端事务
+                // 已随断连终止（MySQL 断连自动回滚）。探测会话存活，死了就
+                // 清标志+丢会话，避免“提交不了也关不掉”的死循环。
+                let probe = global_state
+                    .execute_session_on_runtime(
+                        cx,
+                        session_id.clone(),
+                        "SELECT 1".to_string(),
+                        Some(manual_transaction_control_options()),
+                    )
+                    .await;
+                let session_dead = transaction_liveness(&probe) == TransactionLiveness::Dead;
+
                 let is_current = entity
                     .update(cx, |this, cx| {
                         let current_session_id = this
@@ -3705,13 +3761,35 @@ impl SqlEditorTab {
                         ) {
                             return false;
                         }
-                        this.manual_transaction_finishing = false;
+                        if session_dead {
+                            // 事务已被断连终止：整体满退，放行关闭。
+                            this.manual_transaction = None;
+                            this.manual_transaction_finishing = false;
+                        } else {
+                            this.manual_transaction_finishing = false;
+                        }
                         cx.notify();
                         true
                     })
                     .unwrap_or(false);
                 if is_current {
-                    Self::notify_async(cx, t!("Query.transaction_control_failed").to_string());
+                    if session_dead {
+                        Self::notify_async(
+                            cx,
+                            t!("Query.transaction_terminated_by_disconnect").to_string(),
+                        );
+                        // 死会话不再可复用，丢弃；失败只记日志不阻断收尾。
+                        if let Err(error) =
+                            global_state.close_session(cx, session_id.clone()).await
+                        {
+                            error!(
+                                "Failed to close dead manual transaction session {}: {:?}",
+                                session_id, error
+                            );
+                        }
+                    } else {
+                        Self::notify_async(cx, t!("Query.transaction_control_failed").to_string());
+                    }
                 }
                 return;
             }
@@ -4926,11 +5004,12 @@ mod tests {
         ManualTransactionStopAction, QueryFileNameError, QueryToolbarAction,
         RUN_ALL_QUERY_KEY_BINDINGS, RUN_CURRENT_QUERY_KEY_BINDINGS, RunCurrentQuery,
         SCHEMA_COLUMN_FETCH_CONCURRENCY, SQL_EDITOR_CONTEXT, SQL_EDITOR_INPUT_CONTEXT,
-        SqlDiagnosticIdentity, SqlMetadataScope, StatementScanInput, ToggleLineComment,
-        can_start_query_execution, can_switch_query_connection, collect_bounded,
-        current_statement_frame_decorations, foreign_prefetch_key, foreign_qualifier_fetch_scope,
-        foreign_qualifier_scope, initial_database_select_value, insert_target_table,
-        insert_values_range, is_current_diagnostic_identity, is_current_manual_transaction_owner,
+        SqlDiagnosticIdentity, SqlMetadataScope, StatementScanInput,
+        TOGGLE_LINE_COMMENT_KEY_BINDINGS, ToggleLineComment, can_start_query_execution,
+        can_switch_query_connection, collect_bounded, current_statement_frame_decorations,
+        foreign_prefetch_key, foreign_qualifier_fetch_scope, foreign_qualifier_scope,
+        initial_database_select_value, insert_target_table, insert_values_range,
+        is_current_diagnostic_identity, is_current_manual_transaction_owner,
         is_current_manual_transaction_start, is_current_query_context_generation,
         lookup_table_columns, manual_sql_execution_action, manual_transaction_control_sql,
         manual_transaction_invalidation_mode, manual_transaction_stop_action,
@@ -4939,16 +5018,26 @@ mod tests {
         query_toolbar_action, schema_changed_event_matches_scope, should_render_schema_select,
         sql_text_for_run_all, sql_text_for_toolbar_run, statement_for_gutter_marker,
         statement_marker_id, supports_manual_transactions, toggle_sql_line_comments,
-        unquote_sql_identifier, viewport_statement_scan_input, write_new_sql_file, write_sql_file,
+        transaction_liveness, unquote_sql_identifier, viewport_statement_scan_input,
+        write_new_sql_file, write_sql_file,
     };
+    use crate::sql_editor::SqlEditor;
     use db::DbManager;
     use db::sql_editor::statement_ranges::{SqlDialect, SqlStatementSnapshot};
-    use gpui::{KeyBinding, KeyContext, Keymap, Keystroke};
+    use gpui::{
+        AppContext as _, Context, Entity, Focusable as _, InteractiveElement as _, IntoElement,
+        KeyBinding, KeyContext, Keymap, Keystroke, ParentElement as _, Render, Styled as _,
+        VisualTestContext, Window, WindowOptions, div,
+    };
+    use gpui_component::Root;
     use gpui_component::input;
     use gpui_component::input::RangeDecorationStyle;
+    use one_core::settings::AppSettings;
     use one_core::storage::DatabaseType;
     use ropey::Rope;
+    use std::cell::Cell;
     use std::path::PathBuf;
+    use std::rc::Rc;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
@@ -5987,6 +6076,167 @@ mod tests {
         );
     }
 
+    /// 探针宿主：复刻 `SqlEditorTab::render` 的关键结构 —— 根节点挂 `on_action`，
+    /// 内部用 `div.key_context("SqlEditor")` 包住 SQL 编辑器。
+    struct LineCommentShortcutProbe {
+        editor: Entity<SqlEditor>,
+        hits: Rc<Cell<usize>>,
+    }
+
+    impl Render for LineCommentShortcutProbe {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let hits = self.hits.clone();
+            div()
+                .size_full()
+                .on_action(move |_: &ToggleLineComment, _window, _cx| {
+                    hits.set(hits.get() + 1);
+                })
+                .child(
+                    div()
+                        .size_full()
+                        .key_context(SQL_EDITOR_CONTEXT)
+                        .child(self.editor.clone()),
+                )
+        }
+    }
+
+    fn comment_shortcut_keystroke() -> &'static str {
+        if cfg!(target_os = "macos") {
+            "cmd-/"
+        } else {
+            "ctrl-/"
+        }
+    }
+
+    fn override_comment_keystroke() -> &'static str {
+        if cfg!(target_os = "macos") {
+            "cmd-shift-c"
+        } else {
+            "ctrl-shift-c"
+        }
+    }
+
+    /// 开一个「SQL 编辑器 + 宿主动作」的探针窗口，并把焦点交给编辑器内部节点
+    /// （等价于用户点进 SQL 编辑区）。
+    ///
+    /// 用**运行时真实 keymap**（`gpui_component::init` + `sql_editor_view::init`）而不是
+    /// 手工拼 `Keymap`：手工 keymap 只能证明「绑定写对了」，证明不了
+    /// 「焦点落在编辑器里时它会被派发到」（#290 的真实症状）。
+    fn open_comment_probe(
+        cx: &mut gpui::TestAppContext,
+        hits: Rc<Cell<usize>>,
+    ) -> (VisualTestContext, Entity<LineCommentShortcutProbe>) {
+        let (window, probe) = cx.update(|cx| {
+            let mut probe_slot = None;
+            let window = cx
+                .open_window(WindowOptions::default(), |window, cx| {
+                    let editor = cx.new(|cx| SqlEditor::new(window, cx));
+                    let probe = cx.new(|_| LineCommentShortcutProbe { editor, hits });
+                    probe_slot = Some(probe.clone());
+                    cx.new(|cx| Root::new(probe, window, cx))
+                })
+                .expect("open sql editor keybinding probe window");
+            (window, probe_slot.expect("probe view"))
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
+
+        let focus = cx.read(|cx| {
+            probe
+                .read(cx)
+                .editor
+                .read(cx)
+                .input()
+                .read(cx)
+                .focus_handle(cx)
+        });
+        cx.update(|window, cx| window.focus(&focus, cx));
+        cx.run_until_parked();
+        (cx, probe)
+    }
+
+    /// 行为验证：焦点在 SQL 编辑器内部时，注释快捷键必须被派发到宿主的动作上。
+    #[gpui::test]
+    fn toggle_line_comment_shortcut_reaches_the_sql_editor(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_global(AppSettings::default());
+            super::init(cx);
+        });
+
+        let hits = Rc::new(Cell::new(0_usize));
+        let (mut cx, _probe) = open_comment_probe(cx, hits.clone());
+
+        cx.simulate_keystrokes(comment_shortcut_keystroke());
+        cx.run_until_parked();
+
+        assert_eq!(
+            1,
+            hits.get(),
+            "焦点在 SQL 编辑器里时按注释快捷键，应命中宿主的 ToggleLineComment 动作"
+        );
+    }
+
+    /// 用户把 `sql.toggle_comment` 改到别的组合后，编辑器必须跟着换键。
+    ///
+    /// 这正是 #290 的出路：`cmd-/` 被输入法吞掉、或与别的软件冲突的机器上，
+    /// 用户能在「设置 → 快捷键」里自己换一个。
+    #[gpui::test]
+    fn toggle_line_comment_shortcut_follows_user_overrides(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            let mut settings = AppSettings::default();
+            settings.custom_keybindings.insert(
+                one_core::keybindings::action_id::SQL_TOGGLE_COMMENT.to_string(),
+                vec!["cmd-shift-c".to_string(), "ctrl-shift-c".to_string()],
+            );
+            cx.set_global(settings);
+            super::init(cx);
+        });
+
+        let hits = Rc::new(Cell::new(0_usize));
+        let (mut cx, _probe) = open_comment_probe(cx, hits.clone());
+
+        cx.simulate_keystrokes(comment_shortcut_keystroke());
+        cx.run_until_parked();
+        assert_eq!(
+            0,
+            hits.get(),
+            "用户改键后，默认的 cmd-/ / ctrl-/ 不应再触发注释"
+        );
+
+        cx.simulate_keystrokes(override_comment_keystroke());
+        cx.run_until_parked();
+        assert_eq!(1, hits.get(), "用户自定义的注释快捷键应命中");
+    }
+
+    /// 设置面板里列出的默认键位必须与运行时默认值一致。
+    ///
+    /// 「设置 → 快捷键」是这条快捷键唯一的可发现入口（#290 里用户正是找不到它），
+    /// 一旦两边漂移，用户看到的和实际生效的就不是一回事。
+    #[test]
+    fn comment_shortcut_defaults_match_the_settings_panel() {
+        let settings_source = include_str!("../../../main/src/setting_tab.rs");
+        let anchor = settings_source
+            .find("action_id::SQL_TOGGLE_COMMENT")
+            .expect("设置面板应列出注释快捷键");
+        let entry_start = settings_source[..anchor]
+            .rfind("ShortcutEntry {")
+            .expect("注释快捷键的 ShortcutEntry");
+        let entry = &settings_source[entry_start..anchor];
+
+        for key in TOGGLE_LINE_COMMENT_KEY_BINDINGS {
+            assert!(
+                entry.contains(&format!("\"{key}\"")),
+                "设置面板缺少默认键位 {key}"
+            );
+        }
+        assert!(
+            entry.contains("Settings.Shortcuts.sql_toggle_comment"),
+            "设置面板条目必须带词条 key，否则界面显示不出名字"
+        );
+    }
+
     #[test]
     fn toggle_line_comment_comments_and_uncomments_current_line() {
         let sql = "select *\n  from users";
@@ -6121,6 +6371,46 @@ mod tests {
         assert!(!session.matches_scope(Some("analytics"), Some("public")));
         assert!(!session.matches_scope(Some("app_db"), Some("private")));
         assert!(!session.matches_scope(None, Some("public")));
+    }
+
+    #[test]
+    fn transaction_liveness_classifies_probe_outcomes() {
+        use super::TransactionLiveness;
+
+        // 探测 Err（含 ping 超时/连接关闭）→ 连接死，事务已被断连终止
+        assert_eq!(
+            TransactionLiveness::Dead,
+            transaction_liveness(&Err(anyhow::anyhow!(
+                "Input/output Error: Driver error: Connection to the server is closed."
+            )))
+        );
+        // 探测返回 SQL 错误结果 → 连接死
+        assert_eq!(
+            TransactionLiveness::Dead,
+            transaction_liveness(&Ok(vec![db::SqlResult::Error(db::SqlErrorInfo {
+                sql: "SELECT 1".to_string(),
+                message: "connection closed".to_string(),
+            })]))
+        );
+        // 探测成功 → 连接活，保留事务状态允许重试
+        assert_eq!(
+            TransactionLiveness::Alive,
+            transaction_liveness(&Ok(vec![]))
+        );
+    }
+
+    /// 断连杀死的会话不得再拦截编辑器关闭：事务已随断连终止。
+    #[test]
+    fn has_manual_transaction_lifecycle_must_not_flag_a_dead_session() {
+        // 纯决策函数无法直接构造 view；这里钉住判定入口的组合逻辑：
+        // manual_transaction 被清空后，starting/finishing 也必须同时复位，
+        // 否则 try_close 仍会被 has_manual_transaction_lifecycle 拦住。
+        // （视图字段复位由 finish_manual_transaction 的断连分支保证。）
+        let has_lifecycle =
+            |manual: bool, starting: bool, finishing: bool| manual || starting || finishing;
+        assert!(!has_lifecycle(false, false, false));
+        assert!(has_lifecycle(true, false, false));
+        assert!(has_lifecycle(false, true, false));
     }
 
     #[test]

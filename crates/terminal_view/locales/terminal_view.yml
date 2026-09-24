@@ -274,9 +274,9 @@ SSH:
     zh-CN: 启用
     zh-HK: 啟用
   keyboard_interactive_desc:
-    en: Allow Keyboard-Interactive prompts such as OTP, hardware tokens, and challenge-response.
-    zh-CN: 允许服务器通过 Keyboard-Interactive 请求 OTP、硬件令牌或质询响应。
-    zh-HK: 允許伺服器透過 Keyboard-Interactive 要求 OTP、硬件權杖或質詢回應。
+    en: Allow Keyboard-Interactive prompts such as OTP, hardware tokens, and challenge-response. Enable it when the server demands keyboard-interactive (MFA/OTP authentication); some switches deliver the normal password prompt this way, but most devices accept plain password authentication. If the server drops the connection during the keyboard-interactive exchange, navop retries once with password authentication.
+    zh-CN: 允许服务器通过 Keyboard-Interactive 请求 OTP、硬件令牌或质询响应。服务器要求 keyboard-interactive（二次认证/OTP）时请开启；部分交换机用它下发普通密码提示，但多数设备也支持普通密码认证。若服务器在 keyboard-interactive 往返中直接断开连接，navop 会自动改用密码认证重试一次。
+    zh-HK: 允許伺服器透過 Keyboard-Interactive 要求 OTP、硬體權杖或質詢回應。伺服器要求 keyboard-interactive（二次認證/OTP）時請開啟；部分交換器用它下發一般密碼提示，但多數設備也支援一般密碼認證。若伺服器在 keyboard-interactive 往返中直接中斷連線，navop 會自動改用密碼認證重試一次。
   terminal_encoding:
     en: Terminal Encoding
     zh-CN: 终端字符集
@@ -314,9 +314,9 @@ SSH:
     zh-CN: 请等待远端 Shell 集成卸载完成后再保存。
     zh-HK: 請等待遠端 Shell 整合解除安裝完成後再儲存。
   workspace:
-    en: Workspace
-    zh-CN: 工作区
-    zh-HK: 工作區
+    en: Group
+    zh-CN: 分组
+    zh-HK: 分組
   validation_error:
     en: Please fill in all required fields
     zh-CN: 请填写所有必填字段
@@ -770,6 +770,14 @@ Settings:
     en: Highlight matching text on selection
     zh-CN: 选中文本后高亮相同内容
     zh-HK: 選取文字後高亮相同內容
+  show_line_timestamps:
+    en: Show line timestamps
+    zh-CN: 显示每行时间戳
+    zh-HK: 顯示每行時間戳
+  show_line_numbers:
+    en: Show line numbers
+    zh-CN: 显示行号
+    zh-HK: 顯示行號
   file_manager_section:
     en: FILE MANAGER
     zh-CN: 文件管理器
@@ -1246,6 +1254,10 @@ TerminalSidebar:
     en: Server Monitor
     zh-CN: 服务器监控
     zh-HK: 伺服器監控
+  save_as_connection:
+    en: Save as connection
+    zh-CN: 保存为连接
+    zh-HK: 儲存為連線
 
 LocalTerminalClose:
   title:
@@ -1738,9 +1750,9 @@ Telnet:
     zh-CN: 钥匙串
     zh-HK: 鑰匙圈
   workspace:
-    en: Workspace
-    zh-CN: 工作区
-    zh-HK: 工作區
+    en: Group
+    zh-CN: 分组
+    zh-HK: 分組
   remark:
     en: Remark
     zh-CN: 备注
@@ -1879,9 +1891,9 @@ Serial:
     zh-CN: 流控
     zh-HK: 流控
   workspace:
-    en: Workspace
-    zh-CN: 工作区
-    zh-HK: 工作區
+    en: Group
+    zh-CN: 分组
+    zh-HK: 分組
   remark:
     en: Remark
     zh-CN: 备注
@@ -2088,6 +2100,38 @@ FileManager:
     en: "Failed to read directory: %{error}. Returned to your working directory."
     zh-CN: "读取目录失败：%{error}。已返回你的工作目录。"
     zh-HK: "讀取目錄失敗：%{error}。已返回你的工作目錄。"
+  foreign_host_notice:
+    en: "Terminal is now on %{host}; the file panel is still connected to %{connection}."
+    zh-CN: "终端已进入 %{host}，文件面板仍连接 %{connection}。"
+    zh-HK: "終端已進入 %{host}，檔案面板仍連線 %{connection}。"
+  foreign_host_hint:
+    en: "Directory sync is paused: SFTP follows the connection's host, so nested SSH sessions are not tracked. If this host is saved as its own connection (with the current one as jump host), use the target picker in the toolbar to switch to it."
+    zh-CN: "已暂停目录同步：SFTP 跟随连接所在主机，嵌套 SSH 不会被跟踪。若该主机已保存为独立连接（跳板机填当前主机），可用工具栏的目标选择器直接切过去。"
+    zh-HK: "已暫停目錄同步：SFTP 跟隨連線所在主機，嵌套 SSH 不會被追蹤。若該主機已存為獨立連線（跳板機填目前主機），可用工具列的目標選擇器直接切過去。"
+  target_tooltip:
+    en: "Choose the remote target this panel browses"
+    zh-CN: "选择该面板浏览的远端目标"
+    zh-HK: "選擇該面板瀏覽的遠端目標"
+  target_picker_title:
+    en: Choose remote target
+    zh-CN: 选择远端目标
+    zh-HK: 選擇遠端目標
+  target_search:
+    en: Search hosts
+    zh-CN: 搜索主机
+    zh-HK: 搜尋主機
+  target_empty:
+    en: "No saved SSH or FTP connection available"
+    zh-CN: "没有可用的 SSH 或 FTP 连接"
+    zh-HK: "沒有可用的 SSH 或 FTP 連線"
+  target_terminal_badge:
+    en: "Terminal"
+    zh-CN: "终端"
+    zh-HK: "終端"
+  target_switch_invalid:
+    en: "Cannot switch remote target"
+    zh-CN: "无法切换远端目标"
+    zh-HK: "無法切換遠端目標"
   retry:
     en: Retry
     zh-CN: 重试
@@ -2762,9 +2806,9 @@ Ftp:
     zh-CN: 钥匙串
     zh-HK: 鑰匙圈
   workspace:
-    en: Workspace
-    zh-CN: 工作区
-    zh-HK: 工作區
+    en: Group
+    zh-CN: 分组
+    zh-HK: 分組
   remark:
     en: Remark
     zh-CN: 备注

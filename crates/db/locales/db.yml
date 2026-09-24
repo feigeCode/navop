@@ -683,6 +683,10 @@ ObjectView:
       en: "%{count} view(s)"
       zh-CN: "%{count} 个视图"
       zh-HK: "%{count} 個檢視"
+    materialized_views:
+      en: "%{count} materialized view(s)"
+      zh-CN: "%{count} 个物化视图"
+      zh-HK: "%{count} 個實體化檢視"
     functions:
       en: "%{count} function(s)"
       zh-CN: "%{count} 个函数"

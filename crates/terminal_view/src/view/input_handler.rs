@@ -70,7 +70,7 @@ impl EntityInputHandler for TerminalView {
 
         // 计算像素位置
         let origin = Point::new(
-            self.terminal_bounds.origin.x + self.cell_width * col as f32,
+            self.terminal_bounds.origin.x + self.line_margin_width() + self.cell_width * col as f32,
             self.terminal_bounds.origin.y + self.line_height * screen_line as f32,
         );
 

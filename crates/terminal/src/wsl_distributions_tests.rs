@@ -358,3 +358,17 @@ fn reported_linux_directory_is_mapped_back_into_the_wsl_share() {
     );
     assert_eq!(None, resolve_reported_working_dir(root, "etc"));
 }
+
+/// 结构契约：WSL 识别必须走后台子进程约定隐藏控制台窗口。
+///
+/// `wsl.exe` 是控制台程序，无控制台的 GUI 进程直接 spawn 会让 Windows 新建一个
+/// 控制台窗口（应用启动时表现为闪一下黑框）。
+#[test]
+fn wsl_detection_hides_the_background_console() {
+    let source = include_str!("wsl_distributions.rs");
+
+    assert!(
+        source.contains("process_util::configure_background_child(&mut command)"),
+        "WSL 识别未隐藏控制台：Windows 启动时会闪出控制台窗口"
+    );
+}

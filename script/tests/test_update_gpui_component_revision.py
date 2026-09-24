@@ -20,7 +20,7 @@ class UpdateGpuiComponentRevisionTests(unittest.TestCase):
             "gpui-component-shell": "1.2.7",
         }
         source = "".join(
-            f'{name} = {{ package = "pkg", git = "https://github.com/feigeCode/gpui-component.git", rev = "old", version = "0.1.0" }}\n'
+            f'{name} = {{ package = "pkg", git = "https://github.com/feigeCode/gpui-kit", rev = "old", version = "0.1.0" }}\n'
             for name in versions
         )
 

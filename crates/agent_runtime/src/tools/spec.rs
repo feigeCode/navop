@@ -191,6 +191,14 @@ impl ToolSpec {
     }
 }
 
+/// provider 不允许出现在工具参数 schema 顶层的关键字。
+///
+/// OpenAI 等 provider 要求顶层是纯 `object` schema，遇到这些关键字会直接拒绝整个
+/// 模型请求（例如 `Invalid request: OpenAI: Invalid schema for function
+/// \`connections_save\` ...`），且报错只提函数名，难以定位到具体工具。这里在本地
+/// 就拦截，并把工具名与指针写进错误。嵌套层（如 `properties.*` 内部）不受限制。
+const REJECTED_ROOT_KEYWORDS: [&str; 6] = ["oneOf", "anyOf", "allOf", "enum", "const", "not"];
+
 fn validate_function_calling_schema(
     tool_name: &ToolName,
     schema: &serde_json::Value,
@@ -216,41 +224,14 @@ fn validate_function_calling_schema(
             "root schema must declare type \"object\"",
         ));
     }
-    for keyword in ["oneOf", "anyOf", "allOf"] {
-        validate_root_combinator(tool_name, root, keyword)?;
-    }
-    Ok(())
-}
-
-fn validate_root_combinator(
-    tool_name: &ToolName,
-    root: &serde_json::Map<String, serde_json::Value>,
-    keyword: &str,
-) -> Result<(), ToolSchemaError> {
-    let Some(value) = root.get(keyword) else {
-        return Ok(());
-    };
-    let pointer = format!("/{keyword}");
-    let Some(branches) = value.as_array() else {
-        return Err(ToolSchemaError::new(
-            tool_name,
-            pointer,
-            "root combinator must contain an array of object schemas",
-        ));
-    };
-    if branches.is_empty() {
-        return Err(ToolSchemaError::new(
-            tool_name,
-            pointer,
-            "root combinator must contain at least one object schema",
-        ));
-    }
-    for (index, branch) in branches.iter().enumerate() {
-        if branch.get("type").and_then(serde_json::Value::as_str) != Some("object") {
+    for keyword in REJECTED_ROOT_KEYWORDS {
+        if root.contains_key(keyword) {
             return Err(ToolSchemaError::new(
                 tool_name,
-                format!("/{keyword}/{index}"),
-                "root combinator branch must declare type \"object\"",
+                format!("/{keyword}"),
+                format!(
+                    "`{keyword}` is not allowed in the root schema; express the constraint with properties, required, enum-like descriptions, and runtime validation instead"
+                ),
             ));
         }
     }
@@ -381,46 +362,38 @@ mod tests {
     }
 
     #[test]
-    fn function_calling_requires_object_branches_in_root_combinators() {
-        for keyword in ["oneOf", "anyOf", "allOf"] {
+    fn function_calling_rejects_provider_unsupported_root_keywords() {
+        for keyword in ["oneOf", "anyOf", "allOf", "enum", "const", "not"] {
             let error = schema_error(json!({
                 "type": "object",
-                keyword: [
-                    { "required": ["value"] },
-                    { "type": "object" }
-                ]
+                "properties": { "value": { "type": "string" } },
+                keyword: if keyword == "not" {
+                    json!({ "required": ["value"] })
+                } else {
+                    json!([{ "type": "object" }])
+                }
             }));
 
-            assert_eq!(format!("/{keyword}/0"), error.pointer());
+            assert_eq!(format!("/{keyword}"), error.pointer());
             assert!(error.to_string().contains("runtime_tool"));
-            assert!(error.to_string().contains("object"));
+            assert!(error.to_string().contains("root schema"));
         }
     }
 
     #[test]
-    fn function_calling_rejects_boolean_and_non_object_combinator_branches() {
-        for branch in [json!(false), json!({ "type": "string" })] {
-            let error = schema_error(json!({
-                "type": "object",
-                "oneOf": [branch, { "type": "object" }]
-            }));
-
-            assert_eq!("/oneOf/0", error.pointer());
-        }
-    }
-
-    #[test]
-    fn function_calling_accepts_object_combinator_branches() {
+    fn function_calling_accepts_nullable_types_and_nested_combinators() {
         let result = spec(json!({
             "type": "object",
             "properties": {
                 "kind": { "type": "string" },
-                "id": { "type": "integer" }
+                "target": {
+                    "anyOf": [
+                        { "type": "string" },
+                        { "type": ["integer", "null"] }
+                    ]
+                }
             },
-            "oneOf": [
-                { "type": "object", "required": ["kind"] },
-                { "type": "object", "required": ["id"] }
-            ]
+            "required": ["kind"]
         }))
         .to_llm_tool();
 

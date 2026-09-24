@@ -16,6 +16,10 @@
 //! * `pending_save_tasks` — in-flight remote writes
 //! * `active_parse_tasks` — in-flight language/parser loads
 //!
+//! On macOS, closing the editor retains one empty window for reuse (#262).
+//! `editor_window_hidden` should report zero tabs, but one live view is expected;
+//! this is not a full teardown and native renderer resources remain allocated.
+//!
 //! Privacy: these logs intentionally record only `tab_id`, `size_bytes` and the
 //! resolved language name. Remote paths can carry query-string credentials
 //! (e.g. `…?token=…`), and file contents must never be logged.
@@ -35,9 +39,7 @@ pub(crate) struct EditorLifecycleSnapshot {
 impl EditorLifecycleSnapshot {
     /// Whether any in-flight task outlives its own window.
     pub(crate) const fn has_pending_work(&self) -> bool {
-        self.pending_load_tasks != 0
-            || self.pending_save_tasks != 0
-            || self.active_parse_tasks != 0
+        self.pending_load_tasks != 0 || self.pending_save_tasks != 0 || self.active_parse_tasks != 0
     }
 
     /// Whether the editor is fully torn down.
@@ -51,6 +53,10 @@ static LIVE_EDITOR_TABS: AtomicI64 = AtomicI64::new(0);
 static PENDING_LOAD_TASKS: AtomicI64 = AtomicI64::new(0);
 static PENDING_SAVE_TASKS: AtomicI64 = AtomicI64::new(0);
 static ACTIVE_PARSE_TASKS: AtomicI64 = AtomicI64::new(0);
+
+/// All tests that instantiate editor views share the process-wide gauges.
+#[cfg(test)]
+pub(crate) static GAUGE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Kind of background editor task, used as the log `task` field.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -227,13 +233,10 @@ pub(crate) struct EditorTaskDetail<'a> {
 #[cfg(test)]
 mod tests {
     use super::{
-        EditorLifecycleSnapshot, EditorTaskDetail, EditorTaskGuard, EditorTaskKind,
-        record_editor_tab_created, record_editor_view_created, record_editor_view_released_with_tabs,
-        snapshot,
+        EditorLifecycleSnapshot, EditorTaskDetail, EditorTaskGuard, EditorTaskKind, GAUGE_LOCK,
+        record_editor_tab_created, record_editor_view_created,
+        record_editor_view_released_with_tabs, snapshot,
     };
-
-    /// Serializes the gauge assertions; the gauges are process-wide.
-    static GAUGE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn task_guard_returns_every_gauge_to_its_baseline() {
@@ -249,7 +252,8 @@ mod tests {
                     language: Some("rust"),
                 },
             );
-            let _save = EditorTaskGuard::begin(EditorTaskKind::Save, 7, EditorTaskDetail::default());
+            let _save =
+                EditorTaskGuard::begin(EditorTaskKind::Save, 7, EditorTaskDetail::default());
             let _parse = EditorTaskGuard::begin(
                 EditorTaskKind::Parse,
                 7,

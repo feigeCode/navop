@@ -129,7 +129,7 @@ impl TerminalView {
         bounds: Bounds<Pixels>,
         _cx: &Context<Self>,
     ) -> AlacPoint {
-        let relative_x = position.x - bounds.origin.x;
+        let relative_x = position.x - bounds.origin.x - self.line_margin_width();
         let relative_y = position.y - bounds.origin.y;
 
         let col = (relative_x / self.cell_width).floor().max(0.0) as usize;
@@ -146,7 +146,7 @@ impl TerminalView {
 
     /// 根据鼠标在单元格内的位置计算 Side
     pub(super) fn pixel_to_side(&self, position: Point<Pixels>, bounds: Bounds<Pixels>) -> Side {
-        let relative_x = position.x - bounds.origin.x;
+        let relative_x = position.x - bounds.origin.x - self.line_margin_width();
         let col_f = (relative_x / self.cell_width).max(0.0);
         let cell_offset = col_f.fract();
         if cell_offset < 0.5 {

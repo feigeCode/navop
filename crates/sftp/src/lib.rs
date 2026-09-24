@@ -8,6 +8,7 @@ mod server_copy;
 mod server_copy_auth;
 mod server_copy_command;
 mod server_copy_direct;
+mod upload_batch;
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;

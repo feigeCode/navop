@@ -31,6 +31,8 @@ pub struct DatabaseUiCapabilities {
     pub supports_schema: bool,
     pub uses_schema_as_database: bool,
     pub supports_views: bool,
+    /// 是否支持物化视图（PostgreSQL 等）。默认关闭，避免在树中凭空出现空目录。
+    pub supports_materialized_views: bool,
     pub supports_indexes: bool,
     pub supports_users: bool,
     pub supports_user_create: bool,
@@ -59,6 +61,7 @@ impl Default for DatabaseUiCapabilities {
             supports_schema: false,
             uses_schema_as_database: false,
             supports_views: true,
+            supports_materialized_views: false,
             supports_indexes: true,
             supports_users: false,
             supports_user_create: false,

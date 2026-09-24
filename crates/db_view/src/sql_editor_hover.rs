@@ -9,6 +9,7 @@
 use std::cell::RefCell;
 use std::ops::Range;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -67,6 +68,10 @@ pub enum SqlHoverObject {
 #[derive(Clone)]
 pub struct DefaultSqlHoverProvider {
     sources: Rc<RefCell<SqlHoverSources>>,
+    /// Latest hover request offset, used to drop stale debounced requests.
+    /// `Arc<AtomicUsize>` so the debounce future stays `Send` for
+    /// `background_spawn`.
+    latest_offset: Arc<AtomicUsize>,
 }
 
 #[derive(Clone)]
@@ -88,6 +93,7 @@ impl DefaultSqlHoverProvider {
             sources: Rc::new(RefCell::new(SqlHoverSources {
                 schema: Arc::new(schema),
             })),
+            latest_offset: Arc::new(AtomicUsize::new(usize::MAX)),
         }
     }
 
@@ -111,7 +117,22 @@ impl HoverProvider for DefaultSqlHoverProvider {
     ) -> Task<Result<Option<LspHover>>> {
         let text = text.to_string();
         let schema = self.snapshot().schema;
-        cx.background_spawn(async move { Ok(build_lsp_hover(&text, offset, &schema)) })
+        let latest_offset = self.latest_offset.clone();
+        latest_offset.store(offset, Ordering::SeqCst);
+        // Dwell debounce: the caller (gpui-kit) already waits ~150ms before
+        // the first popover, but that still pops while the pointer sweeps
+        // across identifiers. Holding here means the pointer must rest on the
+        // same offset for the full window before a hover resolves; requests
+        // superseded by a newer offset resolve to None and the popover never
+        // appears for the stale one.
+        const HOVER_DWELL_MS: u64 = 600;
+        cx.background_spawn(async move {
+            smol::Timer::after(std::time::Duration::from_millis(HOVER_DWELL_MS)).await;
+            if latest_offset.load(Ordering::SeqCst) != offset {
+                return Ok(None);
+            }
+            Ok(build_lsp_hover(&text, offset, &schema))
+        })
     }
 }
 
@@ -129,6 +150,50 @@ pub fn build_lsp_hover(text: &str, offset: usize, schema: &SqlSchema) -> Option<
         }),
         range: Some(LspRange::new(start, end)),
     })
+}
+
+/// Selection-aware hover resolution for the context menu.
+///
+/// With a selection, right-clicking keeps the selection (gpui-kit only moves
+/// the cursor when the click falls outside it), but the cursor can sit at a
+/// selection edge where `locate_identifier` fails or anchors the wrong token.
+/// Try the selection body first (start, mid, end), then the bare cursor.
+pub fn build_lsp_hover_for_selection(
+    text: &str,
+    selection: Option<Range<usize>>,
+    cursor: usize,
+    schema: &SqlSchema,
+) -> Option<LspHover> {
+    if let Some(sel) = selection
+        && !sel.is_empty()
+    {
+        let mid = sel.start + (sel.end - sel.start) / 2;
+        for offset in [sel.start, mid, sel.end - 1, sel.end] {
+            if let Some(hover) = build_lsp_hover(text, offset, schema) {
+                return Some(hover);
+            }
+        }
+    }
+    build_lsp_hover(text, cursor, schema)
+}
+
+/// Best-effort `CREATE TABLE/VIEW` DDL for the identifier at `cursor` (or in
+/// `selection`), suitable for the "Copy DDL" context-menu item.
+pub fn build_ddl_for_selection(
+    text: &str,
+    selection: Option<Range<usize>>,
+    cursor: usize,
+    schema: &SqlSchema,
+) -> Option<String> {
+    let hover = build_lsp_hover_for_selection(text, selection, cursor, schema)?;
+    let markdown = match &hover.contents {
+        HoverContents::Markup(markup) => markup.value.clone(),
+        _ => return None,
+    };
+    // The table hover embeds the DDL in a trailing ```sql fenced block.
+    let start = markdown.find("```sql\n")? + "```sql\n".len();
+    let end = markdown[start..].find("```")? + start;
+    Some(markdown[start..end].trim_end().to_string())
 }
 
 /// Locate the maximal dotted identifier containing `offset`.

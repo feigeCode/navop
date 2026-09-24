@@ -1,6 +1,6 @@
 //! 已安装 / 市场列表与分区网格渲染。
 
-use gpui::{Context, IntoElement, ParentElement, Styled, Window, div, px};
+use gpui::{AnyElement, Context, IntoElement, ParentElement, Styled, Window, div, px};
 use gpui_component::{
     ActiveTheme, Icon, Sizable, button::{Button, ButtonRounded, ButtonVariants},
     h_flex, v_flex,
@@ -11,7 +11,7 @@ use rust_i18n::t;
 
 use crate::{
     ExtensionManagerView, MarketplaceEntry,
-    card_view::{CardPayload, ExtensionCardView, installed_card_data, marketplace_card_data},
+    card_view::{installed_card, installed_card_data, marketplace_card, marketplace_card_data},
     cards::{extension_kind_id, kind_label, section_header},
     filter_installed, filter_marketplace, filter_updatable_marketplace, grid::card_grid_metrics,
     state::{MarketplaceLoadState, marketplace_sections},
@@ -32,16 +32,9 @@ impl ExtensionManagerView {
             return empty_extension_state(t!("Extension.no_installed_matches").to_string());
         }
         let action_busy = self.busy.is_some();
-        let manager = cx.weak_entity();
-        let cards: Vec<_> = list
+        let cards: Vec<AnyElement> = list
             .into_iter()
-            .map(|summary| {
-                ExtensionCardView::new(
-                    CardPayload::Installed(installed_card_data(summary, action_busy)),
-                    manager.clone(),
-                    cx,
-                )
-            })
+            .map(|summary| installed_card(installed_card_data(summary, action_busy), cx))
             .collect();
         render_card_grid(cards, body_content_width(window), window)
     }
@@ -62,7 +55,6 @@ impl ExtensionManagerView {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         let fg = theme.foreground;
-        let manager = cx.weak_entity();
         let section_views: Vec<_> = sections
             .into_iter()
             .map(|section| {
@@ -74,7 +66,6 @@ impl ExtensionManagerView {
                     content_width,
                     fg,
                     muted,
-                    manager.clone(),
                     window,
                     cx,
                 )
@@ -140,7 +131,6 @@ fn render_marketplace_section(
     content_width: gpui::Pixels,
     fg: gpui::Hsla,
     muted: gpui::Hsla,
-    manager: gpui::WeakEntity<ExtensionManagerView>,
     window: &Window,
     cx: &mut Context<ExtensionManagerView>,
 ) -> gpui::AnyElement {
@@ -150,18 +140,12 @@ fn render_marketplace_section(
         .unwrap_or_else(|| t!("Extension.marketplace").to_string());
     let count = section.entries.len();
     let view_all_kind = section.kind;
-    let cards: Vec<_> = section
+    let cards: Vec<AnyElement> = section
         .entries
         .into_iter()
         .map(|entry| {
-            ExtensionCardView::new(
-                CardPayload::Marketplace(marketplace_card_data(
-                    entry,
-                    installed,
-                    load_state,
-                    action_busy,
-                )),
-                manager.clone(),
+            marketplace_card(
+                marketplace_card_data(entry, installed, load_state, action_busy),
                 cx,
             )
         })
@@ -239,7 +223,7 @@ fn empty_extension_state(message: String) -> gpui::AnyElement {
 }
 
 fn render_card_grid(
-    cards: Vec<gpui::Entity<ExtensionCardView>>,
+    cards: Vec<AnyElement>,
     content_width: gpui::Pixels,
     window: &Window,
 ) -> gpui::AnyElement {

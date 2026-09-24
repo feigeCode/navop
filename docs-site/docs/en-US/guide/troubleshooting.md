@@ -20,6 +20,8 @@ Confirm an extension is installed, enabled, platform-compatible, and version-com
 
 RDP/VNC problems may involve provider, Domain, certificate, session policy, or network. Serial output requires matching device, baud, data bits, stop bits, parity, and flow control.
 
+A Linux launch failing with "Failed to create surface" means the host lacks the Mesa/EGL rendering libraries: grab the GPU dependency archive for your architecture from the Download Center, extract it, and run the bundled `install.sh` (`--dry-run` previews, `--uninstall` removes). Reinstalling the application itself is not required — see the Linux graphics dependency section of [Install and update](./install-update).
+
 ## Diagnose AI and Public MCP
 
 For models, check Provider state, API key, base URL, model, network, and quota. Missing tools can come from mode, resources, or permissions. ACP authorization does not remove Public MCP approval.

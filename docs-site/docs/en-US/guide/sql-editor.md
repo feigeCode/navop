@@ -28,6 +28,10 @@ Automatic mode follows the driver's commit behavior. Manual mode groups multiple
 
 Before changing database or schema, or closing the editor, Navop asks you to finish a manual transaction. Commit makes the changes durable; rollback discards uncommitted work. After a disconnect, query the server to verify state rather than assuming the transaction outcome.
 
+## Object details and DDL
+
+Hover popups are off by default (enable them in settings; when on they require a 600ms dwell). The right-click "View object details" opens a standalone dialog with selectable, copyable content, and right-click "Copy DDL" copies the CREATE TABLE/VIEW statement of the table under the cursor or selection; selecting a table name and right-clicking resolves it too. Details come from current connection metadata and may lag the server-side definition.
+
 ## Recover from errors safely
 
 Reduce syntax, permission, constraint, or timeout errors to one statement and read the server response. Execution errors map to precise source locations, which helps locate the failing statement in a multi-statement script. Do not repeatedly execute while transaction state is unknown. For UPDATE or DELETE, first run the same WHERE clause as SELECT and verify the target rows.

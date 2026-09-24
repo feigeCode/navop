@@ -158,6 +158,7 @@ fn estimate_history_prompt_dropdown_height(
 
 pub(super) fn history_prompt_dropdown_origin(
     terminal_bounds: Bounds<Pixels>,
+    line_margin_width: Pixels,
     cell_width: Pixels,
     line_height: Pixels,
     cursor_line: i32,
@@ -165,7 +166,7 @@ pub(super) fn history_prompt_dropdown_origin(
     match_count: usize,
     search_mode: bool,
 ) -> Point<Pixels> {
-    let cursor_left = terminal_bounds.origin.x + cell_width * cursor_col as f32;
+    let cursor_left = terminal_bounds.origin.x + line_margin_width + cell_width * cursor_col as f32;
     let cursor_top = terminal_bounds.origin.y + line_height * cursor_line as f32;
     let dropdown_width = (terminal_bounds.size.width
         - px(HISTORY_PROMPT_DROPDOWN_EDGE_PADDING * 2.0))

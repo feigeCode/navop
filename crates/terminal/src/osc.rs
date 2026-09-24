@@ -8,6 +8,43 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 
 const MAX_PENDING_OSC_BYTES: usize = 16 * 1024;
 
+/// 一次 OSC 7 上报的工作目录。
+///
+/// `host` 是上报该目录的机器名（`OSC 7;file://<host>/<path>` 里的主机段），
+/// 必须在解析阶段保留：多跳会话（堡垒机里再 `ssh`）中内层 shell 与外层
+/// 会话不是同一台机器，丢了 host 就无法判断这条路径能不能套到当前
+/// 远程文件会话上。`file:///path` 这种省略主机的写法归一化为 `None`。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReportedWorkingDir {
+    /// 上报目录的机器名；`None` 表示上报方没有给出主机信息。
+    pub host: Option<String>,
+    /// 归一化后的绝对路径。
+    pub path: String,
+}
+
+impl ReportedWorkingDir {
+    /// 构造上报值，并把空白/空串主机段折叠为 `None`。
+    #[must_use]
+    pub fn new(host: Option<&str>, path: String) -> Self {
+        let host = host
+            .map(str::trim)
+            .filter(|host| !host.is_empty())
+            .map(ToString::to_string);
+        Self { host, path }
+    }
+
+    /// 是否与另一台机器同名（大小写不敏感）。
+    ///
+    /// 只在同一条会话的历次上报之间比较，因此无需处理 `IP ↔ 远端
+    /// hostname` 的映射差异：同一个 shell 对自身的称呼是稳定的。
+    #[must_use]
+    pub fn is_same_host(&self, other: &str) -> bool {
+        self.host
+            .as_deref()
+            .is_some_and(|host| host.trim().eq_ignore_ascii_case(other.trim()))
+    }
+}
+
 /// OSC 事件类型（基于 OSC 133 协议）
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OscEvent {
@@ -20,7 +57,7 @@ pub enum OscEvent {
     /// 命令执行完毕（OSC 133;D;<exit_code>）
     CommandFinished { exit_code: i32 },
     /// 工作目录变更（OSC 7;file://host/path）
-    WorkingDirChanged(String),
+    WorkingDirChanged(ReportedWorkingDir),
     /// 记录 shell 实际执行过的命令（OSC 1337;Command=<base64>）
     CommandRecorded(String),
 }
@@ -122,14 +159,16 @@ pub fn parse_osc_payload(payload: &str) -> Option<OscEvent> {
 
     // OSC 7：工作目录变更
     if let Some(rest) = payload.strip_prefix("7;file://") {
-        // "hostname/path/to/dir" 或 "/path/to/dir"
-        let path = rest
-            .split_once('/')
-            .map(|(_, p)| format!("/{p}"))
-            .unwrap_or_default();
-        let path = percent_decode_path(&path);
+        // "hostname/path/to/dir" 或 "/path/to/dir"（省略主机时首段为空）
+        let (host, raw_path) = match rest.split_once('/') {
+            Some((host, tail)) => (Some(host), format!("/{tail}")),
+            None => (None, String::new()),
+        };
+        let path = percent_decode_path(&raw_path);
         let path = normalize_osc_file_path(path, cfg!(target_os = "windows"));
-        return Some(OscEvent::WorkingDirChanged(path));
+        return Some(OscEvent::WorkingDirChanged(ReportedWorkingDir::new(
+            host, path,
+        )));
     }
 
     // OSC 1337：命令记录
@@ -221,23 +260,60 @@ mod tests {
     fn parse_osc_7_working_dir() {
         assert_eq!(
             parse_osc_payload("7;file://hostname/home/user/project"),
-            Some(OscEvent::WorkingDirChanged(
-                "/home/user/project".to_string()
-            ))
+            Some(OscEvent::WorkingDirChanged(ReportedWorkingDir {
+                host: Some("hostname".to_string()),
+                path: "/home/user/project".to_string(),
+            }))
         );
+    }
+
+    #[test]
+    fn parse_osc_7_keeps_reporting_host_for_multi_hop_sessions() {
+        // 堡垒机里再 ssh 进主机 B 时，主机段是判断"这条路径属于哪台机器"的
+        // 唯一依据；解析阶段必须原样保留。
+        let inner = parse_osc_payload("7;file://ip-10-0-0-5/root");
+        assert_eq!(
+            inner,
+            Some(OscEvent::WorkingDirChanged(ReportedWorkingDir {
+                host: Some("ip-10-0-0-5".to_string()),
+                path: "/root".to_string(),
+            }))
+        );
+        let Some(OscEvent::WorkingDirChanged(reported)) = inner else {
+            unreachable!("osc 7 payload must parse");
+        };
+        assert!(reported.is_same_host("IP-10-0-0-5"));
+        assert!(!reported.is_same_host("bastion.example.com"));
+    }
+
+    #[test]
+    fn parse_osc_7_without_host_normalizes_to_none() {
+        assert_eq!(
+            parse_osc_payload("7;file:///home/user"),
+            Some(OscEvent::WorkingDirChanged(ReportedWorkingDir {
+                host: None,
+                path: "/home/user".to_string(),
+            }))
+        );
+        // 空主机段与缺失主机等价，不能退化成"主机名是空串"。
+        assert_eq!(ReportedWorkingDir::new(Some("  "), "/".to_string()).host, None);
     }
 
     #[test]
     fn parse_osc_7_decodes_percent_encoded_path() {
         assert_eq!(
             parse_osc_payload("7;file://hostname/home/user/My%20Projects"),
-            Some(OscEvent::WorkingDirChanged(
-                "/home/user/My Projects".to_string()
-            ))
+            Some(OscEvent::WorkingDirChanged(ReportedWorkingDir {
+                host: Some("hostname".to_string()),
+                path: "/home/user/My Projects".to_string(),
+            }))
         );
         assert_eq!(
             parse_osc_payload("7;file://host/%E4%B8%AD%E6%96%87"),
-            Some(OscEvent::WorkingDirChanged("/中文".to_string()))
+            Some(OscEvent::WorkingDirChanged(ReportedWorkingDir {
+                host: Some("host".to_string()),
+                path: "/中文".to_string(),
+            }))
         );
     }
 
@@ -245,11 +321,17 @@ mod tests {
     fn parse_osc_7_keeps_invalid_percent_sequences() {
         assert_eq!(
             parse_osc_payload("7;file://host/dir%GGsub"),
-            Some(OscEvent::WorkingDirChanged("/dir%GGsub".to_string()))
+            Some(OscEvent::WorkingDirChanged(ReportedWorkingDir {
+                host: Some("host".to_string()),
+                path: "/dir%GGsub".to_string(),
+            }))
         );
         assert_eq!(
             parse_osc_payload("7;file://host/dir%"),
-            Some(OscEvent::WorkingDirChanged("/dir%".to_string()))
+            Some(OscEvent::WorkingDirChanged(ReportedWorkingDir {
+                host: Some("host".to_string()),
+                path: "/dir%".to_string(),
+            }))
         );
     }
 

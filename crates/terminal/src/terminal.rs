@@ -51,6 +51,7 @@ use crate::history::{
     collect_history_search_results, collect_history_suggestions_with_cwd, collect_recent_history,
     normalize_recorded_command, parse_shell_history, push_rich_history_entry,
 };
+use crate::line_timeline::{LineTimelineSample, SharedLineTimeline};
 use crate::pty_backend::{GpuiEventProxy, LocalPtyBackend};
 use crate::recording::{
     RecordingArtifactKind, RecordingBackend, RecordingCompleteness, RecordingMetadata,
@@ -68,7 +69,7 @@ use crate::session_logging::{
 };
 #[cfg(not(target_os = "windows"))]
 use crate::shell_integration::embedded_shell_integration_script;
-use crate::ssh_backend::SshBackendConnect;
+use crate::ssh_backend::{SshBackendConnect, is_keyboard_interactive_transport_closed_failure};
 #[cfg(target_os = "windows")]
 use crate::windows_environment::{
     environment_value, merge_environment_overrides, refreshed_windows_environment,
@@ -132,8 +133,8 @@ pub enum TerminalModelEvent {
     CommandHistoryChanged,
     /// 终端程序请求存储到剪贴板
     ClipboardStore(String),
-    /// 远程工作目录变更（OSC 7）
-    WorkingDirChanged(String),
+    /// 远程工作目录变更（OSC 7），带上报主机名
+    WorkingDirChanged(crate::osc::ReportedWorkingDir),
     /// 会话锁定/解锁状态变化
     LockStateChanged,
 }
@@ -503,6 +504,13 @@ impl KeyboardInteractiveResponder for TerminalMfaResponder {
             .collect::<Vec<_>>();
 
         if terminal_prompts.is_empty() {
+            // 提示全部是密码提示时直接用保存的凭据应答，界面上不会出现任何输入界面。
+            // 日志必须留下痕迹，否则连接失败时无法区分「用户手动答过」与「客户端静默应答」。
+            tracing::debug!(
+                target = ?request.target,
+                prompt_count = request.prompts.len(),
+                "SSH keyboard-interactive prompts are all password prompts, answering with the saved credential"
+            );
             return keyboard_interactive_answers_for_terminal(
                 &request,
                 &[],
@@ -671,6 +679,17 @@ fn resolve_ssh_connection(
         connection_id: update.connection.id,
         connection_name: update.connection.name,
     })
+}
+
+/// 判断某个连接失败是否应触发「keyboard-interactive → 纯密码认证」的降级兜底。
+///
+/// `keyboard_interactive_enabled` 传生效开关（见 `ssh_keyboard_interactive_effective`）：
+/// 开关关闭或本会话已降级过时都不会再触发，因此一次连接序列最多降级一次。
+fn should_retry_ssh_without_keyboard_interactive(
+    keyboard_interactive_enabled: bool,
+    error: &anyhow::Error,
+) -> bool {
+    keyboard_interactive_enabled && is_keyboard_interactive_transport_closed_failure(error)
 }
 
 fn ssh_config_with_runtime_credentials(
@@ -1180,7 +1199,8 @@ pub struct Terminal {
     /// 终端标题
     title: String,
     /// 当前工作目录（由 OSC 7 更新，仅 SSH 终端）
-    current_working_dir: Option<String>,
+    /// 最近一次 OSC 7 上报的远程工作目录（含上报主机名）
+    reported_working_dir: Option<crate::osc::ReportedWorkingDir>,
     /// 子进程退出码
     child_exited: Option<i32>,
     /// 连接状态
@@ -1207,6 +1227,8 @@ pub struct Terminal {
     ssh_credential_request: Option<TerminalSshCredentialRequest>,
     /// 是否允许 keyboard-interactive（OTP/2FA）认证。
     ssh_keyboard_interactive_enabled: bool,
+    /// 本会话是否已因 keyboard-interactive 往返被设备捆断而降级为纯密码认证。
+    ssh_keyboard_interactive_fallback: bool,
     /// SSH keyboard-interactive/MFA 输入响应器
     ssh_mfa_responder: Option<TerminalMfaResponder>,
     /// SSH ZMODEM 文件选择请求协调器
@@ -1250,6 +1272,8 @@ pub struct Terminal {
     connection_kind: TerminalConnectionKind,
     /// 终端滚屏历史最多保留的行数
     scrollback_lines: usize,
+    /// 逐行到达时间；只用于左边距的时间戳展示，不进网格。
+    line_timeline: SharedLineTimeline,
 }
 
 #[derive(Clone)]
@@ -1650,6 +1674,7 @@ impl Terminal {
         Self::spawn_event_loop(event_rx, wakeup_pending.clone(), cx);
 
         Self {
+            line_timeline: Default::default(),
             term,
             session_mode: TerminalSessionMode::Live,
             performance_metrics,
@@ -1660,7 +1685,7 @@ impl Terminal {
             recording_session_id,
             recording_session_metadata: local_recording_session_metadata(),
             title: String::new(),
-            current_working_dir: None,
+            reported_working_dir: None,
             child_exited: None,
             connection_state: ConnectionState::Disconnected { error: Some(error) },
             session_lock: None,
@@ -1674,6 +1699,7 @@ impl Terminal {
             ssh_credential_prompt_policy: SshCredentialPromptPolicy::default(),
             ssh_credential_request: None,
             ssh_keyboard_interactive_enabled: false,
+            ssh_keyboard_interactive_fallback: false,
             ssh_mfa_responder: None,
             zmodem_responder: None,
             pending_host_key_verification: None,
@@ -1803,6 +1829,7 @@ impl Terminal {
         let history_repository = Self::history_repository(cx);
 
         Ok(Self {
+            line_timeline: Default::default(),
             term,
             session_mode: TerminalSessionMode::Live,
             performance_metrics,
@@ -1813,7 +1840,7 @@ impl Terminal {
             recording_session_id,
             recording_session_metadata,
             title: String::new(),
-            current_working_dir: None,
+            reported_working_dir: None,
             child_exited: None,
             connection_state: ConnectionState::Connected,
             session_lock: None,
@@ -1827,6 +1854,7 @@ impl Terminal {
             ssh_credential_prompt_policy: SshCredentialPromptPolicy::default(),
             ssh_credential_request: None,
             ssh_keyboard_interactive_enabled: false,
+            ssh_keyboard_interactive_fallback: false,
             ssh_mfa_responder: None,
             zmodem_responder: None,
             pending_host_key_verification: None,
@@ -1948,6 +1976,7 @@ impl Terminal {
             });
 
         let mut terminal = Self {
+            line_timeline: Default::default(),
             term,
             session_mode: TerminalSessionMode::Live,
             performance_metrics,
@@ -1958,7 +1987,7 @@ impl Terminal {
             recording_session_id,
             recording_session_metadata,
             title: String::new(),
-            current_working_dir: None,
+            reported_working_dir: None,
             child_exited: None,
             connection_state: ConnectionState::Connecting,
             session_lock: None,
@@ -1972,6 +2001,7 @@ impl Terminal {
             ssh_credential_prompt_policy: resolved.credential_prompt_policy,
             ssh_credential_request: None,
             ssh_keyboard_interactive_enabled: resolved.keyboard_interactive_enabled,
+            ssh_keyboard_interactive_fallback: false,
             ssh_mfa_responder: None,
             zmodem_responder: Some(zmodem_responder),
             pending_host_key_verification: None,
@@ -2082,6 +2112,7 @@ impl Terminal {
         );
 
         Self {
+            line_timeline: Default::default(),
             term,
             session_mode: TerminalSessionMode::Live,
             performance_metrics,
@@ -2092,7 +2123,7 @@ impl Terminal {
             recording_session_id,
             recording_session_metadata,
             title: String::new(),
-            current_working_dir: None,
+            reported_working_dir: None,
             child_exited: None,
             connection_state: ConnectionState::Connecting,
             session_lock: None,
@@ -2106,6 +2137,7 @@ impl Terminal {
             ssh_credential_prompt_policy: SshCredentialPromptPolicy::default(),
             ssh_credential_request: None,
             ssh_keyboard_interactive_enabled: false,
+            ssh_keyboard_interactive_fallback: false,
             ssh_mfa_responder: None,
             zmodem_responder: None,
             pending_host_key_verification: None,
@@ -2202,6 +2234,7 @@ impl Terminal {
         }
 
         Self {
+            line_timeline: Default::default(),
             term,
             session_mode: TerminalSessionMode::Live,
             performance_metrics,
@@ -2212,7 +2245,7 @@ impl Terminal {
             recording_session_id,
             recording_session_metadata,
             title: String::new(),
-            current_working_dir: None,
+            reported_working_dir: None,
             child_exited: None,
             connection_state: ConnectionState::Connecting,
             session_lock: None,
@@ -2226,6 +2259,7 @@ impl Terminal {
             ssh_credential_prompt_policy: SshCredentialPromptPolicy::default(),
             ssh_credential_request: None,
             ssh_keyboard_interactive_enabled: false,
+            ssh_keyboard_interactive_fallback: false,
             ssh_mfa_responder: None,
             zmodem_responder: None,
             pending_host_key_verification: None,
@@ -2344,6 +2378,7 @@ impl Terminal {
 
         (
             Self {
+                line_timeline: Default::default(),
                 term,
                 session_mode,
                 performance_metrics,
@@ -2354,7 +2389,7 @@ impl Terminal {
                 recording_session_id: Self::new_recording_session_id(),
                 recording_session_metadata: RecordingSessionMetadata::default(),
                 title: String::new(),
-                current_working_dir: None,
+                reported_working_dir: None,
                 child_exited: None,
                 // Connected suppresses the live reconnect overlay. Capability
                 // checks still fail closed through `session_mode`.
@@ -2370,6 +2405,7 @@ impl Terminal {
                 ssh_credential_prompt_policy: SshCredentialPromptPolicy::default(),
                 ssh_credential_request: None,
                 ssh_keyboard_interactive_enabled: false,
+                ssh_keyboard_interactive_fallback: false,
                 ssh_mfa_responder: None,
                 zmodem_responder: None,
                 pending_host_key_verification: None,
@@ -2819,6 +2855,77 @@ impl Terminal {
         true
     }
 
+    /// keyboard-interactive 的生效开关。
+    ///
+    /// 降级标记只在本会话内生效：设备在 keyboard-interactive 往返中掐断传输层后，后续连接
+    /// （含用户手动重连）不再发起 keyboard-interactive，直到连接参数被重新应用。
+    fn ssh_keyboard_interactive_effective(&self) -> bool {
+        self.ssh_keyboard_interactive_enabled && !self.ssh_keyboard_interactive_fallback
+    }
+
+    /// 设备在 keyboard-interactive 往返中掐断传输层时，把本次会话降级为纯密码认证并重试一次。
+    ///
+    /// 部分交换机/防火墙用 keyboard-interactive 下发普通密码提示，却在校验失败或认证超时时
+    /// 直接断开传输层（russh 侧表现为 `Unable to receive more messages from the channel`）。
+    /// 保留该开关会让这类设备永远登不上；降级后的连接不再发起 keyboard-interactive，因此同一次
+    /// 连接序列不会被重复触发。返回 `true` 表示已接管本次失败并重新发起连接。
+    fn retry_ssh_without_keyboard_interactive(
+        &mut self,
+        error: &anyhow::Error,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !should_retry_ssh_without_keyboard_interactive(
+            self.ssh_keyboard_interactive_effective(),
+            error,
+        ) {
+            return false;
+        }
+
+        let Some(base_config) = self.ssh_config.clone() else {
+            return false;
+        };
+        let Some(event_tx) = self.event_tx.clone() else {
+            return false;
+        };
+        let Ok((retry_config, responder)) = ssh_config_with_runtime_credentials(
+            &base_config,
+            &TerminalSshCredentials::default(),
+            event_tx,
+            false,
+        ) else {
+            return false;
+        };
+
+        tracing::warn!(
+            target: "terminal.ssh.connect",
+            error = %format!("{error:#}"),
+            "keyboard-interactive 认证往返被设备中断，本会话降级为纯密码认证后重试"
+        );
+
+        self.ssh_keyboard_interactive_fallback = true;
+        if let Some(mfa_responder) = &self.ssh_mfa_responder {
+            mfa_responder.cancel();
+        }
+        self.ssh_mfa_responder = None;
+        self.pending_host_key_verification = None;
+        if let Some(backend) = self.backend.take() {
+            backend.shutdown();
+        }
+        if let Some(session_manager) = self.ssh_session_manager.take() {
+            cx.spawn(async move |_, _| {
+                let _ = session_manager.disconnect().await;
+            })
+            .detach();
+        }
+        self.prepare_surface_for_reconnect();
+        self.connection_state = ConnectionState::Connecting;
+        self.set_connection_active(false, cx);
+
+        let generation = self.next_connection_generation();
+        self.record_connection_generation_marker(generation);
+        self.start_ssh_connection_attempt(retry_config, responder, generation, cx)
+    }
+
     fn handle_ssh_result(
         &mut self,
         result: Result<Result<SshBackend, anyhow::Error>, tokio::task::JoinError>,
@@ -2873,7 +2980,7 @@ impl Terminal {
                     self.pending_host_key_verification = Some(request);
                     self.connection_state = ConnectionState::Disconnected { error: None };
                     cx.emit(TerminalModelEvent::HostKeyVerificationRequired);
-                } else {
+                } else if !self.retry_ssh_without_keyboard_interactive(&e, cx) {
                     self.pending_host_key_verification = None;
                     let detail = format_connection_error(&e);
                     tracing::error!(
@@ -3107,7 +3214,7 @@ impl Terminal {
         let Some(command) = normalize_recorded_command(command, history_user.as_deref()) else {
             return;
         };
-        let cwd = self.current_working_dir.clone();
+        let cwd = self.current_working_dir().map(str::to_string);
         let entry = HistoryEntry::new(command.clone())
             .with_cwd(cwd.clone())
             .with_exit_code(Some(exit_code));
@@ -3165,9 +3272,31 @@ impl Terminal {
         }
     }
 
+    /// 采样一次行时间轴。解析器繁忙时跳过，下一个 Wakeup 会补上。
+    fn sample_line_timeline(&self) {
+        let Some(term) = self.term.try_lock_unfair() else {
+            return;
+        };
+        let sample = LineTimelineSample {
+            history_size: term.history_size(),
+            screen_lines: term.screen_lines(),
+            cursor_line: term.grid().cursor.point.line.0,
+            alternate_screen: term.mode().contains(TermMode::ALT_SCREEN),
+            scrollback_lines: self.scrollback_lines,
+        };
+        drop(term);
+        self.line_timeline.observe(sample);
+    }
+
+    /// 行时间轴句柄，视图侧用于查每行时间戳。
+    pub fn line_timeline(&self) -> SharedLineTimeline {
+        self.line_timeline.clone()
+    }
+
     fn handle_terminal_event(&mut self, event: TerminalEvent, cx: &mut Context<Self>) {
         match event {
             TerminalEvent::Wakeup => {
+                self.sample_line_timeline();
                 cx.emit(TerminalModelEvent::Wakeup);
             }
             TerminalEvent::SshMfaChanged => {
@@ -3228,9 +3357,9 @@ impl Terminal {
             TerminalEvent::ClipboardLoad(_ty) => {
                 // 剪贴板加载由 TerminalView 处理
             }
-            TerminalEvent::WorkingDirChanged(path) => {
-                self.current_working_dir = Some(path.clone());
-                cx.emit(TerminalModelEvent::WorkingDirChanged(path));
+            TerminalEvent::WorkingDirChanged(reported) => {
+                self.reported_working_dir = Some(reported.clone());
+                cx.emit(TerminalModelEvent::WorkingDirChanged(reported));
             }
             TerminalEvent::CommandFinished { exit_code } => {
                 tracing::debug!("命令执行完毕，退出码: {}", exit_code);
@@ -3278,7 +3407,17 @@ impl Terminal {
 
     /// 获取当前工作目录（由 OSC 7 更新，仅 SSH 终端）
     pub fn current_working_dir(&self) -> Option<&str> {
-        self.current_working_dir.as_deref()
+        self.reported_working_dir
+            .as_ref()
+            .map(|reported| reported.path.as_str())
+    }
+
+    /// 获取最近一次 OSC 7 上报的完整信息（路径 + 上报主机名）。
+    ///
+    /// 多跳会话里主机名是判断"这条路径属于哪台机器"的唯一依据，
+    /// 需要主机信息的下游（如侧边栏文件面板）应使用本方法。
+    pub fn reported_working_dir(&self) -> Option<&crate::osc::ReportedWorkingDir> {
+        self.reported_working_dir.as_ref()
     }
 
     pub fn rows(&self) -> usize {
@@ -3308,7 +3447,7 @@ impl Terminal {
             &self.persisted_history,
             prefix,
             limit,
-            self.current_working_dir.as_deref(),
+            self.current_working_dir(),
         );
         merge_history_matches(db_matches, fallback, limit)
     }
@@ -3380,6 +3519,8 @@ impl Terminal {
         self.ssh_credential_request = None;
         self.ssh_credential_prompt_policy = resolved.credential_prompt_policy;
         self.ssh_keyboard_interactive_enabled = resolved.keyboard_interactive_enabled;
+        // 连接参数被重新应用：清除上一轮的降级状态，重新按设置尝试认证。
+        self.ssh_keyboard_interactive_fallback = false;
         self.ssh_base_config = Some(resolved.config.clone());
 
         if resolved.credential_prompt_policy.requires_credentials() {
@@ -3461,7 +3602,7 @@ impl Terminal {
             &base_config,
             &TerminalSshCredentials { username, password },
             event_tx,
-            self.ssh_keyboard_interactive_enabled,
+            self.ssh_keyboard_interactive_effective(),
         ) else {
             return false;
         };
@@ -4129,7 +4270,7 @@ impl Terminal {
                     &base_config,
                     &TerminalSshCredentials::default(),
                     event_tx,
-                    self.ssh_keyboard_interactive_enabled,
+                    self.ssh_keyboard_interactive_effective(),
                 ) else {
                     return false;
                 };
@@ -4205,7 +4346,7 @@ impl Terminal {
         }
         drop(term);
         self.child_exited = None;
-        self.current_working_dir = None;
+        self.reported_working_dir = None;
     }
 
     pub fn host_key_verification_request(&self) -> Option<HostKeyVerificationRequest> {
@@ -4251,7 +4392,7 @@ impl Terminal {
             &retry_config,
             &TerminalSshCredentials::default(),
             event_tx,
-            self.ssh_keyboard_interactive_enabled,
+            self.ssh_keyboard_interactive_effective(),
         ) else {
             self.connection_state = ConnectionState::Disconnected {
                 error: Some(rejection_message),
@@ -4556,7 +4697,8 @@ mod tests {
         receive_terminal_event_for_gpui, recent_text_from_term,
         resolve_default_windows_shell_from_env, resolve_local_working_dir,
         resolve_local_workspace_root, resolve_ssh_connection, send_coalesced_wakeup,
-        shell_escape_arg, should_install_connected_backend, ssh_config_with_confirmed_host_key,
+        shell_escape_arg, should_install_connected_backend,
+        should_retry_ssh_without_keyboard_interactive, ssh_config_with_confirmed_host_key,
         ssh_config_with_runtime_credentials,
     };
     use crate::history::{
@@ -4697,6 +4839,7 @@ mod tests {
         let wakeup_pending = event_proxy.wakeup_pending_handle();
 
         Terminal {
+            line_timeline: Default::default(),
             term,
             session_mode: TerminalSessionMode::Live,
             performance_metrics,
@@ -4714,7 +4857,7 @@ mod tests {
                 ..RecordingSessionMetadata::default()
             },
             title: String::new(),
-            current_working_dir: None,
+            reported_working_dir: None,
             child_exited: None,
             connection_state: ConnectionState::Connected,
             session_lock: None,
@@ -4728,6 +4871,7 @@ mod tests {
             ssh_credential_prompt_policy: SshCredentialPromptPolicy::default(),
             ssh_credential_request: None,
             ssh_keyboard_interactive_enabled: false,
+            ssh_keyboard_interactive_fallback: false,
             ssh_mfa_responder: None,
             zmodem_responder: None,
             pending_host_key_verification: None,
@@ -6708,6 +6852,31 @@ mod tests {
     }
 
     #[test]
+    fn keyboard_interactive_fallback_triggers_only_for_interactive_transport_death() {
+        let interactive_death = anyhow!("Unable to receive more messages from the channel")
+            .context("SSH keyboard-interactive response failed");
+        assert!(
+            should_retry_ssh_without_keyboard_interactive(true, &interactive_death),
+            "开关开启且失败落在 keyboard-interactive 往返时应降级重试"
+        );
+        assert!(
+            !should_retry_ssh_without_keyboard_interactive(false, &interactive_death),
+            "开关关闭或本会话已降级时不应再次降级"
+        );
+
+        let password_death = anyhow!("Unable to receive more messages from the channel")
+            .context("SSH password authentication exchange failed");
+        assert!(
+            !should_retry_ssh_without_keyboard_interactive(true, &password_death),
+            "密码认证阶段的传输中断不构成 keyboard-interactive 降级理由"
+        );
+        assert!(
+            !should_retry_ssh_without_keyboard_interactive(true, &anyhow!("Disconnected")),
+            "纯传输断开不应被当作 keyboard-interactive 往返失败"
+        );
+    }
+
+    #[test]
     fn changed_host_key_error_becomes_verification_request() {
         let identity = HostKeyIdentity::new("host.example", 22, HostKeyRoute::Direct);
         let presented = HostKeyDetails {
@@ -6853,6 +7022,7 @@ mod tests {
         let shared_metrics = performance_metrics.clone();
         let original_term = term.clone();
         let mut terminal = Terminal {
+            line_timeline: Default::default(),
             term,
             session_mode: TerminalSessionMode::Live,
             performance_metrics,
@@ -6866,7 +7036,10 @@ mod tests {
             recording_session_id: "surface-reset-test-session".to_string(),
             recording_session_metadata: RecordingSessionMetadata::default(),
             title: "old title".to_string(),
-            current_working_dir: Some("/tmp/project".to_string()),
+            reported_working_dir: Some(crate::osc::ReportedWorkingDir::new(
+                Some("host"),
+                "/tmp/project".to_string(),
+            )),
             child_exited: Some(255),
             connection_state: ConnectionState::Connected,
             session_lock: None,
@@ -6880,6 +7053,7 @@ mod tests {
             ssh_credential_prompt_policy: SshCredentialPromptPolicy::default(),
             ssh_credential_request: None,
             ssh_keyboard_interactive_enabled: false,
+            ssh_keyboard_interactive_fallback: false,
             ssh_mfa_responder: None,
             zmodem_responder: None,
             pending_host_key_verification: None,
@@ -7137,6 +7311,7 @@ mod tests {
             Terminal::create_term(80, 24, 10_000, event_tx.clone());
         let wakeup_pending = event_proxy.wakeup_pending_handle();
         let mut terminal = Terminal {
+            line_timeline: Default::default(),
             term,
             session_mode: TerminalSessionMode::Live,
             performance_metrics,
@@ -7150,7 +7325,7 @@ mod tests {
             recording_session_id: "scrollback-test-session".to_string(),
             recording_session_metadata: RecordingSessionMetadata::default(),
             title: String::new(),
-            current_working_dir: None,
+            reported_working_dir: None,
             child_exited: None,
             connection_state: ConnectionState::Connected,
             session_lock: None,
@@ -7164,6 +7339,7 @@ mod tests {
             ssh_credential_prompt_policy: SshCredentialPromptPolicy::default(),
             ssh_credential_request: None,
             ssh_keyboard_interactive_enabled: false,
+            ssh_keyboard_interactive_fallback: false,
             ssh_mfa_responder: None,
             zmodem_responder: None,
             pending_host_key_verification: None,

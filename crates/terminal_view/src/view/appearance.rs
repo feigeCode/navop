@@ -123,6 +123,7 @@ impl TerminalView {
         self.apply_confirm_high_risk_command(settings.confirm_high_risk_command, cx);
         self.apply_custom_highlight_rules(&settings.custom_highlights, cx);
         self.apply_selection_highlight(settings.selection_highlight, cx);
+        self.apply_line_margin(settings, cx);
         let theme = TerminalTheme::resolve(&settings.theme, cx.theme());
         self.apply_theme(&theme, window, cx);
     }
@@ -154,6 +155,28 @@ impl TerminalView {
         }
         self.sidebar.update(cx, |sidebar, cx| {
             sidebar.set_selection_highlight(enabled, cx);
+        });
+        cx.notify();
+    }
+
+    /// 应用终端左边距（时间戳 / 行号）开关
+    pub(super) fn apply_line_margin(
+        &mut self,
+        settings: &TerminalSettings,
+        cx: &mut Context<Self>,
+    ) {
+        // 行号列宽由当前最大行号驱动（见 render_terminal），这里只管两个开关。
+        let changed = self.show_line_timestamps != settings.show_line_timestamps
+            || self.show_line_numbers != settings.show_line_numbers;
+        self.show_line_timestamps = settings.show_line_timestamps;
+        self.show_line_numbers = settings.show_line_numbers;
+        if changed {
+            // 边距宽度变了，必须重新计算网格列数并通知 PTY。
+            self.last_size = None;
+        }
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.set_show_line_timestamps(settings.show_line_timestamps, cx);
+            sidebar.set_show_line_numbers(settings.show_line_numbers, cx);
         });
         cx.notify();
     }

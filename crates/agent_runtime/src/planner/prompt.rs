@@ -5,6 +5,7 @@
 use crate::history::{HistoryItem, RuntimeHistory};
 use crate::tools::{ToolCall, ToolObservation};
 use llm_connector::types::{Message, MessageBlock, Role};
+use rust_i18n::t;
 
 /// 历史图片回灌模型时允许占用的 base64 总量。
 ///
@@ -207,6 +208,24 @@ pub fn normalize_system_messages(messages: Vec<Message>) -> Vec<Message> {
     normalized
 }
 
+/// 保证请求中至少存在一条 user 消息。
+///
+/// OpenAI 兼容网关（以及部分 chat template 严格的模型）会以
+/// `No user query found in messages` 拒绝只含 system / assistant / tool 的请求。
+/// 上下文压缩会把本轮用户输入并入摘要，压缩后的历史可能只剩助手与工具消息，
+/// 因此发请求前做一次兜底：缺失时补一条「继续当前任务」的 user 消息。
+/// 摘要本身仍在 system 提示中，上下文不会丢失。
+pub fn ensure_user_message(messages: Vec<Message>) -> Vec<Message> {
+    if messages.iter().any(|message| message.role == Role::User) {
+        return messages;
+    }
+    let mut messages = messages;
+    messages.push(Message::user(
+        t!("AgentRuntime.continue_after_compaction").to_string(),
+    ));
+    messages
+}
+
 fn push_assistant_tool_call_message(
     messages: &mut Vec<Message>,
     call: &ToolCall,
@@ -299,10 +318,81 @@ fn user_message_with_images(text: &str, images: &[crate::runtime::InputImage]) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::history::RuntimeHistory;
+    use crate::history::{HistoryItem, RuntimeHistory};
     use crate::ids::ToolCallId;
     use crate::runtime::InputImage;
-    use crate::tools::{ToolCall, ToolName, ToolObservation};
+    use crate::tools::{ObservationData, ToolCall, ToolName, ToolObservation};
+
+    #[test]
+    fn compacted_history_still_sends_a_user_message() {
+        let mut history = RuntimeHistory::new();
+        history.record_user("长任务目标：修复部署脚本");
+        for index in 0..20 {
+            history.record_assistant("继续处理");
+            let call = tool_call(&format!("call_{index}"), "echo");
+            let call_id = call.call_id.clone();
+            history.record_tool_call(call);
+            history.record_observation(ToolObservation::success(
+                call_id,
+                ToolName::new("echo"),
+                "echo: ok",
+                ObservationData::Text("ok".into()),
+            ));
+        }
+
+        // 本轮唯一的用户输入落在压缩前缀里，保留的尾部只剩助手与工具消息。
+        let prefix = history
+            .compaction_prefix(32)
+            .expect("history should be compactable");
+        assert!(
+            prefix
+                .iter()
+                .any(|item| matches!(item, HistoryItem::User { .. })),
+            "用户输入应落在被压缩的前缀里"
+        );
+        assert!(history.compact_old_items("之前的上下文摘要", 32));
+
+        let mut messages = vec![Message::system("主系统提示")];
+        messages.extend(history_to_messages(&history));
+        let messages = ensure_user_message(normalize_system_messages(messages));
+
+        assert!(
+            messages.iter().any(|message| message.role == Role::User),
+            "压缩后仍必须发出至少一条 user 消息，否则 OpenAI 兼容网关会报 No user query found in messages"
+        );
+    }
+
+    #[test]
+    fn agent_loop_applies_user_message_guarantee() {
+        let source = include_str!("../tasks/agent.rs");
+        assert!(
+            source.contains("ensure_user_message(normalize_system_messages(messages))"),
+            "请求构造必须经过 ensure_user_message，否则压缩后可能发出没有 user 消息的请求"
+        );
+    }
+
+    fn tool_call(id: &str, name: &str) -> ToolCall {
+        ToolCall {
+            call_id: ToolCallId::from_string(id),
+            tool_name: ToolName::new(name),
+            arguments: serde_json::json!({}),
+            resource_id: None,
+        }
+    }
+
+    #[test]
+    fn ensure_user_message_keeps_existing_user_message() {
+        let messages = normalize_system_messages(vec![
+            Message::system("主系统提示"),
+            Message::user("你好"),
+        ]);
+
+        let messages = ensure_user_message(messages);
+
+        assert_eq!(2, messages.len());
+        assert_eq!(Role::User, messages[1].role);
+        assert_eq!("你好", messages[1].content_as_text());
+    }
 
     #[test]
     fn plain_user_history_becomes_text_message() {

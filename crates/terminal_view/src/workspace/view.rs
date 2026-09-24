@@ -29,6 +29,8 @@ pub struct TerminalWorkspace {
 #[derive(Clone, Debug)]
 pub enum TerminalWorkspaceEvent {
     OpenSftp(StoredConnection),
+    /// 把临时连接保存为正式连接
+    SaveAsConnection(StoredConnection),
 }
 
 impl TerminalWorkspace {

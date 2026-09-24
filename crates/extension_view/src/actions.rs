@@ -114,9 +114,12 @@ impl ExtensionManagerView {
             .into();
         let http_client = cx.http_client();
         let entity = cx.entity().downgrade();
+        // 触发安装的窗口必须在这里捕获：异步回调里 `cx.active_window()` 拿到的
+        // 可能是详情弹窗、也可能为 `None`（应用不在前台），结果就会无处投递。
+        let window_handle = window.window_handle();
         let task = cx.background_spawn(self.host.review_marketplace_entry(http_client, entry));
         cx.spawn(async move |_: WeakEntity<Self>, cx: &mut AsyncApp| {
-            finish_extension_action(entity, task.await, cx);
+            finish_extension_action(entity, window_handle, task.await, cx);
         })
         .detach();
         window.push_notification(
@@ -153,7 +156,7 @@ impl ExtensionManagerView {
                     crate::shell::finish_shell_extension(&gate_id, cx);
                     let _ = entity.update(cx, |view, cx| {
                         view.busy = None;
-                        view.status = "Extension tabs could not be closed".into();
+                        view.status = t!("Extension.tabs_close_failed").to_string().into();
                         cx.notify();
                     });
                 });
@@ -241,7 +244,7 @@ impl ExtensionManagerView {
                     crate::shell::finish_shell_extension(&gate_id, cx);
                     let _ = entity.update(cx, |view, cx| {
                         view.busy = None;
-                        view.status = "Extension tabs could not be closed".into();
+                        view.status = t!("Extension.tabs_close_failed").to_string().into();
                         cx.notify();
                     });
                 });
@@ -378,37 +381,75 @@ fn install_local_on_active_window(
 
 fn finish_extension_action(
     entity: gpui::WeakEntity<ExtensionManagerView>,
+    window_handle: gpui::AnyWindowHandle,
     outcome: anyhow::Result<MarketplaceInstallOutcome>,
     cx: &mut AsyncApp,
 ) {
-    let _ = cx.update(|cx| {
-        let Some(window_id) = cx.active_window() else {
+    // `update_window` 失败时闭包不会执行，用 `Option` 把结果取回来走无窗口兜底。
+    let mut outcome = Some(outcome);
+    let updated = cx.update_window(window_handle, |_, window, cx| {
+        let Some(outcome) = outcome.take() else {
             return;
         };
-        let _ = cx.update_window(window_id, |_, window, cx| {
-            let Some(entity) = entity.upgrade() else {
-                return;
-            };
-            let entity_for_dialog = entity.clone();
-            entity.update(cx, |view, cx| match outcome {
-                Ok(outcome) => {
-                    view.finish_marketplace_outcome(outcome, entity_for_dialog, window, cx);
-                }
-                Err(err) => {
-                    view.busy = None;
-                    let message = format_notification_error(
-                        &t!("Extension.install_failed").to_string(),
-                        &err,
-                    );
-                    view.status = format_status_error(
-                        &t!("Extension.install_failed_short").to_string(),
-                        &err,
-                    )
-                    .into();
-                    window.push_notification(Notification::error(message).autohide(false), cx);
-                }
-            });
+        let Some(entity) = entity.upgrade() else {
+            return;
+        };
+        let entity_for_dialog = entity.clone();
+        entity.update(cx, |view, cx| match outcome {
+            Ok(outcome) => {
+                view.finish_marketplace_outcome(outcome, entity_for_dialog, window, cx);
+            }
+            Err(err) => {
+                view.busy = None;
+                let message =
+                    format_notification_error(&t!("Extension.install_failed").to_string(), &err);
+                view.status =
+                    format_status_error(&t!("Extension.install_failed_short").to_string(), &err)
+                        .into();
+                window.push_notification(Notification::error(message).autohide(false), cx);
+            }
         });
+    });
+    let Some(outcome) = outcome.filter(|_| updated.is_err()) else {
+        return;
+    };
+    // 窗口在安装过程中被关闭（关闭了详情弹窗、主窗口收进托盘等）：结果无法再通过
+    // 窗口投递，但必须落到视图上，否则 `busy` 会一直卡住，扩展页所有安装/卸载
+    // 按钮都会被永久禁用，表现为「安装和卸载都没反应」。
+    let _ = cx.update(|cx| finish_extension_action_without_window(entity, outcome, cx));
+}
+
+/// 没有可用窗口时的安装收尾：只更新视图状态与磁盘暂存，不弹通知/对话框。
+fn finish_extension_action_without_window(
+    entity: gpui::WeakEntity<ExtensionManagerView>,
+    outcome: anyhow::Result<MarketplaceInstallOutcome>,
+    cx: &mut App,
+) {
+    let Some(entity) = entity.upgrade() else {
+        return;
+    };
+    entity.update(cx, |view, cx| {
+        view.busy = None;
+        match outcome {
+            Ok(MarketplaceInstallOutcome::Installed(summary)) => {
+                view.status = t!("Extension.installed_name", name = summary.name.clone())
+                    .to_string()
+                    .into();
+                view.refresh_after_extension_change(summary.kind, cx);
+            }
+            Ok(MarketplaceInstallOutcome::NeedsPermission(downloaded)) => {
+                // 需要权限确认却弹不出对话框：放弃这次安装并清掉暂存目录，
+                // 状态回到可重试，而不是把 busy 留在原地。
+                crate::permissions::cleanup_staging(downloaded.staging);
+                view.status = t!("Extension.install_cancelled").to_string().into();
+            }
+            Err(err) => {
+                view.status =
+                    format_status_error(&t!("Extension.install_failed_short").to_string(), &err)
+                        .into();
+            }
+        }
+        cx.notify();
     });
 }
 
@@ -504,6 +545,40 @@ mod tests {
         assert!(
             !uninstall.contains("match self.host.uninstall(&summary)"),
             "uninstall must not call the synchronous host method from the click callback"
+        );
+    }
+
+    #[test]
+    fn install_result_survives_the_originating_window_closing() {
+        let source = include_str!("actions.rs");
+        let install = source
+            .split("pub(crate) fn install_marketplace_entry")
+            .nth(1)
+            .and_then(|rest| rest.split("pub(crate) fn uninstall_extension").next())
+            .expect("install action should exist");
+        let finish = source
+            .split("fn finish_extension_action(")
+            .nth(1)
+            .and_then(|rest| rest.split("fn finish_marketplace_load").next())
+            .expect("install completion should exist");
+
+        assert!(
+            install.contains("window.window_handle()"),
+            "install must capture the clicking window instead of resolving it later"
+        );
+        assert!(
+            !finish.contains("active_window"),
+            "install completion must not depend on `active_window()`, which is None when \
+             the app is not frontmost"
+        );
+        assert!(
+            finish.contains("finish_extension_action_without_window"),
+            "a closed window must still clear `busy`, otherwise every install/uninstall \
+             button stays disabled forever"
+        );
+        assert!(
+            include_str!("permissions.rs").contains("view.busy = None;"),
+            "the permission-confirm path must clear `busy` on every exit"
         );
     }
 }

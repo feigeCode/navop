@@ -10,8 +10,12 @@ use crate::extension_menu::{
     DbTreeExtensionActionContext, DbTreeExtensionMenuContext, DbTreeExtensionMenuItem,
     DbTreeExtensionMenuRegistry, GlobalDbTreeExtensionActionHandler,
 };
+use crate::object_list_selection::{
+    RowDragState, VisibleRowSpan, exceeds_drag_threshold, replace_with_span, select_all_rows,
+};
 use crate::search_shortcut::{
-    DB_SEARCH_CONTEXT, FocusSearchInput, OpenSelectedTableQuery, focus_search_input,
+    DB_SEARCH_CONTEXT, FocusSearchInput, OpenSelectedTableQuery, SelectAllObjects,
+    focus_search_input,
 };
 use crate::table_copy_menu::append_table_copy_items;
 use db::DbNodeType::QueryFolder;
@@ -25,8 +29,9 @@ use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, AsyncApp, Context, Entity, EventEmitter, FocusHandle, Focusable,
     HighlightStyle, InteractiveElement, IntoElement, ListSizingBehavior, MouseButton,
-    MouseDownEvent, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
-    StyledText, Subscription, WeakEntity, Window, div, px, uniform_list,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, Render,
+    ScrollStrategy, SharedString, StatefulInteractiveElement, Styled, StyledText, Subscription,
+    UniformListScrollHandle, WeakEntity, Window, div, px, uniform_list,
 };
 use gpui_component::button::Button;
 use gpui_component::input::{Input, InputEvent, InputState};
@@ -289,6 +294,14 @@ pub struct DatabaseObjects {
     current_node: Option<DbNode>,
     selected_indices: HashSet<usize>,
     context_menu_row: Option<usize>,
+    /// 鼠标行选择的交互状态（按下行、拖选锚点、加选快照）
+    drag_state: RowDragState,
+    /// 按下点在窗口中的位置，用于判定拖选阈值
+    drag_origin: Option<Point<Pixels>>,
+    /// 列表滚动句柄：Shift 点击时把目标行滚入可视区
+    list_scroll_handle: UniformListScrollHandle,
+    /// 拖选过程中最近悬停的可见行，用来避免同一行重复重算选择集
+    drag_hover_row: Option<usize>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -300,6 +313,101 @@ impl DatabaseObjects {
         cx: &mut Context<Self>,
     ) {
         focus_search_input(&self.search_input, window, cx);
+    }
+
+    fn on_action_select_all_objects(
+        &mut self,
+        _: &SelectAllObjects,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_all_visible_rows(cx);
+    }
+
+    /// 行按下：区分单选、多选（Cmd/Ctrl）与 Shift 区间选择，并开启拖选待判定状态。
+    fn on_row_mouse_down(&mut self, row_ix: usize, event: &MouseDownEvent, cx: &mut Context<Self>) {
+        let additive = event.modifiers.secondary();
+        if event.modifiers.shift {
+            self.drag_state.cancel();
+            self.drag_origin = None;
+            self.drag_hover_row = None;
+            self.extend_selection_to(row_ix, cx);
+            return;
+        }
+
+        self.toggle_selection(row_ix, additive);
+        // Cmd/Ctrl 拖选在按下快照之上叠加区间，普通拖选直接替换选择集
+        let additive_base = additive.then(|| self.selected_indices.clone());
+        self.drag_state.press(row_ix, additive_base);
+        self.drag_origin = Some(event.position);
+        self.drag_hover_row = Some(row_ix);
+        cx.notify();
+    }
+
+    /// 行悬停：超过拖选阈值后把锚点到当前位置的整段行纳入选择集。
+    fn on_row_mouse_move(&mut self, row_ix: usize, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+        if self.drag_state.pressed().is_none() {
+            return;
+        }
+
+        if !self.drag_state.is_dragging() {
+            let Some(origin) = self.drag_origin else {
+                return;
+            };
+            let origin = (f32::from(origin.x), f32::from(origin.y));
+            let position = (f32::from(event.position.x), f32::from(event.position.y));
+            if !exceeds_drag_threshold(origin, position) {
+                return;
+            }
+        }
+
+        // 先确立锚点，再判断是否需要重算区间：首个越过阈值的悬停行也要参与计算
+        if self.drag_state.start_drag().is_none() {
+            return;
+        }
+        if self.drag_hover_row == Some(row_ix) {
+            return;
+        }
+        self.drag_hover_row = Some(row_ix);
+
+        let visible_row_count = self.visible_row_count();
+        self.drag_state
+            .apply_drag_to(row_ix, &mut self.selected_indices, visible_row_count);
+        cx.notify();
+    }
+
+    /// 行释放：未发生拖选时保持按下时的单击/多选结果。
+    fn on_row_mouse_up(&mut self, _: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.drag_state.release().is_some() {
+            cx.notify();
+        }
+        self.drag_origin = None;
+        self.drag_hover_row = None;
+    }
+
+    /// 面板根节点释放：兜住“按下后拖到行外才松手”的情况。
+    fn on_panel_mouse_up(
+        &mut self,
+        _: &MouseUpEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.end_row_drag(cx);
+    }
+
+    /// 结束拖选但不改变已确认的选择集。
+    ///
+    /// 指针在列表外松开（拖出列表、切到别的面板）时，gpui 只把 `mouse_up` 发给
+    /// 命中路径上的元素，本视图收不到，因此 `RowDragState::press` 会自己丢弃旧锚点，
+    /// 这里的收尾只负责清掉拖选过程中的临时状态。
+    fn end_row_drag(&mut self, cx: &mut Context<Self>) {
+        let was_active = self.drag_state.pressed().is_some() || self.drag_state.is_dragging();
+        self.drag_state.cancel();
+        self.drag_origin = None;
+        self.drag_hover_row = None;
+        if was_active {
+            cx.notify();
+        }
     }
 
     fn on_action_open_selected_table_query(
@@ -315,7 +423,13 @@ impl DatabaseObjects {
         }
 
         let node = nodes[0].clone();
-        if matches!(node.node_type, DbNodeType::Table | DbNodeType::View) {
+        if matches!(
+            node.node_type,
+            DbNodeType::Table
+                | DbNodeType::ForeignTable
+                | DbNodeType::View
+                | DbNodeType::MaterializedView
+        ) {
             cx.emit(DatabaseObjectsEvent::CreateNewQuery { node });
         }
     }
@@ -403,6 +517,10 @@ impl DatabaseObjects {
             current_node: None,
             selected_indices: HashSet::new(),
             context_menu_row: None,
+            drag_state: RowDragState::default(),
+            drag_origin: None,
+            list_scroll_handle: UniformListScrollHandle::new(),
+            drag_hover_row: None,
             _subscriptions: vec![search_sub],
         }
     }
@@ -428,8 +546,12 @@ impl DatabaseObjects {
         supports_action: impl Fn(DatabaseActionId) -> bool,
     ) -> Option<DatabaseObjectsEvent> {
         Some(match node.node_type {
-            DbNodeType::Table => DatabaseObjectsEvent::OpenTableData { node },
-            DbNodeType::View => DatabaseObjectsEvent::OpenViewData { node },
+            DbNodeType::Table | DbNodeType::ForeignTable => {
+                DatabaseObjectsEvent::OpenTableData { node }
+            }
+            DbNodeType::View | DbNodeType::MaterializedView => {
+                DatabaseObjectsEvent::OpenViewData { node }
+            }
             DbNodeType::Function if supports_action(DatabaseActionId::OpenFunction) => {
                 DatabaseObjectsEvent::OpenFunction { node }
             }
@@ -458,8 +580,11 @@ impl DatabaseObjects {
             | DbNodeType::Schema
             | DbNodeType::TablesFolder
             | DbNodeType::Table
+            | DbNodeType::ForeignTable
             | DbNodeType::ViewsFolder
             | DbNodeType::View
+            | DbNodeType::MaterializedViewsFolder
+            | DbNodeType::MaterializedView
             | DbNodeType::FunctionsFolder
             | DbNodeType::Function
             | DbNodeType::ProceduresFolder
@@ -543,6 +668,48 @@ impl DatabaseObjects {
             self.selected_indices.clear();
             self.selected_indices.insert(row_ix);
         }
+    }
+
+    /// 可见行总数（已应用搜索过滤）。
+    fn visible_row_count(&self) -> usize {
+        self.filtered_rows.len()
+    }
+
+    /// 全选当前可见行（Ctrl/Cmd + A）。
+    ///
+    /// 列表本身已是当前范围的全量数据（`ObjectView` 不做截断），可见行即全部对象，
+    /// 因此全选不需要再去请求宿主补全。
+    fn select_all_visible_rows(&mut self, cx: &mut Context<Self>) {
+        let visible_row_count = self.visible_row_count();
+        select_all_rows(&mut self.selected_indices, visible_row_count);
+        self.context_menu_row = None;
+        cx.notify();
+    }
+
+    /// Shift 点击：从当前锚点行扩展到目标行。
+    ///
+    /// 锚点优先取首个已选行；没有已选行时退化为单选目标行。
+    fn extend_selection_to(&mut self, row_ix: usize, cx: &mut Context<Self>) {
+        self.context_menu_row = None;
+        let anchor = self
+            .selected_indices
+            .iter()
+            .copied()
+            .min()
+            .filter(|_| !self.selected_indices.is_empty());
+        match anchor {
+            Some(anchor) => {
+                let span = VisibleRowSpan::new(anchor, row_ix, self.visible_row_count());
+                replace_with_span(&mut self.selected_indices, span);
+            }
+            None => {
+                self.selected_indices.clear();
+                self.selected_indices.insert(row_ix);
+            }
+        }
+        self.list_scroll_handle
+            .scroll_to_item(row_ix, ScrollStrategy::Nearest);
+        cx.notify();
     }
 
     fn apply_filter(&mut self) {
@@ -732,7 +899,7 @@ impl DatabaseObjects {
                     )
                 }
             }
-            DbNodeType::TablesFolder | DbNodeType::Table => {
+            DbNodeType::TablesFolder | DbNodeType::Table | DbNodeType::ForeignTable => {
                 let schema = current_node.get_schema_name();
                 metadata.insert("database".to_string(), database.clone());
                 if let Some(schema) = schema.as_ref().filter(|schema| !schema.trim().is_empty()) {
@@ -754,7 +921,7 @@ impl DatabaseObjects {
                 } else {
                     format!("{}:table_folder:{}", current_node.id, name)
                 };
-                (node_id, DbNodeType::Table)
+                (node_id, Self::table_row_node_type(columns, row_data))
             }
             DbNodeType::Schema => {
                 if current_node.node_type == DbNodeType::Connection {
@@ -783,23 +950,43 @@ impl DatabaseObjects {
                     metadata.insert("table".to_string(), name.clone());
                     (
                         format!("{}:{}:{}:table_folder:{}", connection_id, db, schema, name),
-                        DbNodeType::Table,
+                        Self::table_row_node_type(columns, row_data),
                     )
                 }
             }
-            DbNodeType::ViewsFolder | DbNodeType::View => {
+            DbNodeType::ViewsFolder
+            | DbNodeType::View
+            | DbNodeType::MaterializedViewsFolder
+            | DbNodeType::MaterializedView => {
+                let is_materialized = matches!(
+                    db_node_type,
+                    DbNodeType::MaterializedViewsFolder | DbNodeType::MaterializedView
+                );
                 let schema = current_node.get_schema_name();
                 metadata.insert("database".to_string(), database.clone());
                 if let Some(schema) = schema.as_ref().filter(|schema| !schema.trim().is_empty()) {
                     metadata.insert("schema".to_string(), schema.clone());
                 }
+                let folder_key = if is_materialized {
+                    "matviews_folder"
+                } else {
+                    "views_folder"
+                };
                 metadata.insert("view".to_string(), name.clone());
-                let node_id = if current_node.node_type == DbNodeType::ViewsFolder {
+                let node_id = if matches!(
+                    current_node.node_type,
+                    DbNodeType::ViewsFolder | DbNodeType::MaterializedViewsFolder
+                ) {
                     format!("{}:{}", current_node.id, name)
                 } else {
-                    format!("{}:views_folder:{}", current_node.id, name)
+                    format!("{}:{}:{}", current_node.id, folder_key, name)
                 };
-                (node_id, DbNodeType::View)
+                let node_type = if is_materialized {
+                    DbNodeType::MaterializedView
+                } else {
+                    DbNodeType::View
+                };
+                (node_id, node_type)
             }
             DbNodeType::FunctionsFolder | DbNodeType::Function => {
                 let schema = current_node.get_schema_name();
@@ -906,6 +1093,17 @@ impl DatabaseObjects {
             .iter()
             .position(|column| column.key.as_ref().eq_ignore_ascii_case(key))?;
         row_data.get(index).cloned()
+    }
+
+    /// 「表」目录对象行的真实节点类型。
+    ///
+    /// 外部表与普通表共用同一个列表，必须靠类型列区分，否则右键菜单与
+    /// 删除/重命名会按普通表生成 DDL。
+    fn table_row_node_type(columns: &[Column], row_data: &[String]) -> DbNodeType {
+        match Self::row_value_for_column(columns, row_data, "type").as_deref() {
+            Some("Foreign Table") => DbNodeType::ForeignTable,
+            _ => DbNodeType::Table,
+        }
     }
 
     fn build_nodes_for_selected_rows(&self) -> Vec<DbNode> {
@@ -1396,6 +1594,8 @@ impl Render for DatabaseObjects {
             .key_context(DB_SEARCH_CONTEXT)
             .on_action(cx.listener(Self::on_action_focus_search))
             .on_action(cx.listener(Self::on_action_open_selected_table_query))
+            .on_action(cx.listener(Self::on_action_select_all_objects))
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::on_panel_mouse_up))
             .child(
                 h_flex()
                     .gap_1()
@@ -1453,15 +1653,38 @@ impl Render for DatabaseObjects {
                                                         cx.listener(
                                                             move |this,
                                                                   event: &MouseDownEvent,
-                                                                  _window,
+                                                                  window,
                                                                   cx| {
-                                                                let multi_select =
-                                                                    event.modifiers.secondary();
-                                                                this.toggle_selection(
-                                                                    row_ix,
-                                                                    multi_select,
+                                                                window.focus(
+                                                                    &this.focus_handle,
+                                                                    cx,
                                                                 );
-                                                                cx.notify();
+                                                                this.on_row_mouse_down(
+                                                                    row_ix, event, cx,
+                                                                );
+                                                            },
+                                                        ),
+                                                    )
+                                                    .on_mouse_move(cx.listener(
+                                                        move |this,
+                                                              event: &MouseMoveEvent,
+                                                              _window,
+                                                              cx| {
+                                                            this.on_row_mouse_move(
+                                                                row_ix, event, cx,
+                                                            );
+                                                        },
+                                                    ))
+                                                    .on_mouse_up(
+                                                        MouseButton::Left,
+                                                        cx.listener(
+                                                            move |this,
+                                                                  event: &MouseUpEvent,
+                                                                  window,
+                                                                  cx| {
+                                                                this.on_row_mouse_up(
+                                                                    event, window, cx,
+                                                                );
                                                             },
                                                         ),
                                                     )
@@ -1513,6 +1736,7 @@ impl Render for DatabaseObjects {
                         })
                         .flex_grow_1()
                         .size_full()
+                        .track_scroll(&self.list_scroll_handle)
                         .with_sizing_behavior(ListSizingBehavior::Auto),
                     ),
                 ),
@@ -1538,6 +1762,10 @@ impl Clone for DatabaseObjects {
             current_node: self.current_node.clone(),
             selected_indices: self.selected_indices.clone(),
             context_menu_row: self.context_menu_row,
+            drag_state: RowDragState::default(),
+            drag_origin: None,
+            list_scroll_handle: UniformListScrollHandle::new(),
+            drag_hover_row: None,
             _subscriptions: vec![],
         }
     }
@@ -2240,6 +2468,93 @@ mod tests {
             DatabaseType::Oracle,
         )
         .with_metadata(HashMap::from([("database".to_string(), String::new())]))
+    }
+
+    fn postgres_tables_folder_node() -> DbNode {
+        DbNode::new(
+            "1:app:public:table_folder",
+            "DbTree.Tables",
+            DbNodeType::TablesFolder,
+            "1".to_string(),
+            DatabaseType::PostgreSQL,
+        )
+        .with_metadata(HashMap::from([
+            ("database".to_string(), "app".to_string()),
+            ("schema".to_string(), "public".to_string()),
+        ]))
+    }
+
+    fn object_columns_with_type() -> Vec<Column> {
+        vec![Column::new("name", "Name"), Column::new("type", "Type")]
+    }
+
+    #[test]
+    fn postgres_foreign_table_row_builds_foreign_table_node() {
+        let columns = object_columns_with_type();
+        let row = vec!["remote_orders".to_string(), "Foreign Table".to_string()];
+
+        let node = DatabaseObjects::build_node_from_object_row(
+            DbNodeType::Table,
+            Some(&postgres_tables_folder_node()),
+            &columns,
+            &row,
+        )
+        .expect("foreign table row should produce a node");
+
+        // 外部表与普通表同在「表」目录，但节点类型必须区分，
+        // 否则右键菜单与删除/重命名会按普通表生成 DDL。
+        assert_eq!(DbNodeType::ForeignTable, node.node_type);
+        assert_eq!("1:app:public:table_folder:remote_orders", node.id);
+        assert_eq!(
+            Some("remote_orders"),
+            node.metadata.get("table").map(String::as_str)
+        );
+    }
+
+    #[test]
+    fn postgres_regular_table_row_stays_table_node() {
+        let columns = object_columns_with_type();
+        let row = vec!["users".to_string(), "Table".to_string()];
+
+        let node = DatabaseObjects::build_node_from_object_row(
+            DbNodeType::Table,
+            Some(&postgres_tables_folder_node()),
+            &columns,
+            &row,
+        )
+        .expect("table row should produce a node");
+
+        assert_eq!(DbNodeType::Table, node.node_type);
+        assert_eq!("1:app:public:table_folder:users", node.id);
+    }
+
+    #[test]
+    fn postgres_matviews_folder_row_builds_materialized_view_node() {
+        let current_node = DbNode::new(
+            "1:app:public:matviews_folder",
+            "DbTree.MaterializedViews",
+            DbNodeType::MaterializedViewsFolder,
+            "1".to_string(),
+            DatabaseType::PostgreSQL,
+        )
+        .with_metadata(HashMap::from([
+            ("database".to_string(), "app".to_string()),
+            ("schema".to_string(), "public".to_string()),
+        ]));
+        let columns = vec![Column::new("name", "Name")];
+        let row = vec!["mv_orders".to_string()];
+
+        let node = DatabaseObjects::build_node_from_object_row(
+            DbNodeType::MaterializedViewsFolder,
+            Some(&current_node),
+            &columns,
+            &row,
+        )
+        .expect("materialized view row should produce a node");
+
+        assert_eq!(DbNodeType::MaterializedView, node.node_type);
+        // 与树中 build_materialized_views_folder 生成的 id 保持一致。
+        assert_eq!("1:app:public:matviews_folder:mv_orders", node.id);
     }
 
     #[test]

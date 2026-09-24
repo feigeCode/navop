@@ -13,12 +13,36 @@ use crate::install_flow::{notify_error, run_install_with_progress_prompt};
 const DUCKDB_DRIVER_ID: &str = "duckdb";
 /// TDengine IPC 驱动扩展 id(navop-extensions,driver_id "tdengine")
 const TDENGINE_DRIVER_ID: &str = "tdengine";
+/// OceanBase IPC 驱动扩展 id(navop-extensions,driver_id "oceanbase")
+const OCEANBASE_DRIVER_ID: &str = "oceanbase";
+/// OceanBase 驱动 0.1.12 起 u64 cell 才按宿主契约发 JSON 数字
+/// (navop-extensions#9)。更早版本对无符号列发十进制文本,宿主在反序列化层
+/// 会直接判类型不匹配(invalid type: string "4", expected u64),整表读取失败。
+const OCEANBASE_MIN_DRIVER_VERSION: &str = "0.1.12";
+
+/// 外部驱动的最低可用版本(驱动 id -> 最低版本)。
+/// 低于该版本时宿主不再放行连接,而是引导用户从扩展市场更新驱动。
+const EXTERNAL_DRIVER_MINIMUM_VERSIONS: &[(&str, &str)] =
+    &[(OCEANBASE_DRIVER_ID, OCEANBASE_MIN_DRIVER_VERSION)];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DriverRequirement {
     NotRequired,
-    Required { driver_id: String },
-    InvalidConfig { message: String },
+    Required {
+        driver_id: String,
+        minimum_version: Option<String>,
+    },
+    InvalidConfig {
+        message: String,
+    },
+}
+
+/// 查询外部驱动的最低可用版本;未声明的驱动不做版本门。
+fn external_driver_minimum_version(driver_id: &str) -> Option<String> {
+    EXTERNAL_DRIVER_MINIMUM_VERSIONS
+        .iter()
+        .find(|(id, _)| *id == driver_id)
+        .map(|(_, version)| (*version).to_string())
 }
 
 /// Generic sidecar requirement shared by every native driver API.
@@ -144,11 +168,13 @@ pub fn required_driver_for_config(config: &DbConnectionConfig) -> DriverRequirem
     match &config.database_type {
         DatabaseType::DuckDB => DriverRequirement::Required {
             driver_id: DUCKDB_DRIVER_ID.to_string(),
+            minimum_version: None,
         },
         // TDengine 连接(历史存储的 DatabaseType::TDengine)按外部驱动守卫:
         // 未安装 tdengine 驱动时引导用户从扩展市场安装,与 DuckDB 同策略。
         DatabaseType::TDengine => DriverRequirement::Required {
             driver_id: TDENGINE_DRIVER_ID.to_string(),
+            minimum_version: None,
         },
         DatabaseType::External { .. } => required_external_driver(config),
         _ => DriverRequirement::NotRequired,
@@ -201,14 +227,29 @@ pub fn open_database_connection_with_driver_guard<T>(
             home.open_database_connection(&connection, workspace, mode, window, cx)
         }
         DriverRequirement::InvalidConfig { message } => notify_error(window, cx, message),
-        DriverRequirement::Required { driver_id } => {
-            if db::ipc::IpcDriverRegistry::load_default()
+        DriverRequirement::Required {
+            driver_id,
+            minimum_version,
+        } => {
+            // 已装但低于最低版本的驱动同样需要走安装/更新流程:旧版本带着已知的
+            // 契约缺陷,放行只会把类型不匹配错误丢给用户。
+            let installed_meets_requirement = db::ipc::IpcDriverRegistry::load_default()
                 .find(&driver_id)
-                .is_some()
-            {
+                .is_some_and(|driver| {
+                    driver_version_meets_minimum(&driver.version, minimum_version.as_deref())
+                });
+            if installed_meets_requirement {
                 home.open_database_connection(&connection, workspace, mode, window, cx);
             } else {
-                prompt_install_driver(connection, workspace, driver_id, mode, window, cx);
+                prompt_install_driver(
+                    connection,
+                    workspace,
+                    driver_id,
+                    minimum_version,
+                    mode,
+                    window,
+                    cx,
+                );
             }
         }
     }
@@ -254,6 +295,7 @@ fn prompt_install_driver<T>(
     connection: StoredConnection,
     workspace: Option<Workspace>,
     driver_id: String,
+    minimum_version: Option<String>,
     mode: TabOpenMode,
     window: &mut Window,
     cx: &mut Context<T>,
@@ -264,7 +306,7 @@ fn prompt_install_driver<T>(
     prompt_install_driver_with_completion(
         "database".to_string(),
         driver_id.clone(),
-        None,
+        minimum_version,
         connection_name,
         window,
         cx,
@@ -420,6 +462,7 @@ fn required_external_driver(config: &DbConnectionConfig) -> DriverRequirement {
         };
     }
     DriverRequirement::Required {
+        minimum_version: external_driver_minimum_version(driver_id),
         driver_id: driver_id.to_string(),
     }
 }
