@@ -498,6 +498,33 @@ impl client::Handler for RusshHandler {
         }
     }
 
+    /// 远端（设备/服务器）主动发 `SSH_MSG_DISCONNECT` 时的回调。
+    ///
+    /// russh 把它映射成无载荷的 `Error::Disconnect`（Display 只有 "Disconnected"），
+    /// 默认实现也只在 debug 级别打印，于是「为何被断开」在最需要它的默认日志里丢失。
+    /// 这里按 warn 记录原因码与原因文本：受限设备（防火墙/交换机）正是用这条消息踢连接，
+    /// 例如 VTY/会话数限制、账号并发登录、设备侧认证超时。
+    async fn disconnected(
+        &mut self,
+        reason: client::DisconnectReason<Self::Error>,
+    ) -> Result<(), Self::Error> {
+        if let client::DisconnectReason::ReceivedDisconnect(info) = &reason {
+            tracing::warn!(
+                target: "ssh.disconnect",
+                identity = %self.identity,
+                reason_code = ?info.reason_code,
+                message = %info.message,
+                lang_tag = %info.lang_tag,
+                "SSH 服务器主动断开连接"
+            );
+        }
+
+        match reason {
+            client::DisconnectReason::ReceivedDisconnect(_) => Ok(()),
+            client::DisconnectReason::Error(err) => Err(err),
+        }
+    }
+
     /// sshd 为远端 X client 回连的 `x11` 通道：按 fake cookie 找到注册会话，
     /// 改写为本机 real cookie 后桥接到本机 X server。
     async fn server_channel_open_x11(
@@ -805,7 +832,10 @@ where
         }
     }
 
-    let auth_result = session.authenticate_password(username, password).await?;
+    let auth_result = session
+        .authenticate_password(username, password)
+        .await
+        .context("SSH password authentication exchange failed")?;
     finish_auth_result_or_keyboard_interactive(
         session,
         username,
@@ -883,7 +913,11 @@ async fn probe_keyboard_interactive_support<H>(
 where
     H: client::Handler,
 {
-    match session.authenticate_none(username).await? {
+    match session
+        .authenticate_none(username)
+        .await
+        .context("SSH server capability probe (none authentication) failed")?
+    {
         client::AuthResult::Success => Ok(KeyboardInteractiveSupport::Anonymous),
         client::AuthResult::Failure {
             remaining_methods, ..
@@ -928,7 +962,8 @@ where
 {
     let mut response = session
         .authenticate_keyboard_interactive_start(username, None::<String>)
-        .await?;
+        .await
+        .context("SSH keyboard-interactive start failed")?;
     let mut restart_count = 0;
     // 服务器是否已经下发过提示。没有下发提示就失败，说明该方法在当前认证链里还用不上，
     // 而不是用户输入有误：此时重新发起只会重复同一个结果。
@@ -956,7 +991,8 @@ where
                 );
                 session
                     .authenticate_keyboard_interactive_start(username, None::<String>)
-                    .await?
+                    .await
+                    .context("SSH keyboard-interactive restart failed")?
             }
             client::KeyboardInteractiveAuthResponse::Failure {
                 remaining_methods,
@@ -982,6 +1018,13 @@ where
                 prompts,
             } => {
                 prompted = true;
+                // 服务器在此下发提示：一旦这里成功应答后传输中断，日志至少要能指出
+                // 「认证往返已经开始」，而不是只剩一个裸的 russh 传输错误。
+                tracing::debug!(
+                    target = ?target,
+                    prompt_count = prompts.len(),
+                    "SSH keyboard-interactive prompt received"
+                );
                 let request =
                     build_keyboard_interactive_request(target, name, instructions, prompts);
                 let answers = request_keyboard_interactive_responses(
@@ -992,7 +1035,8 @@ where
                 .await?;
                 session
                     .authenticate_keyboard_interactive_respond(answers)
-                    .await?
+                    .await
+                    .context("SSH keyboard-interactive response failed")?
             }
         };
     }
