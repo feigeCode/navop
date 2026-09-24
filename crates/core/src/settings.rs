@@ -1079,6 +1079,12 @@ pub struct AppSettings {
     /// SQL 查询默认最大返回行数，0 表示不限制
     #[serde(default = "default_sql_query_max_rows")]
     pub sql_query_max_rows: u32,
+    /// 导出/转储 SQL 时每一条 INSERT 语句合并的数据行数，`1` 表示一行一条语句。
+    ///
+    /// 用作「导出 SQL 文件」窗口里该参数的初始值，并在每次导出时写回，默认与
+    /// Navicat 的「每条语句的数据行数」一致（100）。
+    #[serde(default = "default_sql_export_rows_per_statement")]
+    pub sql_export_rows_per_statement: usize,
     /// SQL 美化格式化设置
     #[serde(default)]
     pub sql_format: SqlFormatSettings,
@@ -1089,6 +1095,8 @@ pub struct AppSettings {
 pub(crate) const DEFAULT_SYSTEM_HOTKEY_MACOS: &str = "cmd-alt-m";
 pub(crate) const DEFAULT_SYSTEM_HOTKEY_OTHER: &str = "ctrl-alt-m";
 pub const DEFAULT_SQL_QUERY_MAX_ROWS: u32 = 1000;
+/// SQL 导出每条语句默认合并的数据行数，与 Navicat 的默认值一致。
+pub const DEFAULT_SQL_EXPORT_ROWS_PER_STATEMENT: usize = 100;
 pub const DEFAULT_TERMINAL_THEME: &str = "application";
 
 fn default_font_family() -> String {
@@ -1357,6 +1365,10 @@ fn default_sql_query_max_rows() -> u32 {
     DEFAULT_SQL_QUERY_MAX_ROWS
 }
 
+fn default_sql_export_rows_per_statement() -> usize {
+    DEFAULT_SQL_EXPORT_ROWS_PER_STATEMENT
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -1427,6 +1439,7 @@ impl Default for AppSettings {
             system_hotkey_other: default_system_hotkey_other(),
             table_row_height: default_table_row_height(),
             sql_query_max_rows: default_sql_query_max_rows(),
+            sql_export_rows_per_statement: default_sql_export_rows_per_statement(),
             sql_format: SqlFormatSettings::default(),
             custom_keybindings: HashMap::new(),
         }
@@ -1749,14 +1762,15 @@ mod tests {
     use super::{
         AiChatSettings, AiChatToolExecutionMode, AppSettings, CloseButtonBehavior,
         ConnectionSortOrder, CustomFont, DEFAULT_AI_REQUEST_TIMEOUT_SECS,
-        DEFAULT_MCP_APPROVAL_TIMEOUT_MS, DEFAULT_TERMINAL_THEME, HomeConnectionLayout,
-        LOCALE_SYSTEM, LargeTextCellEditorOpenMode, LocalTerminalProfileKind,
-        LocalTerminalProfileSettings, MAX_AI_REQUEST_TIMEOUT_SECS, MAX_CUSTOM_SYSTEM_PROMPT_CHARS,
-        MIN_AI_REQUEST_TIMEOUT_SECS, MainWindowState, McpPermissionMode, McpServerMode,
-        PersonalSyncBackendKind, RemoteFileOpenMode, SqlFormatSettings, SqlIndentStyle,
-        SqlKeywordCase, StartupDefaultPage, SyncProvider, default_grid_font_fallback_families,
-        default_grid_monospace_font_family, grid_monospace_font, installed_grid_monospace_font,
-        is_installed_font_family, resolve_installed_grid_monospace_font_family,
+        DEFAULT_MCP_APPROVAL_TIMEOUT_MS, DEFAULT_SQL_EXPORT_ROWS_PER_STATEMENT,
+        DEFAULT_TERMINAL_THEME, HomeConnectionLayout, LOCALE_SYSTEM, LargeTextCellEditorOpenMode,
+        LocalTerminalProfileKind, LocalTerminalProfileSettings, MAX_AI_REQUEST_TIMEOUT_SECS,
+        MAX_CUSTOM_SYSTEM_PROMPT_CHARS, MIN_AI_REQUEST_TIMEOUT_SECS, MainWindowState,
+        McpPermissionMode, McpServerMode, PersonalSyncBackendKind, RemoteFileOpenMode,
+        SqlFormatSettings, SqlIndentStyle, SqlKeywordCase, StartupDefaultPage, SyncProvider,
+        default_grid_font_fallback_families, default_grid_monospace_font_family,
+        grid_monospace_font, installed_grid_monospace_font, is_installed_font_family,
+        resolve_installed_grid_monospace_font_family,
     };
 
     #[test]
@@ -2131,6 +2145,17 @@ mod tests {
     }
 
     #[test]
+    fn app_settings_default_batches_sql_export_statements() {
+        let settings = AppSettings::default();
+
+        assert_eq!(DEFAULT_SQL_EXPORT_ROWS_PER_STATEMENT, 100);
+        assert_eq!(
+            DEFAULT_SQL_EXPORT_ROWS_PER_STATEMENT,
+            settings.sql_export_rows_per_statement
+        );
+    }
+
+    #[test]
     fn app_settings_default_enables_terminal_file_manager_path_sync() {
         let settings = AppSettings::default();
 
@@ -2411,6 +2436,20 @@ mod tests {
         .expect("旧版 settings.json 应能读取");
 
         assert_eq!(1000, settings.sql_query_max_rows);
+    }
+
+    #[test]
+    fn app_settings_deserializes_missing_sql_export_rows_per_statement() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "locale": "en",
+            "theme_mode": "dark"
+        }))
+        .expect("旧版 settings.json 应能读取");
+
+        assert_eq!(
+            DEFAULT_SQL_EXPORT_ROWS_PER_STATEMENT,
+            settings.sql_export_rows_per_statement
+        );
     }
 
     #[test]

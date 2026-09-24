@@ -2864,6 +2864,10 @@ SqlDump:
     en: "Dump to:"
     zh-CN: "转储到:"
     zh-HK: "轉儲到:"
+  rows_per_statement:
+    en: "Rows per statement:"
+    zh-CN: "每条语句的数据行数:"
+    zh-HK: "每條語句的資料行數:"
   processed_records:
     en: "Processed records:"
     zh-CN: "已处理记录:"

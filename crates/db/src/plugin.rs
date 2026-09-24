@@ -2843,6 +2843,7 @@ pub trait DatabasePlugin: Send + Sync {
             self,
             &table_ident,
             &query_result,
+            crate::import_export::DEFAULT_ROWS_PER_INSERT_STATEMENT,
         )
     }
 
