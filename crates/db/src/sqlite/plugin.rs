@@ -1789,7 +1789,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_columns_marks_all_composite_primary_key_columns() {
-        let (_temp_dir, mut connection) = create_connection().await;
+        let (_temp_dir, connection) = create_connection().await;
         connection
             .query(
                 "CREATE TABLE datapoints (
