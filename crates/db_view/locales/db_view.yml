@@ -2674,6 +2674,14 @@ TableDataGrid:
     en: SQL Preview
     zh-CN: SQL预览
     zh-HK: SQL預覽
+  copy_sql:
+    en: Copy SQL
+    zh-CN: 复制 SQL
+    zh-HK: 複製 SQL
+  sql_copied:
+    en: SQL copied to clipboard
+    zh-CN: SQL 已复制到剪贴板
+    zh-HK: SQL 已複製到剪貼簿
   commit_changes:
     en: Commit Changes
     zh-CN: 提交更改

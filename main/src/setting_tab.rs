@@ -3089,6 +3089,13 @@ const DATABASE_SHORTCUTS: &[ShortcutEntry] = &[
         action_id: Some(action_id::SQL_RUN_ALL_QUERY),
         system_hotkey: false,
     },
+    ShortcutEntry {
+        keys_macos: &["cmd-/", "ctrl-/"],
+        keys_other: &["cmd-/", "ctrl-/"],
+        label_key: "Settings.Shortcuts.sql_toggle_comment",
+        action_id: Some(action_id::SQL_TOGGLE_COMMENT),
+        system_hotkey: false,
+    },
 ];
 
 const TABLE_SHORTCUTS: &[ShortcutEntry] = &[

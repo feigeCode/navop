@@ -4121,6 +4121,10 @@ Settings:
       en: Run All Queries
       zh-CN: 执行全部查询
       zh-HK: 執行全部查詢
+    sql_toggle_comment:
+      en: Toggle Line Comment
+      zh-CN: 注释/取消注释
+      zh-HK: 註解/取消註解
     table_move_selection:
       en: Move Selection
       zh-CN: 移动选区

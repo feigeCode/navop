@@ -1,9 +1,9 @@
 use gpui::prelude::*;
 use gpui::{
-    Anchor, AnyElement, App, AsyncApp, ClickEvent, Context, Entity, EventEmitter, FocusHandle,
-    Focusable, Font, Image, ImageFormat, IntoElement, ListSizingBehavior, ObjectFit, ParentElement,
-    PathPromptOptions, Pixels, SharedString, Styled, Subscription, UniformListScrollHandle, Window,
-    actions, div, img, px, uniform_list,
+    Anchor, AnyElement, App, AsyncApp, ClickEvent, ClipboardItem, Context, Entity, EventEmitter,
+    FocusHandle, Focusable, Font, Image, ImageFormat, IntoElement, ListSizingBehavior, ObjectFit,
+    ParentElement, PathPromptOptions, Pixels, SharedString, Styled, Subscription,
+    UniformListScrollHandle, Window, actions, div, img, px, uniform_list,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, Sizable as _, Size, WindowExt,
@@ -2206,6 +2206,23 @@ impl DataGrid {
         self.show_sql_preview(window, cx);
     }
 
+    /// 复制底部状态栏里那条实际执行的 SQL（#290）。
+    ///
+    /// 宽表场景下这条 SQL 常被省略号截断，复制的是**完整文本**，不是屏幕上看到的那一截。
+    fn handle_copy_current_sql(
+        &mut self,
+        _: &ClickEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let sql = self.table_data_info.read(cx).current_sql.clone();
+        if sql.trim().is_empty() {
+            return;
+        }
+        cx.write_to_clipboard(ClipboardItem::new_string(sql));
+        window.push_notification(t!("TableDataGrid.sql_copied").to_string(), cx);
+    }
+
     fn handle_commit_changes(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         cx.emit(DataGridEvent::SaveChangesRequested);
     }
@@ -3771,13 +3788,29 @@ impl DataGrid {
                     ),
             )
             .child(
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
+                h_flex()
                     .flex_1()
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .child(table_data_info.current_sql.clone()),
+                    .min_w_0()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .child(table_data_info.current_sql.clone()),
+                    )
+                    .child(
+                        Button::new("copy-current-sql")
+                            .with_size(Size::Small)
+                            .ghost()
+                            .icon(IconName::Copy)
+                            .tooltip(t!("TableDataGrid.copy_sql").to_string())
+                            .on_click(cx.listener(Self::handle_copy_current_sql)),
+                    ),
             )
             .child(
                 h_flex()
