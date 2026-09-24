@@ -2538,6 +2538,30 @@ TableData:
     zh-CN: 无法刷新数据
     zh-HK: 無法重新整理資料
 TableDataGrid:
+  view_mode:
+    en: Display mode
+    zh-CN: 显示方式
+    zh-HK: 顯示方式
+  view_mode_grid:
+    en: Grid
+    zh-CN: 表格
+    zh-HK: 表格
+  view_mode_vertical:
+    en: "Column: Value"
+    zh-CN: "列：值"
+    zh-HK: "欄：值"
+  vertical_record:
+    en: "Record %{index}"
+    zh-CN: "记录 %{index}"
+    zh-HK: "記錄 %{index}"
+  vertical_empty:
+    en: No rows to display
+    zh-CN: 暂无可显示的数据
+    zh-HK: 暫無可顯示的資料
+  vertical_loading:
+    en: Loading…
+    zh-CN: 正在加载…
+    zh-HK: 正在載入…
   load_data_failed:
     en: "Failed to load data: %{error}"
     zh-CN: "数据加载失败: %{error}"

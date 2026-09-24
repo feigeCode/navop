@@ -6,3 +6,6 @@ pub mod results_delegate;
 
 #[cfg(test)]
 mod find_contract_tests;
+
+#[cfg(test)]
+mod vertical_view_tests;

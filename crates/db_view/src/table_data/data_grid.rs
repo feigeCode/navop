@@ -1,8 +1,9 @@
 use gpui::prelude::*;
 use gpui::{
     Anchor, AnyElement, App, AsyncApp, ClickEvent, Context, Entity, EventEmitter, FocusHandle,
-    Focusable, Image, ImageFormat, IntoElement, ObjectFit, ParentElement, PathPromptOptions,
-    SharedString, Styled, Subscription, Window, actions, div, img, px,
+    Focusable, Font, Image, ImageFormat, IntoElement, ListSizingBehavior, ObjectFit, ParentElement,
+    PathPromptOptions, Pixels, SharedString, Styled, Subscription, UniformListScrollHandle, Window,
+    actions, div, img, px, uniform_list,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, Sizable as _, Size, WindowExt,
@@ -10,6 +11,7 @@ use gpui_component::{
     h_flex,
     input::{Input, InputEvent, InputState},
     notification::Notification,
+    scroll::Scrollbar,
     v_flex,
 };
 use one_assets::IconName;
@@ -31,7 +33,7 @@ use crate::sidebar::execution_history_panel::ExecutionHistoryPanel;
 use crate::sql_editor::SqlEditor;
 use crate::table_data::copy_format::{CopyFormat, CopyFormatContext, CopyFormatter, TableMetadata};
 use crate::table_data::filter_editor::{FilterEditorEvent, TableFilterEditor, TableSchema};
-use crate::table_data::results_delegate::{EditorTableDelegate, RowChange};
+use crate::table_data::results_delegate::{EditorTableDelegate, RowChange, VerticalCellValue};
 use chrono::Local;
 use db::{
     BinaryCell, ColumnInfo, DatabasePlugin, DbManager, ExecOptions, GlobalDbState, IndexInfo,
@@ -43,11 +45,14 @@ use gpui_component::dialog::DialogButtonProps;
 use gpui_component::menu::{DropdownMenu, PopupMenu, PopupMenuItem};
 use one_core::gpui_tokio::Tokio;
 use one_core::popup_window::{PopupWindowOptions, open_popup_window};
-use one_core::settings::{AppSettings, LargeTextCellEditorOpenMode};
+use one_core::settings::{
+    AppSettings, LargeTextCellEditorOpenMode, TableViewMode, installed_grid_monospace_font,
+};
 use one_core::storage::DatabaseType;
 use one_core::tab_container::TabContainer;
 use one_ui::edit_table::ColumnSort;
 use std::collections::HashMap;
+use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::{
     Arc,
@@ -102,6 +107,33 @@ fn build_column_visibility_menu(
                     grid.update(cx, |grid, cx| {
                         grid.toggle_column_visibility(original_ix, cx)
                     });
+                }),
+        );
+    }
+    menu
+}
+
+/// 构建「显示方式」菜单：网格 / 纵向「列：值」。
+///
+/// 与字段过滤菜单同样在点击时构建，因此读到的一定是最新的设置值。
+fn build_view_mode_menu(
+    menu: PopupMenu,
+    data_grid: &Entity<DataGrid>,
+    cx: &mut Context<PopupMenu>,
+) -> PopupMenu {
+    let current = AppSettings::global(cx).table_view_mode;
+
+    let mut menu = menu;
+    for (mode, label_key) in [
+        (TableViewMode::Grid, "TableDataGrid.view_mode_grid"),
+        (TableViewMode::Vertical, "TableDataGrid.view_mode_vertical"),
+    ] {
+        let grid = data_grid.clone();
+        menu = menu.item(
+            PopupMenuItem::new(t!(label_key).to_string())
+                .checked(current == mode)
+                .on_click(move |_, _window, cx| {
+                    grid.update(cx, |grid, cx| grid.switch_view_mode(mode, cx));
                 }),
         );
     }
@@ -617,6 +649,145 @@ fn data_generation_is_current(generation: &AtomicU64, expected: u64) -> bool {
     generation.load(Ordering::Acquire) == expected
 }
 
+/// 纵向「列：值」视图里的一行。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum VerticalLine {
+    /// 记录头：每条数据占一行
+    Record {
+        /// 显示行下标
+        row: usize,
+    },
+    /// 字段行：一条「列名 + 值」
+    Field {
+        /// 显示行下标
+        row: usize,
+        /// 展示层列下标（不是原始列下标）
+        col: usize,
+    },
+}
+
+/// 纵向视图里「列名」列的固定宽度。
+const VERTICAL_LABEL_WIDTH: f32 = 200.;
+
+/// 纵向视图的总行数：每条记录一行记录头 + 每个可见列一行。
+///
+/// `column_count` 必须是**可见列数**——隐藏列在纵向视图里同样不出现。
+pub(super) fn vertical_line_count(row_count: usize, column_count: usize) -> usize {
+    if column_count == 0 {
+        return 0;
+    }
+    row_count.saturating_mul(column_count + 1)
+}
+
+/// 把纵向视图的扁平行号还原成「记录头 / 字段行」。
+///
+/// 纵向视图靠 `uniform_list` 虚拟化，要求所有行等高，所以记录头与字段行
+/// 共用同一个行号空间：每 `column_count + 1` 行构成一条记录。
+pub(super) fn vertical_line_at(line_ix: usize, column_count: usize) -> Option<VerticalLine> {
+    if column_count == 0 {
+        return None;
+    }
+
+    let lines_per_record = column_count + 1;
+    let row = line_ix / lines_per_record;
+    let slot = line_ix % lines_per_record;
+
+    Some(if slot == 0 {
+        VerticalLine::Record { row }
+    } else {
+        VerticalLine::Field { row, col: slot - 1 }
+    })
+}
+
+/// 纵向视图里一个字段的显示文本。
+///
+/// 与网格单元格共用口径：NULL 用弱化斜体标出，二进制给大小描述。
+fn render_vertical_value(value: VerticalCellValue, font: &Font, cx: &App) -> AnyElement {
+    let base = div()
+        .flex_1()
+        .min_w_0()
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .text_ellipsis()
+        .font(font.clone());
+
+    match value {
+        // 与网格单元格一致：NULL 弱化成斜体，不能被当成空字符串。
+        VerticalCellValue::Null => base
+            .text_color(cx.theme().muted_foreground.opacity(0.5))
+            .italic()
+            .child("NULL")
+            .into_any_element(),
+        VerticalCellValue::Binary { byte_len } => base
+            .child(t!("TableData.binary_value", size = byte_len).to_string())
+            .into_any_element(),
+        VerticalCellValue::Text(text) => base.child(text).into_any_element(),
+    }
+}
+
+/// 画纵向视图的一行：记录头，或一条「列名 + 值」。
+fn render_vertical_line(
+    line: VerticalLine,
+    delegate: &EditorTableDelegate,
+    font: &Font,
+    line_height: Pixels,
+    cx: &App,
+) -> AnyElement {
+    match line {
+        VerticalLine::Record { row } => h_flex()
+            .h(line_height)
+            .w_full()
+            .items_center()
+            .px_2()
+            .bg(cx.theme().muted)
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t!("TableDataGrid.vertical_record", index = row + 1).to_string()),
+            )
+            .into_any_element(),
+        VerticalLine::Field { row, col } => {
+            let Some(field) = delegate.vertical_field(row, col) else {
+                return div().h(line_height).w_full().into_any_element();
+            };
+
+            h_flex()
+                .h(line_height)
+                .w_full()
+                .min_w_0()
+                .items_center()
+                .gap_2()
+                .px_2()
+                .border_b_1()
+                .border_color(cx.theme().border)
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(VERTICAL_LABEL_WIDTH))
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(field.name),
+                )
+                .child(render_vertical_value(field.value, font, cx))
+                .into_any_element()
+        }
+    }
+}
+
+/// 纵向视图的数据字体缓存。
+///
+/// 字体族解析要走系统字体枚举（macOS 上是 CoreText 全量枚举），不能按行
+/// 调用；纵向视图每次渲染只解析一次，之后命中这里的缓存。
+#[derive(Clone)]
+struct VerticalFontCache {
+    requested_family: String,
+    font: Font,
+}
+
 /// 数据表格组件
 pub struct DataGrid {
     /// 组件配置
@@ -643,6 +814,10 @@ pub struct DataGrid {
     is_large_text_editor_sidebar_open: bool,
     /// Invalidates stale asynchronous data and metadata callbacks.
     data_generation: Arc<AtomicU64>,
+    /// 纵向「列：值」视图的滚动句柄
+    vertical_scroll_handle: UniformListScrollHandle,
+    /// 纵向视图的数据字体（按字体族缓存，字体枚举是系统级全量调用）
+    vertical_font_cache: Option<VerticalFontCache>,
 }
 
 impl DataGrid {
@@ -688,6 +863,8 @@ impl DataGrid {
             execution_history,
             is_large_text_editor_sidebar_open: false,
             data_generation: Arc::new(AtomicU64::new(0)),
+            vertical_scroll_handle: UniformListScrollHandle::default(),
+            vertical_font_cache: None,
         };
         result.bind_table_event(window, cx);
         if is_table_data {
@@ -3070,6 +3247,130 @@ impl DataGrid {
 
     // ========== 渲染辅助方法 ==========
 
+    /// 当前是否处于纵向「列：值」形态。
+    fn is_vertical_view(&self, cx: &App) -> bool {
+        AppSettings::global(cx).table_view_mode.is_vertical()
+    }
+
+    /// 纵向视图的数据字体（按字体族缓存，命中后不再走系统字体枚举）。
+    fn vertical_view_font(&mut self, cx: &App) -> Font {
+        let requested_family = AppSettings::global(cx).table_preview_font_family.clone();
+        if let Some(cache) = &self.vertical_font_cache
+            && cache.requested_family == requested_family
+        {
+            return cache.font.clone();
+        }
+
+        let font =
+            installed_grid_monospace_font(&requested_family, &cx.text_system().all_font_names());
+        self.vertical_font_cache = Some(VerticalFontCache {
+            requested_family,
+            font: font.clone(),
+        });
+        font
+    }
+
+    /// 切换显示方式：网格 ⇄ 纵向「列：值」。
+    ///
+    /// 偏好写回 `AppSettings` 而不是留在实例上：SQL 结果页每执行一次查询都会
+    /// 新建一个 `DataGrid`，只存实例状态会让用户每次查询都被打回网格形态。
+    fn switch_view_mode(&mut self, mode: TableViewMode, cx: &mut Context<Self>) {
+        if AppSettings::global(cx).table_view_mode == mode {
+            return;
+        }
+        AppSettings::update_and_save(cx, |settings| {
+            settings.table_view_mode = mode;
+        });
+        cx.notify();
+    }
+
+    /// 「显示方式」入口：网格 / 纵向「列：值」。
+    fn render_view_mode_button(&self, cx: &Context<Self>) -> AnyElement {
+        let data_grid = cx.entity().clone();
+        let vertical = self.is_vertical_view(cx);
+
+        Button::new("view-mode")
+            .with_size(Size::Medium)
+            .icon(IconName::Table)
+            .when(vertical, |this| this.primary())
+            .tooltip(t!("TableDataGrid.view_mode").to_string())
+            .dropdown_menu(move |menu, _window, cx| build_view_mode_menu(menu, &data_grid, cx))
+            .into_any_element()
+    }
+
+    /// 纵向「列：值」视图：每条记录展开成「列名 + 值」逐行展示。
+    ///
+    /// 用 `uniform_list` 虚拟化——一页可能上千条记录、每列一行，全量铺开会在
+    /// 每帧重建上万个文本元素。行高取表格行高设置，与网格保持同一节奏。
+    fn render_vertical_view(&mut self, font: &Font, cx: &Context<Self>) -> AnyElement {
+        let (row_count, column_count, loading) = {
+            let table = self.table.read(cx);
+            let delegate = table.delegate();
+            (
+                delegate.filtered_row_count(),
+                delegate.visible_column_indices().len(),
+                delegate.is_loading(),
+            )
+        };
+        let line_count = vertical_line_count(row_count, column_count);
+
+        if line_count == 0 {
+            // 首次加载时 `rows` 本来就是空的，这时候说「暂无数据」是错的。
+            let message = if loading {
+                t!("TableDataGrid.vertical_loading")
+            } else {
+                t!("TableDataGrid.vertical_empty")
+            };
+            return div()
+                .flex_1()
+                .w_full()
+                .h_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(message.to_string()),
+                )
+                .into_any_element();
+        }
+
+        let line_height = one_ui::table_row_height(cx);
+        let font = font.clone();
+        div()
+            .relative()
+            .flex_1()
+            .size_full()
+            .overflow_hidden()
+            .child(
+                uniform_list(
+                    "table-vertical-list",
+                    line_count,
+                    cx.processor(
+                        move |grid: &mut DataGrid, range: Range<usize>, _window, cx| {
+                            let table = grid.table.read(cx);
+                            let delegate = table.delegate();
+
+                            range
+                                .filter_map(|line_ix| vertical_line_at(line_ix, column_count))
+                                .map(|line| {
+                                    render_vertical_line(line, delegate, &font, line_height, cx)
+                                })
+                                .collect::<Vec<_>>()
+                        },
+                    ),
+                )
+                .flex_grow_1()
+                .size_full()
+                .track_scroll(&self.vertical_scroll_handle)
+                .with_sizing_behavior(ListSizingBehavior::Auto),
+            )
+            .child(Scrollbar::vertical(&self.vertical_scroll_handle))
+            .into_any_element()
+    }
+
     /// 「字段过滤」入口：按当前可见状态渲染每个字段的勾选项。
     ///
     /// 菜单在点击时构建，因此可以从捕获的实体读出最新列状态，避免缓存过期。
@@ -3161,8 +3462,12 @@ impl DataGrid {
         let editable = self.config.editable;
         let loading = self.table.read(cx).delegate().is_loading();
         let data_grid = cx.entity().clone();
-        let find_bar =
-            (self.config.usage == DataGridUsage::TableData).then(|| self.render_find_bar(cx));
+        // 纵向「列：值」形态只有浏览语义：网格的选中、单元格编辑、表内查找
+        // 都建立在「行 × 列」的二维布局上，纵向视图里没有对应的落点，因此
+        // 这些入口整体隐藏，而不是留一个点了没反应的按钮。
+        let grid_affordances = !self.is_vertical_view(cx);
+        let find_bar = (self.config.usage == DataGridUsage::TableData && grid_affordances)
+            .then(|| self.render_find_bar(cx));
         let settings = cx.global::<AppSettings>();
         let large_text_button_selected = settings.large_text_cell_editor_open_mode
             == LargeTextCellEditorOpenMode::SidebarPreview
@@ -3184,7 +3489,7 @@ impl DataGrid {
                     .disabled(loading)
                     .on_click(cx.listener(Self::handle_toolbar_refresh)),
             )
-            .when(editable, |this| {
+            .when(editable && grid_affordances, |this| {
                 this.child(
                     Button::new("add-row")
                         .with_size(Size::Medium)
@@ -3194,7 +3499,7 @@ impl DataGrid {
                         .on_click(cx.listener(Self::handle_add_row)),
                 )
             })
-            .when(editable, |this| {
+            .when(editable && grid_affordances, |this| {
                 this.child(
                     Button::new("delete-row")
                         .with_size(Size::Medium)
@@ -3204,7 +3509,7 @@ impl DataGrid {
                         .on_click(cx.listener(Self::handle_delete_row)),
                 )
             })
-            .when(editable, |this| {
+            .when(editable && grid_affordances, |this| {
                 this.child(
                     Button::new("undo-changes")
                         .with_size(Size::Medium)
@@ -3214,7 +3519,7 @@ impl DataGrid {
                         .on_click(cx.listener(Self::handle_revert_changes)),
                 )
             })
-            .when(editable, |this| {
+            .when(editable && grid_affordances, |this| {
                 this.child(
                     Button::new("sql-preview")
                         .with_size(Size::Medium)
@@ -3224,7 +3529,7 @@ impl DataGrid {
                         .on_click(cx.listener(Self::handle_sql_preview)),
                 )
             })
-            .when(editable, |this| {
+            .when(editable && grid_affordances, |this| {
                 this.child(
                     Button::new("commit-changes")
                         .with_size(Size::Medium)
@@ -3235,6 +3540,7 @@ impl DataGrid {
                 )
             })
             .child(div().flex_1())
+            .child(self.render_view_mode_button(cx))
             .child(self.render_column_visibility_button(cx))
             .when_some(find_bar, |this, bar| this.child(bar))
             .when(
@@ -3250,15 +3556,17 @@ impl DataGrid {
                     )
                 },
             )
-            .child(
-                Button::new("toggle-editor")
-                    .with_size(Size::Medium)
-                    .icon(IconName::EditBorder)
-                    .when(large_text_button_selected, |this| this.primary())
-                    .tooltip(t!("TableDataGrid.large_text_editor").to_string())
-                    .disabled(loading)
-                    .on_click(cx.listener(Self::handle_large_text_editor)),
-            )
+            .when(grid_affordances, |this| {
+                this.child(
+                    Button::new("toggle-editor")
+                        .with_size(Size::Medium)
+                        .icon(IconName::EditBorder)
+                        .when(large_text_button_selected, |this| this.primary())
+                        .tooltip(t!("TableDataGrid.large_text_editor").to_string())
+                        .disabled(loading)
+                        .on_click(cx.listener(Self::handle_large_text_editor)),
+                )
+            })
             .child(
                 Button::new("export-data")
                     .with_size(Size::Medium)
@@ -3364,7 +3672,7 @@ impl DataGrid {
             .into_any_element()
     }
 
-    pub fn render_table_area(&self, _window: &mut Window, cx: &App) -> AnyElement {
+    pub fn render_table_area(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let error_message = self.table_data_info.read(cx).error_message.clone();
 
         if let Some(error) = error_message {
@@ -3384,6 +3692,23 @@ impl DataGrid {
                         .text_sm()
                         .child(error),
                 )
+                .into_any_element();
+        }
+
+        if self.is_vertical_view(cx) {
+            // 数据字体只在纵向形态下解析（要过系统字体枚举），且在渲染入口
+            // 解析一次后缓存，不做成按行解析。
+            let font = self.vertical_view_font(cx);
+            return div()
+                .flex_1()
+                .w_full()
+                .h_full()
+                .bg(cx.theme().background)
+                .border_1()
+                .border_color(cx.theme().border)
+                .overflow_hidden()
+                .flex()
+                .child(self.render_vertical_view(&font, cx))
                 .into_any_element();
         }
 
@@ -3535,6 +3860,12 @@ impl DataGrid {
 impl Render for DataGrid {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_table_data = self.config.usage == DataGridUsage::TableData;
+        // 纵向形态下查找框被收起，这里也要一起摘掉「聚焦搜索框」的绑定，
+        // 否则 Cmd/Ctrl+F 会把焦点塞进一个看不见的输入框。
+        let grid_affordances = !self.is_vertical_view(cx);
+        // 表格区域先算好：纵向视图要走 `&mut self` 刷新字体缓存，
+        // 放进 builder 链里会和下面闭包对 `self` 的借用打架。
+        let table_area = self.render_table_area(cx);
 
         v_flex()
             .when(is_table_data, |this| {
@@ -3543,7 +3874,9 @@ impl Render for DataGrid {
                     .on_action(cx.listener(Self::handle_page_change_2000))
                     .on_action(cx.listener(Self::handle_page_change_10000))
                     .on_action(cx.listener(Self::handle_page_change_100000))
-                    .on_action(cx.listener(Self::on_action_focus_search))
+                    .when(grid_affordances, |this| {
+                        this.on_action(cx.listener(Self::on_action_focus_search))
+                    })
                     .on_action(cx.listener(Self::on_action_open_table_designer))
                     .on_action(cx.listener(Self::on_action_open_table_query))
                     .key_context(DB_SEARCH_CONTEXT)
@@ -3568,7 +3901,7 @@ impl Render for DataGrid {
                     .w_full()
                     .h_full()
                     .overflow_hidden()
-                    .child(self.render_table_area(window, cx)),
+                    .child(table_area),
             )
             .child(if is_table_data {
                 self.render_status_bar(cx)
@@ -3593,6 +3926,8 @@ impl Clone for DataGrid {
             execution_history: self.execution_history.clone(),
             is_large_text_editor_sidebar_open: self.is_large_text_editor_sidebar_open,
             data_generation: self.data_generation.clone(),
+            vertical_scroll_handle: self.vertical_scroll_handle.clone(),
+            vertical_font_cache: self.vertical_font_cache.clone(),
         }
     }
 }
