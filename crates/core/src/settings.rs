@@ -647,6 +647,10 @@ pub struct WorkbenchLayoutSettings {
     /// 右侧标签组是否放大占满工作台行。
     #[serde(default)]
     pub right_maximized: bool,
+    /// 侧栏里被用户「移除」的工作区根目录（绝对路径）。分组由此派生，
+    /// 不记名单的话移除后下次渲染又会回来。用户显式切回该工作区时移出名单。
+    #[serde(default)]
+    pub hidden_workspaces: Vec<String>,
 }
 
 /// 自定义系统提示词的最大字符数（按 chars 计），防止拖垮上下文长度。

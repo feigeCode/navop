@@ -205,6 +205,9 @@ pub struct WorkbenchState {
     right_collapsed: bool,
     /// 右侧标签组放大占满工作台行。
     right_maximized: bool,
+    /// 侧栏里被用户「移除」的工作区根目录。会话归属工作区是持久事实，
+    /// 分组由它派生，所以隐藏必须记名单（落盘），否则下次渲染就回来。
+    hidden_workspaces: Vec<String>,
 }
 
 impl WorkbenchState {
@@ -220,6 +223,7 @@ impl WorkbenchState {
             right_width: DEFAULT_RIGHT_WIDTH,
             right_collapsed: false,
             right_maximized: false,
+            hidden_workspaces: Vec::new(),
         }
     }
 
@@ -303,6 +307,30 @@ impl WorkbenchState {
         if self.right_maximized {
             self.right_collapsed = false;
         }
+        true
+    }
+
+    /// 该工作区是否被用户从侧栏移除过。
+    pub fn is_workspace_hidden(&self, root: &str) -> bool {
+        self.hidden_workspaces.iter().any(|hidden| hidden == root)
+    }
+
+    /// 把工作区从侧栏移除（记名单）。已在名单里则无变化。
+    pub fn hide_workspace(&mut self, root: &str) -> bool {
+        if self.is_workspace_hidden(root) {
+            return false;
+        }
+        self.hidden_workspaces.push(root.to_string());
+        true
+    }
+
+    /// 恢复工作区分组（用户显式切回该工作区时调用）。
+    pub fn unhide_workspace(&mut self, root: &str) -> bool {
+        let Some(index) = self.hidden_workspaces.iter().position(|hidden| hidden == root)
+        else {
+            return false;
+        };
+        self.hidden_workspaces.remove(index);
         true
     }
 
@@ -567,6 +595,7 @@ impl WorkbenchState {
             right_width: Some(self.right_width),
             right_collapsed: self.right_collapsed,
             right_maximized: self.right_maximized,
+            hidden_workspaces: self.hidden_workspaces.clone(),
         }
     }
 
@@ -616,6 +645,7 @@ impl WorkbenchState {
             .unwrap_or(DEFAULT_RIGHT_WIDTH);
         state.right_collapsed = settings.right_collapsed;
         state.right_maximized = settings.right_maximized && !state.right_collapsed;
+        state.hidden_workspaces = settings.hidden_workspaces.clone();
         state
     }
 }
@@ -648,6 +678,24 @@ mod tests {
         assert!(state.right_tabs().is_empty());
         assert_eq!(None, state.right_active());
         assert!(!state.nav_collapsed());
+    }
+
+    #[test]
+    fn hidden_workspaces_round_trip_and_deduplicate() {
+        let mut state = WorkbenchState::new(WorkbenchPanelKind::Chat);
+
+        assert!(state.hide_workspace("/tmp/a"));
+        assert!(!state.hide_workspace("/tmp/a"), "重复移除不应产生重复名单");
+        assert!(state.is_workspace_hidden("/tmp/a"));
+        assert!(!state.is_workspace_hidden("/tmp/b"));
+
+        let settings = state.to_settings();
+        let mut restored = WorkbenchState::from_settings(&settings);
+        assert!(restored.is_workspace_hidden("/tmp/a"));
+
+        assert!(restored.unhide_workspace("/tmp/a"));
+        assert!(!restored.unhide_workspace("/tmp/a"), "名单里没有时无变化");
+        assert!(!restored.is_workspace_hidden("/tmp/a"));
     }
 
     #[test]

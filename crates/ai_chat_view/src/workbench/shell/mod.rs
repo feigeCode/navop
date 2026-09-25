@@ -202,7 +202,11 @@ impl WorkbenchShell {
         if self.workspace_root.as_ref() == Some(&root) {
             return;
         }
-        self.workspace_root = Some(root);
+        self.workspace_root = Some(root.clone());
+        // 用户显式切回该工作区 = 想看到它；从「已移除」名单里恢复。
+        if self.state.unhide_workspace(&root.to_string_lossy()) {
+            self.persist_layout(cx);
+        }
         cx.notify();
     }
 
@@ -273,6 +277,41 @@ impl WorkbenchShell {
         if let Some(panel) = self.session_source.clone() {
             panel.update(cx, |panel, cx| panel.select_session(uid, cx));
         }
+    }
+
+    /// 侧栏分组「...」菜单：把该工作区从侧栏移除。
+    ///
+    /// 分组由会话归属派生，隐藏必须记名单落盘；用户显式切回该工作区时恢复
+    /// （见 [`Self::set_workspace_root`]）。
+    pub fn hide_workspace_group(&mut self, root: &str, cx: &mut Context<Self>) {
+        let changed = self.state.hide_workspace(root);
+        self.commit(changed, cx);
+    }
+
+    /// 侧栏分组「...」菜单：归档该工作区里超过 `days` 天没动静的会话。
+    pub fn archive_inactive_sessions(&mut self, root: &str, days: u64, cx: &mut Context<Self>) {
+        let Some(panel) = self.session_source.clone() else {
+            return;
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|since| since.as_secs() as i64)
+            .unwrap_or(0);
+        let cutoff = now.saturating_sub((days.saturating_mul(24 * 3600)) as i64);
+        panel.update(cx, |panel, cx| {
+            let stale: Vec<String> = panel
+                .session_summaries(cx)
+                .into_iter()
+                .filter(|summary| {
+                    summary.workspace_root.as_deref() == Some(root)
+                        && summary.updated_at < cutoff
+                })
+                .map(|summary| summary.id.to_string())
+                .collect();
+            for uid in stale {
+                panel.archive_session(&uid, cx);
+            }
+        });
     }
 
     /// 顶栏右侧栏开关：无标签时展开即打开第一个可用面板；有标签时在

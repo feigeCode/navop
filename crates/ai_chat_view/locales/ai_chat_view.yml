@@ -1119,6 +1119,22 @@ Workbench:
     en: "Dock %{panel} to the right group"
     zh-CN: "把%{panel}并入右侧标签组"
     zh-HK: "把%{panel}併入右側標籤群組"
+  workspace_menu:
+    en: "Workspace actions"
+    zh-CN: "工作区操作"
+    zh-HK: "工作區操作"
+  ws_menu_reveal:
+    en: "Reveal in File Manager"
+    zh-CN: "在文件管理器中显示"
+    zh-HK: "在檔案管理器中顯示"
+  ws_menu_archive_inactive:
+    en: "Archive inactive (%{count})"
+    zh-CN: "归档不活跃对话 (%{count})"
+    zh-HK: "歸檔不活躍對話 (%{count})"
+  ws_menu_remove:
+    en: "Remove"
+    zh-CN: "移除"
+    zh-HK: "移除"
   close_tab:
     en: "Close %{panel} tab"
     zh-CN: "关闭「%{panel}」标签"
