@@ -24,6 +24,8 @@ use gpui::{
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Editor, EditorState, Input, InputEvent, InputState};
 use gpui_component::popover::Popover;
+use gpui_component::searchable_list::SearchableVec;
+use gpui_component::select::{Select, SelectEvent, SelectGroup, SelectState};
 use gpui_component::switch::Switch;
 use gpui_component::{ActiveTheme, Disableable, Icon, Sizable, h_flex, v_flex};
 use one_assets::IconName;
@@ -43,7 +45,7 @@ use crate::input::context::{
 use crate::input::completion::ComposerCompletionProvider;
 use crate::input::mention::{MentionCompletionProvider, MentionItem};
 use crate::input::slash::{SlashCommandItem, SlashCompletionProvider};
-use crate::input::model_picker::group_models;
+use crate::input::model_picker::{ModelChoice, model_groups, selected_model_index};
 use crate::input::skill::{render_skill_mode_content, skill_trigger_label};
 use crate::theme::{AgentChatTheme, active_agent_chat_theme};
 
@@ -98,6 +100,8 @@ pub enum AgentInputEvent {
 }
 
 /// 内置下拉的种类(用于受控开合状态)。
+///
+/// 模型下拉不在这里:它交给组件库的 `Select`,开合由组件自己管。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ComposerMenuKind {
     Target,
@@ -105,7 +109,6 @@ enum ComposerMenuKind {
     Plan,
     SubAgent,
     Mode,
-    Model,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -267,6 +270,14 @@ pub struct AgentInput {
     target_options: Vec<ComposerTarget>,
     /// 模型下拉选项(上层注入)。
     model_options: Vec<ComposerModelOption>,
+    /// 模型下拉的组件库状态。
+    ///
+    /// 选项的注入点只有 `Context`、拿不到窗口，而 `SelectState` 的更新需要窗口；
+    /// 所以注入时只置脏标记，真正的同步在 `render`(持有窗口)时做 ——
+    /// 与 `context_search_needs_reset` 同一个套路。
+    model_select: Entity<SelectState<SearchableVec<SelectGroup<ModelChoice>>>>,
+    /// 见 `model_select`:注入新选项后置位,`render` 消费后清掉。
+    model_select_dirty: bool,
     /// 工具执行模式下拉选项(上层注入)。
     execution_mode_options: Vec<ComposerMenuOption>,
     /// 上下文面板的目标搜索框(与顶部输入框分离,避免抢焦点 / 拦截回车提交)。
@@ -406,6 +417,36 @@ impl AgentInput {
             },
         );
 
+        // 模型下拉交给组件库的 `Select`(自带搜索框、虚拟滚动与键盘导航)。
+        // 选项这里先留空:它由 `set_menu_options` 置脏、`render` 里带窗口灌进去。
+        let model_select: Entity<SelectState<SearchableVec<SelectGroup<ModelChoice>>>> =
+            cx.new(|cx| {
+                SelectState::<SearchableVec<SelectGroup<ModelChoice>>>::new(
+                    SearchableVec::new(Vec::new()),
+                    None,
+                    window,
+                    cx,
+                )
+                .searchable(true)
+            });
+        let model_select_sub = cx.subscribe(
+            &model_select,
+            |_this: &mut Self,
+             _state: Entity<SelectState<SearchableVec<SelectGroup<ModelChoice>>>>,
+             event: &SelectEvent<SearchableVec<SelectGroup<ModelChoice>>>,
+             cx: &mut Context<Self>| {
+                // 用户确认了一项:把完整选项回报给上层(它据此重建运行时)。
+                let SelectEvent::Confirm(Some(option)) = event else {
+                    return;
+                };
+                cx.emit(AgentInputEvent::SelectModel {
+                    id: option.id.clone(),
+                    provider_id: option.provider_id.clone(),
+                    model: option.model.clone(),
+                });
+            },
+        );
+
         Self {
             focus_handle: cx.focus_handle(),
             input_state,
@@ -420,6 +461,8 @@ impl AgentInput {
             context: AgentComposerContext::default(),
             target_options: Vec::new(),
             model_options: Vec::new(),
+            model_select,
+            model_select_dirty: false,
             execution_mode_options: Vec::new(),
             context_search_input,
             context_search_query: SharedString::default(),
@@ -430,7 +473,13 @@ impl AgentInput {
             top_capabilities_collapsed: false,
             theme: None,
             edge_to_edge: false,
-            _subscriptions: vec![enter_sub, paste_sub, history_sub, context_search_sub],
+            _subscriptions: vec![
+                enter_sub,
+                paste_sub,
+                history_sub,
+                context_search_sub,
+                model_select_sub,
+            ],
         }
     }
 
@@ -502,7 +551,11 @@ impl AgentInput {
         execution_mode_options: Vec<ComposerMenuOption>,
         cx: &mut Context<Self>,
     ) {
-        self.model_options = model_options;
+        if self.model_options != model_options {
+            self.model_options = model_options;
+            // `SelectState` 的更新要窗口,而这里只有 `Context`;置脏,`render` 时同步。
+            self.model_select_dirty = true;
+        }
         self.execution_mode_options = execution_mode_options;
         cx.notify();
     }
@@ -986,129 +1039,32 @@ impl AgentInput {
             })
     }
 
-    fn render_model_menu(
-        &self,
-        trigger_label: SharedString,
-        options: Vec<ComposerModelOption>,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
-        let view = cx.entity();
-        let is_open = self.open_menu == Some(ComposerMenuKind::Model);
-        let selected_model = self.context.model.clone();
+    /// 模型下拉:交给组件库的 `Select` —— 搜索框、滚动、键盘导航都由它提供。
+    ///
+    /// 选项不从这里传:它们在 `set_menu_options` 时置脏、`render` 里灌进 `model_select`。
+    fn render_model_menu(&self, placeholder: SharedString) -> impl IntoElement + use<> {
+        Select::new(&self.model_select)
+            .id("agent-model")
+            .w_full()
+            .h(px(32.0))
+            .small()
+            .placeholder(placeholder)
+            .search_placeholder(t!("AgentUi.search_model").to_string())
+            .menu_max_h(px(320.0))
+            .disabled(self.is_running)
+    }
 
-        let theme = self.local_theme(cx);
-        let trigger = themed_outline_button(
-            Button::new("agent-model")
-                .small()
-                .w_full()
-                .h(px(32.0))
-                .justify_between()
-                .outline()
-                .disabled(self.is_running)
-                .child(toolbar_button_label(trigger_label)),
-            &theme,
-        );
-
-        Popover::new("agent-model-popover")
-            .p_0()
-            .open(is_open)
-            .on_open_change({
-                let view = view.clone();
-                move |open, _window, cx| {
-                    let open = *open;
-                    view.update(cx, |this, cx| {
-                        this.open_menu = if open && !this.is_running {
-                            Some(ComposerMenuKind::Model)
-                        } else {
-                            None
-                        };
-                        cx.notify();
-                    });
-                }
-            })
-            .trigger(trigger)
-            .content({
-                let view = view.clone();
-                let theme = theme.clone();
-                move |_state, _window, cx| {
-                    let muted = theme.muted_foreground;
-                    let hover_bg = theme.hover_background();
-                    let radius = cx.theme().radius;
-                    let selected = selected_model.clone();
-                    let mut col = v_flex()
-                        .p_1()
-                        .gap(px(2.0))
-                        .min_w(px(240.0))
-                        .bg(theme.background)
-                        .text_color(theme.foreground);
-                    for group in group_models(&options) {
-                        col = col.child(
-                            div()
-                                .w_full()
-                                .px_2()
-                                .pt_2()
-                                .pb_1()
-                                .text_xs()
-                                .text_color(muted)
-                                .child(group.provider_label.clone()),
-                        );
-                        for opt in group.options {
-                            let view = view.clone();
-                            let id = opt.id.clone();
-                            let provider_id = opt.provider_id.clone();
-                            let model = opt.model.clone();
-                            let is_current = selected.as_ref().is_some_and(|current| {
-                                current.provider == opt.provider_label && current.model == opt.model
-                            });
-                            let mut inner = v_flex()
-                                .gap(px(1.0))
-                                .child(div().text_sm().child(opt.display_label()));
-                            if let Some(hint) = &opt.hint {
-                                inner = inner
-                                    .child(div().text_xs().text_color(muted).child(hint.clone()));
-                            }
-                            col = col.child(
-                                h_flex()
-                                    .id(SharedString::from(format!("agent-model-opt-{id}")))
-                                    .w_full()
-                                    .items_center()
-                                    .gap_2()
-                                    .px_2()
-                                    .py_1()
-                                    .rounded(radius)
-                                    .cursor_pointer()
-                                    .hover(move |s| s.bg(hover_bg))
-                                    .child(div().flex_1().min_w_0().child(inner))
-                                    .when(is_current, |this| {
-                                        this.child(
-                                            Icon::new(IconName::Check)
-                                                .xsmall()
-                                                .text_color(cx.theme().success),
-                                        )
-                                    })
-                                    .on_click(move |_, _window, cx| {
-                                        let id = id.clone();
-                                        let provider_id = provider_id.clone();
-                                        let model = model.clone();
-                                        view.update(cx, |this, cx| {
-                                            if this.is_running {
-                                                return;
-                                            }
-                                            this.open_menu = None;
-                                            cx.emit(AgentInputEvent::SelectModel {
-                                                id,
-                                                provider_id,
-                                                model,
-                                            });
-                                            cx.notify();
-                                        });
-                                    }),
-                            );
-                        }
-                    }
-                    col
-                }
-            })
+    /// 把当前选项与选中项灌进组件库的 `Select`。
+    ///
+    /// 只在 `model_select_dirty` 时调用:`set_items` 会触发重渲染,必须靠脏标记保证
+    /// 「一次同步即收敛」,否则渲染 → 通知 → 渲染会自己转起来。
+    fn sync_model_select(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let groups = model_groups(&self.model_options);
+        let selected = selected_model_index(&self.model_options, self.context.model.as_ref());
+        self.model_select.update(cx, |state, cx| {
+            state.set_items(groups, window, cx);
+            state.set_selected_index(selected, window, cx);
+        });
     }
 
     fn render_attachments(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
@@ -1340,7 +1296,7 @@ impl AgentInput {
                     .min_w(px(model_min_width))
                     .h(action_button_size)
                     .overflow_hidden()
-                    .child(self.render_model_menu(model_label, self.model_options.clone(), cx))
+                    .child(self.render_model_menu(model_label))
                     .debug_selector(|| "agent-input-model-control".to_string()),
             );
 
@@ -3166,6 +3122,11 @@ impl Render for AgentInput {
             });
             self.context_search_query = SharedString::default();
             self.context_search_needs_reset = false;
+        }
+        // 模型下拉换了选项 / 选中项:同一套路,趁手里有窗口时灌进组件库的 state。
+        if self.model_select_dirty {
+            self.sync_model_select(_window, cx);
+            self.model_select_dirty = false;
         }
         let context_bar = self.render_context_bar(cx);
         let attachments = self.render_attachments(cx);
