@@ -209,15 +209,18 @@ impl WorkbenchShell {
             }
         } else {
             for group in &groups {
+                let key = group_key(group);
                 rows.push(self.workspace_group_header(group, theme, cx));
-                for summary in &group.sessions {
-                    rows.push(Self::session_row(
-                        summary,
-                        current.as_deref() == Some(summary.id.as_str()),
-                        theme,
-                        &panel,
-                        cx,
-                    ));
+                if !self.group_collapsed(&key) {
+                    for summary in &group.sessions {
+                        rows.push(Self::session_row(
+                            summary,
+                            current.as_deref() == Some(summary.id.as_str()),
+                            theme,
+                            &panel,
+                            cx,
+                        ));
+                    }
                 }
             }
         }
@@ -329,7 +332,9 @@ impl WorkbenchShell {
         )
     }
 
-    /// 工作区分组标题：目录名 + hover 出「新建对话」+ 右侧会话计数。
+    /// 工作区分组标题：chevron + 目录名 + hover 出「新建对话」+ 右侧会话计数。
+    ///
+    /// 整行可点：点击展开/收起该组（仅会话内记忆）。
     fn workspace_group_header(
         &self,
         group: &WorkspaceGroup,
@@ -337,9 +342,11 @@ impl WorkbenchShell {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let count = group.sessions.len();
+        let key = group_key(group);
+        let collapsed = self.group_collapsed(&key);
         let hover_group = SharedString::from(format!(
             "ws-group-hover-{}",
-            group.root.as_deref().unwrap_or("ungrouped")
+            group.root.as_deref().unwrap_or(super::GROUP_KEY_UNGROUPED)
         ));
         let new_button = group.root.clone().map(|root| {
             let this = cx.entity();
@@ -349,9 +356,12 @@ impl WorkbenchShell {
             )
             .to_string();
             // 平时隐藏，hover 分组时浮现（opacity 不影响命中，区域很小）。
+            // 按钮点击会冒泡到整行的收起/展开，得拦住。
             div()
+                .id(SharedString::from(format!("workbench-ws-new-guard-{hover_group}")))
                 .opacity(0.0)
                 .group_hover(hover_group.clone(), |style| style.opacity(1.0))
+                .on_click(|_, _, cx| cx.stop_propagation())
                 .child(
                     IconButton::new(
                         SharedString::from(format!("workbench-ws-new-{hover_group}")),
@@ -369,12 +379,26 @@ impl WorkbenchShell {
         });
 
         h_flex()
+            .id(SharedString::from(format!("workbench-ws-group-{key}")))
             .group(hover_group)
             .pt_2()
             .px_2()
             .pb_0p5()
             .items_center()
             .gap_1()
+            .rounded(theme.surface_radius)
+            .cursor_pointer()
+            .hover(|style| style.bg(theme.hover_background()))
+            .on_click(cx.listener(move |this, _, _, cx| this.toggle_workspace_group(&key, cx)))
+            .child(
+                Icon::new(if collapsed {
+                    IconName::ChevronRight
+                } else {
+                    IconName::ChevronDown
+                })
+                .xsmall()
+                .text_color(theme.muted_foreground),
+            )
             .child(
                 Icon::new(IconName::Folder)
                     .xsmall()
@@ -536,4 +560,12 @@ impl WorkbenchShell {
                 .into_any_element(),
         }
     }
+}
+
+/// 折叠表里的组键：工作区根目录；未分组会话用固定键。
+fn group_key(group: &WorkspaceGroup) -> String {
+    group
+        .root
+        .clone()
+        .unwrap_or_else(|| super::GROUP_KEY_UNGROUPED.to_string())
 }

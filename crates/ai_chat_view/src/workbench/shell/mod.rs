@@ -4,7 +4,7 @@
 //! 停靠、折叠与布局落盘；面板之间不互相持有。落位语义在 [`super::state`]，
 //! 本模块只做渲染与状态编排。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use gpui::{AnyView, AppContext as _, Context, Entity, FocusHandle, Subscription, Window};
@@ -24,6 +24,8 @@ const DOCK_PANEL_WIDTH: f32 = 400.0;
 /// 底部停靠面板的默认高度。
 const DOCK_PANEL_HEIGHT: f32 = 260.0;
 const PANEL_HEADER_HEIGHT: f32 = 36.0;
+/// 未分组会话在折叠表里的键（与 `WorkspaceGroup` 的 `root: None` 对应）。
+pub(super) const GROUP_KEY_UNGROUPED: &str = "ungrouped";
 
 /// 一次注入给外壳的面板。
 pub struct WorkbenchPanelEntry {
@@ -77,6 +79,12 @@ pub struct WorkbenchShell {
     pub(super) workspace_switcher: Option<Box<dyn Fn(&std::path::Path, &mut gpui::App) + 'static>>,
     /// 宽度拖拽时落盘的节流时间戳（拖拽每帧都会触发，不能每帧写盘）。
     pub(super) last_width_persist: Option<Instant>,
+    /// 收起的工作区分组（键为组根目录或 `ungrouped`）。仅会话内记忆：
+    /// 折叠是浏览姿势，不值得落盘，也不该跨工作区串味。
+    pub(super) collapsed_groups: HashSet<String>,
+    /// 「新建页签」选择面板是否打开。虚拟页签：不进 `WorkbenchState`、
+    /// 不落盘，点选面板后即关闭。
+    pub(super) picker_open: bool,
     pub(super) _subscriptions: Vec<Subscription>,
 }
 
@@ -176,6 +184,8 @@ impl WorkbenchShell {
             workspace_picker: None,
             workspace_switcher: None,
             last_width_persist: None,
+            collapsed_groups: HashSet::new(),
+            picker_open: false,
             _subscriptions: subscriptions,
         }
     }
@@ -364,6 +374,46 @@ impl WorkbenchShell {
     pub fn toggle_session_nav(&mut self, cx: &mut Context<Self>) {
         let changed = self.state.toggle_nav();
         self.commit(changed, cx);
+    }
+
+    /// 切换工作区分组的展开/收起。`key` 为组根目录字符串，未分组传
+    /// [`GROUP_KEY_UNGROUPED`]。
+    pub fn toggle_workspace_group(&mut self, key: &str, cx: &mut Context<Self>) {
+        if !self.collapsed_groups.remove(key) {
+            self.collapsed_groups.insert(key.to_string());
+        }
+        cx.notify();
+    }
+
+    /// 该工作区分组当前是否被收起。
+    pub fn group_collapsed(&self, key: &str) -> bool {
+        self.collapsed_groups.contains(key)
+    }
+
+    /// 打开/关闭「新建页签」选择面板（虚拟页签）。
+    pub fn toggle_tab_picker(&mut self, cx: &mut Context<Self>) {
+        self.picker_open = !self.picker_open;
+        if self.picker_open && self.state.right_collapsed() {
+            // 从收起态点 +：先展开右侧组，否则选择面板看不见。
+            let changed = self.state.set_right_collapsed(false);
+            self.commit(changed, cx);
+        }
+        cx.notify();
+    }
+
+    /// 关闭「新建页签」选择面板（点选面板 / 点 X 时调用）。
+    pub fn close_tab_picker(&mut self, cx: &mut Context<Self>) {
+        if !self.picker_open {
+            return;
+        }
+        self.picker_open = false;
+        cx.notify();
+    }
+
+    /// 从选择面板打开一个面板：当前页签即变为该功能，选择面板随之关闭。
+    pub fn pick_panel(&mut self, kind: WorkbenchPanelKind, cx: &mut Context<Self>) {
+        self.picker_open = false;
+        self.activate_panel(kind, cx);
     }
 
     /// 拖拽调宽：立即重绘；落盘按 [`WIDTH_PERSIST_THROTTLE`] 节流，

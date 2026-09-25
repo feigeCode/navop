@@ -1135,30 +1135,18 @@ Workbench:
     en: "Close %{panel} tab"
     zh-CN: "关闭「%{panel}」标签"
     zh-HK: "關閉「%{panel}」標籤"
-  group_today:
-    en: Today
-    zh-CN: 今天
-    zh-HK: 今天
-  group_yesterday:
-    en: Yesterday
-    zh-CN: 昨天
-    zh-HK: 昨天
-  group_this_week:
-    en: This week
-    zh-CN: 本周
-    zh-HK: 本週
-  group_this_month:
-    en: This month
-    zh-CN: 本月
-    zh-HK: 本月
-  group_this_year:
-    en: This year
-    zh-CN: 今年
-    zh-HK: 今年
-  group_earlier:
-    en: Earlier
-    zh-CN: 更早
-    zh-HK: 更早
+  add_tab:
+    en: New tab
+    zh-CN: 新建页签
+    zh-HK: 新增頁籤
+  picker_title:
+    en: Add a panel
+    zh-CN: 添加面板
+    zh-HK: 新增面板
+  picker_hint:
+    en: Choose a panel to open in the current tab.
+    zh-CN: 选择一个面板，在当前页签打开。
+    zh-HK: 選擇一個面板，在當前頁籤開啟。
   no_matching_sessions:
     en: No conversations match the search.
     zh-CN: 没有匹配的会话。

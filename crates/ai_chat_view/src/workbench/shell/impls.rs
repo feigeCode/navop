@@ -4,7 +4,7 @@ use gpui::{
     StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
 };
 
-use gpui_component::{Icon, Sizable as _, Size, h_flex, v_flex};
+use gpui_component::{Icon, Sizable as _, Size, StyledExt as _, h_flex, v_flex};
 use one_assets::IconName;
 use one_core::tab_container::{TabContent, TabContentEvent};
 use one_ui::{IconButton, IconButtonRole};
@@ -311,6 +311,18 @@ impl WorkbenchShell {
         for kind in &tabs {
             bar = bar.child(self.render_tab(*kind, Some(*kind) == active, theme, cx));
         }
+        // 「新建页签」：先弹一个空白选择面板（虚拟页签），点选后当前页签
+        // 即变为对应功能。
+        if self.picker_open {
+            bar = bar.child(self.render_picker_tab(theme, cx));
+        }
+        bar = bar.child(
+            IconButton::new("workbench-tab-add", IconName::Plus)
+                .role(IconButtonRole::Compact)
+                .tooltip(t!("Workbench.add_tab").to_string())
+                .text_color(theme.muted_foreground)
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_tab_picker(cx))),
+        );
         // 还没并排打开的面板：点一下就进标签组，避免再叠一层下拉菜单。
         bar = bar.child(div().flex_1());
         for kind in unpinned {
@@ -348,18 +360,22 @@ impl WorkbenchShell {
             .on_click(cx.listener(|this, _, _, cx| this.toggle_right_maximized(cx))),
         );
 
-        let content = active
-            .and_then(|kind| self.panels.get(&kind).cloned())
-            .map(|view| {
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .child(view)
-                    .into_any_element()
-            })
-            .unwrap_or_else(|| div().flex_1().into_any_element());
+        let content = if self.picker_open {
+            self.render_picker_panel(theme, cx)
+        } else {
+            active
+                .and_then(|kind| self.panels.get(&kind).cloned())
+                .map(|view| {
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .child(view)
+                        .into_any_element()
+                })
+                .unwrap_or_else(|| div().flex_1().into_any_element())
+        };
 
         v_flex()
             .size_full()
@@ -417,6 +433,112 @@ impl WorkbenchShell {
                 .on_click(on_close),
             )
             .on_click(on_select)
+            .into_any_element()
+    }
+
+    /// 「新建页签」的虚拟标签：只在选择面板打开时出现在标签条上，
+    /// 点 X 或点选面板后消失。
+    fn render_picker_tab(
+        &self,
+        theme: &AgentChatTheme,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        h_flex()
+            .id("workbench-tab-picker")
+            .min_w_0()
+            .items_center()
+            .gap_1()
+            .px_1p5()
+            .py_1()
+            .rounded(theme.surface_radius)
+            .bg(theme.panel_hover)
+            .cursor_pointer()
+            .child(Icon::new(IconName::Plus).with_size(Size::XSmall))
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_xs()
+                    .text_color(theme.foreground)
+                    .child(t!("Workbench.add_tab").to_string()),
+            )
+            .child(
+                IconButton::new("workbench-tab-picker-close", IconName::Close)
+                    .role(IconButtonRole::Compact)
+                    .tooltip(t!("Workbench.close_tab", panel = t!("Workbench.add_tab").to_string()).to_string())
+                    .on_click(cx.listener(|this, _, _, cx| this.close_tab_picker(cx))),
+            )
+            .into_any_element()
+    }
+
+    /// 「新建页签」选择面板：列出所有可用面板（终端、文件、审查），
+    /// 点击后当前页签即变为该功能。
+    fn render_picker_panel(
+        &self,
+        theme: &AgentChatTheme,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let hover = theme.hover_background();
+        let mut list = v_flex().w(px(320.0)).gap_0p5();
+        for kind in WorkbenchPanelKind::DOCKABLE
+            .into_iter()
+            .filter(|kind| self.has_panel(*kind))
+        {
+            list = list.child(
+                h_flex()
+                    .id(SharedString::from(format!("workbench-picker-{}", kind.id())))
+                    .w_full()
+                    .items_center()
+                    .gap_2()
+                    .px_2()
+                    .py_1p5()
+                    .rounded(theme.surface_radius)
+                    .cursor_pointer()
+                    .hover(move |style| style.bg(hover))
+                    .on_click(cx.listener(move |this, _, _, cx| this.pick_panel(kind, cx)))
+                    .child(
+                        Icon::new(kind.icon())
+                            .small()
+                            .text_color(theme.muted_foreground),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_sm()
+                            .text_color(theme.foreground)
+                            .child(kind.title()),
+                    ),
+            );
+        }
+
+        div()
+            .debug_selector(|| "workbench-picker".to_string())
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
+            .overflow_hidden()
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                v_flex()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_semibold()
+                            .text_color(theme.foreground)
+                            .child(t!("Workbench.picker_title").to_string()),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(t!("Workbench.picker_hint").to_string()),
+                    )
+                    .child(list),
+            )
             .into_any_element()
     }
 

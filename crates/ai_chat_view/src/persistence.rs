@@ -21,18 +21,12 @@ use crate::session_sidebar::SessionSummary;
 /// 标题最大字符数(超出截断)。
 const MAX_TITLE_CHARS: usize = 40;
 
-/// 保存会话快照。空会话(无任何历史)不落库。
-///
-/// 返回用于刷新侧边栏摘要的 `(标题, 更新时间秒)`;未保存时返回 `None`。
-pub fn save_session(cx: &App, session: &Session) -> Option<(String, i64)> {
-    save_session_with_workspace(cx, session, None)
-}
-
 /// 带「工作区归属定格」的保存。
 ///
 /// 归属规则：快照里已有 `workspace_root`（此前落过盘 / 从别处载入）则原样保留；
 /// 否则写本次传入的当前工作区。之后无论外壳切到哪个工作区，该会话都留在
 /// 首次落盘时的工作区（侧栏分组与底部新建对话下拉都以此为准）。
+/// 不需要归属时传 `None`。
 pub fn save_session_with_workspace(
     cx: &App,
     session: &Session,
@@ -304,7 +298,7 @@ mod tests {
         session.record_assistant_message(&turn_id, "好的,我来查询");
 
         let saved = cx
-            .update(|cx| save_session(cx, &session))
+            .update(|cx| save_session_with_workspace(cx, &session, None))
             .expect("save session");
         assert_eq!("查询连接数", saved.0);
 
@@ -351,14 +345,14 @@ mod tests {
         let session = test_session();
         session.record_user_input("不要因为点击会话而重新排序");
         let first_saved_at = cx
-            .update(|cx| save_session(cx, &session))
+            .update(|cx| save_session_with_workspace(cx, &session, None))
             .expect("initial session save")
             .1;
 
         std::thread::sleep(std::time::Duration::from_secs(1));
 
         let second_saved_at = cx
-            .update(|cx| save_session(cx, &session))
+            .update(|cx| save_session_with_workspace(cx, &session, None))
             .expect("unchanged session save")
             .1;
 
