@@ -10,6 +10,7 @@
 //! 2. **颜色不凭空造。** [`AgentChatTheme`] 只有中性色，语义色一律取 `cx.theme()`。
 //! 3. **不虚构活动。** 折叠头的步数与工具分布全部来自真实卡片；时间缺失就不显示时长。
 
+use std::collections::HashSet;
 use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder;
@@ -17,6 +18,7 @@ use gpui::{
     AnyElement, App, InteractiveElement, IntoElement, ParentElement, ScrollHandle, SharedString,
     StatefulInteractiveElement, Styled, Window, div, px,
 };
+use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::{ActiveTheme, Icon, Sizable, h_flex, v_flex};
 use one_assets::IconName;
 use rust_i18n::t;
@@ -43,6 +45,8 @@ pub enum MessageListAction {
     SetProcessExpanded { key: String, expanded: bool },
     /// 用户点击「回到最新」。
     ScrollToLatest,
+    /// 用户点击「回到这一轮」：把工作区恢复到该轮结束时的快照。
+    RestoreTurn { turn_id: String },
 }
 
 pub type MessageListActionHandler = Rc<dyn Fn(MessageListAction, &mut Window, &mut App)>;
@@ -67,6 +71,11 @@ pub struct MessageListContext<'a> {
     pub search: Option<&'a TranscriptSearch>,
     /// 会话内搜索的浮层（findbar）。由宿主提供，这里只负责摆到正确位置。
     pub findbar: Option<AnyElement>,
+    /// 可以回滚到的轮次 id（宿主查过工作区快照后注入）。
+    ///
+    /// `None` = 这次渲染不支持回滚，页脚的「回到这一轮」入口不出现——宁可没有，
+    /// 也不给一个点了没反应的控件。
+    pub restorable_turns: Option<&'a HashSet<String>>,
 }
 
 impl<'a> MessageListContext<'a> {
@@ -83,6 +92,7 @@ impl<'a> MessageListContext<'a> {
             turn_chrome: true,
             search: None,
             findbar: None,
+            restorable_turns: None,
         }
     }
 
@@ -133,6 +143,11 @@ impl<'a> MessageListContext<'a> {
 
     pub fn with_findbar(mut self, findbar: Option<AnyElement>) -> Self {
         self.findbar = findbar;
+        self
+    }
+
+    pub fn with_restorable_turns(mut self, turns: Option<&'a HashSet<String>>) -> Self {
+        self.restorable_turns = turns;
         self
     }
 }
@@ -244,7 +259,7 @@ fn render_turn(
         if turn.head.is_some() && turn.answer.is_empty() && !turn.live && turn.risks.is_empty() {
             children.push(render_no_answer(theme));
         }
-        children.push(render_turn_foot(turn, theme, cx));
+        children.push(render_turn_foot(turn, theme, context, cx));
     }
 
     v_flex()
@@ -426,7 +441,31 @@ fn render_process(
         .into_any_element()
 }
 
-fn render_turn_foot(turn: &TurnProjection<'_>, theme: &AgentChatTheme, cx: &mut App) -> AnyElement {
+/// 该轮是否给出「回到这一轮」入口；给出了就返回它对应的 turn id。
+///
+/// 两个条件缺一不可：① 这一轮有 turn id —— 历史恢复出来的轮次没有 id，
+/// 无从定位快照；② 宿主明确把这一轮放进了可回滚集合（说明它真的锚到了快照）。
+///
+/// **拿不准就不给入口**：宁可少一个按钮，也不给一个点了没反应的控件。
+///
+/// 返回值的生命周期只跟 `turn_id` 走（第二个参数刻意不取名）——否则调用方会
+/// 被 `restorable_turns` 的生命周期绑死。
+fn restorable_turn_id<'a>(
+    turn_id: Option<&'a str>,
+    restorable_turns: Option<&HashSet<String>>,
+) -> Option<&'a str> {
+    let turn_id = turn_id?;
+    restorable_turns
+        .filter(|turns| turns.contains(turn_id))
+        .map(|_| turn_id)
+}
+
+fn render_turn_foot(
+    turn: &TurnProjection<'_>,
+    theme: &AgentChatTheme,
+    context: &MessageListContext<'_>,
+    cx: &mut App,
+) -> AnyElement {
     let (label, color) = if turn.has_pending_decision() {
         (
             t!("AgentUi.turn_state_pending_decision").to_string(),
@@ -449,6 +488,9 @@ fn render_turn_foot(turn: &TurnProjection<'_>, theme: &AgentChatTheme, cx: &mut 
         )
     };
 
+    // 只有拿到该轮快照 id 的轮次才给入口；点击后交给宿主决定怎么恢复。
+    let restorable_turn = restorable_turn_id(turn.turn_id.as_deref(), context.restorable_turns);
+
     h_flex()
         .debug_selector(|| "ai-chat-turn-foot".to_string())
         .w_full()
@@ -460,6 +502,29 @@ fn render_turn_foot(turn: &TurnProjection<'_>, theme: &AgentChatTheme, cx: &mut 
         .child(div().size(px(5.0)).rounded_full().bg(color).flex_shrink_0())
         .child(div().text_xs().text_color(color).child(label))
         .child(div().flex_1())
+        .when_some(restorable_turn, |this, turn_id| {
+            let on_action = context.on_action.clone();
+            // 先落成 owned：on_click 的闭包要活过这一帧，借来的 &str 撑不住。
+            let turn_id = turn_id.to_string();
+            this.child(
+                Button::new(SharedString::from(format!("restore-turn-{turn_id}")))
+                    .ghost()
+                    .xsmall()
+                    .label(t!("AgentUi.restore_turn").to_string())
+                    .debug_selector(|| "ai-chat-turn-restore".to_string())
+                    .on_click(move |_, window, cx| {
+                        if let Some(on_action) = on_action.as_ref() {
+                            on_action(
+                                MessageListAction::RestoreTurn {
+                                    turn_id: turn_id.clone(),
+                                },
+                                window,
+                                cx,
+                            );
+                        }
+                    }),
+            )
+        })
         .into_any_element()
 }
 
@@ -548,5 +613,36 @@ mod tests {
         // 跨天与负值都不应产生越界输出。
         assert_eq!("00:00", format_clock(86_400));
         assert_eq!("23:59", format_clock(-60));
+    }
+
+    #[test]
+    fn restore_entry_requires_both_a_turn_id_and_a_confirmed_snapshot() {
+        let known = HashSet::from(["turn-1".to_string()]);
+
+        assert_eq!(
+            Some("turn-1"),
+            restorable_turn_id(Some("turn-1"), Some(&known)),
+            "有 id 且宿主确认锚过快照 ⇒ 给入口"
+        );
+        assert_eq!(
+            None,
+            restorable_turn_id(Some("turn-2"), Some(&known)),
+            "宿主没确认过这一轮 ⇒ 不给入口，点了也没快照可回"
+        );
+        assert_eq!(
+            None,
+            restorable_turn_id(None, Some(&known)),
+            "历史恢复出来的轮次没有 id ⇒ 定位不到快照，不给入口"
+        );
+        assert_eq!(
+            None,
+            restorable_turn_id(Some("turn-1"), None),
+            "整页不支持回滚 ⇒ 不给入口"
+        );
+        assert_eq!(
+            None,
+            restorable_turn_id(Some("turn-1"), Some(&HashSet::new())),
+            "可回滚集合为空 ⇒ 不给入口"
+        );
     }
 }

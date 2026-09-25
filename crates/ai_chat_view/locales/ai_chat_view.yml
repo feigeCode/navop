@@ -727,6 +727,10 @@ AgentUi:
     en: Response Mode
     zh-CN: 响应模式
     zh-HK: 回應模式
+  restore_turn:
+    en: Back to here
+    zh-CN: 回到这一轮
+    zh-HK: 回到這一輪
   risk:
     en: Risk
     zh-CN: 风险

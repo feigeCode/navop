@@ -121,6 +121,14 @@ pub enum AgentChatViewEvent {
         turn_id: String,
         success: bool,
     },
+    /// 用户点击某轮页脚的「回到这一轮」：请求宿主把工作区状态退回该轮结束时。
+    ///
+    /// 视图只转发请求——它不知道工作区有没有快照、也没有能力改文件；实际回滚由
+    /// 宿主的工作区浏览器执行。
+    RestoreTurn {
+        session_id: String,
+        turn_id: String,
+    },
 }
 
 /// 根据模型选项构建对应运行时。
@@ -968,6 +976,12 @@ pub struct AgentChatView {
     expansion: ExpansionState,
     /// 轮次起止时间；折叠头里的「用时 Ns」只来自这里，缺失就不显示。
     turn_timings: TurnTimings,
+    /// 会话 id → 该会话里「已捕获快照、可以回滚」的轮次 id。
+    ///
+    /// 快照存在工作区浏览器的 git ref 里，视图拿不到也不该去查，所以这张表完全由
+    /// 宿主推送。按会话分桶是为了切换会话时不会把上一会话的轮次当成可回滚——那会渲染
+    /// 出一个点了没反应的按钮。
+    restorable_turns: HashMap<String, HashSet<String>>,
     /// 决策栏里**显式展开详情**的那一项 id；`None` 表示全部收起。
     ///
     /// 详情展开是纯展示动作，不取键盘焦点——绝不让「用户正在打字」时 Enter 变成「允许」。
@@ -1306,6 +1320,7 @@ impl AgentChatView {
             scroll: TranscriptScrollState::default(),
             expansion: ExpansionState::default(),
             turn_timings: TurnTimings::new(),
+            restorable_turns: HashMap::new(),
             decision_details: None,
             search: TranscriptSearch::new(),
             search_revision: 0,
@@ -2967,6 +2982,12 @@ impl AgentChatView {
             }
             MessageListAction::ScrollToLatest => {
                 self.request_scroll_to_bottom();
+            }
+            MessageListAction::RestoreTurn { turn_id } => {
+                cx.emit(AgentChatViewEvent::RestoreTurn {
+                    session_id: self.current_session.clone(),
+                    turn_id,
+                });
             }
         }
         cx.notify();
@@ -4831,6 +4852,24 @@ impl AgentChatView {
         &self.current_session
     }
 
+    /// 宿主同步「某会话里哪些轮次可以回滚」。
+    ///
+    /// 由工作区浏览器在快照锚定成功 / 回滚截断后推送**全量**列表。视图不自行推断：
+    /// 快照可能锚定失败，猜错就会渲染出一个点了没反应的按钮。
+    pub fn set_restorable_turns(
+        &mut self,
+        session_id: String,
+        turn_ids: HashSet<String>,
+        cx: &mut Context<Self>,
+    ) {
+        // 调用方是事件驱动的（轮次结束 / 回滚完成），不是逐帧渲染，直接重绘即可。
+        if turn_ids.is_empty() {
+            self.restorable_turns.remove(&session_id);
+        } else {
+            self.restorable_turns.insert(session_id, turn_ids);
+        }
+        cx.notify();
+    }
     /// 内建侧栏是否已被工作台外壳接管。
     pub fn sidebar_suppressed(&self) -> bool {
         self.sidebar_suppressed
@@ -5295,6 +5334,7 @@ impl Render for AgentChatView {
                 .with_turn_chrome(!self.sidebar_mode)
                 .with_search(Some(&self.search))
                 .with_findbar(findbar)
+                .with_restorable_turns(self.restorable_turns.get(&self.current_session))
                 .with_scroll_to_latest(show_scroll_to_latest),
             window,
             cx,
@@ -7667,6 +7707,99 @@ mod tests {
             events,
             "宿主依赖这些事件捕获 worktree checkpoint"
         );
+    }
+
+    #[gpui::test]
+    fn restoring_a_turn_emits_a_host_request_for_that_session(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        use std::sync::{Arc, Mutex};
+        let seen: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
+        let seen_for_subscribe = seen.clone();
+        cx.update(|_window: &mut gpui::Window, cx: &mut gpui::App| {
+            cx.subscribe(&view, move |_, event: &AgentChatViewEvent, _cx| {
+                if let AgentChatViewEvent::RestoreTurn { session_id, turn_id } = event {
+                    seen_for_subscribe
+                        .lock()
+                        .unwrap()
+                        .push((session_id.clone(), turn_id.clone()));
+                }
+            })
+            .detach();
+        });
+
+        let session_id = view.read_with(cx, |view, _| view.current_session.clone());
+        view.update(cx, |view, cx| {
+            view.apply_message_list_action(
+                MessageListAction::RestoreTurn {
+                    turn_id: "turn-2".into(),
+                },
+                cx,
+            );
+        });
+        cx.run_until_parked();
+
+        assert_eq!(
+            vec![(session_id, "turn-2".to_string())],
+            seen.lock().unwrap().clone(),
+            "宿主靠这个事件知道该回滚哪个会话的哪一轮"
+        );
+    }
+
+    #[gpui::test]
+    fn restorable_turns_are_bucketed_by_session(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        let current = view.read_with(cx, |view, _| view.current_session.clone());
+        view.update(cx, |view, cx| {
+            view.set_restorable_turns(
+                current.clone(),
+                HashSet::from(["turn-a".to_string()]),
+                cx,
+            );
+            view.set_restorable_turns(
+                "another-session".to_string(),
+                HashSet::from(["turn-b".to_string()]),
+                cx,
+            );
+        });
+        cx.run_until_parked();
+
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                Some(&HashSet::from(["turn-a".to_string()])),
+                view.restorable_turns.get(&current),
+                "切回本会话时只有本会话的轮次算可回滚"
+            );
+            assert_eq!(
+                Some(&HashSet::from(["turn-b".to_string()])),
+                view.restorable_turns.get("another-session")
+            );
+            assert!(
+                !view
+                    .restorable_turns
+                    .get(&current)
+                    .is_some_and(|turns| turns.contains("turn-b")),
+                "另一会话的轮次绝不能漏进本会话——那会渲染出点了没反应的入口"
+            );
+        });
+
+        // 宿主发空列表 = 该会话已无可回滚轮次，桶要整个消失。
+        view.update(cx, |view, cx| {
+            view.set_restorable_turns(current.clone(), HashSet::new(), cx);
+        });
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert!(!view.restorable_turns.contains_key(&current));
+        });
     }
 
     #[gpui::test]

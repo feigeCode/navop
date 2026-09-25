@@ -1,5 +1,6 @@
 use anyhow::{Context as _, Result, anyhow};
 use process_util::configure_background_child;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -263,18 +264,20 @@ pub fn capture_worktree_snapshot(repository: &GitRepository) -> Result<String> {
 /// 不占分支名、`git branch` 不显示、不会被普通 push 带走，且能防 gc。
 const CHECKPOINT_REF_PREFIX: &str = "refs/navop/checkpoints/";
 
-/// 为一个仓库生成稳定的 checkpoint ref 名。
-///
-/// 用 canonical 化后的仓库根生成 FNV-1a 哈希：同仓库跨重启同名，
-/// 不同仓库互不冲突。
-fn checkpoint_ref_name(repository: &GitRepository) -> String {
+/// 仓库根的 FNV-1a 哈希：同仓库跨重启同名，不同仓库互不冲突。
+fn repository_hash(repository: &GitRepository) -> String {
     let root = repository.root.display().to_string();
     let mut hash = 0xcbf29ce484222325u64;
     for byte in root.bytes() {
         hash ^= u64::from(byte);
         hash = hash.wrapping_mul(0x100000001b3);
     }
-    format!("{CHECKPOINT_REF_PREFIX}{hash:016x}")
+    format!("{hash:016x}")
+}
+
+/// 为仓库生成稳定的基线 checkpoint ref 名。
+fn checkpoint_ref_name(repository: &GitRepository) -> String {
+    format!("{CHECKPOINT_REF_PREFIX}{}", repository_hash(repository))
 }
 
 /// 把一次快照锚定为持久 ref，防止被 gc，并让重启后可恢复。
@@ -303,6 +306,225 @@ pub fn anchored_checkpoint(repository: &GitRepository) -> Result<Option<String>>
     }
     let commit = String::from_utf8_lossy(&output.stdout).trim().to_string();
     Ok((!commit.is_empty()).then_some(commit))
+}
+
+/// 逐轮快照 ref 的命名空间：`refs/navop/turn-checkpoints/<repo-hash>/<turn-id>`。
+///
+/// **必须与基线 ref 分处两个命名空间**：git 不允许同一路径既是 ref 又是目录，而基线 ref
+/// 恰好占用了 `refs/navop/checkpoints/<repo-hash>` 这一级。挂在它下面会报
+/// `cannot lock ref ... exists; cannot create ...`，逐轮链永远建不起来（踩过一次）。
+const TURN_CHECKPOINT_PREFIX: &str = "refs/navop/turn-checkpoints/";
+
+/// 「撤销恢复」槽位：`refs/navop/restore-backups/<repo-hash>`。
+///
+/// 只留最近一次，固定名覆盖式写入——避免每恢复一次就多留一个 ref。
+/// 单独占一个槽位而不是复用基线 ref：基线要参与下一轮 diff 的计算，不能被恢复动作带偏。
+const RESTORE_BACKUP_PREFIX: &str = "refs/navop/restore-backups/";
+
+/// 一次工作区恢复的结果。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CheckpointRestore {
+    /// 恢复前的现场（锚定在 [`RESTORE_BACKUP_REF`]，传回 [`restore_checkpoint`] 即可撤销）。
+    pub backup: String,
+    /// 实际恢复到的快照。
+    pub target: String,
+}
+
+/// 把工作区恢复到某个快照。
+///
+/// 三步：
+/// 1. `restore --source <commit> --worktree --staged -- .` 把快照内容铺到工作区与暂存区；
+/// 2. `clean -fd -- .` 删掉快照之后新出现的 untracked（**不带 `-x`**，`.gitignore` 命中的不动）；
+/// 3. `reset --quiet -- .` 再把暂存区退回 HEAD，使差异只落在工作区。
+///
+/// 恢复前先拍一次当前现场当备份：任一步失败就用它回滚，不把工作区留在「恢复了一半」。
+pub fn restore_checkpoint(repository: &GitRepository, commit: &str) -> Result<CheckpointRestore> {
+    let target = resolve_commit(repository, commit)?;
+    let backup = capture_worktree_snapshot(repository)?;
+    anchor_restore_backup(repository, &backup)?;
+    match apply_worktree_snapshot(repository, &target) {
+        Ok(()) => Ok(CheckpointRestore { backup, target }),
+        Err(error) => {
+            // 回滚只是尽力而为：失败时保留原始错误，它更接近根因。
+            let _ = apply_worktree_snapshot(repository, &backup);
+            Err(error)
+        }
+    }
+}
+
+/// 把「恢复前的现场」锚进撤销槽位。
+pub fn anchor_restore_backup(repository: &GitRepository, commit: &str) -> Result<()> {
+    run_git_operation(
+        repository,
+        "git update-ref restore backup",
+        vec![
+            "update-ref".to_string(),
+            restore_backup_ref_name(repository),
+            commit.to_string(),
+        ],
+    )
+}
+
+/// 读取撤销槽位里的现场；没做过恢复时返回 `None`。
+pub fn restore_backup(repository: &GitRepository) -> Result<Option<String>> {
+    let reference = restore_backup_ref_name(repository);
+    let output = run_git(
+        &repository.root,
+        ["rev-parse", "--verify", "--quiet", &reference],
+    )?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let commit = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok((!commit.is_empty()).then_some(commit))
+}
+
+fn restore_backup_ref_name(repository: &GitRepository) -> String {
+    format!("{RESTORE_BACKUP_PREFIX}{}", repository_hash(repository))
+}
+
+/// 把一个 commit-ish 解析成确定的 commit 对象 id。
+///
+/// 快照被 gc 掉或名字写错时在这里给出明确错误，而不是让 `restore --source` 报晦涩的 git 文案。
+pub fn resolve_commit(repository: &GitRepository, commit: &str) -> Result<String> {
+    let output = run_git_vec(
+        &repository.root,
+        vec![
+            "rev-parse".to_string(),
+            "--verify".to_string(),
+            "--quiet".to_string(),
+            format!("{commit}^{{commit}}"),
+        ],
+    )?;
+    let resolved = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !output.status.success() || resolved.is_empty() {
+        return Err(anyhow!("checkpoint `{commit}` is unavailable"));
+    }
+    Ok(resolved)
+}
+
+fn apply_worktree_snapshot(repository: &GitRepository, commit: &str) -> Result<()> {
+    run_git_operation(
+        repository,
+        "git restore checkpoint",
+        vec![
+            "restore".to_string(),
+            "--source".to_string(),
+            commit.to_string(),
+            "--worktree".to_string(),
+            "--staged".to_string(),
+            "--".to_string(),
+            ".".to_string(),
+        ],
+    )?;
+    run_git_operation(
+        repository,
+        "git clean checkpoint",
+        vec![
+            "clean".to_string(),
+            "-fd".to_string(),
+            "--".to_string(),
+            ".".to_string(),
+        ],
+    )?;
+    // 未出生的仓库（还没有 HEAD）没有可退回的基线，`reset -- .` 会直接失败。
+    if repository_has_head(repository)? {
+        run_git_operation(
+            repository,
+            "git reset checkpoint",
+            vec![
+                "reset".to_string(),
+                "--quiet".to_string(),
+                "--".to_string(),
+                ".".to_string(),
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+/// 生成某一轮快照的 ref 名。
+///
+/// `turn_id` 来自运行时事件（形如 `turn_<uuid>`），进 ref 路径前先校验字符集：
+/// 非法字符会让 `update-ref` 直接报错，早一点给出可读的诊断更划算。
+fn turn_checkpoint_ref_name(repository: &GitRepository, turn_id: &str) -> Result<String> {
+    if turn_id.is_empty()
+        || !turn_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(anyhow!("`{turn_id}` is not a usable checkpoint turn id"));
+    }
+    Ok(format!(
+        "{}/{turn_id}",
+        turn_checkpoint_prefix(repository)
+    ))
+}
+
+/// 逐轮快照 ref 的前缀（到仓库哈希为止，不含 turn id）。
+fn turn_checkpoint_prefix(repository: &GitRepository) -> String {
+    format!("{TURN_CHECKPOINT_PREFIX}{}", repository_hash(repository))
+}
+
+/// 把一轮结束时的快照锚成持久 ref：防 gc，且能按轮恢复。
+pub fn anchor_turn_checkpoint(
+    repository: &GitRepository,
+    turn_id: &str,
+    commit: &str,
+) -> Result<()> {
+    let reference = turn_checkpoint_ref_name(repository, turn_id)?;
+    run_git_operation(
+        repository,
+        "git update-ref turn checkpoint",
+        vec![
+            "update-ref".to_string(),
+            reference,
+            commit.to_string(),
+        ],
+    )
+}
+
+/// 列出该仓库已有逐轮快照，返回 `turn_id -> commit`。
+///
+/// 一次 `for-each-ref` 拿全，不按轮数逐条 `rev-parse`。
+pub fn turn_checkpoints(repository: &GitRepository) -> Result<BTreeMap<String, String>> {
+    let prefix = format!("{}/", turn_checkpoint_prefix(repository));
+    let output = run_git_vec(
+        &repository.root,
+        vec![
+            "for-each-ref".to_string(),
+            "--format=%(refname) %(objectname)".to_string(),
+            prefix.clone(),
+        ],
+    )?;
+    if !output.status.success() {
+        return Err(git_command_error("git for-each-ref turn checkpoints", &output));
+    }
+    let mut checkpoints = BTreeMap::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let Some((reference, commit)) = line.split_once(' ') else {
+            continue;
+        };
+        let Some(turn_id) = reference.strip_prefix(&prefix) else {
+            continue;
+        };
+        if !turn_id.is_empty() && !commit.is_empty() {
+            checkpoints.insert(turn_id.to_string(), commit.to_string());
+        }
+    }
+    Ok(checkpoints)
+}
+
+/// 丢弃若干轮的快照 ref（回滚之后，被截断的那些轮不再需要）。
+pub fn delete_turn_checkpoints(repository: &GitRepository, turn_ids: &[String]) -> Result<()> {
+    for turn_id in turn_ids {
+        let reference = turn_checkpoint_ref_name(repository, turn_id)?;
+        run_git_vec(
+            &repository.root,
+            vec!["update-ref".to_string(), "-d".to_string(), reference],
+        )?;
+    }
+    Ok(())
 }
 
 /// Compare two checkpoint/tree-ish values without changing working files or index.

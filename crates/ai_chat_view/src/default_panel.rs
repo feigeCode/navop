@@ -36,6 +36,8 @@ pub enum DefaultAgentChatPanelEvent {
     MoveTo(SidebarPlacement),
     TurnStarted { session_id: String, turn_id: String },
     TurnFinished { session_id: String, turn_id: String, success: bool },
+    /// 用户点了某轮页脚的「回到这一轮」。宿主据此让工作区浏览器回滚。
+    RestoreTurn { session_id: String, turn_id: String },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -109,6 +111,9 @@ pub struct DefaultAgentChatPanel {
     /// 工作台外壳注入的侧栏开关。内层视图是异步构建的，注入可能早于视图
     /// 存在——这里暂存，视图建好（含 provider 事件触发的重建）时统一应用。
     workbench_toggles: Option<crate::agent_view::WorkbenchSidebarToggles>,
+    /// 各会话当前可回滚的轮次。与 `workbench_toggles` 同理：内层视图可能还不存在，
+    /// 或者被 provider 事件整块重建过，所以这里留一份权威副本，建视图时重放。
+    restorable_turns: std::collections::HashMap<String, std::collections::HashSet<String>>,
     error: Option<String>,
 }
 
@@ -259,6 +264,7 @@ impl DefaultAgentChatPanel {
             tab_closeable: false,
             workspace_root: None,
             workbench_toggles: None,
+            restorable_turns: std::collections::HashMap::new(),
             error: None,
         };
         panel.subscribe_connection_events(cx);
@@ -283,6 +289,28 @@ impl DefaultAgentChatPanel {
         self.workspace_root = Some(root.clone());
         if let Some(view) = &self.view {
             view.update(cx, |view, cx| view.set_workspace_root(root, cx));
+        }
+    }
+
+    /// 宿主（工作区浏览器）同步「某会话里哪些轮次可以回滚」。
+    ///
+    /// 先记进本层副本：内层视图还没建好、或刚被 provider 事件重建过时，这次推送不会丢，
+    /// 建视图时统一重放。
+    pub fn set_restorable_turns(
+        &mut self,
+        session_id: String,
+        turn_ids: std::collections::HashSet<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if turn_ids.is_empty() {
+            self.restorable_turns.remove(&session_id);
+        } else {
+            self.restorable_turns.insert(session_id.clone(), turn_ids.clone());
+        }
+        if let Some(view) = &self.view {
+            view.update(cx, |view, cx| {
+                view.set_restorable_turns(session_id, turn_ids, cx);
+            });
         }
     }
 
@@ -693,6 +721,12 @@ impl DefaultAgentChatPanel {
                                                 success: *success,
                                             });
                                         }
+                                        AgentChatViewEvent::RestoreTurn { session_id, turn_id } => {
+                                            cx.emit(DefaultAgentChatPanelEvent::RestoreTurn {
+                                                session_id: session_id.clone(),
+                                                turn_id: turn_id.clone(),
+                                            });
+                                        }
                                     }
                                 });
                             if let Some(instruction) = panel.pending_system_instruction.clone() {
@@ -736,6 +770,12 @@ impl DefaultAgentChatPanel {
                             }
                             if let Some(toggles) = panel.workbench_toggles.clone() {
                                 view.update(cx, |view, cx| view.set_workbench_toggles(toggles, cx));
+                            }
+                            // 重建后重放回滚入口，否则 provider 刷新一次按钮就没了。
+                            for (session_id, turn_ids) in panel.restorable_turns.clone() {
+                                view.update(cx, |view, cx| {
+                                    view.set_restorable_turns(session_id.clone(), turn_ids.clone(), cx);
+                                });
                             }
                             if std::mem::take(&mut panel.pending_sidebar_shown) {
                                 view.update(cx, |view, cx| view.on_sidebar_shown(cx));

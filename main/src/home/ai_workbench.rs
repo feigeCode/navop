@@ -164,6 +164,17 @@ pub(crate) fn build_ai_workbench_shell(
                         shell.reveal_panel(WorkbenchPanelKind::Review, cx);
                     });
                 }
+                // 快照锚定成功 / 回滚截断后，Explorer 会送上该会话最新的可回滚轮次；
+                // 转手灌进聊天面板，它据此决定轮次页脚要不要显示「回到这一轮」。
+                WorkspaceExplorerEvent::RestorableTurnsChanged {
+                    session_id,
+                    turn_ids,
+                } => {
+                    let turn_ids = turn_ids.iter().cloned().collect();
+                    chat_for_root.update(cx, |panel, cx| {
+                        panel.set_restorable_turns(session_id.clone(), turn_ids, cx);
+                    });
+                }
                 _ => {}
             }
         },
@@ -172,20 +183,31 @@ pub(crate) fn build_ai_workbench_shell(
     let turn_subscription: Subscription = cx.subscribe(
         &chat,
         move |_, event: &DefaultAgentChatPanelEvent, cx| {
-            if let DefaultAgentChatPanelEvent::TurnFinished {
-                session_id,
-                turn_id,
-                success,
-            } = event
-            {
-                explorer_for_turns.update(cx, |explorer, cx| {
-                    explorer.capture_turn_finished(
-                        session_id.clone(),
-                        turn_id.clone(),
-                        *success,
-                        cx,
-                    );
-                });
+            match event {
+                DefaultAgentChatPanelEvent::TurnFinished {
+                    session_id,
+                    turn_id,
+                    success,
+                } => {
+                    explorer_for_turns.update(cx, |explorer, cx| {
+                        explorer.capture_turn_finished(
+                            session_id.clone(),
+                            turn_id.clone(),
+                            *success,
+                            cx,
+                        );
+                    });
+                }
+                // 用户在某一轮的页脚点了「回到这一轮」：把工作区退回那一刻的快照。
+                DefaultAgentChatPanelEvent::RestoreTurn {
+                    session_id,
+                    turn_id,
+                } => {
+                    explorer_for_turns.update(cx, |explorer, cx| {
+                        explorer.restore_turn(session_id.clone(), turn_id.clone(), cx);
+                    });
+                }
+                _ => {}
             }
         },
     );

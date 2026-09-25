@@ -21,6 +21,15 @@ pub enum WorkspaceExplorerEvent {
     /// 用户请求查看一个文档（点开文件或 Git 变更）。宿主工作台借此把
     /// 审阅面板带到前台——Explorer 只知道编辑器实体，不知道落位布局。
     DocumentRequested,
+    /// 某个会话「可以回滚到的轮次」列表发生变化：快照刚锚定成功，或回滚后把
+    /// 后续轮次截掉了。
+    ///
+    /// 这里送**全量**列表而不是增量，因为快照由 Explorer 独占：宿主只需要把看到的
+    /// 结果原样灌进视图，不用自己维护一份可能漂移的镜像。
+    RestorableTurnsChanged {
+        session_id: String,
+        turn_ids: Vec<String>,
+    },
 }
 
 impl EventEmitter<WorkspaceExplorerEvent> for WorkspaceExplorer {}

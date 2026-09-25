@@ -1195,8 +1195,10 @@ impl TerminalSidebar {
                 DefaultAgentChatPanelEvent::MoveTo(placement) => {
                     this.move_tool(SidebarPanel::AiChat, *placement, cx);
                 }
+                // 终端侧栏不承载 AI 工作台，轮次边界与「回到这一轮」都由工作台外壳处理。
                 DefaultAgentChatPanelEvent::TurnStarted { .. }
-                | DefaultAgentChatPanelEvent::TurnFinished { .. } => {}
+                | DefaultAgentChatPanelEvent::TurnFinished { .. }
+                | DefaultAgentChatPanelEvent::RestoreTurn { .. } => {}
             },
         );
 
@@ -1231,6 +1233,8 @@ impl TerminalSidebar {
                     WorkspaceExplorerEvent::CommitMessageRequested => {}
                     // 终端侧栏没有独立审阅面板，文档切换事件无需处理。
                     WorkspaceExplorerEvent::DocumentRequested => {}
+                    // 回滚入口只出现在 AI 工作台的轮次页脚，终端侧栏不渲染它。
+                    WorkspaceExplorerEvent::RestorableTurnsChanged { .. } => {}
                 },
             );
             subs.push(explorer_sub);

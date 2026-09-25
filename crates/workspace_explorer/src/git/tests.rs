@@ -335,6 +335,9 @@ fn empty_repository() -> PathBuf {
     let root = unique_test_path();
     std::fs::create_dir_all(&root).unwrap();
     run_test_git(&root, &["init", "-q"]);
+    // 固定初始分支名：`git init` 建哪个默认分支取决于本机 `init.defaultBranch`，
+    // 不固定的话断言上游 ref 名的测试会随环境漂移（本机是 `main`，CI 上未必）。
+    run_test_git(&root, &["symbolic-ref", "HEAD", "refs/heads/master"]);
     run_test_git(&root, &["config", "core.autocrlf", "false"]);
     run_test_git(&root, &["config", "user.name", "Workspace Explorer Test"]);
     run_test_git(
@@ -538,6 +541,9 @@ fn push_current_branch_publishes_to_default_remote_and_sets_upstream() {
     let remote_path = unique_test_path();
     std::fs::create_dir_all(&remote_path).unwrap();
     run_test_git(&remote_path, &["init", "-q", "--bare"]);
+    // 远端也要固定初始分支：bare 仓库的 HEAD 同样随 `init.defaultBranch` 漂移，
+    // 它指向哪个分支决定了远端的 HEAD 能不能被 `rev-parse` 解出来。
+    run_test_git(&remote_path, &["symbolic-ref", "HEAD", "refs/heads/master"]);
     run_test_git(&root, &["remote", "add", "origin", remote_path.to_str().unwrap()]);
     run_test_git(&root, &["commit", "-q", "--allow-empty", "-m", "to push"]);
 
@@ -587,4 +593,194 @@ fn commit_context_lists_changes_untracked_and_bounds_size() {
         "小上限必须截断: {tiny}"
     );
     assert!(tiny.len() <= 140);
+}
+
+#[test]
+fn restore_checkpoint_rewrites_tracked_files_and_removes_untracked_ones() {
+    let root = initialized_repository();
+    let repository = discover_repository(&root).unwrap().unwrap();
+    std::fs::write(root.join("main.rs"), "fn main() { println!(\"turn 1\"); }\n").unwrap();
+    let snapshot = capture_worktree_snapshot(&repository).unwrap();
+
+    // 往后再走一轮：改 tracked、加 untracked。
+    std::fs::write(root.join("main.rs"), "fn main() { println!(\"turn 2\"); }\n").unwrap();
+    std::fs::write(root.join("added.txt"), "added in turn 2\n").unwrap();
+
+    restore_checkpoint(&repository, &snapshot).unwrap();
+
+    let restored = std::fs::read_to_string(root.join("main.rs")).unwrap();
+    assert!(restored.contains("turn 1"), "{restored}");
+    assert!(
+        !root.join("added.txt").exists(),
+        "快照之后新增的 untracked 必须被清掉"
+    );
+}
+
+#[test]
+fn restore_checkpoint_leaves_ignored_files_alone() {
+    let root = initialized_repository();
+    std::fs::write(root.join(".gitignore"), "build/\n").unwrap();
+    run_test_git(&root, &["add", ".gitignore"]);
+    run_test_git(&root, &["commit", "-q", "-m", "ignore build"]);
+    let repository = discover_repository(&root).unwrap().unwrap();
+    let snapshot = capture_worktree_snapshot(&repository).unwrap();
+
+    std::fs::create_dir_all(root.join("build")).unwrap();
+    std::fs::write(root.join("build/out.bin"), "artifact\n").unwrap();
+
+    restore_checkpoint(&repository, &snapshot).unwrap();
+
+    assert!(
+        root.join("build/out.bin").exists(),
+        "`clean -fd` 不带 `-x`，.gitignore 命中的文件不能被删"
+    );
+}
+
+#[test]
+fn restore_checkpoint_backup_undoes_the_restore() {
+    let root = initialized_repository();
+    let repository = discover_repository(&root).unwrap().unwrap();
+    std::fs::write(root.join("main.rs"), "fn main() { println!(\"turn 1\"); }\n").unwrap();
+    let snapshot = capture_worktree_snapshot(&repository).unwrap();
+    std::fs::write(root.join("main.rs"), "fn main() { println!(\"turn 2\"); }\n").unwrap();
+    std::fs::write(root.join("added.txt"), "added in turn 2\n").unwrap();
+
+    let restore = restore_checkpoint(&repository, &snapshot).unwrap();
+    let undo = restore_checkpoint(&repository, &restore.backup).unwrap();
+
+    assert_eq!(undo.target, restore.backup);
+    let undone = std::fs::read_to_string(root.join("main.rs")).unwrap();
+    assert!(undone.contains("turn 2"), "{undone}");
+    assert!(
+        root.join("added.txt").exists(),
+        "撤销恢复应把当时的新文件带回来"
+    );
+}
+
+#[test]
+fn restore_checkpoint_reports_unavailable_snapshot() {
+    let root = initialized_repository();
+    let repository = discover_repository(&root).unwrap().unwrap();
+
+    let error =
+        restore_checkpoint(&repository, "0123456789abcdef0123456789abcdef01234567").unwrap_err();
+
+    assert!(error.to_string().contains("unavailable"), "{error}");
+}
+
+#[test]
+fn resolve_commit_accepts_a_commit_and_rejects_a_tree() {
+    let root = initialized_repository();
+    let repository = discover_repository(&root).unwrap().unwrap();
+
+    let head = resolve_commit(&repository, "HEAD").unwrap();
+    assert_eq!(40, head.len());
+
+    let tree = run_git_stdout(&root, &["rev-parse", "HEAD^{tree}"]);
+    assert!(
+        resolve_commit(&repository, tree.trim()).is_err(),
+        "树对象不是 commit，必须被拒绝"
+    );
+}
+
+#[test]
+fn turn_checkpoints_are_anchored_listed_and_deleted() {
+    let root = initialized_repository();
+    let repository = discover_repository(&root).unwrap().unwrap();
+    std::fs::write(root.join("main.rs"), "fn main() {}\n// turn 1\n").unwrap();
+    let first = capture_worktree_snapshot(&repository).unwrap();
+    std::fs::write(root.join("main.rs"), "fn main() {}\n// turn 2\n").unwrap();
+    let second = capture_worktree_snapshot(&repository).unwrap();
+
+    anchor_turn_checkpoint(&repository, "turn_aaaa", &first).unwrap();
+    anchor_turn_checkpoint(&repository, "turn_bbbb", &second).unwrap();
+
+    let checkpoints = turn_checkpoints(&repository).unwrap();
+    assert_eq!(2, checkpoints.len());
+    assert_eq!(Some(&first), checkpoints.get("turn_aaaa"));
+    assert_eq!(Some(&second), checkpoints.get("turn_bbbb"));
+
+    delete_turn_checkpoints(&repository, &["turn_aaaa".to_string()]).unwrap();
+
+    let remaining = turn_checkpoints(&repository).unwrap();
+    assert_eq!(1, remaining.len());
+    assert!(remaining.contains_key("turn_bbbb"));
+}
+
+#[test]
+fn restore_backup_slot_holds_the_latest_pre_restore_state() {
+    let root = initialized_repository();
+    let repository = discover_repository(&root).unwrap().unwrap();
+    std::fs::write(root.join("main.rs"), "fn main() { println!(\"turn 1\"); }\n").unwrap();
+    let snapshot = capture_worktree_snapshot(&repository).unwrap();
+    anchor_checkpoint(&repository, &snapshot).unwrap();
+    assert_eq!(None, restore_backup(&repository).unwrap());
+
+    std::fs::write(root.join("main.rs"), "fn main() { println!(\"turn 2\"); }\n").unwrap();
+    let restore = restore_checkpoint(&repository, &snapshot).unwrap();
+
+    assert_eq!(
+        Some(restore.backup.clone()),
+        restore_backup(&repository).unwrap(),
+        "最近一次恢复前的现场要落进撤销槽位"
+    );
+    assert_eq!(
+        Some(snapshot),
+        anchored_checkpoint(&repository).unwrap(),
+        "恢复动作不能改写基线 ref"
+    );
+}
+
+#[test]
+fn turn_checkpoints_are_isolated_from_the_baseline_ref() {
+    let root = initialized_repository();
+    let repository = discover_repository(&root).unwrap().unwrap();
+    let snapshot = capture_worktree_snapshot(&repository).unwrap();
+    anchor_checkpoint(&repository, &snapshot).unwrap();
+
+    assert!(
+        turn_checkpoints(&repository).unwrap().is_empty(),
+        "基线 ref 不能被当成某一轮"
+    );
+    assert_eq!(Some(snapshot), anchored_checkpoint(&repository).unwrap());
+}
+
+#[test]
+fn turn_checkpoints_and_backups_coexist_with_the_baseline_ref() {
+    let root = initialized_repository();
+    let repository = discover_repository(&root).unwrap().unwrap();
+    let snapshot = capture_worktree_snapshot(&repository).unwrap();
+
+    // git 不允许同一路径既是 ref 又是目录：基线、逐轮、撤销槽位三者必须能同时存在。
+    // 逐轮 ref 曾经挂在基线 ref 之下，这条就是那个坑的回归守卫。
+    anchor_checkpoint(&repository, &snapshot).unwrap();
+    anchor_turn_checkpoint(&repository, "turn_cafe", &snapshot).unwrap();
+    anchor_restore_backup(&repository, &snapshot).unwrap();
+
+    assert_eq!(
+        Some(snapshot.clone()),
+        anchored_checkpoint(&repository).unwrap()
+    );
+    assert_eq!(
+        Some(snapshot.clone()),
+        turn_checkpoints(&repository)
+            .unwrap()
+            .get("turn_cafe")
+            .cloned()
+    );
+    assert_eq!(Some(snapshot), restore_backup(&repository).unwrap());
+}
+
+#[test]
+fn turn_checkpoint_ref_rejects_unsafe_turn_ids() {
+    let root = initialized_repository();
+    let repository = discover_repository(&root).unwrap().unwrap();
+
+    for turn_id in ["", "../escape", "turn/1", "turn 1", "turn~1"] {
+        assert!(
+            turn_checkpoint_ref_name(&repository, turn_id).is_err(),
+            "`{turn_id}` 应被拒绝"
+        );
+    }
+    assert!(turn_checkpoint_ref_name(&repository, "turn_1a2b3c").is_ok());
 }

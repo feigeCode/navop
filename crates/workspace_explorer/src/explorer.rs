@@ -10,8 +10,9 @@ use crate::WorkspaceEditor;
 use crate::backend::{WorkspaceBackend, local_backend};
 use crate::editor::{GitDiffRequest, WorkspaceEditorEvent};
 use crate::git::{
-    GitChange, GitRepository, WorktreeEntry, anchor_checkpoint, capture_worktree_snapshot,
-    create_worktree, diff_snapshots, load_changes,
+    GitChange, GitRepository, WorktreeEntry, anchor_checkpoint, anchor_turn_checkpoint,
+    capture_worktree_snapshot, create_worktree, delete_turn_checkpoints, diff_snapshots,
+    load_changes, restore_checkpoint,
 };
 use crate::model::ExplorerEntry;
 use crate::theme::WorkspaceTheme;
@@ -53,6 +54,8 @@ pub struct WorkspaceExplorer {
     worktrees: Vec<WorktreeEntry>,
     last_checkpoint: Option<String>,
     last_turn_review: Option<WorktreeReviewSnapshot>,
+    /// 每个会话已捕获的逐轮快照，按轮次先后排列（key = session id）。
+    turn_checkpoints: HashMap<String, Vec<TurnCheckpoint>>,
     /// 捕获完成、等待下一帧打开 Review 的 diff。
     pending_review_open: bool,
     /// 提交信息生成中（按钮防重复触发）。
@@ -89,6 +92,17 @@ pub struct WorktreeReviewSnapshot {
     pub session_id: String,
     pub turn_id: String,
     pub diff: String,
+    pub success: bool,
+}
+
+/// 一轮结束时的快照。按会话累积成链，是「回到某一轮」的依据。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TurnCheckpoint {
+    pub session_id: String,
+    pub turn_id: String,
+    /// 该轮结束时的整棵工作区快照（悬空 commit，已锚成 ref）。
+    pub commit: String,
+    /// 该轮是否正常结束；失败的轮次同样可以回滚（它一样改变了磁盘）。
     pub success: bool,
 }
 
@@ -132,6 +146,7 @@ impl WorkspaceExplorer {
             worktrees: Vec::new(),
             last_checkpoint: None,
             last_turn_review: None,
+            turn_checkpoints: HashMap::new(),
             pending_review_open: false,
             commit_message_generating: false,
             recent_roots: Vec::new(),
@@ -216,23 +231,39 @@ impl WorkspaceExplorer {
             return;
         };
         let before = self.last_checkpoint.clone();
+        let turn_to_anchor = turn_id.clone();
         let task = cx.background_spawn(async move {
             let after = capture_worktree_snapshot(&repository)?;
             // 锚定成持久 ref：防 gc，重启后 Explorer 能恢复基线。
             anchor_checkpoint(&repository, &after)?;
+            // 同一份快照另挂到该轮的 ref 下，供「回到这一轮」取用。锚定失败（例如 turn id
+            // 不合规）不该拖垮基线记录，所以单独吞掉错误，只让这一轮不进可回滚列表。
+            let anchored_turn = anchor_turn_checkpoint(&repository, &turn_to_anchor, &after).is_ok();
             let diff = before
                 .as_deref()
                 .map(|before| diff_snapshots(&repository, before, &after))
                 .transpose()?
                 .unwrap_or_default();
-            anyhow::Ok((after, diff))
+            anyhow::Ok((after, diff, anchored_turn))
         });
         let entity = cx.entity().downgrade();
         cx.spawn(async move |_: WeakEntity<Self>, cx: &mut AsyncApp| {
             let result = task.await;
             let _ = entity.update(cx, |this, cx| {
-                if let Ok((after, diff)) = result {
-                    this.last_checkpoint = Some(after);
+                if let Ok((after, diff, anchored_turn)) = result {
+                    this.last_checkpoint = Some(after.clone());
+                    if anchored_turn {
+                        this.turn_checkpoints
+                            .entry(session_id.clone())
+                            .or_default()
+                            .push(TurnCheckpoint {
+                                session_id: session_id.clone(),
+                                turn_id: turn_id.clone(),
+                                commit: after,
+                                success,
+                            });
+                        this.emit_restorable_turns(&session_id, cx);
+                    }
                     this.last_turn_review = Some(WorktreeReviewSnapshot {
                         session_id,
                         turn_id,
@@ -245,6 +276,86 @@ impl WorkspaceExplorer {
             });
         })
         .detach();
+    }
+
+    /// 某个会话里已捕获快照、可以回滚到的轮次（按轮次先后）。
+    pub fn turn_checkpoints(&self, session_id: &str) -> &[TurnCheckpoint] {
+        self.turn_checkpoints
+            .get(session_id)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    }
+
+    /// 把某个会话当前可回滚的轮次**全量**通知宿主。
+    ///
+    /// 宿主（Agent 面板）据此决定轮次页脚要不要显示「回到这一轮」——它拿不到 git ref，
+    /// 所以不通知就等于入口不出现。
+    fn emit_restorable_turns(&self, session_id: &str, cx: &mut Context<Self>) {
+        let turn_ids = self
+            .turn_checkpoints(session_id)
+            .iter()
+            .map(|turn| turn.turn_id.clone())
+            .collect();
+        cx.emit(WorkspaceExplorerEvent::RestorableTurnsChanged {
+            session_id: session_id.to_string(),
+            turn_ids,
+        });
+    }
+
+    /// 把工作区恢复到某一轮结束时的状态。
+    ///
+    /// 恢复到第 N 轮后，第 N 轮之后的快照不再指向这条时间线，一并丢弃；但**先恢复、
+    /// 成功了才丢**——恢复失败时保留记录，用户可以重试或换一轮。
+    pub fn restore_turn(&mut self, session_id: String, turn_id: String, cx: &mut Context<Self>) {
+        let Some(repository) = self.repository.clone() else {
+            return;
+        };
+        let Some(commit) = self
+            .turn_checkpoints
+            .get(&session_id)
+            .and_then(|turns| turns.iter().find(|turn| turn.turn_id == turn_id))
+            .map(|turn| turn.commit.clone())
+        else {
+            return;
+        };
+        let task = cx.background_spawn(async move { restore_checkpoint(&repository, &commit) });
+        let entity = cx.entity().downgrade();
+        cx.spawn(async move |_: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let result = task.await;
+            let _ = entity.update(cx, |this, cx| {
+                match result {
+                    Ok(restore) => {
+                        // 恢复后的现场就是目标快照，基线随之对齐。
+                        this.last_checkpoint = Some(restore.target);
+                        this.last_turn_review = None;
+                        this.pending_review_open = false;
+                        this.git_error = None;
+                        let dropped = this.truncate_turns_after(&session_id, &turn_id);
+                        if !dropped.is_empty() {
+                            if let Some(repository) = this.repository.clone() {
+                                cx.background_spawn(async move {
+                                    let _ = delete_turn_checkpoints(&repository, &dropped);
+                                })
+                                .detach();
+                            }
+                        }
+                        this.refresh_git(cx);
+                        // 截断后宿主手里的列表就过期了，重发一份全量。
+                        this.emit_restorable_turns(&session_id, cx);
+                    }
+                    Err(error) => {
+                        this.git_error = Some(error.to_string());
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// 丢掉第 `turn_id` 轮之后的快照记录，返回被丢掉的 turn id（调用方据此删 ref）。
+    fn truncate_turns_after(&mut self, session_id: &str, turn_id: &str) -> Vec<String> {
+        truncate_checkpoints_after(&mut self.turn_checkpoints, session_id, turn_id)
     }
 
     /// 弹出提交信息输入框，提交当前全部变更。
@@ -535,7 +646,16 @@ impl WorkspaceExplorer {
 
     fn apply_root_change(&mut self, root: PathBuf, cx: &mut Context<Self>) {
         self.root = root;
+        // 旧根下锚定的快照 ref 与新根无关，随记录一起作废；逐会话发一条空列表，
+        // 免得宿主视图里留着点了没反应的「回到这一轮」入口。
+        let dropped_sessions: Vec<String> = self.turn_checkpoints.keys().cloned().collect();
         self.reset_workspace_state();
+        for session_id in dropped_sessions {
+            cx.emit(WorkspaceExplorerEvent::RestorableTurnsChanged {
+                session_id,
+                turn_ids: Vec::new(),
+            });
+        }
         self.refresh(cx);
         cx.emit(WorkspaceExplorerEvent::RootChanged(self.root.clone()));
     }
@@ -553,6 +673,7 @@ impl WorkspaceExplorer {
         self.worktrees.clear();
         self.last_checkpoint = None;
         self.last_turn_review = None;
+        self.turn_checkpoints.clear();
         self.pending_review_open = false;
         self.ignore_matcher = None;
         self.git_loading = false;
@@ -789,6 +910,25 @@ fn should_sync_terminal_root(
     in_repository: bool,
 ) -> bool {
     follow_terminal_cwd && should_update_root(current, requested, in_repository)
+}
+
+fn truncate_checkpoints_after(
+    checkpoints: &mut HashMap<String, Vec<TurnCheckpoint>>,
+    session_id: &str,
+    turn_id: &str,
+) -> Vec<String> {
+    let Some(turns) = checkpoints.get_mut(session_id) else {
+        return Vec::new();
+    };
+    let Some(index) = turns.iter().position(|turn| turn.turn_id == turn_id) else {
+        return Vec::new();
+    };
+    // 保留到该轮（含）为止；被截掉的那些不再属于这条时间线。
+    turns
+        .split_off(index + 1)
+        .into_iter()
+        .map(|turn| turn.turn_id)
+        .collect()
 }
 
 #[cfg(test)]
