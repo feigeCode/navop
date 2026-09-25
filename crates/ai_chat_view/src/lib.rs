@@ -21,6 +21,7 @@ pub use agent_runtime::{
 };
 
 mod acp;
+mod acp_agent_config;
 mod agent_cards;
 mod agent_skills;
 mod agent_tool_config;
@@ -71,15 +72,23 @@ pub mod workspace_files;
 mod workbench;
 
 pub use acp::{
-    AcpAgentConfig, AcpAgentEntry, AcpAuthConfig, AcpAuthMethodConfig, AcpConfigDiagnostic,
-    AcpConnectOutcome, AcpConnection, AcpConnectionPhase, AcpError, AcpErrorKind,
-    AcpPendingConnection, AcpPermissionFuture, AcpPermissionGrant, AcpPermissionOption,
-    AcpPermissionOutcome, AcpPermissionProvider, AcpPermissionRequest, AcpPromptStartError,
-    AcpPublicMcpApprovalFuture, AcpPublicMcpApprovalOutcome, AcpPublicMcpApprovalProvider,
-    AcpPublicMcpApprovalRequest, AcpRecoveryAction, AcpTimeoutConfig, AcpTransport,
-    build_acp_agent_configs, build_acp_agent_entries, current_acp_tool_mode,
+    AcpAgentConfig, AcpAgentEntry, AcpAgentProbe, AcpAgentSource, AcpAuthConfig,
+    AcpAuthMethodConfig, AcpClientProviders, AcpConfigDiagnostic, AcpConnectOutcome,
+    AcpConnection, AcpConnectionPhase, AcpElicitationField, AcpElicitationFieldKind,
+    AcpElicitationForm, AcpElicitationFuture, AcpElicitationMode, AcpElicitationOption,
+    AcpElicitationOutcome, AcpElicitationProvider, AcpElicitationRequest, AcpError, AcpErrorKind,
+    AcpModelInfo, AcpPendingConnection, AcpPermissionFuture, AcpPermissionGrant,
+    AcpPermissionOption, AcpPermissionOutcome, AcpPermissionProvider, AcpPermissionRequest,
+    AcpProbeCache, AcpProbeRecord, AcpPromptStartError, AcpPublicMcpApprovalFuture,
+    AcpPublicMcpApprovalOutcome, AcpPublicMcpApprovalProvider, AcpPublicMcpApprovalRequest,
+    AcpRecoveryAction, AcpTimeoutConfig, AcpTransport, acp_probe_cache, build_acp_agent_configs,
+    build_acp_agent_entries, current_acp_tool_mode, probe_agent_blocking, probe_fingerprint,
     set_acp_agent_config_provider, set_acp_permission_grant_provider, set_acp_tool_mode_provider,
     set_current_acp_tool_mode,
+};
+pub use acp_agent_config::{
+    AcpAgentConfigEvent, AcpAgentConfigNotifier, acp_agent_config_notifier,
+    emit_acp_agent_config_changed,
 };
 pub use agent_cards::{PlanCardData, PlanStepData, SubAgentCardData, ToolCardData};
 pub use agent_tool_config::emit_agent_tool_config_changed;
@@ -177,6 +186,7 @@ pub use workbench::{
 /// 自己的卡片注册进来。
 pub fn init(cx: &mut App) {
     agent_tool_config::init(cx);
+    acp_agent_config::init(cx);
     CardRegistry::init_global(cx);
     cards::register_builtin_cards(cx);
     agent_cards::register_agent_cards(cx);

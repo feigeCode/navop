@@ -3500,6 +3500,136 @@ Settings:
       zh-CN: Agent
       zh-HK: Agent
 
+  AcpAgents:
+    title:
+      en: ACP Agents
+      zh-CN: ACP 智能体
+      zh-HK: ACP 智能體
+    group_title:
+      en: ACP agents
+      zh-CN: ACP 智能体
+      zh-HK: ACP 智能體
+    description:
+      en: Coding agents reachable over Agent Client Protocol. Navop detects each one on demand and caches the result, so the list is ready the moment you open it.
+      zh-CN: 通过 Agent Client Protocol 接入的编码智能体。检测结果按需执行并落盘缓存，打开列表即可直接使用。
+      zh-HK: 透過 Agent Client Protocol 接入的編碼智能體。檢測結果按需執行並落盤快取，開啟清單即可直接使用。
+    refresh:
+      en: Refresh
+      zh-CN: 刷新
+      zh-HK: 重新整理
+    checked_ago:
+      en: "Checked %{age} ago"
+      zh-CN: "检查于 %{age}前"
+      zh-HK: "檢查於 %{age}前"
+    age_seconds:
+      en: "%{count}s"
+      zh-CN: "%{count} 秒"
+      zh-HK: "%{count} 秒"
+    age_minutes:
+      en: "%{count}m"
+      zh-CN: "%{count} 分钟"
+      zh-HK: "%{count} 分鐘"
+    age_hours:
+      en: "%{count}h"
+      zh-CN: "%{count} 小时"
+      zh-HK: "%{count} 小時"
+    age_days:
+      en: "%{count}d"
+      zh-CN: "%{count} 天"
+      zh-HK: "%{count} 天"
+    detected_at:
+      en: "Found at %{path}"
+      zh-CN: "已找到 %{path}"
+      zh-HK: "已找到 %{path}"
+    searches_path:
+      en: "Looking for %{command} in PATH"
+      zh-CN: "在 PATH 中查找 %{command}"
+      zh-HK: "在 PATH 中尋找 %{command}"
+    active:
+      en: In use
+      zh-CN: 使用中
+      zh-HK: 使用中
+    custom:
+      en: Custom
+      zh-CN: 自定义
+      zh-HK: 自訂
+    expand:
+      en: Edit
+      zh-CN: 编辑
+      zh-HK: 編輯
+    collapse:
+      en: Close
+      zh-CN: 收起
+      zh-HK: 收起
+    use:
+      en: Use
+      zh-CN: 切换
+      zh-HK: 切換
+    add:
+      en: Add agent
+      zh-CN: 添加智能体
+      zh-HK: 新增智能體
+    add_hint:
+      en: Fill in the launch command below and save.
+      zh-CN: 在下方填写启动命令后保存。
+      zh-HK: 在下方填寫啟動命令後儲存。
+    name:
+      en: Name
+      zh-CN: 名称
+      zh-HK: 名稱
+    name_placeholder:
+      en: Display name
+      zh-CN: 展示名称
+      zh-HK: 顯示名稱
+    command:
+      en: Command
+      zh-CN: 启动命令
+      zh-HK: 啟動命令
+    command_from_extension:
+      en: Command (from extension)
+      zh-CN: 启动命令（来自扩展）
+      zh-HK: 啟動命令（來自擴充）
+    command_placeholder:
+      en: e.g. npx -y @agentclientprotocol/codex-acp
+      zh-CN: 例如 npx -y @agentclientprotocol/codex-acp
+      zh-HK: 例如 npx -y @agentclientprotocol/codex-acp
+    args:
+      en: Arguments (one per line)
+      zh-CN: 参数（每行一个）
+      zh-HK: 參數（每行一個）
+    args_placeholder:
+      en: --stdio
+      zh-CN: --stdio
+      zh-HK: --stdio
+    env:
+      en: Environment (KEY=VALUE per line; secrets must use ${env:NAME})
+      zh-CN: 环境变量（每行 KEY=VALUE；密钥请写 ${env:NAME}）
+      zh-HK: 環境變數（每行 KEY=VALUE；密鑰請寫 ${env:NAME}）
+    env_placeholder:
+      en: "LOG_LEVEL=debug"
+      zh-CN: "LOG_LEVEL=debug"
+      zh-HK: "LOG_LEVEL=debug"
+    save:
+      en: Save
+      zh-CN: 保存
+      zh-HK: 儲存
+    cancel:
+      en: Cancel
+      zh-CN: 取消
+      zh-HK: 取消
+    remove:
+      en: Delete
+      zh-CN: 删除
+      zh-HK: 刪除
+    reset:
+      en: Reset to default
+      zh-CN: 恢复默认
+      zh-HK: 還原預設
+    empty:
+      en: No ACP agent is enabled. Add one below, or install an ACP agent extension.
+      zh-CN: 还没有启用的 ACP 智能体。可以在下面添加，或安装 ACP 智能体扩展。
+      zh-HK: 還沒有啟用的 ACP 智能體。可以在下面新增，或安裝 ACP 智能體擴充。
+
   Mcp:
     title:
       en: MCP

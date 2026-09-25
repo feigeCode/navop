@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use agent_client_protocol::schema::{AuthMethodId, NewSessionRequest, SessionId};
+use agent_client_protocol::schema::v1::{AuthMethodId, NewSessionRequest, SessionId};
 use agent_client_protocol::{Agent, ConnectionTo};
 use rust_i18n::t;
 
@@ -165,13 +165,12 @@ fn available_env(config: &AcpAgentConfig) -> BTreeSet<String> {
         .filter(|(_, value)| !value.is_empty())
         .map(|(name, _)| name)
         .collect::<BTreeSet<_>>();
-    if let AcpTransport::Stdio { env, .. } = &config.transport {
-        names.extend(
-            env.iter()
-                .filter(|(_, value)| !value.is_empty())
-                .map(|(name, _)| name.clone()),
-        );
-    }
+    let AcpTransport::Stdio { env, .. } = &config.transport;
+    names.extend(
+        env.iter()
+            .filter(|(_, value)| !value.is_empty())
+            .map(|(name, _)| name.clone()),
+    );
     names
 }
 

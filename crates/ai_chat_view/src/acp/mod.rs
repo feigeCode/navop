@@ -12,11 +12,13 @@ mod auth_tests;
 mod client;
 mod config;
 mod connection;
+mod elicitation;
 mod error;
 #[cfg(test)]
 mod error_tests;
 mod permission;
 mod probe;
+mod probe_cache;
 mod provider;
 mod public_mcp_approval;
 mod state;
@@ -27,10 +29,21 @@ mod turn;
 mod turn_tests;
 
 pub use config::{
-    AcpAgentConfig, AcpAgentEntry, AcpAuthConfig, AcpAuthMethodConfig, AcpConfigDiagnostic,
-    AcpTimeoutConfig, AcpTransport,
+    AcpAgentConfig, AcpAgentEntry, AcpAgentSource, AcpAuthConfig, AcpAuthMethodConfig,
+    AcpConfigDiagnostic, AcpTimeoutConfig, AcpTransport,
 };
-pub use connection::{AcpConnectOutcome, AcpConnection, AcpPendingConnection, AcpPromptStartError};
+pub use connection::{
+    AcpClientProviders, AcpConnectOutcome, AcpConnection, AcpPendingConnection,
+    AcpPromptStartError,
+};
+pub(crate) use elicitation::{
+    AcpElicitationEnvelope, AcpElicitationMessage, acp_elicitation_channel,
+};
+pub use elicitation::{
+    AcpElicitationField, AcpElicitationFieldKind, AcpElicitationForm, AcpElicitationFuture,
+    AcpElicitationMode, AcpElicitationOption, AcpElicitationOutcome, AcpElicitationProvider,
+    AcpElicitationRequest,
+};
 pub use error::{AcpError, AcpErrorKind, AcpRecoveryAction};
 pub(crate) use permission::{AcpPermissionEnvelope, AcpPermissionMessage, acp_permission_channel};
 pub use permission::{
@@ -51,11 +64,11 @@ pub use public_mcp_approval::{
     AcpPublicMcpApprovalRequest,
 };
 pub use state::AcpConnectionPhase;
-pub(crate) use probe::AcpAgentProbe;
-pub(crate) use probe::AcpModelInfo;
-/// 仅后台探测路径使用（测试构建下探测被禁用以避免真实子进程）。
-#[cfg_attr(test, allow(unused_imports))]
-pub(crate) use probe::probe_agent_blocking;
+pub use probe::{AcpAgentProbe, AcpModelInfo};
+pub use probe_cache::{
+    AcpProbeCache, AcpProbeRecord, acp_probe_cache, probe_fingerprint,
+};
+pub use probe::probe_agent_blocking;
 pub(crate) use sessions::{
     AcpSessionOpen, AcpSessionSummary, acp_session_list_supported, acp_session_open_kind,
     acp_session_summaries,

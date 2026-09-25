@@ -1,3 +1,4 @@
+pub mod acp_agents_settings;
 pub mod agent_settings;
 pub mod appearance;
 mod appearance_import;

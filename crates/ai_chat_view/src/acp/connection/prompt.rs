@@ -1,6 +1,6 @@
 use std::fmt;
 
-use agent_client_protocol::schema::{CancelNotification, ContentBlock, PromptRequest, TextContent};
+use agent_client_protocol::schema::v1::{CancelNotification, ContentBlock, PromptRequest, TextContent};
 use agent_runtime::{RuntimeEvent, TurnId};
 use rust_i18n::t;
 
@@ -152,7 +152,7 @@ fn responding_status_title(agent_name: &str) -> String {
 
 struct PromptContext {
     connection: agent_client_protocol::ConnectionTo<agent_client_protocol::Agent>,
-    acp_session_id: agent_client_protocol::schema::SessionId,
+    acp_session_id: agent_client_protocol::schema::v1::SessionId,
     events: tokio::sync::broadcast::Sender<RuntimeEvent>,
     session_id: agent_runtime::SessionId,
     active_turn: std::sync::Arc<std::sync::Mutex<Option<AcpTurnTracker>>>,
@@ -165,7 +165,7 @@ struct PromptContext {
 async fn finish_prompt(
     context: PromptContext,
     result: Result<
-        Result<agent_client_protocol::schema::PromptResponse, agent_client_protocol::Error>,
+        Result<agent_client_protocol::schema::v1::PromptResponse, agent_client_protocol::Error>,
         tokio::time::error::Elapsed,
     >,
 ) {
@@ -198,7 +198,7 @@ fn emit_success(
     context: &PromptContext,
     turn_id: TurnId,
     tracker: AcpTurnTracker,
-    stop_reason: agent_client_protocol::schema::StopReason,
+    stop_reason: agent_client_protocol::schema::v1::StopReason,
 ) {
     match tracker.finish_success(stop_reason) {
         TurnOutcome::Completed => emit_completed(context, turn_id),

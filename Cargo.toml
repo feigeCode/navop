@@ -117,7 +117,7 @@ reqwest_client = { package = "gpui-pre-reqwest-client", version = "0.3.99" }
 agent_runtime = { path = "crates/agent_runtime" }
 ai_chat_view = { path = "crates/ai_chat_view", default-features = false }
 html-preview = { path = "crates/html-preview" }
-agent-client-protocol = "0.14.0"
+agent-client-protocol = "2.2.0"
 public_mcp = { path = "crates/public_mcp" }
 tool_runtime = { path = "crates/tool_runtime" }
 universal-plugins = { path = "crates/universal-plugins" }

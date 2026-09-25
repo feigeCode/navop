@@ -3,7 +3,7 @@
 //! 复用点:翻译成现有 `RuntimeEvent` 后,直接喂 `AgentTranscript` 的归约逻辑,
 //! ACP 后端无需任何新增渲染代码。纯函数,便于单测。
 
-use agent_client_protocol::schema::{
+use agent_client_protocol::schema::v1::{
     ContentBlock, Plan as AcpPlan, PlanEntryStatus, SessionUpdate, ToolCall as AcpToolCall,
     ToolCallStatus, ToolCallUpdate,
 };
@@ -391,7 +391,7 @@ fn map_step_status(status: &PlanEntryStatus) -> StepStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::schema::{
+    use agent_client_protocol::schema::v1::{
         AvailableCommand, AvailableCommandsUpdate, ConfigOptionUpdate, ContentChunk,
         CurrentModeUpdate, PlanEntry, PlanEntryPriority, SessionInfoUpdate, TextContent,
         ToolCall as AcpToolCall, ToolCallUpdate, ToolCallUpdateFields, UsageUpdate,

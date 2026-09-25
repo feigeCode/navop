@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use agent_client_protocol::schema::SessionNotification;
+use agent_client_protocol::schema::v1::SessionNotification;
 use agent_runtime::{RuntimeEvent, SessionId};
 use tokio::sync::broadcast;
 

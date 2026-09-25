@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use agent_client_protocol::schema::AuthMethodId;
+use agent_client_protocol::schema::v1::AuthMethodId;
 
 use super::auth::{AuthDecision, select_auth};
 use super::{AcpAuthConfig, AcpAuthMethodConfig, AcpErrorKind};

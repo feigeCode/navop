@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::{ContentBlock, SessionUpdate, StopReason};
+use agent_client_protocol::schema::v1::{ContentBlock, SessionUpdate, StopReason};
 use agent_runtime::TurnId;
 
 #[derive(Clone, Debug)]

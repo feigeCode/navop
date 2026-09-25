@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use agent_client_protocol::schema::{AuthMethodId, SessionId as AcpSessionId};
+use agent_client_protocol::schema::v1::{AuthMethodId, SessionId as AcpSessionId};
 use agent_client_protocol::{Agent, ConnectionTo};
 use agent_runtime::{RuntimeEvent, SessionId};
 use rust_i18n::t;

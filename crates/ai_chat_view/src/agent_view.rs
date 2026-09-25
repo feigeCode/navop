@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use agent_client_protocol::schema::{AvailableCommandInput, ContentBlock, ImageContent, TextContent};
+use agent_client_protocol::schema::v1::{AvailableCommandInput, ContentBlock, ImageContent, TextContent};
 use agent_runtime::{
     AgentResourceScope, ResourceCatalog, ResourceContext, ResourceId, ResourceKind, ResourceRef,
     Runtime, RuntimeEvent, RuntimeEventReceiver, SessionId, TaskKind, ToolCallId,
@@ -46,19 +46,21 @@ use rust_i18n::t;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 
 use crate::acp::{
-    AcpAgentEntry, AcpAgentProbe, AcpConnectOutcome, AcpConnection, AcpConnectionPhase, AcpError,
-    AcpErrorKind, AcpModelInfo,
-    AcpPendingConnection, AcpPermissionEnvelope, AcpPermissionMessage, AcpPermissionOutcome,
-    AcpPermissionProvider, AcpPromptStartError, AcpPublicMcpApprovalEnvelope,
-    AcpPublicMcpApprovalMessage, AcpPublicMcpApprovalOutcome, AcpPublicMcpApprovalProvider,
-    AcpRecoveryAction, AcpSessionState, AcpSessionSummary, AcpUsage, acp_permission_channel,
-    acp_public_mcp_approval_channel, acp_session_list_supported, acp_session_open_kind,
-    acp_session_summaries, acquire_acp_permission_grant, build_acp_agent_entries,
-    current_acp_tool_mode, set_current_acp_tool_mode,
+    AcpAgentEntry, AcpAgentProbe, AcpClientProviders, AcpConnectOutcome, AcpConnection,
+    AcpConnectionPhase, AcpElicitationEnvelope, AcpElicitationMessage, AcpElicitationOutcome,
+    AcpError, AcpErrorKind, AcpModelInfo, AcpPendingConnection, AcpPermissionEnvelope,
+    AcpPermissionMessage, AcpPermissionOutcome, AcpPromptStartError,
+    AcpPublicMcpApprovalEnvelope, AcpPublicMcpApprovalMessage, AcpPublicMcpApprovalOutcome,
+    AcpPublicMcpApprovalProvider, AcpRecoveryAction, AcpSessionState, AcpSessionSummary, AcpUsage,
+    acp_elicitation_channel, acp_permission_channel, acp_public_mcp_approval_channel,
+    acp_session_list_supported, acp_session_open_kind, acp_session_summaries,
+    acquire_acp_permission_grant, build_acp_agent_entries, current_acp_tool_mode,
+    set_current_acp_tool_mode,
 };
 /// 仅后台探测路径使用（测试构建下探测被禁用以避免真实子进程）。
 #[cfg(not(test))]
-use crate::acp::AcpAgentConfig;
+use crate::acp::{AcpAgentConfig, AcpProbeRecord, acp_probe_cache, probe_fingerprint};
+use crate::acp_agent_config::{AcpAgentConfigEvent, acp_agent_config_notifier};
 use crate::agent_cards::{
     ApproveToolCall, PlanCardData, RejectToolCall, SelectAcpPermissionOption, SubAgentCardData,
 };
@@ -164,6 +166,39 @@ enum Backend {
     Local,
     /// 外部 ACP agent。
     Acp,
+}
+
+/// composer「执行模式」下拉里的一项：任务类型 + 工具策略。
+///
+/// 早期任务类型与工具策略是两个独立下拉，后来合并成一个；这里把「问答」这个任务
+/// 类型选择保留下来，避免合并之后 `TaskKind::Ask` 彻底不可达。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+struct ExecutionSelection {
+    task: TaskKind,
+    tool: ToolExecutionMode,
+}
+
+impl ExecutionSelection {
+    fn new(task: TaskKind, tool: ToolExecutionMode) -> Self {
+        Self { task, tool }
+    }
+
+    /// 普通轮次：任务类型固定 Agent，只挑工具策略。
+    fn tool(tool: ToolExecutionMode) -> Self {
+        Self {
+            task: TaskKind::Agent,
+            tool,
+        }
+    }
+
+    /// 下拉里展示的文案。
+    fn label(self) -> String {
+        match self.task {
+            TaskKind::Ask => t!("AgentUi.ask_mode").to_string(),
+            TaskKind::Plan => t!("AgentUi.plan_mode").to_string(),
+            TaskKind::Agent => tool_execution_mode_label(self.tool),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1009,6 +1044,8 @@ pub struct AgentChatView {
     acp_sessions_supported: bool,
     /// 当前 ACP 连接尚未响应的权限请求。
     pending_acp_permissions: HashMap<String, AcpPermissionEnvelope>,
+    /// 当前 ACP 连接尚未回答的 agent 提问。同一时刻最多一条，新的会顶掉旧的。
+    pending_acp_elicitations: HashMap<String, AcpElicitationEnvelope>,
     /// 安全确认模式下，实际 Public MCP 调用尚未响应的二次审批。
     pending_public_mcp_approvals: HashMap<String, AcpPublicMcpApprovalEnvelope>,
     /// 把匹配的 Public MCP 审批请求路由回当前 ACP 消息流。
@@ -1017,6 +1054,8 @@ pub struct AgentChatView {
     auto_scroll: AutoScrollState,
     /// 当前工具执行模式。由 AI Chat 设置恢复，并用于后续提交。
     tool_execution_mode: ToolExecutionMode,
+    /// 本轮的任务类型（问答 / 常规 / 计划）。与工具策略合成一个下拉。
+    task_kind: TaskKind,
     /// 当前模型。切换时通过 runtime_factory 重建 Runtime,影响后续提交。
     selected_model: Option<ComposerModelOption>,
     model_options: Vec<ComposerModelOption>,
@@ -1042,6 +1081,7 @@ pub struct AgentChatView {
     _event_task: Task<()>,
     /// 当前 ACP 连接的权限请求泵；切换连接时丢弃以隔离旧连接请求。
     _acp_permission_task: Option<Task<()>>,
+    _acp_elicitation_task: Option<Task<()>>,
     /// 当前 ACP 连接的 Public MCP 二次审批泵。
     _acp_public_mcp_approval_task: Option<Task<()>>,
 }
@@ -1157,8 +1197,9 @@ impl AgentChatView {
             input.update(cx, |input, cx| input.set_edge_to_edge(true, cx));
         }
 
-        let tool_execution_mode =
-            runtime_tool_execution_mode(AppSettings::current(cx).ai_chat.tool_execution_mode);
+        let stored_mode = AppSettings::current(cx).ai_chat.tool_execution_mode;
+        let tool_execution_mode = runtime_tool_execution_mode(stored_mode);
+        let task_kind = task_kind_from_settings(stored_mode);
         // 默认来源为全局设置：初始化时用当前设置作种子值，之后新会话/切换模型都会
         // 跟随设置刷新（包括配置被清空）。外部显式注入会通过 set_system_instruction
         // 覆盖来源并保持不变。
@@ -1166,12 +1207,12 @@ impl AgentChatView {
             .ai_chat
             .effective_custom_system_prompt();
         let system_instruction_from_settings = true;
-        let tool_options = default_tool_options();
+        let tool_options = default_execution_mode_options();
 
         let skills = AgentSkillState::load_for_workspace(&workspace_root);
         let init_ctx = build_composer_context(
             &resources,
-            tool_execution_mode,
+            ExecutionSelection::new(task_kind, tool_execution_mode),
             selected_model.as_ref(),
             None,
             &[],
@@ -1204,7 +1245,7 @@ impl AgentChatView {
             InputState::new(window, cx).placeholder(t!("AgentUi.findbar_placeholder").to_string())
         });
 
-        let subscriptions = vec![
+        let mut subscriptions = vec![
             cx.subscribe_in(&input, window, Self::on_input_event),
             cx.subscribe(
                 &findbar_input,
@@ -1213,6 +1254,15 @@ impl AgentChatView {
                 },
             ),
         ];
+        // 设置页改完 ACP agent 列表/启用状态/当前选中项后，活着的聊天面板要跟着走。
+        if let Some(notifier) = acp_agent_config_notifier(cx) {
+            subscriptions.push(cx.subscribe(
+                &notifier,
+                |this: &mut Self, _, _: &AcpAgentConfigEvent, cx| {
+                    this.on_acp_agent_config_changed(cx);
+                },
+            ));
+        }
         let event_task = Self::spawn_event_pump(runtime.subscribe(), None, cx);
         let current_session = session_id.to_string();
         let mut transcript = AgentTranscript::new();
@@ -1291,11 +1341,13 @@ impl AgentChatView {
             acp_sessions_generation: 0,
             acp_sessions_supported: false,
             pending_acp_permissions: HashMap::new(),
+            pending_acp_elicitations: HashMap::new(),
             pending_public_mcp_approvals: HashMap::new(),
             acp_public_mcp_approval_provider: None,
             scroll_handle: ScrollHandle::new(),
             auto_scroll: AutoScrollState::default(),
             tool_execution_mode,
+            task_kind,
             selected_model,
             model_options,
             tool_options,
@@ -1309,6 +1361,7 @@ impl AgentChatView {
             _subscriptions: subscriptions,
             _event_task: event_task,
             _acp_permission_task: None,
+            _acp_elicitation_task: None,
             _acp_public_mcp_approval_task: None,
             workspace_root,
         };
@@ -1380,17 +1433,108 @@ impl AgentChatView {
         true
     }
 
-    fn start_acp_permission_session(&mut self, cx: &mut Context<Self>) -> AcpPermissionProvider {
-        self.reset_acp_permission_session(cx);
+    /// 为这一次连接建好「agent 反问用户」的两条回程：权限确认与提问。
+    fn start_acp_client_session(&mut self, cx: &mut Context<Self>) -> AcpClientProviders {
+        self.reset_acp_client_session(cx);
         let (provider, receiver) = acp_permission_channel();
+        let (elicitation_provider, elicitation_receiver) = acp_elicitation_channel();
         let (public_mcp_provider, public_mcp_receiver) = acp_public_mcp_approval_channel();
         self.acp_public_mcp_approval_provider = Some(public_mcp_provider);
         self._acp_permission_task = Some(Self::spawn_acp_permission_pump(receiver, cx));
+        self._acp_elicitation_task = Some(Self::spawn_acp_elicitation_pump(
+            elicitation_receiver,
+            cx,
+        ));
         self._acp_public_mcp_approval_task = Some(Self::spawn_public_mcp_approval_pump(
             public_mcp_receiver,
             cx,
         ));
-        provider
+        AcpClientProviders::new(provider, elicitation_provider)
+    }
+
+    fn spawn_acp_elicitation_pump(
+        mut receiver: tokio::sync::mpsc::UnboundedReceiver<AcpElicitationMessage>,
+        cx: &mut Context<Self>,
+    ) -> Task<()> {
+        cx.spawn(async move |this, cx| {
+            while let Some(message) = receiver.recv().await {
+                let updated = this.update(cx, |this, cx| match message {
+                    AcpElicitationMessage::Requested(envelope) => {
+                        this.receive_acp_elicitation(envelope, cx)
+                    }
+                    AcpElicitationMessage::Expired { request_id } => {
+                        this.expire_acp_elicitation(&request_id, cx)
+                    }
+                });
+                if updated.is_err() {
+                    break;
+                }
+            }
+        })
+    }
+
+    fn receive_acp_elicitation(
+        &mut self,
+        envelope: AcpElicitationEnvelope,
+        cx: &mut Context<Self>,
+    ) {
+        let request = envelope.request().clone();
+        // 同一时刻只留一个问题：新的顶掉旧的（旧的按取消回给它的 agent）。
+        self.cancel_pending_acp_elicitations(cx);
+        let input = self.input.clone();
+        input.update(cx, |input, cx| {
+            input.set_pending_elicitation(Some(&request), cx);
+        });
+        self.pending_acp_elicitations
+            .insert(request.request_id.clone(), envelope);
+        self.request_scroll_to_bottom();
+        self.auto_scroll.request_settle();
+        cx.notify();
+    }
+
+    fn expire_acp_elicitation(&mut self, request_id: &str, cx: &mut Context<Self>) {
+        if self.pending_acp_elicitations.remove(request_id).is_none() {
+            return;
+        }
+        // 超时是 agent 侧先放弃的：这里只把面板收起来，不必再回一次结果。
+        self.clear_elicitation_panel(cx);
+        cx.notify();
+    }
+
+    fn cancel_pending_acp_elicitations(&mut self, cx: &mut Context<Self>) {
+        let pending = std::mem::take(&mut self.pending_acp_elicitations);
+        if pending.is_empty() {
+            return;
+        }
+        for (_request_id, envelope) in pending {
+            envelope.resolve(AcpElicitationOutcome::Cancel);
+        }
+        self.clear_elicitation_panel(cx);
+        cx.notify();
+    }
+
+    /// 把用户在 composer 面板里给出的答案送回 agent。
+    fn resolve_pending_acp_elicitation(
+        &mut self,
+        outcome: AcpElicitationOutcome,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(request_id) = self.pending_acp_elicitations.keys().next().cloned() else {
+            return;
+        };
+        let Some(envelope) = self.pending_acp_elicitations.remove(&request_id) else {
+            return;
+        };
+        // 送不回去说明通道已经关了（多半是超时）：结果丢弃即可，agent 那边不再等。
+        let _ = envelope.resolve(outcome);
+        self.clear_elicitation_panel(cx);
+        cx.notify();
+    }
+
+    fn clear_elicitation_panel(&mut self, cx: &mut Context<Self>) {
+        self.input.update(cx, |input, cx| {
+            input.set_pending_elicitation(None, cx);
+        });
     }
 
     fn spawn_public_mcp_approval_pump(
@@ -1570,11 +1714,14 @@ impl AgentChatView {
         cx.notify();
     }
 
-    fn reset_acp_permission_session(&mut self, cx: &mut Context<Self>) {
+    /// 收掉这一次连接留下的全部交互回程（权限 / 提问 / 二次审批）。
+    fn reset_acp_client_session(&mut self, cx: &mut Context<Self>) {
         self.cancel_pending_acp_permissions(cx);
         self.cancel_pending_public_mcp_approvals(cx);
+        self.cancel_pending_acp_elicitations(cx);
         self.acp_public_mcp_approval_provider = None;
         self._acp_permission_task = None;
+        self._acp_elicitation_task = None;
         self._acp_public_mcp_approval_task = None;
     }
 
@@ -1724,6 +1871,15 @@ impl AgentChatView {
                 }
             }
             AgentInputEvent::SelectExecutionMode { id } => self.select_execution_mode(&id, cx),
+            AgentInputEvent::SubmitElicitation { content } => {
+                self.resolve_pending_acp_elicitation(AcpElicitationOutcome::Accept(content), cx)
+            }
+            AgentInputEvent::DeclineElicitation => {
+                self.resolve_pending_acp_elicitation(AcpElicitationOutcome::Decline, cx)
+            }
+            AgentInputEvent::CancelElicitation => {
+                self.resolve_pending_acp_elicitation(AcpElicitationOutcome::Cancel, cx)
+            }
             AgentInputEvent::SelectAgentBackend { id } => {
                 if !self.is_running {
                     self.select_backend(id, cx);
@@ -1872,8 +2028,8 @@ impl AgentChatView {
         if self.pending_submissions.len(&session_uid) == 0 {
             return PendingAdvance::Idle;
         }
-        if let Some((operation, permission_provider)) = self.prepare_current_pending_reconnect(cx) {
-            self.spawn_acp_connect(operation, permission_provider, cx);
+        if let Some((operation, providers)) = self.prepare_current_pending_reconnect(cx) {
+            self.spawn_acp_connect(operation, providers, cx);
             return PendingAdvance::Blocked;
         }
         self.start_next_pending(&session_uid, cx)
@@ -1882,7 +2038,7 @@ impl AgentChatView {
     fn prepare_current_pending_reconnect(
         &mut self,
         cx: &mut Context<Self>,
-    ) -> Option<(AcpConnectOperation, AcpPermissionProvider)> {
+    ) -> Option<(AcpConnectOperation, AcpClientProviders)> {
         let session_uid = self.current_session.clone();
         if self.pending_submissions.len(&session_uid) == 0 || self.backend != Backend::Acp {
             return None;
@@ -2096,11 +2252,13 @@ impl AgentChatView {
 
         let runtime = self.runtime.clone();
         let tool_mode = self.tool_execution_mode;
+        // 「问答」模式下不向模型暴露工具，因此任务类型要跟着下拉一起下发。
+        let task_kind = self.task_kind;
         let session_uid = session_uid.to_string();
         cx.spawn(async move |this, cx| {
             #[cfg(test)]
             let result = runtime
-                .run_turn_blocking_with_tool_mode(&session_id, input, TaskKind::Agent, tool_mode)
+                .run_turn_blocking_with_tool_mode(&session_id, input, task_kind, tool_mode)
                 .await;
 
             #[cfg(not(test))]
@@ -2110,7 +2268,7 @@ impl AgentChatView {
                         .run_turn_blocking_with_tool_mode(
                             &session_id,
                             input,
-                            TaskKind::Agent,
+                            task_kind,
                             tool_mode,
                         )
                         .await
@@ -2582,7 +2740,7 @@ impl AgentChatView {
         if !acp_connection_is_unavailable(phase.as_ref()) {
             return false;
         }
-        self.reset_acp_permission_session(cx);
+        self.reset_acp_client_session(cx);
         self.acp = None;
         self.sync_pending_preview(cx);
         self.sync_composer(cx);
@@ -3045,7 +3203,8 @@ impl AgentChatView {
     }
 
     /// 重建并把展示上下文推给输入框。
-    fn sync_composer(&self, cx: &mut Context<Self>) {
+    fn sync_composer(&mut self, cx: &mut Context<Self>) {
+        self.refresh_execution_mode_options();
         let model = self
             .acp
             .as_ref()
@@ -3053,7 +3212,7 @@ impl AgentChatView {
             .or_else(|| self.selected_model.clone());
         let ctx = build_composer_context(
             &self.resources,
-            self.tool_execution_mode,
+            self.execution_selection(),
             model.as_ref(),
             self.transcript.latest_plan(),
             self.transcript.active_subagents(),
@@ -3105,7 +3264,7 @@ impl AgentChatView {
         if self
             .acp_agents
             .iter()
-            .any(|entry| entry.id == agent_id && entry.config.is_some())
+            .any(|entry| entry.id == agent_id && entry.selectable())
         {
             self.select_acp_backend(agent_id, cx);
         }
@@ -3217,39 +3376,87 @@ impl AgentChatView {
         cx.notify();
     }
 
-    /// 为尚未探测的 ACP agent 各起一次后台探测。
+    /// 设置页改了 ACP agent 配置（列表/启用状态/当前选中项）后的对齐动作。
+    fn on_acp_agent_config_changed(&mut self, cx: &mut Context<Self>) {
+        self.refresh_acp_agents(cx);
+        self.sync_active_acp_agent_from_settings(cx);
+    }
+
+    /// 把当前后端对齐到设置页选中的 agent。
     ///
-    /// 探测会真的拉起子进程，因此只在 agent 列表刷新（打开切换器）时触发，并按 id
-    /// 缓存结果；已探测过的 agent 不会重复拉起。
-    #[cfg(not(test))]
-    fn spawn_acp_probes(&mut self, cx: &mut Context<Self>) {
-        let targets: Vec<(SharedString, AcpAgentConfig)> = self
+    /// 正在跑一轮或正在连接时不动连接：切后端会掐掉当前回合，等这一轮结束或面板
+    /// 重新挂载时再对齐。
+    fn sync_active_acp_agent_from_settings(&mut self, cx: &mut Context<Self>) {
+        if self.is_running || self.acp_connecting {
+            return;
+        }
+        let Some(target) = AppSettings::current(cx)
+            .ai_chat
+            .last_acp_agent_id
+            .map(SharedString::from)
+        else {
+            return;
+        };
+        if self.backend == Backend::Acp && self.current_acp_id.as_ref() == Some(&target) {
+            return;
+        }
+        if !self
             .acp_agents
             .iter()
-            .filter_map(|entry| entry.config.clone().map(|config| (entry.id.clone(), config)))
-            .filter(|(id, _)| {
-                !self.acp_probes.contains_key(id) && !self.acp_probe_inflight.contains(id)
-            })
-            .collect();
+            .any(|entry| entry.id == target && entry.selectable())
+        {
+            return;
+        }
+        self.select_acp_backend(target, cx);
+    }
+
+    /// 为尚未探测的 ACP agent 各起一次后台探测。
+    ///
+    /// 探测会真的拉起子进程，因此：
+    /// - 只处理**已启用**的 agent（停用的不启动任何进程）；
+    /// - 先查落盘缓存：启动指纹一致就直接复用上次结论；
+    /// - 剩下没缓存的才真正后台探测，结果写回缓存供下次复用。
+    #[cfg(not(test))]
+    fn spawn_acp_probes(&mut self, cx: &mut Context<Self>) {
+        let mut targets: Vec<(SharedString, AcpAgentConfig, String)> = Vec::new();
+        {
+            let cache = acp_probe_cache(cx);
+            for entry in self.acp_agents.iter().filter(|entry| entry.enabled) {
+                let Some(config) = entry.config.clone() else {
+                    continue;
+                };
+                if self.acp_probes.contains_key(&entry.id)
+                    || self.acp_probe_inflight.contains(&entry.id)
+                {
+                    continue;
+                }
+                let fingerprint = probe_fingerprint(&config);
+                if let Some(record) = cache.get(entry.id.as_ref(), &fingerprint) {
+                    self.acp_probes.insert(entry.id.clone(), record.probe);
+                    continue;
+                }
+                targets.push((entry.id.clone(), config, fingerprint));
+            }
+        }
         if targets.is_empty() {
             return;
         }
         let handle = Tokio::handle(cx);
-        for (id, _) in &targets {
+        for (id, _, _) in &targets {
             self.acp_probe_inflight.insert(id.clone());
         }
         // 串行探测，且每个探测在 GPUI 后台线程上用 `Handle::block_on` 跑：
         // 一次只拉起一个 CLI，`EnterGuard` 也不会落到 GPUI 主线程上交错。
         let probe_task = cx.background_spawn(async move {
             let mut results = Vec::with_capacity(targets.len());
-            for (id, config) in targets {
+            for (id, config, fingerprint) in targets {
                 let probe = crate::acp::probe_agent_blocking(&config, handle.clone());
-                results.push((id, probe));
+                results.push((id, probe, fingerprint));
             }
             results
         });
         cx.spawn(async move |this, cx| {
-            for (id, probe) in probe_task.await {
+            for (id, probe, fingerprint) in probe_task.await {
                 if !probe.identified() {
                     tracing::warn!(
                         agent = %id,
@@ -3260,6 +3467,10 @@ impl AgentChatView {
                 let alive = this
                     .update(cx, |this, cx| {
                         this.acp_probe_inflight.remove(&id);
+                        acp_probe_cache(cx).store(
+                            id.as_ref(),
+                            AcpProbeRecord::new(fingerprint.clone(), probe.clone()),
+                        );
                         this.acp_probes.insert(id.clone(), probe);
                         if this.backend == Backend::Acp && this.current_acp_id.as_ref() == Some(&id) {
                             this.apply_probe_model_options(&id, cx);
@@ -3470,7 +3681,7 @@ impl AgentChatView {
             self.acp = Some(acp);
             return;
         };
-        let value = agent_client_protocol::schema::SessionConfigValueId::new(model);
+        let value = agent_client_protocol::schema::v1::SessionConfigValueId::new(model);
         let config_id = config.id.clone();
         let provider_id = provider_id.to_string();
         let model = model.to_string();
@@ -3499,33 +3710,83 @@ impl AgentChatView {
         .detach();
     }
 
+    /// composer 的执行模式选择：任务类型 + 工具策略。
+    fn execution_selection(&self) -> ExecutionSelection {
+        ExecutionSelection::new(self.task_kind, self.tool_execution_mode)
+    }
+
+    /// 按当前后端刷新执行模式下拉项。
+    ///
+    /// ACP 已连接且 agent 声明了会话模式时用 agent 的模式（那是它真正支持的执行档位），
+    /// 其余情况用本地的任务类型/工具策略列表。
+    fn refresh_execution_mode_options(&mut self) {
+        self.tool_options = self
+            .acp
+            .as_ref()
+            .map(|acp| acp_execution_mode_options(&acp.state()))
+            .filter(|options| !options.is_empty())
+            .unwrap_or_else(default_execution_mode_options);
+    }
+
     fn select_execution_mode(&mut self, id: &str, cx: &mut Context<Self>) {
         if self.is_running {
             return;
         }
-        if let Some(opt) = self.tool_options.iter().find(|o| o.id.as_ref() == id) {
-            let mode = tool_execution_mode_from_id(opt.id.as_ref());
-            if self.backend == Backend::Acp
-                && let Err(error) = set_current_acp_tool_mode(cx, mode)
-            {
-                let message = t!(
-                    "AgentChat.acp_tool_mode_update_failed",
-                    error = error.to_string()
-                )
-                .to_string();
-                tracing::warn!(%error, "Failed to update ACP Public MCP permission mode");
-                self.transcript.push_system(message);
-                self.request_scroll_to_bottom();
-                cx.notify();
-                return;
-            }
-            AppSettings::update_and_save(cx, |settings| {
-                settings.ai_chat.tool_execution_mode = settings_tool_execution_mode(mode);
-            });
-            self.tool_execution_mode = mode;
-            self.sync_composer(cx);
-            cx.notify();
+        // ACP 后端下拉里是 agent 自己声明的会话模式，选中后走 `session/set_mode`。
+        if let Some(mode_id) = id.strip_prefix(ACP_MODE_OPTION_PREFIX) {
+            self.select_acp_mode(mode_id.to_string(), cx);
+            return;
         }
+        if self.tool_options.iter().all(|o| o.id.as_ref() != id) {
+            return;
+        }
+        // 「问答」只改任务类型（它本身不下发工具），其余 id 只改工具策略、任务类型回到常规。
+        let selection = match task_kind_from_id(id) {
+            TaskKind::Agent => ExecutionSelection::tool(tool_execution_mode_from_id(id)),
+            task => ExecutionSelection::new(task, self.tool_execution_mode),
+        };
+        if self.backend == Backend::Acp
+            && let Err(error) = set_current_acp_tool_mode(cx, selection.tool)
+        {
+            let message = t!(
+                "AgentChat.acp_tool_mode_update_failed",
+                error = error.to_string()
+            )
+            .to_string();
+            tracing::warn!(%error, "Failed to update ACP Public MCP permission mode");
+            self.transcript.push_system(message);
+            self.request_scroll_to_bottom();
+            cx.notify();
+            return;
+        }
+        AppSettings::update_and_save(cx, |settings| {
+            settings.ai_chat.tool_execution_mode = settings_execution_mode(selection);
+        });
+        self.tool_execution_mode = selection.tool;
+        self.task_kind = selection.task;
+        self.sync_composer(cx);
+        cx.notify();
+    }
+
+    /// 切换 ACP agent 自己声明的会话模式。
+    fn select_acp_mode(&mut self, mode_id: String, cx: &mut Context<Self>) {
+        let Some(acp) = self.acp.take() else {
+            return;
+        };
+        let mode = agent_client_protocol::schema::v1::SessionModeId::new(mode_id);
+        cx.spawn(async move |this, cx| {
+            let result = acp.set_mode(mode).await;
+            let _ = this.update(cx, |this, cx| {
+                this.acp = Some(acp);
+                if let Err(error) = result {
+                    this.transcript
+                        .push_system(format!("ACP mode switch failed: {error}"));
+                }
+                this.sync_composer(cx);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn new_session(&mut self, cx: &mut Context<Self>) {
@@ -4102,7 +4363,7 @@ impl AgentChatView {
             .collect();
         let ctx = build_composer_context(
             &self.resources,
-            self.tool_execution_mode,
+            self.execution_selection(),
             self.selected_model.as_ref(),
             self.transcript.latest_plan(),
             self.transcript.active_subagents(),
@@ -4171,7 +4432,7 @@ impl AgentChatView {
             .collect();
         let ctx = build_composer_context(
             &self.resources,
-            self.tool_execution_mode,
+            self.execution_selection(),
             self.selected_model.as_ref(),
             self.transcript.latest_plan(),
             self.transcript.active_subagents(),
@@ -4844,7 +5105,7 @@ fn acp_model_option(
 ) -> Option<ComposerModelOption> {
     let agent_id = agent_id?;
     let option = state.current_model_config()?;
-    let agent_client_protocol::schema::SessionConfigKind::Select(select) = &option.kind else {
+    let agent_client_protocol::schema::v1::SessionConfigKind::Select(select) = &option.kind else {
         return None;
     };
     let value = &select.current_value;
@@ -4908,10 +5169,10 @@ fn acp_model_options(
 }
 
 fn select_config_value(
-    options: &agent_client_protocol::schema::SessionConfigSelectOptions,
-    value: &agent_client_protocol::schema::SessionConfigValueId,
+    options: &agent_client_protocol::schema::v1::SessionConfigSelectOptions,
+    value: &agent_client_protocol::schema::v1::SessionConfigValueId,
 ) -> Option<String> {
-    use agent_client_protocol::schema::SessionConfigSelectOptions;
+    use agent_client_protocol::schema::v1::SessionConfigSelectOptions;
     let values = match options {
         SessionConfigSelectOptions::Ungrouped(values) => values,
         SessionConfigSelectOptions::Grouped(groups) => {
@@ -5170,7 +5431,7 @@ impl Render for AgentChatView {
 
 fn build_composer_context(
     resources: &ResourceContext,
-    tool_execution_mode: ToolExecutionMode,
+    selection: ExecutionSelection,
     model: Option<&ComposerModelOption>,
     plan: Option<&PlanCardData>,
     subagents: &[SubAgentCardData],
@@ -5183,7 +5444,7 @@ fn build_composer_context(
     skill_summary: ComposerSkillSummary,
     skill_items: Vec<ComposerSkillItem>,
 ) -> AgentComposerContext {
-    let mut context = build_context(resources, tool_execution_mode, model);
+    let mut context = build_context(resources, selection, model);
     context.resource_source_options = resource_source_options(resources, available_resources);
     context.resource_pool_items = resource_pool_items(resources, available_resources);
     context.skill_summary = skill_summary;
@@ -5194,6 +5455,11 @@ fn build_composer_context(
         composer_agent_options(backend, acp_agents, current_acp_id, acp_connecting);
     if backend == Backend::Acp {
         apply_acp_state_to_context(&mut context, acp_state.as_ref());
+        // ACP 的「执行模式」是 agent 自己声明的会话模式（如 codex 的 read-only /
+        // agent / agent-full-access），比本地那套工具策略更贴近实际语义。
+        if let Some(label) = acp_state.as_ref().and_then(acp_mode_label) {
+            context.execution_mode_label = SharedString::from(label);
+        }
     }
     context
 }
@@ -5338,7 +5604,7 @@ fn acp_mode_label(state: &AcpSessionState) -> Option<String> {
 /// 由资源上下文构建输入框展示用上下文。
 fn build_context(
     resources: &ResourceContext,
-    tool_execution_mode: ToolExecutionMode,
+    selection: ExecutionSelection,
     model: Option<&ComposerModelOption>,
 ) -> AgentComposerContext {
     let current = resources.current();
@@ -5373,7 +5639,7 @@ fn build_context(
         subagent_items: Vec::new(),
         agent_options: Vec::new(),
         model: model.map(ComposerModelOption::to_composer_model),
-        execution_mode_label: SharedString::from(tool_execution_mode_label(tool_execution_mode)),
+        execution_mode_label: SharedString::from(selection.label()),
     }
 }
 
@@ -5895,6 +6161,22 @@ fn kind_icon(kind: &ResourceKind) -> &'static str {
     }
 }
 
+/// 「问答」是一个任务类型而不是工具策略，两者共用同一个下拉 id 空间。
+fn task_kind_from_id(id: &str) -> TaskKind {
+    match id {
+        "ask" => TaskKind::Ask,
+        "plan" => TaskKind::Plan,
+        _ => TaskKind::Agent,
+    }
+}
+
+fn task_kind_from_settings(mode: AiChatToolExecutionMode) -> TaskKind {
+    match mode {
+        AiChatToolExecutionMode::Ask => TaskKind::Ask,
+        _ => TaskKind::Agent,
+    }
+}
+
 fn tool_execution_mode_from_id(id: &str) -> ToolExecutionMode {
     match id {
         "auto" => ToolExecutionMode::Auto,
@@ -5908,6 +6190,18 @@ fn runtime_tool_execution_mode(mode: AiChatToolExecutionMode) -> ToolExecutionMo
         AiChatToolExecutionMode::Auto => ToolExecutionMode::Auto,
         AiChatToolExecutionMode::ReadOnly => ToolExecutionMode::ReadOnly,
         AiChatToolExecutionMode::Manual => ToolExecutionMode::Manual,
+        // 「问答」不下发工具，工具策略用不上；取最保守的一档，避免任何意外暴露。
+        AiChatToolExecutionMode::Ask => ToolExecutionMode::Manual,
+    }
+}
+
+/// 把执行模式下拉选中的项落盘到设置。
+///
+/// 任务类型优先：「问答」有独立的设置档位；其余情况按工具策略存。
+fn settings_execution_mode(selection: ExecutionSelection) -> AiChatToolExecutionMode {
+    match selection.task {
+        TaskKind::Ask => AiChatToolExecutionMode::Ask,
+        _ => settings_tool_execution_mode(selection.tool),
     }
 }
 
@@ -6064,12 +6358,42 @@ fn selected_provider_model_id(specs: &[RuntimeBuildSpec]) -> Option<SharedString
         .map(|spec| spec.option.id.clone())
 }
 
-fn default_tool_options() -> Vec<ComposerMenuOption> {
+/// 本地后端的执行模式选项。
+///
+/// 「问答」是任务类型（不向模型暴露工具），其余三项是工具策略——两者共用一个下拉，
+/// 与合并后的单一执行模式控件保持一致。
+fn default_execution_mode_options() -> Vec<ComposerMenuOption> {
     vec![
+        ComposerMenuOption::new("ask", t!("AgentUi.ask_mode").to_string())
+            .with_hint(t!("AgentUi.ask_mode_hint").to_string()),
         ComposerMenuOption::new("auto", t!("AgentUi.auto").to_string()),
         ComposerMenuOption::new("readonly", t!("AgentUi.readonly").to_string()),
         ComposerMenuOption::new("manual", t!("AgentUi.manual_confirmation").to_string()),
     ]
+}
+
+/// ACP 后端的执行模式选项：直接用 agent 声明的会话模式。
+fn acp_execution_mode_options(state: &AcpSessionState) -> Vec<ComposerMenuOption> {
+    state
+        .available_modes()
+        .iter()
+        .map(|mode| {
+            let option = ComposerMenuOption::new(
+                acp_mode_option_id(mode.id.0.as_ref()),
+                mode.name.clone(),
+            );
+            match mode.description.as_deref() {
+                Some(description) => option.with_hint(description.to_string()),
+                None => option,
+            }
+        })
+        .collect()
+}
+
+const ACP_MODE_OPTION_PREFIX: &str = "acp-mode:";
+
+fn acp_mode_option_id(mode_id: &str) -> String {
+    format!("{ACP_MODE_OPTION_PREFIX}{mode_id}")
 }
 
 fn now_secs() -> i64 {
@@ -6088,7 +6412,9 @@ mod tests {
         TOOL_CONFIRM_CARD, ToolCardData, ToolConfirmCardData,
     };
     use crate::{
-        AcpAgentConfig, AcpConfigDiagnostic, AcpPermissionOption, AcpPermissionRequest,
+        AcpAgentConfig, AcpConfigDiagnostic, AcpElicitationField, AcpElicitationFieldKind,
+        AcpElicitationForm, AcpElicitationMode, AcpElicitationOption, AcpElicitationOutcome,
+        AcpElicitationRequest, AcpPermissionOption, AcpPermissionRequest,
         AcpPublicMcpApprovalRequest,
     };
     use agent_runtime::RuntimeServices;
@@ -6138,6 +6464,47 @@ mod tests {
                     kind: "allow_once".into(),
                 },
             ],
+        }
+    }
+
+    fn test_acp_elicitation_request() -> AcpElicitationRequest {
+        AcpElicitationRequest {
+            request_id: "elicitation-test".into(),
+            session_id: "session".into(),
+            message: "要部署到哪个环境？".into(),
+            mode: AcpElicitationMode::Form(AcpElicitationForm {
+                title: Some("部署目标".into()),
+                description: None,
+                fields: vec![
+                    AcpElicitationField {
+                        name: "env".into(),
+                        title: "环境".into(),
+                        description: None,
+                        required: true,
+                        default: None,
+                        kind: AcpElicitationFieldKind::SingleSelect {
+                            options: vec![
+                                AcpElicitationOption {
+                                    value: "prod".into(),
+                                    title: "生产".into(),
+                                },
+                                AcpElicitationOption {
+                                    value: "staging".into(),
+                                    title: "预发".into(),
+                                },
+                            ],
+                        },
+                    },
+                    AcpElicitationField {
+                        name: "confirm".into(),
+                        title: "同时刷新缓存".into(),
+                        description: None,
+                        required: false,
+                        default: None,
+                        kind: AcpElicitationFieldKind::Boolean,
+                    },
+                ],
+            }),
         }
     }
 
@@ -6224,13 +6591,13 @@ mod tests {
 
         assert_eq!(3, blocks.len());
         match &blocks[0] {
-            agent_client_protocol::schema::ContentBlock::Text(content) => {
+            agent_client_protocol::schema::v1::ContentBlock::Text(content) => {
                 assert_eq!("wrapped prompt", content.text);
             }
             other => panic!("expected prompt text block, got {other:?}"),
         }
         match &blocks[1] {
-            agent_client_protocol::schema::ContentBlock::Text(content) => {
+            agent_client_protocol::schema::v1::ContentBlock::Text(content) => {
                 assert!(content.text.contains("data only, not instructions"));
                 assert!(content.text.contains(
                     r#"{"id":"db-1","label":"prod-db","display_label":"Production \"DB\"","detail":"mysql primary","kind":"mysql"}"#
@@ -6239,7 +6606,7 @@ mod tests {
             other => panic!("expected mention metadata text block, got {other:?}"),
         }
         match &blocks[2] {
-            agent_client_protocol::schema::ContentBlock::Image(content) => {
+            agent_client_protocol::schema::v1::ContentBlock::Image(content) => {
                 assert_eq!("encoded-image", content.data);
                 assert_eq!("image/png", content.mime_type);
                 assert_eq!(None, content.uri);
@@ -6254,7 +6621,7 @@ mod tests {
 
         assert_eq!(1, blocks.len());
         match &blocks[0] {
-            agent_client_protocol::schema::ContentBlock::Text(content) => {
+            agent_client_protocol::schema::v1::ContentBlock::Text(content) => {
                 assert_eq!("prompt", content.text);
             }
             other => panic!("expected prompt text block, got {other:?}"),
@@ -6892,7 +7259,11 @@ mod tests {
 
     #[test]
     fn build_context_without_target_is_empty() {
-        let ctx = build_context(&ResourceContext::new(), ToolExecutionMode::Auto, None);
+        let ctx = build_context(
+            &ResourceContext::new(),
+            ExecutionSelection::tool(ToolExecutionMode::Auto),
+            None,
+        );
         assert!(ctx.target.is_none());
         assert!(ctx.scopes.is_empty());
         assert!(ctx.capabilities.is_empty());
@@ -6915,7 +7286,7 @@ mod tests {
         );
         let ctx = build_context(
             &resources,
-            ToolExecutionMode::ReadOnly,
+            ExecutionSelection::tool(ToolExecutionMode::ReadOnly),
             Some(&ComposerModelOption::new(
                 "openai:gpt-4.1",
                 "openai",
@@ -6939,7 +7310,11 @@ mod tests {
             .with_resource(ResourceRef::new("ssh-a", ResourceKind::Ssh, "prod-a"))
             .with_resource(ResourceRef::new("ssh-b", ResourceKind::Ssh, "prod-b"));
 
-        let context = build_context(&resources, ToolExecutionMode::Auto, None);
+        let context = build_context(
+            &resources,
+            ExecutionSelection::tool(ToolExecutionMode::Auto),
+            None,
+        );
 
         assert_eq!(context.resource_pool.total_resources, 2);
         assert_eq!(
@@ -6960,7 +7335,11 @@ mod tests {
             .with_resource(ResourceRef::new("db-a", ResourceKind::Postgres, "prod-db"))
             .with_resource(ResourceRef::new("redis-a", ResourceKind::Redis, "cache"));
 
-        let context = build_context(&resources, ToolExecutionMode::Auto, None);
+        let context = build_context(
+            &resources,
+            ExecutionSelection::tool(ToolExecutionMode::Auto),
+            None,
+        );
 
         let filters = context
             .resource_type_filters
@@ -8758,17 +9137,79 @@ mod tests {
     }
 
     #[test]
-    fn composer_only_exposes_tool_execution_modes() {
-        let options = default_tool_options();
+    fn composer_exposes_ask_then_tool_execution_modes() {
+        let options = default_execution_mode_options();
 
+        // 「问答」是任务类型，与工具策略共用同一个下拉 id 空间，排在首位。
         assert_eq!(
-            vec!["auto", "readonly", "manual"],
+            vec!["ask", "auto", "readonly", "manual"],
             options
                 .iter()
                 .map(|option| option.id.as_ref())
                 .collect::<Vec<_>>()
         );
-        assert_eq!(options[0].label.as_ref(), t!("AgentUi.auto").as_ref());
+        assert_eq!(options[0].label.as_ref(), t!("AgentUi.ask_mode").as_ref());
+        assert_eq!(options[1].label.as_ref(), t!("AgentUi.auto").as_ref());
+    }
+
+    #[test]
+    fn execution_mode_ids_round_trip_to_task_kind_and_tool_policy() {
+        // 「问答」改任务类型且不动工具策略；其余改工具策略且任务类型回到常规。
+        assert_eq!(TaskKind::Ask, task_kind_from_id("ask"));
+        assert_eq!(TaskKind::Agent, task_kind_from_id("auto"));
+        assert_eq!(TaskKind::Agent, task_kind_from_id("readonly"));
+        assert_eq!(TaskKind::Agent, task_kind_from_id("manual"));
+
+        // 未知 id 不应把任务类型带偏。
+        assert_eq!(TaskKind::Agent, task_kind_from_id("acp-mode:plan"));
+
+        assert_eq!(TaskKind::Ask, task_kind_from_settings(AiChatToolExecutionMode::Ask));
+        assert_eq!(
+            TaskKind::Agent,
+            task_kind_from_settings(AiChatToolExecutionMode::Manual)
+        );
+    }
+
+    #[test]
+    fn acp_modes_are_namespaced_so_they_cannot_collide_with_local_ids() {
+        // ACP 的会话模式 id 由 agent 自己给定，可能与本地的 `auto` / `manual` 同名，
+        // 因此统一切到 `acp-mode:` 前缀，避免 `select_execution_mode` 走错分支。
+        let id = acp_mode_option_id("auto");
+        assert_eq!("acp-mode:auto", id);
+        assert_eq!(Some("auto"), id.strip_prefix(ACP_MODE_OPTION_PREFIX));
+        assert_eq!(TaskKind::Agent, task_kind_from_id(&id));
+    }
+
+    #[test]
+    fn acp_backend_exposes_agent_declared_session_modes() {
+        use agent_client_protocol::schema::v1::{
+            NewSessionResponse, SessionMode, SessionModeState,
+        };
+
+        let mut state = AcpSessionState::default();
+        state.apply_new_session_response(
+            &NewSessionResponse::new("s1").modes(SessionModeState::new(
+                "ask",
+                vec![
+                    SessionMode::new("ask", "Ask"),
+                    SessionMode::new("code", "Code"),
+                ],
+            )),
+        );
+
+        let options = acp_execution_mode_options(&state);
+
+        // ACP 下拉里是 agent 自己声明的档位（带前缀防止与本地 id 撞车），
+        // 不是本地那套 auto/readonly/manual。
+        assert_eq!(
+            vec!["acp-mode:ask", "acp-mode:code"],
+            options
+                .iter()
+                .map(|option| option.id.as_ref())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(options[1].label.as_ref(), "Code");
+        assert_eq!(Some("Ask".to_string()), acp_mode_label(&state));
     }
 
     #[test]
@@ -8793,7 +9234,7 @@ mod tests {
 
         let local = build_composer_context(
             &ResourceContext::new(),
-            ToolExecutionMode::Auto,
+            ExecutionSelection::tool(ToolExecutionMode::Auto),
             None,
             Some(&plan),
             &[],
@@ -8808,7 +9249,7 @@ mod tests {
         );
         let acp = build_composer_context(
             &ResourceContext::new(),
-            ToolExecutionMode::Auto,
+            ExecutionSelection::tool(ToolExecutionMode::Auto),
             None,
             Some(&plan),
             &[],
@@ -8838,7 +9279,7 @@ mod tests {
     fn local_backend_option_is_not_named_after_a_specific_cli() {
         let ctx = build_composer_context(
             &ResourceContext::new(),
-            ToolExecutionMode::Auto,
+            ExecutionSelection::tool(ToolExecutionMode::Auto),
             None,
             None,
             &[],
@@ -8878,7 +9319,7 @@ mod tests {
 
         let ctx = build_composer_context(
             &ResourceContext::new(),
-            ToolExecutionMode::Auto,
+            ExecutionSelection::tool(ToolExecutionMode::Auto),
             None,
             None,
             &subagents,
@@ -9018,7 +9459,7 @@ mod tests {
 
     #[test]
     fn composer_context_maps_acp_state_to_visible_context() {
-        use agent_client_protocol::schema::{
+        use agent_client_protocol::schema::v1::{
             AgentCapabilities, AvailableCommand, AvailableCommandsUpdate, CurrentModeUpdate,
             SessionInfoUpdate, SessionMode, SessionModeState, SessionUpdate, UsageUpdate,
         };
@@ -9026,7 +9467,7 @@ mod tests {
         let mut state = AcpSessionState::default();
         state.set_agent_capabilities(AgentCapabilities::new().load_session(true));
         state.apply_new_session_response(
-            &agent_client_protocol::schema::NewSessionResponse::new("s1").modes(
+            &agent_client_protocol::schema::v1::NewSessionResponse::new("s1").modes(
                 SessionModeState::new(
                     "ask",
                     vec![
@@ -9049,7 +9490,7 @@ mod tests {
 
         let ctx = build_composer_context(
             &ResourceContext::new(),
-            ToolExecutionMode::Auto,
+            ExecutionSelection::tool(ToolExecutionMode::Auto),
             None,
             None,
             &[],
@@ -9079,7 +9520,7 @@ mod tests {
 
     #[test]
     fn slash_commands_come_from_acp_state_verbatim() {
-        use agent_client_protocol::schema::{
+        use agent_client_protocol::schema::v1::{
             AvailableCommand, AvailableCommandInput, AvailableCommandsUpdate, SessionUpdate,
             UnstructuredCommandInput,
         };
@@ -9114,7 +9555,7 @@ mod tests {
 
     #[test]
     fn usage_scope_appends_cost_when_the_agent_reports_one() {
-        use agent_client_protocol::schema::Cost;
+        use agent_client_protocol::schema::v1::Cost;
 
         let unbilled = AcpUsage {
             used: 42,
@@ -9352,7 +9793,7 @@ mod tests {
         let (envelope, mut outcome_rx) = AcpPermissionEnvelope::new(test_acp_permission_request());
 
         view.update(cx, |view, cx| {
-            let _ = view.start_acp_permission_session(cx);
+            let _ = view.start_acp_client_session(cx);
             view.transcript.apply(&RuntimeEvent::ToolCallStarted {
                 session_id: view.session_id.clone(),
                 turn_id: agent_runtime::TurnId::from_string("turn"),
@@ -9420,7 +9861,7 @@ mod tests {
         drop(outcome_rx);
 
         view.update(cx, |view, cx| {
-            let _ = view.start_acp_permission_session(cx);
+            let _ = view.start_acp_client_session(cx);
             view.receive_acp_permission(envelope, cx);
         });
         cx.run_until_parked();
@@ -9617,6 +10058,98 @@ mod tests {
     }
 
     #[gpui::test]
+    fn gpui_pending_elicitation_renders_and_submits_collected_answer(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let (envelope, mut outcome_rx) = AcpElicitationEnvelope::new(test_acp_elicitation_request());
+
+        view.update(cx, |view, cx| {
+            let _ = view.start_acp_client_session(cx);
+            view.receive_acp_elicitation(envelope, cx);
+        });
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("agent-input-elicitation").is_some(),
+            "agent 提问面板应渲染在输入框上方"
+        );
+
+        // 必填项空着时提交只应给出提示，不能把半截答案回给 agent。
+        let submit = cx.debug_bounds("elicitation-submit").expect("submit button");
+        cx.simulate_click(submit.center(), Modifiers::default());
+        cx.run_until_parked();
+        assert!(
+            outcome_rx.try_recv().is_err(),
+            "必填项没填就不该提交"
+        );
+
+        let prod = cx
+            .debug_bounds("elicitation-radio-env-prod")
+            .expect("env option");
+        cx.simulate_click(prod.center(), Modifiers::default());
+        cx.run_until_parked();
+        let submit = cx.debug_bounds("elicitation-submit").expect("submit button");
+        cx.simulate_click(submit.center(), Modifiers::default());
+        cx.run_until_parked();
+
+        let AcpElicitationOutcome::Accept(content) = outcome_rx.try_recv().expect("answer") else {
+            panic!("expected accept outcome");
+        };
+        assert_eq!(Some(&json!("prod")), content.get("env"));
+        // 布尔字段没动过也要给值，否则 agent 收到的对象缺字段。
+        assert_eq!(Some(&json!(false)), content.get("confirm"));
+        assert!(
+            cx.debug_bounds("agent-input-elicitation").is_none(),
+            "答完应收起面板"
+        );
+    }
+
+    #[gpui::test]
+    fn gpui_declining_elicitation_reports_decline_and_closes_the_panel(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let (envelope, mut outcome_rx) = AcpElicitationEnvelope::new(test_acp_elicitation_request());
+
+        view.update(cx, |view, cx| {
+            view.receive_acp_elicitation(envelope, cx);
+        });
+        cx.run_until_parked();
+        let decline = cx
+            .debug_bounds("elicitation-decline")
+            .expect("decline button");
+        cx.simulate_click(decline.center(), Modifiers::default());
+        cx.run_until_parked();
+
+        assert_eq!(
+            AcpElicitationOutcome::Decline,
+            outcome_rx.try_recv().expect("decline outcome")
+        );
+        assert!(cx.debug_bounds("agent-input-elicitation").is_none());
+    }
+
+    #[gpui::test]
+    fn gpui_resetting_acp_connection_cancels_pending_elicitation(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let (envelope, mut outcome_rx) = AcpElicitationEnvelope::new(test_acp_elicitation_request());
+
+        view.update(cx, |view, cx| {
+            view.receive_acp_elicitation(envelope, cx);
+            view.reset_acp_client_session(cx);
+        });
+
+        assert_eq!(
+            AcpElicitationOutcome::Cancel,
+            outcome_rx.try_recv().expect("cancelled elicitation")
+        );
+    }
+
+    #[gpui::test]
     fn gpui_resetting_acp_connection_cancels_pending_permission_card(cx: &mut TestAppContext) {
         init_test_ui(cx);
         let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
@@ -9626,7 +10159,7 @@ mod tests {
 
         view.update(cx, |view, cx| {
             view.receive_acp_permission(envelope, cx);
-            view.reset_acp_permission_session(cx);
+            view.reset_acp_client_session(cx);
         });
 
         assert_eq!(

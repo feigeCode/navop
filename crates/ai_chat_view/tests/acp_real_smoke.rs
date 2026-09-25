@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use agent_client_protocol::schema::{ContentBlock, TextContent};
+use agent_client_protocol::schema::v1::{ContentBlock, TextContent};
 use agent_runtime::RuntimeEvent;
 use ai_chat_view::{AcpAgentConfig, AcpConnectOutcome, AcpConnection, AcpTimeoutConfig};
 

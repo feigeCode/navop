@@ -1,18 +1,30 @@
 use std::path::{Path, PathBuf};
 
-use agent_client_protocol::schema::{
-    ClientCapabilities, FileSystemCapabilities, InitializeRequest, ProtocolVersion,
-    ReadTextFileRequest, ReadTextFileResponse, WriteTextFileRequest, WriteTextFileResponse,
+use agent_client_protocol::schema::ProtocolVersion;
+use agent_client_protocol::schema::v1::{
+    ClientCapabilities, ElicitationCapabilities, ElicitationFormCapabilities,
+    ElicitationUrlCapabilities, FileSystemCapabilities, InitializeRequest, ReadTextFileRequest,
+    ReadTextFileResponse, WriteTextFileRequest, WriteTextFileResponse,
 };
 
 pub(super) fn build_initialize_request() -> InitializeRequest {
     InitializeRequest::new(ProtocolVersion::V1).client_capabilities(build_client_capabilities())
 }
 
+/// 声明客户端能力。
+///
+/// 每加一项都必须同时注册对应的 `on_receive_request` 处理（见 [`super::connection::runner`]），
+/// 否则 agent 会因为「你声称支持」而来问一个没人接的问题。
 fn build_client_capabilities() -> ClientCapabilities {
-    ClientCapabilities::new().fs(FileSystemCapabilities::new()
-        .read_text_file(true)
-        .write_text_file(true))
+    ClientCapabilities::new()
+        .fs(FileSystemCapabilities::new()
+            .read_text_file(true)
+            .write_text_file(true))
+        .elicitation(
+            ElicitationCapabilities::new()
+                .form(ElicitationFormCapabilities::new())
+                .url(ElicitationUrlCapabilities::new()),
+        )
 }
 
 pub(super) fn handle_read_text_file_request(
@@ -79,7 +91,7 @@ fn normalize_path(path: &Path) -> PathBuf {
 mod tests {
     use std::path::Path;
 
-    use agent_client_protocol::schema::FileSystemCapabilities;
+    use agent_client_protocol::schema::v1::FileSystemCapabilities;
 
     use super::{build_client_capabilities, read_text_slice, workspace_path_allowed};
 
@@ -93,6 +105,10 @@ mod tests {
             capabilities.fs
         );
         assert!(!capabilities.terminal);
+        // 提问能力必须与 `runner` 里注册的 `CreateElicitationRequest` 处理同进同退。
+        let elicitation = capabilities.elicitation.expect("elicitation 能力已声明");
+        assert!(elicitation.supports_form());
+        assert!(elicitation.supports_url());
     }
 
     #[test]

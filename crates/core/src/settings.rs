@@ -571,6 +571,8 @@ pub enum AiChatToolExecutionMode {
     ReadOnly,
     #[default]
     Manual,
+    /// 问答模式：只回答，不向模型暴露工具（对应 `TaskKind::Ask`）。
+    Ask,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

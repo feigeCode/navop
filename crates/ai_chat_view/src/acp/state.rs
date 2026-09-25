@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::{
+use agent_client_protocol::schema::v1::{
     AgentCapabilities, AvailableCommand, Implementation, LoadSessionResponse, NewSessionResponse,
     ResumeSessionResponse, SessionConfigKind, SessionConfigOption, SessionConfigSelectOptions,
     SessionMode, SessionModeId, SessionUpdate,
@@ -48,7 +48,7 @@ pub(crate) struct AcpSessionState {
 pub(crate) struct AcpUsage {
     pub used: u64,
     pub size: u64,
-    pub cost: Option<agent_client_protocol::schema::Cost>,
+    pub cost: Option<agent_client_protocol::schema::v1::Cost>,
 }
 
 impl AcpSessionState {
@@ -93,7 +93,7 @@ impl AcpSessionState {
         self.config_options.iter().find(|option| {
             matches!(
                 option.category,
-                Some(agent_client_protocol::schema::SessionConfigOptionCategory::Model)
+                Some(agent_client_protocol::schema::v1::SessionConfigOptionCategory::Model)
             ) || option.id.0.eq_ignore_ascii_case("model")
                 || option.name.to_ascii_lowercase().contains("model")
         })
@@ -192,7 +192,7 @@ impl AcpSessionState {
 
     fn apply_modes_and_config(
         &mut self,
-        modes: Option<&agent_client_protocol::schema::SessionModeState>,
+        modes: Option<&agent_client_protocol::schema::v1::SessionModeState>,
         config_options: Option<&Vec<SessionConfigOption>>,
     ) {
         if let Some(modes) = modes {
@@ -238,7 +238,7 @@ fn phase_transition_allowed(current: &AcpConnectionPhase, next: &AcpConnectionPh
 
 #[cfg(test)]
 mod tests {
-    use agent_client_protocol::schema::{
+    use agent_client_protocol::schema::v1::{
         AvailableCommand, AvailableCommandsUpdate, ConfigOptionUpdate, ContentBlock,
         CurrentModeUpdate, NewSessionResponse, SessionConfigOption, SessionConfigSelectOption,
         SessionInfoUpdate, SessionMode, SessionModeState, SessionUpdate, TextContent, UsageUpdate,
@@ -297,7 +297,7 @@ mod tests {
         ));
         state.apply_session_update(&SessionUpdate::UsageUpdate(UsageUpdate::new(42, 100)));
         state.apply_session_update(&SessionUpdate::AgentMessageChunk(
-            agent_client_protocol::schema::ContentChunk::new(ContentBlock::Text(TextContent::new(
+            agent_client_protocol::schema::v1::ContentChunk::new(ContentBlock::Text(TextContent::new(
                 "ignored by state",
             ))),
         ));

@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use agent_client_protocol::schema::{
-    ReadTextFileRequest, RequestPermissionRequest, SessionNotification, WriteTextFileRequest,
+use agent_client_protocol::schema::v1::{
+    CreateElicitationRequest, ReadTextFileRequest, RequestPermissionRequest, SessionNotification,
+    WriteTextFileRequest,
 };
 use agent_client_protocol::{AcpAgent, Agent, Client, ConnectionTo};
 use agent_runtime::{RuntimeEvent, SessionId};
@@ -12,7 +13,8 @@ use tokio::sync::{broadcast, oneshot};
 
 use crate::acp::client::{handle_read_text_file_request, handle_write_text_file_request};
 use crate::acp::config::AcpAgentConfig;
-use crate::acp::permission::{AcpPermissionProvider, resolve_acp_permission_request};
+use crate::acp::elicitation::resolve_acp_elicitation_request;
+use crate::acp::permission::resolve_acp_permission_request;
 use crate::acp::state::{AcpConnectionPhase, AcpSessionState};
 use crate::acp::turn::AcpTurnTracker;
 
@@ -20,8 +22,8 @@ use super::notifications::{NotificationContext, handle_notification};
 use super::outcome::finish_connect;
 use super::setup::{SetupOutcome, setup_connection};
 use super::{
-    AcpConnectOutcome, connection_closed_error, fail_connection_and_take_active_turn,
-    transition_state,
+    AcpClientProviders, AcpConnectOutcome, connection_closed_error,
+    fail_connection_and_take_active_turn, transition_state,
 };
 
 pub(super) type ReadyMessage = Result<(ConnectionTo<Agent>, SetupOutcome), String>;
@@ -47,7 +49,7 @@ pub(super) struct SpawnedConnection {
 
 struct ClientTaskContext {
     agent: AcpAgent,
-    permission_provider: Option<AcpPermissionProvider>,
+    providers: AcpClientProviders,
     shared: ConnectShared,
     ready_tx: oneshot::Sender<ReadyMessage>,
     shutdown_rx: oneshot::Receiver<()>,
@@ -59,17 +61,23 @@ pub(super) async fn connect(
     cx: &mut AsyncApp,
 ) -> anyhow::Result<AcpConnectOutcome> {
     let handle = cx.update(|cx| Tokio::handle(cx));
-    connect_with_parts(config, workspace_root, handle, None).await
+    connect_with_parts(
+        config,
+        workspace_root,
+        handle,
+        AcpClientProviders::default(),
+    )
+    .await
 }
 
-pub(super) async fn connect_with_permission_provider(
+pub(super) async fn connect_with_providers(
     config: &AcpAgentConfig,
     workspace_root: PathBuf,
-    permission_provider: AcpPermissionProvider,
+    providers: AcpClientProviders,
     cx: &mut AsyncApp,
 ) -> anyhow::Result<AcpConnectOutcome> {
     let handle = cx.update(|cx| Tokio::handle(cx));
-    connect_with_parts(config, workspace_root, handle, Some(permission_provider)).await
+    connect_with_parts(config, workspace_root, handle, providers).await
 }
 
 pub(super) async fn connect_with_runtime(
@@ -77,26 +85,26 @@ pub(super) async fn connect_with_runtime(
     workspace_root: PathBuf,
     handle: tokio::runtime::Handle,
 ) -> anyhow::Result<AcpConnectOutcome> {
-    connect_with_parts(config, workspace_root, handle, None).await
+    connect_with_parts(config, workspace_root, handle, AcpClientProviders::default()).await
 }
 
-pub(super) async fn connect_with_runtime_and_permission_provider(
+pub(super) async fn connect_with_runtime_and_providers(
     config: &AcpAgentConfig,
     workspace_root: PathBuf,
     handle: tokio::runtime::Handle,
-    permission_provider: AcpPermissionProvider,
+    providers: AcpClientProviders,
 ) -> anyhow::Result<AcpConnectOutcome> {
-    connect_with_parts(config, workspace_root, handle, Some(permission_provider)).await
+    connect_with_parts(config, workspace_root, handle, providers).await
 }
 
 async fn connect_with_parts(
     config: &AcpAgentConfig,
     workspace_root: PathBuf,
     handle: tokio::runtime::Handle,
-    permission_provider: Option<AcpPermissionProvider>,
+    providers: AcpClientProviders,
 ) -> anyhow::Result<AcpConnectOutcome> {
     let shared = prepare_shared(config, workspace_root, handle);
-    let mut spawned = spawn_client(shared.clone(), permission_provider);
+    let mut spawned = spawn_client(shared.clone(), providers);
     let ready_rx = spawned.ready_rx.take().expect("ready receiver must exist");
     let ready = wait_for_ready(&shared.handle, config.timeouts.connect, ready_rx).await;
     finish_connect(shared, spawned, ready)
@@ -130,15 +138,12 @@ fn prepare_shared(
     }
 }
 
-fn spawn_client(
-    shared: ConnectShared,
-    permission_provider: Option<AcpPermissionProvider>,
-) -> SpawnedConnection {
+fn spawn_client(shared: ConnectShared, providers: AcpClientProviders) -> SpawnedConnection {
     let (ready_tx, ready_rx) = oneshot::channel();
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let context = ClientTaskContext {
         agent: shared.config.to_acp_agent(),
-        permission_provider,
+        providers,
         shared: shared.clone(),
         ready_tx,
         shutdown_rx,
@@ -153,7 +158,8 @@ fn spawn_client(
 
 async fn run_client(context: ClientTaskContext) {
     let agent = context.agent;
-    let permission_provider = context.permission_provider;
+    let permission_provider = context.providers.permission;
+    let elicitation_provider = context.providers.elicitation;
     let shared = context.shared;
     let ready_tx = context.ready_tx;
     let shutdown_rx = context.shutdown_rx;
@@ -190,6 +196,15 @@ async fn run_client(context: ClientTaskContext) {
                     Ok(response) => responder.respond(response),
                     Err(error) => responder.respond_with_error(error),
                 }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        // agent 主动提问：交给视图渲染成聊天里的问答卡片，结果原样送回。
+        .on_receive_request(
+            async move |request: CreateElicitationRequest, responder, _connection| {
+                responder.respond(
+                    resolve_acp_elicitation_request(elicitation_provider.clone(), request).await,
+                )
             },
             agent_client_protocol::on_receive_request!(),
         )

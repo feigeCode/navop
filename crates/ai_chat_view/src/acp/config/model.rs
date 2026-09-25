@@ -65,12 +65,26 @@ impl AcpConfigDiagnostic {
     }
 }
 
+/// ACP agent 条目的来源。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AcpAgentSource {
+    /// 由已安装的 `acp_agent` 扩展提供。
+    #[default]
+    Extension,
+    /// 用户在设置里自己添加的。
+    User,
+}
+
 #[derive(Clone, Debug)]
 pub struct AcpAgentEntry {
     pub id: SharedString,
     pub name: SharedString,
     pub config: Option<AcpAgentConfig>,
     pub diagnostic: Option<AcpConfigDiagnostic>,
+    /// 条目来源：决定设置页能否删除，也决定覆盖写回哪里。
+    pub source: AcpAgentSource,
+    /// 用户是否启用。停用的条目仍然出现在设置页，但不进聊天切换器。
+    pub enabled: bool,
 }
 
 impl AcpAgentEntry {
@@ -80,6 +94,8 @@ impl AcpAgentEntry {
             name: config.name.clone(),
             config: Some(config),
             diagnostic: None,
+            source: AcpAgentSource::default(),
+            enabled: true,
         }
     }
 
@@ -93,6 +109,23 @@ impl AcpAgentEntry {
             name: name.into(),
             config: None,
             diagnostic: Some(diagnostic),
+            source: AcpAgentSource::default(),
+            enabled: true,
         }
+    }
+
+    pub fn with_source(mut self, source: AcpAgentSource) -> Self {
+        self.source = source;
+        self
+    }
+
+    pub fn with_enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    /// 是否可以在聊天里选中（配置就绪且未被停用）。
+    pub fn selectable(&self) -> bool {
+        self.config.is_some() && self.enabled
     }
 }

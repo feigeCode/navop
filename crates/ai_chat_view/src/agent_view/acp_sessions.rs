@@ -8,7 +8,7 @@
 //! - 连接只有 `list`/`load`/`resume` 这类真请求才 take，其余时间留在原地。
 //! - 异步回写按发起时捕获的世代 + 操作令牌判归属（不变量 5）。
 
-use agent_client_protocol::schema::SessionId as AcpSessionId;
+use agent_client_protocol::schema::v1::SessionId as AcpSessionId;
 use gpui::{Hsla, SharedString};
 
 use super::*;
@@ -124,7 +124,7 @@ impl AgentChatView {
         agent_id: SharedString,
         session_uid: String,
         acp: AcpConnection,
-        result: anyhow::Result<Vec<agent_client_protocol::schema::SessionInfo>>,
+        result: anyhow::Result<Vec<agent_client_protocol::schema::v1::SessionInfo>>,
         cx: &mut Context<Self>,
     ) {
         // 连接只在「槽位还空着、还是同一个 agent」时放回。否则说明已经有更新的操作接管了它，

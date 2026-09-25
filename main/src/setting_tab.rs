@@ -8,6 +8,7 @@ use crate::license::{get_license_service, is_feature_enabled, offline_license_pu
 use crate::settings::agent_settings::agent_setting_group;
 use crate::settings::appearance::render as render_appearance_settings;
 use crate::settings::database_settings::database_setting_group;
+use crate::settings::acp_agents_settings::AcpAgentsView;
 use crate::settings::llm_providers_view::LlmProvidersView;
 use crate::settings::local_terminal_settings::local_terminal_setting_group;
 use crate::settings::mcp_settings::mcp_setting_group;
@@ -61,8 +62,8 @@ use one_core::popup_window::{PopupWindowOptions, open_popup_window};
 use one_core::storage::GlobalStorageState;
 pub const DEFAULT_SYSTEM_HOTKEY_MACOS: &str = "cmd-alt-m";
 pub const DEFAULT_SYSTEM_HOTKEY_OTHER: &str = "ctrl-alt-m";
-const SYNC_SETTINGS_PAGE_INDEX: usize = 5;
-const TEAM_KEYS_SETTINGS_PAGE_INDEX: usize = 6;
+const SYNC_SETTINGS_PAGE_INDEX: usize = 6;
+const TEAM_KEYS_SETTINGS_PAGE_INDEX: usize = 7;
 
 use gpui_component::input::InputEvent;
 pub use one_core::settings::{
@@ -449,6 +450,7 @@ fn update_master_key_setting(is_portable: bool, enabled: bool, cx: &mut App) {
 pub struct SettingsPanel {
     focus_handle: FocusHandle,
     llm_providers_view: Entity<LlmProvidersView>,
+    acp_agents_view: Entity<AcpAgentsView>,
     size: Size,
     group_variant: GroupBoxVariant,
     initial_page_index: usize,
@@ -483,9 +485,11 @@ impl SettingsPanel {
 
     fn new_with_initial_page(initial_page_index: usize, cx: &mut Context<Self>) -> Self {
         let llm_providers_view = cx.new(|cx| LlmProvidersView::new(cx));
+        let acp_agents_view = cx.new(|cx| AcpAgentsView::new(cx));
         Self {
             focus_handle: cx.focus_handle(),
             llm_providers_view,
+            acp_agents_view,
             size: Size::default(),
             group_variant: GroupBoxVariant::Outline,
             initial_page_index,
@@ -525,6 +529,7 @@ impl SettingsPanel {
 
     fn setting_pages(&mut self, _window: &mut Window, cx: &App) -> Vec<SettingPage> {
         let llm_view = self.llm_providers_view.clone();
+        let acp_view = self.acp_agents_view.clone();
         let default_settings = AppSettings::default();
         let default_system_hotkey = AppSettings::default().current_system_hotkey().to_string();
         let (app_font_options, font_options) = self.cached_font_options(cx);
@@ -957,6 +962,19 @@ impl SettingsPanel {
                     agent_setting_group(&default_settings.ai_chat),
                     agent_tool_exposure_setting_group(&default_settings.tool_exposure),
                 ]),
+            // ACP 智能体设置页（插在 Agent 与 MCP 之间，改这里必须同步 SYNC_/TEAM_KEYS_SETTINGS_PAGE_INDEX）
+            SettingPage::new(t!("Settings.AcpAgents.title")).group(
+                SettingGroup::new().item(
+                    SettingItem::render(move |_options, _window, _cx| {
+                        acp_view.clone().into_any_element()
+                    })
+                    .keywords([
+                        t!("Settings.AcpAgents.title").to_string(),
+                        t!("Settings.AcpAgents.group_title").to_string(),
+                        t!("Settings.AcpAgents.description").to_string(),
+                    ]),
+                ),
+            ),
             // MCP 设置页
             SettingPage::new(t!("Settings.Mcp.title"))
                 .resettable(true)

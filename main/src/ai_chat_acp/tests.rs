@@ -1,9 +1,12 @@
 use super::{
-    acp_agent_config_from_extension_agent, acp_agent_entries_from_agents, builtin_agent_configs,
+    acp_agent_config_from_extension_agent, acp_agent_entries_from_agents,
     normalize_acp_agent_config_ids,
 };
 use ai_chat_view::{AcpAgentConfig, AcpTransport};
-use extension_runtime::extension::AcpAgentExtensionAgent;
+use extension_runtime::extension::{
+    AcpAgentExtensionAgent, AcpAgentExtensionAuth, AcpAgentExtensionTimeouts,
+    AcpAgentExtensionTransport,
+};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -12,9 +15,9 @@ use super::user_config::{parse_user_config, resolve_override};
 #[test]
 fn normalizes_duplicate_acp_agent_config_ids() {
     let mut configs = vec![
-        AcpAgentConfig::new_http("agent", "One", "http://127.0.0.1:1"),
-        AcpAgentConfig::new_http("agent", "Two", "http://127.0.0.1:2"),
-        AcpAgentConfig::new_http("", "Three", "http://127.0.0.1:3"),
+        AcpAgentConfig::new("agent", "One", "codex-acp"),
+        AcpAgentConfig::new("agent", "Two", "claude-agent-acp"),
+        AcpAgentConfig::new("", "Three", "opencode"),
     ];
 
     normalize_acp_agent_config_ids(&mut configs);
@@ -45,23 +48,52 @@ fn builds_acp_agent_config_from_extension_agent() {
 
     assert_eq!("com.example.codex.codex", config.id.as_ref());
     assert_eq!("Codex", config.name.as_ref());
-    match config.transport {
-        AcpTransport::Stdio { command, args, env } => {
-            let expected_command = manifest_dir
-                .join("bin/codex-acp")
-                .components()
-                .collect::<PathBuf>()
-                .display()
-                .to_string();
-            assert_eq!(expected_command, command);
-            assert_eq!(vec!["--stdio".to_string()], args);
-            assert_eq!(
-                vec![("CODEX_HOME".to_string(), "test-home".to_string())],
-                env
-            );
-        }
-        AcpTransport::Http { .. } => panic!("expected stdio transport"),
-    }
+    let AcpTransport::Stdio { command, args, env } = &config.transport;
+    let expected_command = manifest_dir
+        .join("bin/codex-acp")
+        .components()
+        .collect::<PathBuf>()
+        .display()
+        .to_string();
+    assert_eq!(&expected_command, command);
+    assert_eq!(&vec!["--stdio".to_string()], args);
+    assert_eq!(
+        &vec![("CODEX_HOME".to_string(), "test-home".to_string())],
+        env
+    );
+}
+
+/// HTTP 传输已从协议 SDK 移除：扩展声明 http 时必须在配置阶段就带出诊断，
+/// 而不是等到用户点开 agent 才在连接时失败。
+#[test]
+fn http_transport_extension_is_reported_as_unavailable() {
+    let agent = AcpAgentExtensionAgent {
+        extension_id: "com.example.remote".to_string(),
+        id: "remote".to_string(),
+        name: "Remote".to_string(),
+        transport: AcpAgentExtensionTransport::Http {
+            url: "http://127.0.0.1:3100/".to_string(),
+        },
+        auth: AcpAgentExtensionAuth::default(),
+        timeouts: AcpAgentExtensionTimeouts::default(),
+        manifest_dir: PathBuf::from("/tmp/onetcli-acp/remote"),
+    };
+
+    let error = acp_agent_config_from_extension_agent(&agent).unwrap_err();
+
+    assert!(
+        error.message.contains("HTTP transport"),
+        "{}",
+        error.message
+    );
+
+    let config = parse_user_config(r#"{"version": 1, "agents": {}}"#).unwrap();
+    let entries = acp_agent_entries_from_agents(&[agent], &config, &|_| None);
+
+    assert_eq!(1, entries.len());
+    assert!(entries[0].config.is_none());
+    assert!(entries[0].diagnostic.is_some());
+    assert_eq!("com.example.remote.remote", entries[0].id.as_ref());
 }
 
 #[test]
@@ -154,7 +186,7 @@ fn one_invalid_override_does_not_hide_other_agents() {
     )
     .unwrap();
 
-    let entries = acp_agent_entries_from_agents(&agents, &config, |_| None);
+    let entries = acp_agent_entries_from_agents(&agents, &config, &|_| None);
 
     assert!(entries[0].config.is_none());
     assert!(entries[0].diagnostic.is_some());
@@ -172,51 +204,4 @@ fn extension_agent(id: &str) -> AcpAgentExtensionAgent {
         Vec::new(),
         BTreeMap::new(),
     )
-}
-
-#[test]
-fn builtin_agents_use_real_acp_entrypoints() {
-    let configs = builtin_agent_configs();
-
-    let codex = configs
-        .iter()
-        .find(|config| config.id.as_ref() == "builtin.codex")
-        .expect("codex builtin");
-    match &codex.transport {
-        AcpTransport::Stdio { command, args, .. } => {
-            // 与仓库内 acp_agent.json 约定一致：走 codex-acp 适配器，而不是 `codex` 普通子命令。
-            assert_eq!("codex-acp", command);
-            assert_eq!(vec!["--stdio".to_string()], *args);
-        }
-        other => panic!("codex must be stdio, got {other:?}"),
-    }
-
-    // 不能把普通 CLI 名字当成 ACP 入口：那会拉起一个不实现 ACP 的进程。
-    for config in &configs {
-        let AcpTransport::Stdio { command, .. } = &config.transport else {
-            panic!("builtin agents must use stdio transport");
-        };
-        assert_ne!("codex", command);
-        assert_ne!("claude", command);
-        assert!(!config.name.is_empty());
-    }
-}
-
-#[test]
-fn builtin_agent_ids_are_unique_and_namespaced() {
-    let configs = builtin_agent_configs();
-    let mut ids = configs
-        .iter()
-        .map(|config| config.id.to_string())
-        .collect::<Vec<_>>();
-    let total = ids.len();
-    ids.sort();
-    ids.dedup();
-    assert_eq!(total, ids.len(), "builtin agent ids must be unique");
-    assert!(
-        configs
-            .iter()
-            .all(|config| config.id.as_ref().starts_with("builtin.")),
-        "builtin agents must be namespaced to avoid clashing with extension ids"
-    );
 }

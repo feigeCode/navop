@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::{
+use agent_client_protocol::schema::v1::{
     ContentBlock, ContentChunk, SessionUpdate, StopReason, TextContent, ToolCall,
 };
 use agent_runtime::TurnId;

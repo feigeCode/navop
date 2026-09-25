@@ -32,7 +32,7 @@ pub(super) fn composer_agent_options_with_status(
         backend == Backend::Local,
         acp_connecting,
     )];
-    options.extend(acp_agents.iter().map(|entry| {
+    options.extend(acp_agents.iter().filter(|entry| entry.enabled).map(|entry| {
         if let Some(diagnostic) = &entry.diagnostic {
             return ComposerAgentOption::invalid_acp(
                 entry.id.clone(),

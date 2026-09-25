@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use agent_client_protocol::schema::{
+use agent_client_protocol::schema::v1::{
     CloseSessionRequest, CloseSessionResponse, DeleteSessionRequest, DeleteSessionResponse,
     ListSessionsRequest, ListSessionsResponse, LoadSessionRequest, LoadSessionResponse,
     LogoutRequest, LogoutResponse, NewSessionRequest, NewSessionResponse, ResumeSessionRequest,

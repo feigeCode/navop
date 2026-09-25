@@ -3,19 +3,21 @@
 //! 不写厂商特定逻辑:用户配置一条可执行命令(如 `npx -y @zed-industries/claude-code-acp`
 //! 或 `gemini`),onetcli 作为 ACP 客户端把它当 stdio 子进程拉起。
 
-use agent_client_protocol::schema::{EnvVariable, McpServer, McpServerHttp, McpServerStdio};
 use agent_client_protocol::{AcpAgent, LineDirection};
 use agent_runtime::SkillContext;
 use gpui::SharedString;
-use std::path::PathBuf;
 
 mod model;
 
 pub use model::{
-    AcpAgentEntry, AcpAuthConfig, AcpAuthMethodConfig, AcpConfigDiagnostic, AcpTimeoutConfig,
+    AcpAgentEntry, AcpAgentSource, AcpAuthConfig, AcpAuthMethodConfig, AcpConfigDiagnostic,
+    AcpTimeoutConfig,
 };
 
 /// ACP agent 传输类型。
+///
+/// 只保留 stdio 子进程:协议 SDK 2.x 的 `AcpAgent` 只负责拉起子进程,HTTP MCP
+/// 形态已从 SDK 移除,因此不再提供 HTTP 传输。
 #[derive(Clone, Debug)]
 pub enum AcpTransport {
     /// stdio 子进程(默认)。
@@ -24,18 +26,16 @@ pub enum AcpTransport {
         args: Vec<String>,
         env: Vec<(String, String)>,
     },
-    /// 进程内 HTTP MCP 服务(streamable-http)。
-    Http { url: String },
 }
 
-/// 一个可接入的 ACP agent 配置(自定义命令或进程内 HTTP)。
+/// 一个可接入的 ACP agent 配置(自定义命令)。
 #[derive(Clone, Debug)]
 pub struct AcpAgentConfig {
     /// 唯一标识(用于头部切换控件选中态)。
     pub id: SharedString,
     /// 展示名(头部按钮文案)。
     pub name: SharedString,
-    /// 传输配置(stdio 子进程或 HTTP)。
+    /// 传输配置(stdio 子进程)。
     pub transport: AcpTransport,
     /// 鉴权选择与凭证要求。
     pub auth: AcpAuthConfig,
@@ -63,35 +63,17 @@ impl AcpAgentConfig {
         }
     }
 
-    /// 构造进程内 HTTP 模式的 ACP agent 配置(用于连接 onetcli MCP HTTP 宿主)。
-    pub fn new_http(
-        id: impl Into<SharedString>,
-        name: impl Into<SharedString>,
-        url: impl Into<String>,
-    ) -> Self {
-        Self {
-            id: id.into(),
-            name: name.into(),
-            transport: AcpTransport::Http { url: url.into() },
-            auth: AcpAuthConfig::default(),
-            timeouts: AcpTimeoutConfig::default(),
-        }
-    }
-
     pub fn with_args(mut self, args: Vec<String>) -> Self {
-        if let AcpTransport::Stdio {
-            args: ref mut a, ..
-        } = self.transport
-        {
-            *a = args;
-        }
+        let AcpTransport::Stdio {
+            args: current_args, ..
+        } = &mut self.transport;
+        *current_args = args;
         self
     }
 
     pub fn with_env(mut self, env: Vec<(String, String)>) -> Self {
-        if let AcpTransport::Stdio { env: ref mut e, .. } = self.transport {
-            *e = env;
-        }
+        let AcpTransport::Stdio { env: current, .. } = &mut self.transport;
+        *current = env;
         self
     }
 
@@ -109,49 +91,38 @@ impl AcpAgentConfig {
         if skills.is_empty() {
             return self;
         }
-        if let AcpTransport::Stdio { env, .. } = &mut self.transport {
-            env.push(("ONETCLI_SKILLS".to_string(), skills.describe()));
-            env.push((
-                "ONETCLI_SELECTED_SKILLS".to_string(),
-                skills.selected_names_csv(),
-            ));
-        }
+        let AcpTransport::Stdio { env, .. } = &mut self.transport;
+        env.push(("ONETCLI_SKILLS".to_string(), skills.describe()));
+        env.push((
+            "ONETCLI_SELECTED_SKILLS".to_string(),
+            skills.selected_names_csv(),
+        ));
         self
     }
 
     /// 转为 `agent-client-protocol` 的 agent 传输配置。
     pub(crate) fn to_acp_agent(&self) -> AcpAgent {
-        match &self.transport {
-            AcpTransport::Stdio { command, args, env } => {
-                // McpServerStdio 是 #[non_exhaustive],用 `new` + 公有字段赋值构造。
-                let mut stdio = McpServerStdio::new(self.name.to_string(), PathBuf::from(command));
-                stdio.args = args.clone();
-                stdio.env = env
-                    .iter()
-                    .map(|(name, value)| EnvVariable::new(name.clone(), value.clone()))
-                    .collect();
-                // 把子进程的协议 I/O 接到 tracing。很多 ACP agent 会把 DEBUG/INFO
-                // 正常日志写到 stderr,因此 stderr 需要按内容分级,不能一律 warn。
-                let agent_name = self.name.to_string();
-                AcpAgent::new(McpServer::Stdio(stdio)).with_debug(move |line, direction| {
-                    match direction {
-                        LineDirection::Stderr => log_acp_stderr(&agent_name, line),
-                        LineDirection::Stdout => {
-                            let line = strip_ansi_escapes(line);
-                            tracing::debug!(agent = %agent_name, "acp recv: {line}");
-                        }
-                        LineDirection::Stdin => {
-                            let line = strip_ansi_escapes(line);
-                            tracing::debug!(agent = %agent_name, "acp send: {line}");
-                        }
-                    }
-                })
+        let AcpTransport::Stdio { command, args, env } = &self.transport;
+        let launch = agent_client_protocol::AcpAgentConfig::new(command.clone())
+            .args(args.clone())
+            .envs(
+                env.iter()
+                    .map(|(name, value)| (name.clone(), value.clone())),
+            );
+        // 把子进程的协议 I/O 接到 tracing。很多 ACP agent 会把 DEBUG/INFO
+        // 正常日志写到 stderr,因此 stderr 需要按内容分级,不能一律 warn。
+        let agent_name = self.name.to_string();
+        AcpAgent::new(launch).with_debug(move |line, direction| match direction {
+            LineDirection::Stderr => log_acp_stderr(&agent_name, line),
+            LineDirection::Stdout => {
+                let line = strip_ansi_escapes(line);
+                tracing::debug!(agent = %agent_name, "acp recv: {line}");
             }
-            AcpTransport::Http { url } => {
-                let http = McpServerHttp::new(self.name.to_string(), url);
-                AcpAgent::new(McpServer::Http(http))
+            LineDirection::Stdin => {
+                let line = strip_ansi_escapes(line);
+                tracing::debug!(agent = %agent_name, "acp send: {line}");
             }
-        }
+        })
     }
 }
 

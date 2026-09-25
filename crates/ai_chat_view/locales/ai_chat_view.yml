@@ -207,6 +207,50 @@ AgentUi:
     en: Edit and pull back into the composer
     zh-CN: 编辑（拉回输入框）
     zh-HK: 編輯（拉回輸入框）
+  elicitation_heading:
+    en: Agent question
+    zh-CN: Agent 提问
+    zh-HK: Agent 提問
+  elicitation_submit:
+    en: Send answer
+    zh-CN: 提交回答
+    zh-HK: 提交回答
+  elicitation_decline:
+    en: Decline
+    zh-CN: 拒绝回答
+    zh-HK: 拒絕回答
+  elicitation_cancel:
+    en: Cancel
+    zh-CN: 取消
+    zh-HK: 取消
+  elicitation_open_url:
+    en: Open link
+    zh-CN: 打开链接
+    zh-HK: 開啟連結
+  elicitation_required:
+    en: "\"%{field}\" is required"
+    zh-CN: "「%{field}」是必填项"
+    zh-HK: "「%{field}」是必填項"
+  elicitation_not_integer:
+    en: "\"%{field}\" must be a whole number"
+    zh-CN: "「%{field}」需要是整数"
+    zh-HK: "「%{field}」需要是整數"
+  elicitation_not_number:
+    en: "\"%{field}\" must be a number"
+    zh-CN: "「%{field}」需要是数字"
+    zh-HK: "「%{field}」需要是數字"
+  elicitation_format:
+    en: "Format: %{format}"
+    zh-CN: "格式：%{format}"
+    zh-HK: "格式：%{format}"
+  elicitation_unsupported_mode:
+    en: "This agent asked in a way this version does not support (%{mode})."
+    zh-CN: "Agent 使用了当前版本不支持的提问方式（%{mode}）。"
+    zh-HK: "Agent 使用了目前版本不支援的提問方式（%{mode}）。"
+  elicitation_unsupported_field:
+    en: "%{kind} fields are not supported yet"
+    zh-CN: "暂不支持 %{kind} 类型的字段"
+    zh-HK: "暫不支援 %{kind} 類型的欄位"
   remove_queued_item:
     en: Remove from queue
     zh-CN: 从队列删除

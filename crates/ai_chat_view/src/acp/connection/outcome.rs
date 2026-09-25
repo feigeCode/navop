@@ -42,7 +42,7 @@ fn build_ready(
     shared: ConnectShared,
     spawned: SpawnedConnection,
     conn: ConnectionTo<Agent>,
-    acp_session_id: agent_client_protocol::schema::SessionId,
+    acp_session_id: agent_client_protocol::schema::v1::SessionId,
 ) -> AcpConnection {
     let lifecycle = build_lifecycle(&shared, spawned);
     AcpConnection {
@@ -64,7 +64,7 @@ fn build_pending(
     shared: ConnectShared,
     spawned: SpawnedConnection,
     conn: ConnectionTo<Agent>,
-    methods: Vec<agent_client_protocol::schema::AuthMethodId>,
+    methods: Vec<agent_client_protocol::schema::v1::AuthMethodId>,
 ) -> AcpPendingConnection {
     let lifecycle = build_lifecycle(&shared, spawned);
     AcpPendingConnection {

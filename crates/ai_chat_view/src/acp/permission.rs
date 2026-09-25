@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::{
+use agent_client_protocol::schema::v1::{
     RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
     SelectedPermissionOutcome,
 };
@@ -204,7 +204,7 @@ mod tests {
         AcpPermissionRequest, acp_permission_channel, acp_permission_channel_with_timeout,
         acp_permission_request, resolve_acp_permission_request,
     };
-    use agent_client_protocol::schema::{
+    use agent_client_protocol::schema::v1::{
         PermissionOption, PermissionOptionKind, RequestPermissionOutcome, RequestPermissionRequest,
         ToolCallUpdate, ToolCallUpdateFields,
     };

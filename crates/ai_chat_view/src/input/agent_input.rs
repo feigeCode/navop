@@ -10,7 +10,7 @@
 //! [`AgentInputEvent`];目标用上层注入的列表渲染内置 popover(选中 emit `SelectTarget`),
 //! scope 仅 emit `PickScope` 交上层;模型 / 执行模式同样用注入选项渲染内置下拉。
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -24,10 +24,15 @@ use gpui::{
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Editor, EditorState, Input, InputEvent, InputState};
 use gpui_component::popover::Popover;
+use gpui_component::switch::Switch;
 use gpui_component::{ActiveTheme, Disableable, Icon, Sizable, h_flex, v_flex};
 use one_assets::IconName;
 use rust_i18n::t;
+use serde_json::Value;
 
+use crate::acp::{
+    AcpElicitationField, AcpElicitationFieldKind, AcpElicitationMode, AcpElicitationRequest,
+};
 use crate::input::PromptHistory;
 use crate::input::attachment::ImageAttachment;
 use crate::input::context::{
@@ -84,6 +89,12 @@ pub enum AgentInputEvent {
     RemoveQueued { index: usize },
     /// 把队列中第 `index` 条拉回输入框继续编辑（由上层负责从队列移除）。
     EditQueued { index: usize },
+    /// 回答 agent 的提问：`content` 已按属性名收集好，直接送回 ACP。
+    SubmitElicitation { content: BTreeMap<String, Value> },
+    /// 明确拒绝回答 agent 的提问。
+    DeclineElicitation,
+    /// 关掉这条提问（等价于取消，agent 会走降级路径）。
+    CancelElicitation,
 }
 
 /// 内置下拉的种类(用于受控开合状态)。
@@ -246,6 +257,8 @@ pub struct AgentInput {
     queued_submissions: Vec<QueuedPromptPreview>,
     /// 队列因 ACP 连接或会话过渡失败而暂停，可由用户显式停止并清空。
     pending_queue_blocked: bool,
+    /// 当前挂着的「agent 提问」。由上层在收到 ACP elicitation 时推入，答完清空。
+    pending_elicitation: Option<PendingElicitation>,
     /// 是否正在运行(运行中显示「停止」)。
     is_running: bool,
     /// 上层注入的展示上下文(目标 / scope / 能力 / 模型 / 模式文案)。
@@ -402,6 +415,7 @@ impl AgentInput {
             history: PromptHistory::default(),
             queued_submissions: Vec::new(),
             pending_queue_blocked: false,
+            pending_elicitation: None,
             is_running: false,
             context: AgentComposerContext::default(),
             target_options: Vec::new(),
@@ -2507,6 +2521,642 @@ impl Focusable for AgentInput {
     }
 }
 
+/// composer 上挂着的「agent 提问」。
+///
+/// 这是纯展示状态：`AgentInput` 只管渲染表单与收集答案，答完把内容通过
+/// [`AgentInputEvent::SubmitElicitation`] 交回上层，由上层送回 ACP——输入框不认识协议。
+struct PendingElicitation {
+    request_id: String,
+    message: String,
+    form: Option<PendingElicitationForm>,
+    /// URL 模式：用户去外部页面完成，面板只提供入口与取消。
+    url: Option<String>,
+    /// 协议新增、本客户端不认识的方式：只提示，不猜渲染。
+    unsupported_mode: Option<String>,
+    /// 校验提示（必填未填 / 数字解析失败）。
+    error: Option<String>,
+}
+
+struct PendingElicitationForm {
+    title: Option<String>,
+    description: Option<String>,
+    fields: Vec<PendingElicitationField>,
+}
+
+struct PendingElicitationField {
+    name: String,
+    title: String,
+    description: Option<String>,
+    required: bool,
+    control: PendingElicitationControl,
+}
+
+enum PendingElicitationControl {
+    /// 文本 / 整数 / 小数共用一个输入框，提交时按 `kind` 解析。
+    Text {
+        kind: ElicitationTextKind,
+        /// 输入框在首次渲染时创建——`InputState::new` 需要 `&mut Window`。
+        input: Option<Entity<InputState>>,
+        placeholder: String,
+    },
+    Boolean {
+        value: bool,
+    },
+    SingleSelect {
+        options: Vec<PendingElicitationChoice>,
+        selected: Option<String>,
+    },
+    MultiSelect {
+        options: Vec<PendingElicitationChoice>,
+        selected: Vec<String>,
+    },
+    Unsupported {
+        type_name: String,
+    },
+}
+
+impl PendingElicitationControl {
+    /// 有没有能真正收集输入的控件。协议新增的类型不算。
+    fn is_editable(&self) -> bool {
+        !matches!(self, Self::Unsupported { .. })
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ElicitationTextKind {
+    Plain,
+    Integer,
+    Number,
+}
+
+#[derive(Clone)]
+struct PendingElicitationChoice {
+    value: String,
+    title: String,
+}
+
+impl PendingElicitation {
+    fn from_request(request: &AcpElicitationRequest) -> Self {
+        let mut pending = Self {
+            request_id: request.request_id.clone(),
+            message: request.message.clone(),
+            form: None,
+            url: None,
+            unsupported_mode: None,
+            error: None,
+        };
+        match &request.mode {
+            AcpElicitationMode::Form(form) => {
+                pending.form = Some(PendingElicitationForm {
+                    title: form.title.clone(),
+                    description: form.description.clone(),
+                    fields: form.fields.iter().map(PendingElicitationField::new).collect(),
+                });
+            }
+            AcpElicitationMode::Url { url } => pending.url = Some(url.clone()),
+            AcpElicitationMode::Unsupported { mode } => {
+                pending.unsupported_mode = Some(mode.clone());
+            }
+        }
+        pending
+    }
+
+    /// 能不能给出结构化答案。URL 模式要靠外部页面完成，这里只能取消。
+    fn can_submit(&self) -> bool {
+        self.form
+            .as_ref()
+            .is_some_and(|form| form.fields.iter().any(|field| field.control.is_editable()))
+    }
+
+    /// 收集答案。必填项缺失或数字解析失败时返回可直接展示的提示文案。
+    fn content(&self, cx: &App) -> Result<BTreeMap<String, Value>, String> {
+        let Some(form) = &self.form else {
+            return Ok(BTreeMap::new());
+        };
+        let mut content = BTreeMap::new();
+        for field in &form.fields {
+            match &field.control {
+                PendingElicitationControl::Text { kind, input, .. } => {
+                    let raw = input
+                        .as_ref()
+                        .map(|input| input.read(cx).value().to_string())
+                        .unwrap_or_default();
+                    let raw = raw.trim();
+                    if raw.is_empty() {
+                        if field.required {
+                            return Err(required_hint(field));
+                        }
+                        continue;
+                    }
+                    let value = match kind {
+                        ElicitationTextKind::Plain => Value::String(raw.to_string()),
+                        ElicitationTextKind::Integer => {
+                            raw.parse::<i64>().map(Value::from).map_err(|_| {
+                                t!("AgentUi.elicitation_not_integer", field = field.title.clone())
+                                    .to_string()
+                            })?
+                        }
+                        ElicitationTextKind::Number => {
+                            raw.parse::<f64>().map(Value::from).map_err(|_| {
+                                t!("AgentUi.elicitation_not_number", field = field.title.clone())
+                                    .to_string()
+                            })?
+                        }
+                    };
+                    content.insert(field.name.clone(), value);
+                }
+                PendingElicitationControl::Boolean { value } => {
+                    // 布尔字段永远给值：不填与「否」在这里没有区别，给 false 更符合直觉。
+                    content.insert(field.name.clone(), Value::Bool(*value));
+                }
+                PendingElicitationControl::SingleSelect { selected, .. } => match selected {
+                    Some(value) => {
+                        content.insert(field.name.clone(), Value::String(value.clone()));
+                    }
+                    None if field.required => return Err(required_hint(field)),
+                    None => {}
+                },
+                PendingElicitationControl::MultiSelect { selected, .. } => {
+                    if selected.is_empty() {
+                        if field.required {
+                            return Err(required_hint(field));
+                        }
+                    } else {
+                        content.insert(
+                            field.name.clone(),
+                            Value::Array(selected.iter().cloned().map(Value::String).collect()),
+                        );
+                    }
+                }
+                PendingElicitationControl::Unsupported { .. } => {}
+            }
+        }
+        Ok(content)
+    }
+}
+
+fn required_hint(field: &PendingElicitationField) -> String {
+    t!("AgentUi.elicitation_required", field = field.title.clone()).to_string()
+}
+
+impl PendingElicitationField {
+    fn new(field: &AcpElicitationField) -> Self {
+        let control = match &field.kind {
+            AcpElicitationFieldKind::Text { format } => PendingElicitationControl::Text {
+                kind: ElicitationTextKind::Plain,
+                input: None,
+                placeholder: format
+                    .clone()
+                    .map(|format| t!("AgentUi.elicitation_format", format = format).to_string())
+                    .unwrap_or_default(),
+            },
+            AcpElicitationFieldKind::Integer => PendingElicitationControl::Text {
+                kind: ElicitationTextKind::Integer,
+                input: None,
+                placeholder: String::new(),
+            },
+            AcpElicitationFieldKind::Number => PendingElicitationControl::Text {
+                kind: ElicitationTextKind::Number,
+                input: None,
+                placeholder: String::new(),
+            },
+            AcpElicitationFieldKind::Boolean => PendingElicitationControl::Boolean {
+                value: field.default.as_ref().and_then(Value::as_bool).unwrap_or(false),
+            },
+            AcpElicitationFieldKind::SingleSelect { options } => {
+                PendingElicitationControl::SingleSelect {
+                    options: choices(options),
+                    selected: None,
+                }
+            }
+            AcpElicitationFieldKind::MultiSelect { options } => PendingElicitationControl::MultiSelect {
+                options: choices(options),
+                selected: Vec::new(),
+            },
+            AcpElicitationFieldKind::Unsupported { type_name } => {
+                PendingElicitationControl::Unsupported {
+                    type_name: type_name.clone(),
+                }
+            }
+        };
+        Self {
+            name: field.name.clone(),
+            title: field.title.clone(),
+            description: field.description.clone(),
+            required: field.required,
+            control,
+        }
+    }
+}
+
+fn choices(options: &[crate::acp::AcpElicitationOption]) -> Vec<PendingElicitationChoice> {
+    options
+        .iter()
+        .map(|option| PendingElicitationChoice {
+            value: option.value.clone(),
+            title: option.title.clone(),
+        })
+        .collect()
+}
+
+impl AgentInput {
+    /// 推入 / 清空「agent 提问」。传 `None` 即收起面板。
+    pub fn set_pending_elicitation(
+        &mut self,
+        request: Option<&AcpElicitationRequest>,
+        cx: &mut Context<Self>,
+    ) {
+        self.pending_elicitation = request.map(PendingElicitation::from_request);
+        cx.notify();
+    }
+
+    /// 有没有挂着的提问（上层据此决定是否吞掉回车等提交动作）。
+    pub fn has_pending_elicitation(&self) -> bool {
+        self.pending_elicitation.is_some()
+    }
+
+    /// 文本输入框得在拿到 `&mut Window` 之后才能建，因此在渲染前补建一次。
+    fn ensure_elicitation_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(form) = self
+            .pending_elicitation
+            .as_mut()
+            .and_then(|pending| pending.form.as_mut())
+        else {
+            return;
+        };
+        for field in &mut form.fields {
+            let PendingElicitationControl::Text {
+                input, placeholder, ..
+            } = &mut field.control
+            else {
+                continue;
+            };
+            if input.is_some() {
+                continue;
+            }
+            let placeholder = placeholder.clone();
+            *input = Some(cx.new(|cx| {
+                InputState::new(window, cx).placeholder(placeholder.clone())
+            }));
+        }
+    }
+
+    fn submit_elicitation(&mut self, cx: &mut Context<Self>) {
+        let Some(pending) = self.pending_elicitation.as_ref() else {
+            return;
+        };
+        match pending.content(cx) {
+            Ok(content) => cx.emit(AgentInputEvent::SubmitElicitation { content }),
+            Err(error) => {
+                if let Some(pending) = self.pending_elicitation.as_mut() {
+                    pending.error = Some(error);
+                }
+                cx.notify();
+            }
+        }
+    }
+
+    fn render_pending_elicitation(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        let pending = self.pending_elicitation.as_ref()?;
+        let theme = self.local_theme(cx);
+        let mut body = v_flex()
+            .debug_selector(|| "agent-input-elicitation".to_string())
+            .w_full()
+            .min_w_0()
+            .gap_2()
+            .px_3()
+            .py_2()
+            .border_t_1()
+            .border_color(theme.border)
+            .bg(theme.panel);
+
+        body = body.child(
+            div()
+                .text_xs()
+                .text_color(theme.accent)
+                .child(t!("AgentUi.elicitation_heading").to_string()),
+        );
+        if let Some(title) = pending.form.as_ref().and_then(|form| form.title.clone()) {
+            body = body.child(div().text_sm().child(title));
+        }
+        body = body.child(
+            div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(pending.message.clone()),
+        );
+
+        if let Some(form) = &pending.form {
+            if let Some(description) = &form.description {
+                body = body.child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(description.clone()),
+                );
+            }
+            body = body.children(
+                form.fields
+                    .iter()
+                    .map(|field| self.render_elicitation_field(field, cx)),
+            );
+        }
+        if let Some(url) = &pending.url {
+            body = body.child(
+                h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        Button::new(SharedString::from(format!(
+                            "elicitation-open-{}",
+                            pending.request_id
+                        )))
+                        .small()
+                        .debug_selector(|| "elicitation-open-url".to_string())
+                        .label(t!("AgentUi.elicitation_open_url").to_string())
+                        .on_click({
+                            let url = url.clone();
+                            move |_, _, cx| cx.open_url(&url)
+                        }),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(url.clone()),
+                    ),
+            );
+        }
+        if let Some(mode) = &pending.unsupported_mode {
+            body = body.child(
+                div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(
+                        t!("AgentUi.elicitation_unsupported_mode", mode = mode.clone()).to_string(),
+                    ),
+            );
+        }
+        if let Some(error) = &pending.error {
+            body = body.child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().danger)
+                    .child(error.clone()),
+            );
+        }
+
+        let mut actions = h_flex().w_full().min_w_0().justify_end().gap_2().child(
+            Button::new(SharedString::from(format!(
+                "elicitation-cancel-{}",
+                pending.request_id
+            )))
+            .small()
+            .debug_selector(|| "elicitation-cancel".to_string())
+            .label(t!("AgentUi.elicitation_cancel").to_string())
+            .on_click(cx.listener(|_, _, _, cx| {
+                cx.emit(AgentInputEvent::CancelElicitation);
+            })),
+        );
+        if pending.can_submit() {
+            actions = actions
+                .child(
+                    Button::new(SharedString::from(format!(
+                        "elicitation-decline-{}",
+                        pending.request_id
+                    )))
+                    .small()
+                    .debug_selector(|| "elicitation-decline".to_string())
+                    .label(t!("AgentUi.elicitation_decline").to_string())
+                    .on_click(cx.listener(|_, _, _, cx| {
+                        cx.emit(AgentInputEvent::DeclineElicitation);
+                    })),
+                )
+                .child(
+                    Button::new(SharedString::from(format!(
+                        "elicitation-submit-{}",
+                        pending.request_id
+                    )))
+                    .small()
+                    .primary()
+                    .debug_selector(|| "elicitation-submit".to_string())
+                    .label(t!("AgentUi.elicitation_submit").to_string())
+                    .on_click(cx.listener(|this, _, _, cx| this.submit_elicitation(cx))),
+                );
+        }
+        body = body.child(actions);
+
+        Some(body.into_any_element())
+    }
+
+    fn render_elicitation_field(
+        &self,
+        field: &PendingElicitationField,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let theme = self.local_theme(cx);
+        let mut column = v_flex().w_full().min_w_0().gap_1();
+        let mut label = h_flex().items_center().gap_1().child(
+            div()
+                .text_xs()
+                .text_color(theme.foreground)
+                .child(field.title.clone()),
+        );
+        if field.required {
+            label = label.child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().danger)
+                    .child("*"),
+            );
+        }
+        column = column.child(label);
+        if let Some(description) = &field.description {
+            column = column.child(
+                div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(description.clone()),
+            );
+        }
+
+        let name = field.name.clone();
+        match &field.control {
+            PendingElicitationControl::Text { input, .. } => {
+                if let Some(input) = input {
+                    column = column.child(
+                        Input::new(input).cleanable(true).small().w_full(),
+                    );
+                }
+            }
+            PendingElicitationControl::Boolean { value } => {
+                let checked = *value;
+                column = column.child(
+                    Switch::new(SharedString::from(format!("elicitation-bool-{name}")))
+                        .small()
+                        .checked(checked)
+                        .on_click(cx.listener({
+                            let name = name.clone();
+                            move |this, checked, _, cx| {
+                                this.toggle_elicitation_boolean(&name, *checked, cx)
+                            }
+                        })),
+                );
+            }
+            PendingElicitationControl::SingleSelect { options, selected } => {
+                let mut row = h_flex().w_full().min_w_0().flex_wrap().gap_1();
+                for option in options {
+                    let is_selected = selected.as_deref() == Some(option.value.as_str());
+                    row = row.child(
+                        Button::new(SharedString::from(format!(
+                            "elicitation-radio-{name}-{}",
+                            option.value
+                        )))
+                        .small()
+                        .debug_selector({
+                            let selector = format!("elicitation-radio-{name}-{}", option.value);
+                            move || selector.clone()
+                        })
+                        .when(is_selected, |this| this.primary())
+                        .label(option.title.clone())
+                        .on_click(cx.listener({
+                            let name = name.clone();
+                            let value = option.value.clone();
+                            move |this, _, _, cx| {
+                                this.select_elicitation_option(&name, &value, cx)
+                            }
+                        })),
+                    );
+                }
+                column = column.child(row);
+            }
+            PendingElicitationControl::MultiSelect { options, selected } => {
+                let mut row = h_flex().w_full().min_w_0().flex_wrap().gap_1();
+                for option in options {
+                    let is_selected = selected.contains(&option.value);
+                    row = row.child(
+                        Button::new(SharedString::from(format!(
+                            "elicitation-checkbox-{name}-{}",
+                            option.value
+                        )))
+                        .small()
+                        .debug_selector({
+                            let selector = format!("elicitation-checkbox-{name}-{}", option.value);
+                            move || selector.clone()
+                        })
+                        .when(is_selected, |this| this.primary())
+                        .label(option.title.clone())
+                        .on_click(cx.listener({
+                            let name = name.clone();
+                            let value = option.value.clone();
+                            move |this, _, _, cx| {
+                                this.toggle_elicitation_option(&name, &value, cx)
+                            }
+                        })),
+                    );
+                }
+                column = column.child(row);
+            }
+            PendingElicitationControl::Unsupported { type_name } => {
+                column = column.child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(
+                            t!("AgentUi.elicitation_unsupported_field", kind = type_name.clone())
+                                .to_string(),
+                        ),
+                );
+            }
+        }
+        column.into_any_element()
+    }
+
+    fn with_elicitation_field(
+        &mut self,
+        name: &str,
+        edit: impl FnOnce(&mut PendingElicitationControl),
+        cx: &mut Context<Self>,
+    ) {
+        let Some(form) = self
+            .pending_elicitation
+            .as_mut()
+            .and_then(|pending| pending.form.as_mut())
+        else {
+            return;
+        };
+        let Some(field) = form.fields.iter_mut().find(|field| field.name == name) else {
+            return;
+        };
+        edit(&mut field.control);
+        if let Some(pending) = self.pending_elicitation.as_mut() {
+            pending.error = None;
+        }
+        cx.notify();
+    }
+
+    fn toggle_elicitation_boolean(
+        &mut self,
+        name: &str,
+        value: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.with_elicitation_field(
+            name,
+            |control| {
+                if let PendingElicitationControl::Boolean { value: current } = control {
+                    *current = value;
+                }
+            },
+            cx,
+        );
+    }
+
+    fn select_elicitation_option(&mut self, name: &str, value: &str, cx: &mut Context<Self>) {
+        let value = value.to_string();
+        self.with_elicitation_field(
+            name,
+            move |control| {
+                if let PendingElicitationControl::SingleSelect { selected, .. } = control {
+                    // 再点一次已选项即取消选择（不必让用户去猜怎么撤销）。
+                    if selected.as_deref() == Some(value.as_str()) {
+                        *selected = None;
+                    } else {
+                        *selected = Some(value);
+                    }
+                }
+            },
+            cx,
+        );
+    }
+
+    fn toggle_elicitation_option(&mut self, name: &str, value: &str, cx: &mut Context<Self>) {
+        let value = value.to_string();
+        self.with_elicitation_field(
+            name,
+            move |control| {
+                if let PendingElicitationControl::MultiSelect { selected, .. } = control {
+                    match selected.iter().position(|current| current == &value) {
+                        Some(index) => {
+                            selected.remove(index);
+                        }
+                        None => selected.push(value),
+                    }
+                }
+            },
+            cx,
+        );
+    }
+}
+
 impl Render for AgentInput {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // 打开上下文面板时,在 render 时(持有 &mut Window)清空搜索框。
@@ -2521,6 +3171,8 @@ impl Render for AgentInput {
         let attachments = self.render_attachments(cx);
         let editor_top_bar = self.render_editor_top_bar(cx);
         let queued_submissions = self.render_queued_submissions(cx);
+        self.ensure_elicitation_inputs(_window, cx);
+        let pending_elicitation = self.render_pending_elicitation(cx);
         let toolbar = self.render_toolbar(cx);
         let theme = self.local_theme(cx);
         let input_state = self.input_state.read(cx);
@@ -2549,6 +3201,8 @@ impl Render for AgentInput {
             .children(attachments)
             .child(editor_top_bar)
             .when_some(queued_submissions, |this, queued| this.child(queued))
+            // agent 提问：放在输入框正上方，答完才收起
+            .when_some(pending_elicitation, |this, pending| this.child(pending))
             // 中部：多行输入框
             .child(
                 div()

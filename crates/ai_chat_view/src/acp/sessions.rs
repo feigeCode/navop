@@ -5,7 +5,7 @@
 //! 不变量 11(**能力缺失就不显示**)最容易在渲染层被写坏——散着写就会冒出
 //! 「点得动但一定失败」的入口。
 
-use agent_client_protocol::schema::{AgentCapabilities, SessionInfo};
+use agent_client_protocol::schema::v1::{AgentCapabilities, SessionInfo};
 
 /// 一条可展示的 ACP 会话。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -84,7 +84,7 @@ pub(crate) fn acp_session_summaries(sessions: &[SessionInfo]) -> Vec<AcpSessionS
 
 #[cfg(test)]
 mod tests {
-    use agent_client_protocol::schema::{
+    use agent_client_protocol::schema::v1::{
         AgentCapabilities, SessionCapabilities, SessionId, SessionInfo, SessionListCapabilities,
         SessionResumeCapabilities,
     };

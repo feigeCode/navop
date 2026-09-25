@@ -11,13 +11,14 @@ mod setup;
 
 use std::sync::{Arc, Mutex};
 
-use agent_client_protocol::schema::SessionId as AcpSessionId;
+use agent_client_protocol::schema::v1::SessionId as AcpSessionId;
 use agent_client_protocol::{Agent, ConnectionTo};
 use agent_runtime::{RuntimeEvent, SessionId, TurnId};
 use gpui::AsyncApp;
 use tokio::sync::broadcast;
 
 use crate::acp::config::AcpAgentConfig;
+use crate::acp::elicitation::AcpElicitationProvider;
 use crate::acp::permission::AcpPermissionProvider;
 use crate::acp::state::{AcpConnectionPhase, AcpSessionState};
 use crate::acp::turn::AcpTurnTracker;
@@ -26,6 +27,31 @@ use crate::acp::{AcpError, AcpErrorKind};
 use lifecycle::AcpConnectionLifecycle;
 pub use pending::AcpPendingConnection;
 pub use prompt::AcpPromptStartError;
+
+/// 连接期间由视图提供的交互通道：agent 反过来问用户时的两条回程。
+///
+/// 两者都可以缺省（例如只在测试或纯后端场景里连一次）。缺省时对应请求立刻按「取消」
+/// 回给 agent——宁可让它走降级路径，也不能让它在等一个永远不会有人回答的问题。
+#[derive(Default, Clone)]
+pub struct AcpClientProviders {
+    /// 工具调用前的权限确认。
+    pub permission: Option<AcpPermissionProvider>,
+    /// agent 主动向用户提问（表单 / URL）。
+    pub elicitation: Option<AcpElicitationProvider>,
+}
+
+impl AcpClientProviders {
+    /// 同时提供权限确认与提问两条通道。
+    pub fn new(
+        permission: AcpPermissionProvider,
+        elicitation: AcpElicitationProvider,
+    ) -> Self {
+        Self {
+            permission: Some(permission),
+            elicitation: Some(elicitation),
+        }
+    }
+}
 
 pub enum AcpConnectOutcome {
     Ready(Box<AcpConnection>),
@@ -55,13 +81,33 @@ impl AcpConnection {
         runner::connect(config, workspace_root, cx).await
     }
 
+    /// 带上视图提供的交互通道连接。
+    pub async fn connect_with_providers(
+        config: &AcpAgentConfig,
+        workspace_root: std::path::PathBuf,
+        providers: AcpClientProviders,
+        cx: &mut AsyncApp,
+    ) -> anyhow::Result<AcpConnectOutcome> {
+        runner::connect_with_providers(config, workspace_root, providers, cx).await
+    }
+
+    /// 只带权限确认通道（旧签名，保留给还不需要提问回程的调用方）。
     pub async fn connect_with_permission_provider(
         config: &AcpAgentConfig,
         workspace_root: std::path::PathBuf,
         permission_provider: AcpPermissionProvider,
         cx: &mut AsyncApp,
     ) -> anyhow::Result<AcpConnectOutcome> {
-        runner::connect_with_permission_provider(config, workspace_root, permission_provider, cx).await
+        Self::connect_with_providers(
+            config,
+            workspace_root,
+            AcpClientProviders {
+                permission: Some(permission_provider),
+                elicitation: None,
+            },
+            cx,
+        )
+        .await
     }
 
     #[doc(hidden)]
@@ -74,14 +120,33 @@ impl AcpConnection {
     }
 
     #[doc(hidden)]
+    pub async fn connect_with_runtime_and_providers(
+        config: &AcpAgentConfig,
+        workspace_root: std::path::PathBuf,
+        handle: tokio::runtime::Handle,
+        providers: AcpClientProviders,
+    ) -> anyhow::Result<AcpConnectOutcome> {
+        runner::connect_with_runtime_and_providers(config, workspace_root, handle, providers).await
+    }
+
+    /// 只带权限确认通道的运行时变体（旧签名）。
+    #[doc(hidden)]
     pub async fn connect_with_runtime_and_permission_provider(
         config: &AcpAgentConfig,
         workspace_root: std::path::PathBuf,
         handle: tokio::runtime::Handle,
         permission_provider: AcpPermissionProvider,
     ) -> anyhow::Result<AcpConnectOutcome> {
-        runner::connect_with_runtime_and_permission_provider(config, workspace_root, handle, permission_provider)
-            .await
+        Self::connect_with_runtime_and_providers(
+            config,
+            workspace_root,
+            handle,
+            AcpClientProviders {
+                permission: Some(permission_provider),
+                elicitation: None,
+            },
+        )
+        .await
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<RuntimeEvent> {
@@ -101,8 +166,8 @@ impl AcpConnection {
 
     pub async fn set_model(
         &self,
-        config_id: agent_client_protocol::schema::SessionConfigId,
-        value: agent_client_protocol::schema::SessionConfigValueId,
+        config_id: agent_client_protocol::schema::v1::SessionConfigId,
+        value: agent_client_protocol::schema::v1::SessionConfigValueId,
     ) -> anyhow::Result<()> {
         self.set_config_option(config_id, value).await.map(|_| ())
     }

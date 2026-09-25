@@ -21,14 +21,14 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(12);
 const PROBE_DIRECTORY: &str = "navop-acp-probe";
 
 /// agent 广告的一个模型候选。
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AcpModelInfo {
     pub id: String,
     pub label: String,
 }
 
 /// 一次性探测的结论。`error` 为空即视为已识别。
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AcpAgentProbe {
     pub name: Option<String>,
     pub version: Option<String>,
@@ -39,7 +39,7 @@ pub struct AcpAgentProbe {
 
 impl AcpAgentProbe {
     /// 命令确实作为一个 ACP agent 应答过（含「需要登录」）。
-    pub(crate) fn identified(&self) -> bool {
+    pub fn identified(&self) -> bool {
         self.error.is_none()
     }
 }
@@ -62,7 +62,7 @@ pub(crate) fn probe_from_state(state: &AcpSessionState) -> AcpAgentProbe {
     }
 }
 
-fn display_name(info: &agent_client_protocol::schema::Implementation) -> String {
+fn display_name(info: &agent_client_protocol::schema::v1::Implementation) -> String {
     info.title
         .clone()
         .filter(|title| !title.trim().is_empty())
@@ -131,7 +131,7 @@ fn probe_directory() -> anyhow::Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use agent_client_protocol::schema::{
+    use agent_client_protocol::schema::v1::{
         NewSessionResponse, SessionConfigOption, SessionConfigSelectOption,
     };
 
@@ -140,7 +140,7 @@ mod tests {
     #[test]
     fn reports_identity_and_advertised_models() {
         let mut state = AcpSessionState::default();
-        state.set_agent_info(Some(agent_client_protocol::schema::Implementation::new(
+        state.set_agent_info(Some(agent_client_protocol::schema::v1::Implementation::new(
             "codex", "1.2.3",
         )));
         state.apply_new_session_response(
@@ -169,7 +169,7 @@ mod tests {
     fn prefers_the_human_readable_title_for_the_name() {
         let mut state = AcpSessionState::default();
         state.set_agent_info(Some(
-            agent_client_protocol::schema::Implementation::new("codex-acp", "1.0.0")
+            agent_client_protocol::schema::v1::Implementation::new("codex-acp", "1.0.0")
                 .title("Codex"),
         ));
 

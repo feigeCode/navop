@@ -38,14 +38,19 @@ fn strips_ansi_color_sequences_from_acp_logs() {
 }
 
 #[test]
-fn constructs_http_transport_config() {
-    let config = AcpAgentConfig::new_http("onetcli-mcp", "Navop Tools", "http://127.0.0.1:3100/");
-    assert_eq!(config.id.as_ref(), "onetcli-mcp");
-    assert_eq!(config.name.as_ref(), "Navop Tools");
-    match config.transport {
-        AcpTransport::Http { url } => assert_eq!(url, "http://127.0.0.1:3100/"),
-        _ => panic!("期望 Http 传输"),
-    }
+fn stdio_transport_maps_command_args_and_env_onto_the_sdk_agent_config() {
+    let config = AcpAgentConfig::new("codex", "Codex", "codex-acp")
+        .with_args(vec!["--stdio".to_string()])
+        .with_env(vec![("CODEX_PATH".to_string(), "/opt/codex".to_string())]);
+
+    let launch = config.to_acp_agent().into_config();
+
+    assert_eq!(std::path::Path::new("codex-acp"), launch.command());
+    assert_eq!(["--stdio".to_string()], launch.arguments());
+    assert_eq!(
+        Some(&"/opt/codex".to_string()),
+        launch.environment().get("CODEX_PATH")
+    );
 }
 
 #[test]
@@ -58,16 +63,12 @@ fn stdio_config_exposes_skill_context_to_external_acp_agent() {
 
     let config = AcpAgentConfig::new("codex", "Codex", "codex-acp").with_skill_context(&context);
 
-    match config.transport {
-        AcpTransport::Stdio { env, .. } => {
-            assert!(env.iter().any(|(name, value)| {
-                name == "ONETCLI_SKILLS" && value.contains("Run operational playbooks")
-            }));
-            assert!(
-                env.iter()
-                    .any(|(name, value)| { name == "ONETCLI_SELECTED_SKILLS" && value == "ops" })
-            );
-        }
-        _ => panic!("期望 Stdio 传输"),
-    }
+    let AcpTransport::Stdio { env, .. } = &config.transport;
+    assert!(env.iter().any(|(name, value)| {
+        name == "ONETCLI_SKILLS" && value.contains("Run operational playbooks")
+    }));
+    assert!(
+        env.iter()
+            .any(|(name, value)| { name == "ONETCLI_SELECTED_SKILLS" && value == "ops" })
+    );
 }

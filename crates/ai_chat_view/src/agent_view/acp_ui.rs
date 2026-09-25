@@ -32,7 +32,7 @@ impl AgentChatView {
             return;
         }
         self.invalidate_acp_operation();
-        self.reset_acp_permission_session(cx);
+        self.reset_acp_client_session(cx);
         self.cancel_acp_auto_reconnect();
         self.acp_turn_owner = None;
         self.clear_acp_sessions();
@@ -63,23 +63,23 @@ impl AgentChatView {
         // 用户主动选择后端：重新给自动重连一次完整预算。
         self.invalidate_acp_reconnect_schedule();
         self.acp_reconnect.attempts = 0;
-        let Some((operation, permission_provider)) = self.prepare_acp_connect(id, cx) else {
+        let Some((operation, providers)) = self.prepare_acp_connect(id, cx) else {
             return;
         };
-        self.spawn_acp_connect(operation, permission_provider, cx);
+        self.spawn_acp_connect(operation, providers, cx);
     }
 
     pub(super) fn spawn_acp_connect(
         &mut self,
         operation: AcpConnectOperation,
-        permission_provider: AcpPermissionProvider,
+        providers: AcpClientProviders,
         cx: &mut Context<Self>,
     ) {
         cx.spawn(async move |this, cx| {
-            let outcome = AcpConnection::connect_with_permission_provider(
+            let outcome = AcpConnection::connect_with_providers(
                 &operation.config,
                 operation.workspace_root.clone(),
-                permission_provider,
+                providers,
                 cx,
             )
             .await;
@@ -94,7 +94,7 @@ impl AgentChatView {
         &mut self,
         id: SharedString,
         cx: &mut Context<Self>,
-    ) -> Option<(AcpConnectOperation, AcpPermissionProvider)> {
+    ) -> Option<(AcpConnectOperation, AcpClientProviders)> {
         if self.acp_connecting
             || agent_selection_is_active(
                 self.backend,
@@ -114,9 +114,8 @@ impl AgentChatView {
             session_uid,
             workspace_root: self.workspace_root.clone(),
         };
-        let permission_provider =
-            self.begin_acp_connect(&operation.config, &operation.session_uid, cx);
-        Some((operation, permission_provider))
+        let providers = self.begin_acp_connect(&operation.config, &operation.session_uid, cx);
+        Some((operation, providers))
     }
 
     pub(super) fn sync_acp_tool_mode_from_provider(&mut self, cx: &mut Context<Self>) {
@@ -137,7 +136,7 @@ impl AgentChatView {
     fn ready_acp_config(&self, id: &SharedString) -> Option<AcpAgentConfig> {
         self.acp_agents
             .iter()
-            .find(|entry| &entry.id == id)
+            .find(|entry| &entry.id == id && entry.enabled)
             .and_then(|entry| entry.config.clone())
     }
 
@@ -146,8 +145,8 @@ impl AgentChatView {
         config: &AcpAgentConfig,
         origin_session_uid: &str,
         cx: &mut Context<Self>,
-    ) -> AcpPermissionProvider {
-        let permission_provider = self.start_acp_permission_session(cx);
+    ) -> AcpClientProviders {
+        let providers = self.start_acp_client_session(cx);
         self.backend = Backend::Acp;
         self.current_acp_id = Some(config.id.clone());
         // 换 agent 时丢弃上一个 agent 的连接前选择，并对新 agent 立刻展示探测到的模型。
@@ -173,7 +172,7 @@ impl AgentChatView {
             .update(cx, |input, cx| input.set_running(true, cx));
         self.sync_composer(cx);
         cx.notify();
-        permission_provider
+        providers
     }
 
     fn finish_acp_connect(
@@ -247,7 +246,7 @@ impl AgentChatView {
         source: anyhow::Error,
         cx: &mut Context<Self>,
     ) {
-        self.reset_acp_permission_session(cx);
+        self.reset_acp_client_session(cx);
         self.acp_connecting = false;
         self.acp_connecting_id = None;
         self.acp_connect_origin_session = None;
@@ -350,7 +349,7 @@ impl AgentChatView {
         error: AcpError,
         cx: &mut Context<Self>,
     ) {
-        self.reset_acp_permission_session(cx);
+        self.reset_acp_client_session(cx);
         self.acp_connect_origin_session = None;
         self.current_acp_id = Some(agent_id);
         AppSettings::update_and_save(cx, |settings| {

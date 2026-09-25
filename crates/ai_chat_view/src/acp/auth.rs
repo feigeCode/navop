@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use agent_client_protocol::schema::{AuthMethodId, AuthenticateRequest};
+use agent_client_protocol::schema::v1::{AuthMethodId, AuthenticateRequest};
 use agent_client_protocol::{Agent, ConnectionTo};
 use rust_i18n::t;
 
