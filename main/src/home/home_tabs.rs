@@ -488,7 +488,11 @@ mod tests {
         let pinned = opener.find("activate_pinned_tab_by_id").unwrap();
         let regular = opener.find("activate_or_add_tab_lazy").unwrap();
         assert!(pinned < regular);
-        assert!(opener.contains("with_tab_closeable(true)"));
+        // 「AI 工作台标签可关闭」这件事是在 `build_ai_workbench_shell` 里设置的
+        // （opener 只是 `TabItem::new(..)` 引用它），所以断言要分开落两处：
+        // 这里确认 opener 确实走那个构造函数，具体标志位去它自己的文件里查。
+        assert!(opener.contains("build_ai_workbench_shell"));
+        assert!(include_str!("ai_workbench.rs").contains(".with_tab_closeable(true)"));
     }
 
     #[test]

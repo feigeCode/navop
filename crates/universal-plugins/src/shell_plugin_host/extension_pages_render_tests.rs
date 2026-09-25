@@ -112,6 +112,11 @@ mod tests {
         let log = HostModule::new("navop.log")
             .function("info", null)
             .function("error", null);
+        // 嵌入式工作台页会 `import * as context from "navop.context"` 取当前连接
+        // （契约见 `navop-extensions` 的 `middleware-standard.md`）。这里的台子没有
+        // 真实会话，按声明面的可空返回给 `null` 即可 —— 落成 `undefined` 会被下面的
+        // PLACEHOLDER_TEXT 抓出来。宿主真正的实现在 `shell_plugin_host/context.rs`。
+        let context = HostModule::new("navop.context").function("current", null);
 
         Rc::new(
             Policy::new()
@@ -120,7 +125,9 @@ mod tests {
                 .with_host_module(dev)
                 .expect("`navop.dev` is not a reserved specifier")
                 .with_host_module(log)
-                .expect("`navop.log` is not a reserved specifier"),
+                .expect("`navop.log` is not a reserved specifier")
+                .with_host_module(context)
+                .expect("`navop.context` is not a reserved specifier"),
         )
     }
 
