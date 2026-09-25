@@ -18,6 +18,9 @@ pub enum WorkspaceExplorerEvent {
     RootChanged(std::path::PathBuf),
     /// 请求宿主用已配置的 LLM 生成提交信息（Explorer 不依赖 LLM 层）。
     CommitMessageRequested,
+    /// 用户请求查看一个文档（点开文件或 Git 变更）。宿主工作台借此把
+    /// 审阅面板带到前台——Explorer 只知道编辑器实体，不知道落位布局。
+    DocumentRequested,
 }
 
 impl EventEmitter<WorkspaceExplorerEvent> for WorkspaceExplorer {}

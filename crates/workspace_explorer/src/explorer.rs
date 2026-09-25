@@ -750,6 +750,7 @@ impl WorkspaceExplorer {
         self.selected_path = Some(path.clone());
         self.editor
             .update(cx, |editor, cx| editor.open_file(path, window, cx));
+        cx.emit(WorkspaceExplorerEvent::DocumentRequested);
         cx.notify();
     }
 
@@ -762,6 +763,7 @@ impl WorkspaceExplorer {
         self.editor.update(cx, |editor, cx| {
             editor.open_diff(GitDiffRequest { repository, change }, window, cx);
         });
+        cx.emit(WorkspaceExplorerEvent::DocumentRequested);
         cx.notify();
     }
 }

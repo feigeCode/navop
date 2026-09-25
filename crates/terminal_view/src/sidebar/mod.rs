@@ -1229,6 +1229,8 @@ impl TerminalSidebar {
                     }
                     WorkspaceExplorerEvent::RootChanged(_) => {}
                     WorkspaceExplorerEvent::CommitMessageRequested => {}
+                    // 终端侧栏没有独立审阅面板，文档切换事件无需处理。
+                    WorkspaceExplorerEvent::DocumentRequested => {}
                 },
             );
             subs.push(explorer_sub);

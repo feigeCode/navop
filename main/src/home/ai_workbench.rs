@@ -144,18 +144,27 @@ pub(crate) fn build_ai_workbench_shell(
     });
 
     // 外壳先于订阅存在：这里在构造之后再接线，根目录变化同时刷新外壳标题与聊天面板。
+    // 另一条分支：Explorer 里点开文件/变更 → 审阅面板就地切到前台。
     let chat_for_root = chat.clone();
     let shell_for_root = shell.clone();
     let root_subscription: Subscription = cx.subscribe(
         &explorer,
         move |_, event: &WorkspaceExplorerEvent, cx| {
-            if let WorkspaceExplorerEvent::RootChanged(root) = event {
-                remember_workspace_root(root, cx);
-                chat_for_root.update(cx, |panel, cx| {
-                    panel.set_workspace_root(root.clone(), cx);
-                });
-                let root = root.clone();
-                shell_for_root.update(cx, |shell, cx| shell.set_workspace_root(root, cx));
+            match event {
+                WorkspaceExplorerEvent::RootChanged(root) => {
+                    remember_workspace_root(root, cx);
+                    chat_for_root.update(cx, |panel, cx| {
+                        panel.set_workspace_root(root.clone(), cx);
+                    });
+                    let root = root.clone();
+                    shell_for_root.update(cx, |shell, cx| shell.set_workspace_root(root, cx));
+                }
+                WorkspaceExplorerEvent::DocumentRequested => {
+                    shell_for_root.update(cx, |shell, cx| {
+                        shell.reveal_panel(WorkbenchPanelKind::Review, cx);
+                    });
+                }
+                _ => {}
             }
         },
     );

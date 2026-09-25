@@ -365,6 +365,26 @@ impl WorkbenchShell {
         self.commit(changed, cx);
     }
 
+    /// 就地把面板带到前台，不改变它的落位。
+    ///
+    /// 与 [`Self::activate_panel`]（一律收进右侧标签组）不同：已打开的面板
+    /// 保持原落位——右侧选它的页签，左/底/中心单槽本就可见；未打开才打开
+    /// 到右侧标签组。右侧组若处于收起态则顺带展开。
+    pub fn reveal_panel(&mut self, kind: WorkbenchPanelKind, cx: &mut Context<Self>) {
+        if self.state.is_open(kind) {
+            let mut changed = false;
+            if self.state.placement_of(kind) == Some(WorkbenchPlacement::Right) {
+                changed |= self.state.set_right_active(kind);
+            }
+            if self.state.right_collapsed() {
+                changed |= self.state.set_right_collapsed(false);
+            }
+            self.commit(changed, cx);
+        } else {
+            self.activate_panel(kind, cx);
+        }
+    }
+
     /// 把面板打开到指定落位（右侧即为加入标签组）。
     pub fn open_panel(
         &mut self,
