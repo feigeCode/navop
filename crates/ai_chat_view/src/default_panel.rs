@@ -512,6 +512,17 @@ impl DefaultAgentChatPanel {
         self.sidebar_suppressed
     }
 
+    /// 注入工作台外壳的侧栏开关；由外壳在构造时调用一次。
+    pub fn set_workbench_toggles(
+        &mut self,
+        toggles: crate::agent_view::WorkbenchSidebarToggles,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(view) = &self.view {
+            view.update(cx, |view, cx| view.set_workbench_toggles(toggles, cx));
+        }
+    }
+
     /// 当前可见会话列表；视图尚未建好时为空。
     pub fn session_summaries(&self, cx: &App) -> Vec<SessionSummary> {
         self.view

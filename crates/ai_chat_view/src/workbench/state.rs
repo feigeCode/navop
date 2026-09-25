@@ -238,6 +238,14 @@ impl WorkbenchState {
         self.right_maximized
     }
 
+    /// 右侧标签组是否处于「展开」态：有标签且未被收起，放大视为展开。
+    /// 工具条注入外壳的开关图标与外壳自身的切换逻辑共用这一个判据，
+    /// 避免两处口径漂移。
+    pub fn right_sidebar_open(&self) -> bool {
+        self.right_maximized()
+            || (!self.right_collapsed() && !self.right_tabs().is_empty())
+    }
+
     /// 切换右侧标签组「放大占满」。放大时自动展开（不能放大一个收起的栏）。
     pub fn toggle_right_maximized(&mut self) -> bool {
         self.right_maximized = !self.right_maximized;
@@ -507,6 +515,30 @@ mod tests {
         assert!(state.right_tabs().is_empty());
         assert_eq!(None, state.right_active());
         assert!(!state.nav_collapsed());
+    }
+
+    #[test]
+    fn right_sidebar_open_tracks_tabs_collapse_and_maximize() {
+        let mut state = WorkbenchState::new(WorkbenchPanelKind::Chat);
+        assert!(!state.right_sidebar_open(), "无标签时右侧是关的");
+
+        open_right(&mut state, WorkbenchPanelKind::Files);
+        assert!(state.right_sidebar_open(), "有标签且未收起即视为展开");
+
+        assert!(state.set_right_collapsed(true));
+        assert!(!state.right_sidebar_open(), "收起后视为关闭");
+
+        assert!(state.toggle_right_maximized());
+        assert!(
+            state.right_sidebar_open(),
+            "放大视为展开（放大自动解除收起）"
+        );
+
+        assert!(state.set_right_collapsed(true));
+        assert!(
+            !state.right_sidebar_open() && !state.right_maximized(),
+            "收起优先级高于放大"
+        );
     }
 
     #[test]

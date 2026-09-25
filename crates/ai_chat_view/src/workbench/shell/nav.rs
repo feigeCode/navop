@@ -27,7 +27,7 @@ use crate::{
 use super::super::state::WorkbenchPanelKind;
 use super::widgets::rail_tooltip;
 use crate::theme::AgentChatTheme;
-use super::{HEADER_HEIGHT, WorkbenchShell};
+use super::WorkbenchShell;
 use one_core::layout::TOOLBAR_WIDTH;
 
 impl WorkbenchShell {
@@ -465,88 +465,6 @@ impl WorkbenchShell {
                 this.open_session_from_list(&id, workspace_root.as_deref(), cx);
             }))
             .into_any_element()
-    }
-
-    pub(super) fn render_header(
-        &self,
-        theme: &AgentChatTheme,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
-        let session_name = self.session_source.as_ref().and_then(|panel| {
-            let view = panel.read(cx);
-            let current = view.current_session_id(cx)?;
-            view.session_summaries(cx)
-                .into_iter()
-                .find(|summary| summary.id == current)
-                .map(|summary| summary.name)
-        });
-
-        // 中间的两个侧栏开关：左=会话导航栏，右=页签组。右栏「打开」指
-        // 有标签且未被顶栏开关收起（放大视为打开）。
-        let right_open = self.state.right_maximized()
-            || (!self.state.right_collapsed() && !self.state.right_tabs().is_empty());
-        let nav_toggle = self.has_nav().then(|| {
-            let collapsed = self.state.nav_collapsed();
-            IconButton::new(
-                "workbench-nav-toggle",
-                if collapsed {
-                    IconName::PanelLeftOpen
-                } else {
-                    IconName::PanelLeftClose
-                },
-            )
-            .role(IconButtonRole::Compact)
-            .tooltip(if collapsed {
-                t!("Workbench.expand_nav")
-            } else {
-                t!("Workbench.collapse_nav")
-            }
-            .to_string())
-            .on_click(cx.listener(|this, _, _, cx| this.toggle_session_nav(cx)))
-        });
-        let right_toggle = IconButton::new(
-            "workbench-right-toggle",
-            if right_open {
-                IconName::PanelRightClose
-            } else {
-                IconName::PanelRightOpen
-            },
-        )
-        .role(IconButtonRole::Compact)
-        .tooltip(if right_open {
-            t!("Workbench.collapse_right_sidebar").to_string()
-        } else {
-            t!("Workbench.expand_right_sidebar").to_string()
-        })
-        .on_click(cx.listener(|this, _, _, cx| this.toggle_right_sidebar(cx)));
-
-        // 顶栏：会话名居左，两个侧栏开关严格居中（左右等宽占位）。
-        // 工作区入口已移入侧栏顶部的工作区行。
-        h_flex()
-            .h(px(HEADER_HEIGHT))
-            .flex_shrink_0()
-            .items_center()
-            .px_2()
-            .border_b_1()
-            .border_color(theme.border)
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .when_some(session_name, |this, name| this.child(name)),
-            )
-            .child(
-                h_flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .gap_1()
-                    .when_some(nav_toggle, |this, toggle| this.child(toggle))
-                    .child(right_toggle),
-            )
-            .child(div().flex_1())
     }
 
     pub(super) fn render_rail(

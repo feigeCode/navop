@@ -23,7 +23,6 @@ mod widgets;
 const DOCK_PANEL_WIDTH: f32 = 400.0;
 /// 底部停靠面板的默认高度。
 const DOCK_PANEL_HEIGHT: f32 = 260.0;
-const HEADER_HEIGHT: f32 = 40.0;
 const PANEL_HEADER_HEIGHT: f32 = 36.0;
 
 /// 一次注入给外壳的面板。
@@ -100,6 +99,45 @@ impl WorkbenchShell {
         subscriptions.append(&mut external_subscriptions);
         if let Some(source) = session_source.as_ref() {
             subscriptions.push(cx.observe(source, |_this, _, cx| cx.notify()));
+        }
+
+        // 左右侧栏开关下沉到会话面板工具条（agent 切换器两侧），外壳不再有
+        // 独立顶栏。动作经外壳弱引用回调，状态由外壳实时提供。
+        if let Some(source) = session_source.as_ref() {
+            let shell = cx.entity().downgrade();
+            let shell_nav_state = shell.clone();
+            let shell_nav_action = shell.clone();
+            let shell_right_state = shell.clone();
+            let shell_right_action = shell.clone();
+            source.update(cx, |panel, cx| {
+                panel.set_workbench_toggles(
+                    crate::agent_view::WorkbenchSidebarToggles {
+                        nav_collapsed: std::sync::Arc::new(move |cx| {
+                            shell_nav_state
+                                .upgrade()
+                                .map(|shell| shell.read(cx).state().nav_collapsed())
+                                .unwrap_or(true)
+                        }),
+                        toggle_nav: std::sync::Arc::new(move |_, cx| {
+                            if let Some(shell) = shell_nav_action.upgrade() {
+                                shell.update(cx, |shell, cx| shell.toggle_session_nav(cx));
+                            }
+                        }),
+                        right_open: std::sync::Arc::new(move |cx| {
+                            shell_right_state
+                                .upgrade()
+                                .map(|shell| shell.read(cx).state().right_sidebar_open())
+                                .unwrap_or(false)
+                        }),
+                        toggle_right: std::sync::Arc::new(move |_, cx| {
+                            if let Some(shell) = shell_right_action.upgrade() {
+                                shell.update(cx, |shell, cx| shell.toggle_right_sidebar(cx));
+                            }
+                        }),
+                    },
+                    cx,
+                );
+            });
         }
 
         // 内建会话列表才有搜索：外部注入的导航视图自带交互，外壳不掺和。
@@ -365,6 +403,11 @@ impl WorkbenchShell {
             return;
         }
         self.persist_layout(cx);
+        // 工具条上的侧栏开关图标由外壳状态驱动，面板得跟着重绘一次，
+        // 否则点外壳侧的「放大」后工具条图标会停在旧状态。
+        if let Some(panel) = self.session_source.clone() {
+            panel.update(cx, |_, cx| cx.notify());
+        }
         cx.notify();
     }
 

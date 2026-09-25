@@ -242,9 +242,6 @@ impl Render for WorkbenchShell {
             })
         });
 
-        let header =
-            with_agent_chat_theme(&theme, || self.render_header(&theme, cx).into_any_element());
-
         with_agent_chat_theme(&theme, || {
             v_flex()
                 .size_full()
@@ -253,7 +250,6 @@ impl Render for WorkbenchShell {
                 .overflow_hidden()
                 .bg(theme.background)
                 .text_color(theme.foreground)
-                .child(header)
                 .child(body)
                 .when_some(bottom, |this, bottom| this.child(bottom))
         })

@@ -642,6 +642,21 @@ impl RuntimeBinding {
     }
 }
 
+/// 工作台外壳注入工具条的侧栏开关：状态读取与切换动作都由外壳提供。
+///
+/// 图标状态在每次渲染时经 `nav_collapsed` / `right_open` 闭包实时求值，
+/// 动作闭包经外壳弱引用回调——外壳与面板互不强持有，销毁顺序无关。
+pub struct WorkbenchSidebarToggles {
+    /// 会话导航栏是否处于收起态。
+    pub nav_collapsed: std::sync::Arc<dyn Fn(&gpui::App) -> bool + 'static>,
+    /// 切换会话导航栏。
+    pub toggle_nav: std::sync::Arc<dyn Fn(&mut gpui::Window, &mut gpui::App) + 'static>,
+    /// 右侧标签组是否处于展开态（有标签且未被收起，放大视为展开）。
+    pub right_open: std::sync::Arc<dyn Fn(&gpui::App) -> bool + 'static>,
+    /// 切换右侧标签组。
+    pub toggle_right: std::sync::Arc<dyn Fn(&mut gpui::Window, &mut gpui::App) + 'static>,
+}
+
 /// 创建 [`AgentChatView`] 所需的配置。
 pub struct AgentChatViewConfig {
     pub runtime: Arc<Runtime>,
@@ -907,6 +922,9 @@ pub struct AgentChatView {
     sidebar_collapsed: bool,
     /// 工作台外壳接管左侧会话栏时整块隐藏内建侧栏（不渲染折叠 rail）。
     sidebar_suppressed: bool,
+    /// 工作台外壳注入的侧栏开关；`Some` 时工具条在 agent 切换器两侧渲染
+    /// 导航栏开关（左）与右侧标签组开关（右），替代外壳顶栏。
+    workbench_toggles: Option<WorkbenchSidebarToggles>,
     /// 滚动三态（跟随尾巴 / 阅读历史 / 锚点跳转中）。
     scroll: TranscriptScrollState,
     /// 过程块展开态覆盖表；按稳定 id 记录用户的显式展开/收起。
@@ -1232,6 +1250,7 @@ impl AgentChatView {
             current_session,
             sidebar_collapsed: false,
             sidebar_suppressed: false,
+            workbench_toggles: None,
             scroll: TranscriptScrollState::default(),
             expansion: ExpansionState::default(),
             turn_timings: TurnTimings::new(),
@@ -4663,6 +4682,17 @@ impl AgentChatView {
             .into_any_element()
     }
 
+    /// 注入工作台外壳的侧栏开关；注入后工具条在 agent 切换器两侧渲染
+    /// 导航栏开关（leading）与右侧标签组开关（trailing）。
+    pub fn set_workbench_toggles(
+        &mut self,
+        toggles: WorkbenchSidebarToggles,
+        cx: &mut Context<Self>,
+    ) {
+        self.workbench_toggles = Some(toggles);
+        cx.notify();
+    }
+
     fn render_toolbar(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let theme = resolve_agent_chat_theme(self.theme.as_ref(), cx);
         // 会话内搜索入口。findbar 是浮层，打开状态本身已经很明显，
@@ -4680,14 +4710,71 @@ impl AgentChatView {
             .debug_selector(|| "agent-chat-find".to_string())
             .flex_shrink_0()
             .child(search_button);
-        PanelHeader::new("agent-chat-toolbar")
+
+        // 工作台模式：导航栏开关在 agent 切换器左侧，右侧标签组开关与搜索
+        // 同在 trailing；非工作台模式保持原样。
+        let (leading, trailing) = match &self.workbench_toggles {
+            Some(toggles) => {
+                let nav_collapsed = (toggles.nav_collapsed)(cx);
+                let toggle_nav = toggles.toggle_nav.clone();
+                let toggle_right = toggles.toggle_right.clone();
+                let nav_toggle = IconButton::new(
+                    "workbench-toolbar-nav-toggle",
+                    if nav_collapsed {
+                        IconName::PanelLeftOpen
+                    } else {
+                        IconName::PanelLeftClose
+                    },
+                )
+                .role(IconButtonRole::Compact)
+                .tooltip(if nav_collapsed {
+                    t!("Workbench.expand_nav")
+                } else {
+                    t!("Workbench.collapse_nav")
+                }
+                .to_string())
+                .on_click(move |_, window, cx| (toggle_nav)(window, cx));
+                let right_open = (toggles.right_open)(cx);
+                let right_toggle = IconButton::new(
+                    "workbench-toolbar-right-toggle",
+                    if right_open {
+                        IconName::PanelRightClose
+                    } else {
+                        IconName::PanelRightOpen
+                    },
+                )
+                .role(IconButtonRole::Compact)
+                .tooltip(if right_open {
+                    t!("Workbench.collapse_right_sidebar")
+                } else {
+                    t!("Workbench.expand_right_sidebar")
+                }
+                .to_string())
+                .on_click(move |_, window, cx| (toggle_right)(window, cx));
+                (
+                    Some(nav_toggle.into_any_element()),
+                    h_flex()
+                        .gap_1()
+                        .items_center()
+                        .child(right_toggle)
+                        .child(search_entry)
+                        .into_any_element(),
+                )
+            }
+            None => (None, search_entry.into_any_element()),
+        };
+
+        let mut header = PanelHeader::new("agent-chat-toolbar")
             .variant(PanelHeaderVariant::Toolbar)
             .horizontal_padding(one_ui::theme_geometry().spacing.space_4)
             .background(theme.background)
             .border_color(theme.border)
             .title(self.render_agent_switcher(cx))
-            .trailing(search_entry)
-            .into_any_element()
+            .trailing(trailing);
+        if let Some(leading) = leading {
+            header = header.leading(leading);
+        }
+        header.into_any_element()
     }
 
     fn render_sidebar_frame_options(&self, cx: &mut Context<Self>) -> impl IntoElement {
