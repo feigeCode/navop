@@ -646,6 +646,8 @@ impl RuntimeBinding {
 ///
 /// 图标状态在每次渲染时经 `nav_collapsed` / `right_open` 闭包实时求值，
 /// 动作闭包经外壳弱引用回调——外壳与面板互不强持有，销毁顺序无关。
+/// 面板会暂存注入值：内层视图是异步构建的，注入可能早于视图存在。
+#[derive(Clone)]
 pub struct WorkbenchSidebarToggles {
     /// 会话导航栏是否处于收起态。
     pub nav_collapsed: std::sync::Arc<dyn Fn(&gpui::App) -> bool + 'static>,

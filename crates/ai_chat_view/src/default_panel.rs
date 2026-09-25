@@ -106,6 +106,9 @@ pub struct DefaultAgentChatPanel {
     sidebar_frame_placement: SidebarPlacement,
     tab_closeable: bool,
     workspace_root: Option<std::path::PathBuf>,
+    /// 工作台外壳注入的侧栏开关。内层视图是异步构建的，注入可能早于视图
+    /// 存在——这里暂存，视图建好（含 provider 事件触发的重建）时统一应用。
+    workbench_toggles: Option<crate::agent_view::WorkbenchSidebarToggles>,
     error: Option<String>,
 }
 
@@ -255,6 +258,7 @@ impl DefaultAgentChatPanel {
             sidebar_frame_placement: SidebarPlacement::Right,
             tab_closeable: false,
             workspace_root: None,
+            workbench_toggles: None,
             error: None,
         };
         panel.subscribe_connection_events(cx);
@@ -518,6 +522,9 @@ impl DefaultAgentChatPanel {
         toggles: crate::agent_view::WorkbenchSidebarToggles,
         cx: &mut Context<Self>,
     ) {
+        // 先暂存：内层视图是异步构建的，外壳构造早于视图存在；
+        // 视图（重）建好时会从这里取值应用。
+        self.workbench_toggles = Some(toggles.clone());
         if let Some(view) = &self.view {
             view.update(cx, |view, cx| view.set_workbench_toggles(toggles, cx));
         }
@@ -726,6 +733,9 @@ impl DefaultAgentChatPanel {
                                 view.update(cx, |view, cx| {
                                     view.set_sidebar_suppressed(true, cx);
                                 });
+                            }
+                            if let Some(toggles) = panel.workbench_toggles.clone() {
+                                view.update(cx, |view, cx| view.set_workbench_toggles(toggles, cx));
                             }
                             if std::mem::take(&mut panel.pending_sidebar_shown) {
                                 view.update(cx, |view, cx| view.on_sidebar_shown(cx));
