@@ -276,6 +276,10 @@ fn spawn_commit_message_generation(
     };
     let model = config.model.clone();
     let window_handle = cx.active_window();
+    // LLM 客户端（reqwest）的超时实现依赖 tokio reactor：必须把调用放到
+    // 应用持有的 Tokio runtime 上执行，GPUI 前台 Future 里直接 await 会
+    // panic（there is no reactor running）。
+    let tokio_handle = one_core::gpui_tokio::Tokio::handle(cx);
     let explorer = explorer.clone();
     cx.spawn(async move |cx| {
         let fail = |cx: &mut gpui::AsyncApp| {
@@ -288,7 +292,7 @@ fn spawn_commit_message_generation(
             fail(cx);
             return;
         };
-        // diff 摘要是 git 只读操作，放后台线程；LLM 调用本身也是 IO。
+        // diff 摘要是 git 只读操作，放后台线程；LLM 调用走 Tokio runtime。
         let context = match cx
             .background_spawn(async move {
                 workspace_explorer::commit_context(&repository, 16 * 1024)
@@ -313,7 +317,17 @@ fn spawn_commit_message_generation(
             max_tokens: Some(100),
             ..Default::default()
         };
-        let generated = provider.chat(&request).await;
+        let generated = match tokio_handle
+            .spawn(async move { provider.chat(&request).await })
+            .await
+        {
+            Ok(result) => result,
+            Err(join_error) => {
+                tracing::warn!(%join_error, "Commit message generation task aborted");
+                fail(cx);
+                return;
+            }
+        };
         let Some(window_handle) = window_handle else {
             return;
         };
