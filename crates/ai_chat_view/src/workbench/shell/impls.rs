@@ -11,7 +11,7 @@ use one_ui::{IconButton, IconButtonRole};
 use rust_i18n::t;
 
 use super::WorkbenchShell;
-use super::super::state::{WorkbenchPanelKind, WorkbenchPlacement};
+use super::super::state::{WorkbenchPanelKind, WorkbenchPlacement, WorkbenchTab};
 use super::widgets::{close_tab_tooltip, cycle_placement_tooltip, pin_tooltip};
 use super::{DOCK_PANEL_HEIGHT, DOCK_PANEL_WIDTH, PANEL_HEADER_HEIGHT};
 use crate::theme::{AgentChatTheme, with_agent_chat_theme};
@@ -260,14 +260,14 @@ impl WorkbenchShell {
     /// 左侧 / 底部的单槽面板：标题栏（图标 + 名称 + 移到下一处 + 关闭）+ 内容。
     fn render_dock(
         &self,
-        kind: WorkbenchPanelKind,
+        slot: WorkbenchTab,
         theme: &AgentChatTheme,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        let Some(view) = self.panels.get(&kind).cloned() else {
+        let Some(view) = self.panels.get(&slot).cloned() else {
             return div().into_any_element();
         };
-        let header = self.render_panel_header(kind, workbench_panel_icon(kind), theme, cx);
+        let header = self.render_panel_header(slot.kind, workbench_panel_icon(slot.kind), theme, cx);
 
         v_flex()
             .size_full()
@@ -296,7 +296,7 @@ impl WorkbenchShell {
         let active = self.state.right_active();
         let unpinned: Vec<WorkbenchPanelKind> = WorkbenchPanelKind::DOCKABLE
             .into_iter()
-            .filter(|kind| !tabs.contains(kind) && self.has_panel(*kind))
+            .filter(|kind| !tabs.iter().any(|tab| tab.kind == *kind) && self.has_panel(*kind))
             .collect();
 
         let mut bar = h_flex()
@@ -308,8 +308,19 @@ impl WorkbenchShell {
             .border_b_1()
             .border_color(theme.border)
             .bg(theme.panel);
-        for kind in &tabs {
-            bar = bar.child(self.render_tab(*kind, Some(*kind) == active, theme, cx));
+        for (index, tab) in tabs.iter().enumerate() {
+            // 该实例在同 kind 标签中的下标，决定显示名要不要带序号。
+            let ordinal = tabs[..index]
+                .iter()
+                .filter(|prev| prev.kind == tab.kind)
+                .count();
+            bar = bar.child(self.render_tab(
+                *tab,
+                ordinal,
+                Some(*tab) == active,
+                theme,
+                cx,
+            ));
         }
         // 「新建页签」：先弹一个空白选择面板（虚拟页签），点选后当前页签
         // 即变为对应功能。
@@ -364,7 +375,7 @@ impl WorkbenchShell {
             self.render_picker_panel(theme, cx)
         } else {
             active
-                .and_then(|kind| self.panels.get(&kind).cloned())
+                .and_then(|tab| self.panels.get(&tab).cloned())
                 .map(|view| {
                     div()
                         .flex_1()
@@ -387,20 +398,27 @@ impl WorkbenchShell {
             .into_any_element()
     }
 
-    /// 单个标签：点击激活，右侧 X 关闭。
+    /// 单个标签：点击激活，右侧 X 关闭。`ordinal` 是该实例在同 kind
+    /// 标签里的下标，决定显示名要不要带序号。
     fn render_tab(
         &self,
-        kind: WorkbenchPanelKind,
+        tab: WorkbenchTab,
+        ordinal: usize,
         active: bool,
         theme: &AgentChatTheme,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        let on_select =
-            cx.listener(move |this, _, _, cx| this.select_right_tab(kind, cx));
-        let on_close = cx.listener(move |this, _, _, cx| this.close_panel(kind, cx));
+        let kind = tab.kind;
+        let on_select = cx
+            .listener(move |this, _, _, cx| this.select_right_tab_instance(tab, cx));
+        let on_close = cx.listener(move |this, _, _, cx| this.close_right_tab_instance(tab, cx));
 
         h_flex()
-            .id(SharedString::from(format!("workbench-tab-{}", kind.id())))
+            .id(SharedString::from(format!(
+                "workbench-tab-{}#{}",
+                kind.id(),
+                tab.seq()
+            )))
             .min_w_0()
             .items_center()
             .gap_1()
@@ -421,11 +439,15 @@ impl WorkbenchShell {
                     } else {
                         theme.muted_foreground
                     })
-                    .child(kind.title()),
+                    .child(tab.display_title(ordinal)),
             )
             .child(
                 IconButton::new(
-                    SharedString::from(format!("workbench-tab-close-{}", kind.id())),
+                    SharedString::from(format!(
+                        "workbench-tab-close-{}#{}",
+                        kind.id(),
+                        tab.seq()
+                    )),
                     IconName::Close,
                 )
                 .role(IconButtonRole::Compact)
@@ -495,7 +517,9 @@ impl WorkbenchShell {
                     .rounded(theme.surface_radius)
                     .cursor_pointer()
                     .hover(move |style| style.bg(hover))
-                    .on_click(cx.listener(move |this, _, _, cx| this.pick_panel(kind, cx)))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.pick_panel(kind, window, cx)
+                    }))
                     .child(
                         Icon::new(kind.icon())
                             .small()
@@ -504,11 +528,22 @@ impl WorkbenchShell {
                     .child(
                         div()
                             .min_w_0()
+                            .flex_1()
                             .truncate()
                             .text_sm()
                             .text_color(theme.foreground)
                             .child(kind.title()),
-                    ),
+                    )
+                    // 多例面板点选是「每次新建」而非定位，给一行提示。
+                    .when(kind.multi_instance(), |this| {
+                        this.child(
+                            div()
+                                .flex_shrink_0()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child(t!("Workbench.picker_multi_hint").to_string()),
+                        )
+                    }),
             );
         }
 

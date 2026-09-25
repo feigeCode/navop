@@ -11,4 +11,4 @@ mod shell;
 mod state;
 
 pub use shell::{WorkbenchPanelEntry, WorkbenchShell, WorkbenchShellConfig};
-pub use state::{WorkbenchPanelKind, WorkbenchPlacement, WorkbenchState};
+pub use state::{WorkbenchPanelKind, WorkbenchPlacement, WorkbenchState, WorkbenchTab};

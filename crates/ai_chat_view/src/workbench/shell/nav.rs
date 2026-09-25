@@ -24,7 +24,7 @@ use crate::session_sidebar::{
 use crate::{
     DefaultAgentChatPanel, acp_session_placeholder, acp_session_row, acp_session_section_header,
 };
-use super::super::state::WorkbenchPanelKind;
+use super::super::state::{WorkbenchPanelKind, WorkbenchTab};
 use super::widgets::rail_tooltip;
 use crate::theme::AgentChatTheme;
 use super::WorkbenchShell;
@@ -529,7 +529,10 @@ impl WorkbenchShell {
 
     pub(super) fn render_content(&self, theme: &AgentChatTheme) -> gpui::AnyElement {
         // 中心区跟随状态单选；「对话」不可关闭，所以正常路径总有面板可显示。
-        let center = self.state.center().unwrap_or(WorkbenchPanelKind::Chat);
+        let center = self
+            .state
+            .center()
+            .unwrap_or(WorkbenchTab::new(WorkbenchPanelKind::Chat));
         let body = self
             .panels
             .get(&center)

@@ -210,6 +210,20 @@ pub(crate) fn build_ai_workbench_shell(
         );
     });
 
+    // 多例面板工厂：「新建页签」选终端时创建一个全新终端实例（工作目录取
+    // 外壳当前工作区根），而不是定位到已有终端。审查/文件是单例面板，
+    // 重复打开只会定位，不走这里。
+    shell.update(cx, |shell, cx| {
+        shell.set_panel_factory(
+            move |root: &std::path::Path, window: &mut gpui::Window, cx: &mut gpui::App| {
+                let config = default_terminal_config(root);
+                cx.new(|cx| TerminalView::new(config, window, cx).with_workspace_pane())
+                    .into()
+            },
+            cx,
+        );
+    });
+
     // AI 提交信息：Explorer 发请求，这里取已配置 provider 生成后回填。
     let explorer_for_message = explorer.clone();
     let commit_message_subscription: Subscription = cx.subscribe(

@@ -12,8 +12,9 @@
 //!
 //! 三处落位共享两条不变量：
 //!
-//! 1. **同一面板最多出现在一个落位。** 移到别处一定从原处摘除。
-//! 2. **右侧标签组不出现重复。** 重复打开只会把它激活。
+//! 1. **同一实例最多出现在一个落位。** 移到别处一定从原处摘除。
+//! 2. **单例面板在标签组不重复**（重复打开只会激活）；多例面板（终端等）
+//!    可通过「新建页签」并存多个实例。
 //!
 //! 「对话」是中心区专属（[`WorkbenchPanelKind::is_dockable`] 为假）：它不会进标签组，
 //! 也不会被挤到侧边——把别的面板切到中心区只会让对话暂时让位。
@@ -77,6 +78,56 @@ impl WorkbenchPanelKind {
     pub fn is_dockable(self) -> bool {
         !matches!(self, Self::Chat)
     }
+
+    /// 是否支持多开：`true` 的面板（终端等）每次「新建页签」都开一个新
+    /// 实例，同一面板可并存多个标签；`false` 的面板（审查、文件）重复
+    /// 打开只会定位到已开的那个标签。
+    pub fn multi_instance(self) -> bool {
+        matches!(self, Self::Terminal)
+    }
+}
+
+/// 右侧标签组里的一个标签实例。
+///
+/// 单例面板（[`WorkbenchPanelKind::multi_instance`] 为假）恒用 `seq = 0`，
+/// 重复打开只会激活同一个标签；多例面板每次「新建页签」分配递增的 `seq`，
+/// 同一面板可并存多个实例。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct WorkbenchTab {
+    pub kind: WorkbenchPanelKind,
+    seq: u32,
+}
+
+impl WorkbenchTab {
+    /// 单例面板的标签身份（`seq = 0`）。
+    pub fn new(kind: WorkbenchPanelKind) -> Self {
+        Self { kind, seq: 0 }
+    }
+
+    fn with_seq(kind: WorkbenchPanelKind, seq: u32) -> Self {
+        Self { kind, seq }
+    }
+
+    /// 实例序号；单例面板恒为 0。
+    pub fn seq(self) -> u32 {
+        self.seq
+    }
+
+    /// 显示名：多例面板的第 N 个实例（N > 1）带序号（如「终端 2」），
+    /// 其余用面板原名。`ordinal` 为该实例在同 kind 标签中的下标（0 起）。
+    pub fn display_title(self, ordinal: usize) -> SharedString {
+        if self.kind.multi_instance() && ordinal > 0 {
+            t!(
+                "Workbench.tab_instance",
+                panel = self.kind.title(),
+                ordinal = ordinal + 1
+            )
+            .to_string()
+            .into()
+        } else {
+            self.kind.title()
+        }
+    }
 }
 
 /// 面板落位。
@@ -139,13 +190,13 @@ fn clamp_width(width: f32, range: (f32, f32)) -> f32 {
 pub struct WorkbenchState {
     nav_collapsed: bool,
     /// 中心区当前面板。`None` 只在「对话被别的面板顶掉、且用户把它关掉」的瞬间出现。
-    center: Option<WorkbenchPanelKind>,
-    left: Option<WorkbenchPanelKind>,
-    bottom: Option<WorkbenchPanelKind>,
-    /// 右侧标签组，顺序即标签顺序。
-    right: Vec<WorkbenchPanelKind>,
+    center: Option<WorkbenchTab>,
+    left: Option<WorkbenchTab>,
+    bottom: Option<WorkbenchTab>,
+    /// 右侧标签组，顺序即标签顺序。多例面板可有多个实例标签。
+    right: Vec<WorkbenchTab>,
     /// 标签组当前显示的面板。非空标签组一定有激活项。
-    right_active: Option<WorkbenchPanelKind>,
+    right_active: Option<WorkbenchTab>,
     /// 会话导航栏宽度（像素），已收敛到允许范围。
     nav_width: f32,
     /// 右侧标签组宽度（像素），已收敛到允许范围。
@@ -160,7 +211,7 @@ impl WorkbenchState {
     pub fn new(center: WorkbenchPanelKind) -> Self {
         Self {
             nav_collapsed: false,
-            center: Some(center),
+            center: Some(WorkbenchTab::new(center)),
             left: None,
             bottom: None,
             right: Vec::new(),
@@ -255,35 +306,35 @@ impl WorkbenchState {
         true
     }
 
-    pub fn center(&self) -> Option<WorkbenchPanelKind> {
+    pub fn center(&self) -> Option<WorkbenchTab> {
         self.center
     }
 
-    pub fn left(&self) -> Option<WorkbenchPanelKind> {
+    pub fn left(&self) -> Option<WorkbenchTab> {
         self.left
     }
 
-    pub fn bottom(&self) -> Option<WorkbenchPanelKind> {
+    pub fn bottom(&self) -> Option<WorkbenchTab> {
         self.bottom
     }
 
-    pub fn right_tabs(&self) -> &[WorkbenchPanelKind] {
+    pub fn right_tabs(&self) -> &[WorkbenchTab] {
         &self.right
     }
 
-    pub fn right_active(&self) -> Option<WorkbenchPanelKind> {
+    pub fn right_active(&self) -> Option<WorkbenchTab> {
         self.right_active
     }
 
-    /// 面板当前所在落位；未打开返回 `None`。
+    /// 面板当前所在落位（取它的第一个实例）；未打开返回 `None`。
     pub fn placement_of(&self, kind: WorkbenchPanelKind) -> Option<WorkbenchPlacement> {
-        if self.center == Some(kind) {
+        if self.center.map(|tab| tab.kind) == Some(kind) {
             Some(WorkbenchPlacement::Center)
-        } else if self.left == Some(kind) {
+        } else if self.left.map(|tab| tab.kind) == Some(kind) {
             Some(WorkbenchPlacement::Left)
-        } else if self.bottom == Some(kind) {
+        } else if self.bottom.map(|tab| tab.kind) == Some(kind) {
             Some(WorkbenchPlacement::Bottom)
-        } else if self.right.contains(&kind) {
+        } else if self.right.iter().any(|tab| tab.kind == kind) {
             Some(WorkbenchPlacement::Right)
         } else {
             None
@@ -294,44 +345,62 @@ impl WorkbenchState {
         self.placement_of(kind).is_some()
     }
 
-    /// 把面板打开到指定落位。返回是否真的发生了变化。
+    /// 把面板打开到指定落位（定位语义）。返回是否真的发生了变化。
     ///
     /// - 面板已在目标落位：只有右侧标签组会顺带把它设为激活项。
     /// - 「对话」请求停靠：直接拒绝（返回 `false`），它只能待在中心区。
     /// - 目标单槽已被占用：占用者按 [`Self::stash`] 处理，不会凭空消失。
+    ///
+    /// 多例面板（终端等）走定位语义时也只定位到第一个实例；
+    /// 「新建页签」请用 [`Self::open_new_tab`]。
     pub fn open(&mut self, kind: WorkbenchPanelKind, placement: WorkbenchPlacement) -> bool {
         if placement != WorkbenchPlacement::Center && !kind.is_dockable() {
             return false;
         }
         if self.placement_of(kind) == Some(placement) {
-            return placement == WorkbenchPlacement::Right && self.set_right_active(kind);
+            return placement == WorkbenchPlacement::Right && self.activate_first_tab(kind);
         }
 
-        self.detach(kind);
+        let tab = self.take_tab(kind);
         match placement {
             WorkbenchPlacement::Center => {
-                let displaced = self.center.replace(kind);
+                let displaced = self.center.replace(tab);
                 self.stash(displaced);
             }
             WorkbenchPlacement::Left => {
-                let displaced = self.left.replace(kind);
+                let displaced = self.left.replace(tab);
                 self.stash(displaced);
             }
             WorkbenchPlacement::Bottom => {
-                let displaced = self.bottom.replace(kind);
+                let displaced = self.bottom.replace(tab);
                 self.stash(displaced);
             }
             WorkbenchPlacement::Right => {
-                if !self.right.contains(&kind) {
-                    self.right.push(kind);
-                }
-                self.right_active = Some(kind);
+                self.right.push(tab);
+                self.right_active = Some(tab);
             }
         }
         true
     }
 
-    /// 关闭面板。返回是否真的关掉了。
+    /// 多例面板「新建页签」：无论是否已打开，都向右侧标签组追加一个新
+    /// 实例并激活。单例面板退化为定位语义。返回新标签身份；
+    /// 面板不可停靠时返回 `None`。
+    pub fn open_new_tab(&mut self, kind: WorkbenchPanelKind) -> Option<WorkbenchTab> {
+        if !kind.is_dockable() {
+            return None;
+        }
+        if !kind.multi_instance() {
+            self.open(kind, WorkbenchPlacement::Right);
+            return self.first_tab_of(kind);
+        }
+        let tab = self.fresh_tab(kind);
+        self.right.push(tab);
+        self.right_active = Some(tab);
+        Some(tab)
+    }
+
+    /// 关闭面板的第一个实例。返回是否真的关掉了。
     ///
     /// 「对话」不可关闭；关掉中心区的可停靠面板后中心区回落到「对话」，
     /// 避免留下一个空白工作台。
@@ -342,9 +411,9 @@ impl WorkbenchState {
         let Some(placement) = self.placement_of(kind) else {
             return false;
         };
-        self.detach(kind);
+        self.take_tab(kind);
         if placement == WorkbenchPlacement::Center {
-            self.center = Some(WorkbenchPanelKind::Chat);
+            self.center = Some(WorkbenchTab::new(WorkbenchPanelKind::Chat));
         }
         true
     }
@@ -358,20 +427,25 @@ impl WorkbenchState {
         }
     }
 
-    /// 选中右侧标签组里的某个面板。不在标签组里则无操作。
+    /// 选中右侧标签组里的某个面板（定位到它的第一个实例）。不在标签组里则无操作。
     pub fn set_right_active(&mut self, kind: WorkbenchPanelKind) -> bool {
-        if !self.right.contains(&kind) || self.right_active == Some(kind) {
+        self.activate_first_tab(kind)
+    }
+
+    /// 选中右侧标签组里的某个具体实例。
+    pub fn set_right_active_tab(&mut self, tab: WorkbenchTab) -> bool {
+        if !self.right.contains(&tab) || self.right_active == Some(tab) {
             return false;
         }
-        self.right_active = Some(kind);
+        self.right_active = Some(tab);
         true
     }
 
-    /// 关掉右侧标签组当前显示的面板，返回被关掉的那一个。
-    pub fn close_right_active(&mut self) -> Option<WorkbenchPanelKind> {
-        let kind = self.right_active?;
-        self.close(kind);
-        Some(kind)
+    /// 关掉右侧标签组当前显示的实例，返回被关掉的那一个。
+    pub fn close_right_active(&mut self) -> Option<WorkbenchTab> {
+        let tab = self.right_active?;
+        self.close_tab(tab);
+        Some(tab)
     }
 
     /// 把面板移到下一个落位；未打开的先打开到右侧。
@@ -382,58 +456,113 @@ impl WorkbenchState {
         self.open(kind, current.next())
     }
 
-    /// 从所有落位摘除面板，并修正标签组激活项。
-    fn detach(&mut self, kind: WorkbenchPanelKind) {
-        if self.center == Some(kind) {
-            self.center = None;
-        }
-        if self.left == Some(kind) {
-            self.left = None;
-        }
-        if self.bottom == Some(kind) {
-            self.bottom = None;
-        }
-        let Some(index) = self.right.iter().position(|panel| *panel == kind) else {
-            return;
-        };
-        self.right.remove(index);
-        if self.right_active == Some(kind) {
-            // 关掉激活标签后选相邻的：优先它右边那个（顺位补上），没有就取左边。
-            self.right_active = self
-                .right
-                .get(index)
-                .copied()
-                .or_else(|| index.checked_sub(1).and_then(|prev| self.right.get(prev)).copied());
+    /// 该面板在标签组里的第一个实例标签。
+    fn first_tab_of(&self, kind: WorkbenchPanelKind) -> Option<WorkbenchTab> {
+        self.right.iter().copied().find(|tab| tab.kind == kind)
+    }
+
+    /// 定位语义：激活面板已有的第一个标签（若有），返回是否变化。
+    fn activate_first_tab(&mut self, kind: WorkbenchPanelKind) -> bool {
+        match self.first_tab_of(kind) {
+            Some(tab) => self.set_right_active_tab(tab),
+            None => false,
         }
     }
 
-    /// 被单槽挤走的面板：能停靠的回到右侧标签组并激活，否则视为关闭。
-    fn stash(&mut self, displaced: Option<WorkbenchPanelKind>) {
-        let Some(panel) = displaced else {
+    /// 为面板分配一个新标签身份：多例面板用递增 `seq`，单例恒为 0。
+    fn fresh_tab(&self, kind: WorkbenchPanelKind) -> WorkbenchTab {
+        let seq = if kind.multi_instance() {
+            self.right
+                .iter()
+                .filter(|tab| tab.kind == kind)
+                .map(|tab| tab.seq + 1)
+                .max()
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        WorkbenchTab::with_seq(kind, seq)
+    }
+
+    /// 把面板的第一个实例从所有落位摘下，返回它的标签身份；
+    /// 面板原本未打开则分配一个新身份。右侧组里的后继实例会顺位补激活。
+    fn take_tab(&mut self, kind: WorkbenchPanelKind) -> WorkbenchTab {
+        if let Some(tab) = self.center.filter(|tab| tab.kind == kind) {
+            self.center = None;
+            return tab;
+        }
+        if let Some(tab) = self.left.filter(|tab| tab.kind == kind) {
+            self.left = None;
+            return tab;
+        }
+        if let Some(tab) = self.bottom.filter(|tab| tab.kind == kind) {
+            self.bottom = None;
+            return tab;
+        }
+        match self.first_tab_of(kind) {
+            Some(tab) => {
+                self.close_tab(tab);
+                tab
+            }
+            None => self.fresh_tab(kind),
+        }
+    }
+
+    /// 关闭右侧标签组里的一个具体实例。返回是否真的关掉了。
+    pub fn close_tab(&mut self, tab: WorkbenchTab) -> bool {
+        let Some(index) = self.right.iter().position(|open| *open == tab) else {
+            return false;
+        };
+        let removed = self.right.remove(index);
+        if self.right_active == Some(removed) {
+            // 关掉激活标签后选相邻的：优先它右边那个（顺位补上），没有就取左边。
+            self.right_active = self.right.get(index).copied().or_else(|| {
+                index
+                    .checked_sub(1)
+                    .and_then(|prev| self.right.get(prev))
+                    .copied()
+            });
+        }
+        true
+    }
+
+    /// 被单槽挤走的面板实例：能停靠的回到右侧标签组并激活，否则视为关闭。
+    fn stash(&mut self, displaced: Option<WorkbenchTab>) {
+        let Some(tab) = displaced else {
             return;
         };
-        if !panel.is_dockable() {
+        if !tab.kind.is_dockable() {
             return;
         }
-        if !self.right.contains(&panel) {
-            self.right.push(panel);
+        if !self.right.contains(&tab) {
+            self.right.push(tab);
         }
-        self.right_active = Some(panel);
+        self.right_active = Some(tab);
     }
 
     /// 导出可持久化的布局。面板按稳定 id 记录。
+    ///
+    /// 多例面板的多个实例只落盘第一个（终端会话本就活不过进程，恢复时
+    /// 只还原「这个面板开着」这一事实）；激活项若是非首个实例则回落到
+    /// 该面板的第一个实例。
     pub fn to_settings(&self) -> WorkbenchLayoutSettings {
         WorkbenchLayoutSettings {
             nav_collapsed: self.nav_collapsed,
-            center: self.center.map(|kind| kind.id().to_string()),
-            left: self.left.map(|kind| kind.id().to_string()),
-            bottom: self.bottom.map(|kind| kind.id().to_string()),
-            right: self
-                .right
-                .iter()
-                .map(|kind| kind.id().to_string())
-                .collect(),
-            right_active: self.right_active.map(|kind| kind.id().to_string()),
+            center: self.center.map(|tab| tab.kind.id().to_string()),
+            left: self.left.map(|tab| tab.kind.id().to_string()),
+            bottom: self.bottom.map(|tab| tab.kind.id().to_string()),
+            right: {
+                let mut seen = std::collections::HashSet::new();
+                self.right
+                    .iter()
+                    .filter(|tab| seen.insert(tab.kind.id()))
+                    .map(|tab| tab.kind.id().to_string())
+                    .collect()
+            },
+            right_active: self
+                .right_active
+                .filter(|tab| self.first_tab_of(tab.kind) == Some(*tab))
+                .map(|tab| tab.kind.id().to_string()),
             nav_width: Some(self.nav_width),
             right_width: Some(self.right_width),
             right_collapsed: self.right_collapsed,
@@ -451,16 +580,16 @@ impl WorkbenchState {
         state.nav_collapsed = settings.nav_collapsed;
 
         if let Some(kind) = settings.center.as_deref().and_then(WorkbenchPanelKind::from_id) {
-            state.center = Some(kind);
+            state.center = Some(WorkbenchTab::new(kind));
         }
         if let Some(kind) = dockable_from_settings(settings.left.as_deref()) {
             if state.placement_of(kind).is_none() {
-                state.left = Some(kind);
+                state.left = Some(WorkbenchTab::new(kind));
             }
         }
         if let Some(kind) = dockable_from_settings(settings.bottom.as_deref()) {
             if state.placement_of(kind).is_none() {
-                state.bottom = Some(kind);
+                state.bottom = Some(WorkbenchTab::new(kind));
             }
         }
         for id in &settings.right {
@@ -468,14 +597,14 @@ impl WorkbenchState {
                 continue;
             };
             if state.placement_of(kind).is_none() {
-                state.right.push(kind);
+                state.right.push(WorkbenchTab::new(kind));
             }
         }
         state.right_active = settings
             .right_active
             .as_deref()
             .and_then(WorkbenchPanelKind::from_id)
-            .filter(|kind| state.right.contains(kind))
+            .and_then(|kind| state.first_tab_of(kind))
             .or_else(|| state.right.first().copied());
         state.nav_width = settings
             .nav_width
@@ -505,11 +634,15 @@ mod tests {
         assert!(state.open(kind, WorkbenchPlacement::Right));
     }
 
+    fn tab(kind: WorkbenchPanelKind) -> WorkbenchTab {
+        WorkbenchTab::new(kind)
+    }
+
     #[test]
     fn new_state_shows_chat_in_center_without_side_panels() {
         let state = WorkbenchState::new(WorkbenchPanelKind::Chat);
 
-        assert_eq!(Some(WorkbenchPanelKind::Chat), state.center());
+        assert_eq!(Some(WorkbenchPanelKind::Chat), state.center().map(|t| t.kind));
         assert_eq!(None, state.left());
         assert_eq!(None, state.bottom());
         assert!(state.right_tabs().is_empty());
@@ -549,10 +682,13 @@ mod tests {
         open_right(&mut state, WorkbenchPanelKind::Files);
 
         assert_eq!(
-            &[WorkbenchPanelKind::Review, WorkbenchPanelKind::Files],
+            &[tab(WorkbenchPanelKind::Review), tab(WorkbenchPanelKind::Files)],
             state.right_tabs()
         );
-        assert_eq!(Some(WorkbenchPanelKind::Files), state.right_active());
+        assert_eq!(
+            Some(WorkbenchPanelKind::Files),
+            state.right_active().map(|t| t.kind)
+        );
         assert_eq!(
             Some(WorkbenchPlacement::Right),
             state.placement_of(WorkbenchPanelKind::Review)
@@ -567,7 +703,10 @@ mod tests {
 
         assert!(state.open(WorkbenchPanelKind::Review, WorkbenchPlacement::Right));
 
-        assert_eq!(Some(WorkbenchPanelKind::Review), state.right_active());
+        assert_eq!(
+            Some(WorkbenchPanelKind::Review),
+            state.right_active().map(|t| t.kind)
+        );
         assert_eq!(2, state.right_tabs().len(), "重复打开不应新增标签");
     }
 
@@ -583,10 +722,13 @@ mod tests {
         assert!(state.close(WorkbenchPanelKind::Files));
 
         assert_eq!(
-            &[WorkbenchPanelKind::Review, WorkbenchPanelKind::Terminal],
+            &[tab(WorkbenchPanelKind::Review), tab(WorkbenchPanelKind::Terminal)],
             state.right_tabs()
         );
-        assert_eq!(Some(WorkbenchPanelKind::Terminal), state.right_active());
+        assert_eq!(
+            Some(WorkbenchPanelKind::Terminal),
+            state.right_active().map(|t| t.kind)
+        );
     }
 
     #[test]
@@ -610,7 +752,10 @@ mod tests {
         // 激活项是 Terminal（队尾），右边没有标签，应回落到左边那个。
         assert!(state.close(WorkbenchPanelKind::Terminal));
 
-        assert_eq!(Some(WorkbenchPanelKind::Review), state.right_active());
+        assert_eq!(
+            Some(WorkbenchPanelKind::Review),
+            state.right_active().map(|t| t.kind)
+        );
     }
 
     #[test]
@@ -623,7 +768,7 @@ mod tests {
         assert!(!state.close(WorkbenchPanelKind::Chat));
 
         assert!(state.right_tabs().is_empty());
-        assert_eq!(Some(WorkbenchPanelKind::Chat), state.center());
+        assert_eq!(Some(WorkbenchPanelKind::Chat), state.center().map(|t| t.kind));
     }
 
     #[test]
@@ -632,10 +777,13 @@ mod tests {
 
         assert!(state.open(WorkbenchPanelKind::Files, WorkbenchPlacement::Center));
 
-        assert_eq!(Some(WorkbenchPanelKind::Files), state.center());
+        assert_eq!(Some(WorkbenchPanelKind::Files), state.center().map(|t| t.kind));
         // 被顶掉的 Review 不能凭空消失，它落进右侧标签组并激活。
-        assert_eq!(&[WorkbenchPanelKind::Review], state.right_tabs());
-        assert_eq!(Some(WorkbenchPanelKind::Review), state.right_active());
+        assert_eq!(&[tab(WorkbenchPanelKind::Review)], state.right_tabs());
+        assert_eq!(
+            Some(WorkbenchPanelKind::Review),
+            state.right_active().map(|t| t.kind)
+        );
     }
 
     #[test]
@@ -644,8 +792,8 @@ mod tests {
 
         assert!(state.open(WorkbenchPanelKind::Chat, WorkbenchPlacement::Center));
 
-        assert_eq!(Some(WorkbenchPanelKind::Chat), state.center());
-        assert_eq!(&[WorkbenchPanelKind::Files], state.right_tabs());
+        assert_eq!(Some(WorkbenchPanelKind::Chat), state.center().map(|t| t.kind));
+        assert_eq!(&[tab(WorkbenchPanelKind::Files)], state.right_tabs());
     }
 
     #[test]
@@ -657,7 +805,10 @@ mod tests {
 
         assert!(state.right_tabs().is_empty());
         assert_eq!(None, state.right_active());
-        assert_eq!(Some(WorkbenchPanelKind::Files), state.center());
+        assert_eq!(
+            Some(WorkbenchPanelKind::Files),
+            state.center().map(|t| t.kind)
+        );
         assert_eq!(
             Some(WorkbenchPlacement::Center),
             state.placement_of(WorkbenchPanelKind::Files)
@@ -672,9 +823,15 @@ mod tests {
 
         assert!(state.open(WorkbenchPanelKind::Review, WorkbenchPlacement::Left));
 
-        assert_eq!(Some(WorkbenchPanelKind::Review), state.left());
-        assert_eq!(&[WorkbenchPanelKind::Terminal], state.right_tabs());
-        assert_eq!(Some(WorkbenchPanelKind::Terminal), state.right_active());
+        assert_eq!(
+            Some(WorkbenchPanelKind::Review),
+            state.left().map(|t| t.kind)
+        );
+        assert_eq!(&[tab(WorkbenchPanelKind::Terminal)], state.right_tabs());
+        assert_eq!(
+            Some(WorkbenchPanelKind::Terminal),
+            state.right_active().map(|t| t.kind)
+        );
     }
 
     #[test]
@@ -684,9 +841,15 @@ mod tests {
 
         assert!(state.open(WorkbenchPanelKind::Files, WorkbenchPlacement::Left));
 
-        assert_eq!(Some(WorkbenchPanelKind::Files), state.left());
-        assert_eq!(&[WorkbenchPanelKind::Review], state.right_tabs());
-        assert_eq!(Some(WorkbenchPanelKind::Review), state.right_active());
+        assert_eq!(
+            Some(WorkbenchPanelKind::Files),
+            state.left().map(|t| t.kind)
+        );
+        assert_eq!(&[tab(WorkbenchPanelKind::Review)], state.right_tabs());
+        assert_eq!(
+            Some(WorkbenchPanelKind::Review),
+            state.right_active().map(|t| t.kind)
+        );
     }
 
     #[test]
@@ -696,8 +859,14 @@ mod tests {
         state.open(WorkbenchPanelKind::Files, WorkbenchPlacement::Left);
         state.open(WorkbenchPanelKind::Terminal, WorkbenchPlacement::Bottom);
 
-        assert_eq!(Some(WorkbenchPanelKind::Files), state.left());
-        assert_eq!(Some(WorkbenchPanelKind::Terminal), state.bottom());
+        assert_eq!(
+            Some(WorkbenchPanelKind::Files),
+            state.left().map(|t| t.kind)
+        );
+        assert_eq!(
+            Some(WorkbenchPanelKind::Terminal),
+            state.bottom().map(|t| t.kind)
+        );
         assert!(state.right_tabs().is_empty());
     }
 
@@ -707,7 +876,10 @@ mod tests {
         state.open(WorkbenchPanelKind::Files, WorkbenchPlacement::Left);
 
         assert!(!state.open(WorkbenchPanelKind::Files, WorkbenchPlacement::Left));
-        assert_eq!(Some(WorkbenchPanelKind::Files), state.left());
+        assert_eq!(
+            Some(WorkbenchPanelKind::Files),
+            state.left().map(|t| t.kind)
+        );
     }
 
     #[test]
@@ -717,7 +889,7 @@ mod tests {
 
         assert!(state.close(WorkbenchPanelKind::Review));
 
-        assert_eq!(Some(WorkbenchPanelKind::Chat), state.center());
+        assert_eq!(Some(WorkbenchPanelKind::Chat), state.center().map(|t| t.kind));
         assert!(!state.is_open(WorkbenchPanelKind::Review));
     }
 
@@ -747,10 +919,13 @@ mod tests {
 
         assert_eq!(
             Some(WorkbenchPanelKind::Files),
-            state.close_right_active()
+            state.close_right_active().map(|t| t.kind)
         );
         // 激活项会顺位补位，所以还能再关一个；组空之后才是 None。
-        assert_eq!(Some(WorkbenchPanelKind::Review), state.close_right_active());
+        assert_eq!(
+            Some(WorkbenchPanelKind::Review),
+            state.close_right_active().map(|t| t.kind)
+        );
         assert_eq!(None, state.close_right_active());
     }
 
@@ -760,13 +935,22 @@ mod tests {
         state.open(WorkbenchPanelKind::Review, WorkbenchPlacement::Right);
 
         assert!(state.cycle_placement(WorkbenchPanelKind::Review));
-        assert_eq!(Some(WorkbenchPanelKind::Review), state.bottom());
+        assert_eq!(
+            Some(WorkbenchPanelKind::Review),
+            state.bottom().map(|t| t.kind)
+        );
 
         assert!(state.cycle_placement(WorkbenchPanelKind::Review));
-        assert_eq!(Some(WorkbenchPanelKind::Review), state.left());
+        assert_eq!(
+            Some(WorkbenchPanelKind::Review),
+            state.left().map(|t| t.kind)
+        );
 
         assert!(state.cycle_placement(WorkbenchPanelKind::Review));
-        assert_eq!(Some(WorkbenchPanelKind::Review), state.center());
+        assert_eq!(
+            Some(WorkbenchPanelKind::Review),
+            state.center().map(|t| t.kind)
+        );
 
         assert!(state.cycle_placement(WorkbenchPanelKind::Review));
         assert_eq!(
@@ -806,7 +990,10 @@ mod tests {
         open_right(&mut state, WorkbenchPanelKind::Files);
 
         assert!(state.nav_collapsed());
-        assert_eq!(Some(WorkbenchPanelKind::Files), state.right_active());
+        assert_eq!(
+            Some(WorkbenchPanelKind::Files),
+            state.right_active().map(|t| t.kind)
+        );
     }
 
     #[test]
@@ -815,6 +1002,128 @@ mod tests {
             assert_eq!(Some(kind), WorkbenchPanelKind::from_id(kind.id()));
         }
         assert_eq!(None, WorkbenchPanelKind::from_id("nope"));
+    }
+
+    #[test]
+    fn only_terminal_is_multi_instance() {
+        assert!(!WorkbenchPanelKind::Chat.multi_instance());
+        assert!(!WorkbenchPanelKind::Review.multi_instance());
+        assert!(!WorkbenchPanelKind::Files.multi_instance());
+        assert!(WorkbenchPanelKind::Terminal.multi_instance());
+    }
+
+    #[test]
+    fn new_tab_appends_a_fresh_terminal_instance_each_time() {
+        let mut state = WorkbenchState::new(WorkbenchPanelKind::Chat);
+
+        let first = state.open_new_tab(WorkbenchPanelKind::Terminal);
+        let second = state.open_new_tab(WorkbenchPanelKind::Terminal);
+
+        assert_eq!(
+            Some(WorkbenchTab::with_seq(WorkbenchPanelKind::Terminal, 0)),
+            first
+        );
+        assert_eq!(
+            Some(WorkbenchTab::with_seq(WorkbenchPanelKind::Terminal, 1)),
+            second
+        );
+        assert_eq!(2, state.right_tabs().len(), "多例面板每次都是新标签");
+        assert_eq!(second, state.right_active(), "新标签自动激活");
+    }
+
+    #[test]
+    fn new_tab_on_a_singleton_panel_locates_instead_of_duplicating() {
+        let mut state = WorkbenchState::new(WorkbenchPanelKind::Chat);
+
+        let first = state.open_new_tab(WorkbenchPanelKind::Files);
+        let second = state.open_new_tab(WorkbenchPanelKind::Files);
+
+        assert_eq!(first, second, "单例面板重复点选只定位");
+        assert_eq!(1, state.right_tabs().len());
+    }
+
+    #[test]
+    fn locate_semantics_pick_the_first_terminal_instance() {
+        let mut state = WorkbenchState::new(WorkbenchPanelKind::Chat);
+        state.open_new_tab(WorkbenchPanelKind::Terminal);
+        state.open_new_tab(WorkbenchPanelKind::Terminal);
+        state.set_right_active_tab(state.right_tabs()[0]);
+
+        // 定位语义（rail / 拖拽等既有路径）只激活第一个实例，不再开新的；
+        // 已是激活项时无变化，返回 false。
+        assert!(!state.open(
+            WorkbenchPanelKind::Terminal,
+            WorkbenchPlacement::Right
+        ));
+        assert_eq!(2, state.right_tabs().len());
+        assert_eq!(
+            Some(WorkbenchTab::with_seq(WorkbenchPanelKind::Terminal, 0)),
+            state.right_active()
+        );
+    }
+
+    #[test]
+    fn closing_one_terminal_instance_keeps_the_other() {
+        let mut state = WorkbenchState::new(WorkbenchPanelKind::Chat);
+        state.open_new_tab(WorkbenchPanelKind::Terminal);
+        let second = state
+            .open_new_tab(WorkbenchPanelKind::Terminal)
+            .expect("终端可多开");
+
+        assert!(state.close_tab(second));
+
+        assert_eq!(1, state.right_tabs().len());
+        assert_eq!(
+            Some(WorkbenchTab::with_seq(WorkbenchPanelKind::Terminal, 0)),
+            state.right_active()
+        );
+        // 关掉第一个后，再「新建页签」从 0 重新计号不冲突（唯一活跃实例）。
+        let reopened = state.open_new_tab(WorkbenchPanelKind::Terminal);
+        assert_eq!(
+            Some(WorkbenchTab::with_seq(WorkbenchPanelKind::Terminal, 1)),
+            reopened
+        );
+    }
+
+    #[test]
+    fn settings_round_trip_dedupes_multi_instance_tabs() {
+        let mut state = WorkbenchState::new(WorkbenchPanelKind::Chat);
+        state.open_new_tab(WorkbenchPanelKind::Terminal);
+        state.open_new_tab(WorkbenchPanelKind::Terminal);
+        state.open_new_tab(WorkbenchPanelKind::Review);
+
+        let restored = WorkbenchState::from_settings(&state.to_settings());
+
+        // 多实例只还原「面板开着」：终端与审查各一个标签。
+        let kinds: Vec<WorkbenchPanelKind> = restored.right_tabs().iter().map(|t| t.kind).collect();
+        assert_eq!(
+            &[WorkbenchPanelKind::Terminal, WorkbenchPanelKind::Review],
+            kinds.as_slice()
+        );
+        // 激活项是审查（最后打开的单例，首个实例可落盘）。
+        assert_eq!(
+            Some(WorkbenchPanelKind::Review),
+            restored.right_active().map(|t| t.kind)
+        );
+    }
+
+    #[test]
+    fn tab_display_title_only_numbers_second_and_later_instances() {
+        let terminal = WorkbenchPanelKind::Terminal;
+        assert_eq!(
+            terminal.title(),
+            WorkbenchTab::with_seq(terminal, 0).display_title(0)
+        );
+        assert_ne!(
+            terminal.title(),
+            WorkbenchTab::with_seq(terminal, 1).display_title(1),
+            "第二个实例应带序号"
+        );
+        // 单例面板永远不带序号。
+        assert_eq!(
+            WorkbenchPanelKind::Files.title(),
+            WorkbenchTab::new(WorkbenchPanelKind::Files).display_title(1)
+        );
     }
 
     #[test]
@@ -844,14 +1153,20 @@ mod tests {
 
         let state = WorkbenchState::from_settings(&settings);
 
-        assert_eq!(Some(WorkbenchPanelKind::Files), state.left());
+        assert_eq!(
+            Some(WorkbenchPanelKind::Files),
+            state.left().map(|t| t.kind)
+        );
         assert_eq!(None, state.bottom(), "未知 id 应被忽略");
         assert_eq!(
-            &[WorkbenchPanelKind::Review],
+            &[tab(WorkbenchPanelKind::Review)],
             state.right_tabs(),
             "已在左侧的面板不应重复出现在标签组"
         );
-        assert_eq!(Some(WorkbenchPanelKind::Review), state.right_active());
+        assert_eq!(
+            Some(WorkbenchPanelKind::Review),
+            state.right_active().map(|t| t.kind)
+        );
     }
 
     #[test]
@@ -866,7 +1181,10 @@ mod tests {
 
         let state = WorkbenchState::from_settings(&settings);
 
-        assert_eq!(Some(WorkbenchPanelKind::Review), state.center());
+        assert_eq!(
+            Some(WorkbenchPanelKind::Review),
+            state.center().map(|t| t.kind)
+        );
         assert_eq!(None, state.left());
         assert_eq!(None, state.bottom());
         assert!(state.right_tabs().is_empty());
@@ -881,7 +1199,9 @@ mod tests {
 
         assert_eq!(
             Some(WorkbenchPanelKind::Chat),
-            WorkbenchState::from_settings(&settings).center()
+            WorkbenchState::from_settings(&settings)
+                .center()
+                .map(|t| t.kind)
         );
     }
 
@@ -895,7 +1215,9 @@ mod tests {
 
         assert_eq!(
             Some(WorkbenchPanelKind::Review),
-            WorkbenchState::from_settings(&settings).right_active()
+            WorkbenchState::from_settings(&settings)
+                .right_active()
+                .map(|t| t.kind)
         );
     }
 

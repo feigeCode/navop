@@ -1147,6 +1147,14 @@ Workbench:
     en: Choose a panel to open in the current tab.
     zh-CN: 选择一个面板，在当前页签打开。
     zh-HK: 選擇一個面板，在當前頁籤開啟。
+  tab_instance:
+    en: "%{panel} %{ordinal}"
+    zh-CN: "%{panel} %{ordinal}"
+    zh-HK: "%{panel} %{ordinal}"
+  picker_multi_hint:
+    en: Opens a new one
+    zh-CN: 每次新建
+    zh-HK: 每次新建
   no_matching_sessions:
     en: No conversations match the search.
     zh-CN: 没有匹配的会话。

@@ -11,7 +11,7 @@ use gpui::{AnyView, AppContext as _, Context, Entity, FocusHandle, Subscription,
 use gpui_component::input::{InputEvent, InputState};
 use one_core::settings::AppSettings;
 
-use super::state::{WorkbenchPanelKind, WorkbenchPlacement, WorkbenchState};
+use super::state::{WorkbenchPanelKind, WorkbenchPlacement, WorkbenchState, WorkbenchTab};
 use crate::DefaultAgentChatPanel;
 use crate::theme::AgentChatTheme;
 
@@ -60,7 +60,9 @@ pub struct WorkbenchShellConfig {
 
 pub struct WorkbenchShell {
     pub(super) state: WorkbenchState,
-    pub(super) panels: HashMap<WorkbenchPanelKind, AnyView>,
+    /// 面板视图，按标签实例身份存放。宿主注入的初始面板用 `seq = 0`；
+    /// 多例面板（终端）的新实例由 `panel_factory` 创建后以新标签身份入表。
+    pub(super) panels: HashMap<WorkbenchTab, AnyView>,
     pub(super) nav: Option<AnyView>,
     pub(super) session_source: Option<Entity<DefaultAgentChatPanel>>,
     /// 会话搜索框；仅内建会话列表（`session_source`）存在时创建。
@@ -77,6 +79,10 @@ pub struct WorkbenchShell {
     /// 宿主注入的工作区切换动作（把 explorer 等宿主侧视图切到指定根，
     /// 经 `RootChanged` 级联回外壳与聊天面板）。侧栏分组的新建/选择依赖它。
     pub(super) workspace_switcher: Option<Box<dyn Fn(&std::path::Path, &mut gpui::App) + 'static>>,
+    /// 宿主注入的多例面板工厂：为「新建页签」创建新实例视图（如新终端）。
+    /// 入参为当前工作区根目录。未注入时多例面板的新建页签退化为定位。
+    pub(super) panel_factory:
+        Option<Box<dyn Fn(&std::path::Path, &mut Window, &mut gpui::App) -> AnyView + 'static>>,
     /// 宽度拖拽时落盘的节流时间戳（拖拽每帧都会触发，不能每帧写盘）。
     pub(super) last_width_persist: Option<Instant>,
     /// 收起的工作区分组（键为组根目录或 `ungrouped`）。仅会话内记忆：
@@ -171,7 +177,7 @@ impl WorkbenchShell {
             state: initial_state,
             panels: panels
                 .into_iter()
-                .map(|entry| (entry.kind, entry.view))
+                .map(|entry| (WorkbenchTab::new(entry.kind), entry.view))
                 .collect(),
             nav: session_nav,
             session_source,
@@ -183,6 +189,7 @@ impl WorkbenchShell {
             workspace_root,
             workspace_picker: None,
             workspace_switcher: None,
+            panel_factory: None,
             last_width_persist: None,
             collapsed_groups: HashSet::new(),
             picker_open: false,
@@ -315,7 +322,7 @@ impl WorkbenchShell {
     }
 
     pub fn has_panel(&self, kind: WorkbenchPanelKind) -> bool {
-        self.panels.contains_key(&kind)
+        self.panels.keys().any(|tab| tab.kind == kind)
     }
 
     pub fn has_session_nav(&self) -> bool {
@@ -323,17 +330,33 @@ impl WorkbenchShell {
     }
 
     pub fn set_panel(&mut self, kind: WorkbenchPanelKind, view: AnyView, cx: &mut Context<Self>) {
-        self.panels.insert(kind, view);
+        self.panels.insert(WorkbenchTab::new(kind), view);
+        cx.notify();
+    }
+
+    /// 注入多例面板工厂：为「新建页签」创建新实例视图（如新终端）。
+    /// 入参为外壳当前的工作区根目录。
+    pub fn set_panel_factory(
+        &mut self,
+        factory: impl Fn(&std::path::Path, &mut Window, &mut gpui::App) -> AnyView + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        self.panel_factory = Some(Box::new(factory));
         cx.notify();
     }
 
     /// 工具条与面板头共用的唯一入口。
     ///
     /// 页签模型：rail / 工具条打开的面板一律进右侧标签组并激活；已在其他
-    /// 落位（左/底/中心）的面板会被摘下来放进标签组。
+    /// 落位（左/底/中心）的面板会被摘下来放进标签组。单例面板重复打开
+    /// 只会定位；多例面板走定位语义（新建实例见 [`Self::pick_panel`]）。
     pub fn activate_panel(&mut self, kind: WorkbenchPanelKind, cx: &mut Context<Self>) {
         let changed = if self.state.placement_of(kind) == Some(WorkbenchPlacement::Right)
-            && self.state.right_active() == Some(kind)
+            && self
+                .state
+                .right_active()
+                .map(|tab| tab.kind)
+                == Some(kind)
         {
             false
         } else {
@@ -359,9 +382,21 @@ impl WorkbenchShell {
         self.commit(changed, cx);
     }
 
-    /// 选中右侧标签组里的某个面板。
+    /// 选中右侧标签组里的某个面板（定位到它的第一个实例）。
     pub fn select_right_tab(&mut self, kind: WorkbenchPanelKind, cx: &mut Context<Self>) {
         let changed = self.state.set_right_active(kind);
+        self.commit(changed, cx);
+    }
+
+    /// 选中右侧标签组里的某个具体实例（点击标签时用）。
+    pub fn select_right_tab_instance(&mut self, tab: WorkbenchTab, cx: &mut Context<Self>) {
+        let changed = self.state.set_right_active_tab(tab);
+        self.commit(changed, cx);
+    }
+
+    /// 关闭右侧标签组里的一个具体实例（标签上的 X）。
+    pub fn close_right_tab_instance(&mut self, tab: WorkbenchTab, cx: &mut Context<Self>) {
+        let changed = self.state.close_tab(tab);
         self.commit(changed, cx);
     }
 
@@ -411,9 +446,44 @@ impl WorkbenchShell {
     }
 
     /// 从选择面板打开一个面板：当前页签即变为该功能，选择面板随之关闭。
-    pub fn pick_panel(&mut self, kind: WorkbenchPanelKind, cx: &mut Context<Self>) {
+    ///
+    /// 多例面板（终端等）不走定位：每次点选都经工厂创建一个新实例并作为
+    /// 新标签打开。工厂未注入时退化为定位语义。
+    pub fn pick_panel(
+        &mut self,
+        kind: WorkbenchPanelKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.picker_open = false;
-        self.activate_panel(kind, cx);
+        if kind.multi_instance() {
+            self.open_new_instance_tab(kind, window, cx);
+        } else {
+            self.activate_panel(kind, cx);
+        }
+    }
+
+    /// 为多例面板创建一个新实例标签。
+    fn open_new_instance_tab(
+        &mut self,
+        kind: WorkbenchPanelKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(factory) = self.panel_factory.as_ref() else {
+            self.activate_panel(kind, cx);
+            return;
+        };
+        let root = self
+            .workspace_root
+            .clone()
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let Some(tab) = self.state.open_new_tab(kind) else {
+            return;
+        };
+        let view = factory(&root, window, cx);
+        self.panels.insert(tab, view);
+        self.commit(true, cx);
     }
 
     /// 拖拽调宽：立即重绘；落盘按 [`WIDTH_PERSIST_THROTTLE`] 节流，
