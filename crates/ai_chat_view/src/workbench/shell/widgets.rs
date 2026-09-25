@@ -16,18 +16,6 @@ pub(super) fn cycle_placement_tooltip(next: WorkbenchPlacement) -> String {
     .to_string()
 }
 
-/// 工具条按钮的提示（页签模型：点击打开/激活右侧标签组）。
-pub(super) fn rail_tooltip(
-    kind: WorkbenchPanelKind,
-    placement: Option<WorkbenchPlacement>,
-) -> String {
-    let panel = kind.title().to_string();
-    match placement {
-        None => t!("Workbench.rail_open", panel = panel).to_string(),
-        Some(_) => t!("Workbench.rail_focus_center", panel = panel).to_string(),
-    }
-}
-
 /// 标签条末尾「并排打开」按钮的提示。
 pub(super) fn pin_tooltip(kind: WorkbenchPanelKind) -> String {
     t!("Workbench.pin_right", panel = kind.title().to_string()).to_string()
@@ -43,15 +31,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rail_tooltip_distinguishes_open_and_focus_states() {
-        let closed = rail_tooltip(WorkbenchPanelKind::Files, None);
-        let open = rail_tooltip(
-            WorkbenchPanelKind::Files,
-            Some(WorkbenchPlacement::Right),
-        );
+    fn tooltips_are_localized_and_distinct() {
+        let pin = pin_tooltip(WorkbenchPanelKind::Files);
+        let close = close_tab_tooltip(WorkbenchPanelKind::Files);
 
-        assert!(!closed.is_empty());
-        assert!(!open.is_empty());
-        assert_ne!(closed, open);
+        assert!(!pin.is_empty());
+        assert!(!close.is_empty());
+        assert_ne!(pin, close);
     }
 }

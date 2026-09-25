@@ -25,10 +25,8 @@ use crate::{
     DefaultAgentChatPanel, acp_session_placeholder, acp_session_row, acp_session_section_header,
 };
 use super::super::state::{WorkbenchPanelKind, WorkbenchTab};
-use super::widgets::rail_tooltip;
 use crate::theme::AgentChatTheme;
 use super::WorkbenchShell;
-use one_core::layout::TOOLBAR_WIDTH;
 
 impl WorkbenchShell {
 
@@ -489,42 +487,6 @@ impl WorkbenchShell {
                 this.open_session_from_list(&id, workspace_root.as_deref(), cx);
             }))
             .into_any_element()
-    }
-
-    pub(super) fn render_rail(
-        &self,
-        theme: &AgentChatTheme,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
-        // 页签模型：rail 只放可停靠面板（对话是中心区主场，不进 rail），
-        // 点击一律打开/激活右侧标签组。
-        v_flex()
-            .w(TOOLBAR_WIDTH)
-            .flex_shrink_0()
-            .h_full()
-            .items_center()
-            .gap_1()
-            .py_1()
-            .border_l_1()
-            .border_color(theme.border)
-            .bg(theme.background)
-            .children(WorkbenchPanelKind::DOCKABLE.into_iter().map(|kind| {
-                let open = self.state.placement_of(kind).is_some();
-                let color = if open {
-                    theme.foreground
-                } else {
-                    theme.muted_foreground
-                };
-                IconButton::new(
-                    SharedString::from(format!("workbench-rail-{}", kind.id())),
-                    kind.icon(),
-                )
-                .role(IconButtonRole::Compact)
-                .tooltip(rail_tooltip(kind, self.state.placement_of(kind)))
-                .text_color(color)
-                .on_click(cx.listener(move |this, _, _, cx| this.activate_panel(kind, cx)))
-                .into_any_element()
-            }))
     }
 
     pub(super) fn render_content(&self, theme: &AgentChatTheme) -> gpui::AnyElement {

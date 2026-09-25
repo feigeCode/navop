@@ -225,7 +225,6 @@ impl Render for WorkbenchShell {
                         },
                     )
                 })
-                .child(self.render_rail(&theme, cx))
                 .into_any_element()
         });
 

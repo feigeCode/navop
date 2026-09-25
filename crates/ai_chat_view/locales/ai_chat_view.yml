@@ -1115,18 +1115,6 @@ Workbench:
     en: center
     zh-CN: 中心区
     zh-HK: 中央區
-  rail_open_center:
-    en: "Open %{panel} in the center"
-    zh-CN: "在中心区打开%{panel}"
-    zh-HK: "在中央區開啟%{panel}"
-  rail_close_center:
-    en: "Close %{panel}"
-    zh-CN: "关闭%{panel}"
-    zh-HK: "關閉%{panel}"
-  rail_focus_center:
-    en: "Show %{panel} in the center"
-    zh-CN: "把%{panel}切到中心区"
-    zh-HK: "把%{panel}切到中央區"
   pin_right:
     en: "Dock %{panel} to the right group"
     zh-CN: "把%{panel}并入右侧标签组"
@@ -1191,7 +1179,3 @@ Workbench:
     en: "Restore sidebar"
     zh-CN: "还原侧边栏"
     zh-HK: "還原側邊欄"
-  rail_open:
-    en: "Open %{panel}"
-    zh-CN: "打开「%{panel}」"
-    zh-HK: "打開「%{panel}」"
