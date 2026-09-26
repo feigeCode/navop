@@ -624,6 +624,18 @@ impl AgentInput {
         cx.notify();
     }
 
+    /// 设置输入框文本，不动附件、不抢焦点（会话草稿恢复专用）。
+    ///
+    /// 与 [`Self::restore_to_composer`] 的区别：那是「用户显式编辑」——要聚焦、
+    /// 要带回附件；这里是「切了个会话，输入框该显示那个会话自己的草稿」——
+    /// 只是换内容，用户正在别处打字的话不该被拽走焦点。
+    pub fn set_composer_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.input_state.update(cx, |state, cx| {
+            state.set_value(text, window, cx);
+        });
+        cx.notify();
+    }
+
     fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let text = self.input_state.read(cx).value().to_string();
         if text.trim().is_empty() && self.attachments.is_empty() {

@@ -14,15 +14,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use agent_client_protocol::schema::v1::{AvailableCommandInput, ContentBlock, ImageContent, TextContent};
 use agent_runtime::{
-    AgentResourceScope, ResourceCatalog, ResourceContext, ResourceId, ResourceKind, ResourceRef,
-    Runtime, RuntimeEvent, RuntimeEventReceiver, SessionId, TaskKind, ToolCallId,
+    AgentResourceScope, HistoryItem, ResourceCatalog, ResourceContext, ResourceId, ResourceKind,
+    ResourceRef, Runtime, RuntimeEvent, RuntimeEventReceiver, SessionId, TaskKind, ToolCallId,
     ToolExecutionMode, ToolRegistry, TurnId, UserInput,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Anchor, App, AppContext as _, Context, Entity, EventEmitter, FontWeight, InteractiveElement,
-    IntoElement, ParentElement, Render, ScrollHandle, SharedString, StatefulInteractiveElement,
-    Styled, Subscription, Task, Window, div, px,
+    Anchor, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, FontWeight,
+    InteractiveElement, IntoElement, MouseButton, NavigationDirection, ParentElement, Render,
+    ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Subscription, Task, Window,
+    div, px,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, Selectable, Sizable, WindowExt as _,
@@ -87,6 +88,7 @@ use crate::expansion_state::ExpansionState;
 use crate::find_shortcut::{
     AI_CHAT_SEARCH_CONTEXT, FindNextInTranscript, FindPreviousInTranscript, ToggleTranscriptFind,
 };
+use crate::session_shortcut::{NavigateSessionBack, NavigateSessionForward, ToggleSessionSwitcher};
 use crate::session_sidebar::{self, SessionRowStyle, SessionSummary};
 use crate::transcript_scroll::TranscriptScrollState;
 use crate::transcript_search::TranscriptSearch;
@@ -98,6 +100,8 @@ pub(crate) mod acp_sessions;
 mod acp_ui;
 mod decision_dock;
 mod findbar;
+mod session_navigation;
+mod session_switcher;
 
 use acp_options::{
     agent_option_disabled, composer_agent_options, composer_agent_options_with_status,
@@ -105,6 +109,8 @@ use acp_options::{
 };
 use acp_sessions::{acp_session_placeholder, acp_session_row, acp_session_section_header};
 use acp_ui::AcpConnectOperation;
+use session_navigation::SessionNavigation;
+use session_switcher::SessionSwitcherUi;
 
 /// Agent 聊天视图事件。
 #[derive(Clone, Debug)]
@@ -596,6 +602,17 @@ fn should_stop_task_before_session_switch(backend: Backend) -> bool {
     backend == Backend::Acp
 }
 
+/// 这次会话切换是怎么发起的——决定导航栈（后退/前进）怎么记账。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SessionSwitchOrigin {
+    /// 用户主动访问（侧栏点击 / 切换器提交 / 公共 API）：把来源压入 back 栈。
+    Visit,
+    /// 后退导航：栈已在调用前移动，切换本身不再记账。
+    Back,
+    /// 前进导航：同上。
+    Forward,
+}
+
 fn merge_live_session_summaries(
     persisted: Vec<SessionSummary>,
     live: &[SessionSummary],
@@ -962,6 +979,26 @@ pub struct AgentChatView {
     available_resources: Vec<ResourceRef>,
     transcript: AgentTranscript,
     input: Entity<AgentInput>,
+    /// 会话切换后待写入输入框的草稿；`Some` 才有动作，在下一次 `render` 应用。
+    ///
+    /// 之所以不直接写输入框：`InputState::set_value` 需要 `&mut Window`，
+    /// 而 `switch_session` / `start_fresh_session` 全链路都没有 window（改签名
+    /// 会波及十几处调用点与公共 API）。渲染恰好在切换后必然发生，把「换输入框
+    /// 内容」推迟到那一帧，语义等价且不动任何调用方。
+    pending_input_draft: Option<String>,
+    /// 上一次离开的「空白会话」，供「新建会话」复用（见 [`Self::new_session`]）。
+    ///
+    /// 只在**本地后端**记：ACP 的转录空白不代表 agent 那边没有上下文
+    /// （`session/resume` 就是不回放历史的，转录看着空、聊天记录在 agent 手里）。
+    /// 内存态，不持久化：重启后这些白纸本来就没了。
+    draft_session: Option<String>,
+    /// 会话后退/前进导航栈（见 [`session_navigation`] 模块文档）。
+    session_navigation: SessionNavigation,
+    /// 最近会话切换器的状态机（见 [`session_switcher`] 模块文档）。
+    session_switcher: SessionSwitcherUi,
+    /// 切换器 overlay 的焦点句柄：切换器打开时把焦点收进来，这样
+    /// `AgentSessionSwitcher` 上下文里的键（tab / enter / escape）才派发得到。
+    session_switcher_focus: FocusHandle,
     sessions: Vec<SessionSummary>,
     /// 会话 id → 归属工作区。创建/载入时定格，落盘时随快照写出。
     session_roots: HashMap<String, String>,
@@ -1277,6 +1314,9 @@ impl AgentChatView {
             InputState::new(window, cx).placeholder(t!("AgentUi.findbar_placeholder").to_string())
         });
 
+        // 会话切换器 overlay 的焦点句柄（打开时收焦点，让 tab/enter/escape 到位）。
+        let session_switcher_focus = cx.focus_handle();
+
         let mut subscriptions = vec![
             cx.subscribe_in(&input, window, Self::on_input_event),
             cx.subscribe(
@@ -1322,6 +1362,11 @@ impl AgentChatView {
             available_resources,
             transcript,
             input,
+            pending_input_draft: None,
+            draft_session: None,
+            session_navigation: SessionNavigation::default(),
+            session_switcher: SessionSwitcherUi::new(),
+            session_switcher_focus,
             sessions,
             live_sessions,
             session_transcripts: HashMap::new(),
@@ -1954,6 +1999,14 @@ impl AgentChatView {
         self.expansion.clear();
         self.scroll.jump_to_tail();
         let session_uid = self.current_session.clone();
+        // 文字已从输入框消费（AgentInput::submit 里清空），草稿同步作废——
+        // 否则切走再切回，已发送的半句话会「复活」回输入框。
+        if let Some(session) = self
+            .runtime
+            .session(&SessionId::from_string(session_uid.clone()))
+        {
+            session.set_draft(None);
+        }
         let submission = PendingSubmission {
             text,
             mentions,
@@ -3933,7 +3986,30 @@ impl AgentChatView {
             .detach();
             return;
         }
+        // 已经站在一张白纸上：「新建会话」不该再produce第二张白纸。
+        // （本地后端才有的判断，理由见 `current_session_is_blank`。）
+        if self.current_session_is_blank(cx) {
+            self.show_archived = false;
+            self.reload_sessions(cx);
+            cx.notify();
+            return;
+        }
+        // 上一张被留在身后的白纸还在的话，回到它——比再造一张更贴近用户预期
+        // （他上一次「新建」得到的那张纸还在，没必要给两张）。
+        let reusable_draft = self
+            .draft_session
+            .clone()
+            .filter(|uid| self.reusable_blank_session(uid));
+        if let Some(draft) = reusable_draft {
+            self.draft_session = None;
+            self.show_archived = false;
+            self.switch_session(&draft, cx);
+            return;
+        }
+        self.draft_session = None;
         // 新建前先保存当前会话,避免内容丢失。
+        // 草稿同理：先捕获再落盘，半句话跟着旧会话走。
+        self.capture_session_draft(cx);
         self.persist_current(cx);
         self.show_archived = false;
         self.start_fresh_session(cx);
@@ -3977,6 +4053,7 @@ impl AgentChatView {
             self.stop(cx);
         }
         self.stash_current_transcript();
+        let previous_session = self.current_session.clone();
         let session = self.runtime.create_session(self.resources.clone());
         self.session_id = session.id().clone();
         // 归属定格：新会话记住创建时的工作区，之后不随外壳切换而漂移。
@@ -3993,11 +4070,18 @@ impl AgentChatView {
         self.apply_system_instruction_to_current_session();
         self.sync_session_skills();
         self.current_session = self.session_id.to_string();
+        // 新建会话也是一次「主动访问」，旧会话留在后退栈里。
+        self.session_navigation
+            .visit(Some(previous_session), self.current_session.as_str());
+        self.session_switcher
+            .record_access(self.current_session.as_str());
         self.closed_sessions.remove(&self.current_session);
         self.trim_session_transcripts();
         self.transcript = AgentTranscript::new();
         self.transcript.set_resource_context(&self.resources);
         self.is_running = false;
+        // 新会话从空输入框开始（渲染时应用）。
+        self.pending_input_draft = Some(String::new());
         self.input
             .update(cx, |input, cx| input.set_running(false, cx));
         self.sync_pending_preview(cx);
@@ -4181,6 +4265,119 @@ impl AgentChatView {
         true
     }
 
+    /// 把输入框里尚未发送的文字记到当前会话上（会话草稿）。
+    ///
+    /// 调用时机：**离开当前会话之前**（切换 / 新建），且必须在 `persist_current`
+    /// 之前——落盘走 `session.snapshot()`，草稿要先写进 Runtime 会话才会被带上。
+    /// 草稿是每个会话独立的：切走再切回，输入框显示的是**那个会话自己**的
+    /// 未发送文字，而不是全局共享一块输入。
+    fn capture_session_draft(&self, cx: &App) {
+        // 上一次切换排队的草稿还没落进输入框：此刻输入框里显示的是**再上一个**
+        // 会话的文字，当成当前会话的草稿捕获就串台了。当前会话的正确草稿
+        // 仍在 Runtime 会话上（staging 只读不写），跳过即可。两次切换之间
+        // 必然没有用户输入（中间隔着一帧渲染），不会漏掉真实的编辑。
+        if self.pending_input_draft.is_some() {
+            return;
+        }
+        let text = self.input.read(cx).composer_text(cx);
+        if self.closed_sessions.contains(&self.current_session) {
+            return;
+        }
+        if let Some(session) = self
+            .runtime
+            .session(&SessionId::from_string(self.current_session.clone()))
+        {
+            session.set_draft((!text.trim().is_empty()).then(|| text));
+        }
+    }
+
+    /// 目标会话的草稿送入输入框（经 [`Self::pending_input_draft`] 在渲染时应用）。
+    ///
+    /// 没有 `window` 时只排队不写——渲染帧必然到来，见字段注释。
+    fn stage_session_draft(&mut self, uid: &str) {
+        let draft = self
+            .runtime
+            .session(&SessionId::from_string(uid.to_string()))
+            .and_then(|session| session.draft())
+            .unwrap_or_default();
+        self.pending_input_draft = Some(draft);
+    }
+
+    /// 渲染开头应用排队的草稿。只有切换会话会排队，平时是 no-op。
+    fn apply_pending_input_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(draft) = self.pending_input_draft.take() {
+            self.input
+                .update(cx, |input, cx| input.set_composer_text(&draft, window, cx));
+        }
+    }
+
+    /// `uid` 的 **Runtime 历史**是否还只有系统提示——即这个会话到底有没有被用过。
+    ///
+    /// 这是空白判定的**事实源**（不看屏幕转录）：转录可能只是留在缓存里的副本，
+    /// 或者在流式过程中短暂落后于历史。Runtime 不在这个会话时返回 `false`
+    /// （「不敢当白纸」比「误当白纸」安全得多）。
+    fn runtime_history_is_blank(&self, uid: &str) -> bool {
+        let session_id = SessionId::from_string(uid.to_string());
+        self.runtime.session(&session_id).is_some_and(|session| {
+            session
+                .snapshot()
+                .history
+                .iter()
+                .all(HistoryItem::is_system_note)
+        })
+    }
+
+    /// 当前会话是否还是一张白纸：**本地后端**、屏幕上没聊过、Runtime 历史也没聊过、
+    /// 没在跑、没有排队提交、输入框也空着。
+    ///
+    /// 只看本地后端：ACP 的转录空白并不等于 agent 那边没有上下文——`session/resume`
+    /// 按设计不回放历史，转录正是空的，可 agent 手里握着整段对话（见
+    /// [`AcpSessionContinuity::ReusedWithoutHistory`]）。把「转录空」当「会话空」，
+    /// 会让用户点「新建会话」时被静默拦下，那才是真 bug。
+    ///
+    /// 输入框非空也算「不空」：用户打了半句话再点新建，他要的是一个干净输入框；
+    /// 那半句话会跟着旧会话留在它的草稿里（见 [`Self::stage_session_draft`]），不会被吞。
+    fn current_session_is_blank(&self, cx: &App) -> bool {
+        self.backend == Backend::Local
+            && !self.transcript.has_conversation()
+            && self.runtime_history_is_blank(&self.current_session)
+            && !self.is_running
+            && self
+                .pending_submissions
+                .items(self.current_session.as_str())
+                .is_empty()
+            && self.input.read(cx).composer_text(cx).trim().is_empty()
+    }
+
+    /// 离开当前会话时，若它还是白纸就记下来当「可复用的草稿会话」。
+    ///
+    /// 不记的话，用户每点一次「+」都在侧栏留一个空条目：
+    /// 空白会话增殖是「新建会话」最容易被抱怨的地方。
+    fn remember_blank_session_on_leave(&mut self, cx: &App) {
+        if !self.current_session_is_blank(cx) {
+            return;
+        }
+        let uid = self.current_session.clone();
+        if !self.closed_sessions.contains(&uid) {
+            self.draft_session = Some(uid);
+        }
+    }
+
+    /// `uid` 是否是一张仍在运行时里、还没被聊过的白纸。
+    ///
+    /// 判据取 Runtime 的**历史**而不是屏幕转录：转录可能是切换时留在缓存里的副本，
+    /// 历史才是「这个会话到底说过话没有」的事实源。
+    fn reusable_blank_session(&self, uid: &str) -> bool {
+        if uid == self.current_session
+            || self.closed_sessions.contains(uid)
+            || self.running_sessions.contains(uid)
+            || !self.pending_submissions.items(uid).is_empty()
+        {
+            return false;
+        }
+        self.runtime_history_is_blank(uid)
+    }
+
     /// 切回本地后端时把该会话的本地转录放回屏幕。
     ///
     /// 顺序：内存缓存（离开本地时 stash 的）→ Runtime 快照重建 → 清空。
@@ -4235,11 +4432,67 @@ impl AgentChatView {
         self.runtime.close_session(&session_id);
         self.pending_submissions.remove_session(uid);
         self.remove_cached_session_transcript(uid);
+        // 这张纸没了，别再拿它当「可复用的空白草稿」。
+        if self.draft_session.as_deref() == Some(uid) {
+            self.draft_session = None;
+        }
         self.live_sessions.retain(|summary| summary.id != uid);
+        // 会话没了：导航栈里也不能再有它，否则后退会落到一个不存在的会话。
+        self.session_navigation.remove(uid);
+        // 切换器的 recency / 列表同样要清。
+        self.session_switcher.remove(uid);
     }
 
     /// 切换到另一个(已持久化的)会话:保存当前 → 加载快照恢复 → 重建转录。
     fn switch_session(&mut self, uid: &str, cx: &mut Context<Self>) {
+        self.switch_session_with_origin(uid, SessionSwitchOrigin::Visit, cx);
+    }
+
+    /// 后退/前进导航：切换到导航栈给出的目标。
+    ///
+    /// 栈的移动（go_back/go_forward）发生在调用**之前**，这里只负责切换本身，
+    /// 不再向 back 栈压入当前会话——否则后退会变成「来回横跳永不收敛」。
+    fn navigate_session(&mut self, uid: &str, cx: &mut Context<Self>, origin: SessionSwitchOrigin) {
+        debug_assert!(
+            origin != SessionSwitchOrigin::Visit,
+            "导航路径不该走 Visit 语义"
+        );
+        self.switch_session_with_origin(uid, origin, cx);
+    }
+
+    /// 会话后退；没有可退的目标时是 no-op（不是错误）。
+    fn navigate_session_back(&mut self, cx: &mut Context<Self>) {
+        let current = self.current_session.clone();
+        if self
+            .session_navigation
+            .back_target()
+            .is_some_and(|target| target != current)
+            && let Some(target) = self.session_navigation.go_back(&current)
+        {
+            self.navigate_session(&target, cx, SessionSwitchOrigin::Back);
+        }
+    }
+
+    /// 会话前进；没有可进的目标时是 no-op。
+    fn navigate_session_forward(&mut self, cx: &mut Context<Self>) {
+        let current = self.current_session.clone();
+        if self
+            .session_navigation
+            .forward_target()
+            .is_some_and(|target| target != current)
+            && let Some(target) = self.session_navigation.go_forward(&current)
+        {
+            self.navigate_session(&target, cx, SessionSwitchOrigin::Forward);
+        }
+    }
+
+    /// 切换会话的统一实现。`origin` 决定导航栈怎么记账（见 [`SessionSwitchOrigin`]）。
+    fn switch_session_with_origin(
+        &mut self,
+        uid: &str,
+        origin: SessionSwitchOrigin,
+        cx: &mut Context<Self>,
+    ) {
         // 侧边栏视图:从历史 Popover 选择后随即收起。
         self.history_popover_open = false;
         if uid == self.current_session {
@@ -4247,9 +4500,15 @@ impl AgentChatView {
             cx.notify();
             return;
         }
+        let previous_session = self.current_session.clone();
+        // 把「离开的是一张白纸」记下来（判定要在 `transcript` 被换掉之前做）。
+        self.remember_blank_session_on_leave(cx);
         if self.is_running && should_stop_task_before_session_switch(self.backend) {
             self.stop(cx);
         }
+        // 草稿必须先于落盘捕获：persist_current 走 session.snapshot()，
+        // 晚一步这次切换产生的草稿就不会进快照。
+        self.capture_session_draft(cx);
         self.persist_current(cx);
         self.stash_current_transcript();
 
@@ -4288,6 +4547,17 @@ impl AgentChatView {
         });
         self.system_instruction_from_settings = target.system_instruction().is_none();
         self.current_session = self.session_id.to_string();
+        // 只有「用户主动访问」才进导航历史；后退/前进本身不动栈（栈在调用前已移动）。
+        if origin == SessionSwitchOrigin::Visit {
+            self.session_navigation
+                .visit(Some(previous_session), self.current_session.as_str());
+            // 用户已经点了别的会话：切换器不再悬着（提交守卫之外的主动关闭）。
+            self.session_switcher.dismiss();
+        }
+        // recency：无论来源（点击 / 后退 / 前进 / 切换器），都是一次真实访问。
+        self.session_switcher.record_access(uid);
+        // 切换已成立：输入框换显示目标会话自己的草稿（渲染时应用）。
+        self.stage_session_draft(uid);
         self.apply_system_instruction_to_current_session();
         if let Some(transcript) = self.remove_cached_session_transcript(uid)
             && !transcript.is_empty()
@@ -5378,6 +5648,8 @@ fn unix_now_secs() -> i64 {
 
 impl Render for AgentChatView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // 会话切换排队的草稿在第一帧应用（见 `pending_input_draft` 字段注释）。
+        self.apply_pending_input_draft(window, cx);
         if self.auto_scroll.take_pending_for_render() {
             self.scroll_handle.scroll_to_bottom();
         }
@@ -5501,6 +5773,33 @@ impl Render for AgentChatView {
                         this.step_search(false, cx);
                     }),
                 )
+                // 会话导航：cmd-[ / cmd-]（可自定义）与鼠标后退/前进键。
+                .on_action(cx.listener(|this, _: &NavigateSessionBack, _, cx| {
+                    this.navigate_session_back(cx);
+                }))
+                .on_action(cx.listener(|this, _: &NavigateSessionForward, _, cx| {
+                    this.navigate_session_forward(cx);
+                }))
+                .on_action(cx.listener(|this, _: &ToggleSessionSwitcher, window, cx| {
+                    this.toggle_session_switcher(window, cx);
+                }))
+                .on_mouse_down(
+                    MouseButton::Navigate(NavigationDirection::Back),
+                    cx.listener(|this, _, _, cx| {
+                        this.navigate_session_back(cx);
+                    }),
+                )
+                .on_mouse_down(
+                    MouseButton::Navigate(NavigationDirection::Forward),
+                    cx.listener(|this, _, _, cx| {
+                        this.navigate_session_forward(cx);
+                    }),
+                )
+                // 最近会话切换器 overlay。
+                .when_some(
+                    self.render_session_switcher(&chat_theme, cx),
+                    |root, overlay| root.child(overlay),
+                )
                 .child(
                     v_flex()
                         .debug_selector(|| "agent-sidebar-stack".to_string())
@@ -5550,6 +5849,33 @@ impl Render for AgentChatView {
                     cx.listener(|this, _: &FindPreviousInTranscript, _, cx| {
                         this.step_search(false, cx);
                     }),
+                )
+                // 会话导航：cmd-[ / cmd-]（可自定义）与鼠标后退/前进键。
+                .on_action(cx.listener(|this, _: &NavigateSessionBack, _, cx| {
+                    this.navigate_session_back(cx);
+                }))
+                .on_action(cx.listener(|this, _: &NavigateSessionForward, _, cx| {
+                    this.navigate_session_forward(cx);
+                }))
+                .on_action(cx.listener(|this, _: &ToggleSessionSwitcher, window, cx| {
+                    this.toggle_session_switcher(window, cx);
+                }))
+                .on_mouse_down(
+                    MouseButton::Navigate(NavigationDirection::Back),
+                    cx.listener(|this, _, _, cx| {
+                        this.navigate_session_back(cx);
+                    }),
+                )
+                .on_mouse_down(
+                    MouseButton::Navigate(NavigationDirection::Forward),
+                    cx.listener(|this, _, _, cx| {
+                        this.navigate_session_forward(cx);
+                    }),
+                )
+                // 最近会话切换器 overlay。
+                .when_some(
+                    self.render_session_switcher(&chat_theme, cx),
+                    |root, overlay| root.child(overlay),
                 )
                 .child(
                     h_flex().size_full().when_some(sidebar, |this, sidebar| this.child(sidebar)).child(
@@ -8975,6 +9301,270 @@ mod tests {
                     matches!(&message.content, content if content.contains("第一段会话的话"))
                 }),
                 "空壳缓存不能遮蔽 Runtime 快照"
+            );
+        });
+    }
+
+    /// 会话草稿跟随会话：切走时捕获到 Runtime 会话，切回来时回到输入框。
+    /// 每个会话各存各的，互不串台。
+    #[gpui::test]
+    fn switching_sessions_carries_the_composer_draft_per_session(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update_in(cx, |view, window, cx| {
+            let first = view.current_session.clone();
+            let first_id = view.session_id.clone();
+            view.input.update(cx, |input, cx| {
+                input.set_composer_text("第一个会话的半句话", window, cx)
+            });
+            // 第一个会话有了历史（否则不会被持久化），草稿才有落盘意义。
+            view.runtime
+                .session(&first_id)
+                .expect("first session is live")
+                .record_user_input("第一段会话的话");
+
+            // 新建会话：输入框应清空（新会话没有草稿）。
+            view.new_session(cx);
+            let second = view.current_session.clone();
+            assert_ne!(first, second);
+            view.apply_pending_input_draft(window, cx);
+            assert_eq!(
+                view.input.read(cx).composer_text(cx),
+                "",
+                "新会话必须从空输入框开始"
+            );
+
+            // 在第二个会话里留半句，再切回第一个。
+            view.input.update(cx, |input, cx| {
+                input.set_composer_text("第二个会话的半句话", window, cx)
+            });
+            view.switch_session(&first, cx);
+            view.apply_pending_input_draft(window, cx);
+            assert_eq!(
+                view.input.read(cx).composer_text(cx),
+                "第一个会话的半句话",
+                "切回来必须恢复该会话自己的草稿"
+            );
+
+            // 两个会话的 Runtime 草稿互不覆盖。
+            assert_eq!(
+                view.runtime
+                    .session(&SessionId::from_string(first.clone()))
+                    .expect("first still live")
+                    .draft()
+                    .as_deref(),
+                Some("第一个会话的半句话")
+            );
+            assert_eq!(
+                view.runtime
+                    .session(&SessionId::from_string(second.clone()))
+                    .expect("second still live")
+                    .draft()
+                    .as_deref(),
+                Some("第二个会话的半句话")
+            );
+        });
+    }
+
+    /// 只有系统提示的转录不算「聊过」：否则「正在创建 ACP 会话」这类提示
+    /// 会让空白会话看起来像有内容，空白复用与切后端提示都会跟着错。
+    #[test]
+    fn a_transcript_with_only_system_notes_has_no_conversation() {
+        let mut transcript = AgentTranscript::new();
+        assert!(!transcript.has_conversation(), "空转录当然没聊过");
+        transcript.push_system("正在创建 ACP 会话");
+        assert!(!transcript.has_conversation(), "只有系统提示不算聊过");
+        transcript.push_user("你好", 0);
+        assert!(transcript.has_conversation());
+    }
+
+    /// 已经站在一张白纸上时点「新建会话」是 no-op：否则每点一次就多一张
+    /// 侧栏里的空条目。
+    #[gpui::test]
+    fn new_session_on_an_untouched_blank_session_does_not_pile_up_sessions(
+        cx: &mut TestAppContext,
+    ) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update_in(cx, |view, _window, cx| {
+            let first = view.current_session.clone();
+            assert!(
+                view.current_session_is_blank(cx),
+                "刚打开的会话就是一张白纸"
+            );
+            view.new_session(cx);
+            assert_eq!(
+                first, view.current_session,
+                "白纸上再点一次「新建」不该produce第二张纸"
+            );
+            assert_eq!(None, view.draft_session, "no-op 不该留下草稿指针");
+        });
+    }
+
+    /// 只有系统提示的历史仍算白纸。这条真会出现在落盘数据里：一段只跑到
+    /// 「正在创建 ACP 会话」就失败、或者只有系统告示的会话，往返回来就是
+    /// `HistoryItem::System`。把它判成「聊过」会让白纸复用失效、侧栏开始堆空条目。
+    #[gpui::test]
+    fn a_session_whose_history_is_only_system_notes_is_still_reusable(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update_in(cx, |view, _window, _cx| {
+            let uid = "sess_system_only";
+            view.runtime
+                .restore_session(agent_runtime::SessionSnapshot {
+                    id: SessionId::from_string(uid),
+                    resources: ResourceContext::new(),
+                    history: vec![HistoryItem::System("正在创建 ACP 会话".into())],
+                    plan: None,
+                    system_instruction: None,
+                    skills: agent_runtime::SkillContext::new(),
+                    workspace_root: None,
+                    draft: None,
+                });
+
+            assert!(
+                view.runtime_history_is_blank(uid),
+                "只挂了一条系统提示 = 还是白纸"
+            );
+            assert!(
+                view.reusable_blank_session(uid),
+                "白纸应当可以被「新建会话」复用"
+            );
+
+            // 真聊过之后就不再是白纸。
+            view.runtime
+                .session(&SessionId::from_string(uid))
+                .expect("restored session is live")
+                .record_user_input("你好");
+            assert!(!view.runtime_history_is_blank(uid));
+            assert!(!view.reusable_blank_session(uid), "聊过的会话不能复用");
+        });
+    }
+
+    /// 离开一张白纸后，再点「新建会话」要回到那张纸，而不是造第三张。
+    #[gpui::test]
+    fn new_session_reuses_the_blank_session_left_behind(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update_in(cx, |view, window, cx| {
+            let first = view.current_session.clone();
+            let first_id = view.session_id.clone();
+            view.runtime
+                .session(&first_id)
+                .expect("first session is live")
+                .record_user_input("第一段会话的话");
+
+            // 第一个会话聊过了：新建必须真的产生第二张纸。
+            view.new_session(cx);
+            let blank = view.current_session.clone();
+            assert_ne!(first, blank);
+            view.apply_pending_input_draft(window, cx);
+
+            // 离开这张白纸去看第一个会话：它应当被记成可复用的草稿。
+            view.switch_session(&first, cx);
+            assert_eq!(
+                Some(blank.clone()),
+                view.draft_session,
+                "离开的空白会话要被记下来"
+            );
+
+            // 再点「新建」：回到那张纸，不是造第三张。
+            view.new_session(cx);
+            assert_eq!(blank, view.current_session, "应当复用被留在身后的白纸");
+            assert_eq!(None, view.draft_session, "草稿被消费后要清掉");
+        });
+    }
+
+    /// 记下的白纸一旦真有了历史，就不能再被当白纸复用——否则「新建会话」
+    /// 会把用户送进一段他以为已经清空的对话。
+    #[gpui::test]
+    fn a_recorded_blank_session_stops_being_reusable_once_it_has_history(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update_in(cx, |view, _window, cx| {
+            let first = view.current_session.clone();
+            let first_id = view.session_id.clone();
+            view.runtime
+                .session(&first_id)
+                .expect("first session is live")
+                .record_user_input("第一段会话的话");
+
+            view.new_session(cx);
+            let blank = view.current_session.clone();
+            view.switch_session(&first, cx);
+            assert_eq!(Some(blank.clone()), view.draft_session);
+
+            // 模拟后台在这张「白纸」上落了内容（跑完的一轮 / 恢复的提交）。
+            view.runtime
+                .session(&SessionId::from_string(blank.clone()))
+                .expect("blank session is live")
+                .record_user_input("其实已经聊过了");
+
+            view.new_session(cx);
+            assert_ne!(
+                blank, view.current_session,
+                "已经有历史的会话不能再当白纸复用"
+            );
+            assert_eq!(None, view.draft_session, "失效的草稿指针要清掉");
+        });
+    }
+
+    /// 后退/前进沿访问历史走：a → b → c，后退两次、前进两次，栈空后 no-op；
+    /// 会话消失后导航栈里不残留它的痕迹。
+    #[gpui::test]
+    fn session_back_and_forward_navigation_walks_the_visit_history(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update(cx, |view, cx| {
+            let a = view.current_session.clone();
+            view.start_fresh_session(cx);
+            let b = view.current_session.clone();
+            view.start_fresh_session(cx);
+            let c = view.current_session.clone();
+
+            view.navigate_session_back(cx);
+            assert_eq!(b, view.current_session, "第一次后退回到上一个会话");
+            view.navigate_session_back(cx);
+            assert_eq!(a, view.current_session, "第二次后退回到最初会话");
+            view.navigate_session_forward(cx);
+            assert_eq!(b, view.current_session, "前进逐步恢复");
+            view.navigate_session_forward(cx);
+            assert_eq!(c, view.current_session, "前进恢复到最新");
+
+            // 栈空时是 no-op，不是错误。
+            view.navigate_session_forward(cx);
+            assert_eq!(c, view.current_session);
+
+            // 会话被删除/归档：导航栈里不能有它，后退要跳过它。
+            view.session_navigation.remove(&a);
+            view.navigate_session_back(cx);
+            assert_eq!(
+                b, view.current_session,
+                "a 已消失，后退应直接落到 b（而不是 a）"
             );
         });
     }

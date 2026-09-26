@@ -694,6 +694,35 @@
 - **验证方式**：`cargo test -p ai_chat_view --lib agent_view::`（`leaving_local_backend_stashes_the_local_transcript`、`returning_to_local_restores_the_stashed_transcript`、`returning_to_local_rebuilds_from_runtime_when_cache_is_gone`、`an_empty_session_cache_does_not_shadow_the_runtime_history`、`switching_sessions_rebuilds_when_the_cached_transcript_is_empty`、`switching_back_to_local_explains_where_the_agent_conversation_went`、`switching_to_acp_tells_the_user_where_the_local_context_goes`、`switching_to_acp_stays_quiet_when_the_local_session_is_empty`）。**这些用例必须做变异检查**：往提示条件里撒 `&& false` 应变红对应用例、「空会话保持安静」那个应仍绿；去掉两处 `is_empty()` 判定应变红空壳用例——不然「绿」不能证明保护生效。
 - **适用范围**：`crates/ai_chat_view/src/agent_view.rs`（`stash_current_transcript` / `restore_local_transcript`）、`crates/ai_chat_view/src/agent_view/acp_ui.rs`（`begin_acp_connect` / `select_local_backend_for_session`），以及任何「同一视图承载多种后端、需要来回切换」的改造。
 
+- **标题**：判断「这个会话还没聊过」要以 Runtime 历史为事实源，不能用屏幕转录
+- **触发信号**：给 AI 会话做「空白会话不增殖 / 复用没动过的会话 / 每会话独立草稿」时，判空只看 `transcript.has_conversation()` 或屏幕上的消息列表；或测试里用「空转录」造出空白会话就以为覆盖到了。
+- **根因 / 约束**：视图的 `transcript` 只是屏幕（切后端 / 切会话会被 stash / restore，见上一条经验），**真相在 `runtime` 的会话快照**。两个典型误判：①会话历史里只有系统提示 / 内部说明时，屏幕上看确实「没内容」，但 Runtime 已有一条 `HistoryItem::System`；②缓存被清后转录为空，而模型其实记得。只看屏幕会把这两种情况判成「空白」，进而复用掉一个用户其实已经用过的会话（或反过来，把一个空白会话当成有内容的而永不复用 → 空白会话增殖）。
+- **正确做法**：判据函数以 `runtime.session(&SessionId::from_string(uid)).snapshot().history` 为事实源；「空白」定义成「所有历史项都只是系统提示」，并用**白名单**表达：`HistoryItem::is_system_note()` = `matches!(self, HistoryItem::System(_))`。**必须是白名单而不是黑名单**——新增历史变体时默认「不算空白」，宁可不复用，也不要把用户内容误吞进一个被反复复用的壳里。
+- **验证方式**：除「空历史」用例外，**必须补一条「历史里只有系统提示时仍然可复用」的用例**（用 `restore_session` 造只含 `HistoryItem::System` 的快照）。本次变异（把 `is_system_note` 改成恒 `false`）暴露了盲区：`agent_runtime` 的测试变红，而 `ai_chat_view` 侧**全绿**——只覆盖「空历史」的视图测试抓不到这个 bug。补测后才变红。
+- **适用范围**：`crates/agent_runtime/src/history.rs`（`is_system_note`）、`crates/agent_runtime/src/runtime/session.rs`、`crates/ai_chat_view/src/agent_view.rs`（`runtime_history_is_blank` / `current_session_is_blank` / `reusable_blank_session`），以及任何「会话是否为空」的判断。
+
+- **标题**：会话草稿的时序不变量：capture 必须在 persist 之前；需要 `&mut Window` 的恢复动作放到 render
+- **触发信号**：给会话切换加「保留 / 恢复未发送的输入」；或发现切回来草稿没了、或两个会话的草稿串台；或想恢复输入却卡在 `InputState::set_value` 需要 `&mut Window`、而 `switch_session` 全链路只有 `&App`。
+- **根因 / 约束**：草稿要落盘就得走 `session.snapshot()`，所以 `capture_session_draft` **必须排在 `persist_current` 之前**——反了就会把「已被清空」的状态存下去。恢复侧若为了拿 window 去改 `switch_session` 的签名，会波及十几处调用点，得不偿失。
+- **正确做法**：`capture_session_draft` 先于 `persist_current`；恢复不改进切换链路签名，而是把待应用草稿存进 `pending_input_draft: Option<String>` 字段，等在 `render`（那里有 `&mut Window`）里由 `apply_pending_input_draft` 应用。**发送成功后必须 `set_draft(None)`**，否则「已经发出去的内容」会在切回来时复活。另外给输入框加一个**无副作用**的写入口（不聚焦、不动附件），不要复用「用户操作」语义的方法。
+- **验证方式**：`cargo test -p ai_chat_view --lib agent_view::`（`switching_sessions_carries_the_composer_draft_per_session`）、`cargo test -p agent_runtime`（快照 `draft` 往返）。变异：去掉 `capture` / 去掉 `set_draft(None)` 应分别变红。
+- **适用范围**：`crates/ai_chat_view/src/agent_view.rs`、`crates/ai_chat_view/src/input/agent_input.rs`（`set_composer_text`）、`crates/agent_runtime/src/runtime/session.rs`（`SessionSnapshot.draft`）。
+
+- **标题**：新增可自定义快捷键要三处同源：绑定层常量 → 设置页条目 → 词条
+- **触发信号**：给某个视图新增一个用户可改的快捷键；或设置页里显示的键位和真正按下去生效的不一致；或新增 `ShortcutEntry` 后忘了写词条，界面上直接显示 `Settings.Shortcuts.xxx`。
+- **根因 / 约束**：默认键有三个可能各写一份的地方（绑定层的 `KeyBinding::new` 字面量、设置页的 `keys_macos` / `keys_other` 字面量、`main/locales/main.yml` 词条）。三份各自漂移的后果是「设置页显示 A、实际生效 B」，且**只有用户按了才知道**。
+- **正确做法**：默认键只在绑定层定义一次（`pub const X_MACOS` / `X_OTHER`，再给一个 `*_defaults_for_platform(is_macos)` 供设置页取），设置页的 `ShortcutEntry` **直接引用该常量**、不写字面量；平台分栏必须按 `is_macos` 分别取（别把两栏接反）。配套两条守卫测试：①设置页条目在 `is_macos` 两个取值下都等于绑定层该平台的默认值；②每个 `label_key` 都能在 yml 里解析出文案（`assert_ne!(key, t!(key))`——`t!` 找不到词条时会把 key 原样吐回）。
+- **验证方式**：变异两条都要变红：把某个条目的 `keys_macos` / `keys_other` **对调**（本次实测变红并打出 `left: ["ctrl-["] right: ["cmd-["]`）、把 yml 里某个词条**改名**（本次实测变红）。命令：`cargo test -p main ai_chat_session_shortcut`。
+- **适用范围**：`crates/ai_chat_view/src/find_shortcut.rs`、`crates/ai_chat_view/src/session_shortcut.rs`、`crates/core/src/keybindings.rs`（`action_id`）、`main/src/setting_tab.rs`（`*_SHORTCUTS` + `tests`）、`main/locales/main.yml`、`main/src/navop_app.rs`（`refresh_keybindings` 调用点）。
+
+- **标题**：改「导航栈 / 最近使用序」这类纯状态机时，抽成无 GPUI 依赖的独立模块再测
+- **触发信号**：给视图加后退 / 前进、最近会话切换器（Ctrl-Tab 风格 overlay）、最近使用排序；或发现这类逻辑混在 `agent_view.rs` 里根本没法脱离 GPUI 测。
+- **根因 / 约束**：`agent_view.rs` 已近万行，塞进去的状态机既难测也难复用。而这类逻辑（栈、ring、截断、去重、失效剪枝）**完全不需要 GPUI**，放独立文件后可以纯 `#[test]` 覆盖边界。
+- **正确做法**：抽 `SessionNavigation`（`back` / `forward` 两个 `Vec<String>`；`visit` 压 back 并**清空 forward**——浏览器同款语义；`go_back` / `go_forward` 先移栈再返回；被删会话在**两个栈都要清**）与 `SessionSwitcherUi`（当前会话置顶 + recency 序 + 去重 + 上限 10；打开时高亮「上一个会话」；被删条目删除后高亮要留在邻居上）。视图层只做「把动作翻译成状态机调用」。
+- **验证方式**：`cargo test -p ai_chat_view --lib agent_view::session_navigation agent_view::session_switcher`。变异：注释掉 `forward.clear()` 或 `retain()` 应各变红——这次实测确认。
+- **注意事项**：`ctrl-tab` 在本应用是**工作台 Tab 切换的全局键**，会话切换器不能抢（用 `cmd-shift-j` / `ctrl-shift-j`），并把这条写成测试（`the_switcher_default_does_not_shadow_the_app_tab_switcher`）钉住，防止后人改回去。
+- **适用范围**：`crates/ai_chat_view/src/agent_view/session_navigation.rs`、`crates/ai_chat_view/src/agent_view/session_switcher.rs`，以及任何新增的视图级 overlay / 历史导航。新增这类文件**必须自己先跑 rustfmt 到 clean**（见上面格式化那条经验的双断言探针）。
+
 ### 执行原则
 
 1. 先澄清，再实现；先缩小边界，再扩展范围。

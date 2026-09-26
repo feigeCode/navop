@@ -1059,6 +1059,14 @@ AgentUi:
     en: "Showing the first %{max} matches only"
     zh-CN: "仅显示前 %{max} 处匹配"
     zh-HK: "僅顯示前 %{max} 處匹配"
+  session_switcher_hint:
+    en: Tab / ↑↓ to choose · Enter or release the modifier to switch · Esc to cancel
+    zh-CN: Tab / ↑↓ 选择 · 回车或松开修饰键切换 · Esc 取消
+    zh-HK: Tab / ↑↓ 選擇 · 回車或放開修飾鍵切換 · Esc 取消
+  session_switcher_current:
+    en: current
+    zh-CN: 当前
+    zh-HK: 目前
 
 HtmlPreview:
   copy_html:

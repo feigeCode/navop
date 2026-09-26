@@ -46,6 +46,13 @@ pub struct SessionSnapshot {
     /// 旧快照没有该字段，反序列化为 `None`（侧栏归入「未分组」）。
     #[serde(default)]
     pub workspace_root: Option<String>,
+    /// 用户在输入框里**尚未发送**的文字（会话草稿）。
+    ///
+    /// 切换会话时由视图捕获/恢复；随快照落盘，重启后回到对应会话仍能看到。
+    /// 空白会话不落盘（持久化层跳过空历史快照），所以空白会话的草稿只在
+    /// 本次进程内有效——这是刻意的：navop 的空白会话是瞬态的，不进列表。
+    #[serde(default)]
+    pub draft: Option<String>,
 }
 
 /// 一次会话。
@@ -56,6 +63,7 @@ pub struct Session {
     skills: Mutex<SkillContext>,
     input_queue: Mutex<InputQueue>,
     turns: Mutex<TurnState>,
+    draft: Mutex<Option<String>>,
     events: RuntimeEventSender,
 }
 
@@ -68,6 +76,7 @@ impl Session {
             skills: Mutex::new(SkillContext::new()),
             input_queue: Mutex::new(InputQueue::new()),
             turns: Mutex::new(TurnState::default()),
+            draft: Mutex::new(None),
             events,
         })
     }
@@ -88,6 +97,7 @@ impl Session {
             skills: Mutex::new(snapshot.skills),
             input_queue: Mutex::new(InputQueue::new()),
             turns: Mutex::new(TurnState::default()),
+            draft: Mutex::new(snapshot.draft),
             events,
         })
     }
@@ -116,6 +126,7 @@ impl Session {
             // 会话归属由持久化层在落盘时按「首存定格」规则补写，见
             // ai_chat_view::persistence::save_session_with_workspace。
             workspace_root: None,
+            draft: self.draft(),
         }
     }
 
@@ -176,6 +187,25 @@ impl Session {
             .lock()
             .expect("session 锁中毒")
             .system_instruction = instruction;
+    }
+
+    // ===== 输入草稿 =====
+
+    /// 当前未发送的输入草稿；`None` 表示没有。
+    ///
+    /// 纯空白的草稿被视为没有草稿（与「空输入框」同义），避免切走再切回
+    /// 后输入框凭空多出一段不可见的空白。
+    pub fn draft(&self) -> Option<String> {
+        self.draft
+            .lock()
+            .expect("session 锁中毒")
+            .clone()
+            .filter(|text| !text.trim().is_empty())
+    }
+
+    /// 覆盖输入草稿。传 `None` 或纯空白即清除。
+    pub fn set_draft(&self, draft: Option<String>) {
+        *self.draft.lock().expect("session 锁中毒") = draft.filter(|text| !text.trim().is_empty());
     }
 
     pub fn set_last_error(&self, error: Option<String>) {
@@ -544,6 +574,38 @@ mod tests {
         let restored_plan = restored.current_plan().expect("应恢复出当前计划");
         assert_eq!(restored_plan.goal, "查询连接数");
         assert_eq!(restored_plan.steps.len(), 1);
+    }
+
+    #[test]
+    fn draft_round_trips_through_snapshot_and_restores() {
+        let (session, _rx) = test_session();
+        // 新会话没有草稿。
+        assert_eq!(session.draft(), None);
+
+        // 草稿不 trim 内容（打字中途的前导空白可能是刻意的），只把纯空白归一为无草稿。
+        session.set_draft(Some("  帮我查一下连接数  ".into()));
+        assert_eq!(session.draft().as_deref(), Some("  帮我查一下连接数  "));
+        session.set_draft(Some("   ".into()));
+        assert_eq!(session.draft(), None);
+        session.set_draft(None);
+        assert_eq!(session.draft(), None);
+
+        session.set_draft(Some("未发送的文字".into()));
+        let snapshot = session.snapshot();
+        assert_eq!(snapshot.draft.as_deref(), Some("未发送的文字"));
+        let json = serde_json::to_string(&snapshot).expect("快照应可序列化为 JSON");
+        let parsed: SessionSnapshot = serde_json::from_str(&json).expect("JSON 应可反序列化回快照");
+        let (tx, _rx2) = tokio::sync::broadcast::channel(16);
+        let restored = Session::restore(parsed, tx);
+        assert_eq!(restored.draft().as_deref(), Some("未发送的文字"));
+    }
+
+    #[test]
+    fn legacy_snapshot_without_draft_field_deserializes_to_none() {
+        let json = r#"{"id":"sess_x","history":[]}"#;
+        let parsed: SessionSnapshot =
+            serde_json::from_str(json).expect("旧快照(无 draft 字段)应可反序列化");
+        assert_eq!(parsed.draft, None);
     }
 }
 

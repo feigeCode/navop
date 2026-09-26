@@ -137,6 +137,7 @@ fn load_legacy_chat_snapshot(cx: &App, uid: &str) -> Option<SessionSnapshot> {
         system_instruction: None,
         skills: agent_runtime::SkillContext::new(),
         workspace_root: None,
+        draft: None,
     })
 }
 
@@ -206,6 +207,7 @@ mod tests {
             system_instruction: None,
             skills: agent_runtime::SkillContext::new(),
             workspace_root: None,
+            draft: None,
         }
     }
 
@@ -279,6 +281,7 @@ mod tests {
             system_instruction: None,
             skills: agent_runtime::SkillContext::new(),
             workspace_root: None,
+            draft: None,
         };
         assert_eq!(derive_title(&snap), "新 Agent 会话");
     }
@@ -360,6 +363,26 @@ mod tests {
             first_saved_at, second_saved_at,
             "saving an unchanged snapshot during navigation must not make the conversation look newly active"
         );
+    }
+
+    #[gpui::test]
+    fn draft_round_trips_through_the_session_repository(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(GlobalStorageState {
+                storage: test_storage(),
+            });
+        });
+
+        let session = test_session();
+        session.record_user_input("已有消息");
+        session.set_draft(Some("还没发送的半句话".into()));
+        cx.update(|cx| save_session_with_workspace(cx, &session, None))
+            .expect("save session");
+
+        let loaded = cx
+            .update(|cx| load_snapshot(cx, "sess_persist"))
+            .expect("load snapshot");
+        assert_eq!(loaded.draft.as_deref(), Some("还没发送的半句话"));
     }
 
     #[gpui::test]

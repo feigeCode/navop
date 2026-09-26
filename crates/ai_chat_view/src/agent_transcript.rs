@@ -21,7 +21,7 @@ use crate::agent_cards::{
 };
 use crate::agent_tool_input::build_tool_input_display;
 use crate::code_block::extract_fenced_code_blocks;
-use crate::{ChatMessageUI, MessageVariant, parse_chart_json_block};
+use crate::{ChatMessageUI, ChatRole, MessageVariant, parse_chart_json_block};
 
 mod acp;
 
@@ -186,6 +186,17 @@ impl AgentTranscript {
     /// 让「切回本地」看起来像历史丢了。
     pub fn is_empty(&self) -> bool {
         self.messages.is_empty()
+    }
+
+    /// 屏幕上是否已经有「真正的对话」——用户或助手说过话。
+    ///
+    /// 与 [`Self::is_empty`] 的差别：只有系统提示（「正在创建 ACP 会话」之类）时
+    /// 这仍然是 `false`。「新建会话」要不要复用上一张白纸就看这条，
+    /// 见 `AgentChatView::current_session_is_blank`。
+    pub fn has_conversation(&self) -> bool {
+        self.messages
+            .iter()
+            .any(|message| matches!(message.role, ChatRole::User | ChatRole::Assistant))
     }
 
     /// 当前未决的决策清单：时间线卡片与输入区决策栏**共用**这一份。

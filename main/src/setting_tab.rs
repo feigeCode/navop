@@ -3284,6 +3284,27 @@ const AI_CHAT_SHORTCUTS: &[ShortcutEntry] = &[
         action_id: Some(action_id::AI_CHAT_FIND_PREVIOUS),
         system_hotkey: false,
     },
+    ShortcutEntry {
+        keys_macos: ai_chat_view::SESSION_BACK_MACOS,
+        keys_other: ai_chat_view::SESSION_BACK_OTHER,
+        label_key: "Settings.Shortcuts.ai_chat_session_back",
+        action_id: Some(action_id::AI_CHAT_SESSION_BACK),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: ai_chat_view::SESSION_FORWARD_MACOS,
+        keys_other: ai_chat_view::SESSION_FORWARD_OTHER,
+        label_key: "Settings.Shortcuts.ai_chat_session_forward",
+        action_id: Some(action_id::AI_CHAT_SESSION_FORWARD),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: ai_chat_view::SESSION_SWITCHER_MACOS,
+        keys_other: ai_chat_view::SESSION_SWITCHER_OTHER,
+        label_key: "Settings.Shortcuts.ai_chat_session_switcher",
+        action_id: Some(action_id::AI_CHAT_SESSION_SWITCHER),
+        system_hotkey: false,
+    },
 ];
 
 const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
@@ -3795,6 +3816,64 @@ mod tests {
         assert_eq!(entry.keys_macos, &["cmd-a"]);
         assert_eq!(entry.keys_other, &["ctrl-a"]);
         assert!(!entry.system_hotkey);
+    }
+
+    /// AI 会话的三条会话键：设置页展示的默认值必须与绑定层同源。
+    ///
+    /// `AI_CHAT_SHORTCUTS` 直接引用 `ai_chat_view::SESSION_*` 常量，所以这条真正
+    /// 钉的是「macOS / 其他 两栏有没有接反」与「三条动作有没有漏进设置页」——
+    /// 接反了用户会在 macOS 上看到 `ctrl-[`，而真正生效的是 `cmd-[`。
+    #[test]
+    fn ai_chat_session_shortcuts_match_the_binding_layer() {
+        use one_core::keybindings::action_id;
+
+        for is_macos in [true, false] {
+            let (back, forward, switcher) =
+                ai_chat_view::session_shortcut_defaults_for_platform(is_macos);
+            for (action, expected) in [
+                (action_id::AI_CHAT_SESSION_BACK, back),
+                (action_id::AI_CHAT_SESSION_FORWARD, forward),
+                (action_id::AI_CHAT_SESSION_SWITCHER, switcher),
+            ] {
+                let entry = super::AI_CHAT_SHORTCUTS
+                    .iter()
+                    .find(|entry| entry.action_id == Some(action))
+                    .unwrap_or_else(|| panic!("{action} 未出现在设置页快捷键列表里"));
+                let shown = if is_macos {
+                    entry.keys_macos
+                } else {
+                    entry.keys_other
+                };
+                assert_eq!(
+                    shown, expected,
+                    "{action} 在 is_macos={is_macos} 时设置页展示值与绑定层不一致"
+                );
+            }
+        }
+    }
+
+    /// 三条会话键的 `label_key` 必须真的能在 `locales/main.yml` 里解析出文案。
+    /// 少了词条，`t!` 会把 key 原样吐回界面（用户看到 `Settings.Shortcuts.…`）。
+    #[test]
+    fn ai_chat_session_shortcut_labels_resolve() {
+        use one_core::keybindings::action_id;
+
+        for action in [
+            action_id::AI_CHAT_SESSION_BACK,
+            action_id::AI_CHAT_SESSION_FORWARD,
+            action_id::AI_CHAT_SESSION_SWITCHER,
+        ] {
+            let entry = super::AI_CHAT_SHORTCUTS
+                .iter()
+                .find(|entry| entry.action_id == Some(action))
+                .unwrap_or_else(|| panic!("{action} 未出现在设置页快捷键列表里"));
+            let text = t!(entry.label_key).to_string();
+            assert_ne!(
+                entry.label_key, text,
+                "词条 `{}` 在 locales/main.yml 里缺失",
+                entry.label_key
+            );
+        }
     }
 
     #[test]

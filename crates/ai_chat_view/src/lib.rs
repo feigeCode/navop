@@ -63,6 +63,7 @@ mod resource_builder_tests;
 mod resource_display;
 mod send_button;
 mod session_service;
+pub mod session_shortcut;
 mod session_sidebar;
 mod theme;
 mod transcript_scroll;
@@ -159,6 +160,14 @@ pub use resource_builder::{
 };
 pub use send_button::{SendButton, SendButtonEvent, SendButtonState};
 pub use session_service::{SessionError, SessionService, extract_session_name};
+pub use session_shortcut::{
+    AI_CHAT_SESSION_SWITCHER_CONTEXT, CancelSessionSwitch, ConfirmSessionSwitch,
+    CycleSessionSwitcherBackward, CycleSessionSwitcherForward, NavigateSessionBack,
+    NavigateSessionForward, SESSION_BACK_MACOS, SESSION_BACK_OTHER, SESSION_FORWARD_MACOS,
+    SESSION_FORWARD_OTHER, SESSION_SWITCHER_MACOS, SESSION_SWITCHER_OTHER,
+    SelectFirstSessionInSwitcher, SelectLastSessionInSwitcher, ToggleSessionSwitcher,
+    session_shortcut_defaults_for_platform,
+};
 pub use session_sidebar::{SessionSummary, format_timestamp, session_row};
 pub use expansion_state::ExpansionState;
 pub use find_shortcut::{
@@ -193,6 +202,8 @@ pub fn init(cx: &mut App) {
     agent_cards::register_agent_cards(cx);
     // 本 crate 自己的快捷键随 `init` 一起注册，而不是留给宿主单独调用：
     // 漏调不会报错、只会「快捷键静默不生效」，这种失效模式不值得赌。
-    // 设置变更后的重绑定仍由宿主显式调 `find_shortcut::refresh_keybindings`。
+    // 设置变更后的重绑定仍由宿主显式调 `find_shortcut::refresh_keybindings`
+    // / `session_shortcut::refresh_keybindings`。
     find_shortcut::init(cx);
+    session_shortcut::init(cx);
 }

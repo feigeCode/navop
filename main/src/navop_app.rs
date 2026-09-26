@@ -1060,6 +1060,7 @@ pub fn refresh_keybindings(cx: &mut App) {
     db_view::search_shortcut::refresh_keybindings(cx);
     db_view::sql_editor_view::refresh_keybindings(cx);
     ai_chat_view::find_shortcut::refresh_keybindings(cx);
+    ai_chat_view::session_shortcut::refresh_keybindings(cx);
     terminal_view::refresh_keybindings(cx);
     redis_view::refresh_keybindings(cx);
     remote_desktop_view::refresh_keybindings(cx);

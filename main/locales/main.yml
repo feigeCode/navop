@@ -3851,6 +3851,18 @@ Settings:
       en: Previous Match in Conversation
       zh-CN: 上一个匹配（会话）
       zh-HK: 上一個匹配（會話）
+    ai_chat_session_back:
+      en: Previous Conversation (Back)
+      zh-CN: 后退到上一个会话
+      zh-HK: 後退到上一個工作階段
+    ai_chat_session_forward:
+      en: Next Conversation (Forward)
+      zh-CN: 前进到下一个会话
+      zh-HK: 前進到下一個工作階段
+    ai_chat_session_switcher:
+      en: Recent Conversations Switcher
+      zh-CN: 最近会话切换器
+      zh-HK: 最近工作階段切換器
     notes_editor:
       en: Notes Editor
       zh-CN: 笔记编辑器
