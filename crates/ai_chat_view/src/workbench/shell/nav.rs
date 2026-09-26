@@ -8,7 +8,7 @@ use gpui::{
 };
 use gpui_component::{
     ActiveTheme as _, Icon, Sizable as _, Size, StyledExt as _, h_flex,
-    button::{Button, ButtonVariants as _},
+    button::{Button, ButtonVariants as _, DropdownButton},
     input::Input,
     menu::{DropdownMenu as _, PopupMenuItem},
     scroll::ScrollableElement as _, v_flex,
@@ -40,11 +40,12 @@ impl WorkbenchShell {
             return Some(nav.into_any_element());
         }
         let panel = self.session_source.as_ref()?.clone();
-        let (summaries, current, acp_model, acp_current, backend_is_acp) = {
+        let (summaries, current, has_messages, acp_model, acp_current, backend_is_acp) = {
             let view = panel.read(cx);
             (
                 view.session_summaries(cx),
                 view.current_session_id(cx),
+                view.current_session_has_messages(cx),
                 view.acp_session_list_model(cx),
                 view.acp_session_id(cx),
                 view.backend_is_acp(cx),
@@ -58,6 +59,18 @@ impl WorkbenchShell {
         let query = self.search_query.clone();
         let filtered = filter_sessions(&summaries, &query);
         let groups: Vec<WorkspaceGroup> = group_sessions_by_workspace(&filtered)
+            .into_iter()
+            .filter(|group| {
+                group
+                    .root
+                    .as_deref()
+                    .map_or(true, |root| !self.state.is_workspace_hidden(root))
+            })
+            .collect();
+        // 工作区选择器的候选来自**全量**会话：搜索词只过滤列表，
+        // 不该让底部的工作区下拉跟着一起缩水。
+        let all_summaries: Vec<&SessionSummary> = summaries.iter().collect();
+        let all_groups: Vec<WorkspaceGroup> = group_sessions_by_workspace(&all_summaries)
             .into_iter()
             .filter(|group| {
                 group
@@ -85,122 +98,89 @@ impl WorkbenchShell {
                 }))
         };
 
-        // 底部固定区「新对话」：下拉选工作区（已添加过的分组都在里面），
-        // 归属在会话首次落盘时定格，之后不可再切换工作区。
-        let workspace_items: Vec<(SharedString, String)> = groups
+        // 底部固定区工作区选择器：下拉列出所有已选择过的工作区。
+        // 当前会话尚无消息时，选择其他工作区会切换当前上下文；
+        // 一旦会话已有消息，工作区被锁定，选择其他工作区会在目标工作区新建对话。
+        let current_root = self.workspace_root.clone();
+        let current_label = current_root
+            .as_ref()
+            .map(|root| {
+                root.file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| root.display().to_string())
+            })
+            .unwrap_or_else(|| t!("Workbench.no_workspace").to_string());
+        let workspace_items: Vec<(SharedString, String)> = all_groups
             .iter()
             .filter_map(|group| group.root.clone().map(|root| (group.label(), root)))
             .collect();
-        let new_button = {
+        let current_path = current_root
+            .as_ref()
+            .map(|root| root.to_string_lossy().to_string());
+        // 主按钮 = 在当前工作区新建对话；下拉 = 切换工作区。
+        let workspace_selector = {
             let this = cx.entity();
-            Button::new("workbench-session-new")
-                .icon(IconName::Plus)
-                .label(t!("AgentUi.new_conversation").to_string())
-                .small()
+            let this_for_menu = this.clone();
+            DropdownButton::new("workbench-workspace-dropdown")
                 .flex_1()
                 .min_w_0()
-                .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _window, _cx| {
-                    let this = this.clone();
-                    let mut menu = menu.item(
-                        PopupMenuItem::new(t!("Workbench.new_chat_here").to_string())
-                            .icon(IconName::Plus)
-                            .on_click({
-                                let this = this.clone();
-                                move |_, _, cx| {
-                                    this.update(cx, |this, cx| {
-                                        if let Some(panel) = this.session_source.clone() {
-                                            panel.update(cx, |panel, cx| panel.create_session(cx));
-                                        }
-                                    });
-                                }
-                            }),
-                    );
-                    for (label, root) in &workspace_items {
-                        let this = this.clone();
-                        let root = root.clone();
-                        menu = menu.item(
-                            PopupMenuItem::new(
-                                t!(
-                                    "Workbench.new_chat_in_workspace",
-                                    workspace = label.to_string()
-                                )
-                                .to_string(),
-                            )
-                            .icon(IconName::FolderOpen)
-                            .on_click(move |_, _, cx| {
-                                let root = root.clone();
-                                this.update(cx, |this, cx| {
-                                    this.create_session_in_workspace(
-                                        std::path::Path::new(&root),
-                                        cx,
-                                    );
-                                });
-                            }),
-                        );
-                    }
-                    menu
-                })
-        };
-
-        // 工作区行：当前工作区 + 新增按钮（Finch 式，工作区入口在侧栏内）。
-        let workspace_row = self.workspace_root.as_ref().map(|root| {
-            let name = root
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| root.display().to_string());
-            h_flex()
-                .flex_shrink_0()
-                .items_center()
-                .gap_1()
-                .px_2()
-                .pt_2()
-                .pb_1()
-                .child(
-                    h_flex()
-                        .id("workbench-workspace-button")
+                .button(
+                    Button::new("workbench-session-new")
+                        .icon(IconName::Plus)
+                        .label(current_label)
+                        .small()
                         .flex_1()
                         .min_w_0()
-                        .h(px(28.0))
-                        .items_center()
-                        .gap_1()
-                        .px_2()
-                        .rounded(theme.surface_radius)
-                        .bg(theme.panel)
-                        .cursor_pointer()
-                        .hover(|style| style.bg(theme.panel_hover))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            if let Some(picker) = this.workspace_picker.take() {
-                                (picker)(window, cx);
-                                this.workspace_picker = Some(picker);
+                        .tooltip(t!("Workbench.new_chat_here").to_string())
+                        .on_click({
+                            let this = this.clone();
+                            move |_, _, cx| {
+                                this.update(cx, |this, cx| {
+                                    this.create_session_in_current_workspace(cx);
+                                });
                             }
-                        }))
-                        .child(
-                            Icon::new(IconName::FolderOpen)
-                                .xsmall()
-                                .text_color(theme.muted_foreground),
-                        )
-                        .child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .text_xs()
-                                .font_semibold()
-                                .text_color(theme.foreground)
-                                .child(name),
-                        ),
+                        }),
                 )
-                .child(
-                    IconButton::new("workbench-workspace-add", IconName::Plus)
-                        .role(IconButtonRole::Compact)
-                        .tooltip(t!("Workbench.choose_workspace").to_string())
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            if let Some(picker) = this.workspace_picker.take() {
-                                (picker)(window, cx);
-                                this.workspace_picker = Some(picker);
-                            }
-                        })),
-                )
-        });
+                .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _window, _cx| {
+                    let mut menu = menu;
+                    // 已选择过的工作区；当前工作区打勾。
+                    for (label, root) in &workspace_items {
+                        let this = this_for_menu.clone();
+                        let root = root.clone();
+                        let checked = current_path.as_deref() == Some(root.as_str());
+                        menu = menu.item(
+                            PopupMenuItem::new(label.to_string())
+                                .icon(IconName::Folder)
+                                .checked(checked)
+                                .on_click(move |_, _, cx| {
+                                    let root = root.clone();
+                                    this.update(cx, |this, cx| {
+                                        if has_messages {
+                                            this.create_session_in_workspace(
+                                                std::path::Path::new(&root),
+                                                cx,
+                                            );
+                                        } else {
+                                            this.switch_to_workspace(
+                                                std::path::Path::new(&root),
+                                                cx,
+                                            );
+                                        }
+                                    });
+                                }),
+                        );
+                    }
+                    // 添加/切换到其他目录：打开宿主的目录选择器。
+                    let this = this_for_menu.clone();
+                    menu.separator().item(
+                        PopupMenuItem::new(t!("Workbench.choose_workspace").to_string())
+                            .icon(IconName::Plus)
+                            .on_click(move |_, window, cx| {
+                                this.update(cx, |this, cx| this.open_workspace_picker(window, cx));
+                            }),
+                    )
+                })
+        };
 
         let mut rows: Vec<gpui::AnyElement> = Vec::new();
         if groups.is_empty() {
@@ -286,7 +266,6 @@ impl WorkbenchShell {
             v_flex()
                 .size_full()
                 .min_h_0()
-                .children(workspace_row)
                 // 搜索行：圆角搜索框（无输入能力时整行省略）。
                 .when(self.search_input.is_some(), |this| {
                     this.child(
@@ -295,7 +274,7 @@ impl WorkbenchShell {
                             .items_center()
                             .gap_1()
                             .px_2()
-                            .pb_1()
+                            .py_2()
                             .child(
                                 h_flex()
                                     .flex_1()
@@ -336,7 +315,7 @@ impl WorkbenchShell {
                         .gap_0p5()
                         .children(rows),
                 )
-                // 底部固定区：「新对话」下拉 + 归档开关。
+                // 底部固定区：工作区选择器（含新建对话）+ 归档开关。
                 .child(
                     h_flex()
                         .flex_shrink_0()
@@ -346,7 +325,8 @@ impl WorkbenchShell {
                         .py_2()
                         .border_t_1()
                         .border_color(theme.border)
-                        .child(new_button)
+                        .bg(theme.panel)
+                        .child(workspace_selector)
                         .child(archive_toggle),
                 )
                 .into_any_element(),

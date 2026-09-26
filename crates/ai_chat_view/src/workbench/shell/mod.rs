@@ -220,6 +220,25 @@ impl WorkbenchShell {
         cx.notify();
     }
 
+    /// 打开宿主注入的目录选择器。
+    ///
+    /// 回调借用 `&mut Context` 自持（原实现用 `Vec` 里的 `take`/回填），
+    /// 便于在菜单项回调里安全调用：那里拿到的是 `&mut App`，
+    /// 只有经 `Entity::update` 才能在借用窗口的同时改动外壳状态。
+    pub fn open_workspace_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(picker) = self.workspace_picker.take() {
+            (picker)(window, cx);
+            self.workspace_picker = Some(picker);
+        }
+    }
+
+    /// 在当前工作区新建对话。
+    pub fn create_session_in_current_workspace(&mut self, cx: &mut Context<Self>) {
+        if let Some(panel) = self.session_source.clone() {
+            panel.update(cx, |panel, cx| panel.create_session(cx));
+        }
+    }
+
     /// 注入「切换到指定工作区」动作。侧栏分组的新建对话 / 选择跨工作区会话
     /// 时调用；宿主应把 explorer 等切到该根（`RootChanged` 会级联回外壳）。
     pub fn set_workspace_switcher(

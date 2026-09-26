@@ -4855,6 +4855,14 @@ impl AgentChatView {
         &self.current_session
     }
 
+    /// 当前会话是否已经产生对话内容。
+    ///
+    /// 用于决定工作区选择器是否允许切换当前会话的工作区：
+    /// 空会话可以随用户切工作区，已有消息后工作区被锁定。
+    pub fn current_session_has_messages(&self) -> bool {
+        !self.transcript.messages.is_empty()
+    }
+
     /// 宿主同步「某会话里哪些轮次可以回滚」。
     ///
     /// 由工作区浏览器在快照锚定成功 / 回滚截断后推送**全量**列表。视图不自行推断：
@@ -5061,8 +5069,8 @@ impl AgentChatView {
                     h_flex()
                         .gap_1()
                         .items_center()
-                        .child(right_toggle)
                         .child(search_entry)
+                        .child(right_toggle)
                         .into_any_element(),
                 )
             }

@@ -572,6 +572,13 @@ impl DefaultAgentChatPanel {
             .map(|view| view.read(cx).current_session_id().to_string())
     }
 
+    /// 当前会话是否已经产生对话内容。
+    pub fn current_session_has_messages(&self, cx: &App) -> bool {
+        self.view
+            .as_ref()
+            .is_some_and(|view| view.read(cx).current_session_has_messages())
+    }
+
     pub fn select_session(&mut self, id: &str, cx: &mut Context<Self>) {
         if let Some(view) = &self.view {
             let id = id.to_string();
