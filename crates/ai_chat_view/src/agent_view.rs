@@ -668,6 +668,15 @@ impl RuntimeBinding {
         }
     }
 
+    /// 切换模型：换 Runtime，但**保留当前会话**。
+    ///
+    /// 本地会话的对话历史只活在 Runtime 内存里（落盘的是快照副本），直接
+    /// `create_session` 开一个空会话等于把上下文丢掉——用户看到的就是"切完
+    /// 模型它不记得刚才聊过什么"。这里先把当前会话冻结成快照，再在新 Runtime
+    /// 上用同一个 session id 恢复，历史 / 计划 / 系统指令 / 技能一起延续。
+    ///
+    /// 返回 `Ok(true)` 表示已切换（`session_id` 不变即历史已延续），`Ok(false)`
+    /// 表示没有可用的 Runtime 工厂、调用方应保持原状。
     fn switch_model(
         &mut self,
         option: &ComposerModelOption,
@@ -676,8 +685,16 @@ impl RuntimeBinding {
         let Some(factory) = &self.runtime_factory else {
             return Ok(false);
         };
+        // 先取快照再建 Runtime：工厂报错时 `self` 原封不动，旧 Runtime 仍可用。
+        let snapshot = self
+            .runtime
+            .session(&self.session_id)
+            .map(|session| session.snapshot());
         let runtime = factory(option)?;
-        let session = runtime.create_session(resources.clone());
+        let session = match snapshot {
+            Some(snapshot) => runtime.restore_session(snapshot),
+            None => runtime.create_session(resources.clone()),
+        };
         self.runtime = runtime;
         self.session_id = session.id().clone();
         self.selected_model = Some(option.clone());
@@ -3614,6 +3631,7 @@ impl AgentChatView {
             return;
         };
         let opt = opt.clone();
+        let previous_session = self.session_id.clone();
         let mut binding = RuntimeBinding {
             runtime: self.runtime.clone(),
             session_id: self.session_id.clone(),
@@ -3622,6 +3640,9 @@ impl AgentChatView {
         };
         match binding.switch_model(&opt, &self.resources) {
             Ok(true) => {
+                // session id 与切换前一致 ⇒ 历史已随会话搬进新 Runtime：这仍是
+                // 同一个会话，转录、侧栏摘要、会话缓存都不能重置，只换了模型。
+                let carried_session = binding.session_id == previous_session;
                 // Runtime 与新会话已成功构造；提交切换前先保存旧会话。
                 self.persist_current(cx);
                 self.runtime = binding.runtime;
@@ -3633,21 +3654,26 @@ impl AgentChatView {
                 }
                 self.apply_system_instruction_to_current_session();
                 self.sync_session_skills();
+                self.sync_session_resources();
                 self.selected_model = binding.selected_model;
                 self.current_session = self.session_id.to_string();
-                self.clear_cached_session_transcripts();
-                self.live_sessions.clear();
-                self.ignored_local_turns.clear();
-                self.closed_sessions.clear();
                 self.pending_submissions = PendingSubmissions::default();
                 self.acp_turn_owner = None;
-                self.upsert_live_summary(
-                    self.current_session.clone(),
-                    format!("{} / {}", opt.provider_label, opt.model),
-                    now_secs(),
-                );
-                self.transcript.clear();
-                self.transcript.set_resource_context(&self.resources);
+                if !carried_session {
+                    // 没有可延续的会话（当前会话已不在 Runtime 中），只能按新会话
+                    // 处理：清转录与缓存，并在侧栏用「provider / model」占位。
+                    self.clear_cached_session_transcripts();
+                    self.live_sessions.clear();
+                    self.ignored_local_turns.clear();
+                    self.closed_sessions.clear();
+                    self.upsert_live_summary(
+                        self.current_session.clone(),
+                        format!("{} / {}", opt.provider_label, opt.model),
+                        now_secs(),
+                    );
+                    self.transcript.clear();
+                    self.transcript.set_resource_context(&self.resources);
+                }
                 self._event_task = Self::spawn_event_pump(self.runtime.subscribe(), None, cx);
                 self.reload_sessions(cx);
                 self.sync_pending_preview(cx);
@@ -10713,6 +10739,65 @@ mod tests {
         );
     }
 
+    /// 切换模型只换模型，不换会话：同一个 session id、同一段转录，历史跟着走。
+    #[gpui::test]
+    fn gpui_model_switch_keeps_the_same_conversation(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let first = ComposerModelOption::new("openai:gpt-a", "openai", "OpenAI", "gpt-a");
+        let second = ComposerModelOption::new("ollama:qwen", "ollama", "Ollama", "qwen3:14b");
+        let runtimes = Arc::new(std::sync::Mutex::new(Vec::<Arc<Runtime>>::new()));
+        let factory_runtimes = runtimes.clone();
+        let factory: AgentRuntimeFactory = Arc::new(move |option| {
+            let runtime = test_runtime(option.model.as_ref());
+            factory_runtimes.lock().unwrap().push(runtime.clone());
+            Ok(runtime)
+        });
+        let config =
+            AgentChatViewConfig::new(test_runtime("gpt-a"), ResourceContext::new(), vec![])
+                .with_models(vec![first.clone(), second], Some(first.id.clone()), factory);
+
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let original_session = view.read_with(cx, |view, _| view.session_id.clone());
+        view.update(cx, |view, cx| {
+            // 会话里已有对话，屏幕上已有转录。
+            view.runtime
+                .session(&view.session_id)
+                .expect("current session should exist")
+                .record_user_input("列出所有表");
+            view.transcript.push_system("已在屏幕上的内容");
+            view.select_model("ollama:qwen", "ollama", "qwen3:14b", cx);
+        });
+
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.session_id, original_session);
+            assert!(
+                view.transcript
+                    .messages
+                    .iter()
+                    .any(|message| message.content == "已在屏幕上的内容"),
+                "切模型不该清掉屏幕上的对话"
+            );
+        });
+        let runtime = runtimes
+            .lock()
+            .unwrap()
+            .last()
+            .cloned()
+            .expect("factory should have built the new runtime");
+        view.read_with(cx, |view, _| {
+            assert!(Arc::ptr_eq(&view.runtime, &runtime));
+        });
+        let session = runtime
+            .session(&original_session)
+            .expect("session should be carried into the new runtime");
+        assert_eq!(
+            session.history_snapshot().len(),
+            1,
+            "历史应随会话延续到新模型"
+        );
+    }
+
     #[gpui::test]
     fn gpui_model_switch_failure_preserves_current_state(cx: &mut TestAppContext) {
         init_test_ui(cx);
@@ -11466,7 +11551,9 @@ mod tests {
                 .switch_model(&second, &resources)
                 .expect("runtime switch should succeed")
         );
-        assert_ne!(binding.session_id, old_session);
+        // 空会话也一起搬过去：切模型不该凭空多出一个 session id。
+        assert_eq!(binding.session_id, old_session);
+        assert!(binding.runtime.session(&old_session).is_some());
         assert_eq!(binding.runtime.services().model.model_name(), "qwen3:14b");
         assert_eq!(
             binding
@@ -11478,6 +11565,48 @@ mod tests {
             "ollama"
         );
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// 切模型必须带上当前会话：本地会话的历史只活在 Runtime 内存里，换 Runtime
+    /// 若新开空会话，用户看到的就是"切完模型它不记得刚才聊过什么"。
+    #[test]
+    fn runtime_binding_switch_model_carries_the_current_session() {
+        let first = ComposerModelOption::new("openai:gpt-a", "openai", "OpenAI", "gpt-a");
+        let second = ComposerModelOption::new("ollama:qwen", "ollama", "Ollama", "qwen3:14b");
+        let factory: AgentRuntimeFactory =
+            Arc::new(|option| Ok(test_runtime(option.model.as_ref())));
+        let resources = ResourceContext::new();
+        let mut binding = RuntimeBinding::new(
+            test_runtime(first.model.as_ref()),
+            resources.clone(),
+            Some(first),
+            Some(factory),
+        );
+        let session_id = binding.session_id.clone();
+        binding
+            .runtime
+            .session(&session_id)
+            .expect("initial session should exist")
+            .record_user_input("查询当前连接数");
+
+        assert!(
+            binding
+                .switch_model(&second, &resources)
+                .expect("runtime switch should succeed")
+        );
+
+        assert_eq!(binding.session_id, session_id);
+        assert_eq!(binding.runtime.services().model.model_name(), "qwen3:14b");
+        let carried = binding
+            .runtime
+            .session(&session_id)
+            .expect("session should be restored into the new runtime");
+        assert_eq!(carried.id(), &session_id);
+        assert_eq!(
+            carried.history_snapshot().len(),
+            1,
+            "对话历史应随会话延续到新模型"
+        );
     }
 
     #[test]
