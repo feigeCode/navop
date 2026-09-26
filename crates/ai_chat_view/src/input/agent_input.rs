@@ -636,6 +636,25 @@ impl AgentInput {
         cx.notify();
     }
 
+    /// 当前输入框挂着的图片附件（会话草稿捕获用，只读）。
+    pub fn composer_attachments(&self) -> &[ImageAttachment] {
+        &self.attachments
+    }
+
+    /// 整体替换输入框的图片附件（会话草稿恢复专用，与 [`Self::set_composer_text`] 同一套纪律）。
+    ///
+    /// **整体替换**是防串台的关键：切到一个没有附件草稿的会话时，上一会话挂在
+    /// 输入框里的图片必须被清掉，而不是留下来跟着新会话一起发出去。
+    /// 不聚焦、不追加：只是换内容。
+    pub fn set_composer_attachments(
+        &mut self,
+        images: Vec<ImageAttachment>,
+        cx: &mut Context<Self>,
+    ) {
+        self.attachments = images;
+        cx.notify();
+    }
+
     fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let text = self.input_state.read(cx).value().to_string();
         if text.trim().is_empty() && self.attachments.is_empty() {

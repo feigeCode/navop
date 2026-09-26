@@ -613,6 +613,18 @@ enum SessionSwitchOrigin {
     Forward,
 }
 
+/// 输入框的一次性草稿载荷：文字 + 图片附件。
+///
+/// 文字来自 Runtime 会话的 `draft`（可落盘）；图片来自
+/// [`AgentChatView::session_draft_attachments`]（只在进程内，见字段注释）。
+/// 由 [`AgentChatView::stage_session_draft`] 组装、`render` 时
+/// [`AgentChatView::apply_pending_input_draft`] 写进输入框。
+#[derive(Default)]
+struct ComposerDraft {
+    text: String,
+    images: Vec<crate::ImageAttachment>,
+}
+
 fn merge_live_session_summaries(
     persisted: Vec<SessionSummary>,
     live: &[SessionSummary],
@@ -985,7 +997,13 @@ pub struct AgentChatView {
     /// 而 `switch_session` / `start_fresh_session` 全链路都没有 window（改签名
     /// 会波及十几处调用点与公共 API）。渲染恰好在切换后必然发生，把「换输入框
     /// 内容」推迟到那一帧，语义等价且不动任何调用方。
-    pending_input_draft: Option<String>,
+    pending_input_draft: Option<ComposerDraft>,
+    /// 每个会话自己的**图片**草稿（文字走 Runtime 会话的 `draft`，见
+    /// [`Self::capture_session_draft`]）。
+    ///
+    /// 图片不进会话快照——几 MB 的像素数据会让快照膨胀到不可接受——所以只在
+    /// 进程内有效：切换会话时图片跟着会话走、互不串台，重启后只恢复文字。
+    session_draft_attachments: HashMap<String, Vec<crate::ImageAttachment>>,
     /// 上一次离开的「空白会话」，供「新建会话」复用（见 [`Self::new_session`]）。
     ///
     /// 只在**本地后端**记：ACP 的转录空白不代表 agent 那边没有上下文
@@ -1363,6 +1381,7 @@ impl AgentChatView {
             transcript,
             input,
             pending_input_draft: None,
+            session_draft_attachments: HashMap::new(),
             draft_session: None,
             session_navigation: SessionNavigation::default(),
             session_switcher: SessionSwitcherUi::new(),
@@ -1999,14 +2018,15 @@ impl AgentChatView {
         self.expansion.clear();
         self.scroll.jump_to_tail();
         let session_uid = self.current_session.clone();
-        // 文字已从输入框消费（AgentInput::submit 里清空），草稿同步作废——
-        // 否则切走再切回，已发送的半句话会「复活」回输入框。
+        // 文字与附件已从输入框消费（AgentInput::submit 里清空 / take），草稿同步
+        // 作废——否则切走再切回，已发送的半句话和图片会「复活」回输入框。
         if let Some(session) = self
             .runtime
             .session(&SessionId::from_string(session_uid.clone()))
         {
             session.set_draft(None);
         }
+        self.session_draft_attachments.remove(&session_uid);
         let submission = PendingSubmission {
             text,
             mentions,
@@ -3986,9 +4006,13 @@ impl AgentChatView {
             .detach();
             return;
         }
-        // 已经站在一张白纸上：「新建会话」不该再produce第二张白纸。
-        // （本地后端才有的判断，理由见 `current_session_is_blank`。）
-        if self.current_session_is_blank(cx) {
+        // 已经站在**当前工作区的一张白纸**上：「新建会话」不该再 produce 第二张
+        // 白纸。（本地后端才有的判断，理由见 `current_session_is_blank`；
+        // 白纸本身归属别的工作区时要照常新建——侧栏不按工作区过滤，用户完全
+        // 可能站在别的工作区的白纸上。）
+        if self.current_session_is_blank(cx)
+            && self.session_belongs_to_current_workspace(&self.current_session)
+        {
             self.show_archived = false;
             self.reload_sessions(cx);
             cx.notify();
@@ -4006,7 +4030,13 @@ impl AgentChatView {
             self.switch_session(&draft, cx);
             return;
         }
-        self.draft_session = None;
+        // 指针在本工作区用不上就清掉——**除了**别的工作区的白纸：那张纸在它
+        // 自己的工作区里仍然有效，用户切回去时应当还能复用（每次复用前都会
+        // 经 `reusable_blank_session` 重新校验，指针留着是安全的）。
+        self.draft_session = self
+            .draft_session
+            .take()
+            .filter(|uid| !self.session_belongs_to_current_workspace(uid));
         // 新建前先保存当前会话,避免内容丢失。
         // 草稿同理：先捕获再落盘，半句话跟着旧会话走。
         self.capture_session_draft(cx);
@@ -4080,8 +4110,9 @@ impl AgentChatView {
         self.transcript = AgentTranscript::new();
         self.transcript.set_resource_context(&self.resources);
         self.is_running = false;
-        // 新会话从空输入框开始（渲染时应用）。
-        self.pending_input_draft = Some(String::new());
+        // 新会话从空输入框开始（渲染时应用；文字与附件都换空的——
+        // 上一会话挂在输入框里的图片不许跟过来）。
+        self.pending_input_draft = Some(ComposerDraft::default());
         self.input
             .update(cx, |input, cx| input.set_running(false, cx));
         self.sync_pending_preview(cx);
@@ -4270,24 +4301,36 @@ impl AgentChatView {
     /// 调用时机：**离开当前会话之前**（切换 / 新建），且必须在 `persist_current`
     /// 之前——落盘走 `session.snapshot()`，草稿要先写进 Runtime 会话才会被带上。
     /// 草稿是每个会话独立的：切走再切回，输入框显示的是**那个会话自己**的
-    /// 未发送文字，而不是全局共享一块输入。
-    fn capture_session_draft(&self, cx: &App) {
+    /// 未发送内容，而不是全局共享一块输入。
+    ///
+    /// 附件是**只读捕获**（`ImageAttachment` 内是 `Arc`，克隆廉价）：不把图片从
+    /// 输入框里拿走，留给 `apply_pending_input_draft` 在切换成立后整体替换——
+    /// 这样切换中途失败（目标快照加载不到）时输入框原样未动，不会出现
+    /// 「图没了、字还在」的中间态。
+    fn capture_session_draft(&mut self, cx: &App) {
         // 上一次切换排队的草稿还没落进输入框：此刻输入框里显示的是**再上一个**
-        // 会话的文字，当成当前会话的草稿捕获就串台了。当前会话的正确草稿
+        // 会话的内容，当成当前会话的草稿捕获就串台了。当前会话的正确草稿
         // 仍在 Runtime 会话上（staging 只读不写），跳过即可。两次切换之间
         // 必然没有用户输入（中间隔着一帧渲染），不会漏掉真实的编辑。
         if self.pending_input_draft.is_some() {
             return;
         }
-        let text = self.input.read(cx).composer_text(cx);
         if self.closed_sessions.contains(&self.current_session) {
             return;
         }
+        let text = self.input.read(cx).composer_text(cx);
+        let images = self.input.read(cx).composer_attachments().to_vec();
         if let Some(session) = self
             .runtime
             .session(&SessionId::from_string(self.current_session.clone()))
         {
-            session.set_draft((!text.trim().is_empty()).then(|| text));
+            session.set_draft((!text.trim().is_empty() || !images.is_empty()).then(|| text));
+        }
+        if images.is_empty() {
+            self.session_draft_attachments.remove(&self.current_session);
+        } else {
+            self.session_draft_attachments
+                .insert(self.current_session.clone(), images);
         }
     }
 
@@ -4295,19 +4338,29 @@ impl AgentChatView {
     ///
     /// 没有 `window` 时只排队不写——渲染帧必然到来，见字段注释。
     fn stage_session_draft(&mut self, uid: &str) {
-        let draft = self
+        let text = self
             .runtime
             .session(&SessionId::from_string(uid.to_string()))
             .and_then(|session| session.draft())
             .unwrap_or_default();
-        self.pending_input_draft = Some(draft);
+        let images = self
+            .session_draft_attachments
+            .get(uid)
+            .cloned()
+            .unwrap_or_default();
+        self.pending_input_draft = Some(ComposerDraft { text, images });
     }
 
     /// 渲染开头应用排队的草稿。只有切换会话会排队，平时是 no-op。
+    ///
+    /// 文字与附件**一起**换：附件是整体替换——目标会话没有附件草稿时，
+    /// 上一会话挂在输入框里的图片必须被清掉，否则会跟着新会话一起发出去。
     fn apply_pending_input_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(draft) = self.pending_input_draft.take() {
-            self.input
-                .update(cx, |input, cx| input.set_composer_text(&draft, window, cx));
+            self.input.update(cx, |input, cx| {
+                input.set_composer_text(&draft.text, window, cx);
+                input.set_composer_attachments(draft.images, cx);
+            });
         }
     }
 
@@ -4328,15 +4381,16 @@ impl AgentChatView {
     }
 
     /// 当前会话是否还是一张白纸：**本地后端**、屏幕上没聊过、Runtime 历史也没聊过、
-    /// 没在跑、没有排队提交、输入框也空着。
+    /// 没在跑、没有排队提交、输入框也空着（**文字与附件都空**）。
     ///
     /// 只看本地后端：ACP 的转录空白并不等于 agent 那边没有上下文——`session/resume`
     /// 按设计不回放历史，转录正是空的，可 agent 手里握着整段对话（见
     /// [`AcpSessionContinuity::ReusedWithoutHistory`]）。把「转录空」当「会话空」，
     /// 会让用户点「新建会话」时被静默拦下，那才是真 bug。
     ///
-    /// 输入框非空也算「不空」：用户打了半句话再点新建，他要的是一个干净输入框；
-    /// 那半句话会跟着旧会话留在它的草稿里（见 [`Self::stage_session_draft`]），不会被吞。
+    /// 输入框非空（文字**或**挂了图片）也算「不空」：用户已经开始准备内容了，
+    /// 他要的是一个干净输入框；这些半成品会跟着旧会话留在它的草稿里
+    /// （见 [`Self::stage_session_draft`]），不会被吞。
     fn current_session_is_blank(&self, cx: &App) -> bool {
         self.backend == Backend::Local
             && !self.transcript.has_conversation()
@@ -4347,6 +4401,7 @@ impl AgentChatView {
                 .items(self.current_session.as_str())
                 .is_empty()
             && self.input.read(cx).composer_text(cx).trim().is_empty()
+            && self.input.read(cx).composer_attachments().is_empty()
     }
 
     /// 离开当前会话时，若它还是白纸就记下来当「可复用的草稿会话」。
@@ -4367,15 +4422,32 @@ impl AgentChatView {
     ///
     /// 判据取 Runtime 的**历史**而不是屏幕转录：转录可能是切换时留在缓存里的副本，
     /// 历史才是「这个会话到底说过话没有」的事实源。
+    ///
+    /// 只复用**当前工作区**的白纸：工作区 B 里点「新建」不该把用户切到工作区 A
+    /// 留下的白纸上——那张纸的快照归属、落盘目录都是 A 的。这条约束按工作区生效，
+    /// 工作区不同的白纸一律不复用。
     fn reusable_blank_session(&self, uid: &str) -> bool {
         if uid == self.current_session
             || self.closed_sessions.contains(uid)
             || self.running_sessions.contains(uid)
             || !self.pending_submissions.items(uid).is_empty()
+            || !self.session_belongs_to_current_workspace(uid)
         {
             return false;
         }
         self.runtime_history_is_blank(uid)
+    }
+
+    /// 会话是否归属于当前工作区。
+    ///
+    /// 没有记录归属（旧数据 / 测试里直接 restore 的会话）视为归属当前工作区——
+    /// 与快照载入时「缺失则归入当前工作区」的既有约定一致（见
+    /// [`Self::switch_session_with_origin`] 的「载入即定格」）。
+    fn session_belongs_to_current_workspace(&self, uid: &str) -> bool {
+        let Some(root) = self.session_roots.get(uid) else {
+            return true;
+        };
+        *root == self.workspace_root.to_string_lossy().into_owned()
     }
 
     /// 切回本地后端时把该会话的本地转录放回屏幕。
@@ -4432,6 +4504,8 @@ impl AgentChatView {
         self.runtime.close_session(&session_id);
         self.pending_submissions.remove_session(uid);
         self.remove_cached_session_transcript(uid);
+        // 会话没了，它的附件草稿（可能握着几 MB 的图片）也要一并放掉。
+        self.session_draft_attachments.remove(uid);
         // 这张纸没了，别再拿它当「可复用的空白草稿」。
         if self.draft_session.as_deref() == Some(uid) {
             self.draft_session = None;
@@ -9366,6 +9440,201 @@ mod tests {
                     .draft()
                     .as_deref(),
                 Some("第二个会话的半句话")
+            );
+        });
+    }
+
+    /// 测试用的图片附件：内容字节不重要（这些用例不渲染缩略图），重要的是
+    /// 它是一份**跟着会话走的用户内容**。
+    fn test_image_attachment(name: &str) -> crate::ImageAttachment {
+        crate::ImageAttachment {
+            id: format!("img-{name}"),
+            name: format!("{name}.png"),
+            image: std::sync::Arc::new(gpui::Image::from_bytes(
+                gpui::ImageFormat::Png,
+                vec![0x89, 0x50, 0x4E, 0x47],
+            )),
+        }
+    }
+
+    /// 附件也跟着会话走：切走时捕获、
+    /// 切回来时恢复；目标会话没有附件草稿时，输入框里**不许残留**上一会话的
+    /// 图片——否则它会跟着新会话一起发出去。
+    #[gpui::test]
+    fn switching_sessions_carries_the_composer_attachments_per_session(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update_in(cx, |view, window, cx| {
+            let first = view.current_session.clone();
+            let first_id = view.session_id.clone();
+            view.input.update(cx, |input, cx| {
+                input.set_composer_text("第一个会话的半句话", window, cx);
+                input.set_composer_attachments(vec![test_image_attachment("a")], cx);
+            });
+            // 第一个会话有了历史（否则不会被持久化），草稿才有落盘意义。
+            view.runtime
+                .session(&first_id)
+                .expect("first session is live")
+                .record_user_input("第一段会话的话");
+
+            // 新会话：输入框要**连图片一起**清空（新会话没有附件草稿）。
+            view.new_session(cx);
+            let second = view.current_session.clone();
+            assert_ne!(first, second);
+            view.apply_pending_input_draft(window, cx);
+            assert_eq!(view.input.read(cx).composer_text(cx), "");
+            assert!(
+                view.input.read(cx).composer_attachments().is_empty(),
+                "切到没有附件草稿的会话，上一会话的图片不能留在输入框里"
+            );
+
+            // 切回第一个会话：文字与图片都要回来。
+            view.switch_session(&first, cx);
+            view.apply_pending_input_draft(window, cx);
+            assert_eq!(
+                view.input.read(cx).composer_text(cx),
+                "第一个会话的半句话",
+                "切回来必须恢复该会话自己的文字草稿"
+            );
+            let attachments = view.input.read(cx).composer_attachments();
+            assert_eq!(1, attachments.len(), "切回来必须恢复该会话自己的附件");
+            assert_eq!("img-a", attachments[0].id, "恢复的是同一张图");
+        });
+    }
+
+    /// 输入框只挂了图片、没有文字时，这个会话也**不算白纸**：
+    /// 用户已经开始准备内容了。
+    #[gpui::test]
+    fn a_session_with_only_composer_attachments_is_not_blank(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update_in(cx, |view, _window, cx| {
+            assert!(
+                view.current_session_is_blank(cx),
+                "刚打开、什么都没挂的会话才是白纸"
+            );
+            view.input.update(cx, |input, cx| {
+                input.set_composer_attachments(vec![test_image_attachment("x")], cx);
+            });
+            assert!(
+                !view.current_session_is_blank(cx),
+                "只挂了图片（没有文字）也不是白纸"
+            );
+        });
+    }
+
+    /// 发送后附件草稿作废：切走再切回，已发送的图片不能「复活」回输入框
+    /// （文字已有同款保护，这条补齐附件侧）。
+    #[gpui::test]
+    fn submit_consumes_the_attachment_draft(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update_in(cx, |view, window, cx| {
+            let first = view.current_session.clone();
+            view.input.update(cx, |input, cx| {
+                input.set_composer_text("带图的这句话", window, cx);
+                input.set_composer_attachments(vec![test_image_attachment("s")], cx);
+            });
+            // 先把附件捕获进这个会话的草稿位（否则 map 里本来就没有它，
+            // 下面的「作废」断言就成了无中生有的空转绿）。
+            view.capture_session_draft(cx);
+            assert!(
+                view.session_draft_attachments.contains_key(&first),
+                "前置：附件草稿已进入该会话的草稿位"
+            );
+            // 排队一个提交并标记运行中：submit 走入队路径，不触发模型调用。
+            view.pending_submissions
+                .enqueue(&first, pending_submission("already queued"));
+            view.set_running(true, cx);
+
+            view.submit(
+                "带图的这句话".into(),
+                Vec::new(),
+                vec![test_image_attachment("s")],
+                cx,
+            );
+
+            assert!(
+                !view.session_draft_attachments.contains_key(&first),
+                "发送后该会话的附件草稿必须作废"
+            );
+            // 排队路径没有丢内容：图片跟着提交进了队列。
+            assert_eq!(
+                1,
+                view.pending_submissions
+                    .items(&first)
+                    .last()
+                    .expect("submitted item is queued")
+                    .images
+                    .len()
+            );
+        });
+    }
+
+    /// 空白草稿只在**同一个工作区**内复用：工作区 B 里点「新建」，不能把用户
+    /// 切到工作区 A 留下的白纸上（那张纸的快照归属、技能上下文都是 A 的）。
+    #[gpui::test]
+    fn a_blank_session_from_another_workspace_is_not_reused(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new())
+                .with_workspace_root(std::path::PathBuf::from("/tmp/navop-test-ws-a"));
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update_in(cx, |view, _window, cx| {
+            let first = view.current_session.clone();
+            let first_id = view.session_id.clone();
+            view.runtime
+                .session(&first_id)
+                .expect("first session is live")
+                .record_user_input("第一段会话的话");
+
+            // 在 ws-a 里留下一张白纸。
+            view.new_session(cx);
+            let blank = view.current_session.clone();
+            view.switch_session(&first, cx);
+            assert_eq!(Some(blank.clone()), view.draft_session, "前置：白纸被记下");
+
+            // 壳层切到工作区 B（直接改字段：绕开 set_workspace_root 的设置落盘）。
+            view.workspace_root = std::path::PathBuf::from("/tmp/navop-test-ws-b");
+
+            // B 里点「新建」：不能切回 A 的白纸，要给 B 造一张新纸。
+            view.new_session(cx);
+            assert_ne!(
+                blank, view.current_session,
+                "别的工作区留下的白纸不能被复用"
+            );
+            assert_eq!(
+                Some(blank.clone()),
+                view.draft_session,
+                "指针要留着：那张纸在它自己的工作区里仍然有效"
+            );
+            assert!(
+                view.session_roots
+                    .get(&view.current_session)
+                    .is_some_and(|root| root == "/tmp/navop-test-ws-b"),
+                "新纸必须归属当前工作区"
+            );
+
+            // 切回工作区 A：那张白纸又能被复用了。
+            view.workspace_root = std::path::PathBuf::from("/tmp/navop-test-ws-a");
+            view.new_session(cx);
+            assert_eq!(
+                blank, view.current_session,
+                "回到原工作区后，自己的白纸照常复用"
             );
         });
     }
