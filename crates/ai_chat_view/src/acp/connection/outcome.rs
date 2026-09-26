@@ -77,6 +77,7 @@ fn build_pending(
         workspace_root: shared.workspace_root,
         config: shared.config,
         methods,
+        resume: shared.resume,
         lifecycle,
     }
 }

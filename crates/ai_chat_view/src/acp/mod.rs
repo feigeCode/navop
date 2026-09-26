@@ -63,7 +63,7 @@ pub use public_mcp_approval::{
     AcpPublicMcpApprovalFuture, AcpPublicMcpApprovalOutcome, AcpPublicMcpApprovalProvider,
     AcpPublicMcpApprovalRequest,
 };
-pub use state::AcpConnectionPhase;
+pub use state::{AcpConnectionPhase, AcpSessionContinuity};
 pub use probe::{AcpAgentProbe, AcpModelInfo};
 pub use probe_cache::{
     AcpProbeCache, AcpProbeRecord, acp_probe_cache, probe_fingerprint,

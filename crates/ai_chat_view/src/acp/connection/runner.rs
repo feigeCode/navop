@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::v1::{
-    CreateElicitationRequest, ReadTextFileRequest, RequestPermissionRequest, SessionNotification,
-    WriteTextFileRequest,
+    CreateElicitationRequest, ReadTextFileRequest, RequestPermissionRequest,
+    SessionId as AcpSessionId, SessionNotification, WriteTextFileRequest,
 };
 use agent_client_protocol::{AcpAgent, Agent, Client, ConnectionTo};
 use agent_runtime::{RuntimeEvent, SessionId};
@@ -39,6 +39,10 @@ pub(super) struct ConnectShared {
     pub(super) active_turn: Arc<Mutex<Option<AcpTurnTracker>>>,
     pub(super) workspace_root: PathBuf,
     pub(super) config: AcpAgentConfig,
+    /// 调用方希望复用的 ACP 协议会话（上次这个内置会话用的那个）。
+    ///
+    /// `None` 或复用失败都退回 `session/new`；见 `setup::open_session`。
+    pub(super) resume: Option<AcpSessionId>,
 }
 
 pub(super) struct SpawnedConnection {
@@ -66,6 +70,7 @@ pub(super) async fn connect(
         workspace_root,
         handle,
         AcpClientProviders::default(),
+        None,
     )
     .await
 }
@@ -77,7 +82,19 @@ pub(super) async fn connect_with_providers(
     cx: &mut AsyncApp,
 ) -> anyhow::Result<AcpConnectOutcome> {
     let handle = cx.update(|cx| Tokio::handle(cx));
-    connect_with_parts(config, workspace_root, handle, providers).await
+    connect_with_parts(config, workspace_root, handle, providers, None).await
+}
+
+/// 带「沿用哪个 ACP 会话」的连接入口：重连 / 重启时优先 `load` 或 `resume`。
+pub(super) async fn connect_with_providers_and_resume(
+    config: &AcpAgentConfig,
+    workspace_root: PathBuf,
+    providers: AcpClientProviders,
+    resume: Option<AcpSessionId>,
+    cx: &mut AsyncApp,
+) -> anyhow::Result<AcpConnectOutcome> {
+    let handle = cx.update(|cx| Tokio::handle(cx));
+    connect_with_parts(config, workspace_root, handle, providers, resume).await
 }
 
 pub(super) async fn connect_with_runtime(
@@ -85,7 +102,31 @@ pub(super) async fn connect_with_runtime(
     workspace_root: PathBuf,
     handle: tokio::runtime::Handle,
 ) -> anyhow::Result<AcpConnectOutcome> {
-    connect_with_parts(config, workspace_root, handle, AcpClientProviders::default()).await
+    connect_with_parts(
+        config,
+        workspace_root,
+        handle,
+        AcpClientProviders::default(),
+        None,
+    )
+    .await
+}
+
+/// 带复用目标的运行时变体（不给视图、只给测试与嵌入式调用方）。
+pub(super) async fn connect_with_runtime_and_resume(
+    config: &AcpAgentConfig,
+    workspace_root: PathBuf,
+    handle: tokio::runtime::Handle,
+    resume: Option<AcpSessionId>,
+) -> anyhow::Result<AcpConnectOutcome> {
+    connect_with_parts(
+        config,
+        workspace_root,
+        handle,
+        AcpClientProviders::default(),
+        resume,
+    )
+    .await
 }
 
 pub(super) async fn connect_with_runtime_and_providers(
@@ -94,7 +135,7 @@ pub(super) async fn connect_with_runtime_and_providers(
     handle: tokio::runtime::Handle,
     providers: AcpClientProviders,
 ) -> anyhow::Result<AcpConnectOutcome> {
-    connect_with_parts(config, workspace_root, handle, providers).await
+    connect_with_parts(config, workspace_root, handle, providers, None).await
 }
 
 async fn connect_with_parts(
@@ -102,8 +143,9 @@ async fn connect_with_parts(
     workspace_root: PathBuf,
     handle: tokio::runtime::Handle,
     providers: AcpClientProviders,
+    resume: Option<AcpSessionId>,
 ) -> anyhow::Result<AcpConnectOutcome> {
-    let shared = prepare_shared(config, workspace_root, handle);
+    let shared = prepare_shared(config, workspace_root, handle, resume);
     let mut spawned = spawn_client(shared.clone(), providers);
     let ready_rx = spawned.ready_rx.take().expect("ready receiver must exist");
     let ready = wait_for_ready(&shared.handle, config.timeouts.connect, ready_rx).await;
@@ -123,6 +165,7 @@ fn prepare_shared(
     config: &AcpAgentConfig,
     workspace_root: PathBuf,
     handle: tokio::runtime::Handle,
+    resume: Option<AcpSessionId>,
 ) -> ConnectShared {
     let (events_tx, _keep) = broadcast::channel(512);
     let state = Arc::new(Mutex::new(AcpSessionState::default()));
@@ -135,6 +178,7 @@ fn prepare_shared(
         active_turn: Arc::new(Mutex::new(None)),
         workspace_root,
         config: config.clone(),
+        resume,
     }
 }
 
@@ -228,6 +272,7 @@ async fn setup_and_park(
         &shared.config,
         &shared.state,
         shared.workspace_root,
+        shared.resume.clone(),
     )
     .await;
     match setup {

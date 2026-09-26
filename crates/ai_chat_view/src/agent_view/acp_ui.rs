@@ -1,3 +1,5 @@
+use agent_client_protocol::schema::v1::SessionId as AcpSessionId;
+
 use super::acp_options::agent_selection_is_active;
 use super::*;
 use crate::AcpAgentConfig;
@@ -7,6 +9,8 @@ pub(super) struct AcpConnectOperation {
     pub(super) token: AcpOperationToken,
     config: AcpAgentConfig,
     pub(super) session_uid: String,
+    /// 这个内置会话 + 这个 agent 上次用的 ACP 协议会话，连接时优先复用。
+    pub(super) resume: Option<String>,
     workspace_root: std::path::PathBuf,
 }
 
@@ -31,6 +35,15 @@ impl AgentChatView {
         if self.local_backend_is_idle() {
             return;
         }
+        // 先把「屏幕上这段是哪个 agent 的内容」记下来：下面会把 `current_acp_id` 清掉，
+        // 而用户需要知道刚才那段对话留在 agent 那一侧。
+        let leaving_agent = if self.backend == Backend::Acp && !self.transcript.is_empty() {
+            self.current_acp_id
+                .clone()
+                .map(|id| self.acp_agent_name(&id))
+        } else {
+            None
+        };
         self.invalidate_acp_operation();
         self.reset_acp_client_session(cx);
         self.cancel_acp_auto_reconnect();
@@ -46,9 +59,17 @@ impl AgentChatView {
         self.acp_connecting_id = None;
         self.acp_connect_origin_session = None;
         if session_uid == self.current_session {
-            self.transcript.clear();
-        } else if let Some(transcript) = self.session_transcripts.get_mut(session_uid) {
-            transcript.clear();
+            self.restore_local_transcript(session_uid);
+            // 与 ACP agent 的对话归 agent 所有：切回本地后它不在屏幕上，也不在本地模型的上下文里。
+            // 不说清楚，用户会以为刚才那段对话丢了。
+            if let Some(name) = leaving_agent {
+                self.transcript
+                    .push_system(t!("AgentUi.context_boundary_to_local", name = name).to_string());
+            }
+        } else {
+            // 非当前会话：丢掉这块缓存即可，切到它时按 Runtime 快照重建。
+            // 别在这里留一块空壳——空壳会遮蔽重建（见 `restore_local_transcript`）。
+            self.remove_cached_session_transcript(session_uid);
         }
         self.set_running(false, cx);
         self.input
@@ -76,10 +97,11 @@ impl AgentChatView {
         cx: &mut Context<Self>,
     ) {
         cx.spawn(async move |this, cx| {
-            let outcome = AcpConnection::connect_with_providers(
+            let outcome = AcpConnection::connect_with_providers_and_resume(
                 &operation.config,
                 operation.workspace_root.clone(),
                 providers,
+                operation.resume.clone().map(AcpSessionId::new),
                 cx,
             )
             .await;
@@ -108,10 +130,17 @@ impl AgentChatView {
         let config = self.ready_acp_config(&id)?;
         self.sync_acp_tool_mode_from_provider(cx);
         let session_uid = self.current_session.clone();
+        // 这个内置会话 + 这个 agent 上次的 ACP 协议会话：连上就优先复用，
+        // 别再让 agent 每回开一个新的空会话。
+        let resume = AppSettings::current(cx)
+            .ai_chat
+            .remembered_acp_session(&session_uid, config.id.as_ref())
+            .map(str::to_string);
         let operation = AcpConnectOperation {
             token: self.next_acp_operation(),
             config: config.with_skill_context(&self.skills.selected_context()),
             session_uid,
+            resume,
             workspace_root: self.workspace_root.clone(),
         };
         let providers = self.begin_acp_connect(&operation.config, &operation.session_uid, cx);
@@ -140,13 +169,17 @@ impl AgentChatView {
             .and_then(|entry| entry.config.clone())
     }
 
-    fn begin_acp_connect(
+    pub(super) fn begin_acp_connect(
         &mut self,
         config: &AcpAgentConfig,
         origin_session_uid: &str,
         cx: &mut Context<Self>,
     ) -> AcpClientProviders {
         let providers = self.start_acp_client_session(cx);
+        // 本地那段对话归 navop 所有，切走前必须先落进缓存：下面这句 `transcript.clear()`
+        // 是为了腾出屏幕显示 ACP 会话，不该顺手把本地转录销毁。
+        // 返回值还说明本地到底有没有内容——有内容才需要提示上下文边界。
+        let local_had_content = self.stash_current_transcript();
         self.backend = Backend::Acp;
         self.current_acp_id = Some(config.id.clone());
         // 换 agent 时丢弃上一个 agent 的连接前选择，并对新 agent 立刻展示探测到的模型。
@@ -166,6 +199,17 @@ impl AgentChatView {
         self._event_task = Self::spawn_event_pump(self.runtime.subscribe(), None, cx);
         self.set_running(false, cx);
         self.transcript.clear();
+        // 上下文边界要说在明处：agent 看不见本地模型这段对话，它用的是自己的会话上下文。
+        // 只在本地确实有内容时提示——空会话切过去不存在「东西被吃掉」的观感，提示只会变噪音。
+        if local_had_content {
+            self.transcript.push_system(
+                t!(
+                    "AgentUi.context_boundary_to_acp",
+                    name = config.name.clone()
+                )
+                .to_string(),
+            );
+        }
         self.transcript
             .set_acp_status(t!("AgentUi.starting_agent", name = config.name).to_string());
         self.input
@@ -373,6 +417,8 @@ impl AgentChatView {
     ) {
         let receiver = connection.subscribe();
         let session_id = connection.session_id();
+        let protocol_session_id = connection.protocol_session_id();
+        let continuity = connection.session_continuity();
         self.acp_sessions_supported =
             acp_session_list_supported(connection.state().agent_capabilities());
         let acp_state = connection.state();
@@ -396,9 +442,19 @@ impl AgentChatView {
         self.acp_reconnect.attempts = 0;
         self.acp_reconnect.scheduled = false;
         #[cfg(not(test))]
-        self.spawn_acp_health(agent_id, cx);
+        self.spawn_acp_health(agent_id.clone(), cx);
         if let Some(transcript) = self.transcript_for_open_session_mut(&origin_session_uid) {
             transcript.clear_acp_status();
+        }
+        // 上下文到底接上了没有，要说在明处：复用失败降级新建只写日志的话，
+        // 用户会以为对话还在，继续追问才发现 agent 什么都不记得。
+        //
+        // 只往**屏幕上正显示的那个会话**写：连接期间用户可能已经切走，那时这条提示会落进
+        // 另一个会话的本地转录缓存，等切回本地时就变成「本地对话里混着 ACP 文案」。
+        if origin_session_uid == self.current_session
+            && let Some(message) = session_continuity_notice(continuity, agent_id.as_ref())
+        {
+            self.push_system_to_session(&origin_session_uid, message);
         }
         self._event_task = Self::spawn_event_pump(receiver, Some(session_id), cx);
         self.sync_pending_preview(cx);
@@ -407,7 +463,32 @@ impl AgentChatView {
         // 连接就绪后立刻拉一次历史会话，让统一列表能马上和内置会话并排。
         // 上一轮已经在跑的话 `reload_acp_sessions` 自己会让路。
         self.reload_acp_sessions(cx);
+        // 记住这条会话地址：下次重连 / 重启才有东西可以复用，而不是一路 `session/new`。
+        self.remember_acp_protocol_session(
+            &origin_session_uid,
+            &agent_id,
+            &protocol_session_id,
+            cx,
+        );
         cx.notify();
+    }
+
+    /// 记住这个内置会话此刻指向的 ACP 协议会话，供下次重连 / 重启复用。
+    pub(super) fn remember_acp_protocol_session(
+        &self,
+        session_uid: &str,
+        agent_id: &SharedString,
+        acp_session_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if acp_session_id.is_empty() || session_uid.is_empty() {
+            return;
+        }
+        AppSettings::update_and_save(cx, |settings| {
+            settings
+                .ai_chat
+                .remember_acp_session(session_uid, agent_id.as_ref(), acp_session_id);
+        });
     }
 
     pub(super) fn cancel_acp_auth(&mut self, cx: &mut Context<Self>) {
@@ -449,6 +530,31 @@ impl AgentChatView {
                 .child(actions)
                 .into_any_element(),
         )
+    }
+}
+
+/// 会话延续的结果要不要告诉用户，以及说什么。
+///
+/// 只在「用户的预期与实际不符」时开口：
+/// - 复用失败降级新建 → 用户以为对话还在，其实已经断了，必须说；
+/// - `session/resume` 接上了但 agent 不回放历史 → 屏幕上空空如也，必须解释；
+/// - 回放历史成功（肉眼可见）/ 本来就没有可复用的记忆 → 眼见即事实，不打扰。
+pub(super) fn session_continuity_notice(
+    continuity: Option<AcpSessionContinuity>,
+    agent_name: &str,
+) -> Option<String> {
+    match continuity? {
+        AcpSessionContinuity::RestartedAfterReuseFailure => {
+            Some(t!("AgentUi.acp_session_restarted", name = agent_name).to_string())
+        }
+        AcpSessionContinuity::ReusedWithoutHistory => Some(
+            t!(
+                "AgentUi.acp_session_resumed_without_history",
+                name = agent_name
+            )
+            .to_string(),
+        ),
+        AcpSessionContinuity::ReusedWithHistory | AcpSessionContinuity::StartedFresh => None,
     }
 }
 

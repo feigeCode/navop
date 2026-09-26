@@ -178,6 +178,16 @@ impl AgentTranscript {
         self.terminal_event_order.clear();
     }
 
+    /// 屏幕上是否还没有任何内容。
+    ///
+    /// 两个用途都关于「切后端会不会让用户觉得东西被吃掉」：空转录切去 ACP 不必提示
+    /// 「本地这段不会带过去」；空转录也不该进会话缓存——缓存里留个空壳会遮蔽
+    /// Runtime 快照重建（见 `AgentChatView::restore_local_transcript`），
+    /// 让「切回本地」看起来像历史丢了。
+    pub fn is_empty(&self) -> bool {
+        self.messages.is_empty()
+    }
+
     /// 当前未决的决策清单：时间线卡片与输入区决策栏**共用**这一份。
     ///
     /// 顺序即出现顺序；同一身份只出现一次（卡片就地替换时不会重复）。

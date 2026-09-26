@@ -602,6 +602,12 @@ pub struct AiChatSettings {
     pub last_acp_agent_id: Option<String>,
     #[serde(default)]
     pub acp_models: HashMap<String, String>,
+    /// 内置会话 uid → ACP agent id → 该 agent 上次实际在用的协议会话 id。
+    ///
+    /// 重连 / 重启后据此走 `session/load` 或 `session/resume`，而不是每回都 `session/new`：
+    /// 后者会让外接 agent 那边凭空多一个空会话，用户看到的现象是「agent 全忘了」。
+    #[serde(default)]
+    pub acp_sessions: HashMap<String, HashMap<String, String>>,
     #[serde(default)]
     pub last_workspace_root: Option<PathBuf>,
     /// 最近使用的工作区根目录，最近在前。
@@ -668,7 +674,50 @@ pub const MAX_AI_REQUEST_TIMEOUT_SECS: u64 = 3600;
 /// 最近工作区列表上限，避免设置文件无界增长。
 pub const MAX_RECENT_WORKSPACE_ROOTS: usize = 8;
 
+/// ACP 会话记忆的外层条目上限（按内置会话 uid 计）。
+///
+/// 不按 LRU 精确淘汰：这条信息是可重建的，丢掉一条的代价只是下次多开一个 ACP 会话，
+/// 不值得为此在设置里再维护一份访问序。
+pub const MAX_REMEMBERED_ACP_SESSIONS: usize = 32;
+
 impl AiChatSettings {
+    /// 记住「这个内置会话 + 这个 ACP agent」当前指向的协议会话。
+    ///
+    /// 空值一律忽略：写入空 id 会让下次重连试着 resume 到一个不存在的会话。
+    pub fn remember_acp_session(
+        &mut self,
+        session_uid: &str,
+        agent_id: &str,
+        acp_session_id: &str,
+    ) {
+        if session_uid.is_empty() || agent_id.is_empty() || acp_session_id.is_empty() {
+            return;
+        }
+        self.acp_sessions
+            .entry(session_uid.to_string())
+            .or_default()
+            .insert(agent_id.to_string(), acp_session_id.to_string());
+        while self.acp_sessions.len() > MAX_REMEMBERED_ACP_SESSIONS {
+            let Some(victim) = self
+                .acp_sessions
+                .keys()
+                .find(|uid| uid.as_str() != session_uid)
+                .cloned()
+            else {
+                break;
+            };
+            self.acp_sessions.remove(&victim);
+        }
+    }
+
+    /// 取回「这个内置会话 + 这个 ACP agent」上次用的协议会话 id。
+    pub fn remembered_acp_session(&self, session_uid: &str, agent_id: &str) -> Option<&str> {
+        self.acp_sessions
+            .get(session_uid)?
+            .get(agent_id)
+            .map(String::as_str)
+    }
+
     /// 记录一个工作区：去重、置顶、限长，并同步 `last_workspace_root`。
     pub fn remember_workspace_root(&mut self, root: &std::path::Path) {
         let root = root.to_path_buf();
@@ -733,6 +782,7 @@ impl Default for AiChatSettings {
             request_timeout_secs: default_ai_request_timeout_secs(),
             last_acp_agent_id: None,
             acp_models: HashMap::new(),
+            acp_sessions: HashMap::new(),
             last_workspace_root: None,
             recent_workspace_roots: Vec::new(),
             workbench_layout: WorkbenchLayoutSettings::default(),
@@ -1895,6 +1945,7 @@ mod tests {
         MainWindowState,
         MAX_AI_REQUEST_TIMEOUT_SECS,
         MAX_CUSTOM_SYSTEM_PROMPT_CHARS,
+        MAX_REMEMBERED_ACP_SESSIONS,
         MAX_RECENT_WORKSPACE_ROOTS,
         McpPermissionMode,
         McpServerMode,
@@ -3046,6 +3097,87 @@ mod tests {
         assert_eq!(settings.ai_chat.last_acp_agent_id, restored.ai_chat.last_acp_agent_id);
         assert_eq!(settings.ai_chat.acp_models, restored.ai_chat.acp_models);
         assert_eq!(settings.ai_chat.last_workspace_root, restored.ai_chat.last_workspace_root);
+    }
+
+    #[test]
+    fn acp_session_memory_round_trips_per_session_and_agent() {
+        let mut settings = AppSettings::default();
+        settings
+            .ai_chat
+            .remember_acp_session("session-a", "agent-1", "acp-session-a1");
+        settings
+            .ai_chat
+            .remember_acp_session("session-a", "agent-2", "acp-session-a2");
+        settings
+            .ai_chat
+            .remember_acp_session("session-b", "agent-1", "acp-session-b1");
+
+        let json = serde_json::to_string(&settings).expect("serialize ACP session memory");
+        let restored: AppSettings =
+            serde_json::from_str(&json).expect("deserialize ACP session memory");
+
+        assert_eq!(
+            Some("acp-session-a1"),
+            restored
+                .ai_chat
+                .remembered_acp_session("session-a", "agent-1")
+        );
+        assert_eq!(
+            Some("acp-session-a2"),
+            restored
+                .ai_chat
+                .remembered_acp_session("session-a", "agent-2")
+        );
+        assert_eq!(
+            Some("acp-session-b1"),
+            restored
+                .ai_chat
+                .remembered_acp_session("session-b", "agent-1")
+        );
+        // 没记过的组合必须是 None，而不是退回到别的 agent 的会话。
+        assert_eq!(
+            None,
+            restored
+                .ai_chat
+                .remembered_acp_session("session-b", "agent-2")
+        );
+    }
+
+    #[test]
+    fn remembering_an_acp_session_overwrites_the_previous_target() {
+        let mut settings = AiChatSettings::default();
+        settings.remember_acp_session("session-a", "agent", "old");
+        settings.remember_acp_session("session-a", "agent", "new");
+
+        assert_eq!(
+            Some("new"),
+            settings.remembered_acp_session("session-a", "agent")
+        );
+    }
+
+    #[test]
+    fn remembering_an_acp_session_ignores_blank_values() {
+        let mut settings = AiChatSettings::default();
+        settings.remember_acp_session("", "agent", "acp");
+        settings.remember_acp_session("session-a", "", "acp");
+        settings.remember_acp_session("session-a", "agent", "");
+
+        assert!(settings.acp_sessions.is_empty());
+    }
+
+    #[test]
+    fn remembered_acp_sessions_are_capped_without_dropping_the_latest() {
+        let mut settings = AiChatSettings::default();
+        for index in 0..(MAX_REMEMBERED_ACP_SESSIONS + 4) {
+            settings.remember_acp_session(&format!("session-{index}"), "agent", "acp");
+        }
+
+        assert_eq!(MAX_REMEMBERED_ACP_SESSIONS, settings.acp_sessions.len());
+        let latest = format!("session-{}", MAX_REMEMBERED_ACP_SESSIONS + 3);
+        assert_eq!(
+            Some("acp"),
+            settings.remembered_acp_session(&latest, "agent")
+        );
     }
 
     #[test]

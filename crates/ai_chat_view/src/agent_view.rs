@@ -51,7 +51,8 @@ use crate::acp::{
     AcpError, AcpErrorKind, AcpModelInfo, AcpPendingConnection, AcpPermissionEnvelope,
     AcpPermissionMessage, AcpPermissionOutcome, AcpPromptStartError,
     AcpPublicMcpApprovalEnvelope, AcpPublicMcpApprovalMessage, AcpPublicMcpApprovalOutcome,
-    AcpPublicMcpApprovalProvider, AcpRecoveryAction, AcpSessionState, AcpSessionSummary, AcpUsage,
+    AcpPublicMcpApprovalProvider, AcpRecoveryAction, AcpSessionContinuity, AcpSessionState,
+    AcpSessionSummary, AcpUsage,
     acp_elicitation_channel, acp_permission_channel, acp_public_mcp_approval_channel,
     acp_session_list_supported, acp_session_open_kind, acp_session_summaries,
     acquire_acp_permission_grant, build_acp_agent_entries, current_acp_tool_mode,
@@ -3892,9 +3893,21 @@ impl AgentChatView {
                         .update(cx, |input, cx| input.set_running(false, cx));
                     this.acp = Some(acp);
                     this.transcript.clear();
+                    let protocol_session_id =
+                        this.acp.as_ref().map(|acp| acp.protocol_session_id());
                     match result {
                         Ok(_) => {
                             this.clear_acp_session_transition(operation);
+                            // 新建出来的会话也是这个内置会话「当前指向」的那条，
+                            // 下次重连要回到它，而不是再开一条空的。
+                            if let Some(protocol_session_id) = protocol_session_id.as_deref() {
+                                this.remember_acp_protocol_session(
+                                    &session_uid,
+                                    &agent_id,
+                                    protocol_session_id,
+                                    cx,
+                                );
+                            }
                             // 刚建好的会话要立刻出现在会话列表里：以前只有手动点刷新
                             // 或重连才会拉列表，用户会以为压根没建成。
                             this.reload_acp_sessions(cx);
@@ -4147,14 +4160,55 @@ impl AgentChatView {
         }
     }
 
-    fn stash_current_transcript(&mut self) {
+    /// 把屏幕上的本地转录收进会话缓存。返回**是否真的收下了一段非空转录**。
+    ///
+    /// 返回值给调用方判断要不要提示用户「本地这段不会带到 agent 那边」：空转录没什么可失的，
+    /// 提示只会变成噪音。
+    ///
+    /// 空转录**不入缓存**：缓存里留一个空壳会遮蔽 Runtime 快照重建
+    /// （见 [`Self::restore_local_transcript`]），让「切回本地」看起来像历史丢了。
+    fn stash_current_transcript(&mut self) -> bool {
         if self.backend != Backend::Local {
-            return;
+            return false;
         }
         let mut replacement = AgentTranscript::new();
         replacement.set_resource_context(&self.resources);
         let transcript = std::mem::replace(&mut self.transcript, replacement);
+        if transcript.is_empty() {
+            return false;
+        }
         self.cache_session_transcript(self.current_session.clone(), transcript);
+        true
+    }
+
+    /// 切回本地后端时把该会话的本地转录放回屏幕。
+    ///
+    /// 顺序：内存缓存（离开本地时 stash 的）→ Runtime 快照重建 → 清空。
+    /// 不能无条件清空：屏幕上此刻是 ACP agent 的内容，清掉就等于把本地那段对话抹了，
+    /// 这正是「会话记不住」的观感来源。ACP 自己的转录归 agent 所有（靠 load/resume 取回），
+    /// 不进这个缓存——缓存里永远只有本地转录，切回来才不会串台。
+    ///
+    /// 缓存命中也要看**是否非空**：可能有人往这个会话的缓存里塞过一个空壳转录
+    /// （例如连接失败时给非当前会话建过一块），空壳命中会让下面的 Runtime 重建被跳过，
+    /// 屏幕上就空了——而 Runtime 里历史还在。
+    fn restore_local_transcript(&mut self, session_uid: &str) {
+        if let Some(transcript) = self.remove_cached_session_transcript(session_uid)
+            && !transcript.is_empty()
+        {
+            self.transcript = transcript;
+            self.transcript.set_resource_context(&self.resources);
+            return;
+        }
+        self.transcript.clear();
+        let session_id = SessionId::from_string(session_uid.to_string());
+        let Some(session) = self.runtime.session(&session_id) else {
+            self.transcript.set_resource_context(&self.resources);
+            return;
+        };
+        let snapshot = session.snapshot();
+        self.transcript
+            .load_history(&snapshot.history, snapshot.plan.as_ref());
+        self.transcript.set_resource_context(&self.resources);
     }
 
     fn discard_live_session(&mut self, uid: &str) {
@@ -4235,7 +4289,9 @@ impl AgentChatView {
         self.system_instruction_from_settings = target.system_instruction().is_none();
         self.current_session = self.session_id.to_string();
         self.apply_system_instruction_to_current_session();
-        if let Some(transcript) = self.remove_cached_session_transcript(uid) {
+        if let Some(transcript) = self.remove_cached_session_transcript(uid)
+            && !transcript.is_empty()
+        {
             self.transcript = transcript;
         } else {
             let snapshot = target.snapshot();
@@ -6495,10 +6551,10 @@ mod tests {
         TOOL_CONFIRM_CARD, ToolCardData, ToolConfirmCardData,
     };
     use crate::{
-        AcpAgentConfig, AcpConfigDiagnostic, AcpElicitationField, AcpElicitationFieldKind,
-        AcpElicitationForm, AcpElicitationMode, AcpElicitationOption, AcpElicitationOutcome,
-        AcpElicitationRequest, AcpPermissionOption, AcpPermissionRequest,
-        AcpPublicMcpApprovalRequest,
+        AcpAgentConfig, AcpAgentEntry, AcpConfigDiagnostic, AcpElicitationField,
+        AcpElicitationFieldKind, AcpElicitationForm, AcpElicitationMode, AcpElicitationOption,
+        AcpElicitationOutcome, AcpElicitationRequest, AcpPermissionOption,
+        AcpPermissionRequest, AcpPublicMcpApprovalRequest,
     };
     use agent_runtime::RuntimeServices;
     use agent_runtime::model::MockModelClient;
@@ -8656,6 +8712,398 @@ mod tests {
             assert_eq!(Backend::Local, view.backend);
             assert!(!view.is_current_acp_operation(stale_operation));
             assert_eq!(None, view.acp_session_transition_phase(&session_uid));
+        });
+    }
+
+    /// 切到 ACP 后端前，必须把本地那段对话落进会话缓存。
+    ///
+    /// 本地转录归 navop 所有，ACP 会话历史归 agent（靠 load/resume 取回），
+    /// 两者不能共用同一个 `clear`：否则「本地 → ACP → 切回本地」之后本地内容凭空消失。
+    #[gpui::test]
+    fn leaving_local_backend_stashes_the_local_transcript(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let agent = AcpAgentConfig::new("agent", "Agent", "noop");
+
+        view.update(cx, |view, cx| {
+            let session_uid = view.current_session.clone();
+            view.transcript.push_system(LOCAL_TRANSCRIPT_MARK);
+
+            view.begin_acp_connect(&agent, &session_uid, cx);
+
+            assert!(
+                view.session_transcripts.contains_key(&session_uid),
+                "切到 ACP 前本地转录必须落进会话缓存"
+            );
+            assert!(
+                !view
+                    .transcript
+                    .messages
+                    .iter()
+                    .any(|message| message.content == LOCAL_TRANSCRIPT_MARK),
+                "ACP 会话内容未知，屏幕不该继续显示上一段本地对话"
+            );
+        });
+    }
+
+    /// 从 ACP 切回本地时，屏幕上要能把本地那段对话还回来。
+    #[gpui::test]
+    fn returning_to_local_restores_the_stashed_transcript(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let agent = AcpAgentConfig::new("agent", "Agent", "noop");
+
+        view.update(cx, |view, cx| {
+            let session_uid = view.current_session.clone();
+            view.transcript.push_system(LOCAL_TRANSCRIPT_MARK);
+            view.begin_acp_connect(&agent, &session_uid, cx);
+
+            view.select_local_backend_for_session(&session_uid, cx);
+
+            assert!(
+                view.transcript
+                    .messages
+                    .iter()
+                    .any(|message| message.content == LOCAL_TRANSCRIPT_MARK),
+                "切回本地必须恢复该会话的本地转录"
+            );
+        });
+    }
+
+    /// 缓存被淘汰也不能让本地会话在切回时变成空白：能从 Runtime 快照重建。
+    #[gpui::test]
+    fn returning_to_local_rebuilds_from_runtime_when_cache_is_gone(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let agent = AcpAgentConfig::new("agent", "Agent", "noop");
+
+        view.update(cx, |view, cx| {
+            let session_uid = view.current_session.clone();
+            let session_id = view.session_id.clone();
+            view.runtime
+                .session(&session_id)
+                .expect("current session is live")
+                .record_user_input("本地快照里的话");
+            view.transcript.push_system(LOCAL_TRANSCRIPT_MARK);
+            view.begin_acp_connect(&agent, &session_uid, cx);
+            // 模拟缓存被 LRU 淘汰 / 从未落缓存。
+            view.remove_cached_session_transcript(&session_uid);
+
+            view.select_local_backend_for_session(&session_uid, cx);
+
+            assert!(
+                view.transcript.messages.iter().any(|message| {
+                    matches!(&message.content, content if content.contains("本地快照里的话"))
+                }),
+                "缓存缺失时应从 Runtime 快照重建本地转录"
+            );
+        });
+    }
+
+    /// 本地这段对话不会进入 agent 的上下文，切过去时必须说在明处。
+    #[gpui::test]
+    fn switching_to_acp_tells_the_user_where_the_local_context_goes(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let agent = AcpAgentConfig::new("agent", "Agent", "noop");
+
+        view.update(cx, |view, cx| {
+            view.refresh_acp_agents_from(vec![AcpAgentEntry::ready(agent.clone())], cx);
+            let session_uid = view.current_session.clone();
+            view.transcript.push_system(LOCAL_TRANSCRIPT_MARK);
+
+            view.begin_acp_connect(&agent, &session_uid, cx);
+
+            assert!(
+                view.transcript.messages.iter().any(|message| {
+                    message.content == t!("AgentUi.context_boundary_to_acp", name = "Agent")
+                }),
+                "切到 ACP 必须提示本地上下文不会带过去，实际内容：{:?}",
+                view.transcript
+                    .messages
+                    .iter()
+                    .map(|message| message.content.clone())
+                    .collect::<Vec<_>>()
+            );
+        });
+    }
+
+    /// 本地会话本来就是空的，切到 ACP 不必提示「本地那段不会带过去」——没有可失的东西。
+    ///
+    /// 顺带钉住空转录**不进缓存**：缓存里留一个空壳会遮蔽 Runtime 快照重建，
+    /// 让「切回本地」看起来像历史丢了。
+    #[gpui::test]
+    fn switching_to_acp_stays_quiet_when_the_local_session_is_empty(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let agent = AcpAgentConfig::new("agent", "Agent", "noop");
+
+        view.update(cx, |view, cx| {
+            view.refresh_acp_agents_from(vec![AcpAgentEntry::ready(agent.clone())], cx);
+            let session_uid = view.current_session.clone();
+
+            view.begin_acp_connect(&agent, &session_uid, cx);
+
+            let boundary_notice = t!("AgentUi.context_boundary_to_acp", name = "Agent").to_string();
+            assert!(
+                !view
+                    .transcript
+                    .messages
+                    .iter()
+                    .any(|message| message.content == boundary_notice),
+                "本地没有内容时不该提示上下文边界"
+            );
+            assert!(
+                !view.session_transcripts.contains_key(&session_uid),
+                "空转录不该进会话缓存"
+            );
+        });
+    }
+
+    /// 切回本地时要说清 agent 那段对话去哪了：它在 agent 一侧，不进入本地模型的上下文。
+    #[gpui::test]
+    fn switching_back_to_local_explains_where_the_agent_conversation_went(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let agent = AcpAgentConfig::new("agent", "Agent", "noop");
+
+        view.update(cx, |view, cx| {
+            view.refresh_acp_agents_from(vec![AcpAgentEntry::ready(agent.clone())], cx);
+            let session_uid = view.current_session.clone();
+            view.transcript.push_system(LOCAL_TRANSCRIPT_MARK);
+            view.begin_acp_connect(&agent, &session_uid, cx);
+            // 屏幕上此刻是 agent 的内容。
+            view.transcript.push_system(ACP_TRANSCRIPT_MARK);
+
+            view.select_local_backend_for_session(&session_uid, cx);
+
+            assert!(
+                view.transcript
+                    .messages
+                    .iter()
+                    .any(|message| message.content == LOCAL_TRANSCRIPT_MARK),
+                "切回本地要恢复本地那段对话"
+            );
+            assert!(
+                view.transcript.messages.iter().any(|message| {
+                    message.content == t!("AgentUi.context_boundary_to_local", name = "Agent")
+                }),
+                "切回本地必须说明 agent 那段对话留在哪一侧"
+            );
+        });
+    }
+
+    /// 缓存里留一个空壳不能让切回本地变空白：Runtime 里的历史还在，必须重建出来。
+    ///
+    /// 空壳是真实会出现的：连接失败 / 状态推送会给非当前会话建一块空白转录。
+    #[gpui::test]
+    fn an_empty_session_cache_does_not_shadow_the_runtime_history(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let agent = AcpAgentConfig::new("agent", "Agent", "noop");
+
+        view.update(cx, |view, cx| {
+            let session_uid = view.current_session.clone();
+            let session_id = view.session_id.clone();
+            view.runtime
+                .session(&session_id)
+                .expect("current session is live")
+                .record_user_input("本地快照里的话");
+            view.begin_acp_connect(&agent, &session_uid, cx);
+            // 缓存没了，只剩一个空壳。
+            view.remove_cached_session_transcript(&session_uid);
+            view.cache_session_transcript(session_uid.clone(), AgentTranscript::new());
+
+            view.select_local_backend_for_session(&session_uid, cx);
+
+            assert!(
+                view.transcript.messages.iter().any(|message| {
+                    matches!(&message.content, content if content.contains("本地快照里的话"))
+                }),
+                "空缓存不能遮蔽 Runtime 快照重建"
+            );
+        });
+    }
+
+    /// 切会话时，缓存里一块空壳转录同样不能遮蔽 Runtime 里的历史。
+    #[gpui::test]
+    fn switching_sessions_rebuilds_when_the_cached_transcript_is_empty(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update(cx, |view, cx| {
+            let first = view.current_session.clone();
+            let first_id = view.session_id.clone();
+            view.runtime
+                .session(&first_id)
+                .expect("current session is live")
+                .record_user_input("第一段会话的话");
+
+            // 换到另一个会话，并把第一个会话的缓存换成一块空壳。
+            view.start_fresh_session(cx);
+            assert_ne!(first, view.current_session);
+            view.cache_session_transcript(first.clone(), AgentTranscript::new());
+
+            view.switch_session(&first, cx);
+
+            assert!(
+                view.transcript.messages.iter().any(|message| {
+                    matches!(&message.content, content if content.contains("第一段会话的话"))
+                }),
+                "空壳缓存不能遮蔽 Runtime 快照"
+            );
+        });
+    }
+
+    /// 只有「用户预期与实际不符」的那两档才开口提示。
+    #[test]
+    fn only_mismatched_session_continuity_reaches_the_user() {
+        let cases = [
+            (AcpSessionContinuity::StartedFresh, false),
+            (AcpSessionContinuity::ReusedWithHistory, false),
+            (AcpSessionContinuity::ReusedWithoutHistory, true),
+            (AcpSessionContinuity::RestartedAfterReuseFailure, true),
+        ];
+
+        for (continuity, expect_notice) in cases {
+            assert_eq!(
+                expect_notice,
+                super::acp_ui::session_continuity_notice(Some(continuity), "Agent").is_some(),
+                "{continuity:?} 的提示策略不对"
+            );
+        }
+        assert!(
+            super::acp_ui::session_continuity_notice(None, "Agent").is_none(),
+            "还没走到开会话这一步时不该猜一个结论"
+        );
+    }
+
+    /// 本组提示依赖四个词条。缺词条时 `t!` 会原样返回 key，占位符写错则会留下 `%{..}`——
+    /// 两种都会把内部标识直接显示给用户。
+    #[test]
+    fn context_notice_locales_resolve_and_interpolate() {
+        let notices = [
+            (
+                "AgentUi.context_boundary_to_acp",
+                t!("AgentUi.context_boundary_to_acp", name = "Agent").to_string(),
+            ),
+            (
+                "AgentUi.context_boundary_to_local",
+                t!("AgentUi.context_boundary_to_local", name = "Agent").to_string(),
+            ),
+            (
+                "AgentUi.acp_session_restarted",
+                t!("AgentUi.acp_session_restarted", name = "Agent").to_string(),
+            ),
+            (
+                "AgentUi.acp_session_resumed_without_history",
+                t!(
+                    "AgentUi.acp_session_resumed_without_history",
+                    name = "Agent"
+                )
+                .to_string(),
+            ),
+        ];
+
+        for (key, text) in notices {
+            assert_ne!(key, text, "词条 `{key}` 在 locales/ai_chat_view.yml 里缺失");
+            assert!(
+                !text.contains("%{"),
+                "词条 `{key}` 的占位符没被替换，实际文案：{text}"
+            );
+        }
+    }
+
+    /// 连接前必须把「这个会话上次用的 ACP 会话」带上：不带的话重连等于一路新开空会话，
+    /// agent 那边的上下文就接不上了。
+    #[gpui::test]
+    fn acp_connect_reuses_the_remembered_protocol_session(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let agent = AcpAgentConfig::new("agent", "Agent", "noop");
+
+        view.update(cx, |view, cx| {
+            view.refresh_acp_agents_from(vec![AcpAgentEntry::ready(agent)], cx);
+            let session_uid = view.current_session.clone();
+            AppSettings::update(cx, |settings| {
+                settings
+                    .ai_chat
+                    .remember_acp_session(&session_uid, "agent", "acp-remembered");
+            });
+
+            let (operation, _providers) = view
+                .prepare_acp_connect(SharedString::from("agent"), cx)
+                .expect("ready agent must start a connect");
+
+            assert_eq!(Some("acp-remembered".to_string()), operation.resume);
+        });
+    }
+
+    /// 没记过的会话不能被凭空「恢复」到别人的会话上；换 agent 也不能串台。
+    #[gpui::test]
+    fn acp_connect_starts_fresh_without_a_matching_memory(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let agent = AcpAgentConfig::new("agent", "Agent", "noop");
+        let other = AcpAgentConfig::new("other-agent", "Other", "noop");
+
+        view.update(cx, |view, cx| {
+            view.refresh_acp_agents_from(
+                vec![AcpAgentEntry::ready(agent), AcpAgentEntry::ready(other)],
+                cx,
+            );
+            let session_uid = view.current_session.clone();
+            AppSettings::update(cx, |settings| {
+                settings
+                    .ai_chat
+                    .remember_acp_session(&session_uid, "agent", "acp-for-agent");
+            });
+
+            let (first, _providers) = view
+                .prepare_acp_connect(SharedString::from("agent"), cx)
+                .expect("ready agent must start a connect");
+            assert_eq!(Some("acp-for-agent".to_string()), first.resume);
+
+            // 前一条连接已经结束，现在才轮得到为另一个 agent 发起连接。
+            view.acp_connecting = false;
+            view.acp_connecting_id = None;
+            let (second, _providers) = view
+                .prepare_acp_connect(SharedString::from("other-agent"), cx)
+                .expect("another ready agent must start its own connect");
+            assert_eq!(
+                None, second.resume,
+                "换 agent 时不能把前一个 agent 的会话 id 带过去"
+            );
         });
     }
 
@@ -11780,6 +12228,12 @@ mod tests {
         );
         assert!(retained.is_none());
     }
+
+    /// 视图级测试里标记「本地那段对话」的哨兵文本。
+    const LOCAL_TRANSCRIPT_MARK: &str = "本地这段不能丢";
+
+    /// 视图级测试里冒充「ACP agent 那段对话」的哨兵文本。
+    const ACP_TRANSCRIPT_MARK: &str = "agent 那边说的话";
 
     fn test_runtime(model_name: &str) -> Arc<Runtime> {
         let model = Arc::new(NamedModelClient(model_name.to_string()));

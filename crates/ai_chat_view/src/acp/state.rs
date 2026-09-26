@@ -29,6 +29,28 @@ pub enum AcpConnectionPhase {
     Closed,
 }
 
+/// 一次连接里 ACP 会话**实际**是怎么打开的。
+///
+/// 与 [`super::AcpSessionOpen`] 分工不同：那个是由 agent 能力推出的「**可以**怎么开」，
+/// 由 `acp_session_open_kind()` 从能力协商得出；这个记录「**实际**怎么开的」，是视图判断
+/// 「要不要告诉用户上一轮上下文没接上」的唯一依据。
+///
+/// 复用失败只写日志是不够的：用户以为对话还在，继续追问才发现 agent 什么都不记得——
+/// 这正是「会话记不住」的观感来源，必须让 UI 有机会说出来。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AcpSessionContinuity {
+    /// 接上了记住的会话，并让 agent 回放了历史（`session/load`）。
+    ReusedWithHistory,
+    /// 接上了记住的会话，但没有回放历史（`session/resume`）：agent 记得，屏幕上看不到。
+    ReusedWithoutHistory,
+    /// 没有可复用的记忆，或 agent 不具备复用能力：开了一条新会话。
+    ///
+    /// 这种情况不必提示——此前从没延续成功过，用户没有「上下文还在」的错误预期。
+    StartedFresh,
+    /// 有记忆但复用失败，退而新建：**上一轮的上下文已经断了**。
+    RestartedAfterReuseFailure,
+}
+
 /// ACP 会话状态快照。用于保存协议层元数据,不直接承担渲染职责。
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct AcpSessionState {
@@ -42,6 +64,8 @@ pub(crate) struct AcpSessionState {
     title: Option<String>,
     updated_at: Option<String>,
     usage: Option<AcpUsage>,
+    /// 这次连接实际怎么打开会话的；连接还没走到开会话时为 `None`。
+    session_continuity: Option<AcpSessionContinuity>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -134,6 +158,15 @@ impl AcpSessionState {
 
     pub(crate) fn usage(&self) -> Option<&AcpUsage> {
         self.usage.as_ref()
+    }
+
+    /// 这次连接实际怎么打开会话的（复用 / 没记忆新建 / 复用失败降级）。
+    pub(crate) fn session_continuity(&self) -> Option<AcpSessionContinuity> {
+        self.session_continuity
+    }
+
+    pub(crate) fn set_session_continuity(&mut self, continuity: AcpSessionContinuity) {
+        self.session_continuity = Some(continuity);
     }
 
     pub(crate) fn set_agent_capabilities(&mut self, capabilities: AgentCapabilities) {
@@ -246,7 +279,7 @@ mod tests {
 
     use agent_runtime::TurnId;
 
-    use super::{AcpConnectionPhase, AcpSessionState};
+    use super::{AcpConnectionPhase, AcpSessionContinuity, AcpSessionState};
     use crate::acp::{AcpError, AcpErrorKind};
 
     #[test]
@@ -375,6 +408,24 @@ mod tests {
 
         assert!(error.contains("Closed -> Failed"));
         assert_eq!(AcpConnectionPhase::Closed, state.phase);
+    }
+
+    #[test]
+    fn session_continuity_is_absent_until_a_session_is_opened() {
+        let mut state = AcpSessionState::default();
+
+        assert_eq!(
+            None,
+            state.session_continuity(),
+            "还没走到开会话时不能凭能力协商猜一个结论"
+        );
+
+        state.set_session_continuity(AcpSessionContinuity::RestartedAfterReuseFailure);
+
+        assert_eq!(
+            Some(AcpSessionContinuity::RestartedAfterReuseFailure),
+            state.session_continuity()
+        );
     }
 
     fn test_error() -> AcpError {

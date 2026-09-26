@@ -119,6 +119,14 @@ AgentUi:
     en: External sessions
     zh-CN: 外部会话
     zh-HK: 外部工作階段
+  acp_session_restarted:
+    en: "Could not reopen the previous session with %{name}; a new empty session was created and the earlier context is no longer available"
+    zh-CN: "未能接上与 %{name} 此前的会话，已新建一个空会话；此前的上下文不再可用"
+    zh-HK: "未能接上與 %{name} 先前的工作階段，已新增一個空白工作階段；先前的上下文不再可用"
+  acp_session_resumed_without_history:
+    en: "Reconnected to the previous session with %{name}. It kept the context but does not replay history, so the earlier conversation is not shown here"
+    zh-CN: "已接上与 %{name} 此前的会话：它保留了上下文，但不回放历史，所以这里看不到之前的对话"
+    zh-HK: "已接上與 %{name} 先前的工作階段：它保留了上下文，但不會回放歷史，所以這裡看不到先前的對話"
   acp_image_not_supported:
     en: This ACP Agent does not support image prompts
     zh-CN: 当前 ACP Agent 不支持图片输入
@@ -363,6 +371,14 @@ AgentUi:
     en: Connecting
     zh-CN: 连接中
     zh-HK: 連線中
+  context_boundary_to_acp:
+    en: "Local model context is not carried over to %{name}; the agent uses its own session context"
+    zh-CN: "本地模型的上下文不会带到 %{name}：agent 使用它自己的会话上下文"
+    zh-HK: "本地模型的上下文不會帶到 %{name}：agent 使用它自己的工作階段上下文"
+  context_boundary_to_local:
+    en: "Switched back to the local model. The conversation with %{name} stays on the agent side and is not part of the local model's context; switch back to that agent to continue it"
+    zh-CN: "已切回本地模型：与 %{name} 的对话留在 agent 一侧，不进入本地模型的上下文；切回该 agent 可以继续"
+    zh-HK: "已切回本地模型：與 %{name} 的對話留在 agent 一側，不會進入本地模型的上下文；切回該 agent 可以繼續"
   context_summary:
     en: "Context summary (compressed %{count} history items):\n%{text}"
     zh-CN: "上下文摘要（压缩 %{count} 条历史）：\n%{text}"

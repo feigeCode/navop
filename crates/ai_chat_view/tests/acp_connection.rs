@@ -1,11 +1,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use agent_client_protocol::schema::v1::{ContentBlock, TextContent};
+use agent_client_protocol::schema::v1::{ContentBlock, SessionId, TextContent};
 use agent_runtime::RuntimeEvent;
 use ai_chat_view::{
     AcpAgentConfig, AcpConnectOutcome, AcpConnection, AcpConnectionPhase, AcpPermissionFuture,
-    AcpPermissionOutcome, AcpPermissionProvider, AcpPromptStartError, AcpTimeoutConfig,
+    AcpPermissionOutcome, AcpPermissionProvider, AcpPromptStartError, AcpSessionContinuity,
+    AcpTimeoutConfig,
 };
 
 #[derive(Clone, Copy)]
@@ -17,6 +18,193 @@ enum Mode {
     PromptHang,
     Permission,
     ExitAfterInitialize,
+}
+
+/// 重连必须复用上次的 ACP 会话，而不是一路 `session/new`。
+///
+/// 两处证据互相印证：agent 侧记下的方法序列里有 `session/load`，且会话 id 没变——
+/// fake agent 的 `session/new` 按进程给不同 id，走 new 一定看得出来。
+#[tokio::test]
+async fn reconnect_reuses_the_remembered_acp_session() {
+    let log = temp_method_log("reuse");
+    let first = connect_reuse(&log, None).await;
+    let remembered = first.protocol_session_id();
+    assert!(
+        remembered.starts_with("fake-new-"),
+        "first connect should create a session, got {remembered}"
+    );
+    assert_eq!(
+        Some(AcpSessionContinuity::StartedFresh),
+        first.session_continuity(),
+        "first connect has nothing to reuse"
+    );
+    drop(first);
+
+    let second = connect_reuse(&log, Some(&remembered)).await;
+
+    assert_eq!(
+        remembered,
+        second.protocol_session_id(),
+        "reconnect must land on the remembered ACP session"
+    );
+    assert_eq!(
+        vec!["initialize", "session/new", "initialize", "session/load"],
+        read_method_log(&log),
+        "reconnect must ask the agent to load the remembered session"
+    );
+    assert_eq!(
+        Some(AcpSessionContinuity::ReusedWithHistory),
+        second.session_continuity(),
+        "reuse must be reported as such, or the view would warn about lost context"
+    );
+}
+
+/// 记住的会话已经不存在时，要退回新建，而不是把整次连接判死。
+#[tokio::test]
+async fn a_vanished_remembered_session_falls_back_to_a_new_one() {
+    let log = temp_method_log("fallback");
+
+    let connection = connect_reuse(&log, Some("fake-missing-session")).await;
+
+    assert!(
+        connection.protocol_session_id().starts_with("fake-new-"),
+        "a failed load must fall back to a freshly created session, got {}",
+        connection.protocol_session_id()
+    );
+    assert_eq!(
+        vec!["initialize", "session/load", "session/new"],
+        read_method_log(&log),
+        "the fallback is a real new session, not a silent stop"
+    );
+    assert_eq!(
+        Some(AcpSessionContinuity::RestartedAfterReuseFailure),
+        connection.session_continuity(),
+        "a failed reopen must be reported as a lost context, not as a fresh start"
+    );
+}
+
+/// 只声明 `session/resume` 的 agent：接上了会话，但 agent 不回放历史。
+///
+/// 这一档必须与「干净的新会话」区分开——否则屏幕上空空如也时，
+/// 用户没法判断是上下文断了还是只是没显示。
+#[tokio::test]
+async fn an_agent_that_only_resumes_is_reported_as_no_history_replay() {
+    let log = temp_method_log("resume-only");
+    let executable =
+        std::env::var("CARGO_BIN_EXE_fake_acp_agent").expect("fake ACP executable path");
+    let config = AcpAgentConfig::new("fake", "Fake ACP", executable)
+        .with_args(vec![
+            "session-resume-only".to_string(),
+            log.display().to_string(),
+        ])
+        .with_timeouts(short_timeouts(Duration::from_secs(2)));
+
+    let connection = match AcpConnection::connect_with_runtime_and_resume(
+        &config,
+        std::env::current_dir().expect("current directory"),
+        tokio::runtime::Handle::current(),
+        Some(SessionId::new("fake-remembered")),
+    )
+    .await
+    .expect("resume-only agent should connect")
+    {
+        AcpConnectOutcome::Ready(connection) => *connection,
+        AcpConnectOutcome::AuthenticationRequired(_) => panic!("unexpected authentication"),
+    };
+
+    assert_eq!("fake-remembered", connection.protocol_session_id());
+    assert_eq!(
+        vec!["initialize", "session/resume"],
+        read_method_log(&log),
+        "without load capability the only way back is session/resume"
+    );
+    assert_eq!(
+        Some(AcpSessionContinuity::ReusedWithoutHistory),
+        connection.session_continuity(),
+        "context is back but nothing will be replayed on screen"
+    );
+}
+
+/// agent 不声明 load/resume 能力时不该硬试：直接新建。
+#[tokio::test]
+async fn an_agent_without_reopen_capability_creates_a_new_session() {
+    let log = temp_method_log("no-capability");
+    let executable =
+        std::env::var("CARGO_BIN_EXE_fake_acp_agent").expect("fake ACP executable path");
+    let config = AcpAgentConfig::new("fake", "Fake ACP", executable)
+        .with_args(vec!["text".to_string(), log.display().to_string()])
+        .with_timeouts(short_timeouts(Duration::from_secs(2)));
+
+    let connection = match AcpConnection::connect_with_runtime_and_resume(
+        &config,
+        std::env::current_dir().expect("current directory"),
+        tokio::runtime::Handle::current(),
+        Some(SessionId::new("fake-remembered")),
+    )
+    .await
+    .expect("connect should succeed without reopen capability")
+    {
+        AcpConnectOutcome::Ready(connection) => *connection,
+        AcpConnectOutcome::AuthenticationRequired(_) => panic!("unexpected authentication"),
+    };
+
+    assert_eq!("fake-session", connection.protocol_session_id());
+    assert_eq!(vec!["initialize", "session/new"], read_method_log(&log));
+    assert_eq!(
+        Some(AcpSessionContinuity::StartedFresh),
+        connection.session_continuity(),
+        "an agent without reopen capability was never going to continue the context"
+    );
+}
+
+async fn connect_reuse(log: &std::path::Path, resume: Option<&str>) -> AcpConnection {
+    let executable =
+        std::env::var("CARGO_BIN_EXE_fake_acp_agent").expect("fake ACP executable path");
+    let config = AcpAgentConfig::new("fake", "Fake ACP", executable)
+        .with_args(vec!["session-reuse".to_string(), log.display().to_string()])
+        .with_timeouts(short_timeouts(Duration::from_secs(2)));
+
+    match AcpConnection::connect_with_runtime_and_resume(
+        &config,
+        std::env::current_dir().expect("current directory"),
+        tokio::runtime::Handle::current(),
+        resume.map(|id| SessionId::new(id.to_string())),
+    )
+    .await
+    .expect("fake session-reuse agent should connect")
+    {
+        AcpConnectOutcome::Ready(connection) => *connection,
+        AcpConnectOutcome::AuthenticationRequired(_) => panic!("unexpected authentication"),
+    }
+}
+
+fn short_timeouts(prompt: Duration) -> AcpTimeoutConfig {
+    AcpTimeoutConfig {
+        connect: Duration::from_secs(2),
+        authenticate: Duration::from_secs(2),
+        prompt,
+    }
+}
+
+fn temp_method_log(tag: &str) -> std::path::PathBuf {
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "fake-acp-methods-{tag}-{}-{unique}.log",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    path
+}
+
+fn read_method_log(path: &std::path::Path) -> Vec<String> {
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect()
 }
 
 #[tokio::test]

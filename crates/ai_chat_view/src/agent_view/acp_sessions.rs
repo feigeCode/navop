@@ -261,11 +261,19 @@ impl AgentChatView {
                 self.clear_acp_session_transition(operation);
                 let receiver = acp.subscribe();
                 let session_id = acp.session_id();
+                let protocol_session_id = acp.protocol_session_id();
                 self.acp = Some(acp);
                 self.acp_turn_owner = None;
                 self._event_task = Self::spawn_event_pump(receiver, Some(session_id), cx);
                 self.transcript.clear_acp_status();
                 self.acp_sessions_error = None;
+                // 手动打开历史会话之后，这个内置会话就指向它了：下次重连要回到这条。
+                self.remember_acp_protocol_session(
+                    &session_uid,
+                    &agent_id,
+                    &protocol_session_id,
+                    cx,
+                );
             }
             Err(error) => {
                 let message =

@@ -26,6 +26,8 @@ pub struct AcpPendingConnection {
     pub(super) workspace_root: PathBuf,
     pub(super) config: AcpAgentConfig,
     pub(super) methods: Vec<AuthMethodId>,
+    /// 登录完成后要复用的那个 ACP 会话（可能没有）。
+    pub(super) resume: Option<AcpSessionId>,
     pub(super) lifecycle: AcpConnectionLifecycle,
 }
 
@@ -50,6 +52,7 @@ impl AcpPendingConnection {
             &self.state,
             self.workspace_root.clone(),
             method,
+            self.resume.clone(),
         )
         .await?;
         Ok(self.into_ready(acp_session_id))

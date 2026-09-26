@@ -20,7 +20,7 @@ use tokio::sync::broadcast;
 use crate::acp::config::AcpAgentConfig;
 use crate::acp::elicitation::AcpElicitationProvider;
 use crate::acp::permission::AcpPermissionProvider;
-use crate::acp::state::{AcpConnectionPhase, AcpSessionState};
+use crate::acp::state::{AcpConnectionPhase, AcpSessionContinuity, AcpSessionState};
 use crate::acp::turn::AcpTurnTracker;
 use crate::acp::{AcpError, AcpErrorKind};
 
@@ -91,6 +91,21 @@ impl AcpConnection {
         runner::connect_with_providers(config, workspace_root, providers, cx).await
     }
 
+    /// 连接并优先复用指定的 ACP 协议会话（拿不到就新建）。
+    ///
+    /// 重连 / 应用重启后走这条：不传 `resume` 的话每次都 `session/new`，
+    /// agent 那边会一路堆空会话，用户看到的是「上次说的话全没了」。
+    pub async fn connect_with_providers_and_resume(
+        config: &AcpAgentConfig,
+        workspace_root: std::path::PathBuf,
+        providers: AcpClientProviders,
+        resume: Option<AcpSessionId>,
+        cx: &mut AsyncApp,
+    ) -> anyhow::Result<AcpConnectOutcome> {
+        runner::connect_with_providers_and_resume(config, workspace_root, providers, resume, cx)
+            .await
+    }
+
     /// 只带权限确认通道（旧签名，保留给还不需要提问回程的调用方）。
     pub async fn connect_with_permission_provider(
         config: &AcpAgentConfig,
@@ -117,6 +132,17 @@ impl AcpConnection {
         handle: tokio::runtime::Handle,
     ) -> anyhow::Result<AcpConnectOutcome> {
         runner::connect_with_runtime(config, workspace_root, handle).await
+    }
+
+    /// 只给运行时、只给复用目标的变体。
+    #[doc(hidden)]
+    pub async fn connect_with_runtime_and_resume(
+        config: &AcpAgentConfig,
+        workspace_root: std::path::PathBuf,
+        handle: tokio::runtime::Handle,
+        resume: Option<AcpSessionId>,
+    ) -> anyhow::Result<AcpConnectOutcome> {
+        runner::connect_with_runtime_and_resume(config, workspace_root, handle, resume).await
     }
 
     #[doc(hidden)]
@@ -155,6 +181,25 @@ impl AcpConnection {
 
     pub fn session_id(&self) -> SessionId {
         self.session_id.clone()
+    }
+
+    /// 当前指向的 ACP **协议**会话 id。
+    ///
+    /// 与 [`Self::session_id`] 不是一回事：那个是内置事件流的会话 id（`acp:<uuid>`），
+    /// 这个才是能拿去 `session/load`、`session/resume` 的地址，重连时要记住它。
+    pub fn protocol_session_id(&self) -> String {
+        self.acp_session_id.0.to_string()
+    }
+
+    /// 这次连接实际怎么打开会话的（复用成功 / 没记忆新建 / 复用失败降级）。
+    ///
+    /// 视图据此决定要不要告诉用户「上一轮的上下文没接上」：复用失败只写日志的话，
+    /// 用户会以为对话还在，继续追问才发现 agent 什么都不记得。
+    pub fn session_continuity(&self) -> Option<AcpSessionContinuity> {
+        self.state
+            .lock()
+            .ok()
+            .and_then(|state| state.session_continuity())
     }
 
     pub fn phase(&self) -> AcpConnectionPhase {
