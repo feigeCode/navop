@@ -40,13 +40,14 @@ impl WorkbenchShell {
             return Some(nav.into_any_element());
         }
         let panel = self.session_source.as_ref()?.clone();
-        let (summaries, current, acp_model, acp_current) = {
+        let (summaries, current, acp_model, acp_current, backend_is_acp) = {
             let view = panel.read(cx);
             (
                 view.session_summaries(cx),
                 view.current_session_id(cx),
                 view.acp_session_list_model(cx),
                 view.acp_session_id(cx),
+                view.backend_is_acp(cx),
             )
         };
 
@@ -267,6 +268,18 @@ impl WorkbenchShell {
             ) {
                 rows.push(placeholder);
             }
+        } else if backend_is_acp {
+            // 外接 agent 没声明 `session/list`：这一区此前会**整块消失**，
+            // 用户既看不到会话、也看不到任何解释。给一句话说明会话归谁管。
+            rows.push(
+                div()
+                    .px_2()
+                    .py_2()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(t!("AgentUi.acp_external_managed").to_string())
+                    .into_any_element(),
+            );
         }
 
         Some(

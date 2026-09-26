@@ -6,7 +6,8 @@
 //!
 //! 三条纪律：
 //!
-//! 1. **风险区永远展开。** 待审批卡片、失败的工具/子代理、系统提示不走折叠分支。
+//! 1. **风险项永远展开，但排在原位。** 待审批卡片、失败的工具/子代理、系统提示
+//!    不走折叠分支，也**不**被挪到轮次末尾 —— 否则失败卡片会一直钉在底部。
 //! 2. **颜色不凭空造。** [`AgentChatTheme`] 只有中性色，语义色一律取 `cx.theme()`。
 //! 3. **不虚构活动。** 折叠头的步数与工具分布全部来自真实卡片；时间缺失就不显示时长。
 
@@ -250,11 +251,6 @@ fn render_turn(
         children.push(slot(render_one(message, context.code_actions, theme, window, cx)));
     }
 
-    // 风险区不参与折叠：无条件展开渲染。
-    for message in &turn.risks {
-        children.push(slot(render_one(message, context.code_actions, theme, window, cx)));
-    }
-
     if context.turn_chrome {
         if turn.head.is_some() && turn.answer.is_empty() && !turn.live && turn.risks.is_empty() {
             children.push(render_no_answer(theme));
@@ -326,6 +322,23 @@ fn render_turn_head(turn: &TurnProjection<'_>, theme: &AgentChatTheme) -> AnyEle
         })
         .child(div().flex_1())
         .into_any_element()
+}
+
+/// 过程区当前实际渲染的消息。
+///
+/// 展开 = 全部过程项；收起 = 只剩「不许被折叠吞掉的项」（风险 + 仍在跑的步骤）。
+/// 位置由 `process` 决定，所以两种状态下顺序都是消息的原始顺序
+/// —— 失败卡片不会被挪到末尾，正在跑的步骤也不会消失。
+fn visible_process_items<'a>(turn: &'a TurnProjection<'_>, expanded: bool) -> Vec<&'a ChatMessageUI> {
+    if expanded {
+        turn.process.clone()
+    } else {
+        turn.process
+            .iter()
+            .copied()
+            .filter(|message| crate::turn::survives_collapse(message))
+            .collect()
+    }
 }
 
 fn render_process(
@@ -403,34 +416,40 @@ fn render_process(
             }
         });
 
-    let body = expanded.then(|| {
-        let items = message_render_items_for(&turn.process);
-        let children: Vec<AnyElement> = items
-            .into_iter()
-            .map(|item| match item {
-                crate::message_tool_group::MessageRenderItem::Single(message) => {
-                    slot(render_one(message, context.code_actions, theme, window, cx))
-                }
-                crate::message_tool_group::MessageRenderItem::ToolTargetGroup(group) => {
-                    let inner = group
-                        .messages()
-                        .iter()
-                        .map(|message| {
-                            render_one(message, context.code_actions, theme, window, cx)
-                        })
-                        .collect();
-                    slot(render_tool_target_group(group, inner, theme, cx))
-                }
-            })
-            .collect();
-        v_flex()
-            .debug_selector(|| "ai-chat-process-body".to_string())
-            .w_full()
-            .min_w_0()
-            .gap_2()
-            .children(children)
-            .into_any_element()
-    });
+    // 收起时也保留风险项：它们不参与折叠（见 `turn.rs` 的纪律 1）。
+    // 位置由 `process` 决定，所以无论展开还是收起，顺序都是消息的原始顺序。
+    let visible = visible_process_items(turn, expanded);
+    let items = message_render_items_for(&visible);
+    let children: Vec<AnyElement> = items
+        .into_iter()
+        .map(|item| match item {
+            crate::message_tool_group::MessageRenderItem::Single(message) => {
+                slot(render_one(message, context.code_actions, theme, window, cx))
+            }
+            crate::message_tool_group::MessageRenderItem::ToolTargetGroup(group) => {
+                let inner = group
+                    .messages()
+                    .iter()
+                    .map(|message| render_one(message, context.code_actions, theme, window, cx))
+                    .collect();
+                slot(render_tool_target_group(group, inner, theme, cx))
+            }
+        })
+        .collect();
+    // 收起且这一轮没有风险项时，整块过程正文都不渲染（只留折叠头）。
+    let body = if children.is_empty() {
+        None
+    } else {
+        Some(
+            v_flex()
+                .debug_selector(|| "ai-chat-process-body".to_string())
+                .w_full()
+                .min_w_0()
+                .gap_2()
+                .children(children)
+                .into_any_element(),
+        )
+    };
 
     v_flex()
         .w_full()
@@ -466,26 +485,21 @@ fn render_turn_foot(
     context: &MessageListContext<'_>,
     cx: &mut App,
 ) -> AnyElement {
-    let (label, color) = if turn.has_pending_decision() {
-        (
-            t!("AgentUi.turn_state_pending_decision").to_string(),
-            cx.theme().warning,
-        )
+    // 状态徽标是**可选**的：轮内已经有一条「还在跑」的状态消息时（例如
+    // 「OpenCode 正在继续响应…」），页脚不再说一遍「进行中」——它俩紧挨着就是
+    // 同一句话说两遍。此时徽标整块省略，页脚其余部分（回滚入口）照常。
+    let status: Option<(String, gpui::Hsla)> = if let Some(pending) = turn
+        .has_pending_decision()
+        .then(|| t!("AgentUi.turn_state_pending_decision").to_string())
+    {
+        Some((pending, cx.theme().warning))
     } else if turn.live {
-        (
-            t!("AgentUi.turn_state_running").to_string(),
-            theme.muted_foreground,
-        )
+        (!turn.has_live_status())
+            .then(|| (t!("AgentUi.turn_state_running").to_string(), theme.muted_foreground))
     } else if turn.has_failure() {
-        (
-            t!("AgentUi.turn_state_failed").to_string(),
-            cx.theme().danger,
-        )
+        Some((t!("AgentUi.turn_state_failed").to_string(), cx.theme().danger))
     } else {
-        (
-            t!("AgentUi.turn_state_done").to_string(),
-            cx.theme().success,
-        )
+        Some((t!("AgentUi.turn_state_done").to_string(), cx.theme().success))
     };
 
     // 只有拿到该轮快照 id 的轮次才给入口；点击后交给宿主决定怎么恢复。
@@ -499,8 +513,10 @@ fn render_turn_foot(
         .gap_2()
         .px_2()
         .pt_1()
-        .child(div().size(px(5.0)).rounded_full().bg(color).flex_shrink_0())
-        .child(div().text_xs().text_color(color).child(label))
+        .when_some(status, |this, (label, color)| {
+            this.child(div().size(px(5.0)).rounded_full().bg(color).flex_shrink_0())
+                .child(div().text_xs().text_color(color).child(label))
+        })
         .child(div().flex_1())
         .when_some(restorable_turn, |this, turn_id| {
             let on_action = context.on_action.clone();
@@ -613,6 +629,87 @@ mod tests {
         // 跨天与负值都不应产生越界输出。
         assert_eq!("00:00", format_clock(86_400));
         assert_eq!("23:59", format_clock(-60));
+    }
+
+    #[test]
+    fn collapsed_process_keeps_only_risks_while_expanded_keeps_the_original_order() {
+        use crate::agent_cards::{TOOL_CARD, ToolCardData};
+
+        let tool = |call_id: &str, success: Option<bool>| {
+            ChatMessageUI::card(
+                TOOL_CARD,
+                ToolCardData {
+                    call_id: call_id.to_string(),
+                    tool_name: "fs.read".to_string(),
+                    target_id: None,
+                    target_label: None,
+                    input_summary: String::new(),
+                    input_json: String::new(),
+                    running: success.is_none(),
+                    success,
+                    summary: String::new(),
+                    data_text: String::new(),
+                }
+                .to_json(),
+            )
+        };
+        // 失败的工具卡夹在中间：它的位置必须保持不变。
+        let messages = vec![
+            ChatMessageUI::user("Q1"),
+            tool("ok", Some(true)),
+            ChatMessageUI::status("继续响应", false),
+            tool("boom", Some(false)),
+        ];
+        let turns = project_turns(&messages, &TurnTimings::new());
+
+        let expanded: Vec<String> = visible_process_items(&turns[0], true)
+            .into_iter()
+            .map(|message| message.id.clone())
+            .collect();
+        assert_eq!(3, expanded.len(), "展开时过程项齐全");
+        assert_eq!(
+            messages[1].id, expanded[0],
+            "展开时第一条就是原始顺序里的第一条"
+        );
+
+        let collapsed: Vec<String> = visible_process_items(&turns[0], false)
+            .into_iter()
+            .map(|message| message.id.clone())
+            .collect();
+        assert_eq!(
+            vec![messages[2].id.clone(), messages[3].id.clone()],
+            collapsed,
+            "收起时只留「不许被折叠吞掉」的项：仍在跑的状态行 + 失败的工具卡"
+        );
+
+        // 已完成、且无风险的步骤在收起时让位 —— 否则折叠就等于没折叠。
+        assert!(
+            !collapsed.contains(&messages[1].id),
+            "成功的工具卡属于可折叠的历史步骤"
+        );
+    }
+
+    #[test]
+    fn a_live_status_line_suppresses_the_duplicate_running_badge() {
+        // 三处「还在跑」曾同时出现：轮内状态行、页脚「进行中」、列表末尾「执行中…」。
+        // 状态行本身就是指示，页脚据此省略徽标，避免同义重复。
+        let mut with_status = vec![
+            ChatMessageUI::user("Q1"),
+            ChatMessageUI::status("OpenCode 正在继续响应…", false),
+        ];
+        let turns = project_turns(&with_status, &TurnTimings::new());
+        assert!(turns[0].live, "状态行未完成 ⇒ 本轮仍在进行");
+        assert!(
+            turns[0].has_live_status(),
+            "页脚据此不重复显示「进行中」"
+        );
+
+        with_status[1] = ChatMessageUI::status("已结束", true);
+        let turns = project_turns(&with_status, &TurnTimings::new());
+        assert!(
+            !turns[0].has_live_status(),
+            "状态行完成后，页脚恢复显示轮次状态"
+        );
     }
 
     #[test]

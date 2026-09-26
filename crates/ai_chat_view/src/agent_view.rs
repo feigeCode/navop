@@ -3869,6 +3869,9 @@ impl AgentChatView {
                     match result {
                         Ok(_) => {
                             this.clear_acp_session_transition(operation);
+                            // 刚建好的会话要立刻出现在会话列表里：以前只有手动点刷新
+                            // 或重连才会拉列表，用户会以为压根没建成。
+                            this.reload_acp_sessions(cx);
                             this.start_next_pending(&session_uid, cx);
                         }
                         Err(err) => {
@@ -5292,8 +5295,14 @@ impl Render for AgentChatView {
         // 这里刻意用无通知版本：渲染期间 notify 会把「重算 → 通知 → 再渲染」转起来。
         self.refresh_search_if_stale();
         let chat_theme = resolve_agent_chat_theme(self.theme.as_ref(), cx);
-        let running_activity = self
-            .is_running
+        // 「执行中…」只在**没有**进行中轮次时才挂：轮次页脚已经在显示「进行中」，
+        // 两者紧挨着出现就是同一句话说两遍（用户看到的「三个执行状态」）。
+        let has_live_turn = self
+            .transcript
+            .messages
+            .iter()
+            .any(crate::turn::is_live_message);
+        let running_activity = (self.is_running && !has_live_turn)
             .then(|| render_running_activity(&chat_theme));
 
         // 滚动几何观测。「内容变长」不算用户移动阅读位置，否则流式输出会把

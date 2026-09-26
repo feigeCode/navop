@@ -34,6 +34,15 @@ impl AgentChatView {
         self.backend == Backend::Acp && self.acp_sessions_supported
     }
 
+    /// 当前后端是否是 ACP（会话由外接 agent 管理）。
+    ///
+    /// 与 [`Self::acp_session_list_visible`] 分开：那个还要求 agent 声明了
+    /// `session/list` 能力。这个只回答「后端是谁」，用来在能力缺失时给一句说明，
+    /// 别让整个会话区凭空消失。
+    pub(crate) fn backend_is_acp(&self) -> bool {
+        self.backend == Backend::Acp
+    }
+
     /// 给渲染层用的快照；不显示时是 `None`。
     pub(crate) fn acp_session_list_model(&self) -> Option<AcpSessionListModel> {
         self.acp_session_list_visible().then(|| AcpSessionListModel {

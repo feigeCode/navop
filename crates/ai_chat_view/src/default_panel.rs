@@ -586,6 +586,16 @@ impl DefaultAgentChatPanel {
             .and_then(|view| view.read(cx).acp_session_list_model())
     }
 
+    /// 当前会话后端是否是 ACP（会话由外接 agent 管理）。
+    ///
+    /// 与 [`Self::acp_session_list_model`] 的区别：那个在 agent 没声明
+    /// `session/list` 时是 `None`，这个仍为真 —— 侧栏据此显示兜底说明。
+    pub(crate) fn backend_is_acp(&self, cx: &App) -> bool {
+        self.view
+            .as_ref()
+            .is_some_and(|view| view.read(cx).backend_is_acp())
+    }
+
     /// 当前连接指向的 ACP 会话 id。
     pub(crate) fn acp_session_id(&self, cx: &App) -> Option<String> {
         self.view

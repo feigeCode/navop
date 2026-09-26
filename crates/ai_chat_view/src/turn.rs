@@ -6,8 +6,10 @@
 //!
 //! 三条硬纪律（都是踩过坑才有的）：
 //!
-//! 1. **风险不进过程区。** 待审批卡片、被拒/失败的工具与子代理一律归入
-//!    [`TurnProjection::risks`]，过程区折叠**不得**把它们藏起来。
+//! 1. **风险不参与过程折叠，但留在时间线原位。** 待审批卡片、被拒/失败的工具与
+//!    子代理同时记入 [`TurnProjection::process`]（保持原始顺序）与
+//!    [`TurnProjection::risks`]（`process` 的有序子集）：过程区收起时**仍要**显示
+//!    它们，但**不能**把它们挪到轮次末尾 —— 那会让失败的工具卡片一直钉在底部。
 //! 2. **轮次身份用运行时 `turn_id`，缺失时退化为首个消息 id。** 不用数组下标、
 //!    不用显示文本 —— 否则预算裁剪后身份会整体错位。
 //! 3. **未测到的时间不猜。** `started_at` / `finished_at` 缺失时渲染层不显示时长，
@@ -89,11 +91,13 @@ pub struct TurnProjection<'a> {
     pub timing: TurnTiming,
     /// 本轮的用户提问（本轮第一条 user 消息）。preamble 轮为 `None`。
     pub head: Option<&'a ChatMessageUI>,
-    /// 过程：状态、工具、计划、子代理，以及结论之前的助手片段。
+    /// 过程：状态、工具、计划、子代理，以及结论之前的助手片段 ——
+    /// **按消息原始顺序，且包含风险项**。
     pub process: Vec<&'a ChatMessageUI>,
     /// 结论：本轮最后一次助手正文。
     pub answer: Vec<&'a ChatMessageUI>,
-    /// 风险：待审批 / 失败 / 被拒 —— **任何折叠都不得隐藏**。
+    /// 风险：待审批 / 失败 / 被拒。**是 `process` 的有序子集**，任何折叠都不得隐藏；
+    /// 但**不能**单独排到轮次末尾 —— 那会让失败的工具卡片脱离时间线、一直钉在底部。
     pub risks: Vec<&'a ChatMessageUI>,
     /// 是否仍在进行。
     pub live: bool,
@@ -115,16 +119,23 @@ impl TurnProjection<'_> {
         self.live
     }
 
+    /// 这一轮里是否已经有一条**还在跑**的状态消息（例如「OpenCode 正在继续响应…」）。
+    ///
+    /// 那条消息本身就是「本轮仍在进行」的指示，且比页脚的「进行中」具体 ——
+    /// 两者紧挨着渲染就是同一句话说两遍。渲染层据此省略页脚的「进行中」。
+    pub fn has_live_status(&self) -> bool {
+        self.process
+            .iter()
+            .chain(self.answer.iter())
+            .any(|message| matches!(&message.variant, MessageVariant::Status { is_done: false, .. }))
+    }
+
     /// 该轮是否以失败/取消收尾（由系统提示或失败卡片体现）。
     pub fn has_failure(&self) -> bool {
-        self.risks
+        self.process
             .iter()
+            .chain(self.answer.iter())
             .any(|message| matches!(message.role, ChatRole::System))
-            || self
-                .process
-                .iter()
-                .chain(self.answer.iter())
-                .any(|message| matches!(message.role, ChatRole::System))
     }
 
     /// 过程步数 = 工具卡片数。
@@ -188,7 +199,10 @@ pub fn breakdown_text(breakdown: &[(String, usize)], max: usize) -> Option<Strin
 /// 只看 `is_streaming` 不够：一次工具执行、一个子代理、一条未完成的轻量状态
 /// 都可能没有流式文本，但用户显然希望它们保持可见。漏判会让运行中的过程区
 /// 在默认收起状态下一闪而过。
-fn is_live_message(message: &ChatMessageUI) -> bool {
+///
+/// 也用于判断「列表末尾还要不要再挂一条『执行中…』」——轮次页脚已经在显示
+/// 「进行中」时，再挂一条就是同义重复。
+pub(crate) fn is_live_message(message: &ChatMessageUI) -> bool {
     if message.is_streaming {
         return true;
     }
@@ -203,6 +217,15 @@ fn is_live_message(message: &ChatMessageUI) -> bool {
             .is_some_and(|data| data.success.is_none()),
         _ => false,
     }
+}
+
+/// 消息在过程区**收起**时是否仍要显示。
+///
+/// 两类：风险项（失败 / 待审批，见 [`is_risk_message`]）与仍在进行的项
+/// （未完成的工具、子代理、状态行）。前者藏了会漏掉失败，后者藏了会让人
+/// 以为卡住了 —— 都不许被折叠吞掉。位置仍由 `process` 决定，不做重排。
+pub fn survives_collapse(message: &ChatMessageUI) -> bool {
+    is_risk_message(message) || is_live_message(message)
 }
 
 /// 消息是否属于「风险」：必须无条件展示，不能被过程折叠吞掉。
@@ -298,7 +321,10 @@ fn build_turn<'a>(
         }
         if is_risk_message(message) {
             risks.push(message);
-        } else if Some(position) == answer_index {
+        }
+        // 风险项**同时**留在过程序列里，顺序不变 —— `risks` 只是它的视图。
+        // 抽走它们会让失败卡片被渲染到轮次末尾（用户看到的「一直钉在底部」）。
+        if Some(position) == answer_index {
             answer.push(message);
         } else {
             process.push(message);
@@ -457,7 +483,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_confirmation_is_a_risk_and_never_folded_into_process() {
+    fn pending_confirmation_is_a_risk_and_keeps_its_place_in_process() {
         let messages = vec![
             user("Q1", "t1"),
             tool_card("c1", "fs.read", Some(true)),
@@ -471,8 +497,40 @@ mod tests {
         assert_eq!(1, turns[0].risks.len());
         assert_eq!("c1", call_id_of(turns[0].risks[0]));
         assert!(turns[0].has_pending_decision());
-        // 已完成的确认卡片留在过程区（它是历史步骤），但不再需要决策。
-        assert_eq!(2, turns[0].process.len());
+        // 待决策卡片**在**过程序列里（收起时会被单独放行），另外两张是历史步骤。
+        assert_eq!(3, turns[0].process.len());
+    }
+
+    #[test]
+    fn a_failed_tool_keeps_its_place_in_the_process_sequence() {
+        // 失败的工具卡是风险项，但**不能**被挪到轮次末尾：它必须和相邻步骤保持原顺序，
+        // 否则表现就是「执行失败的工具一直钉在底部」。
+        let messages = vec![
+            user("Q1", "t1"),
+            tool_card("ok", "fs.read", Some(true)),
+            ChatMessageUI::status("继续响应", false),
+            tool_card("boom", "ssh.exec", Some(false)),
+        ];
+
+        let turns = project_turns(&messages, &TurnTimings::new());
+
+        let actual: Vec<String> = turns[0]
+            .process
+            .iter()
+            .map(|message| message.id.clone())
+            .collect();
+        let expected: Vec<String> = messages[1..]
+            .iter()
+            .map(|message| message.id.clone())
+            .collect();
+        assert_eq!(expected, actual, "过程序列必须与消息原始顺序逐条一致");
+        assert_eq!(1, turns[0].risks.len());
+        assert_eq!("boom", call_id_of(turns[0].risks[0]));
+        assert_eq!(
+            turns[0].process.last().map(|message| message.id.as_str()),
+            turns[0].risks.last().map(|message| message.id.as_str()),
+            "风险项是过程序列的**有序子集**：位置也一致"
+        );
     }
 
     #[test]
@@ -487,7 +545,7 @@ mod tests {
 
         assert_eq!(1, turns[0].risks.len());
         assert_eq!("c2", call_id_of(turns[0].risks[0]));
-        assert_eq!(1, turns[0].process.len());
+        assert_eq!(2, turns[0].process.len());
     }
 
     #[test]
