@@ -143,6 +143,7 @@ async fn collect_subagent_response(
     cancellation: &CancellationToken,
 ) -> Result<ModelResponse, String> {
     let mut text = String::new();
+    let mut usage: Option<crate::model::TokenUsage> = None;
     let mut completed: Option<ModelResponse> = None;
     while let Some(event) = stream.next().await {
         if cancellation.is_cancelled() {
@@ -153,13 +154,19 @@ async fn collect_subagent_response(
         {
             ModelStreamEvent::TextDelta(delta) => text.push_str(&delta),
             ModelStreamEvent::ReasoningDelta(_) | ModelStreamEvent::ToolCall(_) => {}
-            ModelStreamEvent::Completed(response) => completed = Some(response),
+            // 子代理的计量只随它自己的响应返回;它不持有会话,不在这里记账。
+            ModelStreamEvent::Usage(reported) => usage = usage.or(Some(reported)),
+            ModelStreamEvent::Completed(response) => {
+                usage = usage.or(response.usage);
+                completed = Some(response);
+            }
         }
     }
     let mut response = completed.unwrap_or_default();
     if !text.is_empty() {
         response.text = Some(text);
     }
+    response.usage = usage;
     Ok(response)
 }
 

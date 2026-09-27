@@ -76,6 +76,9 @@ impl ModelClient for MockModelClient {
         for call in &response.tool_calls {
             events.push(Ok(ModelStreamEvent::ToolCall(call.clone())));
         }
+        if let Some(usage) = response.usage {
+            events.push(Ok(ModelStreamEvent::Usage(usage)));
+        }
         events.push(Ok(ModelStreamEvent::Completed(response)));
         Ok(Box::pin(futures::stream::iter(events)))
     }

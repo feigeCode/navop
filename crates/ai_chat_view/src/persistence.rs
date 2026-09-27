@@ -138,6 +138,7 @@ fn load_legacy_chat_snapshot(cx: &App, uid: &str) -> Option<SessionSnapshot> {
         skills: agent_runtime::SkillContext::new(),
         workspace_root: None,
         draft: None,
+        context_tokens: None,
     })
 }
 
@@ -208,6 +209,7 @@ mod tests {
             skills: agent_runtime::SkillContext::new(),
             workspace_root: None,
             draft: None,
+            context_tokens: None,
         }
     }
 
@@ -282,6 +284,7 @@ mod tests {
             skills: agent_runtime::SkillContext::new(),
             workspace_root: None,
             draft: None,
+            context_tokens: None,
         };
         assert_eq!(derive_title(&snap), "新 Agent 会话");
     }

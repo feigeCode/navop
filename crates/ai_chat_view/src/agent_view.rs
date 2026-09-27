@@ -67,6 +67,7 @@ use crate::agent_cards::{
     ApproveToolCall, PlanCardData, RejectToolCall, SelectAcpPermissionOption, SubAgentCardData,
 };
 use crate::agent_skills::AgentSkillState;
+use crate::usage::{format_local_usage, model_context_window};
 use crate::agent_transcript::AgentTranscript;
 use crate::bridge::build_runtime_from_llm_provider;
 use crate::code_block::{CodeBlockAction, CodeBlockActionRegistry};
@@ -1311,6 +1312,8 @@ impl AgentChatView {
             &available_resources,
             skills.summary(),
             skills.items(),
+            // 构造时还没有任何模型采样,计量自然为空;之后的 sync_composer 会带上。
+            None,
         );
         let target_options: Vec<ComposerTarget> = resources
             .resources
@@ -3336,11 +3339,23 @@ impl AgentChatView {
             &self.available_resources,
             self.skills.summary(),
             self.skills.items(),
+            self.local_context_tokens(),
         );
         self.input.update(cx, |inp, cx| {
             inp.set_slash_commands(self.composer_slash_commands(), cx);
             inp.set_context(ctx, cx);
         });
+    }
+
+    /// 当前本地会话的上下文占用(模型报告过计量才有;ACP 会话由 agent 上报,
+    /// 走 [`AcpUsage`] 那条路,不经过这里)。
+    fn local_context_tokens(&self) -> Option<u64> {
+        if self.backend != Backend::Local {
+            return None;
+        }
+        self.runtime
+            .session(&SessionId::from_string(self.current_session.clone()))
+            .and_then(|session| session.context_tokens())
     }
 
     pub fn set_workspace_root(&mut self, root: std::path::PathBuf, cx: &mut Context<Self>) {
@@ -4825,6 +4840,7 @@ impl AgentChatView {
             &self.available_resources,
             self.skills.summary(),
             self.skills.items(),
+            self.local_context_tokens(),
         );
         self.input.update(cx, |input, cx| {
             input.set_target_options(target_options, cx);
@@ -4894,6 +4910,7 @@ impl AgentChatView {
             &self.available_resources,
             self.skills.summary(),
             self.skills.items(),
+            self.local_context_tokens(),
         );
         self.input.update(cx, |input, cx| {
             input.set_mentions(mentions, cx);
@@ -5982,6 +5999,7 @@ fn build_composer_context(
     available_resources: &[ResourceRef],
     skill_summary: ComposerSkillSummary,
     skill_items: Vec<ComposerSkillItem>,
+    local_context_tokens: Option<u64>,
 ) -> AgentComposerContext {
     let mut context = build_context(resources, selection, model);
     context.resource_source_options = resource_source_options(resources, available_resources);
@@ -5999,6 +6017,15 @@ fn build_composer_context(
         if let Some(label) = acp_state.as_ref().and_then(acp_mode_label) {
             context.execution_mode_label = SharedString::from(label);
         }
+    } else if let Some(tokens) = local_context_tokens {
+        // 本地后端:模型报了计量才展示;窗口大小按模型名尽力解析,查不到就
+        // 只显示 token 数,不猜百分比。
+        let window = model.and_then(|option| model_context_window(&option.model));
+        context.scopes.push(ComposerScope::new(
+            "local-usage",
+            t!("AgentUi.usage").to_string(),
+            format_local_usage(tokens, window),
+        ));
     }
     context
 }
@@ -9701,6 +9728,7 @@ mod tests {
                     skills: agent_runtime::SkillContext::new(),
                     workspace_root: None,
                     draft: None,
+                    context_tokens: None,
                 });
 
             assert!(
@@ -10729,6 +10757,7 @@ mod tests {
             &[],
             ComposerSkillSummary::default(),
             Vec::new(),
+        None,
         );
         let acp = build_composer_context(
             &ResourceContext::new(),
@@ -10744,6 +10773,7 @@ mod tests {
             &[],
             ComposerSkillSummary::default(),
             Vec::new(),
+        None,
         );
 
         assert_eq!(local.plan_items, acp.plan_items);
@@ -10774,6 +10804,7 @@ mod tests {
             &[],
             ComposerSkillSummary::default(),
             Vec::new(),
+        None,
         );
 
         assert_eq!(ctx.agent_options[0].label.as_ref(), "One Agent");
@@ -10814,6 +10845,7 @@ mod tests {
             &[],
             ComposerSkillSummary::default(),
             Vec::new(),
+        None,
         );
 
         assert_eq!(ctx.subagent_items.len(), 2);
@@ -10985,6 +11017,7 @@ mod tests {
             &[],
             ComposerSkillSummary::default(),
             Vec::new(),
+        None,
         );
 
         assert_eq!(ctx.target.unwrap().label.as_ref(), "ACP 工作会话");
@@ -10998,6 +11031,99 @@ mod tests {
         assert!(
             ctx.capabilities
                 .contains(&SharedString::from(format!("{}:1", t!("AgentUi.commands"))))
+        );
+    }
+
+    #[test]
+    fn local_backend_reports_context_usage_with_a_best_effort_window() {
+        let model = ComposerModelOption::new(
+            "deepseek-chat-option",
+            "deepseek",
+            "DeepSeek",
+            "deepseek-chat",
+        );
+        let ctx = build_composer_context(
+            &ResourceContext::new(),
+            ExecutionSelection::tool(ToolExecutionMode::Auto),
+            Some(&model),
+            None,
+            &[],
+            Backend::Local,
+            &[],
+            None,
+            false,
+            None,
+            &[],
+            ComposerSkillSummary::default(),
+            Vec::new(),
+            Some(1500),
+        );
+
+        let usage = ctx
+            .scopes
+            .iter()
+            .find(|scope| scope.key == "local-usage")
+            .expect("本地会话报过计量就应有用量 scope");
+        assert_eq!(usage.value.as_ref(), "1500/128000 tokens");
+    }
+
+    #[test]
+    fn local_usage_without_a_known_window_shows_tokens_only() {
+        let model =
+            ComposerModelOption::new("custom-option", "custom", "Custom", "my-private-finetune");
+        let ctx = build_composer_context(
+            &ResourceContext::new(),
+            ExecutionSelection::tool(ToolExecutionMode::Auto),
+            Some(&model),
+            None,
+            &[],
+            Backend::Local,
+            &[],
+            None,
+            false,
+            None,
+            &[],
+            ComposerSkillSummary::default(),
+            Vec::new(),
+            Some(1500),
+        );
+
+        let usage = ctx
+            .scopes
+            .iter()
+            .find(|scope| scope.key == "local-usage")
+            .expect("窗口未知也应展示 token 数");
+        assert_eq!(usage.value.as_ref(), "1500 tokens");
+    }
+
+    #[test]
+    fn local_usage_scope_is_absent_until_the_model_reports_something() {
+        let model = ComposerModelOption::new(
+            "deepseek-chat-option",
+            "deepseek",
+            "DeepSeek",
+            "deepseek-chat",
+        );
+        let ctx = build_composer_context(
+            &ResourceContext::new(),
+            ExecutionSelection::tool(ToolExecutionMode::Auto),
+            Some(&model),
+            None,
+            &[],
+            Backend::Local,
+            &[],
+            None,
+            false,
+            None,
+            &[],
+            ComposerSkillSummary::default(),
+            Vec::new(),
+            None,
+        );
+
+        assert!(
+            !ctx.scopes.iter().any(|scope| scope.key == "local-usage"),
+            "模型还没报过计量,不该装作测过(空 chip 比假数据好)"
         );
     }
 

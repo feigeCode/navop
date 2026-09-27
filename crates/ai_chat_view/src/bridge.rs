@@ -19,7 +19,7 @@ use self::model_policy::{
 };
 use self::stream_tools::merge_stream_tool_calls;
 use agent_runtime::model::{
-    ModelClient, ModelRequest, ModelResponse, ModelStream, ModelStreamEvent, ToolCall,
+    ModelClient, ModelRequest, ModelResponse, ModelStream, ModelStreamEvent, TokenUsage, ToolCall,
     model_response_into_stream,
 };
 use agent_runtime::{Runtime, RuntimeError, RuntimeServices, ToolRegistry, ToolRouter};
@@ -135,6 +135,7 @@ impl ModelClient for LlmModelClient {
         Ok(ModelResponse {
             text: (!response.content.is_empty()).then(|| response.content.clone()),
             tool_calls,
+            usage: response.usage.map(token_usage_from_connector),
         })
     }
 
@@ -166,6 +167,7 @@ impl ModelClient for LlmModelClient {
             .map_err(|e| RuntimeError::model(e.to_string()))?;
 
         // 状态机:逐段读取底层流,把文本映射为 TextDelta、把分片的工具调用聚合起来;
+        // 最终 chunk 上的 token 计量映射为 Usage(Completed 也会带同一份)。
         // 流尽时补一条 Completed(完整文本 + 聚合后的工具调用)。
         let provider_name = self.provider.provider_name().to_string();
         let model = self.model.clone();
@@ -176,6 +178,7 @@ impl ModelClient for LlmModelClient {
                 inner,
                 text: String::new(),
                 tool_calls: Vec::new(),
+                usage: None,
                 pending_events: VecDeque::new(),
             },
             |state| async move {
@@ -186,6 +189,7 @@ impl ModelClient for LlmModelClient {
                         mut inner,
                         mut text,
                         mut tool_calls,
+                        mut usage,
                         mut pending_events,
                     } => {
                         if let Some(event) = pending_events.pop_front() {
@@ -197,6 +201,7 @@ impl ModelClient for LlmModelClient {
                                     inner,
                                     text,
                                     tool_calls,
+                                    usage,
                                     pending_events,
                                 },
                             ));
@@ -217,6 +222,17 @@ impl ModelClient for LlmModelClient {
                                         );
                                     }
                                     merge_stream_tool_calls(&mut tool_calls, &chunk);
+                                    if let Some(reported) = chunk.usage.clone() {
+                                        // 只在第一次收到时发事件;个别 provider 的
+                                        // 累计型计量会随每个 chunk 重复,事件只表达
+                                        // 「有计量了」,数值以最后一次为准。
+                                        let mapped_usage = token_usage_from_connector(reported);
+                                        if usage.is_none() {
+                                            pending_events
+                                                .push_back(ModelStreamEvent::Usage(mapped_usage));
+                                        }
+                                        usage = Some(mapped_usage);
+                                    }
                                     let parts = extract_stream_text_parts(&chunk);
                                     if let Some(reasoning) = parts.reasoning {
                                         pending_events.push_back(ModelStreamEvent::ReasoningDelta(
@@ -238,6 +254,7 @@ impl ModelClient for LlmModelClient {
                                                 inner,
                                                 text,
                                                 tool_calls,
+                                                usage,
                                                 pending_events,
                                             },
                                         ));
@@ -263,6 +280,7 @@ impl ModelClient for LlmModelClient {
                                     let response = ModelResponse {
                                         text: (!text.is_empty()).then_some(text),
                                         tool_calls,
+                                        usage,
                                     };
                                     let event = Ok(ModelStreamEvent::Completed(response));
                                     return Some((event, StreamState::Done));
@@ -351,19 +369,29 @@ fn preview(value: &str) -> String {
     out
 }
 
-/// `complete_stream` 映射的内部状态。
+/// `stream::unfold` 映射的内部状态。
 enum StreamState {
-    /// 仍在转发底层流(携带底层流、已累积文本与已聚合的工具调用)。
+    /// 仍在转发底层流(携带底层流、已累积文本、已聚合的工具调用与计量)。
     Streaming {
         provider_name: String,
         model: String,
         inner: one_core::llm::ChatStream,
         text: String,
         tool_calls: Vec<ToolCall>,
+        usage: Option<TokenUsage>,
         pending_events: VecDeque<ModelStreamEvent>,
     },
     /// 已产出 Completed,流结束。
     Done,
+}
+
+/// llm-connector 的 [`llm_connector::types::Usage`] 转运行时计量。
+fn token_usage_from_connector(usage: llm_connector::types::Usage) -> TokenUsage {
+    TokenUsage {
+        prompt_tokens: usage.prompt_tokens as u64,
+        completion_tokens: usage.completion_tokens as u64,
+        total_tokens: usage.total_tokens as u64,
+    }
 }
 
 /// 用一个 [`ModelClient`] 与工具注册表装配出可驱动的 [`Runtime`]。

@@ -540,15 +540,26 @@ async fn sample(
             }
             // 工具调用以 Completed 聚合结果为准,避免重复计数。
             ModelStreamEvent::ToolCall(_) => {}
-            ModelStreamEvent::Completed(resp) => completed = Some(resp),
+            // 计量随到随记(流式 provider 在最终 chunk 报告,通常先于
+            // Completed),UI 不必等轮次结束就能看到占用更新。
+            ModelStreamEvent::Usage(usage) => session.record_token_usage(usage),
+            ModelStreamEvent::Completed(resp) => {
+                if let Some(usage) = resp.usage {
+                    session.record_token_usage(usage);
+                }
+                completed = Some(resp);
+            }
         }
     }
 
-    let tool_calls = completed.map(|r| r.tool_calls).unwrap_or_default();
+    let (tool_calls, usage) = completed
+        .map(|r| (r.tool_calls, r.usage))
+        .unwrap_or_default();
     Ok(Some(AgentSample {
         response: ModelResponse {
             text: (!text.is_empty()).then_some(text),
             tool_calls,
+            usage,
         },
         reasoning,
     }))

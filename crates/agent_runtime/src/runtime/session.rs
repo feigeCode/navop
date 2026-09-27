@@ -53,6 +53,13 @@ pub struct SessionSnapshot {
     /// 本次进程内有效——这是刻意的：navop 的空白会话是瞬态的，不进列表。
     #[serde(default)]
     pub draft: Option<String>,
+    /// 会话当前的上下文占用估算(token 数,取最近一次模型请求的输入+输出)。
+    ///
+    /// provider 不报告计量时保持 `None`(没有测过就别装测过);切换模型后
+    /// 数字会被下一次请求自然覆盖。窗口大小不在这里——它取决于当前模型,
+    /// 由展示层按模型名解析,快照只存「用了多少」这个事实。
+    #[serde(default)]
+    pub context_tokens: Option<u64>,
 }
 
 /// 一次会话。
@@ -64,6 +71,7 @@ pub struct Session {
     input_queue: Mutex<InputQueue>,
     turns: Mutex<TurnState>,
     draft: Mutex<Option<String>>,
+    context_tokens: Mutex<Option<u64>>,
     events: RuntimeEventSender,
 }
 
@@ -77,6 +85,7 @@ impl Session {
             input_queue: Mutex::new(InputQueue::new()),
             turns: Mutex::new(TurnState::default()),
             draft: Mutex::new(None),
+            context_tokens: Mutex::new(None),
             events,
         })
     }
@@ -98,6 +107,7 @@ impl Session {
             input_queue: Mutex::new(InputQueue::new()),
             turns: Mutex::new(TurnState::default()),
             draft: Mutex::new(snapshot.draft),
+            context_tokens: Mutex::new(snapshot.context_tokens),
             events,
         })
     }
@@ -127,6 +137,7 @@ impl Session {
             // ai_chat_view::persistence::save_session_with_workspace。
             workspace_root: None,
             draft: self.draft(),
+            context_tokens: self.context_tokens(),
         }
     }
 
@@ -206,6 +217,21 @@ impl Session {
     /// 覆盖输入草稿。传 `None` 或纯空白即清除。
     pub fn set_draft(&self, draft: Option<String>) {
         *self.draft.lock().expect("session 锁中毒") = draft.filter(|text| !text.trim().is_empty());
+    }
+
+    /// 记录一次模型采样后的上下文占用(输入 + 输出 token,见
+    /// [`TokenUsage::context_tokens`])。
+    ///
+    /// 覆盖写:每次请求的 prompt 就是那之后的上下文基线,历史值无需保留。
+    /// 多次调用幂等——`Usage` 事件与 `Completed` 各记一次是正常情况。
+    pub fn record_token_usage(&self, usage: crate::model::TokenUsage) {
+        let tokens = usage.context_tokens();
+        *self.context_tokens.lock().expect("session 锁中毒") = Some(tokens);
+    }
+
+    /// 当前上下文占用估算;provider 从未报告过计量时为 `None`。
+    pub fn context_tokens(&self) -> Option<u64> {
+        *self.context_tokens.lock().expect("session 锁中毒")
     }
 
     pub fn set_last_error(&self, error: Option<String>) {
@@ -606,6 +632,43 @@ mod tests {
         let parsed: SessionSnapshot =
             serde_json::from_str(json).expect("旧快照(无 draft 字段)应可反序列化");
         assert_eq!(parsed.draft, None);
+    }
+
+    #[test]
+    fn context_tokens_round_trip_through_snapshot_and_restore() {
+        let (session, _rx) = test_session();
+        // 没测过就是没测过:不是 0,是 None。
+        assert_eq!(session.context_tokens(), None);
+
+        session.record_token_usage(crate::model::TokenUsage {
+            prompt_tokens: 1200,
+            completion_tokens: 300,
+            total_tokens: 1500,
+        });
+        assert_eq!(session.context_tokens(), Some(1500));
+
+        // 覆盖写:下一次请求的计量取代旧值,Usage 事件与 Completed 重复记账无副作用。
+        session.record_token_usage(crate::model::TokenUsage {
+            prompt_tokens: 2000,
+            completion_tokens: 100,
+            total_tokens: 0, // 个别 provider 只填部分字段
+        });
+        assert_eq!(session.context_tokens(), Some(2100));
+
+        let snapshot = session.snapshot();
+        assert_eq!(snapshot.context_tokens, Some(2100));
+        let json = serde_json::to_string(&snapshot).expect("快照应可序列化为 JSON");
+        let parsed: SessionSnapshot = serde_json::from_str(&json).expect("JSON 应可反序列化回快照");
+        let (tx, _rx2) = tokio::sync::broadcast::channel(16);
+        let restored = Session::restore(parsed, tx);
+        assert_eq!(restored.context_tokens(), Some(2100));
+    }
+
+    #[test]
+    fn legacy_snapshot_without_context_tokens_field_deserializes_to_none() {
+        let json = r#"{"id":"sess_x","history":[]}"#;
+        let parsed: SessionSnapshot = serde_json::from_str(json).expect("旧快照应可反序列化");
+        assert_eq!(parsed.context_tokens, None);
     }
 }
 

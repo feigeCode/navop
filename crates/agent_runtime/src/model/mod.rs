@@ -3,7 +3,7 @@
 mod client;
 mod mock;
 
-pub use client::{ModelClient, ModelRequest, ModelResponse, function_tool_call};
+pub use client::{ModelClient, ModelRequest, ModelResponse, TokenUsage, function_tool_call};
 pub use client::{ModelStream, ModelStreamEvent, collect_model_stream, model_response_into_stream};
 pub use mock::MockModelClient;
 

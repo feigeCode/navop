@@ -12,7 +12,32 @@ use crate::error::RuntimeError;
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
 use llm_connector::types::{FunctionCall, Message, Tool, ToolCall, ToolChoice};
+use serde::{Deserialize, Serialize};
 use std::pin::Pin;
+
+/// 一次模型采样的 token 计量,由 provider 响应携带;不报告时为 `None`。
+///
+/// `total_tokens` 个别 provider 只填部分字段,消费方应做 `max` 兜底
+/// (见 [`crate::runtime::Session::record_token_usage`])。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TokenUsage {
+    /// 输入(提示词)token 数——近似等于当前上下文占用。
+    pub prompt_tokens: u64,
+    /// 输出(补全)token 数。
+    pub completion_tokens: u64,
+    /// 总数。provider 未填时可能为 0。
+    pub total_tokens: u64,
+}
+
+impl TokenUsage {
+    /// 这一次请求过后的上下文占用估算:输入 + 输出。
+    ///
+    /// 比 `total_tokens` 更可靠——个别 provider 只填 `prompt_tokens`。
+    pub fn context_tokens(&self) -> u64 {
+        self.total_tokens
+            .max(self.prompt_tokens.saturating_add(self.completion_tokens))
+    }
+}
 
 /// 一次模型采样请求。
 #[derive(Debug, Clone, Default)]
@@ -66,6 +91,8 @@ pub struct ModelResponse {
     pub text: Option<String>,
     /// 模型请求的工具调用(可能为空)。
     pub tool_calls: Vec<ToolCall>,
+    /// 本次采样的 token 计量;provider 不报告时为 `None`。
+    pub usage: Option<TokenUsage>,
 }
 
 impl ModelResponse {
@@ -74,6 +101,7 @@ impl ModelResponse {
         Self {
             text: Some(text.into()),
             tool_calls: Vec::new(),
+            usage: None,
         }
     }
 
@@ -82,6 +110,7 @@ impl ModelResponse {
         Self {
             text: None,
             tool_calls,
+            usage: None,
         }
     }
 
@@ -108,6 +137,9 @@ pub enum ModelStreamEvent {
     ReasoningDelta(String),
     /// 一个(已累积完整的)工具调用。
     ToolCall(ToolCall),
+    /// 一次采样的 token 计量。流式 provider 在最终 chunk 上报告;
+    /// 供消费方在流结束前就地记账,`Completed` 也会携带同一份数据。
+    Usage(TokenUsage),
     /// 流结束,携带最终聚合结果(完整文本 + 全部工具调用)。
     Completed(ModelResponse),
 }
@@ -139,6 +171,7 @@ pub trait ModelClient: Send + Sync {
 
 /// 把一个完整 [`ModelResponse`] 转换为单步流(文本一次性产出 + 工具调用 + Completed)。
 pub fn model_response_into_stream(response: ModelResponse) -> ModelStream {
+    let usage = response.usage;
     let mut events: Vec<Result<ModelStreamEvent, RuntimeError>> = Vec::new();
     if let Some(text) = &response.text
         && !text.is_empty()
@@ -147,6 +180,10 @@ pub fn model_response_into_stream(response: ModelResponse) -> ModelStream {
     }
     for call in &response.tool_calls {
         events.push(Ok(ModelStreamEvent::ToolCall(call.clone())));
+    }
+    // 非流式响应退化成流时,计量同样以 Usage 事件先行——消费方无需区分来源。
+    if let Some(usage) = usage {
+        events.push(Ok(ModelStreamEvent::Usage(usage)));
     }
     events.push(Ok(ModelStreamEvent::Completed(response)));
     Box::pin(futures::stream::iter(events))
@@ -159,19 +196,30 @@ pub fn model_response_into_stream(response: ModelResponse) -> ModelStream {
 pub async fn collect_model_stream(mut stream: ModelStream) -> Result<ModelResponse, RuntimeError> {
     let mut text = String::new();
     let mut tool_calls = Vec::new();
+    let mut usage: Option<TokenUsage> = None;
     let mut completed: Option<ModelResponse> = None;
     while let Some(event) = stream.next().await {
         match event? {
             ModelStreamEvent::TextDelta(delta) => text.push_str(&delta),
             ModelStreamEvent::ReasoningDelta(_) => {}
             ModelStreamEvent::ToolCall(call) => tool_calls.push(call),
-            ModelStreamEvent::Completed(response) => completed = Some(response),
+            ModelStreamEvent::Usage(reported) => usage = Some(reported),
+            ModelStreamEvent::Completed(response) => {
+                // Completed 自带的计量优先;适配器两边都发时是同一份数据。
+                usage = usage.or(response.usage);
+                completed = Some(response);
+            }
         }
     }
-    Ok(completed.unwrap_or(ModelResponse {
+    // Completed 的计量优先,但流中单独报的 Usage 事件也要合并——
+    // 适配器两边都发时是同一份数据,只报一边时不能丢。
+    let mut response = completed.unwrap_or(ModelResponse {
         text: (!text.is_empty()).then_some(text),
         tool_calls,
-    }))
+        usage: None,
+    });
+    response.usage = response.usage.or(usage);
+    Ok(response)
 }
 
 /// 构造一个 function-calling 工具调用。
@@ -191,5 +239,89 @@ pub fn function_tool_call(
             ..Default::default()
         },
         ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::StreamExt;
+
+    fn sample_usage() -> TokenUsage {
+        TokenUsage {
+            prompt_tokens: 900,
+            completion_tokens: 100,
+            total_tokens: 1000,
+        }
+    }
+
+    #[test]
+    fn context_tokens_prefers_the_larger_of_total_and_parts() {
+        // provider 只填部分字段时,输入+输出是更可靠的占用估算。
+        let partial = TokenUsage {
+            prompt_tokens: 700,
+            completion_tokens: 80,
+            total_tokens: 0,
+        };
+        assert_eq!(partial.context_tokens(), 780);
+        assert_eq!(sample_usage().context_tokens(), 1000);
+    }
+
+    #[tokio::test]
+    async fn completed_response_degrades_into_a_usage_event_before_completed() {
+        let response = ModelResponse {
+            text: Some("答案".into()),
+            tool_calls: Vec::new(),
+            usage: Some(sample_usage()),
+        };
+        let mut stream = model_response_into_stream(response);
+        let mut events = Vec::new();
+        while let Some(event) = stream.next().await {
+            events.push(event.expect("退化流不应出错"));
+        }
+        let usage_index = events
+            .iter()
+            .position(
+                |event| matches!(event, ModelStreamEvent::Usage(usage) if *usage == sample_usage()),
+            )
+            .expect("应在 Completed 前产出 Usage 事件");
+        let completed_index = events
+            .iter()
+            .position(|event| matches!(event, ModelStreamEvent::Completed(_)))
+            .expect("流应以 Completed 结束");
+        assert!(usage_index < completed_index);
+    }
+
+    #[tokio::test]
+    async fn collect_model_stream_aggregates_usage_from_the_event() {
+        let usage = sample_usage();
+        let events = vec![
+            Ok(ModelStreamEvent::TextDelta("部分".into())),
+            Ok(ModelStreamEvent::TextDelta("回答".into())),
+            Ok(ModelStreamEvent::Usage(usage)),
+            Ok(ModelStreamEvent::Completed(ModelResponse {
+                text: Some("完整回答".into()),
+                tool_calls: Vec::new(),
+                usage: None,
+            })),
+        ];
+        let response = collect_model_stream(Box::pin(futures::stream::iter(events)))
+            .await
+            .expect("聚合不应失败");
+        assert_eq!(response.text.as_deref(), Some("完整回答"));
+        assert_eq!(response.usage, Some(usage));
+    }
+
+    #[tokio::test]
+    async fn collect_model_stream_without_usage_reports_none() {
+        let events = vec![Ok(ModelStreamEvent::Completed(ModelResponse {
+            text: Some("回答".into()),
+            tool_calls: Vec::new(),
+            usage: None,
+        }))];
+        let response = collect_model_stream(Box::pin(futures::stream::iter(events)))
+            .await
+            .expect("聚合不应失败");
+        assert_eq!(response.usage, None);
     }
 }

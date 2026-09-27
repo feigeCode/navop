@@ -1834,3 +1834,51 @@ async fn system_prompt_includes_current_resource_context() {
     assert!(system.contains("schema=public"));
     assert!(!system.contains("connection、connection_id、session_id"));
 }
+
+#[tokio::test]
+async fn reported_token_usage_updates_session_context_tokens() {
+    let mut response = ModelResponse::text("回答完毕。");
+    response.usage = Some(agent_runtime::model::TokenUsage {
+        prompt_tokens: 1200,
+        completion_tokens: 300,
+        total_tokens: 1500,
+    });
+    let model = Arc::new(MockModelClient::new([response]));
+    let runtime = Runtime::new(RuntimeServices::new(
+        model,
+        Arc::new(ToolRouter::new(ToolRegistry::new())),
+    ));
+    let session = runtime.create_session(ResourceContext::new());
+
+    runtime
+        .run_turn_blocking(session.id(), "随便问点什么".into(), TaskKind::Ask)
+        .await
+        .expect("run ask turn");
+
+    assert_eq!(
+        session.context_tokens(),
+        Some(1500),
+        "模型报告的计量应写入会话的上下文占用"
+    );
+}
+
+#[tokio::test]
+async fn absent_token_usage_leaves_session_context_tokens_unset() {
+    let model = Arc::new(MockModelClient::new([ModelResponse::text("没有计量的回答。")]));
+    let runtime = Runtime::new(RuntimeServices::new(
+        model,
+        Arc::new(ToolRouter::new(ToolRegistry::new())),
+    ));
+    let session = runtime.create_session(ResourceContext::new());
+
+    runtime
+        .run_turn_blocking(session.id(), "随便问点什么".into(), TaskKind::Ask)
+        .await
+        .expect("run ask turn");
+
+    assert_eq!(
+        session.context_tokens(),
+        None,
+        "provider 不报告计量时不能装作测过(不是 Some(0))"
+    );
+}

@@ -69,6 +69,7 @@ mod theme;
 mod transcript_scroll;
 mod transcript_search;
 mod turn;
+mod usage;
 pub mod workspace_files;
 mod workbench;
 
