@@ -58,6 +58,11 @@ impl AcpConnection {
         Ok(sessions)
     }
 
+    /// 打开一条历史会话。agent 会把整段历史重放成一批 `session/update`。
+    ///
+    /// 回放窗口的**开**在调用方（视图要拿同一个轮次 id 去放行事件，见
+    /// [`AcpConnection::begin_history_replay`]），**关**在这里：协议保证响应派发于所有
+    /// 回放通知之后，所以响应一回来就关不会漏掉尾巴，而且无论成功失败都能关掉。
     pub async fn load_session(
         &mut self,
         acp_session_id: AcpSessionId,
@@ -67,7 +72,9 @@ impl AcpConnection {
             .conn
             .send_request(LoadSessionRequest::new(acp_session_id.clone(), cwd))
             .block_task()
-            .await?;
+            .await;
+        self.end_history_replay();
+        let response = response?;
         self.acp_session_id = acp_session_id;
         if let Ok(mut state) = self.state.lock() {
             state.apply_load_session_response(&response);
@@ -75,6 +82,11 @@ impl AcpConnection {
         Ok(response)
     }
 
+    /// 接上记住的会话（`session/resume`）。
+    ///
+    /// 协议里 `resume` 只接上下文、不回放历史，但窗口照样要围着它开一次：agent 实现
+    /// 并不都守这条约定，真有 agent 顺手推几条 `session/update` 过来，那些通知同样
+    /// 没有轮次可归；开窗的成本只是把这段窗口里的无主通知算成历史，而不开就是直接丢。
     pub async fn resume_session(
         &mut self,
         acp_session_id: AcpSessionId,
@@ -84,7 +96,9 @@ impl AcpConnection {
             .conn
             .send_request(ResumeSessionRequest::new(acp_session_id.clone(), cwd))
             .block_task()
-            .await?;
+            .await;
+        self.end_history_replay();
+        let response = response?;
         self.acp_session_id = acp_session_id;
         if let Ok(mut state) = self.state.lock() {
             state.apply_resume_session_response(&response);

@@ -344,13 +344,16 @@ impl AgentChatView {
 
         let operation = self.begin_acp_session_transition(agent_id.clone(), session_uid.clone());
         let target = AcpSessionId::new(acp_session_id);
-        let cwd = self
-            .acp_sessions
-            .iter()
-            .find(|session| session.id == acp_session_id)
-            .map(|session| session.cwd.clone())
-            .unwrap_or_else(|| self.workspace_root.clone());
         self.acp_turn_owner = None;
+        // `session/load` 会把整段历史重放成一批 `session/update`，它们不属于任何一轮：
+        // 连接层要靠回放窗口才认得出，视图这边要靠同一个轮次 id 才敢放行。窗口必须在
+        // 请求发出**之前**开——回放是随请求一起推过来的。
+        let replay_turn = acp.begin_history_replay();
+        self.acp_history_replay = Some(AcpHistoryReplay {
+            event_session_id: acp.session_id(),
+            session_uid: session_uid.clone(),
+            turn_id: replay_turn,
+        });
         self.acp_sessions_error = None;
         // 旧转录不能留在屏上：load 会回放历史，resume 从当前状态继续，两者都不该和上一段混排。
         self.transcript.clear();

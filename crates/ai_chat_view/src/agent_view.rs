@@ -243,6 +243,37 @@ impl AcpTurnOwner {
     }
 }
 
+/// 正在放行的**历史回放**：`session/load` 把整段历史重放成一批 `session/update`。
+///
+/// 与 [`AcpTurnOwner`] 分开，是因为回放**不属于任何一轮**——它不是跑出来的输出，没有
+/// prompt、没有终态，`is_running` 那些「有一轮在跑」的判断也不该被它影响。它只需要
+/// 一道门：这批事件必须落进转录（否则用户点开一条历史会话什么都看不到），但又只能落
+/// 进**它自己那条会话**。
+///
+/// 所以窗口只认「哪条连接事件流 + 哪个合成轮次」，两者都对上才放行；其余一律丢弃——
+/// 迟到的输出绝不能算进别人的会话。
+///
+/// 窗口不需要精确关闭：连接那边（[`AcpConnection::end_history_replay`]）在 `load` 响应
+/// 回来时就把回放轮次从 `session/update` 上摘掉了，之后不会再有任何事件带这个 id。
+/// 所以这里留到下一次打开会话时被覆盖、或连接被收掉时清掉（[`Self::reset_acp_client_session`]）
+/// 都不会多放任何一个事件进来。
+///
+/// 反过来，**不能在 `finish_acp_session_open` 里关闭它**：那批事件此时已经发进事件通道，
+/// 事件泵未必已经把尾部几条交给转录，先关窗口就是白丢几条历史。
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AcpHistoryReplay {
+    event_session_id: SessionId,
+    session_uid: String,
+    turn_id: TurnId,
+}
+
+impl AcpHistoryReplay {
+    /// 这条事件是不是这次回放的。
+    fn accepts(&self, event: &RuntimeEvent) -> bool {
+        event.session_id() == &self.event_session_id && runtime_event_turn_id(event) == &self.turn_id
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct AcpOperationToken(u64);
 
@@ -282,21 +313,38 @@ enum PendingAdvance {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AcpStopAction {
+    /// 发 `session/cancel`,等 agent 回终态。
     CancelActivePrompt,
+    /// 取消已发过、agent 仍不回终态：本地结账，不再等。
+    ForceLocalStop,
     ReturnToLocal,
     AbandonFailedTransition,
     ClearQueueOnly,
 }
 
+/// 发出取消后等 agent 回终态的上限。超时就本地结账。
+///
+/// `session/cancel` 只是一条通知，协议里 agent 可以不回终态：实测 OpenCode 在
+/// provider 卡死时 `session/prompt` 二十多分钟不返回，而它的 `stopReason` 又永远
+/// 是 `end_turn`（从不回 `cancelled`）。没有这个上限，界面就永远停在「正在响应」，
+/// 再点停止也毫无反应。
+const ACP_CANCEL_SETTLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+
 fn acp_stop_action(
     owns_current_turn: bool,
     has_connection: bool,
+    cancel_outstanding: bool,
     connecting: bool,
     authentication_pending: bool,
     session_transition: Option<AcpSessionTransitionPhase>,
 ) -> AcpStopAction {
     if owns_current_turn && has_connection {
-        return AcpStopAction::CancelActivePrompt;
+        // 已经发过一次取消、agent 还没回终态：用户再点就是「不等了」。
+        return if cancel_outstanding {
+            AcpStopAction::ForceLocalStop
+        } else {
+            AcpStopAction::CancelActivePrompt
+        };
     }
     if connecting
         || authentication_pending
@@ -1102,6 +1150,8 @@ pub struct AgentChatView {
     acp: Option<AcpConnection>,
     /// 当前 ACP prompt 的 UI 会话、连接事件 token 与 turn 归属。
     acp_turn_owner: Option<AcpTurnOwner>,
+    /// 正在放行的**历史回放**窗口（`session/load` 重放出来的那批 `session/update`）。
+    acp_history_replay: Option<AcpHistoryReplay>,
     /// 等待用户选择鉴权方式的 ACP 连接。
     acp_pending: Option<AcpPendingConnection>,
     /// 当前 pending 连接公布的鉴权方式。
@@ -1438,6 +1488,7 @@ impl AgentChatView {
             skills,
             acp: None,
             acp_turn_owner: None,
+            acp_history_replay: None,
             acp_pending: None,
             acp_auth_methods: Vec::new(),
             current_acp_id: None,
@@ -1845,6 +1896,8 @@ impl AgentChatView {
         self.cancel_pending_acp_permissions(cx);
         self.cancel_pending_public_mcp_approvals(cx);
         self.cancel_pending_acp_elicitations(cx);
+        // 连接已经收掉，回放窗口也没有意义了：留着它只会让人以为还有一批历史要落进来。
+        self.acp_history_replay = None;
         self.acp_public_mcp_approval_provider = None;
         self._acp_permission_task = None;
         self._acp_elicitation_task = None;
@@ -2523,6 +2576,83 @@ impl AgentChatView {
         should_cancel
     }
 
+    /// 当前 owner 的轮次 id（只在这个 owner 就属于 `session_uid` 时给）。
+    fn acp_turn_owner_turn_id(&self, session_uid: &str) -> Option<TurnId> {
+        self.acp_turn_owner
+            .as_ref()
+            .filter(|owner| owner.session_uid == session_uid)
+            .map(|owner| owner.turn_id.clone())
+    }
+
+    /// 测试构建下不排取消兜底定时器，这个判归属的辅助函数只有生产路径在用。
+    #[cfg_attr(test, allow(dead_code))]
+    fn acp_turn_owner_matches(&self, session_uid: &str, turn_id: &TurnId) -> bool {
+        self.acp_turn_owner
+            .as_ref()
+            .is_some_and(|owner| owner.session_uid == session_uid && &owner.turn_id == turn_id)
+    }
+
+    /// 本地把这一轮结掉：agent 没有回终态，界面不能一直转。
+    ///
+    /// 三件事必须一起做，少一件都还是「卡住」：
+    /// - 清 owner —— 迟到的输出靠它被丢弃，不会算进下一轮；
+    /// - 让连接层也放手 —— 否则它仍记着这一轮在跑，用户下一条消息会被拒成
+    ///   「等这一轮结束」，而那一轮永远不结束；
+    /// - 写一条说明 —— 用户点的是「停止」，得知道这一轮是按本地停止收的尾。
+    fn settle_acp_turn_locally(&mut self, session_uid: &str, cx: &mut Context<Self>) {
+        // 只动本会话的 owner:别的会话正在跑的轮次不归这次停止管。
+        let owned_turn = self.acp_turn_owner_turn_id(session_uid);
+        if owned_turn.is_some() {
+            self.acp_turn_owner = None;
+        }
+        if let Some(turn_id) = owned_turn
+            && let Some(acp) = self.acp.as_ref()
+        {
+            acp.abandon_active_turn(&turn_id);
+        }
+        self.set_session_running(session_uid, false, cx);
+        self.sync_pending_preview(cx);
+        self.sync_composer(cx);
+        self.push_system_to_session(
+            session_uid,
+            t!("AgentUi.acp_stop_settled_locally").to_string(),
+        );
+        cx.notify();
+    }
+
+    #[cfg(not(test))]
+    fn spawn_acp_cancel_settle_after(
+        &mut self,
+        delay: std::time::Duration,
+        session_uid: String,
+        turn_id: TurnId,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(delay).await;
+            let _ = this.update(cx, |this, cx| {
+                // 轮次还在跑才结账：能对上终态事件的话(owner 已被清)这里什么都不做。
+                if !this.acp_turn_owner_matches(&session_uid, &turn_id) {
+                    return;
+                }
+                this.settle_acp_turn_locally(&session_uid, cx);
+            });
+        })
+        .detach();
+    }
+
+    /// 测试构建下不排定时器：到期后的行为由 [`Self::settle_acp_turn_locally`] 的
+    /// 单测直接覆盖，不必真的等 8 秒。
+    #[cfg(test)]
+    fn spawn_acp_cancel_settle_after(
+        &mut self,
+        _delay: std::time::Duration,
+        _session_uid: String,
+        _turn_id: TurnId,
+        _cx: &mut Context<Self>,
+    ) {
+    }
+
     fn stop(&mut self, cx: &mut Context<Self>) {
         let session_uid = self.current_session.clone();
         if self.backend == Backend::Acp {
@@ -2530,10 +2660,15 @@ impl AgentChatView {
                 .acp_turn_owner
                 .as_ref()
                 .is_some_and(|owner| owner.session_uid == session_uid);
+            let cancel_outstanding = self
+                .acp_turn_owner
+                .as_ref()
+                .is_some_and(|owner| owner.cancel_requested);
             let transition_phase = self.acp_session_transition_phase(&session_uid);
             let action = acp_stop_action(
                 owns_current_turn,
                 self.acp.is_some(),
+                cancel_outstanding,
                 self.acp_connecting,
                 self.acp_pending.is_some(),
                 transition_phase,
@@ -2549,11 +2684,25 @@ impl AgentChatView {
             self.sync_pending_preview(cx);
             match action {
                 AcpStopAction::CancelActivePrompt => {
-                    self.request_acp_cancel_for_session(&session_uid);
+                    let requested = self.request_acp_cancel_for_session(&session_uid);
                     // ACP cancellation is only a protocol notification. Keep the owner and
                     // running state until the matching prompt produces a real terminal event,
                     // otherwise late output can be attributed to a newer turn.
+                    if requested && let Some(turn_id) = self.acp_turn_owner_turn_id(&session_uid) {
+                        // 但等的上限必须有:agent 可以不回终态(provider 卡死时实测如此),
+                        // 到时本地结账,界面不会永远停在「正在响应」。
+                        self.spawn_acp_cancel_settle_after(
+                            ACP_CANCEL_SETTLE_TIMEOUT,
+                            session_uid.clone(),
+                            turn_id,
+                            cx,
+                        );
+                    }
                     cx.notify();
+                    return;
+                }
+                AcpStopAction::ForceLocalStop => {
+                    self.settle_acp_turn_locally(&session_uid, cx);
                     return;
                 }
                 AcpStopAction::ReturnToLocal => {
@@ -2717,17 +2866,27 @@ impl AgentChatView {
         }
         let session_uid = match backend {
             Backend::Local => event.session_id().to_string(),
-            Backend::Acp => {
-                let Some(owner) = self.acp_turn_owner.as_ref() else {
-                    return;
-                };
-                if event.session_id() != &owner.event_session_id
-                    || runtime_event_turn_id(&event) != &owner.turn_id
-                {
-                    return;
+            Backend::Acp => match self.acp_turn_owner.as_ref() {
+                Some(owner) => {
+                    if event.session_id() != &owner.event_session_id
+                        || runtime_event_turn_id(&event) != &owner.turn_id
+                    {
+                        return;
+                    }
+                    owner.session_uid.clone()
                 }
-                owner.session_uid.clone()
-            }
+                // 没有活动轮次：唯一合法的来源是 `session/load` 的历史回放。它没有轮次
+                // 可归，认不出回放就只能丢弃 —— 点开一条 ACP 历史会话会因此全屏空白。
+                None => {
+                    let Some(replay) = self.acp_history_replay.as_ref() else {
+                        return;
+                    };
+                    if !replay.accepts(&event) {
+                        return;
+                    }
+                    replay.session_uid.clone()
+                }
+            },
         };
         let is_need_user_input = matches!(&event, RuntimeEvent::NeedUserInput { .. });
         let is_pending_tool_approval = matches!(
@@ -7338,19 +7497,20 @@ mod tests {
     fn acp_stop_action_distinguishes_prompt_control_and_failed_transition_states() {
         assert_eq!(
             AcpStopAction::CancelActivePrompt,
-            acp_stop_action(true, true, false, false, None)
+            acp_stop_action(true, true, false, false, false, None)
         );
         assert_eq!(
             AcpStopAction::ReturnToLocal,
-            acp_stop_action(false, false, true, false, None)
+            acp_stop_action(false, false, false, true, false, None)
         );
         assert_eq!(
             AcpStopAction::ReturnToLocal,
-            acp_stop_action(false, false, false, true, None)
+            acp_stop_action(false, false, false, false, true, None)
         );
         assert_eq!(
             AcpStopAction::ReturnToLocal,
             acp_stop_action(
+                false,
                 false,
                 false,
                 false,
@@ -7365,6 +7525,7 @@ mod tests {
                 true,
                 false,
                 false,
+                false,
                 Some(AcpSessionTransitionPhase::Failed),
             )
         );
@@ -7375,12 +7536,27 @@ mod tests {
                 false,
                 false,
                 false,
+                false,
                 Some(AcpSessionTransitionPhase::Failed),
             )
         );
         assert_eq!(
             AcpStopAction::ClearQueueOnly,
-            acp_stop_action(false, false, false, false, None)
+            acp_stop_action(false, false, false, false, false, None)
+        );
+    }
+
+    #[test]
+    fn a_second_stop_settles_the_turn_instead_of_repeating_the_cancel() {
+        // 取消已经发过、agent 就是不回终态:再点停止必须做点别的,否则按钮等于坏的。
+        assert_eq!(
+            AcpStopAction::ForceLocalStop,
+            acp_stop_action(true, true, true, false, false, None)
+        );
+        // 连接已经没了,就没什么可结的账了,照旧走原有分支。
+        assert_eq!(
+            AcpStopAction::ClearQueueOnly,
+            acp_stop_action(true, false, true, false, false, None)
         );
     }
 
@@ -10365,6 +10541,87 @@ mod tests {
             assert_eq!(message_count, view.transcript.messages.len());
             assert!(view.is_running);
             assert!(view.acp_turn_owner.is_some());
+        });
+    }
+
+    /// 点开一条 ACP 历史会话时，`session/load` 重放出来的事件必须落到转录里。
+    ///
+    /// 这类事件**没有轮次可归**（没有 prompt、没有 owner），之前被过滤逻辑一律丢弃 ——
+    /// 用户点开历史会话看到的就是一片空白。
+    #[gpui::test]
+    fn acp_history_replay_lands_without_a_turn_owner(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update(cx, |view, cx| {
+            view.backend = Backend::Acp;
+            view.acp_turn_owner = None;
+            let event_session_id = SessionId::from_string("acp:replay");
+            let turn_id = TurnId::from_string("acp-replay:1");
+            view.acp_history_replay = Some(AcpHistoryReplay {
+                event_session_id: event_session_id.clone(),
+                session_uid: view.current_session.clone(),
+                turn_id: turn_id.clone(),
+            });
+            let message_count = view.transcript.messages.len();
+
+            // 别的连接推来的事件：不放行。
+            view.apply_runtime_event(
+                RuntimeEvent::UserMessage {
+                    session_id: SessionId::from_string("acp:other"),
+                    turn_id: turn_id.clone(),
+                    text: "别的会话的历史".into(),
+                },
+                cx,
+            );
+            // 同一个连接、但不是回放轮次：也不放行 —— 窗口只认那一个轮次。
+            view.apply_runtime_event(
+                RuntimeEvent::UserMessage {
+                    session_id: event_session_id.clone(),
+                    turn_id: TurnId::from_string("turn-live"),
+                    text: "不是回放".into(),
+                },
+                cx,
+            );
+            assert_eq!(message_count, view.transcript.messages.len());
+
+            view.apply_runtime_event(
+                RuntimeEvent::UserMessage {
+                    session_id: event_session_id.clone(),
+                    turn_id: turn_id.clone(),
+                    text: "历史上问过的问题".into(),
+                },
+                cx,
+            );
+            view.apply_runtime_event(
+                RuntimeEvent::AssistantMessage {
+                    session_id: event_session_id,
+                    turn_id,
+                    text: "历史上答过的话".into(),
+                },
+                cx,
+            );
+
+            assert!(
+                !view.is_running,
+                "回放不是一轮，不能把界面带回「正在响应」"
+            );
+        });
+
+        view.read_with(cx, |view, _| {
+            let texts = view
+                .transcript
+                .messages
+                .iter()
+                .map(|message| message.content.as_str())
+                .collect::<Vec<_>>();
+            assert!(texts.contains(&"历史上问过的问题"));
+            assert!(texts.contains(&"历史上答过的话"));
+            assert!(!texts.contains(&"别的会话的历史"));
+            assert!(!texts.contains(&"不是回放"));
         });
     }
 

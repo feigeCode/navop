@@ -875,6 +875,10 @@ AgentUi:
     en: "Failed to stop: %{error}"
     zh-CN: "停止失败：%{error}"
     zh-HK: "停止失敗：%{error}"
+  acp_stop_settled_locally:
+    en: Stopped locally — the agent never confirmed the cancel, so this turn is no longer waited on.
+    zh-CN: 已按本地停止处理：agent 没有确认取消，这一轮不再等待。
+    zh-HK: 已按本地停止處理：agent 沒有確認取消，這一輪不再等待。
   subagent_count:
     en: "Subagents · %{count}"
     zh-CN: "子代理 · %{count}"

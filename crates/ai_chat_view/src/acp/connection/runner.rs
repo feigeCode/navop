@@ -6,7 +6,7 @@ use agent_client_protocol::schema::v1::{
     SessionId as AcpSessionId, SessionNotification, WriteTextFileRequest,
 };
 use agent_client_protocol::{AcpAgent, Agent, Client, ConnectionTo};
-use agent_runtime::{RuntimeEvent, SessionId};
+use agent_runtime::{RuntimeEvent, SessionId, TurnId};
 use gpui::AsyncApp;
 use one_core::gpui_tokio::Tokio;
 use tokio::sync::{broadcast, oneshot};
@@ -37,6 +37,11 @@ pub(super) struct ConnectShared {
     pub(super) session_id: SessionId,
     pub(super) state: Arc<Mutex<AcpSessionState>>,
     pub(super) active_turn: Arc<Mutex<Option<AcpTurnTracker>>>,
+    /// 历史回放窗口；与 [`AcpConnection::history_replay`] 是同一个 `Arc`。
+    ///
+    /// 通知处理跑在另一条任务上（ACP 的 dispatch loop），拿不到 `AcpConnection`，
+    /// 只能靠这个共享槽位知道「现在收到的是 `session/load` 重放出来的历史」。
+    pub(super) history_replay: Arc<Mutex<Option<TurnId>>>,
     pub(super) workspace_root: PathBuf,
     pub(super) config: AcpAgentConfig,
     /// 调用方希望复用的 ACP 协议会话（上次这个内置会话用的那个）。
@@ -176,6 +181,7 @@ fn prepare_shared(
         session_id: SessionId::from_string(format!("acp:{}", uuid::Uuid::new_v4())),
         state,
         active_turn: Arc::new(Mutex::new(None)),
+        history_replay: Arc::new(Mutex::new(None)),
         workspace_root,
         config: config.clone(),
         resume,

@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::v1::{AuthMethodId, SessionId as AcpSessionId};
 use agent_client_protocol::{Agent, ConnectionTo};
-use agent_runtime::{RuntimeEvent, SessionId};
+use agent_runtime::{RuntimeEvent, SessionId, TurnId};
 use rust_i18n::t;
 use tokio::sync::broadcast;
 
@@ -23,6 +23,8 @@ pub struct AcpPendingConnection {
     pub(super) events_tx: broadcast::Sender<RuntimeEvent>,
     pub(super) state: Arc<Mutex<AcpSessionState>>,
     pub(super) active_turn: Arc<Mutex<Option<AcpTurnTracker>>>,
+    /// 历史回放窗口；登录完成后要带进 [`AcpConnection`]，否则通知层认不出回放。
+    pub(super) history_replay: Arc<Mutex<Option<TurnId>>>,
     pub(super) workspace_root: PathBuf,
     pub(super) config: AcpAgentConfig,
     pub(super) methods: Vec<AuthMethodId>,
@@ -67,6 +69,7 @@ impl AcpPendingConnection {
             events_tx: self.events_tx,
             state: self.state,
             active_turn: self.active_turn,
+            history_replay: self.history_replay,
             prompt_timeout: self.config.timeouts.prompt,
             agent_id: self.config.id.to_string(),
             agent_name: self.config.name.to_string(),

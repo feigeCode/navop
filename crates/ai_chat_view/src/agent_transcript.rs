@@ -759,9 +759,12 @@ impl AgentTranscript {
         let success = obs.success;
         let file_changes = file_change_summaries(&obs.file_changes);
         let duration_ms = Some(obs.duration_ms()).filter(|ms| *ms > 0);
+        // 目标优先级:改动过的文件 → agent 声明这次调用指向什么 → 资源。
+        // 三者都是「产出方声明」,不是从工具名反推。
         let target_id = file_changes
             .first()
             .map(|change| change.path.clone())
+            .or_else(|| obs.target.clone())
             .or_else(|| obs.resource_id.as_ref().map(|id| id.as_str().to_string()));
         let target_label = target_id.as_ref().map(|id| {
             self.resource_labels
@@ -778,17 +781,30 @@ impl AgentTranscript {
             data.file_changes = file_changes;
             data.duration_ms = duration_ms;
             data.success = Some(success);
+            // 调用开始时 agent 可能还没给出入参(ACP 的 `tool_call` 只有占位),真实
+            // 入参随终态一起到。这里覆盖,而不是只在为空时补 —— 行标题按「这一行说了
+            // 什么」取,占位留着就会一直显示成 `bash {"cwd": …}`。
+            if let Some(arguments) = obs.arguments.as_ref() {
+                let input = build_tool_input_display(&data.tool_name, arguments);
+                data.input_summary = input.summary;
+                data.input_json = input.json;
+            }
             self.replace_tool_card(&call_id, data);
         } else {
             // 防御:没有对应的开始事件,直接建一张完成态卡片。
+            let input = obs
+                .arguments
+                .as_ref()
+                .map(|arguments| build_tool_input_display(obs.tool_name.as_str(), arguments))
+                .unwrap_or_default();
             let data = ToolCardData {
                 call_id,
                 tool_name: obs.tool_name.to_string(),
                 action: ToolAction::from_tool_name(obs.tool_name.as_str()),
                 target_id,
                 target_label,
-                input_summary: String::new(),
-                input_json: String::new(),
+                input_summary: input.summary,
+                input_json: input.json,
                 running: false,
                 success: Some(success),
                 summary,

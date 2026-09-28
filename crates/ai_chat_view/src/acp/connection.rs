@@ -66,6 +66,10 @@ pub struct AcpConnection {
     pub(super) events_tx: broadcast::Sender<RuntimeEvent>,
     pub(super) state: Arc<Mutex<AcpSessionState>>,
     pub(super) active_turn: Arc<Mutex<Option<AcpTurnTracker>>>,
+    /// 历史回放窗口：`session/load` 期间收到的 `session/update` 归属哪个**回放轮次**。
+    ///
+    /// 详见 [`AcpConnection::begin_history_replay`]。
+    pub(super) history_replay: Arc<Mutex<Option<TurnId>>>,
     pub(super) prompt_timeout: std::time::Duration,
     pub(super) agent_id: String,
     pub(super) agent_name: String,
@@ -209,6 +213,69 @@ impl AcpConnection {
             .unwrap_or(AcpConnectionPhase::Closed)
     }
 
+    /// 本地放弃这一轮：agent 没有回终态，用户选择不再等。
+    ///
+    /// 与 [`claim_prompt_completion`] 的关键差别是**不产出任何终态事件**——迟到的
+    /// 输出一律丢弃（视图那边已经没有对应的 owner 了）。必须做这一步，否则连接会
+    /// 一直记着「这一轮还在跑」：用户下一条消息会被 [`AcpPromptStartError::AlreadyRunning`]
+    /// 挡回来排进队列，而那一轮永远不会结束。
+    ///
+    /// 返回是否真的放弃了；轮次对不上说明这一轮已经结束或已被换掉。
+    pub fn abandon_active_turn(&self, turn_id: &TurnId) -> bool {
+        // 与 `claim_prompt_completion` 保持同一把锁的顺序：先 tracker,再 phase。
+        let Ok(mut active) = self.active_turn.lock() else {
+            return false;
+        };
+        if !active
+            .as_ref()
+            .is_some_and(|tracker| tracker.turn_id() == turn_id)
+        {
+            return false;
+        }
+        active.take();
+        // 锁要分开取:`transition_state` 自己会再锁一次,持着锁调它会自锁。
+        let running = self.state.lock().is_ok_and(|state| {
+            matches!(
+                state.phase(),
+                AcpConnectionPhase::RunningTurn { turn_id: running } if running == turn_id
+            )
+        });
+        if running {
+            transition_state(&self.state, AcpConnectionPhase::Ready);
+        }
+        true
+    }
+
+    /// 开始把接下来收到的 `session/update` 当成**历史回放**收。
+    ///
+    /// `session/load` 会把整段历史重放成一批 `session/update`。那不是任何一轮的输出：
+    /// 此刻 `active_turn` 是空的，通知层手里没有轮次 id，只能把它们全丢掉 —— 用户点开
+    /// 一条 ACP 历史会话，屏幕上就什么都没有。
+    ///
+    /// 这个窗口给出的就是这个缺失的 id：窗口开着时，没有活动轮次的通知一律归属到它。
+    /// 调用方（视图）拿同一个 id 去放行事件，见 `AgentChatView::acp_history_replay`。
+    ///
+    /// 窗口由 [`Self::end_history_replay`] 关闭，且**必须成对**：落单的回放轮次会让
+    /// 之后所有无主通知都被算成历史。
+    pub fn begin_history_replay(&self) -> TurnId {
+        let turn_id = new_acp_replay_turn_id();
+        if let Ok(mut replay) = self.history_replay.lock() {
+            *replay = Some(turn_id.clone());
+        }
+        turn_id
+    }
+
+    /// 关闭历史回放窗口。
+    ///
+    /// 关得掉不代表回放"少一段"：协议保证 `session/load` 的响应一定在它引发的**所有**
+    /// 通知之后派发（dispatch loop 逐条处理完才轮到下一条），所以响应回来的那一刻，
+    /// 回放通知已经全部翻译成事件发出去了。
+    pub fn end_history_replay(&self) {
+        if let Ok(mut replay) = self.history_replay.lock() {
+            *replay = None;
+        }
+    }
+
     pub async fn set_model(
         &self,
         config_id: agent_client_protocol::schema::v1::SessionConfigId,
@@ -227,6 +294,14 @@ impl AcpConnection {
 
 fn new_acp_turn_id() -> TurnId {
     TurnId::from_string(format!("acp-turn:{}", uuid::Uuid::new_v4()))
+}
+
+/// 历史回放的合成轮次 id。
+///
+/// 与 [`new_acp_turn_id`] 分开命名，是为了让日志和转录里的轮次一眼能分出「这一轮是
+/// agent 重放的历史」和「这一轮是真跑出来的」。
+fn new_acp_replay_turn_id() -> TurnId {
+    TurnId::from_string(format!("acp-replay:{}", uuid::Uuid::new_v4()))
 }
 
 fn transition_state(state: &Arc<Mutex<AcpSessionState>>, phase: AcpConnectionPhase) {
