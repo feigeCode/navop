@@ -213,6 +213,22 @@ impl AcpConnection {
             .unwrap_or(AcpConnectionPhase::Closed)
     }
 
+    /// 连接此刻认领的轮次；`None` 表示这一侧没有任何 prompt 在飞。
+    ///
+    /// 这是「这一轮到底结束没有」的**权威答案**——事件流是广播通道，会被挤掉，
+    /// 视图侧靠事件推出来的 running 因此可能是过期的；`active_turn` 就在产出事件
+    /// 的地方，不会落后。视图用它做丢事件之后的重同步判据，见
+    /// [`AgentChatView::driver_reports_idle`](crate::agent_view)。
+    ///
+    /// `try_prompt` / `abandon_active_turn` / `claim_prompt_completion` 分别
+    /// 在发起、本地放弃、正常结束时增删它，所以「`None`」只可能是这三种情况之一。
+    pub fn active_turn_id(&self) -> Option<TurnId> {
+        self.active_turn
+            .lock()
+            .ok()
+            .and_then(|active| active.as_ref().map(|tracker| tracker.turn_id().clone()))
+    }
+
     /// 本地放弃这一轮：agent 没有回终态，用户选择不再等。
     ///
     /// 与 [`claim_prompt_completion`] 的关键差别是**不产出任何终态事件**——迟到的

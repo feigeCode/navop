@@ -158,29 +158,50 @@ fn runtime_event_matches_session(event: &RuntimeEvent, session_filter: Option<&S
     session_filter.is_none_or(|session_id| event.session_id() == session_id)
 }
 
+/// 一批已就绪的事件，外加「取这批的过程中被通道挤掉了多少条」。
+#[derive(Default)]
+struct RuntimeEventBatch {
+    /// 本批实际拿到、且属于目标会话的事件。
+    events: Vec<RuntimeEvent>,
+    /// 广播通道挤掉的事件数。
+    ///
+    /// 必须往上报，不能吞掉：被挤掉的是**任意**事件，其中可能正好是某一轮的
+    /// 终态。终态是清「正在响应」和推进排队消息的唯一触发点，丢了就再没有任何
+    /// 后续事件会补上——界面会永久停在工作中，而且不留任何痕迹
+    /// （日志里只有驱动侧那行，无从判断事件到没到）。见
+    /// [`AgentChatView::on_runtime_events_dropped`]。
+    skipped: u64,
+}
+
 fn collect_ready_runtime_events(
     rx: &mut RuntimeEventReceiver,
     first: RuntimeEvent,
     session_filter: Option<&SessionId>,
-) -> Vec<RuntimeEvent> {
-    let mut events = Vec::new();
+) -> RuntimeEventBatch {
+    let mut batch = RuntimeEventBatch::default();
     if runtime_event_matches_session(&first, session_filter) {
-        events.push(first);
+        batch.events.push(first);
     }
 
-    for _ in events.len()..MAX_RUNTIME_EVENT_BATCH_SIZE {
+    for _ in batch.events.len()..MAX_RUNTIME_EVENT_BATCH_SIZE {
         match rx.try_recv() {
             Ok(event) if runtime_event_matches_session(&event, session_filter) => {
-                if events.len() == 1 {
-                    events.reserve(MAX_RUNTIME_EVENT_BATCH_SIZE - 1);
+                if batch.events.len() == 1 {
+                    batch.events.reserve(MAX_RUNTIME_EVENT_BATCH_SIZE - 1);
                 }
-                events.push(event);
+                batch.events.push(event);
             }
-            Ok(_) | Err(TryRecvError::Lagged(_)) => {}
+            // 别的会话的事件：本泵不认，丢给对应会话的泵。不算 lag。
+            Ok(_) => {}
+            Err(TryRecvError::Lagged(skipped)) => {
+                // 游标已被挪到最旧的可读位置，继续取就是「还在的那批」里最旧的。
+                // 丢掉的条数单独记下来，由调用方决定怎么补。
+                batch.skipped = batch.skipped.saturating_add(skipped);
+            }
             Err(TryRecvError::Empty | TryRecvError::Closed) => break,
         }
     }
-    events
+    batch
 }
 
 /// 当前驱动后端:自研内核(One_Agent)或外部 ACP agent。
@@ -1920,22 +1941,36 @@ impl AgentChatView {
     ) -> Task<()> {
         cx.spawn(async move |this, cx| {
             loop {
-                match rx.recv().await {
+                // 先收事件，再把「丢过事件」这件事补掉。
+                // 顺序不能反：本批里可能就带着某个会话的终态，先落地它，
+                // 重同步就少一次误判。
+                let batch = match rx.recv().await {
                     Ok(event) => {
-                        let events =
-                            collect_ready_runtime_events(&mut rx, event, session_filter.as_ref());
-                        if events.is_empty() {
-                            continue;
-                        }
-                        if this
-                            .update(cx, |this, cx| this.apply_runtime_events(events, cx))
-                            .is_err()
-                        {
-                            break;
-                        }
+                        collect_ready_runtime_events(&mut rx, event, session_filter.as_ref())
                     }
-                    Err(RecvError::Lagged(_)) => {}
+                    Err(RecvError::Lagged(skipped)) => RuntimeEventBatch {
+                        events: Vec::new(),
+                        skipped,
+                    },
                     Err(RecvError::Closed) => break,
+                };
+                if !batch.events.is_empty()
+                    && this
+                        .update(cx, |this, cx| this.apply_runtime_events(batch.events, cx))
+                        .is_err()
+                {
+                    break;
+                }
+                // 丢过事件就必须重同步：被挤掉的可能是某一轮的终态，
+                // 迟到的补救没有任何其他触发点。见 `on_runtime_events_dropped`。
+                if batch.skipped > 0
+                    && this
+                        .update(cx, |this, cx| {
+                            this.on_runtime_events_dropped(batch.skipped, cx)
+                        })
+                        .is_err()
+                {
+                    break;
                 }
             }
         })
@@ -1951,6 +1986,110 @@ impl AgentChatView {
         self.transcript.flush_deferred_budget();
         for transcript in self.session_transcripts.values_mut() {
             transcript.flush_deferred_budget();
+        }
+    }
+
+    /// 事件流被广播通道挤掉之后的补救。
+    ///
+    /// 为什么不能只记一条日志：丢的是**任意**事件，而清「正在响应」、推进排队
+    /// 消息、落盘这一整串收尾动作，唯一的触发点就是终态事件
+    /// （`TurnCompleted` / `TurnFailed` / `TurnCancelled`）。终态一旦被挤掉，
+    /// 后面不会再有第二个事件来补齐——界面永久停在「正在响应」，排队的那条消息
+    /// 永远发不出去，而且日志里看不出任何异常。所以丢过事件就必须重算一次。
+    ///
+    /// 判据取自**驱动侧**而不是视图侧：视图的 `running_sessions` 本来就是事件
+    /// 推出来的，丢了事件它自己就是错的；本地看 runtime 会话的 `is_busy`，
+    /// ACP 看连接自己的 `active_turn`，这两个都在产生事件的那一侧。
+    fn on_runtime_events_dropped(&mut self, skipped: u64, cx: &mut Context<Self>) {
+        tracing::warn!(
+            skipped,
+            backend = ?self.backend,
+            running = self.running_sessions.len(),
+            "runtime event stream lagged: dropped events cannot be replayed; \
+             reconciling running state against the driver"
+        );
+        let stale: Vec<String> = self
+            .running_sessions
+            .iter()
+            .filter(|session_uid| self.driver_reports_idle(session_uid))
+            .cloned()
+            .collect();
+        if stale.is_empty() {
+            return;
+        }
+        let backend = self.backend;
+        let acp_phase = self.acp.as_ref().map(AcpConnection::phase);
+        for session_uid in stale {
+            tracing::warn!(
+                %session_uid,
+                ?backend,
+                "terminating a turn whose terminal event was dropped"
+            );
+            if self
+                .acp_turn_owner
+                .as_ref()
+                .is_some_and(|owner| owner.session_uid == session_uid)
+            {
+                self.cancel_pending_acp_permissions(cx);
+                self.acp_turn_owner = None;
+            }
+            if session_uid == self.current_session {
+                self.auto_scroll.request_settle();
+            }
+            self.set_session_running(&session_uid, false, cx);
+            // 终态该做的收尾一件都不能少：漏了落盘会丢历史，漏了推进排队会让
+            // 用户排在下一条的消息永远发不出去——两个都是静默的。
+            match backend {
+                Backend::Local => {
+                    self.persist_session(&session_uid, cx);
+                    self.start_next_pending(&session_uid, cx);
+                }
+                Backend::Acp if acp_terminal_allows_queue_advance(acp_phase.as_ref()) => {
+                    self.persist_acp_session(&session_uid, cx);
+                    self.advance_acp_pending_after_terminal(&session_uid, cx);
+                }
+                Backend::Acp => {}
+            }
+        }
+        self.trim_session_transcripts();
+        cx.notify();
+    }
+
+    /// 驱动侧是否**确证**这个会话已经不在跑了。
+    ///
+    /// 只回答「确证空闲」：问不出来、或者轮次对不上，一律返回 `false`。
+    /// 这里宁可漏收（界面上多转一会儿），也不能误清——误清会让真正还在跑的
+    /// 那一轮凭空失去「正在响应」，用户会以为它结束了。
+    fn driver_reports_idle(&self, session_uid: &str) -> bool {
+        match self.backend {
+            Backend::Local => {
+                let session_id = SessionId::from_string(session_uid.to_string());
+                // 会话不在 runtime 里就不下结论（可能是历史条目，也可能是别的
+                // runtime 的会话）。在，就信它自己的 `is_busy`：runtime 是先登记
+                // 活动轮次再发 `TurnStarted`、先清登记再发终态的，所以这个值在
+                // 有事件可看的时候始终是准的。
+                self.runtime
+                    .session(&session_id)
+                    .is_some_and(|session| !session.is_busy())
+            }
+            Backend::Acp => {
+                let Some(acp) = self.acp.as_ref() else {
+                    // 连接已经收掉：没有可问的对象，不猜。
+                    return false;
+                };
+                match self.acp_turn_owner.as_ref() {
+                    // 有一轮记在账上：问连接「这一轮还在跑吗」。`try_prompt` 是
+                    // 先装 tracker 再发 `TurnStarted` 的，所以视图这边一看到
+                    // 轮次，连接那边就一定有对应的 tracker；查不到就是终态被丢了。
+                    Some(owner) if owner.session_uid == session_uid => {
+                        acp.active_turn_id().is_none()
+                    }
+                    // 账上没轮次、视图却还标着在跑：只认当前连接自己那条会话。
+                    None => acp.session_id().to_string() == session_uid,
+                    // 账记在别的会话上：这条不归它，不猜。
+                    Some(_) => false,
+                }
+            }
         }
     }
 
@@ -2986,14 +3125,12 @@ impl AgentChatView {
             self.trim_session_transcripts();
             applied
         };
-        if !applied {
-            return;
-        }
-        if is_current_session {
-            self.sync_composer(cx);
-            // 跟随当前会话的流式输出 / 新卡片自动滚到底。
-            self.request_scroll_to_bottom();
-        }
+        // 终态收尾放在转录去重**之前**。
+        //
+        // `applied` 说的是「这条事件的内容是重复的」，不是「这一轮不用收尾」。
+        // 曾经的位置在 `if !applied { return; }` 之后，于是一条被判重的终态会把
+        // 清 running / 清 owner 一起带走——界面就永久停在「正在响应」，而且因为
+        // 转录里确实有内容，看起来完全不像卡住。收尾只依赖 `clears_running`。
         if clears_running {
             if backend == Backend::Acp && is_real_terminal {
                 self.cancel_pending_acp_permissions(cx);
@@ -3006,6 +3143,14 @@ impl AgentChatView {
                 self.acp_turn_owner = None;
                 self.trim_session_transcripts();
             }
+        }
+        if !applied {
+            return;
+        }
+        if is_current_session {
+            self.sync_composer(cx);
+            // 跟随当前会话的流式输出 / 新卡片自动滚到底。
+            self.request_scroll_to_bottom();
         }
         if backend == Backend::Acp
             && is_real_terminal
@@ -7309,13 +7454,187 @@ mod tests {
         }
 
         let first = rx.try_recv().unwrap();
-        let events = collect_ready_runtime_events(&mut rx, first, None);
+        let batch = collect_ready_runtime_events(&mut rx, first, None);
 
-        assert_eq!(MAX_RUNTIME_EVENT_BATCH_SIZE, events.len());
+        assert_eq!(MAX_RUNTIME_EVENT_BATCH_SIZE, batch.events.len());
+        assert_eq!(0, batch.skipped, "没丢事件时不该报 lag");
         assert!(
             rx.try_recv().is_ok(),
             "batch must leave the overflow queued"
         );
+    }
+
+    /// 通道挤掉事件时必须把条数报上来。
+    ///
+    /// 这是丢终态能不能被补救的**唯一**入口：条数没报出来，上层就以为一切正常，
+    /// 界面会停在「正在响应」而日志里一句都没有。
+    #[test]
+    fn runtime_event_batch_reports_the_events_the_channel_dropped() {
+        let (tx, mut rx) = tokio::sync::broadcast::channel(2);
+        let session_id = SessionId::from_string("lag-session");
+        let turn_id = TurnId::from_string("lag-turn");
+
+        // 容量 2，先塞满再把接收端甩开 3 条，接收端必然 lag。
+        for index in 0..5 {
+            tx.send(RuntimeEvent::AssistantMessageDelta {
+                session_id: session_id.clone(),
+                turn_id: turn_id.clone(),
+                delta: index.to_string(),
+            })
+            .unwrap();
+        }
+
+        // 第一条 `recv` 就会撞上 lag：丢的是最旧的那批。
+        let Err(TryRecvError::Lagged(skipped)) = rx.try_recv() else {
+            panic!("expected the receiver to lag behind a full channel");
+        };
+        assert!(skipped > 0, "lag 必须报出被挤掉的条数");
+
+        let next = rx.try_recv().expect("lag 之后仍应能取到还留着的事件");
+        let batch = collect_ready_runtime_events(&mut rx, next, Some(&session_id));
+        assert!(
+            !batch.events.is_empty(),
+            "lag 之后游标会挪到最旧的可读位置，接着取仍是本会话的事件"
+        );
+    }
+
+    /// 终态被通道挤掉之后，「正在响应」必须能被收回来。
+    ///
+    /// 复现形状：视图相信会话在跑（`running_sessions` 里有它），但 runtime 那边
+    /// 这一轮早就结束了——区别只在于清 running 的那个终态事件被挤掉了。没有重同步
+    /// 的话界面就永久停在「正在响应」，而日志里只有驱动侧那行，看不出事件没到。
+    #[gpui::test]
+    fn dropped_terminal_event_releases_a_session_the_driver_already_finished(
+        cx: &mut TestAppContext,
+    ) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update(cx, |view, cx| {
+            let session_uid = view.current_session.clone();
+            view.set_session_running(&session_uid, true, cx);
+            assert!(view.running_sessions.contains(&session_uid));
+
+            // 前置条件：runtime 里这个会话确实在，而且没有在跑的轮次。
+            // 也就是说视图的 running 是**残留**，而不是 runtime 还在忙。
+            assert!(
+                !view
+                    .runtime
+                    .session(&view.session_id)
+                    .expect("view's session must be registered with the runtime")
+                    .is_busy()
+            );
+
+            view.on_runtime_events_dropped(7, cx);
+
+            assert!(
+                !view.running_sessions.contains(&session_uid),
+                "runtime 侧已经没有在跑的轮次：running 是终态被丢掉的残留，必须收回"
+            );
+            assert!(!view.is_running, "当前会话的输入框也要跟着退出运行态");
+        });
+    }
+
+    /// 问不出结论时**不许**猜：不在 runtime 里的会话不能被误清。
+    ///
+    /// 误清的代价比多转一会儿大得多——用户会以为那一轮结束了，对着一个其实还在
+    /// 跑的会话继续追问。
+    #[gpui::test]
+    fn dropped_terminal_event_keeps_a_session_the_driver_cannot_be_asked_about(
+        cx: &mut TestAppContext,
+    ) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update(cx, |view, cx| {
+            let session_uid = "history-only-session".to_string();
+            view.set_session_running(&session_uid, true, cx);
+
+            view.on_runtime_events_dropped(3, cx);
+
+            assert!(
+                view.running_sessions.contains(&session_uid),
+                "runtime 里没有这个会话、问不出结论：宁可多转一会儿，也不能误清"
+            );
+        });
+    }
+
+    /// ACP 侧同理：连接已经收掉时没有可问的对象，不能凭「没有连接」就断定它跑完了。
+    #[gpui::test]
+    fn dropped_terminal_event_keeps_an_acp_turn_without_a_connection(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update(cx, |view, cx| {
+            view.backend = Backend::Acp;
+            let session_uid = "acp-owner-session".to_string();
+            view.acp_turn_owner = Some(AcpTurnOwner {
+                event_session_id: SessionId::from_string("acp:owner"),
+                session_uid: session_uid.clone(),
+                turn_id: TurnId::from_string("turn-owner"),
+                cancel_requested: false,
+            });
+            view.set_session_running(&session_uid, true, cx);
+
+            view.on_runtime_events_dropped(2, cx);
+
+            assert!(view.running_sessions.contains(&session_uid));
+            assert!(
+                view.acp_turn_owner.is_some(),
+                "没确证结束就不该动 owner —— 动了等于把这一轮白送给下一条消息"
+            );
+        });
+    }
+
+    /// 终态收尾不能被转录去重挡掉。
+    ///
+    /// 复现形状：同一个终态来了两次（直播一次、迟到的重放再来一次）。第二次转录
+    /// 会判重、不再写入内容，但「这一轮结束了」这件事是**每次都要落地**的。收尾
+    /// 一旦被 `applied == false` 挡掉，界面就永久停在「正在响应」——而且因为转录里
+    /// 确实有内容，看起来完全不像卡住。
+    #[gpui::test]
+    fn a_duplicate_terminal_event_still_releases_running(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update(cx, |view, cx| {
+            let session_uid = view.current_session.clone();
+            let session_id = view.session_id.clone();
+            let turn_id = TurnId::from_string("duplicate-terminal-turn");
+            let terminal = || RuntimeEvent::TurnFailed {
+                session_id: session_id.clone(),
+                turn_id: turn_id.clone(),
+                reason: "boom".to_string(),
+            };
+
+            view.set_session_running(&session_uid, true, cx);
+            view.apply_runtime_event(terminal(), cx);
+            assert!(
+                !view.running_sessions.contains(&session_uid),
+                "第一次终态就该清掉 running"
+            );
+
+            // 同一个终态再来一次：转录判重，但收尾照样要跑。
+            view.set_session_running(&session_uid, true, cx);
+            view.apply_runtime_event(terminal(), cx);
+
+            assert!(
+                !view.running_sessions.contains(&session_uid),
+                "重复的终态也要清 running —— 收尾不该由转录去重来把关"
+            );
+        });
     }
 
     #[test]
@@ -7339,8 +7658,13 @@ mod tests {
         }
 
         let first = rx.try_recv().unwrap();
-        let events = collect_ready_runtime_events(&mut rx, first, Some(&target_session));
-        let deltas = events
+        let batch = collect_ready_runtime_events(&mut rx, first, Some(&target_session));
+        assert_eq!(
+            0, batch.skipped,
+            "别的会话的事件不算 lag —— 两边都有各自的泵，不是丢事件"
+        );
+        let deltas = batch
+            .events
             .into_iter()
             .map(|event| match event {
                 RuntimeEvent::AssistantMessageDelta { delta, .. } => delta,
