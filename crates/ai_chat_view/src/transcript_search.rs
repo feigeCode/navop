@@ -12,8 +12,9 @@
 //! 高亮整条轮次是诚实的做法；假装标出精确区间属于虚构。
 
 use crate::agent_cards::{
-    ACP_PERMISSION_CARD, AcpPermissionCardData, SUBAGENT_CARD, SubAgentCardData, TOOL_CARD,
-    TOOL_CONFIRM_CARD, ToolCardData, ToolConfirmCardData,
+    ACP_PERMISSION_CARD, AcpPermissionCardData, COMPACTION_CARD, CompactionCardData, PLAN_CARD,
+    PlanCardData, SUBAGENT_CARD, SubAgentCardData, TOOL_CARD, TOOL_CONFIRM_CARD, ToolCardData,
+    ToolConfirmCardData,
 };
 use crate::turn::TurnProjection;
 use crate::{ChatMessageUI, MessageVariant};
@@ -290,6 +291,20 @@ fn card_search_text(kind: &str, content: &str) -> Option<String> {
             let data = SubAgentCardData::from_json(content)?;
             Some([data.name, data.task, data.summary].join("\n"))
         }
+        PLAN_CARD => {
+            let data = PlanCardData::from_json(content)?;
+            let mut parts = vec![data.goal];
+            parts.extend(
+                data.steps
+                    .into_iter()
+                    .flat_map(|step| [step.title, step.description]),
+            );
+            Some(parts.join("\n"))
+        }
+        COMPACTION_CARD => {
+            let data = CompactionCardData::from_json(content)?;
+            Some(data.text)
+        }
         // `chart-json` 之类不是文本内容，不参与搜索。
         _ => None,
     }
@@ -467,6 +482,7 @@ mod tests {
             ToolCardData {
                 call_id: "c1".into(),
                 tool_name: "fs.read".into(),
+                action: agent_runtime::ToolAction::Read,
                 target_id: None,
                 target_label: None,
                 input_summary: "agent_transcript.rs:29-41".into(),
@@ -475,6 +491,8 @@ mod tests {
                 success: Some(true),
                 summary: "读取完成".into(),
                 data_text: "const MAX_TRANSCRIPT_MESSAGES: usize = 500;".into(),
+                file_changes: Vec::new(),
+                duration_ms: None,
             }
             .to_json(),
         );

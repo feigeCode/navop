@@ -23,6 +23,7 @@ pub use agent_runtime::{
 mod acp;
 mod acp_agent_config;
 mod agent_cards;
+mod agent_diff;
 mod agent_skills;
 mod agent_tool_config;
 mod agent_tool_input;
@@ -183,8 +184,8 @@ pub use transcript_search::{
     MAX_SEARCH_HITS, SearchHit, TranscriptSearch, count_matches, message_search_text, turn_texts,
 };
 pub use turn::{
-    TurnProjection, TurnTiming, TurnTimings, breakdown_text, is_pending_decision, is_risk_message,
-    project_turns,
+    TurnOutcome, TurnProjection, TurnTiming, TurnTimings, breakdown_text, is_pending_decision,
+    is_risk_message, project_turns,
 };
 pub use workbench::{
     WorkbenchPanelEntry, WorkbenchPanelKind, WorkbenchPlacement, WorkbenchShell,

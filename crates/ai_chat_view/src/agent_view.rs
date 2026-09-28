@@ -64,7 +64,8 @@ use crate::acp::{
 use crate::acp::{AcpAgentConfig, AcpProbeRecord, acp_probe_cache, probe_fingerprint};
 use crate::acp_agent_config::{AcpAgentConfigEvent, acp_agent_config_notifier};
 use crate::agent_cards::{
-    ApproveToolCall, PlanCardData, RejectToolCall, SelectAcpPermissionOption, SubAgentCardData,
+    ApproveToolCall, OpenFileInReview, PlanCardData, RejectToolCall, SelectAcpPermissionOption,
+    SubAgentCardData,
 };
 use crate::agent_skills::AgentSkillState;
 use crate::usage::{format_local_usage, model_context_window};
@@ -93,7 +94,7 @@ use crate::session_shortcut::{NavigateSessionBack, NavigateSessionForward, Toggl
 use crate::session_sidebar::{self, SessionRowStyle, SessionSummary};
 use crate::transcript_scroll::TranscriptScrollState;
 use crate::transcript_search::TranscriptSearch;
-use crate::turn::TurnTimings;
+use crate::turn::{TurnOutcome, TurnTimings};
 use crate::theme::{AgentChatTheme, resolve_agent_chat_theme};
 
 mod acp_options;
@@ -136,6 +137,13 @@ pub enum AgentChatViewEvent {
     RestoreTurn {
         session_id: String,
         turn_id: String,
+    },
+    /// 用户点了改动摘要里的某个文件：请求宿主在审阅面板里打开它。
+    ///
+    /// 与 [`Self::RestoreTurn`] 同理,视图只转发路径 —— 打开文件需要窗口,
+    /// 面板在哪、怎么开都由宿主决定。
+    OpenFileInReview {
+        path: String,
     },
 }
 
@@ -1513,6 +1521,17 @@ impl AgentChatView {
             if !handled {
                 cx.propagate();
             }
+        });
+
+        // 工具卡片里的 diff 文件头只有一个「打开」按钮,它不知道审阅面板在哪,
+        // 只把路径发出来。这里再往上转一手,由宿主决定落位。
+        let view = cx.weak_entity();
+        let app: &mut App = cx;
+        app.on_action(move |action: &OpenFileInReview, cx: &mut App| {
+            let path = action.path.clone();
+            let _ = view.update(cx, |_this, cx| {
+                cx.emit(AgentChatViewEvent::OpenFileInReview { path });
+            });
         });
     }
 
@@ -3050,19 +3069,30 @@ impl AgentChatView {
         .with_recovery(AcpRecoveryAction::Retry)
     }
 
-    /// 记录轮次起止时间。
+    /// 记录轮次起止时间，以及真实收尾结果。
     ///
-    /// 只认真实事件时刻；折叠头里的「用时 Ns」不足以凭猜显示。
+    /// 只认真实事件时刻；折叠头里的「用时 Ns」不足以凭猜显示。收尾结果同理：
+    /// 只有终态事件能判定失败/取消，绝不从系统提示文本推断。
     fn record_turn_timing(&mut self, event: &RuntimeEvent) {
         let now = unix_now_secs();
         match event {
             RuntimeEvent::TurnStarted { turn_id, .. } => {
                 self.turn_timings.note_started(turn_id.as_str(), now);
             }
-            RuntimeEvent::TurnCompleted { turn_id, .. }
-            | RuntimeEvent::TurnCancelled { turn_id, .. }
-            | RuntimeEvent::TurnFailed { turn_id, .. } => {
+            RuntimeEvent::TurnCompleted { turn_id, .. } => {
                 self.turn_timings.note_finished(turn_id.as_str(), now);
+                self.turn_timings
+                    .note_outcome(turn_id.as_str(), TurnOutcome::Completed);
+            }
+            RuntimeEvent::TurnCancelled { turn_id, .. } => {
+                self.turn_timings.note_finished(turn_id.as_str(), now);
+                self.turn_timings
+                    .note_outcome(turn_id.as_str(), TurnOutcome::Cancelled);
+            }
+            RuntimeEvent::TurnFailed { turn_id, .. } => {
+                self.turn_timings.note_finished(turn_id.as_str(), now);
+                self.turn_timings
+                    .note_outcome(turn_id.as_str(), TurnOutcome::Failed);
             }
             _ => {}
         }
@@ -3082,6 +3112,9 @@ impl AgentChatView {
                     session_id: self.current_session.clone(),
                     turn_id,
                 });
+            }
+            MessageListAction::OpenFileInReview { path } => {
+                cx.emit(AgentChatViewEvent::OpenFileInReview { path });
             }
         }
         cx.notify();
@@ -8277,6 +8310,43 @@ mod tests {
     }
 
     #[gpui::test]
+    fn opening_a_changed_file_emits_a_host_request(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        use std::sync::{Arc, Mutex};
+        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let seen_for_subscribe = seen.clone();
+        cx.update(|_window: &mut gpui::Window, cx: &mut gpui::App| {
+            cx.subscribe(&view, move |_, event: &AgentChatViewEvent, _cx| {
+                if let AgentChatViewEvent::OpenFileInReview { path } = event {
+                    seen_for_subscribe.lock().unwrap().push(path.clone());
+                }
+            })
+            .detach();
+        });
+
+        view.update(cx, |view, cx| {
+            view.apply_message_list_action(
+                MessageListAction::OpenFileInReview {
+                    path: "src/lib.rs".into(),
+                },
+                cx,
+            );
+        });
+        cx.run_until_parked();
+
+        assert_eq!(
+            vec!["src/lib.rs".to_string()],
+            seen.lock().unwrap().clone(),
+            "视图只发路径，落到哪个面板由宿主决定"
+        );
+    }
+
+    #[gpui::test]
     fn restorable_turns_are_bucketed_by_session(cx: &mut TestAppContext) {
         init_test_ui(cx);
         let config =
@@ -11408,6 +11478,7 @@ mod tests {
                 turn_id: agent_runtime::TurnId::from_string("turn"),
                 call_id: ToolCallId::from_string("call"),
                 tool_name: ToolName::new("terminal.exec"),
+                kind: agent_runtime::ToolAction::Execute,
                 arguments: json!({
                     "target": "haiwai comi",
                     "command": "du -xhd1 /"
@@ -12837,6 +12908,7 @@ mod tests {
                 ToolCardData {
                     call_id: "call-layout".to_string(),
                     tool_name: "terminal.exec".to_string(),
+                    action: agent_runtime::ToolAction::Execute,
                     target_id: Some("ssh-prod-with-a-very-long-target-id".to_string()),
                     target_label: Some("生产终端节点-很长的展示名称".to_string()),
                     input_summary: "ps aux | sort -nrk 3,3 | head -20".to_string(),
@@ -12845,6 +12917,8 @@ mod tests {
                     success: None,
                     summary: String::new(),
                     data_text: String::new(),
+                    file_changes: Vec::new(),
+                    duration_ms: None,
                 }
                 .to_json(),
             ));
@@ -12859,10 +12933,13 @@ mod tests {
             .debug_bounds("agent-tool-card")
             .expect("tool card should render");
 
-        assert_eq!(column.origin.x, card.origin.x);
+        // 工具行是活动块的子行,缩进一级(块头占最左边);除了这一级缩进,它仍
+        // 该铺满剩余宽度。
+        assert_eq!(column.origin.x + px(16.0), card.origin.x);
         assert_eq!(
-            column.size.width, card.size.width,
-            "tool card should fill sidebar message column: column={column:?}, card={card:?}"
+            column.size.width - px(16.0),
+            card.size.width,
+            "tool card should fill the rest of the sidebar message column: column={column:?}, card={card:?}"
         );
     }
 

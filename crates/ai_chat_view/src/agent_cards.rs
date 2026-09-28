@@ -9,21 +9,24 @@
 //! 负责在收到 [`RuntimeEvent`](agent_runtime::RuntimeEvent) 时写入 / 更新这些 JSON。
 //! 这里定义共享的数据结构(序列化契约)与渲染实现,二者共用同一份 schema。
 
+use agent_runtime::ToolAction;
+use crate::agent_diff::{DiffRow, FileChangeSummary};
 use crate::card::{CardMessage, CardRegistry, ChatCard};
-use crate::theme::{active_agent_chat_theme, themed_markdown};
+use crate::theme::{AgentChatTheme, active_agent_chat_theme, themed_markdown};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Action, Anchor, AnyElement, App, AppContext, Entity, InteractiveElement, IntoElement,
     ParentElement, SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Sizable, Size,
+    ActiveTheme, Disableable, Icon, Sizable, Size,
     button::{Button, ButtonVariants},
     h_flex,
     input::{Editor, EditorState},
     menu::{DropdownMenu, PopupMenuItem},
     v_flex,
 };
+use one_assets::IconName;
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -49,6 +52,10 @@ pub const SUBAGENT_CARD: &str = "agent.subagent";
 pub const TOOL_CONFIRM_CARD: &str = "agent.confirm";
 /// ACP 协议权限请求卡片的 `kind`。
 pub const ACP_PERMISSION_CARD: &str = "acp.permission";
+/// 计划进度卡片的 `kind`（一行进度，展开看步骤）。
+pub const PLAN_CARD: &str = "agent.plan";
+/// 对话压缩卡片的 `kind`（一行说明，展开看摘要）。
+pub const COMPACTION_CARD: &str = "agent.compaction";
 
 // ============================================================================
 // 数据契约(reducer 写入 / 卡片读取共用)
@@ -80,6 +87,9 @@ pub struct PlanStepData {
 pub struct ToolCardData {
     pub call_id: String,
     pub tool_name: String,
+    /// 调用方声明的动作类别。UI 据此选动词;`Other` 时改显示工具名。
+    #[serde(default)]
+    pub action: ToolAction,
     /// 目标资源 id,用于多资源任务分组展示。
     #[serde(default)]
     pub target_id: Option<String>,
@@ -103,6 +113,12 @@ pub struct ToolCardData {
     /// 观测数据文本(可能较长,展示时截断)。
     #[serde(default)]
     pub data_text: String,
+    /// 本次调用改动的文件(已算成可渲染的 diff 行)。空表示没有文件改动。
+    #[serde(default)]
+    pub file_changes: Vec<FileChangeSummary>,
+    /// 执行耗时(毫秒)。为 0 或缺失时不显示。
+    #[serde(default)]
+    pub duration_ms: Option<i64>,
 }
 
 /// 子代理任务卡片数据。
@@ -195,6 +211,20 @@ pub struct SelectAcpPermissionOption {
     pub option_id: String,
 }
 
+/// 对话压缩卡片数据。
+///
+/// 历史里被压缩掉的旧上下文：过去这里把整份摘要直接铺在转录里，两屏就没了。
+/// 现在只留一行说明，正文交给展开。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CompactionCardData {
+    /// 被压缩进摘要的历史条目数。
+    #[serde(default)]
+    pub items: usize,
+    /// 摘要正文。
+    #[serde(default)]
+    pub text: String,
+}
+
 impl PlanCardData {
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).unwrap_or_default()
@@ -252,6 +282,16 @@ impl AcpPermissionCardData {
     }
 }
 
+impl CompactionCardData {
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
+
+    pub fn from_json(s: &str) -> Option<Self> {
+        serde_json::from_str(s).ok()
+    }
+}
+
 fn default_tool_confirm_status() -> String {
     "pending".into()
 }
@@ -291,36 +331,29 @@ impl ChatCard for ToolCard {
             return fallback(msg.content, cx);
         };
 
-        let (status_glyph, status_color) = if data.running {
-            ("●", theme.muted_foreground)
-        } else if data.success == Some(true) {
-            ("✓", cx.theme().success)
-        } else if data.success == Some(false) {
-            ("✗", cx.theme().danger)
-        } else {
-            ("•", theme.muted_foreground)
-        };
-        let has_details =
-            !data.input_json.is_empty() || !data.summary.is_empty() || !data.data_text.is_empty();
+        let (status_glyph, status_color) = tool_status_style(&data, cx);
+        let expanded_diff = data.file_changes.iter().any(FileChangeSummary::has_rows);
+        let has_details = expanded_diff
+            || !data.input_json.is_empty()
+            || !data.summary.is_empty()
+            || !data.data_text.is_empty();
         let expanded = has_details && self.is_expanded(msg.id);
         let toggle_state = self.expanded.clone();
         let message_id = msg.id.to_string();
         let toggle_id = SharedString::from(format!("agent-tool-card-toggle-{}", data.call_id));
         let hover_bg = theme.panel_hover;
 
-        let mut card = v_flex()
+        // 一次工具调用 = 一行。没有容器、没有边框、没有底色:重装饰会让一摞
+        // 调用看起来像一摞表单,而它们只是同一件事的连续步骤。hover 才给底色。
+        let card = v_flex()
             .debug_selector(|| "agent-tool-card".to_string())
             .w_full()
             .min_w_0()
-            .gap_2()
-            .p_2()
-            .rounded_lg()
-            .border_1()
-            .border_color(theme.border)
-            .bg(theme.panel)
+            .gap_1()
             .child(
                 h_flex()
                     .id(toggle_id)
+                    .debug_selector(|| "agent-tool-row".to_string())
                     .w_full()
                     .min_w_0()
                     .gap_2()
@@ -332,74 +365,58 @@ impl ChatCard for ToolCard {
                         this.cursor_pointer()
                             .hover(move |this| this.bg(hover_bg))
                             .on_click(move |_, _, cx| {
-                                if let Ok(mut expanded_ids) = toggle_state.lock()
-                                    && !expanded_ids.insert(message_id.clone())
-                                {
-                                    expanded_ids.remove(&message_id);
-                                }
+                                toggle_expanded(&toggle_state, &message_id);
                                 cx.refresh_windows();
                             })
                     })
                     .child(
                         div()
                             .flex_shrink_0()
+                            .text_xs()
                             .text_color(status_color)
                             .child(status_glyph),
                     )
-                    .child(tool_card_title(&data, cx))
                     .child(
                         div()
-                            .flex_shrink_0()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
                             .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(tool_status_label(&data)),
+                            .text_color(theme.foreground)
+                            .child(tool_row_title(&data)),
                     )
-                    .when(has_details, |this| {
-                        this.child(
+                    .children(tool_row_meta_chips(&data, cx).into_iter().map(
+                        |(text, color)| {
                             div()
                                 .flex_shrink_0()
                                 .text_xs()
-                                .text_color(theme.muted_foreground)
-                                .child(if expanded {
-                                    t!("AgentUi.collapse_details").to_string()
-                                } else {
-                                    t!("AgentUi.expand_details").to_string()
-                                }),
+                                .text_color(color)
+                                .child(text)
+                        },
+                    ))
+                    .when(has_details, |this| {
+                        this.child(
+                            Icon::new(if expanded {
+                                IconName::ChevronDown
+                            } else {
+                                IconName::ChevronRight
+                            })
+                            .xsmall()
+                            .text_color(theme.muted_foreground)
+                            .flex_shrink_0(),
                         )
                     }),
             );
 
-        if expanded && !data.input_json.is_empty() {
-            card = card.child(tool_card_json_block(
-                t!("AgentUi.input").to_string(),
-                SharedString::from(format!("agent-tool-input-{}", data.call_id)),
-                data.input_json.clone(),
-                window,
-                cx,
-            ));
-        }
+        let mut card = card;
 
         if expanded {
-            let terminal_output = terminal_exec_output_text(&data);
-            if !terminal_output.is_empty() {
-                card = card.child(tool_card_text_block(
-                    t!("AgentUi.output").to_string(),
-                    SharedString::from(format!("agent-tool-output-{}", data.call_id)),
-                    terminal_output,
-                    window,
-                    cx,
-                ));
+            // 有 diff 就**不给**入参 / 输出:入参里装的正是这次改动的两份文件内容,
+            // 再摊开一遍等于同一件事说两遍,而且更难看。
+            if expanded_diff {
+                card = card.child(tool_card_diff_block(&data, cx));
             } else {
-                let output = distinct_tool_output_json(&data);
-                if !output.is_empty() {
-                    card = card.child(tool_card_json_block(
-                        t!("AgentUi.output").to_string(),
-                        SharedString::from(format!("agent-tool-output-{}", data.call_id)),
-                        output,
-                        window,
-                        cx,
-                    ));
-                }
+                card = card.child(tool_card_detail_block(&data, window, cx));
             }
         }
 
@@ -469,6 +486,293 @@ impl ChatCard for SubAgentCard {
             cx,
         )
     }
+}
+
+/// 计划进度卡片：过程区里的一行进度，展开看每一步。
+///
+/// 计划以前只活在输入框上方的触发器里：往回翻历史时看不到当时打算怎么做。
+struct PlanCard {
+    expanded: Arc<Mutex<HashSet<String>>>,
+}
+
+impl PlanCard {
+    fn new() -> Self {
+        Self {
+            expanded: Arc::new(Mutex::new(HashSet::new())),
+        }
+    }
+
+    fn is_expanded(&self, message_id: &str) -> bool {
+        self.expanded
+            .lock()
+            .map(|set| set.contains(message_id))
+            .unwrap_or(false)
+    }
+}
+
+impl ChatCard for PlanCard {
+    fn kind(&self) -> &'static str {
+        PLAN_CARD
+    }
+
+    fn render(&self, msg: &CardMessage, _window: &mut Window, cx: &mut App) -> AnyElement {
+        let theme = active_agent_chat_theme(cx);
+        let Some(data) = PlanCardData::from_json(msg.content) else {
+            return fallback(msg.content, cx);
+        };
+
+        let expandable = !data.steps.is_empty();
+        let expanded = expandable && self.is_expanded(msg.id);
+        let toggle_state = self.expanded.clone();
+        let message_id = msg.id.to_string();
+        let (done, total) = data.progress();
+        let meta = if total == 0 {
+            t!("AgentUi.no_plan").to_string()
+        } else {
+            format!("{done}/{total} {}", plan_progress_state(&data, done, total))
+        };
+
+        let mut card = v_flex()
+            .debug_selector(|| "agent-plan-card".to_string())
+            .w_full()
+            .min_w_0()
+            .gap_1()
+            .child(agent_info_row(
+                SharedString::from(format!("agent-plan-row-{}", msg.id)),
+                "agent-plan-row",
+                IconName::ListChecks,
+                t!("AgentUi.plan").to_string(),
+                Some(meta),
+                expanded,
+                expandable,
+                &theme,
+                Box::new(move |cx| {
+                    toggle_expanded(&toggle_state, &message_id);
+                    cx.refresh_windows();
+                }),
+            ));
+
+        if expanded {
+            card = card.child(
+                v_flex()
+                    .debug_selector(|| "agent-plan-steps".to_string())
+                    .w_full()
+                    .min_w_0()
+                    .pl_4()
+                    .gap_0p5()
+                    .children(
+                        data.steps
+                            .iter()
+                            .map(|step| plan_step_row(step, &theme, cx)),
+                    ),
+            );
+        }
+
+        card.into_any_element()
+    }
+}
+
+/// 计划一行的右端事实：还有工作时说「进行中 / 待执行」，全部结束时说「已完成」。
+fn plan_progress_state(data: &PlanCardData, done: usize, total: usize) -> String {
+    if done >= total {
+        return t!("AgentUi.completed_state").to_string();
+    }
+    if data
+        .steps
+        .iter()
+        .any(|step| matches!(step.status.as_str(), "running" | "in_progress"))
+    {
+        return t!("AgentUi.in_progress").to_string();
+    }
+    t!("AgentUi.pending").to_string()
+}
+
+/// 计划里的一步：状态字形 + 标题，风险步把风险写在后面。
+fn plan_step_row(step: &PlanStepData, theme: &AgentChatTheme, cx: &App) -> AnyElement {
+    let (glyph, color) = match step.status.as_str() {
+        "completed" => ("✓", cx.theme().success),
+        "running" | "in_progress" => ("●", cx.theme().info),
+        "failed" => ("✗", cx.theme().danger),
+        _ => ("•", theme.muted_foreground),
+    };
+    let mut row = h_flex()
+        .debug_selector(|| "agent-plan-step".to_string())
+        .w_full()
+        .min_w_0()
+        .gap_2()
+        .items_center()
+        .px_1()
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_xs()
+                .text_color(color)
+                .child(glyph),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_xs()
+                .text_color(theme.foreground)
+                .child(step.title.clone()),
+        );
+    if !step.risk.trim().is_empty() {
+        row = row.child(
+            div()
+                .flex_shrink_0()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(step.risk.clone()),
+        );
+    }
+    row.into_any_element()
+}
+
+/// 对话压缩卡片：一行说清压掉了多少历史，摘要正文折在后面。
+struct CompactionCard {
+    expanded: Arc<Mutex<HashSet<String>>>,
+}
+
+impl CompactionCard {
+    fn new() -> Self {
+        Self {
+            expanded: Arc::new(Mutex::new(HashSet::new())),
+        }
+    }
+
+    fn is_expanded(&self, message_id: &str) -> bool {
+        self.expanded
+            .lock()
+            .map(|set| set.contains(message_id))
+            .unwrap_or(false)
+    }
+}
+
+impl ChatCard for CompactionCard {
+    fn kind(&self) -> &'static str {
+        COMPACTION_CARD
+    }
+
+    fn render(&self, msg: &CardMessage, window: &mut Window, cx: &mut App) -> AnyElement {
+        let theme = active_agent_chat_theme(cx);
+        let Some(data) = CompactionCardData::from_json(msg.content) else {
+            return fallback(msg.content, cx);
+        };
+
+        let expandable = !data.text.trim().is_empty();
+        let expanded = expandable && self.is_expanded(msg.id);
+        let toggle_state = self.expanded.clone();
+        let message_id = msg.id.to_string();
+        let meta = (data.items > 0)
+            .then(|| t!("AgentUi.context_compacted_items", count = data.items).to_string());
+
+        let mut card = v_flex()
+            .debug_selector(|| "agent-compaction-card".to_string())
+            .w_full()
+            .min_w_0()
+            .gap_1()
+            .child(agent_info_row(
+                SharedString::from(format!("agent-compaction-row-{}", msg.id)),
+                "agent-compaction-row",
+                IconName::Archive,
+                t!("AgentUi.context_compacted").to_string(),
+                meta,
+                expanded,
+                expandable,
+                &theme,
+                Box::new(move |cx| {
+                    toggle_expanded(&toggle_state, &message_id);
+                    cx.refresh_windows();
+                }),
+            ));
+
+        if expanded {
+            card = card.child(detail_frame(
+                SharedString::from(format!("agent-compaction-detail-{}", msg.id)),
+                vec![(
+                    t!("AgentUi.context_summary").to_string(),
+                    ToolDetailPayload::Text(data.text.clone()),
+                )],
+                window,
+                cx,
+            ));
+        }
+
+        card.into_any_element()
+    }
+}
+
+/// 非工具行的一行版式：图标 + 标题 + 右端事实 + 折叠箭头。
+///
+/// 计划 / 压缩这类「结构事件」跟工具行说同一种话，用同一种版式；它们本来就是
+/// 同一段过程里的不同环节，各写一套只会看起来像两个 App 拼起来的。
+fn agent_info_row(
+    element_id: SharedString,
+    debug: &'static str,
+    icon: IconName,
+    title: String,
+    meta: Option<String>,
+    expanded: bool,
+    expandable: bool,
+    theme: &AgentChatTheme,
+    on_toggle: Box<dyn Fn(&mut App)>,
+) -> AnyElement {
+    let hover_bg = theme.panel_hover;
+    let foreground = theme.foreground;
+    let muted = theme.muted_foreground;
+    h_flex()
+        .id(element_id)
+        .debug_selector(move || debug.to_string())
+        .w_full()
+        .min_w_0()
+        .gap_2()
+        .items_center()
+        .px_1()
+        .py_1()
+        .rounded_md()
+        .when(expandable, |this| {
+            this.cursor_pointer()
+                .hover(move |this| this.bg(hover_bg))
+                .on_click(move |_, _, cx| on_toggle(cx))
+        })
+        .child(
+            Icon::new(icon)
+                .mono()
+                .xsmall()
+                .text_color(muted)
+                .flex_shrink_0(),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_xs()
+                .text_color(foreground)
+                .child(title),
+        )
+        .children(meta.map(|meta| {
+            div()
+                .flex_shrink_0()
+                .text_xs()
+                .text_color(muted)
+                .child(meta)
+        }))
+        .when(expandable, |this| {
+            this.child(
+                Icon::new(if expanded {
+                    IconName::ChevronDown
+                } else {
+                    IconName::ChevronRight
+                })
+                .xsmall()
+                .text_color(muted)
+                .flex_shrink_0(),
+            )
+        })
+        .into_any_element()
 }
 
 struct ToolConfirmCard;
@@ -811,30 +1115,394 @@ fn acp_permission_option_button(request_id: &str, option: &AcpPermissionOptionDa
 // 渲染辅助
 // ============================================================================
 
-fn tool_card_title(data: &ToolCardData, cx: &App) -> AnyElement {
+/// 折叠行的标题:**动词 + 目标**;命令行则是**工具名 + 命令**。
+///
+/// 只有调用方声明了动作类别才用动词;没声明就老实显示工具名 —— 从名字反推
+/// 「这个工具在读取」属于虚构活动。命令行是唯一的例外:这行的重点是命令本身,
+/// 而 `Bash` / `ssh.exec` 是这次调用自己声明的名字,比一个笼统的「执行」有信息量。
+pub(crate) fn tool_row_title(data: &ToolCardData) -> String {
+    let target = tool_row_target(data);
+    if data.action == ToolAction::Execute {
+        let head = if data.tool_name.trim().is_empty() {
+            tool_action_label(data.action)
+        } else {
+            data.tool_name.clone()
+        };
+        return match target {
+            Some(target) => format!("{head} {target}"),
+            None => head,
+        };
+    }
+    if data.action.has_verb() {
+        let verb = tool_action_label(data.action);
+        return match target {
+            Some(target) => format!("{verb} {target}"),
+            None => format!("{verb} {}", data.tool_name),
+        };
+    }
+    match target {
+        Some(target) => format!("{} {target}", data.tool_name),
+        None => data.tool_name.clone(),
+    }
+}
+
+/// 折叠行的目标:文件路径优先,其次资源,最后才是入参摘要。
+///
+/// 两类例外,都是「这行真正想说什么」的问题:
+///
+/// - 命令行:命令比资源有用(「Bash cargo test」而不是「Bash prod-a」);
+/// - 检索行:被检索的关键字 / 模式比资源有用,资源只是一个查找范围。
+fn tool_row_target(data: &ToolCardData) -> Option<String> {
+    if let Some(change) = data.file_changes.first() {
+        return Some(compact_path(&change.path));
+    }
+    let summary = data.input_summary.trim();
+    let label = tool_card_target_label(data)
+        .map(str::trim)
+        .filter(|label| !label.is_empty())
+        .map(str::to_string);
+    let summary = (!summary.is_empty()).then(|| single_line_preview(summary));
+    let target = match data.action {
+        ToolAction::Execute | ToolAction::Search => summary.or(label),
+        _ => label.or(summary),
+    };
+    target.map(|target| compact_row_target(&target))
+}
+
+/// 行内目标:绝对路径只留尾部两段,其余原样。
+///
+/// 只对绝对路径生效 —— `compact_path` 按 `/` 切段,拿命令去切会把
+/// `cat /etc/hosts` 变成 `…/etc/hosts`。相对路径也不动:它已经够短,而且
+/// `crates/a/b` 截成 `…/a/b` 反而看不出是哪儿。
+fn compact_row_target(target: &str) -> String {
+    if target.starts_with('/') {
+        compact_path(target)
+    } else {
+        target.to_string()
+    }
+}
+
+/// 行内展示用的单行摘要:取第一个非空行、折叠空白、超长截断。
+///
+/// 多行命令(heredoc、分号串)原样塞进一行,会被宽度截成半句话,还可能把行撑成
+/// 两行;先取一行再截断,读到的至少是一句完整的话。
+fn single_line_preview(text: &str) -> String {
+    const MAX_CHARS: usize = 80;
+    let first_line = text
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("");
+    let collapsed = first_line.split_whitespace().collect::<Vec<_>>().join(" ");
+    truncate_chars(&collapsed, MAX_CHARS)
+}
+
+/// 路径在行内只留尾部两段,并加省略号前缀:`…/navop/crates/core/src/lib.rs` → `…/src/lib.rs`。
+///
+/// 省略号不是装饰:少了它,`src/lib.rs` 看起来就是一个相对路径,读者会以为
+/// 「就是这个文件」;有了它才知道前面还有一段。完整路径留给展开后的 diff 文件头。
+pub(crate) fn compact_path(path: &str) -> String {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let parts: Vec<&str> = trimmed.split('/').filter(|part| !part.is_empty()).collect();
+    match parts.len() {
+        0 => trimmed.to_string(),
+        1 | 2 => parts.join("/"),
+        len => format!("…/{}/{}", parts[len - 2], parts[len - 1]),
+    }
+}
+
+/// 行右端元信息的类别。类别只用来选颜色,文案与颜色分开,便于单测。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MetaKind {
+    Added,
+    Removed,
+    Duration,
+    Reason,
+}
+
+/// 行右端的元信息:**失败原因**,否则是**增删统计 + 耗时**。
+///
+/// 两段都留着:改动行既要知道改了多少、也要知道花了多久;只留一个会让人以为
+/// 另一个不存在(而耗时是判断「这次是不是卡住了」的唯一线索)。
+fn tool_row_meta_parts(data: &ToolCardData) -> Vec<(MetaKind, String)> {
+    if data.success == Some(false) {
+        let reason = data.summary.trim();
+        if !reason.is_empty() {
+            return vec![(MetaKind::Reason, truncate_chars(reason, 48))];
+        }
+    }
+    let mut parts = Vec::new();
+    if let Some((added, removed)) = file_change_totals(&data.file_changes) {
+        if added > 0 {
+            parts.push((MetaKind::Added, format!("+{added}")));
+        }
+        if removed > 0 {
+            parts.push((MetaKind::Removed, format!("−{removed}")));
+        }
+    }
+    if let Some(ms) = data.duration_ms.filter(|ms| *ms > 0) {
+        parts.push((MetaKind::Duration, format_duration_ms(ms)));
+    }
+    parts
+}
+
+fn tool_row_meta_chips(data: &ToolCardData, cx: &App) -> Vec<(String, gpui::Hsla)> {
+    tool_row_meta_parts(data)
+        .into_iter()
+        .map(|(kind, text)| (text, meta_kind_color(kind, cx)))
+        .collect()
+}
+
+fn meta_kind_color(kind: MetaKind, cx: &App) -> gpui::Hsla {
+    match kind {
+        MetaKind::Added => cx.theme().success,
+        MetaKind::Removed | MetaKind::Reason => cx.theme().danger,
+        MetaKind::Duration => active_agent_chat_theme(cx).muted_foreground,
+    }
+}
+
+/// 增删合计的两个 chip(+绿 / −红),块头和行尾共用。
+pub(crate) fn diff_stat_chips(added: u32, removed: u32, cx: &App) -> Vec<(String, gpui::Hsla)> {
+    let mut chips = Vec::new();
+    if added > 0 {
+        chips.push((format!("+{added}"), cx.theme().success));
+    }
+    if removed > 0 {
+        chips.push((format!("−{removed}"), cx.theme().danger));
+    }
+    chips
+}
+
+/// 耗时的人类可读形式:不足一秒给毫秒,超过给一位小数的秒。
+fn format_duration_ms(ms: i64) -> String {
+    if ms < 1000 {
+        format!("{ms}ms")
+    } else {
+        format!("{:.1}s", ms as f64 / 1000.0)
+    }
+}
+
+/// 动作类别 → 动词短语。
+pub(crate) fn tool_action_label(action: ToolAction) -> String {
+    match action {
+        ToolAction::Read => t!("AgentUi.action_read").to_string(),
+        ToolAction::Edit => t!("AgentUi.action_edit").to_string(),
+        ToolAction::Delete => t!("AgentUi.action_delete").to_string(),
+        ToolAction::Move => t!("AgentUi.action_move").to_string(),
+        ToolAction::Search => t!("AgentUi.action_search").to_string(),
+        ToolAction::Execute => t!("AgentUi.action_execute").to_string(),
+        ToolAction::Think => t!("AgentUi.action_think").to_string(),
+        ToolAction::Fetch => t!("AgentUi.action_fetch").to_string(),
+        ToolAction::SwitchMode => t!("AgentUi.action_switch_mode").to_string(),
+        ToolAction::Other => String::new(),
+    }
+}
+
+fn tool_status_style(data: &ToolCardData, cx: &App) -> (&'static str, gpui::Hsla) {
     let theme = active_agent_chat_theme(cx);
-    div()
-        .flex_1()
+    if data.running {
+        ("●", theme.muted_foreground)
+    } else if data.success == Some(true) {
+        ("✓", cx.theme().success)
+    } else if data.success == Some(false) {
+        ("✗", cx.theme().danger)
+    } else {
+        ("•", theme.muted_foreground)
+    }
+}
+
+/// 整个卡片的增删合计(只在有文件改动时给出)。
+pub(crate) fn file_change_totals(changes: &[FileChangeSummary]) -> Option<(u32, u32)> {
+    if changes.is_empty() {
+        return None;
+    }
+    let added: u32 = changes.iter().map(|change| change.added).sum();
+    let removed: u32 = changes.iter().map(|change| change.removed).sum();
+    Some((added, removed))
+}
+
+/// 文件改动块:每个文件一个头行 + 若干 diff 行。
+///
+/// 高度上限在 [`crate::agent_diff`] 里就切好了(`rows` 最多十几行),这里不再
+/// 二次裁剪 —— 视口高度与改动规模无关,是这个模块的硬约束。
+fn tool_card_diff_block(data: &ToolCardData, cx: &App) -> AnyElement {
+    let theme = active_agent_chat_theme(cx);
+    v_flex()
+        .debug_selector(|| "agent-tool-diff".to_string())
+        .w_full()
         .min_w_0()
-        .text_sm()
-        .text_color(theme.foreground)
-        .truncate()
-        .child(tool_card_title_text(data))
+        .gap_2()
+        .px_1()
+        .children(
+            data.file_changes
+                .iter()
+                .filter(|change| !change.path.is_empty() || change.has_rows())
+                .map(|change| {
+                    let change = change.clone();
+                    v_flex()
+                        .w_full()
+                        .min_w_0()
+                        .rounded_md()
+                        .bg(theme.code_background)
+                        .overflow_hidden()
+                        .child(tool_diff_file_header(&change, cx))
+                        .children(change.rows.iter().map(|row| diff_row_element(row, cx)))
+                        .when(change.hidden > 0, |this| {
+                            this.child(
+                                div()
+                                    .w_full()
+                                    .min_w_0()
+                                    .px_2()
+                                    .py_1()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(
+                                        t!("AgentUi.diff_rows_hidden", count = change.hidden)
+                                            .to_string(),
+                                    ),
+                            )
+                        })
+                        .into_any_element()
+                }),
+        )
         .into_any_element()
 }
 
-fn tool_card_title_text(data: &ToolCardData) -> String {
-    let mut parts = vec![
-        tool_card_prefix(&data.tool_name).to_string(),
-        data.tool_name.clone(),
-    ];
-    if let Some(target) = tool_card_target_label(data) {
-        parts.push(format!("@{target}"));
-    }
-    if !data.input_summary.is_empty() {
-        parts.push(data.input_summary.clone());
-    }
-    parts.join(" · ")
+/// diff 块的文件头:完整路径 + 新建标记 + `+N −M` + 「打开」。
+fn tool_diff_file_header(change: &FileChangeSummary, cx: &App) -> AnyElement {
+    let theme = active_agent_chat_theme(cx);
+    let path = change.path.clone();
+    let can_open = !path.is_empty();
+    h_flex()
+        .w_full()
+        .min_w_0()
+        .items_center()
+        .gap_2()
+        .px_2()
+        .py_1()
+        .border_b_1()
+        .border_color(theme.border)
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_xs()
+                .text_color(theme.foreground)
+                .child(if change.path.is_empty() {
+                    t!("AgentUi.diff_unknown_file").to_string()
+                } else {
+                    change.path.clone()
+                }),
+        )
+        .when(change.created, |this| {
+            this.child(
+                div()
+                    .flex_shrink_0()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(t!("AgentUi.diff_new_file").to_string()),
+            )
+        })
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_xs()
+                .text_color(cx.theme().success)
+                .child(format!("+{}", change.added)),
+        )
+        .when(change.removed > 0, |this| {
+            this.child(
+                div()
+                    .flex_shrink_0()
+                    .text_xs()
+                    .text_color(cx.theme().danger)
+                    .child(format!("−{}", change.removed)),
+            )
+        })
+        .when(can_open, |this| {
+            this.child(
+                // 卡片渲染器不能自己开面板:它只负责把动作发出去,由宿主决定
+                // 把这个文件摆到哪个面板。和「执行 / 拒绝」走的是同一条路。
+                Button::new(SharedString::from(format!("agent-tool-diff-open-{path}")))
+                    .ghost()
+                    .xsmall()
+                    .label(t!("AgentUi.open_in_review").to_string())
+                    .on_click(move |_, window, cx| {
+                        window
+                            .dispatch_action(Box::new(OpenFileInReview { path: path.clone() }), cx);
+                    }),
+            )
+        })
+        .into_any_element()
+}
+
+/// 单行 diff:`行号 + 增删标记 + 文本`。
+fn diff_row_element(row: &DiffRow, cx: &App) -> AnyElement {
+    use crate::agent_diff::DiffRowKind;
+
+    let theme = active_agent_chat_theme(cx);
+    let (marker, marker_color, background) = match row.kind {
+        DiffRowKind::Context => ("", theme.muted_foreground, None),
+        DiffRowKind::Added => (
+            "+",
+            cx.theme().success,
+            Some(cx.theme().success.opacity(0.10)),
+        ),
+        DiffRowKind::Removed => (
+            "−",
+            cx.theme().danger,
+            Some(cx.theme().danger.opacity(0.10)),
+        ),
+    };
+    let line_no = row.old_no.or(row.new_no).map(|no| no.to_string());
+    h_flex()
+        .w_full()
+        .min_w_0()
+        .items_start()
+        .gap_1()
+        .px_2()
+        .when_some(background, |this, background| this.bg(background))
+        .child(
+            div()
+                .flex_shrink_0()
+                .w(px(32.0))
+                .text_right()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(line_no.unwrap_or_default()),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .w(px(10.0))
+                .text_xs()
+                .text_color(marker_color)
+                .child(marker),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_xs()
+                .font_family(cx.theme().mono_font_family.clone())
+                .text_color(theme.code_foreground)
+                .child(row.text.clone()),
+        )
+        .into_any_element()
+}
+
+/// 后端的「打开这个文件」请求。
+///
+/// 卡片渲染器不持有宿主 Entity,也不该知道审阅面板在哪;它只把路径发出去,
+/// 由 `AgentChatView` 转成视图事件、宿主决定落位。
+#[derive(Clone, Action, PartialEq, Eq, Deserialize)]
+#[action(namespace = ai_chat_view, no_json)]
+pub struct OpenFileInReview {
+    pub path: String,
 }
 
 fn tool_card_target_label(data: &ToolCardData) -> Option<&str> {
@@ -916,64 +1584,183 @@ fn is_terminal_exec_tool(tool_name: &str) -> bool {
     matches!(tool_name, "terminal_exec" | "terminal.exec")
 }
 
-fn tool_output_json(data: &ToolCardData) -> String {
-    let source = if data.data_text.trim().is_empty() {
-        data.summary.trim()
-    } else {
-        data.data_text.trim()
-    };
-    if source.is_empty() {
-        return String::new();
+/// 展开块里一节载荷的形式。
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ToolDetailPayload {
+    /// 已格式化的 JSON。
+    Json(String),
+    /// 原样文本(命令输出、文件内容)。
+    Text(String),
+}
+
+impl ToolDetailPayload {
+    fn text(&self) -> &str {
+        match self {
+            Self::Json(text) | Self::Text(text) => text,
+        }
     }
-    let formatted = serde_json::from_str::<serde_json::Value>(source)
-        .ok()
-        .and_then(|value| serde_json::to_string_pretty(&value).ok())
-        .unwrap_or_else(|| {
-            serde_json::to_string_pretty(&serde_json::json!({ "output": source }))
-                .unwrap_or_default()
+
+    fn is_json(&self) -> bool {
+        matches!(self, Self::Json(_))
+    }
+}
+
+/// 展开块里的一节:一个名字 + 一份载荷。
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ToolDetailSection {
+    label: String,
+    payload: ToolDetailPayload,
+}
+
+/// 工具输出的原始文本:数据优先,其次摘要。
+fn raw_output_text(data: &ToolCardData) -> String {
+    if data.data_text.trim().is_empty() {
+        data.summary.trim().to_string()
+    } else {
+        data.data_text.trim().to_string()
+    }
+}
+
+/// 把一段原始载荷规整成「JSON 或文本」:能解析成 JSON 就格式化,否则原样当文本。
+///
+/// 纯文本**不再**被包成 `{"output": "..."}`:多一层括号、多一层 `\n` 转义,只为
+/// 看上去「统一」,离原文更远 —— 命令输出和文件内容本来就该按原样读。
+fn normalize_payload(raw: &str) -> Option<ToolDetailPayload> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    match serde_json::from_str::<serde_json::Value>(raw) {
+        Ok(value) => serde_json::to_string_pretty(&value)
+            .ok()
+            .map(|text| ToolDetailPayload::Json(truncate_chars(&text, MAX_TOOL_OUTPUT_JSON_CHARS))),
+        Err(_) => Some(ToolDetailPayload::Text(raw.to_string())),
+    }
+}
+
+/// 展开块要说的话:**入参**和**输出**,同一句话不说两遍。
+///
+/// 输出只是把入参、或行里已经显示过的摘要原样念一遍时就不再单独给一节 —— 重复
+/// 一遍读者会以为发现了第二件事。
+fn tool_detail_sections(data: &ToolCardData) -> Vec<ToolDetailSection> {
+    let input = normalize_payload(&data.input_json);
+    let output = if is_terminal_exec_tool(&data.tool_name) {
+        let text = terminal_exec_output_text(data);
+        (!text.trim().is_empty()).then(|| ToolDetailPayload::Text(text))
+    } else {
+        normalize_payload(&raw_output_text(data))
+    };
+
+    let output_repeats_input = match (&input, &output) {
+        (Some(left), Some(right)) => left.text().trim() == right.text().trim(),
+        _ => false,
+    };
+    let output_repeats_summary = match &output {
+        Some(payload) => {
+            let summary = data.input_summary.trim();
+            !summary.is_empty() && payload.text().trim() == summary
+        }
+        None => false,
+    };
+
+    let mut sections = Vec::new();
+    if let Some(payload) = input.filter(|_| !output_repeats_input) {
+        sections.push(ToolDetailSection {
+            label: t!("AgentUi.input").to_string(),
+            payload,
         });
-    truncate_chars(&formatted, MAX_TOOL_OUTPUT_JSON_CHARS)
-}
-
-fn distinct_tool_output_json(data: &ToolCardData) -> String {
-    let output = tool_output_json(data);
-    if output.is_empty() || tool_output_duplicates_input(data, &output) {
-        String::new()
-    } else {
-        output
     }
-}
-
-fn tool_output_duplicates_input(data: &ToolCardData, output_json: &str) -> bool {
-    json_values_equal(&data.input_json, output_json)
-        || wrapped_output_matches_input_summary(&data.input_summary, output_json)
-}
-
-fn json_values_equal(left: &str, right: &str) -> bool {
-    let Ok(left) = serde_json::from_str::<serde_json::Value>(left) else {
-        return false;
-    };
-    let Ok(right) = serde_json::from_str::<serde_json::Value>(right) else {
-        return false;
-    };
-    left == right
-}
-
-fn wrapped_output_matches_input_summary(input_summary: &str, output_json: &str) -> bool {
-    let input_summary = input_summary.trim();
-    if input_summary.is_empty() {
-        return false;
+    if let Some(payload) = output.filter(|_| !output_repeats_summary) {
+        sections.push(ToolDetailSection {
+            label: t!("AgentUi.output").to_string(),
+            payload,
+        });
     }
-    serde_json::from_str::<serde_json::Value>(output_json)
-        .ok()
-        .and_then(|value| {
-            value
-                .as_object()
-                .and_then(|object| object.get("output"))
-                .and_then(|output| output.as_str())
-                .map(|output| output.trim() == input_summary)
-        })
-        .unwrap_or(false)
+    sections
+}
+
+/// 展开块:入参 + 输出。
+///
+/// 合成**一个**框、节间一条细线、节名缩成框内的小字头:两个框加两行标题看起来
+/// 像两张表单,而它们只是同一次调用的两面。
+fn tool_card_detail_block(data: &ToolCardData, window: &mut Window, cx: &mut App) -> AnyElement {
+    detail_frame(
+        SharedString::from(format!("agent-tool-detail-{}", data.call_id)),
+        tool_detail_sections(data)
+            .into_iter()
+            .map(|section| (section.label, section.payload))
+            .collect(),
+        window,
+        cx,
+    )
+}
+
+/// 展开内容的公共容器：**一个**框，节与节之间一条细线，节名是框内的小字头。
+///
+/// 入参 / 输出 / 摘要都走这里 —— 展开的东西只有一种长相。
+fn detail_frame(
+    id: SharedString,
+    sections: Vec<(String, ToolDetailPayload)>,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let theme = active_agent_chat_theme(cx);
+    let border = theme.border;
+    let muted = theme.muted_foreground;
+    let code_foreground = theme.code_foreground;
+    v_flex()
+        .debug_selector(|| "agent-tool-detail-block".to_string())
+        .w_full()
+        .min_w_0()
+        .rounded(cx.theme().radius)
+        .border_1()
+        .border_color(border)
+        .bg(theme.code_background)
+        .overflow_hidden()
+        .children(
+            sections
+                .into_iter()
+                .enumerate()
+                .map(|(index, (label, payload))| {
+                    let content = payload.text().to_string();
+                    let height = tool_json_height(&content);
+                    let section_id = SharedString::from(format!("{id}-{index}"));
+                    let input = if payload.is_json() {
+                        tool_json_input(section_id, content, window, cx)
+                    } else {
+                        tool_text_input(section_id, content, window, cx)
+                    };
+                    v_flex()
+                        .w_full()
+                        .min_w_0()
+                        .when(index > 0, |this| this.border_t_1().border_color(border))
+                        .child(
+                            div()
+                                .w_full()
+                                .min_w_0()
+                                .px_2()
+                                .pt_1()
+                                .text_xs()
+                                .text_color(muted)
+                                .child(label),
+                        )
+                        .child(
+                            div().w_full().min_w_0().h(height).child(
+                                Editor::new(&input)
+                                    .w_full()
+                                    .min_w_0()
+                                    .h_full()
+                                    .appearance(false)
+                                    .bordered(false)
+                                    .readonly(true)
+                                    .text_xs()
+                                    .text_color(code_foreground),
+                            ),
+                        )
+                        .into_any_element()
+                }),
+        )
+        .into_any_element()
 }
 
 fn tool_card_json_block(
@@ -1033,52 +1820,6 @@ fn tool_card_json_block(
                                 .text_xs()
                                 .text_color(theme.code_foreground),
                         ),
-                ),
-        )
-        .into_any_element()
-}
-
-fn tool_card_text_block(
-    label: impl Into<SharedString>,
-    id: SharedString,
-    content: String,
-    window: &mut Window,
-    cx: &mut App,
-) -> AnyElement {
-    let theme = active_agent_chat_theme(cx);
-    let height = tool_json_height(&content);
-    let input = tool_text_input(id.clone(), content, window, cx);
-    v_flex()
-        .w_full()
-        .min_w_0()
-        .gap_1()
-        .px_1()
-        .child(
-            div()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child(label.into()),
-        )
-        .child(
-            div()
-                .w_full()
-                .min_w_0()
-                .h(height)
-                .rounded(cx.theme().radius)
-                .border_1()
-                .border_color(theme.border)
-                .bg(theme.code_background)
-                .overflow_hidden()
-                .child(
-                    Editor::new(&input)
-                        .w_full()
-                        .min_w_0()
-                        .h_full()
-                        .appearance(false)
-                        .bordered(false)
-                        .readonly(true)
-                        .text_xs()
-                        .text_color(theme.code_foreground),
                 ),
         )
         .into_any_element()
@@ -1178,16 +1919,6 @@ fn fallback(content: &str, cx: &App) -> AnyElement {
             .selectable(true),
         )
         .into_any_element()
-}
-
-fn tool_status_label(data: &ToolCardData) -> String {
-    if data.running {
-        t!("AgentUi.running").to_string()
-    } else if data.success == Some(false) {
-        t!("AgentUi.failed").to_string()
-    } else {
-        t!("AgentUi.completed_state").to_string()
-    }
 }
 
 fn confirm_status_label(status: &str) -> String {
@@ -1416,6 +2147,8 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
 pub fn register_agent_cards(cx: &mut App) {
     CardRegistry::register_global(cx, Arc::new(ToolCard::new()));
     CardRegistry::register_global(cx, Arc::new(SubAgentCard::new()));
+    CardRegistry::register_global(cx, Arc::new(PlanCard::new()));
+    CardRegistry::register_global(cx, Arc::new(CompactionCard::new()));
     CardRegistry::register_global(cx, Arc::new(ToolConfirmCard));
     CardRegistry::register_global(cx, Arc::new(AcpPermissionCard));
 }
@@ -1423,6 +2156,25 @@ pub fn register_agent_cards(cx: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 一张最小可用的工具卡数据:其余用例只改自己关心的字段。
+    fn echo_card() -> ToolCardData {
+        ToolCardData {
+            call_id: "call_1".into(),
+            tool_name: "echo".into(),
+            action: ToolAction::Other,
+            target_id: None,
+            target_label: None,
+            input_summary: String::new(),
+            input_json: String::new(),
+            running: false,
+            success: Some(true),
+            summary: "ok".into(),
+            data_text: String::new(),
+            file_changes: Vec::new(),
+            duration_ms: None,
+        }
+    }
 
     #[test]
     fn plan_card_data_roundtrips() {
@@ -1449,6 +2201,7 @@ mod tests {
         let data = ToolCardData {
             call_id: "call_1".into(),
             tool_name: "echo".into(),
+            action: ToolAction::Other,
             target_id: Some("ssh-b".into()),
             target_label: Some("prod-b".into()),
             input_summary: "hi".into(),
@@ -1457,6 +2210,8 @@ mod tests {
             success: Some(true),
             summary: "echo: hi".into(),
             data_text: "hi".into(),
+            file_changes: Vec::new(),
+            duration_ms: None,
         };
         let back = ToolCardData::from_json(&data.to_json()).expect("parse");
         assert_eq!(back.call_id, "call_1");
@@ -1468,10 +2223,32 @@ mod tests {
     }
 
     #[test]
-    fn tool_card_title_includes_target_label_for_multi_resource_results() {
+    fn tool_card_data_without_the_new_fields_still_parses() {
+        // 旧会话里的卡片 JSON 没有 action / file_changes / duration_ms,
+        // 读回来必须能降级,而不是整条消息渲染成「无法解析」。
+        let legacy = serde_json::json!({
+            "call_id": "call_1",
+            "tool_name": "read_file",
+            "input_summary": "/etc/hosts",
+            "input_json": "",
+            "running": false,
+            "success": true,
+            "summary": "ok",
+            "data_text": "ok",
+        })
+        .to_string();
+        let back = ToolCardData::from_json(&legacy).expect("parse");
+        assert_eq!(ToolAction::Other, back.action);
+        assert!(back.file_changes.is_empty());
+        assert_eq!(None, back.duration_ms);
+    }
+
+    #[test]
+    fn executed_command_outranks_the_resource_in_the_row_title() {
         let data = ToolCardData {
             call_id: "call_1".into(),
             tool_name: "ssh.exec".into(),
+            action: ToolAction::Execute,
             target_id: Some("ssh-b".into()),
             target_label: Some("prod-b".into()),
             input_summary: "df -h".into(),
@@ -1480,12 +2257,210 @@ mod tests {
             success: Some(true),
             summary: "ok".into(),
             data_text: "ok".into(),
+            file_changes: Vec::new(),
+            duration_ms: None,
+        };
+
+        // 命令是这一行的重点,前面挂工具名(这次调用自己声明的名字),资源不重复。
+        assert_eq!("ssh.exec df -h", tool_row_title(&data));
+    }
+
+    #[test]
+    fn multi_line_commands_are_reduced_to_one_readable_line() {
+        let data = ToolCardData {
+            call_id: "call_1".into(),
+            tool_name: "Bash".into(),
+            action: ToolAction::Execute,
+            target_id: None,
+            target_label: None,
+            input_summary: "\n\n  cd /repo   &&\n  cargo test --lib\n ".into(),
+            input_json: String::new(),
+            running: false,
+            success: Some(true),
+            summary: "ok".into(),
+            data_text: "ok".into(),
+            file_changes: Vec::new(),
+            duration_ms: None,
+        };
+
+        // 取第一个非空行、折叠空白:行不会被 heredoc / 换行撑成两行。
+        assert_eq!("Bash cd /repo &&", tool_row_title(&data));
+    }
+
+    #[test]
+    fn search_rows_show_the_query_rather_than_the_resource() {
+        let data = ToolCardData {
+            call_id: "call_1".into(),
+            tool_name: "grep".into(),
+            action: ToolAction::Search,
+            target_id: Some("/repo".into()),
+            target_label: Some("repo".into()),
+            input_summary: "tool_row_meta".into(),
+            input_json: String::new(),
+            running: false,
+            success: Some(true),
+            summary: "ok".into(),
+            data_text: "ok".into(),
+            file_changes: Vec::new(),
+            duration_ms: None,
         };
 
         assert_eq!(
-            format!("{} · ssh.exec · @prod-b · df -h", t!("AgentUi.tool")),
-            tool_card_title_text(&data)
+            format!("{} tool_row_meta", t!("AgentUi.action_search")),
+            tool_row_title(&data)
         );
+    }
+
+    #[test]
+    fn rows_without_a_declared_action_show_the_tool_name_instead_of_a_verb() {
+        let data = ToolCardData {
+            call_id: "call_1".into(),
+            tool_name: "mcp.fs.grep".into(),
+            action: ToolAction::Other,
+            target_id: None,
+            target_label: None,
+            input_summary: "TODO".into(),
+            input_json: String::new(),
+            running: false,
+            success: Some(true),
+            summary: "ok".into(),
+            data_text: "ok".into(),
+            file_changes: Vec::new(),
+            duration_ms: None,
+        };
+
+        assert_eq!("mcp.fs.grep TODO", tool_row_title(&data));
+    }
+
+    #[test]
+    fn file_changes_drive_the_row_title_and_the_diff_stats() {
+        let data = ToolCardData {
+            call_id: "call_1".into(),
+            tool_name: "Edit".into(),
+            action: ToolAction::Edit,
+            target_id: Some("/repo/crates/core/src/lib.rs".into()),
+            target_label: None,
+            input_summary: String::new(),
+            input_json: String::new(),
+            running: false,
+            success: Some(true),
+            summary: String::new(),
+            data_text: String::new(),
+            file_changes: vec![FileChangeSummary::from_texts(
+                "/repo/crates/core/src/lib.rs",
+                Some("a\nb\n"),
+                "a\nc\n",
+            )],
+            duration_ms: Some(120),
+        };
+
+        assert_eq!(
+            format!("{} …/src/lib.rs", t!("AgentUi.action_edit")),
+            tool_row_title(&data)
+        );
+        assert_eq!(Some((1, 1)), file_change_totals(&data.file_changes));
+        // 增删统计与耗时**并列**都留着:只留一个会让人以为另一个不存在。
+        assert_eq!(
+            vec![
+                (MetaKind::Added, "+1".to_string()),
+                (MetaKind::Removed, "−1".to_string()),
+                (MetaKind::Duration, "120ms".to_string()),
+            ],
+            tool_row_meta_parts(&data)
+        );
+    }
+
+    #[test]
+    fn a_failed_row_reports_the_reason_instead_of_the_stats() {
+        let mut data = ToolCardData {
+            call_id: "call_1".into(),
+            tool_name: "read_file".into(),
+            action: ToolAction::Read,
+            target_id: None,
+            target_label: None,
+            input_summary: "a.rs".into(),
+            input_json: String::new(),
+            running: false,
+            success: Some(false),
+            summary: "没有这个文件".into(),
+            data_text: String::new(),
+            file_changes: Vec::new(),
+            duration_ms: Some(30),
+        };
+
+        let parts = tool_row_meta_parts(&data);
+        assert_eq!(1, parts.len());
+        assert_eq!(MetaKind::Reason, parts[0].0);
+        assert!(parts[0].1.contains("没有这个文件"));
+
+        // 没给失败理由时退回耗时,而不是留一个空位。
+        data.summary = String::new();
+        assert_eq!(
+            vec![(MetaKind::Duration, "30ms".to_string())],
+            tool_row_meta_parts(&data)
+        );
+    }
+
+    #[test]
+    fn compact_path_keeps_the_tail_of_a_path() {
+        // 截断过的路径带省略号前缀:读者才知道前面还有一段。
+        assert_eq!("…/src/lib.rs", compact_path("/repo/crates/core/src/lib.rs"));
+        assert_eq!("lib.rs", compact_path("lib.rs"));
+        assert_eq!("src/lib.rs", compact_path("src/lib.rs"));
+        assert_eq!("", compact_path("   "));
+    }
+
+    #[test]
+    fn a_read_row_shows_the_tail_of_the_file_it_read() {
+        // 外部 agent 给的是绝对路径;行内只留尾部两段,不然一行全是路径。
+        let data = ToolCardData {
+            call_id: "call_1".into(),
+            tool_name: "read".into(),
+            action: ToolAction::Read,
+            target_id: Some("/repo/crates/agent_runtime/src/tools/action.rs".into()),
+            target_label: Some("/repo/crates/agent_runtime/src/tools/action.rs".into()),
+            input_summary: String::new(),
+            input_json: String::new(),
+            running: false,
+            success: Some(true),
+            summary: String::new(),
+            data_text: String::new(),
+            file_changes: Vec::new(),
+            duration_ms: None,
+        };
+
+        assert_eq!(
+            format!("{} …/tools/action.rs", t!("AgentUi.action_read")),
+            tool_row_title(&data)
+        );
+    }
+
+    #[test]
+    fn a_command_row_is_never_path_truncated() {
+        // 命令里也会出现 `/`,按路径切段会把它切坏(`cat /etc/hosts` → `…/etc/hosts`)。
+        let data = ToolCardData {
+            call_id: "call_1".into(),
+            tool_name: "bash".into(),
+            action: ToolAction::Execute,
+            target_id: None,
+            target_label: None,
+            input_summary: "cat /etc/hosts".into(),
+            input_json: String::new(),
+            running: false,
+            success: Some(true),
+            summary: String::new(),
+            data_text: String::new(),
+            file_changes: Vec::new(),
+            duration_ms: None,
+        };
+
+        assert_eq!("bash cat /etc/hosts", tool_row_title(&data));
+    }
+
+    #[test]
+    fn durations_are_formatted_for_humans() {
+        assert_eq!("120ms", format_duration_ms(120));
+        assert_eq!("1.5s", format_duration_ms(1500));
     }
 
     #[test]
@@ -1675,45 +2650,50 @@ mod tests {
     }
 
     #[test]
-    fn tool_output_json_prefers_data_without_repeating_summary() {
-        let data = ToolCardData {
-            call_id: "call_1".into(),
-            tool_name: "echo".into(),
-            target_id: None,
-            target_label: None,
-            input_summary: String::new(),
-            input_json: String::new(),
-            running: false,
-            success: Some(true),
-            summary: "ok".into(),
-            data_text: "{\"rows\":[1]}".into(),
-        };
+    fn json_output_is_pretty_printed() {
+        let mut data = echo_card();
+        data.data_text = "{\"rows\":[1]}".into();
 
-        let output = tool_output_json(&data);
+        let sections = tool_detail_sections(&data);
 
-        assert_eq!("{\n  \"rows\": [\n    1\n  ]\n}", output);
-        assert!(!output.contains("summary"));
+        assert_eq!(1, sections.len());
+        assert_eq!(t!("AgentUi.output").to_string(), sections[0].label);
+        assert_eq!(
+            ToolDetailPayload::Json("{\n  \"rows\": [\n    1\n  ]\n}".to_string()),
+            sections[0].payload
+        );
     }
 
     #[test]
-    fn tool_output_json_wraps_plain_text_as_json() {
-        let data = ToolCardData {
-            call_id: "call_1".into(),
-            tool_name: "echo".into(),
-            target_id: None,
-            target_label: None,
-            input_summary: String::new(),
-            input_json: String::new(),
-            running: false,
-            success: Some(true),
-            summary: "ok".into(),
-            data_text: "plain output".into(),
-        };
+    fn plain_text_output_stays_text() {
+        let mut data = echo_card();
+        data.data_text = "plain output".into();
 
+        let sections = tool_detail_sections(&data);
+
+        // 不再被包成 `{"output": "..."}`:命令输出 / 文件内容按原样读。
         assert_eq!(
-            "{\n  \"output\": \"plain output\"\n}",
-            tool_output_json(&data)
+            vec![ToolDetailSection {
+                label: t!("AgentUi.output").to_string(),
+                payload: ToolDetailPayload::Text("plain output".to_string()),
+            }],
+            sections
         );
+    }
+
+    #[test]
+    fn input_and_output_are_separate_sections_with_labels() {
+        let mut data = echo_card();
+        data.input_json = "{\"sql\": \"select 1\"}".into();
+        data.data_text = "{\"rows\":[{\"value\":1}]}".into();
+
+        let sections = tool_detail_sections(&data);
+
+        assert_eq!(2, sections.len());
+        assert_eq!(t!("AgentUi.input").to_string(), sections[0].label);
+        assert_eq!(t!("AgentUi.output").to_string(), sections[1].label);
+        assert!(sections[0].payload.text().contains("select 1"));
+        assert!(sections[1].payload.text().contains("rows"));
     }
 
     #[test]
@@ -1723,6 +2703,9 @@ mod tests {
             tool_name: "terminal_exec".into(),
             target_id: None,
             target_label: None,
+            action: ToolAction::Other,
+            file_changes: Vec::new(),
+            duration_ms: None,
             input_summary: String::new(),
             input_json: String::new(),
             running: false,
@@ -1746,6 +2729,9 @@ mod tests {
             tool_name: "terminal_exec".into(),
             target_id: None,
             target_label: None,
+            action: ToolAction::Other,
+            file_changes: Vec::new(),
+            duration_ms: None,
             input_summary: String::new(),
             input_json: String::new(),
             running: false,
@@ -1774,56 +2760,28 @@ mod tests {
     }
 
     #[test]
-    fn distinct_tool_output_json_hides_structurally_equal_input() {
-        let data = ToolCardData {
-            call_id: "call_1".into(),
-            tool_name: "echo".into(),
-            target_id: None,
-            target_label: None,
-            input_summary: String::new(),
-            input_json: "{\n  \"rows\": [\n    1\n  ]\n}".into(),
-            running: false,
-            success: Some(true),
-            summary: "ok".into(),
-            data_text: "{\"rows\":[1]}".into(),
-        };
+    fn output_repeating_the_input_is_shown_once() {
+        let mut data = echo_card();
+        data.input_json = "{\n  \"rows\": [\n    1\n  ]\n}".into();
+        data.data_text = "{\"rows\":[1]}".into();
 
-        assert_eq!("", distinct_tool_output_json(&data));
+        let sections = tool_detail_sections(&data);
+
+        assert_eq!(1, sections.len());
+        assert_eq!(t!("AgentUi.output").to_string(), sections[0].label);
     }
 
     #[test]
-    fn distinct_tool_output_json_hides_plain_output_matching_input_summary() {
-        let data = ToolCardData {
-            call_id: "call_1".into(),
-            tool_name: "echo".into(),
-            target_id: None,
-            target_label: None,
-            input_summary: "hello".into(),
-            input_json: "{\n  \"text\": \"hello\"\n}".into(),
-            running: false,
-            success: Some(true),
-            summary: "hello".into(),
-            data_text: "hello".into(),
-        };
+    fn output_repeating_the_row_summary_is_dropped() {
+        let mut data = echo_card();
+        data.input_summary = "hello".into();
+        data.input_json = "{\n  \"text\": \"hello\"\n}".into();
+        data.summary = "hello".into();
+        data.data_text = "hello".into();
 
-        assert_eq!("", distinct_tool_output_json(&data));
-    }
+        let sections = tool_detail_sections(&data);
 
-    #[test]
-    fn distinct_tool_output_json_keeps_different_output() {
-        let data = ToolCardData {
-            call_id: "call_1".into(),
-            tool_name: "query".into(),
-            target_id: None,
-            target_label: None,
-            input_summary: "select 1".into(),
-            input_json: "{\n  \"sql\": \"select 1\"\n}".into(),
-            running: false,
-            success: Some(true),
-            summary: "1 row".into(),
-            data_text: "{\"rows\":[{\"value\":1}]}".into(),
-        };
-
-        assert!(distinct_tool_output_json(&data).contains("\"rows\""));
+        assert_eq!(1, sections.len());
+        assert_eq!(t!("AgentUi.input").to_string(), sections[0].label);
     }
 }

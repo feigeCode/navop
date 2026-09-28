@@ -5,8 +5,8 @@
 //! [`AgentTranscript::apply`],再渲染 `messages`。
 
 use agent_runtime::{
-    HistoryItem, PendingToolCallSummary, Plan, PlanStatus, ResourceContext, RuntimeEvent,
-    StepStatus, ToolObservation,
+    FileChange, HistoryItem, PendingToolCallSummary, Plan, PlanStatus, ResourceContext,
+    RuntimeEvent, StepStatus, ToolAction, ToolObservation,
     ids::{ToolCallId, TurnId},
 };
 use rust_i18n::t;
@@ -15,10 +15,11 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 
 use crate::acp::{AcpPermissionOption, AcpPermissionRequest, AcpPublicMcpApprovalRequest};
 use crate::agent_cards::{
-    ACP_PERMISSION_CARD, AcpPermissionCardData, AcpPermissionOptionData, PlanCardData,
-    PlanStepData, SUBAGENT_CARD, SubAgentCardData, TOOL_CARD, TOOL_CONFIRM_CARD, ToolCardData,
-    ToolConfirmCardData, ToolConfirmItemData,
+    ACP_PERMISSION_CARD, AcpPermissionCardData, AcpPermissionOptionData, COMPACTION_CARD,
+    CompactionCardData, PLAN_CARD, PlanCardData, PlanStepData, SUBAGENT_CARD, SubAgentCardData,
+    TOOL_CARD, TOOL_CONFIRM_CARD, ToolCardData, ToolConfirmCardData, ToolConfirmItemData,
 };
+use crate::agent_diff::FileChangeSummary;
 use crate::agent_tool_input::build_tool_input_display;
 use crate::code_block::extract_fenced_code_blocks;
 use crate::{ChatMessageUI, ChatRole, MessageVariant, parse_chart_json_block};
@@ -38,6 +39,8 @@ const MAX_CACHED_TOOL_INPUT_BYTES: usize = 1024 * 1024;
 const MAX_CARD_FIELD_BYTES: usize = 64 * 1024;
 const MAX_CARD_ITEM_FIELD_BYTES: usize = 8 * 1024;
 const MAX_CARD_COLLECTION_ITEMS: usize = 64;
+/// 一张工具卡片最多带几个文件的改动。超出部分不进卡片(计数也不再累计)。
+const MAX_CARD_FILE_CHANGES: usize = 8;
 const TRANSCRIPT_TRUNCATION_MARKER: &str = "[...earlier content truncated...]\n";
 const DELEGATE_TASK_TOOL: &str = "delegate_task";
 
@@ -92,6 +95,8 @@ pub struct AgentTranscript {
     acp_status_id: Option<String>,
     /// 本轮最新计划(渲染到输入框上方的 Tasks 面板,不进消息流)。
     latest_plan: Option<PlanCardData>,
+    /// 本轮计划在消息流里那一行的 id；计划更新时只改这一条。
+    plan_message_id: Option<String>,
     /// 当前会话最近的子代理(渲染到输入框上方的子代理面板,不进消息流)。
     active_subagents: Vec<SubAgentCardData>,
     /// 当前资源池 id -> label 快照,用于工具结果卡片展示目标资源。
@@ -170,6 +175,7 @@ impl AgentTranscript {
         self.active_status_id = None;
         self.acp_status_id = None;
         self.latest_plan = None;
+        self.plan_message_id = None;
         self.active_subagents.clear();
         self.tool_inputs.clear();
         self.tool_input_order.clear();
@@ -328,19 +334,15 @@ impl AgentTranscript {
                 HistoryItem::ContextSummary {
                     text,
                     original_items,
-                } => self.push_system(
-                    t!(
-                        "AgentUi.context_summary",
-                        count = original_items,
-                        text = text
-                    )
-                    .to_string(),
-                ),
+                } => self.push_compaction(text, *original_items),
                 HistoryItem::ToolCall(call) => {
                     if !self.push_delegate_task_from_history(call) {
+                        // 历史条目里没有协议声明的动作类别,只能按第一方工具名
+                        // 表回推;推不出来就退化成显示工具名(渲染层已经这么做了)。
                         self.push_tool_call(
                             call.call_id.as_str(),
                             call.tool_name.as_str(),
+                            ToolAction::from_tool_name(call.tool_name.as_str()),
                             &call.arguments,
                         );
                     }
@@ -367,6 +369,19 @@ impl AgentTranscript {
         self.enforce_budget();
     }
 
+    /// 追加一条对话压缩记录。
+    ///
+    /// 只写一行「对话已压缩 N 条历史」—— 摘要是给模型续写用的，不是给人读的；
+    /// 过去把它整段铺在转录里，翻历史时满屏都是它。正文留在展开里。
+    pub fn push_compaction(&mut self, text: &str, original_items: usize) {
+        let data = CompactionCardData {
+            items: original_items,
+            text: text.to_string(),
+        };
+        self.push_message(ChatMessageUI::card(COMPACTION_CARD, data.to_json()));
+        self.enforce_budget();
+    }
+
     /// 追加用户消息(提交时由视图调用;`image_count` 用于提示附带图片)。
     pub fn push_user(&mut self, text: &str, image_count: usize) {
         let content = if image_count > 0 {
@@ -387,7 +402,13 @@ impl AgentTranscript {
     pub fn apply(&mut self, event: &RuntimeEvent) -> bool {
         // 轮次归属：先更新当前轮，再归约，保证本轮所有消息都带上正确的 `turn_id`。
         if let Some(turn_id) = event_turn_id(event) {
-            self.current_turn = Some(turn_id.as_str().to_string());
+            let turn_id = turn_id.as_str().to_string();
+            if self.current_turn.as_deref() != Some(turn_id.as_str()) {
+                // 新的一轮：计划行也归新一轮。旧那一行留在它发生的那一轮里 ——
+                // 往回翻历史时，应该看到「当时打算怎么做」，而不是最后的结果。
+                self.plan_message_id = None;
+            }
+            self.current_turn = Some(turn_id);
         }
         if let Some(key) = terminal_event_key(event)
             && !self.record_terminal_event(key)
@@ -466,9 +487,10 @@ impl AgentTranscript {
             RuntimeEvent::ToolCallStarted {
                 call_id,
                 tool_name,
+                kind,
                 arguments,
                 ..
-            } => self.push_tool_call(call_id.as_str(), tool_name.as_str(), arguments),
+            } => self.push_tool_call(call_id.as_str(), tool_name.as_str(), *kind, arguments),
             RuntimeEvent::ObservationAdded { observation, .. } => {
                 self.apply_observation(observation)
             }
@@ -674,12 +696,39 @@ impl AgentTranscript {
     // ===== 计划卡片 =====
 
     fn upsert_plan(&mut self, plan: &Plan) {
-        self.latest_plan = Some(plan_to_card(plan));
+        let card = plan_to_card(plan);
+        self.latest_plan = Some(card.clone());
+        self.sync_plan_row(&card);
+    }
+
+    /// 把计划同步到消息流里那一行。
+    ///
+    /// 计划会被反复更新，行只有一条：找到就改内容，找不到（新一轮、被预算
+    /// 淘汰、历史重建）就补一条。不改位置 —— 计划应该留在它发生的那一刻，
+    /// 而不是被后续的工具调用推到末尾。
+    fn sync_plan_row(&mut self, plan: &PlanCardData) {
+        let content = plan.to_json();
+        if let Some(id) = self.plan_message_id.as_deref()
+            && let Some(message) = self.messages.iter_mut().find(|message| message.id == id)
+        {
+            message.content = content;
+            self.touch();
+            return;
+        }
+        let message = ChatMessageUI::card(PLAN_CARD, content);
+        self.plan_message_id = Some(message.id.clone());
+        self.push_message(message);
     }
 
     // ===== 工具卡片 =====
 
-    fn push_tool_call(&mut self, call_id: &str, tool_name: &str, arguments: &serde_json::Value) {
+    fn push_tool_call(
+        &mut self,
+        call_id: &str,
+        tool_name: &str,
+        kind: ToolAction,
+        arguments: &serde_json::Value,
+    ) {
         self.finish_active_status();
         self.close_streaming_segment();
         self.cache_tool_input(call_id, arguments);
@@ -687,6 +736,7 @@ impl AgentTranscript {
         let mut data = ToolCardData {
             call_id: call_id.to_string(),
             tool_name: tool_name.to_string(),
+            action: kind,
             target_id: None,
             target_label: None,
             input_summary: input.summary,
@@ -695,6 +745,8 @@ impl AgentTranscript {
             success: None,
             summary: String::new(),
             data_text: String::new(),
+            file_changes: Vec::new(),
+            duration_ms: None,
         };
         bound_tool_card_data(&mut data, self.card_field_limit());
                 self.push_message(ChatMessageUI::card(TOOL_CARD, data.to_json()));
@@ -705,7 +757,12 @@ impl AgentTranscript {
         let summary = obs.summary.clone();
         let data_text = truncate_chars(&obs.data.to_text(), max_data_chars_for_tool(obs));
         let success = obs.success;
-        let target_id = obs.resource_id.as_ref().map(|id| id.as_str().to_string());
+        let file_changes = file_change_summaries(&obs.file_changes);
+        let duration_ms = Some(obs.duration_ms()).filter(|ms| *ms > 0);
+        let target_id = file_changes
+            .first()
+            .map(|change| change.path.clone())
+            .or_else(|| obs.resource_id.as_ref().map(|id| id.as_str().to_string()));
         let target_label = target_id.as_ref().map(|id| {
             self.resource_labels
                 .get(id)
@@ -718,6 +775,8 @@ impl AgentTranscript {
             data.target_label = target_label;
             data.summary = summary;
             data.data_text = data_text;
+            data.file_changes = file_changes;
+            data.duration_ms = duration_ms;
             data.success = Some(success);
             self.replace_tool_card(&call_id, data);
         } else {
@@ -725,6 +784,7 @@ impl AgentTranscript {
             let data = ToolCardData {
                 call_id,
                 tool_name: obs.tool_name.to_string(),
+                action: ToolAction::from_tool_name(obs.tool_name.as_str()),
                 target_id,
                 target_label,
                 input_summary: String::new(),
@@ -733,6 +793,8 @@ impl AgentTranscript {
                 success: Some(success),
                 summary,
                 data_text,
+                file_changes,
+                duration_ms,
             };
             self.push_message(ChatMessageUI::card(TOOL_CARD, data.to_json()));
         }
@@ -1182,7 +1244,31 @@ fn truncate_card_fields(message: &mut ChatMessageUI, max_bytes: usize) {
                 message.content = data.to_json();
             }
         }
+        PLAN_CARD => {
+            if let Some(mut data) = PlanCardData::from_json(&message.content) {
+                bound_plan_data(&mut data, max_bytes);
+                message.content = data.to_json();
+            }
+        }
+        COMPACTION_CARD => {
+            if let Some(mut data) = CompactionCardData::from_json(&message.content) {
+                truncate_to_recent(&mut data.text, max_bytes);
+                message.content = data.to_json();
+            }
+        }
         _ => {}
+    }
+}
+
+/// 计划行的体积上限：目标与每一步都可能有长描述，逐字段收敛。
+fn bound_plan_data(data: &mut PlanCardData, max_bytes: usize) {
+    truncate_to_recent(&mut data.goal, max_bytes);
+    data.steps.truncate(MAX_CARD_COLLECTION_ITEMS);
+    let step_max_bytes = max_bytes.min(MAX_CARD_ITEM_FIELD_BYTES);
+    for step in &mut data.steps {
+        truncate_to_recent(&mut step.title, step_max_bytes);
+        truncate_to_recent(&mut step.description, step_max_bytes);
+        truncate_to_recent(&mut step.risk, step_max_bytes);
     }
 }
 
@@ -1198,6 +1284,30 @@ fn bound_tool_card_data(data: &mut ToolCardData, max_bytes: usize) {
     truncate_to_recent(&mut data.input_json, max_bytes);
     truncate_to_recent(&mut data.summary, max_bytes);
     truncate_to_recent(&mut data.data_text, max_bytes);
+    // 文件改动里的路径同样要设上限:路径由外部 agent 提供,不能假设它短。
+    data.file_changes.truncate(MAX_CARD_FILE_CHANGES);
+    let path_max_bytes = max_bytes.min(MAX_CARD_ITEM_FIELD_BYTES);
+    for change in &mut data.file_changes {
+        truncate_to_recent(&mut change.path, path_max_bytes);
+    }
+}
+
+/// 观测里的文件改动 → 卡片摘要。
+///
+/// 改动前后的**完整文本在这里被丢掉**:卡片只需要「路径 + 增删计数 + 十几行
+/// diff」。留着全文的话,一次大文件编辑就能把单条消息的 JSON 撑到几百 KB。
+fn file_change_summaries(changes: &[FileChange]) -> Vec<FileChangeSummary> {
+    changes
+        .iter()
+        .take(MAX_CARD_FILE_CHANGES)
+        .map(|change| {
+            FileChangeSummary::from_texts(
+                change.path.clone(),
+                change.old_text.as_deref(),
+                &change.new_text,
+            )
+        })
+        .collect()
 }
 
 fn bound_tool_confirm_data(data: &mut ToolConfirmCardData, max_bytes: usize) {
@@ -1531,6 +1641,7 @@ mod tests {
             turn_id: turn(1),
             call_id: ToolCallId::from_string("c1"),
             tool_name: ToolName::new("fs.read"),
+            kind: ToolAction::Read,
             arguments: serde_json::json!({ "path": "a.rs" }),
         });
         tr.apply(&RuntimeEvent::AssistantMessageDelta {
@@ -1616,6 +1727,7 @@ mod tests {
             turn_id: turn(3),
             call_id: ToolCallId::from_string("c1"),
             tool_name: ToolName::new("ssh.exec"),
+            kind: ToolAction::Execute,
             arguments: serde_json::json!({ "command": "df -h" }),
         });
         tr.apply(&RuntimeEvent::NeedUserInput {
@@ -1745,6 +1857,7 @@ mod tests {
             turn_id: tid(),
             call_id: call_id.clone(),
             tool_name: ToolName::new("terminal_exec"),
+            kind: ToolAction::Execute,
             arguments: serde_json::json!({"command": "sleep 10"}),
         });
         tr.apply(&RuntimeEvent::NeedUserInput {
@@ -1906,6 +2019,7 @@ mod tests {
                 turn_id: tid(),
                 call_id: ToolCallId::from_string(format!("call_{index}")),
                 tool_name: ToolName::new("terminal_exec"),
+                kind: ToolAction::Execute,
                 arguments: serde_json::json!({"command": format!("sleep {index}")}),
             });
         }
@@ -1927,6 +2041,7 @@ mod tests {
                 turn_id: tid(),
                 call_id: call_id.clone(),
                 tool_name: ToolName::new("echo"),
+                kind: ToolAction::Other,
                 arguments: serde_json::json!({"text": call_id.as_str()}),
             });
         }
@@ -2064,7 +2179,7 @@ mod tests {
             "command": "x".repeat(MAX_CACHED_TOOL_INPUT_BYTES + 1)
         });
 
-        tr.push_tool_call("oversized", "terminal_exec", &arguments);
+        tr.push_tool_call("oversized", "terminal_exec", ToolAction::Execute, &arguments);
 
         assert!(tr.tool_call_arguments("oversized").is_none());
         let card = tr.find_tool_card("oversized").expect("tool card");
@@ -2362,6 +2477,7 @@ mod tests {
             turn_id: tid(),
             call_id: call.clone(),
             tool_name: ToolName::new("echo"),
+            kind: ToolAction::Other,
             arguments: serde_json::json!({"text": "hi"}),
         });
         tr.apply(&RuntimeEvent::ToolCallFinished {
@@ -2397,6 +2513,7 @@ mod tests {
             turn_id: tid(),
             call_id: call.clone(),
             tool_name: ToolName::new("echo"),
+            kind: ToolAction::Other,
             arguments: serde_json::json!({"text": "hi"}),
         });
         assert_eq!(tr.messages.len(), 1);
@@ -2438,6 +2555,7 @@ mod tests {
             turn_id: tid(),
             call_id: call.clone(),
             tool_name: ToolName::new("terminal_exec"),
+            kind: ToolAction::Execute,
             arguments: serde_json::json!({"command": "systemctl list-units"}),
         });
         let output = "x".repeat(MAX_DATA_CHARS + 100);
@@ -2470,6 +2588,7 @@ mod tests {
             turn_id: tid(),
             call_id: call.clone(),
             tool_name: ToolName::new("echo"),
+            kind: ToolAction::Other,
             arguments: serde_json::json!({"text": "hi"}),
         });
         let obs = ToolObservation::success(
@@ -2503,6 +2622,7 @@ mod tests {
             turn_id: tid(),
             call_id: call.clone(),
             tool_name: ToolName::new("ssh.exec"),
+            kind: ToolAction::Execute,
             arguments: serde_json::json!({"command": "df -h"}),
         });
         let obs = ToolObservation::success(
@@ -2701,6 +2821,7 @@ mod tests {
             turn_id: tid(),
             call_id: call_id.clone(),
             tool_name: ToolName::new("db_query"),
+            kind: ToolAction::Other,
             arguments: serde_json::json!({"sql": "select count(*) from users"}),
         });
         tr.apply(&RuntimeEvent::NeedUserInput {
@@ -2806,6 +2927,7 @@ mod tests {
             turn_id: tid(),
             call_id: call,
             tool_name: ToolName::new("Read"),
+            kind: ToolAction::Read,
             arguments: serde_json::json!({"path": "/tmp/a.txt"}),
         });
         tr.apply(&RuntimeEvent::AssistantMessageDelta {
@@ -2851,7 +2973,7 @@ mod tests {
     }
 
     #[test]
-    fn plan_goes_to_latest_plan_not_messages() {
+    fn plan_takes_one_row_and_keeps_the_latest_state() {
         let mut tr = AgentTranscript::new();
         let mut plan = Plan::new("排查慢查询", PlanSource::Llm)
             .with_steps(vec![PlanStep::new("查看连接数", "SHOW PROCESSLIST")]);
@@ -2861,12 +2983,88 @@ mod tests {
             turn_id: tid(),
             plan,
         });
-        // 计划不进消息流。
-        assert!(tr.messages.is_empty());
-        // 计划存入 latest_plan,可读出目标与步骤。
+        // 计划在消息流里占**一行**——不是每条步骤铺开。
+        assert_eq!(tr.messages.len(), 1);
+        assert_eq!(tr.messages[0].variant.card_kind(), Some(PLAN_CARD));
+        // 同时仍供输入框上方的面板读取最新状态。
         let data = tr.latest_plan().expect("latest_plan 应已填充");
         assert_eq!(data.goal, "排查慢查询");
         assert_eq!(data.steps.len(), 1);
+
+        // 计划会被反复更新:只有改内容,不追加新行。
+        let mut updated = Plan::new("排查慢查询", PlanSource::Llm).with_steps(vec![
+            PlanStep::new("查看连接数", "SHOW PROCESSLIST"),
+            PlanStep::new("看执行计划", "EXPLAIN"),
+        ]);
+        updated.set_status(PlanStatus::Running);
+        tr.apply(&RuntimeEvent::PlanUpdated {
+            session_id: sid(),
+            turn_id: tid(),
+            plan: updated,
+        });
+        assert_eq!(tr.messages.len(), 1);
+        let row = PlanCardData::from_json(&tr.messages[0].content).unwrap();
+        assert_eq!(2, row.steps.len());
+    }
+
+    #[test]
+    fn every_turn_keeps_its_own_plan_row() {
+        let mut tr = AgentTranscript::new();
+        tr.apply(&RuntimeEvent::PlanUpdated {
+            session_id: sid(),
+            turn_id: turn(1),
+            plan: Plan::new("第一轮", PlanSource::Llm)
+                .with_steps(vec![PlanStep::new("a", "")]),
+        });
+        tr.apply(&RuntimeEvent::PlanUpdated {
+            session_id: sid(),
+            turn_id: turn(2),
+            plan: Plan::new("第二轮", PlanSource::Llm)
+                .with_steps(vec![PlanStep::new("b", "")]),
+        });
+
+        // 往回翻历史时应该看到「当时打算怎么做」,而不是最后的结果。
+        assert_eq!(tr.messages.len(), 2);
+        assert_eq!(
+            PlanCardData::from_json(&tr.messages[0].content).unwrap().goal,
+            "第一轮"
+        );
+        assert_eq!(
+            PlanCardData::from_json(&tr.messages[1].content).unwrap().goal,
+            "第二轮"
+        );
+        assert!(turn_labels(&tr).iter().all(|label| label.is_some()));
+    }
+
+    #[test]
+    fn restored_history_shows_compaction_as_one_row() {
+        let mut tr = AgentTranscript::new();
+        tr.load_history(
+            &[
+                HistoryItem::User {
+                    text: "旧问题".into(),
+                    images: Vec::new(),
+                },
+                HistoryItem::ContextSummary {
+                    text: "之前聊了很久很久很久……".into(),
+                    original_items: 42,
+                },
+            ],
+            None,
+        );
+
+        assert_eq!(2, tr.messages.len());
+        assert_eq!(tr.messages[1].variant.card_kind(), Some(COMPACTION_CARD));
+        let data = CompactionCardData::from_json(&tr.messages[1].content).unwrap();
+        assert_eq!(42, data.items);
+        assert_eq!("之前聊了很久很久很久……", data.text);
+    }
+
+    #[test]
+    fn compaction_card_data_tolerates_missing_fields() {
+        let data = CompactionCardData::from_json("{}").expect("空对象也应当能解析");
+        assert_eq!(0, data.items);
+        assert!(data.text.is_empty());
     }
 
     #[test]

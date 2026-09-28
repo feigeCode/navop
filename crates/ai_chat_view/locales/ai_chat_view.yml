@@ -159,6 +159,42 @@ AgentUi:
     en: ACP Agent has no available credentials
     zh-CN: ACP Agent 缺少可用凭证
     zh-HK: ACP Agent 缺少可用憑證
+  action_read:
+    en: Read
+    zh-CN: 读取
+    zh-HK: 讀取
+  action_edit:
+    en: Edit
+    zh-CN: 编辑
+    zh-HK: 編輯
+  action_delete:
+    en: Delete
+    zh-CN: 删除
+    zh-HK: 刪除
+  action_move:
+    en: Move
+    zh-CN: 移动
+    zh-HK: 移動
+  action_search:
+    en: Search
+    zh-CN: 搜索
+    zh-HK: 搜尋
+  action_execute:
+    en: Run
+    zh-CN: 执行
+    zh-HK: 執行
+  action_think:
+    en: Think
+    zh-CN: 思考
+    zh-HK: 思考
+  action_fetch:
+    en: Fetch
+    zh-CN: 获取
+    zh-HK: 取得
+  action_switch_mode:
+    en: Switch mode
+    zh-CN: 切换模式
+    zh-HK: 切換模式
   all:
     en: All
     zh-CN: 全部
@@ -380,9 +416,17 @@ AgentUi:
     zh-CN: "已切回本地模型：与 %{name} 的对话留在 agent 一侧，不进入本地模型的上下文；切回该 agent 可以继续"
     zh-HK: "已切回本地模型：與 %{name} 的對話留在 agent 一側，不會進入本地模型的上下文；切回該 agent 可以繼續"
   context_summary:
-    en: "Context summary (compressed %{count} history items):\n%{text}"
-    zh-CN: "上下文摘要（压缩 %{count} 条历史）：\n%{text}"
-    zh-HK: "上下文摘要（壓縮 %{count} 筆歷史）：\n%{text}"
+    en: Context summary
+    zh-CN: 上下文摘要
+    zh-HK: 上下文摘要
+  context_compacted:
+    en: Conversation compacted
+    zh-CN: 对话已压缩
+    zh-HK: 對話已壓縮
+  context_compacted_items:
+    en: "%{count} items"
+    zh-CN: "%{count} 条历史"
+    zh-HK: "%{count} 筆歷史"
   copy_code:
     en: Copy code
     zh-CN: 复制代码
@@ -631,6 +675,22 @@ AgentUi:
     en: Official Model
     zh-CN: 正式模型
     zh-HK: 正式模型
+  diff_new_file:
+    en: New file
+    zh-CN: 新文件
+    zh-HK: 新檔案
+  diff_unknown_file:
+    en: Unknown file
+    zh-CN: 未知文件
+    zh-HK: 未知檔案
+  diff_rows_hidden:
+    en: "%{count} more line(s)"
+    zh-CN: "还有 %{count} 行"
+    zh-HK: "還有 %{count} 行"
+  open_in_review:
+    en: Open in Review
+    zh-CN: 在 Review 中打开
+    zh-HK: 在 Review 中開啟
   open_sidebar:
     en: Open sidebar
     zh-CN: 打开侧边栏
@@ -879,6 +939,54 @@ AgentUi:
     en: Tool Execution Confirmation
     zh-CN: 工具执行确认
     zh-HK: 工具執行確認
+  tool_block_edit:
+    en: "%{count} file(s) changed"
+    zh-CN: "改 %{count} 个文件"
+    zh-HK: "改 %{count} 個檔案"
+  tool_block_delete:
+    en: "%{count} file(s) deleted"
+    zh-CN: "删 %{count} 个文件"
+    zh-HK: "刪 %{count} 個檔案"
+  tool_block_move:
+    en: "%{count} file(s) moved"
+    zh-CN: "移动 %{count} 个文件"
+    zh-HK: "移動 %{count} 個檔案"
+  tool_block_read:
+    en: "%{count} file(s) read"
+    zh-CN: "读 %{count} 个文件"
+    zh-HK: "讀 %{count} 個檔案"
+  tool_block_search:
+    en: "%{count} search(es)"
+    zh-CN: "%{count} 次搜索"
+    zh-HK: "%{count} 次搜尋"
+  tool_block_fetch:
+    en: "%{count} fetch(es)"
+    zh-CN: "%{count} 次抓取"
+    zh-HK: "%{count} 次抓取"
+  tool_block_execute:
+    en: "%{count} command(s)"
+    zh-CN: "%{count} 个命令"
+    zh-HK: "%{count} 個命令"
+  tool_block_think:
+    en: "%{count} reasoning round(s)"
+    zh-CN: "%{count} 次思考"
+    zh-HK: "%{count} 次思考"
+  tool_block_switch_mode:
+    en: "%{count} mode switch(es)"
+    zh-CN: "%{count} 次切换"
+    zh-HK: "%{count} 次切換"
+  tool_block_invocations:
+    en: "%{count} call(s)"
+    zh-CN: "%{count} 次调用"
+    zh-HK: "%{count} 次調用"
+  tool_block_other:
+    en: "%{count} × %{name}"
+    zh-CN: "%{count} 次 %{name}"
+    zh-HK: "%{count} 次 %{name}"
+  tool_block_separator:
+    en: ", "
+    zh-CN: "，"
+    zh-HK: "，"
   tool_results_count:
     en: "%{target} · %{count} tool result(s)"
     zh-CN: "%{target} · %{count} 个工具结果"
@@ -903,6 +1011,14 @@ AgentUi:
     en: Process
     zh-CN: 执行过程
     zh-HK: 執行過程
+  turn_changed_files:
+    en: "%{count} file(s) changed"
+    zh-CN: "本轮改动 %{count} 个文件"
+    zh-HK: "本輪改動 %{count} 個檔案"
+  turn_review_changes:
+    en: Review changes
+    zh-CN: 查看改动
+    zh-HK: 查看改動
   turn_started_at:
     en: "Started %{time}"
     zh-CN: "开始于 %{time}"
@@ -923,6 +1039,10 @@ AgentUi:
     en: This turn failed
     zh-CN: 本轮失败
     zh-HK: 本輪失敗
+  turn_state_cancelled:
+    en: This turn was cancelled
+    zh-CN: 本轮已取消
+    zh-HK: 本輪已取消
   turn_state_pending_decision:
     en: Waiting for your decision
     zh-CN: 等待你的决策

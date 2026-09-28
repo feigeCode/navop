@@ -25,8 +25,10 @@ use one_assets::IconName;
 use rust_i18n::t;
 
 use crate::ExpansionState;
+use crate::agent_cards::compact_path;
+use crate::agent_diff::FileChangeSummary;
 use crate::code_block::CodeBlockActionRegistry;
-use crate::message_tool_group::{message_render_items_for, render_tool_target_group};
+use crate::message_tool_group::{message_render_items_for, render_tool_call_group};
 use crate::message_view::{MessageListLayout, message_scroll_container, render_one};
 use crate::theme::{AgentChatTheme, resolve_agent_chat_theme};
 use crate::transcript_search::TranscriptSearch;
@@ -48,6 +50,8 @@ pub enum MessageListAction {
     ScrollToLatest,
     /// 用户点击「回到这一轮」：把工作区恢复到该轮结束时的快照。
     RestoreTurn { turn_id: String },
+    /// 用户点击本轮改动摘要里的某个文件：在审阅面板里打开它。
+    OpenFileInReview { path: String },
 }
 
 pub type MessageListActionHandler = Rc<dyn Fn(MessageListAction, &mut Window, &mut App)>;
@@ -326,7 +330,8 @@ fn render_turn_head(turn: &TurnProjection<'_>, theme: &AgentChatTheme) -> AnyEle
 
 /// 过程区当前实际渲染的消息。
 ///
-/// 展开 = 全部过程项；收起 = 只剩「不许被折叠吞掉的项」（风险 + 仍在跑的步骤）。
+/// 展开 = 全部过程项；收起 = 只剩「不许被折叠吞掉的项」（风险 + 仍在跑的步骤
+/// + 结构标记，见 [`crate::turn::survives_collapse`]）。
 /// 位置由 `process` 决定，所以两种状态下顺序都是消息的原始顺序
 /// —— 失败卡片不会被挪到末尾，正在跑的步骤也不会消失。
 fn visible_process_items<'a>(turn: &'a TurnProjection<'_>, expanded: bool) -> Vec<&'a ChatMessageUI> {
@@ -426,13 +431,13 @@ fn render_process(
             crate::message_tool_group::MessageRenderItem::Single(message) => {
                 slot(render_one(message, context.code_actions, theme, window, cx))
             }
-            crate::message_tool_group::MessageRenderItem::ToolTargetGroup(group) => {
+            crate::message_tool_group::MessageRenderItem::ToolCallGroup(group) => {
                 let inner = group
                     .messages()
                     .iter()
                     .map(|message| render_one(message, context.code_actions, theme, window, cx))
                     .collect();
-                slot(render_tool_target_group(group, inner, theme, cx))
+                slot(render_tool_call_group(group, inner, theme, cx))
             }
         })
         .collect();
@@ -498,47 +503,152 @@ fn render_turn_foot(
             .then(|| (t!("AgentUi.turn_state_running").to_string(), theme.muted_foreground))
     } else if turn.has_failure() {
         Some((t!("AgentUi.turn_state_failed").to_string(), cx.theme().danger))
+    } else if turn.is_cancelled() {
+        Some((
+            t!("AgentUi.turn_state_cancelled").to_string(),
+            theme.muted_foreground,
+        ))
     } else {
         Some((t!("AgentUi.turn_state_done").to_string(), cx.theme().success))
     };
 
     // 只有拿到该轮快照 id 的轮次才给入口；点击后交给宿主决定怎么恢复。
     let restorable_turn = restorable_turn_id(turn.turn_id.as_deref(), context.restorable_turns);
+    let changed_files = turn.changed_files();
+
+    v_flex()
+        .w_full()
+        .min_w_0()
+        .child(
+            h_flex()
+                .debug_selector(|| "ai-chat-turn-foot".to_string())
+                .w_full()
+                .min_w_0()
+                .items_center()
+                .gap_2()
+                .px_2()
+                .pt_1()
+                .when_some(status, |this, (label, color)| {
+                    this.child(div().size(px(5.0)).rounded_full().bg(color).flex_shrink_0())
+                        .child(div().text_xs().text_color(color).child(label))
+                })
+                .child(div().flex_1())
+                .when_some(restorable_turn, |this, turn_id| {
+                    let on_action = context.on_action.clone();
+                    // 先落成 owned：on_click 的闭包要活过这一帧，借来的 &str 撑不住。
+                    let turn_id = turn_id.to_string();
+                    this.child(
+                        Button::new(SharedString::from(format!("restore-turn-{turn_id}")))
+                            .ghost()
+                            .xsmall()
+                            .label(t!("AgentUi.restore_turn").to_string())
+                            .debug_selector(|| "ai-chat-turn-restore".to_string())
+                            .on_click(move |_, window, cx| {
+                                if let Some(on_action) = on_action.as_ref() {
+                                    on_action(
+                                        MessageListAction::RestoreTurn {
+                                            turn_id: turn_id.clone(),
+                                        },
+                                        window,
+                                        cx,
+                                    );
+                                }
+                            }),
+                    )
+                }),
+        )
+        .when(!changed_files.is_empty(), |this| {
+            this.child(render_turn_changes(&changed_files, theme, context, cx))
+        })
+        .into_any_element()
+}
+
+/// 一行的改动摘要：「本轮改动 N 个文件」+ 前几个文件名(可点开) + 合计增删。
+///
+/// 只列前几个文件：页脚是导航，不是清单。剩下的交给审阅面板——逐个列全只会把
+/// 页脚变成一堵墙。
+fn render_turn_changes(
+    changed_files: &[FileChangeSummary],
+    theme: &AgentChatTheme,
+    context: &MessageListContext<'_>,
+    cx: &mut App,
+) -> AnyElement {
+    const MAX_LISTED: usize = 3;
+    let added: u32 = changed_files.iter().map(|change| change.added).sum();
+    let removed: u32 = changed_files.iter().map(|change| change.removed).sum();
+    let hidden = changed_files.len().saturating_sub(MAX_LISTED);
+    let on_action = context.on_action.clone();
 
     h_flex()
-        .debug_selector(|| "ai-chat-turn-foot".to_string())
+        .debug_selector(|| "ai-chat-turn-changes".to_string())
         .w_full()
         .min_w_0()
         .items_center()
         .gap_2()
         .px_2()
-        .pt_1()
-        .when_some(status, |this, (label, color)| {
-            this.child(div().size(px(5.0)).rounded_full().bg(color).flex_shrink_0())
-                .child(div().text_xs().text_color(color).child(label))
-        })
-        .child(div().flex_1())
-        .when_some(restorable_turn, |this, turn_id| {
-            let on_action = context.on_action.clone();
-            // 先落成 owned：on_click 的闭包要活过这一帧，借来的 &str 撑不住。
-            let turn_id = turn_id.to_string();
+        .pb_1()
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(
+                    t!(
+                        "AgentUi.turn_changed_files",
+                        count = changed_files.len()
+                    )
+                    .to_string(),
+                ),
+        )
+        .children(
+            changed_files
+                .iter()
+                .take(MAX_LISTED)
+                .map(|change| {
+                    let label = compact_path(&change.path);
+                    let path = change.path.clone();
+                    let on_action = on_action.clone();
+                    Button::new(SharedString::from(format!("turn-change-{path}")))
+                        .ghost()
+                        .xsmall()
+                        .label(label)
+                        .debug_selector(|| "ai-chat-turn-change".to_string())
+                        .on_click(move |_, window, cx| {
+                            if let Some(on_action) = on_action.as_ref() {
+                                on_action(
+                                    MessageListAction::OpenFileInReview {
+                                        path: path.clone(),
+                                    },
+                                    window,
+                                    cx,
+                                );
+                            }
+                        })
+                }),
+        )
+        .when(hidden > 0, |this| {
             this.child(
-                Button::new(SharedString::from(format!("restore-turn-{turn_id}")))
-                    .ghost()
-                    .xsmall()
-                    .label(t!("AgentUi.restore_turn").to_string())
-                    .debug_selector(|| "ai-chat-turn-restore".to_string())
-                    .on_click(move |_, window, cx| {
-                        if let Some(on_action) = on_action.as_ref() {
-                            on_action(
-                                MessageListAction::RestoreTurn {
-                                    turn_id: turn_id.clone(),
-                                },
-                                window,
-                                cx,
-                            );
-                        }
-                    }),
+                div()
+                    .flex_shrink_0()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(format!("+{hidden}")),
+            )
+        })
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_xs()
+                .text_color(cx.theme().success)
+                .child(format!("+{added}")),
+        )
+        .when(removed > 0, |this| {
+            this.child(
+                div()
+                    .flex_shrink_0()
+                    .text_xs()
+                    .text_color(cx.theme().danger)
+                    .child(format!("−{removed}")),
             )
         })
         .into_any_element()
@@ -641,6 +751,7 @@ mod tests {
                 ToolCardData {
                     call_id: call_id.to_string(),
                     tool_name: "fs.read".to_string(),
+                    action: agent_runtime::ToolAction::Read,
                     target_id: None,
                     target_label: None,
                     input_summary: String::new(),
@@ -649,6 +760,8 @@ mod tests {
                     success,
                     summary: String::new(),
                     data_text: String::new(),
+                    file_changes: Vec::new(),
+                    duration_ms: None,
                 }
                 .to_json(),
             )

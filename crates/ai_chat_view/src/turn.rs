@@ -17,8 +17,23 @@
 
 use std::collections::HashMap;
 
-use crate::agent_cards::{ACP_PERMISSION_CARD, SUBAGENT_CARD, TOOL_CARD, TOOL_CONFIRM_CARD, SubAgentCardData, ToolCardData, ToolConfirmCardData};
+use crate::agent_cards::{
+    ACP_PERMISSION_CARD, COMPACTION_CARD, SUBAGENT_CARD, TOOL_CARD, TOOL_CONFIRM_CARD,
+    SubAgentCardData, ToolCardData, ToolConfirmCardData,
+};
+use crate::agent_diff::FileChangeSummary;
 use crate::{ChatMessageUI, ChatRole, MessageVariant};
+
+/// 轮次的收尾结果。只由真实运行时事件落值，**不得**从消息文本推断。
+///
+/// 旧实现把「任意系统提示」当作失败，于是 ACP 控制面提示（「正在创建会话」、
+/// 「上下文边界」）会让页脚误报红色「失败」。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TurnOutcome {
+    Completed,
+    Cancelled,
+    Failed,
+}
 
 /// 轮次的时间信息（Unix 秒）。任一侧缺失即视为未知。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -41,6 +56,7 @@ impl TurnTiming {
 #[derive(Clone, Debug, Default)]
 pub struct TurnTimings {
     by_turn: HashMap<String, TurnTiming>,
+    outcomes: HashMap<String, TurnOutcome>,
 }
 
 impl TurnTimings {
@@ -50,6 +66,16 @@ impl TurnTimings {
 
     pub fn get(&self, turn_id: &str) -> Option<TurnTiming> {
         self.by_turn.get(turn_id).copied()
+    }
+
+    /// 该轮真实收尾结果；没有收到终态事件时为 `None`。
+    pub fn outcome(&self, turn_id: &str) -> Option<TurnOutcome> {
+        self.outcomes.get(turn_id).copied()
+    }
+
+    /// 记录轮次收尾结果。终态事件每轮只到达一次，重复时后到的覆盖先前值。
+    pub fn note_outcome(&mut self, turn_id: impl Into<String>, outcome: TurnOutcome) {
+        self.outcomes.insert(turn_id.into(), outcome);
     }
 
     /// 记录轮次开始；重复调用只保留最早一次（重放事件不应把起点往后推）。
@@ -70,6 +96,7 @@ impl TurnTimings {
 
     pub fn clear(&mut self) {
         self.by_turn.clear();
+        self.outcomes.clear();
     }
 
     pub fn len(&self) -> usize {
@@ -89,6 +116,8 @@ pub struct TurnProjection<'a> {
     /// 运行时轮次 id；历史恢复 / 本地合成时为 `None`。
     pub turn_id: Option<String>,
     pub timing: TurnTiming,
+    /// 真实收尾结果（来自终态事件）；未收到终态事件时为 `None`。
+    pub outcome: Option<TurnOutcome>,
     /// 本轮的用户提问（本轮第一条 user 消息）。preamble 轮为 `None`。
     pub head: Option<&'a ChatMessageUI>,
     /// 过程：状态、工具、计划、子代理，以及结论之前的助手片段 ——
@@ -130,12 +159,14 @@ impl TurnProjection<'_> {
             .any(|message| matches!(&message.variant, MessageVariant::Status { is_done: false, .. }))
     }
 
-    /// 该轮是否以失败/取消收尾（由系统提示或失败卡片体现）。
+    /// 该轮是否以失败收尾（由真实终态事件判定，不看消息文本）。
     pub fn has_failure(&self) -> bool {
-        self.process
-            .iter()
-            .chain(self.answer.iter())
-            .any(|message| matches!(message.role, ChatRole::System))
+        self.outcome == Some(TurnOutcome::Failed)
+    }
+
+    /// 该轮是否以取消收尾。
+    pub fn is_cancelled(&self) -> bool {
+        self.outcome == Some(TurnOutcome::Cancelled)
     }
 
     /// 过程步数 = 工具卡片数。
@@ -171,6 +202,37 @@ impl TurnProjection<'_> {
     /// 是否含待用户决策的卡片（待审批 / 待补充输入）。
     pub fn has_pending_decision(&self) -> bool {
         self.risks.iter().any(|message| is_pending_decision(message))
+    }
+
+    /// 本轮改动过的文件，按路径去重（同一文件改多次只留最后一次的改动）。
+    ///
+    /// 去重而不是累加：同一文件被改三遍，用户想知道的是「这个文件变成了什么样」，
+    /// 不是三次 diff 的增删之和——累加出来的 `+42 −39` 只会让人以为动了 42 行。
+    /// 顺序按首次出现，保证渲染稳定。
+    pub fn changed_files(&self) -> Vec<FileChangeSummary> {
+        let mut paths: Vec<String> = Vec::new();
+        let mut latest: HashMap<String, FileChangeSummary> = HashMap::new();
+        for message in &self.process {
+            if message.variant.card_kind() != Some(TOOL_CARD) {
+                continue;
+            }
+            let Some(data) = ToolCardData::from_json(&message.content) else {
+                continue;
+            };
+            for change in data.file_changes {
+                if change.path.trim().is_empty() {
+                    continue;
+                }
+                if !latest.contains_key(&change.path) {
+                    paths.push(change.path.clone());
+                }
+                latest.insert(change.path.clone(), change);
+            }
+        }
+        paths
+            .into_iter()
+            .filter_map(|path| latest.remove(&path))
+            .collect()
     }
 }
 
@@ -221,11 +283,20 @@ pub(crate) fn is_live_message(message: &ChatMessageUI) -> bool {
 
 /// 消息在过程区**收起**时是否仍要显示。
 ///
-/// 两类：风险项（失败 / 待审批，见 [`is_risk_message`]）与仍在进行的项
-/// （未完成的工具、子代理、状态行）。前者藏了会漏掉失败，后者藏了会让人
-/// 以为卡住了 —— 都不许被折叠吞掉。位置仍由 `process` 决定，不做重排。
+/// 三类：风险项（失败 / 待审批，见 [`is_risk_message`]）、仍在进行的项
+/// （未完成的工具、子代理、状态行）与结构标记（对话压缩边界）。前者藏了会
+/// 漏掉失败，中者藏了会让人以为卡住了，后者藏了会让人看不懂上下文为什么变短
+/// —— 都不许被折叠吞掉。位置仍由 `process` 决定，不做重排。
 pub fn survives_collapse(message: &ChatMessageUI) -> bool {
-    is_risk_message(message) || is_live_message(message)
+    is_risk_message(message) || is_live_message(message) || is_structural_marker(message)
+}
+
+/// 消息是否是过程里的**结构标记**：压缩边界之类。
+///
+/// 它既不是风险、也不是进行中的步骤，但它是解释性的：这段历史为什么变短了。
+/// 它自己只有一行，收起来省的版面不值这个代价。
+fn is_structural_marker(message: &ChatMessageUI) -> bool {
+    message.variant.card_kind() == Some(COMPACTION_CARD)
 }
 
 /// 消息是否属于「风险」：必须无条件展示，不能被过程折叠吞掉。
@@ -353,11 +424,13 @@ fn build_turn<'a>(
         .as_deref()
         .and_then(|id| timings.get(id))
         .unwrap_or_default();
+    let outcome = turn_id.as_deref().and_then(|id| timings.outcome(id));
 
     TurnProjection {
         key,
         turn_id,
         timing,
+        outcome,
         head,
         process,
         answer,
@@ -377,6 +450,7 @@ mod tests {
             ToolCardData {
                 call_id: call_id.to_string(),
                 tool_name: name.to_string(),
+                action: agent_runtime::ToolAction::from_tool_name(name),
                 target_id: None,
                 target_label: None,
                 input_summary: String::new(),
@@ -385,6 +459,8 @@ mod tests {
                 success,
                 summary: String::new(),
                 data_text: String::new(),
+                file_changes: Vec::new(),
+                duration_ms: None,
             }
             .to_json(),
         )
@@ -687,8 +763,107 @@ mod tests {
         assert_eq!(1, turns[1].process.len());
     }
 
+    #[test]
+    fn a_system_notice_does_not_mark_the_turn_as_failed() {
+        // ACP 控制面 / 上下文边界这类系统提示与失败无关，不能把页脚刷成红色「失败」。
+        let messages = vec![
+            user("Q1", "t1"),
+            ChatMessageUI::system("正在创建 ACP 会话"),
+            assistant("A1", "t1"),
+        ];
+
+        let turns = project_turns(&messages, &TurnTimings::new());
+
+        assert_eq!(None, turns[0].outcome);
+        assert!(!turns[0].has_failure(), "普通系统提示不是失败");
+        assert!(!turns[0].is_cancelled());
+    }
+
+    #[test]
+    fn turn_outcome_comes_from_events_not_from_message_text() {
+        let messages = vec![user("Q1", "t1"), assistant("A1", "t1")];
+
+        let mut timings = TurnTimings::new();
+        timings.note_outcome("t1", TurnOutcome::Failed);
+        let turns = project_turns(&messages, &timings);
+        assert!(turns[0].has_failure(), "终态事件报失败 ⇒ 本轮失败");
+        assert!(!turns[0].is_cancelled());
+
+        let mut timings = TurnTimings::new();
+        timings.note_outcome("t1", TurnOutcome::Cancelled);
+        let turns = project_turns(&messages, &timings);
+        assert!(turns[0].is_cancelled());
+        assert!(!turns[0].has_failure(), "取消不是失败");
+
+        let mut timings = TurnTimings::new();
+        timings.note_outcome("t1", TurnOutcome::Completed);
+        let turns = project_turns(&messages, &timings);
+        assert!(!turns[0].has_failure());
+        assert!(!turns[0].is_cancelled());
+    }
+
     fn as_contents<'a>(messages: &[&'a ChatMessageUI]) -> Vec<&'a str> {
         messages.iter().map(|m| m.content.as_str()).collect()
+    }
+
+    fn edit_card(call_id: &str, path: &str, old: &str, new: &str) -> ChatMessageUI {
+        ChatMessageUI::card(
+            TOOL_CARD,
+            ToolCardData {
+                call_id: call_id.to_string(),
+                tool_name: "Edit".to_string(),
+                action: agent_runtime::ToolAction::Edit,
+                target_id: None,
+                target_label: None,
+                input_summary: String::new(),
+                input_json: String::new(),
+                running: false,
+                success: Some(true),
+                summary: String::new(),
+                data_text: String::new(),
+                file_changes: vec![FileChangeSummary::from_texts(path, Some(old), new)],
+                duration_ms: None,
+            }
+            .to_json(),
+        )
+    }
+
+    #[test]
+    fn changed_files_collect_edits_across_the_turn() {
+        let messages = vec![
+            user("Q1", "t1"),
+            tool_card("c1", "fs.read", Some(true)),
+            edit_card("c2", "src/a.rs", "a\n", "b\n"),
+            edit_card("c3", "src/b.rs", "x\n", "y\n"),
+            assistant("A1", "t1"),
+        ];
+
+        let turns = project_turns(&messages, &TurnTimings::new());
+        let changed = turns[0].changed_files();
+
+        assert_eq!(
+            vec!["src/a.rs", "src/b.rs"],
+            changed.iter().map(|c| c.path.as_str()).collect::<Vec<_>>(),
+            "只读的工具不算改动"
+        );
+    }
+
+    #[test]
+    fn editing_the_same_file_twice_reports_it_once() {
+        let messages = vec![
+            user("Q1", "t1"),
+            edit_card("c1", "src/a.rs", "a\n", "b\n"),
+            edit_card("c2", "src/a.rs", "b\n", "b\nc\n"),
+            assistant("A1", "t1"),
+        ];
+
+        let turns = project_turns(&messages, &TurnTimings::new());
+        let changed = turns[0].changed_files();
+
+        // 去重而不是累加:第二次编辑的统计覆盖第一次的。
+        assert_eq!(1, changed.len());
+        assert_eq!(1, changed[0].added);
+        assert_eq!(0, changed[0].removed);
     }
 
     fn call_id_of(message: &ChatMessageUI) -> String {

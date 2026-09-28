@@ -2,7 +2,7 @@ use crate::card::{CardMessage, CardRegistry};
 use crate::code_block::CodeBlockActionRegistry;
 use crate::message_code_actions::apply_code_block_features;
 use crate::message_tool_group::{
-    MessageRenderItem, message_render_items, render_tool_target_group,
+    MessageRenderItem, message_render_items, render_tool_call_group,
 };
 use crate::theme::{
     AgentChatTheme, resolve_agent_chat_theme, themed_html, themed_markdown, with_agent_chat_theme,
@@ -311,13 +311,13 @@ pub(crate) fn render_item(
 ) -> AnyElement {
     match item {
         MessageRenderItem::Single(msg) => render_one(msg, code_actions, theme, window, cx),
-        MessageRenderItem::ToolTargetGroup(group) => {
+        MessageRenderItem::ToolCallGroup(group) => {
             let children = group
                 .messages()
                 .iter()
                 .map(|msg| render_one(msg, code_actions, theme, window, cx))
                 .collect();
-            render_tool_target_group(group, children, theme, cx)
+            render_tool_call_group(group, children, theme, cx)
         }
     }
 }

@@ -180,6 +180,8 @@ pub(crate) fn build_ai_workbench_shell(
         },
     );
     let explorer_for_turns = explorer.clone();
+    let shell_for_open = shell.clone();
+    let explorer_for_files = explorer.clone();
     let turn_subscription: Subscription = cx.subscribe(
         &chat,
         move |_, event: &DefaultAgentChatPanelEvent, cx| {
@@ -205,6 +207,27 @@ pub(crate) fn build_ai_workbench_shell(
                 } => {
                     explorer_for_turns.update(cx, |explorer, cx| {
                         explorer.restore_turn(session_id.clone(), turn_id.clone(), cx);
+                    });
+                }
+                // 用户点了改动摘要里的某个文件：先把审阅面板切到前台，再让编辑器
+                // 打开它（`open_file` 自己也会广播 `DocumentRequested`）。
+                //
+                // 打开文件需要窗口，而这里只有 `App`：推迟到下一帧再取窗口，
+                // 避免在当前窗口的更新过程中重入。
+                DefaultAgentChatPanelEvent::OpenFileInReview { path } => {
+                    shell_for_open.update(cx, |shell, cx| {
+                        shell.reveal_panel(WorkbenchPanelKind::Review, cx);
+                    });
+                    let path = std::path::PathBuf::from(path);
+                    let explorer = explorer_for_files.clone();
+                    cx.defer(move |cx| {
+                        let Some(window) = crate::app_init::resolve_navop_window(cx) else {
+                            tracing::warn!(path = %path.display(), "no window for review open");
+                            return;
+                        };
+                        let _ = window.update(cx, |_, window, cx| {
+                            explorer.update(cx, |explorer, cx| explorer.open_file(path, window, cx));
+                        });
                     });
                 }
                 _ => {}

@@ -6,7 +6,7 @@
 use crate::ids::{SessionId, SubAgentId, ToolCallId, TurnId};
 use crate::planner::Plan;
 use crate::runtime::PendingToolCallSummary;
-use crate::tools::{ToolName, ToolObservation};
+use crate::tools::{ToolAction, ToolName, ToolObservation};
 use serde_json::Value;
 
 /// 事件发送端(克隆给各 Session)。
@@ -34,6 +34,9 @@ pub enum RuntimeEvent {
         turn_id: TurnId,
         call_id: ToolCallId,
         tool_name: ToolName,
+        /// 调用方声明的动作类别(ACP 来自协议 `kind`,本地来自注册名)。
+        /// UI 据此选动词短语;拿不到声明时为 [`ToolAction::Other`],UI 显示工具名。
+        kind: ToolAction,
         arguments: Value,
     },
     /// 工具调用结束。

@@ -1195,10 +1195,12 @@ impl TerminalSidebar {
                 DefaultAgentChatPanelEvent::MoveTo(placement) => {
                     this.move_tool(SidebarPanel::AiChat, *placement, cx);
                 }
-                // 终端侧栏不承载 AI 工作台，轮次边界与「回到这一轮」都由工作台外壳处理。
+                // 终端侧栏不承载 AI 工作台，轮次边界、「回到这一轮」与
+                // 「在 Review 中打开」都由工作台外壳处理。
                 DefaultAgentChatPanelEvent::TurnStarted { .. }
                 | DefaultAgentChatPanelEvent::TurnFinished { .. }
-                | DefaultAgentChatPanelEvent::RestoreTurn { .. } => {}
+                | DefaultAgentChatPanelEvent::RestoreTurn { .. }
+                | DefaultAgentChatPanelEvent::OpenFileInReview { .. } => {}
             },
         );
 

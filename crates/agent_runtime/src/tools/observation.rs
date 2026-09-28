@@ -56,6 +56,51 @@ impl ObservationData {
     }
 }
 
+/// 一次工具调用对单个文件的改动。
+///
+/// 携带**改动前后的完整文本**,而不是渲染好的 diff:diff 是展示层的选择
+/// (单列/双列、留几行上下文),不该由产出方定死。写入方应保证 `new_text` 与
+/// `old_text` 是同一份文件的完整内容,展示层据此自己算行级差异。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileChange {
+    /// 被改动的文件路径(协议通常给绝对路径)。
+    pub path: String,
+    /// 改动前的完整内容;`None` 表示新建文件。
+    #[serde(default)]
+    pub old_text: Option<String>,
+    /// 改动后的完整内容。
+    pub new_text: String,
+}
+
+impl FileChange {
+    /// 新建文件(无旧内容)。
+    pub fn created(path: impl Into<String>, new_text: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            old_text: None,
+            new_text: new_text.into(),
+        }
+    }
+
+    /// 就地修改。
+    pub fn modified(
+        path: impl Into<String>,
+        old_text: impl Into<String>,
+        new_text: impl Into<String>,
+    ) -> Self {
+        Self {
+            path: path.into(),
+            old_text: Some(old_text.into()),
+            new_text: new_text.into(),
+        }
+    }
+
+    /// 是否新建文件。
+    pub fn is_created(&self) -> bool {
+        self.old_text.is_none()
+    }
+}
+
 /// 一次工具调用的观测结果。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ToolObservation {
@@ -67,6 +112,9 @@ pub struct ToolObservation {
     pub summary: String,
     /// 完整数据载荷。
     pub data: ObservationData,
+    /// 本次调用改动的文件。空表示这次调用没有文件改动(或产出方没提供)。
+    #[serde(default)]
+    pub file_changes: Vec<FileChange>,
     pub started_at: DateTime<Utc>,
     pub finished_at: DateTime<Utc>,
 }
@@ -87,6 +135,7 @@ impl ToolObservation {
             success: true,
             summary: summary.into(),
             data,
+            file_changes: Vec::new(),
             started_at: now,
             finished_at: now,
         }
@@ -103,6 +152,7 @@ impl ToolObservation {
             success: false,
             summary: message.clone(),
             data: ObservationData::Text(message),
+            file_changes: Vec::new(),
             started_at: now,
             finished_at: now,
         }
@@ -116,6 +166,19 @@ impl ToolObservation {
     pub fn with_resource(mut self, resource_id: Option<ResourceId>) -> Self {
         self.resource_id = resource_id;
         self
+    }
+
+    /// 附加本次调用改动的文件。
+    pub fn with_file_changes(mut self, file_changes: Vec<FileChange>) -> Self {
+        self.file_changes = file_changes;
+        self
+    }
+
+
+
+    /// 是否带文件改动。
+    pub fn has_file_changes(&self) -> bool {
+        !self.file_changes.is_empty()
     }
 
     /// 执行耗时(毫秒)。

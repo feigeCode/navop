@@ -5,9 +5,9 @@
 
 use agent_client_protocol::schema::v1::{
     ContentBlock, Plan as AcpPlan, PlanEntryStatus, SessionUpdate, ToolCall as AcpToolCall,
-    ToolCallStatus, ToolCallUpdate,
+    ToolCallContent, ToolCallStatus, ToolCallUpdate, ToolKind,
 };
-use agent_runtime::tools::{ObservationData, ToolName};
+use agent_runtime::tools::{FileChange, ObservationData, ToolAction, ToolName};
 use agent_runtime::{
     Plan, PlanSource, PlanStatus, PlanStep, RuntimeEvent, SessionId, StepStatus, ToolCallId,
     ToolObservation, TurnId,
@@ -200,18 +200,18 @@ fn tool_call_events(
         turn_id: tid.clone(),
         call_id: call_id.clone(),
         tool_name: tool_name.clone(),
+        // 类别由 agent 通过协议字段声明,本地不猜。
+        kind: tool_action(call.kind),
         arguments: call.raw_input.clone().unwrap_or(serde_json::Value::Null),
     }];
     // ToolCall 携带终态(部分 agent 一步到位),补观测 + 完成事件。
     if let Some(success) = terminal_success(call.status) {
-        let text = tool_text(
-            call.raw_output.as_ref(),
-            serde_json::to_string(&call.content).ok(),
-        );
+        let (text, file_changes) = tool_payload(&call.content, call.raw_output.as_ref());
         events.push(RuntimeEvent::ObservationAdded {
             session_id: sid.clone(),
             turn_id: tid.clone(),
-            observation: build_observation(call_id.clone(), tool_name, &call.title, text, success),
+            observation: build_observation(call_id.clone(), tool_name, &call.title, text, success)
+                .with_file_changes(file_changes),
         });
         events.push(RuntimeEvent::ToolCallFinished {
             session_id: sid.clone(),
@@ -239,17 +239,14 @@ fn tool_call_update_events(
     let call_id = ToolCallId::from_string(u.tool_call_id.0.to_string());
     let title = u.fields.title.clone().unwrap_or_else(|| "tool".to_string());
     let tool_name = ToolName::new(title.clone());
-    let content_json = u
-        .fields
-        .content
-        .as_ref()
-        .and_then(|c| serde_json::to_string(c).ok());
-    let text = tool_text(u.fields.raw_output.as_ref(), content_json);
+    let content: &[ToolCallContent] = u.fields.content.as_deref().unwrap_or_default();
+    let (text, file_changes) = tool_payload(content, u.fields.raw_output.as_ref());
     vec![
         RuntimeEvent::ObservationAdded {
             session_id: sid.clone(),
             turn_id: tid.clone(),
-            observation: build_observation(call_id.clone(), tool_name, &title, text, success),
+            observation: build_observation(call_id.clone(), tool_name, &title, text, success)
+                .with_file_changes(file_changes),
         },
         RuntimeEvent::ToolCallFinished {
             session_id: sid.clone(),
@@ -341,6 +338,57 @@ fn tool_text(raw_output: Option<&serde_json::Value>, content_json: Option<String
     content_json.unwrap_or_default()
 }
 
+/// 协议声明的工具类别 → 本地动作类别。
+///
+/// 这是**协议字段的直接映射**,不是从工具名反推:ACP agent 自己声明了它在读、
+/// 在改、还是在跑命令,UI 直接用。未知类别落到 `Other`,由 UI 显示工具名。
+fn tool_action(kind: ToolKind) -> ToolAction {
+    match kind {
+        ToolKind::Read => ToolAction::Read,
+        ToolKind::Edit => ToolAction::Edit,
+        ToolKind::Delete => ToolAction::Delete,
+        ToolKind::Move => ToolAction::Move,
+        ToolKind::Search => ToolAction::Search,
+        ToolKind::Execute => ToolAction::Execute,
+        ToolKind::Think => ToolAction::Think,
+        ToolKind::Fetch => ToolAction::Fetch,
+        ToolKind::SwitchMode => ToolAction::SwitchMode,
+        // `ToolKind::Other` 与协议将来新增的类别都落到这里:宁可显示工具名,
+        // 也不要给一个猜来的动词。
+        _ => ToolAction::Other,
+    }
+}
+
+/// 把协议内容拆成「文件改动」与「其余文本载荷」。
+///
+/// 关键取舍:[`ToolCallContent::Diff`] **不进文本载荷**。它自带改动前后的完整
+/// 文件内容,再序列化一遍 JSON 就是同一份内容存两处——旧实现正是这么做的,
+/// 于是卡片里出现了「两个完整文件当 JSON 展示」的样子。拆出来之后,文本载荷
+/// 只留真正的输出,文件改动走结构化通道给 UI 渲染成 diff。
+fn tool_payload(
+    content: &[ToolCallContent],
+    raw_output: Option<&serde_json::Value>,
+) -> (String, Vec<FileChange>) {
+    let mut file_changes = Vec::new();
+    let mut rest: Vec<&ToolCallContent> = Vec::new();
+    for item in content {
+        match item {
+            ToolCallContent::Diff(diff) => {
+                let path = diff.path.display().to_string();
+                file_changes.push(match diff.old_text.clone() {
+                    Some(old) => FileChange::modified(path, old, diff.new_text.clone()),
+                    None => FileChange::created(path, diff.new_text.clone()),
+                });
+            }
+            other => rest.push(other),
+        }
+    }
+    let content_json = (!rest.is_empty())
+        .then(|| serde_json::to_string(&rest).ok())
+        .flatten();
+    (tool_text(raw_output, content_json), file_changes)
+}
+
 fn content_block_text(block: &ContentBlock) -> String {
     match block {
         ContentBlock::Text(t) => t.text.clone(),
@@ -393,8 +441,9 @@ mod tests {
     use super::*;
     use agent_client_protocol::schema::v1::{
         AvailableCommand, AvailableCommandsUpdate, ConfigOptionUpdate, ContentChunk,
-        CurrentModeUpdate, PlanEntry, PlanEntryPriority, SessionInfoUpdate, TextContent,
-        ToolCall as AcpToolCall, ToolCallUpdate, ToolCallUpdateFields, UsageUpdate,
+        CurrentModeUpdate, Diff, PlanEntry, PlanEntryPriority, SessionInfoUpdate, TextContent,
+        ToolCall as AcpToolCall, ToolCallUpdate, ToolCallUpdateFields,
+        UsageUpdate,
     };
 
     fn ids() -> (SessionId, TurnId) {
@@ -587,6 +636,59 @@ mod tests {
             RuntimeEvent::ToolCallStarted { tool_name, arguments, .. }
                 if tool_name.as_str() == "SQL" && arguments["sql"] == "select 1"
         ));
+    }
+
+    #[test]
+    fn declared_tool_kind_becomes_the_local_action() {
+        let (sid, tid) = ids();
+        let mut call = AcpToolCall::new("call_1", "编辑文件");
+        call.kind = ToolKind::Edit;
+        let events = session_update_to_events(&SessionUpdate::ToolCall(call), &sid, &tid);
+
+        assert!(
+            matches!(
+                &events[0],
+                RuntimeEvent::ToolCallStarted { kind, .. } if *kind == ToolAction::Edit
+            ),
+            "动词只能来自协议声明"
+        );
+
+        // 协议没声明(或声明了将来新增的类别)时,不给动词。
+        let mut unknown = AcpToolCall::new("call_2", "某个工具");
+        unknown.kind = ToolKind::Other;
+        let events = session_update_to_events(&SessionUpdate::ToolCall(unknown), &sid, &tid);
+        assert!(matches!(
+            &events[0],
+            RuntimeEvent::ToolCallStarted { kind, .. } if *kind == ToolAction::Other
+        ));
+    }
+
+    #[test]
+    fn acp_diff_content_becomes_a_file_change_and_leaves_the_text_payload() {
+        let (sid, tid) = ids();
+        let mut fields = ToolCallUpdateFields::default();
+        fields.status = Some(ToolCallStatus::Completed);
+        fields.content = Some(vec![ToolCallContent::Diff(Diff::new("src/lib.rs", "a\nb\n"))]);
+        let update = SessionUpdate::ToolCallUpdate(ToolCallUpdate::new("call_1", fields));
+
+        let events = session_update_to_events(&update, &sid, &tid);
+
+        let observation = events
+            .iter()
+            .find_map(|event| match event {
+                RuntimeEvent::ObservationAdded { observation, .. } => Some(observation),
+                _ => None,
+            })
+            .expect("observation");
+
+        assert_eq!(1, observation.file_changes.len());
+        assert_eq!("src/lib.rs", observation.file_changes[0].path);
+        assert_eq!("a\nb\n", observation.file_changes[0].new_text);
+        assert!(
+            !observation.data.to_text().contains("new_text"),
+            "改动内容不该再以 JSON 形式出现一遍: {:?}",
+            observation.data.to_text()
+        );
     }
 
     #[test]

@@ -52,6 +52,6 @@ pub use skill::{
 };
 pub use tasks::AgentTask;
 pub use tools::{
-    ObservationData, Tool, ToolCall, ToolDispatchContext, ToolName, ToolObservation, ToolRegistry,
-    ToolRouter, ToolSpec,
+    FileChange, ObservationData, Tool, ToolAction, ToolCall, ToolDispatchContext, ToolName,
+    ToolObservation, ToolRegistry, ToolRouter, ToolSpec,
 };

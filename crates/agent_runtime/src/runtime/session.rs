@@ -13,7 +13,7 @@ use crate::runtime::event::{RuntimeEvent, RuntimeEventSender};
 use crate::runtime::input_queue::{InputQueue, TurnInput};
 use crate::runtime::session_state::SessionState;
 use crate::skill::SkillContext;
-use crate::tools::{ToolCall, ToolObservation};
+use crate::tools::{ToolAction, ToolCall, ToolObservation};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
@@ -324,6 +324,7 @@ impl Session {
                 turn_id: turn_id.clone(),
                 call_id: call.call_id.clone(),
                 tool_name: call.tool_name.clone(),
+                kind: ToolAction::from_tool_name(call.tool_name.as_str()),
                 arguments: call.arguments.clone(),
             });
         });

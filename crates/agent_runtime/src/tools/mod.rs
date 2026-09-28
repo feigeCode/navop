@@ -2,6 +2,7 @@
 
 pub mod builtin;
 
+mod action;
 mod invocation;
 mod observation;
 mod registry;
@@ -9,8 +10,9 @@ mod router;
 mod runtime_adapter;
 mod spec;
 
+pub use action::ToolAction;
 pub use invocation::ToolInvocation;
-pub use observation::{ObservationData, ToolObservation};
+pub use observation::{FileChange, ObservationData, ToolObservation};
 pub use registry::{Tool, ToolRegistry, ToolRegistryError};
 pub use router::{ToolCall, ToolDispatchContext, ToolRouter};
 pub use runtime_adapter::*;
