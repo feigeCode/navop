@@ -110,17 +110,30 @@ fn message_repository(cx: &App) -> Option<std::sync::Arc<MessageRepository>> {
 }
 
 fn list_summaries_by_archived(cx: &App, archived: bool) -> Vec<SessionSummary> {
+    // 只取摘要行：`snapshot_json` 本体（实测本机未归档 356 行合计 76.8MB、单条
+    // 最大 19.2MB）不再进入进程内存，工作区归属与外部 agent 来源这两个来自快照的
+    // 字段由 SQL 层的 `json_extract` 直接给出。
+    //
+    // 这里以前是把整列快照读上来、再逐行整体反序列化两次（一次取 workspace_root、
+    // 一次取 acp.agent_id）。列表刷新跑在 UI 线程上，且切会话 / 每轮结束 / ACP
+    // 连接就绪都会触发，debug 构建下单次光解析就要 1.6s——界面会明显冻住。
     agent_session_repository(cx)
-        .and_then(|repo| repo.list_by_archived(archived).ok())
+        .and_then(|repo| repo.list_summary_rows_by_archived(archived).ok())
         .unwrap_or_default()
         .into_iter()
-        .map(|session| {
-            SessionSummary::new(session.uid, session.title, session.updated_at)
-                .with_workspace_root(crate::session_sidebar::workspace_root_from_snapshot_json(
-                    &session.snapshot_json,
-                ))
+        .map(|row| {
+            SessionSummary::new(row.uid, row.title, row.updated_at)
+                .with_workspace_root(snapshot_workspace_root(row.workspace_root))
         })
         .collect()
+}
+
+/// 快照里的工作区归属：空白视为没有。
+///
+/// 与旧实现（解析 JSON 后取字段）保持同一判据：空串或纯空白都不算归属，
+/// 否则侧栏会多出一个空的工作区分组。
+fn snapshot_workspace_root(root: Option<String>) -> Option<String> {
+    root.filter(|root| !root.trim().is_empty())
 }
 
 fn load_legacy_chat_snapshot(cx: &App, uid: &str) -> Option<SessionSnapshot> {
@@ -417,4 +430,20 @@ mod tests {
             HistoryItem::Assistant(text) if text == "旧回答"
         ));
     }
+
+    /// 工作区归属的判据：空串 / 纯空白都不算归属，否则侧栏会多出一个空分组。
+    ///
+    /// 这条以前挂在 `session_sidebar::workspace_root_from_snapshot_json` 上（从整份
+    /// JSON 里取字段）。摘要改成 SQL 层提取后字段已是解好的字符串，判据挪到这里。
+    #[test]
+    fn blank_workspace_roots_are_not_a_workspace() {
+        assert_eq!(None, snapshot_workspace_root(None));
+        assert_eq!(None, snapshot_workspace_root(Some(String::new())));
+        assert_eq!(None, snapshot_workspace_root(Some("   ".into())));
+        assert_eq!(
+            Some("/w".to_string()),
+            snapshot_workspace_root(Some("/w".into()))
+        );
+    }
+
 }

@@ -19,6 +19,25 @@ pub struct AgentSession {
     pub updated_at: i64,
 }
 
+/// 侧栏会话列表需要的一行，**不含** `snapshot_json` 本体。
+///
+/// 列表只用得到快照里的两个顶层字段（工作区归属、外部 agent 来源）。把整列
+/// `snapshot_json` 读上来、再在调用侧反序列化，代价与快照体积成正比（实测本机
+/// 未归档 356 行合计 76.8MB、单条最大 19.2MB；debug 下光反序列化就要 1.6s），
+/// 而列表刷新跑在 UI 线程上且触发频繁（切会话 / 每轮结束 / 连接就绪都会跑）。
+/// 因此这两个字段下推到 SQL 层用 `json_extract` 提取：快照本体不再进入进程内存。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentSessionSummaryRow {
+    pub id: i64,
+    pub uid: String,
+    pub title: String,
+    pub archived: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+    /// 快照里的 `workspace_root`。缺失 / 空串 / 快照不是合法 JSON 时为 `None`。
+    pub workspace_root: Option<String>,
+}
+
 impl FromSqliteRow for AgentSession {
     fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
         let archived: i32 = row.get("archived")?;
@@ -403,6 +422,56 @@ impl AgentSessionRepository {
                  ORDER BY updated_at DESC",
             )?;
             let rows = stmt.query_map(params![archived], AgentSession::from_row)?;
+            let mut results = Vec::new();
+            for row in rows {
+                results.push(row?);
+            }
+            Ok(results)
+        })
+    }
+
+    /// 列出摘要行（侧栏用），**不读** `snapshot_json` 本体。
+    ///
+    /// 过滤与排序与 [`Self::list_by_archived`] 完全一致，只是把来自快照的两个字段
+    /// 下推到 SQL 层提取。调用侧因此不必把几十 MB 的快照 JSON 搬进内存、更不必逐行
+    /// 反序列化。
+    ///
+    /// `json_valid` 守卫是必需的，不是防御性冗余：本表历史数据里存在
+    /// `snapshot_json` 为空串或非合法 JSON 的行（早期 chat 会话），裸
+    /// `json_extract` 遇到它们会直接报 `malformed JSON`，**整条查询失败**，
+    /// 侧栏会话列表会整体变空。
+    pub fn list_summary_rows_by_archived(
+        &self,
+        archived: bool,
+    ) -> Result<Vec<AgentSessionSummaryRow>> {
+        let archived = if archived { 1i32 } else { 0i32 };
+        self.conn.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT
+                   id,
+                   COALESCE(uid, CAST(id AS TEXT)) AS uid,
+                   name AS title,
+                   archived,
+                   created_at,
+                   updated_at,
+                   CASE WHEN json_valid(snapshot_json)
+                        THEN json_extract(snapshot_json, '$.workspace_root') END AS workspace_root,
+                 FROM chat_sessions
+                 WHERE archived = ?1
+                 ORDER BY updated_at DESC",
+            )?;
+            let rows = stmt.query_map(params![archived], |row| {
+                let archived: i32 = row.get("archived")?;
+                Ok(AgentSessionSummaryRow {
+                    id: row.get("id")?,
+                    uid: row.get("uid")?,
+                    title: row.get("title")?,
+                    archived: archived != 0,
+                    created_at: row.get("created_at")?,
+                    updated_at: row.get("updated_at")?,
+                    workspace_root: row.get("workspace_root")?,
+                })
+            })?;
             let mut results = Vec::new();
             for row in rows {
                 results.push(row?);

@@ -256,16 +256,6 @@ pub fn group_sessions_by_workspace<'a>(
     groups
 }
 
-/// 从快照 JSON 里宽松提取工作区根目录（容忍缺字段 / 坏 JSON）。
-pub fn workspace_root_from_snapshot_json(json: &str) -> Option<String> {
-    serde_json::from_str::<serde_json::Value>(json)
-        .ok()?
-        .get("workspace_root")?
-        .as_str()
-        .filter(|root| !root.trim().is_empty())
-        .map(str::to_string)
-}
-
 #[cfg(test)]
 mod relative_time_tests {
     use super::*;
@@ -348,19 +338,5 @@ mod group_tests {
         let groups = group_sessions_by_workspace(&filter_sessions(&sessions, ""));
 
         assert_eq!("navop", groups[0].label().as_ref());
-    }
-
-    #[test]
-    fn workspace_root_extraction_is_tolerant() {
-        assert_eq!(
-            Some("/w".to_string()),
-            workspace_root_from_snapshot_json(r#"{"id":"a","workspace_root":"/w"}"#)
-        );
-        assert_eq!(None, workspace_root_from_snapshot_json(r#"{"id":"a"}"#));
-        assert_eq!(
-            None,
-            workspace_root_from_snapshot_json(r#"{"workspace_root":"  "}"#)
-        );
-        assert_eq!(None, workspace_root_from_snapshot_json("not json"));
     }
 }
