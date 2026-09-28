@@ -49,6 +49,8 @@ impl AgentChatView {
         self.cancel_acp_auto_reconnect();
         self.acp_turn_owner = None;
         self.clear_acp_sessions();
+        // 用户主动切回本地：那条待重开的会话不再算数。
+        self.acp_reopen_pending = None;
         self.acp = None;
         self.acp_pending = None;
         self.acp_auth_methods.clear();
@@ -162,7 +164,7 @@ impl AgentChatView {
             && self.current_acp_id.is_none()
     }
 
-    fn ready_acp_config(&self, id: &SharedString) -> Option<AcpAgentConfig> {
+    pub(super) fn ready_acp_config(&self, id: &SharedString) -> Option<AcpAgentConfig> {
         self.acp_agents
             .iter()
             .find(|entry| &entry.id == id && entry.enabled)
@@ -470,6 +472,15 @@ impl AgentChatView {
             &protocol_session_id,
             cx,
         );
+        // 会话列表里得有这一行：ACP 会话的本地历史是空的，不在这里落盘就永远不会出现在侧栏。
+        self.persist_acp_session(&origin_session_uid, cx);
+        // 从零重开一条外部会话时，`resume` 只接上下文、不回放历史；agent 支持
+        // `session/load` 的话再主动 load 一次，把那段对话摆回屏幕上。
+        if let Some(pending) = self.acp_reopen_pending.take()
+            && pending == protocol_session_id
+        {
+            self.open_protocol_session(&pending, self.workspace_root.clone(), cx);
+        }
         cx.notify();
     }
 

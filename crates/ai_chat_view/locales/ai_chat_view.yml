@@ -40,9 +40,13 @@ AgentUi:
     zh-CN: ACP Agent 没有返回任何内容
     zh-HK: ACP Agent 沒有傳回任何內容
   acp_external_managed:
-    en: ACP tasks are managed by the external agent and are not persisted here.
-    zh-CN: ACP 任务由外部 Agent 管理，不在此持久化。
-    zh-HK: ACP 工作由外部 Agent 管理，不會在此保存。
+    en: This conversation is run by the external agent; its history stays there.
+    zh-CN: 这轮对话归外部 Agent 执行，历史也留在它那边。
+    zh-HK: 這輪對話由外部 Agent 執行，歷史也留在它那邊。
+  acp_agent_unavailable:
+    en: The external agent %{name} is unavailable right now, so this conversation cannot be reopened.
+    zh-CN: 外部 Agent %{name} 当前不可用，这条对话暂时接不回来。
+    zh-HK: 外部 Agent %{name} 目前無法使用，這條對話暫時接不回來。
   acp_not_connected:
     en: ACP agent is not connected
     zh-CN: ACP Agent 未连接

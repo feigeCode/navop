@@ -1126,6 +1126,12 @@ pub struct AgentChatView {
     acp_operation_generation: u64,
     /// ACP 新会话创建中的操作，或创建失败后等待重试的操作。
     acp_session_transition: Option<AcpSessionTransition>,
+    /// 从零重开一条外部 agent 会话时，连接就绪后要 `load` 回来的协议会话 id。
+    ///
+    /// `resume` 只把上下文接上，不回放历史；agent 支持 `session/load` 时再主动
+    /// load 一次，用户点开侧栏那行才能看到原来那段对话。只在下一次连接就绪时消费，
+    /// 且 id 对得上才真去 load：用户中途改成连别的 agent 的话，这个值自然作废。
+    acp_reopen_pending: Option<String>,
     /// 从 agent 拉到的历史会话列表（仅在 agent 声明支持 `session/list` 时有意义）。
     acp_sessions: Vec<AcpSessionSummary>,
     /// 拉列表/开会话失败的可见原因。清空表示上次是成功的——不拿空列表冒充失败。
@@ -1443,6 +1449,7 @@ impl AgentChatView {
             acp_connect_origin_session: None,
             acp_operation_generation: 0,
             acp_session_transition: None,
+            acp_reopen_pending: None,
             acp_sessions: Vec::new(),
             acp_sessions_error: None,
             acp_sessions_loading: false,
@@ -2851,6 +2858,11 @@ impl AgentChatView {
         if backend == Backend::Local && (clears_running || is_need_user_input) {
             self.persist_session(&session_uid, cx);
             self.reload_sessions(cx);
+        }
+        // ACP 会话的历史仍然归外部 agent，但侧栏得留着这一行，而且每轮结束
+        // 都算一次「有过动静」，不然这段对话会永远沉在列表底部。
+        if backend == Backend::Acp && is_real_terminal {
+            self.persist_acp_session(&session_uid, cx);
         }
         if advances_queue {
             match backend {
@@ -4659,6 +4671,8 @@ impl AgentChatView {
             restored
         };
         self.closed_sessions.remove(uid);
+        // 这段对话是不是归外部 agent 管：运行时会话带着地址（从快照恢复的同样带）。
+        let external_agent = target.acp_ref();
         self.session_id = target.id().clone();
         // 快照自带指令的会话优先快照值（行为可复现）；没有指令的旧会话回落到
         // 当前全局设置（可能为空），并继续保持来源跟随设置。
@@ -4701,6 +4715,10 @@ impl AgentChatView {
         self.request_scroll_to_bottom();
         if self.backend == Backend::Acp && !self.is_running {
             self.start_or_reconnect_current_pending(cx);
+        }
+        // 回到一条外部 agent 会话：把 agent 那边接回来（本地只有地址，历史在它手上）。
+        if let Some(reference) = external_agent {
+            self.reopen_acp_session(uid, reference, cx);
         }
         cx.notify();
     }
@@ -9799,6 +9817,7 @@ mod tests {
                     workspace_root: None,
                     draft: None,
                     context_tokens: None,
+                    acp: None,
                 });
 
             assert!(
@@ -10020,6 +10039,110 @@ mod tests {
                 .expect("ready agent must start a connect");
 
             assert_eq!(Some("acp-remembered".to_string()), operation.resume);
+        });
+    }
+
+    fn snapshot_of_external_session(uid: &str, agent_id: &str, protocol_id: &str) -> agent_runtime::SessionSnapshot {
+        agent_runtime::SessionSnapshot {
+            id: SessionId::from_string(uid.to_string()),
+            resources: ResourceContext::new(),
+            history: Vec::new(),
+            plan: None,
+            system_instruction: None,
+            skills: agent_runtime::SkillContext::new(),
+            workspace_root: None,
+            draft: None,
+            context_tokens: None,
+            acp: Some(agent_runtime::AcpSessionRef {
+                agent_id: agent_id.to_string(),
+                session_id: protocol_id.to_string(),
+            }),
+        }
+    }
+
+    /// 从侧栏回到一条外部 agent 会话：要按快照里的地址把 agent 那边接回来，
+    /// 而不是当成一条空的本地会话（那样用户会以为对话没了）。
+    #[gpui::test]
+    fn reopening_an_external_session_reconnects_to_its_agent(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let agent_id = SharedString::from("codex");
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new())
+                .with_acp_agents(vec![AcpAgentEntry::ready(AcpAgentConfig::new(
+                    agent_id.clone(),
+                    "Codex",
+                    "definitely-missing-acp-binary",
+                ))]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update(cx, |view, cx| {
+            view.runtime.restore_session(snapshot_of_external_session(
+                "sess_acp",
+                "codex",
+                "acp-42",
+            ));
+            let reference = view
+                .runtime
+                .session(&SessionId::from_string("sess_acp".to_string()))
+                .expect("会话应在运行时里")
+                .acp_ref()
+                .expect("外部地址要跟着快照回到会话上");
+
+            // 还没连在这个 agent 上：绕不开重新握手（不能就那么当成本地会话）。
+            let plan = view.plan_acp_reopen("sess_acp", &reference, cx);
+            assert!(
+                matches!(
+                    plan,
+                    Some(super::acp_sessions::AcpReopenPlan::Reconnect(ref id))
+                        if id.as_ref() == "codex"
+                ),
+                "没连在这个 agent 上时应当重新握手"
+            );
+            assert_eq!(
+                Some("acp-42"),
+                AppSettings::current(cx)
+                    .ai_chat
+                    .remembered_acp_session("sess_acp", "codex"),
+                "地址要补回记忆里，重连才会复用那条对话而不是新开一条"
+            );
+
+            // 真去握手时，重连带的就是那条协议会话。
+            view.current_session = "sess_acp".to_string();
+            let (operation, _providers) = view
+                .prepare_acp_connect(agent_id, cx)
+                .expect("agent 就绪时应当能发起握手");
+            assert_eq!(Some("acp-42".to_string()), operation.resume);
+        });
+    }
+
+    /// agent 已经不在了：说清楚接不回来，不要默默变成一条空会话。
+    #[gpui::test]
+    fn reopening_an_external_session_without_its_agent_says_so(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update(cx, |view, cx| {
+            view.runtime.restore_session(snapshot_of_external_session(
+                "sess_gone",
+                "removed-agent",
+                "acp-7",
+            ));
+
+            view.select_session("sess_gone", cx);
+
+            assert!(!view.acp_connecting);
+            assert!(view.acp_reopen_pending.is_none());
+            assert!(
+                view.transcript
+                    .messages
+                    .iter()
+                    .any(|message| message.content.contains("removed-agent")),
+                "接不回来要写在转录里，别默认用户知道"
+            );
         });
     }
 

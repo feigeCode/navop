@@ -36,6 +36,8 @@ pub struct AgentSessionSummaryRow {
     pub updated_at: i64,
     /// 快照里的 `workspace_root`。缺失 / 空串 / 快照不是合法 JSON 时为 `None`。
     pub workspace_root: Option<String>,
+    /// 快照里的 `acp.agent_id`（这段会话由外部 agent 承载）。判定同上。
+    pub acp_agent_id: Option<String>,
 }
 
 impl FromSqliteRow for AgentSession {
@@ -456,6 +458,8 @@ impl AgentSessionRepository {
                    updated_at,
                    CASE WHEN json_valid(snapshot_json)
                         THEN json_extract(snapshot_json, '$.workspace_root') END AS workspace_root,
+                   CASE WHEN json_valid(snapshot_json)
+                        THEN json_extract(snapshot_json, '$.acp.agent_id') END AS acp_agent_id
                  FROM chat_sessions
                  WHERE archived = ?1
                  ORDER BY updated_at DESC",
@@ -470,6 +474,7 @@ impl AgentSessionRepository {
                     created_at: row.get("created_at")?,
                     updated_at: row.get("updated_at")?,
                     workspace_root: row.get("workspace_root")?,
+                    acp_agent_id: row.get("acp_agent_id")?,
                 })
             })?;
             let mut results = Vec::new();

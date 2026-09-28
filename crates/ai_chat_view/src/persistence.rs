@@ -8,10 +8,11 @@
 //! DB 操作为同步、低频(每轮结束保存一次 / 切换会话时读取一次)、载荷小,直接在
 //! 调用线程执行,沿用项目既有的同步 Repository 调用风格。
 
-use agent_runtime::{HistoryItem, Session, SessionSnapshot};
+use agent_runtime::{AcpSessionRef, HistoryItem, Session, SessionSnapshot};
 use one_core::{
     llm::chat_history::{AgentSessionRepository, ChatMessage, MessageRepository},
     storage::GlobalStorageState,
+    storage::traits::Repository,
 };
 
 use gpui::App;
@@ -54,6 +55,66 @@ fn workspace_root_non_empty(root: Option<&str>) -> Option<String> {
     root.map(str::trim)
         .filter(|root| !root.is_empty())
         .map(str::to_string)
+}
+
+/// 保存一条**由外部 agent 承载**的会话（ACP）。
+///
+/// 与 [`save_session_with_workspace`] 的关键差别：历史在外部 agent 那边，本地
+/// `history` 就是空的，所以这里**不**按「空历史就跳过」处理——按那条规则走，
+/// ACP 会话永远进不了侧栏（用户在会话列表里看不到自己刚聊过的一切）。
+/// 本地只存「这个会话指向哪个 agent 的哪条协议会话」加一个可读标题。
+///
+/// 已有快照会被当作基底：工作区归属继续定格（首存优先）、输入草稿等本地字段保留，
+/// 这里只更新外部地址与标题。标题留空时沿用首条用户消息的推导结果。
+/// 内容没变化时仓储层自会跳过写入，不会因此把会话在侧栏里顶到最上面。
+pub fn save_acp_session(
+    cx: &App,
+    uid: &str,
+    title: &str,
+    workspace_root: Option<&str>,
+    acp: AcpSessionRef,
+) -> Option<(String, i64)> {
+    let uid = uid.trim();
+    if uid.is_empty() || acp.agent_id.trim().is_empty() || acp.session_id.trim().is_empty() {
+        return None;
+    }
+    let mut snapshot = load_snapshot(cx, uid).unwrap_or_else(|| empty_snapshot(uid));
+    snapshot.acp = Some(acp);
+    if snapshot.workspace_root.is_none()
+        && let Some(root) = workspace_root_non_empty(workspace_root)
+    {
+        snapshot.workspace_root = Some(root);
+    }
+    let title = match title.trim() {
+        "" => derive_title(&snapshot),
+        text => truncate_title(text),
+    };
+    let snapshot_json = serde_json::to_string(&snapshot).ok()?;
+    let repo = agent_session_repository(cx)?;
+    let saved = repo.save_snapshot(uid, &title, &snapshot_json).ok()?;
+    // 外部会话的快照内容几乎不变（地址一存就定），仓储层会跳过写入，更新时间就会
+    // 永远停在首次落盘那一刻；而列表按时间倒序排，刚聊过的对话反而沉到底部。
+    // 这里显式提一次时间：调这个函数的地方都是「真有过动静」。
+    if let Ok(Some(row)) = repo.get_by_uid(uid) {
+        let _ = repo.update(&row);
+    }
+    Some((saved.title, saved.updated_at))
+}
+
+/// 只有标识、没有对话内容的空快照；工作区与外部地址由调用方补。
+fn empty_snapshot(uid: &str) -> SessionSnapshot {
+    SessionSnapshot {
+        id: agent_runtime::SessionId::from_string(uid.to_string()),
+        resources: agent_runtime::ResourceContext::new(),
+        history: Vec::new(),
+        plan: None,
+        system_instruction: None,
+        skills: agent_runtime::SkillContext::new(),
+        workspace_root: None,
+        draft: None,
+        context_tokens: None,
+        acp: None,
+    }
 }
 
 /// 列出全部**未归档**会话,按更新时间倒序映射为侧边栏摘要。
@@ -124,6 +185,7 @@ fn list_summaries_by_archived(cx: &App, archived: bool) -> Vec<SessionSummary> {
         .map(|row| {
             SessionSummary::new(row.uid, row.title, row.updated_at)
                 .with_workspace_root(snapshot_workspace_root(row.workspace_root))
+                .with_external_agent(external_agent_label(row.acp_agent_id))
         })
         .collect()
 }
@@ -136,22 +198,33 @@ fn snapshot_workspace_root(root: Option<String>) -> Option<String> {
     root.filter(|root| !root.trim().is_empty())
 }
 
+/// 会话来源标记：快照里记了外部 agent 时，用它的短标识标出这行归谁管。
+///
+/// 只从 id 的末段取名（`builtin.codex` → `codex`）：展示名在宿主的 agent 注册表里，
+/// 持久化层拿不到；写进快照又会因为改名而过期。
+fn external_agent_label(agent_id: Option<String>) -> Option<gpui::SharedString> {
+    let agent_id = agent_id?;
+    let agent_id = agent_id.trim();
+    if agent_id.is_empty() {
+        return None;
+    }
+    let label = agent_id
+        .rsplit('.')
+        .next()
+        .filter(|segment| !segment.is_empty())
+        .unwrap_or(agent_id);
+    Some(gpui::SharedString::from(label.to_string()))
+}
+
 fn load_legacy_chat_snapshot(cx: &App, uid: &str) -> Option<SessionSnapshot> {
     let session_id = uid.parse::<i64>().ok()?;
     let messages = message_repository(cx)?.list_by_session(session_id).ok()?;
     Some(SessionSnapshot {
-        id: agent_runtime::SessionId::from_string(uid.to_string()),
-        resources: agent_runtime::ResourceContext::new(),
         history: messages
             .into_iter()
             .filter_map(chat_message_to_history)
             .collect(),
-        plan: None,
-        system_instruction: None,
-        skills: agent_runtime::SkillContext::new(),
-        workspace_root: None,
-        draft: None,
-        context_tokens: None,
+        ..empty_snapshot(uid)
     })
 }
 
@@ -223,6 +296,7 @@ mod tests {
             workspace_root: None,
             draft: None,
             context_tokens: None,
+            acp: None,
         }
     }
 
@@ -298,6 +372,7 @@ mod tests {
             workspace_root: None,
             draft: None,
             context_tokens: None,
+            acp: None,
         };
         assert_eq!(derive_title(&snap), "新 Agent 会话");
     }
@@ -431,6 +506,205 @@ mod tests {
         ));
     }
 
+    fn acp_ref(agent_id: &str, session_id: &str) -> AcpSessionRef {
+        AcpSessionRef {
+            agent_id: agent_id.to_string(),
+            session_id: session_id.to_string(),
+        }
+    }
+
+    /// 外部 agent 会话的历史为空，但**必须**进侧栏，而且要标出来源：
+    /// 「历史在别处」不能让用户在会话列表里找不到它。
+    #[gpui::test]
+    fn acp_sessions_are_listed_with_their_external_source(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(GlobalStorageState {
+                storage: test_storage(),
+            });
+        });
+
+        let saved = cx
+            .update(|cx| {
+                save_acp_session(
+                    cx,
+                    "sess_acp",
+                    "查一下连接数",
+                    Some("/w/project"),
+                    acp_ref("builtin.codex", "acp-1"),
+                )
+            })
+            .expect("保存外部会话");
+        assert_eq!("查一下连接数", saved.0);
+
+        let summaries = cx.update(|cx| list_summaries(cx));
+        assert_eq!(1, summaries.len(), "空历史不该让外部会话从侧栏消失");
+        assert_eq!("sess_acp", summaries[0].id);
+        assert_eq!(Some("/w/project"), summaries[0].workspace_root.as_deref());
+        assert_eq!(Some("codex"), summaries[0].external_agent.as_deref());
+
+        let snapshot = cx
+            .update(|cx| load_snapshot(cx, "sess_acp"))
+            .expect("读回快照");
+        assert!(snapshot.history.is_empty());
+        assert_eq!(
+            Some("acp-1".to_string()),
+            snapshot.acp.as_ref().map(|acp| acp.session_id.clone())
+        );
+    }
+
+    /// 再次落盘不能把会话的原有信息抹掉：工作区归属首存定格、草稿留在本地、
+    /// 地址换成新那条会话。
+    #[gpui::test]
+    fn resaving_an_acp_session_keeps_the_local_shell_fields(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(GlobalStorageState {
+                storage: test_storage(),
+            });
+        });
+        let uid = "sess_acp";
+        cx.update(|cx| {
+            save_acp_session(
+                cx,
+                uid,
+                "第一句话",
+                Some("/w/first"),
+                acp_ref("builtin.codex", "acp-1"),
+            )
+        })
+        .expect("首次保存");
+
+        // 用着用着输入框里存了半句话（本地字段，只在快照里）。
+        cx.update(|cx| {
+            let mut snapshot = load_snapshot(cx, uid).expect("读回快照");
+            snapshot.draft = Some("还没发出去".into());
+            let json = serde_json::to_string(&snapshot).expect("序列化");
+            agent_session_repository(cx)
+                .expect("仓储")
+                .save_snapshot(uid, "第一句话", &json)
+                .expect("写入草稿");
+        });
+
+        // 外壳换了工作区、用户在 agent 那边切了另一条会话（地址变了）。
+        cx.update(|cx| {
+            save_acp_session(
+                cx,
+                uid,
+                "第一句话",
+                Some("/w/second"),
+                acp_ref("builtin.codex", "acp-2"),
+            )
+        })
+        .expect("再次保存");
+
+        let snapshot = cx
+            .update(|cx| load_snapshot(cx, uid))
+            .expect("读回快照");
+        assert_eq!(Some("/w/first"), snapshot.workspace_root.as_deref());
+        assert_eq!(Some("还没发出去"), snapshot.draft.as_deref());
+        assert_eq!(
+            Some("acp-2".to_string()),
+            snapshot.acp.as_ref().map(|acp| acp.session_id.clone())
+        );
+    }
+
+    /// 外部会话的快照一存就定，仓储层会跳过重复写入；更新时间必须由这次调用推上去，
+    /// 否则刚聊过的对话反而沉在侧栏底部。
+    #[gpui::test]
+    fn resaving_an_acp_session_marks_it_active(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(GlobalStorageState {
+                storage: test_storage(),
+            });
+        });
+        let uid = "sess_acp";
+        let first = cx
+            .update(|cx| {
+                save_acp_session(
+                    cx,
+                    uid,
+                    "第一句话",
+                    None,
+                    acp_ref("agent-1", "acp-1"),
+                )
+            })
+            .expect("首次保存")
+            .1;
+
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        cx.update(|cx| {
+            save_acp_session(
+                cx,
+                uid,
+                "第一句话",
+                None,
+                acp_ref("agent-1", "acp-1"),
+            )
+        })
+        .expect("重复保存");
+
+        let summaries = cx.update(|cx| list_summaries(cx));
+        assert!(
+            summaries[0].updated_at > first,
+            "同一轮对话再次活跃时应当提到列表前面"
+        );
+    }
+
+    /// 历史数据里存在 `snapshot_json` 为空串 / 非合法 JSON 的行（早期 chat 会话）。
+    ///
+    /// 摘要现在由 SQL 层的 `json_extract` 取字段，缺了 `json_valid` 守卫就会
+    /// `malformed JSON` 报错——**整条查询失败**，侧栏会话列表会整体变空。
+    /// 本测试同时钉住「脏行不丢」与「好行照常提取」。
+    #[gpui::test]
+    fn malformed_snapshots_do_not_blank_the_session_list(cx: &mut TestAppContext) {
+        let storage = test_storage();
+        let conn = storage.connection();
+        cx.update(|cx| {
+            cx.set_global(GlobalStorageState { storage });
+        });
+        cx.update(|cx| {
+            save_acp_session(
+                cx,
+                "sess_ok",
+                "正常会话",
+                Some("/w/ok"),
+                acp_ref("builtin.codex", "acp-1"),
+            )
+            .expect("保存正常会话");
+        });
+        conn.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO chat_sessions
+                   (name, provider_id, session_kind, uid, snapshot_json, archived, created_at, updated_at)
+                 VALUES
+                   ('空快照', 'legacy', 'chat', '9001', '', 0, 1, 1),
+                   ('坏快照', 'legacy', 'chat', '9002', 'not json', 0, 2, 2)",
+                [],
+            )?;
+            Ok(())
+        })
+        .expect("插入脏快照行");
+
+        let summaries = cx.update(|cx| list_summaries(cx));
+
+        assert_eq!(
+            3,
+            summaries.len(),
+            "脏快照不能把整条列表查询带崩（json_valid 守卫）: {summaries:?}"
+        );
+        let ok = summaries
+            .iter()
+            .find(|summary| summary.id == "sess_ok")
+            .expect("正常会话仍应在列表里");
+        assert_eq!(Some("/w/ok"), ok.workspace_root.as_deref());
+        assert_eq!(Some("codex"), ok.external_agent.as_deref());
+        let broken = summaries
+            .iter()
+            .find(|summary| summary.id == "9002")
+            .expect("坏快照行也要保留，只是没有工作区与来源");
+        assert_eq!(None, broken.workspace_root);
+        assert_eq!(None, broken.external_agent);
+    }
+
     /// 工作区归属的判据：空串 / 纯空白都不算归属，否则侧栏会多出一个空分组。
     ///
     /// 这条以前挂在 `session_sidebar::workspace_root_from_snapshot_json` 上（从整份
@@ -446,4 +720,19 @@ mod tests {
         );
     }
 
+    /// 来源标记只取 id 末段；空 / 纯空白不算来源。
+    #[test]
+    fn external_agent_labels_use_the_last_segment() {
+        assert_eq!(
+            Some("codex".to_string()),
+            external_agent_label(Some("builtin.codex".into())).map(|l| l.to_string())
+        );
+        assert_eq!(
+            Some("opencode-acp".to_string()),
+            external_agent_label(Some("opencode-acp.opencode-acp".into()))
+                .map(|l| l.to_string())
+        );
+        assert_eq!(None, external_agent_label(None));
+        assert_eq!(None, external_agent_label(Some("  ".into())));
+    }
 }

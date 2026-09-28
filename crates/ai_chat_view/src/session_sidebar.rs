@@ -22,6 +22,11 @@ pub struct SessionSummary {
     pub updated_at: i64,
     /// 会话归属的工作区根目录。`None` 表示旧数据 / 未分组。
     pub workspace_root: Option<String>,
+    /// 会话由外部 agent（ACP）承载时的来源短标识（如 `codex`）。
+    ///
+    /// `None` = 本地会话。行上标出来源，用户才知道点它会去连外部 agent，
+    /// 而不是把这段对话当成存在本地的历史。
+    pub external_agent: Option<SharedString>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -52,12 +57,19 @@ impl SessionSummary {
             name: name.into(),
             updated_at,
             workspace_root: None,
+            external_agent: None,
         }
     }
 
     /// 附加工作区归属(链式)。
     pub fn with_workspace_root(mut self, root: Option<String>) -> Self {
         self.workspace_root = root;
+        self
+    }
+
+    /// 附加「外部 agent 承载」的来源标记(链式)。
+    pub fn with_external_agent(mut self, agent: Option<SharedString>) -> Self {
+        self.external_agent = agent;
         self
     }
 }
@@ -111,7 +123,14 @@ pub fn session_row_with_style(
                         } else {
                             style.muted_foreground
                         })
-                        .child(format_timestamp(session.updated_at)),
+                        .child(match session.external_agent.as_ref() {
+                            Some(agent) => format!(
+                                "{} · {}",
+                                agent,
+                                format_timestamp(session.updated_at)
+                            ),
+                            None => format_timestamp(session.updated_at),
+                        }),
                 ),
         )
 }

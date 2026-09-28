@@ -22,6 +22,19 @@ mod turns;
 pub(crate) use turns::PendingToolResolution;
 use turns::TurnState;
 
+/// 「这条会话由外部 agent 承载」的地址。
+///
+/// 外部 agent 自己存历史，navop 这边只记「这个会话指的是它哪一条协议会话」，
+/// 用来把会话留在侧栏列表里，并在重新打开时接回同一段对话，而不是新开一条。
+/// 会话的工作目录不在这里：它是外壳的属性，连接时由当前工作区决定。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AcpSessionRef {
+    /// 外部 agent 的 id（配置里的稳定标识）。
+    pub agent_id: String,
+    /// 该 agent 侧的协议会话 id（能拿去 `session/load` / `session/resume` 的地址）。
+    pub session_id: String,
+}
+
 /// 会话的可持久化快照:足以重建一个 [`Session`] 全部对话状态的最小集合。
 ///
 /// 只包含可序列化的对话事实(标识、资源、历史、当前计划),**不含**运行时瞬态
@@ -60,6 +73,12 @@ pub struct SessionSnapshot {
     /// 由展示层按模型名解析,快照只存「用了多少」这个事实。
     #[serde(default)]
     pub context_tokens: Option<u64>,
+    /// 会话是否由外部 agent 承载（见 [`AcpSessionRef`]）。
+    ///
+    /// `Some` 时本地 `history` 可能为空——历史在 agent 那边，本地只留这个地址；
+    /// 旧快照没有该字段，反序列化为 `None`（纯本地会话）。
+    #[serde(default)]
+    pub acp: Option<AcpSessionRef>,
 }
 
 /// 一次会话。
@@ -72,6 +91,9 @@ pub struct Session {
     turns: Mutex<TurnState>,
     draft: Mutex<Option<String>>,
     context_tokens: Mutex<Option<u64>>,
+    /// 会话的外部 agent 地址（纯载体：运行时不用它，只负责让它随快照往返，
+    /// 否则一次本地落盘就会把「这条会话属于哪个 agent」抹掉）。
+    acp: Mutex<Option<AcpSessionRef>>,
     events: RuntimeEventSender,
 }
 
@@ -86,6 +108,7 @@ impl Session {
             turns: Mutex::new(TurnState::default()),
             draft: Mutex::new(None),
             context_tokens: Mutex::new(None),
+            acp: Mutex::new(None),
             events,
         })
     }
@@ -108,6 +131,7 @@ impl Session {
             turns: Mutex::new(TurnState::default()),
             draft: Mutex::new(snapshot.draft),
             context_tokens: Mutex::new(snapshot.context_tokens),
+            acp: Mutex::new(snapshot.acp),
             events,
         })
     }
@@ -138,6 +162,7 @@ impl Session {
             workspace_root: None,
             draft: self.draft(),
             context_tokens: self.context_tokens(),
+            acp: self.acp_ref(),
         }
     }
 
@@ -232,6 +257,16 @@ impl Session {
     /// 当前上下文占用估算;provider 从未报告过计量时为 `None`。
     pub fn context_tokens(&self) -> Option<u64> {
         *self.context_tokens.lock().expect("session 锁中毒")
+    }
+
+    /// 会话当前指向的外部 agent 会话地址（没有就是本地会话）。
+    pub fn acp_ref(&self) -> Option<AcpSessionRef> {
+        self.acp.lock().expect("session 锁中毒").clone()
+    }
+
+    /// 记下 / 清掉外部 agent 会话地址。
+    pub fn set_acp_ref(&self, reference: Option<AcpSessionRef>) {
+        *self.acp.lock().expect("session 锁中毒") = reference;
     }
 
     pub fn set_last_error(&self, error: Option<String>) {
@@ -601,6 +636,38 @@ mod tests {
         let restored_plan = restored.current_plan().expect("应恢复出当前计划");
         assert_eq!(restored_plan.goal, "查询连接数");
         assert_eq!(restored_plan.steps.len(), 1);
+    }
+
+    #[test]
+    fn external_agent_reference_survives_the_local_save_path() {
+        // 外部 agent 会话由它自己存历史，本地只有地址。若 `snapshot()` 不带这个地址，
+        // 一次本地落盘（切走会话时就会发生）就会把会话变回「纯本地」，
+        // 侧栏那行也就再也接不回原来的对话。
+        let (session, _rx) = test_session();
+        assert!(session.acp_ref().is_none());
+
+        session.set_acp_ref(Some(AcpSessionRef {
+            agent_id: "agent-1".into(),
+            session_id: "acp-42".into(),
+        }));
+        let snapshot = session.snapshot();
+        assert_eq!(
+            Some("acp-42".to_string()),
+            snapshot.acp.as_ref().map(|acp| acp.session_id.clone())
+        );
+
+        let json = serde_json::to_string(&snapshot).expect("快照应可序列化为 JSON");
+        let parsed: SessionSnapshot = serde_json::from_str(&json).expect("JSON 应可反序列化回快照");
+        let (tx, _rx2) = tokio::sync::broadcast::channel(16);
+        let restored = Session::restore(parsed, tx);
+        assert_eq!(
+            restored.acp_ref().map(|acp| acp.agent_id),
+            Some("agent-1".to_string())
+        );
+
+        // 清掉之后不再随快照回来（切回本地也可以显式解绑）。
+        restored.set_acp_ref(None);
+        assert!(restored.snapshot().acp.is_none());
     }
 
     #[test]

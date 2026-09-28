@@ -18,7 +18,7 @@ pub use command::RuntimeCommand;
 pub use event::{RuntimeEvent, RuntimeEventReceiver, RuntimeEventSender};
 pub use input_queue::{InputImage, InputQueue, TurnInput, UserInput};
 pub use session::Session;
-pub use session::SessionSnapshot;
+pub use session::{AcpSessionRef, SessionSnapshot};
 pub use session_manager::SessionManager;
 pub use session_state::SessionState;
 pub use task::{

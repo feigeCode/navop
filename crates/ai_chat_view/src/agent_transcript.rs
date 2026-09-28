@@ -1139,6 +1139,17 @@ impl AgentTranscript {
         self.current_turn.as_deref()
     }
 
+    /// 屏幕上第一条用户消息的内容（去空白后为空的不算）。
+    ///
+    /// 用在「会话归外部 agent 管、本地没有快照历史」的地方：侧栏那行总得有个名字，
+    /// 而此刻能代表这段对话的只有用户说的第一句话。
+    pub fn first_user_text(&self) -> Option<&str> {
+        self.messages
+            .iter()
+            .find(|message| message.role == ChatRole::User && !message.content.trim().is_empty())
+            .map(|message| message.content.as_str())
+    }
+
     /// 给消息打上当前轮次并推入列表。
     ///
     /// 所有新消息都走这里：**唯一**的轮次落值点，避免某个分支漏打标。

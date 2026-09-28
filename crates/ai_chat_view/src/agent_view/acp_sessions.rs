@@ -14,6 +14,15 @@ use gpui::{Hsla, SharedString};
 use super::*;
 use crate::acp::{AcpSessionOpen, AcpSessionSummary};
 
+/// 回到外部会话的走法（由 [`AgentChatView::plan_acp_reopen`] 判定）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum AcpReopenPlan {
+    /// 连接已经挂在这个 agent 上：直接把那条协议会话 `load` 回来。
+    LoadHere,
+    /// 需要重新握手：连接就绪后再 `load`。
+    Reconnect(SharedString),
+}
+
 /// 一次 `session/list` 的可见状态。`None`（模型不存在）表示「这个后端不该显示 ACP 列表」，
 /// 而不是「列表是空的」——后者是 `Some` + 空 `sessions`。
 #[derive(Clone, Debug)]
@@ -53,8 +62,117 @@ impl AgentChatView {
     }
 
     /// 当前连接指向的 ACP 会话 id，用来把列表里那一条标成「正在用」。
+    ///
+    /// 要的是能拿去 `session/load` 的**协议**会话 id，和 `session/list` 给的 id
+    /// 同一套；不是连接内部的 `acp:<uuid>` 事件流 id，那个永远对不上列表。
     pub(crate) fn acp_session_id_snapshot(&self) -> Option<String> {
-        self.acp.as_ref().map(|acp| acp.session_id().to_string())
+        self.acp.as_ref().map(|acp| acp.protocol_session_id())
+    }
+
+    /// 把当前挂在外部 agent 上的会话写进会话列表。
+    ///
+    /// ACP 会话的历史在 agent 那边，本地 `history` 是空的；持久化层那条「空历史
+    /// 就跳过」的规则会让这类会话永远进不了侧栏。所以这里单独落一行：地址 + 一个
+    /// 可读标题（本地转录里的首条用户消息，没有就用 agent 名）。
+    ///
+    /// 调用时机都是「真有过动静」：接上 agent、手动打开一条历史会话、一轮结束。
+    pub(crate) fn persist_acp_session(&mut self, uid: &str, cx: &mut Context<Self>) {
+        let Some(agent_id) = self.current_acp_id.clone() else {
+            return;
+        };
+        let Some(session_id) = self.acp.as_ref().map(|acp| acp.protocol_session_id()) else {
+            return;
+        };
+        if uid.trim().is_empty() || session_id.is_empty() {
+            return;
+        }
+        let reference = agent_runtime::AcpSessionRef {
+            agent_id: agent_id.to_string(),
+            session_id,
+        };
+        // 运行时会话也记住这个地址：之后任何一次本地落盘都不会把它抹掉，
+        // 切到这条会话时也能凭它知道「这段对话归外部 agent 管」。
+        if let Some(session) = self.runtime.session(&SessionId::from_string(uid.to_string())) {
+            session.set_acp_ref(Some(reference.clone()));
+        }
+        let title = self
+            .external_session_title(uid)
+            .unwrap_or_else(|| self.acp_agent_name(&agent_id).to_string());
+        let workspace_root = self
+            .session_roots
+            .get(uid)
+            .cloned()
+            .unwrap_or_else(|| self.workspace_root.to_string_lossy().into_owned());
+        persistence::save_acp_session(cx, uid, &title, Some(&workspace_root), reference);
+        self.reload_sessions(cx);
+    }
+
+    /// 回到一条「外部 agent 承载」的会话：把 agent 那边接回来。
+    ///
+    /// 本地只有地址（`AcpSessionRef`），历史在 agent 手上，所以走法由
+    /// [`Self::plan_acp_reopen`] 判定，这里只负责把选定的路走完。
+    pub(crate) fn reopen_acp_session(
+        &mut self,
+        uid: &str,
+        reference: agent_runtime::AcpSessionRef,
+        cx: &mut Context<Self>,
+    ) {
+        match self.plan_acp_reopen(uid, &reference, cx) {
+            Some(AcpReopenPlan::LoadHere) => {
+                // 连接已经在这个 agent 上：`load` 会把历史带回来，不用重新握手。
+                self.acp_reopen_pending = None;
+                self.open_protocol_session(
+                    &reference.session_id,
+                    self.workspace_root.clone(),
+                    cx,
+                );
+            }
+            Some(AcpReopenPlan::Reconnect(agent_id)) => {
+                // 绕不开重新握手：`resume` 只接上下文、不回放历史，连上后再 load 一次。
+                self.acp_reopen_pending = Some(reference.session_id);
+                self.select_acp_backend(agent_id, cx);
+            }
+            None => {}
+        }
+    }
+
+    /// 判定「回到外部会话」的走法，本身不碰连接。
+    ///
+    /// agent 已经被移除等接不上的情况，写明原因并返回 `None`，不假装历史还在。
+    /// 能接就把地址补回「这条会话上次用的协议会话」记忆里：重连优先复用那条对话，
+    /// 而不是每回新开一条空会话。
+    pub(super) fn plan_acp_reopen(
+        &mut self,
+        uid: &str,
+        reference: &agent_runtime::AcpSessionRef,
+        cx: &mut Context<Self>,
+    ) -> Option<AcpReopenPlan> {
+        let agent_id = SharedString::from(reference.agent_id.clone());
+        if self.ready_acp_config(&agent_id).is_none() {
+            self.push_system_to_session(
+                uid,
+                t!("AgentUi.acp_agent_unavailable", name = reference.agent_id).to_string(),
+            );
+            return None;
+        }
+        self.remember_acp_protocol_session(uid, &agent_id, &reference.session_id, cx);
+        if self.backend == Backend::Acp
+            && self.current_acp_id.as_ref() == Some(&agent_id)
+            && self.acp.is_some()
+        {
+            return Some(AcpReopenPlan::LoadHere);
+        }
+        Some(AcpReopenPlan::Reconnect(agent_id))
+    }
+
+    /// 这段会话在本地转录里留下的第一条用户消息（标题来源）。
+    fn external_session_title(&self, uid: &str) -> Option<String> {
+        let transcript = if uid == self.current_session {
+            Some(&self.transcript)
+        } else {
+            self.session_transcripts.get(uid)
+        }?;
+        transcript.first_user_text().map(str::to_string)
     }
 
     /// 抹掉 ACP 列表状态：切后端、换 agent、能力不支持时调用。
@@ -175,7 +293,31 @@ impl AgentChatView {
     /// 走 `load` 还是 `resume` 由 agent 能力决定（`session/load` 能带回历史，优先）。
     /// 之后要重挂事件泵：新会话的 `session/update` 通知认的是新 id。
     pub(crate) fn open_acp_session(&mut self, acp_session_id: &str, cx: &mut Context<Self>) {
-        if !self.acp_session_list_visible() || self.is_running || self.acp_turn_owner.is_some() {
+        if !self.acp_session_list_visible() {
+            return;
+        }
+        let cwd = self
+            .acp_sessions
+            .iter()
+            .find(|session| session.id == acp_session_id)
+            .map(|session| session.cwd.clone())
+            .unwrap_or_else(|| self.workspace_root.clone());
+        self.open_protocol_session(acp_session_id, cwd, cx);
+    }
+
+    /// 打开一条协议会话（列表点击与重开外部会话共用）。
+    ///
+    /// 不再要求 `session/list` 可见：那是列表 UI 的前提，不是 `load` 的前提——
+    /// 重开一条落盘的会话时手上根本没有列表，但 agent 支持 `load` 时仍然要把
+    /// 历史带回来。真正的能力判定在 `acp_session_open_kind`（拿不到打开方式就
+    /// 什么也不做，不变量 11）。
+    pub(crate) fn open_protocol_session(
+        &mut self,
+        acp_session_id: &str,
+        cwd: std::path::PathBuf,
+        cx: &mut Context<Self>,
+    ) {
+        if self.is_running || self.acp_turn_owner.is_some() {
             return;
         }
         if self.acp_connecting || self.acp_session_transition.is_some() {
@@ -274,6 +416,8 @@ impl AgentChatView {
                     &protocol_session_id,
                     cx,
                 );
+                // 从 agent 自己的列表里挑中的会话，同样要留在侧栏会话列表里。
+                self.persist_acp_session(&session_uid, cx);
             }
             Err(error) => {
                 let message =

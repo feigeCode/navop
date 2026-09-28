@@ -620,7 +620,10 @@ impl WorkbenchShell {
                     .flex_shrink_0()
                     .text_xs()
                     .text_color(theme.muted_foreground)
-                    .child(format_timestamp(summary.updated_at)),
+                    .child(match summary.external_agent.as_ref() {
+                        Some(agent) => format!("{} · {}", agent, format_timestamp(summary.updated_at)),
+                        None => format_timestamp(summary.updated_at),
+                    }),
             )
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.open_session_from_list(&id, workspace_root.as_deref(), cx);
