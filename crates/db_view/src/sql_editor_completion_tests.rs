@@ -1845,7 +1845,7 @@ mod tests {
     // =========================================================================
 
     use crate::sql_editor::{
-        ForeignSchema, SqlContext as LocalSqlContext, dot_qualifier_chain,
+        ForeignSchema, ForeignSchemaScope, SqlContext as LocalSqlContext, dot_qualifier_chain,
         find_columns_with_foreign, foreign_column_items, foreign_table_items,
         pending_foreign_qualifiers, qualifier_name_items, sql_dot_completion_target_for_chain,
     };
@@ -1874,6 +1874,10 @@ mod tests {
         );
         ForeignSchema {
             name: "test2".to_string(),
+            scope: ForeignSchemaScope {
+                database: "test2".to_string(),
+                schema: None,
+            },
             tables: vec![("t1".to_string(), "Foreign table".to_string())],
             columns_by_table,
             table_details: HashMap::new(),
@@ -2082,7 +2086,9 @@ mod tests {
 
 #[cfg(test)]
 mod cross_schema_provider_tests {
-    use crate::sql_editor::{DefaultSqlCompletionProvider, ForeignSchema, SqlSchema};
+    use crate::sql_editor::{
+        DefaultSqlCompletionProvider, ForeignSchema, ForeignSchemaScope, SqlSchema,
+    };
     use gpui::{AppContext, Context, Entity, IntoElement, Render, Window, div};
     use gpui_component::input::{CompletionProvider, InputState};
     use gpui_component::{Rope, Theme};
@@ -2109,6 +2115,10 @@ mod cross_schema_provider_tests {
             .with_qualifiers(vec![("test2".to_string(), "Database".to_string())])
             .with_foreign_schema(ForeignSchema {
                 name: "test2".to_string(),
+                scope: ForeignSchemaScope {
+                    database: "test2".to_string(),
+                    schema: None,
+                },
                 tables: vec![("t1".to_string(), String::new())],
                 columns_by_table,
                 table_details: HashMap::new(),

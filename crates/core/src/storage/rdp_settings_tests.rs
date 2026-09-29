@@ -1,7 +1,7 @@
 use super::{
-    RdpAudioMode, RdpAudioQuality, RdpDisplayMode, RdpGatewayCredentialSource, RdpGatewayMode,
-    RdpKeyboardHookMode, RdpNetworkConnectionType, RdpPerformancePreset, RdpSettings,
-    RemoteDesktopParams,
+    RdpAudioMode, RdpAudioQuality, RdpDisplayMode, RdpEgfxMode, RdpGatewayCredentialSource,
+    RdpGatewayMode, RdpKeyboardHookMode, RdpNetworkConnectionType, RdpPerformancePreset,
+    RdpSettings, RemoteDesktopParams,
 };
 
 #[test]
@@ -207,4 +207,34 @@ fn stored_connection_round_trip_keeps_legacy_rdp_settings_none() {
         RdpAudioMode::Local,
         restored.effective_rdp_settings().audio.mode
     );
+}
+
+#[test]
+fn egfx_defaults_to_a_retry_when_a_server_refuses_the_connection() {
+    assert_eq!(RdpEgfxMode::Auto, RdpSettings::default().graphics.egfx);
+}
+
+#[test]
+fn rdp_settings_without_graphics_default_to_auto_egfx() {
+    let settings: RdpSettings = serde_json::from_str("{}").unwrap();
+
+    assert_eq!(RdpEgfxMode::Auto, settings.graphics.egfx);
+}
+
+#[test]
+fn egfx_mode_round_trips_through_settings_json() {
+    for (mode, label) in [
+        (RdpEgfxMode::Auto, "auto"),
+        (RdpEgfxMode::Always, "always"),
+        (RdpEgfxMode::Never, "never"),
+    ] {
+        let mut settings = RdpSettings::default();
+        settings.graphics.egfx = mode;
+
+        let encoded = serde_json::to_string(&settings).unwrap();
+        assert!(encoded.contains(&format!("\"egfx\":\"{label}\"")));
+
+        let decoded: RdpSettings = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(mode, decoded.graphics.egfx);
+    }
 }

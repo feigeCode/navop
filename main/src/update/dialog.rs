@@ -20,7 +20,8 @@ use gpui::{
 };
 use gpui_component::WindowExt;
 use one_core::gpui_tokio::Tokio;
-use one_core::popup_window::{PopupWindowOptions, open_popup_window};
+use one_core::popup_window::{PopupWindowOptions, open_reusable_popup_window};
+use one_core::window_close::close_window_for_reuse;
 use rust_i18n::t;
 
 #[path = "dialog_render.rs"]
@@ -32,11 +33,25 @@ const AVAILABLE_WINDOW_HEIGHT: f32 = 450.0;
 const DOWNLOAD_WINDOW_WIDTH: f32 = 440.0;
 const DOWNLOAD_WINDOW_HEIGHT: f32 = 170.0;
 
+/// 更新弹窗的复用键（见 [`open_reusable_popup_window`]）。
+///
+/// 这个窗口会在启动时自动弹出，用户随手一关就是一次原生窗口销毁 —— macOS 上那是
+/// `EXC_CRASH (SIGABRT)` 的触发点。改成「关闭即隐藏 + 复用」后，同一个会话里再次
+/// 检查更新会重新显示它，并用新的 `info` 重建 view。
+const UPDATE_DIALOG_WINDOW_KEY: &str = "update.available";
+
 pub(super) fn show_update_dialog(info: UpdateDialogInfo, cx: &mut App) {
-    open_popup_window(
+    open_reusable_popup_window(
         PopupWindowOptions::new(t!("Update.title").to_string())
             .size(AVAILABLE_WINDOW_WIDTH, AVAILABLE_WINDOW_HEIGHT),
-        move |_window, cx| cx.new(|cx| UpdateDialogView::new(info, cx)),
+        UPDATE_DIALOG_WINDOW_KEY,
+        move |_window, cx| {
+            // factory 会被调用多次（每次重新显示都重建 view），所以在里面 clone 一份，
+            // 让外层闭包保持 `Fn`。重建 view 同时也就把 downloading / progress 之类的
+            // 上一次状态全部清掉了。
+            let info = info.clone();
+            cx.new(move |cx| UpdateDialogView::new(info, cx))
+        },
         None,
         cx,
     );
@@ -97,7 +112,7 @@ impl UpdateDialogView {
         }
 
         if self.completed && self.info.is_local_simulation {
-            window.remove_window();
+            let _ = close_window_for_reuse(window, cx);
             return;
         }
 
@@ -130,7 +145,7 @@ impl UpdateDialogView {
             return;
         }
 
-        window.remove_window();
+        let _ = close_window_for_reuse(window, cx);
     }
 
     fn start_download(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -383,7 +398,7 @@ impl UpdateDialogView {
         AppSettings::update_and_save(cx, |settings| {
             settings.skipped_update_version = Some(latest_version);
         });
-        window.remove_window();
+        let _ = close_window_for_reuse(window, cx);
     }
 
     fn status_message(&self) -> String {

@@ -5,8 +5,49 @@ use tokio::sync::watch;
 
 use crate::RemoteDesktopOutput;
 
-const MAX_PENDING_DELTA_RECTS: usize = 8192;
-const MAX_PENDING_DELTA_BYTES: usize = 16 * 1024 * 1024;
+/// Fixed floor for a session that has not reported its desktop size yet.
+const MIN_PENDING_DELTA_RECTS: usize = 8192;
+const MIN_PENDING_DELTA_BYTES: usize = 16 * 1024 * 1024;
+/// Ceiling so a misbehaving stream cannot queue unbounded memory.
+const MAX_PENDING_DELTA_RECTS: usize = 65_536;
+const MAX_PENDING_DELTA_BYTES: usize = 256 * 1024 * 1024;
+/// How many screens worth of pending deltas may accumulate before the chain is dropped.
+const PENDING_DELTA_SCREEN_BUDGET: usize = 3;
+const PIXELS_PER_PENDING_DELTA_RECT: usize = 32;
+
+/// How much pending delta payload fits before the queued chain is discarded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DeltaLimits {
+    rects: usize,
+    bytes: usize,
+}
+
+impl DeltaLimits {
+    /// Budget for the desktop the deltas describe.
+    ///
+    /// A single legitimate delta repaints an arbitrary part of the screen, up to all of
+    /// it, so a fixed byte budget rejects what any high-resolution session produces
+    /// routinely: at 2724x1530 one full-screen update is already 16 MB. Scaling with the
+    /// desktop keeps the same "a few screens behind, then resynchronize" behaviour at
+    /// every resolution instead of only at 1080p.
+    fn for_extent(extent: Option<(u16, u16)>) -> Self {
+        let Some((width, height)) = extent else {
+            return Self {
+                rects: MIN_PENDING_DELTA_RECTS,
+                bytes: MIN_PENDING_DELTA_BYTES,
+            };
+        };
+
+        let pixels = usize::from(width).saturating_mul(usize::from(height));
+        let screen_bytes = pixels.saturating_mul(4);
+        let bytes = screen_bytes
+            .saturating_mul(PENDING_DELTA_SCREEN_BUDGET)
+            .clamp(MIN_PENDING_DELTA_BYTES, MAX_PENDING_DELTA_BYTES);
+        let rects = (pixels / PIXELS_PER_PENDING_DELTA_RECT).clamp(MIN_PENDING_DELTA_RECTS, MAX_PENDING_DELTA_RECTS);
+
+        Self { rects, bytes }
+    }
+}
 
 #[derive(Debug, Default)]
 pub struct OutputBatch {
@@ -72,6 +113,9 @@ struct State {
     /// One-shot notification consumed by `drain`. This is mailbox content so
     /// an overflow that discards the only pending delta still wakes the view.
     pending_frame_sync_lost: bool,
+    /// Size of the desktop the accepted frames describe, used to size the
+    /// pending delta budget.
+    frame_extent: Option<(u16, u16)>,
     next_session_generation: u64,
     active_session_generation: Option<u64>,
     receiver_alive: bool,
@@ -90,6 +134,7 @@ pub fn output_mailbox() -> (OutputMailboxSender, OutputMailboxReceiver) {
         accepting_frames: true,
         awaiting_full_frame: false,
         pending_frame_sync_lost: false,
+        frame_extent: None,
         next_session_generation: 0,
         active_session_generation: None,
         notification_epoch: 0,
@@ -147,6 +192,9 @@ impl OutputMailboxSender {
             return Ok(());
         }
         let was_empty = state.is_empty();
+        if let Some(extent) = output_extent(&output) {
+            state.frame_extent = Some(extent);
+        }
         match output {
             frame @ (RemoteDesktopOutput::Frame { .. } | RemoteDesktopOutput::FrameBgra { .. }) => {
                 if state.accepting_frames {
@@ -174,7 +222,7 @@ impl OutputMailboxSender {
                     if state.awaiting_full_frame {
                         state.pending_stats.frames_dropped =
                             state.pending_stats.frames_dropped.saturating_add(1);
-                    } else if pending_delta_fits_budget(state.latest_delta.as_ref(), &delta) {
+                    } else if pending_delta_fits_budget(&state, &delta) {
                         if state.latest_delta.is_some() {
                             state.pending_stats.delta_frames_merged =
                                 state.pending_stats.delta_frames_merged.saturating_add(1);
@@ -184,14 +232,24 @@ impl OutputMailboxSender {
                             None => delta,
                         });
                     } else {
+                        // The pending deltas no longer fit in memory. A complete frame is
+                        // a snapshot of the whole desktop, so when one is already queued
+                        // the deltas on top of it can be dropped without losing the
+                        // point the view synchronizes from: the areas they covered simply
+                        // keep the older pixels until the server repaints them. Asking
+                        // for a resynchronized session instead is what turned a single
+                        // oversized delta into an endless reconnect loop.
+                        let has_base = state.latest_frame.is_some();
                         state.pending_stats.frames_dropped = state
                             .pending_stats
                             .frames_dropped
                             .saturating_add(1)
                             .saturating_add(u64::from(state.latest_delta.is_some()));
                         state.latest_delta = None;
-                        state.awaiting_full_frame = true;
-                        state.pending_frame_sync_lost = true;
+                        if !has_base {
+                            state.awaiting_full_frame = true;
+                            state.pending_frame_sync_lost = true;
+                        }
                     }
                 } else {
                     state.pending_stats.frames_dropped =
@@ -387,14 +445,11 @@ fn merge_deltas(previous: RemoteDesktopOutput, next: RemoteDesktopOutput) -> Rem
     }
 }
 
-fn pending_delta_fits_budget(
-    previous: Option<&RemoteDesktopOutput>,
-    next: &RemoteDesktopOutput,
-) -> bool {
+fn pending_delta_fits_budget(state: &State, next: &RemoteDesktopOutput) -> bool {
     let Some((next_width, next_height, next_rects, next_bytes)) = delta_metadata(next) else {
         return false;
     };
-    let (pending_rects, pending_bytes) = match previous {
+    let (pending_rects, pending_bytes) = match state.latest_delta.as_ref() {
         Some(previous) => {
             let Some((width, height, rects, bytes)) = delta_metadata(previous) else {
                 return false;
@@ -407,8 +462,20 @@ fn pending_delta_fits_budget(
         None => (0, 0),
     };
 
-    pending_rects.saturating_add(next_rects) <= MAX_PENDING_DELTA_RECTS
-        && pending_bytes.saturating_add(next_bytes) <= MAX_PENDING_DELTA_BYTES
+    let limits = DeltaLimits::for_extent(state.frame_extent);
+
+    pending_rects.saturating_add(next_rects) <= limits.rects
+        && pending_bytes.saturating_add(next_bytes) <= limits.bytes
+}
+
+/// Desktop size a frame output describes, when it carries one.
+fn output_extent(output: &RemoteDesktopOutput) -> Option<(u16, u16)> {
+    match output {
+        RemoteDesktopOutput::Frame { width, height, .. }
+        | RemoteDesktopOutput::FrameBgra { width, height, .. }
+        | RemoteDesktopOutput::FrameBgraRects { width, height, .. } => Some((*width, *height)),
+        _ => None,
+    }
 }
 
 fn delta_metadata(output: &RemoteDesktopOutput) -> Option<(u16, u16, usize, usize)> {

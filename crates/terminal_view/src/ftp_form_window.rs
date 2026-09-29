@@ -32,6 +32,8 @@ use one_core::storage::traits::Repository;
 use one_core::storage::{FtpParams, StoredConnection, Workspace};
 use rust_i18n::t;
 
+/// FTP 表单窗口配置。`Clone` 见 `one_core::popup_window::open_reusable_popup_window`。
+#[derive(Clone)]
 pub struct FtpFormWindowConfig {
     pub editing_connection: Option<StoredConnection>,
     pub workspaces: Vec<Workspace>,
@@ -479,7 +481,7 @@ impl FtpFormWindow {
                         cx.emit(event);
                     });
                 }
-                window.remove_window();
+                let _ = one_core::window_close::close_window_for_reuse(window, cx);
             }
             Err(error) => {
                 let message = t!("Ftp.save_failed", error = error).to_string();
@@ -490,8 +492,8 @@ impl FtpFormWindow {
         }
     }
 
-    fn on_cancel(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
-        window.remove_window();
+    fn on_cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let _ = one_core::window_close::close_window_for_reuse(window, cx);
     }
 
     fn render_form_row(&self, label: &str, child: impl IntoElement) -> impl IntoElement {

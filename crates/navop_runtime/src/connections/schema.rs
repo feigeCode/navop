@@ -465,7 +465,9 @@ fn port_forwarding_schema() -> Value {
     ])
 }
 
-fn remote_desktop_schema(default_port: u16, supports_audio_playback: bool) -> Value {
+/// Only RDP connections can advertise the Graphics Pipeline Extension, so only they expose the
+/// policy that controls it.
+fn remote_desktop_schema(default_port: u16, is_rdp: bool) -> Value {
     let mut fields = vec![
         field("name", "string", true, Value::Null),
         field("host", "string", true, Value::Null),
@@ -475,8 +477,14 @@ fn remote_desktop_schema(default_port: u16, supports_audio_playback: bool) -> Va
         field("domain", "string", false, Value::Null),
         field("read_only", "boolean", false, json!(false)),
     ];
-    if supports_audio_playback {
+    if is_rdp {
         fields.push(field("audio_playback", "boolean", false, json!(false)));
+        fields.push(enum_field(
+            "egfx",
+            &["auto", "always", "never"],
+            false,
+            json!("auto"),
+        ));
     }
     Value::Array(fields)
 }

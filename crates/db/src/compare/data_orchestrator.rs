@@ -1716,6 +1716,7 @@ mod tests {
             comment: Some("important amount".to_string()),
             charset: Some("utf8mb4".to_string()),
             collation: Some("utf8mb4_bin".to_string()),
+            is_auto_increment: false,
         }];
 
         let mapped = map_missing_target_columns(
@@ -1747,6 +1748,7 @@ mod tests {
                 comment: None,
                 charset: None,
                 collation: None,
+                is_auto_increment: false,
             }],
             &DatabaseType::ClickHouse,
             &DatabaseType::PostgreSQL,
@@ -1770,6 +1772,7 @@ mod tests {
                 comment: None,
                 charset: None,
                 collation: None,
+                is_auto_increment: false,
             }],
             &DatabaseType::PostgreSQL,
             &DatabaseType::MySQL,

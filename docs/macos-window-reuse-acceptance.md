@@ -1,0 +1,199 @@
+# macOS「关闭即隐藏」窗口复用 · 内部验收方案
+
+适用范围：打包时开了 `macos-touchbar-window-hide` 的 macOS 构建（当前发布流水线只给
+`x86_64-apple-darwin` 打开）。这套机制现在的定位是**客户可用的临时方案**：把「关闭即销毁」
+换成「关闭即隐藏」，代价是隐藏的原生窗口一直占着 `NSWindow` / `CAMetalLayer`。
+
+本文回答一个问题：**这个代价是不是受控、可测、有界的**。不是「有没有泄漏」的学术问题 ——
+是「下一轮能不能交付」的准入条件。
+
+## 1. 这套机制承诺什么
+
+| 对象 | 关闭时的动作 | 上限 |
+|---|---|---|
+| 原生窗口（有复用键） | `orderOut` 隐藏，条目留在复用表 | **复用键数量**（同一目标反复开关不增长） |
+| 原生窗口（一次性弹窗） | 隐藏并**停放**，没人会重新显示它 | **这类弹窗的打开次数**（只增不减） |
+| 业务会话（view、数据、任务句柄） | 关闭时**同步**结束 | 0（关闭后必须回落） |
+
+「上限＝打开次数」这一条是**已知且接受**的代价，不是泄漏。真正的泄漏长这样：关闭后
+`live_sessions` 不回落，或者同一个复用键每次都新建窗口（`opened_windows` 跟着开关次数涨）。
+
+分层审计：这套机制只管**应用层**（隐藏 vs 销毁）。gpui fork 里的 `RETIRED_WINDOWS` 守卫是
+另一层（原生 release 的延迟退休），两层**分开看**，不要用一层的数字解释另一层。
+
+## 2. 观测手段
+
+### 2.1 生命周期日志（首选）
+
+`one_core::popup_lifecycle` 在每次登记/注销/会话开关时打一条 info 日志：
+
+```
+target: one_core::popup_lifecycle, stage: popup_window_registered,
+live_windows=..., reusable_windows=..., parked_windows=...,
+live_sessions=..., opened_windows=..., opened_sessions=...
+```
+
+字段怎么读：
+
+| 字段 | 含义 | 正常表现 |
+|---|---|---|
+| `live_windows` | 登记在册的弹窗窗口壳总数 | 复用生效时趋于常数 |
+| `reusable_windows` | 其中按复用键复用的（`live_windows` 的一部分） | **同目标反复开关不增长** |
+| `parked_windows` | 其中一次性停放的（`live_windows` 的其余部分） | 随这类弹窗的打开次数增长；数量小且可列举 |
+| `live_sessions` | 当前挂着业务 view 的窗口数 | 全部关闭后回到基线 |
+| `opened_windows` | 累计创建的原生窗口数 | 只随**真的新建**增长，同目标复用不涨 |
+| `opened_sessions` | 累计打开的业务会话数 | 等于有效打开次数，可以大于 `opened_windows` |
+
+取日志：
+
+```bash
+# 默认日志文件在平台配置目录下（macOS 一般是 ~/Library/Application Support/navop/logs/navop.log），
+# 设置里可以覆盖路径。
+LOG="$HOME/Library/Application Support/navop/logs/navop.log"
+grep popup_lifecycle "$LOG" | tail -40
+# 只关心这套机制时可以把 env filter 收窄：
+# RUST_LOG=one_core::popup_lifecycle=info
+```
+
+窗口壳总量可以随时从稳态的 `live_windows` 读出来；**空闲窗口壳（隐藏着、没有会话）＝
+`live_windows − live_sessions`**。注意关闭瞬间的窗口注销与 `Drop` 归还计数有先后，这个差值
+在那一刹那可能是 `-1`；看稳态值。
+
+### 2.2 这套日志还没覆盖到的（本轮用外部手段补）
+
+- **fork 层的原生窗口退休数**（`RETIRED_WINDOWS` 守卫）：没进上面的日志。要看它得开 fork 的
+  诊断日志 / 在 lldb 里断点，属于「根因线」的事，本轮不做。
+- **业务 view 的创建/释放次数**：`popup_lifecycle` 只能给出近似（`opened_sessions` /
+  `live_sessions`）；远程编辑器窗口另有自己的计数，target `remote_file_editor::lifecycle`
+  （`record_editor_view_created` / `record_editor_view_dropped` / `record_editor_tab_created` /
+  `record_editor_tab_dropped` / `record_editor_view_released_with_tabs`）。所以本轮内存结论
+  **必须**用 Instruments 的代际对比兜底。
+- **后台任务与连接数**：没有统一计数。用「连接面板里实际列出的连接数」+ Instruments 里的
+  任务/线程曲线代替。
+
+## 3. 场景矩阵
+
+每一条都在**带 Touch Bar 的 macOS 实机**上跑（Intel 用发布包即可；Apple Silicon 的 13 英寸
+MacBook Pro 需要自己按 `--features macos-touchbar-window-hide` 构建一个包）。每条开始前先记
+一次基线（`live_windows` / `reusable_windows` / `parked_windows` / `live_sessions`）。
+
+### S1 同一目标重复开关 ×100
+
+用同一个连接反复打开/关闭编辑表单（100 次）。
+
+- 步骤：每次「打开 → 关掉（换着用红点 / 取消 / Cmd-W）」。
+- 记录：首末两端的 `reusable_windows`、`opened_windows`、`live_sessions`；Instruments 第 1 轮
+  与第 10 轮之后的存活分配对比。
+- 通过判据：`live_sessions` 每次回到基线；`reusable_windows` 只在**第一次** +1；
+  `opened_windows` 与开关次数**不同步增长**（同目标复用命中）；
+  Instruments 代际对比在若干轮后趋于平台期（不是每轮都留一份）。
+- 不通过的含义：复用没命中（退化成每次新建窗口），或会话没卸载。
+
+### S2 不同目标依次开关 ×100
+
+100 个不同的目标各开关一次（不同连接、不同表导出、不同远程桌面目标）。
+
+- 记录：每 10 个目标记一次 `live_windows` / `reusable_windows` / `parked_windows`。
+- 预期（**当前设计就是这样，不是 bug**）：`reusable_windows` 随**不同目标数**线性增长，等价于
+  「历史目标数」而不是「同时打开数」——每个目标各占一个隐藏窗口壳。这条测试的目的不是判
+  通过/不通过，而是**量出增长曲线的斜率和每壳的内存代价**，作为下一改动的基线。
+- 通过判据：增长只跟「不同目标数」相关，不跟「开关次数」相关；`live_sessions` 每次回落。
+- 不通过的含义：增长跟开关次数一起走 ⇒ 复用键不稳定（同一目标算出不同的键）。
+
+### S3 多目标同时打开再关闭
+
+同时打开 3～5 个不同目标的窗口（同时编辑两个连接、同时连两台远程桌面、同一连接库的不同表
+导出），逐个关闭。
+
+- 通过判据：互不顶掉（每个窗口内容属于自己那个目标）、关闭后 `live_sessions` 回落、
+  `reusable_windows` 等于同时打开过的不同目标数。
+- 不通过的含义：复用键丢了目标身份（按「弹窗种类」复用），后开的把先开的顶掉，或者内容串了。
+
+### S4 所有关闭入口
+
+对同一个窗口分别用：原生红点、取消、确定、保存、Cmd-W。
+
+- 通过判据：五种入口的**策略一致**（都只隐藏、都结束会话）；保存失败时业务语义正确
+  （表单不关、提示报错、会话不结束、`live_sessions` 不回落）。
+- 不通过的含义：还有入口绕过统一漏斗 —— 也就是「还剩一条会销毁的路线」，闪退风险重新出现。
+
+### S5 慢任务期间关闭并立即重开
+
+在「连接测试 / 加载表数据 / 保存」进行中关闭窗口，然后立刻重开同一个目标。
+
+- 通过判据：旧任务的结果**不会**出现在新会话里（不串数据、不弹旧提示）；重开是复用同一个
+  窗口壳（`opened_windows` 不 +1）；后台任务数没有因为复用多留一份。
+- 不通过的含义：旧任务持有的是强引用，或者会话没真正结束。
+
+### S6 远程桌面全屏进出后关闭/重开
+
+进入全屏 → 退出全屏 → 关闭 → 对同一目标重开。
+
+- 通过判据：显示状态（全屏/窗口化、分辨率）、连接资源、关闭行为与首次打开一致；`live_sessions`
+  回落；没有残留的全屏窗口壳。
+- 不通过的含义：复用时窗口状态没重置（大小/全屏/焦点约束没回到初始）。
+
+## 4. 内存代际验证（不要只看 Activity Monitor）
+
+Activity Monitor 的一个数字分不清「受控保留」和「持续增长」。Apple 推荐的做法是代际标记：
+
+1. Instruments → Allocations，attach 到 navop。
+2. 记基线（Mark Generation A）。
+3. 跑完一轮场景（例如 S1 的 10 次开关），等界面回到稳态、GC/autorelease 排空。
+4. Mark Generation B，看**两代之间的存活分配**（Persistent 部分），按 size 排序找
+   `NSWindow` / `CAMetalLayer` / `CGGlyph` / 业务 view 类型的增量。
+5. 连续多轮做同一件事：正常的复用是**第 2 轮起增量为 0（或极小）**；每轮都留下等量对象就是
+   增长问题。
+
+要分开看的类型：
+
+- `NSWindow` / `CAMetalLayer`：壳的代价（受控，上限＝复用键数 + 停放数）。
+- 上一轮的业务 view / 大缓冲区：会话没卸载（真泄漏）。
+- 任务句柄 / socket：后台任务没被取消（真泄漏）。
+
+## 5. 通过标准与停止条件
+
+**可以进下一轮交付**：
+
+- S1、S3、S4、S5、S6 全部通过；
+- S2 的增长曲线有明确解释（= 不同目标数）且记录了每壳代价；
+- Instruments 代际对比里，同一场景第 2 轮起的持久增量可以忽略，或增量能一一对应到「已登记的
+  窗口壳」。
+
+**必须停下来先修**（不允许带着这些结论发版）：
+
+- 关闭后 `live_sessions` 不回落；
+- 同一目标反复开关时 `reusable_windows` 或 `opened_windows` 跟着涨（复用键不稳定）；
+- 任一关闭入口绕过统一漏斗（源码契约或实机行为都算）；
+- 跨目标串数据 / 旧任务污染新会话；
+- 每轮都留下等量的业务 view / 任务对象。
+
+**注意**：「窗口壳数 ≈ 历史目标数」**不在**停止条件里 —— 它是当前设计的已知代价，收敛方向是
+第 6 节那条独立改动。
+
+## 6. 本轮不做（明确划出去）
+
+1. **空闲窗口壳池 + 业务会话隔离**（把「目标身份 → 窗口」和「可复用的空闲壳」拆开，关闭时
+   解绑目标、把壳归还到按窗口类型分的池子里）。这是**独立改动**，要单独验证：旧异步回调不能
+   写进新会话（会话代际号或弱引用隔离）、标题/尺寸/焦点/全屏/关闭回调都要重置、不兼容的原生
+   窗口配置不能混用。**不要把「池满就销毁最旧的窗口」当兜底** —— 销毁安全性还没证明，要限流
+   就限制新建，而不是偷偷退回已知有风险的路径（LRU 淘汰同理）。
+2. **fork 层守卫的异常级追踪**：给守卫加调用序号 / 异常地址 / 阶段记录（`caught` / `matched` /
+   `will_rethrow` / `release_done` / `forward_exit`），在可复现机器上用 ObjC 异常断点抓抛出点，
+   把每次异常对齐到守卫的处理记录，判断是后续异常、重复抛出还是返回不完整。这是「能不能恢复
+   原生释放」的前置问题，和上面那条**分开**做。
+3. **Apple Silicon 侧是否要默认打开**：需要那一侧的现场证据（见
+   `docs/macos-memory-investigation.md` §10.12 的范围说明）。
+
+## 7. 记录模板
+
+```
+场景：S1 同目标重复开关
+机器/系统：MacBookPro16,2 / macOS 14.8.9
+包：navop-0.19.4-macos-x64.dmg (sha256 …)
+基线：live_windows=1 reusable=1 parked=0 sessions=0
+第 10 次：live_windows=1 reusable=1 parked=0 sessions=0
+第 100 次：live_windows=1 reusable=1 parked=0 sessions=0
+Instruments：G-A → G-B 持久增量 +0.3 MB（NSWindow 无新增）
+结论：通过 / 不通过（原因）
+```

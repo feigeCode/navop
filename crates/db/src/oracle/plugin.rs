@@ -359,6 +359,39 @@ impl OraclePlugin {
             limit_clause
         ))
     }
+
+    /// 查出表内 identity 列名。
+    ///
+    /// `all_tab_identity_cols` 是 Oracle 12c 才有的字典视图，查询在 11g 会报错；
+    /// 这里容许失败（记日志后当没有 identity 列），不能因为自增元数据把整个列清单弄挂。
+    async fn identity_columns(
+        &self,
+        connection: &dyn DbConnection,
+        owner: &str,
+        table: &str,
+    ) -> Vec<String> {
+        let sql = format!(
+            "SELECT column_name FROM all_tab_identity_cols \
+             WHERE owner = '{}' AND table_name = '{}'",
+            owner.replace("'", "''"),
+            table.replace("'", "''")
+        );
+        let Ok(SqlResult::Query(result)) = connection.query(&sql).await else {
+            tracing::debug!(
+                owner = %owner,
+                table = %table,
+                "Oracle identity columns unavailable; treating table as having none"
+            );
+            return Vec::new();
+        };
+        (0..result.rows.len())
+            .filter_map(|row_index| {
+                crate::metadata_read::metadata_text(&result, row_index, 0, "utf8mb4")
+                    .ok()
+                    .flatten()
+            })
+            .collect()
+    }
 }
 
 fn is_oracle_lob_column(column: Option<&ColumnInfo>) -> bool {
@@ -1812,6 +1845,9 @@ impl DatabasePlugin for OraclePlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list columns: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
+            // Oracle 12c 才有 identity 列，且 `all_tab_columns.identity_column` 在旧版本
+            // 直接报错；用 `all_tab_identity_cols` 单独查并容许失败，旧库就当没有。
+            let identity_columns = self.identity_columns(connection, &owner, table).await;
             let mut columns = Vec::new();
             for row_index in 0..query_result.rows.len() {
                 let cell = |column_index| {
@@ -1824,8 +1860,12 @@ impl DatabasePlugin for OraclePlugin {
                 };
                 let is_nullable = cell(2)?.unwrap_or_else(|| "Y".to_string()) == "Y";
                 let is_pk = cell(4)?.unwrap_or_else(|| "N".to_string()) == "Y";
+                let name = cell(0)?.unwrap_or_default();
+                let is_auto_increment = identity_columns
+                    .iter()
+                    .any(|column| column.eq_ignore_ascii_case(&name));
                 columns.push(ColumnInfo {
-                    name: cell(0)?.unwrap_or_default(),
+                    name,
                     data_type: cell(1)?.unwrap_or_default(),
                     is_nullable,
                     is_primary_key: is_pk,
@@ -1833,6 +1873,7 @@ impl DatabasePlugin for OraclePlugin {
                     comment: cell(5)?,
                     charset: None,
                     collation: None,
+                    is_auto_increment,
                 });
             }
             Ok(columns)
@@ -3616,6 +3657,7 @@ mod tests {
             comment: None,
             charset: None,
             collation: None,
+            is_auto_increment: false,
         }
     }
 

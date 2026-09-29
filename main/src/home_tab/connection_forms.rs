@@ -22,6 +22,19 @@ fn editable_extension_connection(connection: &StoredConnection) -> Option<Stored
     connection.to_extension_params().ok().map(|_| connection)
 }
 
+/// 连接表单弹窗的复用键。
+///
+/// 表单窗口关闭时只隐藏、不销毁（带 Touch Bar 的 Mac 上关闭即闪退的修法），同一个键再次打开时
+/// 重新显示同一个原生窗口，所以键要带上「哪一类表单 + 哪一个连接」：「新建」只占一个槽位
+/// （同一时刻只需要一个新建表单），编辑表单按连接 id 各占一个 —— 否则给 B 打开编辑表单
+/// 会把 A 那个（连同 A 里没保存的修改）顶掉。
+pub(super) fn connection_form_reuse_key(kind: &str, editing: Option<&StoredConnection>) -> String {
+    match editing.and_then(|connection| connection.id) {
+        Some(id) => format!("connection-form:{kind}:{id}"),
+        None => format!("connection-form:{kind}:new"),
+    }
+}
+
 impl HomePage {
     pub(crate) fn show_extension_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let editing = self
@@ -69,10 +82,13 @@ impl HomePage {
             teams: get_cached_team_options(cx),
         };
         self.editing_connection_id = None;
-        open_popup_window(
+        open_reusable_popup_window(
             PopupWindowOptions::new(format!("Edit {}", connection.name)).size(700.0, 650.0),
+            connection_form_reuse_key("extension", config.editing_connection.as_ref()),
             move |window, cx| {
-                cx.new(|cx| universal_plugins::ExtensionConnectionForm::new(config, window, cx))
+                cx.new(|cx| {
+                    universal_plugins::ExtensionConnectionForm::new(config.clone(), window, cx)
+                })
             },
             Some(window),
             cx,
@@ -197,9 +213,10 @@ impl HomePage {
         } else {
             650.0
         };
-        open_popup_window(
+        open_reusable_popup_window(
             PopupWindowOptions::new(title).size(700.0, popup_height),
-            move |window, cx| cx.new(|cx| ConnectionFormWindow::new(config, window, cx)),
+            connection_form_reuse_key(config.db_type.as_str(), config.editing_connection.as_ref()),
+            move |window, cx| cx.new(|cx| ConnectionFormWindow::new(config.clone(), window, cx)),
             Some(window),
             cx,
         );
@@ -231,9 +248,10 @@ impl HomePage {
             teams: get_cached_team_options(cx),
         };
 
-        open_popup_window(
+        open_reusable_popup_window(
             PopupWindowOptions::new(t!("Home.save_as_connection").to_string()).size(820.0, 750.0),
-            move |window, cx| cx.new(|cx| SshFormWindow::new(config, window, cx)),
+            connection_form_reuse_key("ssh-save-temporary", None),
+            move |window, cx| cx.new(|cx| SshFormWindow::new(config.clone(), window, cx)),
             Some(window),
             cx,
         );
@@ -270,9 +288,10 @@ impl HomePage {
                 t!("SSH.new").to_string()
             },
         );
-        open_popup_window(
+        open_reusable_popup_window(
             PopupWindowOptions::new(title).size(820.0, 750.0),
-            move |window, cx| cx.new(|cx| SshFormWindow::new(config, window, cx)),
+            connection_form_reuse_key("ssh", config.editing_connection.as_ref()),
+            move |window, cx| cx.new(|cx| SshFormWindow::new(config.clone(), window, cx)),
             Some(_window),
             cx,
         );
@@ -312,9 +331,10 @@ impl HomePage {
             "Redis",
             config.editing_connection.as_ref(),
         );
-        open_popup_window(
+        open_reusable_popup_window(
             PopupWindowOptions::new(title).size(700.0, 650.0),
-            move |window, cx| cx.new(|cx| RedisFormWindow::new(config, window, cx)),
+            connection_form_reuse_key("redis", config.editing_connection.as_ref()),
+            move |window, cx| cx.new(|cx| RedisFormWindow::new(config.clone(), window, cx)),
             Some(_window),
             cx,
         );
@@ -349,9 +369,10 @@ impl HomePage {
                 t!("Ftp.new").to_string()
             },
         );
-        open_popup_window(
+        open_reusable_popup_window(
             PopupWindowOptions::new(title).size(700.0, 650.0),
-            move |window, cx| cx.new(|cx| FtpFormWindow::new(config, window, cx)),
+            connection_form_reuse_key("ftp", config.editing_connection.as_ref()),
+            move |window, cx| cx.new(|cx| FtpFormWindow::new(config.clone(), window, cx)),
             Some(_window),
             cx,
         );
@@ -386,9 +407,10 @@ impl HomePage {
             "MongoDB",
             config.editing_connection.as_ref(),
         );
-        open_popup_window(
+        open_reusable_popup_window(
             PopupWindowOptions::new(title).size(700.0, 650.0),
-            move |window, cx| cx.new(|cx| MongoFormWindow::new(config, window, cx)),
+            connection_form_reuse_key("mongo", config.editing_connection.as_ref()),
+            move |window, cx| cx.new(|cx| MongoFormWindow::new(config.clone(), window, cx)),
             Some(_window),
             cx,
         );
@@ -423,9 +445,10 @@ impl HomePage {
                 t!("Serial.new").to_string()
             },
         );
-        open_popup_window(
+        open_reusable_popup_window(
             PopupWindowOptions::new(title).size(700.0, 600.0),
-            move |window, cx| cx.new(|cx| SerialFormWindow::new(config, window, cx)),
+            connection_form_reuse_key("serial", config.editing_connection.as_ref()),
+            move |window, cx| cx.new(|cx| SerialFormWindow::new(config.clone(), window, cx)),
             Some(_window),
             cx,
         );
@@ -460,9 +483,10 @@ impl HomePage {
                 t!("Telnet.new").to_string()
             },
         );
-        open_popup_window(
+        open_reusable_popup_window(
             PopupWindowOptions::new(title).size(700.0, 600.0),
-            move |window, cx| cx.new(|cx| TelnetFormWindow::new(config, window, cx)),
+            connection_form_reuse_key("telnet", config.editing_connection.as_ref()),
+            move |window, cx| cx.new(|cx| TelnetFormWindow::new(config.clone(), window, cx)),
             Some(_window),
             cx,
         );

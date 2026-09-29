@@ -75,12 +75,14 @@ impl HomePage {
         let parent = cx.entity();
         let parent_window = window.window_handle();
         let external_driver_registry = self.external_driver_registry.clone();
-        open_popup_window(
+        open_reusable_popup_window(
             PopupWindowOptions::new(t!("Home.new_connection").to_string()).size(1100.0, 700.0),
+            // 新建连接向导全局只有一个：菜单 / 快捷键 / 空列表按钮共用同一个窗口。
+            "new-connection-dialog",
             move |window, cx| {
                 cx.new(|cx| {
                     NewConnectionWindow::new(
-                        parent,
+                        parent.clone(),
                         parent_window,
                         external_driver_registry.clone(),
                         window,

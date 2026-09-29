@@ -69,6 +69,11 @@ pub type SshFormSavedCallback = Arc<
     dyn Fn(StoredConnection, SshFormPostSaveAction, &mut Window, &mut App) + Send + Sync + 'static,
 >;
 
+/// SSH 表单窗口配置
+///
+/// `Clone` 是复用窗口的前提：同一类弹窗按目标复用同一个原生窗口，重建 view 时要把
+/// 配置按本次调用重新给一遍（见 `one_core::popup_window::open_reusable_popup_window`）。
+#[derive(Clone)]
 pub struct SshFormWindowConfig {
     pub editing_connection: Option<StoredConnection>,
     pub initial_connection: Option<StoredConnection>,
@@ -321,6 +326,9 @@ struct JumpMfaInput {
 fn credential_capabilities_for_auth(auth_method: AuthMethodSelection) -> CredentialCapabilities {
     match auth_method {
         AuthMethodSelection::Password => CredentialCapabilities::ssh_password(),
+        AuthMethodSelection::PasswordAndPrivateKey => {
+            CredentialCapabilities::ssh_password_and_private_key()
+        }
         AuthMethodSelection::PrivateKey | AuthMethodSelection::PrivateKeyContent => {
             CredentialCapabilities::ssh_private_key()
         }
@@ -561,6 +569,16 @@ fn load_jump_server_into_form(
                 jump_passphrase_input.update(cx, |s, cx| s.set_value(pass, window, cx));
             }
         }
+        SshAuthMethod::Chain(_) => {
+            *jump_auth_method = AuthMethodSelection::PasswordAndPrivateKey;
+            let (chain_password, chain_key_path, chain_private_key, chain_passphrase) =
+                combined_auth_fields(&jump.auth_method);
+            jump_password_input.update(cx, |s, cx| s.set_value(&chain_password, window, cx));
+            jump_key_path_input.update(cx, |s, cx| s.set_value(&chain_key_path, window, cx));
+            jump_private_key_content_input
+                .update(cx, |s, cx| s.set_value(&chain_private_key, window, cx));
+            jump_passphrase_input.update(cx, |s, cx| s.set_value(&chain_passphrase, window, cx));
+        }
         SshAuthMethod::Agent => {
             *jump_auth_method = AuthMethodSelection::Agent;
         }
@@ -582,6 +600,10 @@ fn build_jump_auth_method(
 ) -> SshAuthMethod {
     match auth_method {
         AuthMethodSelection::Password => SshAuthMethod::Password { password },
+        AuthMethodSelection::PasswordAndPrivateKey => SshAuthMethod::Chain(vec![
+            SshAuthMethod::Password { password },
+            combined_key_factor(key_path, private_key, passphrase),
+        ]),
         AuthMethodSelection::PrivateKey => SshAuthMethod::PrivateKey {
             key_path,
             passphrase: if passphrase.is_empty() {
@@ -601,6 +623,88 @@ fn build_jump_auth_method(
         AuthMethodSelection::Agent => SshAuthMethod::Agent,
         AuthMethodSelection::Pageant => SshAuthMethod::Pageant,
         AuthMethodSelection::AutoPublicKey => SshAuthMethod::AutoPublicKey,
+    }
+}
+
+/// 组合认证里的密钥因素：优先使用密钥路径，路径为空时才退回私钥内容。
+fn combined_key_factor(key_path: String, private_key: String, passphrase: String) -> SshAuthMethod {
+    let passphrase = if passphrase.is_empty() {
+        None
+    } else {
+        Some(passphrase)
+    };
+    if key_path.is_empty() && !private_key.is_empty() {
+        SshAuthMethod::PrivateKeyContent {
+            private_key,
+            passphrase,
+        }
+    } else {
+        SshAuthMethod::PrivateKey {
+            key_path,
+            passphrase,
+        }
+    }
+}
+
+/// 把「密码 + 密钥」认证链拆成各输入框的回填值。
+fn combined_auth_fields(auth: &SshAuthMethod) -> (String, String, String, String) {
+    let mut password = String::new();
+    let mut key_path = String::new();
+    let mut private_key = String::new();
+    let mut passphrase = String::new();
+    if let SshAuthMethod::Chain(steps) = auth {
+        for step in steps {
+            match step {
+                SshAuthMethod::Password { password: value } => password.clone_from(value),
+                SshAuthMethod::PrivateKey {
+                    key_path: path,
+                    passphrase: pass,
+                } => {
+                    key_path.clone_from(path);
+                    if let Some(pass) = pass {
+                        passphrase.clone_from(pass);
+                    }
+                }
+                SshAuthMethod::PrivateKeyContent {
+                    private_key: content,
+                    passphrase: pass,
+                } => {
+                    private_key.clone_from(content);
+                    if let Some(pass) = pass {
+                        passphrase.clone_from(pass);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    (password, key_path, private_key, passphrase)
+}
+
+/// 存储层认证方式 → 运行时认证方式（组合认证递归展开）。
+fn runtime_ssh_auth(auth: &SshAuthMethod) -> SshAuth {
+    match auth {
+        SshAuthMethod::Password { password } => SshAuth::Password(password.clone()),
+        SshAuthMethod::PrivateKey {
+            key_path,
+            passphrase,
+        } => SshAuth::PrivateKey {
+            key_path: key_path.clone(),
+            passphrase: passphrase.clone(),
+            certificate_path: None,
+        },
+        SshAuthMethod::PrivateKeyContent {
+            private_key,
+            passphrase,
+        } => SshAuth::PrivateKeyContent {
+            private_key: private_key.clone(),
+            passphrase: passphrase.clone(),
+            certificate_path: None,
+        },
+        SshAuthMethod::Agent => SshAuth::Agent,
+        SshAuthMethod::Pageant => SshAuth::Pageant,
+        SshAuthMethod::AutoPublicKey => SshAuth::AutoPublicKey,
+        SshAuthMethod::Chain(steps) => SshAuth::Chain(steps.iter().map(runtime_ssh_auth).collect()),
     }
 }
 
@@ -882,6 +986,17 @@ impl SshFormWindow {
                             passphrase_input.update(cx, |s, cx| s.set_value(pass, window, cx));
                         }
                     }
+                    SshAuthMethod::Chain(_) => {
+                        auth_method = AuthMethodSelection::PasswordAndPrivateKey;
+                        let (chain_password, chain_key_path, chain_private_key, chain_passphrase) =
+                            combined_auth_fields(&params.auth_method);
+                        password_input.update(cx, |s, cx| s.set_value(&chain_password, window, cx));
+                        key_path_input.update(cx, |s, cx| s.set_value(&chain_key_path, window, cx));
+                        private_key_content_input
+                            .update(cx, |s, cx| s.set_value(&chain_private_key, window, cx));
+                        passphrase_input
+                            .update(cx, |s, cx| s.set_value(&chain_passphrase, window, cx));
+                    }
                     SshAuthMethod::Agent => {
                         auth_method = AuthMethodSelection::Agent;
                     }
@@ -1039,8 +1154,11 @@ impl SshFormWindow {
         }
 
         let credential_picker = create_credential_picker(
-            CredentialPickerConfig::new("ssh-credential", CredentialCapabilities::all())
-                .reference(credential_reference),
+            CredentialPickerConfig::new(
+                "ssh-credential",
+                credential_capabilities_for_auth(auth_method),
+            )
+            .reference(credential_reference),
             window,
             cx,
         );
@@ -1183,10 +1301,13 @@ impl SshFormWindow {
     fn set_auth_method(
         &mut self,
         auth_method: AuthMethodSelection,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.auth_method = auth_method;
+        self.credential_picker.update(cx, |picker, cx| {
+            picker.set_capabilities(credential_capabilities_for_auth(auth_method), window, cx);
+        });
         cx.notify();
     }
 
@@ -1289,6 +1410,16 @@ impl SshFormWindow {
                     private_key,
                     passphrase,
                 }
+            }
+            AuthMethodSelection::PasswordAndPrivateKey => {
+                let password = self.password_input.read(cx).text().to_string();
+                let key_path = self.key_path_input.read(cx).text().to_string();
+                let private_key = self.private_key_content_input.read(cx).text().to_string();
+                let passphrase = self.passphrase_input.read(cx).text().to_string();
+                SshAuthMethod::Chain(vec![
+                    SshAuthMethod::Password { password },
+                    combined_key_factor(key_path, private_key, passphrase),
+                ])
             }
             AuthMethodSelection::Agent => SshAuthMethod::Agent,
             AuthMethodSelection::Pageant => SshAuthMethod::Pageant,
@@ -1486,7 +1617,7 @@ impl SshFormWindow {
             credential_reference,
             prompt_username: (!self.save_username && !username_referenced).then_some(true),
             prompt_password: (!self.save_password
-                && self.auth_method == AuthMethodSelection::Password
+                && self.auth_method.requires_password()
                 && !password_referenced)
                 .then_some(true),
             keyboard_interactive: (!self.keyboard_interactive).then_some(false),
@@ -1534,53 +1665,11 @@ impl SshFormWindow {
     }
 
     fn build_ssh_connect_config(&self, params: &SshParams) -> SshConnectConfig {
-        let auth = match &params.auth_method {
-            SshAuthMethod::Password { password } => SshAuth::Password(password.clone()),
-            SshAuthMethod::PrivateKey {
-                key_path,
-                passphrase,
-            } => SshAuth::PrivateKey {
-                key_path: key_path.clone(),
-                passphrase: passphrase.clone(),
-                certificate_path: None,
-            },
-            SshAuthMethod::PrivateKeyContent {
-                private_key,
-                passphrase,
-            } => SshAuth::PrivateKeyContent {
-                private_key: private_key.clone(),
-                passphrase: passphrase.clone(),
-                certificate_path: None,
-            },
-            SshAuthMethod::Agent => SshAuth::Agent,
-            SshAuthMethod::Pageant => SshAuth::Pageant,
-            SshAuthMethod::AutoPublicKey => SshAuth::AutoPublicKey,
-        };
+        let auth = runtime_ssh_auth(&params.auth_method);
 
         // 构建跳板机配置
         let jump_server = params.jump_server.as_ref().map(|jump| {
-            let jump_auth = match &jump.auth_method {
-                SshAuthMethod::Password { password } => SshAuth::Password(password.clone()),
-                SshAuthMethod::PrivateKey {
-                    key_path,
-                    passphrase,
-                } => SshAuth::PrivateKey {
-                    key_path: key_path.clone(),
-                    passphrase: passphrase.clone(),
-                    certificate_path: None,
-                },
-                SshAuthMethod::PrivateKeyContent {
-                    private_key,
-                    passphrase,
-                } => SshAuth::PrivateKeyContent {
-                    private_key: private_key.clone(),
-                    passphrase: passphrase.clone(),
-                    certificate_path: None,
-                },
-                SshAuthMethod::Agent => SshAuth::Agent,
-                SshAuthMethod::Pageant => SshAuth::Pageant,
-                SshAuthMethod::AutoPublicKey => SshAuth::AutoPublicKey,
-            };
+            let jump_auth = runtime_ssh_auth(&jump.auth_method);
             JumpServerConnectConfig {
                 host: jump.host.clone(),
                 port: jump.port,
@@ -2106,7 +2195,7 @@ impl SshFormWindow {
                 if let Some(callback) = self.on_saved.as_ref() {
                     callback(saved_conn, post_save_action(self.save_action), window, cx);
                 }
-                window.remove_window();
+                let _ = one_core::window_close::close_window_for_reuse(window, cx);
             }
             Err(e) => {
                 let error_msg = t!("SSH.save_failed", error = e).to_string();
@@ -2117,8 +2206,8 @@ impl SshFormWindow {
         }
     }
 
-    fn on_cancel(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
-        window.remove_window();
+    fn on_cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let _ = one_core::window_close::close_window_for_reuse(window, cx);
     }
 
     fn render_form_row(&self, label: &str, child: impl IntoElement) -> Div {
@@ -2357,6 +2446,20 @@ impl SshFormWindow {
                                     })),
                             )
                             .child(
+                                Radio::new("password-and-private-key")
+                                    .label(t!("SSH.password_and_private_key").to_string())
+                                    .checked(
+                                        auth_method == AuthMethodSelection::PasswordAndPrivateKey,
+                                    )
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.set_auth_method(
+                                            AuthMethodSelection::PasswordAndPrivateKey,
+                                            window,
+                                            cx,
+                                        );
+                                    })),
+                            )
+                            .child(
                                 Radio::new("private-key")
                                     .label(t!("SSH.private_key").to_string())
                                     .checked(auth_method == AuthMethodSelection::PrivateKey)
@@ -2500,6 +2603,68 @@ impl SshFormWindow {
                                                 ),
                                         ),
                                 ),
+                        ),
+                    )
+                },
+            )
+            .when(
+                credential_is_manual && auth_method == AuthMethodSelection::PasswordAndPrivateKey,
+                |this| {
+                    this.child(
+                        self.render_form_row(
+                            &t!("SSH.password"),
+                            h_flex()
+                                .w_full()
+                                .items_center()
+                                .gap_2()
+                                .child(div().min_w_0().flex_1().child(
+                                    self.render_form_input(&self.password_input).mask_toggle(),
+                                ))
+                                .child(
+                                    h_flex()
+                                        .items_center()
+                                        .gap_1()
+                                        .flex_shrink_0()
+                                        .child(
+                                            Checkbox::new("save-password")
+                                                .label(t!("SSH.save_password_desc").to_string())
+                                                .checked(self.save_password)
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.save_password = !this.save_password;
+                                                    cx.notify();
+                                                })),
+                                        )
+                                        .child(
+                                            Button::new("save-password-help")
+                                                .icon(IconName::Info)
+                                                .ghost()
+                                                .xsmall()
+                                                .tooltip(
+                                                    if self.save_password {
+                                                        t!("SSH.save_password_enabled_hint")
+                                                    } else {
+                                                        t!("SSH.save_password_disabled_hint")
+                                                    }
+                                                    .to_string(),
+                                                ),
+                                        ),
+                                ),
+                        ),
+                    )
+                    .child(self.render_form_row(
+                        &t!("SSH.key_path"),
+                        self.render_form_input(&self.key_path_input),
+                    ))
+                    .child(self.render_form_row(
+                        &t!("SSH.passphrase"),
+                        self.render_form_input(&self.passphrase_input).mask_toggle(),
+                    ))
+                    .child(
+                        h_flex().justify_center().child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(t!("SSH.password_and_private_key_hint").to_string()),
                         ),
                     )
                 },
@@ -2721,6 +2886,21 @@ impl SshFormWindow {
                                     })),
                             )
                             .child(
+                                Radio::new("jump-password-and-private-key")
+                                    .label(t!("SSH.password_and_private_key").to_string())
+                                    .checked(
+                                        jump_auth_method
+                                            == AuthMethodSelection::PasswordAndPrivateKey,
+                                    )
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.set_jump_auth_method(
+                                            AuthMethodSelection::PasswordAndPrivateKey,
+                                            window,
+                                            cx,
+                                        );
+                                    })),
+                            )
+                            .child(
                                 Radio::new("jump-private-key")
                                     .label(t!("SSH.private_key").to_string())
                                     .checked(jump_auth_method == AuthMethodSelection::PrivateKey)
@@ -2792,6 +2972,38 @@ impl SshFormWindow {
                                 &t!("SSH.jump_password"),
                                 self.render_form_input(&self.jump_password_input)
                                     .mask_toggle(),
+                            ),
+                        )
+                    },
+                )
+                .when(
+                    jump_credential_is_manual
+                        && jump_auth_method == AuthMethodSelection::PasswordAndPrivateKey,
+                    |this| {
+                        this.child(
+                            self.render_form_row(
+                                &t!("SSH.jump_password"),
+                                self.render_form_input(&self.jump_password_input)
+                                    .mask_toggle(),
+                            ),
+                        )
+                        .child(self.render_form_row(
+                            &t!("SSH.jump_key_path"),
+                            self.render_form_input(&self.jump_key_path_input),
+                        ))
+                        .child(
+                            self.render_form_row(
+                                &t!("SSH.jump_passphrase"),
+                                self.render_form_input(&self.jump_passphrase_input)
+                                    .mask_toggle(),
+                            ),
+                        )
+                        .child(
+                            h_flex().justify_center().child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(t!("SSH.password_and_private_key_hint").to_string()),
                             ),
                         )
                     },
@@ -3598,6 +3810,82 @@ mod tests {
     }
 
     #[test]
+    fn combined_authentication_builds_a_password_then_key_chain() {
+        let chain = build_jump_auth_method(
+            AuthMethodSelection::PasswordAndPrivateKey,
+            "secret".to_string(),
+            "/keys/id_ed25519".to_string(),
+            String::new(),
+            "key-pass".to_string(),
+        );
+        match chain {
+            SshAuthMethod::Chain(steps) => assert!(
+                matches!(
+                    steps.as_slice(),
+                    [
+                        SshAuthMethod::Password { password },
+                        SshAuthMethod::PrivateKey {
+                            key_path,
+                            passphrase
+                        }
+                    ] if password == "secret"
+                        && key_path == "/keys/id_ed25519"
+                        && passphrase.as_deref() == Some("key-pass")
+                ),
+                "组合认证应先密码后密钥，实际：{steps:?}"
+            ),
+            other => panic!("期望认证链，实际：{other:?}"),
+        }
+
+        // 只有私钥内容时退回私钥内容因素，保证组合认证不会缺密钥。
+        let content_chain = build_jump_auth_method(
+            AuthMethodSelection::PasswordAndPrivateKey,
+            "secret".to_string(),
+            String::new(),
+            "-----BEGIN OPENSSH PRIVATE KEY-----".to_string(),
+            String::new(),
+        );
+        match content_chain {
+            SshAuthMethod::Chain(steps) => assert!(
+                matches!(
+                    steps.as_slice(),
+                    [
+                        SshAuthMethod::Password { .. },
+                        SshAuthMethod::PrivateKeyContent { .. }
+                    ]
+                ),
+                "缺少密钥路径时应使用私钥内容，实际：{steps:?}"
+            ),
+            other => panic!("期望认证链，实际：{other:?}"),
+        }
+    }
+
+    #[test]
+    fn combined_authentication_round_trips_through_form_fields() {
+        let chain = build_jump_auth_method(
+            AuthMethodSelection::PasswordAndPrivateKey,
+            "secret".to_string(),
+            "/keys/id_ed25519".to_string(),
+            String::new(),
+            String::new(),
+        );
+
+        let (password, key_path, private_key, passphrase) = super::combined_auth_fields(&chain);
+
+        assert_eq!("secret", password);
+        assert_eq!("/keys/id_ed25519", key_path);
+        assert!(private_key.is_empty());
+        assert!(passphrase.is_empty());
+
+        // 非组合认证不应被拆出任何因素。
+        let (password, key_path, _, _) = super::combined_auth_fields(&SshAuthMethod::Password {
+            password: "other".to_string(),
+        });
+        assert!(password.is_empty());
+        assert!(key_path.is_empty());
+    }
+
+    #[test]
     fn ssh_auth_method_limits_credential_fields() {
         assert_eq!(
             credential_capabilities_for_auth(AuthMethodSelection::Password),
@@ -3606,6 +3894,10 @@ mod tests {
         assert_eq!(
             credential_capabilities_for_auth(AuthMethodSelection::PrivateKey),
             CredentialCapabilities::ssh_private_key()
+        );
+        assert_eq!(
+            credential_capabilities_for_auth(AuthMethodSelection::PasswordAndPrivateKey),
+            CredentialCapabilities::ssh_password_and_private_key()
         );
         assert_eq!(
             credential_capabilities_for_auth(AuthMethodSelection::PrivateKeyContent),

@@ -37,6 +37,10 @@ ConnectionForm:
     en: Password
     zh-CN: 密码
     zh-HK: 密碼
+  ssh_auth_password_and_private_key:
+    en: Password + Private Key
+    zh-CN: 密码 + 密钥
+    zh-HK: 密碼 + 金鑰
   ssh_auth_private_key:
     en: Private Key
     zh-CN: 私钥

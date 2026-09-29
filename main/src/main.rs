@@ -478,6 +478,10 @@ fn main() {
             file_association::schedule_registration(cx);
         }
         notes::init(cx);
+        // notes::init 给 `secondary-/` 绑了一个全局的「切换源码模式」，而 gpui 的
+        // 绑定优先级是「无 context 的绑定等价于最深的 context，同深度后注册者胜」；
+        // SQL 编辑器的注释快捷键必须再登记一次，才能在编辑器里按得动 cmd+/（#290 反馈）。
+        db_view::sql_editor_view::refresh_keybindings(cx);
         extension_runtime::init(cx);
         universal_plugins::init(cx);
         // 资源工作台的 terminal 页面需要宿主提供可嵌入终端;未注册时

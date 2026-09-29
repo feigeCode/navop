@@ -43,7 +43,8 @@ use tracing::error;
 
 use crate::{GlobalRedisState, RedisManager};
 
-/// Redis 表单窗口配置
+/// Redis 表单窗口配置。`Clone` 见 `one_core::popup_window::open_reusable_popup_window`。
+#[derive(Clone)]
 pub struct RedisFormWindowConfig {
     pub editing_connection: Option<StoredConnection>,
     pub initial_connection: Option<StoredConnection>,
@@ -771,7 +772,7 @@ impl RedisFormWindow {
         })
         .detach();
 
-        window.remove_window();
+        let _ = one_core::window_close::close_window_for_reuse(window, cx);
     }
 
     fn render_form_row(&self, label: &str, child: impl IntoElement) -> impl IntoElement {
@@ -1044,8 +1045,8 @@ impl Render for RedisFormWindow {
                         Button::new("cancel")
                             .small()
                             .label(t!("Common.cancel").to_string())
-                            .on_click(|_, window, _cx| {
-                                window.remove_window();
+                            .on_click(|_, window, cx| {
+                                let _ = one_core::window_close::close_window_for_reuse(window, cx);
                             }),
                     )
                     .child(

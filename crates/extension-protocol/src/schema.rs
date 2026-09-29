@@ -278,6 +278,9 @@ pub struct ColumnInfo {
     pub scale: Option<i32>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub comment: String,
+    /// 是否自增/标识列（AUTO_INCREMENT / IDENTITY / serial 等）。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_auto_increment: bool,
     #[serde(default, skip_serializing_if = "Value::is_null")]
     pub extra: Value,
 }
@@ -745,6 +748,7 @@ mod tests {
             precision: None,
             scale: None,
             comment: String::new(),
+            is_auto_increment: true,
             extra: serde_json::json!({"kind": "partition"}),
         };
         let j = serde_json::to_string(&c).unwrap();
@@ -753,6 +757,7 @@ mod tests {
         assert_eq!(parsed.name, "id");
         assert!(parsed.is_primary);
         assert!(parsed.is_partition_key);
+        assert!(parsed.is_auto_increment);
         assert_eq!(parsed.extra, serde_json::json!({"kind": "partition"}));
     }
 

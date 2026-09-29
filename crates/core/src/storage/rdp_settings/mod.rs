@@ -1,9 +1,11 @@
 mod display;
+mod graphics;
 mod performance;
 mod resources;
 mod security;
 
 pub use display::*;
+pub use graphics::*;
 pub use performance::*;
 pub use resources::*;
 pub use security::*;
@@ -15,6 +17,7 @@ use serde::{Deserialize, Serialize};
 pub struct RdpSettings {
     pub admin_session: bool,
     pub display: RdpDisplaySettings,
+    pub graphics: RdpGraphicsSettings,
     pub resources: RdpResourceSettings,
     pub performance: RdpPerformanceSettings,
     pub audio: RdpAudioSettings,
@@ -39,6 +42,7 @@ impl Default for RdpSettings {
         Self {
             admin_session: false,
             display: RdpDisplaySettings::default(),
+            graphics: RdpGraphicsSettings::default(),
             resources: RdpResourceSettings::default(),
             performance: RdpPerformanceSettings::default(),
             audio: RdpAudioSettings::default(),

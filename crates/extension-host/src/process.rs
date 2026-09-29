@@ -150,6 +150,13 @@ pub fn default_socket_name() -> String {
 pub struct ProcessHandle {
     child: Option<Child>,
     pub stream: Option<LocalSocketStream>,
+    /// 子进程 stderr 的尾部若干行。
+    ///
+    /// 此前这个 tail 只活在 `spawn_local_socket` 的局部变量里,仅在
+    /// "ready 之前就退出"那条错误路径上被用过一次;进程 ready 之后再死,
+    /// tail 就彻底不可达,provider 为什么死因此永远是个谜。存在 handle 里,
+    /// 让 `exit_diagnosis` 能把它带进宿主日志。
+    stderr_tail: StderrTail,
 }
 
 impl std::fmt::Debug for ProcessHandle {
@@ -175,6 +182,27 @@ impl ProcessHandle {
     /// 取得子进程 pid(平台原生 id)。
     pub fn pid(&self) -> Option<u32> {
         self.child.as_ref().and_then(|c| c.id())
+    }
+
+    /// 子进程已经退出时,返回"为什么没了"的诊断文本(退出码 + stderr 尾部)。
+    ///
+    /// 仍在运行、或句柄已被 kill/reap 掉时返回 `None`。这是宿主唯一能解释
+    /// "provider 进程怎么消失的"的信息来源:进程被替换后,旧 session 只会
+    /// 以 `HostError::Closed` 的形式暴露给上层,没有任何退出原因。
+    pub fn exit_diagnosis(&mut self) -> Option<String> {
+        let status = match self.child.as_mut() {
+            Some(child) => match child.try_wait() {
+                Ok(Some(status)) => status.to_string(),
+                // 还在跑:没有可报告的退出原因
+                Ok(None) => return None,
+                Err(error) => format!("unknown (try_wait failed: {error})"),
+            },
+            None => "unknown (child handle already reaped)".to_string(),
+        };
+        Some(with_stderr_tail(
+            format!("exited with {status}"),
+            &self.stderr_tail,
+        ))
     }
 
     /// kill 子进程并等待退出。
@@ -285,6 +313,7 @@ async fn spawn_local_socket(config: SpawnConfig, socket_name: String) -> HostRes
     Ok(ProcessHandle {
         child: Some(child),
         stream: Some(stream),
+        stderr_tail,
     })
 }
 
@@ -356,8 +385,36 @@ async fn forward_stderr(stderr: tokio::process::ChildStderr, label: String, tail
             }
             guard.push_back(line.clone());
         }
-        tracing::debug!(target: "extension_host::stderr", program = %label, "{line}");
+        // provider 的诊断几乎都走 stderr,而 debug 级在默认日志配置下看不到:
+        // 崩溃之后留在日志里的只有"会话已关闭",没有任何原因。像错误/崩溃的
+        // 行一律提到 warn,其余仍留在 debug,避免刷屏。
+        if looks_like_diagnostic(&line) {
+            tracing::warn!(target: "extension_host::stderr", program = %label, "{line}");
+        } else {
+            tracing::debug!(target: "extension_host::stderr", program = %label, "{line}");
+        }
     }
+}
+
+/// stderr 行是否像一条失败/崩溃诊断(而不是扩展的正常输出)。
+fn looks_like_diagnostic(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    const NEEDLES: &[&str] = &[
+        "error",
+        "panic",
+        "fatal",
+        "failed",
+        "failure",
+        "exceed",
+        "refused",
+        "timed out",
+        "timeout",
+        "denied",
+        "unavailable",
+        "closed",
+        "abort",
+    ];
+    NEEDLES.iter().any(|needle| lower.contains(needle))
 }
 
 #[cfg(test)]

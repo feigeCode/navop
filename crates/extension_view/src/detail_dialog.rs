@@ -32,6 +32,10 @@ const DIALOG_BOTTOM_PADDING_PX: f32 = 12.0;
 ///
 /// 必须传入触发点击的真实父窗口：否则回退链路依赖 `active_window()`（macOS
 /// mainWindow），多屏下可能解析到其他屏幕的窗口，导致弹窗跨屏。
+///
+/// 走可复用入口（关闭即隐藏）：macOS 上销毁原生窗口会踩到 Touch Bar KVO 竞态
+/// （`EXC_CRASH (SIGABRT)`）。重新打开时用本次的 `entry` 重建 view，所以换一个扩展
+/// 看到的一定是新那个。
 pub(super) fn show_detail_dialog(
     entry: MarketplaceEntry,
     window: &mut Window,
@@ -39,13 +43,17 @@ pub(super) fn show_detail_dialog(
 ) {
     let options = one_core::popup_window::PopupWindowOptions::new(t!("Extension.detail_title"))
         .size(DIALOG_WIDTH, DIALOG_HEIGHT);
-    one_core::popup_window::open_popup_window(
+    one_core::popup_window::open_reusable_popup_window(
         options,
+        DETAIL_DIALOG_WINDOW_KEY,
         move |_window, cx| cx.new(|cx| ExtensionDetailView::new(entry.clone(), cx)),
         Some(window),
         cx,
     );
 }
+
+/// 复用键（见 [`one_core::popup_window::open_reusable_popup_window`]）。
+const DETAIL_DIALOG_WINDOW_KEY: &str = "extension.detail";
 
 struct ExtensionDetailView {
     entry: MarketplaceEntry,

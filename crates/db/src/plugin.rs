@@ -4051,6 +4051,7 @@ mod tests {
                 comment: None,
                 charset: None,
                 collation: None,
+                is_auto_increment: false,
             })
             .collect();
         let row = vec![None, Some(String::new()), Some("NULL".to_string())];
@@ -4085,6 +4086,7 @@ mod tests {
                 comment: None,
                 charset: None,
                 collation: None,
+                is_auto_increment: false,
             },
             ColumnInfo {
                 name: "enabled".to_string(),
@@ -4095,6 +4097,7 @@ mod tests {
                 comment: None,
                 charset: None,
                 collation: None,
+                is_auto_increment: false,
             },
         ];
         let request = CopySqlRequest::new("features", columns)
@@ -4119,6 +4122,7 @@ mod tests {
                 comment: None,
                 charset: Some("utf8mb4".to_string()),
                 collation: Some("utf8mb4_0900_ai_ci".to_string()),
+                is_auto_increment: false,
             },
             ColumnInfo {
                 name: "payload".to_string(),
@@ -4129,6 +4133,7 @@ mod tests {
                 comment: None,
                 charset: None,
                 collation: Some("binary".to_string()),
+                is_auto_increment: false,
             },
         ];
         let current = vec![
@@ -4177,6 +4182,7 @@ mod tests {
             comment: None,
             charset: Some("utf8mb4".to_string()),
             collation: Some("utf8mb4_0900_ai_ci".to_string()),
+            is_auto_increment: false,
         })
         .collect();
         let request = CopySqlRequest::new("typed_values", columns).with_typed_rows(vec![vec![
@@ -4205,6 +4211,7 @@ mod tests {
             comment: None,
             charset: None,
             collation: None,
+            is_auto_increment: false,
         }];
 
         let mismatched = CopySqlRequest::new("items", columns.clone())
@@ -4246,6 +4253,7 @@ mod tests {
             comment: None,
             charset: None,
             collation: None,
+            is_auto_increment: false,
         }];
         let request = CopySqlRequest::new("items", columns)
             .with_typed_original_rows(vec![vec![TableCellValue::Text("42".to_string())]]);

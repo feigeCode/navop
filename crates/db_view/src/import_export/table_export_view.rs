@@ -1310,8 +1310,8 @@ impl Render for DataExportView {
                     .child(
                         Button::new("cancel")
                             .child(t!("Common.cancel").to_string())
-                            .on_click(|_, window, _cx| {
-                                window.remove_window();
+                            .on_click(|_, window, cx| {
+                                let _ = one_core::window_close::close_window_for_reuse(window, cx);
                             })
                     )
                     .when(current_step == ExportStep::Execute && !is_running, |this| {
@@ -1358,8 +1358,8 @@ impl Render for DataExportView {
                             Button::new("close")
                                 .primary()
                                 .child(t!("Common.finish").to_string())
-                                .on_click(|_, window, _cx| {
-                                    window.remove_window();
+                                .on_click(|_, window, cx| {
+                                    let _ = one_core::window_close::close_window_for_reuse(window, cx);
                                 })
                         )
                     }),

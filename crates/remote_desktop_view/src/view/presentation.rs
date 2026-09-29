@@ -14,8 +14,15 @@ use super::surface::RemoteDesktopSurface;
 
 const MAX_MERGED_DELTA_RECTS: usize = 4096;
 const MAX_MERGED_DELTA_BYTES: usize = 8 * 1024 * 1024;
-const MAX_PENDING_DELTA_RECTS: usize = 8192;
-const MAX_PENDING_DELTA_BYTES: usize = 16 * 1024 * 1024;
+/// Fixed floor for a session that has not reported its desktop size yet.
+const MIN_PENDING_DELTA_RECTS: usize = 8192;
+const MIN_PENDING_DELTA_BYTES: usize = 16 * 1024 * 1024;
+/// Ceiling so a misbehaving stream cannot queue unbounded memory.
+const MAX_PENDING_DELTA_RECTS: usize = 65_536;
+const MAX_PENDING_DELTA_BYTES: usize = 256 * 1024 * 1024;
+/// How many screens worth of pending deltas may accumulate before the chain is dropped.
+const PENDING_DELTA_SCREEN_BUDGET: usize = 3;
+const PIXELS_PER_PENDING_DELTA_RECT: usize = 32;
 const FRAME_PRESENTATION_INTERVAL: Duration = Duration::from_millis(16);
 
 pub(super) enum PresentationFrame {
@@ -90,9 +97,34 @@ struct PresentationQueueLimits {
 
 impl Default for PresentationQueueLimits {
     fn default() -> Self {
+        Self::for_extent(None)
+    }
+}
+
+impl PresentationQueueLimits {
+    /// Budget for the desktop the queued deltas describe.
+    ///
+    /// A single legitimate delta repaints an arbitrary part of the screen, up to all of
+    /// it, so a fixed byte budget rejects what any high-resolution session produces
+    /// routinely: at 2724x1530 one full-screen update is already 16 MB. Scaling with the
+    /// desktop keeps the same "a few screens behind, then resynchronize" behaviour at
+    /// every resolution instead of only at 1080p.
+    fn for_extent(extent: Option<(u16, u16)>) -> Self {
+        let Some((width, height)) = extent else {
+            return Self {
+                max_delta_rects: MIN_PENDING_DELTA_RECTS,
+                max_delta_bytes: MIN_PENDING_DELTA_BYTES,
+            };
+        };
+
+        let pixels = usize::from(width).saturating_mul(usize::from(height));
+        let screen_bytes = pixels.saturating_mul(4);
         Self {
-            max_delta_rects: MAX_PENDING_DELTA_RECTS,
-            max_delta_bytes: MAX_PENDING_DELTA_BYTES,
+            max_delta_rects: (pixels / PIXELS_PER_PENDING_DELTA_RECT)
+                .clamp(MIN_PENDING_DELTA_RECTS, MAX_PENDING_DELTA_RECTS),
+            max_delta_bytes: screen_bytes
+                .saturating_mul(PENDING_DELTA_SCREEN_BUDGET)
+                .clamp(MIN_PENDING_DELTA_BYTES, MAX_PENDING_DELTA_BYTES),
         }
     }
 }
@@ -113,7 +145,10 @@ pub(super) struct PresentationQueue {
     pending_delta_rects: usize,
     pending_delta_bytes: usize,
     awaiting_base_generation: Option<u64>,
-    limits: PresentationQueueLimits,
+    /// Desktop size the queued deltas describe, used to size their budget.
+    extent: Option<(u16, u16)>,
+    /// Limits pinned by a test, which must not scale with the extent.
+    fixed_limits: Option<PresentationQueueLimits>,
 }
 
 impl PresentationQueue {
@@ -146,6 +181,7 @@ impl PresentationQueue {
                 mut frame,
             } => {
                 self.retain_generation_commands(generation);
+                self.extent = Some(frame.dimensions());
                 if frame.is_delta() {
                     let (width, height) = frame.dimensions();
                     if self.awaiting_base_generation == Some(generation) {
@@ -159,10 +195,9 @@ impl PresentationQueue {
                     let (delta_rects, delta_bytes) = frame
                         .delta_size()
                         .expect("delta frame must report its payload size");
-                    if self.pending_delta_rects.saturating_add(delta_rects)
-                        > self.limits.max_delta_rects
-                        || self.pending_delta_bytes.saturating_add(delta_bytes)
-                            > self.limits.max_delta_bytes
+                    let limits = self.limits();
+                    if self.pending_delta_rects.saturating_add(delta_rects) > limits.max_delta_rects
+                        || self.pending_delta_bytes.saturating_add(delta_bytes) > limits.max_delta_bytes
                     {
                         let recovery_required = self.require_base(generation);
                         return PresentationQueuePushResult::DeltaDropped {
@@ -240,17 +275,35 @@ impl PresentationQueue {
         self.awaiting_base_generation = None;
     }
 
-    /// Discard every pending frame for this generation and reject later deltas
+    /// Discard the pending delta chain for this generation and reject later deltas
     /// until a complete frame re-establishes the predecessor chain.
     ///
-    /// Returns `true` only for the first transition into this recovery epoch.
+    /// A complete frame that is already queued is kept: it is exactly the
+    /// synchronization point being requested, and discarding it as well left the session
+    /// with nothing to resume from, which restarted it instead.
+    ///
+    /// Returns `true` only when nothing can be resumed from, i.e. only on the first
+    /// transition into this recovery epoch.
     pub(super) fn require_base(&mut self, generation: u64) -> bool {
         self.retain_generation_commands(generation);
-        self.pending
-            .retain(|command| !matches!(command, PresentationCommand::Frame { .. }));
+        self.pending.retain(|command| match command {
+            PresentationCommand::Frame { frame, .. } => !frame.is_delta(),
+            _ => true,
+        });
         self.reset_delta_accounting();
-        let recovery_required = self.awaiting_base_generation != Some(generation);
-        self.awaiting_base_generation = Some(generation);
+
+        let has_pending_base = self.pending.iter().any(|command| {
+            matches!(
+                command,
+                PresentationCommand::Frame {
+                    generation: base_generation,
+                    frame,
+                    ..
+                } if *base_generation == generation && !frame.is_delta()
+            )
+        });
+        let recovery_required = !has_pending_base && self.awaiting_base_generation != Some(generation);
+        self.awaiting_base_generation = (!has_pending_base).then_some(generation);
         recovery_required
     }
 
@@ -281,12 +334,17 @@ impl PresentationQueue {
     #[cfg(test)]
     fn with_delta_limits(max_delta_rects: usize, max_delta_bytes: usize) -> Self {
         Self {
-            limits: PresentationQueueLimits {
+            fixed_limits: Some(PresentationQueueLimits {
                 max_delta_rects,
                 max_delta_bytes,
-            },
+            }),
             ..Self::default()
         }
+    }
+
+    fn limits(&self) -> PresentationQueueLimits {
+        self.fixed_limits
+            .unwrap_or_else(|| PresentationQueueLimits::for_extent(self.extent))
     }
 
     fn retain_generation_commands(&mut self, generation: u64) {
@@ -1018,6 +1076,47 @@ mod tests {
         ));
         assert!(matches!(
             queue.push(delta(7, 6)),
+            PresentationQueuePushResult::Queued
+        ));
+        assert_eq!(4, queue.len());
+    }
+
+    #[test]
+    fn delta_budget_overflow_keeps_a_queued_base_frame_and_resumes_from_it() {
+        let mut queue = PresentationQueue::with_delta_limits(usize::MAX, 4);
+        queue.push(PresentationCommand::Reset { generation: 7 });
+        queue.push(PresentationCommand::Connected { generation: 7 });
+        queue.push(PresentationCommand::Frame {
+            generation: 7,
+            ticket: 1,
+            frame: PresentationFrame::Bgra {
+                width: 2,
+                height: 1,
+                bgra: vec![0; 8],
+            },
+        });
+        queue.push(delta(7, 2));
+
+        assert!(matches!(
+            queue.push(delta(7, 3)),
+            PresentationQueuePushResult::DeltaDropped {
+                recovery_required: false,
+                ..
+            }
+        ));
+
+        // The complete frame already queued is exactly the synchronization point the
+        // overflow asks for: dropping it as well is what forced a new session, so it
+        // stays, and later deltas keep being accepted on top of it.
+        assert!(matches!(
+            queue.pending.back(),
+            Some(PresentationCommand::Frame {
+                frame: PresentationFrame::Bgra { .. },
+                ..
+            })
+        ));
+        assert!(matches!(
+            queue.push(delta(7, 4)),
             PresentationQueuePushResult::Queued
         ));
         assert_eq!(4, queue.len());

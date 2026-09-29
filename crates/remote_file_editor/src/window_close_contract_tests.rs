@@ -132,6 +132,17 @@ fn native_hide_is_macos_only_and_keeps_the_window_registered() {
     assert!(platform.contains("MainThreadMarker::new()"));
     assert!(platform.contains("native.orderOut(None)"));
     assert!(platform.contains("!native.isVisible()"));
+    // 隐藏必须与弹窗共用同一个开关：只有打包时开了 `macos-touchbar-window-hide` 的
+    // x86_64 macOS 包才隐藏，其余构建（含 ARM macOS）退回销毁 —— 否则「隐藏的原生窗口
+    // 一直占着 NSWindow / CAMetalLayer」这个代价会被推到不该付的平台上。
+    let hidden_half = platform
+        .split("#[cfg(not(target_os = \"macos\"))]")
+        .next()
+        .expect("macOS hide half");
+    assert!(
+        hidden_half.contains("if !one_core::window_close::HIDE_WINDOWS_ON_CLOSE {"),
+        "macOS hide path must stay behind the shared switch"
+    );
     let other_platforms = platform
         .split("#[cfg(not(target_os = \"macos\"))]")
         .nth(1)
@@ -154,4 +165,19 @@ fn native_hide_is_macos_only_and_keeps_the_window_registered() {
     let reset = method_source(source, "fn reset_for_reuse(");
     assert!(!reset.contains("self.next_tab_id ="));
     assert!(reset.contains("self.tabs.clear()"));
+
+    let failed = prepare
+        .split("Err(error) =>")
+        .nth(1)
+        .expect("prepare_window_close must handle a failed hide explicitly");
+    assert!(
+        !failed.contains("window.remove_window()"),
+        "a failed hide must keep the editor window alive: removal is the AppKit close path \
+         this switch exists to avoid"
+    );
+    assert!(
+        !failed.contains("clear_editor_window"),
+        "a failed hide must leave the editor window registered, so the next open reuses it \
+         instead of orphaning the live one"
+    );
 }

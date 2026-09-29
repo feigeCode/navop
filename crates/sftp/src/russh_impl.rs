@@ -1073,6 +1073,9 @@ fn sftp_auth_failure_messages() -> AuthFailureMessages {
         keyboard_interactive_required: t!("Sftp.auth_keyboard_interactive_required").to_string(),
         keyboard_interactive_failed: t!("Sftp.auth_keyboard_interactive_failed").to_string(),
         keyboard_interactive_cancelled: t!("Sftp.auth_keyboard_interactive_cancelled").to_string(),
+        chain_failed: t!("Sftp.auth_chain_failed").to_string(),
+        chain_incomplete: t!("Sftp.auth_chain_incomplete").to_string(),
+        chain_unsupported_factor: t!("Sftp.auth_chain_unsupported_factor").to_string(),
     }
 }
 

@@ -154,7 +154,7 @@ impl NewConnectionWindow {
                 cx.notify();
             }
             NewConnectionFormResult::Done => {
-                window.remove_window();
+                let _ = one_core::window_close::close_window_for_reuse(window, cx);
             }
             NewConnectionFormResult::Blocked => {
                 cx.notify();
@@ -400,7 +400,7 @@ impl NewConnectionWindow {
                     .small()
                     .label(t!("Common.cancel").to_string())
                     .on_click(cx.listener(|_, _, window, cx| {
-                        window.remove_window();
+                        let _ = one_core::window_close::close_window_for_reuse(window, cx);
                         cx.notify();
                     })),
             )

@@ -9,6 +9,10 @@ pub struct CredentialCapabilities {
     pub password: bool,
     pub private_key: bool,
     pub passphrase: bool,
+    /// 是否允许同时引用密码与私钥两个因素（「密码 + 密钥」组合认证）。
+    ///
+    /// 单一认证方式（含通用 `all()`）保持历史上「密码优先、不引用私钥」的行为。
+    pub password_and_private_key: bool,
 }
 
 impl CredentialCapabilities {
@@ -16,8 +20,7 @@ impl CredentialCapabilities {
         Self {
             username: true,
             password: true,
-            private_key: false,
-            passphrase: false,
+            ..Self::empty()
         }
     }
 
@@ -38,6 +41,17 @@ impl CredentialCapabilities {
             private_key: true,
             passphrase: true,
             ..Self::empty()
+        }
+    }
+
+    /// 「密码 + 密钥」组合认证：同时引用用户名、密码、私钥与口令。
+    pub const fn ssh_password_and_private_key() -> Self {
+        Self {
+            username: true,
+            password: true,
+            private_key: true,
+            passphrase: true,
+            password_and_private_key: true,
         }
     }
 
@@ -62,6 +76,7 @@ impl CredentialCapabilities {
             password: true,
             private_key: true,
             passphrase: true,
+            ..Self::empty()
         }
     }
 
@@ -71,6 +86,7 @@ impl CredentialCapabilities {
             password: false,
             private_key: false,
             passphrase: false,
+            password_and_private_key: false,
         }
     }
 }
@@ -146,7 +162,7 @@ pub fn normalize_reference(
     reference.password &= capabilities.password;
     reference.private_key &= capabilities.private_key;
     reference.passphrase &= capabilities.passphrase;
-    normalize_auth_fields(&mut reference);
+    normalize_auth_fields(&mut reference, capabilities);
     reference
 }
 
@@ -196,9 +212,10 @@ fn default_reference(
     summary: &CredentialSummary,
 ) -> CredentialReference {
     let password = capabilities.password && summary.has_password;
-    let private_key = !password
-        && capabilities.private_key
-        && (summary.has_private_key_path || summary.has_private_key_content);
+    // 组合认证同时引用密码与私钥；单一认证方式下沿用「密码优先」的历史行为。
+    let private_key = capabilities.private_key
+        && (summary.has_private_key_path || summary.has_private_key_content)
+        && (capabilities.password_and_private_key || !password);
     CredentialReference {
         credential_id,
         credential_cloud_id: summary.cloud_id.clone(),
@@ -229,8 +246,12 @@ pub(crate) fn reference_is_unavailable(
         .any(|summary| summary_matches_reference(summary, reference))
 }
 
-fn normalize_auth_fields(reference: &mut CredentialReference) {
-    if reference.password && reference.private_key {
+fn normalize_auth_fields(
+    reference: &mut CredentialReference,
+    capabilities: CredentialCapabilities,
+) {
+    // 只有组合认证能力才能同时引用两份凭据，其余场景保持互斥。
+    if reference.password && reference.private_key && !capabilities.password_and_private_key {
         reference.private_key = false;
     }
     if !reference.private_key {

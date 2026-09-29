@@ -3,8 +3,9 @@ use super::input::{
     optional_value_str, required_object, required_value_str,
 };
 use one_core::storage::{
-    PortForwardingKind, PortForwardingParams, RemoteDesktopBackendPreference, RemoteDesktopParams,
-    RemoteDesktopProtocol, SerialFlowControl, SerialParams, SerialParity, StoredConnection,
+    PortForwardingKind, PortForwardingParams, RdpEgfxMode, RdpSettings,
+    RemoteDesktopBackendPreference, RemoteDesktopParams, RemoteDesktopProtocol, SerialFlowControl,
+    SerialParams, SerialParity, StoredConnection,
 };
 use serde_json::Value;
 use tool_runtime::ToolError;
@@ -74,7 +75,7 @@ pub(super) fn build_remote_desktop(
         proxy: None,
         credential_reference: None,
         backend_preference: RemoteDesktopBackendPreference::Canvas,
-        rdp: None,
+        rdp: rdp_settings_from_values(values, protocol)?,
     };
     Ok(with_common_fields(
         StoredConnection::new_remote_desktop(
@@ -128,6 +129,34 @@ fn parse_port_forwarding_kind(value: &str) -> Result<PortForwardingKind, ToolErr
         "Remote" | "remote" => Ok(PortForwardingKind::Remote),
         "Dynamic" | "dynamic" => Ok(PortForwardingKind::Dynamic),
         _ => unknown_value("port forwarding kind", value),
+    }
+}
+
+/// RDP settings only materialize when a value that lives in them is provided, so connections that
+/// never touched those controls keep storing their legacy flat parameters.
+fn rdp_settings_from_values(
+    values: &Value,
+    protocol: RemoteDesktopProtocol,
+) -> Result<Option<RdpSettings>, ToolError> {
+    let Some(egfx) = optional_value_str(values, "egfx") else {
+        return Ok(None);
+    };
+    if protocol != RemoteDesktopProtocol::Rdp {
+        return unknown_value("rdp graphics pipeline policy", egfx);
+    }
+    let mut settings = RdpSettings::from_legacy_audio_playback(
+        optional_bool(values, "audio_playback").unwrap_or(false),
+    );
+    settings.graphics.egfx = parse_rdp_egfx_mode(egfx)?;
+    Ok(Some(settings))
+}
+
+fn parse_rdp_egfx_mode(value: &str) -> Result<RdpEgfxMode, ToolError> {
+    match value.to_ascii_lowercase().as_str() {
+        "auto" => Ok(RdpEgfxMode::Auto),
+        "always" => Ok(RdpEgfxMode::Always),
+        "never" => Ok(RdpEgfxMode::Never),
+        _ => unknown_value("rdp graphics pipeline policy", value),
     }
 }
 

@@ -612,6 +612,7 @@ mod tests {
             comment: None,
             charset: None,
             collation: None,
+            is_auto_increment: false,
         }];
         let indexes = vec![IndexInfo {
             name: "idx_orders_id".to_string(),

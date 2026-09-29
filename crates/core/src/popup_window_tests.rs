@@ -4,7 +4,7 @@ fn popup_open_source() -> &'static str {
         .find("pub fn open_popup_window")
         .expect("popup window opener");
     let content_start = source[open_start..]
-        .find("\nstruct PopupWindowContent")
+        .find("struct PopupWindowContent")
         .map(|offset| open_start + offset)
         .expect("popup window content");
     &source[open_start..content_start]

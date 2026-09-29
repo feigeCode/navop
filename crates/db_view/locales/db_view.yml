@@ -953,6 +953,14 @@ Table:
     zh-HK: 匯入資料到表
 
   # 表设计器
+  loading_structure:
+    en: Loading table structure…
+    zh-CN: 正在加载表结构…
+    zh-HK: 正在載入表結構…
+  load_structure_failed:
+    en: "Failed to load table structure: %{error}"
+    zh-CN: "加载表结构失败：%{error}"
+    zh-HK: "載入表結構失敗：%{error}"
   table_name:
     en: Table Name
     zh-CN: 表名
@@ -1378,6 +1386,10 @@ Query:
     en: Show Details
     zh-CN: 查看对象详情
     zh-HK: 查看物件詳情
+  object_details_title:
+    en: "Details: %{object}"
+    zh-CN: "对象详情: %{object}"
+    zh-HK: "物件詳情: %{object}"
   copy_hover_ddl:
     en: Copy DDL
     zh-CN: 复制 DDL
@@ -1386,6 +1398,18 @@ Query:
     en: DDL copied to clipboard
     zh-CN: DDL 已复制到剪贴板
     zh-HK: DDL 已複製到剪貼簿
+  object_details_ddl_loading:
+    en: Generating DDL…
+    zh-CN: DDL 生成中…
+    zh-HK: DDL 產生中…
+  object_details_ddl_failed:
+    en: "Failed to generate DDL: %{error}"
+    zh-CN: "生成 DDL 失败: %{error}"
+    zh-HK: "產生 DDL 失敗: %{error}"
+  object_details_view_ddl_unavailable:
+    en: Views have no CREATE TABLE DDL; the columns above come from the metadata.
+    zh-CN: 视图没有建表 DDL，上面的列信息来自元数据。
+    zh-HK: 檢視表沒有建表 DDL，上面的欄位資訊來自中繼資料。
   no_hover_details_at_cursor:
     en: No database object details at the cursor
     zh-CN: 光标处没有可查看的数据库对象详情
@@ -2694,10 +2718,14 @@ TableDataGrid:
     en: Filter fields
     zh-CN: 字段过滤
     zh-HK: 欄位過濾
-  column_visibility_hint:
-    en: Choose fields to display
-    zh-CN: 选择要显示的字段
-    zh-HK: 選擇要顯示的欄位
+  column_visibility_search_placeholder:
+    en: Search fields…
+    zh-CN: 搜索字段…
+    zh-HK: 搜尋欄位…
+  column_visibility_keep_one_hint:
+    en: At least one field stays visible.
+    zh-CN: 至少保留一列可见。
+    zh-HK: 至少保留一欄可見。
   show_all_columns:
     en: Show all fields
     zh-CN: 显示全部字段
@@ -2950,6 +2978,22 @@ DbTreeView:
     en: Locate active tab in tree
     zh-CN: 在树中定位当前标签
     zh-HK: 在樹中定位目前標籤
+  search_match_case:
+    en: Match case
+    zh-CN: 区分大小写
+    zh-HK: 區分大小寫
+  search_whole_word:
+    en: Whole words
+    zh-CN: 全词匹配
+    zh-HK: 全詞比對
+  search_regex:
+    en: Regular expression
+    zh-CN: 正则表达式
+    zh-HK: 正規表達式
+  search_regex_invalid:
+    en: Invalid regular expression
+    zh-CN: 正则表达式无效
+    zh-HK: 正規表達式無效
 EditorView:
   form_tab:
     en: Form

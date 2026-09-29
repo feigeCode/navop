@@ -3,6 +3,7 @@
 //! GPUI code may dispatch activation intents, but this service remains the
 //! sole owner of provider processes and supervision.
 
+use std::path::PathBuf;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -64,12 +65,18 @@ impl UniversalPluginService {
         let events = Arc::new(EventActivationManager::new());
         let jobs = Arc::new(extension_plugin_adapter::JobActivationManager::new());
         let blobs = extension_plugin_adapter::BlobStore::default();
+        let provider_storage_root = provider_storage_root();
         let transient_secrets = Arc::new(Mutex::new(HashMap::new()));
         let manager = Arc::new(
             ActivationManager::from_shared_catalog(
                 catalog,
                 production_session_factory(),
-                production_host_api_factory(blobs.clone(), secrets, Arc::clone(&transient_secrets)),
+                production_host_api_factory(
+                    blobs.clone(),
+                    provider_storage_root,
+                    secrets,
+                    Arc::clone(&transient_secrets),
+                ),
             )
             .with_blob_store(blobs)
             .with_job_activation(jobs)
@@ -385,9 +392,14 @@ fn production_session_factory() -> SessionFactory {
 
 fn production_host_api_factory(
     blobs: extension_plugin_adapter::BlobStore,
+    storage_root: Option<PathBuf>,
     secrets: Option<Arc<ConnectionRepository>>,
     transient_secrets: Arc<Mutex<HashMap<(String, String), Vec<u8>>>>,
 ) -> HostApiFactory {
+    // 一个扩展一个 store(而不是一个 provider 一个):同一扩展的多个连接共享
+    // 同一把写锁,不会互相覆盖对方的持久化文件。
+    let stores: Arc<Mutex<HashMap<String, extension_plugin_adapter::ProviderStore>>> =
+        Arc::new(Mutex::new(HashMap::new()));
     Arc::new(move |binding, generation| {
         let secret_resolver = ExtensionSecretResolver {
             extension_id: binding.extension_id.clone(),
@@ -405,8 +417,62 @@ fn production_host_api_factory(
                 generation,
             },
         );
+        let host = match storage_root.as_deref() {
+            Some(root) => {
+                match extension_plugin_adapter::extension_storage_dir(root, &binding.extension_id) {
+                    Ok(directory) => {
+                        // 锁中毒只说明之前有 panic 打断过一次写入,缓存表本身仍然
+                        // 可用;退回"每次新建 store"比 panic 掉整个挂载好得多。
+                        let mut guard = stores
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        let store = guard
+                            .entry(binding.extension_id.clone())
+                            .or_insert_with(|| {
+                                extension_plugin_adapter::ProviderStore::new(directory)
+                            })
+                            .clone();
+                        host.with_storage(store, binding.extension_id.clone())
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            extension_id = %binding.extension_id,
+                            error = %error,
+                            "extension storage root rejected; provider storage disabled"
+                        );
+                        host
+                    }
+                }
+            }
+            None => host,
+        };
         Arc::new(extension_host::HostApiHandler::new(Arc::new(host)))
     })
+}
+
+/// `<data dir>/extension-storage`。
+///
+/// 用 `one_core::app_dirs`(而不是 `dirs::data_dir`)以便 portable 安装模式
+/// 走同一套路径解析。
+fn provider_storage_root() -> Option<PathBuf> {
+    match one_core::app_dirs::data_dir() {
+        Some(data_dir) => {
+            let root = data_dir.join("extension-storage");
+            if let Err(error) = std::fs::create_dir_all(&root) {
+                tracing::warn!(
+                    root = ?root,
+                    error = %error,
+                    "could not create extension storage root; provider storage disabled"
+                );
+                return None;
+            }
+            Some(root)
+        }
+        None => {
+            tracing::warn!("no data directory available; provider storage disabled");
+            None
+        }
+    }
 }
 
 struct ExtensionSecretResolver {
@@ -522,9 +588,7 @@ impl Drop for TransientSecretGuard {
 /// `panic` is not used because the release profile is `panic = "abort"`, where
 /// `catch_unwind` cannot observe it. Callers that treat a duplicate as a bug
 /// should `expect` the returned `Option`.
-pub(crate) fn register_application_owner(
-    cx: &mut gpui::App,
-) -> Option<UniversalPluginService> {
+pub(crate) fn register_application_owner(cx: &mut gpui::App) -> Option<UniversalPluginService> {
     if cx.try_global::<GlobalUniversalPluginService>().is_some() {
         return None;
     }

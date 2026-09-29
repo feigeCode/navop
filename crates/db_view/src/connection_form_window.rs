@@ -38,6 +38,10 @@ pub type ConnectionFormSavedCallback = Arc<
 >;
 
 /// 连接表单窗口的配置
+///
+/// `Clone` 是「复用弹窗」的前提：复用窗口时里面的 view 会被重建，而重建用的 factory
+/// 必须能被调用多次（见 `one_core::popup_window::open_reusable_popup_window`）。
+#[derive(Clone)]
 pub struct ConnectionFormWindowConfig {
     pub db_type: DatabaseType,
     pub external_driver_id: Option<String>,
@@ -197,7 +201,7 @@ impl ConnectionFormWindow {
                             cx,
                         );
                     }
-                    window.remove_window();
+                    let _ = one_core::window_close::close_window_for_reuse(window, cx);
                 }
                 DbConnectionFormEvent::SaveError(_) => {}
             },
@@ -242,7 +246,7 @@ impl ConnectionFormWindow {
         self.form.update(cx, |form, cx| {
             form.trigger_cancel(cx);
         });
-        window.remove_window();
+        let _ = one_core::window_close::close_window_for_reuse(window, cx);
     }
 }
 

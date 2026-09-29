@@ -27,6 +27,9 @@ mod job_activation_state;
 #[cfg(test)]
 mod job_activation_tests;
 pub mod provider_permissions;
+pub mod provider_storage;
+#[cfg(test)]
+mod provider_storage_tests;
 pub mod resource_session;
 pub mod universal_host;
 pub mod workbench_dispatch;
@@ -56,6 +59,10 @@ pub use job_activation::{
 pub use provider_permissions::{
     NetworkEndpoint, ProviderPermissionError, ProviderPermissionSet, ResourceOpenAuthorizer,
     SecretReference,
+};
+pub use provider_storage::{
+    DEFAULT_MAX_NAMESPACE_BYTES, DEFAULT_MAX_VALUE_BYTES, ProviderStore, ProviderStoreError,
+    ProviderStoreLimits, extension_storage_dir,
 };
 pub use resource_session::{
     ResourceScope, ResourceSessionHandle, ResourceSessionIdentity, ResourceSessionOwner,

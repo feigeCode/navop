@@ -32,7 +32,18 @@ impl Focusable for ShellPluginTab {
 }
 
 impl Render for ShellPluginTab {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    // 测试构建里没有监视桥,重挂入口整块被 cfg 掉,窗口参数用不上。
+    #[cfg_attr(test, allow(unused_variables))]
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // provider 换代后要重新挂载 gpui 视图,而挂载必须有 `Window`;
+        // 监视事件入口没有窗口,所以重挂在这里落地(下一帧执行,避免在
+        // render 中改变挂载状态)。
+        #[cfg(not(test))]
+        if self.take_pending_remount() {
+            cx.defer_in(window, |this, window, cx| {
+                this.remount_after_runtime_change(window, cx);
+            });
+        }
         div()
             .size_full()
             .min_w_0()

@@ -54,6 +54,14 @@ pub enum HostError {
     #[error("invalid request for method `{method}`: {message}")]
     InvalidParams { method: String, message: String },
 
+    /// 出站请求超出了协议帧上限。
+    ///
+    /// 单独成一个变体(而不是混进 `Io`)是因为超限帧在协议层是**写出任何
+    /// 字节之前**就被拒的:流没有被写坏,连接依然可用,这只是一个调用方
+    /// 参数错误。混进 IO 会让它看起来像"连接莫名其妙断了"。
+    #[error("rpc request exceeds the {limit_bytes} byte protocol frame limit")]
+    FrameTooLarge { limit_bytes: usize },
+
     /// 子进程没在 deadline 内 ready(未建立 socket 连接)。
     #[error("extension process did not become ready within {deadline_ms}ms")]
     ProcessNotReady {

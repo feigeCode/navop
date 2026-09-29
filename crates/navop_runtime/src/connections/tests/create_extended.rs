@@ -1,8 +1,8 @@
 use super::{connection_tool_registry, create_connection, repo};
 use one_core::storage::traits::Repository;
 use one_core::storage::{
-    ConnectionType, PortForwardingKind, RemoteDesktopBackendPreference, RemoteDesktopProtocol,
-    SerialFlowControl, SerialParity,
+    ConnectionType, PortForwardingKind, RdpAudioMode, RdpEgfxMode, RemoteDesktopBackendPreference,
+    RemoteDesktopProtocol, SerialFlowControl, SerialParity,
 };
 use serde_json::json;
 
@@ -106,6 +106,55 @@ fn create_rdp_connection_persists_remote_desktop_params() {
         RemoteDesktopBackendPreference::Canvas,
         params.backend_preference
     );
+}
+
+#[test]
+fn create_rdp_connection_persists_the_graphics_pipeline_policy() {
+    let repo = repo();
+    let registry = connection_tool_registry(repo.clone());
+    let id = create_connection(
+        &registry,
+        json!({
+            "kind": "rdp",
+            "values": {
+                "name": "gnome host",
+                "host": "10.0.1.31",
+                "egfx": "always"
+            }
+        }),
+    );
+
+    let stored = repo.get(id).unwrap().unwrap();
+    let params = stored
+        .to_remote_desktop_params()
+        .expect("rdp params should parse");
+    let settings = params.effective_rdp_settings();
+    assert_eq!(RdpEgfxMode::Always, settings.graphics.egfx);
+    assert_eq!(RdpAudioMode::Disabled, settings.audio.mode);
+}
+
+#[test]
+fn create_rdp_connection_without_a_graphics_policy_keeps_legacy_params() {
+    let repo = repo();
+    let registry = connection_tool_registry(repo.clone());
+    let id = create_connection(
+        &registry,
+        json!({
+            "kind": "rdp",
+            "values": { "name": "win host", "host": "10.0.1.32", "audio_playback": true }
+        }),
+    );
+
+    let stored = repo.get(id).unwrap().unwrap();
+    let params = stored
+        .to_remote_desktop_params()
+        .expect("rdp params should parse");
+    assert!(params.rdp.is_none());
+    assert_eq!(
+        RdpEgfxMode::Auto,
+        params.effective_rdp_settings().graphics.egfx
+    );
+    assert_eq!(RdpAudioMode::Local, params.effective_rdp_settings().audio.mode);
 }
 
 #[test]

@@ -87,7 +87,7 @@ impl CredentialFormWindow {
                     .autohide(true),
                     cx,
                 );
-                window.remove_window();
+                let _ = one_core::window_close::close_window_for_reuse(window, cx);
             }
             Err(error) => {
                 window.push_notification(
@@ -135,7 +135,9 @@ impl Render for CredentialFormWindow {
                         Button::new("credential-form-cancel")
                             .small()
                             .label(t!("CredentialForm.cancel").to_string())
-                            .on_click(|_, window, _| window.remove_window()),
+                            .on_click(|_, window, cx| {
+                                let _ = one_core::window_close::close_window_for_reuse(window, cx);
+                            }),
                     )
                     .child(
                         Button::new("credential-form-save")

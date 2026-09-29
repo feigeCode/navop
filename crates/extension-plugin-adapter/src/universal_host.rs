@@ -13,6 +13,7 @@ use crate::blob_store::{BlobOwner, BlobStore};
 use crate::provider_permissions::{
     ProviderPermissionError, ProviderPermissionSet, SecretReference,
 };
+use crate::provider_storage::ProviderStore;
 
 /// Application-owned secret lookup. Values never enter logs or provider UI state.
 #[async_trait::async_trait]
@@ -45,6 +46,14 @@ pub struct UniversalProviderHost {
     permissions: ProviderPermissionSet,
     secrets: Arc<dyn SecretResolver>,
     blobs: Option<BlobCapability>,
+    storage: Option<StorageScope>,
+}
+
+/// 一个 provider 的存储作用域:共享句柄 + 默认命名空间(扩展 id)。
+#[derive(Clone)]
+struct StorageScope {
+    store: ProviderStore,
+    default_namespace: String,
 }
 
 #[derive(Clone)]
@@ -67,7 +76,22 @@ impl UniversalProviderHost {
             ),
             secrets,
             blobs: None,
+            storage: None,
         }
+    }
+
+    /// 接入宿主侧 KV。没有存储时读写一律 `NotImplemented` —— 让 provider 能
+    /// 明确知道"宿主不支持",而不是把"永远读不到"误当成"从来没存过"。
+    pub fn with_storage(
+        mut self,
+        store: ProviderStore,
+        default_namespace: impl Into<String>,
+    ) -> Self {
+        self.storage = Some(StorageScope {
+            store,
+            default_namespace: default_namespace.into(),
+        });
+        self
     }
 
     pub fn with_blob_store(mut self, store: BlobStore, owner: BlobOwner) -> Self {
@@ -95,6 +119,21 @@ impl UniversalProviderHost {
             .await?;
         Ok(ResolveSecretResult { value })
     }
+
+    fn storage_scope(&self) -> HostResult<StorageScope> {
+        self.storage.clone().ok_or_else(|| {
+            HostError::NotImplemented("host key/value storage is not configured".into())
+        })
+    }
+
+    /// 请求里的 `namespace` 只是扩展目录内的子作用域,不能越出扩展目录;
+    /// 缺省(或空)则用扩展 id 本身。
+    fn storage_namespace(scope: &StorageScope, requested: Option<String>) -> String {
+        match requested {
+            Some(namespace) if !namespace.is_empty() => namespace,
+            _ => scope.default_namespace.clone(),
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -120,13 +159,26 @@ impl HostApiProvider for UniversalProviderHost {
 
     async fn storage_get(
         &self,
-        _params: host::StorageGetParams,
+        params: host::StorageGetParams,
     ) -> HostResult<host::StorageGetResult> {
-        Ok(host::StorageGetResult { value: None })
+        let scope = self.storage_scope()?;
+        let namespace = Self::storage_namespace(&scope, params.namespace);
+        let value = scope.store.get(&namespace, &params.key)?;
+        Ok(host::StorageGetResult { value })
     }
 
-    async fn storage_set(&self, _params: host::StorageSetParams) -> HostResult<()> {
-        Ok(())
+    async fn storage_set(&self, params: host::StorageSetParams) -> HostResult<()> {
+        let scope = self.storage_scope()?;
+        let namespace = Self::storage_namespace(&scope, params.namespace);
+        scope
+            .store
+            .set(
+                &namespace,
+                &params.key,
+                params.value,
+                params.ttl_secs.map(u64::from),
+            )
+            .map_err(HostError::from)
     }
 
     async fn log(&self, _params: host::LogParams) -> HostResult<()> {

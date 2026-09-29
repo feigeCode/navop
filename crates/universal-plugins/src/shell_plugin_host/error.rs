@@ -25,8 +25,7 @@ pub(crate) enum ErrorCode {
     StaleHandle,
     RequestCancelled,
     RequestTimeout,
-    /// 预留给 provider 结果超过预算的场景,当前仅作为稳定 code 定义。
-    #[allow(dead_code)]
+    /// 预留给 provider 结果/请求超过预算的场景(`HostError::FrameTooLarge`)。
     ResultTooLarge,
     ProtocolError,
     ExtensionUnloaded,
@@ -117,6 +116,12 @@ impl From<extension_host::HostError> for NavopError {
             | ProviderError::Config(_) => (ErrorCode::BackendStartFailed, None),
             ProviderError::Io(_) => (ErrorCode::RuntimeUnavailable, None),
             ProviderError::InvalidParams { .. } => (ErrorCode::InvalidArgument, None),
+            // 帧超限和"参数非法"不是一回事:参数可能完全合法,只是 payload 撑爆了
+            // 传输预算。给专门的 code,前端才能提示"消息太大"而不是"参数错误"。
+            ProviderError::FrameTooLarge { limit_bytes } => (
+                ErrorCode::ResultTooLarge,
+                Some(serde_json::json!({ "limitBytes": limit_bytes })),
+            ),
             ProviderError::Protocol(protocol) => (
                 ErrorCode::ProtocolError,
                 Some(serde_json::json!({
@@ -170,11 +175,16 @@ pub(crate) fn workbench_error(
         W::UnknownOperation(_) | W::BindingMissing { .. } | W::BindingType { .. } => {
             ErrorCode::InvalidArgument
         }
-        W::ResultContract { .. }
-        | W::Provider(_)
-        | W::EventStreamRegistration { .. } => ErrorCode::ProtocolError,
+        // 运行时/传输没了只是暂时的:前端可以自愈重试,所以给可重试的稳定 code,
+        // 而不是让用户看到一个笼统的 PROTOCOL_ERROR。
+        W::ProviderUnavailable(_) => ErrorCode::RuntimeUnavailable,
+        W::ResultContract { .. } | W::Provider(_) | W::EventStreamRegistration { .. } => {
+            ErrorCode::ProtocolError
+        }
     };
-    NavopError::new(code, error.to_string()).into_host_error()
+    let mut navop = NavopError::new(code, error.to_string());
+    navop.retryable = matches!(error, W::ProviderUnavailable(_));
+    navop.into_host_error()
 }
 
 fn truncate_chars(value: &str, max: usize) -> String {
@@ -234,6 +244,40 @@ mod tests {
     fn closed_maps_to_extension_unloaded() {
         let error = host_error(extension_host::HostError::Closed);
         assert_eq!(decode(&error)["code"], "EXTENSION_UNLOADED");
+    }
+
+    #[test]
+    fn frame_too_large_maps_to_result_too_large() {
+        let error = host_error(extension_host::HostError::FrameTooLarge {
+            limit_bytes: 16 * 1024 * 1024,
+        });
+        let envelope = decode(&error);
+        assert_eq!(envelope["code"], "RESULT_TOO_LARGE");
+        assert_eq!(envelope["details"]["limitBytes"], 16 * 1024 * 1024);
+        // 同一份 payload 再发一次还是会超限,重试没有意义。
+        assert_eq!(envelope["retryable"], false);
+    }
+
+    #[test]
+    fn provider_unavailable_is_a_retryable_runtime_error() {
+        let error = workbench_error(
+            extension_plugin_adapter::WorkbenchDispatchError::ProviderUnavailable(
+                "rpc client is closed".into(),
+            ),
+        );
+        let envelope = decode(&error);
+        assert_eq!(envelope["code"], "RUNTIME_UNAVAILABLE");
+        assert_eq!(envelope["retryable"], true);
+    }
+
+    #[test]
+    fn provider_contract_violation_stays_a_protocol_error() {
+        let error = workbench_error(extension_plugin_adapter::WorkbenchDispatchError::Provider(
+            "strange response".into(),
+        ));
+        let envelope = decode(&error);
+        assert_eq!(envelope["code"], "PROTOCOL_ERROR");
+        assert_eq!(envelope["retryable"], false);
     }
 
     #[test]

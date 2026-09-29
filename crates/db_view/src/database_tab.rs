@@ -386,6 +386,8 @@ impl DatabaseTabView {
                 let code_clone = code.clone();
                 let available_connection_ids = available_connection_ids.clone();
                 let execution_history = execution_history_for_new.clone();
+                // 详情页签是编辑器页签的兄弟：先把这个容器句柄带进内层闭包。
+                let host_tab_container = tab_container_for_new.clone();
 
                 tab_container_for_new.update(cx, |container, cx| {
                     container.activate_or_add_tab_lazy(
@@ -403,6 +405,7 @@ impl DatabaseTabView {
                                         initial_database: None,
                                         initial_schema: None,
                                         execution_history,
+                                        tab_container: host_tab_container.clone(),
                                     },
                                     window,
                                     cx,

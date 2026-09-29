@@ -7,6 +7,7 @@ These tests exercise the built-in database plugins against real database engines
 - `real_sqlite.rs`: SQLite integration flow.
 - `real_duckdb.rs`: DuckDB integration flow.
 - `real_mysql.rs`: MySQL integration flow.
+- `real_mssql.rs`: Microsoft SQL Server metadata regression flow (nullable `bit` columns in system catalog views).
 - `real_postgres.rs`: PostgreSQL integration flow.
 - `real_compare.rs`: SQLite source/target schema compare, data compare, generated sync SQL, selected statement execution, and destructive statement safety.
 
@@ -18,7 +19,7 @@ SQLite, the SQLite compare test, and DuckDB run by default:
 ./script/run-real-db-tests.sh
 ```
 
-The script does not start a database server and never provides default credentials. MySQL and PostgreSQL tests skip automatically (with a note on stderr) when their password environment variable is absent, so `cargo test --all` stays green on machines and CI runners without a local database server. When the variable is present the tests run for real. An empty PostgreSQL password is valid and is handled correctly.
+The script does not start a database server and never provides default credentials. MySQL, PostgreSQL and SQL Server tests skip automatically (with a note on stderr) when their password environment variable is absent, so `cargo test --all` stays green on machines and CI runners without a local database server. When the variable is present the tests run for real. An empty PostgreSQL password is valid and is handled correctly.
 
 ## Environment variables
 
@@ -45,6 +46,18 @@ export ONETCLI_TEST_POSTGRES_DATABASE=postgres
 
 All variables except `ONETCLI_TEST_POSTGRES_PASSWORD` have defaults. Tests create and drop isolated `navop_real_pg_<pid>_<flow>` schemas.
 
+### SQL Server
+
+```bash
+export ONETCLI_TEST_MSSQL_HOST=127.0.0.1
+export ONETCLI_TEST_MSSQL_PORT=1433
+export ONETCLI_TEST_MSSQL_USER=sa
+export ONETCLI_TEST_MSSQL_PASSWORD='your-password'
+export ONETCLI_TEST_MSSQL_DATABASE=master
+```
+
+All variables except `ONETCLI_TEST_MSSQL_PASSWORD` have defaults. `ONETCLI_TEST_MSSQL_DATABASE` must point at a database the account may create tables in; the test creates and drops an isolated `navop_meta_probe_<pid>` table inside it (default `master`).
+
 ## Direct commands
 
 ```bash
@@ -55,6 +68,8 @@ ONETCLI_TEST_MYSQL_PASSWORD='your-password' \
   cargo test -p db --test real_mysql -- --nocapture
 ONETCLI_TEST_POSTGRES_PASSWORD='' \
   cargo test -p db --test real_postgres -- --nocapture
+ONETCLI_TEST_MSSQL_PASSWORD='your-password' \
+  cargo test -p db --test real_mssql -- --nocapture
 ```
 
 Run tests from the repository root. Keep any leaked test databases out of shared servers by dropping them if a test is interrupted.

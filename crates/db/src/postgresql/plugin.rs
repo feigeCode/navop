@@ -1958,7 +1958,11 @@ impl DatabasePlugin for PostgresPlugin {
                     AND a.attnum = ANY(c.conkey) \
                     AND c.contype = 'p' \
                 ) AS is_primary, \
-                col_description(a.attrelid, a.attnum) AS column_comment \
+                col_description(a.attrelid, a.attnum) AS column_comment, \
+                pg_get_serial_sequence( \
+                    quote_ident(n.nspname) || '.' || quote_ident(t.relname), \
+                    a.attname \
+                ) IS NOT NULL AS is_auto_increment \
             FROM pg_attribute a \
             LEFT JOIN pg_attrdef d ON a.attrelid = d.adrelid AND a.attnum = d.adnum \
             JOIN pg_class t ON a.attrelid = t.oid \
@@ -2000,6 +2004,11 @@ impl DatabasePlugin for PostgresPlugin {
                     comment: cell(5)?,
                     charset: None,
                     collation: None,
+                    // serial 与 identity 列都会让 `pg_get_serial_sequence` 返回非空；
+                    // 比读 `attidentity` 安全，老版本 PostgreSQL 也能执行。
+                    is_auto_increment: cell(6)?
+                        .map(|v| v == "t" || v == "true" || v == "1")
+                        .unwrap_or(false),
                 });
             }
             Ok(columns)
@@ -5942,6 +5951,7 @@ mod tests {
                     comment: None,
                     charset: None,
                     collation: None,
+                    is_auto_increment: false,
                 },
                 ColumnInfo {
                     name: "name".to_string(),
@@ -5952,6 +5962,7 @@ mod tests {
                     comment: None,
                     charset: None,
                     collation: None,
+                    is_auto_increment: false,
                 },
             ],
             index_infos: vec![],
@@ -5983,6 +5994,7 @@ mod tests {
                     comment: None,
                     charset: None,
                     collation: None,
+                    is_auto_increment: false,
                 },
                 ColumnInfo {
                     name: "score".to_string(),
@@ -5993,6 +6005,7 @@ mod tests {
                     comment: None,
                     charset: None,
                     collation: None,
+                    is_auto_increment: false,
                 },
             ],
             index_infos: vec![],
@@ -6033,6 +6046,7 @@ mod tests {
                     comment: None,
                     charset: None,
                     collation: None,
+                    is_auto_increment: false,
                 },
                 ColumnInfo {
                     name: "score".to_string(),
@@ -6043,6 +6057,7 @@ mod tests {
                     comment: None,
                     charset: None,
                     collation: None,
+                    is_auto_increment: false,
                 },
             ],
             index_infos: vec![],
@@ -6083,6 +6098,7 @@ mod tests {
                     comment: None,
                     charset: None,
                     collation: None,
+                    is_auto_increment: false,
                 },
                 ColumnInfo {
                     name: "body".to_string(),
@@ -6093,6 +6109,7 @@ mod tests {
                     comment: None,
                     charset: None,
                     collation: None,
+                    is_auto_increment: false,
                 },
                 ColumnInfo {
                     name: "note".to_string(),
@@ -6103,6 +6120,7 @@ mod tests {
                     comment: None,
                     charset: None,
                     collation: None,
+                    is_auto_increment: false,
                 },
             ],
             index_infos: vec![],
@@ -6151,6 +6169,7 @@ mod tests {
                     comment: None,
                     charset: None,
                     collation: None,
+                    is_auto_increment: false,
                 },
                 ColumnInfo {
                     name: "empty_value".to_string(),
@@ -6161,6 +6180,7 @@ mod tests {
                     comment: None,
                     charset: None,
                     collation: None,
+                    is_auto_increment: false,
                 },
                 ColumnInfo {
                     name: "literal_null".to_string(),
@@ -6171,6 +6191,7 @@ mod tests {
                     comment: None,
                     charset: None,
                     collation: None,
+                    is_auto_increment: false,
                 },
             ],
             index_infos: vec![],
@@ -6204,6 +6225,7 @@ mod tests {
                     comment: None,
                     charset: None,
                     collation: None,
+                    is_auto_increment: false,
                 },
                 ColumnInfo {
                     name: "empty_value".to_string(),
@@ -6214,6 +6236,7 @@ mod tests {
                     comment: None,
                     charset: None,
                     collation: None,
+                    is_auto_increment: false,
                 },
                 ColumnInfo {
                     name: "literal_null".to_string(),
@@ -6224,6 +6247,7 @@ mod tests {
                     comment: None,
                     charset: None,
                     collation: None,
+                    is_auto_increment: false,
                 },
             ],
             index_infos: vec![],
@@ -6258,6 +6282,7 @@ mod tests {
                     comment: None,
                     charset: None,
                     collation: None,
+                    is_auto_increment: false,
                 },
                 ColumnInfo {
                     name: "bits".to_string(),
@@ -6268,6 +6293,7 @@ mod tests {
                     comment: None,
                     charset: None,
                     collation: None,
+                    is_auto_increment: false,
                 },
                 ColumnInfo {
                     name: "payload".to_string(),
@@ -6278,6 +6304,7 @@ mod tests {
                     comment: None,
                     charset: None,
                     collation: None,
+                    is_auto_increment: false,
                 },
             ],
             index_infos: vec![],

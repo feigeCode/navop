@@ -806,6 +806,105 @@ pub enum SshAuthMethod {
     Agent,
     Pageant,
     AutoPublicKey,
+    /// 多因素认证：服务器要求依次通过多个因素（例如 `AuthenticationMethods password,publickey`）。
+    ///
+    /// 列表只声明「客户端持有哪些因素」，实际提交顺序由服务器返回的
+    /// `remaining_methods` 决定。界面上的「密码 + 密钥」组合写入本变体。
+    Chain(Vec<SshAuthMethod>),
+}
+
+impl SshAuthMethod {
+    /// 该认证方式是否包含密码因素。
+    pub fn contains_password(&self) -> bool {
+        match self {
+            SshAuthMethod::Password { .. } => true,
+            SshAuthMethod::Chain(steps) => steps.iter().any(SshAuthMethod::contains_password),
+            _ => false,
+        }
+    }
+
+    /// 该认证方式是否包含私钥因素。
+    pub fn contains_private_key(&self) -> bool {
+        match self {
+            SshAuthMethod::PrivateKey { .. } | SshAuthMethod::PrivateKeyContent { .. } => true,
+            SshAuthMethod::Chain(steps) => steps.iter().any(SshAuthMethod::contains_private_key),
+            _ => false,
+        }
+    }
+}
+
+/// 认证方式在隧道配置里的扁平表示（`auth_type` + 各凭据字段）。
+struct TunnelAuthFields {
+    auth_type: &'static str,
+    password: Option<String>,
+    private_key_path: Option<String>,
+    private_key_content: Option<String>,
+    passphrase: Option<String>,
+}
+
+/// 把认证方式摊平成隧道配置字段。
+///
+/// 组合认证（密码 + 密钥）写成 `password_and_private_key`，密码与私钥字段同时填充；
+/// 运行时由 SSH 层按服务器下发的 `remaining_methods` 依次提交两个因素。
+fn tunnel_auth_fields(auth: &SshAuthMethod) -> TunnelAuthFields {
+    fn empty(auth_type: &'static str) -> TunnelAuthFields {
+        TunnelAuthFields {
+            auth_type,
+            password: None,
+            private_key_path: None,
+            private_key_content: None,
+            passphrase: None,
+        }
+    }
+
+    match auth {
+        SshAuthMethod::Password { password } => TunnelAuthFields {
+            password: Some(password.clone()),
+            ..empty("password")
+        },
+        SshAuthMethod::PrivateKey {
+            key_path,
+            passphrase,
+        } => TunnelAuthFields {
+            private_key_path: Some(key_path.clone()),
+            passphrase: passphrase.clone(),
+            ..empty("private_key")
+        },
+        SshAuthMethod::PrivateKeyContent {
+            private_key,
+            passphrase,
+        } => TunnelAuthFields {
+            private_key_content: Some(private_key.clone()),
+            passphrase: passphrase.clone(),
+            ..empty("private_key_content")
+        },
+        SshAuthMethod::Agent => empty("agent"),
+        SshAuthMethod::Pageant => empty("pageant"),
+        SshAuthMethod::AutoPublicKey => empty("auto_publickey"),
+        SshAuthMethod::Chain(steps) => {
+            let mut fields = empty("password_and_private_key");
+            for step in steps {
+                let step_fields = tunnel_auth_fields(step);
+                fields.password = fields.password.or(step_fields.password);
+                fields.private_key_path = fields.private_key_path.or(step_fields.private_key_path);
+                fields.private_key_content = fields
+                    .private_key_content
+                    .or(step_fields.private_key_content);
+                fields.passphrase = fields.passphrase.or(step_fields.passphrase);
+            }
+            // 只带一个因素的链退化成对应的单因素表示，避免存储层出现空头组合。
+            if fields.password.is_none() {
+                fields.auth_type = if fields.private_key_content.is_some() {
+                    "private_key_content"
+                } else {
+                    "private_key"
+                };
+            } else if fields.private_key_path.is_none() && fields.private_key_content.is_none() {
+                fields.auth_type = "password";
+            }
+            fields
+        }
+    }
 }
 
 /// Redis 连接模式
@@ -898,56 +997,12 @@ impl RedisParams {
         tunnel.target_host.get_or_insert_with(|| self.host.clone());
         tunnel.target_port.get_or_insert(self.port);
 
-        match ssh_params.auth_method {
-            SshAuthMethod::Password { password } => {
-                tunnel.auth_type = "password".to_string();
-                tunnel.password = Some(password);
-                tunnel.private_key_path = None;
-                tunnel.private_key_content = None;
-                tunnel.private_key_passphrase = None;
-            }
-            SshAuthMethod::PrivateKey {
-                key_path,
-                passphrase,
-            } => {
-                tunnel.auth_type = "private_key".to_string();
-                tunnel.password = None;
-                tunnel.private_key_path = Some(key_path);
-                tunnel.private_key_content = None;
-                tunnel.private_key_passphrase = passphrase;
-            }
-            SshAuthMethod::PrivateKeyContent {
-                private_key,
-                passphrase,
-            } => {
-                tunnel.auth_type = "private_key_content".to_string();
-                tunnel.password = None;
-                tunnel.private_key_path = None;
-                tunnel.private_key_content = Some(private_key);
-                tunnel.private_key_passphrase = passphrase;
-            }
-            SshAuthMethod::Agent => {
-                tunnel.auth_type = "agent".to_string();
-                tunnel.password = None;
-                tunnel.private_key_path = None;
-                tunnel.private_key_content = None;
-                tunnel.private_key_passphrase = None;
-            }
-            SshAuthMethod::Pageant => {
-                tunnel.auth_type = "pageant".to_string();
-                tunnel.password = None;
-                tunnel.private_key_path = None;
-                tunnel.private_key_content = None;
-                tunnel.private_key_passphrase = None;
-            }
-            SshAuthMethod::AutoPublicKey => {
-                tunnel.auth_type = "auto_publickey".to_string();
-                tunnel.password = None;
-                tunnel.private_key_path = None;
-                tunnel.private_key_content = None;
-                tunnel.private_key_passphrase = None;
-            }
-        }
+        let auth_fields = tunnel_auth_fields(&ssh_params.auth_method);
+        tunnel.auth_type = auth_fields.auth_type.to_string();
+        tunnel.password = auth_fields.password;
+        tunnel.private_key_path = auth_fields.private_key_path;
+        tunnel.private_key_content = auth_fields.private_key_content;
+        tunnel.private_key_passphrase = auth_fields.passphrase;
 
         Ok(())
     }
@@ -1041,56 +1096,12 @@ impl MongoDBParams {
         tunnel.target_host.get_or_insert_with(|| self.host.clone());
         tunnel.target_port.get_or_insert(self.port.unwrap_or(27017));
 
-        match ssh_params.auth_method {
-            SshAuthMethod::Password { password } => {
-                tunnel.auth_type = "password".to_string();
-                tunnel.password = Some(password);
-                tunnel.private_key_path = None;
-                tunnel.private_key_content = None;
-                tunnel.private_key_passphrase = None;
-            }
-            SshAuthMethod::PrivateKey {
-                key_path,
-                passphrase,
-            } => {
-                tunnel.auth_type = "private_key".to_string();
-                tunnel.password = None;
-                tunnel.private_key_path = Some(key_path);
-                tunnel.private_key_content = None;
-                tunnel.private_key_passphrase = passphrase;
-            }
-            SshAuthMethod::PrivateKeyContent {
-                private_key,
-                passphrase,
-            } => {
-                tunnel.auth_type = "private_key_content".to_string();
-                tunnel.password = None;
-                tunnel.private_key_path = None;
-                tunnel.private_key_content = Some(private_key);
-                tunnel.private_key_passphrase = passphrase;
-            }
-            SshAuthMethod::Agent => {
-                tunnel.auth_type = "agent".to_string();
-                tunnel.password = None;
-                tunnel.private_key_path = None;
-                tunnel.private_key_content = None;
-                tunnel.private_key_passphrase = None;
-            }
-            SshAuthMethod::Pageant => {
-                tunnel.auth_type = "pageant".to_string();
-                tunnel.password = None;
-                tunnel.private_key_path = None;
-                tunnel.private_key_content = None;
-                tunnel.private_key_passphrase = None;
-            }
-            SshAuthMethod::AutoPublicKey => {
-                tunnel.auth_type = "auto_publickey".to_string();
-                tunnel.password = None;
-                tunnel.private_key_path = None;
-                tunnel.private_key_content = None;
-                tunnel.private_key_passphrase = None;
-            }
-        }
+        let auth_fields = tunnel_auth_fields(&ssh_params.auth_method);
+        tunnel.auth_type = auth_fields.auth_type.to_string();
+        tunnel.password = auth_fields.password;
+        tunnel.private_key_path = auth_fields.private_key_path;
+        tunnel.private_key_content = auth_fields.private_key_content;
+        tunnel.private_key_passphrase = auth_fields.passphrase;
 
         Ok(())
     }
@@ -1210,56 +1221,12 @@ impl MqttParams {
         tunnel.target_host.get_or_insert_with(|| self.host.clone());
         tunnel.target_port.get_or_insert(self.port);
 
-        match ssh_params.auth_method {
-            SshAuthMethod::Password { password } => {
-                tunnel.auth_type = "password".to_string();
-                tunnel.password = Some(password);
-                tunnel.private_key_path = None;
-                tunnel.private_key_content = None;
-                tunnel.private_key_passphrase = None;
-            }
-            SshAuthMethod::PrivateKey {
-                key_path,
-                passphrase,
-            } => {
-                tunnel.auth_type = "private_key".to_string();
-                tunnel.password = None;
-                tunnel.private_key_path = Some(key_path);
-                tunnel.private_key_content = None;
-                tunnel.private_key_passphrase = passphrase;
-            }
-            SshAuthMethod::PrivateKeyContent {
-                private_key,
-                passphrase,
-            } => {
-                tunnel.auth_type = "private_key_content".to_string();
-                tunnel.password = None;
-                tunnel.private_key_path = None;
-                tunnel.private_key_content = Some(private_key);
-                tunnel.private_key_passphrase = passphrase;
-            }
-            SshAuthMethod::Agent => {
-                tunnel.auth_type = "agent".to_string();
-                tunnel.password = None;
-                tunnel.private_key_path = None;
-                tunnel.private_key_content = None;
-                tunnel.private_key_passphrase = None;
-            }
-            SshAuthMethod::Pageant => {
-                tunnel.auth_type = "pageant".to_string();
-                tunnel.password = None;
-                tunnel.private_key_path = None;
-                tunnel.private_key_content = None;
-                tunnel.private_key_passphrase = None;
-            }
-            SshAuthMethod::AutoPublicKey => {
-                tunnel.auth_type = "auto_publickey".to_string();
-                tunnel.password = None;
-                tunnel.private_key_path = None;
-                tunnel.private_key_content = None;
-                tunnel.private_key_passphrase = None;
-            }
-        }
+        let auth_fields = tunnel_auth_fields(&ssh_params.auth_method);
+        tunnel.auth_type = auth_fields.auth_type.to_string();
+        tunnel.password = auth_fields.password;
+        tunnel.private_key_path = auth_fields.private_key_path;
+        tunnel.private_key_content = auth_fields.private_key_content;
+        tunnel.private_key_passphrase = auth_fields.passphrase;
 
         Ok(())
     }
@@ -1888,53 +1855,26 @@ impl DbConnectionConfig {
                 .insert("ssh_timeout".to_string(), timeout.to_string());
         }
 
-        match ssh_params.auth_method {
-            SshAuthMethod::Password { password } => {
-                self.extra_params
-                    .insert("ssh_auth_type".to_string(), "password".to_string());
-                self.extra_params
-                    .insert("ssh_password".to_string(), password);
-            }
-            SshAuthMethod::PrivateKey {
-                key_path,
-                passphrase,
-            } => {
-                self.extra_params
-                    .insert("ssh_auth_type".to_string(), "private_key".to_string());
-                self.extra_params
-                    .insert("ssh_private_key_path".to_string(), key_path);
-                if let Some(passphrase) = passphrase {
-                    self.extra_params
-                        .insert("ssh_private_key_passphrase".to_string(), passphrase);
-                }
-            }
-            SshAuthMethod::PrivateKeyContent {
-                private_key,
-                passphrase,
-            } => {
-                self.extra_params.insert(
-                    "ssh_auth_type".to_string(),
-                    "private_key_content".to_string(),
-                );
-                self.extra_params
-                    .insert("ssh_private_key_content".to_string(), private_key);
-                if let Some(passphrase) = passphrase {
-                    self.extra_params
-                        .insert("ssh_private_key_passphrase".to_string(), passphrase);
-                }
-            }
-            SshAuthMethod::Agent => {
-                self.extra_params
-                    .insert("ssh_auth_type".to_string(), "agent".to_string());
-            }
-            SshAuthMethod::Pageant => {
-                self.extra_params
-                    .insert("ssh_auth_type".to_string(), "pageant".to_string());
-            }
-            SshAuthMethod::AutoPublicKey => {
-                self.extra_params
-                    .insert("ssh_auth_type".to_string(), "auto_publickey".to_string());
-            }
+        let auth_fields = tunnel_auth_fields(&ssh_params.auth_method);
+        self.extra_params.insert(
+            "ssh_auth_type".to_string(),
+            auth_fields.auth_type.to_string(),
+        );
+        if let Some(password) = auth_fields.password {
+            self.extra_params
+                .insert("ssh_password".to_string(), password);
+        }
+        if let Some(key_path) = auth_fields.private_key_path {
+            self.extra_params
+                .insert("ssh_private_key_path".to_string(), key_path);
+        }
+        if let Some(private_key) = auth_fields.private_key_content {
+            self.extra_params
+                .insert("ssh_private_key_content".to_string(), private_key);
+        }
+        if let Some(passphrase) = auth_fields.passphrase {
+            self.extra_params
+                .insert("ssh_private_key_passphrase".to_string(), passphrase);
         }
 
         Ok(())
@@ -3338,6 +3278,69 @@ mod tests {
         );
         assert_eq!(None, db.extra_params.get("ssh_password"));
         assert_eq!(None, db.extra_params.get("ssh_private_key_path"));
+    }
+
+    #[test]
+    fn db_connection_applies_referenced_combined_ssh_connection() {
+        let ssh = ssh_connection_with_id(
+            42,
+            SshAuthMethod::Chain(vec![
+                SshAuthMethod::Password {
+                    password: "ssh-secret".to_string(),
+                },
+                SshAuthMethod::PrivateKey {
+                    key_path: "/home/deploy/.ssh/id_ed25519".to_string(),
+                    passphrase: Some("key-secret".to_string()),
+                },
+            ]),
+        );
+        let mut db = database_config_with_ssh_ref(42);
+
+        db.apply_referenced_ssh_tunnel(&ssh)
+            .expect("combined ssh connection should be reusable by db tunnel");
+
+        assert_eq!(
+            Some(&"password_and_private_key".to_string()),
+            db.extra_params.get("ssh_auth_type")
+        );
+        assert_eq!(
+            Some(&"ssh-secret".to_string()),
+            db.extra_params.get("ssh_password")
+        );
+        assert_eq!(
+            Some(&"/home/deploy/.ssh/id_ed25519".to_string()),
+            db.extra_params.get("ssh_private_key_path")
+        );
+    }
+
+    #[test]
+    fn ssh_auth_method_chain_round_trips_through_json() {
+        let auth = SshAuthMethod::Chain(vec![
+            SshAuthMethod::Password {
+                password: "ssh-secret".to_string(),
+            },
+            SshAuthMethod::PrivateKeyContent {
+                private_key: "-----BEGIN OPENSSH PRIVATE KEY-----".to_string(),
+                passphrase: None,
+            },
+        ]);
+
+        let json = serde_json::to_value(&auth).expect("chain auth should serialize");
+        assert!(json.get("Chain").is_some(), "组合认证应序列化为 Chain 变体");
+
+        let parsed: SshAuthMethod =
+            serde_json::from_value(json.clone()).expect("chain auth should deserialize");
+        assert_eq!(
+            json,
+            serde_json::to_value(&parsed).expect("parsed chain auth should serialize again")
+        );
+
+        // 旧数据（单因素）不受影响。
+        let legacy: SshAuthMethod = serde_json::from_value(serde_json::json!({
+            "Password": { "password": "legacy" }
+        }))
+        .expect("legacy single-factor json should still parse");
+        assert!(matches!(legacy, SshAuthMethod::Password { .. }));
     }
 
     #[test]

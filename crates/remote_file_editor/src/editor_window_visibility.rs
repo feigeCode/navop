@@ -1,14 +1,26 @@
 //! Keep the macOS editor's native window alive across close/reopen (issue #262).
 //! This avoids the suspected Touch Bar observer teardown trigger, not all
 //! possible AppKit exceptions. The caller still owns the GPUI window.
+//!
+//! 与 `one_core::window_close::hide_for_reuse` 同构（那份管弹窗，这份管编辑器窗口），
+//! 因此同样受 `one_core::window_close::HIDE_WINDOWS_ON_CLOSE` 门控：只有打包时开了
+//! `macos-touchbar-window-hide` 的 macOS 包才隐藏（当前发布流水线只给 x86_64 打开），
+//! 其他构建退回销毁。
 
 /// `true` means hidden and reusable; `false` preserves other platforms' close
-/// behavior. Errors let the caller fall back to actual window removal.
+/// behavior. An error means the build opted in but the hide failed: the caller must
+/// keep the window (and its session) instead of falling back to removal — removal is
+/// the very AppKit close path this switch exists to avoid.
 #[cfg(target_os = "macos")]
 pub(super) fn hide_for_reuse(window: &gpui::Window) -> anyhow::Result<bool> {
     use anyhow::Context as _;
     use objc2_app_kit::NSView;
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    // 未启用兜底的构建（ARM macOS / Windows / Linux）按原行为销毁；判据与弹窗共用同一个常量。
+    if !one_core::window_close::HIDE_WINDOWS_ON_CLOSE {
+        return Ok(false);
+    }
 
     let Some(_main_thread) = objc2::MainThreadMarker::new() else {
         anyhow::bail!("remote editor window must be hidden on the AppKit main thread");

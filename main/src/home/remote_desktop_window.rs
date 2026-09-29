@@ -1,5 +1,5 @@
 use gpui::{AppContext, Focusable};
-use one_core::popup_window::{PopupWindowOptions, open_popup_window};
+use one_core::popup_window::{PopupWindowOptions, open_reusable_popup_window};
 #[cfg(target_os = "windows")]
 use one_core::storage::RemoteDesktopParams;
 use remote_desktop::RemoteDesktopConnectionOptions;
@@ -81,14 +81,18 @@ pub(crate) fn open_remote_desktop_fullscreen_window(
     title: String,
     cx: &mut gpui::App,
 ) {
-    open_popup_window(
+    // 复用键按目标机器区分：同时连两台不同机器仍然各占一个窗口，重连同一台则复用
+    // （窗口关闭时会卸载业务 view，所以复用不会把上一条连接的界面带过来）。
+    let reuse_key = format!("remote-desktop:{}", options.destination);
+    open_reusable_popup_window(
         remote_desktop_window_options(title.clone()),
+        reuse_key,
         move |window, cx| {
             let view = cx.new(|cx| {
                 RemoteDesktopView::new(
                     RemoteDesktopViewConfig {
-                        options,
-                        title,
+                        options: options.clone(),
+                        title: title.clone(),
                         tab_index: None,
                     },
                     window.window_handle(),

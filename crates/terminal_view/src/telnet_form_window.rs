@@ -33,6 +33,8 @@ use one_core::storage::{
 };
 use rust_i18n::t;
 
+/// Telnet 表单窗口配置。`Clone` 见 `one_core::popup_window::open_reusable_popup_window`。
+#[derive(Clone)]
 pub struct TelnetFormWindowConfig {
     pub editing_connection: Option<StoredConnection>,
     pub workspaces: Vec<Workspace>,
@@ -555,7 +557,7 @@ impl TelnetFormWindow {
                         cx.emit(event);
                     });
                 }
-                window.remove_window();
+                let _ = one_core::window_close::close_window_for_reuse(window, cx);
             }
             Err(error) => {
                 let message = t!("Telnet.save_failed", error = error).to_string();
@@ -566,8 +568,8 @@ impl TelnetFormWindow {
         }
     }
 
-    fn on_cancel(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
-        window.remove_window();
+    fn on_cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let _ = one_core::window_close::close_window_for_reuse(window, cx);
     }
 
     fn render_form_row(&self, label: &str, child: impl IntoElement) -> impl IntoElement {

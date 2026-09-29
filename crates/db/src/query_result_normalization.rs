@@ -385,6 +385,7 @@ mod tests {
             comment: None,
             charset: Some("utf8mb4".to_string()),
             collation: Some("utf8mb4_0900_ai_ci".to_string()),
+            is_auto_increment: false,
         }
     }
 

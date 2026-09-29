@@ -121,7 +121,7 @@ impl MiddlewareFormWindow {
                     if let Some(callback) = on_saved_callback.as_ref() {
                         callback(conn.as_ref().clone(), cx);
                     }
-                    window.remove_window();
+                    let _ = one_core::window_close::close_window_for_reuse(window, cx);
                 }
                 MiddlewareFormEvent::SaveError(_) => {}
             },
@@ -158,7 +158,7 @@ impl MiddlewareFormWindow {
         self.form.update(cx, |form, cx| {
             form.trigger_cancel(cx);
         });
-        window.remove_window();
+        let _ = one_core::window_close::close_window_for_reuse(window, cx);
     }
 
     /// 支持保存并继续(由调用方通过 `on_saved` 启用)

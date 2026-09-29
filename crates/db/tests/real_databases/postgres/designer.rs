@@ -126,6 +126,19 @@ async fn assert_created_metadata(
         .await
         .expect("created columns");
     assert!(columns.iter().any(|column| column.name == "label"));
+    // serial 列的默认值是 `nextval(...)`，靠 `pg_get_serial_sequence` 才能认出它是自增。
+    assert!(
+        columns
+            .iter()
+            .any(|column| column.name == "id" && column.is_auto_increment),
+        "serial 主键应被标记为 is_auto_increment"
+    );
+    assert!(
+        !columns
+            .iter()
+            .any(|column| column.name == "label" && column.is_auto_increment),
+        "普通列不应被标记为自增"
+    );
     let indexes = plugin
         .list_indexes(connection, "postgres", Some(schema.to_string()), "designed")
         .await

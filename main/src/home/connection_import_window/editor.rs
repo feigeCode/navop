@@ -4,7 +4,7 @@ use db_view::connection_form_window::{
 use gpui::{App, AppContext, Context, Window};
 use mongodb_view::{MongoFormSavedCallback, MongoFormWindow, MongoFormWindowConfig};
 use one_core::cloud_sync::get_cached_team_options;
-use one_core::popup_window::{PopupWindowOptions, open_popup_window};
+use one_core::popup_window::{PopupWindowOptions, open_reusable_popup_window};
 use one_core::storage::{ConnectionType, StoredConnection};
 use redis_view::{RedisFormSavedCallback, RedisFormWindow, RedisFormWindowConfig};
 use rust_i18n::t;
@@ -54,6 +54,8 @@ impl ConnectionImportWindow {
         let Ok(config) = connection.to_db_connection() else {
             return;
         };
+        // 复用键按导入草稿行区分：同一行反复编辑复用同一个窗口。
+        let reuse_key = format!("connection-form:import-db:{record_id}");
         let (workspaces, ssh_connections, external_driver_registry) =
             self.parent.read(cx).import_editor_context();
         let form_config = ConnectionFormWindowConfig {
@@ -67,9 +69,12 @@ impl ConnectionImportWindow {
             teams: get_cached_team_options(cx),
             ssh_connections,
         };
-        open_popup_window(
+        open_reusable_popup_window(
             PopupWindowOptions::new(t!("Home.import").to_string()).size(700.0, 650.0),
-            move |window, cx| cx.new(|cx| ConnectionFormWindow::new(form_config, window, cx)),
+            reuse_key,
+            move |window, cx| {
+                cx.new(|cx| ConnectionFormWindow::new(form_config.clone(), window, cx))
+            },
             None,
             cx,
         );
@@ -82,6 +87,8 @@ impl ConnectionImportWindow {
         cx: &mut Context<Self>,
     ) {
         let (workspaces, ssh_connections, _) = self.parent.read(cx).import_editor_context();
+        // 复用键按导入草稿行区分：同一行反复编辑复用同一个窗口。
+        let reuse_key = format!("connection-form:import-redis:{record_id}");
         let form_config = RedisFormWindowConfig {
             editing_connection: None,
             initial_connection: Some(connection),
@@ -90,9 +97,10 @@ impl ConnectionImportWindow {
             teams: get_cached_team_options(cx),
             ssh_connections,
         };
-        open_popup_window(
+        open_reusable_popup_window(
             PopupWindowOptions::new(t!("Home.import").to_string()).size(700.0, 650.0),
-            move |window, cx| cx.new(|cx| RedisFormWindow::new(form_config, window, cx)),
+            reuse_key,
+            move |window, cx| cx.new(|cx| RedisFormWindow::new(form_config.clone(), window, cx)),
             None,
             cx,
         );
@@ -105,6 +113,8 @@ impl ConnectionImportWindow {
         cx: &mut Context<Self>,
     ) {
         let (workspaces, ssh_connections, _) = self.parent.read(cx).import_editor_context();
+        // 复用键按导入草稿行区分：同一行反复编辑复用同一个窗口。
+        let reuse_key = format!("connection-form:import-mongo:{record_id}");
         let form_config = MongoFormWindowConfig {
             editing_connection: None,
             initial_connection: Some(connection),
@@ -113,9 +123,10 @@ impl ConnectionImportWindow {
             teams: get_cached_team_options(cx),
             ssh_connections,
         };
-        open_popup_window(
+        open_reusable_popup_window(
             PopupWindowOptions::new(t!("Home.import").to_string()).size(700.0, 650.0),
-            move |window, cx| cx.new(|cx| MongoFormWindow::new(form_config, window, cx)),
+            reuse_key,
+            move |window, cx| cx.new(|cx| MongoFormWindow::new(form_config.clone(), window, cx)),
             None,
             cx,
         );
@@ -128,6 +139,8 @@ impl ConnectionImportWindow {
         cx: &mut Context<Self>,
     ) {
         let (workspaces, _, _) = self.parent.read(cx).import_editor_context();
+        // 复用键按导入草稿行区分：同一行反复编辑复用同一个窗口。
+        let reuse_key = format!("connection-form:import-ssh:{record_id}");
         let form_config = SshFormWindowConfig {
             editing_connection: None,
             initial_connection: Some(connection),
@@ -135,9 +148,10 @@ impl ConnectionImportWindow {
             workspaces,
             teams: get_cached_team_options(cx),
         };
-        open_popup_window(
+        open_reusable_popup_window(
             PopupWindowOptions::new(t!("Home.import").to_string()).size(750.0, 650.0),
-            move |window, cx| cx.new(|cx| SshFormWindow::new(form_config, window, cx)),
+            reuse_key,
+            move |window, cx| cx.new(|cx| SshFormWindow::new(form_config.clone(), window, cx)),
             None,
             cx,
         );

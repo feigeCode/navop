@@ -9,22 +9,24 @@
 use std::cell::RefCell;
 use std::ops::Range;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::Result;
 use db::sql_editor::sql_tokenizer::{SqlTokenKind, SqlTokenizer};
-use gpui::{App, AppContext, Task, Window};
+use gpui::{App, AsyncApp, Task, Window};
 use gpui_component::Rope;
 use gpui_component::input::HoverProvider;
 use lsp_types::{
     Hover as LspHover, HoverContents, MarkupContent, MarkupKind, Position as LspPosition,
     Range as LspRange,
 };
+use rust_i18n::t;
 
 use crate::sql_editor::{
     ForeignSchema, SqlColumnDetail, SqlObjectType, SqlSchema, SqlTableDetail, find_foreign_schema,
 };
+use crate::table_ddl::{SqlTableRef, TableDdlSources, load_ddl_section, with_ddl_section};
 
 /// One part of a qualified SQL identifier (e.g. the `users` in `db.users`).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -50,7 +52,8 @@ pub struct SqlQualifiedIdentifier {
 #[derive(Clone, Debug)]
 pub enum SqlHoverObject {
     Table {
-        name: String,
+        /// 表的完整坐标（当前 scope 或限定名指向的外库/外 schema）。
+        table: SqlTableRef,
         detail: SqlTableDetail,
     },
     Column {
@@ -77,12 +80,16 @@ pub struct DefaultSqlHoverProvider {
 #[derive(Clone)]
 pub(crate) struct SqlHoverSources {
     pub(crate) schema: Arc<SqlSchema>,
+    /// 建表 DDL 的来源（连接上下文 + 加载器）。编辑器注入；嵌在单元格里的
+    /// 编辑器没有，那种场景下 hover/详情不展示 DDL 区段。
+    pub(crate) table_ddl: Option<TableDdlSources>,
 }
 
 impl Default for SqlHoverSources {
     fn default() -> Self {
         Self {
             schema: Arc::new(SqlSchema::default()),
+            table_ddl: None,
         }
     }
 }
@@ -92,6 +99,7 @@ impl DefaultSqlHoverProvider {
         Self {
             sources: Rc::new(RefCell::new(SqlHoverSources {
                 schema: Arc::new(schema),
+                table_ddl: None,
             })),
             latest_offset: Arc::new(AtomicUsize::new(usize::MAX)),
         }
@@ -102,8 +110,24 @@ impl DefaultSqlHoverProvider {
         self.sources.borrow_mut().schema = Arc::new(schema);
     }
 
+    /// 注入（或清空）建表 DDL 的来源。
+    pub fn set_table_ddl(&self, table_ddl: Option<TableDdlSources>) {
+        self.sources.borrow_mut().table_ddl = table_ddl;
+    }
+
+    /// 当前建表 DDL 来源。
+    pub fn table_ddl(&self) -> Option<TableDdlSources> {
+        self.sources.borrow().table_ddl.clone()
+    }
+
     pub(crate) fn snapshot(&self) -> SqlHoverSources {
         self.sources.borrow().clone()
+    }
+
+    /// Shared schema snapshot, so other providers (Cmd/Ctrl+click definition)
+    /// see exactly the same metadata generation.
+    pub(crate) fn sources_handle(&self) -> Rc<RefCell<SqlHoverSources>> {
+        self.sources.clone()
     }
 }
 
@@ -116,7 +140,7 @@ impl HoverProvider for DefaultSqlHoverProvider {
         cx: &mut App,
     ) -> Task<Result<Option<LspHover>>> {
         let text = text.to_string();
-        let schema = self.snapshot().schema;
+        let sources = self.snapshot();
         let latest_offset = self.latest_offset.clone();
         latest_offset.store(offset, Ordering::SeqCst);
         // Dwell debounce: the caller (gpui-kit) already waits ~150ms before
@@ -126,74 +150,176 @@ impl HoverProvider for DefaultSqlHoverProvider {
         // superseded by a newer offset resolve to None and the popover never
         // appears for the stale one.
         const HOVER_DWELL_MS: u64 = 600;
-        cx.background_spawn(async move {
+        // 前景（非 Send）任务：DDL 要经 [`TableDdlSources`] 的加载器取，它持有
+        // `Rc` 句柄。
+        cx.spawn(async move |cx: &mut AsyncApp| {
             smol::Timer::after(std::time::Duration::from_millis(HOVER_DWELL_MS)).await;
             if latest_offset.load(Ordering::SeqCst) != offset {
                 return Ok(None);
             }
-            Ok(build_lsp_hover(&text, offset, &schema))
+            build_lsp_hover_async(&text, offset, &sources, cx).await
         })
     }
 }
 
+/// The semantic kind of a resolved object, used to pick the details tab icon.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SqlObjectDetailsKind {
+    Table,
+    Column,
+    Function,
+}
+
+/// A resolved object: its details markdown plus the identity of the source
+/// identifier it was resolved from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SqlObjectDetails {
+    /// Markdown body（不含 DDL 区段）shared with the hover popover and the
+    /// details tab. DDL 要按连接上下文异步取，见 [`SqlObjectDetails::table`]。
+    pub markdown: String,
+    /// Byte range of the whole (possibly qualified) identifier.
+    pub range: Range<usize>,
+    /// Stable slug for the object inside its database/schema scope, so the same
+    /// object always maps to the same details tab.
+    pub id: String,
+    /// Object label shown on the details tab (`users`, `users.id`, ...).
+    pub label: String,
+    /// Kind of the resolved object.
+    pub kind: SqlObjectDetailsKind,
+    /// 解析到的表坐标：只有表对象（不含视图、列、函数）有值。调用方拿到连接
+    /// 上下文后用它取驱动生成的建表 DDL。
+    pub table: Option<SqlTableRef>,
+}
+
 /// Full hover pipeline: locate identifier -> resolve -> render markdown.
+///
+/// 主体 markdown（不含 DDL 区段）：DDL 需要异步取驱动结果，见
+/// [`build_lsp_hover_async`]。这里只服务单测（生产 hover 一律走异步版）。
+#[cfg(test)]
 pub fn build_lsp_hover(text: &str, offset: usize, schema: &SqlSchema) -> Option<LspHover> {
-    let ident = locate_identifier(text, offset)?;
-    let object = resolve_hover(schema, &ident)?;
-    let (markdown, _ddl_is_fallback) = build_hover(&object);
-    let start = offset_to_lsp_position(text, ident.range.start);
-    let end = offset_to_lsp_position(text, ident.range.end);
-    Some(LspHover {
+    let details = resolve_object_details(text, offset, schema)?;
+    Some(lsp_hover_for(text, &details, details.markdown.clone()))
+}
+
+/// 带建表 DDL 的 hover：表对象等驱动生成 DDL 后一并渲染。
+pub async fn build_lsp_hover_async(
+    text: &str,
+    offset: usize,
+    sources: &SqlHoverSources,
+    cx: &mut AsyncApp,
+) -> Result<Option<LspHover>> {
+    let Some(details) = resolve_object_details(text, offset, &sources.schema) else {
+        return Ok(None);
+    };
+    let section = load_ddl_section(details.table.as_ref(), sources.table_ddl.as_ref(), cx).await;
+    let markdown = with_ddl_section(&details.markdown, section.as_ref());
+    Ok(Some(lsp_hover_for(text, &details, markdown)))
+}
+
+fn lsp_hover_for(text: &str, details: &SqlObjectDetails, markdown: String) -> LspHover {
+    let start = offset_to_lsp_position(text, details.range.start);
+    let end = offset_to_lsp_position(text, details.range.end);
+    LspHover {
         contents: HoverContents::Markup(MarkupContent {
             kind: MarkupKind::Markdown,
             value: markdown,
         }),
         range: Some(LspRange::new(start, end)),
+    }
+}
+
+/// Render the object under `offset` (or nothing when it is not a known
+/// table/column/function). Shared by the hover popover and the
+/// Cmd/Ctrl+click definition provider, so both must agree on what counts as
+/// a hit.
+pub fn resolve_object_details(
+    text: &str,
+    offset: usize,
+    schema: &SqlSchema,
+) -> Option<SqlObjectDetails> {
+    let ident = locate_identifier(text, offset)?;
+    let object = resolve_hover(schema, &ident)?;
+    Some(SqlObjectDetails {
+        markdown: build_hover(&object),
+        range: ident.range,
+        id: object_details_id(schema, &object),
+        label: object_label(&object),
+        kind: object_kind(&object),
+        table: ddl_table_of(&object),
     })
 }
 
-/// Selection-aware hover resolution for the context menu.
-///
-/// With a selection, right-clicking keeps the selection (gpui-kit only moves
-/// the cursor when the click falls outside it), but the cursor can sit at a
-/// selection edge where `locate_identifier` fails or anchors the wrong token.
-/// Try the selection body first (start, mid, end), then the bare cursor.
-pub fn build_lsp_hover_for_selection(
-    text: &str,
-    selection: Option<Range<usize>>,
-    cursor: usize,
-    schema: &SqlSchema,
-) -> Option<LspHover> {
-    if let Some(sel) = selection
-        && !sel.is_empty()
-    {
-        let mid = sel.start + (sel.end - sel.start) / 2;
-        for offset in [sel.start, mid, sel.end - 1, sel.end] {
-            if let Some(hover) = build_lsp_hover(text, offset, schema) {
-                return Some(hover);
-            }
+/// 能生成建表 DDL 的对象坐标：只有表（视图没有建表 DDL，列/函数不是表）。
+fn ddl_table_of(object: &SqlHoverObject) -> Option<SqlTableRef> {
+    match object {
+        SqlHoverObject::Table { table, detail } if detail.object_type == SqlObjectType::Table => {
+            Some(table.clone())
         }
+        _ => None,
     }
-    build_lsp_hover(text, cursor, schema)
 }
 
-/// Best-effort `CREATE TABLE/VIEW` DDL for the identifier at `cursor` (or in
-/// `selection`), suitable for the "Copy DDL" context-menu item.
-pub fn build_ddl_for_selection(
+/// Stable slug for `object` inside its database/schema scope.
+fn object_details_id(schema: &SqlSchema, object: &SqlHoverObject) -> String {
+    let scope = schema
+        .current_database
+        .iter()
+        .chain(schema.current_schema.iter())
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(".");
+    let (kind, name) = match object {
+        SqlHoverObject::Table { table, .. } => ("table", table.name.clone()),
+        SqlHoverObject::Column { table, column } => ("column", format!("{table}.{}", column.name)),
+        SqlHoverObject::Function { signature, .. } => ("function", signature.clone()),
+    };
+    if scope.is_empty() {
+        format!("{kind}:{name}")
+    } else {
+        format!("{scope}:{kind}:{name}")
+    }
+}
+
+/// Label shown on the details tab: the object itself, not its scope.
+fn object_label(object: &SqlHoverObject) -> String {
+    match object {
+        SqlHoverObject::Table { table, .. } => table.name.clone(),
+        SqlHoverObject::Column { table, column } => format!("{table}.{}", column.name),
+        SqlHoverObject::Function { signature, .. } => signature.clone(),
+    }
+}
+
+fn object_kind(object: &SqlHoverObject) -> SqlObjectDetailsKind {
+    match object {
+        SqlHoverObject::Table { .. } => SqlObjectDetailsKind::Table,
+        SqlHoverObject::Column { .. } => SqlObjectDetailsKind::Column,
+        SqlHoverObject::Function { .. } => SqlObjectDetailsKind::Function,
+    }
+}
+
+/// Offsets to probe for a selection-aware resolution: the selection body first
+/// (start, mid, end), then the bare cursor.
+fn selection_probe_offsets(selection: Option<Range<usize>>, cursor: usize) -> Vec<usize> {
+    match selection {
+        Some(sel) if !sel.is_empty() => {
+            let mid = sel.start + (sel.end - sel.start) / 2;
+            vec![sel.start, mid, sel.end - 1, sel.end, cursor]
+        }
+        _ => vec![cursor],
+    }
+}
+
+/// Selection-aware variant of [`resolve_object_details`], used by the context
+/// menu.
+pub fn resolve_object_details_for_selection(
     text: &str,
     selection: Option<Range<usize>>,
     cursor: usize,
     schema: &SqlSchema,
-) -> Option<String> {
-    let hover = build_lsp_hover_for_selection(text, selection, cursor, schema)?;
-    let markdown = match &hover.contents {
-        HoverContents::Markup(markup) => markup.value.clone(),
-        _ => return None,
-    };
-    // The table hover embeds the DDL in a trailing ```sql fenced block.
-    let start = markdown.find("```sql\n")? + "```sql\n".len();
-    let end = markdown[start..].find("```")? + start;
-    Some(markdown[start..end].trim_end().to_string())
+) -> Option<SqlObjectDetails> {
+    selection_probe_offsets(selection, cursor)
+        .into_iter()
+        .find_map(|offset| resolve_object_details(text, offset, schema))
 }
 
 /// Locate the maximal dotted identifier containing `offset`.
@@ -350,6 +476,15 @@ fn next_non_trivia(
     None
 }
 
+/// 当前 scope 里的表坐标：database/schema 取自快照的当前 scope。
+fn current_table_ref(schema: &SqlSchema, name: String) -> SqlTableRef {
+    SqlTableRef {
+        name,
+        database: schema.current_database.clone().unwrap_or_default(),
+        schema: schema.current_schema.clone(),
+    }
+}
+
 /// Resolve a qualified identifier against the metadata snapshot.
 ///
 /// The current database/schema scope is used to reject cross-database bare-name
@@ -359,7 +494,10 @@ pub fn resolve_hover(schema: &SqlSchema, ident: &SqlQualifiedIdentifier) -> Opti
     match parts.as_slice() {
         [name] => {
             if let Some((name, detail)) = find_table_detail(schema, name) {
-                return Some(SqlHoverObject::Table { name, detail });
+                return Some(SqlHoverObject::Table {
+                    table: current_table_ref(schema, name),
+                    detail,
+                });
             }
             if let Some((signature, doc)) = find_function(schema, name) {
                 return Some(SqlHoverObject::Function { signature, doc });
@@ -368,14 +506,17 @@ pub fn resolve_hover(schema: &SqlSchema, ident: &SqlQualifiedIdentifier) -> Opti
         }
         [a, b] => {
             // schema.table / database.table (scope-validated)
-            if looks_like_current_schema(schema, a) {
-                if let Some((name, detail)) = find_table_detail(schema, b) {
-                    return Some(SqlHoverObject::Table { name, detail });
-                }
+            if looks_like_current_schema(schema, a)
+                && let Some((name, detail)) = find_table_detail(schema, b)
+            {
+                return Some(SqlHoverObject::Table {
+                    table: current_table_ref(schema, name),
+                    detail,
+                });
             }
             // 其他 database/schema 的表：qualifier.table
-            if let Some((name, detail)) = find_foreign_table_detail(schema, a, b) {
-                return Some(SqlHoverObject::Table { name, detail });
+            if let Some((table, detail)) = find_foreign_table_detail(schema, a, b) {
+                return Some(SqlHoverObject::Table { table, detail });
             }
             // table.column
             if let Some((table, detail)) = find_table_detail(schema, a)
@@ -387,10 +528,14 @@ pub fn resolve_hover(schema: &SqlSchema, ident: &SqlQualifiedIdentifier) -> Opti
         }
         [a, b, c] => {
             // catalog.schema.table
-            if looks_like_current_database(schema, a) && looks_like_current_schema(schema, b) {
-                if let Some((name, detail)) = find_table_detail(schema, c) {
-                    return Some(SqlHoverObject::Table { name, detail });
-                }
+            if looks_like_current_database(schema, a)
+                && looks_like_current_schema(schema, b)
+                && let Some((name, detail)) = find_table_detail(schema, c)
+            {
+                return Some(SqlHoverObject::Table {
+                    table: current_table_ref(schema, name),
+                    detail,
+                });
             }
             // schema.table.column
             if looks_like_current_schema(schema, a) {
@@ -409,7 +554,8 @@ pub fn resolve_hover(schema: &SqlSchema, ident: &SqlQualifiedIdentifier) -> Opti
                 }
             }
             // 其他 database/schema 的列：qualifier.table.column
-            if let Some((table, detail)) = find_foreign_table_detail(schema, a, b)
+            if let Some((SqlTableRef { name: table, .. }, detail)) =
+                find_foreign_table_detail(schema, a, b)
                 && let Some(column) = find_column(&detail, c)
             {
                 return Some(SqlHoverObject::Column { table, column });
@@ -456,18 +602,27 @@ fn find_table_detail(schema: &SqlSchema, name: &str) -> Option<(String, SqlTable
         .map(|(key, detail)| (key.clone(), detail.clone()))
 }
 
-/// 在外部 qualifier（其他 database/schema）缓存中查表详情。
+/// 在外部 qualifier（其他 database/schema）缓存中查表坐标与详情。
 fn find_foreign_table_detail(
     schema: &SqlSchema,
     qualifier: &str,
     name: &str,
-) -> Option<(String, SqlTableDetail)> {
+) -> Option<(SqlTableRef, SqlTableDetail)> {
     let foreign: &ForeignSchema = find_foreign_schema(schema, qualifier)?;
     foreign
         .table_details
         .iter()
         .find(|(key, _)| key.eq_ignore_ascii_case(name))
-        .map(|(key, detail)| (key.clone(), detail.clone()))
+        .map(|(key, detail)| {
+            (
+                SqlTableRef {
+                    name: key.clone(),
+                    database: foreign.scope.database.clone(),
+                    schema: foreign.scope.schema.clone(),
+                },
+                detail.clone(),
+            )
+        })
 }
 
 fn find_column(detail: &SqlTableDetail, name: &str) -> Option<SqlColumnDetail> {
@@ -486,14 +641,15 @@ fn find_function(schema: &SqlSchema, name: &str) -> Option<(String, String)> {
     })
 }
 
-/// Render markdown for a resolved object. Returns `(markdown, ddl_is_fallback)`.
-pub fn build_hover(object: &SqlHoverObject) -> (String, bool) {
+/// Render the body markdown for a resolved object.
+///
+/// 建表 DDL 不在里面：它由驱动按方言生成，需要连接上下文与异步查询，
+/// 由 [`crate::table_ddl`] 单独拼成区段。
+pub fn build_hover(object: &SqlHoverObject) -> String {
     match object {
-        SqlHoverObject::Table { name, detail } => (build_table_hover(name, detail), true),
-        SqlHoverObject::Column { table, column } => (build_column_hover(table, column), false),
-        SqlHoverObject::Function { signature, doc } => {
-            (build_function_hover(signature, doc), false)
-        }
+        SqlHoverObject::Table { table, detail } => build_table_hover(&table.name, detail),
+        SqlHoverObject::Column { table, column } => build_column_hover(table, column),
+        SqlHoverObject::Function { signature, doc } => build_function_hover(signature, doc),
     }
 }
 
@@ -530,11 +686,12 @@ fn build_table_hover(name: &str, detail: &SqlTableDetail) -> String {
             escape_md(comment)
         ));
     }
-    md.push_str("\n---\n\n");
-    md.push_str("**Generated DDL preview**（根据元数据生成的预览，不保证可执行）\n\n");
-    md.push_str("```sql\n");
-    md.push_str(&generate_ddl_preview(name, detail));
-    md.push_str("```\n");
+    md.push_str("\n");
+    // 视图没有建表 DDL，而列信息仍来自元数据，这里明说一下免得用户等一个不会来的区段。
+    if detail.object_type == SqlObjectType::View {
+        md.push_str(t!("Query.object_details_view_ddl_unavailable").as_ref());
+        md.push('\n');
+    }
     md
 }
 
@@ -570,50 +727,12 @@ fn build_function_hover(signature: &str, doc: &str) -> String {
     md
 }
 
-/// Best-effort `CREATE TABLE` from metadata. Explicitly non-authoritative
-/// (spec §11.5.5/6); callers must not route it into "copy and execute".
-fn generate_ddl_preview(name: &str, detail: &SqlTableDetail) -> String {
-    let mut ddl = String::new();
-    let keyword = match detail.object_type {
-        SqlObjectType::Table => "TABLE",
-        SqlObjectType::View => "VIEW",
-    };
-    ddl.push_str(&format!("CREATE {} {} (\n", keyword, quote_ddl_ident(name)));
-    for (i, col) in detail.columns.iter().enumerate() {
-        let mut line = format!("  {} {}", quote_ddl_ident(&col.name), col.data_type);
-        if !col.is_nullable {
-            line.push_str(" NOT NULL");
-        }
-        if let Some(default) = &col.default_value {
-            line.push_str(&format!(" DEFAULT {}", default));
-        }
-        let comma = if i + 1 < detail.columns.len() {
-            ","
-        } else {
-            ""
-        };
-        ddl.push_str(&line);
-        ddl.push_str(comma);
-        ddl.push('\n');
-    }
-    ddl.push_str(");\n");
-    ddl
-}
-
-fn quote_ddl_ident(name: &str) -> String {
-    if name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-        name.to_string()
-    } else {
-        format!("\"{}\"", name.replace('"', "\"\""))
-    }
-}
-
 fn escape_md(value: &str) -> String {
     value.replace('|', "\\|")
 }
 
 /// Convert a byte offset to an LSP position (line, character-in-chars).
-fn offset_to_lsp_position(text: &str, offset: usize) -> LspPosition {
+pub(crate) fn offset_to_lsp_position(text: &str, offset: usize) -> LspPosition {
     let offset = clip_utf8_offset_left(text, offset);
     let before = &text[..offset];
     let line = before.matches('\n').count();
@@ -633,7 +752,9 @@ fn clip_utf8_offset_left(text: &str, offset: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sql_editor::{SqlColumnDetail, SqlObjectType, SqlSchema, SqlTableDetail};
+    use crate::sql_editor::{
+        ForeignSchemaScope, SqlColumnDetail, SqlObjectType, SqlSchema, SqlTableDetail,
+    };
 
     fn sample_schema() -> SqlSchema {
         let columns = vec![
@@ -840,15 +961,114 @@ mod tests {
         assert!(markup(&h).contains("**COLUMN**"));
     }
 
+    /// 建表 DDL 不在 hover markdown 里（它由驱动异步生成），但表对象要带着
+    /// 驱动查询需要的坐标。
     #[test]
-    fn ddl_preview_is_marked_as_fallback() {
+    fn table_details_carry_the_ddl_coordinates() {
         let schema = sample_schema();
-        let h = hover("select * from users", 17, &schema).unwrap();
-        let contents = markup(&h);
-        assert!(contents.contains("Generated DDL preview"));
-        assert!(contents.contains("不保证可执行"));
-        assert!(contents.contains("CREATE TABLE"));
-        assert!(contents.contains("INT"));
+        let details = resolve_object_details("select * from users", 17, &schema).unwrap();
+
+        assert_eq!(
+            Some(SqlTableRef {
+                name: "users".into(),
+                database: "app".into(),
+                schema: Some("public".into()),
+            }),
+            details.table
+        );
+        assert!(!details.markdown.contains("CREATE TABLE"));
+        assert!(!details.markdown.contains("DDL"));
+    }
+
+    #[test]
+    fn only_tables_carry_ddl_coordinates() {
+        let schema = sample_schema();
+        // 列对象
+        let column = resolve_object_details("select users.id", 13, &schema).unwrap();
+        assert_eq!(SqlObjectDetailsKind::Column, column.kind);
+        assert!(column.table.is_none());
+        // 函数对象
+        let function = resolve_object_details("select count_orders('a')", 8, &schema).unwrap();
+        assert_eq!(SqlObjectDetailsKind::Function, function.kind);
+        assert!(function.table.is_none());
+    }
+
+    #[test]
+    fn view_details_have_no_ddl_coordinates_and_say_so() {
+        let schema = SqlSchema::default()
+            .with_scope(Some("app".into()), Some("public".into()))
+            .with_table_detail(
+                "active_users",
+                SqlTableDetail {
+                    object_type: SqlObjectType::View,
+                    schema: Some("public".into()),
+                    comment: None,
+                    engine: None,
+                    columns: vec![SqlColumnDetail {
+                        name: "id".into(),
+                        data_type: "INT".into(),
+                        is_nullable: true,
+                        is_primary_key: false,
+                        default_value: None,
+                        comment: None,
+                    }],
+                },
+            );
+        let details = resolve_object_details("select * from active_users", 17, &schema).unwrap();
+
+        assert_eq!(SqlObjectDetailsKind::Table, details.kind);
+        assert!(details.table.is_none());
+        assert!(
+            !details.markdown.contains("```sql"),
+            "视图不该摆建表 DDL 代码块"
+        );
+        assert!(
+            details
+                .markdown
+                .contains(&t!("Query.object_details_view_ddl_unavailable").to_string())
+        );
+    }
+
+    /// 跨库限定名：DDL 坐标取自拉取该 qualifier 时记录的 scope，而不是当前 scope。
+    #[test]
+    fn foreign_table_details_use_the_foreign_scope() {
+        let schema = sample_schema().with_foreign_schema(ForeignSchema {
+            name: "shop".into(),
+            scope: ForeignSchemaScope {
+                database: "shop".into(),
+                schema: None,
+            },
+            tables: vec![("orders".into(), String::new())],
+            columns_by_table: std::collections::HashMap::new(),
+            table_details: std::collections::HashMap::from([(
+                "orders".to_string(),
+                SqlTableDetail {
+                    object_type: SqlObjectType::Table,
+                    schema: None,
+                    comment: None,
+                    engine: None,
+                    columns: vec![SqlColumnDetail {
+                        name: "total".into(),
+                        data_type: "DECIMAL(10,2)".into(),
+                        is_nullable: false,
+                        is_primary_key: false,
+                        default_value: None,
+                        comment: None,
+                    }],
+                },
+            )]),
+        });
+
+        let details = resolve_object_details("select * from shop.orders", 21, &schema).unwrap();
+
+        assert_eq!(
+            Some(SqlTableRef {
+                name: "orders".into(),
+                database: "shop".into(),
+                schema: None,
+            }),
+            details.table
+        );
     }
 
     #[test]
@@ -909,5 +1129,57 @@ mod tests {
         let range = h.range.unwrap();
         assert_eq!(range.start.character, 14);
         assert_eq!(range.end.character, 30);
+    }
+
+    #[test]
+    fn object_details_id_is_scoped_and_kind_qualified() {
+        let schema = sample_schema();
+        let details = |sql: &str, needle: &str| {
+            let offset = sql.find(needle).expect("identifier") + 1;
+            resolve_object_details(sql, offset, &schema).expect("details")
+        };
+
+        let table = details("select * from users", "users");
+        assert_eq!("app.public:table:users", table.id);
+        assert_eq!("users", table.label);
+        assert_eq!(SqlObjectDetailsKind::Table, table.kind);
+
+        let column = details("select * from users where users.id = 1", "id");
+        assert_eq!("app.public:column:users.id", column.id);
+        assert_eq!("users.id", column.label);
+        assert_eq!(SqlObjectDetailsKind::Column, column.kind);
+
+        // Same table name in another scope must not share a tab.
+        let other_scope = sample_schema().with_scope(Some("other".into()), Some("public".into()));
+        let elsewhere = resolve_object_details(
+            "select * from users",
+            "select * from users".find("users").expect("users") + 1,
+            &other_scope,
+        )
+        .expect("details");
+        assert_eq!("other.public:table:users", elsewhere.id);
+    }
+
+    #[test]
+    fn selection_details_resolve_when_the_cursor_sits_at_an_edge() {
+        let schema = sample_schema();
+        let text = "select * from users";
+        let start = text.find("users").expect("users");
+        // Right-clicking a selection leaves the cursor at its start, which
+        // anchors the keyword `from`; the selection body must win.
+        let details = resolve_object_details_for_selection(
+            text,
+            Some(start..start + "users".len()),
+            start,
+            &schema,
+        )
+        .expect("the selection body resolves");
+
+        assert_eq!("app.public:table:users", details.id);
+
+        // Without a selection only the cursor counts.
+        let cursor_only = resolve_object_details_for_selection(text, None, start, &schema)
+            .expect("the bare cursor still resolves");
+        assert_eq!(details.id, cursor_only.id);
     }
 }

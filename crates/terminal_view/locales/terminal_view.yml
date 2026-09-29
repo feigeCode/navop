@@ -217,6 +217,14 @@ SSH:
     en: The password will not be saved. Enter it on the first connection and every manual reconnect.
     zh-CN: 密码不会保存；首次连接及每次手动重连时都需要重新输入。
     zh-HK: 密碼不會儲存；首次連線及每次手動重新連線時都需要重新輸入。
+  password_and_private_key:
+    en: Password + Private Key
+    zh-CN: 密码 + 密钥
+    zh-HK: 密碼 + 金鑰
+  password_and_private_key_hint:
+    en: The server asks for both a password and a private key. The actual order follows what the server requires.
+    zh-CN: 服务器要求同时提供密码与私钥（双因素）。实际认证顺序以服务器要求为准。
+    zh-HK: 伺服器要求同時提供密碼與私鑰（雙因素）。實際認證順序以伺服器要求為準。
   private_key:
     en: Private Key File
     zh-CN: 私钥文件

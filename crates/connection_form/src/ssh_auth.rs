@@ -7,6 +7,9 @@
 pub enum SshAuthOption {
     #[default]
     Password,
+    /// 先密码、后密钥的组合认证（服务器 `AuthenticationMethods password,publickey`）。
+    /// 只用于 SSH 会话表单，数据库 SSH 隧道等单一认证入口不展示该选项。
+    PasswordAndPrivateKey,
     PrivateKey,
     PrivateKeyContent,
     Agent,
@@ -36,6 +39,7 @@ impl SshAuthOption {
     pub const fn value(self) -> &'static str {
         match self {
             Self::Password => "password",
+            Self::PasswordAndPrivateKey => "password_and_private_key",
             Self::PrivateKey => "private_key",
             Self::PrivateKeyContent => "private_key_content",
             Self::Agent => "agent",
@@ -47,6 +51,7 @@ impl SshAuthOption {
     pub const fn label_i18n_key(self) -> &'static str {
         match self {
             Self::Password => "ConnectionForm.ssh_auth_password",
+            Self::PasswordAndPrivateKey => "ConnectionForm.ssh_auth_password_and_private_key",
             Self::PrivateKey => "ConnectionForm.ssh_auth_private_key",
             Self::PrivateKeyContent => "ConnectionForm.ssh_auth_private_key_content",
             Self::Agent => "ConnectionForm.ssh_auth_agent",
@@ -58,6 +63,9 @@ impl SshAuthOption {
     pub fn label(self) -> String {
         match self {
             Self::Password => t!("ConnectionForm.ssh_auth_password").to_string(),
+            Self::PasswordAndPrivateKey => {
+                t!("ConnectionForm.ssh_auth_password_and_private_key").to_string()
+            }
             Self::PrivateKey => t!("ConnectionForm.ssh_auth_private_key").to_string(),
             Self::PrivateKeyContent => {
                 t!("ConnectionForm.ssh_auth_private_key_content").to_string()
@@ -69,11 +77,11 @@ impl SshAuthOption {
     }
 
     pub const fn requires_password(self) -> bool {
-        matches!(self, Self::Password)
+        matches!(self, Self::Password | Self::PasswordAndPrivateKey)
     }
 
     pub const fn requires_private_key(self) -> bool {
-        matches!(self, Self::PrivateKey)
+        matches!(self, Self::PrivateKey | Self::PasswordAndPrivateKey)
     }
 
     pub const fn requires_private_key_content(self) -> bool {
@@ -89,6 +97,11 @@ pub fn normalize_ssh_auth_type(auth_type: &str) -> &str {
         "private_key_content"
     } else if auth_type.eq_ignore_ascii_case("private_key") {
         "private_key"
+    } else if auth_type.eq_ignore_ascii_case("password_and_private_key")
+        || auth_type.eq_ignore_ascii_case("password_publickey")
+    {
+        // 组合认证是显式类型，不能落进下面的 `password` 兜底分支而被静默降级。
+        "password_and_private_key"
     } else if auth_type.eq_ignore_ascii_case("agent") {
         "agent"
     } else if auth_type.eq_ignore_ascii_case("pageant") {
@@ -125,6 +138,35 @@ mod tests {
         assert_eq!(
             SshAuthOption::Pageant.label_i18n_key(),
             "ConnectionForm.ssh_auth_pageant"
+        );
+    }
+
+    #[test]
+    fn shared_ssh_auth_options_exclude_combined_authentication() {
+        // 组合认证仅用于 SSH 会话表单，数据库隧道等入口不展示。
+        assert!(!SshAuthOption::ALL.contains(&SshAuthOption::PasswordAndPrivateKey));
+        assert!(!SshAuthOption::TUNNEL.contains(&SshAuthOption::PasswordAndPrivateKey));
+        assert_eq!(
+            "password_and_private_key",
+            SshAuthOption::PasswordAndPrivateKey.value()
+        );
+        assert_eq!(
+            "ConnectionForm.ssh_auth_password_and_private_key",
+            SshAuthOption::PasswordAndPrivateKey.label_i18n_key()
+        );
+        assert!(SshAuthOption::PasswordAndPrivateKey.requires_password());
+        assert!(SshAuthOption::PasswordAndPrivateKey.requires_private_key());
+    }
+
+    #[test]
+    fn shared_ssh_auth_type_normalization_preserves_combined_authentication() {
+        assert_eq!(
+            "password_and_private_key",
+            normalize_ssh_auth_type("password_and_private_key")
+        );
+        assert_eq!(
+            "password_and_private_key",
+            normalize_ssh_auth_type(" Password_PublicKey ")
         );
     }
 

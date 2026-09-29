@@ -17,6 +17,8 @@ use crate::input_values::{parse_port, trimmed_text};
 use crate::persistence::save_connection;
 use crate::selects::{ForwardingKindSelectItem, SshConnectionSelectItem, WorkspaceSelectItem};
 
+/// 端口转发表单窗口配置。`Clone` 见 `one_core::popup_window::open_reusable_popup_window`。
+#[derive(Clone)]
 pub struct PortForwardingFormWindowConfig {
     pub editing_connection: Option<StoredConnection>,
     pub ssh_connections: Vec<StoredConnection>,
@@ -270,7 +272,7 @@ impl PortForwardingFormWindow {
             conn.last_synced_at = self.editing_last_synced_at;
         }
         save_connection(conn, self.is_editing, cx);
-        window.remove_window();
+        let _ = one_core::window_close::close_window_for_reuse(window, cx);
     }
 
     fn connection_name(&self, params: &PortForwardingParams, cx: &App) -> String {

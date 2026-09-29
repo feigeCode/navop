@@ -288,6 +288,36 @@ pub enum SshAuth {
     Agent,
     Pageant,
     AutoPublicKey,
+    /// 多因素认证链：一次登录需要依次通过多个认证因素。
+    ///
+    /// 防火墙、交换机等设备会配置 `AuthenticationMethods password,publickey` 这类
+    /// 组合要求，服务器在每次尝试后通过 `USERAUTH_FAILURE` 的 `remaining_methods`
+    /// 指出还差哪些因素。链里只声明「客户端持有哪些因素」，实际提交顺序由服务器
+    /// 返回的方法顺序和配置顺序共同决定（见 [`authenticate_with_chain`]）。
+    Chain(Vec<SshAuth>),
+}
+
+impl SshAuth {
+    /// 该认证方式对应的 SSH 方法名；`Chain` 不是单一方法。
+    fn factor_method_kind(&self) -> Option<MethodKind> {
+        match self {
+            SshAuth::Password(_) => Some(MethodKind::Password),
+            SshAuth::PrivateKey { .. }
+            | SshAuth::PrivateKeyContent { .. }
+            | SshAuth::Agent
+            | SshAuth::Pageant
+            | SshAuth::AutoPublicKey => Some(MethodKind::PublicKey),
+            SshAuth::Chain(_) => None,
+        }
+    }
+
+    /// 认证链中可用的因素，按配置顺序展开；嵌套的链会被摊平。
+    fn chain_factors(&self) -> Vec<&SshAuth> {
+        match self {
+            SshAuth::Chain(steps) => steps.iter().flat_map(|step| step.chain_factors()).collect(),
+            other => vec![other],
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -304,6 +334,9 @@ pub struct AuthFailureMessages {
     pub keyboard_interactive_required: String,
     pub keyboard_interactive_failed: String,
     pub keyboard_interactive_cancelled: String,
+    pub chain_failed: String,
+    pub chain_incomplete: String,
+    pub chain_unsupported_factor: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -758,6 +791,9 @@ where
             authenticate_with_pageant(session, username, hash_alg, &messages).await?
         }
         SshAuth::AutoPublicKey => unreachable!("AutoPublicKey 应由高层认证编排处理"),
+        SshAuth::Chain(_) => {
+            unreachable!("SshAuth::Chain 应由 authenticate_with_strategy_for_target 处理")
+        }
     }
     Ok(())
 }
@@ -1171,6 +1207,9 @@ fn default_auth_failure_messages() -> AuthFailureMessages {
         keyboard_interactive_required: t!("Ssh.auth_keyboard_interactive_required").to_string(),
         keyboard_interactive_failed: t!("Ssh.auth_keyboard_interactive_failed").to_string(),
         keyboard_interactive_cancelled: t!("Ssh.auth_keyboard_interactive_cancelled").to_string(),
+        chain_failed: t!("Ssh.auth_chain_failed").to_string(),
+        chain_incomplete: t!("Ssh.auth_chain_incomplete").to_string(),
+        chain_unsupported_factor: t!("Ssh.auth_chain_unsupported_factor").to_string(),
     }
 }
 
@@ -1230,10 +1269,292 @@ where
             let auth_candidates = expand_auto_publickey_auth();
             authenticate_session_with_fallbacks(session, username, &auth_candidates, messages).await
         }
+        SshAuth::Chain(_) => {
+            authenticate_with_chain(
+                session,
+                username,
+                auth.chain_factors(),
+                messages,
+                target,
+                responder,
+            )
+            .await
+        }
         _ => {
             authenticate_session_for_target(session, username, auth, messages, target, responder)
                 .await
         }
+    }
+}
+
+/// 一次认证链尝试的结果，用于判断是否要继续下一个因素。
+enum ChainFactorOutcome {
+    /// 已完成认证。
+    Authenticated,
+    /// 该方法未被服务器接受（可能还缺其它因素，也可能这个凭据本身就是错的）。
+    Failed {
+        remaining_methods: MethodSet,
+        message: String,
+    },
+}
+
+/// 认证链里由客户端主动发起的候选项。
+enum ChainCandidate {
+    /// 链里配置的某个因素。
+    Factor(usize),
+    /// 服务器要求 keyboard-interactive（例如动态验证码），不在配置里，由 MFA 回调应答。
+    KeyboardInteractive,
+}
+
+/// 认证链的总尝试次数上限：每个因素最多重试一次，外加服务器重排的余量。
+const MAX_CHAIN_ATTEMPTS: usize = 6;
+
+/// 按服务器返回的 `remaining_methods` 依次完成多个认证因素。
+///
+/// 设备侧（防火墙、交换机）常见的组合要求是 `AuthenticationMethods password,publickey`
+/// 或 `publickey,password`，客户端必须在同一连接内先通过一个因素、再补齐下一个因素。
+/// 编排规则：
+///
+/// 1. 先用 RFC 4252 的 `none` 探测拿到服务器认可的方法列表，作为提交顺序的首选依据
+///    （设备要求的顺序可能与配置顺序相反）；列表里没有可用因素时回退到配置顺序。
+/// 2. 每个因素在一次「无进展」期间只提交一次：服务器仍然列出该方法说明它没被接受，
+///    此时不再重复提交同一个因素，避免在会把失败次数当锁定依据的设备上反复试错。
+/// 3. 某个因素不再出现在 `remaining_methods` 里即视为通过，此时清空「已尝试」标记，
+///    允许在此之前被服务器拒绝过的因素再试一次——这正是「设备先拒绝公钥、直到密码
+///    通过后才接受公钥」的场景。
+async fn authenticate_with_chain<H>(
+    session: &mut client::Handle<H>,
+    username: &str,
+    factors: Vec<&SshAuth>,
+    messages: AuthFailureMessages,
+    target: KeyboardInteractiveTarget,
+    responder: Option<Arc<dyn KeyboardInteractiveResponder>>,
+) -> Result<()>
+where
+    H: client::Handler,
+{
+    for factor in &factors {
+        match factor {
+            SshAuth::Password(_)
+            | SshAuth::PrivateKey { .. }
+            | SshAuth::PrivateKeyContent { .. } => {}
+            _ => {
+                anyhow::bail!(messages.chain_unsupported_factor.clone());
+            }
+        }
+    }
+    // 只有一个因素时退化为普通认证：不做探测，保留单方法认证既有的 MFA 优先顺序。
+    if let [only] = factors.as_slice() {
+        return authenticate_session_for_target(
+            session, username, only, messages, target, responder,
+        )
+        .await;
+    }
+    if factors.is_empty() {
+        anyhow::bail!(messages.chain_incomplete.clone());
+    }
+
+    let mut remaining_methods = match session
+        .authenticate_none(username)
+        .await
+        .context("SSH server capability probe (none authentication) failed")?
+    {
+        client::AuthResult::Success => return Ok(()),
+        client::AuthResult::Failure {
+            remaining_methods, ..
+        } => remaining_methods,
+    };
+
+    // 每个因素在本轮「无进展」期间是否已经提交过；因素通过后该标记会被重置。
+    let mut attempted = vec![false; factors.len()];
+    let mut keyboard_interactive_attempted = false;
+    let mut satisfied = vec![false; factors.len()];
+    let mut failures: Vec<String> = Vec::new();
+    let mut attempts = 0usize;
+
+    while attempts < MAX_CHAIN_ATTEMPTS {
+        let Some(candidate) =
+            pick_chain_candidate(&factors, &remaining_methods, &attempted, &satisfied, {
+                responder.is_some() && !keyboard_interactive_attempted
+            })
+        else {
+            break;
+        };
+
+        match candidate {
+            ChainCandidate::Factor(index) => {
+                attempted[index] = true;
+                attempts += 1;
+                tracing::debug!(
+                    target = ?target,
+                    factor = index,
+                    "SSH multi-factor authentication: submitting next factor"
+                );
+
+                let outcome =
+                    attempt_chain_factor(session, username, factors[index], &messages).await?;
+                let ChainFactorOutcome::Failed {
+                    remaining_methods: updated,
+                    message,
+                } = &outcome
+                else {
+                    return Ok(());
+                };
+
+                failures.push(message.clone());
+                // 服务器不再提供该方法，说明这个因素已经通过；此时允许其它因素重试一次
+                // （设备常常在某个因素通过前拒绝另一个因素）。
+                if !method_set_lists(&updated, factors[index].factor_method_kind()) {
+                    satisfied[index] = true;
+                    attempted.iter_mut().for_each(|flag| *flag = false);
+                }
+                remaining_methods = updated.clone();
+            }
+            ChainCandidate::KeyboardInteractive => {
+                keyboard_interactive_attempted = true;
+                attempts += 1;
+                match authenticate_keyboard_interactive(
+                    session,
+                    username,
+                    target,
+                    responder.clone(),
+                    &messages,
+                )
+                .await?
+                {
+                    KeyboardInteractiveAttempt::Authenticated => return Ok(()),
+                    // 用户已经作答却被拒签，说明这条链已经作废（例如 PAM 事务被破坏）。
+                    KeyboardInteractiveAttempt::Rejected => {
+                        anyhow::bail!(messages.keyboard_interactive_failed.clone());
+                    }
+                    // 服务器没下发提示，说明还有因素要先行完成，继续下一个候选。
+                    KeyboardInteractiveAttempt::Unavailable => {
+                        failures.push(messages.keyboard_interactive_failed.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    if failures.is_empty() {
+        anyhow::bail!(messages.chain_incomplete.clone());
+    }
+    anyhow::bail!(format!(
+        "{}: {}",
+        messages.chain_failed,
+        failures.join("; ")
+    ));
+}
+
+/// 服务器下发的方法列表里是否还列出该方法；`None`（无法映射到方法）视为「不再列出」。
+fn method_set_lists(methods: &MethodSet, kind: Option<MethodKind>) -> bool {
+    kind.is_some_and(|kind| methods.contains(&kind))
+}
+
+fn pick_chain_candidate(
+    factors: &[&SshAuth],
+    remaining_methods: &MethodSet,
+    attempted: &[bool],
+    satisfied: &[bool],
+    keyboard_interactive_available: bool,
+) -> Option<ChainCandidate> {
+    let usable = |index: usize| !attempted[index] && !satisfied[index];
+
+    // 服务器给出的方法顺序优先：设备要求的顺序可能与配置顺序相反。
+    for kind in remaining_methods.iter() {
+        if *kind == MethodKind::KeyboardInteractive {
+            if keyboard_interactive_available {
+                return Some(ChainCandidate::KeyboardInteractive);
+            }
+            continue;
+        }
+        if let Some(index) = (0..factors.len())
+            .find(|index| usable(*index) && factors[*index].factor_method_kind() == Some(*kind))
+        {
+            return Some(ChainCandidate::Factor(index));
+        }
+    }
+
+    // 服务器没有给出可用方法（或都不匹配）时，回退到配置顺序。
+    (0..factors.len())
+        .find(|index| usable(*index))
+        .map(ChainCandidate::Factor)
+}
+
+/// 提交认证链里的一个因素。
+async fn attempt_chain_factor<H>(
+    session: &mut client::Handle<H>,
+    username: &str,
+    factor: &SshAuth,
+    messages: &AuthFailureMessages,
+) -> Result<ChainFactorOutcome>
+where
+    H: client::Handler,
+{
+    match factor {
+        SshAuth::Password(password) => {
+            let auth_result = session
+                .authenticate_password(username, password)
+                .await
+                .context("SSH password authentication exchange failed")?;
+            Ok(classify_chain_auth_result(
+                auth_result,
+                &messages.password_failed,
+            ))
+        }
+        SshAuth::PrivateKey { .. } | SshAuth::PrivateKeyContent { .. } => {
+            let hash_alg = session.best_supported_rsa_hash().await?.flatten();
+            let key_pair = private_key_for_auth(factor)?;
+            match factor {
+                SshAuth::PrivateKey {
+                    certificate_path: Some(cert_path),
+                    ..
+                }
+                | SshAuth::PrivateKeyContent {
+                    certificate_path: Some(cert_path),
+                    ..
+                } => {
+                    let cert = load_openssh_certificate(cert_path)?;
+                    let auth_result = session
+                        .authenticate_openssh_cert(username, Arc::new(key_pair), cert)
+                        .await
+                        .context("SSH certificate authentication exchange failed")?;
+                    Ok(classify_chain_auth_result(
+                        auth_result,
+                        &messages.certificate_failed,
+                    ))
+                }
+                _ => {
+                    let auth_result = session
+                        .authenticate_publickey(
+                            username,
+                            PrivateKeyWithHashAlg::new(Arc::new(key_pair), hash_alg),
+                        )
+                        .await
+                        .context("SSH public key authentication exchange failed")?;
+                    Ok(classify_chain_auth_result(
+                        auth_result,
+                        &messages.public_key_failed,
+                    ))
+                }
+            }
+        }
+        _ => anyhow::bail!(messages.chain_unsupported_factor.clone()),
+    }
+}
+
+fn classify_chain_auth_result(
+    auth_result: client::AuthResult,
+    failure_message: &str,
+) -> ChainFactorOutcome {
+    match auth_result {
+        client::AuthResult::Success => ChainFactorOutcome::Authenticated,
+        client::AuthResult::Failure {
+            remaining_methods, ..
+        } => ChainFactorOutcome::Failed {
+            remaining_methods,
+            message: failure_message.to_string(),
+        },
     }
 }
 
@@ -1445,6 +1766,9 @@ mod tests {
             keyboard_interactive_required: "keyboard_interactive_required".to_string(),
             keyboard_interactive_failed: "keyboard_interactive_failed".to_string(),
             keyboard_interactive_cancelled: "keyboard_interactive_cancelled".to_string(),
+            chain_failed: "chain_failed".to_string(),
+            chain_incomplete: "chain_incomplete".to_string(),
+            chain_unsupported_factor: "chain_unsupported_factor".to_string(),
         }
     }
 

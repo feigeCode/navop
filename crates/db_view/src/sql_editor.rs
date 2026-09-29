@@ -3,8 +3,10 @@ use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use crate::sql_editor_definition::DefaultSqlDefinitionProvider;
 use crate::sql_editor_hover::DefaultSqlHoverProvider;
 use crate::sql_editor_signature::DefaultSqlSignatureHelpProvider;
+use crate::table_ddl::{TableDdlSection, TableDdlSources};
 use anyhow::Result;
 use db::plugin::SqlCompletionInfo;
 use db::sql_editor::diagnostics::{
@@ -17,18 +19,18 @@ use db::sql_editor::sql_tokenizer::{SqlKeyword, SqlToken, SqlTokenKind, SqlToken
 use db::sql_editor::statement_ranges::{SqlDialect, SqlStatementSnapshot};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext, Context, Entity, Font, InteractiveElement as _, IntoElement,
+    App, AppContext, AsyncApp, Context, Entity, Font, InteractiveElement as _, IntoElement,
     ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _, Task, Window, div,
 };
+use gpui_component::WindowExt as _;
 use gpui_component::highlighter::{Diagnostic, DiagnosticSeverity};
 use gpui_component::input::{
-    CodeActionProvider, CompletionProvider, Copy, Cut, EditorState, GutterLane, GutterLaneOptions,
-    GutterMarker, HoverProvider, Paste, SelectAll, TabSize,
+    CodeActionProvider, CompletionProvider, Copy, Cut, DefinitionProvider, EditorState, GutterLane,
+    GutterLaneOptions, GutterMarker, HoverProvider, Paste, SelectAll, ShowDocumentHandler, TabSize,
 };
 use gpui_component::native_menu::NativeMenu as PlatformNativeMenu;
 use gpui_component::spinner::Spinner;
 use gpui_component::tooltip::Tooltip;
-use gpui_component::WindowExt as _;
 use gpui_component::{Icon, Rope, RopeExt, Sizable as _, Size};
 use lsp_types::{
     CompletionContext, CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit,
@@ -37,11 +39,20 @@ use lsp_types::{
 };
 use one_assets::IconName;
 use one_core::settings::{AppSettings, installed_grid_monospace_font};
+use one_core::tab_container::TabContainer;
 use one_ui::{ExtendedEditor, ExtendedEditorState, SignatureHelpProvider};
 use rust_i18n::t;
 use sum_tree::Bias;
 
-gpui::actions!(sql_editor, [RunSelectedSql, RunCursorStatementSql, ShowHoverDetails, CopyHoverDdl]);
+gpui::actions!(
+    sql_editor,
+    [
+        RunSelectedSql,
+        RunCursorStatementSql,
+        ShowHoverDetails,
+        CopyHoverDdl
+    ]
+);
 
 pub(crate) const SQL_GUTTER_IDLE: &str = "idle";
 pub(crate) const SQL_GUTTER_RUNNING: &str = "running";
@@ -95,12 +106,25 @@ pub struct SqlTableDetail {
 pub struct ForeignSchema {
     /// qualifier 原始名称（保持大小写）。
     pub name: String,
+    /// 拉取这份元数据时用的坐标：它才是表真正所在的 database/schema。
+    /// 跨库限定名（`otherdb.users`）的建表 DDL 要靠它对上驱动查询。
+    pub scope: ForeignSchemaScope,
     /// (表名, 说明)
     pub tables: Vec<(String, String)>,
     /// 表→列映射，每列为 (name, data_type, doc)
     pub columns_by_table: std::collections::HashMap<String, Vec<(String, String, String)>>,
     /// 表名→详细信息（供 hover 复用）。
     pub table_details: std::collections::HashMap<String, SqlTableDetail>,
+}
+
+/// 拉取外部 qualifier 元数据时使用的 (database, schema) 坐标。
+///
+/// database 型 qualifier（MySQL/ClickHouse）落在 database 上，schema 型 qualifier
+/// （PG/MSSQL/Oracle）落在 schema 上，两者都由视图层在拉取时确定。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ForeignSchemaScope {
+    pub database: String,
+    pub schema: Option<String>,
 }
 
 /// Schema hints used by autocomplete and hover.
@@ -2428,6 +2452,10 @@ pub struct SqlEditor {
     default_hover_provider: Option<Rc<DefaultSqlHoverProvider>>,
     default_signature_help_provider: Option<Rc<DefaultSqlSignatureHelpProvider>>,
     font_cache: Option<SqlEditorFontCache>,
+    /// 宿主页签容器：对象详情页签要开在编辑器所在的那个容器里（数据库页签内部的
+    /// 容器），而不是主窗口的页签栏。由 [`SqlEditorTab`] 在构造时注入；共用一个
+    /// 句柄给 Cmd/Ctrl+点击的处理器。
+    tab_container: Rc<RefCell<Option<Entity<TabContainer>>>>,
 }
 
 struct SqlEditorFontCache {
@@ -2442,6 +2470,17 @@ impl SqlEditor {
         let default_provider_trait: Rc<dyn CompletionProvider> =
             default_completion_provider.clone();
         let default_hover_provider = Rc::new(DefaultSqlHoverProvider::new(SqlSchema::default()));
+        // Cmd/Ctrl+click reuses the same schema snapshot as the hover
+        // provider; gpui-kit underlines the identifier on Cmd/Ctrl+hover and
+        // hands the click over to `show_document` (see the handler below).
+        let default_definition_provider = Rc::new(DefaultSqlDefinitionProvider::new(
+            default_hover_provider.sources_handle(),
+        ));
+        let default_definition_provider_trait: Rc<dyn DefinitionProvider> =
+            default_definition_provider.clone();
+        let tab_container: Rc<RefCell<Option<Entity<TabContainer>>>> = Rc::new(RefCell::new(None));
+        let show_object_details =
+            sql_object_details_handler(default_definition_provider.clone(), tab_container.clone());
         let default_signature_help_provider =
             Rc::new(DefaultSqlSignatureHelpProvider::new(SqlSchema::default()));
         let default_signature_help_provider_trait: Rc<dyn SignatureHelpProvider> =
@@ -2460,6 +2499,8 @@ impl SqlEditor {
                 .placeholder(t!("Query.editor_placeholder").to_string());
 
             editor.lsp_mut().completion_provider = Some(default_provider_trait);
+            editor.lsp_mut().definition_provider = Some(default_definition_provider_trait);
+            editor.lsp_mut().show_document = Some(show_object_details);
             // The default hover provider is intentionally NOT installed as a
             // mouse-hover trigger: hover details are shown on demand from the
             // context menu (ShowHoverDetails) instead, so pointer movement
@@ -2487,7 +2528,38 @@ impl SqlEditor {
             default_hover_provider: Some(default_hover_provider),
             default_signature_help_provider: Some(default_signature_help_provider),
             font_cache: None,
+            tab_container,
         }
+    }
+
+    /// 注入宿主页签容器（编辑器所在的那个容器）。
+    ///
+    /// 由 [`SqlEditorTab`] 在把自己的编辑器挂进数据库页签容器后调用，这样对象
+    /// 详情页签会开在同一个容器里，而不是主窗口的页签栏。
+    pub fn set_tab_container(&mut self, container: Entity<TabContainer>) {
+        *self.tab_container.borrow_mut() = Some(container);
+    }
+
+    /// 注入建表 DDL 的来源（连接 + 方言）。
+    ///
+    /// 由 [`SqlEditorView`] 在发布元数据时调用；嵌在单元格里的编辑器没有连接
+    /// 上下文，那种场景下详情页签不带 DDL 区段。
+    pub fn set_table_ddl_sources(&mut self, sources: Option<TableDdlSources>) {
+        if let Some(provider) = &self.default_hover_provider {
+            provider.set_table_ddl(sources);
+        }
+    }
+
+    /// 当前建表 DDL 来源。
+    fn table_ddl_sources(&self) -> Option<TableDdlSources> {
+        self.default_hover_provider
+            .as_ref()
+            .and_then(|provider| provider.table_ddl())
+    }
+
+    /// 当前宿主页签容器。
+    fn host_tab_container(&self) -> Option<Entity<TabContainer>> {
+        self.tab_container.borrow().clone()
     }
 
     fn editor_font(&mut self, cx: &mut Context<Self>) -> Font {
@@ -2762,59 +2834,80 @@ impl SqlEditor {
     }
 
     /// Resolve the identifier under the cursor (or in the selection) against
-    /// the current schema snapshot and show its details.
+    /// the current schema snapshot and open its details tab.
     ///
-    /// Triggered from the editor context menu. With a selection the selection
-    /// body is probed first, so right-clicking a selected table name works even
-    /// when the cursor sits at a selection edge. Details open in a standalone
-    /// popup window so the content stays selectable/copyable.
+    /// Triggered from the editor context menu and by Cmd/Ctrl+click. With a
+    /// selection the selection body is probed first, so right-clicking a
+    /// selected table name works even when the cursor sits at a selection edge.
     pub fn show_hover_details(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let schema = self.current_schema();
-        let (text, cursor, selection) = self.editor.update(cx, |state, _| {
-            (
-                state.text().to_string(),
-                state.cursor(),
-                Some(state.selected_range()),
-            )
-        });
-        let Some(hover) =
-            crate::sql_editor_hover::build_lsp_hover_for_selection(&text, selection, cursor, &schema)
-        else {
-            window.push_notification(
-                t!("Query.no_hover_details_at_cursor").to_string(),
-                cx,
-            );
+        let (text, cursor, selection) = self.editor_snapshot(cx);
+        let Some(details) = crate::sql_editor_hover::resolve_object_details_for_selection(
+            &text,
+            selection,
+            cursor,
+            &self.current_schema(),
+        ) else {
+            window.push_notification(t!("Query.no_hover_details_at_cursor").to_string(), cx);
             return;
         };
-        let markdown = match &hover.contents {
-            lsp_types::HoverContents::Markup(markup) => markup.value.clone(),
-            _ => return,
-        };
-        open_sql_hover_details_window(markdown, window, cx);
+        crate::sql_object_details_tab::open_object_details_tab(
+            self.object_details_request(details),
+            window,
+            cx,
+        );
     }
 
-    /// Copy the generated DDL for the table under the cursor (or in the
-    /// selection) to the clipboard. No-op notification when nothing resolves.
+    /// Copy the DDL for the table under the cursor (or in the selection) to the
+    /// clipboard. No-op notification when nothing resolves.
+    ///
+    /// 与[表设计器] (@see SqlEditorView) 同一条驱动链路，所以是异步的：先取
+    /// 元数据再让驱动生成方言正确的建表 DDL。
     pub fn copy_hover_ddl(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let schema = self.current_schema();
-        let (text, cursor, selection) = self.editor.update(cx, |state, _| {
+        let (text, cursor, selection) = self.editor_snapshot(cx);
+        let details = crate::sql_editor_hover::resolve_object_details_for_selection(
+            &text,
+            selection,
+            cursor,
+            &self.current_schema(),
+        );
+        let table = details.and_then(|details| details.table);
+        let Some(table) = table else {
+            window.push_notification(t!("Query.no_hover_details_at_cursor").to_string(), cx);
+            return;
+        };
+        let sources = self.table_ddl_sources();
+        let window_handle = window.window_handle();
+        cx.spawn(async move |_this, cx: &mut AsyncApp| {
+            let section =
+                crate::table_ddl::load_ddl_section(Some(&table), sources.as_ref(), cx).await;
+            let _ = cx.update_window(window_handle, |_, window, cx| {
+                let message = copy_ddl_message(section, cx);
+                window.push_notification(message, cx);
+            });
+        })
+        .detach();
+    }
+
+    /// 编辑器当前的文本、光标与选区。
+    fn editor_snapshot(&self, cx: &mut App) -> (String, usize, Option<Range<usize>>) {
+        self.editor.update(cx, |state, _| {
             (
                 state.text().to_string(),
                 state.cursor(),
                 Some(state.selected_range()),
             )
-        });
-        match crate::sql_editor_hover::build_ddl_for_selection(&text, selection, cursor, &schema) {
-            Some(ddl) => {
-                cx.write_to_clipboard(gpui::ClipboardItem::new_string(ddl.clone()));
-                window.push_notification(t!("Query.ddl_copied").to_string(), cx);
-            }
-            None => {
-                window.push_notification(
-                    t!("Query.no_hover_details_at_cursor").to_string(),
-                    cx,
-                );
-            }
+        })
+    }
+
+    /// 打开对象详情页签要的请求：对象身份 + DDL 来源 + 宿主编容器。
+    fn object_details_request(
+        &self,
+        details: crate::sql_editor_hover::SqlObjectDetails,
+    ) -> crate::sql_object_details_tab::ObjectDetailsRequest {
+        crate::sql_object_details_tab::ObjectDetailsRequest {
+            details,
+            ddl: self.table_ddl_sources(),
+            host: self.host_tab_container(),
         }
     }
 
@@ -2846,6 +2939,21 @@ impl SqlEditor {
     }
 }
 
+/// 拿到 DDL 后写进剪贴板，并给出要提示用户的文案。
+fn copy_ddl_message(section: Option<TableDdlSection>, cx: &mut App) -> String {
+    match section {
+        Some(TableDdlSection::Ready(ddl)) => {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(ddl));
+            t!("Query.ddl_copied").to_string()
+        }
+        Some(TableDdlSection::Failed(error)) => {
+            t!("Query.object_details_ddl_failed", error = error.as_str()).to_string()
+        }
+        // 没有连接上下文的内嵌编辑器，或还没生成完：这里没有 DDL 可复制。
+        _ => t!("Query.no_hover_details_at_cursor").to_string(),
+    }
+}
+
 impl Render for SqlEditor {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let font = self.editor_font(cx);
@@ -2874,65 +2982,53 @@ impl Render for SqlEditor {
                 // Never touch a custom provider installed via set_hover_provider.
                 if hover_enabled != default_installed {
                     state.clear_hover_state(cx);
-                    state.lsp_mut().hover_provider =
-                        hover_enabled.then(|| default_trait);
+                    state.lsp_mut().hover_provider = hover_enabled.then(|| default_trait);
                 }
             });
         }
-        div().size_full()
+        div()
+            .size_full()
             .on_action(cx.listener(Self::handle_show_hover_details_action))
             .on_action(cx.listener(Self::handle_copy_hover_ddl_action))
             .child(
-            ExtendedEditor::new(&self.extended_editor)
-                .context_menu(move |_, _, cx| {
-                    sql_editor_native_menu(capabilities, cx.read_from_clipboard().is_some())
-                })
-                .font(font)
-                .text_size(gpui::px(font_size))
-                .line_height(gpui::px(font_size * 1.5))
-                .size_full(),
-        )
-    }
-}
-
-/// Standalone, text-selectable details window for the SQL hover markdown.
-struct SqlHoverDetailsView {
-    markdown: gpui::SharedString,
-}
-
-impl Render for SqlHoverDetailsView {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        // TextView::markdown is selectable by default, which is the whole
-        // point of using a standalone window: the kit hover popover closes on
-        // the first click outside itself, making its content impossible to
-        // select and copy.
-        div()
-            .id("sql-hover-details")
-            .size_full()
-            .p_3()
-            .overflow_y_scroll()
-            .child(
-                gpui_base::TextView::markdown(
-                    "sql-hover-details-markdown",
-                    self.markdown.clone(),
-                )
-                .selectable(true),
+                ExtendedEditor::new(&self.extended_editor)
+                    .context_menu(move |_, _, cx| {
+                        sql_editor_native_menu(capabilities, cx.read_from_clipboard().is_some())
+                    })
+                    .font(font)
+                    .text_size(gpui::px(font_size))
+                    .line_height(gpui::px(font_size * 1.5))
+                    .size_full(),
             )
     }
 }
 
-fn open_sql_hover_details_window(markdown: String, window: &mut Window, cx: &mut App) {
-    one_core::popup_window::open_popup_window(
-        one_core::popup_window::PopupWindowOptions::new(t!("Query.show_hover_details").to_string())
-            .size(560.0, 480.0),
-        move |_, cx| {
-            cx.new(|_| SqlHoverDetailsView {
-                markdown: markdown.into(),
-            })
-        },
-        Some(window),
-        cx,
-    );
+/// `show_document` callback backing Cmd/Ctrl+click on an identifier.
+///
+/// gpui-kit offers the go-to-definition target here before falling back to its
+/// own handling. We claim only our synthetic URI (see
+/// [`crate::sql_editor_definition`]) and open the details tab that the context
+/// menu also uses; anything else returns `false` so normal go-to-definition
+/// behaviour is untouched.
+fn sql_object_details_handler(
+    provider: Rc<DefaultSqlDefinitionProvider>,
+    tab_container: Rc<RefCell<Option<Entity<TabContainer>>>>,
+) -> ShowDocumentHandler {
+    Rc::new(move |params, window, cx| {
+        if !crate::sql_editor_definition::is_object_details_uri(&params.uri) {
+            return false;
+        }
+        let Some(details) = provider.take_pending_details() else {
+            return false;
+        };
+        let request = crate::sql_object_details_tab::ObjectDetailsRequest {
+            details,
+            ddl: provider.table_ddl(),
+            host: tab_container.borrow().clone(),
+        };
+        crate::sql_object_details_tab::open_object_details_tab(request, window, cx);
+        true
+    })
 }
 
 fn sql_editor_native_menu(
@@ -3029,25 +3125,32 @@ fn render_sql_gutter_marker(marker: &GutterMarker) -> gpui::AnyElement {
 #[cfg(test)]
 mod tests {
     use super::{
-        RunCursorStatementSql, RunSelectedSql, ShowHoverDetails, SQL_GUTTER_IDLE, SqlContext,
-        SqlEditor, SqlSchema, analyze_diagnostics_pure, completion_priority, identifier_match_rank,
-        schema_to_metadata_view, sql_diagnostic_to_input, sql_editor_context_menu,
+        RunCursorStatementSql, RunSelectedSql, SQL_GUTTER_IDLE, ShowHoverDetails, SqlContext,
+        SqlEditor, SqlSchema, analyze_diagnostics_pure, completion_priority, copy_ddl_message,
+        identifier_match_rank, schema_to_metadata_view, sql_diagnostic_to_input,
+        sql_editor_context_menu,
     };
+    use crate::sql_editor_hover::SqlObjectDetailsKind;
     use db::sql_editor::diagnostics::{
         SqlDiagnosticSeverity, analyze_parser_diagnostics, analyze_semantic_diagnostics,
     };
     use db::sql_editor::statement_ranges::{SqlDialect, SqlStatementSnapshot};
     use gpui::{
-        AppContext as _, Context, Entity, IntoElement, Modifiers, MouseButton, ParentElement as _,
-        Render, Styled as _, Subscription, VisualTestContext, Window, div,
+        App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
+        Modifiers, MouseButton, ParentElement as _, Render, Styled as _, Subscription,
+        VisualTestContext, Window, div,
     };
     use gpui_component::highlighter::DiagnosticSeverity;
     use gpui_component::input::{
         Copy, Cut, GutterMarker, InlineWidget, InputEvent, Paste, RangeDecoration, SelectAll,
     };
     use gpui_component::{Rope, RopeExt};
-    use lsp_types::CompletionItemKind;
+    use lsp_types::{CompletionItemKind, ShowDocumentParams};
     use one_core::settings::AppSettings;
+    use one_core::tab_container::{
+        GlobalTabContainer, TabContainer, TabContent, TabContentEvent, TabItem,
+    };
+    use rust_i18n::t;
     use std::collections::HashMap;
     use std::{cell::RefCell, rc::Rc, sync::Arc};
 
@@ -3141,9 +3244,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn sql_editor_installs_mouse_hover_provider_only_when_enabled(
-        cx: &mut gpui::TestAppContext,
-    ) {
+    fn sql_editor_installs_mouse_hover_provider_only_when_enabled(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
             gpui_component::init(cx);
             cx.set_global(AppSettings::default());
@@ -3187,95 +3288,9 @@ mod tests {
         });
     }
 
-    #[gpui::test]
-    fn sql_editor_show_hover_details_resolves_selection(cx: &mut gpui::TestAppContext) {
-        cx.update(|cx| {
-            gpui_component::init(cx);
-            cx.set_global(AppSettings::default());
-        });
-        let mut sql_editor = None;
-        let (_, visual) = cx.add_window_view(|window, cx| {
-            let editor = cx.new(|cx| SqlEditor::new(window, cx));
-            sql_editor = Some(editor.clone());
-            SqlEditorHarness {
-                editor,
-                _subscription: None,
-            }
-        });
-        let sql_editor = sql_editor.expect("SQL editor should be created");
-
-        VisualTestContext::update(visual, |window, cx| {
-            sql_editor.update(cx, |editor, cx| {
-                editor.set_schema(
-                    SqlSchema::default()
-                        .with_scope(Some("app".into()), Some("public".into()))
-                        .with_tables(vec![("users".to_string(), "doc".to_string())])
-                        .with_table_detail(
-                            "users",
-                            crate::sql_editor::SqlTableDetail {
-                                object_type: crate::sql_editor::SqlObjectType::Table,
-                                schema: Some("public".into()),
-                                comment: None,
-                                engine: None,
-                                columns: vec![crate::sql_editor::SqlColumnDetail {
-                                    name: "id".into(),
-                                    data_type: "INT".into(),
-                                    is_nullable: false,
-                                    is_primary_key: true,
-                                    default_value: None,
-                                    comment: None,
-                                }],
-                            },
-                        ),
-                    window,
-                    cx,
-                );
-                // "users" is selected; the cursor sits at the selection start,
-                // which on its own anchors "from" (a keyword) and fails to
-                // resolve. Selection-aware probing must still resolve users.
-                editor.set_value("select * from users".to_string(), window, cx);
-                let input = editor.input();
-                input.update(cx, |state, cx| {
-                    let start = "select * from ".len();
-                    state.set_selected_range(start..start + "users".len(), cx);
-                });
-            });
-        });
-
-        // The details window is a separate OS window; here we only verify the
-        // selection-aware resolution path resolves the selected table even
-        // though the cursor sits at a selection edge (on "from", a keyword).
-        visual.read(|cx| {
-            let (text, cursor, selection, schema) = {
-                let editor = sql_editor.read(cx);
-                let input = editor.input();
-                let input_ref = input.read(cx);
-                (
-                    input_ref.text().to_string(),
-                    input_ref.cursor(),
-                    Some(input_ref.selected_range()),
-                    editor.current_schema(),
-                )
-            };
-            let hover = crate::sql_editor_hover::build_lsp_hover_for_selection(
-                &text,
-                selection,
-                cursor,
-                &schema,
-            )
-            .expect("selection-aware hover should resolve the selected table");
-            let markdown = match &hover.contents {
-                lsp_types::HoverContents::Markup(markup) => markup.value.clone(),
-                other => panic!("unexpected hover contents: {other:?}"),
-            };
-            assert!(markdown.contains("**TABLE**"));
-            assert!(markdown.contains("CREATE TABLE"));
-        });
-    }
-
-    #[test]
-    fn copy_ddl_extracts_sql_block_from_hover_markdown() {
-        let schema = SqlSchema::default()
+    /// Metadata for the SQL snippets used by the Cmd/Ctrl+click tests.
+    fn users_schema() -> SqlSchema {
+        SqlSchema::default()
             .with_scope(Some("app".into()), Some("public".into()))
             .with_tables(vec![("users".to_string(), "doc".to_string())])
             .with_table_detail(
@@ -3294,18 +3309,530 @@ mod tests {
                         comment: None,
                     }],
                 },
-            );
+            )
+    }
+
+    /// Window hosting a SQL editor showing `select * from users` against
+    /// [`users_schema`], plus both tab containers the app has: the database
+    /// tab's inner container (where the editor lives) and the window-level one.
+    struct SqlEditorFixture {
+        editor: Entity<SqlEditor>,
+        /// 数据库页签内部的容器：详情页签应该开在这里。
+        tab_container: Entity<TabContainer>,
+        /// 主窗口（外层）页签栏：详情页签不应该开到这里。
+        window_tab_container: Entity<TabContainer>,
+        table_range: std::ops::Range<usize>,
+    }
+
+    fn editor_over_users_table(
+        cx: &mut gpui::TestAppContext,
+    ) -> (SqlEditorFixture, &mut VisualTestContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_global(AppSettings::default());
+        });
         let text = "select * from users";
-        let ddl = crate::sql_editor_hover::build_ddl_for_selection(
-            text,
-            None,
-            text.len(),
+        let table_range = text.find("users").expect("table name")..text.len();
+        let mut sql_editor = None;
+        let mut tab_container = None;
+        let mut window_tab_container = None;
+        let (_, visual) = cx.add_window_view(|window, cx| {
+            let editor = cx.new(|cx| SqlEditor::new(window, cx));
+            // Same wiring as the app: the editor sits in the database tab's
+            // inner container, while `GlobalTabContainer` holds the window-level
+            // one that must *not* collect the details tabs.
+            let container = cx.new(|cx| TabContainer::new(window, cx));
+            let window_container = cx.new(|cx| TabContainer::new(window, cx));
+            cx.set_global(GlobalTabContainer {
+                tab_container: window_container.clone(),
+            });
+            editor.update(cx, |editor, _| {
+                editor.set_tab_container(container.clone());
+            });
+            sql_editor = Some(editor.clone());
+            tab_container = Some(container);
+            window_tab_container = Some(window_container);
+            SqlEditorHarness {
+                editor,
+                _subscription: None,
+            }
+        });
+        let fixture = SqlEditorFixture {
+            editor: sql_editor.expect("SQL editor should be created"),
+            tab_container: tab_container.expect("tab container should be created"),
+            window_tab_container: window_tab_container.expect("window tab container"),
+            table_range,
+        };
+        VisualTestContext::update(visual, |window, cx| {
+            fixture.editor.update(cx, |editor, cx| {
+                editor.set_schema(users_schema(), window, cx);
+                editor.set_value(text.to_string(), window, cx);
+            });
+            // Layout the editor so identifier bounds are known to the mouse
+            // simulation below.
+            window.draw(cx).clear(cx);
+        });
+        (fixture, visual)
+    }
+
+    /// Ids and titles of the tabs currently open in `fixture`'s inner
+    /// (database tab) container.
+    fn details_tabs(fixture: &SqlEditorFixture, cx: &App) -> Vec<(String, String)> {
+        tab_ids(&fixture.tab_container, cx)
+    }
+
+    /// Ids and titles of the tabs currently open in the window-level container.
+    fn window_tabs(fixture: &SqlEditorFixture, cx: &App) -> Vec<(String, String)> {
+        tab_ids(&fixture.window_tab_container, cx)
+    }
+
+    fn tab_ids(container: &Entity<TabContainer>, cx: &App) -> Vec<(String, String)> {
+        container
+            .read(cx)
+            .tabs()
+            .iter()
+            .map(|tab| (tab.id().to_string(), tab.title(cx).to_string()))
+            .collect()
+    }
+
+    /// Window-space center of `range` in the editor's text.
+    fn text_range_center(
+        visual: &mut VisualTestContext,
+        sql_editor: &Entity<SqlEditor>,
+        range: &std::ops::Range<usize>,
+    ) -> gpui::Point<gpui::Pixels> {
+        visual
+            .read(|cx| {
+                sql_editor
+                    .read(cx)
+                    .input()
+                    .read(cx)
+                    .range_to_bounds(range)
+                    .map(|bounds| bounds.center())
+            })
+            .expect("the table name should be laid out")
+    }
+
+    /// Pumps the dispatcher (foreground tasks included): the definition
+    /// lookup completes in a spawned task, so `run_until_parked` alone is not
+    /// enough before clicking.
+    fn settle(visual: &mut VisualTestContext) {
+        visual.cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn sql_editor_installs_object_details_definition_provider(cx: &mut gpui::TestAppContext) {
+        let (fixture, visual) = editor_over_users_table(cx);
+
+        // Cmd/Ctrl+click is the primary entry point for object details, so the
+        // provider and the host handler are installed unconditionally - unlike
+        // the mouse-hover popover, which stays opt-in via settings.
+        visual.read(|cx| {
+            let input = fixture.editor.read(cx).input();
+            let lsp = input.read(cx).lsp();
+            assert!(
+                lsp.definition_provider.is_some(),
+                "Cmd/Ctrl+click needs a definition provider"
+            );
+            assert!(
+                lsp.show_document.is_some(),
+                "the host must intercept the synthetic details URI"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn sql_editor_secondary_click_opens_object_details_tab(cx: &mut gpui::TestAppContext) {
+        let (fixture, visual) = editor_over_users_table(cx);
+        let point = text_range_center(visual, &fixture.editor, &fixture.table_range);
+
+        // Cmd/Ctrl+hover first: gpui-kit only offers an identifier to the
+        // definition provider while the secondary modifier is held.
+        visual.simulate_mouse_move(
+            point,
+            Option::<MouseButton>::None,
+            Modifiers::secondary_key(),
+        );
+        settle(visual);
+
+        visual.simulate_mouse_down(point, MouseButton::Left, Modifiers::secondary_key());
+        settle(visual);
+        let tabs = visual.read(|cx| details_tabs(&fixture, cx));
+        assert_eq!(1, tabs.len(), "Cmd/Ctrl+click opens the details tab");
+        assert_eq!("sql-object-details:app.public:table:users", tabs[0].0);
+        assert!(
+            tabs[0].1.contains("users"),
+            "tab title should name the object, got {:?}",
+            tabs[0].1
+        );
+        // 详情页签是 SQL 编辑器页签的兄弟：必须开在数据库页签内部的容器里，
+        // 不能跑到主窗口的页签栏上。
+        visual.read(|cx| {
+            assert!(
+                window_tabs(&fixture, cx).is_empty(),
+                "details must not open in the window-level tab bar"
+            );
+        });
+
+        // Re-resolving the same object must reuse its tab, not stack a copy.
+        visual.simulate_mouse_down(point, MouseButton::Left, Modifiers::secondary_key());
+        settle(visual);
+        visual.read(|cx| {
+            assert_eq!(1, details_tabs(&fixture, cx).len(), "details tabs reuse");
+            assert!(window_tabs(&fixture, cx).is_empty());
+        });
+    }
+
+    #[gpui::test]
+    fn sql_editor_plain_click_on_table_keeps_normal_editing(cx: &mut gpui::TestAppContext) {
+        let (fixture, visual) = editor_over_users_table(cx);
+        let point = text_range_center(visual, &fixture.editor, &fixture.table_range);
+
+        // Cmd/Ctrl+hover arms the link, but a plain click must only move the
+        // caret - opening details on every click would be unusable.
+        visual.simulate_mouse_move(
+            point,
+            Option::<MouseButton>::None,
+            Modifiers::secondary_key(),
+        );
+        settle(visual);
+
+        visual.simulate_click(point, Modifiers::default());
+        settle(visual);
+        visual.read(|cx| {
+            assert!(
+                details_tabs(&fixture, cx).is_empty(),
+                "a plain click must not open the details tab"
+            );
+            assert!(window_tabs(&fixture, cx).is_empty());
+            assert_eq!(
+                fixture.table_range.start + fixture.table_range.len() / 2,
+                fixture.editor.read(cx).input().read(cx).cursor(),
+                "a plain click must still place the caret"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn sql_object_details_handler_keeps_foreign_documents_to_the_kit(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (fixture, visual) = editor_over_users_table(cx);
+        let handler = visual
+            .read(|cx| {
+                fixture
+                    .editor
+                    .read(cx)
+                    .input()
+                    .read(cx)
+                    .lsp()
+                    .show_document
+                    .clone()
+            })
+            .expect("host handler should be installed");
+
+        // A regular go-to-definition target (a real file) must fall through to
+        // gpui-kit's own handling instead of opening a details tab.
+        let handled = visual.update(|window, cx| {
+            let params = ShowDocumentParams {
+                uri: "file:///tmp/query.sql".parse().expect("valid uri"),
+                external: Some(false),
+                take_focus: Some(true),
+                selection: None,
+            };
+            handler(&params, window, cx)
+        });
+
+        assert!(!handled, "only the synthetic details URI belongs to us");
+        visual.read(|cx| {
+            assert!(details_tabs(&fixture, cx).is_empty());
+            assert!(window_tabs(&fixture, cx).is_empty());
+        });
+    }
+
+    #[test]
+    fn object_details_are_identified_per_object_and_kind() {
+        let schema = users_schema();
+        let details = |sql: &str| {
+            crate::sql_editor_hover::resolve_object_details(
+                sql,
+                sql.find("users").expect("identifier") + 1,
+                &schema,
+            )
+            .expect("details should resolve")
+        };
+
+        let table = details("select * from users");
+        assert_eq!("app.public:table:users", table.id);
+        assert_eq!("users", table.label);
+        assert_eq!(SqlObjectDetailsKind::Table, table.kind);
+
+        let column = details("select users.id from users");
+        assert_eq!("app.public:column:users.id", column.id);
+        assert_eq!("users.id", column.label);
+        assert_eq!(SqlObjectDetailsKind::Column, column.kind);
+    }
+
+    #[gpui::test]
+    fn sql_editor_show_hover_details_resolves_selection(cx: &mut gpui::TestAppContext) {
+        let (fixture, visual) = editor_over_users_table(cx);
+        // "users" is selected; the cursor sits at the selection start, which on
+        // its own anchors "from" (a keyword) and fails to resolve.
+        VisualTestContext::update(visual, |window, cx| {
+            fixture.editor.update(cx, |editor, cx| {
+                let input = editor.input();
+                input.update(cx, |state, cx| {
+                    let start = "select * from ".len();
+                    state.set_selected_range(start..start + "users".len(), cx);
+                });
+            });
+            window.draw(cx).clear(cx);
+        });
+
+        visual.update(|window, cx| {
+            fixture.editor.update(cx, |editor, cx| {
+                editor.show_hover_details(window, cx);
+            });
+        });
+        let tabs = visual.read(|cx| details_tabs(&fixture, cx));
+        assert_eq!(1, tabs.len(), "the menu entry opens the details tab");
+        assert_eq!("sql-object-details:app.public:table:users", tabs[0].0);
+        assert!(tabs[0].1.contains("users"));
+        visual.read(|cx| {
+            assert!(
+                window_tabs(&fixture, cx).is_empty(),
+                "the menu entry must open into the database tab as well"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn object_details_fall_back_to_the_window_container_without_a_host(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        // 内嵌编辑器（表格单元格里的 SQL 编辑器）没有自己的页签容器，
+        // 只能退回主窗口容器——不能变成一个点了没反应的入口。
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_global(AppSettings::default());
+        });
+        let mut tab_container = None;
+        let (_, visual) = cx.add_window_view(|window, cx| {
+            let container = cx.new(|cx| TabContainer::new(window, cx));
+            cx.set_global(GlobalTabContainer {
+                tab_container: container.clone(),
+            });
+            tab_container = Some(container);
+            SqlEditorHarness {
+                editor: cx.new(|cx| SqlEditor::new(window, cx)),
+                _subscription: None,
+            }
+        });
+        let tab_container = tab_container.expect("tab container should be created");
+        let schema = users_schema();
+        let details = crate::sql_editor_hover::resolve_object_details(
+            "select * from users",
+            "select * from ".len() + 1,
             &schema,
         )
-        .expect("table hover carries a DDL preview");
-        assert!(ddl.starts_with("CREATE TABLE"));
-        assert!(ddl.contains("id INT"));
-        assert!(!ddl.contains("```"));
+        .expect("details should resolve");
+
+        let opened = visual.update(|window, cx| {
+            crate::sql_object_details_tab::open_object_details_tab(
+                crate::sql_object_details_tab::ObjectDetailsRequest {
+                    details,
+                    ddl: None,
+                    host: None,
+                },
+                window,
+                cx,
+            )
+        });
+
+        assert!(
+            opened,
+            "a container-less editor still opens the details tab"
+        );
+        visual.read(|cx| {
+            let tabs = tab_ids(&tab_container, cx);
+            assert_eq!(1, tabs.len());
+            assert_eq!("sql-object-details:app.public:table:users", tabs[0].0);
+        });
+    }
+
+    /// 桩页签：被取消激活时回头去改编辑器，复刻 `SqlEditorTab::on_deactivate`
+    /// 的行为（先改 `SqlEditor` 视图，再由它改到编辑器输入状态）。
+    struct DeactivatingEditorStub {
+        view: Entity<SqlEditor>,
+        focus_handle: FocusHandle,
+    }
+
+    impl EventEmitter<TabContentEvent> for DeactivatingEditorStub {}
+
+    impl Focusable for DeactivatingEditorStub {
+        fn focus_handle(&self, _: &App) -> FocusHandle {
+            self.focus_handle.clone()
+        }
+    }
+
+    impl gpui::Render for DeactivatingEditorStub {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            gpui::div()
+        }
+    }
+
+    impl TabContent for DeactivatingEditorStub {
+        fn content_key(&self) -> &'static str {
+            "DeactivatingEditorStub"
+        }
+
+        fn title(&self, _cx: &App) -> gpui::SharedString {
+            "stub".into()
+        }
+
+        fn on_deactivate(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+            self.view.update(cx, |editor, cx| {
+                editor.invalidate_metadata_context(cx);
+                editor.invalidate_completions(cx);
+            });
+        }
+    }
+
+    /// 让宿主编容器里站着一个「被取消激活就去改编辑器」的页签。
+    ///
+    /// 真实场景就是 SQL 编辑器页签：Cmd/Ctrl+点击时它就是宿主编容器里
+    /// 当前的页签，开详情页签会先把它取消激活。
+    fn host_with_deactivating_tab(fixture: &SqlEditorFixture, visual: &mut VisualTestContext) {
+        let view = fixture.editor.clone();
+        let host = fixture.tab_container.clone();
+        visual.update(|_window, cx| {
+            let stub = cx.new(|cx| DeactivatingEditorStub {
+                view,
+                focus_handle: cx.focus_handle(),
+            });
+            host.update(cx, |container, cx| {
+                container.add_and_activate_tab(TabItem::new("stub", "stub", stub), cx);
+            });
+        });
+    }
+
+    /// `select * from users` 里 `users` 的对象详情。
+    fn users_table_details() -> crate::sql_editor_hover::SqlObjectDetails {
+        crate::sql_editor_hover::resolve_object_details(
+            "select * from users",
+            "select * from ".len() + 1,
+            &users_schema(),
+        )
+        .expect("details should resolve")
+    }
+
+    #[gpui::test]
+    fn object_details_open_leaves_the_requesting_input_update_first(cx: &mut gpui::TestAppContext) {
+        // Cmd/Ctrl+点击这条路径：`go_to_definition` 是在编辑器输入状态自己的
+        // update 里回调进 `show_document` 的，同步开页签必然 double-lease。
+        let (fixture, visual) = editor_over_users_table(cx);
+        host_with_deactivating_tab(&fixture, visual);
+        let input = visual.read(|cx| fixture.editor.read(cx).input());
+        let details = users_table_details();
+        let host = fixture.tab_container.clone();
+
+        let opened = visual.update(|window, cx| {
+            input.update(cx, |_state, cx| {
+                crate::sql_object_details_tab::open_object_details_tab(
+                    crate::sql_object_details_tab::ObjectDetailsRequest {
+                        details,
+                        ddl: None,
+                        host: Some(host.clone()),
+                    },
+                    window,
+                    cx,
+                )
+            })
+        });
+        assert!(opened, "有宿主容器时应当接住详情页签");
+
+        visual.read(|cx| {
+            let tabs = details_tabs(&fixture, cx);
+            assert_eq!(2, tabs.len(), "详情页签要和宿主的当前页签并排");
+            assert_eq!("sql-object-details:app.public:table:users", tabs[1].0);
+        });
+    }
+
+    #[gpui::test]
+    fn object_details_open_leaves_the_requesting_editor_update_first(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        // 右键菜单这条路径：动作由 `cx.listener` 派发，也就是在 `SqlEditor`
+        // 自己的 update 里；取消激活时被改的正是它。
+        let (fixture, visual) = editor_over_users_table(cx);
+        host_with_deactivating_tab(&fixture, visual);
+        let details = users_table_details();
+        let host = fixture.tab_container.clone();
+
+        let opened = visual.update(|window, cx| {
+            fixture.editor.update(cx, |_editor, cx| {
+                crate::sql_object_details_tab::open_object_details_tab(
+                    crate::sql_object_details_tab::ObjectDetailsRequest {
+                        details,
+                        ddl: None,
+                        host: Some(host.clone()),
+                    },
+                    window,
+                    cx,
+                )
+            })
+        });
+        assert!(opened, "有宿主容器时应当接住详情页签");
+
+        visual.read(|cx| {
+            let tabs = details_tabs(&fixture, cx);
+            assert_eq!(2, tabs.len(), "详情页签要和宿主的当前页签并排");
+            assert_eq!("sql-object-details:app.public:table:users", tabs[1].0);
+        });
+    }
+
+    /// 「复制 DDL」写进剪贴板的是驱动生成的 DDL（与表设计器一致），不再从
+    /// hover markdown 里抠代码块。
+    #[gpui::test]
+    fn copy_ddl_writes_the_driver_ddl_to_the_clipboard(cx: &mut gpui::TestAppContext) {
+        const DDL: &str =
+            "CREATE TABLE `users` (\n  `id` INT NOT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB";
+        let message = cx.update(|cx| {
+            copy_ddl_message(
+                Some(crate::table_ddl::TableDdlSection::Ready(DDL.into())),
+                cx,
+            )
+        });
+        let copied = cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
+
+        assert_eq!(Some(DDL.to_string()), copied);
+        assert_eq!(t!("Query.ddl_copied").to_string(), message);
+    }
+
+    /// 生成失败或光标不在表上时，不写剪贴板。
+    #[gpui::test]
+    fn copy_ddl_reports_failures_without_touching_the_clipboard(cx: &mut gpui::TestAppContext) {
+        let failed = cx.update(|cx| {
+            copy_ddl_message(
+                Some(crate::table_ddl::TableDdlSection::Failed(
+                    "connection closed".into(),
+                )),
+                cx,
+            )
+        });
+        let missing = cx.update(|cx| copy_ddl_message(None, cx));
+        let copied = cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
+
+        assert_eq!(
+            t!(
+                "Query.object_details_ddl_failed",
+                error = "connection closed"
+            )
+            .to_string(),
+            failed
+        );
+        assert_eq!(t!("Query.no_hover_details_at_cursor").to_string(), missing);
+        assert_eq!(None, copied, "没有 DDL 时不该动剪贴板");
     }
 
     #[gpui::test]

@@ -175,12 +175,30 @@ test("Linux publishes one package per architecture plus a separate GPU dependenc
     build,
     /cargo zigbuild[\s\S]*--release[\s\S]*-p main[\s\S]*--target "\$\{\{ matrix\.target \}\}\.2\.28"/,
   );
-  // No platform overrides the feature set: `embedded-webview` is off in the
+  // No platform drops the default feature set: `embedded-webview` is off in the
   // default set itself (see main/Cargo.toml), so the shape that gets published is
   // the plain default build on all three platforms. The guard for that lives in
   // its own test below.
   assert.doesNotMatch(build, /--no-default-features/);
-  assert.doesNotMatch(build, /--features/);
+  // The one deliberate exception is the Intel Mac Touch Bar workaround. It has to
+  // stay the *only* feature this step ever names, be handed to the compile through
+  // the same variable, and stay behind the target check: a workaround that leaks
+  // onto ARM Macs, Windows or Linux would trade a crash we can reproduce for a
+  // memory cost we cannot explain.
+  assert.match(
+    build,
+    /if \[ "\$\{\{ matrix\.target \}\}" = "x86_64-apple-darwin" \]; then\s*\n\s*extra_features="--features macos-touchbar-window-hide"/,
+  );
+  assert.equal(
+    (build.match(/--features/g) ?? []).length,
+    1,
+    "the build step must name features in exactly one place: the x86_64 macOS-only variable",
+  );
+  assert.equal(
+    (build.match(/\$extra_features/g) ?? []).length,
+    2,
+    "both compile commands must consume the feature variable: a platform that silently loses it would ship the un-fixed binary",
+  );
   assert.match(
     build,
     /cargo build --release -p main --target "\$\{\{ matrix\.target \}\}"/,
@@ -351,7 +369,8 @@ test("no release build enables the embedded webview, while the opt-in path still
   assert.doesNotMatch(release, /--features[^\n]*embedded-webview/);
   const build = workflowStep(release, "Build release binary");
   assert.doesNotMatch(build, /--no-default-features/);
-  assert.doesNotMatch(build, /--features/);
+  assert.doesNotMatch(build, /--features[^\n]*embedded-webview/);
+  assert.doesNotMatch(build, /--features[^\n]*wasm-components/);
   assert.match(
     build,
     /cargo zigbuild[\s\S]*--release[\s\S]*-p main[\s\S]*--target "\$\{\{ matrix\.target \}\}\.2\.28"/,

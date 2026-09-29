@@ -126,6 +126,8 @@ fn column_info_from_query_meta(meta: &QueryColumnMeta) -> ColumnInfo {
         comment: None,
         charset: None,
         collation: None,
+        // 查询结果集的列元数据里没有自增信息。
+        is_auto_increment: false,
     }
 }
 

@@ -252,6 +252,11 @@ pub struct ColumnInfo {
     /// 列级排序规则（如 MySQL 的 COLLATION_NAME）
     #[serde(default)]
     pub collation: Option<String>,
+    /// 是否自增/自增标识列（MSSQL IDENTITY、MySQL AUTO_INCREMENT、
+    /// PostgreSQL serial/identity、SQLite 的 INTEGER PRIMARY KEY rowid 别名等）。
+    /// 取不到时必须是 `false`：设计器靠它决定重建列时是否保留自增。
+    #[serde(default)]
+    pub is_auto_increment: bool,
 }
 
 /// Index information

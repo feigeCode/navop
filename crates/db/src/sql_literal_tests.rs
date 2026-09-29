@@ -10,6 +10,7 @@ fn column(data_type: &str) -> ColumnInfo {
         comment: None,
         charset: None,
         collation: None,
+        is_auto_increment: false,
     }
 }
 

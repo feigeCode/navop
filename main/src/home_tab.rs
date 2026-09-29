@@ -37,7 +37,7 @@ use one_core::gpui_tokio::Tokio;
 use one_core::key_storage;
 use one_core::keybindings::{action_id, rebind_keybindings, shortcuts_for};
 use one_core::license::Feature;
-use one_core::popup_window::{PopupWindowOptions, open_popup_window};
+use one_core::popup_window::{PopupWindowOptions, open_reusable_popup_window};
 use one_core::settings::{AppSettings, HomeConnectionLayout, SyncProvider};
 use one_core::storage::traits::Repository;
 use one_core::storage::{

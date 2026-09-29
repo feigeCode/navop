@@ -257,6 +257,22 @@ RemoteDesktopForm:
     en: Play remote audio
     zh-CN: 播放远端音频
     zh-HK: 播放遠端音訊
+  label_egfx:
+    en: Graphics pipeline (EGFX)
+    zh-CN: 图形管线（EGFX）
+    zh-HK: 圖形管線（EGFX）
+  egfx_auto:
+    en: Auto
+    zh-CN: 自动
+    zh-HK: 自動
+  egfx_always:
+    en: Always on
+    zh-CN: 总是开启
+    zh-HK: 總是開啟
+  egfx_never:
+    en: Never
+    zh-CN: 从不开启
+    zh-HK: 從不開啟
   label_backend_preference:
     en: RDP backend
     zh-CN: RDP 后端

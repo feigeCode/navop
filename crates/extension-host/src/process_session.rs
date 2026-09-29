@@ -224,6 +224,18 @@ impl ProcessRpcSession {
         self.handle.is_closed()
     }
 
+    /// provider 进程为何没了:退出码 + 最近的 stderr 尾部。
+    ///
+    /// 非 owning clone(`owner == None`)拿不到进程句柄,返回 `None`;进程仍在
+    /// 运行时也返回 `None`。锁被 poison 时同样返回 `None` —— 一条诊断信息不
+    /// 值得再引入 panic 路径。
+    pub fn exit_diagnosis(&self) -> Option<String> {
+        let owner = self.owner.lock().ok()?;
+        let process = owner.as_ref()?.process.as_ref()?;
+        let mut handle = process.lock().ok()?;
+        handle.as_mut()?.exit_diagnosis()
+    }
+
     /// 先请求扩展优雅退出，再关闭 reader 并回收 child。
     pub async fn shutdown(&self) {
         if let Err(error) = shutdown(&self.handle, self.shutdown_grace_ms).await {

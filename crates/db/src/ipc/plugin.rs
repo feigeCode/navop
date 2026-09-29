@@ -2211,6 +2211,7 @@ fn column_info_from_wire(column: wire_schema::ColumnInfo) -> ColumnInfo {
         comment: empty_to_none(column.comment),
         charset: None,
         collation: None,
+        is_auto_increment: column.is_auto_increment,
     }
 }
 
@@ -2489,6 +2490,7 @@ mod tests {
             comment: None,
             charset: None,
             collation: None,
+            is_auto_increment: false,
         }
     }
 

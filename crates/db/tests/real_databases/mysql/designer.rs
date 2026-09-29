@@ -146,6 +146,19 @@ async fn assert_created_metadata(
         .await
         .expect("created columns");
     assert!(columns.iter().any(|column| column.name == "label"));
+    // AUTO_INCREMENT 不在 COLUMN_TYPE 里，只能从 EXTRA 读；读不到的话设计器会把它当普通 int。
+    assert!(
+        columns
+            .iter()
+            .any(|column| column.name == "id" && column.is_auto_increment),
+        "AUTO_INCREMENT 主键应被标记为 is_auto_increment"
+    );
+    assert!(
+        !columns
+            .iter()
+            .any(|column| column.name == "label" && column.is_auto_increment),
+        "普通列不应被标记为自增"
+    );
     let indexes = plugin
         .list_indexes(connection, database, None, "designed")
         .await

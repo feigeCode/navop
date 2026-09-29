@@ -23,7 +23,7 @@ use one_assets::IconName;
 use rust_i18n::t;
 
 use super::RemoteDesktopFormWindow;
-use one_core::storage::{RdpAudioMode, RemoteDesktopProtocol};
+use one_core::storage::{RdpAudioMode, RdpEgfxMode, RdpSettings, RemoteDesktopProtocol};
 
 impl RemoteDesktopFormWindow {
     fn render_form_row(&self, label: String, child: impl IntoElement) -> impl IntoElement {
@@ -100,6 +100,9 @@ impl RemoteDesktopFormWindow {
             .child(self.render_read_only_row(cx))
             .when(self.protocol == RemoteDesktopProtocol::Rdp, |form| {
                 let form = form.child(self.render_audio_playback_row(cx));
+                let form = form.when(self.egfx_controls_visible(), |form| {
+                    form.child(self.render_egfx_row(cx))
+                });
                 #[cfg(windows)]
                 let form = form.child(self.render_backend_preference_row(cx));
                 form
@@ -216,22 +219,80 @@ impl RemoteDesktopFormWindow {
         )
     }
 
+    /// The graphics pipeline policy only applies to the IronRDP backend: the Windows native
+    /// backend never launches the helper, so the setting would do nothing there.
+    fn egfx_controls_visible(&self) -> bool {
+        if self.protocol != RemoteDesktopProtocol::Rdp {
+            return false;
+        }
+        #[cfg(windows)]
+        let visible = !super::backend_preference::windows_native_rdp_available()
+            || super::backend_preference::effective_backend_preference(self.backend_preference)
+                == one_core::storage::RemoteDesktopBackendPreference::Canvas;
+        #[cfg(not(windows))]
+        let visible = true;
+        visible
+    }
+
+    /// The policy lives in the RDP settings, which stay absent until the user picks something.
+    fn egfx_mode(&self) -> RdpEgfxMode {
+        self.rdp_settings
+            .as_ref()
+            .map(|settings| settings.graphics.egfx)
+            .unwrap_or_default()
+    }
+
+    fn set_egfx_mode(&mut self, mode: RdpEgfxMode) {
+        let audio_playback = self.audio_playback;
+        let settings = self
+            .rdp_settings
+            .get_or_insert_with(|| RdpSettings::from_legacy_audio_playback(audio_playback));
+        settings.graphics.egfx = mode;
+    }
+
+    fn render_egfx_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let selected = self.egfx_mode();
+        let options = [
+            (
+                "remote-desktop-egfx-auto",
+                RdpEgfxMode::Auto,
+                t!("RemoteDesktopForm.egfx_auto").to_string(),
+            ),
+            (
+                "remote-desktop-egfx-always",
+                RdpEgfxMode::Always,
+                t!("RemoteDesktopForm.egfx_always").to_string(),
+            ),
+            (
+                "remote-desktop-egfx-never",
+                RdpEgfxMode::Never,
+                t!("RemoteDesktopForm.egfx_never").to_string(),
+            ),
+        ];
+
+        let mut row = h_flex().gap_4();
+        for (id, mode, label) in options {
+            row = row.child(
+                Radio::new(id)
+                    .label(label)
+                    .checked(selected == mode)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.set_egfx_mode(mode);
+                        cx.notify();
+                    })),
+            );
+        }
+
+        self.render_form_row(t!("RemoteDesktopForm.label_egfx").to_string(), row)
+    }
+
     #[cfg(windows)]
     fn render_backend_preference_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let native_available = super::backend_preference::windows_native_rdp_available();
-        // Auto is no longer offered in the form. Legacy connections that
-        // stored Auto map to the effective backend for display: Windows
-        // native when available, otherwise IronRDP (Canvas).
+        // Legacy connections that stored Auto map to the effective backend for display:
+        // Windows native when available, otherwise IronRDP (Canvas).
         let effective_preference =
-            if self.backend_preference == one_core::storage::RemoteDesktopBackendPreference::Auto {
-                if native_available {
-                    one_core::storage::RemoteDesktopBackendPreference::WindowsNative
-                } else {
-                    one_core::storage::RemoteDesktopBackendPreference::Canvas
-                }
-            } else {
-                self.backend_preference
-            };
+            super::backend_preference::effective_backend_preference(self.backend_preference);
         let selected_index = super::backend_preference::backend_preferences()
             .iter()
             .position(|preference| *preference == effective_preference);

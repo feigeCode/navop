@@ -4,6 +4,128 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.19.4] - 2026-09-28
+
+#### 更新内容
+
+- macOS（Touch Bar 机型）：关闭窗口闪退的问题这次收口到「所有会开窗口的入口」。上一版把弹窗的关闭路径收进统一漏斗之后仍会崩，因为表单、远程桌面、表导出、编辑器窗口里还各有自己销毁原生窗口的入口——从那些入口关闭（例如表单里的「保存」）照样走到 AppKit 的销毁流程。现在这些窗口的关闭一律经过同一条漏斗：不销毁原生窗口，只隐藏并结束业务会话，下次打开同一目标直接复用那个原生窗口。同时开多个窗口（同时编辑两个连接、同时连两台远程桌面、同一连接库的不同表导出）互不干扰。
+
+#### 修复与优化
+
+- 「关闭即隐藏」当前只在 Intel 版 macOS 包（x86_64）里默认打开：已复现的闪退现场都在 Intel 机型上，而隐藏的原生窗口会一直占着 NSWindow 与渲染层直到进程退出。ARM Mac、Windows、Linux 保持原来的「关闭即销毁」，不再为这个修复承担内存代价；Apple Silicon 的 13 英寸 MacBook Pro（M1 2020 / M2 2022）同样带 Touch Bar，那一侧需要同样保护时给对应构建打开同一个开关即可。
+- 内部依赖更新（gpui 分支 fork-0.3.121 / fork-0.3.122）：Touch Bar 重复注销异常的捕获挪到 Objective-C 侧编译，release 构建的 panic=abort 下才真正生效（此前 Rust 侧的捕获在 release 里形同虚设）。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.19.4) 下载桌面端安装包
+
+---
+
+#### What's New
+
+- macOS (Touch Bar models): closing a window no longer crashes, now covering every entry point that opens a window. Closing the dialog path in the previous release was not enough: forms, remote desktop, table export and the editor window each destroyed their own native window, so closing from any of those (the "Save" button in a form, for example) still entered AppKit's destruction flow. All of them now go through the same funnel — the native window is hidden rather than destroyed, the session ends, and opening the same target again reuses that window. Multiple windows open at the same time (two connections being edited, two remote desktops, exports of different tables in one connection) no longer interfere with each other.
+
+#### Fixes and Improvements
+
+- "Hide on close" is currently on by default only for the Intel macOS package (x86_64): every reproduced crash came from an Intel model, and a hidden native window keeps its NSWindow and rendering layer alive until the process exits. ARM Macs, Windows and Linux keep destroying on close, so they no longer pay a memory cost for this fix; the 13-inch MacBook Pro with M1 (2020) or M2 (2022) also has a Touch Bar, so that side can switch the same feature on for its build whenever the protection is needed.
+- Internal dependency update (gpui fork 0.3.121 / 0.3.122): the Touch Bar duplicate-unregistration exception is now caught in code compiled as Objective-C, which is what makes it effective in release builds with panic=abort (the Rust-side catch never took effect there).
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.19.3...v0.19.4
+
+## [v0.19.3] - 2026-09-28
+
+#### 更新内容
+
+- SSH 支持「密码 + 密钥」组合认证（MFA password,publickey）：防火墙、交换机等设备把 AuthenticationMethods 配成 password,publickey 后，必须在同一条连接上依次通过两个因素，此前只能二选一，这类设备必然登录失败。新增的认证方式由服务器决定因素顺序，password,publickey 与 publickey,password 两种设备都能登录；目标机与跳板机各自可选，数据库隧道、终端、SFTP、端口转发等入口一并支持。
+- SQL 编辑器的「查看对象详情」不再弹独立窗口，改为在数据库页签内打开只读页签：Cmd/Ctrl+点击标识符或右键菜单都能打开，同一对象重复打开只激活已有页签，页签标题与图标按对象类型区分，内容可选中复制。
+- 数据库树搜索框新增「区分大小写 / 全词 / 正则」三个开关（与 IDEA 一致的 Cc / W / .*）：正则开启时「全词」置灰不可用，正则写错时开关标红并在悬停提示里说明、树里显示「未找到」而不是匹配全部；正则模式下不做行内高亮，避免错误的匹配标记。
+- 打开表设计器时先显示「正在加载表结构…」：首次打开既有表要串行查列、索引、表信息三次，此前这段时间是一片空白表单，看着像坏了。
+- RDP 每个连接新增图形管线开关（自动 / 始终 / 从不）：自动模式在部分环境下画质或性能不理想时可以手工指定。
+
+#### 修复与优化
+
+- 修复 MSSQL 打开设计表后字段栏一片空白的问题：可空列返回的是变长类型，此前一律解码失败，整份列清单又被静默吞掉，界面上只剩一张没有任何提示的空表。现在补齐变长类型解码，加载失败也会推窗口通知。各引擎的自增标记也不再丢失：MSSQL IDENTITY、MySQL AUTO_INCREMENT、PostgreSQL serial 与 identity、SQLite 单列 INTEGER 主键、DuckDB nextval、Oracle 标识列现在都由元数据如实上报，设计器不再退化成靠类型字符串猜。
+- 修复对象详情、悬停浮层和「复制 DDL」生成的建表语句与表设计器不一致的问题：此前用的是本地生成逻辑，产物基本是非法 DDL（双引号引用、缺主键 / 自增 / 引擎 / 字符集 / 注释 / 索引）。现在三处统一调用驱动生成，与表设计器逐字一致；DDL 生成期间显示「DDL 生成中…」，视图、列、函数不再假装有建表语句。
+- 修复大分辨率（如 2724x1530）远程桌面会话约每 500ms 反复重连的问题：同一批脏矩形互相重叠，同一批像素被按 2–3 倍上行，超限后又丢弃待提交的基础帧并重连整个会话。现在合并预算按帧尺寸缩放，队列里已有基础帧时只丢增量，绝不为增量压力丢弃基础帧。
+- 修复数据库树搜索「张开就收不回去」：搜索态下点箭头收起节点后，重建扁平列表又把它展开回来。现在搜索期间的手动收起会生效，命中节点仍会自动展开。
+- 修复数据库树搜索时展开的分支「张开却无节点」：箭头方向取自持久展开状态、子项渲染取自搜索结果，两者不一致。现在搜索态下箭头只反映真正渲染出来的子项，取消搜索后也不再留下错误的展开状态。
+- 修复表设计器选中行的悬停底色盖掉选中高亮：此前鼠标移到选中的行上，选中高亮就消失，移开又回来。现在悬停底色只叠加在未选中行上。
+- 扩展的持久化存储改为真正落盘：此前 host storage 的 get 恒返回空、set 恒成功，扩展写进去的订阅、游标读回来永远是空的，MQTT 扩展的「已保存订阅」实际上从未生效。现在每个扩展有独立的命名空间目录，写入走临时文件加 rename，读不出来的旧文件隔离为 .corrupt，支持 TTL 与体积预算。
+- provider 进程崩溃并被宿主自动重启后，已挂载的 shell 页面原地重挂，不再永久停在「加载失败，请关闭并重开连接」；重启还没落地时会等下一次事件，不抢跑。
+- provider 异常退出时记录退出码与 stderr 尾部（含 error / panic / fatal 等关键行），并随重启、自愈被禁用、重启预算耗尽三类日志一起输出，崩溃排查不再只能靠猜。
+- 工作台区分「provider 暂时不可用」与真正的协议错误：前者标记为可重试（宿主会自动重启 provider），后者仍按协议错误上报，调用方不再一概收到 PROTOCOL_ERROR 而无法决定是重试还是报错。
+- 修复出站消息超过协议帧上限时报成「连接莫名断开」：超限帧在写出任何字节之前就被拒绝，连接本身仍然可用，现在明确提示消息过大；入站超限也从 debug 提到 warn，并说明连接随后会被关闭。
+- macOS：带 Touch Bar 的机型上关闭弹窗不再闪退。上一版把「确定 / 取消」那条关闭路径收口之后，点原生红点仍会崩——区别在于那次销毁是 AppKit 在自己的关闭流程里发起的。现在弹窗关闭一律只隐藏并结束会话、不再销毁原生窗口，红点与 Cmd-W 走同一个漏斗。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.19.3) 下载桌面端安装包
+
+---
+
+#### What's New
+
+- SSH now supports combined "password + private key" authentication (MFA password,publickey): firewalls and switches configured with AuthenticationMethods password,publickey must pass two factors on the same connection, and picking one method at a time always failed on such devices. The server decides the factor order, so both password,publickey and publickey,password devices work; the option is available for the target host and the jump host separately, and database tunnels, terminals, SFTP and port forwarding all support it.
+- "View object details" in the SQL editor no longer opens a separate window; it opens a read-only tab inside the database tab. Cmd/Ctrl+click on an identifier and the context menu both work, reopening the same object activates the existing tab, the title and icon follow the object type, and the content stays selectable.
+- The database tree search box gains "match case / whole word / regex" toggles (Cc / W / .*, matching IDEA). With regex on, "whole word" is disabled; an invalid pattern marks the regex toggle red, explains it in a tooltip and shows "not found" in the tree instead of matching everything; inline highlighting is skipped in regex mode to avoid misleading marks.
+- Opening the table designer now shows "Loading table structure…": the first open of an existing table runs three serial queries (columns, indexes, table info) and used to leave a blank form that looked broken.
+- RDP connections gain a graphics pipeline switch (auto / always / never) per connection, for environments where the automatic mode is not the right choice for quality or performance.
+
+#### Fixes and Improvements
+
+- Fixed the blank field list when opening a table designer on MSSQL: nullable columns come back as variable-length types that failed to decode, and the whole column list was then silently swallowed, leaving an empty table with no message at all. Variable-length types now decode, and a failed load raises a window notification. Auto-increment flags are no longer lost either: MSSQL IDENTITY, MySQL AUTO_INCREMENT, PostgreSQL serial and identity, SQLite single-column INTEGER primary keys, DuckDB nextval and Oracle identity columns are all reported from metadata now, so the designer no longer falls back to guessing from the type name.
+- Fixed the CREATE TABLE produced by object details, the hover popover and "Copy DDL" differing from the table designer: it came from a local generator whose output was effectively invalid DDL (double-quoted identifiers, missing primary key / auto-increment / engine / charset / comments / indexes). All three now call the driver's generator and match the table designer byte for byte, showing "Generating DDL…" while it loads; views, columns and functions no longer pretend to have a CREATE TABLE statement.
+- Fixed high-resolution remote desktop sessions (for example 2724x1530) reconnecting roughly every 500 ms: dirty rectangles inside a batch overlap, the same pixels were pushed two or three times, and exceeding the budget dropped the pending base frame and restarted the whole session. The merge budget now scales with the frame size, and a queued base frame is never dropped because of delta pressure.
+- Fixed tree nodes that could not be collapsed while a database search was active: collapsing a branch was undone as soon as the flat list was rebuilt. Manual collapses during a search now stick, while matching nodes still auto-expand.
+- Fixed branches expanded during a database search showing "expanded but empty": the arrow came from the persistent expansion state while the children came from the filtered result. In search mode the arrow now reflects what is actually rendered, and cancelling the search no longer leaves a wrong expansion state behind.
+- Fixed the hover background covering the selection highlight in the table designer: moving the pointer over a selected row used to make the highlight disappear, and moving it away brought it back. The hover background is now only applied to unselected rows.
+- Extension persistent storage now actually writes to disk: host storage used to return an empty value from get and succeed on set, so subscriptions and cursors written by an extension always read back empty — the MQTT extension's saved subscriptions had never worked. Each extension now gets its own namespace directory, writes go through a temporary file plus rename, unreadable files are quarantined as .corrupt, and TTL and size budgets are enforced.
+- After a provider process crashes and the host restarts it, mounted shell pages are remounted in place instead of staying permanently on "loading failed, close and reopen this connection"; a restart that has not landed yet simply waits for the next event.
+- Provider exits now record the exit code and the tail of stderr (including error / panic / fatal lines) and report them alongside restarts, disabled self-healing and exhausted restart budgets, so a crash no longer has to be diagnosed by guesswork.
+- The workbench now distinguishes "provider temporarily unavailable" from a real protocol error: the former is marked retryable (the host restarts the provider automatically) while the latter is still reported as a protocol error, so callers no longer get a blanket PROTOCOL_ERROR and cannot tell whether to retry.
+- Fixed outbound messages over the protocol frame limit being reported as "the connection dropped": an oversized frame is rejected before any byte is written and the connection stays usable, and the error now says the message is too large; inbound overflow was also raised from debug to warn together with the note that the connection is closed afterwards.
+- macOS: closing a dialog no longer crashes on Touch Bar Macs. After the previous release closed the "OK / Cancel" path, clicking the native close button still crashed — the difference is that AppKit initiates that destruction inside its own close flow. Dialogs are now only hidden and their session ended, never destroyed, and the close button and Cmd-W go through the same funnel.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.19.2...v0.19.3
+
+## [v0.19.2] - 2026-09-24
+
+#### 更新内容
+
+- 数据库结果新增纵向「列：值」显示方式：宽表横向铺满几十列后没法读，现在可以按「列名：值」逐字段竖排（表数据页与 SQL 结果页共用），工具栏「显示方式」或「设置 → 通用 → 数据库 → 结果显示方式」切换。长值不再被截断——标签列固定、值区单独横向滚动且滚动条常驻；单击值行选中、在选中行上再点一次进入编辑（Enter 提交、Esc 取消），提交前工具栏会亮出撤销 / SQL 预览 / 提交。
+- 字段过滤面板重做：新增字段搜索框（不区分大小写的子串匹配，输入 `id` 同时命中 `id` 与 `tenant_id`）、列表限高滚动并常驻滚动条、标题显示「已显示字段数 / 字段总数」，底部固定「至少保留一列可见」提示与「显示全部字段」。此前是下拉菜单，高度只由条目数决定，几十列的表会一路顶到窗口底部，最后几个字段点不到。
+- 表数据页底部状态栏的 SQL 可以整条复制：宽表下这行总被省略号截断，复制到的是完整语句；空 SQL 不写剪贴板，避免把上次的内容悄悄清掉。SQL 编辑器的「注释/取消注释」纳入「设置 → 快捷键 → 数据库」，默认 macOS 为 `Cmd+/`、Windows/Linux 为 `Ctrl+/`，改键后立即生效（此前改键不生效、默认键在编辑器里按不出来）；空白行也能先生成 `-- ` 再写 SQL，光标停在标记之后可直接续写。
+- SQL 转储支持每条 INSERT 合并多行数据：转储窗口在「转储到」下方新增「每条语句的数据行数」，默认 100（与 Navicat 的「每条语句的数据行数」一致），分页按整批对齐，一批数据不会被页边界拆成两条语句。
+- 双击已打开的 RDP/VNC 连接改为切换已有标签页，不再堆出多个指向同一主机的会话，标签身份按「协议 + 连接 id」钉死。同一连接因此不再能开出第二个标签页（需要第二条同主机会话时，可复制一份连接）。
+
+#### 修复与优化
+
+- 修复 macOS 上关闭部分弹窗就闪退的问题（带 Touch Bar 的机型，崩溃栈落在 AppKit 的 Touch Bar 观察者注销上）：弹窗关闭改为隐藏并复用，不再销毁原生窗口。本次接入全局代理设置、更新提示、扩展离线包下载与扩展详情、远程图片预览、SQL 悬停详情、导入数据、导出表、运行 SQL 文件、转储 SQL 文件、数据比较、结构比较共 12 个窗口。需要注意的行为变化：同类弹窗（导入数据、导出表、数据比较等）由「可同时开多个」变为「一次一个」。
+- 在单元格里编辑时用鼠标拖选文本，网格不再同时开始自己的拖选：此前指针扫过相邻单元格就会把它们纳入选区，提交时把新值批量写到整片选区，现象是「不小心把隔壁一起编辑了」。
+- 修复 SQLite 联合主键表的 DDL 显示错误：表设计器打开 WITHOUT ROWID 联合主键表时，DDL 会被渲染成 `"device_id" INTEGER PRIMARY KEY AUTOINCREMENT` 并重复声明主键。现在联合主键的每一列都能正确识别，只有单列 INTEGER 主键才视作自增，生成的建表语句也不再多写一个表级主键。
+- SSH 连接：设备在认证阶段掐断连接时，报错不再只有 `Unable to receive more messages from the channel` 或裸 `Disconnected`。现在会记录设备给出的断开原因码与文本（warn 日志），报错里点出常见原因（密码被拒、账号已在别处登录、VTY/并发达上限、RADIUS・TACACS・LDAP 不可达、设备认证超时短于登录往返）；若设备是在 keyboard-interactive 往返中断开传输层，会自动改用纯密码认证重试一次（仅本会话生效，一次连接序列最多降级一次）。
+- 从 SecureCRT 等工具迁移/导入进来的连接不再默认勾选「双因素认证」：此前每个迁移连接都会优先走 keyboard-interactive，在交换机、防火墙这类设备上一认证就被掐断。迁移源里的「支持多种认证方式」只是服务器返回的方法列表，不等于需要二次认证；确实需要二次认证的设备请手动开启。
+- 认证失败的提示文案不再断言「服务器需要 MFA/二次认证」——交换机往往只是声明支持多种认证方式。现在改为说明当前认证方式被拒绝并提示先核对凭据，双因素开关的悬停说明也补充了自动降级的说明。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.19.2) 下载桌面端安装包
+
+---
+
+#### What's New
+
+- Query results can now use a vertical "column: value" layout: a wide result set that spans dozens of columns becomes readable when shown field by field, shared by the table data page and the SQL result tabs, and switchable from "Display mode" in the toolbar or Settings → General → Database → Result display mode. Long values are no longer truncated — the label column stays fixed while the value area scrolls horizontally with an always-visible scrollbar. Click a value row to select it, click a selected row again to edit it (Enter commits, Esc cancels), and the toolbar reveals undo / SQL preview / commit while editing.
+- The field filter panel was rebuilt: it now has a field search box (case-insensitive substring, so `id` also matches `tenant_id`), a height-capped list with an always-visible scrollbar, a "shown fields / total fields" counter in the title, and a fixed footer with the "at least one field stays visible" hint and "Show all fields". Previously it was a dropdown menu whose height was decided purely by the number of entries, so a table with dozens of columns pushed it past the bottom of the window and the last fields could not be reached.
+- The SQL shown in the table data page status bar can now be copied in full: the line is ellipsized on wide tables, and the copy contains the whole statement. An empty statement no longer overwrites the clipboard. "Toggle comment" in the SQL editor is now listed under Settings → Shortcuts → Database, defaulting to `Cmd+/` on macOS and `Ctrl+/` on Windows/Linux, and re-binding takes effect immediately (previously a new binding did not take effect and the default never fired inside the editor). Blank lines can generate `-- ` so you can write the comment before the SQL, with the caret left right after the marker.
+- SQL dumps can merge multiple rows into a single INSERT: the dump window gains a "rows per statement" field next to the destination, defaulting to 100 (matching Navicat's equivalent setting), and paging is aligned to whole batches so a batch is never split across two statements.
+- Double-clicking an RDP/VNC connection that is already open now switches to its existing tab instead of stacking several sessions for the same host, with the tab identity pinned to "protocol + connection id". The same connection can no longer open a second tab (copy the connection if you need a second session to the same host).
+
+#### Fixes and Improvements
+
+- Fixed Navop crashing on macOS when closing some dialogs on Touch Bar Macs, where the crash frames land in AppKit's Touch Bar observer deregistration: dialogs now hide and get reused instead of destroying the native window. 12 windows are covered — global proxy settings, the update prompt, extension offline package download and extension details, remote image preview, SQL hover details, import data, export table, run SQL file, dump SQL file, data comparison and schema comparison. Note the deliberate behavior change: dialogs such as import data, export table and data comparison now open one at a time instead of allowing several at once.
+- Dragging to select text inside a cell that is being edited no longer starts the grid's own drag selection: the pointer used to sweep neighbouring cells into the selection, and committing wrote the new value across the whole selection — effectively editing the neighbours by accident.
+- Fixed the DDL shown for SQLite tables with a composite primary key: the table designer used to render `"device_id" INTEGER PRIMARY KEY AUTOINCREMENT` and declare the primary key twice for WITHOUT ROWID tables. Every composite key column is now detected, only a single-column INTEGER primary key counts as auto-increment, and the generated CREATE TABLE statement no longer adds a duplicated table-level primary key.
+- SSH: when a device drops the connection during authentication, the error is no longer just `Unable to receive more messages from the channel` or a bare `Disconnected`. The reason code and text sent by the device are now logged as a warning, and the error points at the common causes (rejected credentials, an account already logged in elsewhere, VTY/concurrency limits, unreachable RADIUS・TACACS・LDAP, or a device authentication timeout shorter than the login round trip). If the device drops the transport during the keyboard-interactive exchange, Navop retries once with password authentication only, scoped to that session and at most once per connection sequence.
+- Connections migrated or imported from SecureCRT and similar tools no longer enable two-factor authentication by default: every imported connection used to prefer keyboard-interactive and was dropped by switches and firewalls on the first authentication round. The "supports multiple authentication methods" reported by the migration source is just the method list returned by the server, not a requirement for a second factor; devices that genuinely need one can be switched on manually.
+- Authentication failures no longer claim that "the server requires MFA / a second factor" — switches often just advertise several authentication methods. The message now states that the current authentication method was rejected and suggests verifying the credentials first, and the two-factor tooltip explains the automatic fallback.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.19.1...v0.19.2
+
 ## [v0.19.1] - 2026-09-24
 
 #### 修复与优化

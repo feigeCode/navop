@@ -25,6 +25,8 @@ use self::{
 };
 use crate::universal_plugins::GlobalUniversalPluginService;
 
+/// 扩展连接表单窗口配置。`Clone` 见 `one_core::popup_window::open_reusable_popup_window`。
+#[derive(Clone)]
 pub struct ExtensionConnectionFormConfig {
     pub contribution: extension_runtime::RegisteredResourceConnectionContribution,
     pub editing_connection: Option<StoredConnection>,
@@ -296,7 +298,7 @@ impl ExtensionConnectionForm {
         match outcome {
             Ok(event) => {
                 emit_connection_event(event, cx);
-                window.remove_window();
+                let _ = one_core::window_close::close_window_for_reuse(window, cx);
             }
             Err(error) => self.set_error(error.to_string(), cx),
         }
@@ -309,8 +311,8 @@ impl ExtensionConnectionForm {
         });
     }
 
-    pub(super) fn on_cancel(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
-        window.remove_window();
+    pub(super) fn on_cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let _ = one_core::window_close::close_window_for_reuse(window, cx);
     }
 
     pub(super) fn on_clear_test_result(&mut self, cx: &mut Context<Self>) {

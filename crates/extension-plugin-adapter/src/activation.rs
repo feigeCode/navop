@@ -75,6 +75,15 @@ pub trait ManagedRpcSession: Send + Sync {
         false
     }
 
+    /// provider 进程退出时的诊断(退出码 + 最近的 stderr 尾部)。
+    ///
+    /// 默认 `None`:进程内测试替身没有真实子进程。生产实现是
+    /// `ProcessRpcSession::exit_diagnosis`,它让"provider 为什么消失"这条
+    /// 信息能出现在重启日志里,而不是只剩一句"会话已关闭"。
+    fn exit_diagnosis(&self) -> Option<String> {
+        None
+    }
+
     /// Performs a process-level health request.
     ///
     /// The default is useful for in-process test doubles. A failed ping does
@@ -118,6 +127,10 @@ impl ManagedRpcSession for ProcessRpcSession {
 
     fn is_closed(&self) -> bool {
         ProcessRpcSession::is_closed(self)
+    }
+
+    fn exit_diagnosis(&self) -> Option<String> {
+        ProcessRpcSession::exit_diagnosis(self)
     }
 
     fn ping<'a>(&'a self) -> BoxFuture<'a, Result<(), HostError>> {
@@ -817,6 +830,8 @@ enum CheckDecision {
         binding: Box<RegisteredIpcRuntimeBinding>,
         generation: u64,
         attempt: u32,
+        /// 旧 session 的退出诊断(退出码 + stderr 尾部),用于重启日志。
+        exit_diagnosis: Option<String>,
     },
 }
 
@@ -1477,6 +1492,12 @@ impl ActivationManager {
             if !binding.auto_restart {
                 tracing::warn!(
                     runtime_id = %runtime_id,
+                    exit_diagnosis = runtime
+                        .session
+                        .as_ref()
+                        .and_then(|session| session.exit_diagnosis())
+                        .as_deref()
+                        .unwrap_or("<not available>"),
                     "provider process closed; auto-restart is disabled for this runtime"
                 );
                 runtime.state = RuntimeActivationState::Failed;
@@ -1488,6 +1509,12 @@ impl ActivationManager {
                     runtime_id = %runtime_id,
                     attempts = runtime.restart_attempts,
                     budget,
+                    exit_diagnosis = runtime
+                        .session
+                        .as_ref()
+                        .and_then(|session| session.exit_diagnosis())
+                        .as_deref()
+                        .unwrap_or("<not available>"),
                     "provider process keeps closing; restart budget exhausted (crash loop)"
                 );
                 runtime.state = RuntimeActivationState::CrashLoop;
@@ -1506,10 +1533,18 @@ impl ActivationManager {
                 runtime.restart_attempts += 1;
                 runtime.state = RuntimeActivationState::Restarting;
                 runtime.factory_claimed = true;
+                // 趁 session 还在手上取一份退出诊断:进程句柄随
+                // `restart_runtime` 被回收之后,退出码与 stderr 尾部就再也
+                // 看不到了 —— 那正是"provider 为什么死"唯一的线索。
+                let exit_diagnosis = runtime
+                    .session
+                    .as_ref()
+                    .and_then(|session| session.exit_diagnosis());
                 Ok(CheckDecision::Restart {
                     binding: Box::new(binding),
                     generation: runtime.start_generation,
                     attempt: runtime.restart_attempts,
+                    exit_diagnosis,
                 })
             }
         };
@@ -1525,12 +1560,14 @@ impl ActivationManager {
                 binding,
                 generation,
                 attempt,
+                exit_diagnosis,
             } => {
                 tracing::warn!(
                     runtime_id = %runtime_id,
                     attempt,
                     generation,
                     health = ?health,
+                    exit_diagnosis = exit_diagnosis.as_deref().unwrap_or("<not available>"),
                     "provider process closed; restarting runtime"
                 );
                 let binding = *binding;

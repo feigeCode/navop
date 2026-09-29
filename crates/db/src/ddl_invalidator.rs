@@ -15,7 +15,7 @@ use crate::streaming_parser::StreamingSqlParser;
 use one_core::storage::DatabaseType;
 
 /// DDL 关键字列表，用于粗粒度兜底检测
-const DDL_KEYWORDS: &[&str] = &["CREATE", "ALTER", "DROP", "TRUNCATE", "RENAME"];
+const DDL_KEYWORDS: &[&str] = &["CREATE", "ALTER", "DROP", "TRUNCATE", "RENAME", "COMMENT"];
 
 /// DDL 事件类型
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -523,8 +523,80 @@ impl DdlInvalidator {
                 })
             }
 
+            // COMMENT ON ... 会写入表注释/列注释，列注释是列元数据的一部分，
+            // 必须让表结构缓存失效，否则对象页签与列元数据会继续返回旧的注释。
+            Statement::Comment {
+                object_type,
+                object_name,
+                ..
+            } => {
+                let parts = Self::object_name_parts(object_name);
+                match object_type {
+                    // COMMENT ON COLUMN <table>.<column> | <schema>.<table>.<column>
+                    sqlparser::ast::CommentObject::Column => {
+                        if parts.len() < 2 {
+                            return None;
+                        }
+                        let table = parts[parts.len() - 2].clone();
+                        let schema = if parts.len() >= 3 {
+                            Some(parts[parts.len() - 3].clone())
+                        } else {
+                            current_schema.map(|s| s.to_string())
+                        };
+                        Some(DdlEvent::AlterTable {
+                            database: current_database.to_string(),
+                            schema,
+                            table,
+                        })
+                    }
+                    // COMMENT ON TABLE <table> | <schema>.<table>
+                    sqlparser::ast::CommentObject::Table => {
+                        let table = parts.last()?.clone();
+                        let schema = if parts.len() >= 2 {
+                            Some(parts[parts.len() - 2].clone())
+                        } else {
+                            current_schema.map(|s| s.to_string())
+                        };
+                        Some(DdlEvent::AlterTable {
+                            database: current_database.to_string(),
+                            schema,
+                            table,
+                        })
+                    }
+                    sqlparser::ast::CommentObject::View
+                    | sqlparser::ast::CommentObject::MaterializedView => {
+                        let view = parts.last()?.clone();
+                        let schema = if parts.len() >= 2 {
+                            Some(parts[parts.len() - 2].clone())
+                        } else {
+                            current_schema.map(|s| s.to_string())
+                        };
+                        Some(DdlEvent::CreateView {
+                            database: current_database.to_string(),
+                            schema,
+                            view,
+                        })
+                    }
+                    // 其它对象类型定位不到具体表 → 退化为整库失效，宁可多失效不可漏失效。
+                    _ => Some(DdlEvent::CreateDatabase {
+                        database: current_database.to_string(),
+                    }),
+                }
+            }
+
             _ => None,
         }
+    }
+
+    /// 从 sqlparser ObjectName 中提取全部标识符段
+    fn object_name_parts(name: &sqlparser::ast::ObjectName) -> Vec<String> {
+        name.0
+            .iter()
+            .filter_map(|part| match part {
+                sqlparser::ast::ObjectNamePart::Identifier(ident) => Some(ident.value.clone()),
+                _ => None,
+            })
+            .collect()
     }
 
     /// 从 sqlparser ObjectName 中提取最后一个标识符（对象名）
@@ -546,6 +618,21 @@ impl DdlInvalidator {
     ) -> Option<DdlEvent> {
         let upper = sql.trim().to_uppercase();
         let sql_trimmed = sql.trim();
+
+        // COMMENT ON TABLE / COLUMN
+        // AST 解析失败的方言（例如达梦的三段式列注释）走这里；定位不到表名时退化为整库失效。
+        if upper.starts_with("COMMENT ON") {
+            if let Some((schema, table)) = Self::parse_comment_target(sql_trimmed, current_schema) {
+                return Some(DdlEvent::AlterTable {
+                    database: current_database.to_string(),
+                    schema,
+                    table,
+                });
+            }
+            return Some(DdlEvent::CreateDatabase {
+                database: current_database.to_string(),
+            });
+        }
 
         // CREATE TABLE
         if upper.starts_with("CREATE TABLE") {
@@ -878,6 +965,75 @@ impl DdlInvalidator {
         }
     }
 
+    /// 解析 `COMMENT ON <对象类型> <名称> IS ...` 的目标对象。
+    ///
+    /// 返回 `(schema, table)`：列注释取「表.列」之前的部分作为表名，
+    /// 表注释直接取最后一段。定位不到时返回 `None`，由调用方退化为整库失效。
+    fn parse_comment_target(
+        sql: &str,
+        current_schema: Option<&str>,
+    ) -> Option<(Option<String>, String)> {
+        let mut words = sql.split_whitespace();
+        words.next()?; // COMMENT
+        words.next()?; // ON
+        let object_type = words.next()?.to_ascii_uppercase();
+        let raw_name = words.next()?;
+
+        // 逐段拆分标识符，引号内的点号不参与拆分
+        let mut parts: Vec<String> = Vec::new();
+        let mut current = String::new();
+        let mut quote: Option<char> = None;
+        for ch in raw_name.chars() {
+            match quote {
+                Some(q) => {
+                    if ch == q {
+                        quote = None;
+                    } else {
+                        current.push(ch);
+                    }
+                }
+                None => match ch {
+                    '"' | '`' => quote = Some(ch),
+                    '[' => quote = Some(']'),
+                    ']' => {}
+                    '.' => parts.push(std::mem::take(&mut current)),
+                    c => current.push(c),
+                },
+            }
+        }
+        if !current.is_empty() {
+            parts.push(current);
+        }
+        parts.retain(|part| !part.is_empty());
+
+        let (schema, table) = match object_type.as_str() {
+            "COLUMN" => {
+                if parts.len() < 2 {
+                    return None;
+                }
+                let table = parts[parts.len() - 2].clone();
+                let schema = if parts.len() >= 3 {
+                    Some(parts[parts.len() - 3].clone())
+                } else {
+                    current_schema.map(|s| s.to_string())
+                };
+                (schema, table)
+            }
+            "TABLE" => {
+                let table = parts.last()?.clone();
+                let schema = if parts.len() >= 2 {
+                    Some(parts[parts.len() - 2].clone())
+                } else {
+                    current_schema.map(|s| s.to_string())
+                };
+                (schema, table)
+            }
+            _ => return None,
+        };
+
+        Some((schema, table))
+    }
+
     /// 清理标识符（去除引号）
     fn clean_identifier(s: &str) -> String {
         let s = s.trim();
@@ -1113,6 +1269,70 @@ mod tests {
             None,
         );
         assert!(matches!(event, Some(DdlEvent::AlterTable { table, .. }) if table == "users"));
+    }
+
+    #[test]
+    fn test_parse_comment_on_column_qualified() {
+        // 达梦表设计器写列注释时生成的三段式语句：必须让该表结构缓存失效，
+        // 否则对象页签/列元数据会继续返回写入前的旧注释。
+        let events = DdlInvalidator::parse_ddl_events(
+            r#"COMMENT ON COLUMN "ai-manager-330-dev"."AI_SKILL_ABILITY_SYNC_RECORD"."ID" IS 'Id'"#,
+            "DAMENG",
+            None,
+        );
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        match &events[0] {
+            DdlEvent::AlterTable {
+                database,
+                schema,
+                table,
+            } => {
+                assert_eq!(database, "DAMENG");
+                assert_eq!(table, "AI_SKILL_ABILITY_SYNC_RECORD");
+                assert_eq!(schema.as_deref(), Some("ai-manager-330-dev"));
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_comment_on_table_and_column() {
+        let event = DdlInvalidator::parse_ddl_event(
+            "COMMENT ON TABLE users IS '用户表'",
+            "mydb",
+            Some("public"),
+        );
+        assert!(matches!(event, Some(DdlEvent::AlterTable { table, .. }) if table == "users"));
+
+        // 二段式列注释：表名取列名前一段，schema 回退到当前 schema
+        let event = DdlInvalidator::parse_ddl_event(
+            "COMMENT ON COLUMN users.name IS '姓名'",
+            "mydb",
+            Some("public"),
+        );
+        match event {
+            Some(DdlEvent::AlterTable {
+                schema, table, ..
+            }) => {
+                assert_eq!(table, "users");
+                assert_eq!(schema.as_deref(), Some("public"));
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_comment_statement_is_ddl_candidate() {
+        // COMMENT 必须能被 ddl_candidates 选中，否则根本不进入事件解析
+        assert!(DdlInvalidator::starts_with_ddl_keyword(
+            "COMMENT ON TABLE users IS 'x'"
+        ));
+        let events = DdlInvalidator::parse_ddl_events(
+            "COMMENT ON COLUMN users.name IS 'x'",
+            "mydb",
+            None,
+        );
+        assert_eq!(events.len(), 1, "events: {events:?}");
     }
 
     #[test]

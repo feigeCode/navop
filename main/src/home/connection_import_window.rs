@@ -6,7 +6,7 @@ use gpui::{
     PathPromptOptions, WeakEntity, Window,
 };
 use one_core::gpui_tokio::Tokio;
-use one_core::popup_window::{PopupWindowOptions, open_popup_window};
+use one_core::popup_window::{PopupWindowOptions, open_reusable_popup_window};
 use rust_i18n::t;
 
 use super::connection_import_actions::{
@@ -37,10 +37,12 @@ pub(crate) fn show_connection_import_window(
     cx: &mut App,
 ) {
     let parent_window = window.window_handle();
-    open_popup_window(
+    // 导入窗口全局只有一个：所有入口共用同一个原生窗口。
+    open_reusable_popup_window(
         PopupWindowOptions::new(t!("Home.import").to_string()).size(1040.0, 720.0),
+        "connection-import-window",
         move |window, cx| {
-            cx.new(|cx| ConnectionImportWindow::new(parent, parent_window, window, cx))
+            cx.new(|cx| ConnectionImportWindow::new(parent.clone(), parent_window, window, cx))
         },
         Some(window),
         cx,

@@ -792,12 +792,15 @@ impl RemoteFileEditorWindow {
                 true
             }
             Err(error) => {
-                tracing::warn!(
+                // 受保护模式下**不把「隐藏失败」当成「销毁」**：这条销毁同样会经过 AppKit
+                // 的关闭流程，正是要规避的那条路径。窗口与它的会话保持原样，返回 `false`
+                // 让调用方不要 `remove_window()`；也不清编辑器窗口登记 —— 窗口还活着，
+                // 下一次打开仍然复用它。
+                tracing::error!(
                     ?error,
-                    "failed to hide remote editor; falling back to window removal"
+                    "failed to hide the remote editor; keeping it alive instead of destroying it"
                 );
-                clear_editor_window();
-                true
+                false
             }
         }
     }

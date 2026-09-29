@@ -970,6 +970,8 @@ impl DatabasePlugin for ClickHousePlugin {
                     comment,
                     charset: None,
                     collation: None,
+                    // ClickHouse 没有列级自增概念。
+                    is_auto_increment: false,
                 });
             }
 

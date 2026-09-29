@@ -115,17 +115,6 @@ fn upload_progress_state(state: &SftpTransferState) -> TransferProgressState {
     }
 }
 
-/// 后台任务分组标题：只保留「连接名称 - IP」，同一连接的面板合并到同一分组。
-/// 目标选择器按钮上的名字：过长时截断，避免挤占路径栏。
-fn truncate_target_label(name: &str, max_chars: usize) -> String {
-    if name.chars().count() <= max_chars {
-        return name.to_string();
-    }
-    let mut label: String = name.chars().take(max_chars.saturating_sub(1)).collect();
-    label.push('…');
-    label
-}
-
 /// 能否作为远端文件浏览目标：SSH/SFTP 与 FTP 可以，数据库、Redis 之类不行。
 fn is_file_browsable_connection(connection: &StoredConnection) -> bool {
     matches!(
@@ -134,6 +123,7 @@ fn is_file_browsable_connection(connection: &StoredConnection) -> bool {
     )
 }
 
+/// 后台任务分组标题：只保留「连接名称 - IP」，同一连接的面板合并到同一分组。
 fn background_task_group_label(connection: &StoredConnection) -> SharedString {
     let host = connection
         .to_ssh_params()
@@ -4754,6 +4744,14 @@ impl FileManagerPanel {
     /// 显性化，用户才不会把堡垒机的目录误当成内层主机的；要浏览内层主机，就在这里
     /// 选一台已保存的连接（例如配好跳板机的那台）。
     fn render_target_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        // 宽度上限：连接名再长也不许挤掉右侧的路径栏。名字按可用宽度省略而不是
+        // 按字符数截断——同一个上限对中英文名一视同仁，也不受字体影响。
+        const TARGET_PICKER_MAX_WIDTH: f32 = 132.;
+
+        let name = SharedString::from(self.stored_connection.name.clone());
+        // 省略号只说明「还有」，截掉的部分只能靠 tooltip 补上。
+        let tooltip = format!("{name} · {}", t!("FileManager.target_tooltip"));
+
         Button::new("fm-target")
             // 同 `icon_button_variant` 的说明：ghost 变体的前景/悬停背景读全局
             // 应用主题，必须用 custom variant 显式给终端配色。
@@ -4761,8 +4759,9 @@ impl FileManagerPanel {
             .small()
             .compact()
             .icon(IconName::Server)
-            .label(truncate_target_label(&self.stored_connection.name, 12))
-            .tooltip(t!("FileManager.target_tooltip").to_string())
+            .label(name)
+            .max_w(px(TARGET_PICKER_MAX_WIDTH))
+            .tooltip(tooltip)
             .on_click(cx.listener(|this, _, window, cx| {
                 this.open_target_picker(window, cx);
             }))
@@ -6165,7 +6164,7 @@ mod tests {
         classify_reported_host, clear_remote_listing_state, frame_move_options,
         global_transfer_action, is_file_browsable_connection, resolve_upload_conflict,
         should_apply_directory_result, should_refresh_after_delete, should_refresh_after_upload,
-        transfer_progress_display_label, truncate_target_label,
+        transfer_progress_display_label,
     };
     use crate::transfer_notice::TransferAction;
     use anyhow::{Result, anyhow};
@@ -6387,19 +6386,20 @@ mod tests {
         );
     }
 
+    /// 目标选择器不按字符数截断：名字交给按钮按可用宽度省略，全名进 tooltip。
     #[test]
-    fn target_label_is_truncated_on_char_boundaries() {
-        assert_eq!(truncate_target_label("bastion", 12), "bastion");
-        // 恰好等于上限：不截断。
-        assert_eq!(
-            truncate_target_label("堡垒机跳板服务器生产环境", 12),
-            "堡垒机跳板服务器生产环境"
-        );
-        // 超出一个字符：按字符而不是字节截断，避免切碎多字节字符。
-        assert_eq!(
-            truncate_target_label("堡垒机跳板服务器生产环境测试", 12),
-            "堡垒机跳板服务器生产环…"
-        );
+    fn target_picker_caps_its_width_and_keeps_the_full_name_in_the_tooltip() {
+        let source = include_str!("file_manager_panel.rs");
+        let picker = source
+            .split("fn render_target_picker")
+            .nth(1)
+            .and_then(|source| source.split("fn open_target_picker").next())
+            .expect("target picker source");
+
+        assert!(picker.contains(".max_w(px(TARGET_PICKER_MAX_WIDTH))"));
+        assert!(picker.contains(".label(name)"));
+        assert!(picker.contains(r#"let tooltip = format!("{name} · {}""#));
+        assert!(picker.contains(r#"t!("FileManager.target_tooltip")"#));
     }
 
     /// 切到另一台主机后必须停用目录跟随，并且不能在切回时留下外来状态。

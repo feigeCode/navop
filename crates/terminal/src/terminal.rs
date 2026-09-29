@@ -388,12 +388,17 @@ fn ssh_auth_from_storage(auth: SshAuthMethod) -> SshAuth {
         SshAuthMethod::Agent => SshAuth::Agent,
         SshAuthMethod::Pageant => SshAuth::Pageant,
         SshAuthMethod::AutoPublicKey => SshAuth::AutoPublicKey,
+        SshAuthMethod::Chain(steps) => {
+            SshAuth::Chain(steps.into_iter().map(ssh_auth_from_storage).collect())
+        }
     }
 }
 
 fn password_from_ssh_auth(auth: &SshAuth) -> Option<String> {
     match auth {
         SshAuth::Password(password) => Some(password.clone()),
+        // 组合认证里密码因素仍要交给 MFA 回调，让 password 提示能用保存的密码自动应答。
+        SshAuth::Chain(steps) => steps.iter().find_map(password_from_ssh_auth),
         _ => None,
     }
 }
@@ -621,8 +626,7 @@ fn resolve_ssh_connection(
     let params = update.connection.to_ssh_params()?;
     let credential_prompt_policy = SshCredentialPromptPolicy {
         username: params.prompts_for_username(),
-        password: params.prompts_for_password()
-            && matches!(&params.auth_method, SshAuthMethod::Password { .. }),
+        password: params.prompts_for_password() && params.auth_method.contains_password(),
     };
     let keyboard_interactive_enabled = params.keyboard_interactive_enabled();
     let terminal_encoding = params.terminal_encoding.into();
@@ -714,6 +718,18 @@ fn ssh_config_with_runtime_credentials(
         }
         match &mut config.ssh_config.auth {
             SshAuth::Password(configured_password) => {
+                *configured_password = password.to_string();
+            }
+            // 组合认证里密码是其中一个因素，运行时输入的密码覆盖该因素。
+            SshAuth::Chain(steps) => {
+                let Some(configured_password) = steps.iter_mut().find_map(|step| match step {
+                    SshAuth::Password(configured_password) => Some(configured_password),
+                    _ => None,
+                }) else {
+                    return Err(anyhow!(
+                        "runtime SSH password is only valid for password authentication"
+                    ));
+                };
                 *configured_password = password.to_string();
             }
             _ => {

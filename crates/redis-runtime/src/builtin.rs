@@ -120,6 +120,48 @@ fn build_ssh_auth(
                 certificate_path: None,
             })
         }
+        // 组合认证：一个隧道配置里同时带密码与私钥两个因素。
+        "password_and_private_key" => {
+            let password = tunnel_config
+                .password
+                .as_deref()
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    RedisError::connection("ssh tunnel enabled but `ssh_password` is missing")
+                })?;
+            let content = tunnel_config
+                .private_key_content
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            let key_path = tunnel_config
+                .private_key_path
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            let key = match (content, key_path) {
+                (Some(private_key), _) => SshAuth::PrivateKeyContent {
+                    private_key: private_key.to_string(),
+                    passphrase: tunnel_config.private_key_passphrase.clone(),
+                    certificate_path: None,
+                },
+                (None, Some(key_path)) => SshAuth::PrivateKey {
+                    key_path: key_path.to_string(),
+                    passphrase: tunnel_config.private_key_passphrase.clone(),
+                    certificate_path: None,
+                },
+                (None, None) => {
+                    return Err(RedisError::connection(
+                        "ssh tunnel enabled but `ssh_private_key_path` is missing",
+                    ));
+                }
+            };
+            Ok(SshAuth::Chain(vec![
+                SshAuth::Password(password.to_string()),
+                key,
+            ]))
+        }
         _ => {
             let password = tunnel_config
                 .password

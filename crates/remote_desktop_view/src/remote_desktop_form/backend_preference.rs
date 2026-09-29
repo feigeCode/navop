@@ -16,6 +16,23 @@ pub(super) const fn windows_native_rdp_available() -> bool {
     cfg!(all(feature = "windows-native-rdp", target_os = "windows"))
 }
 
+/// The backend a connection actually uses. Legacy connections that stored
+/// `Auto` resolve to Windows native when that backend can run here, and to
+/// IronRDP (Canvas) otherwise.
+#[cfg(windows)]
+pub(super) fn effective_backend_preference(
+    preference: RemoteDesktopBackendPreference,
+) -> RemoteDesktopBackendPreference {
+    if preference != RemoteDesktopBackendPreference::Auto {
+        return preference;
+    }
+    if windows_native_rdp_available() {
+        RemoteDesktopBackendPreference::WindowsNative
+    } else {
+        RemoteDesktopBackendPreference::Canvas
+    }
+}
+
 #[cfg(all(test, windows))]
 mod tests {
     use one_core::storage::RemoteDesktopBackendPreference;

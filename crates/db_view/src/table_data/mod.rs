@@ -5,6 +5,9 @@ pub mod filter_editor;
 pub mod results_delegate;
 
 #[cfg(test)]
+mod column_visibility_tests;
+
+#[cfg(test)]
 mod copy_sql_tests;
 
 #[cfg(test)]

@@ -34,6 +34,23 @@ pub const SQLITE_DATA_TYPES: &[(&str, &str)] = &[
     ("DATETIME", "Date and time (stored as TEXT)"),
 ];
 
+/// SQLite 没有独立的自增列元数据：单列 INTEGER 主键是 rowid 别名，插入时自动取值。
+/// 联合主键（包括 WITHOUT ROWID 表）不成立；声明成 `INT` 也不是别名，所以只认 `INTEGER`。
+fn mark_rowid_alias_column(columns: &mut [ColumnInfo]) {
+    let primary_keys: Vec<&ColumnInfo> = columns
+        .iter()
+        .filter(|column| column.is_primary_key)
+        .collect();
+    let is_rowid_alias =
+        primary_keys.len() == 1 && primary_keys[0].data_type.eq_ignore_ascii_case("INTEGER");
+    if !is_rowid_alias {
+        return;
+    }
+    for column in columns.iter_mut().filter(|column| column.is_primary_key) {
+        column.is_auto_increment = true;
+    }
+}
+
 /// SQLite database plugin implementation
 pub struct SqlitePlugin;
 
@@ -900,8 +917,12 @@ impl DatabasePlugin for SqlitePlugin {
                     comment: None,
                     charset: None,
                     collation: None,
+                    is_auto_increment: false,
                 });
             }
+            // SQLite 没有独立的列自增元数据：单列 INTEGER 主键就是 rowid 别名，
+            // 插入时自动取值（声明成 INT 就不是别名，所以只认 INTEGER）。
+            mark_rowid_alias_column(&mut columns);
             Ok(columns)
         } else {
             Err(anyhow::anyhow!("Unexpected result type"))
@@ -1821,6 +1842,53 @@ mod tests {
                 ("value", false),
             ],
             "PRAGMA table_info 的 pk 是联合主键 1-based 序号，全部主键列都应被标记"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_columns_marks_rowid_alias_only_for_single_integer_pk() {
+        let (_temp_dir, connection) = create_connection().await;
+        connection
+            .query(
+                "CREATE TABLE rowid_alias (\n\
+                    id INTEGER PRIMARY KEY,\n\
+                    label TEXT NOT NULL\n\
+                );",
+            )
+            .await
+            .expect("rowid 别名表创建应成功");
+        // `INT` 不是 `INTEGER`，构不成 rowid 别名；联合主键同理。
+        connection
+            .query(
+                "CREATE TABLE declared_int (\n\
+                    id INT PRIMARY KEY,\n\
+                    label TEXT NOT NULL\n\
+                );",
+            )
+            .await
+            .expect("INT 声明表创建应成功");
+
+        let plugin = create_plugin();
+        let alias_columns = plugin
+            .list_columns(&connection, "main", None, "rowid_alias")
+            .await
+            .expect("column listing should succeed");
+        assert_eq!(
+            alias_columns
+                .iter()
+                .map(|col| (col.name.as_str(), col.is_auto_increment))
+                .collect::<Vec<_>>(),
+            vec![("id", true), ("label", false)],
+            "单列 INTEGER 主键是 rowid 别名，插入时自动取值"
+        );
+
+        let int_columns = plugin
+            .list_columns(&connection, "main", None, "declared_int")
+            .await
+            .expect("column listing should succeed");
+        assert!(
+            int_columns.iter().all(|col| !col.is_auto_increment),
+            "声明成 INT 的主键不是 rowid 别名"
         );
     }
 

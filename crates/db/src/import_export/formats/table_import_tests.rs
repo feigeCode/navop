@@ -177,6 +177,7 @@ fn column_info(name: &str, data_type: &str) -> ColumnInfo {
         comment: None,
         charset: None,
         collation: None,
+        is_auto_increment: false,
     }
 }
 

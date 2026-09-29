@@ -47,7 +47,6 @@ impl CredentialRepository {
             self.resolve_remote_file_ftp(params.remote_file.as_mut())?;
             return Ok(params);
         };
-        reject_conflicting_ssh_fields(reference)?;
         let credential = self.resolve_reference_entry(reference)?;
         let manual = ssh_fields(&params);
         let fields = resolve_credential_reference_strict(manual, reference, credential.as_ref())?;
@@ -304,6 +303,7 @@ fn ssh_fields(params: &SshParams) -> ReferencedCredentialFields {
 fn password_from_auth(auth: &SshAuthMethod) -> Option<String> {
     match auth {
         SshAuthMethod::Password { password } => Some(password.clone()),
+        SshAuthMethod::Chain(steps) => steps.iter().find_map(password_from_auth),
         _ => None,
     }
 }
@@ -312,6 +312,7 @@ fn private_key_from_auth(auth: &SshAuthMethod) -> Option<String> {
     match auth {
         SshAuthMethod::PrivateKey { key_path, .. } => Some(key_path.clone()),
         SshAuthMethod::PrivateKeyContent { private_key, .. } => Some(private_key.clone()),
+        SshAuthMethod::Chain(steps) => steps.iter().find_map(private_key_from_auth),
         _ => None,
     }
 }
@@ -320,7 +321,33 @@ fn passphrase_from_auth(auth: &SshAuthMethod) -> Option<String> {
     match auth {
         SshAuthMethod::PrivateKey { passphrase, .. }
         | SshAuthMethod::PrivateKeyContent { passphrase, .. } => passphrase.clone(),
+        SshAuthMethod::Chain(steps) => steps.iter().find_map(passphrase_from_auth),
         _ => None,
+    }
+}
+
+/// 用解析后的字段构造私钥认证方式；凭据里有内联私钥内容时优先用它。
+fn build_private_key_auth(
+    private_key: Option<String>,
+    passphrase: Option<String>,
+    credential: Option<&crate::storage::CredentialEntry>,
+) -> Result<SshAuthMethod> {
+    let credential =
+        credential.ok_or_else(|| anyhow::anyhow!("private-key credential is missing"))?;
+    if let Some(private_key_content) = credential
+        .private_key_content
+        .clone()
+        .filter(|value| !value.is_empty())
+    {
+        Ok(SshAuthMethod::PrivateKeyContent {
+            private_key: private_key_content,
+            passphrase,
+        })
+    } else {
+        Ok(SshAuthMethod::PrivateKey {
+            key_path: private_key.unwrap_or_default(),
+            passphrase,
+        })
     }
 }
 
@@ -330,44 +357,47 @@ fn apply_ssh_auth(
     fields: ReferencedCredentialFields,
     credential: Option<&crate::storage::CredentialEntry>,
 ) -> Result<()> {
-    if reference.password {
+    if reference.password && reference.private_key {
+        // 服务器要求「密码 + 密钥」两个因素时，凭据引用需要同时提供两份凭据。
+        let password = fields.password.unwrap_or_default();
+        let private_key =
+            build_private_key_auth(fields.private_key, fields.passphrase, credential)?;
+        *auth = SshAuthMethod::Chain(vec![SshAuthMethod::Password { password }, private_key]);
+    } else if reference.password {
         *auth = SshAuthMethod::Password {
             password: fields.password.unwrap_or_default(),
         };
     } else if reference.private_key {
-        let credential =
-            credential.ok_or_else(|| anyhow::anyhow!("private-key credential is missing"))?;
-        let passphrase = fields.passphrase;
-        *auth = if let Some(private_key) = credential
-            .private_key_content
-            .clone()
-            .filter(|value| !value.is_empty())
-        {
-            SshAuthMethod::PrivateKeyContent {
-                private_key,
-                passphrase,
-            }
-        } else {
-            SshAuthMethod::PrivateKey {
-                key_path: fields.private_key.unwrap_or_default(),
-                passphrase,
-            }
-        };
+        *auth = build_private_key_auth(fields.private_key, fields.passphrase, credential)?;
     } else if reference.passphrase {
         match auth {
             SshAuthMethod::PrivateKey { passphrase, .. }
             | SshAuthMethod::PrivateKeyContent { passphrase, .. } => {
                 *passphrase = fields.passphrase;
             }
+            SshAuthMethod::Chain(steps) => {
+                let key_factor = steps
+                    .iter_mut()
+                    .find(|step| step.contains_private_key())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "a passphrase reference requires private-key authentication"
+                        )
+                    })?;
+                match key_factor {
+                    SshAuthMethod::PrivateKey { passphrase, .. }
+                    | SshAuthMethod::PrivateKeyContent { passphrase, .. } => {
+                        *passphrase = fields.passphrase;
+                    }
+                    _ => {
+                        return Err(anyhow::anyhow!(
+                            "a passphrase reference requires private-key authentication"
+                        ));
+                    }
+                }
+            }
             _ => bail!("a passphrase reference requires private-key authentication"),
         }
-    }
-    Ok(())
-}
-
-fn reject_conflicting_ssh_fields(reference: &crate::storage::CredentialReference) -> Result<()> {
-    if reference.password && reference.private_key {
-        bail!("a credential reference cannot select password and private key together");
     }
     Ok(())
 }

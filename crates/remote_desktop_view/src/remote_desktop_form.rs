@@ -31,6 +31,8 @@ use self::inputs::{create_inputs, input_text, non_empty_text, parse_u16};
 use self::persistence::{emit_saved_connection, persist_connection};
 use self::selects::{WorkspaceSelectItem, create_workspace_select};
 
+/// 远程桌面表单窗口配置。`Clone` 见 `one_core::popup_window::open_reusable_popup_window`。
+#[derive(Clone)]
 pub struct RemoteDesktopFormWindowConfig {
     pub protocol: RemoteDesktopProtocol,
     pub editing_connection: Option<StoredConnection>,
@@ -292,7 +294,7 @@ impl RemoteDesktopFormWindow {
         {
             Ok(connection) => {
                 emit_saved_connection(connection, self.is_editing, cx);
-                window.remove_window();
+                let _ = one_core::window_close::close_window_for_reuse(window, cx);
             }
             Err(error) => {
                 self.error = Some(error);

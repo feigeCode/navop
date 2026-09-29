@@ -24,6 +24,21 @@ pub fn postgres_config() -> Option<DbConnectionConfig> {
     ))
 }
 
+pub fn mssql_config() -> Option<DbConnectionConfig> {
+    let password = std::env::var("ONETCLI_TEST_MSSQL_PASSWORD").ok()?;
+    let mut config = base_config(
+        "navop-real-mssql",
+        DatabaseType::MSSQL,
+        env_or("ONETCLI_TEST_MSSQL_HOST", "127.0.0.1"),
+        env_port("ONETCLI_TEST_MSSQL_PORT", 1433),
+        env_or("ONETCLI_TEST_MSSQL_USER", "sa"),
+        password,
+    );
+    // MSSQL 连接必须带默认库名，缺省落到 master（测试只建同名临时表并清理）。
+    config.database = Some(env_or("ONETCLI_TEST_MSSQL_DATABASE", "master"));
+    Some(config)
+}
+
 pub fn optional_database(config: &DbConnectionConfig, fallback: &str) -> DbConnectionConfig {
     let mut config = config.clone();
     if config.database.as_deref().unwrap_or("").is_empty() {

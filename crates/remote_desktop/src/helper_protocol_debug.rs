@@ -35,6 +35,7 @@ fn debug_connect_request(
         scale_factor,
         audio_playback,
         audio_capture,
+        egfx,
         shared_folders,
         rdp,
     } = request
@@ -54,6 +55,7 @@ fn debug_connect_request(
         .field("scale_factor", scale_factor)
         .field("audio_playback", audio_playback)
         .field("audio_capture", audio_capture)
+        .field("egfx", egfx)
         .field("shared_folder_count", &shared_folders.len())
         .field("rdp_admin_session", &rdp.admin_session)
         .field("rdp_gateway_mode", &rdp.gateway.mode)

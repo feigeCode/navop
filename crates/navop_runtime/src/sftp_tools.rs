@@ -295,6 +295,7 @@ fn auth_from_method(auth: &SshAuthMethod) -> SshAuth {
         SshAuthMethod::Agent => SshAuth::Agent,
         SshAuthMethod::Pageant => SshAuth::Pageant,
         SshAuthMethod::AutoPublicKey => SshAuth::AutoPublicKey,
+        SshAuthMethod::Chain(steps) => SshAuth::Chain(steps.iter().map(auth_from_method).collect()),
     }
 }
 

@@ -200,19 +200,22 @@ impl RemoteDesktopView {
                 let current_ticket = self
                     .latest_presentation_frame_ticket
                     .load(Ordering::Acquire);
-                if should_commit_prepared_frame(
-                    frame.generation,
-                    generation,
-                    frame.ticket,
-                    current_ticket,
-                ) {
+                // A prepared frame has already been applied to the worker's
+                // framebuffer, so its synchronization state is committed whenever it
+                // belongs to the current session. A newer frame having been queued
+                // since only means this one is no longer worth presenting, not that
+                // the framebuffer reverted: skipping the accounting here used to leave
+                // the frame tracker without the base the framebuffer already had, which
+                // rejected the next delta and restarted the session.
+                if should_commit_prepared_frame(frame.generation, generation) {
+                    let is_latest = frame.ticket == current_ticket;
                     let has_newer_frame =
                         self.presentation_queue.has_pending_frame(frame.generation);
                     match frame.kind {
                         presentation::PreparedFrameKind::Base { encoding } => {
                             self.remote_size = Some((frame.width, frame.height));
                             self.frame_sync.accept_base((frame.width, frame.height));
-                            if !has_newer_frame {
+                            if is_latest && !has_newer_frame {
                                 if let Some(surface) = frame.surface {
                                     self.latest_frame = Some(surface);
                                     should_notify = true;
@@ -223,7 +226,9 @@ impl RemoteDesktopView {
                         }
                         presentation::PreparedFrameKind::Delta => {
                             match self.frame_sync.accept_delta((frame.width, frame.height)) {
-                                frame_sync::DeltaDisposition::Applied if !has_newer_frame => {
+                                frame_sync::DeltaDisposition::Applied
+                                    if is_latest && !has_newer_frame =>
+                                {
                                     if let Some(surface) = frame.surface {
                                         self.remote_size = Some((frame.width, frame.height));
                                         self.latest_frame = Some(surface);
@@ -758,13 +763,13 @@ fn should_apply_remote_cursor_output(protocol: RemoteDesktopProtocol) -> bool {
     protocol == RemoteDesktopProtocol::Rdp
 }
 
-fn should_commit_prepared_frame(
-    frame_generation: u64,
-    current_generation: u64,
-    frame_ticket: u64,
-    current_ticket: u64,
-) -> bool {
-    frame_generation == current_generation && frame_ticket == current_ticket
+/// Whether a prepared frame still belongs to the current session.
+///
+/// Presenting it is a separate question: a frame that a newer one superseded while it
+/// was being prepared carries no new information for the screen, but it was still
+/// applied to the worker's framebuffer, so its synchronization state has to be committed.
+fn should_commit_prepared_frame(frame_generation: u64, current_generation: u64) -> bool {
+    frame_generation == current_generation
 }
 
 #[cfg(test)]

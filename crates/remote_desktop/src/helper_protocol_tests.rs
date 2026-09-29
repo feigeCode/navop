@@ -4,8 +4,8 @@ use crate::{
     RemoteDesktopSize,
 };
 use one_core::storage::{
-    RdpAudioMode, RdpAudioQuality, RdpDisplayMode, RdpGatewayCredentialSource, RdpGatewayMode,
-    RdpSettings,
+    RdpAudioMode, RdpAudioQuality, RdpDisplayMode, RdpEgfxMode, RdpGatewayCredentialSource,
+    RdpGatewayMode, RdpSettings,
 };
 
 fn rdp_options() -> RemoteDesktopConnectionOptions {
@@ -254,12 +254,46 @@ fn legacy_connect_request_defaults_optional_features() {
         encoded.get("shared_folders")
     );
     assert_eq!(
+        Some(&serde_json::Value::String("auto".to_string())),
+        encoded.get("egfx"),
+        "hosts that never chose a policy keep the safe default"
+    );
+    assert_eq!(
         serde_json::to_value(RdpSettings::default()).expect("default RDP settings encode"),
         encoded
             .get("rdp")
             .cloned()
             .expect("legacy request receives default RDP settings")
     );
+}
+
+#[test]
+fn connect_request_carries_the_graphics_pipeline_policy() {
+    for (mode, wire) in [
+        (RdpEgfxMode::Auto, "auto"),
+        (RdpEgfxMode::Always, "always"),
+        (RdpEgfxMode::Never, "never"),
+    ] {
+        let mut options = rdp_options();
+        options.rdp.graphics.egfx = mode;
+        let request = HelperRequest::connect_from_options(
+            &options,
+            RemoteDesktopSize {
+                width: 1280,
+                height: 720,
+                scale_factor: 100,
+            },
+        );
+        let encoded = serde_json::to_value(&request).expect("connect request encodes");
+        assert_eq!(Some(&serde_json::Value::String(wire.to_string())), encoded.get("egfx"));
+
+        let line = encode_request_line(&request).expect("connect request encodes");
+        let decoded = decode_request_line(&line).expect("connect request decodes");
+        let HelperRequest::Connect { egfx, .. } = decoded else {
+            panic!("decoded request is not Connect");
+        };
+        assert_eq!(mode, egfx);
+    }
 }
 
 #[test]

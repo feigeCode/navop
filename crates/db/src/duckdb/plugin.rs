@@ -1032,21 +1032,26 @@ impl DatabasePlugin for DuckDbPlugin {
 
         Ok(rows
             .iter()
-            .map(|row| ColumnInfo {
-                name: row
-                    .first()
-                    .and_then(|value| value.clone())
-                    .unwrap_or_default(),
-                data_type: row
-                    .get(1)
-                    .and_then(|value| value.clone())
-                    .unwrap_or_default(),
-                is_nullable: Self::parse_bool(row.get(2).and_then(|value| value.as_deref())),
-                is_primary_key: Self::parse_bool(row.get(3).and_then(|value| value.as_deref())),
-                default_value: row.get(4).and_then(|value| value.clone()),
-                comment: None,
-                charset: None,
-                collation: None,
+            .map(|row| {
+                let column_default = row.get(4).and_then(|value| value.clone());
+                ColumnInfo {
+                    name: row
+                        .first()
+                        .and_then(|value| value.clone())
+                        .unwrap_or_default(),
+                    data_type: row
+                        .get(1)
+                        .and_then(|value| value.clone())
+                        .unwrap_or_default(),
+                    is_nullable: Self::parse_bool(row.get(2).and_then(|value| value.as_deref())),
+                    is_primary_key: Self::parse_bool(row.get(3).and_then(|value| value.as_deref())),
+                    default_value: column_default.clone(),
+                    comment: None,
+                    charset: None,
+                    collation: None,
+                    // DuckDB 没有 SERIAL/IDENTITY：自增靠 `DEFAULT nextval('seq')` 表达。
+                    is_auto_increment: is_identity_default(column_default.as_deref()),
+                }
             })
             .collect())
     }
@@ -1479,9 +1484,15 @@ impl DatabasePlugin for DuckDbPlugin {
     }
 }
 
+/// DuckDB 没有 SERIAL/IDENTITY 关键字，自增列写成 `DEFAULT nextval('seq')`，
+/// 所以只能从列默认值里认出它。
+fn is_identity_default(column_default: Option<&str>) -> bool {
+    column_default.is_some_and(|default| default.to_lowercase().contains("nextval("))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::DuckDbPlugin;
+    use super::{DuckDbPlugin, is_identity_default};
     use crate::connection::DbConnection;
     use crate::duckdb::DuckDbConnection;
     use crate::plugin::DatabasePlugin;
@@ -1522,6 +1533,47 @@ mod tests {
 
     fn create_plugin() -> DuckDbPlugin {
         DuckDbPlugin::new()
+    }
+
+    #[test]
+    fn identity_default_detection_is_case_insensitive() {
+        assert!(is_identity_default(Some("nextval('counter_seq')")));
+        assert!(is_identity_default(Some("NEXTVAL('counter_seq')")));
+        assert!(!is_identity_default(Some("0")));
+        assert!(!is_identity_default(None));
+    }
+
+    #[tokio::test]
+    async fn list_columns_marks_nextval_default_as_auto_increment() {
+        let (_temp_dir, connection) = create_connection().await;
+        connection
+            .query("CREATE SEQUENCE counter_seq;")
+            .await
+            .expect("sequence creation should succeed");
+        connection
+            .query(
+                "CREATE TABLE counted (\n\
+                    id BIGINT DEFAULT nextval('counter_seq') NOT NULL,\n\
+                    label TEXT\n\
+                );",
+            )
+            .await
+            .expect("table creation should succeed");
+
+        let columns = create_plugin()
+            .list_columns(&connection, "main", Some("main".to_string()), "counted")
+            .await
+            .expect("list_columns should succeed");
+
+        let flags: Vec<(&str, bool)> = columns
+            .iter()
+            .map(|column| (column.name.as_str(), column.is_auto_increment))
+            .collect();
+        assert_eq!(
+            flags,
+            vec![("id", true), ("label", false)],
+            "DuckDB 的自增只能从 DEFAULT nextval(…) 认出来"
+        );
     }
 
     #[test]

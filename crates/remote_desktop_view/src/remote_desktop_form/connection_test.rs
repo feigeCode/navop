@@ -222,7 +222,9 @@ impl RemoteDesktopFormWindow {
                 Button::new("cancel-remote-desktop")
                     .small()
                     .label(t!("Common.cancel").to_string())
-                    .on_click(cx.listener(|_, _, window, _| window.remove_window())),
+                    .on_click(cx.listener(|_, _, window, cx| {
+                        let _ = one_core::window_close::close_window_for_reuse(window, cx);
+                    })),
             )
             .child(
                 Button::new("save-remote-desktop")

@@ -459,7 +459,7 @@ fn resolver_uses_stable_cloud_id_without_falling_back_to_foreign_local_id() {
 }
 
 #[test]
-fn resolve_connection_returns_a_temporary_clone_and_rejects_conflicting_ssh_fields() {
+fn resolve_connection_returns_a_temporary_clone_and_supports_password_with_private_key() {
     with_master_key(|| {
         let (_temp, _connection, repository) = super::test_repository();
         let credential_id = insert_password_credential(&repository);
@@ -479,19 +479,41 @@ fn resolve_connection_returns_a_temporary_clone_and_rejects_conflicting_ssh_fiel
         assert_eq!(ConnectionType::SshSftp, resolved.connection_type);
         assert!(resolved.params.contains("vault-password"));
 
-        let mut conflicting = ssh_params(Some(CredentialReference {
-            credential_id,
+        // 同时勾选密码与私钥的钥匙串条目应解析成「密码 + 密钥」认证链。
+        let mut combined_credential = CredentialEntry::new("Combined login");
+        combined_credential.username = Some("combined-user".to_string());
+        combined_credential.password = Some("combined-password".to_string());
+        combined_credential.private_key_path = Some("/local/combined-key".to_string());
+        let combined_id = repository
+            .insert(&mut combined_credential)
+            .expect("insert combined credential");
+
+        let mut combined = ssh_params(Some(CredentialReference {
+            credential_id: combined_id,
             credential_cloud_id: None,
-            username: false,
+            username: true,
             password: true,
             private_key: true,
             passphrase: false,
         }));
-        conflicting.auth_method = SshAuthMethod::Agent;
-        let error = repository
-            .resolve_ssh(conflicting)
-            .expect_err("password and private key cannot both be selected");
-        assert!(error.to_string().contains("password and private key"));
+        combined.auth_method = SshAuthMethod::Agent;
+        let resolved = repository
+            .resolve_ssh(combined)
+            .expect("password and private key references should resolve together");
+        assert_eq!("combined-user", resolved.username);
+        match resolved.auth_method {
+            SshAuthMethod::Chain(steps) => assert!(
+                matches!(
+                    steps.as_slice(),
+                    [
+                        SshAuthMethod::Password { password },
+                        SshAuthMethod::PrivateKey { key_path, .. }
+                    ] if password == "combined-password" && key_path == "/local/combined-key"
+                ),
+                "组合认证应保留密码与私钥两个因素，实际：{steps:?}"
+            ),
+            other => panic!("期望「密码 + 密钥」认证链，实际：{other:?}"),
+        }
     });
 }
 

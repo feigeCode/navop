@@ -1,5 +1,5 @@
 use base64::Engine as _;
-use one_core::storage::RdpSettings;
+use one_core::storage::{RdpEgfxMode, RdpSettings};
 use serde::{Deserialize, Serialize};
 
 use crate::{RemoteDesktopConnectionOptions, RemoteDesktopSharedFolder, RemoteDesktopSize};
@@ -19,6 +19,9 @@ pub enum HelperRequest {
         audio_playback: bool,
         #[serde(default)]
         audio_capture: bool,
+        /// How the helper advertises the RDP Graphics Pipeline Extension; see `RdpEgfxMode`.
+        #[serde(default)]
+        egfx: RdpEgfxMode,
         #[serde(default)]
         shared_folders: Vec<RemoteDesktopSharedFolder>,
         #[serde(default)]
@@ -82,6 +85,7 @@ impl HelperRequest {
             scale_factor: size.scale_factor,
             audio_playback: options.audio_playback,
             audio_capture: options.audio_capture,
+            egfx: options.rdp.graphics.egfx,
             shared_folders: options.shared_folders.clone(),
             rdp: options.rdp.clone(),
         }

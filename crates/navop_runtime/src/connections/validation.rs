@@ -127,7 +127,11 @@ fn invalid_fields(input: &Value) -> Vec<Value> {
                 &mut invalid,
             );
         }
-        "rdp" | "vnc" => add_invalid_u16(values, "port", &mut invalid),
+        "rdp" => {
+            add_invalid_u16(values, "port", &mut invalid);
+            add_invalid_enum(values, "egfx", &["auto", "always", "never"], &mut invalid);
+        }
+        "vnc" => add_invalid_u16(values, "port", &mut invalid),
         _ => {}
     }
     invalid

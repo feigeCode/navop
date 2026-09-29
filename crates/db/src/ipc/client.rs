@@ -297,6 +297,9 @@ pub(crate) fn host_error_to_db_error(error: HostError) -> DbError {
         HostError::InvalidParams { method, message } => DbError::query(format!(
             "external driver request `{method}` invalid: {message}"
         )),
+        HostError::FrameTooLarge { limit_bytes } => DbError::query(format!(
+            "external driver request exceeds the {limit_bytes} byte protocol frame limit"
+        )),
         HostError::NotImplemented(msg) => DbError::NotSupported(msg),
     }
 }

@@ -179,6 +179,7 @@ fn connect_request() -> HelperRequest {
         scale_factor: 100,
         audio_playback: false,
         audio_capture: false,
+        egfx: Default::default(),
         shared_folders: Vec::new(),
         rdp: Default::default(),
     }

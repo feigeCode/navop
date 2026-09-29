@@ -3,12 +3,12 @@ use futures::channel::oneshot;
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, AsyncApp, Context, DragMoveEvent, Entity, EntityId, EventEmitter, FocusHandle,
-    Focusable, InteractiveElement, IntoElement, ListSizingBehavior, MouseButton, ParentElement,
-    Pixels, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Task,
-    UniformListScrollHandle, Window, div, px, uniform_list,
+    Focusable, Hsla, InteractiveElement, IntoElement, ListSizingBehavior, MouseButton,
+    ParentElement, Pixels, Render, SharedString, StatefulInteractiveElement, Styled, Subscription,
+    Task, UniformListScrollHandle, Window, div, px, uniform_list,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IndexPath, Sizable, Size, WindowExt,
+    ActiveTheme, Icon, IndexPath, Sizable, Size, Theme, WindowExt,
     button::{Button, ButtonVariants},
     checkbox::Checkbox,
     clipboard::Clipboard,
@@ -85,6 +85,20 @@ const COLUMN_EDITOR_MAX_WIDTHS: [Pixels; COLUMN_EDITOR_COLUMN_COUNT] = [
     px(120.0),
     px(140.0),
 ];
+
+/// 列/索引行的选中底色透明度。
+const SELECTED_ROW_BACKGROUND_OPACITY: f32 = 0.1;
+/// 列/索引行的悬停底色透明度。
+const HOVERED_ROW_BACKGROUND_OPACITY: f32 = 0.3;
+
+/// 行悬停时叠加的底色。
+///
+/// 选中的行返回 `None`：悬停样式是在基础样式之后 refine 的，一旦叠加就会把选中
+/// 底色整个盖掉，看起来就像「鼠标移到这一行，高亮没了」。树视图同样只在未选中
+/// 的行上叠加悬停底色。
+fn row_hover_background(is_selected: bool, theme: &Theme) -> Option<Hsla> {
+    (!is_selected).then(|| theme.muted.opacity(HOVERED_ROW_BACKGROUND_OPACITY))
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum DesignerTab {
@@ -204,20 +218,13 @@ fn column_info_to_definition(
     parsed: ParsedColumnType,
     primary_key_count: usize,
 ) -> ColumnDefinition {
+    let is_auto_increment =
+        column_is_auto_increment(&database_type, col, &parsed, primary_key_count);
     let base_type = parsed.base_type;
     let data_type = if let Some(enum_values) = parsed.enum_values {
         format!("{}({})", base_type, enum_values)
     } else {
         base_type.clone()
-    };
-    // SQLite 没有独立的自增元数据：仅当主键是「单列 INTEGER 主键」时才是 rowid 别名，
-    // 才允许当作自增；联合主键（含 WITHOUT ROWID 表）不成立。
-    let is_auto_increment = if matches!(database_type, DatabaseType::SQLite) {
-        col.is_primary_key
-            && base_type.eq_ignore_ascii_case("INTEGER")
-            && primary_key_count == 1
-    } else {
-        parsed.is_auto_increment
     };
 
     ColumnDefinition {
@@ -235,6 +242,28 @@ fn column_info_to_definition(
         charset: col.charset.clone(),
         collation: col.collation.clone(),
     }
+}
+
+/// 某列在设计器里是否算自增列。
+///
+/// 优先信元数据：各插件已按引擎语义填好 `is_auto_increment`（MSSQL IDENTITY、MySQL EXTRA、
+/// PG serial/identity）；元数据没给时，SQLite 按「单列 INTEGER 主键 = rowid 别名」兜底
+/// （联合主键、WITHOUT ROWID 表都不算），其它引擎退回类型字符串解析。
+fn column_is_auto_increment(
+    database_type: &DatabaseType,
+    col: &ColumnInfo,
+    parsed: &ParsedColumnType,
+    primary_key_count: usize,
+) -> bool {
+    if col.is_auto_increment {
+        return true;
+    }
+    if matches!(database_type, DatabaseType::SQLite) {
+        return col.is_primary_key
+            && parsed.base_type.eq_ignore_ascii_case("INTEGER")
+            && primary_key_count == 1;
+    }
+    parsed.is_auto_increment
 }
 
 fn fallback_parse_column_type(data_type: &str) -> ParsedColumnType {
@@ -277,7 +306,7 @@ fn extract_scale_from_type_str(data_type: &str) -> Option<u32> {
     None
 }
 
-fn find_loaded_table_info(
+pub(crate) fn find_loaded_table_info(
     tables: Vec<TableInfo>,
     table_name: &str,
     schema_name: Option<&str>,
@@ -319,6 +348,7 @@ pub struct TableDesigner {
     ddl_preview_input: Entity<EditorState>,
     preview_refresh_state: PreviewRefreshScheduleState,
     metadata_load_seq: usize,
+    structure_load: StructureLoadState,
     preview_generation: usize,
     sql_preview_loading: bool,
     executing: bool,
@@ -365,6 +395,40 @@ impl PreviewRefreshScheduleState {
 
     fn finish_refresh(&mut self) {
         self.refresh_pending = false;
+    }
+}
+
+/// 表结构加载的触发来源。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StructureLoadReason {
+    /// 打开既有表设计器时的首次加载。
+    InitialOpen,
+    /// 保存成功后按最新结构重载。
+    AfterSave,
+}
+
+/// 表结构加载态。
+///
+/// 只有首次打开既有表时整块面板换成加载中，因为那时候列、索引、表信息都
+/// 还没回来，直接渲染表单就是一片空白；保存后的重载留在原地刷新，闪一下
+/// 反而更晕。
+#[derive(Default)]
+struct StructureLoadState {
+    loading: bool,
+}
+
+impl StructureLoadState {
+    fn begin(&mut self, reason: StructureLoadReason) {
+        self.loading = reason == StructureLoadReason::InitialOpen;
+    }
+
+    /// 加载结束（成功或失败都要调，否则面板会一直停在加载中）。
+    fn finish(&mut self) {
+        self.loading = false;
+    }
+
+    fn is_loading(&self) -> bool {
+        self.loading
     }
 }
 
@@ -547,6 +611,7 @@ impl TableDesigner {
             ddl_preview_input,
             preview_refresh_state: PreviewRefreshScheduleState::default(),
             metadata_load_seq: 0,
+            structure_load: StructureLoadState::default(),
             preview_generation: 0,
             sql_preview_loading: false,
             executing: false,
@@ -566,7 +631,7 @@ impl TableDesigner {
         designer.update_previews(window, cx);
 
         if designer.config.table_name.is_some() {
-            designer.load_table_structure("initial_open", cx);
+            designer.load_table_structure(StructureLoadReason::InitialOpen, cx);
         }
 
         designer
@@ -908,7 +973,10 @@ impl TableDesigner {
                                             designer.config.table_name =
                                                 Some(request.table_name.clone());
                                         }
-                                        designer.load_table_structure("after_save", cx);
+                                        designer.load_table_structure(
+                                            StructureLoadReason::AfterSave,
+                                            cx,
+                                        );
                                     }
                                     ExecuteSuccessBehavior::CloseTab {
                                         tab_container,
@@ -1120,17 +1188,19 @@ impl TableDesigner {
         self.build_and_maybe_execute(design, column_renames, success_behavior, window, cx);
     }
 
-    pub fn load_table_structure(&mut self, reason: &'static str, cx: &mut Context<Self>) {
+    fn load_table_structure(&mut self, reason: StructureLoadReason, cx: &mut Context<Self>) {
         let Some(table_name) = self.config.table_name.clone() else {
             return;
         };
 
         self.metadata_load_seq += 1;
         let load_seq = self.metadata_load_seq;
+        self.structure_load.begin(reason);
+        cx.notify();
         tracing::warn!(
             target: "table_designer_diag",
             seq = load_seq,
-            reason,
+            reason = ?reason,
             connection_id = %self.config.connection_id,
             database = %self.config.database_name,
             schema = ?self.config.schema_name,
@@ -1190,6 +1260,19 @@ impl TableDesigner {
                             error = %error,
                             "[table_designer_diag] load_table_structure Tokio task failed"
                         );
+                        let message = t!("Table.load_structure_failed", error = error.to_string())
+                            .to_string();
+                        let _ = cx.update(|cx| {
+                            if let Some(window_id) = cx.active_window() {
+                                cx.update_window(window_id, |_entity, window, cx| {
+                                    window.push_notification(message.clone(), cx);
+                                })
+                                .ok();
+                            }
+                        });
+                        let _ = this.update(cx, |designer, cx| {
+                            designer.finish_structure_load(cx);
+                        });
                         return;
                     }
                 };
@@ -1209,8 +1292,30 @@ impl TableDesigner {
             let _ = cx.update(|cx| {
                 if let Some(window_id) = cx.active_window() {
                     cx.update_window(window_id, |_entity, window, cx| {
-                        let columns = columns_result.ok();
-                        let indexes = indexes_result.ok();
+                        // 元数据读取失败时必须可见：否则设计器只剩表头，
+                        // 用户看到空网格却不知道发生了错误。
+                        let mut failures: Vec<String> = Vec::new();
+                        let columns = match columns_result {
+                            Ok(columns) => Some(columns),
+                            Err(error) => {
+                                failures.push(error.to_string());
+                                None
+                            }
+                        };
+                        let indexes = match indexes_result {
+                            Ok(indexes) => Some(indexes),
+                            Err(error) => {
+                                failures.push(error.to_string());
+                                None
+                            }
+                        };
+                        if !failures.is_empty() {
+                            window.push_notification(
+                                t!("Table.load_structure_failed", error = failures.join("; "))
+                                    .to_string(),
+                                cx,
+                            );
+                        }
                         let table_info = tables_result.ok().and_then(|tables| {
                             find_loaded_table_info(tables, &table_name, schema_name.as_deref())
                         });
@@ -1244,14 +1349,24 @@ impl TableDesigner {
                             );
                             designer.original_design = Some(original_design);
                             designer.update_previews(window, cx);
+                            designer.finish_structure_load(cx);
                         });
                     })
                 } else {
+                    let _ = this.update(cx, |designer, cx| {
+                        designer.finish_structure_load(cx);
+                    });
                     Err(anyhow::anyhow!("No active window"))
                 }
             });
         })
         .detach();
+    }
+
+    /// 收掉表结构加载态并刷新面板。
+    fn finish_structure_load(&mut self, cx: &mut Context<Self>) {
+        self.structure_load.finish();
+        cx.notify();
     }
 
     fn build_original_design(
@@ -1525,14 +1640,36 @@ impl Render for TableDesigner {
             .size_full()
             .child(self.render_toolbar(cx))
             .child(self.render_tabs(cx))
-            .child(
-                div()
-                    .flex_1()
-                    .w_full()
-                    .overflow_hidden()
-                    .child(self.render_active_tab(window, cx)),
-            )
+            .child(div().flex_1().w_full().overflow_hidden().child(
+                if self.structure_load.is_loading() {
+                    render_structure_loading(cx)
+                } else {
+                    self.render_active_tab(window, cx)
+                },
+            ))
     }
+}
+
+/// 表结构加载面板的调试选择器（供回归测试定位该面板）。
+const STRUCTURE_LOADING_SELECTOR: &str = "table-designer-structure-loading";
+
+/// 首次打开既有表时，列/索引/表信息还在路上：先给一个明确的等待反馈，
+/// 而不是先渲染一个空白表单再被数据填上。
+fn render_structure_loading(cx: &App) -> AnyElement {
+    v_flex()
+        .debug_selector(|| STRUCTURE_LOADING_SELECTOR.to_owned())
+        .size_full()
+        .items_center()
+        .justify_center()
+        .gap_3()
+        .child(Spinner::new().with_size(Size::Large))
+        .child(
+            div()
+                .text_sm()
+                .text_color(cx.theme().muted_foreground)
+                .child(t!("Table.loading_structure").to_string()),
+        )
+        .into_any_element()
 }
 
 impl EventEmitter<TableDesignerEvent> for TableDesigner {}
@@ -2479,15 +2616,12 @@ impl ColumnsEditor {
                 scale_input,
                 nullable: col.is_nullable,
                 is_pk: col.is_primary_key,
-                auto_increment: if matches!(self.database_type, DatabaseType::SQLite) {
-                    // 仅单列 INTEGER 主键是 rowid 别名（SQLite 的隐式自增）；
-                    // 联合主键（含 WITHOUT ROWID 表）不能勾选自增。
-                    col.is_primary_key
-                        && parsed_type.base_type.eq_ignore_ascii_case("INTEGER")
-                        && primary_key_count == 1
-                } else {
-                    parsed_type.is_auto_increment
-                },
+                auto_increment: column_is_auto_increment(
+                    &self.database_type,
+                    &col,
+                    &parsed_type,
+                    primary_key_count,
+                ),
                 is_unsigned: parsed_type.is_unsigned,
                 default_input,
                 comment_input,
@@ -2740,8 +2874,13 @@ impl ColumnsEditor {
             .gap_3()
             .px_3()
             .py_1p5()
-            .when(is_selected, |this| this.bg(cx.theme().primary.opacity(0.1)))
-            .hover(|this| this.bg(cx.theme().muted.opacity(0.3)))
+            .when(is_selected, |this| {
+                this.bg(cx.theme().primary.opacity(SELECTED_ROW_BACKGROUND_OPACITY))
+            })
+            .when_some(
+                row_hover_background(is_selected, cx.theme()),
+                |this, background| this.hover(move |style| style.bg(background)),
+            )
             .border_b_1()
             .border_color(cx.theme().border.opacity(0.5))
             .on_mouse_down(
@@ -3258,8 +3397,13 @@ impl Render for IndexesEditor {
                             .gap_3()
                             .px_3()
                             .py_1p5()
-                            .when(is_selected, |this| this.bg(cx.theme().primary.opacity(0.1)))
-                            .hover(|this| this.bg(cx.theme().muted.opacity(0.3)))
+                            .when(is_selected, |this| {
+                                this.bg(cx.theme().primary.opacity(SELECTED_ROW_BACKGROUND_OPACITY))
+                            })
+                            .when_some(
+                                row_hover_background(is_selected, cx.theme()),
+                                |this, background| this.hover(move |style| style.bg(background)),
+                            )
                             .border_b_1()
                             .border_color(cx.theme().border.opacity(0.5))
                             .on_mouse_down(
@@ -3576,6 +3720,8 @@ mod tests {
         clickhouse::ClickHousePlugin, mssql::MsSqlPlugin, mysql::MySqlPlugin, oracle::OraclePlugin,
         plugin::DatabasePlugin, postgresql::PostgresPlugin, sqlite::SqlitePlugin,
     };
+    use gpui_component::{Theme, ThemeColor};
+    use std::{cell::Cell, rc::Rc};
 
     /// 表设计器 DDL 断言仅覆盖仍带原生插件的数据库类型。
     ///
@@ -3616,6 +3762,23 @@ mod tests {
         ColumnsEditor::resize_column_width(&mut widths, COLUMN_EDITOR_COLUMN_COUNT, px(260.0));
 
         assert_eq!(COLUMN_EDITOR_DEFAULT_WIDTHS, widths);
+    }
+
+    #[test]
+    fn hovering_a_selected_row_keeps_the_selection_highlight() {
+        let theme = Theme::from(ThemeColor::dark().as_ref());
+
+        // 选中行不叠加悬停底色：悬停样式在基础样式之后 refine，一旦叠加就会
+        // 把选中底色盖掉，看起来像「鼠标移到这一行，高亮没了」。
+        assert_eq!(None, row_hover_background(true, &theme));
+        assert_eq!(
+            Some(theme.muted.opacity(HOVERED_ROW_BACKGROUND_OPACITY)),
+            row_hover_background(false, &theme)
+        );
+        assert_ne!(
+            row_hover_background(true, &theme),
+            row_hover_background(false, &theme)
+        );
     }
 
     fn build_col(name: &str) -> ColumnDefinition {
@@ -4821,6 +4984,7 @@ mod tests {
             comment: Some("会话ID".to_string()),
             charset: Some("utf8mb4".to_string()),
             collation: Some("utf8mb4_general_ci".to_string()),
+            is_auto_increment: false,
         };
         let parsed = MySqlPlugin::new().parse_column_type(&column.data_type);
 
@@ -4845,6 +5009,7 @@ mod tests {
             comment: None,
             charset: None,
             collation: None,
+            is_auto_increment: false,
         };
         let enum_col = ColumnInfo {
             name: "status".to_string(),
@@ -4855,6 +5020,7 @@ mod tests {
             comment: None,
             charset: Some("utf8mb4".to_string()),
             collation: Some("utf8mb4_bin".to_string()),
+            is_auto_increment: false,
         };
 
         let numeric_definition = column_info_to_definition(
@@ -4874,6 +5040,61 @@ mod tests {
         assert_eq!(numeric_definition.length, Some(11));
         assert_eq!(enum_definition.data_type, "enum('todo','done')");
         assert_eq!(enum_definition.collation.as_deref(), Some("utf8mb4_bin"));
+    }
+
+    #[test]
+    fn test_column_info_to_definition_prefers_metadata_auto_increment() {
+        // MSSQL 的 IDENTITY 在类型字符串里没有任何痕迹，只能来自元数据；
+        // 以前这里只认类型字符串解析，设计器就会丢掉 IDENTITY。
+        let identity = ColumnInfo {
+            name: "id".to_string(),
+            data_type: "bigint".to_string(),
+            is_nullable: false,
+            is_primary_key: true,
+            default_value: None,
+            comment: None,
+            charset: None,
+            collation: None,
+            is_auto_increment: true,
+        };
+        let parsed = MsSqlPlugin::new().parse_column_type(&identity.data_type);
+        assert!(
+            !parsed.is_auto_increment,
+            "类型字符串解析不出 IDENTITY，这正是必须读元数据的原因"
+        );
+
+        let definition = column_info_to_definition(DatabaseType::MSSQL, &identity, parsed, 1);
+
+        assert!(
+            definition.is_auto_increment,
+            "元数据的自增标记必须传导到设计"
+        );
+    }
+
+    #[test]
+    fn test_column_info_to_definition_sqlite_rowid_alias_fallback() {
+        // 旧来源没填元数据时，SQLite 仍按「单列 INTEGER 主键 = rowid 别名」兜底。
+        let column = ColumnInfo {
+            name: "id".to_string(),
+            data_type: "INTEGER".to_string(),
+            is_nullable: false,
+            is_primary_key: true,
+            default_value: None,
+            comment: None,
+            charset: None,
+            collation: None,
+            is_auto_increment: false,
+        };
+        let parsed = SqlitePlugin::new().parse_column_type(&column.data_type);
+
+        let single_pk = column_info_to_definition(DatabaseType::SQLite, &column, parsed.clone(), 1);
+        let composite_pk = column_info_to_definition(DatabaseType::SQLite, &column, parsed, 2);
+
+        assert!(
+            single_pk.is_auto_increment,
+            "单列 INTEGER 主键是 rowid 别名"
+        );
+        assert!(!composite_pk.is_auto_increment, "联合主键不构成 rowid 别名");
     }
 
     #[test]
@@ -4934,6 +5155,7 @@ mod tests {
                 comment: None,
                 charset: None,
                 collation: None,
+                is_auto_increment: false,
             },
             ColumnInfo {
                 name: "tag_id".to_string(),
@@ -4944,6 +5166,7 @@ mod tests {
                 comment: None,
                 charset: None,
                 collation: None,
+                is_auto_increment: false,
             },
             ColumnInfo {
                 name: "ts".to_string(),
@@ -4954,6 +5177,7 @@ mod tests {
                 comment: None,
                 charset: None,
                 collation: None,
+                is_auto_increment: false,
             },
             ColumnInfo {
                 name: "value".to_string(),
@@ -4964,6 +5188,7 @@ mod tests {
                 comment: None,
                 charset: None,
                 collation: None,
+                is_auto_increment: false,
             },
         ];
 
@@ -5001,6 +5226,7 @@ mod tests {
                 comment: None,
                 charset: None,
                 collation: None,
+                is_auto_increment: false,
             },
             ColumnInfo {
                 name: "name".to_string(),
@@ -5011,6 +5237,7 @@ mod tests {
                 comment: None,
                 charset: None,
                 collation: None,
+                is_auto_increment: false,
             },
         ];
 
@@ -5081,5 +5308,133 @@ mod tests {
             None,
         );
         assert_eq!(found.and_then(|t| t.comment).as_deref(), Some("demo表"));
+    }
+
+    #[test]
+    fn initial_open_arms_the_structure_loading_panel() {
+        let mut state = StructureLoadState::default();
+
+        state.begin(StructureLoadReason::InitialOpen);
+
+        assert!(state.is_loading());
+    }
+
+    #[test]
+    fn after_save_reload_keeps_the_panel_in_place() {
+        let mut state = StructureLoadState::default();
+
+        state.begin(StructureLoadReason::AfterSave);
+
+        assert!(!state.is_loading());
+    }
+
+    #[test]
+    fn a_new_designer_starts_without_the_loading_panel() {
+        let state = StructureLoadState::default();
+
+        assert!(!state.is_loading());
+    }
+
+    #[test]
+    fn finishing_a_load_always_clears_the_loading_panel() {
+        let mut state = StructureLoadState::default();
+        state.begin(StructureLoadReason::InitialOpen);
+
+        state.finish();
+
+        assert!(!state.is_loading());
+    }
+
+    /// 打开既有表时真实面板会先停在加载态（列/索引/表信息回来前不渲染空表单）。
+    #[gpui::test]
+    fn opening_an_existing_table_arms_the_loading_panel(cx: &mut gpui::TestAppContext) {
+        let (_designer, armed_at_open, _visual) = designer_window(cx, Some("users"));
+
+        assert!(armed_at_open);
+    }
+
+    /// 新建表没有可拉取的结构，不应该出现加载态。
+    #[gpui::test]
+    fn opening_a_new_table_keeps_the_form_visible(cx: &mut gpui::TestAppContext) {
+        let (_designer, armed_at_open, _visual) = designer_window(cx, None);
+
+        assert!(!armed_at_open);
+    }
+
+    /// 加载期间面板是加载中占位，而不是一片空白表单；加载结束后回到表单。
+    ///
+    /// 直接驱动加载态（不触发真实查询）：这里要验证的是渲染门控，
+    /// 触发时机由 `opening_an_existing_table_arms_the_loading_panel` 负责。
+    #[gpui::test]
+    fn existing_table_renders_the_loading_panel_until_the_structure_arrives(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (designer, _armed_at_open, visual) = designer_window(cx, None);
+
+        visual.update(|_window, cx| {
+            designer.update(cx, |designer, cx| {
+                designer
+                    .structure_load
+                    .begin(StructureLoadReason::InitialOpen);
+                cx.notify();
+            });
+        });
+        visual.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        assert!(visual.debug_bounds(STRUCTURE_LOADING_SELECTOR).is_some());
+
+        visual.update(|_window, cx| {
+            designer.update(cx, |designer, cx| designer.finish_structure_load(cx));
+        });
+        visual.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        assert!(visual.debug_bounds(STRUCTURE_LOADING_SELECTOR).is_none());
+    }
+
+    /// 结构加载失败的提示必须能在当前 locale 解析出内容。
+    ///
+    /// 这条文案是加载失败时唯一的用户可见反馈（空白网格、没有提示正是本次
+    /// 问题的现场），key 打错会让用户直接看到原始 key。
+    #[test]
+    fn load_structure_failed_message_is_translated() {
+        let message = t!("Table.load_structure_failed", error = "boom").to_string();
+
+        assert!(message.contains("boom"), "{message}");
+        assert!(
+            !message.contains("Table.load_structure_failed"),
+            "{message}"
+        );
+    }
+
+    /// 构造表设计器窗口，返回 (designer, 打开瞬间是否在加载态, visual)。
+    ///
+    /// 加载态在构造处当场采样：结构查询是异步的，回过头再读字段就会和「查询已经
+    /// 失败并收掉加载态」赛跑，采样点必须在同一个不中断的闭包内。
+    fn designer_window<'a>(
+        cx: &'a mut gpui::TestAppContext,
+        table_name: Option<&str>,
+    ) -> (Entity<TableDesigner>, bool, &'a mut gpui::VisualTestContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            one_core::gpui_tokio::init(cx);
+            cx.set_global(GlobalDbState::default());
+        });
+
+        let mut config = TableDesignerConfig::new("conn-1", "app", DatabaseType::MySQL);
+        if let Some(table_name) = table_name {
+            config = config.with_table_name(table_name);
+        }
+
+        let armed_at_open = Rc::new(Cell::new(false));
+        let probe = armed_at_open.clone();
+        let (designer, visual) = cx.add_window_view(move |window, cx| {
+            let designer = TableDesigner::new("表设计器", config, window, cx);
+            probe.set(designer.structure_load.is_loading());
+            designer
+        });
+
+        (designer, armed_at_open.get(), visual)
     }
 }

@@ -31,6 +31,8 @@ mod baud_rate;
 
 use baud_rate::{custom_baud_rate_text, is_valid_baud_rate_text, resolve_baud_rate};
 
+/// 串口表单窗口配置。`Clone` 见 `one_core::popup_window::open_reusable_popup_window`。
+#[derive(Clone)]
 pub struct SerialFormWindowConfig {
     pub editing_connection: Option<StoredConnection>,
     pub workspaces: Vec<Workspace>,
@@ -656,11 +658,11 @@ impl SerialFormWindow {
         })
         .detach();
 
-        window.remove_window();
+        let _ = one_core::window_close::close_window_for_reuse(window, cx);
     }
 
-    fn on_cancel(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
-        window.remove_window();
+    fn on_cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let _ = one_core::window_close::close_window_for_reuse(window, cx);
     }
 
     fn on_refresh_ports(&mut self, window: &mut Window, cx: &mut Context<Self>) {

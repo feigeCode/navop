@@ -895,7 +895,11 @@ impl Render for SimpleCodeEditor {
                     cx.stop_propagation();
                 }
             })
-            .child(Editor::new(&self.editor).bg(cx.theme().background).size_full())
+            .child(
+                Editor::new(&self.editor)
+                    .bg(cx.theme().background)
+                    .size_full(),
+            )
     }
 }
 
@@ -1058,6 +1062,7 @@ mod tests {
                     comment: None,
                     charset: None,
                     collation: None,
+                    is_auto_increment: false,
                 },
                 ColumnInfo {
                     name: "age".into(),
@@ -1068,6 +1073,7 @@ mod tests {
                     comment: None,
                     charset: None,
                     collation: None,
+                    is_auto_increment: false,
                 },
                 ColumnInfo {
                     name: "created_at".into(),
@@ -1078,6 +1084,7 @@ mod tests {
                     comment: None,
                     charset: None,
                     collation: None,
+                    is_auto_increment: false,
                 },
             ],
         }

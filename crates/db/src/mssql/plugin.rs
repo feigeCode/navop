@@ -30,6 +30,13 @@ use crate::plugin_manifest::{
 use crate::schema_preferences::{SchemaFilterProfile, filter_schemas};
 use crate::types::*;
 
+/// MSSQL 元数据里的布尔值渲染形式不统一：typed 解码后的 `bit` 是 `true`/`false`，
+/// 而 SQL 里 `CASE ... THEN 1 ELSE 0 END` 这类表达式是 `1`/`0`。
+/// 二者都要能识别为真，否则索引唯一性这类标志会被误判为假。
+fn mssql_text_is_true(text: &str) -> bool {
+    text == "1" || text.eq_ignore_ascii_case("true")
+}
+
 /// MSSQL data types (name, description)
 pub const MSSQL_DATA_TYPES: &[(&str, &str)] = &[
     ("BIT", "Boolean (0/1)"),
@@ -1435,10 +1442,11 @@ impl DatabasePlugin for MsSqlPlugin {
                         "utf8mb4",
                     )
                 };
-                let is_nullable = cell(2)?
-                    .map(|v| v == "1" || v.to_lowercase() == "true")
-                    .unwrap_or(true);
+                let is_nullable = cell(2)?.map(|v| mssql_text_is_true(&v)).unwrap_or(true);
                 let is_primary_key = cell(6)?.map(|v| v == "1").unwrap_or(false);
+                // `c.is_identity` 在 SQL 里一直有查，但以前没读：设计器拿不到 IDENTITY，
+                // 重建列时会丢自增。
+                let is_auto_increment = cell(4)?.map(|v| mssql_text_is_true(&v)).unwrap_or(false);
                 columns.push(ColumnInfo {
                     name: cell(0)?.unwrap_or_default(),
                     data_type: cell(1)?.unwrap_or_default(),
@@ -1448,6 +1456,7 @@ impl DatabasePlugin for MsSqlPlugin {
                     comment: cell(5)?,
                     charset: None,
                     collation: None,
+                    is_auto_increment,
                 });
             }
             Ok(columns)
@@ -2020,8 +2029,7 @@ impl DatabasePlugin for MsSqlPlugin {
                 let is_unique =
                     crate::metadata_read::metadata_text(&query_result, row_index, 3, "utf8mb4")?
                         .as_deref()
-                        .unwrap_or("0")
-                        == "1";
+                        .is_some_and(mssql_text_is_true);
 
                 indexes
                     .entry(index_name.clone())

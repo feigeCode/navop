@@ -1,3 +1,4 @@
+use super::connection_forms::connection_form_reuse_key;
 use super::*;
 
 impl HomePage {
@@ -41,9 +42,12 @@ impl HomePage {
                 t!("PortForwarding.new").to_string()
             },
         );
-        open_popup_window(
+        open_reusable_popup_window(
             PopupWindowOptions::new(title).size(700.0, 520.0),
-            move |window, cx| cx.new(|cx| PortForwardingFormWindow::new(config, window, cx)),
+            connection_form_reuse_key("port-forwarding", config.editing_connection.as_ref()),
+            move |window, cx| {
+                cx.new(|cx| PortForwardingFormWindow::new(config.clone(), window, cx))
+            },
             Some(_window),
             cx,
         );
@@ -145,9 +149,10 @@ impl HomePage {
                 t!("RemoteDesktopForm.title_new", protocol = protocol.label()).to_string()
             },
         );
-        open_popup_window(
+        open_reusable_popup_window(
             PopupWindowOptions::new(title).size(700.0, 600.0),
-            move |window, cx| cx.new(|cx| RemoteDesktopFormWindow::new(config, window, cx)),
+            connection_form_reuse_key("remote-desktop-form", config.editing_connection.as_ref()),
+            move |window, cx| cx.new(|cx| RemoteDesktopFormWindow::new(config.clone(), window, cx)),
             Some(_window),
             cx,
         );

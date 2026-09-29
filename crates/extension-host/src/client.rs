@@ -32,7 +32,10 @@ use tracing::{debug, trace, warn};
 
 use crate::error::{HostError, HostResult};
 use crate::host_api::HostApiHandler;
-use crate::transport::{FramedTransport, ReadFramed, WriteFramed, recv_async, send_async};
+use crate::transport::{
+    FramedTransport, MAX_FRAME_BYTES, ReadFramed, WriteFramed, is_frame_too_large, recv_async,
+    send_async,
+};
 
 /// 单次请求的可选项。
 #[derive(Debug, Clone, Default)]
@@ -244,7 +247,21 @@ impl JsonRpcClientHandle {
 
     async fn send_message<M: Serialize>(&self, msg: &M) -> HostResult<()> {
         let mut w = self.inner.writer.lock().await;
-        send_async(&mut *w, msg).await.map_err(HostError::Io)
+        send_async(&mut *w, msg).await.map_err(|error| {
+            if is_frame_too_large(&error) {
+                // 请求体超限是调用方 bug,而且协议层在写出任何字节之前就拒了,
+                // 流没有被写坏、连接依然可用:不伪装成传输故障。
+                warn!(
+                    limit_bytes = MAX_FRAME_BYTES,
+                    "outbound rpc frame exceeds the protocol frame limit; request rejected without touching the stream"
+                );
+                HostError::FrameTooLarge {
+                    limit_bytes: MAX_FRAME_BYTES,
+                }
+            } else {
+                HostError::Io(error)
+            }
+        })
     }
 }
 
@@ -484,6 +501,13 @@ where
             Err(e) => {
                 if shared.closed.load(Ordering::SeqCst) {
                     debug!(error = %e, "reader exiting (client closed)");
+                } else if is_frame_too_large(&e) {
+                    // 这条以前是 debug 级,所以"provider 发了一个超过 16 MiB 的帧"
+                    // 之后,日志里只剩上层那句 `rpc client is closed`:根因被丢掉了。
+                    warn!(
+                        limit_bytes = MAX_FRAME_BYTES,
+                        "provider sent a frame larger than the protocol frame limit; closing the rpc client"
+                    );
                 } else {
                     debug!(error = %e, "reader exiting (transport error)");
                 }

@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use async_trait::async_trait;
-use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
+use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
 use one_core::storage::DbConnectionConfig;
 use tiberius::{AuthMethod, Client, ColumnType, Config, Row, Uuid};
 use tokio::net::TcpStream;
@@ -24,6 +24,57 @@ use db_value::{
     CellState, ColumnDescriptor, DbValue, FloatWidth, Nullability, RawPayload, RawRepresentation,
     ResultBatch, ResultRow,
 };
+
+/// MSSQL 标量类型对应的 typed 解码目标。
+///
+/// TDS 对可空列使用变长包装类型：可空 `bit` 走 `BITN`、可空 `int` 走 `INTN`、
+/// 可空 `float` 走 `FLOATN` 等。系统目录视图里的 `is_nullable`、`is_unique`
+/// 这类列几乎都是可空 `bit`，因此变长包装类型必须与定长类型一起建模，否则
+/// 列/索引元数据读取会因为单个单元格无法解码而整条失败。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MssqlScalarDecoder {
+    Bit,
+    Null,
+    Int1,
+    Int2,
+    Int4,
+    Int8,
+    Money,
+    Float4,
+    Float8,
+    Guid,
+    Decimal,
+    DateTime,
+    Date,
+    Time,
+    DateTimeOffset,
+}
+
+impl MssqlScalarDecoder {
+    /// 未建模类型（如 `Udt`、`SSVariant`）返回 `None`，由调用方标为 `Undecoded`。
+    fn for_column_type(column_type: ColumnType) -> Option<Self> {
+        use ColumnType::*;
+        Some(match column_type {
+            Bit | Bitn => Self::Bit,
+            Null => Self::Null,
+            Int1 => Self::Int1,
+            Int2 => Self::Int2,
+            Int4 => Self::Int4,
+            // `Intn` 只会在不常见列宽下出现，按最宽整数兜底。
+            Int8 | Intn => Self::Int8,
+            Money | Money4 => Self::Money,
+            Float4 => Self::Float4,
+            Float8 | Floatn => Self::Float8,
+            Guid => Self::Guid,
+            Decimaln | Numericn => Self::Decimal,
+            Datetime | Datetimen | Datetime2 => Self::DateTime,
+            Daten => Self::Date,
+            Timen => Self::Time,
+            DatetimeOffsetn => Self::DateTimeOffset,
+            _ => return None,
+        })
+    }
+}
 
 pub struct MssqlDbConnection {
     config: DbConnectionConfig,
@@ -197,61 +248,91 @@ impl MssqlDbConnection {
             };
         }
 
-        match column_type {
-            ColumnType::Bit => Self::try_cell(row.try_get::<bool, _>(index), column_type, |v| {
-                (DbValue::Bool(v), v.to_string())
-            }),
-            ColumnType::Int1 => Self::try_cell(row.try_get::<u8, _>(index), column_type, |v| {
-                let s = v.to_string();
-                (DbValue::Integer(s.clone()), s)
-            }),
-            ColumnType::Int2 => Self::try_cell(row.try_get::<i16, _>(index), column_type, |v| {
-                let s = v.to_string();
-                (DbValue::Integer(s.clone()), s)
-            }),
-            ColumnType::Int4 => Self::try_cell(row.try_get::<i32, _>(index), column_type, |v| {
-                let s = v.to_string();
-                (DbValue::Integer(s.clone()), s)
-            }),
-            ColumnType::Int8 => Self::try_cell(row.try_get::<i64, _>(index), column_type, |v| {
-                let s = v.to_string();
-                (DbValue::Integer(s.clone()), s)
-            }),
+        let Some(decoder) = MssqlScalarDecoder::for_column_type(column_type) else {
+            // 未建模类型:保留 legacy 显示,typed 明确 Undecoded,不伪装成值。
+            let display = Self::extract_value(row, index);
+            return (
+                CellState::Undecoded {
+                    native_type: format!("{column_type:?}"),
+                    raw: None,
+                    reason: "no typed decoder for this MSSQL column type".to_string(),
+                },
+                display,
+            );
+        };
+
+        match decoder {
+            MssqlScalarDecoder::Bit => {
+                Self::try_cell(row.try_get::<bool, _>(index), column_type, |v| {
+                    (DbValue::Bool(v), v.to_string())
+                })
+            }
+            MssqlScalarDecoder::Null => (CellState::Decoded(DbValue::Null), None),
+            MssqlScalarDecoder::Int1 => {
+                Self::try_cell(row.try_get::<u8, _>(index), column_type, |v| {
+                    let s = v.to_string();
+                    (DbValue::Integer(s.clone()), s)
+                })
+            }
+            MssqlScalarDecoder::Int2 => {
+                Self::try_cell(row.try_get::<i16, _>(index), column_type, |v| {
+                    let s = v.to_string();
+                    (DbValue::Integer(s.clone()), s)
+                })
+            }
+            MssqlScalarDecoder::Int4 => {
+                Self::try_cell(row.try_get::<i32, _>(index), column_type, |v| {
+                    let s = v.to_string();
+                    (DbValue::Integer(s.clone()), s)
+                })
+            }
+            MssqlScalarDecoder::Int8 => {
+                Self::try_cell(row.try_get::<i64, _>(index), column_type, |v| {
+                    let s = v.to_string();
+                    (DbValue::Integer(s.clone()), s)
+                })
+            }
             // Driver limitation: tiberius decodes TDS money as `ColumnData::F64`
             // after already losing the exact scaled integer, so large money values
             // cannot be recovered with full precision here. Kept as Decimal text
             // for display; not claimed as exact.
-            ColumnType::Money | ColumnType::Money4 => {
+            MssqlScalarDecoder::Money => {
                 Self::try_cell(row.try_get::<f64, _>(index), column_type, |v| {
                     let s = v.to_string();
                     (DbValue::Decimal(s.clone()), s)
                 })
             }
-            ColumnType::Float4 => Self::try_cell(row.try_get::<f32, _>(index), column_type, |v| {
-                let s = v.to_string();
-                (
-                    DbValue::Float {
-                        value: s.clone(),
-                        width: FloatWidth::F32,
-                    },
-                    s,
-                )
-            }),
-            ColumnType::Float8 => Self::try_cell(row.try_get::<f64, _>(index), column_type, |v| {
-                let s = v.to_string();
-                (
-                    DbValue::Float {
-                        value: s.clone(),
-                        width: FloatWidth::F64,
-                    },
-                    s,
-                )
-            }),
-            ColumnType::Guid => Self::try_cell(row.try_get::<Uuid, _>(index), column_type, |v| {
-                let s = v.to_string();
-                (DbValue::Uuid(s.clone()), s)
-            }),
-            ColumnType::Decimaln | ColumnType::Numericn => Self::try_cell(
+            MssqlScalarDecoder::Float4 => {
+                Self::try_cell(row.try_get::<f32, _>(index), column_type, |v| {
+                    let s = v.to_string();
+                    (
+                        DbValue::Float {
+                            value: s.clone(),
+                            width: FloatWidth::F32,
+                        },
+                        s,
+                    )
+                })
+            }
+            MssqlScalarDecoder::Float8 => {
+                Self::try_cell(row.try_get::<f64, _>(index), column_type, |v| {
+                    let s = v.to_string();
+                    (
+                        DbValue::Float {
+                            value: s.clone(),
+                            width: FloatWidth::F64,
+                        },
+                        s,
+                    )
+                })
+            }
+            MssqlScalarDecoder::Guid => {
+                Self::try_cell(row.try_get::<Uuid, _>(index), column_type, |v| {
+                    let s = v.to_string();
+                    (DbValue::Uuid(s.clone()), s)
+                })
+            }
+            MssqlScalarDecoder::Decimal => Self::try_cell(
                 row.try_get::<tiberius::numeric::Numeric, _>(index),
                 column_type,
                 |v| {
@@ -259,36 +340,32 @@ impl MssqlDbConnection {
                     (DbValue::Decimal(s.clone()), s)
                 },
             ),
-            ColumnType::Datetime | ColumnType::Datetimen | ColumnType::Datetime2 => {
+            MssqlScalarDecoder::DateTime => {
                 Self::try_cell(row.try_get::<NaiveDateTime, _>(index), column_type, |v| {
                     let s = v.format("%Y-%m-%d %H:%M:%S").to_string();
                     (DbValue::DateTime(s.clone()), s)
                 })
             }
-            ColumnType::Daten => {
+            MssqlScalarDecoder::Date => {
                 Self::try_cell(row.try_get::<NaiveDate, _>(index), column_type, |v| {
                     let s = v.format("%Y-%m-%d").to_string();
                     (DbValue::Date(s.clone()), s)
                 })
             }
-            ColumnType::Timen => {
+            MssqlScalarDecoder::Time => {
                 Self::try_cell(row.try_get::<NaiveTime, _>(index), column_type, |v| {
                     let s = v.format("%H:%M:%S%.f").to_string();
                     (DbValue::Time(s.clone()), s)
                 })
             }
-            _ => {
-                // 未建模类型:保留 legacy 显示,typed 明确 Undecoded,不伪装成值。
-                let display = Self::extract_value(row, index);
-                (
-                    CellState::Undecoded {
-                        native_type: format!("{column_type:?}"),
-                        raw: None,
-                        reason: "no typed decoder for this MSSQL column type".to_string(),
-                    },
-                    display,
-                )
-            }
+            MssqlScalarDecoder::DateTimeOffset => Self::try_cell(
+                row.try_get::<DateTime<FixedOffset>, _>(index),
+                column_type,
+                |v| {
+                    let s = v.format("%Y-%m-%d %H:%M:%S%.f%:z").to_string();
+                    (DbValue::DateTime(s.clone()), s)
+                },
+            ),
         }
     }
 
@@ -498,6 +575,70 @@ impl MssqlDbConnection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nullable_tds_wrapped_types_have_typed_decoders() {
+        // 回归：可空列会让 TDS 换成变长包装类型，例如系统目录里的
+        // `is_nullable` / `is_unique` 都是可空 `bit`（BITN）。缺这些分支时
+        // 单元格会落成 Undecoded，列/索引元数据读取整条失败。
+        let expected = [
+            (ColumnType::Bitn, MssqlScalarDecoder::Bit),
+            (ColumnType::Intn, MssqlScalarDecoder::Int8),
+            (ColumnType::Floatn, MssqlScalarDecoder::Float8),
+            (
+                ColumnType::DatetimeOffsetn,
+                MssqlScalarDecoder::DateTimeOffset,
+            ),
+            (ColumnType::Null, MssqlScalarDecoder::Null),
+        ];
+
+        for (column_type, decoder) in expected {
+            assert_eq!(
+                MssqlScalarDecoder::for_column_type(column_type),
+                Some(decoder),
+                "{column_type:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn fixed_length_types_map_to_their_decoders() {
+        let expected = [
+            (ColumnType::Bit, MssqlScalarDecoder::Bit),
+            (ColumnType::Int1, MssqlScalarDecoder::Int1),
+            (ColumnType::Int2, MssqlScalarDecoder::Int2),
+            (ColumnType::Int4, MssqlScalarDecoder::Int4),
+            (ColumnType::Int8, MssqlScalarDecoder::Int8),
+            (ColumnType::Money, MssqlScalarDecoder::Money),
+            (ColumnType::Money4, MssqlScalarDecoder::Money),
+            (ColumnType::Float4, MssqlScalarDecoder::Float4),
+            (ColumnType::Float8, MssqlScalarDecoder::Float8),
+            (ColumnType::Guid, MssqlScalarDecoder::Guid),
+            (ColumnType::Decimaln, MssqlScalarDecoder::Decimal),
+            (ColumnType::Numericn, MssqlScalarDecoder::Decimal),
+            (ColumnType::Datetime, MssqlScalarDecoder::DateTime),
+            (ColumnType::Datetimen, MssqlScalarDecoder::DateTime),
+            (ColumnType::Datetime2, MssqlScalarDecoder::DateTime),
+            (ColumnType::Daten, MssqlScalarDecoder::Date),
+            (ColumnType::Timen, MssqlScalarDecoder::Time),
+        ];
+
+        for (column_type, decoder) in expected {
+            assert_eq!(
+                MssqlScalarDecoder::for_column_type(column_type),
+                Some(decoder),
+                "{column_type:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn unmodelled_types_stay_undecoded() {
+        // `Udt` / `SSVariant` 在驱动层就是未实现，保持 Undecoded 而不是伪装成值。
+        for column_type in [ColumnType::Udt, ColumnType::SSVariant] {
+            assert_eq!(MssqlScalarDecoder::for_column_type(column_type), None);
+        }
+    }
 
     #[test]
     fn fixed_and_variable_character_types_are_text() {

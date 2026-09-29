@@ -39,8 +39,47 @@ pub enum WorkbenchDispatchError {
     EventStreamRegistration { reason: String },
     #[error("provider call failed: {0}")]
     Provider(String),
+    /// provider 调用失败,且原因是「运行时/传输已经不在了」。
+    ///
+    /// 和 [`Self::Provider`] 分开是因为上层要把二者映射成不同的稳定 code:
+    /// 运行时消失可重试,而不是一个笼统的协议错。不分开的话,"provider 进程被
+    /// 替换"和"provider 真的返回了非法响应"在 UI 上长得一模一样。
+    #[error("provider call failed: {0}")]
+    ProviderUnavailable(String),
     #[error("operation `{0}` requires user confirmation before it can run")]
     ConfirmationRequired(String),
+}
+
+impl WorkbenchDispatchError {
+    /// 把 provider 侧 `HostError` 转成工作台错误,保留「运行时不可用」这一类别。
+    ///
+    /// 只有这一层还看得见 `HostError` 的变体,再往上就只剩字符串了,所以要
+    /// 在这里分类。
+    pub fn provider(error: extension_host::HostError) -> Self {
+        use extension_host::HostError as ProviderError;
+        match error {
+            ProviderError::Closed
+            | ProviderError::NotInitialized
+            | ProviderError::Io(_)
+            | ProviderError::ProcessExited(_)
+            | ProviderError::ProcessNotReady { .. }
+            | ProviderError::Timeout { .. } => Self::ProviderUnavailable(error.to_string()),
+            other => Self::Provider(other.to_string()),
+        }
+    }
+
+    /// 会话层错误(`session.resource_id()` 等)的同一分类。
+    ///
+    /// 会话已经关闭等价于"运行时不可用":页面只看到一句 SessionClosed 的话,
+    /// 会把它当成永久失败,而不是可以自愈重试的状态。
+    pub fn session(error: crate::PluginAdapterError) -> Self {
+        match error {
+            crate::PluginAdapterError::SessionClosed => {
+                Self::ProviderUnavailable(error.to_string())
+            }
+            other => Self::Provider(other.to_string()),
+        }
+    }
 }
 
 /// 命名操作的执行输入:绑定的参数值已经过类型检查。
@@ -291,7 +330,7 @@ async fn read_blob_json(
                 max_bytes: Some(remaining.min(256 * 1024)),
             })
             .await
-            .map_err(|error| WorkbenchDispatchError::Provider(error.to_string()))?;
+            .map_err(WorkbenchDispatchError::provider)?;
         let bytes = base64_decode(&read.data);
         chunks.extend_from_slice(&bytes);
         if read.done {
@@ -367,7 +406,7 @@ pub async fn dispatch_invoke_result(
     let resource_id = session
         .resource_id()
         .await
-        .map_err(|error| WorkbenchDispatchError::Provider(error.to_string()))?;
+        .map_err(WorkbenchDispatchError::session)?;
     let result = client
         .client()
         .invoke_resource(&ResourceInvokeParams {
@@ -380,7 +419,7 @@ pub async fn dispatch_invoke_result(
             params: request.params,
         })
         .await
-        .map_err(|error| WorkbenchDispatchError::Provider(error.to_string()))?;
+        .map_err(WorkbenchDispatchError::provider)?;
     Ok(result)
 }
 
@@ -412,7 +451,7 @@ pub async fn dispatch_invoke_result_scoped(
     let resource_id = session
         .resource_id()
         .await
-        .map_err(|error| WorkbenchDispatchError::Provider(error.to_string()))?;
+        .map_err(WorkbenchDispatchError::session)?;
     let operation = workbench
         .operations
         .get(operation_id)
@@ -429,7 +468,7 @@ pub async fn dispatch_invoke_result_scoped(
             extension_host::RequestOptions::default().with_cancel(cancellation),
         )
         .await
-        .map_err(|error| WorkbenchDispatchError::Provider(error.to_string()))?;
+        .map_err(WorkbenchDispatchError::provider)?;
     register_invoked_event_stream(session.client(), &result).await?;
     Ok(result)
 }
@@ -454,7 +493,9 @@ async fn register_invoked_event_stream(
     if let Err(error) = client.register_invoked_event_stream(id) {
         let _ = client
             .client()
-            .close_event_stream(&EventCloseParams { stream_id: id.clone() })
+            .close_event_stream(&EventCloseParams {
+                stream_id: id.clone(),
+            })
             .await;
         return Err(WorkbenchDispatchError::EventStreamRegistration {
             reason: error.to_string(),
@@ -518,7 +559,7 @@ async fn dispatch_job_with_cancel(
     let resource_id = session
         .resource_id()
         .await
-        .map_err(|error| WorkbenchDispatchError::Provider(error.to_string()))?;
+        .map_err(WorkbenchDispatchError::session)?;
 
     let handle = client
         .start_job(&extension_protocol::job::JobStartParams {
@@ -527,14 +568,14 @@ async fn dispatch_job_with_cancel(
             params: request.params,
         })
         .await
-        .map_err(|error| WorkbenchDispatchError::Provider(error.to_string()))?;
+        .map_err(WorkbenchDispatchError::provider)?;
 
     let outcome: Result<(), WorkbenchDispatchError> = 'poll: {
         for _ in 0..MAX_POLL_ATTEMPTS {
             let status = client
                 .job_status(&handle)
                 .await
-                .map_err(|error| WorkbenchDispatchError::Provider(error.to_string()))?;
+                .map_err(WorkbenchDispatchError::provider)?;
             match status.state {
                 JobState::Succeeded => break 'poll Ok(()),
                 JobState::Failed => {
@@ -570,7 +611,7 @@ async fn dispatch_job_with_cancel(
         Ok(()) => client
             .job_result(&handle)
             .await
-            .map_err(|error| WorkbenchDispatchError::Provider(error.to_string())),
+            .map_err(WorkbenchDispatchError::provider),
         Err(error) => {
             let _ = client.cancel_job(&handle).await;
             let _ = client.close_job(&handle).await;
@@ -916,7 +957,10 @@ mod tests {
 
         let error = parse_form_input("payload", "{oops}", ResourceWorkbenchInputType::Json)
             .expect_err("invalid json must not parse");
-        assert!(error.contains("payload") && error.contains("json"), "error={error}");
+        assert!(
+            error.contains("payload") && error.contains("json"),
+            "error={error}"
+        );
 
         assert_eq!(
             serde_json::json!(true),

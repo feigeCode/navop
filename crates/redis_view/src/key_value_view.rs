@@ -3869,7 +3869,7 @@ mod tests {
         AppContext, Bounds, TestAppContext, VisualTestContext, WindowBounds, WindowOptions, px,
         size,
     };
-    use gpui_component::Root;
+    use gpui_component::{Root, render_dialog_layer};
 
     #[gpui::test]
     fn delete_key_confirmation_dialog_opens(cx: &mut TestAppContext) {
@@ -3904,7 +3904,7 @@ mod tests {
 
         assert!(view.read_with(&cx, |view, _| view.current_key.is_some()));
         assert!(
-            !cx.update(|window, cx| Root::render_dialog_layer(window, cx).is_some()),
+            !cx.update(|window, cx| render_dialog_layer(window, cx).is_some()),
             "confirmation dialog should initially be closed"
         );
         view.update_in(&mut cx, |view, window, cx| {
@@ -3913,7 +3913,7 @@ mod tests {
         cx.run_until_parked();
 
         assert!(
-            cx.update(|window, cx| Root::render_dialog_layer(window, cx).is_some()),
+            cx.update(|window, cx| render_dialog_layer(window, cx).is_some()),
             "delete confirmation dialog should be registered with the window root"
         );
     }

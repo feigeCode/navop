@@ -231,9 +231,9 @@ fn keeps_keyframe_when_coalescing_dirty_rectangles() {
 #[test]
 fn pending_delta_chain_stays_within_the_rect_budget() {
     let (tx, rx) = output_mailbox();
-    tx.send(delta_with_rect_count(MAX_PENDING_DELTA_RECTS / 2))
+    tx.send(delta_with_rect_count(MIN_PENDING_DELTA_RECTS / 2))
         .unwrap();
-    tx.send(delta_with_rect_count(MAX_PENDING_DELTA_RECTS / 2))
+    tx.send(delta_with_rect_count(MIN_PENDING_DELTA_RECTS / 2))
         .unwrap();
 
     let batch = rx.drain();
@@ -242,7 +242,7 @@ fn pending_delta_chain_stays_within_the_rect_budget() {
     let Some(RemoteDesktopOutput::FrameBgraRects { rects, bgra, .. }) = batch.latest_delta else {
         panic!("expected a bounded merged delta");
     };
-    assert_eq!(MAX_PENDING_DELTA_RECTS, rects.len());
+    assert_eq!(MIN_PENDING_DELTA_RECTS, rects.len());
     assert!(bgra.is_empty());
     assert_eq!(1, batch.stats.delta_frames_merged);
     assert_eq!(0, batch.stats.frames_dropped);
@@ -251,7 +251,7 @@ fn pending_delta_chain_stays_within_the_rect_budget() {
 #[test]
 fn delta_overflow_discards_the_chain_and_reports_sync_loss() {
     let (tx, rx) = output_mailbox();
-    tx.send(delta_with_rect_count(MAX_PENDING_DELTA_RECTS))
+    tx.send(delta_with_rect_count(MIN_PENDING_DELTA_RECTS))
         .unwrap();
     tx.send(delta_with_rect_count(1)).unwrap();
 
@@ -260,6 +260,70 @@ fn delta_overflow_discards_the_chain_and_reports_sync_loss() {
     assert_eq!(None, batch.latest_delta);
     assert!(batch.frame_sync_lost);
     assert_eq!(2, batch.stats.frames_dropped);
+}
+
+#[test]
+fn delta_overflow_keeps_a_queued_base_frame_and_does_not_lose_sync() {
+    let (tx, rx) = output_mailbox();
+    tx.send(frame(3)).unwrap();
+    tx.send(delta_with_rect_count(MIN_PENDING_DELTA_RECTS))
+        .unwrap();
+    tx.send(delta_with_rect_count(1)).unwrap();
+
+    let batch = rx.drain();
+
+    assert_eq!(Some(frame(3)), batch.latest_frame);
+    assert_eq!(None, batch.latest_delta);
+    assert!(!batch.frame_sync_lost);
+    assert_eq!(2, batch.stats.frames_dropped);
+
+    // The queued base is a resume point, so the session keeps taking deltas instead of
+    // being restarted.
+    tx.send(delta_with_rect_count(1)).unwrap();
+    let recovered = rx.drain();
+
+    assert!(matches!(
+        recovered.latest_delta,
+        Some(RemoteDesktopOutput::FrameBgraRects { .. })
+    ));
+    assert!(!recovered.frame_sync_lost);
+    assert_eq!(0, recovered.stats.frames_dropped);
+}
+
+#[test]
+fn delta_budget_scales_with_the_desktop_it_describes() {
+    let (tx, rx) = output_mailbox();
+    tx.send(RemoteDesktopOutput::FrameBgra {
+        width: 3840,
+        height: 2160,
+        bgra: vec![0; 4],
+    })
+    .unwrap();
+    // One 4K screen's worth of delta pixels is a routine update at that size, and must
+    // not be mistaken for an overflow.
+    let full_screen_bytes = 3840 * 2160 * 4;
+    tx.send(RemoteDesktopOutput::FrameBgraRects {
+        width: 3840,
+        height: 2160,
+        rects: vec![RemoteDesktopFrameRect {
+            x: 0,
+            y: 0,
+            width: 3840,
+            height: 2160,
+            byte_len: full_screen_bytes,
+        }],
+        bgra: vec![0; full_screen_bytes],
+    })
+    .unwrap();
+
+    let batch = rx.drain();
+
+    assert!(!batch.frame_sync_lost);
+    assert!(matches!(
+        batch.latest_delta,
+        Some(RemoteDesktopOutput::FrameBgraRects { .. })
+    ));
+    assert_eq!(0, batch.stats.frames_dropped);
 }
 
 #[test]
@@ -273,9 +337,9 @@ fn oversized_delta_payload_is_rejected_without_retaining_it() {
             y: 0,
             width: 1,
             height: 1,
-            byte_len: MAX_PENDING_DELTA_BYTES + 1,
+            byte_len: MIN_PENDING_DELTA_BYTES + 1,
         }],
-        bgra: vec![0; MAX_PENDING_DELTA_BYTES + 1],
+        bgra: vec![0; MIN_PENDING_DELTA_BYTES + 1],
     })
     .unwrap();
 

@@ -70,7 +70,7 @@ fn form_audio_checkbox_and_full_rdp_settings_stay_synchronized() {
         .split("fn render_audio_playback_row(")
         .nth(1)
         .expect("audio row body")
-        .split("\n    fn render_backend_preference_row(")
+        .split("\n    /// The graphics pipeline policy")
         .next()
         .expect("audio row end");
 
@@ -102,4 +102,44 @@ fn form_audio_checkbox_and_full_rdp_settings_stay_synchronized() {
     // and switching protocols still clears all RDP-only settings.
     assert!(source.contains("rdp_settings: None,"));
     assert!(!source.contains("rdp: None,"));
+}
+
+#[test]
+fn form_offers_the_graphics_pipeline_policy_per_connection() {
+    let view = include_str!("view.rs").replace("\r\n", "\n");
+    let click = view
+        .split("fn set_egfx_mode(")
+        .nth(1)
+        .expect("set_egfx_mode body")
+        .split("\n    fn render_egfx_row(")
+        .next()
+        .expect("set_egfx_mode end");
+    let row = view
+        .split("fn render_egfx_row(")
+        .nth(1)
+        .expect("egfx row body")
+        .split("\n    #[cfg(windows)]")
+        .next()
+        .expect("egfx row end");
+
+    // The policy lives in the full RDP settings, so writing it must not reset the audio mode of a
+    // connection that only ever stored the legacy bool.
+    assert!(click.contains("RdpSettings::from_legacy_audio_playback(audio_playback)"));
+    assert!(click.contains("settings.graphics.egfx = mode;"));
+
+    // All three states are reachable from the form.
+    for id in [
+        "remote-desktop-egfx-auto",
+        "remote-desktop-egfx-always",
+        "remote-desktop-egfx-never",
+    ] {
+        assert!(row.contains(id), "the form must offer {id}");
+    }
+    assert!(row.contains("RdpEgfxMode::Auto"));
+    assert!(row.contains("RdpEgfxMode::Always"));
+    assert!(row.contains("RdpEgfxMode::Never"));
+
+    // RDP connections render it, and only when the helper is the backend that runs.
+    assert!(view.contains("self.egfx_controls_visible()"));
+    assert!(view.contains("form.child(self.render_egfx_row(cx))"));
 }
