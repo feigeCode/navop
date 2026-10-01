@@ -15,12 +15,16 @@ use super::*;
 use crate::acp::{AcpSessionOpen, AcpSessionSummary};
 
 /// 回到外部会话的走法（由 [`AgentChatView::plan_acp_reopen`] 判定）。
+///
+/// 两臂都带上**要重开的那条协议会话 id**，调用方据此设置 `acp_reopen_pending`：
+/// 连接握手用哪个地址 load、握手回来后 `promote_pending_acp_session` 拿哪个地址比对，
+/// 必须是同一个，否则历史回放对不上、屏幕空白。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum AcpReopenPlan {
     /// 连接已经挂在这个 agent 上：直接把那条协议会话 `load` 回来。
-    LoadHere,
+    LoadHere(String),
     /// 需要重新握手：连接就绪后再 `load`。
-    Reconnect(SharedString),
+    Reconnect(SharedString, String),
 }
 
 /// 一次 `session/list` 的可见状态。`None`（模型不存在）表示「这个后端不该显示 ACP 列表」，
@@ -118,18 +122,14 @@ impl AgentChatView {
         cx: &mut Context<Self>,
     ) {
         match self.plan_acp_reopen(uid, &reference, cx) {
-            Some(AcpReopenPlan::LoadHere) => {
+            Some(AcpReopenPlan::LoadHere(session_id)) => {
                 // 连接已经在这个 agent 上：`load` 会把历史带回来，不用重新握手。
                 self.acp_reopen_pending = None;
-                self.open_protocol_session(
-                    &reference.session_id,
-                    self.workspace_root.clone(),
-                    cx,
-                );
+                self.open_protocol_session(&session_id, self.workspace_root.clone(), cx);
             }
-            Some(AcpReopenPlan::Reconnect(agent_id)) => {
+            Some(AcpReopenPlan::Reconnect(agent_id, session_id)) => {
                 // 绕不开重新握手：`resume` 只接上下文、不回放历史，连上后再 load 一次。
-                self.acp_reopen_pending = Some(reference.session_id);
+                self.acp_reopen_pending = Some(session_id);
                 self.select_acp_backend(agent_id, cx);
             }
             None => {}
@@ -139,8 +139,9 @@ impl AgentChatView {
     /// 判定「回到外部会话」的走法，本身不碰连接。
     ///
     /// agent 已经被移除等接不上的情况，写明原因并返回 `None`，不假装历史还在。
-    /// 能接就把地址补回「这条会话上次用的协议会话」记忆里：重连优先复用那条对话，
-    /// 而不是每回新开一条空会话。
+    /// 要重开的协议会话以**记忆**为准（`AiChatSettings.acp_sessions`，每次连接都会刷新），
+    /// 只把快照里的地址当兜底：两者可能因写入时机不同而分叉，此时记忆更新，用旧地址会
+    /// 让 agent 回到一条不含近期工作的旧会话。
     pub(super) fn plan_acp_reopen(
         &mut self,
         uid: &str,
@@ -155,14 +156,20 @@ impl AgentChatView {
             );
             return None;
         }
-        self.remember_acp_protocol_session(uid, &agent_id, &reference.session_id, cx);
+        let session_id = AppSettings::current(cx)
+            .ai_chat
+            .remembered_acp_session(uid, agent_id.as_ref())
+            .map(str::to_string)
+            .filter(|id| !id.trim().is_empty())
+            .unwrap_or_else(|| reference.session_id.clone());
+        self.remember_acp_protocol_session(uid, &agent_id, &session_id, cx);
         if self.backend == Backend::Acp
             && self.current_acp_id.as_ref() == Some(&agent_id)
             && self.acp.is_some()
         {
-            return Some(AcpReopenPlan::LoadHere);
+            return Some(AcpReopenPlan::LoadHere(session_id));
         }
-        Some(AcpReopenPlan::Reconnect(agent_id))
+        Some(AcpReopenPlan::Reconnect(agent_id, session_id))
     }
 
     /// 这段会话在本地转录里留下的第一条用户消息（标题来源）。
@@ -421,6 +428,9 @@ impl AgentChatView {
                 );
                 // 从 agent 自己的列表里挑中的会话，同样要留在侧栏会话列表里。
                 self.persist_acp_session(&session_uid, cx);
+                // `activate_acp` 里那次列表刷新会被正在进行的 load 挡下（连接被占着），
+                // 这里补一次：历史摆上屏幕之后，会话列表也该跟上。
+                self.reload_acp_sessions(cx);
             }
             Err(error) => {
                 let message =

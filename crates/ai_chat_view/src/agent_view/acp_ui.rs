@@ -462,9 +462,6 @@ impl AgentChatView {
         self.sync_pending_preview(cx);
         self.sync_composer(cx);
         self.advance_acp_pending_after_origin(&origin_session_uid, cx);
-        // 连接就绪后立刻拉一次历史会话，让统一列表能马上和内置会话并排。
-        // 上一轮已经在跑的话 `reload_acp_sessions` 自己会让路。
-        self.reload_acp_sessions(cx);
         // 记住这条会话地址：下次重连 / 重启才有东西可以复用，而不是一路 `session/new`。
         self.remember_acp_protocol_session(
             &origin_session_uid,
@@ -473,15 +470,44 @@ impl AgentChatView {
             cx,
         );
         // 会话列表里得有这一行：ACP 会话的本地历史是空的，不在这里落盘就永远不会出现在侧栏。
+        // 它读的是 `self.acp`，所以必须排在下面两个会 `take()` 连接的操作之前。
         self.persist_acp_session(&origin_session_uid, cx);
         // 从零重开一条外部会话时，`resume` 只接上下文、不回放历史；agent 支持
         // `session/load` 的话再主动 load 一次，把那段对话摆回屏幕上。
-        if let Some(pending) = self.acp_reopen_pending.take()
-            && pending == protocol_session_id
-        {
-            self.open_protocol_session(&pending, self.workspace_root.clone(), cx);
-        }
+        //
+        // 顺序是这里的要害：它必须排在 `reload_acp_sessions` **之前**。后者为了发
+        // `session/list` 会把连接 `take()` 走，等轮到 `open_protocol_session` 时它
+        // 只能 `take()` 到 `None` 而静默返回——用户点开一条 ACP 历史会话，屏幕一片
+        // 空白，日志里连一次失败都看不到（这就是「点击 ACP 会话看不到历史」的根因）。
+        self.promote_pending_acp_session(&protocol_session_id, cx);
+        // 连接就绪后立刻拉一次历史会话，让统一列表能马上和内置会话并排。
+        // 上一轮已经在跑、或上面刚占住连接去 load 时，这里会让路，改由
+        // `finish_acp_session_open` 在 load 结束后补拉。
+        self.reload_acp_sessions(cx);
         cx.notify();
+    }
+
+    /// 兑现「从零重开一条外部会话」的待办：连接回来之后，把那段历史真正 load 回屏幕。
+    ///
+    /// 只在**连接就在手上**时才消费待办。连接此刻不在（被 `session/list` 之类的操作
+    /// `take()` 走了）就先留着——`open_protocol_session` 拿不到连接会静默返回，那时
+    /// 把待办一并吃掉，历史就再也没有第二次机会补回来。
+    pub(super) fn promote_pending_acp_session(
+        &mut self,
+        protocol_session_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if self.acp_reopen_pending.as_deref() != Some(protocol_session_id) {
+            return;
+        }
+        if self.acp.is_none() {
+            return;
+        }
+        let pending = self
+            .acp_reopen_pending
+            .take()
+            .expect("checked against protocol_session_id above");
+        self.open_protocol_session(&pending, self.workspace_root.clone(), cx);
     }
 
     /// 记住这个内置会话此刻指向的 ACP 协议会话，供下次重连 / 重启复用。

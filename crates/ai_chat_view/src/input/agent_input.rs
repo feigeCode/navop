@@ -1277,6 +1277,7 @@ impl AgentInput {
         let running = self.is_running;
         let queue_mode = running || self.pending_queue_blocked;
         let model_label = match &self.context.model {
+            Some(m) if m.model_only => m.model.clone(),
             Some(m) => SharedString::from(format!("{} / {}", m.provider, m.model)),
             None => SharedString::from(t!("AgentUi.select_model").to_string()),
         };

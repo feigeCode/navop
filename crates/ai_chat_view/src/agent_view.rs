@@ -6207,6 +6207,7 @@ fn acp_model_option(
             agent_id.clone(),
             value.to_string(),
         )
+        .with_model_only()
         .with_hint(selected),
     )
 }
@@ -6228,6 +6229,7 @@ fn acp_model_options_from_probe(
                 agent_id.clone(),
                 model.id.clone(),
             )
+            .with_model_only()
             .with_hint(model.label.clone())
         })
         .collect()
@@ -6253,6 +6255,7 @@ fn acp_model_options(
                 agent_id.clone(),
                 value,
             )
+            .with_model_only()
             .with_hint(label)
         })
         .collect()
@@ -10836,10 +10839,10 @@ mod tests {
             assert!(
                 matches!(
                     plan,
-                    Some(super::acp_sessions::AcpReopenPlan::Reconnect(ref id))
-                        if id.as_ref() == "codex"
+                    Some(super::acp_sessions::AcpReopenPlan::Reconnect(ref id, ref session))
+                        if id.as_ref() == "codex" && session == "acp-42"
                 ),
-                "没连在这个 agent 上时应当重新握手"
+                "没连在这个 agent 上时应当重新握手，并带上要重开的协议会话"
             );
             assert_eq!(
                 Some("acp-42"),
@@ -10855,6 +10858,63 @@ mod tests {
                 .prepare_acp_connect(agent_id, cx)
                 .expect("agent 就绪时应当能发起握手");
             assert_eq!(Some("acp-42".to_string()), operation.resume);
+        });
+    }
+
+    /// 快照里的地址与记忆分叉时，重开必须以**记忆**为准，不能顺手改回旧地址。
+    ///
+    /// 两个来源写入时机不同会分叉；快照地址可能是很早以前那条会话，用它重开 agent
+    /// 会回到一段不含近期工作的旧对话（用户观感就是「它不记得前面做过的事」）。
+    #[gpui::test]
+    fn reopening_prefers_the_remembered_protocol_session_over_a_stale_snapshot(
+        cx: &mut TestAppContext,
+    ) {
+        init_test_ui(cx);
+        let agent_id = SharedString::from("codex");
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new())
+                .with_acp_agents(vec![AcpAgentEntry::ready(AcpAgentConfig::new(
+                    agent_id.clone(),
+                    "Codex",
+                    "definitely-missing-acp-binary",
+                ))]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update(cx, |view, cx| {
+            view.runtime.restore_session(snapshot_of_external_session(
+                "sess_acp",
+                "codex",
+                "acp-stale",
+            ));
+            AppSettings::update(cx, |settings| {
+                settings
+                    .ai_chat
+                    .remember_acp_session("sess_acp", "codex", "acp-current");
+            });
+            let reference = view
+                .runtime
+                .session(&SessionId::from_string("sess_acp".to_string()))
+                .expect("会话应在运行时里")
+                .acp_ref()
+                .expect("外部地址要跟着快照回到会话上");
+
+            let plan = view.plan_acp_reopen("sess_acp", &reference, cx);
+            assert!(
+                matches!(
+                    plan,
+                    Some(super::acp_sessions::AcpReopenPlan::Reconnect(ref id, ref session))
+                        if id.as_ref() == "codex" && session == "acp-current"
+                ),
+                "记忆里的协议会话比快照地址新，重开要用记忆"
+            );
+            assert_eq!(
+                Some("acp-current"),
+                AppSettings::current(cx)
+                    .ai_chat
+                    .remembered_acp_session("sess_acp", "codex"),
+                "不能把记忆改回快照里的旧地址"
+            );
         });
     }
 
@@ -10884,6 +10944,58 @@ mod tests {
                     .iter()
                     .any(|message| message.content.contains("removed-agent")),
                 "接不回来要写在转录里，别默认用户知道"
+            );
+        });
+    }
+
+    /// 重开历史会话的待办，绝不能因为「连接此刻不在手上」而被静默吞掉。
+    ///
+    /// 这就是「点开 ACP 会话消息列表是空的」的成因：`activate_acp` 先跑
+    /// `reload_acp_sessions`（它为了发 `session/list` 会 `take()` 走连接），后跑重开
+    /// 逻辑——那时 `open_protocol_session` 只能 `take()` 到 `None` 而直接返回，待办却
+    /// 已经被吃掉，那段历史再也没有第二次机会补回来，日志里也看不到任何失败。
+    #[gpui::test]
+    fn a_pending_acp_reopen_survives_while_the_connection_is_away(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update(cx, |view, cx| {
+            view.acp_reopen_pending = Some("acp-42".to_string());
+            // 连接不在手上：正是 `reload_acp_sessions` 把连接 `take()` 走之后的真实状态。
+            view.acp = None;
+
+            view.promote_pending_acp_session("acp-42", cx);
+
+            assert_eq!(
+                Some("acp-42".to_string()),
+                view.acp_reopen_pending,
+                "连接不在时不能消费待办——消费掉就再也没人去 load 那段历史了"
+            );
+        });
+    }
+
+    /// 待办只认它自己那条协议会话：换 agent / 换会话时不能被顺手用掉。
+    #[gpui::test]
+    fn a_pending_acp_reopen_is_not_spent_on_another_session(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update(cx, |view, cx| {
+            view.acp_reopen_pending = Some("acp-42".to_string());
+            view.acp = None;
+
+            view.promote_pending_acp_session("acp-99", cx);
+
+            assert_eq!(
+                Some("acp-42".to_string()),
+                view.acp_reopen_pending,
+                "连回来的不是待办里那条会话时，待办要原样留着"
             );
         });
     }
@@ -15098,6 +15210,9 @@ mod acp_preconnect_model_tests {
         assert_eq!("builtin.codex", options[0].provider_id.as_ref());
         assert_eq!("GPT-5", options[0].hint.as_ref().map(AsRef::as_ref).unwrap_or(""));
         assert_ne!(options[0].id, options[1].id, "选项 id 必须唯一");
+        // ACP 标签只显示模型名，agent 名不进标签。
+        assert!(options[0].model_only);
+        assert_eq!("gpt-5", options[0].display_label().as_ref());
     }
 
     #[test]

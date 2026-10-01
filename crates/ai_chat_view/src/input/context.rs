@@ -225,6 +225,9 @@ impl ComposerScope {
 pub struct ComposerModel {
     pub provider: SharedString,
     pub model: SharedString,
+    /// true 时标签只显示模型名，隐藏 provider 前缀（ACP 的 provider 是 agent 名，
+    /// 工具栏已单独展示 agent，再拼一遍是重复）。
+    pub model_only: bool,
 }
 
 impl ComposerModel {
@@ -232,7 +235,13 @@ impl ComposerModel {
         Self {
             provider: provider.into(),
             model: model.into(),
+            model_only: false,
         }
+    }
+
+    pub fn with_model_only(mut self) -> Self {
+        self.model_only = true;
+        self
     }
 }
 
@@ -249,6 +258,8 @@ pub struct ComposerModelOption {
     pub model: SharedString,
     /// 次要说明(可选,显示在标签下方)。
     pub hint: Option<SharedString>,
+    /// true 时标签只显示模型名，不拼 provider 前缀（ACP 模型用）。
+    pub model_only: bool,
 }
 
 impl ComposerModelOption {
@@ -264,6 +275,7 @@ impl ComposerModelOption {
             provider_label: provider_label.into(),
             model: model.into(),
             hint: None,
+            model_only: false,
         }
     }
 
@@ -272,12 +284,26 @@ impl ComposerModelOption {
         self
     }
 
+    pub fn with_model_only(mut self) -> Self {
+        self.model_only = true;
+        self
+    }
+
     pub fn display_label(&self) -> SharedString {
-        SharedString::from(format!("{} / {}", self.provider_label, self.model))
+        if self.model_only {
+            self.model.clone()
+        } else {
+            SharedString::from(format!("{} / {}", self.provider_label, self.model))
+        }
     }
 
     pub fn to_composer_model(&self) -> ComposerModel {
-        ComposerModel::new(self.provider_label.clone(), self.model.clone())
+        let model = ComposerModel::new(self.provider_label.clone(), self.model.clone());
+        if self.model_only {
+            model.with_model_only()
+        } else {
+            model
+        }
     }
 }
 
@@ -609,5 +635,23 @@ mod tests {
             option.to_composer_model(),
             ComposerModel::new("OpenAI", "gpt-4.1")
         );
+    }
+
+    #[test]
+    fn model_only_option_hides_the_provider_prefix() {
+        // ACP：provider 是 agent 名，标签只用模型名。
+        let option = ComposerModelOption::new(
+            "acp:opencode-acp:model:9router/deepseek-v4-flash",
+            "opencode-acp",
+            "opencode-acp.opencode-acp",
+            "9router/deepseek-v4-flash",
+        )
+        .with_model_only();
+
+        assert_eq!(option.display_label().as_ref(), "9router/deepseek-v4-flash");
+        let model = option.to_composer_model();
+        assert!(model.model_only);
+        assert_eq!(model.provider.as_ref(), "opencode-acp.opencode-acp");
+        assert_eq!(model.model.as_ref(), "9router/deepseek-v4-flash");
     }
 }
