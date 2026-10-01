@@ -10,7 +10,7 @@ use crate::git::{GitChange, GitRepository};
 use crate::theme::WorkspaceTheme;
 use crate::{WorkspaceBackend, local_backend};
 use gpui::{App, Context, Entity, EventEmitter, KeyBinding, Subscription, actions};
-use gpui_component::input::EditorState;
+use gpui_component::input::{EditorState, RangeDecorationCollection};
 use notes::NotesView;
 use one_ui::StatusPresentation;
 use remote_file_editor::EditorMode;
@@ -158,6 +158,11 @@ impl LoadedDocument {
 pub(super) struct DiffEditors {
     left: Entity<EditorState>,
     right: Entity<EditorState>,
+    /// 两侧行背景装饰的句柄。组件文档说装饰集合"存活到显式销毁或编辑器被
+    /// 丢弃"，当前版本没有 `Drop` 实现，所以丢掉句柄其实也留得住装饰——但持有
+    /// 它才不必依赖那个实现细节。
+    _left_spans: RangeDecorationCollection,
+    _right_spans: RangeDecorationCollection,
 }
 
 pub(super) struct EditorTab {

@@ -74,8 +74,10 @@ impl WorkspaceEditor {
         let read_only = tab.is_none_or(|tab| tab.read_only);
         let unavailable = tab.is_none_or(|tab| tab.loading || tab.saving || tab.editor.is_none());
         let soft_wrap = tab.is_some_and(|tab| tab.soft_wrap);
-        let diff_available = tab.is_some_and(|tab| tab.diff.is_some());
-        let side_by_side = diff_available && tab.is_some_and(|tab| tab.diff_side_by_side);
+        // 「并排对比」只在真有并排数据时才可用：快照 diff（整轮多文件）刻意不做
+        // 双栏对齐，对它保持可点只会让按钮亮起来而屏上毫无变化。
+        let side_by_side_available = tab.is_some_and(|tab| tab.diff_editors.is_some());
+        let side_by_side = side_by_side_available && tab.is_some_and(|tab| tab.diff_side_by_side);
         let diff_change_count = tab
             .and_then(|tab| tab.diff.as_ref())
             .map_or(0, |diff| crate::diff::change_starts(diff).len());
@@ -98,7 +100,7 @@ impl WorkspaceEditor {
                     .selected(side_by_side)
                     .with_size(Size::Small)
                     .custom(self.theme.button_style(cx))
-                    .disabled(!diff_available)
+                    .disabled(!side_by_side_available)
                     .on_click(cx.listener(|this, _, _window, cx| {
                         this.toggle_diff_view(cx);
                     })),

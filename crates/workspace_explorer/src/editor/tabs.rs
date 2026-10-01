@@ -128,6 +128,11 @@ impl WorkspaceEditor {
         let Some(tab) = self.active_tab_mut().filter(|tab| tab.diff.is_some()) else {
             return;
         };
+        // 没有并排数据就切不进并排：`render_body` 只认 `diff_editors`，硬翻这个开关
+        // 只会让按钮亮起来而屏上没有任何变化。快照 diff（整轮多文件）就是这种形态。
+        if tab.diff_editors.is_none() {
+            return;
+        }
         tab.diff_side_by_side = !tab.diff_side_by_side;
         cx.notify();
     }

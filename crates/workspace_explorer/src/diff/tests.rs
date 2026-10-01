@@ -171,6 +171,91 @@ diff --git a/main.rs b/main.rs
     assert_eq!(vec![false, true, false], right.placeholders);
 }
 
+/// 装饰范围必须连行尾换行一起算。这条断言是给"看起来多余的那个 +1"站岗的：
+/// 组件的 `Fill` 对空 range 是直接丢弃的（`normalize` 拒收、`layout_range_corners`
+/// 返回 `None`），而占位行的文本本身就是空的——一旦把换行省掉，最该被指出来的
+/// 占位行反而整块不画，且不报任何错。
+#[test]
+fn aligned_spans_include_the_newline_so_placeholder_rows_still_paint() {
+    let parsed = parse_side_by_side(
+        "\
+diff --git a/main.rs b/main.rs
+--- a/main.rs
++++ b/main.rs
+@@ -1,3 +1,2 @@
+ context
+-removed
+ tail
+",
+    );
+    let (left, right) = aligned_side_by_side(&parsed);
+
+    assert_eq!(vec![0..8, 8..16, 16..20], ranges_of(&left));
+    // 右栏中间那行是占位，文本为空：`8..9` 覆盖的正是那个换行。
+    assert_eq!("context\n\ntail", right.text);
+    assert_eq!(vec![0..8, 8..9, 9..13], ranges_of(&right));
+
+    for (range, _) in aligned_span_ranges(&right) {
+        assert!(
+            !range.is_empty(),
+            "占位行也必须拿到非空范围，否则背景画不出来：{range:?}"
+        );
+    }
+    // 逐行首尾相接，并且完整覆盖文本。
+    let left_ranges = ranges_of(&left);
+    assert_eq!(0, left_ranges[0].start);
+    assert_eq!(left.text.len(), left_ranges.last().expect("三行").end);
+}
+
+#[test]
+fn aligned_spans_tell_changes_apart_from_placeholders() {
+    let parsed = parse_side_by_side(
+        "\
+diff --git a/main.rs b/main.rs
+--- a/main.rs
++++ b/main.rs
+@@ -1,3 +1,2 @@
+ context
+-removed
+ tail
+",
+    );
+    let (left, right) = aligned_side_by_side(&parsed);
+
+    // 左侧是"这行被改了"，右侧是"这一侧这里没有对应行"——两者都要上色，
+    // 但颜色语义不同，所以必须区分开。
+    assert_eq!(
+        vec![
+            AlignedSpanKind::Context,
+            AlignedSpanKind::Changed,
+            AlignedSpanKind::Context
+        ],
+        kinds_of(&left)
+    );
+    assert_eq!(
+        vec![
+            AlignedSpanKind::Context,
+            AlignedSpanKind::Placeholder,
+            AlignedSpanKind::Context
+        ],
+        kinds_of(&right)
+    );
+}
+
+fn ranges_of(side: &AlignedDiffSide) -> Vec<std::ops::Range<usize>> {
+    aligned_span_ranges(side)
+        .into_iter()
+        .map(|(range, _)| range)
+        .collect()
+}
+
+fn kinds_of(side: &AlignedDiffSide) -> Vec<AlignedSpanKind> {
+    aligned_span_ranges(side)
+        .into_iter()
+        .map(|(_, kind)| kind)
+        .collect()
+}
+
 #[test]
 fn change_starts_group_contiguous_changed_rows() {
     let parsed = parse_side_by_side(

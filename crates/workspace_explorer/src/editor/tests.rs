@@ -161,6 +161,8 @@ fn test_theme() -> WorkspaceTheme {
         border: gpui::rgb(0x333333).into(),
         accent: gpui::rgb(0x444444).into(),
         accent_foreground: gpui::rgb(0xffffff).into(),
+        selection: gpui::rgb(0x55a0fc).into(),
+        caret: gpui::rgb(0xffffff).into(),
         danger: gpui::rgb(0xff0000).into(),
         warning: gpui::rgb(0xffaa00).into(),
         success: gpui::rgb(0x00aa00).into(),

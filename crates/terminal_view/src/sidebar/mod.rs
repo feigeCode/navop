@@ -79,6 +79,10 @@ pub(crate) fn workspace_theme_from_terminal_colors(
         border: colors.border,
         accent: colors.accent,
         accent_foreground: colors.accent_foreground,
+        // 终端配色没有「选区 / 光标」这两个概念，取应用主题的专用色兜底。
+        // 关键是不能用 accent：它贴着终端背景，拿来当选区等于不可见。
+        selection: application_theme.selection,
+        caret: application_theme.caret,
         danger: application_theme.danger,
         warning: application_theme.warning,
         success: application_theme.success,

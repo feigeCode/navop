@@ -14,6 +14,17 @@ pub struct WorkspaceTheme {
     pub border: Hsla,
     pub accent: Hsla,
     pub accent_foreground: Hsla,
+    /// 编辑器选区的背景色。取自应用主题的 `selection`——主题作者专为「输入框
+    /// 选区」准备的颜色（浅色 `#55a0fc`、深色 `#1d4ed8`），与背景有真实色相差。
+    ///
+    /// 不要拿 `accent` 顶替：它在两个模式下都被选成贴近背景的表面色（浅色
+    /// `neutral-100`、深色 `neutral-800`），再乘 24% 不透明度叠到背景上就退回
+    /// 背景本身，选区在屏幕上等于不存在。组件库的 `Input` 用的就是主题的
+    /// 同一字段（`component/src/input/input.rs` 里 `selection: cx.theme().selection`），
+    /// 编辑器不该另立一套。
+    pub selection: Hsla,
+    /// 编辑器光标色。同理取自应用主题的 `caret`，不用 `accent`。
+    pub caret: Hsla,
     pub danger: Hsla,
     pub warning: Hsla,
     pub success: Hsla,
@@ -53,8 +64,8 @@ impl WorkspaceTheme {
             muted_foreground: Some(self.muted_foreground),
             background: Some(self.background),
             border: Some(self.border),
-            selection: Some(self.selection_background()),
-            caret: Some(self.accent),
+            selection: Some(self.selection),
+            caret: Some(self.caret),
             highlight_styles: Some(self.highlight_theme()),
             editor_active_line: Some(self.muted),
             editor_gutter_background: Some(self.muted),
@@ -118,6 +129,8 @@ mod tests {
             border: gpui::rgb(0x333333).into(),
             accent: gpui::rgb(0x444444).into(),
             accent_foreground: gpui::rgb(0xffffff).into(),
+            selection: gpui::rgb(0x55a0fc).into(),
+            caret: gpui::rgb(0xffffff).into(),
             danger: gpui::rgb(0xff0000).into(),
             warning: gpui::rgb(0xffaa00).into(),
             success: gpui::rgb(0x00aa00).into(),
@@ -141,6 +154,8 @@ mod tests {
             border: gpui::rgb(0x223344).into(),
             accent: gpui::rgb(0x00d9ff).into(),
             accent_foreground: gpui::rgb(0x000000).into(),
+            selection: gpui::rgb(0x55a0fc).into(),
+            caret: gpui::rgb(0xffffff).into(),
             danger: gpui::rgb(0xff0000).into(),
             warning: gpui::rgb(0xffaa00).into(),
             success: gpui::rgb(0x00aa00).into(),
@@ -163,6 +178,24 @@ mod tests {
         assert_eq!(style.editor_active_line, Some(theme.muted));
         assert_eq!(style.editor_invisible, Some(theme.muted_foreground));
         assert!(style.highlight_styles.is_some());
+    }
+
+    /// 编辑器选区与光标必须走主题的专用色，不能走 `accent`。
+    ///
+    /// `accent` 在浅色主题里是 `neutral-100`、深色里是 `neutral-800`——都是刻意
+    /// 贴近背景的表面色。把它乘 24% 当成选区，选区与背景的对比度约 1.0:1，
+    /// 屏幕上什么都看不见：代码区「单击能放光标、拖动出不了高亮」就是这么来的。
+    #[test]
+    fn the_editor_selection_and_caret_come_from_the_theme_not_the_accent() {
+        let theme = workspace_theme();
+
+        let style = theme.editor_style();
+
+        assert_eq!(style.selection, Some(theme.selection));
+        assert_eq!(style.caret, Some(theme.caret));
+        // `accent` 派生色仍服务列表行高亮（整行选中是另一种语义），两者不是
+        // 同一个值——这一条就是防止实现再被换回 `accent.opacity(0.24)`。
+        assert_ne!(style.selection, Some(theme.selection_background()));
     }
 
     #[test]

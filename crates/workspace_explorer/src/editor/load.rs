@@ -2,14 +2,18 @@ use super::{
     DiffEditors, DocumentKey, DocumentPolicy, EditorTab, GitDiffRequest, LoadRequest,
     LoadedDocument, PendingDocument, WorkspaceEditor, WorkspaceEditorEvent, display_name,
 };
-use crate::diff::{aligned_side_by_side, parse_side_by_side};
+use crate::diff::{
+    AlignedDiffSide, AlignedSpanKind, aligned_side_by_side, aligned_span_ranges, parse_side_by_side,
+};
 use crate::editor::markdown::create_markdown_editor;
 use crate::git::load_diff;
 use crate::model::active_index_after_open;
-use gpui::{AppContext as _, AsyncApp, Context, Task, WeakEntity, Window};
+use gpui::{
+    AppContext as _, AsyncApp, Context, Entity, Hsla, Pixels, Task, WeakEntity, Window, px,
+};
 use gpui_component::{
     WindowExt as _,
-    input::{EditorState, InputEvent},
+    input::{EditorState, InputEvent, RangeDecoration, RangeDecorationStyle},
     notification::Notification,
 };
 use one_ui::StatusPresentation;
@@ -274,10 +278,23 @@ impl WorkspaceEditor {
             }
             _ => None,
         };
+        // diff 的三种行背景。直接复用工作区主题已有的语义色，不为 diff 另开一套：
+        // `danger` / `success` 在应用主题里是饱和的红绿，压到 20% 铺在背景上依然
+        // 一眼可辨；`muted` 本来就是"比背景略深一层"的表面色，正好用来表示
+        // "这一侧没有对应行"。
+        let removed_background = self.theme.danger.opacity(0.20);
+        let added_background = self.theme.success.opacity(0.20);
+        let gap_background = self.theme.muted;
         tab.diff_change_cursor = None;
         tab.diff_editors = match (&tab.diff, diff_language) {
             (Some(diff), Some(language)) => {
                 let (left_side, right_side) = aligned_side_by_side(diff);
+                // 行背景必须赶在 `set_value` 之前算出来：那一步会把两侧文本移进
+                // 编辑器，之后就借不出 `changed` / `placeholders` 了。
+                let left_decorations =
+                    diff_span_decorations(&left_side, removed_background, gap_background);
+                let right_decorations =
+                    diff_span_decorations(&right_side, added_background, gap_background);
                 let left_language = language.clone();
                 let left = cx.new(|cx| {
                     let mut state = EditorState::new(window, cx)
@@ -299,10 +316,43 @@ impl WorkspaceEditor {
                     state.set_value(right_side.text, window, cx);
                     state
                 });
-                Some(DiffEditors { left, right })
+                // 并排本身只把两份对齐文本摆在一起，不含任何"这里不一样"的信息：
+                // `changed` / `placeholders` 算出来了却没人用，用户看到的就是两栏
+                // 一模一样的黑白代码。挂上填充装饰，左栏变更行是删除色、右栏是新增
+                // 色、没有对应行的那一侧是补白色。
+                let left_spans = left.update(cx, |state, cx| {
+                    state.create_range_decorations_collection(left_decorations, cx)
+                });
+                let right_spans = right.update(cx, |state, cx| {
+                    state.create_range_decorations_collection(right_decorations, cx)
+                });
+                Some(DiffEditors {
+                    left,
+                    right,
+                    _left_spans: left_spans,
+                    _right_spans: right_spans,
+                })
             }
             _ => None,
         };
+        // 并排模式必须真的有并排数据才成立。快照 diff（整轮多文件）刻意不做双栏
+        // 对齐，`diff_editors` 因此是 `None`；若这里留着 `EditorTab::new` 的默认
+        // `true`，`render_body` 会跳过并排落到单栏，而工具栏「并排对比」仍显示为
+        // 已开启——按钮在撒谎，点它也只是把它关掉，视口毫无变化。
+        tab.diff_side_by_side = tab.diff_editors.is_some();
+        // 并排两栏是同一份内容逐行对齐的结果，各滚各的会让"并排对比"失去意义。
+        // 只同步纵向：占位行已经把两栏补到同样多行，纵向偏移天然一一对应；横向
+        // 留给各自——两侧内容宽度不同，强行对齐只会把窄的那栏推进空白。
+        if let Some(editors) = tab.diff_editors.as_ref() {
+            tab.subscriptions.push(cx.observe(&editors.left, {
+                let target = editors.right.clone();
+                move |_this, source, cx| sync_scroll(source, &target, cx)
+            }));
+            tab.subscriptions.push(cx.observe(&editors.right, {
+                let target = editors.left.clone();
+                move |_this, source, cx| sync_scroll(source, &target, cx)
+            }));
+        }
         tab.loading = false;
         tab.saving = false;
         tab.read_only = document.read_only;
@@ -357,5 +407,80 @@ fn loaded_status(policy: DocumentPolicy) -> std::borrow::Cow<'static, str> {
         DocumentPolicy::Code | DocumentPolicy::PlainText => {
             t!("WorkspaceExplorer.status.loaded")
         }
+    }
+}
+
+/// 把对齐结果里需要提示的行变成编辑器行背景。
+///
+/// 只画变更行与占位行：两侧相同的行不需要任何标记，给每一行都铺底色反而会
+/// 稀释真正的差异。
+fn diff_span_decorations(
+    side: &AlignedDiffSide,
+    changed_background: Hsla,
+    placeholder_background: Hsla,
+) -> Vec<RangeDecoration> {
+    aligned_span_ranges(side)
+        .into_iter()
+        .filter_map(|(range, kind)| {
+            let color = match kind {
+                AlignedSpanKind::Context => return None,
+                AlignedSpanKind::Changed => changed_background,
+                AlignedSpanKind::Placeholder => placeholder_background,
+            };
+            Some(
+                RangeDecoration::new(range)
+                    .with_style(RangeDecorationStyle::Fill)
+                    .with_color(color),
+            )
+        })
+        .collect()
+}
+
+/// 需要写进目标栏的纵向偏移；`None` 表示两栏已在容差内对齐。
+///
+/// 抽成纯函数是为了让它可测：真正落笔要经过 `Entity`，而"什么时候**不该**写"
+/// 才是容易出错的地方。
+fn scroll_sync_target(source_y: Pixels, target_y: Pixels) -> Option<Pixels> {
+    if (target_y - source_y).abs() < px(SCROLL_SYNC_TOLERANCE) {
+        return None;
+    }
+    Some(source_y)
+}
+
+/// 两栏纵向偏移的容差。`set_scroll_offset` 会被各自视口高度 clamp，边界处可能
+/// 差出亚像素；不留容差，两栏就会互相推来推去。
+const SCROLL_SYNC_TOLERANCE: f32 = 0.5;
+
+/// 把并排栏的纵向滚动对齐到另一栏。
+///
+/// 写入是"先比较、相等就跳过"，所以不需要防重入标志：`set_scroll_offset` 要到
+/// 下次布局才生效，而 `update_scroll_offset` 在偏移没变时不会 `notify`，回环
+/// 自然终止。
+fn sync_scroll(
+    source: Entity<EditorState>,
+    target: &Entity<EditorState>,
+    cx: &mut Context<WorkspaceEditor>,
+) {
+    let source_y = source.read(cx).scroll_offset().y;
+    let mut offset = target.read(cx).scroll_offset();
+    let Some(target_y) = scroll_sync_target(source_y, offset.y) else {
+        return;
+    };
+    offset.y = target_y;
+    target.update(cx, |state, cx| state.set_scroll_offset(offset, cx));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scroll_sync_ignores_subpixel_drift_but_follows_real_moves() {
+        // clamp 造成的亚像素差不该触发写入，否则两栏会互相推。
+        assert_eq!(None, scroll_sync_target(px(120.0), px(120.4)));
+        assert_eq!(None, scroll_sync_target(px(120.0), px(120.0)));
+        // 真正的滚动必须跟随，向上向下两个方向都算。
+        assert_eq!(Some(px(240.0)), scroll_sync_target(px(240.0), px(120.0)));
+        assert_eq!(Some(px(0.0)), scroll_sync_target(px(0.0), px(120.0)));
     }
 }

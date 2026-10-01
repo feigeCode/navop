@@ -1,6 +1,8 @@
 //! Parses unified Git diffs into a side-by-side row model so the editor can
 //! render the old and new file contents next to each other.
 
+use std::ops::Range;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DiffLineKind {
     Context,
@@ -114,6 +116,56 @@ pub fn aligned_side_by_side(diff: &SideBySideDiff) -> (AlignedDiffSide, AlignedD
     }
 
     (left, right)
+}
+
+/// How one aligned line reads in the side-by-side view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AlignedSpanKind {
+    /// Identical on both sides; nothing to point out.
+    Context,
+    /// This side changed here. Direction is the pane's business: the left pane
+    /// renders it as a removal, the right pane as an addition.
+    Changed,
+    /// This side has no counterpart on this row; the blank exists only to keep
+    /// the two panes line-for-line aligned.
+    Placeholder,
+}
+
+/// Byte range and decoration meaning of every aligned line.
+///
+/// Byte ranges index into [`AlignedDiffSide::text`] and line up with its
+/// `changed` / `placeholders` / `line_numbers` vectors.
+///
+/// Every range **includes the trailing newline** (the last line has none). That
+/// is load-bearing, not incidental: a `RangeDecoration` fill is dropped twice
+/// over when its range is empty — `normalize` refuses empty ranges outright, and
+/// `layout_range_corners` in the editor element returns `None` for them. A range
+/// that covers the newline instead lands in the "selected newline has a
+/// one-space cell" branch, which paints the whole line plus one space, and gives
+/// an empty line its cell too. Without the newline the blank and placeholder
+/// rows — the ones that most need pointing at — would simply not be painted.
+pub fn aligned_span_ranges(side: &AlignedDiffSide) -> Vec<(Range<usize>, AlignedSpanKind)> {
+    let line_count = side.line_numbers.len();
+    let mut spans = Vec::with_capacity(line_count);
+    let mut start = 0usize;
+
+    for (index, line) in side.text.split('\n').enumerate() {
+        if index >= line_count {
+            break;
+        }
+        let end = start + line.len() + usize::from(start + line.len() < side.text.len());
+        let kind = if side.placeholders.get(index).copied().unwrap_or(false) {
+            AlignedSpanKind::Placeholder
+        } else if side.changed.get(index).copied().unwrap_or(false) {
+            AlignedSpanKind::Changed
+        } else {
+            AlignedSpanKind::Context
+        };
+        spans.push((start..end, kind));
+        start = end;
+    }
+
+    spans
 }
 
 /// Returns the aligned row index where each contiguous change block starts.

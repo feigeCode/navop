@@ -28,6 +28,8 @@ fn workspace_theme(cx: &App) -> WorkspaceTheme {
         border: theme.border,
         accent: theme.accent,
         accent_foreground: theme.accent_foreground,
+        selection: theme.selection,
+        caret: theme.caret,
         danger: theme.danger,
         warning: theme.warning,
         success: theme.success,
