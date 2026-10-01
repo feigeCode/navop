@@ -9,8 +9,8 @@ use agent_client_protocol::schema::v1::{
 };
 use agent_runtime::tools::{FileChange, ObservationData, ToolAction, ToolName};
 use agent_runtime::{
-    Plan, PlanSource, PlanStatus, PlanStep, RuntimeEvent, SessionId, StepStatus, ToolCallId,
-    ToolObservation, TurnId,
+    Plan, PlanSource, PlanStatus, PlanStep, RuntimeEvent, SessionId, SkillContext, StepStatus,
+    ToolCallId, ToolObservation, TurnId,
 };
 use rust_i18n::t;
 use serde_json::Value;
@@ -61,6 +61,10 @@ pub(crate) fn session_update_to_events_for_agent(
     match update {
         SessionUpdate::UserMessageChunk(chunk) => {
             let text = content_block_text(&chunk.content);
+            // 发给 agent 的 prompt 前面带着注入的技能上下文（`SkillContext::wrap_user_prompt`），
+            // agent 在 `session/load` 时把那条原样重放回来。这里剥掉，否则恢复出来的第一条
+            // 「用户消息」是整张技能目录。
+            let text = SkillContext::unwrap_user_prompt(&text).to_string();
             user_message_events(text, session_id, turn_id)
         }
         SessionUpdate::AgentMessageChunk(chunk) => {
@@ -513,6 +517,11 @@ fn tool_payload(
 fn content_block_text(block: &ContentBlock) -> String {
     match block {
         ContentBlock::Text(t) => t.text.clone(),
+        // 图片块转成 data: URL 的 markdown 图片，让消息列表直接渲染图片，
+        // 而不是把整段 base64 JSON 当文本铺出来。
+        ContentBlock::Image(image) => {
+            format!("![](data:{};base64,{})", image.mime_type, image.data)
+        }
         _ => serde_json::to_string(block)
             .unwrap_or_else(|_| t!("AgentUi.acp_non_text_content").to_string()),
     }
@@ -562,10 +571,11 @@ mod tests {
     use super::*;
     use agent_client_protocol::schema::v1::{
         AvailableCommand, AvailableCommandsUpdate, ConfigOptionUpdate, ContentChunk,
-        CurrentModeUpdate, Diff, PlanEntry, PlanEntryPriority, SessionInfoUpdate, TextContent,
-        ToolCall as AcpToolCall, ToolCallLocation, ToolCallUpdate, ToolCallUpdateFields,
-        UsageUpdate,
+        CurrentModeUpdate, Diff, ImageContent, PlanEntry, PlanEntryPriority, SessionInfoUpdate,
+        TextContent, ToolCall as AcpToolCall, ToolCallLocation, ToolCallUpdate,
+        ToolCallUpdateFields, UsageUpdate,
     };
+    use agent_runtime::SkillSummary;
 
     fn ids() -> (SessionId, TurnId) {
         (
@@ -778,6 +788,47 @@ mod tests {
         assert!(matches!(
             &events[0],
             RuntimeEvent::UserMessage { text, .. } if text == "用户补充"
+        ));
+    }
+
+    /// 图片块要变成 markdown 图片（data: URL），不能把 base64 JSON 当文本铺出来。
+    #[test]
+    fn image_block_becomes_markdown_data_url_not_raw_base64_json() {
+        let (sid, tid) = ids();
+        let update = SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::Image(
+            ImageContent::new("QUJD", "image/png"),
+        )));
+        let events = session_update_to_events(&update, &sid, &tid);
+
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0],
+            RuntimeEvent::UserMessage { text, .. }
+                if text == "![](data:image/png;base64,QUJD)"
+        ));
+        // 不能是序列化后的原始块。
+        if let RuntimeEvent::UserMessage { text, .. } = &events[0] {
+            assert!(!text.contains("\"type\":\"image\""));
+        }
+    }
+
+    /// 恢复历史时，注入的技能上下文不能当成用户消息显示出来。
+    #[test]
+    fn replayed_user_message_drops_the_injected_skill_context() {
+        let (sid, tid) = ids();
+        let context = SkillContext::new()
+            .with_available_skill(SkillSummary::new("demo", "Demo skill", "/tmp/demo/SKILL.md"));
+        let wrapped = context.wrap_user_prompt("帮我看下这个");
+        let update = SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::Text(
+            TextContent::new(wrapped),
+        )));
+
+        let events = replayed(&update, &sid, &tid);
+
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0],
+            RuntimeEvent::UserMessage { text, .. } if text == "帮我看下这个"
         ));
     }
 
