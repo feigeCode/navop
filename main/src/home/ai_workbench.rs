@@ -5,8 +5,8 @@
 //! 会话列表由外壳直接读会话面板，所以内建侧栏会被压制。
 
 use ai_chat_view::{
-    DefaultAgentChatPanel, DefaultAgentChatPanelEvent, MentionItem, WorkbenchPanelEntry,
-    WorkbenchPanelKind, WorkbenchShell, WorkbenchShellConfig, WorkbenchState,
+    DefaultAgentChatPanel, DefaultAgentChatPanelEvent, MentionItem, SubagentDetailPanel,
+    WorkbenchPanelEntry, WorkbenchPanelKind, WorkbenchShell, WorkbenchShellConfig, WorkbenchState,
 };
 use gpui::{App, AppContext as _, Entity, Subscription, Window};
 use gpui_component::ActiveTheme as _;
@@ -116,6 +116,12 @@ pub(crate) fn build_ai_workbench_shell(
     let terminal = cx.new(|cx| {
         TerminalView::new(default_terminal_config(&terminal_root), window, cx).with_workspace_pane()
     });
+    // 子代理详情面板：内容由「点开某张子代理卡片」决定。
+    //
+    // 面板自己订阅聊天面板的事件、自己认领要看哪条子代理；宿主只负责在请求到来时
+    // 把它切到前台（见下面的 `SubagentDetailRequested` 分支）。这样面板的目标状态
+    // 只有一个副本，不会出现「宿主认为是 A、面板显示 B」。
+    let subagent_detail = cx.new(|cx| SubagentDetailPanel::new(chat.clone(), cx));
 
     let shell = cx.new(|cx| {
         WorkbenchShell::new(
@@ -125,6 +131,7 @@ pub(crate) fn build_ai_workbench_shell(
                     WorkbenchPanelEntry::new(WorkbenchPanelKind::Review, editor.clone()),
                     WorkbenchPanelEntry::new(WorkbenchPanelKind::Files, explorer.clone()),
                     WorkbenchPanelEntry::new(WorkbenchPanelKind::Terminal, terminal.clone()),
+                    WorkbenchPanelEntry::new(WorkbenchPanelKind::Subagent, subagent_detail.clone()),
                 ],
                 session_nav: None,
                 session_source: Some(chat.clone()),
@@ -212,6 +219,13 @@ pub(crate) fn build_ai_workbench_shell(
                 // 用户点了改动摘要里的某个文件：先把审阅面板切到前台，再让编辑器
                 // 打开它（`open_file` 自己也会广播 `DocumentRequested`）。
                 //
+                // 用户点了子代理卡片的「查看推理过程」：把详情面板切到前台。
+                // 面板内容由它自己按事件里的子会话 id 现取，这里不搬数据。
+                DefaultAgentChatPanelEvent::SubagentDetailRequested { .. } => {
+                    shell_for_open.update(cx, |shell, cx| {
+                        shell.reveal_panel(WorkbenchPanelKind::Subagent, cx);
+                    });
+                }
                 // 打开文件需要窗口，而这里只有 `App`：推迟到下一帧再取窗口，
                 // 避免在当前窗口的更新过程中重入。
                 DefaultAgentChatPanelEvent::OpenFileInReview { path } => {

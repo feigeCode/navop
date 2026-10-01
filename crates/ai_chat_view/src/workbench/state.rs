@@ -31,14 +31,25 @@ pub enum WorkbenchPanelKind {
     Review,
     Files,
     Terminal,
+    /// 子代理详情：回放某只子代理的完整推理过程。
+    ///
+    /// 由「点开子代理卡片」驱动，因此**不落盘**（见 [`WorkbenchState::to_settings`]）：
+    /// 重启后没有任何卡片指向它，恢复出来的只会是一个空面板。
+    Subagent,
 }
 
 impl WorkbenchPanelKind {
     /// 固定顺序，UI 上的排列以此为准（rail 与标签组下拉都按它）。
-    pub const ALL: [Self; 4] = [Self::Chat, Self::Review, Self::Files, Self::Terminal];
+    pub const ALL: [Self; 5] = [
+        Self::Chat,
+        Self::Review,
+        Self::Files,
+        Self::Terminal,
+        Self::Subagent,
+    ];
 
     /// 可停靠到侧边的面板。中心区专属的「对话」不在其中。
-    pub const DOCKABLE: [Self; 3] = [Self::Review, Self::Files, Self::Terminal];
+    pub const DOCKABLE: [Self; 4] = [Self::Review, Self::Files, Self::Terminal, Self::Subagent];
 
     /// 持久化用的稳定 id。改名字会让已存的布局失效，不要动。
     pub fn id(self) -> &'static str {
@@ -47,7 +58,16 @@ impl WorkbenchPanelKind {
             Self::Review => "review",
             Self::Files => "files",
             Self::Terminal => "terminal",
+            Self::Subagent => "subagent",
         }
+    }
+
+    /// 是否参与布局持久化。
+    ///
+    /// 子代理详情是**会话内的一次性视图**：它由某张卡片的点击开出来，重启后没有任何
+    /// 东西指向它。存下来只会在下次启动时凭空恢复出一个空面板。
+    pub fn persists_layout(self) -> bool {
+        !matches!(self, Self::Subagent)
     }
 
     /// 从持久化 id 还原；未知 id 返回 `None`（旧配置 / 已下线的面板）。
@@ -61,6 +81,7 @@ impl WorkbenchPanelKind {
             Self::Review => t!("Workbench.panel_review"),
             Self::Files => t!("Workbench.panel_files"),
             Self::Terminal => t!("Workbench.panel_terminal"),
+            Self::Subagent => t!("Workbench.panel_subagent"),
         }
         .into()
     }
@@ -71,6 +92,7 @@ impl WorkbenchPanelKind {
             Self::Review => IconName::GitBranch,
             Self::Files => IconName::Folder,
             Self::Terminal => IconName::SquareTerminal,
+            Self::Subagent => IconName::Bot,
         }
     }
 
@@ -573,22 +595,36 @@ impl WorkbenchState {
     /// 多例面板的多个实例只落盘第一个（终端会话本就活不过进程，恢复时
     /// 只还原「这个面板开着」这一事实）；激活项若是非首个实例则回落到
     /// 该面板的第一个实例。
+    ///
+    /// 另外只落盘 [`WorkbenchPanelKind::persists_layout`] 为真的面板：子代理详情由
+    /// 卡片点击开出来，存下来只会在下次启动时恢复出一个没有任何内容的空面板。
     pub fn to_settings(&self) -> WorkbenchLayoutSettings {
+        let persisted = |tab: &WorkbenchTab| tab.kind.persists_layout();
         WorkbenchLayoutSettings {
             nav_collapsed: self.nav_collapsed,
-            center: self.center.map(|tab| tab.kind.id().to_string()),
-            left: self.left.map(|tab| tab.kind.id().to_string()),
-            bottom: self.bottom.map(|tab| tab.kind.id().to_string()),
+            center: self
+                .center
+                .filter(persisted)
+                .map(|tab| tab.kind.id().to_string()),
+            left: self
+                .left
+                .filter(persisted)
+                .map(|tab| tab.kind.id().to_string()),
+            bottom: self
+                .bottom
+                .filter(persisted)
+                .map(|tab| tab.kind.id().to_string()),
             right: {
                 let mut seen = std::collections::HashSet::new();
                 self.right
                     .iter()
-                    .filter(|tab| seen.insert(tab.kind.id()))
+                    .filter(|tab| tab.kind.persists_layout() && seen.insert(tab.kind.id()))
                     .map(|tab| tab.kind.id().to_string())
                     .collect()
             },
             right_active: self
                 .right_active
+                .filter(|tab| tab.kind.persists_layout())
                 .filter(|tab| self.first_tab_of(tab.kind) == Some(*tab))
                 .map(|tab| tab.kind.id().to_string()),
             nav_width: Some(self.nav_width),
@@ -608,7 +644,14 @@ impl WorkbenchState {
         let mut state = Self::new(WorkbenchPanelKind::Chat);
         state.nav_collapsed = settings.nav_collapsed;
 
-        if let Some(kind) = settings.center.as_deref().and_then(WorkbenchPanelKind::from_id) {
+        // 中心区同样要过一遍持久化守卫：配置文件是外部输入，手改过的文件不该能把
+        // 一个「没有内容可显示」的面板摆到中心。
+        if let Some(kind) = settings
+            .center
+            .as_deref()
+            .and_then(WorkbenchPanelKind::from_id)
+            .filter(|kind| kind.persists_layout())
+        {
             state.center = Some(WorkbenchTab::new(kind));
         }
         if let Some(kind) = dockable_from_settings(settings.left.as_deref()) {
@@ -650,10 +693,13 @@ impl WorkbenchState {
     }
 }
 
-/// 解析一个「侧边停靠位」的 id：未知 id 与不可停靠的面板都返回 `None`。
+/// 解析一个「侧边停靠位」的 id：未知 id、不可停靠、不参与持久化的面板都返回 `None`。
+///
+/// 不参与持久化这一条是双保险：正常路径上 [`WorkbenchState::to_settings`] 就不会写出
+/// 这类面板，但配置文件是外部输入，手改过的旧文件不该能把一个空面板恢复出来。
 fn dockable_from_settings(id: Option<&str>) -> Option<WorkbenchPanelKind> {
     let kind = WorkbenchPanelKind::from_id(id?)?;
-    kind.is_dockable().then_some(kind)
+    (kind.is_dockable() && kind.persists_layout()).then_some(kind)
 }
 
 #[cfg(test)]
@@ -1333,5 +1379,80 @@ mod tests {
 
         assert!(state.right_collapsed());
         assert!(!state.right_maximized(), "收起优先于放大");
+    }
+
+    /// 子代理详情面板是「点开卡片才出现」的临时视图：可以停靠、但绝不落盘。
+    ///
+    /// 它显示的是某一次子代理调用的回放，重启后没有任何卡片指向它。落盘只会让下次
+    /// 启动凭空多出一个永远空着的右栏标签。
+    #[test]
+    fn the_subagent_panel_opens_like_any_other_but_is_never_persisted() {
+        assert!(WorkbenchPanelKind::Subagent.is_dockable());
+        assert!(!WorkbenchPanelKind::Subagent.persists_layout());
+
+        let mut state = WorkbenchState::new(WorkbenchPanelKind::Chat);
+        assert!(state.open(WorkbenchPanelKind::Subagent, WorkbenchPlacement::Right));
+        assert!(state.is_open(WorkbenchPanelKind::Subagent));
+        assert_eq!(
+            Some(WorkbenchPanelKind::Subagent),
+            state.right_active().map(|tab| tab.kind)
+        );
+
+        let settings = state.to_settings();
+        assert!(
+            settings.right.is_empty(),
+            "临时面板不落盘，实际写出：{:?}",
+            settings.right
+        );
+        assert_eq!(None, settings.right_active);
+
+        // 同一份状态里别的面板该存还得存：过滤不能误伤。
+        open_right(&mut state, WorkbenchPanelKind::Files);
+        let settings = state.to_settings();
+        assert_eq!(vec!["files".to_string()], settings.right);
+        assert_eq!(Some("files".to_string()), settings.right_active);
+    }
+
+    /// 配置文件是外部输入：手改过的旧文件也不该把空的详情面板恢复出来。
+    #[test]
+    fn a_hand_edited_layout_cannot_restore_the_subagent_panel() {
+        for slot in ["center", "left", "bottom"] {
+            let mut settings = WorkbenchLayoutSettings::default();
+            match slot {
+                "center" => settings.center = Some("subagent".into()),
+                "left" => settings.left = Some("subagent".into()),
+                _ => settings.bottom = Some("subagent".into()),
+            }
+
+            let state = WorkbenchState::from_settings(&settings);
+
+            assert!(
+                !state.is_open(WorkbenchPanelKind::Subagent),
+                "{slot} 位上的 subagent 不该被还原"
+            );
+        }
+
+        let settings = WorkbenchLayoutSettings {
+            right: vec!["subagent".into(), "files".into()],
+            right_active: Some("subagent".into()),
+            ..Default::default()
+        };
+
+        let state = WorkbenchState::from_settings(&settings);
+
+        assert_eq!(
+            vec![WorkbenchPanelKind::Files],
+            state
+                .right_tabs()
+                .iter()
+                .map(|tab| tab.kind)
+                .collect::<Vec<_>>(),
+            "右侧组里的 subagent 应被丢掉，其余面板照常还原"
+        );
+        assert_eq!(
+            Some(WorkbenchPanelKind::Files),
+            state.right_active().map(|tab| tab.kind),
+            "激活项指向被丢掉的面板时要回落到第一个标签"
+        );
     }
 }

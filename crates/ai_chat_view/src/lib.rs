@@ -66,6 +66,7 @@ mod send_button;
 mod session_service;
 pub mod session_shortcut;
 mod session_sidebar;
+mod subagent_detail_panel;
 mod theme;
 mod transcript_scroll;
 mod transcript_search;
@@ -161,6 +162,7 @@ pub use resource_builder::{
     build_workbench_agent_context, build_workbench_resource_state,
 };
 pub use send_button::{SendButton, SendButtonEvent, SendButtonState};
+pub use subagent_detail_panel::{SubagentDetailPanel, SubagentDetailTarget};
 pub use session_service::{SessionError, SessionService, extract_session_name};
 pub use session_shortcut::{
     AI_CHAT_SESSION_SWITCHER_CONTEXT, CancelSessionSwitch, ConfirmSessionSwitch,

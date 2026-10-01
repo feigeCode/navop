@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use agent_client_protocol::{Agent, ConnectionTo};
 use agent_client_protocol::schema::v1::{
     CloseSessionRequest, CloseSessionResponse, DeleteSessionRequest, DeleteSessionResponse,
     ListSessionsRequest, ListSessionsResponse, LoadSessionRequest, LoadSessionResponse,
@@ -80,6 +81,17 @@ impl AcpConnection {
             state.apply_load_session_response(&response);
         }
         Ok(response)
+    }
+
+    /// 取一份「发起子代理详情 `session/load`」所需的句柄。
+    ///
+    /// 见 [`AcpDetailLoader`]：视图要在 `'static` 的异步块里 await 这次请求，
+    /// 而 `AcpConnection` 归视图所有、借不进异步块。
+    pub(crate) fn detail_loader(&self) -> AcpDetailLoader {
+        AcpDetailLoader {
+            conn: self.conn.clone(),
+            detail_sessions: self.detail_sessions.clone(),
+        }
     }
 
     /// 接上记住的会话（`session/resume`）。
@@ -166,5 +178,72 @@ impl AcpConnection {
             .send_request(LogoutRequest::new())
             .block_task()
             .await?)
+    }
+}
+
+/// 发起「子代理详情」`session/load` 所需的最小句柄。
+///
+/// # 为什么不直接借 `&AcpConnection`
+///
+/// 视图要在 `cx.spawn` 的 `'static` 异步块里 await 这次请求，而 `AcpConnection`
+/// 归视图所有、借不进异步块。照 [`AgentChatView::open_protocol_session`] 那样
+/// `take()` 走也不行：那次请求发生在用户**主动切换会话**的时刻，连接让位是应当的；
+/// 而点开一张子代理卡片时主会话往往还在跑，把连接抽走会让界面显示成断线。
+///
+/// 协议连接句柄本身可克隆，把最小集合拷出来最省事。
+///
+/// [`AgentChatView::open_protocol_session`]: crate::agent_view::AgentChatView::open_protocol_session
+#[derive(Clone)]
+pub(crate) struct AcpDetailLoader {
+    conn: ConnectionTo<Agent>,
+    detail_sessions: super::AcpDetailSessions,
+}
+
+impl AcpDetailLoader {
+    /// 把一条子代理子会话登记成详情会话，并让它回放整段历史。
+    ///
+    /// 与 [`AcpConnection::load_session`] 的关键差别：**不动当前会话指针**。
+    /// 用户点的是主对话里的一张卡片，主会话必须留在原地——把连接指针挪到子会话上，
+    /// 之后的 prompt、取消、权限确认、模式切换全会打到错误的会话。
+    ///
+    /// 子会话的 `session/update` 靠 [`super::AcpDetailSessions`] 那张表分流，
+    /// 因此这里也**不开主会话的历史回放窗口**：抢用同一个回放轮次会让子代理历史
+    /// 被算进主转录。
+    ///
+    /// 登记必须发生在请求**之前**：回放是随请求一起推过来的，晚一步注册，
+    /// 先到的几条通知就会因为「认不出是哪条会话」被丢掉。
+    pub(crate) async fn load(
+        &self,
+        acp_session_id: AcpSessionId,
+        cwd: PathBuf,
+    ) -> anyhow::Result<()> {
+        let protocol_id = acp_session_id.0.to_string();
+        // 登记独立成块：`MutexGuard` 不能跨过下面的 `.await`，否则既触发
+        // `clippy::await_holding_lock`，也把「锁被持有到请求返回」变成真事实。
+        let detail_session_id = crate::acp::detail_session_uid_for(&protocol_id);
+        {
+            let mut registry = self
+                .detail_sessions
+                .lock()
+                .map_err(|_| anyhow::anyhow!("子代理详情会话注册表不可用"))?;
+            registry.insert(protocol_id.clone(), detail_session_id);
+        }
+
+        let response = self
+            .conn
+            .send_request(LoadSessionRequest::new(acp_session_id, cwd))
+            .block_task()
+            .await;
+        match response {
+            Ok(_) => Ok(()),
+            Err(error) => {
+                // 没登记成功就不会有回放。留着这条映射，用户再点一次卡片只会得到
+                // 一片空白（视图以为已经加载过了）。
+                if let Ok(mut registry) = self.detail_sessions.lock() {
+                    registry.remove(&protocol_id);
+                }
+                Err(error.into())
+            }
+        }
     }
 }

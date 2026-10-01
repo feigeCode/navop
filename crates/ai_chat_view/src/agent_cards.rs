@@ -342,6 +342,11 @@ impl ChatCard for ToolCard {
         let message_id = msg.id.to_string();
         let toggle_id = SharedString::from(format!("agent-tool-card-toggle-{}", data.call_id));
         let hover_bg = theme.panel_hover;
+        // 子代理入口要发出去的两个值；先取出来，免得按钮的 `move` 闭包跟后面的
+        // `data` 借用打架。
+        let subagent_target = subagent_session_of_card(&data);
+        let subagent_open_id = subagent_target.clone().unwrap_or_default();
+        let subagent_open_title = tool_row_title(&data);
 
         // 一次工具调用 = 一行。没有容器、没有边框、没有底色:重装饰会让一摞
         // 调用看起来像一摞表单,而它们只是同一件事的连续步骤。hover 才给底色。
@@ -394,6 +399,30 @@ impl ChatCard for ToolCard {
                                 .child(text)
                         },
                     ))
+                    // 子代理卡片的详情入口。
+                    //
+                    // 放在标题行末尾而不是塞进展开区：它要的是「跳出去看另一条会话的
+                    // 完整推理」，不是「就地展开这一段 JSON」。点了之后由视图去
+                    // `session/load`，由宿主把详情面板摆到右侧。
+                    .when(subagent_target.is_some(), |this| {
+                        this.child(
+                            Button::new(SharedString::from(format!(
+                                "agent-tool-subagent-open-{subagent_open_id}"
+                            )))
+                            .ghost()
+                            .xsmall()
+                            .label(t!("AgentUi.subagent_open_detail").to_string())
+                            .on_click(move |_, window, cx| {
+                                window.dispatch_action(
+                                    Box::new(OpenSubagentDetail {
+                                        acp_session_id: subagent_open_id.clone(),
+                                        title: subagent_open_title.clone(),
+                                    }),
+                                    cx,
+                                );
+                            }),
+                        )
+                    })
                     .when(has_details, |this| {
                         this.child(
                             Icon::new(if expanded {
@@ -422,6 +451,27 @@ impl ChatCard for ToolCard {
 
         card.into_any_element()
     }
+}
+
+/// 这张工具卡片是不是一次**子代理**调用？是就给出它那条子会话的协议 id。
+///
+/// 判据落在观测文本上（外部 agent 的 `task` 工具会把子会话地址写在输出里，
+/// 见 [`crate::acp::subagent_link_from_observation`]）。放在渲染期而不是 reducer 里，是为了不往
+/// [`ToolCardData`] 上加一个只有子代理才用得到的字段——那会牵动十几处构造点，
+/// 而这张卡片本来就每帧都在解析自己的 JSON（`ToolCardData::from_json`）。
+///
+/// 解析前先做一次廉价的标记预筛：绝大多数工具卡片的输出里连 `<task id=` 都
+/// 不出现，直接跳过 JSON 解析。
+pub(crate) fn subagent_session_of_card(data: &ToolCardData) -> Option<String> {
+    for text in [&data.summary, &data.data_text] {
+        if !text.contains("<task id=") && !text.contains("\"parentSessionId\"") {
+            continue;
+        }
+        if let Some(link) = crate::acp::subagent_link_from_observation(text) {
+            return Some(link.session_id);
+        }
+    }
+    None
 }
 
 fn terminal_exec_output_text(data: &ToolCardData) -> String {
@@ -1505,6 +1555,19 @@ pub struct OpenFileInReview {
     pub path: String,
 }
 
+/// 卡片上的「查看推理过程」请求。
+///
+/// 与 [`OpenFileInReview`] 同一条路数：卡片只知道子会话的协议 id 和标题，
+/// 实际去 `session/load`、把推理摆到哪个面板，都由 `AgentChatView` 与宿主接手。
+#[derive(Clone, Action, PartialEq, Eq, Deserialize)]
+#[action(namespace = ai_chat_view, no_json)]
+pub struct OpenSubagentDetail {
+    /// 子代理子会话的协议 id。
+    pub acp_session_id: String,
+    /// 卡片标题，作为详情面板的表头。
+    pub title: String,
+}
+
 fn tool_card_target_label(data: &ToolCardData) -> Option<&str> {
     data.target_label
         .as_deref()
@@ -2174,6 +2237,57 @@ mod tests {
             file_changes: Vec::new(),
             duration_ms: None,
         }
+    }
+
+    /// 子代理卡片要能认出自己的子会话地址——这是「查看推理过程」入口的唯一判据。
+    ///
+    /// 判据是在**渲染期**从观测文本现解析的（见 [`subagent_session_of_card`]），
+    /// 所以这里锁住正反两面：真实终态输出解得出来，普通工具卡片解不出来。
+    #[test]
+    fn a_subagent_card_exposes_its_child_session_id() {
+        let mut data = echo_card();
+        // OpenCode `task` 工具的终态输出原样：地址既在 `metadata` 上，也在
+        // `output` 正文的 `<task id="…">` 里。
+        data.data_text = serde_json::json!({
+            "output": "<task id=\"ses_child\" state=\"completed\">done</task>",
+            "metadata": {
+                "parentSessionId": "ses_parent",
+                "sessionId": "ses_child",
+            },
+        })
+        .to_string();
+
+        assert_eq!(
+            Some("ses_child".to_string()),
+            subagent_session_of_card(&data),
+            "认不出子会话地址，卡片上就不会出现「查看推理过程」"
+        );
+    }
+
+    /// 只有 `output` 正文、metadata 缺席（取消 / 失败）时也要认得出来。
+    #[test]
+    fn a_cancelled_subagent_card_still_exposes_its_child_session_id() {
+        let mut data = echo_card();
+        data.data_text = r#"{"error":"Task cancelled: <task id=\"ses_cancelled\" state=\"error\">"}"#.into();
+
+        assert_eq!(
+            Some("ses_cancelled".to_string()),
+            subagent_session_of_card(&data)
+        );
+    }
+
+    /// 普通工具卡片不能凭空长出「查看推理过程」入口：点开只会是一片空白。
+    #[test]
+    fn an_ordinary_tool_card_has_no_subagent_entry() {
+        let mut data = echo_card();
+        data.data_text = r#"{"stdout":"hello","exit_code":0}"#.into();
+        data.summary = "echo: hello".into();
+
+        assert_eq!(None, subagent_session_of_card(&data));
+
+        // 只有 `sessionId`、没有 `parentSessionId` 的元数据不算子代理（太常见了）。
+        data.data_text = r#"{"metadata":{"sessionId":"ses_whatever"},"stdout":"hi"}"#.into();
+        assert_eq!(None, subagent_session_of_card(&data));
     }
 
     #[test]

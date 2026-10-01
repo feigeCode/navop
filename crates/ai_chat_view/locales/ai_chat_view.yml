@@ -695,6 +695,26 @@ AgentUi:
     en: Open in Review
     zh-CN: 在 Review 中打开
     zh-HK: 在 Review 中開啟
+  subagent_open_detail:
+    en: View reasoning
+    zh-CN: 查看推理过程
+    zh-HK: 檢視推理過程
+  subagent_detail_hint:
+    en: Subagent replay — full reasoning is available once the subagent finishes.
+    zh-CN: 子代理回放 · 推理过程在子代理结束后完整可得
+    zh-HK: 子代理回放 · 推理過程於子代理結束後完整可得
+  subagent_detail_empty:
+    en: Open a subagent card to review its reasoning.
+    zh-CN: 点开一张子代理卡片即可查看它的推理过程
+    zh-HK: 點開一張子代理卡片即可檢視它的推理過程
+  subagent_detail_loading:
+    en: Loading the subagent transcript…
+    zh-CN: 正在载入子代理记录…
+    zh-HK: 正在載入子代理記錄…
+  subagent_detail_failed:
+    en: "Could not load the subagent transcript: %{error}"
+    zh-CN: 无法载入子代理记录：%{error}
+    zh-HK: 無法載入子代理記錄：%{error}
   open_sidebar:
     en: Open sidebar
     zh-CN: 打开侧边栏
@@ -1283,6 +1303,10 @@ Workbench:
     en: Terminal
     zh-CN: 终端
     zh-HK: 終端
+  panel_subagent:
+    en: Subagent reasoning
+    zh-CN: 子代理推理
+    zh-HK: 子代理推理
   panel_unavailable:
     en: This panel is not available in the current build.
     zh-CN: 此面板在当前构建不可用。

@@ -9,6 +9,7 @@ mod runner;
 mod session;
 mod setup;
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::v1::SessionId as AcpSessionId;
@@ -58,6 +59,18 @@ pub enum AcpConnectOutcome {
     AuthenticationRequired(Box<AcpPendingConnection>),
 }
 
+/// 子代理**详情会话**注册表：子会话的协议 id → 内置事件流里的详情会话 id。
+///
+/// # 为什么需要一张共享表
+///
+/// `session/load` 一条子会话，作用是让 agent 把它登记进自己的会话表 —— OpenCode
+/// 的 `ACPSession` 正因如此才会转发它的 `session/update`（未登记的子会话通知会被
+/// `tryGet` 丢掉）。登记必须发生在请求**之前**，而通知处理跑在 ACP 的 dispatch
+/// loop 上、拿不到 `AcpConnection`，只能靠这块共享表判断「这条通知不是主会话的」。
+///
+/// 表的内容只活在本次连接内：连接被替换/收掉时随 `Arc` 一起消失。
+pub(crate) type AcpDetailSessions = Arc<Mutex<HashMap<String, SessionId>>>;
+
 pub struct AcpConnection {
     pub(super) handle: tokio::runtime::Handle,
     pub(super) conn: ConnectionTo<Agent>,
@@ -70,6 +83,8 @@ pub struct AcpConnection {
     ///
     /// 详见 [`AcpConnection::begin_history_replay`]。
     pub(super) history_replay: Arc<Mutex<Option<TurnId>>>,
+    /// 已被登记为「子代理详情会话」的子会话；见 [`AcpDetailSessions`]。
+    pub(super) detail_sessions: AcpDetailSessions,
     pub(super) prompt_timeout: std::time::Duration,
     pub(super) agent_id: String,
     pub(super) agent_name: String,
@@ -291,6 +306,17 @@ impl AcpConnection {
             *replay = None;
         }
     }
+
+    /// 这条子会话是否已经被登记成详情会话。
+    ///
+    /// 视图用它避免对同一张卡片重复 `session/load` —— 每 load 一次，agent 就会把
+    /// 整段子代理历史重放一遍，重复触发既浪费也刷屏。
+    pub fn is_detail_session_registered(&self, acp_session_id: &str) -> bool {
+        self.detail_sessions
+            .lock()
+            .is_ok_and(|sessions| sessions.contains_key(acp_session_id))
+    }
+
 
     pub async fn set_model(
         &self,

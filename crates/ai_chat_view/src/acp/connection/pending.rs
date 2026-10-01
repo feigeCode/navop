@@ -25,6 +25,8 @@ pub struct AcpPendingConnection {
     pub(super) active_turn: Arc<Mutex<Option<AcpTurnTracker>>>,
     /// 历史回放窗口；登录完成后要带进 [`AcpConnection`]，否则通知层认不出回放。
     pub(super) history_replay: Arc<Mutex<Option<TurnId>>>,
+    /// 子代理详情会话注册表；登录完成后同样要带过去。
+    pub(super) detail_sessions: super::AcpDetailSessions,
     pub(super) workspace_root: PathBuf,
     pub(super) config: AcpAgentConfig,
     pub(super) methods: Vec<AuthMethodId>,
@@ -70,6 +72,7 @@ impl AcpPendingConnection {
             state: self.state,
             active_turn: self.active_turn,
             history_replay: self.history_replay,
+            detail_sessions: self.detail_sessions,
             prompt_timeout: self.config.timeouts.prompt,
             agent_id: self.config.id.to_string(),
             agent_name: self.config.name.to_string(),

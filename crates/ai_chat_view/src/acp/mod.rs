@@ -23,6 +23,7 @@ mod provider;
 mod public_mcp_approval;
 mod state;
 mod sessions;
+mod subagent;
 mod translate;
 mod turn;
 #[cfg(test)]
@@ -72,5 +73,9 @@ pub use probe::probe_agent_blocking;
 pub(crate) use sessions::{
     AcpSessionOpen, AcpSessionSummary, acp_session_list_supported, acp_session_open_kind,
     acp_session_summaries,
+};
+pub(crate) use subagent::{
+    detail_session_id_for, detail_session_uid_for, detail_turn_id_for, is_detail_session_id,
+    subagent_link_from_observation,
 };
 pub(crate) use state::{AcpSessionState, AcpUsage};

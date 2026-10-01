@@ -40,6 +40,13 @@ pub enum DefaultAgentChatPanelEvent {
     RestoreTurn { session_id: String, turn_id: String },
     /// 用户点了改动摘要里的某个文件。宿主据此在审阅面板里打开它。
     OpenFileInReview { path: String },
+    /// 用户点了子代理卡片上的「查看推理过程」。宿主据此把子代理详情面板切到前台。
+    SubagentDetailRequested {
+        acp_session_id: String,
+        title: String,
+    },
+    /// 某条子代理详情的转录有了新内容。详情面板据此重绘。
+    SubagentDetailUpdated { detail_session_id: String },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -314,6 +321,32 @@ impl DefaultAgentChatPanel {
                 view.set_restorable_turns(session_id, turn_ids, cx);
             });
         }
+    }
+
+    /// 取一份子代理详情转录的快照：`(修订号, 是否有失败文案, 消息, 失败文案)`。
+    ///
+    /// 返回**owned** 数据是刻意的，不是图省事：详情面板要在自己的 `render` 里同时
+    /// 拿到消息与 `cx`，而 `entity.read(cx)` 借出的切片会一直占着 `cx`，没法再交给
+    /// 需要 `&mut App` 的 `render_messages`。面板侧用修订号做去重，所以这份克隆只在
+    /// 转录真的变了时才发生。
+    ///
+    /// 内层视图还没建好时返回 `None`（provider 事件会整块重建它）。
+    pub fn subagent_detail_snapshot(
+        &self,
+        detail_session_id: &str,
+        cx: &App,
+    ) -> Option<(u64, bool, Vec<crate::ChatMessageUI>, Option<String>)> {
+        let view = self.view.as_ref()?.read(cx);
+        let (revision, has_error) = view.subagent_detail_token(detail_session_id);
+        Some((
+            revision,
+            has_error,
+            view.subagent_detail_messages(detail_session_id)
+                .map(<[crate::ChatMessageUI]>::to_vec)
+                .unwrap_or_default(),
+            view.subagent_detail_error(detail_session_id)
+                .map(str::to_owned),
+        ))
     }
 
     fn subscribe_provider_events(&mut self, cx: &mut Context<Self>) {
@@ -750,6 +783,21 @@ impl DefaultAgentChatPanel {
                                             cx.emit(DefaultAgentChatPanelEvent::OpenFileInReview {
                                                 path: path.clone(),
                                             });
+                                        }
+                                        AgentChatViewEvent::SubagentDetailRequested { acp_session_id, title } => {
+                                            cx.emit(
+                                                DefaultAgentChatPanelEvent::SubagentDetailRequested {
+                                                    acp_session_id: acp_session_id.clone(),
+                                                    title: title.clone(),
+                                                },
+                                            );
+                                        }
+                                        AgentChatViewEvent::SubagentDetailUpdated { detail_session_id } => {
+                                            cx.emit(
+                                                DefaultAgentChatPanelEvent::SubagentDetailUpdated {
+                                                    detail_session_id: detail_session_id.clone(),
+                                                },
+                                            );
                                         }
                                     }
                                 });

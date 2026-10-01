@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -22,7 +23,7 @@ use super::notifications::{NotificationContext, handle_notification};
 use super::outcome::finish_connect;
 use super::setup::{SetupOutcome, setup_connection};
 use super::{
-    AcpClientProviders, AcpConnectOutcome, connection_closed_error,
+    AcpClientProviders, AcpConnectOutcome, AcpDetailSessions, connection_closed_error,
     fail_connection_and_take_active_turn, transition_state,
 };
 
@@ -42,6 +43,11 @@ pub(super) struct ConnectShared {
     /// 通知处理跑在另一条任务上（ACP 的 dispatch loop），拿不到 `AcpConnection`，
     /// 只能靠这个共享槽位知道「现在收到的是 `session/load` 重放出来的历史」。
     pub(super) history_replay: Arc<Mutex<Option<TurnId>>>,
+    /// 子代理详情会话注册表；与 [`AcpConnection::detail_sessions`] 是同一个 `Arc`。
+    ///
+    /// 通知处理拿不到 `AcpConnection`（跑在 ACP 的 dispatch loop 上），只能靠这块
+    /// 共享表判断一条 `session/update` 是不是子代理详情会话的。
+    pub(super) detail_sessions: AcpDetailSessions,
     pub(super) workspace_root: PathBuf,
     pub(super) config: AcpAgentConfig,
     /// 调用方希望复用的 ACP 协议会话（上次这个内置会话用的那个）。
@@ -182,6 +188,7 @@ fn prepare_shared(
         state,
         active_turn: Arc::new(Mutex::new(None)),
         history_replay: Arc::new(Mutex::new(None)),
+        detail_sessions: Arc::new(Mutex::new(HashMap::new())),
         workspace_root,
         config: config.clone(),
         resume,

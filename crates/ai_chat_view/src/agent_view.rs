@@ -57,19 +57,23 @@ use crate::acp::{
     acp_elicitation_channel, acp_permission_channel, acp_public_mcp_approval_channel,
     acp_session_list_supported, acp_session_open_kind, acp_session_summaries,
     acquire_acp_permission_grant, build_acp_agent_entries, current_acp_tool_mode,
-    set_current_acp_tool_mode,
+    detail_session_id_for, is_detail_session_id, set_current_acp_tool_mode,
 };
 /// 仅后台探测路径使用（测试构建下探测被禁用以避免真实子进程）。
 #[cfg(not(test))]
 use crate::acp::{AcpAgentConfig, AcpProbeRecord, acp_probe_cache, probe_fingerprint};
+/// 仅测试用例使用：给子代理详情回放造一个合成轮次 id。
+#[cfg(test)]
+use crate::acp::detail_turn_id_for;
 use crate::acp_agent_config::{AcpAgentConfigEvent, acp_agent_config_notifier};
 use crate::agent_cards::{
-    ApproveToolCall, OpenFileInReview, PlanCardData, RejectToolCall, SelectAcpPermissionOption,
-    SubAgentCardData,
+    ApproveToolCall, OpenFileInReview, OpenSubagentDetail, PlanCardData, RejectToolCall,
+    SelectAcpPermissionOption, SubAgentCardData,
 };
 use crate::agent_skills::AgentSkillState;
 use crate::usage::{format_local_usage, model_context_window};
 use crate::agent_transcript::AgentTranscript;
+use crate::message::ChatMessageUI;
 use crate::bridge::build_runtime_from_llm_provider;
 use crate::code_block::{CodeBlockAction, CodeBlockActionRegistry};
 use crate::input::{
@@ -145,6 +149,25 @@ pub enum AgentChatViewEvent {
     OpenFileInReview {
         path: String,
     },
+    /// 用户点了子代理卡片上的「查看推理过程」：请求宿主把子代理详情面板切到前台。
+    ///
+    /// 视图只转发请求，面板建在哪、怎么开由宿主决定（与 [`Self::OpenFileInReview`] 同理）。
+    /// 数据本身不走这里——面板从面板层按 `detail_session_id` 现取，见
+    /// [`AgentChatView::subagent_detail_messages`]。
+    SubagentDetailRequested {
+        /// 子会话的**协议** id（`session/load` 的地址，也是面板的稳定标识）。
+        acp_session_id: String,
+        /// 卡片标题（工具调用标题），面板头部用它标明「看的是哪只子代理」。
+        title: String,
+    },
+    /// 子代理详情转录有了新内容：面板据此重绘。
+    ///
+    /// 单独一个事件而不是让面板 observe 整个聊天视图：主会话每个 token 都会
+    /// `cx.notify()`，observe 会把详情面板一起拖着重绘（一次 `render_messages`
+    /// 覆盖上千条消息），代价直接落在流式输出上。
+    SubagentDetailUpdated {
+        detail_session_id: String,
+    },
 }
 
 /// 根据模型选项构建对应运行时。
@@ -155,7 +178,18 @@ const MAX_CACHED_SESSION_TRANSCRIPTS: usize = 32;
 const MAX_RUNTIME_EVENT_BATCH_SIZE: usize = 64;
 
 fn runtime_event_matches_session(event: &RuntimeEvent, session_filter: Option<&SessionId>) -> bool {
-    session_filter.is_none_or(|session_id| event.session_id() == session_id)
+    session_filter.is_none_or(|session_id| {
+        event.session_id() == session_id
+            // 子代理详情会话的事件也归这条连接的泵：它们同属一个 agent 进程，只是
+            // 另一条会话。挡在这里等于把整段子代理推理丢掉 —— 而且丢得无声无息。
+            || is_detail_session_id(&event.session_id().to_string())
+    })
+}
+
+/// 这条事件是不是子代理详情会话的？是就返回它的详情会话 id。
+fn subagent_detail_uid(event: &RuntimeEvent) -> Option<String> {
+    let session_id = event.session_id().to_string();
+    is_detail_session_id(&session_id).then_some(session_id)
 }
 
 /// 一批已就绪的事件，外加「取这批的过程中被通道挤掉了多少条」。
@@ -1104,6 +1138,19 @@ pub struct AgentChatView {
     session_transcripts: HashMap<String, AgentTranscript>,
     /// 非当前会话转录的 LRU 顺序，队首为最久未访问项。
     session_transcript_order: VecDeque<String>,
+    /// 子代理**详情会话**的转录，键是详情会话 id（`acp-sub:<子会话 id>`）。
+    ///
+    /// 与 [`Self::session_transcripts`] 分开存是有意的：那个 map 装的是「别的**真实**
+    /// 会话」，会进 LRU、会落盘、会出现在会话列表里；详情会话只是某张卡片的一次回放，
+    /// 既不落盘也不该被 LRU 挤掉——用户正看着它。
+    subagent_details: HashMap<String, AgentTranscript>,
+    /// 详情会话加载失败的文案，键同 [`Self::subagent_details`]。
+    subagent_detail_errors: HashMap<String, String>,
+    /// 已经发出过 `session/load` 的子会话协议 id。
+    ///
+    /// 用于防重复：每 load 一次，agent 就把整段子代理历史重放一遍；子代理动辄上千条
+    /// part，重复触发既浪费也会把转录灌花。
+    subagent_loads: HashSet<String>,
     /// 当前 Runtime 中仍在执行的会话集合。
     running_sessions: HashSet<String>,
     /// 本地 stop 后不再允许影响后续轮次状态的旧 turn。
@@ -1478,6 +1525,9 @@ impl AgentChatView {
             live_sessions,
             session_transcripts: HashMap::new(),
             session_transcript_order: VecDeque::new(),
+            subagent_details: HashMap::new(),
+            subagent_detail_errors: HashMap::new(),
+            subagent_loads: HashSet::new(),
             running_sessions,
             ignored_local_turns: HashSet::new(),
             local_operation_generations: HashMap::new(),
@@ -1610,6 +1660,18 @@ impl AgentChatView {
             let path = action.path.clone();
             let _ = view.update(cx, |_this, cx| {
                 cx.emit(AgentChatViewEvent::OpenFileInReview { path });
+            });
+        });
+
+        // 子代理卡片上的「查看推理过程」：卡片只知道子会话的协议 id 与标题，
+        // 拉历史、开面板都由视图与宿主分别接手。
+        let view = cx.weak_entity();
+        let app: &mut App = cx;
+        app.on_action(move |action: &OpenSubagentDetail, cx: &mut App| {
+            let acp_session_id = action.acp_session_id.clone();
+            let title = action.title.clone();
+            let _ = view.update(cx, |this, cx| {
+                this.open_subagent_detail(acp_session_id, title, cx);
             });
         });
     }
@@ -2988,6 +3050,16 @@ impl AgentChatView {
         defer_budget: bool,
         cx: &mut Context<Self>,
     ) {
+        // 子代理详情会话：与当前对话无关的一段回放，走自己的通路。
+        //
+        // 必须在这里就分流，不能等到下面按会话归属：详情会话既不是 `current_session`，
+        // 也不属于任何一轮，落进 `session_transcripts` 就会被当成「另一条真实会话」——
+        // 于是进 LRU、被 `trim_session_transcripts` 挤掉，还可能被误当成一条要落盘的
+        // 会话。它只是某张卡片的一次回放。
+        if let Some(detail_uid) = subagent_detail_uid(&event) {
+            self.apply_subagent_detail_event(&detail_uid, &event, defer_budget, cx);
+            return;
+        }
         let backend = self.backend;
         if backend == Backend::Local {
             let turn_id = runtime_event_turn_id(&event).clone();
@@ -3177,6 +3249,176 @@ impl AgentChatView {
             }
         }
         cx.notify();
+    }
+
+    /// 把一条子代理详情事件落进它自己的转录。
+    ///
+    /// 详情转录是**独立**的一份 [`AgentTranscript`]：它不参与当前会话判定、不碰
+    /// running 状态、不落盘、也不进会话列表。唯一的外向动作是通知面板重绘。
+    fn apply_subagent_detail_event(
+        &mut self,
+        detail_uid: &str,
+        event: &RuntimeEvent,
+        defer_budget: bool,
+        cx: &mut Context<Self>,
+    ) {
+        // 加载成功就别再挂着上一次的失败文案。
+        self.subagent_detail_errors.remove(detail_uid);
+        let resources = self.resources.clone();
+        let changed = {
+            let transcript = self
+                .subagent_details
+                .entry(detail_uid.to_string())
+                .or_insert_with(|| {
+                    let mut transcript = AgentTranscript::new();
+                    transcript.set_resource_context(&resources);
+                    transcript
+                });
+            transcript.set_budget_deferred(defer_budget);
+            let changed = transcript.apply(event);
+            transcript.flush_deferred_budget();
+            changed
+        };
+        if !changed {
+            return;
+        }
+        cx.emit(AgentChatViewEvent::SubagentDetailUpdated {
+            detail_session_id: detail_uid.to_string(),
+        });
+        cx.notify();
+    }
+
+    /// 用户点了子代理卡片上的「查看推理过程」。
+    ///
+    /// 交互是**懒加载**的：每 `session/load` 一次，agent 就把整段子代理历史重放一遍。
+    /// 子代理动辄上千条 part，为每张卡片都在结束时自动拉一遍，代价和噪声都不划算；
+    /// 用户点了才拉，才符合「我想看看这只子代理干了什么」的意图。
+    pub(crate) fn open_subagent_detail(
+        &mut self,
+        acp_session_id: String,
+        title: String,
+        cx: &mut Context<Self>,
+    ) {
+        cx.emit(AgentChatViewEvent::SubagentDetailRequested {
+            acp_session_id: acp_session_id.clone(),
+            title,
+        });
+        self.ensure_subagent_detail_loaded(acp_session_id, cx);
+        cx.notify();
+    }
+
+    /// 拉取（且只拉一次）某条子会话的完整推理。
+    fn ensure_subagent_detail_loaded(&mut self, acp_session_id: String, cx: &mut Context<Self>) {
+        if self.backend != Backend::Acp {
+            return;
+        }
+        // 插进去失败说明已经在拉、或已经拉过。状态会一直留着：转录本来就缓存着，
+        // 再点一次只是切回那份缓存。
+        if !self.subagent_loads.insert(acp_session_id.clone()) {
+            return;
+        }
+        let Some(loader) = self.acp.as_ref().map(AcpConnection::detail_loader) else {
+            // 连接已经不在（断线 / 刚切走）：把标记撤回，等重连后再点还有机会。
+            self.subagent_loads.remove(&acp_session_id);
+            return;
+        };
+        // 已经登记过的子会话不需要再 load：转录还在缓存里，重复 load 只会重放一遍。
+        if self
+            .acp
+            .as_ref()
+            .is_some_and(|acp| acp.is_detail_session_registered(&acp_session_id))
+        {
+            return;
+        }
+        let detail_uid = detail_session_id_for(&acp_session_id);
+        let cwd = self.acp_detail_cwd();
+        cx.spawn(async move |this, cx| {
+            let result = loader
+                .load(agent_client_protocol::schema::v1::SessionId::new(
+                    acp_session_id,
+                ), cwd)
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.finish_subagent_detail_load(&detail_uid, result, cx);
+            });
+        })
+        .detach();
+    }
+
+    fn finish_subagent_detail_load(
+        &mut self,
+        detail_uid: &str,
+        result: anyhow::Result<()>,
+        cx: &mut Context<Self>,
+    ) {
+        match result {
+            Ok(()) => {
+                self.subagent_detail_errors.remove(detail_uid);
+            }
+            Err(error) => {
+                // 失败要让用户看见：卡片点得动、点完却一片空白，是最难排查的那种静默失败。
+                let message = t!(
+                    "AgentUi.subagent_detail_failed",
+                    error = error.to_string()
+                )
+                .to_string();
+                tracing::warn!(%error, detail = %detail_uid, "failed to load subagent detail");
+                self.subagent_detail_errors
+                    .insert(detail_uid.to_string(), message);
+            }
+        }
+        cx.emit(AgentChatViewEvent::SubagentDetailUpdated {
+            detail_session_id: detail_uid.to_string(),
+        });
+        cx.notify();
+    }
+
+    /// 详情会话的转录消息；面板渲染用。
+    pub(crate) fn subagent_detail_messages(&self, detail_session_id: &str) -> Option<&[ChatMessageUI]> {
+        self.subagent_details
+            .get(detail_session_id)
+            .map(|transcript| transcript.messages.as_slice())
+    }
+
+    /// 详情会话加载失败的文案；`None` 表示没失败（或还没结果）。
+    pub(crate) fn subagent_detail_error(&self, detail_session_id: &str) -> Option<&str> {
+        self.subagent_detail_errors
+            .get(detail_session_id)
+            .map(String::as_str)
+    }
+
+    /// 详情会话的状态令牌：`(转录修订号, 是否有失败文案)`。
+    ///
+    /// 详情面板靠它判断「要不要重新取一份快照」。直接把消息克隆过去虽然简单，但面板
+    /// 每次重绘都会克隆一遍整段转录（工具卡片里躺着几十 KB 的 JSON），光是鼠标划过
+    /// 就够呛。
+    pub(crate) fn subagent_detail_token(&self, detail_session_id: &str) -> (u64, bool) {
+        (
+            self.subagent_details
+                .get(detail_session_id)
+                .map(AgentTranscript::revision)
+                .unwrap_or(0),
+            self.subagent_detail_errors.contains_key(detail_session_id),
+        )
+    }
+
+    /// `session/load` 详情会话要用的工作目录。
+    ///
+    /// agent 按 cwd 定位会话（OpenCode 的 `session.get` 带 `directory` 参数），拿一个
+    /// 不相干的目录去 load 会直接查不到。所以优先用**当前 ACP 会话自己的** cwd；
+    /// 拿不到（当前会话不在已拉取的列表里）才退回工作区根目录——那是新建会话时用的
+    /// 目录，也是绝大多数情况下的正确答案。
+    fn acp_detail_cwd(&self) -> std::path::PathBuf {
+        self.acp
+            .as_ref()
+            .map(AcpConnection::protocol_session_id)
+            .and_then(|protocol_id| {
+                self.acp_sessions
+                    .iter()
+                    .find(|session| session.id == protocol_id)
+                    .map(|session| session.cwd.clone())
+            })
+            .unwrap_or_else(|| self.workspace_root.clone())
     }
 
     fn invalidate_unavailable_acp_connection(&mut self, cx: &mut Context<Self>) -> bool {
@@ -10946,6 +11188,90 @@ mod tests {
             assert!(texts.contains(&"历史上答过的话"));
             assert!(!texts.contains(&"别的会话的历史"));
             assert!(!texts.contains(&"不是回放"));
+        });
+    }
+
+    /// 事件泵必须放行**子代理详情会话**的事件。
+    ///
+    /// 这条判据挡错一次，表现是「点了卡片、右侧面板一片空白」，而且日志里什么都不
+    /// 会留下：事件在进视图之前就被当成「别的会话的」丢掉了。
+    #[test]
+    fn the_event_pump_accepts_subagent_detail_sessions() {
+        let main = SessionId::from_string("acp:3f1a");
+        let detail = SessionId::from_string("acp-sub:ses_child");
+
+        let detail_event = RuntimeEvent::AssistantMessage {
+            session_id: detail,
+            turn_id: detail_turn_id_for("ses_child"),
+            text: "子代理的推理".into(),
+        };
+        let other_event = RuntimeEvent::AssistantMessage {
+            session_id: SessionId::from_string("acp:other"),
+            turn_id: TurnId::from_string("t"),
+            text: "别的连接".into(),
+        };
+
+        assert!(
+            runtime_event_matches_session(&detail_event, Some(&main)),
+            "详情会话的事件同属这条连接，挡下来就等于整段推理静默丢失"
+        );
+        assert!(
+            !runtime_event_matches_session(&other_event, Some(&main)),
+            "别的连接的事件仍然要挡"
+        );
+        // 没有过滤时一律放行（本地后端）。
+        assert!(runtime_event_matches_session(&other_event, None));
+    }
+
+    /// 详情事件必须落进**它自己**的转录，而不是主转录。
+    #[gpui::test]
+    fn subagent_detail_events_land_in_their_own_transcript(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        let detail_uid = view.update(cx, |view, cx| {
+            view.backend = Backend::Acp;
+            let detail_uid = detail_session_id_for("ses_child");
+            let main_before = view.transcript.messages.len();
+            view.apply_runtime_event(
+                RuntimeEvent::AssistantMessage {
+                    session_id: SessionId::from_string(detail_uid.clone()),
+                    turn_id: detail_turn_id_for("ses_child"),
+                    text: "子代理查了连接数".into(),
+                },
+                cx,
+            );
+            assert_eq!(
+                main_before,
+                view.transcript.messages.len(),
+                "详情回放不能灌进主转录"
+            );
+            detail_uid
+        });
+
+        view.read_with(cx, |view, _| {
+            let detail = view
+                .subagent_details
+                .get(&detail_uid)
+                .expect("详情事件要落进自己的转录");
+            assert!(
+                detail
+                    .messages
+                    .iter()
+                    .any(|message| message.content.contains("子代理查了连接数")),
+                "详情转录要带上回放的内容"
+            );
+            assert!(
+                !view.is_running,
+                "详情回放不是一轮，不能把界面带回「正在响应」"
+            );
+            assert!(
+                view.session_transcripts.is_empty(),
+                "详情会话不该被当成「另一条真实会话」缓存，那会被 LRU 挤掉"
+            );
         });
     }
 
