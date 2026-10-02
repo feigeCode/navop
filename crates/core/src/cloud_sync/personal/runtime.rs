@@ -6,9 +6,54 @@ use std::time::{Duration, Instant};
 
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 
+use std::fmt;
+
 use crate::settings::{PersonalSyncBackendKind, PersonalSyncSettings};
 
 use super::{PersonalSyncEvent, SyncPackageLayout, SyncStoreError};
+
+/// WebDAV 后端在运行时真正使用的连接参数。
+///
+/// `password` 是解密后的明文，只存在于内存中；为了不让它在日志里出现，
+/// 这个结构体手写了 `Debug`。
+#[derive(Clone, PartialEq, Eq)]
+pub struct PersonalWebDavRuntimeSettings {
+    pub url: String,
+    pub username: String,
+    password: String,
+}
+
+impl PersonalWebDavRuntimeSettings {
+    pub fn new(url: String, username: String, password: String) -> Self {
+        Self {
+            url,
+            username,
+            password,
+        }
+    }
+
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    pub fn username(&self) -> &str {
+        &self.username
+    }
+
+    pub fn password(&self) -> &str {
+        &self.password
+    }
+}
+
+impl fmt::Debug for PersonalWebDavRuntimeSettings {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PersonalWebDavRuntimeSettings")
+            .field("url", &self.url)
+            .field("username", &self.username)
+            .field("password", &"<redacted>")
+            .finish()
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PersonalSyncRuntimeConfig {
@@ -16,6 +61,8 @@ pub struct PersonalSyncRuntimeConfig {
     pub root: PathBuf,
     pub auto_sync: bool,
     pub git_auto_push: bool,
+    /// WebDAV 后端的连接参数；其他后端为 `None`。
+    pub webdav: Option<PersonalWebDavRuntimeSettings>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,18 +73,39 @@ pub enum PersonalSyncRuntimeError {
 
 pub fn build_personal_sync_runtime_config(
     settings: &PersonalSyncSettings,
+    webdav_password: Option<&str>,
 ) -> Result<PersonalSyncRuntimeConfig, PersonalSyncRuntimeError> {
+    let common = |root: Option<PathBuf>, webdav: Option<PersonalWebDavRuntimeSettings>| PersonalSyncRuntimeConfig {
+        backend: settings.backend,
+        root: root.unwrap_or_default(),
+        auto_sync: settings.auto_sync,
+        git_auto_push: settings.git.auto_push,
+        webdav,
+    };
+
+    if settings.backend == PersonalSyncBackendKind::Webdav {
+        let webdav = &settings.webdav;
+        if !webdav.is_complete() {
+            return Err(PersonalSyncRuntimeError::NotConfigured);
+        }
+        let Some(password) = webdav_password.map(str::trim).filter(|value| !value.is_empty())
+        else {
+            // 配置里存着密文，但没有可用主密钥去解开它。
+            return Err(PersonalSyncRuntimeError::NotConfigured);
+        };
+        return Ok(common(None, Some(PersonalWebDavRuntimeSettings::new(
+            webdav.url.trim().to_string(),
+            webdav.username.trim().to_string(),
+            password.to_string(),
+        ))));
+    }
+
     let path = settings.path.trim();
     if path.is_empty() {
         return Err(PersonalSyncRuntimeError::NotConfigured);
     }
 
-    Ok(PersonalSyncRuntimeConfig {
-        backend: settings.backend,
-        root: PathBuf::from(path),
-        auto_sync: settings.auto_sync,
-        git_auto_push: settings.git.auto_push,
-    })
+    Ok(common(Some(PathBuf::from(path)), None))
 }
 
 #[derive(Debug, Clone)]

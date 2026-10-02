@@ -3540,9 +3540,9 @@ Settings:
       zh-CN: 后端
       zh-HK: 後端
     backend_desc:
-      en: Folder works with local folders, iCloud Drive, OneDrive, and other synced directories; Git adds commit and push support.
-      zh-CN: 文件夹后端可用于本地文件夹、iCloud Drive、OneDrive 以及其他同步目录；Git 后端会增加提交和推送。
-      zh-HK: 資料夾後端可用於本機資料夾、iCloud Drive、OneDrive 以及其他同步目錄；Git 後端會增加提交和推送。
+      en: Folder works with local folders, iCloud Drive, OneDrive, and other synced directories; Git adds commit and push support; WebDAV uploads encrypted records to a WebDAV server such as Jianguoyun, Synology NAS, Nextcloud, or a self-hosted service.
+      zh-CN: 文件夹后端可用于本地文件夹、iCloud Drive、OneDrive 以及其他同步目录；Git 后端会增加提交和推送；WebDAV 后端会把加密后的记录上传到 WebDAV 服务（坚果云、群晖 NAS、Nextcloud 或自建服务）。
+      zh-HK: 資料夾後端可用於本機資料夾、iCloud Drive、OneDrive 以及其他同步目錄；Git 後端會增加提交和推送；WebDAV 後端會把加密後的記錄上傳到 WebDAV 服務（堅果雲、Synology NAS、Nextcloud 或自建服務）。
     path:
       en: Sync Path
       zh-CN: 同步路径
@@ -3571,6 +3571,50 @@ Settings:
       en: Push personal sync commits after Git backend writes.
       zh-CN: Git 后端写入后自动推送个人同步提交。
       zh-HK: Git 後端寫入後自動推送個人同步提交。
+    webdav_url:
+      en: WebDAV Server URL
+      zh-CN: WebDAV 服务器地址
+      zh-HK: WebDAV 伺服器位址
+    webdav_url_desc:
+      en: The collection that stores sync records, e.g. https://dav.jianguoyun.com/dav/navop/ (Jianguoyun), https://nas.example.com:5006/navop/ (Synology), https://cloud.example.com/remote.php/dav/files/USER/navop/ (Nextcloud).
+      zh-CN: 存放同步记录的目录地址，例如坚果云 https://dav.jianguoyun.com/dav/navop/、群晖 https://nas.example.com:5006/navop/、Nextcloud https://cloud.example.com/remote.php/dav/files/USER/navop/。
+      zh-HK: 存放同步記錄的目錄位址，例如堅果雲 https://dav.jianguoyun.com/dav/navop/、Synology https://nas.example.com:5006/navop/、Nextcloud https://cloud.example.com/remote.php/dav/files/USER/navop/。
+    webdav_username:
+      en: WebDAV Username
+      zh-CN: WebDAV 用户名
+      zh-HK: WebDAV 使用者名稱
+    webdav_username_desc:
+      en: Account name for the WebDAV server. Use an app password or application-specific token when the service provides one.
+      zh-CN: WebDAV 服务的账号名。若服务商支持应用专用密码，请使用应用专用密码而非账户密码。
+      zh-HK: WebDAV 服務的帳號名稱。若服務商支援應用程式專用密碼，請使用專用密碼而非帳戶密碼。
+    webdav_password:
+      en: WebDAV Password
+      zh-CN: WebDAV 密码
+      zh-HK: WebDAV 密碼
+    webdav_password_placeholder:
+      en: Password or app password
+      zh-CN: 密码或应用专用密码
+      zh-HK: 密碼或應用程式專用密碼
+    webdav_password_desc:
+      en: Required before Test or Sync Now can run. It is encrypted before being written to settings.json, and Basic auth credentials are sent over HTTPS only. If the service issues app passwords, use one instead of the account password.
+      zh-CN: 「测试」与「立即同步」需要三项配置齐全才能使用。密码在写入 settings.json 前会被加密，且仅通过 HTTPS 发送。若服务商提供应用专用密码，请使用它而非账户密码。
+      zh-HK: 「測試」與「立即同步」需要三項設定齊全才能使用。密碼在寫入 settings.json 前會被加密，且僅透過 HTTPS 傳送。若服務商提供應用程式專用密碼，請使用它而非帳戶密碼。
+    webdav_url_placeholder:
+      en: https://dav.example.com/dav/navop/
+      zh-CN: https://dav.example.com/dav/navop/
+      zh-HK: https://dav.example.com/dav/navop/
+    webdav_username_placeholder:
+      en: Account name on the WebDAV server
+      zh-CN: WebDAV 服务上的账号名
+      zh-HK: WebDAV 服務上的帳號名稱
+    webdav_show_password:
+      en: Show password
+      zh-CN: 显示密码
+      zh-HK: 顯示密碼
+    webdav_hide_password:
+      en: Hide password
+      zh-CN: 隐藏密码
+      zh-HK: 隱藏密碼
     status:
       en: Status
       zh-CN: 状态
@@ -3592,6 +3636,10 @@ Settings:
         en: Git
         zh-CN: Git
         zh-HK: Git
+      webdav:
+        en: WebDAV
+        zh-CN: WebDAV
+        zh-HK: WebDAV
     Provider:
       onet_cloud:
         en: Navop Cloud Sync
@@ -3638,6 +3686,14 @@ Settings:
         en: Paused after repeated failures
         zh-CN: 多次失败后已暂停
         zh-HK: 多次失敗後已暫停
+      webdav_auth_failed:
+        en: WebDAV authentication failed
+        zh-CN: WebDAV 认证失败
+        zh-HK: WebDAV 認證失敗
+      webdav_unreachable:
+        en: WebDAV server unreachable
+        zh-CN: WebDAV 服务无法访问
+        zh-HK: WebDAV 服務無法連線
 
   # 快捷键
   Shortcuts:

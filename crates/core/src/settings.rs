@@ -705,6 +705,7 @@ pub enum PersonalSyncBackendKind {
     #[default]
     Folder,
     Git,
+    Webdav,
 }
 
 impl PersonalSyncBackendKind {
@@ -712,12 +713,14 @@ impl PersonalSyncBackendKind {
         match self {
             Self::Folder => "folder",
             Self::Git => "git",
+            Self::Webdav => "webdav",
         }
     }
 
     pub fn from_str(value: &str) -> Self {
         match value {
             "git" => Self::Git,
+            "webdav" => Self::Webdav,
             _ => Self::Folder,
         }
     }
@@ -771,6 +774,8 @@ pub struct PersonalSyncSettings {
     pub auto_sync: bool,
     #[serde(default)]
     pub git: PersonalGitSyncSettings,
+    #[serde(default)]
+    pub webdav: PersonalWebdavSyncSettings,
 }
 
 impl Default for PersonalSyncSettings {
@@ -780,7 +785,43 @@ impl Default for PersonalSyncSettings {
             path: String::new(),
             auto_sync: default_true(),
             git: PersonalGitSyncSettings::default(),
+            webdav: PersonalWebdavSyncSettings::default(),
         }
+    }
+}
+
+/// WebDAV 个人同步后端的连接配置。
+///
+/// `password` 在落盘前由调用方经 `cloud_sync::personal::seal_webdav_password` 加密，
+/// 这里保存的是 `ENC:` 前缀密文而非明文；读取时用 `open_webdav_password` 还原。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersonalWebdavSyncSettings {
+    /// WebDAV 根目录地址，例如 `https://dav.jianguoyun.com/dav/navop/`
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub username: String,
+    /// 加密后的密码（或历史遗留的明文，读取时自动兼容）。
+    #[serde(default)]
+    pub password: String,
+}
+
+impl Default for PersonalWebdavSyncSettings {
+    fn default() -> Self {
+        Self {
+            url: String::new(),
+            username: String::new(),
+            password: String::new(),
+        }
+    }
+}
+
+impl PersonalWebdavSyncSettings {
+    /// 三个字段都非空才算配置完整，此时 `test_connection` / `sync_now` 才可用。
+    pub fn is_complete(&self) -> bool {
+        !self.url.trim().is_empty()
+            && !self.username.trim().is_empty()
+            && !self.password.is_empty()
     }
 }
 

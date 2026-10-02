@@ -46,6 +46,12 @@ pub enum SyncStoreError {
     GitMergeConflict,
     Io(String),
     Parse(String),
+    /// WebDAV 凭据被服务端拒绝（401 / 403）。
+    WebdavAuthFailed,
+    /// WebDAV 服务端不可达：DNS 失败、连接超时、TLS 失败等。
+    WebdavUnreachable(String),
+    /// 服务端返回了非预期状态码，且不属于「未认证」类。
+    WebdavStatus { status: u16, message: String },
 }
 
 impl fmt::Display for SyncStoreError {
@@ -62,6 +68,14 @@ impl fmt::Display for SyncStoreError {
             Self::GitMergeConflict => write!(f, "git merge conflict"),
             Self::Io(message) => write!(f, "personal sync io error: {message}"),
             Self::Parse(message) => write!(f, "personal sync parse error: {message}"),
+            Self::WebdavAuthFailed => write!(
+                f,
+                "WebDAV authentication failed: check the server URL, username and password"
+            ),
+            Self::WebdavUnreachable(message) => write!(f, "WebDAV server unreachable: {message}"),
+            Self::WebdavStatus { status, message } => {
+                write!(f, "WebDAV request failed ({status}): {message}")
+            }
         }
     }
 }
@@ -89,6 +103,10 @@ pub enum SyncStoreHealth {
     GitAuthRequired,
     GitMergeConflict,
     PausedAfterRepeatedFailures,
+    /// WebDAV 用户名或密码被服务端拒绝。
+    WebdavAuthFailed,
+    /// WebDAV 服务端无法访问。
+    WebdavUnreachable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,6 +120,13 @@ impl SyncStoreStatus {
         Self {
             health: SyncStoreHealth::Ready,
             message: None,
+        }
+    }
+
+    pub fn ready_with_message(message: impl Into<String>) -> Self {
+        Self {
+            health: SyncStoreHealth::Ready,
+            message: Some(message.into()),
         }
     }
 }
@@ -124,6 +149,8 @@ impl SyncStoreHealth {
             Self::GitAuthRequired => "git_auth_required",
             Self::GitMergeConflict => "git_merge_conflict",
             Self::PausedAfterRepeatedFailures => "paused_after_repeated_failures",
+            Self::WebdavAuthFailed => "webdav_auth_failed",
+            Self::WebdavUnreachable => "webdav_unreachable",
         }
     }
 
@@ -135,6 +162,8 @@ impl SyncStoreHealth {
             "git_auth_required" => Self::GitAuthRequired,
             "git_merge_conflict" => Self::GitMergeConflict,
             "paused_after_repeated_failures" => Self::PausedAfterRepeatedFailures,
+            "webdav_auth_failed" => Self::WebdavAuthFailed,
+            "webdav_unreachable" => Self::WebdavUnreachable,
             _ => Self::NotConfigured,
         }
     }

@@ -321,7 +321,21 @@
   - **验证方式**：如何确认这次处理是对的
   - **适用范围**：影响哪些模块、页面、链路或命令
 
+- **标题**：GPUI 事件订阅回调要求 `'static`，外层闭包里的局部变量必须 `move` 捕获
+- **触发信号**：编译报 `error[E0373]: closure may outlive the current function, but it borrows 'x', which is owned by the current function`，且报错点在 `cx.subscribe(...)` / `cx.observe(...)` 的回调上。
+- **根因 / 约束**：gpui 的 `App::subscribe` / `observe` 回调要求 `F: 'static`。当回调定义在一个 `move` 初始化闭包内部（典型场景：`window.use_keyed_state(key, cx, move |window, cx| { ... })` 里创建 Entity 并订阅自己的事件）时，若回调体只**读取**外层的局部变量，编译器会按引用捕获；这个引用指向初始化闭包的栈帧，不满足 `'static`。注意 `input` 这类由回调签名传入的参数（`&mut Entity<T>`）不算捕获，因此仓库里不涉及外层局部变量的既有写法不会暴露这个问题。
+- **正确做法**：给订阅回调加 `move`，让需要的外层变量按值捕获。若该变量是 `&'static str`、`String`、`Entity<T>` 这类本身可直接放进 `'static` 环境的值，`move` 即可；随后在回调体内再开的内层闭包（如 `update_and_save(cx, |settings| ...)`）会按引用借用这个已被按值捕获的变量，因外层已 `'static` 而不再是问题。反之，若变量是 `&mut Window` 之类借用型且生命周期短于回调，就不能靠 `move` 解决，要改为把所需数据先 `clone` 成拥有型再捕获。
+- **验证方式**：`cargo check -p main` 足以暴露（borrowck 在 type check 之后运行，type check 全绿不代表 borrowck 全绿）；若只想快速验证某个 view，可在 `use_keyed_state` 内故意引用一个外层局部变量看是否复现 E0373。
+- **适用范围**：所有在 `use_keyed_state` / `cx.new` 初始化闭包里订阅自身事件并引用外层局部变量的 GPUI 设置项与自定义组件。
+
 #### 已沉淀经验
+
+- **标题**：发布构建会被 Rust 工具链漂移打断，`setup-rust-toolchain` 默认带 `-D warnings`
+- **触发信号**：CI 发布构建报 `-D deprecated` / `-D warnings` 相关失败，且失败点在自己这次改动之外的既有代码里；典型如 `use of deprecated method ... fetch_update: renamed to try_update`。
+- **根因 / 约束**：`.github/workflows/release.yml` 调 `actions-rust-lang/setup-rust-toolchain@v1` 时没有覆盖 `rustflags`，而该 action 的**默认值就是 `-D warnings`**；工具链又未固定版本（跟随最新 stable）。因此 Rust 一次常规弃用就会让发布构建整体变红。仓库自身 `[workspace.lints.rust]` 只设了 `unexpected_cfgs`，`-D warnings` 不来自仓库配置。
+- **正确做法**：按编译器给出的建议改掉弃用点（保持签名与语义不变），不要为了绕过而给 workflow 加 `rustflags: ""` —— 那会永久关闭整个发布链路的告警。修完顺手 `grep -rn "<弃用 API>" --include=*.rs` 全仓扫一遍同类用法。
+- **验证方式**：`script/build-windows-rdp-probe.ps1` 是很好的快速反馈点——它在正式构建前就会 `cargo build/test` 编译 `one-core`、`windows-rdp-probe`、`windows_rdp_host`、`remote_desktop_view`；它通过后再看第 17 步 `Build release binary (Windows)`。
+- **适用范围**：所有走 release.yml 的发布构建（6 个平台都受影响）；新增平台或新 Rust stable 升级后优先怀疑这一类。
 
 - **标题**：扩展机制收敛时先做全仓 + 外部仓库死代码审计，`extension-api` 不是孤儿而是 WIT 契约宿主
 - **触发信号**：试图删除某个 extension-* crate 或“统一扩展机制”时，凭 `rg` 在 workspace 内没找到 `use extension_api` 就判定它是死 crate；或看到 `extension-host/src/runtime.rs` 的 `IpcExtensionRuntime`/`ComponentExtensionRuntime`/`ExtensionRuntimeFactory` 而以为它是统一运行时核心。

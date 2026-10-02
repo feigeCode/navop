@@ -478,7 +478,7 @@ impl RemoteDesktopSurface {
 fn next_surface_id() -> usize {
     static NEXT_SURFACE_ID: AtomicUsize = AtomicUsize::new(0);
     NEXT_SURFACE_ID
-        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |id| id.checked_add(1))
+        .try_update(Ordering::SeqCst, Ordering::SeqCst, |id| id.checked_add(1))
         .expect("remote desktop surface identifier space exhausted")
 }
 

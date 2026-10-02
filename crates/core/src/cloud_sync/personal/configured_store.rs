@@ -1,19 +1,23 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
+use gpui::http_client::HttpClient;
 
 use crate::cloud_sync::models::CloudSyncData;
 use crate::settings::PersonalSyncBackendKind;
 
 use super::{
     CommandGitRunner, DirectorySyncStore, GitRunner, GitSyncOptions, GitSyncStore,
-    PersonalSyncStore, SyncDeviceId, SyncStoreError, SyncStoreLock, SyncStoreStatus,
+    PersonalSyncStore, PersonalWebDavRuntimeSettings, SyncDeviceId, SyncStoreError, SyncStoreLock,
+    SyncStoreStatus, WebDavCredentials, WebDavSyncStore,
 };
 
 #[derive(Clone)]
 pub enum ConfiguredPersonalSyncStore<R = CommandGitRunner> {
     Folder(DirectorySyncStore),
     Git(GitSyncStore<R>),
+    Webdav(WebDavSyncStore),
 }
 
 impl ConfiguredPersonalSyncStore<CommandGitRunner> {
@@ -23,12 +27,15 @@ impl ConfiguredPersonalSyncStore<CommandGitRunner> {
 
     pub fn from_runtime_config(
         config: &super::PersonalSyncRuntimeConfig,
-    ) -> ConfiguredPersonalSyncStore<CommandGitRunner> {
+        http: Arc<dyn HttpClient>,
+    ) -> Result<ConfiguredPersonalSyncStore<CommandGitRunner>, SyncStoreError> {
         Self::from_backend(
             config.backend,
             config.root.clone(),
             CommandGitRunner,
             config.git_auto_push,
+            config.webdav.clone(),
+            http,
         )
     }
 }
@@ -37,15 +44,33 @@ impl<R> ConfiguredPersonalSyncStore<R>
 where
     R: GitRunner,
 {
+    #[allow(clippy::too_many_arguments)]
     pub fn from_backend(
         backend: PersonalSyncBackendKind,
         root: PathBuf,
         runner: R,
         git_auto_push: bool,
-    ) -> Self {
+        webdav: Option<PersonalWebDavRuntimeSettings>,
+        http: Arc<dyn HttpClient>,
+    ) -> Result<Self, SyncStoreError> {
         match backend {
-            PersonalSyncBackendKind::Folder => Self::Folder(DirectorySyncStore::new(root)),
-            PersonalSyncBackendKind::Git => Self::new_git(root, runner, git_auto_push),
+            PersonalSyncBackendKind::Folder => Ok(Self::Folder(DirectorySyncStore::new(root))),
+            PersonalSyncBackendKind::Git => {
+                Ok(Self::new_git(root, runner, git_auto_push))
+            }
+            PersonalSyncBackendKind::Webdav => {
+                let Some(settings) = webdav else {
+                    return Err(SyncStoreError::NotConfigured);
+                };
+                Ok(Self::Webdav(WebDavSyncStore::new(
+                    http,
+                    WebDavCredentials {
+                        url: settings.url().to_string(),
+                        username: settings.username().to_string(),
+                        password: settings.password().to_string(),
+                    },
+                )?))
+            }
         }
     }
 
@@ -60,6 +85,7 @@ where
     pub async fn flush(&self) -> Result<(), SyncStoreError> {
         match self {
             Self::Folder(_) => Ok(()),
+            Self::Webdav(_) => Ok(()),
             Self::Git(store) => store.flush().await,
         }
     }
@@ -74,6 +100,7 @@ where
         match self {
             Self::Folder(store) => store.backend_id(),
             Self::Git(store) => store.backend_id(),
+            Self::Webdav(store) => store.backend_id(),
         }
     }
 
@@ -81,6 +108,7 @@ where
         match self {
             Self::Folder(store) => store.probe().await,
             Self::Git(store) => store.probe().await,
+            Self::Webdav(store) => store.probe().await,
         }
     }
 
@@ -92,6 +120,7 @@ where
         match self {
             Self::Folder(store) => store.list_records(data_type, since).await,
             Self::Git(store) => store.list_records(data_type, since).await,
+            Self::Webdav(store) => store.list_records(data_type, since).await,
         }
     }
 
@@ -103,6 +132,7 @@ where
         match self {
             Self::Folder(store) => store.upsert_record(record, expected_version).await,
             Self::Git(store) => store.upsert_record(record, expected_version).await,
+            Self::Webdav(store) => store.upsert_record(record, expected_version).await,
         }
     }
 
@@ -123,6 +153,11 @@ where
                     .tombstone_record(data_type, id, expected_version)
                     .await
             }
+            Self::Webdav(store) => {
+                store
+                    .tombstone_record(data_type, id, expected_version)
+                    .await
+            }
         }
     }
 
@@ -130,6 +165,7 @@ where
         match self {
             Self::Folder(store) => store.acquire_lock(owner).await,
             Self::Git(store) => store.acquire_lock(owner).await,
+            Self::Webdav(store) => store.acquire_lock(owner).await,
         }
     }
 }
