@@ -965,6 +965,18 @@ Table:
     en: Loading table structure…
     zh-CN: 正在加载表结构…
     zh-HK: 正在載入表結構…
+  refresh_structure:
+    en: Refresh table structure
+    zh-CN: 刷新表结构
+    zh-HK: 刷新表結構
+  refresh_discard_changes_prompt:
+    en: Refreshing will discard unsaved changes in this designer.
+    zh-CN: 刷新会放弃当前设计器中未保存的更改。
+    zh-HK: 刷新會放棄目前設計器中未儲存的變更。
+  discard_and_refresh:
+    en: Discard and refresh
+    zh-CN: 放弃并刷新
+    zh-HK: 放棄並刷新
   load_structure_failed:
     en: "Failed to load table structure: %{error}"
     zh-CN: "加载表结构失败：%{error}"

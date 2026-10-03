@@ -178,8 +178,7 @@ pub(crate) fn build_table_design_from_metadata(
             let parsed = plugin
                 .map(|plugin| plugin.parse_column_type(&col.data_type))
                 .unwrap_or_else(|| fallback_parse_column_type(&col.data_type));
-            let primary_key_count =
-                columns.iter().filter(|col| col.is_primary_key).count();
+            let primary_key_count = columns.iter().filter(|col| col.is_primary_key).count();
             column_info_to_definition(database_type.clone(), col, parsed, primary_key_count)
         })
         .collect();
@@ -405,30 +404,42 @@ enum StructureLoadReason {
     InitialOpen,
     /// 保存成功后按最新结构重载。
     AfterSave,
+    /// 用户在列/索引工具栏主动刷新结构。
+    ManualRefresh,
 }
 
 /// 表结构加载态。
 ///
-/// 只有首次打开既有表时整块面板换成加载中，因为那时候列、索引、表信息都
-/// 还没回来，直接渲染表单就是一片空白；保存后的重载留在原地刷新，闪一下
-/// 反而更晕。
+/// 首次打开和手动刷新都会把整块面板换成加载中：前者还没有结构可显示，
+/// 后者需要明确表达正在从数据库重建当前表单。保存后的自动重载留在原地，
+/// 避免表单闪烁。
 #[derive(Default)]
 struct StructureLoadState {
     loading: bool,
+    refreshing: bool,
 }
 
 impl StructureLoadState {
     fn begin(&mut self, reason: StructureLoadReason) {
-        self.loading = reason == StructureLoadReason::InitialOpen;
+        self.loading = matches!(
+            reason,
+            StructureLoadReason::InitialOpen | StructureLoadReason::ManualRefresh
+        );
+        self.refreshing = true;
     }
 
     /// 加载结束（成功或失败都要调，否则面板会一直停在加载中）。
     fn finish(&mut self) {
         self.loading = false;
+        self.refreshing = false;
     }
 
     fn is_loading(&self) -> bool {
         self.loading
+    }
+
+    fn is_refreshing(&self) -> bool {
+        self.refreshing
     }
 }
 
@@ -511,16 +522,18 @@ impl TableDesigner {
             )
         });
 
+        let can_refresh_structure = config.table_name.is_some();
         let columns_editor = cx.new(|cx| {
             ColumnsEditor::new(
                 config.database_type.clone(),
                 charsets.clone(),
                 column_editor_capabilities,
+                can_refresh_structure,
                 window,
                 cx,
             )
         });
-        let indexes_editor = cx.new(|cx| IndexesEditor::new(window, cx));
+        let indexes_editor = cx.new(|cx| IndexesEditor::new(can_refresh_structure, window, cx));
 
         let sql_preview_input = cx.new(|cx| {
             EditorState::new(window, cx)
@@ -580,16 +593,18 @@ impl TableDesigner {
         let cols_sub = cx.subscribe_in(
             &columns_editor,
             window,
-            |this, _, _: &ColumnsEditorEvent, window, cx| {
-                this.schedule_preview_refresh(window, cx);
+            |this, _, event: &ColumnsEditorEvent, window, cx| match event {
+                ColumnsEditorEvent::Changed => this.schedule_preview_refresh(window, cx),
+                ColumnsEditorEvent::RefreshRequested => this.refresh_structure(window, cx),
             },
         );
 
         let idx_sub = cx.subscribe_in(
             &indexes_editor,
             window,
-            |this, _, _: &IndexesEditorEvent, window, cx| {
-                this.schedule_preview_refresh(window, cx);
+            |this, _, event: &IndexesEditorEvent, window, cx| match event {
+                IndexesEditorEvent::Changed => this.schedule_preview_refresh(window, cx),
+                IndexesEditorEvent::RefreshRequested => this.refresh_structure(window, cx),
             },
         );
 
@@ -1188,6 +1203,57 @@ impl TableDesigner {
         self.build_and_maybe_execute(design, column_renames, success_behavior, window, cx);
     }
 
+    /// 从数据库重新读取当前表结构。
+    ///
+    /// 工具栏在列/索引子编辑器里，但元数据请求和加载状态归表设计器所有，
+    /// 这样两个 tab 共享同一个 loading 生命周期和查询路径。
+    fn refresh_structure(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.config.table_name.is_none() || self.executing || self.structure_load.is_refreshing()
+        {
+            return;
+        }
+
+        if self.has_unsaved_changes(cx) {
+            self.confirm_refresh_structure(window, cx);
+            return;
+        }
+
+        self.load_table_structure(StructureLoadReason::ManualRefresh, cx);
+    }
+
+    fn confirm_refresh_structure(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let designer_entity = cx.entity().clone();
+
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let refresh_entity = designer_entity.clone();
+            let footer = DialogFooter::new().children(vec![
+                Button::new("cancel")
+                    .label(t!("Common.cancel").to_string())
+                    .on_click(move |_, window, cx| {
+                        window.close_dialog(cx);
+                    })
+                    .into_any_element(),
+                Button::new("discard-and-refresh")
+                    .label(t!("Table.discard_and_refresh").to_string())
+                    .danger()
+                    .on_click(move |_, window, cx| {
+                        window.close_dialog(cx);
+                        refresh_entity.update(cx, |designer, cx| {
+                            designer.load_table_structure(StructureLoadReason::ManualRefresh, cx);
+                        });
+                    })
+                    .into_any_element(),
+            ]);
+
+            dialog
+                .title(t!("Table.refresh_structure").to_string())
+                .overlay_closable(false)
+                .close_button(false)
+                .footer(footer)
+                .child(t!("Table.refresh_discard_changes_prompt").to_string())
+        });
+    }
+
     fn load_table_structure(&mut self, reason: StructureLoadReason, cx: &mut Context<Self>) {
         let Some(table_name) = self.config.table_name.clone() else {
             return;
@@ -1196,6 +1262,7 @@ impl TableDesigner {
         self.metadata_load_seq += 1;
         let load_seq = self.metadata_load_seq;
         self.structure_load.begin(reason);
+        self.set_editors_can_refresh(true, cx);
         cx.notify();
         tracing::warn!(
             target: "table_designer_diag",
@@ -1367,6 +1434,15 @@ impl TableDesigner {
     fn finish_structure_load(&mut self, cx: &mut Context<Self>) {
         self.structure_load.finish();
         cx.notify();
+    }
+
+    fn set_editors_can_refresh(&self, can_refresh: bool, cx: &mut Context<Self>) {
+        self.columns_editor.update(cx, |editor, cx| {
+            editor.set_can_refresh(can_refresh, cx);
+        });
+        self.indexes_editor.update(cx, |editor, cx| {
+            editor.set_can_refresh(can_refresh, cx);
+        });
     }
 
     fn build_original_design(
@@ -1764,6 +1840,7 @@ impl TabContent for TableDesigner {
 
 pub enum ColumnsEditorEvent {
     Changed,
+    RefreshRequested,
 }
 
 /// 拖拽列时的视觉反馈
@@ -1812,6 +1889,7 @@ impl Render for ResizeColumnEditorColumn {
 
 pub struct ColumnsEditor {
     focus_handle: FocusHandle,
+    can_refresh: bool,
     columns: Vec<ColumnEditorRow>,
     selected_index: Option<usize>,
     column_widths: [Pixels; COLUMN_EDITOR_COLUMN_COUNT],
@@ -1858,6 +1936,7 @@ impl ColumnsEditor {
         database_type: DatabaseType,
         charsets: Vec<CharsetInfo>,
         column_editor_capabilities: ColumnEditorCapabilities,
+        can_refresh: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -1879,6 +1958,7 @@ impl ColumnsEditor {
 
         Self {
             focus_handle,
+            can_refresh,
             columns: vec![],
             selected_index: None,
             column_widths: COLUMN_EDITOR_DEFAULT_WIDTHS,
@@ -1984,6 +2064,14 @@ impl ColumnsEditor {
             }
         }
 
+        cx.notify();
+    }
+
+    fn set_can_refresh(&mut self, can_refresh: bool, cx: &mut Context<Self>) {
+        if self.can_refresh == can_refresh {
+            return;
+        }
+        self.can_refresh = can_refresh;
         cx.notify();
     }
 
@@ -2723,6 +2811,18 @@ impl ColumnsEditor {
                     .tooltip(t!("Table.delete_column").to_string())
                     .on_click(cx.listener(|this, _, _window, cx| this.remove_column(cx))),
             )
+            .when(self.can_refresh, |this| {
+                this.child(
+                    IconButton::new("refresh-columns", IconName::Refresh)
+                        .hit_size(Size::Small)
+                        .glyph_size(OneIconSize::Default)
+                        .tooltip(t!("Table.refresh_structure").to_string())
+                        .accessible_label(t!("Table.refresh_structure").to_string())
+                        .on_click(cx.listener(|_, _, _, cx| {
+                            cx.emit(ColumnsEditorEvent::RefreshRequested);
+                        })),
+                )
+            })
             .child(div().flex_1())
             .child(
                 Input::new(&self.search_input)
@@ -2938,26 +3038,18 @@ impl ColumnsEditor {
                     .w(self.column_width(COLUMN_NULLABLE_COL))
                     .flex()
                     .justify_center()
-                    .child(
-                        Checkbox::new(("null", idx))
-                            .checked(row.nullable)
-                            .on_click(cx.listener(move |this, _, _window, cx| {
-                                this.toggle_nullable(idx, cx)
-                            })),
-                    ),
+                    .child(Checkbox::new(("null", idx)).checked(row.nullable).on_click(
+                        cx.listener(move |this, _, _window, cx| this.toggle_nullable(idx, cx)),
+                    )),
             )
             .child(
                 div()
                     .w(self.column_width(COLUMN_PRIMARY_KEY_COL))
                     .flex()
                     .justify_center()
-                    .child(
-                        Checkbox::new(("pk", idx))
-                            .checked(row.is_pk)
-                            .on_click(
-                                cx.listener(move |this, _, _window, cx| this.toggle_pk(idx, cx)),
-                            ),
-                    ),
+                    .child(Checkbox::new(("pk", idx)).checked(row.is_pk).on_click(
+                        cx.listener(move |this, _, _window, cx| this.toggle_pk(idx, cx)),
+                    )),
             )
             .child(
                 div()
@@ -3142,10 +3234,12 @@ impl Render for ColumnsEditor {
 
 pub enum IndexesEditorEvent {
     Changed,
+    RefreshRequested,
 }
 
 pub struct IndexesEditor {
     focus_handle: FocusHandle,
+    can_refresh: bool,
     indexes: Vec<IndexEditorRow>,
     selected_index: Option<usize>,
     _subscriptions: Vec<Subscription>,
@@ -3158,14 +3252,23 @@ struct IndexEditorRow {
 }
 
 impl IndexesEditor {
-    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(can_refresh: bool, _window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
         Self {
             focus_handle,
+            can_refresh,
             indexes: vec![],
             selected_index: None,
             _subscriptions: vec![],
         }
+    }
+
+    fn set_can_refresh(&mut self, can_refresh: bool, cx: &mut Context<Self>) {
+        if self.can_refresh == can_refresh {
+            return;
+        }
+        self.can_refresh = can_refresh;
+        cx.notify();
     }
 
     fn add_index(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -3352,7 +3455,19 @@ impl Render for IndexesEditor {
                             .glyph_size(OneIconSize::Default)
                             .tooltip(t!("Table.delete_index").to_string())
                             .on_click(cx.listener(|this, _, _window, cx| this.remove_index(cx))),
-                    ),
+                    )
+                    .when(self.can_refresh, |this| {
+                        this.child(
+                            IconButton::new("refresh-indexes", IconName::Refresh)
+                                .hit_size(Size::Small)
+                                .glyph_size(OneIconSize::Default)
+                                .tooltip(t!("Table.refresh_structure").to_string())
+                                .accessible_label(t!("Table.refresh_structure").to_string())
+                                .on_click(cx.listener(|_, _, _, cx| {
+                                    cx.emit(IndexesEditorEvent::RefreshRequested);
+                                })),
+                        )
+                    }),
             )
             .child(
                 h_flex()
@@ -4988,8 +5103,7 @@ mod tests {
         };
         let parsed = MySqlPlugin::new().parse_column_type(&column.data_type);
 
-        let definition =
-            column_info_to_definition(DatabaseType::MySQL, &column, parsed, 0);
+        let definition = column_info_to_definition(DatabaseType::MySQL, &column, parsed, 0);
 
         assert_eq!(definition.data_type, "varchar");
         assert_eq!(definition.length, Some(255));
@@ -5326,6 +5440,7 @@ mod tests {
         state.begin(StructureLoadReason::AfterSave);
 
         assert!(!state.is_loading());
+        assert!(state.is_refreshing());
     }
 
     #[test]
@@ -5343,6 +5458,77 @@ mod tests {
         state.finish();
 
         assert!(!state.is_loading());
+    }
+
+    #[test]
+    fn manual_refresh_uses_the_full_structure_loading_panel() {
+        let mut state = StructureLoadState::default();
+
+        state.begin(StructureLoadReason::ManualRefresh);
+
+        assert!(state.is_loading());
+        assert!(state.is_refreshing());
+
+        state.finish();
+
+        assert!(!state.is_loading());
+        assert!(!state.is_refreshing());
+    }
+
+    #[test]
+    fn columns_and_indexes_toolbar_refresh_buttons_reach_the_parent_loader() {
+        let source = include_str!("table_designer_tab.rs");
+        let columns_header = source
+            .split("fn render_header(")
+            .nth(1)
+            .unwrap()
+            .split("fn render_table_header(")
+            .next()
+            .unwrap();
+        let indexes_header = source
+            .split("impl Render for IndexesEditor")
+            .nth(1)
+            .unwrap()
+            .split("impl EventEmitter<IndexesEditorEvent>")
+            .next()
+            .unwrap();
+
+        assert!(columns_header.contains("IconButton::new(\"refresh-columns\", IconName::Refresh)"));
+        assert!(columns_header.contains("cx.emit(ColumnsEditorEvent::RefreshRequested)"));
+        assert!(indexes_header.contains("IconButton::new(\"refresh-indexes\", IconName::Refresh)"));
+        assert!(indexes_header.contains("cx.emit(IndexesEditorEvent::RefreshRequested)"));
+
+        let subscriptions = source
+            .split("let cols_sub = cx.subscribe_in(")
+            .nth(1)
+            .unwrap()
+            .split("let mut designer = Self {")
+            .next()
+            .unwrap();
+        assert!(subscriptions.contains("ColumnsEditorEvent::RefreshRequested"));
+        assert!(subscriptions.contains("this.refresh_structure(window, cx)"));
+        assert!(subscriptions.contains("IndexesEditorEvent::RefreshRequested"));
+
+        let loader = source
+            .split("fn refresh_structure(")
+            .nth(1)
+            .unwrap()
+            .split("fn load_table_structure(")
+            .next()
+            .unwrap();
+        assert!(loader.contains("StructureLoadReason::ManualRefresh"));
+    }
+
+    #[test]
+    fn refresh_structure_messages_are_translated() {
+        let title = t!("Table.refresh_structure").to_string();
+        let prompt = t!("Table.refresh_discard_changes_prompt").to_string();
+
+        assert!(!title.contains("Table.refresh_structure"), "{title}");
+        assert!(
+            !prompt.contains("Table.refresh_discard_changes_prompt"),
+            "{prompt}"
+        );
     }
 
     /// 打开既有表时真实面板会先停在加载态（列/索引/表信息回来前不渲染空表单）。
@@ -5366,7 +5552,7 @@ mod tests {
     /// 直接驱动加载态（不触发真实查询）：这里要验证的是渲染门控，
     /// 触发时机由 `opening_an_existing_table_arms_the_loading_panel` 负责。
     #[gpui::test]
-    fn existing_table_renders_the_loading_panel_until_the_structure_arrives(
+    fn structure_loading_replaces_the_panel_for_initial_open_and_manual_refresh(
         cx: &mut gpui::TestAppContext,
     ) {
         let (designer, _armed_at_open, visual) = designer_window(cx, None);
@@ -5376,6 +5562,27 @@ mod tests {
                 designer
                     .structure_load
                     .begin(StructureLoadReason::InitialOpen);
+                cx.notify();
+            });
+        });
+        visual.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        assert!(visual.debug_bounds(STRUCTURE_LOADING_SELECTOR).is_some());
+
+        visual.update(|_window, cx| {
+            designer.update(cx, |designer, cx| designer.finish_structure_load(cx));
+        });
+        visual.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        assert!(visual.debug_bounds(STRUCTURE_LOADING_SELECTOR).is_none());
+
+        visual.update(|_window, cx| {
+            designer.update(cx, |designer, cx| {
+                designer
+                    .structure_load
+                    .begin(StructureLoadReason::ManualRefresh);
                 cx.notify();
             });
         });
