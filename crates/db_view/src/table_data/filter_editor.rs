@@ -54,14 +54,23 @@ enum SuggestionContext<'a> {
 }
 
 /// 获取当前正在输入的 token
+fn previous_char_boundary(rope: &Rope, byte_offset: usize) -> usize {
+    let char_index = rope.byte_to_char_idx(byte_offset);
+    if char_index == 0 {
+        return 0;
+    }
+    rope.char_to_byte_idx(char_index - 1)
+}
+
 fn extract_current_word(rope: &Rope, offset: usize) -> (String, usize) {
     let mut start = offset;
     while start > 0 {
-        let ch = rope.char(start - 1);
+        let previous_start = previous_char_boundary(rope, start);
+        let ch = rope.char(previous_start);
         if !(ch.is_alphanumeric() || ch == '_' || ch == '.') {
             break;
         }
-        start -= 1;
+        start = previous_start;
     }
     (rope.slice(start..offset).to_string().to_uppercase(), start)
 }
@@ -98,8 +107,12 @@ fn get_last_token_before(rope: &Rope, offset: usize) -> Option<String> {
     }
 
     let mut idx = offset;
-    while idx > 0 && rope.char(idx - 1).is_whitespace() {
-        idx -= 1;
+    while idx > 0 {
+        let previous_start = previous_char_boundary(rope, idx);
+        if !rope.char(previous_start).is_whitespace() {
+            break;
+        }
+        idx = previous_start;
     }
     if idx == 0 {
         return None;
@@ -107,11 +120,12 @@ fn get_last_token_before(rope: &Rope, offset: usize) -> Option<String> {
 
     let mut token_start = idx;
     while token_start > 0 {
-        let ch = rope.char(token_start - 1);
+        let previous_start = previous_char_boundary(rope, token_start);
+        let ch = rope.char(previous_start);
         if !(ch.is_alphanumeric() || ch == '_' || ch == '.') {
             break;
         }
-        token_start -= 1;
+        token_start = previous_start;
     }
     let token = rope.slice(token_start..idx).to_string();
     if token.is_empty() { None } else { Some(token) }
@@ -1194,5 +1208,51 @@ mod tests {
             cx.read(|cx| editor.read(cx).get_text_from_app(cx)),
             "Shift+Enter 应保留换行"
         );
+    }
+
+    /// 回归：过滤条件 completion 扫描必须按 UTF-8 字符边界回退。
+    ///
+    /// `Rope::char()` 接收 byte index，中文首字符占三个字节；用 `start -= 1`
+    /// 扫描会把索引 2 传进去并落在字符中间，导致应用崩溃。
+    #[gpui::test]
+    fn chinese_input_does_not_crash_in_filter_editors(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+
+        let (window, filter_editor) = cx.update(|cx| {
+            let mut filter_editor = None;
+            let window = cx
+                .open_window(WindowOptions::default(), |window, cx| {
+                    let entity = cx.new(|cx| TableFilterEditor::new(window, cx));
+                    filter_editor = Some(entity.clone());
+                    cx.new(|cx| Root::new(entity, window, cx))
+                })
+                .expect("open table filter editor test window");
+            (window, filter_editor.expect("table filter editor"))
+        });
+
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.update(|_window, cx| {
+            filter_editor.update(cx, |editor, cx| {
+                editor.set_schema(sample_schema(), cx);
+            });
+        });
+
+        for editor in [
+            filter_editor.read_with(&cx, |editor, _| editor.where_editor.clone()),
+            filter_editor.read_with(&cx, |editor, _| editor.order_by_editor.clone()),
+        ] {
+            let input = editor.read_with(&cx, |editor, _| editor.editor.clone());
+            let focus_handle = cx.read(|cx| input.read(cx).focus_handle(cx));
+            cx.update(|window, cx| window.focus(&focus_handle, cx));
+
+            cx.simulate_input("中");
+            cx.run_until_parked();
+
+            assert_eq!(
+                "中",
+                editor.read_with(&cx, |editor, cx| editor.get_text_from_app(cx)),
+                "中文输入应保留在过滤器中，而不是触发 completion panic"
+            );
+        }
     }
 }
