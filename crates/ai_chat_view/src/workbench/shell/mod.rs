@@ -220,6 +220,56 @@ impl WorkbenchShell {
         cx.notify();
     }
 
+    /// 当前工作区根目录；宿主未提供时为 `None`。
+    pub fn workspace_root(&self) -> Option<&std::path::Path> {
+        self.workspace_root.as_deref()
+    }
+
+    /// 上下文栏的工作区选择：会话已有消息就在目标工作区新建对话，否则切换根。
+    ///
+    /// 与侧栏分组菜单的语义保持一致（见 [`Self::create_session_in_workspace`]），
+    /// 区别只是入口从左侧导航搬到了输入框下方。
+    pub fn open_workspace_from_composer(
+        &mut self,
+        root: &std::path::Path,
+        cx: &mut Context<Self>,
+    ) {
+        let has_messages = self
+            .session_source
+            .as_ref()
+            .is_some_and(|panel| panel.read(cx).current_session_has_messages(cx));
+        if has_messages {
+            self.create_session_in_workspace(root, cx);
+        } else {
+            self.switch_to_workspace(root, cx);
+        }
+    }
+
+    /// 注入输入框下方上下文栏的数据源（工作区 / 分支 / Worktree）。
+    ///
+    /// 外壳只做转发：真实语义（切根、切分支、建 worktree）在宿主侧，与
+    /// [`Self::set_workspace_picker`] / [`Self::set_workspace_switcher`] 的分工一致。
+    /// `source` 里的动作闭包通常自持外壳弱引用，所以宿主应在拿到外壳实体后调用。
+    pub fn set_composer_context_source(
+        &mut self,
+        source: crate::agent_view::ComposerContextSource,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(panel) = self.session_source.clone() {
+            panel.update(cx, |panel, cx| {
+                panel.set_composer_context_source(source, cx)
+            });
+        }
+        cx.notify();
+    }
+
+    /// 让会话面板重新向宿主取一次上下文栏快照（分支 / worktree 改动后调用）。
+    pub fn refresh_composer_context(&mut self, cx: &mut Context<Self>) {
+        if let Some(panel) = self.session_source.clone() {
+            panel.update(cx, |panel, cx| panel.refresh_composer_context(cx));
+        }
+    }
+
     /// 打开宿主注入的目录选择器。
     ///
     /// 回调借用 `&mut Context` 自持（原实现用 `Vec` 里的 `take`/回填），

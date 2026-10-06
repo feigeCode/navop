@@ -8,11 +8,12 @@ use gpui::{
 };
 use gpui_component::{
     ActiveTheme as _, Icon, Sizable as _, Size, StyledExt as _, h_flex,
-    button::{Button, ButtonVariants as _, DropdownButton},
+    button::{Button, ButtonVariants as _},
     input::Input,
     menu::{DropdownMenu as _, PopupMenuItem},
     scroll::ScrollableElement as _, v_flex,
 };
+use gpui_component::tooltip::Tooltip;
 use one_assets::IconName;
 use one_ui::{IconButton, IconButtonRole};
 use rust_i18n::t;
@@ -40,12 +41,11 @@ impl WorkbenchShell {
             return Some(nav.into_any_element());
         }
         let panel = self.session_source.as_ref()?.clone();
-        let (summaries, current, has_messages, acp_model, acp_current, backend_is_acp) = {
+        let (summaries, current, acp_model, acp_current, backend_is_acp) = {
             let view = panel.read(cx);
             (
                 view.session_summaries(cx),
                 view.current_session_id(cx),
-                view.current_session_has_messages(cx),
                 view.acp_session_list_model(cx),
                 view.acp_session_id(cx),
                 view.backend_is_acp(cx),
@@ -67,18 +67,9 @@ impl WorkbenchShell {
                     .map_or(true, |root| !self.state.is_workspace_hidden(root))
             })
             .collect();
-        // 工作区选择器的候选来自**全量**会话：搜索词只过滤列表，
-        // 不该让底部的工作区下拉跟着一起缩水。
-        let all_summaries: Vec<&SessionSummary> = summaries.iter().collect();
-        let all_groups: Vec<WorkspaceGroup> = group_sessions_by_workspace(&all_summaries)
-            .into_iter()
-            .filter(|group| {
-                group
-                    .root
-                    .as_deref()
-                    .map_or(true, |root| !self.state.is_workspace_hidden(root))
-            })
-            .collect();
+        // 工作区选择器的候选来自**全量**会话，与搜索词无关——搜索只过滤列表。
+        // 现在改由输入框下方上下文栏呈现（宿主经 `ComposerContextSource` 注入），
+        // 这里不再重复算一遍分组。
 
         let archive_toggle = {
             let panel = panel.clone();
@@ -110,77 +101,29 @@ impl WorkbenchShell {
                     .unwrap_or_else(|| root.display().to_string())
             })
             .unwrap_or_else(|| t!("Workbench.no_workspace").to_string());
-        let workspace_items: Vec<(SharedString, String)> = all_groups
-            .iter()
-            .filter_map(|group| group.root.clone().map(|root| (group.label(), root)))
-            .collect();
         let current_path = current_root
             .as_ref()
             .map(|root| root.to_string_lossy().to_string());
-        // 主按钮 = 在当前工作区新建对话；下拉 = 切换工作区。
-        let workspace_selector = {
-            let this = cx.entity();
-            let this_for_menu = this.clone();
-            DropdownButton::new("workbench-workspace-dropdown")
-                .flex_1()
-                .min_w_0()
-                .button(
-                    Button::new("workbench-session-new")
-                        .icon(IconName::Plus)
-                        .label(current_label)
-                        .small()
-                        .flex_1()
-                        .min_w_0()
-                        .tooltip(t!("Workbench.new_chat_here").to_string())
-                        .on_click({
-                            let this = this.clone();
-                            move |_, _, cx| {
-                                this.update(cx, |this, cx| {
-                                    this.create_session_in_current_workspace(cx);
-                                });
-                            }
-                        }),
-                )
-                .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _window, _cx| {
-                    let mut menu = menu;
-                    // 已选择过的工作区；当前工作区打勾。
-                    for (label, root) in &workspace_items {
-                        let this = this_for_menu.clone();
-                        let root = root.clone();
-                        let checked = current_path.as_deref() == Some(root.as_str());
-                        menu = menu.item(
-                            PopupMenuItem::new(label.to_string())
-                                .icon(IconName::Folder)
-                                .checked(checked)
-                                .on_click(move |_, _, cx| {
-                                    let root = root.clone();
-                                    this.update(cx, |this, cx| {
-                                        if has_messages {
-                                            this.create_session_in_workspace(
-                                                std::path::Path::new(&root),
-                                                cx,
-                                            );
-                                        } else {
-                                            this.switch_to_workspace(
-                                                std::path::Path::new(&root),
-                                                cx,
-                                            );
-                                        }
-                                    });
-                                }),
-                        );
-                    }
-                    // 添加/切换到其他目录：打开宿主的目录选择器。
-                    let this = this_for_menu.clone();
-                    menu.separator().item(
-                        PopupMenuItem::new(t!("Workbench.choose_workspace").to_string())
-                            .icon(IconName::Plus)
-                            .on_click(move |_, window, cx| {
-                                this.update(cx, |this, cx| this.open_workspace_picker(window, cx));
-                            }),
-                    )
-                })
-        };
+        // 底部固定区只留「在当前工作区新建对话」。
+        //
+        // 工作区**切换**已统一收口到输入框下方的上下文栏（宿主经
+        // `ComposerContextSource` 注入的工作区下拉），这里不再摆第二个同功能菜单：
+        // 两套菜单数据同源却各自渲染，候选集合迟早会不一致。
+        // 目录名过长时截断，完整路径放进 tooltip。
+        let new_session_button = Button::new("workbench-session-new")
+            .debug_selector(|| "workbench-session-new".to_string())
+            .icon(IconName::Plus)
+            .label(current_label)
+            .small()
+            .flex_1()
+            .min_w_0()
+            .tooltip(match current_path {
+                Some(path) => format!("{}\n{path}", t!("Workbench.new_chat_here")),
+                None => t!("Workbench.new_chat_here").to_string(),
+            })
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.create_session_in_current_workspace(cx);
+            }));
 
         let mut rows: Vec<gpui::AnyElement> = Vec::new();
         if groups.is_empty() {
@@ -315,7 +258,7 @@ impl WorkbenchShell {
                         .gap_0p5()
                         .children(rows),
                 )
-                // 底部固定区：工作区选择器（含新建对话）+ 归档开关。
+                // 底部固定区：在当前工作区新建对话 + 归档开关。
                 .child(
                     h_flex()
                         .flex_shrink_0()
@@ -326,7 +269,7 @@ impl WorkbenchShell {
                         .border_t_1()
                         .border_color(theme.border)
                         .bg(theme.panel)
-                        .child(workspace_selector)
+                        .child(new_session_button)
                         .child(archive_toggle),
                 )
                 .into_any_element(),
@@ -362,6 +305,14 @@ impl WorkbenchShell {
             .gap_1()
             .rounded(theme.surface_radius)
             .cursor_pointer()
+            // 分组名（目录名）过长会截断，完整路径放 tooltip。
+            .tooltip({
+                let tip = match group.root.as_deref() {
+                    Some(root) => root.to_string(),
+                    None => group.label().to_string(),
+                };
+                move |window, cx| Tooltip::new(tip.clone()).build(window, cx)
+            })
             .hover(|style| style.bg(theme.hover_background()))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.toggle_workspace_group(&click_key, cx)
@@ -568,6 +519,8 @@ impl WorkbenchShell {
         let element_id = SharedString::from(format!("workbench-session-{}", summary.id));
         let archive_panel = panel.clone();
         let archive_uid = id.clone();
+        // 会话名过长会截断，完整名放 tooltip。
+        let row_tooltip = summary.name.to_string();
 
         // Finch 式单行会话条目：名称居左，归档按钮与相对时间居右。
         h_flex()
@@ -581,6 +534,7 @@ impl WorkbenchShell {
             .when(indented, |this| this.pl_6())
             .rounded(theme.surface_radius)
             .cursor_pointer()
+            .tooltip(move |window, cx| Tooltip::new(row_tooltip.clone()).build(window, cx))
             .when(selected, |this| this.bg(theme.panel_hover))
             .hover(move |style| style.bg(hover))
             .child(
