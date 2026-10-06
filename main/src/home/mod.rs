@@ -1,4 +1,5 @@
 pub(crate) mod ai_workbench;
+mod ai_workbench_composer;
 pub(crate) mod connection_import_actions;
 mod connection_import_database_conversion;
 pub(crate) mod connection_import_draft;

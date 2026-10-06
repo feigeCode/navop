@@ -17,6 +17,8 @@ use workspace_explorer::{
     WorkspaceTheme,
 };
 
+use super::ai_workbench_composer::{composer_context_source, refresh_composer_git};
+
 /// 工作区主题：面板背景、边框与强调色取应用主题，语义色同样取应用主题。
 fn workspace_theme(cx: &App) -> WorkspaceTheme {
     let theme = cx.theme();
@@ -51,7 +53,7 @@ fn workspace_root(cx: &App) -> std::path::PathBuf {
         .unwrap_or_else(|| std::path::PathBuf::from("."))
 }
 
-fn recent_workspace_roots(cx: &App) -> Vec<std::path::PathBuf> {
+pub(super) fn recent_workspace_roots(cx: &App) -> Vec<std::path::PathBuf> {
     one_core::settings::AppSettings::current(cx)
         .ai_chat
         .recent_workspace_roots
@@ -167,6 +169,9 @@ pub(crate) fn build_ai_workbench_shell(
                     });
                     let root = root.clone();
                     shell_for_root.update(cx, |shell, cx| shell.set_workspace_root(root, cx));
+                    // 根变了 → 分支 / worktree 缓存整体失效，底栏取一次新的。
+                    refresh_composer_git(cx);
+                    shell_for_root.update(cx, |shell, cx| shell.refresh_composer_context(cx));
                 }
                 WorkspaceExplorerEvent::DocumentRequested => {
                     shell_for_root.update(cx, |shell, cx| {
@@ -278,6 +283,13 @@ pub(crate) fn build_ai_workbench_shell(
             },
             cx,
         );
+    });
+
+    // 输入框下方上下文栏（工作区 / 分支 / Worktree）：数据与动作都在宿主侧，
+    // 视图只做客后转发。必须在 shell 建好之后接线——动作闭包自持它的弱引用。
+    let composer_source = composer_context_source(shell.downgrade(), explorer.clone(), cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_composer_context_source(composer_source, cx)
     });
 
     // 多例面板工厂：「新建页签」选终端时创建一个全新终端实例（工作目录取
