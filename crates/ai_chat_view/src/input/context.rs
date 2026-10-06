@@ -466,6 +466,106 @@ impl ComposerAgentOption {
     }
 }
 
+/// 底部上下文栏的「工作区」信息。
+///
+/// 只承载展示所需的文本；真实路径与切换动作由上层持有。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ComposerWorkspaceInfo {
+    /// 显示名(通常是目录名)；空串表示尚无工作区。
+    pub label: SharedString,
+    /// 完整路径，用于下拉项副标题与 tooltip。
+    pub path: Option<SharedString>,
+    /// 是否为 Git 仓库；决定分支 / Worktree 两个入口是否可用。
+    pub is_git_repo: bool,
+}
+
+impl ComposerWorkspaceInfo {
+    pub fn new(label: impl Into<SharedString>, path: Option<impl Into<SharedString>>) -> Self {
+        Self {
+            label: label.into(),
+            path: path.map(Into::into),
+            is_git_repo: false,
+        }
+    }
+
+    pub fn with_git_repo(mut self, is_git_repo: bool) -> Self {
+        self.is_git_repo = is_git_repo;
+        self
+    }
+}
+
+/// 底部上下文栏「工作区」下拉的一项。
+///
+/// 候选来自宿主已经打开过的工作区集合；与左侧会话导航里的那个下拉同源。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ComposerWorkspaceOption {
+    pub label: SharedString,
+    /// 工作区根目录(绝对路径)，选中后回传给宿主。
+    pub path: SharedString,
+    pub current: bool,
+}
+
+impl ComposerWorkspaceOption {
+    pub fn new(label: impl Into<SharedString>, path: impl Into<SharedString>, current: bool) -> Self {
+        Self {
+            label: label.into(),
+            path: path.into(),
+            current,
+        }
+    }
+
+    /// 下拉菜单项的稳定标识。
+    pub fn element_id(&self) -> SharedString {
+        SharedString::from(format!("composer-workspace-{}", self.path))
+    }
+}
+
+/// 底部上下文栏「分支」下拉的一项。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ComposerBranchOption {
+    pub name: SharedString,
+    pub current: bool,
+    /// 远程分支(`origin/xxx`)。选中远程分支由上层决定是否切成本地跟踪分支。
+    pub remote: bool,
+}
+
+impl ComposerBranchOption {
+    pub fn new(name: impl Into<SharedString>, current: bool, remote: bool) -> Self {
+        Self {
+            name: name.into(),
+            current,
+            remote,
+        }
+    }
+
+    /// 下拉菜单项的稳定标识。
+    pub fn element_id(&self) -> SharedString {
+        SharedString::from(format!(
+            "composer-branch-{}{}",
+            if self.remote { "remote-" } else { "" },
+            self.name
+        ))
+    }
+}
+
+/// 底部上下文栏的「Worktree」状态。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ComposerWorktreeState {
+    /// 当前会话是否跑在独立 worktree 上(复选框勾选态)。
+    pub enabled: bool,
+    /// 当前 worktree 名；`enabled` 时用于 chip 文案。
+    pub label: Option<SharedString>,
+}
+
+impl ComposerWorktreeState {
+    pub fn new(enabled: bool, label: Option<impl Into<SharedString>>) -> Self {
+        Self {
+            enabled,
+            label: label.map(Into::into),
+        }
+    }
+}
+
 /// 注入给输入框的整体上下文(只读展示)。
 ///
 /// 由上层构造并通过 [`AgentInput::set_context`](super::AgentInput::set_context) 注入。
@@ -499,6 +599,14 @@ pub struct AgentComposerContext {
     pub model: Option<ComposerModel>,
     /// 工具执行模式当前文案(如 `自动`)。
     pub execution_mode_label: SharedString,
+    /// 底部上下文栏：当前工作区。
+    pub workspace: ComposerWorkspaceInfo,
+    /// 底部上下文栏：工作区下拉的候选(空表示宿主尚未注入)。
+    pub workspace_options: Vec<ComposerWorkspaceOption>,
+    /// 底部上下文栏：可切换的分支列表(空表示非 Git 仓库或数据未就绪)。
+    pub branch_options: Vec<ComposerBranchOption>,
+    /// 底部上下文栏：Worktree 状态。
+    pub worktree: ComposerWorktreeState,
 }
 
 #[cfg(test)]

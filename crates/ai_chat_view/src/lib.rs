@@ -98,7 +98,10 @@ pub use acp_agent_config::{
 pub use agent_cards::{PlanCardData, PlanStepData, SubAgentCardData, ToolCardData};
 pub use agent_tool_config::emit_agent_tool_config_changed;
 pub use agent_transcript::AgentTranscript;
-pub use agent_view::{AgentChatView, AgentChatViewConfig, AgentChatViewEvent, AgentRuntimeFactory};
+pub use agent_view::{
+    AgentChatView, AgentChatViewConfig, AgentChatViewEvent, AgentRuntimeFactory,
+    ComposerContextSnapshot, ComposerContextSource,
+};
 // 工作台外壳也要画同一份 ACP 会话行，所以把行构造器和模型提到 crate 可见。
 pub(crate) use agent_view::acp_sessions::{
     AcpSessionListModel, acp_session_placeholder, acp_session_row, acp_session_section_header,
@@ -125,8 +128,9 @@ pub use code_block::{
 pub use connection_selector::{ConnectionSelector, ConnectionSelectorEvent};
 pub use default_panel::{DefaultAgentChatPanel, DefaultAgentChatPanelEvent};
 pub use input::{
-    AgentComposerContext, AgentInput, AgentInputEvent, ComposerAgentOption, ComposerMenuOption,
-    ComposerModel, ComposerModelOption, ComposerPlanItem, ComposerScope, ComposerTarget,
+    AgentComposerContext, AgentInput, AgentInputEvent, ComposerAgentOption, ComposerBranchOption,
+    ComposerMenuOption, ComposerModel, ComposerModelOption, ComposerPlanItem, ComposerScope,
+    ComposerTarget, ComposerWorkspaceInfo, ComposerWorkspaceOption, ComposerWorktreeState,
     ImageAttachment, MentionCompletionProvider, MentionItem, SlashCommandItem,
 };
 pub use message::{

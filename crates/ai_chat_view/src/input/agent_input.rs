@@ -18,10 +18,11 @@ use std::sync::Arc;
 use gpui::{
     App, AppContext, Context, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
     InteractiveElement, IntoElement, Modifiers, ParentElement, PathPromptOptions, Pixels, Render,
-    SharedString, StatefulInteractiveElement, Styled, Subscription, Window, div, img,
-    prelude::FluentBuilder, px,
+    SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Subscription, Window, div,
+    img, prelude::FluentBuilder, px,
 };
 use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Editor, EditorState, Input, InputEvent, InputState};
 use gpui_component::popover::Popover;
 use gpui_component::searchable_list::SearchableVec;
@@ -38,9 +39,10 @@ use crate::acp::{
 use crate::input::PromptHistory;
 use crate::input::attachment::ImageAttachment;
 use crate::input::context::{
-    AgentComposerContext, ComposerMenuOption, ComposerModelOption, ComposerPlanItem,
-    ComposerResourcePoolItem, ComposerResourceSourceOption, ComposerResourceTypeFilter,
-    ComposerScope, ComposerSubAgentItem, ComposerTarget,
+    AgentComposerContext, ComposerBranchOption, ComposerMenuOption, ComposerModelOption,
+    ComposerPlanItem, ComposerResourcePoolItem, ComposerResourceSourceOption,
+    ComposerResourceTypeFilter, ComposerScope, ComposerSubAgentItem, ComposerTarget,
+    ComposerWorkspaceOption,
 };
 use crate::input::completion::ComposerCompletionProvider;
 use crate::input::mention::{MentionCompletionProvider, MentionItem};
@@ -85,6 +87,14 @@ pub enum AgentInputEvent {
     },
     /// 在内置下拉中选择了工具执行模式。
     SelectExecutionMode { id: SharedString },
+    /// 在底部上下文栏的工作区下拉中选择了工作区。
+    SelectWorkspace { path: SharedString },
+    /// 点击底部上下文栏工作区下拉里的「选择其它目录」，由宿主弹出目录选择器。
+    BrowseWorkspace,
+    /// 在底部上下文栏的分支下拉中选择了分支。
+    SelectBranch { name: SharedString },
+    /// 切换底部上下文栏的 Worktree 开关。
+    ToggleWorktree { enabled: bool },
     /// 在顶部「Agent」面板中选择内置 Agent 或 ACP Agent。
     SelectAgentBackend { id: Option<SharedString> },
     /// 删除队列中第 `index` 条待执行提交。
@@ -109,6 +119,10 @@ enum ComposerMenuKind {
     Plan,
     SubAgent,
     Mode,
+    /// 底部上下文栏的工作区下拉。
+    Workspace,
+    /// 底部上下文栏的分支下拉。
+    Branch,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -160,8 +174,17 @@ const COMPOSER_EDITOR_FALLBACK_LINE_HEIGHT: f32 = 20.0;
 const COMPOSER_EDITOR_VERTICAL_PADDING: f32 = 12.0;
 /// 底部工具栏操作按钮(发送 / 排队 / 停止)的边长,同时也是工具栏控件高度。
 const TOOLBAR_ACTION_BUTTON_SIZE: f32 = 32.0;
-/// 执行模式下拉在空间紧张时允许收缩到的最小宽度(标签会被截断)。
-const EXECUTION_TRIGGER_MIN_WIDTH: f32 = 64.0;
+/// 输入框下方上下文栏里每个 chip 的固定高度。
+///
+/// 比工具栏按钮矮一档:它是「框外」的次级信息,不该和框内的操作按钮抢视觉重量。
+const COMPOSER_FOOTER_CHIP_HEIGHT: f32 = 24.0;
+/// 上下文栏 chip 之间的横向间距。
+const COMPOSER_FOOTER_GAP: f32 = 6.0;
+/// 上下文栏 chip 收缩到的最小宽度（标签走省略号）。
+///
+/// 侧栏被拖窄时四个 chip 仍在同一行：宽度不足靠截断消化，
+/// 每项的完整内容在点击后弹出的菜单 / 弹层里。
+const COMPOSER_FOOTER_CHIP_MIN_WIDTH: f32 = 56.0;
 /// 下拉触发器里除文字外的固定占位:左右内边距 + 箭头 + 间距。
 const TRIGGER_CHROME_WIDTH: f32 = 48.0;
 
@@ -178,13 +201,18 @@ fn composer_editor_height(state: &EditorState) -> Pixels {
     line_height * rows as f32 + px(COMPOSER_EDITOR_VERTICAL_PADDING)
 }
 
-fn toolbar_button_label(label: SharedString) -> impl IntoElement {
+/// 输入框下方上下文栏里单个 chip 的内容:`[图标] [可截断标签] [⌄]`。
+///
+/// 这个函数只管内容;承载它的容器(直接可点的 chip / 下拉触发器)由调用方决定,
+/// 但都必须给足宽度约束(容器 `min_w_0` + 这里 `flex_1 min_w_0`)标签才会走省略号。
+fn composer_footer_chip_label(icon: IconName, label: SharedString) -> impl IntoElement {
     h_flex()
         .w_full()
         .min_w_0()
         .items_center()
         .gap_1()
-        .child(div().flex_1().min_w_0().truncate().child(label.to_string()))
+        .child(Icon::new(icon).xsmall().flex_shrink_0())
+        .child(div().flex_1().min_w_0().truncate().text_xs().child(label))
         .child(Icon::new(IconName::ChevronDown).xsmall().flex_shrink_0())
 }
 
@@ -1017,57 +1045,285 @@ impl AgentInput {
         div().h(px(20.0)).w(px(1.0)).bg(theme.border)
     }
 
-    fn render_execution_mode_menu(
-        &self,
-        execution_mode_label: SharedString,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
+    /// 输入框下方上下文栏的「权限级别」下拉。
+    ///
+    /// 承载的仍是 ACP 工具执行模式(自动 / 只读 / 手动确认):状态、选项与回调都与
+    /// 原先工具栏里的那个下拉一致,只是移到了输入框外下方、并收成 chip 形态。
+    fn render_permission_menu(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let view = cx.entity();
         let is_open = self.open_menu == Some(ComposerMenuKind::Mode);
+        let label = current_execution_mode_label(&self.context.execution_mode_label);
         let data = ModeContentData {
-            execution_mode_label: execution_mode_label.clone(),
+            execution_mode_label: label.clone(),
             options: self.execution_mode_options.clone(),
         };
 
         let theme = self.local_theme(cx);
+        let queue_mode = self.is_running || self.pending_queue_blocked;
+        let chip_width = execution_trigger_width(&label, queue_mode);
         let trigger = themed_outline_button(
-            Button::new("agent-execution-mode")
-                .debug_selector(|| "agent-execution-mode".to_string())
+            Button::new("agent-permission")
+                .debug_selector(|| "agent-input-permission".to_string())
                 .small()
                 .w_full()
-                .h(px(32.0))
+                .h(px(COMPOSER_FOOTER_CHIP_HEIGHT))
                 .justify_between()
                 .outline()
                 .disabled(self.is_running)
-                .child(toolbar_button_label(execution_mode_label)),
+                .child(composer_footer_chip_label(IconName::Key, label)),
             &theme,
         );
 
-        Popover::new("agent-mode-popover")
-            .p_0()
-            .open(is_open)
-            .on_open_change({
-                let view = view.clone();
-                move |open, _window, cx| {
-                    let open = *open;
-                    view.update(cx, |this, cx| {
-                        this.open_menu = if open && !this.is_running {
-                            Some(ComposerMenuKind::Mode)
-                        } else {
-                            None
-                        };
-                        cx.notify();
-                    });
-                }
-            })
-            .trigger(trigger)
-            .content({
-                let view = view.clone();
-                let theme = theme.clone();
-                move |_state, _window, cx| {
-                    render_mode_content(view.clone(), data.clone(), &theme, cx)
-                }
-            })
+        div()
+            .w(chip_width)
+            .min_w(px(COMPOSER_FOOTER_CHIP_MIN_WIDTH))
+            .flex_shrink(1.0)
+            .h(px(COMPOSER_FOOTER_CHIP_HEIGHT))
+            .overflow_hidden()
+            .child(
+                Popover::new("agent-permission-popover")
+                    .p_0()
+                    .open(is_open)
+                    .trigger_style(StyleRefinement::default().w_full())
+                    .on_open_change({
+                        let view = view.clone();
+                        move |open, _window, cx| {
+                            let open = *open;
+                            view.update(cx, |this, cx| {
+                                this.open_menu = if open && !this.is_running {
+                                    Some(ComposerMenuKind::Mode)
+                                } else {
+                                    None
+                                };
+                                cx.notify();
+                            });
+                        }
+                    })
+                    .trigger(trigger)
+                    .content({
+                        let view = view.clone();
+                        let theme = theme.clone();
+                        move |_state, _window, cx| {
+                            render_mode_content(view.clone(), data.clone(), &theme, cx)
+                        }
+                    }),
+            )
+    }
+
+    /// 输入框下方上下文栏的「分支」下拉。
+    ///
+    /// 选项由上层注入(见 [`AgentComposerContext::branch_options`]);选中后只 emit
+    /// [`AgentInputEvent::SelectBranch`],真正的切分支动作交给宿主。
+    fn render_branch_menu(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let view = cx.entity();
+        let is_open = self.open_menu == Some(ComposerMenuKind::Branch);
+        let current = self
+            .context
+            .branch_options
+            .iter()
+            .find(|branch| branch.current)
+            .map(|branch| branch.name.clone())
+            .unwrap_or_else(|| {
+                SharedString::from(t!("AgentUi.composer_branch").to_string())
+            });
+        let options = self.context.branch_options.clone();
+
+        let theme = self.local_theme(cx);
+        let trigger = themed_outline_button(
+            Button::new("agent-branch")
+                .debug_selector(|| "agent-input-branch".to_string())
+                .small()
+                .w_full()
+                .h(px(COMPOSER_FOOTER_CHIP_HEIGHT))
+                .justify_between()
+                .outline()
+                .disabled(self.is_running)
+                .child(composer_footer_chip_label(IconName::GitBranch, current)),
+            &theme,
+        );
+
+        div()
+            .min_w(px(COMPOSER_FOOTER_CHIP_MIN_WIDTH))
+            .flex_shrink(1.0)
+            .h(px(COMPOSER_FOOTER_CHIP_HEIGHT))
+            .overflow_hidden()
+            .child(
+                Popover::new("agent-branch-popover")
+                    .p_0()
+                    .open(is_open)
+                    .trigger_style(StyleRefinement::default().w_full())
+                    .on_open_change({
+                        let view = view.clone();
+                        move |open, _window, cx| {
+                            let open = *open;
+                            view.update(cx, |this, cx| {
+                                this.open_menu = if open && !this.is_running {
+                                    Some(ComposerMenuKind::Branch)
+                                } else {
+                                    None
+                                };
+                                cx.notify();
+                            });
+                        }
+                    })
+                    .trigger(trigger)
+                    .content({
+                        let view = view.clone();
+                        let theme = theme.clone();
+                        move |_state, _window, cx| {
+                            render_branch_content(view.clone(), options.clone(), &theme, cx)
+                        }
+                    }),
+            )
+    }
+
+    /// 输入框下方上下文栏的「工作区」下拉。
+    ///
+    /// 候选由上层注入(见 [`AgentComposerContext::workspace_options`])，与左侧会话
+    /// 导航里的工作区下拉同源。这里不自行实现选择逻辑：选中只 emit
+    /// [`AgentInputEvent::SelectWorkspace`]，「会话已有消息则在新工作区开新对话」的
+    /// 判定留在宿主。
+    fn render_workspace_menu(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let view = cx.entity();
+        let is_open = self.open_menu == Some(ComposerMenuKind::Workspace);
+        let label = if self.context.workspace.label.is_empty() {
+            SharedString::from(t!("AgentUi.composer_pick_workspace").to_string())
+        } else {
+            self.context.workspace.label.clone()
+        };
+        let options = self.context.workspace_options.clone();
+        let current_path = self.context.workspace.path.clone();
+
+        let theme = self.local_theme(cx);
+        // 工作区名可能很长(目录名)，给它一个弹性的最大宽度：行内其余 chip 都
+        // `flex_shrink_0`，宽度不够时由这里先让步、标签走省略号。
+        let trigger = themed_outline_button(
+            Button::new("agent-workspace")
+                .debug_selector(|| "agent-input-workspace".to_string())
+                .small()
+                .w_full()
+                .h(px(COMPOSER_FOOTER_CHIP_HEIGHT))
+                .justify_between()
+                .outline()
+                .disabled(self.is_running)
+                .tooltip(
+                    current_path
+                        .clone()
+                        .map(|path| path.to_string())
+                        .unwrap_or_else(|| t!("AgentUi.composer_pick_workspace").to_string()),
+                )
+                .child(composer_footer_chip_label(IconName::Workspace, label)),
+            &theme,
+        );
+
+        div()
+            .flex_1()
+            .min_w(px(COMPOSER_FOOTER_CHIP_MIN_WIDTH))
+            .h(px(COMPOSER_FOOTER_CHIP_HEIGHT))
+            .overflow_hidden()
+            .child(
+                Popover::new("agent-workspace-popover")
+                    .p_0()
+                    .open(is_open)
+                    .trigger_style(StyleRefinement::default().w_full())
+                    .on_open_change({
+                        let view = view.clone();
+                        move |open, _window, cx| {
+                            let open = *open;
+                            view.update(cx, |this, cx| {
+                                this.open_menu = if open && !this.is_running {
+                                    Some(ComposerMenuKind::Workspace)
+                                } else {
+                                    None
+                                };
+                                cx.notify();
+                            });
+                        }
+                    })
+                    .trigger(trigger)
+                    .content({
+                        let view = view.clone();
+                        let theme = theme.clone();
+                        move |_state, _window, cx| {
+                            render_workspace_content(
+                                view.clone(),
+                                options.clone(),
+                                current_path.clone(),
+                                &theme,
+                                cx,
+                            )
+                        }
+                    }),
+            )
+    }
+
+    /// 输入框下方上下文栏的「Worktree」勾选。
+    ///
+    /// 勾选态来自 [`ComposerWorktreeState::enabled`];切换只 emit
+    /// [`AgentInputEvent::ToggleWorktree`],建/切 worktree 由宿主完成。
+    fn render_worktree_toggle(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let view = cx.entity();
+        let label = self
+            .context
+            .worktree
+            .label
+            .clone()
+            .unwrap_or_else(|| SharedString::from(t!("AgentUi.composer_worktree").to_string()));
+        let checked = self.context.worktree.enabled;
+
+        div()
+            .debug_selector(|| "agent-input-worktree".to_string())
+            .min_w(px(COMPOSER_FOOTER_CHIP_MIN_WIDTH))
+            .flex_shrink(1.0)
+            .h(px(COMPOSER_FOOTER_CHIP_HEIGHT))
+            .overflow_hidden()
+            .flex()
+            .items_center()
+            .child(
+                Checkbox::new("agent-worktree-toggle")
+                    .checked(checked)
+                    .disabled(self.is_running)
+                    .tooltip(t!("AgentUi.composer_worktree_hint").to_string())
+                    .label(label)
+                    .on_click(move |checked, _window, cx| {
+                        let enabled = *checked;
+                        view.update(cx, |this, cx| {
+                            this.open_menu = None;
+                            cx.emit(AgentInputEvent::ToggleWorktree { enabled });
+                            cx.notify();
+                        });
+                    }),
+            )
+    }
+
+    /// 输入框**外**、下方一整行上下文栏。
+    ///
+    /// 布局参考 `ai-workbench-composer-footer`:`[工作区][分支][Worktree][权限]` 四项,
+    /// 每一项内容尺寸自适应 —— 侧边栏变窄时靠 `min_w_0` + `truncate` 省略号截断,
+    /// 点击后由各自的弹层 / 选择器给出完整内容。非 Git 工作区里分支与 Worktree 直接隐藏。
+    fn render_composer_footer(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let theme = self.local_theme(cx);
+        let is_git_repo =
+            self.context.workspace.is_git_repo || !self.context.branch_options.is_empty();
+
+        let mut row = h_flex()
+            .debug_selector(|| "agent-input-composer-footer".to_string())
+            .w_full()
+            .min_w_0()
+            .items_center()
+            .gap(px(COMPOSER_FOOTER_GAP))
+            .px_3()
+            .pb_2()
+            .flex_shrink_0()
+            .text_color(theme.muted_foreground);
+
+        row = row.child(self.render_workspace_menu(cx));
+        if is_git_repo {
+            row = row.child(self.render_branch_menu(cx));
+            row = row.child(self.render_worktree_toggle(cx));
+        }
+        row = row.child(self.render_permission_menu(cx));
+        row
     }
 
     /// 模型下拉:交给组件库的 `Select` —— 搜索框、滚动、键盘导航都由它提供。
@@ -1281,8 +1537,6 @@ impl AgentInput {
             Some(m) => SharedString::from(format!("{} / {}", m.provider, m.model)),
             None => SharedString::from(t!("AgentUi.select_model").to_string()),
         };
-        let execution_label = current_execution_mode_label(&self.context.execution_mode_label);
-        let execution_width = execution_trigger_width(&execution_label, queue_mode);
         let model_min_width = if queue_mode { 96.0 } else { 150.0 };
         let action_button_size = px(TOOLBAR_ACTION_BUTTON_SIZE);
         let attach_count = self.attachments.len();
@@ -1314,14 +1568,7 @@ impl AgentInput {
                     .child(t!("AgentUi.attachment_count", count = attach_count).to_string()),
             )
             .child(div().h(px(18.0)).w(px(1.0)).bg(theme.border))
-            .child(
-                div()
-                    .w(execution_width)
-                    .min_w(px(EXECUTION_TRIGGER_MIN_WIDTH))
-                    .h(action_button_size)
-                    .overflow_hidden()
-                    .child(self.render_execution_mode_menu(execution_label, cx)),
-            )
+            // 模型留在框内右下（工作区 / 分支 / Worktree / 权限移到框外下方的上下文栏）。
             .child(
                 div()
                     .flex_1()
@@ -1521,6 +1768,256 @@ fn mode_option_row(
                 }
                 this.open_menu = None;
                 cx.emit(AgentInputEvent::SelectExecutionMode { id });
+                cx.notify();
+            });
+        })
+        .into_any_element()
+}
+
+/// 工作区下拉的菜单内容。
+fn render_workspace_content(
+    view: Entity<AgentInput>,
+    options: Vec<ComposerWorkspaceOption>,
+    current_path: Option<SharedString>,
+    theme: &AgentChatTheme,
+    cx: &mut Context<gpui_component::popover::PopoverState>,
+) -> gpui::AnyElement {
+    let mut col = v_flex()
+        .p_1()
+        .gap(px(2.0))
+        .min_w(px(260.0))
+        .bg(theme.background)
+        .text_color(theme.foreground);
+
+    col = col.child(context_group_label(
+        t!("AgentUi.workspace").to_string(),
+        theme,
+    ));
+
+    if options.is_empty() {
+        col = col.child(
+            div()
+                .px_2()
+                .py_2()
+                .text_sm()
+                .text_color(theme.muted_foreground)
+                .child(t!("AgentUi.composer_workspace_empty").to_string()),
+        );
+    } else {
+        for option in options {
+            let current = current_path.as_deref() == Some(option.path.as_ref());
+            col = col.child(workspace_option_row(
+                view.clone(),
+                option,
+                current,
+                theme,
+                cx,
+            ));
+        }
+    }
+
+    // 与候选列表之间加一条分隔线：下面这项是「打开新目录」，不是同级候选。
+    col.child(
+        div()
+            .my_1()
+            .h(px(1.0))
+            .w_full()
+            .bg(theme.border),
+    )
+    .child(browse_workspace_row(view, theme, cx))
+    .into_any_element()
+}
+
+/// 工作区下拉里的一行候选。
+fn workspace_option_row(
+    view: Entity<AgentInput>,
+    option: ComposerWorkspaceOption,
+    current: bool,
+    theme: &AgentChatTheme,
+    cx: &mut Context<gpui_component::popover::PopoverState>,
+) -> gpui::AnyElement {
+    let muted = theme.muted_foreground;
+    let hover_bg = theme.hover_background();
+    let selected_bg = theme.selection_background();
+    let accent = theme.accent;
+
+    h_flex()
+        .id(option.element_id())
+        .w_full()
+        .min_w_0()
+        .items_center()
+        .gap_2()
+        .px_2()
+        .py_1p5()
+        .rounded(cx.theme().radius)
+        .cursor_pointer()
+        .when(current, |this| this.bg(selected_bg))
+        .hover(move |this| this.bg(hover_bg))
+        .child(Icon::new(IconName::Folder).xsmall().flex_shrink_0())
+        .child(
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .gap(px(1.0))
+                .child(div().text_sm().truncate().child(option.label.clone()))
+                // 完整路径作为副标题：重名目录靠它区分。
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(muted)
+                        .truncate()
+                        .child(option.path.clone()),
+                ),
+        )
+        .when(current, |this| {
+            this.child(Icon::new(IconName::Check).xsmall().text_color(accent))
+        })
+        .on_click(move |_, _, cx| {
+            let path = option.path.clone();
+            view.update(cx, |this, cx| {
+                if this.is_running {
+                    return;
+                }
+                this.open_menu = None;
+                cx.emit(AgentInputEvent::SelectWorkspace { path });
+                cx.notify();
+            });
+        })
+        .into_any_element()
+}
+
+/// 工作区下拉里的「选择其它目录…」：交给宿主弹目录选择器。
+fn browse_workspace_row(
+    view: Entity<AgentInput>,
+    theme: &AgentChatTheme,
+    cx: &mut Context<gpui_component::popover::PopoverState>,
+) -> gpui::AnyElement {
+    let hover_bg = theme.hover_background();
+
+    h_flex()
+        .id("composer-workspace-browse")
+        .w_full()
+        .min_w_0()
+        .items_center()
+        .gap_2()
+        .px_2()
+        .py_1p5()
+        .rounded(cx.theme().radius)
+        .cursor_pointer()
+        .hover(move |this| this.bg(hover_bg))
+        .child(Icon::new(IconName::Plus).xsmall().flex_shrink_0())
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_sm()
+                .truncate()
+                .child(t!("AgentUi.composer_browse_workspace").to_string()),
+        )
+        .on_click(move |_, _, cx| {
+            view.update(cx, |this, cx| {
+                this.open_menu = None;
+                cx.emit(AgentInputEvent::BrowseWorkspace);
+                cx.notify();
+            });
+        })
+        .into_any_element()
+}
+
+/// 分支下拉的菜单内容。
+fn render_branch_content(
+    view: Entity<AgentInput>,
+    options: Vec<ComposerBranchOption>,
+    theme: &AgentChatTheme,
+    cx: &mut Context<gpui_component::popover::PopoverState>,
+) -> gpui::AnyElement {
+    let mut col = v_flex()
+        .p_1()
+        .gap(px(2.0))
+        .min_w(px(260.0))
+        .bg(theme.background)
+        .text_color(theme.foreground);
+
+    col = col.child(context_group_label(
+        t!("AgentUi.composer_branch").to_string(),
+        theme,
+    ));
+
+    if options.is_empty() {
+        return col
+            .child(
+                div()
+                    .px_2()
+                    .py_2()
+                    .text_sm()
+                    .text_color(theme.muted_foreground)
+                    .child(t!("AgentUi.composer_branch_empty").to_string()),
+            )
+            .into_any_element();
+    }
+
+    for option in options {
+        col = col.child(branch_option_row(view.clone(), option, theme, cx));
+    }
+
+    col.into_any_element()
+}
+
+/// 分支下拉里的一行。
+fn branch_option_row(
+    view: Entity<AgentInput>,
+    option: ComposerBranchOption,
+    theme: &AgentChatTheme,
+    cx: &mut Context<gpui_component::popover::PopoverState>,
+) -> gpui::AnyElement {
+    let muted = theme.muted_foreground;
+    let hover_bg = theme.hover_background();
+    let selected_bg = theme.selection_background();
+    let selected_fg = theme.accent;
+    let current = option.current;
+    let remote = option.remote;
+    let name = option.name.clone();
+    let row_id = option.element_id();
+
+    let mut inner = v_flex()
+        .flex_1()
+        .min_w_0()
+        .gap(px(1.0))
+        .child(div().text_sm().truncate().child(name.clone()));
+    if remote {
+        inner = inner.child(
+            div()
+                .text_xs()
+                .text_color(muted)
+                .child(t!("AgentUi.composer_branch_remote").to_string()),
+        );
+    }
+
+    h_flex()
+        .id(row_id)
+        .w_full()
+        .items_center()
+        .gap_2()
+        .px_2()
+        .py_1p5()
+        .rounded(cx.theme().radius)
+        .cursor_pointer()
+        .when(current, |this| {
+            this.bg(selected_bg).text_color(theme.foreground)
+        })
+        .hover(move |this| this.bg(hover_bg))
+        .child(inner)
+        .when(current, |this| {
+            this.child(Icon::new(IconName::Check).xsmall().text_color(selected_fg))
+        })
+        .on_click(move |_, _window, cx| {
+            let name = name.clone();
+            view.update(cx, |this, cx| {
+                if this.is_running {
+                    return;
+                }
+                this.open_menu = None;
+                cx.emit(AgentInputEvent::SelectBranch { name });
                 cx.notify();
             });
         })
@@ -3167,19 +3664,17 @@ impl Render for AgentInput {
         self.ensure_elicitation_inputs(_window, cx);
         let pending_elicitation = self.render_pending_elicitation(cx);
         let toolbar = self.render_toolbar(cx);
+        let composer_footer = self.render_composer_footer(cx);
         let theme = self.local_theme(cx);
         let input_state = self.input_state.read(cx);
         let input_focused = input_state.focus_handle(cx).is_focused(_window);
         let editor_height = composer_editor_height(input_state);
 
-        v_flex()
-            .id("agent-input-root")
-            .debug_selector(|| "agent-input-root".to_string())
-            .track_focus(&self.focus_handle)
+        // 输入卡片：带边框的那一块（工作区 / 分支 / Worktree / 权限在它外面的下方）。
+        let card = v_flex()
+            .debug_selector(|| "agent-input-card".to_string())
             .w_full()
             .min_w_0()
-            .when(self.edge_to_edge, |this| this.min_h_0().flex_shrink_0())
-            .when(!self.edge_to_edge, |this| this.flex_shrink_0())
             .bg(theme.background)
             .text_color(theme.foreground)
             .when(!self.edge_to_edge, |this| {
@@ -3188,6 +3683,7 @@ impl Render for AgentInput {
                     .border_color(theme.border)
                     .shadow_sm()
             })
+            .when(self.edge_to_edge, |this| this.min_h_0())
             // 顶部：计划 / Agent / 上下文入口
             .child(context_bar)
             // 附件预览（如果有）
@@ -3227,15 +3723,29 @@ impl Render for AgentInput {
                             ),
                     ),
             )
-            // 底部：执行参数、模型和发送按钮
-            .child(toolbar)
+            // 底部：模型和发送按钮
+            .child(toolbar);
+
+        v_flex()
+            .id("agent-input-root")
+            .debug_selector(|| "agent-input-root".to_string())
+            .track_focus(&self.focus_handle)
+            .w_full()
+            .min_w_0()
+            .when(self.edge_to_edge, |this| this.min_h_0().flex_shrink_0())
+            .when(!self.edge_to_edge, |this| this.flex_shrink_0())
+            .bg(theme.background)
+            .text_color(theme.foreground)
+            .child(card)
+            // 输入框外、下方一整行：工作区 / 分支 / Worktree / 权限
+            .child(composer_footer)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::input::context::ComposerModel;
+    use crate::input::context::{ComposerModel, ComposerWorkspaceInfo, ComposerWorktreeState};
     use gpui::{Modifiers, Pixels, TestAppContext, VisualTestContext};
 
     struct AgentInputLayoutRoot {
@@ -3321,8 +3831,54 @@ mod tests {
             root
         }
 
-        fn with_width(width: Pixels, window: &mut Window, cx: &mut Context<Self>) -> Self {
-            let input = cx.new(|cx| {
+        /// 注入工作区 / 分支 / Worktree 数据，用于底栏渲染与截断测试。
+        fn with_composer_context(
+            width: Pixels,
+            window: &mut Window,
+            cx: &mut Context<Self>,
+        ) -> Self {
+            const LONG_WORKSPACE: &str = "an-extremely-long-workspace-directory-name";
+            let root = Self::with_width(width, window, cx);
+            root.input.update(cx, |input, cx| {
+                input.set_context(
+                    AgentComposerContext {
+                        model: Some(ComposerModel::new(
+                            "Very Long Provider Name",
+                            "extremely-long-model-name-with-large-context",
+                        )),
+                        execution_mode_label: SharedString::from("允许完全访问"),
+                        workspace: ComposerWorkspaceInfo::new(
+                            LONG_WORKSPACE,
+                            Some("/Users/someone/projects/an-extremely-long-workspace-directory-name"),
+                        )
+                        .with_git_repo(true),
+                        workspace_options: vec![
+                            ComposerWorkspaceOption::new(
+                                LONG_WORKSPACE,
+                                "/Users/someone/projects/an-extremely-long-workspace-directory-name",
+                                true,
+                            ),
+                            ComposerWorkspaceOption::new("navop", "/Users/someone/navop", false),
+                        ],
+                        branch_options: vec![
+                            ComposerBranchOption::new(
+                                "feature/composer-footer-relayout",
+                                true,
+                                false,
+                            ),
+                            ComposerBranchOption::new("main", false, false),
+                            ComposerBranchOption::new("origin/main", false, true),
+                        ],
+                        worktree: ComposerWorktreeState::new(true, Some("navop-1a2b3c4d")),
+                        ..AgentComposerContext::default()
+                    },
+                    cx,
+                );
+            });
+            root
+        }
+
+        fn with_width(width: Pixels, window: &mut Window, cx: &mut Context<Self>) -> Self {            let input = cx.new(|cx| {
                 AgentInput::with_mentions(Vec::new(), "描述目标，输入 @ 引用资源…", window, cx)
             });
             input.update(cx, |input, cx| {
@@ -3364,6 +3920,95 @@ mod tests {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
             div().w(self.width).h(self.height).child(self.input.clone())
         }
+    }
+
+    /// 底栏四项都在，整行位于输入卡片**下方**，且按 工作区→分支→Worktree→权限 排布。
+    #[gpui::test]
+    fn composer_footer_renders_context_chips_below_the_card(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            AgentInputLayoutRoot::with_composer_context(px(900.0), window, cx)
+        });
+        let cx: &mut VisualTestContext = cx;
+
+        let toolbar = cx
+            .debug_bounds("agent-input-toolbar")
+            .expect("toolbar should render");
+        let footer = cx
+            .debug_bounds("agent-input-composer-footer")
+            .expect("composer footer should render");
+        let workspace = cx
+            .debug_bounds("agent-input-workspace")
+            .expect("workspace chip should render");
+        let branch = cx
+            .debug_bounds("agent-input-branch")
+            .expect("branch chip should render");
+        let worktree = cx
+            .debug_bounds("agent-input-worktree")
+            .expect("worktree toggle should render");
+        let permission = cx
+            .debug_bounds("agent-input-permission")
+            .expect("permission chip should render");
+
+        assert!(
+            footer.origin.y >= toolbar.origin.y + toolbar.size.height,
+            "footer must sit below the input card: footer={footer:?}, toolbar={toolbar:?}"
+        );
+        assert!(
+            workspace.origin.x < branch.origin.x
+                && branch.origin.x < worktree.origin.x
+                && worktree.origin.x < permission.origin.x,
+            "chips must be ordered workspace → branch → worktree → permission: \
+             workspace={workspace:?}, branch={branch:?}, worktree={worktree:?}, permission={permission:?}"
+        );
+        // 四项共处一行：纵向偏差只可能来自边框/内边距的取整。
+        let row_y = workspace.origin.y;
+        for bounds in [branch, worktree, permission] {
+            assert!(
+                (bounds.origin.y - row_y).abs() <= px(2.0),
+                "all context chips must share one row: rows differ at {bounds:?}"
+            );
+        }
+    }
+
+    /// 侧栏被拖窄时四项仍留在卡片内：靠截断消化，不横向溢出。
+    #[gpui::test]
+    fn composer_footer_truncates_instead_of_overflowing(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        const NARROW: f32 = 260.0;
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            AgentInputLayoutRoot::with_composer_context(px(NARROW), window, cx)
+        });
+        let cx: &mut VisualTestContext = cx;
+
+        let workspace = cx
+            .debug_bounds("agent-input-workspace")
+            .expect("workspace chip should render");
+        let permission = cx
+            .debug_bounds("agent-input-permission")
+            .expect("permission chip should render");
+        let branch = cx
+            .debug_bounds("agent-input-branch")
+            .expect("branch chip should render");
+
+        assert!(
+            permission.origin.x + permission.size.width <= px(NARROW),
+            "the right-most chip must stay inside the panel: permission={permission:?}"
+        );
+        assert!(
+            workspace.size.width < px(200.0),
+            "a long workspace name must truncate instead of pushing chips out: \
+             workspace={workspace:?}"
+        );
+        // 长工作区名先让位，短标签的分支/权限仍保持最小可用宽度。
+        assert!(workspace.size.width < px(420.0));
+        assert!(branch.size.width >= px(COMPOSER_FOOTER_CHIP_MIN_WIDTH));
     }
 
     #[gpui::test]
@@ -3466,8 +4111,11 @@ mod tests {
         );
     }
 
+    /// 工具栏只留「附件 + 模型 + 发送」;权限级别移到输入框**外**下方的上下文栏。
     #[gpui::test]
-    fn toolbar_keeps_action_button_square_and_execution_trigger_compact(cx: &mut TestAppContext) {
+    fn toolbar_keeps_action_button_square_and_permission_moves_below_the_card(
+        cx: &mut TestAppContext,
+    ) {
         cx.update(|cx| {
             gpui_component::init(cx);
             crate::init(cx);
@@ -3487,12 +4135,19 @@ mod tests {
             "send button must stay a 32x32 tap target: send={send:?}"
         );
 
-        let execution = cx
-            .debug_bounds("agent-execution-mode")
-            .expect("execution mode control should be rendered");
+        let toolbar = cx
+            .debug_bounds("agent-input-toolbar")
+            .expect("toolbar should render");
+        let permission = cx
+            .debug_bounds("agent-input-permission")
+            .expect("permission chip should render in the composer footer");
         assert!(
-            execution.size.width < px(124.0),
-            "execution trigger should hug its short label: execution={execution:?}"
+            permission.origin.y >= toolbar.origin.y + toolbar.size.height,
+            "permission chip must sit below the toolbar row: permission={permission:?}, toolbar={toolbar:?}"
+        );
+        assert!(
+            permission.size.width < px(124.0),
+            "permission chip should hug its short label: permission={permission:?}"
         );
     }
 
@@ -3566,7 +4221,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn plan_and_subagent_triggers_stay_and_execution_mode_is_single_control(
+    fn plan_and_subagent_triggers_stay_and_permission_is_a_single_footer_control(
         cx: &mut TestAppContext,
     ) {
         cx.update(|cx| {
@@ -3585,8 +4240,8 @@ mod tests {
             "subagents should be a top capability trigger"
         );
         assert!(
-            cx.debug_bounds("agent-execution-mode").is_some(),
-            "execution mode should render as the single bottom mode control"
+            cx.debug_bounds("agent-input-permission").is_some(),
+            "permission level should render as the single control in the composer footer"
         );
         assert!(
             cx.debug_bounds("agent-task-mode").is_none(),

@@ -120,6 +120,8 @@ pub struct DefaultAgentChatPanel {
     /// 工作台外壳注入的侧栏开关。内层视图是异步构建的，注入可能早于视图
     /// 存在——这里暂存，视图建好（含 provider 事件触发的重建）时统一应用。
     workbench_toggles: Option<crate::agent_view::WorkbenchSidebarToggles>,
+    /// 外壳 / 宿主注入的输入框下方上下文栏数据源。同样需要暂存并重放。
+    composer_context_source: Option<crate::agent_view::ComposerContextSource>,
     /// 各会话当前可回滚的轮次。与 `workbench_toggles` 同理：内层视图可能还不存在，
     /// 或者被 provider 事件整块重建过，所以这里留一份权威副本，建视图时重放。
     restorable_turns: std::collections::HashMap<String, std::collections::HashSet<String>>,
@@ -273,6 +275,7 @@ impl DefaultAgentChatPanel {
             tab_closeable: false,
             workspace_root: None,
             workbench_toggles: None,
+            composer_context_source: None,
             restorable_turns: std::collections::HashMap::new(),
             error: None,
         };
@@ -593,6 +596,27 @@ impl DefaultAgentChatPanel {
         }
     }
 
+    /// 注入输入框下方上下文栏的数据源（工作区 / 分支 / Worktree）。
+    ///
+    /// 同 [`Self::set_workbench_toggles`]：先暂存再应用，视图（重）建时重放。
+    pub fn set_composer_context_source(
+        &mut self,
+        source: crate::agent_view::ComposerContextSource,
+        cx: &mut Context<Self>,
+    ) {
+        self.composer_context_source = Some(source.clone());
+        if let Some(view) = &self.view {
+            view.update(cx, |view, cx| view.set_composer_context_source(source, cx));
+        }
+    }
+
+    /// 让内层视图重新向宿主取一次上下文栏快照（分支 / worktree 变化后调用）。
+    pub fn refresh_composer_context(&mut self, cx: &mut Context<Self>) {
+        if let Some(view) = &self.view {
+            view.update(cx, |view, cx| view.refresh_composer_context(cx));
+        }
+    }
+
     /// 当前可见会话列表；视图尚未建好时为空。
     pub fn session_summaries(&self, cx: &App) -> Vec<SessionSummary> {
         self.view
@@ -842,6 +866,11 @@ impl DefaultAgentChatPanel {
                             }
                             if let Some(toggles) = panel.workbench_toggles.clone() {
                                 view.update(cx, |view, cx| view.set_workbench_toggles(toggles, cx));
+                            }
+                            if let Some(source) = panel.composer_context_source.clone() {
+                                view.update(cx, |view, cx| {
+                                    view.set_composer_context_source(source, cx)
+                                });
                             }
                             // 重建后重放回滚入口，否则 provider 刷新一次按钮就没了。
                             for (session_id, turn_ids) in panel.restorable_turns.clone() {

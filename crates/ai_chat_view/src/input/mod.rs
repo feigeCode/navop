@@ -14,10 +14,11 @@ pub use agent_input::{AgentInput, AgentInputEvent, QueuedPromptPreview};
 pub use attachment::ImageAttachment;
 pub(crate) use attachment::prepare_input_images;
 pub use context::{
-    AgentComposerContext, ComposerAgentOption, ComposerMenuOption, ComposerModel,
-    ComposerModelOption, ComposerPlanItem, ComposerResourcePoolItem, ComposerResourcePoolSummary,
-    ComposerResourceSourceOption, ComposerResourceTypeFilter, ComposerScope, ComposerSubAgentItem,
-    ComposerTarget,
+    AgentComposerContext, ComposerAgentOption, ComposerBranchOption, ComposerMenuOption,
+    ComposerModel, ComposerModelOption, ComposerPlanItem, ComposerResourcePoolItem,
+    ComposerResourcePoolSummary, ComposerResourceSourceOption, ComposerResourceTypeFilter,
+    ComposerScope, ComposerSubAgentItem, ComposerTarget, ComposerWorkspaceInfo,
+    ComposerWorkspaceOption, ComposerWorktreeState,
 };
 pub(crate) use history::PromptHistory;
 pub use mention::{MentionCompletionProvider, MentionItem};

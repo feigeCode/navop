@@ -77,11 +77,12 @@ use crate::message::ChatMessageUI;
 use crate::bridge::build_runtime_from_llm_provider;
 use crate::code_block::{CodeBlockAction, CodeBlockActionRegistry};
 use crate::input::{
-    AgentComposerContext, AgentInput, AgentInputEvent, ComposerAgentOption, ComposerMenuOption,
-    ComposerModelOption, ComposerPlanItem, ComposerResourcePoolItem, ComposerResourcePoolSummary,
-    ComposerResourceSourceOption, ComposerResourceTypeFilter, ComposerScope, ComposerSkillItem,
-    ComposerSkillSummary, ComposerSubAgentItem, ComposerTarget, MentionItem, QueuedPromptPreview,
-    SlashCommandItem,
+    AgentComposerContext, AgentInput, AgentInputEvent, ComposerAgentOption, ComposerBranchOption,
+    ComposerMenuOption, ComposerModelOption, ComposerPlanItem, ComposerResourcePoolItem,
+    ComposerResourcePoolSummary, ComposerResourceSourceOption, ComposerResourceTypeFilter,
+    ComposerScope, ComposerSkillItem, ComposerSkillSummary, ComposerSubAgentItem, ComposerTarget,
+    ComposerWorkspaceInfo, ComposerWorkspaceOption, ComposerWorktreeState, MentionItem,
+    QueuedPromptPreview, SlashCommandItem,
 };
 use crate::message_turn_view::{
     MessageListAction, MessageListActionHandler, MessageListContext, render_message_list,
@@ -861,6 +862,36 @@ pub struct WorkbenchSidebarToggles {
     pub toggle_right: std::sync::Arc<dyn Fn(&mut gpui::Window, &mut gpui::App) + 'static>,
 }
 
+/// 输入框下方上下文栏的数据快照：工作区 / 分支 / Worktree。
+///
+/// 宿主每次推送前现算一次（分支要走 git），因此是一次性的值而不是 getter。
+#[derive(Clone, Debug, Default)]
+pub struct ComposerContextSnapshot {
+    pub workspace: ComposerWorkspaceInfo,
+    pub workspace_options: Vec<ComposerWorkspaceOption>,
+    pub branches: Vec<ComposerBranchOption>,
+    pub worktree: ComposerWorktreeState,
+}
+
+/// 宿主注入的上下文栏数据源与动作。
+///
+/// 与 [`WorkbenchSidebarToggles`] 同构：视图只负责展示与转发，真实语义
+/// （切工作区、切分支、建 worktree）全在宿主侧，视图不依赖任何业务 crate。
+#[derive(Clone)]
+pub struct ComposerContextSource {
+    /// 取当前快照。每次 [`AgentChatView::sync_composer`] 调用一次。
+    pub snapshot: std::sync::Arc<dyn Fn(&mut gpui::App) -> ComposerContextSnapshot + 'static>,
+    /// 选中工作区。宿主决定「会话已有消息则在目标工作区新建对话」。
+    pub select_workspace:
+        std::sync::Arc<dyn Fn(&std::path::Path, &mut gpui::Window, &mut gpui::App) + 'static>,
+    /// 「选择其它目录…」：宿主弹自己的目录选择器。
+    pub browse_workspace: std::sync::Arc<dyn Fn(&mut gpui::Window, &mut gpui::App) + 'static>,
+    /// 切换分支（分支名，可能与远程分支同名）。
+    pub select_branch: std::sync::Arc<dyn Fn(&SharedString, &mut gpui::App) + 'static>,
+    /// 切换「本会话跑在独立 worktree 上」。
+    pub toggle_worktree: std::sync::Arc<dyn Fn(bool, &mut gpui::App) + 'static>,
+}
+
 /// 创建 [`AgentChatView`] 所需的配置。
 pub struct AgentChatViewConfig {
     pub runtime: Arc<Runtime>,
@@ -1168,6 +1199,9 @@ pub struct AgentChatView {
     /// 工作台外壳注入的侧栏开关；`Some` 时工具条在 agent 切换器两侧渲染
     /// 导航栏开关（左）与右侧标签组开关（右），替代外壳顶栏。
     workbench_toggles: Option<WorkbenchSidebarToggles>,
+    /// 宿主注入的输入框下方上下文栏数据源（工作区 / 分支 / Worktree）。
+    /// `None` 时底栏只渲染「权限级别」一项，其余入口不出现。
+    composer_context_source: Option<ComposerContextSource>,
     /// 滚动三态（跟随尾巴 / 阅读历史 / 锚点跳转中）。
     scroll: TranscriptScrollState,
     /// 过程块展开态覆盖表；按稳定 id 记录用户的显式展开/收起。
@@ -1537,6 +1571,7 @@ impl AgentChatView {
             sidebar_collapsed: false,
             sidebar_suppressed: false,
             workbench_toggles: None,
+            composer_context_source: None,
             scroll: TranscriptScrollState::default(),
             expansion: ExpansionState::default(),
             turn_timings: TurnTimings::new(),
@@ -2251,6 +2286,34 @@ impl AgentChatView {
                 }
             }
             AgentInputEvent::SelectExecutionMode { id } => self.select_execution_mode(&id, cx),
+            AgentInputEvent::SelectWorkspace { path } => {
+                if !self.is_running {
+                    self.run_composer_action(window, cx, move |source, window, cx| {
+                        (source.select_workspace)(std::path::Path::new(path.as_ref()), window, cx);
+                    });
+                }
+            }
+            AgentInputEvent::BrowseWorkspace => {
+                if !self.is_running {
+                    self.run_composer_action(window, cx, move |source, window, cx| {
+                        (source.browse_workspace)(window, cx);
+                    });
+                }
+            }
+            AgentInputEvent::SelectBranch { name } => {
+                if !self.is_running {
+                    self.run_composer_action(window, cx, move |source, _window, cx| {
+                        (source.select_branch)(&name, cx);
+                    });
+                }
+            }
+            AgentInputEvent::ToggleWorktree { enabled } => {
+                if !self.is_running {
+                    self.run_composer_action(window, cx, move |source, _window, cx| {
+                        (source.toggle_worktree)(enabled, cx);
+                    });
+                }
+            }
             AgentInputEvent::SubmitElicitation { content } => {
                 self.resolve_pending_acp_elicitation(AcpElicitationOutcome::Accept(content), cx)
             }
@@ -2290,14 +2353,29 @@ impl AgentChatView {
         }
     }
 
+    /// 把底栏动作转发给宿主注入的数据源。
+    ///
+    /// 先把 `Arc` 克隆出来再调用：宿主回调里很可能 `update` 本视图（重新取快照），
+    /// 若直接借用 `self` 的字段就会自借用冲突。
+    fn run_composer_action(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        action: impl FnOnce(&ComposerContextSource, &mut Window, &mut gpui::App),
+    ) {
+        let Some(source) = self.composer_context_source.clone() else {
+            return;
+        };
+        action(&source, window, cx);
+    }
+
     fn submit(
         &mut self,
         text: String,
         mentions: Vec<MentionItem>,
         images: Vec<crate::ImageAttachment>,
         cx: &mut Context<Self>,
-    ) {
-        // 新提交：跨轮的展开态与滚动跟随都要重置。
+    ) {        // 新提交：跨轮的展开态与滚动跟随都要重置。
         self.expansion.clear();
         self.scroll.jump_to_tail();
         let session_uid = self.current_session.clone();
@@ -3916,7 +3994,7 @@ impl AgentChatView {
             .as_ref()
             .and_then(|acp| acp_model_option(&acp.state(), self.current_acp_id.as_ref()))
             .or_else(|| self.selected_model.clone());
-        let ctx = build_composer_context(
+        let mut ctx = build_composer_context(
             &self.resources,
             self.execution_selection(),
             model.as_ref(),
@@ -3932,10 +4010,22 @@ impl AgentChatView {
             self.skills.items(),
             self.local_context_tokens(),
         );
+        apply_composer_snapshot(&mut ctx, self.composer_snapshot(cx));
         self.input.update(cx, |inp, cx| {
             inp.set_slash_commands(self.composer_slash_commands(), cx);
             inp.set_context(ctx, cx);
         });
+    }
+
+    /// 向宿主取一次上下文栏快照；未注入数据源时给默认值（底栏只有权限级别）。
+    ///
+    /// 宿主快照闭包拿的是 `&mut App`：它可能要读设置、走 git，允许内部缓存，
+    /// 但绝不能反过来更新本视图（会在渲染路径里形成 `Entity::update` 重入）。
+    fn composer_snapshot(&self, cx: &mut Context<Self>) -> ComposerContextSnapshot {
+        match self.composer_context_source.as_ref() {
+            Some(source) => (source.snapshot)(cx),
+            None => ComposerContextSnapshot::default(),
+        }
     }
 
     /// 当前本地会话的上下文占用(模型报告过计量才有;ACP 会话由 agent 上报,
@@ -6046,6 +6136,25 @@ impl AgentChatView {
         cx.notify();
     }
 
+    /// 注入输入框下方上下文栏的数据源（工作区 / 分支 / Worktree）。
+    ///
+    /// 注入后底栏出现对应入口；`settle` 之前底栏只有「权限级别」一项。
+    pub fn set_composer_context_source(
+        &mut self,
+        source: ComposerContextSource,
+        cx: &mut Context<Self>,
+    ) {
+        self.composer_context_source = Some(source);
+        self.sync_composer(cx);
+        cx.notify();
+    }
+
+    /// 重新向宿主取一次上下文栏快照（分支/worktree 变化后由宿主调用）。
+    pub fn refresh_composer_context(&mut self, cx: &mut Context<Self>) {
+        self.sync_composer(cx);
+        cx.notify();
+    }
+
     fn render_toolbar(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let theme = resolve_agent_chat_theme(self.theme.as_ref(), cx);
         // 会话内搜索入口。findbar 是浮层，打开状态本身已经很明显，
@@ -6585,6 +6694,17 @@ impl Render for AgentChatView {
     }
 }
 
+/// 把宿主快照里的底栏数据覆盖进已构建好的上下文。
+///
+/// 单独成函数而不是给 [`build_composer_context`] 加参数：那个函数在测试里
+/// 有十几处直接调用，多一个「几乎总是默认值」的参数只会污染所有调用点。
+fn apply_composer_snapshot(context: &mut AgentComposerContext, snapshot: ComposerContextSnapshot) {
+    context.workspace = snapshot.workspace;
+    context.workspace_options = snapshot.workspace_options;
+    context.branch_options = snapshot.branches;
+    context.worktree = snapshot.worktree;
+}
+
 fn build_composer_context(
     resources: &ResourceContext,
     selection: ExecutionSelection,
@@ -6806,6 +6926,10 @@ fn build_context(
         agent_options: Vec::new(),
         model: model.map(ComposerModelOption::to_composer_model),
         execution_mode_label: SharedString::from(selection.label()),
+        workspace: Default::default(),
+        workspace_options: Vec::new(),
+        branch_options: Vec::new(),
+        worktree: Default::default(),
     }
 }
 

@@ -1111,6 +1111,42 @@ AgentUi:
     en: Workspace
     zh-CN: 工作区
     zh-HK: 工作區
+  composer_pick_workspace:
+    en: Pick workspace
+    zh-CN: 选择工作区
+    zh-HK: 選擇工作區
+  composer_browse_workspace:
+    en: Choose another folder…
+    zh-CN: 选择其它目录…
+    zh-HK: 選擇其他目錄…
+  composer_workspace_empty:
+    en: No workspace has been opened yet
+    zh-CN: 还没有打开过工作区
+    zh-HK: 還沒有開啟過工作區
+  composer_branch:
+    en: Branch
+    zh-CN: 分支
+    zh-HK: 分支
+  composer_branch_empty:
+    en: This workspace is not a Git repository
+    zh-CN: 当前工作区不是 Git 仓库
+    zh-HK: 目前工作區不是 Git 倉庫
+  composer_branch_remote:
+    en: Remote
+    zh-CN: 远程分支
+    zh-HK: 遠端分支
+  composer_worktree:
+    en: Worktree
+    zh-CN: Worktree
+    zh-HK: Worktree
+  composer_worktree_hint:
+    en: Run this session in its own Git worktree
+    zh-CN: 在独立的 Git worktree 中运行本会话
+    zh-HK: 在獨立的 Git worktree 中執行本工作階段
+  composer_permission:
+    en: Permission
+    zh-CN: 权限
+    zh-HK: 權限
   history_truncated:
     en: "%{count} earlier messages were dropped to stay within the transcript budget."
     zh-CN: "已裁断 %{count} 条更早的消息以控制转录体积。"
