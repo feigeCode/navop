@@ -275,10 +275,11 @@ impl DdlInvalidator {
 
         // 3. 粗粒度兜底：SQL 包含 DDL 关键字但无法精确解析
         if Self::contains_ddl_keywords(sql) {
+            // 按字节硬切会在预算落进汉字内部时让 `&str` panic，日志预览同样要夹边界。
+            let preview = &sql[..sql.floor_char_boundary(100.min(sql.len()))];
             warn!(
                 "SQL contains DDL keywords but could not be parsed precisely, \
-                 falling back to database-level invalidation: {}",
-                &sql[..sql.len().min(100)]
+                 falling back to database-level invalidation: {preview}"
             );
             // 返回一个 CreateDatabase 事件来触发整个数据库级缓存失效
             return vec![DdlEvent::CreateDatabase {

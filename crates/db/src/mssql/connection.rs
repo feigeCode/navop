@@ -925,10 +925,9 @@ impl DbConnection for MssqlDbConnection {
         let client = guard.as_mut().ok_or(DbError::NotConnected)?;
         debug!("[MSSQL] Lock acquired");
 
-        debug!(
-            "[MSSQL] Executing query: {}",
-            &query[..query.len().min(100)]
-        );
+        // 按字节硬切会在预算落进汉字内部时让 `&str` panic，日志预览同样要夹边界。
+        let preview = &query[..query.floor_char_boundary(100.min(query.len()))];
+        debug!("[MSSQL] Executing query: {preview}");
         Self::execute_single(client, query).await
     }
 
