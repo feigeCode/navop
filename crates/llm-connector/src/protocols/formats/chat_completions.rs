@@ -80,6 +80,43 @@ fn body_preview(body: &str) -> &str {
     &body[..body.floor_char_boundary(PREVIEW_BYTES.min(body.len()))]
 }
 
+/// 响应体里「第一个完整 JSON 值结束在哪里」，以及它前后各一段原文。
+///
+/// `trailing characters at line 1 column N` 这类错的 N 是位置而不是长度，实测见过
+/// N=1007 —— 只给开头 512 字节等于没给，恰好看不到出错点。而 N 的单位（字节还是
+/// 字符）serde 没写死，自己换算容易错，所以这里不猜：用流式解析问它「第一个键值
+/// 在哪结束」——`StreamDeserializer::byte_offset` 是**精确字节数** —— 再把那段窗口
+/// 取出来。serde 报 trailing，就是那里后面还有东西。
+///
+/// 正常 body、或整个 body 连第一个值都解析不出来（语法错在中间）时返回 `None`，
+/// 这时开头的预览已经够用。
+fn trailing_boundary(body: &str) -> Option<String> {
+    /// 边界前后各取多少字节。
+    const WINDOW_BYTES: usize = 200;
+    let mut values = serde_json::Deserializer::from_str(body).into_iter::<serde_json::Value>();
+    values.next()?.ok()?;
+    let boundary = values.byte_offset();
+    if boundary >= body.len() {
+        return None;
+    }
+    // 边界本身一定是字符边界（serde 停在值的末尾），两端各自回退到最近的字符边界。
+    let start = body.floor_char_boundary(boundary.saturating_sub(WINDOW_BYTES));
+    let end = body.floor_char_boundary((boundary + WINDOW_BYTES).min(body.len()));
+    Some(format!(
+        "first JSON value ends at byte {boundary}: {}<|>{}",
+        &body[start..boundary],
+        &body[boundary..end]
+    ))
+}
+
+/// 拼错误信息里的响应体诊断：开头预览，外加（若是 trailing 类畸形）出错边界处的窗口。
+fn body_diagnostic(body: &str) -> String {
+    match trailing_boundary(body) {
+        Some(boundary) => format!("{} | {boundary}", body_preview(body)),
+        None => body_preview(body).to_string(),
+    }
+}
+
 /// Parse a standard OpenAI-compatible JSON response into a ChatResponse
 pub fn parse_chat_completions_chat_response(
     response: &str,
@@ -87,13 +124,13 @@ pub fn parse_chat_completions_chat_response(
     stream_reasoning_strategy: StreamReasoningStrategy,
 ) -> Result<ChatResponse, LlmConnectorError> {
     let raw: ChatCompletionsResponse = serde_json::from_str(response).map_err(|e| {
-        // 带上响应体开头：像「trailing characters at line 1 column 975」这种错，
+        // 带上响应体：像「trailing characters at line 1 column 1007」这种错，
         // 光看 serde 的位置信息无法判断上游到底回了什么形状的 body。
         LlmConnectorError::ParseError(format!(
             "{}: {} | body: {}",
             provider_name,
             e,
-            body_preview(response)
+            body_diagnostic(response)
         ))
     })?;
 
@@ -213,6 +250,62 @@ mod tests {
         assert!(message.len() < 1024, "预览必须有界: {} 字节", message.len());
     }
 
+    /// trailing 类错误的边界常常远超 512 字节的头部预览 —— 预览必须够得着它。
+    #[test]
+    fn test_parse_error_preview_reaches_a_boundary_past_the_head_preview() {
+        // 形状与位置取自线上实测：`9Router: trailing characters at line 1 column 1007`。
+        // 头部预览只到 512 字节，正好看不到 1007，等于没给。
+        let filler = "中".repeat(300); // 900 字节，把边界推到头部预览之外
+        let body = format!(
+            "{{\"id\":\"x\",\"choices\":[{{\"message\":{{\"content\":\"{filler}\"}}}}]}}{{\"again\":true}}"
+        );
+        let boundary = body
+            .find("{\"again\"")
+            .expect("trailing object starts here");
+        assert!(
+            boundary > 512,
+            "边界必须落在头部预览之外，否则这条测试是空转的（{boundary}）"
+        );
+
+        let error = parse_chat_completions_chat_response(
+            &body,
+            "9Router",
+            StreamReasoningStrategy::SeparateField,
+        )
+        .expect_err("非法 body 必须报错");
+        let message = error.to_string();
+
+        assert!(
+            message.contains("first JSON value ends at byte"),
+            "{message}"
+        );
+        // 边界**之后**的原文是头部预览永远给不出的部分 —— 正是「上游多回了什么」。
+        assert!(
+            message.contains("\"again\""),
+            "必须能看见边界之后的内容: {message}"
+        );
+    }
+
+    /// 中间语法错（连第一个值都解析不出来）时给不出边界，只能靠头部预览，且仍须有界。
+    #[test]
+    fn test_parse_error_without_a_parseable_first_value_falls_back_to_the_head() {
+        let body = format!("{{\"ok\": {}}}", "中".repeat(400));
+        let error = parse_chat_completions_chat_response(
+            &body,
+            "9Router",
+            StreamReasoningStrategy::SeparateField,
+        )
+        .expect_err("非法 body 必须报错");
+        let message = error.to_string();
+
+        assert!(message.contains("| body: {\"ok\": "), "{message}");
+        assert!(
+            !message.contains("first JSON value ends at byte"),
+            "{message}"
+        );
+        assert!(message.len() < 1024, "预览必须有界: {} 字节", message.len());
+    }
+
     #[test]
     fn test_parse_dashscope_wrapped_chat_response() {
         let response = r#"{
@@ -323,7 +416,7 @@ pub fn parse_chat_completions_embed_response(
             "{}: {} | body: {}",
             provider_name,
             e,
-            body_preview(response)
+            body_diagnostic(response)
         ))
     })?;
 
