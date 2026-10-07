@@ -415,9 +415,9 @@ fn terminal_sidebar_available_panels(
     if has_file_explorer {
         panels.push(SidebarPanel::FileExplorer);
     }
-    // AI 面板按用户反馈从终端侧栏移除：对话统一走 AI 工作台。
-    // 面板实体与订阅仍保留（避免大规模拆线），仅不进入可用面板列表。
-    panels.push(SidebarPanel::Settings);
+    // 原始终端侧栏保留 AI 面板；只有 AI 工作台里的终端（WorkspacePane，无内建侧栏）
+    // 不出现它。
+    panels.extend([SidebarPanel::Settings, SidebarPanel::AiChat]);
     if broadcast_supported {
         panels.push(SidebarPanel::BroadcastInput);
     }
@@ -2169,7 +2169,7 @@ mod tests {
     }
 
     #[test]
-    fn ai_chat_is_not_available_in_the_terminal_sidebar() {
+    fn ai_chat_is_available_in_the_terminal_sidebar() {
         for (explorer, manager, monitor, history, broadcast) in [
             (true, false, false, true, false),
             (false, true, true, true, true),
@@ -2178,8 +2178,8 @@ mod tests {
             let panels =
                 terminal_sidebar_available_panels(explorer, manager, monitor, history, broadcast);
             assert!(
-                !panels.contains(&SidebarPanel::AiChat),
-                "AI 面板不再出现在终端侧栏: {panels:?}"
+                panels.contains(&SidebarPanel::AiChat),
+                "原始终端侧栏应保留 AI 面板: {panels:?}"
             );
         }
     }
