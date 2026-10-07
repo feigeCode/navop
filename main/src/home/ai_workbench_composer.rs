@@ -134,14 +134,8 @@ pub(crate) fn composer_context_source(
                 .workspace_root()
                 .map(|root| root.to_path_buf())
         });
-        // 兜底自愈，只认「根目录变了」与「之前没认出仓库、现在认出了」两种跳变。
-        //
-        // 后者是单向的：Explorer 异步发现仓库，装机那一帧 `repository()` 还是 `None`，
-        // 只比根目录会把「不是 Git 仓库」连同正确的根一起缓存住。这里只补一次
-        // `None → Some`；不能写成 `cache.repo_root != repo_root`，否则一旦两边不收敛
-        // 就会每次渲染都去起 git 子进程。常规路径由 `RepositoryChanged` 事件覆盖。
-        // 兜底自愈，只认「根目录变了」与「之前没认出仓库、现在认出了」两种跳变。
-        // 后者是单向的，理由见 `composer_cache_is_stale` 的注释。
+        // 兜底自愈，只认「根目录变了」与「之前没认出仓库、现在认出了」两种跳变；
+        // 后者为什么必须是单向的，见 `composer_cache_is_stale` 的注释。
         let (cached_root, cached_repository_root) = cx
             .try_global::<ComposerGitCache>()
             .map(|cache| (cache.root.clone(), cache.repo_root.clone()))
