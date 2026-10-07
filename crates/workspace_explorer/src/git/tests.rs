@@ -596,6 +596,63 @@ fn commit_context_lists_changes_untracked_and_bounds_size() {
 }
 
 #[test]
+fn truncate_on_char_boundary_never_splits_a_multibyte_character() {
+    let text = "开始中文内容结尾";
+    for budget in 0..=text.len() + 2 {
+        let truncated = truncate_on_char_boundary(text, budget);
+        assert!(truncated.len() <= budget, "{budget}: {truncated}");
+        assert!(text.starts_with(truncated), "{budget}: {truncated}");
+    }
+
+    // 每个汉字 3 字节：7、8 落在「中」内部，必须回退到 6。
+    assert_eq!("", truncate_on_char_boundary(text, 0));
+    assert_eq!("开始", truncate_on_char_boundary(text, 6));
+    assert_eq!("开始", truncate_on_char_boundary(text, 7));
+    assert_eq!("开始", truncate_on_char_boundary(text, 8));
+    assert_eq!("开始中", truncate_on_char_boundary(text, 9));
+    assert_eq!(text, truncate_on_char_boundary(text, text.len() + 2));
+}
+
+#[test]
+fn commit_context_truncation_stops_on_a_character_boundary() {
+    // 实测崩溃回归：中文 diff 的预算落在字符内部时，`&full[..n]` 直接 panic，
+    // 后台线程里无法 unwind 会 abort 整个进程（`failed to initiate panic`）。
+    let root = initialized_repository();
+    let repository = discover_repository(&root).unwrap().unwrap();
+    // 必须写进已跟踪文件：`git diff HEAD` 不含未跟踪文件，写新文件的话 diff 里没有中文。
+    let mut body = String::new();
+    for index in 0..80 {
+        body.push_str(&format!("第 {index} 行：中文正文用来把 diff 撑到预算之外。\n"));
+    }
+    std::fs::write(root.join("main.rs"), &body).unwrap();
+
+    let full = git_stdout(&root, &["diff", "HEAD", "--unified=3"]).unwrap();
+    // diff 之前那段前缀（numstat/untracked/标题）与预算无关，长度恒定。
+    let prefix_len = commit_context(&repository, usize::MAX).unwrap().len() - full.len();
+    let offset = (0..full.len())
+        .find(|&offset| !full.is_char_boundary(offset))
+        .expect("中文 diff 里应当存在非字符边界");
+    let budget = prefix_len + offset;
+
+    // 先确认这一档确实是「旧写法会 panic」的那一档，否则这条测试是空转的。
+    assert!(
+        !full.is_char_boundary(budget - prefix_len),
+        "预算 {budget} 没有落在字符内部，回归失去意义"
+    );
+
+    let context = commit_context(&repository, budget).unwrap();
+
+    assert!(context.contains("truncated"), "{context}");
+    assert!(
+        context.len() <= budget + "\n... (truncated)".len(),
+        "截断标记之外的体量不该超预算: {}",
+        context.len()
+    );
+    assert!(context.ends_with("... (truncated)"), "{context}");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn restore_checkpoint_rewrites_tracked_files_and_removes_untracked_ones() {
     let root = initialized_repository();
     let repository = discover_repository(&root).unwrap().unwrap();

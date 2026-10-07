@@ -873,11 +873,23 @@ pub fn commit_context(repository: &GitRepository, max_bytes: usize) -> Result<St
     context.push_str("\n\nDiff (unified=3, truncated):\n");
     let full = git_stdout(&repository.root, &["diff", "HEAD", "--unified=3"])?;
     let remaining = max_bytes.saturating_sub(context.len());
-    context.push_str(&full[..full.len().min(remaining)]);
-    if context.len() >= max_bytes || full.len() > remaining {
+    let diff = truncate_on_char_boundary(&full, remaining);
+    context.push_str(diff);
+    if context.len() >= max_bytes || diff.len() < full.len() {
         context.push_str("\n... (truncated)");
     }
     Ok(context)
+}
+
+/// 把 `text` 截断到 `max_bytes` 以内，并回退到最近的 UTF-8 字符边界。
+///
+/// 不能直接写 `&text[..n]`：预算落在多字节字符内部时按下标切会让 `&str`
+/// 直接 panic（`byte index N is not a char boundary; it is inside '…'`）。
+/// 这里的输入是 diff 原文，常常整段是中文，预算几乎必然落在某个汉字中间；
+/// 调用方又在后台线程里（`cx.background_spawn`），线程 panic 无法 unwind，
+/// 会升级成 `fatal runtime error: failed to initiate panic` 直接 abort 进程。
+fn truncate_on_char_boundary(text: &str, max_bytes: usize) -> &str {
+    &text[..text.floor_char_boundary(max_bytes.min(text.len()))]
 }
 
 /// untracked 文件相对路径列表。
