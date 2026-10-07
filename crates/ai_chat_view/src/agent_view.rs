@@ -765,9 +765,21 @@ fn merge_live_session_summaries(
     }
 
     summaries.extend(persisted.into_iter().map(|summary| {
-        live_by_id
-            .get(summary.id.as_str())
-            .map_or(summary, |live| (*live).clone())
+        // 实时摘要只提供「还在内存里变」的字段：标题与活跃时间。
+        //
+        // 工作区归属与外部 agent 来源是**落盘快照**的事实，不能被内存副本冲掉：
+        // 内存那份归属来自 `session_roots`，而它可能压根没有这个会话的记录
+        // （例如进程启动时建的那个初始会话从没进过表）。整体 `clone()` 覆盖
+        // 会让侧栏那一行从它的工作区分组掉进「未分组」，用户点一下别的会话
+        // 它又跳回来——「点一下分组就变了 / 顺序就变了」。
+        match live_by_id.get(summary.id.as_str()) {
+            Some(live) => SessionSummary {
+                name: live.name.clone(),
+                updated_at: live.updated_at,
+                ..summary
+            },
+            None => summary,
+        }
     }));
     summaries.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
     summaries
@@ -1565,6 +1577,14 @@ impl AgentChatView {
             false,
         );
 
+        // 初始会话在构造时就归属当前工作区（与 `start_fresh_session` 同一约定）。
+        // 漏了它，这条会话在第一次落盘之前没有任何归属可查，侧栏会先把它摆进
+        // 「未分组」，落盘后才跳回分组——看起来就像「点一下分组自己变了」。
+        let initial_session_roots = HashMap::from([(
+            current_session.clone(),
+            workspace_root.to_string_lossy().into_owned(),
+        )]);
+
         let new_view = Self {
             runtime,
             session_id,
@@ -1649,7 +1669,7 @@ impl AgentChatView {
             tool_options,
             runtime_factory,
             is_running: false,
-            session_roots: HashMap::new(),
+            session_roots: initial_session_roots,
             system_instruction: seed_system_instruction,
             system_instruction_from_settings,
             theme,
@@ -5315,9 +5335,10 @@ impl AgentChatView {
 
     /// 会话是否归属于当前工作区。
     ///
-    /// 没有记录归属（旧数据 / 测试里直接 restore 的会话）视为归属当前工作区——
-    /// 与快照载入时「缺失则归入当前工作区」的既有约定一致（见
-    /// [`Self::switch_session_with_origin`] 的「载入即定格」）。
+    /// 没有记录归属（旧数据 / 测试里直接 restore 的会话）视为归属当前工作区 ——
+    /// 与落盘时的兜底同一约定（见 [`Self::persist_session`]）。注意这只是**判定**
+    /// 用的默认值：点开一条无归属旧会话不会给它定格归属，别拿这里的 `true`
+    /// 去反推「它就属于当前工作区」并回写。
     fn session_belongs_to_current_workspace(&self, uid: &str) -> bool {
         let Some(root) = self.session_roots.get(uid) else {
             return true;
@@ -5474,13 +5495,12 @@ impl AgentChatView {
                 cx.notify();
                 return;
             };
-            // 载入即定格：优先快照里记录的工作区；旧快照没有则归入当前工作区。
-            let restored_root = snapshot
-                .workspace_root
-                .clone()
-                .unwrap_or_else(|| self.workspace_root.to_string_lossy().into_owned());
-            self.session_roots
-                .insert(uid.to_string(), restored_root);
+            // 载入即定格：快照里**记过**归属就照它定格；没有归属的旧会话保持
+            // 「无归属」——点开看一眼不是归属变更（侧栏「未分组」就是它的语义），
+            // 真正的定格留到它下次落盘（见 [`Self::persist_session`] 的兜底）。
+            if let Some(root) = snapshot.workspace_root.clone() {
+                self.session_roots.insert(uid.to_string(), root);
+            }
             let restored = self.runtime.restore_session(snapshot);
             restored.set_resources(self.resources.clone());
             restored
@@ -13938,6 +13958,49 @@ mod tests {
         );
     }
 
+    /// 点开会话只是选中它，不能顺手改写它的工作区归属。
+    ///
+    /// 实时摘要（live）只负责「名字 / 时间」这类还在内存里变动的字段；工作区
+    /// 归属的真源是落盘快照。实时摘要里这条如果缺归属（例如进程启动时建的
+    /// 初始会话从没进过 `session_roots`），整体覆盖会把侧栏那一行从它的工作区
+    /// 分组里打到「未分组」——用户看到的就是「点一下它就换组了」。
+    #[test]
+    fn selected_live_summary_must_not_erase_workspace_root() {
+        let persisted = vec![
+            SessionSummary::new("selected", "选中任务", 10)
+                .with_workspace_root(Some("/w/project".into())),
+        ];
+        let live = vec![SessionSummary::new("selected", "选中任务", 10)];
+
+        let merged =
+            merge_live_session_summaries(persisted, &live, "selected", &HashSet::new(), false);
+
+        assert_eq!(
+            Some("/w/project"),
+            merged[0].workspace_root.as_deref(),
+            "选中会话不应把它从所属工作区分组里打出去"
+        );
+    }
+
+    /// 反过来也一样：未分组的会话不能被实时摘要凭空塞进某个分组。
+    #[test]
+    fn selected_live_summary_must_not_invent_workspace_root() {
+        let persisted = vec![SessionSummary::new("legacy", "旧会话", 10)];
+        let live = vec![
+            SessionSummary::new("legacy", "旧会话", 10)
+                .with_workspace_root(Some("/w/project".into())),
+        ];
+
+        let merged =
+            merge_live_session_summaries(persisted, &live, "legacy", &HashSet::new(), false);
+
+        assert_eq!(
+            None,
+            merged[0].workspace_root.as_deref(),
+            "未分组的会话不应因为被选中就挂到某个工作区下"
+        );
+    }
+
     #[test]
     fn archived_sidebar_does_not_mix_in_live_workbench_tasks() {
         let archived = vec![SessionSummary::new("archived", "归档任务", 10)];
@@ -13956,6 +14019,120 @@ mod tests {
     fn local_workbench_can_switch_away_from_a_running_session() {
         assert!(!should_stop_task_before_session_switch(Backend::Local));
         assert!(should_stop_task_before_session_switch(Backend::Acp));
+    }
+
+    /// 启动时那张初始会话也要记住自己的工作区。
+    ///
+    /// `session_roots` 是侧栏归属在内存里的依据。漏了这条会话，它第一次落盘
+    /// 之前实时摘要就报不出归属，侧栏先把它摆进「未分组」，落盘后才跳回分组。
+    #[gpui::test]
+    fn the_initial_session_knows_its_workspace(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![])
+            .with_workspace_root(std::path::PathBuf::from("/tmp/navop-test-ws-a"));
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update_in(cx, |view, _window, _cx| {
+            assert_eq!(
+                view.session_roots
+                    .get(&view.current_session)
+                    .map(String::as_str),
+                Some("/tmp/navop-test-ws-a"),
+                "初始会话必须记住它的工作区，否则它在侧栏里会先显示成「未分组」"
+            );
+        });
+    }
+
+    /// 一条只带会话内容的存储后端；用来造「快照里没有工作区归属」的旧会话。
+    fn test_session_storage() -> one_core::storage::StorageManager {
+        use one_core::llm::chat_history::{
+            AgentSessionRepository, MessageRepository, SessionRepository,
+        };
+        use one_core::storage::StorageManager;
+        use one_core::storage::connection::SqliteConnection;
+        use one_core::storage::migration::run_migrations;
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let db_path = std::env::temp_dir().join(format!(
+            "navop-ai-chat-view-sessions-{}-{unique}.db",
+            std::process::id(),
+        ));
+        let _ = std::fs::remove_file(&db_path);
+        let conn = SqliteConnection::open_with_pool_size(&db_path, 1).expect("open sqlite");
+        conn.with_connection(run_migrations)
+            .expect("run migrations");
+
+        let storage = StorageManager::new_with_connection(conn.clone());
+        storage.register(AgentSessionRepository::new(conn.clone()));
+        storage.register(SessionRepository::new(conn.clone()));
+        storage.register(MessageRepository::new(conn));
+        storage
+    }
+
+    /// 点开一条「没有归属」的旧会话，不能顺手把它钉到当前工作区。
+    ///
+    /// 侧栏把它摆在「未分组」，就是因为快照里没有归属。归属的定格只发生在
+    /// **真正落盘**那一刻（见 `persist_session` 里的兜底）；只是点开看一眼
+    /// 就改写它，用户看到的就是「无分组的自己跑到分组下面去了」。
+    #[gpui::test]
+    fn opening_a_legacy_session_without_a_workspace_does_not_assign_one(cx: &mut TestAppContext) {
+        use agent_runtime::{HistoryItem, SessionId, SessionSnapshot};
+        use one_core::llm::chat_history::AgentSessionRepository;
+        use one_core::storage::GlobalStorageState;
+
+        init_test_ui(cx);
+
+        let legacy_uid = "legacy-without-workspace";
+        let snapshot = SessionSnapshot {
+            id: SessionId::from_string(legacy_uid),
+            resources: ResourceContext::new(),
+            history: vec![
+                HistoryItem::User {
+                    text: "升级前的老会话".into(),
+                    images: Vec::new(),
+                },
+                HistoryItem::Assistant("老回答".into()),
+            ],
+            plan: None,
+            system_instruction: None,
+            skills: agent_runtime::SkillContext::new(),
+            workspace_root: None,
+            draft: None,
+            context_tokens: None,
+            acp: None,
+        };
+        let snapshot_json = serde_json::to_string(&snapshot).expect("序列化快照");
+
+        let storage = test_session_storage();
+        storage
+            .get::<AgentSessionRepository>()
+            .expect("会话仓储")
+            .save_snapshot(legacy_uid, "升级前的老会话", &snapshot_json)
+            .expect("写入一条无归属旧会话");
+        cx.update(|cx| cx.set_global(GlobalStorageState { storage }));
+
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![])
+            .with_workspace_root(std::path::PathBuf::from("/tmp/navop-test-ws-a"));
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update_in(cx, |view, _window, cx| {
+            view.switch_session(legacy_uid, cx);
+
+            assert_eq!(
+                legacy_uid, view.current_session,
+                "前置：确实切到了那条旧会话（快照读回来了）"
+            );
+            assert_eq!(
+                None,
+                view.session_roots.get(legacy_uid).map(String::as_str),
+                "点开旧会话只是看一眼，不该凭空给它定一个工作区归属"
+            );
+        });
     }
 
     #[gpui::test]
