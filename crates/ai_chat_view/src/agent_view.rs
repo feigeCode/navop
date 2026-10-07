@@ -2355,18 +2355,33 @@ impl AgentChatView {
 
     /// 把底栏动作转发给宿主注入的数据源。
     ///
-    /// 先把 `Arc` 克隆出来再调用：宿主回调里很可能 `update` 本视图（重新取快照），
+    /// 先把 `Arc` 克隆出来再调用：宿主回调里会 `update` 本视图（重新取快照），
     /// 若直接借用 `self` 的字段就会自借用冲突。
+    ///
+    /// **必须延迟到本轮 `update` 收尾再执行**，不能原地调用。本函数处在
+    /// `on_input_event` 里，而那是本视图订阅 `AgentInput` 的回调：GPUI 的
+    /// `Context::subscribe_in` 会经 `invoke_subscriber_in` 先
+    /// `subscriber.update(...)`，也就是说回调运行期间 `AgentChatView` 已被租借。
+    /// 宿主动作末了会走 `shell.refresh_composer_context()`
+    /// → `DefaultAgentChatPanel::refresh_composer_context` → `AgentChatView::update`，
+    /// 同步调用就是 GPUI 的双重租借 panic：
+    /// `cannot update ai_chat_view::agent_view::AgentChatView while it is already
+    /// being updated`。而 macOS 的事件回调 `handle_view_event` 是 `extern "C"`，
+    /// panic 无法 unwind，会升级成 `fatal runtime error: failed to initiate panic`
+    /// 直接 abort 整个进程 —— 点一下底栏的分支 / Worktree / 工作区就是一次崩溃。
+    ///
+    /// `Window::defer` 把回调挂到 `Effect::Defer`，由最外层 `finish_update`
+    /// 的 `flush_effects` 执行，那时所有租借都已释放，且仍在同一帧内。
     fn run_composer_action(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
-        action: impl FnOnce(&ComposerContextSource, &mut Window, &mut gpui::App),
+        action: impl FnOnce(&ComposerContextSource, &mut Window, &mut gpui::App) + 'static,
     ) {
         let Some(source) = self.composer_context_source.clone() else {
             return;
         };
-        action(&source, window, cx);
+        window.defer(cx, move |window, cx| action(&source, window, cx));
     }
 
     fn submit(
@@ -15232,6 +15247,66 @@ mod tests {
         assert!(
             cx.debug_bounds("ai-chat-messages").is_some(),
             "the workbench content area must lay out the chat transcript"
+        );
+    }
+
+    /// 底栏 chip 的动作必须延后到本视图的租借释放之后才执行。
+    ///
+    /// 触发链路（与线上逐字同形）：`AgentInput` emit → 本视图的
+    /// `cx.subscribe_in` → GPUI 先 `subscriber.update(...)` 再回调，回调期间
+    /// `AgentChatView` 已被租借 → `run_composer_action` 把动作交给宿主 →
+    /// 宿主末了 `refresh_composer_context()` 回头 `update` 本视图。
+    /// 原地同步调用就是 GPUI 的双重租借 panic
+    /// （`cannot update ... while it is already being updated`）；而 macOS 的
+    /// 事件回调是 `extern "C"`，panic 无法 unwind，会升级成
+    /// `fatal runtime error` 直接 abort 整个进程 —— 点一下分支 / Worktree /
+    /// 工作区就崩一次。延后（`Window::defer`）后动作照旧执行，只是落在租借
+    /// 释放之后。
+    #[gpui::test]
+    fn gpui_composer_action_re_entering_the_view_does_not_double_lease(
+        cx: &mut TestAppContext,
+    ) {
+        init_test_ui(cx);
+        let runtime = test_runtime("m");
+        let config = AgentChatViewConfig::new(runtime, ResourceContext::new(), vec![]);
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_for_branch = calls.clone();
+
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let cx: &mut VisualTestContext = cx;
+
+        let view_for_action = view.clone();
+        let source = ComposerContextSource {
+            snapshot: Arc::new(|_: &mut gpui::App| ComposerContextSnapshot::default()),
+            select_workspace: Arc::new(
+                |_: &std::path::Path, _: &mut gpui::Window, _: &mut gpui::App| {},
+            ),
+            browse_workspace: Arc::new(|_: &mut gpui::Window, _: &mut gpui::App| {}),
+            // 宿主真实做法：切完分支再让视图重取快照 —— 也就是 update 本视图。
+            select_branch: Arc::new(move |_: &SharedString, cx: &mut gpui::App| {
+                calls_for_branch.fetch_add(1, Ordering::SeqCst);
+                view_for_action.update(cx, |view, cx| view.refresh_composer_context(cx));
+            }),
+            toggle_worktree: Arc::new(|_: bool, _: &mut gpui::App| {}),
+        };
+        view.update_in(cx, |view, _window, cx| {
+            view.set_composer_context_source(source, cx)
+        });
+
+        let input = view.update_in(cx, |view, _window, _cx| view.input.clone());
+        input.update(cx, |_, cx| {
+            cx.emit(AgentInputEvent::SelectBranch {
+                name: "dev".into(),
+            });
+        });
+        cx.run_until_parked();
+
+        assert_eq!(
+            1,
+            calls.load(Ordering::SeqCst),
+            "宿主动作必须照旧执行，只是延后到租借释放之后"
         );
     }
 }
