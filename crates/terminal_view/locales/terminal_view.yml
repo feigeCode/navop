@@ -611,6 +611,14 @@ SSH:
     en: Forward remote X11 graphical applications to the local X server. macOS requires XQuartz to be installed and running. Applies to new terminal sessions.
     zh-CN: 将远端 X11 图形应用转发到本机 X server。macOS 需要安装并启动 XQuartz。对新开的终端会话生效。
     zh-HK: 將遠端 X11 圖形應用轉發到本機 X server。macOS 需要安裝並啟動 XQuartz。對新開的終端工作階段生效。
+  forward_agent:
+    en: SSH Agent Forwarding
+    zh-CN: SSH Agent 转发
+    zh-HK: SSH Agent 轉發
+  forward_agent_desc:
+    en: Forward the local ssh-agent to the remote host (ForwardAgent), letting it authenticate to deeper hosts using your local keys. Applies to new terminal sessions.
+    zh-CN: 将本地 ssh-agent 转发给远端主机（ForwardAgent），使远端可代表你用本机私钥向更内层主机认证。对新开的终端会话生效。
+    zh-HK: 將本機 ssh-agent 轉發給遠端主機（ForwardAgent），使遠端可代表你用本機私鑰向更內層主機認證。對新開的終端工作階段生效。
   xquartz_not_installed:
     en: XQuartz was not detected. Install and start XQuartz before using X11 forwarding on macOS, then reconnect the SSH session.
     zh-CN: 未检测到 XQuartz。请先安装并启动 XQuartz，再重新建立 SSH 连接以使用 X11 转发。
@@ -1216,6 +1224,14 @@ TerminalView:
     en: Paste as single line
     zh-CN: 合并为单行粘贴
     zh-HK: 合併為單行貼上
+  paste_open_settings:
+    en: Open Settings
+    zh-CN: 打开设置
+    zh-HK: 開啟設定
+  paste_dont_ask_again:
+    en: Don't Ask Again
+    zh-CN: 不再提示
+    zh-HK: 不再提示
   large_paste_title:
     en: Confirm Large Paste
     zh-CN: 确认大段粘贴
@@ -1613,9 +1629,9 @@ TerminalCommandBar:
     zh-CN: 命令输入
     zh-HK: 命令輸入
   placeholder:
-    en: Enter commands, one per line. Shift+Enter for newline, Enter to run lines one by one
-    zh-CN: 输入命令，每行一条，Enter 逐条执行，Shift+Enter 换行
-    zh-HK: 輸入命令，每行一條，Enter 逐條執行，Shift+Enter 換行
+    en: One command per line · Up/Down select · Tab complete · Enter run · Shift+Enter newline
+    zh-CN: 输入命令，每行一条 · ↑/↓ 选择 · Tab 补全 · Enter 逐条执行 · Shift+Enter 换行
+    zh-HK: 輸入命令，每行一條 · ↑/↓ 選擇 · Tab 補全 · Enter 逐條執行 · Shift+Enter 換行
   search_quick_commands:
     en: Search quick commands
     zh-CN: 搜索快捷指令
@@ -1648,10 +1664,10 @@ TerminalCommandBar:
     en: History
     zh-CN: 历史
     zh-HK: 歷史
-  keyboard_hint:
-    en: Up/Down select · Tab complete · Enter run · Shift+Enter newline
-    zh-CN: ↑/↓ 选择 · Tab 补全 · Enter 逐条执行 · Shift+Enter 换行
-    zh-HK: ↑/↓ 選擇 · Tab 補全 · Enter 逐條執行 · Shift+Enter 換行
+  collapsed_hint:
+    en: Click to expand · Command input runs multiple commands
+    zh-CN: 点击展开 · 命令输入支持批量执行
+    zh-HK: 點擊展開 · 命令輸入支援批次執行
   expand:
     en: Expand command input
     zh-CN: 展开命令输入

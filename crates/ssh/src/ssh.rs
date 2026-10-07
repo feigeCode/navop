@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use russh::keys::*;
 use russh::*;
 use rust_i18n::t;
-use tokio::io::copy_bidirectional;
+use tokio::io::{AsyncRead, AsyncWrite, copy_bidirectional};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, oneshot};
 use x11_forwarding::{ForwardRequest, X11Proxy, X11ProxyHandle};
@@ -145,6 +145,16 @@ pub struct SshConnectConfig {
     pub x11_forwarding: bool,
     /// 是否为旧版 SSH 服务器启用兼容算法。默认应由连接配置保持关闭。
     pub allow_legacy_algorithms: bool,
+    /// 是否启用 ForwardAgent（`auth-agent-req@openssh.com`）。
+    ///
+    /// 启用后，连接持有的本地 ssh-agent 会通过 `auth-agent@openssh.com`
+    /// 通道转发给远端（典型场景：跳板机上用它向更内层主机认证）。
+    pub forward_agent: bool,
+    /// 连接建立前要加入本地 ssh-agent 的私钥身份。
+    ///
+    /// 这些密钥不参与本连接的认证，而是被 `ssh-add` 到本地 agent，
+    /// 再通过 ForwardAgent 供远端使用。密钥保持 agent 中，不随连接释放。
+    pub agent_identities: Vec<AgentIdentity>,
 }
 
 impl SshConnectConfig {
@@ -320,6 +330,25 @@ impl SshAuth {
     }
 }
 
+/// 一个要加入本地 ssh-agent 的私钥身份。
+///
+/// 与 [`SshAuth`] 分离：这组密钥不参与目标/跳板机认证，而是被添加到
+/// 本地 ssh-agent，随后通过 ForwardAgent 转发给远端（如跳板机），
+/// 供跳板机向更内层主机用该密钥认证。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AgentIdentity {
+    /// 从文件路径加载的私钥。
+    PrivateKeyPath {
+        key_path: String,
+        passphrase: Option<String>,
+    },
+    /// 直接以内联 PEM/OpenSSH 文本提供的私钥。
+    PrivateKeyContent {
+        private_key: String,
+        passphrase: Option<String>,
+    },
+}
+
 #[derive(Clone)]
 pub struct AuthFailureMessages {
     pub password_failed: String,
@@ -412,6 +441,13 @@ pub trait SshChannel: Send {
             "X11 forwarding is not supported by this channel"
         ))
     }
+    /// 请求 sshd 为该会话启用 ForwardAgent（`auth-agent-req@openssh.com`）。
+    /// 默认实现返回错误，表示该通道实现不支持 agent 转发。
+    async fn request_agent_forwarding(&mut self) -> Result<()> {
+        Err(anyhow::anyhow!(
+            "agent forwarding is not supported by this channel"
+        ))
+    }
     async fn set_env(&mut self, name: &str, value: &str) -> Result<()>;
     async fn send_data(&mut self, data: &[u8]) -> Result<()>;
     async fn resize_pty(&mut self, width: u32, height: u32) -> Result<()>;
@@ -448,6 +484,12 @@ pub trait SshClient: Send + Sync {
     fn x11_forwarding(&self) -> Option<&X11Proxy> {
         None
     }
+
+    /// 连接是否启用了 ForwardAgent（`auth-agent-req@openssh.com`）。
+    /// 默认 `false`；具体实现应返回连接配置中的实际值。
+    fn forward_agent(&self) -> bool {
+        false
+    }
 }
 
 struct RusshHandler {
@@ -455,6 +497,8 @@ struct RusshHandler {
     identity: HostKeyIdentity,
     host_key_verifier: HostKeyVerifier,
     remote_forward_target: Arc<RwLock<Option<RemoteForwardTarget>>>,
+    /// 是否把收到的 `auth-agent@openssh.com` 回连通道桥接到本地 ssh-agent。
+    forward_agent: bool,
 }
 
 impl RusshHandler {
@@ -463,12 +507,14 @@ impl RusshHandler {
         host_key_verifier: HostKeyVerifier,
         x11_handle: Option<X11ProxyHandle>,
         remote_forward_target: Arc<RwLock<Option<RemoteForwardTarget>>>,
+        forward_agent: bool,
     ) -> Self {
         Self {
             x11_handle,
             identity,
             host_key_verifier,
             remote_forward_target,
+            forward_agent,
         }
     }
 }
@@ -597,6 +643,26 @@ impl client::Handler for RusshHandler {
         Ok(())
     }
 
+    /// sshd 为远端向本地 agent 回连的 `auth-agent@openssh.com` 通道：
+    /// 将通道桥接到本地 ssh-agent（Unix socket / Windows 命名管道）。
+    async fn server_channel_open_agent_forward(
+        &mut self,
+        channel: Channel<client::Msg>,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        if !self.forward_agent {
+            reply
+                .reject(ChannelOpenFailure::AdministrativelyProhibited)
+                .await;
+            return Ok(());
+        }
+
+        reply.accept().await;
+        bridge_to_local_agent(channel).await;
+        Ok(())
+    }
+
     async fn server_channel_open_forwarded_tcpip(
         &mut self,
         channel: Channel<client::Msg>,
@@ -636,6 +702,139 @@ impl client::Handler for RusshHandler {
     }
 }
 
+/// 展开路径开头的 `~`（`~` 或 `~/...`）为用户主目录，其余路径原样返回。
+///
+/// 用户在设置中填写的私钥/证书路径是未经 shell 展开的原始文本，直接交给
+/// `load_secret_key`/`load_openssh_certificate` 会因找不到名为 `~` 的文件而报
+/// `No such file or directory`。
+fn expand_tilde(path: &str) -> PathBuf {
+    let suffix = if path == "~" {
+        Some("")
+    } else {
+        path.strip_prefix("~/")
+    };
+
+    match suffix.and_then(|suffix| dirs::home_dir().map(|home| home.join(suffix))) {
+        Some(expanded) => expanded,
+        None => PathBuf::from(path),
+    }
+}
+
+/// 把 `agent_identities` 中配置的私钥加入本地 ssh-agent。
+///
+/// 这些密钥不参与本连接的认证，而是驻留在 agent 中，随后通过 ForwardAgent
+/// 供远端（如跳板机）使用。密钥保持 agent 中，不随连接释放。
+async fn add_identities_to_local_agent(identities: &[AgentIdentity]) -> Result<()> {
+    if identities.is_empty() {
+        return Ok(());
+    }
+
+    let mut agent = connect_local_agent_client().await?;
+    for identity in identities {
+        let key = match identity {
+            AgentIdentity::PrivateKeyPath {
+                key_path,
+                passphrase,
+            } => load_secret_key(expand_tilde(key_path), passphrase.as_deref())?,
+            AgentIdentity::PrivateKeyContent {
+                private_key,
+                passphrase,
+            } => decode_secret_key(private_key, passphrase.as_deref())?,
+        };
+        agent
+            .add_identity(&key, &[])
+            .await
+            .map_err(|error| anyhow::anyhow!("ssh-add {:?} failed: {error}", key.public_key()))?;
+    }
+    Ok(())
+}
+
+/// 建立到本地 ssh-agent 的 AgentClient。
+///
+/// Unix 上通过 `SSH_AUTH_SOCK`，Windows 上连 OpenSSH 命名管道。Windows 上
+/// 只有 Pageant 时也尝试回退到 Pageant。
+async fn connect_local_agent_client()
+-> Result<agent::client::AgentClient<Box<dyn agent::client::AgentStream + Send + Unpin + 'static>>>
+{
+    #[cfg(unix)]
+    {
+        Ok(agent::client::AgentClient::connect_env().await?.dynamic())
+    }
+    #[cfg(windows)]
+    {
+        let openssh =
+            agent::client::AgentClient::connect_named_pipe(r"\\.\pipe\openssh-ssh-agent").await;
+        match openssh {
+            Ok(client) => Ok(client.dynamic()),
+            Err(openssh_error) => {
+                let pageant = agent::client::AgentClient::connect_pageant().await;
+                match pageant {
+                    Ok(client) => Ok(client.dynamic()),
+                    Err(_) => Err(openssh_error.into()),
+                }
+            }
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        Err(anyhow::anyhow!(
+            "ssh-agent is not supported on this platform"
+        ))
+    }
+}
+
+/// 把 sshd 打开的 `auth-agent@openssh.com` 回连通道桥接到本地 ssh-agent。
+///
+/// 本地 agent 端点：Unix 上读 `SSH_AUTH_SOCK`，Windows 上连 OpenSSH 命名管道。
+/// 连接失败仅记录日志，不向上抛错（通道由调用方接受后随会话关闭）。
+async fn bridge_to_local_agent(channel: Channel<client::Msg>) {
+    let (mut agent_stream, socket_path) = match connect_to_local_agent().await {
+        Ok(pair) => pair,
+        Err(error) => {
+            tracing::warn!(
+                target: "ssh.agent",
+                error = %error,
+                "无法连接本地 ssh-agent，ForwardAgent 通道已关闭"
+            );
+            return;
+        }
+    };
+
+    let mut ssh_stream = channel.into_stream();
+    tracing::debug!(
+        target: "ssh.agent",
+        socket = %socket_path,
+        "已桥接 ForwardAgent 通道到本地 ssh-agent"
+    );
+    tokio::spawn(async move {
+        if let Err(error) = copy_bidirectional(&mut ssh_stream, &mut agent_stream).await {
+            tracing::debug!(target: "ssh.agent", error = %error, "ForwardAgent 桥接结束");
+        }
+    });
+}
+
+async fn connect_to_local_agent() -> Result<(impl AsyncRead + AsyncWrite + Unpin, String)> {
+    #[cfg(unix)]
+    {
+        let path = std::env::var("SSH_AUTH_SOCK")
+            .map_err(|_| anyhow::anyhow!("SSH_AUTH_SOCK is not set"))?;
+        let stream = tokio::net::UnixStream::connect(&path).await?;
+        Ok((stream, path))
+    }
+    #[cfg(windows)]
+    {
+        const NAMED_PIPE: &str = r"\\.\pipe\openssh-ssh-agent";
+        let stream = tokio::net::windows::named_pipe::ClientOptions::new().open(NAMED_PIPE)?;
+        Ok((stream, NAMED_PIPE.to_string()))
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        Err(anyhow::anyhow!(
+            "ssh-agent is not supported on this platform"
+        ))
+    }
+}
+
 pub struct RusshClient {
     session: client::Handle<RusshHandler>,
     /// 跳板机会话（如果使用跳板机连接）
@@ -643,6 +842,11 @@ pub struct RusshClient {
     /// 本机 X11 转发管理器（仅在配置启用且本机 X server 可用时存在）。
     x11_proxy: Option<X11Proxy>,
     remote_forward_target: Arc<RwLock<Option<RemoteForwardTarget>>>,
+    /// 连接是否启用了 ForwardAgent（`auth-agent-req@openssh.com`）。
+    ///
+    /// 启用后，终端在 pty 之后、shell 之前会发送 agent 转发请求，
+    /// 使远端（如跳板机）能通过 `auth-agent@openssh.com` 通道使用本地 ssh-agent。
+    forward_agent: bool,
 }
 
 pub struct LocalPortForwardTunnel {
@@ -753,7 +957,7 @@ where
             let key_pair = private_key_for_auth(auth)?;
 
             if let Some(cert_path) = certificate_path {
-                let cert = load_openssh_certificate(cert_path)?;
+                let cert = load_openssh_certificate(expand_tilde(cert_path))?;
                 let auth_result = session
                     .authenticate_openssh_cert(username, Arc::new(key_pair), cert)
                     .await?;
@@ -804,7 +1008,10 @@ fn private_key_for_auth(auth: &SshAuth) -> Result<PrivateKey> {
             key_path,
             passphrase,
             ..
-        } => Ok(load_secret_key(key_path, passphrase.as_deref())?),
+        } => Ok(load_secret_key(
+            expand_tilde(key_path),
+            passphrase.as_deref(),
+        )?),
         SshAuth::PrivateKeyContent {
             private_key,
             passphrase,
@@ -1773,6 +1980,22 @@ mod tests {
     }
 
     #[test]
+    fn expand_tilde_replaces_leading_tilde_with_home_dir() {
+        let home = dirs::home_dir().expect("测试环境应有可用的 home 目录");
+
+        assert_eq!(expand_tilde("~"), home);
+        assert_eq!(expand_tilde("~/.ssh/id_rsa"), home.join(".ssh/id_rsa"));
+        assert_eq!(
+            expand_tilde("/absolute/id_rsa"),
+            PathBuf::from("/absolute/id_rsa")
+        );
+        assert_eq!(
+            expand_tilde("relative/id_rsa"),
+            PathBuf::from("relative/id_rsa")
+        );
+    }
+
+    #[test]
     fn windows_agent_backend_is_explicit_for_each_auth_method() {
         assert_eq!(
             windows_agent_backend_for_auth(&SshAuth::Agent),
@@ -2327,6 +2550,14 @@ impl SshClient for RusshClient {
             .map(|identity| build_russh_client_config(&config, identity))
             .transpose()?;
 
+        // 需要 ForwardAgent 时，先把配置的私钥加入本地 ssh-agent，
+        // 使它们可被远端（如跳板机）通过转发通道使用。
+        if config.forward_agent {
+            add_identities_to_local_agent(&config.agent_identities)
+                .await
+                .context("add SSH agent identities")?;
+        }
+
         // X11 转发依赖本机 X server（DISPLAY/XAUTHORITY），解析失败仅降级不阻断连接。
         let x11_proxy = if config.x11_forwarding {
             detect_x11_proxy().await
@@ -2357,6 +2588,7 @@ impl SshClient for RusshClient {
                         host_key_verifier.clone(),
                         None,
                         Arc::new(RwLock::new(None)),
+                        config.forward_agent,
                     );
                     client::connect_stream(jump_russh_config, stream, handler)
                         .await
@@ -2370,6 +2602,7 @@ impl SshClient for RusshClient {
                         host_key_verifier.clone(),
                         None,
                         Arc::new(RwLock::new(None)),
+                        config.forward_agent,
                     );
                     client::connect(jump_russh_config, addrs, handler)
                         .await
@@ -2402,6 +2635,7 @@ impl SshClient for RusshClient {
                     host_key_verifier.clone(),
                     x11_handle.clone(),
                     Arc::clone(&remote_forward_target),
+                    config.forward_agent,
                 );
                 let mut session = client::connect_stream(
                     target_russh_config,
@@ -2429,6 +2663,7 @@ impl SshClient for RusshClient {
                     _jump_session: Some(jump_session),
                     x11_proxy: x11_proxy.clone(),
                     remote_forward_target: Arc::clone(&remote_forward_target),
+                    forward_agent: config.forward_agent,
                 })
             }
             // 情况2: 仅使用代理连接
@@ -2446,6 +2681,7 @@ impl SshClient for RusshClient {
                     host_key_verifier.clone(),
                     x11_handle.clone(),
                     Arc::clone(&remote_forward_target),
+                    config.forward_agent,
                 );
                 let mut session = client::connect_stream(target_russh_config, stream, handler)
                     .await
@@ -2468,6 +2704,7 @@ impl SshClient for RusshClient {
                     _jump_session: None,
                     x11_proxy: x11_proxy.clone(),
                     remote_forward_target: Arc::clone(&remote_forward_target),
+                    forward_agent: config.forward_agent,
                 })
             }
             // 情况3: 直接连接
@@ -2478,6 +2715,7 @@ impl SshClient for RusshClient {
                     host_key_verifier.clone(),
                     x11_handle.clone(),
                     Arc::clone(&remote_forward_target),
+                    config.forward_agent,
                 );
                 let mut session = client::connect(target_russh_config, addrs, handler)
                     .await
@@ -2500,6 +2738,7 @@ impl SshClient for RusshClient {
                     _jump_session: None,
                     x11_proxy: x11_proxy.clone(),
                     remote_forward_target: Arc::clone(&remote_forward_target),
+                    forward_agent: config.forward_agent,
                 })
             }
         };
@@ -2542,6 +2781,10 @@ impl SshClient for RusshClient {
 
     fn x11_forwarding(&self) -> Option<&X11Proxy> {
         self.x11_proxy.as_ref()
+    }
+
+    fn forward_agent(&self) -> bool {
+        self.forward_agent
     }
 }
 
@@ -2679,6 +2922,8 @@ mod port_forward_tests {
             host_key_verifier: HostKeyVerifier::default(),
             x11_forwarding: false,
             allow_legacy_algorithms: false,
+            forward_agent: false,
+            agent_identities: Vec::new(),
         }
     }
 
@@ -3061,6 +3306,8 @@ mod port_forward_tests {
             host_key_verifier: HostKeyVerifier::insecure(),
             x11_forwarding: false,
             allow_legacy_algorithms,
+            forward_agent: false,
+            agent_identities: Vec::new(),
         };
 
         let result = RusshClient::connect(config).await;
@@ -3166,6 +3413,8 @@ zsXyAAAAAAE=
             host_key_verifier,
             x11_forwarding: false,
             allow_legacy_algorithms: false,
+            forward_agent: false,
+            agent_identities: Vec::new(),
         }
     }
 
@@ -3722,6 +3971,11 @@ impl SshChannel for RusshChannel {
                 request.screen,
             )
             .await?;
+        Ok(())
+    }
+
+    async fn request_agent_forwarding(&mut self) -> Result<()> {
+        self.channel.agent_forward(true).await?;
         Ok(())
     }
 

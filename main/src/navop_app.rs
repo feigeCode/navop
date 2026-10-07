@@ -299,6 +299,16 @@ pub(crate) fn shutdown_application_resources_and_quit(cx: &mut App, reason: &'st
             );
         }
 
+        // 托盘与全局热键的句柄都是 `!Send` 的平台对象，只能留在创建它们的主线程上。
+        // 必须在 `cx.quit()` 之前显式释放，不能留给进程退出的 TLS 析构链：Linux(ksni)
+        // 的 `TrayIcon::drop` 会回到 async-io，而 async-io 的线程本地是在托盘安装过程中
+        // 才注册的，退出时反而先被销毁 —— 析构器撞上已销毁的 TLS 只能 panic → abort
+        // （issue #336）。详见 `system_tray::shutdown`。
+        let _ = cx.update(|_cx| {
+            crate::system_tray::shutdown();
+            crate::app_init::shutdown_system_hotkey();
+        });
+
         let _ = cx.update(|cx| cx.quit());
     })
     .detach();
@@ -2319,6 +2329,44 @@ mod tests {
         let update_dialog = include_str!("update/dialog.rs");
         assert!(update_dialog.contains("shutdown_application_resources_and_quit"));
         assert!(!update_dialog.contains("cx.quit()"));
+    }
+
+    /// 退出漏斗必须先把留在主线程 TLS 上的原生平台句柄释放掉，再调 `cx.quit()`。
+    ///
+    /// Linux(ksni) 的 `TrayIcon::drop` 会跑 `async_io::block_on()`，而 async-io 的线程
+    /// 本地 `driver::CACHE` 注册得比 `TRAY_ICON` 晚 ⇒ 进程退出时反而先被销毁；
+    /// 析构链走到 `TRAY_ICON` 时访问它就是 `AccessError` panic，而 TLS 析构器里不能
+    /// panic，只能 abort（issue #336：退出流程全部正常，进程却以 SIGABRT 收尾并留 core）。
+    #[test]
+    fn quit_path_releases_platform_handles_before_quitting() {
+        let source = include_str!("navop_app.rs").replace("\r\n", "\n");
+        let helper_start = source
+            .find("pub(crate) fn shutdown_application_resources_and_quit")
+            .expect("shared application resource shutdown helper");
+        let helper_end = source[helper_start..]
+            .find("\n}\n\n#[derive(Clone, Copy")
+            .map(|offset| helper_start + offset)
+            .expect("shared application resource shutdown helper end");
+        let helper = &source[helper_start..helper_end];
+
+        let tray_release = helper
+            .find("crate::system_tray::shutdown();")
+            .expect("tray handle release");
+        let hotkey_release = helper
+            .find("crate::app_init::shutdown_system_hotkey();")
+            .expect("global hotkey manager release");
+        let platform_quit = helper
+            .find("cx.update(|cx| cx.quit())")
+            .expect("platform quit");
+
+        assert!(
+            tray_release < platform_quit,
+            "托盘句柄必须在 cx.quit() 之前释放，否则退回 TLS 析构链就是 SIGABRT"
+        );
+        assert!(
+            hotkey_release < platform_quit,
+            "全局热键句柄必须在 cx.quit() 之前释放"
+        );
     }
 
     #[test]

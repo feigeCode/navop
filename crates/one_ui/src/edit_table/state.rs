@@ -12,6 +12,7 @@ use super::find::{
     resolve_find, row_highlight_ranges, row_matches, scroll_target_for_match,
 };
 use super::selection::{CellCoord, TableSelection};
+use super::tsv::{encode_tsv_rows, parse_tsv_rows};
 use super::*;
 use crate::edit_table::filter_panel::FilterPanel;
 use gpui::{
@@ -33,6 +34,19 @@ use gpui_component::{
 };
 use one_assets::IconName;
 use rust_i18n::t;
+
+/// 列宽分隔线本身的宽度。
+const COLUMN_RESIZE_LINE_WIDTH: Pixels = px(1.);
+
+/// 分隔条在列边界两侧各自的抓取区宽度。
+///
+/// 旧实现是「2px、整条都缩在列内、贴着右缘」的一根细带：命中区比指针热区
+/// 还窄，鼠标得像素级对准才碰得到，稍微偏一点光标和悬停高亮就一起没了——
+/// 这正是「表头宽度不好拉」。边界两侧各留这么宽，抓取区才算够得着。
+const COLUMN_RESIZE_GRAB_PADDING: Pixels = px(4.);
+
+/// 拖动时列边界落在指针左侧多远（拖动中的边界始终「跟在指尖后面」）。
+const COLUMN_RESIZE_DRAG_OFFSET: Pixels = px(2.);
 
 fn data_column_selection_bounds(
     total_column_count: usize,
@@ -2301,17 +2315,12 @@ where
             return;
         }
 
-        // 转换为 TSV 格式（Tab 分隔，与 Excel 兼容）
-        let text = data
-            .iter()
-            .map(|row| {
-                row.iter()
-                    .map(|cell| cell.as_deref().unwrap_or("\\N"))
-                    .collect::<Vec<_>>()
-                    .join("\t")
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        // 转换为 TSV 格式（Tab 分隔，与 Excel 兼容），含分隔符/引号的值会被转义
+        let text = encode_tsv_rows(data.iter().map(|row| {
+            row.iter()
+                .map(|cell| cell.as_deref().unwrap_or("\\N"))
+                .collect::<Vec<_>>()
+        }));
 
         // 写入剪贴板
         cx.write_to_clipboard(ClipboardItem::new_string(text));
@@ -2338,11 +2347,8 @@ where
             return;
         };
 
-        // 解析 TSV 数据
-        let data: Vec<Vec<String>> = text
-            .lines()
-            .map(|line| line.split('\t').map(|s| s.to_string()).collect())
-            .collect();
+        // 解析 TSV 数据（与复制侧的转义对称）
+        let data: Vec<Vec<String>> = parse_tsv_rows(&text);
 
         if data.is_empty() {
             return;
@@ -2991,44 +2997,46 @@ where
         }
     }
 
-    fn render_resize_handle(
-        &self,
-        ix: usize,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        const HANDLE_SIZE: Pixels = px(2.);
-
-        let resizable = self.col_resizable
+    /// 列宽分隔条能否拖动：整体允许缩放，且这一列本身可缩放。
+    fn is_col_resizable(&self, ix: usize) -> bool {
+        self.col_resizable
             && self
                 .col_groups
                 .get(ix)
                 .map(|col| col.is_resizable())
-                .unwrap_or(false);
-        if !resizable {
-            return div().into_any_element();
+                .unwrap_or(false)
+    }
+
+    /// 第 `ix - 1` 列与第 `ix` 列的边界是否落在同一个表头分组内。
+    ///
+    /// 表头被拆成「固定列」和「横向滚动列」两组渲染：滚动组的左边缘会随
+    /// 横向滚动跑，固定组的右边缘不动，两者只在未滚动时重合。跨组的边界只能
+    /// 靠左侧那一列自己的右半边抓取，否则会在滚动后留下一条错位的假抓取区。
+    fn boundary_is_inside_one_head_group(&self, ix: usize) -> bool {
+        match (ix.checked_sub(1), self.col_groups.get(ix)) {
+            (Some(prev), Some(current)) => self
+                .col_groups
+                .get(prev)
+                .is_some_and(|prev| prev.column.fixed == current.column.fixed),
+            _ => false,
         }
+    }
 
-        let group_id = SharedString::from(format!("resizable-handle:{}", ix));
-
+    /// 分隔条的抓取区：只管命中、光标与拖动，位置和外观由调用方决定。
+    ///
+    /// 抓取区被列边界一分为二（左右各 [`COLUMN_RESIZE_GRAB_PADDING`] 宽），
+    /// 所以边界两侧的列各自渲染自己那半边。两半边都压在自己列的内容之上，
+    /// 后画的兄弟节点先拿到鼠标，不会被单元格抢走。
+    fn resize_handle_band(
+        &self,
+        ix: usize,
+        id: ElementId,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
         h_flex()
-            .id(("resizable-handle", ix))
-            .group(group_id.clone())
+            .id(id)
             .occlude()
             .cursor_col_resize()
-            .h_full()
-            .w(HANDLE_SIZE)
-            .ml(-(HANDLE_SIZE))
-            .justify_end()
-            .items_center()
-            .child(
-                div()
-                    .h_full()
-                    .justify_center()
-                    .bg(cx.theme().table_row_border)
-                    .group_hover(group_id, |this| this.bg(cx.theme().border).h_full())
-                    .w(px(1.)),
-            )
             .on_drag_move(
                 cx.listener(move |view, e: &DragMoveEvent<ResizeColumn>, window, cx| {
                     match e.drag(cx) {
@@ -3048,7 +3056,9 @@ where
 
                             view.resize_cols(
                                 ix,
-                                e.event.position.x - HANDLE_SIZE - col_group.bounds.left(),
+                                e.event.position.x
+                                    - COLUMN_RESIZE_DRAG_OFFSET
+                                    - col_group.bounds.left(),
                                 window,
                                 cx,
                             );
@@ -3064,18 +3074,85 @@ where
             })
             .on_mouse_up_out(
                 MouseButton::Left,
-                cx.listener(|view, _, _, cx| {
-                    if view.resizing_col.is_none() {
-                        return;
-                    }
-
-                    view.resizing_col = None;
-
-                    let new_widths = view.col_groups.iter().map(|g| g.width).collect();
-                    cx.emit(EditTableEvent::ColumnWidthsChanged(new_widths));
-                    cx.notify();
-                }),
+                cx.listener(|view, _, _, cx| view.finish_column_resize(cx)),
             )
+    }
+
+    /// 结束一次列宽拖动：清掉拖动态并把新列宽广播给宿主。
+    fn finish_column_resize(&mut self, cx: &mut Context<Self>) {
+        if self.resizing_col.is_none() {
+            return;
+        }
+
+        self.resizing_col = None;
+
+        let new_widths = self.col_groups.iter().map(|g| g.width).collect();
+        cx.emit(EditTableEvent::ColumnWidthsChanged(new_widths));
+        cx.notify();
+    }
+
+    /// 列边界的右半边：贴在第 `ix` 列右缘内侧，并画出分隔线。
+    fn render_resize_handle(
+        &self,
+        ix: usize,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        if !self.is_col_resizable(ix) {
+            return div().into_any_element();
+        }
+
+        let group_id = SharedString::from(format!("resizable-handle:{}", ix));
+        let dragging = self.resizing_col == Some(ix);
+        // 拖动中指针大多已经离开抓取区，悬停态这时不再可信：拖动态必须压过
+        // 它，否则分隔线会在「拖动中」和「悬停」两个颜色之间来回闪。
+        let (line_color, hover_color) = if dragging {
+            (cx.theme().drag_border, cx.theme().drag_border)
+        } else {
+            (cx.theme().table_row_border, cx.theme().border)
+        };
+
+        self.resize_handle_band(ix, ("resizable-handle", ix).into(), cx)
+            .debug_selector(move || format!("resizable-handle-{ix}"))
+            .group(group_id.clone())
+            .h_full()
+            .w(COLUMN_RESIZE_GRAB_PADDING)
+            .ml(-COLUMN_RESIZE_GRAB_PADDING)
+            .justify_end()
+            .items_center()
+            .child(
+                div()
+                    .h_full()
+                    .w(COLUMN_RESIZE_LINE_WIDTH)
+                    .bg(line_color)
+                    .group_hover(group_id, move |this| this.bg(hover_color).h_full()),
+            )
+            .into_any_element()
+    }
+
+    /// 列边界的左半边：贴在第 `ix` 列左缘内侧，也就是第 `ix - 1` 列右边界
+    /// 的另一半抓取区。只负责把鼠标接住，分隔线仍由左侧那一列画。
+    fn render_leading_resize_handle(
+        &self,
+        ix: usize,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(boundary) = ix
+            .checked_sub(1)
+            .filter(|boundary| self.is_col_resizable(*boundary))
+            .filter(|_| self.boundary_is_inside_one_head_group(ix))
+        else {
+            return div().into_any_element();
+        };
+
+        self.resize_handle_band(boundary, ("resizable-handle-leading", ix).into(), cx)
+            .debug_selector(move || format!("resizable-handle-leading-{ix}"))
+            .absolute()
+            .top_0()
+            .left_0()
+            .h_full()
+            .w(COLUMN_RESIZE_GRAB_PADDING)
             .into_any_element()
     }
 
@@ -3360,6 +3437,7 @@ where
                     }),
             )
             .child(self.render_resize_handle(col_ix, window, cx))
+            .child(self.render_leading_resize_handle(col_ix, window, cx))
             .child({
                 let view = cx.entity().clone();
                 canvas(

@@ -124,12 +124,42 @@ pub trait SyncTypeHandler: Send + Sync + 'static {
     ) -> Result<Self::Item, SyncError>;
 
     /// 加密本地数据项为云端数据
+    ///
+    /// 传入 `engine` 是因为部分类型（如工作空间）在加密前需要
+    /// 把本地引用解析为云端 ID，而不是上传仅在本机有效的整数 ID。
     fn encrypt(
         &self,
+        engine: &SyncEngine,
         service: &CloudSyncService,
         item: &Self::Item,
         teams: &[Team],
     ) -> Result<CloudSyncData, SyncError>;
+
+    // --- 同步计划修正与收尾（默认无操作） ---
+
+    /// 修正同步计划（在计划计算完成后、执行前调用）
+    ///
+    /// 用于处理数据类型特有的补偿：例如工作空间需要把「云端载荷尚未携带
+    /// 层级信息」的本地分组重新上传，让旧数据也能补上父分组引用。
+    fn adjust_plan(
+        &self,
+        _engine: &SyncEngine,
+        _plan: &mut GenericSyncPlan<Self::Item>,
+        _cloud_data: &[CloudSyncData],
+    ) {
+    }
+
+    /// 同步收尾（在所有操作执行完成后调用）
+    ///
+    /// 用于解析跨记录的云端引用：例如把所有工作空间的本地父分组 ID
+    /// 按本次拉动到的云端记录重新对齐。
+    fn finalize_sync(
+        &self,
+        _engine: &SyncEngine,
+        _cloud_data: &[CloudSyncData],
+    ) -> Result<(), SyncError> {
+        Ok(())
+    }
 
     // --- 待删除处理（有默认实现） ---
 

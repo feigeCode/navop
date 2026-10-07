@@ -703,9 +703,15 @@ impl DefaultSqlCompletionProvider {
     /// Parse SQL text and return both context and symbol table.
     ///
     /// This method is used when we need the symbol table for DotColumn filtering.
+    ///
+    /// 符号表只由**当前语句**的 token 构建：文档里其他语句的 FROM/JOIN 表和别名
+    /// 不能参与本语句的补全，否则会出现「当前表的字段列表里混入别的表的字段」
+    /// （issue #329）。上下文推断同样只看当前语句的 token，避免解析到上一条语句
+    /// 遗留的点号。
     fn parse_context_with_symbols(tokens: &[SqlToken], offset: usize) -> (SqlContext, SymbolTable) {
-        let symbol_table = SymbolTable::build_from_tokens(tokens);
-        let inferred = ContextInferrer::infer(tokens, offset, &symbol_table);
+        let statement_tokens = current_statement_tokens(tokens, offset);
+        let symbol_table = SymbolTable::build_from_tokens(statement_tokens);
+        let inferred = ContextInferrer::infer(statement_tokens, offset, &symbol_table);
         (Self::convert_context(inferred), symbol_table)
     }
 
@@ -764,27 +770,56 @@ pub(crate) fn cursor_is_in_sql_literal_or_comment(
     })
 }
 
+/// 当前语句（以分号划分）覆盖的字节范围 `[start, end)`。
+///
+/// 起点是光标之前最后一个分号的末尾，终点是光标之后第一个分号的起点；光标之后
+/// 没有分号时以 token 流末端（Eof token 的偏移）为界。分号划分对 `DELIMITER`
+/// 之类的存储过程体并不精确，但这是旧的 `current_statement_has_from_keyword`
+/// 已经在用的口径，收窄只会少给候选、不会给错候选。
+fn current_statement_bounds(tokens: &[SqlToken], offset: usize) -> std::ops::Range<usize> {
+    let start = tokens
+        .iter()
+        .filter(|token| token.kind == SqlTokenKind::Semicolon && token.end <= offset)
+        .map(|token| token.end)
+        .next_back()
+        .unwrap_or(0);
+    let end = tokens
+        .iter()
+        .find(|token| token.kind == SqlTokenKind::Semicolon && token.start >= offset)
+        .map(|token| token.start)
+        .unwrap_or_else(|| tokens.last().map_or(0, |token| token.end));
+
+    start..end
+}
+
+/// 当前语句（以分号划分）的 token 子切片，含语句内的空白与注释；终止分号本身不计入。
+///
+/// 补全时用它来构建符号表和推断上下文，保证候选只来自光标所在的那条语句。
+pub(crate) fn current_statement_tokens(tokens: &[SqlToken], offset: usize) -> &[SqlToken] {
+    let bounds = current_statement_bounds(tokens, offset);
+    let start = tokens
+        .iter()
+        .position(|token| token.end > bounds.start)
+        .unwrap_or(tokens.len());
+    let end = tokens
+        .iter()
+        .position(|token| token.start >= bounds.end)
+        .unwrap_or(tokens.len());
+
+    &tokens[start.min(end)..end]
+}
+
 pub(crate) fn current_statement_has_from_keyword(
     text: &str,
     tokens: &[SqlToken],
     offset: usize,
 ) -> bool {
     let offset = clip_sql_offset(text, offset);
-    let statement_start = tokens
-        .iter()
-        .filter(|token| token.kind == SqlTokenKind::Semicolon && token.end <= offset)
-        .map(|token| token.end)
-        .next_back()
-        .unwrap_or(0);
-    let statement_end = tokens
-        .iter()
-        .find(|token| token.kind == SqlTokenKind::Semicolon && token.start >= offset)
-        .map(|token| token.start)
-        .unwrap_or(text.len());
+    let bounds = current_statement_bounds(tokens, offset);
 
     tokens.iter().any(|token| {
-        token.start >= statement_start
-            && token.end <= statement_end
+        token.start >= bounds.start
+            && token.end <= bounds.end
             && token.is_keyword_of(SqlKeyword::From)
     })
 }

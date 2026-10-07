@@ -8,6 +8,8 @@ SSH authentication supports passwords, private-key files, inline private-key con
 
 The SSH connection's Advanced Settings include an "Allow Legacy SSH Algorithms" compatibility option (off by default). Enable it per connection only when a server supports only older algorithms such as DSA host keys, SHA-1 key exchange/MAC, or 1024-bit DH group negotiation; Windows also supports Pageant authentication. Enabling it lowers cryptographic strength, so do not keep it on for servers that can be upgraded.
 
+A key credential can be marked "Forward this key through ssh-agent", and the connection's Advanced Settings also carry an "SSH Agent Forwarding" (ForwardAgent) switch. With the local ssh-agent forwarded to the remote host, that host (a jump host, for example) can authenticate onward to deeper hosts with your local key; the setting applies to newly opened terminal sessions, so reconnect existing ones.
+
 Local profiles include the system shell, PowerShell, CMD, WSL, Git Bash, or a custom program. Select the profile when opening a terminal; unavailable platform-specific choices are hidden. Use trusted executables and safely parsed arguments, and do not place passwords in command-line parameters.
 
 The terminal AI sidebar works with both SSH and local sessions and uses the active terminal as its default resource context. Verify the shell, operating system, host, and current directory before running generated commands; local PowerShell, custom programs, and remote Linux shells are not interchangeable.

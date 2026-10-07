@@ -3,6 +3,7 @@ use db::{
     executor::BinaryCell,
 };
 use gpui::SharedString;
+use one_ui::edit_table::tsv::encode_tsv_rows;
 
 #[path = "copy_sql_format.rs"]
 mod copy_sql_format;
@@ -232,21 +233,13 @@ impl CopyFormatter {
     }
 
     fn format_tsv(context: CopyFormatContext<'_>) -> String {
-        context
-            .data
-            .iter()
-            .enumerate()
-            .map(|(row_index, row)| {
-                row.iter()
-                    .enumerate()
-                    .map(|(column_index, _)| {
-                        Self::plain_cell(context.cell(row_index, column_index))
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\t")
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+        // 含分隔符/换行的值会转义，否则粘贴时会被当成列/行分隔符切开（issue #355）。
+        encode_tsv_rows(context.data.iter().enumerate().map(|(row_index, row)| {
+            row.iter()
+                .enumerate()
+                .map(|(column_index, _)| Self::plain_cell(context.cell(row_index, column_index)))
+                .collect::<Vec<_>>()
+        }))
     }
 
     fn format_csv(context: CopyFormatContext<'_>) -> String {

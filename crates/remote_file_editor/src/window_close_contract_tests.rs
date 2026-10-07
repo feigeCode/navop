@@ -132,9 +132,9 @@ fn native_hide_is_macos_only_and_keeps_the_window_registered() {
     assert!(platform.contains("MainThreadMarker::new()"));
     assert!(platform.contains("native.orderOut(None)"));
     assert!(platform.contains("!native.isVisible()"));
-    // 隐藏必须与弹窗共用同一个开关：只有打包时开了 `macos-touchbar-window-hide` 的
-    // x86_64 macOS 包才隐藏，其余构建（含 ARM macOS）退回销毁 —— 否则「隐藏的原生窗口
-    // 一直占着 NSWindow / CAMetalLayer」这个代价会被推到不该付的平台上。
+    // 隐藏必须与弹窗共用同一个开关：只有打包时传了 `macos-touchbar-window-hide` 的构建
+    // 才隐藏，其余构建（含默认的全部构建 —— 该开关当前恒为 `false`）退回销毁 —— 否则
+    // 「隐藏的原生窗口一直占着 NSWindow / CAMetalLayer」这个代价会被推到不该付的构建上。
     let hidden_half = platform
         .split("#[cfg(not(target_os = \"macos\"))]")
         .next()

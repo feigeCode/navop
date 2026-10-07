@@ -16,8 +16,33 @@ fn personal_sync_runtime_is_disabled_without_path() {
 
     assert_eq!(
         Err(PersonalSyncRuntimeError::NotConfigured),
-        build_personal_sync_runtime_config(&settings)
+        build_personal_sync_runtime_config(&settings, None)
     );
+}
+
+#[test]
+fn personal_sync_runtime_requires_webdav_credentials() {
+    let settings = PersonalSyncSettings {
+        backend: crate::settings::PersonalSyncBackendKind::Webdav,
+        webdav: crate::settings::PersonalWebdavSyncSettings {
+            url: "https://dav.example.com/dav/navop/".to_string(),
+            username: "user".to_string(),
+            password: "ENC:sealed".to_string(),
+        },
+        ..PersonalSyncSettings::default()
+    };
+
+    // 配置填了但解不出密码，等同于未配置。
+    assert_eq!(
+        Err(PersonalSyncRuntimeError::NotConfigured),
+        build_personal_sync_runtime_config(&settings, None)
+    );
+
+    let config =
+        build_personal_sync_runtime_config(&settings, Some("plain-password")).expect("config");
+    // 运行时日志里不应该出现明文：Debug 实现会把密码打码。
+    assert!(!format!("{config:?}").contains("plain-password"));
+    assert!(format!("{config:?}").contains("<redacted>"));
 }
 
 #[test]

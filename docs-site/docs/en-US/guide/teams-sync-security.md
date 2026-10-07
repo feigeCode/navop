@@ -14,6 +14,8 @@ The master key encrypts database passwords, SSH private keys, and related secret
 
 Back it up through a secure offline method. Never send it through chat, email, shared Notes, or reuse it as an account password. The home workspace groups personal and team keys separately, so confirm which key type a connection uses before opening or creating it; a team key only applies to authorized shared connections.
 
+Personal sync can target a Folder, a Git repository, or a WebDAV server: Folder and Git need a local directory or repository, while WebDAV only needs a server URL, user name, and password — the password is sealed to disk rather than stored in the clear, which suits Jianguoyun, Synology, Nextcloud, and self-hosted servers. WebDAV has no local directory to watch, so a 60-second scan drives syncing; a collection is created on the server before the first write, and if the server reports the directory as unavailable, create it or check write permission rather than retrying. The settings page shows only the items of the selected backend.
+
 ## Resolve sync conflicts
 
 Conflicts occur when both sides edit a record, or when one deletes while the other edits. Before choosing local or remote, compare device, time, target, and fields. Record both versions manually if necessary.

@@ -543,6 +543,10 @@ impl TelnetFormWindow {
 
         match result {
             Ok(saved_conn) => {
+                // 保存已经落地：先把表单切到「已保存」（编辑）状态，再关窗。
+                // 关窗返回 `Retained` 时窗口会留在屏幕上（隐藏失败），没有这一步用户再点
+                // 一次「保存」就会按「新建」再插一条连接。
+                self.mark_saved(&saved_conn, cx);
                 if let Some(notifier) = get_notifier(cx) {
                     let event = if is_editing {
                         ConnectionDataEvent::ConnectionUpdated {
@@ -557,7 +561,7 @@ impl TelnetFormWindow {
                         cx.emit(event);
                     });
                 }
-                let _ = one_core::window_close::close_window_for_reuse(window, cx);
+                let _ = one_core::window_close::close_window_after_save(window, cx);
             }
             Err(error) => {
                 let message = t!("Telnet.save_failed", error = error).to_string();
@@ -566,6 +570,19 @@ impl TelnetFormWindow {
                 cx.notify();
             }
         }
+    }
+
+    /// 保存已经落地：把表单切到「已保存」（编辑）状态。
+    ///
+    /// 不能依赖「窗口反正会消失」来结束这轮操作：关闭漏斗返回 `Retained` 时窗口会留在
+    /// 屏幕上（隐藏失败），没有这一步用户再点一次「保存」会按「新建」再插一条。
+    fn mark_saved(&mut self, saved: &StoredConnection, cx: &mut Context<Self>) {
+        self.is_editing = true;
+        self.editing_id = saved.id;
+        self.editing_cloud_id = saved.cloud_id.clone();
+        self.editing_last_synced_at = saved.last_synced_at;
+        self.editing_owner_id = saved.owner_id.clone();
+        cx.notify();
     }
 
     fn on_cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {

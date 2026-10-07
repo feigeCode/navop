@@ -358,9 +358,7 @@ mod tests {
             FilteredShellOutput::Suppressed,
             integration.filter_output(b"echoed setup without marker".to_vec())
         );
-        let _ = integration.filter_output(
-            b"\x1b]1337;ShellIntegrationReady=1\x07prompt".to_vec(),
-        );
+        let _ = integration.filter_output(b"\x1b]1337;ShellIntegrationReady=1\x07prompt".to_vec());
         assert_eq!("awaiting-prompt", integration.phase_name());
         assert!(!integration.accepts_terminal_input());
         assert!(integration.force_release_input());
@@ -380,13 +378,19 @@ mod tests {
     #[test]
     fn handshake_watchdog_keeps_already_usable_phases_untouched() {
         let mut integration = RuntimeShellIntegration::new(false);
-        assert!(!integration.force_release_input(), "未请求注入的会话无需降级");
+        assert!(
+            !integration.force_release_input(),
+            "未请求注入的会话无需降级"
+        );
         assert!(integration.accepts_terminal_input());
 
         let mut integration = RuntimeShellIntegration::new(true);
         integration.on_input_start();
         assert!(integration.is_integrated());
-        assert!(!integration.force_release_input(), "已集成会话不应被看门狗降级");
+        assert!(
+            !integration.force_release_input(),
+            "已集成会话不应被看门狗降级"
+        );
         assert!(integration.is_integrated());
         assert!(integration.accepts_terminal_input());
     }

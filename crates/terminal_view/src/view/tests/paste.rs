@@ -100,3 +100,52 @@ fn join_paste_as_single_line_collapses_blank_lines() {
     );
     assert_eq!(join_paste_as_single_line("single"), "single");
 }
+
+#[test]
+fn paste_confirm_kind_maps_disable_setting() {
+    use super::super::paste_confirm_dialog::{PasteConfirmKind, PasteSafetySetting};
+
+    assert_eq!(
+        PasteConfirmKind::MultilineUnbracketed.disable_setting(),
+        Some(PasteSafetySetting::MultilinePaste)
+    );
+    assert_eq!(
+        PasteConfirmKind::HighRiskCommand.disable_setting(),
+        Some(PasteSafetySetting::HighRiskCommand)
+    );
+    // 大段粘贴是硬阈值，没有对应开关，因此不提供「不再提示」。
+    assert_eq!(PasteConfirmKind::LargePaste.disable_setting(), None);
+}
+
+#[test]
+fn paste_confirm_kind_keeps_locale_keys() {
+    // 弹窗文案仍然由这三组 key 提供，避免迁移时改错标题/正文对应关系。
+    let source = include_str!("../paste_confirm_dialog.rs");
+    for expected in [
+        "TerminalView.multiline_paste_title",
+        "TerminalView.multiline_paste_message",
+        "TerminalView.high_risk_paste_title",
+        "TerminalView.high_risk_paste_message",
+        "TerminalView.large_paste_title",
+        "TerminalView.large_paste_message",
+    ] {
+        assert!(source.contains(expected), "缺少 {expected}");
+    }
+}
+
+#[test]
+fn paste_confirm_dialog_exposes_settings_escape_hatches() {
+    let source = include_str!("../paste_confirm_dialog.rs");
+
+    for expected in [
+        "paste-open-settings",
+        "paste-dont-ask-again",
+        "TerminalView.paste_open_settings",
+        "TerminalView.paste_dont_ask_again",
+    ] {
+        assert!(source.contains(expected), "缺少 {expected}");
+    }
+    // 「不再提示」与设置面板开关写同一份持久化状态。
+    assert!(source.contains("settings.confirm_multiline_paste = false"));
+    assert!(source.contains("settings.confirm_high_risk_command = false"));
+}

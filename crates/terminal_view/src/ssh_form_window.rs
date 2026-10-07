@@ -37,14 +37,14 @@ use one_core::storage::traits::Repository;
 use one_core::storage::{
     FtpParams, JumpServerConfig, PreferredOpenMode, ProxyConfig, ProxyType as StorageProxyType,
     RemoteFileParams, RemoteFileProtocol as StoredRemoteFileProtocol, SSH_ICON_IDS, SftpAccount,
-    SshAccountExpect, SshAuthMethod, SshParams, StoredConnection, StoredTerminalEncoding,
-    StoredTerminalType, Workspace, ssh_os_icon,
+    SshAccountExpect, SshAgentForwardKey, SshAuthMethod, SshParams, StoredConnection,
+    StoredTerminalEncoding, StoredTerminalType, Workspace, ssh_os_icon,
 };
 use rust_i18n::t;
 use ssh::{
-    ChannelEvent, HostKeyDetails, HostKeyIdentity, HostKeyRejection, HostKeyVerifier,
-    JumpServerConnectConfig, ProxyConnectConfig, ProxyType, RusshClient, SshAuth, SshChannel,
-    SshClient, SshConnectConfig, SshSessionManager,
+    AgentIdentity, ChannelEvent, HostKeyDetails, HostKeyIdentity, HostKeyRejection,
+    HostKeyVerifier, JumpServerConnectConfig, ProxyConnectConfig, ProxyType, RusshClient, SshAuth,
+    SshChannel, SshClient, SshConnectConfig, SshSessionManager,
 };
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -308,6 +308,10 @@ pub struct SshFormWindow {
     // 启用 X11 转发(需要本机有可用 X server,如 macOS 的 XQuartz)
     x11_forwarding: bool,
 
+    // 启用 ForwardAgent：将本地 ssh-agent 转发给远端；选中带
+    // forward_to_agent 标记的 keychain 私钥时会被 resolver 自动置为开启。
+    forward_agent: bool,
+
     is_testing: bool,
     is_uninstalling_shell_integration: bool,
     test_result: Option<Result<Option<String>, String>>,
@@ -345,6 +349,68 @@ fn build_connection_test_signature(params: &SshParams) -> String {
     let mut hasher = DefaultHasher::new();
     format!("{:?}", params).hash(&mut hasher);
     format!("{:016x}", hasher.finish())
+}
+
+/// 从存储层的 SSH 认证方式推导需要加入本地 ssh-agent 的私钥身份。
+///
+/// 仅当连接开启了 ForwardAgent 时这些身份才会被加载进 agent 并转发给远端；
+/// 这里只负责“有哪些私钥该进 agent”，不负责判断是否启用转发。
+fn agent_identities_from_auth(auth: &SshAuthMethod) -> Vec<AgentIdentity> {
+    match auth {
+        SshAuthMethod::PrivateKey {
+            key_path,
+            passphrase,
+        } => vec![AgentIdentity::PrivateKeyPath {
+            key_path: key_path.clone(),
+            passphrase: passphrase.clone(),
+        }],
+        SshAuthMethod::PrivateKeyContent {
+            private_key,
+            passphrase,
+        } => vec![AgentIdentity::PrivateKeyContent {
+            private_key: private_key.clone(),
+            passphrase: passphrase.clone(),
+        }],
+        SshAuthMethod::Chain(steps) => steps.iter().flat_map(agent_identities_from_auth).collect(),
+        SshAuthMethod::Password { .. }
+        | SshAuthMethod::Agent
+        | SshAuthMethod::Pageant
+        | SshAuthMethod::AutoPublicKey => Vec::new(),
+    }
+}
+
+/// 推导需要加入本地 ssh-agent 的私钥身份。
+///
+/// 优先使用 resolver 回填的 `agent_forward_key`（keychain 私钥标记了
+/// 「转发到 agent」，与本连接自身的认证方式无关，即便该连接用密码认证）；
+/// 没有回填时（例如连接本身就是用私钥认证）退回从 `auth_method` 推导。
+fn agent_identities_for_params(
+    auth: &SshAuthMethod,
+    agent_forward_key: Option<&SshAgentForwardKey>,
+) -> Vec<AgentIdentity> {
+    if let Some(key) = agent_forward_key {
+        if let Some(private_key) = key
+            .private_key_content
+            .clone()
+            .filter(|value| !value.is_empty())
+        {
+            return vec![AgentIdentity::PrivateKeyContent {
+                private_key,
+                passphrase: key.passphrase.clone(),
+            }];
+        }
+        if let Some(key_path) = key
+            .private_key_path
+            .clone()
+            .filter(|value| !value.is_empty())
+        {
+            return vec![AgentIdentity::PrivateKeyPath {
+                key_path,
+                passphrase: key.passphrase.clone(),
+            }];
+        }
+    }
+    agent_identities_from_auth(auth)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -926,6 +992,7 @@ impl SshFormWindow {
         let mut proxy_type = ProxyTypeSelection::default();
         let mut sync_enabled = true; // 默认启用云同步
         let mut x11_forwarding = false;
+        let mut forward_agent = false;
         let mut allow_legacy_algorithms = false;
         let mut disable_shell_integration = false;
         let mut sftp_account_use_custom = false;
@@ -1033,6 +1100,7 @@ impl SshFormWindow {
                     init_script_input.update(cx, |s, cx| s.set_value(script, window, cx));
                 }
                 x11_forwarding = params.x11_forwarding.unwrap_or(false);
+                forward_agent = params.forward_agent.unwrap_or(false);
                 allow_legacy_algorithms = params.allow_legacy_algorithms.unwrap_or(false);
                 disable_shell_integration = params.disable_shell_integration.unwrap_or(false);
                 terminal_encoding_select.update(cx, |select, cx| {
@@ -1272,6 +1340,7 @@ impl SshFormWindow {
             custom_icon_file_path,
             sync_enabled,
             x11_forwarding,
+            forward_agent,
             is_testing: false,
             is_uninstalling_shell_integration: false,
             test_result: None,
@@ -1649,6 +1718,10 @@ impl SshFormWindow {
             } else {
                 None
             },
+            forward_agent: if self.forward_agent { Some(true) } else { None },
+            // 明文私钥只存在于运行时解析副本中，UI 表单不持有也不落库；
+            // 由 resolve_ssh 在连接前根据 keychain 的 forward_to_agent 回填。
+            agent_forward_key: None,
             allow_legacy_algorithms: if self.allow_legacy_algorithms {
                 Some(true)
             } else {
@@ -1707,6 +1780,11 @@ impl SshFormWindow {
             host_key_verifier: HostKeyVerifier::default(),
             x11_forwarding: params.x11_forwarding.unwrap_or(false),
             allow_legacy_algorithms: params.allow_legacy_algorithms.unwrap_or(false),
+            forward_agent: params.forward_agent.unwrap_or(false),
+            agent_identities: agent_identities_for_params(
+                &params.auth_method,
+                params.agent_forward_key.as_ref(),
+            ),
         }
     }
 
@@ -2178,6 +2256,10 @@ impl SshFormWindow {
 
         match result {
             Ok(saved_conn) => {
+                // 保存已经落地：先把表单切到「已保存」（编辑）状态，再关窗。
+                // 关窗返回 `Retained` 时窗口会留在屏幕上（隐藏失败），没有这一步用户再点
+                // 一次「保存」就会按「新建」再插一条连接。
+                self.mark_saved(&saved_conn, cx);
                 if let Some(notifier) = get_notifier(cx) {
                     let event = if is_editing {
                         ConnectionDataEvent::ConnectionUpdated {
@@ -2195,7 +2277,7 @@ impl SshFormWindow {
                 if let Some(callback) = self.on_saved.as_ref() {
                     callback(saved_conn, post_save_action(self.save_action), window, cx);
                 }
-                let _ = one_core::window_close::close_window_for_reuse(window, cx);
+                let _ = one_core::window_close::close_window_after_save(window, cx);
             }
             Err(e) => {
                 let error_msg = t!("SSH.save_failed", error = e).to_string();
@@ -2204,6 +2286,19 @@ impl SshFormWindow {
                 cx.notify();
             }
         }
+    }
+
+    /// 保存已经落地：把表单切到「已保存」（编辑）状态。
+    ///
+    /// 不能依赖「窗口反正会消失」来结束这轮操作：关闭漏斗返回 `Retained` 时窗口会留在
+    /// 屏幕上（隐藏失败），没有这一步用户再点一次「保存」会按「新建」再插一条。
+    fn mark_saved(&mut self, saved: &StoredConnection, cx: &mut Context<Self>) {
+        self.is_editing = true;
+        self.editing_id = saved.id;
+        self.editing_cloud_id = saved.cloud_id.clone();
+        self.editing_last_synced_at = saved.last_synced_at;
+        self.editing_owner_id = saved.owner_id.clone();
+        cx.notify();
     }
 
     fn on_cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -3489,6 +3584,34 @@ impl SshFormWindow {
                 )
                 .debug_selector(|| "ssh-x11-forwarding-row".to_string()),
             )
+            .child(
+                self.render_form_row(
+                    &t!("SSH.forward_agent"),
+                    h_flex()
+                        .w_full()
+                        .gap_2()
+                        .items_start()
+                        .child(
+                            div().flex_shrink_0().child(
+                                Checkbox::new("forward-agent")
+                                    .checked(self.forward_agent)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.forward_agent = !this.forward_agent;
+                                        cx.notify();
+                                    })),
+                            ),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(t!("SSH.forward_agent_desc").to_string()),
+                        ),
+                )
+                .debug_selector(|| "ssh-forward-agent-row".to_string()),
+            )
     }
 
     /// 渲染其他设置标签页
@@ -3805,6 +3928,8 @@ mod tests {
             icon_file_path: None,
             x11_forwarding: None,
             allow_legacy_algorithms: None,
+            forward_agent: None,
+            agent_forward_key: None,
             account_expect: Default::default(),
         }
     }

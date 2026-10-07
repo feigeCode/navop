@@ -942,6 +942,8 @@ mod tests {
             disable_shell_integration: None,
             x11_forwarding: None,
             allow_legacy_algorithms: None,
+            forward_agent: None,
+            agent_forward_key: None,
             jump_server: None,
             proxy: None,
             os_id: None,

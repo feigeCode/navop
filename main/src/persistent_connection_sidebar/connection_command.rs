@@ -454,6 +454,8 @@ mod tests {
             disable_shell_integration: None,
             x11_forwarding: Some(true),
             allow_legacy_algorithms: None,
+            forward_agent: None,
+            agent_forward_key: None,
             jump_server: Some(JumpServerConfig {
                 host: "jump host".to_string(),
                 port: 2200,

@@ -296,7 +296,10 @@ mod tests {
             }))
         );
         // 空主机段与缺失主机等价，不能退化成"主机名是空串"。
-        assert_eq!(ReportedWorkingDir::new(Some("  "), "/".to_string()).host, None);
+        assert_eq!(
+            ReportedWorkingDir::new(Some("  "), "/".to_string()).host,
+            None
+        );
     }
 
     #[test]

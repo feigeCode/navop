@@ -387,17 +387,25 @@ impl CloudSyncService {
     }
 
     /// 准备上传工作空间到 sync_data（整体 blob 加密）
+    ///
+    /// `parent_link` 为父分组的云端引用，调用方负责把本地 `parent_id`
+    /// 解析成云端 ID（用 `WorkspaceParentLink::for_upload`）；父分组尚未
+    /// 取得云端 ID 时会得到 [`WorkspaceParentLink::Unknown`]，载荷按旧格式
+    /// 上报，目标设备据此保留本地层级并且不做误删。
     pub fn prepare_workspace_sync_data_upload(
         &self,
         ws: &crate::storage::Workspace,
+        parent_link: WorkspaceParentLink,
         team_id: Option<&str>,
         teams: &[Team],
     ) -> Result<CloudSyncData, SyncError> {
         let plain_data = WorkspacePlainData {
+            format_version: parent_link.payload_format_version(),
             name: ws.name.clone(),
             color: ws.color.clone(),
             icon: ws.icon.clone(),
             sort_order: ws.sort_order,
+            parent_cloud_id: parent_link.cloud_id().map(str::to_string),
         };
 
         let plaintext = serde_json::to_string(&plain_data)
@@ -444,6 +452,7 @@ impl CloudSyncService {
             passphrase: credential.passphrase.clone(),
             ssh_expect: credential.ssh_expect.clone(),
             owner_id: credential.owner_id.clone(),
+            forward_to_agent: credential.forward_to_agent,
         };
         let plaintext = serde_json::to_string(&plain_data)
             .map_err(|error| SyncError::DataFormatError(error.to_string()))?;
@@ -517,24 +526,44 @@ impl CloudSyncService {
         &self,
         cloud_data: &CloudSyncData,
     ) -> Result<crate::storage::Workspace, SyncError> {
+        self.decrypt_sync_data_workspace_with_parent_link(cloud_data)
+            .map(|(workspace, _)| workspace)
+    }
+
+    /// 解密 sync_data 中的工作空间数据，并返回其父分组关系
+    ///
+    /// 返回的 `Workspace.parent_id` 始终为 `None`：本地父分组 ID 必须由调用方
+    /// 根据 `WorkspaceParentLink` 在目标设备上重新解析。
+    pub fn decrypt_sync_data_workspace_with_parent_link(
+        &self,
+        cloud_data: &CloudSyncData,
+    ) -> Result<(crate::storage::Workspace, WorkspaceParentLink), SyncError> {
         let plaintext =
             self.decrypt_blob(&cloud_data.encrypted_data, cloud_data.team_id.as_deref())?;
         let plain_data: WorkspacePlainData = serde_json::from_str(&plaintext)
             .map_err(|e| SyncError::DataFormatError(e.to_string()))?;
 
-        Ok(crate::storage::Workspace {
-            id: None,
-            name: plain_data.name,
-            color: plain_data.color,
-            icon: plain_data.icon,
-            parent_id: None,
-            created_at: None,
-            updated_at: Some(cloud_data.updated_at / 1000),
-            cloud_id: Some(cloud_data.id.clone()),
-            last_synced_at: Some(cloud_data.updated_at / 1000),
-            sort_order: plain_data.sort_order,
-            sidebar_collapsed: false,
-        })
+        let parent_link = WorkspaceParentLink::from_payload(
+            plain_data.format_version,
+            plain_data.parent_cloud_id.clone(),
+        );
+
+        Ok((
+            crate::storage::Workspace {
+                id: None,
+                name: plain_data.name,
+                color: plain_data.color,
+                icon: plain_data.icon,
+                parent_id: None,
+                created_at: None,
+                updated_at: Some(cloud_data.updated_at / 1000),
+                cloud_id: Some(cloud_data.id.clone()),
+                last_synced_at: Some(cloud_data.updated_at / 1000),
+                sort_order: plain_data.sort_order,
+                sidebar_collapsed: false,
+            },
+            parent_link,
+        ))
     }
 
     /// 解密个人钥匙串同步记录。
@@ -587,6 +616,7 @@ impl CloudSyncService {
             owner_id: plain_data.owner_id,
             created_at: None,
             updated_at: Some(synced_at),
+            forward_to_agent: plain_data.forward_to_agent,
         })
     }
 
@@ -721,7 +751,7 @@ mod tests {
         workspace.sort_order = Some(7);
 
         let cloud_data = service
-            .prepare_workspace_sync_data_upload(&workspace, None, &[])
+            .prepare_workspace_sync_data_upload(&workspace, WorkspaceParentLink::Root, None, &[])
             .unwrap();
         let plaintext = service
             .decrypt_blob(&cloud_data.encrypted_data, None)
@@ -731,6 +761,80 @@ mod tests {
 
         assert_eq!(Some(7), plain_data.sort_order);
         assert_eq!(Some(7), decrypted.sort_order);
+    }
+
+    #[test]
+    fn workspace_sync_data_roundtrips_parent_cloud_id() {
+        let mut service = CloudSyncService::new();
+        service.set_master_key_directly("test_blob_key".to_string());
+        let workspace = crate::storage::Workspace::new("backend".to_string());
+
+        let cloud_data = service
+            .prepare_workspace_sync_data_upload(
+                &workspace,
+                WorkspaceParentLink::Cloud("parent-cloud-1".to_string()),
+                None,
+                &[],
+            )
+            .unwrap();
+        let plaintext = service
+            .decrypt_blob(&cloud_data.encrypted_data, None)
+            .unwrap();
+        let plain_data: WorkspacePlainData = serde_json::from_str(&plaintext).unwrap();
+        let (decrypted, link) = service
+            .decrypt_sync_data_workspace_with_parent_link(&cloud_data)
+            .unwrap();
+
+        assert_eq!(WORKSPACE_PAYLOAD_FORMAT_VERSION, plain_data.format_version);
+        assert_eq!(
+            Some("parent-cloud-1".to_string()),
+            plain_data.parent_cloud_id
+        );
+        assert_eq!("backend", decrypted.name);
+        assert_eq!(
+            WorkspaceParentLink::Cloud("parent-cloud-1".to_string()),
+            link
+        );
+    }
+
+    #[test]
+    fn workspace_sync_data_marks_uploaded_root_group_as_root() {
+        let mut service = CloudSyncService::new();
+        service.set_master_key_directly("test_blob_key".to_string());
+        let workspace = crate::storage::Workspace::new("root".to_string());
+
+        let cloud_data = service
+            .prepare_workspace_sync_data_upload(&workspace, WorkspaceParentLink::Root, None, &[])
+            .unwrap();
+        let (_, link) = service
+            .decrypt_sync_data_workspace_with_parent_link(&cloud_data)
+            .unwrap();
+
+        assert_eq!(WorkspaceParentLink::Root, link);
+    }
+
+    #[test]
+    fn workspace_sync_data_reports_unknown_hierarchy_when_parent_has_no_cloud_id() {
+        let mut service = CloudSyncService::new();
+        service.set_master_key_directly("test_blob_key".to_string());
+        let workspace = crate::storage::Workspace::new("child".to_string());
+        let parent_link = WorkspaceParentLink::for_upload(Some(3), None);
+
+        let cloud_data = service
+            .prepare_workspace_sync_data_upload(&workspace, parent_link, None, &[])
+            .unwrap();
+        let plaintext = service
+            .decrypt_blob(&cloud_data.encrypted_data, None)
+            .unwrap();
+        let plain_data: WorkspacePlainData = serde_json::from_str(&plaintext).unwrap();
+        let (_, link) = service
+            .decrypt_sync_data_workspace_with_parent_link(&cloud_data)
+            .unwrap();
+
+        // 父分组云端 ID 未知时不能谎称根分组，否则目标设备会永久丢失层级。
+        assert_eq!(0, plain_data.format_version);
+        assert_eq!(None, plain_data.parent_cloud_id);
+        assert_eq!(WorkspaceParentLink::Unknown, link);
     }
 
     #[test]
@@ -754,9 +858,14 @@ mod tests {
         };
 
         let decrypted = service.decrypt_sync_data_workspace(&cloud_data).unwrap();
+        let (_, link) = service
+            .decrypt_sync_data_workspace_with_parent_link(&cloud_data)
+            .unwrap();
 
         assert_eq!("legacy", decrypted.name);
         assert_eq!(None, decrypted.sort_order);
+        // 旧载荷没有层级信息，应用时必须保留本地已有的父子关系。
+        assert_eq!(WorkspaceParentLink::Unknown, link);
     }
 
     #[test]

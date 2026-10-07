@@ -175,7 +175,11 @@ impl<T> RetirementQueue<T> {
     }
 
     /// Removes and returns every entry that exhausted its grace period.
-    pub(crate) fn take_expired(&mut self, now: Instant, policy: RetirementPolicy) -> Vec<Retired<T>> {
+    pub(crate) fn take_expired(
+        &mut self,
+        now: Instant,
+        policy: RetirementPolicy,
+    ) -> Vec<Retired<T>> {
         let mut expired = Vec::new();
         let mut kept = Vec::with_capacity(self.entries.len());
         for entry in self.entries.drain(..) {
@@ -311,8 +315,8 @@ mod platform {
         // `spawn` must stay outside this closure: `AsyncApp::update_global`
         // already holds the app borrow, and spawning inside it would re-enter
         // that borrow.
-        let start_driver = cx.update_global::<GlobalWindowsNativeRdpRetirement, _>(
-            |retirement, _| {
+        let start_driver =
+            cx.update_global::<GlobalWindowsNativeRdpRetirement, _>(|retirement, _| {
                 retirement.queue.push(Retired::new(
                     PendingRetiredAdapter { native },
                     generation,
@@ -325,10 +329,10 @@ mod platform {
                     retirement.driver_running = true;
                     true
                 }
-            },
-        );
+            });
         if start_driver {
-            cx.spawn(async move |cx| drive_retirement(cx).await).detach();
+            cx.spawn(async move |cx| drive_retirement(cx).await)
+                .detach();
         }
         windows_rdp_host::lifecycle_counters().record_adapter_retired();
         windows_rdp_host::lifecycle_counters().log_snapshot("retirement", "adapter_retired");
@@ -353,16 +357,15 @@ mod platform {
                     cx.background_executor().timer(POLICY.retry_interval).await;
                 }
                 PollOutcome::Empty => {
-                    let keep_running = cx.update_global::<GlobalWindowsNativeRdpRetirement, _>(
-                        |retirement, _| {
+                    let keep_running =
+                        cx.update_global::<GlobalWindowsNativeRdpRetirement, _>(|retirement, _| {
                             if retirement.queue.is_empty() {
                                 retirement.driver_running = false;
                                 false
                             } else {
                                 true
                             }
-                        },
-                    );
+                        });
                     if !keep_running {
                         windows_rdp_host::lifecycle_counters()
                             .log_snapshot("retirement", "driver_stopped");
@@ -389,13 +392,12 @@ mod platform {
         {
             return PollOutcome::ControllerGone;
         }
-        let (expired, due, remaining) = cx.update_global::<GlobalWindowsNativeRdpRetirement, _>(
-            |retirement, _| {
+        let (expired, due, remaining) =
+            cx.update_global::<GlobalWindowsNativeRdpRetirement, _>(|retirement, _| {
                 let expired = retirement.queue.take_expired(now, POLICY);
                 let due = retirement.queue.take_due(now, POLICY);
                 (expired, due, retirement.queue.len())
-            },
-        );
+            });
 
         for retired in expired {
             leak_unretirable(
@@ -489,12 +491,10 @@ mod platform {
         if !cx.has_global::<GlobalWindowsNativeRdpRetirement>() {
             return 0;
         }
-        let pending = cx.update_global::<GlobalWindowsNativeRdpRetirement, _>(
-            |retirement, _| {
-                retirement.driver_running = false;
-                retirement.queue.take_all()
-            },
-        );
+        let pending = cx.update_global::<GlobalWindowsNativeRdpRetirement, _>(|retirement, _| {
+            retirement.driver_running = false;
+            retirement.queue.take_all()
+        });
         if pending.is_empty() {
             return 0;
         }
@@ -561,7 +561,10 @@ mod tests {
     fn first_attempt_is_immediate_and_later_attempts_wait_for_the_interval() {
         let now = Instant::now();
         let entry = retired(1, now);
-        assert!(entry.is_due(now), "retiring must schedule an immediate retry");
+        assert!(
+            entry.is_due(now),
+            "retiring must schedule an immediate retry"
+        );
         assert!(!entry.is_expired(now, policy()));
 
         let mut queue = RetirementQueue::default();
@@ -631,7 +634,10 @@ mod tests {
 
         let later = now + Duration::from_secs(1);
         let entry = queue.take_due(later, policy()).pop().unwrap();
-        assert_eq!(2, entry.attempts, "requeueing must not reset the attempt count");
+        assert_eq!(
+            2, entry.attempts,
+            "requeueing must not reset the attempt count"
+        );
         assert_eq!(
             retired_at, entry.retired_at,
             "requeueing must not reset the grace period clock"

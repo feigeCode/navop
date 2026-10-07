@@ -49,6 +49,8 @@ fn ssh_params(reference: Option<CredentialReference>) -> SshParams {
         disable_shell_integration: None,
         x11_forwarding: None,
         allow_legacy_algorithms: None,
+        forward_agent: None,
+        agent_forward_key: None,
         jump_server: None,
         proxy: None,
         os_id: None,
@@ -401,6 +403,46 @@ fn resolver_supports_proxy_jump_server_sentinel_and_private_key_content() {
                 .sentinel_password
                 .as_deref()
         );
+    });
+}
+
+/// 关键场景：keychain 凭据用密码登录跳板机，同时把随身携带的私钥标记为
+/// 「转发到 agent」。连接本身认证方式仍是密码，但 resolver 必须把私钥
+/// 明文回填到 `agent_forward_key`，否则下游没有身份可加入本地 ssh-agent，
+/// ForwardAgent 通道会白白打开却转发一个空 agent。
+#[test]
+fn resolver_forwards_credential_private_key_even_when_password_auth_is_selected() {
+    with_master_key(|| {
+        let (_temp, _connection, repository) = super::test_repository();
+        let mut credential = CredentialEntry::new("Bastion with spare key");
+        credential.username = Some("vault-user".to_string());
+        credential.password = Some("vault-password".to_string());
+        credential.private_key_content = Some("spare-private-key".to_string());
+        credential.passphrase = Some("spare-passphrase".to_string());
+        credential.forward_to_agent = true;
+        let credential_id = repository
+            .insert(&mut credential)
+            .expect("insert credential");
+
+        let reference = Some(password_reference(credential_id));
+        let ssh = repository
+            .resolve_ssh(ssh_params(reference))
+            .expect("resolve ssh");
+
+        assert!(matches!(
+            ssh.auth_method,
+            SshAuthMethod::Password { ref password } if password == "vault-password"
+        ));
+        assert_eq!(Some(true), ssh.forward_agent);
+        let forwarded = ssh
+            .agent_forward_key
+            .as_ref()
+            .expect("agent_forward_key should be filled in for forward_to_agent credentials");
+        assert_eq!(
+            Some("spare-private-key"),
+            forwarded.private_key_content.as_deref()
+        );
+        assert_eq!(Some("spare-passphrase"), forwarded.passphrase.as_deref());
     });
 }
 

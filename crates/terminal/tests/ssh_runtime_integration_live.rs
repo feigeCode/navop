@@ -59,6 +59,8 @@ impl LiveTarget {
             host_key_verifier: HostKeyVerifier::new(HostKeyPolicy::Insecure, None, None),
             x11_forwarding: false,
             allow_legacy_algorithms: false,
+            forward_agent: false,
+            agent_identities: Vec::new(),
         }
     }
 }

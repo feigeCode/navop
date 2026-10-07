@@ -271,8 +271,24 @@ impl PortForwardingFormWindow {
             conn.cloud_id = self.editing_cloud_id.clone();
             conn.last_synced_at = self.editing_last_synced_at;
         }
-        save_connection(conn, self.is_editing, cx);
+        save_connection(conn, self.is_editing, window.window_handle(), cx);
+        // 同步先关一次：保存还没落地，这里没什么可告诉用户的（提示和「已保存」状态都在保存
+        // 完成后补上）。保留这一步是为了不让窗口在保存期间一直开着 —— 那样连点两次「保存」
+        // 会并发插两条。
         let _ = one_core::window_close::close_window_for_reuse(window, cx);
+    }
+
+    /// 保存已经落地：把表单切到「已保存」（编辑）状态。
+    ///
+    /// 不能依赖「窗口反正会消失」来结束这轮操作：关闭漏斗返回 `Retained` 时窗口会留在
+    /// 屏幕上（隐藏失败），没有这一步用户再点一次「保存」会按「新建」再插一条连接。
+    pub(super) fn mark_saved(&mut self, saved: &StoredConnection, cx: &mut Context<Self>) {
+        self.is_editing = true;
+        self.editing_id = saved.id;
+        self.editing_cloud_id = saved.cloud_id.clone();
+        self.editing_last_synced_at = saved.last_synced_at;
+        self.editing_owner_id = saved.owner_id.clone();
+        cx.notify();
     }
 
     fn connection_name(&self, params: &PortForwardingParams, cx: &App) -> String {

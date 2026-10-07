@@ -485,7 +485,7 @@ fn terminal_performance_metrics_truthy(value: &str) -> bool {
 }
 
 fn add(target: &AtomicU64, value: u64) {
-    let _ = target.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+    let _ = target.try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
         Some(current.saturating_add(value))
     });
 }

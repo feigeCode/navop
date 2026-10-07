@@ -26,7 +26,7 @@ Display density never changes stored field values. Use the appropriate editor fo
 
 ## Configure terminal and remote editors
 
-Choose a local Terminal profile or trusted custom program. Configure completion, selection copy, right/middle paste, multiline confirmation, dangerous-command warnings, and terminal fonts. Understand bracketed paste and clipboard risk before reducing safeguards.
+Choose a local Terminal profile or trusted custom program. Terminal-scoped options (fonts, completion, selection copy, right/middle paste, multiline paste confirmation, dangerous-command warnings) live in the terminal tool sidebar's Settings panel rather than the app Settings page; paste confirmations sit in its Safety section, and the paste dialog also offers Open Settings and Don't Ask Again. Understand bracketed paste and clipboard risk before reducing safeguards.
 
 Select a built-in or extension-provided remote editor, its executable, and automatic upload behavior. Keep remote-conflict checks enabled.
 

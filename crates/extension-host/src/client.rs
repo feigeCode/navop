@@ -42,6 +42,12 @@ use crate::transport::{
 pub struct RequestOptions {
     /// 超时;`None` 走客户端默认值。
     pub timeout: Option<Duration>,
+    /// 显式要求不设超时。
+    ///
+    /// 只在调用方确实不知道要等多久时才用（例如用户 SQL：快库几百毫秒，慢库的
+    /// 报表可能跑几十分钟）。设了它，`timeout` 与客户端/会话默认值都不再生效：
+    /// 调用会一直等到响应、连接断开或被 `cancel` 打断。
+    pub no_timeout: bool,
     /// 提供该 token 时,触发 cancel → 发 `$/cancelRequest` 并立刻返回
     /// [`HostError::Cancelled`]。
     pub cancel: Option<CancellationToken>,
@@ -50,6 +56,14 @@ pub struct RequestOptions {
 impl RequestOptions {
     pub fn with_timeout(mut self, t: Duration) -> Self {
         self.timeout = Some(t);
+        self.no_timeout = false;
+        self
+    }
+
+    /// 不设超时:一直等到响应、连接断开或被 `cancel` 打断。
+    pub fn without_timeout(mut self) -> Self {
+        self.timeout = None;
+        self.no_timeout = true;
         self
     }
 
@@ -57,6 +71,13 @@ impl RequestOptions {
         self.cancel = Some(token);
         self
     }
+}
+
+/// 一次请求等待的结果（区分「超时」与「连接断开」，`no_timeout` 时只有后两者）。
+enum WaitOutcome {
+    Response(ResponseBody),
+    Closed,
+    TimedOut,
 }
 
 /// 可等待的取消令牌——多份 clone 共享状态并立即唤醒等待者。
@@ -184,16 +205,35 @@ impl JsonRpcClientHandle {
         let req = Request::new(id, method, params);
         self.send_message(&RpcMessage::Request(req)).await?;
 
-        let to = options
-            .timeout
-            .unwrap_or_else(|| Duration::from_millis(crate::DEFAULT_REQUEST_TIMEOUT_MS));
+        let to = if options.no_timeout {
+            None
+        } else {
+            Some(
+                options
+                    .timeout
+                    .unwrap_or_else(|| Duration::from_millis(crate::DEFAULT_REQUEST_TIMEOUT_MS)),
+            )
+        };
 
-        // 等响应:同时监听 cancel + timeout
+        // 等响应:同时监听 cancel + timeout（`no_timeout` 时不套超时）。
         let recv_fut = rx;
+        let wait = async move {
+            match to {
+                Some(to) => match timeout(to, recv_fut).await {
+                    Ok(Ok(body)) => WaitOutcome::Response(body),
+                    Ok(Err(_)) => WaitOutcome::Closed,
+                    Err(_) => WaitOutcome::TimedOut,
+                },
+                None => match recv_fut.await {
+                    Ok(body) => WaitOutcome::Response(body),
+                    Err(_) => WaitOutcome::Closed,
+                },
+            }
+        };
         let resp = if let Some(token) = options.cancel.clone() {
             tokio::select! {
                 biased;
-                r = timeout(to, recv_fut) => r,
+                r = wait => r,
                 _ = token.cancelled() => {
                     drop(guard);
                     let _ = self.send_cancel(id).await;
@@ -201,24 +241,22 @@ impl JsonRpcClientHandle {
                 }
             }
         } else {
-            timeout(to, recv_fut).await
+            wait.await
         };
 
         match resp {
-            Ok(Ok(body)) => match body {
-                ResponseBody::Ok { result } => Ok(result),
-                ResponseBody::Err { error } => Err(HostError::Protocol(error)),
-            },
-            Ok(Err(_)) => {
+            WaitOutcome::Response(ResponseBody::Ok { result }) => Ok(result),
+            WaitOutcome::Response(ResponseBody::Err { error }) => Err(HostError::Protocol(error)),
+            WaitOutcome::Closed => {
                 // oneshot 被丢:reader task 退出了
                 Err(HostError::Closed)
             }
-            Err(_) => {
+            WaitOutcome::TimedOut => {
                 // timeout;guard drop 自动从 pending 摘出
                 let _ = self.send_cancel(id).await;
                 Err(HostError::Timeout {
                     method: method.to_string(),
-                    timeout_ms: to.as_millis() as u64,
+                    timeout_ms: to.map(|to| to.as_millis() as u64).unwrap_or_default(),
                 })
             }
         }

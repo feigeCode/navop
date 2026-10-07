@@ -88,6 +88,9 @@
           Value="1"
           KeyPath="yes" />
       </Component>
+      <!-- 快捷方式一律不引用 Icon 表：MSI 会把 Icon 表里的图标另存成一份文件，那份文件
+           被清理或图标缓存失效后，快捷方式图标就退化成通用白纸（issue #325）。
+           navop.exe 已内嵌同一份图标（main/build.rs），留空即由目标 exe 提供。 -->
       <Component Id="StartMenuShortcutComponent" Directory="ApplicationProgramsFolder" Guid="*">
         <Shortcut
           Id="StartMenuShortcut"
@@ -95,7 +98,6 @@
           Description="Navop - Database, SSH, Terminal, AI Tools"
           Target="[#NavopExecutable]"
           WorkingDirectory="INSTALLFOLDER"
-          Icon="NavopIcon"
           Advertise="no" />
         <RemoveFolder Id="RemoveApplicationProgramsFolder" Directory="ApplicationProgramsFolder" On="uninstall" />
         <RegistryValue
@@ -108,13 +110,13 @@
           KeyPath="yes" />
       </Component>
       <Component Id="DesktopShortcutComponent" Directory="DesktopFolder" Guid="*">
+        <!-- 同 StartMenuShortcut：不引用 Icon 表，图标取自 navop.exe 的内嵌资源。 -->
         <Shortcut
           Id="DesktopShortcut"
           Name="Navop"
           Description="Navop - Database, SSH, Terminal, AI Tools"
           Target="[#NavopExecutable]"
           WorkingDirectory="INSTALLFOLDER"
-          Icon="NavopIcon"
           Advertise="no" />
         <RegistryValue
           Id="DesktopShortcutRegistry"

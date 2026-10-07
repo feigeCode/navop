@@ -8,7 +8,7 @@
 //! - 托盘是否可用 → 由纯函数 [`main_window_close_action`] 决定关闭按钮行为；
 //!   托盘不可用时行为与改造前完全一致（走既有退出确认）。
 //!
-//! 三个已经踩实、不能再踩的坑（都有源码守卫测试盯着）：
+//! 五个已经踩实、不能再踩的坑（都有源码守卫测试盯着）：
 //!
 //! 1. `MenuEvent::receiver()` / `TrayIconEvent::receiver()` 与
 //!    `set_event_handler(Some(_))` **互斥**——设了 handler 之后就再也不会往 channel
@@ -21,6 +21,10 @@
 //! 4. 原生可见性/激活修改必须留在 GPUI 窗口借用**之外**（见 [`restore_main_window`]
 //!    与 `window_visibility` 的模块头注释）：AppKit 会同步回调 `gpui::window` 里的
 //!    `handle.update(...)`，在借用内改原生状态必定二次借用失败。
+//! 5. `TRAY_ICON` 这个 `thread_local!` 必须在退出前**主动清空**（见 [`shutdown`]），
+//!    不能留给进程退出的 TLS 析构链：Linux(ksni) 的 `TrayIcon::drop` 会回到 async-io，
+//!    而 async-io 的线程本地是在托盘安装过程中才注册的，退出时反而先被销毁 ——
+//!    析构器撞上已销毁的 TLS 只能 panic → abort（issue #336）。
 
 use anyhow::Context as _;
 use gpui::{AnyWindowHandle, App, AppContext as _, AsyncApp};
@@ -190,6 +194,51 @@ fn sync_sessions(sessions: &[(String, String)]) {
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 fn sync_sessions(_sessions: &[(String, String)]) {}
+
+/// 退出前释放托盘句柄，让进程退出的 TLS 析构链上不再留下托盘析构器。
+///
+/// # 为什么必须显式释放
+///
+/// `TRAY_ICON` 是包着 `RefCell<Option<TrayIcon>>` 的 `thread_local!`，不主动清空，
+/// 它的析构器就会由 libc 在 `exit()` 里沿 `__call_tls_dtors` 执行。问题出在 Linux 的
+/// ksni 后端：`TrayIcon::drop` 要跑一次 `Handle::shutdown().wait()`，也就是在调用线程
+/// 上跑 `async_io::block_on()`；而 `async_io::driver::block_on` 一进门就无条件访问
+/// async-io 自己的线程本地 `driver::CACHE`。
+///
+/// 两个线程本地的注册顺序是确定的，而且是错的那一个：`TRAY_ICON` 在 [`init`] →
+/// `desktop::install()` 的第一句 `TRAY_ICON.with(..)` 上注册，而 `CACHE` 要等到同一函数
+/// 里的 `TrayIconBuilder::build()` 走 ksni `spawn()` 才注册 —— **`TRAY_ICON` 先、`CACHE` 后**。
+/// TLS 析构逆序执行，于是退出时 `CACHE` 先被销毁，之后 `TRAY_ICON` 的析构器再去碰它，
+/// 拿到的就是 `cannot access a Thread Local Storage value during or after destruction:
+/// AccessError`；在 TLS 析构器里 panic 无法展开，只能 abort。外部表现正是 issue #336：
+/// 退出流程全部正常（会话服务收完、数据库干净），进程却以 SIGABRT 收尾并留 core。
+///
+/// 启动路径在托盘之前不做 async-io 阻塞调用（`gpui_linux` 一次都没有），所以这条顺序
+/// 在 Linux 上是必现的；`kill -TERM` 不复现，是因为信号直接终结进程、根本不走 `exit()`
+/// 的析构链。
+///
+/// # 调用时机
+///
+/// 必须在 GPUI 还活着、事件循环还在跑的时候调用（此时 async-io 的 `CACHE` 仍然有效），
+/// 也就是退出漏斗 [`crate::navop_app::shutdown_application_resources_and_quit`] 里
+/// 调 GPUI 退出之前。交给 `on_app_quit` 兜底已经太晚：那时已经在 `exit()` 的析构链上。
+///
+/// 这里阻塞主线程一次是可接受的：`sync_sessions` 早就在主线程上跑同一个 `block_on`，
+/// 本函数只是把同样的调用提前到退出之前。重复调用是幂等的（句柄取走即为空）。
+pub(crate) fn shutdown() {
+    // 先掐掉可用性标记：句柄交出去之后，`sync_sessions_from` 之类的菜单操作必须立刻
+    // 变成空操作，不能再去碰一个已经 drop 掉的句柄。
+    TRAY_READY.store(false, Ordering::SeqCst);
+    shutdown_tray();
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+fn shutdown_tray() {
+    desktop::shutdown();
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+fn shutdown_tray() {}
 
 static COMMAND_TX: OnceLock<smol::channel::Sender<TrayCommand>> = OnceLock::new();
 static TRAY_READY: AtomicBool = AtomicBool::new(false);
@@ -470,6 +519,15 @@ mod desktop {
             dispatch(command);
         }
     }
+
+    /// 释放托盘句柄。只在退出漏斗里调用，理由见 [`super::shutdown`]。
+    ///
+    /// 先把句柄 `take` 出闭包再 drop：`TrayIcon::drop` 会阻塞（join 菜单监听线程 +
+    /// 等 ksni 的 D-Bus service 收摊），不能让它发生在 `TRAY_ICON.with` 的借用里。
+    pub(super) fn shutdown() {
+        let tray = TRAY_ICON.with(|slot| slot.borrow_mut().take());
+        drop(tray);
+    }
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
@@ -479,6 +537,8 @@ mod desktop {
     }
 
     pub(super) fn sync_sessions(_sessions: &[(String, String)]) {}
+
+    pub(super) fn shutdown() {}
 }
 
 #[cfg(test)]
@@ -704,5 +764,41 @@ mod tests {
         assert!(linux_deps.contains("default-features = false"));
         assert!(!linux_deps.contains(&appindicator_feature));
         assert!(!linux_deps.contains(&xdo_feature));
+    }
+
+    /// 退出守卫：托盘句柄必须在退出前从 `thread_local!` 里**取出来真的析构**。
+    ///
+    /// 不能留给进程退出的 TLS 析构链。Linux(ksni) 的 `TrayIcon::drop` 会跑
+    /// `Handle::shutdown().wait()` → `async_io::block_on()`，而 async-io 的线程本地
+    /// `driver::CACHE` 是在同一次 `desktop::install()` 里、`TRAY_ICON` 之后才注册的，
+    /// TLS 析构逆序执行 ⇒ 退出时 `CACHE` 先没，`TRAY_ICON` 的析构器再去访问它就直接
+    /// `AccessError` panic，而 TLS 析构器里不能 panic，只能 abort。外部表现就是
+    /// issue #336：退出流程一切正常，进程却以 SIGABRT 收尾并留 core。
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    #[test]
+    fn tray_handle_is_released_before_the_process_teardown_chain() {
+        let source = include_str!("system_tray.rs");
+
+        // 公开入口存在，并且会同时掐掉可用性标记：句柄交出去之后任何菜单操作都必须
+        // 变成空操作，不能再去碰一个已经 drop 的托盘。
+        let public = source
+            .split("pub(crate) fn shutdown() {")
+            .nth(1)
+            .and_then(|rest| rest.split("\n}").next())
+            .expect("system_tray::shutdown source");
+        assert!(public.contains("TRAY_READY.store(false"));
+
+        // 后端实现必须把句柄 take 出来、在 `TRAY_ICON.with` 的借用之外析构。
+        // needle 运行时拼接，避免 include_str! 守卫命中自己的断言文本。
+        let release = ["slot.borrow_mut()", ".take()"].concat();
+        let drop_outside = ["drop(tray", ");"].concat();
+        let backend = source
+            .split("pub(super) fn shutdown() {")
+            .nth(1)
+            .and_then(|rest| rest.split("\n    }").next())
+            .expect("desktop tray shutdown source");
+
+        assert!(backend.contains(&release));
+        assert!(backend.contains(&drop_outside));
     }
 }

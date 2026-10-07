@@ -1,7 +1,8 @@
 use std::ops::Deref;
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
-use crate::cloud_sync::models::data_type;
+use crate::cloud_sync::models::{CloudSyncData, WorkspaceParentLink, data_type};
+use crate::cloud_sync::personal::test_support;
 use crate::cloud_sync::personal::{PersonalSyncLocalRepositorySource, PersonalSyncLocalSource};
 use crate::cloud_sync::service::CloudSyncService;
 use crate::crypto;
@@ -686,6 +687,72 @@ impl Fixture {
             .insert(&mut workspace)
             .expect("workspace insert")
     }
+
+    fn insert_workspace_with(
+        &self,
+        name: &str,
+        parent_id: Option<i64>,
+        cloud_id: Option<&str>,
+    ) -> i64 {
+        let mut workspace = Workspace::new(name.to_string());
+        workspace.parent_id = parent_id;
+        workspace.cloud_id = cloud_id.map(str::to_string);
+        self.workspaces
+            .insert(&mut workspace)
+            .expect("workspace insert")
+    }
+
+    fn stored_workspace(&self, local_id: i64) -> Workspace {
+        self.workspaces
+            .get(local_id)
+            .expect("workspace query")
+            .expect("workspace exists")
+    }
+
+    fn workspace_by_cloud_id(&self, cloud_id: &str) -> Workspace {
+        self.workspaces
+            .list()
+            .expect("workspace list")
+            .into_iter()
+            .find(|workspace| workspace.cloud_id.as_deref() == Some(cloud_id))
+            .expect("workspace with cloud id exists")
+    }
+
+    fn remote_workspace_record(
+        &self,
+        cloud_id: &str,
+        name: &str,
+        parent_cloud_id: Option<&str>,
+    ) -> CloudSyncData {
+        let workspace = Workspace::new(name.to_string());
+        let parent_link = match parent_cloud_id {
+            Some(parent_cloud_id) => WorkspaceParentLink::Cloud(parent_cloud_id.to_string()),
+            None => WorkspaceParentLink::Root,
+        };
+        let mut record = self
+            .service
+            .read()
+            .expect("service read lock")
+            .prepare_workspace_sync_data_upload(&workspace, parent_link, None, &[])
+            .expect("remote workspace record");
+        record.id = cloud_id.to_string();
+        record
+    }
+
+    /// 旧版本客户端上传的分组载荷：只有 name/color/icon，不含层级信息
+    fn legacy_workspace_record(&self, cloud_id: &str, name: &str) -> CloudSyncData {
+        let payload = format!(r#"{{"name":"{name}","color":null,"icon":null}}"#);
+        let encrypted_data = self
+            .service
+            .read()
+            .expect("service read lock")
+            .encrypt_blob(&payload, None)
+            .expect("legacy payload encryption");
+        CloudSyncData {
+            encrypted_data,
+            ..test_support::test_record(cloud_id, data_type::WORKSPACE, 1, "")
+        }
+    }
 }
 
 fn credential(name: &str, sync_enabled: bool) -> CredentialEntry {
@@ -777,4 +844,138 @@ impl Drop for CredentialFixture {
     fn drop(&mut self) {
         crypto::clear_master_key();
     }
+}
+
+#[tokio::test]
+async fn local_source_exports_workspace_with_parent_cloud_id() {
+    let fixture = Fixture::new();
+    let parent_id = fixture.insert_workspace_with("parent", None, Some("cloud-parent"));
+    let child_id = fixture.insert_workspace_with("child", Some(parent_id), Some("cloud-child"));
+
+    let items = fixture.source.list_items().await.expect("items list");
+    let workspace_items: Vec<String> = items
+        .iter()
+        .map(|item| item.local_id.clone())
+        .filter(|local_id| local_id.starts_with("workspace:"))
+        .collect();
+    let child_item = items
+        .iter()
+        .find(|item| item.local_id == format!("workspace:{child_id}"))
+        .expect("child snapshot exists");
+
+    let record = fixture
+        .source
+        .export_item(child_item)
+        .await
+        .expect("export");
+    let link = fixture
+        .service
+        .read()
+        .expect("service read lock")
+        .decrypt_sync_data_workspace_with_parent_link(&record)
+        .expect("decrypt")
+        .1;
+
+    // 父分组先导出，子分组才能拿到父分组的云端 ID 引用。
+    assert_eq!(
+        vec![
+            format!("workspace:{parent_id}"),
+            format!("workspace:{child_id}"),
+        ],
+        workspace_items
+    );
+    assert_eq!(WorkspaceParentLink::Cloud("cloud-parent".to_string()), link);
+}
+
+#[tokio::test]
+async fn local_source_finalize_pass_links_child_downloaded_before_parent() {
+    let fixture = Fixture::new();
+    let child_record =
+        fixture.remote_workspace_record("cloud-child", "child", Some("cloud-parent"));
+    let parent_record = fixture.remote_workspace_record("cloud-parent", "parent", None);
+
+    // 下载顺序不保证父分组先到，这里刻意先应用子分组。
+    fixture
+        .source
+        .apply_remote(&child_record, None)
+        .await
+        .expect("child apply");
+    fixture
+        .source
+        .apply_remote(&parent_record, None)
+        .await
+        .expect("parent apply");
+    fixture
+        .source
+        .finalize_pass(&[child_record, parent_record])
+        .await
+        .expect("finalize");
+
+    let parent = fixture.workspace_by_cloud_id("cloud-parent");
+    let child = fixture.workspace_by_cloud_id("cloud-child");
+    assert_eq!(parent.id, child.parent_id);
+}
+
+#[tokio::test]
+async fn local_source_finalize_pass_keeps_local_hierarchy_for_legacy_records() {
+    let fixture = Fixture::new();
+    let parent_id = fixture.insert_workspace_with("parent", None, Some("cloud-parent"));
+    let child_id = fixture.insert_workspace_with("child", Some(parent_id), Some("cloud-child"));
+    let record = fixture.legacy_workspace_record("cloud-child", "child");
+
+    fixture
+        .source
+        .finalize_pass(&[record])
+        .await
+        .expect("finalize");
+
+    assert_eq!(
+        Some(parent_id),
+        fixture.stored_workspace(child_id).parent_id
+    );
+}
+
+#[tokio::test]
+async fn local_source_finalize_pass_clears_local_parent_when_cloud_says_root() {
+    let fixture = Fixture::new();
+    let parent_id = fixture.insert_workspace_with("parent", None, Some("cloud-parent"));
+    let child_id = fixture.insert_workspace_with("child", Some(parent_id), Some("cloud-child"));
+    let record = fixture.remote_workspace_record("cloud-child", "child", None);
+
+    fixture
+        .source
+        .finalize_pass(&[record])
+        .await
+        .expect("finalize");
+
+    assert_eq!(None, fixture.stored_workspace(child_id).parent_id);
+}
+
+#[tokio::test]
+async fn local_source_finalize_pass_restores_recursive_nesting() {
+    let fixture = Fixture::new();
+    // 递归创建的分组 A > B > C，云端记录顺序被打乱（刻意按 C、A、B 应用）
+    let leaf = fixture.remote_workspace_record("cloud-c", "c", Some("cloud-b"));
+    let root = fixture.remote_workspace_record("cloud-a", "a", None);
+    let middle = fixture.remote_workspace_record("cloud-b", "b", Some("cloud-a"));
+
+    for record in [&leaf, &root, &middle] {
+        fixture
+            .source
+            .apply_remote(record, None)
+            .await
+            .expect("apply remote");
+    }
+    fixture
+        .source
+        .finalize_pass(&[leaf.clone(), root.clone(), middle.clone()])
+        .await
+        .expect("finalize");
+
+    let root = fixture.workspace_by_cloud_id("cloud-a");
+    let middle = fixture.workspace_by_cloud_id("cloud-b");
+    let leaf = fixture.workspace_by_cloud_id("cloud-c");
+    assert_eq!(None, root.parent_id);
+    assert_eq!(root.id, middle.parent_id);
+    assert_eq!(middle.id, leaf.parent_id);
 }

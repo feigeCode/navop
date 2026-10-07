@@ -38,6 +38,8 @@ fn config_for(host: &str, allow_legacy_algorithms: bool) -> SshConnectConfig {
         host_key_verifier: HostKeyVerifier::insecure(),
         x11_forwarding: false,
         allow_legacy_algorithms,
+        forward_agent: false,
+        agent_identities: Vec::new(),
     }
 }
 

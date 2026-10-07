@@ -50,6 +50,13 @@ pub trait PersonalSyncLocalSource: Send + Sync {
         local: Option<&PersonalSyncItemSnapshot>,
     ) -> Result<(), SyncStoreError>;
 
+    /// 一轮同步的收尾（在本地写入全部完成后调用）
+    ///
+    /// 用于解析跨记录的云端引用，例如按本次拉取到的云端记录对齐分组层级。
+    async fn finalize_pass(&self, _records: &[CloudSyncData]) -> Result<(), SyncStoreError> {
+        Ok(())
+    }
+
     async fn mark_synced(
         &self,
         local_id: &str,
@@ -199,6 +206,7 @@ where
 
         self.apply_plan(&plan, &local_items, &active_remote_records)
             .await?;
+        self.local.finalize_pass(&active_remote_records).await?;
         if tombstone_conflicts > 0 {
             return Err(SyncStoreError::Conflict(format!(
                 "{tombstone_conflicts} remote deletion conflict(s) paused"

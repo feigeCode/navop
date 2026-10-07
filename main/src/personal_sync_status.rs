@@ -63,6 +63,8 @@ fn health_from_error(error: &SyncStoreError) -> SyncStoreHealth {
         SyncStoreError::SchemaUnsupported { .. } => SyncStoreHealth::SchemaUnsupported,
         SyncStoreError::GitAuthRequired => SyncStoreHealth::GitAuthRequired,
         SyncStoreError::GitMergeConflict => SyncStoreHealth::GitMergeConflict,
+        SyncStoreError::WebdavAuthFailed => SyncStoreHealth::WebdavAuthFailed,
+        SyncStoreError::WebdavUnreachable(_) => SyncStoreHealth::WebdavUnreachable,
         _ => SyncStoreHealth::PausedAfterRepeatedFailures,
     }
 }

@@ -398,3 +398,78 @@ jobs:
           done
 
           upload_object "artifacts/updates/latest.json" "updates/latest.json" "application/json; charset=utf-8" "no-store, max-age=0"
+
+      # 桶里只留这次上传的版本：旧安装包在 R2 上只占空间，下载入口都不依赖它们
+      # —— updates/latest.json 只指向本次 tag，旧版本另有 GitHub Release 与 CNB
+      # 镜像作为存档。这一步必须待在上传与逐对象校验之后，且不能加 always()：
+      # 上传没成功就一个对象都不许删，否则桶里可能新旧两份都不完整。
+      - name: Prune older R2 releases
+        if: ${{ steps.r2_config.outputs.skip != 'true' && steps.release.outputs.skip != 'true' }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_REGION: auto
+          AWS_EC2_METADATA_DISABLED: true
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_R2_BUCKET: ${{ secrets.CLOUDFLARE_R2_BUCKET }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          endpoint="https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          # 所有删除都限定在这个前缀下：更新清单（latest.json 在另一条前缀里）
+          # 永远不碰。
+          prefix="releases"
+
+          # 预发布（v0.20.0-rc.1 之类）不清理：它不该把上一个稳定版本的安装包
+          # 带走，而它的对象本来也只是临时放一下。
+          if ! [[ "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::warning::Skipping R2 prune for non-stable release tag '${RELEASE_TAG}'."
+            exit 0
+          fi
+
+          # 列出 releases/ 下的版本前缀（delimiter 让每页只回顶层目录名）。
+          # 注意：--output text 对扁平列表是「一行、tab 拼接」，所以先用 tr 把它
+          # 归一成一行一个，再用 ^...$ 锚定就对了；多页时同样是每行一个值。
+          list_release_prefixes() {
+            aws s3api list-objects-v2 \
+              --bucket "${CLOUDFLARE_R2_BUCKET}" \
+              --prefix "${prefix}/" \
+              --delimiter "/" \
+              --endpoint-url "${endpoint}" \
+              --query "CommonPrefixes[].Prefix" \
+              --output text \
+              | tr '\t' '\n' \
+              | sed -n "s|^${prefix}/\\([^/]*\\)/\$|\\1|p" \
+              | sort -u
+          }
+
+          tags="$(list_release_prefixes)"
+          echo "Versions in ${prefix}: $(tr '\n' ' ' <<< "${tags}")"
+
+          # 本次 tag 不在桶里就什么都不删：宁可留下旧版本，也不能在「新版本其实
+          # 没上传成功」时把最后一份可用安装包清掉。
+          if ! grep -Fxq "${RELEASE_TAG}" <<< "${tags}"; then
+            echo "::error::Refusing to prune: ${prefix}/${RELEASE_TAG}/ is not present in R2"
+            exit 1
+          fi
+
+          # 注意这里的 for 依赖分词逐行遍历。
+          for tag in ${tags}; do
+            if [ "${tag}" = "${RELEASE_TAG}" ]; then
+              continue
+            fi
+            echo "Deleting ${prefix}/${tag}/"
+            aws s3 rm "s3://${CLOUDFLARE_R2_BUCKET}/${prefix}/${tag}/" \
+              --recursive \
+              --endpoint-url "${endpoint}"
+          done
+
+          for tag in $(list_release_prefixes); do
+            if [ "${tag}" != "${RELEASE_TAG}" ]; then
+              echo "::error::R2 still holds ${prefix}/${tag}/ after pruning"
+              exit 1
+            fi
+          done
+
+          echo "R2 now keeps only ${prefix}/${RELEASE_TAG}/"

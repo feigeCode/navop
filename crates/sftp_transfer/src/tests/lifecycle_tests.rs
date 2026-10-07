@@ -307,7 +307,7 @@ fn stored_connection() -> StoredConnection {
     StoredConnection::new_ssh(
         "test".to_string(),
         SshParams {
-                remote_file: None,
+            remote_file: None,
             host: "localhost".to_string(),
             port: 22,
             username: "user".to_string(),
@@ -330,6 +330,8 @@ fn stored_connection() -> StoredConnection {
             disable_shell_integration: None,
             x11_forwarding: None,
             allow_legacy_algorithms: None,
+            forward_agent: None,
+            agent_forward_key: None,
             jump_server: None,
             proxy: None,
             os_id: None,

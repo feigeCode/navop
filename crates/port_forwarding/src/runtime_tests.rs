@@ -12,7 +12,7 @@ fn ssh_connection(id: i64) -> StoredConnection {
     let mut connection = StoredConnection::new_ssh(
         "bastion".to_string(),
         SshParams {
-                remote_file: None,
+            remote_file: None,
             sftp_default_directory: None,
             disabled_jump_server: None,
             sftp_account: None,
@@ -33,6 +33,8 @@ fn ssh_connection(id: i64) -> StoredConnection {
             disable_shell_integration: None,
             x11_forwarding: None,
             allow_legacy_algorithms: None,
+            forward_agent: None,
+            agent_forward_key: None,
             jump_server: None,
             proxy: None,
             credential_reference: None,

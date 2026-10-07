@@ -96,6 +96,8 @@ pub(crate) fn unused_ssh_config_placeholder() -> SshConnectConfig {
         host_key_verifier: HostKeyVerifier::default(),
         x11_forwarding: false,
         allow_legacy_algorithms: false,
+        forward_agent: false,
+        agent_identities: Vec::new(),
     }
 }
 
@@ -196,6 +198,8 @@ mod tests {
                 disable_shell_integration: None,
                 x11_forwarding: None,
                 allow_legacy_algorithms: Some(true),
+                forward_agent: None,
+                agent_forward_key: None,
                 jump_server: None,
                 proxy: None,
                 os_id: None,

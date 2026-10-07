@@ -1,5 +1,6 @@
 use std::fmt;
 use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 
 use agent_client_protocol::schema::v1::{
@@ -65,11 +66,23 @@ impl AcpConnection {
         let expected_turn_id = turn_id.clone();
         self.handle.spawn(async move {
             let pending = connection.send_request(request).block_task();
-            let result = wait_for_prompt(pending, progress, idle).await;
+            tokio::pin!(pending);
+            // 「判卡死」与「cancel 握手」在这里分开做：wait_for_prompt 只管纯计时判据，
+            // 回包 future 由本块持有。判卡死后**不能**直接 drop 它——drop 会拆掉
+            // JSON-RPC 响应路由的接收端，agent 对 session/cancel 的回包就会以
+            // connection-fatal 的「failed to send response, receiver dropped」浮出，
+            // 把整条连接打成 Failed 而不是 Ready（合并自 dev 的 cd9d08877）。
+            // 所以先发 cancel，再陪 future 走完握手：正常 agent 会回话收场；对那些
+            // 永远不回话的 agent，用一个不小于 30s 的宽限期兜底，然后才按超时收场。
+            let mut result = wait_for_prompt(pending.as_mut(), progress, idle).await;
+            if matches!(result, PromptWait::Stalled) {
+                let _ =
+                    connection.send_notification(CancelNotification::new(acp_session_id));
+                let cancel_grace = idle.max(Duration::from_secs(30));
+                let _ = tokio::time::timeout(cancel_grace, pending.as_mut()).await;
+            }
             finish_prompt(
                 PromptContext {
-                    connection,
-                    acp_session_id,
                     events,
                     session_id,
                     active_turn,
@@ -166,8 +179,6 @@ fn responding_status_title(agent_name: &str) -> String {
 }
 
 struct PromptContext {
-    connection: agent_client_protocol::ConnectionTo<agent_client_protocol::Agent>,
-    acp_session_id: agent_client_protocol::schema::v1::SessionId,
     events: tokio::sync::broadcast::Sender<RuntimeEvent>,
     session_id: agent_runtime::SessionId,
     active_turn: std::sync::Arc<std::sync::Mutex<Option<AcpTurnTracker>>>,
@@ -194,18 +205,18 @@ enum PromptWait {
 ///
 /// 1. 有工具在执行 ⇒ **不设截止**。agent 显然在干活，工具自己的超时归它管；
 /// 2. 收到这条会话的通知 ⇒ 截止延后一整个 `idle`（模型在流式输出）；
-/// 3. 既没有工具在跑、又静默满 `idle` ⇒ 判卡死，由调用方发 `session/cancel`。
+/// 3. 既没有工具在跑、又静默满 `idle` ⇒ 判卡死。cancel 通知与回包 future 的收尾
+///    都由调用方做（见 [`AcpConnection::try_prompt`]），这里只保留纯计时判据，
+///    好直接对三条规则写测试。
 ///
-/// 抽成独立函数是为了能直接对上面三条写测试——它们各自对应一次真实的误杀或漏判。
 async fn wait_for_prompt<F>(
-    pending: F,
+    mut pending: Pin<&mut F>,
     mut progress: watch::Receiver<TurnProgress>,
     idle: Duration,
 ) -> PromptWait
 where
     F: Future<Output = Result<PromptResponse, agent_client_protocol::Error>>,
 {
-    tokio::pin!(pending);
     // 发送端随 tracker 一起活。它要是先没了（这一轮被本地放弃、连接被收掉），就再也
     // 不会有人来续期——此时退化成一次普通的空闲等待，不能把截止永远关掉。
     let mut reachable = true;
@@ -214,7 +225,7 @@ where
         let armed = !reachable || current.inflight_tools == 0;
         let deadline = armed.then(|| tokio::time::Instant::now() + idle);
         tokio::select! {
-            settled = &mut pending => return PromptWait::Settled(settled),
+            settled = pending.as_mut() => return PromptWait::Settled(settled),
             changed = progress.changed(), if reachable => {
                 reachable = changed.is_ok();
             }
@@ -255,7 +266,7 @@ async fn finish_prompt(context: PromptContext, result: PromptWait) {
             emit_success(&context, turn_id, tracker, response.stop_reason)
         }
         PromptWait::Settled(Err(error)) => emit_protocol_error(&context, turn_id, error),
-        PromptWait::Stalled => emit_timeout(&context, turn_id).await,
+        PromptWait::Stalled => emit_timeout(&context, turn_id),
     }
 }
 
@@ -307,10 +318,8 @@ fn emit_protocol_error(
     emit_failed(context, turn_id, error);
 }
 
-async fn emit_timeout(context: &PromptContext, turn_id: TurnId) {
-    let _ = context
-        .connection
-        .send_notification(CancelNotification::new(context.acp_session_id.clone()));
+fn emit_timeout(context: &PromptContext, turn_id: TurnId) {
+    // session/cancel 已在判卡死处发出（见 `try_prompt`），这里只负责把失败讲清楚。
     // 详情不能空着：只有「等了多久」能告诉用户这次到底是他网络的问题、还是 agent 真的死了。
     // 修复前这里是空串，日志里只剩 `kind=PromptTimeout detail=`，什么也判断不出来。
     let detail = t!(
@@ -491,10 +500,13 @@ mod tests {
     #[tokio::test]
     async fn silence_with_nothing_running_is_a_stall() {
         let (_tx, rx) = progress_channel();
+        let fut = never_settles();
+        tokio::pin!(fut);
 
-        let outcome = tokio::time::timeout(IDLE * 4, super::wait_for_prompt(never_settles(), rx, IDLE))
-            .await
-            .expect("静默满一个窗口就该判卡死");
+        let outcome =
+            tokio::time::timeout(IDLE * 4, super::wait_for_prompt(fut.as_mut(), rx, IDLE))
+                .await
+                .expect("静默满一个窗口就该判卡死");
 
         assert!(matches!(outcome, super::PromptWait::Stalled));
     }
@@ -503,8 +515,10 @@ mod tests {
     async fn a_running_tool_suspends_the_deadline_entirely() {
         let (tx, rx) = progress_channel();
         tx.send_modify(|progress| progress.inflight_tools = 1);
+        let fut = never_settles();
+        tokio::pin!(fut);
 
-        let wait = super::wait_for_prompt(never_settles(), rx, IDLE);
+        let wait = super::wait_for_prompt(fut.as_mut(), rx, IDLE);
         tokio::pin!(wait);
 
         // 远超一个空闲窗口的时间过去，这一轮也不该被判卡死：OpenCode 在整个 `task`
@@ -532,8 +546,10 @@ mod tests {
                 tx.send_modify(|progress| progress.revision += 1);
             }
         });
+        let fut = never_settles();
+        tokio::pin!(fut);
 
-        let wait = super::wait_for_prompt(never_settles(), rx, IDLE);
+        let wait = super::wait_for_prompt(fut.as_mut(), rx, IDLE);
         tokio::pin!(wait);
 
         // 喂食还在进行时（已经过了两个窗口）绝不能判超时：这正是修复前会误杀的形状 ——
@@ -559,10 +575,13 @@ mod tests {
         // 但发送端随 tracker 一起没了（这一轮被本地放弃、连接被收掉）：不会再有进展来
         // 表示工具收尾，此时必须退化成普通空闲等待，否则这条任务会永远挂着。
         drop(tx);
+        let fut = never_settles();
+        tokio::pin!(fut);
 
-        let outcome = tokio::time::timeout(IDLE * 4, super::wait_for_prompt(never_settles(), rx, IDLE))
-            .await
-            .expect("发送端消失后不能永远不计时");
+        let outcome =
+            tokio::time::timeout(IDLE * 4, super::wait_for_prompt(fut.as_mut(), rx, IDLE))
+                .await
+                .expect("发送端消失后不能永远不计时");
 
         assert!(matches!(outcome, super::PromptWait::Stalled));
     }
@@ -575,8 +594,9 @@ mod tests {
                 agent_client_protocol::schema::v1::StopReason::EndTurn,
             ))
         };
+        tokio::pin!(settled);
 
-        let outcome = super::wait_for_prompt(settled, rx, IDLE).await;
+        let outcome = super::wait_for_prompt(settled.as_mut(), rx, IDLE).await;
 
         assert!(matches!(outcome, super::PromptWait::Settled(Ok(_))));
     }

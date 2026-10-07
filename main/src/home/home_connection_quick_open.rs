@@ -147,6 +147,8 @@ pub(crate) fn temporary_ssh_connection(input: &str) -> Option<StoredConnection> 
         disable_shell_integration: None,
         x11_forwarding: None,
         allow_legacy_algorithms: None,
+        forward_agent: None,
+        agent_forward_key: None,
         jump_server: None,
         disabled_jump_server: None,
         proxy: None,

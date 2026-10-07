@@ -1,6 +1,8 @@
 use std::{collections::HashMap, rc::Rc};
 
 use gpui::{AnyWindowHandle, App, Global, Subscription, Window, WindowId};
+use gpui_component::{WindowExt as _, notification::Notification};
+use rust_i18n::t;
 
 type WindowCloseHandler = Rc<dyn Fn(AnyWindowHandle, &mut App) + 'static>;
 
@@ -95,11 +97,15 @@ pub fn request_close_window(window_handle: AnyWindowHandle, cx: &mut App) {
 
 /// 这个构建是否启用「关闭即隐藏」兜底（开着 `macos-touchbar-window-hide` 的 macOS 构建）。
 ///
-/// 当前只有 `x86_64-apple-darwin` 的发布包会在打包时打开这个 feature
-/// （见 `crates/core/Cargo.toml` 的 feature 说明与 `docs/macos-memory-investigation.md` §10）。
+/// **当前恒为 `false`，没有任何构建打开它**：上游 zed#65186 修掉了根因（accesskit 改用普通
+/// Adapter，不再动态替换内容视图的类），修复随 gpui-pre fork-0.3.124 进来，所以关闭窗口回到
+/// `remove_window()`。机制原样保留：重新打开时只需给对应 target 传
+/// `--features macos-touchbar-window-hide`（见 `crates/core/Cargo.toml` 的 feature 说明与
+/// `docs/macos-memory-investigation.md` §10），代码不用改。
+///
 /// 判据里**没有架构条件**：Touch Bar 也存在于 Apple Silicon 的 13 英寸 MacBook Pro
 /// （M1 2020 / M2 2022）上，那一侧需要同样保护时，给它的构建传同一个 feature 即可。
-/// 未启用时所有隐藏路径都必须退回原来的「关闭即销毁」，行为与加这套机制之前一致。
+/// 未启用时所有隐藏路径都退回「关闭即销毁」。
 ///
 /// 开关刻意收敛成**一个常量**而不是散落的 `#[cfg]`：弹窗（[`crate::popup_window`]）、
 /// 编辑器窗口（`remote_file_editor::editor_window_visibility`）都要读它，写死在各处
@@ -175,6 +181,10 @@ pub fn hide_for_reuse(_window: &Window) -> anyhow::Result<bool> {
 /// 「隐藏失败就退回销毁」曾经是故意的下坡路，但它和这套机制的目的事实相冲突：**受保护
 /// 模式下的销毁同样会经过 AppKit 的关闭流程**，也就是要规避的那条路径。所以三种结果分开，
 /// 由调用方（与日志）看得见差别，而不是悄悄降级成销毁。
+///
+/// `#[must_use]`：调用方可以忽略它，但得**显式**写 `let _ =` —— 保存类流程下这个返回值
+/// 决定表单要不要切到「已保存」（见 [`close_window_after_save`]），静默丢掉就是漏处理。
+#[must_use]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WindowCloseOutcome {
     /// 原生窗口已隐藏、业务会话已结束。窗口仍然存活，同一个复用键可以重新显示它。
@@ -196,10 +206,9 @@ pub enum WindowCloseOutcome {
 ///
 /// # 生效范围
 ///
-/// 整套「隐藏不销毁」只在 [`HIDE_WINDOWS_ON_CLOSE`] 为真时生效，也就是打包时开了
-/// `macos-touchbar-window-hide` 的 macOS 构建（当前发布流水线只给 `x86_64-apple-darwin`
-/// 打开）。未启用时这个函数对弹窗的结果与普通窗口一样：`remove_window()`，即加这套机制
-/// 之前的行为。
+/// 整套「隐藏不销毁」只在 [`HIDE_WINDOWS_ON_CLOSE`] 为真时生效，也就是打包时给这个 target 传了
+/// `macos-touchbar-window-hide` 的 macOS 构建。该开关当前恒为 `false`（上游 zed#65186 已修掉
+/// 根因，见常量文档），所以这个函数眼下对弹窗的结果与普通窗口一样：`remove_window()`。
 ///
 /// # 弹窗一律不销毁
 ///
@@ -230,23 +239,25 @@ pub enum WindowCloseOutcome {
 ///
 /// 参数里有 `cx` 就是因为第 2 步必须能更新内容实体；只有 `&mut Window` 的接口做不到。
 pub fn close_window_for_reuse(window: &mut Window, cx: &mut App) -> WindowCloseOutcome {
-    // 不是弹窗：照旧销毁。它不在这条复用链上，也没有「AppKit 在关闭流程里销毁弹窗」
-    // 那个崩溃点；顺手也把视图层「改错了本该销毁的窗口」变成隐藏的风险挡住。
-    if !crate::popup_window::is_popup_window(window.window_handle().window_id()) {
-        window.remove_window();
-        return WindowCloseOutcome::Destroyed;
-    }
+    let is_popup = crate::popup_window::is_popup_window(window.window_handle().window_id());
+    // 不是弹窗时**不能**调 `hide_for_reuse` —— 那会把主窗口、编辑器窗口这类不该复用的
+    // 窗口一起藏起来。
+    let hide = if is_popup {
+        hide_for_reuse(window)
+    } else {
+        Ok(false)
+    };
 
-    match hide_for_reuse(window) {
-        Ok(true) => {
-            crate::popup_window::end_popup_session(window, cx);
-            WindowCloseOutcome::Hidden
-        }
-        Ok(false) => {
+    match close_plan(is_popup, &hide) {
+        ClosePlan::Destroy => {
             window.remove_window();
             WindowCloseOutcome::Destroyed
         }
-        Err(error) => {
+        ClosePlan::HideAndEndSession => {
+            crate::popup_window::end_popup_session(window, cx);
+            WindowCloseOutcome::Hidden
+        }
+        ClosePlan::Retain => {
             // `Err` 只可能来自开了 `macos-touchbar-window-hide` 的构建：未启用时
             // `hide_for_reuse` 在第一步就返回 `Ok(false)`（契约测试
             // `the_hide_switch_gates_every_link_of_the_chain` 钉住这个顺序）。
@@ -254,12 +265,65 @@ pub fn close_window_for_reuse(window: &mut Window, cx: &mut App) -> WindowCloseO
             // 不销毁：受保护模式下的销毁同样要经过 AppKit 的关闭流程，正是要规避的那条
             // 路径。窗口与它的业务会话保持原样，调用方从 `Retained` 知道这次关闭没生效。
             tracing::error!(
-                ?error,
+                ?hide,
                 "failed to hide the window; keeping it alive instead of destroying it"
             );
             WindowCloseOutcome::Retained
         }
     }
+}
+
+/// 关窗漏斗的决策，和窗口无关。
+///
+/// 抽成纯函数是为了让「隐藏失败必须保留窗口」这条规则**可以在没有真窗口的情况下做
+/// 回归测试**（含注入的隐藏失败）—— 真窗口路径上没法构造 AppKit 的失败现场，而这条
+/// 规则一旦被改回「失败就销毁」，就是把崩溃挪回原位。
+fn close_plan(is_popup: bool, hide: &anyhow::Result<bool>) -> ClosePlan {
+    if !is_popup {
+        return ClosePlan::Destroy;
+    }
+    match hide {
+        Ok(true) => ClosePlan::HideAndEndSession,
+        // `Ok(false)`：当前构建没开保护，行为与加这套机制之前一致。
+        Ok(false) => ClosePlan::Destroy,
+        Err(_) => ClosePlan::Retain,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ClosePlan {
+    /// 销毁原生窗口。
+    Destroy,
+    /// 隐藏并结束业务会话，窗口留下来复用。
+    HideAndEndSession,
+    /// 隐藏失败：窗口和会话都保持原样，这次关闭没生效。
+    Retain,
+}
+
+/// 保存类流程的关窗收尾：**保存已经落地之后**才能调用。
+///
+/// 与 [`close_window_for_reuse`] 的差别只有「谁先知道保存成功了」这一点，但后果不一样：
+/// 窗口没被隐藏（[`WindowCloseOutcome::Retained`]）时表单会留在屏幕上，用户还能再点一次
+/// 「保存」。对「新建」流程来说，那就是再 insert 一条连接 —— 而旧代码是靠「窗口反正会消失」
+/// 来结束这轮操作的，[`WindowCloseOutcome::Retained`] 把那个前提掀掉了。
+///
+/// 所以调用方有两件事必须做，缺一不可：
+///
+/// 1. **保存成功时就把握在手里的表单切到「已保存」状态**（记住写回的 id，让下一次保存
+///    变成更新），而不是依赖窗口消失；
+/// 2. 通过本函数关窗，而不是裸的 [`close_window_for_reuse`] —— 它会在窗口没关掉时告诉
+///    用户「已保存，只是窗口没关掉」，并说明可以重试关闭。
+///
+/// 顺序不能倒：先把窗口藏起来再保存，保存失败时用户正在编辑的界面已经没了。
+pub fn close_window_after_save(window: &mut Window, cx: &mut App) -> WindowCloseOutcome {
+    let outcome = close_window_for_reuse(window, cx);
+    if outcome == WindowCloseOutcome::Retained {
+        window.push_notification(
+            Notification::warning(t!("Window.saved_but_close_failed").to_string()).autohide(false),
+            cx,
+        );
+    }
+    outcome
 }
 
 #[cfg(test)]
@@ -385,6 +449,181 @@ mod tests {
                 !source.contains("window.remove_window()"),
                 "{path} 里还有直接销毁窗口的写法：这类窗口必须走 one_core::window_close::close_window_for_reuse，\
                  否则带 Touch Bar 的 Mac 上关闭时会闪退"
+            );
+        }
+    }
+
+    /// 「隐藏失败就保留窗口」这条规则不能靠真机复测来守：真窗口路径上造不出 AppKit 的
+    /// 失败现场。所以决策被抽成纯函数 [`close_plan`]，四种输入组合在这里全部钉住 ——
+    /// 尤其是注入的 `Err`（受保护模式下隐藏失败）。
+    ///
+    /// 一旦有人把它改回「失败就销毁」，就是把崩溃挪回原位：受保护模式下的销毁同样要经过
+    /// AppKit 的关闭流程。
+    #[test]
+    fn a_failed_hide_keeps_the_window_instead_of_destroying_it() {
+        let hidden = Ok(true);
+        let refused = Ok(false);
+        let failed: anyhow::Result<bool> = Err(anyhow::anyhow!("AppKit did not hide the window"));
+
+        assert_eq!(close_plan(false, &hidden), ClosePlan::Destroy);
+        assert_eq!(close_plan(false, &refused), ClosePlan::Destroy);
+        assert_eq!(close_plan(true, &hidden), ClosePlan::HideAndEndSession);
+        assert_eq!(close_plan(true, &refused), ClosePlan::Destroy);
+        assert_eq!(
+            close_plan(true, &failed),
+            ClosePlan::Retain,
+            "a failed hide under the protected build must keep the window and its session"
+        );
+    }
+
+    /// 保存类流程的关窗必须走 [`close_window_after_save`]。
+    ///
+    /// 这条比「不销毁」更难发现：隐藏失败（`Retained`）时表单会留在屏幕上，而旧的保存流程
+    /// 是靠「窗口反正会消失」结束这一轮的。所以每个保存类入口都得走这个收尾函数 —— 它只做
+    /// 两件事：关窗，以及关不掉时告诉用户「已保存，可以重试关闭」。
+    #[test]
+    fn save_flows_close_through_the_save_aware_funnel() {
+        let sources: [(&str, &str); 12] = [
+            (
+                "main/src/credential_vault/form_window.rs",
+                include_str!("../../../main/src/credential_vault/form_window.rs"),
+            ),
+            (
+                "crates/connection_form/src/middleware_form/window.rs",
+                include_str!("../../../crates/connection_form/src/middleware_form/window.rs"),
+            ),
+            (
+                "crates/db_view/src/connection_form_window.rs",
+                include_str!("../../../crates/db_view/src/connection_form_window.rs"),
+            ),
+            (
+                "crates/mongodb_view/src/mongo_form_window.rs",
+                include_str!("../../../crates/mongodb_view/src/mongo_form_window.rs"),
+            ),
+            (
+                "crates/port_forwarding_view/src/persistence.rs",
+                include_str!("../../../crates/port_forwarding_view/src/persistence.rs"),
+            ),
+            (
+                "crates/redis_view/src/redis_form_window.rs",
+                include_str!("../../../crates/redis_view/src/redis_form_window.rs"),
+            ),
+            (
+                "crates/remote_desktop_view/src/remote_desktop_form.rs",
+                include_str!("../../../crates/remote_desktop_view/src/remote_desktop_form.rs"),
+            ),
+            (
+                "crates/terminal_view/src/ftp_form_window.rs",
+                include_str!("../../../crates/terminal_view/src/ftp_form_window.rs"),
+            ),
+            (
+                "crates/terminal_view/src/serial_form_window.rs",
+                include_str!("../../../crates/terminal_view/src/serial_form_window.rs"),
+            ),
+            (
+                "crates/terminal_view/src/ssh_form_window.rs",
+                include_str!("../../../crates/terminal_view/src/ssh_form_window.rs"),
+            ),
+            (
+                "crates/terminal_view/src/telnet_form_window.rs",
+                include_str!("../../../crates/terminal_view/src/telnet_form_window.rs"),
+            ),
+            (
+                "crates/universal-plugins/src/extension_connection_form.rs",
+                include_str!("../../../crates/universal-plugins/src/extension_connection_form.rs"),
+            ),
+        ];
+
+        for (path, source) in sources {
+            assert!(
+                source.contains("close_window_after_save("),
+                "{path} 的保存流程没走 close_window_after_save：窗口没关掉时用户连一点提示都看不到，\
+                 而留着的表单还能再点一次「保存」"
+            );
+        }
+    }
+
+    /// 保存成功时必须**就地**把表单切到「已保存」状态。
+    ///
+    /// 这是「隐藏失败不销毁」带来的另一半改动：旧代码靠「窗口反正会消失」结束这一轮，
+    /// 窗口留在屏幕上之后，再点一次「保存」就会再插一条连接（表单还以为自己在新建）。
+    /// 关窗走 `close_window_after_save` 但漏了这一步，重复插入会原样回来。
+    #[test]
+    fn save_flows_flip_the_form_into_its_saved_state() {
+        // 标记写的是各表单翻转状态的那行代码（`mark_saved` / 写回编辑中的连接）。
+        let sources: [(&str, &str, &str); 13] = [
+            (
+                "main/src/credential_vault/form.rs",
+                include_str!("../../../main/src/credential_vault/form.rs"),
+                "fn mark_saved(&mut self, entry: CredentialEntry)",
+            ),
+            (
+                "main/src/credential_vault/form_window.rs",
+                include_str!("../../../main/src/credential_vault/form_window.rs"),
+                "self.editing = true;",
+            ),
+            (
+                "crates/connection_form/src/middleware_form/form.rs",
+                include_str!("../../../crates/connection_form/src/middleware_form/form.rs"),
+                "form.editing_connection = Some(saved.clone())",
+            ),
+            (
+                "crates/db_view/src/common/db_connection_form.rs",
+                include_str!("../../../crates/db_view/src/common/db_connection_form.rs"),
+                "editing_connection = Some(stored.clone())",
+            ),
+            (
+                "crates/mongodb_view/src/mongo_form_window.rs",
+                include_str!("../../../crates/mongodb_view/src/mongo_form_window.rs"),
+                "fn mark_saved(&mut self, saved: &StoredConnection",
+            ),
+            (
+                "crates/port_forwarding_view/src/form_window.rs",
+                include_str!("../../../crates/port_forwarding_view/src/form_window.rs"),
+                "fn mark_saved(&mut self, saved: &StoredConnection",
+            ),
+            (
+                "crates/redis_view/src/redis_form_window.rs",
+                include_str!("../../../crates/redis_view/src/redis_form_window.rs"),
+                "fn mark_saved(&mut self, saved: &StoredConnection",
+            ),
+            (
+                "crates/remote_desktop_view/src/remote_desktop_form.rs",
+                include_str!("../../../crates/remote_desktop_view/src/remote_desktop_form.rs"),
+                "fn mark_saved(&mut self, saved: &StoredConnection",
+            ),
+            (
+                "crates/terminal_view/src/ftp_form_window.rs",
+                include_str!("../../../crates/terminal_view/src/ftp_form_window.rs"),
+                "fn mark_saved(&mut self, saved: &StoredConnection",
+            ),
+            (
+                "crates/terminal_view/src/serial_form_window.rs",
+                include_str!("../../../crates/terminal_view/src/serial_form_window.rs"),
+                "fn mark_saved(&mut self, saved: &StoredConnection",
+            ),
+            (
+                "crates/terminal_view/src/ssh_form_window.rs",
+                include_str!("../../../crates/terminal_view/src/ssh_form_window.rs"),
+                "fn mark_saved(&mut self, saved: &StoredConnection",
+            ),
+            (
+                "crates/terminal_view/src/telnet_form_window.rs",
+                include_str!("../../../crates/terminal_view/src/telnet_form_window.rs"),
+                "fn mark_saved(&mut self, saved: &StoredConnection",
+            ),
+            (
+                "crates/universal-plugins/src/extension_connection_form.rs",
+                include_str!("../../../crates/universal-plugins/src/extension_connection_form.rs"),
+                "self.editing_connection = Some(connection.clone())",
+            ),
+        ];
+
+        for (path, source, marker) in sources {
+            assert!(
+                source.contains(marker),
+                "{path} 少了这一步：保存成功后就地把表单切到「已保存」（{marker}）—— \
+                 窗口没关掉时用户再点一次「保存」会再插一条连接"
             );
         }
     }

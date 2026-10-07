@@ -1974,8 +1974,7 @@ fn windows_native_presentation_readiness_is_independent_of_canvas_frames() {
 fn windows_native_timeout_hands_off_to_the_owner_thread_retirement_queue() {
     let view = include_str!("../view.rs").replace("\r\n", "\n");
     let retirement = include_str!("windows_native_retirement.rs").replace("\r\n", "\n");
-    let drain =
-        include_str!("../windows_native_shutdown/platform/drain.rs").replace("\r\n", "\n");
+    let drain = include_str!("../windows_native_shutdown/platform/drain.rs").replace("\r\n", "\n");
 
     // Every deadline path retires; none of them leaks.
     for (name, source) in [("view.rs", &view), ("drain.rs", &drain)] {

@@ -198,7 +198,7 @@ fn ssh_connection(port: u16, username: String, password: String) -> StoredConnec
     let mut connection = StoredConnection::new_ssh(
         "docker ssh".to_string(),
         SshParams {
-                remote_file: None,
+            remote_file: None,
             sftp_default_directory: None,
             disabled_jump_server: None,
             sftp_account: None,
@@ -220,6 +220,8 @@ fn ssh_connection(port: u16, username: String, password: String) -> StoredConnec
             disable_shell_integration: None,
             x11_forwarding: None,
             allow_legacy_algorithms: None,
+            forward_agent: None,
+            agent_forward_key: None,
             jump_server: None,
             proxy: None,
             os_id: None,

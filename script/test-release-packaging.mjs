@@ -180,25 +180,18 @@ test("Linux publishes one package per architecture plus a separate GPU dependenc
   // the plain default build on all three platforms. The guard for that lives in
   // its own test below.
   assert.doesNotMatch(build, /--no-default-features/);
-  // The one deliberate exception is the Intel Mac Touch Bar workaround. It has to
-  // stay the *only* feature this step ever names, be handed to the compile through
-  // the same variable, and stay behind the target check: a workaround that leaks
-  // onto ARM Macs, Windows or Linux would trade a crash we can reproduce for a
-  // memory cost we cannot explain.
-  assert.match(
+  // The Touch Bar workaround feature is switched off again: upstream zed#65186 fixed the
+  // root cause (accesskit's plain Adapter instead of the dynamically subclassed content
+  // view) and that fix ships in gpui-pre fork-0.3.124, so every platform closes windows by
+  // destroying them. If the fix is ever disproven on real hardware, re-adding
+  // `--features macos-touchbar-window-hide` for the affected target here is the whole
+  // change; the mechanism is still in the code behind `HIDE_WINDOWS_ON_CLOSE`.
+  assert.doesNotMatch(
     build,
-    /if \[ "\$\{\{ matrix\.target \}\}" = "x86_64-apple-darwin" \]; then\s*\n\s*extra_features="--features macos-touchbar-window-hide"/,
+    /--features/,
+    "the build step must not name features: the Intel Mac Touch Bar workaround is disabled now that upstream zed#65186 landed",
   );
-  assert.equal(
-    (build.match(/--features/g) ?? []).length,
-    1,
-    "the build step must name features in exactly one place: the x86_64 macOS-only variable",
-  );
-  assert.equal(
-    (build.match(/\$extra_features/g) ?? []).length,
-    2,
-    "both compile commands must consume the feature variable: a platform that silently loses it would ship the un-fixed binary",
-  );
+  assert.doesNotMatch(build, /extra_features/);
   assert.match(
     build,
     /cargo build --release -p main --target "\$\{\{ matrix\.target \}\}"/,
@@ -1032,6 +1025,28 @@ test("Windows MSI shortcuts use dedicated HKCU-keyed components", () => {
   }
 });
 
+test("Windows MSI shortcuts inherit the executable's embedded icon", () => {
+  const wix = read("installer/windows/navop.wxs");
+
+  // 快捷方式不能引用 Icon 表：MSI 会把 Icon 表里的图标另存成一份文件，该文件被清理或
+  // 图标缓存失效后，快捷方式图标会退化成通用白纸（issue #325）。目标 exe 已内嵌图标。
+  for (const id of ["StartMenuShortcut", "DesktopShortcut"]) {
+    const shortcut = wix.match(
+      new RegExp(`<Shortcut\\b[^>]*Id="${id}"[^>]*/>`),
+    );
+    assert.ok(shortcut, `missing ${id} shortcut`);
+    assert.doesNotMatch(shortcut[0], /\bIcon=/);
+  }
+
+  // 控制面板的卸载项仍走 Icon 表；快捷方式图标则由 exe 的内嵌资源提供。
+  assert.match(wix, /<Icon Id="NavopIcon" SourceFile="\$\(IconPath\)"\s*\/>/);
+  assert.match(wix, /<Property Id="ARPPRODUCTICON" Value="NavopIcon"\s*\/>/);
+  assert.match(
+    read("main/build.rs"),
+    /set_icon\("\.\.\/resources\/windows\/navop\.ico"\)/,
+  );
+});
+
 test("GitHub and R2 publish every installer while the updater manifest remains compatible", () => {
   const release = read(".github/workflows/release.yml");
   const upload = read(".github/workflows/upload-r2.yml");
@@ -1089,6 +1104,146 @@ test("R2 uploads are single-dispatch, revalidated, and verified after overwrite"
   assert.doesNotMatch(upload, /max-age=31536000, immutable/);
 });
 
+test("R2 keeps only the release it just uploaded", () => {
+  const upload = read(".github/workflows/upload-r2.yml");
+
+  // 清理必须排在上传与逐对象校验之后，而且不能总是执行：上传失败时一个对象
+  // 都不能删，否则桶里可能新旧两份都不完整。
+  assert.ok(
+    upload.indexOf("Prune older R2 releases") >
+      upload.indexOf("Upload update archives and manifest to R2"),
+  );
+  const pruneStep = workflowStep(upload, "Prune older R2 releases");
+  assert.doesNotMatch(pruneStep, /always\(\)/);
+  assert.doesNotMatch(pruneStep, /continue-on-error/);
+  assert.match(
+    pruneStep,
+    /if: \$\{\{ steps\.r2_config\.outputs\.skip != 'true' && steps\.release\.outputs\.skip != 'true' \}\}/,
+  );
+  // 只动 releases/<tag>/：updates/latest.json 是更新入口，任何时候都不能删。
+  assert.match(pruneStep, /prefix="releases"/);
+  assert.doesNotMatch(pruneStep, /updates\//);
+  // 只有稳定版本号才清理，预发布不能把上一个稳定版本的安装包带走。
+  assert.match(pruneStep, /=\~ \^v\[0-9\]\+\\\.\[0-9\]\+\\\.\[0-9\]\+\$ \]\]/);
+  assert.match(pruneStep, /Skipping R2 prune for non-stable release tag/);
+
+  const pruneRun = pruneStep
+    .match(/run: \|\n([\s\S]*)/)?.[1]
+    .split("\n")
+    .map((line) => line.replace(/^ {10}/, ""))
+    .join("\n");
+  assert.ok(pruneRun, "prune step must have a run script");
+
+  const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "navop-r2-prune-"));
+  const statePath = path.join(fixtureDir, "bucket");
+  const deletedPath = path.join(fixtureDir, "deleted");
+  const fakeAws = path.join(fixtureDir, "aws");
+
+  // 假 aws 只实现这一步用到的两条命令：列出版本前缀、递归删掉一个前缀。删除
+  // 会真的从 fixture 里拿掉版本，所以脚本最后的复查也一起被验证到。
+  fs.writeFileSync(
+    fakeAws,
+    `#!/usr/bin/env bash
+set -euo pipefail
+case "\${1:-} \${2:-}" in
+  "s3api list-objects-v2")
+    # 必须带 delimiter，否则列出来的是对象而不是版本目录。
+    if [[ " $* " != *" --delimiter / "* ]]; then
+      echo "s3api list-objects-v2 without --delimiter: $*" >&2
+      exit 42
+    fi
+    # 跟真实 aws cli 一致：--output text 对扁平列表是「一行、tab 拼接」。
+    # 之前这里按一行一个写，恰好把真实现场的解析 bug 掩盖过去了。
+    separator=""
+    line=""
+    for tag in $(grep -v '^$' "\${FAKE_R2_STATE}"); do
+      line="\${line}\${separator}releases/\$tag/"
+      separator=\$'\t'
+    done
+    [[ -z "\$line" ]] || printf '%s\\n' "\$line"
+    ;;
+  "s3 rm")
+    target=""
+    for argument in "\$@"; do
+      case "\$argument" in s3://*) target="\$argument" ;; esac
+    done
+    key="\${target#s3://*/}"
+    key="\${key%/}"
+    echo "\$key" >> "\${FAKE_R2_DELETED}"
+    grep -Fxv "\${key#releases/}" "\${FAKE_R2_STATE}" > "\${FAKE_R2_STATE}.tmp"
+    mv "\${FAKE_R2_STATE}.tmp" "\${FAKE_R2_STATE}"
+    ;;
+  *)
+    echo "unexpected aws invocation: \$*" >&2
+    exit 42
+    ;;
+esac
+`,
+    { mode: 0o755 },
+  );
+
+  const runPrune = (tags, releaseTag = "v0.19.5") => {
+    fs.writeFileSync(statePath, `${tags.join("\n")}\n`);
+    fs.writeFileSync(deletedPath, "");
+    const result = spawnSync("bash", ["-c", pruneRun], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${fixtureDir}:${process.env.PATH}`,
+        FAKE_R2_STATE: statePath,
+        FAKE_R2_DELETED: deletedPath,
+        CLOUDFLARE_ACCOUNT_ID: "test-account",
+        CLOUDFLARE_R2_BUCKET: "test-bucket",
+        RELEASE_TAG: releaseTag,
+      },
+    });
+    return {
+      result,
+      remaining: fs
+        .readFileSync(statePath, "utf8")
+        .trim()
+        .split("\n")
+        .filter(Boolean),
+      deleted: fs
+        .readFileSync(deletedPath, "utf8")
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .sort(),
+    };
+  };
+
+  try {
+    const pruned = runPrune(["v0.19.5", "v0.19.4", "v0.19.3"]);
+    assert.equal(pruned.result.status, 0, pruned.result.stderr);
+    assert.deepEqual(pruned.remaining, ["v0.19.5"]);
+    assert.deepEqual(pruned.deleted, [
+      "releases/v0.19.3",
+      "releases/v0.19.4",
+    ]);
+    assert.match(pruned.result.stdout, /R2 now keeps only releases\/v0\.19\.5\//);
+
+    // 本次 tag 不在桶里（上传其实没成功）时，一个旧版本都不能删。
+    const missing = runPrune(["v0.19.4", "v0.19.3"]);
+    assert.notEqual(missing.result.status, 0);
+    assert.match(missing.result.stdout, /Refusing to prune/);
+    assert.deepEqual(missing.deleted, []);
+    assert.deepEqual(missing.remaining, ["v0.19.4", "v0.19.3"]);
+
+    // 预发布不清理，既有稳定版本原样保留。
+    const prerelease = runPrune(["v0.19.5", "v0.19.4"], "v0.20.0-rc.1");
+    assert.equal(prerelease.result.status, 0, prerelease.result.stderr);
+    assert.deepEqual(prerelease.deleted, []);
+    assert.deepEqual(prerelease.remaining, ["v0.19.5", "v0.19.4"]);
+    assert.match(
+      prerelease.result.stdout,
+      /Skipping R2 prune for non-stable release tag/,
+    );
+  } finally {
+    fs.rmSync(fixtureDir, { recursive: true, force: true });
+  }
+});
+
 test("CNB release synchronization replaces moved tags before syncing assets", () => {
   const sync = read(".github/workflows/sync-cnb-release-assets.yml");
 
@@ -1136,6 +1291,8 @@ test("Windows release validates the MSI installer with the shared validator", ()
   assert.match(validator, /DesktopShortcutRegistry/);
   assert.match(validator, /StartMenuShortcutRegistry/);
   assert.match(validator, /SELECT Component_ FROM Shortcut/);
+  assert.match(validator, /Assert-MsiEmptyValue/);
+  assert.match(validator, /SELECT Icon_ FROM Shortcut/);
   assert.match(validator, /SELECT KeyPath FROM Component/);
   assert.match(validator, /SELECT Root FROM Registry/);
   assert.match(validator, /\.Trim\(\)/);

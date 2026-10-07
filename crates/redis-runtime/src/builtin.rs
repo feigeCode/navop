@@ -356,6 +356,8 @@ impl RedisConnectionImpl {
             host_key_verifier: HostKeyVerifier::default(),
             x11_forwarding: false,
             allow_legacy_algorithms: false,
+            forward_agent: false,
+            agent_identities: Vec::new(),
         };
 
         let tunnel_result = timeout(

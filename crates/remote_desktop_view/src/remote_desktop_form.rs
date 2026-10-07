@@ -293,14 +293,32 @@ impl RemoteDesktopFormWindow {
             .and_then(|params| self.save_connection(params, cx).map_err(|e| e.to_string()))
         {
             Ok(connection) => {
-                emit_saved_connection(connection, self.is_editing, cx);
-                let _ = one_core::window_close::close_window_for_reuse(window, cx);
+                // 保存已经落地：先把表单切到「已保存」（编辑）状态，再关窗。
+                // 关窗返回 `Retained` 时窗口会留在屏幕上（隐藏失败），没有这一步用户再点
+                // 一次「保存」就会按「新建」再插一条连接。
+                let is_editing = self.is_editing;
+                self.mark_saved(&connection, cx);
+                emit_saved_connection(connection, is_editing, cx);
+                let _ = one_core::window_close::close_window_after_save(window, cx);
             }
             Err(error) => {
                 self.error = Some(error);
                 cx.notify();
             }
         }
+    }
+
+    /// 保存已经落地：把表单切到「已保存」（编辑）状态。
+    ///
+    /// 不能依赖「窗口反正会消失」来结束这轮操作：关闭漏斗返回 `Retained` 时窗口会留在
+    /// 屏幕上（隐藏失败），没有这一步用户再点一次「保存」会按「新建」再插一条连接。
+    fn mark_saved(&mut self, saved: &StoredConnection, cx: &mut Context<Self>) {
+        self.is_editing = true;
+        self.editing_id = saved.id;
+        self.editing_cloud_id = saved.cloud_id.clone();
+        self.editing_last_synced_at = saved.last_synced_at;
+        self.editing_connection = Some(saved.clone());
+        cx.notify();
     }
 
     fn save_connection(

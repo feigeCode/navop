@@ -40,6 +40,8 @@ mod redis_tree_event;
 pub mod redis_tree_view;
 pub mod sidebar;
 mod value_table_columns;
+#[cfg(test)]
+mod value_table_columns_resize_tests;
 
 // 核心导出
 pub use connection::RedisConnectionImpl;

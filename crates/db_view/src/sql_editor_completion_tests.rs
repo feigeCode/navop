@@ -2224,3 +2224,129 @@ mod cross_schema_provider_tests {
         );
     }
 }
+
+/// 回归测试：多语句文档里的字段补全必须按「当前语句」收窄（issue #329）。
+///
+/// 症状：写 `select * from user where ` 时，候选里混进文档中其他语句的表的字段，
+/// 并且因为跨表出现同名列，裸列名被迫退化成 `table.column` 形式，用户不得不加别名。
+#[cfg(test)]
+mod statement_scope_provider_tests {
+    use crate::sql_editor::{DefaultSqlCompletionProvider, SqlSchema};
+    use gpui::{AppContext, Context, Entity, IntoElement, Render, Task, Window, div};
+    use gpui_component::input::{CompletionProvider, InputState};
+    use gpui_component::{Rope, Theme};
+    use lsp_types::{CompletionContext, CompletionResponse, CompletionTriggerKind};
+
+    struct Root(Entity<InputState>);
+
+    impl Render for Root {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    /// `users(id, name)` 与 `logs(id, message)`：两表有同名列 `id`。
+    fn fixture() -> SqlSchema {
+        SqlSchema::default()
+            .with_tables([("users", ""), ("logs", "")])
+            .with_table_columns("users", [("id", ""), ("name", "")])
+            .with_table_columns("logs", [("id", ""), ("message", "")])
+    }
+
+    async fn completion_labels(
+        tasks: Vec<Task<anyhow::Result<CompletionResponse>>>,
+    ) -> anyhow::Result<Vec<Vec<String>>> {
+        let mut all = Vec::new();
+        for task in tasks {
+            let items = match task.await? {
+                CompletionResponse::Array(items) => items,
+                CompletionResponse::List(list) => list.items,
+            };
+            all.push(items.into_iter().map(|item| item.label).collect());
+        }
+        anyhow::Ok(all)
+    }
+
+    #[gpui::test]
+    async fn columns_do_not_leak_from_other_statements(cx: &mut gpui::TestAppContext) {
+        let provider = DefaultSqlCompletionProvider::new(fixture());
+
+        let handle = cx.update(|cx| {
+            cx.open_window(gpui::WindowOptions::default(), |window, cx| {
+                cx.set_global(Theme::default());
+                let input = cx.new(|cx| InputState::new(window, cx));
+                cx.new(|_| Root(input))
+            })
+            .unwrap()
+        });
+
+        let labels = handle
+            .update(cx, |root, window, cx| {
+                let input = root.0.clone();
+                let mut run = |sql: &str| {
+                    let rope = Rope::from_str(sql);
+                    let end = rope.len();
+                    input.update(cx, |_state, cx| {
+                        let trigger = CompletionContext {
+                            trigger_kind: CompletionTriggerKind::INVOKED,
+                            trigger_character: None,
+                        };
+                        provider.completions(&rope, end, trigger, window, cx)
+                    })
+                };
+                // 单语句：基线，候选只应来自 users
+                let single = run("SELECT * FROM users WHERE ");
+                // 多语句：当前语句是 users，前一条语句的表 logs 不得参与
+                let multi = run("SELECT * FROM logs WHERE id > 1;\nSELECT * FROM users WHERE ");
+                // 单语句限定列：别名 u 应能解析到 users
+                let dot_single = run("SELECT * FROM users u WHERE u.");
+                // 多语句限定列：别名只在当前语句内解析
+                let dot_multi = run("SELECT * FROM logs l;\nSELECT * FROM users u WHERE u.");
+                // 多语句：上一条语句的别名 l 不应再解析出 logs 的列
+                let stale_alias = run("SELECT * FROM logs l;\nSELECT l.");
+                let tasks = vec![single, multi, dot_single, dot_multi, stale_alias];
+                cx.spawn(async move |_, _| completion_labels(tasks).await)
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        let [single, multi, dot_single, dot_multi, stale_alias] =
+            <[Vec<String>; 5]>::try_from(labels).expect("应返回 5 组候选");
+
+        assert!(
+            single.iter().any(|label| label == "id") && single.iter().any(|label| label == "name"),
+            "单语句 `FROM users WHERE` 应提示 users 的字段，实际 {single:?}"
+        );
+        assert!(
+            multi.iter().any(|label| label == "id") && multi.iter().any(|label| label == "name"),
+            "多语句下当前语句仍应提示 users 的字段，实际 {multi:?}"
+        );
+        assert!(
+            !multi.iter().any(|label| label == "message"),
+            "多语句下不应出现其他语句表 logs 的字段，实际 {multi:?}"
+        );
+        assert!(
+            !multi.iter().any(|label| label.starts_with("logs.")),
+            "多语句下不应出现其他语句表的限定名候选，实际 {multi:?}"
+        );
+        assert!(
+            dot_single.iter().any(|label| label == "id")
+                && dot_single.iter().any(|label| label == "name"),
+            "`u.` 应提示别名对应表的字段，实际 {dot_single:?}"
+        );
+        assert!(
+            dot_multi.iter().any(|label| label == "id")
+                && dot_multi.iter().any(|label| label == "name"),
+            "多语句下 `u.` 仍应提示当前语句别名对应表的字段，实际 {dot_multi:?}"
+        );
+        assert!(
+            !dot_multi.iter().any(|label| label == "message"),
+            "多语句下 `u.` 不应提示其他语句表的字段，实际 {dot_multi:?}"
+        );
+        assert!(
+            !stale_alias.iter().any(|label| label == "message"),
+            "上一条语句的别名不应在当前语句里解析出字段，实际 {stale_alias:?}"
+        );
+    }
+}

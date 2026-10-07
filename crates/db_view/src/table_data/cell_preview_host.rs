@@ -2,9 +2,9 @@ use crate::sidebar::cell_preview_panel::CellPreviewPanel;
 use crate::table_data::data_grid::{DataGrid, DataGridEvent};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, Context, DragMoveEvent, Entity, EntityId, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, ParentElement, Pixels, Render, StatefulInteractiveElement,
-    Styled, Subscription, Window, div, px,
+    App, AppContext, Context, Div, DragMoveEvent, Entity, EntityId, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, ParentElement, Pixels, Render, Stateful,
+    StatefulInteractiveElement, Styled, Subscription, Window, div, px,
 };
 use gpui_component::{ActiveTheme, h_flex};
 use std::{cell::Cell, rc::Rc};
@@ -12,7 +12,13 @@ use std::{cell::Cell, rc::Rc};
 const DEFAULT_PREVIEW_WIDTH: Pixels = px(420.0);
 const MIN_PREVIEW_WIDTH: Pixels = px(280.0);
 const MAX_PREVIEW_WIDTH: Pixels = px(800.0);
-const PREVIEW_RESIZE_HANDLE_WIDTH: Pixels = px(6.0);
+/// 预览分隔条抓取区在分隔线两侧各自的宽度。
+const PREVIEW_RESIZE_GRAB_PADDING: Pixels = px(4.0);
+/// 分隔线本身的宽度。
+const PREVIEW_RESIZE_LINE_WIDTH: Pixels = px(1.0);
+
+#[cfg(test)]
+mod resize_tests;
 
 #[derive(Clone)]
 struct ResizeCellPreview {
@@ -132,6 +138,54 @@ impl CellPreviewHost {
             grid.set_large_text_editor_sidebar_open(open, cx);
         });
     }
+
+    /// 预览分隔条的一侧抓取区：只管命中、光标与拖动，位置与外观由调用方决定。
+    ///
+    /// 抓取区以分隔线为中心、两侧各 [`PREVIEW_RESIZE_GRAB_PADDING`]，两半分别挂在
+    /// 数据表格一侧和预览面板一侧。以前是一条 6px、整条压在数据表格那边的抓取区：
+    /// 从预览面板那边靠过来完全没有反馈，鼠标得精确停在那几个像素上才拉得动。
+    fn render_preview_resize_grab(
+        &self,
+        initial_x: Rc<Cell<Option<Pixels>>>,
+        selector: &'static str,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let preview_width = self.preview_width;
+        div()
+            .id(selector)
+            .debug_selector(|| selector.to_owned())
+            .cursor_col_resize()
+            .occlude()
+            .flex()
+            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_drag_move(
+                cx.listener(|this, e: &DragMoveEvent<ResizeCellPreview>, _window, cx| {
+                    let drag = e.drag(cx);
+                    if drag.entity_id != cx.entity_id() {
+                        return;
+                    }
+                    let Some(initial_x) = drag.initial_x.get() else {
+                        return;
+                    };
+
+                    this.preview_width =
+                        resized_preview_width(drag.initial_width, initial_x, e.event.position.x);
+                    cx.notify();
+                }),
+            )
+            .on_drag(
+                ResizeCellPreview {
+                    entity_id: cx.entity_id(),
+                    initial_width: preview_width,
+                    initial_x,
+                },
+                |drag, _, window, cx| {
+                    drag.initial_x.set(Some(window.mouse_position().x));
+                    cx.stop_propagation();
+                    cx.new(|_| drag.clone())
+                },
+            )
+    }
 }
 
 impl Focusable for CellPreviewHost {
@@ -154,63 +208,41 @@ impl Render for CellPreviewHost {
             .when(self.is_preview_open, |this| {
                 let initial_x = Rc::new(Cell::new(None));
                 this.child(
-                    div()
-                        .id("cell-preview-resize")
+                    self.render_preview_resize_grab(initial_x.clone(), "cell-preview-resize", cx)
                         .group("cell-preview-resize")
-                        .w(PREVIEW_RESIZE_HANDLE_WIDTH)
+                        .w(PREVIEW_RESIZE_GRAB_PADDING)
                         .h_full()
                         .flex_shrink_0()
-                        .cursor_col_resize()
-                        .occlude()
-                        .flex()
                         .justify_end()
-                        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(
                             div()
                                 .h_full()
-                                .w(px(1.0))
+                                .w(PREVIEW_RESIZE_LINE_WIDTH)
                                 .bg(cx.theme().border)
                                 .group_hover("cell-preview-resize", |this| {
                                     this.bg(cx.theme().primary)
                                 }),
-                        )
-                        .on_drag_move(cx.listener(
-                            |this, e: &DragMoveEvent<ResizeCellPreview>, _window, cx| {
-                                let drag = e.drag(cx);
-                                if drag.entity_id != cx.entity_id() {
-                                    return;
-                                }
-                                let Some(initial_x) = drag.initial_x.get() else {
-                                    return;
-                                };
-
-                                this.preview_width = resized_preview_width(
-                                    drag.initial_width,
-                                    initial_x,
-                                    e.event.position.x,
-                                );
-                                cx.notify();
-                            },
-                        ))
-                        .on_drag(
-                            ResizeCellPreview {
-                                entity_id: cx.entity_id(),
-                                initial_width: self.preview_width,
-                                initial_x,
-                            },
-                            |drag, _, window, cx| {
-                                drag.initial_x.set(Some(window.mouse_position().x));
-                                cx.stop_propagation();
-                                cx.new(|_| drag.clone())
-                            },
                         ),
                 )
                 .child(
                     div()
+                        .relative()
                         .w(self.preview_width)
                         .h_full()
                         .flex_shrink_0()
-                        .child(self.preview_panel.clone()),
+                        .child(self.preview_panel.clone())
+                        .child(
+                            self.render_preview_resize_grab(
+                                initial_x,
+                                "cell-preview-resize-leading",
+                                cx,
+                            )
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
+                            .left_0()
+                            .w(PREVIEW_RESIZE_GRAB_PADDING),
+                        ),
                 )
             })
     }

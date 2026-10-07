@@ -33,3 +33,5 @@ After certificate rotation, retest the connection and confirm that an extension 
 Schema filters can hide system objects, include selected schemas, exclude selected schemas, or show everything. They affect navigation only; they do not change account permissions or prevent direct SQL access. When an object appears missing, check the current database, schema, name case, permissions, and filter.
 
 Close dependent editors, data tabs, and comparison jobs before changing connection parameters so active sessions do not continue with stale settings.
+
+External (IPC) drivers time out per call category: user operations such as query, exec, cursor, and import/export default to 30 minutes, while metadata and structure browsing keep 30 seconds. The connection's advanced settings expose a "Request timeout (seconds)" field that overrides the category defaults — leave it empty to follow the defaults, or set 0 for no limit — so large queries and imports on slow databases are no longer cut off by the single 30-second cap.

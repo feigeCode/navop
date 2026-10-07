@@ -31,6 +31,7 @@ The normal release sequence is:
 6. The workflow checks the application version and tagged changelog entry before starting expensive builds.
 7. macOS ARM64, macOS x86_64, Linux x86_64, Linux ARM64, and Windows x86_64 build in parallel in one matrix.
 8. After all requested platforms finish, the workflow extracts the tagged entry, uses it as the GitHub Release body, and writes the same Markdown to the R2 `latest.json` `release_notes` field.
+9. Once every uploaded object has been verified, R2 keeps only the tag that was just uploaded: the other `releases/<tag>/` prefixes are pruned, so the bucket carries one version's installers instead of the whole history. Nothing becomes unreachable — `updates/latest.json` only ever points at the tag being uploaded, and older installers stay on their GitHub Release and on the CNB mirror.
 
 The build workflow checks out the requested tag, while the workflow itself runs from `main`. This keeps Cargo input caches and sccache data reusable across tags and repair runs.
 
@@ -117,5 +118,6 @@ For a failed matrix job in the same workflow run, prefer **Re-run failed jobs**.
 - A new release tag must contain a valid bilingual `CHANGELOG.md` entry before builds begin.
 - GitHub Release notes and R2 updater `release_notes` are extracted from the same tagged changelog entry.
 - Publishing uses `--clobber` only for newly built platform files and `sha256sums.txt`.
+- R2 keeps only the newest release. The prune step runs after the upload has been verified object by object and never carries `always()`, so a failed upload leaves the existing objects alone; it refuses to delete anything when its own tag is missing from R2, and a non-stable tag (for example `v0.20.0-rc.1`) skips pruning so it cannot take the last stable installers with it.
 - Legacy pre-changelog repairs preserve their existing GitHub Release body.
 - All five primary platform builds belong to one matrix, so they start in parallel and a failed job can be rerun without rebuilding successful matrix jobs.

@@ -1,13 +1,47 @@
 use std::path::Path;
+use std::sync::Arc;
 
 use async_trait::async_trait;
+use futures::FutureExt;
+use gpui::http_client::{AsyncBody, HttpClient, Request, Response};
 
 use crate::cloud_sync::models::data_type;
 use crate::cloud_sync::personal::test_support::test_record;
 use crate::cloud_sync::personal::{
     CommandGitRunner, ConfiguredPersonalSyncStore, GitRunner, GitRunnerError, PersonalSyncStore,
+    SyncStoreError,
 };
 use crate::settings::PersonalSyncBackendKind;
+
+/// Folder / Git 后端用不到 HTTP，这里给一个从不成功的占位实现。
+fn stub_http_client() -> Arc<dyn HttpClient> {
+    Arc::new(StubHttpClient)
+}
+
+struct StubHttpClient;
+
+impl HttpClient for StubHttpClient {
+    fn user_agent(&self) -> Option<&gpui::http_client::http::HeaderValue> {
+        None
+    }
+
+    fn send(
+        &self,
+        _req: Request<AsyncBody>,
+    ) -> futures::future::BoxFuture<'static, anyhow::Result<Response<AsyncBody>>> {
+        async move {
+            Response::builder()
+                .status(404)
+                .body(AsyncBody::from(Vec::new()))
+                .map_err(|error| anyhow::anyhow!(error))
+        }
+        .boxed()
+    }
+
+    fn proxy(&self) -> Option<&gpui::http_client::Url> {
+        None
+    }
+}
 
 #[test]
 fn configured_store_builds_folder_store() {
@@ -37,16 +71,36 @@ fn configured_store_maps_backend_kind() {
         temp.path().to_path_buf(),
         CommandGitRunner,
         true,
-    );
+        None,
+        stub_http_client(),
+    )
+    .expect("folder store");
     let git = ConfiguredPersonalSyncStore::from_backend(
         PersonalSyncBackendKind::Git,
         temp.path().to_path_buf(),
         CommandGitRunner,
         false,
-    );
+        None,
+        stub_http_client(),
+    )
+    .expect("git store");
 
     assert_eq!("folder", folder.backend_id());
     assert_eq!("git", git.backend_id());
+}
+
+#[test]
+fn configured_store_rejects_webdav_without_credentials() {
+    let result = ConfiguredPersonalSyncStore::from_backend(
+        PersonalSyncBackendKind::Webdav,
+        std::path::PathBuf::new(),
+        CommandGitRunner,
+        false,
+        None,
+        stub_http_client(),
+    );
+
+    assert_eq!(Err(SyncStoreError::NotConfigured), result.map(|_| ()));
 }
 
 #[tokio::test]

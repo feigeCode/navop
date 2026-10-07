@@ -8,11 +8,11 @@ use one_core::storage::{
     StoredConnection,
 };
 use ssh::{
-    DynamicSocksConfig, DynamicSocksTunnel, HostKeyVerifier, JumpServerConnectConfig,
-    LocalPortForwardActivity, LocalPortForwardConfig, LocalPortForwardTunnel, ProxyConnectConfig,
-    ProxyType, RemotePortForwardConfig, RemotePortForwardTunnel, SshAuth, SshConnectConfig,
-    start_dynamic_socks_forward, start_local_port_forward_with_config,
-    start_remote_port_forward_with_config,
+    AgentIdentity, DynamicSocksConfig, DynamicSocksTunnel, HostKeyVerifier,
+    JumpServerConnectConfig, LocalPortForwardActivity, LocalPortForwardConfig,
+    LocalPortForwardTunnel, ProxyConnectConfig, ProxyType, RemotePortForwardConfig,
+    RemotePortForwardTunnel, SshAuth, SshConnectConfig, start_dynamic_socks_forward,
+    start_local_port_forward_with_config, start_remote_port_forward_with_config,
 };
 
 pub struct LocalForwardingRequest {
@@ -267,6 +267,33 @@ fn build_ssh_connect_config(params: &SshParams) -> SshConnectConfig {
         host_key_verifier: HostKeyVerifier::default(),
         x11_forwarding: false,
         allow_legacy_algorithms: params.allow_legacy_algorithms.unwrap_or(false),
+        forward_agent: params.forward_agent.unwrap_or(false),
+        agent_identities: if params.forward_agent.unwrap_or(false) {
+            agent_identities_from_auth(&params.auth_method)
+        } else {
+            Vec::new()
+        },
+    }
+}
+
+/// 仅当连接开启了 ForwardAgent 时才会被加载进 agent 并转发给远端。
+fn agent_identities_from_auth(auth: &SshAuthMethod) -> Vec<AgentIdentity> {
+    match auth {
+        SshAuthMethod::PrivateKey {
+            key_path,
+            passphrase,
+        } => vec![AgentIdentity::PrivateKeyPath {
+            key_path: key_path.clone(),
+            passphrase: passphrase.clone(),
+        }],
+        SshAuthMethod::PrivateKeyContent {
+            private_key,
+            passphrase,
+        } => vec![AgentIdentity::PrivateKeyContent {
+            private_key: private_key.clone(),
+            passphrase: passphrase.clone(),
+        }],
+        _ => Vec::new(),
     }
 }
 

@@ -8,6 +8,8 @@ pub mod database_objects_tab;
 mod database_objects_tab_tests;
 pub mod database_tab;
 mod database_table_columns;
+#[cfg(test)]
+mod database_table_columns_tests;
 mod database_toolbar;
 mod database_users_list;
 mod database_users_tab;

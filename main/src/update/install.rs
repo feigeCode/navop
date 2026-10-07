@@ -462,7 +462,7 @@ fn install_linux(staging_dir: &Path) -> Result<(), String> {
     let target_path = std::env::current_exe().map_err(|err| format!("获取当前路径失败: {err}"))?;
     let backup_path = target_path.with_extension("old");
 
-    ensure_writable(&target_path)?;
+    ensure_target_dir_writable(&target_path)?;
     replace_target_with_backup(&target_path, &backup_path, || {
         replace_via_staging_copy(&new_binary, &target_path)
     })
@@ -484,13 +484,29 @@ fn locate_linux_binary(staging_dir: &Path) -> Result<PathBuf, String> {
     Err("未找到 Linux 更新二进制 navop 或兼容的 onetcli".to_string())
 }
 
-#[cfg(target_os = "linux")]
-fn ensure_writable(target_path: &Path) -> Result<(), String> {
-    fs::OpenOptions::new()
-        .write(true)
-        .open(target_path)
-        .map(|_| ())
-        .map_err(|err| format!("当前安装位置不可写: {}", err))
+/// 校验更新目标**所在目录**可写。
+///
+/// 不能对目标文件本身试写：Linux 内核对正在执行的映像 `open(O_WRONLY)` 必定返回
+/// `ETXTBSY`（`Text file busy`，os error 26），而更新时 Navop 自己就是那个正在运行的
+/// 二进制 —— 这样的前置检查会让 Linux 应用内更新必然失败，并把用户引向「权限」这个
+/// 错误方向（issue #353：便携目录已给足写权限仍报 os error 26）。
+///
+/// 替换链路是 `rename(target→backup)` + `rename(staging→target)`，只依赖目录写权限，
+/// 从不写目标文件，因此这里探测目录即可。
+///
+/// 测试构建下也编译这个函数：只有 Linux 生产路径会用它，但上述语义可以在任意平台用
+/// 「目标文件只读 + 目录可写」的用例回归（macOS 不强制 ETXTBSY，Linux 专属断言没法在本机跑）。
+#[cfg(any(test, target_os = "linux"))]
+fn ensure_target_dir_writable(target_path: &Path) -> Result<(), String> {
+    let dir = target_path
+        .parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let probe = dir.join(format!(".navop-update-probe-{}", std::process::id()));
+
+    fs::write(&probe, b"").map_err(|err| format!("当前安装位置不可写: {}", err))?;
+    let _ = remove_file_if_exists(&probe);
+    Ok(())
 }
 
 fn replace_target_with_backup(
@@ -808,6 +824,76 @@ mod tests {
         let located = locate_linux_binary(&temp_dir.path).expect("应兼容根目录 onetcli");
 
         assert_eq!(located, fallback);
+    }
+
+    /// 更新前检查不得把「正在运行的可执行文件」当成不可写目标。
+    ///
+    /// 测试二进制自己就是正在执行的映像，而它所在的 `target/debug/deps` 是可写的：旧实现
+    /// 对目标文件 `open(O_WRONLY)` 会拿到 `ETXTBSY(os error 26)`，正是 issue #353 的现象。
+    /// 该断言只在 Linux 上有效——macOS 不强制 ETXTBSY，新旧实现都会通过，所以本机无法
+    /// 用它自证，必须在 Linux 上跑。
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn running_executable_is_not_treated_as_unwritable() {
+        use super::ensure_target_dir_writable;
+
+        let exe = std::env::current_exe().expect("获取当前可执行文件失败");
+
+        assert!(
+            ensure_target_dir_writable(&exe).is_ok(),
+            "不得对正在运行的映像试写，否则 Linux 应用内更新必然失败"
+        );
+    }
+
+    /// 目标文件自身的权限不参与判定：替换只依赖**目录**可写。
+    ///
+    /// 旧实现对目标文件 `open(O_WRONLY)`，遇到只读的目标文件会直接拒绝更新（实测
+    /// `Permission denied (os error 13)`；在 Linux 上对正在运行的映像则是 os error 26），
+    /// 而 `rename` 覆盖只读文件是允许的 —— 前置检查因此既拦错了对象，又误导了用户。
+    #[test]
+    fn read_only_target_file_is_not_rejected() {
+        use super::ensure_target_dir_writable;
+
+        let temp_dir = TestDir::new("read-only-target-file");
+        let target_path = temp_dir.path.join("navop");
+        std::fs::write(&target_path, b"binary").expect("写入目标失败");
+        let mut permissions = std::fs::metadata(&target_path)
+            .expect("读取目标权限失败")
+            .permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&target_path, permissions).expect("设置只读权限失败");
+
+        assert!(
+            ensure_target_dir_writable(&target_path).is_ok(),
+            "替换只依赖目录可写，目标文件只读不应被前置检查拒绝"
+        );
+    }
+
+    /// 只读目录仍要被拦住：前置检查的原始意图（尽早给出可读的失败原因）不能丢。
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn read_only_target_directory_is_rejected() {
+        use super::ensure_target_dir_writable;
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = TestDir::new("read-only-target-dir");
+        let target_path = temp_dir.path.join("navop");
+        std::fs::write(&target_path, b"binary").expect("写入目标失败");
+        std::fs::set_permissions(&temp_dir.path, std::fs::Permissions::from_mode(0o555))
+            .expect("设置只读权限失败");
+
+        let result = ensure_target_dir_writable(&target_path);
+
+        // root 或特权 CI 容器会绕过目录权限，此时该用例没有判定意义。
+        let still_writable = std::fs::write(temp_dir.path.join("probe"), b"").is_ok();
+        std::fs::set_permissions(&temp_dir.path, std::fs::Permissions::from_mode(0o755))
+            .expect("恢复目录权限失败");
+        if still_writable {
+            return;
+        }
+
+        let err = result.expect_err("只读目录必须被拒绝");
+        assert!(err.contains("不可写"), "错误信息应说明目录不可写: {err}");
     }
 
     #[cfg(target_os = "macos")]

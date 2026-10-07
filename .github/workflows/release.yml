@@ -329,22 +329,17 @@ jobs:
           echo "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-}"
           echo "CARGO_PROFILE_RELEASE_LTO=${CARGO_PROFILE_RELEASE_LTO:-}"
           echo "CARGO_PROFILE_RELEASE_CODEGEN_UNITS=${CARGO_PROFILE_RELEASE_CODEGEN_UNITS:-}"
-          # `macos-touchbar-window-hide` 当前只为 x86_64-apple-darwin 打开：已复现的闪退现场
-          # 都在 Intel Touch Bar 机型上，而「关闭即隐藏」有明确的代价 —— 隐藏的原生窗口会一直
-          # 占着 NSWindow / CAMetalLayer 直到进程退出（见 main/Cargo.toml 与 crates/core/Cargo.toml
-          # 的 feature 注释）。
-          # 这不是「ARM 没有 Touch Bar」：Apple Silicon 的 13 英寸 MacBook Pro（M1 2020 /
-          # M2 2022）同样带 Touch Bar。判据里没有架构条件，那一侧需要复现或验证时，把下面这个
-          # 判定条件加上 `aarch64-apple-darwin` 即可。
-          # ARM macOS / Windows / Linux 交付的是加这套机制之前的形态：关闭即销毁。
+          # 三个平台交付同一个形态：关闭窗口即销毁（`remove_window()`）。
           #
-          # 用普通变量而不是 bash 数组：macOS runner 的系统 bash 是 3.2，`set -u` 下展开空数组
-          # 会报 unbound variable。变量在这里只会取「一个 feature 组成的单词」这一种值。
-          # shellcheck disable=SC2086
-          extra_features=""
-          if [ "${{ matrix.target }}" = "x86_64-apple-darwin" ]; then
-            extra_features="--features macos-touchbar-window-hide"
-          fi
+          # 这里曾经给 x86_64-apple-darwin 打开 `macos-touchbar-window-hide`（关闭即隐藏），
+          # 用来绕开带 Touch Bar 的 Mac 上关闭窗口闪退（navop#262 / #308 / #314）。上游 zed#65186
+          # 修掉了根因（accesskit 换成普通 Adapter，不再动态替换内容视图的类），该修复随
+          # gpui-pre fork-0.3.124 进来，所以这个开关重新关掉。
+          #
+          # 机制本身保留在代码里（`crate::window_close::HIDE_WINDOWS_ON_CLOSE`）：万一上游修复在
+          # 真机上被否证，重新在这里给对应 target 打开这个 feature 即可，代码不用改
+          # （写法见 `crates/core/Cargo.toml` 的 feature 注释）。完整背景见
+          # docs/macos-memory-investigation.md §10。
           if [ "${{ runner.os }}" = "Linux" ]; then
             # The glibc 2.28 target is what makes the single Linux package run on
             # hosts that predate the runner image; the dependency archive is
@@ -359,10 +354,9 @@ jobs:
             cargo zigbuild \
               --release \
               -p main \
-              --target "${{ matrix.target }}.2.28" \
-              $extra_features
+              --target "${{ matrix.target }}.2.28"
           else
-            cargo build --release -p main --target "${{ matrix.target }}" $extra_features
+            cargo build --release -p main --target "${{ matrix.target }}"
           fi
           test -x "target/${{ matrix.target }}/release/${{ matrix.binary }}"
           # 体积回归在日志里可见（fat LTO + panic=abort 后约 107MiB）

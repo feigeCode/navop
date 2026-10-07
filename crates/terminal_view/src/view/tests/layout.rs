@@ -752,6 +752,32 @@ fn terminal_command_bar_keeps_oxideterm_keyboard_and_overlay_contracts() {
     assert!(render_source.contains("COMMAND_BAR_INPUT_MIN_HEIGHT: f32 = 80.0"));
     assert!(render_source.contains("fn popover_bottom_offset(&self) -> f32"));
     assert!(render_source.contains("self.input_height + COMMAND_BAR_POPOVER_GAP"));
+    // 折叠态不能展示输入框按键提示（输入框此时不可见，用户会误以为是终端自身的提示）；
+    // 展开态的按键说明由输入框 placeholder 承担，不另起一行，避免与 placeholder 重复。
+    let collapsed_hint = render_source
+        .split("fn render_collapsed_hint")
+        .nth(1)
+        .and_then(|source| source.split("fn render_toolbar_context").next())
+        .expect("collapsed hint control should exist");
+    assert!(collapsed_hint.contains("TerminalCommandBar.collapsed_hint"));
+    assert!(
+        collapsed_hint.contains("this.toggle_collapsed(window, cx)"),
+        "collapsed hint text must expand the command bar when clicked"
+    );
+    assert!(render_source.contains(".child(self.render_collapsed_hint(cx))"));
+    assert!(!render_source.contains("TerminalCommandBar.keyboard_hint"));
+    assert!(!render_source.contains("render_expanded_hint"));
+    let placeholder = include_str!("../../../locales/terminal_view.yml")
+        .split("  placeholder:")
+        .nth(1)
+        .and_then(|source| source.split("  search_quick_commands:").next())
+        .expect("command bar placeholder should exist");
+    for key in ["↑/↓", "Tab", "Enter", "Shift+Enter"] {
+        assert!(
+            placeholder.contains(key),
+            "expanded-state key hint must live in the command bar placeholder"
+        );
+    }
     assert!(render_source.contains("struct CommandBarResize {"));
     assert!(render_source.contains("entity_id: EntityId"));
     assert!(render_source.contains("initial_height: f32"));

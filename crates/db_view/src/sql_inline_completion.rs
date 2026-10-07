@@ -1,4 +1,4 @@
-use crate::sql_editor::SqlSchema;
+use crate::sql_editor::{SqlSchema, current_statement_tokens};
 use db::plugin::SqlCompletionInfo;
 use db::sql_editor::sql_context_inferrer::{ContextInferrer, SqlContext, SqlContextInfo};
 use db::sql_editor::sql_symbol_table::SymbolTable;
@@ -290,8 +290,11 @@ impl<'a> SqlInlineCompleter<'a> {
             return None;
         }
 
-        let symbol_table = SymbolTable::build_from_tokens(&tokens);
-        let context_info = ContextInferrer::infer_with_info(&tokens, offset, &symbol_table);
+        // 符号表与上下文只取当前语句：其他语句的表/别名不能影响本语句的补全（issue #329）
+        let statement_tokens = current_statement_tokens(&tokens, offset);
+        let symbol_table = SymbolTable::build_from_tokens(statement_tokens);
+        let context_info =
+            ContextInferrer::infer_with_info(statement_tokens, offset, &symbol_table);
 
         let partial = extract_partial_word(before_cursor);
 

@@ -153,6 +153,7 @@ mod input_handler;
 mod keybindings;
 mod mouse_down;
 mod mouse_selection;
+mod paste_confirm_dialog;
 mod paste_confirmation;
 mod performance_diagnostics;
 mod preferences;

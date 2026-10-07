@@ -3,19 +3,21 @@
 //! 四种集合视图共用同一套表格布局模型：
 //! - 列由 [`ValueColumn`] 描述（i18n 标签、默认宽度、最小宽度）；
 //! - 用户拖拽后的列宽由 [`ColumnWidths`] 保存，并按列独立生效；
-//! - 表头通过 [`render_column_resize_handle`] 提供拖拽分隔条。
+//! - 表头通过 [`render_column_resize_handles`] 提供拖拽分隔条。
 
 use std::collections::HashMap;
 
 use gpui::{
-    AnyElement, AppContext, Context, DragMoveEvent, EntityId, InteractiveElement, IntoElement,
-    ParentElement, Pixels, Render, SharedString, StatefulInteractiveElement, Styled, Window, div,
-    px,
+    AnyElement, AppContext, Context, Div, DragMoveEvent, EntityId, InteractiveElement, IntoElement,
+    ParentElement, Pixels, Render, SharedString, Stateful, StatefulInteractiveElement, Styled,
+    Window, div, px,
 };
 use gpui_component::ActiveTheme;
 
-/// 列宽拖拽手柄的宽度（像素）
-pub(crate) const COLUMN_RESIZE_HANDLE_WIDTH: f32 = 6.0;
+/// 列边界两侧各占的抓取区宽度（像素）
+pub(crate) const COLUMN_RESIZE_GRAB_PADDING: Pixels = px(4.0);
+/// 列分隔线的宽度（像素）
+pub(crate) const COLUMN_RESIZE_LINE_WIDTH: Pixels = px(1.0);
 /// 列宽统一下限，避免列被拖到不可用
 pub(crate) const MIN_COLUMN_WIDTH: f32 = 56.0;
 /// 列宽上限，避免异常拖拽把表格撑到不可用
@@ -230,46 +232,107 @@ impl Render for ResizeValueColumn {
     }
 }
 
-/// 渲染表头上的列宽拖拽分隔条。
+/// 渲染第 `col_ix` 列表头上、以列边界为中心的两半列宽抓取区。
 ///
-/// 非 resizable 的列返回空元素，因此调用方可以直接对每一列调用本函数。
-pub(crate) fn render_column_resize_handle<T, WidthFn, ResizeFn>(
-    column: ValueColumn,
+/// 一条列边界由相邻两侧的表头单元格各渲染一半：左列渲染贴在自己右缘的那半（负责
+/// 画分隔线），右列渲染贴在自己左缘的那半（只负责接住鼠标），两侧各占
+/// [`COLUMN_RESIZE_GRAB_PADDING`]。两半都必须留在自己的单元格里：表头单元格带
+/// `overflow_hidden`，跨列的绕对定位会被裁掉。
+///
+/// 返回的是两半本身，调用方必须把它们直接挂到表头单元格下（`.children(...)`）：
+/// gpui 的绕对定位是按直接父节点解析 `top_0`/`bottom_0` 的，多包一层尺寸为零的
+/// 容器就会让抓取区高度变成 0、彻底接不到鼠标。
+///
+/// 以前是一条 6px、整条缩在左列右缘里的抓取区：从边界右侧靠过来完全没有反馈，鼠标
+/// 得精确停在那几个像素上才拉得动，稍微偏一点光标就退回默认状态。
+///
+/// 非 resizable 的列返回空，调用方可以直接对每一列调用本函数。
+pub(crate) fn render_column_resize_handles<T, WidthFn, ResizeFn>(
+    columns: &[ValueColumn],
+    col_ix: usize,
     cx: &mut Context<T>,
     current_width: WidthFn,
     resize_column: ResizeFn,
-) -> AnyElement
+) -> Vec<AnyElement>
 where
     T: 'static,
     WidthFn: Fn(&T, ValueColumn) -> Pixels + Copy + 'static,
     ResizeFn: Fn(&mut T, ValueColumn, Pixels) + Copy + 'static,
 {
-    if !column.resizable() {
-        return div().into_any_element();
-    }
+    let trailing = columns
+        .get(col_ix)
+        .filter(|column| column.resizable())
+        .map(|column| {
+            let group_id = SharedString::from(format!("value-column-resize-{}", column.key()));
+            column_resize_band(
+                format!("value-column-resize-{}", column.key()),
+                *column,
+                cx,
+                current_width,
+                resize_column,
+            )
+            .debug_selector(move || format!("value-column-resize-{}", column.key()))
+            .group(group_id.clone())
+            .right_0()
+            .justify_end()
+            .items_center()
+            .child(
+                div()
+                    .debug_selector(move || format!("value-column-resize-line-{}", column.key()))
+                    .h_full()
+                    .w(COLUMN_RESIZE_LINE_WIDTH)
+                    .bg(cx.theme().table_row_border)
+                    .group_hover(&group_id, |el| el.bg(cx.theme().border)),
+            )
+            .into_any_element()
+        });
 
-    let group_id = SharedString::from(format!("value-column-resize-{}", column.key()));
+    // 本列左缘那半属于「上一列与这一列之间」的边界：拖动它调整的是上一列的宽度。
+    let leading = col_ix
+        .checked_sub(1)
+        .and_then(|boundary| columns.get(boundary).copied())
+        .filter(|column| column.resizable())
+        .map(|column| {
+            column_resize_band(
+                format!("value-column-resize-leading-{}", column.key()),
+                column,
+                cx,
+                current_width,
+                resize_column,
+            )
+            .debug_selector(move || format!("value-column-resize-leading-{}", column.key()))
+            .left_0()
+            .into_any_element()
+        });
+
+    let mut handles = Vec::new();
+    handles.extend(trailing);
+    handles.extend(leading);
+    handles
+}
+
+/// 一侧抓取区的交互核心（命中、光标、拖动）：位置与外观由调用方决定。
+fn column_resize_band<T, WidthFn, ResizeFn>(
+    id: String,
+    column: ValueColumn,
+    cx: &mut Context<T>,
+    current_width: WidthFn,
+    resize_column: ResizeFn,
+) -> Stateful<Div>
+where
+    T: 'static,
+    WidthFn: Fn(&T, ValueColumn) -> Pixels + Copy + 'static,
+    ResizeFn: Fn(&mut T, ValueColumn, Pixels) + Copy + 'static,
+{
     div()
-        .id(format!("value-column-resize-{}", column.key()))
-        .debug_selector(|| format!("value-column-resize-{}", column.key()))
-        .group(group_id.clone())
+        .id(id)
         .absolute()
-        .right_0()
         .top_0()
         .bottom_0()
-        .w(px(COLUMN_RESIZE_HANDLE_WIDTH))
+        .w(COLUMN_RESIZE_GRAB_PADDING)
+        .flex()
         .cursor_col_resize()
         .occlude()
-        .flex()
-        .justify_end()
-        .items_center()
-        .child(
-            div()
-                .h_full()
-                .w(px(1.0))
-                .bg(cx.theme().table_row_border)
-                .group_hover(&group_id, |el| el.bg(cx.theme().border)),
-        )
         .on_drag_move(cx.listener(
             move |this, e: &DragMoveEvent<ResizeValueColumn>, _window, cx| {
                 let drag = e.drag(cx);
@@ -293,7 +356,6 @@ where
                 cx.new(|_| drag.clone())
             },
         )
-        .into_any_element()
 }
 
 #[cfg(test)]

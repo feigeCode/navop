@@ -172,6 +172,7 @@ pub struct ConnectionKey {
     keyboard_interactive: Option<CredentialRevision>,
     x11_forwarding: bool,
     allow_legacy_algorithms: bool,
+    forward_agent: bool,
 }
 
 impl ConnectionKey {
@@ -229,6 +230,7 @@ impl ConnectionKey {
             keyboard_interactive,
             x11_forwarding: config.x11_forwarding,
             allow_legacy_algorithms: config.allow_legacy_algorithms,
+            forward_agent: config.forward_agent,
         })
     }
 
@@ -502,6 +504,8 @@ mod tests {
             ),
             x11_forwarding: false,
             allow_legacy_algorithms: false,
+            forward_agent: false,
+            agent_identities: Vec::new(),
         }
     }
 
@@ -557,6 +561,13 @@ mod tests {
         assert_ne!(
             baseline_key,
             key(&changed_legacy_algorithms, target_credentials())
+        );
+
+        let mut changed_forward_agent = base_config();
+        changed_forward_agent.forward_agent = true;
+        assert_ne!(
+            baseline_key,
+            key(&changed_forward_agent, target_credentials())
         );
     }
 

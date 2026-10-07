@@ -40,6 +40,12 @@ mod team_key_envelope_tests;
 #[cfg(test)]
 #[path = "team_key_manager_status_tests.rs"]
 mod team_key_manager_status_tests;
+
+#[cfg(test)]
+#[path = "workspace_hierarchy_engine_tests.rs"]
+mod workspace_hierarchy_engine_tests;
+
+mod workspace_hierarchy;
 mod workspace_sync;
 
 use std::collections::HashMap;

@@ -1,5 +1,5 @@
 use crate::database_table_columns::{
-    render_table_column_resize_handle, resize_table_column, table_columns_width,
+    render_table_column_resize_handles, resize_table_column, table_columns_width,
     ui_columns_from_object_columns,
 };
 use crate::database_users_list::users_list;
@@ -216,23 +216,28 @@ impl DatabaseUsersTab {
                             .text_ellipsis()
                             .whitespace_nowrap()
                             .child(column.name.clone())
-                            .child(render_table_column_resize_handle(
-                                "database-user-column-resize",
-                                "database-user-column-resize",
-                                col_ix,
-                                column,
-                                cx,
-                                |this: &Self, col_ix| {
-                                    this.columns.get(col_ix).map(|column| column.width)
-                                },
-                                |this: &mut Self, col_ix, width| {
-                                    resize_table_column(&mut this.columns, col_ix, width);
-                                },
-                            )),
+                            .children(self.render_column_resize_handles(col_ix, cx)),
                     )
                 },
             )
             .into_any_element()
+    }
+
+    fn render_column_resize_handles(
+        &self,
+        col_ix: usize,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        render_table_column_resize_handles(
+            "database-user-column-resize",
+            &self.columns,
+            col_ix,
+            cx,
+            |this: &Self, col_ix| this.columns.get(col_ix).map(|column| column.width),
+            |this: &mut Self, col_ix, width| {
+                resize_table_column(&mut this.columns, col_ix, width);
+            },
+        )
     }
 
     pub(super) fn render_row(&self, row_ix: usize, cx: &App) -> AnyElement {

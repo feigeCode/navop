@@ -617,8 +617,10 @@ impl SerialFormWindow {
             .storage
             .clone();
         let is_editing = self.is_editing;
+        // 保存落地之后还要回到这个窗口：切「已保存」状态、并重试一次关窗（见下面）。
+        let window_handle = window.window_handle();
 
-        cx.spawn(async move |_this, cx| {
+        cx.spawn(async move |this, cx| {
             let result: Result<StoredConnection, anyhow::Error> = (|| {
                 let repo = storage
                     .get::<one_core::storage::ConnectionRepository>()
@@ -634,6 +636,14 @@ impl SerialFormWindow {
 
             match result {
                 Ok(saved_conn) => {
+                    // 保存已经落地：把表单切到「已保存」，并**再关一次窗**。
+                    // 前面那次关窗是同步发生的，窗口正常已经消失；只有隐藏失败时它会留在屏幕上
+                    // （关闭漏斗返回 `Retained`）—— 那一次拿不到保存结果，所以提示要从这里发：
+                    // 到这个点才知道「已保存」，也只有到这里下一次保存才会变成更新而不是新建。
+                    _ = cx.update_window(window_handle, |_, window, cx| {
+                        let _ = this.update(cx, |form, cx| form.mark_saved(&saved_conn, cx));
+                        let _ = one_core::window_close::close_window_after_save(window, cx);
+                    });
                     let _ = cx.update(|cx| {
                         if let Some(notifier) = get_notifier(cx) {
                             let event = if is_editing {
@@ -658,7 +668,23 @@ impl SerialFormWindow {
         })
         .detach();
 
+        // 同步先关一次：保存还没落地，这里没什么可告诉用户的（提示和「已保存」状态都在保存
+        // 完成后补上）。保留这一步是为了不让窗口在保存期间一直开着 —— 那样连点两次「保存」
+        // 会并发插两条。
         let _ = one_core::window_close::close_window_for_reuse(window, cx);
+    }
+
+    /// 保存已经落地：把表单切到「已保存」（编辑）状态。
+    ///
+    /// 不能依赖「窗口反正会消失」来结束这轮操作：关闭漏斗返回 `Retained` 时窗口会留在
+    /// 屏幕上（隐藏失败），没有这一步用户再点一次「保存」会按「新建」再插一条连接。
+    fn mark_saved(&mut self, saved: &StoredConnection, cx: &mut Context<Self>) {
+        self.is_editing = true;
+        self.editing_id = saved.id;
+        self.editing_cloud_id = saved.cloud_id.clone();
+        self.editing_last_synced_at = saved.last_synced_at;
+        self.editing_owner_id = saved.owner_id.clone();
+        cx.notify();
     }
 
     fn on_cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {

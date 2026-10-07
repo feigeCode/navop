@@ -27,7 +27,7 @@ use gpui::http_client::{AsyncBody, Method, Request};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, AsyncApp, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    FontWeight, InteractiveElement, IntoElement, KeyDownEvent, Keystroke, ParentElement,
+    FontWeight, Global, InteractiveElement, IntoElement, KeyDownEvent, Keystroke, ParentElement,
     PathPromptOptions, Render, SharedString, Styled, WeakEntity, Window, div,
 };
 use gpui_component::{
@@ -50,7 +50,8 @@ use gpui_component::{
 use one_assets::IconName;
 use one_core::cloud_sync::{
     CloudSyncService, GlobalCloudUser, SyncEngine, TeamKeyCacheStatus, TeamOption,
-    get_cached_team_options, personal::SyncStoreHealth,
+    get_cached_team_options,
+    personal::{SyncStoreHealth, open_webdav_password, seal_webdav_password},
 };
 use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
 use one_core::crypto;
@@ -989,6 +990,7 @@ impl SettingsPanel {
                     default_settings.sync_enabled,
                     default_settings.sync_provider,
                     &default_settings.personal_sync,
+                    AppSettings::global(cx).personal_sync.backend,
                 )),
             SettingPage::new(t!("TeamSync.manage_keys"))
                 .resettable(false)
@@ -1087,29 +1089,75 @@ fn close_behavior_setting_group(default: CloseButtonBehavior) -> SettingGroup {
         )
 }
 
+/// 同步设置分组。
+///
+/// `setting_pages` 每次渲染都会重建这里，所以按**当前**后端（而不是默认值）决定
+/// 显示哪些项：选了 WebDAV 就没必要再让人填本地同步路径；选了文件夹 / Git 时
+/// 隐藏三项 WebDAV 配置。`setting_pages` 在 `cx: &App` 上运行，切换后端会触发
+/// 重新求值，因此下拉一改，条目就跟着增减。
 fn sync_setting_group(
     sync_enabled_default: bool,
     sync_provider_default: SyncProvider,
     defaults: &PersonalSyncSettings,
+    current_backend: PersonalSyncBackendKind,
 ) -> SettingGroup {
-    SettingGroup::new()
-        .title(t!("Settings.Sync.group_title"))
-        .items(vec![
-            sync_enabled_item(sync_enabled_default),
-            sync_provider_item(sync_provider_default),
-            personal_sync_backend_item(defaults.backend),
-            personal_sync_path_item(defaults.path.clone()),
-            personal_sync_auto_sync_item(defaults.auto_sync),
-            personal_sync_git_auto_push_item(defaults.git.auto_push),
-            SettingItem::render(move |_options, window, cx| {
-                render_personal_sync_actions(window, cx)
-            })
-            .keywords([
-                t!("Settings.Sync.status").to_string(),
-                t!("Settings.Sync.test_connection").to_string(),
-                t!("Settings.Sync.sync_now").to_string(),
-            ]),
-        ])
+    let webdav_selected = current_backend == PersonalSyncBackendKind::Webdav;
+
+    let mut items = vec![
+        sync_enabled_item(sync_enabled_default),
+        sync_provider_item(sync_provider_default),
+        personal_sync_backend_item(defaults.backend),
+    ];
+
+    if webdav_selected {
+        // 与「同步路径」项同构：SettingItem::new + SettingField::render + .description。
+        // 不把标签只放进 keywords，否则搜索能命中但界面没有标题。
+        items.push(
+            SettingItem::new(
+                t!("Settings.Sync.webdav_url"),
+                SettingField::render(move |options, window, cx| {
+                    render_personal_sync_webdav_url_field(options, window, cx)
+                }),
+            )
+            .description(t!("Settings.Sync.webdav_url_desc").to_string()),
+        );
+        items.push(
+            SettingItem::new(
+                t!("Settings.Sync.webdav_username"),
+                SettingField::render(move |options, window, cx| {
+                    render_personal_sync_webdav_username_field(options, window, cx)
+                }),
+            )
+            .description(t!("Settings.Sync.webdav_username_desc").to_string()),
+        );
+        items.push(
+            SettingItem::new(
+                t!("Settings.Sync.webdav_password"),
+                SettingField::render(move |options, window, cx| {
+                    render_personal_sync_webdav_password_field(options, window, cx)
+                }),
+            )
+            .description(t!("Settings.Sync.webdav_password_desc").to_string()),
+        );
+    } else {
+        // WebDAV 不用本地目录，填了也会被忽略。
+        items.push(personal_sync_path_item(defaults.path.clone()));
+    }
+
+    items.push(personal_sync_auto_sync_item(defaults.auto_sync));
+    items.push(personal_sync_git_auto_push_item(defaults.git.auto_push));
+    items.push(
+        SettingItem::render(move |_options, window, cx| {
+            render_personal_sync_actions(window, cx)
+        })
+        .keywords([
+            t!("Settings.Sync.status").to_string(),
+            t!("Settings.Sync.test_connection").to_string(),
+            t!("Settings.Sync.sync_now").to_string(),
+        ]),
+    );
+
+    SettingGroup::new().title(t!("Settings.Sync.group_title")).items(items)
 }
 
 fn sync_enabled_item(default: bool) -> SettingItem {
@@ -1324,7 +1372,211 @@ pub(crate) fn personal_sync_backend_options() -> Vec<(SharedString, SharedString
             SharedString::from("git"),
             SharedString::from(t!("Settings.Sync.Backend.git")),
         ),
+        (
+            SharedString::from("webdav"),
+            SharedString::from(t!("Settings.Sync.Backend.webdav")),
+        ),
     ]
+}
+
+// ============================================================================
+// WebDAV 后端：服务器地址 / 用户名 / 密码
+// ============================================================================
+
+fn render_personal_sync_webdav_url_field(
+    options: &gpui_component::setting::RenderOptions,
+    window: &mut Window,
+    cx: &mut App,
+) -> gpui::AnyElement {
+    render_personal_sync_webdav_text_field(
+        "url",
+        t!("Settings.Sync.webdav_url_placeholder").to_string(),
+        options,
+        window,
+        cx,
+    )
+}
+
+fn render_personal_sync_webdav_username_field(
+    options: &gpui_component::setting::RenderOptions,
+    window: &mut Window,
+    cx: &mut App,
+) -> gpui::AnyElement {
+    render_personal_sync_webdav_text_field(
+        "username",
+        t!("Settings.Sync.webdav_username_placeholder").to_string(),
+        options,
+        window,
+        cx,
+    )
+}
+
+/// WebDAV 三个输入框统一宽度。
+///
+/// 用户名与密码必须同宽、同一起始位置，否则在设置右侧列里会明显错位；
+/// 同时这个宽度要能容纳较长的 URL，省得用户还要横向滚动。
+const WEBDAV_FIELD_WIDTH: f32 = 420.0;
+
+/// 密码框的明文/掩码状态。
+///
+/// 放在 Global 里而不是组件内部：`use_keyed_state` 的 key 会带上这个标记，
+/// 切换时 key 变化 → 整个输入框连同订阅一起重建。
+/// 这样就不需要 `InputState::set_masked`（gpui-component 并未公开该方法）。
+struct WebDavPasswordVisibility {
+    revealed: bool,
+}
+
+impl Global for WebDavPasswordVisibility {}
+
+fn webdav_password_revealed(cx: &App) -> bool {
+    cx.try_global::<WebDavPasswordVisibility>()
+        .is_some_and(|state| state.revealed)
+}
+
+fn set_webdav_password_revealed(cx: &mut App, revealed: bool) {
+    if cx.try_global::<WebDavPasswordVisibility>().is_some() {
+        cx.global_mut::<WebDavPasswordVisibility>().revealed = revealed;
+    } else {
+        cx.set_global(WebDavPasswordVisibility { revealed });
+    }
+}
+
+struct WebDavInputState {
+    input: Entity<InputState>,
+    _subscription: gpui::Subscription,
+}
+
+/// 把输入框的值写回 `personal_sync.webdav.<field>`。
+fn persist_webdav_field(field: &'static str, value: &str, cx: &mut App) {
+    AppSettings::update_and_save(cx, |settings| match field {
+        "url" => settings.personal_sync.webdav.url = value.trim().to_string(),
+        "username" => settings.personal_sync.webdav.username = value.trim().to_string(),
+        // 密码不在 settings.json 里留明文：落盘前先加密。
+        "password" => settings.personal_sync.webdav.password = seal_webdav_password(value),
+        // 显式兜底而非 `_ =>` 走密码分支：新增字段时不会被静默当成密码加密。
+        _ => {}
+    });
+}
+
+/// 构造（或复用）一个 webdav 输入框，并把值变更绑定回 settings。
+fn bind_webdav_input(
+    field: &'static str,
+    key_suffix: &str,
+    options: &gpui_component::setting::RenderOptions,
+    window: &mut Window,
+    cx: &mut App,
+    build: impl FnOnce(&mut Window, &mut Context<InputState>) -> InputState,
+) -> Entity<InputState> {
+    let state = window.use_keyed_state(
+        SharedString::from(format!(
+            "personal-sync-webdav-{field}-{key_suffix}-{}-{}-{}",
+            options.page_ix(),
+            options.group_ix(),
+            options.item_ix()
+        )),
+        cx,
+        move |window, cx| {
+            let input = cx.new(|cx| build(window, cx));
+            // `subscribe` 的回调要求 `'static`，而 `field` 是外层闭包的局部变量。
+            // 必须 `move` 按值捕获（`&'static str` 本身是 Copy + 'static），
+            // 否则闭包按引用借用它，触发 E0373。
+            let _subscription = cx.subscribe(&input, move |_, input, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let value = input.read(cx).value();
+                    persist_webdav_field(field, &value, cx);
+                }
+            });
+            WebDavInputState {
+                input,
+                _subscription,
+            }
+        },
+    );
+    state.read(cx).input.clone()
+}
+
+/// 服务器地址 / 用户名：纯输入框。
+fn render_personal_sync_webdav_text_field(
+    field: &'static str,
+    default: String,
+    options: &gpui_component::setting::RenderOptions,
+    window: &mut Window,
+    cx: &mut App,
+) -> gpui::AnyElement {
+    let value = match field {
+        "username" => AppSettings::global(cx).personal_sync.webdav.username.clone(),
+        _ => AppSettings::global(cx).personal_sync.webdav.url.clone(),
+    };
+    let input = bind_webdav_input(field, "", options, window, cx, |window, cx| {
+        InputState::new(window, cx)
+            .default_value(value)
+            .placeholder(default)
+    });
+
+    h_flex()
+        .w_full()
+        .child(
+            Input::new(&input)
+                .with_size(options.size())
+                .w(gpui::px(WEBDAV_FIELD_WIDTH)),
+        )
+        .into_any_element()
+}
+
+/// 密码框：与上面两项同宽同位置，右侧一个小眼睛切换明文 / 掩码。
+fn render_personal_sync_webdav_password_field(
+    options: &gpui_component::setting::RenderOptions,
+    window: &mut Window,
+    cx: &mut App,
+) -> gpui::AnyElement {
+    let revealed = webdav_password_revealed(cx);
+    let plaintext = open_webdav_password(&AppSettings::global(cx).personal_sync.webdav.password);
+    // key 带上 revealed：切换显隐时 key 变化，输入框连同订阅一起重建。
+    let input = bind_webdav_input(
+        "password",
+        if revealed { "shown" } else { "masked" },
+        options,
+        window,
+        cx,
+        |window, cx| {
+            InputState::new(window, cx)
+                .default_value(plaintext)
+                .masked(!revealed)
+                .placeholder(t!("Settings.Sync.webdav_password_placeholder").to_string())
+        },
+    );
+
+    let tooltip = if revealed {
+        t!("Settings.Sync.webdav_hide_password").to_string()
+    } else {
+        t!("Settings.Sync.webdav_show_password").to_string()
+    };
+
+    h_flex()
+        .w_full()
+        .gap_2()
+        .child(
+            Input::new(&input)
+                .with_size(options.size())
+                .w(gpui::px(WEBDAV_FIELD_WIDTH)),
+        )
+        .child(
+            Button::new("personal-sync-webdav-password-toggle")
+                .icon(if revealed {
+                    IconName::EyeOff
+                } else {
+                    IconName::Eye
+                })
+                .ghost()
+                .xsmall()
+                .tooltip(tooltip)
+                .on_click(|_, window, cx| {
+                    let next = !webdav_password_revealed(cx);
+                    set_webdav_password_revealed(cx, next);
+                    window.refresh();
+                }),
+        )
+        .into_any_element()
 }
 
 pub(crate) fn personal_sync_status_label(health: &SyncStoreHealth) -> String {
@@ -1345,6 +1597,12 @@ pub(crate) fn personal_sync_status_label(health: &SyncStoreHealth) -> String {
         }
         SyncStoreHealth::PausedAfterRepeatedFailures => {
             t!("Settings.Sync.Status.paused_after_repeated_failures").to_string()
+        }
+        SyncStoreHealth::WebdavAuthFailed => {
+            t!("Settings.Sync.Status.webdav_auth_failed").to_string()
+        }
+        SyncStoreHealth::WebdavUnreachable => {
+            t!("Settings.Sync.Status.webdav_unreachable").to_string()
         }
     }
 }
@@ -4648,13 +4906,16 @@ mod tests {
     }
 
     #[test]
-    fn personal_sync_backend_options_include_folder_and_git() {
+    fn personal_sync_backend_options_include_all_backends() {
         let options = personal_sync_backend_options();
 
+        // 逐项精确比对（含顺序）：下拉里可选的后端必须与 `PersonalSyncBackendKind`
+        // 一一对应，新增后端时这里要同步补一行，否则 CI 会拦下来。
         assert_eq!(
             vec![
                 ("folder".into(), t!("Settings.Sync.Backend.folder").into()),
                 ("git".into(), t!("Settings.Sync.Backend.git").into()),
+                ("webdav".into(), t!("Settings.Sync.Backend.webdav").into()),
             ],
             options
         );

@@ -863,6 +863,41 @@ fn apply_external_driver_defaults(config: &mut DbFormConfig, driver: &IpcDriverM
     }
     apply_external_driver_empty_tab_defaults(config, driver);
     apply_external_driver_name_defaults(config, driver);
+    apply_external_driver_request_timeout_field(config);
+}
+
+/// 给所有外部驱动的连接表单补一个「请求超时（秒）」字段（高级页签）。
+///
+/// 外部驱动走 IPC，每次驱动调用都受 host 的请求超时约束：元数据/浏览类默认 30 秒，
+/// 用户 SQL/数据操作默认 30 分钟（见 `db::ipc::client`）。慢库上的大查询要更久时，
+/// 用户可在这里覆盖，0 表示不限制。
+///
+/// 字段名就是 `extra_params` 的键，表单保存时按「非基础字段」自动收集。
+fn apply_external_driver_request_timeout_field(config: &mut DbFormConfig) {
+    const ADVANCED_TAB: &str = "advanced";
+    let field_name = db::ipc::REQUEST_TIMEOUT_SECS_PARAM;
+    let field = FormField::new(
+        field_name,
+        translate("ConnectionForm.request_timeout_secs"),
+        FormFieldType::Number,
+    )
+    .optional()
+    .placeholder(translate("ConnectionForm.request_timeout_secs_placeholder"));
+
+    if let Some(group) = config
+        .tab_groups
+        .iter_mut()
+        .find(|group| group.name == ADVANCED_TAB)
+    {
+        if !group.fields.iter().any(|field| field.name == field_name) {
+            group.fields.push(field);
+        }
+        return;
+    }
+
+    config.tab_groups.push(
+        TabGroup::new(ADVANCED_TAB, translate("ConnectionForm.advanced")).fields(vec![field]),
+    );
 }
 
 fn apply_external_driver_empty_tab_defaults(config: &mut DbFormConfig, driver: &IpcDriverManifest) {
@@ -1995,6 +2030,85 @@ driver:
             ]
         );
         assert_eq!(tab_fields(&config, "remark"), vec!["remark"]);
+    }
+
+    /// 外部驱动连接表单必须带「请求超时（秒）」字段，否则慢库上跑久一点的查询
+    /// 会一直撞 host 的默认超时（见 `db::ipc::client`）。
+    #[test]
+    fn external_driver_forms_gain_request_timeout_field() {
+        let driver = demo_driver();
+        let mut config = DbFormConfig {
+            db_type: DatabaseType::external("demo"),
+            title: "Driver Connection".into(),
+            hidden_params: HashMap::new(),
+            tab_groups: vec![TabGroup::new("general", "General").field(FormField::new(
+                "host",
+                "Host",
+                FormFieldType::Text,
+            ))],
+        };
+
+        apply_external_driver_defaults(&mut config, &driver);
+
+        let advanced = config
+            .tab_groups
+            .iter()
+            .find(|group| group.name == "advanced")
+            .expect("没有 advanced 页签时应该新建一个");
+        assert_eq!(advanced.label, translate("ConnectionForm.advanced"));
+        assert_eq!(
+            tab_fields(&config, "advanced"),
+            vec![db::ipc::REQUEST_TIMEOUT_SECS_PARAM]
+        );
+
+        let field = config_field(&config, db::ipc::REQUEST_TIMEOUT_SECS_PARAM);
+        assert_eq!(field.field_type, FormFieldType::Number);
+        assert!(!field.required, "超时字段应该可选");
+        assert_eq!("", field.default_value, "留空表示按调用类别用内置默认值");
+        assert_eq!(
+            translate("ConnectionForm.request_timeout_secs_placeholder"),
+            field.placeholder
+        );
+    }
+
+    /// 驱动自带 advanced 页签时只补字段，不重复建页签、不动驱动自己的字段。
+    #[test]
+    fn external_driver_advanced_tab_keeps_driver_fields() {
+        let driver = demo_driver();
+        let mut config = DbFormConfig {
+            db_type: DatabaseType::external("demo"),
+            title: "Driver Connection".into(),
+            hidden_params: HashMap::new(),
+            tab_groups: vec![
+                TabGroup::new("general", "General").field(FormField::new(
+                    "host",
+                    "Host",
+                    FormFieldType::Text,
+                )),
+                TabGroup::new("advanced", "Advanced").field(FormField::new(
+                    "driver_tuning",
+                    "Tuning",
+                    FormFieldType::Text,
+                )),
+            ],
+        };
+
+        apply_external_driver_defaults(&mut config, &driver);
+        // 重复应用应幂等：不能出现第二个超时字段或第二个 advanced 页签。
+        apply_external_driver_defaults(&mut config, &driver);
+
+        assert_eq!(
+            tab_fields(&config, "advanced"),
+            vec!["driver_tuning", db::ipc::REQUEST_TIMEOUT_SECS_PARAM]
+        );
+        assert_eq!(
+            1,
+            config
+                .tab_groups
+                .iter()
+                .filter(|group| group.name == "advanced")
+                .count()
+        );
     }
 
     #[test]

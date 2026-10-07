@@ -35,6 +35,33 @@ function Assert-MsiValue {
   Write-Host "Verified: $Query => $actual"
 }
 
+# 快捷方式不得引用 Icon 表：那份图标会被 MSI 另存成独立文件，丢失后快捷方式图标
+# 退化成通用白纸（issue #325）。空列在自动化的 StringData 上取值为 "" 或抛异常，两者都算通过。
+function Assert-MsiEmptyValue {
+  param([object]$Database, [string]$Query)
+
+  $view = $Database.OpenView($Query)
+  try {
+    $null = $view.Execute()
+    $record = $view.Fetch()
+    if ($null -eq $record) {
+      throw "MSI query returned no rows: $Query"
+    }
+    $value = ""
+    try {
+      $value = [string]$record.StringData(1)
+    } catch {
+      $value = ""
+    }
+    if (-not [string]::IsNullOrWhiteSpace($value)) {
+      throw "MSI value should be empty, got '$value'. Query: $Query"
+    }
+    Write-Host "Verified empty: $Query"
+  } finally {
+    $null = $view.Close()
+  }
+}
+
 $resolvedPath = (Resolve-Path $Path).Path
 $installer = New-Object -ComObject WindowsInstaller.Installer
 $database = $installer.OpenDatabase($resolvedPath, 0)
@@ -61,6 +88,10 @@ Assert-MsiValue $database "[#NavopExecutable]" `
   "SELECT Target FROM Shortcut WHERE Shortcut = 'DesktopShortcut'"
 Assert-MsiValue $database "[#NavopExecutable]" `
   "SELECT Target FROM Shortcut WHERE Shortcut = 'StartMenuShortcut'"
+Assert-MsiEmptyValue $database `
+  "SELECT Icon_ FROM Shortcut WHERE Shortcut = 'DesktopShortcut'"
+Assert-MsiEmptyValue $database `
+  "SELECT Icon_ FROM Shortcut WHERE Shortcut = 'StartMenuShortcut'"
 Assert-MsiValue $database "DesktopShortcutRegistry" `
   "SELECT KeyPath FROM Component WHERE Component = 'DesktopShortcutComponent'"
 Assert-MsiValue $database "StartMenuShortcutRegistry" `

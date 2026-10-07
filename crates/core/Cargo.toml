@@ -71,18 +71,17 @@ dotenvy = "0.15"
 # `EXC_CRASH (SIGABRT)` 闪退（navop#262 / #308 / #314，上游 zed#64819）。把「关闭」换成
 # 「隐藏」可以从根上绕开这条路径，完整背景见 `docs/macos-memory-investigation.md` §10。
 #
+# **当前没有任何构建打开它**：上游 zed#65186 修掉了根因（accesskit 不再动态替换内容视图
+# 的类，改用普通 Adapter），该修复随 gpui-pre fork-0.3.124 进来，所以关闭窗口回到
+# `remove_window()`。整套机制原样保留，作为随时可重开的回退开关。
+#
 # 代价写在明处：被隐藏的原生窗口会一直占着 NSWindow / CAMetalLayer，直到进程退出。
 #
-# **生效范围按「已复现的机型 / 构建」划，不按硬件架构划。**Touch Bar 既出现在 Intel 机型
-# （13 英寸 MacBook Pro 2016–2020），也出现在 Apple Silicon 机型（13 英寸 MacBook Pro
-# M1 2020 / M2 2022），所以「只有 x86_64 才有 Touch Bar」是错的。当前 release workflow 只
-# 给 `x86_64-apple-darwin` 传这个 feature，理由是**已复现的闪退现场都在 Intel 机器上**
-# （#262 的 `MacBookPro16,2`），而隐藏窗口的代价是实打实的。
-#
-# 判据里没有架构条件（只有 `target_os = "macos"` + 这个 feature），所以 Apple Silicon 侧
-# 需要同样保护时不用改代码，直接给那个构建开就行：
-# `cargo build --release -p main --target aarch64-apple-darwin --features macos-touchbar-window-hide`。
-# 未开启时所有隐藏路径都退回原来的「关闭即销毁」，其他平台的行为与加这套机制之前完全一致 ——
-# 开关收敛在 `crate::window_close::HIDE_WINDOWS_ON_CLOSE` 一个常量上。
+# 需要重新打开时（上游修复在真机上被否证），按「已复现的机型 / 构建」给对应 target 传这个
+# feature 即可，代码不用改 —— 判据里没有架构条件（只有 `target_os = "macos"` + 这个
+# feature）：
+# `cargo build --release -p main --target x86_64-apple-darwin --features macos-touchbar-window-hide`。
+# 未开启时所有隐藏路径都退回「关闭即销毁」，开关收敛在
+# `crate::window_close::HIDE_WINDOWS_ON_CLOSE` 一个常量上。
 default = []
 macos-touchbar-window-hide = []

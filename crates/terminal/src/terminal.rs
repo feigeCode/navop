@@ -23,7 +23,7 @@ use one_core::gpui_tokio::Tokio;
 use one_core::settings::AppSettings;
 use one_core::storage::models::{
     ActiveConnections, ProxyType as StorageProxyType, SerialParams, SshAccountExpect,
-    SshAuthMethod, StoredConnection, TelnetParams,
+    SshAgentForwardKey, SshAuthMethod, StoredConnection, TelnetParams,
 };
 use one_core::storage::{
     GlobalStorageState, TerminalCommandHistoryRepository, TerminalCommandHistorySort,
@@ -85,13 +85,14 @@ use crate::{
     TerminalPerformanceSnapshot, TerminalPerformanceWindow, TerminalSize,
     TerminalTransferCancelHandle,
 };
+pub use ssh::{
+    AgentIdentity, JumpServerConnectConfig, ProxyConnectConfig, ProxyType, PtyConfig, SshAuth,
+    SshConnectConfig,
+};
 use ssh::{
     ChannelEvent, HostKeyDetails, HostKeyIdentity, HostKeyRejection, HostKeyVerifier,
     KeyboardInteractiveRequest, KeyboardInteractiveResponder, KeyboardInteractiveTarget,
     SshChannel, SshSessionManager,
-};
-pub use ssh::{
-    JumpServerConnectConfig, ProxyConnectConfig, ProxyType, PtyConfig, SshAuth, SshConnectConfig,
 };
 
 /// Terminal 发出的事件，供 TerminalView 订阅
@@ -403,6 +404,68 @@ fn password_from_ssh_auth(auth: &SshAuth) -> Option<String> {
     }
 }
 
+/// 从存储层的 SSH 认证方式推导需要加入本地 ssh-agent 的私钥身份。
+///
+/// 仅当连接开启了 ForwardAgent 时这些身份才会被加载进 agent 并转发给远端；
+/// 这里只负责“有哪些私钥该进 agent”，不负责判断是否启用转发。
+fn agent_identities_from_auth(auth: &SshAuthMethod) -> Vec<AgentIdentity> {
+    match auth {
+        SshAuthMethod::PrivateKey {
+            key_path,
+            passphrase,
+        } => vec![AgentIdentity::PrivateKeyPath {
+            key_path: key_path.clone(),
+            passphrase: passphrase.clone(),
+        }],
+        SshAuthMethod::PrivateKeyContent {
+            private_key,
+            passphrase,
+        } => vec![AgentIdentity::PrivateKeyContent {
+            private_key: private_key.clone(),
+            passphrase: passphrase.clone(),
+        }],
+        SshAuthMethod::Chain(steps) => steps.iter().flat_map(agent_identities_from_auth).collect(),
+        SshAuthMethod::Password { .. }
+        | SshAuthMethod::Agent
+        | SshAuthMethod::Pageant
+        | SshAuthMethod::AutoPublicKey => Vec::new(),
+    }
+}
+
+/// 推导需要加入本地 ssh-agent 的私钥身份。
+///
+/// 优先使用 resolver 回填的 `agent_forward_key`（keychain 私钥标记了
+/// 「转发到 agent」，与本连接自身的认证方式无关，即便该连接用密码认证）；
+/// 没有回填时（例如连接本身就是用私钥认证）退回从 `auth_method` 推导。
+fn agent_identities_for_params(
+    auth: &SshAuthMethod,
+    agent_forward_key: Option<&SshAgentForwardKey>,
+) -> Vec<AgentIdentity> {
+    if let Some(key) = agent_forward_key {
+        if let Some(private_key) = key
+            .private_key_content
+            .clone()
+            .filter(|value| !value.is_empty())
+        {
+            return vec![AgentIdentity::PrivateKeyContent {
+                private_key,
+                passphrase: key.passphrase.clone(),
+            }];
+        }
+        if let Some(key_path) = key
+            .private_key_path
+            .clone()
+            .filter(|value| !value.is_empty())
+        {
+            return vec![AgentIdentity::PrivateKeyPath {
+                key_path,
+                passphrase: key.passphrase.clone(),
+            }];
+        }
+    }
+    agent_identities_from_auth(auth)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerminalMfaPrompt {
     pub prompt: String,
@@ -639,6 +702,9 @@ fn resolve_ssh_connection(
         params.init_script.as_deref(),
         update.sync_path_with_terminal,
     );
+    // 计算 agent 身份需要在 move `auth_method` 之前完成（它只借用）。
+    let agent_identities =
+        agent_identities_for_params(&params.auth_method, params.agent_forward_key.as_ref());
     let ssh_config = SshConnectConfig {
         host: params.host,
         port: params.port,
@@ -667,6 +733,8 @@ fn resolve_ssh_connection(
         host_key_verifier: HostKeyVerifier::default(),
         x11_forwarding: params.x11_forwarding.unwrap_or(false),
         allow_legacy_algorithms: params.allow_legacy_algorithms.unwrap_or(false),
+        forward_agent: params.forward_agent.unwrap_or(false),
+        agent_identities,
     };
     Ok(ResolvedSshConnection {
         config: SshTerminalConfig {
@@ -5837,6 +5905,8 @@ mod tests {
                 disabled_jump_server: None,
                 sftp_account: None,
                 host: "latest.example".to_string(),
+                forward_agent: None,
+                agent_forward_key: None,
                 port: 2222,
                 username: "latest-user".to_string(),
                 auth_method: SshAuthMethod::Password {
@@ -5906,6 +5976,8 @@ mod tests {
                 disabled_jump_server: None,
                 sftp_account: None,
                 host: "prompted.example".to_string(),
+                forward_agent: None,
+                agent_forward_key: None,
                 port: 22,
                 username: "stored-user".to_string(),
                 auth_method: SshAuthMethod::Password {
@@ -5982,6 +6054,8 @@ mod tests {
                 disabled_jump_server: None,
                 sftp_account: None,
                 host: "no-ki.example".to_string(),
+                forward_agent: None,
+                agent_forward_key: None,
                 port: 22,
                 username: "user".to_string(),
                 auth_method: SshAuthMethod::Password {
@@ -6044,6 +6118,8 @@ mod tests {
                 disabled_jump_server: None,
                 sftp_account: None,
                 host: "host-key.example".to_string(),
+                forward_agent: None,
+                agent_forward_key: None,
                 port: 22,
                 username: "stored-user".to_string(),
                 auth_method: SshAuthMethod::Password {

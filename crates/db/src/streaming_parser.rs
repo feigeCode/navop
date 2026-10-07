@@ -1067,6 +1067,25 @@ mod test {
     }
 
     #[test]
+    fn probe_external_dialect_comment_split() {
+        let cases = [
+            r#"COMMENT ON COLUMN "ai-manager-330-dev"."AI_SKILL_ABILITY_SYNC_RECORD"."ID" IS 'Id';"#,
+            r#"COMMENT ON COLUMN "ai-manager-330-dev"."AI_SKILL_ABILITY_SYNC_RECORD"."ID" IS 'Id'"#,
+            r#"ALTER TABLE "ai-manager-330-dev"."t" ADD COLUMN "c" VARCHAR(20);"#,
+        ];
+        for case in cases {
+            for db_type in [
+                DatabaseType::Oracle,
+                DatabaseType::external("dm".to_string()),
+                DatabaseType::MySQL,
+            ] {
+                let parsed = parse_all(SqlSource::Script(case.to_string()), db_type.clone());
+                println!("db_type={db_type:?} sql={case:?} -> {parsed:?}");
+            }
+        }
+    }
+
+    #[test]
     fn test_basic_statements() {
         let sql = "SELECT * FROM users;\nINSERT INTO users VALUES (1, 'test');\nUPDATE users SET name = 'new';";
         let statements = parse_all(SqlSource::Script(sql.to_string()), DatabaseType::MySQL);

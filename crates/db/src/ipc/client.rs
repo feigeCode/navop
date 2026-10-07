@@ -19,14 +19,53 @@ use crate::ipc::registry::{IpcDriverManifest, current_host_version};
 use extension_host::error::HostError;
 use extension_host::negotiation::{ExtensionSession, NegotiationConfig};
 use extension_host::process::{SpawnConfig, SpawnTransport, default_socket_name};
-use extension_host::{ProcessRpcSession, ProcessRpcSessionConfig};
+use extension_host::{ProcessRpcSession, ProcessRpcSessionConfig, RequestOptions};
 use extension_protocol::error::ProtocolError;
 use one_core::storage::DbConnectionConfig;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-/// 单次请求默认超时(毫秒)。
+/// 单次请求默认超时(毫秒)，用于元数据/浏览类调用。
 const REQUEST_TIMEOUT_MS: u64 = 30_000;
+
+/// 用户查询/数据操作类调用的默认超时(毫秒)。
+///
+/// 慢库上的大查询/大导入可能跑几十分钟，用 30s 会直接把正常操作打断。
+/// 连接级参数 [`REQUEST_TIMEOUT_SECS_PARAM`] 可覆盖，0 表示不限制。
+const LONG_REQUEST_TIMEOUT_MS: u64 = 30 * 60 * 1_000;
+
+/// 连接级请求超时参数名(单位秒，0 = 不限制)。
+///
+/// 存在 `DbConnectionConfig::extra_params` 里，由外部驱动连接表单的高级页签收集。
+pub const REQUEST_TIMEOUT_SECS_PARAM: &str = "request_timeout_secs";
+
+/// 该驱动方法是否属于「可能长时间执行」的用户操作。
+///
+/// `query`/`cursor`/`exec`/`tx`/`data`/`stream`/`blob` 都是用户自己触发、耗时取决于
+/// 库大小与数据量的操作；其余（`conn`/`schema`/`ddl`/`sql` 等元数据与本地构建）保持
+/// 短超时——它们慢了是驱动或字典视图有问题，应该报错而不是让界面一直等。
+fn is_long_running_method(method: &str) -> bool {
+    matches!(
+        method.split('/').next().unwrap_or_default(),
+        "query" | "cursor" | "exec" | "tx" | "data" | "stream" | "blob"
+    )
+}
+
+/// 按调用类别与连接级配置解析单次请求的超时选项。
+///
+/// - 连接配了 `request_timeout_secs`：所有调用都用它（0 = 不限制）；
+/// - 没配：用户操作走 [`LONG_REQUEST_TIMEOUT_MS`]，元数据/浏览类交给会话默认值
+///   [`REQUEST_TIMEOUT_MS`]（`RequestOptions::default()`，即 `timeout = None`）。
+fn resolve_request_options(method: &str, configured_secs: Option<u64>) -> RequestOptions {
+    match configured_secs {
+        Some(0) => RequestOptions::default().without_timeout(),
+        Some(secs) => RequestOptions::default().with_timeout(Duration::from_secs(secs)),
+        None if is_long_running_method(method) => {
+            RequestOptions::default().with_timeout(Duration::from_millis(LONG_REQUEST_TIMEOUT_MS))
+        }
+        None => RequestOptions::default(),
+    }
+}
 
 /// shutdown 优雅时长(毫秒)。
 const SHUTDOWN_GRACE_MS: u32 = 5_000;
@@ -48,6 +87,9 @@ const SHUTDOWN_GRACE_MS: u32 = 5_000;
 /// ```
 pub struct JsonRpcClient {
     inner: ProcessRpcSession,
+    /// 连接级请求超时(秒)；`None` = 未配置，按调用类别用内置默认值，
+    /// `Some(0)` = 不限制。
+    request_timeout_secs: Option<u64>,
 }
 
 impl JsonRpcClient {
@@ -84,7 +126,17 @@ impl JsonRpcClient {
             .await
             .map_err(host_error_to_db_error)?;
 
-        Ok(Self { inner })
+        Ok(Self {
+            inner,
+            request_timeout_secs: config
+                .and_then(|config| config.get_param_as::<u64>(REQUEST_TIMEOUT_SECS_PARAM)),
+        })
+    }
+
+    /// 按调用类别与连接配置解析出单次请求的超时选项。见
+    /// [`resolve_request_options`]。
+    fn request_options_for(&self, method: &str) -> RequestOptions {
+        resolve_request_options(method, self.request_timeout_secs)
     }
 
     /// 调用 wire 方法并把 result 反序列化为 `T`。
@@ -98,9 +150,13 @@ impl JsonRpcClient {
     }
 
     /// 调用 wire 方法,返回 raw `serde_json::Value`(协议层场景用)。
+    ///
+    /// 超时按调用类别与连接级 `request_timeout_secs` 解析，见
+    /// [`Self::request_options_for`]。
     pub async fn request_value(&self, method: &str, params: Value) -> Result<Value, DbError> {
+        let options = self.request_options_for(method);
         self.inner
-            .request_value(method, params)
+            .request_value_with_options(method, params, options)
             .await
             .map_err(host_error_to_db_error)
     }
@@ -266,9 +322,16 @@ pub(crate) fn host_error_to_db_error(error: HostError) -> DbError {
                 }
             }
         }
-        HostError::Timeout { method, timeout_ms } => DbError::query(format!(
-            "external driver request `{method}` timed out after {timeout_ms}ms"
-        )),
+        HostError::Timeout { method, timeout_ms } => {
+            let hint = if is_long_running_method(&method) {
+                "; raise \"request timeout\" in the connection's advanced settings (0 = no limit)"
+            } else {
+                ""
+            };
+            DbError::query(format!(
+                "external driver request `{method}` timed out after {timeout_ms}ms{hint}"
+            ))
+        }
         HostError::Cancelled { method } => {
             DbError::query(format!("external driver request `{method}` was cancelled"))
         }
@@ -577,5 +640,89 @@ mod tests {
         let manifest = dummy_manifest("", None);
         let result = JsonRpcClient::start(&manifest).await;
         assert!(matches!(result, Err(DbError::Connection { .. })));
+    }
+
+    /// 用户 SQL / 数据操作默认给大超时，元数据/浏览保持会话默认（不覆盖）。
+    #[test]
+    fn long_running_methods_get_extended_timeout() {
+        for method in [
+            "query/start",
+            "cursor/fetch",
+            "exec/run",
+            "exec/batch",
+            "tx/commit",
+            "data/import",
+            "stream/open",
+            "blob/read",
+        ] {
+            let options = resolve_request_options(method, None);
+            assert_eq!(
+                options.timeout,
+                Some(Duration::from_millis(LONG_REQUEST_TIMEOUT_MS)),
+                "{method} 应该用扩展超时"
+            );
+            assert!(!options.no_timeout, "{method} 不应该无限制");
+        }
+    }
+
+    /// 元数据类调用不覆盖超时，留给会话默认值 30s。
+    #[test]
+    fn metadata_methods_keep_session_default_timeout() {
+        for method in [
+            "conn/test",
+            "conn/open",
+            "schema/children",
+            "ddl/build",
+            "sql/parse",
+        ] {
+            let options = resolve_request_options(method, None);
+            assert_eq!(options.timeout, None, "{method} 应该走会话默认值");
+            assert!(!options.no_timeout);
+        }
+    }
+
+    /// 连接级 `request_timeout_secs` 覆盖所有调用类别；0 表示不限制。
+    #[test]
+    fn connection_setting_overrides_every_method() {
+        let configured = resolve_request_options("schema/children", Some(120));
+        assert_eq!(configured.timeout, Some(Duration::from_secs(120)));
+        assert!(!configured.no_timeout);
+
+        let unlimited = resolve_request_options("schema/children", Some(0));
+        assert!(unlimited.no_timeout, "0 表示不限制");
+
+        let unlimited_query = resolve_request_options("query/start", Some(0));
+        assert!(unlimited_query.no_timeout);
+        assert!(unlimited_query.timeout.is_none(), "不限制时不应该再带期限");
+    }
+
+    /// 方法名检查只认前缀，避免像 `query_builder` 这样的自定义方法被误伤。
+    #[test]
+    fn method_classification_matches_prefix_only() {
+        assert!(is_long_running_method("exec/run"));
+        assert!(is_long_running_method("exec"));
+        assert!(!is_long_running_method("query_builder/plan"));
+        assert!(!is_long_running_method(""));
+    }
+
+    /// 用户操作超时报错要提示可以在连接高级设置里改，元数据报错不加这句。
+    #[test]
+    fn timeout_errors_hint_at_connection_setting() {
+        let query = host_error_to_db_error(HostError::Timeout {
+            method: "query/start".into(),
+            timeout_ms: LONG_REQUEST_TIMEOUT_MS,
+        });
+        assert!(
+            query.to_string().contains("request timeout"),
+            "用户操作超时要给配置提示: {query}"
+        );
+
+        let metadata = host_error_to_db_error(HostError::Timeout {
+            method: "schema/children".into(),
+            timeout_ms: REQUEST_TIMEOUT_MS,
+        });
+        let message = metadata.to_string();
+        assert!(message.contains("timed out after 30000ms"));
+        assert!(!message.contains("request timeout"), "元数据报错不加提示");
     }
 }

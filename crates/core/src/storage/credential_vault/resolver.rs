@@ -4,8 +4,8 @@ use crate::storage::traits::Repository;
 use crate::storage::{
     ConnectionType, CredentialRepository, DbConnectionConfig, FtpParams, MongoDBParams,
     ProxyConfig, RedisParams, ReferencedCredentialFields, RemoteDesktopParams, RemoteFileParams,
-    RemoteFileProtocol, SshAccountExpect, SshAuthMethod, SshParams, StoredConnection,
-    TelnetLoginStep, TelnetParams, resolve_credential_reference_strict,
+    RemoteFileProtocol, SshAccountExpect, SshAgentForwardKey, SshAuthMethod, SshParams,
+    StoredConnection, TelnetLoginStep, TelnetParams, resolve_credential_reference_strict,
 };
 
 impl CredentialRepository {
@@ -59,6 +59,27 @@ impl CredentialRepository {
         )?;
         if let Some(credential) = credential.as_ref() {
             params.account_expect = credential.ssh_expect.clone();
+            // 仅当凭据带私钥且标记「转发到 ssh-agent」时开启 ForwardAgent，
+            // 让远端（如跳板机）可用这把本地私钥继续向更内层主机认证。
+            //
+            // 这与本连接实际选用的认证方式无关：即使这里选的是密码认证
+            // （典型场景：密码登录跳板机，再用被转发的 agent 里的这把
+            // 私钥登录更内层主机），私钥内容也要通过 agent_forward_key
+            // 回填，否则下游只能从 auth_method 猜身份，密码场景下会漏填。
+            if credential.forward_to_agent && credential.private_key().is_some() {
+                params.forward_agent = Some(true);
+                params.agent_forward_key = Some(SshAgentForwardKey {
+                    private_key_path: credential
+                        .private_key_path
+                        .clone()
+                        .filter(|value| !value.is_empty()),
+                    private_key_content: credential
+                        .private_key_content
+                        .clone()
+                        .filter(|value| !value.is_empty()),
+                    passphrase: credential.passphrase.clone(),
+                });
+            }
         }
         self.resolve_optional_proxy(params.proxy.as_mut())?;
         self.resolve_optional_jump(params.jump_server.as_mut())?;

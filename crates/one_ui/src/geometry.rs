@@ -23,6 +23,16 @@ pub(crate) struct Resize {
     pub visible_line: Pixels,
 }
 
+impl Resize {
+    /// 指针热区：分隔线本身加上两侧各一段 [`Self::edge_padding`]。
+    ///
+    /// 热区以分隔线为中心铺开，而不是整条贴在某一侧，否则从另一侧靠过来就
+    /// 完全抓不到。
+    pub fn hit_area(&self) -> Pixels {
+        self.visible_line + self.edge_padding * 2.
+    }
+}
+
 pub(crate) fn spacing() -> Spacing {
     Spacing {
         space_1: px(4.),

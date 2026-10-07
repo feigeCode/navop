@@ -18,9 +18,7 @@ use crate::storage::traits::Repository;
 use crate::storage::{ConnectionType, PreferredOpenMode, StoredConnection, Workspace};
 
 /// `preferred_open_mode` 列的序列化形态（与云同步 JSON 保持一致）。
-fn serialize_preferred_open_mode(
-    mode: Option<PreferredOpenMode>,
-) -> Result<Option<String>> {
+fn serialize_preferred_open_mode(mode: Option<PreferredOpenMode>) -> Result<Option<String>> {
     mode.map(|mode| serde_json::to_string(&mode).map_err(Into::into))
         .transpose()
 }
@@ -677,6 +675,20 @@ impl WorkspaceRepository {
         })
     }
 
+    /// 对齐工作空间的父分组（同步时按云端记录解析结果写入）
+    ///
+    /// 刻意不改动 `updated_at`：层级对齐属于同步过程自身的收敛动作，
+    /// 不应该看起来像一次本地修改。
+    pub fn update_parent_id(&self, local_id: i64, parent_id: Option<i64>) -> Result<()> {
+        self.conn.with_connection(|conn| {
+            conn.execute(
+                "UPDATE workspaces SET parent_id = ?1 WHERE id = ?2",
+                params![parent_id, local_id],
+            )?;
+            Ok(())
+        })
+    }
+
     /// 更新工作空间的云端同步状态和最后同步时间。
     pub fn update_sync_status(
         &self,
@@ -1071,6 +1083,8 @@ mod tests {
                 icon: None,
                 icon_file_path: None,
                 account_expect: Default::default(),
+                forward_agent: None,
+                agent_forward_key: None,
             },
             None,
         )
@@ -1523,7 +1537,7 @@ mod tests {
         let mut connection = ssh_connection("sensitive-readable");
         let connection_id = repo.insert(&mut connection).expect("connection");
         let plaintext_params = serde_json::to_string(&SshParams {
-                remote_file: None,
+            remote_file: None,
             sftp_default_directory: None,
             disabled_jump_server: None,
             sftp_account: None,
@@ -1553,6 +1567,8 @@ mod tests {
             icon: None,
             icon_file_path: None,
             account_expect: Default::default(),
+            forward_agent: None,
+            agent_forward_key: None,
         })
         .expect("serialize SSH params");
         conn.with_connection(|conn| {

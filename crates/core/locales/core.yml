@@ -131,6 +131,10 @@ Window:
     en: Keep window on top
     zh-CN: 窗口置顶
     zh-HK: 視窗置頂
+  saved_but_close_failed:
+    en: Saved, but the window could not be closed. Close it again to retry — the data is already saved.
+    zh-CN: 已保存，但窗口没能关闭。可以再次关闭窗口重试，数据已经保存好了。
+    zh-HK: 已儲存，但視窗未能關閉。可以再次關閉視窗重試，資料已經儲存好了。
 
 Home:
   open_connection:

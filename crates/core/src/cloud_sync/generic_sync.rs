@@ -93,13 +93,14 @@ pub(crate) async fn generic_sync<H: SyncTypeHandler>(
     );
 
     // ========== 7. 计算同步计划 ==========
-    let plan = calculate_sync_plan(
+    let mut plan = calculate_sync_plan(
         engine,
         handler,
         &local_items,
         &active_cloud_data,
         &cloud_name_map,
     )?;
+    handler.adjust_plan(engine, &mut plan, &active_cloud_data);
     tracing::info!(
         "[{}计划] 上传: {}, 更新云端: {}, 下载: {}, 更新本地: {}",
         type_name,
@@ -330,6 +331,14 @@ pub(crate) async fn generic_sync<H: SyncTypeHandler>(
 
     // ========== 10. 保存队列 ==========
     engine.store_operation_queue(handler.queue_key(), queue)?;
+
+    // ========== 11. 同步收尾（解析跨记录引用） ==========
+    if let Err(error) = handler.finalize_sync(engine, &active_cloud_data) {
+        tracing::warn!("[{}] 同步收尾失败: {}", type_name, error);
+        result
+            .errors
+            .push(format!("{}同步收尾失败: {}", type_name, error));
+    }
 
     Ok(result)
 }
@@ -587,7 +596,7 @@ async fn upload_item<H: SyncTypeHandler>(
             .crypto_service
             .read()
             .map_err(|_| SyncError::StorageError("同步服务锁获取失败".to_string()))?;
-        handler.encrypt(&service, item, &teams)?
+        handler.encrypt(engine, &service, item, &teams)?
     };
 
     let created = engine
@@ -612,7 +621,7 @@ async fn update_cloud_item<H: SyncTypeHandler>(
             .crypto_service
             .read()
             .map_err(|_| SyncError::StorageError("同步服务锁获取失败".to_string()))?;
-        let mut data = handler.encrypt(&service, item, &teams)?;
+        let mut data = handler.encrypt(engine, &service, item, &teams)?;
         data.id = cloud_data.id.clone();
         data.version = cloud_data.version;
         data

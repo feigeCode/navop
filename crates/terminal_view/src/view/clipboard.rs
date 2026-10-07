@@ -1,3 +1,4 @@
+use super::paste_confirm_dialog::PasteConfirmKind;
 use super::*;
 
 impl TerminalView {
@@ -146,8 +147,7 @@ impl TerminalView {
         if self.confirm_high_risk_command && Self::contains_high_risk_command(text) {
             self.show_paste_confirm_dialog(
                 text.to_string(),
-                t!("TerminalView.high_risk_paste_title").to_string(),
-                t!("TerminalView.high_risk_paste_message").to_string(),
+                PasteConfirmKind::HighRiskCommand,
                 window,
                 cx,
             );
@@ -167,8 +167,7 @@ impl TerminalView {
         if self.confirm_multiline_paste && is_multiline && !is_bracketed_paste {
             self.show_paste_confirm_dialog(
                 text.to_string(),
-                t!("TerminalView.multiline_paste_title").to_string(),
-                t!("TerminalView.multiline_paste_message").to_string(),
+                PasteConfirmKind::MultilineUnbracketed,
                 window,
                 cx,
             );
@@ -180,8 +179,7 @@ impl TerminalView {
         if is_large_paste(text) {
             self.show_paste_confirm_dialog(
                 text.to_string(),
-                t!("TerminalView.large_paste_title").to_string(),
-                t!("TerminalView.large_paste_message").to_string(),
+                PasteConfirmKind::LargePaste,
                 window,
                 cx,
             );

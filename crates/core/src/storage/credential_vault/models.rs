@@ -24,6 +24,9 @@ pub struct CredentialEntry {
     pub ssh_expect: SshAccountExpect,
     #[serde(default)]
     pub sync_enabled: bool,
+    /// 该凭据的私钥是否应被加入本地 ssh-agent 并通过 ForwardAgent 转发给远端。
+    #[serde(default)]
+    pub forward_to_agent: bool,
     pub cloud_id: Option<String>,
     pub last_synced_at: Option<i64>,
     pub team_id: Option<String>,
@@ -42,11 +45,12 @@ impl Serialize for CredentialEntry {
     where
         S: Serializer,
     {
-        let mut state = serializer.serialize_struct("CredentialEntry", 10)?;
+        let mut state = serializer.serialize_struct("CredentialEntry", 11)?;
         state.serialize_field("id", &self.id)?;
         state.serialize_field("name", &self.name)?;
         state.serialize_field("username", &self.username)?;
         state.serialize_field("sync_enabled", &self.sync_enabled)?;
+        state.serialize_field("forward_to_agent", &self.forward_to_agent)?;
         state.serialize_field("cloud_id", &self.cloud_id)?;
         state.serialize_field("last_synced_at", &self.last_synced_at)?;
         state.serialize_field("team_id", &self.team_id)?;
@@ -82,6 +86,7 @@ impl std::fmt::Debug for CredentialEntry {
                 &(!self.ssh_expect.is_empty()).then_some("<redacted>"),
             )
             .field("sync_enabled", &self.sync_enabled)
+            .field("forward_to_agent", &self.forward_to_agent)
             .field("cloud_id", &self.cloud_id)
             .field("last_synced_at", &self.last_synced_at)
             .field("team_id", &self.team_id)
@@ -104,6 +109,7 @@ impl CredentialEntry {
             passphrase: None,
             ssh_expect: SshAccountExpect::default(),
             sync_enabled: false,
+            forward_to_agent: false,
             cloud_id: None,
             last_synced_at: None,
             team_id: None,
@@ -162,6 +168,8 @@ pub struct CredentialSummary {
     pub has_passphrase: bool,
     pub has_ssh_expect: bool,
     pub sync_enabled: bool,
+    /// 私钥是否应被加入本地 ssh-agent 并通过 ForwardAgent 转发给远端。
+    pub forward_to_agent: bool,
     pub cloud_id: Option<String>,
     pub last_synced_at: Option<i64>,
     pub team_id: Option<String>,

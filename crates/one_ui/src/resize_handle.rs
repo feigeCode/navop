@@ -16,6 +16,21 @@ pub const HANDLE_PADDING: Pixels = px(4.);
 #[deprecated(note = "Use one_ui::theme_geometry().resize.visible_line")]
 pub const HANDLE_SIZE: Pixels = px(1.);
 
+/// 分隔线的调试选择器名（[`crate::resize_handle`] 的测试按它取真实 bounds）。
+const LINE_SELECTOR: &str = "resize-handle-line";
+
+/// 抓取区的调试选择器名：按形状分名，方便测试直接量到命中区到底铺在哪儿。
+///
+/// `VisualTestContext::debug_bounds` 只收字面量选择器，所以这里是 `'static str`。
+pub(crate) fn band_selector(axis: Axis, placement: Option<HandlePlacement>) -> &'static str {
+    match (axis, placement) {
+        (Axis::Horizontal, Some(HandlePlacement::Left)) => "resize-handle-band-horizontal-left",
+        (Axis::Horizontal, Some(HandlePlacement::Right)) => "resize-handle-band-horizontal-right",
+        (Axis::Horizontal, None) => "resize-handle-band-horizontal-none",
+        (Axis::Vertical, _) => "resize-handle-band-vertical",
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HandlePlacement {
     Left,
@@ -119,13 +134,14 @@ impl<T: 'static, E: 'static + Render> Element for ResizeHandle<T, E> {
         cx: &mut App,
     ) -> (gpui::LayoutId, Self::RequestLayoutState) {
         let axis = self.axis;
+        let placement = self.placement;
 
         window.with_element_state(id.unwrap(), |state, window| {
             let state = state.unwrap_or(ResizeHandleState::default());
             let resize = geometry::resize();
             let handle_padding = resize.edge_padding;
             let handle_size = resize.visible_line;
-            let neg_offset = -handle_padding;
+            let hit_area = resize.hit_area();
 
             let bg_color = if state.is_active() {
                 cx.theme().drag_border
@@ -137,8 +153,10 @@ impl<T: 'static, E: 'static + Render> Element for ResizeHandle<T, E> {
 
             let mut el = div()
                 .id(self.id.clone())
+                .debug_selector(move || band_selector(axis, placement).to_owned())
                 .occlude()
                 .absolute()
+                .flex()
                 .flex_shrink_0()
                 .group("handle")
                 .when_some(self.on_drag.clone(), |this, on_drag| {
@@ -147,41 +165,49 @@ impl<T: 'static, E: 'static + Render> Element for ResizeHandle<T, E> {
                         move |_, position, window, cx| on_drag(&position, window, cx),
                     )
                 })
-                .map(|this| match self.placement {
+                .map(|this| match placement {
+                    // 抓取区以边界为中心铺开：往边框外多铺一格（`mr/ml` 负边距），
+                    // 分隔线仍旧停在面板自己那一像素边框上。
                     Some(HandlePlacement::Left) => this
                         .cursor_col_resize()
                         .top_0()
-                        .right(px(1.))
+                        .right_0()
+                        .mr(-handle_padding)
                         .h_full()
-                        .w(handle_size)
-                        .pl(handle_padding),
+                        .w(hit_area)
+                        .justify_center(),
                     Some(HandlePlacement::Right) => this
                         .cursor_col_resize()
                         .top_0()
-                        .left(px(1.))
+                        .left_0()
+                        .ml(-handle_padding)
                         .h_full()
-                        .w(handle_size)
-                        .pr(handle_padding),
+                        .w(hit_area)
+                        .justify_center(),
                     None => this
                         .when(is_horizontal, |this| {
                             this.cursor_col_resize()
                                 .top_0()
-                                .left(neg_offset)
+                                .left_0()
+                                .ml(-handle_padding)
                                 .h_full()
-                                .w(handle_size)
-                                .px(handle_padding)
+                                .w(hit_area)
+                                .justify_center()
                         })
                         .when(!is_horizontal, |this| {
                             this.cursor_row_resize()
-                                .top(neg_offset)
+                                .top_0()
                                 .left_0()
+                                .mt(-handle_padding)
                                 .w_full()
-                                .h(handle_size)
-                                .py(handle_padding)
+                                .h(hit_area)
+                                .items_center()
                         }),
                 })
                 .child(
                     div()
+                        .id(LINE_SELECTOR)
+                        .debug_selector(|| LINE_SELECTOR.to_owned())
                         .bg(bg_color)
                         .group_hover("handle", |this| this.bg(cx.theme().drag_border))
                         .when(is_horizontal, |this| this.h_full().w(handle_size))

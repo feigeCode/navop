@@ -82,7 +82,7 @@ impl CredentialForm {
             .child(self.render_sync_settings(cx))
     }
 
-    fn render_ssh_key_tab(&self, cx: &gpui::App) -> impl IntoElement {
+    fn render_ssh_key_tab(&self, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         v_flex()
             .w_full()
             .gap_3()
@@ -107,6 +107,43 @@ impl CredentialForm {
                 t!("CredentialForm.passphrase").to_string(),
                 Input::new(&self.passphrase_input).w_full().mask_toggle(),
             ))
+            .child(self.render_forward_to_agent_setting(cx))
+    }
+
+    fn render_forward_to_agent_setting(&self, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        h_flex()
+            .w_full()
+            .items_center()
+            .justify_between()
+            .gap_4()
+            .rounded_md()
+            .border_1()
+            .border_color(cx.theme().border)
+            .p_3()
+            .child(
+                v_flex()
+                    .min_w_0()
+                    .gap_1()
+                    .child(
+                        div()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .child(t!("CredentialForm.forward_to_agent").to_string()),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(t!("CredentialForm.forward_to_agent_description").to_string()),
+                    ),
+            )
+            .child(
+                Switch::new("credential-forward-to-agent")
+                    .checked(self.forward_to_agent)
+                    .on_click(cx.listener(|form, checked, _, cx| {
+                        form.forward_to_agent = *checked;
+                        cx.notify();
+                    })),
+            )
     }
 
     fn render_account_expect_tab(&self, cx: &gpui::App) -> impl IntoElement {

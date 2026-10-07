@@ -3248,6 +3248,8 @@ mod tests {
             host_key_verifier,
             x11_forwarding: false,
             allow_legacy_algorithms: false,
+            forward_agent: false,
+            agent_identities: Vec::new(),
         };
 
         let config =
@@ -3280,6 +3282,8 @@ mod tests {
             host_key_verifier: HostKeyVerifier::default(),
             x11_forwarding: false,
             allow_legacy_algorithms: false,
+            forward_agent: false,
+            agent_identities: Vec::new(),
         };
 
         let default_config =
@@ -3326,6 +3330,8 @@ mod tests {
             host_key_verifier: HostKeyVerifier::default(),
             x11_forwarding: false,
             allow_legacy_algorithms: false,
+            forward_agent: false,
+            agent_identities: Vec::new(),
         };
 
         let modern =
@@ -3406,6 +3412,8 @@ mod tests {
             host_key_verifier: HostKeyVerifier::default(),
             x11_forwarding: false,
             allow_legacy_algorithms: false,
+            forward_agent: false,
+            agent_identities: Vec::new(),
         };
 
         let transport =

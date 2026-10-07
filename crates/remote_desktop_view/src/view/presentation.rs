@@ -197,7 +197,8 @@ impl PresentationQueue {
                         .expect("delta frame must report its payload size");
                     let limits = self.limits();
                     if self.pending_delta_rects.saturating_add(delta_rects) > limits.max_delta_rects
-                        || self.pending_delta_bytes.saturating_add(delta_bytes) > limits.max_delta_bytes
+                        || self.pending_delta_bytes.saturating_add(delta_bytes)
+                            > limits.max_delta_bytes
                     {
                         let recovery_required = self.require_base(generation);
                         return PresentationQueuePushResult::DeltaDropped {
@@ -302,7 +303,8 @@ impl PresentationQueue {
                 } if *base_generation == generation && !frame.is_delta()
             )
         });
-        let recovery_required = !has_pending_base && self.awaiting_base_generation != Some(generation);
+        let recovery_required =
+            !has_pending_base && self.awaiting_base_generation != Some(generation);
         self.awaiting_base_generation = (!has_pending_base).then_some(generation);
         recovery_required
     }

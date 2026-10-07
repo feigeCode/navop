@@ -201,7 +201,9 @@ impl ConnectionFormWindow {
                             cx,
                         );
                     }
-                    let _ = one_core::window_close::close_window_for_reuse(window, cx);
+                    // 保存已经落地（`Saved` 事件就是这个含义），所以这里能给出准确的
+                    // 「已保存，但窗口没能关闭」提示。
+                    let _ = one_core::window_close::close_window_after_save(window, cx);
                 }
                 DbConnectionFormEvent::SaveError(_) => {}
             },

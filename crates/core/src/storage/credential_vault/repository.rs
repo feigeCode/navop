@@ -91,8 +91,8 @@ impl CredentialRepository {
 
     fn select_sql() -> &'static str {
         "SELECT id, name, username, password, private_key_path,
-                private_key_content, passphrase, ssh_expect, sync_enabled, cloud_id,
-                last_synced_at, team_id, owner_id, created_at, updated_at
+                private_key_content, passphrase, ssh_expect, sync_enabled, forward_to_agent,
+                cloud_id, last_synced_at, team_id, owner_id, created_at, updated_at
          FROM credential_entries"
     }
 
@@ -105,7 +105,7 @@ impl CredentialRepository {
                     AS has_private_key_content,
                 passphrase IS NOT NULL AND passphrase != '' AS has_passphrase,
                 ssh_expect IS NOT NULL AND ssh_expect != '' AS has_ssh_expect,
-                sync_enabled, cloud_id, last_synced_at, team_id, owner_id,
+                sync_enabled, forward_to_agent, cloud_id, last_synced_at, team_id, owner_id,
                 created_at, updated_at
          FROM credential_entries"
     }
@@ -130,6 +130,7 @@ impl CredentialRepository {
                 )
             })?,
             sync_enabled: row.get::<_, i64>("sync_enabled").unwrap_or_default() != 0,
+            forward_to_agent: row.get::<_, i64>("forward_to_agent").unwrap_or_default() != 0,
             cloud_id: row.get("cloud_id")?,
             last_synced_at: row.get("last_synced_at")?,
             team_id: row.get("team_id")?,
@@ -150,6 +151,7 @@ impl CredentialRepository {
             has_passphrase: row.get::<_, i64>("has_passphrase")? != 0,
             has_ssh_expect: row.get::<_, i64>("has_ssh_expect")? != 0,
             sync_enabled: row.get::<_, i64>("sync_enabled")? != 0,
+            forward_to_agent: row.get::<_, i64>("forward_to_agent")? != 0,
             cloud_id: row.get("cloud_id")?,
             last_synced_at: row.get("last_synced_at")?,
             team_id: row.get("team_id")?,
@@ -250,9 +252,9 @@ impl Repository for CredentialRepository {
             conn.execute(
                 "INSERT INTO credential_entries
                  (name, username, password, private_key_path, private_key_content,
-                  passphrase, ssh_expect, sync_enabled, cloud_id, last_synced_at, team_id,
-                  owner_id, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                  passphrase, ssh_expect, sync_enabled, forward_to_agent, cloud_id,
+                  last_synced_at, team_id, owner_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                 rusqlite::params![
                     item.name,
                     item.username,
@@ -262,6 +264,7 @@ impl Repository for CredentialRepository {
                     passphrase,
                     ssh_expect,
                     item.sync_enabled,
+                    item.forward_to_agent,
                     item.cloud_id,
                     item.last_synced_at,
                     item.team_id,
@@ -287,9 +290,9 @@ impl Repository for CredentialRepository {
                 "UPDATE credential_entries
                  SET name = ?1, username = ?2, password = ?3,
                      private_key_path = ?4, private_key_content = ?5, passphrase = ?6,
-                     ssh_expect = ?7, sync_enabled = ?8, cloud_id = ?9,
-                     last_synced_at = ?10, team_id = ?11, owner_id = ?12,
-                     updated_at = ?13 WHERE id = ?14",
+                     ssh_expect = ?7, sync_enabled = ?8, forward_to_agent = ?9, cloud_id = ?10,
+                     last_synced_at = ?11, team_id = ?12, owner_id = ?13,
+                     updated_at = ?14 WHERE id = ?15",
                 rusqlite::params![
                     item.name,
                     item.username,
@@ -299,6 +302,7 @@ impl Repository for CredentialRepository {
                     passphrase,
                     ssh_expect,
                     item.sync_enabled,
+                    item.forward_to_agent,
                     item.cloud_id,
                     item.last_synced_at,
                     item.team_id,

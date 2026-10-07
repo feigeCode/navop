@@ -112,6 +112,8 @@ fn direct_config(host: &str) -> SshConnectConfig {
         host_key_verifier: HostKeyVerifier::default(),
         x11_forwarding: false,
         allow_legacy_algorithms: false,
+        forward_agent: false,
+        agent_identities: Vec::new(),
     }
 }
 

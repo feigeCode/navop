@@ -62,7 +62,7 @@ fn build_ssh(input: &Value) -> Result<StoredConnection, ToolError> {
     let values = required_object(input, "values")?;
     let password = optional_value_str(values, "password").map(str::to_string);
     let params = SshParams {
-                remote_file: None,
+        remote_file: None,
         sftp_default_directory: None,
         disabled_jump_server: None,
         sftp_account: None,
@@ -85,6 +85,8 @@ fn build_ssh(input: &Value) -> Result<StoredConnection, ToolError> {
         disable_shell_integration: None,
         x11_forwarding: None,
         allow_legacy_algorithms: None,
+        forward_agent: None,
+        agent_forward_key: None,
         jump_server: None,
         proxy: None,
         credential_reference: None,

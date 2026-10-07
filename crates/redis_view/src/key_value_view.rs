@@ -2,7 +2,7 @@
 
 use crate::value_table_columns::{
     ColumnWidths, HASH_COLUMNS, LIST_COLUMNS, SET_COLUMNS, ValueColumn, ZSET_COLUMNS,
-    columns_min_row_width, render_column_resize_handle,
+    columns_min_row_width, render_column_resize_handles,
 };
 use crate::{
     GlobalRedisState, HashField, KeyInfo, KeyValueContent, KeyValueDetail, RedisKeyType, ZSetMember,
@@ -3574,8 +3574,9 @@ impl KeyValueView {
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .when(is_action, |this| this.text_right())
                 .child(label)
-                .child(render_column_resize_handle(
-                    column,
+                .children(render_column_resize_handles(
+                    columns,
+                    index,
                     cx,
                     |view: &Self, column| px(view.column_width(column)),
                     |view: &mut Self, column, width| view.set_column_width(column, width),

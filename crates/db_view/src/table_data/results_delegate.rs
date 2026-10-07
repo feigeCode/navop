@@ -33,6 +33,7 @@ use one_core::storage::DatabaseType;
 use one_ui::edit_table::{
     CellEditor, Column, ColumnSort, EditTableDelegate, EditTableEvent, EditTableState,
     filter_panel::{FilterValue, FilterValueKey},
+    tsv::parse_tsv_rows,
 };
 use one_ui::{DateTimePickerEvent, DateTimePickerState, TimePickerEvent, TimePickerState};
 use rust_i18n::t;
@@ -1898,10 +1899,7 @@ impl EditTableDelegate for EditorTableDelegate {
                 return;
             };
 
-            let data: Vec<Vec<String>> = text
-                .lines()
-                .map(|line| line.split('\t').map(|value| value.to_string()).collect())
-                .collect();
+            let data: Vec<Vec<String>> = parse_tsv_rows(&text);
             if data.is_empty() {
                 return;
             }

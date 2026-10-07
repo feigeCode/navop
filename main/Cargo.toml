@@ -1,6 +1,6 @@
 [package]
 name = "main"
-version = "0.19.4"
+version = "0.19.5"
 publish.workspace = true
 edition.workspace = true
 
@@ -143,15 +143,14 @@ github-distribution = ["github-updates", "github-marketplace"]
 github-marketplace = ["extension-runtime/github-marketplace"]
 github-updates = []
 # `macos-touchbar-window-hide`：关闭窗口只隐藏原生窗口、绝不销毁，规避带 Touch Bar 的 Mac
-# 上关闭窗口闪退（navop#262 / #308 / #314）。**当前只为 x86_64-apple-darwin 发布包开启**
-# （已复现的现场都在 Intel 机型上），其他构建（ARM macOS / Windows / Linux）保持加这套机制
-# 之前的「关闭即销毁」。范围按机型 / 构建划而不是按架构划：Apple Silicon 的 13 英寸
-# MacBook Pro（M1 2020 / M2 2022）同样带 Touch Bar，需要时给 aarch64-apple-darwin 传同一个
-# feature 即可，代码不用改。
+# 上关闭窗口闪退（navop#262 / #308 / #314）。
 #
-# 转发到 `one-core/macos-touchbar-window-hide`：开关本体与代价说明写在
+# **当前没有任何构建打开它**：上游 zed#65186 修掉了根因，修复随 gpui-pre fork-0.3.124 进来，
+# 所以窗口关闭回到 `remove_window()`。机制保留作为回退开关。
+#
+# 转发到 `one-core/macos-touchbar-window-hide`：开关本体、代价与重新打开的写法写在
 # `crates/core/Cargo.toml` 的同名 feature 注释里，全链路读同一个常量
-# `one_core::window_close::HIDE_WINDOWS_ON_CLOSE`。打包时由 release workflow 按 target 传入：
+# `one_core::window_close::HIDE_WINDOWS_ON_CLOSE`。需要重新打开时在打包命令里按 target 传：
 # `cargo build --release -p main --target x86_64-apple-darwin --features macos-touchbar-window-hide`
 macos-touchbar-window-hide = ["one-core/macos-touchbar-window-hide"]
 screenshot-safe = []

@@ -41,6 +41,21 @@ pub(crate) fn refresh_system_hotkey(cx: &mut App) {
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 pub(crate) fn refresh_system_hotkey(_cx: &mut App) {}
 
+/// 退出前释放全局热键管理器句柄。
+///
+/// `GlobalHotKeyManager` 和托盘句柄一样是 `!Send` 的平台对象，只能留在创建它的线程上。
+/// 它今天的 `Drop` 只是给事件线程发一条消息，不会像 ksni 那样回头碰别的线程本地；
+/// 但把原生句柄留在 TLS 里等进程退出再析构，是一类已经踩过的坑（见
+/// [`crate::system_tray::shutdown`] 与 issue #336）。这里一并收干净，让退出路径上
+/// 不再留下任何平台对象的析构器。
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+pub(crate) fn shutdown_system_hotkey() {
+    system_hotkey::shutdown();
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+pub(crate) fn shutdown_system_hotkey() {}
+
 fn pick_toggle_target<T: Copy>(
     registered: Option<T>,
     stacked: Option<&[T]>,
@@ -169,6 +184,16 @@ mod system_hotkey {
         }
 
         set_registered_hotkey(Some(hotkey), Some(hotkey_id));
+    }
+
+    /// 释放热键管理器句柄。只在退出漏斗里调用，理由见
+    /// [`super::shutdown_system_hotkey`]。
+    ///
+    /// 先把句柄 `take` 出闭包再 drop：`GlobalHotKeyManager::drop` 会往事件线程发消息、
+    /// 可能阻塞，不能让它发生在 `HOTKEY_MANAGER.with` 的借用里。
+    pub(crate) fn shutdown() {
+        let manager = HOTKEY_MANAGER.with(|manager| manager.borrow_mut().take());
+        drop(manager);
     }
 
     fn handle_hotkey_event(event: GlobalHotKeyEvent) {
@@ -463,5 +488,28 @@ mod tests {
         assert!(is_valid_system_hotkey("  "));
         assert!(is_valid_system_hotkey("cmd-alt-m"));
         assert!(!is_valid_system_hotkey("cmd-alt-invalid"));
+    }
+
+    /// 退出守卫：热键管理器句柄也要在退出前从 `thread_local!` 里取出来真的析构。
+    ///
+    /// 同类坑的完整机制见 `system_tray::shutdown`（issue #336）。`GlobalHotKeyManager`
+    /// 今天的 `Drop` 只是给事件线程发一条消息，但"原生平台句柄留在 TLS 里等进程退出"
+    /// 这条路本身就不该再走第二遍。
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    #[test]
+    fn hotkey_handle_is_released_before_the_process_teardown_chain() {
+        let source = include_str!("app_init.rs");
+
+        let backend = source
+            .split("pub(crate) fn shutdown() {")
+            .nth(1)
+            .and_then(|rest| rest.split("\n    }").next())
+            .expect("system_hotkey::shutdown source");
+        // needle 运行时拼接，避免 include_str! 守卫命中自己的断言文本。
+        let release = ["manager.borrow_mut()", ".take()"].concat();
+        let drop_outside = ["drop(manager", ");"].concat();
+
+        assert!(backend.contains(&release));
+        assert!(backend.contains(&drop_outside));
     }
 }

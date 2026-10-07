@@ -327,9 +327,17 @@ pub struct ConnectionPlainData {
     pub preferred_open_mode: Option<crate::storage::PreferredOpenMode>,
 }
 
+/// 工作空间同步载荷的当前格式版本
+///
+/// 0（缺省）为旧版载荷：不携带父分组引用，应用时必须保留本地层级。
+pub const WORKSPACE_PAYLOAD_FORMAT_VERSION: u32 = 1;
+
 /// 工作空间明文数据结构（加密前 / 解密后的 JSON blob）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspacePlainData {
+    /// 载荷格式版本，用于后续兼容升级
+    #[serde(default)]
+    pub format_version: u32,
     /// 工作空间名称
     pub name: String,
     /// 颜色
@@ -341,6 +349,65 @@ pub struct WorkspacePlainData {
     /// 工作空间排序值
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sort_order: Option<i32>,
+    /// 父工作空间的云端 ID（空表示根分组）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_cloud_id: Option<String>,
+}
+
+/// 云端工作空间记录携带的父分组关系
+///
+/// 用三态表达「旧载荷 / 根分组 / 指向父分组」，使应用端能区分
+/// 「云端明确为根分组」和「旧载荷未携带层级信息」。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkspaceParentLink {
+    /// 旧版载荷未携带层级信息，不得据此改动本地层级
+    Unknown,
+    /// 明确的根分组
+    Root,
+    /// 指向云端父分组 ID
+    Cloud(String),
+}
+
+impl WorkspaceParentLink {
+    /// 从载荷字段还原父分组关系
+    pub fn from_payload(format_version: u32, parent_cloud_id: Option<String>) -> Self {
+        if format_version < WORKSPACE_PAYLOAD_FORMAT_VERSION {
+            return Self::Unknown;
+        }
+        match parent_cloud_id {
+            Some(cloud_id) if !cloud_id.is_empty() => Self::Cloud(cloud_id),
+            _ => Self::Root,
+        }
+    }
+
+    /// 由本地父分组推断上传用的层级引用
+    ///
+    /// 父分组还没有云端 ID（例如本轮上传失败或尚未上传）时必须返回
+    /// [`Self::Unknown`]：否则会以「明确的根分组」上报，目标设备就会
+    /// 永久把子分组提升到顶层。
+    pub fn for_upload(parent_id: Option<i64>, parent_cloud_id: Option<String>) -> Self {
+        match (parent_id, parent_cloud_id) {
+            (None, _) => Self::Root,
+            (Some(_), Some(cloud_id)) => Self::Cloud(cloud_id),
+            (Some(_), None) => Self::Unknown,
+        }
+    }
+
+    /// 载荷格式版本：只有携带明确层级关系时才使用当前版本
+    pub fn payload_format_version(&self) -> u32 {
+        match self {
+            Self::Unknown => 0,
+            Self::Root | Self::Cloud(_) => WORKSPACE_PAYLOAD_FORMAT_VERSION,
+        }
+    }
+
+    /// 获取云端父分组 ID（根分组或旧载荷返回 None）
+    pub fn cloud_id(&self) -> Option<&str> {
+        match self {
+            Self::Cloud(cloud_id) => Some(cloud_id.as_str()),
+            Self::Unknown | Self::Root => None,
+        }
+    }
 }
 
 /// 钥匙串条目的个人同步明文结构。
@@ -367,4 +434,11 @@ pub struct CredentialPlainData {
     pub ssh_expect: crate::storage::SshAccountExpect,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner_id: Option<String>,
+    /// 私钥是否应被加入本地 ssh-agent 并通过 ForwardAgent 转发给远端。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub forward_to_agent: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }

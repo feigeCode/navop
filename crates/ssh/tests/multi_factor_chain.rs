@@ -399,6 +399,8 @@ fn connect_config(
         host_key_verifier: HostKeyVerifier::insecure(),
         x11_forwarding: false,
         allow_legacy_algorithms: false,
+        forward_agent: false,
+        agent_identities: Vec::new(),
     }
 }
 

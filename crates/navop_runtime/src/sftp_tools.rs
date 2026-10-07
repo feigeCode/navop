@@ -10,8 +10,8 @@ use one_core::storage::{
 use serde_json::{Value, json};
 use sftp::{DirectoryConflictPolicy, RemoteFileClient, RusshSftpClient, SftpClient};
 use ssh::{
-    HostKeyVerifier, JumpServerConnectConfig, ProxyConnectConfig, ProxyType, SshAuth,
-    SshConnectConfig,
+    AgentIdentity, HostKeyVerifier, JumpServerConnectConfig, ProxyConnectConfig, ProxyType,
+    SshAuth, SshConnectConfig,
 };
 use std::path::Path;
 use std::sync::Arc;
@@ -270,6 +270,33 @@ fn ssh_config_from_params(params: &SshParams) -> SshConnectConfig {
         host_key_verifier: HostKeyVerifier::default(),
         x11_forwarding: false,
         allow_legacy_algorithms: params.allow_legacy_algorithms.unwrap_or(false),
+        forward_agent: params.forward_agent.unwrap_or(false),
+        agent_identities: if params.forward_agent.unwrap_or(false) {
+            agent_identities_from_auth(&params.auth_method)
+        } else {
+            Vec::new()
+        },
+    }
+}
+
+/// 仅当连接开启了 ForwardAgent 时才会被加载进 agent 并转发给远端。
+fn agent_identities_from_auth(auth: &SshAuthMethod) -> Vec<AgentIdentity> {
+    match auth {
+        SshAuthMethod::PrivateKey {
+            key_path,
+            passphrase,
+        } => vec![AgentIdentity::PrivateKeyPath {
+            key_path: key_path.clone(),
+            passphrase: passphrase.clone(),
+        }],
+        SshAuthMethod::PrivateKeyContent {
+            private_key,
+            passphrase,
+        } => vec![AgentIdentity::PrivateKeyContent {
+            private_key: private_key.clone(),
+            passphrase: passphrase.clone(),
+        }],
+        _ => Vec::new(),
     }
 }
 

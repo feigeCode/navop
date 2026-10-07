@@ -3,9 +3,9 @@
 //! possible AppKit exceptions. The caller still owns the GPUI window.
 //!
 //! 与 `one_core::window_close::hide_for_reuse` 同构（那份管弹窗，这份管编辑器窗口），
-//! 因此同样受 `one_core::window_close::HIDE_WINDOWS_ON_CLOSE` 门控：只有打包时开了
-//! `macos-touchbar-window-hide` 的 macOS 包才隐藏（当前发布流水线只给 x86_64 打开），
-//! 其他构建退回销毁。
+//! 因此同样受 `one_core::window_close::HIDE_WINDOWS_ON_CLOSE` 门控：只有打包时传了
+//! `macos-touchbar-window-hide` 的 macOS 包才隐藏。该开关当前恒为 `false`（上游 zed#65186
+//! 已修掉根因），所以所有构建都退回销毁。
 
 /// `true` means hidden and reusable; `false` preserves other platforms' close
 /// behavior. An error means the build opted in but the hide failed: the caller must

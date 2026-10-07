@@ -2,7 +2,7 @@ use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 
-use crate::cloud_sync::models::{CloudSyncData, data_type};
+use crate::cloud_sync::models::{CloudSyncData, WorkspaceParentLink, data_type};
 use crate::cloud_sync::service::{CloudSyncService, SyncError};
 use crate::storage::traits::Repository;
 use crate::storage::{
@@ -11,6 +11,9 @@ use crate::storage::{
 };
 
 use super::{PersonalSyncItemSnapshot, PersonalSyncLocalSource, SyncStoreError};
+use crate::cloud_sync::workspace_hierarchy::{
+    cloud_parent_links, reconcile_parent_links, sort_ancestors_first,
+};
 
 const CONNECTION_PREFIX: &str = "connection:";
 const CREDENTIAL_PREFIX: &str = "credential:";
@@ -110,11 +113,15 @@ impl PersonalSyncLocalRepositorySource {
     }
 
     fn export_workspace(&self, workspace: &Workspace) -> Result<CloudSyncData, SyncStoreError> {
+        // 只上传父分组的云端 ID：本地整数 ID 在目标设备上没有意义。
+        // 父分组还没取得云端 ID 时按「层级未知」上报，避免误删层级。
+        let parent_cloud_id = self.workspace_cloud_id(workspace.parent_id)?;
+        let parent_link = WorkspaceParentLink::for_upload(workspace.parent_id, parent_cloud_id);
         let mut record = self
             .service
             .read()
             .map_err(lock_error)?
-            .prepare_workspace_sync_data_upload(workspace, None, &[])
+            .prepare_workspace_sync_data_upload(workspace, parent_link, None, &[])
             .map_err(sync_error)?;
         preserve_cloud_id(&mut record, workspace.cloud_id.as_deref());
         Ok(record)
@@ -325,19 +332,21 @@ impl PersonalSyncLocalRepositorySource {
 impl PersonalSyncLocalSource for PersonalSyncLocalRepositorySource {
     async fn list_items(&self) -> Result<Vec<PersonalSyncItemSnapshot>, SyncStoreError> {
         let mut items = Vec::new();
-        // 钥匙串必须先上传并取得 cloud_id，随后导出的连接才能写入稳定引用。
+        // 被引用的数据必须先上传并取得 cloud_id，随后导出的引用方才能写入稳定引用：
+        // 钥匙串 → 工作空间（分组）→ 连接。连接要引用分组，子分组的父分组引用
+        // 也要求父分组先落地。
         for credential in self.credentials.list().map_err(repository_error)? {
             if credential.sync_enabled && credential.team_id.is_none() {
                 items.push(self.credential_snapshot(&credential)?);
             }
         }
+        for workspace in sort_ancestors_first(self.workspaces.list().map_err(repository_error)?) {
+            items.push(self.workspace_snapshot(&workspace)?);
+        }
         for conn in self.connections.list_personal().map_err(repository_error)? {
             if conn.sync_enabled {
                 items.push(self.connection_snapshot(&conn)?);
             }
-        }
-        for workspace in self.workspaces.list().map_err(repository_error)? {
-            items.push(self.workspace_snapshot(&workspace)?);
         }
         Ok(items)
     }
@@ -377,6 +386,30 @@ impl PersonalSyncLocalSource for PersonalSyncLocalRepositorySource {
                 "unsupported personal sync data type: {other}"
             ))),
         }
+    }
+
+    async fn finalize_pass(&self, records: &[CloudSyncData]) -> Result<(), SyncStoreError> {
+        // 所有本地写入都已完成，此时按云端记录把父分组对齐：
+        // 与下载顺序无关，也能自愈「父分组当时还没落地」的情况。
+        let workspaces = self.workspaces.list().map_err(repository_error)?;
+        let workspace_records: Vec<CloudSyncData> = records
+            .iter()
+            .filter(|record| {
+                record.data_type == data_type::WORKSPACE && record.deleted_at.is_none()
+            })
+            .cloned()
+            .collect();
+        let links = cloud_parent_links(&workspace_records, |record| {
+            self.service
+                .read()
+                .ok()?
+                .decrypt_sync_data_workspace_with_parent_link(record)
+                .ok()
+                .map(|(_, link)| link)
+        });
+        reconcile_parent_links(&self.workspaces, &workspaces, &links)
+            .map(|_| ())
+            .map_err(sync_error)
     }
 
     async fn mark_synced(

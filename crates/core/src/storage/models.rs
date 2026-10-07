@@ -517,6 +517,17 @@ pub struct SshParams {
     /// 为旧版 SSH 服务器启用兼容算法；默认关闭
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_legacy_algorithms: Option<bool>,
+    /// 启用 ForwardAgent：将本地 ssh-agent 转发给远端服务器，
+    /// 并把选中的 keychain 私钥加入本地 ssh-agent。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forward_agent: Option<bool>,
+    /// 要加入本地 ssh-agent 并转发的私钥（仅存在于运行时解析副本中）。
+    ///
+    /// 与 `auth_method` 无关：即使本连接用密码认证，只要引用的 keychain
+    /// 凭据带私钥且标记了「转发到 agent」，resolver 就会在这里回填明文
+    /// 私钥，供 ForwardAgent 使用。调用方必须不将其持久化到磁盘。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_forward_key: Option<SshAgentForwardKey>,
     /// 跳板机配置
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jump_server: Option<JumpServerConfig>,
@@ -905,6 +916,21 @@ fn tunnel_auth_fields(auth: &SshAuthMethod) -> TunnelAuthFields {
             fields
         }
     }
+}
+
+/// 需要加入本地 ssh-agent 并通过 ForwardAgent 转发的私钥。
+///
+/// 独立于 [`SshAuthMethod`]：这把密钥不用于本连接自身的认证，只是被加入
+/// 本地 agent，随后转发给远端（如跳板机）供其向更内层主机认证。仅出现在
+/// `resolve_ssh` 返回的运行时解析副本中，不应被持久化到磁盘。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SshAgentForwardKey {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub private_key_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub private_key_content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub passphrase: Option<String>,
 }
 
 /// Redis 连接模式
@@ -2878,6 +2904,8 @@ mod tests {
                 disable_shell_integration: None,
                 x11_forwarding: None,
                 allow_legacy_algorithms: None,
+                forward_agent: None,
+                agent_forward_key: None,
                 jump_server: None,
                 proxy: None,
                 os_id: None,
@@ -3074,6 +3102,8 @@ mod tests {
             disable_shell_integration: None,
             x11_forwarding: None,
             allow_legacy_algorithms: None,
+            forward_agent: None,
+            agent_forward_key: None,
             jump_server: None,
             proxy: None,
             os_id: None,
@@ -4124,6 +4154,8 @@ mod serial_tests {
             disable_shell_integration: None,
             x11_forwarding: None,
             allow_legacy_algorithms: None,
+            forward_agent: None,
+            agent_forward_key: None,
             jump_server: None,
             proxy: None,
             os_id: Some("ubuntu".to_string()),
@@ -4405,6 +4437,8 @@ mod serial_tests {
                 disable_shell_integration: None,
                 x11_forwarding: None,
                 allow_legacy_algorithms: None,
+                forward_agent: None,
+                agent_forward_key: None,
                 jump_server: None,
                 proxy: None,
                 os_id: None,
@@ -4744,6 +4778,8 @@ mod serial_tests {
             disable_shell_integration: None,
             x11_forwarding: None,
             allow_legacy_algorithms: None,
+            forward_agent: None,
+            agent_forward_key: None,
             jump_server: None,
             disabled_jump_server: None,
             proxy: None,
@@ -4902,8 +4938,8 @@ mod serial_tests {
     #[test]
     fn ftp_connection_type_round_trips_and_defaults_name() {
         let connection = StoredConnection::new_ftp(
-            String::new(),
-            ftp_params_for_storage_tests(),
+            String::new(), 
+            ftp_params_for_storage_tests(), 
             None,
         );
         assert_eq!(connection.connection_type, ConnectionType::Ftp);
@@ -4925,7 +4961,7 @@ mod serial_tests {
         let connection = StoredConnection::new_ftp("测试 FTP".to_string(), ftp, None);
 
         let params: FtpParams =
-            serde_json::from_str(&connection.params_for_storage()).unwrap();
+         serde_json::from_str(&connection.params_for_storage()).unwrap();
         assert_eq!(params.username, "ftp-user", "未启用 prompt 的字段保留");
         assert_eq!(params.password, "", "启用了 prompt 的密码应被清除");
     }
@@ -4981,6 +5017,8 @@ mod serial_tests {
                 disable_shell_integration: None,
                 x11_forwarding: None,
                 allow_legacy_algorithms: None,
+                forward_agent: None,
+                agent_forward_key: None,
                 jump_server: None,
                 proxy: None,
                 os_id: None,
@@ -4999,8 +5037,8 @@ mod serial_tests {
     #[test]
     fn preferred_open_mode_round_trips_through_serde() {
         let mut connection = StoredConnection::new_ftp(
-            "ftp".to_string(),
-            ftp_params_for_storage_tests(),
+            "ftp".to_string(), 
+            ftp_params_for_storage_tests(), 
             None,
         );
         connection.preferred_open_mode = Some(PreferredOpenMode::Terminal);
@@ -5018,10 +5056,10 @@ mod serial_tests {
     #[test]
     fn preferred_open_mode_absent_keeps_type_default() {
         let connection = StoredConnection::new_ftp(
-            "ftp".to_string(),
+            "ftp".to_string(), 
             ftp_params_for_storage_tests(),
-            None,
-        );
+             None,
+            );
         assert_eq!(connection.preferred_open_mode, None);
         // 旧版云同步/数据库 JSON 不携带该字段时反序列化为 None
         let legacy = serde_json::to_string(&connection).expect("serialize");

@@ -38,12 +38,12 @@ pub use local_shell::{
     local_config_from_custom_profile, local_config_from_settings,
     local_config_from_settings_with_profile,
 };
+pub use osc::ReportedWorkingDir;
 pub use performance_metrics::{
     TERMINAL_PERFORMANCE_METRICS_ENV, TerminalActivity, TerminalInputMetricSource,
     TerminalPerformanceMetrics, TerminalPerformanceSnapshot, TerminalPerformanceWindow,
     terminal_performance_metrics_enabled,
 };
-pub use osc::ReportedWorkingDir;
 pub use pty_backend::{GpuiEventProxy, TerminalEvent};
 pub use selection_text::selection_text_from_term;
 pub use serial_backend::SerialBackend;

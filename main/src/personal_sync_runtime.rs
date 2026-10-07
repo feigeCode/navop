@@ -1,13 +1,14 @@
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+use gpui::http_client::HttpClient;
 use gpui::{App, AsyncApp, Global, Subscription};
 use one_core::cloud_sync::personal::{
     ConfiguredPersonalSyncStore, PersonalSyncConflict, PersonalSyncConflictRepository,
     PersonalSyncConflictResolver, PersonalSyncEvent, PersonalSyncLocalRepositorySource,
     PersonalSyncRuntimeConfig, PersonalSyncRuntimeError, PersonalSyncStore, PersonalSyncWatcher,
     PersonalSyncWorker, SqlitePersonalSyncConflictSink, SyncDeviceId, SyncStoreError,
-    SyncStoreHealth, WorkerConfig, build_personal_sync_runtime_config,
+    SyncStoreHealth, WorkerConfig, build_personal_sync_runtime_config, open_webdav_password,
 };
 use one_core::cloud_sync::{CloudSyncData, CloudSyncService, ConflictResolution, data_type};
 use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
@@ -75,7 +76,19 @@ pub fn runtime_status(cx: &App) -> PersonalSyncRuntimeStatus {
 pub fn actions_enabled(cx: &App) -> bool {
     let settings = AppSettings::global(cx);
     active_personal_sync_settings(settings)
-        .is_some_and(|settings| build_personal_sync_runtime_config(&settings).is_ok())
+        .is_some_and(|settings| {
+            let password = webdav_password_for(&settings);
+            build_personal_sync_runtime_config(&settings, password.as_deref()).is_ok()
+        })
+}
+
+/// 取出 WebDAV 后端的明文密码。
+///
+/// 只在真正要建连时才解密，且结果不会离开调用栈：runtime config 虽然会带上它，
+/// 但那个结构体手写了 `Debug`，日志里只会看到 `<redacted>`。
+fn webdav_password_for(settings: &PersonalSyncSettings) -> Option<String> {
+    let password = open_webdav_password(&settings.webdav.password);
+    (!password.is_empty()).then_some(password)
 }
 
 pub fn test_connection(cx: &mut App) {
@@ -84,8 +97,9 @@ pub fn test_connection(cx: &mut App) {
         return;
     };
     let generation = begin_operation(cx, PersonalSyncRuntimeStatus::Syncing);
+    let http = cx.http_client();
     let task = Tokio::spawn(cx, async move {
-        let store = ConfiguredPersonalSyncStore::from_runtime_config(&config);
+        let store = ConfiguredPersonalSyncStore::from_runtime_config(&config, http)?;
         store.probe().await
     });
     cx.spawn(async move |cx: &mut AsyncApp| {
@@ -212,6 +226,7 @@ pub fn resolve_personal_conflict(
     };
 
     let generation = begin_operation(cx, PersonalSyncRuntimeStatus::Syncing);
+    let http = cx.http_client();
     let task = Tokio::spawn(cx, async move {
         resolve_personal_conflict_once(
             config,
@@ -219,6 +234,7 @@ pub fn resolve_personal_conflict(
             (*conflicts).clone(),
             selection_key,
             strategy,
+            http,
         )
         .await
     });
@@ -259,6 +275,7 @@ pub fn resolve_personal_conflicts(strategies: Vec<(String, ConflictResolution)>,
     };
 
     let generation = begin_operation(cx, PersonalSyncRuntimeStatus::Syncing);
+    let http = cx.http_client();
     let task = Tokio::spawn(cx, async move {
         for (selection_key, strategy) in strategies {
             resolve_personal_conflict_once(
@@ -267,6 +284,7 @@ pub fn resolve_personal_conflicts(strategies: Vec<(String, ConflictResolution)>,
                 (*conflicts).clone(),
                 selection_key,
                 strategy,
+                http.clone(),
             )
             .await?;
         }
@@ -538,7 +556,8 @@ fn run_temporary_full_scan(
     conflict_sink: SqlitePersonalSyncConflictSink,
 ) {
     let generation = begin_operation(cx, PersonalSyncRuntimeStatus::Syncing);
-    let task = Tokio::spawn(cx, run_sync(config, source, conflict_sink));
+    let http = cx.http_client();
+    let task = Tokio::spawn(cx, run_sync(config, source, conflict_sink, http));
     cx.spawn(async move |cx: &mut AsyncApp| {
         let status = personal_sync_status_from_task(task.await);
         let _ = cx.update(move |cx| finish_operation(cx, generation, status));
@@ -551,7 +570,10 @@ fn reconcile_runtime(cx: &mut App) {
     let settings = AppSettings::global(cx);
     let config = active_personal_sync_settings(settings)
         .ok_or(PersonalSyncRuntimeError::Disabled)
-        .and_then(|settings| build_personal_sync_runtime_config(&settings));
+        .and_then(|settings| {
+            let password = webdav_password_for(&settings);
+            build_personal_sync_runtime_config(&settings, password.as_deref())
+        });
     match config {
         Ok(config) => {
             if runtime_config_unchanged(cx, &config) {
@@ -600,7 +622,7 @@ fn start_running_runtime(
 ) -> Result<RunningPersonalSyncRuntime, SyncStoreError> {
     let source = build_local_source(cx).ok_or(SyncStoreError::NotConfigured)?;
     let conflict_sink = build_conflict_sink(cx).ok_or(SyncStoreError::NotConfigured)?;
-    let store = ConfiguredPersonalSyncStore::from_runtime_config(config);
+    let store = ConfiguredPersonalSyncStore::from_runtime_config(config, cx.http_client())?;
     let worker = PersonalSyncWorker::with_conflict_sink(
         store.clone(),
         source,
@@ -610,7 +632,8 @@ fn start_running_runtime(
             device_id: SyncDeviceId("local-device".to_string()),
         },
     );
-    let watcher = if config.auto_sync {
+    // WebDAV 后端没有本地目录，文件监听无从谈起：交由 60 秒一次的周期全量扫描驱动。
+    let watcher = if config.auto_sync && !config.root.as_os_str().is_empty() {
         Some(start_watcher(
             cx,
             config.root.clone(),
@@ -802,8 +825,9 @@ async fn run_sync(
     config: PersonalSyncRuntimeConfig,
     source: PersonalSyncLocalRepositorySource,
     conflict_sink: SqlitePersonalSyncConflictSink,
+    http: Arc<dyn HttpClient>,
 ) -> Result<(), SyncStoreError> {
-    let store = ConfiguredPersonalSyncStore::from_runtime_config(&config);
+    let store = ConfiguredPersonalSyncStore::from_runtime_config(&config, http)?;
     let worker = PersonalSyncWorker::with_conflict_sink(
         store.clone(),
         source,
@@ -837,6 +861,7 @@ async fn resolve_personal_conflict_once(
     conflicts: PersonalSyncConflictRepository,
     selection_key: String,
     strategy: ConflictResolution,
+    http: Arc<dyn HttpClient>,
 ) -> Result<(), SyncStoreError> {
     let (data_type, record_id) = parse_personal_conflict_selection_key(&selection_key)?;
     let conflict = conflicts
@@ -849,7 +874,7 @@ async fn resolve_personal_conflict_once(
                 "personal sync conflict not found: {data_type}/{record_id}"
             ))
         })?;
-    let store = ConfiguredPersonalSyncStore::from_runtime_config(&config);
+    let store = ConfiguredPersonalSyncStore::from_runtime_config(&config, http)?;
     let resolver = PersonalSyncConflictResolver::new(store.clone(), source, conflicts);
     resolver.resolve(&conflict, strategy).await?;
     store.flush().await
@@ -887,8 +912,10 @@ fn sync_master_key_and_user(cx: &mut App) {
 }
 
 fn active_or_current_config(cx: &App) -> Option<PersonalSyncRuntimeConfig> {
-    active_personal_sync_settings(AppSettings::global(cx))
-        .and_then(|settings| build_personal_sync_runtime_config(&settings).ok())
+    active_personal_sync_settings(AppSettings::global(cx)).and_then(|settings| {
+        let password = webdav_password_for(&settings);
+        build_personal_sync_runtime_config(&settings, password.as_deref()).ok()
+    })
 }
 
 fn active_personal_sync_settings(settings: &AppSettings) -> Option<PersonalSyncSettings> {

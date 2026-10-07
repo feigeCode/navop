@@ -1,5 +1,5 @@
 use crate::database_table_columns::{
-    render_table_column_resize_handle, resize_table_column, ui_columns_from_object_columns,
+    render_table_column_resize_handles, resize_table_column, ui_columns_from_object_columns,
 };
 use crate::database_view_plugin::{
     ContextMenuEvent, ContextMenuItem, ToolbarButtonType, build_context_menu_for,
@@ -1360,24 +1360,22 @@ impl DatabaseObjects {
                             .items_center()
                             .child(column.name.clone()),
                     )
-                    .child(self.render_column_resize_handle(col_ix, column, cx)),
+                    .children(self.render_column_resize_handles(col_ix, cx)),
             );
         }
 
         header.into_any_element()
     }
 
-    fn render_column_resize_handle(
+    fn render_column_resize_handles(
         &self,
         col_ix: usize,
-        column: &Column,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
-        render_table_column_resize_handle(
+    ) -> Vec<AnyElement> {
+        render_table_column_resize_handles(
             "database-object-column-resize",
-            "database-object-column-resize",
+            &self.columns,
             col_ix,
-            column,
             cx,
             |this: &Self, col_ix| this.columns.get(col_ix).map(|column| column.width),
             |this: &mut Self, col_ix, width| {

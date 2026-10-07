@@ -4,6 +4,56 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.19.5] - 2026-10-06
+
+#### 更新内容
+
+- 个人同步新增 WebDAV：与「文件夹」「Git」并列，填服务器地址、用户名、密码即可用。密码经加密后落盘，不明文保存。协议实现刻意只用 GET / PUT / DELETE 三个基础方法加 Basic 认证，不做 PROPFIND / MKCOL 探测，以规避坚果云、群晖、Nextcloud 与自建服务之间的 WebDAV 方言差异；首次写入前用 MKCOL 建目录，服务端返回 409 会被正确识别为「目录不可用」并提示去服务器上建目录或检查写权限，不再误报成「记录版本冲突」进入反复失败后暂停。设置页只显示当前后端相关的项（选 WebDAV 时隐藏「同步路径」，选文件夹 / Git 时隐藏三项 WebDAV 配置），三个输入框统一宽度，密码框可切换明文 / 掩码。WebDAV 没有本地目录可监听，同步由 60 秒周期扫描驱动。
+- SSH Agent 转发：凭据里的私钥可勾选「通过 ssh-agent 转发此密钥」，连接侧也有「SSH Agent 转发」（ForwardAgent）开关。本地 ssh-agent 转发给远端后，远端（例如跳板机）能代表你用本机私钥向更内层主机认证。对新开的终端会话生效。
+- 表结构设计页新增「刷新表结构」：重新读取最新的列、索引与表信息。设计器里有未保存改动时会先提示「刷新会放弃当前设计器中未保存的更改」，确认后「放弃并刷新」。
+- 终端粘贴确认弹窗补上「打开设置」与「不再提示」：多行粘贴、高危命令、大段粘贴三类提示都能直接跳到对应设置项，被反复拦截时不用再自己找去哪里关。大段粘贴是硬阈值，不提供「不再提示」。
+- SQL 编辑器手动事务的提交 / 回滚按钮、表数据页的「提交更改」，在写库期间显示 loading，能看出是哪一步还在跑，另一个按钮只禁用、不跟着转。
+- 走 IPC 的外部驱动改为按调用类别区分请求超时，并支持连接级配置：查询、执行、游标、导入导出等用户操作类默认 30 分钟，元数据与结构浏览类保持 30 秒；连接的高级设置里新增「请求超时（秒）」（留空按类别默认，0 表示不限制）。慢库上的大查询、大导入不再被此前那个对所有调用一视同仁的 30 秒硬超时打断。
+
+#### 修复与优化
+
+- macOS（Touch Bar 机型）：关闭窗口闪退这次收口到上游修复。上游 zed#65186 修掉了根因——accesskit 不再用动态替换内容视图的类来挂适配器，而那次「还原类」正是破坏 AppKit Touch Bar 观察者状态、让窗口关闭时抛异常的动作。因此「关闭即隐藏」这个实验开关撤掉，macOS 两个架构、Windows、Linux 统一回到「关闭即销毁」，不再为这个修复承担隐藏窗口一直占着原生窗口与渲染层的内存代价。整套机制原样保留、现在恒为关；万一闪退在真机复现，给对应构建打开同一个开关即可，代码不用改。同时把内部依赖同步到 gpui-pre fork-0.3.124 与 gpui-kit v0.7.1（含 37 个上游提交，以及上游对 headless windowing、hang monitor 等一批修复）。
+- 修复 WHERE / ORDER BY 过滤输入框里输入中文导致程序崩溃（#326）：补全候选的扫描按字节回退，而中文首字符占三个字节，回退一位会落进字符中间，直接把进程带走。现在一律按 UTF-8 字符边界回退。
+- 修复表数据过滤条的 WHERE / ORDER BY 两个输入框比迁移前高出一行：输入框在组件外部化时从「单行输入」换成了恒为多行的编辑器，行数写在布局模式里、默认 2 行，而过滤条外层是 auto 高度容器，于是直接退化成两行的下界高度——不是内容撑高的。现在行数可配置，过滤条按一行渲染（实测高度 40px → 20px），SQL 高亮与字段补全一点没动。
+- 终端命令输入栏的折叠态提示重做：此前折叠时展示的是输入框的按键提示（↑/↓ 选择 · Tab 补全 · Enter 逐条执行 · Shift+Enter 换行），可输入框这时是隐藏的，看着像是终端自己给的提示，也不容易发现有「命令输入」这个功能。现在折叠态换成可点击的「点击展开 · 命令输入支持批量执行」，点击任意位置即展开；展开后的按键说明并入输入框 placeholder，不再另起一行与 placeholder 重复。
+- 修复 Linux（Arch + Hyprland / Wayland）上每次应用内退出都以 SIGABRT 收尾并留下 core（#336）：根因不在退出逻辑，而是线程局部存储的析构顺序——托盘句柄先注册析构器，async-io 的驱动缓存在后，退出时逆序析构，轮到托盘时驱动缓存已经销毁，析构器不能 unwind，只能 abort。现在退出前显式释放托盘与全局快捷键的原生句柄，句柄交出去后托盘命令自动退化为空操作，重复调用幂等。
+- 修复 AI 对话里取消回答后会话被误判为失败：取消时提前丢掉请求 future 会拆掉 JSON-RPC 的响应通道，agent 对 session/cancel 的回应因此变成「连接致命错误」并把会话状态翻成失败。现在在取消握手期间保住这个 future，取消后回到可继续对话的状态。
+- 修复达梦等方言下表设计器改完列注释、界面一直显示旧注释：COMMENT ON 语句此前不在 DDL 关键字里，改注释根本进不到表结构缓存失效那条路径。现在 COMMENT ON COLUMN / TABLE / VIEW 都纳入失效，列注释改动即时生效（定位不到具体对象的类型宁可整库失效，不少失效）。
+- 保存流程不再依赖「窗口会消失」：受保护模式下隐藏失败会把窗口留在屏幕上，而旧保存流程是靠「窗口反正会消失」来结束这一轮的，于是表单没切到「已保存」，用户再点一次「保存」会再插一条连接（redis / mongo / serial / 端口转发最明显，数据库、中间件、扩展、凭据表单则是清掉编辑状态后重建）。现在保存成功即就地切「已保存」、下一次保存走更新而不是新建；异步保存的表单在保存落地后再补一次状态切换，所以提示里能带「已保存」这个事实——窗口没能关闭时会提示「已保存，但窗口没能关闭，可以重试关闭」，取消、红点、Cmd-W 这些裸关窗不受影响。
+- 远端目标选择器改为按可用宽度省略、完整连接名进 tooltip：此前按 12 个字符硬截断，中英文名宽窄不一，同样的上限压不住中文长名（连接名一长就把右侧路径栏挤掉），短英文名又显得空。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.19.5) 下载桌面端安装包
+
+---
+
+#### What's New
+
+- Personal sync gains a WebDAV backend next to "Folder" and "Git": enter the server URL, user name and password and it works. The password is sealed before it is written to disk. The protocol implementation deliberately uses only GET / PUT / DELETE plus Basic auth and never probes with PROPFIND / MKCOL, to avoid the WebDAV dialect differences between Jianguoyun, Synology, Nextcloud and self-hosted servers; a collection is created with MKCOL before the first write, and a 409 from the server is now correctly recognized as "directory unavailable" with a hint to create the directory or check write permissions instead of being misreported as a version conflict that ends in a paused sync. The settings page only shows the items of the selected backend (no sync path for WebDAV, no WebDAV fields for Folder / Git), the three inputs share one width, and the password field can be revealed. WebDAV has no local directory to watch, so a 60-second scan drives syncing.
+- SSH agent forwarding: a key credential can be marked "Forward this key through ssh-agent", and a connection has its own "SSH Agent Forwarding" (ForwardAgent) switch. With the local ssh-agent forwarded to the remote host, that host (a jump host, for example) can authenticate onward to deeper hosts with your local key. Applies to new terminal sessions.
+- The table structure designer gains "Refresh table structure", which reloads the latest columns, indexes and table info. With unsaved edits in the designer it first warns that refreshing discards them, and confirms with "Discard and refresh".
+- The terminal's paste confirmation dialog now offers "Open settings" and "Don't ask again": multi-line paste, high-risk command and large paste prompts all link to the matching setting, so repeated prompts no longer leave you hunting for where to turn them off. Large paste is a hard threshold and offers no "don't ask again".
+- The commit and rollback buttons of the SQL editor's manual transaction, and "Commit changes" in the table data page, show a loading indicator while the write is in flight, so it is clear which step is still running; the other button is merely disabled and does not spin.
+- External drivers reached over IPC can now time out per call category, with a per-connection override: user operations (query, exec, cursor, import/export) default to 30 minutes while metadata and structure browsing keep 30 seconds, and the connection's advanced settings gain a "Request timeout (seconds)" field (empty follows the category defaults, 0 means unlimited). Large queries and imports on slow databases are no longer cut off by the single 30-second timeout that used to apply to every call.
+
+#### Fixes and Improvements
+
+- macOS (Touch Bar models): the crash when closing a window is now closed out by the upstream fix. Upstream zed#65186 removed the root cause — accesskit no longer swaps the content view's class to attach its adapter, and that "restore the class" step was what corrupted the AppKit Touch Bar observer state and made window close throw. The "hide on close" experiment switch is therefore gone, and both macOS architectures, Windows and Linux are back to destroying on close, no longer paying the memory cost of hidden windows that keep their native window and rendering layer alive. The whole mechanism is kept and is now permanently off; if the crash ever reproduces on real hardware, passing the same feature to the affected build is enough and no code has to change. Internal dependencies were synced to gpui-pre fork-0.3.124 and gpui-kit v0.7.1 (37 upstream commits, including a batch of upstream fixes for headless windowing and the hang monitor).
+- Fixed the crash when typing Chinese into the WHERE / ORDER BY filter inputs (#326): completion scanning stepped back one byte at a time, and because the first byte of a Chinese character spans three, that landed in the middle of a character and took the process down. It now steps back on UTF-8 character boundaries.
+- Fixed the WHERE / ORDER BY inputs of the table data filter bar being one line taller than before the migration: when the input component was externalized, the single-line input became an always-multiline editor whose row count lives in the layout mode and defaults to 2, while the filter bar sits in an auto-height container — so it collapsed into the two-row lower bound rather than being pushed up by content. The row count is now configurable and the filter bar renders one row (measured 40px → 20px), with SQL highlighting and field completion untouched.
+- Reworked the collapsed hint of the terminal's command input bar: it used to show the input's key hints (↑/↓ to select · Tab to complete · Enter to run all · Shift+Enter for a new line) while that input was hidden, which read like a hint from the terminal itself and made the "command input" feature easy to miss. The collapsed state is now a clickable "Click to expand · the command input runs batches", and expanding happens from a click anywhere on it; the key hints moved into the input's placeholder instead of repeating on a line of their own.
+- Fixed every in-app quit ending in SIGABRT on Linux (Arch + Hyprland / Wayland) with a core file (#336): the cause was not the quit logic but thread-local destruction order — the tray handle registered its destructor first and the async-io driver cache after it, so on exit the cache was already gone when the tray handle was destroyed, and a destructor that cannot unwind can only abort. The tray and global-hotkey native handles are now released explicitly before quitting, and once the handle is handed over the tray commands degrade to no-ops, making repeated calls idempotent.
+- Fixed an AI chat turn being marked as failed after cancelling a reply: dropping the request future early tears down the JSON-RPC response channel, so the agent's reply to session/cancel surfaced as a connection-fatal error and flipped the session to Failed. The future now stays alive through the cancel handshake and the session returns to a usable state.
+- Fixed the table designer showing a stale column comment after editing it on dialects such as Dameng: COMMENT ON statements were not in the DDL keyword list, so a comment edit never reached the path that invalidates the table structure cache. COMMENT ON COLUMN / TABLE / VIEW now all invalidate it, so column comment changes take effect immediately (types whose object cannot be located invalidate the whole database instead — better too much than too little).
+- Save flows no longer rely on "the window is going to disappear": when hiding fails in protected mode the window stays on screen, and the old flow used that disappearance to end the round — so the form never flipped to "saved" and pressing Save again inserted a second connection (most visible with redis / mongo / serial / port forwarding; the database, middleware, extension and credential forms rebuilt from a cleared editing state instead). A successful save now flips the form to its saved state in place, so the next save updates rather than creates; asynchronous save forms flip the state once the save lands, which is what lets the message carry the "saved" fact — a window that could not be closed now reports "saved, but the window could not be closed and closing can be retried", while plain closes (cancel, red dot, Cmd-W) are unaffected.
+- The remote target picker now elides by available width and puts the full connection name in a tooltip: it used to cut at 12 characters, which could not contain long CJK names (a long connection name pushed the path bar out) while short English names looked empty.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.19.4...v0.19.5
+
 ## [v0.19.4] - 2026-09-28
 
 #### 更新内容

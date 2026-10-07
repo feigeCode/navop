@@ -114,6 +114,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "20260915000001",
         include_str!("../../migrations/20260915000001_connection_preferred_open_mode.sql"),
     ),
+    (
+        "20260929000001",
+        include_str!("../../migrations/20260929000001_credential_forward_to_agent.sql"),
+    ),
 ];
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {
@@ -494,6 +498,52 @@ mod tests {
             )
             .expect("read untouched mysql username")
         );
+
+        run_migrations(&conn).expect("rerun migrations");
+    }
+
+    #[test]
+    fn credential_forward_to_agent_migration_defaults_existing_rows_to_disabled() {
+        let conn = Connection::open_in_memory().expect("open in-memory database");
+        conn.execute_batch(
+            "CREATE TABLE _migrations (
+                version TEXT PRIMARY KEY,
+                applied_at INTEGER NOT NULL
+            );
+            CREATE TABLE credential_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                username TEXT,
+                password TEXT,
+                private_key_path TEXT,
+                private_key_content TEXT,
+                passphrase TEXT,
+                sync_enabled INTEGER NOT NULL DEFAULT 0,
+                cloud_id TEXT,
+                last_synced_at INTEGER,
+                team_id TEXT,
+                owner_id TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            INSERT INTO credential_entries
+                (name, kind, created_at, updated_at)
+            VALUES ('existing', 'ssh', 1, 1);",
+        )
+        .expect("create pre-migration schema");
+
+        mark_all_migrations_except(&conn, "20260929000001");
+        run_migrations(&conn).expect("run credential forward-to-agent migration");
+
+        let forward_to_agent: i64 = conn
+            .query_row(
+                "SELECT forward_to_agent FROM credential_entries WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read forward_to_agent state");
+        assert_eq!(0, forward_to_agent);
 
         run_migrations(&conn).expect("rerun migrations");
     }

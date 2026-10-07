@@ -12,6 +12,8 @@ Refresh before a change so an old tab does not hide modifications made by anothe
 
 Create or modify columns and indexes, plus supported engine, character-set, and collation settings. Before narrowing a type or changing nullability, confirm that existing data can convert. Check for duplicates before creating a unique index.
 
+"Refresh table structure" reloads the latest columns, indexes, and table info from the server. If the designer has unsaved edits it warns that refreshing discards them, and confirms with "Discard and refresh". After a teammate or an external tool changes the schema, refreshing is usually faster than closing and reopening the designer.
+
 Review the SQL/DDL preview. Navop warns about destructive statements such as DROP, but automated detection cannot understand every business impact. Validate migrations in a test database and prepare rollback or restore procedures.
 
 ## Build ER diagrams

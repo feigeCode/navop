@@ -206,6 +206,8 @@ fn to_ssh_connection(
         disable_shell_integration: None,
         x11_forwarding: None,
         allow_legacy_algorithms: None,
+        forward_agent: None,
+        agent_forward_key: None,
         jump_server: imported
             .jump_server
             .as_ref()

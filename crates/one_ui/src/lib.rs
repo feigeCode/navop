@@ -16,6 +16,8 @@ pub mod marquee_text;
 pub mod panel_header;
 pub mod picker_dialog;
 pub mod resize_handle;
+#[cfg(test)]
+mod resize_handle_tests;
 mod settings;
 pub mod signature_help;
 pub mod status_bar;

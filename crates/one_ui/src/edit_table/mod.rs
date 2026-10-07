@@ -4,8 +4,11 @@ pub mod find;
 pub mod filter_panel;
 mod filter_state;
 pub(crate) mod loading;
+#[cfg(test)]
+mod resize_handle_tests;
 pub mod selection;
 mod state;
+pub mod tsv;
 
 use std::collections::HashSet;
 

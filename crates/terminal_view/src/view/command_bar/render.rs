@@ -111,12 +111,26 @@ impl TerminalCommandBar {
             .items_center()
             .justify_between()
             .child(self.render_toolbar_context(cx))
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(self.colors.muted_foreground)
-                    .child(t!("TerminalCommandBar.keyboard_hint").to_string()),
+            .child(self.render_collapsed_hint(cx))
+            .into_any_element()
+    }
+
+    /// 折叠态把「命令输入」入口做成可点击的展开控件：用户会直接点这段文字，
+    /// 所以点击必须真的展开；按键说明由输入框 placeholder 承担，不另起一行。
+    fn render_collapsed_hint(&self, cx: &mut Context<Self>) -> AnyElement {
+        Button::new("terminal-command-collapsed-hint")
+            .label(t!("TerminalCommandBar.collapsed_hint").to_string())
+            .custom(
+                ButtonCustomVariant::new(cx)
+                    .foreground(self.colors.muted_foreground)
+                    .hover(self.colors.muted)
+                    .active(self.colors.muted),
             )
+            .small()
+            .tooltip(t!("TerminalCommandBar.expand").to_string())
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.toggle_collapsed(window, cx);
+            }))
             .into_any_element()
     }
 

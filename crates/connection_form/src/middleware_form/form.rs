@@ -788,7 +788,10 @@ impl MiddlewareConnectionForm {
             match result {
                 Ok(saved) => {
                     let _ = this.update(cx, |form, cx| {
-                        form.editing_connection = None;
+                        // 保存已经落地：记住刚保存的连接，下一轮保存走更新而不是新建 ——
+                        // 窗口因为隐藏失败留在屏幕上时（关闭漏斗返回 `Retained`）用户可能
+                        // 再点一次「保存」，没有这一步会插出第二条连接。
+                        form.editing_connection = Some(saved.clone());
                         cx.emit(MiddlewareFormEvent::Saved(Box::new(saved)));
                     });
                 }
@@ -1263,6 +1266,8 @@ mod tests {
                 disable_shell_integration: None,
                 x11_forwarding: None,
                 allow_legacy_algorithms: None,
+                forward_agent: None,
+                agent_forward_key: None,
                 jump_server: None,
                 proxy: None,
                 os_id: None,

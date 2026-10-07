@@ -322,24 +322,24 @@ mod tests {
 
     fn ftp_stored_connection() -> one_core::storage::models::StoredConnection {
         let params: one_core::storage::models::SshParams = serde_json::from_value(serde_json::json!({
-            "host": "127.0.0.1",
-            "port": 22,
-            "username": "ssh-user",
-            "auth_method": { "Password": { "password": "ssh-pass" } },
-            "remote_file": {
-                "protocol": "Ftp",
-                "ftp": {
-                    "host": "localhost",
-                    "port": 2121,
-                    "username": "testuser",
-                    "password": "testpass",
-                    "passive_mode": true,
-                    "use_tls": true,
-                    "connect_timeout": 10
+                "host": "127.0.0.1",
+                "port": 22,
+                "username": "ssh-user",
+                "auth_method": { "Password": { "password": "ssh-pass" } },
+                "remote_file": {
+                    "protocol": "Ftp",
+                    "ftp": {
+                        "host": "localhost",
+                        "port": 2121,
+                        "username": "testuser",
+                        "password": "testpass",
+                        "passive_mode": true,
+                        "use_tls": true,
+                        "connect_timeout": 10
+                    }
                 }
-            }
-        }))
-        .expect("valid ssh params");
+            }))
+            .expect("valid ssh params");
         one_core::storage::models::StoredConnection::new_ssh(
             "站点".to_string(),
             params,
@@ -350,7 +350,7 @@ mod tests {
     #[test]
     fn ftp_connect_config_is_extracted_from_ftp_protocol_connection() {
         let config = ftp_connect_config_from_stored(&ftp_stored_connection())
-            .expect("ftp config present");
+        .expect("ftp config present");
         assert_eq!(config.host, "localhost");
         assert_eq!(config.port, 2121);
         assert_eq!(config.username, "testuser");
@@ -380,8 +380,8 @@ mod tests {
             None,
         );
 
-        let config =
-            ftp_connect_config_from_stored(&connection).expect("ftp config present");
+        let config = 
+        ftp_connect_config_from_stored(&connection).expect("ftp config present");
         assert_eq!(config.host, "127.0.0.1");
         assert_eq!(config.port, 2121);
         assert_eq!(config.username, "testuser");
@@ -394,30 +394,30 @@ mod tests {
     #[test]
     fn ftp_connect_config_is_none_for_sftp_protocol() {
         let params: one_core::storage::models::SshParams = serde_json::from_value(serde_json::json!({
-            "host": "127.0.0.1",
-            "port": 22,
-            "username": "ssh-user",
-            "auth_method": { "Password": { "password": "ssh-pass" } }
-        }))
-        .expect("valid ssh params");
+                "host": "127.0.0.1",
+                "port": 22,
+                "username": "ssh-user",
+                "auth_method": { "Password": { "password": "ssh-pass" } }
+            }))
+            .expect("valid ssh params");
         let connection = one_core::storage::models::StoredConnection::new_ssh(
             "纯SSH".to_string(),
-            params,
-            None,
-        );
+             params, 
+             None,
+            );
         assert!(ftp_connect_config_from_stored(&connection).is_none());
     }
 
     #[test]
     fn ftp_connect_config_is_none_when_ftp_params_missing() {
         let params: one_core::storage::models::SshParams = serde_json::from_value(serde_json::json!({
-            "host": "127.0.0.1",
-            "port": 22,
-            "username": "ssh-user",
-            "auth_method": { "Password": { "password": "ssh-pass" } },
-            "remote_file": { "protocol": "Ftp" }
-        }))
-        .expect("valid ssh params");
+                "host": "127.0.0.1",
+                "port": 22,
+                "username": "ssh-user",
+                "auth_method": { "Password": { "password": "ssh-pass" } },
+                "remote_file": { "protocol": "Ftp" }
+            }))
+            .expect("valid ssh params");
         let connection = one_core::storage::models::StoredConnection::new_ssh(
             "缺FTP参数".to_string(),
             params,
@@ -429,13 +429,13 @@ mod tests {
     #[test]
     fn upload_connection_for_endpoint_prefers_ftp_config() {
         let ftp_config = ftp_connect_config_from_stored(&ftp_stored_connection())
-            .expect("ftp config present");
+        .expect("ftp config present");
         let source = SftpUploadConnection::for_endpoint(Some(&ftp_config), test_session_manager());
         assert!(matches!(source, SftpUploadConnection::Ftp(_)));
 
         let fallback = SftpUploadConnection::for_endpoint(None, test_session_manager());
         assert!(matches!(
-            fallback,
+            fallback, 
             SftpUploadConnection::SessionManager(_)
         ));
     }
@@ -459,6 +459,8 @@ mod tests {
             host_key_verifier: ssh::HostKeyVerifier::default(),
             x11_forwarding: false,
             allow_legacy_algorithms: false,
+            forward_agent: false,
+            agent_identities: Vec::new(),
         }
     }
 }

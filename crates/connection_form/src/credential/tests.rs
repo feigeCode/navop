@@ -16,6 +16,7 @@ fn summary() -> CredentialSummary {
         has_passphrase: true,
         has_ssh_expect: false,
         sync_enabled: false,
+        forward_to_agent: false,
         cloud_id: None,
         last_synced_at: None,
         team_id: None,

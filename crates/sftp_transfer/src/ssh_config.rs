@@ -15,8 +15,8 @@ use one_core::storage::models::{
     ProxyType as StorageProxyType, SshAuthMethod, SshParams, StoredConnection,
 };
 use ssh::{
-    HostKeyVerifier, JumpServerConnectConfig, ProxyConnectConfig, ProxyType, SshAuth,
-    SshConnectConfig,
+    AgentIdentity, HostKeyVerifier, JumpServerConnectConfig, ProxyConnectConfig, ProxyType,
+    SshAuth, SshConnectConfig,
 };
 
 /// 已保存连接解析出的 SSH 目标。
@@ -37,12 +37,23 @@ pub fn resolve_ssh_target(connection: &StoredConnection) -> Result<ResolvedSshTa
         .to_ssh_params()
         .context("connection does not contain valid SSH parameters")?;
     let initial_directory = sftp_initial_directory(&params);
-    let (username, auth) = match params.sftp_account.as_ref() {
-        Some(account) if !account.username.trim().is_empty() || !account.password.is_empty() => (
+    let uses_sftp_account = params
+        .sftp_account
+        .as_ref()
+        .is_some_and(|account| !account.username.trim().is_empty() || !account.password.is_empty());
+    let agent_identities = if uses_sftp_account || !params.forward_agent.unwrap_or(false) {
+        Vec::new()
+    } else {
+        agent_identities_from_auth(&params.auth_method)
+    };
+    let (username, auth) = if uses_sftp_account {
+        let account = params.sftp_account.as_ref().expect("guarded by flag");
+        (
             account.username.clone(),
             SshAuth::Password(account.password.clone()),
-        ),
-        _ => (params.username.clone(), ssh_auth(params.auth_method)),
+        )
+    } else {
+        (params.username.clone(), ssh_auth(params.auth_method))
     };
     let config = SshConnectConfig {
         host: params.host,
@@ -71,6 +82,8 @@ pub fn resolve_ssh_target(connection: &StoredConnection) -> Result<ResolvedSshTa
         keyboard_interactive_responder: None,
         host_key_verifier: HostKeyVerifier::default(),
         x11_forwarding: false,
+        forward_agent: params.forward_agent.unwrap_or(false),
+        agent_identities,
         allow_legacy_algorithms: params.allow_legacy_algorithms.unwrap_or(false),
     };
     Ok(ResolvedSshTarget {
@@ -125,5 +138,32 @@ pub fn ssh_auth(method: SshAuthMethod) -> SshAuth {
         SshAuthMethod::Pageant => SshAuth::Pageant,
         SshAuthMethod::AutoPublicKey => SshAuth::AutoPublicKey,
         SshAuthMethod::Chain(steps) => SshAuth::Chain(steps.into_iter().map(ssh_auth).collect()),
+    }
+}
+
+/// 从存储 SSH 认证方式推导要加入本地 ssh-agent 的私钥身份。
+///
+/// 仅当连接开启了 ForwardAgent 时才会被加载进 agent 并转发给远端。
+fn agent_identities_from_auth(auth: &SshAuthMethod) -> Vec<AgentIdentity> {
+    match auth {
+        SshAuthMethod::PrivateKey {
+            key_path,
+            passphrase,
+        } => vec![AgentIdentity::PrivateKeyPath {
+            key_path: key_path.clone(),
+            passphrase: passphrase.clone(),
+        }],
+        SshAuthMethod::PrivateKeyContent {
+            private_key,
+            passphrase,
+        } => vec![AgentIdentity::PrivateKeyContent {
+            private_key: private_key.clone(),
+            passphrase: passphrase.clone(),
+        }],
+        SshAuthMethod::Chain(steps) => steps.iter().flat_map(agent_identities_from_auth).collect(),
+        SshAuthMethod::Password { .. }
+        | SshAuthMethod::Agent
+        | SshAuthMethod::Pageant
+        | SshAuthMethod::AutoPublicKey => Vec::new(),
     }
 }

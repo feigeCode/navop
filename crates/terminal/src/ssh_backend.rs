@@ -1700,6 +1700,7 @@ impl SshBackend {
     ) -> anyhow::Result<()> {
         channel.request_pty(pty_config).await?;
         Self::maybe_request_x11_forwarding(client, channel).await;
+        Self::maybe_request_agent_forwarding(client, channel).await;
         channel.request_shell().await?;
         Ok(())
     }
@@ -1717,6 +1718,21 @@ impl SshBackend {
                 target: "terminal.ssh.x11",
                 error = %error,
                 "服务端拒绝 X11 转发请求，本会话停用 X11 转发"
+            );
+        }
+    }
+
+    /// 连接启用了 ForwardAgent 时在 pty 之后、shell 之前发送 auth-agent-req。
+    /// 服务端拒绝（如 sshd 未开 AllowAgentForwarding）只告警降级，不影响终端使用。
+    async fn maybe_request_agent_forwarding<C: SshClient>(client: &C, channel: &mut C::Channel) {
+        if !client.forward_agent() {
+            return;
+        }
+        if let Err(error) = channel.request_agent_forwarding().await {
+            tracing::warn!(
+                target: "terminal.ssh.agent",
+                error = %error,
+                "服务端拒绝 ForwardAgent 请求，本会话停用 agent 转发"
             );
         }
     }
@@ -2640,7 +2656,9 @@ mod tests {
         let mut integration = RuntimeShellIntegration::new(true);
         assert!(!integration.accepts_terminal_input());
 
-        assert!(release_stalled_shell_integration_handshake(&mut integration));
+        assert!(release_stalled_shell_integration_handshake(
+            &mut integration
+        ));
         assert!(
             integration.accepts_terminal_input(),
             "看门狗到期后用户输入必须立刻可发送"
@@ -2652,7 +2670,9 @@ mod tests {
 
         // 未请求注入（纯裸终端）的会话不适用看门狗。
         let mut integration = RuntimeShellIntegration::new(false);
-        assert!(!release_stalled_shell_integration_handshake(&mut integration));
+        assert!(!release_stalled_shell_integration_handshake(
+            &mut integration
+        ));
         assert!(integration.accepts_terminal_input());
     }
 

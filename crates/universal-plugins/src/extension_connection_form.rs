@@ -297,8 +297,12 @@ impl ExtensionConnectionForm {
         let outcome = persist_connection(&repository, &mut connection);
         match outcome {
             Ok(event) => {
+                // 保存已经落地：记住刚保存的连接（含 id），下一轮保存走更新而不是新建 ——
+                // 窗口因为隐藏失败留在屏幕上时（关闭漏斗返回 `Retained`）用户可能再点一次
+                // 「保存」，没有这一步会插出第二条连接。
+                self.editing_connection = Some(connection.clone());
                 emit_connection_event(event, cx);
-                let _ = one_core::window_close::close_window_for_reuse(window, cx);
+                let _ = one_core::window_close::close_window_after_save(window, cx);
             }
             Err(error) => self.set_error(error.to_string(), cx),
         }

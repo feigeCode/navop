@@ -2280,7 +2280,10 @@ impl DbConnectionForm {
                     match re {
                         Ok(..) => {
                             let _ = this.update(cx, |form, cx| {
-                                form.editing_connection = None;
+                                // 保存已经落地：记住刚保存的连接，下一轮保存就是更新而不是新建 ——
+                                // 窗口因为隐藏失败留在屏幕上时（关闭漏斗返回 `Retained`）用户可能
+                                // 再点一次「保存」，没有这一步会插出第二条连接。
+                                form.editing_connection = Some(stored.clone());
                                 cx.emit(DbConnectionFormEvent::Saved(Box::new(stored)));
                             });
                         }
@@ -2297,8 +2300,9 @@ impl DbConnectionForm {
                     match re {
                         Ok(id) => {
                             let _ = this.update(cx, |form, cx| {
-                                form.editing_connection = None;
                                 stored.id = Some(id);
+                                // 同上面 update 分支：保存已经落地，下一轮保存要走更新。
+                                form.editing_connection = Some(stored.clone());
                                 cx.emit(DbConnectionFormEvent::Saved(Box::new(stored)));
                             });
                         }
@@ -3336,6 +3340,8 @@ mod tests {
                 disable_shell_integration: None,
                 x11_forwarding: None,
                 allow_legacy_algorithms: None,
+                forward_agent: None,
+                agent_forward_key: None,
                 jump_server: None,
                 proxy: None,
                 os_id: None,

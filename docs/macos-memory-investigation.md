@@ -905,3 +905,27 @@ arm 都一样）没有 Touch Bar。因此 CI 能钉住的是「修复所依赖�
   窗口，#308 的「确定/取消」、#314 的「保存」都是这么漏出来的。
 - **仍未解决的**：`fork-0.3.122` 的守卫（§10.11）依然是「隐藏」之外的第二道兜底，两者都保留。
   等守卫在真机稳定，可以反过来撤掉隐藏、让原生窗口重新被释放。
+
+### 10.13 上游 zed#65186 落地：线关掉「关闭即隐藏」，窗口重新销毁（2026-10-06）
+
+上游 zed 的 PR #65186（`gpui_macos: Fix crash closing windows on Touch Bar Macs`）修掉了本
+节的根因：它把 accesskit 的 `SubclassingAdapter` 换成挂在 `GPUIView` 上的普通
+`Adapter`，不再在 drop 时把动态子类化的内容视图的类还原回去 —— 正是那次还原破坏了
+AppKit Touch Bar 观察者的 KVO 状态，让窗口关闭时抛异常。该提交已随 zed `upstream/main`
+合并进 fork，发布为 `gpui-pre fork-0.3.124`。
+
+因此：
+
+- **开关重新关掉**：`release.yml` 里给 `x86_64-apple-darwin` 传 `--features
+  macos-touchbar-window-hide` 的 `extra_features` 分支已删除，三个平台交付同一形态 ——
+  关闭窗口即 `remove_window()`。打包契约测试 `script/test-release-packaging.mjs` 同步改成
+  断言这一步不再出现 `--features` 与 `extra_features`。
+- **机制保留**：`HIDE_WINDOWS_ON_CLOSE` 常量、`hide_for_reuse` 隐藏路径、关闭漏斗的三态
+  结果、弹窗登记表与全部契约测试都原样留在代码里。`HIDE_WINDOWS_ON_CLOSE` 现在恒为
+  `false`，整条链逐字退回销毁；万一上游修复在真机上被否证，给对应 target 重新传这个
+  feature 即可恢复，代码不用改。
+- **注意**：这次改动**没有**真机验证 —— 手上没有 Touch Bar 机型。判定依据是上游把崩溃的
+  那条代码路径（动态子类化 + 还原）整个删掉了，而不是「看起来像修好了」。若闪退复现，
+  第一个动作是重新打开这个开关，而不是重新查。
+- §10.11 的 `@try`/`@catch` 守卫在 `gpui-pre` fork 里已经撤掉（先于本次，等待上游修复期间
+  不再维护）。隐藏这条路仍作为可重开的兜底。
