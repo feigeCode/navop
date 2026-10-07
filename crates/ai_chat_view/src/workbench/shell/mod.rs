@@ -264,6 +264,10 @@ impl WorkbenchShell {
     }
 
     /// 让会话面板重新向宿主取一次上下文栏快照（分支 / worktree 改动后调用）。
+    ///
+    /// 调用点无一例外是 `shell.update(cx, |shell, cx| shell.refresh_composer_context(cx))`
+    /// —— 调用期间外壳已被租借，因此宿主注入的快照闭包（[`ComposerContextSource::snapshot`]）
+    /// 不得反过来读外壳实体，否则就是 GPUI 的双重租借。
     pub fn refresh_composer_context(&mut self, cx: &mut Context<Self>) {
         if let Some(panel) = self.session_source.clone() {
             panel.update(cx, |panel, cx| panel.refresh_composer_context(cx));

@@ -126,26 +126,35 @@ pub(crate) fn composer_context_source(
     });
     refresh_composer_git(cx);
 
-    let snapshot_shell = shell.clone();
     let snapshot = Arc::new(move |cx: &mut App| {
-        let root = snapshot_shell.upgrade().and_then(|shell| {
-            shell
-                .read(cx)
-                .workspace_root()
-                .map(|root| root.to_path_buf())
-        });
+        // 当前工作区根取 Explorer 的，**不能**读外壳的同名字段。
+        //
+        // 1. 外壳侧 `refresh_composer_context` 的调用点全是
+        //    `shell.update(cx, |shell, cx| shell.refresh_composer_context(cx))`
+        //    —— 刷新期间外壳已被租借。快照回头 `shell.read(cx)` 就是 GPUI 的双重
+        //    租借：`cannot read WorkbenchShell while it is already being updated`，
+        //    而 macOS 的事件回调是 `extern "C"`，panic 无法 unwind，会升级成
+        //    `fatal runtime error` 直接 abort 整个进程（点一下底栏的分支 /
+        //    Worktree 就崩一次）。
+        // 2. Explorer 的根才是真源：`set_root_manually` → `apply_root_change`
+        //    先改自己的字段再 emit `RootChanged`，而 emit 是延后派发的，外壳那份
+        //    镜像要等派发落地才更新。切 worktree 后紧接着刷新底栏，读外壳会拿到
+        //    旧根，worktree 开关会闪回「关」。
+        let explorer = cx
+            .try_global::<ComposerGitCache>()
+            .and_then(|cache| cache.explorer.upgrade());
+        let root = explorer
+            .as_ref()
+            .map(|explorer| explorer.read_with(cx, |explorer, _| explorer.root().to_path_buf()));
         // 兜底自愈，只认「根目录变了」与「之前没认出仓库、现在认出了」两种跳变；
         // 后者为什么必须是单向的，见 `composer_cache_is_stale` 的注释。
         let (cached_root, cached_repository_root) = cx
             .try_global::<ComposerGitCache>()
             .map(|cache| (cache.root.clone(), cache.repo_root.clone()))
             .unwrap_or_default();
-        let explorer_has_repository = cx
-            .try_global::<ComposerGitCache>()
-            .and_then(|cache| cache.explorer.upgrade())
-            .is_some_and(|explorer| {
-                explorer.read_with(cx, |explorer, _| explorer.repository().is_some())
-            });
+        let explorer_has_repository = explorer.as_ref().is_some_and(|explorer| {
+            explorer.read_with(cx, |explorer, _| explorer.repository().is_some())
+        });
         let stale = composer_cache_is_stale(
             cached_root.as_deref(),
             root.as_deref(),
@@ -325,7 +334,98 @@ fn composer_cache_is_stale(
 
 #[cfg(test)]
 mod tests {
+    use ai_chat_view::{
+        WorkbenchPanelEntry, WorkbenchPanelKind, WorkbenchShellConfig, WorkbenchState,
+    };
+    use gpui::{AppContext as _, TestAppContext, VisualTestContext};
+    use workspace_explorer::{WorkspaceEditor, WorkspaceExplorerConfig};
+
     use super::*;
+    use crate::home::ai_workbench::workspace_theme;
+
+    /// 快照必须能在「外壳已被租借」时安全取到 —— 这正是宿主动作末了的时序。
+    ///
+    /// 线上表现：点底栏的分支 / Worktree 就崩，日志是
+    ///
+    /// ```text
+    /// cannot read ai_chat_view::workbench::shell::WorkbenchShell while it is
+    /// already being updated      (gpui/src/app/entity_map.rs)
+    /// ```
+    ///
+    /// 原因是 `select_branch` / `toggle_worktree` 的最后一行是
+    /// `shell.update(cx, |shell, cx| shell.refresh_composer_context(cx))` ——
+    /// 刷新期间外壳已被租借，而快照闭包回头 `shell.read(cx)` 取「当前工作区根」，
+    /// 于是双重租借。macOS 的事件回调是 `extern "C"`，panic 无法 unwind，会升级成
+    /// `fatal runtime error` 直接 abort 整个进程 —— 点一下崩一次。
+    ///
+    /// 这条测试按线上时序直接调真实的宿主快照闭包（`composer_context_source` 造出来的
+    /// 那一个），并断言它拿到的是 Explorer 的根，而不是绕道外壳取镜像。
+    #[gpui::test]
+    fn composer_snapshot_is_safe_while_the_caller_holds_the_shell(cx: &mut TestAppContext) {
+        cx.update(|cx| gpui_component::init(cx));
+
+        let workspace = tempfile::tempdir().expect("temp workspace");
+        let root = workspace.path().to_path_buf();
+        let explorer = cx.update(|cx| {
+            let theme = workspace_theme(cx);
+            let editor = cx.new(|_| WorkspaceEditor::new(theme));
+            let root = root.clone();
+            cx.new(|cx| {
+                WorkspaceExplorer::new(
+                    WorkspaceExplorerConfig {
+                        root,
+                        editor,
+                        theme,
+                        show_frame_controls: false,
+                        backend: None,
+                    },
+                    cx,
+                )
+            })
+        });
+
+        let explorer_for_shell = explorer.clone();
+        let (shell, cx) = cx.add_window_view(move |window, cx| {
+            WorkbenchShell::new(
+                WorkbenchShellConfig {
+                    panels: vec![WorkbenchPanelEntry::new(
+                        WorkbenchPanelKind::Files,
+                        explorer_for_shell,
+                    )],
+                    session_nav: None,
+                    session_source: None,
+                    initial_state: WorkbenchState::new(WorkbenchPanelKind::Files),
+                    theme: None,
+                    subscriptions: Vec::new(),
+                    workspace_root: None,
+                },
+                window,
+                cx,
+            )
+        });
+        let cx: &mut VisualTestContext = cx;
+
+        let source = {
+            let shell_weak = shell.downgrade();
+            cx.update(move |_window, cx| composer_context_source(shell_weak, explorer, cx))
+        };
+        let snapshot = source.snapshot.clone();
+
+        // 宿主动作末了的刷新：外壳此刻正被租借。
+        let captured = shell.update_in(cx, |_shell, _window, cx| snapshot(cx));
+        // Explorer 会把根规范化（macOS 上 `/var` 会被解成 `/private/var`），
+        // 断言前先过一遍同样的规范化。
+        let expected = std::fs::canonicalize(&root).expect("canonical workspace root");
+        assert_eq!(
+            Some(expected.to_string_lossy().to_string()),
+            captured
+                .workspace
+                .path
+                .as_ref()
+                .map(|path| path.to_string()),
+            "快照必须取到 Explorer 的当前根，而不是绕道外壳"
+        );
+    }
 
     #[test]
     fn a_matching_root_without_a_repository_is_not_re_read() {

@@ -20,7 +20,7 @@ use workspace_explorer::{
 use super::ai_workbench_composer::{composer_context_source, refresh_composer_git};
 
 /// 工作区主题：面板背景、边框与强调色取应用主题，语义色同样取应用主题。
-fn workspace_theme(cx: &App) -> WorkspaceTheme {
+pub(crate) fn workspace_theme(cx: &App) -> WorkspaceTheme {
     let theme = cx.theme();
     WorkspaceTheme {
         background: theme.background,
