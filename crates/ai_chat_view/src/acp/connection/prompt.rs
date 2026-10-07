@@ -74,7 +74,7 @@ impl AcpConnection {
             // 把整条连接打成 Failed 而不是 Ready（合并自 dev 的 cd9d08877）。
             // 所以先发 cancel，再陪 future 走完握手：正常 agent 会回话收场；对那些
             // 永远不回话的 agent，用一个不小于 30s 的宽限期兜底，然后才按超时收场。
-            let mut result = wait_for_prompt(pending.as_mut(), progress, idle).await;
+            let result = wait_for_prompt(pending.as_mut(), progress, idle).await;
             if matches!(result, PromptWait::Stalled) {
                 let _ =
                     connection.send_notification(CancelNotification::new(acp_session_id));
