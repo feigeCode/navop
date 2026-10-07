@@ -407,6 +407,54 @@ fn worktrees_are_created_listed_and_removed_with_their_branch() {
     std::fs::remove_dir_all(&worktree_root).ok();
 }
 
+/// 从 linked worktree 里发现仓库时，主工作区仍须被认成主工作区。
+///
+/// `rev-parse --show-toplevel` 在 worktree 内部返回的是那个 worktree 自己；
+/// 早先直接把它当「主工作区」，于是两个条目的 `is_main` 整体判反 ——
+/// worktree 成了「主工作区」（切回去原地空转），真正的主工作区成了可删除的 worktree。
+/// 应用切根之后正是这个状态，所以从 worktree 内部重新发现是这条测试的关键。
+#[test]
+fn discovering_from_a_linked_worktree_keeps_the_main_worktree_marked_as_main() {
+    let root = initialized_repository();
+    let repository = discover_repository(&root).unwrap().unwrap();
+    let worktree_root = unique_test_path();
+
+    let created = create_worktree_in(&worktree_root, &repository, &root, None).unwrap();
+
+    let from_worktree = discover_repository(&created.worktree_root)
+        .unwrap()
+        .expect("worktree 内部也是仓库");
+    assert_ne!(
+        canonical_or_self(&root),
+        canonical_or_self(&from_worktree.root),
+        "前置：worktree 内部发现出的根不该等于主工作区根"
+    );
+
+    let listed = list_worktrees(&from_worktree).unwrap();
+    let mains: Vec<_> = listed.iter().filter(|entry| entry.is_main).collect();
+    assert_eq!(1, mains.len(), "有且只有一个主工作区：{listed:#?}");
+    assert_eq!(
+        canonical_or_self(&root),
+        mains[0].path,
+        "主工作区必须是原始仓库根，而不是 worktree"
+    );
+    let linked = listed
+        .iter()
+        .find(|entry| entry.path == created.worktree_root)
+        .expect("新建 worktree 应出现在列表里");
+    assert!(!linked.is_main, "worktree 不能被当成主工作区");
+
+    // 顺带钉住「站在 worktree 里删它自己」：`is_main` 修对之前，这个条目被判成主
+    // 工作区，菜单里根本不出现删除入口，所以这条路径一直没人走过。删除过程中
+    // `git worktree remove` 会把 cwd（= 这个 worktree）删掉，后续删分支必须换 cwd。
+    let branch = linked.branch.clone().expect("worktree 有分支");
+    remove_worktree(&from_worktree, &created.worktree_root).unwrap();
+    let branches = run_git_stdout(&root, &["branch", "--list", &branch]);
+    assert!(branches.trim().is_empty(), "受管分支应一并删除");
+
+    std::fs::remove_dir_all(&worktree_root).ok();
+}
+
 #[test]
 fn removing_the_main_worktree_is_refused() {
     let root = initialized_repository();

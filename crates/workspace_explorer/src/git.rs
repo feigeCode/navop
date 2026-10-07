@@ -174,8 +174,46 @@ pub fn list_worktrees(repository: &GitRepository) -> Result<Vec<WorktreeEntry>> 
     if !output.status.success() {
         return Err(git_command_error("git worktree list", &output));
     }
-    let main_root = canonical_or_self(&repository.root);
+    let main_root = main_worktree_root(repository);
     Ok(parse_worktrees(&String::from_utf8_lossy(&output.stdout), &main_root))
+}
+
+/// 主工作区的根目录，供 [`parse_worktrees`] 判定 `is_main`。
+///
+/// 不能拿 `repository.root` 顶替：从 linked worktree 里跑
+/// `rev-parse --show-toplevel` 得到的是**那个 worktree 自己**的路径，用它当「主」
+/// 会把两边的 `is_main` 判反 —— worktree 被当成主工作区（「切回主工作区」变成原地
+/// 空转），真正的主工作区被当成可删除的 worktree。
+///
+/// 改问 common dir：主工作区里它是相对的 `.git`，linked worktree 里是
+/// `<主工作区>/.git` 的绝对路径 —— 取父目录（相对路径先按仓库根展开）都是主工作区根。
+///
+/// 例外是 `--separate-git-dir` 这类 git 目录独立于工作区的布局：common dir 的父目录
+/// 不再是主工作区，此时退回 `repository.root`。那种布局下所有条目都判不出「主」，
+/// 表现为「认不出 worktree」（不会误判成 worktree）。本应用自己建的 worktree 不走
+/// 这种布局。
+fn main_worktree_root(repository: &GitRepository) -> PathBuf {
+    let fallback = canonical_or_self(&repository.root);
+    let Ok(output) = run_git(&repository.root, ["rev-parse", "--git-common-dir"]) else {
+        return fallback;
+    };
+    if !output.status.success() {
+        return fallback;
+    }
+    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if raw.is_empty() {
+        return fallback;
+    }
+    let common = PathBuf::from(&raw);
+    let common = if common.is_absolute() {
+        common
+    } else {
+        repository.root.join(common)
+    };
+    match common.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => canonical_or_self(parent),
+        _ => fallback,
+    }
 }
 
 fn canonical_or_self(path: &Path) -> PathBuf {
@@ -187,9 +225,11 @@ fn canonical_or_self(path: &Path) -> PathBuf {
 /// 主工作区与不受管理的 worktree 会被拒绝，避免误删用户自己的检出。
 pub fn remove_worktree(repository: &GitRepository, path: &Path) -> Result<()> {
     let target = canonical_or_self(path);
-    let entry = list_worktrees(repository)?
-        .into_iter()
+    let entries = list_worktrees(repository)?;
+    let entry = entries
+        .iter()
         .find(|entry| entry.path == target)
+        .cloned()
         .ok_or_else(|| anyhow!("Worktree is not registered: {}", path.display()))?;
     if entry.is_main {
         return Err(anyhow!("Refusing to remove the main worktree"));
@@ -200,8 +240,17 @@ pub fn remove_worktree(repository: &GitRepository, path: &Path) -> Result<()> {
             path.display()
         ));
     }
+    // 后面几步不能用 `repository.root` 当 cwd：它可能正是要删的那个 worktree
+    // （用户就站在里面删自己）。`git worktree remove` 会把这个目录删掉，紧接着的
+    // `branch -D` / `prune` 便没有 cwd 可用，直接报 `Unable to run git`，留下一个
+    // 「目录已删、分支还在」的半成品。主工作区不在被删之列，拿它当落点。
+    let cwd = entries
+        .iter()
+        .find(|entry| entry.is_main)
+        .map(|entry| entry.path.clone())
+        .unwrap_or_else(|| canonical_or_self(&repository.root));
     let output = run_git_vec(
-        &repository.root,
+        &cwd,
         vec![
             "worktree".to_string(),
             "remove".to_string(),
@@ -214,7 +263,7 @@ pub fn remove_worktree(repository: &GitRepository, path: &Path) -> Result<()> {
     }
     if let Some(branch) = entry.branch.as_deref().filter(|branch| is_managed_branch(branch)) {
         let output = run_git_vec(
-            &repository.root,
+            &cwd,
             vec![
                 "branch".to_string(),
                 "-D".to_string(),
@@ -226,7 +275,7 @@ pub fn remove_worktree(repository: &GitRepository, path: &Path) -> Result<()> {
         }
     }
     // 清理 git 侧残留的 worktree 记录。
-    let _ = run_git(&repository.root, ["worktree", "prune"]);
+    let _ = run_git(&cwd, ["worktree", "prune"]);
     Ok(())
 }
 
