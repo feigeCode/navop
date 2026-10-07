@@ -6,6 +6,9 @@
 name: TMP windows native RDP build
 
 on:
+  push:
+    branches:
+      - ci/windows-native-composition
   workflow_dispatch:
 
 env:
