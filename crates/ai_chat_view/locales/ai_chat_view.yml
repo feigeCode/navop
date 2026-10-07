@@ -71,6 +71,10 @@ AgentUi:
     en: ACP request timed out
     zh-CN: ACP 请求超时
     zh-HK: ACP 請求逾時
+  acp_prompt_timeout_detail:
+    en: No output and no tool running for %{seconds} seconds
+    zh-CN: 连续 %{seconds} 秒既没有输出、也没有工具在运行
+    zh-HK: 連續 %{seconds} 秒既沒有輸出、也沒有工具在運行
   acp_request_failed:
     en: ACP request failed
     zh-CN: ACP 请求失败
