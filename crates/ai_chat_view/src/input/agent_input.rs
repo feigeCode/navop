@@ -174,17 +174,20 @@ const COMPOSER_EDITOR_FALLBACK_LINE_HEIGHT: f32 = 20.0;
 const COMPOSER_EDITOR_VERTICAL_PADDING: f32 = 12.0;
 /// 底部工具栏操作按钮(发送 / 排队 / 停止)的边长,同时也是工具栏控件高度。
 const TOOLBAR_ACTION_BUTTON_SIZE: f32 = 32.0;
-/// 输入框下方上下文栏里每个 chip 的固定高度。
+/// 底部那一行里上下文档位 chip 的固定高度。
 ///
-/// 比工具栏按钮矮一档:它是「框外」的次级信息,不该和框内的操作按钮抢视觉重量。
-const COMPOSER_FOOTER_CHIP_HEIGHT: f32 = 24.0;
-/// 上下文栏 chip 之间的横向间距。
-const COMPOSER_FOOTER_GAP: f32 = 6.0;
-/// 上下文栏 chip 收缩到的最小宽度（标签走省略号）。
+/// 与发送 / 附件按钮同高：整行只有一种控件高度，7 项并排时不会参差。
+const COMPOSER_CHIP_HEIGHT: f32 = TOOLBAR_ACTION_BUTTON_SIZE;
+/// 上下文档位 chip 收缩到的最小宽度（标签走省略号）。
 ///
-/// 侧栏被拖窄时四个 chip 仍在同一行：宽度不足靠截断消化，
+/// 侧栏被拖窄时 7 项仍要在同一行：宽度不足靠 `flex_shrink` + `truncate` 消化，
 /// 每项的完整内容在点击后弹出的菜单 / 弹层里。
-const COMPOSER_FOOTER_CHIP_MIN_WIDTH: f32 = 56.0;
+const COMPOSER_CHIP_MIN_WIDTH: f32 = 44.0;
+/// 上下文档位 chip 的自然宽度上限。
+///
+/// 工作区目录名、分支名都可能很长；不设上限的话一项就能吃掉整行，
+/// 把其余 chip 挤到只剩省略号。
+const COMPOSER_CHIP_MAX_WIDTH: f32 = 220.0;
 /// 下拉触发器里除文字外的固定占位:左右内边距 + 箭头 + 间距。
 const TRIGGER_CHROME_WIDTH: f32 = 48.0;
 
@@ -201,11 +204,11 @@ fn composer_editor_height(state: &EditorState) -> Pixels {
     line_height * rows as f32 + px(COMPOSER_EDITOR_VERTICAL_PADDING)
 }
 
-/// 输入框下方上下文栏里单个 chip 的内容:`[图标] [可截断标签] [⌄]`。
+/// 底部那一行里单个 chip 的内容:`[图标] [可截断标签] [⌄]`。
 ///
 /// 这个函数只管内容;承载它的容器(直接可点的 chip / 下拉触发器)由调用方决定,
 /// 但都必须给足宽度约束(容器 `min_w_0` + 这里 `flex_1 min_w_0`)标签才会走省略号。
-fn composer_footer_chip_label(icon: IconName, label: SharedString) -> impl IntoElement {
+fn composer_chip_label(icon: IconName, label: SharedString) -> impl IntoElement {
     h_flex()
         .w_full()
         .min_w_0()
@@ -214,6 +217,16 @@ fn composer_footer_chip_label(icon: IconName, label: SharedString) -> impl IntoE
         .child(Icon::new(icon).xsmall().flex_shrink_0())
         .child(div().flex_1().min_w_0().truncate().text_xs().child(label))
         .child(Icon::new(IconName::ChevronDown).xsmall().flex_shrink_0())
+}
+
+/// 上下文档位 chip 的自然宽度:按标签估算后夹在区间内。
+///
+/// 这一行固定 7 项(`[附件][工作区][分支][模型][Worktree][权限][发送]`),
+/// 谁都不能无条件铺满:这里给的是「内容想要的宽度」,空间不够时由容器的
+/// `flex_shrink` + 标签 `truncate` 消化,而不是让某一项独占整行。
+fn composer_chip_width(label: &str) -> Pixels {
+    px((estimated_label_width(label) + TRIGGER_CHROME_WIDTH)
+        .clamp(COMPOSER_CHIP_MIN_WIDTH, COMPOSER_CHIP_MAX_WIDTH))
 }
 
 fn menu_state_after_open_change(
@@ -1045,10 +1058,10 @@ impl AgentInput {
         div().h(px(20.0)).w(px(1.0)).bg(theme.border)
     }
 
-    /// 输入框下方上下文栏的「权限级别」下拉。
+    /// 底部那一行的「权限级别」下拉。
     ///
     /// 承载的仍是 ACP 工具执行模式(自动 / 只读 / 手动确认):状态、选项与回调都与
-    /// 原先工具栏里的那个下拉一致,只是移到了输入框外下方、并收成 chip 形态。
+    /// 原先工具栏里的那个下拉一致,只是收成了 chip 形态。
     fn render_permission_menu(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let view = cx.entity();
         let is_open = self.open_menu == Some(ComposerMenuKind::Mode);
@@ -1066,19 +1079,19 @@ impl AgentInput {
                 .debug_selector(|| "agent-input-permission".to_string())
                 .small()
                 .w_full()
-                .h(px(COMPOSER_FOOTER_CHIP_HEIGHT))
+                .h(px(COMPOSER_CHIP_HEIGHT))
                 .justify_between()
                 .outline()
                 .disabled(self.is_running)
-                .child(composer_footer_chip_label(IconName::Key, label)),
+                .child(composer_chip_label(IconName::Key, label)),
             &theme,
         );
 
         div()
             .w(chip_width)
-            .min_w(px(COMPOSER_FOOTER_CHIP_MIN_WIDTH))
+            .min_w(px(COMPOSER_CHIP_MIN_WIDTH))
             .flex_shrink(1.0)
-            .h(px(COMPOSER_FOOTER_CHIP_HEIGHT))
+            .h(px(COMPOSER_CHIP_HEIGHT))
             .overflow_hidden()
             .child(
                 Popover::new("agent-permission-popover")
@@ -1110,7 +1123,7 @@ impl AgentInput {
             )
     }
 
-    /// 输入框下方上下文栏的「分支」下拉。
+    /// 底部那一行的「分支」下拉。
     ///
     /// 选项由上层注入(见 [`AgentComposerContext::branch_options`]);选中后只 emit
     /// [`AgentInputEvent::SelectBranch`],真正的切分支动作交给宿主。
@@ -1134,18 +1147,19 @@ impl AgentInput {
                 .debug_selector(|| "agent-input-branch".to_string())
                 .small()
                 .w_full()
-                .h(px(COMPOSER_FOOTER_CHIP_HEIGHT))
+                .h(px(COMPOSER_CHIP_HEIGHT))
                 .justify_between()
                 .outline()
                 .disabled(self.is_running)
-                .child(composer_footer_chip_label(IconName::GitBranch, current)),
+                .child(composer_chip_label(IconName::GitBranch, current.clone())),
             &theme,
         );
 
         div()
-            .min_w(px(COMPOSER_FOOTER_CHIP_MIN_WIDTH))
+            .w(composer_chip_width(&current))
+            .min_w(px(COMPOSER_CHIP_MIN_WIDTH))
             .flex_shrink(1.0)
-            .h(px(COMPOSER_FOOTER_CHIP_HEIGHT))
+            .h(px(COMPOSER_CHIP_HEIGHT))
             .overflow_hidden()
             .child(
                 Popover::new("agent-branch-popover")
@@ -1177,7 +1191,7 @@ impl AgentInput {
             )
     }
 
-    /// 输入框下方上下文栏的「工作区」下拉。
+    /// 底部那一行的「工作区」下拉。
     ///
     /// 候选由上层注入(见 [`AgentComposerContext::workspace_options`])，与左侧会话
     /// 导航里的工作区下拉同源。这里不自行实现选择逻辑：选中只 emit
@@ -1195,14 +1209,12 @@ impl AgentInput {
         let current_path = self.context.workspace.path.clone();
 
         let theme = self.local_theme(cx);
-        // 工作区名可能很长(目录名)，给它一个弹性的最大宽度：行内其余 chip 都
-        // `flex_shrink_0`，宽度不够时由这里先让步、标签走省略号。
         let trigger = themed_outline_button(
             Button::new("agent-workspace")
                 .debug_selector(|| "agent-input-workspace".to_string())
                 .small()
                 .w_full()
-                .h(px(COMPOSER_FOOTER_CHIP_HEIGHT))
+                .h(px(COMPOSER_CHIP_HEIGHT))
                 .justify_between()
                 .outline()
                 .disabled(self.is_running)
@@ -1212,14 +1224,15 @@ impl AgentInput {
                         .map(|path| path.to_string())
                         .unwrap_or_else(|| t!("AgentUi.composer_pick_workspace").to_string()),
                 )
-                .child(composer_footer_chip_label(IconName::Workspace, label)),
+                .child(composer_chip_label(IconName::Workspace, label.clone())),
             &theme,
         );
 
         div()
-            .flex_1()
-            .min_w(px(COMPOSER_FOOTER_CHIP_MIN_WIDTH))
-            .h(px(COMPOSER_FOOTER_CHIP_HEIGHT))
+            .w(composer_chip_width(&label))
+            .min_w(px(COMPOSER_CHIP_MIN_WIDTH))
+            .flex_shrink(1.0)
+            .h(px(COMPOSER_CHIP_HEIGHT))
             .overflow_hidden()
             .child(
                 Popover::new("agent-workspace-popover")
@@ -1257,7 +1270,7 @@ impl AgentInput {
             )
     }
 
-    /// 输入框下方上下文栏的「Worktree」勾选。
+    /// 底部那一行的「Worktree」勾选。
     ///
     /// 勾选态来自 [`ComposerWorktreeState::enabled`];切换只 emit
     /// [`AgentInputEvent::ToggleWorktree`],建/切 worktree 由宿主完成。
@@ -1273,9 +1286,10 @@ impl AgentInput {
 
         div()
             .debug_selector(|| "agent-input-worktree".to_string())
-            .min_w(px(COMPOSER_FOOTER_CHIP_MIN_WIDTH))
+            .w(composer_chip_width(&label))
+            .min_w(px(COMPOSER_CHIP_MIN_WIDTH))
             .flex_shrink(1.0)
-            .h(px(COMPOSER_FOOTER_CHIP_HEIGHT))
+            .h(px(COMPOSER_CHIP_HEIGHT))
             .overflow_hidden()
             .flex()
             .items_center()
@@ -1296,34 +1310,53 @@ impl AgentInput {
             )
     }
 
-    /// 输入框**外**、下方一整行上下文栏。
+    /// 底部那一行里「附件 / 上下文档位 / 操作按钮」三段中的中间段。
     ///
-    /// 布局参考 `ai-workbench-composer-footer`:`[工作区][分支][Worktree][权限]` 四项,
-    /// 每一项内容尺寸自适应 —— 侧边栏变窄时靠 `min_w_0` + `truncate` 省略号截断,
-    /// 点击后由各自的弹层 / 选择器给出完整内容。非 Git 工作区里分支与 Worktree 直接隐藏。
-    fn render_composer_footer(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let theme = self.local_theme(cx);
+    /// 顺序:`[工作区][分支][模型][Worktree][权限]`(非 Git 工作区里分支与 Worktree 隐藏)。
+    /// 这一组独占剩余宽度:空间不足时先在组内 `flex_shrink` + `truncate` 消化,
+    /// 由本组自己的 `overflow_hidden` 兜底,绝不把右侧的发送按钮挤出可视区。
+    fn render_context_group(&self, cx: &mut Context<Self>, row_gap: Pixels) -> impl IntoElement + use<> {
         let is_git_repo =
             self.context.workspace.is_git_repo || !self.context.branch_options.is_empty();
+        let model_label = match &self.context.model {
+            Some(m) if m.model_only => m.model.clone(),
+            Some(m) => SharedString::from(format!("{} / {}", m.provider, m.model)),
+            None => SharedString::from(t!("AgentUi.select_model").to_string()),
+        };
+        let model_min_width = if self.is_running || self.pending_queue_blocked {
+            96.0
+        } else {
+            150.0
+        };
+        let action_button_size = px(TOOLBAR_ACTION_BUTTON_SIZE);
 
-        let mut row = h_flex()
-            .debug_selector(|| "agent-input-composer-footer".to_string())
-            .w_full()
+        let mut group = h_flex()
+            .debug_selector(|| "agent-input-context-group".to_string())
+            .flex_1()
             .min_w_0()
+            .overflow_hidden()
             .items_center()
-            .gap(px(COMPOSER_FOOTER_GAP))
-            .px_3()
-            .pb_2()
-            .flex_shrink_0()
-            .text_color(theme.muted_foreground);
-
-        row = row.child(self.render_workspace_menu(cx));
+            .gap(row_gap)
+            .text_color(self.local_theme(cx).foreground)
+            .child(self.render_workspace_menu(cx));
         if is_git_repo {
-            row = row.child(self.render_branch_menu(cx));
-            row = row.child(self.render_worktree_toggle(cx));
+            group = group.child(self.render_branch_menu(cx));
         }
-        row = row.child(self.render_permission_menu(cx));
-        row
+        // 模型留在这一行中间:它是唯一需要「搜索 + 滚动 + 键盘导航」的控件,
+        // 用 `flex_1` 吸收整行余量,其余项保持内容宽度。
+        group = group.child(
+            div()
+                .flex_1()
+                .min_w(px(model_min_width))
+                .h(action_button_size)
+                .overflow_hidden()
+                .child(self.render_model_menu(model_label))
+                .debug_selector(|| "agent-input-model-control".to_string()),
+        );
+        if is_git_repo {
+            group = group.child(self.render_worktree_toggle(cx));
+        }
+        group.child(self.render_permission_menu(cx))
     }
 
     /// 模型下拉:交给组件库的 `Select` —— 搜索框、滚动、键盘导航都由它提供。
@@ -1532,25 +1565,15 @@ impl AgentInput {
         let theme = self.local_theme(cx);
         let running = self.is_running;
         let queue_mode = running || self.pending_queue_blocked;
-        let model_label = match &self.context.model {
-            Some(m) if m.model_only => m.model.clone(),
-            Some(m) => SharedString::from(format!("{} / {}", m.provider, m.model)),
-            None => SharedString::from(t!("AgentUi.select_model").to_string()),
-        };
-        let model_min_width = if queue_mode { 96.0 } else { 150.0 };
+        let row_gap = if queue_mode { px(4.0) } else { px(8.0) };
         let action_button_size = px(TOOLBAR_ACTION_BUTTON_SIZE);
         let attach_count = self.attachments.len();
-        let mut toolbar = h_flex()
-            .debug_selector(|| "agent-input-toolbar".to_string())
-            .w_full()
-            .min_w_0()
-            .items_center()
-            .text_color(theme.foreground)
-            .gap(if queue_mode { px(4.0) } else { px(8.0) })
-            .px_3()
-            .py_2()
+
+        // 左段:附件入口 + 附件计数(固定宽度,不参与收缩)。
+        let attach_group = h_flex()
             .flex_shrink_0()
-            // Finch 式 chips 行：附件入口在最左，附附件计数。
+            .items_center()
+            .gap(row_gap)
             .child(
                 Button::new("agent-attach")
                     .icon(IconName::File)
@@ -1567,17 +1590,25 @@ impl AgentInput {
                     .text_color(theme.muted_foreground)
                     .child(t!("AgentUi.attachment_count", count = attach_count).to_string()),
             )
-            .child(div().h(px(18.0)).w(px(1.0)).bg(theme.border))
-            // 模型留在框内右下（工作区 / 分支 / Worktree / 权限移到框外下方的上下文栏）。
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(model_min_width))
-                    .h(action_button_size)
-                    .overflow_hidden()
-                    .child(self.render_model_menu(model_label))
-                    .debug_selector(|| "agent-input-model-control".to_string()),
-            );
+            .child(div().h(px(18.0)).w(px(1.0)).bg(theme.border));
+
+        // 中段:工作区 / 分支 / 模型 / Worktree / 权限。
+        let context_group = self.render_context_group(cx, row_gap);
+
+        let mut toolbar = h_flex()
+            .debug_selector(|| "agent-input-toolbar".to_string())
+            .w_full()
+            .min_w_0()
+            .items_center()
+            .text_color(theme.foreground)
+            .gap(row_gap)
+            .px_3()
+            .py_2()
+            // 极端窄宽度下宁可裁掉中段的尾巴,也不让内容画到输入卡片外面。
+            .overflow_hidden()
+            .flex_shrink_0()
+            .child(attach_group)
+            .child(context_group);
 
         if queue_mode {
             toolbar = toolbar
@@ -3664,13 +3695,13 @@ impl Render for AgentInput {
         self.ensure_elicitation_inputs(_window, cx);
         let pending_elicitation = self.render_pending_elicitation(cx);
         let toolbar = self.render_toolbar(cx);
-        let composer_footer = self.render_composer_footer(cx);
         let theme = self.local_theme(cx);
         let input_state = self.input_state.read(cx);
         let input_focused = input_state.focus_handle(cx).is_focused(_window);
         let editor_height = composer_editor_height(input_state);
 
-        // 输入卡片：带边框的那一块（工作区 / 分支 / Worktree / 权限在它外面的下方）。
+        // 输入卡片：带边框的那一块（工作区 / 分支 / 模型 / Worktree / 权限
+        // 与附件、发送按钮同处卡片底部的**同一行**）。
         let card = v_flex()
             .debug_selector(|| "agent-input-card".to_string())
             .w_full()
@@ -3723,7 +3754,7 @@ impl Render for AgentInput {
                             ),
                     ),
             )
-            // 底部：模型和发送按钮
+            // 底部：附件 / 工作区 / 分支 / 模型 / Worktree / 权限 / 发送，一整行
             .child(toolbar);
 
         v_flex()
@@ -3737,8 +3768,6 @@ impl Render for AgentInput {
             .bg(theme.background)
             .text_color(theme.foreground)
             .child(card)
-            // 输入框外、下方一整行：工作区 / 分支 / Worktree / 权限
-            .child(composer_footer)
     }
 }
 
@@ -3748,6 +3777,14 @@ mod tests {
     use crate::input::context::{ComposerModel, ComposerWorkspaceInfo, ComposerWorktreeState};
     use gpui::{Modifiers, Pixels, TestAppContext, VisualTestContext};
 
+    /// 一行 7 项全部放下、不触发裁剪的最小宽度。
+    ///
+    /// 底部那一行固定是 `[附件][计数][工作区][分支][模型][Worktree][权限][发送]`：
+    /// 附件组与发送按钮不参与收缩，中段 5 项各自还有可读性下限，加起来约 520px；
+    /// 再窄就轮到中段的 `overflow_hidden` 裁尾巴了（发送按钮始终保留）。
+    /// 布局类测试一律以它为「窄」的下限，低于它就不再声称「都看得到」。
+    const NARROW_USABLE_WIDTH: f32 = 620.0;
+
     struct AgentInputLayoutRoot {
         input: Entity<AgentInput>,
         width: Pixels,
@@ -3756,7 +3793,7 @@ mod tests {
 
     impl AgentInputLayoutRoot {
         fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-            Self::with_width(px(360.0), window, cx)
+            Self::with_width(px(NARROW_USABLE_WIDTH), window, cx)
         }
 
         fn wide(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -3803,7 +3840,7 @@ mod tests {
         }
 
         fn running_with_queue(window: &mut Window, cx: &mut Context<Self>) -> Self {
-            let mut root = Self::with_width(px(360.0), window, cx);
+            let mut root = Self::with_width(px(NARROW_USABLE_WIDTH), window, cx);
             root.height = px(320.0);
             root.input.update(cx, |input, cx| {
                 input.set_running(true, cx);
@@ -3819,7 +3856,7 @@ mod tests {
         }
 
         fn blocked_with_queue(window: &mut Window, cx: &mut Context<Self>) -> Self {
-            let mut root = Self::with_width(px(360.0), window, cx);
+            let mut root = Self::with_width(px(NARROW_USABLE_WIDTH), window, cx);
             root.height = px(320.0);
             root.input.update(cx, |input, cx| {
                 input.set_pending_queue_blocked(true, cx);
@@ -3922,24 +3959,92 @@ mod tests {
         }
     }
 
-    /// 底栏四项都在，整行位于输入卡片**下方**，且按 工作区→分支→Worktree→权限 排布。
+    /// 七项都在输入卡片底部的**同一行**，并按 工作区→分支→模型→Worktree→权限→发送 排布。
     #[gpui::test]
-    fn composer_footer_renders_context_chips_below_the_card(cx: &mut TestAppContext) {
+    fn composer_row_keeps_context_chips_on_one_line(cx: &mut TestAppContext) {
         cx.update(|cx| {
             gpui_component::init(cx);
             crate::init(cx);
         });
         let (_, cx) = cx.add_window_view(|window, cx| {
-            AgentInputLayoutRoot::with_composer_context(px(900.0), window, cx)
+            AgentInputLayoutRoot::with_composer_context(px(1100.0), window, cx)
         });
         let cx: &mut VisualTestContext = cx;
 
-        let toolbar = cx
-            .debug_bounds("agent-input-toolbar")
-            .expect("toolbar should render");
-        let footer = cx
-            .debug_bounds("agent-input-composer-footer")
-            .expect("composer footer should render");
+        let card = cx
+            .debug_bounds("agent-input-card")
+            .expect("input card should render");
+        let group = cx
+            .debug_bounds("agent-input-context-group")
+            .expect("context group should render");
+        let workspace = cx
+            .debug_bounds("agent-input-workspace")
+            .expect("workspace chip should render");
+        let branch = cx
+            .debug_bounds("agent-input-branch")
+            .expect("branch chip should render");
+        let model = cx
+            .debug_bounds("agent-input-model-control")
+            .expect("model control should render");
+        let worktree = cx
+            .debug_bounds("agent-input-worktree")
+            .expect("worktree toggle should render");
+        let permission = cx
+            .debug_bounds("agent-input-permission")
+            .expect("permission chip should render");
+        let send = cx
+            .debug_bounds("agent-input-send-control")
+            .expect("send control should render");
+
+        assert!(
+            workspace.origin.x < branch.origin.x
+                && branch.origin.x < model.origin.x
+                && model.origin.x < worktree.origin.x
+                && worktree.origin.x < permission.origin.x
+                && permission.origin.x < send.origin.x,
+            "chips must be ordered workspace → branch → model → worktree → permission → send: \
+             workspace={workspace:?}, branch={branch:?}, model={model:?}, \
+             worktree={worktree:?}, permission={permission:?}, send={send:?}"
+        );
+        // 七项共处一行：纵向偏差只可能来自边框/内边距的取整。
+        let row_y = workspace.origin.y;
+        for bounds in [branch, model, worktree, permission, send] {
+            assert!(
+                (bounds.origin.y - row_y).abs() <= px(2.0),
+                "all controls must share one row: rows differ at {bounds:?} (row_y={row_y:?})"
+            );
+        }
+        // 而且这一行在输入卡片内部，不再有卡片外的第二行。
+        for bounds in [workspace, branch, model, worktree, permission, send] {
+            assert!(
+                bounds.origin.y >= card.origin.y
+                    && bounds.origin.y + bounds.size.height
+                        <= card.origin.y + card.size.height,
+                "every control must stay inside the input card: {bounds:?}, card={card:?}"
+            );
+        }
+        assert!(
+            group.origin.x + group.size.width <= send.origin.x,
+            "the context group must not overlap the send button: group={group:?}, send={send:?}"
+        );
+    }
+
+    /// 侧栏被拖窄时七项仍留在同一行：靠收缩 + 截断消化，绝不把发送按钮挤出卡片。
+    #[gpui::test]
+    fn composer_row_truncates_instead_of_pushing_the_send_button_out(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        const NARROW: f32 = 620.0;
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            AgentInputLayoutRoot::with_composer_context(px(NARROW), window, cx)
+        });
+        let cx: &mut VisualTestContext = cx;
+
+        let card = cx
+            .debug_bounds("agent-input-card")
+            .expect("input card should render");
         let workspace = cx
             .debug_bounds("agent-input-workspace")
             .expect("workspace chip should render");
@@ -3952,63 +4057,33 @@ mod tests {
         let permission = cx
             .debug_bounds("agent-input-permission")
             .expect("permission chip should render");
+        let send = cx
+            .debug_bounds("agent-input-send-control")
+            .expect("send control should render");
 
+        // 发送按钮是这一行的锚点：任何收缩都不能把它推出卡片。
         assert!(
-            footer.origin.y >= toolbar.origin.y + toolbar.size.height,
-            "footer must sit below the input card: footer={footer:?}, toolbar={toolbar:?}"
+            send.origin.x + send.size.width <= card.origin.x + card.size.width,
+            "send control must stay inside the card: send={send:?}, card={card:?}"
         );
         assert!(
-            workspace.origin.x < branch.origin.x
-                && branch.origin.x < worktree.origin.x
-                && worktree.origin.x < permission.origin.x,
-            "chips must be ordered workspace → branch → worktree → permission: \
-             workspace={workspace:?}, branch={branch:?}, worktree={worktree:?}, permission={permission:?}"
+            workspace.size.width < px(COMPOSER_CHIP_MAX_WIDTH),
+            "a long workspace name must shrink instead of hogging the row: workspace={workspace:?}"
         );
-        // 四项共处一行：纵向偏差只可能来自边框/内边距的取整。
-        let row_y = workspace.origin.y;
-        for bounds in [branch, worktree, permission] {
+        for bounds in [workspace, branch, worktree, permission] {
             assert!(
-                (bounds.origin.y - row_y).abs() <= px(2.0),
-                "all context chips must share one row: rows differ at {bounds:?}"
+                bounds.size.width >= px(COMPOSER_CHIP_MIN_WIDTH),
+                "chips must not shrink below the readable floor: {bounds:?}"
             );
         }
-    }
-
-    /// 侧栏被拖窄时四项仍留在卡片内：靠截断消化，不横向溢出。
-    #[gpui::test]
-    fn composer_footer_truncates_instead_of_overflowing(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            gpui_component::init(cx);
-            crate::init(cx);
-        });
-        const NARROW: f32 = 260.0;
-        let (_, cx) = cx.add_window_view(|window, cx| {
-            AgentInputLayoutRoot::with_composer_context(px(NARROW), window, cx)
-        });
-        let cx: &mut VisualTestContext = cx;
-
-        let workspace = cx
-            .debug_bounds("agent-input-workspace")
-            .expect("workspace chip should render");
-        let permission = cx
-            .debug_bounds("agent-input-permission")
-            .expect("permission chip should render");
-        let branch = cx
-            .debug_bounds("agent-input-branch")
-            .expect("branch chip should render");
-
-        assert!(
-            permission.origin.x + permission.size.width <= px(NARROW),
-            "the right-most chip must stay inside the panel: permission={permission:?}"
-        );
-        assert!(
-            workspace.size.width < px(200.0),
-            "a long workspace name must truncate instead of pushing chips out: \
-             workspace={workspace:?}"
-        );
-        // 长工作区名先让位，短标签的分支/权限仍保持最小可用宽度。
-        assert!(workspace.size.width < px(420.0));
-        assert!(branch.size.width >= px(COMPOSER_FOOTER_CHIP_MIN_WIDTH));
+        // 收缩之后仍然是同一行。
+        let row_y = workspace.origin.y;
+        for bounds in [branch, worktree, permission, send] {
+            assert!(
+                (bounds.origin.y - row_y).abs() <= px(2.0),
+                "chips must stay on one row at narrow width: {bounds:?} (row_y={row_y:?})"
+            );
+        }
     }
 
     #[gpui::test]
@@ -4111,9 +4186,9 @@ mod tests {
         );
     }
 
-    /// 工具栏只留「附件 + 模型 + 发送」;权限级别移到输入框**外**下方的上下文栏。
+    /// 工具栏一行内同时有「附件 + 上下文档位 + 发送」；发送按钮仍是 32x32。
     #[gpui::test]
-    fn toolbar_keeps_action_button_square_and_permission_moves_below_the_card(
+    fn toolbar_keeps_action_button_square_and_permission_in_the_same_row(
         cx: &mut TestAppContext,
     ) {
         cx.update(|cx| {
@@ -4140,14 +4215,21 @@ mod tests {
             .expect("toolbar should render");
         let permission = cx
             .debug_bounds("agent-input-permission")
-            .expect("permission chip should render in the composer footer");
+            .expect("permission chip should render in the toolbar");
         assert!(
-            permission.origin.y >= toolbar.origin.y + toolbar.size.height,
-            "permission chip must sit below the toolbar row: permission={permission:?}, toolbar={toolbar:?}"
+            permission.origin.y >= toolbar.origin.y
+                && permission.origin.y + permission.size.height
+                    <= toolbar.origin.y + toolbar.size.height,
+            "permission chip must share the toolbar row, not sit in a second row: \
+             permission={permission:?}, toolbar={toolbar:?}"
         );
         assert!(
-            permission.size.width < px(124.0),
+            permission.size.width <= px(124.0),
             "permission chip should hug its short label: permission={permission:?}"
+        );
+        assert!(
+            permission.size.height <= px(TOOLBAR_ACTION_BUTTON_SIZE),
+            "permission chip must not outgrow the toolbar buttons: permission={permission:?}"
         );
     }
 
