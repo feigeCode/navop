@@ -1327,10 +1327,6 @@ Workbench:
     en: Choose workspace
     zh-CN: 选择工作区
     zh-HK: 選擇工作區
-  no_workspace:
-    en: No workspace
-    zh-CN: 未选择工作区
-    zh-HK: 未選擇工作區
   panel_chat:
     en: AI Chat
     zh-CN: AI 对话
@@ -1447,10 +1443,6 @@ Workbench:
     en: Ungrouped
     zh-CN: 未分组
     zh-HK: 未分組
-  new_chat_here:
-    en: "New conversation"
-    zh-CN: "新建对话"
-    zh-HK: "新建對話"
   new_chat_in_workspace:
     en: "New conversation in %{workspace}"
     zh-CN: "在「%{workspace}」新建对话"

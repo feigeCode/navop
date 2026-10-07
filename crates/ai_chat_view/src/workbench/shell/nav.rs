@@ -89,42 +89,6 @@ impl WorkbenchShell {
                 }))
         };
 
-        // 底部固定区工作区选择器：下拉列出所有已选择过的工作区。
-        // 当前会话尚无消息时，选择其他工作区会切换当前上下文；
-        // 一旦会话已有消息，工作区被锁定，选择其他工作区会在目标工作区新建对话。
-        let current_root = self.workspace_root.clone();
-        let current_label = current_root
-            .as_ref()
-            .map(|root| {
-                root.file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| root.display().to_string())
-            })
-            .unwrap_or_else(|| t!("Workbench.no_workspace").to_string());
-        let current_path = current_root
-            .as_ref()
-            .map(|root| root.to_string_lossy().to_string());
-        // 底部固定区只留「在当前工作区新建对话」。
-        //
-        // 工作区**切换**已统一收口到输入框下方的上下文栏（宿主经
-        // `ComposerContextSource` 注入的工作区下拉），这里不再摆第二个同功能菜单：
-        // 两套菜单数据同源却各自渲染，候选集合迟早会不一致。
-        // 目录名过长时截断，完整路径放进 tooltip。
-        let new_session_button = Button::new("workbench-session-new")
-            .debug_selector(|| "workbench-session-new".to_string())
-            .icon(IconName::Plus)
-            .label(current_label)
-            .small()
-            .flex_1()
-            .min_w_0()
-            .tooltip(match current_path {
-                Some(path) => format!("{}\n{path}", t!("Workbench.new_chat_here")),
-                None => t!("Workbench.new_chat_here").to_string(),
-            })
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.create_session_in_current_workspace(cx);
-            }));
-
         let mut rows: Vec<gpui::AnyElement> = Vec::new();
         if groups.is_empty() {
             if !query.trim().is_empty() {
@@ -258,18 +222,19 @@ impl WorkbenchShell {
                         .gap_0p5()
                         .children(rows),
                 )
-                // 底部固定区：在当前工作区新建对话 + 归档开关。
+                // 底部固定区：归档开关。工作区切换已收口到输入框下方的上下文栏
+                // （宿主经 `ComposerContextSource` 注入的工作区下拉），这里不再重复。
                 .child(
                     h_flex()
                         .flex_shrink_0()
                         .items_center()
+                        .justify_end()
                         .gap_1()
                         .px_2()
                         .py_2()
                         .border_t_1()
                         .border_color(theme.border)
                         .bg(theme.panel)
-                        .child(new_session_button)
                         .child(archive_toggle),
                 )
                 .into_any_element(),

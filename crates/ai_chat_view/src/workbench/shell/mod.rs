@@ -286,13 +286,6 @@ impl WorkbenchShell {
         }
     }
 
-    /// 在当前工作区新建对话。
-    pub fn create_session_in_current_workspace(&mut self, cx: &mut Context<Self>) {
-        if let Some(panel) = self.session_source.clone() {
-            panel.update(cx, |panel, cx| panel.create_session(cx));
-        }
-    }
-
     /// 注入「切换到指定工作区」动作。侧栏分组的新建对话 / 选择跨工作区会话
     /// 时调用；宿主应把 explorer 等切到该根（`RootChanged` 会级联回外壳）。
     pub fn set_workspace_switcher(
