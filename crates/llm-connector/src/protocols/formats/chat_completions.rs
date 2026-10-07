@@ -71,14 +71,31 @@ pub struct ChatCompletionsUsage {
 // Shared Parsers
 // ============================================================================
 
+/// 截断响应体，用于把畸形响应带进错误信息。
+///
+/// 必须走字符边界：响应体是 UTF-8，直接 `&body[..n]` 在 n 落进多字节字符内部时
+/// 会让报错路径自己 panic —— 比原始错误更难查。
+fn body_preview(body: &str) -> &str {
+    const PREVIEW_BYTES: usize = 512;
+    &body[..body.floor_char_boundary(PREVIEW_BYTES.min(body.len()))]
+}
+
 /// Parse a standard OpenAI-compatible JSON response into a ChatResponse
 pub fn parse_chat_completions_chat_response(
     response: &str,
     provider_name: &str,
     stream_reasoning_strategy: StreamReasoningStrategy,
 ) -> Result<ChatResponse, LlmConnectorError> {
-    let raw: ChatCompletionsResponse = serde_json::from_str(response)
-        .map_err(|e| LlmConnectorError::ParseError(format!("{}: {}", provider_name, e)))?;
+    let raw: ChatCompletionsResponse = serde_json::from_str(response).map_err(|e| {
+        // 带上响应体开头：像「trailing characters at line 1 column 975」这种错，
+        // 光看 serde 的位置信息无法判断上游到底回了什么形状的 body。
+        LlmConnectorError::ParseError(format!(
+            "{}: {} | body: {}",
+            provider_name,
+            e,
+            body_preview(response)
+        ))
+    })?;
 
     let ChatCompletionsResponse {
         id,
@@ -173,6 +190,28 @@ pub fn parse_chat_completions_chat_response(
 mod tests {
     use super::parse_chat_completions_chat_response;
     use crate::protocols::common::capabilities::StreamReasoningStrategy;
+
+    /// 解析失败必须能看出上游回了什么形状的 body；预览又必须是有界且不切字符。
+    #[test]
+    fn test_parse_error_carries_a_bounded_char_boundary_safe_body_preview() {
+        // 形状取自线上实测错误：`9Router: trailing characters at line 1 column 975`
+        // —— 一个完整的 JSON 对象后面还粘着别的东西。
+        let body = format!("{{\"ok\":1}}{}", "中".repeat(400));
+        let error = parse_chat_completions_chat_response(
+            &body,
+            "9Router",
+            StreamReasoningStrategy::SeparateField,
+        )
+        .expect_err("非法 body 必须报错");
+        let message = error.to_string();
+
+        assert!(message.contains("9Router"), "{message}");
+        assert!(message.contains("trailing characters"), "{message}");
+        assert!(message.contains("| body: {\"ok\":1}"), "{message}");
+        // 512 字节预算落在「中」中间（3 字节对齐到 510），预览必须回退到边界；
+        // 同时整条消息要有界，不能把整个响应体塞进日志。
+        assert!(message.len() < 1024, "预览必须有界: {} 字节", message.len());
+    }
 
     #[test]
     fn test_parse_dashscope_wrapped_chat_response() {
@@ -279,8 +318,14 @@ pub fn parse_chat_completions_embed_response(
     response: &str,
     provider_name: &str,
 ) -> Result<EmbedResponse, LlmConnectorError> {
-    let raw: ChatCompletionsEmbedResponse = serde_json::from_str(response)
-        .map_err(|e| LlmConnectorError::ParseError(format!("{}: {}", provider_name, e)))?;
+    let raw: ChatCompletionsEmbedResponse = serde_json::from_str(response).map_err(|e| {
+        LlmConnectorError::ParseError(format!(
+            "{}: {} | body: {}",
+            provider_name,
+            e,
+            body_preview(response)
+        ))
+    })?;
 
     // Extract usage
     let usage = raw
