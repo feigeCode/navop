@@ -733,7 +733,17 @@ impl WorkspaceExplorer {
                 }
                 this.loading = false;
                 match result {
-                    Ok(snapshot) => this.apply_snapshot(snapshot),
+                    Ok(snapshot) => {
+                        let previous = this.repository.as_ref().map(|repo| repo.root.clone());
+                        this.apply_snapshot(snapshot);
+                        let current = this.repository.as_ref().map(|repo| repo.root.clone());
+                        // 仓库是异步发现的：装机那一帧 `repository()` 还是 None，
+                        // 宿主若只看一次就会把「不是 Git 仓库」永久缓存下来。
+                        // 这里在句柄真正变化时补一条事件，宿主据此重读分支 / worktree。
+                        if previous != current {
+                            cx.emit(WorkspaceExplorerEvent::RepositoryChanged);
+                        }
+                    }
                     Err(error) => this.error = Some(error.to_string()),
                 }
                 cx.notify();

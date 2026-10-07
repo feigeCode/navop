@@ -1238,6 +1238,8 @@ impl TerminalSidebar {
                         cx.emit(TerminalSidebarEvent::SyncWorkingDir);
                     }
                     WorkspaceExplorerEvent::RootChanged(_) => {}
+                    // 终端侧栏不消费仓库句柄（它只转发工作目录），无需处理。
+                    WorkspaceExplorerEvent::RepositoryChanged => {}
                     WorkspaceExplorerEvent::CommitMessageRequested => {}
                     // 终端侧栏没有独立审阅面板，文档切换事件无需处理。
                     WorkspaceExplorerEvent::DocumentRequested => {}

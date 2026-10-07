@@ -16,6 +16,14 @@ pub enum WorkspaceExplorerEvent {
     MoveTo(ExplorerFramePlacement),
     SyncTerminalCwd,
     RootChanged(std::path::PathBuf),
+    /// 当前根目录的 Git 仓库句柄变了（认出仓库 / 换仓库 / 不再是仓库）。
+    ///
+    /// 仓库是**异步**发现的：装机时 `repository()` 是 `None`，首帧工作区快照
+    /// 落地后才有值。宿主若在装机那一帧读过一次就缓存结论，没有这个事件就永远
+    /// 等不到第二次机会（典型表现：底栏的分支 / worktree 入口一直是空的）。
+    ///
+    /// 不带载荷：订阅方需要什么直接问 [`super::WorkspaceExplorer::repository`]。
+    RepositoryChanged,
     /// 请求宿主用已配置的 LLM 生成提交信息（Explorer 不依赖 LLM 层）。
     CommitMessageRequested,
     /// 用户请求查看一个文档（点开文件或 Git 变更）。宿主工作台借此把
