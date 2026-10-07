@@ -190,6 +190,24 @@ const COMPOSER_CHIP_MIN_WIDTH: f32 = 44.0;
 const COMPOSER_CHIP_MAX_WIDTH: f32 = 220.0;
 /// 下拉触发器里除文字外的固定占位:左右内边距 + 箭头 + 间距。
 const TRIGGER_CHROME_WIDTH: f32 = 48.0;
+/// 模型触发器在这一行里能被压到的最小宽度。
+///
+/// 模型是这一行唯一 `flex_1` 的项:空间富余时它吸收余量,空间不足时缩到这里为止
+/// (再缩下去连「9Router / deepsee…」都放不下,不如把宽度让给两侧的 chip)。
+const MODEL_TRIGGER_MIN_WIDTH: f32 = 150.0;
+/// 模型下拉弹层的宽度区间。
+///
+/// 组件库 `Select` 的 `menu_width` 默认是 `Length::Auto` —— 弹层宽度**取触发器宽度**
+/// (见 `gpui_component::select` 的 `Length::Auto => this.w(bounds.size.width)`)。
+/// 触发器被挤到 [`MODEL_TRIGGER_MIN_WIDTH`] 时标题只剩 `9Router / deepsee…`;
+/// 弹层若跟着按 150px 渲染,用户点开看到的还是同一个省略号 ——「挤不下的点开看全文」
+/// 这条兜底就失效了。所以这里按选项里最长的 `provider / model` 估宽度并夹在区间内:
+/// 短列表不塌成一条,长列表收在上限,超宽时由组件库的 `Positioner` 按窗口边缘收敛
+/// (它带 8px margin,会把浮层压回视口内)。
+const MODEL_MENU_MIN_WIDTH: f32 = 320.0;
+const MODEL_MENU_MAX_WIDTH: f32 = 400.0;
+/// 弹层里除标签外还要留的宽度:选项行左右内边距 + 选中标记。
+const MODEL_MENU_CHROME_WIDTH: f32 = 56.0;
 
 fn composer_editor_height(state: &EditorState) -> Pixels {
     let rows = state
@@ -227,6 +245,27 @@ fn composer_chip_label(icon: IconName, label: SharedString) -> impl IntoElement 
 fn composer_chip_width(label: &str) -> Pixels {
     px((estimated_label_width(label) + TRIGGER_CHROME_WIDTH)
         .clamp(COMPOSER_CHIP_MIN_WIDTH, COMPOSER_CHIP_MAX_WIDTH))
+}
+
+/// 模型下拉弹层的宽度:按最长的选项估,保证点开能读到完整的 `provider / model`。
+///
+/// 不能沿用组件库默认值(那是「触发器多宽弹层多宽」,见 [`MODEL_MENU_MIN_WIDTH`]),
+/// 也不适合只给一个固定值:ACP agent 报上来的模型名长短差别很大,固定宽要么空一大片
+/// 要么还是截断。这里按内容估(标签与副标题取宽者),再夹进区间。
+fn model_menu_width(options: &[ComposerModelOption]) -> Pixels {
+    let longest = options
+        .iter()
+        .map(|option| {
+            let label = estimated_label_width(&option.display_label());
+            let hint = option
+                .hint
+                .as_deref()
+                .map(estimated_label_width)
+                .unwrap_or(0.0);
+            label.max(hint)
+        })
+        .fold(0.0_f32, f32::max);
+    px((longest + MODEL_MENU_CHROME_WIDTH).clamp(MODEL_MENU_MIN_WIDTH, MODEL_MENU_MAX_WIDTH))
 }
 
 fn menu_state_after_open_change(
@@ -1335,8 +1374,10 @@ impl AgentInput {
         let model_min_width = if self.is_running || self.pending_queue_blocked {
             96.0
         } else {
-            150.0
+            MODEL_TRIGGER_MIN_WIDTH
         };
+        // 触发器会被挤扁,弹层不能跟着缩 —— 见 `model_menu_width`。
+        let model_menu_width = model_menu_width(&self.model_options);
         let action_button_size = px(TOOLBAR_ACTION_BUTTON_SIZE);
 
         let mut group = h_flex()
@@ -1359,7 +1400,7 @@ impl AgentInput {
                 .min_w(px(model_min_width))
                 .h(action_button_size)
                 .overflow_hidden()
-                .child(self.render_model_menu(model_label))
+                .child(self.render_model_menu(model_label, model_menu_width))
                 .debug_selector(|| "agent-input-model-control".to_string()),
         );
         if is_git_repo {
@@ -1371,7 +1412,15 @@ impl AgentInput {
     /// 模型下拉:交给组件库的 `Select` —— 搜索框、滚动、键盘导航都由它提供。
     ///
     /// 选项不从这里传:它们在 `set_menu_options` 时置脏、`render` 里灌进 `model_select`。
-    fn render_model_menu(&self, placeholder: SharedString) -> impl IntoElement + use<> {
+    ///
+    /// `menu_width` 必须显式传:组件库默认让弹层跟着触发器宽度走,而这一行的触发器会被
+    /// 挤到 [`MODEL_TRIGGER_MIN_WIDTH`],弹层跟着缩就等于「点开也看不全」—— 那条
+    /// 「挤不下的点开看全文」的兜底会在最需要它的宽度上失效(见 [`model_menu_width`])。
+    fn render_model_menu(
+        &self,
+        placeholder: SharedString,
+        menu_width: Pixels,
+    ) -> impl IntoElement + use<> {
         Select::new(&self.model_select)
             .id("agent-model")
             .w_full()
@@ -1379,6 +1428,7 @@ impl AgentInput {
             .small()
             .placeholder(placeholder)
             .search_placeholder(t!("AgentUi.search_model").to_string())
+            .menu_width(menu_width)
             .menu_max_h(px(320.0))
             .disabled(self.is_running)
     }
@@ -3784,7 +3834,7 @@ impl Render for AgentInput {
 mod tests {
     use super::*;
     use crate::input::context::{ComposerModel, ComposerWorkspaceInfo, ComposerWorktreeState};
-    use gpui::{Modifiers, Pixels, TestAppContext, VisualTestContext};
+    use gpui::{Modifiers, Pixels, TestAppContext, VisualTestContext, size};
 
     /// 一行 7 项全部放下、不触发裁剪的最小宽度。
     ///
@@ -4192,6 +4242,90 @@ mod tests {
         assert!(
             running < px(80.0),
             "running trigger should stay narrower: {running:?}"
+        );
+    }
+
+    /// 「挤不下的项点开看全文」这条兜底,对模型下拉必须**真的**成立。
+    ///
+    /// 弹层宽度在 navop 侧没有直接观测点:组件库 `SelectOptions` 是私有的,弹层表面
+    /// 没有调试选择器,选项行又按内容定宽(量行宽量到的是标签,不是弹层)。唯一可用
+    /// 的位置效应是:`Positioner` 会把**放不进视口**的弹层从右缘往回压。所以先把窗口
+    /// 收窄到与输入卡同宽,再点开弹层,断言选项行退到了触发器左侧 —— 只有弹层确实
+    /// 比触发器宽(显式传的 320px,而非默认的「触发器多宽弹层多宽」)才会发生;
+    /// 退回 `Length::Auto` 时弹层与触发器同宽,纹丝不动。
+    #[gpui::test]
+    fn model_menu_popup_is_wider_than_the_squeezed_trigger(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            AgentInputLayoutRoot::with_composer_context(px(NARROW_USABLE_WIDTH), window, cx)
+        });
+        let cx: &mut VisualTestContext = cx;
+        // 默认测试窗口比输入卡宽,320px 的弹层随便放、不会触发右缘收敛;
+        // 收窄到同宽,「放不下」才真的发生。
+        cx.simulate_resize(size(px(NARROW_USABLE_WIDTH), px(400.0)));
+
+        let trigger = cx
+            .debug_bounds("agent-input-model-control")
+            .expect("model control should render");
+        // 前置条件:这一行必须真的把触发器挤到下限,否则下面的断言证明不了兜底。
+        assert!(
+            trigger.size.width <= px(MODEL_TRIGGER_MIN_WIDTH + 1.0),
+            "模型触发器应被挤到下限: trigger={trigger:?}, min={MODEL_TRIGGER_MIN_WIDTH}"
+        );
+        assert!(
+            cx.debug_bounds("agent-model-option").is_none(),
+            "弹层没打开时不该有选项行"
+        );
+
+        cx.simulate_click(trigger.center(), Modifiers::default());
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        let option = cx
+            .debug_bounds("agent-model-option")
+            .expect("点击模型控件后弹层应打开并渲染出选项行(选择器在 model_picker::ModelChoice::render)");
+        assert!(
+            option.origin.x < trigger.origin.x,
+            "弹层没有比触发器宽 —— 显式 `menu_width` 丢了(退回 `Length::Auto` 时弹层与触发器 \
+             同宽,不会被视口右缘往回压)。option={option:?}, trigger={trigger:?}"
+        );
+    }
+
+    /// 常量层面的守卫:弹层下限必须高于触发器下限,且放得下长标签。
+    ///
+    /// 它只守「数值没被改坏」,守不住「`.menu_width(...)` 还在不在」——
+    /// 那由 `model_menu_popup_is_wider_than_the_squeezed_trigger` 量真弹层来守。
+    #[test]
+    fn model_menu_stays_wider_than_a_squeezed_trigger() {
+        assert!(
+            MODEL_MENU_MIN_WIDTH > MODEL_TRIGGER_MIN_WIDTH,
+            "弹层下限必须大于触发器下限: menu={MODEL_MENU_MIN_WIDTH}, trigger={MODEL_TRIGGER_MIN_WIDTH}"
+        );
+        // ACP agent 报上来的模型名常见就有这么长,弹层下限要能放下整个标签。
+        let long = "9Router / deepseek-v3.1-terminus";
+        assert!(
+            MODEL_MENU_MIN_WIDTH >= estimated_label_width(long) + MODEL_MENU_CHROME_WIDTH,
+            "弹层下限放不下长标签: {long}"
+        );
+    }
+
+    /// 弹层宽度按最长选项估:短列表用下限(不塌成一条),超长收在上限内。
+    #[test]
+    fn model_menu_width_tracks_the_longest_option() {
+        let short = ComposerModelOption::new("m1", "p1", "OpenAI", "gpt-4o-mini");
+        assert_eq!(
+            model_menu_width(std::slice::from_ref(&short)),
+            px(MODEL_MENU_MIN_WIDTH),
+            "短标签用下限即可,不该比下限还窄"
+        );
+
+        let long = ComposerModelOption::new("m2", "p2", "p".repeat(40), "m".repeat(60));
+        assert_eq!(
+            model_menu_width(&[short, long]),
+            px(MODEL_MENU_MAX_WIDTH),
+            "超长标签要收在上限内,否则浮层会被窗口边缘收敛"
         );
     }
 

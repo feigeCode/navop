@@ -7,7 +7,9 @@
 //! 主标题是 `provider / model`，次要说明（`hint`）另起一行 —— 后者常常是模型的
 //! 人类可读名（ACP agent 会给），挤进主标题会变成一长串。
 
-use gpui::{App, IntoElement, ParentElement, SharedString, Styled, Window, div, px};
+use gpui::{
+    App, InteractiveElement, IntoElement, ParentElement, SharedString, Styled, Window, div, px,
+};
 use gpui_component::ActiveTheme;
 use gpui_component::IndexPath;
 use gpui_component::searchable_list::SearchableVec;
@@ -86,6 +88,12 @@ impl SelectItem for ModelChoice {
         let muted = cx.theme().muted_foreground;
         let mut column = v_flex()
             .gap(px(1.0))
+            // 弹层自己的宽度没有调试选择器 —— 它由组件库 `select` 内部渲染,拿不到挂点;
+            // 行宽又是按内容走的,量不到弹层。但行的**位置**在弹层里,所以这个选择器是
+            // 「弹层在哪」唯一可观测的缝:`agent_input` 的
+            // `model_menu_popup_is_wider_than_the_squeezed_trigger` 靠它确认点开后弹层
+            // 真的比触发器宽(被视口右缘往回压),而没有退回 `Length::Auto`。
+            .debug_selector(|| "agent-model-option".to_string())
             .child(div().text_sm().child(self.option.display_label()));
         if let Some(hint) = &self.option.hint {
             column = column.child(div().text_xs().text_color(muted).child(hint.clone()));
