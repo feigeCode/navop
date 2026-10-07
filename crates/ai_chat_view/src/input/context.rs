@@ -555,6 +555,12 @@ pub struct ComposerWorktreeState {
     pub enabled: bool,
     /// 当前 worktree 名；`enabled` 时用于 chip 文案。
     pub label: Option<SharedString>,
+    /// 已勾选但**尚未创建** —— 真正的创建推迟到本会话第一次发送
+    /// (见 [`AgentChatView::submit_with_window`](super::AgentChatView))，
+    /// 免得只是勾一下就在磁盘上留下 worktree、还把工作区根切走。
+    ///
+    /// `pending` 时没有 `label`(名字要等创建时才知道)，chip 显示通用文案。
+    pub pending: bool,
 }
 
 impl ComposerWorktreeState {
@@ -562,6 +568,16 @@ impl ComposerWorktreeState {
         Self {
             enabled,
             label: label.map(Into::into),
+            pending: false,
+        }
+    }
+
+    /// 已勾选、等首次对话时创建。
+    pub fn pending() -> Self {
+        Self {
+            enabled: true,
+            label: None,
+            pending: true,
         }
     }
 }

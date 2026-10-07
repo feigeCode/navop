@@ -14,7 +14,11 @@ use ai_chat_view::{
     ComposerBranchOption, ComposerContextSnapshot, ComposerContextSource, ComposerWorkspaceInfo,
     ComposerWorkspaceOption, ComposerWorktreeState, WorkbenchShell,
 };
-use gpui::{App, Entity, Global, WeakEntity, Window};
+use gpui::{
+    App, AppContext as _, AsyncApp, Entity, Global, SharedString, Task, WeakEntity, Window,
+};
+use gpui_component::{WindowExt as _, notification::Notification};
+use rust_i18n::t;
 use workspace_explorer::{WorkspaceExplorer, git};
 
 use super::ai_workbench::recent_workspace_roots;
@@ -32,6 +36,11 @@ struct ComposerGitCache {
     is_git_repo: bool,
     branches: Vec<ComposerBranchOption>,
     worktree: ComposerWorktreeState,
+    /// 「本会话要用独立 worktree」的用户意图：勾了但还没建。
+    ///
+    /// 勾选不再立刻建 worktree —— 那会在磁盘上留目录、还把工作区根切走。
+    /// 意图留在这里，等第一次发送时由 [`prepare_worktree`] 真正创建。
+    worktree_intent: bool,
 }
 
 impl Global for ComposerGitCache {}
@@ -45,6 +54,8 @@ pub(crate) fn refresh_composer_git(cx: &mut App) {
         return;
     };
     let explorer = cache.explorer.clone();
+    let worktree_intent = cache.worktree_intent;
+    let previous_root = cache.root.clone();
     let Some(explorer) = explorer.upgrade() else {
         return;
     };
@@ -72,6 +83,14 @@ pub(crate) fn refresh_composer_git(cx: &mut App) {
         }
         None => (false, Vec::new(), ComposerWorktreeState::default()),
     };
+    // 意图的两条出路：
+    // - 已经跑在 worktree 上 → 达成，落成常态的 `worktree.enabled`；
+    // - 换了工作区（首次填充之后）→ 作废，意图属于某一个仓库，用户切走就是想
+    //   在新地方干活，不该还挂着旧仓库的 pending。
+    let root_changed = previous_root
+        .as_deref()
+        .is_some_and(|previous| previous != root.as_path());
+    let worktree_intent = worktree_intent && !worktree.enabled && !root_changed;
     cx.set_global(ComposerGitCache {
         explorer: explorer.downgrade(),
         root: Some(root),
@@ -79,6 +98,7 @@ pub(crate) fn refresh_composer_git(cx: &mut App) {
         is_git_repo,
         branches,
         worktree,
+        worktree_intent,
     });
 }
 
@@ -111,9 +131,13 @@ fn current_worktree_state(
 ///
 /// 四个动作闭包都自持外壳弱引用：外壳构造早于本函数，且切换工作区必须走外壳的
 /// 既有语义（「会话已有消息就开新对话」），不能在这里重写一遍。
+///
+/// `worktree_root` 是新建 worktree 的落点：`None` 用 `~/.navop/worktrees`
+/// （生产路径），测试注入临时目录以免污染用户 home。
 pub(crate) fn composer_context_source(
     shell: WeakEntity<WorkbenchShell>,
     explorer: Entity<WorkspaceExplorer>,
+    worktree_root: Option<PathBuf>,
     cx: &mut App,
 ) -> ComposerContextSource {
     cx.set_global(ComposerGitCache {
@@ -123,6 +147,7 @@ pub(crate) fn composer_context_source(
         is_git_repo: false,
         branches: Vec::new(),
         worktree: ComposerWorktreeState::default(),
+        worktree_intent: false,
     });
     refresh_composer_git(cx);
 
@@ -167,11 +192,14 @@ pub(crate) fn composer_context_source(
         let (is_git_repo, branches, worktree) = cx
             .try_global::<ComposerGitCache>()
             .map(|cache| {
-                (
-                    cache.is_git_repo,
-                    cache.branches.clone(),
-                    cache.worktree.clone(),
-                )
+                // 勾了但还没建：chip 要显示待创建（勾选态 + 「首次对话时创建」的
+                // 提示），而不是假装已经有一个 worktree 在跑。
+                let worktree = if cache.worktree_intent && !cache.worktree.enabled {
+                    ComposerWorktreeState::pending()
+                } else {
+                    cache.worktree.clone()
+                };
+                (cache.is_git_repo, cache.branches.clone(), worktree)
             })
             .unwrap_or_default();
 
@@ -254,41 +282,85 @@ pub(crate) fn composer_context_source(
     let worktree_explorer = explorer.clone();
     let worktree_shell = shell.clone();
     let toggle_worktree = Arc::new(move |enabled: bool, cx: &mut App| {
+        if enabled {
+            // 只记意图，**不建** worktree：勾一下就在磁盘上留目录、还把工作区根
+            // 切走（连带丢弃 ACP 连接、重载项目 skills），代价太大。
+            // 真正创建在第一次发送时，见 `prepare_worktree`。
+            if set_worktree_intent(cx, true) {
+                refresh_composer_context(&worktree_shell, cx);
+            }
+            return;
+        }
+        if take_worktree_intent(cx) {
+            // 还没建就取消：纯撤销，磁盘上没有任何东西要收拾。
+            refresh_composer_context(&worktree_shell, cx);
+            return;
+        }
         let Some(repository) =
             worktree_explorer.read_with(cx, |explorer, _| explorer.repository().cloned())
         else {
             return;
         };
-        let target = if enabled {
-            // 新建的 worktree 落在 `~/.navop/worktrees/<项目>-<随机>`，
-            // 分支带 `navop/` 前缀（由 workspace_explorer 统一管理）。
-            match git::create_worktree(&repository, &repository.root, None) {
-                Ok(created) => created.worktree_root,
-                Err(error) => {
-                    tracing::warn!(%error, "创建 worktree 失败（来自输入框底栏）");
-                    return;
-                }
-            }
-        } else {
-            // 关掉只切回主工作区，**不删除** worktree：里面可能有没提交的改动，
-            // 删除不可逆，不能由一个复选框的单击决定。
-            match git::list_worktrees(&repository) {
-                Ok(entries) => match entries.into_iter().find(|entry| entry.is_main) {
-                    Some(entry) => entry.path,
-                    None => return,
-                },
-                Err(error) => {
-                    tracing::warn!(%error, "读取 worktree 列表失败（来自输入框底栏）");
-                    return;
-                }
+        // 已经建出来了，关掉勾选只切回主工作区，**不删除** worktree：里面可能有
+        // 没提交的改动，删除不可逆，不能由一个复选框的单击决定。
+        let target = match git::list_worktrees(&repository) {
+            Ok(entries) => match entries.into_iter().find(|entry| entry.is_main) {
+                Some(entry) => entry.path,
+                None => return,
+            },
+            Err(error) => {
+                tracing::warn!(%error, "读取 worktree 列表失败（来自输入框底栏）");
+                return;
             }
         };
         worktree_explorer.update(cx, |explorer, cx| explorer.set_root_manually(target, cx));
         refresh_composer_git(cx);
-        if let Some(shell) = worktree_shell.upgrade() {
-            shell.update(cx, |shell, cx| shell.refresh_composer_context(cx));
-        }
+        refresh_composer_context(&worktree_shell, cx);
     });
+
+    let prepare_explorer = explorer.clone();
+    let prepare_worktree_root = worktree_root;
+    let prepare_worktree = Arc::new(move |cx: &mut App| -> Task<Result<(), SharedString>> {
+        let explorer = prepare_explorer.clone();
+        let Some(repository) = explorer.read_with(cx, |explorer, _| explorer.repository().cloned())
+        else {
+            return Task::ready(Err(SharedString::from("当前工作区不是 Git 仓库")));
+        };
+        // `git worktree add` 是子进程，大仓库要数秒：放后台跑，别冻结输入框。
+        let worktree_root = prepare_worktree_root.clone();
+        let create = cx.background_spawn(async move {
+            let created = match worktree_root.as_deref() {
+                Some(root) => git::create_worktree_in(root, &repository, &repository.root, None),
+                None => git::create_worktree(&repository, &repository.root, None),
+            };
+            created
+                .map(|created| created.worktree_root)
+                .map_err(|error| error.to_string())
+        });
+        let explorer = explorer.downgrade();
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            let root = create.await.map_err(SharedString::from)?;
+            // 只切根：`apply_root_change` 会级联 `RootChanged`，宿主订阅再把根同步给
+            // 外壳与聊天面板 —— 视图是在那一步之后才继续发那条被拦下的提交的。
+            explorer
+                .update(cx, |explorer, cx| explorer.set_root_manually(root, cx))
+                .map_err(|_| SharedString::from("工作区已关闭"))?;
+            Ok(())
+        })
+    });
+
+    // 报错交给宿主：通知要用组件库的窗口状态，视图那边不该背这个依赖。
+    let report_worktree_failure = Arc::new(
+        |message: &SharedString, window: &mut Window, cx: &mut App| {
+            window.push_notification(
+                Notification::error(
+                    t!("Home.worktree_create_failed", error = message.as_ref()).to_string(),
+                )
+                .autohide(false),
+                cx,
+            );
+        },
+    );
 
     ComposerContextSource {
         snapshot,
@@ -296,6 +368,42 @@ pub(crate) fn composer_context_source(
         browse_workspace,
         select_branch,
         toggle_worktree,
+        prepare_worktree,
+        report_worktree_failure,
+    }
+}
+
+/// 改写「要用独立 worktree」的意图；返回是否发生了实际变化。
+fn set_worktree_intent(cx: &mut App, intent: bool) -> bool {
+    if cx
+        .try_global::<ComposerGitCache>()
+        .is_none_or(|cache| cache.worktree_intent == intent)
+    {
+        return false;
+    }
+    cx.global_mut::<ComposerGitCache>().worktree_intent = intent;
+    true
+}
+
+/// 清掉「要用独立 worktree」的意图；返回此前是否有意图。
+///
+/// 与 [`set_worktree_intent`] 的区别是它回答「刚才挂着意图吗」—— 取消勾选时靠这个
+/// 区分「纯撤销」和「已经建出来了，得切回主工作区」。
+fn take_worktree_intent(cx: &mut App) -> bool {
+    if cx
+        .try_global::<ComposerGitCache>()
+        .is_none_or(|cache| !cache.worktree_intent)
+    {
+        return false;
+    }
+    cx.global_mut::<ComposerGitCache>().worktree_intent = false;
+    true
+}
+
+/// 让外壳重新取一次底栏快照（意图 / 根变化后）。
+fn refresh_composer_context(shell: &WeakEntity<WorkbenchShell>, cx: &mut App) {
+    if let Some(shell) = shell.upgrade() {
+        shell.update(cx, |shell, cx| shell.refresh_composer_context(cx));
     }
 }
 
@@ -337,7 +445,8 @@ mod tests {
     use ai_chat_view::{
         WorkbenchPanelEntry, WorkbenchPanelKind, WorkbenchShellConfig, WorkbenchState,
     };
-    use gpui::{AppContext as _, TestAppContext, VisualTestContext};
+    use gpui::{TestAppContext, VisualTestContext};
+    use std::sync::Mutex;
     use workspace_explorer::{WorkspaceEditor, WorkspaceExplorerConfig};
 
     use super::*;
@@ -407,7 +516,7 @@ mod tests {
 
         let source = {
             let shell_weak = shell.downgrade();
-            cx.update(move |_window, cx| composer_context_source(shell_weak, explorer, cx))
+            cx.update(move |_window, cx| composer_context_source(shell_weak, explorer, None, cx))
         };
         let snapshot = source.snapshot.clone();
 
@@ -473,5 +582,243 @@ mod tests {
         // 首次装机 / 根被清空
         assert!(composer_cache_is_stale(None, Some(next), None, false));
         assert!(composer_cache_is_stale(Some(previous), None, None, false));
+    }
+
+    /// 建一个真 Git 仓库的临时工作区；返回（保活用的 TempDir，仓库根）。
+    ///
+    /// `git worktree add` 要求仓库至少有一个提交，否则报
+    /// `fatal: invalid reference: HEAD`。
+    ///
+    /// 仓库落在具名子目录 `project/` 而不是 TempDir 自身：`tempfile` 的目录名以 `.`
+    /// 开头（`.tmpJtcIrf`），而 worktree 分支名是用仓库目录名拼的 ——
+    /// `navop/.tmpJtcIrf-bd946841` 会被 git 判为
+    /// `fatal: ... is not a valid branch name`（路径分量不许以 `.` 开头）。
+    fn git_workspace() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("temp workspace");
+        let root = dir.path().join("project");
+        std::fs::create_dir(&root).expect("create project dir");
+        let run_git = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&root)
+                .status()
+                .expect("run git");
+            assert!(status.success(), "git {args:?} failed");
+        };
+        run_git(&["init", "-q"]);
+        run_git(&["config", "user.email", "tests@navop.invalid"]);
+        run_git(&["config", "user.name", "Navop Tests"]);
+        std::fs::write(root.join("README.md"), "hello\n").expect("write README");
+        run_git(&["add", "."]);
+        run_git(&["commit", "-q", "-m", "init"]);
+        (dir, root)
+    }
+
+    /// 仓库里注册的 worktree 数（含主工作区）。
+    fn worktree_count(root: &Path) -> usize {
+        let repository = git::discover_repository(root)
+            .expect("discover repository")
+            .expect("仓库存在");
+        git::list_worktrees(&repository)
+            .expect("list worktrees")
+            .len()
+    }
+
+    /// 指向临时仓库的 Explorer + 外壳，以及接好线的上下文栏数据源。
+    ///
+    /// `worktree_root` 注入新建 worktree 的落点。生产路径是 `~/.navop/worktrees`，
+    /// 测试必须换成临时目录：在那个路径建 worktree 不只会留垃圾目录，还会往这个
+    /// 仓库的 `.git/worktrees` 里注册一条指向临时目录、随后就失效的条目。
+    fn composer_fixture<'a>(
+        root: &Path,
+        worktree_root: Option<PathBuf>,
+        cx: &'a mut TestAppContext,
+    ) -> (
+        Entity<WorkbenchShell>,
+        ComposerContextSource,
+        &'a mut VisualTestContext,
+    ) {
+        let root = root.to_path_buf();
+        let explorer = cx.update(|cx| {
+            let theme = workspace_theme(cx);
+            let editor = cx.new(|_| WorkspaceEditor::new(theme));
+            let root = root.clone();
+            cx.new(|cx| {
+                WorkspaceExplorer::new(
+                    WorkspaceExplorerConfig {
+                        root,
+                        editor,
+                        theme,
+                        show_frame_controls: false,
+                        backend: None,
+                    },
+                    cx,
+                )
+            })
+        });
+
+        let explorer_for_shell = explorer.clone();
+        let (shell, cx) = cx.add_window_view(move |window, cx| {
+            WorkbenchShell::new(
+                WorkbenchShellConfig {
+                    panels: vec![WorkbenchPanelEntry::new(
+                        WorkbenchPanelKind::Files,
+                        explorer_for_shell,
+                    )],
+                    session_nav: None,
+                    session_source: None,
+                    initial_state: WorkbenchState::new(WorkbenchPanelKind::Files),
+                    theme: None,
+                    subscriptions: Vec::new(),
+                    workspace_root: None,
+                },
+                window,
+                cx,
+            )
+        });
+        let shell_weak = shell.downgrade();
+        let source = cx.update(move |_window, cx| {
+            composer_context_source(shell_weak, explorer, worktree_root, cx)
+        });
+        (shell, source, cx)
+    }
+
+    /// 勾选 Worktree 只记意图：磁盘上不许冒出 worktree，根也不许被切走。
+    ///
+    /// 原来的行为是一勾就 `create_worktree` + `set_root_manually` —— 勾一下就在
+    /// `~/.navop/worktrees` 里留个目录，还把工作区根换掉（连带丢弃 ACP 连接、
+    /// 重载项目 skills）。创建推迟到第一次发送，见
+    /// [`the_first_submission_creates_the_worktree`]。
+    #[gpui::test]
+    fn toggling_worktree_on_only_records_the_intent(cx: &mut TestAppContext) {
+        cx.update(|cx| gpui_component::init(cx));
+
+        let (_workspace, root) = git_workspace();
+        let (_shell, source, cx) = composer_fixture(&root, None, cx);
+        // Explorer 异步发现仓库；底栏的分支 / Worktree 入口依赖它。
+        cx.run_until_parked();
+
+        assert!(
+            cx.update(|_window, cx| (source.snapshot)(cx))
+                .workspace
+                .is_git_repo,
+            "前置：临时仓库必须被认出来，否则 Worktree 入口根本不存在"
+        );
+        assert_eq!(1, worktree_count(&root), "前置：只有主工作区");
+
+        let toggle = source.toggle_worktree.clone();
+        cx.update(|_window, cx| toggle(true, cx));
+
+        assert_eq!(1, worktree_count(&root), "勾选本身不该在磁盘上建东西");
+        let snapshot = cx.update(|_window, cx| (source.snapshot)(cx));
+        assert!(snapshot.worktree.enabled, "勾选态要亮着");
+        assert!(
+            snapshot.worktree.pending,
+            "还没创建，chip 必须处于「待创建」"
+        );
+        assert!(
+            snapshot.worktree.label.is_none(),
+            "worktree 名字要等创建时才有"
+        );
+
+        let toggle = source.toggle_worktree.clone();
+        cx.update(|_window, cx| toggle(false, cx));
+
+        let snapshot = cx.update(|_window, cx| (source.snapshot)(cx));
+        assert!(!snapshot.worktree.enabled, "取消勾选后不该还亮着");
+        assert!(!snapshot.worktree.pending, "意图要一起清掉");
+        assert_eq!(1, worktree_count(&root), "取消勾选同样不该动磁盘");
+    }
+
+    /// 第一次发送才真正建 worktree，并把工作区根切过去。
+    #[gpui::test]
+    fn the_first_submission_creates_the_worktree(cx: &mut TestAppContext) {
+        cx.update(|cx| gpui_component::init(cx));
+
+        let (_workspace, root) = git_workspace();
+        let worktrees = tempfile::tempdir().expect("worktree root");
+        let (_shell, source, cx) =
+            composer_fixture(&root, Some(worktrees.path().to_path_buf()), cx);
+        cx.run_until_parked();
+
+        let toggle = source.toggle_worktree.clone();
+        cx.update(|_window, cx| toggle(true, cx));
+        assert_eq!(1, worktree_count(&root), "勾选本身不建");
+
+        let prepare = source.prepare_worktree.clone();
+        let task = cx.update(|_window, cx| prepare(cx));
+        // 把 `Result` 捞回来：只看「任务跑完了」会把 `Err` 当成成功，掩盖真正的失败。
+        let outcome = Arc::new(Mutex::new(None::<Result<(), SharedString>>));
+        let outcome_for_wait = outcome.clone();
+        cx.update(|_window, cx| {
+            cx.spawn(async move |_cx: &mut AsyncApp| {
+                let result = task.await;
+                *outcome_for_wait.lock().expect("lock outcome") = Some(result);
+            })
+            .detach();
+        });
+        // 后台 git 子进程 + 主线程切根：轮询推到完成。
+        for _ in 0..300 {
+            if outcome.lock().expect("lock outcome").is_some() {
+                break;
+            }
+            cx.run_until_parked();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let result = outcome
+            .lock()
+            .expect("lock outcome")
+            .clone()
+            .expect("准备 worktree 超时");
+        assert!(result.is_ok(), "prepare_worktree 失败：{result:?}");
+
+        assert_eq!(2, worktree_count(&root), "第一次发送才建出 worktree");
+        let switched = cx.update(|_window, cx| {
+            cx.try_global::<ComposerGitCache>()
+                .and_then(|cache| cache.explorer.upgrade())
+                .map(|explorer| explorer.read(cx).root().to_path_buf())
+        });
+        let switched = switched.expect("explorer is alive");
+        assert_ne!(root, switched, "根必须切到新 worktree");
+        let worktrees_root = std::fs::canonicalize(worktrees.path()).expect("canonical root");
+        assert!(
+            switched.starts_with(&worktrees_root),
+            "worktree 要建在注入的根下，实际落到了 {switched:?}"
+        );
+
+        // 线上这一步由 `RootChanged` 的订阅者做（`main/src/home/ai_workbench.rs`）；
+        // fixture 没注册订阅，手动补上。
+        //
+        // 但得先等 Explorer 在后台把仓库重新发现出来：`apply_root_change` 会把
+        // `repository` 清成 `None`，再异步从新根加载。抢在那之前刷新，看到的还是
+        // 空状态（`is_git_repo == false`），断言会随后台任务的快慢飘。
+        for _ in 0..300 {
+            let rediscovered = cx.update(|_window, cx| {
+                cx.try_global::<ComposerGitCache>()
+                    .and_then(|cache| cache.explorer.upgrade())
+                    .and_then(|explorer| {
+                        explorer
+                            .read(cx)
+                            .repository()
+                            .map(|repository| repository.root.clone())
+                    })
+            });
+            if rediscovered
+                .as_deref()
+                .is_some_and(|repo_root| repo_root != root)
+            {
+                break;
+            }
+            cx.run_until_parked();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        cx.update(|_window, cx| refresh_composer_git(cx));
+        let snapshot = cx.update(|_window, cx| (source.snapshot)(cx));
+        assert!(
+            snapshot.worktree.enabled,
+            "创建完就该显示「跑在 worktree 上」"
+        );
+        assert!(!snapshot.worktree.pending, "意图已经达成，不该还标着待创建");
     }
 }

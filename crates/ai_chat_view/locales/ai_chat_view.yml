@@ -1143,6 +1143,10 @@ AgentUi:
     en: Run this session in its own Git worktree
     zh-CN: 在独立的 Git worktree 中运行本会话
     zh-HK: 在獨立的 Git worktree 中執行本工作階段
+  composer_worktree_pending:
+    en: Creates the Git worktree when you send the first message
+    zh-CN: 发送第一条消息时才创建 Git worktree
+    zh-HK: 傳送第一則訊息時才建立 Git worktree
   composer_permission:
     en: Permission
     zh-CN: 权限

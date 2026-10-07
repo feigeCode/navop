@@ -1274,6 +1274,10 @@ impl AgentInput {
     ///
     /// 勾选态来自 [`ComposerWorktreeState::enabled`];切换只 emit
     /// [`AgentInputEvent::ToggleWorktree`],建/切 worktree 由宿主完成。
+    ///
+    /// 勾选后不会立刻创建:宿主只记下意图,等本会话第一次发送时才建
+    /// (见 `ComposerWorktreeState::pending`)。所以待创建阶段的 tooltip
+    /// 要改成「首次对话时创建」,否则用户会以为勾完就已经建好了。
     fn render_worktree_toggle(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let view = cx.entity();
         let label = self
@@ -1283,6 +1287,11 @@ impl AgentInput {
             .clone()
             .unwrap_or_else(|| SharedString::from(t!("AgentUi.composer_worktree").to_string()));
         let checked = self.context.worktree.enabled;
+        let hint = if self.context.worktree.pending {
+            t!("AgentUi.composer_worktree_pending").to_string()
+        } else {
+            t!("AgentUi.composer_worktree_hint").to_string()
+        };
 
         div()
             .debug_selector(|| "agent-input-worktree".to_string())
@@ -1297,7 +1306,7 @@ impl AgentInput {
                 Checkbox::new("agent-worktree-toggle")
                     .checked(checked)
                     .disabled(self.is_running)
-                    .tooltip(t!("AgentUi.composer_worktree_hint").to_string())
+                    .tooltip(hint)
                     .label(label)
                     .on_click(move |checked, _window, cx| {
                         let enabled = *checked;

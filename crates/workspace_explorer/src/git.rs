@@ -109,7 +109,11 @@ pub fn create_worktree(
 }
 
 /// 在指定根目录下创建 worktree；根目录可注入，便于测试不污染用户目录。
-pub(crate) fn create_worktree_in(
+///
+/// 生产路径走 [`create_worktree`]（落在 `~/.navop/worktrees`）。宿主传注入根是为了
+/// 让测试能把 worktree 建到临时目录：真建到用户 home 不只会留垃圾目录，还会在
+/// 用户真实仓库的 `.git/worktrees` 里注册一条指向临时目录、随后就失效的条目。
+pub fn create_worktree_in(
     worktree_root: &Path,
     repository: &GitRepository,
     project_root: &Path,

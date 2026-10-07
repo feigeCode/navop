@@ -293,7 +293,7 @@ pub(crate) fn build_ai_workbench_shell(
 
     // 输入框下方上下文栏（工作区 / 分支 / Worktree）：数据与动作都在宿主侧，
     // 视图只做客后转发。必须在 shell 建好之后接线——动作闭包自持它的弱引用。
-    let composer_source = composer_context_source(shell.downgrade(), explorer.clone(), cx);
+    let composer_source = composer_context_source(shell.downgrade(), explorer.clone(), None, cx);
     shell.update(cx, |shell, cx| {
         shell.set_composer_context_source(composer_source, cx)
     });

@@ -174,6 +174,10 @@ Home:
     en: "Open from Home"
     zh-CN: "从主页打开"
     zh-HK: "從主頁開啟"
+  worktree_create_failed:
+    en: "Could not create the Git worktree, message not sent: %{error}"
+    zh-CN: "Git worktree 创建失败，消息未发送：%{error}"
+    zh-HK: "Git worktree 建立失敗，訊息未傳送：%{error}"
   tree_filter_independent:
     en: "Filters are independent from Home"
     zh-CN: "筛选独立于主页"

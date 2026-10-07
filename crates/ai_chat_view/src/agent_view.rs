@@ -889,7 +889,25 @@ pub struct ComposerContextSource {
     /// 切换分支（分支名，可能与远程分支同名）。
     pub select_branch: std::sync::Arc<dyn Fn(&SharedString, &mut gpui::App) + 'static>,
     /// 切换「本会话跑在独立 worktree 上」。
+    ///
+    /// 勾选只是记下意图（宿主在快照里回 `ComposerWorktreeState::pending`），
+    /// 真正的创建发生在第一次提交之前，见 [`Self::prepare_worktree`]。
     pub toggle_worktree: std::sync::Arc<dyn Fn(bool, &mut gpui::App) + 'static>,
+    /// 创建待建的 worktree（首次提交前调用，见 [`AgentChatView::defer_submission_for_worktree`]）。
+    ///
+    /// 返回的 task 在**失败**时给出原因，视图据此中止这次发送并把内容还回输入框；
+    /// 成功时它只代表 `git worktree add` 跑完了 —— 换根要经过
+    /// `set_root_manually` → `RootChanged` 的**延后派发**，真正落地在
+    /// [`AgentChatView::set_workspace_root`]，视图在那里接着发这条被拦下的提交。
+    /// 若在这里就继续提交，ACP 会话仍绑在旧根上，等于没切。
+    pub prepare_worktree:
+        std::sync::Arc<dyn Fn(&mut gpui::App) -> Task<Result<(), SharedString>> + 'static>,
+    /// 告诉用户「worktree 没建起来、这条消息没发出去」。
+    ///
+    /// 由宿主弹，而不是视图自己调组件库的通知：通知需要组件库的窗口状态，
+    /// 视图只负责把话递出去（与 `browse_workspace` 弹宿主的目录选择器同一套路）。
+    pub report_worktree_failure:
+        std::sync::Arc<dyn Fn(&SharedString, &mut gpui::Window, &mut gpui::App) + 'static>,
 }
 
 /// 创建 [`AgentChatView`] 所需的配置。
@@ -1202,6 +1220,11 @@ pub struct AgentChatView {
     /// 宿主注入的输入框下方上下文栏数据源（工作区 / 分支 / Worktree）。
     /// `None` 时底栏只渲染「权限级别」一项，其余入口不出现。
     composer_context_source: Option<ComposerContextSource>,
+    /// 被「worktree 待创建」拦下、等根切过去之后再发的提交（先来先发）。
+    ///
+    /// 用队列而不是单个槽位：创建要秒级（`git worktree add` 是子进程），这期间
+    /// 用户完全可能再发一条；单槽位会把上一条静默覆盖掉。
+    gated_submissions: VecDeque<PendingSubmission>,
     /// 滚动三态（跟随尾巴 / 阅读历史 / 锚点跳转中）。
     scroll: TranscriptScrollState,
     /// 过程块展开态覆盖表；按稳定 id 记录用户的显式展开/收起。
@@ -1572,6 +1595,7 @@ impl AgentChatView {
             sidebar_suppressed: false,
             workbench_toggles: None,
             composer_context_source: None,
+            gated_submissions: VecDeque::new(),
             scroll: TranscriptScrollState::default(),
             expansion: ExpansionState::default(),
             turn_timings: TurnTimings::new(),
@@ -2238,7 +2262,7 @@ impl AgentChatView {
                 mentions,
                 images,
             } => {
-                self.submit(text, mentions, images, cx);
+                self.submit_with_window(text, mentions, images, window, cx);
             }
             AgentInputEvent::Stop => self.stop(cx),
             AgentInputEvent::SelectTarget { id } => {
@@ -2382,6 +2406,129 @@ impl AgentChatView {
             return;
         };
         window.defer(cx, move |window, cx| action(&source, window, cx));
+    }
+
+    /// 用户从输入框提交 —— 先过一道「worktree 待创建」的闸。
+    ///
+    /// 与 [`Self::submit`] 分开是因为闸门要 [`Window`]：worktree 创建失败时得把
+    /// 文字与附件**还回**输入框并弹提示。而 `submit` 还被
+    /// [`Self::send_external_message`]（侧栏 ask_ai，手上没有窗口）复用，不能
+    /// 给它的签名加窗口。
+    fn submit_with_window(
+        &mut self,
+        text: String,
+        mentions: Vec<MentionItem>,
+        images: Vec<crate::ImageAttachment>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.defer_submission_for_worktree(&text, &mentions, &images, window, cx) {
+            return;
+        }
+        self.submit(text, mentions, images, cx);
+    }
+
+    /// 这次提交是不是要先建 worktree；是则拦下并返回 `true`。
+    ///
+    /// 勾选 Worktree 只记意图，磁盘上还什么都没有（快照里的
+    /// [`ComposerWorktreeState::pending`]）。到第一次发送才真正创建 ——
+    /// 否则「只是勾一下」就会在磁盘上留一个 worktree、还把工作区根切走。
+    ///
+    /// 创建期间这条提交挂在 [`Self::gated_submissions`] 上等根落地：ACP 会话绑的是
+    /// 工作区根，根没换过去就发等于跑在旧工作区上。成功由
+    /// [`Self::set_workspace_root`] 接着发，失败走 [`Self::abort_gated_submission`]。
+    fn defer_submission_for_worktree(
+        &mut self,
+        text: &str,
+        mentions: &[MentionItem],
+        images: &[crate::ImageAttachment],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(source) = self.composer_context_source.clone() else {
+            return false;
+        };
+        // 只有第一条要开工：创建是实打实的 `git worktree add`，多调一次就多建一个
+        // worktree。创建期间后来的提交只排队，等根切过去一起按序发。
+        let preparing = !self.gated_submissions.is_empty();
+        if !preparing && !(source.snapshot)(cx).worktree.pending {
+            return false;
+        }
+        self.gated_submissions.push_back(PendingSubmission {
+            text: text.to_string(),
+            mentions: mentions.to_vec(),
+            images: images.to_vec(),
+        });
+        if preparing {
+            cx.notify();
+            return true;
+        }
+        // 创建是后台 git 子进程（大仓库要数秒），等它跑完再发，别冻结输入框。
+        let task = (source.prepare_worktree)(cx);
+        cx.spawn_in(window, async move |this, cx| {
+            // 成功不在这里做什么：换根是延后派发的，等 `set_workspace_root` 落地后
+            // 由它接着发（在这儿发会用旧根）。
+            if let Err(message) = task.await {
+                let _ = this.update_in(cx, |this, window, cx| {
+                    this.abort_gated_submission(message, window, cx);
+                });
+            }
+        })
+        .detach();
+        true
+    }
+
+    /// worktree 创建失败：中止这次发送，把内容还回输入框，并把原因交给宿主展示。
+    ///
+    /// 「中止」而不是「降级到主工作区继续发」：静默换个地方跑，用户会以为自己在
+    /// 隔离的 worktree 里，实际改动落在主工作区上。勾选态**保留**，用户可以直接
+    /// 再点一次发送重试，或取消勾选改用主工作区。
+    fn abort_gated_submission(
+        &mut self,
+        message: SharedString,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.gated_submissions.is_empty() {
+            return;
+        }
+        // 排队期间攒下的几条一起还回去：输入框只有一个，按发送顺序用换行拼起来，
+        // 附件合到一起。丢消息比这难看多了。
+        let gated: Vec<PendingSubmission> = self.gated_submissions.drain(..).collect();
+        let text = gated
+            .iter()
+            .map(|submission| submission.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let images = gated
+            .into_iter()
+            .flat_map(|submission| submission.images)
+            .collect::<Vec<_>>();
+        self.input.update(cx, |input, cx| {
+            input.restore_to_composer(&text, images, window, cx);
+        });
+        if let Some(source) = self.composer_context_source.clone() {
+            (source.report_worktree_failure)(&message, window, cx);
+        }
+        cx.notify();
+    }
+
+    /// 根已经切到新 worktree：把被拦下的提交按顺序发出去。
+    ///
+    /// 手上只有 [`Self::apply_workspace_root`] 一个调用点（它由
+    /// [`Self::set_workspace_root`] 在「根落地」那一步调到）而不是 worktree 创建
+    /// 完成的时刻 —— 创建完成时 `RootChanged` 还只是入队（`Effect::Emit` 延后派发），
+    /// 视图这边的根、skills、ACP 连接都还是旧的。
+    fn resume_gated_submission(&mut self, cx: &mut Context<Self>) {
+        if self.gated_submissions.is_empty() {
+            return;
+        }
+        // 先取干净再逐条发：第一条会正常启动，后面的在 `submit` 里看到本会话已在
+        // 运行就自己排队 —— 复用既有队列，顺序不会乱。
+        let gated: Vec<PendingSubmission> = self.gated_submissions.drain(..).collect();
+        for submission in gated {
+            self.submit(submission.text, submission.mentions, submission.images, cx);
+        }
     }
 
     fn submit(
@@ -4058,13 +4205,27 @@ impl AgentChatView {
         if self.workspace_root == root {
             return;
         }
+        self.apply_workspace_root(root.clone(), cx);
+        AppSettings::update_and_save(cx, |settings| {
+            settings.ai_chat.last_workspace_root = Some(root);
+        });
+    }
+
+    /// 换根的后半程，也是被拦提交真正落地的地方：技能重载、ACP 连接作废、
+    /// 底栏重算，最后把「等这次换根」的提交接着发出去。
+    ///
+    /// 与 [`Self::set_workspace_root`] 分开，是为了让它能在单测里被直接驱动 ——
+    /// 后者会写用户真实的 `settings.json`，测试不能碰。**不要**为了省一次调用
+    /// 把它合回去：合回去就等于这条路径没有测试覆盖（`RootChanged` 那条链上的
+    /// 「提交接手」会静默失效，而测试照样全绿）。
+    ///
+    /// 用「根落地」而不是「worktree 创建完成」当触发点：创建完成时 `RootChanged`
+    /// 才刚入队（`Effect::Emit` 延后派发），技能与 ACP 连接都还是旧根的。
+    fn apply_workspace_root(&mut self, root: std::path::PathBuf, cx: &mut Context<Self>) {
         self.workspace_root = root.clone();
         // 项目级 skills 跟随工作区；选择集合只保留仍然存在的路径。
         self.skills.reload_for_workspace(&root);
         self.sync_session_skills();
-        AppSettings::update_and_save(cx, |settings| {
-            settings.ai_chat.last_workspace_root = Some(root);
-        });
         // 换工作区会丢弃旧连接；连接前的模型选择也不再适用于新 agent 会话。
         self.pending_acp_model = None;
         self.cancel_acp_auto_reconnect();
@@ -4074,6 +4235,9 @@ impl AgentChatView {
         self.clear_acp_sessions();
         self.sync_composer(cx);
         cx.notify();
+        // 副作用：若用户在等待那一两秒里手动切了工作区，这条提交会落在新根上 ——
+        // 概率极低，且用户本来就切到了那里，比把内容憋在 `gated_submissions` 里强。
+        self.resume_gated_submission(cx);
     }
 
     pub fn restore_persisted_acp(&mut self, cx: &mut Context<Self>) {
@@ -7740,6 +7904,7 @@ mod tests {
     };
     use one_core::llm::{ProviderConfig, ProviderType};
     use serde_json::json;
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct WriteTool;
@@ -15290,6 +15455,11 @@ mod tests {
                 view_for_action.update(cx, |view, cx| view.refresh_composer_context(cx));
             }),
             toggle_worktree: Arc::new(|_: bool, _: &mut gpui::App| {}),
+            // 这条用例只关心 chip 动作的重入，不涉及 worktree 创建。
+            prepare_worktree: Arc::new(|_: &mut gpui::App| Task::ready(Ok(()))),
+            report_worktree_failure: Arc::new(
+                |_: &SharedString, _: &mut gpui::Window, _: &mut gpui::App| {},
+            ),
         };
         view.update_in(cx, |view, _window, cx| {
             view.set_composer_context_source(source, cx)
@@ -15308,6 +15478,243 @@ mod tests {
             calls.load(Ordering::SeqCst),
             "宿主动作必须照旧执行，只是延后到租借释放之后"
         );
+    }
+
+    /// 造一个「Worktree 已勾选、待创建」的上下文源。
+    ///
+    /// `prepare` 是「第一次发送时才创建」那一步的替身，测试用它分别走成功与失败两条路。
+    /// 返回的第二个值是宿主侧「上报失败」的记录 —— 线上那一步会弹通知，这里只记下来
+    /// 供断言。
+    fn source_with_pending_worktree(
+        prepare: Arc<dyn Fn(&mut gpui::App) -> Task<Result<(), SharedString>>>,
+    ) -> (ComposerContextSource, Arc<Mutex<Vec<SharedString>>>) {
+        let reported = Arc::new(Mutex::new(Vec::new()));
+        let reported_for_source = reported.clone();
+        let source = ComposerContextSource {
+            snapshot: Arc::new(|_: &mut gpui::App| ComposerContextSnapshot {
+                worktree: ComposerWorktreeState::pending(),
+                ..Default::default()
+            }),
+            select_workspace: Arc::new(
+                |_: &std::path::Path, _: &mut gpui::Window, _: &mut gpui::App| {},
+            ),
+            browse_workspace: Arc::new(|_: &mut gpui::Window, _: &mut gpui::App| {}),
+            select_branch: Arc::new(|_: &SharedString, _: &mut gpui::App| {}),
+            toggle_worktree: Arc::new(|_: bool, _: &mut gpui::App| {}),
+            prepare_worktree: prepare,
+            report_worktree_failure: Arc::new(
+                move |message: &SharedString, _: &mut gpui::Window, _: &mut gpui::App| {
+                    reported_for_source.lock().unwrap().push(message.clone());
+                },
+            ),
+        };
+        (source, reported)
+    }
+
+    /// 走输入框的真实提交路径（与线上同一条：`AgentInput` emit → 本视图订阅）。
+    ///
+    /// 提交后必须跟着清空输入框，和 `AgentInput::submit` 同序：emit 是**延后派发**的
+    /// （视图在 `flush_effects` 时才收到），清空紧接其后立刻做。少了这一步，
+    /// 「失败时消息回到输入框」（`restore_to_composer`）的断言会因为输入框压根没被
+    /// 清过而恒真 —— 那是条假绿。
+    fn submit_from_composer(view: &Entity<AgentChatView>, text: &str, cx: &mut VisualTestContext) {
+        let input = view.update_in(cx, |view, _window, _cx| view.input.clone());
+        input.update_in(cx, |input, window, cx| {
+            input.set_composer_text(text, window, cx);
+        });
+        input.update(cx, |_, cx| {
+            cx.emit(AgentInputEvent::Submit {
+                text: text.to_string(),
+                mentions: Vec::new(),
+                images: Vec::new(),
+            });
+        });
+        input.update_in(cx, |input, window, cx| {
+            input.set_composer_text("", window, cx);
+        });
+    }
+
+    /// 勾选 Worktree 后第一次发送要先建 worktree，建好之前消息不能出去。
+    ///
+    /// 理由不是「省点资源」而是正确性：ACP 会话绑的是工作区根，根还没换到新
+    /// worktree 就发出去，等于照旧跑在主工作区上，用户却以为自己在隔离环境里。
+    #[gpui::test]
+    fn pending_worktree_defers_the_first_submission(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let cx: &mut VisualTestContext = cx;
+
+        let prepared = Arc::new(AtomicUsize::new(0));
+        let prepared_for_source = prepared.clone();
+        let (source, _reported) =
+            source_with_pending_worktree(Arc::new(move |_: &mut gpui::App| {
+                prepared_for_source.fetch_add(1, Ordering::SeqCst);
+                // `git worktree add` 跑完了，但换根是**延后派发**的：
+                // 视图这边的根这时还没落地。
+                Task::ready(Ok(()))
+            }));
+        view.update_in(cx, |view, _window, cx| {
+            view.set_composer_context_source(source, cx)
+        });
+
+        submit_from_composer(&view, "在 worktree 里跑", cx);
+        cx.run_until_parked();
+
+        assert_eq!(1, prepared.load(Ordering::SeqCst), "拦下提交时要发起创建");
+        view.read_with(cx, |view, _| {
+            assert!(
+                !view.gated_submissions.is_empty(),
+                "待创建的 worktree 必须拦下这次提交，等根切过去再发"
+            );
+            assert!(
+                !view.current_session_has_messages(),
+                "worktree 还没落地，消息不能先进了会话"
+            );
+        });
+    }
+
+    /// 创建失败：中止发送并把内容还回输入框。
+    ///
+    /// **不**悄悄降到主工作区继续发 —— 那种「静默换个地方跑」会让人以为改动落在
+    /// 隔离的 worktree 里，实际全在主工作区上。勾选态保留，用户可以直接重试。
+    #[gpui::test]
+    fn worktree_creation_failure_restores_the_composer(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let cx: &mut VisualTestContext = cx;
+
+        let (source, reported) = source_with_pending_worktree(Arc::new(|_: &mut gpui::App| {
+            Task::ready(Err(SharedString::from("fatal: 分支已存在")))
+        }));
+        view.update_in(cx, |view, _window, cx| {
+            view.set_composer_context_source(source, cx)
+        });
+
+        submit_from_composer(&view, "别把我的话弄丢了", cx);
+        cx.run_until_parked();
+
+        view.read_with(cx, |view, cx| {
+            assert!(
+                view.gated_submissions.is_empty(),
+                "失败之后不能还挂着待发提交"
+            );
+            assert!(
+                !view.current_session_has_messages(),
+                "创建失败就不能把消息发出去"
+            );
+            assert_eq!(
+                "别把我的话弄丢了",
+                view.input.read(cx).composer_text(cx),
+                "失败时消息必须回到输入框，否则用户白打一遍"
+            );
+        });
+        assert_eq!(
+            vec![SharedString::from("fatal: 分支已存在")],
+            *reported.lock().unwrap(),
+            "失败原因要交给宿主去说（线上是弹通知），视图不能默默吞掉"
+        );
+    }
+
+    /// 根切到新 worktree 之后，被拦下的那条提交要接着发出去。
+    ///
+    /// 走 `apply_workspace_root`（`set_workspace_root` 的后半程，线上由 `RootChanged`
+    /// 的订阅者触发），而不是直接调 `resume_gated_submission`：直接调后者的话，
+    /// 「换根之后要把提交接上」这件事本身没有测试盯着 —— 把接线的那个调用删掉，
+    /// 测试照样全绿。
+    ///
+    /// 不直接调 `set_workspace_root`：它会 `AppSettings::update_and_save`，在测试里
+    /// 会拿假路径覆盖用户真实的 `last_workspace_root`。
+    #[gpui::test]
+    fn the_gated_submission_resumes_once_the_root_switches(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let cx: &mut VisualTestContext = cx;
+
+        let (source, _reported) =
+            source_with_pending_worktree(Arc::new(|_: &mut gpui::App| Task::ready(Ok(()))));
+        view.update_in(cx, |view, _window, cx| {
+            view.set_composer_context_source(source, cx)
+        });
+
+        submit_from_composer(&view, "在 worktree 里跑", cx);
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert!(!view.gated_submissions.is_empty(), "前置：提交应当被拦下");
+            assert!(!view.current_session_has_messages(), "前置：还没发出去");
+        });
+
+        view.update(cx, |view, cx| {
+            view.apply_workspace_root(std::path::PathBuf::from("/tmp/navop-wt-under-test"), cx)
+        });
+        cx.run_until_parked();
+
+        view.read_with(cx, |view, _| {
+            assert!(view.gated_submissions.is_empty(), "接手之后不该再挂着");
+            assert!(
+                view.current_session_has_messages(),
+                "根切过去之后必须接着把这条消息发出去"
+            );
+        });
+    }
+
+    /// 创建期间又发一条：只排队，**不能**再建第二个 worktree。
+    ///
+    /// 创建要秒级，这期间用户完全可能再发一条；单槽位实现会把上一条静默覆盖，
+    /// 所以这里同时钉住「第二条被拦下」和「`prepare_worktree` 只调一次」。
+    #[gpui::test]
+    fn a_submission_during_creation_only_queues(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let cx: &mut VisualTestContext = cx;
+
+        let created = Arc::new(AtomicUsize::new(0));
+        let created_for_source = created.clone();
+        let (source, _reported) =
+            source_with_pending_worktree(Arc::new(move |_: &mut gpui::App| {
+                created_for_source.fetch_add(1, Ordering::SeqCst);
+                Task::ready(Ok(()))
+            }));
+        view.update_in(cx, |view, _window, cx| {
+            view.set_composer_context_source(source, cx)
+        });
+
+        submit_from_composer(&view, "第一条", cx);
+        cx.run_until_parked();
+        // 创建还没落地（线上要等 `RootChanged` 级联），用户又发了一条。
+        submit_from_composer(&view, "第二条", cx);
+        cx.run_until_parked();
+
+        assert_eq!(
+            1,
+            created.load(Ordering::SeqCst),
+            "第二条只是排队，不能再建一个 worktree"
+        );
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                vec!["第一条", "第二条"],
+                view.gated_submissions
+                    .iter()
+                    .map(|submission| submission.text.as_str())
+                    .collect::<Vec<_>>(),
+                "两条都要留着（旧的单槽位会覆盖掉第一条），且先来先发"
+            );
+            assert!(
+                !view.current_session_has_messages(),
+                "根还没切过去，两条都不许发"
+            );
+        });
     }
 }
 
