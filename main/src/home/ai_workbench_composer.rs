@@ -24,6 +24,11 @@ struct ComposerGitCache {
     /// 取根目录与仓库句柄的来源。弱引用：外壳与面板不因它被吊住。
     explorer: WeakEntity<WorkspaceExplorer>,
     root: Option<PathBuf>,
+    /// 上一次读到仓库时它的根目录；`None` 表示那次没看到仓库。
+    ///
+    /// 只用来判断「是否刚认出仓库」这一次单向跳变（见快照闭包里的兜底自愈），
+    /// 不作为常规失效条件 —— 两边不收敛时它会让每次渲染都起 git 子进程。
+    repo_root: Option<PathBuf>,
     is_git_repo: bool,
     branches: Vec<ComposerBranchOption>,
     worktree: ComposerWorktreeState,
@@ -70,6 +75,7 @@ pub(crate) fn refresh_composer_git(cx: &mut App) {
     cx.set_global(ComposerGitCache {
         explorer: explorer.downgrade(),
         root: Some(root),
+        repo_root: repository.map(|repository| repository.root),
         is_git_repo,
         branches,
         worktree,
@@ -113,6 +119,7 @@ pub(crate) fn composer_context_source(
     cx.set_global(ComposerGitCache {
         explorer: explorer.downgrade(),
         root: None,
+        repo_root: None,
         is_git_repo: false,
         branches: Vec::new(),
         worktree: ComposerWorktreeState::default(),
@@ -127,10 +134,30 @@ pub(crate) fn composer_context_source(
                 .workspace_root()
                 .map(|root| root.to_path_buf())
         });
-        // 根目录对不上说明缓存过期（宿主漏了刷新）：这里补一次，底栏不会停在旧分支。
-        let stale = cx
+        // 兜底自愈，只认「根目录变了」与「之前没认出仓库、现在认出了」两种跳变。
+        //
+        // 后者是单向的：Explorer 异步发现仓库，装机那一帧 `repository()` 还是 `None`，
+        // 只比根目录会把「不是 Git 仓库」连同正确的根一起缓存住。这里只补一次
+        // `None → Some`；不能写成 `cache.repo_root != repo_root`，否则一旦两边不收敛
+        // 就会每次渲染都去起 git 子进程。常规路径由 `RepositoryChanged` 事件覆盖。
+        // 兜底自愈，只认「根目录变了」与「之前没认出仓库、现在认出了」两种跳变。
+        // 后者是单向的，理由见 `composer_cache_is_stale` 的注释。
+        let (cached_root, cached_repository_root) = cx
             .try_global::<ComposerGitCache>()
-            .is_none_or(|cache| cache.root != root);
+            .map(|cache| (cache.root.clone(), cache.repo_root.clone()))
+            .unwrap_or_default();
+        let explorer_has_repository = cx
+            .try_global::<ComposerGitCache>()
+            .and_then(|cache| cache.explorer.upgrade())
+            .is_some_and(|explorer| {
+                explorer.read_with(cx, |explorer, _| explorer.repository().is_some())
+            });
+        let stale = composer_cache_is_stale(
+            cached_root.as_deref(),
+            root.as_deref(),
+            cached_repository_root.as_deref(),
+            explorer_has_repository,
+        );
         if stale {
             refresh_composer_git(cx);
         }
@@ -278,4 +305,79 @@ fn workspace_label(path: &Path) -> String {
 
 fn path_text(path: &Path) -> String {
     path.to_string_lossy().into_owned()
+}
+
+/// 快照缓存该不该重读。
+///
+/// 两个条件之一成立就重读：
+/// - **根目录变了**：缓存记的是别的根，内容整体作废。
+/// - **刚认出仓库**：Explorer 是异步发现仓库的，装机那一帧 `repository()` 还是
+///   `None`；只比根目录的话，那份「不是 Git 仓库」的结论会连同正确的根一起被
+///   永久缓存住，底栏的分支 / Worktree 入口再也不出现（这是实际踩过的 bug，
+///   截图取证过）。常规路径由 `RepositoryChanged` 事件覆盖，这里是兜底。
+///
+/// 「刚认出仓库」必须是**单向**的：一旦缓存里记下了仓库根，条件就不再成立。
+/// 写成 `cached_repository_root != 当前仓库根` 是错的 —— 两边一旦不收敛就会每次
+/// 渲染都去起 `git` 子进程（`load_branches` / `list_worktrees`）。
+fn composer_cache_is_stale(
+    cached_root: Option<&Path>,
+    requested_root: Option<&Path>,
+    cached_repository_root: Option<&Path>,
+    explorer_has_repository: bool,
+) -> bool {
+    cached_root != requested_root
+        || (cached_repository_root.is_none() && explorer_has_repository)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_matching_root_without_a_repository_is_not_re_read() {
+        let root = Path::new("/work/navop");
+        // 真正的非 Git 目录：没仓库、根也没变 —— 不该反复重读。
+        assert!(!composer_cache_is_stale(
+            Some(root),
+            Some(root),
+            None,
+            false
+        ));
+    }
+
+    #[test]
+    fn a_newly_discovered_repository_forces_a_re_read() {
+        let root = Path::new("/work/navop");
+        // 装机那一帧缓存下的是「不是 Git 仓库」；仓库一出现就必须重读，
+        // 否则分支 / Worktree 入口永远不出现。
+        assert!(composer_cache_is_stale(Some(root), Some(root), None, true));
+    }
+
+    #[test]
+    fn a_repository_already_cached_does_not_loop() {
+        let root = Path::new("/work/navop");
+        let repository = Path::new("/work/navop");
+        // 单向：已经记下仓库之后，条件不再成立 —— 不会每次渲染都起 git 子进程。
+        assert!(!composer_cache_is_stale(
+            Some(root),
+            Some(root),
+            Some(repository),
+            true
+        ));
+    }
+
+    #[test]
+    fn a_changed_or_cleared_root_forces_a_re_read() {
+        let previous = Path::new("/work/navop");
+        let next = Path::new("/work/other");
+        assert!(composer_cache_is_stale(
+            Some(previous),
+            Some(next),
+            Some(previous),
+            true
+        ));
+        // 首次装机 / 根被清空
+        assert!(composer_cache_is_stale(None, Some(next), None, false));
+        assert!(composer_cache_is_stale(Some(previous), None, None, false));
+    }
 }

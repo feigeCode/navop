@@ -173,6 +173,12 @@ pub(crate) fn build_ai_workbench_shell(
                     refresh_composer_git(cx);
                     shell_for_root.update(cx, |shell, cx| shell.refresh_composer_context(cx));
                 }
+                // Explorer 的仓库句柄变了（首次认出仓库 / 换仓库）：底栏依赖它的
+                // 分支与 worktree 入口要跟着重算，否则会一直停在装机那一帧的空状态。
+                WorkspaceExplorerEvent::RepositoryChanged => {
+                    refresh_composer_git(cx);
+                    shell_for_root.update(cx, |shell, cx| shell.refresh_composer_context(cx));
+                }
                 WorkspaceExplorerEvent::DocumentRequested => {
                     shell_for_root.update(cx, |shell, cx| {
                         shell.reveal_panel(WorkbenchPanelKind::Review, cx);
