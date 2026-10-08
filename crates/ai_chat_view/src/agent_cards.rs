@@ -10,17 +10,18 @@
 //! 这里定义共享的数据结构(序列化契约)与渲染实现,二者共用同一份 schema。
 
 use agent_runtime::ToolAction;
-use crate::agent_diff::{DiffRow, FileChangeSummary};
+use crate::agent_diff::{DiffRow, FileChangeSummary, patch_from_summary};
 use crate::card::{CardMessage, CardRegistry, ChatCard};
 use crate::theme::{AgentChatTheme, active_agent_chat_theme, themed_markdown};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Action, Anchor, AnyElement, App, AppContext, Entity, InteractiveElement, IntoElement,
-    ParentElement, SharedString, StatefulInteractiveElement, Styled, Window, div, px,
+    ParentElement, SharedString, StatefulInteractiveElement, Styled, WeakEntity, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, Sizable, Size,
     button::{Button, ButtonVariants},
+    diff::{Diff, DiffFile, DiffHunkSeparator, DiffMode, DiffState},
     h_flex,
     input::{Editor, EditorState},
     menu::{DropdownMenu, PopupMenuItem},
@@ -29,7 +30,7 @@ use gpui_component::{
 use one_assets::IconName;
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 const MAX_TOOL_OUTPUT_JSON_CHARS: usize = 4000;
@@ -303,12 +304,17 @@ fn default_tool_confirm_status() -> String {
 /// 工具执行卡片渲染器。
 struct ToolCard {
     expanded: Arc<Mutex<HashSet<String>>>,
+    /// Diff 组件的状态缓存:`DiffState` 是带订阅的实体,而卡片每帧重渲染,
+    /// 必须跨帧复用。key 含 rows 指纹,内容变了就换新实体(旧实体无其余
+    /// 强引用,GC 回收)。
+    diff_states: Arc<Mutex<HashMap<String, WeakEntity<DiffState>>>>,
 }
 
 impl ToolCard {
     fn new() -> Self {
         Self {
             expanded: Arc::new(Mutex::new(HashSet::new())),
+            diff_states: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -443,7 +449,8 @@ impl ChatCard for ToolCard {
             // 有 diff 就**不给**入参 / 输出:入参里装的正是这次改动的两份文件内容,
             // 再摊开一遍等于同一件事说两遍,而且更难看。
             if expanded_diff {
-                card = card.child(tool_card_diff_block(&data, cx));
+                let diff_blocks = build_diff_blocks(&data, &self.diff_states, cx);
+                card = card.child(tool_card_diff_block(&diff_blocks, cx));
             } else {
                 card = card.child(tool_card_detail_block(&data, window, cx));
             }
@@ -1377,7 +1384,84 @@ pub(crate) fn file_change_totals(changes: &[FileChangeSummary]) -> Option<(u32, 
 ///
 /// 高度上限在 [`crate::agent_diff`] 里就切好了(`rows` 最多十几行),这里不再
 /// 二次裁剪 —— 视口高度与改动规模无关,是这个模块的硬约束。
-fn tool_card_diff_block(data: &ToolCardData, cx: &App) -> AnyElement {
+/// Diff 块里一个文件段的状态:头部数据 + 已就绪的 DiffState(合成 patch
+/// 解析失败时为 `None`,回退到旧的逐行渲染)+ 未展示行数。
+struct DiffBlockState {
+    change: FileChangeSummary,
+    state: Option<Entity<DiffState>>,
+    hidden: u32,
+}
+
+/// 为每个值得展示的 `FileChangeSummary` 准备渲染状态,以
+/// `(call_id, path, rows 指纹)` 缓存。卡片每帧都从 JSON 重建 `ToolCardData`,
+/// 但 `DiffState` 是带订阅的实体、解析 patch 也要花钱——同一份内容跨帧复用;
+/// 流式更新中 rows 增长会改变指纹,旧实体没有其余强引用,交给 GC。
+fn build_diff_blocks(
+    data: &ToolCardData,
+    cache: &Arc<Mutex<HashMap<String, WeakEntity<DiffState>>>>,
+    cx: &mut App,
+) -> Vec<DiffBlockState> {
+    let mut cache = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    data.file_changes
+        .iter()
+        .filter(|change| !change.path.is_empty() || change.has_rows())
+        .map(|change| {
+            let state = if change.has_rows() {
+                let key = format!(
+                    "{}\u{0}{}\u{0}{:016x}",
+                    data.call_id,
+                    change.path,
+                    file_change_fingerprint(change)
+                );
+                match cache.get(&key).and_then(WeakEntity::upgrade) {
+                    Some(state) => Some(state),
+                    None => match DiffFile::parse(&patch_from_summary(change)) {
+                        Ok(files) => {
+                            let state = cx
+                                .new(|cx| DiffState::new(files, cx).with_mode(DiffMode::Split));
+                            cache.insert(key, state.downgrade());
+                            Some(state)
+                        }
+                        // 合成 patch 按契约必可解析;走到这里说明契约破了,
+                        // 退回旧渲染,别让一行 diff 都不显示。
+                        Err(error) => {
+                            tracing::warn!("synthesized diff patch failed to parse: {error}");
+                            None
+                        }
+                    },
+                }
+            } else {
+                None
+            };
+            DiffBlockState {
+                change: change.clone(),
+                state,
+                hidden: change.hidden,
+            }
+        })
+        .collect()
+}
+
+/// rows 内容指纹:缓存 key 的一部分。流式更新中同一 call_id 的 rows 会增长,
+/// 指纹变化使旧缓存失效。
+fn file_change_fingerprint(change: &FileChangeSummary) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    change.rows.hash(&mut hasher);
+    change.added.hash(&mut hasher);
+    change.removed.hash(&mut hasher);
+    change.created.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Diff 组件自带滚动、需要给定高度:按展示行数估一个,保底 72、封顶 320。
+/// 行高按组件的等宽小字号取 20px;hunk 分隔条与内边距另给余量。
+fn diff_block_height(change: &FileChangeSummary) -> f32 {
+    (change.rows.len() as f32 * 20.0 + 16.0).clamp(72.0, 320.0)
+}
+
+fn tool_card_diff_block(blocks: &[DiffBlockState], cx: &App) -> AnyElement {
     let theme = active_agent_chat_theme(cx);
     v_flex()
         .debug_selector(|| "agent-tool-diff".to_string())
@@ -1385,38 +1469,52 @@ fn tool_card_diff_block(data: &ToolCardData, cx: &App) -> AnyElement {
         .min_w_0()
         .gap_2()
         .px_1()
-        .children(
-            data.file_changes
-                .iter()
-                .filter(|change| !change.path.is_empty() || change.has_rows())
-                .map(|change| {
-                    let change = change.clone();
-                    v_flex()
-                        .w_full()
-                        .min_w_0()
-                        .rounded_md()
-                        .bg(theme.code_background)
-                        .overflow_hidden()
-                        .child(tool_diff_file_header(&change, cx))
-                        .children(change.rows.iter().map(|row| diff_row_element(row, cx)))
-                        .when(change.hidden > 0, |this| {
-                            this.child(
-                                div()
-                                    .w_full()
-                                    .min_w_0()
-                                    .px_2()
-                                    .py_1()
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
-                                    .child(
-                                        t!("AgentUi.diff_rows_hidden", count = change.hidden)
-                                            .to_string(),
-                                    ),
-                            )
-                        })
-                        .into_any_element()
-                }),
-        )
+        .children(blocks.iter().map(|block| {
+            v_flex()
+                .w_full()
+                .min_w_0()
+                .rounded_md()
+                .bg(theme.code_background)
+                .overflow_hidden()
+                .child(tool_diff_file_header(&block.change, cx))
+                // Split 双栏 + 行号由 DiffState 的模式决定;头部用上面的自绘
+                // 文件头,保持与整卡一致的信息密度与「打开」动作。state 缺席
+                // (无展示行,或合成 patch 解析失败)时退回旧的逐行渲染。
+                .when_some(block.state.as_ref(), |this, state| {
+                    this.child(
+                        Diff::new(state)
+                            .w_full()
+                            .h(px(diff_block_height(&block.change)))
+                            .header_visible(false)
+                            .hunk_separator(DiffHunkSeparator::Simple),
+                    )
+                })
+                .when(block.state.is_none(), |this| {
+                    this.children(
+                        block
+                            .change
+                            .rows
+                            .iter()
+                            .map(|row| diff_row_element(row, cx)),
+                    )
+                })
+                .when(block.hidden > 0, |this| {
+                    this.child(
+                        div()
+                            .w_full()
+                            .min_w_0()
+                            .px_2()
+                            .py_1()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(
+                                t!("AgentUi.diff_rows_hidden", count = block.hidden)
+                                    .to_string(),
+                            ),
+                    )
+                })
+                .into_any_element()
+        }))
         .into_any_element()
 }
 

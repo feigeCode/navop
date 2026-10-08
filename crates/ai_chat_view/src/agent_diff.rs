@@ -26,7 +26,7 @@ const CONTEXT_LINES: usize = 3;
 const LCS_MAX_CELLS: usize = 250_000;
 
 /// 单行 diff 的类型。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DiffRowKind {
     /// 未改动(上下文)。
@@ -38,7 +38,7 @@ pub enum DiffRowKind {
 }
 
 /// 一行内联 diff。
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DiffRow {
     /// 旧文件行号;新增行没有。
     #[serde(default)]
