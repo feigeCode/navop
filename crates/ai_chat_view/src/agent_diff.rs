@@ -115,6 +115,131 @@ impl FileChangeSummary {
     }
 }
 
+/// 把展示行合成 unified patch 文本,供 gpui-kit 的 Diff 组件消费。
+///
+/// 输入侧没有 patch:[`FileChangeSummary::from_texts`] 拿到的是 ACP 给的改动
+/// 前后完整文本,而 `DiffFile::parse` 只认 unified patch。这里把渲染行
+/// (自带两侧行号与增删标记)反向织回 patch 语法——等于给 Diff 组件造输入,
+/// 而不是给它造一个平行实现。
+///
+/// 展示行只是整份 diff 的窗口(每侧最多 [`TOOL_DIFF_MAX_ROWS`] 行),窗口之间
+/// 行号不连续,按 patch 语义在断点处开新 hunk。`hidden` 的行不在 patch 里,
+/// 无法展开——维持「hidden 提示 + 打开审阅看全量」的既有行为。
+///
+/// 行文本来自 [`FileChangeSummary::from_texts`],已剥换行;这里统一补 `\n`,
+/// 不写 `\ No newline at end of file`:合成 patch 的是摘要不是原文,末行
+/// 有无换行对摘要渲染没有可观察的差别。
+pub fn patch_from_summary(change: &FileChangeSummary) -> String {
+    let path = if change.path.is_empty() {
+        "untitled"
+    } else {
+        change.path.as_str()
+    };
+    let mut patch = format!("diff --git a/{path} b/{path}\n");
+    if change.created {
+        patch.push_str("--- /dev/null\n");
+    } else {
+        patch.push_str(&format!("--- a/{path}\n"));
+    }
+    patch.push_str(&format!("+++ b/{path}\n"));
+
+    // 一个 hunk:已织入的行,首个 old/new 行号(全增/全删侧没有),行数,
+    // 以及开 hunk 时刻的全局行号快照(算 `count == 0` 侧的起始行号用)。
+    struct Hunk {
+        lines: Vec<String>,
+        first_old: Option<u32>,
+        first_new: Option<u32>,
+        old_count: u32,
+        new_count: u32,
+        prev_old: Option<u32>,
+        prev_new: Option<u32>,
+    }
+    let mut hunk: Option<Hunk> = None;
+    let mut prev_old: Option<u32> = None;
+    let mut prev_new: Option<u32> = None;
+
+    for row in &change.rows {
+        // 行号链连续才算同一个 hunk:主链(Context 的两侧行号、Added 的新侧、
+        // Removed 的旧侧)必须恰好接在上一行 +1 处;副侧(Added 的旧侧、Removed
+        // 的新侧)本就该停在原地,给 `None` 放行,给值则要求与上一行相等。
+        // 窗口裁剪、隐藏行都会在这里断开。
+        let continues = hunk.is_some()
+            && match row.kind {
+                DiffRowKind::Added => {
+                    row.new_no == prev_new.map(|no| no + 1)
+                        && row.old_no.is_none_or(|no| Some(no) == prev_old)
+                }
+                DiffRowKind::Removed => {
+                    row.old_no == prev_old.map(|no| no + 1)
+                        && row.new_no.is_none_or(|no| Some(no) == prev_new)
+                }
+                DiffRowKind::Context => {
+                    row.old_no == prev_old.map(|no| no + 1)
+                        && row.new_no == prev_new.map(|no| no + 1)
+                }
+            };
+        if !continues {
+            if let Some(done) = hunk.take() {
+                write_hunk(&mut patch, &done);
+            }
+            hunk = Some(Hunk {
+                lines: Vec::new(),
+                first_old: None,
+                first_new: None,
+                old_count: 0,
+                new_count: 0,
+                prev_old,
+                prev_new,
+            });
+        }
+        let h = hunk.as_mut().expect("hunk opened above");
+        let marker = match row.kind {
+            DiffRowKind::Context => ' ',
+            DiffRowKind::Added => '+',
+            DiffRowKind::Removed => '-',
+        };
+        h.lines.push(format!("{marker}{}\n", row.text));
+        if let Some(no) = row.old_no {
+            h.old_count += 1;
+            if h.first_old.is_none() {
+                h.first_old = Some(no);
+            }
+            prev_old = Some(no);
+        }
+        if let Some(no) = row.new_no {
+            h.new_count += 1;
+            if h.first_new.is_none() {
+                h.first_new = Some(no);
+            }
+            prev_new = Some(no);
+        }
+    }
+    if let Some(done) = hunk.take() {
+        write_hunk(&mut patch, &done);
+    }
+
+    fn write_hunk(patch: &mut String, hunk: &Hunk) {
+        // `count == 0` 的侧按 git 惯例从上一行号 +1 起(没有则 0),即 `-l,0`。
+        let old_start = hunk
+            .first_old
+            .or(hunk.prev_old.map(|no| no + 1))
+            .unwrap_or(0);
+        let new_start = hunk
+            .first_new
+            .or(hunk.prev_new.map(|no| no + 1))
+            .unwrap_or(0);
+        patch.push_str(&format!(
+            "@@ -{},{} +{},{} @@\n",
+            old_start, hunk.old_count, new_start, hunk.new_count
+        ));
+        for line in &hunk.lines {
+            patch.push_str(line);
+        }
+    }
+
+    patch
+}
+
 /// diff 中间表示:一行文本 + 它在两侧的行号(没有的那侧为 `None`)。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Op<'a> {
@@ -442,5 +567,77 @@ mod tests {
         assert_eq!("", summary.path);
         assert!(summary.created);
         assert!(summary.has_rows());
+    }
+
+    // ---- patch_from_summary ----
+
+    #[test]
+    fn patch_round_trips_through_the_diff_parser() {
+        let old = "a\nb\nc\nd\n";
+        let new = "a\nB\nc\nd\n";
+        let summary = FileChangeSummary::from_texts("src/lib.rs", Some(old), new);
+        let patch = patch_from_summary(&summary);
+
+        let files = gpui_component::diff::DiffFile::parse(&patch)
+            .expect("synthesized patch must parse");
+        assert_eq!(1, files.len());
+        assert_eq!("src/lib.rs", files[0].path().to_string());
+        // 一处替换:删一行、加一行,parser 看到的计数必须与摘要一致。
+        assert_eq!(1, summary.added);
+        assert_eq!(1, summary.removed);
+        assert!(!summary.created);
+    }
+
+    #[test]
+    fn patch_opens_new_hunks_where_line_numbers_gap() {
+        // 手工构造两个不连续的窗口:第 1 行删、第 5 行加,中间隔着 3 行空白。
+        let rows = vec![
+            DiffRow { old_no: Some(1), new_no: None, kind: DiffRowKind::Removed, text: "gone".into() },
+            DiffRow { old_no: Some(5), new_no: Some(5), kind: DiffRowKind::Context, text: "ctx".into() },
+            DiffRow { old_no: None, new_no: Some(6), kind: DiffRowKind::Added, text: "fresh".into() },
+        ];
+        let change = FileChangeSummary {
+            path: "a.txt".into(),
+            added: 1,
+            removed: 1,
+            created: false,
+            rows,
+            hidden: 0,
+        };
+        let patch = patch_from_summary(&change);
+
+        // 第 1 行删掉后中间隔着未展示的 3 行,context 从第 5 行开新 hunk;
+        // 新增行紧贴 context(new 侧 5→6 连续),仍留在第二个 hunk 里。
+        // 首个 hunk 删的是文件开头,按 git 惯例新侧起始为 0。
+        assert_eq!(2, patch.matches("@@ -").count());
+        assert!(patch.contains("@@ -1,1 +0,0 @@"));
+        assert!(patch.contains("@@ -5,1 +5,2 @@"));
+        assert!(patch.contains("-gone\n"));
+        assert!(patch.contains("+fresh\n"));
+
+        let files = gpui_component::diff::DiffFile::parse(&patch)
+            .expect("multi-hunk patch must parse");
+        assert_eq!(1, files.len());
+    }
+
+    #[test]
+    fn patch_for_created_file_uses_dev_null() {
+        let summary = FileChangeSummary::from_texts("new.txt", None, "one\ntwo\n");
+        let patch = patch_from_summary(&summary);
+        assert!(patch.contains("--- /dev/null\n"));
+        assert!(patch.contains("@@ -0,0 +1,2 @@"));
+        let files = gpui_component::diff::DiffFile::parse(&patch)
+            .expect("created-file patch must parse");
+        assert_eq!(1, files.len());
+    }
+
+    #[test]
+    fn patch_for_empty_path_still_parses() {
+        let summary = FileChangeSummary::from_texts("", None, "x\n");
+        let patch = patch_from_summary(&summary);
+        assert!(patch.contains("diff --git a/untitled b/untitled\n"));
+        let files = gpui_component::diff::DiffFile::parse(&patch)
+            .expect("untitled patch must parse");
+        assert_eq!(1, files.len());
     }
 }
