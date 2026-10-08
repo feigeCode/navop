@@ -101,6 +101,14 @@ impl WorkspaceEditor {
                     .with_size(Size::Small)
                     .custom(self.theme.button_style(cx))
                     .disabled(!side_by_side_available)
+                    // 灰掉的按钮得把原因说出来：整轮 diff 是多文件，逐行对齐没有
+                    // 意义（双栏会拿第一个文件去对第二份文件的内容）。不解释的话
+                    // 用户只会看到「并排对比」点不动。
+                    .when(!side_by_side_available, |button| {
+                        button.tooltip(
+                            t!("WorkspaceExplorer.action.side_by_side_unavailable").to_string(),
+                        )
+                    })
                     .on_click(cx.listener(|this, _, _window, cx| {
                         this.toggle_diff_view(cx);
                     })),

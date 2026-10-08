@@ -26,6 +26,10 @@ WorkspaceExplorer:
       en: Side by side
       zh-CN: 并排对比
       zh-HK: 並排對比
+    side_by_side_unavailable:
+      en: "Only a single file's diff can be compared side by side"
+      zh-CN: 只有单个文件的差异能并排对比
+      zh-HK: 只有單一檔案的差異能並排對比
     previous_change:
       en: Previous change
       zh-CN: 上一个变更
