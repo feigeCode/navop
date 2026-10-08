@@ -22,6 +22,14 @@ actions!(workspace_editor, [SaveDocument]);
 
 pub(crate) const WORKSPACE_EDITOR_KEY_CONTEXT: &str = "WorkspaceEditor";
 
+/// 只读 diff 视图固定用的语法名。
+///
+/// 它走的是**语言名**而不是文件扩展名：单栏 diff 视图渲染的是 patch 原文，
+/// 与它展示的那份文件的语言无关。要注意这条路径不经过
+/// `load_language_for_path`（那个按扩展名推语言），所以语法得显式加载，
+/// 否则编辑器只会退化成纯文本。见 [`load::ensure_diff_language`]。
+pub(super) const DIFF_LANGUAGE: &str = "diff";
+
 /// 编辑器键盘快捷键。`secondary-s` 在 macOS 上为 Cmd+S,其他平台为 Ctrl+S。
 pub(crate) fn keybindings() -> Vec<KeyBinding> {
     vec![KeyBinding::new(
@@ -135,7 +143,7 @@ impl LoadedDocument {
         Self {
             file_size: diff.len(),
             text: diff,
-            language: "diff".to_string(),
+            language: DIFF_LANGUAGE.to_string(),
             diff_language: Some(language),
             policy: DocumentPolicy::Diff,
             read_only: true,
@@ -147,7 +155,7 @@ impl LoadedDocument {
         Self {
             file_size: diff.len(),
             text: diff,
-            language: "diff".to_string(),
+            language: DIFF_LANGUAGE.to_string(),
             diff_language: None,
             policy: DocumentPolicy::Diff,
             read_only: true,
@@ -174,6 +182,11 @@ pub(super) struct EditorTab {
     subscriptions: Vec<Subscription>,
     diff: Option<Rc<SideBySideDiff>>,
     diff_editors: Option<DiffEditors>,
+    /// 单栏 diff 视图(即 `editor`)上的增删行底色。
+    ///
+    /// 和 `DiffEditors` 里的两栏装饰同样的道理要持有句柄：组件文档说装饰集合
+    /// 「存活到显式销毁或编辑器被丢弃」，但持有它才不必依赖那个实现细节。
+    diff_spans: Option<RangeDecorationCollection>,
     diff_side_by_side: bool,
     diff_change_cursor: Option<usize>,
     saved_text: String,
@@ -200,6 +213,7 @@ impl EditorTab {
             subscriptions: Vec::new(),
             diff: None,
             diff_editors: None,
+            diff_spans: None,
             diff_side_by_side: true,
             diff_change_cursor: None,
             saved_text: String::new(),

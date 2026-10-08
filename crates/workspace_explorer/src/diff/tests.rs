@@ -279,6 +279,151 @@ diff --git a/main.rs b/main.rs
     assert_eq!(vec![1, 4], change_starts(&parsed));
 }
 
+/// 单栏 diff 的着色区间：把原文按行切开，逐行断言它被切到哪一段、染什么色。
+fn text_spans(diff: &str) -> Vec<(&str, DiffTextSpanKind)> {
+    diff_text_spans(diff)
+        .into_iter()
+        .map(|(range, kind)| (&diff[range], kind))
+        .collect()
+}
+
+#[test]
+fn single_pane_spans_cover_the_whole_line_including_its_newline() {
+    let diff = "\
+diff --git a/main.rs b/main.rs
+index 8a1218a..f00c965 100644
+--- a/main.rs
++++ b/main.rs
+@@ -1,3 +1,3 @@
+ fn main() {
+-    old_call();
++    new_call();
+}
+";
+    assert_eq!(
+        vec![
+            ("diff --git a/main.rs b/main.rs\n", DiffTextSpanKind::Marker),
+            ("@@ -1,3 +1,3 @@\n", DiffTextSpanKind::Marker),
+            ("-    old_call();\n", DiffTextSpanKind::Removed),
+            ("+    new_call();\n", DiffTextSpanKind::Added),
+        ],
+        text_spans(diff)
+    );
+}
+
+#[test]
+fn file_headers_before_the_first_hunk_are_not_painted_as_changes() {
+    // `--- a/x` / `+++ b/x` 长得像增删行，但它们在 hunk 之外：染错了远比不染刺眼。
+    let diff = "\
+diff --git a/main.rs b/main.rs
+--- a/main.rs
++++ b/main.rs
+@@ -1 +1 @@
+-old
++new
+";
+    assert_eq!(
+        vec![
+            ("diff --git a/main.rs b/main.rs\n", DiffTextSpanKind::Marker),
+            ("@@ -1 +1 @@\n", DiffTextSpanKind::Marker),
+            ("-old\n", DiffTextSpanKind::Removed),
+            ("+new\n", DiffTextSpanKind::Added),
+        ],
+        text_spans(diff)
+    );
+}
+
+#[test]
+fn a_second_file_restarts_the_hunk_state() {
+    // 多文件 diff：第二个文件的文件头不能被当成上一个 hunk 里的新增行。
+    let diff = "\
+diff --git a/a.rs b/a.rs
+@@ -1 +1 @@
+-old
++new
+diff --git b/b.rs b/b.rs
+--- a/b.rs
++++ b/b.rs
+@@ -1 +1 @@
+-before
++after
+";
+    assert_eq!(
+        vec![
+            ("diff --git a/a.rs b/a.rs\n", DiffTextSpanKind::Marker),
+            ("@@ -1 +1 @@\n", DiffTextSpanKind::Marker),
+            ("-old\n", DiffTextSpanKind::Removed),
+            ("+new\n", DiffTextSpanKind::Added),
+            ("diff --git b/b.rs b/b.rs\n", DiffTextSpanKind::Marker),
+            ("@@ -1 +1 @@\n", DiffTextSpanKind::Marker),
+            ("-before\n", DiffTextSpanKind::Removed),
+            ("+after\n", DiffTextSpanKind::Added),
+        ],
+        text_spans(diff)
+    );
+}
+
+#[test]
+fn added_lines_keeping_a_plus_prefix_are_still_additions() {
+    // `++x` 在 hunk 内是新增加了一行 `+x`，不是文件头。
+    let diff = "\
+diff --git a/main.rs b/main.rs
+@@ -1,1 +1,2 @@
+ keep
+++plus
+";
+    assert_eq!(
+        vec![
+            ("diff --git a/main.rs b/main.rs\n", DiffTextSpanKind::Marker),
+            ("@@ -1,1 +1,2 @@\n", DiffTextSpanKind::Marker),
+            ("++plus\n", DiffTextSpanKind::Added),
+        ],
+        text_spans(diff)
+    );
+}
+
+#[test]
+fn no_newline_marker_is_skipped_and_a_missing_final_newline_still_paints() {
+    // 原文末尾没有换行（最后一行的区间就落在字符串末尾），且中间夹了一行
+    // `\ No newline at end of file`：那一行不是 diff 内容，不染。
+    let diff = "\
+diff --git a/main.rs b/main.rs
+@@ -1 +1 @@
+-old
+\\ No newline at end of file
++new";
+
+    let spans = text_spans(diff);
+    assert_eq!(
+        vec![
+            ("diff --git a/main.rs b/main.rs\n", DiffTextSpanKind::Marker),
+            ("@@ -1 +1 @@\n", DiffTextSpanKind::Marker),
+            ("-old\n", DiffTextSpanKind::Removed),
+            ("+new", DiffTextSpanKind::Added),
+        ],
+        spans
+    );
+    // 区间不能为空：空区间会被渲染层整个丢掉。
+    assert!(spans.iter().all(|(text, _)| !text.is_empty()));
+}
+
+#[test]
+fn a_diff_without_hunks_paints_nothing() {
+    // 只改了文件模式 / 只重命名：没有 hunk，单栏视图不该凭文件头染色。
+    let diff = "\
+diff --git a/main.rs b/main.rs
+old mode 100644
+new mode 100755
+similarity index 100%
+rename from main.rs
+rename to main2.rs
+";
+    assert_eq!(
+        vec![("diff --git a/main.rs b/main.rs\n", DiffTextSpanKind::Marker)],
+        text_spans(diff)
+    );
+}
+
 #[test]
 fn change_starts_are_empty_without_changed_rows() {
     let parsed = SideBySideDiff {

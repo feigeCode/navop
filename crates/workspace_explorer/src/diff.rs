@@ -168,6 +168,65 @@ pub fn aligned_span_ranges(side: &AlignedDiffSide) -> Vec<(Range<usize>, Aligned
     spans
 }
 
+/// 单栏 diff 原文里一行的语义（只区分要染成什么色）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiffTextSpanKind {
+    /// 新增行（`+`）。
+    Added,
+    /// 删除行（`-`）。
+    Removed,
+    /// 段落标记：`diff --git` 与 `@@`。整轮多文件 diff 里唯一的结构线索。
+    Marker,
+}
+
+/// 单栏 diff **原文**里需要着色的行的字节区间。
+///
+/// 并排两栏各自带行背景；退回单栏查看时（整轮快照 diff 恒为单栏，单文件 diff
+/// 关掉「并排对比」后也是单栏）没有任何装饰，整屏就只剩黑白文本，看不出哪行是
+/// 增、哪行是删。`aligned_span_ranges` 服务于对齐后的两栏，这里服务于原始
+/// diff 文本，两者不能互替。
+///
+/// 与 [`aligned_span_ranges`] 同一约定：区间**包含行尾换行**（最后一行没有）。
+/// 删掉换行的话空行的填充会被丢弃两次（`normalize` 拒绝空区间，
+/// `layout_range_corners` 对空区间返回 `None`），于是最该被点出来的空行反而
+/// 看不见——理由与那一段相同，不重复。
+///
+/// 增删只在 hunk **内**按首字符判断。若不管 hunk 直接看前缀，`+++ b/x` /
+/// `--- a/x` 这两行文件头会被染成增删色，而真正以 `++` 开头的新增行会被误当成
+/// 文件头——状态机只需要认 `@@` 这个起点就能同时避开两种错法。
+pub fn diff_text_spans(diff: &str) -> Vec<(Range<usize>, DiffTextSpanKind)> {
+    let mut spans = Vec::new();
+    let mut start = 0usize;
+    let mut in_hunk = false;
+
+    for line in diff.split_inclusive('\n') {
+        let end = start + line.len();
+        let kind = if line.starts_with("diff --git ") {
+            in_hunk = false;
+            Some(DiffTextSpanKind::Marker)
+        } else if line.starts_with("@@") {
+            in_hunk = true;
+            Some(DiffTextSpanKind::Marker)
+        } else if !in_hunk || line.starts_with('\\') {
+            // 文件头（`index` / `---` / `+++` / `new file mode` …）与
+            // `\ No newline at end of file` 都不染。
+            None
+        } else {
+            match line.as_bytes().first() {
+                Some(b'+') => Some(DiffTextSpanKind::Added),
+                Some(b'-') => Some(DiffTextSpanKind::Removed),
+                _ => None,
+            }
+        };
+        if let Some(kind) = kind {
+            spans.push((start..end, kind));
+        }
+        start = end;
+    }
+
+    spans
+}
+
 /// Returns the aligned row index where each contiguous change block starts.
 pub fn change_starts(diff: &SideBySideDiff) -> Vec<usize> {
     let mut previous_changed = false;

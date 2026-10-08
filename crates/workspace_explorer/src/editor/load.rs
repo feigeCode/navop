@@ -1,9 +1,11 @@
 use super::{
-    DiffEditors, DocumentKey, DocumentPolicy, EditorTab, GitDiffRequest, LoadRequest,
-    LoadedDocument, PendingDocument, WorkspaceEditor, WorkspaceEditorEvent, display_name,
+    DIFF_LANGUAGE, DiffEditors, DocumentKey, DocumentPolicy, EditorTab, GitDiffRequest,
+    LoadRequest, LoadedDocument, PendingDocument, WorkspaceEditor, WorkspaceEditorEvent,
+    display_name,
 };
 use crate::diff::{
-    AlignedDiffSide, AlignedSpanKind, aligned_side_by_side, aligned_span_ranges, parse_side_by_side,
+    AlignedDiffSide, AlignedSpanKind, DiffTextSpanKind, aligned_side_by_side, aligned_span_ranges,
+    diff_text_spans, parse_side_by_side,
 };
 use crate::editor::markdown::create_markdown_editor;
 use crate::git::load_diff;
@@ -192,6 +194,7 @@ impl WorkspaceEditor {
                 let repository = repository.clone();
                 let change = change.clone();
                 cx.background_spawn(async move {
+                    ensure_diff_language();
                     let language = remote_file_editor::load_language_for_path(
                         &change.path.to_string_lossy(),
                         false,
@@ -202,7 +205,10 @@ impl WorkspaceEditor {
             }
             LoadRequest::SnapshotDiff { text } => {
                 let document = LoadedDocument::from_snapshot_diff(text.clone());
-                cx.background_spawn(async move { anyhow::Ok(document) })
+                cx.background_spawn(async move {
+                    ensure_diff_language();
+                    anyhow::Ok(document)
+                })
             }
         };
 
@@ -286,6 +292,23 @@ impl WorkspaceEditor {
         let added_background = self.theme.success.opacity(0.20);
         let gap_background = self.theme.muted;
         tab.diff_change_cursor = None;
+        // 单栏视图(`tab.editor`)上的底色。并排两栏各自带装饰，退回单栏
+        //（整轮快照 diff 恒为单栏；单文件 diff 关掉「并排对比」后也是单栏）
+        // 时若不补这一份，整屏就只剩黑白文本，看不出哪行增、哪行删。
+        tab.diff_spans = match (editor.as_ref(), tab.policy) {
+            (Some(editor), DocumentPolicy::Diff) => {
+                let decorations = diff_text_decorations(
+                    &tab.saved_text,
+                    removed_background,
+                    added_background,
+                    gap_background,
+                );
+                Some(editor.update(cx, |state, cx| {
+                    state.create_range_decorations_collection(decorations, cx)
+                }))
+            }
+            _ => None,
+        };
         tab.diff_editors = match (&tab.diff, diff_language) {
             (Some(diff), Some(language)) => {
                 let (left_side, right_side) = aligned_side_by_side(diff);
@@ -434,6 +457,49 @@ fn diff_span_decorations(
             )
         })
         .collect()
+}
+
+/// 单栏 diff 原文的行背景：新增、删除、以及 `diff --git` / `@@` 段落标记。
+///
+/// 与并排两栏同一套语义色，区别只在输入：这里吃的是 patch 原文，不需要事先
+/// 对齐。段落标记用 `muted`——整轮多文件 diff 是单栏的一整片文本，没有这层
+/// 标记就找不到文件与 hunk 的边界。
+fn diff_text_decorations(
+    diff: &str,
+    removed_background: Hsla,
+    added_background: Hsla,
+    marker_background: Hsla,
+) -> Vec<RangeDecoration> {
+    diff_text_spans(diff)
+        .into_iter()
+        .map(|(range, kind)| {
+            let color = match kind {
+                DiffTextSpanKind::Added => added_background,
+                DiffTextSpanKind::Removed => removed_background,
+                DiffTextSpanKind::Marker => marker_background,
+            };
+            RangeDecoration::new(range)
+                .with_style(RangeDecorationStyle::Fill)
+                .with_color(color)
+        })
+        .collect()
+}
+
+/// 确保只读 diff 视图用的语法已加载。
+///
+/// 调用方是 `background_spawn` 的任务：加载要编译 tree-sitter wasm，放在 UI
+/// 线程上会卡住整帧。
+///
+/// 失败只记日志、不打断加载——语法高亮是锦上添花，diff 原文本身仍然可读；
+/// 反过来让「语法扩展损坏」变成「diff 打不开」才是真的糟。
+fn ensure_diff_language() {
+    if let Err(error) = remote_file_editor::load_language(DIFF_LANGUAGE) {
+        tracing::warn!(
+            language = DIFF_LANGUAGE,
+            %error,
+            "failed to load the grammar for the read-only diff view"
+        );
+    }
 }
 
 /// 需要写进目标栏的纵向偏移；`None` 表示两栏已在容差内对齐。
