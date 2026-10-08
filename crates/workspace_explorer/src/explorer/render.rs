@@ -1,4 +1,4 @@
-use super::WorkspaceExplorer;
+use super::{WorkspaceExplorer, WorkspaceExplorerEvent};
 use crate::git::{GitChange, GitChangeKind};
 use crate::model::{ExplorerRow, visible_rows};
 use gpui::{
@@ -262,6 +262,10 @@ impl Render for WorkspaceExplorer {
             self.pending_review_open = false;
             let editor = self.editor.clone();
             let review = self.last_turn_review.clone();
+            // 打开文档之后要广播 `DocumentRequested`，否则宿主不知道审阅面板该
+            // 被带到前台——上一轮 diff 就只会静静地落进一个没打开的面板里。
+            // `open_change` / `open_file` 走的是同一条约定。
+            let explorer = cx.entity().downgrade();
             window.defer(cx, move |window, cx| {
                 if let Some(review) = review {
                     editor.update(cx, |editor, cx| {
@@ -276,6 +280,11 @@ impl Render for WorkspaceExplorer {
                             cx,
                         );
                     });
+                    if let Some(explorer) = explorer.upgrade() {
+                        explorer.update(cx, |_, cx| {
+                            cx.emit(WorkspaceExplorerEvent::DocumentRequested);
+                        });
+                    }
                 }
             });
         }
