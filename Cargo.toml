@@ -55,13 +55,16 @@ edition = "2024"
 # so the workspace resolves it from GitHub instead of a sibling ../gpui-component
 # checkout. The dependency keys keep the crate names navop already imports
 # (`gpui_component`, `gpui_base`, `gpui_shell`, ...).
-gpui-component = { git = "https://github.com/feigeCode/gpui-kit", rev = "b450f35c179faa3a846aed2edc0fc53252c82c80" }
-gpui-component-assets = { package = "gpui-kit-assets", git = "https://github.com/feigeCode/gpui-kit", rev = "b450f35c179faa3a846aed2edc0fc53252c82c80" }
-gpui-base = { git = "https://github.com/feigeCode/gpui-kit", rev = "b450f35c179faa3a846aed2edc0fc53252c82c80" }
-gpui-shell = { git = "https://github.com/feigeCode/gpui-kit", rev = "b450f35c179faa3a846aed2edc0fc53252c82c80" }
-gpui-component-shell = { git = "https://github.com/feigeCode/gpui-kit", rev = "b450f35c179faa3a846aed2edc0fc53252c82c80" }
-gpui-wry = { git = "https://github.com/feigeCode/gpui-kit", rev = "b450f35c179faa3a846aed2edc0fc53252c82c80" }
-gpui-kit = { git = "https://github.com/feigeCode/gpui-kit", rev = "b450f35c179faa3a846aed2edc0fc53252c82c80" }
+gpui-component = { git = "https://github.com/feigeCode/gpui-kit", rev = "e746db5cf1ac1191070f26542f99c79b7f1c2879" }
+gpui-component-assets = { package = "gpui-kit-assets", git = "https://github.com/feigeCode/gpui-kit", rev = "e746db5cf1ac1191070f26542f99c79b7f1c2879" }
+gpui-base = { git = "https://github.com/feigeCode/gpui-kit", rev = "e746db5cf1ac1191070f26542f99c79b7f1c2879" }
+gpui-shell = { git = "https://github.com/feigeCode/gpui-kit", rev = "e746db5cf1ac1191070f26542f99c79b7f1c2879" }
+gpui-component-shell = { git = "https://github.com/feigeCode/gpui-kit", rev = "e746db5cf1ac1191070f26542f99c79b7f1c2879" }
+# 上游 #3398 起 gpui-webview 强制 GPUI Fast 后端（gpui-pre-util =0.3.8），
+# 与 navop 的 gpui-pre fork（0.3.126）不兼容；单独钉回 b450f35c（当时 crate
+# 名还是 gpui-wry），用 package= 重命名保持 gpui_webview 代码写法。
+gpui-webview = { package = "gpui-wry", git = "https://github.com/feigeCode/gpui-kit", rev = "b450f35c179faa3a846aed2edc0fc53252c82c80" }
+gpui-kit = { git = "https://github.com/feigeCode/gpui-kit", rev = "e746db5cf1ac1191070f26542f99c79b7f1c2879" }
 
 gpui = { package = "gpui-pre", version = "0.3.99" }
 gpui_platform = { package = "gpui-pre-platform", version = "0.3.99", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
@@ -334,27 +337,29 @@ xml5ever = { opt-level = 3 }
 # path patch (dev workstation only), re-run
 # `script/migrate-to-git-fork.py --path`.
 [patch.crates-io]
-gpui-pre                   = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.124" }
-gpui-pre-apple             = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.124" }
-gpui-pre-collections       = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.124" }
-gpui-pre-derive-refineable = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.124" }
-gpui-pre-http-client       = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.124" }
-gpui-pre-http-client-tls   = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.124" }
-gpui-pre-linux             = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.124" }
-gpui-pre-macos             = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.124" }
-gpui-pre-macros            = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.124" }
-gpui-pre-platform          = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.124" }
-gpui-pre-refineable        = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.124" }
-gpui-pre-reqwest-client    = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.124" }
-gpui-pre-scheduler         = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.124" }
-gpui-pre-shared-string     = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.124" }
-gpui-pre-sum-tree          = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.124" }
-gpui-pre-util              = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.124" }
-gpui-pre-web               = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.124" }
-gpui-pre-wgpu              = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.124" }
-gpui-pre-windows           = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.124" }
-gpui-pre-ztracing          = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.124" }
-gpui-pre-ztracing-macro    = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.124" }
+gpui-pre                   = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.126" }
+gpui-pre-apple             = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.126" }
+gpui-pre-bench-metrics     = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.126" }
+gpui-pre-collections       = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.126" }
+gpui-pre-derive-refineable = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.126" }
+gpui-pre-http-client       = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.126" }
+gpui-pre-http-client-tls   = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.126" }
+gpui-pre-linux             = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.126" }
+gpui-pre-macos             = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.126" }
+gpui-pre-macros            = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.126" }
+gpui-pre-platform          = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.126" }
+gpui-pre-refineable        = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.126" }
+gpui-pre-reqwest-client    = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.126" }
+gpui-pre-scheduler         = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.126" }
+gpui-pre-shared-string     = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.126" }
+gpui-pre-sum-tree          = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.126" }
+gpui-pre-util              = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.126" }
+gpui-pre-web               = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.126" }
+gpui-pre-wgpu              = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.126" }
+gpui-pre-windows           = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.126" }
+gpui-pre-zlog              = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.126" }
+gpui-pre-ztracing          = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.126" }
+gpui-pre-ztracing-macro    = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.126" }
 # <<< local gpui-pre patch <<<
 
 # gpui-shell binds quickjs via the `quickjs-jit` fork directly, while
@@ -364,7 +369,16 @@ gpui-pre-ztracing-macro    = { git = "https://github.com/feigeCode/gpui-pre.git"
 # live in this root manifest: [patch] sections inside the gpui-component
 # workspace are ignored by cargo. Mirrors the same entry in gpui-component's
 # workspace root, pinned to the same revision as the gpui dependencies above.
-rquickjs = { git = "https://github.com/feigeCode/gpui-kit", rev = "b450f35c179faa3a846aed2edc0fc53252c82c80" }
+rquickjs = { git = "https://github.com/feigeCode/gpui-kit", rev = "e746db5cf1ac1191070f26542f99c79b7f1c2879" }
+
+# gpui-kit（>= #3375）即使不开 gpui-fast feature，其 optional 依赖 gpui-fast
+# 也参与 lockfile 解析；crates.io 的 gpui-fast 钉 gpui-pre =0.3.8，与上面
+# fork-0.3.126 冲突。用自己 fork 的 release 分支（prepare-release.ts 生成，
+# snapshot 依赖全部 =0.3.126）顶替。navop 不启用 gpui-fast feature，
+# 这三个包只进 lockfile，不进编译图。
+gpui-fast = { git = "https://github.com/feigeCode/gpui-fast.git", branch = "release/v0.1.5" }
+gpui-fast-platform = { git = "https://github.com/feigeCode/gpui-fast.git", branch = "release/v0.1.5" }
+gpui-fast-web = { git = "https://github.com/feigeCode/gpui-fast.git", branch = "release/v0.1.5" }
 
 # Legacy devices (e.g. Huawei VRP gear) put redundant leading `0x00` bytes in the
 # RSA exponent/modulus of their `ssh-rsa` host key, which RFC 4251 § 5 forbids but

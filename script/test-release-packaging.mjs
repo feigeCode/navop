@@ -297,9 +297,16 @@ test("the embedded webview is an opt-in feature on every platform", () => {
   assert.match(cargo, /^default = \[\]$/m);
   assert.match(
     cargo,
-    /embedded-webview = \["dep:gpui-wry", "dep:wry"\]/,
+    /embedded-webview = \["dep:gpui-webview", "dep:wry"\]/,
   );
-  assert.match(cargo, /gpui-wry = \{[^}]*optional = true[^}]*\}/);
+  // The dependency key is `gpui-webview`; the workspace manifest pins it to
+  // upstream's pre-rename `gpui-wry` through `package = "gpui-wry"`, which is
+  // what keeps the embedded webview off GPUI Fast.
+  assert.match(cargo, /gpui-webview = \{[^}]*optional = true[^}]*\}/);
+  assert.match(
+    workspaceCargo,
+    /^gpui-webview = \{ package = "gpui-wry",[^}]*\}$/m,
+  );
   assert.match(cargo, /wry = \{[^}]*optional = true[^}]*\}/);
   assert.doesNotMatch(cargo, /target_arch = "aarch64"/);
   assert.match(

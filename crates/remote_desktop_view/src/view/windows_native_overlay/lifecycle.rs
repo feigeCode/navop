@@ -5,7 +5,7 @@ use std::ptr;
 use super::ffi::*;
 use super::window::{
     create_overlay_window, ensure_owner_clips_children, last_error, position_overlay_window,
-    verify_overlay_parent,
+    set_overlay_cloaked, verify_overlay_parent,
 };
 use super::{
     WindowsNativeOverlay, WindowsNativeOverlayBounds, WindowsNativeOverlayError, diagnostics,
@@ -37,6 +37,7 @@ impl WindowsNativeOverlay {
             generation,
             last_bounds: None,
             requested_visible: false,
+            cloaked: false,
             _thread_affinity: PhantomData,
         };
         diagnostics::log_created(&overlay);
@@ -93,6 +94,33 @@ impl WindowsNativeOverlay {
         self.requested_visible = false;
         self.hide_actual()?;
         diagnostics::log_visibility(self, "hide");
+        Ok(())
+    }
+
+    /// Hides the window from the screen while keeping its rasterization live in
+    /// the composition tree, or restores the plain child window.
+    ///
+    /// The caller must only cloak after the overlay's content has been attached
+    /// to a composition visual: a cloaked window that nothing composes would
+    /// take the session off screen entirely.
+    pub(crate) fn set_cloaked(&mut self, cloaked: bool) -> Result<(), WindowsNativeOverlayError> {
+        if self.window == 0 || self.cloaked == cloaked {
+            return Ok(());
+        }
+        self.validate_mutation(if cloaked {
+            "cloak_child_overlay"
+        } else {
+            "uncloak_child_overlay"
+        })?;
+        set_overlay_cloaked(window_pointer(self.window), cloaked)?;
+        self.cloaked = cloaked;
+        tracing::info!(
+            stage = "overlay_cloak",
+            generation = self.generation,
+            overlay_hwnd = self.window,
+            cloaked,
+            "updated Windows native RDP overlay cloak state"
+        );
         Ok(())
     }
 

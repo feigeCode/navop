@@ -23,7 +23,8 @@
     <img src="https://img.shields.io/badge/TDengine-1B73B4" alt="TDengine" />
     <img src="https://img.shields.io/badge/Dameng%20DM-C71D23" alt="Dameng DM" />
     <img src="https://img.shields.io/badge/KingbaseES-005BAC" alt="KingbaseES" />
-    <img src="https://img.shields.io/badge/GBase%208s-1E73BE" alt="GBase 8s" />
+    <img src="https://img.shields.io/badge/GBase%208a-E60012" alt="GBase 8a" />
+    <img src="https://img.shields.io/badge/GBase%208s-E60012" alt="GBase 8s" />
     <img src="https://img.shields.io/badge/OceanBase-1B9A8C" alt="OceanBase" />
     <img src="https://img.shields.io/badge/openGauss-005EB8" alt="openGauss" />
     <img src="https://img.shields.io/badge/Apache%20IoTDB-1B3A6B?logo=apache&logoColor=white" alt="Apache IoTDB" />
@@ -81,7 +82,7 @@
 - Home page with a unified grid layout, tree view, recent connections, batch connection management, and workspace drag-order persistence.
 - Settings organized into dedicated database, terminal, Agent, and MCP pages; shortcuts can be cleared and system-wide hotkeys disabled.
 - English, Simplified Chinese, and Traditional Chinese interfaces.
-- Encrypted synchronization of personal connections, credentials, and settings across devices.
+- Encrypted synchronization of personal connections, credentials, and settings across devices by Navop Cloud Sync or Personal Sync(Folder / Git / WebDAV).
 
 ## Public MCP, Navop CLI, and Agent Skill
 

@@ -8,6 +8,10 @@ const WS_CHILD: u32 = 0x4000_0000;
 pub(super) const WS_CLIPCHILDREN: u32 = 0x0200_0000;
 const WS_CLIPSIBLINGS: u32 = 0x0400_0000;
 const WS_EX_NOPARENTNOTIFY: u32 = 0x0000_0004;
+/// Required for `IDCompositionDevice::CreateSurfaceFromHwnd`, which only wraps
+/// the rasterization of a layered window. Without it the overlay cannot be
+/// presented inside the GPUI window's DirectComposition tree.
+const WS_EX_LAYERED: u32 = 0x0008_0000;
 const SS_BLACKRECT: u32 = 0x0000_0004;
 const SWP_NOSIZE: u32 = 0x0001;
 const SWP_NOMOVE: u32 = 0x0002;
@@ -15,6 +19,9 @@ const SWP_NOZORDER: u32 = 0x0004;
 const SWP_NOACTIVATE: u32 = 0x0010;
 const SWP_FRAMECHANGED: u32 = 0x0020;
 const GWL_STYLE: i32 = -16;
+/// `DWMWA_CLOAK`: hides the window from the screen while the DWM keeps
+/// composing it. `ShowWindow(SW_HIDE)` would drop the rasterization instead.
+const DWMWA_CLOAK: u32 = 13;
 const ERROR_SUCCESS: u32 = 0;
 const OVERLAY_INITIAL_ORIGIN: i32 = 0;
 const OVERLAY_INITIAL_EXTENT: i32 = 1;
@@ -110,7 +117,7 @@ pub(super) fn create_overlay_window(
 ) -> Result<*mut c_void, WindowsNativeOverlayError> {
     let overlay = unsafe {
         CreateWindowExW(
-            WS_EX_NOPARENTNOTIFY,
+            WS_EX_NOPARENTNOTIFY | WS_EX_LAYERED,
             STATIC_CLASS.as_ptr(),
             OVERLAY_TITLE.as_ptr(),
             WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | SS_BLACKRECT,
@@ -128,6 +135,40 @@ pub(super) fn create_overlay_window(
         return Err(last_error("create_child_overlay"));
     }
     Ok(overlay)
+}
+
+/// Takes the overlay off screen without stopping the DWM from composing it.
+///
+/// Only meaningful once the overlay's rasterization has been attached to a
+/// DirectComposition visual: cloaking a plain child window would just hide the
+/// session.
+pub(super) fn set_overlay_cloaked(
+    window: *mut c_void,
+    cloaked: bool,
+) -> Result<(), WindowsNativeOverlayError> {
+    let value: i32 = i32::from(cloaked);
+    let result = unsafe {
+        DwmSetWindowAttribute(
+            window,
+            DWMWA_CLOAK,
+            ptr::from_ref(&value).cast(),
+            std::mem::size_of::<i32>() as u32,
+        )
+    };
+    if result < 0 {
+        return Err(WindowsNativeOverlayError::new(
+            if cloaked {
+                "cloak_child_overlay"
+            } else {
+                "uncloak_child_overlay"
+            },
+            format!(
+                "DwmSetWindowAttribute(DWMWA_CLOAK, {value}) failed: HRESULT 0x{:08X}",
+                result as u32
+            ),
+        ));
+    }
+    Ok(())
 }
 
 pub(super) fn verify_overlay_parent(

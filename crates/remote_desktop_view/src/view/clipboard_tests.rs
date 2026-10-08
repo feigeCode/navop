@@ -6,8 +6,9 @@ use remote_desktop::RemoteDesktopProtocol;
 
 use super::{
     FIRST_LOCAL_CLIPBOARD_TRANSFER_ID, LocalClipboardContent, REMOTE_CLIPBOARD_TRANSFER_BIT,
-    allocate_local_clipboard_transfer_id, classify_local_clipboard, clipboard_files_supported,
-    clipboard_sync_is_due, clipboard_text_supported, is_remote_clipboard_transfer_id,
+    REMOTE_TEXT_AFTER_FILES_SUPPRESS, allocate_local_clipboard_transfer_id,
+    classify_local_clipboard, clipboard_files_supported, clipboard_sync_is_due,
+    clipboard_text_supported, is_remote_clipboard_transfer_id, remote_text_suppressed_after_files,
     validate_remote_clipboard_paths_in_root,
 };
 
@@ -204,4 +205,27 @@ fn remote_clipboard_paths_normalize_windows_verbatim_prefixes() {
             .to_string_lossy()
             .starts_with(r"\\?\")
     );
+}
+
+#[test]
+fn remote_text_is_suppressed_only_inside_the_post_file_install_window() {
+    let installed_at = Instant::now();
+
+    // No install recorded -> text passes through.
+    assert!(!remote_text_suppressed_after_files(
+        None,
+        installed_at + Duration::from_millis(100)
+    ));
+
+    // Inside the window the file clipboard is protected.
+    assert!(remote_text_suppressed_after_files(
+        Some(installed_at),
+        installed_at + Duration::from_millis(2_999)
+    ));
+
+    // A genuinely new remote clipboard generation arrives later -> honoured.
+    assert!(!remote_text_suppressed_after_files(
+        Some(installed_at),
+        installed_at + REMOTE_TEXT_AFTER_FILES_SUPPRESS
+    ));
 }

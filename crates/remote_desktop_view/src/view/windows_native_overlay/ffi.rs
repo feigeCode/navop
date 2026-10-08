@@ -24,6 +24,19 @@ unsafe extern "system" {
     pub(super) fn SetLastError(error_code: u32);
 }
 
+#[link(name = "dwmapi")]
+unsafe extern "system" {
+    /// Cloaks the overlay once DirectComposition presents its content. This is
+    /// the only supported way to take the window off screen while the DWM keeps
+    /// composing its rasterization into the visual tree.
+    pub(super) fn DwmSetWindowAttribute(
+        window: *mut c_void,
+        attribute: u32,
+        value: *const c_void,
+        value_size: u32,
+    ) -> i32;
+}
+
 #[link(name = "user32")]
 unsafe extern "system" {
     pub(super) fn ChildWindowFromPointEx(

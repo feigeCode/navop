@@ -95,7 +95,7 @@ The `navop` executable is GUI/update-only and does not embed database, SSH, SFTP
 - **`reqwest_client`** — HTTP client wrapper around Zed's custom reqwest fork. Comes from the
   `gpui-pre` fork as the package `gpui-pre-reqwest-client` (lib name `reqwest_client`), patched in
   the root `Cargo.toml`; there is no longer a local `crates/reqwest_client` copy.
-- **`crates/webview` (gpui-wry)** — WebView integration via Wry.
+- **`crates/webview` (gpui-webview, upstream's former gpui-wry)** — WebView integration via Wry.
 - **`crates/license_tool`** — License key generation and management.
 - **`crates/story`** — Component gallery/showcase app (runs with `cargo run` from default members).
 - **`examples/`** — Standalone examples (`hello_world`, `input`, `dialog_overlay`, `webview`, `system_monitor`, `focus_trap`, etc.).

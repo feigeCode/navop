@@ -1,6 +1,8 @@
 use gpui::{Bounds, Pixels, Point};
 
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+use super::windows_native_composition::WindowsNativeComposition;
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
 use super::windows_native_overlay::{
     WindowsNativeOverlay, WindowsNativeOverlayBounds, WindowsNativeOverlayError,
 };
@@ -324,6 +326,9 @@ pub(crate) struct WindowsNativeAdapter {
     presentation: WindowsNativePresentation,
     host: windows_rdp_host::WindowsRdpHost,
     overlay: WindowsNativeOverlay,
+    /// Present when the GPUI window composes the native child window into its
+    /// own visual tree. `None` keeps the session as a plain child window.
+    composition: Option<WindowsNativeComposition>,
 }
 
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
@@ -396,23 +401,33 @@ impl WindowsNativeAdapter {
     /// `CoCreateInstance`), so it MUST NOT be called while holding the App
     /// borrow: the message pump can re-enter GPUI foreground tasks and
     /// re-borrow the App context.
+    ///
+    /// `composition` is the GPUI composition surface the session should be
+    /// presented in. Attaching it takes the child window off screen and shows
+    /// its content below GPUI's own overlays; when it is `None`, or when the
+    /// platform refuses to compose the window, the session keeps the plain
+    /// child-window presentation.
     pub(crate) fn create_with_owner(
         owner: usize,
         generation: u64,
+        composition: Option<gpui::WindowCompositionSurface>,
     ) -> Result<Self, WindowsNativeAdapterCreateError> {
         use windows_rdp_host::{WindowsRdpHost, WindowsRdpHostOptions, WindowsRdpParentWindow};
 
-        let overlay = WindowsNativeOverlay::create(owner, generation)?;
+        let mut overlay = WindowsNativeOverlay::create(owner, generation)?;
         let parent = unsafe { WindowsRdpParentWindow::from_raw(overlay.hwnd()) };
         let host = unsafe {
             WindowsRdpHost::create_with_parent(parent, WindowsRdpHostOptions::new(generation))
         }
         .map_err(WindowsNativeAdapterCreateError::Host)?;
 
+        let composition = compose_native_window(composition, &mut overlay);
+
         Ok(Self {
             presentation: WindowsNativePresentation::default(),
             overlay,
             host,
+            composition,
         })
     }
 
@@ -421,11 +436,45 @@ impl WindowsNativeAdapter {
         generation: u64,
     ) -> Result<Self, WindowsNativeAdapterCreateError> {
         let owner = Self::parent_window_owner(window)?;
-        Self::create_with_owner(owner, generation)
+        let composition = enable_composition_surface(window);
+        Self::create_with_owner(owner, generation, composition)
     }
 
     pub(crate) fn generation(&self) -> u64 {
         self.host.generation()
+    }
+
+    /// Builds the presentation sink that routes window work to the overlay and
+    /// the ActiveX host, and mirrors it into the composition tree when the
+    /// session is composed.
+    /// The adapter's fields are taken one by one rather than as `&mut self` so
+    /// the borrow of `presentation` stays disjoint: callers hold the sink while
+    /// calling into `self.presentation` at the same time.
+    fn sink<'a>(
+        overlay: &'a mut WindowsNativeOverlay,
+        host: &'a mut windows_rdp_host::WindowsRdpHost,
+        composition: Option<&'a mut WindowsNativeComposition>,
+    ) -> WindowsNativePresentationSink<'a> {
+        WindowsNativePresentationSink {
+            overlay,
+            host,
+            composition,
+            focus_parent: None,
+        }
+    }
+
+    fn sink_with_focus_parent<'a>(
+        overlay: &'a mut WindowsNativeOverlay,
+        host: &'a mut windows_rdp_host::WindowsRdpHost,
+        composition: Option<&'a mut WindowsNativeComposition>,
+        focus_parent: &'a mut dyn FnMut(),
+    ) -> WindowsNativePresentationSink<'a> {
+        WindowsNativePresentationSink {
+            overlay,
+            host,
+            composition,
+            focus_parent: Some(focus_parent),
+        }
     }
 
     pub(crate) fn is_open(&self) -> bool {
@@ -454,11 +503,11 @@ impl WindowsNativeAdapter {
     ) -> anyhow::Result<()> {
         let bounds = logical_bounds_to_physical(bounds, parent_client_origin, scale_factor)
             .ok_or_else(|| anyhow::anyhow!("invalid native child bounds or scale factor"))?;
-        let mut sink = WindowsNativePresentationSink {
-            overlay: &mut self.overlay,
-            host: &mut self.host,
-            focus_parent: None,
-        };
+        let mut sink = Self::sink(
+            &mut self.overlay,
+            &mut self.host,
+            self.composition.as_mut(),
+        );
         self.presentation.update_bounds(bounds, &mut sink)?;
         Ok(())
     }
@@ -478,41 +527,43 @@ impl WindowsNativeAdapter {
     }
 
     pub(crate) fn activate(&mut self, focus_child: bool) -> anyhow::Result<()> {
-        let mut sink = WindowsNativePresentationSink {
-            overlay: &mut self.overlay,
-            host: &mut self.host,
-            focus_parent: None,
-        };
+        let mut sink = Self::sink(
+            &mut self.overlay,
+            &mut self.host,
+            self.composition.as_mut(),
+        );
         self.presentation.activate(focus_child, &mut sink)?;
         Ok(())
     }
 
     pub(crate) fn focus(&mut self) -> anyhow::Result<()> {
-        let mut sink = WindowsNativePresentationSink {
-            overlay: &mut self.overlay,
-            host: &mut self.host,
-            focus_parent: None,
-        };
+        let mut sink = Self::sink(
+            &mut self.overlay,
+            &mut self.host,
+            self.composition.as_mut(),
+        );
         self.presentation.focus(&mut sink)?;
         Ok(())
     }
 
     pub(crate) fn deactivate(&mut self, focus_parent: &mut dyn FnMut()) -> anyhow::Result<()> {
-        let mut sink = WindowsNativePresentationSink {
-            overlay: &mut self.overlay,
-            host: &mut self.host,
-            focus_parent: Some(focus_parent),
-        };
+        let mut sink = Self::sink_with_focus_parent(
+            &mut self.overlay,
+            &mut self.host,
+            self.composition.as_mut(),
+            focus_parent,
+        );
         self.presentation.deactivate(&mut sink)?;
         Ok(())
     }
 
     pub(crate) fn begin_reconnect(&mut self, focus_parent: &mut dyn FnMut()) -> anyhow::Result<()> {
-        let mut sink = WindowsNativePresentationSink {
-            overlay: &mut self.overlay,
-            host: &mut self.host,
-            focus_parent: Some(focus_parent),
-        };
+        let mut sink = Self::sink_with_focus_parent(
+            &mut self.overlay,
+            &mut self.host,
+            self.composition.as_mut(),
+            focus_parent,
+        );
         self.presentation.begin_reconnect(&mut sink)?;
         Ok(())
     }
@@ -560,11 +611,12 @@ impl WindowsNativeAdapter {
         &mut self,
         focus_parent: &mut dyn FnMut(),
     ) -> anyhow::Result<NativeCloseProgress> {
-        let mut sink = WindowsNativePresentationSink {
-            overlay: &mut self.overlay,
-            host: &mut self.host,
-            focus_parent: Some(focus_parent),
-        };
+        let mut sink = Self::sink_with_focus_parent(
+            &mut self.overlay,
+            &mut self.host,
+            self.composition.as_mut(),
+            focus_parent,
+        );
         if let Err(error) = self.presentation.begin_close(&mut sink) {
             tracing::warn!(
                 ?error,
@@ -631,11 +683,12 @@ impl WindowsNativeAdapter {
         &mut self,
         focus_parent: &mut dyn FnMut(),
     ) -> anyhow::Result<NativeDestroyProgress> {
-        let mut sink = WindowsNativePresentationSink {
-            overlay: &mut self.overlay,
-            host: &mut self.host,
-            focus_parent: Some(focus_parent),
-        };
+        let mut sink = Self::sink_with_focus_parent(
+            &mut self.overlay,
+            &mut self.host,
+            self.composition.as_mut(),
+            focus_parent,
+        );
         if let Err(error) = self.presentation.begin_close(&mut sink) {
             tracing::warn!(
                 ?error,
@@ -689,11 +742,103 @@ impl Drop for WindowsNativeAdapter {
     }
 }
 
+/// Enables window composition and creates the surface the native RDP window is
+/// presented in.
+///
+/// Every failure here is non-fatal: the caller keeps the previous plain
+/// child-window presentation.
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+pub(super) fn enable_composition_surface(
+    window: &gpui::Window,
+) -> Option<gpui::WindowCompositionSurface> {
+    match window
+        .enable_window_composition()
+        .and_then(|composition| composition.create_native_surface())
+    {
+        Ok(surface) => Some(surface),
+        Err(error) => {
+            tracing::warn!(
+                ?error,
+                "GPUI window cannot compose the Windows native RDP child window; \
+                 keeping it as a plain child window"
+            );
+            None
+        }
+    }
+}
+
+/// Composes the freshly created child window into the GPUI visual tree and takes
+/// the original window off screen.
+///
+/// Returns `None` when composition is unavailable or when attaching the window
+/// content failed. The window is only cloaked after a successful attach: a
+/// cloaked window that nothing composes would take the session off screen
+/// entirely, so the fallback stays a plain child window.
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+fn compose_native_window(
+    surface: Option<gpui::WindowCompositionSurface>,
+    overlay: &mut WindowsNativeOverlay,
+) -> Option<WindowsNativeComposition> {
+    let surface = surface?;
+    let mut composition = WindowsNativeComposition::new(surface, overlay.hwnd());
+    if let Err(error) = composition.attach() {
+        tracing::warn!(
+            ?error,
+            overlay_hwnd = overlay.hwnd(),
+            "failed to compose the Windows native RDP overlay; \
+             keeping it as a plain child window"
+        );
+        return None;
+    }
+    if let Err(error) = overlay.set_cloaked(true) {
+        // The composed visual covers the child window, so the session stays
+        // visible either way; report it because the window keeps rendering.
+        tracing::warn!(
+            ?error,
+            overlay_hwnd = overlay.hwnd(),
+            "failed to cloak the composed Windows native RDP overlay"
+        );
+    }
+    Some(composition)
+}
+
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
 struct WindowsNativePresentationSink<'a> {
     overlay: &'a mut WindowsNativeOverlay,
     host: &'a mut windows_rdp_host::WindowsRdpHost,
+    composition: Option<&'a mut WindowsNativeComposition>,
     focus_parent: Option<&'a mut dyn FnMut()>,
+}
+
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+impl WindowsNativePresentationSink<'_> {
+    /// Mirrors the placement of the child window into the composition tree.
+    ///
+    /// A composition failure must not fail window management that already
+    /// succeeded.
+    fn sync_composition_bounds(&mut self, bounds: Option<Win32ClientPhysicalBounds>) {
+        let Some(composition) = self.composition.as_mut() else {
+            return;
+        };
+        if let Err(error) = composition.sync_bounds(bounds) {
+            tracing::warn!(
+                ?error,
+                "failed to mirror Windows native RDP bounds into the composition tree"
+            );
+        }
+    }
+
+    fn sync_composition_visibility(&mut self, visible: bool) {
+        let Some(composition) = self.composition.as_mut() else {
+            return;
+        };
+        if let Err(error) = composition.sync_visible(visible) {
+            tracing::warn!(
+                ?error,
+                "failed to mirror Windows native RDP visibility into the composition tree"
+            );
+        }
+    }
 }
 
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
@@ -709,9 +854,18 @@ impl NativePresentationSink for WindowsNativePresentationSink<'_> {
         })?;
         let Some(clipped) = clipped else {
             self.host.set_bounds(0, 0, 0, 0)?;
+            self.sync_composition_bounds(None);
             return Ok(());
         };
         self.host.set_bounds(0, 0, clipped.width, clipped.height)?;
+        // The composed visual must land exactly where the child window went,
+        // including the clipping against the owner's client area.
+        self.sync_composition_bounds(Some(Win32ClientPhysicalBounds {
+            x: clipped.x,
+            y: clipped.y,
+            width: clipped.width,
+            height: clipped.height,
+        }));
         Ok(())
     }
 
@@ -734,6 +888,7 @@ impl NativePresentationSink for WindowsNativePresentationSink<'_> {
                 "Windows native RDP overlay show did not become effective"
             ));
         }
+        self.sync_composition_visibility(true);
         self.overlay.log_composition_diagnostics("show_complete");
         Ok(())
     }
@@ -751,6 +906,9 @@ impl NativePresentationSink for WindowsNativePresentationSink<'_> {
     }
 
     fn hide(&mut self) -> Result<(), Self::Error> {
+        // Drop the composed visual first: hiding the window stops the DWM from
+        // refreshing it, and a stale frame must not stay on screen.
+        self.sync_composition_visibility(false);
         let host_result = self.host.set_visible(false);
         let overlay_result = self.overlay.hide();
         match (host_result, overlay_result) {

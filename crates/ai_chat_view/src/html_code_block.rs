@@ -25,7 +25,7 @@ pub struct HtmlCodeBlockView {
 struct HtmlPreviewDialogView {
     document: HtmlPreviewDocument,
     #[cfg(feature = "embedded-webview")]
-    webview: Option<Entity<gpui_wry::WebView>>,
+    webview: Option<Entity<gpui_webview::WebView>>,
     webview_error: Option<String>,
 }
 
@@ -254,7 +254,7 @@ fn create_webview(
     document: &HtmlPreviewDocument,
     window: &mut Window,
     cx: &mut App,
-) -> (Option<Entity<gpui_wry::WebView>>, Option<String>) {
+) -> (Option<Entity<gpui_webview::WebView>>, Option<String>) {
     match WebViewBuilder::new()
         .with_custom_protocol("onet-extension".to_string(), |_id, request| {
             extension_asset_response(request)
@@ -263,7 +263,7 @@ fn create_webview(
         .build_as_child(window)
     {
         Ok(webview) => (
-            Some(cx.new(|cx| gpui_wry::WebView::new(webview, window, cx))),
+            Some(cx.new(|cx| gpui_webview::WebView::new(webview, window, cx))),
             None,
         ),
         Err(error) => (

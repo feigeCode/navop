@@ -10,7 +10,7 @@ edition.workspace = true
 # 需要时显式打开（`--features ai_chat_view/embedded-webview`，或 main 的
 # `--features embedded-webview`）。
 default = []
-embedded-webview = ["dep:gpui-wry", "dep:wry"]
+embedded-webview = ["dep:gpui-webview", "dep:wry"]
 
 [dependencies]
 one-assets = { workspace = true }
@@ -38,7 +38,7 @@ uuid.workspace = true
 lsp-types.workspace = true
 chrono.workspace = true
 sum-tree.workspace = true
-gpui-wry = { workspace = true, optional = true }
+gpui-webview = { workspace = true, optional = true }
 wry = { version = "0.53.3", package = "lb-wry", optional = true }
 
 [dev-dependencies]

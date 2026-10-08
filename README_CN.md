@@ -24,7 +24,8 @@
     <img src="https://img.shields.io/badge/TDengine-1B73B4" alt="TDengine" />
     <img src="https://img.shields.io/badge/Dameng%20DM-C71D23" alt="达梦 DM" />
     <img src="https://img.shields.io/badge/KingbaseES-005BAC" alt="金仓 KingbaseES" />
-    <img src="https://img.shields.io/badge/GBase%208s-1E73BE" alt="GBase 8s" />
+    <img src="https://img.shields.io/badge/GBase%208a-E60012" alt="GBase 8a" />
+    <img src="https://img.shields.io/badge/GBase%208s-E60012" alt="GBase 8s" />
     <img src="https://img.shields.io/badge/OceanBase-1B9A8C" alt="OceanBase" />
     <img src="https://img.shields.io/badge/openGauss-005EB8" alt="openGauss" />
     <img src="https://img.shields.io/badge/Apache%20IoTDB-1B3A6B?logo=apache&logoColor=white" alt="Apache IoTDB" />
@@ -82,7 +83,7 @@
 - 主页统一网格布局与树形视图，最近连接、批量连接管理，工作区拖拽排序持久化。
 - 设置页按数据库、终端、Agent、MCP 拆分为独立分页；快捷键支持清除与禁用系统快捷键。
 - 支持 English、简体中文和繁体中文界面。
-- 加密同步不同设备上的个人连接、凭据与设置。
+- 加密同步不同设备上的个人连接、凭据与设置，支持 Navop 云同步和个人同步（文件夹 / Git / WebDAV）。
 
 ## Public MCP、Navop CLI 与 Agent Skill
 
