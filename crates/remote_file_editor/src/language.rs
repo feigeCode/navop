@@ -24,6 +24,19 @@ pub fn load_language_for_path(path: &str, plain_text_mode: bool) -> Result<Strin
     Ok(language)
 }
 
+/// 按**语言名**（不是文件扩展名）显式加载语法。
+///
+/// 与 [`load_language_for_path`] 的分工：那个面向「打开某个文件」，语言从扩展名
+/// 推出来；这个面向「内容已经在我手里，我要的就是这个名字」的场景——例如只读
+/// diff 视图渲染的是 patch 原文，固定用 `diff` 语法，没有任何文件扩展名可依据。
+///
+/// 语言没注册过时返回 `Ok(())`：调用方按「尽力而为」处理即可（语法缺失只是
+/// 少一层着色，不该让内容打不开）。
+pub fn load_language(name: &str) -> Result<()> {
+    extension_runtime::language_extensions::load_registered_language(name)?;
+    Ok(())
+}
+
 fn language_name_for_extension(extension: &str) -> Option<String> {
     extension_runtime::language_extensions::registered_language_name(extension)
         .or_else(|| local_language_name(extension).map(str::to_string))
