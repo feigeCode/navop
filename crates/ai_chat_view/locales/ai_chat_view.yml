@@ -1115,6 +1115,30 @@ AgentUi:
     en: Usage
     zh-CN: 用量
     zh-HK: 用量
+  usage_cost:
+    en: Cost
+    zh-CN: 费用
+    zh-HK: 費用
+  usage_limit:
+    en: Limit
+    zh-CN: 上限
+    zh-HK: 上限
+  usage_remaining:
+    en: Remaining
+    zh-CN: 剩余
+    zh-HK: 剩餘
+  usage_title:
+    en: Context usage
+    zh-CN: 上下文用量
+    zh-HK: 上下文用量
+  usage_used:
+    en: Used
+    zh-CN: 已用
+    zh-HK: 已用
+  usage_unknown:
+    en: Unknown
+    zh-CN: 未知
+    zh-HK: 未知
   workspace:
     en: Workspace
     zh-CN: 工作区

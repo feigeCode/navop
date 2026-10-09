@@ -19,7 +19,7 @@ use gpui::{
     App, AppContext, Context, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
     InteractiveElement, IntoElement, Modifiers, ParentElement, PathPromptOptions, Pixels, Render,
     SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Subscription, Window, div,
-    img, prelude::FluentBuilder, px,
+    img, prelude::FluentBuilder, px, relative,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
@@ -51,7 +51,7 @@ use crate::input::model_picker::{ModelChoice, model_groups, selected_model_index
 use crate::input::skill::{render_skill_mode_content, skill_trigger_label};
 use crate::input::slash::{SlashCommandItem, SlashCompletionProvider};
 use crate::theme::{AgentChatTheme, active_agent_chat_theme, sp};
-use crate::usage::{ContextUsage, UsagePressure};
+use crate::usage::{ContextUsage, UsagePressure, format_token_count};
 
 /// AgentInput 对外事件。
 #[derive(Clone, Debug)]
@@ -340,6 +340,11 @@ pub struct AgentInput {
     slash_commands: Vec<SlashCommandItem>,
     /// 当前图片附件。
     attachments: Vec<ImageAttachment>,
+    /// 正在放大预览的附件 id。
+    ///
+    /// 只存 id 不存图：附件可能在预览期间被移除，存 id 时下一帧自然读不到，
+    /// 覆盖层跟着消失，不会留下一张已经不在列表里的「幽灵图」。
+    attachment_preview: Option<String>,
     /// 已提交过的文本历史，用于在输入框中通过上下键浏览。
     history: PromptHistory,
     /// 当前会话等待下一轮执行的提交摘要。
@@ -540,6 +545,7 @@ impl AgentInput {
             mentions,
             slash_commands: Vec::new(),
             attachments: Vec::new(),
+            attachment_preview: None,
             history: PromptHistory::default(),
             queued_submissions: Vec::new(),
             pending_queue_blocked: false,
@@ -723,6 +729,35 @@ impl AgentInput {
         &self.attachments
     }
 
+    /// 正在放大预览的附件（没有则 `None`）。
+    ///
+    /// 覆盖层画在上层面板根部，不在输入框自己的树里：输入框只占面板底部一条，
+    /// 绝对定位的子元素跳不出它的尺寸。
+    pub fn previewed_attachment(&self) -> Option<&ImageAttachment> {
+        let id = self.attachment_preview.as_deref()?;
+        self.attachments.iter().find(|att| att.id == id)
+    }
+
+    /// 打开/关闭某张附件的预览（再点一下同一张就是关）。
+    pub fn toggle_attachment_preview(&mut self, id: &str, cx: &mut Context<Self>) {
+        if !self.attachments.iter().any(|att| att.id == id) {
+            return;
+        }
+        self.attachment_preview = if self.attachment_preview.as_deref() == Some(id) {
+            None
+        } else {
+            Some(id.to_string())
+        };
+        cx.notify();
+    }
+
+    /// 关掉附件预览（点背板 / 点关闭按钮；本来就是关的时候是 no-op）。
+    pub fn close_attachment_preview(&mut self, cx: &mut Context<Self>) {
+        if self.attachment_preview.take().is_some() {
+            cx.notify();
+        }
+    }
+
     /// 整体替换输入框的图片附件（会话草稿恢复专用，与 [`Self::set_composer_text`] 同一套纪律）。
     ///
     /// **整体替换**是防串台的关键：切到一个没有附件草稿的会话时，上一会话挂在
@@ -833,6 +868,10 @@ impl AgentInput {
 
     fn remove_attachment(&mut self, id: &str, cx: &mut Context<Self>) {
         self.attachments.retain(|a| a.id != id);
+        // 被移除的那张正好在预览里：连同覆盖层一起关掉。
+        if self.attachment_preview.as_deref() == Some(id) {
+            self.attachment_preview = None;
+        }
         cx.notify();
     }
 
@@ -1459,25 +1498,38 @@ impl AgentInput {
             .attachments
             .iter()
             .map(|att| {
-                let id = att.id.clone();
+                let preview_id = att.id.clone();
+                let remove_id = att.id.clone();
+                let element_id = att.id.clone();
+                let previewing = self.attachment_preview.as_deref() == Some(att.id.as_str());
                 div()
+                    .id(SharedString::from(format!("agent-attachment-{element_id}")))
                     .relative()
+                    .debug_selector(move || format!("agent-attachment-{element_id}"))
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.toggle_attachment_preview(&preview_id, cx);
+                    }))
                     .child(
                         img(att.image.clone())
                             .w(sp(56.0))
                             .h(sp(56.0))
                             .rounded(cx.theme().radius)
                             .border_1()
-                            .border_color(theme.border),
+                            .border_color(if previewing {
+                                theme.accent
+                            } else {
+                                theme.border
+                            }),
                     )
                     .child(
                         div().absolute().top_0().right_0().child(
-                            Button::new(SharedString::from(format!("rm-att-{id}")))
+                            Button::new(SharedString::from(format!("rm-att-{remove_id}")))
                                 .icon(IconName::Close)
                                 .ghost()
                                 .xsmall()
                                 .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.remove_attachment(&id, cx);
+                                    this.remove_attachment(&remove_id, cx);
                                 })),
                         ),
                     )
@@ -1631,38 +1683,45 @@ impl AgentInput {
     /// 没数据就不占地方摆一个空圈。
     ///
     /// 颜色随占用分档:常规 accent、70% 起转 warning、90% 起转 danger。
+    /// 圆环本身是按钮:点开看完整读数（已用 / 上限 / 剩余 / 费用）。
     fn render_usage_gauge(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
-        let usage = self.context.context_usage.as_ref()?;
+        let usage = self.context.context_usage.clone()?;
         let theme = self.local_theme(cx);
-        let color = match usage.pressure() {
-            UsagePressure::Calm => theme.gauge,
-            UsagePressure::Elevated => theme.gauge_warning,
-            UsagePressure::Critical => theme.gauge_danger,
-        };
+        let color = usage_color(&usage, &theme);
         let percent = usage.percent().unwrap_or(0.0);
         let label = usage.gauge_label();
         let detail = usage.detail_text();
-        Some(
-            div()
-                .debug_selector(|| "agent-input-usage-gauge".to_string())
-                .flex_shrink_0()
-                .flex()
-                .items_center()
-                .gap(sp(6.0))
-                .child(
-                    div().size(sp(USAGE_GAUGE_DIAMETER)).child(
-                        ProgressCircle::new("agent-input-usage")
-                            .value(percent)
-                            .color(color)
-                            .accessibility_label(detail),
+        let trigger = Button::new("agent-input-usage-gauge")
+            .debug_selector(|| "agent-input-usage-gauge".to_string())
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .gap(sp(6.0))
+                    .child(
+                        div().size(sp(USAGE_GAUGE_DIAMETER)).child(
+                            ProgressCircle::new("agent-input-usage")
+                                .value(percent)
+                                .color(color)
+                                .accessibility_label(detail),
+                        ),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(label),
                     ),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(label),
-                ),
+            )
+            .ghost()
+            .small()
+            .px_0();
+        Some(
+            Popover::new("agent-usage-popover")
+                // 触发器只有 Button 实现了 `Selectable`；圆环与百分比作为按钮内容。
+                .trigger(trigger)
+                .content(move |_state, _window, _cx| render_usage_detail(&usage, &theme)),
         )
     }
 
@@ -3860,6 +3919,123 @@ impl Render for AgentInput {
     }
 }
 
+/// 占用分档 → 圆环颜色。
+///
+/// 三档共用同一套语义槽：常规、70% 起警告、90% 起危险。
+fn usage_color(usage: &ContextUsage, theme: &AgentChatTheme) -> gpui::Hsla {
+    match usage.pressure() {
+        UsagePressure::Calm => theme.gauge,
+        UsagePressure::Elevated => theme.gauge_warning,
+        UsagePressure::Critical => theme.gauge_danger,
+    }
+}
+
+/// 用量详情面板：点圆环展开的完整读数。
+///
+/// 只展示**手上真实有**的数：没有窗口大小就不编造上限与百分比，
+/// 没有费用就不摆一行空值。
+fn render_usage_detail(usage: &ContextUsage, theme: &AgentChatTheme) -> impl IntoElement + use<> {
+    let accent = usage_color(usage, theme);
+    let rows = usage_detail_rows(usage)
+        .into_iter()
+        .map(|(label, value)| usage_detail_row(label, value, theme))
+        .collect::<Vec<_>>();
+
+    v_flex()
+        .debug_selector(|| "agent-usage-detail".to_string())
+        .w(sp(220.0))
+        .gap_2()
+        .p_3()
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(t!("AgentUi.usage_title").to_string()),
+        )
+        .children(match usage.percent() {
+            Some(percent) => Some(usage_percent_bar(percent, accent, theme)),
+            None => None,
+        })
+        .children(rows)
+}
+
+/// 详情面板里的「标签 / 数值」列表。
+///
+/// 抽成纯函数便于断言：哪些行会出现、顺序如何、窗口未知时怎么退化。
+fn usage_detail_rows(usage: &ContextUsage) -> Vec<(String, String)> {
+    let mut rows = vec![(
+        t!("AgentUi.usage_used").to_string(),
+        format_token_count(usage.used),
+    )];
+    match usage.window.filter(|window| *window > 0) {
+        Some(window) => {
+            rows.push((
+                t!("AgentUi.usage_limit").to_string(),
+                format_token_count(window),
+            ));
+            rows.push((
+                t!("AgentUi.usage_remaining").to_string(),
+                format_token_count(window.saturating_sub(usage.used)),
+            ));
+        }
+        None => rows.push((
+            t!("AgentUi.usage_limit").to_string(),
+            t!("AgentUi.usage_unknown").to_string(),
+        )),
+    }
+    if let Some(cost) = usage.cost.as_deref() {
+        rows.push((t!("AgentUi.usage_cost").to_string(), cost.to_string()));
+    }
+    rows
+}
+
+/// 用量详情里的一行：左标签、右数值。
+fn usage_detail_row(
+    label: String,
+    value: String,
+    theme: &AgentChatTheme,
+) -> impl IntoElement + use<> {
+    h_flex()
+        .w_full()
+        .items_center()
+        .justify_between()
+        .gap_3()
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(label),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .text_xs()
+                .text_color(theme.foreground)
+                .child(value),
+        )
+}
+
+/// 占用比例条：轨道走 `inset`，已完成部分走当前档位色。
+fn usage_percent_bar(
+    percent: f32,
+    accent: gpui::Hsla,
+    theme: &AgentChatTheme,
+) -> impl IntoElement + use<> {
+    div()
+        .w_full()
+        .h(sp(6.0))
+        .rounded_full()
+        .bg(theme.inset)
+        .child(
+            div()
+                .h_full()
+                .w(relative((percent / 100.0).clamp(0.0, 1.0)))
+                .rounded_full()
+                .bg(accent),
+        )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4414,6 +4590,82 @@ mod tests {
         assert!(
             cx.debug_bounds("agent-input-usage-gauge").is_none(),
             "没有用量读数就不该占位"
+        );
+    }
+
+    /// 窗口已知时详情面板给四行：已用 / 上限 / 剩余 / 费用。
+    ///
+    /// 标签用同一批 `t!` 钥拼出来：测试环境不确定当前 locale，
+    /// 这里真正要卡的是「哪几行、什么顺序、数值怎么格式化」。
+    #[test]
+    fn usage_detail_rows_cover_used_limit_remaining_and_cost() {
+        let usage = ContextUsage::new(50_000, Some(200_000)).with_cost(Some("$0.12"));
+        assert_eq!(
+            usage_detail_rows(&usage),
+            vec![
+                (t!("AgentUi.usage_used").to_string(), "50.0k".to_string()),
+                (t!("AgentUi.usage_limit").to_string(), "200.0k".to_string()),
+                (
+                    t!("AgentUi.usage_remaining").to_string(),
+                    "150.0k".to_string()
+                ),
+                (t!("AgentUi.usage_cost").to_string(), "$0.12".to_string()),
+            ]
+        );
+    }
+
+    /// 窗口未知时不编造上限与剩余：只报已用，并明说上限未知。
+    #[test]
+    fn usage_detail_rows_degrade_when_the_window_is_unknown() {
+        let unknown = vec![
+            (t!("AgentUi.usage_used").to_string(), "12.3k".to_string()),
+            (
+                t!("AgentUi.usage_limit").to_string(),
+                t!("AgentUi.usage_unknown").to_string(),
+            ),
+        ];
+        assert_eq!(usage_detail_rows(&ContextUsage::new(12_345, None)), unknown);
+        // 窗口为 0 等同于未知，不能除零也不能报一个 0/0。
+        assert_eq!(
+            usage_detail_rows(&ContextUsage::new(12_345, Some(0))),
+            unknown
+        );
+    }
+
+    /// 点圆环展开详情面板；再点一次收起。
+    #[gpui::test]
+    fn clicking_the_gauge_opens_and_closes_the_usage_detail(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            AgentInputLayoutRoot::with_usage(50_000, Some(200_000), window, cx)
+        });
+        let cx: &mut VisualTestContext = cx;
+
+        assert!(
+            cx.debug_bounds("agent-usage-detail").is_none(),
+            "初始应该是收起的"
+        );
+        let gauge = cx
+            .debug_bounds("agent-input-usage-gauge")
+            .expect("有读数时应该渲染圆环");
+        cx.simulate_click(gauge.center(), Modifiers::default());
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("agent-usage-detail").is_some(),
+            "点圆环应该展开用量详情"
+        );
+
+        let gauge = cx
+            .debug_bounds("agent-input-usage-gauge")
+            .expect("圆环仍然在");
+        cx.simulate_click(gauge.center(), Modifiers::default());
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("agent-usage-detail").is_none(),
+            "再点一次应该收起"
         );
     }
 
@@ -4985,5 +5237,68 @@ mod tests {
         let got = referenced_mentions_in_text("请检查 @production", &mentions);
 
         assert!(got.is_empty());
+    }
+
+    /// 点缩略图开预览、再点一下关掉；关掉后 `previewed_attachment` 必须回到
+    /// `None`，否则覆盖层会带进下一个会话。
+    #[gpui::test]
+    fn attachment_thumbnail_click_toggles_preview(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let (root, cx) = cx.add_window_view(AgentInputLayoutRoot::new);
+        let cx: &mut VisualTestContext = cx;
+
+        let attachment = ImageAttachment::for_test("shot.png");
+        let attachment_id = attachment.id.clone();
+        let input = root.read_with(cx, |root, _| root.input.clone());
+        input.update(cx, |input, cx| {
+            input.set_composer_attachments(vec![attachment], cx);
+        });
+        cx.run_until_parked();
+
+        // `debug_bounds` 要 `&'static str`；测试里泄漏一个选择器字符串最省事。
+        let selector: &'static str =
+            Box::leak(format!("agent-attachment-{attachment_id}").into_boxed_str());
+        let thumb = cx.debug_bounds(selector).expect("缩略图应该渲染出来");
+        cx.simulate_click(thumb.center(), Modifiers::default());
+        assert!(
+            input.read_with(cx, |input, _| input.previewed_attachment().is_some()),
+            "点缩略图应该打开预览"
+        );
+
+        cx.run_until_parked();
+        let thumb = cx.debug_bounds(selector).expect("缩略图仍然在");
+        cx.simulate_click(thumb.center(), Modifiers::default());
+        assert!(
+            input.read_with(cx, |input, _| input.previewed_attachment().is_none()),
+            "再点一下应该关掉预览"
+        );
+    }
+
+    /// 删掉附件时预览必须一起关：否则覆盖层会留着一张已经不在列表里的图。
+    #[gpui::test]
+    fn removing_the_previewed_attachment_closes_the_preview(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let (root, cx) = cx.add_window_view(AgentInputLayoutRoot::new);
+        let cx: &mut VisualTestContext = cx;
+
+        let attachment = ImageAttachment::for_test("shot.png");
+        let attachment_id = attachment.id.clone();
+        let input = root.read_with(cx, |root, _| root.input.clone());
+        input.update(cx, |input, cx| {
+            input.set_composer_attachments(vec![attachment], cx);
+            input.toggle_attachment_preview(&attachment_id, cx);
+        });
+        assert!(input.read_with(cx, |input, _| input.previewed_attachment().is_some()));
+
+        input.update(cx, |input, cx| {
+            input.remove_attachment(&attachment_id, cx);
+        });
+        assert!(input.read_with(cx, |input, _| input.previewed_attachment().is_none()));
     }
 }

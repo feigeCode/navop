@@ -11,7 +11,7 @@
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, Context, InteractiveElement, IntoElement, ModifiersChangedEvent, MouseButton,
-    ParentElement, SharedString, StatefulInteractiveElement, Styled, Window, div, px,
+    ParentElement, SharedString, StatefulInteractiveElement, Styled, Window, div,
 };
 use gpui_component::ActiveTheme;
 use rust_i18n::t;

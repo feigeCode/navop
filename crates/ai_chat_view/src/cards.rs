@@ -8,7 +8,7 @@ use crate::card::{CardMessage, CardRegistry, ChatCard};
 use crate::theme::{active_agent_chat_theme, sp};
 use crate::{ChartJsonBlock, ChartType, parse_chart_json_block};
 use gpui::prelude::FluentBuilder;
-use gpui::{AnyElement, App, FontWeight, IntoElement, ParentElement, Styled, Window, div, px};
+use gpui::{AnyElement, App, FontWeight, IntoElement, ParentElement, Styled, Window, div};
 use gpui_component::{h_flex, v_flex};
 use rust_i18n::t;
 use std::sync::Arc;

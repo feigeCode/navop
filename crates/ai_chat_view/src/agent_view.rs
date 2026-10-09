@@ -106,6 +106,7 @@ use crate::usage::{ContextUsage, format_local_usage, model_context_window};
 mod acp_options;
 pub(crate) mod acp_sessions;
 mod acp_ui;
+mod attachment_preview;
 mod decision_dock;
 mod findbar;
 mod session_navigation;
@@ -452,6 +453,41 @@ fn acp_connection_is_unavailable(phase: Option<&AcpConnectionPhase>) -> bool {
         phase,
         Some(AcpConnectionPhase::Failed { .. } | AcpConnectionPhase::Closed)
     )
+}
+
+/// 骨架屏画几组占位条。
+///
+/// 5 组足够铺满常见面板高度，又不会在矮窗口里被裁成半截——骨架屏被裁掉
+/// 一半会让人以为布局坏了。
+const SKELETON_ROWS: usize = 5;
+
+/// 该不该拿骨架屏顶替转录列表。
+///
+/// 五个条件缺一不可：
+/// - 非侧边栏紧凑渲染（那里是列表行，不是完整转录）；
+/// - 后端是 ACP（本地后端的历史是同步读盘的，没有空窗期）；
+/// - 连接停在 Ready 之前的相位（Failed/Closed 要走错误条，不是骨架屏）；
+/// - 没有在飞轮次（轮次页脚已经在说「进行中」）；
+/// - 转录为空（已有历史就不该拿占位条盖住它）。
+fn should_show_transcript_skeleton(
+    sidebar_mode: bool,
+    backend: Backend,
+    phase: Option<&AcpConnectionPhase>,
+    is_running: bool,
+    transcript_is_empty: bool,
+) -> bool {
+    !sidebar_mode
+        && backend == Backend::Acp
+        && !is_running
+        && transcript_is_empty
+        && matches!(
+            phase,
+            Some(
+                AcpConnectionPhase::Starting
+                    | AcpConnectionPhase::Initializing
+                    | AcpConnectionPhase::CreatingSession
+            )
+        )
 }
 
 /// 自动重连上限。超过后不再拉起子进程，改为把决定权交回用户。
@@ -6877,24 +6913,40 @@ impl Render for AgentChatView {
             std::rc::Rc::new(move |action, window, cx| action_listener(&action, window, cx));
 
         let findbar = self.render_findbar(&chat_theme, cx);
-        let messages = render_message_list(
-            &self.transcript.messages,
-            &self.scroll_handle,
-            MessageListContext::new(list_layout)
-                .with_activity(running_activity)
-                .with_code_actions(Some(&self.code_block_actions))
-                .with_theme(Some(&chat_theme))
-                .with_expansion(Some(&self.expansion))
-                .with_timings(Some(&self.turn_timings))
-                .with_action_handler(Some(on_action))
-                .with_turn_chrome(!self.sidebar_mode)
-                .with_search(Some(&self.search))
-                .with_findbar(findbar)
-                .with_restorable_turns(self.restorable_turns.get(&self.current_session))
-                .with_scroll_to_latest(show_scroll_to_latest),
-            window,
-            cx,
-        );
+        // ACP 连接还停在 Ready 之前的相位时，历史要靠 agent 回放，转录是空的。
+        // 空面板会被读成「坏了」；骨架屏则说明「在等数据」。
+        let show_skeleton = {
+            let acp_phase = self.acp.as_ref().map(AcpConnection::phase);
+            should_show_transcript_skeleton(
+                self.sidebar_mode,
+                self.backend,
+                acp_phase.as_ref(),
+                self.is_running,
+                self.transcript.messages.is_empty(),
+            )
+        };
+        let messages = if show_skeleton {
+            crate::skeleton::transcript_skeleton(&chat_theme, list_layout, SKELETON_ROWS)
+        } else {
+            render_message_list(
+                &self.transcript.messages,
+                &self.scroll_handle,
+                MessageListContext::new(list_layout)
+                    .with_activity(running_activity)
+                    .with_code_actions(Some(&self.code_block_actions))
+                    .with_theme(Some(&chat_theme))
+                    .with_expansion(Some(&self.expansion))
+                    .with_timings(Some(&self.turn_timings))
+                    .with_action_handler(Some(on_action))
+                    .with_turn_chrome(!self.sidebar_mode)
+                    .with_search(Some(&self.search))
+                    .with_findbar(findbar)
+                    .with_restorable_turns(self.restorable_turns.get(&self.current_session))
+                    .with_scroll_to_latest(show_scroll_to_latest),
+                window,
+                cx,
+            )
+        };
         let decision_dock = self.render_decision_dock(&chat_theme, cx);
         let input_area = div()
             .id("agent-input-area")
@@ -6929,6 +6981,8 @@ impl Render for AgentChatView {
         let auth_actions = self.render_acp_auth_actions(cx);
 
         if self.sidebar_mode {
+            // 附件放大预览：挂在面板根部，才有覆盖整块面板的背板。
+            let attachment_preview = self.render_attachment_preview(&chat_theme, cx);
             // 侧边栏视图:紧凑头部(新建对话 / 历史记录) + 消息 + 输入。
             let header = self
                 .show_sidebar_header
@@ -6979,6 +7033,7 @@ impl Render for AgentChatView {
                     self.render_session_switcher(&chat_theme, cx),
                     |root, overlay| root.child(overlay),
                 )
+                .when_some(attachment_preview, |root, overlay| root.child(overlay))
                 .child(
                     v_flex()
                         .debug_selector(|| "agent-sidebar-stack".to_string())
@@ -6992,6 +7047,8 @@ impl Render for AgentChatView {
                         .child(input_area),
                 )
         } else {
+            // 附件放大预览：挂在面板根部，才有覆盖整块面板的背板。
+            let attachment_preview = self.render_attachment_preview(&chat_theme, cx);
             // 普通全宽视图:常驻左侧会话栏 + 主区(标题 / 消息 / 输入)。
             // 工作台外壳接管会话栏时整块隐藏（`sidebar_suppressed`）。
             let sidebar = (!self.sidebar_suppressed).then(|| self.render_sidebar(cx));
@@ -7066,6 +7123,7 @@ impl Render for AgentChatView {
                             ),
                         ),
                 )
+                .when_some(attachment_preview, |root, overlay| root.child(overlay))
         }
     }
 }
@@ -8610,6 +8668,91 @@ mod tests {
         assert!(!acp_connection_is_unavailable(Some(
             &AcpConnectionPhase::Ready
         )));
+    }
+
+    #[test]
+    fn transcript_skeleton_only_covers_the_acp_warm_up_window() {
+        let starting = AcpConnectionPhase::Starting;
+        let ready = AcpConnectionPhase::Ready;
+
+        assert!(should_show_transcript_skeleton(
+            false,
+            Backend::Acp,
+            Some(&starting),
+            false,
+            true
+        ));
+        assert!(should_show_transcript_skeleton(
+            false,
+            Backend::Acp,
+            Some(&AcpConnectionPhase::CreatingSession),
+            false,
+            true
+        ));
+
+        // 已连接：真内容（包括真的空会话）自己表达，不用骨头占位。
+        assert!(!should_show_transcript_skeleton(
+            false,
+            Backend::Acp,
+            Some(&ready),
+            false,
+            true
+        ));
+        // 失败/断开走错误条，骨架屏会把「出错了」遮成「在加载」。
+        let failed = AcpConnectionPhase::Failed {
+            error: AcpError::new(
+                AcpErrorKind::ConnectionClosed,
+                "agent",
+                "Agent",
+                "connection failed",
+            ),
+        };
+        assert!(!should_show_transcript_skeleton(
+            false,
+            Backend::Acp,
+            Some(&failed),
+            false,
+            true
+        ));
+        assert!(!should_show_transcript_skeleton(
+            false,
+            Backend::Acp,
+            None,
+            false,
+            true
+        ));
+        // 已经有历史：不能拿占位条盖住它。
+        assert!(!should_show_transcript_skeleton(
+            false,
+            Backend::Acp,
+            Some(&starting),
+            false,
+            false
+        ));
+        // 在飞轮次：轮次页脚已经在说「进行中」。
+        assert!(!should_show_transcript_skeleton(
+            false,
+            Backend::Acp,
+            Some(&starting),
+            true,
+            true
+        ));
+        // 本地后端的历史是同步读盘的，没有空窗期。
+        assert!(!should_show_transcript_skeleton(
+            false,
+            Backend::Local,
+            Some(&starting),
+            false,
+            true
+        ));
+        // 侧边栏紧凑渲染里是列表行，不是完整转录。
+        assert!(!should_show_transcript_skeleton(
+            true,
+            Backend::Acp,
+            Some(&starting),
+            false,
+            true
+        ));
     }
 
     #[test]
@@ -12607,8 +12750,7 @@ mod tests {
         };
 
         let mut state = AcpSessionState::default();
-        state.apply_new_session_response(
-            &NewSessionResponse::new("s1").config_options(vec![
+        state.apply_new_session_response(&NewSessionResponse::new("s1").config_options(vec![
                 SessionConfigOption::select(
                     "mode",
                     "Session Mode",
@@ -12621,8 +12763,7 @@ mod tests {
                     ],
                 )
                 .category(SessionConfigOptionCategory::Mode),
-            ]),
-        );
+            ]));
 
         let options = acp_execution_mode_options(&state);
 

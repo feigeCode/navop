@@ -19,7 +19,6 @@ use gpui::prelude::FluentBuilder;
 use gpui::{
     Animation, AnimationExt, AnyElement, App, InteractiveElement, IntoElement, ParentElement,
     ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Window, div, ease_out_quint,
-    px,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::{ActiveTheme, Icon, Sizable, h_flex, v_flex};

@@ -1,6 +1,6 @@
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
-    ParentElement, Render, Styled, Window, div, px,
+    ParentElement, Render, Styled, Window, div,
 };
 use gpui_component::{
     ActiveTheme, Icon, Sizable, Size, h_flex,

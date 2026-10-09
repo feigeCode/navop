@@ -7,7 +7,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::{
     App, Div, FontWeight, Hsla, InteractiveElement, ParentElement, SharedString, Styled, div,
 };
-use gpui_component::{ActiveTheme, Sizable, h_flex, v_flex};
+use gpui_component::{ActiveTheme, h_flex, v_flex};
 use rust_i18n::t;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -231,15 +231,6 @@ pub fn group_sessions_by_date<'a>(
             (!bucket_sessions.is_empty()).then_some((*bucket, bucket_sessions))
         })
         .collect()
-}
-
-/// 同上,但接拥有所有权的切片(免去调用方自己建一层引用)。
-pub fn group_sessions_by_date_owned(
-    sessions: &[SessionSummary],
-    now: i64,
-) -> Vec<(DateBucket, Vec<&SessionSummary>)> {
-    let refs: Vec<&SessionSummary> = sessions.iter().collect();
-    group_sessions_by_date(&refs, now)
 }
 
 /// 时间桶的本地化标题。
@@ -587,16 +578,6 @@ mod group_tests {
                 .map(|s| s.id.as_str())
                 .collect::<Vec<_>>()
         );
-    }
-
-    #[test]
-    fn owned_grouping_matches_the_ref_version() {
-        let now = local_midnight(1_700_000_000) + DAY_SECS / 2;
-        let sessions = vec![SessionSummary::new("a", "s", now)];
-        let owned = group_sessions_by_date_owned(&sessions, now);
-        assert_eq!(owned.len(), 1);
-        assert_eq!(owned[0].0, DateBucket::Today);
-        assert_eq!(owned[0].1[0].id, "a");
     }
 
     #[test]

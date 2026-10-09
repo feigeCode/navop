@@ -44,6 +44,18 @@ impl ImageAttachment {
         }
     }
 
+    /// 测试用最小附件。
+    ///
+    /// `new` 是私有的（调用方应走剪贴板 / 路径两条真实入口）；测试只需要
+    /// 一个字节合法、能渲染的占位图片，不必把 `new` 放开成公开 API。
+    #[cfg(test)]
+    pub(crate) fn for_test(name: &str) -> Self {
+        Self::new(
+            name,
+            Image::from_bytes(ImageFormat::Png, vec![137, 80, 78, 71]),
+        )
+    }
+
     /// MIME 类型(如 `image/png`)。
     pub fn mime(&self) -> &'static str {
         self.image.format.mime_type()

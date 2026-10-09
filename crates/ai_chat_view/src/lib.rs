@@ -66,6 +66,7 @@ mod send_button;
 mod session_service;
 pub mod session_shortcut;
 mod session_sidebar;
+mod skeleton;
 mod subagent_detail_panel;
 mod theme;
 mod transcript_scroll;
