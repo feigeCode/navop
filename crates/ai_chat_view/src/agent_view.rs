@@ -109,6 +109,7 @@ mod acp_ui;
 mod attachment_preview;
 mod decision_dock;
 mod findbar;
+mod message_image_preview;
 mod session_navigation;
 mod session_switcher;
 
@@ -1323,6 +1324,12 @@ pub struct AgentChatView {
     /// 不适合放在每帧 render 路径上重复查。`None` 与「空数据」区分开——
     /// 空数据是「打开了但还没有采样」。
     pub(super) usage_history: Option<crate::usage_history::UsageHistoryData>,
+    /// 正在放大的转录图片；`None` = 没开。
+    ///
+    /// 存图本身而不是「消息 id + 下标」：会话一切换、消息一被淘汰，
+    /// 反查就会落空，表现为「点了没反应」。`Arc<Image>` 的克隆只加一次
+    /// 引用计数。
+    pub(super) message_image_preview: Option<crate::message_image::MessageImage>,
     /// findbar 的查询输入框。
     findbar_input: Entity<InputState>,
     /// 侧边栏是否显示「已归档」会话(否则显示活跃会话)。
@@ -1700,6 +1707,7 @@ impl AgentChatView {
             search_revision: 0,
             findbar_open: false,
             usage_history: None,
+            message_image_preview: None,
             findbar_input,
             show_archived: false,
             sidebar_mode,
@@ -4095,6 +4103,9 @@ impl AgentChatView {
             MessageListAction::ScrollToLatest => {
                 self.request_scroll_to_bottom();
             }
+            MessageListAction::PreviewImage { image } => {
+                self.message_image_preview = Some(image);
+            }
             MessageListAction::RestoreTurn { turn_id } => {
                 cx.emit(AgentChatViewEvent::RestoreTurn {
                     session_id: self.current_session.clone(),
@@ -5287,6 +5298,13 @@ impl AgentChatView {
     }
 
     /// 关掉用量历史浮层，顺手把数据丢掉——下次打开重新查。
+    /// 关掉转录图片预览。没开着就是空操作。
+    pub(super) fn close_message_image_preview(&mut self, cx: &mut Context<Self>) {
+        if self.message_image_preview.take().is_some() {
+            cx.notify();
+        }
+    }
+
     pub(super) fn close_usage_history(&mut self, cx: &mut Context<Self>) {
         if self.usage_history.take().is_some() {
             cx.notify();
@@ -7030,6 +7048,7 @@ impl Render for AgentChatView {
         if self.sidebar_mode {
             // 附件放大预览：挂在面板根部，才有覆盖整块面板的背板。
             let attachment_preview = self.render_attachment_preview(&chat_theme, cx);
+            let message_image_preview = self.render_message_image_preview(&chat_theme, cx.entity());
             let usage_history = self.render_usage_history(&chat_theme, cx.entity());
             // 侧边栏视图:紧凑头部(新建对话 / 历史记录) + 消息 + 输入。
             let header = self
@@ -7082,6 +7101,7 @@ impl Render for AgentChatView {
                     |root, overlay| root.child(overlay),
                 )
                 .when_some(attachment_preview, |root, overlay| root.child(overlay))
+                .when_some(message_image_preview, |root, overlay| root.child(overlay))
                 .when_some(usage_history, |root, overlay| root.child(overlay))
                 .child(
                     v_flex()
@@ -7098,6 +7118,7 @@ impl Render for AgentChatView {
         } else {
             // 附件放大预览：挂在面板根部，才有覆盖整块面板的背板。
             let attachment_preview = self.render_attachment_preview(&chat_theme, cx);
+            let message_image_preview = self.render_message_image_preview(&chat_theme, cx.entity());
             let usage_history = self.render_usage_history(&chat_theme, cx.entity());
             // 普通全宽视图:常驻左侧会话栏 + 主区(标题 / 消息 / 输入)。
             // 工作台外壳接管会话栏时整块隐藏（`sidebar_suppressed`）。
@@ -7174,6 +7195,7 @@ impl Render for AgentChatView {
                         ),
                 )
                 .when_some(attachment_preview, |root, overlay| root.child(overlay))
+                .when_some(message_image_preview, |root, overlay| root.child(overlay))
                 .when_some(usage_history, |root, overlay| root.child(overlay))
         }
     }
@@ -15088,6 +15110,67 @@ mod tests {
         assert!(
             cx.debug_bounds("ai-chat-user-plain-text").is_some(),
             "图片不挤掉文字"
+        );
+    }
+
+    /// 点开转录里的图：整块缩略图（图 + 文件名）都能点，放大的图挂在面板根上。
+    ///
+    /// 覆盖层必须挂面板根而不是滚动容器里——转录区会滚，绝对定位的子元素
+    /// 会被裁在视口内。
+    #[gpui::test]
+    fn clicking_a_transcript_image_opens_a_preview_and_closes_it(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let (host, cx) = cx.add_window_view(FixedSidebarHost::new);
+        let chat = host.read_with(cx, |host, _| host.view.clone());
+        let attachments = vec![crate::ImageAttachment::for_test("screenshot.png")];
+        chat.update(cx, |view, cx| {
+            let session_uid = view.current_session.clone();
+            let resources = ResourceContext::new();
+            view.push_user_to_session(&session_uid, "看这张图", &attachments, &resources);
+            cx.notify();
+        });
+
+        let message_id = chat.read_with(cx, |view, _| {
+            view.transcript
+                .messages
+                .last()
+                .expect("用户消息应该落进当前转录")
+                .id
+                .clone()
+        });
+        let cx: &mut VisualTestContext = cx;
+
+        let image: &'static str =
+            Box::leak(format!("ai-chat-user-image:{message_id}:0").into_boxed_str());
+        let tile = cx.debug_bounds(image).expect("图片应该渲染成缩略图");
+        assert!(
+            cx.debug_bounds("ai-chat-image-preview-layer").is_none(),
+            "没人点之前不该有预览层"
+        );
+
+        cx.simulate_click(tile.center(), Modifiers::default());
+
+        let layer = cx
+            .debug_bounds("ai-chat-image-preview-layer")
+            .expect("点缩略图应该打开预览层");
+        let panel = cx
+            .debug_bounds("ai-chat-image-preview")
+            .expect("预览层里要有内容面板");
+        assert!(
+            layer.size.width >= panel.size.width && layer.size.height >= panel.size.height,
+            "内容面板不该比背板大：layer={layer:?}, panel={panel:?}"
+        );
+
+        // 点背板收起（`IconButton` 不落 debug selector，就从背板点）。
+        // 取内容面板左侧的空隙：面板居中且最宽只有背板的 0.9，一定有留白。
+        cx.simulate_click(
+            point(layer.origin.x + px(2.0), panel.center().y),
+            Modifiers::default(),
+        );
+
+        assert!(
+            cx.debug_bounds("ai-chat-image-preview-layer").is_none(),
+            "点背板应该把预览收起来"
         );
     }
 

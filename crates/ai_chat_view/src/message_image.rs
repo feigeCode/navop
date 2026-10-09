@@ -28,6 +28,19 @@ pub struct MessageImage {
     pub image: Arc<Image>,
 }
 
+/// 相等 = 同一个 `Arc` 指向同一份解码结果，外加同名。
+///
+/// 刻意不比较像素：`Image` 的相等语义是逐像素比对，在这里既贵又没意义——
+/// 转录里两张「同一张图」（乐观插入一张、重放回来一张）本来就是同一个
+/// `Arc`。这个实现只为让它能进带 `PartialEq` 的动作枚举。
+impl PartialEq for MessageImage {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && Arc::ptr_eq(&self.image, &other.image)
+    }
+}
+
+impl Eq for MessageImage {}
+
 impl MessageImage {
     /// 由 composer 附件构造（实时提交路径）。
     pub(crate) fn from_attachment(attachment: &ImageAttachment) -> Self {
@@ -149,6 +162,23 @@ mod tests {
     use super::*;
 
     const PNG_ONE_PIXEL: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==";
+
+    /// 相等按「同一份解码结果」算：动作枚举靠它做 `PartialEq`，不能逐像素比。
+    #[test]
+    fn image_equality_follows_the_shared_decode() {
+        let input = InputImage::new("image/png", PNG_ONE_PIXEL);
+        let image = MessageImage::from_input(&input).expect("PNG should decode");
+        let same = image.clone();
+        let other = MessageImage::from_input(&input).expect("PNG should decode");
+        let renamed = MessageImage {
+            name: Some("screenshot.png".to_string()),
+            ..image.clone()
+        };
+
+        assert_eq!(image, same, "克隆出来的是同一张图");
+        assert_ne!(image, other, "各自解码出来的两份额不相等");
+        assert_ne!(image, renamed, "换了文件名就不是同一条");
+    }
 
     #[test]
     fn input_images_decode_into_renderable_ones() {

@@ -23,6 +23,8 @@ use gpui::{
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::{ActiveTheme, Icon, Sizable, h_flex, v_flex};
 use one_assets::IconName;
+
+use crate::message_image::MessageImage;
 use rust_i18n::t;
 
 use crate::ChatMessageUI;
@@ -49,6 +51,12 @@ pub enum MessageListAction {
     SetProcessExpanded { key: String, expanded: bool },
     /// 用户点击「回到最新」。
     ScrollToLatest,
+    /// 用户点开了消息里的一张图：转录里的图片放大看。
+    ///
+    /// 图片随动作一起带走（`Arc<Image>`，克隆只是加一次引用计数）：宿主因此
+    /// 不必再去转录里按 id 反查——那种反查在会话切换 / 消息被淘汰时会**查空**，
+    /// 表现为「点了没反应」。
+    PreviewImage { image: MessageImage },
     /// 用户点击「回到这一轮」：把工作区恢复到该轮结束时的快照。
     RestoreTurn { turn_id: String },
     /// 用户点击本轮改动摘要里的某个文件：在审阅面板里打开这个文件的 diff。
@@ -256,6 +264,7 @@ fn render_turn(
         children.push(slot(render_one(
             head,
             context.code_actions,
+            context.on_action.as_ref(),
             theme,
             window,
             cx,
@@ -270,6 +279,7 @@ fn render_turn(
         children.push(slot(render_one(
             message,
             context.code_actions,
+            context.on_action.as_ref(),
             theme,
             window,
             cx,
@@ -457,14 +467,28 @@ fn render_process(
     let children: Vec<AnyElement> = items
         .into_iter()
         .map(|item| match item {
-            crate::message_tool_group::MessageRenderItem::Single(message) => {
-                slot(render_one(message, context.code_actions, theme, window, cx))
-            }
+            crate::message_tool_group::MessageRenderItem::Single(message) => slot(render_one(
+                message,
+                context.code_actions,
+                context.on_action.as_ref(),
+                theme,
+                window,
+                cx,
+            )),
             crate::message_tool_group::MessageRenderItem::ToolCallGroup(group) => {
                 let inner = group
                     .messages()
                     .iter()
-                    .map(|message| render_one(message, context.code_actions, theme, window, cx))
+                    .map(|message| {
+                        render_one(
+                            message,
+                            context.code_actions,
+                            context.on_action.as_ref(),
+                            theme,
+                            window,
+                            cx,
+                        )
+                    })
                     .collect();
                 slot(render_tool_call_group(group, inner, theme, cx))
             }

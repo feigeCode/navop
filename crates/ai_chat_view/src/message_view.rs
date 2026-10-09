@@ -1,7 +1,9 @@
 use crate::card::{CardMessage, CardRegistry};
 use crate::code_block::CodeBlockActionRegistry;
 use crate::message_code_actions::apply_code_block_features;
+use crate::message_image::MessageImage;
 use crate::message_tool_group::{MessageRenderItem, message_render_items, render_tool_call_group};
+use crate::message_turn_view::{MessageListAction, MessageListActionHandler};
 use crate::theme::{
     AgentChatTheme, resolve_agent_chat_theme, themed_html, themed_markdown, with_agent_chat_theme,
 };
@@ -274,7 +276,7 @@ fn render_messages_with_layout(
                     .min_w_0()
                     .self_stretch()
                     .flex_shrink_0()
-                    .child(render_item(item, code_actions, &theme, window, cx)),
+                    .child(render_item(item, code_actions, None, &theme, window, cx)),
                 id,
             )
         })
@@ -332,17 +334,20 @@ pub(crate) fn message_column(layout: MessageListLayout) -> Div {
 pub(crate) fn render_item(
     item: MessageRenderItem<'_>,
     code_actions: Option<&CodeBlockActionRegistry>,
+    on_action: Option<&MessageListActionHandler>,
     theme: &AgentChatTheme,
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
     match item {
-        MessageRenderItem::Single(msg) => render_one(msg, code_actions, theme, window, cx),
+        MessageRenderItem::Single(msg) => {
+            render_one(msg, code_actions, on_action, theme, window, cx)
+        }
         MessageRenderItem::ToolCallGroup(group) => {
             let children = group
                 .messages()
                 .iter()
-                .map(|msg| render_one(msg, code_actions, theme, window, cx))
+                .map(|msg| render_one(msg, code_actions, on_action, theme, window, cx))
                 .collect();
             render_tool_call_group(group, children, theme, cx)
         }
@@ -352,12 +357,13 @@ pub(crate) fn render_item(
 pub(crate) fn render_one(
     msg: &ChatMessageUI,
     code_actions: Option<&CodeBlockActionRegistry>,
+    on_action: Option<&MessageListActionHandler>,
     theme: &AgentChatTheme,
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
     match msg.role {
-        ChatRole::User => render_user_message_themed(msg, theme),
+        ChatRole::User => render_user_message_themed(msg, theme, on_action),
         ChatRole::System => render_system_message_themed(msg, theme),
         ChatRole::Assistant => match &msg.variant {
             MessageVariant::Status { title, is_done } => {
@@ -377,12 +383,14 @@ pub fn render_user_message<E: MessageExtension>(
     cx: &App,
 ) -> AnyElement {
     let theme = AgentChatTheme::from_app(cx);
-    render_user_message_themed(msg, &theme)
+    // 独立入口（宿主自己塞消息的场景）没有动作通道，图片就只展示、不可放大。
+    render_user_message_themed(msg, &theme, None)
 }
 
 fn render_user_message_themed<E: MessageExtension>(
     msg: &ChatMessageUIGeneric<E>,
     theme: &AgentChatTheme,
+    on_action: Option<&MessageListActionHandler>,
 ) -> AnyElement {
     let bubble_width = user_message_bubble_width(&msg.content, msg.images.len());
     let plain_text_html = user_plain_text_html(&msg.content);
@@ -415,7 +423,7 @@ fn render_user_message_themed<E: MessageExtension>(
                         .min_w_0()
                         // 图片放在正文上方：跟聊天软件里「图 + 一句话」的读法一致。
                         .when(!images.is_empty(), |this| {
-                            this.child(render_user_images(&images, &msg.id, theme))
+                            this.child(render_user_images(&images, &msg.id, theme, on_action))
                         })
                         .when(!msg.content.trim().is_empty(), |this| {
                             this.child(
@@ -446,9 +454,10 @@ fn render_user_message_themed<E: MessageExtension>(
 /// 转录就没法看了。点开放大留给后续（要给视图加一层预览状态），
 /// 这里先保证「看得见、看得清是什么」。
 fn render_user_images(
-    images: &[crate::message_image::MessageImage],
+    images: &[MessageImage],
     message_id: &str,
     theme: &AgentChatTheme,
+    on_action: Option<&MessageListActionHandler>,
 ) -> AnyElement {
     let mut row = h_flex()
         .debug_selector(|| format!("ai-chat-user-images:{message_id}"))
@@ -458,11 +467,15 @@ fn render_user_images(
         .gap_2();
     for (index, item) in images.iter().enumerate() {
         let mut tile = div()
+            .id(SharedString::from(format!(
+                "ai-chat-user-image-{message_id}-{index}"
+            )))
             .debug_selector({
                 let message_id = message_id.to_string();
                 move || format!("ai-chat-user-image:{message_id}:{index}")
             })
             .flex_none()
+            .cursor_pointer()
             .overflow_hidden()
             .rounded_md()
             .border_1()
@@ -474,6 +487,20 @@ fn render_user_images(
                     .h(USER_IMAGE_MAX_EDGE)
                     .object_fit(gpui::ObjectFit::ScaleDown),
             );
+        // 点整块（图 + 文件名）都能放大：点文件名而没反应会显得像坏了。
+        if let Some(on_action) = on_action {
+            let on_action = on_action.clone();
+            let image = item.clone();
+            tile = tile.on_click(move |_, window, cx| {
+                on_action(
+                    MessageListAction::PreviewImage {
+                        image: image.clone(),
+                    },
+                    window,
+                    cx,
+                );
+            });
+        }
         if let Some(name) = item.name.as_deref().filter(|name| !name.is_empty()) {
             tile = tile.child(
                 div()
