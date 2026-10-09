@@ -10,7 +10,7 @@
 //! 这里定义共享的数据结构(序列化契约)与渲染实现,二者共用同一份 schema。
 
 use agent_runtime::ToolAction;
-use crate::agent_diff::{DiffRow, FileChangeSummary, patch_from_summary};
+use crate::agent_diff::{FileChangeSummary, patch_from_summary};
 use crate::card::{CardMessage, CardRegistry, ChatCard};
 use crate::theme::{AgentChatTheme, active_agent_chat_theme, themed_markdown};
 use gpui::prelude::FluentBuilder;
@@ -1417,13 +1417,19 @@ fn build_diff_blocks(
                     Some(state) => Some(state),
                     None => match DiffFile::parse(&patch_from_summary(change)) {
                         Ok(files) => {
+                            let files = files
+                                .into_iter()
+                                .map(|file| match diff_language_name(file.path()) {
+                                    Some(language) => file.with_language(language),
+                                    None => file,
+                                })
+                                .collect::<Vec<_>>();
                             let state = cx
                                 .new(|cx| DiffState::new(files, cx).with_mode(DiffMode::Split));
                             cache.insert(key, state.downgrade());
                             Some(state)
                         }
-                        // 合成 patch 按契约必可解析;走到这里说明契约破了,
-                        // 退回旧渲染,别让一行 diff 都不显示。
+                        // 合成 patch 按契约必可解析;走到这里说明契约破了。
                         Err(error) => {
                             tracing::warn!("synthesized diff patch failed to parse: {error}");
                             None
@@ -1461,6 +1467,18 @@ fn diff_block_height(change: &FileChangeSummary) -> f32 {
     (change.rows.len() as f32 * 20.0 + 16.0).clamp(72.0, 320.0)
 }
 
+/// 文件扩展名的小写形式,作为 Diff 组件语法高亮的语言名。
+///
+/// 组件语言表认**小写扩展名**并自带别名映射(`rs` → `rust`、`ts` → `typescript`),
+/// 对不上号只是少一层高亮,不影响渲染。与工作区审阅面板里的同名逻辑一致。
+fn diff_language_name(path: &str) -> Option<String> {
+    let extension = path.rsplit_once('.')?.1;
+    if extension.is_empty() || extension.contains('/') || extension.contains('\\') {
+        return None;
+    }
+    Some(extension.to_lowercase())
+}
+
 fn tool_card_diff_block(blocks: &[DiffBlockState], cx: &App) -> AnyElement {
     let theme = active_agent_chat_theme(cx);
     v_flex()
@@ -1478,8 +1496,8 @@ fn tool_card_diff_block(blocks: &[DiffBlockState], cx: &App) -> AnyElement {
                 .overflow_hidden()
                 .child(tool_diff_file_header(&block.change, cx))
                 // Split 双栏 + 行号由 DiffState 的模式决定;头部用上面的自绘
-                // 文件头,保持与整卡一致的信息密度与「打开」动作。state 缺席
-                // (无展示行,或合成 patch 解析失败)时退回旧的逐行渲染。
+                // 文件头,保持与整卡一致的信息密度与「打开」动作。`state` 缺席
+                // 只可能是「有路径但无展示行」,此时仅显示文件头。
                 .when_some(block.state.as_ref(), |this, state| {
                     this.child(
                         Diff::new(state)
@@ -1487,15 +1505,6 @@ fn tool_card_diff_block(blocks: &[DiffBlockState], cx: &App) -> AnyElement {
                             .h(px(diff_block_height(&block.change)))
                             .header_visible(false)
                             .hunk_separator(DiffHunkSeparator::Simple),
-                    )
-                })
-                .when(block.state.is_none(), |this| {
-                    this.children(
-                        block
-                            .change
-                            .rows
-                            .iter()
-                            .map(|row| diff_row_element(row, cx)),
                     )
                 })
                 .when(block.hidden > 0, |this| {
@@ -1584,62 +1593,6 @@ fn tool_diff_file_header(change: &FileChangeSummary, cx: &App) -> AnyElement {
                     }),
             )
         })
-        .into_any_element()
-}
-
-/// 单行 diff:`行号 + 增删标记 + 文本`。
-fn diff_row_element(row: &DiffRow, cx: &App) -> AnyElement {
-    use crate::agent_diff::DiffRowKind;
-
-    let theme = active_agent_chat_theme(cx);
-    let (marker, marker_color, background) = match row.kind {
-        DiffRowKind::Context => ("", theme.muted_foreground, None),
-        DiffRowKind::Added => (
-            "+",
-            cx.theme().success,
-            Some(cx.theme().success.opacity(0.10)),
-        ),
-        DiffRowKind::Removed => (
-            "−",
-            cx.theme().danger,
-            Some(cx.theme().danger.opacity(0.10)),
-        ),
-    };
-    let line_no = row.old_no.or(row.new_no).map(|no| no.to_string());
-    h_flex()
-        .w_full()
-        .min_w_0()
-        .items_start()
-        .gap_1()
-        .px_2()
-        .when_some(background, |this, background| this.bg(background))
-        .child(
-            div()
-                .flex_shrink_0()
-                .w(px(32.0))
-                .text_right()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child(line_no.unwrap_or_default()),
-        )
-        .child(
-            div()
-                .flex_shrink_0()
-                .w(px(10.0))
-                .text_xs()
-                .text_color(marker_color)
-                .child(marker),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .text_xs()
-                .font_family(cx.theme().mono_font_family.clone())
-                .text_color(theme.code_foreground)
-                .child(row.text.clone()),
-        )
         .into_any_element()
 }
 
