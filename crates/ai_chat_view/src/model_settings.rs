@@ -11,6 +11,8 @@ use gpui_component::{
 use one_assets::IconName;
 use rust_i18n::t;
 
+use crate::theme::sp;
+
 #[derive(Clone, Debug)]
 pub struct ModelSettings {
     pub temperature: f32,
@@ -240,7 +242,7 @@ impl Render for ModelSettingsPanel {
         let border = cx.theme().border;
 
         v_flex()
-            .w(px(320.0))
+            .w(sp(320.0))
             .gap_1()
             .child(
                 h_flex()
@@ -271,14 +273,14 @@ impl Render for ModelSettingsPanel {
                         .gap_2()
                         .child(
                             div()
-                                .w(px(100.0))
+                                .w(sp(100.0))
                                 .child(Slider::new(&self.temperature_slider)),
                         )
                         .child(
                             div()
                                 .text_sm()
                                 .text_color(cx.theme().muted_foreground)
-                                .min_w(px(32.0))
+                                .min_w(sp(32.0))
                                 .child(format!("{:.1}", self.settings.temperature)),
                         ),
                     cx,
@@ -289,7 +291,7 @@ impl Render for ModelSettingsPanel {
                     &self.labels.history_label,
                     &self.labels.history_desc,
                     div()
-                        .w(px(80.0))
+                        .w(sp(80.0))
                         .child(Input::new(&self.history_input).with_size(Size::Small)),
                     cx,
                 ),
@@ -299,7 +301,7 @@ impl Render for ModelSettingsPanel {
                     &self.labels.max_tokens_label,
                     &self.labels.max_tokens_desc,
                     div()
-                        .w(px(80.0))
+                        .w(sp(80.0))
                         .child(Input::new(&self.max_tokens_input).with_size(Size::Small)),
                     cx,
                 ),

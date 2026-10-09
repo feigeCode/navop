@@ -30,7 +30,7 @@ use crate::agent_diff::FileChangeSummary;
 use crate::code_block::CodeBlockActionRegistry;
 use crate::message_tool_group::{message_render_items_for, render_tool_call_group};
 use crate::message_view::{MessageListLayout, message_scroll_container, render_one};
-use crate::theme::{AgentChatTheme, resolve_agent_chat_theme};
+use crate::theme::{AgentChatTheme, resolve_agent_chat_theme, sp};
 use crate::transcript_search::TranscriptSearch;
 use crate::turn::{TurnProjection, TurnTimings, breakdown_text, project_turns};
 use crate::{ChatMessageUI};
@@ -305,7 +305,7 @@ fn render_turn_head(turn: &TurnProjection<'_>, theme: &AgentChatTheme) -> AnyEle
         .child(
             div()
                 .flex_shrink_0()
-                .size(px(20.0))
+                .size(sp(20.0))
                 .rounded_full()
                 .bg(theme.accent.opacity(0.18))
                 .text_xs()
@@ -536,7 +536,7 @@ fn render_turn_foot(
                 .px_2()
                 .pt_1()
                 .when_some(status, |this, (label, color)| {
-                    this.child(div().size(px(5.0)).rounded_full().bg(color).flex_shrink_0())
+                    this.child(div().size(sp(5.0)).rounded_full().bg(color).flex_shrink_0())
                         .child(div().text_xs().text_color(color).child(label))
                 })
                 .child(div().flex_1())

@@ -16,6 +16,7 @@ use gpui::{
 use gpui_component::ActiveTheme;
 use rust_i18n::t;
 
+use crate::theme::sp;
 use crate::session_shortcut::{
     AI_CHAT_SESSION_SWITCHER_CONTEXT, CancelSessionSwitch, ConfirmSessionSwitch,
     CycleSessionSwitcherBackward, CycleSessionSwitcherForward, SelectFirstSessionInSwitcher,
@@ -408,7 +409,7 @@ impl super::AgentChatView {
                 .flex()
                 .items_start()
                 .justify_center()
-                .pt(px(96.0))
+                .pt(sp(96.0))
                 .bg(theme.background.opacity(0.32))
                 .on_mouse_down(
                     MouseButton::Left,
@@ -429,7 +430,7 @@ impl super::AgentChatView {
                         .debug_selector(|| "agent-session-switcher".to_string())
                         .key_context(AI_CHAT_SESSION_SWITCHER_CONTEXT)
                         .track_focus(&switcher_focus)
-                        .w(px(380.0))
+                        .w(sp(380.0))
                         .occlude()
                         .rounded_xl()
                         .border_1()

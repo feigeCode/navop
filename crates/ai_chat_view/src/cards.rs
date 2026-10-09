@@ -5,7 +5,7 @@
 //! 通过 [`CardRegistry::register_global`] 注册。
 
 use crate::card::{CardMessage, CardRegistry, ChatCard};
-use crate::theme::active_agent_chat_theme;
+use crate::theme::{active_agent_chat_theme, sp};
 use crate::{ChartJsonBlock, ChartType, parse_chart_json_block};
 use gpui::prelude::FluentBuilder;
 use gpui::{AnyElement, App, FontWeight, IntoElement, ParentElement, Styled, Window, div, px};
@@ -147,12 +147,12 @@ fn render_xy_points(chart: &ChartJsonBlock, cx: &mut App) -> AnyElement {
                 .gap_2()
                 .child(
                     div()
-                        .w(px(88.0))
+                        .w(sp(88.0))
                         .text_xs()
                         .text_color(theme.muted_foreground)
                         .child(point.x),
                 )
-                .child(div().h(px(10.0)).w(px(width)).rounded_sm().bg(theme.accent))
+                .child(div().h(sp(10.0)).w(sp(width)).rounded_sm().bg(theme.accent))
                 .child(div().text_xs().child(format_number(point.y)))
                 .into_any_element()
         }))

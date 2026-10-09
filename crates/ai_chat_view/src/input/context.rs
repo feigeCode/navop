@@ -14,6 +14,7 @@ use gpui::SharedString;
 use rust_i18n::t;
 
 use super::skill::{ComposerSkillItem, ComposerSkillSummary};
+use crate::usage::ContextUsage;
 
 /// 顶部主「目标」chip 的展示数据。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -623,6 +624,8 @@ pub struct AgentComposerContext {
     pub branch_options: Vec<ComposerBranchOption>,
     /// 底部上下文栏：Worktree 状态。
     pub worktree: ComposerWorktreeState,
+    /// 上下文用量读数(本地/ACP 同源);`None` 时不画圆环。
+    pub context_usage: Option<ContextUsage>,
 }
 
 #[cfg(test)]

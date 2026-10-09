@@ -6,7 +6,7 @@ use gpui_component::{ActiveTheme, Icon, Sizable, button::Button, h_flex, v_flex}
 use one_assets::IconName;
 use rust_i18n::t;
 
-use crate::theme::{AgentChatTheme, active_agent_chat_theme};
+use crate::theme::{AgentChatTheme, active_agent_chat_theme, sp};
 
 use super::agent_input::{AgentInput, AgentInputEvent};
 
@@ -87,9 +87,9 @@ pub(super) fn render_skill_mode_content(
     let muted = theme.muted_foreground;
     let mut col = v_flex()
         .p_1()
-        .gap(px(2.0))
-        .w(px(SKILL_PANEL_WIDTH))
-        .max_w(px(SKILL_PANEL_WIDTH));
+        .gap(sp(2.0))
+        .w(sp(SKILL_PANEL_WIDTH))
+        .max_w(sp(SKILL_PANEL_WIDTH));
     col = col.child(
         h_flex()
             .items_center()
@@ -111,8 +111,8 @@ pub(super) fn render_skill_mode_content(
         .min_w_0()
         .px_1()
         .pb_1()
-        .gap(px(2.0))
-        .max_h(px(SKILL_LIST_MAX_HEIGHT))
+        .gap(sp(2.0))
+        .max_h(sp(SKILL_LIST_MAX_HEIGHT))
         .overflow_x_hidden()
         .overflow_y_scroll();
     if items.is_empty() {

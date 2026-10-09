@@ -25,6 +25,7 @@ use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Editor, EditorState, Input, InputEvent, InputState};
 use gpui_component::popover::Popover;
+use gpui_component::progress::ProgressCircle;
 use gpui_component::searchable_list::SearchableVec;
 use gpui_component::select::{Select, SelectEvent, SelectGroup, SelectState};
 use gpui_component::switch::Switch;
@@ -36,6 +37,7 @@ use serde_json::Value;
 use crate::acp::{
     AcpElicitationField, AcpElicitationFieldKind, AcpElicitationMode, AcpElicitationRequest,
 };
+use crate::usage::{ContextUsage, UsagePressure};
 use crate::input::PromptHistory;
 use crate::input::attachment::ImageAttachment;
 use crate::input::context::{
@@ -49,7 +51,7 @@ use crate::input::mention::{MentionCompletionProvider, MentionItem};
 use crate::input::slash::{SlashCommandItem, SlashCompletionProvider};
 use crate::input::model_picker::{ModelChoice, model_groups, selected_model_index};
 use crate::input::skill::{render_skill_mode_content, skill_trigger_label};
-use crate::theme::{AgentChatTheme, active_agent_chat_theme};
+use crate::theme::{AgentChatTheme, active_agent_chat_theme, sp};
 
 /// AgentInput 对外事件。
 #[derive(Clone, Debug)]
@@ -174,6 +176,10 @@ const COMPOSER_EDITOR_FALLBACK_LINE_HEIGHT: f32 = 20.0;
 const COMPOSER_EDITOR_VERTICAL_PADDING: f32 = 12.0;
 /// 底部工具栏操作按钮(发送 / 排队 / 停止)的边长,同时也是工具栏控件高度。
 const TOOLBAR_ACTION_BUTTON_SIZE: f32 = 32.0;
+/// 工具栏右侧上下文用量圆环的直径。
+///
+/// 取 20:比 32 的按钮小一号,不跟发送键抢视线,又能把百分比读出来。
+const USAGE_GAUGE_DIAMETER: f32 = 20.0;
 /// 底部那一行里上下文档位 chip 的固定高度。
 ///
 /// 与发送 / 附件按钮同高：整行只有一种控件高度，7 项并排时不会参差。
@@ -242,8 +248,8 @@ fn composer_chip_label(icon: IconName, label: SharedString) -> impl IntoElement 
 /// 这一行固定 7 项(`[附件][工作区][分支][模型][Worktree][权限][发送]`),
 /// 谁都不能无条件铺满:这里给的是「内容想要的宽度」,空间不够时由容器的
 /// `flex_shrink` + 标签 `truncate` 消化,而不是让某一项独占整行。
-fn composer_chip_width(label: &str) -> Pixels {
-    px((estimated_label_width(label) + TRIGGER_CHROME_WIDTH)
+fn composer_chip_width(label: &str) -> gpui::Rems {
+    sp((estimated_label_width(label) + TRIGGER_CHROME_WIDTH)
         .clamp(COMPOSER_CHIP_MIN_WIDTH, COMPOSER_CHIP_MAX_WIDTH))
 }
 
@@ -252,7 +258,7 @@ fn composer_chip_width(label: &str) -> Pixels {
 /// 不能沿用组件库默认值(那是「触发器多宽弹层多宽」,见 [`MODEL_MENU_MIN_WIDTH`]),
 /// 也不适合只给一个固定值:ACP agent 报上来的模型名长短差别很大,固定宽要么空一大片
 /// 要么还是截断。这里按内容估(标签与副标题取宽者),再夹进区间。
-fn model_menu_width(options: &[ComposerModelOption]) -> Pixels {
+fn model_menu_width(options: &[ComposerModelOption]) -> gpui::Rems {
     let longest = options
         .iter()
         .map(|option| {
@@ -265,7 +271,7 @@ fn model_menu_width(options: &[ComposerModelOption]) -> Pixels {
             label.max(hint)
         })
         .fold(0.0_f32, f32::max);
-    px((longest + MODEL_MENU_CHROME_WIDTH).clamp(MODEL_MENU_MIN_WIDTH, MODEL_MENU_MAX_WIDTH))
+    sp((longest + MODEL_MENU_CHROME_WIDTH).clamp(MODEL_MENU_MIN_WIDTH, MODEL_MENU_MAX_WIDTH))
 }
 
 fn menu_state_after_open_change(
@@ -288,13 +294,13 @@ fn current_execution_mode_label(label: &SharedString) -> SharedString {
 /// 执行模式只承载「自动 / 只读 / 手动确认」这类短标签,固定 124px 会在窄侧边栏里
 /// 吃掉模型选择的空间,把发送 / 停止按钮挤成细条。这里按标签估算宽度并夹在区间内:
 /// 中文短标签收窄,英文长标签仍保留原来的可用宽度上限。
-fn execution_trigger_width(label: &str, queue_mode: bool) -> Pixels {
+fn execution_trigger_width(label: &str, queue_mode: bool) -> gpui::Rems {
     let (min, max) = if queue_mode {
         (72.0, 88.0)
     } else {
         (80.0, 124.0)
     };
-    px((estimated_label_width(label) + TRIGGER_CHROME_WIDTH).clamp(min, max))
+    sp((estimated_label_width(label) + TRIGGER_CHROME_WIDTH).clamp(min, max))
 }
 
 /// 估算一段文案的渲染宽度:CJK 等全角字符按 13px,其余按 7.5px。
@@ -852,7 +858,7 @@ impl AgentInput {
         v_flex().w_full().px_3().pt_2().pb_1p5().child(
             h_flex()
                 .w_full()
-                .h(px(38.0))
+                .h(sp(38.0))
                 .items_center()
                 .rounded(cx.theme().radius)
                 .border_1()
@@ -1094,7 +1100,7 @@ impl AgentInput {
 
     fn render_mode_separator(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = self.local_theme(cx);
-        div().h(px(20.0)).w(px(1.0)).bg(theme.border)
+        div().h(sp(20.0)).w(px(1.0)).bg(theme.border)
     }
 
     /// 底部那一行的「权限级别」下拉。
@@ -1118,7 +1124,7 @@ impl AgentInput {
                 .debug_selector(|| "agent-input-permission".to_string())
                 .small()
                 .w_full()
-                .h(px(COMPOSER_CHIP_HEIGHT))
+                .h(sp(COMPOSER_CHIP_HEIGHT))
                 .justify_between()
                 .outline()
                 .disabled(self.is_running)
@@ -1128,9 +1134,9 @@ impl AgentInput {
 
         div()
             .w(chip_width)
-            .min_w(px(COMPOSER_CHIP_MIN_WIDTH))
+            .min_w(sp(COMPOSER_CHIP_MIN_WIDTH))
             .flex_shrink(1.0)
-            .h(px(COMPOSER_CHIP_HEIGHT))
+            .h(sp(COMPOSER_CHIP_HEIGHT))
             .overflow_hidden()
             .child(
                 Popover::new("agent-permission-popover")
@@ -1186,7 +1192,7 @@ impl AgentInput {
                 .debug_selector(|| "agent-input-branch".to_string())
                 .small()
                 .w_full()
-                .h(px(COMPOSER_CHIP_HEIGHT))
+                .h(sp(COMPOSER_CHIP_HEIGHT))
                 .justify_between()
                 .outline()
                 .disabled(self.is_running)
@@ -1196,9 +1202,9 @@ impl AgentInput {
 
         div()
             .w(composer_chip_width(&current))
-            .min_w(px(COMPOSER_CHIP_MIN_WIDTH))
+            .min_w(sp(COMPOSER_CHIP_MIN_WIDTH))
             .flex_shrink(1.0)
-            .h(px(COMPOSER_CHIP_HEIGHT))
+            .h(sp(COMPOSER_CHIP_HEIGHT))
             .overflow_hidden()
             .child(
                 Popover::new("agent-branch-popover")
@@ -1253,7 +1259,7 @@ impl AgentInput {
                 .debug_selector(|| "agent-input-workspace".to_string())
                 .small()
                 .w_full()
-                .h(px(COMPOSER_CHIP_HEIGHT))
+                .h(sp(COMPOSER_CHIP_HEIGHT))
                 .justify_between()
                 .outline()
                 .disabled(self.is_running)
@@ -1269,9 +1275,9 @@ impl AgentInput {
 
         div()
             .w(composer_chip_width(&label))
-            .min_w(px(COMPOSER_CHIP_MIN_WIDTH))
+            .min_w(sp(COMPOSER_CHIP_MIN_WIDTH))
             .flex_shrink(1.0)
-            .h(px(COMPOSER_CHIP_HEIGHT))
+            .h(sp(COMPOSER_CHIP_HEIGHT))
             .overflow_hidden()
             .child(
                 Popover::new("agent-workspace-popover")
@@ -1335,9 +1341,9 @@ impl AgentInput {
         div()
             .debug_selector(|| "agent-input-worktree".to_string())
             .w(composer_chip_width(&label))
-            .min_w(px(COMPOSER_CHIP_MIN_WIDTH))
+            .min_w(sp(COMPOSER_CHIP_MIN_WIDTH))
             .flex_shrink(1.0)
-            .h(px(COMPOSER_CHIP_HEIGHT))
+            .h(sp(COMPOSER_CHIP_HEIGHT))
             .overflow_hidden()
             .flex()
             .items_center()
@@ -1363,7 +1369,7 @@ impl AgentInput {
     /// 顺序:`[工作区][分支][模型][Worktree][权限]`(非 Git 工作区里分支与 Worktree 隐藏)。
     /// 这一组独占剩余宽度:空间不足时先在组内 `flex_shrink` + `truncate` 消化,
     /// 由本组自己的 `overflow_hidden` 兜底,绝不把右侧的发送按钮挤出可视区。
-    fn render_context_group(&self, cx: &mut Context<Self>, row_gap: Pixels) -> impl IntoElement + use<> {
+    fn render_context_group(&self, cx: &mut Context<Self>, row_gap: gpui::Rems) -> impl IntoElement + use<> {
         let is_git_repo =
             self.context.workspace.is_git_repo || !self.context.branch_options.is_empty();
         let model_label = match &self.context.model {
@@ -1378,7 +1384,7 @@ impl AgentInput {
         };
         // 触发器会被挤扁,弹层不能跟着缩 —— 见 `model_menu_width`。
         let model_menu_width = model_menu_width(&self.model_options);
-        let action_button_size = px(TOOLBAR_ACTION_BUTTON_SIZE);
+        let action_button_size = sp(TOOLBAR_ACTION_BUTTON_SIZE);
 
         let mut group = h_flex()
             .debug_selector(|| "agent-input-context-group".to_string())
@@ -1397,7 +1403,7 @@ impl AgentInput {
         group = group.child(
             div()
                 .flex_1()
-                .min_w(px(model_min_width))
+                .min_w(sp(model_min_width))
                 .h(action_button_size)
                 .overflow_hidden()
                 .child(self.render_model_menu(model_label, model_menu_width))
@@ -1419,17 +1425,17 @@ impl AgentInput {
     fn render_model_menu(
         &self,
         placeholder: SharedString,
-        menu_width: Pixels,
+        menu_width: gpui::Rems,
     ) -> impl IntoElement + use<> {
         Select::new(&self.model_select)
             .id("agent-model")
             .w_full()
-            .h(px(32.0))
+            .h(sp(32.0))
             .small()
             .placeholder(placeholder)
             .search_placeholder(t!("AgentUi.search_model").to_string())
             .menu_width(menu_width)
-            .menu_max_h(px(320.0))
+            .menu_max_h(sp(320.0))
             .disabled(self.is_running)
     }
 
@@ -1460,8 +1466,8 @@ impl AgentInput {
                     .relative()
                     .child(
                         img(att.image.clone())
-                            .w(px(56.0))
-                            .h(px(56.0))
+                            .w(sp(56.0))
+                            .h(sp(56.0))
                             .rounded(cx.theme().radius)
                             .border_1()
                             .border_color(theme.border),
@@ -1620,12 +1626,54 @@ impl AgentInput {
             )
     }
 
+    /// 底部工具栏右侧的上下文用量圆环。
+    ///
+    /// 数据来自 [`AgentComposerContext::context_usage`](crate::input::context::AgentComposerContext);
+    /// 本地后端与 ACP 侧走同一条通路。没有读数时整块不渲染,不留空位——
+    /// 没数据就不占地方摆一个空圈。
+    ///
+    /// 颜色随占用分档:常规 accent、70% 起转 warning、90% 起转 danger。
+    fn render_usage_gauge(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let usage = self.context.context_usage.as_ref()?;
+        let theme = self.local_theme(cx);
+        let color = match usage.pressure() {
+            UsagePressure::Calm => theme.gauge,
+            UsagePressure::Elevated => theme.gauge_warning,
+            UsagePressure::Critical => theme.gauge_danger,
+        };
+        let percent = usage.percent().unwrap_or(0.0);
+        let label = usage.gauge_label();
+        let detail = usage.detail_text();
+        Some(
+            div()
+                .debug_selector(|| "agent-input-usage-gauge".to_string())
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .gap(sp(6.0))
+                .child(
+                    div().size(sp(USAGE_GAUGE_DIAMETER)).child(
+                        ProgressCircle::new("agent-input-usage")
+                            .value(percent)
+                            .color(color)
+                            .accessibility_label(detail),
+                    ),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(label),
+                ),
+        )
+    }
+
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = self.local_theme(cx);
         let running = self.is_running;
         let queue_mode = running || self.pending_queue_blocked;
-        let row_gap = if queue_mode { px(4.0) } else { px(8.0) };
-        let action_button_size = px(TOOLBAR_ACTION_BUTTON_SIZE);
+        let row_gap = if queue_mode { sp(4.0) } else { sp(8.0) };
+        let action_button_size = sp(TOOLBAR_ACTION_BUTTON_SIZE);
         let attach_count = self.attachments.len();
 
         // 左段:附件入口 + 附件计数(固定宽度,不参与收缩)。
@@ -1649,7 +1697,7 @@ impl AgentInput {
                     .text_color(theme.muted_foreground)
                     .child(t!("AgentUi.attachment_count", count = attach_count).to_string()),
             )
-            .child(div().h(px(18.0)).w(px(1.0)).bg(theme.border));
+            .child(div().h(sp(18.0)).w(px(1.0)).bg(theme.border));
 
         // 中段:工作区 / 分支 / 模型 / Worktree / 权限。
         let context_group = self.render_context_group(cx, row_gap);
@@ -1667,7 +1715,8 @@ impl AgentInput {
             .overflow_hidden()
             .flex_shrink_0()
             .child(attach_group)
-            .child(context_group);
+            .child(context_group)
+            .children(self.render_usage_gauge(cx));
 
         if queue_mode {
             toolbar = toolbar
@@ -1793,8 +1842,8 @@ fn render_mode_content(
 ) -> gpui::AnyElement {
     let mut col = v_flex()
         .p_1()
-        .gap(px(2.0))
-        .min_w(px(320.0))
+        .gap(sp(2.0))
+        .min_w(sp(320.0))
         .bg(theme.background)
         .text_color(theme.foreground);
 
@@ -1874,8 +1923,8 @@ fn render_workspace_content(
 ) -> gpui::AnyElement {
     let mut col = v_flex()
         .p_1()
-        .gap(px(2.0))
-        .min_w(px(260.0))
+        .gap(sp(2.0))
+        .min_w(sp(260.0))
         .bg(theme.background)
         .text_color(theme.foreground);
 
@@ -2023,8 +2072,8 @@ fn render_branch_content(
 ) -> gpui::AnyElement {
     let mut col = v_flex()
         .p_1()
-        .gap(px(2.0))
-        .min_w(px(260.0))
+        .gap(sp(2.0))
+        .min_w(sp(260.0))
         .bg(theme.background)
         .text_color(theme.foreground);
 
@@ -2123,7 +2172,7 @@ fn render_plan_mode_content(
     let theme = active_agent_chat_theme(cx);
     let muted = theme.muted_foreground;
     let border = theme.border;
-    let mut col = v_flex().p_1().gap(px(2.0)).min_w(px(320.0));
+    let mut col = v_flex().p_1().gap(sp(2.0)).min_w(sp(320.0));
 
     col = col.child(context_group_label(
         t!("AgentUi.plan_todo").to_string(),
@@ -2282,7 +2331,7 @@ fn plan_item_details(
 ) -> gpui::AnyElement {
     let mut details = v_flex()
         .w_full()
-        .gap(px(2.0))
+        .gap(sp(2.0))
         .px_2()
         .pb_2()
         .pl_7()
@@ -2345,7 +2394,7 @@ fn render_subagent_mode_content(
 ) -> gpui::AnyElement {
     let theme = active_agent_chat_theme(cx);
     let muted = theme.muted_foreground;
-    let mut col = v_flex().p_1().gap(px(2.0)).min_w(px(300.0));
+    let mut col = v_flex().p_1().gap(sp(2.0)).min_w(sp(300.0));
 
     col = col.child(context_group_label(
         t!("AgentUi.subagents").to_string(),
@@ -2468,8 +2517,8 @@ fn render_context_mode_content(
     let border = theme.border;
     let mut col = v_flex()
         .debug_selector(|| "agent-context-popover-content".to_string())
-        .w(px(CONTEXT_POPOVER_WIDTH))
-        .min_w(px(CONTEXT_POPOVER_WIDTH))
+        .w(sp(CONTEXT_POPOVER_WIDTH))
+        .min_w(sp(CONTEXT_POPOVER_WIDTH))
         .overflow_x_hidden();
 
     if let Some(target) = current {
@@ -2571,8 +2620,8 @@ fn render_context_mode_content(
         .w_full()
         .px_1()
         .pb_1()
-        .gap(px(2.0))
-        .max_h(px(CONTEXT_TARGET_LIST_MAX_HEIGHT))
+        .gap(sp(2.0))
+        .max_h(sp(CONTEXT_TARGET_LIST_MAX_HEIGHT))
         .overflow_x_hidden()
         .overflow_y_scroll();
     if filtered_pool_items.is_empty() && filtered_targets.is_empty() {
@@ -2620,7 +2669,7 @@ fn render_resource_source_options(
     let selected_fg = theme.foreground;
     let muted = theme.muted_foreground;
     let hover_bg = theme.hover_background();
-    let mut row = h_flex().w_full().px_1().pb_1().gap(px(4.0)).flex_wrap();
+    let mut row = h_flex().w_full().px_1().pb_1().gap(sp(4.0)).flex_wrap();
 
     for option in options.into_iter().filter(|option| option.enabled) {
         let id = option.id.clone();
@@ -2632,7 +2681,7 @@ fn render_resource_source_options(
             h_flex()
                 .id(option.element_id())
                 .items_center()
-                .gap(px(4.0))
+                .gap(sp(4.0))
                 .px_2()
                 .py_1()
                 .rounded_sm()
@@ -2674,7 +2723,7 @@ fn render_resource_type_filters(
     let selected_bg = theme.selection_background();
     let selected_fg = theme.foreground;
     let muted = theme.muted_foreground;
-    let mut row = h_flex().w_full().px_1().pb_1().gap(px(4.0));
+    let mut row = h_flex().w_full().px_1().pb_1().gap(sp(4.0));
 
     for filter in filters {
         let id = filter.id.clone();
@@ -2684,7 +2733,7 @@ fn render_resource_type_filters(
             h_flex()
                 .id(filter.element_id())
                 .items_center()
-                .gap(px(4.0))
+                .gap(sp(4.0))
                 .px_2()
                 .py_1()
                 .rounded_sm()
@@ -2766,7 +2815,7 @@ fn resource_pool_item_row(
         .w_full()
         .min_w_0()
         .items_center()
-        .gap(px(8.0))
+        .gap(sp(8.0))
         .px_2()
         .py_1()
         .rounded(radius)
@@ -2792,7 +2841,7 @@ fn resource_pool_item_row(
                 .flex_shrink_0()
                 .items_center()
                 .justify_center()
-                .size(px(24.0))
+                .size(sp(24.0))
                 .rounded(radius)
                 .bg(hover_bg)
                 .text_xs()
@@ -2802,13 +2851,13 @@ fn resource_pool_item_row(
             v_flex()
                 .flex_1()
                 .min_w_0()
-                .gap(px(2.0))
+                .gap(sp(2.0))
                 .child(
                     h_flex()
                         .w_full()
                         .min_w_0()
                         .items_center()
-                        .gap(px(4.0))
+                        .gap(sp(4.0))
                         .child(
                             div()
                                 .flex_1()
@@ -2847,7 +2896,7 @@ fn resource_pool_badge(
 ) -> impl IntoElement {
     div()
         .flex_shrink_0()
-        .max_w(px(CONTEXT_KIND_MAX_WIDTH))
+        .max_w(sp(CONTEXT_KIND_MAX_WIDTH))
         .px_1()
         .py(px(1.0))
         .rounded_sm()
@@ -2971,18 +3020,18 @@ fn context_target_row(
         .w_full()
         .min_w_0()
         .items_center()
-        .gap(px(8.0))
+        .gap(sp(8.0))
         .px_2()
         .py_1()
-        .rounded(px(6.0))
+        .rounded(sp(6.0))
         .when(selected, |this| this.bg(selected_bg))
         .child(
             h_flex()
                 .flex_shrink_0()
                 .items_center()
                 .justify_center()
-                .size(px(24.0))
-                .rounded(px(6.0))
+                .size(sp(24.0))
+                .rounded(sp(6.0))
                 .bg(hover_bg)
                 .text_xs()
                 .child(opt.icon),
@@ -3013,7 +3062,7 @@ fn context_target_row(
         .child(
             div()
                 .flex_shrink_0()
-                .max_w(px(CONTEXT_KIND_MAX_WIDTH))
+                .max_w(sp(CONTEXT_KIND_MAX_WIDTH))
                 .text_xs()
                 .text_color(muted)
                 .truncate()
@@ -3790,7 +3839,7 @@ impl Render for AgentInput {
                     .min_w_0()
                     .px_3()
                     .pt_1()
-                    .max_h(px(220.0))
+                    .max_h(sp(220.0))
                     .child(
                         div()
                             .w_full()
@@ -4010,10 +4059,27 @@ mod tests {
                 height: px(220.0),
             }
         }
+
+        /// 同 [`Self::with_width`],额外注入一条上下文用量读数。
+        fn with_usage(
+            used: u64,
+            window_size: Option<u64>,
+            window: &mut Window,
+            cx: &mut Context<Self>,
+        ) -> Self {
+            let root = Self::with_width(px(900.0), window, cx);
+            root.input.update(cx, |input, _cx| {
+                input.context.context_usage = Some(ContextUsage::new(used, window_size));
+            });
+            root
+        }
     }
 
     impl Render for AgentInputLayoutRoot {
-        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            // 测试窗口默认 rem = 16px；navop 生产环境的 rem 基准是主题字号
+            // （默认 14px）。对齐到 14px，`sp()` 才会解析成书写时的像素值。
+            window.set_rem_size(px(14.0));
             div().w(self.width).h(self.height).child(self.input.clone())
         }
     }
@@ -4228,19 +4294,19 @@ mod tests {
     #[test]
     fn execution_trigger_width_tracks_label_length() {
         // 中文短标签收窄到下限,给模型选择与操作按钮让出空间。
-        assert_eq!(execution_trigger_width("自动", false), px(80.0));
-        assert_eq!(execution_trigger_width("只读", false), px(80.0));
+        assert_eq!(execution_trigger_width("自动", false), sp(80.0));
+        assert_eq!(execution_trigger_width("只读", false), sp(80.0));
         // 四字标签按内容展开,仍明显窄于旧的固定 124px。
-        assert_eq!(execution_trigger_width("手动确认", false), px(100.0));
+        assert_eq!(execution_trigger_width("手动确认", false), sp(100.0));
         // 英文长标签不突破上限,保留原有的可用宽度。
         assert_eq!(
             execution_trigger_width("Manual Confirmation", false),
-            px(124.0)
+            sp(124.0)
         );
         // 运行中还要容纳排队与停止两个按钮,上限更低。
         let running = execution_trigger_width("自动", true);
         assert!(
-            running < px(80.0),
+            running.to_pixels(px(14.0)) < px(80.0),
             "running trigger should stay narrower: {running:?}"
         );
     }
@@ -4317,15 +4383,56 @@ mod tests {
         let short = ComposerModelOption::new("m1", "p1", "OpenAI", "gpt-4o-mini");
         assert_eq!(
             model_menu_width(std::slice::from_ref(&short)),
-            px(MODEL_MENU_MIN_WIDTH),
+            sp(MODEL_MENU_MIN_WIDTH),
             "短标签用下限即可,不该比下限还窄"
         );
 
         let long = ComposerModelOption::new("m2", "p2", "p".repeat(40), "m".repeat(60));
         assert_eq!(
             model_menu_width(&[short, long]),
-            px(MODEL_MENU_MAX_WIDTH),
+            sp(MODEL_MENU_MAX_WIDTH),
             "超长标签要收在上限内,否则浮层会被窗口边缘收敛"
+        );
+    }
+
+    /// 有上下文用量读数时,工具栏右侧多一个圆环,且排在发送按钮左边。
+    #[gpui::test]
+    fn toolbar_shows_the_context_usage_gauge_next_to_the_send_button(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            AgentInputLayoutRoot::with_usage(50_000, Some(200_000), window, cx)
+        });
+        let cx: &mut VisualTestContext = cx;
+
+        let gauge = cx
+            .debug_bounds("agent-input-usage-gauge")
+            .expect("有读数时应该渲染圆环");
+        let send = cx
+            .debug_bounds("agent-send-button")
+            .expect("发送按钮应该渲染");
+        assert!(
+            gauge.right() <= send.left(),
+            "圆环应排在发送按钮左侧: gauge={gauge:?} send={send:?}"
+        );
+    }
+
+    /// 没有读数时不渲染圆环——不摆一个空圈占位。
+    #[gpui::test]
+    fn toolbar_omits_the_context_usage_gauge_without_a_reading(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let (_, cx) =
+            cx.add_window_view(|window, cx| AgentInputLayoutRoot::with_width(px(900.0), window, cx));
+        let cx: &mut VisualTestContext = cx;
+
+        assert!(
+            cx.debug_bounds("agent-input-usage-gauge").is_none(),
+            "没有用量读数就不该占位"
         );
     }
 

@@ -14,7 +14,7 @@ use super::WorkbenchShell;
 use super::super::state::{WorkbenchPanelKind, WorkbenchPlacement, WorkbenchTab};
 use super::widgets::{close_tab_tooltip, cycle_placement_tooltip, pin_tooltip};
 use super::{DOCK_PANEL_HEIGHT, DOCK_PANEL_WIDTH, PANEL_HEADER_HEIGHT};
-use crate::theme::{AgentChatTheme, with_agent_chat_theme};
+use crate::theme::{AgentChatTheme, with_agent_chat_theme, sp};
 
 /// 拖拽调宽把手的命中宽度。
 const RESIZE_HANDLE_WIDTH: f32 = 6.0;
@@ -104,7 +104,7 @@ impl Render for WorkbenchShell {
                 .when_some((!maximized).then_some(nav).flatten(), |this, nav| {
                     this.child(
                         v_flex()
-                            .w(px(nav_width))
+                            .w(sp(nav_width))
                             .flex_shrink_0()
                             .h_full()
                             .min_h_0()
@@ -122,7 +122,7 @@ impl Render for WorkbenchShell {
                     .child(
                         div()
                             .id("workbench-nav-resize")
-                            .w(px(RESIZE_HANDLE_WIDTH))
+                            .w(sp(RESIZE_HANDLE_WIDTH))
                             .h_full()
                             .flex_shrink_0()
                             .cursor_col_resize()
@@ -154,7 +154,7 @@ impl Render for WorkbenchShell {
                     |this, kind| {
                         this.child(
                             div()
-                                .w(px(DOCK_PANEL_WIDTH))
+                                .w(sp(DOCK_PANEL_WIDTH))
                                 .flex_shrink_0()
                                 .h_full()
                                 .min_h_0()
@@ -170,7 +170,7 @@ impl Render for WorkbenchShell {
                         this.child(
                             div()
                                 .id("workbench-right-resize")
-                                .w(px(RESIZE_HANDLE_WIDTH))
+                                .w(sp(RESIZE_HANDLE_WIDTH))
                                 .h_full()
                                 .flex_shrink_0()
                                 .cursor_col_resize()
@@ -214,7 +214,7 @@ impl Render for WorkbenchShell {
                                 .into_any_element()
                         } else {
                             div()
-                                .w(px(right_width))
+                                .w(sp(right_width))
                                 .flex_shrink_0()
                                 .h_full()
                                 .min_h_0()
@@ -232,7 +232,7 @@ impl Render for WorkbenchShell {
             with_agent_chat_theme(&theme, || {
                 div()
                     .w_full()
-                    .h(px(DOCK_PANEL_HEIGHT))
+                    .h(sp(DOCK_PANEL_HEIGHT))
                     .flex_shrink_0()
                     .border_t_1()
                     .border_color(theme.border)
@@ -299,7 +299,7 @@ impl WorkbenchShell {
             .collect();
 
         let mut bar = h_flex()
-            .h(px(PANEL_HEADER_HEIGHT))
+            .h(sp(PANEL_HEADER_HEIGHT))
             .flex_shrink_0()
             .items_center()
             .gap_1()
@@ -500,7 +500,7 @@ impl WorkbenchShell {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let hover = theme.hover_background();
-        let mut list = v_flex().w(px(320.0)).gap_0p5();
+        let mut list = v_flex().w(sp(320.0)).gap_0p5();
         for kind in WorkbenchPanelKind::DOCKABLE
             .into_iter()
             .filter(|kind| self.has_panel(*kind))
@@ -593,7 +593,7 @@ impl WorkbenchShell {
         let on_close = cx.listener(move |this, _, _, cx| this.close_panel(kind, cx));
 
         h_flex()
-            .h(px(PANEL_HEADER_HEIGHT))
+            .h(sp(PANEL_HEADER_HEIGHT))
             .flex_shrink_0()
             .items_center()
             .gap_2()

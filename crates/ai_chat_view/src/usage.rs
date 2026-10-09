@@ -67,6 +67,100 @@ pub fn format_local_usage(tokens: u64, window: Option<u64>) -> String {
     }
 }
 
+/// 上下文用量的一次读数,供 composer 里的圆环 gauge 使用。
+///
+/// 两个数据源共用这一种形状:本地后端从 runtime session 的
+/// `context_tokens` + 模型窗口表推出;ACP 侧直接用 agent 报的
+/// `used`/`size`。窗口未知时 `window` 为 `None`,圆环退化成
+/// 不确定态——只显示数字,不画一个骗人的百分比。
+#[derive(Clone, Debug, PartialEq)]
+pub struct ContextUsage {
+    /// 已消耗的 token。
+    pub used: u64,
+    /// 窗口大小;`None` 表示无从得知(不猜)。
+    pub window: Option<u64>,
+    /// agent 报的费用文案(如 `$0.0124`);本地后端没有这项。
+    pub cost: Option<String>,
+}
+
+/// 上下文占用分档,决定圆环颜色。
+///
+/// 阈值取 70% / 90%:前者是「该留意了」,后者是「快压缩了」。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UsagePressure {
+    /// < 70%。
+    Calm,
+    /// 70% – 90%。
+    Elevated,
+    /// >= 90%。接近客户端自动压缩/截断的区间。
+    Critical,
+}
+
+impl ContextUsage {
+    pub fn new(used: u64, window: Option<u64>) -> Self {
+        Self {
+            used,
+            window,
+            cost: None,
+        }
+    }
+
+    pub fn with_cost(mut self, cost: Option<impl Into<String>>) -> Self {
+        self.cost = cost.map(Into::into);
+        self
+    }
+
+    /// 占用比例(0.0–100.0);窗口未知或为 0 时返回 `None`。
+    pub fn percent(&self) -> Option<f32> {
+        match self.window {
+            Some(window) if window > 0 => {
+                Some((self.used as f64 / window as f64 * 100.0).clamp(0.0, 100.0) as f32)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn pressure(&self) -> UsagePressure {
+        match self.percent() {
+            Some(percent) if percent >= 90.0 => UsagePressure::Critical,
+            Some(percent) if percent >= 70.0 => UsagePressure::Elevated,
+            _ => UsagePressure::Calm,
+        }
+    }
+
+    /// 圆环中心/旁边的短文案:窗口已知给百分比,未知给压缩过的 token 数。
+    pub fn gauge_label(&self) -> String {
+        match self.percent() {
+            Some(percent) => format!("{}%", percent.round() as u32),
+            None => format_token_count(self.used),
+        }
+    }
+
+    /// 悬停/无障碍用的完整读数。
+    pub fn detail_text(&self) -> String {
+        let mut text = match self.window {
+            Some(window) if window > 0 => format!("{}/{} tokens", self.used, window),
+            _ => format!("{} tokens", self.used),
+        };
+        if let Some(cost) = self.cost.as_deref() {
+            text.push_str(" · ");
+            text.push_str(cost);
+        }
+        text
+    }
+}
+
+/// token 数压缩成 3–4 字符:`999` / `12.3k` / `1.2M`。
+///
+/// 圆环旁边的地方只有这么宽;精确数字放 tooltip。
+pub fn format_token_count(tokens: u64) -> String {
+    match tokens {
+        0..=9_999 => tokens.to_string(),
+        10_000..=999_999 => format!("{:.1}k", tokens as f64 / 1_000.0),
+        _ => format!("{:.1}M", tokens as f64 / 1_000_000.0),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,5 +204,56 @@ mod tests {
         assert_eq!(format_local_usage(1500, None), "1500 tokens");
         // 窗口为 0 视同未知——避免除零式的误导百分比。
         assert_eq!(format_local_usage(1500, Some(0)), "1500 tokens");
+    }
+
+    #[test]
+    fn usage_percent_needs_a_known_window() {
+        assert_eq!(ContextUsage::new(50_000, Some(200_000)).percent(), Some(25.0));
+        // 窗口未知/为 0:不猜百分比。
+        assert_eq!(ContextUsage::new(1500, None).percent(), None);
+        assert_eq!(ContextUsage::new(1500, Some(0)).percent(), None);
+        // 溢出窗口时夹到 100,不让圆环画过一整圈。
+        assert_eq!(ContextUsage::new(300_000, Some(200_000)).percent(), Some(100.0));
+    }
+
+    #[test]
+    fn pressure_tracks_the_70_and_90_boundaries() {
+        let at = |used: u64| ContextUsage::new(used, Some(100)).pressure();
+        assert_eq!(at(69), UsagePressure::Calm);
+        assert_eq!(at(70), UsagePressure::Elevated);
+        assert_eq!(at(89), UsagePressure::Elevated);
+        assert_eq!(at(90), UsagePressure::Critical);
+        // 窗口未知时永远不报警——没数据就不吓人。
+        assert_eq!(ContextUsage::new(999_999, None).pressure(), UsagePressure::Calm);
+    }
+
+    #[test]
+    fn gauge_label_prefers_percent_and_falls_back_to_tokens() {
+        assert_eq!(ContextUsage::new(50_000, Some(200_000)).gauge_label(), "25%");
+        assert_eq!(ContextUsage::new(12_345, None).gauge_label(), "12.3k");
+        assert_eq!(ContextUsage::new(842, None).gauge_label(), "842");
+    }
+
+    #[test]
+    fn detail_text_appends_cost_only_when_reported() {
+        assert_eq!(
+            ContextUsage::new(1500, Some(128_000)).detail_text(),
+            "1500/128000 tokens"
+        );
+        assert_eq!(
+            ContextUsage::new(1500, Some(128_000))
+                .with_cost(Some("$0.0124"))
+                .detail_text(),
+            "1500/128000 tokens · $0.0124"
+        );
+    }
+
+    #[test]
+    fn token_count_compacts_only_when_it_has_to() {
+        assert_eq!(format_token_count(0), "0");
+        assert_eq!(format_token_count(9_999), "9999");
+        assert_eq!(format_token_count(10_000), "10.0k");
+        assert_eq!(format_token_count(999_999), "1000.0k");
+        assert_eq!(format_token_count(1_200_000), "1.2M");
     }
 }

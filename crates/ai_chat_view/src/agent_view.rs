@@ -71,7 +71,7 @@ use crate::agent_cards::{
     SelectAcpPermissionOption, SubAgentCardData,
 };
 use crate::agent_skills::AgentSkillState;
-use crate::usage::{format_local_usage, model_context_window};
+use crate::usage::{format_local_usage, model_context_window, ContextUsage};
 use crate::agent_transcript::AgentTranscript;
 use crate::message::ChatMessageUI;
 use crate::bridge::build_runtime_from_llm_provider;
@@ -100,7 +100,7 @@ use crate::session_sidebar::{self, SessionRowStyle, SessionSummary};
 use crate::transcript_scroll::TranscriptScrollState;
 use crate::transcript_search::TranscriptSearch;
 use crate::turn::{TurnOutcome, TurnTimings};
-use crate::theme::{AgentChatTheme, resolve_agent_chat_theme};
+use crate::theme::{AgentChatTheme, resolve_agent_chat_theme, sp};
 
 mod acp_options;
 pub(crate) mod acp_sessions;
@@ -6427,7 +6427,7 @@ impl AgentChatView {
         // ACP 模式:会话由外部 agent 管理,不展示本地列表。
         if self.backend == Backend::Acp {
             return v_flex()
-                .w(px(300.0))
+                .w(sp(300.0))
                 .p_3()
                 .bg(theme.background)
                 .child(
@@ -6447,7 +6447,7 @@ impl AgentChatView {
         let show_archived = self.show_archived;
 
         v_flex()
-            .w(px(300.0))
+            .w(sp(300.0))
             .bg(theme.background)
             .text_color(theme.foreground)
             .child(
@@ -6500,7 +6500,7 @@ impl AgentChatView {
             } else {
                 v_flex()
                     .id("agent-history-list")
-                    .max_h(px(360.0))
+                    .max_h(sp(360.0))
                     .overflow_y_scroll()
                     .p_1()
                     .gap_0p5()
@@ -7122,6 +7122,16 @@ fn build_composer_context(
         if let Some(label) = acp_state.as_ref().and_then(acp_mode_label) {
             context.execution_mode_label = SharedString::from(label);
         }
+        // 圆环 gauge 与 `acp-usage` scope 同源:scope 报精确读数,圆环给
+        // 一眼可见的占用比例。agent 没报窗口(`size == 0`)时给 `None`,
+        // 圆环退化成只显示 token 数。
+        if let Some(usage) = acp_state.as_ref().and_then(AcpSessionState::usage) {
+            let window = (usage.size > 0).then_some(usage.size);
+            context.context_usage = Some(
+                ContextUsage::new(usage.used, window)
+                    .with_cost(usage.cost.as_ref().map(format_acp_cost)),
+            );
+        }
     } else if let Some(tokens) = local_context_tokens {
         // 本地后端:模型报了计量才展示;窗口大小按模型名尽力解析,查不到就
         // 只显示 token 数,不猜百分比。
@@ -7131,6 +7141,7 @@ fn build_composer_context(
             t!("AgentUi.usage").to_string(),
             format_local_usage(tokens, window),
         ));
+        context.context_usage = Some(ContextUsage::new(tokens, window));
     }
     context
 }
@@ -7191,11 +7202,17 @@ fn acp_scopes(state: &AcpSessionState) -> Vec<ComposerScope> {
 fn format_acp_usage(usage: &AcpUsage) -> String {
     let mut text = format!("{}/{} tokens", usage.used, usage.size);
     if let Some(cost) = usage.cost.as_ref() {
-        let amount = format!("{:.4}", cost.amount);
-        let amount = amount.trim_end_matches('0').trim_end_matches('.');
-        text.push_str(&format!(" · {} {}", amount, cost.currency));
+        text.push_str(&format!(" · {}", format_acp_cost(cost)));
     }
     text
+}
+
+/// 费用文案:`0.0124 USD`。货币代码原样透传(协议给什么写什么,不自己拼
+/// 符号);小数位先按 4 位截掉尾随零,免得到处是 `0.0120`。
+fn format_acp_cost(cost: &agent_client_protocol::schema::v1::Cost) -> String {
+    let amount = format!("{:.4}", cost.amount);
+    let amount = amount.trim_end_matches('0').trim_end_matches('.');
+    format!("{} {}", amount, cost.currency)
 }
 
 /// 把 Acp agent 推送的 `available_commands` 转成 composer 的 `/` 补全项。
@@ -7307,6 +7324,7 @@ fn build_context(
         workspace_options: Vec::new(),
         branch_options: Vec::new(),
         worktree: Default::default(),
+        context_usage: None,
     }
 }
 
@@ -7377,8 +7395,8 @@ fn render_agent_switcher_content(
     let muted = theme.muted_foreground;
     let mut col = v_flex()
         .p_1()
-        .gap(px(2.0))
-        .min_w(px(300.0))
+        .gap(sp(2.0))
+        .min_w(sp(300.0))
         .bg(theme.background)
         .text_color(theme.foreground);
 

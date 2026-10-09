@@ -1,8 +1,27 @@
 use std::cell::RefCell;
 
-use gpui::{App, ElementId, HighlightStyle, Hsla, Pixels, SharedString, StyleRefinement};
+use gpui::{App, ElementId, HighlightStyle, Hsla, Pixels, Rems, SharedString, StyleRefinement};
 use gpui_base::{TextView, TextViewStyle};
 use gpui_component::ActiveTheme;
+
+/// navop 默认界面字号（px）：`sp()` 的书写基准。
+///
+/// 与 `navop settings` 的 `default_font_size()` 保持一致。术语：这里的
+/// 「界面尺寸」指边框、间距、圆角、控件高度这些 chrome；**文字**已经由
+/// `text_xs()/text_sm()`（rems）自己缩放，内容面（markdown 正文、代码块、
+/// diff 行）保持 `px` 不参与缩放。
+const UI_BASE_FONT_SIZE: f32 = 14.0;
+
+/// 按 14px 基准书写的界面尺寸 → rem，随「字体大小 × 界面缩放」缩放。
+///
+/// navop 的 rem 基准取自主题字号（gpui-component 的 `Root::render` 会
+/// `window.set_rem_size(cx.theme().font_size)`，而 `apply_font_settings` 把
+/// 缩放倍率乘进了字号）。所以走这里的尺寸会与 gpui-component 组件内部一致地
+/// 缩放；写死的 `px` 则不会。**发丝线（边框、分隔线）保持 `px`** —— 缩放会
+/// 让 1px 线在非整数倍下发糊。
+pub(crate) fn sp(value: f32) -> Rems {
+    gpui::rems(value / UI_BASE_FONT_SIZE)
+}
 
 #[derive(Clone, Debug)]
 pub struct AgentChatTheme {
@@ -25,6 +44,37 @@ pub struct AgentChatTheme {
     pub link: Hsla,
     pub text_selection: Hsla,
     pub surface_radius: Pixels,
+
+    // ── 语义槽：面板内的层次与状态色。全部取自宿主主题，不另立调色板，
+    // 这样 navop 换肤 / 深浅切换时面板自动跟随。
+    /// 浮层表面：popover / 菜单 / 命令面板 / 悬浮卡。
+    pub raised: Hsla,
+    /// 内嵌区表面：比 `panel` 更沉，用于代码槽、inset 容器。
+    pub inset: Hsla,
+    /// 悬停 / 选中叠加层，半透明，画在内容之下。
+    pub overlay: Hsla,
+    /// 更强的叠加层（按下 / 选中强调）。
+    pub overlay_strong: Hsla,
+    /// 结构性分隔线：比 `border` 明确，用于面板边界 / 标题栏。
+    pub border_strong: Hsla,
+    /// 最弱一级文字：占位符、禁用、角落元信息。
+    pub text_ghost: Hsla,
+    /// 用量 / 进度条填充。
+    pub gauge: Hsla,
+    /// 用量接近上限时的告警填充。
+    pub gauge_warning: Hsla,
+    /// 用量越过上限时的危险填充。
+    pub gauge_danger: Hsla,
+    pub success: Hsla,
+    pub warning: Hsla,
+    pub danger: Hsla,
+    pub info: Hsla,
+    /// 骨架屏占位底色。
+    pub skeleton: Hsla,
+    /// 用量历史图表的正向 / 反向柱与网格线。
+    pub chart_bullish: Hsla,
+    pub chart_bearish: Hsla,
+    pub chart_grid: Hsla,
 }
 
 impl AgentChatTheme {
@@ -50,6 +100,23 @@ impl AgentChatTheme {
             link: theme.link,
             text_selection: theme.selection,
             surface_radius: theme.radius,
+            raised: theme.colors.popover,
+            inset: theme.colors.input,
+            overlay: theme.colors.overlay,
+            overlay_strong: theme.colors.overlay.opacity(1.6),
+            border_strong: theme.colors.window_border,
+            text_ghost: theme.muted_foreground.opacity(0.6),
+            gauge: theme.colors.progress_bar,
+            gauge_warning: theme.colors.warning,
+            gauge_danger: theme.colors.danger,
+            success: theme.colors.success,
+            warning: theme.colors.warning,
+            danger: theme.colors.danger,
+            info: theme.colors.info,
+            skeleton: theme.colors.skeleton,
+            chart_bullish: theme.colors.chart_bullish,
+            chart_bearish: theme.colors.chart_bearish,
+            chart_grid: theme.colors.chart_grid,
         }
     }
 
@@ -172,6 +239,23 @@ mod tests {
             link: color(0x38bdf8),
             text_selection: color(0x164e63),
             surface_radius: gpui::px(6.0),
+            raised: color(0x1e293b),
+            inset: color(0x020617),
+            overlay: color(0x334155),
+            overlay_strong: color(0x475569),
+            border_strong: color(0x475569),
+            text_ghost: color(0x64748b),
+            gauge: color(0x38bdf8),
+            gauge_warning: color(0xf59e0b),
+            gauge_danger: color(0xef4444),
+            success: color(0x22c55e),
+            warning: color(0xf59e0b),
+            danger: color(0xef4444),
+            info: color(0x38bdf8),
+            skeleton: color(0x1e293b),
+            chart_bullish: color(0x22c55e),
+            chart_bearish: color(0xef4444),
+            chart_grid: color(0x334155),
         }
     }
 
