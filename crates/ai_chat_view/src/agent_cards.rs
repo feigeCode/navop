@@ -1384,8 +1384,8 @@ pub(crate) fn file_change_totals(changes: &[FileChangeSummary]) -> Option<(u32, 
 ///
 /// 高度上限在 [`crate::agent_diff`] 里就切好了(`rows` 最多十几行),这里不再
 /// 二次裁剪 —— 视口高度与改动规模无关,是这个模块的硬约束。
-/// Diff 块里一个文件段的状态:头部数据 + 已就绪的 DiffState(合成 patch
-/// 解析失败时为 `None`,回退到旧的逐行渲染)+ 未展示行数。
+/// Diff 块里一个文件段的状态:头部数据 + 已就绪的 DiffState(无展示行时为
+/// `None`,只渲染文件头)+ 未展示行数。
 struct DiffBlockState {
     change: FileChangeSummary,
     state: Option<Entity<DiffState>>,
@@ -1396,6 +1396,9 @@ struct DiffBlockState {
 /// `(call_id, path, rows 指纹)` 缓存。卡片每帧都从 JSON 重建 `ToolCardData`,
 /// 但 `DiffState` 是带订阅的实体、解析 patch 也要花钱——同一份内容跨帧复用;
 /// 流式更新中 rows 增长会改变指纹,旧实体没有其余强引用,交给 GC。
+///
+/// 模式固定 **Unified 单栏**:工具卡嵌在聊天流里,宽度通常只够一栏,并排双栏
+/// 会把右栏裁掉。要看并排,走文件头的「在 Review 中打开」——那里才是全宽。
 fn build_diff_blocks(
     data: &ToolCardData,
     cache: &Arc<Mutex<HashMap<String, WeakEntity<DiffState>>>>,
@@ -1425,7 +1428,7 @@ fn build_diff_blocks(
                                 })
                                 .collect::<Vec<_>>();
                             let state = cx
-                                .new(|cx| DiffState::new(files, cx).with_mode(DiffMode::Split));
+                                .new(|cx| DiffState::new(files, cx).with_mode(DiffMode::Unified));
                             cache.insert(key, state.downgrade());
                             Some(state)
                         }
@@ -1461,8 +1464,9 @@ fn file_change_fingerprint(change: &FileChangeSummary) -> u64 {
     hasher.finish()
 }
 
-/// Diff 组件自带滚动、需要给定高度:按展示行数估一个,保底 72、封顶 320。
-/// 行高按组件的等宽小字号取 20px;hunk 分隔条与内边距另给余量。
+/// Diff 组件自带滚动、需要给定高度。单栏(Unified)下每个展示行独占一行,
+/// 故按行数估:行高取组件的等宽小字号 20px,再给 hunk 分隔条与内边距留余量。
+/// 保底 72、封顶 320(约 16 行),与卡片「只给摘要」的定位一致。
 fn diff_block_height(change: &FileChangeSummary) -> f32 {
     (change.rows.len() as f32 * 20.0 + 16.0).clamp(72.0, 320.0)
 }
@@ -1495,8 +1499,8 @@ fn tool_card_diff_block(blocks: &[DiffBlockState], cx: &App) -> AnyElement {
                 .bg(theme.code_background)
                 .overflow_hidden()
                 .child(tool_diff_file_header(&block.change, cx))
-                // Split 双栏 + 行号由 DiffState 的模式决定;头部用上面的自绘
-                // 文件头,保持与整卡一致的信息密度与「打开」动作。`state` 缺席
+                // 单栏(Unified)渲染,行号与增删标记由 DiffState 决定;头部用上面的
+                // 自绘文件头,保持与整卡一致的信息密度与「打开」动作。`state` 缺席
                 // 只可能是「有路径但无展示行」,此时仅显示文件头。
                 .when_some(block.state.as_ref(), |this, state| {
                     this.child(
