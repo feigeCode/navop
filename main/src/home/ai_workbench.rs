@@ -47,10 +47,23 @@ fn workspace_root(cx: &App) -> std::path::PathBuf {
         .ai_chat
         .last_workspace_root;
     saved
-        .filter(|path| path.is_dir())
-        .or_else(|| std::env::current_dir().ok().filter(|path| path.is_dir()))
+        .filter(|path| is_workspace_dir(path))
+        .or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .filter(|path| is_workspace_dir(path))
+        })
         .or_else(dirs::home_dir)
         .unwrap_or_else(|| std::path::PathBuf::from("."))
+}
+
+/// 目录存在、且不是文件系统根。
+///
+/// 文件系统根也要挡：从 Finder 启动的应用当前目录就是 `/`，放它进来会立刻被
+/// `remember_workspace_root` 存成"上次的工作区"，之后每次启动都停在一个没有仓库、
+/// 也没有项目结构的地方——审阅这类依赖仓库的功能会静默退化成打开源文件。
+fn is_workspace_dir(path: &std::path::Path) -> bool {
+    path.is_dir() && path.parent().is_some()
 }
 
 pub(super) fn recent_workspace_roots(cx: &App) -> Vec<std::path::PathBuf> {
@@ -58,7 +71,7 @@ pub(super) fn recent_workspace_roots(cx: &App) -> Vec<std::path::PathBuf> {
         .ai_chat
         .recent_workspace_roots
         .into_iter()
-        .filter(|path| path.is_dir())
+        .filter(|path| is_workspace_dir(path))
         .collect()
 }
 
@@ -90,9 +103,8 @@ pub(crate) fn build_ai_workbench_shell(
     let workspace_root = workspace_root(cx);
     // 工作区文件进 `@` 菜单：连接提及（调用方传入）之后追加，有界收集不拖慢输入框。
     let mut mentions = mentions;
-    mentions.extend(ai_chat_view::workspace_files::collect_workspace_files_default(
-        &workspace_root,
-    ));
+    mentions
+        .extend(ai_chat_view::workspace_files::collect_workspace_files_default(&workspace_root));
     let editor = cx.new(|_| WorkspaceEditor::new(theme));
     let explorer = cx.new(|cx| {
         WorkspaceExplorer::new(
@@ -107,9 +119,11 @@ pub(crate) fn build_ai_workbench_shell(
         )
     });
     let chat = cx.new(|cx| {
-        DefaultAgentChatPanel::new_workbench_with_scope_and_catalog(scope, catalog, mentions, window, cx)
-            .with_tab_closeable(true)
-            .with_workspace_root(workspace_root.clone())
+        DefaultAgentChatPanel::new_workbench_with_scope_and_catalog(
+            scope, catalog, mentions, window, cx,
+        )
+        .with_tab_closeable(true)
+        .with_workspace_root(workspace_root.clone())
     });
     let recents = recent_workspace_roots(cx);
     explorer.update(cx, |explorer, cx| explorer.set_recent_roots(recents, cx));
@@ -158,9 +172,8 @@ pub(crate) fn build_ai_workbench_shell(
     // 另一条分支：Explorer 里点开文件/变更 → 审阅面板就地切到前台。
     let chat_for_root = chat.clone();
     let shell_for_root = shell.clone();
-    let root_subscription: Subscription = cx.subscribe(
-        &explorer,
-        move |_, event: &WorkspaceExplorerEvent, cx| {
+    let root_subscription: Subscription =
+        cx.subscribe(&explorer, move |_, event: &WorkspaceExplorerEvent, cx| {
             match event {
                 WorkspaceExplorerEvent::RootChanged(root) => {
                     remember_workspace_root(root, cx);
@@ -197,14 +210,12 @@ pub(crate) fn build_ai_workbench_shell(
                 }
                 _ => {}
             }
-        },
-    );
+        });
     let explorer_for_turns = explorer.clone();
     let shell_for_open = shell.clone();
     let explorer_for_files = explorer.clone();
-    let turn_subscription: Subscription = cx.subscribe(
-        &chat,
-        move |_, event: &DefaultAgentChatPanelEvent, cx| {
+    let turn_subscription: Subscription =
+        cx.subscribe(&chat, move |_, event: &DefaultAgentChatPanelEvent, cx| {
             match event {
                 DefaultAgentChatPanelEvent::TurnFinished {
                     session_id,
@@ -275,10 +286,13 @@ pub(crate) fn build_ai_workbench_shell(
                 }
                 _ => {}
             }
-        },
-    );
-    shell.update(cx, |shell, cx| shell.add_subscription(turn_subscription, cx));
-    shell.update(cx, |shell, cx| shell.add_subscription(root_subscription, cx));
+        });
+    shell.update(cx, |shell, cx| {
+        shell.add_subscription(turn_subscription, cx)
+    });
+    shell.update(cx, |shell, cx| {
+        shell.add_subscription(root_subscription, cx)
+    });
 
     // 顶部工作区标签点击 → 打开目录选择器（复用 Explorer 的最近列表与广播）。
     let explorer_for_picker = explorer.clone();
@@ -330,12 +344,10 @@ pub(crate) fn build_ai_workbench_shell(
 
     // AI 提交信息：Explorer 发请求，这里取已配置 provider 生成后回填。
     let explorer_for_message = explorer.clone();
-    let commit_message_subscription: Subscription = cx.subscribe(
-        &explorer,
-        move |_, _: &WorkspaceExplorerEvent, cx| {
+    let commit_message_subscription: Subscription =
+        cx.subscribe(&explorer, move |_, _: &WorkspaceExplorerEvent, cx| {
             spawn_commit_message_generation(&explorer_for_message, cx);
-        },
-    );
+        });
     shell.update(cx, |shell, cx| {
         shell.add_subscription(commit_message_subscription, cx)
     });
@@ -343,14 +355,11 @@ pub(crate) fn build_ai_workbench_shell(
 }
 
 /// 用已配置的默认 provider 生成提交信息并回填输入框。
-fn spawn_commit_message_generation(
-    explorer: &gpui::Entity<WorkspaceExplorer>,
-    cx: &mut gpui::App,
-) {
+fn spawn_commit_message_generation(explorer: &gpui::Entity<WorkspaceExplorer>, cx: &mut gpui::App) {
     use one_core::llm::storage::ProviderRepository;
     use one_core::llm::{LlmConnector, LlmProvider};
-    use one_core::storage::traits::Repository;
     use one_core::storage::GlobalStorageState;
+    use one_core::storage::traits::Repository;
 
     let Some(storage_state) = cx.try_global::<GlobalStorageState>() else {
         return;
@@ -389,9 +398,9 @@ fn spawn_commit_message_generation(
         };
         // diff 摘要是 git 只读操作，放后台线程；LLM 调用走 Tokio runtime。
         let context = match cx
-            .background_spawn(async move {
-                workspace_explorer::commit_context(&repository, 16 * 1024)
-            })
+            .background_spawn(
+                async move { workspace_explorer::commit_context(&repository, 16 * 1024) },
+            )
             .await
         {
             Ok(context) => context,
@@ -440,4 +449,24 @@ fn spawn_commit_message_generation(
         });
     })
     .detach();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_workspace_dir;
+    use std::path::Path;
+
+    /// 文件系统根不是工作区：Finder 启动的应用当前目录就是 `/`。
+    #[test]
+    fn filesystem_roots_are_not_workspaces() {
+        assert!(!is_workspace_dir(Path::new("/")));
+        assert!(is_workspace_dir(Path::new("/tmp")));
+    }
+
+    #[test]
+    fn missing_directories_are_not_workspaces() {
+        assert!(!is_workspace_dir(Path::new(
+            "/definitely-not-a-real-directory-9f3a"
+        )));
+    }
 }
