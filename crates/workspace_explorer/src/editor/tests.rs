@@ -240,6 +240,33 @@ fn snapshot_patch(turn: usize) -> String {
 }
 
 #[gpui::test]
+fn diff_tabs_start_in_a_single_column(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        notes::init(cx);
+    });
+    let (window, editor) = open_test_editor(cx);
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+
+    editor.update_in(&mut cx, |editor, window, cx| {
+        editor.open_snapshot_diff("turn 0".to_string(), snapshot_patch(0), window, cx);
+    });
+    cx.run_until_parked();
+
+    let side_by_side = editor.read_with(&cx, |editor, _| {
+        editor
+            .active_tab()
+            .expect("review tab should be active")
+            .diff_side_by_side
+    });
+    assert!(
+        !side_by_side,
+        "审阅面板默认单栏：它是可调宽的侧栏，窄下来时 Split 的右栏会被父级 \
+         overflow_hidden 整块裁掉，看起来就像「diff 少了一半」"
+    );
+}
+
+#[gpui::test]
 fn reopening_a_file_keeps_unsaved_edits(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_component::init(cx);

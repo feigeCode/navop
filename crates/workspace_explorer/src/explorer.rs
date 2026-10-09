@@ -55,7 +55,12 @@ pub struct WorkspaceExplorer {
     /// 仓库已注册的 worktree，来自 `git worktree list`。
     worktrees: Vec<WorktreeEntry>,
     last_checkpoint: Option<String>,
-    last_turn_review: Option<WorktreeReviewSnapshot>,
+    /// 逐轮审阅快照，按捕获先后排列（跨会话）。
+    ///
+    /// 与 `turn_checkpoints` **分开存**：那份是「能回到这一轮」的依据，锚定失败
+    /// 就不入列；这份只要 diff 算出来了就留 —— 审阅入口不该因为 ref 没锚上就
+    /// 点不开。两者一起在「回到某一轮」时截断。
+    turn_reviews: Vec<WorktreeReviewSnapshot>,
     /// 每个会话已捕获的逐轮快照，按轮次先后排列（key = session id）。
     turn_checkpoints: HashMap<String, Vec<TurnCheckpoint>>,
     /// 捕获完成、等待下一帧打开 Review 的 diff。
@@ -147,7 +152,7 @@ impl WorkspaceExplorer {
             changes: Vec::new(),
             worktrees: Vec::new(),
             last_checkpoint: None,
-            last_turn_review: None,
+            turn_reviews: Vec::new(),
             turn_checkpoints: HashMap::new(),
             pending_review_open: false,
             commit_message_generating: false,
@@ -214,8 +219,11 @@ impl WorkspaceExplorer {
         &self.recent_roots
     }
 
-    pub fn last_turn_review(&self) -> Option<&WorktreeReviewSnapshot> {
-        self.last_turn_review.as_ref()
+    /// 最近一轮的审阅快照：每轮结束时自动把这一轮的 diff 摆到审阅面板。
+    ///
+    /// 「点某个改动文件」不走这里 —— 那要找的是用户点的那一轮，见 [`review_for_open`]。
+    fn latest_review(&self) -> Option<&WorktreeReviewSnapshot> {
+        self.turn_reviews.last()
     }
 
     /// 在 turn 结束时捕获工作区快照，并与上一轮结束快照比较。
@@ -266,7 +274,7 @@ impl WorkspaceExplorer {
                             });
                         this.emit_restorable_turns(&session_id, cx);
                     }
-                    this.last_turn_review = Some(WorktreeReviewSnapshot {
+                    this.turn_reviews.push(WorktreeReviewSnapshot {
                         session_id,
                         turn_id,
                         diff,
@@ -329,7 +337,7 @@ impl WorkspaceExplorer {
                     Ok(restore) => {
                         // 恢复后的现场就是目标快照，基线随之对齐。
                         this.last_checkpoint = Some(restore.target);
-                        this.last_turn_review = None;
+                        this.drop_reviews_after(&session_id, &turn_id);
                         this.pending_review_open = false;
                         this.git_error = None;
                         let dropped = this.truncate_turns_after(&session_id, &turn_id);
@@ -358,6 +366,15 @@ impl WorkspaceExplorer {
     /// 丢掉第 `turn_id` 轮之后的快照记录，返回被丢掉的 turn id（调用方据此删 ref）。
     fn truncate_turns_after(&mut self, session_id: &str, turn_id: &str) -> Vec<String> {
         truncate_checkpoints_after(&mut self.turn_checkpoints, session_id, turn_id)
+    }
+
+    /// 丢掉第 `turn_id` 轮之后的审阅快照。
+    ///
+    /// 与检查点同步截断：回到第 N 轮之后，第 N 轮之后的 diff 不再对应磁盘上的
+    /// 任何状态，留着只会让审阅入口裁出一份从未存在过的改动。第 N 轮自己留着
+    /// ——它正是这次恢复出来的那份改动。
+    fn drop_reviews_after(&mut self, session_id: &str, turn_id: &str) {
+        drop_reviews_after(&mut self.turn_reviews, session_id, turn_id);
     }
 
     /// 弹出提交信息输入框，提交当前全部变更。
@@ -674,7 +691,7 @@ impl WorkspaceExplorer {
         self.changes.clear();
         self.worktrees.clear();
         self.last_checkpoint = None;
-        self.last_turn_review = None;
+        self.turn_reviews.clear();
         self.turn_checkpoints.clear();
         self.pending_review_open = false;
         self.ignore_matcher = None;
@@ -902,18 +919,30 @@ impl WorkspaceExplorer {
 
     /// 打开某个「改动文件」的审阅视图。
     ///
+    /// `turn_id` 是用户点的那一处属于哪一轮（轮次页脚、工具卡都会给）。给了就裁
+    /// **那一轮**的快照 —— 同一个文件在不同轮次改出来的不是同一份 diff；给不出来
+    /// （历史恢复的轮次没有 turn id）才退到最近一轮，聊胜于无。
+    ///
     /// 三个来源按可信度排序：
     ///
-    /// 1. 本轮 checkpoint 快照里该文件那一段——Review 面板展示的就是这份 diff；
-    /// 2. 本轮还没结束（快照未落地）时，退到 Git 变更里同名文件相对 HEAD 的 diff；
-    /// 3. 两条都落空（未纳入版本控制、路径对不上）才退回打开文件本身。
+    /// 1. 该轮审阅快照里该文件那一段——Review 面板展示的就是这份 diff；
+    /// 2. 本轮还没结束、或该轮没留下快照（未纳入版本控制、快照捕获失败）时，
+    ///    退到 Git 变更里同名文件相对 HEAD 的 diff；
+    /// 3. 两条都落空（路径对不上、非 Git 目录）才退回打开文件本身。
     ///
     /// 第 3 档不是顺手加的：审阅入口必须点了有事发生，但也**不能**用空 diff 冒充
     /// 「这个文件没改」——那恰恰是这个入口之前的样子（点了只打开源文件，看不出
     /// 哪里变了，再点一次连源文件都已经在前台，于是「点了没反应」）。
-    pub fn open_review_file(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn open_review_file(
+        &mut self,
+        session_id: &str,
+        path: String,
+        turn_id: Option<&str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let requested = PathBuf::from(path.as_str());
-        if let Some(patch) = self.review_patch_for(&requested) {
+        if let Some(patch) = self.review_patch_for(session_id, &requested, turn_id) {
             self.editor.update(cx, |editor, cx| {
                 editor.open_review_diff(requested, patch, window, cx);
             });
@@ -928,13 +957,17 @@ impl WorkspaceExplorer {
         self.open_file(PathBuf::from(path), window, cx);
     }
 
-    /// 最近一轮快照 patch 里该文件那一段。
+    /// 某一轮快照 patch 里该文件那一段。
     ///
-    /// 用的是**最后落地的**那份快照（`last_turn_review`）——逐轮 diff 只为最近一轮
-    /// 留了原文，历史轮的任何入口点进来都拿到它。比「打开文件」接近用户点的那件事，
-    /// 但不等于「那一段历史时刻的 diff」；要更准就得为每一轮都留 diff，那是另一件事。
-    fn review_patch_for(&self, path: &Path) -> Option<String> {
-        let review = self.last_turn_review.as_ref()?;
+    /// 用哪一份快照由 [`review_for_open`] 决定：优先用户点的那一轮，该轮没有快照
+    /// 或调用方给不出轮次时退到最近一轮。
+    fn review_patch_for(
+        &self,
+        session_id: &str,
+        path: &Path,
+        turn_id: Option<&str>,
+    ) -> Option<String> {
+        let review = review_for_open(&self.turn_reviews, session_id, turn_id)?;
         let section = self
             .relative_candidates(path)
             .into_iter()
@@ -993,12 +1026,67 @@ fn should_sync_terminal_root(
     follow_terminal_cwd && should_update_root(current, requested, in_repository)
 }
 
+/// 审阅入口该裁哪一份快照。
+///
+/// 用户点了哪一轮就取哪一轮 —— 同一个文件在第 2 轮和第 5 轮改出来的不是同一份
+/// diff，拿最近一轮冒充会答错。只有**给不出轮次**（历史恢复的轮次没有 turn id），
+/// 或那一轮压根没留下快照（非 Git 目录、捕获失败）时，才退到最近一轮：
+/// 聊胜于无，而且这两条路上本来也没有更准的答案。
+fn review_for_open<'a>(
+    reviews: &'a [WorktreeReviewSnapshot],
+    session_id: &str,
+    turn_id: Option<&str>,
+) -> Option<&'a WorktreeReviewSnapshot> {
+    turn_id
+        .and_then(|turn_id| review_for_turn(reviews, session_id, turn_id))
+        .or_else(|| reviews.last())
+}
+
+/// 指定会话某一轮的审阅快照。
+///
+/// 一轮的 diff 得从**该轮**的快照里裁：同一个文件在第 2 轮和第 5 轮改出来的不是
+/// 同一份 diff；拿最近一轮冒充会答错，而那正是「点历史轮的文件看不到那一刻改动」
+/// 的根子。
+fn review_for_turn<'a>(
+    reviews: &'a [WorktreeReviewSnapshot],
+    session_id: &str,
+    turn_id: &str,
+) -> Option<&'a WorktreeReviewSnapshot> {
+    reviews
+        .iter()
+        .rev()
+        .find(|review| review.session_id == session_id && review.turn_id == turn_id)
+}
+
+/// 丢掉第 `turn_id` 轮**之后**的审阅快照，第 `turn_id` 轮自己留着。
+///
+/// 与 [`truncate_checkpoints_after`] 同步：回到第 N 轮之后，第 N 轮之后的 diff
+/// 不再对应磁盘上的任何状态，留着只会让审阅入口裁出一份从未存在过的改动。
+/// 别的会话的快照与这条时间线无关，原地保留。
+fn drop_reviews_after(
+    reviews: &mut Vec<WorktreeReviewSnapshot>,
+    session_id: &str,
+    turn_id: &str,
+) {
+    let Some(index) = reviews
+        .iter()
+        .position(|review| review.session_id == session_id && review.turn_id == turn_id)
+    else {
+        return;
+    };
+    let stale = reviews.split_off(index + 1);
+    reviews.extend(
+        stale
+            .into_iter()
+            .filter(|review| review.session_id != session_id),
+    );
+}
+
 fn truncate_checkpoints_after(
     checkpoints: &mut HashMap<String, Vec<TurnCheckpoint>>,
     session_id: &str,
     turn_id: &str,
-) -> Vec<String> {
-    let Some(turns) = checkpoints.get_mut(session_id) else {
+) -> Vec<String> {    let Some(turns) = checkpoints.get_mut(session_id) else {
         return Vec::new();
     };
     let Some(index) = turns.iter().position(|turn| turn.turn_id == turn_id) else {

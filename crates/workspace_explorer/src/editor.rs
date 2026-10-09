@@ -200,7 +200,10 @@ impl EditorTab {
             markdown: None,
             subscriptions: Vec::new(),
             diff_state: None,
-            diff_side_by_side: true,
+            // 默认单栏(Unified)。审阅面板是可调宽的侧栏,窄下来时 Split 的右栏
+            // 会被父级 `overflow_hidden` 整块裁掉——宁可先给一栏看得全的,
+            // 要并排再点工具栏切换(那里本来就有开关)。
+            diff_side_by_side: false,
             saved_text: String::new(),
             file_size: 0,
             policy: DocumentPolicy::Code,

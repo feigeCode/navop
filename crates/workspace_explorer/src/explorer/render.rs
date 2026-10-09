@@ -261,7 +261,7 @@ impl Render for WorkspaceExplorer {
         if self.pending_review_open {
             self.pending_review_open = false;
             let editor = self.editor.clone();
-            let review = self.last_turn_review.clone();
+            let review = self.latest_review().cloned();
             // 打开文档之后要广播 `DocumentRequested`，否则宿主不知道审阅面板该
             // 被带到前台——上一轮 diff 就只会静静地落进一个没打开的面板里。
             // `open_change` / `open_file` 走的是同一条约定。
