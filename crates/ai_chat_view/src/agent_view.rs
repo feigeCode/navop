@@ -11,7 +11,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use agent_client_protocol::schema::v1::{
     AvailableCommandInput, ContentBlock, ImageContent, TextContent,
@@ -801,6 +801,12 @@ struct ComposerDraft {
     images: Vec<crate::ImageAttachment>,
 }
 
+/// 草稿防抖保存的等待时间。
+///
+/// 与 waku 的 `COMPOSER_DRAFT_SAVE_DELAY` 同量级：短到「手一停就存上了」，
+/// 长到连续打字时不会每敲一个字都写一次库。
+const DRAFT_SAVE_DEBOUNCE: Duration = Duration::from_millis(250);
+
 fn merge_live_session_summaries(
     persisted: Vec<SessionSummary>,
     live: &[SessionSummary],
@@ -1344,6 +1350,12 @@ pub struct AgentChatView {
     pub(super) palette_query: String,
     /// 命令面板的查询输入框。
     palette_input: Entity<InputState>,
+    /// 有未发送草稿的会话 uid（会话列表行上的标记用）。
+    ///
+    /// 缓存一份而不是每帧查库：列表每帧都要它，而草稿只在输入停下来时变一次。
+    drafted_sessions: HashSet<String>,
+    /// 排队中的草稿防抖保存；再输入一次会把它顶掉重排（旧任务随 drop 取消）。
+    draft_save_task: Option<Task<()>>,
     /// 侧边栏是否显示「已归档」会话(否则显示活跃会话)。
     show_archived: bool,
     /// 侧边栏视图(窄面板)模式:头部走新建对话 / 历史记录紧凑布局,不常驻会话列表。
@@ -1738,6 +1750,9 @@ impl AgentChatView {
             palette_selection: 0,
             palette_query: String::new(),
             palette_input,
+            // 启动时从库里取一次：上次没发出去的草稿要在列表上标出来。
+            drafted_sessions: persistence::drafted_session_uids(cx),
+            draft_save_task: None,
             show_archived: false,
             sidebar_mode,
             show_sidebar_header,
@@ -2701,6 +2716,9 @@ impl AgentChatView {
                     self.sync_pending_preview(cx);
                     cx.notify();
                 }
+            }
+            AgentInputEvent::DraftChanged => {
+                self.schedule_draft_save(cx);
             }
             AgentInputEvent::OpenUsageHistory => {
                 self.usage_history = Some(crate::usage_history::collect_usage_history(cx));
@@ -5706,24 +5724,68 @@ impl AgentChatView {
         }
         let text = self.input.read(cx).composer_text(cx);
         let images = self.input.read(cx).composer_attachments().to_vec();
+        let has_draft = !text.trim().is_empty() || !images.is_empty();
         if let Some(session) = self
             .runtime
             .session(&SessionId::from_string(self.current_session.clone()))
         {
-            session.set_draft((!text.trim().is_empty() || !images.is_empty()).then(|| text));
+            session.set_draft(has_draft.then(|| text.clone()));
         }
         if images.is_empty() {
             self.session_draft_attachments.remove(&self.current_session);
         } else {
             self.session_draft_attachments
-                .insert(self.current_session.clone(), images);
+                .insert(self.current_session.clone(), images.clone());
         }
+        // 落库。库里那行是**权威草稿**（文字 + 附件一起），快照里那份只是随消息
+        // 顺带写下的副本——空会话没有快照，那份副本根本不存在。
+        persistence::save_composer_draft(cx, &self.current_session, &text, &images);
+        if has_draft {
+            self.drafted_sessions.insert(self.current_session.clone());
+        } else {
+            self.drafted_sessions.remove(&self.current_session);
+        }
+    }
+
+    /// 排一次草稿保存；250ms 内再次输入会把上一次顶掉重排。
+    fn schedule_draft_save(&mut self, cx: &mut Context<Self>) {
+        let session = self.current_session.clone();
+        self.draft_save_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(DRAFT_SAVE_DEBOUNCE).await;
+            let _ = this.update(cx, |this, cx| this.flush_draft_save(&session, cx));
+        }));
+    }
+
+    /// 防抖到点：把输入框里的内容写进草稿表。
+    ///
+    /// `uid` 与当前会话不一致就什么都不做——这期间用户已经切走了，输入框里
+    /// 现在是**另一个会话**的内容，照旧 uid 存下去就是串台。
+    fn flush_draft_save(&mut self, uid: &str, cx: &mut Context<Self>) {
+        if uid != self.current_session {
+            return;
+        }
+        self.capture_session_draft(cx);
+        cx.notify();
+    }
+
+    /// 这条会话有没有没发出去的草稿（会话列表行上的标记）。
+    pub(crate) fn session_has_draft(&self, uid: &str) -> bool {
+        self.drafted_sessions.contains(uid)
     }
 
     /// 目标会话的草稿送入输入框（经 [`Self::pending_input_draft`] 在渲染时应用）。
     ///
     /// 没有 `window` 时只排队不写——渲染帧必然到来，见字段注释。
-    fn stage_session_draft(&mut self, uid: &str) {
+    fn stage_session_draft(&mut self, uid: &str, cx: &App) {
+        // 草稿表优先：文字与附件一起从库里取。附件过去只活在内存里，重启即丢；
+        // 库里没有记录（从没写过草稿 / 旧版本升级上来）才回落到运行时草稿。
+        if let Some(record) = persistence::load_composer_draft(cx, uid) {
+            self.pending_input_draft = Some(ComposerDraft {
+                text: record.text,
+                images: record.attachments,
+            });
+            return;
+        }
         let text = self
             .runtime
             .session(&SessionId::from_string(uid.to_string()))
@@ -6039,7 +6101,7 @@ impl AgentChatView {
         // recency：无论来源（点击 / 后退 / 前进 / 切换器），都是一次真实访问。
         self.session_switcher.record_access(uid);
         // 切换已成立：输入框换显示目标会话自己的草稿（渲染时应用）。
-        self.stage_session_draft(uid);
+        self.stage_session_draft(uid, cx);
         self.apply_system_instruction_to_current_session();
         if let Some(transcript) = self.remove_cached_session_transcript(uid)
             && !transcript.is_empty()
@@ -6181,6 +6243,9 @@ impl AgentChatView {
         persistence::delete_session(cx, uid);
         // 用量流水跟着会话一起收：“历史上那条已经不存在的会话用了多少”没意义。
         persistence::clear_usage_samples(cx, uid);
+        // 草稿同理：会话都不在了，留一条草稿只会让列表标记凭空多出来一条。
+        persistence::clear_composer_draft(cx, uid);
+        self.drafted_sessions.remove(uid);
         if self.current_session == uid {
             self.start_fresh_session(cx);
         }
@@ -6355,29 +6420,29 @@ impl AgentChatView {
         let running_animation_id = running_session_animation_id(&uid);
 
         // 标题区:活跃视图可点击切换;归档视图只读。
-        let label = session_sidebar::session_row_with_style(session, selected, row_style, cx).when(
-            running,
-            move |label| {
-                let debug_selector = running_indicator_id.clone();
-                label.child(
-                    h_flex()
-                        .id(SharedString::from(running_indicator_id))
-                        .debug_selector(move || debug_selector.clone())
-                        .items_center()
-                        .gap_0p5()
-                        .flex_shrink_0()
-                        .text_xs()
-                        .text_color(running_color)
-                        .child(
-                            Spinner::new()
-                                .small()
-                                .color(running_color)
-                                .animation_id(running_animation_id),
-                        )
-                        .child(t!("AgentUi.running").to_string()),
-                )
-            },
-        );
+        let has_draft = self.session_has_draft(&session.id);
+        let label =
+            session_sidebar::session_row_with_style(session, selected, has_draft, row_style, cx)
+                .when(running, move |label| {
+                    let debug_selector = running_indicator_id.clone();
+                    label.child(
+                        h_flex()
+                            .id(SharedString::from(running_indicator_id))
+                            .debug_selector(move || debug_selector.clone())
+                            .items_center()
+                            .gap_0p5()
+                            .flex_shrink_0()
+                            .text_xs()
+                            .text_color(running_color)
+                            .child(
+                                Spinner::new()
+                                    .small()
+                                    .color(running_color)
+                                    .animation_id(running_animation_id),
+                            )
+                            .child(t!("AgentUi.running").to_string()),
+                    )
+                });
         let label_area = if archived_view {
             div().flex_1().min_w_0().child(label).into_any_element()
         } else {
@@ -14964,12 +15029,110 @@ mod tests {
         let storage = StorageManager::new_with_connection(conn.clone());
         storage.register(AgentSessionRepository::new(conn.clone()));
         storage.register(SessionRepository::new(conn.clone()));
-        storage.register(MessageRepository::new(conn));
+        storage.register(MessageRepository::new(conn.clone()));
+        storage.register(one_core::llm::ComposerDraftRepository::new(conn));
         storage
     }
 
     /// 点开一条「没有归属」的旧会话，不能顺手把它钉到当前工作区。
     ///
+    /// 草稿：输入停下来就落库，切走再切回连**附件**一起恢复，清空后标记消失。
+    ///
+    /// 附件是这次补的重点——它过去只活在内存里，重启（或这里模拟的换会话路径）
+    /// 就没了。文字那份好歹跟着快照活着。
+    #[gpui::test]
+    fn gpui_composer_drafts_survive_a_session_switch(cx: &mut TestAppContext) {
+        use one_core::storage::GlobalStorageState;
+
+        init_test_ui(cx);
+        cx.update(|cx| {
+            cx.set_global(GlobalStorageState {
+                storage: test_session_storage(),
+            })
+        });
+
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![])
+            .with_workspace_root(std::path::PathBuf::from("/tmp/navop-test-drafts"));
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        cx.run_until_parked();
+
+        let first = view.read_with(cx, |view, _| view.current_session.clone());
+
+        // 打字 + 挂一张图。`set_composer_text` 走的是程序化写入，照样会发
+        // `DraftChanged`——这里就是要验它。
+        view.update_in(cx, |view, window, cx| {
+            let input = view.input.clone();
+            input.update(cx, |input, cx| {
+                input.set_composer_text("还没发送的半句话", window, cx);
+                input.set_composer_attachments(
+                    vec![crate::ImageAttachment::for_test("预算.png")],
+                    cx,
+                );
+            });
+        });
+        // 防抖到点：显式推时钟再跑任务——测试里的定时器不会自己走。
+        cx.background_executor
+            .advance_clock(DRAFT_SAVE_DEBOUNCE + Duration::from_millis(50));
+        cx.run_until_parked();
+
+        view.update(cx, |view, cx| {
+            assert!(
+                view.session_has_draft(&first),
+                "输入停下来之后会话该被标上「有草稿」"
+            );
+            let record = crate::persistence::load_composer_draft(cx, &first).expect("草稿该已落库");
+            assert_eq!("还没发送的半句话", record.text);
+            assert_eq!(1, record.attachments.len());
+            assert_eq!("预算.png", record.attachments[0].name);
+        });
+
+        // 换到新会话：草稿留在旧会话身上，输入框换成新的。
+        view.update(cx, |view, cx| view.new_session(cx));
+        cx.run_until_parked();
+        let second = view.read_with(cx, |view, _| view.current_session.clone());
+        assert_ne!(first, second);
+        assert_eq!(
+            "",
+            view.read_with(cx, |view, cx| view.input.read(cx).composer_text(cx)),
+            "新会话的输入框该是空的"
+        );
+        assert!(view.read_with(cx, |view, _| view.session_has_draft(&first)));
+
+        // 切回去：文字与附件一起回来（附件是从库里那张图恢复的）。
+        view.update_in(cx, |view, _window, cx| view.switch_session(&first, cx));
+        cx.run_until_parked();
+        view.update(cx, |view, cx| {
+            assert_eq!(
+                "还没发送的半句话",
+                view.input.read(cx).composer_text(cx),
+                "切回来该看到上次没发出去的半句话"
+            );
+            let attachments = view.input.read(cx).composer_attachments().to_vec();
+            assert_eq!(1, attachments.len(), "附件草稿该跟着会话一起回来");
+            assert_eq!("预算.png", attachments[0].name);
+        });
+
+        // 清空输入框：行删掉，标记跟着灭。
+        view.update_in(cx, |view, window, cx| {
+            let input = view.input.clone();
+            input.update(cx, |input, cx| {
+                input.set_composer_text("", window, cx);
+                input.set_composer_attachments(Vec::new(), cx);
+            });
+        });
+        cx.background_executor
+            .advance_clock(DRAFT_SAVE_DEBOUNCE + Duration::from_millis(50));
+        cx.run_until_parked();
+        view.update(cx, |view, cx| {
+            assert!(
+                !view.session_has_draft(&first),
+                "清空之后不该再标「有草稿」"
+            );
+            assert!(crate::persistence::load_composer_draft(cx, &first).is_none());
+        });
+    }
+
     /// 侧栏把它摆在「未分组」，就是因为快照里没有归属。归属的定格只发生在
     /// **真正落盘**那一刻（见 `persist_session` 里的兜底）；只是点开看一眼
     /// 就改写它，用户看到的就是「无分组的自己跑到分组下面去了」。

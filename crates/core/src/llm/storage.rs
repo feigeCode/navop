@@ -343,6 +343,8 @@ pub fn init(cx: &mut App) {
     let session_repo = SessionRepository::new(conn.clone());
     let message_repo = MessageRepository::new(conn.clone());
     let agent_usage_repo = crate::llm::usage_history::AgentUsageRepository::new(conn.clone());
+    let composer_draft_repo =
+        crate::llm::composer_draft::ComposerDraftRepository::new(conn.clone());
     let agent_session_repo = AgentSessionRepository::new(conn);
 
     storage.register(provider_repo);
@@ -350,6 +352,7 @@ pub fn init(cx: &mut App) {
     storage.register(message_repo);
     storage.register(agent_session_repo);
     storage.register(agent_usage_repo);
+    storage.register(composer_draft_repo);
 }
 
 #[cfg(test)]

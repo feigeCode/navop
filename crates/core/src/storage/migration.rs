@@ -122,6 +122,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "20260930000001",
         include_str!("../../migrations/20260930000001_agent_usage_samples.sql"),
     ),
+    (
+        "20261001000001",
+        include_str!("../../migrations/20261001000001_agent_composer_drafts.sql"),
+    ),
 ];
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {

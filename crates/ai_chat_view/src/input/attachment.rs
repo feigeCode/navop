@@ -56,6 +56,28 @@ impl ImageAttachment {
         )
     }
 
+    /// 从落库的草稿恢复一张附件（id / 名称 / MIME / base64 原样带回）。
+    ///
+    /// 认不出 MIME、base64 解不开、字节为空都返回 `None`：草稿里坏掉的一张图
+    /// 不该让整条草稿作废，跳过这一张继续。
+    pub(crate) fn from_stored(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        mime: &str,
+        data_base64: &str,
+    ) -> Option<Self> {
+        let format = ImageFormat::from_mime_type(mime)?;
+        let bytes = BASE64.decode(data_base64).ok()?;
+        if bytes.is_empty() {
+            return None;
+        }
+        Some(Self {
+            id: id.into(),
+            name: name.into(),
+            image: Arc::new(Image::from_bytes(format, bytes)),
+        })
+    }
+
     /// MIME 类型(如 `image/png`)。
     pub fn mime(&self) -> &'static str {
         self.image.format.mime_type()

@@ -490,6 +490,12 @@ impl WorkbenchShell {
         let archive_uid = id.clone();
         // 会话名过长会截断，完整名放 tooltip。
         let row_tooltip = summary.name.to_string();
+        // 有草稿的会话在名字后面点一个点：切走以后还能看出哪条剩着没发出去的东西。
+        // 先算成元素再挂上去——`.when` 里现读 `cx` 会和行上其它闭包抢同一个可变借用。
+        let draft_dot = panel
+            .read(cx)
+            .session_has_draft(&id, cx)
+            .then(|| crate::session_sidebar::draft_dot(&id, cx));
 
         // Finch 式单行会话条目：名称居左，归档按钮与相对时间居右。
         h_flex()
@@ -515,6 +521,7 @@ impl WorkbenchShell {
                     .text_color(theme.foreground)
                     .child(summary.name.clone()),
             )
+            .when_some(draft_dot, |this, dot| this.child(dot))
             // 平时隐藏，hover 行时浮现；换用 Archive 图标（Delete 是删除语义）。
             .child(
                 div()

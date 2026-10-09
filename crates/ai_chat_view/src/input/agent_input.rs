@@ -111,6 +111,11 @@ pub enum AgentInputEvent {
     CancelElicitation,
     /// 用户在用量详情里点了「查看历史」——由上层打开独立用量视图。
     OpenUsageHistory,
+    /// 输入框内容（文字或附件）变了——上层据此防抖保存草稿。
+    ///
+    /// 附件变化不产生编辑器的 `InputEvent::Change`（图片不走文本编辑），
+    /// 所以两头都要发：只挂在文字上，加完图直接关应用就会丢草稿。
+    DraftChanged,
 }
 
 /// 内置下拉的种类(用于受控开合状态)。
@@ -431,13 +436,17 @@ impl AgentInput {
         });
 
         let enter_sub = cx.subscribe_in(&input_state, window, |this, _state, event, window, cx| {
-            if let InputEvent::PressEnter {
-                secondary, shift, ..
-            } = event
-                && !secondary
-                && !shift
-            {
-                this.submit(window, cx);
+            match event {
+                InputEvent::PressEnter {
+                    secondary, shift, ..
+                } if !secondary && !shift => {
+                    this.submit(window, cx);
+                }
+                // 文字变了就转发一条：草稿要保存（防抖在上层做，这里只说事实）。
+                InputEvent::Change => {
+                    cx.emit(AgentInputEvent::DraftChanged);
+                }
+                _ => {}
             }
         });
 
@@ -729,6 +738,9 @@ impl AgentInput {
         self.input_state.update(cx, |state, cx| {
             state.set_value(text, window, cx);
         });
+        // `set_value` 是程序化写入，不产生编辑器的 `InputEvent::Change`，
+        // 但内容确实变了（会话切换恢复草稿 / 起手话填词），草稿该跟着走。
+        cx.emit(AgentInputEvent::DraftChanged);
         cx.notify();
     }
 
@@ -777,6 +789,7 @@ impl AgentInput {
         cx: &mut Context<Self>,
     ) {
         self.attachments = images;
+        cx.emit(AgentInputEvent::DraftChanged);
         cx.notify();
     }
 
@@ -840,6 +853,7 @@ impl AgentInput {
             return;
         }
         self.attachments.append(&mut atts);
+        cx.emit(AgentInputEvent::DraftChanged);
         cx.notify();
     }
 
@@ -876,6 +890,7 @@ impl AgentInput {
 
     fn remove_attachment(&mut self, id: &str, cx: &mut Context<Self>) {
         self.attachments.retain(|a| a.id != id);
+        cx.emit(AgentInputEvent::DraftChanged);
         // 被移除的那张正好在预览里：连同覆盖层一起关掉。
         if self.attachment_preview.as_deref() == Some(id) {
             self.attachment_preview = None;

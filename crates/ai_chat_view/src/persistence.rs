@@ -392,6 +392,7 @@ mod tests {
         let storage = StorageManager::new_with_connection(conn.clone());
         storage.register(AgentSessionRepository::new(conn.clone()));
         storage.register(one_core::llm::AgentUsageRepository::new(conn.clone()));
+        storage.register(one_core::llm::ComposerDraftRepository::new(conn.clone()));
         storage.register(SessionRepository::new(conn.clone()));
         storage.register(MessageRepository::new(conn));
         storage
@@ -626,6 +627,35 @@ mod tests {
         ));
     }
 
+    /// 草稿附件里坏掉一张不该让整条草稿作废：认不出 MIME 的那张跳过，其余照常。
+    #[gpui::test]
+    fn a_broken_draft_attachment_is_skipped_not_fatal(cx: &mut TestAppContext) {
+        use one_core::storage::GlobalStorageState;
+
+        let storage = test_storage();
+        storage
+            .get::<one_core::llm::ComposerDraftRepository>()
+            .expect("草稿仓储")
+            .save(&one_core::llm::ComposerDraft::new(
+                "sess_broken",
+                "半句话",
+                concat!(
+                    r#"[{"id":"1","name":"good.png","mime":"image/png","data":"iVBORw=="},"#,
+                    r#"{"id":"2","name":"bad.png","mime":"image/nonsense","data":"AAAA"}]"#,
+                ),
+                one_core::storage::manager::now(),
+            ))
+            .expect("save draft");
+        cx.update(|cx| cx.set_global(GlobalStorageState { storage }));
+
+        cx.update(|cx| {
+            let record = load_composer_draft(cx, "sess_broken").expect("草稿该读得回来");
+            assert_eq!("半句话", record.text);
+            assert_eq!(1, record.attachments.len(), "坏掉的那张跳过，好的留下");
+            assert_eq!("good.png", record.attachments[0].name);
+        });
+    }
+
     fn acp_ref(agent_id: &str, session_id: &str) -> AcpSessionRef {
         AcpSessionRef {
             agent_id: agent_id.to_string(),
@@ -836,4 +866,120 @@ mod tests {
         assert_eq!(None, external_agent_label(None));
         assert_eq!(None, external_agent_label(Some("  ".into())));
     }
+}
+
+// ---- 输入草稿（未发送的文字 + 附件）----
+//
+// 与会话快照里的草稿字段分工：快照那份随消息一起写，只有「会话已有历史」时
+// 才存在——刚开的新会话里写了半句话，快照没地方放。这里单独存一张表
+// （`agent_composer_drafts`），只要用户打过字就有行，附件（base64 图片）
+// 也一起落盘：只存在内存里的附件草稿重启就没了。
+
+/// 一条从库里读回来的输入草稿。
+pub struct ComposerDraftRecord {
+    pub text: String,
+    pub attachments: Vec<crate::ImageAttachment>,
+}
+
+/// 草稿附件在库里的形态。
+///
+/// 存 base64 原字节而不是路径：附件可能是**粘贴**来的，没有路径可指。
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StoredDraftAttachment {
+    id: String,
+    name: String,
+    mime: String,
+    data: String,
+}
+
+/// 写入一条草稿；文字与附件都空则删行。
+///
+/// 返回 `false` 表示没有存储后端（示例程序 / 未初始化）：调用侧据此跳过，
+/// 不当成错误。
+pub fn save_composer_draft(
+    cx: &App,
+    uid: &str,
+    text: &str,
+    attachments: &[crate::ImageAttachment],
+) -> bool {
+    let uid = uid.trim();
+    if uid.is_empty() {
+        return false;
+    }
+    let Some(repo) = composer_draft_repository(cx) else {
+        return false;
+    };
+    let draft = one_core::llm::ComposerDraft::new(
+        uid,
+        text,
+        encode_draft_attachments(attachments),
+        one_core::storage::manager::now(),
+    );
+    repo.save(&draft).is_ok()
+}
+
+/// 读某会话的草稿；没有则 `None`。
+pub fn load_composer_draft(cx: &App, uid: &str) -> Option<ComposerDraftRecord> {
+    let repo = composer_draft_repository(cx)?;
+    let draft = repo.load(uid.trim()).ok().flatten()?;
+    Some(ComposerDraftRecord {
+        text: draft.text,
+        attachments: decode_draft_attachments(&draft.attachments),
+    })
+}
+
+/// 有草稿的会话 uid 集合（会话列表标记用）。
+///
+/// 只读 uid：列表路径上不该把正文与 base64 附件也拉回来。
+pub fn drafted_session_uids(cx: &App) -> std::collections::HashSet<String> {
+    let Some(repo) = composer_draft_repository(cx) else {
+        return std::collections::HashSet::new();
+    };
+    repo.drafted_uids()
+        .map(|uids| uids.into_iter().collect())
+        .unwrap_or_default()
+}
+
+/// 删掉某会话的草稿（提交成功 / 会话被删时调用）。
+pub fn clear_composer_draft(cx: &App, uid: &str) {
+    if let Some(repo) = composer_draft_repository(cx) {
+        let _ = repo.clear(uid.trim());
+    }
+}
+
+fn composer_draft_repository(
+    cx: &App,
+) -> Option<std::sync::Arc<one_core::llm::ComposerDraftRepository>> {
+    cx.try_global::<GlobalStorageState>().and_then(|state| {
+        state
+            .storage
+            .get::<one_core::llm::ComposerDraftRepository>()
+    })
+}
+
+fn encode_draft_attachments(attachments: &[crate::ImageAttachment]) -> String {
+    if attachments.is_empty() {
+        return "[]".to_string();
+    }
+    let stored: Vec<StoredDraftAttachment> = attachments
+        .iter()
+        .map(|attachment| StoredDraftAttachment {
+            id: attachment.id.clone(),
+            name: attachment.name.clone(),
+            mime: attachment.mime().to_string(),
+            data: attachment.data_base64(),
+        })
+        .collect();
+    serde_json::to_string(&stored).unwrap_or_else(|_| "[]".to_string())
+}
+
+fn decode_draft_attachments(json: &str) -> Vec<crate::ImageAttachment> {
+    let stored: Vec<StoredDraftAttachment> = serde_json::from_str(json).unwrap_or_default();
+    stored
+        .into_iter()
+        .filter_map(|entry| {
+            // 坏掉的那一张跳过即可：草稿里的一张图坏了不该让整条草稿作废。
+            crate::ImageAttachment::from_stored(entry.id, entry.name, &entry.mime, &entry.data)
+        })
+        .collect()
 }

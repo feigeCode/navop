@@ -177,16 +177,20 @@ impl ChatView {
         for session in self.state.sessions() {
             let id = session.id.clone();
             let is_current = self.state.current_session_id() == Some(session.id.as_str());
-            let row = session_sidebar::session_row(session, is_current, cx)
-                .id(SharedString::from(format!(
-                    "ai-chat-session-{}",
-                    session.id
-                )))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if this.state.select_session(&id) {
-                        cx.notify();
-                    }
-                }));
+            let row = session_sidebar::session_row(
+                session, is_current,
+                // 这套列表（chat_view）不记草稿，标 `false`——宁可少标，不错标。
+                false, cx,
+            )
+            .id(SharedString::from(format!(
+                "ai-chat-session-{}",
+                session.id
+            )))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if this.state.select_session(&id) {
+                    cx.notify();
+                }
+            }));
             rows.push(row.into_any_element());
         }
 

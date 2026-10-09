@@ -5,7 +5,7 @@
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, Div, FontWeight, Hsla, InteractiveElement, ParentElement, SharedString, Styled, div,
+    App, Div, FontWeight, Hsla, InteractiveElement, ParentElement, SharedString, Styled, div, px,
 };
 use gpui_component::{ActiveTheme, h_flex, v_flex};
 use rust_i18n::t;
@@ -77,13 +77,20 @@ impl SessionSummary {
 /// 渲染单个会话行的视觉部分。
 ///
 /// 返回 [`Div`],调用方可继续 `.id(..).on_click(..)` 附加交互(因此交互逻辑留在上层)。
-pub fn session_row(session: &SessionSummary, is_current: bool, cx: &App) -> Div {
-    session_row_with_style(session, is_current, SessionRowStyle::from_app(cx), cx)
+pub fn session_row(session: &SessionSummary, is_current: bool, has_draft: bool, cx: &App) -> Div {
+    session_row_with_style(
+        session,
+        is_current,
+        has_draft,
+        SessionRowStyle::from_app(cx),
+        cx,
+    )
 }
 
 pub fn session_row_with_style(
     session: &SessionSummary,
     is_current: bool,
+    has_draft: bool,
     style: SessionRowStyle,
     cx: &App,
 ) -> Div {
@@ -122,19 +129,26 @@ pub fn session_row_with_style(
                     .child(session.name.clone()),
             )
             .child(
-                div()
-                    .text_xs()
-                    .text_color(if is_current {
-                        style.selected_foreground.opacity(0.72)
-                    } else {
-                        style.muted_foreground
-                    })
-                    .child(match session.external_agent.as_ref() {
-                        Some(agent) => {
-                            format!("{} · {}", agent, format_timestamp(session.updated_at))
-                        }
-                        None => format_timestamp(session.updated_at),
-                    }),
+                h_flex()
+                    .gap_1()
+                    .min_w_0()
+                    .items_center()
+                    .when(has_draft, |this| this.child(draft_dot(&session.id, cx)))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(if is_current {
+                                style.selected_foreground.opacity(0.72)
+                            } else {
+                                style.muted_foreground
+                            })
+                            .child(match session.external_agent.as_ref() {
+                                Some(agent) => {
+                                    format!("{} · {}", agent, format_timestamp(session.updated_at))
+                                }
+                                None => format_timestamp(session.updated_at),
+                            }),
+                    ),
             ),
     )
 }
@@ -264,6 +278,22 @@ pub fn date_bucket_header(bucket: DateBucket, cx: &App) -> Div {
 ///
 /// 不用各家 logo——仓库里没有这些商标资源,画一个似是而非的图标比不画更糟。
 /// 首字母 + 稳定配色同样能让人一眼区分「这几条是 codex、那几条是 claude」。
+/// 「这条会话有没发出去的草稿」的标记。
+///
+/// 用过一个小圆点而不是写「草稿」两个字：行本来就窄，两个字会把时间挤掉；
+/// 点只需要回答「这儿有没发出去的东西」。
+pub fn draft_dot(uid: &str, cx: &App) -> Div {
+    let color = cx.theme().colors.blue;
+    let selector = format!("agent-session-draft-{uid}");
+    div()
+        .debug_selector(move || selector)
+        .flex_shrink_0()
+        .w(px(6.0))
+        .h(px(6.0))
+        .rounded_full()
+        .bg(color)
+}
+
 pub fn provider_badge(agent: &str, cx: &App) -> Div {
     let color = provider_color(agent, cx);
     let initial = agent

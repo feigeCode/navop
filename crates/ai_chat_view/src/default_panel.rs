@@ -722,6 +722,13 @@ impl DefaultAgentChatPanel {
         }
     }
 
+    /// 这条会话有没有没发出去的草稿（会话列表行上的标记）。
+    pub fn session_has_draft(&self, uid: &str, cx: &App) -> bool {
+        self.view
+            .as_ref()
+            .is_some_and(|view| view.read(cx).session_has_draft(uid))
+    }
+
     pub fn showing_archived_sessions(&self, cx: &App) -> bool {
         self.view
             .as_ref()
