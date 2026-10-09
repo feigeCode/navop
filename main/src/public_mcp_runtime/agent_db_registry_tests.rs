@@ -260,8 +260,7 @@ fn agent_runtime_tool_schemas_convert_to_function_calling(cx: &mut TestAppContex
 
     assert!(!specs.is_empty(), "agent registry should expose tools");
     for spec in specs {
-        spec.to_llm_tool()
-            .unwrap_or_else(|error| panic!("{error}"));
+        spec.to_llm_tool().unwrap_or_else(|error| panic!("{error}"));
     }
 }
 

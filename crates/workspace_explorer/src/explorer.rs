@@ -21,7 +21,7 @@ use gpui::{
     AppContext as _, AsyncApp, Context, Entity, FocusHandle, PathPromptOptions, ScrollHandle,
     Subscription, WeakEntity, Window,
 };
-use gpui_component::{notification::Notification, input::InputState, WindowExt as _};
+use gpui_component::{WindowExt as _, input::InputState, notification::Notification};
 use ignore::gitignore::Gitignore;
 use rust_i18n::t;
 use std::collections::{HashMap, HashSet};
@@ -248,7 +248,8 @@ impl WorkspaceExplorer {
             anchor_checkpoint(&repository, &after)?;
             // 同一份快照另挂到该轮的 ref 下，供「回到这一轮」取用。锚定失败（例如 turn id
             // 不合规）不该拖垮基线记录，所以单独吞掉错误，只让这一轮不进可回滚列表。
-            let anchored_turn = anchor_turn_checkpoint(&repository, &turn_to_anchor, &after).is_ok();
+            let anchored_turn =
+                anchor_turn_checkpoint(&repository, &turn_to_anchor, &after).is_ok();
             let diff = before
                 .as_deref()
                 .map(|before| diff_snapshots(&repository, before, &after))
@@ -400,8 +401,7 @@ impl WorkspaceExplorer {
         let Some(editor) = self.file_action_editor.as_ref() else {
             return;
         };
-        if !matches!(editor.mode, FileActionEditorMode::CommitAll)
-            || self.commit_message_generating
+        if !matches!(editor.mode, FileActionEditorMode::CommitAll) || self.commit_message_generating
         {
             return;
         }
@@ -411,7 +411,12 @@ impl WorkspaceExplorer {
     }
 
     /// 宿主生成完成后回填输入框（覆盖已有草稿，用户仍可编辑再提交）。
-    pub fn set_commit_message(&mut self, message: String, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn set_commit_message(
+        &mut self,
+        message: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.commit_message_generating = false;
         if let Some(editor) = self.file_action_editor.as_ref() {
             if matches!(editor.mode, FileActionEditorMode::CommitAll) {
@@ -438,9 +443,7 @@ impl WorkspaceExplorer {
             return;
         }
         self.file_operation_running = true;
-        let task = cx.background_spawn(async move {
-            crate::git::push_current_branch(&repository)
-        });
+        let task = cx.background_spawn(async move { crate::git::push_current_branch(&repository) });
         let entity = cx.entity().downgrade();
         let window_handle = window.window_handle();
         cx.spawn(async move |_: WeakEntity<Self>, cx: &mut AsyncApp| {
@@ -487,9 +490,8 @@ impl WorkspaceExplorer {
             return;
         }
         self.file_operation_running = true;
-        let task = cx.background_spawn(async move {
-            crate::git::commit_all(&repository, &message)
-        });
+        let task =
+            cx.background_spawn(async move { crate::git::commit_all(&repository, &message) });
         let entity = cx.entity().downgrade();
         let window_handle = window.window_handle();
         cx.spawn(async move |_: WeakEntity<Self>, cx: &mut AsyncApp| {
@@ -533,9 +535,8 @@ impl WorkspaceExplorer {
             return;
         };
         let project_root = self.root.clone();
-        let task = cx.background_spawn(async move {
-            create_worktree(&repository, &project_root, None)
-        });
+        let task =
+            cx.background_spawn(async move { create_worktree(&repository, &project_root, None) });
         let entity = cx.entity().downgrade();
         cx.spawn(async move |_: WeakEntity<Self>, cx: &mut AsyncApp| {
             let result = task.await;
@@ -588,9 +589,10 @@ impl WorkspaceExplorer {
             return;
         };
         let entity = cx.entity().downgrade();
-        let task = cx.background_spawn(async move {
-            crate::git::remove_worktree(&repository, &worktree_root)
-        });
+        let task =
+            cx.background_spawn(
+                async move { crate::git::remove_worktree(&repository, &worktree_root) },
+            );
         cx.spawn(async move |_: WeakEntity<Self>, cx: &mut AsyncApp| {
             let result = task.await;
             let _ = entity.update(cx, |this, cx| {
@@ -1063,11 +1065,7 @@ fn review_for_turn<'a>(
 /// 与 [`truncate_checkpoints_after`] 同步：回到第 N 轮之后，第 N 轮之后的 diff
 /// 不再对应磁盘上的任何状态，留着只会让审阅入口裁出一份从未存在过的改动。
 /// 别的会话的快照与这条时间线无关，原地保留。
-fn drop_reviews_after(
-    reviews: &mut Vec<WorktreeReviewSnapshot>,
-    session_id: &str,
-    turn_id: &str,
-) {
+fn drop_reviews_after(reviews: &mut Vec<WorktreeReviewSnapshot>, session_id: &str, turn_id: &str) {
     let Some(index) = reviews
         .iter()
         .position(|review| review.session_id == session_id && review.turn_id == turn_id)
@@ -1086,7 +1084,8 @@ fn truncate_checkpoints_after(
     checkpoints: &mut HashMap<String, Vec<TurnCheckpoint>>,
     session_id: &str,
     turn_id: &str,
-) -> Vec<String> {    let Some(turns) = checkpoints.get_mut(session_id) else {
+) -> Vec<String> {
+    let Some(turns) = checkpoints.get_mut(session_id) else {
         return Vec::new();
     };
     let Some(index) = turns.iter().position(|turn| turn.turn_id == turn_id) else {

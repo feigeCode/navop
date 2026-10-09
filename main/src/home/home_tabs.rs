@@ -1407,7 +1407,9 @@ impl HomePage {
             ai_chat_view::build_workbench_resource_state(&self.connections);
         window.defer(cx, move |window, cx| {
             tab_container.update(cx, |tabs, cx| {
-                if tabs.activate_pinned_tab_by_id("ai-workbench", window, cx) { return; }
+                if tabs.activate_pinned_tab_by_id("ai-workbench", window, cx) {
+                    return;
+                }
                 tabs.activate_or_add_tab_lazy(
                     "ai-workbench",
                     |window, cx| {

@@ -699,7 +699,10 @@ impl Render for AcpAgentsView {
             )
             .when_some(adding, |element, form| {
                 element
-                    .child(field_label(t!("Settings.AcpAgents.add_hint").to_string(), cx))
+                    .child(field_label(
+                        t!("Settings.AcpAgents.add_hint").to_string(),
+                        cx,
+                    ))
                     .child(form)
             })
     }

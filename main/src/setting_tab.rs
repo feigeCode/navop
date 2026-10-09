@@ -5,10 +5,10 @@ use std::sync::Arc;
 use crate::app_init::is_valid_system_hotkey;
 use crate::auth::get_auth_service;
 use crate::license::{get_license_service, is_feature_enabled, offline_license_public_key};
+use crate::settings::acp_agents_settings::AcpAgentsView;
 use crate::settings::agent_settings::agent_setting_group;
 use crate::settings::appearance::render as render_appearance_settings;
 use crate::settings::database_settings::database_setting_group;
-use crate::settings::acp_agents_settings::AcpAgentsView;
 use crate::settings::llm_providers_view::LlmProvidersView;
 use crate::settings::local_terminal_settings::local_terminal_setting_group;
 use crate::settings::mcp_settings::mcp_setting_group;
@@ -720,9 +720,7 @@ impl SettingsPanel {
                             SettingItem::new(
                                 t!("Settings.General.Font.sql_editor_hover_enabled"),
                                 SettingField::switch(
-                                    |cx: &App| {
-                                        AppSettings::global(cx).sql_editor_hover_enabled
-                                    },
+                                    |cx: &App| AppSettings::global(cx).sql_editor_hover_enabled,
                                     |value: bool, cx: &mut App| {
                                         AppSettings::update_and_save(cx, |settings| {
                                             settings.sql_editor_hover_enabled = value;
@@ -1147,17 +1145,17 @@ fn sync_setting_group(
     items.push(personal_sync_auto_sync_item(defaults.auto_sync));
     items.push(personal_sync_git_auto_push_item(defaults.git.auto_push));
     items.push(
-        SettingItem::render(move |_options, window, cx| {
-            render_personal_sync_actions(window, cx)
-        })
-        .keywords([
-            t!("Settings.Sync.status").to_string(),
-            t!("Settings.Sync.test_connection").to_string(),
-            t!("Settings.Sync.sync_now").to_string(),
-        ]),
+        SettingItem::render(move |_options, window, cx| render_personal_sync_actions(window, cx))
+            .keywords([
+                t!("Settings.Sync.status").to_string(),
+                t!("Settings.Sync.test_connection").to_string(),
+                t!("Settings.Sync.sync_now").to_string(),
+            ]),
     );
 
-    SettingGroup::new().title(t!("Settings.Sync.group_title")).items(items)
+    SettingGroup::new()
+        .title(t!("Settings.Sync.group_title"))
+        .items(items)
 }
 
 fn sync_enabled_item(default: bool) -> SettingItem {
@@ -1504,7 +1502,11 @@ fn render_personal_sync_webdav_text_field(
     cx: &mut App,
 ) -> gpui::AnyElement {
     let value = match field {
-        "username" => AppSettings::global(cx).personal_sync.webdav.username.clone(),
+        "username" => AppSettings::global(cx)
+            .personal_sync
+            .webdav
+            .username
+            .clone(),
         _ => AppSettings::global(cx).personal_sync.webdav.url.clone(),
     };
     let input = bind_webdav_input(field, "", options, window, cx, |window, cx| {

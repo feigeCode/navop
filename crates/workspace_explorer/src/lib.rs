@@ -19,8 +19,8 @@ pub use backend::{
 };
 pub use editor::{GitDiffRequest, WorkspaceEditor, WorkspaceEditorEvent};
 pub use explorer::{
-    ExplorerFramePlacement, WorktreeReviewSnapshot, WorkspaceExplorer, WorkspaceExplorerConfig,
-    WorkspaceExplorerEvent,
+    ExplorerFramePlacement, WorkspaceExplorer, WorkspaceExplorerConfig, WorkspaceExplorerEvent,
+    WorktreeReviewSnapshot,
 };
 pub use git::{
     CreatedWorktree, GitBranch, GitBranchKind, GitChange, GitChangeKind, GitRepository,

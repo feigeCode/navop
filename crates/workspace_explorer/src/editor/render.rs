@@ -204,9 +204,7 @@ impl WorkspaceEditor {
                 .size_full()
                 .min_h_0()
                 .min_w_0()
-                .child(
-                    Diff::new(diff_state).size_full(),
-                )
+                .child(Diff::new(diff_state).size_full())
                 .into_any_element();
         }
         match tab.editor.as_ref() {

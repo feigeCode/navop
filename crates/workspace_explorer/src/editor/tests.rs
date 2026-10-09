@@ -205,23 +205,21 @@ fn snapshot_diff_reuses_one_tab_across_turns(cx: &mut TestAppContext) {
 
     for turn in 0..3 {
         editor.update_in(&mut cx, |editor, window, cx| {
-            editor.open_snapshot_diff(
-                format!("turn {turn}"),
-                snapshot_patch(turn),
-                window,
-                cx,
-            );
+            editor.open_snapshot_diff(format!("turn {turn}"), snapshot_patch(turn), window, cx);
         });
         cx.run_until_parked();
     }
 
     let (tab_count, text, name) = editor.read_with(&cx, |editor, _| {
         let tab = editor.active_tab().expect("review tab should be active");
-        (editor.tabs.len(), tab.saved_text.clone(), tab.display_name.clone())
+        (
+            editor.tabs.len(),
+            tab.saved_text.clone(),
+            tab.display_name.clone(),
+        )
     });
     assert_eq!(
-        1,
-        tab_count,
+        1, tab_count,
         "last-turn review 必须复用同一标签页，而不是每轮开新页"
     );
     assert_eq!(
@@ -310,8 +308,7 @@ fn reopening_a_file_keeps_unsaved_edits(cx: &mut TestAppContext) {
     });
     assert_eq!(1, tab_count, "同一个文件只占一页");
     assert_eq!(
-        "fn main() { /* edited */ }\n",
-        text,
+        "fn main() { /* edited */ }\n", text,
         "重开文件只能聚焦，不能重载——重载会吞掉未保存的改动"
     );
     assert!(dirty);

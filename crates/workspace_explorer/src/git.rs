@@ -179,7 +179,10 @@ pub fn list_worktrees(repository: &GitRepository) -> Result<Vec<WorktreeEntry>> 
         return Err(git_command_error("git worktree list", &output));
     }
     let main_root = main_worktree_root(repository);
-    Ok(parse_worktrees(&String::from_utf8_lossy(&output.stdout), &main_root))
+    Ok(parse_worktrees(
+        &String::from_utf8_lossy(&output.stdout),
+        &main_root,
+    ))
 }
 
 /// 主工作区的根目录，供 [`parse_worktrees`] 判定 `is_main`。
@@ -265,14 +268,14 @@ pub fn remove_worktree(repository: &GitRepository, path: &Path) -> Result<()> {
     if !output.status.success() {
         return Err(git_command_error("git worktree remove", &output));
     }
-    if let Some(branch) = entry.branch.as_deref().filter(|branch| is_managed_branch(branch)) {
+    if let Some(branch) = entry
+        .branch
+        .as_deref()
+        .filter(|branch| is_managed_branch(branch))
+    {
         let output = run_git_vec(
             &cwd,
-            vec![
-                "branch".to_string(),
-                "-D".to_string(),
-                branch.to_string(),
-            ],
+            vec!["branch".to_string(), "-D".to_string(), branch.to_string()],
         )?;
         if !output.status.success() {
             return Err(git_command_error("git branch -D", &output));
@@ -292,16 +295,28 @@ pub fn capture_worktree_snapshot(repository: &GitRepository) -> Result<String> {
     } else {
         repository.root.join(common_dir)
     };
-    let temporary_index = common_dir.join(format!("navop-checkpoint-index-{}", uuid::Uuid::new_v4()));
+    let temporary_index =
+        common_dir.join(format!("navop-checkpoint-index-{}", uuid::Uuid::new_v4()));
     let result = (|| {
         let head = git_stdout(&repository.root, &["rev-parse", "--verify", "HEAD"])?;
         run_git_with_index(&repository.root, &temporary_index, &["read-tree", &head])?;
-        run_git_with_index(&repository.root, &temporary_index, &["add", "-A", "--", "."])?;
+        run_git_with_index(
+            &repository.root,
+            &temporary_index,
+            &["add", "-A", "--", "."],
+        )?;
         let tree = git_stdout_with_index(&repository.root, &temporary_index, &["write-tree"])?;
         let commit = git_output_with_index(
             &repository.root,
             &temporary_index,
-            &["commit-tree", tree.trim(), "-p", &head, "-m", "Navop worktree checkpoint"],
+            &[
+                "commit-tree",
+                tree.trim(),
+                "-p",
+                &head,
+                "-m",
+                "Navop worktree checkpoint",
+            ],
         )?;
         let commit = commit.trim();
         (!commit.is_empty())
@@ -339,11 +354,7 @@ pub fn anchor_checkpoint(repository: &GitRepository, commit: &str) -> Result<()>
     run_git_operation(
         repository,
         "git update-ref checkpoint",
-        vec![
-            "update-ref".to_string(),
-            reference,
-            commit.to_string(),
-        ],
+        vec!["update-ref".to_string(), reference, commit.to_string()],
     )
 }
 
@@ -508,10 +519,7 @@ fn turn_checkpoint_ref_name(repository: &GitRepository, turn_id: &str) -> Result
     {
         return Err(anyhow!("`{turn_id}` is not a usable checkpoint turn id"));
     }
-    Ok(format!(
-        "{}/{turn_id}",
-        turn_checkpoint_prefix(repository)
-    ))
+    Ok(format!("{}/{turn_id}", turn_checkpoint_prefix(repository)))
 }
 
 /// 逐轮快照 ref 的前缀（到仓库哈希为止，不含 turn id）。
@@ -529,11 +537,7 @@ pub fn anchor_turn_checkpoint(
     run_git_operation(
         repository,
         "git update-ref turn checkpoint",
-        vec![
-            "update-ref".to_string(),
-            reference,
-            commit.to_string(),
-        ],
+        vec!["update-ref".to_string(), reference, commit.to_string()],
     )
 }
 
@@ -551,7 +555,10 @@ pub fn turn_checkpoints(repository: &GitRepository) -> Result<BTreeMap<String, S
         ],
     )?;
     if !output.status.success() {
-        return Err(git_command_error("git for-each-ref turn checkpoints", &output));
+        return Err(git_command_error(
+            "git for-each-ref turn checkpoints",
+            &output,
+        ));
     }
     let mut checkpoints = BTreeMap::new();
     for line in String::from_utf8_lossy(&output.stdout).lines() {
@@ -621,16 +628,14 @@ pub fn commit_all(repository: &GitRepository, message: &str) -> Result<()> {
     run_git_operation(
         repository,
         "git commit",
-        vec![
-            "commit".to_string(),
-            "-m".to_string(),
-            message.to_string(),
-        ],
+        vec!["commit".to_string(), "-m".to_string(), message.to_string()],
     )
 }
 
 fn run_git_with_index(cwd: &Path, index: &Path, args: &[&str]) -> Result<()> {
-    let output = git_command(cwd, args).env("GIT_INDEX_FILE", index).output()?;
+    let output = git_command(cwd, args)
+        .env("GIT_INDEX_FILE", index)
+        .output()?;
     if output.status.success() {
         Ok(())
     } else {
@@ -639,7 +644,9 @@ fn run_git_with_index(cwd: &Path, index: &Path, args: &[&str]) -> Result<()> {
 }
 
 fn git_stdout_with_index(cwd: &Path, index: &Path, args: &[&str]) -> Result<String> {
-    let output = git_command(cwd, args).env("GIT_INDEX_FILE", index).output()?;
+    let output = git_command(cwd, args)
+        .env("GIT_INDEX_FILE", index)
+        .output()?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
     } else {
@@ -714,7 +721,6 @@ fn parse_worktrees(output: &str, main_root: &Path) -> Vec<WorktreeEntry> {
     flush(&mut path, &mut branch);
     entries
 }
-
 
 pub fn load_changes(repository: &GitRepository) -> Result<Vec<GitChange>> {
     let output = run_git(
@@ -849,11 +855,7 @@ pub fn create_branch(repository: &GitRepository, name: &str) -> Result<()> {
     )
 }
 
-pub fn rename_branch(
-    repository: &GitRepository,
-    old_name: &str,
-    new_name: &str,
-) -> Result<()> {
+pub fn rename_branch(repository: &GitRepository, old_name: &str, new_name: &str) -> Result<()> {
     validate_branch_name(repository, new_name)?;
     run_git_operation(
         repository,

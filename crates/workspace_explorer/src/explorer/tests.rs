@@ -184,11 +184,7 @@ fn dropping_reviews_for_an_unknown_turn_is_a_no_op() {
     drop_reviews_after(&mut reviews, "session-a", "turn-unknown");
     drop_reviews_after(&mut reviews, "session-b", "turn-1");
 
-    assert_eq!(
-        1,
-        reviews.len(),
-        "误报式的截断不该吃掉任何快照"
-    );
+    assert_eq!(1, reviews.len(), "误报式的截断不该吃掉任何快照");
 }
 
 #[test]

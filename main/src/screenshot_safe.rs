@@ -81,7 +81,12 @@ fn pick<'a>(pool: &'a [&'a str], seed: u64, salt: u64) -> &'a str {
 fn kind_pool(connection_type: ConnectionType) -> &'static [&'static str] {
     match connection_type {
         ConnectionType::Database => &[
-            "mysql", "postgres", "clickhouse", "sqlserver", "oracle", "sqlite",
+            "mysql",
+            "postgres",
+            "clickhouse",
+            "sqlserver",
+            "oracle",
+            "sqlite",
         ],
         ConnectionType::SshSftp => &["web", "app", "api", "bastion", "worker", "gateway"],
         ConnectionType::Ftp => &["ftp", "ftps"],
@@ -221,8 +226,10 @@ mod tests {
                     continue;
                 }
                 assert!(
-                    info.contains("example.com") || info.contains("192.0.2.")
-                        || info.contains("198.51.100.") || info.contains("203.0.113."),
+                    info.contains("example.com")
+                        || info.contains("192.0.2.")
+                        || info.contains("198.51.100.")
+                        || info.contains("203.0.113."),
                     "unexpected host in {info}"
                 );
             }

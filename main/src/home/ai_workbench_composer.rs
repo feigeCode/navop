@@ -60,7 +60,10 @@ pub(crate) fn refresh_composer_git(cx: &mut App) {
         return;
     };
     let (root, repository) = explorer.read_with(cx, |explorer, _| {
-        (explorer.root().to_path_buf(), explorer.repository().cloned())
+        (
+            explorer.root().to_path_buf(),
+            explorer.repository().cloned(),
+        )
     });
     let (is_git_repo, branches, worktree) = match repository.as_ref() {
         Some(repository) => {
@@ -75,11 +78,7 @@ pub(crate) fn refresh_composer_git(cx: &mut App) {
                     )
                 })
                 .collect();
-            (
-                true,
-                branches,
-                current_worktree_state(repository, &root),
-            )
+            (true, branches, current_worktree_state(repository, &root))
         }
         None => (false, Vec::new(), ComposerWorktreeState::default()),
     };
@@ -106,10 +105,7 @@ pub(crate) fn refresh_composer_git(cx: &mut App) {
 ///
 /// 判据来自 git 自己的 `worktree list`，不靠路径前缀猜：主工作区与不受管的
 /// 检出都不会被当成「本会话的 worktree」。
-fn current_worktree_state(
-    repository: &git::GitRepository,
-    root: &Path,
-) -> ComposerWorktreeState {
+fn current_worktree_state(repository: &git::GitRepository, root: &Path) -> ComposerWorktreeState {
     let Ok(entries) = git::list_worktrees(repository) else {
         return ComposerWorktreeState::default();
     };
@@ -204,10 +200,8 @@ pub(crate) fn composer_context_source(
             .unwrap_or_default();
 
         let workspace = match root.as_ref() {
-            Some(root) => {
-                ComposerWorkspaceInfo::new(workspace_label(root), Some(path_text(root)))
-                    .with_git_repo(is_git_repo)
-            }
+            Some(root) => ComposerWorkspaceInfo::new(workspace_label(root), Some(path_text(root)))
+                .with_git_repo(is_git_repo),
             None => ComposerWorkspaceInfo::default(),
         };
         let mut roots = recent_workspace_roots(cx);
@@ -436,8 +430,7 @@ fn composer_cache_is_stale(
     cached_repository_root: Option<&Path>,
     explorer_has_repository: bool,
 ) -> bool {
-    cached_root != requested_root
-        || (cached_repository_root.is_none() && explorer_has_repository)
+    cached_root != requested_root || (cached_repository_root.is_none() && explorer_has_repository)
 }
 
 #[cfg(test)]

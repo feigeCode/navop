@@ -509,7 +509,11 @@ fn run_git_stdout(root: &Path, args: &[&str]) -> String {
 fn worktree_snapshot_captures_dirty_and_untracked_files_without_touching_index() {
     let root = initialized_repository();
     let repository = discover_repository(&root).unwrap().unwrap();
-    std::fs::write(root.join("main.rs"), "fn main() { println!(\"changed\"); }\n").unwrap();
+    std::fs::write(
+        root.join("main.rs"),
+        "fn main() { println!(\"changed\"); }\n",
+    )
+    .unwrap();
     std::fs::write(root.join("untracked.txt"), "new\n").unwrap();
 
     let snapshot = capture_worktree_snapshot(&repository).unwrap();
@@ -592,17 +596,19 @@ fn push_current_branch_publishes_to_default_remote_and_sets_upstream() {
     // 远端也要固定初始分支：bare 仓库的 HEAD 同样随 `init.defaultBranch` 漂移，
     // 它指向哪个分支决定了远端的 HEAD 能不能被 `rev-parse` 解出来。
     run_test_git(&remote_path, &["symbolic-ref", "HEAD", "refs/heads/master"]);
-    run_test_git(&root, &["remote", "add", "origin", remote_path.to_str().unwrap()]);
+    run_test_git(
+        &root,
+        &["remote", "add", "origin", remote_path.to_str().unwrap()],
+    );
     run_test_git(&root, &["commit", "-q", "--allow-empty", "-m", "to push"]);
 
     push_current_branch(&repository).unwrap();
 
-    let upstream = run_git_stdout(&root, &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]);
-    assert_eq!(
-        "origin/master",
-        upstream.trim(),
-        "首次 push 应建立上游跟踪"
+    let upstream = run_git_stdout(
+        &root,
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
     );
+    assert_eq!("origin/master", upstream.trim(), "首次 push 应建立上游跟踪");
     let remote_head = run_git_stdout(&remote_path, &["rev-parse", "HEAD"]);
     let local_head = run_git_stdout(&root, &["rev-parse", "HEAD"]);
     assert_eq!(local_head.trim(), remote_head.trim());
@@ -636,10 +642,7 @@ fn commit_context_lists_changes_untracked_and_bounds_size() {
     assert!(context.contains("Diff"), "{context}");
 
     let tiny = commit_context(&repository, 120).unwrap();
-    assert!(
-        tiny.contains("truncated"),
-        "小上限必须截断: {tiny}"
-    );
+    assert!(tiny.contains("truncated"), "小上限必须截断: {tiny}");
     assert!(tiny.len() <= 140);
 }
 
@@ -670,7 +673,9 @@ fn commit_context_truncation_stops_on_a_character_boundary() {
     // 必须写进已跟踪文件：`git diff HEAD` 不含未跟踪文件，写新文件的话 diff 里没有中文。
     let mut body = String::new();
     for index in 0..80 {
-        body.push_str(&format!("第 {index} 行：中文正文用来把 diff 撑到预算之外。\n"));
+        body.push_str(&format!(
+            "第 {index} 行：中文正文用来把 diff 撑到预算之外。\n"
+        ));
     }
     std::fs::write(root.join("main.rs"), &body).unwrap();
 
@@ -704,11 +709,19 @@ fn commit_context_truncation_stops_on_a_character_boundary() {
 fn restore_checkpoint_rewrites_tracked_files_and_removes_untracked_ones() {
     let root = initialized_repository();
     let repository = discover_repository(&root).unwrap().unwrap();
-    std::fs::write(root.join("main.rs"), "fn main() { println!(\"turn 1\"); }\n").unwrap();
+    std::fs::write(
+        root.join("main.rs"),
+        "fn main() { println!(\"turn 1\"); }\n",
+    )
+    .unwrap();
     let snapshot = capture_worktree_snapshot(&repository).unwrap();
 
     // 往后再走一轮：改 tracked、加 untracked。
-    std::fs::write(root.join("main.rs"), "fn main() { println!(\"turn 2\"); }\n").unwrap();
+    std::fs::write(
+        root.join("main.rs"),
+        "fn main() { println!(\"turn 2\"); }\n",
+    )
+    .unwrap();
     std::fs::write(root.join("added.txt"), "added in turn 2\n").unwrap();
 
     restore_checkpoint(&repository, &snapshot).unwrap();
@@ -745,9 +758,17 @@ fn restore_checkpoint_leaves_ignored_files_alone() {
 fn restore_checkpoint_backup_undoes_the_restore() {
     let root = initialized_repository();
     let repository = discover_repository(&root).unwrap().unwrap();
-    std::fs::write(root.join("main.rs"), "fn main() { println!(\"turn 1\"); }\n").unwrap();
+    std::fs::write(
+        root.join("main.rs"),
+        "fn main() { println!(\"turn 1\"); }\n",
+    )
+    .unwrap();
     let snapshot = capture_worktree_snapshot(&repository).unwrap();
-    std::fs::write(root.join("main.rs"), "fn main() { println!(\"turn 2\"); }\n").unwrap();
+    std::fs::write(
+        root.join("main.rs"),
+        "fn main() { println!(\"turn 2\"); }\n",
+    )
+    .unwrap();
     std::fs::write(root.join("added.txt"), "added in turn 2\n").unwrap();
 
     let restore = restore_checkpoint(&repository, &snapshot).unwrap();
@@ -816,12 +837,20 @@ fn turn_checkpoints_are_anchored_listed_and_deleted() {
 fn restore_backup_slot_holds_the_latest_pre_restore_state() {
     let root = initialized_repository();
     let repository = discover_repository(&root).unwrap().unwrap();
-    std::fs::write(root.join("main.rs"), "fn main() { println!(\"turn 1\"); }\n").unwrap();
+    std::fs::write(
+        root.join("main.rs"),
+        "fn main() { println!(\"turn 1\"); }\n",
+    )
+    .unwrap();
     let snapshot = capture_worktree_snapshot(&repository).unwrap();
     anchor_checkpoint(&repository, &snapshot).unwrap();
     assert_eq!(None, restore_backup(&repository).unwrap());
 
-    std::fs::write(root.join("main.rs"), "fn main() { println!(\"turn 2\"); }\n").unwrap();
+    std::fs::write(
+        root.join("main.rs"),
+        "fn main() { println!(\"turn 2\"); }\n",
+    )
+    .unwrap();
     let restore = restore_checkpoint(&repository, &snapshot).unwrap();
 
     assert_eq!(

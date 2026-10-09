@@ -9,8 +9,8 @@ use crate::git::{GitChange, GitRepository};
 use crate::theme::WorkspaceTheme;
 use crate::{WorkspaceBackend, local_backend};
 use gpui::{App, Context, Entity, EventEmitter, KeyBinding, Subscription, actions};
-use gpui_component::input::EditorState;
 use gpui_component::diff::DiffState;
+use gpui_component::input::EditorState;
 use notes::NotesView;
 use one_ui::StatusPresentation;
 use remote_file_editor::EditorMode;
@@ -39,7 +39,10 @@ pub enum WorkspaceEditorEvent {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum DocumentKey {
     File(PathBuf),
-    Diff { repository: PathBuf, path: PathBuf },
+    Diff {
+        repository: PathBuf,
+        path: PathBuf,
+    },
     /// 稳定单例 key：同一会话的 last-turn review 复用同一标签页刷新。
     SnapshotDiff,
     /// 单个文件的审阅 diff（本轮快照里裁出来的那一段）；按文件分页。
@@ -80,7 +83,9 @@ pub(super) enum LoadRequest {
         change: GitChange,
     },
     /// 已就绪的 patch 原文（整轮 checkpoint diff、单文件审阅切片……），无需再查 git。
-    SnapshotDiff { text: String },
+    SnapshotDiff {
+        text: String,
+    },
 }
 
 impl LoadRequest {

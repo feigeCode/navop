@@ -301,10 +301,8 @@ fn build_workspace_menu(
                 }),
         );
 
-    let linked: Vec<&crate::git::WorktreeEntry> = worktrees
-        .iter()
-        .filter(|entry| !entry.is_main)
-        .collect();
+    let linked: Vec<&crate::git::WorktreeEntry> =
+        worktrees.iter().filter(|entry| !entry.is_main).collect();
     if linked.is_empty() {
         return menu;
     }
@@ -369,16 +367,13 @@ fn workspace_label(root: &Path) -> String {
 }
 
 fn worktree_label(entry: &crate::git::WorktreeEntry) -> String {
-    entry
-        .branch
-        .clone()
-        .unwrap_or_else(|| {
-            entry
-                .path
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| entry.path.display().to_string())
-        })
+    entry.branch.clone().unwrap_or_else(|| {
+        entry
+            .path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| entry.path.display().to_string())
+    })
 }
 
 fn build_frame_options_menu(

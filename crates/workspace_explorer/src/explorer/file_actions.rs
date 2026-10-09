@@ -24,9 +24,15 @@ use std::path::{Path, PathBuf};
 
 #[derive(Clone)]
 pub(super) enum FileActionEditorMode {
-    CreateFile { parent: PathBuf },
-    CreateDirectory { parent: PathBuf },
-    Rename { path: PathBuf },
+    CreateFile {
+        parent: PathBuf,
+    },
+    CreateDirectory {
+        parent: PathBuf,
+    },
+    Rename {
+        path: PathBuf,
+    },
     /// 提交当前全部变更（含 untracked）。
     CommitAll,
 }

@@ -41,10 +41,14 @@ fn section_describes(section: &str, path: &str) -> bool {
         return false;
     };
     files.iter().any(|file| {
-        [Some(file.path()), file.original_path(), file.modified_path()]
-            .into_iter()
-            .flatten()
-            .any(|candidate| same_path(candidate, path))
+        [
+            Some(file.path()),
+            file.original_path(),
+            file.modified_path(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|candidate| same_path(candidate, path))
     })
 }
 

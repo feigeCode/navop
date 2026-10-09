@@ -21,7 +21,10 @@ const TWO_FILES: &str = concat!(
 fn section_is_picked_by_its_file_path() {
     let section = patch_section_for_path(TWO_FILES, "src/main.rs").expect("第二段应命中");
 
-    assert!(section.starts_with("diff --git a/src/main.rs "), "{section}");
+    assert!(
+        section.starts_with("diff --git a/src/main.rs "),
+        "{section}"
+    );
     assert!(section.contains("+after"), "{section}");
     assert!(
         !section.contains("+new"),

@@ -179,7 +179,10 @@ impl PersistentConnectionSidebar {
                     id,
                     workspace_id: connection.workspace_id,
                     name: if cfg!(feature = "screenshot-safe") {
-                        crate::screenshot_safe::connection_name(connection.connection_type, Some(id))
+                        crate::screenshot_safe::connection_name(
+                            connection.connection_type,
+                            Some(id),
+                        )
                     } else {
                         connection.name.clone()
                     },

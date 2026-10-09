@@ -75,11 +75,10 @@ pub fn runtime_status(cx: &App) -> PersonalSyncRuntimeStatus {
 
 pub fn actions_enabled(cx: &App) -> bool {
     let settings = AppSettings::global(cx);
-    active_personal_sync_settings(settings)
-        .is_some_and(|settings| {
-            let password = webdav_password_for(&settings);
-            build_personal_sync_runtime_config(&settings, password.as_deref()).is_ok()
-        })
+    active_personal_sync_settings(settings).is_some_and(|settings| {
+        let password = webdav_password_for(&settings);
+        build_personal_sync_runtime_config(&settings, password.as_deref()).is_ok()
+    })
 }
 
 /// 取出 WebDAV 后端的明文密码。
