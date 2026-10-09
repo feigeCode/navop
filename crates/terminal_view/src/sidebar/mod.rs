@@ -28,9 +28,9 @@ use crate::{
     theme::{TerminalColors, TerminalTheme},
 };
 use ai_chat_view::{
-    AgentChatTheme, CodeBlockAction, DefaultAgentChatPanel, DefaultAgentChatPanelEvent,
-    LanguageMatcher, MentionItem, build_mentions_from_connections, build_resource_catalog,
-    build_sidebar_resource_state,
+    AgentChatTheme, AgentChatThemeBase, CodeBlockAction, DefaultAgentChatPanel,
+    DefaultAgentChatPanelEvent, LanguageMatcher, MentionItem, build_mentions_from_connections,
+    build_resource_catalog, build_sidebar_resource_state,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -39,7 +39,7 @@ use gpui::{
     Window, div,
 };
 use gpui_component::{
-    ActiveTheme, Icon, Selectable, Sizable, Size,
+    ActiveTheme, Icon, Selectable, Sizable, Size, Theme,
     button::{ButtonCustomVariant, ButtonVariants},
     h_flex, v_flex,
 };
@@ -142,40 +142,45 @@ fn terminal_ai_system_instruction(connection_kind: TerminalConnectionKind) -> St
     )
 }
 
+/// 终端侧边栏的对话主题：基础色用终端自有配色，语义槽（状态色 / 用量档位 /
+/// 图表色）仍取应用主题——终端可以有一套自己的底色，但「危险」到哪都该是那个红。
 fn agent_theme_from_terminal_theme(
     theme: &TerminalTheme,
-    surface_radius: Pixels,
+    application_theme: &Theme,
 ) -> AgentChatTheme {
     let colors = theme.colors();
-    AgentChatTheme {
-        is_dark: theme.is_dark(),
-        background: colors.background,
-        foreground: colors.foreground,
-        muted: colors.muted,
-        muted_foreground: colors.muted_foreground,
-        border: colors.border,
-        panel: colors.muted,
-        panel_hover: colors.muted.opacity(0.72),
-        accent: colors.accent,
-        accent_foreground: colors.accent_foreground,
-        code_background: colors.muted,
-        code_foreground: colors.foreground,
-        table_header: colors.muted,
-        table_row: colors.background,
-        table_row_alt: colors.muted.opacity(0.35),
-        quote_border: colors.border,
-        link: colors.accent,
-        // gpui-component 的 TextView 选区高亮绘制在文字字形上层（inline.rs
-        // Inline::paint），不透明色会完全盖住选中文本；应用主题的选区色在
-        // 组件内被钳制到 alpha<=0.3，而终端主题的选区色是不透明的，这里
-        // 统一压到同样的半透明水平（暗色 0.3 / 亮色 0.4，保证高亮可见）。
-        text_selection: if theme.is_dark() {
-            theme.selection.alpha(0.3)
-        } else {
-            theme.selection.alpha(0.4)
+    AgentChatTheme::from_base_colors(
+        AgentChatThemeBase {
+            is_dark: theme.is_dark(),
+            background: colors.background,
+            foreground: colors.foreground,
+            muted: colors.muted,
+            muted_foreground: colors.muted_foreground,
+            border: colors.border,
+            panel: colors.muted,
+            panel_hover: colors.muted.opacity(0.72),
+            accent: colors.accent,
+            accent_foreground: colors.accent_foreground,
+            code_background: colors.muted,
+            code_foreground: colors.foreground,
+            table_header: colors.muted,
+            table_row: colors.background,
+            table_row_alt: colors.muted.opacity(0.35),
+            quote_border: colors.border,
+            link: colors.accent,
+            // gpui-component 的 TextView 选区高亮绘制在文字字形上层（inline.rs
+            // Inline::paint），不透明色会完全盖住选中文本；应用主题的选区色在
+            // 组件内被钳制到 alpha<=0.3，而终端主题的选区色是不透明的，这里
+            // 统一压到同样的半透明水平（暗色 0.3 / 亮色 0.4，保证高亮可见）。
+            text_selection: if theme.is_dark() {
+                theme.selection.alpha(0.3)
+            } else {
+                theme.selection.alpha(0.4)
+            },
+            surface_radius: application_theme.radius,
         },
-        surface_radius,
-    }
+        application_theme,
+    )
 }
 
 fn build_terminal_ai_context(
@@ -1048,7 +1053,7 @@ impl TerminalSidebar {
 
         // 注册 bash/sh 代码块操作，并注入终端专属提示词
         let sidebar_entity = cx.entity();
-        let ai_theme = agent_theme_from_terminal_theme(initial_theme, cx.theme().radius);
+        let ai_theme = agent_theme_from_terminal_theme(initial_theme, cx.theme());
         ai_chat_panel.update(cx, |panel, cx| {
             panel.set_theme(Some(ai_theme), cx);
             panel.set_sidebar_header_visible(true, cx);
@@ -1493,10 +1498,7 @@ impl TerminalSidebar {
             });
         }
         self.ai_chat_panel.update(cx, |panel, cx| {
-            panel.set_theme(
-                Some(agent_theme_from_terminal_theme(theme, cx.theme().radius)),
-                cx,
-            );
+            panel.set_theme(Some(agent_theme_from_terminal_theme(theme, cx.theme())), cx);
         });
         if let Some(ref broadcast_panel) = self.broadcast_input_panel {
             broadcast_panel.update(cx, |panel, cx| {
@@ -2208,8 +2210,7 @@ mod tests {
     fn agent_theme_preserves_terminal_dark_mode_for_markdown() {
         let application_theme = Theme::from(ThemeColor::dark().as_ref());
         let terminal_theme = TerminalTheme::from_application_theme(&application_theme);
-        let agent_theme =
-            agent_theme_from_terminal_theme(&terminal_theme, application_theme.radius);
+        let agent_theme = agent_theme_from_terminal_theme(&terminal_theme, &application_theme);
         let markdown_style = agent_theme.markdown_style();
 
         assert!(terminal_theme.is_dark());

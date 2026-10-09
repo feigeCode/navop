@@ -187,7 +187,7 @@ pub use session_shortcut::{
 };
 pub use session_sidebar::{SessionSummary, format_timestamp, session_row};
 pub use subagent_detail_panel::{SubagentDetailPanel, SubagentDetailTarget};
-pub use theme::AgentChatTheme;
+pub use theme::{AgentChatTheme, AgentChatThemeBase};
 pub use transcript_scroll::{FollowState, TranscriptScrollState};
 pub use transcript_search::{
     MAX_SEARCH_HITS, SearchHit, TranscriptSearch, count_matches, message_search_text, turn_texts,

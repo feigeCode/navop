@@ -447,8 +447,11 @@ fn workspace_pane_terminal_never_renders_the_internal_sidebar() {
     let render_layout = include_str!("../render_layout.rs");
 
     assert!(support.contains("self.render_mode = TerminalRenderMode::WorkspacePane;"));
-    assert!(render_layout
-        .contains("let render_internal_dock = self.render_mode == TerminalRenderMode::Embedded;"));
+    assert!(
+        render_layout.contains(
+            "let render_internal_dock = self.render_mode == TerminalRenderMode::Embedded;"
+        )
+    );
 }
 
 #[test]

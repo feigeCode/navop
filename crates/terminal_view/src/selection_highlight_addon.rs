@@ -160,9 +160,7 @@ fn match_columns(line_text: &str, needle: &str) -> Vec<Range<usize>> {
 #[cfg(test)]
 mod tests {
     use super::{SelectionHighlightAddon, grid_line_text, match_columns, selection_needle};
-    use crate::addon::{
-        TerminalAddon, TerminalAddonFrameContext, TerminalDamageHint,
-    };
+    use crate::addon::{TerminalAddon, TerminalAddonFrameContext, TerminalDamageHint};
     use alacritty_terminal::grid::Dimensions;
     use alacritty_terminal::index::{Column, Line, Point};
     use alacritty_terminal::selection::{Selection, SelectionType};
