@@ -23,10 +23,10 @@ use agent_runtime::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Anchor, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    FontWeight, InteractiveElement, IntoElement, MouseButton, MouseDownEvent, NavigationDirection,
-    ParentElement, Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled,
-    Subscription, Task, Window, div, px,
+    Anchor, App, AppContext as _, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
+    Focusable, FontWeight, InteractiveElement, IntoElement, MouseButton, MouseDownEvent,
+    NavigationDirection, ParentElement, Render, ScrollHandle, SharedString,
+    StatefulInteractiveElement, Styled, Subscription, Task, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, Selectable, Sizable, WindowExt as _,
@@ -77,7 +77,9 @@ use crate::agent_transcript::AgentTranscript;
 use crate::bridge::build_runtime_from_llm_provider;
 use crate::code_block::{CodeBlockAction, CodeBlockActionRegistry};
 use crate::command_palette::{
-    CloseCommandPalette, PaletteSelectNext, PaletteSelectPrev, ToggleCommandPalette,
+    CloseCommandPalette, PALETTE_PAGE_STEP, PaletteSelectFirst, PaletteSelectLast,
+    PaletteSelectNext, PaletteSelectPageDown, PaletteSelectPageUp, PaletteSelectPrev,
+    ToggleCommandPalette,
 };
 use crate::expansion_state::ExpansionState;
 use crate::find_shortcut::{
@@ -104,6 +106,9 @@ use crate::session_sidebar::{self, SessionRowStyle, SessionSummary};
 use crate::theme::{AgentChatTheme, resolve_agent_chat_theme, sp};
 use crate::transcript_scroll::TranscriptScrollState;
 use crate::transcript_search::TranscriptSearch;
+use crate::transcript_selection::{
+    ClearTranscriptSelection, CopyTranscriptSelection, TranscriptSelectionHandle,
+};
 use crate::turn::{TurnOutcome, TurnTimings};
 use crate::usage::{ContextUsage, format_local_usage, model_context_window};
 
@@ -114,6 +119,7 @@ mod attachment_preview;
 mod decision_dock;
 mod findbar;
 mod message_image_preview;
+mod selection;
 mod session_navigation;
 mod session_switcher;
 
@@ -807,6 +813,17 @@ struct ComposerDraft {
 /// 长到连续打字时不会每敲一个字都写一次库。
 const DRAFT_SAVE_DEBOUNCE: Duration = Duration::from_millis(250);
 
+/// 命令面板正文检索的防抖窗口。
+///
+/// 短到「打完停顿一下结果就在」，长到连续输入只查最后一次——正文检索要读快照
+/// JSON，比标题过滤贵得多。
+const PALETTE_BODY_SEARCH_DEBOUNCE: Duration = Duration::from_millis(120);
+/// 少于这个长度的查询不搜正文：一两个字符几乎命中所有会话，等于什么都没筛掉，
+/// 白搭一次全库扫。
+const PALETTE_BODY_MIN_QUERY: usize = 2;
+/// 正文命中最多列几条。
+const PALETTE_BODY_LIMIT: usize = 12;
+
 fn merge_live_session_summaries(
     persisted: Vec<SessionSummary>,
     live: &[SessionSummary],
@@ -1350,12 +1367,33 @@ pub struct AgentChatView {
     pub(super) palette_query: String,
     /// 命令面板的查询输入框。
     palette_input: Entity<InputState>,
+    /// 命令面板「正文命中」那一段的结果；随查询变化刷新。
+    ///
+    /// 存在视图里而不是每帧查库：正文检索要读快照 JSON，代价与库大小成正比，
+    /// 挂在 render 路径上会让每帧都被拖慢。
+    palette_body_hits: Vec<crate::command_palette::PaletteBodyHit>,
+    /// 排队中的正文检索防抖任务；再敲一个字会把它顶掉重排（旧任务随 drop 取消）。
+    palette_body_task: Option<Task<()>>,
     /// 有未发送草稿的会话 uid（会话列表行上的标记用）。
     ///
     /// 缓存一份而不是每帧查库：列表每帧都要它，而草稿只在输入停下来时变一次。
     drafted_sessions: HashSet<String>,
     /// 排队中的草稿防抖保存；再输入一次会把它顶掉重排（旧任务随 drop 取消）。
     draft_save_task: Option<Task<()>>,
+    /// 业务资源那一批 `@` 提及项（连接、SSH 主机…）。
+    ///
+    /// 工作区文件是**后到**的（目录遍历在后台跑），所以这一批要留一份：
+    /// 换根重新收集时要跟文件那份重新合并，而不是把业务资源丢在路上。
+    resource_mentions: Vec<MentionItem>,
+    /// 后台的工作区文件遍历任务；换根会把它顶掉（旧任务随 drop 取消）。
+    workspace_mentions_task: Option<Task<()>>,
+    /// 转录里的块级选中（见 `transcript_selection`）。
+    ///
+    /// 用 `Rc<RefCell<..>>` 而不是普通字段：渲染层（`message_turn_view`）要自己
+    /// 挂鼠标事件并读选区，那层不认识 `AgentChatView`，共享句柄是最小耦合。
+    transcript_selection: Rc<std::cell::RefCell<crate::transcript_selection::TranscriptSelection>>,
+    /// 转录容器的焦点句柄：按下消息时把焦点收过来，`Cmd+C` 才会落到转录而不是 composer。
+    transcript_focus: FocusHandle,
     /// 侧边栏是否显示「已归档」会话(否则显示活跃会话)。
     show_archived: bool,
     /// 侧边栏视图(窄面板)模式:头部走新建对话 / 历史记录紧凑布局,不常驻会话列表。
@@ -1564,7 +1602,7 @@ impl AgentChatView {
         });
         let resources = config.resources;
         let available_resources = config.available_resources;
-        let mentions = config.mentions;
+        let base_mentions = config.mentions;
         let model_options = config.model_options;
         let binding = RuntimeBinding::new(
             config.runtime,
@@ -1578,7 +1616,7 @@ impl AgentChatView {
         let runtime_factory = binding.runtime_factory;
         let input = cx.new(|cx| {
             AgentInput::with_mentions(
-                mentions,
+                base_mentions.clone(),
                 t!("AgentUi.input_placeholder").to_string(),
                 window,
                 cx,
@@ -1704,7 +1742,7 @@ impl AgentChatView {
             workspace_root.to_string_lossy().into_owned(),
         )]);
 
-        let new_view = Self {
+        let mut new_view = Self {
             runtime,
             session_id,
             resources,
@@ -1750,9 +1788,15 @@ impl AgentChatView {
             palette_selection: 0,
             palette_query: String::new(),
             palette_input,
+            palette_body_hits: Vec::new(),
+            palette_body_task: None,
             // 启动时从库里取一次：上次没发出去的草稿要在列表上标出来。
             drafted_sessions: persistence::drafted_session_uids(cx),
             draft_save_task: None,
+            resource_mentions: base_mentions.clone(),
+            workspace_mentions_task: None,
+            transcript_selection: Rc::default(),
+            transcript_focus: cx.focus_handle(),
             show_archived: false,
             sidebar_mode,
             show_sidebar_header,
@@ -1814,6 +1858,8 @@ impl AgentChatView {
         if new_view.system_instruction.is_some() {
             new_view.apply_system_instruction_to_current_session();
         }
+        // `@` 里的工作区文件：起手收集一次（后台跑，见方法说明）。
+        new_view.refresh_workspace_mentions(cx);
         new_view
     }
 
@@ -2398,18 +2444,26 @@ impl AgentChatView {
     fn on_findbar_input_event(&mut self, event: &InputEvent, cx: &mut Context<Self>) {
         match event {
             InputEvent::Change => {
-                let query = self.findbar_input.read(cx).value().to_string();
-                self.search.set_query(query, &self.transcript.messages);
-                self.search_revision = self.transcript.revision();
-                // 查询变化把游标复位到第一个命中：顺手把视图也拉过去。
-                self.jump_to_current_search_hit();
-                cx.notify();
+                self.refresh_search_from_findbar(cx);
             }
             InputEvent::PressEnter { shift, .. } => {
                 self.step_search(!shift, cx);
             }
             _ => {}
         }
+    }
+
+    /// 按查询框当前内容重算命中。
+    ///
+    /// 打字走 `InputEvent::Change`，但程序化写入（命令面板跳过来时把查询词灌进
+    /// 输入框）**不发** `Change`，所以两条路径共用这个方法，别指望事件会来。
+    fn refresh_search_from_findbar(&mut self, cx: &mut Context<Self>) {
+        let query = self.findbar_input.read(cx).value().to_string();
+        self.search.set_query(query, &self.transcript.messages);
+        self.search_revision = self.transcript.revision();
+        // 查询变化把游标复位到第一个命中：顺手把视图也拉过去。
+        self.jump_to_current_search_hit();
+        cx.notify();
     }
 
     /// 命令面板查询框的事件。
@@ -2428,6 +2482,7 @@ impl AgentChatView {
                 // 查询变了就把高亮拉回第一条：留着旧下标的话，高亮会落在
                 // 一个跟刚才不同的条目上。
                 self.palette_selection = 0;
+                self.schedule_palette_body_search(cx);
                 cx.notify();
             }
             InputEvent::PressEnter { .. } => {
@@ -2442,6 +2497,8 @@ impl AgentChatView {
         self.palette_open = true;
         self.palette_selection = 0;
         self.palette_query.clear();
+        self.palette_body_hits.clear();
+        self.palette_body_task = None;
         self.palette_input
             .update(cx, |state, cx| state.set_value("", window, cx));
         let focus_handle = self.palette_input.read(cx).focus_handle(cx);
@@ -2460,6 +2517,8 @@ impl AgentChatView {
         self.palette_open = false;
         self.palette_query.clear();
         self.palette_selection = 0;
+        self.palette_body_hits.clear();
+        self.palette_body_task = None;
         let input = self.input.clone();
         input.update(cx, |input, cx| input.focus_input(window, cx));
         cx.notify();
@@ -2474,6 +2533,45 @@ impl AgentChatView {
         }
     }
 
+    /// 排一次正文检索（防抖）。
+    ///
+    /// 查询太短就把上一轮结果清掉：留着的话，删到一个字时列表里还挂着上一次
+    /// 更长查询的命中——那些行点进去跟当前查询对不上。
+    fn schedule_palette_body_search(&mut self, cx: &mut Context<Self>) {
+        let query = self.palette_query.trim().to_string();
+        if query.chars().count() < PALETTE_BODY_MIN_QUERY {
+            self.palette_body_hits.clear();
+            self.palette_body_task = None;
+            return;
+        }
+        self.palette_body_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(PALETTE_BODY_SEARCH_DEBOUNCE)
+                .await;
+            let _ = this.update(cx, |this, cx| this.flush_palette_body_search(query, cx));
+        }));
+    }
+
+    /// 防抖到点：真去查一次正文。
+    fn flush_palette_body_search(&mut self, query: String, cx: &mut Context<Self>) {
+        // 这期间查询又被改过（或面板关了）：这一轮结果已经过期，丢掉——
+        // 直接把过期结果写进列表，用户会看到跟输入框对不上的命中。
+        if !self.palette_open || self.palette_query.trim() != query {
+            return;
+        }
+        self.palette_body_hits =
+            crate::persistence::search_session_bodies(cx, &query, PALETTE_BODY_LIMIT)
+                .into_iter()
+                .map(|hit| crate::command_palette::PaletteBodyHit {
+                    uid: hit.uid,
+                    title: hit.title,
+                    snippet: hit.snippet,
+                    query: query.clone(),
+                })
+                .collect();
+        cx.notify();
+    }
+
     fn move_palette_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
         if !self.palette_open {
             return;
@@ -2481,6 +2579,16 @@ impl AgentChatView {
         let len = self.palette_items().len();
         self.palette_selection =
             crate::command_palette::move_selection(self.palette_selection, len, delta);
+        cx.notify();
+    }
+
+    /// 直接跳到首项 / 末项（`home` / `end`）。
+    fn select_palette_edge(&mut self, last: bool, cx: &mut Context<Self>) {
+        if !self.palette_open {
+            return;
+        }
+        let len = self.palette_items().len();
+        self.palette_selection = crate::command_palette::edge_selection(len, last);
         cx.notify();
     }
 
@@ -2514,6 +2622,12 @@ impl AgentChatView {
             .collect();
 
         let mut items = crate::command_palette::command_items(self.show_archived);
+        // 正文命中排在会话前面：它是「搜正文搜出来的」，比「标题里恰好有这个字」
+        // 更接近用户想要的东西，而 `visible_items` 只留 7 行——排后面就等于
+        // 永远看不见。
+        items.extend(crate::command_palette::body_match_items(
+            &self.palette_body_hits,
+        ));
         items.extend(crate::command_palette::session_items(&sessions));
         items
     }
@@ -2533,6 +2647,15 @@ impl AgentChatView {
         match &item.action {
             PaletteAction::NewSession => self.new_session(cx),
             PaletteAction::OpenSession(uid) => self.switch_session(uid, cx),
+            PaletteAction::OpenSessionAtMatch { uid, query } => {
+                // 先切会话再开搜索：findbar 搜的是**当前**转录，顺序反了就会
+                // 拿旧会话的正文去找，然后在刚打开的会话里显示一堆对不上的命中。
+                self.switch_session(uid, cx);
+                self.open_findbar(window, cx);
+                self.findbar_input
+                    .update(cx, |state, cx| state.set_value(query.clone(), window, cx));
+                self.refresh_search_from_findbar(cx);
+            }
             PaletteAction::OpenUsageHistory => {
                 self.usage_history = Some(crate::usage_history::collect_usage_history(cx));
             }
@@ -4669,6 +4792,8 @@ impl AgentChatView {
         self.workspace_root = root.clone();
         // 项目级 skills 跟随工作区；选择集合只保留仍然存在的路径。
         self.skills.reload_for_workspace(&root);
+        // `@` 里的文件也要换：引用的是**当前**工作区里的东西。
+        self.refresh_workspace_mentions(cx);
         self.sync_session_skills();
         // 换工作区会丢弃旧连接；连接前的模型选择也不再适用于新 agent 会话。
         self.pending_acp_model = None;
@@ -6376,8 +6501,10 @@ impl AgentChatView {
             self.skills.items(),
             self.local_context_tokens(),
         );
+        // 业务资源换了：留一份给工作区文件重新合并用（文件那份不用重扫，根没动）。
+        self.resource_mentions = mentions;
+        self.refresh_workspace_mentions(cx);
         self.input.update(cx, |input, cx| {
-            input.set_mentions(mentions, cx);
             input.set_target_options(target_options, cx);
             input.set_context(ctx, cx);
         });
@@ -6387,6 +6514,28 @@ impl AgentChatView {
             self.request_scroll_to_bottom();
         }
         cx.notify();
+    }
+
+    /// 重新收集 `@` 里的工作区文件，并与业务资源合并推给输入框。
+    ///
+    /// 目录遍历放后台：工作区可能有几万个文件，把它压在首帧或换根那一帧里，
+    /// 用户会看到面板卡一下再出现。代价是补全菜单里文件**稍后**才出现——
+    /// 键入 `@` 花的几百毫秒通常足够遍历跑完。
+    pub(crate) fn refresh_workspace_mentions(&mut self, cx: &mut Context<Self>) {
+        let root = self.workspace_root.clone();
+        let base = self.resource_mentions.clone();
+        let input = self.input.clone();
+        self.workspace_mentions_task = Some(cx.spawn(async move |_this, cx| {
+            let files = cx
+                .background_executor()
+                .spawn(
+                    async move { crate::workspace_files::collect_workspace_files_default(&root) },
+                )
+                .await;
+            let mut all = base;
+            all.extend(files);
+            input.update(cx, |input, cx| input.set_mentions(all, cx));
+        }));
     }
 
     /// 注册代码块操作。
@@ -7275,6 +7424,8 @@ impl Render for AgentChatView {
             std::rc::Rc::new(move |action, window, cx| action_listener(&action, window, cx));
 
         let findbar = self.render_findbar(&chat_theme, cx);
+        let selection = self.transcript_selection_handle(cx);
+        let selection_bar = self.render_selection_bar(&chat_theme, cx);
         // ACP 连接还停在 Ready 之前的相位时，历史要靠 agent 回放，转录是空的。
         // 空面板会被读成「坏了」；骨架屏则说明「在等数据」。
         let acp_phase = self.acp.as_ref().map(AcpConnection::phase);
@@ -7322,6 +7473,8 @@ impl Render for AgentChatView {
                     .with_turn_chrome(!self.sidebar_mode)
                     .with_search(Some(&self.search))
                     .with_findbar(findbar)
+                    .with_selection(Some(&selection))
+                    .with_selection_bar(selection_bar)
                     .with_empty_state(empty_state)
                     .with_restorable_turns(self.restorable_turns.get(&self.current_session))
                     .with_scroll_to_latest(show_scroll_to_latest),
@@ -7380,6 +7533,18 @@ impl Render for AgentChatView {
                 .text_color(chat_theme.foreground)
                 .bg(chat_theme.background)
                 .key_context(AI_CHAT_SEARCH_CONTEXT)
+                .track_focus(&self.transcript_focus)
+                .on_action(cx.listener(|this, _: &CopyTranscriptSelection, _, cx| {
+                    // 没有选区就交出去：同一条快捷键在别处（例如输入框内）还有别的语义。
+                    if !this.copy_transcript_selection(cx) {
+                        cx.propagate();
+                    }
+                }))
+                .on_action(cx.listener(|this, _: &ClearTranscriptSelection, _, cx| {
+                    if !this.clear_transcript_selection(cx) {
+                        cx.propagate();
+                    }
+                }))
                 .on_action(cx.listener(Self::approve_tool_call))
                 .on_action(cx.listener(Self::reject_tool_call))
                 .on_action(cx.listener(|this, _: &ToggleTranscriptFind, window, cx| {
@@ -7404,6 +7569,18 @@ impl Render for AgentChatView {
                 }))
                 .on_action(cx.listener(|this, _: &PaletteSelectNext, _, cx| {
                     this.move_palette_selection(1, cx);
+                }))
+                .on_action(cx.listener(|this, _: &PaletteSelectFirst, _, cx| {
+                    this.select_palette_edge(false, cx);
+                }))
+                .on_action(cx.listener(|this, _: &PaletteSelectLast, _, cx| {
+                    this.select_palette_edge(true, cx);
+                }))
+                .on_action(cx.listener(|this, _: &PaletteSelectPageUp, _, cx| {
+                    this.move_palette_selection(-(PALETTE_PAGE_STEP as isize), cx);
+                }))
+                .on_action(cx.listener(|this, _: &PaletteSelectPageDown, _, cx| {
+                    this.move_palette_selection(PALETTE_PAGE_STEP as isize, cx);
                 }))
                 // 会话导航：cmd-[ / cmd-]（可自定义）与鼠标后退/前进键。
                 .on_action(cx.listener(|this, _: &NavigateSessionBack, _, cx| {
@@ -7474,6 +7651,18 @@ impl Render for AgentChatView {
                 .text_color(chat_theme.foreground)
                 .bg(chat_theme.background)
                 .key_context(AI_CHAT_SEARCH_CONTEXT)
+                .track_focus(&self.transcript_focus)
+                .on_action(cx.listener(|this, _: &CopyTranscriptSelection, _, cx| {
+                    // 没有选区就交出去：同一条快捷键在别处（例如输入框内）还有别的语义。
+                    if !this.copy_transcript_selection(cx) {
+                        cx.propagate();
+                    }
+                }))
+                .on_action(cx.listener(|this, _: &ClearTranscriptSelection, _, cx| {
+                    if !this.clear_transcript_selection(cx) {
+                        cx.propagate();
+                    }
+                }))
                 .on_action(cx.listener(Self::approve_tool_call))
                 .on_action(cx.listener(Self::reject_tool_call))
                 .on_action(cx.listener(|this, _: &ToggleTranscriptFind, window, cx| {
@@ -7498,6 +7687,18 @@ impl Render for AgentChatView {
                 }))
                 .on_action(cx.listener(|this, _: &PaletteSelectNext, _, cx| {
                     this.move_palette_selection(1, cx);
+                }))
+                .on_action(cx.listener(|this, _: &PaletteSelectFirst, _, cx| {
+                    this.select_palette_edge(false, cx);
+                }))
+                .on_action(cx.listener(|this, _: &PaletteSelectLast, _, cx| {
+                    this.select_palette_edge(true, cx);
+                }))
+                .on_action(cx.listener(|this, _: &PaletteSelectPageUp, _, cx| {
+                    this.move_palette_selection(-(PALETTE_PAGE_STEP as isize), cx);
+                }))
+                .on_action(cx.listener(|this, _: &PaletteSelectPageDown, _, cx| {
+                    this.move_palette_selection(PALETTE_PAGE_STEP as isize, cx);
                 }))
                 // 会话导航：cmd-[ / cmd-]（可自定义）与鼠标后退/前进键。
                 .on_action(cx.listener(|this, _: &NavigateSessionBack, _, cx| {
@@ -15036,6 +15237,281 @@ mod tests {
 
     /// 点开一条「没有归属」的旧会话，不能顺手把它钉到当前工作区。
     ///
+    /// 拖过消息块会选中它，`Cmd+C` 会把**选中内容**送进剪贴板。
+    #[gpui::test]
+    fn gpui_transcript_selection_copies_the_selected_blocks(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        // 用短消息而不是 `push_conversation`：长回复会把第一条挤到视口之外，
+        // 模拟鼠标点就落不到它身上（事件要落在窗口内才命中）。
+        view.update(cx, |view, cx| {
+            view.transcript
+                .push_message(crate::ChatMessageUI::user("第一条"));
+            view.transcript
+                .push_message(crate::ChatMessageUI::assistant("第一条的回复"));
+            view.transcript
+                .push_message(crate::ChatMessageUI::user("第二条"));
+            view.transcript
+                .push_message(crate::ChatMessageUI::assistant("第二条的回复"));
+            view.transcript
+                .push_message(crate::ChatMessageUI::user("第三条"));
+            view.transcript
+                .push_message(crate::ChatMessageUI::assistant("第三条的回复"));
+            cx.notify();
+        });
+        let cx: &mut VisualTestContext = cx;
+        draw_frame(cx);
+
+        // 1) 鼠标侧：按下第一条可拖选的块，选区就落在那条消息上。
+        let first = cx
+            .debug_bounds("ai-chat-message-selectable")
+            .expect("转录里该有可拖选的消息块");
+        cx.simulate_mouse_down(first.center(), MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_up(first.center(), MouseButton::Left, Modifiers::default());
+        draw_frame(cx);
+        let (count, text, matches_a_message) = view.read_with(cx, |view, _| {
+            let order: Vec<String> = view
+                .transcript
+                .messages
+                .iter()
+                .map(|message| message.id.clone())
+                .collect();
+            let count = view.transcript_selection.borrow().count(&order);
+            let text = view.selected_transcript_text();
+            let matches = text.as_ref().is_some_and(|text| {
+                view.transcript.messages.iter().any(|message| {
+                    crate::message_view::message_copy_text(message)
+                        .map(|candidate| candidate.to_string())
+                        == Some(text.clone())
+                })
+            });
+            (count, text, matches)
+        });
+        assert_eq!(1, count, "按下一条消息只该选中它自己");
+        assert!(
+            matches_a_message,
+            "选中的文本必须正好是某一条消息的正文，实际 {text:?}"
+        );
+
+        // 2) 跨块：从第二条拉到第三条，复制内容按顺序拼接。
+        let expected = view.update(cx, |view, cx| {
+            let ids: Vec<String> = view
+                .transcript
+                .messages
+                .iter()
+                .map(|message| message.id.clone())
+                .collect();
+            // 从第一条拉到第三条：区间内的**每一条**都算选中（含夹在中间的那条回复），
+            // 这与「拖过一段就选中这一段」的直觉一致。
+            let expected = (0..=2)
+                .map(|index| {
+                    crate::message_view::message_copy_text(&view.transcript.messages[index])
+                        .expect("正文可复制")
+                        .to_string()
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            {
+                let mut selection = view.transcript_selection.borrow_mut();
+                selection.begin(&ids[0]);
+                selection.extend(&ids[2]);
+                selection.finish();
+            }
+            cx.notify();
+            expected
+        });
+        assert_eq!(
+            Some(expected.clone()),
+            view.read_with(cx, |view, _| view.selected_transcript_text()),
+            "跨块选中的是两头那两条消息"
+        );
+
+        // 3) 快捷键：焦点在按下时已经交给转录，`Cmd+C` 该把两段正文写进剪贴板。
+        cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-c"
+        } else {
+            "ctrl-c"
+        });
+        draw_frame(cx);
+        assert_eq!(
+            Some(expected.clone()),
+            cx.read_from_clipboard().and_then(|item| item.text()),
+            "复制到的必须是选中的两段正文"
+        );
+
+        // 4) 取消：选区清掉。
+        cx.dispatch_action(ClearTranscriptSelection);
+        draw_frame(cx);
+        assert!(
+            view.read_with(cx, |view, _| view.selected_transcript_text().is_none()),
+            "取消后不该再有选区"
+        );
+    }
+
+    /// `@` 菜单里除了业务资源还要有工作区文件，且遍历在后台跑完才并进来。
+    #[gpui::test]
+    fn gpui_workspace_files_join_the_mention_menu(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+
+        // 造一个像模像样的小工作区：一个源文件 + 一个该被整枝跳过的构建目录。
+        let root = std::env::temp_dir().join(format!(
+            "aiwb-mentions-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("时钟")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("src")).expect("建 src");
+        std::fs::create_dir_all(root.join("target")).expect("建 target");
+        std::fs::write(root.join("src").join("main.rs"), "fn main() {}").expect("写 main.rs");
+        std::fs::write(root.join("target").join("skip.rs"), "// build").expect("写 skip.rs");
+
+        let config = AgentChatViewConfig::new(
+            test_runtime("m"),
+            ResourceContext::new(),
+            vec![MentionItem::new("c1", "prod-db", "postgres", "postgres")],
+        )
+        .with_workspace_root(root.clone());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let cx: &mut VisualTestContext = cx;
+
+        // 目录遍历在后台：推一次执行器让它落地。
+        cx.run_until_parked();
+
+        let labels = view.read_with(cx, |view, cx| view.input.read(cx).mention_labels());
+        assert!(
+            labels.iter().any(|label| label == "src/main.rs"),
+            "工作区文件该出现在 `@` 菜单里，实际 {labels:?}"
+        );
+        assert!(
+            labels.iter().any(|label| label == "prod-db"),
+            "业务资源不能被文件挤掉，实际 {labels:?}"
+        );
+        assert!(
+            !labels.iter().any(|label| label.contains("skip.rs")),
+            "构建目录该被整枝跳过，实际 {labels:?}"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 命令面板搜正文：命中会话里的消息文本，跳过去并把那段词交给会话内搜索。
+    #[gpui::test]
+    fn gpui_command_palette_search_body_hits(cx: &mut TestAppContext) {
+        use crate::command_palette::PaletteAction;
+        use one_core::llm::chat_history::AgentSessionRepository;
+        use one_core::storage::GlobalStorageState;
+
+        use agent_runtime::{HistoryItem, SessionId, SessionSnapshot};
+
+        init_test_ui(cx);
+        // 快照要走真结构体序列化：`load_snapshot` 反序列化的是完整 `SessionSnapshot`，
+        // 手写一小段 JSON 会因为缺字段解析失败，切过去时会静默退回原会话。
+        let snapshot = SessionSnapshot {
+            id: SessionId::from_string("sess-body"),
+            resources: ResourceContext::new(),
+            history: vec![
+                HistoryItem::User {
+                    text: "这轮把预算压到八万".into(),
+                    images: Vec::new(),
+                },
+                HistoryItem::Assistant("好的".into()),
+            ],
+            plan: None,
+            system_instruction: None,
+            skills: agent_runtime::SkillContext::new(),
+            workspace_root: None,
+            draft: None,
+            context_tokens: None,
+            acp: None,
+        };
+        let storage = test_session_storage();
+        storage
+            .get::<AgentSessionRepository>()
+            .expect("会话仓储")
+            .save_snapshot(
+                "sess-body",
+                "预算会话",
+                &serde_json::to_string(&snapshot).expect("序列化快照"),
+            )
+            .expect("写入一条带正文的会话");
+        cx.update(|cx| cx.set_global(GlobalStorageState { storage }));
+
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let cx: &mut VisualTestContext = cx;
+
+        assert_ne!(
+            "sess-body",
+            view.read_with(cx, |view, _| view.current_session.clone()),
+            "前置：正文命中的那条不是当前会话"
+        );
+
+        focus_composer(&view, cx);
+        draw_frame(cx);
+        cx.dispatch_action(ToggleCommandPalette);
+        draw_frame(cx);
+        cx.simulate_input("预算压到");
+        draw_frame(cx);
+
+        // 正文检索走防抖：测试里的定时器不会自己走，得显式推时钟。
+        cx.background_executor
+            .advance_clock(PALETTE_BODY_SEARCH_DEBOUNCE + Duration::from_millis(20));
+        draw_frame(cx);
+
+        view.read_with(cx, |view, _| {
+            assert_eq!(1, view.palette_body_hits.len(), "该按正文搜出这一条");
+            assert_eq!("sess-body", view.palette_body_hits[0].uid);
+            assert!(
+                view.palette_body_hits[0].snippet.contains("预算压到"),
+                "片段要带查询词，实际 {:?}",
+                view.palette_body_hits[0].snippet
+            );
+        });
+
+        // 命中行按身份找，不按固定下标：命令、会话段都在它前面。
+        let index = view.read_with(cx, |view, _| {
+            crate::command_palette::visible_items(&view.palette_items(), &view.palette_query)
+                .iter()
+                .position(|item| matches!(item.action, PaletteAction::OpenSessionAtMatch { .. }))
+                .expect("正文命中该出现在可见列表里")
+        });
+        view.update(cx, |view, cx| {
+            view.palette_selection = index;
+            cx.notify();
+        });
+        draw_frame(cx);
+
+        view.update_in(cx, |view, window, cx| {
+            view.run_palette_selection(window, cx)
+        });
+        draw_frame(cx);
+
+        view.update(cx, |view, cx| {
+            assert!(!view.palette_open, "执行完面板该收起来");
+            assert_eq!(
+                "sess-body", view.current_session,
+                "该跳到正文命中的那条会话"
+            );
+            assert!(view.findbar_open, "跳过去要顺手把会话内搜索打开");
+            assert_eq!(
+                "预算压到",
+                view.findbar_input.read(cx).value().to_string(),
+                "查询词要落在搜索框里"
+            );
+            assert!(
+                view.search.total() >= 1,
+                "搜索该真的命中正文，实际 {}",
+                view.search.total()
+            );
+        });
+    }
+
     /// 草稿：输入停下来就落库，切走再切回连**附件**一起恢复，清空后标记消失。
     ///
     /// 附件是这次补的重点——它过去只活在内存里，重启（或这里模拟的换会话路径）
@@ -16259,6 +16735,26 @@ mod tests {
         cx.simulate_keystrokes("up");
         draw_frame(cx);
         assert_eq!(0, view.read_with(cx, |view, _| view.palette_selection));
+
+        // 首 / 末 / 翻页：候选多起来以后不该只能一条条走。
+        let item_count = view.read_with(cx, |view, _| view.palette_items().len());
+        assert!(item_count > 1, "前置：得有几条候选才谈得上首末");
+        cx.simulate_keystrokes("end");
+        draw_frame(cx);
+        assert_eq!(
+            item_count - 1,
+            view.read_with(cx, |view, _| view.palette_selection)
+        );
+        cx.simulate_keystrokes("home");
+        draw_frame(cx);
+        assert_eq!(0, view.read_with(cx, |view, _| view.palette_selection));
+        cx.simulate_keystrokes("pagedown");
+        draw_frame(cx);
+        assert_eq!(
+            crate::command_palette::PALETTE_PAGE_STEP % item_count,
+            view.read_with(cx, |view, _| view.palette_selection),
+            "翻一页走一屏的行数；候选不够一屏就绕回，而不是停在最后一条"
+        );
 
         // 命不中就给空态，而不是留一排点了没反应的行。
         cx.simulate_input("zzz-no-such-command");

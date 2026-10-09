@@ -58,6 +58,10 @@ gpui::actions!(
     [
         ToggleCommandPalette,
         CloseCommandPalette,
+        PaletteSelectFirst,
+        PaletteSelectLast,
+        PaletteSelectPageUp,
+        PaletteSelectPageDown,
         PaletteSelectPrev,
         PaletteSelectNext
     ]
@@ -80,6 +84,20 @@ fn keybindings() -> Vec<KeyBinding> {
     for context in PALETTE_NAV_CONTEXTS {
         keybindings.push(KeyBinding::new("up", PaletteSelectPrev, Some(context)));
         keybindings.push(KeyBinding::new("down", PaletteSelectNext, Some(context)));
+        // 首/末/翻页：候选多起来（尤其是加了正文命中那一段）以后，光靠 ↑↓ 一条条走
+        // 太慢。`home`/`end`/`pageup`/`pagedown` 在输入框里本来没有别的用途。
+        keybindings.push(KeyBinding::new("home", PaletteSelectFirst, Some(context)));
+        keybindings.push(KeyBinding::new("end", PaletteSelectLast, Some(context)));
+        keybindings.push(KeyBinding::new(
+            "pageup",
+            PaletteSelectPageUp,
+            Some(context),
+        ));
+        keybindings.push(KeyBinding::new(
+            "pagedown",
+            PaletteSelectPageDown,
+            Some(context),
+        ));
         keybindings.push(KeyBinding::new(
             "escape",
             CloseCommandPalette,
@@ -106,6 +124,24 @@ impl PaletteItem {
             action,
         }
     }
+
+    /// 正文命中的一条：标题为主、片段为说明。
+    fn body_match(title: String, snippet: String, uid: String, query: String) -> Self {
+        Self {
+            label: title,
+            detail: Some(snippet),
+            action: PaletteAction::OpenSessionAtMatch { uid, query },
+        }
+    }
+}
+
+/// 正文命中项的入参（视图从存储层的检索结果映射过来）。
+pub struct PaletteBodyHit {
+    pub uid: String,
+    pub title: String,
+    pub snippet: String,
+    /// 触发这次命中的查询词，随项一起带下去。
+    pub query: String,
 }
 
 /// 选中一条之后要干的事。
@@ -123,6 +159,11 @@ pub enum PaletteAction {
     ToggleFindInSession,
     /// 切换「显示已归档会话」。
     ToggleArchivedSessions,
+    /// 跳到某个会话，且顺手把正文里那段查询词丢给会话内搜索。
+    ///
+    /// 带上 `query` 而不是只带 uid：正文命中只是「这条会话里大概有」，具体落在
+    /// 哪儿由会话自己的搜索去定位并高亮——否则这里得额外维护一套消息坐标。
+    OpenSessionAtMatch { uid: String, query: String },
 }
 
 /// 会话候选的入参（视图从会话摘要映射过来，模块不依赖视图类型）。
@@ -175,6 +216,20 @@ pub fn session_items(sessions: &[PaletteSession]) -> Vec<PaletteItem> {
         .collect()
 }
 
+/// 正文命中候选项。
+pub fn body_match_items(hits: &[PaletteBodyHit]) -> Vec<PaletteItem> {
+    hits.iter()
+        .map(|hit| {
+            PaletteItem::body_match(
+                hit.title.clone(),
+                hit.snippet.clone(),
+                hit.uid.clone(),
+                hit.query.clone(),
+            )
+        })
+        .collect()
+}
+
 /// 按查询过滤并截断到一次能显示的条数。
 ///
 /// 匹配「命令与说明的任意子串」，且**保持原顺序**：命令在前、会话在后。
@@ -210,6 +265,14 @@ pub fn move_selection(selected: usize, len: usize, delta: isize) -> usize {
     }
     let len = len as isize;
     ((((selected as isize + delta) % len) + len) % len) as usize
+}
+
+/// 翻页步长：一屏的行数。
+pub(crate) const PALETTE_PAGE_STEP: usize = PALETTE_MAX_ROWS;
+
+/// 首项 / 末项的下标。列表为空时留在 0——否则 `len - 1` 会下溢。
+pub fn edge_selection(len: usize, last: bool) -> usize {
+    if len == 0 || !last { 0 } else { len - 1 }
 }
 
 /// 工作区目录名（会话条右侧展示用）。
@@ -316,6 +379,8 @@ fn palette_row(
         PaletteAction::OpenUsageHistory => IconName::ChartPie,
         PaletteAction::ToggleFindInSession => IconName::Search,
         PaletteAction::ToggleArchivedSessions => IconName::Archive,
+        // 正文命中用放大镜：一眼认出「这条是搜正文搜出来的」，而不是又一个会话。
+        PaletteAction::OpenSessionAtMatch { .. } => IconName::Search,
     };
     let item_for_click = item.clone();
 
@@ -426,6 +491,56 @@ mod tests {
         // 空列表上不动：没有可以指的东西。
         assert_eq!(0, move_selection(0, 0, 1));
         assert_eq!(0, move_selection(0, 0, -1));
+    }
+
+    #[test]
+    fn body_hits_become_rows_that_carry_the_query_along() {
+        let hits = vec![PaletteBodyHit {
+            uid: "sess_a".to_string(),
+            title: "预算审批".to_string(),
+            snippet: "…这轮把预算压到 8 万…".to_string(),
+            query: "预算".to_string(),
+        }];
+
+        let items = body_match_items(&hits);
+        assert_eq!(1, items.len());
+        assert_eq!("预算审批", items[0].label, "标题当主行");
+        assert_eq!(
+            Some("…这轮把预算压到 8 万…".to_string()),
+            items[0].detail,
+            "片段当说明——列表里就靠它认出是哪一句"
+        );
+        assert_eq!(
+            PaletteAction::OpenSessionAtMatch {
+                uid: "sess_a".to_string(),
+                query: "预算".to_string(),
+            },
+            items[0].action,
+            "查询词要跟着一起带下去，否则跳过去以后还得再打一遍"
+        );
+    }
+
+    #[test]
+    fn body_hit_rows_survive_the_query_filter() {
+        let hits = vec![PaletteBodyHit {
+            uid: "sess_a".to_string(),
+            title: "一个标题里没有查询词的会话".to_string(),
+            snippet: "…这里有预算两个字…".to_string(),
+            query: "预算".to_string(),
+        }];
+        let items = body_match_items(&hits);
+
+        // 主行不含查询词，靠片段通过过滤——不然命中会被自己的过滤器筛掉。
+        assert_eq!(1, visible_items(&items, "预算").len());
+    }
+
+    #[test]
+    fn edge_selection_clamps_to_the_list() {
+        assert_eq!(0, edge_selection(5, false));
+        assert_eq!(4, edge_selection(5, true));
+        // 空列表：两个方向都留在 0，不做 `len - 1` 下溢。
+        assert_eq!(0, edge_selection(0, false));
+        assert_eq!(0, edge_selection(0, true));
     }
 
     #[test]

@@ -16,10 +16,10 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::{
-    App, AppContext, Context, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, Modifiers, ParentElement, PathPromptOptions, Pixels, Render,
-    SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Subscription, Window, div,
-    img, prelude::FluentBuilder, px, relative,
+    App, AppContext, Context, Entity, EntityInputHandler, EventEmitter, ExternalPaths, FocusHandle,
+    Focusable, InteractiveElement, IntoElement, Modifiers, ParentElement, PathPromptOptions,
+    Pixels, Render, SharedString, StatefulInteractiveElement, StyleRefinement, Styled,
+    Subscription, Window, div, img, prelude::FluentBuilder, px, relative,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
@@ -609,6 +609,18 @@ impl AgentInput {
         cx.notify();
     }
 
+    /// 当前可 `@` 引用的条目标签。
+    ///
+    /// 只为测试开门：补全菜单的内容由 provider 在后台算，测试直接从源头断言
+    /// 「工作区文件到底有没有并进来」比在菜单渲染层翻找稳。
+    #[cfg(test)]
+    pub(crate) fn mention_labels(&self) -> Vec<String> {
+        self.mentions
+            .iter()
+            .map(|mention| mention.label.clone())
+            .collect()
+    }
+
     /// 更新可引用的提及条目(同时刷新补全 provider)。
     pub fn set_mentions(&mut self, mentions: Vec<MentionItem>, cx: &mut Context<Self>) {
         self.mentions = Arc::new(mentions);
@@ -846,6 +858,39 @@ impl AgentInput {
     /// 文本中实际引用到的提及条目(其 `@label` 出现在文本里)。
     fn referenced_mentions(&self, text: &str) -> Vec<MentionItem> {
         referenced_mentions_in_text(text, self.mentions.as_ref())
+    }
+
+    /// 从 Finder 拖进来的文件。
+    ///
+    /// 图片落成附件;其余(文本 / PDF / 目录)把路径插到光标处——附件最终是作为
+    /// 多模态图片发给模型的,塞一个 PDF 进去只会在提交时报错,而路径写进正文
+    /// 更有用:agent 自己会去读。两种情况都算内容变化,防抖落草稿由上层接。
+    fn add_dropped_paths(
+        &mut self,
+        paths: &[PathBuf],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if paths.is_empty() {
+            return;
+        }
+        let mut attachments = Vec::new();
+        let mut texts = Vec::new();
+        for path in paths {
+            match ImageAttachment::from_path(path) {
+                Some(att) => attachments.push(att),
+                None => texts.push(format!("{} ", path.display())),
+            }
+        }
+        let staged = !attachments.is_empty() || !texts.is_empty();
+        self.add_attachments(attachments, cx);
+        for text in texts {
+            self.input_state
+                .update(cx, |state, cx| state.insert(text, window, cx));
+        }
+        if staged {
+            self.focus_input(window, cx);
+        }
     }
 
     fn add_attachments(&mut self, mut atts: Vec<ImageAttachment>, cx: &mut Context<Self>) {
@@ -3888,6 +3933,10 @@ impl Render for AgentInput {
         let input_state = self.input_state.read(cx);
         let input_focused = input_state.focus_handle(cx).is_focused(_window);
         let editor_height = composer_editor_height(input_state);
+        // 拖放悬停时的染色。`drag_over` 的闭包要 `'static`,所以先把颜色取成
+        // 本地副本(Hsla 是 Copy),而不是把 `theme` 移进去——后面还有别的闭包要用。
+        let drop_wash = theme.accent.opacity(0.08);
+        let drop_ring = theme.accent;
 
         // 输入卡片：带边框的那一块（工作区 / 分支 / 模型 / Worktree / 权限
         // 与附件、发送按钮同处卡片底部的**同一行**）。
@@ -3904,6 +3953,13 @@ impl Render for AgentInput {
                     .shadow_sm()
             })
             .when(self.edge_to_edge, |this| this.min_h_0())
+            // 从 Finder 拖文件进来:悬停给卡片染一层,松手落成附件或路径。
+            .drag_over::<ExternalPaths>(move |style, _, _, _| {
+                style.bg(drop_wash).border_color(drop_ring)
+            })
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                this.add_dropped_paths(paths.paths(), window, cx);
+            }))
             // 顶部：计划 / Agent / 上下文入口
             .child(context_bar)
             // 附件预览（如果有）
@@ -5360,5 +5416,52 @@ mod tests {
             input.remove_attachment(&attachment_id, cx);
         });
         assert!(input.read_with(cx, |input, _| input.previewed_attachment().is_none()));
+    }
+
+    /// 从 Finder 拖进来的文件分两路：图片成附件，其余把路径插到正文里。
+    ///
+    /// 非图片不做附件——附件最终是作为多模态图片发给模型的，塞一个 PDF 进去
+    /// 只会在提交时报错；路径写进正文，agent 自己去读更靠谱。
+    #[gpui::test]
+    fn dropped_files_split_into_attachments_and_paths(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let (root, cx) = cx.add_window_view(AgentInputLayoutRoot::new);
+        let cx: &mut VisualTestContext = cx;
+
+        // 真文件：拖放路径来自操作系统，构造出来的假路径读不出字节。
+        let dir = std::env::temp_dir().join(format!("navop-drop-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let image_path = dir.join("shot.png");
+        std::fs::write(&image_path, [137u8, 80, 78, 71]).expect("write png");
+        let text_path = dir.join("notes.txt");
+        std::fs::write(&text_path, b"hello").expect("write txt");
+
+        root.update_in(cx, |root, window, cx| {
+            root.input.update(cx, |input, cx| {
+                input.add_dropped_paths(&[image_path.clone(), text_path.clone()], window, cx);
+            });
+        });
+
+        root.read_with(cx, |root, cx| {
+            let input = root.input.read(cx);
+            let attachments = input.composer_attachments();
+            assert_eq!(1, attachments.len(), "图片落成一张附件");
+            assert_eq!("shot.png", attachments[0].name);
+
+            let text = input.composer_text(cx);
+            assert!(
+                text.contains("notes.txt"),
+                "非图片该把路径写进正文，实际是 {text:?}"
+            );
+            assert!(
+                !text.contains("shot.png"),
+                "图片走了附件，不该再重复写一份路径：{text:?}"
+            );
+        });
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -180,16 +180,22 @@ pub enum DateBucket {
     Yesterday,
     /// 今天往前数 7 天内(不含今天/昨天)。
     ThisWeek,
+    /// 本月(不含本周那一段)。
+    ThisMonth,
+    /// 今年(不含本月那一段)。
+    ThisYear,
     /// 更早。
     Earlier,
 }
 
 impl DateBucket {
     /// 展示顺序:越新越靠前。
-    pub const ORDER: [DateBucket; 4] = [
+    pub const ORDER: [DateBucket; 6] = [
         DateBucket::Today,
         DateBucket::Yesterday,
         DateBucket::ThisWeek,
+        DateBucket::ThisMonth,
+        DateBucket::ThisYear,
         DateBucket::Earlier,
     ];
 }
@@ -223,8 +229,42 @@ pub fn date_bucket(timestamp: i64, now: i64) -> DateBucket {
         DateBucket::Yesterday
     } else if timestamp >= today - 7 * DAY_SECS {
         DateBucket::ThisWeek
+    } else if same_local_month(timestamp, now) {
+        DateBucket::ThisMonth
+    } else if same_local_year(timestamp, now) {
+        DateBucket::ThisYear
     } else {
         DateBucket::Earlier
+    }
+}
+
+/// 两个时间戳是否落在同一个本地日历月。
+///
+/// 这里用日历边界而不是「30 天内」:月初第一天打开列表，上个月的会话不该
+/// 还挂在「本月」里——那正是用户用来确认时间感的锚点。
+fn same_local_month(a: i64, b: i64) -> bool {
+    use chrono::{Datelike as _, Local, TimeZone as _};
+
+    match (
+        Local.timestamp_opt(a, 0).single(),
+        Local.timestamp_opt(b, 0).single(),
+    ) {
+        (Some(a), Some(b)) => a.year() == b.year() && a.month() == b.month(),
+        // 取不到本地时间就保守地不并入：宁可落到「更早」，也别把老会话塞进「本月」。
+        _ => false,
+    }
+}
+
+/// 两个时间戳是否落在同一个本地日历年。
+fn same_local_year(a: i64, b: i64) -> bool {
+    use chrono::{Datelike as _, Local, TimeZone as _};
+
+    match (
+        Local.timestamp_opt(a, 0).single(),
+        Local.timestamp_opt(b, 0).single(),
+    ) {
+        (Some(a), Some(b)) => a.year() == b.year(),
+        _ => false,
     }
 }
 
@@ -255,6 +295,8 @@ pub fn date_bucket_label(bucket: DateBucket) -> String {
         DateBucket::Today => t!("AgentUi.date_today").to_string(),
         DateBucket::Yesterday => t!("AgentUi.date_yesterday").to_string(),
         DateBucket::ThisWeek => t!("AgentUi.date_this_week").to_string(),
+        DateBucket::ThisMonth => t!("AgentUi.date_this_month").to_string(),
+        DateBucket::ThisYear => t!("AgentUi.date_this_year").to_string(),
         DateBucket::Earlier => t!("AgentUi.date_earlier").to_string(),
     }
 }
@@ -574,9 +616,22 @@ mod group_tests {
         assert_eq!(date_bucket(today - DAY_SECS, now), DateBucket::Yesterday);
         assert_eq!(date_bucket(today - DAY_SECS - 1, now), DateBucket::ThisWeek);
         assert_eq!(date_bucket(today - 7 * DAY_SECS, now), DateBucket::ThisWeek);
+        // 基准日固定在 2023-11；下面这几段故意选在月中之后够远的地方，
+        // 免得撞上月/年边界。
         assert_eq!(
-            date_bucket(today - 7 * DAY_SECS - 1, now),
-            DateBucket::Earlier
+            date_bucket(today - 8 * DAY_SECS, now),
+            DateBucket::ThisMonth,
+            "上周但不是本月第一周 → 本月"
+        );
+        assert_eq!(
+            date_bucket(today - 90 * DAY_SECS, now),
+            DateBucket::ThisYear,
+            "同年不同月 → 今年"
+        );
+        assert_eq!(
+            date_bucket(today - 400 * DAY_SECS, now),
+            DateBucket::Earlier,
+            "跨年 → 更早"
         );
     }
 
@@ -585,7 +640,7 @@ mod group_tests {
         let now = local_midnight(1_700_000_000) + DAY_SECS / 2;
         let today = local_midnight(now);
         let sessions = vec![
-            SessionSummary::new("old", "a", today - 30 * DAY_SECS),
+            SessionSummary::new("old", "a", today - 400 * DAY_SECS),
             SessionSummary::new("today", "b", today + 60),
             SessionSummary::new("yesterday", "c", today - 60),
         ];
@@ -600,7 +655,7 @@ mod group_tests {
                 DateBucket::Earlier
             ],
             order,
-            "固定顺序、空桶（最近 7 天）不返回"
+            "固定顺序、空桶（最近 7 天 / 本月 / 今年）不返回"
         );
         assert_eq!(
             vec!["today"],

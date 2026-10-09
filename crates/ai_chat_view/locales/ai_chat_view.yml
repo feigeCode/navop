@@ -499,6 +499,14 @@ AgentUi:
     en: Copy code
     zh-CN: 复制代码
     zh-HK: 複製程式碼
+  transcript_selection_count:
+    en: "%{count} selected"
+    zh-CN: "已选 %{count} 条"
+    zh-HK: "已選 %{count} 條"
+  copy:
+    en: Copy
+    zh-CN: 复制
+    zh-HK: 複製
   copy_message:
     en: Copy message
     zh-CN: 复制消息
@@ -1307,6 +1315,14 @@ AgentUi:
     en: Previous 7 days
     zh-CN: 最近 7 天
     zh-HK: 最近 7 天
+  date_this_month:
+    en: This month
+    zh-CN: 本月
+    zh-HK: 本月
+  date_this_year:
+    en: This year
+    zh-CN: 今年
+    zh-HK: 今年
   date_earlier:
     en: Earlier
     zh-CN: 更早

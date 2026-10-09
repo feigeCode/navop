@@ -20,8 +20,7 @@ use gpui::{
     ease_out_quint, img, px,
 };
 use gpui_component::{
-    ActiveTheme, Icon, Sizable, Size, clipboard::Clipboard, h_flex, scroll::Scrollbar,
-    spinner::Spinner, v_flex,
+    ActiveTheme, Icon, Sizable, Size, clipboard::Clipboard, h_flex, spinner::Spinner, v_flex,
 };
 use one_assets::IconName;
 use rust_i18n::t;
@@ -40,6 +39,13 @@ fn trim_leading_blank_lines(content: &str) -> &str {
         content_start += line.len();
     }
     &content[content_start..]
+}
+
+/// 单条消息该被复制的文本；不可复制的消息（工具卡片等）返回 `None`。
+///
+/// 对 crate 内公开：块级选中复制要复用同一口径，别让两种复制给出不同答案。
+pub(crate) fn message_copy_text(message: &ChatMessageUI) -> Option<SharedString> {
+    message_copy_value(message)
 }
 
 fn message_copy_value<E: MessageExtension>(
@@ -207,6 +213,7 @@ pub(crate) fn message_scroll_container(
     items: Vec<AnyElement>,
     overlays: Vec<AnyElement>,
     empty_state: Option<AnyElement>,
+    cx: &App,
 ) -> AnyElement {
     // 一条消息都没有时的起手态：没有内容可滚，于是让这一列撑满高度、内容居中，
     // 而不是像消息那样从上往下堆。
@@ -254,8 +261,8 @@ pub(crate) fn message_scroll_container(
                 .top_0()
                 .right_0()
                 .bottom_0()
-                .w(px(16.0))
-                .child(Scrollbar::vertical(scroll_handle)),
+                .w(crate::scrollbar::track_extent())
+                .child(crate::scrollbar::overlay_scrollbar(scroll_handle, cx)),
         )
         .children(overlays)
         .into_any_element()
@@ -304,7 +311,7 @@ fn render_messages_with_layout(
         );
     }
 
-    message_scroll_container(scroll_handle, layout, items, Vec::new(), None)
+    message_scroll_container(scroll_handle, layout, items, Vec::new(), None, cx)
 }
 
 /// 新消息进场动效时长。

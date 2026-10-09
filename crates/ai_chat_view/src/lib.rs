@@ -66,6 +66,7 @@ mod resource_builder;
 #[cfg(test)]
 mod resource_builder_tests;
 mod resource_display;
+mod scrollbar;
 mod send_button;
 mod session_service;
 pub mod session_shortcut;
@@ -75,6 +76,7 @@ mod subagent_detail_panel;
 mod theme;
 mod transcript_scroll;
 mod transcript_search;
+mod transcript_selection;
 mod turn;
 mod usage;
 mod usage_history;
@@ -220,4 +222,5 @@ pub fn init(cx: &mut App) {
     find_shortcut::init(cx);
     session_shortcut::init(cx);
     command_palette::init(cx);
+    transcript_selection::init(cx);
 }

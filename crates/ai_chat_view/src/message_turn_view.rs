@@ -17,8 +17,9 @@ use std::time::Duration;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Animation, AnimationExt, AnyElement, App, InteractiveElement, IntoElement, ParentElement,
-    ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Window, div, ease_out_quint,
+    Animation, AnimationExt, AnyElement, App, InteractiveElement, IntoElement, MouseButton,
+    ParentElement, ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Window, div,
+    ease_out_quint,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::{ActiveTheme, Icon, Sizable, h_flex, v_flex};
@@ -36,6 +37,7 @@ use crate::message_tool_group::{message_render_items_for, render_tool_call_group
 use crate::message_view::{MessageListLayout, message_scroll_container, render_one};
 use crate::theme::{AgentChatTheme, resolve_agent_chat_theme, sp};
 use crate::transcript_search::TranscriptSearch;
+use crate::transcript_selection::TranscriptSelectionHandle;
 use crate::turn::{TurnProjection, TurnTimings, breakdown_text, project_turns};
 
 /// 折叠头最多列几个工具名。
@@ -92,6 +94,10 @@ pub struct MessageListContext<'a> {
     pub search: Option<&'a TranscriptSearch>,
     /// 会话内搜索的浮层（findbar）。由宿主提供，这里只负责摆到正确位置。
     pub findbar: Option<AnyElement>,
+    /// 块级选中的共享状态；提供后消息块可拖拽选中（见 `transcript_selection`）。
+    pub selection: Option<&'a TranscriptSelectionHandle>,
+    /// 选中后的操作条（「复制 / 取消」）。同样只负责摆位。
+    pub selection_bar: Option<AnyElement>,
     /// 空转录时的起手态；只在列表一条都没有时用得上。
     ///
     /// 由宿主决定画不画（连接中由骨架屏负责，见 `empty_state` 的判定）。
@@ -117,6 +123,8 @@ impl<'a> MessageListContext<'a> {
             turn_chrome: true,
             search: None,
             findbar: None,
+            selection: None,
+            selection_bar: None,
             restorable_turns: None,
             empty_state: None,
         }
@@ -177,6 +185,16 @@ impl<'a> MessageListContext<'a> {
         self
     }
 
+    pub fn with_selection(mut self, selection: Option<&'a TranscriptSelectionHandle>) -> Self {
+        self.selection = selection;
+        self
+    }
+
+    pub fn with_selection_bar(mut self, bar: Option<AnyElement>) -> Self {
+        self.selection_bar = bar;
+        self
+    }
+
     pub fn with_restorable_turns(mut self, turns: Option<&'a HashSet<String>>) -> Self {
         self.restorable_turns = turns;
         self
@@ -226,11 +244,21 @@ pub fn render_message_list(
     if let Some(findbar) = context.findbar.take() {
         overlays.push(findbar);
     }
+    if let Some(bar) = context.selection_bar.take() {
+        overlays.push(bar);
+    }
 
     let empty_state = (items.is_empty())
         .then(|| context.empty_state.take())
         .flatten();
-    message_scroll_container(scroll_handle, context.layout, items, overlays, empty_state)
+    message_scroll_container(
+        scroll_handle,
+        context.layout,
+        items,
+        overlays,
+        empty_state,
+        cx,
+    )
 }
 
 /// 搜索命中在轮次上的标记。
@@ -260,6 +288,53 @@ fn slot(child: AnyElement) -> AnyElement {
         .into_any_element()
 }
 
+/// 可选中消息块的槽位：铺选中底色，并挂按下 / 拖动 / 松手三个鼠标事件。
+///
+/// 底色铺在槽位上而不是正文里：正文本就没有字符区间，整块着色才与「选中的是块」
+/// 这个事实一致，也不至于让 Markdown 里的代码块背景打架。
+fn selectable_slot(
+    child: AnyElement,
+    message_id: &str,
+    selection: &TranscriptSelectionHandle,
+    theme: &AgentChatTheme,
+) -> AnyElement {
+    let selected = selection.contains(message_id);
+    let id_for_down = message_id.to_string();
+    let id_for_move = message_id.to_string();
+    let handle_down = selection.clone();
+    let handle_move = selection.clone();
+    let handle_up = selection.clone();
+    div()
+        // 静态选择器给测试定位「第一个可拖选的块」；消息 id 是动态的，
+        // 而 `debug_bounds` 只吃 `&'static str`。
+        .debug_selector(|| "ai-chat-message-selectable".to_string())
+        .min_w_0()
+        .self_stretch()
+        .flex_shrink_0()
+        .rounded_md()
+        .when(selected, |this| this.bg(theme.accent.opacity(0.14)))
+        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+            handle_down.begin(&id_for_down, window, cx);
+        })
+        .on_mouse_move(move |event, _window, cx| {
+            // 只在左键按着时扩张：GPUI 的 move 事件不带按钮状态之外的信息，
+            // `pressed_button` 正好回答「现在是不是在拖」。
+            if event.pressed_button == Some(MouseButton::Left) {
+                handle_move.extend(&id_for_move, cx);
+            }
+        })
+        .on_mouse_up(MouseButton::Left, move |_, _window, cx| {
+            handle_up.finish(cx);
+        })
+        .child(
+            div()
+                .debug_selector(|| "ai-chat-message-slot".to_string())
+                .min_w_0()
+                .child(child),
+        )
+        .into_any_element()
+}
+
 fn render_turn(
     turn: &TurnProjection<'_>,
     highlight: TurnHighlight,
@@ -274,14 +349,18 @@ fn render_turn(
         if context.turn_chrome {
             children.push(render_turn_head(turn, theme));
         }
-        children.push(slot(render_one(
+        let head_element = render_one(
             head,
             context.code_actions,
             context.on_action.as_ref(),
             theme,
             window,
             cx,
-        )));
+        );
+        children.push(match context.selection {
+            Some(selection) => selectable_slot(head_element, &head.id, selection, theme),
+            None => slot(head_element),
+        });
     }
 
     if turn.has_process() {
@@ -289,14 +368,18 @@ fn render_turn(
     }
 
     for message in &turn.answer {
-        children.push(slot(render_one(
+        let element = render_one(
             message,
             context.code_actions,
             context.on_action.as_ref(),
             theme,
             window,
             cx,
-        )));
+        );
+        children.push(match context.selection {
+            Some(selection) => selectable_slot(element, &message.id, selection, theme),
+            None => slot(element),
+        });
     }
 
     if context.turn_chrome {

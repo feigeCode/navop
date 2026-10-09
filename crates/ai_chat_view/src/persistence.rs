@@ -940,6 +940,22 @@ pub fn drafted_session_uids(cx: &App) -> std::collections::HashSet<String> {
         .unwrap_or_default()
 }
 
+/// 按正文子串搜会话（命令面板的「正文命中」段用）。
+///
+/// 大小写不敏感，最近更新的在前；`limit` 是命中**上限**，SQL 侧会多扫几倍再截断
+/// （见 `AgentSessionRepository::search_snapshots`）。存储缺失时返回空——搜索是
+/// 加分项，不该因为拿不到库就把面板搞崩。
+pub fn search_session_bodies(
+    cx: &App,
+    needle: &str,
+    limit: usize,
+) -> Vec<one_core::llm::chat_history::AgentSessionBodyMatch> {
+    let Some(repo) = agent_session_repository(cx) else {
+        return Vec::new();
+    };
+    repo.search_snapshots(needle, limit).unwrap_or_default()
+}
+
 /// 删掉某会话的草稿（提交成功 / 会话被删时调用）。
 pub fn clear_composer_draft(cx: &App, uid: &str) {
     if let Some(repo) = composer_draft_repository(cx) {
