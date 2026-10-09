@@ -42,6 +42,8 @@ pub(super) enum DocumentKey {
     Diff { repository: PathBuf, path: PathBuf },
     /// 稳定单例 key：同一会话的 last-turn review 复用同一标签页刷新。
     SnapshotDiff,
+    /// 单个文件的审阅 diff（本轮快照里裁出来的那一段）；按文件分页。
+    ReviewFile(PathBuf),
 }
 
 impl DocumentKey {
@@ -53,6 +55,9 @@ impl DocumentKey {
                 .join("workspace-explorer-diff")
                 .join(path),
             Self::SnapshotDiff => PathBuf::from("navop://last-turn-review"),
+            // 不能写成 `"navop://review".join(path)`：`join` 遇到绝对路径会整段
+            // 替换，于是和 `Self::File` 撞成同一个身份、审阅页会把文件页顶掉。
+            Self::ReviewFile(path) => PathBuf::from(format!("navop://review{}", path.display())),
         }
     }
 
@@ -63,6 +68,7 @@ impl DocumentKey {
                 format!("{} · {}", repository.display(), path.display())
             }
             Self::SnapshotDiff => "last-turn".to_string(),
+            Self::ReviewFile(path) => path.display().to_string(),
         }
     }
 }
@@ -73,8 +79,18 @@ pub(super) enum LoadRequest {
         repository: GitRepository,
         change: GitChange,
     },
-    /// 已就绪的整轮 diff 文本（如 last-turn checkpoint diff），无需再查 git。
+    /// 已就绪的 patch 原文（整轮 checkpoint diff、单文件审阅切片……），无需再查 git。
     SnapshotDiff { text: String },
+}
+
+impl LoadRequest {
+    /// 是否为差异文档（只读快照）。
+    ///
+    /// 复用同名标签页时，文件与差异要分开对待：差异页每次打开都换成新的 patch，
+    /// 文件页只能聚焦（重载会吞掉用户的未保存改动）。
+    pub(super) fn is_diff(&self) -> bool {
+        matches!(self, Self::Diff { .. } | Self::SnapshotDiff { .. })
+    }
 }
 
 /// 请求编辑器展示某条 Git 变更的 diff。

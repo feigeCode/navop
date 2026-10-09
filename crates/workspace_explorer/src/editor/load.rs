@@ -80,6 +80,34 @@ impl WorkspaceEditor {
         );
     }
 
+    /// 打开（或聚焦已打开的）单个文件的审阅 diff 标签页。
+    ///
+    /// 内容是**本轮快照里该文件那一段**（由
+    /// [`crate::WorkspaceExplorer::open_review_file`] 裁好送进来），所以按文件
+    /// 分页：不同文件各占一页，同一文件再来一遍就刷新它。
+    pub fn open_review_diff(
+        &mut self,
+        path: PathBuf,
+        diff_text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let name = t!(
+            "WorkspaceExplorer.editor.diff_tab",
+            name = display_name(&path)
+        )
+        .to_string();
+        self.open_document(
+            PendingDocument {
+                key: DocumentKey::ReviewFile(path),
+                display_name: name,
+                load_request: LoadRequest::SnapshotDiff { text: diff_text },
+            },
+            window,
+            cx,
+        );
+    }
+
     fn open_document(
         &mut self,
         document: PendingDocument,
@@ -94,8 +122,18 @@ impl WorkspaceEditor {
         let active_index = active_index_after_open(&identities, &document.key.identity_path());
         if active_index < self.tabs.len() {
             self.active_tab = active_index;
-            self.focus_editor(window, cx);
-            cx.notify();
+            // 差异页是只读快照：同一 key 再次打开意味着来了一份新 patch（每轮的
+            // last-turn diff 刷新同一页），必须换掉内容——只聚焦会让面板一直停在
+            // 旧的那一轮。文件页相反：重载会吞掉用户未保存的改动，只能聚焦。
+            if document.load_request.is_diff() && self.tabs[active_index].read_only {
+                let tab = &mut self.tabs[active_index];
+                tab.load_request = document.load_request;
+                tab.display_name = document.display_name;
+                self.reload_tab(active_index, window, cx);
+            } else {
+                self.focus_editor(window, cx);
+                cx.notify();
+            }
             return;
         }
         let was_empty = self.tabs.is_empty();

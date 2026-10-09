@@ -5,6 +5,7 @@ mod frame;
 mod header;
 mod load;
 mod render;
+mod review;
 
 use crate::WorkspaceEditor;
 use crate::backend::{WorkspaceBackend, local_backend};
@@ -33,6 +34,7 @@ use clipboard::FileClipboard;
 use file_actions::{
     ExplorerConfirmation, ExplorerConfirmationOperation, FileActionEditor, FileActionEditorMode,
 };
+use review::{patch_section_for_path, same_path};
 
 pub(crate) use clipboard::keybindings;
 pub use frame::{ExplorerFramePlacement, WorkspaceExplorerEvent};
@@ -896,6 +898,75 @@ impl WorkspaceExplorer {
         });
         cx.emit(WorkspaceExplorerEvent::DocumentRequested);
         cx.notify();
+    }
+
+    /// 打开某个「改动文件」的审阅视图。
+    ///
+    /// 三个来源按可信度排序：
+    ///
+    /// 1. 本轮 checkpoint 快照里该文件那一段——Review 面板展示的就是这份 diff；
+    /// 2. 本轮还没结束（快照未落地）时，退到 Git 变更里同名文件相对 HEAD 的 diff；
+    /// 3. 两条都落空（未纳入版本控制、路径对不上）才退回打开文件本身。
+    ///
+    /// 第 3 档不是顺手加的：审阅入口必须点了有事发生，但也**不能**用空 diff 冒充
+    /// 「这个文件没改」——那恰恰是这个入口之前的样子（点了只打开源文件，看不出
+    /// 哪里变了，再点一次连源文件都已经在前台，于是「点了没反应」）。
+    pub fn open_review_file(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
+        let requested = PathBuf::from(path.as_str());
+        if let Some(patch) = self.review_patch_for(&requested) {
+            self.editor.update(cx, |editor, cx| {
+                editor.open_review_diff(requested, patch, window, cx);
+            });
+            cx.emit(WorkspaceExplorerEvent::DocumentRequested);
+            cx.notify();
+            return;
+        }
+        if let Some(change) = self.change_for_path(&path) {
+            self.open_change(change, window, cx);
+            return;
+        }
+        self.open_file(PathBuf::from(path), window, cx);
+    }
+
+    /// 最近一轮快照 patch 里该文件那一段。
+    ///
+    /// 用的是**最后落地的**那份快照（`last_turn_review`）——逐轮 diff 只为最近一轮
+    /// 留了原文，历史轮的任何入口点进来都拿到它。比「打开文件」接近用户点的那件事，
+    /// 但不等于「那一段历史时刻的 diff」；要更准就得为每一轮都留 diff，那是另一件事。
+    fn review_patch_for(&self, path: &Path) -> Option<String> {
+        let review = self.last_turn_review.as_ref()?;
+        let section = self
+            .relative_candidates(path)
+            .into_iter()
+            .find_map(|relative| patch_section_for_path(&review.diff, &relative))?;
+        Some(section.to_owned())
+    }
+
+    /// Git 变更列表里与该路径对应的那条；仓库不存在或路径不在变更里时为 `None`。
+    ///
+    /// 仓库不存在要返回 `None` 而不是「随便挑一条」：`open_change` 在没有仓库时
+    /// 会静默返回，那正好又造出一个「点了没反应」。
+    fn change_for_path(&self, path: &str) -> Option<GitChange> {
+        self.repository.as_ref()?;
+        let candidates = self.relative_candidates(Path::new(path));
+        self.changes
+            .iter()
+            .find(|change| {
+                let change_path = change.path.to_string_lossy();
+                candidates
+                    .iter()
+                    .any(|wanted| same_path(&change_path, wanted))
+            })
+            .cloned()
+    }
+
+    /// 请求路径相对「工作区根」「仓库根」的两种候选写法（按此优先级）。
+    fn relative_candidates(&self, path: &Path) -> Vec<String> {
+        let mut roots = vec![self.root.as_path()];
+        if let Some(repository) = self.repository.as_ref() {
+            roots.push(repository.root.as_path());
+        }
+        review::relative_candidates(path, &roots)
     }
 }
 

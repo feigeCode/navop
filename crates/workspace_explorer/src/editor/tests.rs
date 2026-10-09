@@ -14,6 +14,25 @@ fn file_and_diff_documents_use_distinct_identity_paths() {
 }
 
 #[test]
+fn review_diff_identity_never_collides_with_the_file_tab() {
+    let path = PathBuf::from("/repo/src/lib.rs");
+    let file = DocumentKey::File(path.clone());
+    let review = DocumentKey::ReviewFile(path.clone());
+    let other = DocumentKey::ReviewFile(PathBuf::from("/repo/src/main.rs"));
+
+    assert_ne!(
+        file.identity_path(),
+        review.identity_path(),
+        "审阅页不能顶掉同名文件页"
+    );
+    assert_ne!(
+        review.identity_path(),
+        other.identity_path(),
+        "不同文件各占一页"
+    );
+}
+
+#[test]
 fn file_size_is_compact() {
     assert_eq!("12 B", format_size(12));
     assert_eq!("2.0 KiB", format_size(2048));
@@ -188,7 +207,7 @@ fn snapshot_diff_reuses_one_tab_across_turns(cx: &mut TestAppContext) {
         editor.update_in(&mut cx, |editor, window, cx| {
             editor.open_snapshot_diff(
                 format!("turn {turn}"),
-                "diff --git a/x b/x\n--- a/x\n+++ b/x\n".to_string(),
+                snapshot_patch(turn),
                 window,
                 cx,
             );
@@ -196,10 +215,78 @@ fn snapshot_diff_reuses_one_tab_across_turns(cx: &mut TestAppContext) {
         cx.run_until_parked();
     }
 
-    let tab_count = editor.read_with(&cx, |editor, _| editor.tabs.len());
+    let (tab_count, text, name) = editor.read_with(&cx, |editor, _| {
+        let tab = editor.active_tab().expect("review tab should be active");
+        (editor.tabs.len(), tab.saved_text.clone(), tab.display_name.clone())
+    });
     assert_eq!(
         1,
         tab_count,
         "last-turn review 必须复用同一标签页，而不是每轮开新页"
     );
+    assert_eq!(
+        snapshot_patch(2),
+        text,
+        "复用同一页不等于停在第一页：每轮都得换成这一轮的 patch"
+    );
+    assert_eq!("turn 2", name, "标签标题也要跟着这一轮走");
+}
+
+/// 每轮一份可区分的 patch：内容不同才测得出「刷新了没有」。
+fn snapshot_patch(turn: usize) -> String {
+    format!(
+        "diff --git a/x.rs b/x.rs\n--- a/x.rs\n+++ b/x.rs\n@@ -1,1 +1,1 @@\n-old\n+turn {turn}\n"
+    )
+}
+
+#[gpui::test]
+fn reopening_a_file_keeps_unsaved_edits(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        notes::init(cx);
+    });
+    let path = test_file_path();
+    std::fs::write(&path, "fn main() {}\n").unwrap();
+    let (window, editor) = open_test_editor(cx);
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+
+    cx.update(|window, cx| {
+        editor.update(cx, |editor, cx| editor.open_file(path.clone(), window, cx));
+    });
+    cx.run_until_parked();
+    let state = editor.read_with(&cx, |editor, _| {
+        editor
+            .active_tab()
+            .expect("file tab should be active")
+            .editor
+            .clone()
+            .expect("file tab owns an editor")
+    });
+    cx.update(|window, cx| {
+        state.update(cx, |state, cx| {
+            state.set_value("fn main() { /* edited */ }\n".to_string(), window, cx);
+        });
+    });
+
+    cx.update(|window, cx| {
+        editor.update(cx, |editor, cx| editor.open_file(path.clone(), window, cx));
+    });
+    cx.run_until_parked();
+
+    let (tab_count, text, dirty) = editor.read_with(&cx, |editor, cx| {
+        let tab = editor.active_tab().expect("file tab should be active");
+        (
+            editor.tabs.len(),
+            tab.editor.as_ref().unwrap().read(cx).text().to_string(),
+            tab.is_dirty(cx),
+        )
+    });
+    assert_eq!(1, tab_count, "同一个文件只占一页");
+    assert_eq!(
+        "fn main() { /* edited */ }\n",
+        text,
+        "重开文件只能聚焦，不能重载——重载会吞掉未保存的改动"
+    );
+    assert!(dirty);
+    let _ = std::fs::remove_file(path);
 }
