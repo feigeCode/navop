@@ -230,9 +230,9 @@ pub(crate) fn build_ai_workbench_shell(
                     });
                 }
                 // 用户点了改动摘要里的某个文件：先把审阅面板切到前台，再让
-                // Explorer 打开它的**审阅 diff**（本轮快照里该文件那一段）。
-                // 取哪一份 diff 是 Explorer 的事——它手里才有 checkpoint 与
-                // Git 变更；宿主只负责把面板摆好。
+                // Explorer 打开它的**审阅 diff**（该轮快照里该文件那一段）。
+                // 取哪一份 diff 是 Explorer 的事——它手里才有逐轮 checkpoint 与
+                // Git 变更；宿主只负责把面板摆好，并把「哪一轮」原样转交。
                 //
                 // 用户点了子代理卡片的「查看推理过程」：把详情面板切到前台。
                 // 面板内容由它自己按事件里的子会话 id 现取，这里不搬数据。
@@ -243,11 +243,17 @@ pub(crate) fn build_ai_workbench_shell(
                 }
                 // 打开文档需要窗口，而这里只有 `App`：推迟到下一帧再取窗口，
                 // 避免在当前窗口的更新过程中重入。
-                DefaultAgentChatPanelEvent::OpenFileInReview { path } => {
+                DefaultAgentChatPanelEvent::OpenFileInReview {
+                    session_id,
+                    path,
+                    turn_id,
+                } => {
                     shell_for_open.update(cx, |shell, cx| {
                         shell.reveal_panel(WorkbenchPanelKind::Review, cx);
                     });
+                    let session_id = session_id.clone();
                     let path = path.clone();
+                    let turn_id = turn_id.clone();
                     let explorer = explorer_for_files.clone();
                     cx.defer(move |cx| {
                         let Some(window) = crate::app_init::resolve_navop_window(cx) else {
@@ -255,10 +261,15 @@ pub(crate) fn build_ai_workbench_shell(
                             return;
                         };
                         let _ = window.update(cx, |_, window, cx| {
-                            explorer
-                                .update(cx, |explorer, cx| {
-                                    explorer.open_review_file(path.clone(), window, cx)
-                                });
+                            explorer.update(cx, |explorer, cx| {
+                                explorer.open_review_file(
+                                    &session_id,
+                                    path.clone(),
+                                    turn_id.as_deref(),
+                                    window,
+                                    cx,
+                                )
+                            });
                         });
                     });
                 }

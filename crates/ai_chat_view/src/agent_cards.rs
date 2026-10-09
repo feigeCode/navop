@@ -450,7 +450,7 @@ impl ChatCard for ToolCard {
             // 再摊开一遍等于同一件事说两遍,而且更难看。
             if expanded_diff {
                 let diff_blocks = build_diff_blocks(&data, &self.diff_states, cx);
-                card = card.child(tool_card_diff_block(&diff_blocks, cx));
+                card = card.child(tool_card_diff_block(&diff_blocks, msg.id, cx));
             } else {
                 card = card.child(tool_card_detail_block(&data, window, cx));
             }
@@ -1483,7 +1483,7 @@ fn diff_language_name(path: &str) -> Option<String> {
     Some(extension.to_lowercase())
 }
 
-fn tool_card_diff_block(blocks: &[DiffBlockState], cx: &App) -> AnyElement {
+fn tool_card_diff_block(blocks: &[DiffBlockState], message_id: &str, cx: &App) -> AnyElement {
     let theme = active_agent_chat_theme(cx);
     v_flex()
         .debug_selector(|| "agent-tool-diff".to_string())
@@ -1498,7 +1498,7 @@ fn tool_card_diff_block(blocks: &[DiffBlockState], cx: &App) -> AnyElement {
                 .rounded_md()
                 .bg(theme.code_background)
                 .overflow_hidden()
-                .child(tool_diff_file_header(&block.change, cx))
+                .child(tool_diff_file_header(&block.change, message_id, cx))
                 // 单栏(Unified)渲染,行号与增删标记由 DiffState 决定;头部用上面的
                 // 自绘文件头,保持与整卡一致的信息密度与「打开」动作。`state` 缺席
                 // 只可能是「有路径但无展示行」,此时仅显示文件头。
@@ -1532,10 +1532,15 @@ fn tool_card_diff_block(blocks: &[DiffBlockState], cx: &App) -> AnyElement {
 }
 
 /// diff 块的文件头:完整路径 + 新建标记 + `+N −M` + 「打开」。
-fn tool_diff_file_header(change: &FileChangeSummary, cx: &App) -> AnyElement {
+fn tool_diff_file_header(
+    change: &FileChangeSummary,
+    message_id: &str,
+    cx: &App,
+) -> AnyElement {
     let theme = active_agent_chat_theme(cx);
     let path = change.path.clone();
     let can_open = !path.is_empty();
+    let message_id = message_id.to_string();
     h_flex()
         .w_full()
         .min_w_0()
@@ -1592,8 +1597,13 @@ fn tool_diff_file_header(change: &FileChangeSummary, cx: &App) -> AnyElement {
                     .xsmall()
                     .label(t!("AgentUi.open_in_review").to_string())
                     .on_click(move |_, window, cx| {
-                        window
-                            .dispatch_action(Box::new(OpenFileInReview { path: path.clone() }), cx);
+                        window.dispatch_action(
+                            Box::new(OpenFileInReview {
+                                path: path.clone(),
+                                message_id: message_id.clone(),
+                            }),
+                            cx,
+                        );
                     }),
             )
         })
@@ -1602,13 +1612,19 @@ fn tool_diff_file_header(change: &FileChangeSummary, cx: &App) -> AnyElement {
 
 /// 「打开这个文件的审阅」请求。
 ///
-/// 卡片渲染器不持有宿主 Entity,也不该知道审阅面板在哪;它只把路径发出去,
-/// 由 `AgentChatView` 转成视图事件、宿主决定落位——顺带也决定了这份 diff
-/// 从哪份快照里裁。
+/// 卡片渲染器不持有宿主 Entity,也不该知道审阅面板在哪;它只把路径与**自己的
+/// 消息 id**发出去,由 `AgentChatView` 转成视图事件、宿主决定落位——顺带也决定了
+/// 这份 diff 从哪一轮的快照里裁。
+///
+/// 带 `message_id` 而不是直接带 turn id:`ChatCard::render` 只拿到 `CardMessage`
+/// (id + 内容),拿不到轮次视图。让视图用消息 id 反查它落在哪一轮,好过给
+/// `render_one` / `render_card` 这条共用渲染路径再加一个只为这一处服务的参数。
 #[derive(Clone, Action, PartialEq, Eq, Deserialize)]
 #[action(namespace = ai_chat_view, no_json)]
 pub struct OpenFileInReview {
     pub path: String,
+    /// 发起这条请求的卡片消息 id。
+    pub message_id: String,
 }
 
 /// 卡片上的「查看推理过程」请求。

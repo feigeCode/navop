@@ -143,12 +143,17 @@ pub enum AgentChatViewEvent {
         session_id: String,
         turn_id: String,
     },
-    /// 用户点了改动摘要里的某个文件：请求宿主在审阅面板里打开它。
+    /// 用户点了改动摘要里的某个文件：请求宿主在审阅面板里打开**该文件的改动**。
     ///
-    /// 与 [`Self::RestoreTurn`] 同理,视图只转发路径 —— 打开文件需要窗口,
-    /// 面板在哪、怎么开都由宿主决定。
+    /// 与 [`Self::RestoreTurn`] 同理,视图只转发定位信息 —— 打开文档需要窗口,
+    /// 面板在哪、这份 diff 从哪一轮的快照里裁,都由宿主决定。
+    ///
+    /// `turn_id` 就是「裁哪一轮」：点历史轮的改动文件时，要的是**那一刻**的 diff。
+    /// 给不出来（历史恢复的轮次没有 turn id）时为 `None`，宿主退到最近一轮。
     OpenFileInReview {
+        session_id: String,
         path: String,
+        turn_id: Option<String>,
     },
     /// 用户点了子代理卡片上的「查看推理过程」：请求宿主把子代理详情面板切到前台。
     ///
@@ -1732,13 +1737,21 @@ impl AgentChatView {
         });
 
         // 工具卡片里的 diff 文件头只有一个「打开」按钮,它不知道审阅面板在哪,
-        // 只把路径发出来。这里再往上转一手,由宿主决定落位。
+        // 也不知道自己在哪一轮 —— 只把路径与自己的消息 id 发出来。这里用消息 id
+        // 反查轮次，再往上转一手,由宿主决定落位与裁哪一轮的快照。
         let view = cx.weak_entity();
         let app: &mut App = cx;
         app.on_action(move |action: &OpenFileInReview, cx: &mut App| {
             let path = action.path.clone();
-            let _ = view.update(cx, |_this, cx| {
-                cx.emit(AgentChatViewEvent::OpenFileInReview { path });
+            let message_id = action.message_id.clone();
+            let _ = view.update(cx, |this, cx| {
+                let turn_id = this.turn_id_for_message(&message_id);
+                let session_id = this.current_session.clone();
+                cx.emit(AgentChatViewEvent::OpenFileInReview {
+                    session_id,
+                    path,
+                    turn_id,
+                });
             });
         });
 
@@ -3916,6 +3929,23 @@ impl AgentChatView {
         }
     }
 
+    /// 某条消息属于哪一轮。
+    ///
+    /// 工具卡片的「在 Review 中打开」手里只有路径和自己的消息 id —— `ChatCard::render`
+    /// 拿到的 `CardMessage` 里没有轮次视图。这里用消息 id 反查它落在哪一轮，
+    /// 好过给 `render_one` / `render_card` 这条共用渲染路径再塞一个只为这一处
+    /// 服务的参数（那要牵动七处调用点）。
+    ///
+    /// 消息自身的 `turn_id` 就是权威值（见 `ChatMessageUIGeneric::turn_id` 的注释：
+    /// 不得用数组下标或渲染顺序推断）；历史恢复出来的消息没有它，返回 `None`。
+    fn turn_id_for_message(&self, message_id: &str) -> Option<String> {
+        self.transcript
+            .messages
+            .iter()
+            .find(|message| message.id == message_id)
+            .and_then(|message| message.turn_id.clone())
+    }
+
     /// 处理轮次视图抛出的交互请求。
     fn apply_message_list_action(&mut self, action: MessageListAction, cx: &mut Context<Self>) {
         match action {
@@ -3931,8 +3961,12 @@ impl AgentChatView {
                     turn_id,
                 });
             }
-            MessageListAction::OpenFileInReview { path } => {
-                cx.emit(AgentChatViewEvent::OpenFileInReview { path });
+            MessageListAction::OpenFileInReview { path, turn_id } => {
+                cx.emit(AgentChatViewEvent::OpenFileInReview {
+                    session_id: self.current_session.clone(),
+                    path,
+                    turn_id,
+                });
             }
         }
         cx.notify();
@@ -9405,12 +9439,15 @@ mod tests {
             cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
 
         use std::sync::{Arc, Mutex};
-        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let seen: Arc<Mutex<Vec<(String, Option<String>)>>> = Arc::new(Mutex::new(Vec::new()));
         let seen_for_subscribe = seen.clone();
         cx.update(|_window: &mut gpui::Window, cx: &mut gpui::App| {
             cx.subscribe(&view, move |_, event: &AgentChatViewEvent, _cx| {
-                if let AgentChatViewEvent::OpenFileInReview { path } = event {
-                    seen_for_subscribe.lock().unwrap().push(path.clone());
+                if let AgentChatViewEvent::OpenFileInReview { path, turn_id, .. } = event {
+                    seen_for_subscribe
+                        .lock()
+                        .unwrap()
+                        .push((path.clone(), turn_id.clone()));
                 }
             })
             .detach();
@@ -9420,6 +9457,7 @@ mod tests {
             view.apply_message_list_action(
                 MessageListAction::OpenFileInReview {
                     path: "src/lib.rs".into(),
+                    turn_id: Some("turn-3".into()),
                 },
                 cx,
             );
@@ -9427,9 +9465,50 @@ mod tests {
         cx.run_until_parked();
 
         assert_eq!(
-            vec!["src/lib.rs".to_string()],
+            vec![("src/lib.rs".to_string(), Some("turn-3".to_string()))],
             seen.lock().unwrap().clone(),
-            "视图只发路径，落到哪个面板由宿主决定"
+            "视图只发路径与轮次，落到哪个面板、裁哪一份快照由宿主决定"
+        );
+    }
+
+    #[gpui::test]
+    fn a_message_resolves_to_the_turn_it_belongs_to(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update(cx, |view, cx| {
+            let session_id = view.session_id.clone();
+            view.apply_runtime_event(
+                RuntimeEvent::AssistantMessage {
+                    session_id,
+                    turn_id: agent_runtime::TurnId::from_string("turn-card"),
+                    text: "改完了".into(),
+                },
+                cx,
+            );
+        });
+        cx.run_until_parked();
+
+        let message_id = view.read_with(cx, |view, _| {
+            view.transcript
+                .messages
+                .last()
+                .map(|message| message.id.clone())
+                .expect("一条助手消息")
+        });
+
+        assert_eq!(
+            Some("turn-card".to_string()),
+            view.read_with(cx, |view, _| view.turn_id_for_message(&message_id)),
+            "工具卡片拿自己的消息 id 反查轮次，反查结果决定审阅面板裁哪一轮的快照"
+        );
+        assert_eq!(
+            None,
+            view.read_with(cx, |view, _| view.turn_id_for_message("no-such-message")),
+            "查不到的消息不能猜一个轮次出来 —— 猜错就是拿别人的 diff 冒充"
         );
     }
 

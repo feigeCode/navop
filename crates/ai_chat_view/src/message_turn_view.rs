@@ -51,7 +51,14 @@ pub enum MessageListAction {
     /// 用户点击「回到这一轮」：把工作区恢复到该轮结束时的快照。
     RestoreTurn { turn_id: String },
     /// 用户点击本轮改动摘要里的某个文件：在审阅面板里打开这个文件的 diff。
-    OpenFileInReview { path: String },
+    ///
+    /// 带上 `turn_id` 是要**哪一轮**的 diff —— 点历史轮的文件时，审阅面板必须裁
+    /// 那一轮的快照，而不是最近一轮的。历史恢复出来的轮次没有 turn id，给不出就
+    /// 不装懂（发 `None`，由 Explorer 退到最近一轮）。
+    OpenFileInReview {
+        path: String,
+        turn_id: Option<String>,
+    },
 }
 
 pub type MessageListActionHandler = Rc<dyn Fn(MessageListAction, &mut Window, &mut App)>;
@@ -558,7 +565,13 @@ fn render_turn_foot(
                 }),
         )
         .when(!changed_files.is_empty(), |this| {
-            this.child(render_turn_changes(&changed_files, theme, context, cx))
+            this.child(render_turn_changes(
+                &changed_files,
+                turn.turn_id.as_deref(),
+                theme,
+                context,
+                cx,
+            ))
         })
         .into_any_element()
 }
@@ -567,8 +580,13 @@ fn render_turn_foot(
 ///
 /// 只列前几个文件：页脚是导航，不是清单。剩下的交给审阅面板——逐个列全只会把
 /// 页脚变成一堵墙。
+/// 本轮的改动文件行。
+///
+/// `turn_id` 跟着每个文件按钮一起发出去：同一个文件在第 2 轮和第 5 轮改出来的
+/// 不是同一份 diff，审阅面板得知道该裁哪一轮的快照。
 fn render_turn_changes(
     changed_files: &[FileChangeSummary],
+    turn_id: Option<&str>,
     theme: &AgentChatTheme,
     context: &MessageListContext<'_>,
     cx: &mut App,
@@ -578,6 +596,7 @@ fn render_turn_changes(
     let removed: u32 = changed_files.iter().map(|change| change.removed).sum();
     let hidden = changed_files.len().saturating_sub(MAX_LISTED);
     let on_action = context.on_action.clone();
+    let turn_id = turn_id.map(str::to_owned);
 
     h_flex()
         .debug_selector(|| "ai-chat-turn-changes".to_string())
@@ -608,6 +627,7 @@ fn render_turn_changes(
                     let label = compact_path(&change.path);
                     let path = change.path.clone();
                     let on_action = on_action.clone();
+                    let turn_id = turn_id.clone();
                     Button::new(SharedString::from(format!("turn-change-{path}")))
                         .ghost()
                         .xsmall()
@@ -618,6 +638,7 @@ fn render_turn_changes(
                                 on_action(
                                     MessageListAction::OpenFileInReview {
                                         path: path.clone(),
+                                        turn_id: turn_id.clone(),
                                     },
                                     window,
                                     cx,

@@ -39,7 +39,14 @@ pub enum DefaultAgentChatPanelEvent {
     /// 用户点了某轮页脚的「回到这一轮」。宿主据此让工作区浏览器回滚。
     RestoreTurn { session_id: String, turn_id: String },
     /// 用户点了改动摘要里的某个文件。宿主据此在审阅面板里打开**这个文件的 diff**。
-    OpenFileInReview { path: String },
+    ///
+    /// `turn_id` 指明裁哪一轮的快照：点历史轮的文件时要的是那一刻的 diff，
+    /// 而不是最近一轮的。`None` 表示给不出轮次，由 Explorer 退到最近一轮。
+    OpenFileInReview {
+        session_id: String,
+        path: String,
+        turn_id: Option<String>,
+    },
     /// 用户点了子代理卡片上的「查看推理过程」。宿主据此把子代理详情面板切到前台。
     SubagentDetailRequested {
         acp_session_id: String,
@@ -803,9 +810,15 @@ impl DefaultAgentChatPanel {
                                                 turn_id: turn_id.clone(),
                                             });
                                         }
-                                        AgentChatViewEvent::OpenFileInReview { path } => {
+                                        AgentChatViewEvent::OpenFileInReview {
+                                            session_id,
+                                            path,
+                                            turn_id,
+                                        } => {
                                             cx.emit(DefaultAgentChatPanelEvent::OpenFileInReview {
+                                                session_id: session_id.clone(),
                                                 path: path.clone(),
+                                                turn_id: turn_id.clone(),
                                             });
                                         }
                                         AgentChatViewEvent::SubagentDetailRequested { acp_session_id, title } => {
