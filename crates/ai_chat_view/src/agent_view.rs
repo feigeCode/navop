@@ -23,10 +23,10 @@ use agent_runtime::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Anchor, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, FontWeight,
-    InteractiveElement, IntoElement, MouseButton, NavigationDirection, ParentElement, Render,
-    ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Subscription, Task, Window,
-    div, px,
+    Anchor, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    FontWeight, InteractiveElement, IntoElement, MouseButton, MouseDownEvent, NavigationDirection,
+    ParentElement, Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled,
+    Subscription, Task, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, Selectable, Sizable, WindowExt as _,
@@ -76,6 +76,9 @@ use crate::agent_skills::AgentSkillState;
 use crate::agent_transcript::AgentTranscript;
 use crate::bridge::build_runtime_from_llm_provider;
 use crate::code_block::{CodeBlockAction, CodeBlockActionRegistry};
+use crate::command_palette::{
+    CloseCommandPalette, PaletteSelectNext, PaletteSelectPrev, ToggleCommandPalette,
+};
 use crate::expansion_state::ExpansionState;
 use crate::find_shortcut::{
     AI_CHAT_SEARCH_CONTEXT, FindNextInTranscript, FindPreviousInTranscript, ToggleTranscriptFind,
@@ -1333,6 +1336,14 @@ pub struct AgentChatView {
     pub(super) message_image_preview: Option<crate::message_image::MessageImage>,
     /// findbar 的查询输入框。
     findbar_input: Entity<InputState>,
+    /// 命令面板是否打开。
+    pub(super) palette_open: bool,
+    /// 面板里当前高亮的是第几条（按 `visible_items` 的下标）。
+    pub(super) palette_selection: usize,
+    /// 面板查询框里的文本；由 `InputEvent::Change` 同步，渲染只读它。
+    pub(super) palette_query: String,
+    /// 命令面板的查询输入框。
+    palette_input: Entity<InputState>,
     /// 侧边栏是否显示「已归档」会话(否则显示活跃会话)。
     show_archived: bool,
     /// 侧边栏视图(窄面板)模式:头部走新建对话 / 历史记录紧凑布局,不常驻会话列表。
@@ -1619,6 +1630,12 @@ impl AgentChatView {
             InputState::new(window, cx).placeholder(t!("AgentUi.findbar_placeholder").to_string())
         });
 
+        // 命令面板的查询框。与 findbar 同理**不**设 `clean_on_escape()`：
+        // 那会吞掉 escape 的冒泡，面板就收不到「关掉自己」这个动作。
+        let palette_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t!("AgentUi.palette_placeholder").to_string())
+        });
+
         // 会话切换器 overlay 的焦点句柄（打开时收焦点，让 tab/enter/escape 到位）。
         let session_switcher_focus = cx.focus_handle();
 
@@ -1628,6 +1645,13 @@ impl AgentChatView {
                 &findbar_input,
                 |this: &mut Self, _, event: &InputEvent, cx| {
                     this.on_findbar_input_event(event, cx);
+                },
+            ),
+            cx.subscribe_in(
+                &palette_input,
+                window,
+                |this: &mut Self, _, event: &InputEvent, window, cx| {
+                    this.on_palette_input_event(event, window, cx);
                 },
             ),
         ];
@@ -1710,6 +1734,10 @@ impl AgentChatView {
             usage_history: None,
             message_image_preview: None,
             findbar_input,
+            palette_open: false,
+            palette_selection: 0,
+            palette_query: String::new(),
+            palette_input,
             show_archived: false,
             sidebar_mode,
             show_sidebar_header,
@@ -2367,6 +2395,197 @@ impl AgentChatView {
             }
             _ => {}
         }
+    }
+
+    /// 命令面板查询框的事件。
+    ///
+    /// `Enter` 执行当前高亮；上下键不在输入框这层处理——它们由绑定层转发成
+    /// `PaletteSelectPrev/Next`（见 `command_palette` 模块的说明）。
+    fn on_palette_input_event(
+        &mut self,
+        event: &InputEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            InputEvent::Change => {
+                self.palette_query = self.palette_input.read(cx).value().to_string();
+                // 查询变了就把高亮拉回第一条：留着旧下标的话，高亮会落在
+                // 一个跟刚才不同的条目上。
+                self.palette_selection = 0;
+                cx.notify();
+            }
+            InputEvent::PressEnter { .. } => {
+                self.run_palette_selection(window, cx);
+            }
+            _ => {}
+        }
+    }
+
+    /// 打开命令面板：清掉上一次的查询，把焦点交给查询框。
+    pub(super) fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.palette_open = true;
+        self.palette_selection = 0;
+        self.palette_query.clear();
+        self.palette_input
+            .update(cx, |state, cx| state.set_value("", window, cx));
+        let focus_handle = self.palette_input.read(cx).focus_handle(cx);
+        focus_handle.focus(window, cx);
+        cx.notify();
+    }
+
+    /// 关面板并把焦点还给 composer。
+    ///
+    /// 浮层一消失，焦点就落在一个已经出树的输入框上（等价于没有焦点），
+    /// 键盘事件再没人接——连下一次 `cmd-k` 都会静默失效。
+    pub(super) fn close_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.palette_open {
+            return;
+        }
+        self.palette_open = false;
+        self.palette_query.clear();
+        self.palette_selection = 0;
+        let input = self.input.clone();
+        input.update(cx, |input, cx| input.focus_input(window, cx));
+        cx.notify();
+    }
+
+    /// 快捷键入口：开着就关，关着就开。
+    pub(super) fn toggle_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.palette_open {
+            self.close_command_palette(window, cx);
+        } else {
+            self.open_command_palette(window, cx);
+        }
+    }
+
+    fn move_palette_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
+        if !self.palette_open {
+            return;
+        }
+        let len = self.palette_items().len();
+        self.palette_selection =
+            crate::command_palette::move_selection(self.palette_selection, len, delta);
+        cx.notify();
+    }
+
+    /// 面板里的候选：固定命令在前，会话（最近更新在前）在后。
+    ///
+    /// 当前会话不列：跳到自己等于什么都没发生，占一行还被高亮到最前面。
+    fn palette_items(&self) -> Vec<crate::command_palette::PaletteItem> {
+        let mut summaries: Vec<&SessionSummary> = self
+            .sessions
+            .iter()
+            .filter(|session| session.id != self.current_session)
+            .collect();
+        summaries.sort_by_key(|session| std::cmp::Reverse(session.updated_at));
+        let sessions: Vec<crate::command_palette::PaletteSession> = summaries
+            .into_iter()
+            .take(crate::command_palette::PALETTE_MAX_SESSIONS)
+            .map(|session| crate::command_palette::PaletteSession {
+                uid: session.id.clone(),
+                title: session.name.to_string(),
+                detail: session
+                    .external_agent
+                    .as_deref()
+                    .map(str::to_string)
+                    .or_else(|| {
+                        session
+                            .workspace_root
+                            .as_deref()
+                            .and_then(crate::command_palette::workspace_label)
+                    }),
+            })
+            .collect();
+
+        let mut items = crate::command_palette::command_items(self.show_archived);
+        items.extend(crate::command_palette::session_items(&sessions));
+        items
+    }
+
+    /// 执行面板里的一条。
+    fn run_palette_item(
+        &mut self,
+        item: &crate::command_palette::PaletteItem,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::command_palette::PaletteAction;
+
+        // 先关面板：关的动作会把焦点还给 composer，之后要抢焦点的入口
+        // （会话内搜索）再自己抢。
+        self.close_command_palette(window, cx);
+        match &item.action {
+            PaletteAction::NewSession => self.new_session(cx),
+            PaletteAction::OpenSession(uid) => self.switch_session(uid, cx),
+            PaletteAction::OpenUsageHistory => {
+                self.usage_history = Some(crate::usage_history::collect_usage_history(cx));
+            }
+            PaletteAction::ToggleFindInSession => self.open_findbar(window, cx),
+            PaletteAction::ToggleArchivedSessions => self.toggle_archived(cx),
+        }
+        cx.notify();
+    }
+
+    /// 执行当前高亮那条（回车 / 点击）。
+    fn run_palette_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let visible =
+            crate::command_palette::visible_items(&self.palette_items(), &self.palette_query);
+        let index = self.palette_selection.min(visible.len().saturating_sub(1));
+        let Some(item) = visible.get(index).cloned() else {
+            return;
+        };
+        self.run_palette_item(&item, window, cx);
+    }
+
+    /// 命令面板浮层；没打开时返回 `None`。
+    fn render_command_palette_overlay(
+        &self,
+        theme: &AgentChatTheme,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        if !self.palette_open {
+            return None;
+        }
+
+        // `Input` 自身不吃 `debug_selector`，包一层拿测试锚点。
+        let query_input = div()
+            .debug_selector(|| "ai-chat-palette-input".to_string())
+            .w_full()
+            .min_w_0()
+            .px(sp(6.0))
+            .py(sp(4.0))
+            .border_b_1()
+            .border_color(theme.border)
+            .child(
+                Input::new(&self.palette_input)
+                    .small()
+                    .w_full()
+                    .focus_bordered(false),
+            )
+            .into_any_element();
+
+        let items =
+            crate::command_palette::visible_items(&self.palette_items(), &self.palette_query);
+        let run = cx.listener(
+            |this, item: &crate::command_palette::PaletteItem, window, cx| {
+                this.run_palette_item(item, window, cx);
+            },
+        );
+        let on_run: Rc<dyn Fn(&crate::command_palette::PaletteItem, &mut Window, &mut App)> =
+            Rc::new(move |item, window, cx| run(item, window, cx));
+        let close = cx.listener(|this, _: &MouseDownEvent, window, cx| {
+            this.close_command_palette(window, cx);
+        });
+
+        Some(crate::command_palette::render_command_palette(
+            theme,
+            &items,
+            self.palette_selection,
+            query_input,
+            move |event, window, cx| close(event, window, cx),
+            on_run,
+        ))
     }
 
     fn on_input_event(
@@ -7083,6 +7302,7 @@ impl Render for AgentChatView {
             let attachment_preview = self.render_attachment_preview(&chat_theme, cx);
             let message_image_preview = self.render_message_image_preview(&chat_theme, cx.entity());
             let usage_history = self.render_usage_history(&chat_theme, cx.entity());
+            let command_palette = self.render_command_palette_overlay(&chat_theme, cx);
             // 侧边栏视图:紧凑头部(新建对话 / 历史记录) + 消息 + 输入。
             let header = self
                 .show_sidebar_header
@@ -7105,6 +7325,20 @@ impl Render for AgentChatView {
                 }))
                 .on_action(cx.listener(|this, _: &FindPreviousInTranscript, _, cx| {
                     this.step_search(false, cx);
+                }))
+                // 命令面板：快捷开合 + 上下选择。动作处理挂在面板根上，
+                // 这样面板关着时按键也有地方接。
+                .on_action(cx.listener(|this, _: &ToggleCommandPalette, window, cx| {
+                    this.toggle_command_palette(window, cx);
+                }))
+                .on_action(cx.listener(|this, _: &CloseCommandPalette, window, cx| {
+                    this.close_command_palette(window, cx);
+                }))
+                .on_action(cx.listener(|this, _: &PaletteSelectPrev, _, cx| {
+                    this.move_palette_selection(-1, cx);
+                }))
+                .on_action(cx.listener(|this, _: &PaletteSelectNext, _, cx| {
+                    this.move_palette_selection(1, cx);
                 }))
                 // 会话导航：cmd-[ / cmd-]（可自定义）与鼠标后退/前进键。
                 .on_action(cx.listener(|this, _: &NavigateSessionBack, _, cx| {
@@ -7135,6 +7369,7 @@ impl Render for AgentChatView {
                 )
                 .when_some(attachment_preview, |root, overlay| root.child(overlay))
                 .when_some(message_image_preview, |root, overlay| root.child(overlay))
+                .when_some(command_palette, |root, overlay| root.child(overlay))
                 .when_some(usage_history, |root, overlay| root.child(overlay))
                 .child(
                     v_flex()
@@ -7153,6 +7388,7 @@ impl Render for AgentChatView {
             let attachment_preview = self.render_attachment_preview(&chat_theme, cx);
             let message_image_preview = self.render_message_image_preview(&chat_theme, cx.entity());
             let usage_history = self.render_usage_history(&chat_theme, cx.entity());
+            let command_palette = self.render_command_palette_overlay(&chat_theme, cx);
             // 普通全宽视图:常驻左侧会话栏 + 主区(标题 / 消息 / 输入)。
             // 工作台外壳接管会话栏时整块隐藏（`sidebar_suppressed`）。
             let sidebar = (!self.sidebar_suppressed).then(|| self.render_sidebar(cx));
@@ -7183,6 +7419,20 @@ impl Render for AgentChatView {
                 }))
                 .on_action(cx.listener(|this, _: &FindPreviousInTranscript, _, cx| {
                     this.step_search(false, cx);
+                }))
+                // 命令面板：快捷开合 + 上下选择。动作处理挂在面板根上，
+                // 这样面板关着时按键也有地方接。
+                .on_action(cx.listener(|this, _: &ToggleCommandPalette, window, cx| {
+                    this.toggle_command_palette(window, cx);
+                }))
+                .on_action(cx.listener(|this, _: &CloseCommandPalette, window, cx| {
+                    this.close_command_palette(window, cx);
+                }))
+                .on_action(cx.listener(|this, _: &PaletteSelectPrev, _, cx| {
+                    this.move_palette_selection(-1, cx);
+                }))
+                .on_action(cx.listener(|this, _: &PaletteSelectNext, _, cx| {
+                    this.move_palette_selection(1, cx);
                 }))
                 // 会话导航：cmd-[ / cmd-]（可自定义）与鼠标后退/前进键。
                 .on_action(cx.listener(|this, _: &NavigateSessionBack, _, cx| {
@@ -7229,6 +7479,7 @@ impl Render for AgentChatView {
                 )
                 .when_some(attachment_preview, |root, overlay| root.child(overlay))
                 .when_some(message_image_preview, |root, overlay| root.child(overlay))
+                .when_some(command_palette, |root, overlay| root.child(overlay))
                 .when_some(usage_history, |root, overlay| root.child(overlay))
         }
     }
@@ -15810,6 +16061,82 @@ mod tests {
         assert!(condition(), "GPUI test condition was not reached");
     }
 
+    /// 命令面板：换键开合、方向键选择、输入过滤、回车执行、escape 关掉。
+    #[gpui::test]
+    fn gpui_command_palette_lists_runs_and_closes(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let cx: &mut VisualTestContext = cx;
+
+        assert!(
+            cx.debug_bounds("ai-chat-palette").is_none(),
+            "the palette must stay hidden until asked for"
+        );
+
+        // 焦点要等一帧才算落到已渲染帧上，否则按键派发的起点是空的（同 findbar 测试）。
+        focus_composer(&view, cx);
+        draw_frame(cx);
+
+        cx.dispatch_action(ToggleCommandPalette);
+        draw_frame(cx);
+        assert!(
+            cx.debug_bounds("ai-chat-palette").is_some(),
+            "the toggle action itself must open the palette"
+        );
+        assert!(view.read_with(cx, |view, _| view.palette_open));
+        assert_eq!(0, view.read_with(cx, |view, _| view.palette_selection));
+
+        // 查询框上有焦点，方向键必须走面板自己的绑定（复合上下文），
+        // 不能被 `Input` 自己的光标移动吃掉。
+        cx.simulate_keystrokes("down");
+        draw_frame(cx);
+        assert_eq!(1, view.read_with(cx, |view, _| view.palette_selection));
+        cx.simulate_keystrokes("up");
+        draw_frame(cx);
+        assert_eq!(0, view.read_with(cx, |view, _| view.palette_selection));
+
+        // 命不中就给空态，而不是留一排点了没反应的行。
+        cx.simulate_input("zzz-no-such-command");
+        draw_frame(cx);
+        assert!(cx.debug_bounds("ai-chat-palette-empty").is_some());
+        assert!(cx.debug_bounds("ai-chat-palette-row-0").is_none());
+        assert_eq!(0, view.read_with(cx, |view, _| view.palette_selection));
+
+        // escape 关面板：浮层消失后焦点必须有人接，否则下一次按键静默失效。
+        cx.simulate_keystrokes("escape");
+        draw_frame(cx);
+        assert!(!view.read_with(cx, |view, _| view.palette_open));
+        assert!(cx.debug_bounds("ai-chat-palette").is_none());
+
+        // 再开一次：这次走真实按键，确认换键在 composer 焦点下真的绑上了。
+        cx.simulate_keystrokes(palette_keystroke());
+        draw_frame(cx);
+        assert!(view.read_with(cx, |view, _| view.palette_open));
+
+        // 面板自己也在换键上下文里：开着再按一次要关掉（而不是什么都不发生）。
+        cx.simulate_keystrokes(palette_keystroke());
+        draw_frame(cx);
+        assert!(!view.read_with(cx, |view, _| view.palette_open));
+
+        // 执行高亮那条：第四条命令是「显示/隐藏已归档会话」。
+        cx.simulate_keystrokes(palette_keystroke());
+        draw_frame(cx);
+        view.update(cx, |view, cx| {
+            view.palette_selection = 3;
+            cx.notify();
+        });
+        draw_frame(cx);
+        view.update_in(cx, |view, window, cx| {
+            view.run_palette_selection(window, cx);
+        });
+        draw_frame(cx);
+        assert!(!view.read_with(cx, |view, _| view.palette_open));
+        assert!(view.read_with(cx, |view, _| view.showing_archived_sessions()));
+        assert!(cx.debug_bounds("ai-chat-palette").is_none());
+    }
+
     // ===== 决策栏（DecisionDock）=====
 
     /// 决策栏与时间线卡片是**同一个决策**：点决策栏的按钮，走的就是内联卡片用的那个 action。
@@ -16036,6 +16363,14 @@ mod tests {
     fn draw_frame(cx: &mut VisualTestContext) {
         let _ = cx.debug_bounds("ai-chat-messages-scroll");
         cx.run_until_parked();
+    }
+
+    fn palette_keystroke() -> &'static str {
+        if cfg!(target_os = "macos") {
+            "cmd-k"
+        } else {
+            "ctrl-k"
+        }
     }
 
     fn open_find_keystroke() -> &'static str {

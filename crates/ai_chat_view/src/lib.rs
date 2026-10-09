@@ -38,6 +38,7 @@ mod chat_state;
 mod chat_view;
 mod code_block;
 mod code_block_parse;
+mod command_palette;
 mod connection_selector;
 mod default_panel;
 #[cfg(test)]
@@ -218,4 +219,5 @@ pub fn init(cx: &mut App) {
     // / `session_shortcut::refresh_keybindings`。
     find_shortcut::init(cx);
     session_shortcut::init(cx);
+    command_palette::init(cx);
 }

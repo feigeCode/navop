@@ -279,6 +279,38 @@ AgentUi:
     en: Add tests for what I just changed
     zh-CN: 给刚改的地方补测试
     zh-HK: 給剛改的地方補測試
+  palette_placeholder:
+    en: Type a command or session name
+    zh-CN: 输入命令或会话名
+    zh-HK: 輸入指令或會話名
+  palette_new_session:
+    en: New session
+    zh-CN: 新建会话
+    zh-HK: 新增會話
+  palette_find:
+    en: Search in this session
+    zh-CN: 在本会话内搜索
+    zh-HK: 在本會話內搜尋
+  palette_usage_history:
+    en: Usage history
+    zh-CN: 用量历史
+    zh-HK: 用量歷史
+  palette_show_archived:
+    en: Show archived sessions
+    zh-CN: 显示已归档会话
+    zh-HK: 顯示已封存會話
+  palette_hide_archived:
+    en: Hide archived sessions
+    zh-CN: 隐藏已归档会话
+    zh-HK: 隱藏已封存會話
+  palette_empty:
+    en: No matching command
+    zh-CN: 没有匹配的命令
+    zh-HK: 沒有符合的指令
+  palette_hint:
+    en: "↑↓ select · Enter to run · esc to close"
+    zh-CN: "↑↓ 选择 · 回车执行 · esc 关闭"
+    zh-HK: "↑↓ 選擇 · 回車執行 · esc 關閉"
   empty_title:
     en: What should we work on?
     zh-CN: 想做点什么？
