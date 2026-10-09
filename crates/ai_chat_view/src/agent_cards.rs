@@ -1600,10 +1600,11 @@ fn tool_diff_file_header(change: &FileChangeSummary, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-/// 后端的「打开这个文件」请求。
+/// 「打开这个文件的审阅」请求。
 ///
 /// 卡片渲染器不持有宿主 Entity,也不该知道审阅面板在哪;它只把路径发出去,
-/// 由 `AgentChatView` 转成视图事件、宿主决定落位。
+/// 由 `AgentChatView` 转成视图事件、宿主决定落位——顺带也决定了这份 diff
+/// 从哪份快照里裁。
 #[derive(Clone, Action, PartialEq, Eq, Deserialize)]
 #[action(namespace = ai_chat_view, no_json)]
 pub struct OpenFileInReview {

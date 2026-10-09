@@ -38,7 +38,7 @@ pub enum DefaultAgentChatPanelEvent {
     TurnFinished { session_id: String, turn_id: String, success: bool },
     /// 用户点了某轮页脚的「回到这一轮」。宿主据此让工作区浏览器回滚。
     RestoreTurn { session_id: String, turn_id: String },
-    /// 用户点了改动摘要里的某个文件。宿主据此在审阅面板里打开它。
+    /// 用户点了改动摘要里的某个文件。宿主据此在审阅面板里打开**这个文件的 diff**。
     OpenFileInReview { path: String },
     /// 用户点了子代理卡片上的「查看推理过程」。宿主据此把子代理详情面板切到前台。
     SubagentDetailRequested {

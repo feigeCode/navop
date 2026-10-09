@@ -50,7 +50,7 @@ pub enum MessageListAction {
     ScrollToLatest,
     /// 用户点击「回到这一轮」：把工作区恢复到该轮结束时的快照。
     RestoreTurn { turn_id: String },
-    /// 用户点击本轮改动摘要里的某个文件：在审阅面板里打开它。
+    /// 用户点击本轮改动摘要里的某个文件：在审阅面板里打开这个文件的 diff。
     OpenFileInReview { path: String },
 }
 
