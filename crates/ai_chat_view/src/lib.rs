@@ -48,6 +48,7 @@ mod html_code_block;
 mod input;
 mod message;
 mod message_code_actions;
+mod message_image;
 mod message_tool_group;
 mod message_turn_view;
 mod message_view;

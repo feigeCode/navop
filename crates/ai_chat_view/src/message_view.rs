@@ -14,8 +14,8 @@ use std::time::Duration;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Animation, AnimationExt, AnyElement, App, Div, InteractiveElement, IntoElement, ParentElement,
-    ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Window, div, ease_out_quint,
-    px,
+    ScrollHandle, SharedString, StatefulInteractiveElement, Styled, StyledImage, Window, div,
+    ease_out_quint, img, px,
 };
 use gpui_component::{
     ActiveTheme, Icon, Sizable, Size, clipboard::Clipboard, h_flex, scroll::Scrollbar,
@@ -384,9 +384,10 @@ fn render_user_message_themed<E: MessageExtension>(
     msg: &ChatMessageUIGeneric<E>,
     theme: &AgentChatTheme,
 ) -> AnyElement {
-    let bubble_width = user_message_bubble_width(&msg.content);
+    let bubble_width = user_message_bubble_width(&msg.content, msg.images.len());
     let plain_text_html = user_plain_text_html(&msg.content);
     let copy = render_message_copy(msg);
+    let images = msg.images.clone();
 
     h_flex()
         .debug_selector(|| "ai-chat-user-row".to_string())
@@ -410,22 +411,85 @@ fn render_user_message_themed<E: MessageExtension>(
                 .text_color(theme.foreground)
                 .child(
                     div()
-                        .debug_selector(|| "ai-chat-user-plain-text".to_string())
                         .w_full()
                         .min_w_0()
-                        .whitespace_normal()
-                        .child(
-                            themed_html(
-                                SharedString::from(format!("user-msg-{}", msg.id)),
-                                plain_text_html,
-                                theme,
+                        // 图片放在正文上方：跟聊天软件里「图 + 一句话」的读法一致。
+                        .when(!images.is_empty(), |this| {
+                            this.child(render_user_images(&images, &msg.id, theme))
+                        })
+                        .when(!msg.content.trim().is_empty(), |this| {
+                            this.child(
+                                div()
+                                    .debug_selector(|| "ai-chat-user-plain-text".to_string())
+                                    .w_full()
+                                    .min_w_0()
+                                    .whitespace_normal()
+                                    .child(
+                                        themed_html(
+                                            SharedString::from(format!("user-msg-{}", msg.id)),
+                                            plain_text_html,
+                                            theme,
+                                        )
+                                        .selectable(true)
+                                        .w_full(),
+                                    ),
                             )
-                            .selectable(true)
-                            .w_full(),
-                        ),
+                        }),
                 ),
         )
         .into_any_element()
+}
+
+/// 用户消息里的图片：定高缩略图，多张横向排开、放不下就换行。
+///
+/// 尺寸写死而不是「按原图比例铺开」：一屏里几条带图消息如果各自撑到原尺寸，
+/// 转录就没法看了。点开放大留给后续（要给视图加一层预览状态），
+/// 这里先保证「看得见、看得清是什么」。
+fn render_user_images(
+    images: &[crate::message_image::MessageImage],
+    message_id: &str,
+    theme: &AgentChatTheme,
+) -> AnyElement {
+    let mut row = h_flex()
+        .debug_selector(|| format!("ai-chat-user-images:{message_id}"))
+        .w_full()
+        .min_w_0()
+        .flex_wrap()
+        .gap_2();
+    for (index, item) in images.iter().enumerate() {
+        let mut tile = div()
+            .debug_selector({
+                let message_id = message_id.to_string();
+                move || format!("ai-chat-user-image:{message_id}:{index}")
+            })
+            .flex_none()
+            .overflow_hidden()
+            .rounded_md()
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.inset)
+            .child(
+                img(item.image.clone())
+                    .w(USER_IMAGE_MAX_EDGE)
+                    .h(USER_IMAGE_MAX_EDGE)
+                    .object_fit(gpui::ObjectFit::ScaleDown),
+            );
+        if let Some(name) = item.name.as_deref().filter(|name| !name.is_empty()) {
+            tile = tile.child(
+                div()
+                    .w(USER_IMAGE_MAX_EDGE)
+                    .min_w_0()
+                    .px_2()
+                    .py_1()
+                    .text_xs()
+                    .truncate()
+                    .text_color(theme.text_ghost)
+                    .child(name.to_string()),
+            );
+        }
+        row = row.child(tile);
+    }
+    row.into_any_element()
 }
 
 fn user_plain_text_html(text: &str) -> String {
@@ -453,13 +517,20 @@ fn user_plain_text_html(text: &str) -> String {
     html
 }
 
-fn user_message_bubble_width(content: &str) -> gpui::Pixels {
+/// 用户消息图片槽的边长上限。
+///
+/// 240 是「一眼看得出是什么」与「不至于占掉半屏」之间的折中；配合
+/// `ObjectFit::ScaleDown`，小图不会被放大成马赛克，大图等比缩到框内。
+const USER_IMAGE_MAX_EDGE: gpui::Pixels = px(240.0);
+
+fn user_message_bubble_width(content: &str, image_count: usize) -> gpui::Pixels {
     const MIN_WIDTH: f32 = 128.0;
     const MAX_WIDTH: f32 = 820.0;
     const HORIZONTAL_PADDING_AND_SLACK: f32 = 32.0;
     const ASCII_CHAR_WIDTH: f32 = 8.0;
     const WIDE_CHAR_WIDTH: f32 = 16.0;
     const WIDTH_SAFETY_FACTOR: f32 = 1.08;
+    const IMAGE_SLOT_SLACK: f32 = 248.0;
 
     let content_width = content
         .lines()
@@ -475,6 +546,14 @@ fn user_message_bubble_width(content: &str) -> gpui::Pixels {
                 .sum::<f32>()
         })
         .fold(0.0, f32::max);
+
+    // 带图的短句（「看下这个」）按字数算会很窄，图被挤成一条；
+    // 至少要放得下一个图槽。
+    let content_width = if image_count > 0 {
+        content_width.max(IMAGE_SLOT_SLACK)
+    } else {
+        content_width
+    };
 
     px(
         (content_width * WIDTH_SAFETY_FACTOR + HORIZONTAL_PADDING_AND_SLACK)

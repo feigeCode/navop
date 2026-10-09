@@ -4,6 +4,8 @@ use std::hash::{Hash, Hasher};
 
 use uuid::Uuid;
 
+use crate::message_image::MessageImage;
+
 pub const MESSAGE_RENDER_LIMIT: usize = 60;
 pub const MESSAGE_RENDER_STEP: usize = 40;
 
@@ -42,6 +44,11 @@ pub struct ChatMessageUIGeneric<E: MessageExtension = NoExtension> {
     pub turn_id: Option<String>,
     pub role: ChatRole,
     pub content: String,
+    /// 用户消息附带的图片（别的角色恒为空）。
+    ///
+    /// 放在正文之外而不是以 markdown data URL 塞进 `content`：转录里的图要能
+    /// 单独排版与放大，混进文本会让气泡宽度按 base64 长度算。
+    pub images: Vec<MessageImage>,
     pub reasoning_content: String,
     pub variant: MessageVariant,
     pub is_streaming: bool,
@@ -113,6 +120,7 @@ impl<E: MessageExtension + Default> ChatMessageUIGeneric<E> {
             turn_id: None,
             role,
             content: content.into(),
+            images: Vec::new(),
             reasoning_content: String::new(),
             variant,
             is_streaming,
@@ -143,6 +151,12 @@ impl<E: MessageExtension> ChatMessageUIGeneric<E> {
 
     pub fn with_streaming(mut self, is_streaming: bool) -> Self {
         self.is_streaming = is_streaming;
+        self
+    }
+
+    /// 挂上图片；空集合等于没图。
+    pub fn with_images(mut self, images: Vec<MessageImage>) -> Self {
+        self.images = images;
         self
     }
 

@@ -2689,7 +2689,7 @@ impl AgentChatView {
             self.push_user_to_session(
                 &session_uid,
                 &submission.text,
-                submission.images.len(),
+                &submission.images,
                 &self.resources.clone(),
             );
             self.push_system_to_session(&session_uid, t!("AgentUi.acp_steer_sent").to_string());
@@ -2941,8 +2941,8 @@ impl AgentChatView {
 
         self.push_user_to_session(
             session_uid,
-            &submission.text,
-            submission.images.len(),
+            submission.text.as_str(),
+            &submission.images,
             &self.resources.clone(),
         );
         if session_uid == self.current_session.as_str() {
@@ -3001,8 +3001,8 @@ impl AgentChatView {
         }
         self.push_user_to_session(
             session_uid,
-            &submission.text,
-            submission.images.len(),
+            submission.text.as_str(),
+            &submission.images,
             &resources,
         );
         self.upsert_live_summary(
@@ -3112,15 +3112,16 @@ impl AgentChatView {
         &mut self,
         session_uid: &str,
         text: &str,
-        image_count: usize,
+        attachments: &[crate::ImageAttachment],
         resources: &ResourceContext,
     ) {
         if self.closed_sessions.contains(session_uid) {
             return;
         }
+        let images = crate::message_image::images_from_attachments(attachments);
         if session_uid == self.current_session {
             self.transcript.set_resource_context(resources);
-            self.transcript.push_user(text, image_count);
+            self.transcript.push_user(text, images);
             return;
         }
         {
@@ -3133,7 +3134,7 @@ impl AgentChatView {
                     transcript
                 });
             transcript.set_resource_context(resources);
-            transcript.push_user(text, image_count);
+            transcript.push_user(text, images);
         }
         self.touch_session_transcript(session_uid);
         self.trim_session_transcripts();
@@ -11361,7 +11362,7 @@ mod tests {
         assert!(!transcript.has_conversation(), "空转录当然没聊过");
         transcript.push_system("正在创建 ACP 会话");
         assert!(!transcript.has_conversation(), "只有系统提示不算聊过");
-        transcript.push_user("你好", 0);
+        transcript.push_user("你好", Vec::new());
         assert!(transcript.has_conversation());
     }
 
@@ -15050,6 +15051,76 @@ mod tests {
         assert!(
             input.size.height > px(0.0),
             "sidebar input root must keep a visible height: area={input_area:?}, input={input:?}"
+        );
+    }
+
+    /// 带图片的用户消息：走提交路径把附件交给转录，渲染成缩略图。
+    ///
+    /// 卡的是整条链路（附件 → 投影 → 消息槽），而不是某一层的纯函数：
+    /// 图片过去正是在「视图把 `submission.images` 换成 `.len()`」这一步丢的。
+    #[gpui::test]
+    fn user_message_with_images_renders_a_thumbnail_beside_the_text(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let (host, cx) = cx.add_window_view(FixedSidebarHost::new);
+        let chat = host.read_with(cx, |host, _| host.view.clone());
+        let attachments = vec![crate::ImageAttachment::for_test("screenshot.png")];
+        chat.update(cx, |view, cx| {
+            let session_uid = view.current_session.clone();
+            let resources = ResourceContext::new();
+            view.push_user_to_session(&session_uid, "看这张图", &attachments, &resources);
+            cx.notify();
+        });
+
+        let (message_id, image_count) = chat.read_with(cx, |view, _| {
+            let message = view
+                .transcript
+                .messages
+                .last()
+                .expect("用户消息应该落进当前转录");
+            (message.id.clone(), message.images.len())
+        });
+        assert_eq!(1, image_count, "附件要原样带到消息上");
+        let cx: &mut VisualTestContext = cx;
+
+        let image: &'static str =
+            Box::leak(format!("ai-chat-user-image:{message_id}:0").into_boxed_str());
+        assert!(cx.debug_bounds(image).is_some(), "图片应该渲染成缩略图");
+        assert!(
+            cx.debug_bounds("ai-chat-user-plain-text").is_some(),
+            "图片不挤掉文字"
+        );
+    }
+
+    /// 只发图不带字：不画空的文字槽（那会多出一行间距）。
+    #[gpui::test]
+    fn image_only_user_message_skips_the_text_slot(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let (host, cx) = cx.add_window_view(FixedSidebarHost::new);
+        let chat = host.read_with(cx, |host, _| host.view.clone());
+        let attachments = vec![crate::ImageAttachment::for_test("screenshot.png")];
+        chat.update(cx, |view, cx| {
+            let session_uid = view.current_session.clone();
+            let resources = ResourceContext::new();
+            view.push_user_to_session(&session_uid, "", &attachments, &resources);
+            cx.notify();
+        });
+
+        let message_id = chat.read_with(cx, |view, _| {
+            view.transcript
+                .messages
+                .last()
+                .expect("用户消息应该落进当前转录")
+                .id
+                .clone()
+        });
+        let cx: &mut VisualTestContext = cx;
+
+        let image: &'static str =
+            Box::leak(format!("ai-chat-user-image:{message_id}:0").into_boxed_str());
+        assert!(cx.debug_bounds(image).is_some(), "图还是要画");
+        assert!(
+            cx.debug_bounds("ai-chat-user-plain-text").is_none(),
+            "没有文字就不该有文字槽"
         );
     }
 

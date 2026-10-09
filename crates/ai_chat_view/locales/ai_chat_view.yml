@@ -607,10 +607,6 @@ AgentUi:
     en: Token limit for each response
     zh-CN: 单次回复 Token 上限
     zh-HK: 每次回覆的 Token 上限
-  message_with_images:
-    en: "%{text}\n\n[%{count} image(s) attached]"
-    zh-CN: "%{text}\n\n[附带 %{count} 张图片]"
-    zh-HK: "%{text}\n\n[附帶 %{count} 張圖片]"
   mode:
     en: Mode
     zh-CN: 模式

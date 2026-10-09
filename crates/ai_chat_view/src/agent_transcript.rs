@@ -22,6 +22,7 @@ use crate::agent_cards::{
 use crate::agent_diff::FileChangeSummary;
 use crate::agent_tool_input::build_tool_input_display;
 use crate::code_block::extract_fenced_code_blocks;
+use crate::message_image::MessageImage;
 use crate::{ChatMessageUI, ChatRole, MessageVariant, parse_chart_json_block};
 
 mod acp;
@@ -320,7 +321,9 @@ impl AgentTranscript {
         self.clear();
         for item in items {
             match item {
-                HistoryItem::User { text, images } => self.push_user(text, images.len()),
+                HistoryItem::User { text, images } => {
+                    self.push_user(text, crate::message_image::images_from_inputs(images))
+                }
                 HistoryItem::Assistant(text) => {
                     self.messages.push(ChatMessageUI::assistant(text.clone()));
                 }
@@ -383,19 +386,24 @@ impl AgentTranscript {
     }
 
     /// 追加用户消息(提交时由视图调用;`image_count` 用于提示附带图片)。
-    pub fn push_user(&mut self, text: &str, image_count: usize) {
-        let content = if image_count > 0 {
-            t!(
-                "AgentUi.message_with_images",
-                text = text,
-                count = image_count
-            )
-            .to_string()
-        } else {
-            text.to_string()
-        };
-        self.push_message(ChatMessageUI::user(content));
+    /// 追加一条用户消息。
+    ///
+    /// `images` 是**已经解成可渲染图片**的附件——附件持的是 `Arc<Image>`，这里
+    /// 不再做编解码，免得每帧 render 路径上重复解 base64。图片画在图槽里，
+    /// 不再往正文里补「[附带 N 张图片]」的说明：缩略图本身已经说明了这件事。
+    pub fn push_user(&mut self, text: &str, images: Vec<MessageImage>) {
+        self.push_message(ChatMessageUI::user(text).with_images(images));
         self.enforce_budget();
+    }
+
+    /// 追加一条来自运行时事件 / ACP 回放的用户消息。
+    ///
+    /// ACP agent 会把带图片的 prompt 原样重放回来，图片在那条 update 里是
+    /// `![](data:image/…;base64,…)` 的 markdown。不抠出来就会以纯文本形式把
+    /// 一大段 base64 铺进气泡——恢复历史时看到的就是那串东西。
+    fn push_user_from_text(&mut self, text: &str) {
+        let (text, images) = crate::message_image::split_data_url_images(text);
+        self.push_user(&text, images);
     }
 
     /// 应用一个运行时事件,更新消息列表。
@@ -452,7 +460,7 @@ impl AgentTranscript {
             RuntimeEvent::AssistantMessageDelta { delta, .. } => self.append_delta(delta),
             RuntimeEvent::ReasoningDelta { delta, .. } => self.append_reasoning_delta(delta),
             RuntimeEvent::AssistantMessage { text, .. } => self.finalize_assistant(text),
-            RuntimeEvent::UserMessage { text, .. } => self.push_user(text, 0),
+            RuntimeEvent::UserMessage { text, .. } => self.push_user_from_text(text),
             RuntimeEvent::Status { title, is_done, .. } => self.upsert_status(title, *is_done),
             _ => unreachable!("non-message event routed to apply_message_event"),
         }
@@ -1626,8 +1634,8 @@ mod tests {
     use agent_runtime::ids::{SubAgentId, ToolCallId, TurnId};
     use agent_runtime::tools::{ObservationData, ToolCall, ToolName};
     use agent_runtime::{
-        PendingToolCallSummary, PlanSource, PlanStep, ResourceContext, ResourceId, ResourceKind,
-        ResourceRef, SessionId,
+        InputImage, PendingToolCallSummary, PlanSource, PlanStep, ResourceContext, ResourceId,
+        ResourceKind, ResourceRef, SessionId,
     };
 
     fn sid() -> SessionId {
@@ -1648,6 +1656,61 @@ mod tests {
             .iter()
             .map(|message| message.turn_id.as_deref())
             .collect()
+    }
+
+    /// ACP 回放带图片的 prompt 时，图片是 markdown data URL；要变成图片槽，
+    /// 而不是把整段 base64 铺进气泡。
+    #[test]
+    fn replayed_image_chunks_become_images_instead_of_base64_text() {
+        let mut tr = AgentTranscript::new();
+        tr.apply(&RuntimeEvent::UserMessage {
+            session_id: sid(),
+            turn_id: tid(),
+            text: "看这张图\n\n![](data:image/png;base64,QUJD)\n\n然后改一下".into(),
+        });
+
+        let message = tr.messages.last().expect("用户消息应该落进转录");
+        assert_eq!(1, message.images.len());
+        assert_eq!("看这张图\n\n然后改一下", message.content);
+        assert!(
+            !message.content.contains("base64"),
+            "base64 不该留在正文里: {}",
+            message.content
+        );
+    }
+
+    /// 本地快照恢复：历史里的图片是 base64 输入，要回到图片槽。
+    #[test]
+    fn restored_history_keeps_user_images() {
+        let mut tr = AgentTranscript::new();
+        tr.load_history(
+            &[HistoryItem::User {
+                text: "看下这个".into(),
+                images: vec![InputImage::new("image/png", "QUJD")],
+            }],
+            None,
+        );
+
+        let message = tr.messages.last().expect("历史用户消息应该还原");
+        assert_eq!(1, message.images.len());
+        assert_eq!("看下这个", message.content);
+    }
+
+    /// 解不出来的历史图片只跳过图，不丢整条消息。
+    #[test]
+    fn restored_history_survives_an_undecodable_image() {
+        let mut tr = AgentTranscript::new();
+        tr.load_history(
+            &[HistoryItem::User {
+                text: "这句还在".into(),
+                images: vec![InputImage::new("application/pdf", "QUJD")],
+            }],
+            None,
+        );
+
+        let message = tr.messages.last().expect("消息本身不该丢");
+        assert!(message.images.is_empty());
+        assert_eq!("这句还在", message.content);
     }
 
     #[test]
