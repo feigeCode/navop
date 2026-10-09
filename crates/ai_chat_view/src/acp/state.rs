@@ -1,7 +1,7 @@
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, AvailableCommand, Implementation, LoadSessionResponse, NewSessionResponse,
-    ResumeSessionResponse, SessionConfigKind, SessionConfigOption, SessionConfigSelectOptions,
-    SessionMode, SessionModeId, SessionUpdate,
+    ResumeSessionResponse, SessionConfigKind, SessionConfigOption, SessionConfigSelectOption,
+    SessionConfigSelectOptions, SessionMode, SessionModeId, SessionUpdate,
 };
 use agent_runtime::TurnId;
 
@@ -123,6 +123,21 @@ impl AcpSessionState {
         })
     }
 
+    /// agent 把会话模式放在 `category=mode` 的配置项里（新式：opencode 等）。
+    ///
+    /// 传统走 `SessionModeState.available_modes`；这里只在没有 `modes` 时才用。
+    /// 判定刻意排除 `model`：`"model".contains("mode")` 为真，不能用裸子串匹配。
+    pub(crate) fn current_mode_config(&self) -> Option<&SessionConfigOption> {
+        self.config_options.iter().find(|option| {
+            matches!(
+                option.category,
+                Some(agent_client_protocol::schema::v1::SessionConfigOptionCategory::Mode)
+            ) || option.id.0.eq_ignore_ascii_case("mode")
+                || (option.name.to_ascii_lowercase().contains("mode")
+                    && !option.name.to_ascii_lowercase().contains("model"))
+        })
+    }
+
     /// agent 广告的模型候选 `(value_id, label)`,按 agent 给出的顺序。
     ///
     /// 只读 `model` 类配置的 select 值;没有该配置或不是 select 时返回空,
@@ -131,21 +146,54 @@ impl AcpSessionState {
         let Some(option) = self.current_model_config() else {
             return Vec::new();
         };
-        let SessionConfigKind::Select(select) = &option.kind else {
+        select_values(option)
+            .into_iter()
+            .map(|value| (value.value.to_string(), value.name.clone()))
+            .collect()
+    }
+
+    /// agent 广告的会话模式候选 `(value_id, label, description)`,用于执行模式下拉。
+    pub(crate) fn mode_options(&self) -> Vec<(String, String, Option<String>)> {
+        let Some(option) = self.current_mode_config() else {
             return Vec::new();
         };
-        match &select.options {
-            SessionConfigSelectOptions::Ungrouped(values) => values
-                .iter()
-                .map(|value| (value.value.to_string(), value.name.clone()))
-                .collect(),
-            SessionConfigSelectOptions::Grouped(groups) => groups
-                .iter()
-                .flat_map(|group| group.options.iter())
-                .map(|value| (value.value.to_string(), value.name.clone()))
-                .collect(),
-            _ => Vec::new(),
+        select_values(option)
+            .into_iter()
+            .map(|value| {
+                (
+                    value.value.to_string(),
+                    value.name.clone(),
+                    value.description.clone(),
+                )
+            })
+            .collect()
+    }
+
+    /// 当前会话模式的展示文案。
+    ///
+    /// 优先传统 `modes`；没有时取 `category=mode` 配置项的当前值。
+    pub(crate) fn current_mode_label(&self) -> Option<String> {
+        if let Some(current) = self.current_mode_id() {
+            return Some(
+                self.available_modes()
+                    .iter()
+                    .find(|mode| mode.id == *current)
+                    .map(|mode| mode.name.clone())
+                    .unwrap_or_else(|| current.0.to_string()),
+            );
         }
+        let option = self.current_mode_config()?;
+        let SessionConfigKind::Select(select) = &option.kind else {
+            return None;
+        };
+        let current = select.current_value.to_string();
+        Some(
+            select_values(option)
+                .into_iter()
+                .find(|value| value.value.to_string() == current)
+                .map(|value| value.name.clone())
+                .unwrap_or(current),
+        )
     }
 
     pub(crate) fn title(&self) -> Option<&str> {
@@ -238,6 +286,21 @@ impl AcpSessionState {
     }
 }
 
+/// select 型配置项的候选值，分组展开成同一顺序；非 select 返回空。
+fn select_values(option: &SessionConfigOption) -> Vec<&SessionConfigSelectOption> {
+    let SessionConfigKind::Select(select) = &option.kind else {
+        return Vec::new();
+    };
+    match &select.options {
+        SessionConfigSelectOptions::Ungrouped(values) => values.iter().collect(),
+        SessionConfigSelectOptions::Grouped(groups) => groups
+            .iter()
+            .flat_map(|group| group.options.iter())
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 fn phase_transition_allowed(current: &AcpConnectionPhase, next: &AcpConnectionPhase) -> bool {
     use AcpConnectionPhase as Phase;
 
@@ -273,8 +336,9 @@ fn phase_transition_allowed(current: &AcpConnectionPhase, next: &AcpConnectionPh
 mod tests {
     use agent_client_protocol::schema::v1::{
         AvailableCommand, AvailableCommandsUpdate, ConfigOptionUpdate, ContentBlock,
-        CurrentModeUpdate, NewSessionResponse, SessionConfigOption, SessionConfigSelectOption,
-        SessionInfoUpdate, SessionMode, SessionModeState, SessionUpdate, TextContent, UsageUpdate,
+        CurrentModeUpdate, NewSessionResponse, SessionConfigOption, SessionConfigOptionCategory,
+        SessionConfigSelectOption, SessionInfoUpdate, SessionMode, SessionModeState, SessionUpdate,
+        TextContent, UsageUpdate,
     };
 
     use agent_runtime::TurnId;
@@ -308,6 +372,51 @@ mod tests {
         assert_eq!(Some("ask"), state.current_mode_id().map(|id| id.0.as_ref()));
         assert_eq!(2, state.available_modes().len());
         assert_eq!(1, state.config_options().len());
+    }
+
+    #[test]
+    fn mode_config_option_surfaces_as_execution_modes() {
+        let mut state = AcpSessionState::default();
+        let model_config = SessionConfigOption::select(
+            "model",
+            "Model",
+            "fast",
+            vec![SessionConfigSelectOption::new("fast", "Fast")],
+        );
+        let mode_config = SessionConfigOption::select(
+            "mode",
+            "Session Mode",
+            "build",
+            vec![
+                SessionConfigSelectOption::new("build", "build").description("The default agent."),
+                SessionConfigSelectOption::new("plan", "plan"),
+                SessionConfigSelectOption::new("scout", "scout"),
+            ],
+        )
+        .category(SessionConfigOptionCategory::Mode);
+
+        state.apply_new_session_response(
+            &NewSessionResponse::new("s1").config_options(vec![model_config, mode_config]),
+        );
+
+        // mode 配置不能被当成 model，反之亦然。
+        assert_eq!(
+            Some("mode"),
+            state.current_mode_config().map(|option| option.id.0.as_ref())
+        );
+        assert_eq!(
+            Some("model"),
+            state.current_model_config().map(|option| option.id.0.as_ref())
+        );
+        assert_eq!(
+            vec!["build", "plan", "scout"],
+            state
+                .mode_options()
+                .into_iter()
+                .map(|(value, _, _)| value)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(Some("build".to_string()), state.current_mode_label());
     }
 
     #[test]

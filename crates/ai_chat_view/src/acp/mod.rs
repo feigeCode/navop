@@ -37,6 +37,7 @@ pub use connection::{
     AcpClientProviders, AcpConnectOutcome, AcpConnection, AcpPendingConnection,
     AcpPromptStartError,
 };
+pub(crate) use connection::{AcpActiveTurns, AcpInteractiveSession};
 pub(crate) use elicitation::{
     AcpElicitationEnvelope, AcpElicitationMessage, acp_elicitation_channel,
 };

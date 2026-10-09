@@ -8,15 +8,17 @@ use tokio::sync::broadcast;
 use crate::acp::detail_turn_id_for;
 use crate::acp::state::AcpSessionState;
 use crate::acp::translate::{AcpEventTranslator, session_update_to_events_for_agent};
-use crate::acp::turn::AcpTurnTracker;
 
 use super::runner::ConnectShared;
+use super::{AcpActiveTurns, AcpInteractiveSession};
 
 pub(super) struct NotificationContext {
     events: broadcast::Sender<RuntimeEvent>,
     session_id: SessionId,
     state: Arc<Mutex<AcpSessionState>>,
-    active_turn: Arc<Mutex<Option<AcpTurnTracker>>>,
+    active_turn: AcpActiveTurns,
+    /// 当前交互会话指针；见 [`super::AcpInteractiveSession`]。
+    interactive_session: AcpInteractiveSession,
     history_replay: Arc<Mutex<Option<TurnId>>>,
     /// 已登记的子代理详情会话；见 [`super::AcpDetailSessions`]。
     detail_sessions: super::AcpDetailSessions,
@@ -31,6 +33,7 @@ impl NotificationContext {
             session_id: shared.session_id.clone(),
             state: shared.state.clone(),
             active_turn: shared.active_turn.clone(),
+            interactive_session: shared.interactive_session.clone(),
             history_replay: shared.history_replay.clone(),
             detail_sessions: shared.detail_sessions.clone(),
             translator: Arc::new(Mutex::new(AcpEventTranslator)),
@@ -74,14 +77,23 @@ pub(super) fn handle_notification(
         return Ok(());
     }
 
-    if let Ok(mut state) = context.state.lock() {
-        state.apply_session_update(&notification.update);
-    }
+    // 按协议会话 id路由：这条通知归属哪条会话的在飞轮次，就喂谁的 tracker。
+    // 后台会话的轮次照样被 observe（卡死判据不能因为切走会话就失明）。
     let active = context.active_turn.lock().ok().and_then(|mut active| {
-        let tracker = active.as_mut()?;
+        let tracker = active.get_mut(&acp_session_id)?;
         tracker.observe(&notification.update);
         Some(tracker.turn_id().clone())
     });
+    // 交互状态只认交互会话：后台会话的标题/模式/用量不能污染前台 UI。
+    let is_interactive = context
+        .interactive_session
+        .lock()
+        .is_ok_and(|interactive| *interactive == acp_session_id);
+    if is_interactive {
+        if let Ok(mut state) = context.state.lock() {
+            state.apply_session_update(&notification.update);
+        }
+    }
     let replay_window = context
         .history_replay
         .lock()

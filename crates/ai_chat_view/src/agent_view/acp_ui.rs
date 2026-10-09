@@ -47,7 +47,7 @@ impl AgentChatView {
         self.invalidate_acp_operation();
         self.reset_acp_client_session(cx);
         self.cancel_acp_auto_reconnect();
-        self.acp_turn_owner = None;
+        self.acp_turn_owners.clear();
         self.clear_acp_sessions();
         // 用户主动切回本地：那条待重开的会话不再算数。
         self.acp_reopen_pending = None;
@@ -190,7 +190,7 @@ impl AgentChatView {
         self.invalidate_acp_reconnect_schedule();
         let connected_agent_id = config.id.clone();
         self.apply_probe_model_options(&connected_agent_id, cx);
-        self.acp_turn_owner = None;
+        self.acp_turn_owners.clear();
         self.clear_acp_sessions();
         self.acp = None;
         self.acp_pending = None;
@@ -435,7 +435,7 @@ impl AgentChatView {
         });
         self.acp = Some(connection);
         self.restore_persisted_acp_model(cx);
-        self.acp_turn_owner = None;
+        self.acp_turn_owners.clear();
         self.acp_session_transition = None;
         self.backend = Backend::Acp;
         self.current_acp_id = Some(agent_id.clone());

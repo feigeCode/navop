@@ -7,8 +7,8 @@ use tokio::sync::oneshot;
 
 use crate::acp::AcpError;
 use crate::acp::state::AcpSessionState;
-use crate::acp::turn::AcpTurnTracker;
 
+use super::AcpActiveTurns;
 use super::close_connection_and_take_active_turn;
 
 const SHUTDOWN_ABORT_GRACE: Duration = Duration::from_secs(2);
@@ -18,7 +18,7 @@ pub(super) struct AcpConnectionLifecycle {
     pub(super) join: tokio::task::JoinHandle<()>,
     pub(super) shutdown: Option<oneshot::Sender<()>>,
     pub(super) state: Arc<Mutex<AcpSessionState>>,
-    pub(super) active_turn: Arc<Mutex<Option<AcpTurnTracker>>>,
+    pub(super) active_turn: AcpActiveTurns,
     pub(super) events_tx: broadcast::Sender<RuntimeEvent>,
     pub(super) session_id: SessionId,
     pub(super) closed_error: AcpError,
@@ -49,7 +49,9 @@ impl Drop for AcpConnectionLifecycle {
 mod tests {
     use super::*;
     use crate::acp::state::AcpConnectionPhase;
+    use crate::acp::turn::AcpTurnTracker;
     use agent_runtime::TurnId;
+    use std::collections::HashMap;
 
     #[tokio::test]
     async fn dropping_connection_lifecycle_signals_shutdown_before_abort() {
@@ -67,7 +69,7 @@ mod tests {
             join,
             shutdown: Some(shutdown_tx),
             state: ready_state(),
-            active_turn: Arc::new(Mutex::new(None)),
+            active_turn: Arc::new(Mutex::new(HashMap::new())),
             events_tx,
             session_id: SessionId::from_string("session"),
             closed_error: closed_error(),
@@ -95,7 +97,14 @@ mod tests {
                 turn_id: turn_id.clone(),
             })
             .expect("running turn");
-        let active_turn = Arc::new(Mutex::new(Some(AcpTurnTracker::new(turn_id.clone()))));
+        let active_turn = {
+            let mut map = HashMap::new();
+            map.insert(
+                "ses_main".to_string(),
+                AcpTurnTracker::new(turn_id.clone()),
+            );
+            Arc::new(Mutex::new(map))
+        };
 
         drop(AcpConnectionLifecycle {
             handle: tokio::runtime::Handle::current(),
@@ -117,7 +126,7 @@ mod tests {
                 ..
             } if event_session == session_id && event_turn == turn_id
         ));
-        assert!(active_turn.lock().expect("active turn lock").is_none());
+        assert!(active_turn.lock().expect("active turn lock").is_empty());
         assert_eq!(
             &AcpConnectionPhase::Closed,
             state.lock().expect("state lock").phase()
@@ -143,7 +152,7 @@ mod tests {
             join,
             shutdown: Some(shutdown_tx),
             state: state.clone(),
-            active_turn: Arc::new(Mutex::new(None)),
+            active_turn: Arc::new(Mutex::new(HashMap::new())),
             events_tx,
             session_id: SessionId::from_string("session"),
             closed_error: closed_error(),

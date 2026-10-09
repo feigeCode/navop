@@ -71,6 +71,20 @@ pub enum AcpConnectOutcome {
 /// 表的内容只活在本次连接内：连接被替换/收掉时随 `Arc` 一起消失。
 pub(crate) type AcpDetailSessions = Arc<Mutex<HashMap<String, SessionId>>>;
 
+/// 按协议会话 id 索引的**在飞轮次**表。
+///
+/// 单连接允许多条协议会话各自跑一轮（后台轮次）：用户「新建对话」或切走会话时，
+/// 旧会话的轮次继续在 agent 那边跑，输出继续回流。每条轮次的生死只看这张表，
+/// 不再是全局唯一的 `Option`。
+pub(crate) type AcpActiveTurns = Arc<Mutex<HashMap<String, AcpTurnTracker>>>;
+
+/// 当前**交互会话**（`session/new`/`load`/`resume` 最新指向的那条协议会话）。
+///
+/// 通知层跑在 dispatch loop 上拿不到 `AcpConnection`，靠这个共享指针知道：
+/// 一条 `session/update` 要不要应用到交互状态（标题 / 模式 / 用量）。后台会话的
+/// 通知只走轮次转录，不许污染交互状态。
+pub(crate) type AcpInteractiveSession = Arc<Mutex<String>>;
+
 pub struct AcpConnection {
     pub(super) handle: tokio::runtime::Handle,
     pub(super) conn: ConnectionTo<Agent>,
@@ -78,7 +92,10 @@ pub struct AcpConnection {
     pub(super) session_id: SessionId,
     pub(super) events_tx: broadcast::Sender<RuntimeEvent>,
     pub(super) state: Arc<Mutex<AcpSessionState>>,
-    pub(super) active_turn: Arc<Mutex<Option<AcpTurnTracker>>>,
+    /// 在飞轮次表（协议会话 id → tracker）；见 [`AcpActiveTurns`]。
+    pub(super) active_turn: AcpActiveTurns,
+    /// 交互会话指针；见 [`AcpInteractiveSession`]。
+    pub(super) interactive_session: AcpInteractiveSession,
     /// 历史回放窗口：`session/load` 期间收到的 `session/update` 归属哪个**回放轮次**。
     ///
     /// 详见 [`AcpConnection::begin_history_replay`]。
@@ -228,20 +245,40 @@ impl AcpConnection {
             .unwrap_or(AcpConnectionPhase::Closed)
     }
 
-    /// 连接此刻认领的轮次；`None` 表示这一侧没有任何 prompt 在飞。
+    /// 连接此刻认领的轮次；`None` 表示该协议会话上没有任何 prompt 在飞。
     ///
     /// 这是「这一轮到底结束没有」的**权威答案**——事件流是广播通道，会被挤掉，
     /// 视图侧靠事件推出来的 running 因此可能是过期的；`active_turn` 就在产出事件
     /// 的地方，不会落后。视图用它做丢事件之后的重同步判据，见
     /// [`AgentChatView::driver_reports_idle`](crate::agent_view)。
     ///
-    /// `try_prompt` / `abandon_active_turn` / `claim_prompt_completion` 分别
-    /// 在发起、本地放弃、正常结束时增删它，所以「`None`」只可能是这三种情况之一。
-    pub fn active_turn_id(&self) -> Option<TurnId> {
+    /// 后台轮次方案后按协议会话 id 查询：每条会话各自记账，互不挤占。
+    pub fn active_turn_id_for(&self, protocol_session_id: &str) -> Option<TurnId> {
         self.active_turn
             .lock()
             .ok()
-            .and_then(|active| active.as_ref().map(|tracker| tracker.turn_id().clone()))
+            .and_then(|active| {
+                active
+                    .get(protocol_session_id)
+                    .map(|tracker| tracker.turn_id().clone())
+            })
+    }
+
+    /// 任一协议会话上是否还有在飞轮次（后台轮次含在内）。
+    pub fn has_active_turns(&self) -> bool {
+        self.active_turn.lock().is_ok_and(|active| !active.is_empty())
+    }
+
+    /// 这个轮次是否还在在飞表里（按 turn id 找，跨协议会话）。
+    ///
+    /// 视图侧重同步用：后台轮次后一张内置会话可能同时挂着多条协议会话的轮次，
+    /// 只能按轮次问，不能按会话问。
+    pub fn turn_is_active(&self, turn_id: &TurnId) -> bool {
+        self.active_turn.lock().is_ok_and(|active| {
+            active
+                .values()
+                .any(|tracker| tracker.turn_id() == turn_id)
+        })
     }
 
     /// 本地放弃这一轮：agent 没有回终态，用户选择不再等。
@@ -257,24 +294,27 @@ impl AcpConnection {
         let Ok(mut active) = self.active_turn.lock() else {
             return false;
         };
-        if !active
-            .as_ref()
-            .is_some_and(|tracker| tracker.turn_id() == turn_id)
-        {
+        let key = active
+            .iter()
+            .find(|(_, tracker)| tracker.turn_id() == turn_id)
+            .map(|(key, _)| key.clone());
+        let Some(key) = key else {
             return false;
-        }
-        active.take();
+        };
+        let removed = active.remove(&key).is_some();
         // 锁要分开取:`transition_state` 自己会再锁一次,持着锁调它会自锁。
-        let running = self.state.lock().is_ok_and(|state| {
-            matches!(
-                state.phase(),
-                AcpConnectionPhase::RunningTurn { turn_id: running } if running == turn_id
-            )
-        });
-        if running {
-            transition_state(&self.state, AcpConnectionPhase::Ready);
+        // 表空了才收相位:别的会话还有轮次在飞时,连接仍是「忙」的。
+        let table_drained = active.is_empty();
+        drop(active);
+        if removed && table_drained {
+            let running = self.state.lock().is_ok_and(|state| {
+                matches!(state.phase(), AcpConnectionPhase::RunningTurn { .. })
+            });
+            if running {
+                transition_state(&self.state, AcpConnectionPhase::Ready);
+            }
         }
-        true
+        removed
     }
 
     /// 开始把接下来收到的 `session/update` 当成**历史回放**收。
@@ -357,10 +397,24 @@ fn transition_state(state: &Arc<Mutex<AcpSessionState>>, phase: AcpConnectionPha
 pub(super) enum PromptCompletionClaim {
     Ready(AcpTurnTracker),
     Failed { turn_id: TurnId, error: AcpError },
+    /// 轮次不在（已终结/被放弃），但连接相位停在 RunningTurn 且在飞表空了：
+    /// 由本函数顺手把相位收回到 Ready，避免永久卡在 RunningTurn。
+    Reclaimed,
+}
+
+/// 在在飞表里找到这个轮次所在的 key（协议会话 id）。
+fn active_turn_key(
+    active: &HashMap<String, AcpTurnTracker>,
+    expected_turn_id: &TurnId,
+) -> Option<String> {
+    active
+        .iter()
+        .find(|(_, tracker)| tracker.turn_id() == expected_turn_id)
+        .map(|(key, _)| key.clone())
 }
 
 pub(super) fn claim_prompt_completion(
-    active_turn: &Arc<Mutex<Option<AcpTurnTracker>>>,
+    active_turn: &AcpActiveTurns,
     state: &Arc<Mutex<AcpSessionState>>,
     expected_turn_id: &TurnId,
     closed_error: &AcpError,
@@ -370,12 +424,9 @@ pub(super) fn claim_prompt_completion(
     // connection failure, and lifecycle shutdown from publishing competing
     // terminal events for the same turn.
     let mut active = active_turn.lock().ok()?;
-    if !active
-        .as_ref()
-        .is_some_and(|tracker| tracker.turn_id() == expected_turn_id)
-    {
+    let Some(key) = active_turn_key(&active, expected_turn_id) else {
         return None;
-    }
+    };
     let mut state = state.lock().ok()?;
     match state.phase() {
         AcpConnectionPhase::RunningTurn { turn_id } if turn_id == expected_turn_id => {
@@ -383,57 +434,75 @@ pub(super) fn claim_prompt_completion(
                 tracing::warn!(%error, "failed to finish ACP prompt phase");
                 return None;
             }
-            active.take().map(PromptCompletionClaim::Ready)
+            active.remove(&key).map(PromptCompletionClaim::Ready)
         }
         AcpConnectionPhase::Failed { error } => {
             let error = error.clone();
-            active.take().map(|tracker| PromptCompletionClaim::Failed {
+            active.remove(&key).map(|tracker| PromptCompletionClaim::Failed {
                 turn_id: tracker.turn_id().clone(),
                 error,
             })
         }
-        AcpConnectionPhase::Closed => active.take().map(|tracker| PromptCompletionClaim::Failed {
-            turn_id: tracker.turn_id().clone(),
-            error: closed_error.clone(),
-        }),
+        AcpConnectionPhase::Closed => active
+            .remove(&key)
+            .map(|tracker| PromptCompletionClaim::Failed {
+                turn_id: tracker.turn_id().clone(),
+                error: closed_error.clone(),
+            }),
         phase => {
-            tracing::warn!(
-                ?phase,
-                expected_turn_id = %expected_turn_id,
-                "ACP prompt completed outside its running phase"
-            );
-            None
+            // 后台轮次：另一条会话还在跑，相位是它的 RunningTurn，不是当前轮次的。
+            // 这轮照样从在飞表里收掉（它自己的 prompt 已回包），只是不动全局相位。
+            if matches!(phase, AcpConnectionPhase::RunningTurn { .. }) {
+                active.remove(&key).map(|_| PromptCompletionClaim::Reclaimed)
+            } else {
+                tracing::warn!(
+                    ?phase,
+                    expected_turn_id = %expected_turn_id,
+                    "ACP prompt completed outside its running phase"
+                );
+                None
+            }
         }
     }
 }
 
 pub(super) fn fail_connection_and_take_active_turn(
-    active_turn: &Arc<Mutex<Option<AcpTurnTracker>>>,
+    active_turn: &AcpActiveTurns,
     state: &Arc<Mutex<AcpSessionState>>,
     error: AcpError,
 ) -> Option<TurnId> {
-    let mut active = active_turn.lock().ok()?;
-    let mut state = state.lock().ok()?;
-    if let Err(transition_error) = state.transition(AcpConnectionPhase::Failed { error }) {
-        tracing::warn!(%transition_error, "failed to mark ACP connection as failed");
-        return None;
-    }
-    active.take().map(|tracker| tracker.turn_id().clone())
+    fail_or_close_and_take_active_turn(active_turn, state, |state| {
+        state.transition(AcpConnectionPhase::Failed { error })
+    })
 }
 
 pub(super) fn close_connection_and_take_active_turn(
-    active_turn: &Arc<Mutex<Option<AcpTurnTracker>>>,
+    active_turn: &AcpActiveTurns,
     state: &Arc<Mutex<AcpSessionState>>,
+) -> Option<TurnId> {
+    fail_or_close_and_take_active_turn(active_turn, state, |state| {
+        state.transition(AcpConnectionPhase::Closed)
+    })
+}
+
+/// 连接整体失效（Failed/Closed）时收走**全部**在飞轮次，返回其中一个轮次 id。
+///
+/// 返回值只用于发一条 `TurnFailed` 事件；后台轮次下可能同时有多轮在飞，
+/// 全都发会把同一张转录重复写终态，所以发一条、剩下的由视图按 owner 丢失
+/// 自然收尾（`on_runtime_events_dropped` 那套重同步会兜住）。
+fn fail_or_close_and_take_active_turn(
+    active_turn: &AcpActiveTurns,
+    state: &Arc<Mutex<AcpSessionState>>,
+    transition: impl FnOnce(&mut AcpSessionState) -> Result<(), String>,
 ) -> Option<TurnId> {
     let mut active = active_turn.lock().ok()?;
     let mut state = state.lock().ok()?;
-    if !matches!(state.phase(), AcpConnectionPhase::Closed)
-        && let Err(error) = state.transition(AcpConnectionPhase::Closed)
-    {
-        tracing::warn!(%error, "failed to close ACP connection phase");
+    if let Err(transition_error) = transition(&mut state) {
+        tracing::warn!(%transition_error, "failed to close ACP connection phase");
         return None;
     }
-    active.take().map(|tracker| tracker.turn_id().clone())
+    let drained: Vec<AcpTurnTracker> = active.drain().map(|(_, tracker)| tracker).collect();
+    drained.first().map(|tracker| tracker.turn_id().clone())
 }
 
 pub(super) fn connection_closed_error(

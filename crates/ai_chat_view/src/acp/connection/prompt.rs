@@ -16,8 +16,8 @@ use crate::acp::turn::{AcpTurnTracker, TurnOutcome, TurnProgress};
 use crate::acp::{AcpError, AcpErrorKind, AcpRecoveryAction};
 
 use super::{
-    AcpConnection, PromptCompletionClaim, claim_prompt_completion, connection_closed_error,
-    new_acp_turn_id,
+    AcpActiveTurns, AcpConnection, PromptCompletionClaim, claim_prompt_completion,
+    connection_closed_error, new_acp_turn_id,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -135,28 +135,33 @@ impl AcpConnection {
         &self,
         turn_id: TurnId,
     ) -> Result<watch::Receiver<TurnProgress>, AcpPromptStartError> {
+        let key = self.acp_session_id.0.to_string();
         let mut active = self
             .active_turn
             .lock()
             .map_err(|_| AcpPromptStartError::NotReady)?;
-        if active.is_some() {
+        if active.contains_key(&key) {
             return Err(AcpPromptStartError::AlreadyRunning);
         }
         let mut state = self
             .state
             .lock()
             .map_err(|_| AcpPromptStartError::NotReady)?;
-        if !matches!(state.phase(), AcpConnectionPhase::Ready) {
-            return Err(AcpPromptStartError::NotReady);
-        };
-        state
-            .transition(AcpConnectionPhase::RunningTurn {
-                turn_id: turn_id.clone(),
-            })
-            .map_err(|_| AcpPromptStartError::NotReady)?;
+        match state.phase() {
+            AcpConnectionPhase::Ready => state
+                .transition(AcpConnectionPhase::RunningTurn {
+                    turn_id: turn_id.clone(),
+                })
+                .map_err(|_| AcpPromptStartError::NotReady)?,
+            // 后台轮次在飞：相位停在另一轮的 RunningTurn 上。状态机不允许
+            // RunningTurn -> RunningTurn，也不需要——相位只描述「连接忙」，
+            // 每轮的生死由 `active_turn` 表自己记。
+            AcpConnectionPhase::RunningTurn { .. } => {}
+            _ => return Err(AcpPromptStartError::NotReady),
+        }
         let tracker = AcpTurnTracker::new(turn_id.clone());
         let progress = tracker.progress();
-        *active = Some(tracker);
+        active.insert(key, tracker);
         Ok(progress)
     }
 
@@ -181,7 +186,7 @@ fn responding_status_title(agent_name: &str) -> String {
 struct PromptContext {
     events: tokio::sync::broadcast::Sender<RuntimeEvent>,
     session_id: agent_runtime::SessionId,
-    active_turn: std::sync::Arc<std::sync::Mutex<Option<AcpTurnTracker>>>,
+    active_turn: AcpActiveTurns,
     state: std::sync::Arc<std::sync::Mutex<crate::acp::AcpSessionState>>,
     agent_id: String,
     agent_name: String,
@@ -259,6 +264,8 @@ async fn finish_prompt(context: PromptContext, result: PromptWait) {
             emit_failed(&context, turn_id, error);
             return;
         }
+        // 轮次已不在（被放弃/已被收走），相位顺手收好了，不用发事件。
+        PromptCompletionClaim::Reclaimed => return,
     };
     let turn_id = tracker.turn_id().clone();
     match result {
@@ -369,7 +376,7 @@ mod tests {
     fn active_turn_is_only_taken_when_the_expected_id_matches() {
         let current_turn = TurnId::from_string("current");
         let stale_turn = TurnId::from_string("stale");
-        let active_turn = Arc::new(Mutex::new(Some(AcpTurnTracker::new(current_turn.clone()))));
+        let active_turn = map_active_turn("ses_main", AcpTurnTracker::new(current_turn.clone()));
 
         let state = running_state(&current_turn);
         let closed_error = closed_error();
@@ -377,14 +384,11 @@ mod tests {
             super::claim_prompt_completion(&active_turn, &state, &stale_turn, &closed_error)
                 .is_none()
         );
-        assert_eq!(
-            Some(current_turn.clone()),
-            active_turn
-                .lock()
-                .expect("active turn lock")
-                .as_ref()
-                .map(|tracker| tracker.turn_id().clone())
-        );
+        assert_eq!(Some(current_turn.clone()), active_turn
+            .lock()
+            .expect("active turn lock")
+            .get("ses_main")
+            .map(|tracker| tracker.turn_id().clone()));
 
         let super::PromptCompletionClaim::Ready(tracker) =
             super::claim_prompt_completion(&active_turn, &state, &current_turn, &closed_error)
@@ -393,14 +397,14 @@ mod tests {
             panic!("running prompt should complete as ready");
         };
         assert_eq!(&current_turn, tracker.turn_id());
-        assert!(active_turn.lock().expect("active turn lock").is_none());
+        assert!(active_turn.lock().expect("active turn lock").is_empty());
     }
 
     #[test]
     fn terminal_events_are_published_only_after_connection_is_ready() {
         let turn_id = TurnId::from_string("turn");
         let state = running_state(&turn_id);
-        let active_turn = Arc::new(Mutex::new(Some(AcpTurnTracker::new(turn_id.clone()))));
+        let active_turn = map_active_turn("ses_main", AcpTurnTracker::new(turn_id.clone()));
 
         let claim = super::claim_prompt_completion(&active_turn, &state, &turn_id, &closed_error());
 
@@ -415,10 +419,39 @@ mod tests {
     }
 
     #[test]
+    fn background_turn_completes_while_another_session_still_runs() {
+        // 后台轮次：相位是另一轮（另一条会话）的 RunningTurn，不是当前轮次的。
+        // 这轮照样要从在飞表里收走，且相位保持 RunningTurn（那轮还活着）。
+        let turn_id = TurnId::from_string("turn-bg");
+        let foreground = TurnId::from_string("turn-fg");
+        let state = running_state(&foreground);
+        let active_turn = map_active_turn("ses_bg", AcpTurnTracker::new(turn_id.clone()));
+        active_turn
+            .lock()
+            .expect("active turn lock")
+            .insert("ses_fg".to_string(), AcpTurnTracker::new(foreground.clone()));
+
+        let claim = super::claim_prompt_completion(&active_turn, &state, &turn_id, &closed_error());
+
+        assert!(matches!(claim, Some(super::PromptCompletionClaim::Reclaimed)));
+        let active = active_turn.lock().expect("active turn lock");
+        assert!(!active.contains_key("ses_bg"), "后台轮次应被收走");
+        assert!(
+            active.contains_key("ses_fg"),
+            "另一会话的在飞轮次不受影响"
+        );
+        drop(active);
+        assert!(matches!(
+            state.lock().expect("state lock").phase(),
+            AcpConnectionPhase::RunningTurn { .. }
+        ));
+    }
+
+    #[test]
     fn failed_connection_wins_prompt_completion_without_duplicate_success() {
         let turn_id = TurnId::from_string("turn");
         let state = running_state(&turn_id);
-        let active_turn = Arc::new(Mutex::new(Some(AcpTurnTracker::new(turn_id.clone()))));
+        let active_turn = map_active_turn("ses_main", AcpTurnTracker::new(turn_id.clone()));
         let error = AcpError::new(
             AcpErrorKind::ConnectionClosed,
             "agent",
@@ -442,7 +475,7 @@ mod tests {
                 error: claimed_error,
             }) if claimed_turn == turn_id && claimed_error == error
         ));
-        assert!(active_turn.lock().expect("active turn lock").is_none());
+        assert!(active_turn.lock().expect("active turn lock").is_empty());
         assert!(
             super::claim_prompt_completion(&active_turn, &state, &turn_id, &closed_error())
                 .is_none(),
@@ -454,7 +487,7 @@ mod tests {
     fn closed_connection_converts_late_prompt_success_into_failure() {
         let turn_id = TurnId::from_string("turn");
         let state = running_state(&turn_id);
-        let active_turn = Arc::new(Mutex::new(Some(AcpTurnTracker::new(turn_id.clone()))));
+        let active_turn = map_active_turn("ses_main", AcpTurnTracker::new(turn_id.clone()));
         state
             .lock()
             .expect("state lock")
@@ -471,7 +504,7 @@ mod tests {
                 error,
             }) if claimed_turn == turn_id && error == closed_error
         ));
-        assert!(active_turn.lock().expect("active turn lock").is_none());
+        assert!(active_turn.lock().expect("active turn lock").is_empty());
     }
 
     // ---- 超时判据 ----------------------------------------------------------
@@ -619,6 +652,17 @@ mod tests {
                 .expect("run turn");
         }
         state
+    }
+
+    fn map_active_turn(
+        key: &str,
+        tracker: AcpTurnTracker,
+    ) -> std::sync::Arc<
+        std::sync::Mutex<std::collections::HashMap<String, AcpTurnTracker>>,
+    > {
+        let mut map = std::collections::HashMap::new();
+        map.insert(key.to_string(), tracker);
+        std::sync::Arc::new(std::sync::Mutex::new(map))
     }
 
     fn closed_error() -> AcpError {

@@ -17,14 +17,14 @@ use crate::acp::config::AcpAgentConfig;
 use crate::acp::elicitation::resolve_acp_elicitation_request;
 use crate::acp::permission::resolve_acp_permission_request;
 use crate::acp::state::{AcpConnectionPhase, AcpSessionState};
-use crate::acp::turn::AcpTurnTracker;
 
 use super::notifications::{NotificationContext, handle_notification};
 use super::outcome::finish_connect;
 use super::setup::{SetupOutcome, setup_connection};
 use super::{
-    AcpClientProviders, AcpConnectOutcome, AcpDetailSessions, connection_closed_error,
-    fail_connection_and_take_active_turn, transition_state,
+    AcpActiveTurns, AcpClientProviders, AcpConnectOutcome, AcpDetailSessions,
+    AcpInteractiveSession, connection_closed_error, fail_connection_and_take_active_turn,
+    transition_state,
 };
 
 pub(super) type ReadyMessage = Result<(ConnectionTo<Agent>, SetupOutcome), String>;
@@ -37,7 +37,13 @@ pub(super) struct ConnectShared {
     pub(super) events_tx: broadcast::Sender<RuntimeEvent>,
     pub(super) session_id: SessionId,
     pub(super) state: Arc<Mutex<AcpSessionState>>,
-    pub(super) active_turn: Arc<Mutex<Option<AcpTurnTracker>>>,
+    /// 在飞轮次表；与 [`AcpConnection::active_turn`] 是同一个 `Arc`。
+    pub(super) active_turn: AcpActiveTurns,
+    /// 交互会话指针；与 [`AcpConnection::interactive_session`] 是同一个 `Arc`。
+    ///
+    /// 通知处理跑在另一条任务上（ACP 的 dispatch loop），拿不到 `AcpConnection`，
+    /// 只能靠这个共享指针知道「一条 `session/update` 要不要应用到交互状态」。
+    pub(super) interactive_session: AcpInteractiveSession,
     /// 历史回放窗口；与 [`AcpConnection::history_replay`] 是同一个 `Arc`。
     ///
     /// 通知处理跑在另一条任务上（ACP 的 dispatch loop），拿不到 `AcpConnection`，
@@ -178,7 +184,10 @@ fn prepare_shared(
     handle: tokio::runtime::Handle,
     resume: Option<AcpSessionId>,
 ) -> ConnectShared {
-    let (events_tx, _keep) = broadcast::channel(512);
+    // 4096：ACP 一轮会把每个工具调用展开成几十上百条 `session/update`，512 在
+    // 长任务（子代理实测连续 182 分钟）里会被冲掉，订阅端 lagged 丢事件。
+    // 丢了还有 `on_runtime_events_dropped` 的自愈兜底，但容量先把常见场景挡住。
+    let (events_tx, _keep) = broadcast::channel(4096);
     let state = Arc::new(Mutex::new(AcpSessionState::default()));
     transition_state(&state, AcpConnectionPhase::Initializing);
     ConnectShared {
@@ -186,7 +195,8 @@ fn prepare_shared(
         events_tx,
         session_id: SessionId::from_string(format!("acp:{}", uuid::Uuid::new_v4())),
         state,
-        active_turn: Arc::new(Mutex::new(None)),
+        active_turn: Arc::new(Mutex::new(HashMap::new())),
+        interactive_session: Arc::new(Mutex::new(String::new())),
         history_replay: Arc::new(Mutex::new(None)),
         detail_sessions: Arc::new(Mutex::new(HashMap::new())),
         workspace_root,

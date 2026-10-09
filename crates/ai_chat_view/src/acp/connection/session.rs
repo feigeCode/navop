@@ -16,6 +16,16 @@ use super::AcpConnection;
 const SESSION_LIST_PAGE_LIMIT: usize = 10;
 
 impl AcpConnection {
+    /// 把交互会话指针挪到这条协议会话上。
+    ///
+    /// 连接自己的 `acp_session_id` 与通知层的共享指针必须同步更新：通知层拿不到
+    /// `AcpConnection`，只认共享指针。
+    fn point_interactive_at(&self, acp_session_id: &AcpSessionId) {
+        if let Ok(mut interactive) = self.interactive_session.lock() {
+            *interactive = acp_session_id.0.to_string();
+        }
+    }
+
     pub async fn create_session(&mut self, cwd: PathBuf) -> anyhow::Result<NewSessionResponse> {
         let response = self
             .conn
@@ -23,6 +33,7 @@ impl AcpConnection {
             .block_task()
             .await?;
         self.acp_session_id = response.session_id.clone();
+        self.point_interactive_at(&response.session_id);
         if let Ok(mut state) = self.state.lock() {
             state.apply_new_session_response(&response);
         }
@@ -77,6 +88,7 @@ impl AcpConnection {
         self.end_history_replay();
         let response = response?;
         self.acp_session_id = acp_session_id;
+        self.point_interactive_at(&self.acp_session_id);
         if let Ok(mut state) = self.state.lock() {
             state.apply_load_session_response(&response);
         }
@@ -112,6 +124,7 @@ impl AcpConnection {
         self.end_history_replay();
         let response = response?;
         self.acp_session_id = acp_session_id;
+        self.point_interactive_at(&self.acp_session_id);
         if let Ok(mut state) = self.state.lock() {
             state.apply_resume_session_response(&response);
         }

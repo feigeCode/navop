@@ -12,8 +12,16 @@ use agent_client_protocol::schema::v1::SessionId as AcpSessionId;
 use gpui::{Hsla, SharedString};
 
 use super::*;
-use crate::acp::{AcpSessionOpen, AcpSessionSummary};
+use crate::acp::{AcpSessionOpen, AcpSessionSummary, acp_session_open_kind};
 
+/// 重载补全时从连接能力重新推一次打开方式。
+///
+/// 能力不会在一次 load 之间变化；抽出来是为了让重载路径与首次打开用同一判定。
+fn open_kind_at_finish(
+    capabilities: &agent_client_protocol::schema::v1::AgentCapabilities,
+) -> Option<AcpSessionOpen> {
+    acp_session_open_kind(capabilities)
+}
 /// 回到外部会话的走法（由 [`AgentChatView::plan_acp_reopen`] 判定）。
 ///
 /// 两臂都带上**要重开的那条协议会话 id**，调用方据此设置 `acp_reopen_pending`：
@@ -209,7 +217,7 @@ impl AgentChatView {
         }
         if self.acp_connecting
             || self.is_running
-            || self.acp_turn_owner.is_some()
+            || self.acp_session_has_foreground_turn(&self.current_session)
             || self.acp_session_transition.is_some()
         {
             return;
@@ -324,7 +332,7 @@ impl AgentChatView {
         cwd: std::path::PathBuf,
         cx: &mut Context<Self>,
     ) {
-        if self.is_running || self.acp_turn_owner.is_some() {
+        if self.is_running || self.acp_session_has_foreground_turn(&self.current_session) {
             return;
         }
         if self.acp_connecting || self.acp_session_transition.is_some() {
@@ -351,7 +359,7 @@ impl AgentChatView {
 
         let operation = self.begin_acp_session_transition(agent_id.clone(), session_uid.clone());
         let target = AcpSessionId::new(acp_session_id);
-        self.acp_turn_owner = None;
+        self.acp_turn_owners.clear();
         // `session/load` 会把整段历史重放成一批 `session/update`，它们不属于任何一轮：
         // 连接层要靠回放窗口才认得出，视图这边要靠同一个轮次 id 才敢放行。窗口必须在
         // 请求发出**之前**开——回放是随请求一起推过来的。
@@ -410,12 +418,72 @@ impl AgentChatView {
             .update(cx, |input, cx| input.set_running(false, cx));
         match result {
             Ok(()) => {
+                // 回放期间丢过事件：再 load 一次补全。只补一次；第二次仍丢就
+                // 认了——agent 那边每次重放都溢出时，无限重载只会更糟。
+                let replay_lagged = self.acp_replay_lagged;
+                self.acp_replay_lagged = false;
+                if replay_lagged && self.acp_replay_retries == 0 {
+                    self.acp_replay_retries = 1;
+                    let protocol_session_id = acp.protocol_session_id();
+                    tracing::warn!(
+                        %protocol_session_id,
+                        "ACP history replay lagged; reloading the session once"
+                    );
+                    // 不把连接塞回去也不清 transition：直接再走一次 load，
+                    // 走的还是同一个 operation。
+                    let replay_turn = acp.begin_history_replay();
+                    self.acp_history_replay = Some(AcpHistoryReplay {
+                        event_session_id: acp.session_id(),
+                        session_uid: session_uid.clone(),
+                        turn_id: replay_turn,
+                    });
+                    self.transcript.clear();
+                    self.transcript.set_acp_status(
+                        t!(
+                            "AgentUi.acp_session_opening",
+                            name = self.acp_agent_name(&agent_id)
+                        )
+                        .to_string(),
+                    );
+                    self.input
+                        .update(cx, |input, cx| input.set_running(true, cx));
+                    let cwd = self.workspace_root.clone();
+                    cx.spawn(async move |this, cx| {
+                        let target = AcpSessionId::new(protocol_session_id);
+                        let mut acp = acp;
+                        let result = match open_kind_at_finish(
+                            acp.state().agent_capabilities(),
+                        ) {
+                            Some(AcpSessionOpen::Load) => {
+                                acp.load_session(target, cwd).await.map(|_| ())
+                            }
+                            Some(AcpSessionOpen::Resume) => {
+                                acp.resume_session(target, cwd).await.map(|_| ())
+                            }
+                            None => Ok(()),
+                        };
+                        let _ = this.update(cx, |this, cx| {
+                            this.finish_acp_session_open(
+                                operation, agent_id, session_uid, acp, result, cx,
+                            );
+                        });
+                    })
+                    .detach();
+                    cx.notify();
+                    return;
+                }
+                if replay_lagged {
+                    tracing::warn!(
+                        "ACP history replay lagged twice; giving up on the refill"
+                    );
+                }
+                self.acp_replay_retries = 0;
                 self.clear_acp_session_transition(operation);
                 let receiver = acp.subscribe();
                 let session_id = acp.session_id();
                 let protocol_session_id = acp.protocol_session_id();
                 self.acp = Some(acp);
-                self.acp_turn_owner = None;
+                self.acp_turn_owners.clear();
                 self._event_task = Self::spawn_event_pump(receiver, Some(session_id), cx);
                 self.transcript.clear_acp_status();
                 self.acp_sessions_error = None;

@@ -9,8 +9,7 @@ use tokio::sync::broadcast;
 
 use crate::acp::config::AcpAgentConfig;
 use crate::acp::state::AcpSessionState;
-use crate::acp::turn::AcpTurnTracker;
-use crate::acp::{AcpError, AcpErrorKind};
+use crate::acp::{AcpActiveTurns, AcpError, AcpErrorKind, AcpInteractiveSession};
 
 use super::AcpConnection;
 use super::lifecycle::AcpConnectionLifecycle;
@@ -22,7 +21,9 @@ pub struct AcpPendingConnection {
     pub(super) session_id: SessionId,
     pub(super) events_tx: broadcast::Sender<RuntimeEvent>,
     pub(super) state: Arc<Mutex<AcpSessionState>>,
-    pub(super) active_turn: Arc<Mutex<Option<AcpTurnTracker>>>,
+    pub(super) active_turn: AcpActiveTurns,
+    /// 交互会话指针；登录完成后要带进 [`AcpConnection`]。
+    pub(super) interactive_session: AcpInteractiveSession,
     /// 历史回放窗口；登录完成后要带进 [`AcpConnection`]，否则通知层认不出回放。
     pub(super) history_replay: Arc<Mutex<Option<TurnId>>>,
     /// 子代理详情会话注册表；登录完成后同样要带过去。
@@ -63,6 +64,10 @@ impl AcpPendingConnection {
     }
 
     fn into_ready(self, acp_session_id: AcpSessionId) -> AcpConnection {
+        // 交互指针跟着登录后开出来的会话走。
+        if let Ok(mut interactive) = self.interactive_session.lock() {
+            *interactive = acp_session_id.0.to_string();
+        }
         AcpConnection {
             handle: self.handle,
             conn: self.conn,
@@ -71,6 +76,7 @@ impl AcpPendingConnection {
             events_tx: self.events_tx,
             state: self.state,
             active_turn: self.active_turn,
+            interactive_session: self.interactive_session,
             history_replay: self.history_replay,
             detail_sessions: self.detail_sessions,
             prompt_timeout: self.config.timeouts.prompt,

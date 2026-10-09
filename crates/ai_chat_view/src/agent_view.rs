@@ -55,7 +55,7 @@ use crate::acp::{
     AcpPublicMcpApprovalProvider, AcpRecoveryAction, AcpSessionContinuity, AcpSessionState,
     AcpSessionSummary, AcpUsage,
     acp_elicitation_channel, acp_permission_channel, acp_public_mcp_approval_channel,
-    acp_session_list_supported, acp_session_open_kind, acp_session_summaries,
+    acp_session_list_supported, acp_session_summaries,
     acquire_acp_permission_grant, build_acp_agent_entries, current_acp_tool_mode,
     detail_session_id_for, is_detail_session_id, set_current_acp_tool_mode,
 };
@@ -291,12 +291,21 @@ struct AcpTurnOwner {
     event_session_id: SessionId,
     session_uid: String,
     turn_id: TurnId,
+    /// 这一轮是否已被转入后台：新建对话/切走会话时置位。
+    ///
+    /// 后台轮次的输出照常回流并落进对应会话的转录缓存，但不再驱动当前界面的
+    /// 「正在响应」状态；取消（停止按钮）也只作用于前台轮次。
+    backgrounded: bool,
     cancel_requested: bool,
 }
 
 impl AcpTurnOwner {
     fn mark_cancel_requested(&mut self, session_uid: &str, has_connection: bool) -> bool {
-        if !has_connection || self.session_uid != session_uid || self.cancel_requested {
+        if !has_connection
+            || self.session_uid != session_uid
+            || self.cancel_requested
+            || self.backgrounded
+        {
             return false;
         }
         self.cancel_requested = true;
@@ -716,8 +725,14 @@ fn persistence_title_from_input(text: &str) -> String {
     }
 }
 
+/// 会话切换前是否要停掉在飞轮次。
+///
+/// 历史上 ACP 在这里返回 `true`（切走即取消）；后台轮次方案后 ACP 轮次改为
+/// 转入后台继续跑，本地运行时从不需要切换前强停——两侧都返回 `false`，
+/// 保留这个函数是为了让切换守卫语义集中在一处，也留着给未来需要强停的后端。
 fn should_stop_task_before_session_switch(backend: Backend) -> bool {
-    backend == Backend::Acp
+    let _ = backend;
+    false
 }
 
 /// 这次会话切换是怎么发起的——决定导航栈（后退/前进）怎么记账。
@@ -1290,10 +1305,21 @@ pub struct AgentChatView {
     skills: AgentSkillState,
     /// 已建立的 ACP 连接(backend == Acp 时存在)。
     acp: Option<AcpConnection>,
-    /// 当前 ACP prompt 的 UI 会话、连接事件 token 与 turn 归属。
-    acp_turn_owner: Option<AcpTurnOwner>,
+    /// 在飞轮次的 UI 侧记账：哪个内置会话、哪条连接事件流、哪一轮。
+    ///
+    /// 后台轮次方案后同一时刻可以有多条（各会话各自一轮）：按 turn_id 路由，
+    /// 不再是单槽 `Option`。
+    acp_turn_owners: Vec<AcpTurnOwner>,
     /// 正在放行的**历史回放**窗口（`session/load` 重放出来的那批 `session/update`）。
     acp_history_replay: Option<AcpHistoryReplay>,
+    /// 历史回放期间事件流被挤掉（lagged）后的重载补全状态。
+    ///
+    /// `session/load` 的整段历史靠 broadcast 事件流回放，一旦订阅端 lagged，
+    /// 这段历史就永久缺一块（后续不会再有事件来补）。补法是再 `load` 一次
+    /// 同一条协议会话；只补一次，重放仍然 lagged 就认了（日志 warn），
+    /// 避免在慢 agent 上无限重载。
+    acp_replay_lagged: bool,
+    acp_replay_retries: u8,
     /// 等待用户选择鉴权方式的 ACP 连接。
     acp_pending: Option<AcpPendingConnection>,
     /// 当前 pending 连接公布的鉴权方式。
@@ -1642,8 +1668,10 @@ impl AgentChatView {
             acp_probe_inflight: HashSet::new(),
             skills,
             acp: None,
-            acp_turn_owner: None,
+            acp_turn_owners: Vec::new(),
             acp_history_replay: None,
+            acp_replay_lagged: false,
+            acp_replay_retries: 0,
             acp_pending: None,
             acp_auth_methods: Vec::new(),
             current_acp_id: None,
@@ -2162,6 +2190,11 @@ impl AgentChatView {
             "runtime event stream lagged: dropped events cannot be replayed; \
              reconciling running state against the driver"
         );
+        // 历史回放窗口开着时被挤掉，丢的就是回放本体：再 load 一次补全
+        // （是否补、补几次由 `finish_acp_session_open` 判定）。
+        if self.acp_history_replay.is_some() {
+            self.acp_replay_lagged = true;
+        }
         let stale: Vec<String> = self
             .running_sessions
             .iter()
@@ -2180,12 +2213,12 @@ impl AgentChatView {
                 "terminating a turn whose terminal event was dropped"
             );
             if self
-                .acp_turn_owner
-                .as_ref()
-                .is_some_and(|owner| owner.session_uid == session_uid)
+                .acp_turn_owners
+                .iter()
+                .any(|owner| owner.session_uid == session_uid)
             {
                 self.cancel_pending_acp_permissions(cx);
-                self.acp_turn_owner = None;
+                self.clear_acp_turn_owners_for_session(&session_uid);
             }
             if session_uid == self.current_session {
                 self.auto_scroll.request_settle();
@@ -2231,18 +2264,20 @@ impl AgentChatView {
                     // 连接已经收掉：没有可问的对象，不猜。
                     return false;
                 };
-                match self.acp_turn_owner.as_ref() {
-                    // 有一轮记在账上：问连接「这一轮还在跑吗」。`try_prompt` 是
-                    // 先装 tracker 再发 `TurnStarted` 的，所以视图这边一看到
-                    // 轮次，连接那边就一定有对应的 tracker；查不到就是终态被丢了。
-                    Some(owner) if owner.session_uid == session_uid => {
-                        acp.active_turn_id().is_none()
-                    }
+                // 按这个会话记在账上的轮次问连接：`try_prompt` 是先装 tracker 再发
+                // `TurnStarted` 的，所以视图这边一看到轮次，连接那边就一定有对应的
+                // tracker；查不到就是终态被丢了。
+                let owned: Vec<&TurnId> = self
+                    .acp_turn_owners
+                    .iter()
+                    .filter(|owner| owner.session_uid == session_uid)
+                    .map(|owner| &owner.turn_id)
+                    .collect();
+                if owned.is_empty() {
                     // 账上没轮次、视图却还标着在跑：只认当前连接自己那条会话。
-                    None => acp.session_id().to_string() == session_uid,
-                    // 账记在别的会话上：这条不归它，不猜。
-                    Some(_) => false,
+                    return acp.session_id().to_string() == session_uid;
                 }
+                owned.iter().all(|turn_id| !acp.turn_is_active(turn_id))
             }
         }
     }
@@ -2726,7 +2761,7 @@ impl AgentChatView {
         cx: &mut Context<Self>,
     ) {
         for session_uid in self.acp_pending_schedule_candidates(origin_session_uid) {
-            if self.acp_turn_owner.is_some() {
+            if self.acp_session_has_foreground_turn(&session_uid) {
                 break;
             }
             let advance = if session_uid == self.current_session {
@@ -2841,10 +2876,11 @@ impl AgentChatView {
             self.request_scroll_to_bottom();
         }
         self.set_session_running(session_uid, true, cx);
-        self.acp_turn_owner = Some(AcpTurnOwner {
+        self.acp_turn_owners.push(AcpTurnOwner {
             event_session_id,
             session_uid: session_uid.to_string(),
             turn_id,
+            backgrounded: false,
             cancel_requested: false,
         });
         cx.notify();
@@ -3037,10 +3073,10 @@ impl AgentChatView {
 
     fn request_acp_cancel_for_session(&mut self, session_uid: &str) -> bool {
         let has_connection = self.acp.is_some();
-        let should_cancel = self
-            .acp_turn_owner
-            .as_mut()
-            .is_some_and(|owner| owner.mark_cancel_requested(session_uid, has_connection));
+        let mut should_cancel = false;
+        for owner in self.acp_turn_owners.iter_mut() {
+            should_cancel |= owner.mark_cancel_requested(session_uid, has_connection);
+        }
         if should_cancel {
             self.acp
                 .as_ref()
@@ -3052,18 +3088,31 @@ impl AgentChatView {
 
     /// 当前 owner 的轮次 id（只在这个 owner 就属于 `session_uid` 时给）。
     fn acp_turn_owner_turn_id(&self, session_uid: &str) -> Option<TurnId> {
-        self.acp_turn_owner
-            .as_ref()
-            .filter(|owner| owner.session_uid == session_uid)
+        self.acp_turn_owners
+            .iter()
+            .find(|owner| owner.session_uid == session_uid && !owner.backgrounded)
             .map(|owner| owner.turn_id.clone())
+    }
+
+    /// 这个会话是否有**前台**在飞轮次。
+    fn acp_session_has_foreground_turn(&self, session_uid: &str) -> bool {
+        self.acp_turn_owners
+            .iter()
+            .any(|owner| owner.session_uid == session_uid && !owner.backgrounded)
+    }
+
+    /// 收掉属于这个会话的全部 owner 记账（前台 + 后台）。
+    fn clear_acp_turn_owners_for_session(&mut self, session_uid: &str) {
+        self.acp_turn_owners
+            .retain(|owner| owner.session_uid != session_uid);
     }
 
     /// 测试构建下不排取消兜底定时器，这个判归属的辅助函数只有生产路径在用。
     #[cfg_attr(test, allow(dead_code))]
     fn acp_turn_owner_matches(&self, session_uid: &str, turn_id: &TurnId) -> bool {
-        self.acp_turn_owner
-            .as_ref()
-            .is_some_and(|owner| owner.session_uid == session_uid && &owner.turn_id == turn_id)
+        self.acp_turn_owners.iter().any(|owner| {
+            owner.session_uid == session_uid && &owner.turn_id == turn_id && !owner.backgrounded
+        })
     }
 
     /// 本地把这一轮结掉：agent 没有回终态，界面不能一直转。
@@ -3075,14 +3124,19 @@ impl AgentChatView {
     /// - 写一条说明 —— 用户点的是「停止」，得知道这一轮是按本地停止收的尾。
     fn settle_acp_turn_locally(&mut self, session_uid: &str, cx: &mut Context<Self>) {
         // 只动本会话的 owner:别的会话正在跑的轮次不归这次停止管。
-        let owned_turn = self.acp_turn_owner_turn_id(session_uid);
-        if owned_turn.is_some() {
-            self.acp_turn_owner = None;
+        let owned_turns: Vec<TurnId> = self
+            .acp_turn_owners
+            .iter()
+            .filter(|owner| owner.session_uid == session_uid)
+            .map(|owner| owner.turn_id.clone())
+            .collect();
+        if !owned_turns.is_empty() {
+            self.clear_acp_turn_owners_for_session(session_uid);
         }
-        if let Some(turn_id) = owned_turn
-            && let Some(acp) = self.acp.as_ref()
-        {
-            acp.abandon_active_turn(&turn_id);
+        if let Some(acp) = self.acp.as_ref() {
+            for turn_id in &owned_turns {
+                acp.abandon_active_turn(turn_id);
+            }
         }
         self.set_session_running(session_uid, false, cx);
         self.sync_pending_preview(cx);
@@ -3130,14 +3184,11 @@ impl AgentChatView {
     fn stop(&mut self, cx: &mut Context<Self>) {
         let session_uid = self.current_session.clone();
         if self.backend == Backend::Acp {
-            let owns_current_turn = self
-                .acp_turn_owner
-                .as_ref()
-                .is_some_and(|owner| owner.session_uid == session_uid);
+            let owns_current_turn = self.acp_session_has_foreground_turn(&session_uid);
             let cancel_outstanding = self
-                .acp_turn_owner
-                .as_ref()
-                .is_some_and(|owner| owner.cancel_requested);
+                .acp_turn_owners
+                .iter()
+                .any(|owner| owner.cancel_requested && !owner.backgrounded);
             let transition_phase = self.acp_session_transition_phase(&session_uid);
             let action = acp_stop_action(
                 owns_current_turn,
@@ -3185,7 +3236,7 @@ impl AgentChatView {
                 }
                 AcpStopAction::AbandonFailedTransition => {
                     self.invalidate_acp_operation();
-                    self.acp_turn_owner = None;
+                    self.clear_acp_turn_owners_for_session(&session_uid);
                     self.set_session_running(&session_uid, false, cx);
                     self.sync_pending_preview(cx);
                     self.sync_composer(cx);
@@ -3195,7 +3246,7 @@ impl AgentChatView {
                 AcpStopAction::ClearQueueOnly => {}
             }
             if owns_current_turn {
-                self.acp_turn_owner = None;
+                self.clear_acp_turn_owners_for_session(&session_uid);
             }
             self.set_session_running(&session_uid, false, cx);
             cx.notify();
@@ -3350,18 +3401,22 @@ impl AgentChatView {
         }
         let session_uid = match backend {
             Backend::Local => event.session_id().to_string(),
-            Backend::Acp => match self.acp_turn_owner.as_ref() {
-                Some(owner) => {
-                    if event.session_id() != &owner.event_session_id
-                        || runtime_event_turn_id(&event) != &owner.turn_id
-                    {
+            Backend::Acp => {
+                // 按 turn id 在在飞表里找 owner；找不到再看是不是历史回放。
+                // 多会话并发（后台轮次）时各轮的事件凭 turn id 各归各的会话。
+                let event_turn = runtime_event_turn_id(&event);
+                if let Some(owner) = self
+                    .acp_turn_owners
+                    .iter()
+                    .find(|owner| &owner.turn_id == event_turn)
+                {
+                    if event.session_id() != &owner.event_session_id {
                         return;
                     }
                     owner.session_uid.clone()
-                }
-                // 没有活动轮次：唯一合法的来源是 `session/load` 的历史回放。它没有轮次
-                // 可归，认不出回放就只能丢弃 —— 点开一条 ACP 历史会话会因此全屏空白。
-                None => {
+                } else {
+                    // 没有活动轮次：唯一合法的来源是 `session/load` 的历史回放。它没有轮次
+                    // 可归，认不出回放就只能丢弃 —— 点开一条 ACP 历史会话会因此全屏空白。
                     let Some(replay) = self.acp_history_replay.as_ref() else {
                         return;
                     };
@@ -3370,7 +3425,7 @@ impl AgentChatView {
                     }
                     replay.session_uid.clone()
                 }
-            },
+            }
         };
         let is_need_user_input = matches!(&event, RuntimeEvent::NeedUserInput { .. });
         let is_pending_tool_approval = matches!(
@@ -3414,7 +3469,7 @@ impl AgentChatView {
             if backend == Backend::Acp && is_real_terminal {
                 self.cancel_pending_acp_permissions(cx);
                 self.set_session_running(&session_uid, false, cx);
-                self.acp_turn_owner = None;
+                self.clear_acp_turn_owners_for_session(&session_uid);
                 self.trim_session_transcripts();
                 if acp_connection_is_unavailable(acp_terminal_phase.as_ref()) {
                     self.invalidate_unavailable_acp_connection(cx);
@@ -3426,7 +3481,11 @@ impl AgentChatView {
             }
             return;
         }
-        let is_current_session = session_uid == self.current_session;
+        let is_current_session = session_uid == self.current_session
+            && !self
+                .acp_turn_owners
+                .iter()
+                .any(|owner| owner.turn_id == *runtime_event_turn_id(&event) && owner.backgrounded);
         let clears_running = is_real_terminal
             || (backend == Backend::Local && is_need_user_input && !is_pending_tool_approval);
         let advances_queue = match backend {
@@ -3483,10 +3542,20 @@ impl AgentChatView {
             if is_current_session {
                 self.auto_scroll.request_settle();
             }
-            self.set_session_running(&session_uid, false, cx);
+            let turn_finished = runtime_event_turn_id(&event).clone();
             if backend == Backend::Acp && is_real_terminal {
-                self.acp_turn_owner = None;
+                // 后台轮次与当前轮共享同一个内置 uid：后台轮次终态不能把新会话的
+                // running 一起清掉——只有这条 uid 名下不再有任何在飞轮次时才清。
+                let session_still_running = self.acp_turn_owners.iter().any(|owner| {
+                    owner.session_uid == session_uid && owner.turn_id != turn_finished
+                });
+                if !session_still_running {
+                    self.set_session_running(&session_uid, false, cx);
+                }
+                self.acp_turn_owners.retain(|owner| owner.turn_id != turn_finished);
                 self.trim_session_transcripts();
+            } else {
+                self.set_session_running(&session_uid, false, cx);
             }
         }
         if !applied {
@@ -3754,7 +3823,7 @@ impl AgentChatView {
         let busy = self.acp_connecting
             || self.acp_pending.is_some()
             || self.acp_session_transition.is_some()
-            || self.acp_turn_owner.is_some();
+            || !self.acp_turn_owners.is_empty();
         let decision = acp_reconnect_decision(
             self.backend == Backend::Acp,
             true,
@@ -4661,7 +4730,7 @@ impl AgentChatView {
                 self.selected_model = binding.selected_model;
                 self.current_session = self.session_id.to_string();
                 self.pending_submissions = PendingSubmissions::default();
-                self.acp_turn_owner = None;
+                self.acp_turn_owners.clear();
                 if !carried_session {
                     // 没有可延续的会话（当前会话已不在 Runtime 中），只能按新会话
                     // 处理：清转录与缓存，并在侧栏用「provider / model」占位。
@@ -4787,6 +4856,11 @@ impl AgentChatView {
             self.select_acp_mode(mode_id.to_string(), cx);
             return;
         }
+        // 新式 agent（opencode 等）把模式放在 configOptions，选中后走 `session/setConfigOption`。
+        if let Some(value) = id.strip_prefix(ACP_CONFIG_MODE_OPTION_PREFIX) {
+            self.select_acp_config_mode(value.to_string(), cx);
+            return;
+        }
         if self.tool_options.iter().all(|o| o.id.as_ref() != id) {
             return;
         }
@@ -4839,13 +4913,45 @@ impl AgentChatView {
         .detach();
     }
 
+    /// 切换新式 agent（`SessionConfigOption{category=mode}`）的会话模式。
+    fn select_acp_config_mode(&mut self, value: String, cx: &mut Context<Self>) {
+        let Some(acp) = self.acp.take() else {
+            return;
+        };
+        let Some(config_id) = acp
+            .state()
+            .current_mode_config()
+            .map(|option| option.id.clone())
+        else {
+            self.acp = Some(acp);
+            return;
+        };
+        let value = agent_client_protocol::schema::v1::SessionConfigValueId::new(value);
+        cx.spawn(async move |this, cx| {
+            let result = acp.set_config_option(config_id, value).await;
+            let _ = this.update(cx, |this, cx| {
+                this.acp = Some(acp);
+                if let Err(error) = result {
+                    this.transcript
+                        .push_system(format!("ACP mode switch failed: {error}"));
+                }
+                this.sync_composer(cx);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     fn new_session(&mut self, cx: &mut Context<Self>) {
         self.history_popover_open = false;
         // ACP 后端:会话由外部 agent 管理,这里仅做视觉重置(清空转录)。
         if self.backend == Backend::Acp {
-            if self.is_running {
-                self.stop(cx);
-                return;
+            // 正在跑的轮次不取消：转入后台继续跑，输出继续落进这个会话的转录缓存。
+            // 用户点「新建对话」意图是开新话题，不是杀掉正在生成的回答。
+            for owner in self.acp_turn_owners.iter_mut() {
+                if owner.session_uid == self.current_session {
+                    owner.backgrounded = true;
+                }
             }
             let session_uid = self.current_session.clone();
             let Some(agent_id) = self.current_acp_id.clone() else {
@@ -4871,7 +4977,14 @@ impl AgentChatView {
             if !retrying_failed_transition {
                 self.pending_submissions.clear_session(&session_uid);
             }
-            self.acp_turn_owner = None;
+            // 屏上转录交给缓存：后台轮次的后续输出靠它接住，不能随 visual reset 丢掉。
+            let mut stashed = AgentTranscript::new();
+            stashed.set_resource_context(&self.resources);
+            let transcript = std::mem::replace(&mut self.transcript, stashed);
+            self.cache_session_transcript(session_uid.clone(), transcript);
+            self.set_session_running(&session_uid, false, cx);
+            self.input
+                .update(cx, |input, cx| input.set_running(false, cx));
             self.trim_session_transcripts();
             self.sync_pending_preview(cx);
             let operation =
@@ -4913,6 +5026,8 @@ impl AgentChatView {
                             // 刚建好的会话要立刻出现在会话列表里：以前只有手动点刷新
                             // 或重连才会拉列表，用户会以为压根没建成。
                             this.reload_acp_sessions(cx);
+                            // 后台轮次还在飞时不推进队列：AlreadyRunning 会自己排队，
+                            // 终态后 `advance_acp_pending_after_terminal` 会补发。
                             this.start_next_pending(&session_uid, cx);
                         }
                         Err(err) => {
@@ -5001,7 +5116,7 @@ impl AgentChatView {
             && self.acp.is_none()
             && !self.acp_connecting
             && self.acp_pending.is_none()
-            && self.acp_turn_owner.is_none()
+            && self.acp_turn_owners.is_empty()
             && self.acp_session_transition.is_none()
             && !self.closed_sessions.contains(&self.current_session)
     }
@@ -5166,9 +5281,9 @@ impl AgentChatView {
             || self.running_sessions.contains(uid)
             || self.pending_submissions.len(uid) > 0
             || self
-                .acp_turn_owner
-                .as_ref()
-                .is_some_and(|owner| owner.session_uid == uid)
+                .acp_turn_owners
+                .iter()
+                .any(|owner| owner.session_uid == uid)
             || self
                 .acp_session_transition
                 .as_ref()
@@ -5507,6 +5622,14 @@ impl AgentChatView {
         let previous_session = self.current_session.clone();
         // 把「离开的是一张白纸」记下来（判定要在 `transcript` 被换掉之前做）。
         self.remember_blank_session_on_leave(cx);
+        // ACP 的在飞轮次不取消：转入后台，输出继续回流到这个会话的转录缓存。
+        if self.backend == Backend::Acp {
+            for owner in self.acp_turn_owners.iter_mut() {
+                if owner.session_uid == previous_session {
+                    owner.backgrounded = true;
+                }
+            }
+        }
         if self.is_running && should_stop_task_before_session_switch(self.backend) {
             self.stop(cx);
         }
@@ -7109,15 +7232,7 @@ fn acp_agent_capability_labels(state: &AcpSessionState) -> Vec<SharedString> {
 }
 
 fn acp_mode_label(state: &AcpSessionState) -> Option<String> {
-    let current = state.current_mode_id()?;
-    Some(
-        state
-            .available_modes()
-            .iter()
-            .find(|mode| mode.id == *current)
-            .map(|mode| mode.name.clone())
-            .unwrap_or_else(|| current.0.to_string()),
-    )
+    state.current_mode_label()
 }
 
 /// 由资源上下文构建输入框展示用上下文。
@@ -7895,18 +8010,44 @@ fn default_execution_mode_options() -> Vec<ComposerMenuOption> {
     ]
 }
 
-/// ACP 后端的执行模式选项：直接用 agent 声明的会话模式。
+/// ACP 后端的执行模式选项。
+///
+/// 两套来源：传统 `SessionModeState.available_modes`（waku/codex 等），以及
+/// `SessionConfigOption{category=mode}`（opencode 等新式 agent）。两者只会有一套非空，
+/// 优先传统那套以保持既有行为。
 fn acp_execution_mode_options(state: &AcpSessionState) -> Vec<ComposerMenuOption> {
+    let legacy = legacy_acp_mode_options(state);
+    if !legacy.is_empty() {
+        return legacy;
+    }
+    acp_config_mode_options(state)
+}
+
+/// 传统 `available_modes` 的下拉项。
+fn legacy_acp_mode_options(state: &AcpSessionState) -> Vec<ComposerMenuOption> {
     state
         .available_modes()
         .iter()
         .map(|mode| {
-            let option = ComposerMenuOption::new(
-                acp_mode_option_id(mode.id.0.as_ref()),
-                mode.name.clone(),
-            );
+            let option =
+                ComposerMenuOption::new(acp_mode_option_id(mode.id.0.as_ref()), mode.name.clone());
             match mode.description.as_deref() {
                 Some(description) => option.with_hint(description.to_string()),
+                None => option,
+            }
+        })
+        .collect()
+}
+
+/// `SessionConfigOption{category=mode}` 的下拉项。
+fn acp_config_mode_options(state: &AcpSessionState) -> Vec<ComposerMenuOption> {
+    state
+        .mode_options()
+        .into_iter()
+        .map(|(value, name, description)| {
+            let option = ComposerMenuOption::new(acp_config_mode_option_id(&value), name);
+            match description {
+                Some(description) => option.with_hint(description),
                 None => option,
             }
         })
@@ -7917,6 +8058,12 @@ const ACP_MODE_OPTION_PREFIX: &str = "acp-mode:";
 
 fn acp_mode_option_id(mode_id: &str) -> String {
     format!("{ACP_MODE_OPTION_PREFIX}{mode_id}")
+}
+
+const ACP_CONFIG_MODE_OPTION_PREFIX: &str = "acp-config-mode:";
+
+fn acp_config_mode_option_id(value: &str) -> String {
+    format!("{ACP_CONFIG_MODE_OPTION_PREFIX}{value}")
 }
 
 fn now_secs() -> i64 {
@@ -8180,19 +8327,20 @@ mod tests {
         view.update(cx, |view, cx| {
             view.backend = Backend::Acp;
             let session_uid = "acp-owner-session".to_string();
-            view.acp_turn_owner = Some(AcpTurnOwner {
+            view.acp_turn_owners = vec![AcpTurnOwner {
                 event_session_id: SessionId::from_string("acp:owner"),
                 session_uid: session_uid.clone(),
                 turn_id: TurnId::from_string("turn-owner"),
+                backgrounded: false,
                 cancel_requested: false,
-            });
+            }];
             view.set_session_running(&session_uid, true, cx);
 
             view.on_runtime_events_dropped(2, cx);
 
             assert!(view.running_sessions.contains(&session_uid));
             assert!(
-                view.acp_turn_owner.is_some(),
+                !view.acp_turn_owners.is_empty(),
                 "没确证结束就不该动 owner —— 动了等于把这一轮白送给下一条消息"
             );
         });
@@ -8493,6 +8641,7 @@ mod tests {
             event_session_id: SessionId::from_string("acp:cancel-once"),
             session_uid: "session-a".into(),
             turn_id: TurnId::from_string("turn-a"),
+            backgrounded: false,
             cancel_requested: false,
         };
 
@@ -8647,12 +8796,13 @@ mod tests {
             view.running_sessions.insert(running_uid.clone());
             view.pending_submissions
                 .enqueue(&pending_uid, pending_submission("queued"));
-            view.acp_turn_owner = Some(AcpTurnOwner {
+            view.acp_turn_owners = vec![AcpTurnOwner {
                 event_session_id: SessionId::from_string("acp:cached-owner"),
                 session_uid: owner_uid.clone(),
                 turn_id: TurnId::from_string("turn-cached-owner"),
+                backgrounded: false,
                 cancel_requested: false,
-            });
+            }];
             view.acp_session_transition = Some(AcpSessionTransition {
                 operation: AcpOperationToken(1),
                 agent_id: "cached-agent".into(),
@@ -8671,7 +8821,7 @@ mod tests {
 
             view.running_sessions.remove(&running_uid);
             view.pending_submissions.remove_session(&pending_uid);
-            view.acp_turn_owner = None;
+            view.acp_turn_owners.clear();
             view.acp_session_transition = None;
             view.trim_session_transcripts_to(1);
 
@@ -11593,12 +11743,13 @@ mod tests {
 
         view.update(cx, |view, cx| {
             view.backend = Backend::Acp;
-            view.acp_turn_owner = Some(AcpTurnOwner {
+            view.acp_turn_owners = vec![AcpTurnOwner {
                 event_session_id: SessionId::from_string("acp:owner"),
                 session_uid: view.current_session.clone(),
                 turn_id: agent_runtime::TurnId::from_string("turn-owner"),
+                backgrounded: false,
                 cancel_requested: false,
-            });
+            }];
             view.set_running(true, cx);
             let message_count = view.transcript.messages.len();
 
@@ -11621,7 +11772,7 @@ mod tests {
 
             assert_eq!(message_count, view.transcript.messages.len());
             assert!(view.is_running);
-            assert!(view.acp_turn_owner.is_some());
+            assert!(!view.acp_turn_owners.is_empty());
         });
     }
 
@@ -11639,7 +11790,7 @@ mod tests {
 
         view.update(cx, |view, cx| {
             view.backend = Backend::Acp;
-            view.acp_turn_owner = None;
+            view.acp_turn_owners.clear();
             let event_session_id = SessionId::from_string("acp:replay");
             let turn_id = TurnId::from_string("acp-replay:1");
             view.acp_history_replay = Some(AcpHistoryReplay {
@@ -11840,12 +11991,13 @@ mod tests {
             let event_session_id = SessionId::from_string("acp:need-input");
             let turn_id = TurnId::from_string("turn-needs-input");
             view.backend = Backend::Acp;
-            view.acp_turn_owner = Some(AcpTurnOwner {
+            view.acp_turn_owners = vec![AcpTurnOwner {
                 event_session_id: event_session_id.clone(),
                 session_uid: view.current_session.clone(),
                 turn_id: turn_id.clone(),
+                backgrounded: false,
                 cancel_requested: false,
-            });
+            }];
             view.pending_submissions
                 .enqueue(&view.current_session, pending_submission("queued"));
             view.set_running(true, cx);
@@ -11866,7 +12018,7 @@ mod tests {
 
         view.read_with(cx, |view, _| {
             assert!(view.is_running);
-            assert!(view.acp_turn_owner.is_some());
+            assert!(!view.acp_turn_owners.is_empty());
             assert_eq!(1, view.pending_submissions.len(&view.current_session));
         });
     }
@@ -11883,12 +12035,13 @@ mod tests {
             let event_session_id = SessionId::from_string("acp:cancel");
             let turn_id = TurnId::from_string("turn-cancelled");
             view.backend = Backend::Acp;
-            view.acp_turn_owner = Some(AcpTurnOwner {
+            view.acp_turn_owners = vec![AcpTurnOwner {
                 event_session_id: event_session_id.clone(),
                 session_uid: view.current_session.clone(),
                 turn_id: turn_id.clone(),
-                cancel_requested: true,
-            });
+                backgrounded: false,
+                cancel_requested: false,
+            }];
             view.pending_submissions.enqueue(
                 &view.current_session,
                 pending_submission("queued after stop"),
@@ -11906,7 +12059,7 @@ mod tests {
 
         view.read_with(cx, |view, _| {
             assert!(!view.is_running);
-            assert!(view.acp_turn_owner.is_none());
+            assert!(view.acp_turn_owners.is_empty());
             assert_eq!(
                 1,
                 view.pending_submissions.len(&view.current_session),
@@ -11932,12 +12085,13 @@ mod tests {
             let event_session_id = SessionId::from_string("acp:discarded-owner");
             let turn_id = TurnId::from_string("turn-discarded-owner");
             view.backend = Backend::Acp;
-            view.acp_turn_owner = Some(AcpTurnOwner {
+            view.acp_turn_owners = vec![AcpTurnOwner {
                 event_session_id: event_session_id.clone(),
                 session_uid: closed_uid.clone(),
                 turn_id: turn_id.clone(),
+                backgrounded: false,
                 cancel_requested: false,
-            });
+            }];
             view.set_session_running(&closed_uid, true, cx);
             view.pending_submissions
                 .enqueue(&current_uid, pending_submission("current remains queued"));
@@ -11945,7 +12099,7 @@ mod tests {
             view.discard_live_session(&closed_uid);
 
             assert!(
-                view.acp_turn_owner.is_some(),
+                !view.acp_turn_owners.is_empty(),
                 "the owner token must survive until its matching terminal event"
             );
             view.apply_runtime_event(
@@ -11959,7 +12113,7 @@ mod tests {
         });
 
         view.read_with(cx, |view, _| {
-            assert!(view.acp_turn_owner.is_none());
+            assert!(view.acp_turn_owners.is_empty());
             assert!(!view.running_sessions.contains(&closed_uid));
             assert!(!view.session_transcripts.contains_key(&closed_uid));
             assert!(
@@ -12336,6 +12490,53 @@ mod tests {
         );
         assert_eq!(options[1].label.as_ref(), "Code");
         assert_eq!(Some("Ask".to_string()), acp_mode_label(&state));
+    }
+
+    #[test]
+    fn acp_config_mode_options_are_exposed_and_namespaced() {
+        use agent_client_protocol::schema::v1::{
+            NewSessionResponse, SessionConfigOption, SessionConfigOptionCategory,
+            SessionConfigSelectOption,
+        };
+
+        let mut state = AcpSessionState::default();
+        state.apply_new_session_response(&NewSessionResponse::new("s1").config_options(vec![
+            SessionConfigOption::select(
+                "mode",
+                "Session Mode",
+                "build",
+                vec![
+                    SessionConfigSelectOption::new("build", "build").description("The default agent."),
+                    SessionConfigSelectOption::new("plan", "plan"),
+                    SessionConfigSelectOption::new("scout", "scout"),
+                ],
+            )
+            .category(SessionConfigOptionCategory::Mode),
+        ]));
+
+        let options = acp_execution_mode_options(&state);
+
+        assert_eq!(
+            vec![
+                "acp-config-mode:build",
+                "acp-config-mode:plan",
+                "acp-config-mode:scout",
+            ],
+            options
+                .iter()
+                .map(|option| option.id.as_ref())
+                .collect::<Vec<_>>()
+        );
+        // 走 config 分支的 id 不能撞上传统前缀，且必须解析回 Agent。
+        assert_eq!(TaskKind::Agent, task_kind_from_id(options[0].id.as_ref()));
+        assert_eq!(
+            Some("build"),
+            options[0]
+                .id
+                .as_ref()
+                .strip_prefix(ACP_CONFIG_MODE_OPTION_PREFIX)
+        );
+        assert_eq!(Some("build".to_string()), acp_mode_label(&state));
     }
 
     #[test]
@@ -14096,8 +14297,9 @@ mod tests {
 
     #[test]
     fn local_workbench_can_switch_away_from_a_running_session() {
+        // 后台轮次方案：两侧切换都不再强停；ACP 的新建/切换也不取消在飞轮次。
         assert!(!should_stop_task_before_session_switch(Backend::Local));
-        assert!(should_stop_task_before_session_switch(Backend::Acp));
+        assert!(!should_stop_task_before_session_switch(Backend::Acp));
     }
 
     /// 启动时那张初始会话也要记住自己的工作区。
