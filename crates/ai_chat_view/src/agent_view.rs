@@ -16904,10 +16904,66 @@ mod tests {
         Arc::new(Runtime::new(RuntimeServices::new(model, tools)))
     }
 
+    /// 测试的配置根目录必须在临时目录里，绝不落到用户真实配置目录。
+    ///
+    /// 这不是洁癖：`AppSettings::update_and_save` 的落盘路径默认是用户真实
+    /// `settings.json`，而测试进程里的设置起步是默认值——一次保存就把用户的
+    /// 工作区根、终端、主题、MCP 配置全部覆盖成默认。工作区根一没，工作台就认
+    /// 不出仓库，审阅入口随即退化成「打开源文件、没有 diff」。
+    fn isolate_config_dir_for_tests() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            let data_dir =
+                std::env::temp_dir().join(format!("navop-test-paths-{}", std::process::id()));
+            let context = one_core::app_paths::AppPathResolutionContext {
+                executable_path: std::env::current_exe().unwrap_or_default(),
+                current_dir: std::env::current_dir().unwrap_or_default(),
+                portable_environment: None,
+                data_dir_environment: None,
+            };
+            let _ = one_core::app_paths::initialize_app_paths(
+                &one_core::app_paths::AppPathOverrides::with_data_dir(data_dir),
+                &context,
+            );
+        });
+    }
+
     fn init_test_ui(cx: &mut TestAppContext) {
+        isolate_config_dir_for_tests();
         cx.update(|cx| {
             gpui_component::init(cx);
             crate::init(cx);
+        });
+    }
+
+    /// 测试里的设置保存必须落在临时配置目录，绝不碰用户真实 `settings.json`。
+    #[gpui::test]
+    fn settings_saves_stay_in_the_test_config_dir(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let before = cx.update(|cx| AppSettings::current(cx).log_file_path.clone());
+        cx.update(|cx| {
+            AppSettings::update_and_save(cx, |settings| {
+                settings.log_file_path = "/navop-test/sentinel.log".to_string();
+            });
+        });
+
+        let config_dir = one_core::app_dirs::config_dir().expect("配置目录");
+        assert!(
+            config_dir.starts_with(std::env::temp_dir()),
+            "设置落盘必须写在测试临时目录，实际是 {}",
+            config_dir.display()
+        );
+        let saved =
+            std::fs::read_to_string(config_dir.join("settings.json")).expect("设置文件应已写出");
+        assert!(
+            saved.contains("navop-test/sentinel.log"),
+            "保存的内容要能读回来：{saved}"
+        );
+
+        cx.update(|cx| {
+            AppSettings::update_and_save(cx, |settings| {
+                settings.log_file_path = before;
+            });
         });
     }
 

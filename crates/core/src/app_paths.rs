@@ -63,6 +63,20 @@ pub struct AppPathOverrides {
     data_dir: Option<PathBuf>,
 }
 
+impl AppPathOverrides {
+    /// 把配置/数据根目录挪到指定位置（等同 `--data-dir`）。
+    ///
+    /// 测试用它把写入引到临时目录：配置写入路径默认指向用户真实配置目录，
+    /// 而测试里的设置起步是默认值，一次保存就会把用户真实 `settings.json`
+    /// 覆盖成默认值。
+    pub fn with_data_dir(data_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            portable: false,
+            data_dir: Some(data_dir.into()),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParsedStartupArguments {
     pub path_overrides: AppPathOverrides,
