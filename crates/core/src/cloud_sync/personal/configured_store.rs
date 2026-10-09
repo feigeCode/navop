@@ -55,9 +55,7 @@ where
     ) -> Result<Self, SyncStoreError> {
         match backend {
             PersonalSyncBackendKind::Folder => Ok(Self::Folder(DirectorySyncStore::new(root))),
-            PersonalSyncBackendKind::Git => {
-                Ok(Self::new_git(root, runner, git_auto_push))
-            }
+            PersonalSyncBackendKind::Git => Ok(Self::new_git(root, runner, git_auto_push)),
             PersonalSyncBackendKind::Webdav => {
                 let Some(settings) = webdav else {
                     return Err(SyncStoreError::NotConfigured);

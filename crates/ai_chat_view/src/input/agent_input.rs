@@ -109,6 +109,8 @@ pub enum AgentInputEvent {
     DeclineElicitation,
     /// 关掉这条提问（等价于取消，agent 会走降级路径）。
     CancelElicitation,
+    /// 用户在用量详情里点了「查看历史」——由上层打开独立用量视图。
+    OpenUsageHistory,
 }
 
 /// 内置下拉的种类(用于受控开合状态)。
@@ -381,6 +383,11 @@ pub struct AgentInput {
     context_search_needs_reset: bool,
     /// 当前展开的下拉(受控开合)。
     open_menu: Option<ComposerMenuKind>,
+    /// 用量详情 popover 的开合。
+    ///
+    /// 单独一个 bool 而不是塞进 `open_menu`：它是**受控**的——点「查看历史」要
+    /// 顺手把它收起来，让用量历史浮层不被自己的 popover 压住。
+    usage_detail_open: bool,
     /// 顶部计划面板中已展开的只读计划项。
     expanded_plan_items: HashSet<String>,
     /// 是否折叠顶部计划 / Agent / 上下文能力区。
@@ -562,6 +569,7 @@ impl AgentInput {
             selected_resource_kind_filter: SharedString::from("all"),
             context_search_needs_reset: false,
             open_menu: None,
+            usage_detail_open: false,
             expanded_plan_items: HashSet::new(),
             top_capabilities_collapsed: false,
             theme: None,
@@ -1691,6 +1699,7 @@ impl AgentInput {
         let percent = usage.percent().unwrap_or(0.0);
         let label = usage.gauge_label();
         let detail = usage.detail_text();
+        let view = cx.entity();
         let trigger = Button::new("agent-input-usage-gauge")
             .debug_selector(|| "agent-input-usage-gauge".to_string())
             .child(
@@ -1719,9 +1728,26 @@ impl AgentInput {
             .px_0();
         Some(
             Popover::new("agent-usage-popover")
-                // 触发器只有 Button 实现了 `Selectable`；圆环与百分比作为按钮内容。
+                // 触发只有 Button 实现了 `Selectable`；圆环与百分比作为按钮内容。
                 .trigger(trigger)
-                .content(move |_state, _window, _cx| render_usage_detail(&usage, &theme)),
+                // 受控开合：详情里的「查看历史」要能把它关上。
+                .open(self.usage_detail_open)
+                .on_open_change({
+                    let view = view.clone();
+                    move |open, _window, cx| {
+                        let open = *open;
+                        view.update(cx, |this, cx| {
+                            if this.usage_detail_open != open {
+                                this.usage_detail_open = open;
+                                cx.notify();
+                            }
+                        });
+                    }
+                })
+                .content({
+                    let view = view.clone();
+                    move |_state, _window, _cx| render_usage_detail(&usage, &theme, view.clone())
+                }),
         )
     }
 
@@ -3934,7 +3960,11 @@ fn usage_color(usage: &ContextUsage, theme: &AgentChatTheme) -> gpui::Hsla {
 ///
 /// 只展示**手上真实有**的数：没有窗口大小就不编造上限与百分比，
 /// 没有费用就不摆一行空值。
-fn render_usage_detail(usage: &ContextUsage, theme: &AgentChatTheme) -> impl IntoElement + use<> {
+fn render_usage_detail(
+    usage: &ContextUsage,
+    theme: &AgentChatTheme,
+    view: Entity<AgentInput>,
+) -> impl IntoElement + use<> {
     let accent = usage_color(usage, theme);
     let rows = usage_detail_rows(usage)
         .into_iter()
@@ -3957,6 +3987,21 @@ fn render_usage_detail(usage: &ContextUsage, theme: &AgentChatTheme) -> impl Int
             None => None,
         })
         .children(rows)
+        .child(
+            div().pt_2().border_t_1().border_color(theme.border).child(
+                Button::new("agent-usage-history-open")
+                    .small()
+                    .ghost()
+                    .label(t!("AgentUi.usage_history_open").to_string())
+                    .on_click(move |_event, _window, cx| {
+                        view.update(cx, |this, cx| {
+                            this.usage_detail_open = false;
+                            cx.emit(AgentInputEvent::OpenUsageHistory);
+                            cx.notify();
+                        });
+                    }),
+            ),
+        )
 }
 
 /// 详情面板里的「标签 / 数值」列表。

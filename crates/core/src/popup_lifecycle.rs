@@ -147,10 +147,7 @@ mod tests {
         let registered = snapshot();
         assert_eq!(baseline.live_windows + 1, registered.live_windows);
         assert_eq!(baseline.opened_windows + 1, registered.opened_windows);
-        assert_eq!(
-            baseline.reusable_windows + 1,
-            registered.reusable_windows
-        );
+        assert_eq!(baseline.reusable_windows + 1, registered.reusable_windows);
         assert_eq!(baseline.parked_windows, registered.parked_windows);
         assert_eq!(baseline.live_sessions, registered.live_sessions);
         assert_eq!(baseline.opened_sessions, registered.opened_sessions);

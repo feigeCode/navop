@@ -39,7 +39,9 @@ pub struct SyncTombstone {
 pub enum SyncStoreError {
     NotConfigured,
     DirectoryUnavailable(String),
-    SchemaUnsupported { found: u32 },
+    SchemaUnsupported {
+        found: u32,
+    },
     Conflict(String),
     LockTimeout,
     GitAuthRequired,
@@ -51,7 +53,10 @@ pub enum SyncStoreError {
     /// WebDAV 服务端不可达：DNS 失败、连接超时、TLS 失败等。
     WebdavUnreachable(String),
     /// 服务端返回了非预期状态码，且不属于「未认证」类。
-    WebdavStatus { status: u16, message: String },
+    WebdavStatus {
+        status: u16,
+        message: String,
+    },
 }
 
 impl fmt::Display for SyncStoreError {

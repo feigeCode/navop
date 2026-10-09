@@ -424,7 +424,7 @@ impl super::AgentChatView {
                         }
                     },
                 ))
-                .child(
+                .child(crate::motion::panel_entrance(
                     div()
                         .id("agent-session-switcher")
                         .debug_selector(|| "agent-session-switcher".to_string())
@@ -473,7 +473,9 @@ impl super::AgentChatView {
                                 .child(t!(SWITCHER_HINT_KEY).to_string()),
                         )
                         .children(row_elements),
-                )
+                    "agent-session-switcher-enter",
+                    crate::motion::PANEL_SLIDE_OFFSET * -1.0,
+                ))
                 .into_any_element(),
         )
     }

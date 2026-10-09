@@ -83,9 +83,10 @@ impl ProviderManager {
 
         let provider: Arc<dyn LlmProvider> = match config.provider_type {
             ProviderType::OnetCli => {
-                let cloud_client = self.cloud_client.read().clone().ok_or_else(|| {
-                    anyhow::anyhow!("CloudApiClient not set for Navop provider")
-                })?;
+                let cloud_client =
+                    self.cloud_client.read().clone().ok_or_else(|| {
+                        anyhow::anyhow!("CloudApiClient not set for Navop provider")
+                    })?;
 
                 let onet_provider = NavopLLMProvider::new(cloud_client);
 

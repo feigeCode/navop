@@ -150,7 +150,9 @@ pub fn now_unix() -> i64 {
 }
 
 /// 一天的秒数。
-const DAY_SECS: i64 = 24 * 60 * 60;
+///
+/// 用量历史（`usage_history`）按同一套本地日历天分桶，所以对 crate 内公开。
+pub(crate) const DAY_SECS: i64 = 24 * 60 * 60;
 
 /// 会话列表的时间桶。
 ///
@@ -179,7 +181,7 @@ impl DateBucket {
 }
 
 /// 本地时区下「今天零点」的 Unix 秒;取不到时退回 `now`(分组会全部落到今天)。
-fn local_midnight(now: i64) -> i64 {
+pub(crate) fn local_midnight(now: i64) -> i64 {
     use chrono::{Local, TimeZone as _};
 
     let Some(now_dt) = Local.timestamp_opt(now, 0).single() else {

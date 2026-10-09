@@ -371,6 +371,10 @@ AgentUi:
     en: Choose Skill Directory
     zh-CN: 选择 Skill 目录
     zh-HK: 選擇 Skill 目錄
+  close:
+    en: Close
+    zh-CN: 关闭
+    zh-HK: 關閉
   close_panel:
     en: Close panel
     zh-CN: 关闭面板
@@ -1119,6 +1123,42 @@ AgentUi:
     en: Cost
     zh-CN: 费用
     zh-HK: 費用
+  usage_history_daily:
+    en: Peak context per day
+    zh-CN: 每天峰值占用
+    zh-HK: 每日峰值佔用
+  usage_history_empty:
+    en: No usage recorded yet. Numbers show up after an agent turn reports usage.
+    zh-CN: 还没有用量记录。等某一轮跑完后 agent 报出计量才会有数。
+    zh-HK: 尚未有用量記錄。等某一輪跑完後 agent 報出計量才會有數。
+  usage_history_empty_short:
+    en: No data in this window
+    zh-CN: 这段时间没有数据
+    zh-HK: 這段時間沒有資料
+  usage_history_peak:
+    en: Peak
+    zh-CN: 峰值
+    zh-HK: 峰值
+  usage_history_open:
+    en: View history
+    zh-CN: 查看历史
+    zh-HK: 查看歷史
+  usage_history_per_session:
+    en: Per session
+    zh-CN: 按会话
+    zh-HK: 按工作階段
+  usage_history_range:
+    en: Last 14 days
+    zh-CN: 最近 14 天
+    zh-HK: 最近 14 天
+  usage_history_samples:
+    en: Samples
+    zh-CN: 采样次数
+    zh-HK: 採樣次數
+  usage_history_sessions:
+    en: Sessions
+    zh-CN: 会话数
+    zh-HK: 工作階段數
   usage_limit:
     en: Limit
     zh-CN: 上限

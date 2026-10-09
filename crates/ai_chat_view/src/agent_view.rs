@@ -1317,6 +1317,12 @@ pub struct AgentChatView {
     search_revision: u64,
     /// findbar 是否打开。
     findbar_open: bool,
+    /// 用量历史浮层的数据；`None` = 浮层关着。
+    ///
+    /// 打开时取一次、关掉即清：这条视图读的是本地库（采样流水 + 会话摘要），
+    /// 不适合放在每帧 render 路径上重复查。`None` 与「空数据」区分开——
+    /// 空数据是「打开了但还没有采样」。
+    pub(super) usage_history: Option<crate::usage_history::UsageHistoryData>,
     /// findbar 的查询输入框。
     findbar_input: Entity<InputState>,
     /// 侧边栏是否显示「已归档」会话(否则显示活跃会话)。
@@ -1693,6 +1699,7 @@ impl AgentChatView {
             search: TranscriptSearch::new(),
             search_revision: 0,
             findbar_open: false,
+            usage_history: None,
             findbar_input,
             show_archived: false,
             sidebar_mode,
@@ -2466,6 +2473,10 @@ impl AgentChatView {
                     self.sync_pending_preview(cx);
                     cx.notify();
                 }
+            }
+            AgentInputEvent::OpenUsageHistory => {
+                self.usage_history = Some(crate::usage_history::collect_usage_history(cx));
+                cx.notify();
             }
             AgentInputEvent::EditQueued { index } => {
                 let session_uid = self.current_session.clone();
@@ -5274,6 +5285,13 @@ impl AgentChatView {
         }
     }
 
+    /// 关掉用量历史浮层，顺手把数据丢掉——下次打开重新查。
+    pub(super) fn close_usage_history(&mut self, cx: &mut Context<Self>) {
+        if self.usage_history.take().is_some() {
+            cx.notify();
+        }
+    }
+
     /// 把当前会话快照写入持久化存储,并刷新其侧边栏摘要(空会话不落库)。
     fn persist_current(&mut self, cx: &mut Context<Self>) {
         let uid = self.current_session.clone();
@@ -5300,6 +5318,32 @@ impl AgentChatView {
         {
             self.upsert_live_summary(uid.to_string(), title, updated_at);
         }
+        self.record_local_usage_sample(uid, &session, cx);
+    }
+
+    /// 本地会话落盘顺手记一条用量采样（ACP 会话由 agent 上报那条路径记）。
+    ///
+    /// 没报过计量（`context_tokens` 为 `None`）就不记——宁缺勿造假数据。
+    fn record_local_usage_sample(
+        &self,
+        uid: &str,
+        session: &std::sync::Arc<agent_runtime::Session>,
+        cx: &App,
+    ) {
+        if self.backend != Backend::Local {
+            return;
+        }
+        let Some(used) = session.context_tokens() else {
+            return;
+        };
+        let model = self
+            .selected_model
+            .as_ref()
+            .map(|option| option.model.to_string());
+        let window = model
+            .as_deref()
+            .and_then(crate::usage::model_context_window);
+        persistence::record_usage_sample(cx, uid, used, window, model.as_deref());
     }
 
     fn upsert_live_summary(&mut self, uid: String, title: String, updated_at: i64) {
@@ -5884,6 +5928,8 @@ impl AgentChatView {
     /// 提交删除:从存储与列表移除;若删的是当前会话,自动新建一个空会话。
     fn apply_delete(&mut self, uid: &str, cx: &mut Context<Self>) {
         persistence::delete_session(cx, uid);
+        // 用量流水跟着会话一起收：“历史上那条已经不存在的会话用了多少”没意义。
+        persistence::clear_usage_samples(cx, uid);
         if self.current_session == uid {
             self.start_fresh_session(cx);
         }
@@ -6983,6 +7029,7 @@ impl Render for AgentChatView {
         if self.sidebar_mode {
             // 附件放大预览：挂在面板根部，才有覆盖整块面板的背板。
             let attachment_preview = self.render_attachment_preview(&chat_theme, cx);
+            let usage_history = self.render_usage_history(&chat_theme, cx.entity());
             // 侧边栏视图:紧凑头部(新建对话 / 历史记录) + 消息 + 输入。
             let header = self
                 .show_sidebar_header
@@ -7034,6 +7081,7 @@ impl Render for AgentChatView {
                     |root, overlay| root.child(overlay),
                 )
                 .when_some(attachment_preview, |root, overlay| root.child(overlay))
+                .when_some(usage_history, |root, overlay| root.child(overlay))
                 .child(
                     v_flex()
                         .debug_selector(|| "agent-sidebar-stack".to_string())
@@ -7049,6 +7097,7 @@ impl Render for AgentChatView {
         } else {
             // 附件放大预览：挂在面板根部，才有覆盖整块面板的背板。
             let attachment_preview = self.render_attachment_preview(&chat_theme, cx);
+            let usage_history = self.render_usage_history(&chat_theme, cx.entity());
             // 普通全宽视图:常驻左侧会话栏 + 主区(标题 / 消息 / 输入)。
             // 工作台外壳接管会话栏时整块隐藏（`sidebar_suppressed`）。
             let sidebar = (!self.sidebar_suppressed).then(|| self.render_sidebar(cx));
@@ -7124,6 +7173,7 @@ impl Render for AgentChatView {
                         ),
                 )
                 .when_some(attachment_preview, |root, overlay| root.child(overlay))
+                .when_some(usage_history, |root, overlay| root.child(overlay))
         }
     }
 }
@@ -8172,6 +8222,8 @@ fn now_secs() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use one_core::llm::usage_history::AgentUsageSample;
+
     use crate::agent_cards::{
         ACP_PERMISSION_CARD, AcpPermissionCardData, AcpPermissionOptionData, TOOL_CARD,
         TOOL_CONFIRM_CARD, ToolCardData, ToolConfirmCardData,
@@ -14998,6 +15050,55 @@ mod tests {
         assert!(
             input.size.height > px(0.0),
             "sidebar input root must keep a visible height: area={input_area:?}, input={input:?}"
+        );
+    }
+
+    /// 用量历史浮层：有数据就画、关掉就没了。
+    ///
+    /// 这里直接塞数据而不是走 `OpenUsageHistory` 事件：事件分支只多做一步
+    /// 「查库」，而查库那半步由 `persistence` 的用例覆盖；这里要卡的是覆盖层
+    /// 真的挂在面板根上、并且能关掉。
+    #[gpui::test]
+    fn usage_history_overlay_renders_over_the_panel_and_closes(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let (host, cx) = cx.add_window_view(FixedSidebarHost::new);
+        let chat = host.read_with(cx, |host, _| host.view.clone());
+        let now = crate::session_sidebar::now_unix();
+        chat.update(cx, |view, cx| {
+            let mut first = AgentUsageSample::new("sess_a", 12_000, now - 60);
+            first.window = Some(200_000);
+            let mut second = AgentUsageSample::new("sess_a", 40_000, now);
+            second.window = Some(200_000);
+            let samples = vec![first, second];
+            view.usage_history = Some(crate::usage_history::UsageHistoryData {
+                sessions: crate::usage_history::session_usage(&samples),
+                daily: crate::usage_history::daily_usage(&samples, now, 14),
+                titles: [("sess_a".to_string(), "连接数排查".into())]
+                    .into_iter()
+                    .collect(),
+            });
+            cx.notify();
+        });
+        let cx: &mut VisualTestContext = cx;
+
+        assert!(
+            cx.debug_bounds("ai-chat-usage-history-layer").is_some(),
+            "浮层背板应该铺满面板"
+        );
+        let panel = cx
+            .debug_bounds("ai-chat-usage-history")
+            .expect("浮层内容应该渲染");
+        let root = cx.debug_bounds("agent-sidebar-root").expect("面板根仍然在");
+        assert!(
+            panel.size.width < root.size.width && panel.size.height < root.size.height,
+            "浮层内容应该小于面板（四周留白）: panel={panel:?} root={root:?}"
+        );
+
+        chat.update(cx, |view, cx| view.close_usage_history(cx));
+        let cx: &mut VisualTestContext = cx;
+        assert!(
+            cx.debug_bounds("ai-chat-usage-history-layer").is_none(),
+            "关掉之后覆盖层不该留着"
         );
     }
 

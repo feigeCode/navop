@@ -118,6 +118,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "20260929000001",
         include_str!("../../migrations/20260929000001_credential_forward_to_agent.sql"),
     ),
+    (
+        "20260930000001",
+        include_str!("../../migrations/20260930000001_agent_usage_samples.sql"),
+    ),
 ];
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {

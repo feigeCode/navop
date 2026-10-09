@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use one_core::crypto;
 use one_core::storage::connection::SqliteConnection;
 use one_core::storage::traits::Repository;
-use one_core::storage::{ConnectionRepository, StoredConnection, SshParams, get_db_path};
+use one_core::storage::{ConnectionRepository, SshParams, StoredConnection, get_db_path};
 
 const FTP_NAME: &str = "FTP测试-本地pure-ftpd";
 const FTPS_NAME: &str = "FTPS测试-本地pure-ftpd";

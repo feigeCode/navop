@@ -4937,11 +4937,8 @@ mod serial_tests {
 
     #[test]
     fn ftp_connection_type_round_trips_and_defaults_name() {
-        let connection = StoredConnection::new_ftp(
-            String::new(), 
-            ftp_params_for_storage_tests(), 
-            None,
-        );
+        let connection =
+            StoredConnection::new_ftp(String::new(), ftp_params_for_storage_tests(), None);
         assert_eq!(connection.connection_type, ConnectionType::Ftp);
         assert_eq!(connection.name, "ftp-user@ftp.example:21");
 
@@ -4960,8 +4957,7 @@ mod serial_tests {
         ftp.prompt_password = Some(true);
         let connection = StoredConnection::new_ftp("测试 FTP".to_string(), ftp, None);
 
-        let params: FtpParams =
-         serde_json::from_str(&connection.params_for_storage()).unwrap();
+        let params: FtpParams = serde_json::from_str(&connection.params_for_storage()).unwrap();
         assert_eq!(params.username, "ftp-user", "未启用 prompt 的字段保留");
         assert_eq!(params.password, "", "启用了 prompt 的密码应被清除");
     }
@@ -4980,7 +4976,10 @@ mod serial_tests {
 
         let encrypted = connection.try_encrypt_params().expect("encrypt params");
         let value: Value = serde_json::from_str(&encrypted).unwrap();
-        assert_eq!(value["password"].as_str().map(|p| p.starts_with("ENC:")), Some(true));
+        assert_eq!(
+            value["password"].as_str().map(|p| p.starts_with("ENC:")),
+            Some(true)
+        );
 
         let mut stored = connection.clone();
         stored.params = encrypted;
@@ -5030,17 +5029,15 @@ mod serial_tests {
         );
         assert_eq!(ssh.effective_open_mode(), PreferredOpenMode::Terminal);
 
-        let ftp = StoredConnection::new_ftp("ftp".to_string(), ftp_params_for_storage_tests(), None);
+        let ftp =
+            StoredConnection::new_ftp("ftp".to_string(), ftp_params_for_storage_tests(), None);
         assert_eq!(ftp.effective_open_mode(), PreferredOpenMode::DualPane);
     }
 
     #[test]
     fn preferred_open_mode_round_trips_through_serde() {
-        let mut connection = StoredConnection::new_ftp(
-            "ftp".to_string(), 
-            ftp_params_for_storage_tests(), 
-            None,
-        );
+        let mut connection =
+            StoredConnection::new_ftp("ftp".to_string(), ftp_params_for_storage_tests(), None);
         connection.preferred_open_mode = Some(PreferredOpenMode::Terminal);
 
         let json = serde_json::to_string(&connection).expect("serialize connection");
@@ -5055,11 +5052,8 @@ mod serial_tests {
 
     #[test]
     fn preferred_open_mode_absent_keeps_type_default() {
-        let connection = StoredConnection::new_ftp(
-            "ftp".to_string(), 
-            ftp_params_for_storage_tests(),
-             None,
-            );
+        let connection =
+            StoredConnection::new_ftp("ftp".to_string(), ftp_params_for_storage_tests(), None);
         assert_eq!(connection.preferred_open_mode, None);
         // 旧版云同步/数据库 JSON 不携带该字段时反序列化为 None
         let legacy = serde_json::to_string(&connection).expect("serialize");

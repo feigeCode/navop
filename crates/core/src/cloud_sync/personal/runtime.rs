@@ -75,12 +75,14 @@ pub fn build_personal_sync_runtime_config(
     settings: &PersonalSyncSettings,
     webdav_password: Option<&str>,
 ) -> Result<PersonalSyncRuntimeConfig, PersonalSyncRuntimeError> {
-    let common = |root: Option<PathBuf>, webdav: Option<PersonalWebDavRuntimeSettings>| PersonalSyncRuntimeConfig {
-        backend: settings.backend,
-        root: root.unwrap_or_default(),
-        auto_sync: settings.auto_sync,
-        git_auto_push: settings.git.auto_push,
-        webdav,
+    let common = |root: Option<PathBuf>, webdav: Option<PersonalWebDavRuntimeSettings>| {
+        PersonalSyncRuntimeConfig {
+            backend: settings.backend,
+            root: root.unwrap_or_default(),
+            auto_sync: settings.auto_sync,
+            git_auto_push: settings.git.auto_push,
+            webdav,
+        }
     };
 
     if settings.backend == PersonalSyncBackendKind::Webdav {
@@ -88,16 +90,21 @@ pub fn build_personal_sync_runtime_config(
         if !webdav.is_complete() {
             return Err(PersonalSyncRuntimeError::NotConfigured);
         }
-        let Some(password) = webdav_password.map(str::trim).filter(|value| !value.is_empty())
+        let Some(password) = webdav_password
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
         else {
             // 配置里存着密文，但没有可用主密钥去解开它。
             return Err(PersonalSyncRuntimeError::NotConfigured);
         };
-        return Ok(common(None, Some(PersonalWebDavRuntimeSettings::new(
-            webdav.url.trim().to_string(),
-            webdav.username.trim().to_string(),
-            password.to_string(),
-        ))));
+        return Ok(common(
+            None,
+            Some(PersonalWebDavRuntimeSettings::new(
+                webdav.url.trim().to_string(),
+                webdav.username.trim().to_string(),
+                password.to_string(),
+            )),
+        ));
     }
 
     let path = settings.path.trim();

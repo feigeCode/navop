@@ -724,7 +724,8 @@ impl AiChatSettings {
         self.recent_workspace_roots
             .retain(|existing| existing != &root);
         self.recent_workspace_roots.insert(0, root);
-        self.recent_workspace_roots.truncate(MAX_RECENT_WORKSPACE_ROOTS);
+        self.recent_workspace_roots
+            .truncate(MAX_RECENT_WORKSPACE_ROOTS);
         self.last_workspace_root = self.recent_workspace_roots.first().cloned();
     }
 
@@ -944,9 +945,7 @@ impl Default for PersonalWebdavSyncSettings {
 impl PersonalWebdavSyncSettings {
     /// 三个字段都非空才算配置完整，此时 `test_connection` / `sync_now` 才可用。
     pub fn is_complete(&self) -> bool {
-        !self.url.trim().is_empty()
-            && !self.username.trim().is_empty()
-            && !self.password.is_empty()
+        !self.url.trim().is_empty() && !self.username.trim().is_empty() && !self.password.is_empty()
     }
 }
 
@@ -1963,43 +1962,18 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        AiChatSettings,
-        AiChatToolExecutionMode,
-        AppSettings,
-        CloseButtonBehavior,
-        ConnectionSortOrder,
-        CustomFont,
-        DEFAULT_AI_REQUEST_TIMEOUT_SECS,
-        default_grid_font_fallback_families,
-        default_grid_monospace_font_family,
-        DEFAULT_MCP_APPROVAL_TIMEOUT_MS,
-        DEFAULT_SQL_EXPORT_ROWS_PER_STATEMENT,
-        DEFAULT_TERMINAL_THEME,
-        grid_monospace_font,
-        HomeConnectionLayout,
-        installed_grid_monospace_font,
-        is_installed_font_family,
-        LargeTextCellEditorOpenMode,
-        LOCALE_SYSTEM,
-        LocalTerminalProfileKind,
-        LocalTerminalProfileSettings,
-        MainWindowState,
-        MAX_AI_REQUEST_TIMEOUT_SECS,
-        MAX_CUSTOM_SYSTEM_PROMPT_CHARS,
-        MAX_REMEMBERED_ACP_SESSIONS,
-        MAX_RECENT_WORKSPACE_ROOTS,
-        McpPermissionMode,
-        McpServerMode,
-        MIN_AI_REQUEST_TIMEOUT_SECS,
-        PersonalSyncBackendKind,
-        RemoteFileOpenMode,
+        AiChatSettings, AiChatToolExecutionMode, AppSettings, CloseButtonBehavior,
+        ConnectionSortOrder, CustomFont, DEFAULT_AI_REQUEST_TIMEOUT_SECS,
+        DEFAULT_MCP_APPROVAL_TIMEOUT_MS, DEFAULT_SQL_EXPORT_ROWS_PER_STATEMENT,
+        DEFAULT_TERMINAL_THEME, HomeConnectionLayout, LOCALE_SYSTEM, LargeTextCellEditorOpenMode,
+        LocalTerminalProfileKind, LocalTerminalProfileSettings, MAX_AI_REQUEST_TIMEOUT_SECS,
+        MAX_CUSTOM_SYSTEM_PROMPT_CHARS, MAX_RECENT_WORKSPACE_ROOTS, MAX_REMEMBERED_ACP_SESSIONS,
+        MIN_AI_REQUEST_TIMEOUT_SECS, MainWindowState, McpPermissionMode, McpServerMode,
+        PersonalSyncBackendKind, RemoteFileOpenMode, SqlFormatSettings, SqlIndentStyle,
+        SqlKeywordCase, StartupDefaultPage, SyncProvider, TableViewMode,
+        default_grid_font_fallback_families, default_grid_monospace_font_family,
+        grid_monospace_font, installed_grid_monospace_font, is_installed_font_family,
         resolve_installed_grid_monospace_font_family,
-        SqlFormatSettings,
-        SqlIndentStyle,
-        SqlKeywordCase,
-        StartupDefaultPage,
-        SyncProvider,
-        TableViewMode,
     };
 
     #[test]
@@ -3133,11 +3107,18 @@ mod tests {
         settings.ai_chat.last_workspace_root = Some(PathBuf::from("/tmp/project"));
 
         let json = serde_json::to_string(&settings).expect("serialize AI ACP settings");
-        let restored: AppSettings = serde_json::from_str(&json).expect("deserialize AI ACP settings");
+        let restored: AppSettings =
+            serde_json::from_str(&json).expect("deserialize AI ACP settings");
 
-        assert_eq!(settings.ai_chat.last_acp_agent_id, restored.ai_chat.last_acp_agent_id);
+        assert_eq!(
+            settings.ai_chat.last_acp_agent_id,
+            restored.ai_chat.last_acp_agent_id
+        );
         assert_eq!(settings.ai_chat.acp_models, restored.ai_chat.acp_models);
-        assert_eq!(settings.ai_chat.last_workspace_root, restored.ai_chat.last_workspace_root);
+        assert_eq!(
+            settings.ai_chat.last_workspace_root,
+            restored.ai_chat.last_workspace_root
+        );
     }
 
     #[test]

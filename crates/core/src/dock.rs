@@ -120,14 +120,20 @@ mod tests {
             Some(SidebarPlacement::Bottom),
             layout.placement_of(Panel::Two)
         );
-        assert_eq!(Some(SidebarPlacement::Left), layout.placement_of(Panel::One));
+        assert_eq!(
+            Some(SidebarPlacement::Left),
+            layout.placement_of(Panel::One)
+        );
     }
 
     #[test]
     fn same_edge_only_keeps_the_last_panel() {
         let mut layout = ToolDockLayout::default();
 
-        assert_eq!(None, layout.set_placement(Panel::One, SidebarPlacement::Right));
+        assert_eq!(
+            None,
+            layout.set_placement(Panel::One, SidebarPlacement::Right)
+        );
         assert_eq!(
             Some(Panel::One),
             layout.set_placement(Panel::Two, SidebarPlacement::Right)
@@ -140,7 +146,10 @@ mod tests {
     fn clearing_an_edge_empties_the_layout() {
         let mut layout = ToolDockLayout::from_open_panels([(Panel::One, SidebarPlacement::Left)]);
 
-        assert_eq!(Some(Panel::One), layout.clear_placement(SidebarPlacement::Left));
+        assert_eq!(
+            Some(Panel::One),
+            layout.clear_placement(SidebarPlacement::Left)
+        );
         assert!(layout.is_empty());
     }
 
@@ -155,7 +164,10 @@ mod tests {
     fn right_region_includes_panel_and_toolbar_when_right_panel_is_open() {
         let layout = ToolDockLayout::from_open_panels([(Panel::One, SidebarPlacement::Right)]);
 
-        assert_eq!(px(420.0) + TOOLBAR_WIDTH, dock_region_width(&layout, px(420.0)));
+        assert_eq!(
+            px(420.0) + TOOLBAR_WIDTH,
+            dock_region_width(&layout, px(420.0))
+        );
     }
 
     #[test]

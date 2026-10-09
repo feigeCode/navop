@@ -52,6 +52,7 @@ mod message_tool_group;
 mod message_turn_view;
 mod message_view;
 mod model_settings;
+mod motion;
 mod pending_decision;
 mod pending_submission;
 mod persistence;
@@ -73,6 +74,7 @@ mod transcript_scroll;
 mod transcript_search;
 mod turn;
 mod usage;
+mod usage_history;
 mod workbench;
 pub mod workspace_files;
 

@@ -342,12 +342,14 @@ pub fn init(cx: &mut App) {
     let provider_repo = ProviderRepository::new(conn.clone());
     let session_repo = SessionRepository::new(conn.clone());
     let message_repo = MessageRepository::new(conn.clone());
+    let agent_usage_repo = crate::llm::usage_history::AgentUsageRepository::new(conn.clone());
     let agent_session_repo = AgentSessionRepository::new(conn);
 
     storage.register(provider_repo);
     storage.register(session_repo);
     storage.register(message_repo);
     storage.register(agent_session_repo);
+    storage.register(agent_usage_repo);
 }
 
 #[cfg(test)]

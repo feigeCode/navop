@@ -57,6 +57,80 @@ fn workspace_root_non_empty(root: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
+/// 追加一条上下文用量采样（历史趋势用）。
+///
+/// 与快照里的 `context_tokens` 分工：那份是「现在用了多少」的当前值，会被下一轮
+/// 覆盖；这里是只追加的流水，画趋势、按天汇总靠它。
+///
+/// **去重靠「与最近一条相同就跳过」**：落盘路径一次轮次可能被触发多次
+/// （切换会话 / 连接就绪 / 每轮结束都会调），没这层兜底就会把流水刷成一串重复点，
+/// 趋势图除了变粗一无所获。上下文占用真的变了（涨或压缩后回落）才记。
+///
+/// 写完 / 跳过都返回 `true`；没存储后端时返回 `false`，不静默假装记下了。
+pub fn record_usage_sample(
+    cx: &App,
+    uid: &str,
+    used: u64,
+    window: Option<u64>,
+    model: Option<&str>,
+) -> bool {
+    let uid = uid.trim();
+    if uid.is_empty() {
+        return false;
+    }
+    let Some(repo) = agent_usage_repository(cx) else {
+        return false;
+    };
+    // 窗口 0 等同于未知：先归一化再拿去比对，否则调用侧传一个 `Some(0)`
+    // 会与库里存的 `NULL` 永远不相等，流水每轮都写一条。
+    let window = window.filter(|window| *window > 0);
+    let now = one_core::storage::manager::now();
+    match repo.latest_for_uid(uid) {
+        Ok(Some(latest))
+            if latest.used == used
+                && latest.window == window
+                && latest.model.as_deref() == model =>
+        {
+            return true;
+        }
+        Ok(_) => {}
+        // 读不到旧样本不该阻塞写入：让它当作第一条。
+        Err(error) => tracing::warn!("读用量采样失败，按首次记录处理: {error}"),
+    }
+    let mut sample = one_core::llm::usage_history::AgentUsageSample::new(uid, used, now);
+    sample.window = window;
+    sample.model = model.map(str::to_string);
+    match repo.record(&sample) {
+        Ok(_) => true,
+        Err(error) => {
+            tracing::warn!("写用量采样失败: {error}");
+            false
+        }
+    }
+}
+
+/// 删一条会话时顺手清掉它的用量流水。
+pub fn clear_usage_samples(cx: &App, uid: &str) {
+    if let Some(repo) = agent_usage_repository(cx) {
+        let _ = repo.clear_uid(uid);
+    }
+}
+
+/// `since`（含）之后的全部用量采样，按时间正序。
+pub fn usage_samples_since(
+    cx: &App,
+    since: i64,
+) -> Vec<one_core::llm::usage_history::AgentUsageSample> {
+    agent_usage_repository(cx)
+        .and_then(|repo| repo.list_since(since).ok())
+        .unwrap_or_default()
+}
+
+fn agent_usage_repository(cx: &App) -> Option<std::sync::Arc<one_core::llm::AgentUsageRepository>> {
+    cx.try_global::<GlobalStorageState>()
+        .and_then(|state| state.storage.get::<one_core::llm::AgentUsageRepository>())
+}
+
 /// 保存一条**由外部 agent 承载**的会话（ACP）。
 ///
 /// 与 [`save_session_with_workspace`] 的关键差别：历史在外部 agent 那边，本地
@@ -317,6 +391,7 @@ mod tests {
 
         let storage = StorageManager::new_with_connection(conn.clone());
         storage.register(AgentSessionRepository::new(conn.clone()));
+        storage.register(one_core::llm::AgentUsageRepository::new(conn.clone()));
         storage.register(SessionRepository::new(conn.clone()));
         storage.register(MessageRepository::new(conn));
         storage
@@ -358,6 +433,51 @@ mod tests {
         let title = derive_title(&snap);
         assert!(title.ends_with('…'));
         assert_eq!(title.chars().count(), MAX_TITLE_CHARS + 1);
+    }
+
+    #[gpui::test]
+    fn usage_samples_are_appended_deduped_and_read_back(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(GlobalStorageState {
+                storage: test_storage(),
+            });
+        });
+
+        assert!(
+            cx.update(|cx| record_usage_sample(cx, "sess_a", 12_000, Some(200_000), Some("gpt-5"))),
+            "有存储后端时应该写进去"
+        );
+        // 同一读数重复上报（切会话 / 连接就绪都会触发落盘）不该刷流水。
+        assert!(cx.update(|cx| record_usage_sample(
+            cx,
+            "sess_a",
+            12_000,
+            Some(200_000),
+            Some("gpt-5")
+        )));
+        assert!(cx.update(|cx| record_usage_sample(cx, "sess_b", 3_000, None, None)));
+        assert!(cx.update(|cx| record_usage_sample(
+            cx,
+            "sess_a",
+            40_000,
+            Some(200_000),
+            Some("gpt-5")
+        )));
+        // 窗口从「未知」变成已知也算变化。
+        assert!(cx.update(|cx| record_usage_sample(cx, "sess_b", 3_000, Some(128_000), None)));
+
+        let all = cx.update(|cx| usage_samples_since(cx, 0));
+        assert_eq!(4, all.len(), "重复读数被去重，其余都留下");
+        assert_eq!(
+            vec![12_000, 3_000, 40_000, 3_000],
+            all.iter().map(|sample| sample.used).collect::<Vec<_>>(),
+            "读回来按时间正序"
+        );
+
+        cx.update(|cx| clear_usage_samples(cx, "sess_a"));
+        let left = cx.update(|cx| usage_samples_since(cx, 0));
+        assert_eq!(2, left.len(), "删会话只清它自己的流水");
+        assert!(left.iter().all(|sample| sample.uid == "sess_b"));
     }
 
     #[test]

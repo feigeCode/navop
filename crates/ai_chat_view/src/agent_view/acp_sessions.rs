@@ -117,6 +117,14 @@ impl AgentChatView {
                 .and_then(|acp| acp.state().usage().cloned());
             if let Some(usage) = usage {
                 session.set_context_tokens(Some(usage.used));
+                // 顺手把这一次读数追加到用量流水：快照只留当前值，趋势靠流水。
+                let window = (usage.size > 0).then_some(usage.size);
+                let model = self
+                    .acp
+                    .as_ref()
+                    .and_then(|acp| acp_model_option(&acp.state(), self.current_acp_id.as_ref()))
+                    .map(|option| option.model.to_string());
+                persistence::record_usage_sample(cx, uid, usage.used, window, model.as_deref());
             }
         }
         let title = self
