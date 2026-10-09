@@ -37,21 +37,21 @@ use serde_json::Value;
 use crate::acp::{
     AcpElicitationField, AcpElicitationFieldKind, AcpElicitationMode, AcpElicitationRequest,
 };
-use crate::usage::{ContextUsage, UsagePressure};
 use crate::input::PromptHistory;
 use crate::input::attachment::ImageAttachment;
+use crate::input::completion::ComposerCompletionProvider;
 use crate::input::context::{
     AgentComposerContext, ComposerBranchOption, ComposerMenuOption, ComposerModelOption,
     ComposerPlanItem, ComposerResourcePoolItem, ComposerResourceSourceOption,
     ComposerResourceTypeFilter, ComposerScope, ComposerSubAgentItem, ComposerTarget,
     ComposerWorkspaceOption,
 };
-use crate::input::completion::ComposerCompletionProvider;
 use crate::input::mention::{MentionCompletionProvider, MentionItem};
-use crate::input::slash::{SlashCommandItem, SlashCompletionProvider};
 use crate::input::model_picker::{ModelChoice, model_groups, selected_model_index};
 use crate::input::skill::{render_skill_mode_content, skill_trigger_label};
+use crate::input::slash::{SlashCommandItem, SlashCompletionProvider};
 use crate::theme::{AgentChatTheme, active_agent_chat_theme, sp};
+use crate::usage::{ContextUsage, UsagePressure};
 
 /// AgentInput 对外事件。
 #[derive(Clone, Debug)]
@@ -411,9 +411,10 @@ impl AgentInput {
                 .soft_wrap(true)
                 .submit_on_enter(true)
                 .placeholder(placeholder);
-            state.lsp_mut().completion_provider = Some(Rc::new(
-                ComposerCompletionProvider::new(provider_items, Vec::new()),
-            ));
+            state.lsp_mut().completion_provider = Some(Rc::new(ComposerCompletionProvider::new(
+                provider_items,
+                Vec::new(),
+            )));
             state
         });
 
@@ -592,11 +593,7 @@ impl AgentInput {
     }
 
     /// 更新 `/` 命令补全来源(Acp agent 推送的 `available_commands`)。
-    pub fn set_slash_commands(
-        &mut self,
-        commands: Vec<SlashCommandItem>,
-        cx: &mut Context<Self>,
-    ) {
+    pub fn set_slash_commands(&mut self, commands: Vec<SlashCommandItem>, cx: &mut Context<Self>) {
         // 推送可能很频繁(每次 `session/update` 都可能带),内容没变就不重建 provider。
         if self.slash_commands == commands {
             return;
@@ -609,9 +606,8 @@ impl AgentInput {
         let mentions = (*self.mentions).clone();
         let commands = self.slash_commands.clone();
         self.input_state.update(cx, |state, _| {
-            state.lsp_mut().completion_provider = Some(Rc::new(
-                ComposerCompletionProvider::new(mentions, commands),
-            ));
+            state.lsp_mut().completion_provider =
+                Some(Rc::new(ComposerCompletionProvider::new(mentions, commands)));
         });
     }
 
@@ -1181,9 +1177,7 @@ impl AgentInput {
             .iter()
             .find(|branch| branch.current)
             .map(|branch| branch.name.clone())
-            .unwrap_or_else(|| {
-                SharedString::from(t!("AgentUi.composer_branch").to_string())
-            });
+            .unwrap_or_else(|| SharedString::from(t!("AgentUi.composer_branch").to_string()));
         let options = self.context.branch_options.clone();
 
         let theme = self.local_theme(cx);
@@ -1369,7 +1363,11 @@ impl AgentInput {
     /// 顺序:`[工作区][分支][模型][Worktree][权限]`(非 Git 工作区里分支与 Worktree 隐藏)。
     /// 这一组独占剩余宽度:空间不足时先在组内 `flex_shrink` + `truncate` 消化,
     /// 由本组自己的 `overflow_hidden` 兜底,绝不把右侧的发送按钮挤出可视区。
-    fn render_context_group(&self, cx: &mut Context<Self>, row_gap: gpui::Rems) -> impl IntoElement + use<> {
+    fn render_context_group(
+        &self,
+        cx: &mut Context<Self>,
+        row_gap: gpui::Rems,
+    ) -> impl IntoElement + use<> {
         let is_git_repo =
             self.context.workspace.is_git_repo || !self.context.branch_options.is_empty();
         let model_label = match &self.context.model {
@@ -1687,9 +1685,7 @@ impl AgentInput {
                     .ghost()
                     .small()
                     .tooltip(t!("AgentUi.attach_images").to_string())
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.open_file_picker(window, cx)),
-                    ),
+                    .on_click(cx.listener(|this, _, window, cx| this.open_file_picker(window, cx))),
             )
             .child(
                 div()
@@ -1956,15 +1952,9 @@ fn render_workspace_content(
     }
 
     // 与候选列表之间加一条分隔线：下面这项是「打开新目录」，不是同级候选。
-    col.child(
-        div()
-            .my_1()
-            .h(px(1.0))
-            .w_full()
-            .bg(theme.border),
-    )
-    .child(browse_workspace_row(view, theme, cx))
-    .into_any_element()
+    col.child(div().my_1().h(px(1.0)).w_full().bg(theme.border))
+        .child(browse_workspace_row(view, theme, cx))
+        .into_any_element()
 }
 
 /// 工作区下拉里的一行候选。
@@ -3234,7 +3224,11 @@ impl PendingElicitation {
                 pending.form = Some(PendingElicitationForm {
                     title: form.title.clone(),
                     description: form.description.clone(),
-                    fields: form.fields.iter().map(PendingElicitationField::new).collect(),
+                    fields: form
+                        .fields
+                        .iter()
+                        .map(PendingElicitationField::new)
+                        .collect(),
                 });
             }
             AcpElicitationMode::Url { url } => pending.url = Some(url.clone()),
@@ -3276,14 +3270,20 @@ impl PendingElicitation {
                         ElicitationTextKind::Plain => Value::String(raw.to_string()),
                         ElicitationTextKind::Integer => {
                             raw.parse::<i64>().map(Value::from).map_err(|_| {
-                                t!("AgentUi.elicitation_not_integer", field = field.title.clone())
-                                    .to_string()
+                                t!(
+                                    "AgentUi.elicitation_not_integer",
+                                    field = field.title.clone()
+                                )
+                                .to_string()
                             })?
                         }
                         ElicitationTextKind::Number => {
                             raw.parse::<f64>().map(Value::from).map_err(|_| {
-                                t!("AgentUi.elicitation_not_number", field = field.title.clone())
-                                    .to_string()
+                                t!(
+                                    "AgentUi.elicitation_not_number",
+                                    field = field.title.clone()
+                                )
+                                .to_string()
                             })?
                         }
                     };
@@ -3345,7 +3345,11 @@ impl PendingElicitationField {
                 placeholder: String::new(),
             },
             AcpElicitationFieldKind::Boolean => PendingElicitationControl::Boolean {
-                value: field.default.as_ref().and_then(Value::as_bool).unwrap_or(false),
+                value: field
+                    .default
+                    .as_ref()
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
             },
             AcpElicitationFieldKind::SingleSelect { options } => {
                 PendingElicitationControl::SingleSelect {
@@ -3353,10 +3357,12 @@ impl PendingElicitationField {
                     selected: None,
                 }
             }
-            AcpElicitationFieldKind::MultiSelect { options } => PendingElicitationControl::MultiSelect {
-                options: choices(options),
-                selected: Vec::new(),
-            },
+            AcpElicitationFieldKind::MultiSelect { options } => {
+                PendingElicitationControl::MultiSelect {
+                    options: choices(options),
+                    selected: Vec::new(),
+                }
+            }
             AcpElicitationFieldKind::Unsupported { type_name } => {
                 PendingElicitationControl::Unsupported {
                     type_name: type_name.clone(),
@@ -3419,9 +3425,8 @@ impl AgentInput {
                 continue;
             }
             let placeholder = placeholder.clone();
-            *input = Some(cx.new(|cx| {
-                InputState::new(window, cx).placeholder(placeholder.clone())
-            }));
+            *input =
+                Some(cx.new(|cx| InputState::new(window, cx).placeholder(placeholder.clone())));
         }
     }
 
@@ -3440,10 +3445,7 @@ impl AgentInput {
         }
     }
 
-    fn render_pending_elicitation(
-        &self,
-        cx: &mut Context<Self>,
-    ) -> Option<gpui::AnyElement> {
+    fn render_pending_elicitation(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let pending = self.pending_elicitation.as_ref()?;
         let theme = self.local_theme(cx);
         let mut body = v_flex()
@@ -3520,14 +3522,9 @@ impl AgentInput {
             );
         }
         if let Some(mode) = &pending.unsupported_mode {
-            body = body.child(
-                div()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(
-                        t!("AgentUi.elicitation_unsupported_mode", mode = mode.clone()).to_string(),
-                    ),
-            );
+            body = body.child(div().text_xs().text_color(theme.muted_foreground).child(
+                t!("AgentUi.elicitation_unsupported_mode", mode = mode.clone()).to_string(),
+            ));
         }
         if let Some(error) = &pending.error {
             body = body.child(
@@ -3595,12 +3592,7 @@ impl AgentInput {
                 .child(field.title.clone()),
         );
         if field.required {
-            label = label.child(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().danger)
-                    .child("*"),
-            );
+            label = label.child(div().text_xs().text_color(cx.theme().danger).child("*"));
         }
         column = column.child(label);
         if let Some(description) = &field.description {
@@ -3616,9 +3608,7 @@ impl AgentInput {
         match &field.control {
             PendingElicitationControl::Text { input, .. } => {
                 if let Some(input) = input {
-                    column = column.child(
-                        Input::new(input).cleanable(true).small().w_full(),
-                    );
+                    column = column.child(Input::new(input).cleanable(true).small().w_full());
                 }
             }
             PendingElicitationControl::Boolean { value } => {
@@ -3654,9 +3644,7 @@ impl AgentInput {
                         .on_click(cx.listener({
                             let name = name.clone();
                             let value = option.value.clone();
-                            move |this, _, _, cx| {
-                                this.select_elicitation_option(&name, &value, cx)
-                            }
+                            move |this, _, _, cx| this.select_elicitation_option(&name, &value, cx)
                         })),
                     );
                 }
@@ -3681,9 +3669,7 @@ impl AgentInput {
                         .on_click(cx.listener({
                             let name = name.clone();
                             let value = option.value.clone();
-                            move |this, _, _, cx| {
-                                this.toggle_elicitation_option(&name, &value, cx)
-                            }
+                            move |this, _, _, cx| this.toggle_elicitation_option(&name, &value, cx)
                         })),
                     );
                 }
@@ -3691,13 +3677,13 @@ impl AgentInput {
             }
             PendingElicitationControl::Unsupported { type_name } => {
                 column = column.child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(
-                            t!("AgentUi.elicitation_unsupported_field", kind = type_name.clone())
-                                .to_string(),
-                        ),
+                    div().text_xs().text_color(theme.muted_foreground).child(
+                        t!(
+                            "AgentUi.elicitation_unsupported_field",
+                            kind = type_name.clone()
+                        )
+                        .to_string(),
+                    ),
                 );
             }
         }
@@ -3727,12 +3713,7 @@ impl AgentInput {
         cx.notify();
     }
 
-    fn toggle_elicitation_boolean(
-        &mut self,
-        name: &str,
-        value: bool,
-        cx: &mut Context<Self>,
-    ) {
+    fn toggle_elicitation_boolean(&mut self, name: &str, value: bool, cx: &mut Context<Self>) {
         self.with_elicitation_field(
             name,
             |control| {
@@ -4023,7 +4004,8 @@ mod tests {
             root
         }
 
-        fn with_width(width: Pixels, window: &mut Window, cx: &mut Context<Self>) -> Self {            let input = cx.new(|cx| {
+        fn with_width(width: Pixels, window: &mut Window, cx: &mut Context<Self>) -> Self {
+            let input = cx.new(|cx| {
                 AgentInput::with_mentions(Vec::new(), "描述目标，输入 @ 引用资源…", window, cx)
             });
             input.update(cx, |input, cx| {
@@ -4143,8 +4125,7 @@ mod tests {
         for bounds in [workspace, branch, model, worktree, permission, send] {
             assert!(
                 bounds.origin.y >= card.origin.y
-                    && bounds.origin.y + bounds.size.height
-                        <= card.origin.y + card.size.height,
+                    && bounds.origin.y + bounds.size.height <= card.origin.y + card.size.height,
                 "every control must stay inside the input card: {bounds:?}, card={card:?}"
             );
         }
@@ -4349,9 +4330,9 @@ mod tests {
         cx.simulate_click(trigger.center(), Modifiers::default());
         cx.update(|window, cx| window.draw(cx).clear(cx));
 
-        let option = cx
-            .debug_bounds("agent-model-option")
-            .expect("点击模型控件后弹层应打开并渲染出选项行(选择器在 model_picker::ModelChoice::render)");
+        let option = cx.debug_bounds("agent-model-option").expect(
+            "点击模型控件后弹层应打开并渲染出选项行(选择器在 model_picker::ModelChoice::render)",
+        );
         assert!(
             option.origin.x < trigger.origin.x,
             "弹层没有比触发器宽 —— 显式 `menu_width` 丢了(退回 `Length::Auto` 时弹层与触发器 \
@@ -4426,8 +4407,8 @@ mod tests {
             gpui_component::init(cx);
             crate::init(cx);
         });
-        let (_, cx) =
-            cx.add_window_view(|window, cx| AgentInputLayoutRoot::with_width(px(900.0), window, cx));
+        let (_, cx) = cx
+            .add_window_view(|window, cx| AgentInputLayoutRoot::with_width(px(900.0), window, cx));
         let cx: &mut VisualTestContext = cx;
 
         assert!(
@@ -4438,9 +4419,7 @@ mod tests {
 
     /// 工具栏一行内同时有「附件 + 上下文档位 + 发送」；发送按钮仍是 32x32。
     #[gpui::test]
-    fn toolbar_keeps_action_button_square_and_permission_in_the_same_row(
-        cx: &mut TestAppContext,
-    ) {
+    fn toolbar_keeps_action_button_square_and_permission_in_the_same_row(cx: &mut TestAppContext) {
         cx.update(|cx| {
             gpui_component::init(cx);
             crate::init(cx);

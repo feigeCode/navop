@@ -319,8 +319,7 @@ impl WorkbenchState {
     /// 工具条注入外壳的开关图标与外壳自身的切换逻辑共用这一个判据，
     /// 避免两处口径漂移。
     pub fn right_sidebar_open(&self) -> bool {
-        self.right_maximized()
-            || (!self.right_collapsed() && !self.right_tabs().is_empty())
+        self.right_maximized() || (!self.right_collapsed() && !self.right_tabs().is_empty())
     }
 
     /// 切换右侧标签组「放大占满」。放大时自动展开（不能放大一个收起的栏）。
@@ -348,7 +347,10 @@ impl WorkbenchState {
 
     /// 恢复工作区分组（用户显式切回该工作区时调用）。
     pub fn unhide_workspace(&mut self, root: &str) -> bool {
-        let Some(index) = self.hidden_workspaces.iter().position(|hidden| hidden == root)
+        let Some(index) = self
+            .hidden_workspaces
+            .iter()
+            .position(|hidden| hidden == root)
         else {
             return false;
         };
@@ -718,7 +720,10 @@ mod tests {
     fn new_state_shows_chat_in_center_without_side_panels() {
         let state = WorkbenchState::new(WorkbenchPanelKind::Chat);
 
-        assert_eq!(Some(WorkbenchPanelKind::Chat), state.center().map(|t| t.kind));
+        assert_eq!(
+            Some(WorkbenchPanelKind::Chat),
+            state.center().map(|t| t.kind)
+        );
         assert_eq!(None, state.left());
         assert_eq!(None, state.bottom());
         assert!(state.right_tabs().is_empty());
@@ -776,7 +781,10 @@ mod tests {
         open_right(&mut state, WorkbenchPanelKind::Files);
 
         assert_eq!(
-            &[tab(WorkbenchPanelKind::Review), tab(WorkbenchPanelKind::Files)],
+            &[
+                tab(WorkbenchPanelKind::Review),
+                tab(WorkbenchPanelKind::Files)
+            ],
             state.right_tabs()
         );
         assert_eq!(
@@ -816,7 +824,10 @@ mod tests {
         assert!(state.close(WorkbenchPanelKind::Files));
 
         assert_eq!(
-            &[tab(WorkbenchPanelKind::Review), tab(WorkbenchPanelKind::Terminal)],
+            &[
+                tab(WorkbenchPanelKind::Review),
+                tab(WorkbenchPanelKind::Terminal)
+            ],
             state.right_tabs()
         );
         assert_eq!(
@@ -862,7 +873,10 @@ mod tests {
         assert!(!state.close(WorkbenchPanelKind::Chat));
 
         assert!(state.right_tabs().is_empty());
-        assert_eq!(Some(WorkbenchPanelKind::Chat), state.center().map(|t| t.kind));
+        assert_eq!(
+            Some(WorkbenchPanelKind::Chat),
+            state.center().map(|t| t.kind)
+        );
     }
 
     #[test]
@@ -871,7 +885,10 @@ mod tests {
 
         assert!(state.open(WorkbenchPanelKind::Files, WorkbenchPlacement::Center));
 
-        assert_eq!(Some(WorkbenchPanelKind::Files), state.center().map(|t| t.kind));
+        assert_eq!(
+            Some(WorkbenchPanelKind::Files),
+            state.center().map(|t| t.kind)
+        );
         // 被顶掉的 Review 不能凭空消失，它落进右侧标签组并激活。
         assert_eq!(&[tab(WorkbenchPanelKind::Review)], state.right_tabs());
         assert_eq!(
@@ -886,7 +903,10 @@ mod tests {
 
         assert!(state.open(WorkbenchPanelKind::Chat, WorkbenchPlacement::Center));
 
-        assert_eq!(Some(WorkbenchPanelKind::Chat), state.center().map(|t| t.kind));
+        assert_eq!(
+            Some(WorkbenchPanelKind::Chat),
+            state.center().map(|t| t.kind)
+        );
         assert_eq!(&[tab(WorkbenchPanelKind::Files)], state.right_tabs());
     }
 
@@ -983,7 +1003,10 @@ mod tests {
 
         assert!(state.close(WorkbenchPanelKind::Review));
 
-        assert_eq!(Some(WorkbenchPanelKind::Chat), state.center().map(|t| t.kind));
+        assert_eq!(
+            Some(WorkbenchPanelKind::Chat),
+            state.center().map(|t| t.kind)
+        );
         assert!(!state.is_open(WorkbenchPanelKind::Review));
     }
 
@@ -1145,10 +1168,7 @@ mod tests {
 
         // 定位语义（rail / 拖拽等既有路径）只激活第一个实例，不再开新的；
         // 已是激活项时无变化，返回 false。
-        assert!(!state.open(
-            WorkbenchPanelKind::Terminal,
-            WorkbenchPlacement::Right
-        ));
+        assert!(!state.open(WorkbenchPanelKind::Terminal, WorkbenchPlacement::Right));
         assert_eq!(2, state.right_tabs().len());
         assert_eq!(
             Some(WorkbenchTab::with_seq(WorkbenchPanelKind::Terminal, 0)),

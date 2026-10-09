@@ -43,10 +43,7 @@ pub struct AcpClientProviders {
 
 impl AcpClientProviders {
     /// 同时提供权限确认与提问两条通道。
-    pub fn new(
-        permission: AcpPermissionProvider,
-        elicitation: AcpElicitationProvider,
-    ) -> Self {
+    pub fn new(permission: AcpPermissionProvider, elicitation: AcpElicitationProvider) -> Self {
         Self {
             permission: Some(permission),
             elicitation: Some(elicitation),
@@ -267,7 +264,9 @@ impl AcpConnection {
 
     /// 任一协议会话上是否还有在飞轮次（后台轮次含在内）。
     pub fn has_active_turns(&self) -> bool {
-        self.active_turn.lock().is_ok_and(|active| !active.is_empty())
+        self.active_turn
+            .lock()
+            .is_ok_and(|active| !active.is_empty())
     }
 
     /// 这个轮次是否还在在飞表里（按 turn id 找，跨协议会话）。
@@ -299,9 +298,10 @@ impl AcpConnection {
         let table_drained = active.is_empty();
         drop(active);
         if removed && table_drained {
-            let running = self.state.lock().is_ok_and(|state| {
-                matches!(state.phase(), AcpConnectionPhase::RunningTurn { .. })
-            });
+            let running = self
+                .state
+                .lock()
+                .is_ok_and(|state| matches!(state.phase(), AcpConnectionPhase::RunningTurn { .. }));
             if running {
                 transition_state(&self.state, AcpConnectionPhase::Ready);
             }
@@ -349,7 +349,6 @@ impl AcpConnection {
             .is_ok_and(|sessions| sessions.contains_key(acp_session_id))
     }
 
-
     pub async fn set_model(
         &self,
         config_id: agent_client_protocol::schema::v1::SessionConfigId,
@@ -388,7 +387,10 @@ fn transition_state(state: &Arc<Mutex<AcpSessionState>>, phase: AcpConnectionPha
 
 pub(super) enum PromptCompletionClaim {
     Ready(AcpTurnTracker),
-    Failed { turn_id: TurnId, error: AcpError },
+    Failed {
+        turn_id: TurnId,
+        error: AcpError,
+    },
     /// 轮次不在（已终结/被放弃），但连接相位停在 RunningTurn 且在飞表空了：
     /// 由本函数顺手把相位收回到 Ready，避免永久卡在 RunningTurn。
     Reclaimed,
@@ -429,22 +431,28 @@ pub(super) fn claim_prompt_completion(
         }
         AcpConnectionPhase::Failed { error } => {
             let error = error.clone();
-            active.remove(&key).map(|tracker| PromptCompletionClaim::Failed {
-                turn_id: tracker.turn_id().clone(),
-                error,
-            })
+            active
+                .remove(&key)
+                .map(|tracker| PromptCompletionClaim::Failed {
+                    turn_id: tracker.turn_id().clone(),
+                    error,
+                })
         }
-        AcpConnectionPhase::Closed => active
-            .remove(&key)
-            .map(|tracker| PromptCompletionClaim::Failed {
-                turn_id: tracker.turn_id().clone(),
-                error: closed_error.clone(),
-            }),
+        AcpConnectionPhase::Closed => {
+            active
+                .remove(&key)
+                .map(|tracker| PromptCompletionClaim::Failed {
+                    turn_id: tracker.turn_id().clone(),
+                    error: closed_error.clone(),
+                })
+        }
         phase => {
             // 后台轮次：另一条会话还在跑，相位是它的 RunningTurn，不是当前轮次的。
             // 这轮照样从在飞表里收掉（它自己的 prompt 已回包），只是不动全局相位。
             if matches!(phase, AcpConnectionPhase::RunningTurn { .. }) {
-                active.remove(&key).map(|_| PromptCompletionClaim::Reclaimed)
+                active
+                    .remove(&key)
+                    .map(|_| PromptCompletionClaim::Reclaimed)
             } else {
                 tracing::warn!(
                     ?phase,

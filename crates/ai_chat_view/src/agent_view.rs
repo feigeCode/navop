@@ -12,7 +12,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use agent_client_protocol::schema::v1::{AvailableCommandInput, ContentBlock, ImageContent, TextContent};
+use agent_client_protocol::schema::v1::{
+    AvailableCommandInput, ContentBlock, ImageContent, TextContent,
+};
 use agent_runtime::{
     AgentResourceScope, HistoryItem, ResourceCatalog, ResourceContext, ResourceId, ResourceKind,
     ResourceRef, Runtime, RuntimeEvent, RuntimeEventReceiver, SessionId, TaskKind, ToolCallId,
@@ -46,36 +48,37 @@ use one_ui::{IconButton, IconButtonRole, PanelHeader, PanelHeaderVariant};
 use rust_i18n::t;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 
+/// 仅测试用例使用：给子代理详情回放造一个合成轮次 id。
+#[cfg(test)]
+use crate::acp::detail_turn_id_for;
+/// 仅后台探测路径使用（测试构建下探测被禁用以避免真实子进程）。
+#[cfg(not(test))]
+use crate::acp::{AcpAgentConfig, AcpProbeRecord, acp_probe_cache, probe_fingerprint};
 use crate::acp::{
     AcpAgentEntry, AcpAgentProbe, AcpClientProviders, AcpConnectOutcome, AcpConnection,
     AcpConnectionPhase, AcpElicitationEnvelope, AcpElicitationMessage, AcpElicitationOutcome,
     AcpError, AcpErrorKind, AcpModelInfo, AcpPendingConnection, AcpPermissionEnvelope,
-    AcpPermissionMessage, AcpPermissionOutcome, AcpPromptStartError,
-    AcpPublicMcpApprovalEnvelope, AcpPublicMcpApprovalMessage, AcpPublicMcpApprovalOutcome,
-    AcpPublicMcpApprovalProvider, AcpRecoveryAction, AcpSessionContinuity, AcpSessionState,
-    AcpSessionSummary, AcpUsage,
+    AcpPermissionMessage, AcpPermissionOutcome, AcpPromptStartError, AcpPublicMcpApprovalEnvelope,
+    AcpPublicMcpApprovalMessage, AcpPublicMcpApprovalOutcome, AcpPublicMcpApprovalProvider,
+    AcpRecoveryAction, AcpSessionContinuity, AcpSessionState, AcpSessionSummary, AcpUsage,
     acp_elicitation_channel, acp_permission_channel, acp_public_mcp_approval_channel,
-    acp_session_list_supported, acp_session_summaries,
-    acquire_acp_permission_grant, build_acp_agent_entries, current_acp_tool_mode,
-    detail_session_id_for, is_detail_session_id, set_current_acp_tool_mode,
+    acp_session_list_supported, acp_session_summaries, acquire_acp_permission_grant,
+    build_acp_agent_entries, current_acp_tool_mode, detail_session_id_for, is_detail_session_id,
+    set_current_acp_tool_mode,
 };
-/// 仅后台探测路径使用（测试构建下探测被禁用以避免真实子进程）。
-#[cfg(not(test))]
-use crate::acp::{AcpAgentConfig, AcpProbeRecord, acp_probe_cache, probe_fingerprint};
-/// 仅测试用例使用：给子代理详情回放造一个合成轮次 id。
-#[cfg(test)]
-use crate::acp::detail_turn_id_for;
 use crate::acp_agent_config::{AcpAgentConfigEvent, acp_agent_config_notifier};
 use crate::agent_cards::{
     ApproveToolCall, OpenFileInReview, OpenSubagentDetail, PlanCardData, RejectToolCall,
     SelectAcpPermissionOption, SubAgentCardData,
 };
 use crate::agent_skills::AgentSkillState;
-use crate::usage::{format_local_usage, model_context_window, ContextUsage};
 use crate::agent_transcript::AgentTranscript;
-use crate::message::ChatMessageUI;
 use crate::bridge::build_runtime_from_llm_provider;
 use crate::code_block::{CodeBlockAction, CodeBlockActionRegistry};
+use crate::expansion_state::ExpansionState;
+use crate::find_shortcut::{
+    AI_CHAT_SEARCH_CONTEXT, FindNextInTranscript, FindPreviousInTranscript, ToggleTranscriptFind,
+};
 use crate::input::{
     AgentComposerContext, AgentInput, AgentInputEvent, ComposerAgentOption, ComposerBranchOption,
     ComposerMenuOption, ComposerModelOption, ComposerPlanItem, ComposerResourcePoolItem,
@@ -84,6 +87,7 @@ use crate::input::{
     ComposerWorkspaceInfo, ComposerWorkspaceOption, ComposerWorktreeState, MentionItem,
     QueuedPromptPreview, SlashCommandItem,
 };
+use crate::message::ChatMessageUI;
 use crate::message_turn_view::{
     MessageListAction, MessageListActionHandler, MessageListContext, render_message_list,
 };
@@ -91,16 +95,13 @@ use crate::message_view::{MessageListLayout, render_running_activity};
 use crate::pending_submission::{PendingSubmission, PendingSubmissions};
 use crate::persistence;
 use crate::resource_display::first_visible_alias;
-use crate::expansion_state::ExpansionState;
-use crate::find_shortcut::{
-    AI_CHAT_SEARCH_CONTEXT, FindNextInTranscript, FindPreviousInTranscript, ToggleTranscriptFind,
-};
 use crate::session_shortcut::{NavigateSessionBack, NavigateSessionForward, ToggleSessionSwitcher};
 use crate::session_sidebar::{self, SessionRowStyle, SessionSummary};
+use crate::theme::{AgentChatTheme, resolve_agent_chat_theme, sp};
 use crate::transcript_scroll::TranscriptScrollState;
 use crate::transcript_search::TranscriptSearch;
 use crate::turn::{TurnOutcome, TurnTimings};
-use crate::theme::{AgentChatTheme, resolve_agent_chat_theme, sp};
+use crate::usage::{ContextUsage, format_local_usage, model_context_window};
 
 mod acp_options;
 pub(crate) mod acp_sessions;
@@ -340,7 +341,8 @@ struct AcpHistoryReplay {
 impl AcpHistoryReplay {
     /// 这条事件是不是这次回放的。
     fn accepts(&self, event: &RuntimeEvent) -> bool {
-        event.session_id() == &self.event_session_id && runtime_event_turn_id(event) == &self.turn_id
+        event.session_id() == &self.event_session_id
+            && runtime_event_turn_id(event) == &self.turn_id
     }
 }
 
@@ -1484,9 +1486,9 @@ impl AgentChatView {
         let sidebar_frame_placement = config.sidebar_frame_placement;
         let theme = config.theme;
         let acp_agents = config.acp_agents;
-        let workspace_root = config
-            .workspace_root
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/")));
+        let workspace_root = config.workspace_root.unwrap_or_else(|| {
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"))
+        });
         let resources = config.resources;
         let available_resources = config.available_resources;
         let mentions = config.mentions;
@@ -1821,10 +1823,8 @@ impl AgentChatView {
         let (public_mcp_provider, public_mcp_receiver) = acp_public_mcp_approval_channel();
         self.acp_public_mcp_approval_provider = Some(public_mcp_provider);
         self._acp_permission_task = Some(Self::spawn_acp_permission_pump(receiver, cx));
-        self._acp_elicitation_task = Some(Self::spawn_acp_elicitation_pump(
-            elicitation_receiver,
-            cx,
-        ));
+        self._acp_elicitation_task =
+            Some(Self::spawn_acp_elicitation_pump(elicitation_receiver, cx));
         self._acp_public_mcp_approval_task = Some(Self::spawn_public_mcp_approval_pump(
             public_mcp_receiver,
             cx,
@@ -2422,7 +2422,11 @@ impl AgentChatView {
             }
             AgentInputEvent::RemoveQueued { index } => {
                 let session_uid = self.current_session.clone();
-                if self.pending_submissions.remove_at(&session_uid, index).is_some() {
+                if self
+                    .pending_submissions
+                    .remove_at(&session_uid, index)
+                    .is_some()
+                {
                     self.sync_pending_preview(cx);
                     cx.notify();
                 }
@@ -2432,12 +2436,7 @@ impl AgentChatView {
                 if let Some(submission) = self.pending_submissions.remove_at(&session_uid, index) {
                     self.sync_pending_preview(cx);
                     input.update(cx, |input, cx| {
-                        input.restore_to_composer(
-                            &submission.text,
-                            submission.images,
-                            window,
-                            cx,
-                        );
+                        input.restore_to_composer(&submission.text, submission.images, window, cx);
                     });
                     cx.notify();
                 }
@@ -2605,7 +2604,8 @@ impl AgentChatView {
         mentions: Vec<MentionItem>,
         images: Vec<crate::ImageAttachment>,
         cx: &mut Context<Self>,
-    ) {        // 新提交：跨轮的展开态与滚动跟随都要重置。
+    ) {
+        // 新提交：跨轮的展开态与滚动跟随都要重置。
         self.expansion.clear();
         self.scroll.jump_to_tail();
         let session_uid = self.current_session.clone();
@@ -2645,10 +2645,7 @@ impl AgentChatView {
                 submission.images.len(),
                 &self.resources.clone(),
             );
-            self.push_system_to_session(
-                &session_uid,
-                t!("AgentUi.acp_steer_sent").to_string(),
-            );
+            self.push_system_to_session(&session_uid, t!("AgentUi.acp_steer_sent").to_string());
             self.request_scroll_to_bottom();
             // 直接发；发不出去（连接问题等）就退回排队语义。
             if self.start_submission(&session_uid, &submission, cx) == SubmissionStart::RetryLater {
@@ -2992,12 +2989,7 @@ impl AgentChatView {
             let result = {
                 let task = Tokio::spawn(cx, async move {
                     runtime
-                        .run_turn_blocking_with_tool_mode(
-                            &session_id,
-                            input,
-                            task_kind,
-                            tool_mode,
-                        )
+                        .run_turn_blocking_with_tool_mode(&session_id, input, task_kind, tool_mode)
                         .await
                 });
                 match task.await {
@@ -3581,7 +3573,8 @@ impl AgentChatView {
                 if !session_still_running {
                     self.set_session_running(&session_uid, false, cx);
                 }
-                self.acp_turn_owners.retain(|owner| owner.turn_id != turn_finished);
+                self.acp_turn_owners
+                    .retain(|owner| owner.turn_id != turn_finished);
                 self.trim_session_transcripts();
             } else {
                 self.set_session_running(&session_uid, false, cx);
@@ -3705,9 +3698,10 @@ impl AgentChatView {
         let cwd = self.acp_detail_cwd();
         cx.spawn(async move |this, cx| {
             let result = loader
-                .load(agent_client_protocol::schema::v1::SessionId::new(
-                    acp_session_id,
-                ), cwd)
+                .load(
+                    agent_client_protocol::schema::v1::SessionId::new(acp_session_id),
+                    cwd,
+                )
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.finish_subagent_detail_load(&detail_uid, result, cx);
@@ -3728,11 +3722,8 @@ impl AgentChatView {
             }
             Err(error) => {
                 // 失败要让用户看见：卡片点得动、点完却一片空白，是最难排查的那种静默失败。
-                let message = t!(
-                    "AgentUi.subagent_detail_failed",
-                    error = error.to_string()
-                )
-                .to_string();
+                let message =
+                    t!("AgentUi.subagent_detail_failed", error = error.to_string()).to_string();
                 tracing::warn!(%error, detail = %detail_uid, "failed to load subagent detail");
                 self.subagent_detail_errors
                     .insert(detail_uid.to_string(), message);
@@ -3745,7 +3736,10 @@ impl AgentChatView {
     }
 
     /// 详情会话的转录消息；面板渲染用。
-    pub(crate) fn subagent_detail_messages(&self, detail_session_id: &str) -> Option<&[ChatMessageUI]> {
+    pub(crate) fn subagent_detail_messages(
+        &self,
+        detail_session_id: &str,
+    ) -> Option<&[ChatMessageUI]> {
         self.subagent_details
             .get(detail_session_id)
             .map(|transcript| transcript.messages.as_slice())
@@ -4070,7 +4064,8 @@ impl AgentChatView {
         cx.notify();
     }
 
-    fn request_scroll_to_bottom(&mut self) {        self.scroll.jump_to_tail();
+    fn request_scroll_to_bottom(&mut self) {
+        self.scroll.jump_to_tail();
         self.auto_scroll.request();
         self.scroll_handle.scroll_to_bottom();
     }
@@ -4611,7 +4606,8 @@ impl AgentChatView {
                             AcpProbeRecord::new(fingerprint.clone(), probe.clone()),
                         );
                         this.acp_probes.insert(id.clone(), probe);
-                        if this.backend == Backend::Acp && this.current_acp_id.as_ref() == Some(&id) {
+                        if this.backend == Backend::Acp && this.current_acp_id.as_ref() == Some(&id)
+                        {
                             this.apply_probe_model_options(&id, cx);
                         }
                         cx.notify();
@@ -4638,9 +4634,7 @@ impl AgentChatView {
 
     fn acp_probe_status(&self, id: &SharedString) -> Option<SharedString> {
         if self.acp_probe_inflight.contains(id) {
-            return Some(SharedString::from(
-                t!("AgentUi.agent_probing").to_string(),
-            ));
+            return Some(SharedString::from(t!("AgentUi.agent_probing").to_string()));
         }
         Some(probe_status_label(self.acp_probes.get(id)?))
     }
@@ -4848,9 +4842,9 @@ impl AgentChatView {
                         });
                         this.sync_composer(cx);
                     }
-                    Err(error) => this.transcript.push_system(format!(
-                        "ACP model switch failed: {error}"
-                    )),
+                    Err(error) => this
+                        .transcript
+                        .push_system(format!("ACP model switch failed: {error}")),
                 }
                 cx.notify();
             });
@@ -6028,7 +6022,7 @@ impl AgentChatView {
         let running_animation_id = running_session_animation_id(&uid);
 
         // 标题区:活跃视图可点击切换;归档视图只读。
-        let label = session_sidebar::session_row_with_style(session, selected, row_style).when(
+        let label = session_sidebar::session_row_with_style(session, selected, row_style, cx).when(
             running,
             move |label| {
                 let debug_selector = running_indicator_id.clone();
@@ -6574,12 +6568,14 @@ impl AgentChatView {
                     },
                 )
                 .role(IconButtonRole::Compact)
-                .tooltip(if nav_collapsed {
-                    t!("Workbench.expand_nav")
-                } else {
-                    t!("Workbench.collapse_nav")
-                }
-                .to_string())
+                .tooltip(
+                    if nav_collapsed {
+                        t!("Workbench.expand_nav")
+                    } else {
+                        t!("Workbench.collapse_nav")
+                    }
+                    .to_string(),
+                )
                 .on_click(move |_, window, cx| (toggle_nav)(window, cx));
                 let right_open = (toggles.right_open)(cx);
                 let right_toggle = IconButton::new(
@@ -6591,12 +6587,14 @@ impl AgentChatView {
                     },
                 )
                 .role(IconButtonRole::Compact)
-                .tooltip(if right_open {
-                    t!("Workbench.collapse_right_sidebar")
-                } else {
-                    t!("Workbench.expand_right_sidebar")
-                }
-                .to_string())
+                .tooltip(
+                    if right_open {
+                        t!("Workbench.collapse_right_sidebar")
+                    } else {
+                        t!("Workbench.expand_right_sidebar")
+                    }
+                    .to_string(),
+                )
                 .on_click(move |_, window, cx| (toggle_right)(window, cx));
                 (
                     Some(nav_toggle.into_any_element()),
@@ -6784,7 +6782,11 @@ fn select_config_value(
 fn probe_status_label(probe: &AcpAgentProbe) -> SharedString {
     if let Some(error) = probe.error.as_deref() {
         return SharedString::from(
-            t!("AgentUi.agent_probe_failed", error = truncate_probe_error(error)).to_string(),
+            t!(
+                "AgentUi.agent_probe_failed",
+                error = truncate_probe_error(error)
+            )
+            .to_string(),
         );
     }
     let mut parts: Vec<String> = Vec::new();
@@ -6849,8 +6851,8 @@ impl Render for AgentChatView {
             .messages
             .iter()
             .any(crate::turn::is_live_message);
-        let running_activity = (self.is_running && !has_live_turn)
-            .then(|| render_running_activity(&chat_theme));
+        let running_activity =
+            (self.is_running && !has_live_turn).then(|| render_running_activity(&chat_theme));
 
         // 滚动几何观测。「内容变长」不算用户移动阅读位置，否则流式输出会把
         // 跟随态自己关掉（见 `TranscriptScrollState::observe`）。
@@ -6868,11 +6870,9 @@ impl Render for AgentChatView {
         } else {
             MessageListLayout::Centered
         };
-        let action_listener = cx.listener(
-            |this, action: &MessageListAction, _window, cx| {
-                this.apply_message_list_action(action.clone(), cx);
-            },
-        );
+        let action_listener = cx.listener(|this, action: &MessageListAction, _window, cx| {
+            this.apply_message_list_action(action.clone(), cx);
+        });
         let on_action: MessageListActionHandler =
             std::rc::Rc::new(move |action, window, cx| action_listener(&action, window, cx));
 
@@ -6943,21 +6943,15 @@ impl Render for AgentChatView {
                 .key_context(AI_CHAT_SEARCH_CONTEXT)
                 .on_action(cx.listener(Self::approve_tool_call))
                 .on_action(cx.listener(Self::reject_tool_call))
-                .on_action(
-                    cx.listener(|this, _: &ToggleTranscriptFind, window, cx| {
-                        this.open_findbar(window, cx);
-                    }),
-                )
-                .on_action(
-                    cx.listener(|this, _: &FindNextInTranscript, _, cx| {
-                        this.step_search(true, cx);
-                    }),
-                )
-                .on_action(
-                    cx.listener(|this, _: &FindPreviousInTranscript, _, cx| {
-                        this.step_search(false, cx);
-                    }),
-                )
+                .on_action(cx.listener(|this, _: &ToggleTranscriptFind, window, cx| {
+                    this.open_findbar(window, cx);
+                }))
+                .on_action(cx.listener(|this, _: &FindNextInTranscript, _, cx| {
+                    this.step_search(true, cx);
+                }))
+                .on_action(cx.listener(|this, _: &FindPreviousInTranscript, _, cx| {
+                    this.step_search(false, cx);
+                }))
                 // 会话导航：cmd-[ / cmd-]（可自定义）与鼠标后退/前进键。
                 .on_action(cx.listener(|this, _: &NavigateSessionBack, _, cx| {
                     this.navigate_session_back(cx);
@@ -7020,21 +7014,15 @@ impl Render for AgentChatView {
                 .key_context(AI_CHAT_SEARCH_CONTEXT)
                 .on_action(cx.listener(Self::approve_tool_call))
                 .on_action(cx.listener(Self::reject_tool_call))
-                .on_action(
-                    cx.listener(|this, _: &ToggleTranscriptFind, window, cx| {
-                        this.open_findbar(window, cx);
-                    }),
-                )
-                .on_action(
-                    cx.listener(|this, _: &FindNextInTranscript, _, cx| {
-                        this.step_search(true, cx);
-                    }),
-                )
-                .on_action(
-                    cx.listener(|this, _: &FindPreviousInTranscript, _, cx| {
-                        this.step_search(false, cx);
-                    }),
-                )
+                .on_action(cx.listener(|this, _: &ToggleTranscriptFind, window, cx| {
+                    this.open_findbar(window, cx);
+                }))
+                .on_action(cx.listener(|this, _: &FindNextInTranscript, _, cx| {
+                    this.step_search(true, cx);
+                }))
+                .on_action(cx.listener(|this, _: &FindPreviousInTranscript, _, cx| {
+                    this.step_search(false, cx);
+                }))
                 // 会话导航：cmd-[ / cmd-]（可自定义）与鼠标后退/前进键。
                 .on_action(cx.listener(|this, _: &NavigateSessionBack, _, cx| {
                     this.navigate_session_back(cx);
@@ -7063,17 +7051,20 @@ impl Render for AgentChatView {
                     |root, overlay| root.child(overlay),
                 )
                 .child(
-                    h_flex().size_full().when_some(sidebar, |this, sidebar| this.child(sidebar)).child(
-                        div().flex_1().h_full().min_w_0().child(
-                            v_flex()
-                                .size_full()
-                                .child(toolbar)
-                                .when_some(truncation_hint, |this, hint| this.child(hint))
-                                .child(messages)
-                                .when_some(auth_actions, |this, actions| this.child(actions))
-                                .child(input_area),
+                    h_flex()
+                        .size_full()
+                        .when_some(sidebar, |this, sidebar| this.child(sidebar))
+                        .child(
+                            div().flex_1().h_full().min_w_0().child(
+                                v_flex()
+                                    .size_full()
+                                    .child(toolbar)
+                                    .when_some(truncation_hint, |this, hint| this.child(hint))
+                                    .child(messages)
+                                    .when_some(auth_actions, |this, actions| this.child(actions))
+                                    .child(input_area),
+                            ),
                         ),
-                    ),
                 )
         }
     }
@@ -8123,16 +8114,16 @@ fn now_secs() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::find_shortcut::CloseTranscriptFind;
     use crate::agent_cards::{
         ACP_PERMISSION_CARD, AcpPermissionCardData, AcpPermissionOptionData, TOOL_CARD,
         TOOL_CONFIRM_CARD, ToolCardData, ToolConfirmCardData,
     };
+    use crate::find_shortcut::CloseTranscriptFind;
     use crate::{
         AcpAgentConfig, AcpAgentEntry, AcpConfigDiagnostic, AcpElicitationField,
         AcpElicitationFieldKind, AcpElicitationForm, AcpElicitationMode, AcpElicitationOption,
-        AcpElicitationOutcome, AcpElicitationRequest, AcpPermissionOption,
-        AcpPermissionRequest, AcpPublicMcpApprovalRequest,
+        AcpElicitationOutcome, AcpElicitationRequest, AcpPermissionOption, AcpPermissionRequest,
+        AcpPublicMcpApprovalRequest,
     };
     use agent_runtime::RuntimeServices;
     use agent_runtime::model::MockModelClient;
@@ -8424,13 +8415,16 @@ mod tests {
             );
 
             assert!(
-                view.acp_turn_owners.iter().any(|owner| owner.turn_id.as_str() == "turn-steer"),
+                view.acp_turn_owners
+                    .iter()
+                    .any(|owner| owner.turn_id.as_str() == "turn-steer"),
                 "原在飞轮次的 owner 不受插话影响"
             );
             assert!(
-                view.transcript.messages.iter().any(|message| message
-                    .content
-                    .contains("插一句")),
+                view.transcript
+                    .messages
+                    .iter()
+                    .any(|message| message.content.contains("插一句")),
                 "插话消息应落进当前转录"
             );
         });
@@ -8767,7 +8761,9 @@ mod tests {
             assert!(view.acp_session_list_model().is_none());
 
             view.backend = Backend::Acp;
-            let model = view.acp_session_list_model().expect("visible on acp backend");
+            let model = view
+                .acp_session_list_model()
+                .expect("visible on acp backend");
             assert_eq!(1, model.sessions.len());
             assert_eq!("Plan review", model.sessions[0].label());
 
@@ -8966,12 +8962,22 @@ mod tests {
                 .enqueue(&session_uid, pending_submission("第三条"));
             let input = view.input.clone();
 
-            view.on_input_event(&input, &AgentInputEvent::RemoveQueued { index: 1 }, window, cx);
+            view.on_input_event(
+                &input,
+                &AgentInputEvent::RemoveQueued { index: 1 },
+                window,
+                cx,
+            );
 
             assert_eq!(vec!["第一条", "第三条"], queue(view));
 
             // 越界删除必须是 no-op，不能把队首误删。
-            view.on_input_event(&input, &AgentInputEvent::RemoveQueued { index: 9 }, window, cx);
+            view.on_input_event(
+                &input,
+                &AgentInputEvent::RemoveQueued { index: 9 },
+                window,
+                cx,
+            );
             assert_eq!(vec!["第一条", "第三条"], queue(view));
         });
     }
@@ -8995,7 +9001,12 @@ mod tests {
             view.sync_pending_preview(cx);
             let input = view.input.clone();
 
-            view.on_input_event(&input, &AgentInputEvent::EditQueued { index: 0 }, window, cx);
+            view.on_input_event(
+                &input,
+                &AgentInputEvent::EditQueued { index: 0 },
+                window,
+                cx,
+            );
 
             // 队列里只剩没被编辑的那条，且编辑项已从队列移除而不是复制一份。
             let remaining: Vec<String> = view
@@ -9013,7 +9024,8 @@ mod tests {
     }
 
     #[gpui::test]
-    fn acp_connecting_keeps_pending_submission_for_retry(cx: &mut TestAppContext) {        init_test_ui(cx);
+    fn acp_connecting_keeps_pending_submission_for_retry(cx: &mut TestAppContext) {
+        init_test_ui(cx);
         let config =
             AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
         let (view, cx) =
@@ -9586,18 +9598,22 @@ mod tests {
         let seen: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
         let seen_for_subscribe = seen.clone();
         cx.update(|_window: &mut gpui::Window, cx: &mut gpui::App| {
-            cx.subscribe(&view, move |_, event: &AgentChatViewEvent, _cx| match event {
-                AgentChatViewEvent::TurnStarted { .. } => {
-                    seen_for_subscribe.lock().unwrap().push("started");
-                }
-                AgentChatViewEvent::TurnFinished { success, .. } => {
-                    seen_for_subscribe
-                        .lock()
-                        .unwrap()
-                        .push(if *success { "finished:ok" } else { "finished:fail" });
-                }
-                _ => {}
-            })
+            cx.subscribe(
+                &view,
+                move |_, event: &AgentChatViewEvent, _cx| match event {
+                    AgentChatViewEvent::TurnStarted { .. } => {
+                        seen_for_subscribe.lock().unwrap().push("started");
+                    }
+                    AgentChatViewEvent::TurnFinished { success, .. } => {
+                        seen_for_subscribe.lock().unwrap().push(if *success {
+                            "finished:ok"
+                        } else {
+                            "finished:fail"
+                        });
+                    }
+                    _ => {}
+                },
+            )
             .detach();
         });
 
@@ -9642,7 +9658,11 @@ mod tests {
         let seen_for_subscribe = seen.clone();
         cx.update(|_window: &mut gpui::Window, cx: &mut gpui::App| {
             cx.subscribe(&view, move |_, event: &AgentChatViewEvent, _cx| {
-                if let AgentChatViewEvent::RestoreTurn { session_id, turn_id } = event {
+                if let AgentChatViewEvent::RestoreTurn {
+                    session_id,
+                    turn_id,
+                } = event
+                {
                     seen_for_subscribe
                         .lock()
                         .unwrap()
@@ -9762,11 +9782,7 @@ mod tests {
 
         let current = view.read_with(cx, |view, _| view.current_session.clone());
         view.update(cx, |view, cx| {
-            view.set_restorable_turns(
-                current.clone(),
-                HashSet::from(["turn-a".to_string()]),
-                cx,
-            );
+            view.set_restorable_turns(current.clone(), HashSet::from(["turn-a".to_string()]), cx);
             view.set_restorable_turns(
                 "another-session".to_string(),
                 HashSet::from(["turn-b".to_string()]),
@@ -11430,7 +11446,11 @@ mod tests {
         });
     }
 
-    fn snapshot_of_external_session(uid: &str, agent_id: &str, protocol_id: &str) -> agent_runtime::SessionSnapshot {
+    fn snapshot_of_external_session(
+        uid: &str,
+        agent_id: &str,
+        protocol_id: &str,
+    ) -> agent_runtime::SessionSnapshot {
         agent_runtime::SessionSnapshot {
             id: SessionId::from_string(uid.to_string()),
             resources: ResourceContext::new(),
@@ -11465,11 +11485,8 @@ mod tests {
             cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
 
         view.update(cx, |view, cx| {
-            view.runtime.restore_session(snapshot_of_external_session(
-                "sess_acp",
-                "codex",
-                "acp-42",
-            ));
+            view.runtime
+                .restore_session(snapshot_of_external_session("sess_acp", "codex", "acp-42"));
             let reference = view
                 .runtime
                 .session(&SessionId::from_string("sess_acp".to_string()))
@@ -11927,10 +11944,7 @@ mod tests {
                 cx,
             );
 
-            assert!(
-                !view.is_running,
-                "回放不是一轮，不能把界面带回「正在响应」"
-            );
+            assert!(!view.is_running, "回放不是一轮，不能把界面带回「正在响应」");
         });
 
         view.read_with(cx, |view, _| {
@@ -12533,7 +12547,10 @@ mod tests {
         // 未知 id 不应把任务类型带偏。
         assert_eq!(TaskKind::Agent, task_kind_from_id("acp-mode:plan"));
 
-        assert_eq!(TaskKind::Ask, task_kind_from_settings(AiChatToolExecutionMode::Ask));
+        assert_eq!(
+            TaskKind::Ask,
+            task_kind_from_settings(AiChatToolExecutionMode::Ask)
+        );
         assert_eq!(
             TaskKind::Agent,
             task_kind_from_settings(AiChatToolExecutionMode::Manual)
@@ -12557,15 +12574,15 @@ mod tests {
         };
 
         let mut state = AcpSessionState::default();
-        state.apply_new_session_response(
-            &NewSessionResponse::new("s1").modes(SessionModeState::new(
+        state.apply_new_session_response(&NewSessionResponse::new("s1").modes(
+            SessionModeState::new(
                 "ask",
                 vec![
                     SessionMode::new("ask", "Ask"),
                     SessionMode::new("code", "Code"),
                 ],
-            )),
-        );
+            ),
+        ));
 
         let options = acp_execution_mode_options(&state);
 
@@ -12590,19 +12607,22 @@ mod tests {
         };
 
         let mut state = AcpSessionState::default();
-        state.apply_new_session_response(&NewSessionResponse::new("s1").config_options(vec![
-            SessionConfigOption::select(
-                "mode",
-                "Session Mode",
-                "build",
-                vec![
-                    SessionConfigSelectOption::new("build", "build").description("The default agent."),
-                    SessionConfigSelectOption::new("plan", "plan"),
-                    SessionConfigSelectOption::new("scout", "scout"),
-                ],
-            )
-            .category(SessionConfigOptionCategory::Mode),
-        ]));
+        state.apply_new_session_response(
+            &NewSessionResponse::new("s1").config_options(vec![
+                SessionConfigOption::select(
+                    "mode",
+                    "Session Mode",
+                    "build",
+                    vec![
+                        SessionConfigSelectOption::new("build", "build")
+                            .description("The default agent."),
+                        SessionConfigSelectOption::new("plan", "plan"),
+                        SessionConfigSelectOption::new("scout", "scout"),
+                    ],
+                )
+                .category(SessionConfigOptionCategory::Mode),
+            ]),
+        );
 
         let options = acp_execution_mode_options(&state);
 
@@ -12663,7 +12683,7 @@ mod tests {
             &[],
             ComposerSkillSummary::default(),
             Vec::new(),
-        None,
+            None,
         );
         let acp = build_composer_context(
             &ResourceContext::new(),
@@ -12679,7 +12699,7 @@ mod tests {
             &[],
             ComposerSkillSummary::default(),
             Vec::new(),
-        None,
+            None,
         );
 
         assert_eq!(local.plan_items, acp.plan_items);
@@ -12710,7 +12730,7 @@ mod tests {
             &[],
             ComposerSkillSummary::default(),
             Vec::new(),
-        None,
+            None,
         );
 
         assert_eq!(ctx.agent_options[0].label.as_ref(), "One Agent");
@@ -12751,7 +12771,7 @@ mod tests {
             &[],
             ComposerSkillSummary::default(),
             Vec::new(),
-        None,
+            None,
         );
 
         assert_eq!(ctx.subagent_items.len(), 2);
@@ -12923,7 +12943,7 @@ mod tests {
             &[],
             ComposerSkillSummary::default(),
             Vec::new(),
-        None,
+            None,
         );
 
         assert_eq!(ctx.target.unwrap().label.as_ref(), "ACP 工作会话");
@@ -13579,7 +13599,8 @@ mod tests {
         let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
         let (view, cx) =
             cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
-        let (envelope, mut outcome_rx) = AcpElicitationEnvelope::new(test_acp_elicitation_request());
+        let (envelope, mut outcome_rx) =
+            AcpElicitationEnvelope::new(test_acp_elicitation_request());
 
         view.update(cx, |view, cx| {
             let _ = view.start_acp_client_session(cx);
@@ -13592,20 +13613,21 @@ mod tests {
         );
 
         // 必填项空着时提交只应给出提示，不能把半截答案回给 agent。
-        let submit = cx.debug_bounds("elicitation-submit").expect("submit button");
+        let submit = cx
+            .debug_bounds("elicitation-submit")
+            .expect("submit button");
         cx.simulate_click(submit.center(), Modifiers::default());
         cx.run_until_parked();
-        assert!(
-            outcome_rx.try_recv().is_err(),
-            "必填项没填就不该提交"
-        );
+        assert!(outcome_rx.try_recv().is_err(), "必填项没填就不该提交");
 
         let prod = cx
             .debug_bounds("elicitation-radio-env-prod")
             .expect("env option");
         cx.simulate_click(prod.center(), Modifiers::default());
         cx.run_until_parked();
-        let submit = cx.debug_bounds("elicitation-submit").expect("submit button");
+        let submit = cx
+            .debug_bounds("elicitation-submit")
+            .expect("submit button");
         cx.simulate_click(submit.center(), Modifiers::default());
         cx.run_until_parked();
 
@@ -13627,7 +13649,8 @@ mod tests {
         let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
         let (view, cx) =
             cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
-        let (envelope, mut outcome_rx) = AcpElicitationEnvelope::new(test_acp_elicitation_request());
+        let (envelope, mut outcome_rx) =
+            AcpElicitationEnvelope::new(test_acp_elicitation_request());
 
         view.update(cx, |view, cx| {
             view.receive_acp_elicitation(envelope, cx);
@@ -13652,7 +13675,8 @@ mod tests {
         let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
         let (view, cx) =
             cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
-        let (envelope, mut outcome_rx) = AcpElicitationEnvelope::new(test_acp_elicitation_request());
+        let (envelope, mut outcome_rx) =
+            AcpElicitationEnvelope::new(test_acp_elicitation_request());
 
         view.update(cx, |view, cx| {
             view.receive_acp_elicitation(envelope, cx);
@@ -15372,10 +15396,7 @@ mod tests {
         let pending = view.read_with(cx, |view, _| view.transcript.pending_decisions());
         assert_eq!(1, pending.len());
         assert_eq!("c_write", pending[0].id);
-        assert_eq!(
-            crate::DecisionAuthority::LocalTool,
-            pending[0].authority
-        );
+        assert_eq!(crate::DecisionAuthority::LocalTool, pending[0].authority);
 
         let allow = cx
             .debug_bounds("decision-option-c_write-allow")
@@ -15494,7 +15515,9 @@ mod tests {
                 summary: "Call Execute in terminal".into(),
                 details: json!({"requestArguments": {"command": "du -xhd1 /"}}),
             });
-        view.update(cx, |view, cx| view.receive_public_mcp_approval(envelope, cx));
+        view.update(cx, |view, cx| {
+            view.receive_public_mcp_approval(envelope, cx)
+        });
         cx.run_until_parked();
 
         let authority = view.read_with(cx, |view, _| {
@@ -15504,10 +15527,7 @@ mod tests {
                 .find(|decision| decision.id == request_id)
                 .map(|decision| decision.authority)
         });
-        assert_eq!(
-            Some(crate::DecisionAuthority::PublicMcp),
-            authority
-        );
+        assert_eq!(Some(crate::DecisionAuthority::PublicMcp), authority);
 
         cx.dispatch_action(ApproveToolCall {
             call_id: request_id.into(),
@@ -15575,9 +15595,7 @@ mod tests {
 
     /// 快捷键打开 → 输入即搜 → Escape 关闭并清空命中。
     #[gpui::test]
-    fn gpui_findbar_opens_with_shortcut_searches_and_closes_with_escape(
-        cx: &mut TestAppContext,
-    ) {
+    fn gpui_findbar_opens_with_shortcut_searches_and_closes_with_escape(cx: &mut TestAppContext) {
         init_test_ui(cx);
         let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
         let (view, cx) =
@@ -15688,10 +15706,7 @@ mod tests {
         );
 
         let (top_item, offset_y) = view.read_with(cx, |view, _| {
-            (
-                view.scroll_handle.top_item(),
-                view.scroll_handle.offset().y,
-            )
+            (view.scroll_handle.top_item(), view.scroll_handle.offset().y)
         });
         // GPUI 把滚动偏移夹在 `[-max_offset, 0]`（见 `gpui` 的 `div.rs::compute_scroll_offset`），
         // 向下滚动时它是**负数**，所以这里不能断言「大于 0」。真正判方向的是下面的 `top_item`。
@@ -15704,9 +15719,7 @@ mod tests {
 
     /// 前后跳转按轮次推进，且**不碰 composer**。
     #[gpui::test]
-    fn gpui_findbar_stepping_advances_hits_without_touching_the_composer(
-        cx: &mut TestAppContext,
-    ) {
+    fn gpui_findbar_stepping_advances_hits_without_touching_the_composer(cx: &mut TestAppContext) {
         init_test_ui(cx);
         let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
         let (view, cx) =
@@ -15752,7 +15765,10 @@ mod tests {
             .expect("prev button should render");
         cx.simulate_click(previous.center(), Modifiers::default());
         cx.run_until_parked();
-        assert_eq!(Some(0), view.read_with(cx, |view, _| view.search.current_turn_index()));
+        assert_eq!(
+            Some(0),
+            view.read_with(cx, |view, _| view.search.current_turn_index())
+        );
     }
 
     /// 正文变化（流式追加）后命中要重算，而不是停在旧结果上。
@@ -15976,9 +15992,7 @@ mod tests {
     /// 工作区就崩一次。延后（`Window::defer`）后动作照旧执行，只是落在租借
     /// 释放之后。
     #[gpui::test]
-    fn gpui_composer_action_re_entering_the_view_does_not_double_lease(
-        cx: &mut TestAppContext,
-    ) {
+    fn gpui_composer_action_re_entering_the_view_does_not_double_lease(cx: &mut TestAppContext) {
         init_test_ui(cx);
         let runtime = test_runtime("m");
         let config = AgentChatViewConfig::new(runtime, ResourceContext::new(), vec![]);
@@ -16015,9 +16029,7 @@ mod tests {
 
         let input = view.update_in(cx, |view, _window, _cx| view.input.clone());
         input.update(cx, |_, cx| {
-            cx.emit(AgentInputEvent::SelectBranch {
-                name: "dev".into(),
-            });
+            cx.emit(AgentInputEvent::SelectBranch { name: "dev".into() });
         });
         cx.run_until_parked();
 
@@ -16362,7 +16374,10 @@ mod acp_preconnect_model_tests {
         assert_eq!(2, options.len());
         assert_eq!("gpt-5", options[0].model.as_ref());
         assert_eq!("builtin.codex", options[0].provider_id.as_ref());
-        assert_eq!("GPT-5", options[0].hint.as_ref().map(AsRef::as_ref).unwrap_or(""));
+        assert_eq!(
+            "GPT-5",
+            options[0].hint.as_ref().map(AsRef::as_ref).unwrap_or("")
+        );
         assert_ne!(options[0].id, options[1].id, "选项 id 必须唯一");
         // ACP 标签只显示模型名，agent 名不进标签。
         assert!(options[0].model_only);

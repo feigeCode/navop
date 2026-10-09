@@ -196,8 +196,8 @@ mod tests {
 
     #[test]
     fn insert_text_keeps_the_agent_command_name_verbatim() {
-        let item = SlashCommandItem::new("create_plan", "Make a plan")
-            .with_input_hint("what to plan");
+        let item =
+            SlashCommandItem::new("create_plan", "Make a plan").with_input_hint("what to plan");
 
         assert_eq!("/create_plan", item.completion_label());
         assert_eq!("/create_plan ", item.insert_text());

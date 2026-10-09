@@ -239,7 +239,13 @@ mod workspace_skills_tests {
             !state.selected_paths.contains(&skill_path),
             "失效路径的选择应被丢弃: {skill_path:?}"
         );
-        assert!(state.catalog.skills.iter().all(|skill| skill.name != "temp-skill"));
+        assert!(
+            state
+                .catalog
+                .skills
+                .iter()
+                .all(|skill| skill.name != "temp-skill")
+        );
 
         fs::remove_dir_all(&base).ok();
     }

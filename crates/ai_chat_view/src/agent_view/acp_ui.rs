@@ -399,7 +399,8 @@ impl AgentChatView {
         self.acp_connect_origin_session = None;
         self.current_acp_id = Some(agent_id);
         AppSettings::update_and_save(cx, |settings| {
-            settings.ai_chat.last_acp_agent_id = self.current_acp_id.as_ref().map(ToString::to_string);
+            settings.ai_chat.last_acp_agent_id =
+                self.current_acp_id.as_ref().map(ToString::to_string);
         });
         if let Some(transcript) = self.transcript_for_open_session_mut(origin_session_uid) {
             transcript.set_acp_error(&error);
@@ -427,11 +428,7 @@ impl AgentChatView {
         self.model_options = acp_model_options(&acp_state, Some(&agent_id));
         self.selected_model = acp_model_option(&acp_state, Some(&agent_id));
         self.input.update(cx, |input, cx| {
-            input.set_menu_options(
-                self.model_options.clone(),
-                self.tool_options.clone(),
-                cx,
-            );
+            input.set_menu_options(self.model_options.clone(), self.tool_options.clone(), cx);
         });
         self.acp = Some(connection);
         self.restore_persisted_acp_model(cx);

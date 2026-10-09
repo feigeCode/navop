@@ -32,25 +32,30 @@ pub(super) fn composer_agent_options_with_status(
         backend == Backend::Local,
         acp_connecting,
     )];
-    options.extend(acp_agents.iter().filter(|entry| entry.enabled).map(|entry| {
-        if let Some(diagnostic) = &entry.diagnostic {
-            return ComposerAgentOption::invalid_acp(
-                entry.id.clone(),
-                entry.name.clone(),
-                diagnostic.message.clone(),
-            );
-        }
-        let mut option = ComposerAgentOption::acp(
-            entry.id.clone(),
-            entry.name.clone(),
-            backend == Backend::Acp && current_acp_id == Some(&entry.id),
-            acp_connecting,
-        );
-        if let Some(status) = statuses.get(&entry.id) {
-            option.subtitle = status.clone();
-        }
-        option
-    }));
+    options.extend(
+        acp_agents
+            .iter()
+            .filter(|entry| entry.enabled)
+            .map(|entry| {
+                if let Some(diagnostic) = &entry.diagnostic {
+                    return ComposerAgentOption::invalid_acp(
+                        entry.id.clone(),
+                        entry.name.clone(),
+                        diagnostic.message.clone(),
+                    );
+                }
+                let mut option = ComposerAgentOption::acp(
+                    entry.id.clone(),
+                    entry.name.clone(),
+                    backend == Backend::Acp && current_acp_id == Some(&entry.id),
+                    acp_connecting,
+                );
+                if let Some(status) = statuses.get(&entry.id) {
+                    option.subtitle = status.clone();
+                }
+                option
+            }),
+    );
     options
 }
 

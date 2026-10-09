@@ -66,11 +66,12 @@ impl AgentChatView {
 
     /// 给渲染层用的快照；不显示时是 `None`。
     pub(crate) fn acp_session_list_model(&self) -> Option<AcpSessionListModel> {
-        self.acp_session_list_visible().then(|| AcpSessionListModel {
-            sessions: self.acp_sessions.clone(),
-            loading: self.acp_sessions_loading,
-            error: self.acp_sessions_error.clone(),
-        })
+        self.acp_session_list_visible()
+            .then(|| AcpSessionListModel {
+                sessions: self.acp_sessions.clone(),
+                loading: self.acp_sessions_loading,
+                error: self.acp_sessions_error.clone(),
+            })
     }
 
     /// 当前连接指向的 ACP 会话 id，用来把列表里那一条标成「正在用」。
@@ -426,9 +427,7 @@ impl AgentChatView {
                 AcpSessionOpen::Resume => acp.resume_session(target, cwd).await.map(|_| ()),
             };
             let _ = this.update(cx, |this, cx| {
-                this.finish_acp_session_open(
-                    operation, agent_id, session_uid, acp, result, cx,
-                );
+                this.finish_acp_session_open(operation, agent_id, session_uid, acp, result, cx);
             });
         })
         .detach();
@@ -484,9 +483,7 @@ impl AgentChatView {
                     cx.spawn(async move |this, cx| {
                         let target = AcpSessionId::new(protocol_session_id);
                         let mut acp = acp;
-                        let result = match open_kind_at_finish(
-                            acp.state().agent_capabilities(),
-                        ) {
+                        let result = match open_kind_at_finish(acp.state().agent_capabilities()) {
                             Some(AcpSessionOpen::Load) => {
                                 acp.load_session(target, cwd).await.map(|_| ())
                             }
@@ -497,7 +494,12 @@ impl AgentChatView {
                         };
                         let _ = this.update(cx, |this, cx| {
                             this.finish_acp_session_open(
-                                operation, agent_id, session_uid, acp, result, cx,
+                                operation,
+                                agent_id,
+                                session_uid,
+                                acp,
+                                result,
+                                cx,
                             );
                         });
                     })
@@ -506,9 +508,7 @@ impl AgentChatView {
                     return;
                 }
                 if replay_lagged {
-                    tracing::warn!(
-                        "ACP history replay lagged twice; giving up on the refill"
-                    );
+                    tracing::warn!("ACP history replay lagged twice; giving up on the refill");
                 }
                 self.acp_replay_retries = 0;
                 self.clear_acp_session_transition(operation);
@@ -610,7 +610,10 @@ pub(crate) fn acp_session_placeholder(
 ) -> Option<gpui::AnyElement> {
     let (text, color) = match (error, loading, has_rows) {
         (Some(error), _, _) => (error.to_string(), danger),
-        (None, true, _) => (t!("AgentUi.acp_session_listing").to_string(), theme.muted_foreground),
+        (None, true, _) => (
+            t!("AgentUi.acp_session_listing").to_string(),
+            theme.muted_foreground,
+        ),
         (None, false, false) => (
             t!("AgentUi.acp_sessions_empty").to_string(),
             theme.muted_foreground,

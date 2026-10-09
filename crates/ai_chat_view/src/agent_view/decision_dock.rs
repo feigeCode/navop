@@ -11,9 +11,7 @@
 //! - **敏感参数只展示已脱敏的版本**（脱敏发生在写卡片时，这里不再加工）。
 
 use gpui::prelude::FluentBuilder;
-use gpui::{
-    AnyElement, InteractiveElement, IntoElement, ParentElement, SharedString, Styled, div,
-};
+use gpui::{AnyElement, InteractiveElement, IntoElement, ParentElement, SharedString, Styled, div};
 use gpui_component::{h_flex, v_flex};
 use one_assets::IconName;
 use rust_i18n::t;
@@ -37,15 +35,12 @@ impl AgentChatView {
         let expanded = self.decision_details.as_deref() == Some(current.id.as_str());
         let has_options = !current.options.is_empty();
 
-        let buttons = h_flex()
-            .flex_shrink_0()
-            .gap_1()
-            .children(
-                current
-                    .options
-                    .iter()
-                    .map(|option| decision_option_button(current, option)),
-            );
+        let buttons = h_flex().flex_shrink_0().gap_1().children(
+            current
+                .options
+                .iter()
+                .map(|option| decision_option_button(current, option)),
+        );
 
         let details = expanded.then(|| render_details(current, theme, cx));
         let toggle_id = current.id.clone();
@@ -94,18 +89,24 @@ impl AgentChatView {
                                         ),
                                 )
                                 .child(
-                                    div().w_full().text_xs().text_color(theme.muted_foreground).child(
-                                        t!("AgentUi.decision_dock_subtitle").to_string(),
-                                    ),
+                                    div()
+                                        .w_full()
+                                        .text_xs()
+                                        .text_color(theme.muted_foreground)
+                                        .child(t!("AgentUi.decision_dock_subtitle").to_string()),
                                 )
                                 .child(
-                                    div().w_full().text_xs().text_color(theme.muted_foreground).child(
-                                        t!(
-                                            "AgentUi.decision_authority_note",
-                                            authority = t!(current.authority.label_key())
-                                        )
-                                        .to_string(),
-                                    ),
+                                    div()
+                                        .w_full()
+                                        .text_xs()
+                                        .text_color(theme.muted_foreground)
+                                        .child(
+                                            t!(
+                                                "AgentUi.decision_authority_note",
+                                                authority = t!(current.authority.label_key())
+                                            )
+                                            .to_string(),
+                                        ),
                                 )
                                 .when_some(details, |this, details| this.child(details)),
                         )
@@ -125,16 +126,18 @@ impl AgentChatView {
                                     }
                                     .to_string(),
                                 )
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.decision_details =
-                                        if this.decision_details.as_deref() == Some(toggle_id.as_str())
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
+                                        this.decision_details = if this.decision_details.as_deref()
+                                            == Some(toggle_id.as_str())
                                         {
                                             None
                                         } else {
                                             Some(toggle_id.clone())
                                         };
-                                    cx.notify();
-                                })),
+                                        cx.notify();
+                                    },
+                                )),
                             )
                         })
                         .when(rest.len() > 0, |this| {

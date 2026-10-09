@@ -88,7 +88,8 @@ impl SubagentDetailPanel {
                     this.cached_token = None;
                     this.cached_messages.clear();
                     this.cached_error = None;
-                    this.scroll_handle.set_offset(gpui::point(gpui::px(0.0), gpui::px(0.0)));
+                    this.scroll_handle
+                        .set_offset(gpui::point(gpui::px(0.0), gpui::px(0.0)));
                     cx.notify();
                 }
                 DefaultAgentChatPanelEvent::SubagentDetailUpdated { detail_session_id } => {
@@ -121,8 +122,10 @@ impl SubagentDetailPanel {
             return;
         };
         let detail_session_id = target.detail_session_id();
-        let Some((revision, has_error, messages, error)) =
-            self.chat.read(cx).subagent_detail_snapshot(&detail_session_id, cx)
+        let Some((revision, has_error, messages, error)) = self
+            .chat
+            .read(cx)
+            .subagent_detail_snapshot(&detail_session_id, cx)
         else {
             return;
         };
@@ -179,7 +182,10 @@ impl SubagentDetailPanel {
     fn render_placeholder(&self, cx: &Context<Self>) -> gpui::AnyElement {
         let theme = cx.theme();
         let (icon, text) = if self.target.is_none() {
-            (IconName::AILine, t!("AgentUi.subagent_detail_empty").to_string())
+            (
+                IconName::AILine,
+                t!("AgentUi.subagent_detail_empty").to_string(),
+            )
         } else if let Some(error) = self.cached_error.clone() {
             (IconName::TriangleAlert, error)
         } else {

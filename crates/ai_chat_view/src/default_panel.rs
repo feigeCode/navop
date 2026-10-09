@@ -34,10 +34,20 @@ use crate::{
 pub enum DefaultAgentChatPanelEvent {
     Close,
     MoveTo(SidebarPlacement),
-    TurnStarted { session_id: String, turn_id: String },
-    TurnFinished { session_id: String, turn_id: String, success: bool },
+    TurnStarted {
+        session_id: String,
+        turn_id: String,
+    },
+    TurnFinished {
+        session_id: String,
+        turn_id: String,
+        success: bool,
+    },
     /// 用户点了某轮页脚的「回到这一轮」。宿主据此让工作区浏览器回滚。
-    RestoreTurn { session_id: String, turn_id: String },
+    RestoreTurn {
+        session_id: String,
+        turn_id: String,
+    },
     /// 用户点了改动摘要里的某个文件。宿主据此在审阅面板里打开**这个文件的 diff**。
     ///
     /// `turn_id` 指明裁哪一轮的快照：点历史轮的文件时要的是那一刻的 diff，
@@ -53,7 +63,9 @@ pub enum DefaultAgentChatPanelEvent {
         title: String,
     },
     /// 某条子代理详情的转录有了新内容。详情面板据此重绘。
-    SubagentDetailUpdated { detail_session_id: String },
+    SubagentDetailUpdated {
+        detail_session_id: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -324,7 +336,8 @@ impl DefaultAgentChatPanel {
         if turn_ids.is_empty() {
             self.restorable_turns.remove(&session_id);
         } else {
-            self.restorable_turns.insert(session_id.clone(), turn_ids.clone());
+            self.restorable_turns
+                .insert(session_id.clone(), turn_ids.clone());
         }
         if let Some(view) = &self.view {
             view.update(cx, |view, cx| {

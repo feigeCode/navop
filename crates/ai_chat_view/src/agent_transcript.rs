@@ -749,7 +749,7 @@ impl AgentTranscript {
             duration_ms: None,
         };
         bound_tool_card_data(&mut data, self.card_field_limit());
-                self.push_message(ChatMessageUI::card(TOOL_CARD, data.to_json()));
+        self.push_message(ChatMessageUI::card(TOOL_CARD, data.to_json()));
     }
 
     fn apply_observation(&mut self, obs: &ToolObservation) {
@@ -2206,7 +2206,12 @@ mod tests {
             "command": "x".repeat(MAX_CACHED_TOOL_INPUT_BYTES + 1)
         });
 
-        tr.push_tool_call("oversized", "terminal_exec", ToolAction::Execute, &arguments);
+        tr.push_tool_call(
+            "oversized",
+            "terminal_exec",
+            ToolAction::Execute,
+            &arguments,
+        );
 
         assert!(tr.tool_call_arguments("oversized").is_none());
         let card = tr.find_tool_card("oversized").expect("tool card");
@@ -3040,24 +3045,26 @@ mod tests {
         tr.apply(&RuntimeEvent::PlanUpdated {
             session_id: sid(),
             turn_id: turn(1),
-            plan: Plan::new("第一轮", PlanSource::Llm)
-                .with_steps(vec![PlanStep::new("a", "")]),
+            plan: Plan::new("第一轮", PlanSource::Llm).with_steps(vec![PlanStep::new("a", "")]),
         });
         tr.apply(&RuntimeEvent::PlanUpdated {
             session_id: sid(),
             turn_id: turn(2),
-            plan: Plan::new("第二轮", PlanSource::Llm)
-                .with_steps(vec![PlanStep::new("b", "")]),
+            plan: Plan::new("第二轮", PlanSource::Llm).with_steps(vec![PlanStep::new("b", "")]),
         });
 
         // 往回翻历史时应该看到「当时打算怎么做」,而不是最后的结果。
         assert_eq!(tr.messages.len(), 2);
         assert_eq!(
-            PlanCardData::from_json(&tr.messages[0].content).unwrap().goal,
+            PlanCardData::from_json(&tr.messages[0].content)
+                .unwrap()
+                .goal,
             "第一轮"
         );
         assert_eq!(
-            PlanCardData::from_json(&tr.messages[1].content).unwrap().goal,
+            PlanCardData::from_json(&tr.messages[1].content)
+                .unwrap()
+                .goal,
             "第二轮"
         );
         assert!(turn_labels(&tr).iter().all(|label| label.is_some()));

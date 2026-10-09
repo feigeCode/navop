@@ -289,9 +289,8 @@ fn diff_ops<'a>(old: &'a str, new: &'a str) -> (Vec<Op<'a>>, usize, usize) {
     let mid_old = &old_lines[prefix..old_lines.len() - suffix];
     let mid_new = &new_lines[prefix..new_lines.len() - suffix];
 
-    let mut ops: Vec<Op<'a>> = Vec::with_capacity(
-        old_lines.len().max(new_lines.len()) + mid_old.len() + mid_new.len(),
-    );
+    let mut ops: Vec<Op<'a>> =
+        Vec::with_capacity(old_lines.len().max(new_lines.len()) + mid_old.len() + mid_new.len());
     let mut old_no = 1u32;
     let mut new_no = 1u32;
 
@@ -507,7 +506,14 @@ mod tests {
         assert_eq!(1, summary.added);
         assert_eq!(0, summary.removed);
         // 只多出一行:另一行是上下文,不是新增。
-        assert_eq!(1, summary.rows.iter().filter(|r| r.kind == DiffRowKind::Added).count());
+        assert_eq!(
+            1,
+            summary
+                .rows
+                .iter()
+                .filter(|r| r.kind == DiffRowKind::Added)
+                .count()
+        );
         assert_eq!(2, summary.rows.len());
 
         // 只是补了末尾换行:没有内容变化,就不该有差异行。
@@ -578,8 +584,8 @@ mod tests {
         let summary = FileChangeSummary::from_texts("src/lib.rs", Some(old), new);
         let patch = patch_from_summary(&summary);
 
-        let files = gpui_component::diff::DiffFile::parse(&patch)
-            .expect("synthesized patch must parse");
+        let files =
+            gpui_component::diff::DiffFile::parse(&patch).expect("synthesized patch must parse");
         assert_eq!(1, files.len());
         assert_eq!("src/lib.rs", files[0].path().to_string());
         // 一处替换:删一行、加一行,parser 看到的计数必须与摘要一致。
@@ -592,9 +598,24 @@ mod tests {
     fn patch_opens_new_hunks_where_line_numbers_gap() {
         // 手工构造两个不连续的窗口:第 1 行删、第 5 行加,中间隔着 3 行空白。
         let rows = vec![
-            DiffRow { old_no: Some(1), new_no: None, kind: DiffRowKind::Removed, text: "gone".into() },
-            DiffRow { old_no: Some(5), new_no: Some(5), kind: DiffRowKind::Context, text: "ctx".into() },
-            DiffRow { old_no: None, new_no: Some(6), kind: DiffRowKind::Added, text: "fresh".into() },
+            DiffRow {
+                old_no: Some(1),
+                new_no: None,
+                kind: DiffRowKind::Removed,
+                text: "gone".into(),
+            },
+            DiffRow {
+                old_no: Some(5),
+                new_no: Some(5),
+                kind: DiffRowKind::Context,
+                text: "ctx".into(),
+            },
+            DiffRow {
+                old_no: None,
+                new_no: Some(6),
+                kind: DiffRowKind::Added,
+                text: "fresh".into(),
+            },
         ];
         let change = FileChangeSummary {
             path: "a.txt".into(),
@@ -615,8 +636,8 @@ mod tests {
         assert!(patch.contains("-gone\n"));
         assert!(patch.contains("+fresh\n"));
 
-        let files = gpui_component::diff::DiffFile::parse(&patch)
-            .expect("multi-hunk patch must parse");
+        let files =
+            gpui_component::diff::DiffFile::parse(&patch).expect("multi-hunk patch must parse");
         assert_eq!(1, files.len());
     }
 
@@ -626,8 +647,8 @@ mod tests {
         let patch = patch_from_summary(&summary);
         assert!(patch.contains("--- /dev/null\n"));
         assert!(patch.contains("@@ -0,0 +1,2 @@"));
-        let files = gpui_component::diff::DiffFile::parse(&patch)
-            .expect("created-file patch must parse");
+        let files =
+            gpui_component::diff::DiffFile::parse(&patch).expect("created-file patch must parse");
         assert_eq!(1, files.len());
     }
 
@@ -636,8 +657,8 @@ mod tests {
         let summary = FileChangeSummary::from_texts("", None, "x\n");
         let patch = patch_from_summary(&summary);
         assert!(patch.contains("diff --git a/untitled b/untitled\n"));
-        let files = gpui_component::diff::DiffFile::parse(&patch)
-            .expect("untitled patch must parse");
+        let files =
+            gpui_component::diff::DiffFile::parse(&patch).expect("untitled patch must parse");
         assert_eq!(1, files.len());
     }
 }

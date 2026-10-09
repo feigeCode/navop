@@ -6,31 +6,32 @@ use gpui::{
     Anchor, Context, Entity, InteractiveElement, IntoElement, ParentElement, SharedString,
     StatefulInteractiveElement, Styled, div, prelude::FluentBuilder, px,
 };
+use gpui_component::tooltip::Tooltip;
 use gpui_component::{
-    ActiveTheme as _, Icon, Sizable as _, Size, StyledExt as _, h_flex,
+    ActiveTheme as _, Icon, Sizable as _, Size, StyledExt as _,
     button::{Button, ButtonVariants as _},
+    h_flex,
     input::Input,
     menu::{DropdownMenu as _, PopupMenuItem},
-    scroll::ScrollableElement as _, v_flex,
+    scroll::ScrollableElement as _,
+    v_flex,
 };
-use gpui_component::tooltip::Tooltip;
 use one_assets::IconName;
 use one_ui::{IconButton, IconButtonRole};
 use rust_i18n::t;
 
+use super::super::state::{WorkbenchPanelKind, WorkbenchTab};
+use super::WorkbenchShell;
 use crate::session_sidebar::{
-    SessionSummary, WorkspaceGroup, filter_sessions, format_timestamp,
-    group_sessions_by_workspace,
+    SessionSummary, WorkspaceGroup, date_bucket_header, filter_sessions, format_timestamp,
+    group_sessions_by_date, group_sessions_by_workspace, now_unix,
 };
+use crate::theme::AgentChatTheme;
 use crate::{
     DefaultAgentChatPanel, acp_session_placeholder, acp_session_row, acp_session_section_header,
 };
-use super::super::state::{WorkbenchPanelKind, WorkbenchTab};
-use crate::theme::AgentChatTheme;
-use super::WorkbenchShell;
 
 impl WorkbenchShell {
-
     /// 会话导航：优先用外部注入的视图，否则读 `session_source` 的会话列表。
     pub(super) fn render_session_nav(
         &self,
@@ -53,6 +54,9 @@ impl WorkbenchShell {
         };
 
         let showing_archived = panel.read(cx).showing_archived_sessions(cx);
+        // 列表里所有相对时间/日期分组共用同一个 `now`:同一帧内算法一致,
+        // 不会出现两条会话因取时差跨到不同桶。
+        let now = now_unix();
 
         // 搜索过滤 + 按工作区分组（组内近期优先，未分组垫底），
         // 用户「移除」过的工作区不参与分组。
@@ -107,15 +111,25 @@ impl WorkbenchShell {
                 let key = group_key(group);
                 rows.push(self.workspace_group_header(group, theme, cx));
                 if !self.group_collapsed(&key) {
-                    for summary in &group.sessions {
-                        rows.push(Self::session_row(
-                            summary,
-                            current.as_deref() == Some(summary.id.as_str()),
-                            true,
-                            theme,
-                            &panel,
-                            cx,
-                        ));
+                    // 工作区分组之内再按时间分桶:同一项目的会话往往是「今天调的」
+                    // 与「上周调的」混在一起，插一行日期标题就能把当前这一阵的
+                    // 上下文和旧记录分开。只有一个桶时不插——那时候标题是纯噪音。
+                    let buckets = group_sessions_by_date(&group.sessions, now);
+                    let show_dates = buckets.len() > 1;
+                    for (bucket, sessions) in buckets {
+                        if show_dates {
+                            rows.push(date_bucket_header(bucket, cx).into_any_element());
+                        }
+                        for summary in sessions {
+                            rows.push(Self::session_row(
+                                summary,
+                                current.as_deref() == Some(summary.id.as_str()),
+                                true,
+                                theme,
+                                &panel,
+                                cx,
+                            ));
+                        }
                     }
                 }
             }
@@ -192,21 +206,18 @@ impl WorkbenchShell {
                                     .px_2()
                                     .rounded(theme.surface_radius)
                                     .bg(theme.panel)
-                                    .when_some(
-                                        self.search_input.as_ref(),
-                                        |row, state| {
-                                            row.child(
-                                                Icon::new(IconName::Search)
-                                                    .small()
-                                                    .text_color(theme.muted_foreground),
-                                            )
-                                            .child(
-                                                Input::new(state)
-                                                    .with_size(Size::Small)
-                                                    .appearance(false),
-                                            )
-                                        },
-                                    ),
+                                    .when_some(self.search_input.as_ref(), |row, state| {
+                                        row.child(
+                                            Icon::new(IconName::Search)
+                                                .small()
+                                                .text_color(theme.muted_foreground),
+                                        )
+                                        .child(
+                                            Input::new(state)
+                                                .with_size(Size::Small)
+                                                .appearance(false),
+                                        )
+                                    }),
                             ),
                     )
                 })
@@ -279,9 +290,9 @@ impl WorkbenchShell {
                 move |window, cx| Tooltip::new(tip.clone()).build(window, cx)
             })
             .hover(|style| style.bg(theme.hover_background()))
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.toggle_workspace_group(&click_key, cx)
-            }))
+            .on_click(
+                cx.listener(move |this, _, _, cx| this.toggle_workspace_group(&click_key, cx)),
+            )
             .child(
                 Icon::new(if collapsed {
                     IconName::ChevronRight
@@ -384,10 +395,7 @@ impl WorkbenchShell {
         let root = group.root.clone()?;
         let this = cx.entity();
         let inactive = inactive_session_count(group);
-        let menu_id = SharedString::from(format!(
-            "workbench-ws-menu-{}",
-            group_key(group)
-        ));
+        let menu_id = SharedString::from(format!("workbench-ws-menu-{}", group_key(group)));
         Some(
             Button::new(menu_id)
                 .icon(IconName::Ellipsis)
@@ -424,11 +432,7 @@ impl WorkbenchShell {
                     )
                     .item(
                         PopupMenuItem::new(
-                            t!(
-                                "Workbench.ws_menu_archive_inactive",
-                                count = inactive
-                            )
-                            .to_string(),
+                            t!("Workbench.ws_menu_archive_inactive", count = inactive).to_string(),
                         )
                         .icon(IconName::Archive)
                         .disabled(inactive == 0)
@@ -514,7 +518,9 @@ impl WorkbenchShell {
             // 平时隐藏，hover 行时浮现；换用 Archive 图标（Delete 是删除语义）。
             .child(
                 div()
-                    .id(SharedString::from(format!("workbench-session-archive-guard-{id}")))
+                    .id(SharedString::from(format!(
+                        "workbench-session-archive-guard-{id}"
+                    )))
                     .flex_shrink_0()
                     .opacity(0.0)
                     .group_hover("session-row", |style| style.opacity(1.0))
@@ -540,7 +546,9 @@ impl WorkbenchShell {
                     .text_xs()
                     .text_color(theme.muted_foreground)
                     .child(match summary.external_agent.as_ref() {
-                        Some(agent) => format!("{} · {}", agent, format_timestamp(summary.updated_at)),
+                        Some(agent) => {
+                            format!("{} · {}", agent, format_timestamp(summary.updated_at))
+                        }
                         None => format_timestamp(summary.updated_at),
                     }),
             )

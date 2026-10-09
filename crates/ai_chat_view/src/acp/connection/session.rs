@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 
-use agent_client_protocol::{Agent, ConnectionTo};
 use agent_client_protocol::schema::v1::{
     CloseSessionRequest, CloseSessionResponse, DeleteSessionRequest, DeleteSessionResponse,
     ListSessionsRequest, ListSessionsResponse, LoadSessionRequest, LoadSessionResponse,
@@ -9,6 +8,7 @@ use agent_client_protocol::schema::v1::{
     SessionInfo, SessionModeId, SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
     SetSessionModeRequest, SetSessionModeResponse,
 };
+use agent_client_protocol::{Agent, ConnectionTo};
 
 use super::AcpConnection;
 

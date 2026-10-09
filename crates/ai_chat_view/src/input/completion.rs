@@ -5,8 +5,8 @@
 
 use anyhow::Result;
 use gpui::{App, Task, Window};
-use gpui_component::input::CompletionProvider;
 use gpui_component::Rope;
+use gpui_component::input::CompletionProvider;
 use lsp_types::{CompletionContext, CompletionResponse};
 
 use crate::input::mention::{MentionCompletionProvider, MentionItem};

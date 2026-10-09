@@ -816,8 +816,11 @@ mod tests {
     #[test]
     fn replayed_user_message_drops_the_injected_skill_context() {
         let (sid, tid) = ids();
-        let context = SkillContext::new()
-            .with_available_skill(SkillSummary::new("demo", "Demo skill", "/tmp/demo/SKILL.md"));
+        let context = SkillContext::new().with_available_skill(SkillSummary::new(
+            "demo",
+            "Demo skill",
+            "/tmp/demo/SKILL.md",
+        ));
         let wrapped = context.wrap_user_prompt("帮我看下这个");
         let update = SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::Text(
             TextContent::new(wrapped),
@@ -936,7 +939,10 @@ mod tests {
         let (sid, tid) = ids();
         let mut fields = ToolCallUpdateFields::default();
         fields.status = Some(ToolCallStatus::Completed);
-        fields.content = Some(vec![ToolCallContent::Diff(Diff::new("src/lib.rs", "a\nb\n"))]);
+        fields.content = Some(vec![ToolCallContent::Diff(Diff::new(
+            "src/lib.rs",
+            "a\nb\n",
+        ))]);
         let update = SessionUpdate::ToolCallUpdate(ToolCallUpdate::new("call_1", fields));
 
         let events = session_update_to_events(&update, &sid, &tid);
@@ -1049,10 +1055,7 @@ mod tests {
         let events = session_update_to_events(&SessionUpdate::ToolCall(call), &sid, &tid);
         let observation = observation_of(&events);
 
-        assert_eq!(
-            Some("/Users/me/repo/a.rs"),
-            observation.target.as_deref()
-        );
+        assert_eq!(Some("/Users/me/repo/a.rs"), observation.target.as_deref());
         assert!(
             observation.arguments.is_none(),
             "没有入参解释目标时不要伪造一份"
@@ -1097,8 +1100,7 @@ mod tests {
     fn a_bash_call_ends_up_naming_the_command_it_ran() {
         // 同一端到端,另一条被截图点名的行:`bash {"cwd":"…"}` → `bash <命令>`。
         let title = row_title_from_acp(
-            AcpToolCall::new("call_1", "bash")
-                .raw_input(serde_json::json!({"cwd": "/repo"})),
+            AcpToolCall::new("call_1", "bash").raw_input(serde_json::json!({"cwd": "/repo"})),
             ToolKind::Execute,
             Some(serde_json::json!({
                 "command": "git status && git log --oneline -15",

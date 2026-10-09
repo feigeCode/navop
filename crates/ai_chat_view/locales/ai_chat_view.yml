@@ -1183,6 +1183,22 @@ AgentUi:
     en: "%{count} weeks ago"
     zh-CN: "%{count} 周前"
     zh-HK: "%{count} 週前"
+  date_today:
+    en: Today
+    zh-CN: 今天
+    zh-HK: 今天
+  date_yesterday:
+    en: Yesterday
+    zh-CN: 昨天
+    zh-HK: 昨天
+  date_this_week:
+    en: Previous 7 days
+    zh-CN: 最近 7 天
+    zh-HK: 最近 7 天
+  date_earlier:
+    en: Earlier
+    zh-CN: 更早
+    zh-HK: 更早
   workbench:
     en: AI Workbench
     zh-CN: AI 工作台

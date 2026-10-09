@@ -1,6 +1,6 @@
 use agent_client_protocol::schema::v1::{
-    ContentBlock, ContentChunk, SessionUpdate, StopReason, TextContent, ToolCall,
-    ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
+    ContentBlock, ContentChunk, SessionUpdate, StopReason, TextContent, ToolCall, ToolCallStatus,
+    ToolCallUpdate, ToolCallUpdateFields,
 };
 use agent_runtime::TurnId;
 

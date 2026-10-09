@@ -11,9 +11,7 @@
 //! 收起来**(块头那句话就是这一块的索引)。用户一旦手动展开 / 折叠,这个选择就
 //! 覆盖默认,直到条目按上限淘汰。
 
-use crate::agent_cards::{
-    TOOL_CARD, ToolCardData, diff_stat_chips, file_change_totals,
-};
+use crate::agent_cards::{TOOL_CARD, ToolCardData, diff_stat_chips, file_change_totals};
 use crate::theme::AgentChatTheme;
 use crate::{ChatMessageUI, MessageVariant};
 use agent_runtime::ToolAction;
@@ -179,6 +177,18 @@ impl<'a> ToolCallGroup<'a> {
 }
 
 impl MessageRenderItem<'_> {
+    /// 列表渲染用的稳定身份:单条消息用 `msg.id`,工具块用块首个
+    /// 消息的 id。
+    ///
+    /// 调用方（`message_view`）拿它给元素挂 `id` 与进场动画——
+    /// 流式追加时 id 不变,动画就不会每帧重放。
+    pub(crate) fn element_id(&self) -> SharedString {
+        match self {
+            MessageRenderItem::Single(msg) => SharedString::from(msg.id.clone()),
+            MessageRenderItem::ToolCallGroup(group) => SharedString::from(group.id.clone()),
+        }
+    }
+
     #[cfg(test)]
     fn group(&self) -> Option<&ToolCallGroup<'_>> {
         match self {
@@ -282,13 +292,7 @@ pub(crate) fn render_tool_call_group(
                 .when(running, |this| {
                     // 还在跑就给一个点:块头那句话在两种状态下都成立,这个点表明
                     // 它现在还在往前走(而不是「已经这样了」)。
-                    this.child(
-                        div()
-                            .flex_shrink_0()
-                            .text_xs()
-                            .text_color(muted)
-                            .child("●"),
-                    )
+                    this.child(div().flex_shrink_0().text_xs().text_color(muted).child("●"))
                 })
                 .children(stats.into_iter().map(|(text, color)| {
                     div()
@@ -401,7 +405,14 @@ mod tests {
     }
 
     fn exec_message(call_id: &str, command: &str) -> ChatMessageUI {
-        tool_message_with(call_id, ToolAction::Execute, "ssh.exec", command, None, false)
+        tool_message_with(
+            call_id,
+            ToolAction::Execute,
+            "ssh.exec",
+            command,
+            None,
+            false,
+        )
     }
 
     fn edit_message(call_id: &str, path: &str) -> ChatMessageUI {
@@ -458,7 +469,14 @@ mod tests {
             exec_message("call-1", "df -h"),
             read_message("call-2", "/repo/src/lib.rs"),
             edit_message("call-3", "/repo/src/lib.rs"),
-            tool_message_with("call-4", ToolAction::Search, "grep", "tool_row", None, false),
+            tool_message_with(
+                "call-4",
+                ToolAction::Search,
+                "grep",
+                "tool_row",
+                None,
+                false,
+            ),
         ];
 
         let items = message_render_items(&messages);
@@ -508,8 +526,14 @@ mod tests {
             "{label}"
         );
         // 没有声明就没有动词:块头不该出现任何「读取 / 编辑」字样。
-        assert!(!label.contains(&t!("AgentUi.action_read").to_string()), "{label}");
-        assert!(!label.contains(&t!("AgentUi.action_edit").to_string()), "{label}");
+        assert!(
+            !label.contains(&t!("AgentUi.action_read").to_string()),
+            "{label}"
+        );
+        assert!(
+            !label.contains(&t!("AgentUi.action_edit").to_string()),
+            "{label}"
+        );
     }
 
     #[test]
@@ -573,10 +597,7 @@ mod tests {
             "最旧条目按上限淘汰,回到默认态"
         );
         assert!(
-            is_tool_call_group_expanded(
-                &format!("block-{}", MAX_TOOL_GROUP_TOGGLES + 9),
-                false
-            ),
+            is_tool_call_group_expanded(&format!("block-{}", MAX_TOOL_GROUP_TOGGLES + 9), false),
             "最新条目保留"
         );
 

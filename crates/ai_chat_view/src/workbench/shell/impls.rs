@@ -10,11 +10,11 @@ use one_core::tab_container::{TabContent, TabContentEvent};
 use one_ui::{IconButton, IconButtonRole};
 use rust_i18n::t;
 
-use super::WorkbenchShell;
 use super::super::state::{WorkbenchPanelKind, WorkbenchPlacement, WorkbenchTab};
+use super::WorkbenchShell;
 use super::widgets::{close_tab_tooltip, cycle_placement_tooltip, pin_tooltip};
 use super::{DOCK_PANEL_HEIGHT, DOCK_PANEL_WIDTH, PANEL_HEADER_HEIGHT};
-use crate::theme::{AgentChatTheme, with_agent_chat_theme, sp};
+use crate::theme::{AgentChatTheme, sp, with_agent_chat_theme};
 
 /// 拖拽调宽把手的命中宽度。
 const RESIZE_HANDLE_WIDTH: f32 = 6.0;
@@ -89,8 +89,7 @@ impl Render for WorkbenchShell {
         let left_panel = self.state.left();
         let bottom_panel = self.state.bottom();
         let maximized = self.state.right_maximized();
-        let show_right_group =
-            !self.state.right_collapsed() && !self.state.right_tabs().is_empty();
+        let show_right_group = !self.state.right_collapsed() && !self.state.right_tabs().is_empty();
         let nav_width = self.state.nav_width();
         let right_width = self.state.right_width();
         let hover = theme.hover_background();
@@ -132,9 +131,8 @@ impl Render for WorkbenchShell {
                                     if event.drag(cx).entity_id != cx.entity_id() {
                                         return;
                                     }
-                                    let delta = f32::from(
-                                        event.event.position.x - event.bounds.center().x,
-                                    );
+                                    let delta =
+                                        f32::from(event.event.position.x - event.bounds.center().x);
                                     this.set_nav_width(this.state.nav_width() + delta, cx);
                                 },
                             ))
@@ -184,10 +182,7 @@ impl Render for WorkbenchShell {
                                         let delta = f32::from(
                                             event.event.position.x - event.bounds.center().x,
                                         );
-                                        this.set_right_width(
-                                            this.state.right_width() - delta,
-                                            cx,
-                                        );
+                                        this.set_right_width(this.state.right_width() - delta, cx);
                                     },
                                 ))
                                 .on_drag(
@@ -201,29 +196,27 @@ impl Render for WorkbenchShell {
                                 ),
                         )
                     })
-                    .child(
-                        if maximized {
-                            v_flex()
-                                .flex_1()
-                                .h_full()
-                                .min_h_0()
-                                .min_w_0()
-                                .border_r_1()
-                                .border_color(theme.border)
-                                .child(self.render_right_group(&theme, cx))
-                                .into_any_element()
-                        } else {
-                            div()
-                                .w(sp(right_width))
-                                .flex_shrink_0()
-                                .h_full()
-                                .min_h_0()
-                                .border_l_1()
-                                .border_color(theme.border)
-                                .child(self.render_right_group(&theme, cx))
-                                .into_any_element()
-                        },
-                    )
+                    .child(if maximized {
+                        v_flex()
+                            .flex_1()
+                            .h_full()
+                            .min_h_0()
+                            .min_w_0()
+                            .border_r_1()
+                            .border_color(theme.border)
+                            .child(self.render_right_group(&theme, cx))
+                            .into_any_element()
+                    } else {
+                        div()
+                            .w(sp(right_width))
+                            .flex_shrink_0()
+                            .h_full()
+                            .min_h_0()
+                            .border_l_1()
+                            .border_color(theme.border)
+                            .child(self.render_right_group(&theme, cx))
+                            .into_any_element()
+                    })
                 })
                 .into_any_element()
         });
@@ -266,7 +259,8 @@ impl WorkbenchShell {
         let Some(view) = self.panels.get(&slot).cloned() else {
             return div().into_any_element();
         };
-        let header = self.render_panel_header(slot.kind, workbench_panel_icon(slot.kind), theme, cx);
+        let header =
+            self.render_panel_header(slot.kind, workbench_panel_icon(slot.kind), theme, cx);
 
         v_flex()
             .size_full()
@@ -313,13 +307,7 @@ impl WorkbenchShell {
                 .iter()
                 .filter(|prev| prev.kind == tab.kind)
                 .count();
-            bar = bar.child(self.render_tab(
-                *tab,
-                ordinal,
-                Some(*tab) == active,
-                theme,
-                cx,
-            ));
+            bar = bar.child(self.render_tab(*tab, ordinal, Some(*tab) == active, theme, cx));
         }
         // 「新建页签」：先弹一个空白选择面板（虚拟页签），点选后当前页签
         // 即变为对应功能。
@@ -408,8 +396,7 @@ impl WorkbenchShell {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let kind = tab.kind;
-        let on_select = cx
-            .listener(move |this, _, _, cx| this.select_right_tab_instance(tab, cx));
+        let on_select = cx.listener(move |this, _, _, cx| this.select_right_tab_instance(tab, cx));
         let on_close = cx.listener(move |this, _, _, cx| this.close_right_tab_instance(tab, cx));
 
         h_flex()
@@ -442,11 +429,7 @@ impl WorkbenchShell {
             )
             .child(
                 IconButton::new(
-                    SharedString::from(format!(
-                        "workbench-tab-close-{}#{}",
-                        kind.id(),
-                        tab.seq()
-                    )),
+                    SharedString::from(format!("workbench-tab-close-{}#{}", kind.id(), tab.seq())),
                     IconName::Close,
                 )
                 .role(IconButtonRole::Compact)
@@ -486,7 +469,13 @@ impl WorkbenchShell {
             .child(
                 IconButton::new("workbench-tab-picker-close", IconName::Close)
                     .role(IconButtonRole::Compact)
-                    .tooltip(t!("Workbench.close_tab", panel = t!("Workbench.add_tab").to_string()).to_string())
+                    .tooltip(
+                        t!(
+                            "Workbench.close_tab",
+                            panel = t!("Workbench.add_tab").to_string()
+                        )
+                        .to_string(),
+                    )
                     .on_click(cx.listener(|this, _, _, cx| this.close_tab_picker(cx))),
             )
             .into_any_element()
@@ -507,7 +496,10 @@ impl WorkbenchShell {
         {
             list = list.child(
                 h_flex()
-                    .id(SharedString::from(format!("workbench-picker-{}", kind.id())))
+                    .id(SharedString::from(format!(
+                        "workbench-picker-{}",
+                        kind.id()
+                    )))
                     .w_full()
                     .items_center()
                     .gap_2()
@@ -516,9 +508,9 @@ impl WorkbenchShell {
                     .rounded(theme.surface_radius)
                     .cursor_pointer()
                     .hover(move |style| style.bg(hover))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.pick_panel(kind, window, cx)
-                    }))
+                    .on_click(
+                        cx.listener(move |this, _, window, cx| this.pick_panel(kind, window, cx)),
+                    )
                     .child(
                         Icon::new(kind.icon())
                             .small()

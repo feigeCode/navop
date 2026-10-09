@@ -340,7 +340,11 @@ mod tests {
         assert_eq!(LOCAL_TOOL_ALLOW_OPTION, options[1].option_id);
         assert!(!options[1].is_reject());
         // 「本会话允许 / 始终允许」只在后端明确支持后才会出现。
-        assert!(!options.iter().any(|option| option.option_id.contains("always")));
+        assert!(
+            !options
+                .iter()
+                .any(|option| option.option_id.contains("always"))
+        );
     }
 
     #[test]

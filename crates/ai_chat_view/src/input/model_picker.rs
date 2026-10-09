@@ -145,12 +145,7 @@ mod tests {
     use super::*;
 
     fn option(provider: &str, model: &str) -> ComposerModelOption {
-        ComposerModelOption::new(
-            format!("{provider}-{model}"),
-            provider,
-            provider,
-            model,
-        )
+        ComposerModelOption::new(format!("{provider}-{model}"), provider, provider, model)
     }
 
     fn choice(provider: &str, model: &str, hint: Option<&str>) -> ModelChoice {

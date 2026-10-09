@@ -13,17 +13,20 @@
 
 use std::collections::HashSet;
 use std::rc::Rc;
+use std::time::Duration;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, InteractiveElement, IntoElement, ParentElement, ScrollHandle, SharedString,
-    StatefulInteractiveElement, Styled, Window, div, px,
+    Animation, AnimationExt, AnyElement, App, InteractiveElement, IntoElement, ParentElement,
+    ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Window, div, ease_out_quint,
+    px,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::{ActiveTheme, Icon, Sizable, h_flex, v_flex};
 use one_assets::IconName;
 use rust_i18n::t;
 
+use crate::ChatMessageUI;
 use crate::ExpansionState;
 use crate::agent_cards::compact_path;
 use crate::agent_diff::FileChangeSummary;
@@ -33,7 +36,6 @@ use crate::message_view::{MessageListLayout, message_scroll_container, render_on
 use crate::theme::{AgentChatTheme, resolve_agent_chat_theme, sp};
 use crate::transcript_search::TranscriptSearch;
 use crate::turn::{TurnProjection, TurnTimings, breakdown_text, project_turns};
-use crate::{ChatMessageUI};
 
 /// 折叠头最多列几个工具名。
 const BREAKDOWN_LIMIT: usize = 2;
@@ -208,12 +210,7 @@ pub fn render_message_list(
         overlays.push(findbar);
     }
 
-    message_scroll_container(
-        scroll_handle,
-        context.layout,
-        items,
-        overlays,
-    )
+    message_scroll_container(scroll_handle, context.layout, items, overlays)
 }
 
 /// 搜索命中在轮次上的标记。
@@ -226,6 +223,12 @@ pub enum TurnHighlight {
     /// 当前定位的命中。
     Current,
 }
+
+/// 新轮次进场动效时长。
+///
+/// 180ms 与主题的 `duration_normal` 同量级:快到不挡事,又足够让眼睛
+/// 捕到「这轮是新来的」。
+const TURN_ENTRANCE_DURATION: Duration = Duration::from_millis(180);
 
 fn slot(child: AnyElement) -> AnyElement {
     div()
@@ -251,7 +254,13 @@ fn render_turn(
         if context.turn_chrome {
             children.push(render_turn_head(turn, theme));
         }
-        children.push(slot(render_one(head, context.code_actions, theme, window, cx)));
+        children.push(slot(render_one(
+            head,
+            context.code_actions,
+            theme,
+            window,
+            cx,
+        )));
     }
 
     if turn.has_process() {
@@ -259,7 +268,13 @@ fn render_turn(
     }
 
     for message in &turn.answer {
-        children.push(slot(render_one(message, context.code_actions, theme, window, cx)));
+        children.push(slot(render_one(
+            message,
+            context.code_actions,
+            theme,
+            window,
+            cx,
+        )));
     }
 
     if context.turn_chrome {
@@ -286,6 +301,11 @@ fn render_turn(
                 .border_color(theme.accent)
         })
         .children(children)
+        .with_animation(
+            SharedString::from(format!("ai-chat-turn-enter:{}", turn.key)),
+            Animation::new(TURN_ENTRANCE_DURATION).with_easing(ease_out_quint()),
+            |turn, delta| turn.opacity(delta),
+        )
         .into_any_element()
 }
 
@@ -341,7 +361,10 @@ fn render_turn_head(turn: &TurnProjection<'_>, theme: &AgentChatTheme) -> AnyEle
 /// + 结构标记，见 [`crate::turn::survives_collapse`]）。
 /// 位置由 `process` 决定，所以两种状态下顺序都是消息的原始顺序
 /// —— 失败卡片不会被挪到末尾，正在跑的步骤也不会消失。
-fn visible_process_items<'a>(turn: &'a TurnProjection<'_>, expanded: bool) -> Vec<&'a ChatMessageUI> {
+fn visible_process_items<'a>(
+    turn: &'a TurnProjection<'_>,
+    expanded: bool,
+) -> Vec<&'a ChatMessageUI> {
     if expanded {
         turn.process.clone()
     } else {
@@ -506,17 +529,27 @@ fn render_turn_foot(
     {
         Some((pending, cx.theme().warning))
     } else if turn.live {
-        (!turn.has_live_status())
-            .then(|| (t!("AgentUi.turn_state_running").to_string(), theme.muted_foreground))
+        (!turn.has_live_status()).then(|| {
+            (
+                t!("AgentUi.turn_state_running").to_string(),
+                theme.muted_foreground,
+            )
+        })
     } else if turn.has_failure() {
-        Some((t!("AgentUi.turn_state_failed").to_string(), cx.theme().danger))
+        Some((
+            t!("AgentUi.turn_state_failed").to_string(),
+            cx.theme().danger,
+        ))
     } else if turn.is_cancelled() {
         Some((
             t!("AgentUi.turn_state_cancelled").to_string(),
             theme.muted_foreground,
         ))
     } else {
-        Some((t!("AgentUi.turn_state_done").to_string(), cx.theme().success))
+        Some((
+            t!("AgentUi.turn_state_done").to_string(),
+            cx.theme().success,
+        ))
     };
 
     // 只有拿到该轮快照 id 的轮次才给入口；点击后交给宿主决定怎么恢复。
@@ -611,42 +644,31 @@ fn render_turn_changes(
                 .flex_shrink_0()
                 .text_xs()
                 .text_color(theme.muted_foreground)
-                .child(
-                    t!(
-                        "AgentUi.turn_changed_files",
-                        count = changed_files.len()
-                    )
-                    .to_string(),
-                ),
+                .child(t!("AgentUi.turn_changed_files", count = changed_files.len()).to_string()),
         )
-        .children(
-            changed_files
-                .iter()
-                .take(MAX_LISTED)
-                .map(|change| {
-                    let label = compact_path(&change.path);
-                    let path = change.path.clone();
-                    let on_action = on_action.clone();
-                    let turn_id = turn_id.clone();
-                    Button::new(SharedString::from(format!("turn-change-{path}")))
-                        .ghost()
-                        .xsmall()
-                        .label(label)
-                        .debug_selector(|| "ai-chat-turn-change".to_string())
-                        .on_click(move |_, window, cx| {
-                            if let Some(on_action) = on_action.as_ref() {
-                                on_action(
-                                    MessageListAction::OpenFileInReview {
-                                        path: path.clone(),
-                                        turn_id: turn_id.clone(),
-                                    },
-                                    window,
-                                    cx,
-                                );
-                            }
-                        })
-                }),
-        )
+        .children(changed_files.iter().take(MAX_LISTED).map(|change| {
+            let label = compact_path(&change.path);
+            let path = change.path.clone();
+            let on_action = on_action.clone();
+            let turn_id = turn_id.clone();
+            Button::new(SharedString::from(format!("turn-change-{path}")))
+                .ghost()
+                .xsmall()
+                .label(label)
+                .debug_selector(|| "ai-chat-turn-change".to_string())
+                .on_click(move |_, window, cx| {
+                    if let Some(on_action) = on_action.as_ref() {
+                        on_action(
+                            MessageListAction::OpenFileInReview {
+                                path: path.clone(),
+                                turn_id: turn_id.clone(),
+                            },
+                            window,
+                            cx,
+                        );
+                    }
+                })
+        }))
         .when(hidden > 0, |this| {
             this.child(
                 div()
@@ -686,10 +708,7 @@ fn render_no_answer(theme: &AgentChatTheme) -> AnyElement {
     )
 }
 
-fn render_scroll_to_latest(
-    context: &MessageListContext<'_>,
-    theme: &AgentChatTheme,
-) -> AnyElement {
+fn render_scroll_to_latest(context: &MessageListContext<'_>, theme: &AgentChatTheme) -> AnyElement {
     let on_action = context.on_action.clone();
     let hover = theme.hover_background();
     div()
@@ -731,9 +750,12 @@ fn render_scroll_to_latest(
 fn process_summary(turn: &TurnProjection<'_>) -> String {
     let steps = turn.step_count();
     match (turn.timing.duration_secs(), turn.live) {
-        (Some(seconds), false) => {
-            t!("AgentUi.process_done_timed", seconds = seconds, count = steps).to_string()
-        }
+        (Some(seconds), false) => t!(
+            "AgentUi.process_done_timed",
+            seconds = seconds,
+            count = steps
+        )
+        .to_string(),
         (None, false) => t!("AgentUi.process_done", count = steps).to_string(),
         (_, true) => t!("AgentUi.process_running", count = steps).to_string(),
     }
@@ -833,10 +855,7 @@ mod tests {
         ];
         let turns = project_turns(&with_status, &TurnTimings::new());
         assert!(turns[0].live, "状态行未完成 ⇒ 本轮仍在进行");
-        assert!(
-            turns[0].has_live_status(),
-            "页脚据此不重复显示「进行中」"
-        );
+        assert!(turns[0].has_live_status(), "页脚据此不重复显示「进行中」");
 
         with_status[1] = ChatMessageUI::status("已结束", true);
         let turns = project_turns(&with_status, &TurnTimings::new());

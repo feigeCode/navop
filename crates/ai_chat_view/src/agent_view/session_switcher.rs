@@ -16,12 +16,12 @@ use gpui::{
 use gpui_component::ActiveTheme;
 use rust_i18n::t;
 
-use crate::theme::sp;
 use crate::session_shortcut::{
     AI_CHAT_SESSION_SWITCHER_CONTEXT, CancelSessionSwitch, ConfirmSessionSwitch,
     CycleSessionSwitcherBackward, CycleSessionSwitcherForward, SelectFirstSessionInSwitcher,
     SelectLastSessionInSwitcher,
 };
+use crate::theme::sp;
 
 use super::{AgentChatTheme, current_agent_task_title};
 

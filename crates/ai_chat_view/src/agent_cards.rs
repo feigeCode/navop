@@ -9,10 +9,10 @@
 //! 负责在收到 [`RuntimeEvent`](agent_runtime::RuntimeEvent) 时写入 / 更新这些 JSON。
 //! 这里定义共享的数据结构(序列化契约)与渲染实现,二者共用同一份 schema。
 
-use agent_runtime::ToolAction;
 use crate::agent_diff::{FileChangeSummary, patch_from_summary};
 use crate::card::{CardMessage, CardRegistry, ChatCard};
 use crate::theme::{AgentChatTheme, active_agent_chat_theme, themed_markdown};
+use agent_runtime::ToolAction;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Action, Anchor, AnyElement, App, AppContext, Entity, InteractiveElement, IntoElement,
@@ -396,15 +396,17 @@ impl ChatCard for ToolCard {
                             .text_color(theme.foreground)
                             .child(tool_row_title(&data)),
                     )
-                    .children(tool_row_meta_chips(&data, cx).into_iter().map(
-                        |(text, color)| {
-                            div()
-                                .flex_shrink_0()
-                                .text_xs()
-                                .text_color(color)
-                                .child(text)
-                        },
-                    ))
+                    .children(
+                        tool_row_meta_chips(&data, cx)
+                            .into_iter()
+                            .map(|(text, color)| {
+                                div()
+                                    .flex_shrink_0()
+                                    .text_xs()
+                                    .text_color(color)
+                                    .child(text)
+                            }),
+                    )
                     // 子代理卡片的详情入口。
                     //
                     // 放在标题行末尾而不是塞进展开区：它要的是「跳出去看另一条会话的
@@ -1404,7 +1406,9 @@ fn build_diff_blocks(
     cache: &Arc<Mutex<HashMap<String, WeakEntity<DiffState>>>>,
     cx: &mut App,
 ) -> Vec<DiffBlockState> {
-    let mut cache = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     data.file_changes
         .iter()
         .filter(|change| !change.path.is_empty() || change.has_rows())
@@ -1427,8 +1431,8 @@ fn build_diff_blocks(
                                     None => file,
                                 })
                                 .collect::<Vec<_>>();
-                            let state = cx
-                                .new(|cx| DiffState::new(files, cx).with_mode(DiffMode::Unified));
+                            let state =
+                                cx.new(|cx| DiffState::new(files, cx).with_mode(DiffMode::Unified));
                             cache.insert(key, state.downgrade());
                             Some(state)
                         }
@@ -1521,8 +1525,7 @@ fn tool_card_diff_block(blocks: &[DiffBlockState], message_id: &str, cx: &App) -
                             .text_xs()
                             .text_color(theme.muted_foreground)
                             .child(
-                                t!("AgentUi.diff_rows_hidden", count = block.hidden)
-                                    .to_string(),
+                                t!("AgentUi.diff_rows_hidden", count = block.hidden).to_string(),
                             ),
                     )
                 })
@@ -1532,11 +1535,7 @@ fn tool_card_diff_block(blocks: &[DiffBlockState], message_id: &str, cx: &App) -
 }
 
 /// diff 块的文件头:完整路径 + 新建标记 + `+N −M` + 「打开」。
-fn tool_diff_file_header(
-    change: &FileChangeSummary,
-    message_id: &str,
-    cx: &App,
-) -> AnyElement {
+fn tool_diff_file_header(change: &FileChangeSummary, message_id: &str, cx: &App) -> AnyElement {
     let theme = active_agent_chat_theme(cx);
     let path = change.path.clone();
     let can_open = !path.is_empty();
@@ -2340,7 +2339,8 @@ mod tests {
     #[test]
     fn a_cancelled_subagent_card_still_exposes_its_child_session_id() {
         let mut data = echo_card();
-        data.data_text = r#"{"error":"Task cancelled: <task id=\"ses_cancelled\" state=\"error\">"}"#.into();
+        data.data_text =
+            r#"{"error":"Task cancelled: <task id=\"ses_cancelled\" state=\"error\">"}"#.into();
 
         assert_eq!(
             Some("ses_cancelled".to_string()),

@@ -243,7 +243,11 @@ mod tests {
                 .map(|item| item.text.as_str())
                 .collect::<Vec<_>>()
         );
-        assert!(pending.replace_at("session-a", 9, submission("nope")).is_none());
+        assert!(
+            pending
+                .replace_at("session-a", 9, submission("nope"))
+                .is_none()
+        );
     }
 
     #[test]

@@ -95,11 +95,7 @@ pub struct WorkbenchShell {
 }
 
 impl WorkbenchShell {
-    pub fn new(
-        config: WorkbenchShellConfig,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    pub fn new(config: WorkbenchShellConfig, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let WorkbenchShellConfig {
             panels,
             session_nav,
@@ -229,11 +225,7 @@ impl WorkbenchShell {
     ///
     /// 与侧栏分组菜单的语义保持一致（见 [`Self::create_session_in_workspace`]），
     /// 区别只是入口从左侧导航搬到了输入框下方。
-    pub fn open_workspace_from_composer(
-        &mut self,
-        root: &std::path::Path,
-        cx: &mut Context<Self>,
-    ) {
+    pub fn open_workspace_from_composer(&mut self, root: &std::path::Path, cx: &mut Context<Self>) {
         let has_messages = self
             .session_source
             .as_ref()
@@ -298,11 +290,7 @@ impl WorkbenchShell {
     }
 
     /// 切换到指定工作区（经宿主级联）。返回是否发出了切换。
-    pub fn switch_to_workspace(
-        &mut self,
-        root: &std::path::Path,
-        cx: &mut Context<Self>,
-    ) -> bool {
+    pub fn switch_to_workspace(&mut self, root: &std::path::Path, cx: &mut Context<Self>) -> bool {
         if self.workspace_root.as_deref() == Some(root) {
             return false;
         }
@@ -317,11 +305,7 @@ impl WorkbenchShell {
 
     /// 在指定工作区新建对话：先经宿主切根（级联同步），再开新会话。
     /// 新会话的归属在首次落盘时定格为该工作区。
-    pub fn create_session_in_workspace(
-        &mut self,
-        root: &std::path::Path,
-        cx: &mut Context<Self>,
-    ) {
+    pub fn create_session_in_workspace(&mut self, root: &std::path::Path, cx: &mut Context<Self>) {
         self.switch_to_workspace(root, cx);
         if let Some(panel) = self.session_source.clone() {
             panel.update(cx, |panel, cx| panel.create_session(cx));
@@ -369,8 +353,7 @@ impl WorkbenchShell {
                 .session_summaries(cx)
                 .into_iter()
                 .filter(|summary| {
-                    summary.workspace_root.as_deref() == Some(root)
-                        && summary.updated_at < cutoff
+                    summary.workspace_root.as_deref() == Some(root) && summary.updated_at < cutoff
                 })
                 .map(|summary| summary.id.to_string())
                 .collect();
@@ -457,11 +440,7 @@ impl WorkbenchShell {
     /// 只会定位；多例面板走定位语义（新建实例见 [`Self::pick_panel`]）。
     pub fn activate_panel(&mut self, kind: WorkbenchPanelKind, cx: &mut Context<Self>) {
         let changed = if self.state.placement_of(kind) == Some(WorkbenchPlacement::Right)
-            && self
-                .state
-                .right_active()
-                .map(|tab| tab.kind)
-                == Some(kind)
+            && self.state.right_active().map(|tab| tab.kind) == Some(kind)
         {
             false
         } else {

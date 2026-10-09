@@ -115,7 +115,13 @@ pub(super) fn handle_notification(
     let Some((turn_id, replay)) = notification_turn(active, replay_window) else {
         return Ok(());
     };
-    let events = translate(context, &notification.update, &context.session_id, &turn_id, replay);
+    let events = translate(
+        context,
+        &notification.update,
+        &context.session_id,
+        &turn_id,
+        replay,
+    );
     for event in events {
         let _ = context.events.send(event);
     }
@@ -144,7 +150,13 @@ fn translate(
             )
         },
         |mut translator| {
-            translator.session_update_to_events(update, session_id, turn_id, &context.agent_name, replay)
+            translator.session_update_to_events(
+                update,
+                session_id,
+                turn_id,
+                &context.agent_name,
+                replay,
+            )
         },
     )
 }

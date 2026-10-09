@@ -104,8 +104,8 @@ mod tests {
         assert!(!acp_session_list_supported(&AgentCapabilities::default()));
 
         let mut capabilities = AgentCapabilities::default();
-        capabilities.session_capabilities = SessionCapabilities::new()
-            .list(SessionListCapabilities::new());
+        capabilities.session_capabilities =
+            SessionCapabilities::new().list(SessionListCapabilities::new());
         assert!(acp_session_list_supported(&capabilities));
     }
 
@@ -172,11 +172,7 @@ mod tests {
     #[test]
     fn summaries_keep_the_protocol_id_verbatim() {
         // id 里有空格和大写也必须原样带过去:它是后面 load/resume 的唯一地址。
-        let sessions = [info(
-            "Session A/b",
-            Some("titled"),
-            Some("2026-01-01"),
-        )];
+        let sessions = [info("Session A/b", Some("titled"), Some("2026-01-01"))];
 
         assert_eq!("Session A/b", acp_session_summaries(&sessions)[0].id);
     }

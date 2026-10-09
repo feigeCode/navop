@@ -18,8 +18,8 @@
 use std::collections::HashMap;
 
 use crate::agent_cards::{
-    ACP_PERMISSION_CARD, COMPACTION_CARD, SUBAGENT_CARD, TOOL_CARD, TOOL_CONFIRM_CARD,
-    SubAgentCardData, ToolCardData, ToolConfirmCardData,
+    ACP_PERMISSION_CARD, COMPACTION_CARD, SUBAGENT_CARD, SubAgentCardData, TOOL_CARD,
+    TOOL_CONFIRM_CARD, ToolCardData, ToolConfirmCardData,
 };
 use crate::agent_diff::FileChangeSummary;
 use crate::{ChatMessageUI, ChatRole, MessageVariant};
@@ -156,7 +156,12 @@ impl TurnProjection<'_> {
         self.process
             .iter()
             .chain(self.answer.iter())
-            .any(|message| matches!(&message.variant, MessageVariant::Status { is_done: false, .. }))
+            .any(|message| {
+                matches!(
+                    &message.variant,
+                    MessageVariant::Status { is_done: false, .. }
+                )
+            })
     }
 
     /// 该轮是否以失败收尾（由真实终态事件判定，不看消息文本）。
@@ -190,18 +195,15 @@ impl TurnProjection<'_> {
             *counts.entry(data.tool_name).or_default() += 1;
         }
         let mut pairs: Vec<(String, usize)> = counts.into_iter().collect();
-        pairs.sort_by(|left, right| {
-            right
-                .1
-                .cmp(&left.1)
-                .then_with(|| left.0.cmp(&right.0))
-        });
+        pairs.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
         pairs
     }
 
     /// 是否含待用户决策的卡片（待审批 / 待补充输入）。
     pub fn has_pending_decision(&self) -> bool {
-        self.risks.iter().any(|message| is_pending_decision(message))
+        self.risks
+            .iter()
+            .any(|message| is_pending_decision(message))
     }
 
     /// 本轮改动过的文件，按路径去重（同一文件改多次只留最后一次的改动）。
@@ -275,8 +277,9 @@ pub(crate) fn is_live_message(message: &ChatMessageUI) -> bool {
         Some(kind) if kind == TOOL_CARD => {
             ToolCardData::from_json(&message.content).is_some_and(|data| data.running)
         }
-        Some(kind) if kind == SUBAGENT_CARD => SubAgentCardData::from_json(&message.content)
-            .is_some_and(|data| data.success.is_none()),
+        Some(kind) if kind == SUBAGENT_CARD => {
+            SubAgentCardData::from_json(&message.content).is_some_and(|data| data.success.is_none())
+        }
         _ => false,
     }
 }
@@ -307,13 +310,14 @@ pub fn is_risk_message(message: &ChatMessageUI) -> bool {
         return true;
     }
     match message.variant.card_kind() {
-        Some(kind) if kind == TOOL_CONFIRM_CARD => confirm_status(message)
-            .is_none_or(|status| status != "resolved"),
-        Some(kind) if kind == ACP_PERMISSION_CARD => confirm_status(message)
-            .is_none_or(|status| status != "resolved"),
-        Some(kind) if kind == TOOL_CARD => {
-            ToolCardData::from_json(&message.content).is_some_and(|data| data.success == Some(false))
+        Some(kind) if kind == TOOL_CONFIRM_CARD => {
+            confirm_status(message).is_none_or(|status| status != "resolved")
         }
+        Some(kind) if kind == ACP_PERMISSION_CARD => {
+            confirm_status(message).is_none_or(|status| status != "resolved")
+        }
+        Some(kind) if kind == TOOL_CARD => ToolCardData::from_json(&message.content)
+            .is_some_and(|data| data.success == Some(false)),
         Some(kind) if kind == SUBAGENT_CARD => SubAgentCardData::from_json(&message.content)
             .is_some_and(|data| data.success == Some(false)),
         _ => false,
@@ -379,7 +383,9 @@ fn build_turn<'a>(
     timings: &TurnTimings,
 ) -> TurnProjection<'a> {
     // 结论取**最后一次**助手正文：中途的插话属于过程。
-    let answer_index = body.iter().rposition(|message| is_answer_candidate(message));
+    let answer_index = body
+        .iter()
+        .rposition(|message| is_answer_candidate(message));
 
     let mut process = Vec::new();
     let mut answer = Vec::new();
@@ -442,7 +448,7 @@ fn build_turn<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_cards::{AcpPermissionCardData, ToolCardData, TOOL_CARD, TOOL_CONFIRM_CARD};
+    use crate::agent_cards::{AcpPermissionCardData, TOOL_CARD, TOOL_CONFIRM_CARD, ToolCardData};
 
     fn tool_card(call_id: &str, name: &str, success: Option<bool>) -> ChatMessageUI {
         ChatMessageUI::card(
@@ -515,11 +521,7 @@ mod tests {
     fn messages_before_the_first_user_form_a_preamble_turn() {
         let preamble = ChatMessageUI::system("会话已恢复");
         let expected_key = preamble.id.clone();
-        let messages = vec![
-            preamble,
-            user("Q1", "t1"),
-            assistant("A1", "t1"),
-        ];
+        let messages = vec![preamble, user("Q1", "t1"), assistant("A1", "t1")];
 
         let turns = project_turns(&messages, &TurnTimings::new());
 
@@ -628,7 +630,11 @@ mod tests {
     fn live_turn_expands_process_by_default_and_finished_turn_does_not() {
         let mut streaming = assistant("", "t1");
         streaming.is_streaming = true;
-        let messages = vec![user("Q1", "t1"), tool_card("c1", "fs.read", None), streaming];
+        let messages = vec![
+            user("Q1", "t1"),
+            tool_card("c1", "fs.read", None),
+            streaming,
+        ];
 
         let turns = project_turns(&messages, &TurnTimings::new());
 
@@ -701,7 +707,8 @@ mod tests {
     }
 
     #[test]
-    fn timings_are_read_by_turn_id_and_never_invented() {        let mut timings = TurnTimings::new();
+    fn timings_are_read_by_turn_id_and_never_invented() {
+        let mut timings = TurnTimings::new();
         timings.note_started("t1", 100);
         timings.note_finished("t1", 108);
 
@@ -869,9 +876,7 @@ mod tests {
     fn call_id_of(message: &ChatMessageUI) -> String {
         ToolConfirmCardData::from_json(&message.content)
             .map(|data| data.call_id)
-            .or_else(|| {
-                ToolCardData::from_json(&message.content).map(|data| data.call_id)
-            })
+            .or_else(|| ToolCardData::from_json(&message.content).map(|data| data.call_id))
             .or_else(|| {
                 AcpPermissionCardData::from_json(&message.content).map(|data| data.request_id)
             })

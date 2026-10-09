@@ -1,9 +1,7 @@
 use crate::card::{CardMessage, CardRegistry};
 use crate::code_block::CodeBlockActionRegistry;
 use crate::message_code_actions::apply_code_block_features;
-use crate::message_tool_group::{
-    MessageRenderItem, message_render_items, render_tool_call_group,
-};
+use crate::message_tool_group::{MessageRenderItem, message_render_items, render_tool_call_group};
 use crate::theme::{
     AgentChatTheme, resolve_agent_chat_theme, themed_html, themed_markdown, with_agent_chat_theme,
 };
@@ -11,10 +9,13 @@ use crate::{
     ChatMessageUI, ChatMessageUIGeneric, ChatRole, MessageExtension, MessageVariant,
     render_reasoning_block,
 };
+use std::time::Duration;
+
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, Div, InteractiveElement, IntoElement, ParentElement,
-    ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Window, div, px,
+    Animation, AnimationExt, AnyElement, App, Div, InteractiveElement, IntoElement, ParentElement,
+    ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Window, div, ease_out_quint,
+    px,
 };
 use gpui_component::{
     ActiveTheme, Icon, Sizable, Size, clipboard::Clipboard, h_flex, scroll::Scrollbar,
@@ -266,13 +267,16 @@ fn render_messages_with_layout(
     let mut items: Vec<AnyElement> = message_render_items(messages)
         .into_iter()
         .map(|item| {
-            div()
-                .debug_selector(|| "ai-chat-message-slot".to_string())
-                .min_w_0()
-                .self_stretch()
-                .flex_shrink_0()
-                .child(render_item(item, code_actions, &theme, window, cx))
-                .into_any_element()
+            let id = item.element_id();
+            message_entrance(
+                div()
+                    .debug_selector(|| "ai-chat-message-slot".to_string())
+                    .min_w_0()
+                    .self_stretch()
+                    .flex_shrink_0()
+                    .child(render_item(item, code_actions, &theme, window, cx)),
+                id,
+            )
         })
         .collect();
     if let Some(activity) = activity {
@@ -288,6 +292,29 @@ fn render_messages_with_layout(
     }
 
     message_scroll_container(scroll_handle, layout, items, Vec::new())
+}
+
+/// 新消息进场动效时长。
+///
+/// 180ms 与主题的 `duration_normal` 同量级:快到不挡事,又足够让眼睛
+/// 捕到「这条是新来的」。
+const MESSAGE_ENTRANCE_DURATION: Duration = Duration::from_millis(180);
+
+/// 给一条消息挂上「淡入」进场动画。
+///
+/// 动画状态按 `id` 记在窗口里(而 `id` 来自消息本身),所以一条消息只在
+/// 第一次出现时播一次;流式追加 token 时 id 不变,不会每帧重放。
+///
+/// 逐块(段落级)渐显要自研 markdown 渲染器,本项目用 `TextView` 整体
+/// 渲染,只能做到消息级——这也是 `App::reduce_motion` 时能整块跳过的
+/// 最小粒度。
+fn message_entrance(slot: Div, id: SharedString) -> AnyElement {
+    slot.with_animation(
+        SharedString::from(format!("ai-chat-message-enter:{id}")),
+        Animation::new(MESSAGE_ENTRANCE_DURATION).with_easing(ease_out_quint()),
+        |slot, delta| slot.opacity(delta),
+    )
+    .into_any_element()
 }
 
 pub(crate) fn message_column(layout: MessageListLayout) -> Div {

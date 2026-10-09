@@ -140,11 +140,11 @@ mod tests {
     #[test]
     fn reports_identity_and_advertised_models() {
         let mut state = AcpSessionState::default();
-        state.set_agent_info(Some(agent_client_protocol::schema::v1::Implementation::new(
-            "codex", "1.2.3",
-        )));
-        state.apply_new_session_response(
-            &NewSessionResponse::new("s1").config_options(vec![SessionConfigOption::select(
+        state.set_agent_info(Some(
+            agent_client_protocol::schema::v1::Implementation::new("codex", "1.2.3"),
+        ));
+        state.apply_new_session_response(&NewSessionResponse::new("s1").config_options(vec![
+            SessionConfigOption::select(
                 "model",
                 "Model",
                 "gpt-5",
@@ -152,8 +152,8 @@ mod tests {
                     SessionConfigSelectOption::new("gpt-5", "GPT-5"),
                     SessionConfigSelectOption::new("gpt-5-mini", "GPT-5 mini"),
                 ],
-            )]),
-        );
+            ),
+        ]));
 
         let probe = probe_from_state(&state);
 
@@ -258,11 +258,8 @@ mod tests {
     #[test]
     fn concurrent_probes_keep_runtime_guards_on_their_own_threads() {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
-        let config = AcpAgentConfig::new(
-            "probe-mt",
-            "Probe MT",
-            "/nonexistent/navop-acp-probe-test",
-        );
+        let config =
+            AcpAgentConfig::new("probe-mt", "Probe MT", "/nonexistent/navop-acp-probe-test");
 
         let joins: Vec<_> = (0..3)
             .map(|_| {

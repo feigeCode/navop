@@ -74,11 +74,7 @@ pub fn refresh_keybindings(cx: &mut App) {
 }
 
 fn default_find_shortcuts_for_platform(is_macos: bool) -> &'static [&'static str] {
-    if is_macos {
-        FIND_MACOS
-    } else {
-        FIND_OTHER
-    }
+    if is_macos { FIND_MACOS } else { FIND_OTHER }
 }
 
 fn default_find_next_shortcuts_for_platform(is_macos: bool) -> &'static [&'static str] {
@@ -132,7 +128,11 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
         &default_find_previous_shortcuts(),
     ) {
         for context in FIND_CONTEXTS {
-            keybindings.push(KeyBinding::new(&key, FindPreviousInTranscript, Some(context)));
+            keybindings.push(KeyBinding::new(
+                &key,
+                FindPreviousInTranscript,
+                Some(context),
+            ));
         }
     }
     // `escape` 不可自定义：它同时承担「关掉焦点内的浮层」这件通用语义。
@@ -174,7 +174,13 @@ fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
 }
 
 /// 设置页按平台取默认值。设置表直接引用这里的常量，不再自己写字面量。
-pub fn find_defaults_for_platform(is_macos: bool) -> (&'static [&'static str], &'static [&'static str], &'static [&'static str]) {
+pub fn find_defaults_for_platform(
+    is_macos: bool,
+) -> (
+    &'static [&'static str],
+    &'static [&'static str],
+    &'static [&'static str],
+) {
     (
         default_find_shortcuts_for_platform(is_macos),
         default_find_next_shortcuts_for_platform(is_macos),
@@ -246,8 +252,16 @@ mod tests {
             // 先注册：`gpui_component::init` 在 `ai_chat_view::init` 之前跑。
             KeyBinding::new(keystroke, ForeignInputAction, Some("Input")),
             // 后注册：本 crate 自己那两条。
-            KeyBinding::new(keystroke, ToggleTranscriptFind, Some(AI_CHAT_SEARCH_CONTEXT)),
-            KeyBinding::new(keystroke, ToggleTranscriptFind, Some(AI_CHAT_COMPOSER_CONTEXT)),
+            KeyBinding::new(
+                keystroke,
+                ToggleTranscriptFind,
+                Some(AI_CHAT_SEARCH_CONTEXT),
+            ),
+            KeyBinding::new(
+                keystroke,
+                ToggleTranscriptFind,
+                Some(AI_CHAT_COMPOSER_CONTEXT),
+            ),
         ]);
         let contexts = contexts
             .iter()
@@ -255,12 +269,13 @@ mod tests {
             .collect::<Vec<_>>();
         let keystroke = Keystroke::parse(keystroke).expect("valid keystroke");
         let (bindings, _) = keymap.bindings_for_input(&[keystroke], &contexts);
-        bindings.first().map(|binding| binding.action().boxed_clone())
+        bindings
+            .first()
+            .map(|binding| binding.action().boxed_clone())
     }
 
     fn resolves_to_find(keystroke: &str, contexts: &[&str]) -> bool {
-        resolve(keystroke, contexts)
-            .is_some_and(|action| action.partial_eq(&ToggleTranscriptFind))
+        resolve(keystroke, contexts).is_some_and(|action| action.partial_eq(&ToggleTranscriptFind))
     }
 
     /// composer 获得焦点时，`cmd-f` 必须还是「搜会话」，不能被输入组件自己的搜索抢走。

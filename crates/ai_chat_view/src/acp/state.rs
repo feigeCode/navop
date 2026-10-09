@@ -402,11 +402,15 @@ mod tests {
         // mode 配置不能被当成 model，反之亦然。
         assert_eq!(
             Some("mode"),
-            state.current_mode_config().map(|option| option.id.0.as_ref())
+            state
+                .current_mode_config()
+                .map(|option| option.id.0.as_ref())
         );
         assert_eq!(
             Some("model"),
-            state.current_model_config().map(|option| option.id.0.as_ref())
+            state
+                .current_model_config()
+                .map(|option| option.id.0.as_ref())
         );
         assert_eq!(
             vec!["build", "plan", "scout"],
@@ -439,9 +443,9 @@ mod tests {
         ));
         state.apply_session_update(&SessionUpdate::UsageUpdate(UsageUpdate::new(42, 100)));
         state.apply_session_update(&SessionUpdate::AgentMessageChunk(
-            agent_client_protocol::schema::v1::ContentChunk::new(ContentBlock::Text(TextContent::new(
-                "ignored by state",
-            ))),
+            agent_client_protocol::schema::v1::ContentChunk::new(ContentBlock::Text(
+                TextContent::new("ignored by state"),
+            )),
         ));
 
         assert_eq!(1, state.available_commands().len());

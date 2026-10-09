@@ -14,8 +14,8 @@
 //! `escape` 由 `find_shortcut::init` 绑在 [`AI_CHAT_FINDBAR_CONTEXT`] 上关闭本栏。
 
 use gpui::{
-    AnyElement, Focusable, InteractiveElement, IntoElement, ParentElement, SharedString, Styled, div,
-    px,
+    AnyElement, Focusable, InteractiveElement, IntoElement, ParentElement, SharedString, Styled,
+    div, px,
 };
 use gpui_component::{
     ActiveTheme, Sizable,
@@ -60,7 +60,8 @@ impl AgentChatView {
             .toggled(case_sensitive)
             .on_click(cx.listener(|this, _, _, cx| {
                 let next = !this.search.case_sensitive();
-                this.search.set_case_sensitive(next, &this.transcript.messages);
+                this.search
+                    .set_case_sensitive(next, &this.transcript.messages);
                 // 改大小写规则后命中集变了：把视图拉回当前命中，否则高亮停在旧位置。
                 this.jump_to_current_search_hit();
                 cx.notify();

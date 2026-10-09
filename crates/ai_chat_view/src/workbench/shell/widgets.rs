@@ -9,11 +9,7 @@ use crate::workbench::state::{WorkbenchPanelKind, WorkbenchPlacement};
 
 /// 面板头「移到下一处」按钮的提示。
 pub(super) fn cycle_placement_tooltip(next: WorkbenchPlacement) -> String {
-    t!(
-        "Workbench.move_to",
-        placement = next.label().to_string()
-    )
-    .to_string()
+    t!("Workbench.move_to", placement = next.label().to_string()).to_string()
 }
 
 /// 标签条末尾「并排打开」按钮的提示。

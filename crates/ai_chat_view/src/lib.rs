@@ -72,21 +72,20 @@ mod transcript_scroll;
 mod transcript_search;
 mod turn;
 mod usage;
-pub mod workspace_files;
 mod workbench;
+pub mod workspace_files;
 
 pub use acp::{
     AcpAgentConfig, AcpAgentEntry, AcpAgentProbe, AcpAgentSource, AcpAuthConfig,
-    AcpAuthMethodConfig, AcpClientProviders, AcpConfigDiagnostic, AcpConnectOutcome,
-    AcpConnection, AcpConnectionPhase, AcpElicitationField, AcpElicitationFieldKind,
-    AcpElicitationForm, AcpElicitationFuture, AcpElicitationMode, AcpElicitationOption,
-    AcpElicitationOutcome, AcpElicitationProvider, AcpElicitationRequest, AcpError, AcpErrorKind,
-    AcpModelInfo, AcpPendingConnection, AcpPermissionFuture, AcpPermissionGrant,
-    AcpPermissionOption, AcpPermissionOutcome, AcpPermissionProvider, AcpPermissionRequest,
-    AcpProbeCache, AcpProbeRecord, AcpPromptStartError, AcpPublicMcpApprovalFuture,
-    AcpPublicMcpApprovalOutcome, AcpPublicMcpApprovalProvider, AcpPublicMcpApprovalRequest,
-    AcpRecoveryAction, AcpSessionContinuity, AcpTimeoutConfig, AcpTransport, acp_probe_cache,
-    build_acp_agent_configs,
+    AcpAuthMethodConfig, AcpClientProviders, AcpConfigDiagnostic, AcpConnectOutcome, AcpConnection,
+    AcpConnectionPhase, AcpElicitationField, AcpElicitationFieldKind, AcpElicitationForm,
+    AcpElicitationFuture, AcpElicitationMode, AcpElicitationOption, AcpElicitationOutcome,
+    AcpElicitationProvider, AcpElicitationRequest, AcpError, AcpErrorKind, AcpModelInfo,
+    AcpPendingConnection, AcpPermissionFuture, AcpPermissionGrant, AcpPermissionOption,
+    AcpPermissionOutcome, AcpPermissionProvider, AcpPermissionRequest, AcpProbeCache,
+    AcpProbeRecord, AcpPromptStartError, AcpPublicMcpApprovalFuture, AcpPublicMcpApprovalOutcome,
+    AcpPublicMcpApprovalProvider, AcpPublicMcpApprovalRequest, AcpRecoveryAction,
+    AcpSessionContinuity, AcpTimeoutConfig, AcpTransport, acp_probe_cache, build_acp_agent_configs,
     build_acp_agent_entries, current_acp_tool_mode, probe_agent_blocking, probe_fingerprint,
     set_acp_agent_config_provider, set_acp_permission_grant_provider, set_acp_tool_mode_provider,
     set_current_acp_tool_mode,
@@ -127,6 +126,13 @@ pub use code_block::{
 };
 pub use connection_selector::{ConnectionSelector, ConnectionSelectorEvent};
 pub use default_panel::{DefaultAgentChatPanel, DefaultAgentChatPanelEvent};
+pub use expansion_state::ExpansionState;
+pub use find_shortcut::{
+    AI_CHAT_COMPOSER_CONTEXT, AI_CHAT_FINDBAR_CONTEXT, AI_CHAT_SEARCH_CONTEXT, CloseTranscriptFind,
+    FIND_MACOS, FIND_NEXT_MACOS, FIND_NEXT_OTHER, FIND_OTHER, FIND_PREVIOUS_MACOS,
+    FIND_PREVIOUS_OTHER, FindNextInTranscript, FindPreviousInTranscript, ToggleTranscriptFind,
+    find_defaults_for_platform,
+};
 pub use input::{
     AgentComposerContext, AgentInput, AgentInputEvent, ComposerAgentOption, ComposerBranchOption,
     ComposerMenuOption, ComposerModel, ComposerModelOption, ComposerPlanItem, ComposerScope,
@@ -166,7 +172,6 @@ pub use resource_builder::{
     build_workbench_agent_context, build_workbench_resource_state,
 };
 pub use send_button::{SendButton, SendButtonEvent, SendButtonState};
-pub use subagent_detail_panel::{SubagentDetailPanel, SubagentDetailTarget};
 pub use session_service::{SessionError, SessionService, extract_session_name};
 pub use session_shortcut::{
     AI_CHAT_SESSION_SWITCHER_CONTEXT, CancelSessionSwitch, ConfirmSessionSwitch,
@@ -177,13 +182,7 @@ pub use session_shortcut::{
     session_shortcut_defaults_for_platform,
 };
 pub use session_sidebar::{SessionSummary, format_timestamp, session_row};
-pub use expansion_state::ExpansionState;
-pub use find_shortcut::{
-    AI_CHAT_COMPOSER_CONTEXT, AI_CHAT_FINDBAR_CONTEXT, AI_CHAT_SEARCH_CONTEXT, CloseTranscriptFind,
-    FIND_MACOS, FIND_NEXT_MACOS, FIND_NEXT_OTHER, FIND_OTHER, FIND_PREVIOUS_MACOS,
-    FIND_PREVIOUS_OTHER, FindNextInTranscript, FindPreviousInTranscript, ToggleTranscriptFind,
-    find_defaults_for_platform,
-};
+pub use subagent_detail_panel::{SubagentDetailPanel, SubagentDetailTarget};
 pub use theme::AgentChatTheme;
 pub use transcript_scroll::{FollowState, TranscriptScrollState};
 pub use transcript_search::{

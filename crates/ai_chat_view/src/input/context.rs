@@ -507,7 +507,11 @@ pub struct ComposerWorkspaceOption {
 }
 
 impl ComposerWorkspaceOption {
-    pub fn new(label: impl Into<SharedString>, path: impl Into<SharedString>, current: bool) -> Self {
+    pub fn new(
+        label: impl Into<SharedString>,
+        path: impl Into<SharedString>,
+        current: bool,
+    ) -> Self {
         Self {
             label: label.into(),
             path: path.into(),

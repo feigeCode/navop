@@ -596,9 +596,7 @@ mod tests {
         })
         .expect("再次保存");
 
-        let snapshot = cx
-            .update(|cx| load_snapshot(cx, uid))
-            .expect("读回快照");
+        let snapshot = cx.update(|cx| load_snapshot(cx, uid)).expect("读回快照");
         assert_eq!(Some("/w/first"), snapshot.workspace_root.as_deref());
         assert_eq!(Some("还没发出去"), snapshot.draft.as_deref());
         assert_eq!(
@@ -618,29 +616,13 @@ mod tests {
         });
         let uid = "sess_acp";
         let first = cx
-            .update(|cx| {
-                save_acp_session(
-                    cx,
-                    uid,
-                    "第一句话",
-                    None,
-                    acp_ref("agent-1", "acp-1"),
-                )
-            })
+            .update(|cx| save_acp_session(cx, uid, "第一句话", None, acp_ref("agent-1", "acp-1")))
             .expect("首次保存")
             .1;
 
         std::thread::sleep(std::time::Duration::from_secs(1));
-        cx.update(|cx| {
-            save_acp_session(
-                cx,
-                uid,
-                "第一句话",
-                None,
-                acp_ref("agent-1", "acp-1"),
-            )
-        })
-        .expect("重复保存");
+        cx.update(|cx| save_acp_session(cx, uid, "第一句话", None, acp_ref("agent-1", "acp-1")))
+            .expect("重复保存");
 
         let summaries = cx.update(|cx| list_summaries(cx));
         assert!(
@@ -729,8 +711,7 @@ mod tests {
         );
         assert_eq!(
             Some("opencode-acp".to_string()),
-            external_agent_label(Some("opencode-acp.opencode-acp".into()))
-                .map(|l| l.to_string())
+            external_agent_label(Some("opencode-acp.opencode-acp".into())).map(|l| l.to_string())
         );
         assert_eq!(None, external_agent_label(None));
         assert_eq!(None, external_agent_label(Some("  ".into())));

@@ -278,9 +278,11 @@ fn card_search_text(kind: &str, content: &str) -> Option<String> {
         TOOL_CONFIRM_CARD => {
             let data = ToolConfirmCardData::from_json(content)?;
             let mut parts = vec![data.tool_name, data.input_summary, data.question];
-            parts.extend(data.items.into_iter().flat_map(|item| {
-                [item.tool_name, item.input_summary]
-            }));
+            parts.extend(
+                data.items
+                    .into_iter()
+                    .flat_map(|item| [item.tool_name, item.input_summary]),
+            );
             Some(parts.join("\n"))
         }
         ACP_PERMISSION_CARD => {
@@ -331,10 +333,7 @@ mod tests {
     use crate::ChatMessageUI;
 
     fn texts(messages: &[ChatMessageUI]) -> Vec<String> {
-        messages
-            .iter()
-            .map(message_search_text)
-            .collect::<Vec<_>>()
+        messages.iter().map(message_search_text).collect::<Vec<_>>()
     }
 
     fn search(query: &str, messages: &[ChatMessageUI]) -> TranscriptSearch {
@@ -512,7 +511,8 @@ mod tests {
     #[test]
     fn status_titles_are_searchable_but_chart_cards_are_not() {
         let status = ChatMessageUI::status("正在检索 enforce_budget", false);
-        let chart = ChatMessageUI::card("chart-json", r#"{"chart_type":"bar","x":"enforce_budget"}"#);
+        let chart =
+            ChatMessageUI::card("chart-json", r#"{"chart_type":"bar","x":"enforce_budget"}"#);
 
         assert_eq!(1, search("enforce_budget", &[status]).total());
         assert_eq!(0, search("enforce_budget", &[chart]).total());
@@ -521,7 +521,10 @@ mod tests {
     #[test]
     fn every_occurrence_inside_one_turn_is_counted() {
         // 提问与结论同属一轮：命中数按**出现次数**累计，不是按轮次数。
-        let messages = vec![ChatMessageUI::user("的的的"), ChatMessageUI::assistant("的")];
+        let messages = vec![
+            ChatMessageUI::user("的的的"),
+            ChatMessageUI::assistant("的"),
+        ];
 
         let search = search("的", &messages);
 
