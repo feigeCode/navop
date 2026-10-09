@@ -1285,6 +1285,12 @@ pub struct AgentChatView {
     session_transcripts: HashMap<String, AgentTranscript>,
     /// 非当前会话转录的 LRU 顺序，队首为最久未访问项。
     session_transcript_order: VecDeque<String>,
+    /// [`Self::session_transcripts`] 里哪些 uid 存的是**外部 agent** 那侧的内容。
+    ///
+    /// 槽位按 uid 复用：同一条会话可能先把本地那段交给 agent（本地转录进缓存），
+    /// 之后屏上换成 agent 的内容。来源不记下来，切回本地时就会把 agent 的转录
+    /// 当成本地历史摆出来（`restore_local_transcript` 靠这张表避开这个坑）。
+    acp_cached_transcripts: HashSet<String>,
     /// 子代理**详情会话**的转录，键是详情会话 id（`acp-sub:<子会话 id>`）。
     ///
     /// 与 [`Self::session_transcripts`] 分开存是有意的：那个 map 装的是「别的**真实**
@@ -1758,6 +1764,7 @@ impl AgentChatView {
             sessions,
             live_sessions,
             session_transcripts: HashMap::new(),
+            acp_cached_transcripts: HashSet::new(),
             session_transcript_order: VecDeque::new(),
             subagent_details: HashMap::new(),
             subagent_detail_errors: HashMap::new(),
@@ -5423,10 +5430,12 @@ impl AgentChatView {
                 self.pending_submissions.clear_session(&session_uid);
             }
             // 屏上转录交给缓存：后台轮次的后续输出靠它接住，不能随 visual reset 丢掉。
+            // 来源记成 agent 那侧：同一条 uid 接下来是**新**协议会话的内容，这份旧转录
+            // 不能被当成「本地历史」摆出来（见 `acp_cached_transcripts`）。
             let mut stashed = AgentTranscript::new();
             stashed.set_resource_context(&self.resources);
             let transcript = std::mem::replace(&mut self.transcript, stashed);
-            self.cache_session_transcript(session_uid.clone(), transcript);
+            self.cache_agent_session_transcript(session_uid.clone(), transcript);
             self.set_session_running(&session_uid, false, cx);
             self.input
                 .update(cx, |input, cx| input.set_running(false, cx));
@@ -5746,6 +5755,25 @@ impl AgentChatView {
     }
 
     fn cache_session_transcript(&mut self, uid: String, transcript: AgentTranscript) {
+        self.cache_session_transcript_with_origin(uid, transcript, false);
+    }
+
+    /// 收下一段**外部 agent** 的转录（来源标记见 [`Self::acp_cached_transcripts`]）。
+    fn cache_agent_session_transcript(&mut self, uid: String, transcript: AgentTranscript) {
+        self.cache_session_transcript_with_origin(uid, transcript, true);
+    }
+
+    fn cache_session_transcript_with_origin(
+        &mut self,
+        uid: String,
+        transcript: AgentTranscript,
+        from_agent: bool,
+    ) {
+        if from_agent {
+            self.acp_cached_transcripts.insert(uid.clone());
+        } else {
+            self.acp_cached_transcripts.remove(&uid);
+        }
         self.session_transcripts.insert(uid.clone(), transcript);
         self.touch_session_transcript(&uid);
         self.trim_session_transcripts();
@@ -5753,12 +5781,14 @@ impl AgentChatView {
 
     fn remove_cached_session_transcript(&mut self, uid: &str) -> Option<AgentTranscript> {
         self.session_transcript_order.retain(|item| item != uid);
+        self.acp_cached_transcripts.remove(uid);
         self.session_transcripts.remove(uid)
     }
 
     fn clear_cached_session_transcripts(&mut self) {
         self.session_transcripts.clear();
         self.session_transcript_order.clear();
+        self.acp_cached_transcripts.clear();
     }
 
     fn session_transcript_is_protected(&self, uid: &str) -> bool {
@@ -5801,27 +5831,35 @@ impl AgentChatView {
                 .remove(index)
                 .expect("session transcript LRU index must remain valid");
             self.session_transcripts.remove(&uid);
+            self.acp_cached_transcripts.remove(&uid);
         }
     }
 
-    /// 把屏幕上的本地转录收进会话缓存。返回**是否真的收下了一段非空转录**。
+    /// 把屏幕上的转录收进会话缓存。返回**是否真的收下了一段非空转录**。
     ///
     /// 返回值给调用方判断要不要提示用户「本地这段不会带到 agent 那边」：空转录没什么可失的，
     /// 提示只会变成噪音。
     ///
     /// 空转录**不入缓存**：缓存里留一个空壳会遮蔽 Runtime 快照重建
     /// （见 [`Self::restore_local_transcript`]），让「切回本地」看起来像历史丢了。
+    ///
+    /// 外部 agent 会话的转录**也要留住**：那条会话的轮次不会因为切走而取消，
+    /// 而 agent 侧的 `load` 在轮次在飞时是被挡住的（要保住前台轮次的所有权，见
+    /// [`Self::open_protocol_session`]）。回来时唯一能把历史摆回屏幕的途径就是
+    /// 这块缓存——不留在本地，屏上就只剩一个「执行中」。
     fn stash_current_transcript(&mut self) -> bool {
-        if self.backend != Backend::Local {
-            return false;
-        }
+        let from_agent = self.backend != Backend::Local;
         let mut replacement = AgentTranscript::new();
         replacement.set_resource_context(&self.resources);
         let transcript = std::mem::replace(&mut self.transcript, replacement);
         if transcript.is_empty() {
             return false;
         }
-        self.cache_session_transcript(self.current_session.clone(), transcript);
+        if from_agent {
+            self.cache_agent_session_transcript(self.current_session.clone(), transcript);
+        } else {
+            self.cache_session_transcript(self.current_session.clone(), transcript);
+        }
         true
     }
 
@@ -6040,14 +6078,18 @@ impl AgentChatView {
     ///
     /// 顺序：内存缓存（离开本地时 stash 的）→ Runtime 快照重建 → 清空。
     /// 不能无条件清空：屏幕上此刻是 ACP agent 的内容，清掉就等于把本地那段对话抹了，
-    /// 这正是「会话记不住」的观感来源。ACP 自己的转录归 agent 所有（靠 load/resume 取回），
-    /// 不进这个缓存——缓存里永远只有本地转录，切回来才不会串台。
+    /// 这正是「会话记不住」的观感来源。
     ///
     /// 缓存命中也要看**是否非空**：可能有人往这个会话的缓存里塞过一个空壳转录
     /// （例如连接失败时给非当前会话建过一块），空壳命中会让下面的 Runtime 重建被跳过，
     /// 屏幕上就空了——而 Runtime 里历史还在。
+    ///
+    /// 缓存里装的是**外部 agent** 的内容时直接跳过（`acp_cached_transcripts`）：
+    /// 那段的归属在 agent 那边，拿来当本地历史就是串台。跳过时**不消费**这条缓存，
+    /// 它在 agent 那侧仍然有效（切回去还要靠它把历史摆上屏幕）。
     fn restore_local_transcript(&mut self, session_uid: &str) {
-        if let Some(transcript) = self.remove_cached_session_transcript(session_uid)
+        if !self.acp_cached_transcripts.contains(session_uid)
+            && let Some(transcript) = self.remove_cached_session_transcript(session_uid)
             && !transcript.is_empty()
         {
             self.transcript = transcript;
@@ -6106,6 +6148,46 @@ impl AgentChatView {
     /// 切换到另一个(已持久化的)会话:保存当前 → 加载快照恢复 → 重建转录。
     fn switch_session(&mut self, uid: &str, cx: &mut Context<Self>) {
         self.switch_session_with_origin(uid, SessionSwitchOrigin::Visit, cx);
+    }
+
+    /// 回到一条外部 agent 会话：把**这条 uid 现在指向的协议会话**上还在飞的轮次
+    /// 收回前台（撤掉 `backgrounded`）。
+    ///
+    /// 这个标记只表示「输出别上屏」。切走是临时的，人回来了就该撤：不撤，后续输出会
+    /// 继续落进缓存——屏上停在切回来那一刻，看着像卡住；停止按钮也不作用在它身上
+    /// （见 [`AcpTurnOwner::mark_cancel_requested`]）。
+    ///
+    /// 判据是**协议会话**而不是 uid：uid 被「新建对话」换过协议会话时，旧轮的输出
+    /// 属于上一段对话，不能因为 uid 相同就放它上屏。有连接时问连接要这条协议会话上
+    /// 在飞的轮次 id；没有连接就没有事件可路由，放开是安全的（重连会清空 owner）。
+    fn reclaim_foreground_turn(&mut self) {
+        let session_uid = self.current_session.clone();
+        let protocol_session_id = self
+            .runtime
+            .session(&SessionId::from_string(session_uid.clone()))
+            .and_then(|session| session.acp_ref())
+            .map(|reference| reference.session_id);
+        let Some(acp) = self.acp.as_ref() else {
+            for owner in self.acp_turn_owners.iter_mut() {
+                if owner.session_uid == session_uid {
+                    owner.backgrounded = false;
+                }
+            }
+            return;
+        };
+        let Some(protocol_session_id) = protocol_session_id else {
+            // 连接在、这条 uid 却没有协议会话地址：判不出那轮属于谁，保守不动。
+            return;
+        };
+        let active_turn = acp.active_turn_id_for(&protocol_session_id);
+        for owner in self.acp_turn_owners.iter_mut() {
+            if owner.session_uid == session_uid
+                && owner.backgrounded
+                && active_turn.as_ref() == Some(&owner.turn_id)
+            {
+                owner.backgrounded = false;
+            }
+        }
     }
 
     /// 后退/前进导航：切换到导航栈给出的目标。
@@ -6242,6 +6324,10 @@ impl AgentChatView {
         self.is_running = self.running_sessions.contains(uid);
         self.input
             .update(cx, |input, cx| input.set_running(self.is_running, cx));
+        // 人回到这条外部会话了：还在跑的那轮又回到眼前（输出上屏、停止可用）。
+        if external_agent.is_some() {
+            self.reclaim_foreground_turn();
+        }
         self.sync_pending_preview(cx);
         self.reload_sessions(cx);
         self.sync_composer(cx);
@@ -12236,6 +12322,143 @@ mod tests {
         }
     }
 
+    /// 本地后端的同一条路径：跑着的会话切走再切回，转录也得在。
+    ///
+    /// 本地侧的缓存与外部 agent 侧共用一套（`session_transcripts`），差异只在
+    /// 来源标记——共用就意味着修一边可能碰坏另一边，所以两边都钉住。
+    #[gpui::test]
+    fn switching_back_to_a_running_local_session_keeps_its_transcript(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update(cx, |view, cx| {
+            let running_uid = view.current_session.clone();
+            view.transcript
+                .push_message(crate::ChatMessageUI::user("本地会话的问题"));
+            view.transcript
+                .push_message(crate::ChatMessageUI::assistant("本地会话的回答"));
+            view.set_running(true, cx);
+
+            let other = view.runtime.create_session(view.resources.clone());
+            let other_uid = other.id().to_string();
+            view.switch_session(&other_uid, cx);
+            view.switch_session(&running_uid, cx);
+
+            assert!(view.is_running, "切回来时这一轮还在跑");
+            assert!(
+                view.transcript
+                    .messages
+                    .iter()
+                    .any(|message| message.content == "本地会话的问题"),
+                "切回跑着的本地会话，历史也得回来"
+            );
+        });
+    }
+
+    /// 切走再切回一条**正在跑**的外部 agent 会话：屏上历史必须原样回来。
+    ///
+    /// 这条钉住的是「后台轮次」方案的配套：轮次不再因为切走而取消，而 agent 侧的
+    /// `load` 在轮次在飞时是被挡住的（要保住前台轮次的所有权）。回来时唯一能把
+    /// 历史摆回屏幕的途径就是本地留住的那块转录——不留，屏上就只剩一个「执行中」。
+    /// 这里故意不注册 agent 配置，让 reopen 路径安静地退场，只考转录这块。
+    #[gpui::test]
+    fn switching_back_to_a_running_external_session_keeps_its_transcript(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update(cx, |view, cx| {
+            // 当前会话交给外部 agent，转录里已经有两轮对话，轮次还在跑。
+            let external_uid = view.current_session.clone();
+            view.runtime.restore_session(snapshot_of_external_session(
+                &external_uid,
+                "codex",
+                "acp-42",
+            ));
+            view.backend = Backend::Acp;
+            view.current_acp_id = Some(SharedString::from("codex"));
+            view.transcript
+                .push_message(crate::ChatMessageUI::user("外部会话的问题"));
+            view.transcript
+                .push_message(crate::ChatMessageUI::assistant("外部会话的回答"));
+            view.running_sessions.insert(external_uid.clone());
+            view.set_running(true, cx);
+            let turn_id = TurnId::from_string("turn-external");
+            view.acp_turn_owners = vec![AcpTurnOwner {
+                event_session_id: SessionId::from_string("acp:42"),
+                session_uid: external_uid.clone(),
+                turn_id: turn_id.clone(),
+                backgrounded: false,
+                cancel_requested: false,
+            }];
+
+            // 切到另一条会话，再切回来。
+            let other = view.runtime.create_session(view.resources.clone());
+            let other_uid = other.id().to_string();
+            view.switch_session(&other_uid, cx);
+            assert!(
+                !view
+                    .transcript
+                    .messages
+                    .iter()
+                    .any(|message| message.content == "外部会话的问题"),
+                "切走之后屏上不该还留着上一条会话的消息"
+            );
+            view.switch_session(&external_uid, cx);
+
+            assert!(
+                view.running_sessions.contains(&external_uid),
+                "轮次还在后台跑，回来时状态应当仍是运行中"
+            );
+            assert_eq!(view.is_running, view.running_sessions.contains(&external_uid));
+            assert!(
+                view.transcript
+                    .messages
+                    .iter()
+                    .any(|message| message.content == "外部会话的问题"),
+                "回到正在跑的 agent 会话，历史必须回来；曾经这里只剩一个「执行中」"
+            );
+            assert!(
+                view.transcript
+                    .messages
+                    .iter()
+                    .any(|message| message.content == "外部会话的回答")
+            );
+            assert!(
+                view.acp_turn_owners
+                    .iter()
+                    .all(|owner| !owner.backgrounded),
+                "回到这条会话后，那一轮又成了用户眼前的轮次：输出必须落回屏幕，                 停止按钮也该作用在它身上"
+            );
+
+            // 后续输出必须上屏：轮次被打上「后台」标记时，事件会被判成「别的会话的」
+            // 而落进缓存——屏幕上就一直是切回来那一刻的样子，看起来像卡住了。
+            let before = view.transcript.messages.len();
+            view.apply_runtime_event(
+                RuntimeEvent::AssistantMessage {
+                    session_id: SessionId::from_string("acp:42"),
+                    turn_id: turn_id.clone(),
+                    text: "回来之后的输出".into(),
+                },
+                cx,
+            );
+            assert!(
+                view.transcript.messages.len() > before
+                    && view
+                        .transcript
+                        .messages
+                        .iter()
+                        .any(|message| message.content.contains("回来之后的输出")),
+                "后台轮的后续输出必须回到屏幕上的转录，而不是只落进缓存"
+            );
+        });
+    }
+
     /// 从侧栏回到一条外部 agent 会话：要按快照里的地址把 agent 那边接回来，
     /// 而不是当成一条空的本地会话（那样用户会以为对话没了）。
     #[gpui::test]
@@ -15235,8 +15458,6 @@ mod tests {
         storage
     }
 
-    /// 点开一条「没有归属」的旧会话，不能顺手把它钉到当前工作区。
-    ///
     /// 拖过消息块会选中它，`Cmd+C` 会把**选中内容**送进剪贴板。
     #[gpui::test]
     fn gpui_transcript_selection_copies_the_selected_blocks(cx: &mut TestAppContext) {
