@@ -9,6 +9,7 @@
 //! emit 的选择事件(目标轮换、模型 / 模式切换)。
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -5530,6 +5531,18 @@ impl AgentChatView {
         }
     }
 
+    /// 点了空态里的起手话：填进输入框并把光标交回去，**不**直接发送。
+    ///
+    /// 直接发出去等于替用户按了发送键：起手话是给人改的草稿，不是命令。
+    fn apply_starter_prompt(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let prompt = crate::empty_state::starter_prompt(index);
+        self.input.update(cx, |input, cx| {
+            input.set_composer_text(&prompt, window, cx);
+            input.focus_input(window, cx);
+        });
+        cx.notify();
+    }
+
     /// `uid` 的 **Runtime 历史**是否还只有系统提示——即这个会话到底有没有被用过。
     ///
     /// 这是空白判定的**事实源**（不看屏幕转录）：转录可能只是留在缓存里的副本，
@@ -6980,15 +6993,34 @@ impl Render for AgentChatView {
         let findbar = self.render_findbar(&chat_theme, cx);
         // ACP 连接还停在 Ready 之前的相位时，历史要靠 agent 回放，转录是空的。
         // 空面板会被读成「坏了」；骨架屏则说明「在等数据」。
-        let show_skeleton = {
-            let acp_phase = self.acp.as_ref().map(AcpConnection::phase);
-            should_show_transcript_skeleton(
+        let acp_phase = self.acp.as_ref().map(AcpConnection::phase);
+        let show_skeleton = should_show_transcript_skeleton(
+            self.sidebar_mode,
+            self.backend,
+            acp_phase.as_ref(),
+            self.is_running,
+            self.transcript.messages.is_empty(),
+        );
+        // 起手态与骨架屏互斥（见 `empty_state::should_show_empty_state`）。
+        let show_empty_state = crate::empty_state::should_show_empty_state(
+            acp_phase.as_ref(),
+            self.is_running,
+            self.transcript.messages.is_empty(),
+        );
+        let empty_state = if show_empty_state {
+            let on_starter = cx.listener(|this, index: &usize, window, cx| {
+                this.apply_starter_prompt(*index, window, cx)
+            });
+            let on_starter: Rc<dyn Fn(usize, &mut Window, &mut App)> =
+                Rc::new(move |index, window, cx| on_starter(&index, window, cx));
+            Some(crate::empty_state::render_empty_state(
+                &chat_theme,
+                list_layout,
                 self.sidebar_mode,
-                self.backend,
-                acp_phase.as_ref(),
-                self.is_running,
-                self.transcript.messages.is_empty(),
-            )
+                on_starter,
+            ))
+        } else {
+            None
         };
         let messages = if show_skeleton {
             crate::skeleton::transcript_skeleton(&chat_theme, list_layout, SKELETON_ROWS)
@@ -7006,6 +7038,7 @@ impl Render for AgentChatView {
                     .with_turn_chrome(!self.sidebar_mode)
                     .with_search(Some(&self.search))
                     .with_findbar(findbar)
+                    .with_empty_state(empty_state)
                     .with_restorable_turns(self.restorable_turns.get(&self.current_session))
                     .with_scroll_to_latest(show_scroll_to_latest),
                 window,
@@ -15110,6 +15143,33 @@ mod tests {
         assert!(
             cx.debug_bounds("ai-chat-user-plain-text").is_some(),
             "图片不挤掉文字"
+        );
+    }
+
+    /// 空会话要有起手态，而且第一句话一到就得让位。
+    #[gpui::test]
+    fn empty_session_shows_the_starter_state(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let (host, cx) = cx.add_window_view(FixedSidebarHost::new);
+        let cx: &mut VisualTestContext = cx;
+
+        assert!(
+            cx.debug_bounds("ai-chat-empty-state").is_some(),
+            "空会话过去是一片背景色，现在得有起手态"
+        );
+
+        let chat = host.read_with(cx, |host, _| host.view.clone());
+        let no_images: Vec<crate::ImageAttachment> = Vec::new();
+        chat.update(cx, |view, cx| {
+            let session_uid = view.current_session.clone();
+            let resources = ResourceContext::new();
+            view.push_user_to_session(&session_uid, "你好", &no_images, &resources);
+            cx.notify();
+        });
+
+        assert!(
+            cx.debug_bounds("ai-chat-empty-state").is_none(),
+            "有消息之后起手态必须让位"
         );
     }
 

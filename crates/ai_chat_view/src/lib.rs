@@ -42,6 +42,7 @@ mod connection_selector;
 mod default_panel;
 #[cfg(test)]
 mod default_panel_tests;
+mod empty_state;
 mod expansion_state;
 pub mod find_shortcut;
 mod html_code_block;

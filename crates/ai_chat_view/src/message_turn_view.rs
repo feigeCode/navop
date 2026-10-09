@@ -92,6 +92,10 @@ pub struct MessageListContext<'a> {
     pub search: Option<&'a TranscriptSearch>,
     /// 会话内搜索的浮层（findbar）。由宿主提供，这里只负责摆到正确位置。
     pub findbar: Option<AnyElement>,
+    /// 空转录时的起手态；只在列表一条都没有时用得上。
+    ///
+    /// 由宿主决定画不画（连接中由骨架屏负责，见 `empty_state` 的判定）。
+    pub empty_state: Option<AnyElement>,
     /// 可以回滚到的轮次 id（宿主查过工作区快照后注入）。
     ///
     /// `None` = 这次渲染不支持回滚，页脚的「回到这一轮」入口不出现——宁可没有，
@@ -114,6 +118,7 @@ impl<'a> MessageListContext<'a> {
             search: None,
             findbar: None,
             restorable_turns: None,
+            empty_state: None,
         }
     }
 
@@ -144,6 +149,11 @@ impl<'a> MessageListContext<'a> {
 
     pub fn with_action_handler(mut self, handler: Option<MessageListActionHandler>) -> Self {
         self.on_action = handler;
+        self
+    }
+
+    pub fn with_empty_state(mut self, empty_state: Option<AnyElement>) -> Self {
+        self.empty_state = empty_state;
         self
     }
 
@@ -217,7 +227,10 @@ pub fn render_message_list(
         overlays.push(findbar);
     }
 
-    message_scroll_container(scroll_handle, context.layout, items, overlays)
+    let empty_state = (items.is_empty())
+        .then(|| context.empty_state.take())
+        .flatten();
+    message_scroll_container(scroll_handle, context.layout, items, overlays, empty_state)
 }
 
 /// 搜索命中在轮次上的标记。

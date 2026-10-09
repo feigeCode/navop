@@ -206,16 +206,27 @@ pub(crate) fn message_scroll_container(
     layout: MessageListLayout,
     items: Vec<AnyElement>,
     overlays: Vec<AnyElement>,
+    empty_state: Option<AnyElement>,
 ) -> AnyElement {
-    let items: Vec<AnyElement> = items
-        .into_iter()
-        .map(|item| {
+    // 一条消息都没有时的起手态：没有内容可滚，于是让这一列撑满高度、内容居中，
+    // 而不是像消息那样从上往下堆。
+    let items: Vec<AnyElement> = match empty_state {
+        Some(empty_state) => vec![
             message_column(layout)
-                .flex_shrink_0()
-                .child(item)
-                .into_any_element()
-        })
-        .collect();
+                .flex_1()
+                .child(empty_state)
+                .into_any_element(),
+        ],
+        None => items
+            .into_iter()
+            .map(|item| {
+                message_column(layout)
+                    .flex_shrink_0()
+                    .child(item)
+                    .into_any_element()
+            })
+            .collect(),
+    };
     div()
         .id("ai-chat-messages")
         .debug_selector(|| "ai-chat-messages".to_string())
@@ -293,7 +304,7 @@ fn render_messages_with_layout(
         );
     }
 
-    message_scroll_container(scroll_handle, layout, items, Vec::new())
+    message_scroll_container(scroll_handle, layout, items, Vec::new(), None)
 }
 
 /// 新消息进场动效时长。

@@ -263,6 +263,26 @@ AgentUi:
     en: Edit and pull back into the composer
     zh-CN: 编辑（拉回输入框）
     zh-HK: 編輯（拉回輸入框）
+  empty_hint:
+    en: Ask a question, paste an error, or pick a starter below.
+    zh-CN: 直接提问、贴一段报错，或者从下面挑一句开始。
+    zh-HK: 直接提問、貼一段錯誤，或者從下面挑一句開始。
+  empty_starter_improve:
+    en: Find one thing in the code worth improving
+    zh-CN: 找一处值得改进的代码
+    zh-HK: 找一處值得改進的程式碼
+  empty_starter_overview:
+    en: Walk me through how this project is organized
+    zh-CN: 讲讲这个项目是怎么组织的
+    zh-HK: 講講這個專案是怎麼組織的
+  empty_starter_tests:
+    en: Add tests for what I just changed
+    zh-CN: 给刚改的地方补测试
+    zh-HK: 給剛改的地方補測試
+  empty_title:
+    en: What should we work on?
+    zh-CN: 想做点什么？
+    zh-HK: 想做點什麼？
   elicitation_heading:
     en: Agent question
     zh-CN: Agent 提问
