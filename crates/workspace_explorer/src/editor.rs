@@ -4,31 +4,22 @@ mod render;
 mod save;
 mod tabs;
 
-use crate::diff::SideBySideDiff;
 use crate::file_system::LoadedFile;
 use crate::git::{GitChange, GitRepository};
 use crate::theme::WorkspaceTheme;
 use crate::{WorkspaceBackend, local_backend};
 use gpui::{App, Context, Entity, EventEmitter, KeyBinding, Subscription, actions};
-use gpui_component::input::{EditorState, RangeDecorationCollection};
+use gpui_component::input::EditorState;
+use gpui_component::diff::DiffState;
 use notes::NotesView;
 use one_ui::StatusPresentation;
 use remote_file_editor::EditorMode;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 use std::sync::Arc;
 
 actions!(workspace_editor, [SaveDocument]);
 
 pub(crate) const WORKSPACE_EDITOR_KEY_CONTEXT: &str = "WorkspaceEditor";
-
-/// 只读 diff 视图固定用的语法名。
-///
-/// 它走的是**语言名**而不是文件扩展名：单栏 diff 视图渲染的是 patch 原文，
-/// 与它展示的那份文件的语言无关。要注意这条路径不经过
-/// `load_language_for_path`（那个按扩展名推语言），所以语法得显式加载，
-/// 否则编辑器只会退化成纯文本。见 [`load::ensure_diff_language`]。
-pub(super) const DIFF_LANGUAGE: &str = "diff";
 
 /// 编辑器键盘快捷键。`secondary-s` 在 macOS 上为 Cmd+S,其他平台为 Ctrl+S。
 pub(crate) fn keybindings() -> Vec<KeyBinding> {
@@ -105,7 +96,6 @@ pub(super) struct PendingDocument {
 pub(super) struct LoadedDocument {
     text: String,
     language: String,
-    diff_language: Option<String>,
     file_size: usize,
     policy: DocumentPolicy,
     read_only: bool,
@@ -132,45 +122,32 @@ impl LoadedDocument {
         Self {
             text: file.text,
             language: file.language,
-            diff_language: None,
             file_size: file.file_size,
             policy,
             read_only: false,
         }
     }
 
-    pub(super) fn from_diff(diff: String, language: String) -> Self {
+    pub(super) fn from_diff(diff: String) -> Self {
         Self {
             file_size: diff.len(),
             text: diff,
-            language: DIFF_LANGUAGE.to_string(),
-            diff_language: Some(language),
+            language: String::new(),
             policy: DocumentPolicy::Diff,
             read_only: true,
         }
     }
 
-    /// 整轮快照 diff：多文件不适合双栏对齐，按 diff 语法只读展示。
+    /// 整轮快照 diff：多文件 patch,与单文件 diff 走同一条组件渲染路径。
     pub(super) fn from_snapshot_diff(diff: String) -> Self {
         Self {
             file_size: diff.len(),
             text: diff,
-            language: DIFF_LANGUAGE.to_string(),
-            diff_language: None,
+            language: String::new(),
             policy: DocumentPolicy::Diff,
             read_only: true,
         }
     }
-}
-
-pub(super) struct DiffEditors {
-    left: Entity<EditorState>,
-    right: Entity<EditorState>,
-    /// 两侧行背景装饰的句柄。组件文档说装饰集合"存活到显式销毁或编辑器被
-    /// 丢弃"，当前版本没有 `Drop` 实现，所以丢掉句柄其实也留得住装饰——但持有
-    /// 它才不必依赖那个实现细节。
-    _left_spans: RangeDecorationCollection,
-    _right_spans: RangeDecorationCollection,
 }
 
 pub(super) struct EditorTab {
@@ -180,15 +157,10 @@ pub(super) struct EditorTab {
     editor: Option<Entity<EditorState>>,
     markdown: Option<Entity<NotesView>>,
     subscriptions: Vec<Subscription>,
-    diff: Option<Rc<SideBySideDiff>>,
-    diff_editors: Option<DiffEditors>,
-    /// 单栏 diff 视图(即 `editor`)上的增删行底色。
-    ///
-    /// 和 `DiffEditors` 里的两栏装饰同样的道理要持有句柄：组件文档说装饰集合
-    /// 「存活到显式销毁或编辑器被丢弃」，但持有它才不必依赖那个实现细节。
-    diff_spans: Option<RangeDecorationCollection>,
+    /// Diff 组件状态:从 patch 原文解析,负责全部 diff 渲染(Split/Unified)。
+    diff_state: Option<Entity<DiffState>>,
+    /// `true` 为 Split 双栏,`false` 为 Unified 单栏。
     diff_side_by_side: bool,
-    diff_change_cursor: Option<usize>,
     saved_text: String,
     file_size: usize,
     policy: DocumentPolicy,
@@ -211,11 +183,8 @@ impl EditorTab {
             editor: None,
             markdown: None,
             subscriptions: Vec::new(),
-            diff: None,
-            diff_editors: None,
-            diff_spans: None,
+            diff_state: None,
             diff_side_by_side: true,
-            diff_change_cursor: None,
             saved_text: String::new(),
             file_size: 0,
             policy: DocumentPolicy::Code,

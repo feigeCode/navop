@@ -1,14 +1,8 @@
 use super::WorkspaceEditor;
-use crate::diff::change_starts;
 use crate::model::active_index_after_close;
-use gpui::{AppContext as _, Context, Focusable as _, PromptLevel, Window, point};
+use gpui::{AppContext as _, Context, PromptLevel, Window};
+use gpui_component::diff::DiffMode;
 use rust_i18n::t;
-
-#[derive(Clone, Copy)]
-enum DiffNavigationDirection {
-    Previous,
-    Next,
-}
 
 impl WorkspaceEditor {
     pub(super) fn request_close_tab(
@@ -125,83 +119,50 @@ impl WorkspaceEditor {
     }
 
     pub(super) fn toggle_diff_view(&mut self, cx: &mut Context<Self>) {
-        let Some(tab) = self.active_tab_mut().filter(|tab| tab.diff.is_some()) else {
+        let Some(tab) = self.active_tab_mut().filter(|tab| tab.diff_state.is_some()) else {
             return;
         };
-        // 没有并排数据就切不进并排：`render_body` 只认 `diff_editors`，硬翻这个开关
-        // 只会让按钮亮起来而屏上没有任何变化。快照 diff（整轮多文件）就是这种形态。
-        if tab.diff_editors.is_none() {
-            return;
-        }
         tab.diff_side_by_side = !tab.diff_side_by_side;
+        let mode = if tab.diff_side_by_side {
+            DiffMode::Split
+        } else {
+            DiffMode::Unified
+        };
+        if let Some(diff_state) = tab.diff_state.as_ref() {
+            diff_state.update(cx, |state, cx| state.set_mode(mode, cx));
+        }
         cx.notify();
     }
 
     pub(super) fn previous_diff_change(&mut self, cx: &mut Context<Self>) {
-        self.navigate_diff_change(DiffNavigationDirection::Previous, cx);
+        self.navigate_diff_change(false, cx);
     }
 
     pub(super) fn next_diff_change(&mut self, cx: &mut Context<Self>) {
-        self.navigate_diff_change(DiffNavigationDirection::Next, cx);
+        self.navigate_diff_change(true, cx);
     }
 
-    fn navigate_diff_change(&mut self, direction: DiffNavigationDirection, cx: &mut Context<Self>) {
-        let Some(tab) = self.active_tab() else {
+    /// 跳到下一个/上一个变更块。视口定位与首尾回绕都是 Diff 组件的
+    /// `next_change` / `previous_change` 内置行为,这里只做转发。
+    fn navigate_diff_change(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let Some(diff_state) = self.active_tab().and_then(|tab| tab.diff_state.clone()) else {
             return;
         };
-        let (Some(diff), Some(editors)) = (&tab.diff, &tab.diff_editors) else {
-            return;
-        };
-        let changes = change_starts(diff);
-        if changes.is_empty() {
-            return;
-        }
-
-        let visible_range = editors
-            .left
-            .read(cx)
-            .visible_row_range()
-            .or_else(|| editors.right.read(cx).visible_row_range());
-        let next_index = diff_navigation_index(
-            tab.diff_change_cursor,
-            &changes,
-            visible_range.as_ref(),
-            direction,
-        );
-        let row = changes[next_index];
-        let left = editors.left.clone();
-        let right = editors.right.clone();
-
-        if let Some(tab) = self.active_tab_mut() {
-            tab.diff_change_cursor = Some(next_index);
-        }
-        left.update(cx, |state, cx| {
-            let y = -state.line_height().unwrap_or(gpui::px(20.0)) * row;
-            state.set_scroll_offset(point(state.scroll_offset().x, y), cx);
+        diff_state.update(cx, |state, cx| {
+            if forward {
+                state.next_change(cx);
+            } else {
+                state.previous_change(cx);
+            }
         });
-        right.update(cx, |state, cx| {
-            let y = -state.line_height().unwrap_or(gpui::px(20.0)) * row;
-            state.set_scroll_offset(point(state.scroll_offset().x, y), cx);
-        });
-        cx.notify();
     }
 
     pub(super) fn trigger_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(tab) = self.active_tab() else {
             return;
         };
-        let editor = if tab.diff_side_by_side {
-            tab.diff_editors.as_ref().map(|editors| {
-                if editors.right.read(cx).focus_handle(cx).is_focused(window) {
-                    editors.right.clone()
-                } else {
-                    editors.left.clone()
-                }
-            })
-        } else {
-            tab.editor.clone()
-        };
-        let Some(editor) = editor else {
+        // diff 视图没有可搜索的编辑器,Search 按钮在该形态下本来就被禁用。
+        let Some(editor) = tab.editor.clone() else {
             return;
         };
         editor.update(cx, |state, cx| {
@@ -220,93 +181,5 @@ impl WorkspaceEditor {
                 state.open_search(true, cx);
             });
         }
-    }
-}
-
-fn diff_navigation_index(
-    current: Option<usize>,
-    changes: &[usize],
-    visible_range: Option<&std::ops::Range<usize>>,
-    direction: DiffNavigationDirection,
-) -> usize {
-    if let Some(current) = current.filter(|&index| {
-        changes
-            .get(index)
-            .is_some_and(|row| visible_range.is_none_or(|range| range.contains(row)))
-    }) {
-        return match direction {
-            DiffNavigationDirection::Previous => {
-                current.checked_sub(1).unwrap_or(changes.len() - 1)
-            }
-            DiffNavigationDirection::Next => (current + 1) % changes.len(),
-        };
-    }
-
-    match (direction, visible_range) {
-        (DiffNavigationDirection::Previous, Some(range)) => changes
-            .iter()
-            .rposition(|row| *row < range.end)
-            .unwrap_or(changes.len() - 1),
-        (DiffNavigationDirection::Next, Some(range)) => changes
-            .iter()
-            .position(|row| *row >= range.start)
-            .unwrap_or(0),
-        (DiffNavigationDirection::Previous, None) => changes.len() - 1,
-        (DiffNavigationDirection::Next, None) => 0,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn diff_navigation_wraps_at_both_ends() {
-        let changes = [2, 8, 15];
-        let visible = 0..20;
-
-        assert_eq!(
-            0,
-            diff_navigation_index(
-                Some(2),
-                &changes,
-                Some(&visible),
-                DiffNavigationDirection::Next
-            )
-        );
-        assert_eq!(
-            2,
-            diff_navigation_index(
-                Some(0),
-                &changes,
-                Some(&visible),
-                DiffNavigationDirection::Previous
-            )
-        );
-    }
-
-    #[test]
-    fn diff_navigation_resumes_from_the_visible_rows_after_manual_scroll() {
-        let changes = [2, 8, 15, 24];
-        let visible = 12..20;
-
-        assert_eq!(
-            2,
-            diff_navigation_index(
-                Some(0),
-                &changes,
-                Some(&visible),
-                DiffNavigationDirection::Next
-            )
-        );
-        assert_eq!(
-            2,
-            diff_navigation_index(
-                Some(3),
-                &changes,
-                Some(&visible),
-                DiffNavigationDirection::Previous
-            )
-        );
     }
 }

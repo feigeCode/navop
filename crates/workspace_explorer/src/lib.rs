@@ -7,7 +7,6 @@
 rust_i18n::i18n!("locales", fallback = "en");
 
 mod backend;
-pub mod diff;
 mod editor;
 mod explorer;
 mod file_system;
@@ -17,9 +16,6 @@ mod theme;
 
 pub use backend::{
     ContainerBackend, LocalBackend, WorkspaceBackend, container_backend, local_backend,
-};
-pub use diff::{
-    AlignedDiffSide, DiffLine, DiffLineKind, DiffRow, DiffTextSpanKind, SideBySideDiff,
 };
 pub use editor::{GitDiffRequest, WorkspaceEditor, WorkspaceEditorEvent};
 pub use explorer::{

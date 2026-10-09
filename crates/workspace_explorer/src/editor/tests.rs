@@ -21,12 +21,10 @@ fn file_size_is_compact() {
 }
 
 #[test]
-fn diff_documents_are_read_only_and_use_diff_language() {
-    let document =
-        LoadedDocument::from_diff("@@ -1 +1 @@\n-old\n+new\n".to_string(), "text".to_string());
+fn diff_documents_are_read_only() {
+    let document = LoadedDocument::from_diff("@@ -1 +1 @@\n-old\n+new\n".to_string());
 
     assert!(document.read_only);
-    assert_eq!("diff", document.language);
     assert!(matches!(document.policy, DocumentPolicy::Diff));
 }
 
@@ -170,12 +168,11 @@ fn test_theme() -> WorkspaceTheme {
 }
 
 #[test]
-fn snapshot_diff_documents_are_read_only_without_side_by_side() {
+fn snapshot_diff_documents_are_read_only() {
     let document = LoadedDocument::from_snapshot_diff("diff --git a/x b/x\n".to_string());
 
     assert!(document.read_only);
     assert!(matches!(document.policy, DocumentPolicy::Diff));
-    assert_eq!(None, document.diff_language, "整轮多文件不做双栏对齐");
 }
 
 #[gpui::test]

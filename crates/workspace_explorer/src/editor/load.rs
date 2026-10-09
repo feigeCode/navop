@@ -1,27 +1,20 @@
 use super::{
-    DIFF_LANGUAGE, DiffEditors, DocumentKey, DocumentPolicy, EditorTab, GitDiffRequest,
-    LoadRequest, LoadedDocument, PendingDocument, WorkspaceEditor, WorkspaceEditorEvent,
-    display_name,
-};
-use crate::diff::{
-    AlignedDiffSide, AlignedSpanKind, DiffTextSpanKind, aligned_side_by_side, aligned_span_ranges,
-    diff_text_spans, parse_side_by_side,
+    DocumentKey, DocumentPolicy, EditorTab, GitDiffRequest, LoadRequest, LoadedDocument,
+    PendingDocument, WorkspaceEditor, WorkspaceEditorEvent, display_name,
 };
 use crate::editor::markdown::create_markdown_editor;
 use crate::git::load_diff;
 use crate::model::active_index_after_open;
-use gpui::{
-    AppContext as _, AsyncApp, Context, Entity, Hsla, Pixels, Task, WeakEntity, Window, px,
-};
+use gpui::{AppContext as _, AsyncApp, Context, Entity, Task, WeakEntity, Window};
 use gpui_component::{
     WindowExt as _,
-    input::{EditorState, InputEvent, RangeDecoration, RangeDecorationStyle},
+    diff::{DiffFile, DiffMode, DiffState},
+    input::{EditorState, InputEvent},
     notification::Notification,
 };
 use one_ui::StatusPresentation;
 use rust_i18n::t;
 use std::path::PathBuf;
-use std::rc::Rc;
 
 impl WorkspaceEditor {
     pub fn open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
@@ -194,21 +187,12 @@ impl WorkspaceEditor {
                 let repository = repository.clone();
                 let change = change.clone();
                 cx.background_spawn(async move {
-                    ensure_diff_language();
-                    let language = remote_file_editor::load_language_for_path(
-                        &change.path.to_string_lossy(),
-                        false,
-                    )?;
-                    load_diff(&repository, &change)
-                        .map(|diff| LoadedDocument::from_diff(diff, language))
+                    load_diff(&repository, &change).map(LoadedDocument::from_diff)
                 })
             }
             LoadRequest::SnapshotDiff { text } => {
                 let document = LoadedDocument::from_snapshot_diff(text.clone());
-                cx.background_spawn(async move {
-                    ensure_diff_language();
-                    anyhow::Ok(document)
-                })
+                cx.background_spawn(async move { anyhow::Ok(document) })
             }
         };
 
@@ -240,12 +224,13 @@ impl WorkspaceEditor {
         };
         let document = completion.document;
         let initial_text = document.text.clone();
-        let diff_language = document.diff_language.clone();
+        let is_diff = matches!(document.policy, DocumentPolicy::Diff);
         let markdown_path = match (&tab.key, document.policy) {
             (DocumentKey::File(path), DocumentPolicy::Markdown) => Some(path.clone()),
             _ => None,
         };
-        let editor = markdown_path.is_none().then(|| {
+        // diff 不再走编辑器:渲染全部交给 Diff 组件(见下方 `diff_state`)。
+        let editor = (markdown_path.is_none() && !is_diff).then(|| {
             cx.new(|cx| {
                 let mut state = EditorState::new(window, cx)
                     .language(document.language)
@@ -277,104 +262,15 @@ impl WorkspaceEditor {
         tab.saved_text = document.text;
         tab.file_size = document.file_size;
         tab.policy = document.policy;
-        tab.diff = match tab.policy {
-            DocumentPolicy::Diff => {
-                let parsed = parse_side_by_side(&tab.saved_text);
-                (!parsed.rows.is_empty()).then(|| Rc::new(parsed))
-            }
-            _ => None,
+        tab.diff_state = if is_diff {
+            build_diff_state(&tab.saved_text, tab.diff_side_by_side, cx)
+        } else {
+            None
         };
-        // diff 的三种行背景。直接复用工作区主题已有的语义色，不为 diff 另开一套：
-        // `danger` / `success` 在应用主题里是饱和的红绿，压到 20% 铺在背景上依然
-        // 一眼可辨；`muted` 本来就是"比背景略深一层"的表面色，正好用来表示
-        // "这一侧没有对应行"。
-        let removed_background = self.theme.danger.opacity(0.20);
-        let added_background = self.theme.success.opacity(0.20);
-        let gap_background = self.theme.muted;
-        tab.diff_change_cursor = None;
-        // 单栏视图(`tab.editor`)上的底色。并排两栏各自带装饰，退回单栏
-        //（整轮快照 diff 恒为单栏；单文件 diff 关掉「并排对比」后也是单栏）
-        // 时若不补这一份，整屏就只剩黑白文本，看不出哪行增、哪行删。
-        tab.diff_spans = match (editor.as_ref(), tab.policy) {
-            (Some(editor), DocumentPolicy::Diff) => {
-                let decorations = diff_text_decorations(
-                    &tab.saved_text,
-                    removed_background,
-                    added_background,
-                    gap_background,
-                );
-                Some(editor.update(cx, |state, cx| {
-                    state.create_range_decorations_collection(decorations, cx)
-                }))
-            }
-            _ => None,
-        };
-        tab.diff_editors = match (&tab.diff, diff_language) {
-            (Some(diff), Some(language)) => {
-                let (left_side, right_side) = aligned_side_by_side(diff);
-                // 行背景必须赶在 `set_value` 之前算出来：那一步会把两侧文本移进
-                // 编辑器，之后就借不出 `changed` / `placeholders` 了。
-                let left_decorations =
-                    diff_span_decorations(&left_side, removed_background, gap_background);
-                let right_decorations =
-                    diff_span_decorations(&right_side, added_background, gap_background);
-                let left_language = language.clone();
-                let left = cx.new(|cx| {
-                    let mut state = EditorState::new(window, cx)
-                        .language(left_language)
-                        .folding(false)
-                        .line_number(true)
-                        .searchable(true)
-                        .soft_wrap(false);
-                    state.set_value(left_side.text, window, cx);
-                    state
-                });
-                let right = cx.new(|cx| {
-                    let mut state = EditorState::new(window, cx)
-                        .language(language)
-                        .folding(false)
-                        .line_number(true)
-                        .searchable(true)
-                        .soft_wrap(false);
-                    state.set_value(right_side.text, window, cx);
-                    state
-                });
-                // 并排本身只把两份对齐文本摆在一起，不含任何"这里不一样"的信息：
-                // `changed` / `placeholders` 算出来了却没人用，用户看到的就是两栏
-                // 一模一样的黑白代码。挂上填充装饰，左栏变更行是删除色、右栏是新增
-                // 色、没有对应行的那一侧是补白色。
-                let left_spans = left.update(cx, |state, cx| {
-                    state.create_range_decorations_collection(left_decorations, cx)
-                });
-                let right_spans = right.update(cx, |state, cx| {
-                    state.create_range_decorations_collection(right_decorations, cx)
-                });
-                Some(DiffEditors {
-                    left,
-                    right,
-                    _left_spans: left_spans,
-                    _right_spans: right_spans,
-                })
-            }
-            _ => None,
-        };
-        // 并排模式必须真的有并排数据才成立。快照 diff（整轮多文件）刻意不做双栏
-        // 对齐，`diff_editors` 因此是 `None`；若这里留着 `EditorTab::new` 的默认
-        // `true`，`render_body` 会跳过并排落到单栏，而工具栏「并排对比」仍显示为
-        // 已开启——按钮在撒谎，点它也只是把它关掉，视口毫无变化。
-        tab.diff_side_by_side = tab.diff_editors.is_some();
-        // 并排两栏是同一份内容逐行对齐的结果，各滚各的会让"并排对比"失去意义。
-        // 只同步纵向：占位行已经把两栏补到同样多行，纵向偏移天然一一对应；横向
-        // 留给各自——两侧内容宽度不同，强行对齐只会把窄的那栏推进空白。
-        if let Some(editors) = tab.diff_editors.as_ref() {
-            tab.subscriptions.push(cx.observe(&editors.left, {
-                let target = editors.right.clone();
-                move |_this, source, cx| sync_scroll(source, &target, cx)
-            }));
-            tab.subscriptions.push(cx.observe(&editors.right, {
-                let target = editors.left.clone();
-                move |_this, source, cx| sync_scroll(source, &target, cx)
-            }));
+        if let Some(diff_state) = tab.diff_state.as_ref() {
+            // 组件内部会异步准备行布局与语法高亮,完成后需要重渲染。
+            tab.subscriptions
+                .push(cx.observe(diff_state, |_, _, cx| cx.notify()));
         }
         tab.loading = false;
         tab.saving = false;
@@ -433,120 +329,44 @@ fn loaded_status(policy: DocumentPolicy) -> std::borrow::Cow<'static, str> {
     }
 }
 
-/// 把对齐结果里需要提示的行变成编辑器行背景。
+/// 从 patch 原文构建 Diff 组件状态。
 ///
-/// 只画变更行与占位行：两侧相同的行不需要任何标记，给每一行都铺底色反而会
-/// 稀释真正的差异。
-fn diff_span_decorations(
-    side: &AlignedDiffSide,
-    changed_background: Hsla,
-    placeholder_background: Hsla,
-) -> Vec<RangeDecoration> {
-    aligned_span_ranges(side)
+/// 渲染(行对齐、增删底色、行号、Split/Unified、语法高亮、虚拟滚动)全部由
+/// 组件负责,这里只负责把 patch 文本喂进去,并按文件扩展名标注语言——组件的
+/// 语言表认小写扩展名并自带别名映射(`rs` → `rust` 等),对不上号就只少一层
+/// 高亮。解析失败(空 patch、坏 patch)返回 `None`,渲染层落到「空 diff」。
+fn build_diff_state(
+    text: &str,
+    side_by_side: bool,
+    cx: &mut Context<WorkspaceEditor>,
+) -> Option<Entity<DiffState>> {
+    let files: Vec<DiffFile> = DiffFile::parse(text)
+        .ok()?
         .into_iter()
-        .filter_map(|(range, kind)| {
-            let color = match kind {
-                AlignedSpanKind::Context => return None,
-                AlignedSpanKind::Changed => changed_background,
-                AlignedSpanKind::Placeholder => placeholder_background,
-            };
-            Some(
-                RangeDecoration::new(range)
-                    .with_style(RangeDecorationStyle::Fill)
-                    .with_color(color),
-            )
+        .map(|file| {
+            let language = language_name_for_path(file.path());
+            match language {
+                Some(language) => file.with_language(language),
+                None => file,
+            }
         })
-        .collect()
-}
-
-/// 单栏 diff 原文的行背景：新增、删除、以及 `diff --git` / `@@` 段落标记。
-///
-/// 与并排两栏同一套语义色，区别只在输入：这里吃的是 patch 原文，不需要事先
-/// 对齐。段落标记用 `muted`——整轮多文件 diff 是单栏的一整片文本，没有这层
-/// 标记就找不到文件与 hunk 的边界。
-fn diff_text_decorations(
-    diff: &str,
-    removed_background: Hsla,
-    added_background: Hsla,
-    marker_background: Hsla,
-) -> Vec<RangeDecoration> {
-    diff_text_spans(diff)
-        .into_iter()
-        .map(|(range, kind)| {
-            let color = match kind {
-                DiffTextSpanKind::Added => added_background,
-                DiffTextSpanKind::Removed => removed_background,
-                DiffTextSpanKind::Marker => marker_background,
-            };
-            RangeDecoration::new(range)
-                .with_style(RangeDecorationStyle::Fill)
-                .with_color(color)
-        })
-        .collect()
-}
-
-/// 确保只读 diff 视图用的语法已加载。
-///
-/// 调用方是 `background_spawn` 的任务：加载要编译 tree-sitter wasm，放在 UI
-/// 线程上会卡住整帧。
-///
-/// 失败只记日志、不打断加载——语法高亮是锦上添花，diff 原文本身仍然可读；
-/// 反过来让「语法扩展损坏」变成「diff 打不开」才是真的糟。
-fn ensure_diff_language() {
-    if let Err(error) = remote_file_editor::load_language(DIFF_LANGUAGE) {
-        tracing::warn!(
-            language = DIFF_LANGUAGE,
-            %error,
-            "failed to load the grammar for the read-only diff view"
-        );
-    }
-}
-
-/// 需要写进目标栏的纵向偏移；`None` 表示两栏已在容差内对齐。
-///
-/// 抽成纯函数是为了让它可测：真正落笔要经过 `Entity`，而"什么时候**不该**写"
-/// 才是容易出错的地方。
-fn scroll_sync_target(source_y: Pixels, target_y: Pixels) -> Option<Pixels> {
-    if (target_y - source_y).abs() < px(SCROLL_SYNC_TOLERANCE) {
+        .collect();
+    if files.is_empty() {
         return None;
     }
-    Some(source_y)
-}
-
-/// 两栏纵向偏移的容差。`set_scroll_offset` 会被各自视口高度 clamp，边界处可能
-/// 差出亚像素；不留容差，两栏就会互相推来推去。
-const SCROLL_SYNC_TOLERANCE: f32 = 0.5;
-
-/// 把并排栏的纵向滚动对齐到另一栏。
-///
-/// 写入是"先比较、相等就跳过"，所以不需要防重入标志：`set_scroll_offset` 要到
-/// 下次布局才生效，而 `update_scroll_offset` 在偏移没变时不会 `notify`，回环
-/// 自然终止。
-fn sync_scroll(
-    source: Entity<EditorState>,
-    target: &Entity<EditorState>,
-    cx: &mut Context<WorkspaceEditor>,
-) {
-    let source_y = source.read(cx).scroll_offset().y;
-    let mut offset = target.read(cx).scroll_offset();
-    let Some(target_y) = scroll_sync_target(source_y, offset.y) else {
-        return;
+    let mode = if side_by_side {
+        DiffMode::Split
+    } else {
+        DiffMode::Unified
     };
-    offset.y = target_y;
-    target.update(cx, |state, cx| state.set_scroll_offset(offset, cx));
+    Some(cx.new(|cx| DiffState::new(files, cx).with_mode(mode)))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn scroll_sync_ignores_subpixel_drift_but_follows_real_moves() {
-        // clamp 造成的亚像素差不该触发写入，否则两栏会互相推。
-        assert_eq!(None, scroll_sync_target(px(120.0), px(120.4)));
-        assert_eq!(None, scroll_sync_target(px(120.0), px(120.0)));
-        // 真正的滚动必须跟随，向上向下两个方向都算。
-        assert_eq!(Some(px(240.0)), scroll_sync_target(px(240.0), px(120.0)));
-        assert_eq!(Some(px(0.0)), scroll_sync_target(px(0.0), px(120.0)));
+/// 文件扩展名的小写形式,作为组件语法高亮的语言名。
+fn language_name_for_path(path: &str) -> Option<String> {
+    let extension = path.rsplit_once('.')?.1;
+    if extension.is_empty() || extension.contains('/') || extension.contains('\\') {
+        return None;
     }
+    Some(extension.to_lowercase())
 }

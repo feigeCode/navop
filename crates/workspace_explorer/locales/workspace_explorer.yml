@@ -26,10 +26,6 @@ WorkspaceExplorer:
       en: Side by side
       zh-CN: 并排对比
       zh-HK: 並排對比
-    side_by_side_unavailable:
-      en: "Only a single file's diff can be compared side by side"
-      zh-CN: 只有单个文件的差异能并排对比
-      zh-HK: 只有單一檔案的差異能並排對比
     previous_change:
       en: Previous change
       zh-CN: 上一个变更
@@ -174,18 +170,6 @@ WorkspaceExplorer:
       zh-CN: "%{name}（差异）"
       zh-HK: "%{name}（差異）"
   diff:
-    change_count:
-      en: "%{count} changes"
-      zh-CN: "%{count} 处变更"
-      zh-HK: "%{count} 處變更"
-    before:
-      en: HEAD
-      zh-CN: HEAD 版本
-      zh-HK: HEAD 版本
-    after:
-      en: Working tree
-      zh-CN: 当前文件
-      zh-HK: 目前檔案
     empty:
       en: No changes compared to HEAD
       zh-CN: 与 HEAD 相比没有差异

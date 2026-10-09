@@ -1,13 +1,12 @@
-use super::{
-    DiffEditors, DocumentPolicy, WORKSPACE_EDITOR_KEY_CONTEXT, WorkspaceEditor, format_size,
-};
+use super::{DocumentPolicy, WORKSPACE_EDITOR_KEY_CONTEXT, WorkspaceEditor, format_size};
 use gpui::{
     AnyElement, Context, InteractiveElement as _, IntoElement, ParentElement as _, Render,
-    SharedString, Styled as _, Window, div, prelude::FluentBuilder as _, px,
+    SharedString, Styled as _, Window, div,
 };
 use gpui_component::{
     Disableable as _, Selectable as _, Sizable as _, Size,
     button::{Button, ButtonVariants as _},
+    diff::Diff,
     h_flex,
     input::Editor,
     tab::{Tab, TabBar},
@@ -72,16 +71,15 @@ impl WorkspaceEditor {
             return div().into_any_element();
         }
         let read_only = tab.is_none_or(|tab| tab.read_only);
+        // 编辑器相关动作(保存/查找/替换)要求有 `EditorState`——diff 视图没有，
+        // 由 Diff 组件负责渲染。
         let unavailable = tab.is_none_or(|tab| tab.loading || tab.saving || tab.editor.is_none());
+        // 重新加载只重发一次 load_request,diff 视图同样适用。
+        let reload_unavailable = tab.is_none_or(|tab| tab.loading || tab.saving);
         let soft_wrap = tab.is_some_and(|tab| tab.soft_wrap);
-        // 「并排对比」只在真有并排数据时才可用：快照 diff（整轮多文件）刻意不做
-        // 双栏对齐，对它保持可点只会让按钮亮起来而屏上毫无变化。
-        let side_by_side_available = tab.is_some_and(|tab| tab.diff_editors.is_some());
+        // Diff 组件原生支持多文件 Split,单文件与整轮快照 diff 都能并排。
+        let side_by_side_available = tab.is_some_and(|tab| tab.diff_state.is_some());
         let side_by_side = side_by_side_available && tab.is_some_and(|tab| tab.diff_side_by_side);
-        let diff_change_count = tab
-            .and_then(|tab| tab.diff.as_ref())
-            .map_or(0, |diff| crate::diff::change_starts(diff).len());
-        let has_diff_changes = diff_change_count > 0;
         h_flex()
             .items_center()
             .gap_2()
@@ -93,7 +91,7 @@ impl WorkspaceEditor {
             .child(self.toolbar_button(EditorAction::Save, unavailable || read_only, cx))
             .child(self.toolbar_button(EditorAction::Search, unavailable, cx))
             .child(self.toolbar_button(EditorAction::Replace, unavailable || read_only, cx))
-            .child(self.toolbar_button(EditorAction::Reload, unavailable, cx))
+            .child(self.toolbar_button(EditorAction::Reload, reload_unavailable, cx))
             .child(
                 Button::new("workspace-diff-view")
                     .label(t!("WorkspaceExplorer.action.side_by_side"))
@@ -101,14 +99,6 @@ impl WorkspaceEditor {
                     .with_size(Size::Small)
                     .custom(self.theme.button_style(cx))
                     .disabled(!side_by_side_available)
-                    // 灰掉的按钮得把原因说出来：整轮 diff 是多文件，逐行对齐没有
-                    // 意义（双栏会拿第一个文件去对第二份文件的内容）。不解释的话
-                    // 用户只会看到「并排对比」点不动。
-                    .when(!side_by_side_available, |button| {
-                        button.tooltip(
-                            t!("WorkspaceExplorer.action.side_by_side_unavailable").to_string(),
-                        )
-                    })
                     .on_click(cx.listener(|this, _, _window, cx| {
                         this.toggle_diff_view(cx);
                     })),
@@ -116,7 +106,7 @@ impl WorkspaceEditor {
             .child(
                 IconButton::new("workspace-diff-previous", IconName::ArrowUp)
                     .tooltip(t!("WorkspaceExplorer.action.previous_change"))
-                    .disabled(unavailable || !side_by_side || !has_diff_changes)
+                    .disabled(!side_by_side)
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.previous_diff_change(cx);
                     })),
@@ -124,25 +114,11 @@ impl WorkspaceEditor {
             .child(
                 IconButton::new("workspace-diff-next", IconName::ArrowDown)
                     .tooltip(t!("WorkspaceExplorer.action.next_change"))
-                    .disabled(unavailable || !side_by_side || !has_diff_changes)
+                    .disabled(!side_by_side)
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.next_diff_change(cx);
                     })),
             )
-            .when(side_by_side, |this| {
-                this.child(
-                    div()
-                        .text_xs()
-                        .text_color(self.theme.muted_foreground)
-                        .child(
-                            t!(
-                                "WorkspaceExplorer.diff.change_count",
-                                count = diff_change_count
-                            )
-                            .to_string(),
-                        ),
-                )
-            })
             .child(
                 Button::new("workspace-wrap")
                     .label(t!("WorkspaceExplorer.action.soft_wrap"))
@@ -221,10 +197,17 @@ impl WorkspaceEditor {
             return ContentState::empty(t!("WorkspaceExplorer.diff.empty").to_string())
                 .into_any_element();
         }
-        if tab.diff_side_by_side {
-            if let Some(editors) = tab.diff_editors.as_ref() {
-                return self.render_diff_view(editors);
-            }
+        if let Some(diff_state) = tab.diff_state.as_ref() {
+            // Diff 组件自己滚动、自己虚拟化,给它一个有界的 flex 区域即可。
+            // 文件头(路径 + 增删统计)由组件绘制。
+            return v_flex()
+                .size_full()
+                .min_h_0()
+                .min_w_0()
+                .child(
+                    Diff::new(diff_state).size_full(),
+                )
+                .into_any_element();
         }
         match tab.editor.as_ref() {
             Some(editor) => v_flex()
@@ -242,76 +225,6 @@ impl WorkspaceEditor {
                 .into_any_element(),
             None => v_flex().size_full().into_any_element(),
         }
-    }
-
-    fn render_diff_view(&self, editors: &DiffEditors) -> AnyElement {
-        let theme = self.theme;
-        // Built once: both panes paint the same palette, and the highlight
-        // theme behind it is not worth constructing twice a frame.
-        let editor_style = theme.editor_style();
-        v_flex()
-            .size_full()
-            .min_h_0()
-            .child(
-                h_flex()
-                    .w_full()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .bg(theme.muted)
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .px_2()
-                            .py_1()
-                            .truncate()
-                            .child(t!("WorkspaceExplorer.diff.before")),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .px_2()
-                            .py_1()
-                            .truncate()
-                            .border_l_1()
-                            .border_color(theme.border)
-                            .child(t!("WorkspaceExplorer.diff.after")),
-                    ),
-            )
-            .child(
-                h_flex()
-                    .flex_1()
-                    .min_h_0()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .child(
-                        div().flex_1().min_w_0().h_full().overflow_hidden().child(
-                            Editor::new(&editors.left)
-                                .size_full()
-                                .readonly(true)
-                                .bordered(false)
-                                .editor_style(editor_style.clone())
-                                .bg(theme.background)
-                                .text_color(theme.foreground),
-                        ),
-                    )
-                    .child(div().w(px(1.0)).h_full().flex_none().bg(theme.border))
-                    .child(
-                        div().flex_1().min_w_0().h_full().overflow_hidden().child(
-                            Editor::new(&editors.right)
-                                .size_full()
-                                .readonly(true)
-                                .bordered(false)
-                                .editor_style(editor_style.clone())
-                                .bg(theme.background)
-                                .text_color(theme.foreground),
-                        ),
-                    ),
-            )
-            .into_any_element()
     }
 
     fn render_load_error(&self, error: &str) -> gpui::AnyElement {
