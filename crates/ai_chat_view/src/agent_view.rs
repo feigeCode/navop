@@ -2623,8 +2623,37 @@ impl AgentChatView {
             mentions,
             images,
         };
-        if self.running_sessions.contains(&session_uid) {
+        // steer：ACP 会话正在跑一轮、队列为空时，新提交**并发发出去**而不是排队。
+        // 轮次能跑几十分钟（实测 182 分钟），排队等不起；ACP 允许同会话并发
+        // prompt（插话），agent 不支持时会以该轮 TurnFailed 浮出，旧轮不受影响。
+        // 有排队时仍走 FIFO——插队会破坏已排消息的顺序。
+        let steer_in_flight_turn = self.backend == Backend::Acp
+            && self.running_sessions.contains(&session_uid)
+            && self.acp_session_has_foreground_turn(&session_uid)
+            && self.pending_submissions.len(&session_uid) == 0
+            && !self.acp_connecting
+            && self.acp_pending.is_none()
+            && self.acp_session_transition_phase(&session_uid).is_none();
+        if self.running_sessions.contains(&session_uid) && !steer_in_flight_turn {
             self.enqueue_submission(&session_uid, submission, cx);
+            return;
+        }
+        if steer_in_flight_turn {
+            self.push_user_to_session(
+                &session_uid,
+                &submission.text,
+                submission.images.len(),
+                &self.resources.clone(),
+            );
+            self.push_system_to_session(
+                &session_uid,
+                t!("AgentUi.acp_steer_sent").to_string(),
+            );
+            self.request_scroll_to_bottom();
+            // 直接发；发不出去（连接问题等）就退回排队语义。
+            if self.start_submission(&session_uid, &submission, cx) == SubmissionStart::RetryLater {
+                self.enqueue_submission(&session_uid, submission, cx);
+            }
             return;
         }
 
@@ -8342,6 +8371,49 @@ mod tests {
             assert!(
                 !view.acp_turn_owners.is_empty(),
                 "没确证结束就不该动 owner —— 动了等于把这一轮白送给下一条消息"
+            );
+        });
+    }
+
+    /// steer：ACP 前台轮次在飞时提交新消息，不排队、直接插入在飞轮次。
+    /// 连接不在时退回排队语义（RetryLater），消息不丢。
+    #[gpui::test]
+    fn steering_submission_while_acp_turn_in_flight(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update(cx, |view, cx| {
+            view.backend = Backend::Acp;
+            let session_uid = view.current_session.clone();
+            view.acp_turn_owners = vec![AcpTurnOwner {
+                event_session_id: SessionId::from_string("acp:steer"),
+                session_uid: session_uid.clone(),
+                turn_id: TurnId::from_string("turn-steer"),
+                backgrounded: false,
+                cancel_requested: false,
+            }];
+            view.set_session_running(&session_uid, true, cx);
+
+            // 无连接：steer 发送会失败退回排队，但用户消息与插话提示都已落转录。
+            view.submit(
+                "插一句：别忘了看并发测试".to_string(),
+                Vec::new(),
+                Vec::new(),
+                cx,
+            );
+
+            assert!(
+                view.acp_turn_owners.iter().any(|owner| owner.turn_id.as_str() == "turn-steer"),
+                "原在飞轮次的 owner 不受插话影响"
+            );
+            assert!(
+                view.transcript.messages.iter().any(|message| message
+                    .content
+                    .contains("插一句")),
+                "插话消息应落进当前转录"
             );
         });
     }
@@ -16363,6 +16435,21 @@ mod acp_reconnect_tests {
         // 上限：继续翻倍没有意义，且会撑大延迟。
         assert_eq!(Duration::from_millis(4800), acp_reconnect_delay(3));
         assert_eq!(Duration::from_millis(4800), acp_reconnect_delay(99));
+    }
+
+    #[test]
+    fn in_flight_turns_block_reconnect_and_resume_after_turn_owners_clear() {
+        // 连接断在轮次进行中：agent 那边还挂着我们的 turn，此刻拉新进程只会
+        // 得到一个「同样的对话开第二个进程」。有 owner 在就让路，等轮次收尾。
+        assert_eq!(
+            AcpReconnectDecision::Idle,
+            acp_reconnect_decision(true, true, true, true, 0)
+        );
+        // 轮次收尾（owner 清空）后：恢复重连。
+        assert_eq!(
+            AcpReconnectDecision::Reconnect,
+            acp_reconnect_decision(true, true, false, true, 0)
+        );
     }
 }
 

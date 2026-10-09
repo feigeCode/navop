@@ -77,12 +77,25 @@ pub(super) fn handle_notification(
         return Ok(());
     }
 
-    // 按协议会话 id路由：这条通知归属哪条会话的在飞轮次，就喂谁的 tracker。
-    // 后台会话的轮次照样被 observe（卡死判据不能因为切走会话就失明）。
+    // 按协议会话 id 路由：这条通知归属哪条会话，就喂那条会话**所有**在飞轮次的
+    // tracker（steer 后同会话可能多轮并存，卡死判据每轮都要看）；事件归属取
+    // 最新注册的一轮。后台会话的轮次照样被 observe。
     let active = context.active_turn.lock().ok().and_then(|mut active| {
-        let tracker = active.get_mut(&acp_session_id)?;
-        tracker.observe(&notification.update);
-        Some(tracker.turn_id().clone())
+        let mut newest: Option<(std::time::Instant, TurnId)> = None;
+        for tracker in active
+            .values_mut()
+            .filter(|tracker| tracker.protocol_session_id() == acp_session_id)
+        {
+            tracker.observe(&notification.update);
+            let registered = tracker.registered_at();
+            if newest
+                .as_ref()
+                .is_none_or(|(current, _)| registered > *current)
+            {
+                newest = Some((registered, tracker.turn_id().clone()));
+            }
+        }
+        newest.map(|(_, turn_id)| turn_id)
     });
     // 交互状态只认交互会话：后台会话的标题/模式/用量不能污染前台 UI。
     let is_interactive = context

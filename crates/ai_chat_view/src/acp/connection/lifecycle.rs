@@ -100,8 +100,8 @@ mod tests {
         let active_turn = {
             let mut map = HashMap::new();
             map.insert(
-                "ses_main".to_string(),
-                AcpTurnTracker::new(turn_id.clone()),
+                turn_id.as_str().to_string(),
+                AcpTurnTracker::new(turn_id.clone(), "ses_main".to_string()),
             );
             Arc::new(Mutex::new(map))
         };

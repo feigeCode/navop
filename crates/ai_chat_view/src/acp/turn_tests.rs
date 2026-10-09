@@ -8,7 +8,7 @@ use super::turn::{AcpTurnTracker, TurnOutcome, TurnProgress};
 
 #[test]
 fn successful_rpc_without_agent_output_is_empty_response() {
-    let tracker = AcpTurnTracker::new(TurnId::from_string("turn"));
+    let tracker = AcpTurnTracker::new(TurnId::from_string("turn"), "ses_main".to_string());
 
     assert_eq!(
         TurnOutcome::EmptyResponse,
@@ -18,7 +18,7 @@ fn successful_rpc_without_agent_output_is_empty_response() {
 
 #[test]
 fn tool_activity_makes_the_turn_successful() {
-    let mut tracker = AcpTurnTracker::new(TurnId::from_string("turn"));
+    let mut tracker = AcpTurnTracker::new(TurnId::from_string("turn"), "ses_main".to_string());
     tracker.observe(&SessionUpdate::ToolCall(ToolCall::new("call", "Read file")));
 
     assert_eq!(
@@ -29,7 +29,7 @@ fn tool_activity_makes_the_turn_successful() {
 
 #[test]
 fn empty_assistant_text_is_not_valid_output() {
-    let mut tracker = AcpTurnTracker::new(TurnId::from_string("turn"));
+    let mut tracker = AcpTurnTracker::new(TurnId::from_string("turn"), "ses_main".to_string());
     tracker.observe(&SessionUpdate::AgentMessageChunk(ContentChunk::new(
         ContentBlock::Text(TextContent::new("")),
     )));
@@ -42,7 +42,7 @@ fn empty_assistant_text_is_not_valid_output() {
 
 #[test]
 fn cancelled_stop_reason_is_cancelled() {
-    let tracker = AcpTurnTracker::new(TurnId::from_string("turn"));
+    let tracker = AcpTurnTracker::new(TurnId::from_string("turn"), "ses_main".to_string());
 
     assert_eq!(
         TurnOutcome::Cancelled,
@@ -69,7 +69,7 @@ fn progress_of(tracker: &AcpTurnTracker) -> TurnProgress {
 
 #[test]
 fn a_started_tool_is_inflight_and_stops_being_inflight_when_it_settles() {
-    let mut tracker = AcpTurnTracker::new(TurnId::from_string("turn"));
+    let mut tracker = AcpTurnTracker::new(TurnId::from_string("turn"), "ses_main".to_string());
 
     tracker.observe(&tool_call("call", ToolCallStatus::InProgress));
     assert_eq!(1, progress_of(&tracker).inflight_tools);
@@ -84,7 +84,7 @@ fn a_started_tool_is_inflight_and_stops_being_inflight_when_it_settles() {
 
 #[test]
 fn a_pending_tool_counts_as_inflight_because_it_is_waiting_on_approval() {
-    let mut tracker = AcpTurnTracker::new(TurnId::from_string("turn"));
+    let mut tracker = AcpTurnTracker::new(TurnId::from_string("turn"), "ses_main".to_string());
 
     // `Pending` 的语义是「入参还在流，或者正在等审批」——agent 在等外部条件，不是卡死。
     tracker.observe(&tool_call("call", ToolCallStatus::Pending));
@@ -94,7 +94,7 @@ fn a_pending_tool_counts_as_inflight_because_it_is_waiting_on_approval() {
 
 #[test]
 fn a_failed_tool_is_no_longer_inflight() {
-    let mut tracker = AcpTurnTracker::new(TurnId::from_string("turn"));
+    let mut tracker = AcpTurnTracker::new(TurnId::from_string("turn"), "ses_main".to_string());
 
     tracker.observe(&tool_call("call", ToolCallStatus::InProgress));
     tracker.observe(&tool_status("call", ToolCallStatus::Failed));
@@ -105,7 +105,7 @@ fn a_failed_tool_is_no_longer_inflight() {
 
 #[test]
 fn a_status_free_update_does_not_settle_a_running_tool() {
-    let mut tracker = AcpTurnTracker::new(TurnId::from_string("turn"));
+    let mut tracker = AcpTurnTracker::new(TurnId::from_string("turn"), "ses_main".to_string());
     tracker.observe(&tool_call("call", ToolCallStatus::InProgress));
 
     // 工具的输出是增量推送的：这些更新不带 status，必须原样保留在飞状态。
@@ -119,7 +119,7 @@ fn a_status_free_update_does_not_settle_a_running_tool() {
 
 #[test]
 fn concurrent_tools_are_counted_separately() {
-    let mut tracker = AcpTurnTracker::new(TurnId::from_string("turn"));
+    let mut tracker = AcpTurnTracker::new(TurnId::from_string("turn"), "ses_main".to_string());
 
     tracker.observe(&tool_call("first", ToolCallStatus::InProgress));
     tracker.observe(&tool_call("second", ToolCallStatus::InProgress));
@@ -134,7 +134,7 @@ fn concurrent_tools_are_counted_separately() {
 
 #[test]
 fn every_update_advances_the_progress_revision() {
-    let mut tracker = AcpTurnTracker::new(TurnId::from_string("turn"));
+    let mut tracker = AcpTurnTracker::new(TurnId::from_string("turn"), "ses_main".to_string());
     let before = progress_of(&tracker).revision;
 
     tracker.observe(&SessionUpdate::AgentMessageChunk(ContentChunk::new(
@@ -151,7 +151,7 @@ fn every_update_advances_the_progress_revision() {
 
 #[test]
 fn a_subscribed_receiver_sees_progress_published_after_it_subscribed() {
-    let mut tracker = AcpTurnTracker::new(TurnId::from_string("turn"));
+    let mut tracker = AcpTurnTracker::new(TurnId::from_string("turn"), "ses_main".to_string());
     let mut receiver = tracker.progress();
 
     tracker.observe(&tool_call("call", ToolCallStatus::InProgress));

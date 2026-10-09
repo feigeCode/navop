@@ -26,6 +26,10 @@ pub(crate) struct TurnProgress {
 #[derive(Clone, Debug)]
 pub(crate) struct AcpTurnTracker {
     turn_id: TurnId,
+    /// 这轮挂在哪条协议会话上；见 [`Self::protocol_session_id`]。
+    protocol_session_id: String,
+    /// 注册时刻（单调时钟，仅用于同会话多轮时比较新旧）。
+    registered_at: std::time::Instant,
     received_assistant_content: bool,
     received_reasoning: bool,
     received_tool_activity: bool,
@@ -37,9 +41,11 @@ pub(crate) struct AcpTurnTracker {
 }
 
 impl AcpTurnTracker {
-    pub(crate) fn new(turn_id: TurnId) -> Self {
+    pub(crate) fn new(turn_id: TurnId, protocol_session_id: String) -> Self {
         Self {
             turn_id,
+            protocol_session_id,
+            registered_at: std::time::Instant::now(),
             received_assistant_content: false,
             received_reasoning: false,
             received_tool_activity: false,
@@ -51,6 +57,20 @@ impl AcpTurnTracker {
 
     pub(crate) fn turn_id(&self) -> &TurnId {
         &self.turn_id
+    }
+
+    /// 这轮落在哪条协议会话上。
+    ///
+    /// steer 后同一协议会话可以同时挂多轮（插话轮 + 原轮），通知层凭它把
+    /// `session/update` 喂给同会话的**每一个**在飞 tracker，所以它长在 tracker
+    /// 身上而不是当表键用。
+    pub(crate) fn protocol_session_id(&self) -> &str {
+        &self.protocol_session_id
+    }
+
+    /// 注册时刻；同会话多轮并存时用来分辨「最新一轮」。
+    pub(crate) fn registered_at(&self) -> std::time::Instant {
+        self.registered_at
     }
 
     /// 订阅进展刻度。必须在 tracker 装进 `active_turn` **之后**用完就取，否则会漏掉

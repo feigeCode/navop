@@ -259,6 +259,14 @@ impl Session {
         *self.context_tokens.lock().expect("session 锁中毒")
     }
 
+    /// 外部 agent 报的上下文占用直接写入（ACP 的 `session/update` UsageUpdate）。
+    ///
+    /// 与 [`Self::record_token_usage`] 分开：那个从模型采样计量取值，这个的来源
+    /// 是 agent 推送的快照，语义都是「当前上下文占用了多少」，落同一个字段。
+    pub fn set_context_tokens(&self, tokens: Option<u64>) {
+        *self.context_tokens.lock().expect("session 锁中毒") = tokens;
+    }
+
     /// 会话当前指向的外部 agent 会话地址（没有就是本地会话）。
     pub fn acp_ref(&self) -> Option<AcpSessionRef> {
         self.acp.lock().expect("session 锁中毒").clone()

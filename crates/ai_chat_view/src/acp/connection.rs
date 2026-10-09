@@ -71,11 +71,12 @@ pub enum AcpConnectOutcome {
 /// 表的内容只活在本次连接内：连接被替换/收掉时随 `Arc` 一起消失。
 pub(crate) type AcpDetailSessions = Arc<Mutex<HashMap<String, SessionId>>>;
 
-/// 按协议会话 id 索引的**在飞轮次**表。
+/// 按轮次 id 索引的**在飞轮次**表。
 ///
-/// 单连接允许多条协议会话各自跑一轮（后台轮次）：用户「新建对话」或切走会话时，
-/// 旧会话的轮次继续在 agent 那边跑，输出继续回流。每条轮次的生死只看这张表，
-/// 不再是全局唯一的 `Option`。
+/// 单连接允许多条协议会话各自跑一轮（后台轮次），steer 还允许同一协议会话
+/// 同时挂多轮（插话轮 + 原轮）——所以键是全局唯一的 turn id，不是协议会话 id；
+/// 每条轮次落在哪条会话由 tracker 自己记（`protocol_session_id`）。每条轮次的
+/// 生死只看这张表，不再是全局唯一的 `Option`。
 pub(crate) type AcpActiveTurns = Arc<Mutex<HashMap<String, AcpTurnTracker>>>;
 
 /// 当前**交互会话**（`session/new`/`load`/`resume` 最新指向的那条协议会话）。
@@ -245,23 +246,23 @@ impl AcpConnection {
             .unwrap_or(AcpConnectionPhase::Closed)
     }
 
-    /// 连接此刻认领的轮次；`None` 表示该协议会话上没有任何 prompt 在飞。
+    /// 连接此刻在**交互会话**上认领的轮次；`None` 表示该协议会话上没有任何 prompt 在飞。
     ///
     /// 这是「这一轮到底结束没有」的**权威答案**——事件流是广播通道，会被挤掉，
     /// 视图侧靠事件推出来的 running 因此可能是过期的；`active_turn` 就在产出事件
     /// 的地方，不会落后。视图用它做丢事件之后的重同步判据，见
     /// [`AgentChatView::driver_reports_idle`](crate::agent_view)。
     ///
-    /// 后台轮次方案后按协议会话 id 查询：每条会话各自记账，互不挤占。
+    /// steer 后同一会话可能同时挂多轮：这里取**最新**注册的一轮，仅供重同步
+    /// 判据使用；事件路由不经过它。
     pub fn active_turn_id_for(&self, protocol_session_id: &str) -> Option<TurnId> {
-        self.active_turn
-            .lock()
-            .ok()
-            .and_then(|active| {
-                active
-                    .get(protocol_session_id)
-                    .map(|tracker| tracker.turn_id().clone())
-            })
+        self.active_turn.lock().ok().and_then(|active| {
+            active
+                .values()
+                .filter(|tracker| tracker.protocol_session_id() == protocol_session_id)
+                .max_by_key(|tracker| tracker.registered_at())
+                .map(|tracker| tracker.turn_id().clone())
+        })
     }
 
     /// 任一协议会话上是否还有在飞轮次（后台轮次含在内）。
@@ -274,11 +275,9 @@ impl AcpConnection {
     /// 视图侧重同步用：后台轮次后一张内置会话可能同时挂着多条协议会话的轮次，
     /// 只能按轮次问，不能按会话问。
     pub fn turn_is_active(&self, turn_id: &TurnId) -> bool {
-        self.active_turn.lock().is_ok_and(|active| {
-            active
-                .values()
-                .any(|tracker| tracker.turn_id() == turn_id)
-        })
+        self.active_turn
+            .lock()
+            .is_ok_and(|active| active.contains_key(turn_id.as_str()))
     }
 
     /// 本地放弃这一轮：agent 没有回终态，用户选择不再等。
@@ -294,14 +293,7 @@ impl AcpConnection {
         let Ok(mut active) = self.active_turn.lock() else {
             return false;
         };
-        let key = active
-            .iter()
-            .find(|(_, tracker)| tracker.turn_id() == turn_id)
-            .map(|(key, _)| key.clone());
-        let Some(key) = key else {
-            return false;
-        };
-        let removed = active.remove(&key).is_some();
+        let removed = active.remove(turn_id.as_str()).is_some();
         // 锁要分开取:`transition_state` 自己会再锁一次,持着锁调它会自锁。
         // 表空了才收相位:别的会话还有轮次在飞时,连接仍是「忙」的。
         let table_drained = active.is_empty();
@@ -402,15 +394,14 @@ pub(super) enum PromptCompletionClaim {
     Reclaimed,
 }
 
-/// 在在飞表里找到这个轮次所在的 key（协议会话 id）。
+/// 在在飞表里找到这个轮次的键（turn id 字符串）。
 fn active_turn_key(
     active: &HashMap<String, AcpTurnTracker>,
     expected_turn_id: &TurnId,
 ) -> Option<String> {
     active
-        .iter()
-        .find(|(_, tracker)| tracker.turn_id() == expected_turn_id)
-        .map(|(key, _)| key.clone())
+        .contains_key(expected_turn_id.as_str())
+        .then(|| expected_turn_id.as_str().to_string())
 }
 
 pub(super) fn claim_prompt_completion(

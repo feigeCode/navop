@@ -104,11 +104,23 @@ impl AgentChatView {
         };
         // 运行时会话也记住这个地址：之后任何一次本地落盘都不会把它抹掉，
         // 切到这条会话时也能凭它知道「这段对话归外部 agent 管」。
-        if let Some(session) = self.runtime.session(&SessionId::from_string(uid.to_string())) {
+        let session_id = SessionId::from_string(uid.to_string());
+        if let Some(session) = self.runtime.session(&session_id) {
             session.set_acp_ref(Some(reference.clone()));
+            // agent 报的上下文占用一并落快照：快照里的 `context_tokens` 就是
+            // 「这条会话现在用了多少」的持久化位置，历史趋势以后要画图表时再建
+            // 专门的表，先把快照值记准。
+            let usage = self
+                .acp
+                .as_ref()
+                .and_then(|acp| acp.state().usage().cloned());
+            if let Some(usage) = usage {
+                session.set_context_tokens(Some(usage.used));
+            }
         }
         let title = self
-            .external_session_title(uid)
+            .agent_pushed_session_title()
+            .or_else(|| self.external_session_title(uid))
             .unwrap_or_else(|| self.acp_agent_name(&agent_id).to_string());
         let workspace_root = self
             .session_roots
@@ -116,6 +128,10 @@ impl AgentChatView {
             .cloned()
             .unwrap_or_else(|| self.workspace_root.to_string_lossy().into_owned());
         persistence::save_acp_session(cx, uid, &title, Some(&workspace_root), reference);
+        // live 摘要也要换上新标题：merge 时 live 的名字会覆盖落盘行，不更新它
+        // 的话侧栏要等到重启才能看到 agent 取的新名字。
+        let now = now_secs();
+        self.upsert_live_summary(uid.to_string(), title, now);
         self.reload_sessions(cx);
     }
 
@@ -188,6 +204,23 @@ impl AgentChatView {
             self.session_transcripts.get(uid)
         }?;
         transcript.first_user_text().map(str::to_string)
+    }
+
+    /// agent 自己给这条会话取的名字（`session/update` 的 `SessionInfoUpdate`）。
+    ///
+    /// agent 命名比「首条用户消息截断」准得多（它是看过整段对话后总结的），
+    /// 所以只要当前连接指向的还是这条会话、agent 也真的推过标题，就用它的。
+    /// 连接已指向别的会话（后台轮次收尾时常见的时机）时拿不到，退回本地推导。
+    fn agent_pushed_session_title(&self) -> Option<String> {
+        let acp = self.acp.as_ref()?;
+        if acp.protocol_session_id().is_empty() {
+            return None;
+        }
+        acp.state()
+            .title()
+            .map(str::trim)
+            .filter(|title| !title.is_empty())
+            .map(str::to_string)
     }
 
     /// 抹掉 ACP 列表状态：切后端、换 agent、能力不支持时调用。

@@ -131,18 +131,18 @@ impl AcpConnection {
     ///
     /// 接收端必须**在 tracker 装进 `active_turn` 之后**立刻取：刻度只增不减，但订阅到的
     /// 接收端初始值是 `default`，取晚了就会漏掉这中间到达的通知。
+    ///
+    /// steer：同会话已有在飞轮次时**不再拒绝**——直接再入一轮，两轮并存；
+    /// 通知层把后续 `session/update` 同时喂给两个 tracker，事件归最新一轮。
     fn register_turn(
         &self,
         turn_id: TurnId,
     ) -> Result<watch::Receiver<TurnProgress>, AcpPromptStartError> {
-        let key = self.acp_session_id.0.to_string();
+        let protocol_session_id = self.acp_session_id.0.to_string();
         let mut active = self
             .active_turn
             .lock()
             .map_err(|_| AcpPromptStartError::NotReady)?;
-        if active.contains_key(&key) {
-            return Err(AcpPromptStartError::AlreadyRunning);
-        }
         let mut state = self
             .state
             .lock()
@@ -153,15 +153,15 @@ impl AcpConnection {
                     turn_id: turn_id.clone(),
                 })
                 .map_err(|_| AcpPromptStartError::NotReady)?,
-            // 后台轮次在飞：相位停在另一轮的 RunningTurn 上。状态机不允许
-            // RunningTurn -> RunningTurn，也不需要——相位只描述「连接忙」，
-            // 每轮的生死由 `active_turn` 表自己记。
+            // 已有轮次在飞（后台轮次或 steer 插话）：相位停在某一轮的
+            // RunningTurn 上。状态机不允许 RunningTurn -> RunningTurn，也不需要
+            // ——相位只描述「连接忙」，每轮的生死由 `active_turn` 表自己记。
             AcpConnectionPhase::RunningTurn { .. } => {}
             _ => return Err(AcpPromptStartError::NotReady),
         }
-        let tracker = AcpTurnTracker::new(turn_id.clone());
+        let tracker = AcpTurnTracker::new(turn_id.clone(), protocol_session_id);
         let progress = tracker.progress();
-        active.insert(key, tracker);
+        active.insert(turn_id.as_str().to_string(), tracker);
         Ok(progress)
     }
 
@@ -376,7 +376,10 @@ mod tests {
     fn active_turn_is_only_taken_when_the_expected_id_matches() {
         let current_turn = TurnId::from_string("current");
         let stale_turn = TurnId::from_string("stale");
-        let active_turn = map_active_turn("ses_main", AcpTurnTracker::new(current_turn.clone()));
+        let active_turn = map_active_turn(AcpTurnTracker::new(
+            current_turn.clone(),
+            "ses_main".to_string(),
+        ));
 
         let state = running_state(&current_turn);
         let closed_error = closed_error();
@@ -387,7 +390,7 @@ mod tests {
         assert_eq!(Some(current_turn.clone()), active_turn
             .lock()
             .expect("active turn lock")
-            .get("ses_main")
+            .get(current_turn.as_str())
             .map(|tracker| tracker.turn_id().clone()));
 
         let super::PromptCompletionClaim::Ready(tracker) =
@@ -404,7 +407,10 @@ mod tests {
     fn terminal_events_are_published_only_after_connection_is_ready() {
         let turn_id = TurnId::from_string("turn");
         let state = running_state(&turn_id);
-        let active_turn = map_active_turn("ses_main", AcpTurnTracker::new(turn_id.clone()));
+        let active_turn = map_active_turn(AcpTurnTracker::new(
+            turn_id.clone(),
+            "ses_main".to_string(),
+        ));
 
         let claim = super::claim_prompt_completion(&active_turn, &state, &turn_id, &closed_error());
 
@@ -425,19 +431,22 @@ mod tests {
         let turn_id = TurnId::from_string("turn-bg");
         let foreground = TurnId::from_string("turn-fg");
         let state = running_state(&foreground);
-        let active_turn = map_active_turn("ses_bg", AcpTurnTracker::new(turn_id.clone()));
-        active_turn
-            .lock()
-            .expect("active turn lock")
-            .insert("ses_fg".to_string(), AcpTurnTracker::new(foreground.clone()));
+        let active_turn = map_active_turn(AcpTurnTracker::new(
+            turn_id.clone(),
+            "ses_bg".to_string(),
+        ));
+        active_turn.lock().expect("active turn lock").insert(
+            foreground.as_str().to_string(),
+            AcpTurnTracker::new(foreground.clone(), "ses_fg".to_string()),
+        );
 
         let claim = super::claim_prompt_completion(&active_turn, &state, &turn_id, &closed_error());
 
         assert!(matches!(claim, Some(super::PromptCompletionClaim::Reclaimed)));
         let active = active_turn.lock().expect("active turn lock");
-        assert!(!active.contains_key("ses_bg"), "后台轮次应被收走");
+        assert!(!active.contains_key(turn_id.as_str()), "后台轮次应被收走");
         assert!(
-            active.contains_key("ses_fg"),
+            active.contains_key(foreground.as_str()),
             "另一会话的在飞轮次不受影响"
         );
         drop(active);
@@ -451,7 +460,10 @@ mod tests {
     fn failed_connection_wins_prompt_completion_without_duplicate_success() {
         let turn_id = TurnId::from_string("turn");
         let state = running_state(&turn_id);
-        let active_turn = map_active_turn("ses_main", AcpTurnTracker::new(turn_id.clone()));
+        let active_turn = map_active_turn(AcpTurnTracker::new(
+            turn_id.clone(),
+            "ses_main".to_string(),
+        ));
         let error = AcpError::new(
             AcpErrorKind::ConnectionClosed,
             "agent",
@@ -487,7 +499,10 @@ mod tests {
     fn closed_connection_converts_late_prompt_success_into_failure() {
         let turn_id = TurnId::from_string("turn");
         let state = running_state(&turn_id);
-        let active_turn = map_active_turn("ses_main", AcpTurnTracker::new(turn_id.clone()));
+        let active_turn = map_active_turn(AcpTurnTracker::new(
+            turn_id.clone(),
+            "ses_main".to_string(),
+        ));
         state
             .lock()
             .expect("state lock")
@@ -655,13 +670,12 @@ mod tests {
     }
 
     fn map_active_turn(
-        key: &str,
         tracker: AcpTurnTracker,
     ) -> std::sync::Arc<
         std::sync::Mutex<std::collections::HashMap<String, AcpTurnTracker>>,
     > {
         let mut map = std::collections::HashMap::new();
-        map.insert(key.to_string(), tracker);
+        map.insert(tracker.turn_id().as_str().to_string(), tracker);
         std::sync::Arc::new(std::sync::Mutex::new(map))
     }
 
