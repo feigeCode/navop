@@ -5,7 +5,7 @@ use std::ptr;
 use super::ffi::*;
 use super::window::{
     create_overlay_window, ensure_owner_clips_children, last_error, position_overlay_window,
-    set_overlay_cloaked, verify_overlay_parent,
+    redraw_overlay_window, set_overlay_cloaked, set_overlay_layered, verify_overlay_parent,
 };
 use super::{
     WindowsNativeOverlay, WindowsNativeOverlayBounds, WindowsNativeOverlayError, diagnostics,
@@ -38,6 +38,7 @@ impl WindowsNativeOverlay {
             last_bounds: None,
             requested_visible: false,
             cloaked: false,
+            layered: false,
             _thread_affinity: PhantomData,
         };
         diagnostics::log_created(&overlay);
@@ -101,8 +102,10 @@ impl WindowsNativeOverlay {
     /// the composition tree, or restores the plain child window.
     ///
     /// The caller must only cloak after the overlay's content has been attached
-    /// to a composition visual: a cloaked window that nothing composes would
-    /// take the session off screen entirely.
+    /// to a composition visual, and only after the window has been on screen at
+    /// its final size and painted once: cloaking earlier leaves the composition
+    /// surface permanently empty, and no later paint recovers it. Use `redraw`
+    /// immediately beforehand, once the window is positioned and visible.
     pub(crate) fn set_cloaked(&mut self, cloaked: bool) -> Result<(), WindowsNativeOverlayError> {
         if self.window == 0 || self.cloaked == cloaked {
             return Ok(());
@@ -120,6 +123,48 @@ impl WindowsNativeOverlay {
             overlay_hwnd = self.window,
             cloaked,
             "updated Windows native RDP overlay cloak state"
+        );
+        Ok(())
+    }
+
+    /// Paints the overlay at its current size, synchronously.
+    ///
+    /// The precondition for a safe cloak: the window must have been shown at its
+    /// final size and painted at least once, otherwise cloaking leaves the
+    /// composition surface empty for good. Returns whether the overlay is in a
+    /// state where the paint is meaningful — a hidden or destroyed window cannot
+    /// be painted, so its caller must not cloak yet.
+    pub(crate) fn redraw(&mut self) -> Result<(), WindowsNativeOverlayError> {
+        if self.window == 0 || !self.is_actually_visible() {
+            return Ok(());
+        }
+        self.validate_mutation("redraw_child_overlay")?;
+        redraw_overlay_window(window_pointer(self.window))
+    }
+
+    /// Applies or removes `WS_EX_LAYERED` on the overlay window.
+    ///
+    /// Only a composed session may be layered: the style is required by
+    /// `CreateSurfaceFromHwnd`, but a layered window that nothing composes never
+    /// becomes visible. Callers must pair it with a successful attach, and take
+    /// it back whenever composition does not happen.
+    pub(crate) fn set_layered(&mut self, layered: bool) -> Result<(), WindowsNativeOverlayError> {
+        if self.window == 0 || self.layered == layered {
+            return Ok(());
+        }
+        self.validate_mutation(if layered {
+            "add_overlay_layered"
+        } else {
+            "remove_overlay_layered"
+        })?;
+        set_overlay_layered(window_pointer(self.window), layered)?;
+        self.layered = layered;
+        tracing::info!(
+            stage = "overlay_layered",
+            generation = self.generation,
+            overlay_hwnd = self.window,
+            layered,
+            "updated Windows native RDP overlay layered state"
         );
         Ok(())
     }

@@ -1604,8 +1604,14 @@ fn windows_native_tab_lifecycle_defers_focus_only_while_active() {
     }
 }
 
+/// 「遮蔽呈现」只记录纯 Rust 意图，不碰原生生命周期与输入焦点。
+///
+/// dialog 曾经也走这条通路（主窗口订阅 `DialogStateChanged` → `TabContainer` →
+/// `set_presentation_obscured` → `native.deactivate()`），代价是弹窗背后一片空白；
+/// 现在 dialog 与右键菜单一样由「按需 cloak」让位，这里只剩「GPUI 主内容真的盖住呈现」
+/// 这类遮蔽在用（见 `one_core::tab_container` 的遮蔽来源合成）。
 #[test]
-fn windows_native_dialog_obscures_presentation_without_changing_tab_lifecycle() {
+fn windows_native_presentation_obscuring_records_intent_without_touching_the_native_lifecycle() {
     let render = include_str!("render.rs").replace("\r\n", "\n");
     let view = include_str!("../view.rs").replace("\r\n", "\n");
     let setter = function_body(&render, "fn set_presentation_obscured", "fn try_close");
@@ -2025,4 +2031,199 @@ fn windows_native_timeout_hands_off_to_the_owner_thread_retirement_queue() {
     assert!(retirement.contains("take_expired"));
     // ...and the exit path is the only place allowed to leak.
     assert!(retirement.contains("leak_unretirable"));
+}
+
+#[test]
+fn windows_native_overlay_is_layered_only_while_it_is_composed() {
+    let overlay_window = include_str!("windows_native_overlay/window.rs").replace("\r\n", "\n");
+    let native = include_str!("windows_native.rs").replace("\r\n", "\n");
+
+    // A layered window stays invisible until `SetLayeredWindowAttributes` or
+    // `UpdateLayeredWindow` runs for it, and this overlay calls neither: its
+    // content comes from the composition visual. Creating it layered would make
+    // the "composition unavailable, keep the plain child window" fallback
+    // invisible instead of plain.
+    let create = function_body(
+        &overlay_window,
+        "fn create_overlay_window(",
+        "/// Takes the overlay off screen",
+    );
+    assert!(
+        !create.contains("WS_EX_LAYERED"),
+        "the overlay must not be created layered: a layered window that nothing \
+         composes never becomes visible"
+    );
+    assert!(create.contains("WS_EX_NOPARENTNOTIFY"));
+
+    // The style goes on with composition...
+    let compose = function_body(
+        &native,
+        "fn compose_native_window(",
+        "/// Returns an overlay that did not end up composed",
+    );
+    assert!(compose.contains("overlay.set_layered(true)"));
+    assert!(
+        compose.contains("release_composition_layering(overlay)"),
+        "a failed attach or cloak must give WS_EX_LAYERED back"
+    );
+
+    // ...and comes back off on every step that did not complete.
+    let release = function_body(
+        &native,
+        "fn release_composition_layering(",
+        "struct WindowsNativePresentationSink",
+    );
+    assert!(release.contains("overlay.set_cloaked(false)"));
+    assert!(release.contains("overlay.set_layered(false)"));
+
+    // A composition surface that stops accepting commands must not leave a
+    // cloaked window behind with nothing left to present it.
+    let sink_fallback = function_body(
+        &native,
+        "fn fallback_to_plain_child(",
+        "impl NativePresentationSink for",
+    );
+    assert!(sink_fallback.contains("self.composition = None;"));
+    assert!(sink_fallback.contains("self.overlay.set_cloaked(false)"));
+    assert!(sink_fallback.contains("self.overlay.set_layered(false)"));
+
+    // Every place that mirrors into the composition tree has to route its
+    // failure into that fallback.
+    assert!(native.contains("self.fallback_to_plain_child(\"show_composition_sync_failed\");"));
+    assert!(native.contains("self.fallback_to_plain_child(\"hide_composition_sync_failed\");"));
+    assert!(
+        native.contains("self.fallback_to_plain_child(\"set_bounds_composition_sync_failed\");")
+    );
+}
+
+/// The overlay must be cloaked only once it has been positioned and painted.
+///
+/// Cloaking earlier leaves the composition surface permanently empty: every
+/// DirectComposition call still succeeds, but the visual contributes no pixels,
+/// so the composed RDP area shows the GPUI background and no later paint — not
+/// even the RDP frames themselves — brings it back. Measured on Windows with a
+/// layered child window wrapped by `CreateSurfaceFromHwnd`: cloaking at 1x1 and
+/// resizing afterwards always produced an empty surface, while painting at the
+/// final size and cloaking immediately afterwards always worked, with no settle
+/// delay either way.
+#[test]
+fn windows_native_overlay_is_cloaked_only_after_it_is_positioned_and_painted() {
+    let native = include_str!("windows_native.rs").replace("\r\n", "\n");
+    let composition = include_str!("windows_native_composition.rs").replace("\r\n", "\n");
+    let overlay_window = include_str!("windows_native_overlay/window.rs").replace("\r\n", "\n");
+    let overlay_lifecycle =
+        include_str!("windows_native_overlay/lifecycle.rs").replace("\r\n", "\n");
+
+    // Attaching hands the window's rasterization to the visual but must not
+    // cloak it: at that point the window has never been on screen.
+    let compose = function_body(
+        &native,
+        "fn compose_native_window(",
+        "/// Returns an overlay that did not end up composed",
+    );
+    assert!(
+        !compose.contains("set_cloaked(true)"),
+        "attaching must leave the overlay uncloaked; the cloak is only safe once \
+         the window has been on screen at its final size and painted"
+    );
+
+    // Attaching must not cloak either. A cloak costs the session its input, so
+    // the session keeps a plain child window's input until GPUI really has
+    // overlay content to show; `WindowsNativeAdapter::set_overlay_cloak` is what
+    // reaches for the cloak at that point.
+    let attach = function_body(
+        &composition,
+        "pub(super) fn attach(&mut self)",
+        "/// Mirrors the overlay placement",
+    );
+    assert!(
+        attach.contains("self.cloak_pending = false;"),
+        "composing a window must not cloak it"
+    );
+    let fresh = function_body(
+        &composition,
+        "pub(super) fn new(",
+        "/// Whether the overlay still owes",
+    );
+    assert!(
+        !fresh.contains("cloak_pending: true"),
+        "a composition that never attached owes nothing"
+    );
+
+    // The runtime toggle that the overlay layer drives enforces the very same
+    // precondition, in the very same order.
+    let toggle = function_body(
+        &native,
+        "pub(crate) fn set_overlay_cloak(",
+        "/// Builds the presentation sink",
+    );
+    let toggle_on_screen = toggle
+        .find("is_actually_visible()")
+        .expect("the runtime cloak must wait until the overlay is really on screen");
+    let toggle_painted = toggle
+        .find("self.overlay.redraw()")
+        .expect("the runtime cloak must paint the overlay before cloaking it");
+    let toggle_cloaked = toggle
+        .find("self.overlay.set_cloaked(cloaked)")
+        .expect("the runtime toggle is what cloaks and uncloaks the overlay");
+    assert!(
+        toggle_on_screen < toggle_painted && toggle_painted < toggle_cloaked,
+        "the runtime cloak must follow both the visibility check and the paint"
+    );
+    assert!(
+        toggle.contains("if !self.overlay_cloak_painted {"),
+        "the synchronous repaint is a one-time precondition, not something to \
+         repeat on every menu"
+    );
+
+    // The deferred step owns the order that makes the cloak safe: really on
+    // screen, then painted, then cloaked.
+    let deferred = function_body(
+        &native,
+        "fn apply_deferred_cloak(",
+        "/// Retires the composed presentation",
+    );
+    let on_screen = deferred
+        .find("is_actually_visible()")
+        .expect("the cloak must wait until the overlay is really on screen");
+    let painted = deferred
+        .find("self.overlay.redraw()")
+        .expect("the overlay must be painted before it is cloaked");
+    let cloaked = deferred
+        .find("self.overlay.set_cloaked(true)")
+        .expect("the deferred step is what cloaks the overlay");
+    assert!(
+        on_screen < painted && painted < cloaked,
+        "the cloak must follow both the visibility check and the paint"
+    );
+    assert!(deferred.contains("composition.mark_cloaked();"));
+
+    // Every moment at which the window can become presentable retries it.
+    let bounds = function_body(
+        &native,
+        "fn sync_composition_bounds(",
+        "/// Mirrors requested visibility",
+    );
+    assert!(bounds.contains("self.apply_deferred_cloak(\"set_bounds\")"));
+    let visibility = function_body(
+        &native,
+        "fn sync_composition_visibility(",
+        "/// Cloaks the overlay, once doing so cannot freeze an empty surface",
+    );
+    assert!(visibility.contains("self.apply_deferred_cloak(\"show\")"));
+
+    // The paint is synchronous and covers the children the RDP session draws
+    // into, so nothing has to settle before the cloak.
+    assert!(overlay_window.contains("RDW_UPDATENOW"));
+    assert!(overlay_window.contains("RDW_ALLCHILDREN"));
+
+    // A paint that cannot happen must not be mistaken for one that did: the
+    // overlay refuses to redraw itself while it is off screen, and the caller
+    // therefore keeps the cloak owed.
+    let redraw = function_body(
+        &overlay_lifecycle,
+        "pub(crate) fn redraw(&mut self)",
+        "/// Applies or removes `WS_EX_LAYERED`",
+    );
+    assert!(redraw.contains("!self.is_actually_visible()"));
 }

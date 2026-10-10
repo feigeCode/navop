@@ -329,6 +329,17 @@ pub(crate) struct WindowsNativeAdapter {
     /// Present when the GPUI window composes the native child window into its
     /// own visual tree. `None` keeps the session as a plain child window.
     composition: Option<WindowsNativeComposition>,
+    /// Whether the session is currently cloaked so GPUI's overlay layer can
+    /// paint above it. See `set_overlay_cloak`.
+    overlay_cloaked: bool,
+    /// Whether the overlay has been synchronously painted once, as the
+    /// precondition of its first cloak.
+    ///
+    /// A synchronous repaint drags the RDP child windows into it as well
+    /// (`RDW_ALLCHILDREN`), so it is worth doing exactly once: every later cloak
+    /// can rely on the composition visual having carried the session's frames
+    /// throughout.
+    overlay_cloak_painted: bool,
 }
 
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
@@ -428,6 +439,8 @@ impl WindowsNativeAdapter {
             overlay,
             host,
             composition,
+            overlay_cloaked: false,
+            overlay_cloak_painted: false,
         })
     }
 
@@ -442,6 +455,57 @@ impl WindowsNativeAdapter {
 
     pub(crate) fn generation(&self) -> u64 {
         self.host.generation()
+    }
+
+    /// Whether the session is currently cloaked so that GPUI's overlay layer
+    /// can be seen above it.
+    pub(crate) fn overlay_cloaked(&self) -> bool {
+        self.overlay_cloaked
+    }
+
+    /// Cloaks or uncloaks the composed session so GPUI's overlay layer can paint
+    /// above it.
+    ///
+    /// A cloaked window leaves the screen Z-order and has its pixels taken over
+    /// by the DirectComposition visual, which is the only arrangement in which
+    /// GPUI's overlay surface — the layer popup menus are painted into — shows
+    /// up over the session. The very same cloak also takes the window out of the
+    /// system's hit testing, so a cloaked session stops receiving input. This is
+    /// a trade rather than a free win: cloak only while overlay content really
+    /// is on screen, and uncloak as soon as it is gone.
+    ///
+    /// A session presented as a plain child window has no composition surface to
+    /// swap to, so there is nothing to toggle — that path always keeps its input.
+    pub(crate) fn set_overlay_cloak(&mut self, cloaked: bool) -> anyhow::Result<()> {
+        if self.composition.is_none() || self.overlay_cloaked == cloaked {
+            return Ok(());
+        }
+        if cloaked {
+            if !self.overlay.is_actually_visible() {
+                // Cloaking a window that never reached the screen freezes an
+                // empty composition surface. Until the window really is up, the
+                // overlay stays behind the session and the next frame retries.
+                return Ok(());
+            }
+            if !self.overlay_cloak_painted {
+                // Painting immediately before the *first* cloak is what keeps the
+                // mirrored rasterization non-empty; see `apply_deferred_cloak`.
+                // Later toggles do not need it — the composition visual carries
+                // the session's frames throughout — and this repaint is
+                // synchronous, dragging the RDP child windows into it as well.
+                self.overlay.redraw()?;
+                self.overlay_cloak_painted = true;
+            }
+        }
+        self.overlay.set_cloaked(cloaked)?;
+        self.overlay_cloaked = cloaked;
+        tracing::debug!(
+            stage = "overlay_cloak_toggle",
+            cloaked,
+            overlay_hwnd = self.overlay.hwnd(),
+            "moved the composed Windows native RDP session under the GPUI overlay layer"
+        );
+        Ok(())
     }
 
     /// Builds the presentation sink that routes window work to the overlay and
@@ -751,6 +815,16 @@ impl Drop for WindowsNativeAdapter {
 pub(super) fn enable_composition_surface(
     window: &gpui::Window,
 ) -> Option<gpui::WindowCompositionSurface> {
+    // Diagnostic escape hatch, in the spirit of the other `NAVOP_*` switches:
+    // force the plain child-window presentation so the composition fallback can be
+    // exercised on a real machine rather than only where composition fails.
+    if std::env::var_os("NAVOP_RDP_DISABLE_COMPOSITION").is_some() {
+        tracing::warn!(
+            "NAVOP_RDP_DISABLE_COMPOSITION is set; presenting the Windows native RDP \
+             session as a plain child window"
+        );
+        return None;
+    }
     match window
         .enable_window_composition()
         .and_then(|composition| composition.create_native_surface())
@@ -767,19 +841,36 @@ pub(super) fn enable_composition_surface(
     }
 }
 
-/// Composes the freshly created child window into the GPUI visual tree and takes
-/// the original window off screen.
+/// Composes the freshly created child window into the GPUI visual tree.
 ///
-/// Returns `None` when composition is unavailable or when attaching the window
-/// content failed. The window is only cloaked after a successful attach: a
-/// cloaked window that nothing composes would take the session off screen
-/// entirely, so the fallback stays a plain child window.
+/// Returns `None` when composition is unavailable or when any step of it failed.
+/// Every failure path restores the plain child-window presentation, `WS_EX_LAYERED`
+/// included: a layered window that nothing composes is not merely uncomposed, it
+/// is invisible.
+///
+/// The window is deliberately *not* cloaked here. Cloaking before the window has
+/// been on screen at its final size and painted once leaves the composition
+/// surface permanently empty, which is invisible-by-construction: every
+/// DirectComposition call reports success and no later paint brings the session
+/// back. `WindowsNativePresentationSink::apply_deferred_cloak` lands the cloak
+/// once the window really is positioned and visible.
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
 fn compose_native_window(
     surface: Option<gpui::WindowCompositionSurface>,
     overlay: &mut WindowsNativeOverlay,
 ) -> Option<WindowsNativeComposition> {
     let surface = surface?;
+    // Layered is what `CreateSurfaceFromHwnd` wraps, so it goes on only now that
+    // the session really is about to be composed.
+    if let Err(error) = overlay.set_layered(true) {
+        tracing::warn!(
+            ?error,
+            overlay_hwnd = overlay.hwnd(),
+            "cannot apply WS_EX_LAYERED to the Windows native RDP overlay; \
+             keeping it as a plain child window"
+        );
+        return None;
+    }
     let mut composition = WindowsNativeComposition::new(surface, overlay.hwnd());
     if let Err(error) = composition.attach() {
         tracing::warn!(
@@ -788,18 +879,34 @@ fn compose_native_window(
             "failed to compose the Windows native RDP overlay; \
              keeping it as a plain child window"
         );
+        release_composition_layering(overlay);
         return None;
     }
-    if let Err(error) = overlay.set_cloaked(true) {
-        // The composed visual covers the child window, so the session stays
-        // visible either way; report it because the window keeps rendering.
+    Some(composition)
+}
+
+/// Returns an overlay that did not end up composed to the plain child-window
+/// presentation.
+///
+/// Dropping `WS_EX_LAYERED` is what makes the window itself visible again, and it
+/// also takes its rasterization out of any composition tree still wrapping it.
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+fn release_composition_layering(overlay: &mut WindowsNativeOverlay) {
+    if let Err(error) = overlay.set_cloaked(false) {
         tracing::warn!(
             ?error,
             overlay_hwnd = overlay.hwnd(),
-            "failed to cloak the composed Windows native RDP overlay"
+            "failed to uncloak the Windows native RDP overlay while falling back"
         );
     }
-    Some(composition)
+    if let Err(error) = overlay.set_layered(false) {
+        tracing::warn!(
+            ?error,
+            overlay_hwnd = overlay.hwnd(),
+            "failed to drop WS_EX_LAYERED from the Windows native RDP overlay; \
+             the session may stay invisible"
+        );
+    }
 }
 
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
@@ -815,27 +922,129 @@ impl WindowsNativePresentationSink<'_> {
     /// Mirrors the placement of the child window into the composition tree.
     ///
     /// A composition failure must not fail window management that already
-    /// succeeded.
-    fn sync_composition_bounds(&mut self, bounds: Option<Win32ClientPhysicalBounds>) {
+    /// succeeded, so it only reports whether the visual is still usable.
+    fn sync_composition_bounds(&mut self, bounds: Option<Win32ClientPhysicalBounds>) -> bool {
         let Some(composition) = self.composition.as_mut() else {
-            return;
+            return true;
         };
         if let Err(error) = composition.sync_bounds(bounds) {
             tracing::warn!(
                 ?error,
                 "failed to mirror Windows native RDP bounds into the composition tree"
             );
+            return false;
         }
+        // A real placement means the child window is now on screen at its final
+        // size, which is exactly the precondition the deferred cloak waits for.
+        if bounds.is_some() {
+            return self.apply_deferred_cloak("set_bounds");
+        }
+        true
     }
 
-    fn sync_composition_visibility(&mut self, visible: bool) {
+    /// Mirrors requested visibility into the composition tree.
+    ///
+    /// Reports whether the visual is still usable; see `fallback_to_plain_child`.
+    fn sync_composition_visibility(&mut self, visible: bool) -> bool {
         let Some(composition) = self.composition.as_mut() else {
-            return;
+            return true;
         };
         if let Err(error) = composition.sync_visible(visible) {
             tracing::warn!(
                 ?error,
                 "failed to mirror Windows native RDP visibility into the composition tree"
+            );
+            return false;
+        }
+        // Showing is the other moment at which the deferred cloak may become
+        // possible: the overlay only paints while it is actually on screen.
+        if visible {
+            return self.apply_deferred_cloak("show");
+        }
+        true
+    }
+
+    /// Cloaks the overlay, once doing so cannot freeze an empty surface.
+    ///
+    /// The order this enforces is the whole difference between a session that
+    /// renders and one that shows nothing but the GPUI background:
+    /// `CreateSurfaceFromHwnd` wraps the overlay's rasterization, and cloaking a
+    /// window that has never been on screen at its final size leaves that
+    /// rasterization permanently empty. No later paint recovers it — not even the
+    /// RDP frames themselves — and every DirectComposition call still reports
+    /// success, so nothing else surfaces the failure.
+    ///
+    /// Painting the window immediately before cloaking is enough, and needs no
+    /// settle delay. While the window is not yet on screen the cloak simply stays
+    /// owed and the next bounds or visibility sync retries.
+    ///
+    /// Reports whether the composed presentation is still usable.
+    fn apply_deferred_cloak(&mut self, stage: &'static str) -> bool {
+        let owed = self
+            .composition
+            .as_ref()
+            .is_some_and(|composition| composition.cloak_pending());
+        if !owed || !self.overlay.is_actually_visible() {
+            return true;
+        }
+        if let Err(error) = self.overlay.redraw() {
+            tracing::warn!(
+                ?error,
+                stage,
+                overlay_hwnd = self.overlay.hwnd(),
+                "failed to paint the Windows native RDP overlay before cloaking it"
+            );
+            return false;
+        }
+        if let Err(error) = self.overlay.set_cloaked(true) {
+            tracing::warn!(
+                ?error,
+                stage,
+                overlay_hwnd = self.overlay.hwnd(),
+                "failed to cloak the composed Windows native RDP overlay; \
+                 retiring the composition surface"
+            );
+            return false;
+        }
+        if let Some(composition) = self.composition.as_mut() {
+            composition.mark_cloaked();
+        }
+        tracing::info!(
+            stage,
+            overlay_hwnd = self.overlay.hwnd(),
+            "cloaked the composed Windows native RDP overlay after positioning and painting it"
+        );
+        true
+    }
+
+    /// Retires the composed presentation and hands the session back to the plain
+    /// child window.
+    ///
+    /// Used once the composition surface stops accepting commands. Keeping a
+    /// cloaked window whose visual can no longer be driven would leave the session
+    /// invisible with no way back; dropping the cloak and `WS_EX_LAYERED` instead
+    /// restores the presentation that needs no composition at all.
+    fn fallback_to_plain_child(&mut self, stage: &'static str) {
+        tracing::warn!(
+            stage,
+            overlay_hwnd = self.overlay.hwnd(),
+            "retiring the Windows native RDP composition surface and presenting \
+             the session as a plain child window again"
+        );
+        self.composition = None;
+        if let Err(error) = self.overlay.set_cloaked(false) {
+            tracing::warn!(
+                ?error,
+                stage,
+                "failed to uncloak the Windows native RDP overlay"
+            );
+        }
+        if let Err(error) = self.overlay.set_layered(false) {
+            tracing::warn!(
+                ?error,
+                stage,
+                "failed to drop WS_EX_LAYERED from the Windows native RDP overlay; \
+                 the session may stay invisible"
             );
         }
     }
@@ -854,18 +1063,23 @@ impl NativePresentationSink for WindowsNativePresentationSink<'_> {
         })?;
         let Some(clipped) = clipped else {
             self.host.set_bounds(0, 0, 0, 0)?;
-            self.sync_composition_bounds(None);
+            if !self.sync_composition_bounds(None) {
+                self.fallback_to_plain_child("set_bounds_composition_sync_failed");
+            }
             return Ok(());
         };
         self.host.set_bounds(0, 0, clipped.width, clipped.height)?;
         // The composed visual must land exactly where the child window went,
         // including the clipping against the owner's client area.
-        self.sync_composition_bounds(Some(Win32ClientPhysicalBounds {
+        let synced = self.sync_composition_bounds(Some(Win32ClientPhysicalBounds {
             x: clipped.x,
             y: clipped.y,
             width: clipped.width,
             height: clipped.height,
         }));
+        if !synced {
+            self.fallback_to_plain_child("set_bounds_composition_sync_failed");
+        }
         Ok(())
     }
 
@@ -888,7 +1102,9 @@ impl NativePresentationSink for WindowsNativePresentationSink<'_> {
                 "Windows native RDP overlay show did not become effective"
             ));
         }
-        self.sync_composition_visibility(true);
+        if !self.sync_composition_visibility(true) {
+            self.fallback_to_plain_child("show_composition_sync_failed");
+        }
         self.overlay.log_composition_diagnostics("show_complete");
         Ok(())
     }
@@ -908,7 +1124,9 @@ impl NativePresentationSink for WindowsNativePresentationSink<'_> {
     fn hide(&mut self) -> Result<(), Self::Error> {
         // Drop the composed visual first: hiding the window stops the DWM from
         // refreshing it, and a stale frame must not stay on screen.
-        self.sync_composition_visibility(false);
+        if !self.sync_composition_visibility(false) {
+            self.fallback_to_plain_child("hide_composition_sync_failed");
+        }
         let host_result = self.host.set_visible(false);
         let overlay_result = self.overlay.hide();
         match (host_result, overlay_result) {
