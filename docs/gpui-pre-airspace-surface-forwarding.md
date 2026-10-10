@@ -20,6 +20,7 @@
 |---|---|---|---|
 | **A** | `crates/gpui/src/window.rs`，`ManagedPlatformSurface` | 装饰器漏转发 `set_window_content`，调用落到 trait 默认实现直接 bail：`composing an existing window into a surface is not supported by this platform` | 补 4 行转发 |
 | **B** | `crates/gpui_windows/src/directx_renderer.rs`，`DirectCompositionPortal::set_visible` 与 `DirectComposition::rebind_portal` | 用 `cast::<IDCompositionVisual3>()?.SetOpacity2(..)` 控制可见性；而合成设备由 `DCompositionCreateDevice`（v1）创建，其 visual 只到 `IDCompositionVisual`，`cast` 必然 `E_NOINTERFACE`（`0x80004002` 不支持此接口） | 可见性改为「内容的有无」表达（`SetContent`）；Visual3 可用时保持原行为 |
+| **C** | `crates/gpui/src/window.rs`，`Window` | 宿主无从知道「这一帧有没有画 deferred 内容」，于是不知道该不该让原生子窗口让位 | 新增 `deferred_content_present` 字段与 `Window::has_deferred_content()`，每帧按 `next_frame.deferred_draws` 是否为空（外加 `prompt`）刷新 |
 
 **B 的破坏力比看上去大**：navop 把「隐藏失败」解释为「这个 surface 不可用了」，
 于是**一个已经成功挂载的合成 surface 被整个退回**，会话降级为普通子窗口 ——
@@ -158,13 +159,68 @@ fn apply_portal_visibility(state: &DirectCompositionPortalState, visible: bool) 
 （隐藏态定义为「没有内容」，顺序反了隐藏会失效）。`rebind_portal` 是合成器重建
 （GPU 掉设备）时的路径，不改的话掉一次设备就再也 rebind 不回来。
 
-完整 diff 见 `.workbuddy/tmp/gpui-pre-airspace-fix.patch`：
+完整 diff 见 `.workbuddy/tmp/rdp-cloak-fix/gpui-pre-fork.patch`：
 
 ```
- crates/gpui/src/window.rs                   |  4 +++
+ crates/gpui/src/window.rs                   | 22 +++++++++++++++
  crates/gpui_windows/src/directx_renderer.rs | 45 +++++++++++++++++++++++------
- 2 files changed, 40 insertions(+), 9 deletions(-)
+ 2 files changed, 58 insertions(+), 9 deletions(-)
 ```
+
+> 这份补丁**已经落地在 fork 上**：`Cargo.toml` 里 21 条
+> `gpui-pre = { git = "https://github.com/feigeCode/gpui-pre.git", tag = "fork-0.3.126" }`
+> 解析到的 rev 同时含 A / B / C（`has_deferred_content` 在其中可见，真机合成路径与
+> 按需 cloak 都已生效）——**navop 侧不需要再改依赖**。
+
+### 改动 C：`crates/gpui/src/window.rs`，`Window::has_deferred_content`
+
+**为什么必须由 GPUI 提供**：让位判据不能是「navop 自己有没有画浮层」——那是 navop 的
+私有状态；真正决定屏幕层级的是 GPUI 的 overlay surface，而它的内容来源正是 gpui 的
+deferred 层（`deferred_draws`，dialog / 菜单 / tooltip 全走它）。`Window` 之外拿不到。
+
+改动落在四处：
+
+1. 结构体加字段（`rendered_frame` / `next_frame` 旁）：
+
+```rust
+    /// Whether the most recently drawn frame painted deferred content.
+    ///
+    /// Deferred content is what GPUI draws above the ordinary element tree —
+    /// popup menus, context menus and prompts. Hosts that compose a native child
+    /// window into the window's visual tree use this to tell when their content
+    /// has to yield to the overlay layer, which normal element-tree content
+    /// cannot express.
+    deferred_content_present: bool,
+```
+
+2. `Window::new` 里初始化 `deferred_content_present: false`。
+
+3. 每帧在 `prepaint_deferred_draws(cx)` **之后**刷新 —— 此刻本帧的 deferred draw 已
+   全部收集完毕（`prepaint_deferred_draws` 只把元素从条目里取走、不删条目，所以长度
+   仍代表本帧的 overlay 内容量）；prompt 由窗口自身绘制、不走 `deferred_draws`，
+   单独计数：
+
+```rust
+        self.deferred_content_present =
+            !self.next_frame.deferred_draws.is_empty() || self.prompt.is_some();
+```
+
+4. 公开读取（挨着 `has_active_prompt`）：
+
+```rust
+    pub fn has_deferred_content(&self) -> bool {
+        self.deferred_content_present
+    }
+```
+
+两条语义要在 navop 侧记住：
+
+- **描述的是「上一帧」，窗口 idle 时保持旧值** —— cloak 的开关因此比浮层本身晚一帧；
+  没有浮层时该值稳定在 `false`，不会抖动。
+- **它是 `deferred_draws` 的镜像**，所以**普通元素树内容（`div().absolute()` 浮层）
+  不计入**。这与「普通元素树内容盖不住原生子窗口」是一件事的两面：navop 自绘的浮层
+  必须自己把绘制放进 `deferred(...)`，否则既判不到、也盖不住（浮动侧边栏踩过这个坑，
+  见 `windows-native-rdp-cloak-ordering.md` §11.12）。
 
 ---
 
@@ -172,7 +228,9 @@ fn apply_portal_visibility(state: &DirectCompositionPortalState, visible: bool) 
 
 本机没有 Zed 检出（`/d/workspace/zed`、`/d/workspace/.gpui-pre` 都不存在），
 而 `script/patch-local-gpui-pre.py` / `publish-gpui-pre-fork.py` 的快照流水线需要 Zed checkout，
-所以**最短路径是直接改 fork**：
+所以**最短路径是直接改 fork**。**现状：已经落地** —— `Cargo.toml` 里的
+`tag = "fork-0.3.126"` 解析出的 rev 已含 A / B / C 三处（见 §3 末尾与 §10），
+下面只是重做时的步骤：
 
 ```bash
 git clone https://github.com/feigeCode/gpui-pre.git
@@ -412,3 +470,33 @@ Cargo 把「缺失路径」判为已变化 ⇒ `one-core` **每次构建都被�
   `"RerunIfChanged":{"paths":["../..\\.env.local","../..\\.env"]}`，且 `invoked.timestamp`
   每次构建都刷新。
 - 正解：只在 `path.exists()` 时才打印该指令。
+
+---
+
+## 10. gpui-kit 无需改动（已核实）
+
+常被问到的下一步是「既然浮层要让位，`gpui-kit` 里的组件要不要跟着改」——**不需要**，
+两条核实过：
+
+1. **gpui-kit 的浮层组件已经全部走 `deferred`。** 在 navop 钉的
+   `feigeCode/gpui-kit`（rev `e746db5cf`）里检索 `deferred(` 共 **41 处**，覆盖
+   `base/dialog.rs`、`base/popup.rs`、`base/tooltip.rs`、`component/combobox.rs`、
+   `component/menu/{context_menu,popup_menu,app_menu_bar}.rs`、`component/select.rs`、
+   `component/time/date_picker.rs`、`component/touch_selection/*`、`component/plot/tooltip.rs`、
+   `base/resizable/resize_handle.rs`、`component/dock/panel.rs`、`shell/root.rs`。
+   也就是说 gpui-kit 画在会话之上的东西**本来就在 overlay surface 里**，没有需要补
+   deferred 的组件。
+2. **依赖侧有无缺口，编译就能证明。** navop 用到的
+   `Window::has_deferred_content()` 与 `PlatformSurfaceAttachment::set_window_content`
+   都由 gpui-pre fork 提供（改动 A / C）；gpui-kit 只是使用方。三个 gpui-kit checkout
+   （`23c8e5b` / `b450f35` / `e746db5`）的工作区都干净，没有本地改动。
+
+真正需要动的只有两处：
+
+| 仓库 | 要改什么 | 状态 |
+|---|---|---|
+| `feigeCode/gpui-pre` | 本文件 §3 的 A / B / C（+58/−9） | **已落地**（`tag = "fork-0.3.126"` 解析出的 rev 已含全部三处） |
+| `paofu-cium/navop` | 原生会话合成呈现、dialog 撤销「遮蔽呈现」、浮动侧边栏进 deferred | 分支 `fix/windows-native-rdp-airspace` |
+
+**判据**：拿不准某个浮层要不要改，就看它是不是 `deferred(...)` 包的。不是 —— 它既
+判不到 cloak、也盖不住原生画面；是 —— 什么都不用做。
