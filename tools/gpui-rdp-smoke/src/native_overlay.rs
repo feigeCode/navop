@@ -6,8 +6,8 @@ mod diagnostics;
 mod window;
 
 use window::{
-    ChildBounds, create_overlay_window, ensure_owner_clips_children, last_error,
-    position_overlay_window,
+    ChildBounds, create_overlay_window, ensure_owner_clips_children, last_error, overlay_cloaked,
+    position_overlay_window, redraw_overlay_window, set_overlay_cloaked, set_overlay_layered,
 };
 
 const SW_HIDE: i32 = 0;
@@ -59,6 +59,36 @@ impl NativeOverlay {
 
     pub(crate) fn hwnd(&self) -> usize {
         self.window
+    }
+
+    /// The overlay placement most recently applied to the child window.
+    ///
+    /// `None` while the overlay is hidden or clipped away, which is exactly the
+    /// condition under which a composition visual must not be shown either.
+    pub(crate) fn last_bounds(&self) -> Option<(i32, i32, i32, i32)> {
+        self.last_bounds
+            .map(|bounds| (bounds.x, bounds.y, bounds.width, bounds.height))
+    }
+
+    /// Applies or removes `WS_EX_LAYERED`, including the alpha that makes the
+    /// layered composition visible to `CreateSurfaceFromHwnd`.
+    pub(crate) fn set_layered(&self, layered: bool) -> Result<(), String> {
+        set_overlay_layered(window_pointer(self.window), layered)
+    }
+
+    /// Takes the window off screen through DWM without stopping its composition.
+    pub(crate) fn set_cloaked(&self, cloaked: bool) -> Result<(), String> {
+        set_overlay_cloaked(window_pointer(self.window), cloaked)
+    }
+
+    /// Paints the overlay at its current size; required before cloaking.
+    pub(crate) fn redraw(&self) -> Result<(), String> {
+        redraw_overlay_window(window_pointer(self.window))
+    }
+
+    /// Reads back `DWMWA_CLOAKED` for assertions rather than assumptions.
+    pub(crate) fn cloaked_state(&self) -> Result<i32, String> {
+        overlay_cloaked(window_pointer(self.window))
     }
 
     pub(crate) fn log_composition_diagnostics(&self, reason: &str) {

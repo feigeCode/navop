@@ -39,15 +39,36 @@ fn run(_config: Config) -> ExitCode {
 
 #[cfg(target_os = "windows")]
 fn run(config: Config) -> ExitCode {
-    // Native child HWNDs must use the classic HWND composition path rather
-    // than GPUI's DirectComposition swap-chain presentation.
+    // The smoke tool exercises two presentation paths, selected by
+    // `SMOKE_RDP_COMPOSE`:
+    //
+    //   off (default)  classic child HWND — needs GPUI's DirectComposition off
+    //   early / late   the composition path Navop uses — needs it on
+    //
+    // GPUI's Windows platform reads `GPUI_DISABLE_DIRECT_COMPOSITION` exactly once,
+    // while it builds its platform singleton, so the decision has to be made here,
+    // before `windows_app::run` opens the window. Turning it off unconditionally —
+    // as this tool used to — makes every compose mode silently fall back to the
+    // classic child window, so the composition path could never be tested.
+    let compose = windows_app::compose_mode();
     unsafe {
-        env::set_var("GPUI_DISABLE_DIRECT_COMPOSITION", "1");
+        if compose == windows_app::ComposeMode::Off {
+            // Native child HWNDs must use the classic HWND composition path rather
+            // than GPUI's DirectComposition swap-chain presentation.
+            env::set_var("GPUI_DISABLE_DIRECT_COMPOSITION", "1");
+        }
         // Keep the native presentation stage traces so the smoke tool still
         // produces the diagnostic output its README workflow relies on.
         env::set_var("NAVOP_REMOTE_DESKTOP_DIAGNOSTICS", "1");
     }
-    println!("presentation: GPUI DirectComposition disabled for native child HWND hosting");
+    println!(
+        "presentation: compose_mode={compose:?} direct_composition={}",
+        if compose == windows_app::ComposeMode::Off {
+            "disabled"
+        } else {
+            "enabled"
+        }
+    );
     windows_app::run(config);
     ExitCode::SUCCESS
 }
