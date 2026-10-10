@@ -338,6 +338,31 @@ impl TabContent for RemoteDesktopView {
     }
 }
 
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+impl RemoteDesktopView {
+    /// Keeps the composed native RDP session out of GPUI's way while overlay
+    /// content is on screen.
+    ///
+    /// GPUI's overlay layer can only paint above the session while the session's
+    /// window is cloaked, and a cloak also takes that window out of the system's
+    /// hit testing — so the cloak follows the overlay content instead of staying
+    /// on. `has_deferred_content` reports the frame drawn *before* this one,
+    /// which is the state the overlay should follow: the frame that opened a
+    /// menu set it, the frame that closed one cleared it, and an idle window
+    /// keeps whatever it last reported.
+    fn sync_native_overlay_cloak(&mut self, window: &Window) {
+        let Some(native) = self.windows_native.as_mut() else {
+            return;
+        };
+        if let Err(error) = native.set_overlay_cloak(window.has_deferred_content()) {
+            tracing::warn!(
+                ?error,
+                "failed to move the Windows native RDP session relative to the GPUI overlay layer"
+            );
+        }
+    }
+}
+
 impl Render for RemoteDesktopView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Retired textures stay queued until no presentation state or rendered
@@ -353,6 +378,8 @@ impl Render for RemoteDesktopView {
                 tracing::warn!(?error, "failed to release remote desktop cursor");
             }
         }
+        #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+        self.sync_native_overlay_cloak(window);
         self.drain_output(window, cx);
         self.sync_local_clipboard(window, cx);
         self.ensure_presentation(window, cx);

@@ -69,6 +69,39 @@ unsafe extern "system" {
         flags: u32,
     ) -> i32;
     pub(crate) fn SetWindowLongPtrW(window: *mut c_void, index: i32, value: isize) -> isize;
+    /// Marks a window as layered and gives it the alpha its composition uses.
+    ///
+    /// `CreateSurfaceFromHwnd` wraps the window's layered composition, and a
+    /// layered window composites as fully transparent until this call supplies a
+    /// colour key or an alpha.
+    pub(crate) fn SetLayeredWindowAttributes(
+        window: *mut c_void,
+        color_key: u32,
+        alpha: u8,
+        flags: u32,
+    ) -> i32;
+    pub(crate) fn RedrawWindow(
+        window: *mut c_void,
+        update_rect: *const Rect,
+        update_region: *mut c_void,
+        flags: u32,
+    ) -> i32;
     pub(crate) fn ShowWindow(window: *mut c_void, command: i32) -> i32;
     pub(crate) fn WindowFromPoint(point: Point) -> *mut c_void;
+}
+
+#[link(name = "dwmapi")]
+unsafe extern "system" {
+    pub(crate) fn DwmSetWindowAttribute(
+        window: *mut c_void,
+        attribute: u32,
+        value: *const c_void,
+        size: u32,
+    ) -> i32;
+    pub(crate) fn DwmGetWindowAttribute(
+        window: *mut c_void,
+        attribute: u32,
+        value: *mut c_void,
+        size: u32,
+    ) -> i32;
 }

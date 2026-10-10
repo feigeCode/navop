@@ -1,6 +1,6 @@
 use gpui::{
     AnyElement, AppContext, Context, Entity, EventEmitter, Hsla, InteractiveElement, IntoElement,
-    ParentElement, Pixels, Styled, UniformListScrollHandle, Window, div, hsla, px,
+    ParentElement, Pixels, Styled, UniformListScrollHandle, Window, deferred, div, hsla, px,
 };
 use gpui_component::input::{InputEvent, InputState};
 use terminal_view::TerminalColors;
@@ -157,30 +157,44 @@ impl PersistentConnectionSidebar {
         let layout = one_ui::theme_geometry().layout;
         let top = layout.tab_bar;
         let pad = px(FLOATING_CARD_MARGIN);
-        div()
-            .absolute()
-            .top(top)
-            .bottom_0()
-            .left_0()
-            .w(self.tree_width + pad)
-            // 浮动侧边栏覆盖在内容区之上：occlude 让命中测试在侧边栏处终止，
-            // 避免滚轮/鼠标事件穿透到下方的 tab 内容区（否则终端等会跟着滚动）。
-            .occlude()
-            .pt(pad)
-            .pl(pad)
-            .pb(pad)
-            .child(
-                div()
-                    .size_full()
-                    .overflow_hidden()
-                    .rounded_lg()
-                    .border_1()
-                    .border_color(palette.border.opacity(0.6))
-                    .shadow_lg()
-                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child(self.render_connection_tree(palette, window, cx)),
-            )
-            .into_any_element()
+        // 必须把**绘制**放进 gpui 的 deferred 层（overlay surface），否则盖不住原生
+        // Windows RDP 会话：那个会话的光栅化被合成成一个 portal visual，位于
+        // 「普通元素树之上、deferred 层之下」。也就是说这个 `div().absolute()` 浮层
+        // 作为普通元素树内容，必然被远端画面盖住 —— 只有 deferred 内容才在它上面。
+        // gpui `has_deferred_content` 的文档把这点写死了：「普通元素树内容无法表达
+        // 『盖住原生子窗口』」。dialog / 菜单能盖住，正是因为 gpui-kit 用
+        // `deferred(anchored(...))` 画它们。
+        //
+        // `deferred` 只推迟**绘制**，布局仍留在原处（`Deferred::request_layout` 直接
+        // 转交 child），所以侧栏的尺寸、位置、命中测试、occlude 与滚动都不受影响；
+        // 它同时是 `Window::has_deferred_content()` 的输入，侧栏可见期间原生会话会
+        // 照旧「按需 cloak 让位」，让 visual 不再被原始子窗口压住。
+        deferred(
+            div()
+                .absolute()
+                .top(top)
+                .bottom_0()
+                .left_0()
+                .w(self.tree_width + pad)
+                // 浮动侧边栏覆盖在内容区之上：occlude 让命中测试在侧边栏处终止，
+                // 避免滚轮/鼠标事件穿透到下方的 tab 内容区（否则终端等会跟着滚动）。
+                .occlude()
+                .pt(pad)
+                .pl(pad)
+                .pb(pad)
+                .child(
+                    div()
+                        .size_full()
+                        .overflow_hidden()
+                        .rounded_lg()
+                        .border_1()
+                        .border_color(palette.border.opacity(0.6))
+                        .shadow_lg()
+                        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(self.render_connection_tree(palette, window, cx)),
+                ),
+        )
+        .into_any_element()
     }
 
     pub(crate) fn new(
@@ -298,6 +312,19 @@ mod tests {
         assert!(implementation.contains(".rounded_lg()"));
         assert!(implementation.contains(".shadow_lg()"));
         assert!(implementation.contains("FLOATING_CARD_MARGIN"));
+        // 浮动侧边栏必须画在 gpui 的 deferred 层，否则会被原生 Windows RDP 会话的
+        // 合成 visual 盖住：普通元素树内容在它下面，deferred 内容才在它上面。
+        // 断言按函数体切片，不用整文件 contains —— 免得被别处的 `deferred(` 满足。
+        let floating = implementation
+            .split("fn render_floating_tree")
+            .nth(1)
+            .and_then(|rest| rest.split("pub(crate) fn new(").next())
+            .expect("render_floating_tree source");
+        assert!(floating.contains("deferred("));
+        assert!(floating.contains(".into_any_element()"));
+        // 旧的「零尺寸 deferred 标记」写法不够：布局在原处、绘制也在原处，侧栏仍然
+        // 留在普通内容层，盖不住 native 子窗口。
+        assert!(!floating.contains(".child(deferred("));
         // 自动收起路径保留：打开连接后
         assert!(state.contains("fn collapse_after_open"));
     }

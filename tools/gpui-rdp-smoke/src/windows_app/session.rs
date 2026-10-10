@@ -1,22 +1,65 @@
-use gpui::Window;
+use gpui::{Window, WindowCompositionSurface};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use windows_rdp_host::{
     WindowsRdpColorDepth, WindowsRdpConnectionOptions, WindowsRdpCredentialBundle, WindowsRdpHost,
     WindowsRdpHostError, WindowsRdpHostLifecycle, WindowsRdpParentWindow,
 };
 
+use super::composition::WindowsNativeComposition;
 use super::{host_options, log_host_error, physical_viewport_size};
 use crate::{cli::Config, native_overlay::NativeOverlay};
+
+/// When the overlay is moved into the GPUI composition tree.
+///
+/// The distinction matters for one specific question: whether
+/// `CreateSurfaceFromHwnd` captures pixels from a window that has never been on
+/// screen. `Early` composes before the window is ever shown (what Navop does);
+/// `Late` composes after login has completed, so the window has been visible and
+/// its session has real content.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ComposeMode {
+    Off,
+    Early,
+    Late,
+}
+
+pub(crate) fn compose_mode() -> ComposeMode {
+    match std::env::var("SMOKE_RDP_COMPOSE").ok().as_deref() {
+        Some("early") => ComposeMode::Early,
+        Some("late") => ComposeMode::Late,
+        _ => ComposeMode::Off,
+    }
+}
+
+/// Whether to cloak the overlay at attach time instead of after it has been
+/// shown and painted.
+///
+/// Only used to demonstrate causality: the immediate ordering is the one that
+/// leaves the composition surface empty, and keeping it behind a switch lets
+/// the fixed and broken orderings be measured on the same build.
+fn cloak_immediately() -> bool {
+    std::env::var("SMOKE_RDP_CLOAK_IMMEDIATE").is_ok_and(|value| value == "1" || value == "true")
+}
 
 pub(super) struct NativeSession {
     pub(super) host: WindowsRdpHost,
     pub(super) overlay: NativeOverlay,
+    composition: Option<WindowsNativeComposition>,
+    /// Set once the overlay is attached to the composition tree but DWM has not
+    /// been told to stop drawing the child window yet.
+    ///
+    /// The cloak cannot be applied at attach time: see `finish_cloak`.
+    pending_cloak: bool,
+    /// Kept until composition actually happens so the `Late` mode can attach
+    /// after login instead of at creation time.
+    surface: Option<WindowCompositionSurface>,
 }
 
 pub(super) type Initialization = (Option<NativeSession>, String, Option<(i32, i32)>);
 
 impl NativeSession {
     pub(super) fn prepare_host_close(&mut self) {
+        self.release_composition();
         if self.host.lifecycle() != WindowsRdpHostLifecycle::Open {
             return;
         }
@@ -27,10 +70,145 @@ impl NativeSession {
             log_host_error("close_disconnect", error);
         }
     }
+
+    /// Moves the overlay window into the composition tree and takes it off
+    /// screen.
+    ///
+    /// Ordering is deliberate: `WS_EX_LAYERED` (with its alpha) first, because
+    /// that is what `CreateSurfaceFromHwnd` wraps; the attachment next, because
+    /// cloaking an uncomposed window would take the session off screen with
+    /// nothing to replace it. The cloak itself is *not* applied here — see
+    /// `finish_cloak`.
+    pub(super) fn compose(&mut self, stage: &str) -> Result<(), String> {
+        if self.composition.is_some() {
+            return Ok(());
+        }
+        let Some(surface) = self.surface.clone() else {
+            return Ok(());
+        };
+        if let Err(error) = self.overlay.set_layered(true) {
+            return Err(format!("{stage}: applying WS_EX_LAYERED failed: {error}"));
+        }
+        let mut composition = WindowsNativeComposition::new(surface, self.overlay.hwnd());
+        if let Err(error) = composition.attach() {
+            // A layered window that nothing composes is invisible rather than
+            // merely uncomposed, so the style has to come back off.
+            if let Err(restore) = self.overlay.set_layered(false) {
+                println!("composition: warning could not drop WS_EX_LAYERED after failure: {restore}");
+            }
+            return Err(format!("{stage}: {error}"));
+        }
+        self.composition = Some(composition);
+        println!(
+            "composition: stage={stage} overlay_hwnd=0x{:016X} layered_applied=true cloak={}",
+            self.overlay.hwnd(),
+            if cloak_immediately() { "immediate" } else { "deferred" }
+        );
+        if cloak_immediately() {
+            // Negative control for the ordering above: cloaking right here is the
+            // behaviour that produced an empty composition surface.
+            self.finish_cloak("compose_immediate")?;
+        } else {
+            self.pending_cloak = true;
+        }
+        Ok(())
+    }
+
+    /// Cloaks the overlay, once doing so is actually safe.
+    ///
+    /// This is the whole reason the cloak is not applied inside `compose`.
+    /// `DWMWA_CLOAK` is what takes the child window off screen so that only the
+    /// composition visual shows the session, but it is destructive when applied
+    /// too early: cloaking a window that has never been shown and painted at its
+    /// final size leaves the composition surface permanently empty. The window
+    /// then contributes no pixels at all — the composed area shows whatever is
+    /// behind it — and no later paint brings it back, not even the RDP frames
+    /// themselves. Every DirectComposition call still reports success, which is
+    /// why this fails silently.
+    ///
+    /// The window has to be on screen at its final size and painted once before
+    /// the cloak lands. Both are true by the time the first bounds sync has been
+    /// mirrored into the composition tree, so that is when this runs. Tests that
+    /// cloaked at 1x1 and resized afterwards always produced an empty surface;
+    /// painting first and cloaking afterwards always worked, and the result was
+    /// not timing dependent.
+    ///
+    /// Callers own the decision of *when* this is safe; the method itself always
+    /// cloaks.
+    fn finish_cloak(&mut self, stage: &str) -> Result<(), String> {
+        if let Err(error) = self.overlay.redraw() {
+            return Err(format!("{stage}: painting the overlay at its final size failed: {error}"));
+        }
+        if let Err(error) = self.overlay.set_cloaked(true) {
+            return Err(format!("{stage}: cloaking the composed overlay failed: {error}"));
+        }
+        self.pending_cloak = false;
+        let cloaked = self
+            .overlay
+            .cloaked_state()
+            .map_or_else(|error| format!("unreadable({error})"), |value| value.to_string());
+        println!(
+            "composition: stage={stage} overlay_hwnd=0x{:016X} layered_applied=true cloaked_state={cloaked}",
+            self.overlay.hwnd()
+        );
+        Ok(())
+    }
+
+    /// Mirrors the overlay's placement into the composition tree.
+    pub(super) fn sync_composition(&mut self, visible: bool) -> Result<(), String> {
+        let bounds = self.overlay.last_bounds();
+        match self.composition.as_mut() {
+            Some(composition) if visible => composition.sync_bounds(bounds)?,
+            Some(composition) => return composition.sync_visible(false),
+            None => return Ok(()),
+        }
+        // The child window is on screen at its final size and the visual now has
+        // the matching bounds, so the deferred cloak can finally be applied.
+        if self.pending_cloak {
+            self.finish_cloak("composition_sync")?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn composition_active(&self) -> bool {
+        self.composition.is_some()
+    }
+
+    /// Restores the plain child-window presentation.
+    fn release_composition(&mut self) {
+        self.composition = None;
+        self.pending_cloak = false;
+        if let Err(error) = self.overlay.set_cloaked(false) {
+            println!("composition: warning could not uncloak while falling back: {error}");
+        }
+        if let Err(error) = self.overlay.set_layered(false) {
+            println!("composition: warning could not drop WS_EX_LAYERED while falling back: {error}");
+        }
+    }
+}
+
+/// Enables GPUI window composition and creates the surface the native RDP
+/// window is presented in.
+///
+/// Every failure here is non-fatal: the caller keeps the plain child-window
+/// presentation.
+fn enable_composition_surface(window: &Window) -> Option<WindowCompositionSurface> {
+    match window
+        .enable_window_composition()
+        .and_then(|composition| composition.create_native_surface())
+    {
+        Ok(surface) => Some(surface),
+        Err(error) => {
+            eprintln!("composition: stage=enable_composition error={error:#}");
+            None
+        }
+    }
 }
 
 pub(super) fn initialize(config: Config, window: &Window) -> Initialization {
     log_config(&config);
+    let mode = compose_mode();
+    println!("composition: mode={mode:?} compose_env={:?}", std::env::var("SMOKE_RDP_COMPOSE").ok());
     let credentials = build_credentials(&config);
     let connection_options = match build_connection_options(&config) {
         Ok(options) => options,
@@ -43,7 +221,14 @@ pub(super) fn initialize(config: Config, window: &Window) -> Initialization {
         Ok(owner) => owner,
         Err(error) => return (None, error, None),
     };
-    let session = match create_session(owner) {
+    let surface = match mode {
+        ComposeMode::Off => None,
+        _ => enable_composition_surface(window),
+    };
+    if surface.is_none() && mode != ComposeMode::Off {
+        eprintln!("composition: stage=surface_unavailable; falling back to a plain child window");
+    }
+    let session = match create_session(owner, surface, mode) {
         Ok(session) => session,
         Err(error) => return (None, error, None),
     };
@@ -124,7 +309,11 @@ fn gpui_owner(window: &Window) -> Result<usize, String> {
     Ok(owner)
 }
 
-fn create_session(owner: usize) -> Result<NativeSession, String> {
+fn create_session(
+    owner: usize,
+    surface: Option<WindowCompositionSurface>,
+    mode: ComposeMode,
+) -> Result<NativeSession, String> {
     let overlay = NativeOverlay::create(owner).map_err(|error| {
         eprintln!("ERROR: stage=create_native_overlay error={error}");
         "Failed to create the child native RDP overlay; see console".to_owned()
@@ -141,7 +330,19 @@ fn create_session(owner: usize) -> Result<NativeSession, String> {
         host.generation(),
         host.lifecycle()
     );
-    Ok(NativeSession { host, overlay })
+    let mut session = NativeSession {
+        host,
+        overlay,
+        composition: None,
+        pending_cloak: false,
+        surface,
+    };
+    if mode == ComposeMode::Early {
+        if let Err(error) = session.compose("early") {
+            eprintln!("ERROR: stage=compose_early error={error}");
+        }
+    }
+    Ok(session)
 }
 
 fn finish_initialization(
@@ -159,6 +360,11 @@ fn finish_initialization(
     );
     if let Err(error) = session.overlay.synchronize((0, 0, bounds.0, bounds.1)) {
         return failed_after_overlay_error(session, "initial_overlay_bounds", error);
+    }
+    if session.composition_active() {
+        if let Err(error) = session.sync_composition(true) {
+            eprintln!("ERROR: stage=initial_composition_sync error={error}");
+        }
     }
     if let Err(error) = configure_presentation(&mut session, bounds) {
         return failed_after_host_error(session, error.0, error.1);
@@ -237,6 +443,7 @@ fn failed_after_overlay_error(
 }
 
 fn hide_after_failure(session: &mut NativeSession) {
+    session.release_composition();
     if let Err(error) = session.overlay.hide() {
         eprintln!("ERROR: stage=failure_cleanup_hide_overlay error={error}");
     }

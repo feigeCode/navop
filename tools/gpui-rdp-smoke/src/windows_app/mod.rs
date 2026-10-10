@@ -1,5 +1,8 @@
-mod session;
+mod composition;
+pub(crate) mod session;
 mod view;
+
+pub(crate) use session::{ComposeMode, compose_mode};
 
 use gpui::{
     AppContext, Bounds, Pixels, QuitMode, TitlebarOptions, WindowBounds, WindowOptions, px, size,

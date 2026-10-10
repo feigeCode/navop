@@ -15,7 +15,13 @@ const SWP_NOACTIVATE: u32 = 0x0010;
 const SWP_FRAMECHANGED: u32 = 0x0020;
 const SWP_SHOWWINDOW: u32 = 0x0040;
 const GWL_STYLE: i32 = -16;
+const GWL_EXSTYLE: i32 = -20;
 const ERROR_SUCCESS: u32 = 0;
+const WS_EX_LAYERED: u32 = 0x0008_0000;
+const LWA_ALPHA: u32 = 0x0000_0002;
+const OVERLAY_LAYERED_ALPHA: u8 = 255;
+const DWMWA_CLOAK: u32 = 13;
+const DWMWA_CLOAKED: u32 = 14;
 
 const STATIC_CLASS: [u16; 7] = [
     b'S' as u16,
@@ -174,4 +180,122 @@ pub(super) fn last_error(operation: &str) -> String {
 
 fn last_error_code(operation: &str, code: u32) -> String {
     format!("{operation} failed with Win32 code 0x{code:08X} ({code})")
+}
+
+/// Applies or removes `WS_EX_LAYERED`, and — when applying it — gives the window
+/// the alpha its layered composition needs.
+///
+/// `SetWindowLongPtrW` alone only marks the window layered: until
+/// `SetLayeredWindowAttributes` supplies an alpha the window composites as fully
+/// transparent, so `CreateSurfaceFromHwnd` wraps a surface that holds no visible
+/// pixels and the composed session presents an empty rectangle while every
+/// DirectComposition call still reports success.
+pub(super) fn set_overlay_layered(window: *mut c_void, layered: bool) -> Result<(), String> {
+    let stage = if layered {
+        "add_overlay_layered"
+    } else {
+        "remove_overlay_layered"
+    };
+    let style_before = unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) } as usize;
+    let style_after = if layered {
+        style_before | WS_EX_LAYERED as usize
+    } else {
+        style_before & !(WS_EX_LAYERED as usize)
+    };
+    if style_after != style_before {
+        unsafe {
+            SetLastError(ERROR_SUCCESS);
+        }
+        let previous = unsafe { SetWindowLongPtrW(window, GWL_EXSTYLE, style_after as isize) };
+        let error = unsafe { GetLastError() };
+        if previous == 0 && error != ERROR_SUCCESS {
+            return Err(last_error_code(stage, error));
+        }
+        let flags = SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED;
+        if unsafe { SetWindowPos(window, ptr::null_mut(), 0, 0, 0, 0, flags) } == 0 {
+            return Err(last_error("refresh_overlay_frame"));
+        }
+    }
+    if layered {
+        unsafe {
+            SetLastError(ERROR_SUCCESS);
+        }
+        let applied =
+            unsafe { SetLayeredWindowAttributes(window, 0, OVERLAY_LAYERED_ALPHA, LWA_ALPHA) };
+        if applied == 0 {
+            let error = unsafe { GetLastError() };
+            return Err(last_error_code("activate_overlay_layered", error));
+        }
+    }
+    Ok(())
+}
+
+/// Paints the overlay's whole client area synchronously, at its current size.
+///
+/// This is what makes `DWMWA_CLOAK` safe, and the order is what matters:
+/// cloaking a window that has never been shown and painted at its final size
+/// leaves the composition surface permanently empty. The visual then contributes
+/// no pixels at all — the composed area shows whatever is behind it — and no
+/// later paint brings it back, not even the RDP frames themselves, while every
+/// DirectComposition call still reports success.
+///
+/// A window that has been shown at its final size and painted once keeps
+/// streaming live updates through the cloak, both from itself and from its
+/// nested GDI children, and a later resize does not disturb that. Painting right
+/// before cloaking is therefore sufficient, and needs no settle time.
+pub(super) fn redraw_overlay_window(window: *mut c_void) -> Result<(), String> {
+    const RDW_INVALIDATE: u32 = 0x0001;
+    const RDW_ERASE: u32 = 0x0004;
+    const RDW_ALLCHILDREN: u32 = 0x0080;
+    const RDW_UPDATENOW: u32 = 0x0100;
+    let flags = RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW;
+    if unsafe { RedrawWindow(window, ptr::null(), ptr::null_mut(), flags) } == 0 {
+        return Err(last_error("RedrawWindow(child RDP overlay)"));
+    }
+    Ok(())
+}
+
+/// Cloaks or uncloaks the overlay through DWM.
+///
+/// Cloaking takes the window off screen while letting the system keep composing
+/// its content into the composition visual.
+pub(super) fn set_overlay_cloaked(window: *mut c_void, cloaked: bool) -> Result<(), String> {
+    let flag: i32 = i32::from(cloaked);
+    let attribute = &flag as *const i32;
+    let result = unsafe {
+        DwmSetWindowAttribute(
+            window,
+            DWMWA_CLOAK,
+            attribute.cast::<c_void>(),
+            std::mem::size_of::<i32>() as u32,
+        )
+    };
+    if result < 0 {
+        return Err(format!(
+            "DwmSetWindowAttribute(DWMWA_CLOAK={cloaked}) failed with HRESULT 0x{:08X}",
+            result as u32
+        ));
+    }
+    Ok(())
+}
+
+/// Reads back `DWMWA_CLOAKED` so the cloak state can be asserted, not assumed.
+pub(super) fn overlay_cloaked(window: *mut c_void) -> Result<i32, String> {
+    let mut value: i32 = 0;
+    let attribute = &mut value as *mut i32;
+    let result = unsafe {
+        DwmGetWindowAttribute(
+            window,
+            DWMWA_CLOAKED,
+            attribute.cast::<c_void>(),
+            std::mem::size_of::<i32>() as u32,
+        )
+    };
+    if result < 0 {
+        return Err(format!(
+            "DwmGetWindowAttribute(DWMWA_CLOAKED) failed with HRESULT 0x{:08X}",
+            result as u32
+        ));
+    }
+    Ok(value)
 }

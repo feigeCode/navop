@@ -72,7 +72,29 @@ unsafe extern "system" {
     pub(super) fn IsWindow(window: *mut c_void) -> i32;
     pub(super) fn IsWindowEnabled(window: *mut c_void) -> i32;
     pub(super) fn IsWindowVisible(window: *mut c_void) -> i32;
+    /// Paints the window (and optionally its children) before control returns.
+    ///
+    /// Used to make sure the overlay's rasterization covers its final size before
+    /// it is cloaked; see `redraw_overlay_window`.
+    pub(super) fn RedrawWindow(
+        window: *mut c_void,
+        update_rect: *const Rect,
+        update_region: *mut c_void,
+        flags: u32,
+    ) -> i32;
     pub(super) fn ScreenToClient(window: *mut c_void, point: *mut Point) -> i32;
+    /// Activates a layered window's contents.
+    ///
+    /// A layered window composites as fully transparent until it is given an
+    /// alpha (or a colour key), and `CreateSurfaceFromHwnd` wraps exactly that
+    /// composition — so without this call the composed visual has no visible
+    /// pixels even though every DirectComposition call succeeds.
+    pub(super) fn SetLayeredWindowAttributes(
+        window: *mut c_void,
+        color_key: u32,
+        alpha: u8,
+        flags: u32,
+    ) -> i32;
     pub(super) fn SetWindowLongPtrW(window: *mut c_void, index: i32, value: isize) -> isize;
     pub(super) fn SetWindowPos(
         window: *mut c_void,

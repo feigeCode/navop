@@ -51,9 +51,8 @@ mod windows_single_instance;
 
 use crate::navop_app::NavopApp;
 use gpui::*;
-use one_core::tab_container::GlobalTabContainer;
 
-use gpui_component::{DialogStateChanged, Root};
+use gpui_component::Root;
 use gpui_component_assets::Assets;
 use one_core::settings::{AppSettings, MainWindowSize, MainWindowState};
 use std::path::PathBuf;
@@ -340,14 +339,37 @@ fn report_single_instance_failure(message: &str) {
 fn main() {
     env_file::load_env_files();
 
-    // GPUI 的 Windows 平台默认通过 DirectComposition visual 呈现窗口内容，
-    // 该 visual 会盖住传统 child HWND（例如 RDP ActiveX 控件），即使连接
-    // 成功、child 可见，远端桌面区域也表现为白屏。原生 RDP 后端必须在
-    // platform 单例构造之前让 GPUI 走经典 HWND swap-chain 路径，与
-    // `tools/gpui-rdp-smoke` 保持一致；该环境变量只在构造时读取一次。
-    // 使用共享编译期标记（`remote_desktop_view/windows-native-rdp` 也会
-    // 启用它），而不是 main 自身的 feature，保证两种 feature 写法都生效。
-    if remote_desktop::windows_native_rdp_compiled() {
+    // GPUI 的 Windows 平台通过 DirectComposition visual 呈现窗口内容；原生 RDP
+    // 后端可以把 ActiveX 子窗口作为**合成 surface** 挂进同一棵 visual 树
+    // （`remote_desktop_view::windows_native_composition`）：子窗口的栅格化变成一个
+    // 位于 GPUI overlay 层之下的 visual，标签菜单、弹层等 deferred 浮层因此能盖住
+    // 远端桌面（issue #310）。
+    //
+    // 让浮层真正露出来的是 `DWMWA_CLOAK`，而 cloak 会**同时**把窗口踢出系统的命中
+    // 测试。RDP 的按钮输入归 `IHWindowClass`（"Input Capture Window"，靠 RawInput 走
+    // 系统输入路径），窗口一被 cloak 就再也收不到按钮，合成消息也救不回来——实测把
+    // `WM_MOUSEMOVE` / `WM_LBUTTONDOWN` / `WM_RBUTTONDOWN` 分别 PostMessage 与
+    // SendMessage 给 overlay 子树的 6 个窗口（共 12 组），只有 `WM_MOUSEMOVE` 生效
+    // （远端光标会动），按钮消息全部零像素变化；先把真实光标 `SetCursorPos` 到目标点
+    // 再发同样无效。所以 **cloak 不能常驻**。
+    //
+    // 现在的做法是**按需 cloak**：合成照常启用，但窗口默认不 cloak——保持普通子窗口
+    // 的输出与输入；只有 GPUI 真的有浮层内容时（`Window::has_deferred_content`，覆盖
+    // 全部 popup / context / dropdown 菜单以及 prompt）才临时 cloak，浮层一消失立刻
+    // 取消。两个方向都走 `WindowsNativeAdapter::set_overlay_cloak`。
+    //
+    // 硬约束不变：`DWMWA_CLOAK` 必须晚于「窗口第一次拿到真实尺寸并被绘制一次」，
+    // 过早 cloak 会让合成 surface 永久为空、RDP 区域只剩 gpui 背景色 `#171717`。
+    // 见 `docs/windows-native-rdp-cloak-ordering.md`。
+    //
+    // `NAVOP_RDP_DISABLE_COMPOSITION=1` 是逃生门：直接关掉整条合成路径（同时关掉
+    // GPUI 的 DirectComposition），退回经典 HWND 子窗口。该环境变量只在 platform
+    // 单例构造时读取一次，所以必须在这里、在 GPUI 之前决定；使用共享编译期标记
+    // （`remote_desktop_view/windows-native-rdp` 也会启用它）而不是 main 自身的
+    // feature，保证两种 feature 写法都生效。
+    if remote_desktop::windows_native_rdp_compiled()
+        && std::env::var_os("NAVOP_RDP_DISABLE_COMPOSITION").is_some()
+    {
         // SAFETY: 进程尚未创建 GPUI platform，也没有任何线程会读取该
         // 环境变量；与 smoke 工具在进程首部执行相同操作。
         unsafe {
@@ -532,14 +554,16 @@ fn main() {
                 extension_update::schedule_plugin_update_check(window, cx);
                 let view = cx.new(|cx| NavopApp::new(window, cx));
                 let root = cx.new(|cx| Root::new(view, window, cx));
-                let tab_container = cx.global::<GlobalTabContainer>().tab_container.clone();
                 system_tray::sync_sessions_from(cx);
-                cx.subscribe(&root, move |_, event: &DialogStateChanged, cx| {
-                    tab_container.update(cx, |tabs, cx| {
-                        tabs.set_active_presentation_obscured_by_dialog(event.active_count > 0, cx);
-                    });
-                })
-                .detach();
+                // 主窗口内的 dialog 与右键菜单一样，都是 GPUI 的 deferred 浮层：
+                // Windows 原生 RDP 那侧的「按需 cloak」会据此把会话窗口让给浮层
+                // （见 `remote_desktop_view::view::render::sync_native_overlay_cloak`），
+                // 所以这里**不再**为 dialog 单独标记 presentation obscured。
+                //
+                // 旧接线（订阅 `DialogStateChanged` → `set_active_presentation_obscured_by_dialog`）
+                // 走的是另一条更重的路：它把会话判为 not active → `native.deactivate()`
+                // 直接撤下 RDP overlay，于是 dialog 背后是一片空白，切回该标签页也是空白。
+                // 浮层该由「让位」解决，不该由「撤下会话」解决。
                 root
             }) {
                 Ok(window) => window,
@@ -608,6 +632,14 @@ fn main() {
         })
         .detach();
     });
+
+    // GPUI 的 `run` 循环返回之后，进程才进入 `ExitProcess`，逐个执行已加载
+    // 模块的 `DLL_PROCESS_DETACH`。这台机器上常年驻留着若干第三方注入模块
+    // （输入法 TSF、显卡厂商钩子），其中任何一个在 detach 里阻塞，进程都会停在
+    // 「窗口还在、消息循环已停、连 `TerminateProcess` 都打不进去」的状态，
+    // 从表面看就是「关不掉」。记录这个里程碑，可以把「卡在应用/GPU 资源析构」
+    // 与「卡在进程退出」两类问题区分开。
+    tracing::info!("Navop run loop returned; application resources released");
 }
 
 #[cfg(test)]
@@ -690,22 +722,56 @@ mod embedded_cli_removal_tests {
         assert!(!source.contains("continuing startup"));
     }
 
+    /// 原生 RDP 的合成路径**默认启用**，只有逃生门能关掉它。
+    ///
+    /// 浮层要盖住远端桌面，靠的就是把 ActiveX 子窗口挂进 GPUI 的 visual 树
+    /// （issue #310），所以合成必须开着。让浮层真正露出来的 `DWMWA_CLOAK` 会
+    /// **同时**把窗口踢出系统命中测试：RDP 的按钮输入归 `IHWindowClass`
+    /// （Input Capture Window）走 RawInput，cloak 之后收不到 —— 实测 12 组转发里
+    /// 只有 `WM_MOUSEMOVE` 生效，按钮消息全部零像素变化。所以 cloak 改成**按需**：
+    /// 只有 GPUI 真的画了浮层内容时才 cloaks，见
+    /// `WindowsNativeAdapter::set_overlay_cloak`；窗口默认保持普通子窗口的输入。
+    ///
+    /// 逃生门 `NAVOP_RDP_DISABLE_COMPOSITION=1` 退回经典 HWND 路径，此时必须
+    /// **同时**关掉 GPUI 的 DirectComposition：否则 RDP 只是一个普通子窗口，会被
+    /// GPUI 的合成 visual 盖住。
     #[test]
-    fn windows_native_rdp_disables_direct_composition_before_application_creation() {
-        let source = include_str!("main.rs");
+    fn windows_native_rdp_keeps_direct_composition_unless_the_escape_hatch_is_set() {
+        let source = production_source();
         let marker = source
             .find("remote_desktop::windows_native_rdp_compiled()")
             .expect("windows-native-rdp capability marker");
-        let setter = source
-            .find("GPUI_DISABLE_DIRECT_COMPOSITION")
-            .expect("windows-native-rdp must disable GPUI DirectComposition");
+        // 两个标识符都从 marker 之后开始找：闸门上方的大段注释里也会提到
+        // `GPUI_DISABLE_DIRECT_COMPOSITION`，从文件头找会命中注释。
+        let gate = &source[marker..];
+        let switch = marker
+            + gate
+                .find("NAVOP_RDP_DISABLE_COMPOSITION")
+                .expect("escape hatch for the composition presentation path");
+        let setter = marker
+            + gate
+                .find("GPUI_DISABLE_DIRECT_COMPOSITION")
+                .expect("classic presentation path disables GPUI DirectComposition");
         let application = source
             .find("gpui_platform::application()")
             .expect("GPUI application creation");
 
-        assert!(marker < setter);
+        // 判定必须发生在 GPUI platform 构造之前：该环境变量只被读取一次。
+        assert!(marker < switch);
+        assert!(switch < setter);
         assert!(setter < application);
         assert!(source.contains("std::env::set_var(\"GPUI_DISABLE_DIRECT_COMPOSITION\", \"1\")"));
+        // 关闭动作只能由逃生门把关：默认启用，只有显式关掉合成才跟着关。
+        let guard = &source[marker..setter];
+        assert!(
+            guard.contains("var_os(\"NAVOP_RDP_DISABLE_COMPOSITION\").is_some()"),
+            "DirectComposition must stay on unless the composition path is explicitly disabled"
+        );
+        // 旧的 opt-in 开关已不再承认：留着它会让"默认启用"变成一句空话。
+        assert!(
+            !source.contains("NAVOP_RDP_ENABLE_COMPOSITION"),
+            "the retired opt-in switch must not survive as a no-op"
+        );
     }
 
     #[test]
@@ -761,18 +827,36 @@ mod embedded_cli_removal_tests {
         assert!(restore < open, "恢复主窗口要发生在打开文件之前");
     }
 
+    /// 主窗口的 dialog **不再**接管 Windows 原生 RDP 的呈现。
+    ///
+    /// 旧接线订阅 `DialogStateChanged`，把活跃 dialog 数喂给
+    /// `TabContainer::set_active_presentation_obscured_by_dialog`，最终落到
+    /// `native.deactivate()` —— 会话窗口被撤下，dialog 背后是空白页，切回该标签页
+    /// 也还是空白。dialog 与右键菜单一样都是 GPUI 的 deferred 浮层，原生 RDP 侧已由
+    /// 「按需 cloak」统一让位，所以这条接线必须保持删除状态：它一旦回来，空白页就跟着
+    /// 回来，而且不会有任何报错。
+    ///
+    /// 被禁的字面量要在测试里拆开写（`concat!`）：断言目标就在同一个文件里，
+    /// 否则 `!source.contains(...)` 会被断言自己的文本满足。所以查的是**代码形状**
+    /// 而不是裸标识符 —— 生产代码的注释里还会提到旧符号名（那是有意留的线索）。
     #[test]
-    fn main_window_dialog_state_obscures_active_native_presentation() {
+    fn dialog_state_does_not_obscure_the_native_presentation() {
         let source = include_str!("main.rs").replace("\r\n", "\n");
 
-        let _ = std::any::TypeId::of::<gpui_component::DialogStateChanged>();
-        assert!(source.contains("use gpui_component::{DialogStateChanged, Root};"));
         assert!(source.contains("let root = cx.new(|cx| Root::new(view, window, cx));"));
-        assert!(source.contains("cx.subscribe(&root,"));
-        assert!(source.contains("event: &DialogStateChanged"));
-        assert!(source.contains("event.active_count > 0"));
-        assert!(source.contains("set_active_presentation_obscured_by_dialog"));
-        assert!(source.contains(".detach();\n                root"));
+
+        let forbidden = [
+            concat!("cx.subscribe(&", "root,"),
+            concat!("event.active", "_count > 0"),
+            concat!("tabs.set_active_presentation_obscured", "_by_dialog("),
+            concat!("use one_core::tab_container::Global", "TabContainer;"),
+        ];
+        for needle in forbidden {
+            assert!(
+                !source.contains(needle),
+                "dialog 不是「遮蔽呈现」的来源：{needle} 一旦回来，RDP 就会在弹窗背后变成空白页"
+            );
+        }
     }
 
     #[test]
