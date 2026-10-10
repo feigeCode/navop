@@ -1098,7 +1098,6 @@ pub struct TabContainer {
     show_tab_content: bool,
     presentation_obscured: bool,
     presentation_obscured_by_main_content: bool,
-    presentation_obscured_by_dialog: bool,
     presentation_obscured_by_legacy_caller: bool,
     show_window_controls: bool,
     /// 是否在标签栏最右侧显示后台任务入口。只有顶部主标签栏展示，
@@ -1166,7 +1165,6 @@ impl TabContainer {
             show_tab_content: true,
             presentation_obscured: false,
             presentation_obscured_by_main_content: false,
-            presentation_obscured_by_dialog: false,
             presentation_obscured_by_legacy_caller: false,
             show_window_controls: false,
             show_background_task_panel: true,
@@ -1749,10 +1747,17 @@ impl TabContainer {
         }
     }
 
+    /// 重新合成「当前标签页的呈现是否被遮住」。
+    ///
+    /// **dialog 不是遮蔽来源**（2026-10-10）：主窗口的 dialog 与右键菜单一样，都是 GPUI
+    /// 的 deferred 浮层，Windows 原生 RDP 侧已由「按需 cloak」让它
+    /// （`remote_desktop_view::view::render::sync_native_overlay_cloak`）。旧实现把活跃
+    /// dialog 数当成遮蔽来源，连锁结果是 `native.deactivate()` —— 会话窗口被撤下，弹窗
+    /// 背后是空白页，切回该标签页还是空白。这个布尔量要表达的只有「GPUI 主内容真的盖住了
+    /// 呈现」，浮层让位不该走撤销会话这条路。
     fn recompute_active_presentation_obscured(&mut self, cx: &mut Context<Self>) {
-        let obscured = self.presentation_obscured_by_main_content
-            || self.presentation_obscured_by_dialog
-            || self.presentation_obscured_by_legacy_caller;
+        let obscured =
+            self.presentation_obscured_by_main_content || self.presentation_obscured_by_legacy_caller;
         if self.presentation_obscured == obscured {
             return;
         }
@@ -1771,19 +1776,6 @@ impl TabContainer {
         }
 
         self.presentation_obscured_by_main_content = obscured;
-        self.recompute_active_presentation_obscured(cx);
-    }
-
-    pub fn set_active_presentation_obscured_by_dialog(
-        &mut self,
-        obscured: bool,
-        cx: &mut Context<Self>,
-    ) {
-        if self.presentation_obscured_by_dialog == obscured {
-            return;
-        }
-
-        self.presentation_obscured_by_dialog = obscured;
         self.recompute_active_presentation_obscured(cx);
     }
 
@@ -5717,14 +5709,16 @@ mod tests {
                 lifecycle_for_window.lock().expect("lifecycle lock").clear();
 
                 container.update(cx, |container, cx| {
+                    // 遮蔽来源是「或」关系，且每个来源自己先去重：重复置真、被另一个
+                    // 来源顶住时的置假都不该产生新的状态广播。
                     container.set_active_presentation_obscured_by_main_content(true, cx);
                     container.set_active_presentation_obscured_by_main_content(true, cx);
-                    container.set_active_presentation_obscured_by_dialog(true, cx);
+                    container.set_active_presentation_obscured(true, cx);
                     container.set_active_presentation_obscured_by_main_content(false, cx);
-                    container.set_active_presentation_obscured_by_dialog(false, cx);
-                    container.set_active_presentation_obscured_by_dialog(true, cx);
+                    container.set_active_presentation_obscured(false, cx);
+                    container.set_active_presentation_obscured(true, cx);
                     container.set_active_presentation_obscured_by_main_content(true, cx);
-                    container.set_active_presentation_obscured_by_dialog(false, cx);
+                    container.set_active_presentation_obscured(false, cx);
                     container.set_active_presentation_obscured_by_main_content(false, cx);
                     container.set_active_presentation_obscured(true, cx);
                     container.set_active_presentation_obscured_by_main_content(true, cx);
