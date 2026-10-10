@@ -98,7 +98,6 @@ pub struct Editor {
     table_axis_selection: Option<TableAxisSelection>,
     cross_block_selection: Option<CrossBlockSelection>,
     cross_block_drag: Option<CrossBlockDrag>,
-    rendered_select_all_cycle: Option<RenderedSelectAllCycle>,
     scrollbar_hovered: bool,
     scrollbar_visible_until: Instant,
     scrollbar_fade_task: Option<Task<()>>,
@@ -228,14 +227,6 @@ pub(super) struct CrossBlockDrag {
     pub(super) anchor: CrossBlockSelectionEndpoint,
 }
 
-/// Short-lived Ctrl/Cmd+A press counter for rendered-mode selection upgrade.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct RenderedSelectAllCycle {
-    entity_id: EntityId,
-    count: u8,
-    last_pressed_at: Instant,
-}
-
 /// Mapping from one visible block's text range to canonical Markdown offsets.
 #[derive(Clone)]
 pub(super) struct SourceTargetMapping {
@@ -258,7 +249,6 @@ pub enum ViewMode {
 impl Editor {
     const HISTORY_LIMIT: usize = 200;
     const HISTORY_COALESCE_WINDOW: Duration = Duration::from_millis(1_000);
-    const RENDERED_SELECT_ALL_CYCLE_WINDOW: Duration = Duration::from_millis(750);
 
     /// Builds an editor intended to be hosted inside another GPUI view.
     pub fn from_markdown_embedded(cx: &mut Context<Self>, markdown: String) -> Self {
@@ -338,7 +328,6 @@ impl Editor {
             table_axis_selection: None,
             cross_block_selection: None,
             cross_block_drag: None,
-            rendered_select_all_cycle: None,
             scrollbar_hovered: false,
             scrollbar_visible_until: Instant::now(),
             scrollbar_fade_task: None,

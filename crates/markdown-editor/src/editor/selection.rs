@@ -85,7 +85,6 @@ impl Editor {
             return;
         }
 
-        self.rendered_select_all_cycle = None;
         self.begin_cross_block_drag_at_point(event.position, cx);
         cx.propagate();
     }
@@ -207,11 +206,8 @@ impl Editor {
                 }
     }
 
-    fn select_focused_block_text_for_rendered_select_all(
-        &mut self,
-        block: Entity<Block>,
-        cx: &mut Context<Self>,
-    ) {
+    /// Selects only the focused block's own text (rendered mode).
+    fn select_block_text(&mut self, block: Entity<Block>, cx: &mut Context<Self>) {
         self.clear_cross_block_selection(cx);
         self.end_block_pointer_selection_sessions(cx);
         self.clear_table_axis_preview(cx);
@@ -229,7 +225,8 @@ impl Editor {
         cx.notify();
     }
 
-    fn select_all_rendered_document(&mut self, cx: &mut Context<Self>) {
+    /// Selects the entire rendered document, whatever block currently holds focus.
+    pub(super) fn select_all_rendered_document(&mut self, cx: &mut Context<Self>) {
         if self.rendered_document_is_fully_selected(cx) {
             return;
         }
@@ -280,9 +277,8 @@ impl Editor {
         block: Entity<Block>,
         cx: &mut Context<Self>,
     ) {
-        self.rendered_select_all_cycle = None;
         if self.view_mode == ViewMode::Rendered {
-            self.select_focused_block_text_for_rendered_select_all(block, cx);
+            self.select_block_text(block, cx);
             return;
         }
 
@@ -313,7 +309,6 @@ impl Editor {
         target_block: Option<Entity<Block>>,
         cx: &mut Context<Self>,
     ) {
-        self.rendered_select_all_cycle = None;
         if self.view_mode == ViewMode::Rendered {
             self.select_all_rendered_document(cx);
             return;
@@ -337,43 +332,6 @@ impl Editor {
         });
         self.active_entity_id = Some(block.entity_id());
         cx.notify();
-    }
-
-    pub(super) fn on_rendered_select_all_press(
-        &mut self,
-        block: Entity<Block>,
-        cx: &mut Context<Self>,
-    ) {
-        if self.view_mode != ViewMode::Rendered {
-            self.rendered_select_all_cycle = None;
-            return;
-        }
-
-        let now = std::time::Instant::now();
-        let block_id = block.entity_id();
-        let count = match self.rendered_select_all_cycle {
-            Some(cycle)
-                if cycle.entity_id == block_id
-                    && now.duration_since(cycle.last_pressed_at)
-                        <= Self::RENDERED_SELECT_ALL_CYCLE_WINDOW =>
-            {
-                cycle.count.saturating_add(1)
-            }
-            _ => 1,
-        }
-        .min(3);
-
-        self.rendered_select_all_cycle = Some(super::RenderedSelectAllCycle {
-            entity_id: block_id,
-            count,
-            last_pressed_at: now,
-        });
-
-        if count == 1 {
-            self.select_focused_block_text_for_rendered_select_all(block, cx);
-        } else {
-            self.select_all_rendered_document(cx);
-        }
     }
 
     pub(super) fn cross_block_source_selection_snapshot(
@@ -1266,12 +1224,39 @@ mod tests {
             editor.select_all_content_from_context_menu(None, cx);
 
             assert!(editor.rendered_document_is_fully_selected(cx));
-            assert!(
-                editor.rendered_select_all_cycle.is_none(),
-                "the context-menu action must not depend on the Cmd/Ctrl+A cycle"
-            );
         });
         cx.quit();
+    }
+
+    #[gpui::test]
+    async fn cmd_a_selects_the_whole_rendered_document(cx: &mut TestAppContext) {
+        init_editor_test_app(cx);
+        let (editor, cx) = cx.add_window_view(|_window, cx| {
+            Editor::from_markdown(cx, "first\n\nsecond".to_string(), None)
+        });
+        for _ in 0..3 {
+            redraw(cx);
+        }
+
+        cx.simulate_keystrokes("cmd-a");
+        redraw(cx);
+
+        editor.read_with(cx, |editor, cx| {
+            assert!(
+                editor.rendered_document_is_fully_selected(cx),
+                "Cmd+A must select the whole rendered document"
+            );
+        });
+
+        cx.simulate_keystrokes("cmd-a");
+        redraw(cx);
+
+        editor.read_with(cx, |editor, cx| {
+            assert!(
+                editor.rendered_document_is_fully_selected(cx),
+                "a repeated Cmd+A must keep the whole rendered document selected"
+            );
+        });
     }
 
     #[test]

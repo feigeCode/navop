@@ -47,7 +47,6 @@ impl Editor {
     ) {
         self.end_block_pointer_selection_sessions(cx);
         self.clear_cross_block_selection(cx);
-        self.rendered_select_all_cycle = None;
         self.document.replace_roots(replacement, cx);
         if self.view_mode == ViewMode::Rendered {
             self.rebuild_table_runtimes(cx);

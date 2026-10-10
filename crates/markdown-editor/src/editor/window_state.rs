@@ -291,7 +291,6 @@ impl Editor {
         self.end_block_pointer_selection_sessions(cx);
         let selection_snapshot = self.capture_source_selection_snapshot(cx);
         self.clear_cross_block_selection(cx);
-        self.rendered_select_all_cycle = None;
         match target {
             ViewMode::Source => {
                 debug_assert_eq!(self.view_mode, ViewMode::Rendered);

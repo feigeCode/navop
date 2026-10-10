@@ -767,8 +767,8 @@ pub enum BlockEvent {
         mark_inserted_text: bool,
         undo_kind: UndoCaptureKind,
     },
-    /// Ctrl/Cmd+A was pressed in rendered editing. The editor decides whether
-    /// this press selects the focused block or upgrades to all rendered blocks.
+    /// Ctrl/Cmd+A was pressed in rendered editing; the editor selects the
+    /// entire rendered document.
     RequestRenderedSelectAll,
     /// Tab pressed in list context; increase the current block's nesting when
     /// the previous visible block can adopt it.
