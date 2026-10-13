@@ -118,6 +118,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "20260929000001",
         include_str!("../../migrations/20260929000001_credential_forward_to_agent.sql"),
     ),
+    (
+        "20261013000001",
+        include_str!("../../migrations/20261013000001_remove_builtin_navop_ai_provider.sql"),
+    ),
 ];
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {
@@ -544,6 +548,124 @@ mod tests {
             )
             .expect("read forward_to_agent state");
         assert_eq!(0, forward_to_agent);
+
+        run_migrations(&conn).expect("rerun migrations");
+    }
+
+    #[test]
+    fn builtin_navop_ai_migration_removes_onet_cli_rows_and_promotes_default() {
+        let conn = Connection::open_in_memory().expect("open in-memory database");
+        conn.execute_batch(
+            "CREATE TABLE _migrations (
+                version TEXT PRIMARY KEY,
+                applied_at INTEGER NOT NULL
+            );
+            CREATE TABLE llm_providers (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                provider_type TEXT NOT NULL,
+                api_key TEXT,
+                api_base TEXT,
+                api_version TEXT,
+                model TEXT NOT NULL,
+                models TEXT,
+                max_tokens INTEGER,
+                temperature REAL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                is_default INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            INSERT INTO llm_providers
+                (id, name, provider_type, model, enabled, is_default, created_at, updated_at)
+            VALUES
+                (1, 'Navop AI', 'onet_cli', '', 1, 1, 100, 100),
+                (2, 'my-openai', 'openai', 'gpt-4o-mini', 1, 0, 300, 300),
+                (3, 'my-deepseek', 'deepseek', 'deepseek-chat', 1, 0, 200, 200);",
+        )
+        .expect("create pre-migration llm provider schema");
+
+        mark_all_migrations_except(&conn, "20261013000001");
+        run_migrations(&conn).expect("run builtin Navop AI removal migration");
+
+        // 内置 provider 的历史行必须被清掉，否则读取时会因未知 provider_type 整表失败。
+        let remaining: Vec<String> = conn
+            .prepare("SELECT name FROM llm_providers ORDER BY id")
+            .expect("prepare remaining provider query")
+            .query_map([], |row| row.get::<_, String>(0))
+            .expect("query remaining providers")
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .expect("read remaining providers");
+        assert_eq!(vec!["my-openai", "my-deepseek"], remaining);
+
+        // 被删除的行原本是默认 provider：必须由最早创建的剩余 provider 接管，且默认唯一。
+        assert_eq!(
+            1,
+            conn.query_row(
+                "SELECT COUNT(*) FROM llm_providers WHERE is_default = 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("count default providers")
+        );
+        assert_eq!(
+            3,
+            conn.query_row(
+                "SELECT id FROM llm_providers WHERE is_default = 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("read promoted default provider")
+        );
+
+        run_migrations(&conn).expect("rerun migrations");
+    }
+
+    #[test]
+    fn builtin_navop_ai_migration_keeps_existing_default_when_present() {
+        let conn = Connection::open_in_memory().expect("open in-memory database");
+        conn.execute_batch(
+            "CREATE TABLE _migrations (
+                version TEXT PRIMARY KEY,
+                applied_at INTEGER NOT NULL
+            );
+            CREATE TABLE llm_providers (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                provider_type TEXT NOT NULL,
+                api_key TEXT,
+                api_base TEXT,
+                api_version TEXT,
+                model TEXT NOT NULL,
+                models TEXT,
+                max_tokens INTEGER,
+                temperature REAL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                is_default INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            INSERT INTO llm_providers
+                (id, name, provider_type, model, enabled, is_default, created_at, updated_at)
+            VALUES
+                (1, 'Navop AI', 'onet_cli', '', 1, 0, 100, 100),
+                (2, 'my-openai', 'openai', 'gpt-4o-mini', 1, 1, 300, 300);",
+        )
+        .expect("create pre-migration llm provider schema");
+
+        mark_all_migrations_except(&conn, "20261013000001");
+        run_migrations(&conn).expect("run builtin Navop AI removal migration");
+
+        // 已存在默认 provider 时不得被抢走默认标记。
+        assert_eq!(
+            2,
+            conn.query_row(
+                "SELECT id FROM llm_providers WHERE is_default = 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("read preserved default provider")
+        );
 
         run_migrations(&conn).expect("rerun migrations");
     }

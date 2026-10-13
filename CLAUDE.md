@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Navop** is a cross-platform desktop application built on [GPUI](https://gpui.rs) that provides a unified interface for database management, SSH/SFTP, terminal, and AI tools. The project was migrated from OnetCli, so some compatibility-sensitive protocols, persisted identifiers (such as `ProviderType::OnetCli` and its `onet_cli` value), upgrade entries, and public environment variables still use the historical `onetcli` / `OnetCli` spelling.
+**Navop** is a cross-platform desktop application built on [GPUI](https://gpui.rs) that provides a unified interface for database management, SSH/SFTP, terminal, and AI tools. The project was migrated from OnetCli, so some compatibility-sensitive protocols, internal identifiers (such as `OnetCliApp` and `onetcli_app.rs`), upgrade entries, and public environment variables still use the historical `onetcli` / `OnetCli` spelling.
 
 Key capabilities:
 

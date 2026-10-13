@@ -8,7 +8,6 @@ pub struct ProviderItem {
     pub provider_type: String,
     pub models: Vec<String>,
     pub is_default: bool,
-    pub is_builtin: bool,
 }
 
 impl ProviderItem {
@@ -25,7 +24,6 @@ impl ProviderItem {
             provider_type: provider_type.into(),
             models: Vec::new(),
             is_default: false,
-            is_builtin: false,
         }
     }
 
@@ -42,7 +40,6 @@ impl ProviderItem {
             provider_type: config.provider_type.display_name().to_string(),
             models,
             is_default: config.is_default,
-            is_builtin: config.is_builtin(),
         }
     }
 

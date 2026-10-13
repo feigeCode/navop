@@ -204,11 +204,6 @@ fn client_from_config(config: &ProviderConfig, options: ClientOptions<'_>) -> Re
             &config.name,
             options,
         ),
-        ProviderType::OnetCli => {
-            anyhow::bail!(
-                "OnetCli provider should be created via ProviderManager, not LlmConnector"
-            )
-        }
     }
 }
 
@@ -306,7 +301,7 @@ fn provider_base_url<'a>(config: &'a ProviderConfig, default_base_url: &'static 
 
 /// 该 provider 类型开箱可用的默认 API Base URL，供设置表单预填。
 ///
-/// 返回 `None` 表示没有通用默认值（自建 / 代理类服务、企业专属端点、内置 provider），
+/// 返回 `None` 表示没有通用默认值（自建 / 代理类服务、企业专属端点），
 /// 必须由用户显式填写。这里的取值与 [`client_from_config`] 的兜底地址同源，
 /// 由测试 `preset_provider_types_build_client_without_explicit_base_url` 守住一致性。
 pub fn default_api_base(provider_type: ProviderType) -> Option<&'static str> {
@@ -326,7 +321,7 @@ pub fn default_api_base(provider_type: ProviderType) -> Option<&'static str> {
         ProviderType::TencentHunyuan => Some(HUNYUAN_BASE_URL),
         ProviderType::Xiaomi => Some(XIAOMI_BASE_URL),
         ProviderType::Xinference => Some(XINFERENCE_BASE_URL),
-        ProviderType::AzureOpenAI | ProviderType::OpenAICompatible | ProviderType::OnetCli => None,
+        ProviderType::AzureOpenAI | ProviderType::OpenAICompatible => None,
     }
 }
 
@@ -603,7 +598,6 @@ mod tests {
     fn explicit_endpoint_providers_have_no_preset_api_base_url() {
         assert_eq!(None, default_api_base(ProviderType::OpenAICompatible));
         assert_eq!(None, default_api_base(ProviderType::AzureOpenAI));
-        assert_eq!(None, default_api_base(ProviderType::OnetCli));
     }
 
     /// 契约测试：凡是声明了预置地址的类型，都必须能在用户不填 base_url 的情况下建出 client。
@@ -612,7 +606,7 @@ mod tests {
     fn preset_provider_types_build_client_without_explicit_base_url() {
         let mut checked = 0;
 
-        for provider_type in ProviderType::user_configurable() {
+        for provider_type in ProviderType::all() {
             if default_api_base(provider_type).is_none() {
                 continue;
             }

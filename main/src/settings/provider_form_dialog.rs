@@ -189,13 +189,8 @@ impl ProviderForm {
         cx: &mut Context<Self>,
     ) -> Self {
         let focus_handle = cx.focus_handle();
-        // 创建 provider 类型选择器：新增时不包含内置类型，编辑时包含所有类型
-        let is_editing = config.is_some();
-        let types = if is_editing {
-            ProviderType::all()
-        } else {
-            ProviderType::user_configurable()
-        };
+        // 创建 provider 类型选择器：新增与编辑共用同一份类型清单。
+        let types = ProviderType::all();
         let provider_types: Vec<ProviderTypeItem> =
             types.into_iter().map(ProviderTypeItem::new).collect();
 
@@ -699,14 +694,6 @@ impl Focusable for ProviderForm {
 
 impl Render for ProviderForm {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let provider_type = self
-            .provider_type_select
-            .read(cx)
-            .selected_value()
-            .cloned()
-            .unwrap_or(ProviderType::OpenAI);
-        let is_builtin = provider_type.is_builtin();
-
         let mut model_rows = v_flex().gap_2();
         for (index, row) in self.model_rows.iter().enumerate() {
             let selected = row.select.read(cx).selected_value().cloned();
@@ -751,7 +738,7 @@ impl Render for ProviderForm {
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .child(t!("LlmProviders.name_label").to_string()),
                     )
-                    .child(Input::new(&self.name_input).disabled(is_builtin)),
+                    .child(Input::new(&self.name_input)),
             )
             .child(
                 v_flex()
@@ -762,43 +749,41 @@ impl Render for ProviderForm {
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .child(t!("LlmProviders.provider_type_label").to_string()),
                     )
-                    .child(Select::new(&self.provider_type_select).disabled(is_builtin)),
+                    .child(Select::new(&self.provider_type_select)),
             )
-            .when(!is_builtin, |this| {
-                this.child(
-                    v_flex()
-                        .gap_1()
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .child(t!("LlmProviders.api_key_label").to_string()),
-                        )
-                        .child(Input::new(&self.api_key_input).mask_toggle()),
-                )
-                .child(
-                    v_flex()
-                        .gap_1()
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .child(t!("LlmProviders.api_base_label").to_string()),
-                        )
-                        .child(Input::new(&self.api_base_input)),
-                )
-                .child(
-                    v_flex()
-                        .gap_1()
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .child(t!("LlmProviders.api_version_label").to_string()),
-                        )
-                        .child(Input::new(&self.api_version_input)),
-                )
-            })
+            .child(
+                v_flex()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .child(t!("LlmProviders.api_key_label").to_string()),
+                    )
+                    .child(Input::new(&self.api_key_input).mask_toggle()),
+            )
+            .child(
+                v_flex()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .child(t!("LlmProviders.api_base_label").to_string()),
+                    )
+                    .child(Input::new(&self.api_base_input)),
+            )
+            .child(
+                v_flex()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .child(t!("LlmProviders.api_version_label").to_string()),
+                    )
+                    .child(Input::new(&self.api_version_input)),
+            )
             .child(
                 v_flex()
                     .gap_2()

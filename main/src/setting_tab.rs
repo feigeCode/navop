@@ -2887,7 +2887,6 @@ fn apply_global_http_client(
     auth_service.replace_http_client(http_for_auth);
 
     if let Some(provider_state) = cx.try_global::<GlobalProviderState>() {
-        provider_state.set_cloud_client(auth_service.cloud_client());
         if let Err(err) = provider_state.set_proxy_settings(proxy_settings) {
             tracing::error!(error = %err, "LLM 代理设置同步失败");
         }

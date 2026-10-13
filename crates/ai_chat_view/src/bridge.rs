@@ -399,9 +399,6 @@ pub fn build_runtime_from_llm_provider(
 }
 
 /// 用普通 `ProviderConfig` 同步装配 Runtime。
-///
-/// `ProviderType::OnetCli` 需要 `GlobalProviderState` 中的云端 client,请使用
-/// [`build_runtime_from_provider_state`]。
 pub fn build_runtime_from_provider_config(
     config: &ProviderConfig,
     model: impl Into<String>,
@@ -417,7 +414,7 @@ pub fn build_runtime_from_provider_config(
     )
 }
 
-/// 用 `GlobalProviderState` 异步装配 Runtime,支持 Navop 等需要 manager 的 provider。
+/// 用 `GlobalProviderState` 异步装配 Runtime,复用 provider 缓存与全局代理设置。
 pub async fn build_runtime_from_provider_state(
     provider_state: GlobalProviderState,
     config: &ProviderConfig,

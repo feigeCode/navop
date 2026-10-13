@@ -162,6 +162,24 @@ fn seed_pre_scope_database(connection: &Connection) {
                 detected_at INTEGER NOT NULL,
                 PRIMARY KEY (backend_profile_id, record_id)
              );
+             -- llm_providers 由 init 迁移创建，但本 fixture 只模拟到 20260711 的库，
+             -- 而后续迁移（内置 Navop AI 下线）会清理该表的历史行，故需与真实旧库一致地存在。
+             CREATE TABLE llm_providers (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                provider_type TEXT NOT NULL,
+                api_key TEXT,
+                api_base TEXT,
+                api_version TEXT,
+                model TEXT NOT NULL,
+                models TEXT,
+                max_tokens INTEGER,
+                temperature REAL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                is_default INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+             );
              INSERT INTO team_key_cache VALUES (
                 'team-1', 'Platform', 1, 'unsafe-secret', 1, 1, 'admin', 'verify'
              );",

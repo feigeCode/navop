@@ -6,9 +6,7 @@ use gpui::Global;
 use parking_lot::RwLock;
 
 use super::connector::{LLM_CLIENT_TIMEOUT_SECS, LlmConnector, LlmProvider};
-use super::navop_provider::NavopLLMProvider;
-use super::types::{ProviderConfig, ProviderType};
-use crate::cloud_sync::client::CloudApiClient;
+use super::types::ProviderConfig;
 use crate::settings::GlobalProxySettings;
 
 struct ProviderCacheEntry {
@@ -18,7 +16,6 @@ struct ProviderCacheEntry {
 
 pub struct ProviderManager {
     providers: Arc<DashMap<i64, ProviderCacheEntry>>,
-    cloud_client: RwLock<Option<Arc<dyn CloudApiClient>>>,
     proxy_url: RwLock<Option<String>>,
     request_timeout_secs: RwLock<Option<u64>>,
 }
@@ -27,15 +24,9 @@ impl ProviderManager {
     pub fn new() -> Self {
         Self {
             providers: Arc::new(DashMap::new()),
-            cloud_client: RwLock::new(None),
             proxy_url: RwLock::new(None),
             request_timeout_secs: RwLock::new(None),
         }
-    }
-
-    /// 设置云端 API 客户端（用于 Navop Provider）
-    pub fn set_cloud_client(&self, client: Arc<dyn CloudApiClient>) {
-        *self.cloud_client.write() = Some(client);
     }
 
     pub fn set_proxy_url(&self, proxy_url: Option<String>) {
@@ -81,27 +72,13 @@ impl ProviderManager {
             anyhow::bail!("Provider is disabled: {}", id);
         }
 
-        let provider: Arc<dyn LlmProvider> = match config.provider_type {
-            ProviderType::OnetCli => {
-                let cloud_client =
-                    self.cloud_client.read().clone().ok_or_else(|| {
-                        anyhow::anyhow!("CloudApiClient not set for Navop provider")
-                    })?;
-
-                let onet_provider = NavopLLMProvider::new(cloud_client);
-
-                Arc::new(onet_provider)
-            }
-            _ => {
-                let connector = LlmConnector::from_config_with_proxy_and_timeout(
-                    config,
-                    proxy_url.as_deref(),
-                    self.request_timeout_secs()
-                        .unwrap_or(LLM_CLIENT_TIMEOUT_SECS),
-                )?;
-                Arc::new(connector)
-            }
-        };
+        let provider: Arc<dyn LlmProvider> =
+            Arc::new(LlmConnector::from_config_with_proxy_and_timeout(
+                config,
+                proxy_url.as_deref(),
+                self.request_timeout_secs()
+                    .unwrap_or(LLM_CLIENT_TIMEOUT_SECS),
+            )?);
 
         self.providers.insert(
             id,
@@ -166,11 +143,6 @@ impl GlobalProviderState {
         Arc::clone(&self.manager)
     }
 
-    /// 设置云端 API 客户端
-    pub fn set_cloud_client(&self, client: Arc<dyn CloudApiClient>) {
-        self.manager.set_cloud_client(client);
-    }
-
     pub fn set_proxy_settings(&self, proxy_settings: &GlobalProxySettings) -> Result<(), String> {
         self.manager.set_proxy_url(
             proxy_settings
@@ -201,6 +173,7 @@ impl Global for GlobalProviderState {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::llm::types::ProviderType;
 
     #[test]
     fn provider_cache_signature_changes_with_model() {

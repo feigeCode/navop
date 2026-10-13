@@ -25,7 +25,6 @@ pub enum ProviderType {
     Xinference,
     AzureOpenAI,
     OpenAICompatible,
-    OnetCli,
 }
 
 impl ProviderType {
@@ -48,7 +47,6 @@ impl ProviderType {
             ProviderType::Xinference => "xinference",
             ProviderType::AzureOpenAI => "azure_openai",
             ProviderType::OpenAICompatible => "openai_compatible",
-            ProviderType::OnetCli => "onet_cli",
         }
     }
 
@@ -71,7 +69,6 @@ impl ProviderType {
             "xinference" => Some(ProviderType::Xinference),
             "azure_openai" => Some(ProviderType::AzureOpenAI),
             "openai_compatible" => Some(ProviderType::OpenAICompatible),
-            "onet_cli" => Some(ProviderType::OnetCli),
             _ => None,
         }
     }
@@ -95,7 +92,6 @@ impl ProviderType {
             ProviderType::Xinference => "Xinference",
             ProviderType::AzureOpenAI => "Azure OpenAI",
             ProviderType::OpenAICompatible => "OpenAI Compatible",
-            ProviderType::OnetCli => "Navop",
         }
     }
 
@@ -118,28 +114,12 @@ impl ProviderType {
             ProviderType::Xinference,
             ProviderType::AzureOpenAI,
             ProviderType::OpenAICompatible,
-            ProviderType::OnetCli,
         ]
     }
 
+    /// 是否需要用户提供 API Key。只有本地部署的 Ollama / Xinference 可以不填。
     pub fn requires_api_key(&self) -> bool {
-        !matches!(
-            self,
-            ProviderType::Ollama | ProviderType::Xinference | ProviderType::OnetCli
-        )
-    }
-
-    /// 是否为内置 provider（不需要用户配置）
-    pub fn is_builtin(&self) -> bool {
-        matches!(self, ProviderType::OnetCli)
-    }
-
-    /// 返回用户可配置的 provider 类型列表（不包含内置类型）
-    pub fn user_configurable() -> Vec<Self> {
-        Self::all()
-            .into_iter()
-            .filter(|p| !p.is_builtin())
-            .collect()
+        !matches!(self, ProviderType::Ollama | ProviderType::Xinference)
     }
 }
 
@@ -182,24 +162,33 @@ impl Default for ProviderConfig {
     }
 }
 
-impl ProviderConfig {
-    /// 是否为内置 provider
-    pub fn is_builtin(&self) -> bool {
-        self.provider_type.is_builtin()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::ProviderType;
 
+    /// 内置 Navop AI（`onet_cli`）已下线：历史配置值不再被识别，也不再出现在候选列表里。
     #[test]
-    fn onetcli_provider_uses_navop_display_name_and_legacy_id() {
-        assert_eq!("Navop", ProviderType::OnetCli.display_name());
-        assert_eq!("onet_cli", ProviderType::OnetCli.as_str());
+    fn builtin_navop_ai_provider_is_no_longer_recognised() {
+        assert_eq!(None, ProviderType::from_str("onet_cli"));
+        assert!(
+            !ProviderType::all()
+                .iter()
+                .any(|provider_type| provider_type.as_str() == "onet_cli"),
+            "内置 Navop AI 不应再出现在 ProviderType::all() 中"
+        );
+    }
+
+    /// 内置 provider 下线后，只剩本地部署的两家可以不填 API Key。
+    #[test]
+    fn only_local_providers_skip_api_key() {
+        let without_api_key: Vec<ProviderType> = ProviderType::all()
+            .into_iter()
+            .filter(|provider_type| !provider_type.requires_api_key())
+            .collect();
+
         assert_eq!(
-            Some(ProviderType::OnetCli),
-            ProviderType::from_str("onet_cli")
+            vec![ProviderType::Ollama, ProviderType::Xinference],
+            without_api_key
         );
     }
 
@@ -229,10 +218,10 @@ mod tests {
         }
     }
 
-    /// 新增供应商必须出现在用户可配置列表里，否则设置页选不到（issue #379 的成因）。
+    /// 新增供应商必须出现在设置页的候选列表里，否则用户选不到（issue #379 的成因）。
     #[test]
     fn added_provider_types_are_offered_to_users() {
-        let user_configurable = ProviderType::user_configurable();
+        let all = ProviderType::all();
 
         for provider_type in [
             ProviderType::OpenRouter,
@@ -243,11 +232,10 @@ mod tests {
             ProviderType::Xinference,
         ] {
             assert!(
-                user_configurable.contains(&provider_type),
-                "{} 未出现在用户可配置列表中",
+                all.contains(&provider_type),
+                "{} 未出现在候选列表中",
                 provider_type.as_str()
             );
-            assert!(!provider_type.is_builtin());
         }
     }
 

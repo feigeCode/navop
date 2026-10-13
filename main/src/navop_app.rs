@@ -6,8 +6,8 @@ use crate::persistent_connection_sidebar::{
 };
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext, AsyncApp, Context, Entity, ExternalPaths, InteractiveElement, IntoElement,
-    KeyBinding, Keystroke, ParentElement, Render, Styled, Task, Window, actions, div,
+    App, AppContext, Context, Entity, ExternalPaths, InteractiveElement, IntoElement, KeyBinding,
+    Keystroke, ParentElement, Render, Styled, Task, Window, actions, div,
 };
 use gpui_component::{
     WindowExt,
@@ -376,9 +376,7 @@ use gpui::px;
 use gpui_component::ActiveTheme;
 use gpui_component::dock::ToggleZoom;
 use one_core::llm::manager::GlobalProviderState;
-use one_core::llm::notifier::emit_provider_config_changed;
-use one_core::llm::storage::{ProviderRepository, refresh_navop_models};
-use one_core::settings::{AppSettings, GlobalCurrentUser, MainWindowState};
+use one_core::settings::{AppSettings, MainWindowState};
 use one_core::storage::manager::get_config_dir;
 use one_core::tab_container::{
     GlobalTabContainer, TabContainer, TabContainerEvent, TabContentRegistry, TabItem,
@@ -946,51 +944,6 @@ fn rotate_oversized_log(path: &Path) {
     }
 }
 
-/// 内置 Navop AI 模型列表的定期刷新间隔（已登录时）。
-const NAVOP_MODEL_REFRESH_INTERVAL: Duration = Duration::from_secs(15 * 60);
-/// 未登录时检查登录态的轮询间隔。
-const NAVOP_MODEL_REFRESH_LOGIN_POLL: Duration = Duration::from_secs(30);
-/// 应用启动后首次拉取前的延迟，等待会话恢复与云客户端就绪。
-const NAVOP_MODEL_REFRESH_STARTUP_DELAY: Duration = Duration::from_secs(3);
-
-/// 启动后按固定间隔拉取内置 Navop AI 云端模型列表并持久化到本地。
-///
-/// 模型列表依赖云账号：未登录时仅以较短间隔轮询登录态、不做拉取；
-/// 一旦登录立即拉取一次，之后按固定间隔定期刷新，并通知 AI 面板更新模型选项。
-fn spawn_navop_model_refresh(cx: &mut App) {
-    let storage = cx.global::<GlobalStorageState>().storage.clone();
-    let provider_state = cx.global::<GlobalProviderState>().clone();
-
-    cx.spawn(async move |cx: &mut AsyncApp| {
-        // 先等待云客户端 / 会话恢复就绪
-        cx.background_executor()
-            .timer(NAVOP_MODEL_REFRESH_STARTUP_DELAY)
-            .await;
-
-        loop {
-            let logged_in = cx.update(|cx| GlobalCurrentUser::get_user(cx).is_some());
-            let interval = if logged_in {
-                if let Some(repo) = storage.get::<ProviderRepository>() {
-                    match refresh_navop_models(&repo, &provider_state).await {
-                        Ok(Some(_)) => {
-                            cx.update(|cx| emit_provider_config_changed(cx));
-                        }
-                        Ok(None) => {}
-                        Err(e) => {
-                            tracing::warn!("内置 Navop AI 模型列表刷新失败: {e}");
-                        }
-                    }
-                }
-                NAVOP_MODEL_REFRESH_INTERVAL
-            } else {
-                NAVOP_MODEL_REFRESH_LOGIN_POLL
-            };
-            cx.background_executor().timer(interval).await;
-        }
-    })
-    .detach();
-}
-
 pub fn init(cx: &mut App) -> anyhow::Result<()> {
     gpui_component::init(cx);
     one_core::themes::load_bundled(cx);
@@ -1013,16 +966,13 @@ pub fn init(cx: &mut App) -> anyhow::Result<()> {
     crate::auth::init(cx);
     crate::license::init(cx);
     {
-        let auth_service = crate::auth::get_auth_service(cx);
         let global_provider_state = cx.global::<GlobalProviderState>().clone();
-        global_provider_state.set_cloud_client(auth_service.cloud_client());
         global_provider_state
             .set_proxy_settings(&AppSettings::global(cx).global_proxy)
             .expect("LLM 代理初始化失败");
         global_provider_state
             .set_request_timeout_secs(Some(AppSettings::global(cx).ai_chat.request_timeout_secs));
     }
-    spawn_navop_model_refresh(cx);
     db::init_cache(cx);
     // 启动后台磁盘缓存清理任务
     if let Some(cache) = cx.try_global::<db::GlobalNodeCache>() {
