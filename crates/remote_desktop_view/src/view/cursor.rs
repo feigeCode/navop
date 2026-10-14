@@ -60,6 +60,15 @@ pub(super) struct RemoteCursorState {
     mode: RemoteCursorMode,
     pointer_hovered: bool,
     manage_native_cursor: bool,
+    /// Whether navop currently drives the OS cursor at all.
+    ///
+    /// Only the canvas presentation paints the remote cursor on the GPUI
+    /// canvas, so only that path may call `SetCursor`. A Windows native
+    /// (mstscax) session draws its own session pointer and sets the cursor
+    /// itself; re-applying the GPUI arrow from this process fights the control
+    /// and makes the visible cursor flip between the local arrow and the
+    /// remote one, which also makes remote window borders impossible to aim at.
+    native_cursor_owned: bool,
 }
 
 impl RemoteCursorState {
@@ -67,6 +76,29 @@ impl RemoteCursorState {
         Self {
             manage_native_cursor,
             ..Self::default()
+        }
+    }
+
+    /// Transfers OS cursor ownership to or from the session presentation.
+    ///
+    /// The view calls this once per frame with `!uses_windows_native()`. Giving
+    /// the cursor up only undoes a hide this state actually applied; the
+    /// receiving presentation owns the cursor from then on.
+    pub(super) fn set_native_cursor_owned(&mut self, owned: bool) {
+        if self.native_cursor_owned == owned {
+            return;
+        }
+        self.native_cursor_owned = owned;
+        if owned {
+            self.sync_native_cursor();
+        } else if self.manage_native_cursor
+            && should_hide_native_cursor(
+                self.mode,
+                self.pointer_hovered,
+                self.has_paintable_bitmap(),
+            )
+        {
+            native_cursor::restore();
         }
     }
 
@@ -116,6 +148,7 @@ impl RemoteCursorState {
 
     pub(super) fn rehide_native_cursor_after_pointer_move(&self) {
         if self.manage_native_cursor
+            && self.native_cursor_owned
             && should_hide_native_cursor(
                 self.mode,
                 self.pointer_hovered,
@@ -179,7 +212,7 @@ impl RemoteCursorState {
         self.position = None;
         self.mode = RemoteCursorMode::Default;
         self.pointer_hovered = false;
-        if self.manage_native_cursor {
+        if self.manage_native_cursor && self.native_cursor_owned {
             native_cursor::restore();
         }
         cursors.into_iter().map(|cursor| cursor.image).collect()
@@ -192,6 +225,11 @@ impl RemoteCursorState {
 
     fn sync_native_cursor(&self) {
         if !self.manage_native_cursor {
+            return;
+        }
+        if !self.native_cursor_owned {
+            // A Windows native (mstscax) session sets and draws its own session
+            // pointer. Touching the OS cursor here would undo it on every frame.
             return;
         }
         if should_hide_native_cursor(self.mode, self.pointer_hovered, self.has_paintable_bitmap()) {

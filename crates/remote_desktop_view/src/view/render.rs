@@ -402,6 +402,14 @@ impl Render for RemoteDesktopView {
                 );
             }
         }
+        // Re-evaluated every frame because the presentation path can still fall
+        // back: only the canvas presentation paints the remote cursor, so only
+        // it may own the OS cursor. A Windows native (mstscax) session draws
+        // and sets its own session pointer, and re-applying the GPUI arrow from
+        // here makes the visible cursor flip between the local arrow and the
+        // remote one.
+        let uses_windows_native = self.uses_windows_native_presentation();
+        self.cursor.set_native_cursor_owned(!uses_windows_native);
         if let Some(retired) = self.cursor.promote_latest()
             && let Err(error) = window.drop_image(retired)
         {
@@ -413,7 +421,6 @@ impl Render for RemoteDesktopView {
             frame: rendered_frame,
             cursor: self.cursor.paint_state(self.remote_size),
         };
-        let uses_windows_native = self.uses_windows_native_presentation();
         let failure_detail = self.failure_detail.clone();
         let show_failure_detail = failure_detail.is_some();
         let presentation_initialization = self.presentation_initialization;
