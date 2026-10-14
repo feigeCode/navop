@@ -1,4 +1,4 @@
-use crate::cloud_sync::{GlobalCloudUser, UserInfo};
+use crate::cloud_sync::{GlobalCloudUser, UserInfo, data_type};
 use crate::storage::get_config_dir;
 use crate::utils::auto_save_config::AutoSaveConfig;
 use agent_runtime::{
@@ -790,6 +790,454 @@ impl Default for PersonalSyncSettings {
     }
 }
 
+// ============================================================================
+// 云同步数据范围：用户可自选同步哪些类型
+// ============================================================================
+
+/// `SyncScopeSettings` 的当前 schema 版本。
+///
+/// 0 表示「从未初始化」（存量用户升级后的首次读取），此时按
+/// [`SyncScopeSettings::default()`] 填默认值并落盘。将来新增/移除类型时递增，
+/// 以便区分「用户从未设置过」与「用户显式关掉了」。
+pub const SYNC_SCOPE_SCHEMA_VERSION: u32 = 1;
+
+/// 可同步数据类型的稳定标识
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SyncScopeKey {
+    Connection,
+    Workspace,
+    Credential,
+    Note,
+    SavedSql,
+    QuickCommand,
+    SftpFavorite,
+    SettingsGeneral,
+    SettingsDatabase,
+    SettingsTerminal,
+    SettingsAgent,
+    SettingsMcp,
+    SettingsKeybindings,
+    LlmProvider,
+}
+
+impl SyncScopeKey {
+    pub const ALL: &'static [SyncScopeKey] = &[
+        SyncScopeKey::Connection,
+        SyncScopeKey::Workspace,
+        SyncScopeKey::Credential,
+        SyncScopeKey::Note,
+        SyncScopeKey::SavedSql,
+        SyncScopeKey::QuickCommand,
+        SyncScopeKey::SftpFavorite,
+        SyncScopeKey::SettingsGeneral,
+        SyncScopeKey::SettingsDatabase,
+        SyncScopeKey::SettingsTerminal,
+        SyncScopeKey::SettingsAgent,
+        SyncScopeKey::SettingsMcp,
+        SyncScopeKey::SettingsKeybindings,
+        SyncScopeKey::LlmProvider,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Connection => "connection",
+            Self::Workspace => "workspace",
+            Self::Credential => "credential",
+            Self::Note => "note",
+            Self::SavedSql => "saved_sql",
+            Self::QuickCommand => "quick_command",
+            Self::SftpFavorite => "sftp_favorite",
+            Self::SettingsGeneral => "settings_general",
+            Self::SettingsDatabase => "settings_database",
+            Self::SettingsTerminal => "settings_terminal",
+            Self::SettingsAgent => "settings_agent",
+            Self::SettingsMcp => "settings_mcp",
+            Self::SettingsKeybindings => "settings_keybindings",
+            Self::LlmProvider => "llm_provider",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|key| key.as_str() == value)
+    }
+}
+
+/// 同步粒度
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncKind {
+    /// 逐条同步：每个实体一条云端记录，有独立 ID
+    Item,
+    /// 整包同步：整个分组只对应一条云端记录，`cloud_id` 由 `data_type` 派生，
+    /// 变更检测只用 checksum（设置类没有 `updated_at`）
+    Singleton,
+}
+
+/// 勾选框的锁定方式（决定 UI 是否置灰、是否允许取消）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockMode {
+    /// 始终启用、置灰不可取消（连接 / 工作空间）：
+    /// 允许取消会出现「同步已开启但没有东西在同步」的无意义状态
+    AlwaysOn,
+    /// 仅 Personal 可用；OnetCloud 下强制取消 + 置灰（钥匙串 / LLM 提供商）
+    PersonalOnly,
+    /// 正常可勾选
+    Optional,
+}
+
+/// 一种可同步数据类型的静态描述（UI 与同步引擎共用的唯一事实来源）
+pub struct SyncScopeDescriptor {
+    pub key: SyncScopeKey,
+    /// 对应 `CloudSyncData.data_type`
+    pub data_type: &'static str,
+    /// `SyncOperationQueue` 的持久化 key
+    pub queue_key: &'static str,
+    pub kind: SyncKind,
+    pub lock: LockMode,
+    /// 首次初始化时的默认值
+    pub default_enabled: bool,
+    pub i18n_title: &'static str,
+    pub i18n_desc: &'static str,
+}
+
+impl SyncScopeDescriptor {
+    /// 是否仅 Personal 通道可用
+    pub fn personal_only(&self) -> bool {
+        matches!(self.lock, LockMode::PersonalOnly)
+    }
+
+    /// 用户是否可以手动取消勾选
+    pub fn user_editable(&self) -> bool {
+        matches!(self.lock, LockMode::Optional | LockMode::PersonalOnly)
+    }
+}
+
+pub const SYNC_SCOPE_DESCRIPTORS: &[SyncScopeDescriptor] = &[
+    SyncScopeDescriptor {
+        key: SyncScopeKey::Connection,
+        data_type: data_type::CONNECTION,
+        queue_key: "sync:connection",
+        kind: SyncKind::Item,
+        lock: LockMode::AlwaysOn,
+        default_enabled: true,
+        i18n_title: "Settings.Sync.Scope.connection",
+        i18n_desc: "Settings.Sync.Scope.connection_desc",
+    },
+    SyncScopeDescriptor {
+        key: SyncScopeKey::Workspace,
+        data_type: data_type::WORKSPACE,
+        queue_key: "sync:workspace",
+        kind: SyncKind::Item,
+        lock: LockMode::AlwaysOn,
+        default_enabled: true,
+        i18n_title: "Settings.Sync.Scope.workspace",
+        i18n_desc: "Settings.Sync.Scope.workspace_desc",
+    },
+    SyncScopeDescriptor {
+        key: SyncScopeKey::Credential,
+        data_type: data_type::CREDENTIAL,
+        queue_key: "sync:credential",
+        kind: SyncKind::Item,
+        lock: LockMode::PersonalOnly,
+        default_enabled: true,
+        i18n_title: "Settings.Sync.Scope.credential",
+        i18n_desc: "Settings.Sync.Scope.credential_desc",
+    },
+    SyncScopeDescriptor {
+        key: SyncScopeKey::Note,
+        data_type: data_type::NOTE,
+        queue_key: "sync:note",
+        kind: SyncKind::Item,
+        lock: LockMode::Optional,
+        default_enabled: false,
+        i18n_title: "Settings.Sync.Scope.note",
+        i18n_desc: "Settings.Sync.Scope.note_desc",
+    },
+    SyncScopeDescriptor {
+        key: SyncScopeKey::SavedSql,
+        data_type: data_type::SAVED_SQL,
+        queue_key: "sync:saved_sql",
+        kind: SyncKind::Item,
+        lock: LockMode::Optional,
+        default_enabled: false,
+        i18n_title: "Settings.Sync.Scope.saved_sql",
+        i18n_desc: "Settings.Sync.Scope.saved_sql_desc",
+    },
+    SyncScopeDescriptor {
+        key: SyncScopeKey::QuickCommand,
+        data_type: data_type::QUICK_COMMAND,
+        queue_key: "sync:quick_command",
+        kind: SyncKind::Item,
+        lock: LockMode::Optional,
+        default_enabled: false,
+        i18n_title: "Settings.Sync.Scope.quick_command",
+        i18n_desc: "Settings.Sync.Scope.quick_command_desc",
+    },
+    SyncScopeDescriptor {
+        key: SyncScopeKey::SftpFavorite,
+        data_type: data_type::SFTP_FAVORITE,
+        queue_key: "sync:sftp_favorite",
+        kind: SyncKind::Item,
+        lock: LockMode::Optional,
+        default_enabled: false,
+        i18n_title: "Settings.Sync.Scope.sftp_favorite",
+        i18n_desc: "Settings.Sync.Scope.sftp_favorite_desc",
+    },
+    SyncScopeDescriptor {
+        key: SyncScopeKey::SettingsGeneral,
+        data_type: data_type::SETTINGS_GENERAL,
+        queue_key: "sync:settings_general",
+        kind: SyncKind::Singleton,
+        lock: LockMode::Optional,
+        default_enabled: false,
+        i18n_title: "Settings.Sync.Scope.settings_general",
+        i18n_desc: "Settings.Sync.Scope.settings_general_desc",
+    },
+    SyncScopeDescriptor {
+        key: SyncScopeKey::SettingsDatabase,
+        data_type: data_type::SETTINGS_DATABASE,
+        queue_key: "sync:settings_database",
+        kind: SyncKind::Singleton,
+        lock: LockMode::Optional,
+        default_enabled: false,
+        i18n_title: "Settings.Sync.Scope.settings_database",
+        i18n_desc: "Settings.Sync.Scope.settings_database_desc",
+    },
+    SyncScopeDescriptor {
+        key: SyncScopeKey::SettingsTerminal,
+        data_type: data_type::SETTINGS_TERMINAL,
+        queue_key: "sync:settings_terminal",
+        kind: SyncKind::Singleton,
+        lock: LockMode::Optional,
+        default_enabled: false,
+        i18n_title: "Settings.Sync.Scope.settings_terminal",
+        i18n_desc: "Settings.Sync.Scope.settings_terminal_desc",
+    },
+    SyncScopeDescriptor {
+        key: SyncScopeKey::SettingsAgent,
+        data_type: data_type::SETTINGS_AGENT,
+        queue_key: "sync:settings_agent",
+        kind: SyncKind::Singleton,
+        lock: LockMode::Optional,
+        default_enabled: false,
+        i18n_title: "Settings.Sync.Scope.settings_agent",
+        i18n_desc: "Settings.Sync.Scope.settings_agent_desc",
+    },
+    SyncScopeDescriptor {
+        key: SyncScopeKey::SettingsMcp,
+        data_type: data_type::SETTINGS_MCP,
+        queue_key: "sync:settings_mcp",
+        kind: SyncKind::Singleton,
+        lock: LockMode::Optional,
+        default_enabled: false,
+        i18n_title: "Settings.Sync.Scope.settings_mcp",
+        i18n_desc: "Settings.Sync.Scope.settings_mcp_desc",
+    },
+    SyncScopeDescriptor {
+        key: SyncScopeKey::SettingsKeybindings,
+        data_type: data_type::SETTINGS_KEYBINDINGS,
+        queue_key: "sync:settings_keybindings",
+        kind: SyncKind::Singleton,
+        lock: LockMode::Optional,
+        default_enabled: false,
+        i18n_title: "Settings.Sync.Scope.settings_keybindings",
+        i18n_desc: "Settings.Sync.Scope.settings_keybindings_desc",
+    },
+    SyncScopeDescriptor {
+        key: SyncScopeKey::LlmProvider,
+        data_type: data_type::LLM_PROVIDER,
+        queue_key: "sync:llm_provider",
+        kind: SyncKind::Item,
+        lock: LockMode::PersonalOnly,
+        default_enabled: false,
+        i18n_title: "Settings.Sync.Scope.llm_provider",
+        i18n_desc: "Settings.Sync.Scope.llm_provider_desc",
+    },
+];
+
+/// 按 key 取静态描述
+pub fn sync_scope_descriptor(key: SyncScopeKey) -> Option<&'static SyncScopeDescriptor> {
+    SYNC_SCOPE_DESCRIPTORS.iter().find(|item| item.key == key)
+}
+
+/// 用户对「同步哪些数据类型」的选择，持久化在 `settings.json`。
+///
+/// **本身不参与同步**（见设计文档 R7 / Q9）：它是本机偏好，同步它会让两台设备
+/// 的勾选互相覆盖。因此它也不能出现在任何设置类同步白名单里。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncScopeSettings {
+    /// 0 = 从未初始化；1 = 当前版本
+    #[serde(default)]
+    pub schema_version: u32,
+    /// 曾经开启过的类型（存 `SyncScopeKey::as_str()`）。
+    /// 用于判断「是否首次开启」，从而决定 Personal 下是否弹 R2 确认（Q1）。
+    #[serde(default)]
+    pub ever_enabled: Vec<String>,
+    /// 用户勾选「不再提示」后，Personal 下开启新类型不再弹确认（Q1）
+    #[serde(default)]
+    pub suppress_personal_warning: bool,
+    #[serde(default = "default_true")]
+    pub connection: bool,
+    #[serde(default = "default_true")]
+    pub workspace: bool,
+    #[serde(default = "default_true")]
+    pub credential: bool,
+    #[serde(default)]
+    pub note: bool,
+    #[serde(default)]
+    pub saved_sql: bool,
+    #[serde(default)]
+    pub quick_command: bool,
+    #[serde(default)]
+    pub sftp_favorite: bool,
+    #[serde(default)]
+    pub settings_general: bool,
+    #[serde(default)]
+    pub settings_database: bool,
+    #[serde(default)]
+    pub settings_terminal: bool,
+    #[serde(default)]
+    pub settings_agent: bool,
+    #[serde(default)]
+    pub settings_mcp: bool,
+    #[serde(default)]
+    pub settings_keybindings: bool,
+    #[serde(default)]
+    pub llm_provider: bool,
+}
+
+impl Default for SyncScopeSettings {
+    fn default() -> Self {
+        // 存量用户升级后绝不能掉数据：连接 / 工作空间 / 钥匙串保持开启（Q1）。
+        // 新增 11 项统一默认关闭，避免隐私意外与旧客户端兼容性问题（R2）。
+        Self {
+            schema_version: SYNC_SCOPE_SCHEMA_VERSION,
+            ever_enabled: Vec::new(),
+            suppress_personal_warning: false,
+            connection: true,
+            workspace: true,
+            credential: true,
+            note: false,
+            saved_sql: false,
+            quick_command: false,
+            sftp_favorite: false,
+            settings_general: false,
+            settings_database: false,
+            settings_terminal: false,
+            settings_agent: false,
+            settings_mcp: false,
+            settings_keybindings: false,
+            llm_provider: false,
+        }
+    }
+}
+
+impl SyncScopeSettings {
+    /// 读取某个类型的勾选状态。`LockMode::AlwaysOn` 的类型恒为 true。
+    pub fn get(&self, key: SyncScopeKey) -> bool {
+        if let Some(descriptor) = sync_scope_descriptor(key) {
+            if matches!(descriptor.lock, LockMode::AlwaysOn) {
+                return true;
+            }
+        }
+        match key {
+            SyncScopeKey::Connection => self.connection,
+            SyncScopeKey::Workspace => self.workspace,
+            SyncScopeKey::Credential => self.credential,
+            SyncScopeKey::Note => self.note,
+            SyncScopeKey::SavedSql => self.saved_sql,
+            SyncScopeKey::QuickCommand => self.quick_command,
+            SyncScopeKey::SftpFavorite => self.sftp_favorite,
+            SyncScopeKey::SettingsGeneral => self.settings_general,
+            SyncScopeKey::SettingsDatabase => self.settings_database,
+            SyncScopeKey::SettingsTerminal => self.settings_terminal,
+            SyncScopeKey::SettingsAgent => self.settings_agent,
+            SyncScopeKey::SettingsMcp => self.settings_mcp,
+            SyncScopeKey::SettingsKeybindings => self.settings_keybindings,
+            SyncScopeKey::LlmProvider => self.llm_provider,
+        }
+    }
+
+    /// 写入某个类型的勾选状态。`LockMode::AlwaysOn` 的类型忽略写入。
+    pub fn set(&mut self, key: SyncScopeKey, enabled: bool) {
+        if let Some(descriptor) = sync_scope_descriptor(key) {
+            if matches!(descriptor.lock, LockMode::AlwaysOn) {
+                return;
+            }
+        }
+        let target = match key {
+            SyncScopeKey::Connection => &mut self.connection,
+            SyncScopeKey::Workspace => &mut self.workspace,
+            SyncScopeKey::Credential => &mut self.credential,
+            SyncScopeKey::Note => &mut self.note,
+            SyncScopeKey::SavedSql => &mut self.saved_sql,
+            SyncScopeKey::QuickCommand => &mut self.quick_command,
+            SyncScopeKey::SftpFavorite => &mut self.sftp_favorite,
+            SyncScopeKey::SettingsGeneral => &mut self.settings_general,
+            SyncScopeKey::SettingsDatabase => &mut self.settings_database,
+            SyncScopeKey::SettingsTerminal => &mut self.settings_terminal,
+            SyncScopeKey::SettingsAgent => &mut self.settings_agent,
+            SyncScopeKey::SettingsMcp => &mut self.settings_mcp,
+            SyncScopeKey::SettingsKeybindings => &mut self.settings_keybindings,
+            SyncScopeKey::LlmProvider => &mut self.llm_provider,
+        };
+        *target = enabled;
+    }
+
+    /// 按当前同步方式计算**实际生效**的类型集合。
+    ///
+    /// `provider == OnetCloud` 时剔除 `personal_only` 项（钥匙串 / LLM 提供商）。
+    pub fn effective(&self, provider: SyncProvider) -> Vec<SyncScopeKey> {
+        SYNC_SCOPE_DESCRIPTORS
+            .iter()
+            .filter(|descriptor| !descriptor.personal_only() || provider == SyncProvider::Personal)
+            .filter(|descriptor| self.get(descriptor.key))
+            .map(|descriptor| descriptor.key)
+            .collect()
+    }
+
+    /// 某个类型当前是否真的会参与同步
+    pub fn is_active(&self, key: SyncScopeKey, provider: SyncProvider) -> bool {
+        self.effective(provider).contains(&key)
+    }
+
+    /// 切到 OnetCloud 时把 personal_only 项写回 false。
+    ///
+    /// 必须真的落盘，而不只是 UI 置灰 —— 否则用户切回 Personal 时会看到幽灵勾选。
+    pub fn force_disable_personal_only(&mut self) {
+        for descriptor in SYNC_SCOPE_DESCRIPTORS
+            .iter()
+            .filter(|descriptor| descriptor.personal_only())
+        {
+            self.set(descriptor.key, false);
+        }
+    }
+
+    /// 规范化：`AlwaysOn` 恒开；schema_version 补齐。
+    pub fn normalize(&mut self) {
+        if self.schema_version == 0 {
+            self.schema_version = SYNC_SCOPE_SCHEMA_VERSION;
+        }
+        for descriptor in SYNC_SCOPE_DESCRIPTORS
+            .iter()
+            .filter(|descriptor| matches!(descriptor.lock, LockMode::AlwaysOn))
+        {
+            self.set(descriptor.key, true);
+        }
+    }
+
+    /// 该类型此前是否从未开启过（用于决定 Personal 下是否弹首次确认）
+    pub fn is_first_enable(&self, key: SyncScopeKey) -> bool {
+        !self.ever_enabled.iter().any(|item| item == key.as_str())
+    }
+
+    /// 记录「曾经开启过」
+    pub fn mark_enabled(&mut self, key: SyncScopeKey) {
+        if self.is_first_enable(key) {
+            self.ever_enabled.push(key.as_str().to_string());
+        }
+    }
+}
+
 /// WebDAV 个人同步后端的连接配置。
 ///
 /// `password` 在落盘前由调用方经 `cloud_sync::personal::seal_webdav_password` 加密，
@@ -1110,6 +1558,9 @@ pub struct AppSettings {
     pub sync_enabled: bool,
     #[serde(default)]
     pub sync_provider: SyncProvider,
+    /// 用户选择的同步数据范围。**本身不参与同步**（R7 / Q9）。
+    #[serde(default)]
+    pub sync_scope: SyncScopeSettings,
     #[serde(default)]
     pub global_proxy: GlobalProxySettings,
     #[serde(default)]
@@ -1514,6 +1965,7 @@ impl Default for AppSettings {
             plugin_update_notified_signature: None,
             sync_enabled: false,
             sync_provider: SyncProvider::OnetCloud,
+            sync_scope: SyncScopeSettings::default(),
             global_proxy: GlobalProxySettings::default(),
             mcp: McpSettings::default(),
             tool_exposure: ToolExposureSettings::default(),
@@ -1675,8 +2127,9 @@ impl AppSettings {
     pub fn normalize_terminal_settings(&mut self) {
         self.terminal_scrollback_lines =
             Self::normalize_terminal_scrollback_lines(self.terminal_scrollback_lines);
-        self.terminal_suggestion_popup_opacity =
-            Self::normalize_terminal_suggestion_popup_opacity(self.terminal_suggestion_popup_opacity);
+        self.terminal_suggestion_popup_opacity = Self::normalize_terminal_suggestion_popup_opacity(
+            self.terminal_suggestion_popup_opacity,
+        );
         let terminal_theme = self.terminal_theme.trim();
         self.terminal_theme = if terminal_theme.is_empty() {
             default_terminal_theme()
@@ -1992,9 +2445,117 @@ mod tests {
         resolve_installed_grid_monospace_font_family,
     };
 
+    use super::{
+        SYNC_SCOPE_DESCRIPTORS, SYNC_SCOPE_SCHEMA_VERSION, SyncScopeKey, SyncScopeSettings,
+    };
+
     #[test]
     fn app_settings_disables_sync_by_default() {
         assert!(!AppSettings::default().sync_enabled);
+    }
+
+    // ---- 同步数据范围（SyncScopeSettings） ----
+
+    #[test]
+    fn default_scope_keeps_legacy_types_on_and_new_types_off() {
+        let scope = SyncScopeSettings::default();
+
+        assert_eq!(SYNC_SCOPE_SCHEMA_VERSION, scope.schema_version);
+        // 存量用户升级后绝不能掉数据
+        assert!(scope.get(SyncScopeKey::Connection));
+        assert!(scope.get(SyncScopeKey::Workspace));
+        assert!(scope.get(SyncScopeKey::Credential));
+        // 新增项统一默认关闭（Q1）
+        assert!(!scope.get(SyncScopeKey::Note));
+        assert!(!scope.get(SyncScopeKey::SavedSql));
+        assert!(!scope.get(SyncScopeKey::QuickCommand));
+        assert!(!scope.get(SyncScopeKey::SftpFavorite));
+        assert!(!scope.get(SyncScopeKey::LlmProvider));
+        assert!(!scope.get(SyncScopeKey::SettingsGeneral));
+        assert!(!scope.get(SyncScopeKey::SettingsKeybindings));
+    }
+
+    #[test]
+    fn always_on_types_cannot_be_disabled() {
+        let mut scope = SyncScopeSettings::default();
+
+        scope.set(SyncScopeKey::Connection, false);
+        scope.set(SyncScopeKey::Workspace, false);
+
+        assert!(scope.get(SyncScopeKey::Connection));
+        assert!(scope.get(SyncScopeKey::Workspace));
+    }
+
+    #[test]
+    fn effective_drops_personal_only_types_for_onet_cloud() {
+        let scope = SyncScopeSettings::default();
+        // 让 personal_only 项处于开启状态
+        let mut scope = scope;
+        scope.set(SyncScopeKey::LlmProvider, true);
+
+        let personal = scope.effective(SyncProvider::Personal);
+        assert!(personal.contains(&SyncScopeKey::LlmProvider));
+        assert!(personal.contains(&SyncScopeKey::Credential));
+
+        let cloud = scope.effective(SyncProvider::OnetCloud);
+        assert!(!cloud.contains(&SyncScopeKey::LlmProvider));
+        assert!(!cloud.contains(&SyncScopeKey::Credential));
+        // 其它类型不受影响
+        assert!(cloud.contains(&SyncScopeKey::Connection));
+    }
+
+    #[test]
+    fn force_disable_personal_only_is_idempotent_and_persisted() {
+        let mut scope = SyncScopeSettings::default();
+        scope.set(SyncScopeKey::Credential, true);
+        scope.set(SyncScopeKey::LlmProvider, true);
+
+        scope.force_disable_personal_only();
+        assert!(!scope.credential);
+        assert!(!scope.llm_provider);
+        // 非 personal_only 项不受影响
+        assert!(scope.get(SyncScopeKey::Connection));
+
+        scope.force_disable_personal_only();
+        assert!(!scope.credential);
+        assert!(!scope.llm_provider);
+    }
+
+    #[test]
+    fn every_scope_key_has_a_descriptor_and_round_trips_through_str() {
+        for key in SyncScopeKey::ALL {
+            let descriptor = super::sync_scope_descriptor(*key)
+                .unwrap_or_else(|| panic!("缺少 descriptor: {}", key.as_str()));
+            assert_eq!(key.as_str(), descriptor.data_type);
+            assert_eq!(Some(*key), SyncScopeKey::from_str(key.as_str()));
+        }
+        assert_eq!(SyncScopeKey::ALL.len(), SYNC_SCOPE_DESCRIPTORS.len());
+    }
+
+    #[test]
+    fn legacy_settings_json_deserializes_to_default_scope() {
+        // 旧版 settings.json 没有 sync_scope 字段
+        let parsed: SyncScopeSettings = serde_json::from_str("{}").expect("parse empty scope");
+        assert_eq!(0, parsed.schema_version);
+        assert!(parsed.get(SyncScopeKey::Connection));
+        assert!(!parsed.get(SyncScopeKey::Note));
+
+        // 缺失部分字段时按 default 兜底
+        let partial: SyncScopeSettings =
+            serde_json::from_str(r#"{"note":true}"#).expect("parse partial scope");
+        assert!(partial.get(SyncScopeKey::Note));
+        assert!(partial.get(SyncScopeKey::Connection));
+    }
+
+    #[test]
+    fn first_enable_tracking_drives_the_personal_confirmation() {
+        let mut scope = SyncScopeSettings::default();
+        assert!(scope.is_first_enable(SyncScopeKey::Note));
+
+        scope.mark_enabled(SyncScopeKey::Note);
+        assert!(!scope.is_first_enable(SyncScopeKey::Note));
+        // 只影响被标记的那一项
+        assert!(scope.is_first_enable(SyncScopeKey::SavedSql));
     }
 
     #[test]

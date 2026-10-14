@@ -123,6 +123,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         include_str!("../../migrations/20261013000001_remove_builtin_navop_ai_provider.sql"),
     ),
     (
+        "20261014000001",
+        include_str!("../../migrations/20261014000001_quick_command_is_builtin.sql"),
+    ),
+    (
         "20261022000001",
         include_str!("../../migrations/20261022000001_connection_ai_access.sql"),
     ),

@@ -19,4 +19,5 @@ pub mod notes_shortcuts;
 pub mod provider_form_dialog;
 pub mod remote_file_editor_settings;
 pub mod sql_format_settings;
+pub mod sync_scope_settings;
 pub mod tool_exposure_settings;

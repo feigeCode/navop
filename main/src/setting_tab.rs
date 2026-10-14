@@ -18,6 +18,7 @@ use crate::settings::notes_shortcuts::{
 };
 use crate::settings::remote_file_editor_settings::remote_file_editor_setting_group;
 use crate::settings::sql_format_settings::sql_format_setting_group;
+use crate::settings::sync_scope_settings::sync_scope_group;
 use crate::settings::tool_exposure_settings::{
     agent_tool_exposure_setting_group, mcp_tool_exposure_setting_group,
 };
@@ -984,12 +985,18 @@ impl SettingsPanel {
                 ]),
             SettingPage::new(t!("Settings.Sync.title"))
                 .resettable(true)
-                .group(sync_setting_group(
-                    default_settings.sync_enabled,
-                    default_settings.sync_provider,
-                    &default_settings.personal_sync,
-                    AppSettings::global(cx).personal_sync.backend,
-                )),
+                .groups(vec![
+                    sync_setting_group(
+                        default_settings.sync_enabled,
+                        default_settings.sync_provider,
+                        &default_settings.personal_sync,
+                        AppSettings::global(cx).personal_sync.backend,
+                    ),
+                    sync_scope_group(
+                        &default_settings.sync_scope,
+                        AppSettings::global(cx).sync_provider,
+                    ),
+                ]),
             SettingPage::new(t!("TeamSync.manage_keys"))
                 .resettable(false)
                 .group(team_key_setting_group()),
@@ -1202,6 +1209,11 @@ fn sync_provider_item(default: SyncProvider) -> SettingItem {
             |val: SharedString, cx: &mut App| {
                 AppSettings::update_and_save(cx, |settings| {
                     settings.sync_provider = SyncProvider::from_str(&val);
+                    // 切到 Navop 云同步时，仅 Personal 支持的类型必须真的取消勾选
+                    // 并落盘 —— 只靠 UI 置灰会在切回 Personal 时留下幽灵勾选。
+                    if settings.sync_provider == SyncProvider::OnetCloud {
+                        settings.sync_scope.force_disable_personal_only();
+                    }
                 });
             },
         )

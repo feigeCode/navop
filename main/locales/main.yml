@@ -3907,6 +3907,136 @@ Settings:
         en: WebDAV server unreachable
         zh-CN: WebDAV 服务无法访问
         zh-HK: WebDAV 服務無法連線
+    # 同步数据范围（用户可自选同步哪些类型）
+    Scope:
+      group_title:
+        en: Sync Data Range
+        zh-CN: 同步数据范围
+        zh-HK: 同步資料範圍
+      group_desc:
+        en: Choose which data types are synced. Connections and workspaces always sync.
+        zh-CN: 选择需要同步的数据类型。连接配置和工作空间始终参与同步。
+        zh-HK: 選擇需要同步的資料類型。連線設定與工作區永遠參與同步。
+      connection:
+        en: Connections
+        zh-CN: 连接配置
+        zh-HK: 連線設定
+      connection_desc:
+        en: Connection settings and credentials. Always synced.
+        zh-CN: 连接配置及其凭据参数。始终同步。
+        zh-HK: 連線設定及其憑證參數。永遠同步。
+      workspace:
+        en: Workspaces
+        zh-CN: 工作空间
+        zh-HK: 工作區
+      workspace_desc:
+        en: Workspace groups used to organize connections. Always synced.
+        zh-CN: 用于组织连接的工作空间分组。始终同步。
+        zh-HK: 用於組織連線的工作區分組。永遠同步。
+      credential:
+        en: Keychain Entries
+        zh-CN: 钥匙串条目
+        zh-HK: 鑰匙圈項目
+      credential_desc:
+        en: Personal Sync only. Credentials and private keys are end-to-end encrypted.
+        zh-CN: 仅个人同步支持。凭据与私钥均经过端到端加密。
+        zh-HK: 僅個人同步支援。憑證與私鑰均經過端對端加密。
+      note:
+        en: Notes
+        zh-CN: 笔记
+        zh-HK: 筆記
+      note_desc:
+        en: Synced per document. Documents larger than 1 MB are skipped.
+        zh-CN: 按文档逐篇同步。单篇超过 1 MB 的文档会被跳过。
+        zh-HK: 按文件逐篇同步。單篇超過 1 MB 的文件會被略過。
+      saved_sql:
+        en: Saved SQL
+        zh-CN: 已保存的 SQL
+        zh-HK: 已儲存的 SQL
+      saved_sql_desc:
+        en: SQL files in the default queries directory. Externally mounted directories are not synced.
+        zh-CN: 默认 queries 目录中的 SQL 文件。额外挂载的外部目录不会同步。
+        zh-HK: 預設 queries 目錄中的 SQL 檔案。額外掛載的外部目錄不會同步。
+      quick_command:
+        en: Saved Quick Commands
+        zh-CN: 已保存的快捷命令
+        zh-HK: 已儲存的快捷指令
+      quick_command_desc:
+        en: Commands you created. Built-in default commands are never synced.
+        zh-CN: 你自建的快捷命令。内置默认命令不会同步。
+        zh-HK: 你自建的快捷指令。內建預設指令不會同步。
+      sftp_favorite:
+        en: SFTP Favorites
+        zh-CN: SFTP 收藏列表
+        zh-HK: SFTP 收藏清單
+      sftp_favorite_desc:
+        en: Favorite remote paths for SFTP connections.
+        zh-CN: SFTP 连接中收藏的远端路径。
+        zh-HK: SFTP 連線中收藏的遠端路徑。
+      settings_general:
+        en: General Settings
+        zh-CN: 通用设置
+        zh-HK: 一般設定
+      settings_general_desc:
+        en: Appearance, language, startup and other general preferences.
+        zh-CN: 外观、语言、启动等通用偏好。
+        zh-HK: 外觀、語言、啟動等一般偏好。
+      settings_database:
+        en: Database Settings
+        zh-CN: 数据库设置
+        zh-HK: 資料庫設定
+      settings_database_desc:
+        en: Table view, row limits and SQL formatting preferences.
+        zh-CN: 表格视图、行数上限与 SQL 格式化偏好。
+        zh-HK: 表格檢視、列數上限與 SQL 格式化偏好。
+      settings_terminal:
+        en: Terminal Settings
+        zh-CN: 终端设置
+        zh-HK: 終端機設定
+      settings_terminal_desc:
+        en: Terminal appearance and your custom highlight rules.
+        zh-CN: 终端外观与自定义高亮规则。
+        zh-HK: 終端機外觀與自訂醒目提示規則。
+      settings_agent:
+        en: Agent Settings
+        zh-CN: Agent 设置
+        zh-HK: Agent 設定
+      settings_agent_desc:
+        en: Agent execution mode, system prompt and tool exposure.
+        zh-CN: Agent 执行模式、系统提示词与工具暴露。
+        zh-HK: Agent 執行模式、系統提示詞與工具暴露。
+      settings_mcp:
+        en: MCP Settings
+        zh-CN: MCP 设置
+        zh-HK: MCP 設定
+      settings_mcp_desc:
+        en: MCP server options and tool exposure.
+        zh-CN: MCP 服务选项与工具暴露。
+        zh-HK: MCP 服務選項與工具暴露。
+      settings_keybindings:
+        en: Shortcut Customization
+        zh-CN: 快捷键设置
+        zh-HK: 快捷鍵設定
+      settings_keybindings_desc:
+        en: Only the shortcuts you changed are synced.
+        zh-CN: 只同步你改过的快捷键。
+        zh-HK: 只同步你改過的快捷鍵。
+      llm_provider:
+        en: LLM Providers
+        zh-CN: LLM 提供商
+        zh-HK: LLM 供應商
+      llm_provider_desc:
+        en: Personal Sync only. Provider settings, models and API keys are end-to-end encrypted.
+        zh-CN: 仅个人同步支持。提供商配置、模型与 API Key 均经过端到端加密。
+        zh-HK: 僅個人同步支援。供應商設定、模型與 API Key 均經過端對端加密。
+      personal_confirm_title:
+        en: Syncing this data type requires updated clients
+        zh-CN: 开启此类型同步需要所有设备都已升级
+        zh-HK: 開啟此類型同步需要所有裝置都已升級
+      personal_confirm_message:
+        en: Once enabled, this device will write records that older Navop versions cannot read. Older devices sharing this sync target will fail to sync entirely until they are updated.
+        zh-CN: 开启后，本机会写入旧版本 Navop 无法识别的记录。共用同一同步目标的旧版本设备在升级前将无法完成同步。
+        zh-HK: 開啟後，本機會寫入舊版本 Navop 無法辨識的記錄。共用同一同步目標的舊版本裝置在升級前將無法完成同步。
 
   # 快捷键
   Shortcuts:
