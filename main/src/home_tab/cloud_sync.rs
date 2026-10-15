@@ -104,6 +104,7 @@ impl HomePage {
             scope_env,
             user_id,
             enabled_scopes,
+            Some(Arc::new(crate::sync_note_adapter::FileSystemNoteAdapter)),
         );
         let sync_task = Tokio::spawn(cx, async move { engine.sync().await });
 
