@@ -10,17 +10,24 @@ use one_core::cloud_sync::personal::{
     PersonalSyncWorker, SqlitePersonalSyncConflictSink, SyncDeviceId, SyncStoreError,
     SyncStoreHealth, WorkerConfig, build_personal_sync_runtime_config, open_webdav_password,
 };
+use one_core::cloud_sync::scope::personal::SyncScopeSource;
+use one_core::cloud_sync::scope::state::{SyncItemStateRepository, SyncTypeStatusRepository};
 use one_core::cloud_sync::{CloudSyncData, CloudSyncService, ConflictResolution, data_type};
 use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
 use one_core::crypto;
 use one_core::gpui_tokio::Tokio;
+use one_core::llm::storage::ProviderRepository;
 use one_core::settings::{AppSettings, GlobalCurrentUser, PersonalSyncSettings, SyncProvider};
+use one_core::storage::quick_command::QuickCommandRepository;
+use one_core::storage::sftp_favorite_path::SftpFavoritePathRepository;
 use one_core::storage::traits::Repository;
 use one_core::storage::{
     ConnectionRepository, ConnectionType, CredentialRepository, CredentialSummary, DatabaseType,
     GlobalStorageState, StorageManager, StoredConnection, Workspace, WorkspaceRepository,
 };
 use rust_i18n::t;
+
+use std::collections::HashSet;
 
 use crate::personal_sync_status::PersonalSyncRuntimeStatus;
 
@@ -916,12 +923,51 @@ fn build_local_source(cx: &App) -> Option<PersonalSyncLocalRepositorySource> {
         .try_global::<GlobalPersonalSyncRuntime>()?
         .service
         .clone();
-    Some(PersonalSyncLocalRepositorySource::new(
+
+    let source = PersonalSyncLocalRepositorySource::new(
         (*connections).clone(),
         (*credentials).clone(),
         (*workspaces).clone(),
+        service.clone(),
+    );
+
+    Some(source.with_scope(build_scope_source(cx, &storage, service)))
+}
+
+/// 装配「用户自选同步数据范围」扩展源
+///
+/// 拿不到任一依赖时返回 `None`（功能降级为只同步连接 / 工作空间 / 钥匙串），
+/// 而不是让整条同步链路起不来。
+fn build_scope_source(
+    cx: &App,
+    storage: &one_core::storage::StorageManager,
+    service: Arc<RwLock<CloudSyncService>>,
+) -> Option<Arc<SyncScopeSource>> {
+    let quick_commands = storage.get::<QuickCommandRepository>()?;
+    let sftp = storage.get::<SftpFavoritePathRepository>()?;
+    let providers = storage.get::<ProviderRepository>()?;
+
+    let settings = AppSettings::global(cx);
+    let enabled: HashSet<String> = settings
+        .sync_scope
+        .effective(settings.sync_provider)
+        .into_iter()
+        .filter_map(|key| {
+            one_core::settings::sync_scope_descriptor(key).map(|d| d.data_type.to_string())
+        })
+        .collect();
+
+    Some(Arc::new(SyncScopeSource::new(
+        "personal".to_string(),
+        "personal".to_string(),
+        enabled,
+        SyncItemStateRepository::new(storage.connection()),
+        SyncTypeStatusRepository::new(storage.connection()),
+        (*quick_commands).clone(),
+        (*sftp).clone(),
+        (*providers).clone(),
         service,
-    ))
+    )))
 }
 
 fn sync_master_key_and_user(cx: &mut App) {

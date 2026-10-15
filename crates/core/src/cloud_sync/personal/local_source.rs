@@ -11,6 +11,7 @@ use crate::storage::{
 };
 
 use super::{PersonalSyncItemSnapshot, PersonalSyncLocalSource, SyncStoreError};
+use crate::cloud_sync::scope::personal::SyncScopeSource;
 use crate::cloud_sync::workspace_hierarchy::{
     cloud_parent_links, reconcile_connection_workspaces, reconcile_parent_links,
     sort_ancestors_first,
@@ -26,6 +27,9 @@ pub struct PersonalSyncLocalRepositorySource {
     credentials: CredentialRepository,
     workspaces: WorkspaceRepository,
     service: Arc<RwLock<CloudSyncService>>,
+    /// 用户自选同步范围内的新增数据类型（笔记 / 已保存 SQL / 快捷命令 /
+    /// SFTP 收藏 / 各类设置 / LLM 提供商）。`None` 表示功能未装配。
+    scope: Option<Arc<SyncScopeSource>>,
 }
 
 impl PersonalSyncLocalRepositorySource {
@@ -40,7 +44,14 @@ impl PersonalSyncLocalRepositorySource {
             credentials,
             workspaces,
             service,
+            scope: None,
         }
+    }
+
+    /// 装配「数据范围」扩展源
+    pub fn with_scope(mut self, scope: Option<Arc<SyncScopeSource>>) -> Self {
+        self.scope = scope;
+        self
     }
 
     fn connection_snapshot(
@@ -391,6 +402,9 @@ impl PersonalSyncLocalSource for PersonalSyncLocalRepositorySource {
                 items.push(self.connection_snapshot(&conn)?);
             }
         }
+        if let Some(scope) = &self.scope {
+            items.extend(scope.list_items().await?);
+        }
         Ok(items)
     }
 
@@ -406,6 +420,10 @@ impl PersonalSyncLocalSource for PersonalSyncLocalRepositorySource {
         }
         if let Ok(id) = parse_prefixed_id(&item.local_id, WORKSPACE_PREFIX) {
             return self.export_workspace(&load_required_workspace(&self.workspaces, id)?);
+        }
+        // 不属于既有三种前缀的，交给「数据范围」扩展源处理
+        if let Some(scope) = &self.scope {
+            return scope.export_item(item).await;
         }
         Err(SyncStoreError::Parse(format!(
             "unsupported personal sync local id: {}",
@@ -425,9 +443,16 @@ impl PersonalSyncLocalSource for PersonalSyncLocalRepositorySource {
             data_type::CONNECTION => self.apply_connection(record, local),
             data_type::CREDENTIAL => self.apply_credential(record, local),
             data_type::WORKSPACE => self.apply_workspace(record, local),
-            other => Err(SyncStoreError::Parse(format!(
-                "unsupported personal sync data type: {other}"
-            ))),
+            // 其余类型交给「数据范围」扩展源；未装配时**跳过而不是报错**：
+            // 旧版本客户端拉到未知 data_type 会让整轮同步失败（设计文档 R2），
+            // 这里把它降级为一条 warning。
+            other => match &self.scope {
+                Some(scope) => scope.apply_remote(record, local).await,
+                None => {
+                    tracing::warn!("忽略未知的同步数据类型: {other}");
+                    Ok(())
+                }
+            },
         }
     }
 
@@ -480,6 +505,9 @@ impl PersonalSyncLocalSource for PersonalSyncLocalRepositorySource {
                 .update_sync_status(id, Some(cloud_id.to_string()), Some(synced_at))
                 .map_err(repository_error);
         }
+        if let Some(scope) = &self.scope {
+            return scope.mark_synced(local_id, cloud_id, synced_at).await;
+        }
         Err(SyncStoreError::Parse(format!(
             "unsupported personal sync local id: {local_id}"
         )))
@@ -506,6 +534,9 @@ impl PersonalSyncLocalSource for PersonalSyncLocalRepositorySource {
         }
         if let Ok(id) = parse_prefixed_id(&item.local_id, WORKSPACE_PREFIX) {
             return self.workspaces.delete(id).map_err(repository_error);
+        }
+        if let Some(scope) = &self.scope {
+            return scope.delete_item(item).await;
         }
         Err(SyncStoreError::Parse(format!(
             "unsupported personal sync local id: {}",

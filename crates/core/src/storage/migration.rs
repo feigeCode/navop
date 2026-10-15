@@ -127,6 +127,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         include_str!("../../migrations/20261014000001_quick_command_is_builtin.sql"),
     ),
     (
+        "20261016000001",
+        include_str!("../../migrations/20261016000001_sync_scope_state.sql"),
+    ),
+    (
         "20261022000001",
         include_str!("../../migrations/20261022000001_connection_ai_access.sql"),
     ),

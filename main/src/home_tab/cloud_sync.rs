@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use super::*;
 
 impl HomePage {
@@ -80,8 +82,28 @@ impl HomePage {
             }
         }
 
-        // 创建同步引擎
-        let engine = SyncEngine::new(cloud_client, sync_service, storage);
+        // 创建同步引擎，并按用户勾选的「数据范围」装配新增类型的处理器
+        let settings = AppSettings::global(cx);
+        let enabled_scopes: HashSet<String> = settings
+            .sync_scope
+            .effective(settings.sync_provider)
+            .into_iter()
+            .filter_map(|key| {
+                one_core::settings::sync_scope_descriptor(key).map(|d| d.data_type.to_string())
+            })
+            .collect();
+        let user_id = self
+            .current_user
+            .as_ref()
+            .map(|user| user.id.clone())
+            .unwrap_or_else(|| "personal".to_string());
+        let scope_env = one_core::config::SupabaseConfig::get().project_url;
+
+        let engine = SyncEngine::new(cloud_client, sync_service, storage).with_sync_scopes(
+            scope_env,
+            user_id,
+            enabled_scopes,
+        );
         let sync_task = Tokio::spawn(cx, async move { engine.sync().await });
 
         cx.spawn(async move |this, cx: &mut AsyncApp| {

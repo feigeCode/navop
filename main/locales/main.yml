@@ -4029,6 +4029,38 @@ Settings:
         en: Personal Sync only. Provider settings, models and API keys are end-to-end encrypted.
         zh-CN: 仅个人同步支持。提供商配置、模型与 API Key 均经过端到端加密。
         zh-HK: 僅個人同步支援。供應商設定、模型與 API Key 均經過端對端加密。
+      master_key_required:
+        en: A master key must be set before any data can be encrypted and synced.
+        zh-CN: 需要先设置主密钥，否则任何数据都无法加密并同步到云端。
+        zh-HK: 需要先設定主金鑰，否則任何資料都無法加密並同步到雲端。
+      master_key_locked:
+        en: Not synced - master key locked
+        zh-CN: 未同步：主密钥未解锁
+        zh-HK: 未同步：主金鑰未解鎖
+      never_synced:
+        en: Not synced yet
+        zh-CN: 未同步
+        zh-HK: 未同步
+      just_now:
+        en: just now
+        zh-CN: 刚刚
+        zh-HK: 剛剛
+      minutes_ago:
+        en: "%{count} min ago"
+        zh-CN: "%{count} 分钟前"
+        zh-HK: "%{count} 分鐘前"
+      hours_ago:
+        en: "%{count} hr ago"
+        zh-CN: "%{count} 小时前"
+        zh-HK: "%{count} 小時前"
+      days_ago:
+        en: "%{count} days ago"
+        zh-CN: "%{count} 天前"
+        zh-HK: "%{count} 天前"
+      last_synced:
+        en: Synced %{time}
+        zh-CN: 上次同步 %{time}
+        zh-HK: 上次同步 %{time}
       personal_confirm_title:
         en: Syncing this data type requires updated clients
         zh-CN: 开启此类型同步需要所有设备都已升级

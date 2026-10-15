@@ -26,6 +26,7 @@ pub mod master_key_reencrypt;
 mod models;
 pub mod personal;
 pub mod queue;
+pub mod scope;
 mod service;
 pub mod state_manager;
 pub mod supabase;

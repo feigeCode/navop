@@ -12,21 +12,47 @@ use gpui_component::checkbox::Checkbox;
 use gpui_component::dialog::DialogButtonProps;
 use gpui_component::setting::{RenderOptions, SettingGroup, SettingItem};
 use gpui_component::{ActiveTheme as _, Disableable, Sizable, WindowExt as _, h_flex, v_flex};
+use one_core::cloud_sync::scope::state::SyncTypeStatusRepository;
+use one_core::crypto;
 use one_core::settings::{
     AppSettings, LockMode, SYNC_SCOPE_DESCRIPTORS, SyncProvider, SyncScopeDescriptor, SyncScopeKey,
     SyncScopeSettings,
 };
+use one_core::storage::GlobalStorageState;
 use rust_i18n::t;
+
+/// Personal 同步通道的 scope / user 标识（与 `build_scope_source` 保持一致）
+const PERSONAL_SCOPE_ENV: &str = "personal";
+const PERSONAL_USER_ID: &str = "personal";
 
 /// 构建「同步数据范围」分组。
 ///
 /// `provider` 必须传**当前值**而不是默认值：`setting_pages` 每次渲染都会重建，
 /// 切换同步方式后置灰状态会自动重新求值，不需要手动 refresh。
 pub fn sync_scope_group(defaults: &SyncScopeSettings, provider: SyncProvider) -> SettingGroup {
+    let mut items = Vec::new();
+
+    // Q11：主密钥未设置 / 未解锁时无法加密，任何数据都同步不上去。
+    // 这是「配置未就绪」而不是故障，单独提示，避免用户以为是同步坏了。
+    if !crypto::has_master_key() {
+        items.push(
+            SettingItem::render(|_options, _window, cx| {
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().warning_foreground)
+                    .child(t!("Settings.Sync.Scope.master_key_required").to_string())
+                    .into_any_element()
+            })
+            .keywords(["master key", "主密钥"]),
+        );
+    }
+
+    items.extend(sync_scope_items(defaults, provider));
+
     SettingGroup::new()
         .title(t!("Settings.Sync.Scope.group_title"))
         .description(t!("Settings.Sync.Scope.group_desc"))
-        .items(sync_scope_items(defaults, provider))
+        .items(items)
 }
 
 pub fn sync_scope_items(defaults: &SyncScopeSettings, provider: SyncProvider) -> Vec<SettingItem> {
@@ -101,6 +127,7 @@ fn render_sync_scope_row(
                 .child(div().text_sm().child(title))
                 .child(div().text_xs().text_color(muted).child(description)),
         )
+        .child(status_label(cx, descriptor))
         .child(
             Checkbox::new(descriptor.data_type)
                 .checked(checked)
@@ -111,6 +138,93 @@ fn render_sync_scope_row(
                 }),
         )
         .into_any_element()
+}
+
+/// 每行的状态列（Q12）：上次同步时间，或最近一次失败警告。
+fn status_label(cx: &App, descriptor: &'static SyncScopeDescriptor) -> AnyElement {
+    let Some((text, is_error)) = status_text(cx, descriptor.data_type) else {
+        return div().into_any_element();
+    };
+    let color = if is_error {
+        cx.theme().danger_foreground
+    } else {
+        cx.theme().muted_foreground
+    };
+    div()
+        .text_xs()
+        .text_color(color)
+        .child(text)
+        .into_any_element()
+}
+
+fn status_text(cx: &App, record_type: &str) -> Option<(String, bool)> {
+    // 主密钥未解锁：所有类型统一显示，且优先于其它状态
+    if !crypto::has_master_key() {
+        return Some((
+            t!("Settings.Sync.Scope.master_key_locked").to_string(),
+            true,
+        ));
+    }
+
+    let storage = cx.try_global::<GlobalStorageState>()?;
+    let repo = SyncTypeStatusRepository::new(storage.storage.connection());
+    let status = repo
+        .get(PERSONAL_SCOPE_ENV, PERSONAL_USER_ID, record_type)
+        .ok()
+        .flatten()?;
+
+    if status.has_recent_error() {
+        let code = status.last_error_code.clone().unwrap_or_default();
+        let message = status
+            .last_error_msg
+            .clone()
+            .unwrap_or_else(|| code.clone());
+        return Some((format!("⚠ {message}"), true));
+    }
+
+    let Some(success_at) = status.last_success_at else {
+        return Some((t!("Settings.Sync.Scope.never_synced").to_string(), false));
+    };
+
+    Some((
+        t!(
+            "Settings.Sync.Scope.last_synced",
+            time = format_relative_time(success_at)
+        )
+        .to_string(),
+        false,
+    ))
+}
+
+/// 相对时间文案：一小时内按分钟，一天内按小时，否则给日期
+fn format_relative_time(timestamp: i64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let diff = (now - timestamp).max(0);
+    if diff < 60 {
+        return t!("Settings.Sync.Scope.just_now").to_string();
+    }
+    if diff < 3600 {
+        return t!(
+            "Settings.Sync.Scope.minutes_ago",
+            count = (diff / 60).to_string()
+        )
+        .to_string();
+    }
+    if diff < 86400 {
+        return t!(
+            "Settings.Sync.Scope.hours_ago",
+            count = (diff / 3600).to_string()
+        )
+        .to_string();
+    }
+    t!(
+        "Settings.Sync.Scope.days_ago",
+        count = (diff / 86400).to_string()
+    )
+    .to_string()
 }
 
 /// 勾选变更入口；Personal 下首次开启需要用户确认（Q1 / R2）。

@@ -23,7 +23,7 @@ use crate::crypto;
 use crate::storage::{StorageManager, TeamKeyCache, TeamKeyCacheRepository};
 use crate::storage::{TeamMembershipCache, TeamMembershipCacheRepository, TeamMembershipState};
 use futures_util::{StreamExt, stream};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
@@ -87,6 +87,54 @@ pub struct SyncEngine {
     handlers: Vec<Box<dyn SyncHandler>>,
     /// 当前用户所在团队列表（同步开始时获取）
     pub(crate) cached_teams: std::sync::RwLock<Vec<Team>>,
+    /// 「数据范围」扩展处理器所需的环境标识；`None` 表示未装配
+    pub(crate) scope_env: Option<String>,
+    pub(crate) scope_user_id: Option<String>,
+}
+
+impl SyncEngine {
+    /// 装配「用户自选同步数据范围」：注册新增类型的处理器。
+    ///
+    /// `enabled` 为空表示用户未勾选任何新增类型，此时不注册任何处理器。
+    pub fn with_sync_scopes(
+        mut self,
+        scope_env: String,
+        user_id: String,
+        enabled: HashSet<String>,
+    ) -> Self {
+        if enabled.is_empty() {
+            return self;
+        }
+        self.scope_env = Some(scope_env.clone());
+        self.scope_user_id = Some(user_id.clone());
+
+        let state = crate::cloud_sync::scope::state::SyncItemStateRepository::new(
+            self.storage.connection(),
+        );
+        for descriptor in crate::settings::SYNC_SCOPE_DESCRIPTORS {
+            if !enabled.contains(descriptor.data_type) {
+                continue;
+            }
+            // 既有三类型由各自 handler 负责，避免重复注册
+            if matches!(
+                descriptor.data_type,
+                crate::cloud_sync::data_type::CONNECTION
+                    | crate::cloud_sync::data_type::WORKSPACE
+                    | crate::cloud_sync::data_type::CREDENTIAL
+            ) {
+                continue;
+            }
+            self.handlers.push(Box::new(TypedSyncBridge {
+                handler: crate::cloud_sync::scope::cloud::ScopeSyncTypeHandler::new(
+                    descriptor.data_type,
+                    state.clone(),
+                    scope_env.clone(),
+                    user_id.clone(),
+                ),
+            }));
+        }
+        self
+    }
 }
 
 impl SyncEngine {
@@ -108,6 +156,8 @@ impl SyncEngine {
                 Box::new(ConnectionSyncHandler),
             ],
             cached_teams: std::sync::RwLock::new(Vec::new()),
+            scope_env: None,
+            scope_user_id: None,
         }
     }
 
