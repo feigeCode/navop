@@ -4,6 +4,7 @@
 //! 设计文档见 `docs/design/sync-scope-selection.md`。
 
 pub mod cloud;
+pub mod notes;
 pub mod payloads;
 pub mod personal;
 pub mod settings_payload;
@@ -11,6 +12,7 @@ pub mod settings_store;
 pub mod state;
 
 pub use cloud::{ScopeSyncItem, ScopeSyncTypeHandler, synthetic_id};
+pub use notes::{NOTE_MAX_CONTENT_BYTES, NoteSyncAdapter, NoteSyncItem, SharedNoteAdapter};
 pub use payloads::*;
 pub use personal::*;
 pub use settings_payload::{

@@ -43,6 +43,7 @@ mod session_logs;
 mod setting_tab;
 mod settings;
 mod sync_conflict_dialog;
+mod sync_note_adapter;
 mod system_tray;
 mod team_management;
 mod toolbox_tab;

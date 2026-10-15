@@ -77,7 +77,7 @@ jobs:
   test:
     name: Test (${{ matrix.platform }}, ${{ matrix.target }})
     needs: [prepare, classify]
-    if: ${{ needs.classify.outputs.release_only != 'true' }}
+    if: ${{ always() && needs.prepare.outputs.matrix != '' && needs.classify.outputs.release_only != 'true' }}
     strategy:
       fail-fast: false
       matrix:

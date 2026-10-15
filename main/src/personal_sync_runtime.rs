@@ -966,6 +966,7 @@ fn build_scope_source(
         (*quick_commands).clone(),
         (*sftp).clone(),
         (*providers).clone(),
+        Some(Arc::new(crate::sync_note_adapter::FileSystemNoteAdapter)),
         service,
     )))
 }

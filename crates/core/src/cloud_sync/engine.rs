@@ -101,6 +101,7 @@ impl SyncEngine {
         scope_env: String,
         user_id: String,
         enabled: HashSet<String>,
+        notes: Option<crate::cloud_sync::scope::notes::SharedNoteAdapter>,
     ) -> Self {
         if enabled.is_empty() {
             return self;
@@ -130,6 +131,7 @@ impl SyncEngine {
                     state.clone(),
                     scope_env.clone(),
                     user_id.clone(),
+                    notes.clone(),
                 ),
             }));
         }

@@ -13,11 +13,12 @@ use crate::cloud_sync::models::{CloudSyncData, data_type};
 use crate::cloud_sync::personal::{
     PersonalSyncItemSnapshot, PersonalSyncLocalSource, SyncStoreError,
 };
-use crate::cloud_sync::scope::payloads::SavedSqlPlainData;
+use crate::cloud_sync::scope::notes::{NOTE_MAX_CONTENT_BYTES, NoteSyncItem, SharedNoteAdapter};
 use crate::cloud_sync::scope::payloads::{
     LlmProviderPlainData, PAYLOAD_FORMAT_VERSION, QuickCommandPlainData, SftpFavoritePlainData,
     build_record_with_id, parse_record,
 };
+use crate::cloud_sync::scope::payloads::{NotePlainData, SavedSqlPlainData};
 use crate::cloud_sync::scope::settings_payload::{SettingsGroup, apply_payload, merge_three_way};
 use crate::cloud_sync::scope::settings_store::{
     FileSettingsStore, canonical_json, payload_checksum,
@@ -49,6 +50,7 @@ pub struct SyncScopeSource {
     quick_commands: QuickCommandRepository,
     sftp: SftpFavoritePathRepository,
     providers: ProviderRepository,
+    notes: Option<SharedNoteAdapter>,
     settings: FileSettingsStore,
     service: Arc<RwLock<CloudSyncService>>,
 }
@@ -63,6 +65,7 @@ impl SyncScopeSource {
         quick_commands: QuickCommandRepository,
         sftp: SftpFavoritePathRepository,
         providers: ProviderRepository,
+        notes: Option<SharedNoteAdapter>,
         service: Arc<RwLock<CloudSyncService>>,
     ) -> Self {
         Self {
@@ -74,6 +77,7 @@ impl SyncScopeSource {
             quick_commands,
             sftp,
             providers,
+            notes,
             settings: FileSettingsStore,
             service,
         }
@@ -272,6 +276,41 @@ impl SyncScopeSource {
         Ok(items)
     }
 
+    fn list_notes(&self) -> Result<Vec<PersonalSyncItemSnapshot>, SyncStoreError> {
+        let Some(adapter) = &self.notes else {
+            return Ok(Vec::new());
+        };
+        let mut items = Vec::new();
+        for note in adapter.list() {
+            // Q4：单篇超过 1 MB 跳过，不重试
+            if note.content.len() > NOTE_MAX_CONTENT_BYTES {
+                self.mark_error(
+                    data_type::NOTE,
+                    "note_too_large",
+                    &format!("{} 超过 1 MB，已跳过", note.title()),
+                );
+                continue;
+            }
+            let plain = NotePlainData {
+                format_version: PAYLOAD_FORMAT_VERSION,
+                notebook_id: String::new(),
+                notebook_name: String::new(),
+                document_id: note.relative_path.clone(),
+                relative_path: note.relative_path.clone(),
+                title: note.title(),
+                content: note.content.clone(),
+            };
+            let checksum = payload_checksum(&serde_json::to_value(&plain).unwrap_or_default());
+            items.push(self.snapshot(
+                data_type::NOTE,
+                &note.relative_path,
+                note.modified_at,
+                &checksum,
+            ));
+        }
+        Ok(items)
+    }
+
     fn list_settings(&self) -> Result<Vec<PersonalSyncItemSnapshot>, SyncStoreError> {
         let mut items = Vec::new();
         for group in SettingsGroup::ALL {
@@ -457,6 +496,24 @@ impl SyncScopeSource {
 
         self.record_synced(data_type::SAVED_SQL, &relative, record, None);
         self.mark_success(data_type::SAVED_SQL);
+        Ok(())
+    }
+
+    fn apply_note(&self, record: &CloudSyncData) -> Result<(), SyncStoreError> {
+        let service = self.lock_service()?;
+        let plain: NotePlainData = parse_record(&service, record).map_err(sync_error)?;
+        drop(service);
+
+        let Some(adapter) = &self.notes else {
+            return Ok(());
+        };
+        adapter.write(&NoteSyncItem {
+            relative_path: plain.relative_path.clone(),
+            modified_at: now_seconds(),
+            content: plain.content.clone(),
+        });
+        self.record_synced(data_type::NOTE, &plain.relative_path, record, None);
+        self.mark_success(data_type::NOTE);
         Ok(())
     }
 
@@ -652,6 +709,9 @@ impl PersonalSyncLocalSource for SyncScopeSource {
         if self.enabled.contains(data_type::SAVED_SQL) {
             items.extend(self.list_saved_sql()?);
         }
+        if self.enabled.contains(data_type::NOTE) {
+            items.extend(self.list_notes()?);
+        }
         items.extend(self.list_settings()?);
         Ok(items)
     }
@@ -738,6 +798,30 @@ impl PersonalSyncLocalSource for SyncScopeSource {
                     .map_err(sync_error)?;
                 Ok(record)
             }
+            data_type::NOTE => {
+                let plain = self
+                    .notes
+                    .as_ref()
+                    .and_then(|adapter| {
+                        adapter
+                            .list()
+                            .into_iter()
+                            .find(|note| note.relative_path == local_key)
+                    })
+                    .map(|note| NotePlainData {
+                        format_version: PAYLOAD_FORMAT_VERSION,
+                        notebook_id: String::new(),
+                        notebook_name: String::new(),
+                        document_id: note.relative_path.clone(),
+                        relative_path: note.relative_path.clone(),
+                        title: note.title(),
+                        content: note.content,
+                    })
+                    .ok_or_else(|| SyncStoreError::Parse(format!("note {local_key} missing")))?;
+                let record = build_record_with_id(&service, &item.data_type, &plain, cloud_id)
+                    .map_err(sync_error)?;
+                Ok(record)
+            }
             other if SettingsGroup::from_data_type(other).is_some() => {
                 let group = SettingsGroup::from_data_type(other).expect("checked above");
                 let payload = self
@@ -777,6 +861,7 @@ impl PersonalSyncLocalSource for SyncScopeSource {
             data_type::SFTP_FAVORITE => self.apply_sftp_favorite(record, local_key.as_deref()),
             data_type::LLM_PROVIDER => self.apply_provider(record, local_key.as_deref()),
             data_type::SAVED_SQL => self.apply_saved_sql(record, local_key.as_deref()),
+            data_type::NOTE => self.apply_note(record),
             other if SettingsGroup::from_data_type(other).is_some() => self.apply_settings(record),
             // 未知类型：记 warning 跳过，绝不报错（R2 的未来兼容部分）
             other => {
@@ -834,6 +919,11 @@ impl PersonalSyncLocalSource for SyncScopeSource {
             data_type::SAVED_SQL => {
                 if let Some(root) = saved_sql_root() {
                     let _ = std::fs::remove_file(root.join(local_key));
+                }
+            }
+            data_type::NOTE => {
+                if let Some(adapter) = &self.notes {
+                    adapter.delete(local_key);
                 }
             }
             // 设置类 Singleton 没有「删除」语义：整组清空没有意义

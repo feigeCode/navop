@@ -27,7 +27,8 @@ use crate::storage::quick_command::QuickCommandRepository;
 use crate::storage::sftp_favorite_path::{SftpFavoritePathRepository, SftpFavoriteRow};
 use crate::storage::traits::Repository;
 
-use super::payloads::SettingsPlainData;
+use super::notes::{NoteSyncItem, SharedNoteAdapter};
+use super::payloads::{NotePlainData, SettingsPlainData};
 
 /// 统一的可同步项
 #[derive(Debug, Clone)]
@@ -141,6 +142,7 @@ pub struct ScopeSyncTypeHandler {
     settings: FileSettingsStore,
     scope_env: String,
     user_id: String,
+    notes: Option<SharedNoteAdapter>,
 }
 
 impl ScopeSyncTypeHandler {
@@ -149,6 +151,7 @@ impl ScopeSyncTypeHandler {
         state: SyncItemStateRepository,
         scope_env: String,
         user_id: String,
+        notes: Option<SharedNoteAdapter>,
     ) -> Self {
         Self {
             record_type,
@@ -156,6 +159,7 @@ impl ScopeSyncTypeHandler {
             settings: FileSettingsStore,
             scope_env,
             user_id,
+            notes,
         }
     }
 
@@ -308,6 +312,19 @@ impl ScopeSyncTypeHandler {
                     .map_err(|e| SyncError::DataFormatError(e.to_string()))?;
                 crate::cloud_sync::scope::personal::write_saved_sql(&plain.name, &plain.content);
                 item.key = plain.name.clone();
+                item.id = synthetic_id(self.record_type, &item.key);
+            }
+            data_type::NOTE => {
+                let plain: NotePlainData = serde_json::from_value(payload)
+                    .map_err(|e| SyncError::DataFormatError(e.to_string()))?;
+                if let Some(adapter) = &self.notes {
+                    adapter.write(&NoteSyncItem {
+                        relative_path: plain.relative_path.clone(),
+                        modified_at: now_seconds(),
+                        content: plain.content.clone(),
+                    });
+                }
+                item.key = plain.relative_path.clone();
                 item.id = synthetic_id(self.record_type, &item.key);
             }
             other if SettingsGroup::from_data_type(other).is_some() => {
@@ -482,7 +499,36 @@ impl SyncTypeHandler for ScopeSyncTypeHandler {
                     payload: None,
                 });
             }
-            // 笔记：OnetCloud 通道暂无本地数据源（notes crate 不能反向依赖）
+            data_type::NOTE => {
+                if let Some(adapter) = &self.notes {
+                    for note in adapter.list() {
+                        let id = synthetic_id(self.record_type, &note.relative_path);
+                        items.push(ScopeSyncItem {
+                            record_type: self.record_type.to_string(),
+                            key: note.relative_path.clone(),
+                            id,
+                            name: note.title(),
+                            checksum: payload_checksum(
+                                &serde_json::to_value(NotePlainData {
+                                    format_version: PAYLOAD_FORMAT_VERSION,
+                                    notebook_id: String::new(),
+                                    notebook_name: String::new(),
+                                    document_id: note.relative_path.clone(),
+                                    relative_path: note.relative_path.clone(),
+                                    title: note.title(),
+                                    content: note.content.clone(),
+                                })
+                                .unwrap_or_default(),
+                            ),
+                            updated_at: note.modified_at,
+                            cloud_id: self
+                                .state_of(&note.relative_path)
+                                .and_then(|st| st.cloud_id),
+                            payload: None,
+                        });
+                    }
+                }
+            }
             _ => {}
         }
 
@@ -520,6 +566,11 @@ impl SyncTypeHandler for ScopeSyncTypeHandler {
             }
             data_type::SAVED_SQL => {
                 crate::cloud_sync::scope::personal::delete_saved_sql(&key);
+            }
+            data_type::NOTE => {
+                if let Some(adapter) = &self.notes {
+                    adapter.delete(&key);
+                }
             }
             // 设置类 Singleton 与笔记没有删除语义
             _ => {}
@@ -578,6 +629,13 @@ impl SyncTypeHandler for ScopeSyncTypeHandler {
                 let plain: LlmProviderPlainData = parse_record(service, data)?;
                 (
                     plain.name.clone(),
+                    serde_json::to_value(plain).unwrap_or(serde_json::Value::Null),
+                )
+            }
+            data_type::NOTE => {
+                let plain: NotePlainData = parse_record(service, data)?;
+                (
+                    plain.title.clone(),
                     serde_json::to_value(plain).unwrap_or(serde_json::Value::Null),
                 )
             }
@@ -659,6 +717,24 @@ impl SyncTypeHandler for ScopeSyncTypeHandler {
                     database: None,
                     name: key.clone(),
                     content,
+                };
+                self.build(service, &key, &plain)
+            }
+            data_type::NOTE => {
+                let note = self.notes.as_ref().and_then(|adapter| {
+                    adapter.list().into_iter().find(|n| n.relative_path == key)
+                });
+                let plain = match note {
+                    Some(note) => NotePlainData {
+                        format_version: PAYLOAD_FORMAT_VERSION,
+                        notebook_id: String::new(),
+                        notebook_name: String::new(),
+                        document_id: note.relative_path.clone(),
+                        relative_path: note.relative_path.clone(),
+                        title: note.title(),
+                        content: note.content,
+                    },
+                    None => return Err(SyncError::DataFormatError(format!("note {key} missing"))),
                 };
                 self.build(service, &key, &plain)
             }
