@@ -426,6 +426,17 @@ jobs:
             throw "Release binary was not created: '$binary'"
           }
 
+      - name: Validate Windows executable manifest
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Windows 加载器在进 main 之前就解析导入表：产物缺 Common-Controls v6 清单时，
+          # exe 会因为静态导入 comctl32!TaskDialogIndirect 而直接以
+          # STATUS_ENTRYPOINT_NOT_FOUND / 0xC0000139 退出（弹「无法定位程序输入点」），
+          # 编译期没有任何信号，所以必须在打包前对真实产物校验一次。
+          node script/validate-windows-exe.mjs `
+            "target/${{ matrix.target }}/release/navop.exe"
+
       - name: Verify Linux glibc baseline
         if: runner.os == 'Linux'
         shell: bash
