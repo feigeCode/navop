@@ -295,7 +295,7 @@ impl SyncScopeSource {
                 format_version: PAYLOAD_FORMAT_VERSION,
                 notebook_id: String::new(),
                 notebook_name: String::new(),
-                document_id: note.relative_path.clone(),
+                document_id: note.document_id.clone(),
                 relative_path: note.relative_path.clone(),
                 title: note.title(),
                 content: note.content.clone(),
@@ -303,7 +303,7 @@ impl SyncScopeSource {
             let checksum = payload_checksum(&serde_json::to_value(&plain).unwrap_or_default());
             items.push(self.snapshot(
                 data_type::NOTE,
-                &note.relative_path,
+                &note.document_id,
                 note.modified_at,
                 &checksum,
             ));
@@ -508,11 +508,13 @@ impl SyncScopeSource {
             return Ok(());
         };
         adapter.write(&NoteSyncItem {
+            document_id: plain.document_id.clone(),
             relative_path: plain.relative_path.clone(),
             modified_at: now_seconds(),
             content: plain.content.clone(),
         });
-        self.record_synced(data_type::NOTE, &plain.relative_path, record, None);
+        // 稳定键是 document_id：同一篇笔记换了路径时，本地表现为重命名而不是新增
+        self.record_synced(data_type::NOTE, &plain.document_id, record, None);
         self.mark_success(data_type::NOTE);
         Ok(())
     }
@@ -806,13 +808,13 @@ impl PersonalSyncLocalSource for SyncScopeSource {
                         adapter
                             .list()
                             .into_iter()
-                            .find(|note| note.relative_path == local_key)
+                            .find(|note| note.document_id == local_key)
                     })
                     .map(|note| NotePlainData {
                         format_version: PAYLOAD_FORMAT_VERSION,
                         notebook_id: String::new(),
                         notebook_name: String::new(),
-                        document_id: note.relative_path.clone(),
+                        document_id: note.document_id.clone(),
                         relative_path: note.relative_path.clone(),
                         title: note.title(),
                         content: note.content,

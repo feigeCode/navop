@@ -3,96 +3,63 @@
 //! `notes` crate 依赖 `one-core`，反向依赖会成环，所以 one-core 只定义 trait，
 //! 由 main（同时依赖两者）实现并注入。
 //!
-//! 实现策略：直接遍历笔记根目录下的 `.md` 文件，用「相对路径」作为稳定键。
-//! 这样不依赖 `NotesStorage` 的内部索引结构，也天然覆盖用户自定义目录。
-
-use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
+//! 实现策略：走 `NotesStorage` 的同步接口，以 `documents.json` 里持久化的稳定
+//! `document_id` 作为身份。重命名或移动只改 `relative_path`、不改 id，同步时因此
+//! 表现为「同一条记录改路径」，不会在云端留下「旧记录 + 新记录」的重复。
+//!
+//! 相对路径仅用于还原树形结构，不再承担身份职责。
 
 use one_core::cloud_sync::scope::notes::{NoteSyncAdapter, NoteSyncItem};
+use notes::{NoteDocument, NotesStorage};
 
 /// 基于文件系统的笔记数据源
 #[derive(Default)]
 pub struct FileSystemNoteAdapter;
 
 impl FileSystemNoteAdapter {
-    fn root() -> Option<PathBuf> {
-        notes::NotesStorage::configured_root()
-            .or_else(|_| notes::NotesStorage::default_root())
-            .ok()
+    /// 打开配置里的笔记存储；未配置时退回默认位置。
+    fn storage() -> Option<NotesStorage> {
+        let (root, use_files_subdir) = NotesStorage::configured_location()
+            .or_else(|_| NotesStorage::default_root().map(|root| (root, true)))
+            .ok()?;
+        NotesStorage::open_with_layout(root, use_files_subdir).ok()
     }
 }
 
 impl NoteSyncAdapter for FileSystemNoteAdapter {
     fn list(&self) -> Vec<NoteSyncItem> {
-        let Some(root) = Self::root() else {
+        let Some(storage) = Self::storage() else {
             return Vec::new();
         };
-        let mut items = Vec::new();
-        for (relative, modified_at, content) in collect_markdown(&root) {
-            items.push(NoteSyncItem {
-                relative_path: relative,
-                modified_at,
-                content,
-            });
-        }
-        items.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
-        items
+        storage
+            .sync_documents()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|document| NoteSyncItem {
+                document_id: document.document_id,
+                relative_path: document.relative_path,
+                modified_at: document.modified_at,
+                content: document.content,
+            })
+            .collect()
     }
 
     fn write(&self, item: &NoteSyncItem) {
-        let Some(root) = Self::root() else {
+        let Some(storage) = Self::storage() else {
             return;
         };
-        let target = root.join(&item.relative_path);
-        if let Some(parent) = target.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let _ = std::fs::write(target, item.content.as_bytes());
+        let _ = storage.sync_write_document(&NoteDocument {
+            document_id: item.document_id.clone(),
+            relative_path: item.relative_path.clone(),
+            modified_at: item.modified_at,
+            content: item.content.clone(),
+        });
     }
 
-    fn delete(&self, relative_path: &str) {
-        if let Some(root) = Self::root() {
-            let _ = std::fs::remove_file(root.join(relative_path));
-        }
-    }
-}
-
-/// 递归收集 `.md` 文件，返回（相对路径, mtime 秒, 内容）
-fn collect_markdown(root: &Path) -> Vec<(String, i64, String)> {
-    let mut results = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
+    fn delete(&self, document_id: &str) {
+        let Some(storage) = Self::storage() else {
+            return;
         };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-                continue;
-            }
-            if path.extension().and_then(|e| e.to_str()) != Some("md") {
-                continue;
-            }
-            let Ok(content) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            let Ok(relative) = path.strip_prefix(root) else {
-                continue;
-            };
-            let modified_at = std::fs::metadata(&path)
-                .ok()
-                .and_then(|meta| meta.modified().ok())
-                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
-            results.push((
-                relative.to_string_lossy().replace('\\', "/"),
-                modified_at,
-                content,
-            ));
-        }
+        let _ = storage.sync_delete_document(document_id);
     }
-    results
 }

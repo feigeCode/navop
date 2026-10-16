@@ -1,6 +1,7 @@
 use crate::document_index::{DOCUMENT_INDEX_FILE, DocumentIndex, PendingDocumentOperation};
 use crate::model::{
     DeleteSummary, DocumentDescriptor, DocumentFormat, FileNode, NotebookMetadata, NotebookUiState,
+    NoteDocument,
 };
 use crate::path_policy::{document_file_name, validate_node_name, validate_relative_path};
 use crate::storage_support::{
@@ -10,6 +11,7 @@ use crate::storage_support::{
 use anyhow::{Context, Result, bail};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
 use uuid::Uuid;
 
 const NOTEBOOK_FILE: &str = "notebook.json";
@@ -207,6 +209,111 @@ impl NotesStorage {
         index.save(&self.index_path())
     }
 
+    // ---------- 同步专用：以稳定 document_id 为身份 ----------
+
+    /// 枚举全部文档，附带持久化索引里的稳定 `document_id`。
+    ///
+    /// 索引里还没有的文档会被分配一个新 UUID 并**写回索引**，保证下一次枚举
+    /// 仍是同一个 id——身份一旦确定就不再随路径变化。
+    pub fn sync_documents(&self) -> Result<Vec<NoteDocument>> {
+        let files_root = self.files_root();
+        if !files_root.exists() {
+            return Ok(Vec::new());
+        }
+        let nodes = scan_directory(&files_root, &files_root)?;
+        let mut index = self.load_index()?;
+        let mut changed = false;
+        let mut documents = Vec::new();
+
+        for (relative_path, format) in collect_documents(&nodes) {
+            let absolute = files_root.join(&relative_path);
+            let Ok(content) = fs::read_to_string(&absolute) else {
+                continue;
+            };
+            // 先取出 id 再登记，避免在持有索引借用的同时可变借用索引
+            let known = index.documents.get(&relative_path).map(|record| record.id);
+            let id = match known {
+                Some(id) => id,
+                None => {
+                    let id = Uuid::new_v4();
+                    index.record(relative_path.clone(), id, format);
+                    changed = true;
+                    id
+                }
+            };
+            documents.push(NoteDocument {
+                document_id: id.to_string(),
+                relative_path: relative_path.to_string_lossy().replace('\\', "/"),
+                modified_at: modified_seconds(&absolute),
+                content,
+            });
+        }
+
+        if changed {
+            index.save(&self.index_path())?;
+        }
+        documents.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+        Ok(documents)
+    }
+
+    /// 按稳定 `document_id` 写入一篇笔记。
+    ///
+    /// 三种情形：
+    /// - 该 id 已登记在别的路径 ⇒ 把文件挪到新路径再写内容（即「重命名」，
+    ///   不会留下旧副本）；
+    /// - 目标路径已存在但登记了别的 id ⇒ 覆盖成传入 id；
+    /// - 完全陌生 ⇒ 创建文件并登记 id。
+    ///
+    /// 这样对端把「同一篇笔记换了路径」同步过来时，本地表现为重命名而非新增。
+    pub fn sync_write_document(&self, document: &NoteDocument) -> Result<()> {
+        // id 不是合法 UUID（例如早期/异常记录）时兜底分配一个新的：文件照写，
+        // 之后这篇笔记就有了稳定身份，不会因此写不进去。
+        let id = Uuid::parse_str(&document.document_id).unwrap_or_else(|_| Uuid::new_v4());
+        let relative = PathBuf::from(&document.relative_path);
+        let target = self.files_root().join(&relative);
+        let mut index = self.load_index()?;
+
+        if let Some(previous) = index_path_by_id(&index, id) {
+            if previous != relative {
+                let source = self.files_root().join(&previous);
+                if source.is_file() {
+                    if let Some(parent) = target.parent() {
+                        fs::create_dir_all(parent)?;
+                    }
+                    fs::rename(&source, &target)?;
+                }
+                index.documents.remove(&previous);
+            }
+        }
+
+        index.record(relative.clone(), id, DocumentFormat::Markdown);
+        index.save(&self.index_path())?;
+
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        write_text_atomic(&target, &document.content)?;
+        Ok(())
+    }
+
+    /// 按稳定 `document_id` 删除一篇笔记；返回是否确实删掉了。
+    pub fn sync_delete_document(&self, document_id: &str) -> Result<bool> {
+        let Ok(id) = Uuid::parse_str(document_id) else {
+            return Ok(false);
+        };
+        let mut index = self.load_index()?;
+        let Some(path) = index_path_by_id(&index, id) else {
+            return Ok(false);
+        };
+        let absolute = self.files_root().join(&path);
+        if absolute.is_file() {
+            fs::remove_file(&absolute)?;
+        }
+        index.documents.remove(&path);
+        index.save(&self.index_path())?;
+        Ok(true)
+    }
+
     fn document_id(
         &self,
         relative_path: &Path,
@@ -297,4 +404,23 @@ impl NotesStorage {
             .strip_prefix(self.files_root().canonicalize()?)?
             .to_path_buf())
     }
+}
+
+/// 反向查询：某个稳定 `document_id` 当前登记在哪个路径。
+fn index_path_by_id(index: &DocumentIndex, id: Uuid) -> Option<PathBuf> {
+    index
+        .documents
+        .iter()
+        .find(|(_, record)| record.id == id)
+        .map(|(path, _)| path.clone())
+}
+
+/// 文件修改时间（秒）；取不到时回退为 0，交给同步层按内容判定。
+fn modified_seconds(path: &Path) -> i64 {
+    fs::metadata(path)
+        .ok()
+        .and_then(|meta| meta.modified().ok())
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0)
 }

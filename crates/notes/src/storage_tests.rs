@@ -1,6 +1,6 @@
 use crate::document_index::{DOCUMENT_INDEX_FILE, DocumentIndex, PendingDocumentOperation};
 use crate::path_policy::document_file_name;
-use crate::{DocumentFormat, NotesStorage, validate_node_name};
+use crate::{DocumentFormat, NoteDocument, NotesStorage, validate_node_name};
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
@@ -41,6 +41,78 @@ fn configured_root_defaults_and_persists_custom_location() -> Result<()> {
         custom.canonicalize()?,
         NotesStorage::configured_root_from(&config, &default)?
     );
+    Ok(())
+}
+
+// ---------- 同步身份：以稳定 document_id 为键 ----------
+
+#[test]
+fn sync_documents_keep_a_stable_id_across_enumerations() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let storage = NotesStorage::open(temp.path().join("notes"))?;
+    let document = storage.create_document(Path::new(""), "草稿")?;
+
+    let first = storage.sync_documents()?;
+    assert_eq!(1, first.len());
+    assert_eq!(document.document_id, first[0].document_id);
+
+    // 再次枚举必须还是同一个 id，否则每次同步都会当成新笔记
+    let second = storage.sync_documents()?;
+    assert_eq!(first[0].document_id, second[0].document_id);
+    Ok(())
+}
+
+#[test]
+fn renaming_a_document_keeps_its_sync_identity() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let storage = NotesStorage::open(temp.path().join("notes"))?;
+    let document = storage.create_document(Path::new(""), "草稿")?;
+    let before = storage.sync_documents()?;
+
+    let renamed = storage.rename_node(&document.relative_path, "定稿")?;
+    let after = storage.sync_documents()?;
+
+    assert_eq!(Path::new("定稿.md"), renamed);
+    // 路径变了、稳定身份没变 ⇒ 同步时是「同一条记录改路径」，不会分裂成两条
+    assert_eq!(1, after.len());
+    assert_eq!("定稿.md", after[0].relative_path);
+    assert_eq!(before[0].document_id, after[0].document_id);
+    Ok(())
+}
+
+#[test]
+fn sync_write_moves_the_document_when_its_id_is_registered_elsewhere() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let storage = NotesStorage::open(temp.path().join("notes"))?;
+    let document = storage.create_document(Path::new(""), "旧路径")?;
+
+    // 对端把同一篇笔记改名后同步过来：id 相同、路径不同
+    storage.sync_write_document(&NoteDocument {
+        document_id: document.document_id.clone(),
+        relative_path: "新路径.md".to_string(),
+        modified_at: 0,
+        content: "正文".to_string(),
+    })?;
+
+    // 只剩一篇 ⇒ 旧路径没有留下重复副本
+    let documents = storage.sync_documents()?;
+    assert_eq!(1, documents.len());
+    assert_eq!("新路径.md", documents[0].relative_path);
+    assert_eq!("正文", documents[0].content);
+    assert_eq!(document.document_id, documents[0].document_id);
+    Ok(())
+}
+
+#[test]
+fn sync_delete_removes_the_document_by_identity() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let storage = NotesStorage::open(temp.path().join("notes"))?;
+    let document = storage.create_document(Path::new(""), "待删除")?;
+
+    assert!(storage.sync_delete_document(&document.document_id)?);
+    assert!(storage.sync_documents()?.is_empty());
+    // 重复删除是幂等的
+    assert!(!storage.sync_delete_document(&document.document_id)?);
     Ok(())
 }
 

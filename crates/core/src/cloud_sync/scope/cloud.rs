@@ -319,12 +319,14 @@ impl ScopeSyncTypeHandler {
                     .map_err(|e| SyncError::DataFormatError(e.to_string()))?;
                 if let Some(adapter) = &self.notes {
                     adapter.write(&NoteSyncItem {
+                        document_id: plain.document_id.clone(),
                         relative_path: plain.relative_path.clone(),
                         modified_at: now_seconds(),
                         content: plain.content.clone(),
                     });
                 }
-                item.key = plain.relative_path.clone();
+                // 稳定键是 document_id：重命名后仍是同一条记录，不会分裂成两条
+                item.key = plain.document_id.clone();
                 item.id = synthetic_id(self.record_type, &item.key);
             }
             other if SettingsGroup::from_data_type(other).is_some() => {
@@ -502,10 +504,10 @@ impl SyncTypeHandler for ScopeSyncTypeHandler {
             data_type::NOTE => {
                 if let Some(adapter) = &self.notes {
                     for note in adapter.list() {
-                        let id = synthetic_id(self.record_type, &note.relative_path);
+                        let id = synthetic_id(self.record_type, &note.document_id);
                         items.push(ScopeSyncItem {
                             record_type: self.record_type.to_string(),
-                            key: note.relative_path.clone(),
+                            key: note.document_id.clone(),
                             id,
                             name: note.title(),
                             checksum: payload_checksum(
@@ -513,7 +515,7 @@ impl SyncTypeHandler for ScopeSyncTypeHandler {
                                     format_version: PAYLOAD_FORMAT_VERSION,
                                     notebook_id: String::new(),
                                     notebook_name: String::new(),
-                                    document_id: note.relative_path.clone(),
+                                    document_id: note.document_id.clone(),
                                     relative_path: note.relative_path.clone(),
                                     title: note.title(),
                                     content: note.content.clone(),
@@ -522,7 +524,7 @@ impl SyncTypeHandler for ScopeSyncTypeHandler {
                             ),
                             updated_at: note.modified_at,
                             cloud_id: self
-                                .state_of(&note.relative_path)
+                                .state_of(&note.document_id)
                                 .and_then(|st| st.cloud_id),
                             payload: None,
                         });
@@ -722,14 +724,14 @@ impl SyncTypeHandler for ScopeSyncTypeHandler {
             }
             data_type::NOTE => {
                 let note = self.notes.as_ref().and_then(|adapter| {
-                    adapter.list().into_iter().find(|n| n.relative_path == key)
+                    adapter.list().into_iter().find(|n| n.document_id == key)
                 });
                 let plain = match note {
                     Some(note) => NotePlainData {
                         format_version: PAYLOAD_FORMAT_VERSION,
                         notebook_id: String::new(),
                         notebook_name: String::new(),
-                        document_id: note.relative_path.clone(),
+                        document_id: note.document_id.clone(),
                         relative_path: note.relative_path.clone(),
                         title: note.title(),
                         content: note.content,
