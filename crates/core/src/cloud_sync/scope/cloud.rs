@@ -28,6 +28,9 @@ use crate::storage::sftp_favorite_path::{SftpFavoritePathRepository, SftpFavorit
 use crate::storage::traits::Repository;
 
 use super::notes::{NoteSyncItem, SharedNoteAdapter};
+use super::saved_sql::{
+    SavedSqlDocument, delete_saved_sql_document, saved_sql_documents, write_saved_sql_document,
+};
 use super::payloads::{NotePlainData, SettingsPlainData};
 
 /// 统一的可同步项
@@ -310,8 +313,14 @@ impl ScopeSyncTypeHandler {
             data_type::SAVED_SQL => {
                 let plain: SavedSqlPlainData = serde_json::from_value(payload)
                     .map_err(|e| SyncError::DataFormatError(e.to_string()))?;
-                crate::cloud_sync::scope::personal::write_saved_sql(&plain.name, &plain.content);
-                item.key = plain.name.clone();
+                write_saved_sql_document(&SavedSqlDocument {
+                    document_id: plain.document_id.clone(),
+                    relative_path: plain.name.clone(),
+                    modified_at: now_seconds(),
+                    content: plain.content,
+                });
+                // 稳定键是 document_id：重命名后仍是同一条记录
+                item.key = plain.document_id.clone();
                 item.id = synthetic_id(self.record_type, &item.key);
             }
             data_type::NOTE => {
@@ -450,30 +459,32 @@ impl SyncTypeHandler for ScopeSyncTypeHandler {
                 }
             }
             data_type::SAVED_SQL => {
-                for (key, content) in crate::cloud_sync::scope::personal::collect_saved_sql_files()
-                {
+                for document in saved_sql_documents() {
                     let plain = SavedSqlPlainData {
                         format_version: PAYLOAD_FORMAT_VERSION,
+                        document_id: document.document_id.clone(),
                         db_type: "default".to_string(),
                         connection_cloud_id: None,
                         database: None,
-                        name: key.clone(),
-                        content,
+                        name: document.relative_path.clone(),
+                        content: document.content,
                     };
-                    let id = synthetic_id(self.record_type, &key);
+                    let id = synthetic_id(self.record_type, &document.document_id);
                     items.push(ScopeSyncItem {
                         record_type: self.record_type.to_string(),
-                        key: key.clone(),
+                        key: document.document_id.clone(),
                         id,
-                        name: key.clone(),
+                        name: document.relative_path.clone(),
                         checksum: payload_checksum(
                             &serde_json::to_value(&plain).unwrap_or_default(),
                         ),
                         updated_at: self
-                            .state_of(&key)
+                            .state_of(&document.document_id)
                             .map(|s| s.content_ts)
                             .unwrap_or_else(now_seconds),
-                        cloud_id: self.state_of(&key).and_then(|s| s.cloud_id),
+                        cloud_id: self
+                            .state_of(&document.document_id)
+                            .and_then(|s| s.cloud_id),
                         payload: None,
                     });
                 }
@@ -565,7 +576,7 @@ impl SyncTypeHandler for ScopeSyncTypeHandler {
                 }
             }
             data_type::SAVED_SQL => {
-                crate::cloud_sync::scope::personal::delete_saved_sql(&key);
+                delete_saved_sql_document(&key);
             }
             data_type::NOTE => {
                 if let Some(adapter) = &self.notes {
@@ -708,15 +719,24 @@ impl SyncTypeHandler for ScopeSyncTypeHandler {
                 self.build(service, &key, &provider_plain(&provider))
             }
             data_type::SAVED_SQL => {
-                let content =
-                    crate::cloud_sync::scope::personal::read_saved_sql(&key).unwrap_or_default();
-                let plain = SavedSqlPlainData {
-                    format_version: PAYLOAD_FORMAT_VERSION,
-                    db_type: "default".to_string(),
-                    connection_cloud_id: None,
-                    database: None,
-                    name: key.clone(),
-                    content,
+                let document = saved_sql_documents()
+                    .into_iter()
+                    .find(|document| document.document_id == key);
+                let plain = match document {
+                    Some(document) => SavedSqlPlainData {
+                        format_version: PAYLOAD_FORMAT_VERSION,
+                        document_id: document.document_id,
+                        db_type: "default".to_string(),
+                        connection_cloud_id: None,
+                        database: None,
+                        name: document.relative_path,
+                        content: document.content,
+                    },
+                    None => {
+                        return Err(SyncError::DataFormatError(format!(
+                            "saved sql {key} missing"
+                        )))
+                    }
                 };
                 self.build(service, &key, &plain)
             }

@@ -19,6 +19,9 @@ use crate::cloud_sync::scope::payloads::{
     build_record_with_id, parse_record,
 };
 use crate::cloud_sync::scope::payloads::{NotePlainData, SavedSqlPlainData};
+use crate::cloud_sync::scope::saved_sql::{
+    SavedSqlDocument, delete_saved_sql_document, saved_sql_documents, write_saved_sql_document,
+};
 use crate::cloud_sync::scope::settings_payload::{SettingsGroup, apply_payload, merge_three_way};
 use crate::cloud_sync::scope::settings_store::{
     FileSettingsStore, canonical_json, payload_checksum,
@@ -253,22 +256,24 @@ impl SyncScopeSource {
     }
 
     fn list_saved_sql(&self) -> Result<Vec<PersonalSyncItemSnapshot>, SyncStoreError> {
-        let Some(root) = saved_sql_root() else {
-            return Ok(Vec::new());
-        };
         let mut items = Vec::new();
-        for (relative, content) in collect_sql_files(&root) {
+        for document in saved_sql_documents() {
             let plain = SavedSqlPlainData {
                 format_version: PAYLOAD_FORMAT_VERSION,
+                document_id: document.document_id.clone(),
                 db_type: "default".to_string(),
                 connection_cloud_id: None,
                 database: None,
-                name: relative.clone(),
-                content,
+                name: document.relative_path.clone(),
+                content: document.content,
             };
             let checksum = payload_checksum(&serde_json::to_value(&plain).unwrap_or_default());
-            let content_ts = file_mtime(&root.join(&relative)).unwrap_or_else(now_seconds);
-            items.push(self.snapshot(data_type::SAVED_SQL, &relative, content_ts, &checksum));
+            items.push(self.snapshot(
+                data_type::SAVED_SQL,
+                &document.document_id,
+                document.modified_at,
+                &checksum,
+            ));
         }
         Ok(items)
     }
@@ -469,29 +474,19 @@ impl SyncScopeSource {
         Ok(())
     }
 
-    fn apply_saved_sql(
-        &self,
-        record: &CloudSyncData,
-        local_key: Option<&str>,
-    ) -> Result<(), SyncStoreError> {
+    fn apply_saved_sql(&self, record: &CloudSyncData) -> Result<(), SyncStoreError> {
         let service = self.lock_service()?;
         let plain: SavedSqlPlainData = parse_record(&service, record).map_err(sync_error)?;
         drop(service);
 
-        let Some(root) = saved_sql_root() else {
-            return Ok(());
-        };
-        let relative = local_key
-            .map(str::to_string)
-            .unwrap_or_else(|| plain.name.clone());
-        let target = root.join(&relative);
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| SyncStoreError::Io(e.to_string()))?;
-        }
-        std::fs::write(&target, plain.content.as_bytes())
-            .map_err(|e| SyncStoreError::Io(e.to_string()))?;
-
-        self.record_synced(data_type::SAVED_SQL, &relative, record, None);
+        write_saved_sql_document(&SavedSqlDocument {
+            document_id: plain.document_id.clone(),
+            relative_path: plain.name.clone(),
+            modified_at: now_seconds(),
+            content: plain.content.clone(),
+        });
+        // 稳定键是 document_id：同一篇 SQL 换了路径时表现为移动，不会产生重复
+        self.record_synced(data_type::SAVED_SQL, &plain.document_id, record, None);
         self.mark_success(data_type::SAVED_SQL);
         Ok(())
     }
@@ -593,73 +588,8 @@ pub fn saved_sql_root() -> Option<std::path::PathBuf> {
     get_config_dir().ok().map(|dir| dir.join(SAVED_SQL_ROOT))
 }
 
-/// 供 OnetCloud 通道复用的文件读写入口
-pub fn collect_saved_sql_files() -> Vec<(String, String)> {
-    match saved_sql_root() {
-        Some(root) => collect_sql_files(&root),
-        None => Vec::new(),
-    }
-}
-
-pub fn read_saved_sql(relative: &str) -> Option<String> {
-    let root = saved_sql_root()?;
-    std::fs::read_to_string(root.join(relative)).ok()
-}
-
-pub fn write_saved_sql(relative: &str, content: &str) {
-    let Some(root) = saved_sql_root() else {
-        return;
-    };
-    let target = root.join(relative);
-    if let Some(parent) = target.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let _ = std::fs::write(target, content.as_bytes());
-}
-
-pub fn delete_saved_sql(relative: &str) {
-    if let Some(root) = saved_sql_root() {
-        let _ = std::fs::remove_file(root.join(relative));
-    }
-}
-
-/// 递归收集 `queries/` 下的 `.sql` 文件，返回（相对路径, 内容）
-fn collect_sql_files(root: &std::path::Path) -> Vec<(String, String)> {
-    let mut results = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-                continue;
-            }
-            if path.extension().and_then(|e| e.to_str()) != Some("sql") {
-                continue;
-            }
-            let Ok(content) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            let Ok(relative) = path.strip_prefix(root) else {
-                continue;
-            };
-            results.push((relative.to_string_lossy().to_string(), content));
-        }
-    }
-    results.sort_by(|a, b| a.0.cmp(&b.0));
-    results
-}
-
-fn file_mtime(path: &std::path::Path) -> Option<i64> {
-    std::fs::metadata(path)
-        .ok()
-        .and_then(|meta| meta.modified().ok())
-        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-}
+// 已保存 SQL 的读写/枚举统一收敛到 `saved_sql` 模块（以稳定 document_id 为身份），
+// 这里只保留根目录解析供其复用。
 
 fn quick_command_plain(command: &crate::storage::QuickCommand) -> QuickCommandPlainData {
     QuickCommandPlainData {
@@ -778,20 +708,20 @@ impl PersonalSyncLocalSource for SyncScopeSource {
                 Ok(record)
             }
             data_type::SAVED_SQL => {
-                let Some(root) = saved_sql_root() else {
-                    return Err(SyncStoreError::Parse(
-                        "saved sql root unavailable".to_string(),
-                    ));
-                };
-                let content = std::fs::read_to_string(root.join(&local_key))
-                    .map_err(|e| SyncStoreError::Io(e.to_string()))?;
+                let document = saved_sql_documents()
+                    .into_iter()
+                    .find(|document| document.document_id == local_key)
+                    .ok_or_else(|| {
+                        SyncStoreError::Parse(format!("saved sql {local_key} missing"))
+                    })?;
                 let plain = SavedSqlPlainData {
                     format_version: PAYLOAD_FORMAT_VERSION,
+                    document_id: document.document_id,
                     db_type: "default".to_string(),
                     connection_cloud_id: None,
                     database: None,
-                    name: local_key.clone(),
-                    content,
+                    name: document.relative_path,
+                    content: document.content,
                 };
                 let record = build_record_with_id(&service, &item.data_type, &plain, cloud_id)
                     .map_err(sync_error)?;
@@ -859,7 +789,7 @@ impl PersonalSyncLocalSource for SyncScopeSource {
             data_type::QUICK_COMMAND => self.apply_quick_command(record, local_key.as_deref()),
             data_type::SFTP_FAVORITE => self.apply_sftp_favorite(record, local_key.as_deref()),
             data_type::LLM_PROVIDER => self.apply_provider(record, local_key.as_deref()),
-            data_type::SAVED_SQL => self.apply_saved_sql(record, local_key.as_deref()),
+            data_type::SAVED_SQL => self.apply_saved_sql(record),
             data_type::NOTE => self.apply_note(record),
             other if SettingsGroup::from_data_type(other).is_some() => self.apply_settings(record),
             // 未知类型：记 warning 跳过，绝不报错（R2 的未来兼容部分）
@@ -916,9 +846,7 @@ impl PersonalSyncLocalSource for SyncScopeSource {
                 }
             }
             data_type::SAVED_SQL => {
-                if let Some(root) = saved_sql_root() {
-                    let _ = std::fs::remove_file(root.join(local_key));
-                }
+                delete_saved_sql_document(local_key);
             }
             data_type::NOTE => {
                 if let Some(adapter) = &self.notes {

@@ -121,6 +121,8 @@ impl SftpFavoritePlainData {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SavedSqlPlainData {
     pub format_version: u32,
+    /// 稳定身份：跨重命名/移动保持不变，同步用它当键
+    pub document_id: String,
     /// 数据库类型（复合键 part 1）
     pub db_type: String,
     /// 连接名（复合键 part 2，跨设备稳定）
@@ -236,6 +238,7 @@ mod tests {
     fn saved_sql_business_key_is_stable_across_field_order() {
         let a = SavedSqlPlainData {
             format_version: PAYLOAD_FORMAT_VERSION,
+            document_id: "doc-1".to_string(),
             db_type: "mysql".to_string(),
             connection_cloud_id: Some("cloud-1".to_string()),
             database: Some("shop".to_string()),
