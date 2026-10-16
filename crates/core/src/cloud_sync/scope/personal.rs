@@ -239,10 +239,7 @@ impl SyncScopeSource {
             .list()
             .map_err(|e| SyncStoreError::Io(e.to_string()))?
         {
-            // 内置提供商（Navop AI）由每台设备本地自建，不参与同步
-            if provider.is_builtin() {
-                continue;
-            }
+            // 唯一的内置提供商（Navop AI）已下线，提供商现在全部由用户创建，无需过滤
             let plain = provider_plain(&provider);
             let checksum = payload_checksum(&serde_json::to_value(&plain).unwrap_or_default());
             items.push(self.snapshot(

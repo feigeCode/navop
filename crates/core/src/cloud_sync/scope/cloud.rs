@@ -432,10 +432,8 @@ impl SyncTypeHandler for ScopeSyncTypeHandler {
                     .storage
                     .get::<ProviderRepository>()
                     .ok_or_else(|| SyncError::StorageError("provider repo".to_string()))?;
+                // 唯一的内置提供商（Navop AI）已下线，提供商现在全部由用户创建，无需过滤
                 for provider in repo.list().map_err(storage_error)? {
-                    if provider.is_builtin() {
-                        continue;
-                    }
                     let key = provider.id.to_string();
                     items.push(ScopeSyncItem {
                         record_type: self.record_type.to_string(),
