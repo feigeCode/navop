@@ -8,6 +8,8 @@ use gpui::{SharedUri, http_client::Uri};
 
 use crate::net;
 
+use super::link::parse_link_target;
+
 /// Active fenced code block while scanning for image reference definitions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct FenceInfo {
@@ -32,6 +34,15 @@ enum HtmlBlockStart {
 pub(crate) struct ImageSyntax {
     pub(crate) alt: String,
     pub(crate) target: ImageTarget,
+}
+
+/// A complete image line in an HTML container, optionally wrapped by a link.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct HtmlContainerImage {
+    /// Image source and alternative text shared with native image rendering.
+    pub(crate) syntax: ImageSyntax,
+    /// Destination of `[![alt](image)](destination)`, if present.
+    pub(crate) link_target: Option<String>,
 }
 
 /// Inline image/text segment used only by native table-cell rendering.
@@ -169,6 +180,29 @@ pub(crate) fn parse_standalone_image(markdown: &str) -> Option<ImageSyntax> {
         }
         _ => None,
     }
+}
+
+/// Finds a lone image line inside an HTML container, including linked badges.
+///
+/// The original line remains the serialization source for the containing HTML block.
+pub(crate) fn parse_html_container_image_line(line: &str) -> Option<HtmlContainerImage> {
+    let line = line.trim();
+    if let Some(syntax) = parse_standalone_image(line) {
+        return Some(HtmlContainerImage {
+            syntax,
+            link_target: None,
+        });
+    }
+
+    let inner = line.strip_prefix('[')?;
+    let (_, syntax, end) = parse_inline_image_at(inner, 0)?;
+    let link_tail = inner.get(end..)?;
+    let target = link_tail.strip_prefix("](")?.strip_suffix(')')?;
+    let (link_target, _) = parse_link_target(target)?;
+    Some(HtmlContainerImage {
+        syntax,
+        link_target: Some(link_target),
+    })
 }
 
 pub(crate) fn parse_table_cell_inline_images(markdown: &str) -> Vec<TableCellInlineImageSegment> {

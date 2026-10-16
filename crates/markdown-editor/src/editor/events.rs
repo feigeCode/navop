@@ -192,7 +192,7 @@ impl Editor {
         });
     }
 
-    fn focus_block_range(
+    pub(super) fn focus_block_range(
         &mut self,
         block: &Entity<super::Block>,
         range: std::ops::Range<usize>,

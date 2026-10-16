@@ -77,6 +77,9 @@ impl NotesView {
         if let Some(session) = self.markdown_sessions.get(&document_id) {
             focus_markdown_editor(session, window, cx);
         }
+        if self.outline.is_visible() {
+            self.refresh_markdown_outline(cx);
+        }
         Ok(())
     }
 
@@ -104,7 +107,12 @@ impl NotesView {
         if let Some(epoch) = schedule_epoch {
             self.schedule_markdown_auto_save(document_id.to_owned(), epoch, window, cx);
         }
-        if sync_state_changed {
+        let outline_changed = if self.outline.is_visible() {
+            self.refresh_markdown_outline(cx)
+        } else {
+            false
+        };
+        if sync_state_changed || outline_changed {
             cx.notify();
         }
     }

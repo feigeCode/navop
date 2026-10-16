@@ -65,7 +65,7 @@ impl Block {
         self.prepare_undo_capture(UndoCaptureKind::CoalescibleText, cx);
 
         let current = self.code_language_text().to_string();
-        let range = range.start.min(current.len())..range.end.min(current.len());
+        let range = crate::text_offsets::normalize_utf8_range(&current, range);
         let inserted = new_text.replace("\r\n", " ").replace(['\r', '\n'], " ");
         let mut raw_next = String::new();
         raw_next.push_str(&current[..range.start]);

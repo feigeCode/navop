@@ -648,7 +648,7 @@ impl SettingsPanel {
                             ),
                         ),
                     close_behavior_setting_group(default_settings.close_button_behavior),
-                    notes_setting_group(),
+                    notes_setting_group(font_options.clone()),
                     SettingGroup::new()
                         .title(t!("Settings.General.Appearance.group_title"))
                         .item(SettingItem::render(render_appearance_settings)),

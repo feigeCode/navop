@@ -32,6 +32,7 @@ mod enlarged;
 mod events;
 mod history;
 mod host;
+mod outline;
 mod persistence;
 mod render;
 mod runtime_context;

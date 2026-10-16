@@ -1201,6 +1201,20 @@ impl DatabasePlugin for MySqlPlugin {
         mysql_quote_identifier(identifier)
     }
 
+    /// MySQL 没有 schema 层级，`库.表` 里的前缀就是数据库名（见 `qualified_table_parts`）。
+    fn resolve_metadata_table_identity(
+        &self,
+        database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> (String, Option<String>, String) {
+        let schema = schema.map(str::to_string);
+        let Some((prefix, bare_table)) = crate::plugin::qualified_table_parts(table) else {
+            return (database.to_string(), schema, table.to_string());
+        };
+        (prefix.to_string(), schema, bare_table.to_string())
+    }
+
     fn get_completion_info(&self) -> SqlCompletionInfo {
         SqlCompletionInfo {
             keywords: vec![

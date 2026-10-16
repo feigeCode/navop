@@ -135,8 +135,85 @@ impl RedisManager {
             use_tls: params.use_tls,
             timeout: params.connect_timeout.unwrap_or(10),
             mode,
+            cluster_nodes: params.cluster.map(|c| c.nodes).unwrap_or_default(),
             ssh_tunnel: params.ssh_tunnel,
         })
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod empty_db_switch_test_support {
+    use super::*;
+    use one_core::storage::StoredConnection;
+
+    /// 空库切换复现（redis_tree_view 集成测试）用的已连接状态。
+    ///
+    /// 依赖本机 redis-server（127.0.0.1:16379，db2 有一个种子键）；
+    /// 没有服务时返回 Err，调用方跳过测试。
+    pub(crate) fn connected_state_for_empty_db_switch() -> Result<GlobalRedisState, anyhow::Error> {
+        let config = empty_db_switch_config();
+        let state = GlobalRedisState::new();
+        state.blocking_create_connection_for_test(config)?;
+        Ok(state)
+    }
+
+    pub(crate) fn empty_db_switch_stored_connection(name: &str) -> StoredConnection {
+        StoredConnection::new_redis(name.to_string(), empty_db_switch_params(), None)
+    }
+
+    fn empty_db_switch_params() -> one_core::storage::RedisParams {
+        one_core::storage::RedisParams {
+            host: "127.0.0.1".to_string(),
+            port: 16379,
+            password: None,
+            username: None,
+            credential_reference: None,
+            db_index: 0,
+            mode: one_core::storage::RedisMode::Standalone,
+            use_tls: false,
+            connect_timeout: Some(3),
+            sentinel: None,
+            cluster: None,
+            ssh_tunnel: None,
+        }
+    }
+
+    fn empty_db_switch_config() -> RedisConnectionConfig {
+        let mut stored = StoredConnection::new_redis(
+            "empty-db-switch".to_string(),
+            empty_db_switch_params(),
+            None,
+        );
+        stored.id = Some(4201);
+        RedisManager::config_from_stored(&stored).expect("config")
+    }
+
+    impl GlobalRedisState {
+        /// 测试专用：同步建连（独立 tokio runtime，不依赖 GPUI 全局 Tokio）。
+        pub(crate) fn blocking_create_connection_for_test(
+            &self,
+            config: RedisConnectionConfig,
+        ) -> anyhow::Result<()> {
+            let state = self.clone();
+            let join_result = std::thread::spawn(move || {
+                // 自建 current-thread runtime + 超时，避免 redis-server 不在时挂死。
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("test tokio runtime");
+                let timeout = tokio::time::Duration::from_secs(3);
+                runtime.block_on(async move {
+                    tokio::time::timeout(timeout, state.create_connection(config))
+                        .await
+                        .map_err(|_| anyhow::anyhow!("connect redis 16379 timed out"))?
+                        .map_err(|e| anyhow::anyhow!("{e}"))?;
+                    Ok::<(), anyhow::Error>(())
+                })
+            })
+            .join()
+            .map_err(|_| anyhow::anyhow!("test thread panicked"))?;
+            join_result
+        }
     }
 }
 

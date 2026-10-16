@@ -2563,6 +2563,14 @@ Settings:
         en: "Failed to update notes location: %{error}"
         zh-CN: 更新笔记路径失败：%{error}
         zh-HK: 更新筆記路徑失敗：%{error}
+      markdown_code_font_family:
+        en: Markdown Code Font
+        zh-CN: Markdown 代码字体
+        zh-HK: Markdown 程式碼字體
+      markdown_code_font_family_desc:
+        en: Font for inline code, code blocks, and table code in Markdown documents.
+        zh-CN: Markdown 文档中行内代码、代码块与表格代码使用的字体。
+        zh-HK: Markdown 文件中行內程式碼、程式碼區塊與表格程式碼使用的字體。
 
     # 外观设置
     Appearance:
@@ -4137,6 +4145,10 @@ Settings:
       en: Toggle Source Mode
       zh-CN: 切换源码模式
       zh-HK: 切換原始碼模式
+    notes_toggle_outline:
+      en: Toggle Document Outline
+      zh-CN: 显示/隐藏文档大纲
+      zh-HK: 顯示/隱藏文件大綱
     notes_delete_block:
       en: Delete Current Block
       zh-CN: 删除当前块

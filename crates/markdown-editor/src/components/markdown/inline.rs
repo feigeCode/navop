@@ -922,7 +922,10 @@ impl InlineTextTree {
             } else if clamped >= fragment_end {
                 left.push(fragment.clone());
             } else {
-                let split_offset = clamp_to_char_boundary(&fragment.text, clamped - fragment_start);
+                let split_offset = crate::text_offsets::floor_char_boundary(
+                    &fragment.text,
+                    clamped - fragment_start,
+                );
                 if split_offset > 0 {
                     left.push(InlineFragment {
                         text: fragment.text[..split_offset].to_string(),
@@ -3201,19 +3204,6 @@ fn set_style_flag(mut style: InlineStyle, flag: StyleFlag, enabled: bool) -> Inl
         }
     }
     style
-}
-
-fn clamp_to_char_boundary(text: &str, offset: usize) -> usize {
-    let clamped = offset.min(text.len());
-    if text.is_char_boundary(clamped) {
-        return clamped;
-    }
-
-    let mut boundary = clamped;
-    while boundary > 0 && !text.is_char_boundary(boundary) {
-        boundary -= 1;
-    }
-    boundary
 }
 
 fn can_open_emphasis(tokens: &[CharToken], index: usize, len: usize) -> bool {

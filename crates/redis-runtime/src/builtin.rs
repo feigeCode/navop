@@ -207,6 +207,105 @@ impl RedisConnectionImpl {
         self.get_db_conn(self.config.db_index).await
     }
 
+    /// 集群模式下需要聚合的操作（SCAN/TYPE/DEL）是否应分发到全部 master。
+    /// 仅 Cluster 模式且填了节点列表时启用；SSH 隧道下集群节点地址
+    /// 不可直达，保持单端点行为（ponytail: 隧道内集群需逐节点配隧道后再支持）。
+    fn cluster_fanout_enabled(&self) -> bool {
+        self.config.mode == RedisConnectionMode::Cluster
+            && !self.config.cluster_nodes.is_empty()
+            && !self.config.ssh_tunnel.as_ref().is_some_and(|t| t.enabled)
+    }
+
+    /// 集群模式：解析用户填写的节点列表为 (host, port)，容错格式。
+    fn parse_cluster_nodes(&self) -> Vec<(String, u16)> {
+        self.config
+            .cluster_nodes
+            .iter()
+            .filter_map(|entry| {
+                let entry = entry.trim();
+                if entry.is_empty() {
+                    return None;
+                }
+                let (host, port) = entry.rsplit_once(':')?;
+                let port: u16 = port.parse().ok()?;
+                Some((normalize_direct_host(host), port))
+            })
+            .collect()
+    }
+
+    /// 逐个尝试节点列表直到一个能连上，返回可用 master 连接。
+    async fn cluster_any_conn(&self) -> Result<ConnectionManager, RedisError> {
+        if self.client.is_none() {
+            return Err(RedisError::NotConnected);
+        }
+        let mut last_err = None;
+        for (host, port) in self.parse_cluster_nodes() {
+            match Self::open_connection_for_endpoint(&self.config, 0, &host, port).await {
+                Ok((_, conn)) => return Ok(conn),
+                Err(e) => last_err = Some(e),
+            }
+        }
+        Err(last_err.unwrap_or_else(|| {
+            RedisError::connection("cluster: no reachable node in the configured list")
+        }))
+    }
+
+    /// 集群模式：通过 CLUSTER SLOTS 发现全部 master 端点，去重。
+    /// 每次调用重新发现（调用方低频，连接自带 ConnectionManager 缓存，
+    /// 避免引入失效缓存问题）。任一节点能答即可。
+    async fn cluster_master_endpoints(&self) -> Result<Vec<(String, u16)>, RedisError> {
+        let mut conn = self.cluster_any_conn().await?;
+        let slots: redis_client::Value = redis_client::cmd("CLUSTER")
+            .arg("SLOTS")
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| {
+                RedisError::command_with_source(
+                    t!("RedisConnection.command_failed", command = "CLUSTER SLOTS").to_string(),
+                    e,
+                )
+            })?;
+
+        // CLUSTER SLOTS 返回 [[start, end, [host, port, id], [replica...]], ...]。
+        // 手动解析：每个 slot 区间的第一个节点即 master。
+        let mut masters = Vec::new();
+        if let redis_client::Value::Array(slot_rows) = slots {
+            for row in slot_rows {
+                let redis_client::Value::Array(entry) = row else {
+                    continue;
+                };
+                // entry: [start_slot, end_slot, master_info, replicas...]
+                if entry.len() < 3 {
+                    continue;
+                }
+                let Some(redis_client::Value::Array(node)) = entry.get(2) else {
+                    continue;
+                };
+                let (
+                    Some(redis_client::Value::BulkString(host_bytes)),
+                    Some(redis_client::Value::Int(port)),
+                ) = (node.first(), node.get(1))
+                else {
+                    continue;
+                };
+                let host = String::from_utf8_lossy(host_bytes).to_string();
+                let Ok(port) = u16::try_from(*port) else {
+                    continue;
+                };
+                let endpoint = (normalize_direct_host(&host), port);
+                if !masters.contains(&endpoint) {
+                    masters.push(endpoint);
+                }
+            }
+        }
+        if masters.is_empty() {
+            return Err(RedisError::connection(
+                "cluster: CLUSTER SLOTS returned no master endpoints",
+            ));
+        }
+        Ok(masters)
+    }
+
     async fn get_db_conn(&self, db: u8) -> Result<ConnectionManager, RedisError> {
         if self.client.is_none() {
             return Err(RedisError::NotConnected);
@@ -524,6 +623,20 @@ impl RedisConnectionImpl {
             }
             Err(err) => Err(err),
         }
+    }
+
+    /// 从 MOVED 错误解析目标节点（host, port）。返回 None 表示非 MOVED 错误。
+    fn moved_endpoint(error: &RedisError) -> Option<(String, u16)> {
+        let source = std::error::Error::source(error)?;
+        let redis_error = source.downcast_ref::<redis_client::RedisError>()?;
+        if !matches!(redis_error.kind(), redis_client::ErrorKind::Moved) {
+            return None;
+        }
+        // detail 形如 "13937 127.0.0.1:7003"
+        let detail = redis_error.detail()?;
+        let (_, addr) = detail.split_once(' ')?;
+        let (host, port) = addr.rsplit_once(':')?;
+        Some((host.to_string(), port.parse().ok()?))
     }
 
     async fn key_type_with_conn(
@@ -953,6 +1066,25 @@ impl RedisConnection for RedisConnectionImpl {
     }
 
     async fn del_in_db(&self, db: u8, keys: &[&str]) -> Result<i64, RedisError> {
+        // 集群模式：DEL 须发到键所属 master；对不存在键 DEL 无副作用，
+        // 逐 master 发整批累加即可。
+        if self.cluster_fanout_enabled() && !keys.is_empty() {
+            let masters = self.cluster_master_endpoints().await?;
+            let mut deleted = 0i64;
+            for (host, port) in masters {
+                let (_, mut conn) =
+                    Self::open_connection_for_endpoint(&self.config, db, &host, port).await?;
+                let n: i64 = conn.del(keys).await.map_err(|e| {
+                    RedisError::command_with_source(
+                        t!("RedisConnection.command_failed", command = "DEL").to_string(),
+                        e,
+                    )
+                })?;
+                deleted += n;
+            }
+            return Ok(deleted);
+        }
+
         let mut conn = self.get_db_conn(db).await?;
         conn.del(keys).await.map_err(|e| {
             RedisError::command_with_source(
@@ -1014,6 +1146,45 @@ impl RedisConnection for RedisConnectionImpl {
         pattern: &str,
         count: usize,
     ) -> Result<ScanResult, RedisError> {
+        // 集群模式：SCAN 只会命中所连节点上的槽位，必须逐 master 扫描聚合。
+        // 每个 master 的 cursor 独立，无法折进单个 u64，因此这里一次性扫完
+        // 全部 master（每节点 cursor 到 0），finished=true 返回。
+        // ponytail: 集群下「加载更多」退化为一次性全量；需要真分页时把返回结构
+        // 升级为每节点 cursor 集，调用方同步改造。
+        if self.cluster_fanout_enabled() && cursor == 0 {
+            let masters = self.cluster_master_endpoints().await?;
+            let mut all_keys = Vec::new();
+            for (host, port) in masters {
+                let (_, mut conn) =
+                    Self::open_connection_for_endpoint(&self.config, db, &host, port).await?;
+                let mut node_cursor = 0u64;
+                loop {
+                    let (next, keys): (u64, Vec<String>) = redis_client::cmd("SCAN")
+                        .arg(node_cursor)
+                        .arg("MATCH")
+                        .arg(pattern)
+                        .arg("COUNT")
+                        .arg(count)
+                        .query_async(&mut conn)
+                        .await
+                        .map_err(|e| {
+                            RedisError::command_with_source(
+                                t!("RedisConnection.command_failed", command = "SCAN").to_string(),
+                                e,
+                            )
+                        })?;
+                    all_keys.extend(keys);
+                    node_cursor = next;
+                    if node_cursor == 0 {
+                        break;
+                    }
+                }
+            }
+            all_keys.sort();
+            all_keys.dedup();
+            return Ok(ScanResult::new(0, all_keys));
+        }
+
         let mut conn = self.get_db_conn(db).await?;
 
         let (next_cursor, keys): (u64, Vec<String>) = redis_client::cmd("SCAN")
@@ -1091,6 +1262,57 @@ impl RedisConnection for RedisConnectionImpl {
     ) -> Result<Vec<(String, RedisKeyType)>, RedisError> {
         if keys.is_empty() {
             return Ok(Vec::new());
+        }
+
+        // 集群模式：TYPE 必须发到键所属 master。pipeline 遇 MOVED 会整批失败，
+        // 改为逐键 TYPE：先用缓存的节点连接试，MOVED 错误解析目标节点后
+        // 建连重试一次。连接按端点缓存，同一节点重复命中不重建。
+        // ponytail: 键量大时升级为按 MOVED 目标分组后整批发。
+        if self.cluster_fanout_enabled() {
+            let masters = self.cluster_master_endpoints().await?;
+            let mut by_endpoint: std::collections::HashMap<(String, u16), ConnectionManager> =
+                std::collections::HashMap::new();
+            for (host, port) in &masters {
+                let (_, conn) =
+                    Self::open_connection_for_endpoint(&self.config, db, host, *port).await?;
+                by_endpoint.insert((host.clone(), *port), conn);
+            }
+            let first = masters[0].clone();
+            let mut result = Vec::with_capacity(keys.len());
+            for key in keys {
+                // 先试缓存的端点连接；MOVED 则解析目标节点建连后重试。
+                let mut endpoint = first.clone();
+                let key_type = loop {
+                    let conn = match by_endpoint.get_mut(&endpoint) {
+                        Some(conn) => conn,
+                        None => {
+                            let (_, conn) = Self::open_connection_for_endpoint(
+                                &self.config,
+                                db,
+                                &endpoint.0,
+                                endpoint.1,
+                            )
+                            .await?;
+                            by_endpoint.insert(endpoint.clone(), conn);
+                            by_endpoint.get_mut(&endpoint).expect("just inserted")
+                        }
+                    };
+                    match Self::key_type_with_conn(conn, key).await {
+                        Ok(key_type) => break key_type,
+                        Err(e) => {
+                            let Some(target) = Self::moved_endpoint(&e) else {
+                                return Err(e);
+                            };
+                            if target == endpoint {
+                                return Err(e);
+                            }
+                            endpoint = target;
+                        }
+                    }
+                };
+                result.push((key.clone(), key_type));
+            }
+            return Ok(result);
         }
 
         let mut conn = self.get_db_conn(db).await?;
@@ -1535,6 +1757,46 @@ impl RedisConnection for RedisConnectionImpl {
     }
 
     async fn get_databases_info(&self) -> Result<Vec<RedisDatabaseInfo>, RedisError> {
+        // 集群模式：键计数应汇总全部 master（集群仅 db0 有效）。
+        if self.cluster_fanout_enabled() {
+            let masters = self.cluster_master_endpoints().await?;
+            let mut total = 0i64;
+            let mut expires = 0i64;
+            for (host, port) in masters {
+                let (_, mut conn) =
+                    Self::open_connection_for_endpoint(&self.config, 0, &host, port).await?;
+                let info: String = redis_client::cmd("INFO")
+                    .arg("keyspace")
+                    .query_async(&mut conn)
+                    .await
+                    .map_err(|e| {
+                        RedisError::command_with_source(
+                            t!("RedisConnection.command_failed", command = "INFO").to_string(),
+                            e,
+                        )
+                    })?;
+                for line in info.lines() {
+                    if let Some(("db0", stats)) = line.split_once(':') {
+                        for part in stats.split(',') {
+                            if let Some((k, v)) = part.split_once('=') {
+                                match k {
+                                    "keys" => total += v.parse().unwrap_or(0),
+                                    "expires" => expires += v.parse().unwrap_or(0),
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return Ok(vec![RedisDatabaseInfo {
+                index: 0,
+                keys: total,
+                expires,
+                avg_ttl: 0,
+            }]);
+        }
+
         let info = self.info(Some("keyspace")).await?;
         let mut databases_map = HashMap::new();
 
@@ -1656,6 +1918,7 @@ pub(crate) mod tests {
             use_tls: false,
             timeout: 10,
             mode,
+            cluster_nodes: Vec::new(),
             ssh_tunnel: None,
         }
     }
@@ -1871,6 +2134,65 @@ pub(crate) mod tests {
             .expect_err("SELECT must be rejected on multiplexed connections");
 
         assert!(matches!(error, RedisError::NotSupported(_)));
+    }
+
+    /// 集群集成验证（issue #414）：本机 3 master 集群（127.0.0.1:7001-7003，
+    /// 各节点已有种子键）不存在时跳过。
+    /// 验证 SCAN/TYPE 汇总全部 master，而不是只命中所连的那一个。
+    #[tokio::test]
+    async fn cluster_scan_aggregates_all_masters() {
+        let reachable = tokio::net::TcpStream::connect("127.0.0.1:7001")
+            .await
+            .is_ok();
+        if !reachable {
+            return; // 本机无测试集群，跳过
+        }
+
+        let mut cfg = config(RedisConnectionMode::Cluster, 0);
+        cfg.port = 7001;
+        cfg.cluster_nodes = vec![
+            "127.0.0.1:7001".to_string(),
+            "127.0.0.1:7002".to_string(),
+            "127.0.0.1:7003".to_string(),
+        ];
+        let mut conn = RedisConnectionImpl::new(cfg);
+        conn.connect().await.expect("connect cluster");
+
+        // 每个节点各自的键数（集群只有一个 db0）
+        let mut per_node = Vec::new();
+        for port in [7001u16, 7002, 7003] {
+            let mut cfg = config(RedisConnectionMode::Standalone, 0);
+            cfg.port = port;
+            let mut node = RedisConnectionImpl::new(cfg);
+            node.connect().await.expect("connect node");
+            let dbs = node.get_databases_info().await.expect("dbsize");
+            per_node.push(dbs.first().map(|d| d.keys).unwrap_or(0));
+        }
+        let total: i64 = per_node.iter().sum();
+        assert!(total > 0, "集群应有种子键");
+
+        // 集群聚合 SCAN 应拿到全部 master 的键
+        let scan = conn.scan_in_db(0, 0, "*", 100).await.expect("cluster scan");
+        assert!(scan.finished, "集群扫描一次扫完");
+        assert_eq!(
+            total as usize,
+            scan.keys.len(),
+            "SCAN 应汇总全部 master（各节点 {:?}）",
+            per_node
+        );
+
+        // TYPE 批量也应跨 master 命中
+        let sample: Vec<String> = scan.keys.iter().take(5).cloned().collect();
+        let types = conn
+            .key_types_batch_in_db(0, &sample)
+            .await
+            .expect("cluster type batch");
+        assert_eq!(sample.len(), types.len());
+        assert!(types.iter().all(|(_, t)| *t != RedisKeyType::None));
+
+        // db 计数汇总
+        let dbs = conn.get_databases_info().await.expect("cluster dbinfo");
+        assert_eq!(total, dbs.first().map(|d| d.keys).unwrap_or(0));
     }
 }
 

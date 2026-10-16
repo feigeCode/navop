@@ -2329,7 +2329,9 @@ impl RedisTreeView {
         let tree = one_ui::theme_geometry().tree;
 
         h_flex()
-            .id(SharedString::from(format!("redis-node-{}", ix)))
+            // 用 node_id 而非渲染索引作 key：切库时 flat_entries 会重组，索引 id
+            // 会让不同帧的节点在布局保留缓存里对上号，触发 gpui-fast 测量复用错乱。
+            .id(SharedString::from(format!("redis-node-{}", node_id)))
             .group("tree-item")
             .w_full()
             .h(tree.row_height)
@@ -3568,5 +3570,153 @@ mod tests {
             .filter(|node| matches!(node.node_type, RedisNodeType::Key(_)))
             .map(|node| node.full_key.clone().unwrap_or_else(|| node.name.clone()))
             .collect()
+    }
+
+    /// 复现 issue：Redis 切换到一个没有数据的库时直接卡死崩溃。
+    ///
+    /// 需要本机 redis-server（127.0.0.1:16379）：db2 有一个种子键、其他库为空。
+    /// 没有服务时跳过（返回），避免 CI 无 Redis 时误红。
+    /// 轮询等待条件满足：真实 tokio IO 完成时机早于/晚于测试调度器都可能，
+    /// 单次 run_until_parked 会提前退出，这里用短睡眠 + 重驱动直至完成或超时。
+    fn wait_until(cx: &mut VisualTestContext, mut cond: impl FnMut(&VisualTestContext) -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !cond(cx) {
+            if std::time::Instant::now() > deadline {
+                panic!("wait_until 超时：异步加载未在 10s 内完成");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            cx.run_until_parked();
+        }
+    }
+
+    #[gpui::test]
+    fn switching_to_an_empty_database_does_not_hang_or_crash(cx: &mut TestAppContext) {
+        let Ok(state) =
+            crate::manager::empty_db_switch_test_support::connected_state_for_empty_db_switch()
+        else {
+            return;
+        };
+
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+            one_core::gpui_tokio::init(cx);
+            cx.set_global(state);
+        });
+
+        let (window, tree) = cx.update(|cx| {
+            let mut tree = None;
+            let window = cx
+                .open_window(WindowOptions::default(), |window, cx| {
+                    let entity = cx.new(|cx| RedisTreeView::new(window, cx));
+                    tree = Some(entity.clone());
+                    cx.new(|cx| Root::new(entity, window, cx))
+                })
+                .expect("open redis tree test window");
+            (window, tree.expect("redis tree view"))
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        // 本测试混真实 redis IO：tokio worker 会在测试调度器之外唤醒，
+        // 官方逃生口是 allow_parking（专为确定性测试混真实 IO 设计）。
+        cx.executor().allow_parking();
+        tree.update_in(&mut cx, |tree, _window, _cx| {
+            let mut stored =
+                crate::manager::empty_db_switch_test_support::empty_db_switch_stored_connection(
+                    "empty-db-switch",
+                );
+            stored.id = Some(4201);
+            tree.stored_connections.insert("4201".to_string(), stored);
+            tree.connected_nodes.insert("4201".to_string());
+            tree.database_infos.insert(
+                "4201".to_string(),
+                HashMap::from([
+                    (
+                        2u8,
+                        crate::RedisDatabaseInfo {
+                            index: 2,
+                            keys: 1,
+                            expires: 0,
+                            avg_ttl: 0,
+                        },
+                    ),
+                    (
+                        3u8,
+                        crate::RedisDatabaseInfo {
+                            index: 3,
+                            keys: 0,
+                            expires: 0,
+                            avg_ttl: 0,
+                        },
+                    ),
+                ]),
+            );
+            tree.nodes.insert(
+                "4201".to_string(),
+                RedisNode::new("4201", "redis-test", RedisNodeType::Connection, "4201", 0),
+            );
+            tree.rebuild_flat_entries();
+        });
+
+        // 切到有键的 db2，等加载完成。真实 tokio IO 完成后才会往测试调度器投递，
+        // 单次 run_until_parked 会提前退出，这里轮询直到完成或超时。
+        tree.update_in(&mut cx, |tree, _window, cx| {
+            tree.switch_database("4201", 2, cx);
+        });
+        let db2_done = |cx: &VisualTestContext| {
+            tree.read_with(cx, |tree, _| {
+                !tree
+                    .loading_nodes
+                    .contains(&RedisTreeView::db_node_id("4201", 2))
+                    && tree
+                        .nodes
+                        .contains_key(&RedisTreeView::db_node_id("4201", 2))
+            })
+        };
+        wait_until(&mut cx, |cx| db2_done(cx));
+        // 等键类型补齐：zset 键的 Z 徽章异步出现（issue #416 崩溃场景）。
+        wait_until(&mut cx, |cx| {
+            tree.read_with(cx, |tree, _| {
+                let db2 = RedisTreeView::db_node_id("4201", 2);
+                let loaded = tree.count_loaded_keys(&db2);
+                let typed = tree
+                    .nodes
+                    .values()
+                    .filter(|n| matches!(n.node_type, RedisNodeType::Key(RedisKeyType::ZSet)))
+                    .count() as i64;
+                loaded > 0 && typed == loaded
+            })
+        });
+        cx.run_until_parked();
+        tree.read_with(&cx, |tree, _| {
+            assert_eq!(
+                2,
+                tree.count_loaded_keys(&RedisTreeView::db_node_id("4201", 2)),
+                "前置条件：db2 应加载出 2 个 zset 种子键"
+            );
+        });
+
+        // 切到空库 db3：这就是崩溃场景。驱动全部异步任务；
+        // 若链路里出现死循环 / 反复 notify / panic，这里会挂掉或超时。
+        tree.update_in(&mut cx, |tree, _window, cx| {
+            tree.switch_database("4201", 3, cx);
+        });
+        let db3_done = |cx: &VisualTestContext| {
+            tree.read_with(cx, |tree, _| {
+                let db3_id = RedisTreeView::db_node_id("4201", 3);
+                !tree.loading_nodes.contains(&db3_id) && tree.nodes.contains_key(&db3_id)
+            })
+        };
+        wait_until(&mut cx, |cx| db3_done(cx));
+        cx.run_until_parked();
+
+        tree.read_with(&cx, |tree, _| {
+            let db3_id = RedisTreeView::db_node_id("4201", 3);
+            assert_eq!(0, tree.count_loaded_keys(&db3_id), "空库没有键");
+            assert!(!tree.loading_nodes.contains(&db3_id), "空库加载必须收尾");
+            assert!(!tree.error_nodes.contains_key(&db3_id), "空库不是错误");
+        });
+
+        // run_until_parked 内部会驱动渲染；空库时 entry_count==0 走 ContentState::empty 分支，
+        // 若该分支 panic 会在这里暴露。
     }
 }

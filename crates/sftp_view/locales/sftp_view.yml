@@ -159,6 +159,17 @@ Endpoint:
     zh-CN: 左侧远程栏的修改操作暂不可用
     zh-HK: 左側遠端欄的修改操作暫不可用
 
+# 本地磁盘下拉
+Volume:
+  open:
+    en: Choose drive
+    zh-CN: 选择硬盘
+    zh-HK: 選擇硬碟
+  empty:
+    en: No local drive found
+    zh-CN: 没有找到本地硬盘
+    zh-HK: 沒有找到本機硬碟
+
 # 文件操作
 File:
   column_name:
