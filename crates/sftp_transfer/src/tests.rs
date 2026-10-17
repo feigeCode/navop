@@ -12,18 +12,31 @@ mod upload_retry_tests;
 use support::*;
 
 #[test]
-fn same_connection_is_fifo() {
+fn same_connection_is_fifo_up_to_lane_capacity() {
     let connection = SftpConnectionIdentity::Local(7);
     let first = transfer_id(1);
     let second = transfer_id(2);
+    let third = transfer_id(3);
+    let fourth = transfer_id(4);
     let mut lanes = ConnectionLanes::default();
 
     lanes.enqueue(connection.clone(), first);
     lanes.enqueue(connection.clone(), second);
+    lanes.enqueue(connection.clone(), third);
+    lanes.enqueue(connection.clone(), fourth);
 
+    // 同连接按 FIFO 启动，直到占满并发车道容量。
     assert_eq!(lanes.take_startable(&connection), Some(first));
+    assert_eq!(lanes.take_startable(&connection), Some(second));
+    assert_eq!(lanes.take_startable(&connection), Some(third));
     assert_eq!(lanes.take_startable(&connection), None);
-    assert_eq!(lanes.complete(&connection, first), Some(second));
+    assert_eq!(lanes.running_count(&connection), 3);
+
+    // 完成一个释放一个车位，队首补位。
+    assert_eq!(lanes.complete(&connection, first), Some(fourth));
+    assert_eq!(lanes.take_startable(&connection), None);
+    assert_eq!(lanes.complete(&connection, second), None);
+    assert_eq!(lanes.running_count(&connection), 2);
 }
 
 #[test]
@@ -78,7 +91,7 @@ fn completing_a_lane_only_advances_that_connection() {
 }
 
 #[gpui::test]
-fn same_connection_provider_calls_are_fifo(cx: &mut TestAppContext) {
+fn same_connection_starts_up_to_lane_capacity_in_parallel(cx: &mut TestAppContext) {
     let provider = TestProvider::default();
     let executor = new_executor(provider.clone(), cx);
     let connection = SftpConnectionIdentity::Local(7);
@@ -89,9 +102,10 @@ fn same_connection_provider_calls_are_fifo(cx: &mut TestAppContext) {
         executor.submit(upload_request(connection, "second"), cx)
     });
 
-    wait_until(cx, |_| provider.started() == vec![first]);
+    // 车道容量内同连接的传输并行启动，不再逐个排队。
+    wait_until(cx, |_| started_matches(&provider, &[first, second]));
     provider.complete(first, Ok(()));
-    wait_until(cx, |_| provider.started() == vec![first, second]);
+    provider.complete(second, Ok(()));
 }
 
 #[gpui::test]
@@ -206,11 +220,20 @@ fn cancelled_pending_transfer_never_reaches_provider(cx: &mut TestAppContext) {
     let first = executor.update(cx, |executor, cx| {
         executor.submit(upload_request(connection.clone(), "first"), cx)
     });
+    let filler = executor.update(cx, |executor, cx| {
+        executor.submit(upload_request(connection.clone(), "filler"), cx)
+    });
+    let filler_two = executor.update(cx, |executor, cx| {
+        executor.submit(upload_request(connection.clone(), "filler-two"), cx)
+    });
     let cancelled = executor.update(cx, |executor, cx| {
         executor.submit(upload_request(connection, "cancelled"), cx)
     });
 
-    wait_until(cx, |_| provider.started() == vec![first]);
+    // 占满车道容量后，第四个任务才会真正排队。
+    wait_until(cx, |_| {
+        started_matches(&provider, &[first, filler, filler_two])
+    });
     assert!(executor.update(cx, |executor, cx| executor.cancel(cancelled, cx)));
     wait_until(cx, |cx| {
         executor.read_with(cx, |executor, _| {
@@ -218,8 +241,10 @@ fn cancelled_pending_transfer_never_reaches_provider(cx: &mut TestAppContext) {
         })
     });
     provider.complete(first, Ok(()));
+    provider.complete(filler, Ok(()));
+    provider.complete(filler_two, Ok(()));
     cx.run_until_parked();
-    assert_eq!(provider.started(), vec![first]);
+    assert!(started_matches(&provider, &[first, filler, filler_two]));
 }
 
 #[gpui::test]
@@ -230,13 +255,23 @@ fn failed_transfer_does_not_block_next_in_lane(cx: &mut TestAppContext) {
     let first = executor.update(cx, |executor, cx| {
         executor.submit(upload_request(connection.clone(), "first"), cx)
     });
+    let filler = executor.update(cx, |executor, cx| {
+        executor.submit(upload_request(connection.clone(), "filler"), cx)
+    });
+    let filler_two = executor.update(cx, |executor, cx| {
+        executor.submit(upload_request(connection.clone(), "filler-two"), cx)
+    });
     let second = executor.update(cx, |executor, cx| {
         executor.submit(upload_request(connection, "second"), cx)
     });
 
-    wait_until(cx, |_| provider.started() == vec![first]);
+    wait_until(cx, |_| {
+        started_matches(&provider, &[first, filler, filler_two])
+    });
     provider.complete(first, Err(anyhow!("upload failed")));
-    wait_until(cx, |_| provider.started() == vec![first, second]);
+    wait_until(cx, |_| {
+        started_matches(&provider, &[first, filler, filler_two, second])
+    });
 }
 
 #[gpui::test]

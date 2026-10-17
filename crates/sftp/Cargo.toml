@@ -5,7 +5,7 @@ publish.workspace = true
 edition.workspace = true
 
 [dependencies]
-tokio = { workspace = true, features = ["fs", "io-util", "net", "sync"] }
+tokio = { workspace = true, features = ["fs", "io-util", "net", "sync", "time"] }
 async-trait = { workspace = true }
 anyhow = { workspace = true }
 base64 = { workspace = true }

@@ -185,7 +185,7 @@ impl SftpTransferExecutor {
         self.watch_cancellation(id, token, watcher_done, cx);
         cx.emit(SftpTransferEvent::Added(id));
         cx.notify();
-        self.start_connection_if_idle(&connection, cx);
+        self.start_pending_transfers(&connection, cx);
         id
     }
 
@@ -291,15 +291,16 @@ impl SftpTransferExecutor {
         self.publish_finished(record, cx);
     }
 
-    fn start_connection_if_idle(
+    fn start_pending_transfers(
         &mut self,
         connection: &SftpConnectionIdentity,
         cx: &mut Context<Self>,
     ) {
-        let Some(id) = self.lanes.take_startable(connection) else {
-            return;
-        };
-        self.start_transfer(id, cx);
+        // 连接车道有容量上限（见 MAX_CONCURRENT_TRANSFERS_PER_CONNECTION），
+        // 把尚有空位的排队任务全部启动。
+        while let Some(id) = self.lanes.take_startable(connection) {
+            self.start_transfer(id, cx);
+        }
     }
 
     fn start_transfer(&mut self, id: SftpTransferId, cx: &mut Context<Self>) {

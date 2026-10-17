@@ -12,7 +12,7 @@ use sftp::TransferProgress;
 
 use super::{
     super::{SftpConnectionIdentity, SftpTransferEvent, SftpTransferState},
-    support::{TestProvider, new_executor, upload_request, wait_until},
+    support::{TestProvider, new_executor, started_matches, upload_request, wait_until},
 };
 
 struct TestObserver {
@@ -152,10 +152,18 @@ fn background_manager_cancel_of_queued_task_finishes_cancelled(cx: &mut TestAppC
     let first = executor.update(cx, |executor, cx| {
         executor.submit(upload_request(connection.clone(), "first"), cx)
     });
+    let filler = executor.update(cx, |executor, cx| {
+        executor.submit(upload_request(connection.clone(), "filler"), cx)
+    });
+    let filler_two = executor.update(cx, |executor, cx| {
+        executor.submit(upload_request(connection.clone(), "filler-two"), cx)
+    });
     let queued = executor.update(cx, |executor, cx| {
         executor.submit(upload_request(connection, "queued"), cx)
     });
-    wait_until(cx, |_| provider.started() == vec![first]);
+    wait_until(cx, |_| {
+        started_matches(&provider, &[first, filler, filler_two])
+    });
 
     let manager = cx.update(one_core::background_tasks::global);
     let task_id = background_task_by_title(&manager, "Upload queued", cx).id;
@@ -177,7 +185,10 @@ fn background_manager_cancel_of_queued_task_finishes_cancelled(cx: &mut TestAppC
             executor.snapshot(first).unwrap().state == SftpTransferState::Succeeded
         })
     });
-    assert_eq!(provider.started(), vec![first]);
+    assert!(started_matches(
+        &provider,
+        &[first, filler, filler_two]
+    ));
 }
 
 #[gpui::test]

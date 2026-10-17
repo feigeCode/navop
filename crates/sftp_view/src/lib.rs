@@ -8370,7 +8370,15 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("create temporary fixture directory");
         let (provider, _executor, view, _window) = sftp_view_fixture(cx, &temp_dir);
         let first = submit_upload(cx, &view, "first.txt");
+        let filler = submit_upload(cx, &view, "filler.txt");
+        let filler_two = submit_upload(cx, &view, "filler-two.txt");
+        // 执行器每连接车道容量为 3：占满后第四个任务才会真正排队。
         let second = submit_upload(cx, &view, "second.txt");
+
+        wait_until(cx, |_| {
+            let started = provider.started();
+            started.len() == 3 && started.contains(&first)
+        });
 
         let second_task_id = view.read_with(cx, |view, _| {
             view.transfer_queue
@@ -8390,8 +8398,9 @@ mod tests {
             )
         });
 
-        wait_until(cx, |_| provider.started().contains(&first));
         provider.complete(first, Ok(()));
+        provider.complete(filler, Ok(()));
+        provider.complete(filler_two, Ok(()));
         wait_until(cx, |cx| {
             matches!(
                 mirror_snapshot(cx, &view, first),
@@ -8399,7 +8408,13 @@ mod tests {
             )
         });
 
-        assert_eq!(vec![first], provider.started());
+        let started = provider.started();
+        assert_eq!(3, started.len());
+        assert!(started.contains(&first));
+        assert!(
+            !started.contains(&second),
+            "cancelled while queued, must never reach the provider"
+        );
     }
 
     #[gpui::test]

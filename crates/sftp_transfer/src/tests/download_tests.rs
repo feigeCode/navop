@@ -7,8 +7,8 @@ use sftp::TransferProgress;
 use super::{
     super::{SftpConnectionIdentity, SftpTransferOperation, SftpTransferState, download_task_key},
     support::{
-        TestProvider, TestTransferOperation, download_request, new_executor, upload_request,
-        wait_until,
+        TestProvider, TestTransferOperation, download_request, new_executor, started_matches,
+        upload_request, wait_until,
     },
 };
 
@@ -79,20 +79,31 @@ fn download_reaches_provider_with_paths_and_config_source(cx: &mut TestAppContex
 }
 
 #[gpui::test]
-fn upload_and_download_share_connection_fifo_lane(cx: &mut TestAppContext) {
+fn download_shares_connection_lane_with_uploads(cx: &mut TestAppContext) {
     let provider = TestProvider::default();
     let executor = new_executor(provider.clone(), cx);
     let connection = SftpConnectionIdentity::Local(7);
     let upload = executor.update(cx, |executor, cx| {
         executor.submit(upload_request(connection.clone(), "upload"), cx)
     });
+    let filler = executor.update(cx, |executor, cx| {
+        executor.submit(upload_request(connection.clone(), "filler"), cx)
+    });
+    let filler_two = executor.update(cx, |executor, cx| {
+        executor.submit(upload_request(connection.clone(), "filler-two"), cx)
+    });
     let download = executor.update(cx, |executor, cx| {
         executor.submit_download(download_request(connection, "download"), cx)
     });
 
-    wait_until(cx, |_| provider.started() == vec![upload]);
+    // 占满车道容量后，下载在同一连接的车道上排队。
+    wait_until(cx, |_| {
+        started_matches(&provider, &[upload, filler, filler_two])
+    });
     provider.complete(upload, Ok(()));
-    wait_until(cx, |_| provider.started() == vec![upload, download]);
+    wait_until(cx, |_| {
+        started_matches(&provider, &[upload, filler, filler_two, download])
+    });
     assert_eq!(
         provider.operation(download),
         Some(TestTransferOperation::Download)

@@ -10,7 +10,7 @@ use super::{
     },
     support::{
         TestProvider, TestTransferOperation, delete_remote_request, download_request, new_executor,
-        upload_request, wait_until,
+        started_matches, upload_request, wait_until,
     },
 };
 
@@ -76,12 +76,15 @@ fn delete_remote_reaches_provider_with_entries_and_config_source(cx: &mut TestAp
 }
 
 #[gpui::test]
-fn upload_delete_download_share_connection_fifo_lane(cx: &mut TestAppContext) {
+fn delete_remote_shares_connection_lane_with_uploads(cx: &mut TestAppContext) {
     let provider = TestProvider::default();
     let executor = new_executor(provider.clone(), cx);
     let connection = SftpConnectionIdentity::Local(7);
     let upload = executor.update(cx, |executor, cx| {
         executor.submit(upload_request(connection.clone(), "upload"), cx)
+    });
+    let filler = executor.update(cx, |executor, cx| {
+        executor.submit(upload_request(connection.clone(), "filler"), cx)
     });
     let delete = executor.update(cx, |executor, cx| {
         executor.submit_delete_remote(delete_remote_request(connection.clone(), "delete"), cx)
@@ -90,11 +93,12 @@ fn upload_delete_download_share_connection_fifo_lane(cx: &mut TestAppContext) {
         executor.submit_download(download_request(connection, "download"), cx)
     });
 
-    wait_until(cx, |_| provider.started() == vec![upload]);
+    // 上传、删除、下载共用同一连接的车道：容量内并行，超出后按 FIFO 补位。
+    wait_until(cx, |_| started_matches(&provider, &[upload, filler, delete]));
     provider.complete(upload, Ok(()));
-    wait_until(cx, |_| provider.started() == vec![upload, delete]);
-    provider.complete(delete, Ok(()));
-    wait_until(cx, |_| provider.started() == vec![upload, delete, download]);
+    wait_until(cx, |_| {
+        started_matches(&provider, &[upload, filler, delete, download])
+    });
 }
 
 #[gpui::test]

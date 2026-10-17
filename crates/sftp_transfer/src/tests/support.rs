@@ -111,6 +111,13 @@ pub(super) fn wait_until(
     panic!("condition was not reached before timeout");
 }
 
+/// 按集合比较已启动的传输：并发车道下多个任务同时启动，
+/// 各自 tokio 任务的首次轮询顺序不确定，不能断言 started 的先后。
+pub(super) fn started_matches(provider: &TestProvider, ids: &[SftpTransferId]) -> bool {
+    let started = provider.started();
+    started.len() == ids.len() && ids.iter().all(|id| started.contains(id))
+}
+
 pub(super) fn new_executor(
     provider: TestProvider,
     cx: &mut TestAppContext,
