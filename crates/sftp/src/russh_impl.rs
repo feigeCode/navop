@@ -1023,6 +1023,53 @@ fn ensure_not_cancelled(cancelled: &AtomicBool) -> Result<()> {
     Ok(())
 }
 
+/// 递归扫描本地目录，产出待上传条目：`(路径, 是否目录, 文件大小)`。
+///
+/// 符号链接需要显式处理：上传时会 `File::open` 跟随链接读取真实内容，
+/// 因此不能用链接自身的大小（目标路径字符串长度）作为 expected_size，
+/// 否则写入字节数校验必然失败并中止整个目录上传。
+/// - 指向文件的链接：跟随解析，按真实大小上传；
+/// - 指向目录的链接：跳过，避免把目标内容重复上传且防止环；
+/// - 坏链（目标不存在/不可访问）：跳过。
+fn scan_local_dir_entries(
+    local_base: &std::path::Path,
+    cancelled: &AtomicBool,
+) -> Result<Vec<(std::path::PathBuf, bool, u64)>> {
+    let mut entries: Vec<(std::path::PathBuf, bool, u64)> = Vec::new();
+    let mut dirs_to_scan = vec![local_base.to_path_buf()];
+
+    while let Some(dir) = dirs_to_scan.pop() {
+        ensure_not_cancelled(cancelled)?;
+        let read_dir = std::fs::read_dir(&dir)
+            .map_err(|e| anyhow!("Failed to read directory {:?}: {}", dir, e))?;
+
+        for entry in read_dir {
+            let entry = entry.map_err(|e| anyhow!("Failed to read entry: {}", e))?;
+            let path = entry.path();
+            let metadata = std::fs::symlink_metadata(&path)
+                .map_err(|e| anyhow!("Failed to get metadata for {:?}: {}", path, e))?;
+
+            if metadata.file_type().is_symlink() {
+                let target = match std::fs::metadata(&path) {
+                    Ok(target) => target,
+                    Err(_) => continue,
+                };
+                if target.is_dir() {
+                    continue;
+                }
+                entries.push((path, false, target.len()));
+            } else if metadata.is_dir() {
+                entries.push((path.clone(), true, 0));
+                dirs_to_scan.push(path);
+            } else {
+                entries.push((path, false, metadata.len()));
+            }
+        }
+    }
+
+    Ok(entries)
+}
+
 struct SftpHandler {
     identity: HostKeyIdentity,
     host_key_verifier: HostKeyVerifier,
@@ -2871,28 +2918,7 @@ impl RemoteFileClient for RusshSftpClient {
             anyhow::bail!("Local path is not a directory: {}", local_path);
         }
 
-        let mut entries: Vec<(std::path::PathBuf, bool, u64)> = Vec::new();
-        let mut dirs_to_scan = vec![local_base.to_path_buf()];
-
-        while let Some(dir) = dirs_to_scan.pop() {
-            ensure_not_cancelled(&cancelled)?;
-            let read_dir = std::fs::read_dir(&dir)
-                .map_err(|e| anyhow!("Failed to read directory {:?}: {}", dir, e))?;
-
-            for entry in read_dir {
-                let entry = entry.map_err(|e| anyhow!("Failed to read entry: {}", e))?;
-                let path = entry.path();
-                let metadata = std::fs::symlink_metadata(&path)
-                    .map_err(|e| anyhow!("Failed to get metadata for {:?}: {}", path, e))?;
-
-                if metadata.is_dir() {
-                    entries.push((path.clone(), true, 0));
-                    dirs_to_scan.push(path);
-                } else {
-                    entries.push((path, false, metadata.len()));
-                }
-            }
-        }
+        let entries = scan_local_dir_entries(local_base, &cancelled)?;
 
         let total_size: u64 = entries
             .iter()
@@ -3127,6 +3153,92 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::sync::Mutex as StdMutex;
+
+    /// 目录上传扫描必须对符号链接做显式处理：文件链接跟随取真实大小，
+    /// 目录链接与坏链跳过。否则链接自身的大小（目标路径字符串长度）会被
+    /// 当作 expected_size，写入校验必然失败并中止整个目录上传。
+    #[test]
+    fn scan_local_dir_entries_handles_symlinks() {
+        let temp = tempfile::tempdir().expect("create tempdir");
+        let base = temp.path();
+
+        // 普通文件与子目录
+        std::fs::write(base.join("regular.txt"), b"hello").expect("write regular file");
+        std::fs::create_dir(base.join("subdir")).expect("create subdir");
+        std::fs::write(base.join("subdir").join("nested.txt"), b"nested!")
+            .expect("write nested file");
+
+        // 指向文件的链接（真实内容 5 字节，链接自身大小是目标路径字符串长度）
+        let file_target = base.join("regular.txt");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&file_target, base.join("file_link")).expect("create symlink");
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_file(&file_target, base.join("file_link"))
+            .expect("create symlink");
+
+        // 指向目录的链接：应被跳过
+        let dir_target = base.join("subdir");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&dir_target, base.join("dir_link")).expect("create symlink");
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(&dir_target, base.join("dir_link"))
+            .expect("create symlink");
+
+        // 坏链：应被跳过
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(base.join("missing.txt"), base.join("broken_link"))
+            .expect("create symlink");
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_file(base.join("missing.txt"), base.join("broken_link"))
+            .expect("create symlink");
+
+        let cancelled = AtomicBool::new(false);
+        let mut entries = scan_local_dir_entries(base, &cancelled).expect("scan");
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let names: Vec<String> = entries
+            .iter()
+            .map(|(path, _, _)| {
+                path.strip_prefix(base)
+                    .expect("strip prefix")
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect();
+
+        // 目录链接和坏链不出现在条目中
+        assert!(!names.iter().any(|name| name == "dir_link"));
+        assert!(!names.iter().any(|name| name == "broken_link"));
+
+        let find = |name: &str| {
+            entries
+                .iter()
+                .find(|(path, _, _)| {
+                    path.strip_prefix(base)
+                        .expect("strip prefix")
+                        .to_string_lossy()
+                        .replace('\\', "/")
+                        == name
+                })
+        };
+
+        let regular = find("regular.txt").expect("regular.txt should be present");
+        assert_eq!(regular.1, false);
+        assert_eq!(regular.2, 5);
+
+        let subdir = find("subdir").expect("subdir should be present");
+        assert_eq!(subdir.1, true);
+        assert_eq!(subdir.2, 0);
+
+        let nested = find("subdir/nested.txt").expect("nested file should be present");
+        assert_eq!(nested.1, false);
+        assert_eq!(nested.2, 7);
+
+        // 文件链接跟随到真实内容大小（5 字节），而不是链接字符串长度
+        let file_link = find("file_link").expect("file_link should be present");
+        assert_eq!(file_link.1, false);
+        assert_eq!(file_link.2, 5);
+    }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     enum FakeRemoteEntry {
