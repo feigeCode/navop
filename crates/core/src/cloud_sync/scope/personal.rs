@@ -16,7 +16,7 @@ use crate::cloud_sync::personal::{
 use crate::cloud_sync::scope::notes::{NOTE_MAX_CONTENT_BYTES, NoteSyncItem, SharedNoteAdapter};
 use crate::cloud_sync::scope::payloads::{
     LlmProviderPlainData, PAYLOAD_FORMAT_VERSION, QuickCommandPlainData, SftpFavoritePlainData,
-    build_record_with_id, parse_record,
+    build_record, build_record_with_id, parse_record,
 };
 use crate::cloud_sync::scope::payloads::{NotePlainData, SavedSqlPlainData};
 use crate::cloud_sync::scope::saved_sql::{
@@ -622,6 +622,23 @@ fn sync_error(error: crate::cloud_sync::service::SyncError) -> SyncStoreError {
     SyncStoreError::Parse(error.to_string())
 }
 
+/// 生成待上传的云端记录：同步过的沿用原 `cloud_id`，否则新建一个 UUID。
+///
+/// **绝不能把「未知 id」当作空串**：文件夹 / Git / WebDAV 后端用 `{id}.json`
+/// 当文件名，空 id 会让同一 data_type 下的所有记录塌缩成同一个无名 `.json`
+/// —— 表现为「只有一条数据、后写的覆盖先写的、version 每次同步都涨」。
+fn build_scope_record(
+    service: &CloudSyncService,
+    record_type: &str,
+    plain: &impl serde::Serialize,
+    cloud_id: Option<&str>,
+) -> Result<CloudSyncData, crate::cloud_sync::service::SyncError> {
+    match cloud_id {
+        Some(id) => build_record_with_id(service, record_type, plain, id.to_string()),
+        None => build_record(service, record_type, plain),
+    }
+}
+
 #[async_trait]
 impl PersonalSyncLocalSource for SyncScopeSource {
     async fn list_items(&self) -> Result<Vec<PersonalSyncItemSnapshot>, SyncStoreError> {
@@ -654,7 +671,12 @@ impl PersonalSyncLocalSource for SyncScopeSource {
             .unwrap_or_default();
         let service = self.lock_service()?;
         let known = self.state_of(&item.data_type, &local_key);
-        let cloud_id = known.and_then(|s| s.cloud_id).unwrap_or_default();
+        // 未知 cloud_id 必须落成 `None`（随后生成新 UUID），**不能当成空串**：
+        // 文件夹后端用 `{id}.json` 当文件名，空 id 会让同一类型的所有记录塌缩成
+        // 同一个无名 `.json` 并互相覆盖。
+        let cloud_id = known
+            .and_then(|s| s.cloud_id)
+            .filter(|id| !id.trim().is_empty());
 
         match item.data_type.as_str() {
             data_type::QUICK_COMMAND => {
@@ -664,11 +686,11 @@ impl PersonalSyncLocalSource for SyncScopeSource {
                     .get(id)
                     .map_err(|e| SyncStoreError::Io(e.to_string()))?
                     .ok_or_else(|| SyncStoreError::Parse(format!("quick command {id} missing")))?;
-                let record = build_record_with_id(
+                let record = build_scope_record(
                     &service,
                     &item.data_type,
                     &quick_command_plain(&command),
-                    cloud_id,
+                    cloud_id.as_deref(),
                 )
                 .map_err(sync_error)?;
                 Ok(record)
@@ -687,8 +709,13 @@ impl PersonalSyncLocalSource for SyncScopeSource {
                     connection_cloud_id: None,
                     connection_name: Some(favorite.connection_key),
                 };
-                let record = build_record_with_id(&service, &item.data_type, &plain, cloud_id)
-                    .map_err(sync_error)?;
+                let record = build_scope_record(
+                    &service,
+                    &item.data_type,
+                    &plain,
+                    cloud_id.as_deref(),
+                )
+                .map_err(sync_error)?;
                 Ok(record)
             }
             data_type::LLM_PROVIDER => {
@@ -698,11 +725,11 @@ impl PersonalSyncLocalSource for SyncScopeSource {
                     .get(id)
                     .map_err(|e| SyncStoreError::Io(e.to_string()))?
                     .ok_or_else(|| SyncStoreError::Parse(format!("llm provider {id} missing")))?;
-                let record = build_record_with_id(
+                let record = build_scope_record(
                     &service,
                     &item.data_type,
                     &provider_plain(&provider),
-                    cloud_id,
+                    cloud_id.as_deref(),
                 )
                 .map_err(sync_error)?;
                 Ok(record)
@@ -723,8 +750,13 @@ impl PersonalSyncLocalSource for SyncScopeSource {
                     name: document.relative_path,
                     content: document.content,
                 };
-                let record = build_record_with_id(&service, &item.data_type, &plain, cloud_id)
-                    .map_err(sync_error)?;
+                let record = build_scope_record(
+                    &service,
+                    &item.data_type,
+                    &plain,
+                    cloud_id.as_deref(),
+                )
+                .map_err(sync_error)?;
                 Ok(record)
             }
             data_type::NOTE => {
@@ -747,8 +779,13 @@ impl PersonalSyncLocalSource for SyncScopeSource {
                         content: note.content,
                     })
                     .ok_or_else(|| SyncStoreError::Parse(format!("note {local_key} missing")))?;
-                let record = build_record_with_id(&service, &item.data_type, &plain, cloud_id)
-                    .map_err(sync_error)?;
+                let record = build_scope_record(
+                    &service,
+                    &item.data_type,
+                    &plain,
+                    cloud_id.as_deref(),
+                )
+                .map_err(sync_error)?;
                 Ok(record)
             }
             other if SettingsGroup::from_data_type(other).is_some() => {
@@ -762,8 +799,8 @@ impl PersonalSyncLocalSource for SyncScopeSource {
                     group: group.type_name().to_string(),
                     payload,
                 };
-                let record =
-                    build_record_with_id(&service, other, &plain, cloud_id).map_err(sync_error)?;
+                let record = build_scope_record(&service, other, &plain, cloud_id.as_deref())
+                    .map_err(sync_error)?;
                 Ok(record)
             }
             other => Err(SyncStoreError::Parse(format!(

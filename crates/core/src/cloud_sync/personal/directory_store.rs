@@ -339,6 +339,12 @@ fn push_if_matches(
     data_type: Option<&str>,
     since: Option<i64>,
 ) {
+    // 没有 id 的记录无法被寻址（既不能用它做匹配，也不能更新/删除它）。
+    // 历史版本曾把「未知 id」写成空串，于是所有同类记录塌缩成同一个无名
+    // `.json`；这里直接忽略，避免那份残破内容在每次同步时被当成新数据拉回本地。
+    if record.id.trim().is_empty() || record.data_type.trim().is_empty() {
+        return;
+    }
     if data_type.is_some_and(|target| record.data_type != target) {
         return;
     }

@@ -786,7 +786,12 @@ impl ScopeSyncTypeHandler {
         key: &str,
         plain: &impl serde::Serialize,
     ) -> Result<CloudSyncData, SyncError> {
-        match self.state_of(key).and_then(|s| s.cloud_id) {
+        // 空串视为「还没有 cloud_id」：否则会带着空 id 上传，无法再被寻址
+        match self
+            .state_of(key)
+            .and_then(|s| s.cloud_id)
+            .filter(|id| !id.trim().is_empty())
+        {
             Some(cloud_id) => build_record_with_id(service, self.record_type, plain, cloud_id),
             None => build_record(service, self.record_type, plain),
         }

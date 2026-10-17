@@ -171,7 +171,13 @@ fn status_text(cx: &App, record_type: &str) -> Option<(String, bool)> {
     let status = repo
         .get(PERSONAL_SCOPE_ENV, PERSONAL_USER_ID, record_type)
         .ok()
-        .flatten()?;
+        .flatten();
+
+    // 从未同步过的类型也要给出状态，不能整行空白：
+    // 需求要求「每个同步数据都显示上次同步时间或失败报错信息」。
+    let Some(status) = status else {
+        return Some((t!("Settings.Sync.Scope.never_synced").to_string(), false));
+    };
 
     if status.has_recent_error() {
         let code = status.last_error_code.clone().unwrap_or_default();
