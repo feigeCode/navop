@@ -201,6 +201,7 @@ mod tests {
             runtime_id: "com.example.search::main".into(),
             resource_type: "search".into(),
             shell_view_id: Some("explorer".into()),
+            terminal: None,
             form: Default::default(),
         }
     }

@@ -50,6 +50,20 @@ impl TerminalWorkspace {
         Self::from_pane(main, window, cx)
     }
 
+    /// 扩展声明的终端型连接:固定标题、退出后可重启的本地进程。
+    pub fn new_launched(
+        config: LocalConfig,
+        title: String,
+        tab_index: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let main = cx.new(|cx| {
+            TerminalView::new_launched(config, title, tab_index, window, cx).with_workspace_pane()
+        });
+        Self::from_pane(main, window, cx)
+    }
+
     pub fn new_ssh(conn: StoredConnection, window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self::new_ssh_with_index(conn, None, window, cx, None, true)
     }

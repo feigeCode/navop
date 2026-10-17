@@ -9,16 +9,16 @@ use crate::{
         DocumentExporterContrib, Engines, HtmlPreviewTransformContrib, IpcEntry, IpcRuntime,
         IpcTransport, Manifest, MenuCommandRef, MenuContrib, ResourceConnectionContrib,
         ResourceConnectionFieldType, ResourceConnectionForm, ResourceConnectionFormField,
-        ResourceConnectionFormTab, ResourceWorkbenchBinding, ResourceWorkbenchBindingSource,
-        ResourceWorkbenchColumn, ResourceWorkbenchColumnStyle, ResourceWorkbenchColumnType,
-        ResourceWorkbenchContrib, ResourceWorkbenchEffect, ResourceWorkbenchOpen,
-        ResourceWorkbenchOperation, ResourceWorkbenchOperationMode, ResourceWorkbenchPage,
-        ResourceWorkbenchPagination, ResourceWorkbenchPaginationKind, ResourceWorkbenchPrimitive,
-        ResourceWorkbenchRenderer, ResourceWorkbenchRendererKind, ResourceWorkbenchRowAction,
-        ResourceWorkbenchTable, ResourceWorkbenchTerminal, ResourceWorkbenchTerminalOperation,
-        ResourceWorkbenchValueType, ResourceWorkbenchViewer, ResourceWorkbenchViewerFormat,
-        RuntimeSection, ShellHostModule, ShellSurface, ShellViewContrib, WasmRuntime,
-        WasmRuntimeKind,
+        ResourceConnectionFormTab, ResourceConnectionTerminal, ResourceWorkbenchBinding,
+        ResourceWorkbenchBindingSource, ResourceWorkbenchColumn, ResourceWorkbenchColumnStyle,
+        ResourceWorkbenchColumnType, ResourceWorkbenchContrib, ResourceWorkbenchEffect,
+        ResourceWorkbenchOpen, ResourceWorkbenchOperation, ResourceWorkbenchOperationMode,
+        ResourceWorkbenchPage, ResourceWorkbenchPagination, ResourceWorkbenchPaginationKind,
+        ResourceWorkbenchPrimitive, ResourceWorkbenchRenderer, ResourceWorkbenchRendererKind,
+        ResourceWorkbenchRowAction, ResourceWorkbenchTable, ResourceWorkbenchTerminal,
+        ResourceWorkbenchTerminalOperation, ResourceWorkbenchValueType, ResourceWorkbenchViewer,
+        ResourceWorkbenchViewerFormat, RuntimeSection, ShellHostModule, ShellSurface,
+        ShellViewContrib, WasmRuntime, WasmRuntimeKind,
         contributes::{
             RemoteFileEditorCommandContrib, RemoteFileEditorContrib, RemoteFileEditorLaunchMode,
         },
@@ -257,6 +257,122 @@ fn runtime_catalog_registers_headless_extension_connection() {
             .unwrap()
             .shell_view_id
             .is_none()
+    );
+}
+
+#[test]
+fn runtime_catalog_registers_terminal_connection_without_provider_runtime() {
+    // 没有任何 ipc runtime 的扩展:终端型连接不需要提供者进程。
+    let mut manifest = base_manifest();
+    manifest.contributes.connections.push(terminal_connection());
+
+    let catalog = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap();
+    let connection = catalog
+        .resource_connection("com.example.tools", "tsh")
+        .unwrap();
+
+    assert_eq!("", connection.runtime_id);
+    assert!(connection.shell_view_id.is_none());
+    let terminal = connection.terminal.as_ref().unwrap();
+    assert_eq!("tsh", terminal.command);
+    assert_eq!(vec!["ssh", "{{target}}"], terminal.args);
+}
+
+#[test]
+fn runtime_catalog_rejects_terminal_connection_with_provider_fields() {
+    for mutate in [
+        (|c: &mut ResourceConnectionContrib| c.runtime_id = "provider".into()) as fn(&mut _),
+        |c| c.resource_type = "tsh".into(),
+        |c| c.shell_view_id = Some("explorer".into()),
+    ] {
+        let mut manifest = base_manifest();
+        let mut connection = terminal_connection();
+        mutate(&mut connection);
+        manifest.contributes.connections.push(connection);
+
+        let error = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("must not declare runtimeId, resourceType or shellViewId"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn runtime_catalog_rejects_terminal_template_with_unknown_or_credential_field() {
+    let mut manifest = base_manifest();
+    let mut connection = terminal_connection();
+    connection.terminal.as_mut().unwrap().args = vec!["ssh".into(), "{{missing}}".into()];
+    manifest.contributes.connections.push(connection);
+    let error = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap_err();
+    assert!(
+        error.to_string().contains("unknown field `missing`"),
+        "{error}"
+    );
+
+    let mut manifest = base_manifest();
+    let mut connection = terminal_connection();
+    connection.form.tabs[0].fields[0].field_type = ResourceConnectionFieldType::Auth;
+    manifest.contributes.connections.push(connection);
+    let error = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap_err();
+    assert!(
+        error.to_string().contains("credential field `target`"),
+        "{error}"
+    );
+}
+
+#[test]
+fn runtime_catalog_rejects_terminal_connection_with_secret_field_or_placeholder_command() {
+    let mut manifest = base_manifest();
+    let mut connection = terminal_connection();
+    connection.form.tabs[0]
+        .fields
+        .push(ResourceConnectionFormField {
+            id: "token".into(),
+            label: "Token".into(),
+            field_type: ResourceConnectionFieldType::Password,
+            required: false,
+            default_value: None,
+            placeholder: None,
+            secret: true,
+            options: Vec::new(),
+            visible_when: Vec::new(),
+            rows: None,
+        });
+    manifest.contributes.connections.push(connection);
+    let error = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap_err();
+    assert!(
+        error.to_string().contains("must not declare secret fields"),
+        "{error}"
+    );
+
+    let mut manifest = base_manifest();
+    let mut connection = terminal_connection();
+    connection.terminal.as_mut().unwrap().command = "{{target}}".into();
+    manifest.contributes.connections.push(connection);
+    let error = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap_err();
+    assert!(
+        error.to_string().contains("must not contain placeholders"),
+        "{error}"
+    );
+}
+
+#[test]
+fn runtime_catalog_rejects_workbench_bound_to_terminal_connection() {
+    let mut manifest = shell_manifest();
+    manifest.contributes.connections.push(terminal_connection());
+    let mut workbench = resource_workbench();
+    workbench.connection_ids = vec!["tsh".into()];
+    manifest.contributes.resource_workbenches.push(workbench);
+
+    let error = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap_err();
+
+    assert!(
+        error.to_string().contains("cannot be bound to a workbench"),
+        "{error}"
     );
 }
 
@@ -716,6 +832,48 @@ fn runtime_catalog_accepts_events_pages_and_paging_bindings() {
     );
 }
 
+fn terminal_connection() -> ResourceConnectionContrib {
+    ResourceConnectionContrib {
+        id: "tsh".into(),
+        label: "Teleport SSH".into(),
+        description: None,
+        icon: None,
+        runtime_id: String::new(),
+        resource_type: String::new(),
+        shell_view_id: None,
+        terminal: Some(ResourceConnectionTerminal {
+            command: "tsh".into(),
+            args: vec!["ssh".into(), "{{target}}".into()],
+            env: std::collections::BTreeMap::from([(
+                "TELEPORT_PROXY".to_string(),
+                "{{proxy}}".to_string(),
+            )]),
+            title: Some("{{target}}".into()),
+        }),
+        form: ResourceConnectionForm {
+            tabs: vec![ResourceConnectionFormTab {
+                id: "general".into(),
+                label: "General".into(),
+                fields: ["target", "proxy"]
+                    .into_iter()
+                    .map(|id| ResourceConnectionFormField {
+                        id: id.into(),
+                        label: id.into(),
+                        field_type: ResourceConnectionFieldType::Text,
+                        required: id == "target",
+                        default_value: None,
+                        placeholder: None,
+                        secret: false,
+                        options: Vec::new(),
+                        visible_when: Vec::new(),
+                        rows: None,
+                    })
+                    .collect(),
+            }],
+        },
+    }
+}
+
 fn resource_workbench() -> ResourceWorkbenchContrib {
     ResourceWorkbenchContrib {
         schema_version: 3,
@@ -770,6 +928,7 @@ fn resource_connection() -> ResourceConnectionContrib {
         runtime_id: "provider".into(),
         resource_type: "elasticsearch".into(),
         shell_view_id: Some("explorer".into()),
+        terminal: None,
         form: ResourceConnectionForm {
             tabs: vec![ResourceConnectionFormTab {
                 id: "general".into(),

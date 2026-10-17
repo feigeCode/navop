@@ -1001,6 +1001,76 @@ pub fn resolve_local_working_dir(working_dir: Option<String>) -> Option<PathBuf>
     }
 }
 
+/// 本地会话子进程结束后应进入的连接状态。
+///
+/// 只有「可重启」的本地会话才转入 `Disconnected`(由此显示提示并允许按 Enter 重启);
+/// 普通本地终端保持原有退出语义,返回 `None`。
+fn local_session_end_state(restartable: bool, exit_code: i32) -> Option<ConnectionState> {
+    restartable.then(|| ConnectionState::Disconnected {
+        error: Some(format!("Process exited with code {exit_code}")),
+    })
+}
+
+/// 可重启本地会话的启动参数快照。
+///
+/// 事件代理随会话保留:重启复用同一个终端网格与事件通道,
+/// 只替换底层 PTY 后端。
+#[derive(Clone)]
+struct LocalRestart {
+    config: LocalConfig,
+    event_proxy: GpuiEventProxy,
+}
+
+/// 由 [`LocalConfig`] 构造 PTY 启动选项,并返回用于命令历史的 shell。
+///
+/// 首次启动与「子进程退出后重启」共用,保证两次拉起的环境完全一致。
+fn build_local_pty_options(config: LocalConfig) -> (PtyOptions, Option<String>) {
+    let LocalConfig {
+        shell,
+        args,
+        working_dir,
+        env,
+    } = config;
+    #[cfg(target_os = "windows")]
+    let refreshed_env = refreshed_windows_environment();
+    #[cfg(target_os = "windows")]
+    let shell = shell.or_else(|| {
+        let path = environment_value(&refreshed_env, "PATH").map(OsStr::new);
+        let system_root = environment_value(&refreshed_env, "SystemRoot").map(OsStr::new);
+        let comspec = environment_value(&refreshed_env, "COMSPEC").map(OsStr::new);
+        Some(resolve_default_windows_shell_from_env(
+            path,
+            system_root,
+            comspec,
+        ))
+    });
+    let history_shell = shell.clone();
+    let working_directory = resolve_local_working_dir(working_dir);
+
+    // 准备 Shell Integration 环境（写入集成脚本、生成 wrapper 配置）
+    let (integration_env, integration_args) = prepare_shell_integration(shell.as_deref());
+    let mut shell_args = args;
+    shell_args.extend(integration_args);
+
+    // 合并用户环境变量与 Shell Integration 环境变量
+    #[cfg(target_os = "windows")]
+    let mut env_pairs = merge_environment_overrides(refreshed_env, env);
+    #[cfg(not(target_os = "windows"))]
+    let mut env_pairs = env;
+    env_pairs.extend(integration_env);
+    env_pairs = with_local_terminal_default_env(env_pairs);
+
+    let pty_options = PtyOptions {
+        shell: build_local_shell(shell, shell_args),
+        working_directory,
+        env: env_pairs.into_iter().collect(),
+        drain_on_exit: true,
+        #[cfg(target_os = "windows")]
+        escape_args: true,
+    };
+    (pty_options, history_shell)
+}
+
 /// 本地终端文件树的根目录(仅本机/WSL 会话;容器会话返回 `None`)。
 ///
 /// WSL 会话以 `wsl.exe --distribution <发行版>` 启动，发行版文件系统在 Windows 侧
@@ -1333,6 +1403,8 @@ pub struct Terminal {
     event_tx: Option<UnboundedSender<TerminalEvent>>,
     /// 事件代理（用于设置 PtyWrite 回写通道）
     event_proxy: Option<GpuiEventProxy>,
+    /// 可重启的本地会话(仅嵌入场景启用):子进程退出后可按原参数重新拉起。
+    local_restart: Option<LocalRestart>,
     /// 连接 ID
     connection_id: Option<i64>,
     /// 连接名称
@@ -1804,6 +1876,7 @@ impl Terminal {
             command_record_gate: CommandRecordGate::default(),
             connection_generation: 0,
             connection_kind: TerminalConnectionKind::Local,
+            local_restart: None,
             scrollback_lines,
         }
     }
@@ -1826,6 +1899,34 @@ impl Terminal {
 
     /// 创建本地终端
     pub fn new_local(config: LocalConfig, cx: &mut Context<Self>) -> Result<Self> {
+        Self::new_local_with_restart(config, false, cx)
+    }
+
+    /// 创建「子进程退出后可按原参数重启」的本地终端。
+    ///
+    /// 仅供嵌入场景(如资源工作台的 terminal 页面)使用:普通本地终端的
+    /// 退出语义保持不变。进程退出后会话进入 `Disconnected`,按 Enter 重启。
+    pub fn new_local_restartable_or_disconnected(
+        config: LocalConfig,
+        cx: &mut Context<Self>,
+    ) -> (Self, Option<String>) {
+        match Self::new_local_with_restart(config, true, cx) {
+            Ok(terminal) => (terminal, None),
+            Err(error) => {
+                let message = error.to_string();
+                (
+                    Self::new_local_disconnected(message.clone(), cx),
+                    Some(message),
+                )
+            }
+        }
+    }
+
+    fn new_local_with_restart(
+        config: LocalConfig,
+        restartable: bool,
+        cx: &mut Context<Self>,
+    ) -> Result<Self> {
         let (event_tx, event_rx) = unbounded_channel::<TerminalEvent>();
         let app_settings = AppSettings::current(cx);
         let scrollback_lines = app_settings.terminal_scrollback_lines;
@@ -1858,49 +1959,8 @@ impl Terminal {
             });
         let recording_tap =
             Self::recording_tap_for_runtimes(&recording_runtime, &session_log_runtime);
-        let LocalConfig {
-            shell,
-            args,
-            working_dir,
-            env,
-        } = config;
-        #[cfg(target_os = "windows")]
-        let refreshed_env = refreshed_windows_environment();
-        #[cfg(target_os = "windows")]
-        let shell = shell.or_else(|| {
-            let path = environment_value(&refreshed_env, "PATH").map(OsStr::new);
-            let system_root = environment_value(&refreshed_env, "SystemRoot").map(OsStr::new);
-            let comspec = environment_value(&refreshed_env, "COMSPEC").map(OsStr::new);
-            Some(resolve_default_windows_shell_from_env(
-                path,
-                system_root,
-                comspec,
-            ))
-        });
-        let history_shell = shell.clone();
-        let working_directory = resolve_local_working_dir(working_dir);
-
-        // 准备 Shell Integration 环境（写入集成脚本、生成 wrapper 配置）
-        let (integration_env, integration_args) = prepare_shell_integration(shell.as_deref());
-        let mut shell_args = args;
-        shell_args.extend(integration_args);
-
-        // 合并用户环境变量与 Shell Integration 环境变量
-        #[cfg(target_os = "windows")]
-        let mut env_pairs = merge_environment_overrides(refreshed_env, env);
-        #[cfg(not(target_os = "windows"))]
-        let mut env_pairs = env;
-        env_pairs.extend(integration_env);
-        env_pairs = with_local_terminal_default_env(env_pairs);
-
-        let pty_options = PtyOptions {
-            shell: build_local_shell(shell, shell_args),
-            working_directory,
-            env: env_pairs.into_iter().collect(),
-            drain_on_exit: true,
-            #[cfg(target_os = "windows")]
-            escape_args: true,
-        };
+        let restart_config = restartable.then(|| config.clone());
+        let (pty_options, history_shell) = build_local_pty_options(config);
         let local_backend = LocalPtyBackend::new_with_recording(
             term.clone(),
             event_proxy.clone(),
@@ -1959,6 +2019,10 @@ impl Terminal {
             command_record_gate: CommandRecordGate::default(),
             connection_generation: 0,
             connection_kind: TerminalConnectionKind::Local,
+            local_restart: restart_config.map(|config| LocalRestart {
+                config,
+                event_proxy: event_proxy.clone(),
+            }),
             scrollback_lines,
         })
     }
@@ -2106,6 +2170,7 @@ impl Terminal {
             command_record_gate: CommandRecordGate::default(),
             connection_generation,
             connection_kind: TerminalConnectionKind::Ssh,
+            local_restart: None,
             scrollback_lines,
         };
 
@@ -2242,6 +2307,7 @@ impl Terminal {
             command_record_gate: CommandRecordGate::default(),
             connection_generation,
             connection_kind: TerminalConnectionKind::Serial,
+            local_restart: None,
             scrollback_lines,
         }
     }
@@ -2370,6 +2436,7 @@ impl Terminal {
             command_record_gate: CommandRecordGate::default(),
             connection_generation,
             connection_kind: TerminalConnectionKind::Telnet,
+            local_restart: None,
             scrollback_lines,
         }
     }
@@ -2512,6 +2579,7 @@ impl Terminal {
                 // This is source-format metadata for display only. It does not
                 // confer live capabilities; use `live_connection_kind`.
                 connection_kind,
+                local_restart: None,
                 scrollback_lines,
             },
             PendingPlaybackEventLoop {
@@ -3422,6 +3490,7 @@ impl Terminal {
             }
             TerminalEvent::ChildExit(code) => {
                 self.child_exited = Some(code);
+                self.mark_local_session_ended(code);
                 cx.emit(TerminalModelEvent::ChildExit(code));
             }
             TerminalEvent::BackendStopped => {
@@ -3431,6 +3500,7 @@ impl Terminal {
                 tracing::warn!("本地终端后端已停止，标记会话结束");
                 self.backend = None;
                 self.child_exited = Some(LOCAL_BACKEND_STOPPED_EXIT_CODE);
+                self.mark_local_session_ended(LOCAL_BACKEND_STOPPED_EXIT_CODE);
                 cx.emit(TerminalModelEvent::ChildExit(
                     LOCAL_BACKEND_STOPPED_EXIT_CODE,
                 ));
@@ -3482,6 +3552,12 @@ impl Terminal {
     /// 获取连接名称
     pub fn connection_name(&self) -> Option<&str> {
         self.connection_name.as_deref()
+    }
+
+    /// 为本地会话指定标签名称(如扩展声明的终端型连接用目标主机命名)。
+    /// 本地终端默认没有连接名称,标签会回退成通用的「Terminal」。
+    pub fn set_connection_name(&mut self, name: Option<String>) {
+        self.connection_name = name;
     }
 
     /// 获取连接 ID
@@ -4149,7 +4225,16 @@ impl Terminal {
         !self.is_read_only()
             && (self.ssh_config.is_some()
                 || self.serial_params.is_some()
-                || self.telnet_params.is_some())
+                || self.telnet_params.is_some()
+                || self.local_restart.is_some())
+    }
+
+    /// 可重启本地会话的子进程已结束:转入 `Disconnected`,
+    /// 让视图写入提示并允许按 Enter 重启。普通本地会话不受影响。
+    fn mark_local_session_ended(&mut self, exit_code: i32) {
+        if let Some(state) = local_session_end_state(self.local_restart.is_some(), exit_code) {
+            self.connection_state = state;
+        }
     }
 
     /// 当前会话的退格键编码；非 Telnet 会话保持历史默认 DEL（0x7F）。
@@ -4410,6 +4495,32 @@ impl Terminal {
                 }
             } else if !self.start_telnet_connection_attempt(params, generation, cx) {
                 return false;
+            }
+        } else if let Some(restart) = self.local_restart.clone() {
+            // 本地进程退出后原样重启:沿用同一终端网格与事件通道,只替换 PTY 后端。
+            if let Some(backend) = self.backend.take() {
+                backend.shutdown();
+            }
+            self.prepare_surface_for_reconnect();
+            let (pty_options, _history_shell) = build_local_pty_options(restart.config);
+            match LocalPtyBackend::new_with_recording(
+                self.term.clone(),
+                restart.event_proxy,
+                pty_options,
+                self.recording_tap(),
+            ) {
+                Ok(backend) => {
+                    self.backend = Some(Box::new(backend));
+                    self.connection_state = ConnectionState::Connected;
+                }
+                Err(error) => {
+                    tracing::error!(%error, "本地终端重启失败");
+                    self.connection_state = ConnectionState::Disconnected {
+                        error: Some(error.to_string()),
+                    };
+                    cx.emit(TerminalModelEvent::Wakeup);
+                    return false;
+                }
             }
         } else {
             return false;
@@ -4785,6 +4896,7 @@ mod tests {
         should_retry_ssh_without_keyboard_interactive, ssh_config_with_confirmed_host_key,
         ssh_config_with_runtime_credentials,
     };
+    use super::{build_local_pty_options, local_session_end_state};
     use crate::history::{
         HistoryEntry, ShellHistoryFormat, collect_history_suggestions, normalize_history_command,
         parse_shell_history, push_history_entry,
@@ -4976,6 +5088,7 @@ mod tests {
             command_record_gate: CommandRecordGate::default(),
             connection_generation: 1,
             connection_kind: TerminalConnectionKind::Ssh,
+            local_restart: None,
             scrollback_lines: 10_000,
         }
     }
@@ -6392,6 +6505,37 @@ mod tests {
         assert_eq!(Some("UTF-8"), env_value(&env, "LC_CTYPE"));
     }
 
+    #[test]
+    fn restartable_local_session_disconnects_with_exit_code_when_child_exits() {
+        assert_eq!(
+            Some(ConnectionState::Disconnected {
+                error: Some("Process exited with code 255".to_string()),
+            }),
+            local_session_end_state(true, 255)
+        );
+    }
+
+    #[test]
+    fn plain_local_session_keeps_its_state_when_child_exits() {
+        assert_eq!(None, local_session_end_state(false, 0));
+    }
+
+    #[test]
+    fn local_pty_options_are_rebuilt_identically_for_restart() {
+        let config = LocalConfig {
+            shell: Some("/bin/echo".to_string()),
+            args: vec!["hello".to_string()],
+            working_dir: Some("/tmp".to_string()),
+            env: vec![("FOO".to_string(), "bar".to_string())],
+        };
+        let (first, first_shell) = build_local_pty_options(config.clone());
+        let (second, second_shell) = build_local_pty_options(config);
+        assert_eq!(first_shell, second_shell);
+        assert_eq!(first.working_directory, second.working_directory);
+        assert_eq!(first.env.get("FOO"), second.env.get("FOO"));
+        assert_eq!(Some(&"bar".to_string()), first.env.get("FOO"));
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn with_local_terminal_default_env_keeps_explicit_locale() {
@@ -7166,6 +7310,7 @@ mod tests {
             command_record_gate: CommandRecordGate::default(),
             connection_generation: 1,
             connection_kind: TerminalConnectionKind::Ssh,
+            local_restart: None,
             scrollback_lines: 10_000,
         };
 
@@ -7452,6 +7597,7 @@ mod tests {
             command_record_gate: CommandRecordGate::default(),
             connection_generation: 1,
             connection_kind: TerminalConnectionKind::Ssh,
+            local_restart: None,
             scrollback_lines: 10_000,
         };
 

@@ -36,11 +36,17 @@ fn validate_resource_connection(
     if invalid_connection_identifier(connection_id) {
         return invalid_connection("connection id contains reserved path characters");
     }
-    if connection.runtime_id.trim().is_empty() || connection.resource_type.trim().is_empty() {
-        return invalid_connection("runtimeId and resourceType must not be empty");
-    }
     if !ids.insert(connection_id.to_string()) {
         return invalid_connection(format!("duplicate connection id `{connection_id}`"));
+    }
+    if let Some(terminal) = &connection.terminal {
+        // 终端型连接由宿主直接起本地进程:没有提供者进程,也不经过工作台 / shell 视图。
+        validate_terminal_connection(connection, terminal)?;
+        validate_connection_icon(connection)?;
+        return validate_connection_form(connection);
+    }
+    if connection.runtime_id.trim().is_empty() || connection.resource_type.trim().is_empty() {
+        return invalid_connection("runtimeId and resourceType must not be empty");
     }
     if !manifest
         .runtime
@@ -104,6 +110,55 @@ fn validate_resource_connection(
 
 fn invalid_connection_identifier(value: &str) -> bool {
     value.contains([':', '/', '\\'])
+}
+
+/// 终端型连接的注册期校验:
+/// - 不能同时声明提供者(runtimeId / resourceType)或 shell 视图;
+/// - 模板语法正确,`command` 固定;
+/// - 占位符只能引用表单里存在的非敏感文本类字段(没有提供者代为取密钥,
+///   凭据也不应被拼进命令行 / 环境变量)。
+fn validate_terminal_connection(
+    connection: &crate::extension::manifest::ResourceConnectionContrib,
+    terminal: &crate::extension::manifest::ResourceConnectionTerminal,
+) -> Result<(), ExtensionRuntimeError> {
+    use crate::extension::manifest::ResourceConnectionFieldType;
+    if !connection.runtime_id.trim().is_empty()
+        || !connection.resource_type.trim().is_empty()
+        || connection.shell_view_id.is_some()
+    {
+        return invalid_connection(
+            "terminal connection must not declare runtimeId, resourceType or shellViewId",
+        );
+    }
+    let referenced = match terminal.validate() {
+        Ok(referenced) => referenced,
+        Err(reason) => return invalid_connection(reason),
+    };
+    let fields: Vec<_> = connection
+        .form
+        .tabs
+        .iter()
+        .flat_map(|tab| &tab.fields)
+        .collect();
+    if fields.iter().any(|field| field.secret) {
+        return invalid_connection("terminal connection must not declare secret fields");
+    }
+    for name in referenced {
+        let Some(field) = fields.iter().find(|field| field.id == name) else {
+            return invalid_connection(format!(
+                "terminal template references unknown field `{name}`"
+            ));
+        };
+        if matches!(
+            field.field_type,
+            ResourceConnectionFieldType::Password | ResourceConnectionFieldType::Auth
+        ) {
+            return invalid_connection(format!(
+                "terminal template must not reference credential field `{name}`"
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn validate_connection_icon(
@@ -385,9 +440,14 @@ impl ExtensionRuntimeCatalog {
                         .icon
                         .as_deref()
                         .map(|icon| resolve_extension_path(&manifest.manifest_dir, icon)),
-                    runtime_id: runtime_key(&manifest.id, &connection.runtime_id),
+                    runtime_id: if connection.terminal.is_some() {
+                        String::new()
+                    } else {
+                        runtime_key(&manifest.id, &connection.runtime_id)
+                    },
                     resource_type: connection.resource_type.clone(),
                     shell_view_id: connection.shell_view_id.clone(),
+                    terminal: connection.terminal.clone(),
                     form: connection.form.clone(),
                 },
             );
@@ -791,6 +851,11 @@ fn validate_resource_workbench(
         else {
             return Err(invalid("connectionIds references an unknown connection"));
         };
+        if connection.terminal.is_some() {
+            return Err(invalid(
+                "a terminal connection opens a local terminal and cannot be bound to a workbench",
+            ));
+        }
         if connection.runtime_id != workbench.runtime_id
             || connection.resource_type != workbench.resource_type
         {

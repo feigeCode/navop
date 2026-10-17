@@ -110,6 +110,18 @@ fn tab_duplicate_requires_a_live_local_ssh_or_serial_terminal() {
         Some(&local_source),
         Some(TerminalConnectionKind::Local),
     ));
+    let launched_source = TerminalDuplicateSource::Launched {
+        config: LocalConfig::default(),
+        title: "root@db-1".to_string(),
+    };
+    assert!(terminal_tab_duplicate_supported(
+        Some(&launched_source),
+        Some(TerminalConnectionKind::Local),
+    ));
+    assert!(!terminal_tab_duplicate_supported(
+        Some(&launched_source),
+        Some(TerminalConnectionKind::Ssh),
+    ));
     assert!(terminal_tab_duplicate_supported(
         Some(&ssh_source),
         Some(TerminalConnectionKind::Ssh),
@@ -171,6 +183,26 @@ fn duplicate_source_for_local_terminal_prefers_current_working_dir() {
         panic!("expected local duplicate source");
     };
     assert_eq!(Some("/tmp/current"), config.working_dir.as_deref());
+}
+
+#[test]
+fn duplicate_source_for_launched_terminal_keeps_declared_launch_parameters() {
+    let mut config = LocalConfig::default();
+    config.working_dir = Some("/tmp/original".to_string());
+
+    let source = terminal_duplicate_source_with_cwd(
+        TerminalDuplicateSource::Launched {
+            config,
+            title: "root@db-1".to_string(),
+        },
+        Some("/tmp/current"),
+    );
+
+    let TerminalDuplicateSource::Launched { config, title } = source else {
+        panic!("expected launched duplicate source");
+    };
+    assert_eq!("root@db-1", title);
+    assert_eq!(Some("/tmp/original"), config.working_dir.as_deref());
 }
 
 #[test]

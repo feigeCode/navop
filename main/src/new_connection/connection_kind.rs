@@ -625,6 +625,7 @@ mod tests {
             runtime_id: String::new(),
             resource_type: String::new(),
             shell_view_id: None,
+            terminal: None,
             form: Default::default(),
         }
     }

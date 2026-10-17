@@ -42,7 +42,11 @@ impl Render for ExtensionConnectionForm {
                     .child(self.render_fields(cx)),
             )
             .when_some(result_msg, |this, msg| this.child(result_bar(msg, cx)))
-            .child(action_buttons(testing, cx))
+            .child(action_buttons(
+                testing,
+                self.contribution.terminal.is_none(),
+                cx,
+            ))
     }
 }
 
@@ -211,7 +215,12 @@ fn result_bar(msg: String, cx: &mut Context<ExtensionConnectionForm>) -> impl In
         )
 }
 
-fn action_buttons(testing: bool, cx: &mut Context<ExtensionConnectionForm>) -> impl IntoElement {
+/// `can_test` 为 false(终端型连接没有提供者可探测)时不显示「测试」按钮。
+fn action_buttons(
+    testing: bool,
+    can_test: bool,
+    cx: &mut Context<ExtensionConnectionForm>,
+) -> impl IntoElement {
     h_flex()
         .flex_shrink_0()
         .justify_end()
@@ -225,18 +234,20 @@ fn action_buttons(testing: bool, cx: &mut Context<ExtensionConnectionForm>) -> i
                 .label(t!("Common.cancel").to_string())
                 .on_click(cx.listener(|this, _, window, cx| this.on_cancel(window, cx))),
         )
-        .child(
-            Button::new("extension-connection-test")
-                .small()
-                .outline()
-                .label(if testing {
-                    t!("ConnectionForm.testing").to_string()
-                } else {
-                    t!("ConnectionForm.test").to_string()
-                })
-                .disabled(testing)
-                .on_click(cx.listener(|this, _, _, cx| this.on_test(cx))),
-        )
+        .when(can_test, |this| {
+            this.child(
+                Button::new("extension-connection-test")
+                    .small()
+                    .outline()
+                    .label(if testing {
+                        t!("ConnectionForm.testing").to_string()
+                    } else {
+                        t!("ConnectionForm.test").to_string()
+                    })
+                    .disabled(testing)
+                    .on_click(cx.listener(|this, _, _, cx| this.on_test(cx))),
+            )
+        })
         .child(
             Button::new("extension-connection-save")
                 .small()
@@ -274,6 +285,7 @@ mod tests {
             runtime_id: "main".to_string(),
             resource_type: "middleware".to_string(),
             shell_view_id: None,
+            terminal: None,
             form: ResourceConnectionForm {
                 tabs: vec![
                     ResourceConnectionFormTab {

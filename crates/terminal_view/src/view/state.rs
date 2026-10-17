@@ -47,6 +47,11 @@ pub(super) struct PendingTerminalSearch {
 #[derive(Clone)]
 pub(crate) enum TerminalDuplicateSource {
     Local(LocalConfig),
+    /// 由扩展声明的终端型连接启动的本地进程:带固定标题,退出后可按 Enter 重启。
+    Launched {
+        config: LocalConfig,
+        title: String,
+    },
     Ssh {
         connection: StoredConnection,
         working_dir: Option<String>,
@@ -107,7 +112,7 @@ pub(super) fn terminal_tab_duplicate_supported(
     matches!(
         (source, live_connection_kind),
         (
-            Some(TerminalDuplicateSource::Local(_)),
+            Some(TerminalDuplicateSource::Local(_) | TerminalDuplicateSource::Launched { .. }),
             Some(TerminalConnectionKind::Local),
         ) | (
             Some(TerminalDuplicateSource::Ssh { .. }),
@@ -160,6 +165,8 @@ pub(super) fn terminal_duplicate_source_with_cwd(
             config.working_dir = Some(cwd);
             TerminalDuplicateSource::Local(config)
         }
+        // 启动参数是扩展声明的固定命令,复制时不改写工作目录。
+        launched @ TerminalDuplicateSource::Launched { .. } => launched,
         TerminalDuplicateSource::Ssh {
             connection,
             sync_path_with_terminal,

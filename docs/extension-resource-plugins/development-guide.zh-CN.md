@@ -60,7 +60,39 @@ Navop 的打开顺序是：
 
 shell UI 不会收到保存的 config 或 secret，也不应再次调用 `resource/open` 创建主连接。
 
-### 2.3 独立 shell 页面
+### 2.3 终端型连接(无 provider)
+
+连接声明 `terminal`，不声明 `runtimeId` / `resourceType` / `shellViewId`，扩展里也不需要任何 provider 进程（可以没有 `runtime`、没有 `bin/`，只有一个 `extension.json`）。
+
+用户打开连接时，宿主直接以本地进程启动一个普通终端标签：`command` + `args` + `env` 由 manifest 模板与连接表单里保存的值合成。标签标题、焦点、复制标签、子进程退出后按 Enter 重启都由宿主终端提供。
+
+```json
+{
+  "id": "tsh-ssh",
+  "label": "Teleport SSH (tsh)",
+  "terminal": {
+    "command": "tsh",
+    "args": ["ssh", "{{target}}"],
+    "env": { "TELEPORT_PROXY": "{{proxy}}" },
+    "title": "{{target}}"
+  },
+  "form": { "tabs": [ { "id": "general", "label": "General", "fields": [
+    { "id": "target", "label": "Target", "fieldType": "Text", "required": true },
+    { "id": "proxy", "label": "Proxy", "fieldType": "Text" }
+  ] } ] }
+}
+```
+
+规则：
+
+- `command` 固定写死，**不允许占位符**：执行什么程序只由扩展作者决定，连接数据（可能来自云同步 / 团队共享）改不了它。
+- `args` / `env` 值 / `title` 中的 `{{字段ID}}` 由宿主按连接保存的值替换；只能引用表单中存在的非敏感字段，不能引用 `Password` / `Auth` 字段，也不允许声明 `secret: true` 字段。
+- 含占位符的参数 / 环境变量替换后为空时整项省略，因此可选字段不会留下空参数。
+- **防选项注入**：若参数模板不以 `-` 开头、而替换后的值以 `-` 开头，宿主拒绝打开（例如 `hostname = "-oProxyCommand=..."` 不会变成 `tsh ssh` 的选项）。需要传选项请写在模板里（`"--host={{x}}"`）。值中含控制字符同样被拒绝。
+- 没有 provider，因此表单没有「测试连接」按钮；终端型连接不能被 `resourceWorkbenches` 绑定。
+- `title` 缺省或替换为空时，标签使用连接名称。
+
+### 2.4 独立 shell 页面
 
 `shellViews` 也可以不关联连接，直接从扩展管理页打开。这种页面没有 `context.connection`，可用于帮助页、静态工具或不依赖保存连接的页面。
 
@@ -306,8 +338,8 @@ Native composite 当前要求包内只有一个 `runtime.ipc`。打包 Windows �
 |---|---|
 | `id` | contribution 稳定 ID，会持久化到连接数据中 |
 | `label` | 新建连接页面显示名称 |
-| `runtimeId` | 指向当前扩展的 `runtime.ipc[].id` |
-| `resourceType` | 传给 provider `resource/open` 的资源类型 |
+| `runtimeId` | 指向当前扩展的 `runtime.ipc[].id`（终端型连接不填） |
+| `resourceType` | 传给 provider `resource/open` 的资源类型（终端型连接不填） |
 | `form` | 声明式业务表单 |
 
 可选字段：
@@ -315,6 +347,7 @@ Native composite 当前要求包内只有一个 `runtime.ipc`。打包 Windows �
 - `description`
 - `icon`
 - `shellViewId`
+- `terminal`（见 2.3；与 `runtimeId` / `resourceType` / `shellViewId` 互斥）
 
 `id` 和字段 ID 不能包含 `:`、`/`、`\`。以下字段 ID 由宿主保留：
 

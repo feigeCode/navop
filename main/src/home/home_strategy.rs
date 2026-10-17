@@ -81,6 +81,17 @@ impl ConnectionOpenStrategy for ExtensionOpenStrategy {
             window.push_notification("Extension runtime is unavailable", cx);
             return;
         };
+        let Some(contribution) =
+            service.resource_connection(&params.extension_id, &params.contribution_id)
+        else {
+            window.push_notification("This extension contribution is unavailable", cx);
+            return;
+        };
+        // 终端型连接不需要提供者进程,也不依赖 shell-plugins 构建。
+        if contribution.terminal.is_some() {
+            open_extension_terminal_connection(self.connection, &contribution, mode, window, cx);
+            return;
+        }
         // 无 Shell 构建以 workbench 绑定为决策点:
         // 有原生工作台即可打开(legacy shellViewId 不阻塞),
         // 没有工作台才提示需要 shell-plugins 构建。
@@ -91,12 +102,6 @@ impl ConnectionOpenStrategy for ExtensionOpenStrategy {
                 "This extension connection requires the shell-plugins build",
                 cx,
             );
-            return;
-        };
-        let Some(contribution) =
-            service.resource_connection(&params.extension_id, &params.contribution_id)
-        else {
-            window.push_notification("This extension contribution is unavailable", cx);
             return;
         };
         open_native_extension_connection(
@@ -143,6 +148,10 @@ impl ConnectionOpenStrategy for ExtensionOpenStrategy {
             );
             return;
         };
+        if contribution.terminal.is_some() {
+            open_extension_terminal_connection(self.connection, &contribution, mode, window, cx);
+            return;
+        }
         if let Some(workbench) =
             host.resource_workbench_for_connection(&params.extension_id, &params.contribution_id)
         {
@@ -170,6 +179,68 @@ impl ConnectionOpenStrategy for ExtensionOpenStrategy {
             window.push_notification(format!("Failed to open extension connection: {error}"), cx);
         }
     }
+}
+
+/// 打开终端型扩展连接:宿主直接以本地进程启动一个终端标签,不经过提供者进程。
+///
+/// 启动参数由 manifest 的 `terminal` 模板与连接里保存的字段值合成;
+/// 值的合法性(选项注入等)由 [`extension_runtime::extension::manifest::ResourceConnectionTerminal::resolve`] 把关,
+/// 校验不过时只提示错误、不启动任何进程。
+fn open_extension_terminal_connection(
+    connection: StoredConnection,
+    contribution: &extension_runtime::RegisteredResourceConnectionContribution,
+    mode: TabOpenMode,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let Some(terminal) = contribution.terminal.as_ref() else {
+        return;
+    };
+    let Ok(params) = connection.to_extension_params() else {
+        window.push_notification("Extension connection data is invalid", cx);
+        return;
+    };
+    let launch = match terminal.resolve(&params.config) {
+        Ok(launch) => launch,
+        Err(error) => {
+            window.push_notification(format!("Failed to open extension connection: {error}"), cx);
+            return;
+        }
+    };
+    let title = launch.title.unwrap_or_else(|| connection.name.clone());
+    let config = terminal::LocalConfig {
+        shell: Some(launch.command),
+        args: launch.args,
+        working_dir: None,
+        env: launch.env,
+    };
+    let connection_id = connection.id.unwrap_or(0);
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let prefix = format!("extension-terminal-{connection_id}-");
+    let tab_id = format!("{prefix}{timestamp}");
+    let tabs = cx
+        .global::<one_core::tab_container::GlobalTabContainer>()
+        .primary_pane();
+    let existing = tabs
+        .read(cx)
+        .tabs()
+        .iter()
+        .filter(|tab| tab.id().starts_with(&prefix))
+        .count();
+    let tab_index = (existing > 0).then_some(existing + 1);
+    // 与其他终端标签一致:把创建与容器更新移出 HomePage 租约。
+    window.defer(cx, move |window, cx| {
+        let view = cx.new(|cx| {
+            terminal_view::TerminalWorkspace::new_launched(config, title, tab_index, window, cx)
+        });
+        tabs.update(cx, |tabs, cx| {
+            let tab = TabItem::new(tab_id, "terminal", view);
+            tabs.add_tab_with_mode(tab, mode, window, cx);
+        });
+    });
 }
 
 /// 打开原生扩展连接工作台 tab(共享实现,两种 feature 构建都使用)。

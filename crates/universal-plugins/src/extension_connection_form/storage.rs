@@ -177,6 +177,7 @@ mod tests {
             runtime_id: "com.example.search::main".into(),
             resource_type: "search".into(),
             shell_view_id: None,
+            terminal: None,
             form: ResourceConnectionForm::default(),
         }
     }

@@ -10,7 +10,10 @@ mod shell;
 pub use shell::{ShellHostModule, ShellSurface, ShellViewContrib};
 #[path = "contributes/connection.rs"]
 mod connection;
+#[path = "contributes/terminal_launch.rs"]
+mod terminal_launch;
 pub use connection::*;
+pub use terminal_launch::{ResolvedTerminalLaunch, TerminalLaunchError};
 #[path = "contributes/resource_workbench.rs"]
 mod resource_workbench;
 pub use resource_workbench::*;

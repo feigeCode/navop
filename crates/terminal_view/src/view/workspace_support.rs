@@ -78,6 +78,9 @@ impl TerminalView {
             TerminalDuplicateSource::Local(config) => {
                 Self::new_with_index(config, None, window, cx)
             }
+            TerminalDuplicateSource::Launched { config, title } => {
+                Self::new_launched(config, title, None, window, cx)
+            }
             TerminalDuplicateSource::Serial(connection) => {
                 Self::new_serial_with_index(connection, None, window, cx)
             }
