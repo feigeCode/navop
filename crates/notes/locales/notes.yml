@@ -25,6 +25,14 @@ Notes:
     en: Read-only preview · edit in Source
     zh-CN: 只读预览 · 请在源码模式编辑
     zh-HK: 唯讀預覽 · 請在原始碼模式編輯
+  markdown_outline:
+    en: Outline
+    zh-CN: 大纲
+    zh-HK: 大綱
+  markdown_outline_empty:
+    en: No headings
+    zh-CN: 暂无标题
+    zh-HK: 暫無標題
   markdown_confirm_adjustment:
     en: Confirm changes and edit
     zh-CN: 确认调整并编辑

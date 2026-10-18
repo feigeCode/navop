@@ -4,6 +4,24 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.20.2] - 2026-10-13
+
+#### 修复与优化
+
+- 修复 Windows 版安装后无法启动（issue #397）：v0.20.1 的 Windows 产物漏掉了应用程序清单，程序在 `main` 之前就以「无法定位程序输入点 TaskDialogIndirect」退出，exe、MSI 与便携版全部受影响。现在 navop.exe 自行嵌入 Common-Controls v6 清单（含 asInvoker、Windows 10 兼容声明与 PerMonitorV2 DPI 感知），发布流水线同时新增清单校验，避免它再次被静默丢掉。
+- 「检查更新」不再点了没反应：检查期间按钮显示加载态并自动防重复点击，整轮检查加 20 秒总超时（超时给出明确提示，而不是无限转圈），说明行常驻显示「上次检查」的时间与结果（已是最新 / 发现新版本 / 检查失败 / 检查超时）。顺带修掉一个隐患：主窗口在检查期间被关闭会让 future 一起丢弃，按钮永久转圈且再也回不来。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.20.2) 下载桌面端安装包
+
+---
+
+#### Fixes and Improvements
+
+- Fixed the Windows build failing to start after installation (issue #397): the v0.20.1 Windows artifacts shipped without an application manifest, so the executable exited before `main` with "the procedure entry point TaskDialogIndirect could not be located" — the exe, MSI and portable packages were all affected. navop.exe now embeds its own Common-Controls v6 manifest (asInvoker, Windows 10 compatibility, PerMonitorV2 DPI awareness), and the release pipeline validates the manifest so it cannot go missing silently again.
+- "Check for updates" no longer appears to do nothing: the button shows a loading state while checking (which also prevents duplicate clicks), the whole check is bounded by a 20-second timeout that reports a clear message instead of spinning forever, and a persistent line reports when the last check ran and what it found (up to date / new version available / failed / timed out). This also fixes a latent case where closing the main window mid-check discarded the future and left the button spinning forever.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.20.1...v0.20.2
+
 ## [v0.20.1] - 2026-10-13
 
 #### 更新内容

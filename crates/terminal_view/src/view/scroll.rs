@@ -1,7 +1,7 @@
 use super::*;
 
 impl TerminalView {
-    fn try_scroll_vi_mode(&self, lines: i32, cx: &Context<Self>) -> bool {
+    pub(super) fn try_scroll_vi_mode(&self, lines: i32, cx: &Context<Self>) -> bool {
         let term = self.terminal.read(cx).term().clone();
         let Some(mut term) = term.try_lock_unfair() else {
             return false;

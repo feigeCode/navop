@@ -598,6 +598,13 @@ async fn list_columns_direct_on_runtime(
     table_name: String,
 ) -> anyhow::Result<Vec<ColumnInfo>> {
     Tokio::spawn_result(cx, async move {
+        let (database_name, schema_name, table_name) = resolve_metadata_table_identity(
+            &global_state,
+            &connection_id,
+            database_name,
+            schema_name,
+            table_name,
+        );
         global_state
             .list_columns_direct(&connection_id, &database_name, schema_name, &table_name)
             .await
@@ -614,11 +621,52 @@ async fn list_indexes_direct_on_runtime(
     table_name: String,
 ) -> anyhow::Result<Vec<IndexInfo>> {
     Tokio::spawn_result(cx, async move {
+        let (database_name, schema_name, table_name) = resolve_metadata_table_identity(
+            &global_state,
+            &connection_id,
+            database_name,
+            schema_name,
+            table_name,
+        );
         global_state
             .list_indexes_direct(&connection_id, &database_name, schema_name, &table_name)
             .await
     })
     .await
+}
+
+/// 把表名解析成元数据查询需要的 (database, schema, table)。
+///
+/// 查询结果的表名来自 SQL 分析（`库.表` / `schema.table` 拼接形式，
+/// 见 db crate 的 `qualified_table_parts`），直接拿去查 INFORMATION_SCHEMA 会
+/// 命中不到任何列/索引，主键信息随之丢失（保存时会退化成全列比较）。
+/// 方言相关的拆分规则交给插件决定。
+fn resolve_metadata_table_identity(
+    global_state: &GlobalDbState,
+    connection_id: &str,
+    database_name: String,
+    schema_name: Option<String>,
+    table_name: String,
+) -> (String, Option<String>, String) {
+    let fallback = || {
+        (
+            database_name.clone(),
+            schema_name.clone(),
+            table_name.clone(),
+        )
+    };
+    if !table_name.contains('.') {
+        return fallback();
+    }
+    let Some(plugin) = global_state.get_config(connection_id).and_then(|config| {
+        global_state
+            .db_manager
+            .get_plugin(&config.database_type)
+            .ok()
+    }) else {
+        return fallback();
+    };
+    plugin.resolve_metadata_table_identity(&database_name, schema_name.as_deref(), &table_name)
 }
 
 async fn execute_sql_result_export(

@@ -1522,6 +1522,10 @@ Query:
     en: "Failed to start transaction: %{error}"
     zh-CN: "启动事务失败：%{error}"
     zh-HK: "啟動交易失敗：%{error}"
+  auto_session_start_failed:
+    en: "Failed to start database session: %{error}"
+    zh-CN: "建立数据库会话失败：%{error}"
+    zh-HK: "建立資料庫工作階段失敗：%{error}"
   transaction_control_failed:
     en: Transaction command failed
     zh-CN: 事务控制命令执行失败

@@ -114,6 +114,9 @@ pub(crate) struct SessionSqlRun {
     pub database_type: one_core::storage::DatabaseType,
     pub schema_invalidation: SessionSchemaInvalidation,
     pub source: SqlExecutionResultSource,
+    /// 会话连接丢失信号（Auto 粘性会话用）。执行返回连接级错误时置位，
+    /// 编辑器下次执行前丢弃重建。`None` 表示调用方不关心（Manual 事务）。
+    pub connection_lost: Option<Arc<AtomicBool>>,
 }
 
 #[derive(Clone)]
@@ -688,10 +691,17 @@ impl SqlResultTabContainer {
             let execution_result = execution_result.unwrap_or_else(Err);
             let results = match execution_result {
                 Ok(results) => results,
-                Err(error) => vec![SqlResult::Error(SqlErrorInfo {
-                    sql: request.sql.clone(),
-                    message: error.to_string(),
-                })],
+                Err(error) => {
+                    // 连接级失败（断连/会话丢失）：置位信号，粘性会话持有方
+                    // 下次执行前重建；Manual 事务无信号，行为不变。
+                    if let Some(flag) = request.connection_lost.as_ref() {
+                        flag.store(true, Ordering::SeqCst);
+                    }
+                    vec![SqlResult::Error(SqlErrorInfo {
+                        sql: request.sql.clone(),
+                        message: error.to_string(),
+                    })]
+                }
             };
             if let Some(cache) = cache {
                 let mut plan = SchemaInvalidationPlan::default();

@@ -1,4 +1,4 @@
-use gpui::{App, AppContext, IntoElement, ParentElement, PathPromptOptions, Styled, Window, div};
+use gpui::{App, AppContext, IntoElement, ParentElement, PathPromptOptions, SharedString, Styled, Window, div};
 use gpui_component::{
     Sizable, WindowExt,
     button::Button,
@@ -8,12 +8,41 @@ use gpui_component::{
 };
 use notes::NotesStorage;
 use one_assets::IconName;
+use one_core::settings::AppSettings;
 use rust_i18n::t;
 
-pub fn notes_setting_group() -> SettingGroup {
+pub fn notes_setting_group(
+    font_options: Vec<(SharedString, SharedString)>,
+) -> SettingGroup {
     SettingGroup::new()
         .title(t!("Settings.General.Notes.group_title"))
         .item(notes_path_item())
+        .item(markdown_code_font_item(font_options))
+}
+
+/// Markdown 代码字体：行内代码、代码块与表格内代码统一取这一项。
+fn markdown_code_font_item(
+    font_options: Vec<(SharedString, SharedString)>,
+) -> SettingItem {
+    SettingItem::new(
+        t!("Settings.General.Notes.markdown_code_font_family"),
+        SettingField::scrollable_dropdown(
+            font_options,
+            |cx: &App| {
+                SharedString::from(AppSettings::global(cx).markdown_code_font_family.clone())
+            },
+            |val: SharedString, cx: &mut App| {
+                AppSettings::update_and_save(cx, |settings| {
+                    settings.markdown_code_font_family = val.to_string();
+                });
+                cx.refresh_windows();
+            },
+        )
+        .default_value(SharedString::from(
+            AppSettings::default().markdown_code_font_family,
+        )),
+    )
+    .description(t!("Settings.General.Notes.markdown_code_font_family_desc").to_string())
 }
 
 fn notes_path_item() -> SettingItem {

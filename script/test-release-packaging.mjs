@@ -15,6 +15,30 @@ const workflowStep = (workflow, name) => {
   return workflow.slice(start, end >= 0 ? end : undefined);
 };
 
+// 合成一个最小 PE（单 `.rsrc` 节），给 `script/validate-windows-exe.mjs` 做正/负样本。
+// 只保证节表能被门禁解析（MZ + PE 签名 + 节表 + 节数据），不追求可执行。
+const peFixtureWithResource = (resourcePayload) => {
+  const peOffset = 0x40;
+  const sectionTable = peOffset + 24; // COFF 头 20 字节 + 可选的 PE32+ 头长度 0
+  const resourceOffset = sectionTable + 40;
+  const payload = Buffer.from(resourcePayload, "utf8");
+  const fixture = Buffer.alloc(resourceOffset + payload.length);
+
+  fixture.write("MZ", 0, "latin1");
+  fixture.writeUInt32LE(peOffset, 0x3c);
+  fixture.write("PE\0\0", peOffset, "latin1");
+  // COFF 头从 PE 签名之后开始（`peOffset + 4`）：Machine / NumberOfSections / …
+  fixture.writeUInt16LE(0x8664, peOffset + 4);
+  fixture.writeUInt16LE(1, peOffset + 6);
+  fixture.writeUInt16LE(0, peOffset + 20);
+  fixture.write(".rsrc\0\0\0", sectionTable, "latin1");
+  fixture.writeUInt32LE(payload.length, sectionTable + 8);
+  fixture.writeUInt32LE(payload.length, sectionTable + 16);
+  fixture.writeUInt32LE(resourceOffset, sectionTable + 20);
+  payload.copy(fixture, resourceOffset);
+  return fixture;
+};
+
 test("release packaging uses the navop executable on every platform", () => {
   const release = read(".github/workflows/release.yml");
   const bundle = read("script/bundle-macos.sh");
@@ -1408,4 +1432,107 @@ test("application updates prefer navop while accepting legacy package names", ()
     install,
     /\["usr\/bin\/navop", "navop", "usr\/bin\/onetcli", "onetcli"\]/,
   );
+});
+
+test("Windows 产物由宿主自己内嵌 Common-Controls v6 清单", () => {
+  const build = read("main/build.rs");
+  const manifest = read("resources/windows/navop.manifest.xml");
+  const release = read(".github/workflows/release.yml");
+
+  // 清单内容：gpui 的 Windows 层静态导入 comctl32!TaskDialogIndirect，缺了这条依赖声明
+  // 加载器只会给进程挂 System32 里的 comctl32 5.82（没有该导出），navop.exe 会在 main
+  // 之前以 0xC0000139 退出。
+  assert.match(manifest, /name="Microsoft\.Windows\.Common-Controls"/);
+  assert.match(manifest, /version="6\.0\.0\.0"/);
+  assert.match(manifest, /publicKeyToken="6595b64144ccf1df"/);
+  assert.match(manifest, /level="asInvoker"/);
+  assert.match(manifest, /supportedOS/);
+  // DPI / 堆设置不能省：gpui 的 Windows 层从不调用 SetProcessDpiAwareness（清单是 DPI 感知的
+  // 唯一来源），而 v0.20.0 是从 gpui 自带的清单里拿到 PerMonitorV2 + SegmentHeap 的。这里漏了
+  // 会让修复后的进程退回 DPI-unaware —— 高 DPI 下整窗被系统位图拉伸（模糊），
+  // 等于修好启动又引入一个新问题。
+  assert.match(manifest, /<dpiAware xmlns="[^"]*">true\/pm<\/dpiAware>/);
+  assert.match(
+    manifest,
+    /<dpiAwareness xmlns="[^"]*">PerMonitorV2<\/dpiAwareness>/,
+  );
+  assert.match(manifest, /<heapType xmlns="[^"]*">SegmentHeap<\/heapType>/);
+  // 不能带 XML 声明：winresource 按 RC 字符串逐行写入清单（每行前后各有一个空格），
+  // 声明前出现空白不是合法的 XML prolog。上游 Zed 的 gpui.manifest.xml 同样没有声明。
+  // （属性用双引号，上游那份用单引号，两者都是合法 XML；本文件的双引号路径是实测过的：
+  // winresource 的 escape_string 会把 `"` 写成 `""`，rc 能正确还原。）
+  assert.doesNotMatch(manifest, /<\?xml/);
+
+  // 上游 gpui-fast 只在宿主没声明「我自己提供清单」时才嵌（gpui-kit 声明了
+  // windows-manifest-provided-by-host，而 Cargo 特性只做并集、下游关不掉），
+  // 所以这份清单只能由 navop 自己嵌。
+  assert.match(
+    build,
+    /set_manifest\(include_str!\("\.\.\/resources\/windows\/navop\.manifest\.xml"\)\)/,
+  );
+  // winresource 只在 VersionInfo::FILETYPE 存在时才写清单块：漏了这行会静默不嵌。
+  assert.match(build, /set_version_info\(winresource::VersionInfo::FILETYPE/);
+  assert.match(
+    build,
+    /rerun-if-changed=\.\.\/resources\/windows\/navop\.manifest\.xml/,
+  );
+
+  // 发布流程必须在打包前校验真实产物（静态检查拦不住「清单被上游吃掉」这类回归）。
+  const validateStep = workflowStep(release, "Validate Windows executable manifest");
+  assert.match(validateStep, /node script\/validate-windows-exe\.mjs/);
+  assert.match(validateStep, /\$\{\{ matrix\.target \}\}\/release\/navop\.exe/);
+  assert.ok(
+    release.indexOf("- name: Validate Windows executable manifest") >
+      release.indexOf("- name: Build release binary (Windows)"),
+    "manifest validation must run after the Windows binary is built",
+  );
+  assert.ok(
+    release.indexOf("- name: Validate Windows executable manifest") <
+      release.indexOf("- name: Package (Windows)"),
+    "manifest validation must run before the binary is packaged",
+  );
+});
+
+test("Windows 清单门禁能识别缺失清单的 PE（含真实失败现象的判据）", () => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "navop-manifest-"));
+  const goodExe = path.join(temporary, "good.exe");
+  const badExe = path.join(temporary, "bad.exe");
+  fs.writeFileSync(
+    goodExe,
+    peFixtureWithResource(read("resources/windows/navop.manifest.xml")),
+  );
+  // 真实坏产物的等价物：静态导入了 TaskDialogIndirect，但没有任何清单。
+  fs.writeFileSync(badExe, peFixtureWithResource("TaskDialogIndirect"));
+
+  try {
+    const ok = spawnSync(
+      process.execPath,
+      ["script/validate-windows-exe.mjs", goodExe],
+      { encoding: "utf8" },
+    );
+    assert.equal(ok.status, 0, ok.stderr || ok.stdout);
+
+    const bad = spawnSync(
+      process.execPath,
+      ["script/validate-windows-exe.mjs", badExe],
+      { encoding: "utf8" },
+    );
+    assert.equal(bad.status, 1, bad.stdout);
+    assert.match(bad.stderr, /Microsoft\.Windows\.Common-Controls/);
+    assert.match(bad.stderr, /TaskDialogIndirect/);
+    assert.match(bad.stderr, /0xC0000139/);
+
+    // 非 PE 输入也要报错而不是崩在解析上。
+    const notPe = path.join(temporary, "not-pe.exe");
+    fs.writeFileSync(notPe, "not a PE file");
+    const junk = spawnSync(
+      process.execPath,
+      ["script/validate-windows-exe.mjs", notPe],
+      { encoding: "utf8" },
+    );
+    assert.equal(junk.status, 1);
+    assert.match(junk.stderr, /不是 PE 文件/);
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
 });

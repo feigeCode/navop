@@ -150,14 +150,19 @@ impl EntityInputHandler for Block {
         };
         let (line_idx, y_in_line) =
             element::wrapped_line_for_y(lines, self.last_line_height, relative.y)?;
-        let layout = &lines[line_idx];
+        let (Some(layout), Some(range)) = (lines.get(line_idx), ranges.get(line_idx)) else {
+            return None;
+        };
         let origin_x = element::aligned_line_left(layout, bounds, self.text_align());
         let utf8_offset_in_line = match layout
             .closest_index_for_position(point(pt.x - origin_x, y_in_line), self.last_line_height)
         {
             Ok(idx) | Err(idx) => idx,
         };
-        let utf8_index = ranges[line_idx].start + utf8_offset_in_line;
-        Some(Self::utf8_to_utf16_in(self.display_text(), utf8_index))
+        let utf8_index = crate::text_offsets::floor_char_boundary(
+            text,
+            range.start + utf8_offset_in_line.min(range.len()),
+        );
+        Some(Self::utf8_to_utf16_in(text, utf8_index))
     }
 }

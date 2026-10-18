@@ -8,6 +8,9 @@ use std::ops::Range;
 
 use cssparser::color::{parse_hash_color, parse_named_color};
 
+use super::image::{HtmlContainerImage, parse_html_container_image_line};
+use super::inline::InlineTextTree;
+
 /// Safety classification for an HTML fragment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HtmlSafetyClass {
@@ -24,6 +27,10 @@ pub(crate) enum HtmlNodeKind {
     InlineSemantic,
     /// Safe block tag that maps to a native block-like GPUI element.
     BlockSemantic,
+    /// A complete Markdown image line inside an HTML `div`.
+    MarkdownImage(HtmlContainerImage),
+    /// Cached inline Markdown from a text line inside an HTML `div`.
+    MarkdownInline(InlineTextTree),
     /// Opaque raw source that must not be interpreted as HTML.
     RawTextBlock,
 }
@@ -299,17 +306,13 @@ fn parse_nodes(
     let mut nodes = Vec::new();
     while index < raw.len() {
         let Some(tag_start_relative) = raw[index..].find('<') else {
-            if closing_tag.is_some() {
-                push_text_node(raw, index..raw.len(), &mut nodes);
-            } else {
-                push_text_node(raw, index..raw.len(), &mut nodes);
-            }
+            push_scoped_text_nodes(raw, index..raw.len(), closing_tag, &mut nodes);
             return (nodes, raw.len(), closing_tag.is_none());
         };
 
         let tag_start = index + tag_start_relative;
         if tag_start > index {
-            push_text_node(raw, index..tag_start, &mut nodes);
+            push_scoped_text_nodes(raw, index..tag_start, closing_tag, &mut nodes);
         }
 
         let Some(token) = parse_tag_token(raw, tag_start) else {
@@ -606,6 +609,63 @@ fn push_text_node(raw: &str, range: Range<usize>, nodes: &mut Vec<HtmlNode>) {
         raw_source: raw[range.clone()].to_string(),
         source_range: range,
     });
+}
+
+/// Recognizes complete Markdown image lines only in `div` text, preserving all source spans.
+fn push_scoped_text_nodes(
+    raw: &str,
+    range: Range<usize>,
+    closing_tag: Option<&str>,
+    nodes: &mut Vec<HtmlNode>,
+) {
+    if closing_tag != Some("div") {
+        push_text_node(raw, range, nodes);
+        return;
+    }
+
+    let mut text_start = range.start;
+    let mut line_start = range.start;
+    let mut fence: Option<(char, usize)> = None;
+    for line in raw[range.clone()].split_inclusive('\n') {
+        let trimmed = line.trim();
+        let indent = line.len() - line.trim_start_matches(' ').len();
+        let marker = trimmed.chars().next().filter(|ch| matches!(ch, '`' | '~'));
+        let run_len = marker
+            .map(|ch| trimmed.chars().take_while(|next| *next == ch).count())
+            .unwrap_or(0);
+        if let Some((open, open_len)) = fence {
+            if marker == Some(open) && run_len >= open_len && trimmed[run_len..].trim().is_empty() {
+                fence = None;
+            }
+        } else if indent <= 3 && run_len >= 3 {
+            fence = marker.map(|ch| (ch, run_len));
+        } else if indent <= 3 && line.as_bytes().get(indent) != Some(&b'\t') {
+            let kind = if let Some(image) = parse_html_container_image_line(trimmed) {
+                Some(HtmlNodeKind::MarkdownImage(image))
+            } else if !trimmed.is_empty() {
+                let tree = InlineTextTree::from_markdown(trimmed);
+                (tree.visible_text() != trimmed).then_some(HtmlNodeKind::MarkdownInline(tree))
+            } else {
+                None
+            };
+            if let Some(kind) = kind {
+                let start = line_start + indent;
+                let end = start + trimmed.len();
+                push_text_node(raw, text_start..start, nodes);
+                nodes.push(HtmlNode {
+                    kind,
+                    tag_name: "#markdown-inline".into(),
+                    attrs: Vec::new(),
+                    children: Vec::new(),
+                    raw_source: raw[start..end].to_string(),
+                    source_range: start..end,
+                });
+                text_start = end;
+            }
+        }
+        line_start += line.len();
+    }
+    push_text_node(raw, text_start..range.end, nodes);
 }
 
 fn raw_node(raw: &str, range: Range<usize>) -> HtmlNode {

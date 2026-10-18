@@ -40,8 +40,8 @@ use super::{
 };
 use crate::BlockRenderKind;
 use crate::components::{
-    Editor, HtmlCssColor, HtmlDocument, HtmlNode, HtmlNodeKind, InlineScript,
-    TableCellInlineImageSegment, TableColumnAlignment, TableColumnLayout, attr_value,
+    Editor, HtmlContainerImage, HtmlCssColor, HtmlDocument, HtmlNode, HtmlNodeKind, InlineLinkHit,
+    InlineScript, TableCellInlineImageSegment, TableColumnAlignment, TableColumnLayout, attr_value,
     display_math_font_size, inline_math_font_size, parse_display_math_source,
     parse_html_image_block, parse_mermaid_fence_source, parse_table_cell_inline_images,
     render_display_math_svg, render_inline_math_svg, resolve_image_source, style_for_node,
@@ -768,6 +768,44 @@ fn html_text_view_style(theme: &Theme) -> TextViewStyle {
     style
 }
 
+/// Extends a run across linked badges separated by one physical newline.
+fn html_badge_run_end(nodes: &[HtmlNode], start: usize) -> Option<usize> {
+    if !matches!(
+        &nodes.get(start)?.kind,
+        HtmlNodeKind::MarkdownImage(HtmlContainerImage {
+            link_target: Some(_),
+            ..
+        })
+    ) {
+        return None;
+    }
+
+    let mut end = start + 1;
+    while let (Some(separator), Some(next)) = (nodes.get(end), nodes.get(end + 1)) {
+        let one_newline = separator.tag_name == "#text"
+            && separator.raw_source.trim().is_empty()
+            && separator
+                .raw_source
+                .bytes()
+                .filter(|byte| *byte == b'\n')
+                .count()
+                == 1;
+        if !one_newline
+            || !matches!(
+                &next.kind,
+                HtmlNodeKind::MarkdownImage(HtmlContainerImage {
+                    link_target: Some(_),
+                    ..
+                })
+            )
+        {
+            break;
+        }
+        end += 2;
+    }
+    Some(end)
+}
+
 impl Block {
     fn on_html_details_toggle_mouse_down(
         &mut self,
@@ -1118,6 +1156,7 @@ impl Block {
         // Velotype native renderer on the UI thread.
         div()
             .w_full()
+            .font(crate::fonts::FontSettings::code_font(cx))
             .rounded_sm()
             .bg(c.source_mode_block_bg)
             .px(px(d.block_padding_x))
@@ -1420,6 +1459,7 @@ impl Block {
         }
         if span.style.code {
             element = element
+                .font(crate::fonts::FontSettings::code_font(cx))
                 .rounded(px(theme.dimensions.code_bg_radius))
                 .px(px(theme.dimensions.code_bg_pad_x))
                 .py(px(theme.dimensions.code_bg_pad_y))
@@ -1711,6 +1751,43 @@ impl Block {
                 .into_any_element();
         }
 
+        if let HtmlNodeKind::MarkdownImage(image) = &node.kind {
+            if let Some(runtime) = self.image_runtime_for_syntax(image.syntax.clone()) {
+                return self.render_image_content(
+                    &runtime,
+                    Length::Definite(relative(1.0)),
+                    px(d.image_root_max_height),
+                    px(d.image_root_placeholder_height),
+                    theme,
+                );
+            }
+            return div()
+                .text_size(px(inherited_style.font_size))
+                .text_color(inherited_style.color)
+                .child(SharedString::from(node.raw_source.clone()))
+                .into_any_element();
+        }
+
+        if let HtmlNodeKind::MarkdownInline(tree) = &node.kind {
+            return div()
+                .w_full()
+                .min_w(px(0.0))
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .text_size(px(inherited_style.font_size))
+                .line_height(rems(t.text_line_height))
+                .children(self.render_inline_tree_children(
+                    tree,
+                    theme,
+                    inherited_style.color,
+                    inherited_style.font_size,
+                    FontWeight::NORMAL,
+                    cx,
+                ))
+                .into_any_element();
+        }
+
         if node.tag_name == "#text" {
             return div()
                 .min_w(px(0.0))
@@ -1736,6 +1813,7 @@ impl Block {
                 let mut element =
                     div()
                         .flex()
+                        .font(crate::fonts::FontSettings::code_font(cx))
                         .rounded(px(4.0))
                         .px(px(4.0))
                         .text_size(px(node_style.computed.font_size))
@@ -1768,6 +1846,32 @@ impl Block {
                 element.into_any_element()
             }
             "br" => div().child("\n").into_any_element(),
+            "div" => {
+                let has_markdown_children = node.children.iter().any(|child| {
+                    matches!(
+                        child.kind,
+                        HtmlNodeKind::MarkdownImage(_) | HtmlNodeKind::MarkdownInline(_)
+                    )
+                });
+                let mut element = div()
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .gap(px(if has_markdown_children { d.block_gap } else { 0.0 }))
+                    .text_size(px(node_style.computed.font_size))
+                    .text_color(node_style.computed.color)
+                    .children(self.render_html_div_children(
+                        node,
+                        theme,
+                        node_style.computed,
+                        has_markdown_children,
+                        cx,
+                    ));
+                if let Some(bg) = node_style.background {
+                    element = element.bg(bg);
+                }
+                element.into_any_element()
+            }
             "hr" => div()
                 .w_full()
                 .h(px(d.separator_thickness))
@@ -1795,6 +1899,7 @@ impl Block {
             "pre" => {
                 let mut element = div()
                     .w_full()
+                    .font(crate::fonts::FontSettings::code_font(cx))
                     .rounded_sm()
                     .px(px(d.code_block_padding_x))
                     .py(px(d.code_block_padding_y))
@@ -1913,6 +2018,96 @@ impl Block {
                 element.into_any_element()
             }
         }
+    }
+
+    /// Renders `div` children, grouping linked badges into one wrapping row.
+    fn render_html_div_children(
+        &self,
+        node: &HtmlNode,
+        theme: &Theme,
+        inherited_style: HtmlComputedStyle,
+        has_markdown_children: bool,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let mut children = Vec::new();
+        let mut index = 0;
+        while index < node.children.len() {
+            if let Some(end) = html_badge_run_end(&node.children, index) {
+                let badges = node.children[index..end].iter().filter_map(|child| {
+                    let HtmlNodeKind::MarkdownImage(image) = &child.kind else {
+                        return None;
+                    };
+                    Some(self.render_html_badge_image(image, &child.raw_source, theme, cx))
+                });
+                children.push(
+                    div()
+                        .w_full()
+                        .min_w(px(0.0))
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .justify_center()
+                        .gap(px(theme.dimensions.image_caption_gap))
+                        .children(badges)
+                        .into_any_element(),
+                );
+                index = end;
+                continue;
+            }
+
+            let child = &node.children[index];
+            if !has_markdown_children
+                || child.tag_name != "#text"
+                || !child.raw_source.trim().is_empty()
+            {
+                children.push(self.render_html_node(child, theme, inherited_style, cx));
+            }
+            index += 1;
+        }
+        children
+    }
+
+    /// Uses the existing image loader and link prompt for a compact badge.
+    fn render_html_badge_image(
+        &self,
+        image: &HtmlContainerImage,
+        source: &str,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(runtime) = self.image_runtime_for_syntax(image.syntax.clone()) else {
+            return div()
+                .child(SharedString::from(source.to_string()))
+                .into_any_element();
+        };
+        let content = self.render_inline_image_content(&runtime, theme);
+        let Some(target) = &image.link_target else {
+            return content;
+        };
+        let hit = InlineLinkHit {
+            prompt_target: target.clone(),
+            open_target: target.clone(),
+        };
+        let badge = div()
+            .flex()
+            .items_center()
+            .child(content)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(Self::on_rendered_link_mouse_down),
+            )
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(move |block, event: &MouseUpEvent, _window, cx| {
+                    if event.modifiers.secondary() {
+                        block.open_rendered_link(&hit, cx);
+                    }
+                }),
+            );
+        LinkFollowCursor {
+            child: badge.into_any_element(),
+        }
+        .into_any_element()
     }
 
     fn render_html_inline_container(
@@ -2383,6 +2578,12 @@ impl Render for Block {
                 .text_size(px(t.text_size))
                 .text_color(c.text_default)
                 .line_height(rems(t.text_line_height));
+
+            let source_base = if self.kind().is_code_block() {
+                source_base.font(crate::fonts::FontSettings::code_font(cx))
+            } else {
+                source_base
+            };
 
             let source_base = if self.kind() == BlockKind::Comment {
                 source_base.bg(c.comment_bg).rounded_sm()
@@ -2952,6 +3153,7 @@ impl Render for Block {
                 // above a permanently mounted source surface.
                 focused_base
                     .overflow_hidden()
+                    .font(crate::fonts::FontSettings::code_font(cx))
                     .rounded(px(d.code_language_input_radius))
                     .border(px(1.0))
                     .border_color(c.code_language_input_border)
@@ -2972,6 +3174,7 @@ impl Render for Block {
                         div()
                             .min_w(px(0.0))
                             .w_full()
+                            .font(crate::fonts::FontSettings::code_font(cx))
                             .text_size(px(t.code_size))
                             .text_color(c.code_text)
                             .line_height(rems(t.text_line_height))
@@ -3005,7 +3208,15 @@ impl Render for Block {
                     .record
                     .table
                     .as_ref()
-                    .map(|table| TableColumnLayout::measure(table, table_width, window, &theme))
+                    .map(|table| {
+                        TableColumnLayout::measure(
+                            table,
+                            table_width,
+                            window,
+                            &theme,
+                            &crate::fonts::FontSettings::code_font(cx),
+                        )
+                    })
                     .unwrap_or_else(|| TableColumnLayout::equal(runtime.header.len()));
                 let body_row_count = runtime.rows.len();
                 let current_visual_rows = body_row_count + 1;

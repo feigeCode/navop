@@ -1028,7 +1028,8 @@ impl Block {
                     .display_relative_range
                     .end
                     .min(run.display_range.len());
-            self.selected_range = start..end;
+            self.selected_range =
+                crate::text_offsets::normalize_utf8_range(self.display_text(), start..end);
             self.selection_reversed = snapshot.selection_reversed;
             self.collapsed_caret_affinity = CollapsedCaretAffinity::Default;
         } else if clean_selected.is_empty() {
@@ -1151,7 +1152,7 @@ impl Block {
         affinity: CollapsedCaretAffinity,
         preferred_x: Option<Pixels>,
     ) {
-        let clamped_offset = offset.min(self.visible_len());
+        let clamped_offset = crate::text_offsets::floor_char_boundary(self.display_text(), offset);
         self.selected_range = clamped_offset..clamped_offset;
         self.selection_reversed = false;
         self.vertical_motion_x = preferred_x;
@@ -1192,21 +1193,35 @@ impl Block {
     }
 
     pub(crate) fn clean_to_current_range(&self, range: Range<usize>) -> Range<usize> {
+        let range =
+            crate::text_offsets::normalize_utf8_range(self.render_cache.visible_text(), range);
         if range.is_empty() {
             let offset = self.clean_to_current_cursor_offset(range.start);
+            let offset = crate::text_offsets::floor_char_boundary(self.display_text(), offset);
             offset..offset
         } else {
-            self.clean_to_current_range_start(range.start)
-                ..self.clean_to_current_range_end(range.end)
+            crate::text_offsets::normalize_utf8_range(
+                self.display_text(),
+                self.clean_to_current_range_start(range.start)
+                    ..self.clean_to_current_range_end(range.end),
+            )
         }
     }
 
     pub(crate) fn current_to_clean_range(&self, range: Range<usize>) -> Range<usize> {
-        self.current_to_clean_offset(range.start)..self.current_to_clean_offset(range.end)
+        let range = crate::text_offsets::normalize_utf8_range(self.display_text(), range);
+        crate::text_offsets::normalize_utf8_range(
+            self.render_cache.visible_text(),
+            self.current_to_clean_offset(range.start)..self.current_to_clean_offset(range.end),
+        )
     }
 
     pub(crate) fn current_to_clean_offset(&self, offset: usize) -> usize {
-        self.unexpand_offset(offset)
+        let offset = crate::text_offsets::floor_char_boundary(self.display_text(), offset);
+        crate::text_offsets::floor_char_boundary(
+            self.render_cache.visible_text(),
+            self.unexpand_offset(offset),
+        )
     }
 
     #[allow(dead_code)]
@@ -1241,7 +1256,7 @@ impl Block {
 
     pub(crate) fn current_range_to_markdown_range(&self, range: Range<usize>) -> Range<usize> {
         if self.uses_raw_text_editing() || self.kind().is_code_block() {
-            return range.start.min(self.visible_len())..range.end.min(self.visible_len());
+            return crate::text_offsets::normalize_utf8_range(self.display_text(), range);
         }
 
         if let Some(link_run) = self.projected_link_run_fully_covering_range(&range) {
@@ -1293,8 +1308,7 @@ impl Block {
 
     pub(crate) fn markdown_range_to_current_range(&self, range: Range<usize>) -> Range<usize> {
         if self.uses_raw_text_editing() || self.kind().is_code_block() {
-            let len = self.visible_len();
-            return range.start.min(len)..range.end.min(len);
+            return crate::text_offsets::normalize_utf8_range(self.display_text(), range);
         }
 
         let clean_range = self
@@ -1313,43 +1327,19 @@ impl Block {
         cx.emit(BlockEvent::PrepareUndo { kind });
     }
 
-    pub(super) fn utf16_to_utf8_in(text: &str, offset: usize) -> usize {
-        let mut utf8_offset = 0;
-        let mut utf16_count = 0;
-
-        for ch in text.chars() {
-            if utf16_count >= offset {
-                break;
-            }
-            utf16_count += ch.len_utf16();
-            utf8_offset += ch.len_utf8();
-        }
-
-        utf8_offset
-    }
-
+    /// Converts a UTF-8 byte position to UTF-16 after flooring to a scalar boundary.
     pub(super) fn utf8_to_utf16_in(text: &str, offset: usize) -> usize {
-        let mut utf16_offset = 0;
-        let mut utf8_count = 0;
-
-        for ch in text.chars() {
-            if utf8_count >= offset {
-                break;
-            }
-            utf8_count += ch.len_utf8();
-            utf16_offset += ch.len_utf16();
-        }
-
-        utf16_offset
+        crate::text_offsets::utf8_to_utf16(text, offset)
     }
 
+    /// Converts an IME range to UTF-8 bytes without splitting Unicode scalars.
     pub(super) fn utf16_range_to_utf8_in(text: &str, range_utf16: &Range<usize>) -> Range<usize> {
-        Self::utf16_to_utf8_in(text, range_utf16.start)
-            ..Self::utf16_to_utf8_in(text, range_utf16.end)
+        crate::text_offsets::utf16_range_to_utf8(text, range_utf16)
     }
 
+    /// Converts an internal byte range to an ordered UTF-16 range.
     pub(super) fn utf8_range_to_utf16_in(text: &str, range: &Range<usize>) -> Range<usize> {
-        Self::utf8_to_utf16_in(text, range.start)..Self::utf8_to_utf16_in(text, range.end)
+        crate::text_offsets::utf8_range_to_utf16(text, range)
     }
 
     /// Detect Markdown shortcut prefixes in the edited title and convert the
@@ -1543,10 +1533,11 @@ impl Block {
                     + local_selected
                         .end
                         .min(projected_link_run.display_range.len());
-                self.selected_range = start..end;
+                self.selected_range =
+                    crate::text_offsets::normalize_utf8_range(self.display_text(), start..end);
                 self.selection_reversed = false;
                 self.marked_range = if mark_inserted_text && !new_text.is_empty() {
-                    Some(start..end)
+                    Some(self.selected_range.clone())
                 } else {
                     None
                 };
@@ -1873,6 +1864,11 @@ impl Block {
         if self.kind().is_separator() && !self.uses_raw_text_editing() {
             return;
         }
+
+        let visible_range =
+            crate::text_offsets::normalize_utf8_range(self.display_text(), visible_range);
+        let selected_range_relative = selected_range_relative
+            .map(|range| crate::text_offsets::normalize_utf8_range(new_text, range));
 
         let inserted_attributes = self.replacement_attributes_for_visible_range(&visible_range);
 
@@ -2395,8 +2391,9 @@ impl Block {
     }
 
     fn set_selection_from_anchor_focus(&mut self, anchor: usize, focus: usize) {
-        let clamped_anchor = anchor.min(self.visible_len());
-        let clamped_focus = focus.min(self.visible_len());
+        let text = self.display_text();
+        let clamped_anchor = crate::text_offsets::floor_char_boundary(text, anchor);
+        let clamped_focus = crate::text_offsets::floor_char_boundary(text, focus);
         self.selected_range = clamped_anchor.min(clamped_focus)..clamped_anchor.max(clamped_focus);
         self.selection_reversed = !self.selected_range.is_empty() && clamped_focus < clamped_anchor;
     }
@@ -2425,7 +2422,7 @@ impl Block {
     }
 
     pub fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
-        let clamped_offset = offset.min(self.visible_len());
+        let clamped_offset = crate::text_offsets::floor_char_boundary(self.display_text(), offset);
         if self.selection_reversed {
             self.selected_range.start = clamped_offset;
         } else {
@@ -2451,13 +2448,21 @@ impl Block {
 
     pub fn previous_boundary(&self, offset: usize) -> usize {
         let text = self.display_text();
-        let mut cursor = GraphemeCursor::new(offset.min(text.len()), text.len(), true);
+        let mut cursor = GraphemeCursor::new(
+            crate::text_offsets::floor_char_boundary(text, offset),
+            text.len(),
+            true,
+        );
         cursor.prev_boundary(text, 0).ok().flatten().unwrap_or(0)
     }
 
     pub fn next_boundary(&self, offset: usize) -> usize {
         let text = self.display_text();
-        let mut cursor = GraphemeCursor::new(offset.min(text.len()), text.len(), true);
+        let mut cursor = GraphemeCursor::new(
+            crate::text_offsets::floor_char_boundary(text, offset),
+            text.len(),
+            true,
+        );
         cursor
             .next_boundary(text, 0)
             .ok()
@@ -2534,7 +2539,10 @@ impl Block {
         ) {
             Ok(idx) | Err(idx) => idx,
         };
-        ranges[line_idx].start + offset_in_line
+        crate::text_offsets::floor_char_boundary(
+            text,
+            ranges[line_idx].start + offset_in_line.min(ranges[line_idx].len()),
+        )
     }
 
     pub(crate) fn active_range_or_cursor_bounds(&self) -> Option<Bounds<Pixels>> {

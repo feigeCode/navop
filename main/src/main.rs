@@ -552,7 +552,7 @@ fn main() {
                 // 「隐藏」还是「退出确认」。此处已在主线程且 GPUI 事件
                 // 循环已启动（macOS 的 NSStatusItem 要求如此）。
                 system_tray::init(cx);
-                update::schedule_update_check(window, cx);
+                update::schedule_update_check(cx);
                 extension_update::schedule_plugin_update_check(window, cx);
                 let view = cx.new(|cx| NavopApp::new(window, cx));
                 let root = cx.new(|cx| Root::new(view, window, cx));

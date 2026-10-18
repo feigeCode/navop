@@ -168,6 +168,7 @@ mod render_layout;
 mod render_surface;
 mod resize_event_handler;
 mod scroll;
+mod scroll_keys;
 mod selection_autoscroll;
 mod selection_search;
 mod session_log_config;

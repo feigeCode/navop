@@ -1,3 +1,4 @@
+use crate::auto_session::{AutoExecutionSession, AutoSessionAction, auto_session_action_for};
 use crate::sidebar::execution_history_panel::ExecutionHistoryPanel;
 use crate::sql_editor::{
     ForeignSchema, ForeignSchemaScope, RunCursorStatementSql, RunSelectedSql, SQL_GUTTER_CANCELLED,
@@ -940,13 +941,13 @@ fn transaction_mode_options() -> SearchableVec<TransactionModeOption> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct SqlExecutionScope {
-    database: Option<String>,
-    schema: Option<String>,
+pub(crate) struct SqlExecutionScope {
+    pub(crate) database: Option<String>,
+    pub(crate) schema: Option<String>,
 }
 
 impl SqlExecutionScope {
-    fn new(database: Option<String>, schema: Option<String>) -> Self {
+    pub(crate) fn new(database: Option<String>, schema: Option<String>) -> Self {
         Self { database, schema }
     }
 }
@@ -1506,6 +1507,15 @@ pub struct SqlEditorTab {
     range_decorations: RangeDecorationCollection,
     /// 与 gutter lane 标记顺序一致的 marker id，用于把点击事件映射回语句。
     gutter_marker_ids: Vec<String>,
+    /// Auto 模式粘性会话（issue #312）：同 tab 跨执行复用同一物理连接，
+    /// 使 `SET @var` 等连接级状态存活。scope/连接/模式变化时释放重建。
+    auto_session: Option<AutoExecutionSession>,
+    /// Auto 粘性会话生命周期代次：释放/重建推进，旧异步完成不得回写。
+    auto_session_generation: Arc<AtomicU64>,
+    /// Auto 粘性会话建立中（防止并发双建）。
+    auto_session_starting: bool,
+    /// 页签释放钩子订阅（关闭时释放粘性会话）。
+    _auto_session_release: Option<Subscription>,
 }
 
 struct SqlSchemaUpdateRequest {
@@ -1657,6 +1667,10 @@ impl SqlEditorTab {
             last_insert_hints_key: None,
             range_decorations,
             gutter_marker_ids: Vec::new(),
+            auto_session: None,
+            auto_session_generation: Arc::new(AtomicU64::new(0)),
+            auto_session_starting: false,
+            _auto_session_release: None,
         };
 
         instance.bind_gutter_marker_event(window, cx);
@@ -1666,6 +1680,25 @@ impl SqlEditorTab {
         instance.bind_execution_marker_event(cx);
         instance.bind_editor_input_observe(window, cx);
         instance.bind_connection_data_event(window, cx);
+        // 页签关闭时释放粘性会话：连接归还池中关闭，不再占用数据库连接。
+        instance._auto_session_release = Some(cx.on_release(
+            |this: &mut SqlEditorTab, cx: &mut App| {
+                this.auto_session_generation.fetch_add(1, Ordering::SeqCst);
+                this.auto_session_starting = false;
+                if let Some(session) = this.auto_session.take() {
+                    let global_state = cx.global::<GlobalDbState>().clone();
+                    let session_id = session.session_id().to_string();
+                    cx.spawn(async move |cx: &mut AsyncApp| {
+                        if let Err(error) =
+                            global_state.close_session(cx, session_id.clone()).await
+                        {
+                            error!("Failed to close auto session on release: {:?}", error);
+                        }
+                    })
+                    .detach();
+                }
+            },
+        ));
         instance.refresh_statement_snapshot(cx);
         instance.run_diagnostics(cx);
         instance.load_databases_async(
@@ -1742,6 +1775,8 @@ impl SqlEditorTab {
                 let global_state = cx.global::<GlobalDbState>().clone();
                 if let SelectEvent::Confirm(Some(db_name)) = event {
                     let generation = this.next_context_generation(cx);
+                    // 粘性会话绑 (database, schema)：切库后旧会话作废。
+                    this.discard_auto_session(cx);
                     let window_handle = window.window_handle();
                     if this.supports_schema && !this.uses_schema_as_database {
                         Self::clear_string_select(&this.schema_select, window, cx);
@@ -1787,6 +1822,8 @@ impl SqlEditorTab {
                 let global_state = cx.global::<GlobalDbState>().clone();
                 if let SelectEvent::Confirm(Some(schema_name)) = event {
                     let generation = this.next_context_generation(cx);
+                    // 粘性会话绑 (database, schema)：切 schema 后旧会话作废。
+                    this.discard_auto_session(cx);
                     let window_handle = window.window_handle();
                     let database_or_schema = if this.uses_schema_as_database {
                         Some(schema_name.clone())
@@ -2328,6 +2365,8 @@ impl SqlEditorTab {
 
         let previous_connection_id = self.connection_id.clone();
         let generation = self.next_context_generation(cx);
+        // 粘性会话绑连接：切连接后旧会话必须释放，否则占着旧库连接。
+        self.discard_auto_session(cx);
         let capabilities = global_state.capabilities(&connection.database_type);
         self.connection_id = connection_id.to_string();
         self.database_type = connection.database_type.clone();
@@ -2387,6 +2426,10 @@ impl SqlEditorTab {
                             cx,
                         );
                         return;
+                    }
+                    if *mode != this.transaction_mode {
+                        // 模式切换即执行管线切换：粘性会话不再被引用，释放。
+                        this.discard_auto_session(cx);
                     }
                     this.transaction_mode = *mode;
                     cx.notify();
@@ -2639,6 +2682,10 @@ impl SqlEditorTab {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let ConnectionDataEvent::ConnectionDeleted { .. } = event {
+            // 连接被删：物理连接由池卸载，编辑器只丢弃引用，避免指向已关会话。
+            self.discard_auto_session_without_close(cx);
+        }
         let ConnectionDataEvent::SchemaChanged {
             connection_id,
             database,
@@ -3397,26 +3444,223 @@ impl SqlEditorTab {
     }
 
     fn run_auto_sql_text(
-        &self,
+        &mut self,
         sql: String,
         source: SqlExecutionResultSource,
         scope: SqlExecutionScope,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        match auto_session_action_for(self.auto_session.as_ref(), &scope) {
+            AutoSessionAction::RunInstalledSession => {
+                let session = self
+                    .auto_session
+                    .as_ref()
+                    .expect("validated installed auto session");
+                let session_id = session.session_id().to_string();
+                let connection_lost = session.connection_lost().clone();
+                let schema_invalidation = self.auto_schema_invalidation();
+                Self::run_session_sql(
+                    self.sql_result_tab_container.clone(),
+                    sql,
+                    source,
+                    session_id,
+                    self.connection_id.clone(),
+                    scope,
+                    self.database_type.clone(),
+                    schema_invalidation,
+                    connection_lost,
+                    cx,
+                );
+            }
+            AutoSessionAction::StartSession => {
+                // scope 变化或会话已死：旧会话丢弃，异步新建后执行。
+                self.discard_auto_session(cx);
+                self.start_auto_session_and_run(sql, source, scope, window, cx);
+            }
+        }
+    }
+
+    /// Auto 粘性会话的 DDL 失效策略：始终 Immediate（无事务缓冲，DDL 立即
+    /// 生效并广播刷新）。
+    fn auto_schema_invalidation(&self) -> SessionSchemaInvalidation {
+        SessionSchemaInvalidation::Immediate
+    }
+
+    fn discard_auto_session(&mut self, cx: &mut App) {
+        self.auto_session_generation.fetch_add(1, Ordering::SeqCst);
+        self.auto_session_starting = false;
+        if let Some(session) = self.auto_session.take() {
+            let global_state = cx.global::<GlobalDbState>().clone();
+            let session_id = session.session_id().to_string();
+            cx.spawn(async move |cx: &mut AsyncApp| {
+                if let Err(error) = global_state.close_session(cx, session_id.clone()).await {
+                    error!("Failed to close auto session {}: {:?}", session_id, error);
+                }
+            })
+            .detach();
+        }
+    }
+
+    /// 仅丢弃引用不关闭会话（连接已被外部卸载，关闭只会报错）。
+    fn discard_auto_session_without_close(&mut self, _cx: &mut App) {
+        self.auto_session_generation.fetch_add(1, Ordering::SeqCst);
+        self.auto_session_starting = false;
+        self.auto_session = None;
+    }
+
+    /// 会话建立后（或复用）在粘性会话上执行 SQL，并监听连接级失败。
+    #[allow(clippy::too_many_arguments)]
+    fn run_session_sql(
+        container: Entity<SqlResultTabContainer>,
+        sql: String,
+        source: SqlExecutionResultSource,
+        session_id: String,
+        connection_id: String,
+        scope: SqlExecutionScope,
+        database_type: DatabaseType,
+        schema_invalidation: SessionSchemaInvalidation,
+        connection_lost: Arc<AtomicBool>,
+        cx: &mut App,
+    ) {
+        let request = SessionSqlRun {
+            sql,
+            session_id,
+            connection_id,
+            database: scope.database,
+            schema: scope.schema,
+            database_type,
+            schema_invalidation,
+            source,
+            connection_lost: Some(connection_lost),
+        };
+        container.update(cx, |container, cx| {
+            container.handle_run_query_with_session(request, cx);
+        });
+    }
+
+    fn start_auto_session_and_run(
+        &mut self,
+        sql: String,
+        source: SqlExecutionResultSource,
+        scope: SqlExecutionScope,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.auto_session_starting {
+            // 会话建立中：与 Manual Busy 同语义，提示而不静默丢点击，
+            // 否则 marker 会卡在 running。
+            _window.push_notification(t!("Query.running").to_string(), cx);
+            self.finalize_execution_marker(SqlGutterMarkerState::Cancelled, cx);
+            return;
+        }
+        let generation = self.auto_session_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        self.auto_session_starting = true;
+        cx.notify();
+
+        let global_state = cx.global::<GlobalDbState>().clone();
         let connection_id = self.connection_id.clone();
-        let sql_result_tab_container = self.sql_result_tab_container.clone();
-        sql_result_tab_container.update(cx, |container, cx| {
-            container.handle_run_query(
-                sql,
-                source,
-                connection_id,
-                scope.database,
-                scope.schema,
-                window,
-                cx,
-            );
+        let context_generation = self.context_generation.load(Ordering::SeqCst);
+        let context_generation_guard = self.context_generation.clone();
+        let transaction_generation = self.auto_session_generation.clone();
+
+        cx.spawn(async move |entity: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let session_id =
+                match global_state.create_session(cx, connection_id.clone(), scope.database.clone())
+                    .await
+                {
+                    Ok(session_id) => session_id,
+                    Err(error) => {
+                        let is_current = entity
+                            .update(cx, |this, cx| {
+                                if transaction_generation.load(Ordering::SeqCst) != generation {
+                                    return false;
+                                }
+                                this.auto_session_starting = false;
+                                this.finalize_execution_marker(SqlGutterMarkerState::Failed, cx);
+                                cx.notify();
+                                true
+                            })
+                            .unwrap_or(false);
+                        if is_current {
+                            Self::notify_async(
+                                cx,
+                                t!("Query.auto_session_start_failed", error = error.to_string())
+                                    .to_string(),
+                            );
+                        }
+                        return;
+                    }
+                };
+
+            if transaction_generation.load(Ordering::SeqCst) != generation
+                || context_generation_guard.load(Ordering::SeqCst) != context_generation
+            {
+                let _ = entity.update(cx, |this, cx| {
+                    if transaction_generation.load(Ordering::SeqCst) == generation
+                        && this.auto_session_starting
+                    {
+                        this.auto_session_starting = false;
+                        this.finalize_execution_marker(SqlGutterMarkerState::Cancelled, cx);
+                        cx.notify();
+                    }
+                });
+                if let Err(error) = global_state.close_session(cx, session_id).await {
+                    error!("Failed to close stale auto session: {:?}", error);
+                }
+                return;
+            }
+
+            let installed = entity
+                .update(cx, |this, cx| {
+                    if transaction_generation.load(Ordering::SeqCst) != generation
+                        || context_generation_guard.load(Ordering::SeqCst) != context_generation
+                        || !this.auto_session_starting
+                        || this.auto_session.is_some()
+                    {
+                        return false;
+                    }
+                    let session = AutoExecutionSession::new(
+                        session_id.clone(),
+                        scope.database.clone(),
+                        scope.schema.clone(),
+                    );
+                    let connection_lost = session.connection_lost().clone();
+                    this.auto_session = Some(session);
+                    this.auto_session_starting = false;
+                    let schema_invalidation = this.auto_schema_invalidation();
+                    Self::run_session_sql(
+                        this.sql_result_tab_container.clone(),
+                        sql.clone(),
+                        source,
+                        session_id.clone(),
+                        this.connection_id.clone(),
+                        scope.clone(),
+                        this.database_type.clone(),
+                        schema_invalidation,
+                        connection_lost,
+                        cx,
+                    );
+                    cx.notify();
+                    true
+                })
+                .unwrap_or(false);
+            if !installed {
+                let _ = entity.update(cx, |this, cx| {
+                    if transaction_generation.load(Ordering::SeqCst) == generation
+                        && this.auto_session_starting
+                    {
+                        this.auto_session_starting = false;
+                        this.finalize_execution_marker(SqlGutterMarkerState::Cancelled, cx);
+                        cx.notify();
+                    }
+                });
+                if let Err(error) = global_state.close_session(cx, session_id).await {
+                    error!("Failed to close uninstalled auto session: {:?}", error);
+                }
+            }
         })
+        .detach();
     }
 
     fn execute_manual_sql_text(
@@ -3490,6 +3734,7 @@ impl SqlEditorTab {
             database_type: self.database_type.clone(),
             schema_invalidation,
             source,
+            connection_lost: None,
         };
         self.sql_result_tab_container.update(cx, |container, cx| {
             container.handle_run_query_with_session(request, cx);
@@ -4887,6 +5132,10 @@ impl Clone for SqlEditorTab {
             last_insert_hints_key: self.last_insert_hints_key,
             range_decorations: self.range_decorations.clone(),
             gutter_marker_ids: self.gutter_marker_ids.clone(),
+            auto_session: self.auto_session.clone(),
+            auto_session_generation: self.auto_session_generation.clone(),
+            auto_session_starting: self.auto_session_starting,
+            _auto_session_release: None,
         }
     }
 }

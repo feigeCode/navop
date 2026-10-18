@@ -27,6 +27,12 @@ pub(super) const TERMINAL_SEARCH_BACKWARD_SHORTCUT: &str = "cmd-g";
 #[cfg(not(target_os = "macos"))]
 pub(super) const TERMINAL_SEARCH_BACKWARD_SHORTCUT: &str = "ctrl-shift-g";
 pub(super) const TERMINAL_TOGGLE_VI_MODE_SHORTCUT: &str = "f7";
+// 回滚历史滚动：沿用 Windows Terminal / Alacritty 的约定，翻页用 Shift+PageUp/PageDown，
+// 逐行用 Ctrl+Shift+Up/Down。不占用 Shift+Up/Down，它们在历史提示中仍用于导航。
+pub(super) const TERMINAL_SCROLL_LINE_UP_SHORTCUT: &str = "ctrl-shift-up";
+pub(super) const TERMINAL_SCROLL_LINE_DOWN_SHORTCUT: &str = "ctrl-shift-down";
+pub(super) const TERMINAL_SCROLL_PAGE_UP_SHORTCUT: &str = "shift-pageup";
+pub(super) const TERMINAL_SCROLL_PAGE_DOWN_SHORTCUT: &str = "shift-pagedown";
 // Escape is terminal input (for example, Vim uses it to leave insert mode).
 // ClearSelection remains available from the context menu and can still be
 // assigned by users, but must not consume Escape by default.
@@ -154,6 +160,42 @@ pub(super) fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
         .into_iter()
         .map(|key| KeyBinding::new(&key, ResetFont, Some(TERMINAL_CONTEXT))),
     );
+    keybindings.extend(
+        shortcuts_for(
+            cx,
+            action_id::TERMINAL_SCROLL_LINE_UP,
+            &[TERMINAL_SCROLL_LINE_UP_SHORTCUT],
+        )
+        .into_iter()
+        .map(|key| KeyBinding::new(&key, ScrollLineUp, Some(TERMINAL_CONTEXT))),
+    );
+    keybindings.extend(
+        shortcuts_for(
+            cx,
+            action_id::TERMINAL_SCROLL_LINE_DOWN,
+            &[TERMINAL_SCROLL_LINE_DOWN_SHORTCUT],
+        )
+        .into_iter()
+        .map(|key| KeyBinding::new(&key, ScrollLineDown, Some(TERMINAL_CONTEXT))),
+    );
+    keybindings.extend(
+        shortcuts_for(
+            cx,
+            action_id::TERMINAL_SCROLL_PAGE_UP,
+            &[TERMINAL_SCROLL_PAGE_UP_SHORTCUT],
+        )
+        .into_iter()
+        .map(|key| KeyBinding::new(&key, ScrollPageUp, Some(TERMINAL_CONTEXT))),
+    );
+    keybindings.extend(
+        shortcuts_for(
+            cx,
+            action_id::TERMINAL_SCROLL_PAGE_DOWN,
+            &[TERMINAL_SCROLL_PAGE_DOWN_SHORTCUT],
+        )
+        .into_iter()
+        .map(|key| KeyBinding::new(&key, ScrollPageDown, Some(TERMINAL_CONTEXT))),
+    );
     keybindings
 }
 
@@ -251,6 +293,34 @@ pub(super) fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
         Some(TERMINAL_CONTEXT),
         ResetFont,
     ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::TERMINAL_SCROLL_LINE_UP,
+        &[TERMINAL_SCROLL_LINE_UP_SHORTCUT],
+        Some(TERMINAL_CONTEXT),
+        ScrollLineUp,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::TERMINAL_SCROLL_LINE_DOWN,
+        &[TERMINAL_SCROLL_LINE_DOWN_SHORTCUT],
+        Some(TERMINAL_CONTEXT),
+        ScrollLineDown,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::TERMINAL_SCROLL_PAGE_UP,
+        &[TERMINAL_SCROLL_PAGE_UP_SHORTCUT],
+        Some(TERMINAL_CONTEXT),
+        ScrollPageUp,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::TERMINAL_SCROLL_PAGE_DOWN,
+        &[TERMINAL_SCROLL_PAGE_DOWN_SHORTCUT],
+        Some(TERMINAL_CONTEXT),
+        ScrollPageDown,
+    ));
     keybindings
 }
 
@@ -320,6 +390,22 @@ pub(super) fn is_terminal_action_shortcut(keystroke: &Keystroke, cx: &App) -> bo
             action_id::TERMINAL_RESET_FONT,
             vec![terminal_platform_shortcut("cmd-0", "ctrl-0")],
         ),
+        (
+            action_id::TERMINAL_SCROLL_LINE_UP,
+            vec![TERMINAL_SCROLL_LINE_UP_SHORTCUT],
+        ),
+        (
+            action_id::TERMINAL_SCROLL_LINE_DOWN,
+            vec![TERMINAL_SCROLL_LINE_DOWN_SHORTCUT],
+        ),
+        (
+            action_id::TERMINAL_SCROLL_PAGE_UP,
+            vec![TERMINAL_SCROLL_PAGE_UP_SHORTCUT],
+        ),
+        (
+            action_id::TERMINAL_SCROLL_PAGE_DOWN,
+            vec![TERMINAL_SCROLL_PAGE_DOWN_SHORTCUT],
+        ),
     ]
     .into_iter()
     .any(|(action_id, defaults)| {
@@ -329,10 +415,43 @@ pub(super) fn is_terminal_action_shortcut(keystroke: &Keystroke, cx: &App) -> bo
 
 #[cfg(test)]
 mod tests {
-    use super::TERMINAL_CLEAR_SELECTION_DEFAULTS;
+    use super::{
+        TERMINAL_CLEAR_SELECTION_DEFAULTS, TERMINAL_SCROLL_LINE_DOWN_SHORTCUT,
+        TERMINAL_SCROLL_LINE_UP_SHORTCUT, TERMINAL_SCROLL_PAGE_DOWN_SHORTCUT,
+        TERMINAL_SCROLL_PAGE_UP_SHORTCUT,
+    };
+    use gpui::Keystroke;
 
     #[test]
     fn clear_selection_does_not_consume_escape_by_default() {
         assert!(TERMINAL_CLEAR_SELECTION_DEFAULTS.is_empty());
+    }
+
+    #[test]
+    fn scroll_shortcuts_are_valid_keystrokes() {
+        for shortcut in [
+            TERMINAL_SCROLL_LINE_UP_SHORTCUT,
+            TERMINAL_SCROLL_LINE_DOWN_SHORTCUT,
+            TERMINAL_SCROLL_PAGE_UP_SHORTCUT,
+            TERMINAL_SCROLL_PAGE_DOWN_SHORTCUT,
+        ] {
+            assert!(Keystroke::parse(shortcut).is_ok(), "{shortcut} 必须可解析");
+        }
+    }
+
+    #[test]
+    fn scroll_shortcuts_do_not_shadow_plain_terminal_keys() {
+        // 无修饰的 PageUp/PageDown 与 Shift+Up/Down 属于 shell/TUI 输入，不能被占用。
+        for shortcut in [
+            TERMINAL_SCROLL_LINE_UP_SHORTCUT,
+            TERMINAL_SCROLL_LINE_DOWN_SHORTCUT,
+            TERMINAL_SCROLL_PAGE_UP_SHORTCUT,
+            TERMINAL_SCROLL_PAGE_DOWN_SHORTCUT,
+        ] {
+            let modifiers = Keystroke::parse(shortcut).unwrap().modifiers;
+            assert!(modifiers.shift, "{shortcut} 必须带 Shift");
+        }
+        assert_ne!("shift-up", TERMINAL_SCROLL_LINE_UP_SHORTCUT);
+        assert_ne!("shift-down", TERMINAL_SCROLL_LINE_DOWN_SHORTCUT);
     }
 }

@@ -42,6 +42,10 @@ pub mod action_id {
     pub const TERMINAL_INCREASE_FONT: &str = "terminal.increase_font";
     pub const TERMINAL_DECREASE_FONT: &str = "terminal.decrease_font";
     pub const TERMINAL_RESET_FONT: &str = "terminal.reset_font";
+    pub const TERMINAL_SCROLL_LINE_UP: &str = "terminal.scroll_line_up";
+    pub const TERMINAL_SCROLL_LINE_DOWN: &str = "terminal.scroll_line_down";
+    pub const TERMINAL_SCROLL_PAGE_UP: &str = "terminal.scroll_page_up";
+    pub const TERMINAL_SCROLL_PAGE_DOWN: &str = "terminal.scroll_page_down";
     pub const REMOTE_EDITOR_SEARCH: &str = "remote_editor.search";
     pub const REMOTE_EDITOR_REPLACE: &str = "remote_editor.replace";
     pub const REDIS_CLEAR_OUTPUT: &str = "redis.clear_output";

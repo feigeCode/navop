@@ -451,6 +451,8 @@ fn update_master_key_setting(is_portable: bool, enabled: bool, cx: &mut App) {
 pub struct SettingsPanel {
     focus_handle: FocusHandle,
     llm_providers_view: Entity<LlmProvidersView>,
+    update_check_state: Entity<update::UpdateCheckState>,
+    _update_check_subscription: gpui::Subscription,
     size: Size,
     group_variant: GroupBoxVariant,
     initial_page_index: usize,
@@ -485,9 +487,15 @@ impl SettingsPanel {
 
     fn new_with_initial_page(initial_page_index: usize, cx: &mut Context<Self>) -> Self {
         let llm_providers_view = cx.new(|cx| LlmProvidersView::new(cx));
+        // 检查更新状态由 app 持有（启动时的自动检查可能早于设置页打开），这里只观察它，
+        // 让「检查中」和「上次检查结果」能驱动设置页重绘。
+        let update_check_state = update::update_check_state(cx);
+        let _update_check_subscription = cx.observe(&update_check_state, |_, _, cx| cx.notify());
         Self {
             focus_handle: cx.focus_handle(),
             llm_providers_view,
+            update_check_state,
+            _update_check_subscription,
             size: Size::default(),
             group_variant: GroupBoxVariant::Outline,
             initial_page_index,
@@ -640,7 +648,7 @@ impl SettingsPanel {
                             ),
                         ),
                     close_behavior_setting_group(default_settings.close_button_behavior),
-                    notes_setting_group(),
+                    notes_setting_group(font_options.clone()),
                     SettingGroup::new()
                         .title(t!("Settings.General.Appearance.group_title"))
                         .item(SettingItem::render(render_appearance_settings)),
@@ -1043,7 +1051,10 @@ impl SettingsPanel {
                             ]),
                     ),
                 )
-                .group(about_update_setting_group(default_settings.auto_update)),
+                .group(about_update_setting_group(
+                    default_settings.auto_update,
+                    self.update_check_state.clone(),
+                )),
         ];
         if !is_feature_enabled(Feature::TeamManagement, cx) {
             pages.remove(TEAM_KEYS_SETTINGS_PAGE_INDEX);
@@ -2384,7 +2395,10 @@ impl Render for SettingsPanel {
 }
 
 /// 关于页的“更新”分组：自动检查更新开关与手动检查入口
-fn about_update_setting_group(auto_update_default: bool) -> SettingGroup {
+fn about_update_setting_group(
+    auto_update_default: bool,
+    update_check_state: Entity<update::UpdateCheckState>,
+) -> SettingGroup {
     SettingGroup::new()
         .title(t!("Settings.About.Update.group_title"))
         .items(vec![
@@ -2401,16 +2415,28 @@ fn about_update_setting_group(auto_update_default: bool) -> SettingGroup {
                 .default_value(auto_update_default),
             )
             .description(t!("Settings.About.Update.auto_update_desc").to_string()),
-            SettingItem::render(move |_options, _window, cx| render_manual_update_check_item(cx))
-                .keywords([
-                    t!("Settings.About.Update.group_title").to_string(),
-                    t!("Settings.About.Update.check_now").to_string(),
-                    t!("Settings.About.Update.check_now_desc").to_string(),
-                ]),
+            SettingItem::render(move |_options, _window, cx| {
+                render_manual_update_check_item(&update_check_state, cx)
+            })
+            .keywords([
+                t!("Settings.About.Update.group_title").to_string(),
+                t!("Settings.About.Update.check_now").to_string(),
+                t!("Settings.About.Update.check_now_desc").to_string(),
+            ]),
         ])
 }
 
-fn render_manual_update_check_item(cx: &mut App) -> gpui::AnyElement {
+fn render_manual_update_check_item(
+    update_check_state: &Entity<update::UpdateCheckState>,
+    cx: &mut App,
+) -> gpui::AnyElement {
+    let state = update_check_state.read(cx);
+    let checking = state.is_checking();
+    // 检查完成后就地记下结果，避免用户只靠一闪而过的通知判断「到底查过了没有」。
+    let status = state
+        .last_check_label()
+        .unwrap_or_else(|| t!("Settings.About.Update.check_now_desc").to_string());
+
     h_flex()
         .w_full()
         .justify_between()
@@ -2429,15 +2455,17 @@ fn render_manual_update_check_item(cx: &mut App) -> gpui::AnyElement {
                     div()
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
-                        .child(t!("Settings.About.Update.check_now_desc").to_string()),
+                        .child(status),
                 ),
         )
         .child(
             Button::new("settings-check-update")
                 .icon(IconName::Refresh)
                 .label(t!("Settings.About.Update.check_now"))
-                .on_click(|_, window, cx| {
-                    update::check_for_updates_manually(window, cx);
+                // loading 态的按钮不会响应点击，因此检查期间天然防重复触发。
+                .loading(checking)
+                .on_click(|_, _window, cx| {
+                    update::check_for_updates_manually(cx);
                 }),
         )
         .into_any_element()
@@ -3384,6 +3412,34 @@ const TERMINAL_SHORTCUTS: &[ShortcutEntry] = &[
         action_id: Some(action_id::TERMINAL_TOGGLE_VI_MODE),
         system_hotkey: false,
     },
+    ShortcutEntry {
+        keys_macos: &["ctrl-shift-up"],
+        keys_other: &["ctrl-shift-up"],
+        label_key: "Settings.Shortcuts.terminal_scroll_line_up",
+        action_id: Some(action_id::TERMINAL_SCROLL_LINE_UP),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["ctrl-shift-down"],
+        keys_other: &["ctrl-shift-down"],
+        label_key: "Settings.Shortcuts.terminal_scroll_line_down",
+        action_id: Some(action_id::TERMINAL_SCROLL_LINE_DOWN),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["shift-pageup"],
+        keys_other: &["shift-pageup"],
+        label_key: "Settings.Shortcuts.terminal_scroll_page_up",
+        action_id: Some(action_id::TERMINAL_SCROLL_PAGE_UP),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["shift-pagedown"],
+        keys_other: &["shift-pagedown"],
+        label_key: "Settings.Shortcuts.terminal_scroll_page_down",
+        action_id: Some(action_id::TERMINAL_SCROLL_PAGE_DOWN),
+        system_hotkey: false,
+    },
 ];
 
 const DATABASE_SHORTCUTS: &[ShortcutEntry] = &[
@@ -4253,6 +4309,24 @@ mod tests {
             refresh > set_locale,
             "刷新扩展页要排在 set_locale 之后，否则扩展读到的是上一个语言值"
         );
+    }
+
+    #[test]
+    fn manual_update_check_shows_progress_and_last_result() {
+        let source = include_str!("setting_tab.rs");
+        let item = source
+            .split("fn render_manual_update_check_item(")
+            .nth(1)
+            .expect("手动检查更新入口存在")
+            .split("fn render_global_proxy_settings_item")
+            .next()
+            .expect("手动检查更新入口有结尾");
+
+        // loading 态的按钮不响应点击，检查期间天然防重复触发。
+        assert!(item.contains(".loading(checking)"));
+        assert!(item.contains("last_check_label()"));
+        // 状态挂在 app 上并由设置页观察，自动检查也能驱动按钮重绘。
+        assert!(source.contains("cx.observe(&update_check_state"));
     }
 
     #[test]

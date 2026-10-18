@@ -2563,6 +2563,14 @@ Settings:
         en: "Failed to update notes location: %{error}"
         zh-CN: 更新笔记路径失败：%{error}
         zh-HK: 更新筆記路徑失敗：%{error}
+      markdown_code_font_family:
+        en: Markdown Code Font
+        zh-CN: Markdown 代码字体
+        zh-HK: Markdown 程式碼字體
+      markdown_code_font_family_desc:
+        en: Font for inline code, code blocks, and table code in Markdown documents.
+        zh-CN: Markdown 文档中行内代码、代码块与表格代码使用的字体。
+        zh-HK: Markdown 文件中行內程式碼、程式碼區塊與表格程式碼使用的字體。
 
     # 外观设置
     Appearance:
@@ -4137,6 +4145,10 @@ Settings:
       en: Toggle Source Mode
       zh-CN: 切换源码模式
       zh-HK: 切換原始碼模式
+    notes_toggle_outline:
+      en: Toggle Document Outline
+      zh-CN: 显示/隐藏文档大纲
+      zh-HK: 顯示/隱藏文件大綱
     notes_delete_block:
       en: Delete Current Block
       zh-CN: 删除当前块
@@ -4285,6 +4297,22 @@ Settings:
       en: Toggle Vi Mode
       zh-CN: 切换 Vi 模式
       zh-HK: 切換 Vi 模式
+    terminal_scroll_line_up:
+      en: Scroll Up One Line
+      zh-CN: 向上滚动一行
+      zh-HK: 向上捲動一行
+    terminal_scroll_line_down:
+      en: Scroll Down One Line
+      zh-CN: 向下滚动一行
+      zh-HK: 向下捲動一行
+    terminal_scroll_page_up:
+      en: Scroll Up One Page
+      zh-CN: 向上滚动一屏
+      zh-HK: 向上捲動一頁
+    terminal_scroll_page_down:
+      en: Scroll Down One Page
+      zh-CN: 向下滚动一屏
+      zh-HK: 向下捲動一頁
     database_focus_search:
       en: Focus Search
       zh-CN: 聚焦搜索
@@ -4469,6 +4497,26 @@ Settings:
         en: Manually check
         zh-CN: 立即手动检查
         zh-HK: 立即手動檢查
+      last_check:
+        en: "Last check: %{time} · %{result}"
+        zh-CN: "上次检查：%{time} · %{result}"
+        zh-HK: "上次檢查：%{time} · %{result}"
+      result_up_to_date:
+        en: already up to date
+        zh-CN: 已是最新版本
+        zh-HK: 已是最新版本
+      result_available:
+        en: "new version %{version} found"
+        zh-CN: "发现新版本 %{version}"
+        zh-HK: "發現新版本 %{version}"
+      result_failed:
+        en: check failed
+        zh-CN: 检查失败
+        zh-HK: 檢查失敗
+      result_timeout:
+        en: timed out
+        zh-CN: 检查超时
+        zh-HK: 檢查超時
 
   # 账户设置
   Account:
@@ -4722,6 +4770,10 @@ Update:
     en: Update check failed
     zh-CN: 检查更新失败
     zh-HK: 檢查更新失敗
+  check_timeout:
+    en: Update check timed out. Please try again later.
+    zh-CN: 检查更新超时，请稍后重试。
+    zh-HK: 檢查更新超時，請稍後重試。
   open_release_page:
     en: Open release page to download manually
     zh-CN: 打开发布页面手动下载

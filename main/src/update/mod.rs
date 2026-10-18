@@ -1,6 +1,7 @@
 use std::path::PathBuf;
+use std::time::Duration;
 
-use gpui::{App, AppContext, Window};
+use gpui::{App, AppContext};
 use gpui_component::WindowExt;
 use one_core::gpui_tokio::Tokio;
 use rust_i18n::t;
@@ -8,6 +9,7 @@ use rust_i18n::t;
 use crate::setting_tab::AppSettings;
 use one_core::config::UpdateConfig;
 
+mod check_state;
 mod custom_api;
 mod dialog;
 mod download;
@@ -18,6 +20,8 @@ mod local_source;
 mod network;
 mod util;
 
+use check_state::{CheckReport, begin_check, finish_check};
+pub(crate) use check_state::{UpdateCheckState, update_check_state};
 use custom_api::{
     fetch_update_info, select_download_url, select_fallback_download_url, select_sha256,
 };
@@ -30,6 +34,10 @@ use util::parse_version;
 
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const APPLY_UPDATE_FLAG: &str = "--apply-update";
+
+/// 一次更新检查的总时长上限。多个更新源是串行检查的，连通性探测与拉取又都没有各自的
+/// 超时，代理或弱网下会长时间不返回，因此整体限时并给出明确提示。
+const UPDATE_CHECK_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// 当前使用的更新源。默认走 R2 JSON；启用 `github-updates` feature 时切回 GitHub Releases。
 #[cfg(test)]
@@ -63,11 +71,12 @@ enum UpdateCheckTrigger {
     Manual,
 }
 
+/// 检查结果本身与呈现方式分开：这里只描述「查到了什么」，是否通知用户由 trigger 决定。
 enum UpdateCheckOutcome {
     ShowDialog(UpdateDialogInfo),
-    NotifyNoUpdate,
-    NotifyFailure(String),
-    Silent,
+    NoUpdate,
+    Failure(String),
+    TimedOut,
 }
 
 #[derive(Clone, Debug)]
@@ -129,7 +138,7 @@ pub fn handle_update_command() -> bool {
     true
 }
 
-pub fn schedule_update_check(window: &mut Window, cx: &mut App) {
+pub fn schedule_update_check(cx: &mut App) {
     if !should_run_update_check(
         UpdateCheckTrigger::Automatic,
         AppSettings::global(cx).auto_update,
@@ -138,60 +147,98 @@ pub fn schedule_update_check(window: &mut Window, cx: &mut App) {
         return;
     }
 
-    run_update_check(window, cx, UpdateCheckTrigger::Automatic);
+    run_update_check(cx, UpdateCheckTrigger::Automatic);
 }
 
-pub fn check_for_updates_manually(window: &mut Window, cx: &mut App) {
-    run_update_check(window, cx, UpdateCheckTrigger::Manual);
+pub fn check_for_updates_manually(cx: &mut App) {
+    run_update_check(cx, UpdateCheckTrigger::Manual);
 }
 
-fn run_update_check(window: &mut Window, cx: &mut App, trigger: UpdateCheckTrigger) {
+fn run_update_check(cx: &mut App, trigger: UpdateCheckTrigger) {
+    // 自动与手动检查共用同一份状态：启动时的自动检查可能还在跑，此时按钮已经是加载态，
+    // 这里直接拒绝，避免同一时刻发两轮网络请求。
+    if !begin_check(cx) {
+        return;
+    }
+
     let config = UpdateConfig::get();
     let http_client = cx.http_client();
     let current_version = CURRENT_VERSION.to_string();
     let skipped_version = AppSettings::global(cx).skipped_update_version.clone();
     let update_task = Tokio::spawn(cx, async move {
-        perform_update_check(config, http_client, current_version, trigger).await
+        match tokio::time::timeout(
+            UPDATE_CHECK_TIMEOUT,
+            perform_update_check(config, http_client, current_version),
+        )
+        .await
+        {
+            Ok(outcome) => outcome,
+            Err(_elapsed) => UpdateCheckOutcome::TimedOut,
+        }
     });
 
-    window
-        .spawn(cx, async move |cx| {
-            let outcome = match update_task.await {
-                Ok(outcome) => outcome,
-                Err(err) => {
-                    let message = format!("更新检查任务执行失败: {}", err);
-                    tracing::warn!("{}", message);
-                    notify_failure_if_needed(trigger, message, cx);
-                    return;
-                }
-            };
-
-            match outcome {
-                UpdateCheckOutcome::ShowDialog(info)
-                    if should_show_available_update(
-                        trigger,
-                        &info.latest_version,
-                        skipped_version.as_deref(),
-                    ) =>
-                {
-                    show_update_dialog_on_active_window(info, cx)
-                }
-                UpdateCheckOutcome::ShowDialog(_) => {}
-                UpdateCheckOutcome::NotifyNoUpdate => notify_no_update_if_needed(trigger, cx),
-                UpdateCheckOutcome::NotifyFailure(err) => {
-                    notify_failure_if_needed(trigger, err, cx)
-                }
-                UpdateCheckOutcome::Silent => {}
+    // 收尾挂在 app 而不是某个窗口上：窗口在检查期间被关闭时，窗口级 future 会被丢弃，
+    // 「检查中」就永远落不回来，按钮会一直转圈并拒绝再次检查。
+    cx.spawn(async move |cx| {
+        let outcome = match update_task.await {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                let message = format!("更新检查任务执行失败: {}", err);
+                tracing::warn!("{}", message);
+                finish_check(
+                    cx,
+                    CheckReport::Failed {
+                        reason: message.clone(),
+                    },
+                );
+                notify_failure_if_needed(trigger, message, cx);
+                return;
             }
-        })
-        .detach();
+        };
+
+        match outcome {
+            UpdateCheckOutcome::ShowDialog(info) => {
+                let latest_version = info.latest_version.clone();
+                finish_check(
+                    cx,
+                    CheckReport::Available {
+                        version: latest_version,
+                    },
+                );
+                if should_show_available_update(
+                    trigger,
+                    &info.latest_version,
+                    skipped_version.as_deref(),
+                ) {
+                    show_update_dialog_on_active_window(info, cx);
+                }
+            }
+            UpdateCheckOutcome::NoUpdate => {
+                finish_check(cx, CheckReport::UpToDate);
+                notify_no_update_if_needed(trigger, cx);
+            }
+            UpdateCheckOutcome::Failure(err) => {
+                finish_check(
+                    cx,
+                    CheckReport::Failed {
+                        reason: err.clone(),
+                    },
+                );
+                notify_failure_if_needed(trigger, err, cx);
+            }
+            UpdateCheckOutcome::TimedOut => {
+                finish_check(cx, CheckReport::TimedOut);
+                notify_timeout_if_needed(trigger, cx);
+            }
+        }
+    })
+    .detach();
 }
 
 async fn perform_update_check(
     config: UpdateConfig,
     http_client: std::sync::Arc<dyn gpui::http_client::HttpClient>,
     current_version: String,
-    trigger: UpdateCheckTrigger,
 ) -> UpdateCheckOutcome {
     let mut last_error = None;
     let mut saw_no_update = false;
@@ -210,11 +257,11 @@ async fn perform_update_check(
     }
 
     if saw_no_update {
-        return no_update_outcome(trigger);
+        return UpdateCheckOutcome::NoUpdate;
     }
 
     let err = last_error.unwrap_or_else(|| "没有可用的更新源".to_string());
-    failure_outcome(trigger, err)
+    UpdateCheckOutcome::Failure(err)
 }
 
 #[cfg(feature = "github-updates")]
@@ -305,19 +352,9 @@ fn notify_failure_if_needed(trigger: UpdateCheckTrigger, err: String, cx: &mut g
     }
 }
 
-fn no_update_outcome(trigger: UpdateCheckTrigger) -> UpdateCheckOutcome {
+fn notify_timeout_if_needed(trigger: UpdateCheckTrigger, cx: &mut gpui::AsyncApp) {
     if trigger == UpdateCheckTrigger::Manual {
-        UpdateCheckOutcome::NotifyNoUpdate
-    } else {
-        UpdateCheckOutcome::Silent
-    }
-}
-
-fn failure_outcome(trigger: UpdateCheckTrigger, err: String) -> UpdateCheckOutcome {
-    if trigger == UpdateCheckTrigger::Manual {
-        UpdateCheckOutcome::NotifyFailure(err)
-    } else {
-        UpdateCheckOutcome::Silent
+        push_notification_on_active_window(t!("Update.check_timeout").to_string(), cx);
     }
 }
 
@@ -477,6 +514,7 @@ pub(crate) mod test_support {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::time::Duration;
 
     #[cfg(not(feature = "github-updates"))]
     use anyhow::anyhow;
@@ -485,11 +523,38 @@ mod tests {
     use one_core::config::update_url_from_public_base;
 
     use super::{
-        ACTIVE_UPDATE_SOURCE, UpdateCheckTrigger, UpdateDialogInfo, UpdateSource,
-        should_run_update_check, should_show_available_update,
+        ACTIVE_UPDATE_SOURCE, UPDATE_CHECK_TIMEOUT, UpdateCheckTrigger, UpdateDialogInfo,
+        UpdateSource, should_run_update_check, should_show_available_update,
     };
     use super::{UpdateCheckOutcome, perform_update_check};
     use crate::update::test_support::FakeHttpClient;
+
+    #[test]
+    fn update_check_is_bounded_and_goes_through_the_shared_state() {
+        assert_eq!(Duration::from_secs(20), UPDATE_CHECK_TIMEOUT);
+
+        let source = include_str!("mod.rs");
+        let run_check = source
+            .split("fn run_update_check(")
+            .nth(1)
+            .expect("run_update_check 存在")
+            .split("async fn perform_update_check(")
+            .next()
+            .expect("run_update_check 有结尾");
+
+        // 同一时刻只允许一轮检查，按钮的加载态才不会被并发请求打乱。
+        assert!(
+            run_check.contains("if !begin_check(cx)"),
+            "检查必须先进入共享的「检查中」状态"
+        );
+        assert!(
+            run_check.contains("tokio::time::timeout("),
+            "整轮检查要有总时长上限"
+        );
+        // 结果先落到共享状态，再决定弹窗或通知，设置页才能就地展示。
+        assert!(run_check.contains("finish_check(cx, CheckReport::UpToDate)"));
+        assert!(run_check.contains("notify_timeout_if_needed(trigger, cx)"));
+    }
 
     #[test]
     fn manual_check_bypasses_auto_update_switch() {
@@ -623,13 +688,7 @@ mod tests {
             download_url: None,
         };
 
-        let outcome = perform_update_check(
-            config,
-            http_client,
-            "0.10.0".to_string(),
-            UpdateCheckTrigger::Manual,
-        )
-        .await;
+        let outcome = perform_update_check(config, http_client, "0.10.0".to_string()).await;
 
         let UpdateCheckOutcome::ShowDialog(info) = outcome else {
             panic!("本地 manifest 应展示更新模拟窗口");
@@ -659,13 +718,7 @@ mod tests {
             download_url: None,
         };
 
-        let outcome = perform_update_check(
-            config,
-            http_client,
-            "0.1.0".to_string(),
-            UpdateCheckTrigger::Manual,
-        )
-        .await;
+        let outcome = perform_update_check(config, http_client, "0.1.0".to_string()).await;
 
         let UpdateCheckOutcome::ShowDialog(info) = outcome else {
             panic!("R2 失败后应回退到 GitHub Release");
@@ -698,13 +751,7 @@ mod tests {
             download_url: None,
         };
 
-        let outcome = perform_update_check(
-            config,
-            http_client,
-            "0.1.0".to_string(),
-            UpdateCheckTrigger::Manual,
-        )
-        .await;
+        let outcome = perform_update_check(config, http_client, "0.1.0".to_string()).await;
 
         assert!(matches!(outcome, UpdateCheckOutcome::ShowDialog(_)));
         let requests = client.take_requests();
@@ -732,13 +779,7 @@ mod tests {
             download_url: None,
         };
 
-        let outcome = perform_update_check(
-            config,
-            http_client,
-            "0.1.0".to_string(),
-            UpdateCheckTrigger::Manual,
-        )
-        .await;
+        let outcome = perform_update_check(config, http_client, "0.1.0".to_string()).await;
 
         let UpdateCheckOutcome::ShowDialog(info) = outcome else {
             panic!("R2 manifest 未更新时应继续回退到 GitHub Release");
@@ -769,13 +810,7 @@ mod tests {
             download_url: None,
         };
 
-        let outcome = perform_update_check(
-            config,
-            http_client,
-            "0.1.0".to_string(),
-            UpdateCheckTrigger::Manual,
-        )
-        .await;
+        let outcome = perform_update_check(config, http_client, "0.1.0".to_string()).await;
 
         let UpdateCheckOutcome::ShowDialog(info) = outcome else {
             panic!("R2 manifest 有新版本时应展示更新对话框");

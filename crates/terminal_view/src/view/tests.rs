@@ -44,3 +44,4 @@ mod history_interaction;
 mod layout;
 mod mouse;
 mod paste;
+mod scroll_keys;

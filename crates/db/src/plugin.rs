@@ -2101,6 +2101,57 @@ pub trait DatabasePlugin: Send + Sync {
         )
     }
 
+    /// 引用一个可能已带限定前缀的表名（`库.表` / `schema.table` / `库.schema.表`），逐段加引号。
+    fn quote_qualified_table_name(&self, name: &str) -> String {
+        quote_each_identifier(name, |part| self.quote_identifier(part))
+    }
+
+    /// 与 [`Self::format_table_reference`] 相同，但允许 `table` 本身已经是限定名。
+    ///
+    /// SQL 结果网格里的表名来自查询分析（见 `direct_table_identity`），是 `库.表`
+    /// 的拼接形式。这类名字已自带限定前缀，再拼一次 database 会得到
+    /// `` `user_center`.`user_center.uc_user_info` `` 这种非法引用（MySQL 报 1146），
+    /// 所以限定名按段引用后直接使用；裸表名仍走 [`Self::format_table_reference`]。
+    fn format_resolved_table_reference(
+        &self,
+        database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> String {
+        if qualified_table_parts(table).is_some() {
+            self.quote_qualified_table_name(table)
+        } else {
+            self.format_table_reference(database, schema, table)
+        }
+    }
+
+    /// 解析元数据查询（列 / 索引）所需的表身份。
+    ///
+    /// 查询分析给出的表名可能是 `库.表` / `schema.table`，元数据查询必须拆成
+    /// 三段才能命中系统表，否则拿不到主键与索引信息。默认把前缀当作 schema；
+    /// 没有 schema 层级的方言（MySQL）需覆盖为 database。
+    fn resolve_metadata_table_identity(
+        &self,
+        database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> (String, Option<String>, String) {
+        let Some((prefix, bare_table)) = qualified_table_parts(table) else {
+            return (
+                database.to_string(),
+                schema.map(str::to_string),
+                table.to_string(),
+            );
+        };
+        (
+            database.to_string(),
+            schema
+                .map(str::to_string)
+                .or_else(|| Some(prefix.to_string())),
+            bare_table.to_string(),
+        )
+    }
+
     /// Format table reference for SQL export output (omit database, keep schema when present).
     fn format_export_table_reference(
         &self,
@@ -2531,7 +2582,7 @@ pub trait DatabasePlugin: Send + Sync {
         request: &TableSaveRequest,
         change: &TableRowChange,
     ) -> Option<String> {
-        let table_ident = self.format_table_reference(
+        let table_ident = self.format_resolved_table_reference(
             &request.database,
             request.schema.as_deref(),
             &request.table,
@@ -2607,7 +2658,7 @@ pub trait DatabasePlugin: Send + Sync {
                     self.build_where_and_limit_clause(request, original_data);
 
                 if limit_clause == " __SQLITE_ROWID_LIMIT__" {
-                    let simple_table = self.quote_identifier(&request.table);
+                    let simple_table = self.quote_qualified_table_name(&request.table);
                     Some(format!(
                         "UPDATE {} SET {} WHERE rowid IN (SELECT rowid FROM {} WHERE {} LIMIT 1)",
                         table_ident,
@@ -2648,7 +2699,7 @@ pub trait DatabasePlugin: Send + Sync {
                     self.build_where_and_limit_clause(request, original_data);
 
                 if limit_clause == " __SQLITE_ROWID_LIMIT__" {
-                    let simple_table = self.quote_identifier(&request.table);
+                    let simple_table = self.quote_qualified_table_name(&request.table);
                     Some(format!(
                         "DELETE FROM {} WHERE rowid IN (SELECT rowid FROM {} WHERE {} LIMIT 1)",
                         table_ident, simple_table, where_clause
@@ -3614,6 +3665,34 @@ fn direct_table_identity(relation: &TableFactor) -> Option<(String, Option<Strin
         table_name,
         alias.as_ref().map(|alias| alias.name.value.clone()),
     ))
+}
+
+/// 拆分可能带限定前缀的表名，返回 `(限定前缀, 裸表名)`。
+///
+/// 查询分析（见 `direct_table_identity`）把 `` `库`.`表` `` 拼成 `库.表`，
+/// 生成 SQL 与元数据查询时都要能识别这种限定名。
+pub(crate) fn qualified_table_parts(name: &str) -> Option<(&str, &str)> {
+    let (prefix, bare_table) = name.rsplit_once('.')?;
+    let prefix = prefix.trim();
+    let bare_table = bare_table.trim();
+    (!prefix.is_empty() && !bare_table.is_empty()).then_some((prefix, bare_table))
+}
+
+/// 按 `.` 拆分并逐段加引号，用于已经是限定名的表引用。
+pub(crate) fn quote_each_identifier<F>(name: &str, quote: F) -> String
+where
+    F: Fn(&str) -> String,
+{
+    let parts: Vec<String> = name
+        .split('.')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(&quote)
+        .collect();
+    if parts.is_empty() {
+        return quote(name);
+    }
+    parts.join(".")
 }
 
 fn select_projection_is_direct(
@@ -4611,6 +4690,104 @@ mod tests {
         assert_eq!(
             analyze_select_editability_fallback("UPDATE users SET name = 'test'"),
             None
+        );
+    }
+
+    /// 查询结果网格里的表名来自 SQL 分析，是 `库.表` 拼接形式；保存变更时
+    /// 不能再拼一次 database，否则会生成 `` `user_center`.`user_center.uc_user_info` ``
+    /// 这种非法引用（MySQL 42S02 / 1146）。
+    #[test]
+    fn qualified_table_name_is_not_prefixed_twice_in_save_sql() {
+        let plugin = MySqlPlugin::new();
+        let request = TableSaveRequest {
+            database: "user_center".to_string(),
+            schema: None,
+            table: "user_center.uc_user_info".to_string(),
+            columns: vec![],
+            index_infos: vec![],
+            changes: vec![TableRowChange::Updated {
+                original_data: vec![],
+                changes: vec![TableCellChange {
+                    column_index: 0,
+                    column_name: "user_type".to_string(),
+                    old_value: TableCellValue::Null,
+                    new_value: TableCellValue::Text("000104".to_string()),
+                }],
+                rowid: Some("1".to_string()),
+            }],
+        };
+
+        assert_eq!(
+            plugin.generate_table_changes_sql(&request),
+            "UPDATE `user_center`.`uc_user_info` SET `user_type` = '000104' WHERE rowid = '1';"
+        );
+    }
+
+    /// 表名自带的限定前缀优先：跨库查询时可能与当前连接的库不同。
+    #[test]
+    fn qualified_table_name_wins_over_connection_database() {
+        let plugin = MySqlPlugin::new();
+        assert_eq!(
+            plugin.format_resolved_table_reference("main", None, "other_db.orders"),
+            "`other_db`.`orders`"
+        );
+        assert_eq!(
+            plugin.format_resolved_table_reference("main", None, "main.orders"),
+            "`main`.`orders`"
+        );
+    }
+
+    #[test]
+    fn bare_table_name_still_uses_database_prefix() {
+        let plugin = MySqlPlugin::new();
+        assert_eq!(
+            plugin.format_resolved_table_reference("user_center", None, "uc_user_info"),
+            "`user_center`.`uc_user_info`"
+        );
+        assert_eq!(
+            plugin.quote_qualified_table_name("uc_user_info"),
+            "`uc_user_info`"
+        );
+    }
+
+    /// 元数据查询要拆成 (database, schema, table)，否则命不中系统表，
+    /// 主键/索引信息会丢失，保存时退化成全列比较。
+    #[test]
+    fn mysql_metadata_identity_treats_prefix_as_database() {
+        let plugin = MySqlPlugin::new();
+        assert_eq!(
+            plugin.resolve_metadata_table_identity("user_center", None, "user_center.uc_user_info"),
+            ("user_center".to_string(), None, "uc_user_info".to_string())
+        );
+        assert_eq!(
+            plugin.resolve_metadata_table_identity("main", None, "other_db.orders"),
+            ("other_db".to_string(), None, "orders".to_string())
+        );
+        assert_eq!(
+            plugin.resolve_metadata_table_identity("main", None, "orders"),
+            ("main".to_string(), None, "orders".to_string())
+        );
+    }
+
+    /// 支持 schema 层级的方言里，`schema.table` 的前缀是 schema。
+    #[test]
+    fn schema_dialect_metadata_identity_treats_prefix_as_schema() {
+        let plugin = crate::postgresql::PostgresPlugin::new();
+        assert_eq!(
+            plugin.resolve_metadata_table_identity("mydb", None, "public.orders"),
+            (
+                "mydb".to_string(),
+                Some("public".to_string()),
+                "orders".to_string()
+            )
+        );
+        assert_eq!(
+            plugin.resolve_metadata_table_identity("mydb", Some("sales"), "orders"),
+            (
+                "mydb".to_string(),
+                Some("sales".to_string()),
+                "orders".to_string()
+            )
         );
     }
 }

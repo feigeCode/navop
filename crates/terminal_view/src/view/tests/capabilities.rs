@@ -196,6 +196,10 @@ fn quick_command_shortcuts_do_not_override_any_terminal_action_shortcut() {
         "action_id::TERMINAL_INCREASE_FONT",
         "action_id::TERMINAL_DECREASE_FONT",
         "action_id::TERMINAL_RESET_FONT",
+        "action_id::TERMINAL_SCROLL_LINE_UP",
+        "action_id::TERMINAL_SCROLL_LINE_DOWN",
+        "action_id::TERMINAL_SCROLL_PAGE_UP",
+        "action_id::TERMINAL_SCROLL_PAGE_DOWN",
     ] {
         assert!(
             guard.contains(action_id),

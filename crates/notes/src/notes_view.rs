@@ -37,6 +37,8 @@ pub struct NotesView {
     pub(crate) standalone_markdown: bool,
     pub(crate) sidebar_collapsed: bool,
     pub(crate) editor_theme: Option<MarkdownEditorTheme>,
+    /// Cached, collapsible document outline for the active Markdown document.
+    pub(crate) outline: crate::markdown_outline::MarkdownOutlineState,
 }
 
 impl NotesView {
@@ -150,6 +152,7 @@ impl NotesView {
             standalone_markdown,
             sidebar_collapsed: false,
             editor_theme,
+            outline: crate::markdown_outline::MarkdownOutlineState::default(),
         }
     }
 

@@ -313,6 +313,11 @@ pub struct RedisConnectionConfig {
     /// 连接模式
     #[serde(default)]
     pub mode: RedisConnectionMode,
+    /// 集群模式：用户填写的节点列表（host:port），用于发现全部 master。
+    /// Cluster 模式下为避免只连上单个节点，聚合操作（SCAN/TYPE/DEL）
+    /// 会分发到所有 master；空则退化为单端点行为。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cluster_nodes: Vec<String>,
     /// SSH 隧道配置
     #[serde(default)]
     pub ssh_tunnel: Option<RedisSshTunnelConfig>,
@@ -335,6 +340,7 @@ impl Default for RedisConnectionConfig {
             use_tls: false,
             timeout: 10,
             mode: RedisConnectionMode::Standalone,
+            cluster_nodes: Vec::new(),
             ssh_tunnel: None,
         }
     }

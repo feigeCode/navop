@@ -20,7 +20,8 @@ impl NotesView {
         let editor_pane = div()
             .id("markdown-editor")
             .debug_selector(|| "markdown-editor".to_owned())
-            .size_full()
+            .flex_1()
+            .h_full()
             .min_h_0()
             .min_w_0()
             .overflow_hidden()
@@ -32,6 +33,11 @@ impl NotesView {
                     view.save_active_markdown(window, cx);
                 },
             ))
+            .on_action(cx.listener(
+                |view, _: &crate::markdown_source::ToggleMarkdownOutline, _window, cx| {
+                    view.toggle_markdown_outline(cx);
+                },
+            ))
             .size_full()
             .min_w_0()
             .min_h_0()
@@ -41,7 +47,16 @@ impl NotesView {
                 matches!(session.state.sync_state, MarkdownSyncState::Conflict),
                 |this| this.child(self.render_conflict_banner(document_id, cx)),
             )
-            .child(div().flex_1().min_h_0().min_w_0().child(editor_pane))
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    .child(editor_pane)
+                    .when(self.outline.is_visible(), |this| {
+                        this.child(self.render_markdown_outline(cx))
+                    }),
+            )
             .into_any_element()
     }
 
@@ -161,6 +176,21 @@ impl NotesView {
                     .disabled(save_disabled)
                     .on_click(cx.listener(|view, _, window, cx| {
                         view.save_active_markdown(window, cx);
+                    })),
+            )
+            .child(
+                Button::new("markdown-outline-toggle")
+                    .debug_selector(|| "markdown-outline-toggle".to_owned())
+                    .flex_shrink_0()
+                    .icon(if self.outline.is_visible() {
+                        IconName::PanelRightClose
+                    } else {
+                        IconName::PanelRightOpen
+                    })
+                    .tooltip(t!("Notes.markdown_outline_tooltip").to_string())
+                    .small()
+                    .on_click(cx.listener(|view, _, _window, cx| {
+                        view.toggle_markdown_outline(cx);
                     })),
             )
     }

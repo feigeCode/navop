@@ -1,3 +1,4 @@
+use crate::markdown_source::{MARKDOWN_CONTEXT, ToggleMarkdownOutline};
 use gpui::{Action, App, KeyBinding};
 use markdown_editor::{
     BlockDown, BlockUp, BoldSelection, CodeSelection, Copy, Cut, Delete, DeleteBack, DeleteBlock,
@@ -359,6 +360,13 @@ macro_rules! command_list {
                 GLOBAL_CONTEXT,
                 ToggleViewMode
             ),
+            (
+                "view.toggle_outline",
+                "Toggle Document Outline",
+                &["secondary-shift-o"],
+                Some(MARKDOWN_CONTEXT),
+                ToggleMarkdownOutline
+            ),
         }
     };
 }
@@ -410,7 +418,7 @@ mod tests {
     #[test]
     fn all_markdown_shortcuts_have_valid_unique_commands_and_keys() {
         let descriptors = descriptors();
-        assert_eq!(descriptors.len(), 57);
+        assert_eq!(descriptors.len(), 58);
 
         let mut ids = std::collections::HashSet::new();
         for descriptor in descriptors {

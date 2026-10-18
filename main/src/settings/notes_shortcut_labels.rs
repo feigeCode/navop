@@ -184,6 +184,10 @@ const VIEW_COMMAND_KEYS: &[(&str, &str)] = &[
         "view.toggle_source_mode",
         "Settings.Shortcuts.notes_toggle_source_mode",
     ),
+    (
+        "view.toggle_outline",
+        "Settings.Shortcuts.notes_toggle_outline",
+    ),
 ];
 
 #[cfg(test)]

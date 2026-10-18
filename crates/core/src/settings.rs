@@ -1038,6 +1038,9 @@ pub struct AppSettings {
     pub sql_editor_hover_enabled: bool,
     #[serde(default = "default_monospace_font_family")]
     pub table_preview_font_family: String,
+    /// Markdown 编辑器代码字体（行内代码、代码块、表格内代码）。
+    #[serde(default = "default_monospace_font_family")]
+    pub markdown_code_font_family: String,
     #[serde(default = "default_monospace_font_family")]
     pub terminal_font_family: String,
     #[serde(
@@ -1480,6 +1483,7 @@ impl Default for AppSettings {
             sql_editor_font_size: default_sql_editor_font_size(),
             sql_editor_hover_enabled: default_sql_editor_hover_enabled(),
             table_preview_font_family: default_monospace_font_family(),
+            markdown_code_font_family: default_monospace_font_family(),
             terminal_font_family: default_monospace_font_family(),
             custom_fonts: Vec::new(),
             terminal_font_size: default_terminal_font_size(),
@@ -1619,6 +1623,8 @@ impl AppSettings {
             normalize_grid_monospace_font_family(&self.sql_editor_font_family);
         self.table_preview_font_family =
             normalize_grid_monospace_font_family(&self.table_preview_font_family);
+        self.markdown_code_font_family =
+            normalize_grid_monospace_font_family(&self.markdown_code_font_family);
         self.terminal_font_family =
             normalize_grid_monospace_font_family(&self.terminal_font_family);
     }

@@ -9,12 +9,15 @@ mod block_render;
 pub mod components;
 mod config;
 pub mod editor;
+mod fonts;
 mod host_services;
 mod i18n;
 mod icons;
 mod navop_host;
 mod navop_theme;
 mod net;
+mod outline;
+mod text_offsets;
 mod theme;
 mod wasm_highlight;
 
@@ -36,6 +39,9 @@ pub use components::{
     WordSelectLeft, WordSelectRight,
 };
 pub use editor::{EditorEvent as MarkdownEditorEvent, ViewMode};
+pub use fonts::{
+    FontPreferences, FontSettings, FontStackParseError, parse_font_stack, set_font_stacks,
+};
 pub use host_services::{
     BlockRenderArtifact, BlockRenderKind, BlockRenderProvider, BlockRenderRequest,
     CodeHighlightProvider, CodeHighlightRequest, CodeHighlightResult, CodeHighlightService,
@@ -43,6 +49,7 @@ pub use host_services::{
 };
 pub use navop_host::markdown_editor_host_services;
 pub use navop_theme::MarkdownEditorTheme;
+pub use outline::{OutlineEntry, outline_entries};
 
 /// The embedded editor type exposed to Notes.
 pub type MarkdownEditor = editor::Editor;
@@ -52,6 +59,7 @@ pub fn init(cx: &mut App) {
     let locale = gpui_component::locale();
     rust_i18n::set_locale(i18n::normalize_locale(&locale));
     cx.set_global(theme::ThemeManager::default());
+    FontSettings::init(cx, FontPreferences::default());
     components::init(cx);
 }
 

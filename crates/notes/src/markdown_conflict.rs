@@ -100,6 +100,9 @@ impl NotesView {
         });
         match result {
             Ok(()) => {
+                if self.outline.is_visible() {
+                    self.refresh_markdown_outline(cx);
+                }
                 cx.notify();
             }
             Err(error) => notify_operation_error(window, cx, error),

@@ -118,6 +118,11 @@ fn redis_connection_config(params: &RedisParams) -> RedisConnectionConfig {
         use_tls: params.use_tls,
         timeout: params.connect_timeout.unwrap_or(10),
         mode: RedisConnectionMode::Standalone,
+        cluster_nodes: params
+            .cluster
+            .as_ref()
+            .map(|c| c.nodes.clone())
+            .unwrap_or_default(),
         ssh_tunnel: params.ssh_tunnel.clone(),
     }
 }
