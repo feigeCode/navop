@@ -11,13 +11,16 @@ use one_core::cloud_sync::personal::{
     SyncStoreHealth, WorkerConfig, build_personal_sync_runtime_config, open_webdav_password,
 };
 use one_core::cloud_sync::scope::personal::SyncScopeSource;
+use one_core::cloud_sync::scope::settings_payload::{SettingsGroup, extract_payload};
 use one_core::cloud_sync::scope::state::{SyncItemStateRepository, SyncTypeStatusRepository};
 use one_core::cloud_sync::{CloudSyncData, CloudSyncService, ConflictResolution, data_type};
 use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
 use one_core::crypto;
 use one_core::gpui_tokio::Tokio;
 use one_core::llm::storage::ProviderRepository;
-use one_core::settings::{AppSettings, GlobalCurrentUser, PersonalSyncSettings, SyncProvider};
+use one_core::settings::{
+    AppSettings, GlobalCurrentUser, PersonalSyncSettings, SyncProvider, SYNC_SCOPE_DESCRIPTORS,
+};
 use one_core::storage::quick_command::QuickCommandRepository;
 use one_core::storage::sftp_favorite_path::SftpFavoritePathRepository;
 use one_core::storage::traits::Repository;
@@ -27,7 +30,7 @@ use one_core::storage::{
 };
 use rust_i18n::t;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::personal_sync_status::PersonalSyncRuntimeStatus;
 
@@ -41,6 +44,7 @@ pub struct GlobalPersonalSyncRuntime {
     generation: u64,
     pending_auto_drain: bool,
     _settings_subscription: Subscription,
+    _settings_sync_subscription: Subscription,
     _local_event_subscription: Option<Subscription>,
 }
 
@@ -60,6 +64,9 @@ type RunningPersonalSyncWorker = PersonalSyncWorker<
 
 pub fn init(cx: &mut App) {
     let settings_subscription = cx.observe_global::<AppSettings>(reconcile_runtime);
+    // 设置项被改动后立刻唤醒同步（只针对真正变了的、且已勾选同步的分组）
+    cx.set_global(SettingsSyncBaseline::default());
+    let settings_sync_subscription = cx.observe_global::<AppSettings>(observe_settings_for_sync);
     let local_event_subscription = subscribe_local_events(cx);
     cx.set_global(GlobalPersonalSyncRuntime {
         active_config: None,
@@ -69,6 +76,7 @@ pub fn init(cx: &mut App) {
         generation: 0,
         pending_auto_drain: false,
         _settings_subscription: settings_subscription,
+        _settings_sync_subscription: settings_sync_subscription,
         _local_event_subscription: local_event_subscription,
     });
     start_periodic_auto_sync(cx);
@@ -730,6 +738,79 @@ pub(crate) fn personal_sync_event_from_connection_event(
 
 fn enqueue_local_change(event: PersonalSyncEvent, cx: &mut App) {
     enqueue_auto_sync_event(event, cx);
+}
+
+/// 某类自选同步数据发生本地变更：尽快跑一轮同步。
+///
+/// 注意 `run_locked_pass` 每轮都会重新列举全部本地项与远端记录再整体规划，
+/// 所以这里做不到「只同步这一种类型」——事件只是「尽快跑一轮」的信号。
+fn notify_scope_data_changed(cx: &mut App, data_type: &str) {
+    enqueue_local_change(
+        PersonalSyncEvent::LocalChanged {
+            data_type: data_type.to_string(),
+            local_id: String::new(),
+        },
+        cx,
+    );
+}
+
+/// 各设置分组上次观察到的白名单载荷。
+///
+/// 监听 `AppSettings` 全局拿不到新旧值，只能自己留一份快照比对。快照只含
+/// 白名单字段，所以同步开关 / 同步范围这类字段改动不会触发同步 —— 也就不会
+/// 出现「改同步设置 → 触发同步 → 又写设置」的自激循环。
+#[derive(Default)]
+struct SettingsSyncBaseline {
+    /// 首次观察只建基线、不触发同步，避免一启动就跑一轮
+    initialized: bool,
+    payloads: HashMap<String, String>,
+}
+
+impl Global for SettingsSyncBaseline {}
+
+/// `AppSettings` 变更时，为真正变了且已开启同步的分组唤醒同步。
+fn observe_settings_for_sync(cx: &mut App) {
+    let mut current: Vec<(String, String)> = Vec::new();
+    {
+        let settings = AppSettings::global(cx);
+        let provider = settings.sync_provider;
+        for group in SettingsGroup::ALL {
+            let data_type = group.data_type();
+            let Some(descriptor) = SYNC_SCOPE_DESCRIPTORS
+                .iter()
+                .find(|item| item.data_type == data_type)
+            else {
+                continue;
+            };
+            if !settings.sync_scope.is_active(descriptor.key, provider) {
+                continue;
+            }
+            let Ok(payload) = extract_payload(*group, settings) else {
+                continue;
+            };
+            let Ok(canonical) = serde_json::to_string(&payload) else {
+                continue;
+            };
+            current.push((data_type.to_string(), canonical));
+        }
+    }
+
+    let mut changed: Vec<String> = Vec::new();
+    {
+        let baseline = cx.global_mut::<SettingsSyncBaseline>();
+        let initialized = baseline.initialized;
+        baseline.initialized = true;
+        for (data_type, canonical) in current {
+            if initialized && baseline.payloads.get(&data_type) != Some(&canonical) {
+                changed.push(data_type.clone());
+            }
+            baseline.payloads.insert(data_type, canonical);
+        }
+    }
+
+    for data_type in changed {
+        notify_scope_data_changed(cx, &data_type);
+    }
 }
 
 fn enqueue_periodic_full_scan(cx: &mut App) {
