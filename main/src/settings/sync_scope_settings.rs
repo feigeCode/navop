@@ -7,6 +7,7 @@
 //! - **其余类型**：新增项统一默认关闭（Q1），Personal 下首次开启弹一次确认（R2 提示）。
 //! - 勾选配置本身**不参与同步**（R7 / Q9）。
 
+use chrono::TimeZone as _;
 use gpui::{AnyElement, App, IntoElement, ParentElement as _, Styled as _, Window, div};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::dialog::DialogButtonProps;
@@ -195,42 +196,27 @@ fn status_text(cx: &App, record_type: &str) -> Option<(String, bool)> {
     Some((
         t!(
             "Settings.Sync.Scope.last_synced",
-            time = format_relative_time(success_at)
+            time = format_absolute_time(success_at)
         )
         .to_string(),
         false,
     ))
 }
 
-/// 相对时间文案：一小时内按分钟，一天内按小时，否则给日期
-fn format_relative_time(timestamp: i64) -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let diff = (now - timestamp).max(0);
-    if diff < 60 {
-        return t!("Settings.Sync.Scope.just_now").to_string();
-    }
-    if diff < 3600 {
-        return t!(
-            "Settings.Sync.Scope.minutes_ago",
-            count = (diff / 60).to_string()
-        )
-        .to_string();
-    }
-    if diff < 86400 {
-        return t!(
-            "Settings.Sync.Scope.hours_ago",
-            count = (diff / 3600).to_string()
-        )
-        .to_string();
-    }
-    t!(
-        "Settings.Sync.Scope.days_ago",
-        count = (diff / 86400).to_string()
-    )
-    .to_string()
+/// 上次同步时间：按**本地时区**输出 `YYYY/MM/DD HH:MM:SS`。
+///
+/// 用绝对时间而不是「刚刚 / N 分钟前」：相对文案在自动同步（60s 一轮）下几乎
+/// 永远显示「刚刚」，看不出到底什么时候同步过。
+fn format_absolute_time(timestamp: i64) -> String {
+    chrono::Utc
+        .timestamp_opt(timestamp, 0)
+        .single()
+        .map(|utc| {
+            utc.with_timezone(&chrono::Local)
+                .format("%Y/%m/%d %H:%M:%S")
+                .to_string()
+        })
+        .unwrap_or_else(|| "-".to_string())
 }
 
 /// 勾选变更入口；Personal 下首次开启需要用户确认（Q1 / R2）。

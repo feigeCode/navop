@@ -4058,9 +4058,9 @@ Settings:
         zh-CN: "%{count} 天前"
         zh-HK: "%{count} 天前"
       last_synced:
-        en: Synced %{time}
-        zh-CN: 上次同步 %{time}
-        zh-HK: 上次同步 %{time}
+        en: "Last sync: %{time}"
+        zh-CN: "上次同步：%{time}"
+        zh-HK: "上次同步：%{time}"
       personal_confirm_title:
         en: Syncing this data type requires updated clients
         zh-CN: 开启此类型同步需要所有设备都已升级

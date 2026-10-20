@@ -12,6 +12,7 @@ use crate::storage::{
 
 use super::{PersonalSyncItemSnapshot, PersonalSyncLocalSource, SyncStoreError};
 use crate::cloud_sync::scope::personal::SyncScopeSource;
+use crate::cloud_sync::scope::state::SyncTypeStatusRepository;
 use crate::cloud_sync::workspace_hierarchy::{
     cloud_parent_links, reconcile_connection_workspaces, reconcile_parent_links,
     sort_ancestors_first,
@@ -27,6 +28,11 @@ pub struct PersonalSyncLocalRepositorySource {
     credentials: CredentialRepository,
     workspaces: WorkspaceRepository,
     service: Arc<RwLock<CloudSyncService>>,
+    /// 每类数据的同步结果（上次同步时间 / 最近一次失败），供设置页逐行展示。
+    status: SyncTypeStatusRepository,
+    /// 与 `SyncScopeSource` 必须一致，否则设置页按另一套键查不到状态。
+    scope_env: String,
+    user_id: String,
     /// 用户自选同步范围内的新增数据类型（笔记 / 已保存 SQL / 快捷命令 /
     /// SFTP 收藏 / 各类设置 / LLM 提供商）。`None` 表示功能未装配。
     scope: Option<Arc<SyncScopeSource>>,
@@ -38,14 +44,30 @@ impl PersonalSyncLocalRepositorySource {
         credentials: CredentialRepository,
         workspaces: WorkspaceRepository,
         service: Arc<RwLock<CloudSyncService>>,
+        status: SyncTypeStatusRepository,
+        scope_env: String,
+        user_id: String,
     ) -> Self {
         Self {
             connections,
             credentials,
             workspaces,
             service,
+            status,
+            scope_env,
+            user_id,
             scope: None,
         }
+    }
+
+    /// 记录该类型同步成功，供设置页显示「上次同步」。
+    ///
+    /// 连接 / 工作空间 / 钥匙串由本源直接处理，不经过 `SyncScopeSource`，
+    /// 所以状态必须在这里写——否则这三类在页面上永远显示「未同步」。
+    fn mark_success(&self, record_type: &str) {
+        let _ = self
+            .status
+            .mark_success(&self.scope_env, &self.user_id, record_type);
     }
 
     /// 装配「数据范围」扩展源
@@ -440,9 +462,22 @@ impl PersonalSyncLocalSource for PersonalSyncLocalRepositorySource {
             return Ok(());
         }
         match record.data_type.as_str() {
-            data_type::CONNECTION => self.apply_connection(record, local),
-            data_type::CREDENTIAL => self.apply_credential(record, local),
-            data_type::WORKSPACE => self.apply_workspace(record, local),
+            // 下载路径不会再走 `mark_synced`，所以成功与否要在这里落状态
+            data_type::CONNECTION => {
+                self.apply_connection(record, local)?;
+                self.mark_success(data_type::CONNECTION);
+                Ok(())
+            }
+            data_type::CREDENTIAL => {
+                self.apply_credential(record, local)?;
+                self.mark_success(data_type::CREDENTIAL);
+                Ok(())
+            }
+            data_type::WORKSPACE => {
+                self.apply_workspace(record, local)?;
+                self.mark_success(data_type::WORKSPACE);
+                Ok(())
+            }
             // 其余类型交给「数据范围」扩展源；未装配时**跳过而不是报错**：
             // 旧版本客户端拉到未知 data_type 会让整轮同步失败（设计文档 R2），
             // 这里把它降级为一条 warning。
@@ -488,18 +523,21 @@ impl PersonalSyncLocalSource for PersonalSyncLocalRepositorySource {
         synced_at: i64,
     ) -> Result<(), SyncStoreError> {
         if let Ok(id) = parse_prefixed_id(local_id, CONNECTION_PREFIX) {
+            self.mark_success(data_type::CONNECTION);
             return self
                 .connections
                 .update_sync_status(id, Some(cloud_id.to_string()), Some(synced_at))
                 .map_err(repository_error);
         }
         if let Ok(id) = parse_prefixed_id(local_id, CREDENTIAL_PREFIX) {
+            self.mark_success(data_type::CREDENTIAL);
             return self
                 .credentials
                 .update_sync_status(id, Some(cloud_id), Some(synced_at))
                 .map_err(repository_error);
         }
         if let Ok(id) = parse_prefixed_id(local_id, WORKSPACE_PREFIX) {
+            self.mark_success(data_type::WORKSPACE);
             return self
                 .workspaces
                 .update_sync_status(id, Some(cloud_id.to_string()), Some(synced_at))

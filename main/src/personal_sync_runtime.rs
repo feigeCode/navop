@@ -924,11 +924,16 @@ fn build_local_source(cx: &App) -> Option<PersonalSyncLocalRepositorySource> {
         .service
         .clone();
 
+    // scope_env / user_id 必须与 `build_scope_source` 和设置页读取时用的一致
+    // （都是 "personal"），否则连接 / 工作空间 / 钥匙串的同步状态查不到。
     let source = PersonalSyncLocalRepositorySource::new(
         (*connections).clone(),
         (*credentials).clone(),
         (*workspaces).clone(),
         service.clone(),
+        SyncTypeStatusRepository::new(storage.connection()),
+        "personal".to_string(),
+        "personal".to_string(),
     );
 
     Some(source.with_scope(build_scope_source(cx, &storage, service)))
