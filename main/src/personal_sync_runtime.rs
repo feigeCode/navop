@@ -627,11 +627,14 @@ fn reconcile_runtime(cx: &mut App) {
             sync_master_key_and_user(cx);
             match start_running_runtime(cx, &config) {
                 Ok(runtime) => {
+                    // 先算签名再拿可变借用：`current_scope_signature` 要 `&cx`，
+                    // 与下面 `global_mut` 的可变借用不能重叠（E0502）。
+                    let scope_signature = current_scope_signature(cx);
                     let state = cx.global_mut::<GlobalPersonalSyncRuntime>();
                     state.active_config = Some(config);
                     state.runtime = Some(runtime);
                     state.last_pass_at = None;
-                    state.scope_signature = current_scope_signature(cx);
+                    state.scope_signature = scope_signature;
                     // 运行时（重）建：基线作废，等下一轮轮询重建，避免把旧签名
                     // 当成「刚发生的变更」再触发一轮。
                     state.scope_baseline.clear();
