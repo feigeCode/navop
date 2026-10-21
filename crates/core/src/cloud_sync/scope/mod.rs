@@ -15,7 +15,8 @@ pub mod state;
 pub use cloud::{ScopeSyncItem, ScopeSyncTypeHandler, synthetic_id};
 pub use notes::{NOTE_MAX_CONTENT_BYTES, NoteSyncAdapter, NoteSyncItem, SharedNoteAdapter};
 pub use saved_sql::{
-    SavedSqlDocument, delete_saved_sql_document, saved_sql_documents, write_saved_sql_document,
+    SavedSqlDocument, delete_saved_sql_document, saved_sql_documents, saved_sql_file_stamps,
+    write_saved_sql_document,
 };
 pub use payloads::*;
 pub use personal::*;

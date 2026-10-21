@@ -14,9 +14,9 @@ use one_core::storage::{GlobalStorageState, StorageManager};
 
 use crate::personal_sync_runtime::{
     actions_enabled, build_conflict_sink, forget_personal_conflict, list_personal_conflicts,
-    personal_conflict_display_info, personal_sync_event_from_connection_event,
-    resolve_personal_conflict, resolve_personal_conflicts, runtime_status,
-    should_start_drain_after_enqueue,
+    personal_conflict_display_info, personal_sync_cooldown_elapsed,
+    personal_sync_event_from_connection_event, personal_sync_idle_elapsed, resolve_personal_conflict,
+    resolve_personal_conflicts, runtime_status, should_start_drain_after_enqueue,
 };
 use crate::personal_sync_status::PersonalSyncRuntimeStatus;
 
@@ -200,7 +200,7 @@ fn personal_sync_ignores_non_data_change_events() {
 }
 
 #[test]
-fn personal_sync_enqueue_while_syncing_marks_pending_drain_path() {
+fn personal_sync_drain_gate_skips_while_syncing() {
     assert!(!should_start_drain_after_enqueue(
         &PersonalSyncRuntimeStatus::Syncing
     ));
@@ -210,6 +210,16 @@ fn personal_sync_enqueue_while_syncing_marks_pending_drain_path() {
             message: None,
         }
     ));
+}
+
+#[gpui::test]
+fn personal_sync_cooldown_and_idle_defaults_without_runtime(cx: &mut TestAppContext) {
+    // 运行时尚未建立（没跑过任何一轮）：冷却视为已过（让首轮立刻跑），
+    // 空闲兜底视为未到（首轮由 reconcile 入队，不需要兜底凑脚）。
+    cx.update(|cx| {
+        assert!(personal_sync_cooldown_elapsed(cx));
+        assert!(!personal_sync_idle_elapsed(cx));
+    });
 }
 
 #[gpui::test]

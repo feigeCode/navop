@@ -231,8 +231,36 @@ pub fn delete_saved_sql_document(document_id: &str) -> bool {
     true
 }
 
+/// 只取（相对路径, mtime 秒）的轻量枚举：供变更检测轮询使用，不读文件内容。
+///
+/// 同步运行时靠它判断「`queries/` 下有没有东西变了」——读全量内容来做这件事
+/// 比同步本身还贵，而 mtime 足以覆盖应用内外的新增 / 修改 / 删除 / 重命名。
+pub fn saved_sql_file_stamps() -> Vec<(String, i64)> {
+    let Some(root) = saved_sql_root() else {
+        return Vec::new();
+    };
+    collect_sql_paths(&root)
+        .into_iter()
+        .map(|(relative, path)| {
+            let modified_at = modified_seconds(&path);
+            (relative, modified_at)
+        })
+        .collect()
+}
+
 /// 递归收集 `queries/` 下的 `.sql` 文件，返回（相对路径, 内容, mtime 秒）
 fn collect_sql_files(root: &Path) -> Vec<(String, String, i64)> {
+    collect_sql_paths(root)
+        .into_iter()
+        .filter_map(|(relative, path)| {
+            let content = std::fs::read_to_string(&path).ok()?;
+            Some((relative, content, modified_seconds(&path)))
+        })
+        .collect()
+}
+
+/// 递归收集 `queries/` 下的 `.sql` 文件，返回（相对路径, 绝对路径）
+fn collect_sql_paths(root: &Path) -> Vec<(String, PathBuf)> {
     let mut results = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -248,17 +276,10 @@ fn collect_sql_files(root: &Path) -> Vec<(String, String, i64)> {
             if path.extension().and_then(|e| e.to_str()) != Some("sql") {
                 continue;
             }
-            let Ok(content) = std::fs::read_to_string(&path) else {
-                continue;
-            };
             let Ok(relative) = path.strip_prefix(root) else {
                 continue;
             };
-            results.push((
-                relative.to_string_lossy().replace('\\', "/"),
-                content,
-                modified_seconds(&path),
-            ));
+            results.push((relative.to_string_lossy().replace('\\', "/"), path));
         }
     }
     results

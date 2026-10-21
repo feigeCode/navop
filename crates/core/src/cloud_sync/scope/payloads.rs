@@ -34,14 +34,21 @@ pub fn build_record(
 }
 
 /// 加密并指定云端记录 ID（Singleton 与「重新上传已有记录」场景使用）
+///
+/// ⚠️ checksum 必须与快照侧同口径：`SyncScopeSource` 各处 `list_*` 都用
+/// `payload_checksum(serde_json::to_value(plain))`（对象键排序的规范化 JSON），
+/// 这里如果直接对 `serde_json::to_string(plain)`（结构体字段序）取哈希，两边
+/// 永远不相等——planner 会认为「本地每轮都在变」，把一模一样的内容反复上传，
+/// 表现为「没改任何东西，版本号却每次同步都 +1」。所以明文先规范化再加密。
 pub fn build_record_with_id(
     service: &CloudSyncService,
     record_type: &str,
     plain: &impl Serialize,
     id: String,
 ) -> Result<CloudSyncData, SyncError> {
-    let plaintext =
-        serde_json::to_string(plain).map_err(|e| SyncError::DataFormatError(e.to_string()))?;
+    let value =
+        serde_json::to_value(plain).map_err(|e| SyncError::DataFormatError(e.to_string()))?;
+    let plaintext = super::settings_store::canonical_json(&value);
     let checksum = CloudSyncService::calculate_blob_checksum(&plaintext);
     let encrypted_data = service.encrypt_blob(&plaintext, None)?;
 

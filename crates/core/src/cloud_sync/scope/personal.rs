@@ -20,12 +20,11 @@ use crate::cloud_sync::scope::payloads::{
 };
 use crate::cloud_sync::scope::payloads::{NotePlainData, SavedSqlPlainData};
 use crate::cloud_sync::scope::saved_sql::{
-    SavedSqlDocument, delete_saved_sql_document, saved_sql_documents, write_saved_sql_document,
+    SavedSqlDocument, delete_saved_sql_document, saved_sql_documents, saved_sql_file_stamps,
+    write_saved_sql_document,
 };
 use crate::cloud_sync::scope::settings_payload::{SettingsGroup, apply_payload, merge_three_way};
-use crate::cloud_sync::scope::settings_store::{
-    FileSettingsStore, canonical_json, payload_checksum,
-};
+use crate::cloud_sync::scope::settings_store::{FileSettingsStore, payload_checksum};
 use crate::cloud_sync::scope::state::{
     SyncItemState, SyncItemStateRepository, SyncTypeStatusRepository,
 };
@@ -323,8 +322,7 @@ impl SyncScopeSource {
                 .settings
                 .read(*group)
                 .map_err(|e| SyncStoreError::Io(e.to_string()))?;
-            let _canonical = canonical_json(&payload);
-            let checksum = payload_checksum(&payload);
+            let checksum = settings_group_checksum(group.type_name(), &payload);
             // 设置类没有 updated_at：内容相对基线变化即视为变更。
             // 未变时把 content_ts 对齐到 last_synced_at，让 planner 判定为已同步。
             let known = self.state_of(group.data_type(), group.type_name());
@@ -337,6 +335,67 @@ impl SyncScopeSource {
             items.push(self.snapshot(group.data_type(), group.type_name(), content_ts, &checksum));
         }
         Ok(items)
+    }
+
+    /// 各类数据的轻量变更签名，供同步运行时轮询「本地有没有东西变了」。
+    ///
+    /// 只取身份与时间戳、不算内容校验和——检测变更不该比同步本身还贵。
+    /// 设置类不在这里：它们没有时间戳，由设置观察者按白名单载荷精确比对。
+    pub fn change_signatures(&self) -> Vec<(String, String)> {
+        let mut signatures = Vec::new();
+        if self.enabled.contains(data_type::QUICK_COMMAND) {
+            let rows = self.quick_commands.list().unwrap_or_default();
+            let signature = rows
+                .iter()
+                .map(|command| {
+                    format!(
+                        "{}@{}",
+                        command.id.unwrap_or_default(),
+                        command.updated_at.unwrap_or(0)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            signatures.push((data_type::QUICK_COMMAND.to_string(), signature));
+        }
+        if self.enabled.contains(data_type::SFTP_FAVORITE) {
+            let rows = self.sftp.list_all().unwrap_or_default();
+            let signature = rows
+                .iter()
+                .map(|row| format!("{}@{}", row.id, row.updated_at))
+                .collect::<Vec<_>>()
+                .join(",");
+            signatures.push((data_type::SFTP_FAVORITE.to_string(), signature));
+        }
+        if self.enabled.contains(data_type::LLM_PROVIDER) {
+            let rows = self.providers.list().unwrap_or_default();
+            let signature = rows
+                .iter()
+                .map(|provider| format!("{}@{}", provider.id, provider.updated_at))
+                .collect::<Vec<_>>()
+                .join(",");
+            signatures.push((data_type::LLM_PROVIDER.to_string(), signature));
+        }
+        if self.enabled.contains(data_type::NOTE) {
+            if let Some(adapter) = &self.notes {
+                let signature = adapter
+                    .list()
+                    .iter()
+                    .map(|note| format!("{}@{}", note.document_id, note.modified_at))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                signatures.push((data_type::NOTE.to_string(), signature));
+            }
+        }
+        if self.enabled.contains(data_type::SAVED_SQL) {
+            let signature = saved_sql_file_stamps()
+                .iter()
+                .map(|(path, modified_at)| format!("{path}@{modified_at}"))
+                .collect::<Vec<_>>()
+                .join(",");
+            signatures.push((data_type::SAVED_SQL.to_string(), signature));
+        }
+        signatures
     }
 
     // ---------- 应用远端 ----------
@@ -557,7 +616,8 @@ impl SyncScopeSource {
             .state_of(group.data_type(), group.type_name())
             .unwrap_or_else(|| self.base(group.data_type(), group.type_name()));
         state.cloud_id = Some(record.id.clone());
-        state.checksum = payload_checksum(&merge.merged);
+        // 与 `list_settings` 同口径：覆盖完整载荷，否则下一轮永远判为「已变更」。
+        state.checksum = settings_group_checksum(group.type_name(), &merge.merged);
         state.last_synced_at = Some(now_seconds());
         state.content_ts = now_seconds();
         state.base_payload = Some(merge.merged.to_string());
@@ -565,6 +625,21 @@ impl SyncScopeSource {
         self.mark_success(group.data_type());
         Ok(())
     }
+}
+
+/// 设置类分组的完整载荷校验和。
+///
+/// 必须覆盖 `SettingsPlainData` 整体（`format_version` + `group` + `payload`），
+/// 与 `export_item` 建记录时 `build_record_with_id` 算的口径一致：以前只对
+/// payload 取哈希，而记录侧算的是整个信封，两边永远不相等，设置类每轮都被
+/// 当成「本地已变更」重新上传，版本号跟着虚增。
+fn settings_group_checksum(group: &str, payload: &serde_json::Value) -> String {
+    let plain = SettingsPlainData {
+        format_version: PAYLOAD_FORMAT_VERSION,
+        group: group.to_string(),
+        payload: payload.clone(),
+    };
+    payload_checksum(&serde_json::to_value(&plain).unwrap_or_default())
 }
 
 fn provider_plain(provider: &ProviderConfig) -> LlmProviderPlainData {

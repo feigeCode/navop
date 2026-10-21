@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 
@@ -123,6 +124,9 @@ struct WorkerState {
     pending: HashSet<PersonalSyncEvent>,
     active: bool,
     dirty: bool,
+    /// 最近一轮同步结束的时刻。文件监听用它区分「自己刚写下的记录」和
+    /// 「别的设备写进来的记录」——否则每轮同步都会再触发一轮空转。
+    last_pass_end: Option<Instant>,
 }
 
 #[derive(Clone)]
@@ -170,6 +174,32 @@ where
         state.pending.insert(event);
     }
 
+    /// 是否还有没处理的事件（供同步运行时的调度器判断要不要跑一轮）。
+    pub fn has_pending(&self) -> bool {
+        !self
+            .state
+            .lock()
+            .expect("personal sync worker state")
+            .pending
+            .is_empty()
+    }
+
+    /// 正在同步，或刚刚结束不久。
+    ///
+    /// 同步目录的文件监听会收到**自己写下去**的记录：那些事件不该再触发一轮
+    /// 同步（否则每轮真实同步都跟着一轮空转）。这里用「进行中 + 宽限期」覆盖
+    /// 写入到事件送达之间的延迟；代价是宽限期内别的设备的改动会晚一轮被发现。
+    pub fn is_syncing_or_just_finished(&self) -> bool {
+        const SELF_WRITE_GRACE: Duration = Duration::from_secs(5);
+        let state = self.state.lock().expect("personal sync worker state");
+        if state.active {
+            return true;
+        }
+        state
+            .last_pass_end
+            .is_some_and(|finished_at| finished_at.elapsed() < SELF_WRITE_GRACE)
+    }
+
     pub async fn drain_once(&self) -> Result<(), SyncStoreError> {
         let Some(events) = self.begin_drain() else {
             return Ok(());
@@ -194,6 +224,7 @@ where
     fn finish_drain(&self) {
         let mut state = self.state.lock().expect("personal sync worker state");
         state.active = false;
+        state.last_pass_end = Some(Instant::now());
         if state.dirty {
             state.pending.insert(PersonalSyncEvent::FullScan);
             state.dirty = false;
