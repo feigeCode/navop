@@ -36,9 +36,11 @@ use crate::personal_sync_status::PersonalSyncRuntimeStatus;
 
 /// 两次自动同步之间的最小间隔。
 ///
-/// 变更到达时如果距上次同步不足一分钟，就延迟到满一分钟再跑，把这一分钟内
-/// 的所有变更合并成一轮——既避免「改一个设置就传一次」，也让多设备错开写入。
-const PERSONAL_SYNC_MIN_INTERVAL: Duration = Duration::from_secs(60);
+/// 变更到达时如果距上次同步不足十秒，就延迟到满十秒再跑，把这十秒内的
+/// 所有变更合并成一轮——既避免「改一个设置就传一次」，也让多设备错开写入。
+/// 十秒是「感知不到等待」与「合并突发变更」的折中：用户改完设置最多等十秒
+/// 就会看到同步状态翻新，连续改多项也仍然只传一轮。
+const PERSONAL_SYNC_MIN_INTERVAL: Duration = Duration::from_secs(10);
 
 /// 本地长时间无变更时的兜底同步间隔（拉取别的设备的改动）。
 const PERSONAL_SYNC_IDLE_INTERVAL: Duration = Duration::from_secs(600);
@@ -163,6 +165,7 @@ pub fn test_connection(cx: &mut App) {
 }
 
 pub fn sync_now(cx: &mut App) {
+    tracing::info!("个人同步：用户手动触发「立即同步」");
     let Some(config) = active_or_current_config(cx) else {
         set_status(cx, PersonalSyncRuntimeStatus::Disabled);
         return;
@@ -601,6 +604,9 @@ fn run_temporary_full_scan(
     conflict_sink: SqlitePersonalSyncConflictSink,
 ) {
     let generation = begin_operation(cx, PersonalSyncRuntimeStatus::Syncing);
+    // 手动同步也记下开跑时刻：否则「从未跑过轮次」的启动轮兜底会在它结束后
+    // 又补一轮，且「十秒内不重复跑」的冷却账目也不完整。
+    cx.global_mut::<GlobalPersonalSyncRuntime>().last_pass_at = Some(Instant::now());
     let http = cx.http_client();
     let task = Tokio::spawn(cx, run_sync(config, source, conflict_sink, http));
     cx.spawn(async move |cx: &mut AsyncApp| {
@@ -646,9 +652,16 @@ fn reconcile_runtime(cx: &mut App) {
                     };
                     // 起来先跑一轮：既及时暴露后端问题（例如 Git 后端指向的
                     // 不是仓库），也让新勾选的同步范围立刻上传。
+                    // 这一轮是整个启动链路的关键节点：日志单独记一行，
+                    // 丢没丢一目了然（调度器另有「从未跑过轮次」兜底）。
+                    tracing::info!(
+                        data_types = state.scope_signature.len(),
+                        "个人同步：同步运行时已建立，入队首轮全量扫描"
+                    );
                     enqueue_auto_sync_event(PersonalSyncEvent::FullScan, cx);
                 }
                 Err(error) => {
+                    tracing::warn!(error = %error, "个人同步：同步运行时建立失败");
                     let state = cx.global_mut::<GlobalPersonalSyncRuntime>();
                     state.active_config = Some(config);
                     state.runtime = None;
@@ -657,6 +670,7 @@ fn reconcile_runtime(cx: &mut App) {
             }
         }
         Err(PersonalSyncRuntimeError::Disabled | PersonalSyncRuntimeError::NotConfigured) => {
+            tracing::info!("个人同步：同步未开启或当前 provider 不是个人同步，后台同步不参与");
             let state = cx.global_mut::<GlobalPersonalSyncRuntime>();
             state.generation += 1;
             state.active_config = None;
@@ -875,6 +889,12 @@ fn observe_settings_for_sync(cx: &mut App) {
         }
     }
 
+    if !changed.is_empty() {
+        tracing::info!(
+            groups = %changed.join(", "),
+            "个人同步：设置分组发生变更，触发同步"
+        );
+    }
     for data_type in changed {
         notify_scope_data_changed(cx, &data_type);
     }
@@ -899,6 +919,18 @@ fn personal_auto_sync_enabled(cx: &App) -> bool {
 
 fn enqueue_auto_sync_event(event: PersonalSyncEvent, cx: &mut App) {
     if !personal_auto_sync_enabled(cx) {
+        // 记下被哪道闸门拦下：排查「改了却没同步」时，这一行就是答案。
+        let settings = AppSettings::global(cx);
+        let reason = if !settings.sync_enabled {
+            "同步总开关未打开"
+        } else if settings.sync_provider != SyncProvider::Personal {
+            "当前同步 provider 不是个人同步"
+        } else if !settings.personal_sync.auto_sync {
+            "自动同步子开关未打开（仅手动同步）"
+        } else {
+            "同步运行时尚未就绪"
+        };
+        tracing::info!(event = ?event, reason, "个人同步：变更未入队");
         return;
     }
     sync_master_key_and_user(cx);
@@ -908,25 +940,30 @@ fn enqueue_auto_sync_event(event: PersonalSyncEvent, cx: &mut App) {
     else {
         return;
     };
+    tracing::info!(event = ?event, "个人同步：变更入队");
     runtime.worker.enqueue(event);
     maybe_start_scheduled_drain(cx);
 }
 
 /// 冷却已满就立刻跑；没满就留给调度器，等某个 tick 补跑。
 ///
-/// 一分钟内无论来多少变更（设置观察者、连接通知、变更轮询、文件监听）都
+/// 十秒内无论来多少变更（设置观察者、连接通知、变更轮询、文件监听）都
 /// 合并成一轮：既削服务器压力，也让多设备错开写入、少撞远端锁。
 fn maybe_start_scheduled_drain(cx: &mut App) {
     if !should_start_drain_after_enqueue(&runtime_status(cx)) {
         return;
     }
     if !personal_sync_cooldown_elapsed(cx) {
+        tracing::info!(
+            cooldown_secs = PERSONAL_SYNC_MIN_INTERVAL.as_secs(),
+            "个人同步：距上轮同步不足冷却时间，本轮延迟到冷却结束后执行"
+        );
         return;
     }
     start_runtime_drain(cx);
 }
 
-/// 距上次同步是否已满一分钟。
+/// 距上次同步是否已满十秒。
 pub(crate) fn personal_sync_cooldown_elapsed(cx: &App) -> bool {
     cx.try_global::<GlobalPersonalSyncRuntime>()
         .and_then(|state| state.last_pass_at)
@@ -952,12 +989,19 @@ fn start_runtime_drain(cx: &mut App) {
     };
     let worker = runtime.worker.clone();
     let store = runtime.store.clone();
-    // 记下开跑时刻：调度器据此执行「一分钟内不重复跑」与「空闲 10 分钟兜底」。
+    // 记下开跑时刻：调度器据此执行「十秒内不重复跑」与「空闲 10 分钟兜底」。
     cx.global_mut::<GlobalPersonalSyncRuntime>().last_pass_at = Some(Instant::now());
     let generation = begin_operation(cx, PersonalSyncRuntimeStatus::Syncing);
+    tracing::info!("个人同步：开始一轮同步");
     let task = Tokio::spawn(cx, drain_and_flush(worker, store));
     cx.spawn(async move |cx: &mut AsyncApp| {
-        let status = personal_sync_status_from_task(task.await);
+        let outcome = task.await;
+        match &outcome {
+            Ok(Ok(())) => tracing::info!("个人同步：本轮同步完成"),
+            Ok(Err(error)) => tracing::warn!(error = %error, "个人同步：本轮同步失败"),
+            Err(error) => tracing::warn!(error = %error, "个人同步：本轮同步任务异常退出"),
+        }
+        let status = personal_sync_status_from_task(outcome);
         let _ = cx.update(move |cx| finish_operation(cx, generation, status));
         Ok::<(), anyhow::Error>(())
     })
@@ -975,7 +1019,8 @@ async fn drain_and_flush(
 /// 同步调度器：每秒醒一次，只按本地状态决策，不产生任何 IO。
 ///
 /// - 有待处理事件且冷却已满 → 立刻跑；
-/// - 冷却没满 → 什么都不做，事件继续攒着，满一分钟后的某个 tick 一次性跑掉；
+/// - 冷却没满 → 什么都不做，事件继续攒着，满十秒后的某个 tick 一次性跑掉；
+/// - 还从未跑过轮次 → 补跑启动轮（`reconcile_runtime` 入队的那轮可能丢了）；
 /// - 没有事件且距上次同步已 10 分钟 → 兜底跑一轮（拉取其他设备的改动）。
 fn start_personal_sync_scheduler(cx: &mut App) {
     cx.spawn(|cx: &mut AsyncApp| {
@@ -1004,15 +1049,42 @@ fn personal_sync_scheduler_tick(cx: &mut App) {
         maybe_start_scheduled_drain(cx);
         return;
     }
+    // 启动轮兜底：运行时在跑、自动同步开着，却还从未跑过任何一轮 ——
+    // reconcile_runtime 建好运行时时入队的那轮 FullScan 可能因主线程冻结
+    // （init 期间 UI 线程被长任务卡住）或竞态静默丢失。这里补一轮，保证
+    // 启动轮最迟在一秒内补跑，不让首轮前的本地变更干等。
+    let missed_startup = cx
+        .try_global::<GlobalPersonalSyncRuntime>()
+        .is_some_and(|state| {
+            missed_startup_pass(state.runtime.is_some(), state.last_pass_at, &state.status)
+        });
+    if missed_startup {
+        tracing::info!("个人同步：检测到启动轮未执行，补跑一轮全量扫描");
+        enqueue_periodic_full_scan(cx);
+        return;
+    }
     if personal_sync_idle_elapsed(cx) {
         enqueue_periodic_full_scan(cx);
     }
 }
 
+/// 启动轮兜底判定：运行时已在跑、还从未跑过轮次、且当前没在同步。
+///
+/// 抽成纯函数便于单测：三种状态组合的语义不依赖 GPUI 全局。正常流程里
+/// `reconcile_runtime` 建好运行时后约一秒内就会跑首轮并把 `last_pass_at`
+/// 置上，所以这个判定只在「启动轮真的丢了」时才成立。
+pub(crate) fn missed_startup_pass(
+    runtime_active: bool,
+    last_pass_at: Option<Instant>,
+    status: &PersonalSyncRuntimeStatus,
+) -> bool {
+    runtime_active && last_pass_at.is_none() && !matches!(status, PersonalSyncRuntimeStatus::Syncing)
+}
+
 /// 距上次同步是否已超过空闲兜底间隔。
 ///
-/// 还没跑过首轮时为 `false`：运行时建好时 `reconcile_runtime` 会立刻入队
-/// 一轮 FullScan，不需要兜底再来凑一脚。
+/// 还没跑过首轮时为 `false`：「从未跑过轮次」由调度器的启动轮兜底负责
+/// （见 `personal_sync_scheduler_tick`），不走空闲兜底。
 pub(crate) fn personal_sync_idle_elapsed(cx: &App) -> bool {
     cx.try_global::<GlobalPersonalSyncRuntime>()
         .and_then(|state| state.last_pass_at)
@@ -1069,34 +1141,49 @@ fn apply_scope_signatures(cx: &mut App, signatures: Vec<(String, String)>) {
         return;
     }
 
-    let changed = {
+    let (changed, changed_types) = {
         let state = cx.global_mut::<GlobalPersonalSyncRuntime>();
         if !state.scope_baseline_initialized {
+            tracing::info!(
+                types = signatures.len(),
+                "个人同步：本地变更轮询基线已建立"
+            );
             state.scope_baseline = signatures.into_iter().collect();
             state.scope_baseline_initialized = true;
-            false
+            (false, Vec::new())
         } else if state.scope_baseline_stale {
+            tracing::info!("个人同步：上一轮同步刚结束，本轮轮询只刷新基线（防自激）");
             state.scope_baseline = signatures.into_iter().collect();
             state.scope_baseline_stale = false;
-            false
-        } else if signatures
-            .iter()
-            .any(|(data_type, signature)| state.scope_baseline.get(data_type) != Some(signature))
-        {
-            state.scope_baseline = signatures.into_iter().collect();
-            true
+            (false, Vec::new())
         } else {
-            false
+            let changed_types: Vec<String> = signatures
+                .iter()
+                .filter(|(data_type, signature)| {
+                    state.scope_baseline.get(data_type) != Some(signature)
+                })
+                .map(|(data_type, _)| data_type.clone())
+                .collect();
+            if changed_types.is_empty() {
+                (false, Vec::new())
+            } else {
+                state.scope_baseline = signatures.into_iter().collect();
+                (true, changed_types)
+            }
         }
     };
     if changed {
+        tracing::info!(
+            data_types = %changed_types.join(", "),
+            "个人同步：轮询检测到本地变更，入队全量扫描"
+        );
         enqueue_periodic_full_scan(cx);
     }
 }
 
 /// 监听同步目录（仅文件夹后端有本地目录）。
 ///
-/// 回调只做「入队」：何时真正跑由 UI 线程的调度器决定（状态、一分钟冷却、
+/// 回调只做「入队」：何时真正跑由 UI 线程的调度器决定（状态、十秒冷却、
 /// 变更合并都归它管），调度器 tick 每秒一次，最多晚一秒发现。自己写下去的
 /// 记录也会触发监听，用「同步中 + 宽限期」挡掉，否则每轮真实同步都跟着一轮空转。
 fn start_watcher(
@@ -1107,6 +1194,7 @@ fn start_watcher(
         if worker.is_syncing_or_just_finished() {
             return;
         }
+        tracing::info!(event = ?event, "个人同步：同步目录文件变更，入队同步");
         worker.enqueue(event);
     })
 }

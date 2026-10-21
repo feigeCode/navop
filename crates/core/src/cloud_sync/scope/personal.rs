@@ -916,6 +916,7 @@ impl PersonalSyncLocalSource for SyncScopeSource {
         &self,
         local_id: &str,
         cloud_id: &str,
+        checksum: &str,
         synced_at: i64,
     ) -> Result<(), SyncStoreError> {
         let Some((record_type, local_key)) = split_local_id(local_id) else {
@@ -925,7 +926,19 @@ impl PersonalSyncLocalSource for SyncScopeSource {
             .state_of(record_type, local_key)
             .unwrap_or_else(|| self.base(record_type, local_key));
         state.cloud_id = Some(cloud_id.to_string());
+        // 校验和必须落库：`list_settings` 靠 `state.checksum == 本次计算的校验和`
+        // 把「内容没变」的 content_ts 对齐到 last_synced_at；不落的话每轮都判为
+        // 「已变更」（content_ts 取 now），远端单方面改动也会被 planner 当成
+        // 双方冲突（local_changed 恒为 true）。口径与记录侧一致，见
+        // `build_record_with_id` 的说明。
+        if !checksum.is_empty() {
+            state.checksum = checksum.to_string();
+        }
         state.last_synced_at = Some(synced_at);
+        // 内容「变更时刻」取同步时刻：此后 `updated_at > last_synced_at` 不再成立，
+        // planner 视其为未变更。上传时 synced_at 即新记录的 updated_at，标记已
+        // 同步时是原记录的 updated_at，两种情况下都与 last_synced_at 相等。
+        state.content_ts = synced_at;
         self.persist_state(&state)?;
         self.mark_success(record_type);
         Ok(())

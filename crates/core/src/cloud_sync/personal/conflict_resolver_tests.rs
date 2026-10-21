@@ -31,7 +31,12 @@ async fn resolver_use_cloud_applies_remote_marks_synced_and_clears_conflict() {
 
     assert_eq!(vec!["cloud-1"], local.applied_remote_ids());
     assert_eq!(
-        vec![("local-1".to_string(), "cloud-1".to_string(), 400)],
+        vec![(
+            "local-1".to_string(),
+            "cloud-1".to_string(),
+            "remote".to_string(),
+            400
+        )],
         local.marked_synced()
     );
     assert!(repo.list("personal").expect("conflicts list").is_empty());
@@ -55,7 +60,12 @@ async fn resolver_use_local_writes_expected_remote_version_and_clears_conflict()
 
     assert_eq!(vec![Some(7)], store.expected_versions());
     assert_eq!(
-        vec![("local-1".to_string(), "cloud-1".to_string(), 2)],
+        vec![(
+            "local-1".to_string(),
+            "cloud-1".to_string(),
+            "local".to_string(),
+            2
+        )],
         local.marked_synced()
     );
     assert!(repo.list("personal").expect("conflicts list").is_empty());
@@ -166,7 +176,12 @@ async fn resolver_use_cloud_re_resolves_local_item_by_cloud_id_with_stale_stored
         local.applied_remote_local_ids()
     );
     assert_eq!(
-        vec![("connection:31".to_string(), "cloud-1".to_string(), 400)],
+        vec![(
+            "connection:31".to_string(),
+            "cloud-1".to_string(),
+            "remote".to_string(),
+            400
+        )],
         local.marked_synced()
     );
     assert!(repo.list("personal").expect("conflicts list").is_empty());
@@ -273,7 +288,7 @@ struct FakeLocalSource {
     items: Arc<Mutex<Vec<PersonalSyncItemSnapshot>>>,
     /// `(record_id, 传给 apply_remote 的本地条目 local_id)`
     applied_remote: Arc<Mutex<Vec<(String, Option<String>)>>>,
-    marked_synced: Arc<Mutex<Vec<(String, String, i64)>>>,
+    marked_synced: Arc<Mutex<Vec<(String, String, String, i64)>>>,
     deleted_local_ids: Arc<Mutex<Vec<String>>>,
 }
 
@@ -306,7 +321,7 @@ impl FakeLocalSource {
             .collect()
     }
 
-    fn marked_synced(&self) -> Vec<(String, String, i64)> {
+    fn marked_synced(&self) -> Vec<(String, String, String, i64)> {
         self.marked_synced
             .lock()
             .expect("marked_synced lock")
@@ -355,12 +370,18 @@ impl PersonalSyncLocalSource for FakeLocalSource {
         &self,
         local_id: &str,
         cloud_id: &str,
+        checksum: &str,
         synced_at: i64,
     ) -> Result<(), SyncStoreError> {
         self.marked_synced
             .lock()
             .expect("marked_synced lock")
-            .push((local_id.to_string(), cloud_id.to_string(), synced_at));
+            .push((
+                local_id.to_string(),
+                cloud_id.to_string(),
+                checksum.to_string(),
+                synced_at,
+            ));
         Ok(())
     }
 

@@ -72,10 +72,17 @@ pub trait PersonalSyncLocalSource: Send + Sync {
         Ok(())
     }
 
+    /// 记下「这条本地数据已与某条云端记录对齐」。
+    ///
+    /// `checksum` 必须是**入库时那条记录的校验和**（`record.checksum`，与快照侧
+    /// `payload_checksum` / `settings_group_checksum` 同口径）：`SyncScopeSource`
+    /// 靠它判断设置类分组「内容相对基线有没有变」，不落的话每轮都会把未变的内容
+    /// 当成新变更（`content_ts` 永远取 now），远端单方面改动也会被误判成双方冲突。
     async fn mark_synced(
         &self,
         local_id: &str,
         cloud_id: &str,
+        checksum: &str,
         synced_at: i64,
     ) -> Result<(), SyncStoreError>;
 
@@ -521,7 +528,12 @@ where
         record: &CloudSyncData,
     ) -> Result<(), SyncStoreError> {
         self.local
-            .mark_synced(&item.local_id, &record.id, record.updated_at / 1000)
+            .mark_synced(
+                &item.local_id,
+                &record.id,
+                &record.checksum,
+                record.updated_at / 1000,
+            )
             .await
     }
 }

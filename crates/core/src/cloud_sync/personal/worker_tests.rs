@@ -69,7 +69,12 @@ async fn worker_marks_matching_record_synced_at_remote_timestamp() {
     worker.drain_once().await.expect("drain succeeds");
 
     assert_eq!(
-        vec![("local-1".to_string(), "cloud-1".to_string(), 300)],
+        vec![(
+            "local-1".to_string(),
+            "cloud-1".to_string(),
+            "same".to_string(),
+            300
+        )],
         local.synced_marks()
     );
 }
@@ -554,7 +559,7 @@ struct FakePersonalSyncLocalSource {
     deleted: Arc<Mutex<Vec<String>>>,
     rejected_deletes: Arc<Mutex<Vec<String>>>,
     applied_remote: Arc<Mutex<Vec<(String, String)>>>,
-    synced: Arc<Mutex<Vec<(String, String, i64)>>>,
+    synced: Arc<Mutex<Vec<(String, String, String, i64)>>>,
 }
 
 impl FakePersonalSyncLocalSource {
@@ -586,7 +591,7 @@ impl FakePersonalSyncLocalSource {
             .clone()
     }
 
-    fn synced_marks(&self) -> Vec<(String, String, i64)> {
+    fn synced_marks(&self) -> Vec<(String, String, String, i64)> {
         self.synced.lock().expect("synced lock").clone()
     }
 }
@@ -625,11 +630,13 @@ impl PersonalSyncLocalSource for FakePersonalSyncLocalSource {
         &self,
         local_id: &str,
         cloud_id: &str,
+        checksum: &str,
         synced_at: i64,
     ) -> Result<(), SyncStoreError> {
         self.synced.lock().expect("synced lock").push((
             local_id.to_string(),
             cloud_id.to_string(),
+            checksum.to_string(),
             synced_at,
         ));
         Ok(())

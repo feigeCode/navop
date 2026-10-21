@@ -78,7 +78,12 @@ where
         self.local.apply_remote(&remote, local).await?;
         if let Some(local) = local {
             self.local
-                .mark_synced(&local.local_id, &remote.id, remote.updated_at / 1000)
+                .mark_synced(
+                    &local.local_id,
+                    &remote.id,
+                    &remote.checksum,
+                    remote.updated_at / 1000,
+                )
                 .await?;
         }
         Ok(())
@@ -109,7 +114,12 @@ where
             .upsert_record(&record, Some(remote.version))
             .await?;
         self.local
-            .mark_synced(&local.local_id, &stored.id, stored.updated_at / 1000)
+            .mark_synced(
+                &local.local_id,
+                &stored.id,
+                &stored.checksum,
+                stored.updated_at / 1000,
+            )
             .await
     }
 

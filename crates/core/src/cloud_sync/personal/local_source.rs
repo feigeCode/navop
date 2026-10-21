@@ -520,6 +520,7 @@ impl PersonalSyncLocalSource for PersonalSyncLocalRepositorySource {
         &self,
         local_id: &str,
         cloud_id: &str,
+        checksum: &str,
         synced_at: i64,
     ) -> Result<(), SyncStoreError> {
         if let Ok(id) = parse_prefixed_id(local_id, CONNECTION_PREFIX) {
@@ -544,7 +545,7 @@ impl PersonalSyncLocalSource for PersonalSyncLocalRepositorySource {
                 .map_err(repository_error);
         }
         if let Some(scope) = &self.scope {
-            return scope.mark_synced(local_id, cloud_id, synced_at).await;
+            return scope.mark_synced(local_id, cloud_id, checksum, synced_at).await;
         }
         Err(SyncStoreError::Parse(format!(
             "unsupported personal sync local id: {local_id}"

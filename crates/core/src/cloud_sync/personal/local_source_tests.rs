@@ -71,6 +71,7 @@ async fn local_source_reads_and_updates_workspace_sync_timestamp() {
         .mark_synced(
             &format!("workspace:{workspace_id}"),
             "cloud-workspace-1",
+            "checksum-workspace-1",
             10,
         )
         .await
