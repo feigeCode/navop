@@ -1,7 +1,7 @@
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, AsyncApp, Context, EventEmitter, FocusHandle, Focusable, IntoElement,
-    ParentElement, Render, SharedString, Styled, WeakEntity, Window, div, px,
+    ParentElement, Render, SharedString, Styled, Subscription, WeakEntity, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme, WindowExt,
@@ -10,7 +10,9 @@ use gpui_component::{
     h_flex, v_flex,
 };
 use one_core::llm::{
-    GlobalProviderState, notifier::emit_provider_config_changed, storage::ProviderRepository,
+    GlobalProviderState,
+    notifier::{ProviderConfigEvent, emit_provider_config_changed, get_notifier},
+    storage::ProviderRepository,
     types::ProviderConfig,
 };
 use one_core::storage::{GlobalStorageState, StorageManager, traits::Repository};
@@ -23,6 +25,8 @@ pub struct LlmProvidersView {
     storage_manager: StorageManager,
     providers: Vec<ProviderConfig>,
     loading: bool,
+    /// 提供商变更通知（手动增删改、后台同步落库）→ 重载列表。
+    provider_subscription: Option<Subscription<ProviderConfigEvent>>,
 }
 
 impl LlmProvidersView {
@@ -38,12 +42,22 @@ impl LlmProvidersView {
         let storage_state = cx.global::<GlobalStorageState>();
         let storage_manager = storage_state.storage.clone();
 
-        let instance = Self {
+        let mut instance = Self {
             focus_handle,
             storage_manager,
             providers: vec![],
             loading: false,
+            provider_subscription: None,
         };
+        // 订阅提供商变更：后台同步（或别处的新增 / 删除）是直接改数据库的，
+        // 不订阅的话本页显示的永远是创建时那份旧列表——表现为「同步成功了，
+        // 提供商却要重新打开页面才出现」。
+        if let Some(notifier) = get_notifier(cx) {
+            instance.provider_subscription = Some(cx.subscribe(
+                &notifier,
+                |this, _, _: &ProviderConfigEvent, cx| this.reload_providers(cx),
+            ));
+        }
         cx.spawn(async move |entity: WeakEntity<Self>, cx: &mut AsyncApp| {
             let _ = entity.update(cx, |this, cx| {
                 this.load_providers(cx);

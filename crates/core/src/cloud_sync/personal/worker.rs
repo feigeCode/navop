@@ -207,9 +207,14 @@ where
             .is_some_and(|finished_at| finished_at.elapsed() < SELF_WRITE_GRACE)
     }
 
-    pub async fn drain_once(&self) -> Result<(), SyncStoreError> {
+    /// 跑一轮同步；返回本轮真正动过业务表的数据类型集合。
+    ///
+    /// 同步是把记录直接写进业务表（不走各 UI 的新增 / 编辑入口），调用方
+    /// （个人同步运行时）靠这个集合决定事后要通知哪些界面刷新——不通知的话，
+    /// 已经打开的页面显示的还是旧列表。
+    pub async fn drain_once(&self) -> Result<HashSet<String>, SyncStoreError> {
         let Some(events) = self.begin_drain() else {
-            return Ok(());
+            return Ok(HashSet::new());
         };
 
         let result = self.run_pass(events).await;
@@ -238,7 +243,10 @@ where
         }
     }
 
-    async fn run_pass(&self, events: HashSet<PersonalSyncEvent>) -> Result<(), SyncStoreError> {
+    async fn run_pass(
+        &self,
+        events: HashSet<PersonalSyncEvent>,
+    ) -> Result<HashSet<String>, SyncStoreError> {
         self.store.probe().await?;
         // 互斥：同一个同步包（同一台机器上的两个实例，或两台机器共享的目录 / WebDAV
         // 目标）同一时刻只允许一个 pass 在做「读记录 → 改 → 写回」。
@@ -255,7 +263,7 @@ where
     async fn run_locked_pass(
         &self,
         events: HashSet<PersonalSyncEvent>,
-    ) -> Result<(), SyncStoreError> {
+    ) -> Result<HashSet<String>, SyncStoreError> {
         let local_items = self.local.list_items().await?;
         let remote_records = self.store.list_records(None, None).await?;
         // 挂起状态必须在处理删除之前取出来：墓碑处理要跳过已挂起的记录，
@@ -288,6 +296,26 @@ where
         let plan = self
             .planner
             .plan(&local_items, &active_remote_records, &paused);
+        // 本轮真正会动业务表的数据类型（上传 / 双向更新 / 下载）；只改同步状态的
+        // `to_mark_synced` 与只存冲突快照的 `conflicts` 不算——没有本地数据变化。
+        // 调用方拿它决定事后通知哪些界面刷新。
+        let mut touched: HashSet<String> = HashSet::new();
+        touched.extend(plan.to_upload.iter().map(|item| item.data_type.clone()));
+        touched.extend(
+            plan.to_update_cloud
+                .iter()
+                .map(|(item, _)| item.data_type.clone()),
+        );
+        touched.extend(
+            plan.to_update_local
+                .iter()
+                .map(|(_, item)| item.data_type.clone()),
+        );
+        touched.extend(
+            plan.to_download
+                .iter()
+                .map(|record| record.data_type.clone()),
+        );
 
         self.apply_plan(&plan, &local_items, &active_remote_records)
             .await?;
@@ -298,7 +326,7 @@ where
                 "{deletion_conflicts} deletion conflict(s) paused"
             )));
         }
-        Ok(())
+        Ok(touched)
     }
 
     /// 处理「本地条目被删除」事件；返回本轮因此新挂起冲突的条数。

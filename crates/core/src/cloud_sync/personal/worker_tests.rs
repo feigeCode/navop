@@ -80,6 +80,32 @@ async fn worker_marks_matching_record_synced_at_remote_timestamp() {
 }
 
 #[tokio::test]
+async fn worker_reports_touched_data_types_for_downloaded_records() {
+    // 下载落库的数据类型必须回报给调用方：个人同步运行时靠它通知 UI 刷新
+    // （同步直接写业务表，不通知的话已经打开的页面显示旧列表）。
+    let store = FakePersonalSyncStore::with_records(vec![test_record(
+        "cloud-1",
+        data_type::CONNECTION,
+        4,
+        "remote",
+    )]);
+    let worker = PersonalSyncWorker::new(
+        store,
+        FakePersonalSyncLocalSource::default(),
+        WorkerConfig::test(),
+    );
+
+    worker.enqueue(PersonalSyncEvent::FullScan);
+    let touched = worker.drain_once().await.expect("drain succeeds");
+
+    assert_eq!(
+        HashSet::from([data_type::CONNECTION.to_string()]),
+        touched,
+        "下载落库的数据类型必须回报"
+    );
+}
+
+#[tokio::test]
 async fn worker_pauses_conflicting_record() {
     let store = FakePersonalSyncStore::with_records(vec![remote_record_conflicting()]);
     let local = FakePersonalSyncLocalSource::with_items(vec![local_record_conflicting()]);

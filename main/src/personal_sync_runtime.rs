@@ -17,6 +17,8 @@ use one_core::cloud_sync::{CloudSyncData, CloudSyncService, ConflictResolution, 
 use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
 use one_core::crypto;
 use one_core::gpui_tokio::Tokio;
+use one_core::llm::GlobalProviderState;
+use one_core::llm::notifier::emit_provider_config_changed;
 use one_core::llm::storage::ProviderRepository;
 use one_core::settings::{
     AppSettings, GlobalCurrentUser, PersonalSyncSettings, SyncProvider, SYNC_SCOPE_DESCRIPTORS,
@@ -610,8 +612,31 @@ fn run_temporary_full_scan(
     let http = cx.http_client();
     let task = Tokio::spawn(cx, run_sync(config, source, conflict_sink, http));
     cx.spawn(async move |cx: &mut AsyncApp| {
-        let status = personal_sync_status_from_task(task.await);
-        let _ = cx.update(move |cx| finish_operation(cx, generation, status));
+        let outcome = task.await;
+        let touched = match &outcome {
+            Ok(Ok(touched)) => {
+                tracing::info!(
+                    data_types = %sorted_data_types(touched),
+                    "个人同步：手动同步完成"
+                );
+                Some(touched.clone())
+            }
+            Ok(Err(error)) => {
+                tracing::warn!(error = %error, "个人同步：手动同步失败");
+                None
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "个人同步：手动同步任务异常退出");
+                None
+            }
+        };
+        let status = personal_sync_status_from_task(outcome);
+        let _ = cx.update(move |cx| {
+            finish_operation(cx, generation, status);
+            if let Some(touched) = touched {
+                notify_synced_data_changed(cx, &touched);
+            }
+        });
         Ok::<(), anyhow::Error>(())
     })
     .detach();
@@ -996,13 +1021,30 @@ fn start_runtime_drain(cx: &mut App) {
     let task = Tokio::spawn(cx, drain_and_flush(worker, store));
     cx.spawn(async move |cx: &mut AsyncApp| {
         let outcome = task.await;
-        match &outcome {
-            Ok(Ok(())) => tracing::info!("个人同步：本轮同步完成"),
-            Ok(Err(error)) => tracing::warn!(error = %error, "个人同步：本轮同步失败"),
-            Err(error) => tracing::warn!(error = %error, "个人同步：本轮同步任务异常退出"),
-        }
+        let touched = match &outcome {
+            Ok(Ok(touched)) => {
+                tracing::info!(
+                    data_types = %sorted_data_types(touched),
+                    "个人同步：本轮同步完成"
+                );
+                Some(touched.clone())
+            }
+            Ok(Err(error)) => {
+                tracing::warn!(error = %error, "个人同步：本轮同步失败");
+                None
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "个人同步：本轮同步任务异常退出");
+                None
+            }
+        };
         let status = personal_sync_status_from_task(outcome);
-        let _ = cx.update(move |cx| finish_operation(cx, generation, status));
+        let _ = cx.update(move |cx| {
+            finish_operation(cx, generation, status);
+            if let Some(touched) = touched {
+                notify_synced_data_changed(cx, &touched);
+            }
+        });
         Ok::<(), anyhow::Error>(())
     })
     .detach();
@@ -1011,9 +1053,10 @@ fn start_runtime_drain(cx: &mut App) {
 async fn drain_and_flush(
     worker: RunningPersonalSyncWorker,
     store: ConfiguredPersonalSyncStore,
-) -> Result<(), SyncStoreError> {
-    worker.drain_once().await?;
-    store.flush().await
+) -> Result<HashSet<String>, SyncStoreError> {
+    let touched = worker.drain_once().await?;
+    store.flush().await?;
+    Ok(touched)
 }
 
 /// 同步调度器：每秒醒一次，只按本地状态决策，不产生任何 IO。
@@ -1204,7 +1247,7 @@ async fn run_sync(
     source: PersonalSyncLocalRepositorySource,
     conflict_sink: SqlitePersonalSyncConflictSink,
     http: Arc<dyn HttpClient>,
-) -> Result<(), SyncStoreError> {
+) -> Result<HashSet<String>, SyncStoreError> {
     let store = ConfiguredPersonalSyncStore::from_runtime_config(&config, http)?;
     let worker = PersonalSyncWorker::with_conflict_sink(
         store.clone(),
@@ -1216,8 +1259,9 @@ async fn run_sync(
         },
     );
     worker.enqueue(PersonalSyncEvent::FullScan);
-    worker.drain_once().await?;
-    store.flush().await
+    let touched = worker.drain_once().await?;
+    store.flush().await?;
+    Ok(touched)
 }
 
 pub(crate) fn build_conflict_sink(cx: &App) -> Option<SqlitePersonalSyncConflictSink> {
@@ -1399,11 +1443,14 @@ fn finish_operation(cx: &mut App, generation: u64, status: PersonalSyncRuntimeSt
     state.scope_baseline_stale = true;
 }
 
-fn personal_sync_status_from_task(
-    result: Result<Result<(), SyncStoreError>, tokio::task::JoinError>,
+/// 把一轮后台任务的结果翻译成运行时状态。
+///
+/// 泛型 `T`：同步轮次带「触及的数据类型」，冲突解决等只带 `()`。
+fn personal_sync_status_from_task<T>(
+    result: Result<Result<T, SyncStoreError>, tokio::task::JoinError>,
 ) -> PersonalSyncRuntimeStatus {
     match result {
-        Ok(Ok(())) => {
+        Ok(Ok(_)) => {
             crate::personal_sync_status::note_sync_completed();
             PersonalSyncRuntimeStatus::Ready {
                 health: SyncStoreHealth::Ready,
@@ -1413,6 +1460,30 @@ fn personal_sync_status_from_task(
         Ok(Err(error)) => PersonalSyncRuntimeStatus::from_error(error),
         Err(error) => PersonalSyncRuntimeStatus::failed(&error.to_string()),
     }
+}
+
+/// 排序后的数据类型清单（仅供日志可读）。
+fn sorted_data_types(touched: &HashSet<String>) -> String {
+    let mut types: Vec<&str> = touched.iter().map(String::as_str).collect();
+    types.sort_unstable();
+    types.join(", ")
+}
+
+/// 同步落库后通知相关 UI 刷新。
+///
+/// 同步是把记录直接写进业务表的（不走各 UI 的新增 / 编辑入口），不通知的话
+/// 已经打开的页面显示的仍是旧列表——「同步成功了，提供商却要重新打开页面
+/// 才出现」。只处理有通知器的类型：连接 / 工作空间 / 钥匙串走
+/// `ConnectionDataEvent`，但那条总线同时是同步自己的触发源，从同步里回发会
+/// 形成自激循环，暂不接（重新打开对应页面即可）。
+fn notify_synced_data_changed(cx: &mut App, touched: &HashSet<String>) {
+    if !touched.contains(data_type::LLM_PROVIDER) {
+        return;
+    }
+    if let Some(state) = cx.try_global::<GlobalProviderState>() {
+        state.manager().clear_cache();
+    }
+    emit_provider_config_changed(cx);
 }
 
 fn set_status(cx: &mut App, status: PersonalSyncRuntimeStatus) {
