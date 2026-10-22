@@ -521,6 +521,10 @@ impl SyncScopeSource {
                 id
             }
             None => {
+                // 新设备拉取：本地没有对应行。以 id=0 调 insert，由 SQLite
+                // 分配 rowid 并回写（显式绑 0 会让第二条提供商记录撞
+                // llm_providers.id 主键）；返回的行号同时作为
+                // sync_item_state 的 local_key，后续轮次走上面的 update 分支。
                 let mut created = config;
                 self.providers
                     .insert(&mut created)
