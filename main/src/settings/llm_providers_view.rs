@@ -26,7 +26,7 @@ pub struct LlmProvidersView {
     providers: Vec<ProviderConfig>,
     loading: bool,
     /// 提供商变更通知（手动增删改、后台同步落库）→ 重载列表。
-    provider_subscription: Option<Subscription<ProviderConfigEvent>>,
+    provider_subscription: Option<Subscription>,
 }
 
 impl LlmProvidersView {
