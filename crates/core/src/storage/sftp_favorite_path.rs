@@ -132,6 +132,113 @@ impl SftpFavoritePathRepository {
     }
 }
 
+/// SFTP 收藏行的完整表示
+///
+/// 云同步需要按行枚举与按 id 写入，而既有的 `list_paths` 只按连接键返回路径字符串，
+/// 无法支撑同步。这里补齐按行读写的入口。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SftpFavoriteRow {
+    pub id: i64,
+    pub connection_id: Option<i64>,
+    pub connection_key: String,
+    pub path: String,
+    pub sort_order: i32,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+impl SftpFavoritePathRepository {
+    /// 枚举全部收藏（跨连接），供云同步使用
+    pub fn list_all(&self) -> Result<Vec<SftpFavoriteRow>> {
+        self.conn.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, connection_id, connection_key, path, sort_order, created_at, updated_at
+                 FROM sftp_favorite_paths
+                 ORDER BY connection_key ASC, sort_order ASC, id ASC",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok(SftpFavoriteRow {
+                    id: row.get(0)?,
+                    connection_id: row.get(1)?,
+                    connection_key: row.get(2)?,
+                    path: row.get(3)?,
+                    sort_order: row.get(4)?,
+                    created_at: row.get(5)?,
+                    updated_at: row.get(6)?,
+                })
+            })?;
+            let mut result = Vec::new();
+            for row in rows {
+                result.push(row?);
+            }
+            Ok(result)
+        })
+    }
+
+    pub fn get_row(&self, id: i64) -> Result<Option<SftpFavoriteRow>> {
+        self.list_all()
+            .map(|rows| rows.into_iter().find(|row| row.id == id))
+    }
+
+    /// 按行插入（同步侧已解析好 connection_key），返回新 id
+    pub fn insert_row(&self, row: &SftpFavoriteRow) -> Result<i64> {
+        let Some(path) = normalize_sftp_favorite_path(&row.path) else {
+            return Ok(0);
+        };
+        let ts = now();
+        self.conn.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO sftp_favorite_paths
+                 (connection_id, connection_key, path, sort_order, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    row.connection_id,
+                    row.connection_key,
+                    path,
+                    row.sort_order,
+                    ts,
+                    ts
+                ],
+            )?;
+            Ok(conn.last_insert_rowid())
+        })
+    }
+
+    pub fn update_row(&self, row: &SftpFavoriteRow) -> Result<()> {
+        let Some(path) = normalize_sftp_favorite_path(&row.path) else {
+            return Ok(());
+        };
+        let ts = now();
+        self.conn.with_connection(|conn| {
+            conn.execute(
+                "UPDATE sftp_favorite_paths
+                 SET connection_id = ?2,
+                     connection_key = ?3,
+                     path = ?4,
+                     sort_order = ?5,
+                     updated_at = ?6
+                 WHERE id = ?1",
+                params![
+                    row.id,
+                    row.connection_id,
+                    row.connection_key,
+                    path,
+                    row.sort_order,
+                    ts
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn delete_row(&self, id: i64) -> Result<()> {
+        self.conn.with_connection(|conn| {
+            conn.execute("DELETE FROM sftp_favorite_paths WHERE id = ?1", params![id])?;
+            Ok(())
+        })
+    }
+}
+
 pub fn normalize_sftp_favorite_path(path: &str) -> Option<String> {
     let mut path = path.trim().to_string();
     if path.is_empty() {

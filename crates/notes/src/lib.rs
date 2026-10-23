@@ -34,7 +34,7 @@ mod storage_tests;
 
 pub use model::{
     DeleteSummary, DocumentDescriptor, DocumentFormat, FileNode, MarkdownSaveMode,
-    MarkdownViewMode, NodeKind, NotebookMetadata, NotebookUiState,
+    MarkdownViewMode, NodeKind, NotebookMetadata, NotebookUiState, NoteDocument,
 };
 pub use notes_view::{NotesView, NotesViewEvent};
 pub use path_policy::validate_node_name;

@@ -120,6 +120,14 @@ impl Repository for ProviderRepository {
     }
 
     fn insert(&self, item: &mut Self::Entity) -> Result<i64> {
+        // `id == 0` 表示「尚未落库、等待分配行号」：必须绑定 NULL 让 SQLite
+        // 自动分配 rowid，再把 `last_insert_rowid` 回写到 `item.id` 并返回。
+        // 显式绑定 0 会占掉 rowid 0——第二条 id=0 的记录立刻撞
+        // `UNIQUE constraint failed: llm_providers.id`。同步拉取路径
+        // （personal/cloud 两个 apply_provider）对新设备上的每条提供商记录
+        // 都以 0 调用这里，多提供商用户一拉取整个轮次就失败。
+        // 非 0 的显式 id（如 UI 用时间戳生成的 id）保持原样写入。
+        let assign_rowid = item.id == 0;
         let id = item.id;
         let name = item.name.clone();
         let provider_type = item.provider_type.as_str().to_string();
@@ -141,15 +149,24 @@ impl Repository for ProviderRepository {
         let updated_at = item.updated_at;
 
         self.conn.with_connection(|conn| {
-            conn.execute(
-                "INSERT INTO llm_providers (id, name, provider_type, api_key, api_base, api_version, model, models, max_tokens, temperature, enabled, is_default, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
-                params![id, name, provider_type, api_key, api_base, api_version, model, models_json, max_tokens, temperature, enabled, is_default, created_at, updated_at],
-            )?;
-            Ok(())
-        })?;
-
-        Ok(0)
+            if assign_rowid {
+                conn.execute(
+                    "INSERT INTO llm_providers (name, provider_type, api_key, api_base, api_version, model, models, max_tokens, temperature, enabled, is_default, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                    params![name, provider_type, api_key, api_base, api_version, model, models_json, max_tokens, temperature, enabled, is_default, created_at, updated_at],
+                )?;
+                let rowid = conn.last_insert_rowid();
+                item.id = rowid;
+                Ok(rowid)
+            } else {
+                conn.execute(
+                    "INSERT INTO llm_providers (id, name, provider_type, api_key, api_base, api_version, model, models, max_tokens, temperature, enabled, is_default, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                    params![id, name, provider_type, api_key, api_base, api_version, model, models_json, max_tokens, temperature, enabled, is_default, created_at, updated_at],
+                )?;
+                Ok(id)
+            }
+        })
     }
 
     fn update(&self, item: &Self::Entity) -> Result<()> {
@@ -256,6 +273,74 @@ pub fn init(cx: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::migration::run_migrations;
+
+    fn sample_provider(name: &str) -> ProviderConfig {
+        ProviderConfig {
+            name: name.to_string(),
+            provider_type: ProviderType::OpenAI,
+            model: "gpt-4o-mini".to_string(),
+            models: vec!["gpt-4o-mini".to_string()],
+            created_at: 1_700_000_000,
+            updated_at: 1_700_000_000,
+            ..ProviderConfig::default()
+        }
+    }
+
+    fn open_provider_repo(temp: &tempfile::TempDir) -> ProviderRepository {
+        let conn = SqliteConnection::open(temp.path().join("test.db")).expect("sqlite");
+        conn.with_connection(|conn| run_migrations(conn))
+            .expect("migrations run");
+        ProviderRepository::new(conn)
+    }
+
+    #[test]
+    fn provider_insert_assigns_rowid_when_id_is_zero() {
+        // 回归：同步拉取路径（personal / cloud 的 apply_provider）对新设备上的
+        // 每条 LLM 提供商记录都以 id=0 调 insert。显式绑定 0 会占掉 rowid 0，
+        // 第二条记录立刻 UNIQUE constraint failed: llm_providers.id，整个拉取
+        // 轮次失败（新设备拉取多个提供商时必现）。
+        let temp = tempfile::tempdir().expect("tempdir");
+        let repo = open_provider_repo(&temp);
+
+        let mut first = sample_provider("first");
+        let first_id = repo.insert(&mut first).expect("first insert");
+        assert!(first_id > 0, "insert 应返回自动分配的行号，实际 {first_id}");
+        assert_eq!(first_id, first.id, "insert 应把行号回写到 item.id");
+
+        let mut second = sample_provider("second");
+        let second_id = repo.insert(&mut second).expect("second insert");
+        assert!(second_id > 0);
+        assert_ne!(first_id, second_id, "两条记录的行号必须不同");
+        assert_eq!(second_id, second.id);
+
+        let listed = repo.list().expect("list");
+        assert_eq!(2, listed.len());
+        assert!(listed
+            .iter()
+            .any(|provider| provider.name == "first" && provider.id == first_id));
+        assert!(listed
+            .iter()
+            .any(|provider| provider.name == "second" && provider.id == second_id));
+    }
+
+    #[test]
+    fn provider_insert_keeps_explicit_nonzero_id() {
+        // UI 新增提供商用时间戳当 id，必须按显式值写入，不能被自动分配改写。
+        let temp = tempfile::tempdir().expect("tempdir");
+        let repo = open_provider_repo(&temp);
+
+        let mut config = sample_provider("explicit");
+        config.id = 1_700_000_000;
+        let id = repo.insert(&mut config).expect("insert");
+        assert_eq!(1_700_000_000, id);
+        assert_eq!(1_700_000_000, config.id);
+        let loaded = repo
+            .get(1_700_000_000)
+            .expect("get")
+            .expect("row with explicit id exists");
+        assert_eq!("explicit", loaded.name);
+    }
 
     #[test]
     fn provider_config_row_with_empty_model_keeps_models_untouched() {

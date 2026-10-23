@@ -40,12 +40,24 @@ pub struct QuickCommand {
     /// 连接 ID（可选，null 表示全局命令）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connection_id: Option<i64>,
+    /// 是否为内置默认命令
+    ///
+    /// 内置命令由迁移 `20260720000001_default_quick_commands.sql` 直接 INSERT 进本表，
+    /// 与用户自建命令混在一起。云同步**只处理 `is_builtin = false` 的行**：否则每台
+    /// 设备都会把各自的默认副本推上云端并拉回其他设备，造成「同步一次多 30 条」的
+    /// 指数级重复。标记由迁移 `20261014000001_quick_command_is_builtin.sql` 回填。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_builtin: bool,
     /// 创建时间
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<i64>,
     /// 更新时间
     #[serde(skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<i64>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl Entity for QuickCommand {
@@ -77,6 +89,7 @@ impl QuickCommand {
             pinned: false,
             sort_order: 0,
             connection_id: None,
+            is_builtin: false,
             created_at: Some(ts),
             updated_at: Some(ts),
         }
@@ -114,6 +127,7 @@ struct QuickCommandRow {
     pinned: i32,
     sort_order: i32,
     connection_id: Option<i64>,
+    is_builtin: i32,
     created_at: i64,
     updated_at: i64,
 }
@@ -131,6 +145,9 @@ impl FromSqliteRow for QuickCommandRow {
             pinned: row.get("pinned")?,
             sort_order: row.get("sort_order")?,
             connection_id: row.get("connection_id")?,
+            // 兼容「列尚未迁移完成」的读取路径：缺列时按非内置处理，
+            // 宁可少同步一条也不要把查询整个打挂。
+            is_builtin: row.get("is_builtin").unwrap_or(0),
             created_at: row.get("created_at")?,
             updated_at: row.get("updated_at")?,
         })
@@ -150,6 +167,7 @@ impl From<QuickCommandRow> for QuickCommand {
             pinned: row.pinned != 0,
             sort_order: row.sort_order,
             connection_id: row.connection_id,
+            is_builtin: row.is_builtin != 0,
             created_at: Some(row.created_at),
             updated_at: Some(row.updated_at),
         }
@@ -230,7 +248,7 @@ impl QuickCommandRepository {
 
             if let Some(cid) = connection_id {
                 let mut stmt = conn.prepare(
-                    "SELECT id, name, group_name, group_color, command, shortcut, description, pinned, sort_order, connection_id, created_at, updated_at
+                    "SELECT id, name, group_name, group_color, command, shortcut, description, pinned, sort_order, connection_id, is_builtin, created_at, updated_at
                      FROM quick_commands
                      WHERE connection_id = ?1 OR connection_id IS NULL
                      ORDER BY pinned DESC, sort_order ASC, created_at DESC"
@@ -241,7 +259,7 @@ impl QuickCommandRepository {
                 }
             } else {
                 let mut stmt = conn.prepare(
-                    "SELECT id, name, group_name, group_color, command, shortcut, description, pinned, sort_order, connection_id, created_at, updated_at
+                    "SELECT id, name, group_name, group_color, command, shortcut, description, pinned, sort_order, connection_id, is_builtin, created_at, updated_at
                      FROM quick_commands
                      WHERE connection_id IS NULL
                      ORDER BY pinned DESC, sort_order ASC, created_at DESC"
@@ -264,7 +282,7 @@ impl QuickCommandRepository {
 
             if let Some(cid) = connection_id {
                 let mut stmt = conn.prepare(
-                    "SELECT id, name, group_name, group_color, command, shortcut, description, pinned, sort_order, connection_id, created_at, updated_at
+                    "SELECT id, name, group_name, group_color, command, shortcut, description, pinned, sort_order, connection_id, is_builtin, created_at, updated_at
                      FROM quick_commands
                      WHERE (command LIKE ?1 OR name LIKE ?1 OR description LIKE ?1)
                        AND (connection_id = ?2 OR connection_id IS NULL)
@@ -276,7 +294,7 @@ impl QuickCommandRepository {
                 }
             } else {
                 let mut stmt = conn.prepare(
-                    "SELECT id, name, group_name, group_color, command, shortcut, description, pinned, sort_order, connection_id, created_at, updated_at
+                    "SELECT id, name, group_name, group_color, command, shortcut, description, pinned, sort_order, connection_id, is_builtin, created_at, updated_at
                      FROM quick_commands
                      WHERE (command LIKE ?1 OR name LIKE ?1 OR description LIKE ?1)
                        AND connection_id IS NULL
@@ -356,8 +374,8 @@ impl Repository for QuickCommandRepository {
 
         let id = self.conn.with_connection(|conn| {
             conn.execute(
-                "INSERT INTO quick_commands (name, group_name, group_color, command, shortcut, description, pinned, sort_order, connection_id, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                "INSERT INTO quick_commands (name, group_name, group_color, command, shortcut, description, pinned, sort_order, connection_id, is_builtin, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 params![
                     item.name,
                     item.group_name,
@@ -368,6 +386,7 @@ impl Repository for QuickCommandRepository {
                     pinned,
                     item.sort_order,
                     item.connection_id,
+                    if item.is_builtin { 1 } else { 0 },
                     ts,
                     ts
                 ],
@@ -401,8 +420,9 @@ impl Repository for QuickCommandRepository {
                      pinned = ?7,
                      sort_order = ?8,
                      connection_id = ?9,
-                     updated_at = ?10
-                 WHERE id = ?11",
+                     is_builtin = ?10,
+                     updated_at = ?11
+                 WHERE id = ?12",
                 params![
                     item.name,
                     item.group_name,
@@ -413,6 +433,7 @@ impl Repository for QuickCommandRepository {
                     pinned,
                     item.sort_order,
                     item.connection_id,
+                    if item.is_builtin { 1 } else { 0 },
                     ts,
                     id
                 ],
@@ -431,7 +452,7 @@ impl Repository for QuickCommandRepository {
     fn get(&self, id: i64) -> Result<Option<Self::Entity>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, group_name, group_color, command, shortcut, description, pinned, sort_order, connection_id, created_at, updated_at FROM quick_commands WHERE id = ?1",
+                "SELECT id, name, group_name, group_color, command, shortcut, description, pinned, sort_order, connection_id, is_builtin, created_at, updated_at FROM quick_commands WHERE id = ?1",
             )?;
             let mut rows = stmt.query(params![id])?;
             if let Some(row) = rows.next()? {
@@ -445,7 +466,7 @@ impl Repository for QuickCommandRepository {
     fn list(&self) -> Result<Vec<Self::Entity>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, group_name, group_color, command, shortcut, description, pinned, sort_order, connection_id, created_at, updated_at FROM quick_commands ORDER BY pinned DESC, sort_order ASC, created_at DESC",
+                "SELECT id, name, group_name, group_color, command, shortcut, description, pinned, sort_order, connection_id, is_builtin, created_at, updated_at FROM quick_commands ORDER BY pinned DESC, sort_order ASC, created_at DESC",
             )?;
             let rows = stmt.query_map([], |row| QuickCommandRow::from_row(row))?;
             let mut results = Vec::new();
@@ -514,6 +535,104 @@ mod tests {
         item.group_name = Some(group_name.to_string());
         item.group_color = Some(group_color.to_string());
         repository.insert(&mut item).expect("insert command")
+    }
+
+    fn is_builtin(repository: &QuickCommandRepository, id: i64) -> bool {
+        repository
+            .conn
+            .with_connection(|conn| {
+                let flag: i64 = conn.query_row(
+                    "SELECT is_builtin FROM quick_commands WHERE id = ?1",
+                    rusqlite::params![id],
+                    |row| row.get(0),
+                )?;
+                Ok(flag != 0)
+            })
+            .expect("read is_builtin")
+    }
+
+    fn count_builtin(repository: &QuickCommandRepository) -> i64 {
+        repository
+            .conn
+            .with_connection(|conn| {
+                let count: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM quick_commands WHERE is_builtin = 1",
+                    [],
+                    |row| row.get(0),
+                )?;
+                Ok(count)
+            })
+            .expect("count builtin")
+    }
+
+    /// 迁移回填必须把 30 条内置默认命令全部标记为 `is_builtin = 1`。
+    ///
+    /// 这是 R1 的核心回归保护：少标一条，整表同步就会每次多推一条重复命令。
+    #[test]
+    fn migration_marks_all_builtin_default_commands() {
+        let repository = test_repository();
+
+        assert_eq!(
+            30,
+            count_builtin(&repository),
+            "内置默认命令应全部被标记为 is_builtin"
+        );
+        for command in ["df -h", "ls -la", "git status", "docker ps", "uptime"] {
+            let found = repository
+                .list()
+                .expect("list")
+                .into_iter()
+                .find(|item| item.command == command)
+                .unwrap_or_else(|| panic!("内置命令缺失: {command}"));
+            assert!(found.is_builtin, "内置命令 {command} 未被标记为 is_builtin");
+        }
+    }
+
+    /// 用户自建命令必须保持 `is_builtin = 0`，否则会被误判为内置而不参与同步。
+    #[test]
+    fn user_created_commands_are_not_marked_builtin() {
+        let repository = test_repository();
+        let id = insert_grouped_command(&repository, "echo my-own-command", "mine", "blue");
+
+        assert!(!is_builtin(&repository, id));
+    }
+
+    /// 回填必须幂等：重复执行不会把用户命令误标为内置，也不改变已标记的行。
+    #[test]
+    fn builtin_backfill_is_idempotent() {
+        let repository = test_repository();
+        let user_id = insert_grouped_command(&repository, "echo keep-me", "mine", "blue");
+        let before = count_builtin(&repository);
+
+        // 模拟迁移重复执行（同一条 UPDATE 再跑两遍）
+        for _ in 0..2 {
+            repository
+                .conn
+                .with_connection(|conn| {
+                    conn.execute_batch(
+                        "UPDATE quick_commands
+                         SET is_builtin = 1
+                         WHERE connection_id IS NULL
+                           AND LOWER(TRIM(command)) IN ('df -h', 'ls -la', 'git status')",
+                    )?;
+                    Ok(())
+                })
+                .expect("re-run backfill");
+        }
+
+        assert_eq!(before, count_builtin(&repository), "重复回填改变了标记数量");
+        assert!(!is_builtin(&repository, user_id), "用户命令被误标为内置");
+    }
+
+    /// 新插入的命令默认 `is_builtin = 0` —— 依赖列上的 DEFAULT 约束。
+    #[test]
+    fn newly_inserted_commands_default_to_not_builtin() {
+        let repository = test_repository();
+        let mut item = QuickCommand::new("echo fresh".to_string());
+        let id = repository.insert(&mut item).expect("insert");
+
+        assert!(!is_builtin(&repository, id));
+        assert!(!item.is_builtin);
     }
 
     fn insert_connection(repository: &QuickCommandRepository, id: i64) {

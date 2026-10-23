@@ -235,10 +235,24 @@ fn default_version() -> u32 {
 }
 
 /// 数据类型常量
+///
+/// 这些字符串会**写入云端 / 同步包并长期留存，上线后不可轻易改名**：改名会让
+/// 老客户端拉到无法识别的记录（Personal 通道会因此整轮失败，见设计文档 R2）。
 pub mod data_type {
     pub const CONNECTION: &str = "connection";
     pub const CREDENTIAL: &str = "credential";
     pub const WORKSPACE: &str = "workspace";
+    pub const NOTE: &str = "note";
+    pub const SAVED_SQL: &str = "saved_sql";
+    pub const QUICK_COMMAND: &str = "quick_command";
+    pub const SFTP_FAVORITE: &str = "sftp_favorite";
+    pub const SETTINGS_GENERAL: &str = "settings_general";
+    pub const SETTINGS_DATABASE: &str = "settings_database";
+    pub const SETTINGS_TERMINAL: &str = "settings_terminal";
+    pub const SETTINGS_AGENT: &str = "settings_agent";
+    pub const SETTINGS_MCP: &str = "settings_mcp";
+    pub const SETTINGS_KEYBINDINGS: &str = "settings_keybindings";
+    pub const LLM_PROVIDER: &str = "llm_provider";
 }
 
 /// 团队

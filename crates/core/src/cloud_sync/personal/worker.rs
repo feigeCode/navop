@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 
@@ -71,10 +72,17 @@ pub trait PersonalSyncLocalSource: Send + Sync {
         Ok(())
     }
 
+    /// 记下「这条本地数据已与某条云端记录对齐」。
+    ///
+    /// `checksum` 必须是**入库时那条记录的校验和**（`record.checksum`，与快照侧
+    /// `payload_checksum` / `settings_group_checksum` 同口径）：`SyncScopeSource`
+    /// 靠它判断设置类分组「内容相对基线有没有变」，不落的话每轮都会把未变的内容
+    /// 当成新变更（`content_ts` 永远取 now），远端单方面改动也会被误判成双方冲突。
     async fn mark_synced(
         &self,
         local_id: &str,
         cloud_id: &str,
+        checksum: &str,
         synced_at: i64,
     ) -> Result<(), SyncStoreError>;
 
@@ -123,6 +131,9 @@ struct WorkerState {
     pending: HashSet<PersonalSyncEvent>,
     active: bool,
     dirty: bool,
+    /// 最近一轮同步结束的时刻。文件监听用它区分「自己刚写下的记录」和
+    /// 「别的设备写进来的记录」——否则每轮同步都会再触发一轮空转。
+    last_pass_end: Option<Instant>,
 }
 
 #[derive(Clone)]
@@ -170,9 +181,40 @@ where
         state.pending.insert(event);
     }
 
-    pub async fn drain_once(&self) -> Result<(), SyncStoreError> {
+    /// 是否还有没处理的事件（供同步运行时的调度器判断要不要跑一轮）。
+    pub fn has_pending(&self) -> bool {
+        !self
+            .state
+            .lock()
+            .expect("personal sync worker state")
+            .pending
+            .is_empty()
+    }
+
+    /// 正在同步，或刚刚结束不久。
+    ///
+    /// 同步目录的文件监听会收到**自己写下去**的记录：那些事件不该再触发一轮
+    /// 同步（否则每轮真实同步都跟着一轮空转）。这里用「进行中 + 宽限期」覆盖
+    /// 写入到事件送达之间的延迟；代价是宽限期内别的设备的改动会晚一轮被发现。
+    pub fn is_syncing_or_just_finished(&self) -> bool {
+        const SELF_WRITE_GRACE: Duration = Duration::from_secs(5);
+        let state = self.state.lock().expect("personal sync worker state");
+        if state.active {
+            return true;
+        }
+        state
+            .last_pass_end
+            .is_some_and(|finished_at| finished_at.elapsed() < SELF_WRITE_GRACE)
+    }
+
+    /// 跑一轮同步；返回本轮真正动过业务表的数据类型集合。
+    ///
+    /// 同步是把记录直接写进业务表（不走各 UI 的新增 / 编辑入口），调用方
+    /// （个人同步运行时）靠这个集合决定事后要通知哪些界面刷新——不通知的话，
+    /// 已经打开的页面显示的还是旧列表。
+    pub async fn drain_once(&self) -> Result<HashSet<String>, SyncStoreError> {
         let Some(events) = self.begin_drain() else {
-            return Ok(());
+            return Ok(HashSet::new());
         };
 
         let result = self.run_pass(events).await;
@@ -194,13 +236,17 @@ where
     fn finish_drain(&self) {
         let mut state = self.state.lock().expect("personal sync worker state");
         state.active = false;
+        state.last_pass_end = Some(Instant::now());
         if state.dirty {
             state.pending.insert(PersonalSyncEvent::FullScan);
             state.dirty = false;
         }
     }
 
-    async fn run_pass(&self, events: HashSet<PersonalSyncEvent>) -> Result<(), SyncStoreError> {
+    async fn run_pass(
+        &self,
+        events: HashSet<PersonalSyncEvent>,
+    ) -> Result<HashSet<String>, SyncStoreError> {
         self.store.probe().await?;
         // 互斥：同一个同步包（同一台机器上的两个实例，或两台机器共享的目录 / WebDAV
         // 目标）同一时刻只允许一个 pass 在做「读记录 → 改 → 写回」。
@@ -217,7 +263,7 @@ where
     async fn run_locked_pass(
         &self,
         events: HashSet<PersonalSyncEvent>,
-    ) -> Result<(), SyncStoreError> {
+    ) -> Result<HashSet<String>, SyncStoreError> {
         let local_items = self.local.list_items().await?;
         let remote_records = self.store.list_records(None, None).await?;
         // 挂起状态必须在处理删除之前取出来：墓碑处理要跳过已挂起的记录，
@@ -250,6 +296,26 @@ where
         let plan = self
             .planner
             .plan(&local_items, &active_remote_records, &paused);
+        // 本轮真正会动业务表的数据类型（上传 / 双向更新 / 下载）；只改同步状态的
+        // `to_mark_synced` 与只存冲突快照的 `conflicts` 不算——没有本地数据变化。
+        // 调用方拿它决定事后通知哪些界面刷新。
+        let mut touched: HashSet<String> = HashSet::new();
+        touched.extend(plan.to_upload.iter().map(|item| item.data_type.clone()));
+        touched.extend(
+            plan.to_update_cloud
+                .iter()
+                .map(|(item, _)| item.data_type.clone()),
+        );
+        touched.extend(
+            plan.to_update_local
+                .iter()
+                .map(|(_, item)| item.data_type.clone()),
+        );
+        touched.extend(
+            plan.to_download
+                .iter()
+                .map(|record| record.data_type.clone()),
+        );
 
         self.apply_plan(&plan, &local_items, &active_remote_records)
             .await?;
@@ -260,7 +326,7 @@ where
                 "{deletion_conflicts} deletion conflict(s) paused"
             )));
         }
-        Ok(())
+        Ok(touched)
     }
 
     /// 处理「本地条目被删除」事件；返回本轮因此新挂起冲突的条数。
@@ -490,7 +556,12 @@ where
         record: &CloudSyncData,
     ) -> Result<(), SyncStoreError> {
         self.local
-            .mark_synced(&item.local_id, &record.id, record.updated_at / 1000)
+            .mark_synced(
+                &item.local_id,
+                &record.id,
+                &record.checksum,
+                record.updated_at / 1000,
+            )
             .await
     }
 }
