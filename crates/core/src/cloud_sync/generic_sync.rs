@@ -102,13 +102,29 @@ pub(crate) async fn generic_sync<H: SyncTypeHandler>(
     )?;
     handler.adjust_plan(engine, &mut plan, &active_cloud_data);
     tracing::info!(
-        "[{}计划] 上传: {}, 更新云端: {}, 下载: {}, 更新本地: {}",
+        "[{}计划] 上传: {}, 更新云端: {}, 下载: {}, 更新本地: {}, 无变化: {}",
         type_name,
         plan.to_upload.len(),
         plan.to_update_cloud.len(),
         plan.to_download.len(),
-        plan.to_update_local.len()
+        plan.to_update_local.len(),
+        plan.unchanged.len()
     );
+
+    // checksum 短路项：只刷新 last_synced_at，不进操作队列
+    for item in &plan.unchanged {
+        let key = item.sync_key();
+        if !key.is_empty() {
+            if let Err(e) = handler.touch_synced(key) {
+                tracing::warn!(
+                    "[{}] 刷新同步时间失败 {}: {}",
+                    type_name,
+                    item.item_name(),
+                    e
+                );
+            }
+        }
+    }
 
     // ========== 8. 构建操作队列 ==========
     let local_item_map: HashMap<i64, H::Item> = local_items
@@ -187,18 +203,41 @@ pub(crate) async fn generic_sync<H: SyncTypeHandler>(
                 };
 
                 match upload_item(engine, handler, local_item).await {
-                    Ok(cloud_id) => match handler.on_uploaded(engine, local_id, &cloud_id) {
-                        Ok(()) => {
-                            result.uploaded += 1;
-                            tracing::info!("[上传{}] 成功: {}", type_name, local_item.item_name());
+                    Ok(cloud_id) => {
+                        // 优先键控回写：计划器手里的 item 自带 local_key，
+                        // 无主键类型（设置/SQL/笔记）的 local_id 是合成 ID，
+                        // 走 on_uploaded 反查会静默丢 cloud_id。
+                        // 注意：键为空的类型（rowid 类型未覆盖 sync_key）默认
+                        // on_uploaded_with_key 是无副作用 Ok，必须先判空再回落，
+                        // 否则永远轮不到 on_uploaded。
+                        let keyed = if local_item.sync_key().is_empty() {
+                            handler.on_uploaded(engine, local_id, &cloud_id)
+                        } else {
+                            handler
+                                .on_uploaded_with_key(local_item.sync_key(), &cloud_id, "")
+                                .or_else(|_| handler.on_uploaded(engine, local_id, &cloud_id))
+                        };
+                        match keyed {
+                            Ok(()) => {
+                                result.uploaded += 1;
+                                tracing::info!(
+                                    "[上传{}] 成功: {}",
+                                    type_name,
+                                    local_item.item_name()
+                                );
+                            }
+                            Err(e) => {
+                                let msg = format!(
+                                    "上传{}失败 {}: {}",
+                                    type_name,
+                                    local_item.item_name(),
+                                    e
+                                );
+                                result.errors.push(msg.clone());
+                                queue.mark_failed(queued_operation, msg);
+                            }
                         }
-                        Err(e) => {
-                            let msg =
-                                format!("上传{}失败 {}: {}", type_name, local_item.item_name(), e);
-                            result.errors.push(msg.clone());
-                            queue.mark_failed(queued_operation, msg);
-                        }
-                    },
+                    }
                     Err(e) => {
                         let msg =
                             format!("上传{}失败 {}: {}", type_name, local_item.item_name(), e);
@@ -224,7 +263,24 @@ pub(crate) async fn generic_sync<H: SyncTypeHandler>(
                 };
 
                 match update_cloud_item(engine, handler, local_item, cloud_data).await {
-                    Ok(()) => {
+                    Ok(server_row) => {
+                        // 落水位：取服务端返回的 updated_at（毫秒），不写本地 now——
+                        // 否则下一轮 local > cloud 又重传一遍（乒乓）。
+                        // 键为空的类型没有水位语义，跳过即可。
+                        if !local_item.sync_key().is_empty() {
+                            if let Err(e) = handler.persist_watermark(
+                                local_item.sync_key(),
+                                &cloud_id,
+                                server_row.updated_at,
+                            ) {
+                                tracing::warn!(
+                                    "[更新云端{}] 水位回写失败 {}: {}",
+                                    type_name,
+                                    local_item.item_name(),
+                                    e
+                                );
+                            }
+                        }
                         result.uploaded += 1;
                         tracing::info!("[更新云端{}] 成功: {}", type_name, local_item.item_name());
                     }
@@ -439,18 +495,35 @@ fn process_soft_deletions<H: SyncTypeHandler>(
                 .iter()
                 .find(|item| item.cloud_id() == Some(cloud_data.id.as_str()))
             {
-                if let Some(local_id) = local_item.local_id() {
-                    tracing::info!(
-                        "[软删除] 云端{} {} 已被删除，删除对应的本地数据 {}",
-                        handler.display_name(),
-                        cloud_data.id,
-                        local_id
-                    );
-                    match handler.delete_local(engine, local_id) {
-                        Ok(()) => deleted_count += 1,
-                        Err(e) => {
-                            tracing::error!("[软删除] 删除本地数据失败: {} - {}", local_id, e);
-                        }
+                tracing::info!(
+                    "[软删除] 云端{} {} 已被删除，删除对应的本地数据 {}",
+                    handler.display_name(),
+                    cloud_data.id,
+                    local_item.item_name()
+                );
+                // 优先键控删除：按稳定 key 定位业务行；无主键类型的合成 ID
+                // 反查不可靠。键为空或键控失败再回落按 id 删。
+                let deleted = if !local_item.sync_key().is_empty() {
+                    handler
+                        .delete_local_with_key(engine, local_item.sync_key())
+                        .or_else(|_| match local_item.local_id() {
+                            Some(id) => handler.delete_local(engine, id),
+                            None => Ok(()),
+                        })
+                } else {
+                    match local_item.local_id() {
+                        Some(id) => handler.delete_local(engine, id),
+                        None => Ok(()),
+                    }
+                };
+                match deleted {
+                    Ok(()) => deleted_count += 1,
+                    Err(e) => {
+                        tracing::error!(
+                            "[软删除] 删除本地数据失败: {} - {}",
+                            local_item.item_name(),
+                            e
+                        );
                     }
                 }
             }
@@ -494,6 +567,19 @@ fn calculate_sync_plan<H: SyncTypeHandler>(
         match local_item.cloud_id() {
             Some(cloud_id) => {
                 if let Some(cloud_data) = cloud_map.get(cloud_id) {
+                    // checksum 短路：本地内容摘要与云端一致 → 双方无变化，
+                    // 不进上传/下载计划，只刷新 last_synced_at（避免时间戳
+                    // 抖动引发乒乓）。仅当类型提供摘要且云端记录带摘要时生效。
+                    if let Some(local_checksum) = local_item.local_checksum() {
+                        if !local_checksum.is_empty()
+                            && !cloud_data.checksum.is_empty()
+                            && local_checksum == cloud_data.checksum
+                        {
+                            plan.unchanged.push(local_item.clone());
+                            continue;
+                        }
+                    }
+
                     let local_updated = local_item.updated_at().unwrap_or(0);
                     let cloud_updated = cloud_data.updated_at / 1000;
 
@@ -614,7 +700,7 @@ async fn update_cloud_item<H: SyncTypeHandler>(
     handler: &H,
     item: &H::Item,
     cloud_data: &CloudSyncData,
-) -> Result<(), SyncError> {
+) -> Result<CloudSyncData, SyncError> {
     let teams = engine.get_cached_teams();
     let updated_data = {
         let service = engine
@@ -627,13 +713,13 @@ async fn update_cloud_item<H: SyncTypeHandler>(
         data
     };
 
+    // 返回服务端行：updated_at 是服务端时钟，水位必须取它，
+    // 取本地 now 会把水位推到「未来」，引发每轮乒乓。
     engine
         .cloud_client
         .update_sync_data(&updated_data)
         .await
-        .map_err(|e| SyncError::NetworkError(e.to_string()))?;
-
-    Ok(())
+        .map_err(|e| SyncError::NetworkError(e.to_string()))
 }
 
 /// 下载云端数据项并创建本地记录

@@ -1598,41 +1598,59 @@ impl CloudApiClient for SupabaseClient {
         team_id: Option<&str>,
         since: Option<i64>,
     ) -> Result<Vec<CloudSyncData>, CloudApiError> {
-        let mut url = format!("{}?order=updated_at.desc", self.rest_url("sync_data"));
+        let mut base_url = format!("{}?order=updated_at.desc", self.rest_url("sync_data"));
 
         if let Some(dt) = data_type {
-            url.push_str(&format!("&data_type=eq.{}", dt));
+            base_url.push_str(&format!("&data_type=eq.{}", dt));
         }
 
         match team_id {
-            Some(tid) => url.push_str(&format!("&team_id=eq.{}", tid)),
+            Some(tid) => base_url.push_str(&format!("&team_id=eq.{}", tid)),
             None => {} // RLS 自动过滤
         }
 
         if let Some(ts) = since {
             if let Some(dt) = chrono::DateTime::from_timestamp_millis(ts) {
-                url.push_str(&format!("&updated_at=gte.{}", dt.to_rfc3339()));
+                base_url.push_str(&format!("&updated_at=gte.{}", dt.to_rfc3339()));
             }
         }
 
-        let (status, result) = self.get_json_with_retry::<Vec<SyncDataRow>>(&url).await?;
+        // PostgREST 默认单页最多返回 1000 行，超出即静默截断——数量大的类型
+        // （收藏路径、执行历史等）会「永远同步不到旧数据」。这里用 offset/limit
+        // 分页循环拉全量：返回不足一页说明已到末尾。
+        const PAGE_SIZE: usize = 1000;
+        let mut all_rows: Vec<SyncDataRow> = Vec::new();
+        let mut offset = 0usize;
 
-        if status.is_success() {
+        loop {
+            let url = format!("{}&limit={}&offset={}", base_url, PAGE_SIZE, offset);
+            let (status, result) = self.get_json_with_retry::<Vec<SyncDataRow>>(&url).await?;
+
+            if !status.is_success() {
+                let error_body = Self::format_error_summary(&result);
+                warn!(
+                    status = status.as_u16(),
+                    url = %url,
+                    data_type = ?data_type,
+                    team_id = ?team_id,
+                    since = ?since,
+                    error_body = %error_body,
+                    "获取同步数据失败"
+                );
+                return Err(CloudApiError::ServerError("获取同步数据失败".to_string()));
+            }
+
             let rows = result.map_err(|e| CloudApiError::ParseError(e))?;
-            Ok(rows.into_iter().map(|r| r.into()).collect())
-        } else {
-            let error_body = Self::format_error_summary(&result);
-            warn!(
-                status = status.as_u16(),
-                url = %url,
-                data_type = ?data_type,
-                team_id = ?team_id,
-                since = ?since,
-                error_body = %error_body,
-                "获取同步数据失败"
-            );
-            Err(CloudApiError::ServerError("获取同步数据失败".to_string()))
+            let fetched = rows.len();
+            all_rows.extend(rows);
+
+            if fetched < PAGE_SIZE {
+                break;
+            }
+            offset += PAGE_SIZE;
         }
+
+        Ok(all_rows.into_iter().map(|r| r.into()).collect())
     }
 
     async fn create_sync_data(&self, data: &CloudSyncData) -> Result<CloudSyncData, CloudApiError> {

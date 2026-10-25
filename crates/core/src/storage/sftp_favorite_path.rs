@@ -9,6 +9,10 @@ use crate::storage::models::StoredConnection;
 
 pub const MAX_SFTP_FAVORITE_PATHS: usize = 20;
 
+/// sftp_view 侧「本地文件列表」伪连接键：这类收藏不是真实连接的目录收藏，
+/// 不应参与云同步（远端没有对应连接，落地必然悬空）。
+pub const LOCAL_FAVORITE_CONNECTION_KEY: &str = "local-file-list:global";
+
 #[derive(Clone)]
 pub struct SftpFavoritePathRepository {
     conn: SqliteConnection,
@@ -181,16 +185,24 @@ impl SftpFavoritePathRepository {
     }
 
     /// 按行插入（同步侧已解析好 connection_key），返回新 id
+    /// 按行插入（同步侧已解析好 connection_key），返回新 id
+    ///
+    /// 返回值约定：`0` 表示跳过（路径非法，或冲突后连已有行都查不到的异常兜底）；
+    /// 正值是新插入行的 id；与 `(connection_key, path)` 重复时返回已存在行的 id
+    /// （调用方据此跳过，不写 state，避免 `Ok(0)→state key "0"` 的幽灵行）。
+    /// 冲突用 `ON CONFLICT DO NOTHING` 兜住：重复下发/并发写入不会因 UNIQUE
+    /// 约束挂掉整轮同步。
     pub fn insert_row(&self, row: &SftpFavoriteRow) -> Result<i64> {
         let Some(path) = normalize_sftp_favorite_path(&row.path) else {
             return Ok(0);
         };
         let ts = now();
         self.conn.with_connection(|conn| {
-            conn.execute(
+            let changed = conn.execute(
                 "INSERT INTO sftp_favorite_paths
                  (connection_id, connection_key, path, sort_order, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(connection_key, path) DO NOTHING",
                 params![
                     row.connection_id,
                     row.connection_key,
@@ -200,7 +212,24 @@ impl SftpFavoritePathRepository {
                     ts
                 ],
             )?;
-            Ok(conn.last_insert_rowid())
+            if changed == 0 {
+                // 冲突：回查已存在行 id，交调用方按跳过处理
+                let existing: Option<i64> = conn
+                    .query_row(
+                        "SELECT id FROM sftp_favorite_paths
+                         WHERE connection_key = ?1 AND path = ?2",
+                        params![row.connection_key, path],
+                        |r| r.get(0),
+                    )
+                    .map(Some)
+                    .or_else(|e| match e {
+                        rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                        other => Err(other),
+                    })?;
+                Ok(existing.unwrap_or(0))
+            } else {
+                Ok(conn.last_insert_rowid())
+            }
         })
     }
 

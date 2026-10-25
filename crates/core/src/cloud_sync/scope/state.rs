@@ -80,6 +80,16 @@ impl SyncItemStateRepository {
         Self { conn }
     }
 
+    /// 暴露底层连接：键控回写与差分删除需要在业务表上直接操作
+    pub fn connection(&self) -> SqliteConnection {
+        self.conn.clone()
+    }
+
+    /// 基于同一连接构造类型状态仓库（设置页状态列的数据来源）
+    pub fn status_repository(&self) -> SyncTypeStatusRepository {
+        SyncTypeStatusRepository::new(self.conn.clone())
+    }
+
     pub fn list(&self, scope_env: &str, user_id: &str) -> Result<Vec<SyncItemState>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
@@ -116,10 +126,31 @@ impl SyncItemStateRepository {
         data_type: &str,
         local_key: &str,
     ) -> Result<Option<SyncItemState>> {
-        self.list(scope_env, user_id).map(|items| {
-            items
-                .into_iter()
-                .find(|item| item.data_type == data_type && item.local_key == local_key)
+        // 逐键直查：此前走 list 全量拉取再内存过滤，list_local 对每个 key 都要
+        // 调一次 get，整体退化为 O(n²)；改成 WHERE 四键直查。
+        self.conn.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT scope_env, user_id, data_type, local_key, cloud_id, checksum,
+                        content_ts, last_synced_at, base_payload
+                 FROM sync_item_state
+                 WHERE scope_env = ?1 AND user_id = ?2 AND data_type = ?3 AND local_key = ?4",
+            )?;
+            let mut rows = stmt.query(params![scope_env, user_id, data_type, local_key])?;
+            if let Some(row) = rows.next()? {
+                Ok(Some(SyncItemState {
+                    scope_env: row.get(0)?,
+                    user_id: row.get(1)?,
+                    data_type: row.get(2)?,
+                    local_key: row.get(3)?,
+                    cloud_id: row.get(4)?,
+                    checksum: row.get(5)?,
+                    content_ts: row.get(6)?,
+                    last_synced_at: row.get(7)?,
+                    base_payload: row.get(8)?,
+                }))
+            } else {
+                Ok(None)
+            }
         })
     }
 
