@@ -1,7 +1,8 @@
 use anyhow::Result;
 use rusqlite::Connection;
 
-const MIGRATIONS: &[(&str, &str)] = &[
+// 测试需要逐条标记迁移版本以构造「未跑过目标迁移」的旧库，因此对 crate 内可见。
+pub(crate) const MIGRATIONS: &[(&str, &str)] = &[
     (
         "20260225000001",
         include_str!("../../migrations/20260225000001_init.sql"),

@@ -1,7 +1,7 @@
 use crate::document_index::{DOCUMENT_INDEX_FILE, DocumentIndex, PendingDocumentOperation};
 use crate::model::{
-    DeleteSummary, DocumentDescriptor, DocumentFormat, FileNode, NotebookMetadata, NotebookUiState,
-    NoteDocument,
+    DeleteSummary, DocumentDescriptor, DocumentFormat, FileNode, NoteDocument, NotebookMetadata,
+    NotebookUiState,
 };
 use crate::path_policy::{document_file_name, validate_node_name, validate_relative_path};
 use crate::storage_support::{
@@ -269,7 +269,8 @@ impl NotesStorage {
         // id 不是合法 UUID（例如早期/异常记录）时兜底分配一个新的：文件照写，
         // 之后这篇笔记就有了稳定身份，不会因此写不进去。
         let id = Uuid::parse_str(&document.document_id).unwrap_or_else(|_| Uuid::new_v4());
-        let relative = PathBuf::from(&document.relative_path);
+        // 远端路径是不可信输入：先过路径校验（拒绝绝对路径与 `..`），再落到文件系统
+        let relative = validate_relative_path(Path::new(&document.relative_path))?;
         let target = self.files_root().join(&relative);
         let mut index = self.load_index()?;
 

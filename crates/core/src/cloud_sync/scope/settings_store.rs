@@ -48,57 +48,29 @@ pub fn payload_checksum(payload: &Value) -> String {
     crate::cloud_sync::service::CloudSyncService::calculate_blob_checksum(&canonical)
 }
 
-/// 稳定序列化：对象键排序，避免字段顺序变化造成假变更
+/// 稳定序列化：对象键排序，避免字段顺序变化造成假变更。
+///
+/// 采用「键排序 → `serde_json` 序列化」两步而非手写转义器：`serde_json` 的
+/// 字符串转义覆盖全部控制字符（如 `\u{1b}`），手写版漏掉它们会在设置值包含
+/// 控制字符时产出无法反序列化的 JSON，让该分组从此永远同步失败。
 pub fn canonical_json(payload: &Value) -> String {
-    fn write(value: &Value, out: &mut String) {
+    fn sorted(value: &Value) -> Value {
         match value {
-            Value::Null => out.push_str("null"),
-            Value::Bool(v) => out.push_str(if *v { "true" } else { "false" }),
-            Value::Number(v) => out.push_str(&v.to_string()),
-            Value::String(v) => {
-                out.push('"');
-                for ch in v.chars() {
-                    match ch {
-                        '"' => out.push_str("\\\""),
-                        '\\' => out.push_str("\\\\"),
-                        '\n' => out.push_str("\\n"),
-                        '\r' => out.push_str("\\r"),
-                        '\t' => out.push_str("\\t"),
-                        other => out.push(other),
-                    }
-                }
-                out.push('"');
-            }
-            Value::Array(items) => {
-                out.push('[');
-                for (index, item) in items.iter().enumerate() {
-                    if index > 0 {
-                        out.push(',');
-                    }
-                    write(item, out);
-                }
-                out.push(']');
-            }
             Value::Object(map) => {
                 let mut keys: Vec<&String> = map.keys().collect();
                 keys.sort();
-                out.push('{');
-                for (index, key) in keys.iter().enumerate() {
-                    if index > 0 {
-                        out.push(',');
-                    }
-                    write(&Value::String((*key).clone()), out);
-                    out.push(':');
-                    write(&map[*key], out);
+                let mut sorted_map = serde_json::Map::new();
+                for key in keys {
+                    sorted_map.insert(key.clone(), sorted(&map[key]));
                 }
-                out.push('}');
+                Value::Object(sorted_map)
             }
+            Value::Array(items) => Value::Array(items.iter().map(sorted).collect()),
+            other => other.clone(),
         }
     }
 
-    let mut out = String::new();
-    write(payload, &mut out);
-    out
+    serde_json::to_string(&sorted(payload)).expect("serde_json 对 Value 序列化不会失败")
 }
 
 #[cfg(test)]
@@ -120,5 +92,16 @@ mod tests {
         let b = json!({"a": {"x": 2}});
 
         assert_ne!(canonical_json(&a), canonical_json(&b));
+    }
+
+    #[test]
+    fn canonical_json_escapes_control_characters() {
+        // 控制字符（如 ESC）必须被转义，否则产出的 JSON 无法反序列化
+        let value = json!({"theme": "a\u{1b}b"});
+        let text = canonical_json(&value);
+
+        assert!(text.contains("\\u001b"), "控制字符未被转义: {text}");
+        // 产出的必须是合法 JSON
+        assert!(serde_json::from_str::<serde_json::Value>(&text).is_ok());
     }
 }

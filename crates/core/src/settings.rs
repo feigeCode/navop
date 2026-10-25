@@ -2191,7 +2191,8 @@ impl AppSettings {
         }
     }
 
-    fn config_path() -> Option<PathBuf> {
+    /// settings.json 的路径。云同步写盘后需要按路径重载（见 personal_sync_runtime）。
+    pub fn config_path() -> Option<PathBuf> {
         get_config_dir().ok().map(|dir| dir.join("settings.json"))
     }
 
@@ -2391,7 +2392,11 @@ fn write_settings_atomically(path: &Path, content: &str) -> std::io::Result<()> 
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("settings.json");
-    let tmp_path = path.with_file_name(format!("{file_name}.tmp"));
+    // 临时文件名必须每次唯一：设置会同时被 UI 线程和云同步工作线程写入，
+    // 固定 `.tmp` 名的两个写入者会互相截断对方的半截内容再竞速 rename，
+    // 轻则丢一次保存，重则留下半截 JSON 触发 quarantine 回默认。
+    let unique = format!("{}-{:x}", std::process::id(), now_millis());
+    let tmp_path = path.with_file_name(format!("{file_name}.{unique}.tmp"));
     std::fs::write(&tmp_path, content)?;
 
     if path.exists() {
@@ -2403,6 +2408,14 @@ fn write_settings_atomically(path: &Path, content: &str) -> std::io::Result<()> 
     }
 
     std::fs::rename(&tmp_path, path)
+}
+
+/// 当前毫秒时间戳：用于生成互不冲突的临时文件名。
+fn now_millis() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or_default()
 }
 
 /// 把无法解析的 settings.json 改名保留为 `settings.json.corrupt-<时间戳>`。
@@ -2602,9 +2615,20 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(&path).expect("read saved settings"))
                 .expect("saved settings is json");
         assert_eq!(saved["font_size"], serde_json::json!(13.0));
+        let leftover_tmp: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("read dir")
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .map(|name| name.contains(".tmp"))
+                    .unwrap_or(false)
+            })
+            .collect();
         assert!(
-            !dir.path().join("settings.json.tmp").exists(),
-            "临时文件应在 rename 后消失"
+            leftover_tmp.is_empty(),
+            "临时文件应在 rename 后消失: {leftover_tmp:?}"
         );
 
         let backup: serde_json::Value = serde_json::from_str(
@@ -2629,7 +2653,10 @@ mod tests {
         )
         .expect("write settings");
 
-        assert_eq!(AppSettings::peek_log_file_path_from(&path), "/tmp/navop.log");
+        assert_eq!(
+            AppSettings::peek_log_file_path_from(&path),
+            "/tmp/navop.log"
+        );
         assert!(
             serde_json::from_str::<AppSettings>(
                 &std::fs::read_to_string(&path).expect("read settings")

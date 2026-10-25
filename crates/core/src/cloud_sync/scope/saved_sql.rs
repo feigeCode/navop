@@ -92,6 +92,44 @@ fn content_hash(content: &str) -> String {
     CloudSyncService::calculate_blob_checksum(content)
 }
 
+/// 校验同步下发的相对路径：拒绝绝对路径、`..`、空段与空串，
+/// 防止把文件写到 `queries/` 之外（或挪走别的文件）。
+fn validate_sync_relative_path(relative: &str) -> anyhow::Result<PathBuf> {
+    use anyhow::bail;
+
+    if relative.is_empty() {
+        bail!("空路径");
+    }
+    let path = Path::new(relative);
+    if path.is_absolute() {
+        bail!("绝对路径不允许: {relative}");
+    }
+    let mut clean = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(value) => {
+                let Some(text) = value.to_str() else {
+                    bail!("非法路径段: {relative}");
+                };
+                if text.is_empty() {
+                    bail!("空路径段: {relative}");
+                }
+                clean.push(value);
+            }
+            std::path::Component::CurDir if clean.as_os_str().is_empty() => {}
+            _ => bail!("路径越界: {relative}"),
+        }
+    }
+    if clean.as_os_str().is_empty() {
+        bail!("空路径: {relative}");
+    }
+    // 只接受 .sql 文件，防止借同步改写其他类型文件
+    if clean.extension().and_then(|e| e.to_str()) != Some("sql") {
+        bail!("仅允许 .sql 文件: {relative}");
+    }
+    Ok(clean)
+}
+
 /// 枚举 `queries/` 下的全部 SQL，附带稳定 `document_id`。
 ///
 /// - 路径没变 ⇒ 沿用原 id（并刷新哈希）；
@@ -176,20 +214,22 @@ pub fn saved_sql_documents() -> Vec<SavedSqlDocument> {
 /// 按稳定 `document_id` 写入一篇 SQL。
 ///
 /// 该 id 已登记在别的路径时先移动文件（重命名语义），不会留下重复副本。
-pub fn write_saved_sql_document(document: &SavedSqlDocument) {
+/// 返回 `Err` 表示载荷非法（路径越界等），调用方应记录错误并跳过。
+pub fn write_saved_sql_document(document: &SavedSqlDocument) -> anyhow::Result<()> {
     let Some(root) = saved_sql_root() else {
-        return;
+        return Ok(());
     };
     let mut index = load_index();
-    // id 不是合法 UUID（早期/异常记录）时兜底分配一个新的：文件照写
     let id = match uuid::Uuid::parse_str(&document.document_id) {
         Ok(_) => document.document_id.clone(),
         Err(_) => uuid::Uuid::new_v4().to_string(),
     };
-    let target = root.join(&document.relative_path);
+    // 远端路径是不可信输入：拒绝绝对路径与 `..`，防止越界写/挪文件
+    let relative = validate_sync_relative_path(&document.relative_path)?;
+    let target = root.join(&relative);
 
     if let Some(record) = index.documents.get(&id) {
-        if record.path != document.relative_path {
+        if record.path != relative.to_string_lossy() {
             let source = root.join(&record.path);
             if source.is_file() {
                 if let Some(parent) = target.parent() {
@@ -203,18 +243,17 @@ pub fn write_saved_sql_document(document: &SavedSqlDocument) {
     if let Some(parent) = target.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    if std::fs::write(&target, document.content.as_bytes()).is_err() {
-        return;
-    }
+    std::fs::write(&target, document.content.as_bytes())?;
 
     index.documents.insert(
         id,
         DocumentRecord {
-            path: document.relative_path.clone(),
+            path: relative.to_string_lossy().replace('\\', "/"),
             content_hash: content_hash(&document.content),
         },
     );
     save_index(&index);
+    Ok(())
 }
 
 /// 按稳定 `document_id` 删除一篇 SQL；返回是否确实删掉了。
