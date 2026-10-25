@@ -53,10 +53,11 @@ impl LlmProvidersView {
         // 不订阅的话本页显示的永远是创建时那份旧列表——表现为「同步成功了，
         // 提供商却要重新打开页面才出现」。
         if let Some(notifier) = get_notifier(cx) {
-            instance.provider_subscription = Some(cx.subscribe(
-                &notifier,
-                |this, _, _: &ProviderConfigEvent, cx| this.reload_providers(cx),
-            ));
+            instance.provider_subscription = Some(
+                cx.subscribe(&notifier, |this, _, _: &ProviderConfigEvent, cx| {
+                    this.reload_providers(cx)
+                }),
+            );
         }
         cx.spawn(async move |entity: WeakEntity<Self>, cx: &mut AsyncApp| {
             let _ = entity.update(cx, |this, cx| {

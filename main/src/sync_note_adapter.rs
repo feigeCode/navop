@@ -9,8 +9,8 @@
 //!
 //! 相对路径仅用于还原树形结构，不再承担身份职责。
 
-use one_core::cloud_sync::scope::notes::{NoteSyncAdapter, NoteSyncItem};
 use notes::{NoteDocument, NotesStorage};
+use one_core::cloud_sync::scope::notes::{NoteSyncAdapter, NoteSyncItem};
 
 /// 基于文件系统的笔记数据源
 #[derive(Default)]

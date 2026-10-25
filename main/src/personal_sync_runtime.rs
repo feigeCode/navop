@@ -21,7 +21,7 @@ use one_core::llm::GlobalProviderState;
 use one_core::llm::notifier::emit_provider_config_changed;
 use one_core::llm::storage::ProviderRepository;
 use one_core::settings::{
-    AppSettings, GlobalCurrentUser, PersonalSyncSettings, SyncProvider, SYNC_SCOPE_DESCRIPTORS,
+    AppSettings, GlobalCurrentUser, PersonalSyncSettings, SYNC_SCOPE_DESCRIPTORS, SyncProvider,
 };
 use one_core::storage::quick_command::QuickCommandRepository;
 use one_core::storage::sftp_favorite_path::SftpFavoritePathRepository;
@@ -938,7 +938,8 @@ fn personal_auto_sync_enabled(cx: &App) -> bool {
     settings.sync_enabled
         && settings.sync_provider == SyncProvider::Personal
         && settings.personal_sync.auto_sync
-        && cx.try_global::<GlobalPersonalSyncRuntime>()
+        && cx
+            .try_global::<GlobalPersonalSyncRuntime>()
             .is_some_and(|state| state.runtime.is_some())
 }
 
@@ -1121,7 +1122,9 @@ pub(crate) fn missed_startup_pass(
     last_pass_at: Option<Instant>,
     status: &PersonalSyncRuntimeStatus,
 ) -> bool {
-    runtime_active && last_pass_at.is_none() && !matches!(status, PersonalSyncRuntimeStatus::Syncing)
+    runtime_active
+        && last_pass_at.is_none()
+        && !matches!(status, PersonalSyncRuntimeStatus::Syncing)
 }
 
 /// 距上次同步是否已超过空闲兜底间隔。
@@ -1187,10 +1190,7 @@ fn apply_scope_signatures(cx: &mut App, signatures: Vec<(String, String)>) {
     let (changed, changed_types) = {
         let state = cx.global_mut::<GlobalPersonalSyncRuntime>();
         if !state.scope_baseline_initialized {
-            tracing::info!(
-                types = signatures.len(),
-                "个人同步：本地变更轮询基线已建立"
-            );
+            tracing::info!(types = signatures.len(), "个人同步：本地变更轮询基线已建立");
             state.scope_baseline = signatures.into_iter().collect();
             state.scope_baseline_initialized = true;
             (false, Vec::new())
@@ -1371,6 +1371,7 @@ fn build_scope_source(cx: &App) -> Option<Arc<SyncScopeSource>> {
     let quick_commands = storage.get::<QuickCommandRepository>()?;
     let sftp = storage.get::<SftpFavoritePathRepository>()?;
     let providers = storage.get::<ProviderRepository>()?;
+    let connections = storage.get::<ConnectionRepository>()?;
 
     let settings = AppSettings::global(cx);
     let enabled: HashSet<String> = settings
@@ -1390,6 +1391,7 @@ fn build_scope_source(cx: &App) -> Option<Arc<SyncScopeSource>> {
         SyncTypeStatusRepository::new(storage.connection()),
         (*quick_commands).clone(),
         (*sftp).clone(),
+        (*connections).clone(),
         (*providers).clone(),
         Some(Arc::new(crate::sync_note_adapter::FileSystemNoteAdapter)),
         service,
@@ -1477,13 +1479,61 @@ fn sorted_data_types(touched: &HashSet<String>) -> String {
 /// `ConnectionDataEvent`，但那条总线同时是同步自己的触发源，从同步里回发会
 /// 形成自激循环，暂不接（重新打开对应页面即可）。
 fn notify_synced_data_changed(cx: &mut App, touched: &HashSet<String>) {
-    if !touched.contains(data_type::LLM_PROVIDER) {
+    if touched.contains(data_type::LLM_PROVIDER) {
+        if let Some(state) = cx.try_global::<GlobalProviderState>() {
+            state.manager().clear_cache();
+        }
+        emit_provider_config_changed(cx);
+    }
+    // 同步可能把远端设置写进了 settings.json（FileSettingsStore 以文件为事实源，
+    // 只写盘不写内存）。这里重载并把新值放进全局，否则：
+    // 1) UI / 终端 / 快捷键继续读内存里的旧值，直到重启才生效；
+    // 2) 下一次 AppSettings::update_and_save 以旧内存为基准整份落盘，
+    //    把同步结果连带着别的改动一起覆盖回滚；
+    // 3) 设置观察者拿旧内存算签名，还会把旧值当「本地变更」反向上传。
+    if touched.iter().any(|data_type| {
+        matches!(
+            data_type.as_str(),
+            data_type::SETTINGS_GENERAL
+                | data_type::SETTINGS_DATABASE
+                | data_type::SETTINGS_TERMINAL
+                | data_type::SETTINGS_AGENT
+                | data_type::SETTINGS_MCP
+                | data_type::SETTINGS_KEYBINDINGS
+        )
+    }) {
+        reload_settings_after_sync(cx);
+    }
+}
+
+/// 同步落盘后重载设置并刷新全局。
+///
+/// 必须先把 `SettingsSyncBaseline` 标记为未初始化：`cx.set_global` 会触发
+/// `observe_settings_for_sync`，而观察者拿旧基线比对会把这些远端值当成「本地
+/// 刚改的」再触发一轮同步（自激）。重建基线后，观察者首轮只记录、不上传。
+///
+/// `AppSettings::load()` 在文件损坏时会退回默认值（并在 quarantine 逻辑里备份
+/// 原文件），不会失败 —— 但默认值也不是「同步前的内存值」，直接覆盖同样有
+/// 回滚风险，所以先探测文件能否反序列化，坏了就保留内存值并记日志。
+fn reload_settings_after_sync(cx: &mut App) {
+    // 基线作废：见函数注释（防 set_global 触发的观察者把远端值当本地变更）。
+    {
+        let baseline = cx.global_mut::<SettingsSyncBaseline>();
+        baseline.payloads.clear();
+        baseline.initialized = false;
+    }
+    let readable = AppSettings::config_path()
+        .filter(|path| path.exists())
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .is_some();
+    if !readable {
+        tracing::warn!("个人同步：settings.json 不可读，保留内存值，等待下次保存重建");
         return;
     }
-    if let Some(state) = cx.try_global::<GlobalProviderState>() {
-        state.manager().clear_cache();
-    }
-    emit_provider_config_changed(cx);
+    let settings = AppSettings::load();
+    cx.set_global(settings);
+    tracing::info!("个人同步：设置已从磁盘重载到内存");
 }
 
 fn set_status(cx: &mut App, status: PersonalSyncRuntimeStatus) {
@@ -1513,9 +1563,14 @@ pub fn reencrypt_cloud_data(
         let store = ConfiguredPersonalSyncStore::from_runtime_config(&config, http)?;
         // 重加密只用 re_encrypt_sync_data（显式传旧/新密钥），不依赖服务内的当前密钥
         let service = CloudSyncService::new();
-        let stats =
-            one_core::cloud_sync::reencrypt_personal(&store, &service, &old_key, &new_key, key_version)
-                .await?;
+        let stats = one_core::cloud_sync::reencrypt_personal(
+            &store,
+            &service,
+            &old_key,
+            &new_key,
+            key_version,
+        )
+        .await?;
         store.flush().await?;
         Ok::<_, SyncStoreError>(stats)
     });

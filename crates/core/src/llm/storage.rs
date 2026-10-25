@@ -316,12 +316,16 @@ mod tests {
 
         let listed = repo.list().expect("list");
         assert_eq!(2, listed.len());
-        assert!(listed
-            .iter()
-            .any(|provider| provider.name == "first" && provider.id == first_id));
-        assert!(listed
-            .iter()
-            .any(|provider| provider.name == "second" && provider.id == second_id));
+        assert!(
+            listed
+                .iter()
+                .any(|provider| provider.name == "first" && provider.id == first_id)
+        );
+        assert!(
+            listed
+                .iter()
+                .any(|provider| provider.name == "second" && provider.id == second_id)
+        );
     }
 
     #[test]

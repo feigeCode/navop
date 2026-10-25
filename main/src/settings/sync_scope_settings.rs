@@ -136,6 +136,10 @@ fn render_sync_scope_row(
                 .with_size(options.size())
                 .on_click(move |checked: &bool, window, cx| {
                     handle_toggle(key, *checked, window, cx);
+                    // 受控 Checkbox：勾选状态来自 AppSettings 全局，update_and_save
+                    // 触发的 observe 级联不一定让本行重绘（SettingItem 不订阅全局），
+                    // 必须显式刷新窗口，否则点击后外观不变，直到切页才更新。
+                    window.refresh();
                 }),
         )
         .into_any_element()
