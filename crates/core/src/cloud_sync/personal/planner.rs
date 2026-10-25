@@ -5,6 +5,14 @@ use serde::{Deserialize, Serialize};
 
 use super::PersonalConflictType;
 
+/// Singleton 数据类型的认定集合：该类型在云端**最多只有一条**记录
+/// （例如设置分组），本地快照没有 cloud_id 时不能盲目上传——否则第二台
+/// 设备会给同一个分组再造一条云端记录，两条记录随后互相覆盖。
+///
+/// 由 `PersonalSyncLocalSource::singleton_data_types` 提供，planner 自身
+/// 不做类型硬编码。
+pub type SingletonTypes = HashSet<String>;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PersonalSyncItemSnapshot {
     pub local_id: String,
@@ -81,15 +89,54 @@ impl PersonalSyncPlanner {
         remote_records: &[CloudSyncData],
         paused_record_keys: &HashSet<PersonalSyncCloudKey>,
     ) -> PersonalSyncPlan {
+        self.plan_with_singletons(
+            local_items,
+            remote_records,
+            paused_record_keys,
+            &HashSet::new(),
+        )
+    }
+
+    /// 带 Singleton 类型集合的规划入口（worker 实际调用的版本）。
+    pub fn plan_with_singletons(
+        &self,
+        local_items: &[PersonalSyncItemSnapshot],
+        remote_records: &[CloudSyncData],
+        paused_record_keys: &HashSet<PersonalSyncCloudKey>,
+        singleton_types: &SingletonTypes,
+    ) -> PersonalSyncPlan {
         let remote_by_cloud_id = remote_records
             .iter()
             .map(|record| ((record.data_type.as_str(), record.id.as_str()), record))
             .collect::<HashMap<_, _>>();
+        // 每个 Singleton 类型「第一条」远端记录：本地无 cloud_id 的快照与它
+        // 配对走下载合并，而不是再上传一条。多条远端记录（历史脏数据）时只
+        // 认第一条，其余照旧走 to_download 由 apply 侧幂等覆盖。
+        let mut singleton_remote = HashMap::new();
+        for record in remote_records {
+            if !singleton_types.contains(record.data_type.as_str())
+                || paused_record_keys
+                    .iter()
+                    .any(|key| key.data_type == record.data_type && key.cloud_id == record.id)
+            {
+                continue;
+            }
+            singleton_remote
+                .entry(record.data_type.clone())
+                .or_insert_with(|| record.clone());
+        }
         let mut plan = PersonalSyncPlan::default();
         let mut local_cloud_ids = HashSet::new();
 
         for item in local_items.iter().filter(|item| item.team_id.is_none()) {
-            self.plan_local_item(item, &remote_by_cloud_id, paused_record_keys, &mut plan);
+            self.plan_local_item(
+                item,
+                &remote_by_cloud_id,
+                paused_record_keys,
+                &singleton_remote,
+                singleton_types,
+                &mut plan,
+            );
             if let Some(cloud_id) = &item.cloud_id {
                 local_cloud_ids.insert((item.data_type.as_str(), cloud_id.as_str()));
             }
@@ -100,6 +147,9 @@ impl PersonalSyncPlanner {
                 && !paused_record_keys.contains(&PersonalSyncCloudKey {
                     data_type: record.data_type.clone(),
                     cloud_id: record.id.clone(),
+                })
+                && !plan.to_update_local.iter().any(|(remote, _)| {
+                    remote.id == record.id && remote.data_type == record.data_type
                 })
             {
                 plan.to_download.push(record.clone());
@@ -114,9 +164,27 @@ impl PersonalSyncPlanner {
         item: &PersonalSyncItemSnapshot,
         remote_by_cloud_id: &HashMap<(&str, &str), &CloudSyncData>,
         paused_record_keys: &HashSet<PersonalSyncCloudKey>,
+        singleton_remote: &HashMap<String, CloudSyncData>,
+        singleton_types: &SingletonTypes,
         plan: &mut PersonalSyncPlan,
     ) {
         let Some(cloud_id) = &item.cloud_id else {
+            // Singleton 认领：该类型云端已有记录时，本地快照与它配对走
+            // 「下载合并」（apply_settings 的字段级三方合并），不再上传。
+            // 只有本地内容与远端完全一致才直接标记已同步。
+            if singleton_types.contains(item.data_type.as_str()) {
+                if let Some(remote) = singleton_remote.get(&item.data_type) {
+                    if item.checksum == remote.checksum {
+                        plan.to_mark_synced.push(PersonalSyncCloudKey {
+                            data_type: remote.data_type.clone(),
+                            cloud_id: remote.id.clone(),
+                        });
+                    } else {
+                        plan.to_update_local.push((remote.clone(), item.clone()));
+                    }
+                    return;
+                }
+            }
             plan.to_upload.push(item.clone());
             return;
         };
@@ -172,7 +240,7 @@ mod tests {
     use crate::cloud_sync::models::data_type;
     use crate::cloud_sync::personal::test_support::test_record;
     use crate::cloud_sync::personal::{
-        PersonalConflictType, PersonalSyncItemSnapshot, PersonalSyncPlanner,
+        PersonalConflictType, PersonalSyncCloudKey, PersonalSyncItemSnapshot, PersonalSyncPlanner,
     };
 
     #[test]
@@ -325,6 +393,131 @@ mod tests {
             checksum: String::new(),
             team_id: team_id.map(str::to_string),
         }
+    }
+
+    #[test]
+    fn planner_claims_singleton_record_instead_of_uploading_duplicate() {
+        // 第二台设备：设置分组本地有内容但没有 cloud_id，云端已有一条记录。
+        // 正确行为是「认领」远端记录走下载合并，而不是再上传一条造成双记录。
+        let mut local = local_item("settings_general", None, 200, None);
+        local.data_type = data_type::SETTINGS_GENERAL.to_string();
+        local.checksum = "local-checksum".to_string();
+        let remote = test_record(
+            "cloud-settings",
+            data_type::SETTINGS_GENERAL,
+            2,
+            "remote-checksum",
+        );
+        let singletons: HashSet<String> = [data_type::SETTINGS_GENERAL.to_string()]
+            .into_iter()
+            .collect();
+
+        let plan = PersonalSyncPlanner::new().plan_with_singletons(
+            &[local],
+            &[remote.clone()],
+            &HashSet::new(),
+            &singletons,
+        );
+
+        assert!(plan.to_upload.is_empty(), "singleton 不应再上传新记录");
+        assert_eq!(1, plan.to_update_local.len());
+        assert_eq!(remote.id, plan.to_update_local[0].0.id);
+        assert!(plan.to_download.is_empty(), "配对过的记录不应再进下载队列");
+        assert!(plan.conflicts.is_empty());
+    }
+
+    #[test]
+    fn planner_marks_synced_when_singleton_content_matches_remote() {
+        let mut local = local_item("settings_general", None, 200, None);
+        local.data_type = data_type::SETTINGS_GENERAL.to_string();
+        local.checksum = "same".to_string();
+        let remote = test_record("cloud-settings", data_type::SETTINGS_GENERAL, 2, "same");
+        let singletons: HashSet<String> = [data_type::SETTINGS_GENERAL.to_string()]
+            .into_iter()
+            .collect();
+
+        let plan = PersonalSyncPlanner::new().plan_with_singletons(
+            &[local],
+            &[remote],
+            &HashSet::new(),
+            &singletons,
+        );
+
+        assert!(plan.to_upload.is_empty());
+        assert!(plan.to_update_local.is_empty());
+        assert_eq!(1, plan.to_mark_synced.len());
+    }
+
+    #[test]
+    fn planner_uploads_singleton_when_remote_has_no_record() {
+        let mut local = local_item("settings_general", None, 200, None);
+        local.data_type = data_type::SETTINGS_GENERAL.to_string();
+        let singletons: HashSet<String> = [data_type::SETTINGS_GENERAL.to_string()]
+            .into_iter()
+            .collect();
+
+        let plan = PersonalSyncPlanner::new().plan_with_singletons(
+            &[local],
+            &[],
+            &HashSet::new(),
+            &singletons,
+        );
+
+        assert_eq!(1, plan.to_upload.len());
+    }
+
+    #[test]
+    fn planner_skips_singleton_claim_for_paused_remote_record() {
+        // 远端记录挂在冲突上时不能认领：认领会绕过冲突裁决直接下载覆盖。
+        let mut local = local_item("settings_general", None, 200, None);
+        local.data_type = data_type::SETTINGS_GENERAL.to_string();
+        local.checksum = "local-checksum".to_string();
+        let remote = test_record(
+            "cloud-settings",
+            data_type::SETTINGS_GENERAL,
+            2,
+            "remote-checksum",
+        );
+        let paused = HashSet::from([PersonalSyncCloudKey {
+            data_type: data_type::SETTINGS_GENERAL.to_string(),
+            cloud_id: "cloud-settings".to_string(),
+        }]);
+        let singletons: HashSet<String> = [data_type::SETTINGS_GENERAL.to_string()]
+            .into_iter()
+            .collect();
+
+        let plan = PersonalSyncPlanner::new().plan_with_singletons(
+            &[local],
+            &[remote],
+            &paused,
+            &singletons,
+        );
+
+        assert_eq!(1, plan.to_upload.len(), "paused 记录不参与认领");
+        assert!(plan.to_download.is_empty());
+    }
+
+    #[test]
+    fn planner_does_not_claim_item_types() {
+        // Item 类型（如快捷命令）必须保持「无 cloud_id 即上传」：
+        // 本地多条同类型数据各自对应独立的云端记录，认领会互相串味。
+        let local = vec![
+            local_item("quick_command:1", None, 200, None),
+            local_item("quick_command:2", None, 200, None),
+        ];
+        for item in &local {
+            assert_eq!(data_type::CONNECTION, item.data_type);
+        }
+        let remote = vec![test_record("cloud-1", data_type::CONNECTION, 2, "checksum")];
+        // Connection 不在 singleton 集合里（默认空集合也行，这里显式传空）
+        let plan = PersonalSyncPlanner::new().plan_with_singletons(
+            &local,
+            &remote,
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+
+        assert_eq!(2, plan.to_upload.len());
     }
 
     fn local_item_with_sync(

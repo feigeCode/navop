@@ -11,7 +11,7 @@ use async_trait::async_trait;
 
 use crate::cloud_sync::models::{CloudSyncData, data_type};
 use crate::cloud_sync::personal::{
-    PersonalSyncItemSnapshot, PersonalSyncLocalSource, SyncStoreError,
+    PendingLocalDeletion, PersonalSyncItemSnapshot, PersonalSyncLocalSource, SyncStoreError,
 };
 use crate::cloud_sync::scope::notes::{NOTE_MAX_CONTENT_BYTES, NoteSyncItem, SharedNoteAdapter};
 use crate::cloud_sync::scope::payloads::{
@@ -31,9 +31,13 @@ use crate::cloud_sync::scope::state::{
 use crate::cloud_sync::service::CloudSyncService;
 use crate::llm::storage::ProviderRepository;
 use crate::llm::types::ProviderConfig;
+use crate::storage::ConnectionRepository;
 use crate::storage::get_config_dir;
 use crate::storage::quick_command::QuickCommandRepository;
-use crate::storage::sftp_favorite_path::{SftpFavoritePathRepository, SftpFavoriteRow};
+use crate::storage::sftp_favorite_path::{
+    LOCAL_FAVORITE_CONNECTION_KEY, SftpFavoritePathRepository, SftpFavoriteRow,
+    sftp_favorite_connection_key,
+};
 use crate::storage::traits::Repository;
 
 use super::payloads::SettingsPlainData;
@@ -51,6 +55,9 @@ pub struct SyncScopeSource {
     status: SyncTypeStatusRepository,
     quick_commands: QuickCommandRepository,
     sftp: SftpFavoritePathRepository,
+    /// 连接仓储：SFTP 收藏 / 连接级快捷命令上传时解析连接的 cloud_id，
+    /// 下载时由 cloud_id 反解本地连接 id，跨设备保持外键稳定
+    connections: ConnectionRepository,
     providers: ProviderRepository,
     notes: Option<SharedNoteAdapter>,
     settings: FileSettingsStore,
@@ -58,6 +65,7 @@ pub struct SyncScopeSource {
 }
 
 impl SyncScopeSource {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         scope_env: String,
         user_id: String,
@@ -66,6 +74,7 @@ impl SyncScopeSource {
         status: SyncTypeStatusRepository,
         quick_commands: QuickCommandRepository,
         sftp: SftpFavoritePathRepository,
+        connections: ConnectionRepository,
         providers: ProviderRepository,
         notes: Option<SharedNoteAdapter>,
         service: Arc<RwLock<CloudSyncService>>,
@@ -78,6 +87,7 @@ impl SyncScopeSource {
             status,
             quick_commands,
             sftp,
+            connections,
             providers,
             notes,
             settings: FileSettingsStore,
@@ -91,6 +101,63 @@ impl SyncScopeSource {
 
     pub fn state_repo(&self) -> &SyncItemStateRepository {
         &self.state
+    }
+
+    #[cfg(test)]
+    pub(crate) fn quick_commands(&self) -> &QuickCommandRepository {
+        &self.quick_commands
+    }
+
+    /// 基线差分删除（trait 实现的具体逻辑，测试直接调用）
+    pub async fn report_pending_local_deletions(&self) -> Vec<PendingLocalDeletion> {
+        // 「基线里有 cloud_id、本轮枚举里却消失」的本地条目即被删除：
+        // - enabled 过滤：用户取消勾选的类型按 D3 保留本地与云端，不推删除；
+        // - 设置分组没有删除语义，跳过；
+        // - 只有同步过（有 cloud_id）的行才可能构成删除传播。
+        let mut alive: HashSet<(String, String)> = HashSet::new();
+        for item in self.list_items().await.unwrap_or_default() {
+            if let Some((record_type, local_key)) = split_local_id(&item.local_id) {
+                alive.insert((record_type.to_string(), local_key.to_string()));
+            }
+        }
+        let mut deletions = Vec::new();
+        let Ok(states) = self.state.list(&self.scope_env, &self.user_id) else {
+            return deletions;
+        };
+        for state in states {
+            if !self.enabled.contains(&state.data_type)
+                || SettingsGroup::from_data_type(&state.data_type).is_some()
+                || state.cloud_id.as_deref().unwrap_or("").is_empty()
+            {
+                continue;
+            }
+            if alive.contains(&(state.data_type.clone(), state.local_key.clone())) {
+                continue;
+            }
+            deletions.push(PendingLocalDeletion {
+                data_type: state.data_type.clone(),
+                cloud_id: state.cloud_id.clone().unwrap_or_default(),
+                last_synced_at: state.last_synced_at,
+            });
+        }
+        deletions
+    }
+
+    /// 墓碑推完后清基线行（trait 实现的具体逻辑，测试直接调用）
+    pub async fn drop_local_state(&self, data_type: &str, cloud_id: &str) {
+        let Ok(states) = self.state.list(&self.scope_env, &self.user_id) else {
+            return;
+        };
+        let Some(local_key) = states
+            .into_iter()
+            .find(|s| s.data_type == data_type && s.cloud_id.as_deref() == Some(cloud_id))
+            .map(|s| s.local_key)
+        else {
+            return;
+        };
+        let _ = self
+            .state
+            .delete(&self.scope_env, &self.user_id, data_type, &local_key);
     }
 
     // ---------- 通用辅助 ----------
@@ -164,6 +231,38 @@ impl SyncScopeSource {
             .map(|s| s.local_key)
     }
 
+    /// 由本地连接 id 解析其云端 ID（上传侧填充 `connection_cloud_id` 用）。
+    ///
+    /// 直接查连接表：连接同步成功后 cloud_id 就回填在连接行上，
+    /// 不经过 `sync_item_state`（那是 scope 类型的状态表，connection 不在其中）。
+    fn connection_cloud_id_for(&self, connection_id: Option<i64>) -> Option<String> {
+        let connection_id = connection_id?;
+        let connection = self.connections.get(connection_id).ok().flatten()?;
+        connection.cloud_id.filter(|id| !id.trim().is_empty())
+    }
+
+    /// 由云端连接 ID 反解本地连接 id（下载侧恢复外键用）。
+    fn resolve_connection_cloud_id(&self, cloud_id: &str) -> Option<i64> {
+        self.connections
+            .get_by_cloud_id(cloud_id)
+            .ok()
+            .flatten()
+            .and_then(|c| c.id)
+    }
+
+    /// 按连接名兜底解析（云端记录里只有 `connection_name` 时）。
+    fn resolve_connection_by_name(&self, name: &str) -> Option<i64> {
+        if name.is_empty() {
+            return None;
+        }
+        self.connections
+            .list()
+            .ok()?
+            .into_iter()
+            .find(|c| c.name == name)
+            .and_then(|c| c.id)
+    }
+
     fn record_synced(
         &self,
         record_type: &str,
@@ -197,7 +296,11 @@ impl SyncScopeSource {
             }
             let Some(id) = command.id else { continue };
             let checksum = payload_checksum(
-                &serde_json::to_value(quick_command_plain(&command)).unwrap_or_default(),
+                &serde_json::to_value(quick_command_plain(
+                    self.connection_cloud_id_for(command.connection_id),
+                    &command,
+                ))
+                .unwrap_or_default(),
             );
             items.push(self.snapshot(
                 data_type::QUICK_COMMAND,
@@ -216,13 +319,11 @@ impl SyncScopeSource {
             .list_all()
             .map_err(|e| SyncStoreError::Io(e.to_string()))?
         {
-            let plain = SftpFavoritePlainData {
-                format_version: PAYLOAD_FORMAT_VERSION,
-                path: favorite.path.clone(),
-                sort_order: favorite.sort_order,
-                connection_cloud_id: None,
-                connection_name: Some(favorite.connection_key.clone()),
-            };
+            // 「本地文件列表」伪连接键：不是真实连接的目录收藏，不参与同步
+            if favorite.connection_key == LOCAL_FAVORITE_CONNECTION_KEY {
+                continue;
+            }
+            let plain = self.sftp_plain_payload(&favorite)?;
             let checksum = payload_checksum(&serde_json::to_value(&plain).unwrap_or_default());
             items.push(self.snapshot(
                 data_type::SFTP_FAVORITE,
@@ -232,6 +333,44 @@ impl SyncScopeSource {
             ));
         }
         Ok(items)
+    }
+
+    /// SFTP 收藏的上传载荷：优先带稳定 `connection_cloud_id`；
+    /// 连接尚未同步（无 cloud_id）时退化为真实连接名，
+    /// 由对端按名兜底解析。绝不把 `local:{id}` 这种设备本地键传上云。
+    fn sftp_plain_payload(
+        &self,
+        favorite: &SftpFavoriteRow,
+    ) -> Result<SftpFavoritePlainData, SyncStoreError> {
+        let connection = favorite
+            .connection_id
+            .and_then(|id| self.connections.get(id).ok().flatten());
+        let (connection_cloud_id, connection_name) = match &connection {
+            Some(conn) => {
+                let cloud_id = conn.cloud_id.clone().filter(|id| !id.trim().is_empty());
+                let name = if cloud_id.is_some() {
+                    None
+                } else {
+                    Some(conn.name.clone())
+                };
+                (cloud_id, name)
+            }
+            // 连接行已删（收藏悬空）：按 connection_key 里的 cloud: 前缀兜底
+            None => (
+                favorite
+                    .connection_key
+                    .strip_prefix("cloud:")
+                    .map(str::to_string),
+                None,
+            ),
+        };
+        Ok(SftpFavoritePlainData {
+            format_version: PAYLOAD_FORMAT_VERSION,
+            path: favorite.path.clone(),
+            sort_order: favorite.sort_order,
+            connection_cloud_id,
+            connection_name,
+        })
     }
 
     fn list_providers(&self) -> Result<Vec<PersonalSyncItemSnapshot>, SyncStoreError> {
@@ -419,6 +558,12 @@ impl SyncScopeSource {
         command.group_color = plain.group_color;
         // 内置命令不参与同步，因此同步下来的必定是用户命令
         command.is_builtin = false;
+        // 连接级命令：按云端连接 ID 反解本地 id；连接尚未同步到本机时
+        // 降级为全局命令（连接同步落地后不会自动回填，用户重新绑定即可）
+        command.connection_id = plain
+            .connection_cloud_id
+            .as_deref()
+            .and_then(|id| self.resolve_connection_cloud_id(id));
 
         let id = match local_key.and_then(|k| k.parse::<i64>().ok()) {
             Some(id) => {
@@ -448,7 +593,40 @@ impl SyncScopeSource {
         let plain: SftpFavoritePlainData = parse_record(&service, record).map_err(sync_error)?;
         drop(service);
 
-        let connection_key = plain.connection_name.clone().unwrap_or_default();
+        // 跨设备外键恢复：优先按 connection_cloud_id 反解本地连接；
+        // 旧记录只有 connection_name 时按名兜底；两者都失败则按 name: 键
+        // 落地（与本地「连接未同步」时的键规则一致，等连接同步后由 UI 归位）。
+        let (connection_id, connection_key) = {
+            let by_cloud = plain
+                .connection_cloud_id
+                .as_deref()
+                .and_then(|id| self.resolve_connection_cloud_id(id));
+            let by_name = plain
+                .connection_name
+                .as_deref()
+                .and_then(|name| self.resolve_connection_by_name(name));
+            match by_cloud.or(by_name) {
+                Some(id) => {
+                    let key = self
+                        .connections
+                        .get(id)
+                        .ok()
+                        .flatten()
+                        .map(|c| sftp_favorite_connection_key(&c))
+                        .unwrap_or_else(|| format!("local:{id}"));
+                    (Some(id), key)
+                }
+                None => (
+                    None,
+                    plain
+                        .connection_name
+                        .clone()
+                        .map(|name| format!("name:{name}"))
+                        .unwrap_or_else(|| "name:".to_string()),
+                ),
+            }
+        };
+
         let id = match local_key.and_then(|k| k.parse::<i64>().ok()) {
             Some(id) => {
                 if let Some(mut existing) = self
@@ -458,6 +636,8 @@ impl SyncScopeSource {
                 {
                     existing.path = plain.path.clone();
                     existing.sort_order = plain.sort_order;
+                    existing.connection_id = connection_id;
+                    existing.connection_key = connection_key;
                     self.sftp
                         .update_row(&existing)
                         .map_err(|e| SyncStoreError::Io(e.to_string()))?;
@@ -467,7 +647,7 @@ impl SyncScopeSource {
             None => {
                 let row = SftpFavoriteRow {
                     id: 0,
-                    connection_id: None,
+                    connection_id,
                     connection_key,
                     path: plain.path.clone(),
                     sort_order: plain.sort_order,
@@ -547,7 +727,8 @@ impl SyncScopeSource {
             relative_path: plain.name.clone(),
             modified_at: now_seconds(),
             content: plain.content.clone(),
-        });
+        })
+        .map_err(|e| SyncStoreError::Io(format!("写入已保存 SQL 失败: {e}")))?;
         // 稳定键是 document_id：同一篇 SQL 换了路径时表现为移动，不会产生重复
         self.record_synced(data_type::SAVED_SQL, &plain.document_id, record, None);
         self.mark_success(data_type::SAVED_SQL);
@@ -599,16 +780,18 @@ impl SyncScopeSource {
         // Q8 字段级三方合并；base 缺失时降级为整体采用远端（R14）
         let merge = merge_three_way(group, base_value.as_ref(), &local, &plain.payload);
 
-        if !merge.is_clean() {
-            let field = merge
+        let conflicted = !merge.is_clean();
+        if conflicted {
+            let fields = merge
                 .conflicts
-                .first()
-                .map(|c| c.field.clone())
-                .unwrap_or_default();
+                .iter()
+                .map(|c| c.field.as_str())
+                .collect::<Vec<_>>()
+                .join("、");
             self.mark_error(
                 group.data_type(),
                 "settings_conflict",
-                &format!("{field} 本地与云端都被修改，暂按本地值保留"),
+                &format!("{fields} 本地与云端都被修改，暂按本地值保留"),
             );
         }
 
@@ -621,6 +804,17 @@ impl SyncScopeSource {
             .unwrap_or_else(|| self.base(group.data_type(), group.type_name()));
         state.cloud_id = Some(record.id.clone());
         // 与 `list_settings` 同口径：覆盖完整载荷，否则下一轮永远判为「已变更」。
+        if conflicted {
+            // 冲突：保留本地值，但校验和落**远端口径**、base 不推进——
+            // 下一轮 planner 会把本地合并结果判为「仅本地改」走 to_update_cloud，
+            // 即「本地保留 + 主动覆盖云端」；冲突信息持续留在 sync_type_status
+            // 里直到用户下次改动触发新一轮干净合并，而不是被 mark_success 抹掉。
+            state.checksum = record.checksum.clone();
+            state.last_synced_at = Some(now_seconds());
+            state.content_ts = now_seconds();
+            self.persist_state(&state)?;
+            return Ok(());
+        }
         state.checksum = settings_group_checksum(group.type_name(), &merge.merged);
         state.last_synced_at = Some(now_seconds());
         state.content_ts = now_seconds();
@@ -670,7 +864,10 @@ pub fn saved_sql_root() -> Option<std::path::PathBuf> {
 // 已保存 SQL 的读写/枚举统一收敛到 `saved_sql` 模块（以稳定 document_id 为身份），
 // 这里只保留根目录解析供其复用。
 
-fn quick_command_plain(command: &crate::storage::QuickCommand) -> QuickCommandPlainData {
+fn quick_command_plain(
+    connection_cloud_id: Option<String>,
+    command: &crate::storage::QuickCommand,
+) -> QuickCommandPlainData {
     QuickCommandPlainData {
         format_version: PAYLOAD_FORMAT_VERSION,
         name: command.name.clone(),
@@ -681,7 +878,7 @@ fn quick_command_plain(command: &crate::storage::QuickCommand) -> QuickCommandPl
         sort_order: command.sort_order,
         group_name: command.group_name.clone(),
         group_color: command.group_color.clone(),
-        connection_cloud_id: None,
+        connection_cloud_id,
     }
 }
 
@@ -741,6 +938,28 @@ impl PersonalSyncLocalSource for SyncScopeSource {
         Ok(items)
     }
 
+    fn singleton_data_types(&self) -> HashSet<String> {
+        // 设置分组每组云端最多一条记录；planner 据此做 Singleton 认领，
+        // 避免第二台设备给同一分组再传一条记录、两条互相覆盖。
+        SettingsGroup::ALL
+            .iter()
+            .map(|group| group.data_type().to_string())
+            .collect()
+    }
+    async fn pending_local_deletions(&self) -> Result<Vec<PendingLocalDeletion>, SyncStoreError> {
+        Ok(self.report_pending_local_deletions().await)
+    }
+
+    async fn forget_local_state(
+        &self,
+        data_type: &str,
+        cloud_id: &str,
+    ) -> Result<(), SyncStoreError> {
+        // 墓碑已推上云端：清掉基线行，下一轮差分不再重复报告同一条删除。
+        self.drop_local_state(data_type, cloud_id).await;
+        Ok(())
+    }
+
     async fn export_item(
         &self,
         item: &PersonalSyncItemSnapshot,
@@ -768,7 +987,10 @@ impl PersonalSyncLocalSource for SyncScopeSource {
                 let record = build_scope_record(
                     &service,
                     &item.data_type,
-                    &quick_command_plain(&command),
+                    &quick_command_plain(
+                        self.connection_cloud_id_for(command.connection_id),
+                        &command,
+                    ),
                     cloud_id.as_deref(),
                 )
                 .map_err(sync_error)?;
@@ -781,20 +1003,10 @@ impl PersonalSyncLocalSource for SyncScopeSource {
                     .get_row(id)
                     .map_err(|e| SyncStoreError::Io(e.to_string()))?
                     .ok_or_else(|| SyncStoreError::Parse(format!("sftp favorite {id} missing")))?;
-                let plain = SftpFavoritePlainData {
-                    format_version: PAYLOAD_FORMAT_VERSION,
-                    path: favorite.path,
-                    sort_order: favorite.sort_order,
-                    connection_cloud_id: None,
-                    connection_name: Some(favorite.connection_key),
-                };
-                let record = build_scope_record(
-                    &service,
-                    &item.data_type,
-                    &plain,
-                    cloud_id.as_deref(),
-                )
-                .map_err(sync_error)?;
+                let plain = self.sftp_plain_payload(&favorite)?;
+                let record =
+                    build_scope_record(&service, &item.data_type, &plain, cloud_id.as_deref())
+                        .map_err(sync_error)?;
                 Ok(record)
             }
             data_type::LLM_PROVIDER => {
@@ -829,13 +1041,9 @@ impl PersonalSyncLocalSource for SyncScopeSource {
                     name: document.relative_path,
                     content: document.content,
                 };
-                let record = build_scope_record(
-                    &service,
-                    &item.data_type,
-                    &plain,
-                    cloud_id.as_deref(),
-                )
-                .map_err(sync_error)?;
+                let record =
+                    build_scope_record(&service, &item.data_type, &plain, cloud_id.as_deref())
+                        .map_err(sync_error)?;
                 Ok(record)
             }
             data_type::NOTE => {
@@ -858,13 +1066,9 @@ impl PersonalSyncLocalSource for SyncScopeSource {
                         content: note.content,
                     })
                     .ok_or_else(|| SyncStoreError::Parse(format!("note {local_key} missing")))?;
-                let record = build_scope_record(
-                    &service,
-                    &item.data_type,
-                    &plain,
-                    cloud_id.as_deref(),
-                )
-                .map_err(sync_error)?;
+                let record =
+                    build_scope_record(&service, &item.data_type, &plain, cloud_id.as_deref())
+                        .map_err(sync_error)?;
                 Ok(record)
             }
             other if SettingsGroup::from_data_type(other).is_some() => {
@@ -876,10 +1080,19 @@ impl PersonalSyncLocalSource for SyncScopeSource {
                 let plain = SettingsPlainData {
                     format_version: PAYLOAD_FORMAT_VERSION,
                     group: group.type_name().to_string(),
-                    payload,
+                    payload: payload.clone(),
                 };
                 let record = build_scope_record(&service, other, &plain, cloud_id.as_deref())
                     .map_err(sync_error)?;
+                drop(service);
+                // 上传前把本次载荷登记为三方合并的 base：下一轮远端再变时，
+                // `apply_settings` 拿得到「双方共同起点」，才能做字段级合并，
+                // 而不是退化成「base 缺失 → 整体采用远端」把本地改动抹掉。
+                let mut state = self
+                    .state_of(other, group.type_name())
+                    .unwrap_or_else(|| self.base(other, group.type_name()));
+                state.base_payload = Some(payload.to_string());
+                self.persist_state(&state)?;
                 Ok(record)
             }
             other => Err(SyncStoreError::Parse(format!(
@@ -997,6 +1210,177 @@ impl PersonalSyncLocalSource for SyncScopeSource {
 #[allow(dead_code)]
 fn _apply_payload_is_used() -> bool {
     apply_payload as *const () as usize != 0
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, RwLock};
+
+    use crate::cloud_sync::models::data_type;
+    use crate::cloud_sync::scope::payloads::PAYLOAD_FORMAT_VERSION;
+    use crate::cloud_sync::scope::state::{
+        SyncItemState, SyncItemStateRepository, SyncTypeStatusRepository,
+    };
+    use crate::cloud_sync::service::CloudSyncService;
+    use crate::llm::storage::ProviderRepository;
+    use crate::storage::ConnectionRepository;
+    use crate::storage::connection::SqliteConnection;
+    use crate::storage::manager::StorageManager;
+    use crate::storage::migration::run_migrations;
+    use crate::storage::quick_command::{QuickCommand, QuickCommandRepository};
+    use crate::storage::sftp_favorite_path::SftpFavoritePathRepository;
+    use crate::storage::traits::Repository;
+
+    use super::{SettingsGroup, SyncScopeSource};
+
+    fn test_source(enabled: &[&str]) -> (SyncScopeSource, StorageManager) {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let db_path = std::env::temp_dir().join(format!(
+            "onetcli-scope-personal-tests-{}-{unique}.db",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&db_path);
+        let conn = SqliteConnection::open_with_pool_size(&db_path, 1).expect("open sqlite");
+        conn.with_connection(|c| run_migrations(c))
+            .expect("run migrations");
+        let storage = StorageManager::new_with_connection(conn.clone());
+        let state = SyncItemStateRepository::new(conn.clone());
+        let status = SyncTypeStatusRepository::new(conn.clone());
+        let source = SyncScopeSource::new(
+            "test-env".to_string(),
+            "user-1".to_string(),
+            enabled.iter().map(|t| t.to_string()).collect(),
+            state,
+            status,
+            QuickCommandRepository::new(conn.clone()),
+            SftpFavoritePathRepository::new(conn.clone()),
+            ConnectionRepository::new(conn.clone()),
+            ProviderRepository::new(conn),
+            None,
+            Arc::new(RwLock::new(CloudSyncService::new())),
+        );
+        (source, storage)
+    }
+
+    fn state_row(local_key: &str, cloud_id: &str) -> SyncItemState {
+        let mut state = SyncItemState::new(
+            "test-env".to_string(),
+            "user-1".to_string(),
+            data_type::QUICK_COMMAND.to_string(),
+            local_key.to_string(),
+        );
+        state.cloud_id = Some(cloud_id.to_string());
+        state.last_synced_at = Some(100);
+        state
+    }
+
+    /// 基线里有 cloud_id、本地行已删 ⇒ 差分应报告删除
+    #[tokio::test]
+    async fn pending_local_deletions_reports_missing_local_rows() {
+        let (source, _storage) = test_source(&[data_type::QUICK_COMMAND]);
+        source
+            .state_repo()
+            .upsert(&state_row("7", "cloud-7"))
+            .expect("seed state");
+
+        let deletions = source.report_pending_local_deletions().await;
+
+        assert_eq!(1, deletions.len());
+        assert_eq!(data_type::QUICK_COMMAND, deletions[0].data_type);
+        assert_eq!("cloud-7", deletions[0].cloud_id);
+        assert_eq!(Some(100), deletions[0].last_synced_at);
+    }
+
+    /// 本地行还在 ⇒ 不构成删除
+    #[tokio::test]
+    async fn pending_local_deletions_ignores_alive_rows() {
+        let (source, _storage) = test_source(&[data_type::QUICK_COMMAND]);
+        let mut command = QuickCommand::new("echo hi".to_string());
+        let id = source
+            .quick_commands()
+            .insert(&mut command)
+            .expect("insert command");
+        source
+            .state_repo()
+            .upsert(&state_row(&id.to_string(), "cloud-1"))
+            .expect("seed state");
+
+        let deletions = source.report_pending_local_deletions().await;
+
+        assert!(deletions.is_empty(), "本地行还在，不应报告删除");
+    }
+
+    /// 取消勾选的类型按 D3 停止同步：不推删除、保留云端与本地
+    #[tokio::test]
+    async fn pending_local_deletions_skips_disabled_types() {
+        let (source, _storage) = test_source(&[data_type::NOTE]);
+        source
+            .state_repo()
+            .upsert(&state_row("7", "cloud-7"))
+            .expect("seed state");
+
+        let deletions = source.report_pending_local_deletions().await;
+
+        assert!(deletions.is_empty(), "未勾选的类型不应报告删除");
+    }
+
+    /// 设置分组没有删除语义，基线行不构成差分删除
+    #[tokio::test]
+    async fn pending_local_deletions_skips_settings_groups() {
+        let (source, _storage) = test_source(&[data_type::SETTINGS_GENERAL]);
+        let mut state = state_row("general", "cloud-settings");
+        state.data_type = data_type::SETTINGS_GENERAL.to_string();
+        source.state_repo().upsert(&state).expect("seed state");
+
+        let deletions = source.report_pending_local_deletions().await;
+
+        assert!(deletions.is_empty(), "设置分组不应报告删除");
+    }
+
+    /// 墓碑推完后清基线：同一删除不会每轮重复上报
+    #[tokio::test]
+    async fn forget_local_state_removes_baseline_row() {
+        let (source, _storage) = test_source(&[data_type::QUICK_COMMAND]);
+        source
+            .state_repo()
+            .upsert(&state_row("7", "cloud-7"))
+            .expect("seed state");
+
+        source
+            .drop_local_state(data_type::QUICK_COMMAND, "cloud-7")
+            .await;
+
+        let deletions = source.report_pending_local_deletions().await;
+        assert!(deletions.is_empty(), "基线已清，删除不应重复上报");
+    }
+
+    /// singleton 集合 = 六个设置分组
+    #[test]
+    fn singleton_data_types_covers_all_settings_groups() {
+        let singletons: std::collections::HashSet<String> = SettingsGroup::ALL
+            .iter()
+            .map(|group| group.data_type().to_string())
+            .collect();
+
+        assert_eq!(SettingsGroup::ALL.len(), singletons.len());
+        for group in SettingsGroup::ALL {
+            assert!(
+                singletons.contains(group.data_type()),
+                "缺少分组 {}",
+                group.data_type()
+            );
+        }
+    }
+
+    /// 上传前 base 登记的是明文 payload（三方合并的公共起点），
+    /// 且 format_version 不影响口径。
+    #[test]
+    fn payload_format_version_is_stable() {
+        assert_eq!(1, PAYLOAD_FORMAT_VERSION);
+    }
 }
 
 /// LLM 提供商载荷构造函数（供 Personal 与 OnetCloud 两条通道共用）

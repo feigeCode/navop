@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
@@ -10,7 +11,9 @@ use crate::storage::{
     StoredConnection, Workspace, WorkspaceRepository,
 };
 
-use super::{PersonalSyncItemSnapshot, PersonalSyncLocalSource, SyncStoreError};
+use super::{
+    PendingLocalDeletion, PersonalSyncItemSnapshot, PersonalSyncLocalSource, SyncStoreError,
+};
 use crate::cloud_sync::scope::personal::SyncScopeSource;
 use crate::cloud_sync::scope::state::SyncTypeStatusRepository;
 use crate::cloud_sync::workspace_hierarchy::{
@@ -430,6 +433,35 @@ impl PersonalSyncLocalSource for PersonalSyncLocalRepositorySource {
         Ok(items)
     }
 
+    fn singleton_data_types(&self) -> HashSet<String> {
+        // 仓库源自身（连接/工作空间/钥匙串）都是 Item 类型；
+        // Singleton 集合完全由「数据范围」扩展源（设置分组）提供。
+        self.scope
+            .as_ref()
+            .map(|scope| scope.singleton_data_types())
+            .unwrap_or_default()
+    }
+
+    async fn pending_local_deletions(&self) -> Result<Vec<PendingLocalDeletion>, SyncStoreError> {
+        // 连接/工作空间/钥匙串的删除走事件驱动（PersonalSyncEvent::LocalDeleted），
+        // 差分基线只覆盖扩展类型，这里直接委托。
+        let Some(scope) = &self.scope else {
+            return Ok(Vec::new());
+        };
+        scope.pending_local_deletions().await
+    }
+
+    async fn forget_local_state(
+        &self,
+        data_type: &str,
+        cloud_id: &str,
+    ) -> Result<(), SyncStoreError> {
+        if let Some(scope) = &self.scope {
+            return scope.forget_local_state(data_type, cloud_id).await;
+        }
+        Ok(())
+    }
+
     async fn export_item(
         &self,
         item: &PersonalSyncItemSnapshot,
@@ -545,7 +577,9 @@ impl PersonalSyncLocalSource for PersonalSyncLocalRepositorySource {
                 .map_err(repository_error);
         }
         if let Some(scope) = &self.scope {
-            return scope.mark_synced(local_id, cloud_id, checksum, synced_at).await;
+            return scope
+                .mark_synced(local_id, cloud_id, checksum, synced_at)
+                .await;
         }
         Err(SyncStoreError::Parse(format!(
             "unsupported personal sync local id: {local_id}"

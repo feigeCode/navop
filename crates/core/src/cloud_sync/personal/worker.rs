@@ -12,6 +12,15 @@ use super::{
     SyncStoreError,
 };
 
+/// 待传播的本地删除（由 `PersonalSyncLocalSource::pending_local_deletions` 产出）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingLocalDeletion {
+    pub data_type: String,
+    pub cloud_id: String,
+    /// 删除前那条同步基线（秒），远端在其后改过则挂冲突而不是推墓碑
+    pub last_synced_at: Option<i64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PersonalSyncEvent {
     FullScan,
@@ -53,6 +62,34 @@ impl WorkerConfig {
 #[async_trait]
 pub trait PersonalSyncLocalSource: Send + Sync {
     async fn list_items(&self) -> Result<Vec<PersonalSyncItemSnapshot>, SyncStoreError>;
+
+    /// 该同步源里「云端最多一条记录」的数据类型（设置分组等 Singleton）。
+    ///
+    /// planner 靠它做**认领**：本地快照没有 cloud_id 时，若该类型云端已有
+    /// 记录，就与它配对走下载合并，而不是再上传一条造成双记录互相覆盖。
+    fn singleton_data_types(&self) -> HashSet<String> {
+        HashSet::new()
+    }
+
+    /// 对比「同步基线」与「本地现存数据」得到待传播的删除。
+    ///
+    /// 基线里登记过 cloud_id、而本轮枚举里已消失的本地条目即视为被删除，
+    /// 由 worker 转成墓碑推给远端。默认空：没有基线外置存储的类型
+    /// （连接 / 工作空间 / 钥匙串）仍走事件驱动的 `LocalDeleted`。
+    async fn pending_local_deletions(&self) -> Result<Vec<PendingLocalDeletion>, SyncStoreError> {
+        Ok(Vec::new())
+    }
+
+    /// 墓碑已成功推给远端后，清掉对应的本地同步基线。
+    ///
+    /// 基线行留着会让下一轮 `pending_local_deletions` 把同一条删除再报一遍。
+    async fn forget_local_state(
+        &self,
+        _data_type: &str,
+        _cloud_id: &str,
+    ) -> Result<(), SyncStoreError> {
+        Ok(())
+    }
 
     async fn export_item(
         &self,
@@ -269,9 +306,30 @@ where
         // 挂起状态必须在处理删除之前取出来：墓碑处理要跳过已挂起的记录，
         // 否则会把冲突指向的那条本地行删掉，留下再也解不开的悬挂冲突。
         let mut paused = self.conflicts.paused_record_keys().await?;
-        let local_delete_conflicts = self
+        // 基线差分删除：没有删除事件的类型（快捷命令 / SFTP 收藏 / 提供商 /
+        // 笔记 / 已保存 SQL）靠「基线还在、本地行已消失」发现删除。
+        let mut events = events;
+        let diff_deletions = self.local.pending_local_deletions().await?;
+        for deletion in &diff_deletions {
+            events.insert(PersonalSyncEvent::LocalDeleted {
+                data_type: deletion.data_type.clone(),
+                cloud_id: deletion.cloud_id.clone(),
+                last_synced_at: deletion.last_synced_at,
+            });
+        }
+        let (local_delete_conflicts, tombstoned_keys) = self
             .apply_local_delete_events(&events, &remote_records)
             .await?;
+        // 只有墓碑真正推上云端的差分删除才清基线：挂了删除冲突的记录要留着
+        // 基线（冲突解决后可能重推），否则下一轮差分再也看不到这条删除。
+        for (data_type, cloud_id) in tombstoned_keys {
+            if diff_deletions
+                .iter()
+                .any(|d| d.data_type == data_type && d.cloud_id == cloud_id)
+            {
+                self.local.forget_local_state(&data_type, &cloud_id).await?;
+            }
+        }
         let tombstone_paused = self
             .apply_remote_tombstones(&local_items, &remote_records, &paused)
             .await?;
@@ -293,9 +351,12 @@ where
                     })
             })
             .collect::<Vec<_>>();
-        let plan = self
-            .planner
-            .plan(&local_items, &active_remote_records, &paused);
+        let plan = self.planner.plan_with_singletons(
+            &local_items,
+            &active_remote_records,
+            &paused,
+            &self.local.singleton_data_types(),
+        );
         // 本轮真正会动业务表的数据类型（上传 / 双向更新 / 下载）；只改同步状态的
         // `to_mark_synced` 与只存冲突快照的 `conflicts` 不算——没有本地数据变化。
         // 调用方拿它决定事后通知哪些界面刷新。
@@ -334,8 +395,9 @@ where
         &self,
         events: &HashSet<PersonalSyncEvent>,
         records: &[CloudSyncData],
-    ) -> Result<usize, SyncStoreError> {
+    ) -> Result<(usize, Vec<(String, String)>), SyncStoreError> {
         let mut conflicts = 0;
+        let mut tombstoned_keys = Vec::new();
         for (key, last_synced_at) in local_deleted_keys(events) {
             // 用户显式删掉了本地条目 ⇒ 这条记录上遗留的冲突已经没有任何意义，
             // 顺手清掉，免得对话框里留下一个点哪个按钮都报错的冲突。
@@ -347,6 +409,8 @@ where
             };
             if record.deleted_at.is_some() {
                 // 远端也已经是墓碑：两边都删了，没有需要同步的东西。
+                // 差分基线同样可以清掉——这条删除已经完成传播。
+                tombstoned_keys.push((key.data_type.clone(), key.cloud_id.clone()));
                 continue;
             }
             if remote_changed_since_local_delete(last_synced_at, record) {
@@ -360,8 +424,9 @@ where
             self.store
                 .tombstone_record(&key.data_type, &key.cloud_id, Some(record.version))
                 .await?;
+            tombstoned_keys.push((key.data_type.clone(), key.cloud_id.clone()));
         }
-        Ok(conflicts)
+        Ok((conflicts, tombstoned_keys))
     }
 
     /// 处理远端墓碑；返回本轮因此新挂起冲突的记录键。
