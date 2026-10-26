@@ -3938,9 +3938,9 @@ Settings:
         zh-CN: 钥匙串条目
         zh-HK: 鑰匙圈項目
       credential_desc:
-        en: Personal Sync only. Credentials and private keys are end-to-end encrypted.
-        zh-CN: 仅个人同步支持。凭据与私钥均经过端到端加密。
-        zh-HK: 僅個人同步支援。憑證與私鑰均經過端對端加密。
+        en: Credentials and private keys are end-to-end encrypted with your master key.
+        zh-CN: 凭据与私钥均经过主密钥端到端加密，两种同步方式均可安全同步。
+        zh-HK: 憑證與私鑰均經過主金鑰端對端加密，兩種同步方式均可安全同步。
       note:
         en: Notes
         zh-CN: 笔记
@@ -4026,9 +4026,9 @@ Settings:
         zh-CN: LLM 提供商
         zh-HK: LLM 供應商
       llm_provider_desc:
-        en: Personal Sync only. Provider settings, models and API keys are end-to-end encrypted.
-        zh-CN: 仅个人同步支持。提供商配置、模型与 API Key 均经过端到端加密。
-        zh-HK: 僅個人同步支援。供應商設定、模型與 API Key 均經過端對端加密。
+        en: Provider settings, models and API keys are end-to-end encrypted with your master key.
+        zh-CN: 提供商配置、模型与 API Key 均经过主密钥端到端加密，两种同步方式均可安全同步。
+        zh-HK: 供應商設定、模型與 API Key 均經過主金鑰端對端加密，兩種同步方式均可安全同步。
       master_key_required:
         en: A master key must be set before any data can be encrypted and synced.
         zh-CN: 需要先设置主密钥，否则任何数据都无法加密并同步到云端。

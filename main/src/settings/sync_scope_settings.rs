@@ -88,12 +88,12 @@ fn sync_scope_item(
 }
 
 /// 该行是否置灰（禁止交互）
-fn is_locked(descriptor: &SyncScopeDescriptor, provider: SyncProvider) -> bool {
+fn is_locked(descriptor: &SyncScopeDescriptor, _provider: SyncProvider) -> bool {
     match descriptor.lock {
         // 核心项：不允许取消，否则会出现「同步已开启但没有东西在同步」
         LockMode::AlwaysOn => true,
-        // 仅 Personal 支持：Navop 云同步下强制取消并置灰
-        LockMode::PersonalOnly => provider == SyncProvider::OnetCloud,
+        // 钥匙串 / LLM 提供商已放开双通道（载荷均为用户主密钥端到端加密），
+        // 两种同步方式下都可勾选
         LockMode::Optional => false,
     }
 }

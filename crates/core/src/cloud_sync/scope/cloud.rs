@@ -11,7 +11,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use crate::cloud_sync::engine::SyncEngine;
-use crate::cloud_sync::models::{CloudSyncData, data_type};
+use crate::cloud_sync::models::{CloudSyncData, CredentialPlainData, data_type};
 use crate::cloud_sync::scope::payloads::{
     LlmProviderPlainData, PAYLOAD_FORMAT_VERSION, QuickCommandPlainData, SavedSqlPlainData,
     SftpFavoritePlainData, build_record, build_record_with_id, parse_record,
@@ -27,6 +27,7 @@ use crate::llm::storage::ProviderRepository;
 use crate::llm::types::ProviderConfig;
 use crate::storage::ConnectionRepository;
 use crate::storage::PendingCloudDeletionRepository;
+use crate::storage::credential_vault::{CredentialEntry, CredentialRepository};
 use crate::storage::quick_command::QuickCommandRepository;
 use crate::storage::sftp_favorite_path::{
     SftpFavoritePathRepository, SftpFavoriteRow, sftp_favorite_connection_key,
@@ -140,6 +141,25 @@ fn provider_plain(provider: &ProviderConfig) -> LlmProviderPlainData {
         temperature_milli: provider.temperature.map(|v| (v * 1000.0).round() as i64),
         enabled: provider.enabled,
         is_default: provider.is_default,
+    }
+}
+
+/// 上传侧：钥匙串条目的明文载荷。
+///
+/// 与 Personal 通道的 [`crate::cloud_sync::models::CredentialPlainData`] 完全同构
+/// （format_version=2），本机私钥文件路径（private_key_path）不进载荷——私钥内容
+/// 已在 private_key_content 中随主密钥端到端加密。
+fn credential_plain(credential: &CredentialEntry) -> CredentialPlainData {
+    CredentialPlainData {
+        format_version: 2,
+        name: credential.name.clone(),
+        username: credential.username.clone(),
+        password: credential.password.clone(),
+        private_key_content: credential.private_key_content.clone(),
+        passphrase: credential.passphrase.clone(),
+        ssh_expect: credential.ssh_expect.clone(),
+        owner_id: credential.owner_id.clone(),
+        forward_to_agent: credential.forward_to_agent,
     }
 }
 
@@ -506,6 +526,64 @@ impl ScopeSyncTypeHandler {
                 item.key = id.to_string();
                 item.id = id;
             }
+            data_type::CREDENTIAL => {
+                let plain: CredentialPlainData = serde_json::from_value(payload)
+                    .map_err(|e| SyncError::DataFormatError(e.to_string()))?;
+                let repo = engine
+                    .storage
+                    .get::<CredentialRepository>()
+                    .ok_or_else(|| SyncError::StorageError("credential repo".to_string()))?;
+                let mut credential = CredentialEntry {
+                    id: existing_id,
+                    name: plain.name.clone(),
+                    username: plain.username.clone(),
+                    password: plain.password.clone(),
+                    // 本机私钥文件路径不随云端传播（与 Personal 通道一致），
+                    // 内容已在 private_key_content 里端到端加密
+                    private_key_path: None,
+                    private_key_content: plain.private_key_content.clone(),
+                    passphrase: plain.passphrase.clone(),
+                    ssh_expect: plain.ssh_expect.clone(),
+                    sync_enabled: true,
+                    forward_to_agent: plain.forward_to_agent,
+                    cloud_id: None,
+                    last_synced_at: None,
+                    team_id: None,
+                    owner_id: plain.owner_id.clone(),
+                    created_at: None,
+                    updated_at: Some(now_seconds()),
+                };
+                let id = match existing_id {
+                    Some(id) => {
+                        // 更新分支保留本机私有的字段（文件路径 / 创建时间），
+                        // 与 Personal 通道 apply 相同的取舍
+                        if let Some(existing) = repo.get_plaintext(id).map_err(storage_error)? {
+                            credential.private_key_path = existing.private_key_path;
+                            credential.created_at = existing.created_at;
+                        }
+                        repo.update(&credential).map_err(storage_error)?;
+                        repo.update_sync_status(
+                            id,
+                            Some(&item.cloud_id.clone().unwrap_or_default()),
+                            Some(now_seconds()),
+                        )
+                        .map_err(storage_error)?;
+                        id
+                    }
+                    None => {
+                        let id = repo.insert(&mut credential).map_err(storage_error)?;
+                        repo.update_sync_status(
+                            id,
+                            Some(&item.cloud_id.clone().unwrap_or_default()),
+                            Some(now_seconds()),
+                        )
+                        .map_err(storage_error)?;
+                        id
+                    }
+                };
+                item.key = id.to_string();
+                item.id = id;
+            }
             data_type::SAVED_SQL => {
                 let plain: SavedSqlPlainData = serde_json::from_value(payload)
                     .map_err(|e| SyncError::DataFormatError(e.to_string()))?;
@@ -572,6 +650,7 @@ impl SyncTypeHandler for ScopeSyncTypeHandler {
             data_type::SAVED_SQL => "已保存的 SQL",
             data_type::NOTE => "笔记",
             data_type::LLM_PROVIDER => "LLM 提供商",
+            data_type::CREDENTIAL => "钥匙串条目",
             _ => "设置",
         }
     }
@@ -660,6 +739,34 @@ impl SyncTypeHandler for ScopeSyncTypeHandler {
                             &serde_json::to_value(provider_plain(&provider)).unwrap_or_default(),
                         ),
                         updated_at: provider.updated_at,
+                        cloud_id: self.state_of(&key).and_then(|s| s.cloud_id),
+                        payload: None,
+                    });
+                }
+            }
+            data_type::CREDENTIAL => {
+                let repo = engine
+                    .storage
+                    .get::<CredentialRepository>()
+                    .ok_or_else(|| SyncError::StorageError("credential repo".to_string()))?;
+                // 与 Personal 通道同口径：只同步开启同步且非团队的凭据；
+                // list() 返回的是解密后的完整条目（含明文密钥），仅用于构造载荷
+                for credential in repo.list().map_err(storage_error)? {
+                    if !credential.sync_enabled || credential.team_id.is_some() {
+                        continue;
+                    }
+                    let Some(id) = credential.id else { continue };
+                    let key = id.to_string();
+                    items.push(ScopeSyncItem {
+                        record_type: self.record_type.to_string(),
+                        key: key.clone(),
+                        id,
+                        name: credential.name.clone(),
+                        checksum: payload_checksum(
+                            &serde_json::to_value(credential_plain(&credential))
+                                .unwrap_or_default(),
+                        ),
+                        updated_at: credential.updated_at.unwrap_or(0),
                         cloud_id: self.state_of(&key).and_then(|s| s.cloud_id),
                         payload: None,
                     });
@@ -868,6 +975,17 @@ impl SyncTypeHandler for ScopeSyncTypeHandler {
                     .ok_or_else(|| SyncError::StorageError("provider repo".into()))?;
                 repo.delete(id).map_err(storage_error)?;
             }
+            data_type::CREDENTIAL => {
+                let Some(id) = key.parse::<i64>().ok() else {
+                    tracing::warn!(key, "钥匙串条目键控删除收到非数字 key");
+                    return Ok(());
+                };
+                let repo = engine
+                    .storage
+                    .get::<CredentialRepository>()
+                    .ok_or_else(|| SyncError::StorageError("credential repo".into()))?;
+                repo.delete(id).map_err(storage_error)?;
+            }
             data_type::SAVED_SQL => {
                 if !delete_saved_sql_document(key) {
                     tracing::warn!(key, "已保存 SQL 文档不存在或删除失败");
@@ -906,6 +1024,9 @@ impl SyncTypeHandler for ScopeSyncTypeHandler {
                 .ok()
                 .map(|p| p.path),
             data_type::LLM_PROVIDER => parse_record::<LlmProviderPlainData>(service, data)
+                .ok()
+                .map(|p| p.name),
+            data_type::CREDENTIAL => parse_record::<CredentialPlainData>(service, data)
                 .ok()
                 .map(|p| p.name),
             data_type::SAVED_SQL => parse_record::<SavedSqlPlainData>(service, data)
@@ -949,6 +1070,13 @@ impl SyncTypeHandler for ScopeSyncTypeHandler {
             }
             data_type::LLM_PROVIDER => {
                 let plain: LlmProviderPlainData = parse_record(service, data)?;
+                (
+                    plain.name.clone(),
+                    serde_json::to_value(plain).unwrap_or(serde_json::Value::Null),
+                )
+            }
+            data_type::CREDENTIAL => {
+                let plain: CredentialPlainData = parse_record(service, data)?;
                 (
                     plain.name.clone(),
                     serde_json::to_value(plain).unwrap_or(serde_json::Value::Null),
@@ -1029,6 +1157,19 @@ impl SyncTypeHandler for ScopeSyncTypeHandler {
                     SyncError::DataFormatError(format!("provider {} missing", item.id))
                 })?;
                 self.build(service, &key, &provider_plain(&provider))
+            }
+            data_type::CREDENTIAL => {
+                let repo = engine
+                    .storage
+                    .get::<CredentialRepository>()
+                    .ok_or_else(|| SyncError::StorageError("credential repo".to_string()))?;
+                let credential = repo
+                    .get_plaintext(item.id)
+                    .map_err(storage_error)?
+                    .ok_or_else(|| {
+                        SyncError::DataFormatError(format!("credential {} missing", item.id))
+                    })?;
+                self.build(service, &key, &credential_plain(&credential))
             }
             data_type::SAVED_SQL => {
                 let document = saved_sql_documents()
@@ -1201,6 +1342,7 @@ mod tests {
         storage.register(crate::storage::QuickCommandRepository::new(conn.clone()));
         storage.register(SftpFavoritePathRepository::new(conn.clone()));
         storage.register(PendingCloudDeletionRepository::new(conn.clone()));
+        storage.register(CredentialRepository::new(conn.clone()));
         storage
     }
 
@@ -1530,6 +1672,150 @@ mod tests {
         assert!(
             msg.contains("connection_missing"),
             "错误信息应带 connection_missing 标记: {msg}"
+        );
+    }
+
+    /// 钥匙串：list_local 只枚举开启同步且非团队的凭据（与 Personal 通道同口径）
+    #[test]
+    fn credential_list_local_filters_disabled_and_team_entries() {
+        let storage = test_storage();
+        let handler = test_handler(&storage, data_type::CREDENTIAL);
+        let engine = sync_engine_for(&storage);
+
+        let repo = storage.get::<CredentialRepository>().unwrap();
+        let mut personal = CredentialEntry {
+            id: None,
+            name: "个人服务器".to_string(),
+            username: Some("root".to_string()),
+            password: Some("secret".to_string()),
+            private_key_path: None,
+            private_key_content: None,
+            passphrase: None,
+            ssh_expect: crate::storage::models::SshAccountExpect::default(),
+            sync_enabled: true,
+            forward_to_agent: false,
+            cloud_id: None,
+            last_synced_at: None,
+            team_id: None,
+            owner_id: None,
+            created_at: None,
+            updated_at: Some(1_700_000_000),
+        };
+        let personal_id = repo.insert(&mut personal).expect("插入个人凭据");
+
+        let mut disabled = personal.clone();
+        disabled.name = "关同步的凭据".to_string();
+        disabled.sync_enabled = false;
+        repo.insert(&mut disabled).expect("插入关闭同步的凭据");
+
+        let mut team = personal.clone();
+        team.name = "团队凭据".to_string();
+        team.team_id = Some("team-1".to_string());
+        repo.insert(&mut team).expect("插入团队凭据");
+
+        let items = handler.list_local(&engine).expect("枚举钥匙串");
+        assert_eq!(items.len(), 1, "只应枚举出开启同步的个人凭据");
+        assert_eq!(items[0].key, personal_id.to_string());
+        assert_eq!(items[0].name, "个人服务器");
+    }
+
+    /// 钥匙串：下载落地新条目 + 更新已有条目保留本机私有字段
+    #[test]
+    fn credential_download_insert_and_update_keep_local_fields() {
+        let storage = test_storage();
+        let handler = test_handler(&storage, data_type::CREDENTIAL);
+        let engine = sync_engine_for(&storage);
+
+        let repo = storage.get::<CredentialRepository>().unwrap();
+
+        // 场景 1：新条目下载 → insert + 回填 sync 状态
+        let mut item = ScopeSyncItem {
+            record_type: data_type::CREDENTIAL.to_string(),
+            key: String::new(),
+            id: 0,
+            name: "新凭据".to_string(),
+            checksum: String::new(),
+            updated_at: 0,
+            cloud_id: Some("cloud-cred-1".to_string()),
+            payload: Some(serde_json::json!({
+                "format_version": 2,
+                "name": "新凭据",
+                "username": "deploy",
+                "password": "pw",
+                "private_key_content": null,
+                "passphrase": null,
+                "owner_id": null,
+                "forward_to_agent": false,
+            })),
+        };
+        use crate::cloud_sync::sync_type::SyncTypeHandler;
+        handler
+            .insert_local(&engine, &mut item)
+            .expect("落地新凭据");
+        let created_id = item.local_id().expect("rowid");
+        let created = repo
+            .get_plaintext(created_id)
+            .expect("查询")
+            .expect("业务行存在");
+        assert_eq!(created.username.as_deref(), Some("deploy"));
+        assert_eq!(created.team_id, None, "下载的凭据按个人凭据落地");
+        assert!(
+            created.cloud_id.is_some(),
+            "落地后应回填 cloud_id 供后续增量同步"
+        );
+
+        // 场景 2：本机已有条目（带本机私钥路径）被远端更新 → 保留 private_key_path
+        let mut existing = CredentialEntry {
+            id: None,
+            name: "本机凭据".to_string(),
+            username: Some("root".to_string()),
+            password: Some("old".to_string()),
+            private_key_path: Some("/Users/me/.ssh/id_ed25519".to_string()),
+            private_key_content: None,
+            passphrase: None,
+            ssh_expect: crate::storage::models::SshAccountExpect::default(),
+            sync_enabled: true,
+            forward_to_agent: false,
+            cloud_id: Some("cloud-cred-2".to_string()),
+            last_synced_at: None,
+            team_id: None,
+            owner_id: None,
+            created_at: Some(1_600_000_000),
+            updated_at: Some(1_700_000_000),
+        };
+        let existing_id = repo.insert(&mut existing).expect("插入本机凭据");
+
+        let mut update = ScopeSyncItem {
+            record_type: data_type::CREDENTIAL.to_string(),
+            key: existing_id.to_string(),
+            id: existing_id,
+            name: "本机凭据".to_string(),
+            checksum: String::new(),
+            updated_at: 1_700_000_500,
+            cloud_id: Some("cloud-cred-2".to_string()),
+            payload: Some(serde_json::json!({
+                "format_version": 2,
+                "name": "本机凭据",
+                "username": "root",
+                "password": "new",
+                "private_key_content": null,
+                "passphrase": null,
+                "owner_id": null,
+                "forward_to_agent": false,
+            })),
+        };
+        handler
+            .update_local_item(&engine, &mut update)
+            .expect("更新本机凭据");
+        let updated = repo
+            .get_plaintext(existing_id)
+            .expect("查询")
+            .expect("业务行存在");
+        assert_eq!(updated.password.as_deref(), Some("new"), "远端新密码应落地");
+        assert_eq!(
+            updated.private_key_path,
+            Some("/Users/me/.ssh/id_ed25519".to_string()),
+            "本机私钥路径不应被云端清掉"
         );
     }
 

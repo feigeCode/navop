@@ -7,8 +7,8 @@ use crate::auth::get_auth_service;
 use crate::license::{get_license_service, is_feature_enabled, offline_license_public_key};
 use crate::settings::agent_settings::agent_setting_group;
 use crate::settings::appearance::render as render_appearance_settings;
-use crate::settings::database_settings::database_setting_group;
 use crate::settings::connection_display_settings::connection_display_setting_group;
+use crate::settings::database_settings::database_setting_group;
 use crate::settings::llm_providers_view::LlmProvidersView;
 use crate::settings::local_terminal_settings::local_terminal_setting_group;
 use crate::settings::mcp_settings::mcp_setting_group;
@@ -1018,22 +1018,24 @@ impl SettingsPanel {
                 ),
             ),
             // 账户设置页：账户信息与主密钥是两件独立的事——没有账户也可以有主密钥，
-// 所以拆成两个并列分组，关系与「关于 / 更新」一致。
+            // 所以拆成两个并列分组，关系与「关于 / 更新」一致。
             SettingPage::new(t!("Settings.Account.title"))
                 .group(
-                    SettingGroup::new().title(t!("Settings.Account.title")).item(
-                        SettingItem::render(move |_options, window, cx| {
-                            render_account_section(window, cx)
-                        })
-                        .keywords([
-                            t!("Settings.Account.title").to_string(),
-                            t!("Settings.Account.username").to_string(),
-                            t!("Settings.Account.email").to_string(),
-                            t!("Settings.Account.not_logged_in").to_string(),
-                            t!("Auth.logout").to_string(),
-                            t!("License.import_offline").to_string(),
-                        ]),
-                    ),
+                    SettingGroup::new()
+                        .title(t!("Settings.Account.title"))
+                        .item(
+                            SettingItem::render(move |_options, window, cx| {
+                                render_account_section(window, cx)
+                            })
+                            .keywords([
+                                t!("Settings.Account.title").to_string(),
+                                t!("Settings.Account.username").to_string(),
+                                t!("Settings.Account.email").to_string(),
+                                t!("Settings.Account.not_logged_in").to_string(),
+                                t!("Auth.logout").to_string(),
+                                t!("License.import_offline").to_string(),
+                            ]),
+                        ),
                 )
                 .group(
                     SettingGroup::new()
@@ -1209,11 +1211,8 @@ fn sync_provider_item(default: SyncProvider) -> SettingItem {
             |val: SharedString, cx: &mut App| {
                 AppSettings::update_and_save(cx, |settings| {
                     settings.sync_provider = SyncProvider::from_str(&val);
-                    // 切到 Navop 云同步时，仅 Personal 支持的类型必须真的取消勾选
-                    // 并落盘 —— 只靠 UI 置灰会在切回 Personal 时留下幽灵勾选。
-                    if settings.sync_provider == SyncProvider::OnetCloud {
-                        settings.sync_scope.force_disable_personal_only();
-                    }
+                    // 历史：切到 OnetCloud 曾强制取消 personal_only 项（钥匙串 /
+                    // LLM 提供商）。两类数据已放开双通道同步，这里不再动勾选。
                 });
             },
         )

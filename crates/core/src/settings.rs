@@ -878,9 +878,11 @@ pub enum LockMode {
     /// 始终启用、置灰不可取消（连接 / 工作空间）：
     /// 允许取消会出现「同步已开启但没有东西在同步」的无意义状态
     AlwaysOn,
-    /// 仅 Personal 可用；OnetCloud 下强制取消 + 置灰（钥匙串 / LLM 提供商）
-    PersonalOnly,
     /// 正常可勾选
+    ///
+    /// 历史：钥匙串 / LLM 提供商曾为 `PersonalOnly`（仅个人同步可选），
+    /// 后来确认两类数据在 OnetCloud 通道同样以用户主密钥端到端加密
+    /// （与连接、凭据密钥一致），已放开为双通道可勾选。
     Optional,
 }
 
@@ -901,13 +903,16 @@ pub struct SyncScopeDescriptor {
 
 impl SyncScopeDescriptor {
     /// 是否仅 Personal 通道可用
+    ///
+    /// 历史遗留接口：`PersonalOnly` 锁定模式已移除（钥匙串 / LLM 提供商
+    /// 现已双通道可勾选），恒为 `false`。保留方法避免外部调用点扩散改动。
     pub fn personal_only(&self) -> bool {
-        matches!(self.lock, LockMode::PersonalOnly)
+        false
     }
 
     /// 用户是否可以手动取消勾选
     pub fn user_editable(&self) -> bool {
-        matches!(self.lock, LockMode::Optional | LockMode::PersonalOnly)
+        matches!(self.lock, LockMode::Optional)
     }
 }
 
@@ -937,7 +942,7 @@ pub const SYNC_SCOPE_DESCRIPTORS: &[SyncScopeDescriptor] = &[
         data_type: data_type::CREDENTIAL,
         queue_key: "sync:credential",
         kind: SyncKind::Item,
-        lock: LockMode::PersonalOnly,
+        lock: LockMode::Optional,
         default_enabled: true,
         i18n_title: "Settings.Sync.Scope.credential",
         i18n_desc: "Settings.Sync.Scope.credential_desc",
@@ -1047,7 +1052,7 @@ pub const SYNC_SCOPE_DESCRIPTORS: &[SyncScopeDescriptor] = &[
         data_type: data_type::LLM_PROVIDER,
         queue_key: "sync:llm_provider",
         kind: SyncKind::Item,
-        lock: LockMode::PersonalOnly,
+        lock: LockMode::Optional,
         default_enabled: false,
         i18n_title: "Settings.Sync.Scope.llm_provider",
         i18n_desc: "Settings.Sync.Scope.llm_provider_desc",
@@ -1185,11 +1190,12 @@ impl SyncScopeSettings {
 
     /// 按当前同步方式计算**实际生效**的类型集合。
     ///
-    /// `provider == OnetCloud` 时剔除 `personal_only` 项（钥匙串 / LLM 提供商）。
-    pub fn effective(&self, provider: SyncProvider) -> Vec<SyncScopeKey> {
+    /// 历史：OnetCloud 曾剔除 `personal_only` 项（钥匙串 / LLM 提供商）；
+    /// 两类数据在云端同样是用户主密钥端到端加密的密文，已放开双通道勾选，
+    /// 此处不再按 provider 过滤。
+    pub fn effective(&self, _provider: SyncProvider) -> Vec<SyncScopeKey> {
         SYNC_SCOPE_DESCRIPTORS
             .iter()
-            .filter(|descriptor| !descriptor.personal_only() || provider == SyncProvider::Personal)
             .filter(|descriptor| self.get(descriptor.key))
             .map(|descriptor| descriptor.key)
             .collect()
@@ -1200,17 +1206,11 @@ impl SyncScopeSettings {
         self.effective(provider).contains(&key)
     }
 
-    /// 切到 OnetCloud 时把 personal_only 项写回 false。
+    /// 历史：切到 OnetCloud 时把 personal_only 项写回 false。
     ///
-    /// 必须真的落盘，而不只是 UI 置灰 —— 否则用户切回 Personal 时会看到幽灵勾选。
-    pub fn force_disable_personal_only(&mut self) {
-        for descriptor in SYNC_SCOPE_DESCRIPTORS
-            .iter()
-            .filter(|descriptor| descriptor.personal_only())
-        {
-            self.set(descriptor.key, false);
-        }
-    }
+    /// `PersonalOnly` 锁定已移除（钥匙串 / LLM 提供商双通道可勾选），
+    /// 本方法保留为空操作以兼容旧调用点；新代码不应再调用。
+    pub fn force_disable_personal_only(&mut self) {}
 
     /// 规范化：`AlwaysOn` 恒开；schema_version 补齐。
     pub fn normalize(&mut self) {
@@ -2500,38 +2500,33 @@ mod tests {
     }
 
     #[test]
-    fn effective_drops_personal_only_types_for_onet_cloud() {
-        let scope = SyncScopeSettings::default();
-        // 让 personal_only 项处于开启状态
-        let mut scope = scope;
+    fn effective_keeps_credential_and_llm_provider_for_both_providers() {
+        let mut scope = SyncScopeSettings::default();
         scope.set(SyncScopeKey::LlmProvider, true);
 
         let personal = scope.effective(SyncProvider::Personal);
         assert!(personal.contains(&SyncScopeKey::LlmProvider));
         assert!(personal.contains(&SyncScopeKey::Credential));
 
+        // 钥匙串 / LLM 提供商已放开双通道：OnetCloud 下同样生效
         let cloud = scope.effective(SyncProvider::OnetCloud);
-        assert!(!cloud.contains(&SyncScopeKey::LlmProvider));
-        assert!(!cloud.contains(&SyncScopeKey::Credential));
+        assert!(cloud.contains(&SyncScopeKey::LlmProvider));
+        assert!(cloud.contains(&SyncScopeKey::Credential));
         // 其它类型不受影响
         assert!(cloud.contains(&SyncScopeKey::Connection));
     }
 
     #[test]
-    fn force_disable_personal_only_is_idempotent_and_persisted() {
+    fn force_disable_personal_only_is_now_a_noop() {
         let mut scope = SyncScopeSettings::default();
         scope.set(SyncScopeKey::Credential, true);
         scope.set(SyncScopeKey::LlmProvider, true);
 
+        // PersonalOnly 锁定移除后为空操作：勾选状态原样保留
         scope.force_disable_personal_only();
-        assert!(!scope.credential);
-        assert!(!scope.llm_provider);
-        // 非 personal_only 项不受影响
+        assert!(scope.credential);
+        assert!(scope.llm_provider);
         assert!(scope.get(SyncScopeKey::Connection));
-
-        scope.force_disable_personal_only();
-        assert!(!scope.credential);
-        assert!(!scope.llm_provider);
     }
 
     #[test]
