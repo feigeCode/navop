@@ -1071,6 +1071,46 @@ impl PendingCloudDeletionRepository {
         })
     }
 
+    /// 按实体类型列出待删除记录（新增同步类型的通用入口）
+    ///
+    /// 表结构自始支持任意 entity_type（init 迁移即有该列与索引），
+    /// 这里补上通用查询，无需结构迁移。
+    pub fn list_by_entity_type(&self, entity_type: &str) -> Result<Vec<PendingCloudDeletion>> {
+        self.conn.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, cloud_id, entity_type, created_at
+                 FROM pending_cloud_deletions
+                 WHERE entity_type = ?1
+                 ORDER BY created_at ASC, id ASC",
+            )?;
+            let rows = stmt.query_map(params![entity_type], |row| {
+                Ok(PendingCloudDeletion {
+                    id: row.get(0)?,
+                    cloud_id: row.get(1)?,
+                    entity_type: row.get(2)?,
+                    created_at: row.get(3)?,
+                })
+            })?;
+            let mut results = Vec::new();
+            for row in rows {
+                results.push(row?);
+            }
+            Ok(results)
+        })
+    }
+
+    /// 按实体类型删除一条待删除记录（防止误删其他类型的同 cloud_id 记录）
+    pub fn remove_by_entity_type(&self, entity_type: &str, cloud_id: &str) -> Result<()> {
+        self.conn.with_connection(|conn| {
+            conn.execute(
+                "DELETE FROM pending_cloud_deletions
+                 WHERE entity_type = ?1 AND cloud_id = ?2",
+                params![entity_type, cloud_id],
+            )?;
+            Ok(())
+        })
+    }
+
     /// 删除记录（同步成功后调用）
     pub fn remove(&self, cloud_id: &str) -> Result<()> {
         self.conn.with_connection(|conn| {

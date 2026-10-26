@@ -1,10 +1,13 @@
+use std::collections::HashSet;
+use std::sync::Arc;
+
 use super::*;
 
 impl HomePage {
     pub(super) fn handle_sync_click(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !AppSettings::global(cx).sync_enabled {
             self.show_sync_disabled_dialog(window, cx);
-        } else if sync_route(cx) == HomeSyncRoute::OnetCloud
+        } else if sync_route(cx) == HomeSyncRoute::NavopCloud
             && !is_feature_enabled(Feature::CloudSync, cx)
         {
             show_upgrade_dialog(window, cx);
@@ -80,8 +83,29 @@ impl HomePage {
             }
         }
 
-        // 创建同步引擎
-        let engine = SyncEngine::new(cloud_client, sync_service, storage);
+        // 创建同步引擎，并按用户勾选的「数据范围」装配新增类型的处理器
+        let settings = AppSettings::global(cx);
+        let enabled_scopes: HashSet<String> = settings
+            .sync_scope
+            .effective(settings.sync_provider)
+            .into_iter()
+            .filter_map(|key| {
+                one_core::settings::sync_scope_descriptor(key).map(|d| d.data_type.to_string())
+            })
+            .collect();
+        let user_id = self
+            .current_user
+            .as_ref()
+            .map(|user| user.id.clone())
+            .unwrap_or_else(|| "personal".to_string());
+        let scope_env = one_core::config::SupabaseConfig::get().project_url;
+
+        let engine = SyncEngine::new(cloud_client, sync_service, storage).with_sync_scopes(
+            scope_env,
+            user_id,
+            enabled_scopes,
+            Some(Arc::new(crate::sync_note_adapter::FileSystemNoteAdapter)),
+        );
         let sync_task = Tokio::spawn(cx, async move { engine.sync().await });
 
         cx.spawn(async move |this, cx: &mut AsyncApp| {

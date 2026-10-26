@@ -24,8 +24,8 @@ fn refreshed_pending_conflicts_keeps_previous_when_sync_errors_without_fresh_con
 #[test]
 fn sync_route_uses_selected_provider() {
     assert_eq!(
-        HomeSyncRoute::OnetCloud,
-        sync_route_for_provider(SyncProvider::OnetCloud)
+        HomeSyncRoute::NavopCloud,
+        sync_route_for_provider(SyncProvider::NavopCloud)
     );
     assert_eq!(
         HomeSyncRoute::Personal,
@@ -51,9 +51,12 @@ fn disabled_sync_dialog_opens_the_sync_settings_page() {
 
 #[test]
 fn team_key_menu_item_is_visible_only_for_onetcloud_with_cached_teams() {
-    assert!(should_show_team_key_menu_item(HomeSyncRoute::OnetCloud, 1));
-    assert!(should_show_team_key_menu_item(HomeSyncRoute::OnetCloud, 3));
-    assert!(!should_show_team_key_menu_item(HomeSyncRoute::OnetCloud, 0));
+    assert!(should_show_team_key_menu_item(HomeSyncRoute::NavopCloud, 1));
+    assert!(should_show_team_key_menu_item(HomeSyncRoute::NavopCloud, 3));
+    assert!(!should_show_team_key_menu_item(
+        HomeSyncRoute::NavopCloud,
+        0
+    ));
     assert!(!should_show_team_key_menu_item(HomeSyncRoute::Personal, 1));
 }
 

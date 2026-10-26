@@ -11,10 +11,12 @@ use one_core::storage::migration::run_migrations;
 use one_core::storage::traits::Repository;
 use one_core::storage::{DatabaseType, DbConnectionConfig, StoredConnection};
 use one_core::storage::{GlobalStorageState, StorageManager};
+use std::time::Instant;
 
 use crate::personal_sync_runtime::{
     actions_enabled, build_conflict_sink, forget_personal_conflict, list_personal_conflicts,
-    personal_conflict_display_info, personal_sync_event_from_connection_event,
+    missed_startup_pass, personal_conflict_display_info, personal_sync_cooldown_elapsed,
+    personal_sync_event_from_connection_event, personal_sync_idle_elapsed,
     resolve_personal_conflict, resolve_personal_conflicts, runtime_status,
     should_start_drain_after_enqueue,
 };
@@ -67,11 +69,11 @@ fn personal_sync_actions_disabled_when_global_sync_is_off(cx: &mut TestAppContex
 }
 
 #[gpui::test]
-fn personal_sync_actions_disabled_when_onet_cloud_provider_selected(cx: &mut TestAppContext) {
+fn personal_sync_actions_disabled_when_navop_cloud_provider_selected(cx: &mut TestAppContext) {
     let temp = tempfile::tempdir().expect("tempdir");
     cx.update(|cx| {
         let mut settings = AppSettings::default();
-        settings.sync_provider = SyncProvider::OnetCloud;
+        settings.sync_provider = SyncProvider::NavopCloud;
         settings.personal_sync.backend = PersonalSyncBackendKind::Folder;
         settings.personal_sync.path = temp.path().to_string_lossy().to_string();
         cx.set_global(settings);
@@ -200,7 +202,7 @@ fn personal_sync_ignores_non_data_change_events() {
 }
 
 #[test]
-fn personal_sync_enqueue_while_syncing_marks_pending_drain_path() {
+fn personal_sync_drain_gate_skips_while_syncing() {
     assert!(!should_start_drain_after_enqueue(
         &PersonalSyncRuntimeStatus::Syncing
     ));
@@ -210,6 +212,38 @@ fn personal_sync_enqueue_while_syncing_marks_pending_drain_path() {
             message: None,
         }
     ));
+}
+
+#[gpui::test]
+fn personal_sync_cooldown_and_idle_defaults_without_runtime(cx: &mut TestAppContext) {
+    // 运行时尚未建立（没跑过任何一轮）：冷却视为已过（让首轮立刻跑），
+    // 空闲兜底视为未到（首轮由 reconcile 入队；万一那一轮丢了，调度器的
+    // 「从未跑过轮次」兜底会在一秒内补跑，见 missed_startup_pass 单测）。
+    cx.update(|cx| {
+        assert!(personal_sync_cooldown_elapsed(cx));
+        assert!(!personal_sync_idle_elapsed(cx));
+    });
+}
+
+#[test]
+fn personal_sync_missed_startup_pass_only_when_no_pass_ever_ran() {
+    let ready = PersonalSyncRuntimeStatus::Ready {
+        health: one_core::cloud_sync::personal::SyncStoreHealth::Ready,
+        message: None,
+    };
+
+    // 运行时在跑、从未跑过轮次、没在同步 → 补跑（启动轮可能因主线程冻结丢失）
+    assert!(missed_startup_pass(true, None, &ready));
+    // 已经跑过轮次 → 不补，交给正常调度
+    assert!(!missed_startup_pass(true, Some(Instant::now()), &ready));
+    // 正在同步 → 不补，等这一轮跑完（last_pass_at 在开跑时就会置上）
+    assert!(!missed_startup_pass(
+        true,
+        None,
+        &PersonalSyncRuntimeStatus::Syncing
+    ));
+    // 运行时没建起来 → 不补
+    assert!(!missed_startup_pass(false, None, &ready));
 }
 
 #[gpui::test]

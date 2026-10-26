@@ -41,6 +41,21 @@ pub trait SyncableItem: Clone + Send + Sync + 'static {
     fn team_id(&self) -> Option<&str> {
         None
     }
+
+    /// 稳定业务键（scope 类型的 local_key）：键控回调用它回写基线/删除本地行。
+    ///
+    /// 默认取 local_id 的字符串形式（rowid 类型天然稳定）；无主键类型
+    /// （设置组 / 已保存 SQL / 笔记）覆盖为各自的业务键。空串表示
+    /// 该类型不支持键控（回落到按 id 的旧回调）。
+    fn sync_key(&self) -> &str {
+        ""
+    }
+
+    /// 本地内容校验和（与云端 record.checksum 同口径时可用于短路比较；
+    /// 默认 None 表示该类型不提供，计划器跳过短路逻辑）
+    fn local_checksum(&self) -> Option<String> {
+        None
+    }
 }
 
 /// 同步计划（通用版）
@@ -56,6 +71,8 @@ pub struct GenericSyncPlan<T: SyncableItem> {
     pub to_download: Vec<CloudSyncData>,
     /// 需要更新到本地的数据项 (云端同步数据, 对应的本地数据)
     pub to_update_local: Vec<(CloudSyncData, T)>,
+    /// checksum 一致的无变化项（只刷新 last_synced_at，不产生网络操作）
+    pub unchanged: Vec<T>,
 }
 
 impl<T: SyncableItem> Default for GenericSyncPlan<T> {
@@ -65,6 +82,7 @@ impl<T: SyncableItem> Default for GenericSyncPlan<T> {
             to_update_cloud: Vec::new(),
             to_download: Vec::new(),
             to_update_local: Vec::new(),
+            unchanged: Vec::new(),
         }
     }
 }
@@ -101,6 +119,14 @@ pub trait SyncTypeHandler: Send + Sync + 'static {
     /// 删除本地数据项
     fn delete_local(&self, engine: &SyncEngine, id: i64) -> Result<(), SyncError>;
 
+    /// 删除本地数据项的键控版本：按稳定 key 定位业务行。
+    ///
+    /// 返回 `Err` 表示「按 key 找不到业务行」等异常，由调用方记录；
+    /// 不再像旧行为那样静默 `Ok(())` 吞掉删除失败。
+    fn delete_local_with_key(&self, _engine: &SyncEngine, _key: &str) -> Result<(), SyncError> {
+        Ok(())
+    }
+
     // --- 同步后回调 ---
 
     /// 上传成功后的回调（通常更新 cloud_id）
@@ -110,6 +136,38 @@ pub trait SyncTypeHandler: Send + Sync + 'static {
         local_id: i64,
         cloud_id: &str,
     ) -> Result<(), SyncError>;
+
+    /// 上传成功后的键控回调：按稳定 key（local_key）回写 cloud_id / checksum。
+    ///
+    /// 无主键类型（设置 / 已保存 SQL / 笔记）的 `local_id` 是哈希合成 ID，
+    /// 反查业务行会失败；计划器手里同时有 key，键控版本直接 upsert 基线即可。
+    /// 默认实现为空操作，未实现键控语义的旧 handler 不受影响（仍走 `on_uploaded`）。
+    fn on_uploaded_with_key(
+        &self,
+        _key: &str,
+        _cloud_id: &str,
+        _checksum: &str,
+    ) -> Result<(), SyncError> {
+        Ok(())
+    }
+
+    /// checksum 短路时仅刷新同步时间（不写 cloud_id/checksum/水位）。
+    /// 默认空操作：没有基线表的旧 handler 无事可做。
+    fn touch_synced(&self, _key: &str) -> Result<(), SyncError> {
+        Ok(())
+    }
+
+    /// 更新云端成功后回写水位（content_ts 取远端 updated_at 毫秒值）。
+    ///
+    /// 默认实现回落到 on_uploaded_with_key（无水位语义的类型至少保住 cloud_id）。
+    fn persist_watermark(
+        &self,
+        key: &str,
+        cloud_id: &str,
+        _remote_updated_ms: i64,
+    ) -> Result<(), SyncError> {
+        self.on_uploaded_with_key(key, cloud_id, "")
+    }
 
     // --- 加解密 ---
 
@@ -178,10 +236,11 @@ pub trait SyncTypeHandler: Send + Sync + 'static {
         };
 
         let entity_type = self.pending_deletion_entity_type();
-        let result = if entity_type == "connection" {
-            repo.list_connections()
-        } else {
-            repo.list_workspaces()
+        // 旧类型保留原行为；新类型走通用 entity_type 查询
+        let result = match entity_type {
+            "connection" => repo.list_connections(),
+            "workspace" => repo.list_workspaces(),
+            _ => repo.list_by_entity_type(entity_type),
         };
 
         result.unwrap_or_default()
@@ -200,7 +259,12 @@ pub trait SyncTypeHandler: Send + Sync + 'static {
                 SyncError::StorageError("PendingCloudDeletionRepository not found".to_string())
             })?;
 
-        repo.remove(cloud_id)
-            .map_err(|e| SyncError::StorageError(e.to_string()))
+        // 旧类型 remove 只按 cloud_id；新类型带 entity_type 防误删他类记录
+        let entity_type = self.pending_deletion_entity_type();
+        let result = match entity_type {
+            "connection" | "workspace" => repo.remove(cloud_id),
+            _ => repo.remove_by_entity_type(entity_type, cloud_id),
+        };
+        result.map_err(|e| SyncError::StorageError(e.to_string()))
     }
 }

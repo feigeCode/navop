@@ -160,7 +160,7 @@ impl HomePage {
                         // 然后异步重新加载以确保数据一致性
                         this.load_connections(cx);
                         // 如果已登录且密钥已解锁，自动触发同步
-                        if should_auto_onet_cloud_sync(cx, this.current_user.is_some()) {
+                        if should_auto_navop_cloud_sync(cx, this.current_user.is_some()) {
                             tracing::info!("连接数据变化，自动触发云同步");
                             this.trigger_sync(cx);
                         }
@@ -179,7 +179,7 @@ impl HomePage {
                         // 然后异步重新加载以确保数据一致性
                         this.load_connections(cx);
                         // 如果已登录且密钥已解锁，自动触发同步
-                        if should_auto_onet_cloud_sync(cx, this.current_user.is_some()) {
+                        if should_auto_navop_cloud_sync(cx, this.current_user.is_some()) {
                             tracing::info!("连接数据变化，自动触发云同步");
                             this.trigger_sync(cx);
                         }
@@ -191,7 +191,7 @@ impl HomePage {
                         // 然后异步重新加载以确保数据一致性
                         this.load_connections(cx);
                         // 如果已登录且密钥已解锁，自动触发同步
-                        if should_auto_onet_cloud_sync(cx, this.current_user.is_some()) {
+                        if should_auto_navop_cloud_sync(cx, this.current_user.is_some()) {
                             tracing::info!("连接数据变化，自动触发云同步");
                             this.trigger_sync(cx);
                         }
@@ -200,7 +200,7 @@ impl HomePage {
                     | ConnectionDataEvent::WorkspaceUpdated { .. } => {
                         this.load_workspaces(cx);
                         // 如果已登录且密钥已解锁，自动触发同步
-                        if should_auto_onet_cloud_sync(cx, this.current_user.is_some()) {
+                        if should_auto_navop_cloud_sync(cx, this.current_user.is_some()) {
                             tracing::info!("工作区数据变化，自动触发云同步");
                             this.trigger_sync(cx);
                         }
@@ -211,7 +211,7 @@ impl HomePage {
                         this.load_workspaces(cx);
                         this.load_connections(cx);
                         // 如果已登录且密钥已解锁，自动触发同步
-                        if should_auto_onet_cloud_sync(cx, this.current_user.is_some()) {
+                        if should_auto_navop_cloud_sync(cx, this.current_user.is_some()) {
                             tracing::info!("工作区数据变化，自动触发云同步");
                             this.trigger_sync(cx);
                         }

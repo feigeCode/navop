@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 
@@ -10,6 +11,15 @@ use super::{
     PersonalSyncPlanner, PersonalSyncRecordConflict, PersonalSyncStore, SyncDeviceId,
     SyncStoreError,
 };
+
+/// 待传播的本地删除（由 `PersonalSyncLocalSource::pending_local_deletions` 产出）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingLocalDeletion {
+    pub data_type: String,
+    pub cloud_id: String,
+    /// 删除前那条同步基线（秒），远端在其后改过则挂冲突而不是推墓碑
+    pub last_synced_at: Option<i64>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PersonalSyncEvent {
@@ -53,6 +63,34 @@ impl WorkerConfig {
 pub trait PersonalSyncLocalSource: Send + Sync {
     async fn list_items(&self) -> Result<Vec<PersonalSyncItemSnapshot>, SyncStoreError>;
 
+    /// 该同步源里「云端最多一条记录」的数据类型（设置分组等 Singleton）。
+    ///
+    /// planner 靠它做**认领**：本地快照没有 cloud_id 时，若该类型云端已有
+    /// 记录，就与它配对走下载合并，而不是再上传一条造成双记录互相覆盖。
+    fn singleton_data_types(&self) -> HashSet<String> {
+        HashSet::new()
+    }
+
+    /// 对比「同步基线」与「本地现存数据」得到待传播的删除。
+    ///
+    /// 基线里登记过 cloud_id、而本轮枚举里已消失的本地条目即视为被删除，
+    /// 由 worker 转成墓碑推给远端。默认空：没有基线外置存储的类型
+    /// （连接 / 工作空间 / 钥匙串）仍走事件驱动的 `LocalDeleted`。
+    async fn pending_local_deletions(&self) -> Result<Vec<PendingLocalDeletion>, SyncStoreError> {
+        Ok(Vec::new())
+    }
+
+    /// 墓碑已成功推给远端后，清掉对应的本地同步基线。
+    ///
+    /// 基线行留着会让下一轮 `pending_local_deletions` 把同一条删除再报一遍。
+    async fn forget_local_state(
+        &self,
+        _data_type: &str,
+        _cloud_id: &str,
+    ) -> Result<(), SyncStoreError> {
+        Ok(())
+    }
+
     async fn export_item(
         &self,
         item: &PersonalSyncItemSnapshot,
@@ -71,10 +109,17 @@ pub trait PersonalSyncLocalSource: Send + Sync {
         Ok(())
     }
 
+    /// 记下「这条本地数据已与某条云端记录对齐」。
+    ///
+    /// `checksum` 必须是**入库时那条记录的校验和**（`record.checksum`，与快照侧
+    /// `payload_checksum` / `settings_group_checksum` 同口径）：`SyncScopeSource`
+    /// 靠它判断设置类分组「内容相对基线有没有变」，不落的话每轮都会把未变的内容
+    /// 当成新变更（`content_ts` 永远取 now），远端单方面改动也会被误判成双方冲突。
     async fn mark_synced(
         &self,
         local_id: &str,
         cloud_id: &str,
+        checksum: &str,
         synced_at: i64,
     ) -> Result<(), SyncStoreError>;
 
@@ -123,6 +168,9 @@ struct WorkerState {
     pending: HashSet<PersonalSyncEvent>,
     active: bool,
     dirty: bool,
+    /// 最近一轮同步结束的时刻。文件监听用它区分「自己刚写下的记录」和
+    /// 「别的设备写进来的记录」——否则每轮同步都会再触发一轮空转。
+    last_pass_end: Option<Instant>,
 }
 
 #[derive(Clone)]
@@ -170,9 +218,40 @@ where
         state.pending.insert(event);
     }
 
-    pub async fn drain_once(&self) -> Result<(), SyncStoreError> {
+    /// 是否还有没处理的事件（供同步运行时的调度器判断要不要跑一轮）。
+    pub fn has_pending(&self) -> bool {
+        !self
+            .state
+            .lock()
+            .expect("personal sync worker state")
+            .pending
+            .is_empty()
+    }
+
+    /// 正在同步，或刚刚结束不久。
+    ///
+    /// 同步目录的文件监听会收到**自己写下去**的记录：那些事件不该再触发一轮
+    /// 同步（否则每轮真实同步都跟着一轮空转）。这里用「进行中 + 宽限期」覆盖
+    /// 写入到事件送达之间的延迟；代价是宽限期内别的设备的改动会晚一轮被发现。
+    pub fn is_syncing_or_just_finished(&self) -> bool {
+        const SELF_WRITE_GRACE: Duration = Duration::from_secs(5);
+        let state = self.state.lock().expect("personal sync worker state");
+        if state.active {
+            return true;
+        }
+        state
+            .last_pass_end
+            .is_some_and(|finished_at| finished_at.elapsed() < SELF_WRITE_GRACE)
+    }
+
+    /// 跑一轮同步；返回本轮真正动过业务表的数据类型集合。
+    ///
+    /// 同步是把记录直接写进业务表（不走各 UI 的新增 / 编辑入口），调用方
+    /// （个人同步运行时）靠这个集合决定事后要通知哪些界面刷新——不通知的话，
+    /// 已经打开的页面显示的还是旧列表。
+    pub async fn drain_once(&self) -> Result<HashSet<String>, SyncStoreError> {
         let Some(events) = self.begin_drain() else {
-            return Ok(());
+            return Ok(HashSet::new());
         };
 
         let result = self.run_pass(events).await;
@@ -194,13 +273,17 @@ where
     fn finish_drain(&self) {
         let mut state = self.state.lock().expect("personal sync worker state");
         state.active = false;
+        state.last_pass_end = Some(Instant::now());
         if state.dirty {
             state.pending.insert(PersonalSyncEvent::FullScan);
             state.dirty = false;
         }
     }
 
-    async fn run_pass(&self, events: HashSet<PersonalSyncEvent>) -> Result<(), SyncStoreError> {
+    async fn run_pass(
+        &self,
+        events: HashSet<PersonalSyncEvent>,
+    ) -> Result<HashSet<String>, SyncStoreError> {
         self.store.probe().await?;
         // 互斥：同一个同步包（同一台机器上的两个实例，或两台机器共享的目录 / WebDAV
         // 目标）同一时刻只允许一个 pass 在做「读记录 → 改 → 写回」。
@@ -217,15 +300,36 @@ where
     async fn run_locked_pass(
         &self,
         events: HashSet<PersonalSyncEvent>,
-    ) -> Result<(), SyncStoreError> {
+    ) -> Result<HashSet<String>, SyncStoreError> {
         let local_items = self.local.list_items().await?;
         let remote_records = self.store.list_records(None, None).await?;
         // 挂起状态必须在处理删除之前取出来：墓碑处理要跳过已挂起的记录，
         // 否则会把冲突指向的那条本地行删掉，留下再也解不开的悬挂冲突。
         let mut paused = self.conflicts.paused_record_keys().await?;
-        let local_delete_conflicts = self
+        // 基线差分删除：没有删除事件的类型（快捷命令 / SFTP 收藏 / 提供商 /
+        // 笔记 / 已保存 SQL）靠「基线还在、本地行已消失」发现删除。
+        let mut events = events;
+        let diff_deletions = self.local.pending_local_deletions().await?;
+        for deletion in &diff_deletions {
+            events.insert(PersonalSyncEvent::LocalDeleted {
+                data_type: deletion.data_type.clone(),
+                cloud_id: deletion.cloud_id.clone(),
+                last_synced_at: deletion.last_synced_at,
+            });
+        }
+        let (local_delete_conflicts, tombstoned_keys) = self
             .apply_local_delete_events(&events, &remote_records)
             .await?;
+        // 只有墓碑真正推上云端的差分删除才清基线：挂了删除冲突的记录要留着
+        // 基线（冲突解决后可能重推），否则下一轮差分再也看不到这条删除。
+        for (data_type, cloud_id) in tombstoned_keys {
+            if diff_deletions
+                .iter()
+                .any(|d| d.data_type == data_type && d.cloud_id == cloud_id)
+            {
+                self.local.forget_local_state(&data_type, &cloud_id).await?;
+            }
+        }
         let tombstone_paused = self
             .apply_remote_tombstones(&local_items, &remote_records, &paused)
             .await?;
@@ -247,9 +351,32 @@ where
                     })
             })
             .collect::<Vec<_>>();
-        let plan = self
-            .planner
-            .plan(&local_items, &active_remote_records, &paused);
+        let plan = self.planner.plan_with_singletons(
+            &local_items,
+            &active_remote_records,
+            &paused,
+            &self.local.singleton_data_types(),
+        );
+        // 本轮真正会动业务表的数据类型（上传 / 双向更新 / 下载）；只改同步状态的
+        // `to_mark_synced` 与只存冲突快照的 `conflicts` 不算——没有本地数据变化。
+        // 调用方拿它决定事后通知哪些界面刷新。
+        let mut touched: HashSet<String> = HashSet::new();
+        touched.extend(plan.to_upload.iter().map(|item| item.data_type.clone()));
+        touched.extend(
+            plan.to_update_cloud
+                .iter()
+                .map(|(item, _)| item.data_type.clone()),
+        );
+        touched.extend(
+            plan.to_update_local
+                .iter()
+                .map(|(_, item)| item.data_type.clone()),
+        );
+        touched.extend(
+            plan.to_download
+                .iter()
+                .map(|record| record.data_type.clone()),
+        );
 
         self.apply_plan(&plan, &local_items, &active_remote_records)
             .await?;
@@ -260,7 +387,7 @@ where
                 "{deletion_conflicts} deletion conflict(s) paused"
             )));
         }
-        Ok(())
+        Ok(touched)
     }
 
     /// 处理「本地条目被删除」事件；返回本轮因此新挂起冲突的条数。
@@ -268,8 +395,9 @@ where
         &self,
         events: &HashSet<PersonalSyncEvent>,
         records: &[CloudSyncData],
-    ) -> Result<usize, SyncStoreError> {
+    ) -> Result<(usize, Vec<(String, String)>), SyncStoreError> {
         let mut conflicts = 0;
+        let mut tombstoned_keys = Vec::new();
         for (key, last_synced_at) in local_deleted_keys(events) {
             // 用户显式删掉了本地条目 ⇒ 这条记录上遗留的冲突已经没有任何意义，
             // 顺手清掉，免得对话框里留下一个点哪个按钮都报错的冲突。
@@ -281,6 +409,8 @@ where
             };
             if record.deleted_at.is_some() {
                 // 远端也已经是墓碑：两边都删了，没有需要同步的东西。
+                // 差分基线同样可以清掉——这条删除已经完成传播。
+                tombstoned_keys.push((key.data_type.clone(), key.cloud_id.clone()));
                 continue;
             }
             if remote_changed_since_local_delete(last_synced_at, record) {
@@ -294,8 +424,9 @@ where
             self.store
                 .tombstone_record(&key.data_type, &key.cloud_id, Some(record.version))
                 .await?;
+            tombstoned_keys.push((key.data_type.clone(), key.cloud_id.clone()));
         }
-        Ok(conflicts)
+        Ok((conflicts, tombstoned_keys))
     }
 
     /// 处理远端墓碑；返回本轮因此新挂起冲突的记录键。
@@ -490,7 +621,12 @@ where
         record: &CloudSyncData,
     ) -> Result<(), SyncStoreError> {
         self.local
-            .mark_synced(&item.local_id, &record.id, record.updated_at / 1000)
+            .mark_synced(
+                &item.local_id,
+                &record.id,
+                &record.checksum,
+                record.updated_at / 1000,
+            )
             .await
     }
 }

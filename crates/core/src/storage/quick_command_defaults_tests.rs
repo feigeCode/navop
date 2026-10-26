@@ -137,3 +137,101 @@ fn count_command(connection: &Connection, command: &str) -> i64 {
         )
         .expect("count command")
 }
+
+#[test]
+fn is_builtin_backfill_keeps_user_commands_syncable() {
+    use crate::storage::migration::MIGRATIONS;
+    use rusqlite::params;
+
+    let connection = Connection::open_in_memory().expect("open memory sqlite");
+
+    connection
+        .execute_batch(
+            "CREATE TABLE _migrations (
+                version TEXT PRIMARY KEY,
+                applied_at INTEGER NOT NULL
+            );",
+        )
+        .expect("create migrations table");
+
+    // 手工构造三类命令：
+    // 1. 与内置同名同文本的默认命令（应标记 is_builtin=1）；
+    // 2. 用户自建的、与内置同文本但不同名的命令（应保持 is_builtin=0 参与同步）；
+    // 3. 用户自建且置顶的同名同文本命令（应保持 is_builtin=0）。
+    fn mark_all_migrations_except(conn: &Connection, targets: &[&str]) {
+        let mut found: Vec<&str> = Vec::new();
+        for (version, _) in MIGRATIONS {
+            if targets.contains(version) {
+                found.push(version);
+                continue;
+            }
+            conn.execute(
+                "INSERT INTO _migrations (version, applied_at) VALUES (?1, ?2)",
+                params![version, 1i64],
+            )
+            .expect("mark unrelated migration as applied");
+        }
+        assert_eq!(
+            found.len(),
+            targets.len(),
+            "所有目标迁移都必须已注册: 找到 {found:?}, 期望 {targets:?}"
+        );
+    }
+
+    mark_all_migrations_except(&connection, &["20261014000001", "20260720000001"]);
+    connection
+        .execute_batch(
+            "CREATE TABLE quick_commands (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                command TEXT NOT NULL,
+                description TEXT,
+                pinned INTEGER NOT NULL DEFAULT 0,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                connection_id INTEGER,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                group_name TEXT,
+                group_color TEXT,
+                shortcut TEXT
+            );
+            INSERT INTO quick_commands (name, command, pinned, created_at, updated_at) VALUES
+                ('Disk Usage', 'df -h', 0, 1, 1),
+                ('我的磁盘检查', 'df -h', 0, 1, 1),
+                ('Disk Usage', 'df -h', 1, 1, 1);",
+        )
+        .expect("create pre-migration quick commands");
+
+    run_migrations(&connection).expect("run is_builtin migration");
+
+    let builtin_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM quick_commands WHERE is_builtin = 1",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count builtin commands");
+    // 20260720000001 按 command 文本 NOT EXISTS 判重：预置的 'df -h' 挡住默认
+    // 'Disk Usage'，其余 29 条默认照插 → 内置标记 = 29 默认 + 预置第 1 条（同名同文本未置顶）。
+    assert_eq!(
+        builtin_count, 30,
+        "29 条默认 + 1 条同名同文本预置应标记内置"
+    );
+    let total: i64 = connection
+        .query_row("SELECT COUNT(*) FROM quick_commands", [], |row| row.get(0))
+        .expect("count total");
+    assert_eq!(total, 32, "3 预置 + 29 条默认");
+
+    let user_rows: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM quick_commands
+             WHERE is_builtin = 0 AND (name = '我的磁盘检查' OR pinned = 1)",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count user commands");
+    assert_eq!(
+        user_rows, 2,
+        "用户自建命令（不同名或已置置顶）必须保持可同步"
+    );
+}

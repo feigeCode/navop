@@ -14,18 +14,18 @@
 use std::sync::{Arc, RwLock};
 
 use gpui::{App, AsyncApp, Global};
-use rust_i18n::t;
 use notes::NotesStorage;
 use one_core::cloud_sync::personal::reseal_webdav_password_with_keys;
 use one_core::cloud_sync::{
     CloudApiClient, CloudSyncService, GlobalCloudUser, SyncEngine, SyncError, new_user_config,
-    reencrypt_onet_cloud,
+    reencrypt_navop_cloud,
 };
 use one_core::crypto;
 use one_core::gpui_tokio::Tokio;
 use one_core::master_key_meta;
 use one_core::settings::{AppSettings, SyncProvider};
 use one_core::storage::GlobalStorageState;
+use rust_i18n::t;
 
 use crate::personal_sync_runtime;
 
@@ -239,7 +239,11 @@ pub fn run_kdf_upgrade_after_unlock(cx: &mut App) {
 
 /// WebDAV 密码在 settings.json 里是用主密钥封存的，主密钥换了就得重新封存
 fn reseal_webdav_password(old_key: &str, new_key: &str, cx: &mut App) {
-    let current = AppSettings::global(cx).personal_sync.webdav.password.clone();
+    let current = AppSettings::global(cx)
+        .personal_sync
+        .webdav
+        .password
+        .clone();
     if current.is_empty() {
         return;
     }
@@ -263,7 +267,7 @@ pub fn report_key_version_to_cloud(cx: &mut App) {
     let Some(raw_key) = crypto::get_raw_master_key() else {
         return;
     };
-    if AppSettings::global(cx).sync_provider != SyncProvider::OnetCloud {
+    if AppSettings::global(cx).sync_provider != SyncProvider::NavopCloud {
         return;
     }
 
@@ -295,14 +299,10 @@ fn start_cloud_reencrypt(
     cx: &mut App,
 ) -> bool {
     match AppSettings::global(cx).sync_provider {
-        SyncProvider::Personal => personal_sync_runtime::reencrypt_cloud_data(
-            old_key,
-            new_key,
-            key_version,
-            notifier,
-            cx,
-        ),
-        SyncProvider::OnetCloud => {
+        SyncProvider::Personal => {
+            personal_sync_runtime::reencrypt_cloud_data(old_key, new_key, key_version, notifier, cx)
+        }
+        SyncProvider::NavopCloud => {
             let Some(user) = GlobalCloudUser::get_user(cx) else {
                 tracing::info!("未登录 Navop Cloud，跳过云端重加密");
                 return false;
@@ -319,7 +319,7 @@ fn start_cloud_reencrypt(
             let new_key = new_key.to_string();
 
             let task = Tokio::spawn(cx, async move {
-                let stats = reencrypt_onet_cloud(
+                let stats = reencrypt_navop_cloud(
                     &client,
                     &service,
                     &old_key,
@@ -436,18 +436,18 @@ pub fn reset_master_key_data(scope: ResetScope, cx: &mut App) -> Result<ResetOut
         personal_sync_runtime::wipe_cloud_data(cx);
     }
     if scope.team_data || scope.cloud_sync {
-        wipe_onet_cloud(scope.team_data, cx);
+        wipe_navop_cloud(scope.team_data, cx);
     }
 
     Ok(outcome)
 }
 
 /// 清空 Navop Cloud 侧数据：个人记录按 `cloud_sync` 勾选，团队记录按 `team_data` 勾选
-fn wipe_onet_cloud(include_team: bool, cx: &mut App) {
+fn wipe_navop_cloud(include_team: bool, cx: &mut App) {
     let Some(user) = GlobalCloudUser::get_user(cx) else {
         return;
     };
-    if AppSettings::global(cx).sync_provider != SyncProvider::OnetCloud {
+    if AppSettings::global(cx).sync_provider != SyncProvider::NavopCloud {
         return;
     }
     let client = crate::auth::get_auth_service(cx).cloud_client();

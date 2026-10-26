@@ -95,6 +95,22 @@ pub struct DeleteSummary {
     pub documents: usize,
 }
 
+/// 同步使用的笔记文档快照
+///
+/// `document_id` 是持久化在 `documents.json` 里的稳定 UUID：**重命名或移动只会改
+/// `relative_path`，`document_id` 保持不变**，因此它是笔记同步的稳定键。
+/// 用相对路径当键会让一次重命名在云端变成「旧记录 + 新记录」两条，产生重复。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoteDocument {
+    /// 稳定身份，跨重命名/移动/设备保持一致
+    pub document_id: String,
+    /// 相对内容树根的路径（`/` 分隔），仅用于还原树形结构
+    pub relative_path: String,
+    /// 文件修改时间（秒）
+    pub modified_at: i64,
+    pub content: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

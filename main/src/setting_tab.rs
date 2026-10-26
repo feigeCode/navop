@@ -7,8 +7,8 @@ use crate::auth::get_auth_service;
 use crate::license::{get_license_service, is_feature_enabled, offline_license_public_key};
 use crate::settings::agent_settings::agent_setting_group;
 use crate::settings::appearance::render as render_appearance_settings;
-use crate::settings::database_settings::database_setting_group;
 use crate::settings::connection_display_settings::connection_display_setting_group;
+use crate::settings::database_settings::database_setting_group;
 use crate::settings::llm_providers_view::LlmProvidersView;
 use crate::settings::local_terminal_settings::local_terminal_setting_group;
 use crate::settings::mcp_settings::mcp_setting_group;
@@ -18,6 +18,7 @@ use crate::settings::notes_shortcuts::{
 };
 use crate::settings::remote_file_editor_settings::remote_file_editor_setting_group;
 use crate::settings::sql_format_settings::sql_format_setting_group;
+use crate::settings::sync_scope_settings::sync_scope_group;
 use crate::settings::tool_exposure_settings::{
     agent_tool_exposure_setting_group, mcp_tool_exposure_setting_group,
 };
@@ -1132,12 +1133,18 @@ impl SettingsPanel {
                 ]),
             SettingPage::new(t!("Settings.Sync.title"))
                 .resettable(true)
-                .group(sync_setting_group(
-                    default_settings.sync_enabled,
-                    default_settings.sync_provider,
-                    &default_settings.personal_sync,
-                    AppSettings::global(cx).personal_sync.backend,
-                )),
+                .groups(vec![
+                    sync_setting_group(
+                        default_settings.sync_enabled,
+                        default_settings.sync_provider,
+                        &default_settings.personal_sync,
+                        AppSettings::global(cx).personal_sync.backend,
+                    ),
+                    sync_scope_group(
+                        &default_settings.sync_scope,
+                        AppSettings::global(cx).sync_provider,
+                    ),
+                ]),
             SettingPage::new(t!("TeamSync.manage_keys"))
                 .resettable(false)
                 .group(team_key_setting_group()),
@@ -1159,22 +1166,24 @@ impl SettingsPanel {
                 ),
             ),
             // 账户设置页：账户信息与主密钥是两件独立的事——没有账户也可以有主密钥，
-// 所以拆成两个并列分组，关系与「关于 / 更新」一致。
+            // 所以拆成两个并列分组，关系与「关于 / 更新」一致。
             SettingPage::new(t!("Settings.Account.title"))
                 .group(
-                    SettingGroup::new().title(t!("Settings.Account.title")).item(
-                        SettingItem::render(move |_options, window, cx| {
-                            render_account_section(window, cx)
-                        })
-                        .keywords([
-                            t!("Settings.Account.title").to_string(),
-                            t!("Settings.Account.username").to_string(),
-                            t!("Settings.Account.email").to_string(),
-                            t!("Settings.Account.not_logged_in").to_string(),
-                            t!("Auth.logout").to_string(),
-                            t!("License.import_offline").to_string(),
-                        ]),
-                    ),
+                    SettingGroup::new()
+                        .title(t!("Settings.Account.title"))
+                        .item(
+                            SettingItem::render(move |_options, window, cx| {
+                                render_account_section(window, cx)
+                            })
+                            .keywords([
+                                t!("Settings.Account.title").to_string(),
+                                t!("Settings.Account.username").to_string(),
+                                t!("Settings.Account.email").to_string(),
+                                t!("Settings.Account.not_logged_in").to_string(),
+                                t!("Auth.logout").to_string(),
+                                t!("License.import_offline").to_string(),
+                            ]),
+                        ),
                 )
                 .group(
                     SettingGroup::new()
@@ -1350,6 +1359,8 @@ fn sync_provider_item(default: SyncProvider) -> SettingItem {
             |val: SharedString, cx: &mut App| {
                 AppSettings::update_and_save(cx, |settings| {
                     settings.sync_provider = SyncProvider::from_str(&val);
+                    // 历史：切到 NavopCloud 曾强制取消 personal_only 项（钥匙串 /
+                    // LLM 提供商）。两类数据已放开双通道同步，这里不再动勾选。
                 });
             },
         )
@@ -1361,8 +1372,8 @@ fn sync_provider_item(default: SyncProvider) -> SettingItem {
 fn sync_provider_options() -> Vec<(SharedString, SharedString)> {
     vec![
         (
-            SharedString::from(SyncProvider::OnetCloud.as_str()),
-            SharedString::from(t!("Settings.Sync.Provider.onet_cloud").to_string()),
+            SharedString::from(SyncProvider::NavopCloud.as_str()),
+            SharedString::from(t!("Settings.Sync.Provider.navop_cloud").to_string()),
         ),
         (
             SharedString::from(SyncProvider::Personal.as_str()),

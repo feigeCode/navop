@@ -23,7 +23,7 @@ use crate::crypto;
 use crate::storage::{StorageManager, TeamKeyCache, TeamKeyCacheRepository};
 use crate::storage::{TeamMembershipCache, TeamMembershipCacheRepository, TeamMembershipState};
 use futures_util::{StreamExt, stream};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
@@ -87,6 +87,56 @@ pub struct SyncEngine {
     handlers: Vec<Box<dyn SyncHandler>>,
     /// 当前用户所在团队列表（同步开始时获取）
     pub(crate) cached_teams: std::sync::RwLock<Vec<Team>>,
+    /// 「数据范围」扩展处理器所需的环境标识；`None` 表示未装配
+    pub(crate) scope_env: Option<String>,
+    pub(crate) scope_user_id: Option<String>,
+}
+
+impl SyncEngine {
+    /// 装配「用户自选同步数据范围」：注册新增类型的处理器。
+    ///
+    /// `enabled` 为空表示用户未勾选任何新增类型，此时不注册任何处理器。
+    pub fn with_sync_scopes(
+        mut self,
+        scope_env: String,
+        user_id: String,
+        enabled: HashSet<String>,
+        notes: Option<crate::cloud_sync::scope::notes::SharedNoteAdapter>,
+    ) -> Self {
+        if enabled.is_empty() {
+            return self;
+        }
+        self.scope_env = Some(scope_env.clone());
+        self.scope_user_id = Some(user_id.clone());
+
+        let state = crate::cloud_sync::scope::state::SyncItemStateRepository::new(
+            self.storage.connection(),
+        );
+        for descriptor in crate::settings::SYNC_SCOPE_DESCRIPTORS {
+            if !enabled.contains(descriptor.data_type) {
+                continue;
+            }
+            // 连接 / 工作空间由各自既有 handler 负责，避免重复注册。
+            // 钥匙串（credential）已放开 NavopCloud 通道：走 ScopeSyncTypeHandler
+            // 通用流程（载荷同样是主密钥端到端加密的 CredentialPlainData）。
+            if matches!(
+                descriptor.data_type,
+                crate::cloud_sync::data_type::CONNECTION | crate::cloud_sync::data_type::WORKSPACE
+            ) {
+                continue;
+            }
+            self.handlers.push(Box::new(TypedSyncBridge {
+                handler: crate::cloud_sync::scope::cloud::ScopeSyncTypeHandler::new(
+                    descriptor.data_type,
+                    state.clone(),
+                    scope_env.clone(),
+                    user_id.clone(),
+                    notes.clone(),
+                ),
+            }));
+        }
+        self
+    }
 }
 
 impl SyncEngine {
@@ -108,6 +158,8 @@ impl SyncEngine {
                 Box::new(ConnectionSyncHandler),
             ],
             cached_teams: std::sync::RwLock::new(Vec::new()),
+            scope_env: None,
+            scope_user_id: None,
         }
     }
 
@@ -141,6 +193,9 @@ impl SyncEngine {
     fn ensure_unlocked(&self) -> Result<(), SyncError> {
         // 以本地 crypto 模块为准：主密钥刚被修改过时，服务里可能还留着旧密钥，
         // 那样会用旧密钥去解已经换成新密文的云端数据。
+        //
+        // pinned 的密钥是调用方显式声明的权威密钥（改密迁移、测试自备密钥等），
+        // 引擎不会用全局主密钥覆盖它，避免并行测试互踩全局密钥时注入错误密钥。
         if crypto::has_master_key() {
             if let Some(raw_key) = crypto::get_raw_master_key() {
                 let mut service_write = self

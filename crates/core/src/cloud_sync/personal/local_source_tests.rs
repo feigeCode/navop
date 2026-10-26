@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 use crate::cloud_sync::models::{CloudSyncData, WorkspaceParentLink, data_type};
 use crate::cloud_sync::personal::test_support;
 use crate::cloud_sync::personal::{PersonalSyncLocalRepositorySource, PersonalSyncLocalSource};
+use crate::cloud_sync::scope::state::SyncTypeStatusRepository;
 use crate::cloud_sync::service::CloudSyncService;
 use crate::crypto;
 use crate::storage::connection::SqliteConnection;
@@ -70,6 +71,7 @@ async fn local_source_reads_and_updates_workspace_sync_timestamp() {
         .mark_synced(
             &format!("workspace:{workspace_id}"),
             "cloud-workspace-1",
+            "checksum-workspace-1",
             10,
         )
         .await
@@ -685,6 +687,7 @@ impl Fixture {
         .expect("migrations run");
         let connections = ConnectionRepository::new(db.clone());
         let credentials = CredentialRepository::new(db.clone());
+        let status = SyncTypeStatusRepository::new(db.clone());
         let workspaces = WorkspaceRepository::new(db);
         let service = Arc::new(RwLock::new(CloudSyncService::new()));
         {
@@ -697,6 +700,9 @@ impl Fixture {
             credentials.clone(),
             workspaces.clone(),
             service.clone(),
+            status,
+            "personal".to_string(),
+            "personal".to_string(),
         );
         Self {
             _temp: temp,

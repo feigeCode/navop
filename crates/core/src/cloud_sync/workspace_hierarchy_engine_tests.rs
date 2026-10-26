@@ -303,6 +303,11 @@ impl Device {
     }
 
     async fn sync(&self) -> SyncResult {
+        // 持全局密钥测试锁：engine.ensure_unlocked 会读全局 RAW_MASTER_KEY，
+        // 与其他 clear/set 全局密钥的测试并行会读到别人的钥匙
+        let _crypto_guard = crate::crypto::crypto_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let result = self.engine.sync().await.expect("同步成功");
         assert!(
             result.errors.is_empty(),

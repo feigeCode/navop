@@ -102,7 +102,7 @@ pub fn new_user_config(user_id: &str, new_key: &str, new_key_version: u32) -> Cl
 ///
 /// 版本号与验证数据一并写入 `user_configs`，其他设备同步时先比对版本，就能区分
 /// "云端主密钥被改过"和"自己输错了密钥"。
-pub async fn reencrypt_onet_cloud(
+pub async fn reencrypt_navop_cloud(
     client: &Arc<dyn CloudApiClient>,
     service: &Arc<RwLock<CloudSyncService>>,
     old_key: &str,
@@ -172,7 +172,7 @@ pub async fn reencrypt_personal<S: PersonalSyncStore>(
 
 #[cfg(test)]
 mod tests {
-    use super::{CloudReencryptStats, new_user_config, is_personal_record, re_encrypt_records};
+    use super::{CloudReencryptStats, is_personal_record, new_user_config, re_encrypt_records};
     use crate::cloud_sync::models::CloudSyncData;
     use crate::cloud_sync::service::CloudSyncService;
     use crate::crypto;
@@ -228,7 +228,12 @@ mod tests {
         let team_record = record("team-1", Some("team-1"), "team-secret", "team-data-key");
 
         assert!(!is_personal_record(&team_record));
-        assert!(is_personal_record(&record("personal-1", None, "secret", "old-key")));
+        assert!(is_personal_record(&record(
+            "personal-1",
+            None,
+            "secret",
+            "old-key"
+        )));
     }
 
     #[test]
