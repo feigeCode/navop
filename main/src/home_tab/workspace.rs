@@ -123,7 +123,7 @@ impl HomePage {
                         );
                     }
                     // 兜底触发一次自动同步，避免当前页对自身工作区事件未回流时漏同步。
-                    if should_auto_onet_cloud_sync(cx, this.current_user.is_some()) {
+                    if should_auto_navop_cloud_sync(cx, this.current_user.is_some()) {
                         tracing::info!("本地工作区保存成功，自动触发云同步");
                         this.trigger_sync(cx);
                     }
@@ -256,7 +256,7 @@ impl HomePage {
                             cx,
                         );
                         // 兜底触发一次自动同步，避免当前页对自身工作区事件未回流时漏同步。
-                        if should_auto_onet_cloud_sync(cx, this.current_user.is_some()) {
+                        if should_auto_navop_cloud_sync(cx, this.current_user.is_some()) {
                             tracing::info!("本地工作区删除成功，自动触发云同步");
                             this.trigger_sync(cx);
                         }

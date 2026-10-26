@@ -1,4 +1,4 @@
-//! 新增数据类型在 Navop 云同步（OnetCloud）通道上的接入
+//! 新增数据类型在 Navop 云同步（NavopCloud）通道上的接入
 //!
 //! `SyncTypeHandler::Item` 要求 `local_id() -> Option<i64>`，而新增类型里设置类是
 //! Singleton（无 ID）、已保存 SQL / 笔记是路径键（无 i64）。这里用统一的
@@ -623,7 +623,7 @@ impl ScopeSyncTypeHandler {
                 item.key = group.type_name().to_string();
                 item.id = synthetic_id(other, &item.key);
             }
-            // 笔记由 `notes` crate 提供数据源，OnetCloud 通道暂不落地
+            // 笔记由 `notes` crate 提供数据源，NavopCloud 通道暂不落地
             _ => {}
         }
 
@@ -1675,148 +1675,163 @@ mod tests {
         );
     }
 
+    /// 测试用主密钥：凭据敏感列落库需要会话主密钥（持有全局测试锁防并行互踩）
+    fn with_test_master_key<T>(f: impl FnOnce() -> T) -> T {
+        let _guard = crate::crypto::crypto_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        crate::crypto::clear_master_key();
+        crate::crypto::set_master_key_for_session("scope-cloud-tests-master-key")
+            .expect("configure test master key");
+        f()
+    }
+
     /// 钥匙串：list_local 只枚举开启同步且非团队的凭据（与 Personal 通道同口径）
     #[test]
     fn credential_list_local_filters_disabled_and_team_entries() {
-        let storage = test_storage();
-        let handler = test_handler(&storage, data_type::CREDENTIAL);
-        let engine = sync_engine_for(&storage);
+        with_test_master_key(|| {
+            let storage = test_storage();
+            let handler = test_handler(&storage, data_type::CREDENTIAL);
+            let engine = sync_engine_for(&storage);
 
-        let repo = storage.get::<CredentialRepository>().unwrap();
-        let mut personal = CredentialEntry {
-            id: None,
-            name: "个人服务器".to_string(),
-            username: Some("root".to_string()),
-            password: Some("secret".to_string()),
-            private_key_path: None,
-            private_key_content: None,
-            passphrase: None,
-            ssh_expect: crate::storage::models::SshAccountExpect::default(),
-            sync_enabled: true,
-            forward_to_agent: false,
-            cloud_id: None,
-            last_synced_at: None,
-            team_id: None,
-            owner_id: None,
-            created_at: None,
-            updated_at: Some(1_700_000_000),
-        };
-        let personal_id = repo.insert(&mut personal).expect("插入个人凭据");
+            let repo = storage.get::<CredentialRepository>().unwrap();
+            let mut personal = CredentialEntry {
+                id: None,
+                name: "个人服务器".to_string(),
+                username: Some("root".to_string()),
+                password: Some("secret".to_string()),
+                private_key_path: None,
+                private_key_content: None,
+                passphrase: None,
+                ssh_expect: crate::storage::models::SshAccountExpect::default(),
+                sync_enabled: true,
+                forward_to_agent: false,
+                cloud_id: None,
+                last_synced_at: None,
+                team_id: None,
+                owner_id: None,
+                created_at: None,
+                updated_at: Some(1_700_000_000),
+            };
+            let personal_id = repo.insert(&mut personal).expect("插入个人凭据");
 
-        let mut disabled = personal.clone();
-        disabled.name = "关同步的凭据".to_string();
-        disabled.sync_enabled = false;
-        repo.insert(&mut disabled).expect("插入关闭同步的凭据");
+            let mut disabled = personal.clone();
+            disabled.name = "关同步的凭据".to_string();
+            disabled.sync_enabled = false;
+            repo.insert(&mut disabled).expect("插入关闭同步的凭据");
 
-        let mut team = personal.clone();
-        team.name = "团队凭据".to_string();
-        team.team_id = Some("team-1".to_string());
-        repo.insert(&mut team).expect("插入团队凭据");
+            let mut team = personal.clone();
+            team.name = "团队凭据".to_string();
+            team.team_id = Some("team-1".to_string());
+            repo.insert(&mut team).expect("插入团队凭据");
 
-        let items = handler.list_local(&engine).expect("枚举钥匙串");
-        assert_eq!(items.len(), 1, "只应枚举出开启同步的个人凭据");
-        assert_eq!(items[0].key, personal_id.to_string());
-        assert_eq!(items[0].name, "个人服务器");
+            let items = handler.list_local(&engine).expect("枚举钥匙串");
+            assert_eq!(items.len(), 1, "只应枚举出开启同步的个人凭据");
+            assert_eq!(items[0].key, personal_id.to_string());
+            assert_eq!(items[0].name, "个人服务器");
+        })
     }
 
     /// 钥匙串：下载落地新条目 + 更新已有条目保留本机私有字段
     #[test]
     fn credential_download_insert_and_update_keep_local_fields() {
-        let storage = test_storage();
-        let handler = test_handler(&storage, data_type::CREDENTIAL);
-        let engine = sync_engine_for(&storage);
+        with_test_master_key(|| {
+            let storage = test_storage();
+            let handler = test_handler(&storage, data_type::CREDENTIAL);
+            let engine = sync_engine_for(&storage);
 
-        let repo = storage.get::<CredentialRepository>().unwrap();
+            let repo = storage.get::<CredentialRepository>().unwrap();
 
-        // 场景 1：新条目下载 → insert + 回填 sync 状态
-        let mut item = ScopeSyncItem {
-            record_type: data_type::CREDENTIAL.to_string(),
-            key: String::new(),
-            id: 0,
-            name: "新凭据".to_string(),
-            checksum: String::new(),
-            updated_at: 0,
-            cloud_id: Some("cloud-cred-1".to_string()),
-            payload: Some(serde_json::json!({
-                "format_version": 2,
-                "name": "新凭据",
-                "username": "deploy",
-                "password": "pw",
-                "private_key_content": null,
-                "passphrase": null,
-                "owner_id": null,
-                "forward_to_agent": false,
-            })),
-        };
-        use crate::cloud_sync::sync_type::SyncTypeHandler;
-        handler
-            .insert_local(&engine, &mut item)
-            .expect("落地新凭据");
-        let created_id = item.local_id().expect("rowid");
-        let created = repo
-            .get_plaintext(created_id)
-            .expect("查询")
-            .expect("业务行存在");
-        assert_eq!(created.username.as_deref(), Some("deploy"));
-        assert_eq!(created.team_id, None, "下载的凭据按个人凭据落地");
-        assert!(
-            created.cloud_id.is_some(),
-            "落地后应回填 cloud_id 供后续增量同步"
-        );
+            // 场景 1：新条目下载 → insert + 回填 sync 状态
+            let mut item = ScopeSyncItem {
+                record_type: data_type::CREDENTIAL.to_string(),
+                key: String::new(),
+                id: 0,
+                name: "新凭据".to_string(),
+                checksum: String::new(),
+                updated_at: 0,
+                cloud_id: Some("cloud-cred-1".to_string()),
+                payload: Some(serde_json::json!({
+                    "format_version": 2,
+                    "name": "新凭据",
+                    "username": "deploy",
+                    "password": "pw",
+                    "private_key_content": null,
+                    "passphrase": null,
+                    "owner_id": null,
+                    "forward_to_agent": false,
+                })),
+            };
+            use crate::cloud_sync::sync_type::SyncTypeHandler;
+            handler
+                .insert_local(&engine, &mut item)
+                .expect("落地新凭据");
+            let created_id = item.local_id().expect("rowid");
+            let created = repo
+                .get_plaintext(created_id)
+                .expect("查询")
+                .expect("业务行存在");
+            assert_eq!(created.username.as_deref(), Some("deploy"));
+            assert_eq!(created.team_id, None, "下载的凭据按个人凭据落地");
+            assert!(
+                created.cloud_id.is_some(),
+                "落地后应回填 cloud_id 供后续增量同步"
+            );
 
-        // 场景 2：本机已有条目（带本机私钥路径）被远端更新 → 保留 private_key_path
-        let mut existing = CredentialEntry {
-            id: None,
-            name: "本机凭据".to_string(),
-            username: Some("root".to_string()),
-            password: Some("old".to_string()),
-            private_key_path: Some("/Users/me/.ssh/id_ed25519".to_string()),
-            private_key_content: None,
-            passphrase: None,
-            ssh_expect: crate::storage::models::SshAccountExpect::default(),
-            sync_enabled: true,
-            forward_to_agent: false,
-            cloud_id: Some("cloud-cred-2".to_string()),
-            last_synced_at: None,
-            team_id: None,
-            owner_id: None,
-            created_at: Some(1_600_000_000),
-            updated_at: Some(1_700_000_000),
-        };
-        let existing_id = repo.insert(&mut existing).expect("插入本机凭据");
+            // 场景 2：本机已有条目（带本机私钥路径）被远端更新 → 保留 private_key_path
+            let mut existing = CredentialEntry {
+                id: None,
+                name: "本机凭据".to_string(),
+                username: Some("root".to_string()),
+                password: Some("old".to_string()),
+                private_key_path: Some("/Users/me/.ssh/id_ed25519".to_string()),
+                private_key_content: None,
+                passphrase: None,
+                ssh_expect: crate::storage::models::SshAccountExpect::default(),
+                sync_enabled: true,
+                forward_to_agent: false,
+                cloud_id: Some("cloud-cred-2".to_string()),
+                last_synced_at: None,
+                team_id: None,
+                owner_id: None,
+                created_at: Some(1_600_000_000),
+                updated_at: Some(1_700_000_000),
+            };
+            let existing_id = repo.insert(&mut existing).expect("插入本机凭据");
 
-        let mut update = ScopeSyncItem {
-            record_type: data_type::CREDENTIAL.to_string(),
-            key: existing_id.to_string(),
-            id: existing_id,
-            name: "本机凭据".to_string(),
-            checksum: String::new(),
-            updated_at: 1_700_000_500,
-            cloud_id: Some("cloud-cred-2".to_string()),
-            payload: Some(serde_json::json!({
-                "format_version": 2,
-                "name": "本机凭据",
-                "username": "root",
-                "password": "new",
-                "private_key_content": null,
-                "passphrase": null,
-                "owner_id": null,
-                "forward_to_agent": false,
-            })),
-        };
-        handler
-            .update_local_item(&engine, &mut update)
-            .expect("更新本机凭据");
-        let updated = repo
-            .get_plaintext(existing_id)
-            .expect("查询")
-            .expect("业务行存在");
-        assert_eq!(updated.password.as_deref(), Some("new"), "远端新密码应落地");
-        assert_eq!(
-            updated.private_key_path,
-            Some("/Users/me/.ssh/id_ed25519".to_string()),
-            "本机私钥路径不应被云端清掉"
-        );
+            let mut update = ScopeSyncItem {
+                record_type: data_type::CREDENTIAL.to_string(),
+                key: existing_id.to_string(),
+                id: existing_id,
+                name: "本机凭据".to_string(),
+                checksum: String::new(),
+                updated_at: 1_700_000_500,
+                cloud_id: Some("cloud-cred-2".to_string()),
+                payload: Some(serde_json::json!({
+                    "format_version": 2,
+                    "name": "本机凭据",
+                    "username": "root",
+                    "password": "new",
+                    "private_key_content": null,
+                    "passphrase": null,
+                    "owner_id": null,
+                    "forward_to_agent": false,
+                })),
+            };
+            handler
+                .update_local_item(&engine, &mut update)
+                .expect("更新本机凭据");
+            let updated = repo
+                .get_plaintext(existing_id)
+                .expect("查询")
+                .expect("业务行存在");
+            assert_eq!(updated.password.as_deref(), Some("new"), "远端新密码应落地");
+            assert_eq!(
+                updated.private_key_path,
+                Some("/Users/me/.ssh/id_ed25519".to_string()),
+                "本机私钥路径不应被云端清掉"
+            );
+        })
     }
 
     /// 构造最小 SyncEngine（只填 storage；云客户端不会被触达）

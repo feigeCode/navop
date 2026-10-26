@@ -20,7 +20,7 @@ impl HomePage {
         }
         self.apply_authenticated_user(user, cx);
         cx.notify();
-        if should_auto_onet_cloud_sync(cx, self.current_user.is_some()) {
+        if should_auto_navop_cloud_sync(cx, self.current_user.is_some()) {
             tracing::info!("会话已恢复且密钥已解锁，自动触发云同步");
             self.trigger_sync(cx);
         }
@@ -131,7 +131,7 @@ impl HomePage {
 
                         this.auth_error = None;
                         // 登录成功后，如果密钥已解锁，自动触发同步
-                        if should_auto_onet_cloud_sync(cx, this.current_user.is_some()) {
+                        if should_auto_navop_cloud_sync(cx, this.current_user.is_some()) {
                             tracing::info!("登录成功且密钥已解锁，自动触发云同步");
                             this.trigger_sync(cx);
                         }

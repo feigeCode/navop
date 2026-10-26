@@ -67,7 +67,8 @@ impl HomePage {
         let is_first_setup = !has_password_set;
         let require_master_key_on_startup =
             AppSettings::current(cx).master_key_on_startup_required();
-        let startup_lock = require_master_key_on_startup && has_password_set && !crypto::has_master_key();
+        let startup_lock =
+            require_master_key_on_startup && has_password_set && !crypto::has_master_key();
         let initial_master_key = (!startup_lock)
             .then(|| {
                 crypto::get_raw_master_key().or_else(|| {
@@ -172,7 +173,7 @@ impl HomePage {
                                 // 把当前密钥版本同步到云端，其他设备据此识别
                                 // "云端密钥被改过"而不是"自己输错了"
                                 crate::master_key_flow::report_key_version_to_cloud(cx);
-                                if should_auto_onet_cloud_sync(cx, this.current_user.is_some()) {
+                                if should_auto_navop_cloud_sync(cx, this.current_user.is_some()) {
                                     tracing::info!("密钥设置/解锁成功，自动触发云同步");
                                     this.trigger_sync(cx);
                                 }
@@ -298,7 +299,7 @@ impl HomePage {
                 // 视图可能已释放（例如弹窗期间窗口关闭），拿不到就无需刷新
                 let _ = view.update(cx, |home, cx| {
                     home.load_connections(cx);
-                    if should_auto_onet_cloud_sync(cx, home.current_user.is_some()) {
+                    if should_auto_navop_cloud_sync(cx, home.current_user.is_some()) {
                         home.trigger_sync(cx);
                     }
                 });

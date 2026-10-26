@@ -3854,7 +3854,7 @@ Settings:
         zh-CN: WebDAV
         zh-HK: WebDAV
     Provider:
-      onet_cloud:
+      navop_cloud:
         en: Navop Cloud Sync
         zh-CN: Navop 云同步
         zh-HK: Navop 雲同步

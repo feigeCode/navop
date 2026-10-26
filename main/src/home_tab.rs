@@ -314,7 +314,7 @@ pub(super) use keybindings::{
 };
 pub use keybindings::{init, refresh_keybindings};
 use sync_route::{
-    HomeSyncRoute, refreshed_pending_conflicts, should_auto_onet_cloud_sync,
+    HomeSyncRoute, refreshed_pending_conflicts, should_auto_navop_cloud_sync,
     should_show_team_key_menu_item, sync_route,
 };
 pub(crate) use team_permissions::TeamPermissionSnapshot;

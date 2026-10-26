@@ -730,22 +730,25 @@ impl PersonalSyncBackendKind {
 #[serde(rename_all = "snake_case")]
 pub enum SyncProvider {
     #[default]
-    OnetCloud,
+    /// Navop 云同步（历史上叫 OnetCloud，持久化值见 `as_str`/`from_str`）。
+    #[serde(alias = "onet_cloud")]
+    NavopCloud,
     Personal,
 }
 
 impl SyncProvider {
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::OnetCloud => "onet_cloud",
+            Self::NavopCloud => "navop_cloud",
             Self::Personal => "personal",
         }
     }
 
+    /// 兼容历史配置：旧 settings.json 写的是 "onet_cloud"，升级后仍解析为 NavopCloud。
     pub fn from_str(value: &str) -> Self {
         match value {
             "personal" => Self::Personal,
-            _ => Self::OnetCloud,
+            _ => Self::NavopCloud,
         }
     }
 }
@@ -881,7 +884,7 @@ pub enum LockMode {
     /// 正常可勾选
     ///
     /// 历史：钥匙串 / LLM 提供商曾为 `PersonalOnly`（仅个人同步可选），
-    /// 后来确认两类数据在 OnetCloud 通道同样以用户主密钥端到端加密
+    /// 后来确认两类数据在 NavopCloud 通道同样以用户主密钥端到端加密
     /// （与连接、凭据密钥一致），已放开为双通道可勾选。
     Optional,
 }
@@ -1190,7 +1193,7 @@ impl SyncScopeSettings {
 
     /// 按当前同步方式计算**实际生效**的类型集合。
     ///
-    /// 历史：OnetCloud 曾剔除 `personal_only` 项（钥匙串 / LLM 提供商）；
+    /// 历史：NavopCloud 曾剔除 `personal_only` 项（钥匙串 / LLM 提供商）；
     /// 两类数据在云端同样是用户主密钥端到端加密的密文，已放开双通道勾选，
     /// 此处不再按 provider 过滤。
     pub fn effective(&self, _provider: SyncProvider) -> Vec<SyncScopeKey> {
@@ -1206,7 +1209,7 @@ impl SyncScopeSettings {
         self.effective(provider).contains(&key)
     }
 
-    /// 历史：切到 OnetCloud 时把 personal_only 项写回 false。
+    /// 历史：切到 NavopCloud 时把 personal_only 项写回 false。
     ///
     /// `PersonalOnly` 锁定已移除（钥匙串 / LLM 提供商双通道可勾选），
     /// 本方法保留为空操作以兼容旧调用点；新代码不应再调用。
@@ -1964,7 +1967,7 @@ impl Default for AppSettings {
             skipped_update_version: None,
             plugin_update_notified_signature: None,
             sync_enabled: false,
-            sync_provider: SyncProvider::OnetCloud,
+            sync_provider: SyncProvider::NavopCloud,
             sync_scope: SyncScopeSettings::default(),
             global_proxy: GlobalProxySettings::default(),
             mcp: McpSettings::default(),
@@ -2508,8 +2511,8 @@ mod tests {
         assert!(personal.contains(&SyncScopeKey::LlmProvider));
         assert!(personal.contains(&SyncScopeKey::Credential));
 
-        // 钥匙串 / LLM 提供商已放开双通道：OnetCloud 下同样生效
-        let cloud = scope.effective(SyncProvider::OnetCloud);
+        // 钥匙串 / LLM 提供商已放开双通道：NavopCloud 下同样生效
+        let cloud = scope.effective(SyncProvider::NavopCloud);
         assert!(cloud.contains(&SyncScopeKey::LlmProvider));
         assert!(cloud.contains(&SyncScopeKey::Credential));
         // 其它类型不受影响
@@ -3471,11 +3474,27 @@ mod tests {
         assert!(settings.personal_sync.auto_sync);
     }
 
+    /// 旧配置文件里 sync_provider 写的是 "onet_cloud"，升级后必须仍解析为 NavopCloud
     #[test]
-    fn app_settings_default_uses_onet_cloud_sync_provider() {
+    fn legacy_onet_cloud_provider_value_still_deserializes() {
+        let provider: SyncProvider = serde_json::from_str("\"onet_cloud\"").expect("旧值应可解析");
+        assert_eq!(provider, SyncProvider::NavopCloud);
+        assert_eq!(
+            SyncProvider::from_str("onet_cloud"),
+            SyncProvider::NavopCloud
+        );
+        // 新值序列化/反序列化往返
+        let text = serde_json::to_string(&SyncProvider::NavopCloud).expect("序列化");
+        assert_eq!(text, "\"navop_cloud\"");
+        let back: SyncProvider = serde_json::from_str(&text).expect("新值应可解析");
+        assert_eq!(back, SyncProvider::NavopCloud);
+    }
+
+    #[test]
+    fn app_settings_default_uses_navop_cloud_sync_provider() {
         let settings = AppSettings::default();
 
-        assert_eq!(SyncProvider::OnetCloud, settings.sync_provider);
+        assert_eq!(SyncProvider::NavopCloud, settings.sync_provider);
     }
 
     #[test]

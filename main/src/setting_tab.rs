@@ -1211,7 +1211,7 @@ fn sync_provider_item(default: SyncProvider) -> SettingItem {
             |val: SharedString, cx: &mut App| {
                 AppSettings::update_and_save(cx, |settings| {
                     settings.sync_provider = SyncProvider::from_str(&val);
-                    // 历史：切到 OnetCloud 曾强制取消 personal_only 项（钥匙串 /
+                    // 历史：切到 NavopCloud 曾强制取消 personal_only 项（钥匙串 /
                     // LLM 提供商）。两类数据已放开双通道同步，这里不再动勾选。
                 });
             },
@@ -1224,8 +1224,8 @@ fn sync_provider_item(default: SyncProvider) -> SettingItem {
 fn sync_provider_options() -> Vec<(SharedString, SharedString)> {
     vec![
         (
-            SharedString::from(SyncProvider::OnetCloud.as_str()),
-            SharedString::from(t!("Settings.Sync.Provider.onet_cloud").to_string()),
+            SharedString::from(SyncProvider::NavopCloud.as_str()),
+            SharedString::from(t!("Settings.Sync.Provider.navop_cloud").to_string()),
         ),
         (
             SharedString::from(SyncProvider::Personal.as_str()),

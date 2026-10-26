@@ -1383,7 +1383,7 @@ mod tests {
     }
 }
 
-/// LLM 提供商载荷构造函数（供 Personal 与 OnetCloud 两条通道共用）
+/// LLM 提供商载荷构造函数（供 Personal 与 NavopCloud 两条通道共用）
 pub fn llm_provider_plain(
     name: String,
     provider_type: String,

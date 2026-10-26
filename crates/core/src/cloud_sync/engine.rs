@@ -117,7 +117,7 @@ impl SyncEngine {
                 continue;
             }
             // 连接 / 工作空间由各自既有 handler 负责，避免重复注册。
-            // 钥匙串（credential）已放开 OnetCloud 通道：走 ScopeSyncTypeHandler
+            // 钥匙串（credential）已放开 NavopCloud 通道：走 ScopeSyncTypeHandler
             // 通用流程（载荷同样是主密钥端到端加密的 CredentialPlainData）。
             if matches!(
                 descriptor.data_type,

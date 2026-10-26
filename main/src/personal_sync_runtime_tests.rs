@@ -16,8 +16,9 @@ use std::time::Instant;
 use crate::personal_sync_runtime::{
     actions_enabled, build_conflict_sink, forget_personal_conflict, list_personal_conflicts,
     missed_startup_pass, personal_conflict_display_info, personal_sync_cooldown_elapsed,
-    personal_sync_event_from_connection_event, personal_sync_idle_elapsed, resolve_personal_conflict,
-    resolve_personal_conflicts, runtime_status, should_start_drain_after_enqueue,
+    personal_sync_event_from_connection_event, personal_sync_idle_elapsed,
+    resolve_personal_conflict, resolve_personal_conflicts, runtime_status,
+    should_start_drain_after_enqueue,
 };
 use crate::personal_sync_status::PersonalSyncRuntimeStatus;
 
@@ -68,11 +69,11 @@ fn personal_sync_actions_disabled_when_global_sync_is_off(cx: &mut TestAppContex
 }
 
 #[gpui::test]
-fn personal_sync_actions_disabled_when_onet_cloud_provider_selected(cx: &mut TestAppContext) {
+fn personal_sync_actions_disabled_when_navop_cloud_provider_selected(cx: &mut TestAppContext) {
     let temp = tempfile::tempdir().expect("tempdir");
     cx.update(|cx| {
         let mut settings = AppSettings::default();
-        settings.sync_provider = SyncProvider::OnetCloud;
+        settings.sync_provider = SyncProvider::NavopCloud;
         settings.personal_sync.backend = PersonalSyncBackendKind::Folder;
         settings.personal_sync.path = temp.path().to_string_lossy().to_string();
         cx.set_global(settings);

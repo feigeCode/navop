@@ -7,7 +7,7 @@ impl HomePage {
     pub(super) fn handle_sync_click(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !AppSettings::global(cx).sync_enabled {
             self.show_sync_disabled_dialog(window, cx);
-        } else if sync_route(cx) == HomeSyncRoute::OnetCloud
+        } else if sync_route(cx) == HomeSyncRoute::NavopCloud
             && !is_feature_enabled(Feature::CloudSync, cx)
         {
             show_upgrade_dialog(window, cx);

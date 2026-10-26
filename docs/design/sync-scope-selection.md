@@ -14,7 +14,7 @@
 
 | 通道 | 入口 | 传输/存储 | 计划算法 | 冲突能力 |
 |---|---|---|---|---|
-| **Navop 云同步（OnetCloud）** | `crates/core/src/cloud_sync/engine.rs` + `supabase.rs` | Supabase `sync_data` 表，按 `data_type` 过滤拉取 | `generic_sync.rs::calculate_sync_plan`，**仅比较 `updated_at`，无冲突检测** | `sync_conflict_dialog.rs` 即时二选一，**无挂起机制** |
+| **Navop 云同步（NavopCloud）** | `crates/core/src/cloud_sync/engine.rs` + `supabase.rs` | Supabase `sync_data` 表，按 `data_type` 过滤拉取 | `generic_sync.rs::calculate_sync_plan`，**仅比较 `updated_at`，无冲突检测** | `sync_conflict_dialog.rs` 即时二选一，**无挂起机制** |
 | **Personal 云同步** | `crates/core/src/cloud_sync/personal/` | 本地目录 / Git / WebDAV，包布局 `.onetcli-sync/records/<data_type>/<id>.json` + `tombstones/` | `planner.rs::PersonalSyncPlanner`，**checksum + updated_at + last_synced_at 三元组** | 有：`LocalDeletedRemoteModified` / `BothModified` 挂起到 `personal_sync_conflicts` 表，UI 在 `main/src/personal_sync_conflicts.rs` |
 
 两条通道**共用同一套加密信封**（`CloudSyncData` + `CloudSyncService::encrypt_blob/decrypt_blob`），这是本次扩展能低成本复用的最大前提。
@@ -24,13 +24,13 @@
 ```rust
 // crates/core/src/cloud_sync/models.rs:238-242
 pub mod data_type {
-    pub const CONNECTION: &str = "connection";   // OnetCloud + Personal
+    pub const CONNECTION: &str = "connection";   // NavopCloud + Personal
     pub const CREDENTIAL: &str = "credential";   // 仅 Personal
-    pub const WORKSPACE:  &str = "workspace";    // OnetCloud + Personal
+    pub const WORKSPACE:  &str = "workspace";    // NavopCloud + Personal
 }
 ```
 
-- OnetCloud 注册点：`engine.rs:100-108`（`WorkspaceSyncType` + `ConnectionSyncHandler`）
+- NavopCloud 注册点：`engine.rs:100-108`（`WorkspaceSyncType` + `ConnectionSyncHandler`）
 - Personal 分派点：`personal/local_source.rs`，靠 `local_id` 前缀（`connection:` / `credential:` / `workspace:`）在 `list_items` / `export_item` / `apply_remote` / `mark_synced` / `delete_item` 五个方法里分支
 
 ### 0.3 现有可复用的既有设施
@@ -40,11 +40,11 @@ pub mod data_type {
 | 统一信封 `CloudSyncData`（id/owner_id/team_id/data_type/encrypted_data/key_version/checksum/version/updated_at/deleted_at） | `cloud_sync/models.rs:206-231` | ✅ 直接复用，不加字段 |
 | 加密 `encrypt_blob(plaintext, team_id)` → AES-256-GCM，checksum = SHA256(明文) | `cloud_sync/service.rs:311-336` | ✅ 直接复用 |
 | 变更检测 checksum | `service.rs:331` | ✅ 直接复用 |
-| OnetCloud 类型抽象 `SyncTypeHandler` / `SyncableItem` | `cloud_sync/sync_type.rs` | ✅ 每个新 Item 类型实现一个 |
+| NavopCloud 类型抽象 `SyncTypeHandler` / `SyncableItem` | `cloud_sync/sync_type.rs` | ✅ 每个新 Item 类型实现一个 |
 | 操作队列 + 失败重试（按 `queue_key` 持久化） | `cloud_sync/queue.rs` | ✅ 每类型分配一个 key |
 | Personal 计划器 + 墓碑 | `personal/planner.rs`、`file_format.rs` | ✅ 直接复用 |
 | 待删除列表 `PendingCloudDeletionRepository` | `storage/repository.rs:883` | ⚠️ 目前只支持 `connection`/`workspace` 两种 entity_type，**需扩展** |
-| 冲突挂起 + 解决 UI | `personal/conflict_sink.rs`、`main/src/personal_sync_conflicts.rs` | ⚠️ 仅 Personal 有；OnetCloud 侧无 |
+| 冲突挂起 + 解决 UI | `personal/conflict_sink.rs`、`main/src/personal_sync_conflicts.rs` | ⚠️ 仅 Personal 有；NavopCloud 侧无 |
 
 ### 0.4 待接入数据类型的现状盘点
 
@@ -101,7 +101,7 @@ CREATE INDEX idx_sync_item_state_cloud ON sync_item_state (data_type, cloud_id);
 **收益**
 - 不污染业务表，`quick_commands` / `sftp_favorite_paths` / `llm_providers` **零 `ALTER TABLE`**
 - 为所有新增类型（含没有 `updated_at` 的设置类）统一提供 `(checksum, content_ts, last_synced_at)` 三元组，直接满足 `PersonalSyncPlanner` 的输入契约
-- 两条通道共用，避免 OnetCloud 与 Personal 各写一套基线
+- 两条通道共用，避免 NavopCloud 与 Personal 各写一套基线
 - `local_key` 是字符串，天然容纳文件系统类型（Uuid / 相对路径）
 
 **代价与应对**
@@ -229,7 +229,7 @@ pub struct SyncScopeSettings {
 ```rust
 impl SyncScopeSettings {
     /// 按当前同步方式计算"实际生效"的勾选集合：
-    /// provider == OnetCloud 时，personal_only 项一律视为 false。
+    /// provider == NavopCloud 时，personal_only 项一律视为 false。
     pub fn effective(&self, provider: SyncProvider) -> HashSet<SyncScopeKey> {
         SYNC_SCOPE_DESCRIPTORS.iter()
             .filter(|d| !d.personal_only || provider == SyncProvider::Personal)
@@ -238,7 +238,7 @@ impl SyncScopeSettings {
             .collect()
     }
 
-    /// 切到 OnetCloud 时把 personal_only 项写回 false 并落盘（保证"取消勾选"是真的持久化，
+    /// 切到 NavopCloud 时把 personal_only 项写回 false 并落盘（保证"取消勾选"是真的持久化，
     /// 而不只是 UI 上置灰 —— 否则用户切回 Personal 时会看到幽灵勾选）。
     pub fn force_disable_personal_only(&mut self) { /* ... */ }
 }
@@ -296,7 +296,7 @@ SettingItem::new(
 同步数据范围
   ☑ 连接配置          [置灰·不可取消]   上次同步 5 分钟前
   ☑ 工作空间          [置灰·不可取消]   上次同步 5 分钟前
-  ☑ 钥匙串条目        [Personal 可选 / OnetCloud 置灰取消]   ⚠ 同步失败：主密钥未解锁
+  ☑ 钥匙串条目        [Personal 可选 / NavopCloud 置灰取消]   ⚠ 同步失败：主密钥未解锁
   ☐ 笔记                               未同步
   ☐ 已保存的 SQL                       未同步
   ☐ 已保存的快捷命令                    未同步
@@ -318,14 +318,14 @@ pub enum LockMode {
     /// 始终启用且不可取消（连接 / 工作空间）：云同步的核心价值就在这两项，
     /// 允许取消会让"同步已开启但没有东西在同步"，是无意义的状态。
     AlwaysOn,
-    /// 仅 Personal 可用；OnetCloud 下强制取消 + 置灰（钥匙串 / LLM 提供商）
+    /// 仅 Personal 可用；NavopCloud 下强制取消 + 置灰（钥匙串 / LLM 提供商）
     PersonalOnly,
     /// 正常可勾选
     Optional,
 }
 ```
 
-> ⚠️ **需要你确认的一处理解偏差**：Q12 里"默认勾选且置灰的默认同步项"，我理解为 **连接 / 工作空间 = 始终启用、置灰不可取消**，而**钥匙串保持可勾选**（Personal 下可由用户关掉，OnetCloud 下按你最初提的交互要求强制取消 + 置灰）。
+> ⚠️ **需要你确认的一处理解偏差**：Q12 里"默认勾选且置灰的默认同步项"，我理解为 **连接 / 工作空间 = 始终启用、置灰不可取消**，而**钥匙串保持可勾选**（Personal 下可由用户关掉，NavopCloud 下按你最初提的交互要求强制取消 + 置灰）。
 > 若你的原意是"钥匙串也始终置灰不可取消"，或反过来"连接/工作空间也允许取消"，请指出 —— 这只改 `LockMode` 一行常量，成本很低。
 
 ### 2.6 每行状态展示（Q12）
@@ -514,7 +514,7 @@ for each enabled descriptor:
 | 双方都变 | `conflicts.push(BothModified)` |
 | 本地无 cloud_id | `to_upload` |
 
-### 4.2 OnetCloud 侧接入
+### 4.2 NavopCloud 侧接入
 
 新增类型各实现一个 `SyncTypeHandler`（`sync_type.rs:76-206`），通过 `engine.register_type()` 或改 `engine.rs:100-108` 的 handlers 数组注册。
 
@@ -529,7 +529,7 @@ fn compare(&self, local: &Self::Item, cloud: &CloudSyncData) -> SyncDirection {
 }
 ```
 
-或者更省事的做法：**让 OnetCloud 侧也直接复用 `PersonalSyncPlanner` 的判据**（它更完善，有冲突检测）。这是更彻底的方案但属于引擎重构，本方案**先只做"新类型能拿到正确基线"**，把"统一两条通道的计划算法"列为后续项（见 Q8）。
+或者更省事的做法：**让 NavopCloud 侧也直接复用 `PersonalSyncPlanner` 的判据**（它更完善，有冲突检测）。这是更彻底的方案但属于引擎重构，本方案**先只做"新类型能拿到正确基线"**，把"统一两条通道的计划算法"列为后续项（见 Q8）。
 
 每个新类型分配独立 `queue_key`（如 `"sync:quick_command"`），自动获得 `SyncOperationQueue` 的失败重试与持久化（`queue.rs`）。
 
@@ -556,7 +556,7 @@ fn compare(&self, local: &Self::Item, cloud: &CloudSyncData) -> SyncDirection {
 
 **(a) 逐条 Item 类型（快捷命令 / SFTP 收藏 / LLM 提供商 / 已保存 SQL）**
 - 复用 `BothModified` 冲突 → Personal 侧挂起到冲突表，`main/src/personal_sync_conflicts.rs` 让用户选 `UseCloud` / `UseLocal` / `KeepBoth`
-- OnetCloud 侧无挂起机制，走 `sync_conflict_dialog.rs` 即时二选一（现状行为，本方案不扩展）
+- NavopCloud 侧无挂起机制，走 `sync_conflict_dialog.rs` 即时二选一（现状行为，本方案不扩展）
 
 **(b) Singleton 设置类型 —— Q8 已定：做「字段级三方合并」**
 
@@ -601,7 +601,7 @@ remote = 云端解密出的 payload
 | 通道 | 机制 | 需改动 |
 |---|---|---|
 | Personal | `tombstones/<data_type>/<id>.json` + `apply_remote_tombstones`（`worker.rs:302`） | 新类型自动可用（只要 `delete_item` 实现了）；但要注意 `LocalDeletedRemoteModified` 基线从 state 表取 |
-| OnetCloud | `pending_cloud_deletions` 表 + `deleted_at` 软删除 | `PendingCloudDeletionRepository` **当前只支持 `connection` / `workspace` 两种 entity_type**（`sync_type.rs:180-185` 的 if/else），需扩展为通用的 `entity_type` 过滤 |
+| NavopCloud | `pending_cloud_deletions` 表 + `deleted_at` 软删除 | `PendingCloudDeletionRepository` **当前只支持 `connection` / `workspace` 两种 entity_type**（`sync_type.rs:180-185` 的 if/else），需扩展为通用的 `entity_type` 过滤 |
 
 **SQLite 类型的删除难题**：`quick_commands` / `sftp_favorite_paths` / `llm_providers` 都是物理删除，删完就查不到 `cloud_id` 了。
 **解法**：删除业务行时，先读 state 表拿到 `cloud_id`，写入 `pending_cloud_deletions`，**再**删业务行（同一事务）。state 表那一行延迟到云端删除确认后再 GC。
@@ -610,7 +610,7 @@ remote = 云端解密出的 payload
 
 在 `list_local` 之前短路。两条通道各加一层：
 
-- OnetCloud：`SyncEngine` 的 handlers 遍历处，或 `generic_sync` 开头 —— 若 `!scope.effective(provider).contains(descriptor.key)` 直接返回空 `SyncResult`
+- NavopCloud：`SyncEngine` 的 handlers 遍历处，或 `generic_sync` 开头 —— 若 `!scope.effective(provider).contains(descriptor.key)` 直接返回空 `SyncResult`
 - Personal：`PersonalSyncLocalRepositorySource::list_items` 里按 descriptor 过滤；且 `apply_remote` 遇到未勾选的 `data_type` 直接 `Ok(())` 跳过（**不是报错**）
 
 ⚠️ 注意区分「未勾选」与「未知类型」：
@@ -638,19 +638,19 @@ remote = 云端解密出的 payload
 | 类型 | 默认 | 理由 |
 |---|---|---|
 | 连接 / 工作空间 | **开**（且置灰不可取消） | 存量用户升级后**绝不能掉数据**。关掉会导致"升级后不再同步已有类型"，是最危险的回归 |
-| 钥匙串 | **开**（Personal 下可取消；OnetCloud 下强制取消 + 置灰） | 同左 |
+| 钥匙串 | **开**（Personal 下可取消；NavopCloud 下强制取消 + 置灰） | 同左 |
 | 新增 11 项 | **关**（**两个通道都关**） | ① 用户没有预期，突然上传笔记 / SQL / LLM api-key 属于隐私意外；② **仅 Personal 通道**：见 R2，旧版本客户端遇到新 `data_type` 会让**整轮**同步失败；③ 保守起步、可逐步放开 |
 
 **Personal 下首次开启的确认弹窗**（Q1 决策的落地）：
 
 - 触发条件：`sync_provider == Personal` 且该类型此前从未开启过（用 `SyncScopeSettings` 里一个 `ever_enabled: HashSet<SyncScopeKey>` 或按位标记记录）
 - 弹窗内容：「开启『<类型名>』同步后，本机与其他设备都需要升级到 vX.Y 以上才能正常同步。未升级的设备会遇到同步失败。是否继续？」
-- OnetCloud 下**不弹**（该通道不存在 R2，见下方澄清）
+- NavopCloud 下**不弹**（该通道不存在 R2，见下方澄清）
 - 用户勾选「不再提示」后写进 `AppSettings`，后续开启同类项不再弹
 
 **关于 R2 的适用范围（重要澄清）**：
 
-- **OnetCloud 通道：新类型默认开也是安全的**。`generic_sync.rs:45` 是 `list_sync_data(Some(handler.data_type()), ...)` —— **按类型过滤拉取**。旧版只会请求 `connection` / `workspace`，服务端不会返回新类型记录，旧版**根本感知不到**新类型的存在，原有同步完全不受影响。你的直觉在这条通道上是对的。
+- **NavopCloud 通道：新类型默认开也是安全的**。`generic_sync.rs:45` 是 `list_sync_data(Some(handler.data_type()), ...)` —— **按类型过滤拉取**。旧版只会请求 `connection` / `workspace`，服务端不会返回新类型记录，旧版**根本感知不到**新类型的存在，原有同步完全不受影响。你的直觉在这条通道上是对的。
 - **Personal 通道：会出现"连原有数据一起挂"**。原因是它不做类型过滤，失败链路是：
 
   ```
@@ -669,7 +669,7 @@ remote = 云端解密出的 payload
 
 - **无法在旧版侧修复**：旧版已经发布，只能靠"默认不开"避免制造这种记录。可选的改善（**不能解决问题，只改善可诊断性**）：把 manifest 的 `schema_version` 在启用新类型时升到 2，旧版的 `PersonalSyncManifest::validate()`（`personal/models.rs:18-26`）会返回 `SchemaUnsupported`，给出"同步包版本过高"的清晰提示而不是莫名其妙的 Parse error —— 但结果**仍然是同步失败**，所以这只是把"静默的半吊子失败"变成"明确的失败"，是否要做见 Q1。
 
-**首次开启新类型时的提示**：因为 R2 只作用于 Personal 通道，提示应**按当前同步方式动态显示** —— 仅当 `sync_provider == Personal` 时才提示"开启后，未升级到本版本的客户端将无法完成同步"；OnetCloud 下不提示。
+**首次开启新类型时的提示**：因为 R2 只作用于 Personal 通道，提示应**按当前同步方式动态显示** —— 仅当 `sync_provider == Personal` 时才提示"开启后，未升级到本版本的客户端将无法完成同步"；NavopCloud 下不提示。
 
 ### 5.2 载荷向前兼容
 
@@ -679,7 +679,7 @@ remote = 云端解密出的 payload
 
 ### 5.3 降级兼容
 
-**仅 Personal 通道**（OnetCloud 按类型拉取，不存在此问题）：
+**仅 Personal 通道**（NavopCloud 按类型拉取，不存在此问题）：
 
 用户从新版退回旧版、或同一同步包上有未升级的设备时：
 - 旧版不认识新类型 → 全量拉取会拿到新类型记录 → 整轮报错（R2，链路见 5.2）
@@ -700,7 +700,7 @@ remote = 云端解密出的 payload
 | `list_local` | 14 个类型各扫一次（6 个 Singleton 只是读 `AppSettings` 序列化） | 小，但**必须缓存**：Singleton 的 checksum 只在 `AppSettings::update_and_save` 时变，可用 dirty 标记避免每轮重算 |
 | state 表读取 | 一次全表读（几百行） | 可忽略 |
 | 加密/解密 | 每条记录一次 AES-GCM | 与记录数线性相关，见 6.2 |
-| 网络 | OnetCloud 每记录 1 次 REST；Personal WebDAV 每记录 1 次 PUT | **主要瓶颈** |
+| 网络 | NavopCloud 每记录 1 次 REST；Personal WebDAV 每记录 1 次 PUT | **主要瓶颈** |
 
 ### 6.2 笔记是唯一可能失控的类型（Q4 已定：每篇一条记录、单篇上限 1 MB、Git 后端也同步）
 
@@ -739,7 +739,7 @@ remote = 云端解密出的 payload
 
 | 通道 | 机制 | 新类型 |
 |---|---|---|
-| OnetCloud | `SyncOperationQueue`（按 `queue_key` 持久化 + `retry_failed()` + `mark_failed`） | 分配新 `queue_key` 即可自动获得 |
+| NavopCloud | `SyncOperationQueue`（按 `queue_key` 持久化 + `retry_failed()` + `mark_failed`） | 分配新 `queue_key` 即可自动获得 |
 | Personal | `personal_sync_retry_queue` 表 + `SyncStoreHealth::PausedAfterRepeatedFailures` | 自动获得 |
 
 `generic_sync.rs:177-330` 的循环已经是"逐条 dequeue + 单条失败 `mark_failed` 不阻断整轮"，新类型沿用即可。
@@ -802,10 +802,10 @@ Q11 明确：**主密钥未设置 / 未解锁时，无法加密 → 无法同步
 - checksum 相等 → `to_mark_synced`（**这条是 Singleton 设置类不需要 `updated_at` 的依据，必须覆盖**）
 - 仅本地变 → `to_update_cloud`；仅远端变 → `to_update_local`；双边变 → `BothModified`
 - 未勾选类型不出现在任何计划分支
-- `personal_only` 类型在 OnetCloud provider 下被剔除
+- `personal_only` 类型在 NavopCloud provider 下被剔除
 
 **Scope 配置层**：
-- `SyncScopeSettings::effective(OnetCloud)` 不含 `credential` / `llm_provider`
+- `SyncScopeSettings::effective(NavopCloud)` 不含 `credential` / `llm_provider`
 - `force_disable_personal_only()` 幂等
 - `schema_version = 0` 的旧 settings.json 反序列化 → 默认值正确（连接/工作空间/钥匙串 = true，其余 = false）
 - 缺失部分字段的 JSON → `#[serde(default)]` 兜底
@@ -851,14 +851,14 @@ Q11 明确：**主密钥未设置 / 未解锁时，无法加密 → 无法同步
 4. A 机改主题、B 机改字号（设置类）→ 双向同步后**两者都保留**（**Q8 字段级三方合并**的核心验收）
 5. A 机改主题、B 机改主题为不同值 → 弹出冲突、列出冲突字段与两边的值 → 选一边 → 结果正确
 6. 取消勾选「笔记」→ A 机改笔记 → B 机不变 → 重新勾选 → **不产生重复**（Q2 核心验收）
-7. 切到 OnetCloud → 钥匙串 / LLM 提供商置灰且已被取消勾选 → 切回 Personal → 恢复可选（勾选状态为 false，不复活）
+7. 切到 NavopCloud → 钥匙串 / LLM 提供商置灰且已被取消勾选 → 切回 Personal → 恢复可选（勾选状态为 false，不复活）
 8. Personal 三种后端（Folder / Git / WebDAV）各跑一遍 1-6
 9. 断网 / WebDAV 401 / 主密钥错误 三种失败路径的提示与恢复
 10. **主密钥未解锁**（Q11）：顶部提示 + 每行显示「未同步：主密钥未解锁」→ **确认连接/工作空间也没有同步** → 解锁后自动触发一次 FullScan
 11. **Git + 200 篇笔记首轮同步**（Q4 / R11 / R13）：记录耗时、commit 体积、是否触发锁 TTL 过期
 12. 单篇 > 1 MB 的笔记 → 被跳过 + 状态列显示"单篇超过 1 MB" + **不重试**
 13. **状态列回显**（Q12）：同步成功后每行的"上次同步时间"更新；制造一次失败后该行显示 `⚠ <摘要>`，hover 能看到条目名
-14. **Personal 下首次开启确认弹窗**（Q1）：首次开启弹出且文案正确 → 勾选"不再提示"后再开启其他类型不弹 → OnetCloud 下不弹
+14. **Personal 下首次开启确认弹窗**（Q1）：首次开启弹出且文案正确 → 勾选"不再提示"后再开启其他类型不弹 → NavopCloud 下不弹
 
 ### 8.5 Review 检查项
 
@@ -899,7 +899,7 @@ Q11 明确：**主密钥未设置 / 未解锁时，无法加密 → 无法同步
 | ID | 级别 | 风险 | 说明 | 缓解 |
 |---|---|---|---|---|
 | **R1** | **P0** | **快捷命令内置默认污染** | `20260720000001_default_quick_commands.sql` 把 30 条内置命令直接 INSERT 进业务表且**无 `is_builtin` 列**。整表同步会让每台设备把各自的默认副本推上去再拉下来 → **"同步一次多 30 条"** 的指数级重复 | 必须先加 `is_builtin` 列并回填，只同步 `is_builtin = 0` 的行。回填规则复用现有 SQL 里的 `LOWER(TRIM(command))` 比对逻辑 |
-| **R2** | **P0（仅 Personal 通道）** | **旧客户端遇到未知 `data_type` 会整轮失败** | **只影响 Personal 通道**：`worker.rs:222` 是 `list_records(None, None)` **全量拉取**（目录/Git/WebDAV 三后端都不做类型白名单过滤），旧版会拉到新类型记录 → `planner.rs:98-107` 无条件进 `to_download` → `worker.rs:433-438` 的 `apply_remote` 用 `?` → `local_source.rs:385-388` 对未知类型返回 `Err(Parse)` → **整轮 pass 失败**。连带：`apply_downloads` 循环中断（后续下载全跳过，含别的新增连接）、`apply_synced_marks` 与 `apply_conflicts` 不执行（`last_synced_at` 不更新、新冲突不挂起）、`health_from_error` 把 `Parse` 落到 `_` 分支 → UI 显示"多次失败后已暂停"。<br>**OnetCloud 通道不受影响**：`generic_sync.rs:45` 是 `list_sync_data(Some(data_type))` **按类型过滤拉取**，旧版只会请求 connection/workspace，根本看不到新类型，原有同步照常 | ① Personal 通道新类型默认全关 + 首次开启时提示；② 把未知类型改为 warning + 跳过（**对已发布旧版无效**，只对未来版本间兼容有价值）；③ OnetCloud 通道可以放心默认开 |
+| **R2** | **P0（仅 Personal 通道）** | **旧客户端遇到未知 `data_type` 会整轮失败** | **只影响 Personal 通道**：`worker.rs:222` 是 `list_records(None, None)` **全量拉取**（目录/Git/WebDAV 三后端都不做类型白名单过滤），旧版会拉到新类型记录 → `planner.rs:98-107` 无条件进 `to_download` → `worker.rs:433-438` 的 `apply_remote` 用 `?` → `local_source.rs:385-388` 对未知类型返回 `Err(Parse)` → **整轮 pass 失败**。连带：`apply_downloads` 循环中断（后续下载全跳过，含别的新增连接）、`apply_synced_marks` 与 `apply_conflicts` 不执行（`last_synced_at` 不更新、新冲突不挂起）、`health_from_error` 把 `Parse` 落到 `_` 分支 → UI 显示"多次失败后已暂停"。<br>**NavopCloud 通道不受影响**：`generic_sync.rs:45` 是 `list_sync_data(Some(data_type))` **按类型过滤拉取**，旧版只会请求 connection/workspace，根本看不到新类型，原有同步照常 | ① Personal 通道新类型默认全关 + 首次开启时提示；② 把未知类型改为 warning + 跳过（**对已发布旧版无效**，只对未来版本间兼容有价值）；③ NavopCloud 通道可以放心默认开 |
 | **R3** | P1 | **主密钥轮换可能不覆盖新类型** | 若轮换入口是按 `data_type` 分别拉取而非全量，新类型轮换后会永久解密失败 | 实现前先确认轮换入口是 `data_type = None`；若不是，补齐类型列表。**必须验证** |
 | **R4** | P1 | **笔记 `updated_at` 不随正文更新** | `document_index.rs` 的 `updated_at` 只在新建/重命名时刷新，改正文不刷新 → 改了内容检测不到 | 笔记同步改用「正文 checksum」而非 `updated_at` 作为变更判据（走 D2 的 state 表已有 content/checksum，天然满足）；或给笔记加落盘钩子刷新 `updated_at` |
 | **R5** | P1 | **SFTP 收藏 `connection_key` 是设备本地键** | 默认 `local:{id}`，本地整数 ID 在目标设备无意义 → 跨设备错绑到同 ID 的其他连接 | 转 `connection_cloud_id`；查不到则跳过该条上传 |
@@ -907,7 +907,7 @@ Q11 明确：**主密钥未设置 / 未解锁时，无法加密 → 无法同步
 | **R7** | P1 | **同步范围配置自身被同步 → 回环** | 若 `SyncScopeSettings` 落入"通用设置"同步白名单，A 机的勾选会覆盖 B 机，且 provider 切换的强制取消逻辑会互相打架 | 白名单**显式排除** `sync_scope`；加单测断言 |
 | **R8** | P1 | **设置同步会带走设备相关的本地偏好** | 通用设置里混着窗口尺寸、UI 缩放、自定义字体路径、终端 profile 路径、启动页等**不该跨设备同步**的项 | 设置类同步必须走**字段白名单**（不是整包序列化 `AppSettings`），逐个字段审定。这是 P3 的主要工作量 |
 | **R9** | P2（**Q10 已定：本次不修**） | **LLM api_key 本地 SQLite 明文存储** | 现状 `llm_providers.api_key` 明文落库（`init.sql:60`）。同步本身会用主密钥加密上传（E2E 安全），但**本地明文问题依旧** | **已知不修，本次不做本地加密**。记录下来，后续单开一项 |
-| **R10** | P2 | **OnetCloud 侧无冲突挂起机制** | Personal 有 `personal_sync_conflicts` 表 + UI，OnetCloud 只有即时二选一弹窗。新类型走 OnetCloud 时冲突体验不一致 | 本方案不扩展 OnetCloud 冲突机制（属引擎重构）；接受体验差异，并在文档说明 |
+| **R10** | P2 | **NavopCloud 侧无冲突挂起机制** | Personal 有 `personal_sync_conflicts` 表 + UI，NavopCloud 只有即时二选一弹窗。新类型走 NavopCloud 时冲突体验不一致 | 本方案不扩展 NavopCloud 冲突机制（属引擎重构）；接受体验差异，并在文档说明 |
 | **R11** | **P1（升级：Q4 决定 Git 也同步笔记）** | **Git 后端文件数膨胀** | 每篇笔记 = `records/note/<uuid>.json`，数百篇 = 数百个文件，每次 commit 变更集很大；`git_store.rs` 目前无分批 | ① 正文与元数据同文件（不拆）；② 单轮 commit 记录数上限，超出分批 commit；③ 大批量合并为单次 push。**必须做 Git + 200 篇笔记的专项实测**（见 8.4） |
 | **R12** | P2 | **`PendingCloudDeletionRepository` 只支持两种 entity_type** | `sync_type.rs:180-185` 是硬编码 if/else | 扩展为通用 `entity_type` 过滤 |
 | **R13** | **P1（升级：Git 同步笔记后更可能触发）** | **Personal 锁 TTL vs pass 变长** | 新类型（尤其笔记）让单轮 pass 显著变长，可能超出现有锁 TTL，导致锁被误判过期、两实例并发写 | 实现时确认 TTL；长 pass 考虑分类型分批持锁。**Git + 笔记场景下必须实测** |
@@ -923,7 +923,7 @@ Q11 明确：**主密钥未设置 / 未解锁时，无法加密 → 无法同步
 
 | # | 决策 | 落地位置 | 派生影响 |
 |---|---|---|---|
-| **Q1** | **统一默认全关**（两个通道都关）；**Personal 下首次开启弹确认** | 5.1 | OnetCloud 下不弹确认（该通道无 R2）。需要 `ever_enabled` 标记 + "不再提示"开关 |
+| **Q1** | **统一默认全关**（两个通道都关）；**Personal 下首次开启弹确认** | 5.1 | NavopCloud 下不弹确认（该通道无 R2）。需要 `ever_enabled` 标记 + "不再提示"开关 |
 | **Q2** | 取消勾选后**云端数据保留、不删**；重新勾选可恢复 | D3 / 7.4 | state 表不清空 → 重新勾选不重复创建；该类型 pending deletion 停止处理 |
 | **Q3** | 新增类型**一律仅个人**（`team_id = None`）；团队仍只同步连接/工作空间 | 3.1 | 新类型全部走主密钥分支；团队密钥路径不涉及，回归面缩小 |
 | **Q4** | 笔记**每篇文档一条记录**；单篇上限 **1 MB**；**Git 后端也同步** | 6.2 / 6.3 | 原"Git 先不同步"建议作废 → **R11 从 P2 升到 P1**，必须做 Git + 200 篇笔记专项实测；R13 锁 TTL 同样升级 |
@@ -943,7 +943,7 @@ Q11 明确：**主密钥未设置 / 未解锁时，无法加密 → 无法同步
 Q12 里"默认勾选且置灰的默认同步项"，我理解为：
 
 - **连接 / 工作空间** = `LockMode::AlwaysOn`（默认勾选、**置灰不可取消**）
-- **钥匙串** = `LockMode::PersonalOnly`（Personal 下可取消；OnetCloud 下强制取消 + 置灰）
+- **钥匙串** = `LockMode::PersonalOnly`（Personal 下可取消；NavopCloud 下强制取消 + 置灰）
 
 若你的原意是"钥匙串也始终置灰不可取消"，或反过来"连接/工作空间也允许取消"，请指出 —— 这只改 `LockMode` 一行常量。
 
@@ -970,9 +970,9 @@ P4  note（含 Git 后端专项实测）
 | 数据类型常量 | `crates/core/src/cloud_sync/models.rs:238-242` |
 | 统一信封 | `crates/core/src/cloud_sync/models.rs:206-231` |
 | 加解密服务 | `crates/core/src/cloud_sync/service.rs:311-336`（blob）、`:436-474`（credential 范式） |
-| OnetCloud 类型抽象 | `crates/core/src/cloud_sync/sync_type.rs:16-206` |
-| OnetCloud 通用流程 | `crates/core/src/cloud_sync/generic_sync.rs` |
-| OnetCloud 注册点 | `crates/core/src/cloud_sync/engine.rs:100-108` |
+| NavopCloud 类型抽象 | `crates/core/src/cloud_sync/sync_type.rs:16-206` |
+| NavopCloud 通用流程 | `crates/core/src/cloud_sync/generic_sync.rs` |
+| NavopCloud 注册点 | `crates/core/src/cloud_sync/engine.rs:100-108` |
 | Personal 计划器 | `crates/core/src/cloud_sync/personal/planner.rs:137-166` |
 | Personal 本地源（分派点） | `crates/core/src/cloud_sync/personal/local_source.rs:18-20, 331-470` |
 | Personal worker（全量拉取点） | `crates/core/src/cloud_sync/personal/worker.rs:222` |

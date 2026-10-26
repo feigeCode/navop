@@ -169,7 +169,7 @@ impl HomePage {
                                 cx,
                             );
                         }
-                        if should_auto_onet_cloud_sync(cx, this.current_user.is_some()) {
+                        if should_auto_navop_cloud_sync(cx, this.current_user.is_some()) {
                             tracing::info!("工作区排序变化，自动触发云同步");
                             this.trigger_sync(cx);
                         }
