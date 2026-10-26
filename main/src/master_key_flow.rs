@@ -123,6 +123,10 @@ pub fn apply_change_master_key(
     crypto::validate_master_key_change(old_key, new_key, new_key)
         .map_err(|error| error.to_string())?;
 
+    // 旧版固定盐安装首次改密码时顺带把 KDF 升到 Argon2id：轮换本来就要把每条
+    // 密文解出来再加密，不必在改完密码后再跑一轮全量重加密。
+    promote_local_kdf(old_key)?;
+
     let storage = cx.global::<GlobalStorageState>().storage.clone();
     let connection = storage.connection();
     let stats = one_core::storage::re_encrypt_secrets(&connection, old_key, new_key)
@@ -144,6 +148,7 @@ pub fn apply_change_master_key(
     }
 
     reseal_webdav_password(old_key, new_key, cx);
+    master_key_meta::set_pending_kdf_upgrade(false);
     let key_version = master_key_meta::bump_key_version();
     let cloud_reencrypt_started =
         start_cloud_reencrypt(old_key, new_key, key_version, notifier, cx);
@@ -155,6 +160,81 @@ pub fn apply_change_master_key(
         key_version,
         cloud_reencrypt_started,
     })
+}
+
+/// 本地验证数据是否仍是旧版固定盐格式
+pub fn local_kdf_upgrade_needed() -> bool {
+    crypto::get_current_verification_data()
+        .is_some_and(|data| crypto::verification_needs_kdf_upgrade(&data))
+}
+
+/// 把本地验证信封切到 Argon2id（先落盘新信封，再激活内存派生规范）
+///
+/// 只负责「信封 + 内存派生密钥」的切换，密文轮换由调用方负责。
+/// 信封落盘后即使进程崩溃，旧密文仍由 legacy 派生兜底解密。
+fn promote_local_kdf(master_key: &str) -> Result<(), String> {
+    if !local_kdf_upgrade_needed() {
+        return Ok(());
+    }
+    let upgraded = crypto::create_upgraded_verification(master_key)
+        .ok_or_else(|| "生成 Argon2id 验证数据失败".to_string())?;
+    let previous = crypto::get_current_verification_data();
+
+    // 先记标记再落盘：留下「信封已切换、密文未轮换」的可恢复状态
+    master_key_meta::set_pending_kdf_upgrade(true);
+    if !crypto::save_verification(&upgraded) {
+        return Err("写入 Argon2id 验证数据失败".to_string());
+    }
+    crypto::activate_kdf_from_verification(&upgraded);
+    if crypto::republish_master_key() {
+        return Ok(());
+    }
+
+    // 内存里没有主密钥（理论上刚解锁时不会发生）：回滚信封，保持状态一致
+    if let Some(previous) = previous {
+        crypto::activate_kdf_from_verification(&previous);
+        let _ = crypto::save_verification(&previous);
+    }
+    master_key_meta::set_pending_kdf_upgrade(false);
+    Err("刷新主密钥派生状态失败".to_string())
+}
+
+/// 解锁后检查并完成 KDF 迁移：SHA-256 + 固定盐 → Argon2id + 随机盐
+///
+/// 顺序：升级并落盘验证信封 → 重加密本地密文 → WebDAV 密码重新封存 →
+/// 清除待办标记 → 版本号递增 → 云端重加密（失败由既有 pending 机制补做）。
+/// 任一步中断，旧密文仍可解，下次解锁凭 `pending_kdf_upgrade` 补做。
+pub fn ensure_kdf_upgraded(
+    notifier: Option<CloudReencryptNotifier>,
+    cx: &mut App,
+) -> Result<bool, String> {
+    if !local_kdf_upgrade_needed() && !master_key_meta::pending_kdf_upgrade() {
+        return Ok(false);
+    }
+    let master_key =
+        crypto::get_raw_master_key().ok_or_else(|| "主密钥未解锁，无法升级 KDF".to_string())?;
+
+    promote_local_kdf(&master_key)?;
+
+    let storage = cx.global::<GlobalStorageState>().storage.clone();
+    let connection = storage.connection();
+    // 旧密文用 legacy 派生兜底解密，新密文一律使用 Argon2id
+    one_core::storage::re_encrypt_secrets(&connection, &master_key, &master_key)
+        .map_err(|error| format!("{error:#}"))?;
+    reseal_webdav_password(&master_key, &master_key, cx);
+    master_key_meta::set_pending_kdf_upgrade(false);
+
+    let key_version = master_key_meta::bump_key_version();
+    start_cloud_reencrypt(&master_key, &master_key, key_version, notifier, cx);
+    tracing::info!("主密钥 KDF 已升级到 Argon2id，本地密文已重加密（版本 {key_version}）");
+    Ok(true)
+}
+
+/// 解锁成功后触发 KDF 迁移；失败只记录日志，不阻塞解锁/首次设置
+pub fn run_kdf_upgrade_after_unlock(cx: &mut App) {
+    if let Err(error) = ensure_kdf_upgraded(None, cx) {
+        tracing::warn!("主密钥 KDF 升级未完成（旧数据仍可读，下次解锁重试）: {error}");
+    }
 }
 
 /// WebDAV 密码在 settings.json 里是用主密钥封存的，主密钥换了就得重新封存

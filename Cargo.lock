@@ -6907,6 +6907,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "keyring"
+version = "3.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eebcc3aff044e5944a8fbaf69eb277d11986064cba30c468730e8b9909fb551c"
+dependencies = [
+ "byteorder",
+ "log",
+ "security-framework 2.11.1",
+ "security-framework 3.7.0",
+ "windows-sys 0.60.2",
+ "zeroize",
+]
+
+[[package]]
 name = "khronos-egl"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7777,7 +7791,7 @@ dependencies = [
 
 [[package]]
 name = "main"
-version = "0.21.1"
+version = "0.21.2"
 dependencies = [
  "agent_runtime",
  "ai_chat_view",
@@ -9342,6 +9356,7 @@ dependencies = [
  "gpui-fast",
  "gpui-pre-util",
  "image",
+ "keyring",
  "llm-connector",
  "notify 7.0.0",
  "objc2 0.6.5",
@@ -10748,7 +10763,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.3",
  "rustls 0.23.45",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
@@ -10786,7 +10801,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "tracing",
  "windows-sys 0.61.2",
 ]

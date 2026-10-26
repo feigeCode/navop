@@ -133,7 +133,11 @@ impl HomePage {
                             crypto::set_master_key(&input_key)
                         };
                         return match result {
-                            Ok(()) => true,
+                            Ok(()) => {
+                                // 旧版固定盐安装：首次设置不会触发，这里保持对称调用
+                                crate::master_key_flow::run_kdf_upgrade_after_unlock(cx);
+                                true
+                            }
                             Err(error) => {
                                 tracing::error!("设置主密钥失败: {error}");
                                 error_msg_ok.update(cx, |msg, cx| {
@@ -151,7 +155,11 @@ impl HomePage {
                         crypto::verify_and_set_master_key(&input_key)
                     };
                     match result {
-                        Ok(()) => true,
+                        Ok(()) => {
+                            // 解锁旧数据后把 KDF 迁移到 Argon2id（后台完成，失败可重试）
+                            crate::master_key_flow::run_kdf_upgrade_after_unlock(cx);
+                            true
+                        }
                         Err(error) => {
                             tracing::error!("解锁主密钥失败: {error}");
                             error_msg_ok.update(cx, |msg, cx| {

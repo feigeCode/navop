@@ -293,6 +293,97 @@ impl PostgresPlugin {
         format!("({length}){}", &suffix[close_paren + 1..])
     }
 
+    /// 字符型列的默认值必须写成字符串字面量。
+    ///
+    /// 跨库结构同步和表设计器可能把 `0`、`CDSS` 这类裸字面量直接交给
+    /// PostgreSQL，而 PostgreSQL 只接受与列类型匹配的默认表达式：
+    /// `varchar(1) DEFAULT 1` 会以 `default expression is of type integer`
+    /// 拒绝整条建表语句，随后针对该表的注释语句也会因为表不存在而全部失败。
+    /// 这里按列类型给裸字面量补上引号；已是合法表达式（引号字面量、函数调用、
+    /// 类型转换、`CURRENT_*` 关键字）的默认值原样保留。
+    fn executable_default_for_type(data_type: &str, default: &str) -> String {
+        let trimmed = default.trim();
+        if trimmed.is_empty() || !Self::is_bare_default_literal(trimmed) {
+            return default.to_string();
+        }
+        if !Self::requires_quoted_default(data_type, trimmed) {
+            return default.to_string();
+        }
+        format!("'{}'", trimmed.replace('\'', "''"))
+    }
+
+    /// 判断默认值是否为需要补引号的裸字面量（裸数值或裸标识符）。
+    fn is_bare_default_literal(default: &str) -> bool {
+        if Self::is_quoted_default_literal(default)
+            || default.contains('(')
+            || default.contains("::")
+        {
+            return false;
+        }
+        let upper = default.to_ascii_uppercase();
+        !matches!(
+            upper.as_str(),
+            "NULL"
+                | "TRUE"
+                | "FALSE"
+                | "CURRENT_TIMESTAMP"
+                | "CURRENT_DATE"
+                | "CURRENT_TIME"
+                | "LOCALTIMESTAMP"
+                | "LOCALTIME"
+                | "CURRENT_USER"
+                | "SESSION_USER"
+                | "USER"
+                | "CURRENT_ROLE"
+                | "CURRENT_SCHEMA"
+                | "CURRENT_CATALOG"
+        )
+    }
+
+    fn is_quoted_default_literal(default: &str) -> bool {
+        (default.starts_with('\'') && default.ends_with('\''))
+            || (default.starts_with('"') && default.ends_with('"'))
+            || default.starts_with("$$")
+            || ["b'", "B'", "x'", "X'", "e'", "E'", "u&'", "U&'"]
+                .iter()
+                .any(|prefix| default.starts_with(prefix))
+    }
+
+    /// 该列类型的裸默认值是否需要改写成字符串字面量。
+    fn requires_quoted_default(data_type: &str, default: &str) -> bool {
+        let base_type = Self::canonical_base_type_name(data_type);
+        if matches!(
+            base_type.as_str(),
+            "varchar"
+                | "char"
+                | "bpchar"
+                | "text"
+                | "name"
+                | "citext"
+                | "uuid"
+                | "json"
+                | "jsonb"
+                | "xml"
+        ) {
+            return true;
+        }
+        // MySQL 的 `tinyint(1)` / `bit(1)` 会映射成 `BOOLEAN`，
+        // 源库默认值是 `1`/`0`；PostgreSQL 的 `DEFAULT 1` 是 integer 表达式，
+        // 同样会被拒绝（`TRUE`/`FALSE` 已在裸字面量判定里放行）。
+        matches!(base_type.as_str(), "bool" | "boolean")
+            && (default.eq_ignore_ascii_case("1") || default.eq_ignore_ascii_case("0"))
+    }
+
+    /// 去掉长度/精度/数组后缀后的基础类型名（小写）。
+    fn canonical_base_type_name(data_type: &str) -> String {
+        let normalized = Self::normalize_type_name(data_type);
+        normalized
+            .split(['(', '[', ' '])
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+    }
+
     async fn get_routine_definition(
         &self,
         connection: &dyn DbConnection,
@@ -2918,7 +3009,10 @@ impl DatabasePlugin for PostgresPlugin {
         }
 
         if let Some(default) = &column.default_value {
-            def.push_str(&format!(" DEFAULT {}", default));
+            def.push_str(&format!(
+                " DEFAULT {}",
+                Self::executable_default_for_type(&column.data_type, default)
+            ));
         }
 
         if column.is_primary_key {
@@ -3378,7 +3472,10 @@ ORDER BY rolname;"#
 
         if let Some(default) = &col.default_value {
             if !default.is_empty() {
-                def.push_str(&format!(" DEFAULT {}", default));
+                def.push_str(&format!(
+                    " DEFAULT {}",
+                    Self::executable_default_for_type(&col.data_type, default)
+                ));
             }
         }
 
@@ -3532,7 +3629,9 @@ ORDER BY rolname;"#
                         if let Some(default) = &col.default_value {
                             statements.push(format!(
                                 "ALTER TABLE {} ALTER COLUMN {} SET DEFAULT {};",
-                                table_name, col_name, default
+                                table_name,
+                                col_name,
+                                Self::executable_default_for_type(&col.data_type, default)
                             ));
                         } else {
                             statements.push(format!(
@@ -5374,6 +5473,94 @@ mod tests {
     }
 
     #[test]
+    fn test_build_column_def_quotes_numeric_default_for_text_column() {
+        // MySQL 侧 varchar 列的默认值是裸数值（information_schema 返回 `1`），
+        // PostgreSQL 不接受 `varchar(1) DEFAULT 1`，必须补引号。
+        let plugin = create_plugin();
+        let mut col = ColumnDefinition::new("status")
+            .data_type("varchar")
+            .length(1)
+            .default_value("1");
+
+        let def = plugin.build_column_def(&col);
+        assert!(def.contains("DEFAULT '1'"), "unexpected column def: {def}");
+
+        col.default_value = Some("0".to_string());
+        let def = plugin.build_column_def(&col);
+        assert!(def.contains("DEFAULT '0'"), "unexpected column def: {def}");
+    }
+
+    #[test]
+    fn test_build_column_def_quotes_bare_identifier_default_for_text_column() {
+        let plugin = create_plugin();
+        let col = ColumnDefinition::new("source_platform")
+            .data_type("varchar")
+            .length(64)
+            .default_value("CDSS");
+
+        let def = plugin.build_column_def(&col);
+        assert!(
+            def.contains("DEFAULT 'CDSS'"),
+            "unexpected column def: {def}"
+        );
+    }
+
+    #[test]
+    fn test_build_column_def_keeps_expression_defaults_for_text_column() {
+        let plugin = create_plugin();
+        for default in [
+            "'guest'",
+            "''",
+            "now()",
+            "CURRENT_TIMESTAMP",
+            "'{}'::jsonb",
+            "E'\\n'",
+        ] {
+            let col = ColumnDefinition::new("name")
+                .data_type("text")
+                .default_value(default);
+            let def = plugin.build_column_def(&col);
+            assert!(
+                def.contains(&format!("DEFAULT {default}")),
+                "default `{default}` should stay untouched, got: {def}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_build_column_def_keeps_numeric_default_for_numeric_column() {
+        let plugin = create_plugin();
+        let col = ColumnDefinition::new("amount")
+            .data_type("numeric")
+            .default_value("0");
+
+        let def = plugin.build_column_def(&col);
+        assert!(def.contains("DEFAULT 0"), "unexpected column def: {def}");
+        assert!(!def.contains("DEFAULT '0'"));
+    }
+
+    #[test]
+    fn test_build_column_def_quotes_numeric_default_for_boolean_column() {
+        // MySQL 的 tinyint(1)/bit(1) 会映射成 BOOLEAN，源库默认值是裸数值；
+        // PostgreSQL 同样拒绝 `DEFAULT 1`（integer 表达式）。
+        let plugin = create_plugin();
+        let col = ColumnDefinition::new("enabled")
+            .data_type("BOOLEAN")
+            .default_value("1");
+        let def = plugin.build_column_def(&col);
+        assert!(def.contains("DEFAULT '1'"), "unexpected column def: {def}");
+
+        let col = ColumnDefinition::new("enabled")
+            .data_type("BOOLEAN")
+            .default_value("FALSE");
+        let def = plugin.build_column_def(&col);
+        assert!(
+            def.contains("DEFAULT FALSE"),
+            "unexpected column def: {def}"
+        );
+    }
+
+    #[test]
     fn test_build_column_def_serial() {
         let plugin = create_plugin();
         let col = ColumnDefinition::new("id")
@@ -5873,6 +6060,44 @@ mod tests {
         let sql = plugin.build_alter_table_sql(&original, &new);
         assert!(sql.contains("SET NOT NULL"));
         assert!(sql.contains("SET DEFAULT 'guest'"));
+    }
+
+    #[test]
+    fn test_build_alter_table_sql_quotes_bare_default_for_text_column() {
+        let plugin = create_plugin();
+
+        let original = TableDesign {
+            database_name: "test_db".to_string(),
+            table_name: "users".to_string(),
+            columns: vec![
+                ColumnDefinition::new("status")
+                    .data_type("VARCHAR")
+                    .length(1),
+            ],
+            indexes: vec![],
+            foreign_keys: vec![],
+            options: TableOptions::default(),
+        };
+
+        let new = TableDesign {
+            database_name: "test_db".to_string(),
+            table_name: "users".to_string(),
+            columns: vec![
+                ColumnDefinition::new("status")
+                    .data_type("VARCHAR")
+                    .length(1)
+                    .default_value("0"),
+            ],
+            indexes: vec![],
+            foreign_keys: vec![],
+            options: TableOptions::default(),
+        };
+
+        let sql = plugin.build_alter_table_sql(&original, &new);
+        assert!(
+            sql.contains("SET DEFAULT '0';"),
+            "unexpected alter sql: {sql}"
+        );
     }
 
     #[test]

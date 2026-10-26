@@ -131,6 +131,8 @@ impl HomePage {
             master_key_policy.restore_from_storage && crypto::try_restore_master_key();
         if key_restored {
             tracing::info!("已恢复主密钥");
+            // 恢复出的旧版验证信封在这里顺带迁到 Argon2id（失败不阻塞启动）
+            crate::master_key_flow::run_kdf_upgrade_after_unlock(cx);
         } else if master_key_policy.prompt_for_unlock
             || master_key_policy.restore_from_storage && has_repo_password
         {

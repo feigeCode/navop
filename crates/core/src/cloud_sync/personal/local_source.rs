@@ -688,6 +688,13 @@ fn enrich_credential_references(
                         "credential_cloud_id".to_string(),
                         serde_json::Value::String(cloud_id),
                     );
+                    // 跨设备统一的载荷只保留云端引用。本地整数 ID 在
+                    // 每台设备上都不同，留在载荷里会让同一逻辑连接的
+                    // checksum 永不相等，触发持续的假冲突与来回覆盖。
+                    object.insert(
+                        "credential_id".to_string(),
+                        serde_json::Value::Number(0.into()),
+                    );
                 } else {
                     // 不上传仅在源设备有效的整数 ID，避免目标设备误绑定同号条目。
                     object.insert(

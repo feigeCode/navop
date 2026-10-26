@@ -70,7 +70,7 @@ const TEAM_KEYS_SETTINGS_PAGE_INDEX: usize = 6;
 use gpui_component::input::InputEvent;
 pub use one_core::settings::{
     AppSettings, CloseButtonBehavior, CustomFont, DatabaseOpenMode, GlobalCurrentUser,
-    GlobalProxySettings, LOCALE_EN, LOCALE_SYSTEM, LOCALE_ZH_CN, LOCALE_ZH_HK,
+    GlobalProxySettings, LOCALE_EN, LOCALE_SYSTEM, LOCALE_ZH_CN, LOCALE_ZH_HK, MasterKeyStorage,
     PersonalSyncBackendKind, PersonalSyncSettings, ProxyType, SyncProvider,
     effective_locale_for_setting, is_installed_font_family, is_supported_grid_monospace_font,
 };
@@ -357,7 +357,15 @@ pub fn init_settings(cx: &mut App) {
     // 「Failed to parse settings」如果发生在 subscriber 安装之前，会被直接丢掉，
     // 生产上就只剩「设置被还原成默认值」这个结果，永远查不到原因。
     init_tracing(&AppSettings::peek_log_file_path());
-    let settings = AppSettings::load();
+    let mut settings = AppSettings::load();
+    // 没有系统凭据库的平台只提供本机文件：把从别处带来的「系统凭据库」配置归一到
+    // 实际可用的选项，避免设置页下拉框出现一个永远选不中的值。
+    if !one_core::key_storage::system_storage_supported()
+        && settings.master_key_storage == MasterKeyStorage::SystemCredentialStore
+    {
+        settings.master_key_storage = MasterKeyStorage::LocalFile;
+    }
+    one_core::key_storage::set_preferred_backend(settings.master_key_storage);
     // 初始化自动保存配置全局状态
     cx.set_global(AutoSaveConfig::new(
         settings.enable_sql_auto_save,
@@ -434,13 +442,15 @@ fn master_key_setting_enabled(settings: &AppSettings, is_portable: bool) -> bool
 
 fn update_master_key_setting(is_portable: bool, enabled: bool, cx: &mut App) {
     let should_remember = if is_portable { enabled } else { !enabled };
-    let result = if should_remember {
-        crypto::remember_master_key_for_future_startups()
-    } else {
-        crypto::forget_persisted_master_key()
-    };
-    if let Err(error) = result {
-        // 当前没有内存主密钥时仍保留用户选择；下次成功设置或解锁后会再次尝试保存。
+    if should_remember {
+        // 系统凭据库不可用时保存必然失败：不把开关留在「已开启」，让界面如实反映
+        // 「主密钥没有被记住」。旧版固定密钥文件已停用写入，这里不做静默回退。
+        if let Err(error) = crypto::remember_master_key_for_future_startups() {
+            tracing::warn!("保存自动解锁主密钥失败，设置保持关闭: {error}");
+            return;
+        }
+    } else if let Err(error) = crypto::forget_persisted_master_key() {
+        // 删除失败不阻止用户表达意图：下次启动会再试一次
         tracing::warn!("更新自动解锁主密钥失败，设置会在后续主密钥操作时重试: {error}");
     }
 
@@ -451,6 +461,100 @@ fn update_master_key_setting(is_portable: bool, enabled: bool, cx: &mut App) {
             settings.require_master_key_on_startup = enabled;
         }
     });
+}
+
+fn default_master_key_storage() -> MasterKeyStorage {
+    if one_core::key_storage::system_storage_supported() {
+        MasterKeyStorage::SystemCredentialStore
+    } else {
+        MasterKeyStorage::LocalFile
+    }
+}
+
+fn master_key_storage_value(storage: MasterKeyStorage) -> &'static str {
+    match storage {
+        MasterKeyStorage::SystemCredentialStore => "system_credential_store",
+        MasterKeyStorage::LocalFile => "local_file",
+    }
+}
+
+fn master_key_storage_from_value(value: &str) -> MasterKeyStorage {
+    if value == "local_file" {
+        MasterKeyStorage::LocalFile
+    } else {
+        MasterKeyStorage::SystemCredentialStore
+    }
+}
+
+/// 当前平台的系统凭据库名称：macOS 钥匙串 / Windows 凭据管理器 / 通用名称。
+fn system_key_storage_label() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        t!("Settings.General.Startup.master_key_storage_keychain").to_string()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        t!("Settings.General.Startup.master_key_storage_credential_manager").to_string()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        t!("Settings.General.Startup.master_key_storage_system").to_string()
+    }
+}
+
+/// 保存位置下拉选项：支持系统凭据库的平台多一项，其它平台只有本机文件。
+fn master_key_storage_select_options() -> Vec<(SharedString, SharedString)> {
+    let mut options = Vec::new();
+    if one_core::key_storage::system_storage_supported() {
+        options.push((
+            SharedString::from(master_key_storage_value(
+                MasterKeyStorage::SystemCredentialStore,
+            )),
+            SharedString::from(system_key_storage_label()),
+        ));
+    }
+    options.push((
+        SharedString::from(master_key_storage_value(MasterKeyStorage::LocalFile)),
+        t!("Settings.General.Startup.master_key_storage_local").into(),
+    ));
+    options
+}
+
+/// 切换主密钥保存位置，并把已记住的副本搬到新位置
+fn update_master_key_storage(backend: MasterKeyStorage, cx: &mut App) {
+    let settings = AppSettings::current(cx);
+    if settings.master_key_storage == backend {
+        return;
+    }
+
+    let previous_storage = one_core::key_storage::storage_for(settings.master_key_storage);
+    one_core::key_storage::set_preferred_backend(backend);
+    AppSettings::update_and_save(cx, |settings| {
+        settings.master_key_storage = backend;
+    });
+
+    let is_portable = one_core::app_paths::is_portable();
+    let should_remember = if is_portable {
+        settings.portable_remember_master_key
+    } else {
+        !settings.require_master_key_on_startup
+    };
+    if !should_remember {
+        return;
+    }
+
+    // 会话未解锁时没有可搬运的明文密钥，等下次解锁/记住时再迁移，先不删旧副本。
+    if crypto::get_raw_master_key().is_none() {
+        return;
+    }
+    // 先写到新位置，成功后再删除旧副本：迁移失败时旧副本还在，不至于两头落空。
+    if let Err(error) = crypto::remember_master_key_for_future_startups() {
+        tracing::warn!("主密钥迁移到新的保存位置失败，保留旧副本: {error}");
+        return;
+    }
+    if let Err(error) = previous_storage.delete() {
+        tracing::warn!("清理旧保存位置的主密钥副本失败: {error}");
+    }
 }
 
 pub struct SettingsPanel {
@@ -549,12 +653,35 @@ impl SettingsPanel {
         } else {
             t!("Settings.General.Startup.require_master_key").to_string()
         };
-        let master_key_setting_description = if is_portable {
+        let mut master_key_setting_description = if is_portable {
             t!("Settings.General.Startup.remember_portable_master_key_desc").to_string()
         } else {
             t!("Settings.General.Startup.require_master_key_desc").to_string()
         };
+        if !one_core::key_storage::system_storage_supported() {
+            master_key_setting_description = format!(
+                "{master_key_setting_description} {}",
+                t!("Settings.General.Startup.system_key_storage_unavailable")
+            );
+        }
         let default_master_key_setting = master_key_setting_enabled(&default_settings, is_portable);
+        let master_key_storage_description = {
+            let mut description =
+                t!("Settings.General.Startup.master_key_storage_desc").to_string();
+            if !one_core::key_storage::system_storage_supported() {
+                description = format!(
+                    "{description} {}",
+                    t!("Settings.General.Startup.system_key_storage_unavailable")
+                );
+            }
+            if AppSettings::global(cx).master_key_storage == MasterKeyStorage::LocalFile {
+                description = format!(
+                    "{description} {}",
+                    t!("Settings.General.Startup.master_key_storage_local_risk")
+                );
+            }
+            description
+        };
 
         let mut pages = vec![
             SettingPage::new(t!("Settings.General.title"))
@@ -629,6 +756,27 @@ impl SettingsPanel {
                                 .default_value(default_master_key_setting),
                             )
                             .description(master_key_setting_description),
+                            SettingItem::new(
+                                t!("Settings.General.Startup.master_key_storage"),
+                                SettingField::dropdown(
+                                    master_key_storage_select_options(),
+                                    |cx: &App| {
+                                        SharedString::from(master_key_storage_value(
+                                            AppSettings::global(cx).master_key_storage,
+                                        ))
+                                    },
+                                    |value: SharedString, cx: &mut App| {
+                                        update_master_key_storage(
+                                            master_key_storage_from_value(&value),
+                                            cx,
+                                        );
+                                    },
+                                )
+                                .default_value(SharedString::from(
+                                    master_key_storage_value(default_master_key_storage()),
+                                )),
+                            )
+                            .description(master_key_storage_description),
                         ]),
                     SettingGroup::new()
                         .title(t!("Settings.General.FileTransfer.group_title"))
@@ -4099,15 +4247,17 @@ mod tests {
     use super::{
         AppSettings, CustomFont, DATABASE_SHORTCUTS, FontFamilyKind, GlobalProxySettings,
         ProxyType, WINDOW_SHORTCUTS, app_font_options, build_app_http_client,
-        builtin_monospace_font_options, emit_team_key_change_event, is_supported_font_file,
-        master_key_setting_enabled, merge_font_options_with_custom_fonts, monospace_font_options,
-        parse_font_families, personal_sync_backend_options, personal_sync_status_label,
+        builtin_monospace_font_options, default_master_key_storage, emit_team_key_change_event,
+        is_supported_font_file, master_key_setting_enabled, master_key_storage_from_value,
+        master_key_storage_select_options, master_key_storage_value,
+        merge_font_options_with_custom_fonts, monospace_font_options, parse_font_families,
+        personal_sync_backend_options, personal_sync_status_label,
         personal_sync_status_view_model, team_key_refresh_success_message,
         team_key_rotation_inputs_valid,
     };
     use crate::local_terminal_profiles::setting_options as local_terminal_profile_options;
     use crate::personal_sync_status::PersonalSyncRuntimeStatus;
-    use one_core::settings::LocalTerminalProfileKind;
+    use one_core::settings::{LocalTerminalProfileKind, MasterKeyStorage};
     use std::path::Path;
     use std::sync::{Arc, Mutex};
 
@@ -4289,7 +4439,7 @@ mod tests {
     }
 
     #[test]
-    fn portable_master_key_setting_explicitly_describes_the_recovery_risk() {
+    fn portable_master_key_setting_explicitly_describes_the_storage_boundary() {
         let source = include_str!("setting_tab.rs");
         let locales = include_str!("../locales/main.yml");
 
@@ -4298,9 +4448,46 @@ mod tests {
         let legacy_portable_override =
             ["let val = val || one_core::app_paths::", "is_portable()"].concat();
         assert!(!source.contains(&legacy_portable_override));
-        assert!(locales.contains("Anyone who obtains both the application"));
-        assert!(locales.contains("任何同时获得应用程序和完整 data 目录的人"));
-        assert!(locales.contains("任何同時取得應用程式和完整 data 目錄的人"));
+        // 记住主密钥改为系统凭据库后，文案必须说明「绑定设备/用户」与「无凭据库时的退路」
+        assert!(locales.contains("system credential store"));
+        assert!(locales.contains("系统凭据库"));
+        assert!(locales.contains("系統憑證儲存庫"));
+        assert!(locales.contains("system_key_storage_unavailable"));
+        // 保存位置可切换后，本机文件的风险提示与各平台凭据库名称必须可翻译
+        assert!(source.contains("master_key_storage_select_options"));
+        assert!(source.contains("update_master_key_storage"));
+        assert!(locales.contains("master_key_storage_local_risk"));
+        assert!(locales.contains("master_key_storage_keychain"));
+        assert!(locales.contains("master_key_storage_credential_manager"));
+        assert!(locales.contains("本机文件"));
+        assert!(locales.contains("本機檔案"));
+    }
+
+    #[test]
+    fn master_key_storage_values_round_trip_and_follow_platform_support() {
+        for backend in [
+            MasterKeyStorage::SystemCredentialStore,
+            MasterKeyStorage::LocalFile,
+        ] {
+            assert_eq!(
+                backend,
+                master_key_storage_from_value(master_key_storage_value(backend))
+            );
+        }
+
+        let options = master_key_storage_select_options();
+        let ids: Vec<&str> = options.iter().map(|(id, _)| id.as_ref()).collect();
+        assert!(ids.contains(&"local_file"), "本机文件始终可选");
+        let system_supported = one_core::key_storage::system_storage_supported();
+        assert_eq!(
+            system_supported,
+            ids.contains(&"system_credential_store"),
+            "只有系统凭据库可用的平台才显示系统选项"
+        );
+        assert_eq!(
+            system_supported,
+            default_master_key_storage() == MasterKeyStorage::SystemCredentialStore
+        );
     }
 
     /// 切界面语言必须**叫醒已挂载的扩展页面**。

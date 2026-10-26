@@ -167,4 +167,20 @@ impl GitRunner for FlushRunner {
         *self.checked_clean.lock().expect("checked clean lock") = true;
         Ok(false)
     }
+
+    async fn stash_sync_package(&self, _repo: &Path) -> Result<(), GitRunnerError> {
+        Ok(())
+    }
+
+    async fn stash_pop(&self, _repo: &Path) -> Result<(), GitRunnerError> {
+        Ok(())
+    }
+
+    async fn rebase_abort(&self, _repo: &Path) -> Result<(), GitRunnerError> {
+        Ok(())
+    }
+
+    async fn reset_sync_package(&self, _repo: &Path) -> Result<(), GitRunnerError> {
+        Ok(())
+    }
 }

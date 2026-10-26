@@ -102,6 +102,21 @@ pub enum StartupDefaultPage {
     AiWorkbench,
 }
 
+/// 「记住主密码」时主密钥的保存位置。
+///
+/// 系统凭据库由操作系统按当前用户隔离（macOS 钥匙串 / Windows 凭据管理器）；
+/// 本机文件写在数据目录里，使用程序内置密钥加密，安全强度弱于系统凭据库，
+/// 由用户显式选择。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MasterKeyStorage {
+    /// 系统凭据库（macOS 钥匙串 / Windows 凭据管理器）
+    #[default]
+    SystemCredentialStore,
+    /// 本机文件（数据目录，程序内置密钥加密）
+    LocalFile,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HomeConnectionLayout {
@@ -1590,6 +1605,9 @@ pub struct AppSettings {
     /// 便携模式下是否在数据目录保存可自动恢复的主密钥副本
     #[serde(default)]
     pub portable_remember_master_key: bool,
+    /// 自动解锁时主密钥的保存位置
+    #[serde(default)]
+    pub master_key_storage: MasterKeyStorage,
     #[serde(default)]
     pub home_connection_layout: HomeConnectionLayout,
     /// 首页是否显示「最近连接」分组
@@ -1981,6 +1999,7 @@ impl Default for AppSettings {
             startup_default_page: StartupDefaultPage::default(),
             require_master_key_on_startup: false,
             portable_remember_master_key: false,
+            master_key_storage: MasterKeyStorage::SystemCredentialStore,
             home_connection_layout: HomeConnectionLayout::default(),
             home_show_recent_connections: true,
             connection_sort_order: ConnectionSortOrder::default(),
@@ -2454,11 +2473,11 @@ mod tests {
         DEFAULT_TERMINAL_THEME, HomeConnectionLayout, LOCALE_SYSTEM, LargeTextCellEditorOpenMode,
         LocalTerminalProfileKind, LocalTerminalProfileSettings, MAX_AI_REQUEST_TIMEOUT_SECS,
         MAX_CUSTOM_SYSTEM_PROMPT_CHARS, MIN_AI_REQUEST_TIMEOUT_SECS, MainWindowState,
-        McpPermissionMode, McpServerMode, PersonalSyncBackendKind, RemoteFileOpenMode,
-        SqlFormatSettings, SqlIndentStyle, SqlKeywordCase, StartupDefaultPage, SyncProvider,
-        TableViewMode, default_grid_font_fallback_families, default_grid_monospace_font_family,
-        grid_monospace_font, installed_grid_monospace_font, is_installed_font_family,
-        resolve_installed_grid_monospace_font_family,
+        MasterKeyStorage, McpPermissionMode, McpServerMode, PersonalSyncBackendKind,
+        RemoteFileOpenMode, SqlFormatSettings, SqlIndentStyle, SqlKeywordCase, StartupDefaultPage,
+        SyncProvider, TableViewMode, default_grid_font_fallback_families,
+        default_grid_monospace_font_family, grid_monospace_font, installed_grid_monospace_font,
+        is_installed_font_family, resolve_installed_grid_monospace_font_family,
     };
 
     use super::{
@@ -3292,6 +3311,37 @@ mod tests {
         .expect("portable_remember_master_key 应能读取");
 
         assert!(settings.portable_remember_master_key);
+    }
+
+    #[test]
+    fn app_settings_defaults_to_system_credential_store() {
+        assert_eq!(
+            MasterKeyStorage::SystemCredentialStore,
+            AppSettings::default().master_key_storage
+        );
+    }
+
+    #[test]
+    fn legacy_settings_default_to_system_credential_store() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "require_master_key_on_startup": true
+        }))
+        .expect("旧设置应能安全迁移");
+
+        assert_eq!(
+            MasterKeyStorage::SystemCredentialStore,
+            settings.master_key_storage
+        );
+    }
+
+    #[test]
+    fn app_settings_deserializes_local_file_master_key_storage() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "master_key_storage": "local_file"
+        }))
+        .expect("master_key_storage 应能读取");
+
+        assert_eq!(MasterKeyStorage::LocalFile, settings.master_key_storage);
     }
 
     #[test]

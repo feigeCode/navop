@@ -890,6 +890,18 @@ Home:
     en: Local changed, remote deleted
     zh-CN: 本地有更新，远端已删除
     zh-HK: 本地有更新，遠端已刪除
+  personal_sync_conflict_resolved:
+    en: "Resolved %{count} sync conflict(s)"
+    zh-CN: "已解决 %{count} 个同步冲突"
+    zh-HK: "已解決 %{count} 個同步衝突"
+  personal_sync_conflict_resolve_failed:
+    en: "Failed to resolve %{count} conflict(s): %{reason}"
+    zh-CN: "解决 %{count} 个冲突失败：%{reason}"
+    zh-HK: "解決 %{count} 個衝突失敗：%{reason}"
+  personal_sync_conflict_partially_resolved:
+    en: "Resolved %{succeeded} conflict(s), %{failed} failed: %{reason}"
+    zh-CN: "已解决 %{succeeded} 个冲突，%{failed} 个失败：%{reason}"
+    zh-HK: "已解決 %{succeeded} 個衝突，%{failed} 個失敗：%{reason}"
   sync_conflict_type:
     en: "Conflict type: %{conflict_type}"
     zh-CN: "冲突类型: %{conflict_type}"
@@ -1489,9 +1501,9 @@ Encryption:
     zh-CN: "主密钥用于保护本地敏感数据"
     zh-HK: "主密鑰用於保護本機敏感資料"
   remember_password_detail_local:
-    en: "Sensitive information such as database passwords and SSH keys is encrypted locally. The master key is used only for local encryption and unlocking. Navop does not upload your data automatically."
-    zh-CN: "数据库密码、SSH 密钥等敏感信息会在本地加密保存。主密钥仅用于本地加密与解锁，Navop 不会自动上传您的数据。"
-    zh-HK: "資料庫密碼、SSH 密鑰等敏感資訊會在本機加密儲存。主密鑰僅用於本機加密與解鎖，Navop 不會自動上傳您的資料。"
+    en: "Sensitive information such as database passwords and SSH keys is encrypted locally. The master key is used only for local encryption and unlocking. Navop does not upload your data automatically. When you enable automatic unlock, the master key is kept in the storage location selected in Settings (the system credential store by default); choosing the local file option writes an encrypted copy into the data directory."
+    zh-CN: "数据库密码、SSH 密钥等敏感信息会在本地加密保存。主密钥仅用于本地加密与解锁，Navop 不会自动上传您的数据。启用自动解锁时，主密钥保存在设置中选择的位置（默认为系统凭据库）；选择本机文件时会写入数据目录的加密副本。"
+    zh-HK: "資料庫密碼、SSH 密鑰等敏感資訊會在本機加密儲存。主密鑰僅用於本機加密與解鎖，Navop 不會自動上傳您的資料。啟用自動解鎖時，主密鑰儲存在設定中選擇的位置（預設為系統憑證儲存庫）；選擇本機檔案時會寫入資料目錄的加密副本。"
   sync_info_title:
     en: "About sync"
     zh-CN: "关于云同步"
@@ -2512,14 +2524,46 @@ Settings:
         en: Do not restore the master key automatically; saved connections remain unavailable until you unlock them.
         zh-CN: 不自动恢复主密钥；解锁前无法使用已保存的连接。
         zh-HK: 不自動恢復主密鑰；解鎖前無法使用已保存的連線。
+      system_key_storage_unavailable:
+        en: This platform has no system credential store; the master key can only be kept in the local file option below.
+        zh-CN: 当前平台没有可用的系统凭据库，主密钥只能保存到下面的「本机文件」。
+        zh-HK: 目前平台沒有可用的系統憑證儲存庫，主密鑰只能儲存到下方的「本機檔案」。
+      master_key_storage:
+        en: Master key storage
+        zh-CN: 主密钥保存位置
+        zh-HK: 主密鑰儲存位置
+      master_key_storage_desc:
+        en: Where the master key is kept when automatic unlock is enabled. The system credential store is recommended; the local file option writes an encrypted copy into the data directory.
+        zh-CN: 启用自动解锁时主密钥的保存位置。推荐使用系统凭据库；选择本机文件会把加密副本写进数据目录。
+        zh-HK: 啟用自動解鎖時主密鑰的儲存位置。建議使用系統憑證儲存庫；選擇本機檔案會把加密副本寫進資料目錄。
+      master_key_storage_keychain:
+        en: macOS Keychain
+        zh-CN: macOS 钥匙串
+        zh-HK: macOS 鑰匙串
+      master_key_storage_credential_manager:
+        en: Windows Credential Manager
+        zh-CN: Windows 凭据管理器
+        zh-HK: Windows 認證管理員
+      master_key_storage_system:
+        en: System credential store
+        zh-CN: 系统凭据库
+        zh-HK: 系統憑證儲存庫
+      master_key_storage_local:
+        en: Local file (data directory)
+        zh-CN: 本机文件（数据目录）
+        zh-HK: 本機檔案（資料目錄）
+      master_key_storage_local_risk:
+        en: "Security risk: the local file is encrypted with a key embedded in the application, so anyone with both the app and the data directory can recover the master key."
+        zh-CN: "安全风险：本机文件使用程序内置密钥加密，任何同时拿到程序和数据目录的人都能恢复主密钥。"
+        zh-HK: "安全風險：本機檔案使用程式內建密鑰加密，任何同時取得程式和資料目錄的人都能復原主密鑰。"
       remember_portable_master_key:
         en: Remember master key in portable data
         zh-CN: 在便携数据目录中记住主密钥
         zh-HK: 在便攜資料目錄中記住主密鑰
       remember_portable_master_key_desc:
-        en: "Security risk: Navop stores an encrypted, automatically recoverable copy in data/state/key_storage using a key embedded in the application, not device-bound protection. Anyone who obtains both the application and the complete data directory may be able to recover the master key. Enable only if you understand and accept this risk."
-        zh-CN: "安全风险：Navop 会把可自动恢复的主密钥副本加密保存到 data/state/key_storage；该加密使用程序内置密钥，不提供设备绑定保护。任何同时获得应用程序和完整 data 目录的人都可能恢复主密钥。仅在理解并接受此风险时启用。"
-        zh-HK: "安全風險：Navop 會把可自動復原的主密鑰副本加密儲存到 data/state/key_storage；該加密使用程式內置密鑰，不提供裝置綁定保護。任何同時取得應用程式和完整 data 目錄的人都可能復原主密鑰。僅在理解並接受此風險時啟用。"
+        en: "The master key is kept in the storage location selected below: the system credential store (macOS Keychain / Windows Credential Manager) is bound to this device and user, while the local file option writes an encrypted copy into the portable data directory. Choose the local file only if you accept that whoever has the app and the data directory can recover the key."
+        zh-CN: "主密钥保存在下方选择的保存位置：系统凭据库（macOS 钥匙串 / Windows 凭据管理器）与当前设备和用户绑定；选择本机文件则会把加密副本写进便携数据目录。只有在你能接受「同时拿到程序和数据目录的人可以恢复主密钥」时才选择本机文件。"
+        zh-HK: "主密鑰儲存在下方選擇的儲存位置：系統憑證儲存庫（macOS 鑰匙串 / Windows 認證管理員）與目前裝置和使用者綁定；選擇本機檔案則會把加密副本寫進便攜資料目錄。只有在你接受「同時取得程式和資料目錄的人可以復原主密鑰」時才選擇本機檔案。"
 
     # 连接显示设置
     ConnectionDisplay:

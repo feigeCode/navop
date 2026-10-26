@@ -35,6 +35,14 @@ pub trait GitRunner: Clone + Send + Sync {
     async fn remote_url(&self, repo: &Path) -> Result<Option<String>, GitRunnerError>;
     async fn is_repo(&self, repo: &Path) -> Result<bool, GitRunnerError>;
     async fn is_clean_for_sync(&self, repo: &Path) -> Result<bool, GitRunnerError>;
+    /// 把同步包目录的未提交改动暂存进 git stash（issue #457 的脏工作区自愈）。
+    async fn stash_sync_package(&self, repo: &Path) -> Result<(), GitRunnerError>;
+    /// 恢复最近一次暂存的同步包改动。
+    async fn stash_pop(&self, repo: &Path) -> Result<(), GitRunnerError>;
+    /// 中止进行中的 rebase；没有 rebase 在进行时失败是预期内的。
+    async fn rebase_abort(&self, repo: &Path) -> Result<(), GitRunnerError>;
+    /// 把同步包目录重置回 HEAD（丢弃未提交改动，含 unmerged 状态）。
+    async fn reset_sync_package(&self, repo: &Path) -> Result<(), GitRunnerError>;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -79,6 +87,33 @@ impl GitRunner for CommandGitRunner {
         let output = run_git(repo, &["status", "--porcelain", "--", ".onetcli-sync"])?;
         Ok(output.trim().is_empty())
     }
+
+    async fn stash_sync_package(&self, repo: &Path) -> Result<(), GitRunnerError> {
+        run_git(
+            repo,
+            &[
+                "stash",
+                "push",
+                "-m",
+                "onetcli-sync-self-heal",
+                "--",
+                ".onetcli-sync",
+            ],
+        )
+        .map(|_| ())
+    }
+
+    async fn stash_pop(&self, repo: &Path) -> Result<(), GitRunnerError> {
+        run_git(repo, &["stash", "pop"]).map(|_| ())
+    }
+
+    async fn rebase_abort(&self, repo: &Path) -> Result<(), GitRunnerError> {
+        run_git(repo, &["rebase", "--abort"]).map(|_| ())
+    }
+
+    async fn reset_sync_package(&self, repo: &Path) -> Result<(), GitRunnerError> {
+        run_git(repo, &["checkout", "--", ".onetcli-sync"]).map(|_| ())
+    }
 }
 
 #[derive(Clone)]
@@ -110,13 +145,88 @@ where
         }
 
         self.runner.add_sync_package(&self.root).await?;
-        self.runner
+        match self
+            .runner
             .commit_sync_package(&self.root, SYNC_COMMIT_MESSAGE)
-            .await?;
+            .await
+        {
+            Err(GitRunnerError::NothingToCommit) => Ok(()),
+            result => result,
+        }?;
         if self.options.auto_push {
-            self.runner.push(&self.root).await?;
+            self.push_with_self_heal().await?;
         }
         Ok(())
+    }
+
+    /// 带自愈的 push：被拒（远端有新提交）时先 pull --rebase 再重试一次。
+    async fn push_with_self_heal(&self) -> Result<(), SyncStoreError> {
+        match self.runner.push(&self.root).await {
+            Ok(()) => Ok(()),
+            Err(GitRunnerError::MergeConflict) | Err(GitRunnerError::CommandFailed(_)) => {
+                tracing::warn!("git push rejected; pulling with rebase before retrying");
+                self.pull_with_self_heal().await?;
+                self.runner
+                    .push(&self.root)
+                    .await
+                    .map_err(SyncStoreError::from)
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// 带自愈的 pull --rebase（issue #457）：
+    /// - 脏工作区（上一轮有冲突、flush 被跳过留下未提交改动）会让 pull 直接拒绝；
+    ///   先 stash 再 pull，成功后 pop 回来，恢复失败也不阻塞同步。
+    /// - rebase 冲突会让仓库卡死在 unmerged 状态；先 abort 再重试一次，
+    ///    仍冲突则如实上抛，交给上层挂冲突。
+    async fn pull_with_self_heal(&self) -> Result<(), SyncStoreError> {
+        match self.runner.pull_rebase(&self.root).await {
+            Ok(()) => return Ok(()),
+            Err(GitRunnerError::MergeConflict) => {
+                // 仓库可能卡在上一轮 rebase 冲突：abort 后重试一次。
+                let _ = self.runner.rebase_abort(&self.root).await;
+                match self.runner.pull_rebase(&self.root).await {
+                    Ok(()) => Ok(()),
+                    Err(GitRunnerError::MergeConflict) => {
+                        // 重试仍冲突：先退出 rebase 状态避免仓库卡死，再如实上抛。
+                        let _ = self.runner.rebase_abort(&self.root).await;
+                        Err(SyncStoreError::GitMergeConflict)
+                    }
+                    Err(error) => Err(error.into()),
+                }
+            }
+            Err(GitRunnerError::CommandFailed(_)) => {
+                // 典型场景：上一轮 pass 有冲突提前结束、flush 被跳过，工作区
+                // 留着未提交的 .onetcli-sync 改动，git 拒绝 pull --rebase。
+                tracing::warn!(
+                    "git pull --rebase rejected by dirty worktree; stashing sync package"
+                );
+                if self.runner.stash_sync_package(&self.root).await.is_err() {
+                    // stash 失败通常意味着 unmerged 残留：把同步包目录重置后再试。
+                    // 本地数据库仍是数据源头，重置后 worker 会重新上传。
+                    let _ = self.runner.reset_sync_package(&self.root).await;
+                }
+                match self.runner.pull_rebase(&self.root).await {
+                    Ok(()) => {
+                        if let Err(error) = self.runner.stash_pop(&self.root).await {
+                            // stash pop 失败不阻塞同步：改动还在 stash 里，下一轮
+                            // flush 会把整个同步包重新提交上去。
+                            tracing::warn!(error = ?error, "git stash pop failed after pull");
+                        }
+                        Ok(())
+                    }
+                    Err(error) => {
+                        // pull 本身失败：尝试把 stash 恢复回去，别把用户的改动弄丢。
+                        if let Err(pop_error) = self.runner.stash_pop(&self.root).await {
+                            tracing::warn!(error = ?pop_error, "git stash pop failed after failed pull");
+                        }
+                        Err(error.into())
+                    }
+                }
+            }
+            Err(error) => return Err(error.into()),
+        }
     }
 
     fn mark_dirty(&self) -> Result<(), SyncStoreError> {
@@ -151,7 +261,7 @@ where
         if !self.runner.is_repo(&self.root).await? {
             return Err(SyncStoreError::NotConfigured);
         }
-        self.runner.pull_rebase(&self.root).await?;
+        self.pull_with_self_heal().await?;
         self.directory.probe().await
     }
 

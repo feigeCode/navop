@@ -207,6 +207,14 @@ impl BlockKind {
         )
     }
 
+    /// 零可见长度、完全自绘内容的原子块（表格、分隔线）。这类块不渲染
+    /// `BlockTextElement`，文本层画不出跨块选择的高亮，只能由块渲染层
+    /// 自己补一层覆盖色；跨块选择同步时也用这个判据决定要不要给它们打
+    /// 「整块被选中」标记。
+    pub fn paints_own_atomic_content(&self) -> bool {
+        matches!(self, Self::Separator | Self::Table)
+    }
+
     pub fn is_callout(&self) -> bool {
         matches!(self, Self::Callout(_))
     }

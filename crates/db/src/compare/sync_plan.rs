@@ -5089,6 +5089,67 @@ mod tests {
     }
 
     #[test]
+    fn test_postgres_schema_sync_plan_quotes_numeric_default_for_text_column() {
+        // MySQL 的 varchar 列默认值在 information_schema 里是裸数值（`1`/`0`），
+        // PostgreSQL 不接受 `varchar(1) DEFAULT 1`，会以
+        // "column ... is of type character varying but default expression is of
+        // type integer" 整条拒绝建表，随后该表的 COMMENT 语句全部因表不存在而失败。
+        let result = added_table_result(
+            "sys_user_device",
+            vec![
+                ColumnSchema {
+                    name: "id".to_string(),
+                    data_type: "bigint".to_string(),
+                    ..Default::default()
+                },
+                ColumnSchema {
+                    name: "status".to_string(),
+                    data_type: "varchar(1)".to_string(),
+                    default_value: Some("1".to_string()),
+                    ..Default::default()
+                },
+                ColumnSchema {
+                    name: "del_flag".to_string(),
+                    data_type: "varchar(1)".to_string(),
+                    default_value: Some("0".to_string()),
+                    ..Default::default()
+                },
+                ColumnSchema {
+                    name: "source_platform".to_string(),
+                    data_type: "varchar(64)".to_string(),
+                    default_value: Some("CDSS".to_string()),
+                    ..Default::default()
+                },
+            ],
+        );
+        let plugin = crate::postgresql::PostgresPlugin::new();
+
+        let plan = build_schema_sync_plan_with_plugin_for_source(
+            &result,
+            "app",
+            None,
+            &DatabaseType::MySQL,
+            &plugin,
+        );
+
+        assert!(
+            plan.sql_text.contains("DEFAULT '1'"),
+            "numeric default on text column must be quoted: {}",
+            plan.sql_text
+        );
+        assert!(
+            plan.sql_text.contains("DEFAULT '0'"),
+            "numeric default on text column must be quoted: {}",
+            plan.sql_text
+        );
+        assert!(
+            plan.sql_text.contains("DEFAULT 'CDSS'"),
+            "identifier default on text column must be quoted: {}",
+            plan.sql_text
+        );
+    }
+
+    #[test]
     fn test_sqlite_schema_sync_plan_reuses_table_designer_recreate_sql() {
         use super::super::{
             ColumnDiff, ColumnSchema, DiffStatus, SchemaCompareResult, TableDiff, TableSchema,

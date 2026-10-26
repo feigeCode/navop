@@ -95,24 +95,31 @@ where
         local: Option<&PersonalSyncItemSnapshot>,
     ) -> Result<(), SyncStoreError> {
         let remote = required_remote_snapshot(conflict)?;
+        // `remote_snapshot` 是检测到冲突那一刻的存档：从挂冲突到用户点「应用」之间，
+        // 另一台设备可能又推了新版本。若仍拿快照里的旧版本做乐观锁，upsert 会以
+        // "stale version" 拒绝，冲突永远解不开（issue #457）。所以这里按 record_id
+        // 现场重读远端记录，拿到当前版本再写；远端记录已不存在时才回退快照版本。
+        let expected_version = match self
+            .store
+            .list_records(Some(&conflict.data_type), None)
+            .await?
+            .into_iter()
+            .find(|record| record.id == conflict.record_id)
+        {
+            Some(current) => Some(current.version),
+            None => Some(remote.version),
+        };
         let Some(local) = local else {
             // 本地条目已经不在了 ⇒「使用本地版本」= 保留本地的删除意图：把云端记录也
             // 标记为删除。以前这里会直接报 "connection not found"，用户点哪个按钮都出不来。
             return self
                 .store
-                .tombstone_record(
-                    &conflict.data_type,
-                    &conflict.record_id,
-                    Some(remote.version),
-                )
+                .tombstone_record(&conflict.data_type, &conflict.record_id, expected_version)
                 .await;
         };
         let mut record = self.local.export_item(local).await?;
         record.id = conflict.record_id.clone();
-        let stored = self
-            .store
-            .upsert_record(&record, Some(remote.version))
-            .await?;
+        let stored = self.store.upsert_record(&record, expected_version).await?;
         self.local
             .mark_synced(
                 &local.local_id,

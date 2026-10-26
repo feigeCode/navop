@@ -2,7 +2,8 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use gpui::http_client::HttpClient;
-use gpui::{App, AsyncApp, Global, Subscription};
+use gpui::{App, AppContext, AsyncApp, Global, Subscription};
+use gpui_component::WindowExt;
 use one_core::cloud_sync::personal::{
     ConfiguredPersonalSyncStore, PersonalSyncConflict, PersonalSyncConflictRepository,
     PersonalSyncConflictResolver, PersonalSyncEvent, PersonalSyncLocalRepositorySource,
@@ -290,7 +291,13 @@ pub fn resolve_personal_conflict(
     });
     cx.spawn(async move |cx: &mut AsyncApp| {
         let status = personal_sync_status_from_task(task.await);
-        let _ = cx.update(move |cx| finish_operation(cx, generation, status));
+        let failure = failure_message(&status);
+        let _ = cx.update(move |cx| {
+            finish_operation(cx, generation, status);
+        });
+        // issue #457：解决结果必须让用户看见 —— 以前成功失败都无声，对话框
+        // 又已关闭，用户只能反复点「应用」，以为按钮是坏的。
+        notify_personal_conflict_resolution(cx, 1, failure, 1);
         Ok::<(), anyhow::Error>(())
     })
     .detach();
@@ -324,11 +331,15 @@ pub fn resolve_personal_conflicts(strategies: Vec<(String, ConflictResolution)>,
         return;
     };
 
+    let total = strategies.len();
     let generation = begin_operation(cx, PersonalSyncRuntimeStatus::Syncing);
     let http = cx.http_client();
     let task = Tokio::spawn(cx, async move {
+        // issue #457：逐条解决冲突，一条失败不再中断其余 —— 以前第一条失败
+        // 就 `.await?` 提前返回，剩下的冲突全部原样挂着，用户看着毫无反应。
+        let mut failures: Vec<String> = Vec::new();
         for (selection_key, strategy) in strategies {
-            resolve_personal_conflict_once(
+            if let Err(error) = resolve_personal_conflict_once(
                 config.clone(),
                 source.clone(),
                 (*conflicts).clone(),
@@ -336,16 +347,85 @@ pub fn resolve_personal_conflicts(strategies: Vec<(String, ConflictResolution)>,
                 strategy,
                 http.clone(),
             )
-            .await?;
+            .await
+            {
+                tracing::warn!(error = %error, "personal sync conflict resolution failed");
+                failures.push(error.to_string());
+            }
         }
-        Ok(())
+        failures
     });
     cx.spawn(async move |cx: &mut AsyncApp| {
-        let status = personal_sync_status_from_task(task.await);
-        let _ = cx.update(move |cx| finish_operation(cx, generation, status));
+        // JoinError（任务 panic / 被取消）也算一条失败，不能 unwrap_or_default
+        // ——那会把整批误报成「已解决」。
+        let failures = match task.await {
+            Ok(failures) => failures,
+            Err(error) => vec![error.to_string()],
+        };
+        let succeeded = total.saturating_sub(failures.len());
+        let first_failure = failures.first().cloned();
+        let _ = cx.update(move |cx| {
+            let status = if failures.is_empty() {
+                crate::personal_sync_status::note_sync_completed();
+                PersonalSyncRuntimeStatus::Ready {
+                    health: SyncStoreHealth::Ready,
+                    message: None,
+                }
+            } else {
+                PersonalSyncRuntimeStatus::from_error(SyncStoreError::Io(
+                    failures.first().cloned().unwrap_or_default(),
+                ))
+            };
+            finish_operation(cx, generation, status);
+        });
+        // 成功多少、失败多少都要让用户看见（issue #457）。
+        notify_personal_conflict_resolution(cx, succeeded, first_failure, total);
         Ok::<(), anyhow::Error>(())
     })
     .detach();
+}
+
+/// 冲突解决结果的用户可见反馈（issue #457）。
+///
+/// `succeeded` 是成功条数；`first_failure` 是第一条失败原因（如有）。
+/// 消息用当前窗口的通知条展示，和更新检查的反馈同款交互。
+fn notify_personal_conflict_resolution(
+    cx: &mut AsyncApp,
+    succeeded: usize,
+    first_failure: Option<String>,
+    total: usize,
+) {
+    let message = match first_failure {
+        None => t!("Home.personal_sync_conflict_resolved", count = succeeded).to_string(),
+        Some(reason) if succeeded == 0 => t!(
+            "Home.personal_sync_conflict_resolve_failed",
+            count = total,
+            reason = reason
+        )
+        .to_string(),
+        Some(reason) => t!(
+            "Home.personal_sync_conflict_partially_resolved",
+            succeeded = succeeded,
+            failed = total - succeeded,
+            reason = reason
+        )
+        .to_string(),
+    };
+    let _ = cx.update(|cx| {
+        if let Some(window_id) = cx.active_window() {
+            let _ = cx.update_window(window_id, |_, window, cx| {
+                window.push_notification(message.clone(), cx);
+            });
+        }
+    });
+}
+
+/// 从收尾 status 里提取失败原因；Ready/Disabled 无失败信息。
+fn failure_message(status: &PersonalSyncRuntimeStatus) -> Option<String> {
+    match status {
+        PersonalSyncRuntimeStatus::Failed { message, .. } => Some(message.clone()),
+        _ => None,
+    }
 }
 
 fn local_conflict_display(

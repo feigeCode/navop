@@ -71,6 +71,32 @@ async fn resolver_use_local_writes_expected_remote_version_and_clears_conflict()
     assert!(repo.list("personal").expect("conflicts list").is_empty());
 }
 
+/// issue #457：从挂冲突到用户点「应用」之间，另一台设备可能又推了新版本。
+/// resolver 必须按 record_id 现场重读远端版本，而不是拿冲突快照里的旧版本
+/// 做乐观锁（否则 "stale version" 让冲突永远解不开）。
+#[tokio::test]
+async fn resolver_use_local_uses_current_remote_version_not_stale_snapshot() {
+    let repo = conflict_repo();
+    let local_item = local_item("local-1", "cloud-1", "local");
+    // 冲突快照里的远端版本是 7，但远端现在已经是版本 9（另一台设备推过）。
+    let stale_remote = test_record("cloud-1", data_type::CONNECTION, 7, "remote");
+    let current_remote = test_record("cloud-1", data_type::CONNECTION, 9, "remote-newer");
+    let conflict = stored_conflict(&local_item, &stale_remote);
+    repo.upsert(&conflict).expect("conflict stored");
+    let local = FakeLocalSource::with_items(vec![local_item]);
+    let store = FakeStore::default().with_remote_record(current_remote);
+    let resolver = PersonalSyncConflictResolver::new(store.clone(), local.clone(), repo.clone());
+
+    resolver
+        .resolve(&conflict, ConflictResolution::UseLocal)
+        .await
+        .expect("use local resolves against current remote version");
+
+    // 乐观锁用的是现场重读的版本 9，而不是快照里的 7。
+    assert_eq!(vec![Some(9)], store.expected_versions());
+    assert!(repo.list("personal").expect("conflicts list").is_empty());
+}
+
 #[tokio::test]
 async fn resolver_keep_both_is_explicitly_unsupported_and_keeps_conflict() {
     let repo = conflict_repo();
@@ -216,6 +242,8 @@ async fn resolver_use_cloud_only_clears_conflict_when_both_sides_are_gone() {
 struct FakeStore {
     expected_versions: Arc<Mutex<Vec<Option<u32>>>>,
     tombstoned: Arc<Mutex<Vec<(String, String, Option<u32>)>>>,
+    /// 模拟远端当前记录（另一台设备可能已经推了比冲突快照新的版本）。
+    remote_records: Arc<Mutex<Vec<CloudSyncData>>>,
 }
 
 impl FakeStore {
@@ -228,6 +256,14 @@ impl FakeStore {
 
     fn tombstoned(&self) -> Vec<(String, String, Option<u32>)> {
         self.tombstoned.lock().expect("tombstoned lock").clone()
+    }
+
+    fn with_remote_record(self, record: CloudSyncData) -> Self {
+        self.remote_records
+            .lock()
+            .expect("remote records lock")
+            .push(record);
+        self
     }
 }
 
@@ -246,7 +282,11 @@ impl PersonalSyncStore for FakeStore {
         _data_type: Option<&str>,
         _since: Option<i64>,
     ) -> Result<Vec<CloudSyncData>, SyncStoreError> {
-        Ok(Vec::new())
+        Ok(self
+            .remote_records
+            .lock()
+            .expect("remote records lock")
+            .clone())
     }
 
     async fn upsert_record(

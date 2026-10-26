@@ -194,26 +194,18 @@ impl SyncEngine {
         // 以本地 crypto 模块为准：主密钥刚被修改过时，服务里可能还留着旧密钥，
         // 那样会用旧密钥去解已经换成新密文的云端数据。
         //
-        // 注意：只在服务尚未解锁时才注入。已解锁的 service 可能带着调用方自备的
-        // 密钥（例如测试里 Device::new 用 set_master_key_directly 配好的密钥），
-        // 此时若全局 RAW_MASTER_KEY 恰好被其他并行方改成不同的值，盲目重新注入
-        // 会把错误的密钥写进 service，导致后续解密全部失败。
+        // pinned 的密钥是调用方显式声明的权威密钥（改密迁移、测试自备密钥等），
+        // 引擎不会用全局主密钥覆盖它，避免并行测试互踩全局密钥时注入错误密钥。
         if crypto::has_master_key() {
-            let already_unlocked_with_key = self
-                .crypto_service
-                .read()
-                .map_err(|_| SyncError::StorageError("同步服务锁获取失败".to_string()))?
-                .is_unlocked();
-            if !already_unlocked_with_key {
-                if let Some(raw_key) = crypto::get_raw_master_key() {
-                    let mut service_write = self
-                        .crypto_service
-                        .write()
-                        .map_err(|_| SyncError::StorageError("同步服务锁获取失败".to_string()))?;
-                    if !service_write.master_key_matches(&raw_key) {
-                        tracing::info!("[同步引擎] 主密钥已变更，重新注入同步服务");
-                        service_write.set_master_key_directly(raw_key);
-                    }
+            if let Some(raw_key) = crypto::get_raw_master_key() {
+                let mut service_write = self
+                    .crypto_service
+                    .write()
+                    .map_err(|_| SyncError::StorageError("同步服务锁获取失败".to_string()))?;
+                if !service_write.master_key_pinned() && !service_write.master_key_matches(&raw_key)
+                {
+                    tracing::info!("[同步引擎] 主密钥已变更，重新注入同步服务");
+                    service_write.set_master_key_from_local(raw_key);
                 }
             }
         }

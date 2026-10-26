@@ -99,6 +99,11 @@ pub struct CloudSyncService {
     operation_queues: HashMap<String, OperationQueue>,
     /// 团队密钥缓存：team_id -> team_key
     team_keys: HashMap<String, String>,
+    /// 主密钥是否由调用方显式指定且应保持权威
+    ///
+    /// 应用内的共享服务不设置该标志，由同步引擎在每次同步前从本地 crypto
+    /// 模块对齐；持有独立测试/迁移场景的密钥时置位，避免被进程级主密钥覆盖。
+    master_key_pinned: bool,
 }
 
 impl CloudSyncService {
@@ -112,6 +117,7 @@ impl CloudSyncService {
             sync_states: HashMap::new(),
             operation_queues: HashMap::new(),
             team_keys: HashMap::new(),
+            master_key_pinned: false,
         }
     }
 
@@ -141,6 +147,7 @@ impl CloudSyncService {
         self.logged_in = false;
         self.user_id = None;
         self.master_key = None;
+        self.master_key_pinned = false;
         self.key_version = 0;
         self.sync_states.clear();
         self.operation_queues.clear();
@@ -173,11 +180,23 @@ impl CloudSyncService {
 
     /// 直接设置主密钥（不验证）
     ///
-    /// 用于从本地 crypto 模块同步密钥状态，跳过云端验证。
-    /// 调用者需确保密钥已通过本地验证。
+    /// 调用者显式声明该密钥为本服务实例的权威密钥：此后同步引擎不会再用
+    /// 本地 crypto 模块的全局主密钥覆盖它。用于改主密钥后的迁移、测试等
+    /// 场景；应用内的共享服务请交给引擎在同步前自动对齐。
     pub fn set_master_key_directly(&mut self, master_key: String) {
         self.master_key = Some(master_key);
+        self.master_key_pinned = true;
         // key_version 保持默认或之前的值，实际同步时会从云端更新
+    }
+
+    /// 由同步引擎从本地 crypto 模块注入主密钥（不取得权威、不置位 pinned）
+    pub fn set_master_key_from_local(&mut self, master_key: String) {
+        self.master_key = Some(master_key);
+    }
+
+    /// 当前主密钥是否由调用方显式指定
+    pub fn master_key_pinned(&self) -> bool {
+        self.master_key_pinned
     }
 
     /// 服务内当前的主密钥是否与给定密钥一致

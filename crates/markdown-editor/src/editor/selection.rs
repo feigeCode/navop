@@ -502,6 +502,14 @@ impl Editor {
                 }
                 let block = visible.entity.read(cx);
                 let len = block.visible_len();
+                if len == 0 {
+                    // 零可见长度的原子块（表格、分隔线）没有光标位，区间恒为空；
+                    // 用空区间 `0..0` 标记「整块被多块选择覆盖」，供块渲染层画
+                    // 高亮覆盖层。空段落、空列表项仍按空行分隔符处理，不标记。
+                    return (selection.start_index != selection.end_index
+                        && block.kind().paints_own_atomic_content())
+                    .then(|| 0..0);
+                }
                 let range = if selection.start_index == selection.end_index {
                     selection.start.offset.min(len)..selection.end.offset.min(len)
                 } else if index == selection.start_index {
@@ -901,7 +909,10 @@ impl Editor {
 
 #[cfg(test)]
 mod tests {
-    use gpui::{AppContext, Bounds, Context, TestAppContext, point, px, size};
+    use gpui::{
+        AppContext, Bounds, Context, InputEvent, Modifiers, MouseButton, MouseDownEvent,
+        MouseMoveEvent, MouseUpEvent, TestAppContext, point, px, size,
+    };
 
     use super::{CrossBlockSelection, CrossBlockSelectionEndpoint, Editor, ViewMode};
     use crate::components::{Cut, Delete, DeleteBack, Undo, UndoCaptureKind};
@@ -1123,6 +1134,183 @@ mod tests {
                 Some("pha\n\nbeta\n\nga")
             );
         });
+    }
+
+    #[gpui::test]
+    fn mouse_drag_across_blocks_builds_selection_and_copies(cx: &mut TestAppContext) {
+        init_editor_test_app(cx);
+        let (editor, cx) = cx.add_window_view(|_window, cx| {
+            Editor::from_markdown(cx, "alpha\n\nbeta".to_string(), None)
+        });
+        redraw(cx);
+
+        // 以真实渲染布局为准：取两个块的 last_bounds 作为拖选起止点。
+        let (start, end) = editor.update(cx, |editor, cx| {
+            let visible = editor.document.visible_blocks().to_vec();
+            assert_eq!(visible.len(), 2, "期望两个段落块");
+            let first = visible[0].entity.read(cx);
+            let second = visible[1].entity.read(cx);
+            let first_bounds = first
+                .last_bounds
+                .expect("首个块在 redraw 后应有 last_bounds");
+            let second_bounds = second
+                .last_bounds
+                .expect("第二个块在 redraw 后应有 last_bounds");
+            (
+                point(
+                    first_bounds.origin.x + px(2.0),
+                    first_bounds.origin.y + first_bounds.size.height / 2.0,
+                ),
+                point(
+                    second_bounds.origin.x + second_bounds.size.width - px(2.0),
+                    second_bounds.origin.y + second_bounds.size.height / 2.0,
+                ),
+            )
+        });
+
+        cx.update(|window, cx| {
+            window.dispatch_event(
+                MouseDownEvent {
+                    position: start,
+                    button: MouseButton::Left,
+                    modifiers: Modifiers::default(),
+                    click_count: 1,
+                    first_mouse: false,
+                }
+                .to_platform_input(),
+                cx,
+            );
+        });
+        redraw(cx);
+
+        cx.update(|window, cx| {
+            window.dispatch_event(
+                MouseMoveEvent {
+                    position: end,
+                    pressed_button: Some(MouseButton::Left),
+                    modifiers: Modifiers::default(),
+                }
+                .to_platform_input(),
+                cx,
+            );
+        });
+        redraw(cx);
+
+        cx.update(|window, cx| {
+            window.dispatch_event(
+                MouseUpEvent {
+                    position: end,
+                    button: MouseButton::Left,
+                    modifiers: Modifiers::default(),
+                    click_count: 1,
+                }
+                .to_platform_input(),
+                cx,
+            );
+        });
+        redraw(cx);
+
+        editor.read_with(cx, |editor, cx| {
+            assert!(
+                editor.cross_block_selection.is_some(),
+                "拖选跨块后必须建立 cross_block_selection，实际为 None"
+            );
+            let markdown = editor.cross_block_selected_markdown(cx);
+            assert_eq!(
+                markdown.as_deref(),
+                Some("alpha\n\nbeta"),
+                "跨块选择的剪贴板内容应覆盖两个块"
+            );
+        });
+    }
+
+    #[test]
+    fn cross_block_selection_marks_atomic_blocks_as_covered() {
+        let mut cx = TestAppContext::single();
+        init_editor_test_app(&mut cx);
+        let editor = cx.new(|cx| Editor::from_markdown(cx, TABLE_DOC.to_string(), None));
+
+        editor.update(&mut cx, |editor, cx| {
+            let visible = editor.document.visible_blocks().to_vec();
+            assert_eq!(visible.len(), 3, "alpha / 表格 / gamma");
+            let alpha_len = visible[0].entity.read(cx).visible_len();
+            let gamma_len = visible[2].entity.read(cx).visible_len();
+
+            // 表格是零可见长度的原子块：跨块选择覆盖它时用 `Some(0..0)` 标记，
+            // 渲染层据此画整块高亮（文本层画不出来）。
+            set_selection(editor, 0, 0, 2, gamma_len, cx);
+            let table = visible[1].entity.read(cx);
+            assert_eq!(table.visible_len(), 0);
+            assert_eq!(table.editor_selection_range, Some(0..0));
+            assert!(table.cross_block_selection_covers_atomic_block());
+            assert_eq!(
+                visible[0].entity.read(cx).editor_selection_range,
+                Some(0..alpha_len)
+            );
+            assert_eq!(
+                visible[2].entity.read(cx).editor_selection_range,
+                Some(0..gamma_len)
+            );
+
+            // 边界情形：选择终点停在表格开头，表格仍算整块被选中
+            // （删除/复制本来就会包含它）。
+            set_selection(editor, 0, alpha_len, 1, 0, cx);
+            assert_eq!(
+                visible[1].entity.read(cx).editor_selection_range,
+                Some(0..0)
+            );
+
+            // 单块选择不应该给表格打标记。
+            set_selection(editor, 0, 0, 0, alpha_len, cx);
+            let table = visible[1].entity.read(cx);
+            assert_eq!(table.editor_selection_range, None);
+            assert!(!table.cross_block_selection_covers_atomic_block());
+
+            // 选择清空后标记必须撤销，否则表格会一直显示为选中。
+            set_selection(editor, 0, 0, 2, gamma_len, cx);
+            assert_eq!(
+                visible[1].entity.read(cx).editor_selection_range,
+                Some(0..0)
+            );
+            editor.clear_cross_block_selection(cx);
+            assert_eq!(visible[1].entity.read(cx).editor_selection_range, None);
+        });
+        cx.quit();
+    }
+
+    #[test]
+    fn cross_block_selection_marks_separator_but_not_empty_paragraph() {
+        let mut cx = TestAppContext::single();
+        init_editor_test_app(&mut cx);
+        let editor =
+            cx.new(|cx| Editor::from_markdown(cx, "alpha\n\n---\n\ngamma".to_string(), None));
+
+        editor.update(&mut cx, |editor, cx| {
+            // 末尾补一个空段落，模拟在文档末尾插入结构块后的空行。
+            let empty =
+                Editor::new_block(cx, crate::components::BlockRecord::paragraph(String::new()));
+            let index = editor.document.root_count();
+            editor
+                .document
+                .insert_blocks_at(None, index, vec![empty], cx);
+
+            let visible = editor.document.visible_blocks().to_vec();
+            assert_eq!(visible.len(), 4, "alpha / 分隔线 / gamma / 空段落");
+            assert!(visible[1].entity.read(cx).kind().is_separator());
+
+            // 从 alpha 开头拖到末尾空段落：分隔线整块被选中，空行不参与高亮。
+            set_selection(editor, 0, 0, 3, 0, cx);
+            let separator = visible[1].entity.read(cx);
+            assert_eq!(separator.visible_len(), 0);
+            assert_eq!(separator.editor_selection_range, Some(0..0));
+            assert!(separator.cross_block_selection_covers_atomic_block());
+
+            let empty = visible[3].entity.read(cx);
+            assert_eq!(empty.visible_len(), 0);
+            assert_eq!(empty.editor_selection_range, None);
+            assert!(!empty.cross_block_selection_covers_atomic_block());
+        });
+        cx.quit();
     }
 
     enum FootnoteDeleteAction {

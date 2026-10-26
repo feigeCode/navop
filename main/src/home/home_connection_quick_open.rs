@@ -238,7 +238,6 @@ impl ListDelegate for ConnectionQuickOpenDelegate {
         cx: &mut Context<ListState<Self>>,
     ) -> Option<Self::Item> {
         let connection = self.filtered_items.get(ix.row)?.clone();
-        let parent = self.parent.clone();
         let name = connection.name.clone();
         let icon = {
             let extension_catalog = crate::connection_visuals::extension_catalog_from_cx(cx);
@@ -249,23 +248,20 @@ impl ListDelegate for ConnectionQuickOpenDelegate {
                 extension_catalog.as_deref(),
             )
         };
-        let connection_for_open = connection.clone();
-        let save_parent = parent.clone();
+        let save_parent = self.parent.clone();
         // 临时连接（无数据库 ID）提供“保存为连接”入口。
         let temporary_connection = connection.id.is_none().then(|| connection.clone());
 
+        // 打开连接只走 `confirm` 这一条路径：列表内建的点击处理会先
+        // `set_selected_index` 再调用 `confirm`，键盘 Enter 走的也是同一条路径。
+        // 这里不要再给行挂 `on_click` 打开连接，否则一次点击会先后触发行内
+        // 回调与列表 confirm，一次点击创建两个会话（issue #461）。
         Some(
             ListItem::new(ix)
                 .mx_2()
                 .h(px(44.0))
                 .px_3()
                 .rounded(px(6.0))
-                .on_click(move |_, window, cx| {
-                    parent.update(cx, |this, cx| {
-                        this.open_connection_from_quick(&connection_for_open, window, cx);
-                    });
-                    window.close_dialog(cx);
-                })
                 .child(
                     h_flex()
                         .w_full()
@@ -431,5 +427,36 @@ mod tests {
             },
             None,
         )
+    }
+
+    /// 回归保护（issue #461）：快速打开对话框里点一行只能新建一条会话。
+    /// 列表内建的点击处理会调用 `ListState` 的 confirm，若行内再挂一层打开回调，
+    /// 同一次点击就会打开两次连接，因此行渲染路径不得直接打开连接。
+    #[test]
+    fn quick_open_rows_open_connections_only_through_confirm() {
+        let source = include_str!("home_connection_quick_open.rs");
+        let render_item = source
+            .split("fn render_item(")
+            .nth(1)
+            .expect("quick open delegate renders items")
+            .split("fn set_selected_index(")
+            .next()
+            .expect("render_item has an end marker");
+        let confirm = source
+            .split("fn confirm(")
+            .nth(1)
+            .expect("quick open delegate confirms the selected item")
+            .split("fn cancel(")
+            .next()
+            .expect("confirm has an end marker");
+
+        assert!(
+            !render_item.contains("open_connection_from_quick"),
+            "行渲染不得自己打开连接，否则一次点击会先后触发行回调和列表 confirm（issue #461）"
+        );
+        assert!(
+            confirm.contains("open_connection_from_quick"),
+            "点击与回车都应通过 confirm 打开连接"
+        );
     }
 }

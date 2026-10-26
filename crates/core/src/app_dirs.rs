@@ -37,6 +37,29 @@ pub(crate) fn installed_data_dir() -> Option<PathBuf> {
     dirs::data_dir().map(|root| preferred_dir_from_root(&root))
 }
 
+/// 单元测试专用的数据目录。
+///
+/// `cargo test` 绝不能落盘到真实用户数据目录：验证文件、密钥元信息这类
+/// 「固定文件名」的状态一旦被测试覆盖，已安装的正式版本就再也解不开自己的
+/// 数据（2026-10-26 的 key_verification 污染事故即此原因）。每个测试进程
+/// 使用独立临时目录，既隔离真实目录，也避免多次运行互相干扰。
+#[cfg(test)]
+pub(crate) fn test_data_dir() -> PathBuf {
+    static TEST_DATA_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    TEST_DATA_DIR
+        .get_or_init(|| {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_nanos())
+                .unwrap_or_default();
+            let dir = std::env::temp_dir()
+                .join(format!("navop-test-data-{}-{nanos}", std::process::id()));
+            let _ = std::fs::create_dir_all(&dir);
+            dir
+        })
+        .clone()
+}
+
 pub fn migrate_legacy_directories() -> Result<()> {
     // 便携与 debug 开发目录都不该触碰生产安装目录。
     if crate::app_paths::initialized_paths()

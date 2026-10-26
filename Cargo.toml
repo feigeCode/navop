@@ -88,6 +88,7 @@ reqwest = { git = "https://github.com/zed-industries/reqwest.git", rev = "c15662
 
 anyhow = "1.0.102"
 argon2 = "0.5.3"
+keyring = { version = "3.6.3", default-features = false }
 log = "0.4"
 markdown = { version = "1.0.0", features = ["serde"] }
 lsp-types = { version = "0.97.0", features = ["proposed"] }

@@ -475,7 +475,7 @@ async fn local_source_uses_stable_credential_cloud_ids_in_exported_connections()
     let synced_reference = synced_config
         .credential_reference
         .expect("synced credential reference");
-    assert_eq!(synced_id, synced_reference.credential_id);
+    assert_eq!(0, synced_reference.credential_id);
     assert_eq!(
         Some("credential-cloud-stable".to_string()),
         synced_reference.credential_cloud_id
@@ -585,11 +585,56 @@ async fn local_source_replaces_stale_credential_cloud_id_during_connection_expor
         .credential_reference
         .expect("exported credential reference");
 
-    assert_eq!(credential_id, exported_reference.credential_id);
+    assert_eq!(0, exported_reference.credential_id);
     assert_eq!(
         Some("credential-cloud-current".to_string()),
         exported_reference.credential_cloud_id
     );
+}
+
+/// 回归测试：同一逻辑连接在两台设备上绑定的本地凭据行号不同，
+/// 导出的明文载荷（进而 checksum）必须完全一致。
+///
+/// 修复前 `enrich_credential_references` 会把源设备的本地整数 ID
+/// 留在载荷里，同一连接跨设备的 checksum 永不相等，触发持续假冲突。
+#[tokio::test(flavor = "current_thread")]
+async fn local_source_export_is_identical_across_local_credential_ids() {
+    let fixture = CredentialFixture::new();
+    let mut device_a_credential = credential("device-a credential", true);
+    device_a_credential.cloud_id = Some("credential-cloud-shared".to_string());
+    let device_a_id = fixture.insert_credential(device_a_credential);
+    let device_a_connection =
+        fixture.insert_connection_with_credential("shared connection", device_a_id);
+
+    let mut device_b_credential = credential("device-b credential", true);
+    device_b_credential.cloud_id = Some("credential-cloud-shared".to_string());
+    let device_b_id = fixture.insert_credential(device_b_credential);
+    let device_b_connection =
+        fixture.insert_connection_with_credential("shared connection", device_b_id);
+
+    let items = fixture.source.list_items().await.expect("items list");
+    let export = |connection_id: i64| {
+        let item = items
+            .iter()
+            .find(|item| item.local_id == format!("connection:{connection_id}"))
+            .unwrap_or_else(|| panic!("connection {connection_id} snapshot exists"));
+        fixture.source.export_item(item)
+    };
+    let record_a = export(device_a_connection).await.expect("device-a export");
+    let record_b = export(device_b_connection).await.expect("device-b export");
+
+    // 本地整数 ID 不同只是各设备数据库的巧合，不代表逻辑内容不同。
+    assert_ne!(device_a_id, device_b_id);
+    assert_eq!(record_a.checksum, record_b.checksum);
+
+    let service = fixture.service.read().expect("service read lock");
+    let payload_a = service
+        .decrypt_sync_data_connection(&record_a)
+        .expect("device-a connection decrypts");
+    let payload_b = service
+        .decrypt_sync_data_connection(&record_b)
+        .expect("device-b connection decrypts");
+    assert_eq!(payload_a.params, payload_b.params);
 }
 
 #[tokio::test(flavor = "current_thread")]

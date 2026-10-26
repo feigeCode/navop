@@ -4,6 +4,30 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.21.2] - 2026-10-26
+
+#### 修复与优化
+
+- 个人同步：修复引用了钥匙串凭据的连接在多设备间持续产生假冲突的问题。连接载荷里的凭据引用导出时保留了源设备的本地整数 ID，而每台设备的行号各不相同，导致同一条连接跨设备的 checksum 永不相等，被判定为「双方都改过」而反复冲突、来回覆盖。现在导出载荷统一只保留跨设备稳定的 `credential_cloud_id`，整数 ID 置零（下载时仍按云端 ID 映射回本机行号，行为不变）。
+- 安全：个人主密钥的派生从「SHA-256 + 固定盐」升级为 Argon2id + 随机盐（64 MiB / 3 次迭代），验证数据改为版本化信封 `NAVOPKDF2:`。旧格式在解锁时自动迁移并重加密本地连接、凭据、团队密钥缓存与冲突快照，云端记录由既有 pending 机制补做；迁移中断可续，旧密文始终可读（#460）。
+- 安全：自动解锁用的主密钥不再默认用程序内置密钥加密写进 `data/state/key_storage`，改存系统凭据库（macOS 钥匙串 / Windows 凭据管理器）并自动迁移、删除旧文件；没有可用凭据库的平台改为每次启动手动输入，不再静默回退弱存储（#459）。
+- 设置：「记住主密码」新增「主密钥保存位置」选项，可在系统凭据库（macOS 显示「macOS 钥匙串」、Windows 显示「Windows 凭据管理器」）与「本机文件（数据目录）」之间切换，便携模式同样可选。切换时先把已记住的密钥写入新位置、成功后再删除旧副本；选择本机文件会显示内置密钥加密的风险提示（#459）。
+- 首页：从标签栏「+」打开的「打开连接」列表里点一次不再新建两个 SSH 会话。此前同一行既挂了行内的打开回调，又有列表内建的点击 → `confirm` 打开路径，一次点击先后走完两条路径（已有 2 个标签时点一次直接变成 4 个）；现在点击与键盘回车统一只走 `confirm`，并补源码级回归测试守住「行渲染不得直接打开连接」（#461）。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.21.2) 下载桌面端安装包
+
+---
+
+#### Fixes and Improvements
+
+- Personal sync: fixed constantly recurring false conflicts for connections that reference keychain credentials. The exported payload kept the source device's local integer credential ID, which differs on every device, so the same logical connection never produced an equal checksum across devices and was repeatedly flagged as "modified on both sides", overwriting back and forth. Exports now carry only the device-stable `credential_cloud_id` with the integer ID zeroed (downloads still map the cloud ID back to the local row, unchanged behavior).
+- Security: the personal master key is now derived with Argon2id and a random salt (64 MiB / 3 iterations) instead of SHA-256 with a fixed salt, and its verification data uses a versioned `NAVOPKDF2:` envelope. Legacy installs are migrated on unlock: local connections, credentials, team key caches and conflict snapshots are re-encrypted, cloud records are re-encrypted through the existing pending mechanism, interrupted migrations resume, and old ciphertext stays readable throughout (#460).
+- Security: the master key kept for automatic unlock is no longer encrypted into `data/state/key_storage` with an application-embedded key by default. It is stored in the system credential store (macOS Keychain / Windows Credential Manager), the legacy file is migrated and deleted, and platforms without an available credential store ask for the key on each start instead of silently falling back to the weak store (#459).
+- Settings: "remember master key" now has a storage location choice between the system credential store (shown as "macOS Keychain" on macOS and "Windows Credential Manager" on Windows) and a local file in the data directory, also in portable mode. Switching writes the remembered key to the new location first and only then deletes the old copy; the local file option shows the risk that it is encrypted with an application-embedded key (#459).
+- Home: clicking an entry in the “Open connection” list opened from the tab bar’s “+” no longer creates two SSH sessions. A row carried both its own open callback and the list’s built-in click → `confirm` open path, so a single click ran through both (going from 2 tabs to 4 in one click); clicks and the Enter key now share the single `confirm` path, guarded by a source-level regression test (#461).
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.21.1...v0.21.2
+
 ## [v0.21.1] - 2026-10-22
 
 #### 修复与优化

@@ -3184,22 +3184,27 @@ impl Render for Block {
             }
             BlockKind::Table => {
                 let Some(runtime) = self.table_runtime.clone() else {
-                    return focused_base
-                        .text_size(px(t.text_size))
-                        .text_color(c.text_default)
-                        .line_height(rems(t.text_line_height))
-                        .child(self.render_text_or_mixed_inline_visuals(
-                            &theme,
-                            focused,
-                            is_placeholder,
-                            None,
-                            None,
-                            c.text_default,
-                            t.text_size,
-                            FontWeight::NORMAL,
-                            cx,
-                        ))
-                        .into_any_element();
+                    // 表格记录还没解析出来时退回纯文本渲染，此时块有可见文本，
+                    // 选中高亮由文本层负责，走统一的收尾流程即可。
+                    return self.finish_block_content(
+                        focused_base
+                            .text_size(px(t.text_size))
+                            .text_color(c.text_default)
+                            .line_height(rems(t.text_line_height))
+                            .child(self.render_text_or_mixed_inline_visuals(
+                                &theme,
+                                focused,
+                                is_placeholder,
+                                None,
+                                None,
+                                c.text_default,
+                                t.text_size,
+                                FontWeight::NORMAL,
+                                cx,
+                            ))
+                            .into_any_element(),
+                        &theme,
+                    );
                 };
 
                 let viewport_width = f32::from(window.viewport_size().width.max(px(1.0)));
@@ -3400,7 +3405,7 @@ impl Render for Block {
                             ))
                     });
 
-                    div()
+                    let table_root = div()
                         .id(block_id)
                         .debug_selector(|| "table-root".to_string())
                         .w_full()
@@ -3413,8 +3418,18 @@ impl Render for Block {
                         .flex_col()
                         .gap(px(0.0))
                         .children(rows)
-                        .children(table_toolbar)
-                        .into_any_element()
+                        .children(table_toolbar);
+
+                    // 表格被跨块选择整块覆盖时补一层选中色（表格不渲染文本元素，
+                    // 文本层画不出高亮）。覆盖层放进表格根 div，避免把上方给浮动
+                    // 工具栏预留的那圈外边距也涂上色。
+                    if self.cross_block_selection_covers_atomic_block() {
+                        table_root
+                            .child(Self::cross_block_selection_overlay(&theme))
+                            .into_any_element()
+                    } else {
+                        table_root.into_any_element()
+                    }
                 }
             }
             BlockKind::HtmlBlock => {
@@ -3497,7 +3512,60 @@ impl Render for Block {
                 .into_any_element(),
         };
 
-        wrap_with_quote_guides(content, visible_quote_guides(self), &theme)
+        self.finish_block_content(content, &theme)
+    }
+}
+
+impl Block {
+    /// 收尾块的渲染内容：自绘原子块（表格、分隔线）被跨块选择整块覆盖时先
+    /// 补一层选中色，再按引用层级补引号竖线。
+    ///
+    /// 这类块不渲染 `BlockTextElement`，文本层画不出跨块选择的高亮，所以
+    /// 只能在这里补覆盖色，让拖选覆盖到它们时也显示为选中（复制/剪切本来
+    /// 就已包含整块内容）。
+    fn finish_block_content(&self, content: AnyElement, theme: &Theme) -> AnyElement {
+        let content = if self.needs_outer_selection_overlay() {
+            div()
+                .relative()
+                .w_full()
+                .child(content)
+                .child(Self::cross_block_selection_overlay(theme))
+                .into_any_element()
+        } else {
+            content
+        };
+
+        wrap_with_quote_guides(content, visible_quote_guides(self), theme)
+    }
+
+    /// 是否要在块内容外层包一层选中色覆盖层。
+    ///
+    /// 表格在自己的根 div 里画（那里带了工具栏预留外边距，包在外层会把边距也
+    /// 涂上），分隔线这类块的内容边界就是块边界，直接在外层包。
+    fn needs_outer_selection_overlay(&self) -> bool {
+        self.cross_block_selection_covers_atomic_block() && !matches!(self.kind(), BlockKind::Table)
+    }
+
+    /// 跨块选择覆盖层：整块宽高的选中色，覆盖在被选中的自绘原子块上。
+    ///
+    /// 文字选中色是垫在字形下面画的，这里只能盖在自绘内容上面，所以把不透明度
+    /// 压到 0.55：暗色主题的选中色本身不透明，原样盖上去会把表格内容糊成一块。
+    fn cross_block_selection_overlay(theme: &Theme) -> Div {
+        let mut color = theme.colors.selection;
+        color.a = color.a.min(0.55);
+        div().absolute().inset_0().bg(color)
+    }
+
+    /// 跨块选择是否整块覆盖了当前这个自绘原子块（表格、分隔线）。
+    ///
+    /// 零可见长度的块在 `sync_cross_block_selection_visuals` 里会被打上
+    /// `editor_selection_range = Some(0..0)` 的「整块被选中」标记；文本层
+    /// 会把空区间过滤掉，因此只能由块渲染层自己画高亮。空段落同样是零长度，
+    /// 但它是空行分隔符，不在 `paints_own_atomic_content` 之列。
+    pub(crate) fn cross_block_selection_covers_atomic_block(&self) -> bool {
+        self.editor_selection_range.is_some()
+            && self.visible_len() == 0
+            && self.kind().paints_own_atomic_content()
     }
 }
 
