@@ -939,6 +939,8 @@ apps/*        不得直接依赖域 crate（只能经 *_domain）
 | `205d97f55` | `app_kit::bootstrap` 在路径未初始化时调用 `initialize_app_paths`，独立产品不再依赖 main 的启动路径 | 已完成，`main` 760 tests、`app_kit` 3 tests 通过 |
 | `5974b0d3a` | macOS 应用包按产品生成：`navop`（Navop/navop/com.onetcli.app/保留文档类型）、`navop-shell`（Navop Shell/navop-shell/com.navop.shell/无文档类型）、`navop-data`（Navop Data/navop-data/com.navop.data/无文档类型）；DMG 文件名改按二进制名 | 已完成，`script/test-bundle-macos.sh` 三产品通过，`test-release-packaging.mjs` 34/34 |
 | `04fdc8c95` | 新增 Shell/Data 的 Linux desktop、图标与 `script/package-linux-product.sh`；产出普通 tar 与带产品 portable marker 的便携包 | 已完成，脚本本地打包验证通过；包装测试 35/35 |
+| `ed7614d22` | 新增参数化 WiX 安装器 `navop-product.wxs`/`navop-product-bundle.wxs` 与 `build-product-installer.ps1`；Shell/Data 使用独立 UpgradeCode、安装目录与注册表键；CI 矩阵加入 Windows x64 | 已完成，XML/YAML 与 38 项打包测试通过；本机无 `wix`/`pwsh`，未实际编译 MSI |
+
 | `355be3cf7` | 新增 `.github/workflows/standalone-products.yml`：Shell/Data × macOS arm64/x64 × Linux x64 的 6 个构建任务，复用产品级 macOS/Linux 打包脚本 | 已完成本地 YAML 解析与包装测试 36/36；尚未在 GitHub Actions 实跑 |
 | — | 三产品启动冒烟：`navop-shell`/`navop-data` 用临时 `HOME` 启动 8 秒，无 panic，分别创建 `.navop-shell-dev`/`.navop-data-dev` 目录，Data 完成 `one-hub.db` 迁移 | 通过；真实窗口交互与连接打开仍待人工验证 |
 
