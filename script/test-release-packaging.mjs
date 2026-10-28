@@ -197,7 +197,7 @@ test("Linux publishes one package per architecture plus a separate GPU dependenc
   assert.match(build, /if \[ "\$\{\{ runner\.os \}\}" = "Linux" \]/);
   assert.match(
     build,
-    /cargo zigbuild[\s\S]*--release[\s\S]*-p main[\s\S]*--target "\$\{\{ matrix\.target \}\}\.2\.28"/,
+    /cargo zigbuild[\s\S]*--release[\s\S]*-p navop[\s\S]*--target "\$\{\{ matrix\.target \}\}\.2\.28"/,
   );
   // No platform drops the default feature set: `embedded-webview` is off in the
   // default set itself (see main/Cargo.toml), so the shape that gets published is
@@ -218,7 +218,7 @@ test("Linux publishes one package per architecture plus a separate GPU dependenc
   assert.doesNotMatch(build, /extra_features/);
   assert.match(
     build,
-    /cargo build --release -p main --target "\$\{\{ matrix\.target \}\}"/,
+    /cargo build --release -p navop --target "\$\{\{ matrix\.target \}\}"/,
   );
   assert.match(
     build,
@@ -251,7 +251,7 @@ test("Linux publishes one package per architecture plus a separate GPU dependenc
   // Portable mode exists at all only because this detection stays platform
   // independent; a Windows-only guard here would make the Linux archive ship a
   // marker file that nothing ever reads.
-  assert.match(appPathsSource, /join\(PORTABLE_MARKER_FILE\)\.is_file\(\)/);
+  assert.match(appPathsSource, /join\(app_path_names\(\)\.portable_marker\)\s*\.is_file\(\)/);
   assert.doesNotMatch(appPathsSource, /cfg\(windows\)/);
   assert.doesNotMatch(appPathsSource, /cfg\(target_os = "windows"\)/);
   assert.match(packageLinux, new RegExp(`PORTABLE_MARKER_FILE="${markerFile}"`));
@@ -393,7 +393,7 @@ test("no release build enables the embedded webview, while the opt-in path still
   assert.doesNotMatch(build, /--features[^\n]*wasm-components/);
   assert.match(
     build,
-    /cargo zigbuild[\s\S]*--release[\s\S]*-p main[\s\S]*--target "\$\{\{ matrix\.target \}\}\.2\.28"/,
+    /cargo zigbuild[\s\S]*--release[\s\S]*-p navop[\s\S]*--target "\$\{\{ matrix\.target \}\}\.2\.28"/,
   );
 
   // Windows 32-bit is the one platform that has to name features explicitly (it

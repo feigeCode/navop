@@ -19,7 +19,7 @@ Key capabilities:
 
 ```bash
 # Run the application
-cargo run -p main
+cargo run -p navop
 
 # Build
 cargo build
@@ -51,8 +51,8 @@ cargo run  # (default members include crates/story)
 cargo run --example table
 
 # Performance profiling (macOS)
-MTL_HUD_ENABLED=1 cargo run -p main
-samply record cargo run -p main
+MTL_HUD_ENABLED=1 cargo run -p navop
+samply record cargo run -p navop
 
 # Install system dependencies (Linux/macOS)
 script/bootstrap
@@ -70,7 +70,7 @@ The workspace uses an external `gpui-component` checkout plus `main` and the Nav
 
 ### Application Layer
 
-- **`main/`** — Application entry point and main UI. Orchestrates all subsystems: auth, settings, licensing, updates, home page. Entry: `main/src/main.rs` → `NavopApp`.
+- **`main/`** — Application entry point and main UI. Orchestrates all subsystems: auth, settings, licensing, updates, home page. 入口：`apps/navop/src/main.rs` → `navop_app::run()`（`main/` 现在是 `navop_app` 库）。
 
 The `navop` executable is GUI/update-only and does not embed database, SSH, SFTP, or tool business subcommands. A future standalone `navop-cli` should connect to the running application through Public MCP discovery and its authenticated tool interface instead of linking directly to `main` or application state.
 
@@ -102,7 +102,7 @@ The `navop` executable is GUI/update-only and does not embed database, SSH, SFTP
 
 ## Application Initialization Flow
 
-The startup sequence in `main/src/main.rs` and `main/src/navop_app.rs` is order-sensitive:
+The startup sequence in `main/src/lib.rs` and `main/src/navop_app.rs` is order-sensitive:
 
 1. `update::handle_update_command()` — handle self-update CLI commands
 2. `load_env_files()` — 仅开发构建从 CWD / 工作区加载 `.env.local` / `.env`
