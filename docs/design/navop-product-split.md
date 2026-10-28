@@ -918,7 +918,7 @@ apps/*        不得直接依赖域 crate（只能经 *_domain）
 | `7295e415a` | 新增 `data_domain`，Redis 单连接经 `ConnectionRegistry` 打开；全量产品注册 DataDomain | 已完成，`main` 767 个测试通过 |
 | `87b76d56f` | `HomeContext` 增加工作区查询与连接排序；Redis 工作区标签迁入 `data_domain` | 已完成，`main` 767 个测试通过 |
 | `6a7f202bb` | `HomeContext` 增加数据库打开模式；Database 单连接/工作区标签迁入 `data_domain` | 已完成，`main` 767 个测试通过 |
-| `b1f6a6f0e` | Mongo 单连接/工作区标签迁入 `data_domain` | 已完成，`main` 767 个测试通过 |
+| `93b073e56` | Mongo 单连接/工作区标签迁入 `data_domain` | 已完成，`main` 767 个测试通过 |
 
 尚未开始：`data_domain`、`shell_domain`、`runtime_core/runtime_database` 独立包、`apps/navop` 全量包、打包与 CI 矩阵。
 
