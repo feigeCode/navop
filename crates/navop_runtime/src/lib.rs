@@ -2,9 +2,9 @@ pub mod connections;
 #[cfg(feature = "database")]
 pub use runtime_database::database_tools;
 #[cfg(feature = "redis")]
-pub mod redis_tools;
+pub use runtime_redis::redis_tools;
 #[cfg(feature = "sftp")]
-pub mod sftp_tools;
+pub use runtime_sftp::sftp_tools;
 
 pub use runtime_core::workspaces;
 pub use runtime_core::builtin_tool_registry_with_version;

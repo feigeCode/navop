@@ -8283,20 +8283,15 @@ dependencies = [
 name = "navop_runtime"
 version = "0.15.2"
 dependencies = [
- "agent_runtime",
- "anyhow",
- "async-trait",
- "base64 0.22.1",
  "db",
  "futures",
  "one-core",
- "redis-runtime",
  "runtime_core",
  "runtime_database",
+ "runtime_redis",
+ "runtime_sftp",
  "rusqlite",
  "serde_json",
- "sftp",
- "ssh",
  "tempfile",
  "tokio",
  "tokio-util",
@@ -11626,6 +11621,39 @@ dependencies = [
  "one-core",
  "rusqlite",
  "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tool_runtime",
+]
+
+[[package]]
+name = "runtime_redis"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "futures",
+ "one-core",
+ "redis-runtime",
+ "rusqlite",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tool_runtime",
+]
+
+[[package]]
+name = "runtime_sftp"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "futures",
+ "one-core",
+ "rusqlite",
+ "serde_json",
+ "sftp",
+ "ssh",
  "tempfile",
  "tokio",
  "tokio-util",

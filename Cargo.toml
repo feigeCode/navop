@@ -61,6 +61,8 @@ members = [
     "crates/redis-runtime",
     "crates/runtime_core",
     "crates/runtime_database",
+    "crates/runtime_redis",
+    "crates/runtime_sftp",
     "crates/mongodb-runtime",
     "crates/redis_view",
     "crates/license_tool",
@@ -159,6 +161,8 @@ redis_view = { path = "crates/redis_view" }
 redis-runtime = { path = "crates/redis-runtime" }
 runtime_core = { path = "crates/runtime_core" }
 runtime_database = { path = "crates/runtime_database" }
+runtime_redis = { path = "crates/runtime_redis" }
+runtime_sftp = { path = "crates/runtime_sftp" }
 mongodb-runtime = { path = "crates/mongodb-runtime" }
 one-ui = { path = "crates/one_ui" }
 one-assets = { path = "crates/one-assets" }
