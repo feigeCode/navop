@@ -909,9 +909,11 @@ apps/*        不得直接依赖域 crate（只能经 *_domain）
 | `e12c7945b` | `extension-runtime` 的 `database`/`remote-desktop` 可选特性 | 已完成，默认/无域/仅 wasm 三种组合编译通过 |
 | `62d38c9ce` | Shell 侧下游关闭扩展默认域特性 | 已完成，`terminal_view` 闭包已无 `db`/`db_view`/`redis-runtime`/`mongodb-runtime` |
 | `4bc1361c8` | 抽出 `crates/ssh_form`（SSH 表单 + 主机密钥 UI + MFA） | 已完成，51 个测试通过 |
+| `ca747569b` | `app_kit`：按产品身份配置数据目录/keychain；修复 ssh_form 移动后的源码断言路径 | 已完成，`app_kit` 3 个测试、`one-core` 962 个测试通过 |
+| `09d8bd1c2` | `app_paths` 支持产品级便携标记/开发目录/缓存目录；`main` 启动前应用 `FULL` 身份 | 已完成，`main` 以 `-Dwarnings` 编译通过 |
 
-尚未开始：`app_kit`、`data_domain`、`shell_domain`、`runtime_core/runtime_database` 独立包、三个 `apps/*` bin、身份/数据目录切换、打包与 CI 矩阵。
+尚未开始：`data_domain`、`shell_domain`、`runtime_core/runtime_database` 独立包、三个 `apps/*` bin、打包与 CI 矩阵。
 
 已知问题：`extension-runtime` 的 `db_tree_action_runs_registered_wasm_component` 在本机因 fixture 指向 `.wat` 文本而失败（`bad magic number`），与本次改动无关；其余 227 个测试通过。`ssh_form` 暂用 `edition = "2021"` 以保持与原实现一致，后续随 `terminal_view` 一起升级。
 
-下一步建议：先抽 `app_kit` 的 `Product` 启动骨架与身份切换，再迁 `shell_domain`（先 KnownHosts/本地终端），最后迁 `data_domain`（先 Redis，再 Database）。
+下一步建议：把 `main` 的启动流程迁到 `app_kit::bootstrap`，再迁 `shell_domain`（先 KnownHosts/本地终端），最后迁 `data_domain`（先 Redis，再 Database）；三个 `apps/*` 先做只打开空窗口的骨架，验证身份/路径隔离后再填 UI。
