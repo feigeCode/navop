@@ -47,6 +47,10 @@ pub fn configure_identity(identity: &'static AppIdentity) {
 /// 各产品的错误处理策略写死。
 pub fn bootstrap<P: Product>(product: &P, cx: &mut App) -> anyhow::Result<()> {
     configure_identity(product.identity());
+    if one_core::app_paths::initialized_paths().is_none() {
+        let context = one_core::app_paths::process_context()?;
+        one_core::app_paths::initialize_app_paths(&Default::default(), &context)?;
+    }
     let mut registry = DomainRegistry::default();
     for domain in product.domains() {
         registry.register_domain(domain.id());
@@ -63,8 +67,14 @@ mod tests {
     #[test]
     fn full_identity_keeps_legacy_directory_and_keychain() {
         assert_eq!(AppIdentity::FULL.data_dir_name, "navop");
-        assert_eq!(AppIdentity::FULL.dir_migration_marker, ".one-hub-migration-complete");
-        assert_eq!(AppIdentity::FULL.development_keychain_service, "com.navop.desktop.dev");
+        assert_eq!(
+            AppIdentity::FULL.dir_migration_marker,
+            ".one-hub-migration-complete"
+        );
+        assert_eq!(
+            AppIdentity::FULL.development_keychain_service,
+            "com.navop.desktop.dev"
+        );
     }
 
     #[test]
@@ -77,6 +87,9 @@ mod tests {
     fn standalone_identities_use_isolated_directories() {
         assert_eq!(AppIdentity::SHELL.data_dir_name, "navop-shell");
         assert_eq!(AppIdentity::DATA.data_dir_name, "navop-data");
-        assert_ne!(AppIdentity::SHELL.keychain_service, AppIdentity::DATA.keychain_service);
+        assert_ne!(
+            AppIdentity::SHELL.keychain_service,
+            AppIdentity::DATA.keychain_service
+        );
     }
 }
