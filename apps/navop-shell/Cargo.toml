@@ -1,0 +1,16 @@
+[package]
+name = "navop-shell"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[[bin]]
+name = "navop-shell"
+path = "src/main.rs"
+
+[dependencies]
+app_kit.workspace = true
+domain_api.workspace = true
+gpui.workspace = true
+gpui_platform.workspace = true
+one-core.workspace = true

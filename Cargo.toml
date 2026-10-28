@@ -46,7 +46,26 @@ members = [
     "crates/one-assets",
     "tools/gpui-rdp-smoke",
     "tools/windows-rdp-probe",
-    "main", "crates/ssh", "crates/x11_forwarding", "crates/sftp", "crates/ftp", "crates/sftp_transfer", "crates/sftp_view", "crates/one_ui", "crates/redis-runtime", "crates/mongodb-runtime", "crates/redis_view", "crates/license_tool", "crates/mongodb_view", "crates/remote_file_editor", "crates/remote_image_preview", "crates/resource_view", "crates/embedded_terminal"]
+    "main",
+    "apps/navop-shell",
+    "apps/navop-data",
+    "crates/ssh",
+    "crates/x11_forwarding",
+    "crates/sftp",
+    "crates/ftp",
+    "crates/sftp_transfer",
+    "crates/sftp_view",
+    "crates/one_ui",
+    "crates/redis-runtime",
+    "crates/mongodb-runtime",
+    "crates/redis_view",
+    "crates/license_tool",
+    "crates/mongodb_view",
+    "crates/remote_file_editor",
+    "crates/remote_image_preview",
+    "crates/resource_view",
+    "crates/embedded_terminal",
+]
 resolver = "2"
 
 [workspace.package]

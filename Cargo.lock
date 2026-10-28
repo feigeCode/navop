@@ -8234,6 +8234,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "navop-data"
+version = "0.1.0"
+dependencies = [
+ "app_kit",
+ "domain_api",
+ "gpui-fast",
+ "gpui-fast-platform",
+ "one-core",
+]
+
+[[package]]
+name = "navop-shell"
+version = "0.1.0"
+dependencies = [
+ "app_kit",
+ "domain_api",
+ "gpui-fast",
+ "gpui-fast-platform",
+ "one-core",
+]
+
+[[package]]
 name = "navop_runtime"
 version = "0.15.2"
 dependencies = [
