@@ -918,9 +918,10 @@ apps/*        不得直接依赖域 crate（只能经 *_domain）
 | `7295e415a` | 新增 `data_domain`，Redis 单连接经 `ConnectionRegistry` 打开；全量产品注册 DataDomain | 已完成，`main` 767 个测试通过 |
 | `87b76d56f` | `HomeContext` 增加工作区查询与连接排序；Redis 工作区标签迁入 `data_domain` | 已完成，`main` 767 个测试通过 |
 | `6a7f202bb` | `HomeContext` 增加数据库打开模式；Database 单连接/工作区标签迁入 `data_domain` | 已完成，`main` 767 个测试通过 |
+| `b1f6a6f0e` | Mongo 单连接/工作区标签迁入 `data_domain` | 已完成，`main` 767 个测试通过 |
 
 尚未开始：`data_domain`、`shell_domain`、`runtime_core/runtime_database` 独立包、`apps/navop` 全量包、打包与 CI 矩阵。
 
 已知问题：`extension-runtime` 的 `db_tree_action_runs_registered_wasm_component` 在本机因 fixture 指向 `.wat` 文本而失败（`bad magic number`），与本次改动无关；其余 227 个测试通过。`ssh_form` 暂用 `edition = "2021"` 以保持与原实现一致，后续随 `terminal_view` 一起升级。
 
-下一步建议：Database 已迁入非外部驱动路径，需要外部驱动的连接仍回退 `main` 的安装守卫；接着迁 Mongo，或把驱动守卫抽象成 `domain_api::DriverGate` 后彻底移走。`shell_domain` 再迁本地终端/端口转发。`apps/navop` 全量包暂时仍由 `main` 的 `navop` bin 承担，等 `main` 抽出 lib 后再迁。
+下一步建议：Redis/Database/Mongo 都已进入 `data_domain`；剩余是外部驱动守卫（抽 `DriverGate`）与 SFTP/终端/端口转发进入 `shell_domain`。`apps/navop` 全量包暂时仍由 `main` 的 `navop` bin 承担，等 `main` 抽出 lib 后再迁。
