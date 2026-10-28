@@ -8264,13 +8264,23 @@ dependencies = [
 name = "navop-data"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "app_kit",
  "data_domain",
+ "db",
+ "db_view",
  "domain_api",
+ "gpui-component",
  "gpui-fast",
  "gpui-fast-platform",
+ "gpui-kit-assets",
+ "mongodb_view",
  "one-assets",
  "one-core",
+ "one-ui",
+ "port_forwarding",
+ "redis_view",
+ "tokio",
 ]
 
 [[package]]

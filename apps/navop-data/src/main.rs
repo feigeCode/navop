@@ -1,14 +1,23 @@
+mod home;
+mod sort;
+
 use domain_api::{AppIdentity, Product, ProductFeatures};
 use gpui::{
-    App, Bounds, Context, IntoElement, QuitMode, Render, TitlebarOptions, Window, WindowBounds,
-    WindowOptions, div, prelude::*, px, size,
+    App, AppContext as _, AssetSource, Bounds, QuitMode, SharedString, TitlebarOptions,
+    WindowBounds, WindowOptions, px, size,
 };
+use gpui_component::Root;
+use one_core::settings::AppSettings;
+use one_core::tab_container::TabContainer;
+use std::borrow::Cow;
 use std::sync::Arc;
+
+use home::DataHome;
 
 struct DataProduct;
 
 impl Product for DataProduct {
-    type Assets = one_assets::Assets;
+    type Assets = DataAssets;
 
     fn identity(&self) -> &'static AppIdentity {
         &AppIdentity::DATA
@@ -19,29 +28,55 @@ impl Product for DataProduct {
     }
 
     fn assets(&self) -> Self::Assets {
-        one_assets::Assets::new()
+        DataAssets::new()
     }
 
     fn domains(&self) -> Vec<Arc<dyn domain_api::Domain>> {
         vec![Arc::new(data_domain::DataDomain)]
     }
+
+    fn init(&self, cx: &mut App) -> anyhow::Result<()> {
+        gpui_component::init(cx);
+        one_core::init(cx)?;
+        let settings = AppSettings::load();
+        settings.apply(cx);
+        cx.set_global(settings);
+        one_ui::init(cx, Default::default());
+        db::init_cache(cx);
+        db_view::search_shortcut::init(cx);
+        db_view::sql_editor_view::init(cx);
+        redis_view::init(cx);
+        mongodb_view::init(cx);
+        Ok(())
+    }
 }
 
-struct DataPlaceholder {
-    identity: &'static AppIdentity,
+struct DataAssets {
+    builtin: gpui_component_assets::Assets,
+    icons: one_assets::Assets,
 }
 
-impl Render for DataPlaceholder {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .size_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(format!(
-                "{} 骨架已启动：app_id={}，数据目录={}",
-                self.identity.display_name, self.identity.app_id, self.identity.data_dir_name
-            ))
+impl DataAssets {
+    fn new() -> Self {
+        Self {
+            builtin: gpui_component_assets::Assets::new(""),
+            icons: one_assets::Assets::new(),
+        }
+    }
+}
+
+impl AssetSource for DataAssets {
+    fn load(&self, path: &str) -> anyhow::Result<Option<Cow<'static, [u8]>>> {
+        if let Some(asset) = self.icons.load(path)? {
+            return Ok(Some(asset));
+        }
+        self.builtin.load(path)
+    }
+
+    fn list(&self, path: &str) -> anyhow::Result<Vec<SharedString>> {
+        let mut assets = self.icons.list(path)?;
+        assets.extend(self.builtin.list(path)?);
+        Ok(assets)
     }
 }
 
@@ -49,6 +84,7 @@ fn main() {
     let product = DataProduct;
     let identity = product.identity();
     gpui_platform::application()
+        .with_assets(DataAssets::new())
         .with_quit_mode(QuitMode::LastWindowClosed)
         .run(move |cx: &mut App| {
             if let Err(error) = app_kit::bootstrap(&product, cx) {
@@ -56,7 +92,7 @@ fn main() {
                 cx.quit();
                 return;
             }
-            let bounds = Bounds::centered(None, size(px(900.0), px(600.0)), cx);
+            let bounds = Bounds::centered(None, size(px(1100.0), px(720.0)), cx);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: Some(TitlebarOptions {
@@ -66,8 +102,11 @@ fn main() {
                 app_id: Some(identity.app_id.to_owned()),
                 ..Default::default()
             };
-            if let Err(error) = cx.open_window(options, |_window, cx| {
-                cx.new(|_cx| DataPlaceholder { identity })
+            if let Err(error) = cx.open_window(options, |window, cx| {
+                window.activate_window();
+                let tab_container = cx.new(|cx| TabContainer::new(window, cx));
+                let home = cx.new(|cx| DataHome::new(tab_container, cx));
+                cx.new(|cx| Root::new(home, window, cx))
             }) {
                 eprintln!("failed to open navop-data window: {error}");
             }
