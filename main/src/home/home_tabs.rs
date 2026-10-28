@@ -1145,6 +1145,9 @@ impl HomePage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if app_kit::registry().open_connection(&conn, mode, self, window, cx) {
+            return;
+        }
         let Some(conn) = resolve_connection_credentials(&conn, window, cx) else {
             return;
         };

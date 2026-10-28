@@ -269,7 +269,7 @@ impl HomePage {
 pub(crate) fn resolve_connection_credentials(
     connection: &StoredConnection,
     window: &mut Window,
-    cx: &mut Context<HomePage>,
+    cx: &mut App,
 ) -> Option<StoredConnection> {
     let repository = cx
         .global::<GlobalStorageState>()

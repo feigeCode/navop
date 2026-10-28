@@ -103,6 +103,15 @@ impl HomeContext for HomePage {
         self._subscriptions.push(subscription);
     }
 
+    fn resolve_connection_credentials(
+        &mut self,
+        connection: &StoredConnection,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<StoredConnection> {
+        crate::home_tab::connection_open::resolve_connection_credentials(connection, window, cx)
+    }
+
     fn port_forwarding_runtime(
         &self,
     ) -> Arc<tokio::sync::Mutex<port_forwarding::PortForwardingRuntime>> {

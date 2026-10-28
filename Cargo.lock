@@ -12714,6 +12714,8 @@ dependencies = [
  "known_hosts_view",
  "one-core",
  "port_forwarding_view",
+ "remote_desktop",
+ "remote_desktop_view",
  "sftp_view",
  "terminal",
  "terminal_view",

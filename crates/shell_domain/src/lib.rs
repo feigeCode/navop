@@ -10,9 +10,13 @@ use domain_api::{
 use gpui::{App, AppContext, Window};
 use known_hosts_view::KnownHostsPage;
 use one_core::settings::{AppSettings, LocalTerminalProfileKind};
-use one_core::storage::{ConnectionType, StoredConnection};
+use one_core::storage::{
+    ConnectionType, RemoteDesktopProtocol as StoredRemoteDesktopProtocol, StoredConnection,
+};
 use one_core::tab_container::{TabItem, TabOpenMode};
 use port_forwarding_view::{PortForwardingTab, PortForwardingTabConfig};
+use remote_desktop::{RemoteDesktopConnectionOptions, RemoteDesktopProtocol};
+use remote_desktop_view::{RemoteDesktopView, RemoteDesktopViewConfig};
 use sftp_view::{SftpView, SftpViewEvent};
 use std::sync::Arc;
 use terminal::{local_config_from_settings, local_config_from_settings_with_profile};
@@ -32,6 +36,14 @@ impl Domain for ShellDomain {
         registry.register_connection_opener(
             ConnectionType::PortForwarding,
             Arc::new(PortForwardingConnectionOpener),
+        );
+        registry.register_connection_opener(
+            ConnectionType::Rdp,
+            Arc::new(RemoteDesktopConnectionOpener),
+        );
+        registry.register_connection_opener(
+            ConnectionType::Vnc,
+            Arc::new(RemoteDesktopConnectionOpener),
         );
     }
 
@@ -260,6 +272,81 @@ impl ConnectionOpener for PortForwardingConnectionOpener {
     }
 }
 
+struct RemoteDesktopConnectionOpener;
+
+impl ConnectionOpener for RemoteDesktopConnectionOpener {
+    fn open(
+        &self,
+        connection: &StoredConnection,
+        mode: TabOpenMode,
+        home: &mut dyn HomeContext,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        let protocol = match connection.connection_type {
+            ConnectionType::Rdp => RemoteDesktopProtocol::Rdp,
+            ConnectionType::Vnc => RemoteDesktopProtocol::Vnc,
+            _ => return false,
+        };
+        // 已注册的 RDP/VNC 域不再回退到 main 的旧实现；失败提示由宿主完成。
+        let Some(connection) = home.resolve_connection_credentials(connection, window, cx) else {
+            return true;
+        };
+        let Some(options) = remote_desktop_options(&connection, protocol) else {
+            return true;
+        };
+        let connection_id = connection.id.unwrap_or(0);
+        let tab_id = remote_desktop_tab_id(protocol, connection_id);
+        let tab_index = home.next_tab_index(&connection.name, cx);
+        let title = connection.name.clone();
+        let tab_kind = remote_desktop_tab_kind(protocol);
+        let window_handle = window.window_handle();
+        home.open_tab_lazy(
+            tab_id.clone(),
+            mode,
+            window,
+            cx,
+            Box::new(move |_window, cx| {
+                let view = cx.new(move |cx| {
+                    RemoteDesktopView::new(
+                        RemoteDesktopViewConfig {
+                            options,
+                            title,
+                            tab_index,
+                        },
+                        window_handle,
+                        cx,
+                    )
+                });
+                TabItem::new(tab_id, tab_kind, view)
+            }),
+        )
+    }
+}
+
+fn remote_desktop_options(
+    connection: &StoredConnection,
+    protocol: RemoteDesktopProtocol,
+) -> Option<RemoteDesktopConnectionOptions> {
+    let mut params = connection.to_remote_desktop_params().ok()?;
+    params.protocol = match protocol {
+        RemoteDesktopProtocol::Rdp => StoredRemoteDesktopProtocol::Rdp,
+        RemoteDesktopProtocol::Vnc => StoredRemoteDesktopProtocol::Vnc,
+    };
+    Some(RemoteDesktopConnectionOptions::from_storage_params(params))
+}
+
+fn remote_desktop_tab_kind(protocol: RemoteDesktopProtocol) -> &'static str {
+    match protocol {
+        RemoteDesktopProtocol::Rdp => "rdp",
+        RemoteDesktopProtocol::Vnc => "vnc",
+    }
+}
+
+fn remote_desktop_tab_id(protocol: RemoteDesktopProtocol, connection_id: i64) -> String {
+    format!("{}-{}", remote_desktop_tab_kind(protocol), connection_id)
+}
+
 fn port_forwarding_config(
     connection: &StoredConnection,
     home: &mut dyn HomeContext,
@@ -317,6 +404,24 @@ mod tests {
         let mut registry = DomainRegistry::default();
         ShellDomain.register(&mut registry);
         assert!(registry.has_connection_opener(ConnectionType::PortForwarding));
+    }
+
+    #[test]
+    fn shell_domain_registers_remote_desktop_openers() {
+        let mut registry = DomainRegistry::default();
+        ShellDomain.register(&mut registry);
+        assert!(registry.has_connection_opener(ConnectionType::Rdp));
+        assert!(registry.has_connection_opener(ConnectionType::Vnc));
+    }
+
+    #[test]
+    fn remote_desktop_tab_id_is_stable_per_connection_and_protocol() {
+        assert_eq!(remote_desktop_tab_id(RemoteDesktopProtocol::Rdp, 42), "rdp-42");
+        assert_eq!(remote_desktop_tab_id(RemoteDesktopProtocol::Vnc, 42), "vnc-42");
+        assert_ne!(
+            remote_desktop_tab_id(RemoteDesktopProtocol::Rdp, 42),
+            remote_desktop_tab_id(RemoteDesktopProtocol::Vnc, 42)
+        );
     }
 
     #[test]

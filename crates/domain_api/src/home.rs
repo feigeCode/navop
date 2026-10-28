@@ -60,6 +60,14 @@ pub trait HomeContext: TabHost {
     /// 领域在打开 Tab 时建立的订阅交给宿主保管，随宿主一起释放。
     fn keep_subscription(&mut self, subscription: Subscription);
 
+    /// 解析连接引用的凭据；缺失钥匙串时由宿主给出提示并生成临时参数。
+    fn resolve_connection_credentials(
+        &mut self,
+        connection: &StoredConnection,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<StoredConnection>;
+
     /// 应用级端口转发运行时；端口转发 Tab 与宿主共享同一组隧道。
     fn port_forwarding_runtime(&self) -> Arc<tokio::sync::Mutex<PortForwardingRuntime>>;
 
