@@ -1,6 +1,8 @@
 use gpui::{App, Subscription, Window};
 use one_core::storage::{StoredConnection, Workspace};
 use one_core::tab_container::{TabItem, TabOpenMode};
+use port_forwarding::PortForwardingRuntime;
+use std::sync::Arc;
 
 /// 应用壳暴露给领域的 Tab 能力；领域不能直接持有 `HomePage`。
 pub trait TabHost {
@@ -43,6 +45,9 @@ pub trait HomeContext: TabHost {
 
     /// 领域在打开 Tab 时建立的订阅交给宿主保管，随宿主一起释放。
     fn keep_subscription(&mut self, subscription: Subscription);
+
+    /// 应用级端口转发运行时；端口转发 Tab 与宿主共享同一组隧道。
+    fn port_forwarding_runtime(&self) -> Arc<tokio::sync::Mutex<PortForwardingRuntime>>;
 
     fn notify(&mut self, level: NotifyLevel, message: &str, window: &mut Window, cx: &mut App);
 }

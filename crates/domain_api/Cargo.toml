@@ -8,6 +8,8 @@ edition.workspace = true
 anyhow.workspace = true
 gpui = { workspace = true }
 one-core = { workspace = true }
+port_forwarding.workspace = true
+tokio.workspace = true
 
 [lints]
 workspace = true

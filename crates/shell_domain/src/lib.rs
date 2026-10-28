@@ -12,6 +12,7 @@ use known_hosts_view::KnownHostsPage;
 use one_core::settings::{AppSettings, LocalTerminalProfileKind};
 use one_core::storage::{ConnectionType, StoredConnection};
 use one_core::tab_container::{TabItem, TabOpenMode};
+use port_forwarding_view::{PortForwardingTab, PortForwardingTabConfig};
 use sftp_view::{SftpView, SftpViewEvent};
 use std::sync::Arc;
 use terminal::{local_config_from_settings, local_config_from_settings_with_profile};
@@ -28,6 +29,10 @@ impl Domain for ShellDomain {
         registry.register_tab_opener(Arc::new(KnownHostsTabOpener));
         registry.register_tab_opener(Arc::new(TerminalTabOpener));
         registry.register_connection_opener(ConnectionType::SshSftp, Arc::new(SshConnectionOpener));
+        registry.register_connection_opener(
+            ConnectionType::PortForwarding,
+            Arc::new(PortForwardingConnectionOpener),
+        );
     }
 
     fn init(&self, _cx: &mut App) -> anyhow::Result<()> {
@@ -223,6 +228,51 @@ impl ConnectionOpener for SshConnectionOpener {
     }
 }
 
+struct PortForwardingConnectionOpener;
+
+impl ConnectionOpener for PortForwardingConnectionOpener {
+    fn open(
+        &self,
+        connection: &StoredConnection,
+        mode: TabOpenMode,
+        home: &mut dyn HomeContext,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        if connection.connection_type != ConnectionType::PortForwarding {
+            return false;
+        }
+        let Ok(config) = port_forwarding_config(connection, home) else {
+            return false;
+        };
+        let connection_id = connection.id.unwrap_or(0);
+        let tab = cx.new(|cx| PortForwardingTab::new(config, cx));
+        let item = TabItem::new(format!("port-forwarding-{connection_id}"), "home", tab);
+        home.open_tab(item, mode, window, cx)
+    }
+}
+
+fn port_forwarding_config(
+    connection: &StoredConnection,
+    home: &mut dyn HomeContext,
+) -> anyhow::Result<PortForwardingTabConfig> {
+    connection
+        .id
+        .ok_or_else(|| anyhow::anyhow!("missing connection id"))?;
+    let params = connection.to_port_forwarding_params()?;
+    let ssh_connection = home
+        .connections()
+        .iter()
+        .find(|conn| conn.id == Some(params.ssh_connection_id))
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("referenced SSH connection is missing"))?;
+    PortForwardingTabConfig::new(
+        connection.clone(),
+        ssh_connection,
+        home.port_forwarding_runtime(),
+    )
+}
+
 fn local_profile_kind(kind: TerminalProfileKind) -> LocalTerminalProfileKind {
     match kind {
         TerminalProfileKind::System => LocalTerminalProfileKind::System,
@@ -252,6 +302,13 @@ mod tests {
         let mut registry = DomainRegistry::default();
         ShellDomain.register(&mut registry);
         assert!(registry.has_connection_opener(ConnectionType::SshSftp));
+    }
+
+    #[test]
+    fn shell_domain_registers_port_forwarding_opener() {
+        let mut registry = DomainRegistry::default();
+        ShellDomain.register(&mut registry);
+        assert!(registry.has_connection_opener(ConnectionType::PortForwarding));
     }
 
     #[test]

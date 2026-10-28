@@ -61,6 +61,9 @@ impl HomePage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if app_kit::registry().open_connection(&connection, mode, self, window, cx) {
+            return;
+        }
         let connection_name = connection.name.clone();
         let (tab_id, config) = match self.port_forwarding_tab_config(connection) {
             Ok(result) => result,

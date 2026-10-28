@@ -4,6 +4,7 @@ use gpui::{App, Subscription, Window};
 use gpui_component::{WindowExt as _, notification::Notification};
 use one_core::storage::{StoredConnection, Workspace};
 use one_core::tab_container::{TabItem, TabOpenMode};
+use std::sync::Arc;
 
 impl TabHost for HomePage {
     fn open_tab(
@@ -77,6 +78,12 @@ impl HomeContext for HomePage {
 
     fn keep_subscription(&mut self, subscription: Subscription) {
         self._subscriptions.push(subscription);
+    }
+
+    fn port_forwarding_runtime(
+        &self,
+    ) -> Arc<tokio::sync::Mutex<port_forwarding::PortForwardingRuntime>> {
+        Arc::clone(&self.port_forwarding_runtime)
     }
 
     fn notify(&mut self, level: NotifyLevel, message: &str, window: &mut Window, cx: &mut App) {

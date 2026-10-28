@@ -3450,6 +3450,8 @@ dependencies = [
  "anyhow",
  "gpui-fast",
  "one-core",
+ "port_forwarding",
+ "tokio",
 ]
 
 [[package]]
@@ -12711,6 +12713,7 @@ dependencies = [
  "gpui-fast",
  "known_hosts_view",
  "one-core",
+ "port_forwarding_view",
  "sftp_view",
  "terminal",
  "terminal_view",
