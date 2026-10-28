@@ -1,0 +1,110 @@
+name: Standalone Products
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build, for example v0.22.0"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: standalone-products-${{ inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  prepare:
+    name: Prepare standalone build
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      version: ${{ steps.matrix.outputs.version }}
+    steps:
+      - name: Validate tag
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Invalid tag: $TAG"
+            exit 1
+          fi
+
+      - name: Build matrix
+        id: matrix
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          matrix='{"include":['
+          matrix+='{"product":"navop-shell","label":"macos-arm64","os":"macos-latest","target":"aarch64-apple-darwin","app":"Navop Shell.app"},'
+          matrix+='{"product":"navop-shell","label":"macos-x64","os":"macos-15-intel","target":"x86_64-apple-darwin","app":"Navop Shell.app"},'
+          matrix+='{"product":"navop-shell","label":"linux-x64","os":"ubuntu-latest","target":"x86_64-unknown-linux-gnu","app":""},'
+          matrix+='{"product":"navop-data","label":"macos-arm64","os":"macos-latest","target":"aarch64-apple-darwin","app":"Navop Data.app"},'
+          matrix+='{"product":"navop-data","label":"macos-x64","os":"macos-15-intel","target":"x86_64-apple-darwin","app":"Navop Data.app"},'
+          matrix+='{"product":"navop-data","label":"linux-x64","os":"ubuntu-latest","target":"x86_64-unknown-linux-gnu","app":""}'
+          matrix+=']}'
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build (${{ matrix.product }}, ${{ matrix.label }})
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    env:
+      ONETCLI_VERSION: ${{ needs.prepare.outputs.version }}
+
+    steps:
+      - name: Check out tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.target }}
+          cache: false
+
+      - name: Install system dependencies
+        run: script/bootstrap
+
+      - name: Build product
+        run: cargo build --release -p "${{ matrix.product }}" --target "${{ matrix.target }}"
+
+      - name: Package macOS app
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          chmod +x script/bundle-macos.sh script/bundle-macos-dmg.sh
+          script/bundle-macos.sh "${{ matrix.target }}" "${{ matrix.product }}"
+          script/bundle-macos-dmg.sh "${{ matrix.target }}" "${{ matrix.product }}"
+          tar -czf "target/${{ matrix.product }}-${ONETCLI_VERSION}-${{ matrix.target }}.tar.gz" \
+            -C target "${{ matrix.app }}"
+
+      - name: Package Linux tarball
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          script/package-linux-product.sh "${{ matrix.product }}" "${{ matrix.target }}"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.product }}-${{ matrix.label }}
+          if-no-files-found: error
+          path: |
+            target/*.dmg
+            target/${{ matrix.product }}-${{ matrix.target }}*.tar.gz
+            target/${{ matrix.product }}-*${{ matrix.target }}*.tar.gz

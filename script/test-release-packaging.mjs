@@ -1558,3 +1558,13 @@ test("standalone products ship their own Linux desktop identity and portable mar
   assert.match(shellIdentity, /portable_marker: "navop-shell\.portable"/);
   assert.match(shellIdentity, /portable_marker: "navop-data\.portable"/);
 });
+
+test("standalone products workflow builds Shell and Data on macOS and Linux", () => {
+  const workflow = read(".github/workflows/standalone-products.yml");
+  assert.match(workflow, /name: Standalone Products/);
+  assert.match(workflow, /"product":"navop-shell"/);
+  assert.match(workflow, /"product":"navop-data"/);
+  assert.match(workflow, /script\/bundle-macos\.sh "\$\{\{ matrix\.target \}\}" "\$\{\{ matrix\.product \}\}"/);
+  assert.match(workflow, /script\/package-linux-product\.sh "\$\{\{ matrix\.product \}\}"/);
+  assert.match(workflow, /cargo build --release -p "\$\{\{ matrix\.product \}\}"/);
+});
