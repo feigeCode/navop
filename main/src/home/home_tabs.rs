@@ -5,6 +5,7 @@ use crate::session_logs::SessionLogsPage;
 
 use crate::setting_tab::{AppSettings, DatabaseOpenMode, SettingsPanel};
 use db_view::database_tab::DatabaseTabView;
+use domain_api::{TabIntent, TerminalProfileDescriptor, TerminalProfileKind};
 use gpui::{App, AppContext, Context, Entity, Window};
 use gpui_component::{WindowExt, notification::Notification};
 use json_view::JsonFormatterView;
@@ -738,7 +739,7 @@ impl HomePage {
     }
 
     /// 计算同基础名称的下一个可用标签序号；没有任何同名标签时返回 None（首标签不加序号）。
-    fn next_available_tab_index(&self, base_title: &str, cx: &App) -> Option<usize> {
+    pub(crate) fn next_available_tab_index(&self, base_title: &str, cx: &App) -> Option<usize> {
         let tab_container = self.active_tab_container(cx);
         let titles: Vec<String> = tab_container
             .read(cx)
@@ -1386,24 +1387,13 @@ impl HomePage {
     }
 
     pub(crate) fn add_known_hosts_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(item) = app_kit::registry().open_tab(
+        if app_kit::registry().open_tab(
             &domain_api::TabIntent::KnownHosts,
             TabOpenMode::Activate,
             self,
             window,
             cx,
         ) {
-            let tab_container = self.active_tab_container(cx);
-            window.defer(cx, move |window, cx| {
-                tab_container.update(cx, |tabs, cx| {
-                    tabs.activate_or_add_tab_lazy(
-                        "known-hosts",
-                        move |_window, _cx| item,
-                        window,
-                        cx,
-                    );
-                });
-            });
             return;
         }
         let tab_container = self.active_tab_container(cx);
@@ -1500,6 +1490,16 @@ impl HomePage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let intent = TabIntent::Terminal {
+            profile: profile_kind.map(|kind| TerminalProfileDescriptor {
+                kind: domain_terminal_kind(kind),
+                id: None,
+            }),
+        };
+        if app_kit::registry().open_tab(&intent, TabOpenMode::Activate, self, window, cx) {
+            return;
+        }
+
         let settings = AppSettings::global(cx);
         let config = match profile_kind {
             Some(kind) => local_config_from_settings_with_profile(settings, kind, None),
@@ -1778,4 +1778,19 @@ fn remote_desktop_tab_kind(protocol: RemoteDesktopProtocol) -> &'static str {
 /// 而不是再建一个（#288）。不同连接、不同协议互不干扰。
 fn remote_desktop_tab_id(protocol: RemoteDesktopProtocol, conn_id: i64) -> String {
     format!("{}-{}", remote_desktop_tab_kind(protocol), conn_id)
+}
+
+fn domain_terminal_kind(kind: LocalTerminalProfileKind) -> TerminalProfileKind {
+    match kind {
+        LocalTerminalProfileKind::System => TerminalProfileKind::System,
+        LocalTerminalProfileKind::PowerShell => TerminalProfileKind::PowerShell,
+        LocalTerminalProfileKind::Cmd => TerminalProfileKind::Cmd,
+        LocalTerminalProfileKind::Wsl => TerminalProfileKind::Wsl,
+        LocalTerminalProfileKind::GitBash => TerminalProfileKind::GitBash,
+        LocalTerminalProfileKind::Zsh => TerminalProfileKind::Zsh,
+        LocalTerminalProfileKind::Bash => TerminalProfileKind::Bash,
+        LocalTerminalProfileKind::Fish => TerminalProfileKind::Fish,
+        LocalTerminalProfileKind::Nushell => TerminalProfileKind::Nushell,
+        LocalTerminalProfileKind::Custom => TerminalProfileKind::Custom,
+    }
 }

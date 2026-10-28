@@ -11,6 +11,11 @@ pub trait TabHost {
         window: &mut Window,
         cx: &mut App,
     ) -> bool;
+
+    /// 打开并聚焦内容；终端一类需要键盘焦点的 Tab 使用它。
+    fn open_tab_with_focus(&mut self, item: TabItem, window: &mut Window, cx: &mut App) -> bool {
+        self.open_tab(item, TabOpenMode::Activate, window, cx)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,11 +38,8 @@ pub trait HomeContext: TabHost {
     /// 当前产品的数据库标签打开方式。
     fn database_open_mode(&self, cx: &App) -> crate::DatabaseTabMode;
 
-    fn notify(
-        &mut self,
-        level: NotifyLevel,
-        message: &str,
-        window: &mut Window,
-        cx: &mut App,
-    );
+    /// 当前 Tab 容器里同基础标题的下一个可用序号；没有同名 Tab 时返回 None。
+    fn next_tab_index(&self, base_title: &str, cx: &App) -> Option<usize>;
+
+    fn notify(&mut self, level: NotifyLevel, message: &str, window: &mut Window, cx: &mut App);
 }

@@ -13,8 +13,25 @@ impl TabHost for HomePage {
         window: &mut Window,
         cx: &mut App,
     ) -> bool {
-        self.tab_container
-            .update(cx, |container, cx| container.add_tab_with_mode(item, mode, window, cx));
+        let tab_container = self.tab_container.clone();
+        let tab_id = item.id();
+        window.defer(cx, move |window, cx| {
+            tab_container.update(cx, |container, cx| {
+                if !container.activate_tab_by_id(tab_id.as_ref(), window, cx) {
+                    container.add_tab_with_mode(item, mode, window, cx);
+                }
+            });
+        });
+        true
+    }
+
+    fn open_tab_with_focus(&mut self, item: TabItem, window: &mut Window, cx: &mut App) -> bool {
+        let tab_container = self.tab_container.clone();
+        window.defer(cx, move |window, cx| {
+            tab_container.update(cx, |container, cx| {
+                container.add_and_activate_tab_with_focus(item, window, cx)
+            });
+        });
         true
     }
 }
@@ -54,13 +71,11 @@ impl HomeContext for HomePage {
         }
     }
 
-    fn notify(
-        &mut self,
-        level: NotifyLevel,
-        message: &str,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
+    fn next_tab_index(&self, base_title: &str, cx: &App) -> Option<usize> {
+        self.next_available_tab_index(base_title, cx)
+    }
+
+    fn notify(&mut self, level: NotifyLevel, message: &str, window: &mut Window, cx: &mut App) {
         let notification = match level {
             NotifyLevel::Info => Notification::info(message.to_string()),
             NotifyLevel::Warning => Notification::warning(message.to_string()),

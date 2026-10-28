@@ -10,3 +10,5 @@ domain_api.workspace = true
 gpui.workspace = true
 known_hosts_view.workspace = true
 one-core.workspace = true
+terminal.workspace = true
+terminal_view.workspace = true

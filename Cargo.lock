@@ -12710,6 +12710,8 @@ dependencies = [
  "gpui-fast",
  "known_hosts_view",
  "one-core",
+ "terminal",
+ "terminal_view",
 ]
 
 [[package]]

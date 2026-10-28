@@ -1,9 +1,9 @@
+use crate::DomainId;
 use crate::home::HomeContext;
 use crate::intent::TabIntent;
-use crate::{DomainId, TabHost};
 use gpui::{App, Window};
 use one_core::storage::{ConnectionType, StoredConnection};
-use one_core::tab_container::{TabItem, TabOpenMode};
+use one_core::tab_container::TabOpenMode;
 use std::sync::Arc;
 
 /// 连接类型对应的打开策略，替代 `HomePage` 里的 13 路 `match`。
@@ -24,10 +24,10 @@ pub trait TabOpener: Send + Sync {
         &self,
         intent: &TabIntent,
         mode: TabOpenMode,
-        host: &mut dyn TabHost,
+        home: &mut dyn HomeContext,
         window: &mut Window,
         cx: &mut App,
-    ) -> Option<TabItem>;
+    ) -> bool;
 }
 
 /// 应用启动时由各领域填充的注册表。
@@ -93,13 +93,13 @@ impl DomainRegistry {
         &self,
         intent: &TabIntent,
         mode: TabOpenMode,
-        host: &mut dyn TabHost,
+        home: &mut dyn HomeContext,
         window: &mut Window,
         cx: &mut App,
-    ) -> Option<TabItem> {
+    ) -> bool {
         self.tab_openers
             .iter()
-            .find_map(|opener| opener.open(intent, mode, host, window, cx))
+            .any(|opener| opener.open(intent, mode, home, window, cx))
     }
 }
 
@@ -128,16 +128,12 @@ mod tests {
         let mut registry = DomainRegistry::default();
         assert!(!registry.has_connection_opener(ConnectionType::Database));
 
-        registry.register_connection_opener(
-            ConnectionType::Database,
-            Arc::new(FakeConnectionOpener),
-        );
+        registry
+            .register_connection_opener(ConnectionType::Database, Arc::new(FakeConnectionOpener));
         assert!(registry.has_connection_opener(ConnectionType::Database));
 
-        registry.register_connection_opener(
-            ConnectionType::Database,
-            Arc::new(FakeConnectionOpener),
-        );
+        registry
+            .register_connection_opener(ConnectionType::Database, Arc::new(FakeConnectionOpener));
         assert_eq!(
             1,
             registry
