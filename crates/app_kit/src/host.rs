@@ -6,6 +6,7 @@
 
 use gpui::{App, Window};
 use one_core::storage::StoredConnection;
+use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
 /// 应用壳为 shell 领域提供的事件出口。
@@ -30,6 +31,9 @@ pub trait ShellHost: Send + Sync {
         window: &mut Window,
         cx: &mut App,
     );
+
+    /// 会话日志列表请求打开一条 `.cast` 记录。
+    fn open_session_log_file(&self, path: PathBuf, window: &mut Window, cx: &mut App);
 }
 
 static SHELL_HOST: OnceLock<Arc<dyn ShellHost>> = OnceLock::new();

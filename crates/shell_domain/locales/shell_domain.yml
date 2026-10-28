@@ -1,0 +1,159 @@
+_version: 2
+
+SessionLogs:
+  title:
+    en: Session Logs
+    zh-CN: 会话日志
+    zh-HK: 工作階段日誌
+  search_placeholder:
+    en: Search sessions, hosts, users, or ports...
+    zh-CN: 搜索会话、主机、用户或端口...
+    zh-HK: 搜尋工作階段、主機、使用者或連接埠...
+  refresh:
+    en: Refresh
+    zh-CN: 刷新
+    zh-HK: 重新整理
+  refreshing:
+    en: Refreshing...
+    zh-CN: 正在刷新...
+    zh-HK: 正在重新整理...
+  select_all:
+    en: Select All
+    zh-CN: 全选
+    zh-HK: 全選
+  clear_selection:
+    en: Clear Selection
+    zh-CN: 清除选择
+    zh-HK: 清除選取
+  empty:
+    en: No session logs yet
+    zh-CN: 暂无会话日志
+    zh-HK: 尚無工作階段日誌
+  empty_search:
+    en: No matching session logs
+    zh-CN: 没有匹配的会话日志
+    zh-HK: 沒有相符的工作階段日誌
+  source_help:
+    en: ".cast is the source container for a static, read-only terminal history. Open it to scroll, select, copy, and search just like a terminal; TXT is a readable exported copy."
+    zh-CN: ".cast 是静态只读终端历史的源文件。打开后可像终端一样滚动、选中、复制和搜索；TXT 是导出的可读副本。"
+    zh-HK: ".cast 是靜態唯讀終端歷史的來源檔案。開啟後可像終端一樣捲動、選取、複製和搜尋；TXT 是匯出的可讀副本。"
+  output_only_help:
+    en: Automatic session logging records output only and never records keyboard input, reducing exposure of passwords, tokens, and one-time codes. Session logs have no playback timeline or replay controls.
+    zh-CN: 自动会话日志只记录输出，绝不记录键盘输入，以减少密码、令牌和一次性验证码泄露风险。会话日志没有播放时间轴或回放控制。
+    zh-HK: 自動工作階段日誌只記錄輸出，絕不記錄鍵盤輸入，以減少密碼、權杖和一次性驗證碼外洩風險。工作階段日誌沒有播放時間軸或回放控制。
+  favorite:
+    en: Favorite
+    zh-CN: 收藏
+    zh-HK: 收藏
+  unfavorite:
+    en: Remove favorite
+    zh-CN: 取消收藏
+    zh-HK: 取消收藏
+  view_log:
+    en: View log
+    zh-CN: 查看日志
+    zh-HK: 查看日誌
+  export_text:
+    en: Export TXT
+    zh-CN: 导出 TXT
+    zh-HK: 匯出 TXT
+  export_select_directory:
+    en: Select a directory for the exported TXT file
+    zh-CN: 选择 TXT 导出目录
+    zh-HK: 選擇 TXT 匯出目錄
+  export_success:
+    en: "TXT exported to %{path}"
+    zh-CN: "TXT 已导出到 %{path}"
+    zh-HK: "TXT 已匯出到 %{path}"
+  export_failed:
+    en: "Failed to export TXT: %{error}"
+    zh-CN: "导出 TXT 失败：%{error}"
+    zh-HK: "匯出 TXT 失敗：%{error}"
+  delete:
+    en: Delete
+    zh-CN: 删除
+    zh-HK: 刪除
+  delete_title:
+    en: Delete session log
+    zh-CN: 删除会话日志
+    zh-HK: 刪除工作階段日誌
+  delete_description:
+    en: "Delete %{name}? This cannot be undone."
+    zh-CN: "确定删除 %{name}？此操作无法撤销。"
+    zh-HK: "確定刪除 %{name}？此操作無法復原。"
+  delete_success:
+    en: Session log deleted.
+    zh-CN: 会话日志已删除。
+    zh-HK: 工作階段日誌已刪除。
+  delete_selected:
+    en: Delete selected
+    zh-CN: 删除已选
+    zh-HK: 刪除已選
+  delete_selected_count:
+    en: "Delete selected (%{count})"
+    zh-CN: "删除已选（%{count}）"
+    zh-HK: "刪除已選（%{count}）"
+  delete_selected_description:
+    en: "Delete %{count} selected session logs? This cannot be undone."
+    zh-CN: "确定删除选中的 %{count} 条会话日志？此操作无法撤销。"
+    zh-HK: "確定刪除選取的 %{count} 條工作階段日誌？此操作無法復原。"
+  delete_success_count:
+    en: "%{count} session logs deleted."
+    zh-CN: "已删除 %{count} 条会话日志。"
+    zh-HK: "已刪除 %{count} 條工作階段日誌。"
+  delete_failed:
+    en: "Failed to delete session log: %{error}"
+    zh-CN: "删除会话日志失败：%{error}"
+    zh-HK: "刪除工作階段日誌失敗：%{error}"
+  load_failed:
+    en: "Failed to load session logs: %{error}"
+    zh-CN: "加载会话日志失败：%{error}"
+    zh-HK: "載入工作階段日誌失敗：%{error}"
+  data_directory_unavailable:
+    en: Application data directory is unavailable
+    zh-CN: 无法获取应用数据目录
+    zh-HK: 無法取得應用程式資料目錄
+  favorite_failed:
+    en: "Failed to save favorite: %{error}"
+    zh-CN: "保存收藏失败：%{error}"
+    zh-HK: "儲存收藏失敗：%{error}"
+  complete:
+    en: Complete
+    zh-CN: 完整
+    zh-HK: 完整
+  partial:
+    en: Partial
+    zh-CN: 未完整
+    zh-HK: 未完整
+  local:
+    en: Local
+    zh-CN: 本地
+    zh-HK: 本機
+  ssh:
+    en: SSH
+    zh-CN: SSH
+    zh-HK: SSH
+  serial:
+    en: Serial
+    zh-CN: 串口
+    zh-HK: 串列
+  telnet:
+    en: Telnet
+    zh-CN: Telnet
+    zh-HK: Telnet
+  skipped:
+    en: "%{count} files skipped"
+    zh-CN: "跳过 %{count} 个文件"
+    zh-HK: "已略過 %{count} 個檔案"
+  local_identity:
+    en: Local
+    zh-CN: 本地
+    zh-HK: 本機
+  remote_identity:
+    en: Remote
+    zh-CN: 远端
+    zh-HK: 遠端
+  serial_port:
+    en: Port
+    zh-CN: 串口
+    zh-HK: 連接埠

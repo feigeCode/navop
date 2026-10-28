@@ -1,7 +1,6 @@
 use crate::credential_vault::CredentialVaultView;
 use crate::home_tab::{HomePage, resolve_connection_credentials};
 use crate::license::is_feature_enabled;
-use crate::session_logs::SessionLogsPage;
 
 use crate::setting_tab::{AppSettings, DatabaseOpenMode, SettingsPanel};
 use db_view::database_tab::DatabaseTabView;
@@ -1445,20 +1444,13 @@ impl HomePage {
     }
 
     pub(crate) fn add_session_logs_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let tab_container = self.active_tab_container(cx);
-        window.defer(cx, move |window, cx| {
-            tab_container.update(cx, |tabs, cx| {
-                tabs.activate_or_add_tab_lazy(
-                    "session-logs",
-                    |window, cx| {
-                        let page = cx.new(|cx| SessionLogsPage::new(window, cx));
-                        TabItem::new("session-logs", "home", page)
-                    },
-                    window,
-                    cx,
-                );
-            });
-        });
+        let _ = app_kit::registry().open_tab(
+            &domain_api::TabIntent::SessionLogs,
+            TabOpenMode::Activate,
+            self,
+            window,
+            cx,
+        );
     }
 
     pub(crate) fn add_credential_vault_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {

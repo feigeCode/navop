@@ -6,6 +6,11 @@ publish = false
 
 [dependencies]
 anyhow.workspace = true
+chrono.workspace = true
+gpui-component.workspace = true
+one-assets.workspace = true
+rust-i18n.workspace = true
+smol.workspace = true
 app_kit.workspace = true
 domain_api.workspace = true
 gpui.workspace = true
@@ -17,3 +22,6 @@ remote_desktop_view.workspace = true
 sftp_view.workspace = true
 terminal.workspace = true
 terminal_view.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

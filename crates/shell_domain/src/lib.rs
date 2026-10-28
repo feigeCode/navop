@@ -3,6 +3,12 @@
 //! 当前覆盖 KnownHosts 与本地终端；SSH/SFTP/端口转发等较重的域
 //! 后续按同样方式加入。
 
+rust_i18n::i18n!("locales", fallback = "en");
+
+mod session_logs;
+
+use session_logs::SessionLogsPage;
+
 use domain_api::{
     ConnectionOpener, Domain, DomainId, DomainRegistry, HomeContext, NotifyLevel, TabIntent,
     TabOpener, TerminalProfileKind,
@@ -32,6 +38,7 @@ impl Domain for ShellDomain {
     fn register(&self, registry: &mut DomainRegistry) {
         registry.register_tab_opener(Arc::new(KnownHostsTabOpener));
         registry.register_tab_opener(Arc::new(TerminalTabOpener));
+        registry.register_tab_opener(Arc::new(SessionLogsTabOpener));
         registry.register_connection_opener(ConnectionType::SshSftp, Arc::new(SshConnectionOpener));
         registry.register_connection_opener(
             ConnectionType::PortForwarding,
@@ -49,6 +56,39 @@ impl Domain for ShellDomain {
 
     fn init(&self, _cx: &mut App) -> anyhow::Result<()> {
         Ok(())
+    }
+}
+
+struct SessionLogsTabOpener;
+
+impl SessionLogsTabOpener {
+    fn supports(intent: &TabIntent) -> bool {
+        matches!(intent, TabIntent::SessionLogs)
+    }
+}
+
+impl TabOpener for SessionLogsTabOpener {
+    fn open(
+        &self,
+        intent: &TabIntent,
+        mode: TabOpenMode,
+        home: &mut dyn HomeContext,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        if !Self::supports(intent) {
+            return false;
+        }
+        home.open_tab_lazy(
+            "session-logs".to_string(),
+            mode,
+            window,
+            cx,
+            Box::new(move |window, cx| {
+                let page = cx.new(|cx| SessionLogsPage::new(window, cx));
+                TabItem::new("session-logs", "home", page)
+            }),
+        )
     }
 }
 
@@ -416,12 +456,24 @@ mod tests {
 
     #[test]
     fn remote_desktop_tab_id_is_stable_per_connection_and_protocol() {
-        assert_eq!(remote_desktop_tab_id(RemoteDesktopProtocol::Rdp, 42), "rdp-42");
-        assert_eq!(remote_desktop_tab_id(RemoteDesktopProtocol::Vnc, 42), "vnc-42");
+        assert_eq!(
+            remote_desktop_tab_id(RemoteDesktopProtocol::Rdp, 42),
+            "rdp-42"
+        );
+        assert_eq!(
+            remote_desktop_tab_id(RemoteDesktopProtocol::Vnc, 42),
+            "vnc-42"
+        );
         assert_ne!(
             remote_desktop_tab_id(RemoteDesktopProtocol::Rdp, 42),
             remote_desktop_tab_id(RemoteDesktopProtocol::Vnc, 42)
         );
+    }
+
+    #[test]
+    fn session_logs_opener_only_accepts_session_logs_intent() {
+        assert!(SessionLogsTabOpener::supports(&TabIntent::SessionLogs));
+        assert!(!SessionLogsTabOpener::supports(&TabIntent::KnownHosts));
     }
 
     #[test]

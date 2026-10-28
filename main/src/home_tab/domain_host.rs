@@ -190,4 +190,8 @@ impl app_kit::ShellHost for NavopShellHost {
             home.open_sftp_ssh_terminal(connection, working_dir, window, cx);
         });
     }
+
+    fn open_session_log_file(&self, path: std::path::PathBuf, window: &mut Window, cx: &mut App) {
+        crate::file_open::open_session_log_file(path, window, cx);
+    }
 }

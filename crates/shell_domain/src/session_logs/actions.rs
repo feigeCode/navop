@@ -294,7 +294,9 @@ impl SessionLogsPage {
     }
 
     pub(super) fn view_log(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        crate::file_open::open_session_log_file(path, window, cx);
+        if let Some(host) = app_kit::shell_host() {
+            host.open_session_log_file(path, window, cx);
+        }
     }
 
     pub(super) fn request_text_export(

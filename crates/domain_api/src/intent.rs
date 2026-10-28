@@ -61,4 +61,5 @@ pub enum TabIntent {
     },
     PortForwarding,
     KnownHosts,
+    SessionLogs,
 }
