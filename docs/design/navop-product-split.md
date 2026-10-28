@@ -926,9 +926,11 @@ apps/*        不得直接依赖域 crate（只能经 *_domain）
 | `0209bdb91` | `TabHost::open_tab_lazy` 惰性创建；数据库/Redis/Mongo/端口转发已存在同 id 标签时只激活，不重复建连 | 已完成，`main` 767 个测试，`domain_api`/`shell_domain`/`data_domain` 测试通过 |
 | `5796eafa3` | RDP/VNC 经 `RemoteDesktopConnectionOpener` 打开；凭据解析、选项构造、稳定标签 id 与惰性视图创建迁入 `shell_domain` | 已完成，`main` 767 个测试、`shell_domain` 7 个测试通过 |
 | `cb6e54b4b` | 会话日志页面从 `main/src/session_logs` 迁入 `shell_domain`；`.cast` 打开经 `ShellHost::open_session_log_file` 回到宿主 | 已完成，`main` 760 个测试（7 个随模块迁移）、`shell_domain` 15 个测试通过 |
+| `d3930398c` | 新增 `runtime_core`：应用信息工具与工作区工具从 `navop_runtime` 抽出，`navop_runtime` 保持兼容 re-export | 已完成，`runtime_core`/`navop_runtime` 测试通过 |
+| `7a29ea95a` | 新增 `runtime_database`：`database_tools` 及其 metadata/schema/tests 整体迁出，`navop_runtime::database_tools` 改为 re-export | 已完成，`runtime_database`/`navop_runtime`/`main` 编译通过，`main` 760 个测试通过 |
 
-尚未开始：`runtime_core/runtime_database` 独立包、`apps/navop` 全量包、打包与 CI 矩阵；`shell_domain` 的域打开已覆盖 SSH/SFTP/端口转发/RDP/VNC/会话日志，剩余是扩展驱动守卫（`DriverGate`）与数据库驱动安装流程。注意：构建期间磁盘曾满，已清理 `target` 与 mbx 增量/action 缓存；后续构建缓存会重建。
+尚未开始：`runtime_redis` / `runtime_sftp` 独立包、`apps/navop` 全量包、打包与 CI 矩阵；`shell_domain` 的域打开已覆盖 SSH/SFTP/端口转发/RDP/VNC/会话日志，剩余是扩展驱动守卫（`DriverGate`）与数据库驱动安装流程。注意：构建期间磁盘曾满，已清理 `target` 与 mbx 增量/action 缓存；后续构建缓存会重建。
 
 已知问题：`extension-runtime` 的 `db_tree_action_runs_registered_wasm_component` 在本机因 fixture 指向 `.wat` 文本而失败（`bad magic number`），与本次改动无关；其余 227 个测试通过。`ssh_form` 暂用 `edition = "2021"` 以保持与原实现一致，后续随 `terminal_view` 一起升级。
 
-下一步建议：SSH/SFTP/端口转发/RDP/VNC/会话日志已进入 `shell_domain`；下一步抽外部驱动守卫 `DriverGate`（`extension-runtime` 的安装流程仍绑定实体上下文），再拆 `runtime_core/runtime_database`、补 `apps/navop` 全量包与打包 CI。`apps/navop` 全量包暂时仍由 `main` 的 `navop` bin 承担，等 `main` 抽出 lib 后再迁。
+下一步建议：`runtime_core`、`runtime_database` 已抽出；下一步拆 `runtime_redis`/`runtime_sftp`，再抽外部驱动守卫 `DriverGate`、补 `apps/navop` 全量包与打包 CI。`apps/navop` 全量包暂时仍由 `main` 的 `navop` bin 承担，等 `main` 抽出 lib 后再迁。
