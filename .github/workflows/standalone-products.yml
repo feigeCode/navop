@@ -7,6 +7,21 @@ on:
         description: "Tag to build, for example v0.22.0"
         required: true
         type: string
+      platform:
+        description: "Build one matrix label or all"
+        required: true
+        type: choice
+        default: all
+        options:
+          - all
+          - macos-arm64
+          - macos-x64
+          - linux-x64
+          - windows-x64
+      ref:
+        description: "Optional branch or SHA to build instead of the tag"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -40,19 +55,32 @@ jobs:
         id: matrix
         env:
           TAG: ${{ inputs.tag }}
+          PLATFORM: ${{ inputs.platform }}
         run: |
           set -euo pipefail
           version="${TAG#v}"
-          matrix='{"include":['
-          matrix+='{"product":"navop-shell","label":"macos-arm64","os":"macos-latest","target":"aarch64-apple-darwin","app":"Navop Shell.app"},'
-          matrix+='{"product":"navop-shell","label":"macos-x64","os":"macos-15-intel","target":"x86_64-apple-darwin","app":"Navop Shell.app"},'
-          matrix+='{"product":"navop-shell","label":"linux-x64","os":"ubuntu-latest","target":"x86_64-unknown-linux-gnu","app":""},'
-          matrix+='{"product":"navop-data","label":"macos-arm64","os":"macos-latest","target":"aarch64-apple-darwin","app":"Navop Data.app"},'
-          matrix+='{"product":"navop-data","label":"macos-x64","os":"macos-15-intel","target":"x86_64-apple-darwin","app":"Navop Data.app"},'
-          matrix+='{"product":"navop-data","label":"linux-x64","os":"ubuntu-latest","target":"x86_64-unknown-linux-gnu","app":""}'
-          matrix+='{"product":"navop-shell","label":"windows-x64","os":"windows-latest","target":"x86_64-pc-windows-msvc","app":""},'
-          matrix+='{"product":"navop-data","label":"windows-x64","os":"windows-latest","target":"x86_64-pc-windows-msvc","app":""}'
-          matrix+=']}'
+          entries=(
+            '{"product":"navop-shell","label":"macos-arm64","os":"macos-latest","target":"aarch64-apple-darwin","app":"Navop Shell.app"}'
+            '{"product":"navop-shell","label":"macos-x64","os":"macos-15-intel","target":"x86_64-apple-darwin","app":"Navop Shell.app"}'
+            '{"product":"navop-shell","label":"linux-x64","os":"ubuntu-latest","target":"x86_64-unknown-linux-gnu","app":""}'
+            '{"product":"navop-shell","label":"windows-x64","os":"windows-latest","target":"x86_64-pc-windows-msvc","app":""}'
+            '{"product":"navop-data","label":"macos-arm64","os":"macos-latest","target":"aarch64-apple-darwin","app":"Navop Data.app"}'
+            '{"product":"navop-data","label":"macos-x64","os":"macos-15-intel","target":"x86_64-apple-darwin","app":"Navop Data.app"}'
+            '{"product":"navop-data","label":"linux-x64","os":"ubuntu-latest","target":"x86_64-unknown-linux-gnu","app":""}'
+            '{"product":"navop-data","label":"windows-x64","os":"windows-latest","target":"x86_64-pc-windows-msvc","app":""}'
+          )
+          selected=()
+          for entry in "${entries[@]}"; do
+            if [ "$PLATFORM" = "all" ] || [[ "$entry" == *"\"label\":\"${PLATFORM}\""* ]]; then
+              selected+=("$entry")
+            fi
+          done
+          if [ "${#selected[@]}" -eq 0 ]; then
+            echo "::error::No matrix entries for platform: $PLATFORM"
+            exit 1
+          fi
+          matrix="{\"include\":[$(IFS=,; echo "${selected[*]}")]}"
+          python3 -c 'import json,sys; json.loads(sys.argv[1])' "$matrix"
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
@@ -68,10 +96,10 @@ jobs:
       ONETCLI_VERSION: ${{ needs.prepare.outputs.version }}
 
     steps:
-      - name: Check out tag
+      - name: Check out source
         uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ inputs.ref || inputs.tag }}
 
       - name: Setup Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
