@@ -913,9 +913,10 @@ apps/*        不得直接依赖域 crate（只能经 *_domain）
 | `09d8bd1c2` | `app_paths` 支持产品级便携标记/开发目录/缓存目录；`main` 启动前应用 `FULL` 身份 | 已完成，`main` 以 `-Dwarnings` 编译通过 |
 | `fa0a70f9d` | 新增 `apps/navop-shell`、`apps/navop-data` 骨架可执行包，按身份打开占位窗口 | 已完成，两者以 `-Dwarnings` 编译通过 |
 | `6ef0f60a6` | `main` 实现 `Product`，改走 `app_kit::bootstrap`；`Domain::init` 支持错误传播 | 已完成，`main` 以 `-Dwarnings` 编译通过 |
+| `2c7ba2897` | 新增 `shell_domain`，KnownHosts 通过 `DomainRegistry` 打开；修正启动顺序源码断言 | 已完成，`main` 767 个测试通过 |
 
 尚未开始：`data_domain`、`shell_domain`、`runtime_core/runtime_database` 独立包、`apps/navop` 全量包、打包与 CI 矩阵。
 
 已知问题：`extension-runtime` 的 `db_tree_action_runs_registered_wasm_component` 在本机因 fixture 指向 `.wat` 文本而失败（`bad magic number`），与本次改动无关；其余 227 个测试通过。`ssh_form` 暂用 `edition = "2021"` 以保持与原实现一致，后续随 `terminal_view` 一起升级。
 
-下一步建议：新增 `shell_domain`（先 KnownHosts，再本地终端）与 `data_domain`（先 Redis，再 Database），把 `main` 的 `domains()` 从空列表换成真实域；`apps/navop` 全量包暂时仍由 `main` 的 `navop` bin 承担，等 `main` 抽出 lib 后再迁。
+下一步建议：继续把 `shell_domain` 扩到本地终端/端口转发，再新增 `data_domain`（先 Redis，再 Database）；`TabOpener` 需要补 `TabOpenMode` 参数才能迁 Redis/Database 的打开模式。`apps/navop` 全量包暂时仍由 `main` 的 `navop` bin 承担，等 `main` 抽出 lib 后再迁。
