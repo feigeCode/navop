@@ -920,9 +920,10 @@ apps/*        不得直接依赖域 crate（只能经 *_domain）
 | `6a7f202bb` | `HomeContext` 增加数据库打开模式；Database 单连接/工作区标签迁入 `data_domain` | 已完成，`main` 767 个测试通过 |
 | `93b073e56` | Mongo 单连接/工作区标签迁入 `data_domain` | 已完成，`main` 767 个测试通过 |
 | `6f53fbecf` | 本地终端经 `DomainRegistry` 打开；`TabHost` 增加聚焦打开，`HomePage` 按 id 去重；`TabOpener` 返回 `bool` 并拿到 `HomeContext` | 已完成，`main` 767 个测试、`shell_domain` 3 个测试通过 |
+| `f0cb91d75` | SSH 终端经 `ConnectionOpener` 打开；新增 `app_kit::ShellHost` 事件桥，SFTP/保存临时连接回到当前 `HomePage`；`HomeContext::keep_subscription` 保管事件订阅 | 已完成，`main` 767 个测试、`shell_domain` 4 个测试通过 |
 
-尚未开始：`runtime_core/runtime_database` 独立包、`apps/navop` 全量包、打包与 CI 矩阵；`shell_domain` 仍缺 SFTP、端口转发、RDP/VNC、SSH 连接打开。
+尚未开始：`runtime_core/runtime_database` 独立包、`apps/navop` 全量包、打包与 CI 矩阵；`shell_domain` 仍缺 SFTP、端口转发、RDP/VNC 的 Tab 打开（SSH 已迁入，SFTP/保存连接经事件桥回 `main`）。
 
 已知问题：`extension-runtime` 的 `db_tree_action_runs_registered_wasm_component` 在本机因 fixture 指向 `.wat` 文本而失败（`bad magic number`），与本次改动无关；其余 227 个测试通过。`ssh_form` 暂用 `edition = "2021"` 以保持与原实现一致，后续随 `terminal_view` 一起升级。
 
-下一步建议：本地终端已进入 `shell_domain`；剩余是 SFTP/端口转发/RDP/VNC/SSH 连接进入 `shell_domain`，以及外部驱动守卫（抽 `DriverGate`）。`apps/navop` 全量包暂时仍由 `main` 的 `navop` bin 承担，等 `main` 抽出 lib 后再迁。
+下一步建议：SSH 已进入 `shell_domain`；下一步把 SFTP 也迁入 `shell_domain`（把 `OpenLocalTerminal` 事件同样经 `ShellHost` 桥接），然后处理端口转发/RDP/VNC 与外部驱动守卫（抽 `DriverGate`）。`apps/navop` 全量包暂时仍由 `main` 的 `navop` bin 承担，等 `main` 抽出 lib 后再迁。
