@@ -939,10 +939,11 @@ apps/*        不得直接依赖域 crate（只能经 *_domain）
 | `205d97f55` | `app_kit::bootstrap` 在路径未初始化时调用 `initialize_app_paths`，独立产品不再依赖 main 的启动路径 | 已完成，`main` 760 tests、`app_kit` 3 tests 通过 |
 | `5974b0d3a` | macOS 应用包按产品生成：`navop`（Navop/navop/com.onetcli.app/保留文档类型）、`navop-shell`（Navop Shell/navop-shell/com.navop.shell/无文档类型）、`navop-data`（Navop Data/navop-data/com.navop.data/无文档类型）；DMG 文件名改按二进制名 | 已完成，`script/test-bundle-macos.sh` 三产品通过，`test-release-packaging.mjs` 34/34 |
 | `04fdc8c95` | 新增 Shell/Data 的 Linux desktop、图标与 `script/package-linux-product.sh`；产出普通 tar 与带产品 portable marker 的便携包 | 已完成，脚本本地打包验证通过；包装测试 35/35 |
+| `355be3cf7` | 新增 `.github/workflows/standalone-products.yml`：Shell/Data × macOS arm64/x64 × Linux x64 的 6 个构建任务，复用产品级 macOS/Linux 打包脚本 | 已完成本地 YAML 解析与包装测试 36/36；尚未在 GitHub Actions 实跑 |
 | — | 三产品启动冒烟：`navop-shell`/`navop-data` 用临时 `HOME` 启动 8 秒，无 panic，分别创建 `.navop-shell-dev`/`.navop-data-dev` 目录，Data 完成 `one-hub.db` 迁移 | 通过；真实窗口交互与连接打开仍待人工验证 |
 
-尚未开始：三产品 CI 矩阵与 Windows 安装器参数化；macOS bundle 与 Linux tar 打包脚本已就绪；`DriverGate` 的 Data 路径已接管，Main 仍保留原驱动守卫；`navop-shell`/`navop-data` 的启动冒烟已通过，真实连接打开仍待人工验证；runtime 层四个包（core/database/redis/sftp）已拆完，`navop_runtime` 现在是薄门面，`apps/navop` 全量包已能依赖 `navop_app` 库。`shell_domain` 的域打开已覆盖 SSH/SFTP/端口转发/RDP/VNC/会话日志，剩余是扩展驱动守卫（`DriverGate`）与数据库驱动安装流程。注意：构建期间磁盘曾满，已清理 `target` 与 mbx 增量/action 缓存；后续构建缓存会重建。
+尚未开始：Windows 安装器参数化与 CI 实跑；独立产品 workflow 已增加但未实跑，Linux 包仍用 runner 原生 glibc；`DriverGate` 的 Data 路径已接管，Main 仍保留原驱动守卫；`navop-shell`/`navop-data` 的启动冒烟已通过，真实连接打开仍待人工验证；runtime 层四个包（core/database/redis/sftp）已拆完，`navop_runtime` 现在是薄门面，`apps/navop` 全量包已能依赖 `navop_app` 库。`shell_domain` 的域打开已覆盖 SSH/SFTP/端口转发/RDP/VNC/会话日志，剩余是扩展驱动守卫（`DriverGate`）与数据库驱动安装流程。注意：构建期间磁盘曾满，已清理 `target` 与 mbx 增量/action 缓存；后续构建缓存会重建。
 
 已知问题：`extension-runtime` 的 `db_tree_action_runs_registered_wasm_component` 在本机因 fixture 指向 `.wat` 文本而失败（`bad magic number`），与本次改动无关；其余 227 个测试通过。`ssh_form` 暂用 `edition = "2021"` 以保持与原实现一致，后续随 `terminal_view` 一起升级。
 
-下一步建议：接上三产品 CI 矩阵（macOS/Linux 先行），再做 Windows 安装器参数化与真实连接打开验证。
+下一步建议：参数化 Windows 安装器（独立 UpgradeCode/ProductCode），再补真实连接打开验证与最终交付说明。
