@@ -7,6 +7,10 @@ use domain_api::{AppIdentity, DomainRegistry, Product};
 use gpui::App;
 use std::sync::OnceLock;
 
+pub mod host;
+
+pub use host::{ShellHost, set_shell_host, shell_host};
+
 static DOMAIN_REGISTRY: OnceLock<DomainRegistry> = OnceLock::new();
 static EMPTY_DOMAIN_REGISTRY: OnceLock<DomainRegistry> = OnceLock::new();
 

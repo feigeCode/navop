@@ -770,6 +770,9 @@ impl HomePage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if app_kit::registry().open_connection(&conn, mode, self, window, cx) {
+            return;
+        }
         let conn_id = conn.id.unwrap_or(0);
         // 使用时间戳生成唯一 tab_id，支持同一连接打开多个 SSH 终端
         let timestamp = std::time::SystemTime::now()

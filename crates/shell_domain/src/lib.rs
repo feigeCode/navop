@@ -4,16 +4,17 @@
 //! 后续按同样方式加入。
 
 use domain_api::{
-    Domain, DomainId, DomainRegistry, HomeContext, NotifyLevel, TabIntent, TabOpener,
-    TerminalProfileKind,
+    ConnectionOpener, Domain, DomainId, DomainRegistry, HomeContext, NotifyLevel, TabIntent,
+    TabOpener, TerminalProfileKind,
 };
 use gpui::{App, AppContext, Window};
 use known_hosts_view::KnownHostsPage;
 use one_core::settings::{AppSettings, LocalTerminalProfileKind};
+use one_core::storage::{ConnectionType, StoredConnection};
 use one_core::tab_container::{TabItem, TabOpenMode};
 use std::sync::Arc;
 use terminal::{local_config_from_settings, local_config_from_settings_with_profile};
-use terminal_view::TerminalWorkspace;
+use terminal_view::{TerminalWorkspace, TerminalWorkspaceEvent};
 
 pub struct ShellDomain;
 
@@ -25,6 +26,7 @@ impl Domain for ShellDomain {
     fn register(&self, registry: &mut DomainRegistry) {
         registry.register_tab_opener(Arc::new(KnownHostsTabOpener));
         registry.register_tab_opener(Arc::new(TerminalTabOpener));
+        registry.register_connection_opener(ConnectionType::SshSftp, Arc::new(SshConnectionOpener));
     }
 
     fn init(&self, _cx: &mut App) -> anyhow::Result<()> {
@@ -112,6 +114,64 @@ impl TabOpener for TerminalTabOpener {
     }
 }
 
+struct SshConnectionOpener;
+
+impl ConnectionOpener for SshConnectionOpener {
+    fn open(
+        &self,
+        connection: &StoredConnection,
+        mode: TabOpenMode,
+        home: &mut dyn HomeContext,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        if connection.connection_type != ConnectionType::SshSftp {
+            return false;
+        }
+        let connection_id = connection.id.unwrap_or(0);
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or(0);
+        let tab_id = format!("ssh-terminal-{connection_id}-{timestamp}");
+        let tab_index = home.next_tab_index(&connection.name, cx);
+        let sync_path = AppSettings::global(cx).terminal_sync_path_with_terminal;
+        let terminal = cx.new(|cx| {
+            TerminalWorkspace::new_ssh_with_index(
+                connection.clone(),
+                tab_index,
+                window,
+                cx,
+                None,
+                sync_path,
+            )
+        });
+        let window_handle = window.window_handle();
+        let subscription = cx.subscribe(&terminal, move |_, event: &TerminalWorkspaceEvent, cx| {
+            let Some(host) = app_kit::shell_host() else {
+                return;
+            };
+            match event {
+                TerminalWorkspaceEvent::OpenSftp(connection) => {
+                    let connection = connection.clone();
+                    let _ = window_handle.update(cx, move |_, window, cx| {
+                        host.open_sftp(connection, window, cx);
+                    });
+                }
+                TerminalWorkspaceEvent::SaveAsConnection(connection) => {
+                    let connection = connection.clone();
+                    let _ = window_handle.update(cx, move |_, window, cx| {
+                        host.save_temporary_connection(connection, window, cx);
+                    });
+                }
+            }
+        });
+        home.keep_subscription(subscription);
+        let item = TabItem::new(tab_id, "ssh", terminal);
+        home.open_tab(item, mode, window, cx)
+    }
+}
+
 fn local_profile_kind(kind: TerminalProfileKind) -> LocalTerminalProfileKind {
     match kind {
         TerminalProfileKind::System => LocalTerminalProfileKind::System,
@@ -134,6 +194,13 @@ mod tests {
     #[test]
     fn shell_domain_has_stable_id() {
         assert_eq!(ShellDomain.id(), DomainId::SHELL);
+    }
+
+    #[test]
+    fn shell_domain_registers_ssh_connection_opener() {
+        let mut registry = DomainRegistry::default();
+        ShellDomain.register(&mut registry);
+        assert!(registry.has_connection_opener(ConnectionType::SshSftp));
     }
 
     #[test]

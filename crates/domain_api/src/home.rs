@@ -1,4 +1,4 @@
-use gpui::{App, Window};
+use gpui::{App, Subscription, Window};
 use one_core::storage::{StoredConnection, Workspace};
 use one_core::tab_container::{TabItem, TabOpenMode};
 
@@ -40,6 +40,9 @@ pub trait HomeContext: TabHost {
 
     /// 当前 Tab 容器里同基础标题的下一个可用序号；没有同名 Tab 时返回 None。
     fn next_tab_index(&self, base_title: &str, cx: &App) -> Option<usize>;
+
+    /// 领域在打开 Tab 时建立的订阅交给宿主保管，随宿主一起释放。
+    fn keep_subscription(&mut self, subscription: Subscription);
 
     fn notify(&mut self, level: NotifyLevel, message: &str, window: &mut Window, cx: &mut App);
 }

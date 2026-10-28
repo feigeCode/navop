@@ -1,6 +1,6 @@
 use crate::home_tab::HomePage;
 use domain_api::{HomeContext, NotifyLevel, TabHost};
-use gpui::{App, Window};
+use gpui::{App, Subscription, Window};
 use gpui_component::{WindowExt as _, notification::Notification};
 use one_core::storage::{StoredConnection, Workspace};
 use one_core::tab_container::{TabItem, TabOpenMode};
@@ -75,6 +75,10 @@ impl HomeContext for HomePage {
         self.next_available_tab_index(base_title, cx)
     }
 
+    fn keep_subscription(&mut self, subscription: Subscription) {
+        self._subscriptions.push(subscription);
+    }
+
     fn notify(&mut self, level: NotifyLevel, message: &str, window: &mut Window, cx: &mut App) {
         let notification = match level {
             NotifyLevel::Info => Notification::info(message.to_string()),
@@ -82,5 +86,39 @@ impl HomeContext for HomePage {
             NotifyLevel::Error => Notification::error(message.to_string()),
         };
         window.push_notification(notification, cx);
+    }
+}
+
+/// 全量产品的 shell 宿主：领域事件回到当前 `HomePage`。
+pub(crate) struct NavopShellHost;
+
+impl app_kit::ShellHost for NavopShellHost {
+    fn open_sftp(&self, connection: StoredConnection, window: &mut Window, cx: &mut App) {
+        let Some(home) = cx
+            .try_global::<crate::navop_app::GlobalHomePage>()
+            .map(|global| global.home_page.clone())
+        else {
+            return;
+        };
+        home.update(cx, |home, cx| {
+            home.open_sftp_view(connection, window, cx);
+        });
+    }
+
+    fn save_temporary_connection(
+        &self,
+        connection: StoredConnection,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let Some(home) = cx
+            .try_global::<crate::navop_app::GlobalHomePage>()
+            .map(|global| global.home_page.clone())
+        else {
+            return;
+        };
+        home.update(cx, |home, cx| {
+            home.show_save_temporary_connection_form(connection, window, cx);
+        });
     }
 }

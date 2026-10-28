@@ -12706,6 +12706,7 @@ name = "shell_domain"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "app_kit",
  "domain_api",
  "gpui-fast",
  "known_hosts_view",

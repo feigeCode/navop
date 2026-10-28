@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 anyhow.workspace = true
+app_kit.workspace = true
 domain_api.workspace = true
 gpui.workspace = true
 known_hosts_view.workspace = true

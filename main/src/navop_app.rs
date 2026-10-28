@@ -950,6 +950,7 @@ pub fn init(cx: &mut App) -> anyhow::Result<()> {
     one_core::themes::load_imported(cx);
     setting_tab::init_settings(cx);
     one_core::init(cx)?;
+    app_kit::set_shell_host(Arc::new(crate::home_tab::domain_host::NavopShellHost));
     init_ssh_session_service(cx);
     ai_chat_view::init(cx);
     crate::public_mcp_approval::init(cx);
