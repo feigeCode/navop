@@ -916,9 +916,10 @@ apps/*        不得直接依赖域 crate（只能经 *_domain）
 | `2c7ba2897` | 新增 `shell_domain`，KnownHosts 通过 `DomainRegistry` 打开；修正启动顺序源码断言 | 已完成，`main` 767 个测试通过 |
 | `296b0f76c` | `apps/navop-shell`/`apps/navop-data` 改为 `Product` 启动；`TabOpener` 增加打开模式 | 两个 bin 以 `-Dwarnings` 编译通过 |
 | `7295e415a` | 新增 `data_domain`，Redis 单连接经 `ConnectionRegistry` 打开；全量产品注册 DataDomain | 已完成，`main` 767 个测试通过 |
+| `87b76d56f` | `HomeContext` 增加工作区查询与连接排序；Redis 工作区标签迁入 `data_domain` | 已完成，`main` 767 个测试通过 |
 
 尚未开始：`data_domain`、`shell_domain`、`runtime_core/runtime_database` 独立包、`apps/navop` 全量包、打包与 CI 矩阵。
 
 已知问题：`extension-runtime` 的 `db_tree_action_runs_registered_wasm_component` 在本机因 fixture 指向 `.wat` 文本而失败（`bad magic number`），与本次改动无关；其余 227 个测试通过。`ssh_form` 暂用 `edition = "2021"` 以保持与原实现一致，后续随 `terminal_view` 一起升级。
 
-下一步建议：`data_domain` 现在只覆盖非工作区 Redis，工作区分组仍在 `main`；接着补 Database/Mongo 的 `ConnectionOpener`，并把 `HomeContext` 扩出当前工作区，再迁工作区分组。`apps/navop` 全量包暂时仍由 `main` 的 `navop` bin 承担，等 `main` 抽出 lib 后再迁。
+下一步建议：Redis 已整体迁入 `data_domain`；接着补 Database 的 `ConnectionOpener`（需要先抽 `database_driver_install` 的驱动守卫）与 Mongo；`shell_domain` 再迁本地终端/端口转发。`apps/navop` 全量包暂时仍由 `main` 的 `navop` bin 承担，等 `main` 抽出 lib 后再迁。
