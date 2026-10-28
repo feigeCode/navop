@@ -949,3 +949,63 @@ apps/*        不得直接依赖域 crate（只能经 *_domain）
 已知问题：`extension-runtime` 的 `db_tree_action_runs_registered_wasm_component` 在本机因 fixture 指向 `.wat` 文本而失败（`bad magic number`），与本次改动无关；其余 227 个测试通过。`ssh_form` 暂用 `edition = "2021"` 以保持与原实现一致，后续随 `terminal_view` 一起升级。
 
 下一步建议：参数化 Windows 安装器（独立 UpgradeCode/ProductCode），再补真实连接打开验证与最终交付说明。
+
+## 18. 交付状态（2026-10-29）
+
+### 18.1 已交付
+
+- 分支：`refactor/product-split`，基于 `dev@3dbe5f87a`，未合并 dev。
+- 三个可构建产品：
+  - `apps/navop` → 全量 `navop`；
+  - `apps/navop-shell` → `navop-shell`；
+  - `apps/navop-data` → `navop-data`。
+- 共享层：`app_kit`（启动、身份、领域注册表、宿主事件桥）、`domain_api`（Product/Domain/TabHost/HomeContext/ConnectionOpener/TabOpener/AppIdentity）。
+- 领域层：`shell_domain`（SSH/SFTP/端口转发/RDP/VNC/本地终端/KnownHosts/会话日志）、`data_domain`（Database/Redis/MongoDB，含驱动检查与安装提示）。
+- 运行时层：`runtime_core`、`runtime_database`、`runtime_redis`、`runtime_sftp`；`navop_runtime` 只保留兼容门面。
+- `main` 已抽成 `navop_app` 库；原 bin 由 `apps/navop` 提供。
+- 独立 SSH 表单：`crates/ssh_form`，`terminal_view` 通过 re-export 保持兼容。
+- 身份隔离：`AppIdentity` 统一配置 app id、bundle id、数据目录、keychain、portable marker；三个产品分别使用 `navop`、`navop-shell`、`navop-data` 身份。
+- 打包脚本：macOS `.app`/`.dmg` 三产品参数化；Linux desktop、图标、普通/便携 tar；Windows 参数化 WiX MSI + Burn bundle。
+
+### 18.2 验证结果
+
+| 验证 | 结果 |
+|---|---|
+| `cargo build -p navop -p navop-shell -p navop-data`（`-Dwarnings`） | 通过 |
+| `cargo test -p main --lib` | 760 passed |
+| `main` 集成测试 | 3 passed |
+| `domain_api` / `app_kit` / `shell_domain` / `data_domain` | 5 / 3 / 15 / 4 passed |
+| `runtime_core` / `runtime_database` / `runtime_redis` / `runtime_sftp` | 0 / 1 / 5 / 17 passed |
+| `ssh_form` | 51 passed |
+| `script/test-bundle-macos.sh` | 三产品通过 |
+| `script/test-release-packaging.mjs` | 38 / 38 通过 |
+| 三产品临时 `HOME` 启动冒烟 | 无 panic；Data 完成 SQLite 迁移 |
+
+已知既有失败：`extension-runtime` 的 `db_tree_action_runs_registered_wasm_component` 因 fixture 指向 `.wat` 文本而失败（`bad magic number`），与拆分无关。
+
+### 18.3 运行方式
+
+```bash
+cargo run -p navop        # 全量
+cargo run -p navop-shell  # Shell
+cargo run -p navop-data   # Data
+```
+
+开发模式下三个产品分别使用 `.navop-dev`、`.navop-shell-dev`、`.navop-data-dev` 数据目录。
+
+### 18.4 已知限制
+
+- Windows MSI/Burn 未在真实 WiX 环境编译；本机无 `wix`/`pwsh`，只做了 XML、参数和身份唯一性校验。
+- `standalone-products.yml` 已提交到分支，但 GitHub 的 `workflow_dispatch` 要求 workflow 位于默认分支；分支上直接 dispatch 返回 404，需要合并后或临时放到默认分支才能实跑。
+- macOS 包默认 ad-hoc 签名，未接 Developer ID/公证；三产品更新 feed 尚未隔离，独立产品不应复用全量的更新清单。
+- Linux 包使用构建机 glibc，尚未接主 Release 的 `cargo zigbuild ... .2.28` 基线。
+- `main` 仍保留旧域名打开路径作为未注册时的 fallback，以及旧的数据库驱动守卫；`navop-shell`/`navop-data` 已不再走这些 fallback。
+- 两个独立产品当前只装配连接列表与领域打开入口，不含设置、AI、Notes、Team、凭据库、云同步；这些属于全量产品。
+- 启动冒烟只验证进程存活与目录创建，真实连接、窗口交互仍需人工验证。
+
+### 18.5 后续建议
+
+1. 把 `standalone-products.yml` 合入默认分支后跑一次 Windows/Linux/macOS 矩阵，按真实日志修 WiX 与 Linux 打包。
+2. 为三个产品隔离更新 feed，并补 macOS 公证与 Windows 代码签名。
+3. 逐步删除 `main` 中已被领域注册表覆盖的 fallback，防止两套路径长期漂移。
+4. 给 `navop-shell`/`navop-data` 补最小设置页与“从全量导入连接”的迁移入口。
