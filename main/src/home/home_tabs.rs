@@ -919,6 +919,9 @@ impl HomePage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if app_kit::registry().open_sftp(&conn, self, window, cx) {
+            return;
+        }
         let conn_id = conn.id.unwrap_or(0);
         // 使用时间戳生成唯一 tab_id，支持同一连接打开多个 SFTP 视图
         let timestamp = std::time::SystemTime::now()
@@ -1048,6 +1051,89 @@ impl HomePage {
             tab_container.update(cx, |tc, cx| {
                 tc.add_and_activate_tab_with_focus(tab, window, cx);
             });
+        });
+    }
+
+    /// SFTP 双栏视图请求在指定目录打开本地终端。
+    pub(crate) fn open_sftp_local_terminal(
+        &mut self,
+        working_dir: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let config = match local_config_from_settings(AppSettings::global(cx), Some(working_dir)) {
+            Ok(config) => config,
+            Err(error) => {
+                push_local_terminal_config_error(window, &error, cx);
+                return;
+            }
+        };
+        let tab_id = format!("local-terminal-{}", timestamp);
+        let tab_container = self.active_tab_container(cx);
+        let existing = tab_container
+            .read(cx)
+            .tabs()
+            .iter()
+            .filter(|t| t.id().starts_with("local-terminal-") || t.id().starts_with("terminal-"))
+            .count();
+        let tab_index = (existing > 0).then_some(existing + 1);
+        let terminal_view =
+            cx.new(|cx| TerminalWorkspace::new_with_index(config, tab_index, window, cx));
+        tab_container.update(cx, |tc, cx| {
+            let tab = TabItem::new(tab_id, "terminal", terminal_view);
+            tc.add_and_activate_tab_with_focus(tab, window, cx);
+        });
+    }
+
+    /// SFTP 双栏视图请求在指定目录打开该连接的 SSH 终端。
+    pub(crate) fn open_sftp_ssh_terminal(
+        &mut self,
+        connection: StoredConnection,
+        working_dir: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let conn_id = connection.id.unwrap_or(0);
+        let tab_id = format!("ssh-terminal-{}-{}", conn_id, timestamp);
+        let prefix = format!("ssh-terminal-{}-", conn_id);
+        let tab_container = self.active_tab_container(cx);
+        let existing = tab_container
+            .read(cx)
+            .tabs()
+            .iter()
+            .filter(|t| t.id().starts_with(&prefix))
+            .count();
+        let base_title = connection.name.clone();
+        let titles: Vec<String> = tab_container
+            .read(cx)
+            .tabs()
+            .iter()
+            .map(|tab| tab.title(cx).to_string())
+            .collect();
+        let tab_index = next_duplicate_tab_index(&base_title, titles.iter().map(String::as_str))
+            .or_else(|| (existing > 0).then_some(existing));
+        let sync_path = Self::terminal_sync_path_enabled(cx);
+        let terminal_view = cx.new(|cx| {
+            TerminalWorkspace::new_ssh_with_index(
+                connection,
+                tab_index,
+                window,
+                cx,
+                Some(working_dir.as_str()),
+                sync_path,
+            )
+        });
+        tab_container.update(cx, |tc, cx| {
+            let tab = TabItem::new(tab_id, "ssh", terminal_view);
+            tc.add_and_activate_tab_with_focus(tab, window, cx);
         });
     }
 

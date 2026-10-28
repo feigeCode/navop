@@ -16,6 +16,17 @@ pub trait ConnectionOpener: Send + Sync {
         window: &mut Window,
         cx: &mut App,
     ) -> bool;
+
+    /// 打开双栏文件视图；只有同时具备文件能力的领域实现。
+    fn open_sftp(
+        &self,
+        _connection: &StoredConnection,
+        _home: &mut dyn HomeContext,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) -> bool {
+        false
+    }
 }
 
 /// 不依赖具体连接类型的 Tab 打开器（本地终端、端口转发、known_hosts 等）。
@@ -87,6 +98,18 @@ impl DomainRegistry {
                     .find(|(connection_type, _)| *connection_type == ConnectionType::All)
             });
         opener.is_some_and(|(_, opener)| opener.open(connection, mode, home, window, cx))
+    }
+
+    pub fn open_sftp(
+        &self,
+        connection: &StoredConnection,
+        home: &mut dyn HomeContext,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        self.connection_openers
+            .iter()
+            .any(|(_, opener)| opener.open_sftp(connection, home, window, cx))
     }
 
     pub fn open_tab(

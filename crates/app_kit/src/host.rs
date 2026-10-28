@@ -18,6 +18,18 @@ pub trait ShellHost: Send + Sync {
         window: &mut Window,
         cx: &mut App,
     );
+
+    /// SFTP 双栏视图请求在指定目录打开本地终端。
+    fn open_local_terminal(&self, working_dir: String, window: &mut Window, cx: &mut App);
+
+    /// SFTP 双栏视图请求在指定目录打开该连接的 SSH 终端。
+    fn open_ssh_terminal(
+        &self,
+        connection: StoredConnection,
+        working_dir: String,
+        window: &mut Window,
+        cx: &mut App,
+    );
 }
 
 static SHELL_HOST: OnceLock<Arc<dyn ShellHost>> = OnceLock::new();

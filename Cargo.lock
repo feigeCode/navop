@@ -12711,6 +12711,7 @@ dependencies = [
  "gpui-fast",
  "known_hosts_view",
  "one-core",
+ "sftp_view",
  "terminal",
  "terminal_view",
 ]

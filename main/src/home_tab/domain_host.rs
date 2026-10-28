@@ -121,4 +121,34 @@ impl app_kit::ShellHost for NavopShellHost {
             home.show_save_temporary_connection_form(connection, window, cx);
         });
     }
+
+    fn open_local_terminal(&self, working_dir: String, window: &mut Window, cx: &mut App) {
+        let Some(home) = cx
+            .try_global::<crate::navop_app::GlobalHomePage>()
+            .map(|global| global.home_page.clone())
+        else {
+            return;
+        };
+        home.update(cx, |home, cx| {
+            home.open_sftp_local_terminal(working_dir, window, cx);
+        });
+    }
+
+    fn open_ssh_terminal(
+        &self,
+        connection: StoredConnection,
+        working_dir: String,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let Some(home) = cx
+            .try_global::<crate::navop_app::GlobalHomePage>()
+            .map(|global| global.home_page.clone())
+        else {
+            return;
+        };
+        home.update(cx, |home, cx| {
+            home.open_sftp_ssh_terminal(connection, working_dir, window, cx);
+        });
+    }
 }

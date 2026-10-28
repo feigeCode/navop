@@ -12,6 +12,7 @@ use known_hosts_view::KnownHostsPage;
 use one_core::settings::{AppSettings, LocalTerminalProfileKind};
 use one_core::storage::{ConnectionType, StoredConnection};
 use one_core::tab_container::{TabItem, TabOpenMode};
+use sftp_view::{SftpView, SftpViewEvent};
 use std::sync::Arc;
 use terminal::{local_config_from_settings, local_config_from_settings_with_profile};
 use terminal_view::{TerminalWorkspace, TerminalWorkspaceEvent};
@@ -169,6 +170,56 @@ impl ConnectionOpener for SshConnectionOpener {
         home.keep_subscription(subscription);
         let item = TabItem::new(tab_id, "ssh", terminal);
         home.open_tab(item, mode, window, cx)
+    }
+
+    fn open_sftp(
+        &self,
+        connection: &StoredConnection,
+        home: &mut dyn HomeContext,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        if !matches!(
+            connection.connection_type,
+            ConnectionType::SshSftp | ConnectionType::Ftp
+        ) {
+            return false;
+        }
+        let connection_id = connection.id.unwrap_or(0);
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or(0);
+        let tab_id = format!("sftp-{connection_id}-{timestamp}");
+        let tab_index = home.next_tab_index(&connection.name, cx);
+        let sftp = cx.new(|cx| SftpView::new_with_index(connection.clone(), tab_index, window, cx));
+        let window_handle = window.window_handle();
+        let subscription = cx.subscribe(&sftp, move |_, event: &SftpViewEvent, cx| {
+            let Some(host) = app_kit::shell_host() else {
+                return;
+            };
+            match event {
+                SftpViewEvent::OpenLocalTerminal { working_dir } => {
+                    let working_dir = working_dir.clone();
+                    let _ = window_handle.update(cx, move |_, window, cx| {
+                        host.open_local_terminal(working_dir, window, cx);
+                    });
+                }
+                SftpViewEvent::OpenSshTerminal {
+                    connection,
+                    working_dir,
+                } => {
+                    let connection = connection.clone();
+                    let working_dir = working_dir.clone();
+                    let _ = window_handle.update(cx, move |_, window, cx| {
+                        host.open_ssh_terminal(connection, working_dir, window, cx);
+                    });
+                }
+            }
+        });
+        home.keep_subscription(subscription);
+        let item = TabItem::new(tab_id, "sftp", sftp);
+        home.open_tab_with_focus(item, window, cx)
     }
 }
 
