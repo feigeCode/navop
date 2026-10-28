@@ -914,6 +914,7 @@ apps/*        不得直接依赖域 crate（只能经 *_domain）
 | `fa0a70f9d` | 新增 `apps/navop-shell`、`apps/navop-data` 骨架可执行包，按身份打开占位窗口 | 已完成，两者以 `-Dwarnings` 编译通过 |
 | `6ef0f60a6` | `main` 实现 `Product`，改走 `app_kit::bootstrap`；`Domain::init` 支持错误传播 | 已完成，`main` 以 `-Dwarnings` 编译通过 |
 | `2c7ba2897` | 新增 `shell_domain`，KnownHosts 通过 `DomainRegistry` 打开；修正启动顺序源码断言 | 已完成，`main` 767 个测试通过 |
+| `296b0f76c` | `apps/navop-shell`/`apps/navop-data` 改为 `Product` 启动；`TabOpener` 增加打开模式 | 两个 bin 以 `-Dwarnings` 编译通过 |
 
 尚未开始：`data_domain`、`shell_domain`、`runtime_core/runtime_database` 独立包、`apps/navop` 全量包、打包与 CI 矩阵。
 
