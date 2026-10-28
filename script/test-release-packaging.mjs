@@ -1532,3 +1532,11 @@ test("Windows 清单门禁能识别缺失清单的 PE（含真实失败现象的
     fs.rmSync(temporary, { recursive: true, force: true });
   }
 });
+
+test("release version source stays aligned with the navop product package", () => {
+  const versionOf = (source) => source.match(/^version = "([^"]+)"/m)?.[1];
+  const mainVersion = versionOf(read("main/Cargo.toml"));
+  const navopVersion = versionOf(read("apps/navop/Cargo.toml"));
+  assert.ok(mainVersion, "main/Cargo.toml must declare a version");
+  assert.equal(navopVersion, mainVersion, "apps/navop/Cargo.toml version must match main");
+});
