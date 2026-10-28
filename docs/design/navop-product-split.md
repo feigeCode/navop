@@ -935,8 +935,9 @@ apps/*        不得直接依赖域 crate（只能经 *_domain）
 | `d572a14ed` | `HomeContext::port_forwarding_runtime` 改为 `Option`，Data 产品无需端口转发运行时 | 已完成，main 760 tests、shell/data/domain 测试通过 |
 | `731d97209` | `navop-data` 装配真实主页：Database/Redis/MongoDB 连接列表、打开入口、按设置排序与打开模式 | 已完成，`navop-data` 以 `-Dwarnings` 编译、clippy 通过，8 个排序测试通过 |
 | `205d97f55` | `app_kit::bootstrap` 在路径未初始化时调用 `initialize_app_paths`，独立产品不再依赖 main 的启动路径 | 已完成，`main` 760 tests、`app_kit` 3 tests 通过 |
+| — | 三产品启动冒烟：`navop-shell`/`navop-data` 用临时 `HOME` 启动 8 秒，无 panic，分别创建 `.navop-shell-dev`/`.navop-data-dev` 目录，Data 完成 `one-hub.db` 迁移 | 通过；真实窗口交互与连接打开仍待人工验证 |
 
-尚未开始：`DriverGate`、三产品打包与 CI 矩阵；`navop-shell`/`navop-data` 的主页已装配，但尚未做 GUI 启动冒烟；runtime 层四个包（core/database/redis/sftp）已拆完，`navop_runtime` 现在是薄门面，`apps/navop` 全量包已能依赖 `navop_app` 库。`shell_domain` 的域打开已覆盖 SSH/SFTP/端口转发/RDP/VNC/会话日志，剩余是扩展驱动守卫（`DriverGate`）与数据库驱动安装流程。注意：构建期间磁盘曾满，已清理 `target` 与 mbx 增量/action 缓存；后续构建缓存会重建。
+尚未开始：`DriverGate`、三产品打包与 CI 矩阵；`navop-shell`/`navop-data` 的启动冒烟已通过，真实连接打开仍待人工验证；runtime 层四个包（core/database/redis/sftp）已拆完，`navop_runtime` 现在是薄门面，`apps/navop` 全量包已能依赖 `navop_app` 库。`shell_domain` 的域打开已覆盖 SSH/SFTP/端口转发/RDP/VNC/会话日志，剩余是扩展驱动守卫（`DriverGate`）与数据库驱动安装流程。注意：构建期间磁盘曾满，已清理 `target` 与 mbx 增量/action 缓存；后续构建缓存会重建。
 
 已知问题：`extension-runtime` 的 `db_tree_action_runs_registered_wasm_component` 在本机因 fixture 指向 `.wat` 文本而失败（`bad magic number`），与本次改动无关；其余 227 个测试通过。`ssh_form` 暂用 `edition = "2021"` 以保持与原实现一致，后续随 `terminal_view` 一起升级。
 
