@@ -1,0 +1,12 @@
+[package]
+name = "domain_api"
+version = "0.15.2"
+publish.workspace = true
+edition.workspace = true
+
+[dependencies]
+gpui = { workspace = true }
+one-core = { workspace = true }
+
+[lints]
+workspace = true

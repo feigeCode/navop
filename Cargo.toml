@@ -19,6 +19,7 @@ members = [
     "crates/extension-component",
     "crates/extension-wasm",
     "crates/tool_runtime",
+    "crates/domain_api",
     "crates/universal-plugins",
     "crates/navop_runtime",
     "crates/er_flow",
