@@ -14,6 +14,7 @@ futures = { workspace = true }
 one-core = { workspace = true }
 redis-runtime = { workspace = true, optional = true }
 runtime_core = { workspace = true }
+runtime_database = { workspace = true, optional = true }
 serde_json = { workspace = true }
 sftp = { workspace = true, optional = true }
 ssh = { workspace = true, optional = true }
@@ -21,7 +22,7 @@ tool_runtime = { workspace = true }
 
 [features]
 default = ["database", "redis", "sftp"]
-database = ["dep:db"]
+database = ["dep:db", "dep:runtime_database"]
 redis = ["dep:redis-runtime"]
 sftp = ["dep:sftp", "dep:ssh"]
 builtin-duckdb = ["database", "db/builtin-duckdb"]

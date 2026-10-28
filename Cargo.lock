@@ -8292,6 +8292,7 @@ dependencies = [
  "one-core",
  "redis-runtime",
  "runtime_core",
+ "runtime_database",
  "rusqlite",
  "serde_json",
  "sftp",
@@ -11614,6 +11615,20 @@ version = "0.1.0"
 dependencies = [
  "one-core",
  "serde_json",
+ "tool_runtime",
+]
+
+[[package]]
+name = "runtime_database"
+version = "0.1.0"
+dependencies = [
+ "db",
+ "one-core",
+ "rusqlite",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
  "tool_runtime",
 ]
 

@@ -1,6 +1,6 @@
 pub mod connections;
 #[cfg(feature = "database")]
-pub mod database_tools;
+pub use runtime_database::database_tools;
 #[cfg(feature = "redis")]
 pub mod redis_tools;
 #[cfg(feature = "sftp")]
