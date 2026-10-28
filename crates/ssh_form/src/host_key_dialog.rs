@@ -5,15 +5,15 @@ use ssh::{HostKeyDetails, HostKeyIdentity, HostKeyVerifier};
 use terminal::terminal::HostKeyVerificationReason;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct HostKeyDialogPresentation {
-    pub(crate) title_key: &'static str,
-    pub(crate) message_key: &'static str,
-    pub(crate) save_label_key: &'static str,
-    pub(crate) expected: Vec<HostKeyDetails>,
-    pub(crate) is_changed: bool,
+pub struct HostKeyDialogPresentation {
+    pub title_key: &'static str,
+    pub message_key: &'static str,
+    pub save_label_key: &'static str,
+    pub expected: Vec<HostKeyDetails>,
+    pub is_changed: bool,
 }
 
-pub(crate) fn host_key_dialog_presentation(
+pub fn host_key_dialog_presentation(
     reason: &HostKeyVerificationReason,
 ) -> HostKeyDialogPresentation {
     match reason {
@@ -34,7 +34,7 @@ pub(crate) fn host_key_dialog_presentation(
     }
 }
 
-pub(crate) fn render_host_key_details_card(
+pub fn render_host_key_details_card(
     identity: String,
     presented: HostKeyDetails,
     presentation: &HostKeyDialogPresentation,
@@ -107,7 +107,7 @@ pub(crate) fn render_host_key_details_card(
     card.into_any_element()
 }
 
-pub(crate) fn verifier_with_confirmed_host_key(
+pub fn verifier_with_confirmed_host_key(
     verifier: HostKeyVerifier,
     identity: HostKeyIdentity,
     presented: HostKeyDetails,

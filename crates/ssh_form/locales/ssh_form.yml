@@ -1,0 +1,2925 @@
+_version: 2
+
+TerminalWorkspace:
+  split:
+    en: Split Terminal
+    zh-CN: 终端分屏
+    zh-HK: 終端分屏
+  split_left:
+    en: Split Left
+    zh-CN: 向左分屏
+    zh-HK: 向左分屏
+  split_right:
+    en: Split Right
+    zh-CN: 向右分屏
+    zh-HK: 向右分屏
+  split_top:
+    en: Split Top
+    zh-CN: 向上分屏
+    zh-HK: 向上分屏
+  split_bottom:
+    en: Split Bottom
+    zh-CN: 向下分屏
+    zh-HK: 向下分屏
+  cancel_split:
+    en: Cancel Split and Return to Tab Bar
+    zh-CN: 取消分屏并返回标签栏
+    zh-HK: 取消分屏並返回標籤列
+  close_title:
+    en: Close Terminal Workspace?
+    zh-CN: 关闭终端工作区？
+    zh-HK: 關閉終端工作區？
+  close_message:
+    en: This workspace contains %{count} terminal panes. Closing it will disconnect all sessions.
+    zh-CN: 当前工作区包含 %{count} 个终端分屏，关闭后将断开所有会话。
+    zh-HK: 當前工作區包含 %{count} 個終端分屏，關閉後將斷開所有會話。
+
+# 主题
+Theme:
+  application:
+    en: Follow Application
+    zh-CN: 跟随应用
+    zh-HK: 跟隨應用
+  midnight:
+    en: Midnight
+    zh-CN: 暗夜
+    zh-HK: 暗夜
+  daylight:
+    en: Daylight
+    zh-CN: 明亮
+    zh-HK: 明亮
+  ink:
+    en: Ink
+    zh-CN: 墨黑
+    zh-HK: 墨黑
+  paper:
+    en: Paper
+    zh-CN: 纸白
+    zh-HK: 紙白
+  ocean:
+    en: Ocean
+    zh-CN: 海浪
+    zh-HK: 海浪
+  obsidian:
+    en: Obsidian
+    zh-CN: 黑曜
+    zh-HK: 黑曜
+  lotus:
+    en: Lotus
+    zh-CN: 莲白
+    zh-HK: 蓮白
+  neon_blue:
+    en: Neon Blue
+    zh-CN: 霓蓝
+    zh-HK: 霓藍
+  matrix:
+    en: Matrix
+    zh-CN: 矩阵
+    zh-HK: 矩陣
+  crimson:
+    en: Crimson
+    zh-CN: 赤红
+    zh-HK: 赤紅
+  slate:
+    en: Slate
+    zh-CN: 石板
+    zh-HK: 石板
+  aurora:
+    en: Aurora
+    zh-CN: 极光
+    zh-HK: 極光
+  orchid:
+    en: Orchid
+    zh-CN: 兰紫
+    zh-HK: 蘭紫
+  ember:
+    en: Ember
+    zh-CN: 余烬
+    zh-HK: 餘燼
+  sandstone:
+    en: Sandstone
+    zh-CN: 砂岩
+    zh-HK: 砂岩
+  frost:
+    en: Frost
+    zh-CN: 霜白
+    zh-HK: 霜白
+
+# 通用文本
+Common:
+  save:
+    en: Save
+    zh-CN: 保存
+    zh-HK: 儲存
+  ok:
+    en: OK
+    zh-CN: 确定
+    zh-HK: 確定
+  create:
+    en: Create
+    zh-CN: 创建
+    zh-HK: 建立
+  cancel:
+    en: Cancel
+    zh-CN: 取消
+    zh-HK: 取消
+  none:
+    en: None
+    zh-CN: 无
+    zh-HK: 無
+  close:
+    en: Close
+    zh-CN: 关闭
+    zh-HK: 關閉
+  edit:
+    en: Edit
+    zh-CN: 编辑
+    zh-HK: 編輯
+
+# 连接
+Connection:
+  test:
+    en: Test
+    zh-CN: 测试
+    zh-HK: 測試
+  testing:
+    en: Testing...
+    zh-CN: 测试中...
+    zh-HK: 測試中...
+
+# SSH 连接
+SSH:
+  new:
+    en: New SSH Connection
+    zh-CN: 新建 SSH 连接
+    zh-HK: 新建 SSH 連線
+  edit:
+    en: Edit SSH Connection
+    zh-CN: 编辑 SSH 连接
+    zh-HK: 編輯 SSH 連線
+  name:
+    en: Connection Name
+    zh-CN: 连接名称
+    zh-HK: 連線名稱
+  name_placeholder:
+    en: Enter connection name
+    zh-CN: 请输入连接名称
+    zh-HK: 請輸入連線名稱
+  host:
+    en: Host
+    zh-CN: 主机地址
+    zh-HK: 主機地址
+  host_placeholder:
+    en: Enter host address
+    zh-CN: 请输入主机地址
+    zh-HK: 請輸入主機地址
+  port:
+    en: Port
+    zh-CN: 端口
+    zh-HK: 端口
+  username:
+    en: Username
+    zh-CN: 用户名
+    zh-HK: 用戶名
+  username_placeholder:
+    en: Enter username
+    zh-CN: 请输入用户名
+    zh-HK: 請輸入用戶名
+  keychain:
+    en: Keychain
+    zh-CN: 钥匙串
+    zh-HK: 鑰匙圈
+  save_username_desc:
+    en: Save username
+    zh-CN: 保存用户名
+    zh-HK: 儲存使用者名稱
+  save_username_hint:
+    en: Save the username for future connections. When disabled, enter it again before connecting.
+    zh-CN: 保存用户名以便后续连接使用；关闭后，连接前需要重新输入用户名。
+    zh-HK: 儲存使用者名稱供後續連線使用；關閉後，連線前需要重新輸入使用者名稱。
+  password:
+    en: Password
+    zh-CN: 密码
+    zh-HK: 密碼
+  password_placeholder:
+    en: Enter password
+    zh-CN: 请输入密码
+    zh-HK: 請輸入密碼
+  save_password_desc:
+    en: Save password
+    zh-CN: 保存密码
+    zh-HK: 儲存密碼
+  save_password_enabled_hint:
+    en: The password is encrypted locally. If sync is enabled, only encrypted connection data is synchronized.
+    zh-CN: 密码会在本地加密保存；启用同步后，仅同步加密后的连接数据。
+    zh-HK: 密碼會在本機加密儲存；啟用同步後，只會同步加密後的連線資料。
+  save_password_disabled_hint:
+    en: The password will not be saved. Enter it on the first connection and every manual reconnect.
+    zh-CN: 密码不会保存；首次连接及每次手动重连时都需要重新输入。
+    zh-HK: 密碼不會儲存；首次連線及每次手動重新連線時都需要重新輸入。
+  password_and_private_key:
+    en: Password + Private Key
+    zh-CN: 密码 + 密钥
+    zh-HK: 密碼 + 金鑰
+  password_and_private_key_hint:
+    en: The server asks for both a password and a private key. The actual order follows what the server requires.
+    zh-CN: 服务器要求同时提供密码与私钥（双因素）。实际认证顺序以服务器要求为准。
+    zh-HK: 伺服器要求同時提供密碼與私鑰（雙因素）。實際認證順序以伺服器要求為準。
+  private_key:
+    en: Private Key File
+    zh-CN: 私钥文件
+    zh-HK: 私鑰文件
+  private_key_content:
+    en: Private Key Content
+    zh-CN: 私钥内容
+    zh-HK: 私鑰內容
+  agent:
+    en: SSH Agent
+    zh-CN: SSH Agent
+    zh-HK: SSH Agent
+  pageant:
+    en: Pageant (Windows)
+    zh-CN: Pageant（Windows）
+    zh-HK: Pageant（Windows）
+  auto_publickey:
+    en: Auto Public Key
+    zh-CN: 自动公钥认证
+    zh-HK: 自動公鑰認證
+  key_path:
+    en: Key Path
+    zh-CN: 密钥路径
+    zh-HK: 密鑰路徑
+  key_path_placeholder:
+    en: Enter private key path
+    zh-CN: 请输入私钥路径
+    zh-HK: 請輸入私鑰路徑
+  private_key_content_placeholder:
+    en: Paste the full OpenSSH or PPK private key content
+    zh-CN: 粘贴完整的 OpenSSH 或 PPK 私钥内容
+    zh-HK: 貼上完整的 OpenSSH 或 PPK 私鑰內容
+  private_key_content_sync_hint:
+    en: The private key content is saved with this connection and can be encrypted and synced across devices.
+    zh-CN: 私钥内容会随此连接保存，可加密后跨设备同步。
+    zh-HK: 私鑰內容會隨此連線保存，可加密後跨設備同步。
+  passphrase:
+    en: Passphrase
+    zh-CN: 密钥密码
+    zh-HK: 密鑰密碼
+  passphrase_placeholder:
+    en: Enter key passphrase (optional)
+    zh-CN: 请输入密钥密码（可选）
+    zh-HK: 請輸入密鑰密碼（可選）
+  auth_method:
+    en: Authentication Method
+    zh-CN: 认证方式
+    zh-HK: 認證方式
+  keyboard_interactive:
+    en: Two-factor authentication
+    zh-CN: 双因素认证
+    zh-HK: 雙因素認證
+  enable:
+    en: Enable
+    zh-CN: 启用
+    zh-HK: 啟用
+  keyboard_interactive_desc:
+    en: Allow Keyboard-Interactive prompts such as OTP, hardware tokens, and challenge-response. Enable it when the server demands keyboard-interactive (MFA/OTP authentication); some switches deliver the normal password prompt this way, but most devices accept plain password authentication. If the server drops the connection during the keyboard-interactive exchange, navop retries once with password authentication.
+    zh-CN: 允许服务器通过 Keyboard-Interactive 请求 OTP、硬件令牌或质询响应。服务器要求 keyboard-interactive（二次认证/OTP）时请开启；部分交换机用它下发普通密码提示，但多数设备也支持普通密码认证。若服务器在 keyboard-interactive 往返中直接断开连接，navop 会自动改用密码认证重试一次。
+    zh-HK: 允許伺服器透過 Keyboard-Interactive 要求 OTP、硬體權杖或質詢回應。伺服器要求 keyboard-interactive（二次認證/OTP）時請開啟；部分交換器用它下發一般密碼提示，但多數設備也支援一般密碼認證。若伺服器在 keyboard-interactive 往返中直接中斷連線，navop 會自動改用密碼認證重試一次。
+  terminal_encoding:
+    en: Terminal Encoding
+    zh-CN: 终端字符集
+    zh-HK: 終端字元集
+  terminal_type:
+    en: Terminal Type
+    zh-CN: 终端类型
+    zh-HK: 終端類型
+  auto_publickey_hint:
+    en: Try available SSH agents first (including Pageant on Windows), then default private keys under ~/.ssh.
+    zh-CN: 将优先尝试可用的 SSH Agent（Windows 上包括 Pageant），再尝试 ~/.ssh 下的默认私钥。
+    zh-HK: 將優先嘗試可用的 SSH Agent（Windows 上包括 Pageant），再嘗試 ~/.ssh 下的預設私鑰。
+  auto_publickey_next_step:
+    en: Please load SSH Agent or switch to "Private Key" mode to specify a key file manually
+    zh-CN: 请加载 SSH Agent，或切换为「私钥文件」模式手动指定私钥
+    zh-HK: 請加載 SSH Agent，或切換為「私鑰文件」模式手動指定私鑰
+  test_required_before_save:
+    en: Please test the current SSH configuration before saving.
+    zh-CN: 保存前请先测试当前 SSH 配置。
+    zh-HK: 儲存前請先測試當前 SSH 配置。
+  retest_after_change:
+    en: SSH configuration changed. Please test again before saving.
+    zh-CN: SSH 配置已变更，请重新测试后再保存。
+    zh-HK: SSH 配置已變更，請重新測試後再儲存。
+  save_failed:
+    en: "Failed to save SSH connection: %{error}"
+    zh-CN: "保存 SSH 连接失败：%{error}"
+    zh-HK: "儲存 SSH 連線失敗：%{error}"
+  save_while_testing:
+    en: Please wait for connection testing to complete.
+    zh-CN: 请等待连接测试完成后再保存。
+    zh-HK: 請等待連線測試完成後再儲存。
+  save_while_uninstalling_shell_integration:
+    en: Please wait for remote Shell integration uninstall to complete.
+    zh-CN: 请等待远端 Shell 集成卸载完成后再保存。
+    zh-HK: 請等待遠端 Shell 整合解除安裝完成後再儲存。
+  workspace:
+    en: Group
+    zh-CN: 分组
+    zh-HK: 分組
+  validation_error:
+    en: Please fill in all required fields
+    zh-CN: 请填写所有必填字段
+    zh-HK: 請填寫所有必填字段
+  local_network_route_hint:
+    en: Check System Settings > Privacy & Security > Local Network and allow Navop. Also verify the VPN or local route and any proxy or jump host settings.
+    zh-CN: 请在“系统设置 > 隐私与安全性 > 本地网络”中允许 Navop，并检查 VPN、局域网路由以及代理或跳板机设置。
+    zh-HK: 請在「系統設定 > 私隱與保安 > 本機網絡」中允許 Navop，並檢查 VPN、本機網絡路由以及代理或跳板機設定。
+  test_success:
+    en: Connection test successful
+    zh-CN: 连接测试成功
+    zh-HK: 連線測試成功
+  icon:
+    en: Icon
+    zh-CN: 图标
+    zh-HK: 圖標
+  icon_auto:
+    en: Auto
+    zh-CN: 自动
+    zh-HK: 自動
+  icon_hint:
+    en: Auto follows the OS detected by a successful connection test
+    zh-CN: 自动模式跟随测试连接探测到的系统类型，也可以手动固定图标
+    zh-HK: 自動模式跟隨連線測試偵測到的系統類型，也可以手動固定圖標
+  icon_local:
+    en: Local image
+    zh-CN: 本地图片
+    zh-HK: 本機圖片
+  icon_select_file:
+    en: Select a local connection icon
+    zh-CN: 选择本地连接图标
+    zh-HK: 選擇本機連線圖標
+  # 标签页
+  tab_basic:
+    en: Basic
+    zh-CN: 基本信息
+    zh-HK: 基本信息
+  tab_connection:
+    en: Connection
+    zh-CN: 连接设置
+    zh-HK: 連接設定
+  tab_init:
+    en: Initialization
+    zh-CN: 初始化
+    zh-HK: 初始化
+  tab_jump_server:
+    en: Jump Server
+    zh-CN: 跳板机
+    zh-HK: 跳板機
+  tab_remote_files:
+    en: Remote Files
+    zh-CN: 远程文件
+    zh-HK: 遠端檔案
+  tab_proxy:
+    en: Proxy
+    zh-CN: 代理设置
+    zh-HK: 代理設定
+  tab_advanced:
+    en: Advanced
+    zh-CN: 高级设置
+    zh-HK: 高級設定
+  tab_other:
+    en: Other
+    zh-CN: 其他设置
+    zh-HK: 其他設定
+  # 跳板机相关
+  enable_jump_server:
+    en: Enable Jump Server
+    zh-CN: 启用跳板机
+    zh-HK: 啟用跳板機
+  jump_host:
+    en: Jump Host
+    zh-CN: 跳板机地址
+    zh-HK: 跳板機地址
+  jump_port:
+    en: Jump Port
+    zh-CN: 跳板机端口
+    zh-HK: 跳板機端口
+  jump_username:
+    en: Jump Username
+    zh-CN: 跳板机用户名
+    zh-HK: 跳板機用戶名
+  jump_auth_method:
+    en: Jump Auth
+    zh-CN: 跳板机认证
+    zh-HK: 跳板機認證
+  jump_password:
+    en: Jump Password
+    zh-CN: 跳板机密码
+    zh-HK: 跳板機密碼
+  jump_key_path:
+    en: Jump Key Path
+    zh-CN: 跳板机私钥路径
+    zh-HK: 跳板機私鑰路徑
+  jump_passphrase:
+    en: Jump Passphrase
+    zh-CN: 跳板机私钥密码
+    zh-HK: 跳板機私鑰密碼
+  jump_mfa_required:
+    en: Please fill in the jump server MFA field and test again.
+    zh-CN: 请填写跳板机 MFA 后重新测试。
+    zh-HK: 請填寫跳板機 MFA 後重新測試。
+  jump_mfa_required_hint:
+    en: Jump server requires MFA. Fill in the dynamic field below, then test again.
+    zh-CN: 跳板机要求 MFA。请填写下方动态字段后重新测试。
+    zh-HK: 跳板機要求 MFA。請填寫下方動態字段後重新測試。
+  # 独立 SFTP 账户相关
+  sftp_account:
+    en: Separate SFTP Account
+    zh-CN: 独立 SFTP 账户
+    zh-HK: 獨立 SFTP 賬戶
+  sftp_account_desc:
+    en: When enabled, SFTP transfers and remote file editing use this account while the SSH terminal keeps using the main account. Leave it disabled to share the SSH credentials.
+    zh-CN: 启用后，SFTP 传输与远程文件编辑使用该账户连接，SSH 终端仍使用主账户；关闭时 SFTP 与 SSH 共用一套凭据。
+    zh-HK: 啟用後，SFTP 傳輸與遠程文件編輯使用該賬戶連接，SSH 終端仍使用主賬戶；關閉時 SFTP 與 SSH 共用一套憑據。
+  sftp_username:
+    en: SFTP Username
+    zh-CN: SFTP 用户名
+    zh-HK: SFTP 用戶名
+  sftp_password:
+    en: SFTP Password
+    zh-CN: SFTP 密码
+    zh-HK: SFTP 密碼
+  open_mode_dual_pane:
+    en: Open Dual-Pane File View by Default
+    zh-CN: 默认打开双栏文件视图
+    zh-HK: 預設開啟雙欄檔案視圖
+  open_mode_dual_pane_desc:
+    en: When enabled, double-clicking or opening this connection in the background goes to the dual-pane SFTP file view instead of a terminal. You can still open a terminal from the right-click menu.
+    zh-CN: 启用后，双击或后台打开该连接时进入双栏 SFTP 文件视图而非终端；仍可通过右键菜单打开终端。
+    zh-HK: 啟用後，雙擊或後台開啟該連接時進入雙欄 SFTP 檔案視圖而非終端；仍可通過右鍵選單開啟終端。
+  mfa_prompt_placeholder:
+    en: MFA response
+    zh-CN: MFA 响应
+    zh-HK: MFA 回應
+  mfa_target_dynamic_not_supported:
+    en: SSH target MFA is not supported in this form yet.
+    zh-CN: 当前表单暂不支持目标服务器 MFA。
+    zh-HK: 當前表單暫不支持目標伺服器 MFA。
+  # 代理相关
+  enable_proxy:
+    en: Enable Proxy
+    zh-CN: 启用代理
+    zh-HK: 啟用代理
+  proxy_type:
+    en: Proxy Type
+    zh-CN: 代理类型
+    zh-HK: 代理類型
+  proxy_host:
+    en: Proxy Host
+    zh-CN: 代理地址
+    zh-HK: 代理地址
+  proxy_port:
+    en: Proxy Port
+    zh-CN: 代理端口
+    zh-HK: 代理端口
+  proxy_username:
+    en: Proxy Username
+    zh-CN: 代理用户名
+    zh-HK: 代理用戶名
+  proxy_password:
+    en: Proxy Password
+    zh-CN: 代理密码
+    zh-HK: 代理密碼
+  # 高级设置
+  connect_timeout:
+    en: Connect Timeout (s)
+    zh-CN: 连接超时 (秒)
+    zh-HK: 連接超時 (秒)
+  keepalive_interval:
+    en: Keepalive Interval (s)
+    zh-CN: 心跳间隔 (秒)
+    zh-HK: 心跳間隔 (秒)
+  keepalive_max:
+    en: Keepalive Max
+    zh-CN: 最大心跳次数
+    zh-HK: 最大心跳次數
+  allow_legacy_algorithms:
+    en: Allow Legacy SSH Algorithms
+    zh-CN: 允许旧版 SSH 算法
+    zh-HK: 允許舊版 SSH 演算法
+  allow_legacy_algorithms_desc:
+    en: Enable legacy key-exchange and host-key algorithms, including ssh-dss. Keep disabled unless the server requires them.
+    zh-CN: 启用旧版密钥交换和主机密钥算法，包括 ssh-dss。仅在服务器确有需要时开启。
+    zh-HK: 啟用舊版金鑰交換和主機金鑰演算法，包括 ssh-dss。僅在伺服器確有需要時開啟。
+  disable_shell_integration:
+    en: Disable Shell Integration
+    zh-CN: 禁用 Shell 集成
+    zh-HK: 停用 Shell 整合
+  disable_shell_integration_desc:
+    en: Skip the shell-integration probe and injection for this connection. Recommended for network devices (firewalls, switches) and industrial hosts that reject extra SSH channels. Loses prompt hook and command recording.
+    zh-CN: 连接时跳过 Shell 集成探测与注入。建议网络设备（防火墙、交换机等仅允许单个 SSH 会话）和工控主机开启。将失去提示符感知与命令记录。
+    zh-HK: 連線時跳過 Shell 整合探測與注入。建議網路設備（防火牆、交換器等僅允許單一 SSH 會話）和工控主機開啟。將失去提示符感知與命令記錄。
+  # 初始化
+  init_script:
+    en: Init Script
+    zh-CN: 初始化脚本
+    zh-HK: 初始化腳本
+  init_script_placeholder:
+    en: Commands to run after connection
+    zh-CN: 连接后执行的命令
+    zh-HK: 連接後執行的命令
+  default_directory:
+    en: Default Directory
+    zh-CN: 默认目录
+    zh-HK: 默認目錄
+  default_directory_placeholder:
+    en: Default working directory
+    zh-CN: 默认工作目录
+    zh-HK: 默認工作目錄
+  sftp_default_directory:
+    en: SFTP Initial Directory
+    zh-CN: SFTP 初始目录
+    zh-HK: SFTP 初始目錄
+  sftp_default_directory_placeholder:
+    en: Directory to open when SFTP connects
+    zh-CN: SFTP 连接后打开的目录
+    zh-HK: SFTP 連接後打開的目錄
+  remote_file_protocol:
+    en: Remote file protocol
+    zh-CN: 远程文件协议
+    zh-HK: 遠端檔案協定
+  sftp:
+    en: SFTP
+    zh-CN: SFTP
+    zh-HK: SFTP
+  ftp:
+    en: FTP / FTPS
+    zh-CN: FTP / FTPS
+    zh-HK: FTP / FTPS
+  ftp_host:
+    en: FTP host
+    zh-CN: FTP 主机
+    zh-HK: FTP 主機
+  ftp_host_placeholder:
+    en: e.g. ftp.example.com
+    zh-CN: 例如 ftp.example.com
+    zh-HK: 例如 ftp.example.com
+  ftp_port:
+    en: FTP port
+    zh-CN: FTP 端口
+    zh-HK: FTP 埠
+  ftp_port_placeholder:
+    en: Default 21
+    zh-CN: 默认 21
+    zh-HK: 預設 21
+  ftp_username:
+    en: FTP username
+    zh-CN: FTP 用户名
+    zh-HK: FTP 使用者名稱
+  ftp_username_placeholder:
+    en: FTP login username
+    zh-CN: FTP 登录用户名
+    zh-HK: FTP 登入使用者名稱
+  ftp_password:
+    en: FTP password
+    zh-CN: FTP 密码
+    zh-HK: FTP 密碼
+  ftp_password_placeholder:
+    en: FTP login password
+    zh-CN: FTP 登录密码
+    zh-HK: FTP 登入密碼
+  ftp_passive_mode:
+    en: Passive mode
+    zh-CN: 被动模式
+    zh-HK: 被動模式
+  ftp_tls:
+    en: Explicit TLS (FTPS)
+    zh-CN: 显式 TLS (FTPS)
+    zh-HK: 顯式 TLS (FTPS)
+  ftp_credential:
+    en: FTP credential reference
+    zh-CN: FTP 凭据引用
+    zh-HK: FTP 憑證引用
+  ftp_not_supported:
+    en: This FTP operation is not supported
+    zh-CN: FTP 不支持此操作
+    zh-HK: FTP 不支援此操作
+  x11_forwarding:
+    en: X11 Forwarding
+    zh-CN: X11 转发
+    zh-HK: X11 轉發
+  x11_forwarding_desc:
+    en: Forward remote X11 graphical applications to the local X server. macOS requires XQuartz to be installed and running. Applies to new terminal sessions.
+    zh-CN: 将远端 X11 图形应用转发到本机 X server。macOS 需要安装并启动 XQuartz。对新开的终端会话生效。
+    zh-HK: 將遠端 X11 圖形應用轉發到本機 X server。macOS 需要安裝並啟動 XQuartz。對新開的終端工作階段生效。
+  forward_agent:
+    en: SSH Agent Forwarding
+    zh-CN: SSH Agent 转发
+    zh-HK: SSH Agent 轉發
+  forward_agent_desc:
+    en: Forward the local ssh-agent to the remote host (ForwardAgent), letting it authenticate to deeper hosts using your local keys. Applies to new terminal sessions.
+    zh-CN: 将本地 ssh-agent 转发给远端主机（ForwardAgent），使远端可代表你用本机私钥向更内层主机认证。对新开的终端会话生效。
+    zh-HK: 將本機 ssh-agent 轉發給遠端主機（ForwardAgent），使遠端可代表你用本機私鑰向更內層主機認證。對新開的終端工作階段生效。
+  xquartz_not_installed:
+    en: XQuartz was not detected. Install and start XQuartz before using X11 forwarding on macOS, then reconnect the SSH session.
+    zh-CN: 未检测到 XQuartz。请先安装并启动 XQuartz，再重新建立 SSH 连接以使用 X11 转发。
+    zh-HK: 未偵測到 XQuartz。請先安裝並啟動 XQuartz，再重新建立 SSH 連線以使用 X11 轉發。
+  xquartz_unavailable:
+    en: X11 forwarding is unavailable because XQuartz is not installed, not running, or its DISPLAY authorization is not ready. Install or start XQuartz, then reconnect the SSH session.
+    zh-CN: X11 转发不可用：XQuartz 可能未安装、未运行，或 DISPLAY 授权尚未就绪。请安装或启动 XQuartz，然后重新建立 SSH 连接。
+    zh-HK: X11 轉發無法使用：XQuartz 可能未安裝、未執行，或 DISPLAY 授權尚未就緒。請安裝或啟動 XQuartz，然後重新建立 SSH 連線。
+  remote_shell_integration:
+    en: Shell Integration
+    zh-CN: Shell 集成
+    zh-HK: Shell 整合
+  uninstall_shell_integration:
+    en: Clean up legacy files
+    zh-CN: 清理旧版文件
+    zh-HK: 清理舊版檔案
+  uninstalling_shell_integration:
+    en: Cleaning up...
+    zh-CN: 清理中...
+    zh-HK: 清理中...
+  uninstall_shell_integration_desc:
+    en: Shell integration is injected at runtime for every session and never writes files to the remote host. Older Navop versions may have left persistent integration files (rc blocks and ~/.config/onetcli) behind; click once to clean them up if you no longer use that version.
+    zh-CN: Shell 集成在每次连接时运行时注入，不会在远端写入任何文件。旧版本 Navop 可能遗留过持久化集成文件（rc 配置块和 ~/.config/onetcli），如已不再使用旧版，可点击清理一次。
+    zh-HK: Shell 整合在每次連線時執行時注入，不會在遠端寫入任何檔案。舊版本 Navop 可能遺留過持久化整合檔案（rc 設定區塊和 ~/.config/onetcli），如已不再使用舊版，可點擊清理一次。
+  uninstall_shell_integration_success:
+    en: Shell integration uninstalled successfully.
+    zh-CN: Shell 集成已成功卸载。
+    zh-HK: Shell 整合已成功解除安裝。
+  uninstall_shell_integration_failed:
+    en: "Failed to clean up legacy integration files: %{error}"
+    zh-CN: "清理旧版集成文件失败：%{error}"
+    zh-HK: "清理舊版整合檔案失敗：%{error}"
+  # 其他设置
+  remark:
+    en: Remark
+    zh-CN: 备注
+    zh-HK: 備註
+  remark_placeholder:
+    en: Enter remark
+    zh-CN: 请输入备注
+    zh-HK: 請輸入備註
+
+# 连接表单
+ConnectionForm:
+  save_and_continue:
+    en: Save and Continue
+    zh-CN: 保存并继续
+    zh-HK: 儲存並繼續
+  cloud_sync:
+    en: Cloud Sync
+    zh-CN: 云同步
+    zh-HK: 雲同步
+  cloud_sync_desc:
+    en: Sync this connection to cloud
+    zh-CN: 同步此连接到云端
+    zh-HK: 同步此連線到雲端
+
+# 设置面板
+Settings:
+  suggestion_popup:
+    en: Suggestion popup
+    zh-CN: 弹框候选词
+    zh-HK: 彈框候選詞
+  suggestion_popup_opacity:
+    en: Popup background
+    zh-CN: 弹层背景不透明度
+    zh-HK: 彈層背景不透明度
+  suggestion_popup_opacity_value:
+    en: "%{percent}%"
+    zh-CN: "%{percent}%"
+    zh-HK: "%{percent}%"
+  suggestion_popup_opacity_help:
+    en: Higher values hide more of the terminal text behind the popup.
+    zh-CN: 数值越高，弹层越不透出下层终端文字。
+    zh-HK: 數值越高，彈層越不透出下層終端文字。
+  title:
+    en: Settings
+    zh-CN: 设置
+    zh-HK: 設定
+  search:
+    en: Search
+    zh-CN: 搜索
+    zh-HK: 搜尋
+  search_placeholder:
+    en: Search...
+    zh-CN: 搜索...
+    zh-HK: 搜尋...
+  search_shortcuts_hint:
+    en: Press ⌘G for next, ⇧⌘G for previous
+    zh-CN: 按 ⌘G 跳到下一个，按 ⇧⌘G 跳到上一个
+    zh-HK: 按 ⌘G 跳到下一個，按 ⇧⌘G 跳到上一個
+  font_size:
+    en: Font Size
+    zh-CN: 字体大小
+    zh-HK: 字體大小
+  font_family:
+    en: Font Family
+    zh-CN: 字体
+    zh-HK: 字體
+  font_family_placeholder:
+    en: Select font...
+    zh-CN: 选择字体...
+    zh-HK: 選擇字體...
+  scrollback_lines:
+    en: Scrollback Lines
+    zh-CN: 滚屏历史行数
+    zh-HK: 捲動歷史行數
+  scrollback_lines_help:
+    en: Retain %{min}–%{max} output lines for scrolling. Changes apply to open terminals immediately.
+    zh-CN: 保留 %{min}–%{max} 行终端输出用于滚动查看，修改后立即应用到已打开终端。
+    zh-HK: 保留 %{min}–%{max} 行終端輸出供捲動查看，修改後立即套用到已開啟終端。
+  lines:
+    en: lines
+    zh-CN: 行
+    zh-HK: 行
+  theme:
+    en: Theme
+    zh-CN: 主题
+    zh-HK: 主題
+  cursor:
+    en: Cursor
+    zh-CN: 光标
+    zh-HK: 游標
+  cursor_blink:
+    en: Cursor Blink
+    zh-CN: 光标闪烁
+    zh-HK: 游標閃爍
+  safety:
+    en: Safety
+    zh-CN: 安全确认
+    zh-HK: 安全確認
+  confirm_multiline_paste:
+    en: Confirm multiline paste (non-bracketed)
+    zh-CN: 非 bracketed 多行粘贴需确认
+    zh-HK: 非 bracketed 多行貼上需確認
+  confirm_high_risk_command:
+    en: Confirm high-risk command paste
+    zh-CN: 高危命令粘贴需确认
+    zh-HK: 高危命令貼上需確認
+  session_logging:
+    en: Session Logging
+    zh-CN: 会话日志
+    zh-HK: 會話日誌
+  automatic_session_logging:
+    en: Automatically save new sessions
+    zh-CN: 自动保存新建会话
+    zh-HK: 自動儲存新建會話
+  automatic_session_logging_help:
+    en: Enabled by default for new local terminal, SSH, and serial sessions. Saves terminal output history for static, read-only terminal browsing with scrolling, selection, copying, searching, and TXT export. Keyboard input is never recorded. Session logs have no playback timeline or replay controls. Existing sessions are not affected.
+    zh-CN: 默认自动保存之后新建的本地终端、SSH 和串口会话输出历史，并以静态只读终端方式查看，支持滚动、选中、复制、搜索和导出 TXT。绝不记录键盘输入；会话日志没有播放时间轴或回放控制。已打开的会话不受影响。
+    zh-HK: 預設自動儲存之後新建的本地終端、SSH 和序列埠會話輸出歷史，並以靜態唯讀終端方式查看，支援捲動、選取、複製、搜尋和匯出 TXT。絕不記錄鍵盤輸入；工作階段日誌沒有播放時間軸或回放控制。已開啟的會話不受影響。
+  auto_copy:
+    en: Auto copy on select
+    zh-CN: 选中自动复制
+    zh-HK: 選中自動複製
+  autocomplete:
+    en: Terminal autocomplete
+    zh-CN: 终端自动补全
+    zh-HK: 終端自動補全
+  middle_click_paste:
+    en: Middle click paste
+    zh-CN: 中键粘贴
+    zh-HK: 中鍵貼上
+  right_click_paste:
+    en: Right click paste
+    zh-CN: 右键快速粘贴
+    zh-HK: 右鍵快速貼上
+  paste_image_upload:
+    en: Upload pasted images to SSH
+    zh-CN: 粘贴图片上传到 SSH
+    zh-HK: 貼上圖片上傳到 SSH
+  vim_scroll_to_arrow_keys:
+    en: Mouse wheel as arrow keys in vim/TUI
+    zh-CN: vim/TUI 中鼠标滚轮映射为方向键
+    zh-HK: vim/TUI 中滑鼠滾輪映射為方向鍵
+  selection_highlight:
+    en: Highlight matching text on selection
+    zh-CN: 选中文本后高亮相同内容
+    zh-HK: 選取文字後高亮相同內容
+  show_line_timestamps:
+    en: Show line timestamps
+    zh-CN: 显示每行时间戳
+    zh-HK: 顯示每行時間戳
+  show_line_numbers:
+    en: Show line numbers
+    zh-CN: 显示行号
+    zh-HK: 顯示行號
+  file_manager_section:
+    en: FILE MANAGER
+    zh-CN: 文件管理器
+    zh-HK: 文件管理器
+  sync_path_with_terminal:
+    en: Sync path with terminal
+    zh-CN: 路径与终端同步
+    zh-HK: 路徑與終端同步
+  sync_path_help:
+    en: Automatically sync the current SSH terminal working directory to the file manager through the shell integration script. Enabled by default for new installs.
+    zh-CN: 通过 Shell 集成脚本自动将当前 SSH 终端工作目录同步到文件管理器。新安装默认开启。
+    zh-HK: 透過 Shell 整合腳本自動將目前 SSH 終端工作目錄同步到文件管理器。新安裝預設開啟。
+
+BroadcastInput:
+  enabled:
+    en: Enable broadcast input
+    zh-CN: 开启广播输入
+    zh-HK: 開啟廣播輸入
+  help:
+    en: When enabled, input typed or pasted in any SSH terminal is sent to the selected targets below.
+    zh-CN: 开启后，从任意 SSH 终端输入或粘贴的内容会同步到下方勾选的目标终端。
+    zh-HK: 開啟後，從任意 SSH 終端輸入或貼上的內容會同步到下方勾選的目標終端。
+  selected_count:
+    en: Selected %{selected} of %{total}
+    zh-CN: 已选择 %{selected} / %{total}
+    zh-HK: 已選擇 %{selected} / %{total}
+  no_targets:
+    en: Open an SSH terminal to add a broadcast target.
+    zh-CN: 打开 SSH 终端后会在这里显示可选目标。
+    zh-HK: 開啟 SSH 終端後會在這裡顯示可選目標。
+  select_all:
+    en: Select all
+    zh-CN: 全选
+    zh-HK: 全選
+  deselect_all:
+    en: Deselect all
+    zh-CN: 取消全选
+    zh-HK: 取消全選
+
+CustomHighlight:
+  title:
+    en: Custom Highlights
+    zh-CN: 自定义高亮
+    zh-HK: 自訂高亮
+  add_rule:
+    en: Add Rule
+    zh-CN: 添加规则
+    zh-HK: 新增規則
+  description:
+    en: Built-in rules are ready to use. You can edit, disable, delete, or add your own rules below.
+    zh-CN: 内建规则已直接生效，你可以在下方编辑、关闭、删除，或继续添加自己的规则。
+    zh-HK: 內建規則已直接生效，你可以在下方編輯、關閉、刪除，或繼續新增自己的規則。
+  presets_label:
+    en: Presets
+    zh-CN: 预设
+    zh-HK: 預設
+  empty:
+    en: No custom highlight rules yet.
+    zh-CN: 还没有自定义高亮规则。
+    zh-HK: 尚未建立自訂高亮規則。
+  no_note:
+    en: No note
+    zh-CN: 暂无备注
+    zh-HK: 暫無備註
+  add_rule_title:
+    en: Add Highlight Rule
+    zh-CN: 添加高亮规则
+    zh-HK: 新增高亮規則
+  edit_rule_title:
+    en: Edit Highlight Rule
+    zh-CN: 编辑高亮规则
+    zh-HK: 編輯高亮規則
+  import_success:
+    en: 'Imported preset "%{title}" with %{count} rules'
+    zh-CN: '已导入预设“%{title}”，共 %{count} 条规则'
+    zh-HK: '已匯入預設「%{title}」，共 %{count} 條規則'
+  priority_value:
+    en: 'Priority %{priority}'
+    zh-CN: '优先级 %{priority}'
+    zh-HK: '優先級 %{priority}'
+  actions:
+    edit:
+      en: Edit
+      zh-CN: 编辑
+      zh-HK: 編輯
+    delete:
+      en: Delete
+      zh-CN: 删除
+      zh-HK: 刪除
+  fields:
+    regex:
+      en: Regex
+      zh-CN: 正则
+      zh-HK: 正則
+    foreground:
+      en: Foreground
+      zh-CN: 前景色
+      zh-HK: 前景色
+    background:
+      en: Background
+      zh-CN: 背景色
+      zh-HK: 背景色
+    priority:
+      en: Priority
+      zh-CN: 优先级
+      zh-HK: 優先級
+    note:
+      en: Note
+      zh-CN: 备注
+      zh-HK: 備註
+  placeholders:
+    regex:
+      en: regex pattern
+      zh-CN: 输入正则表达式
+      zh-HK: 輸入正則表達式
+    note:
+      en: note
+      zh-CN: 输入备注
+      zh-HK: 輸入備註
+  errors:
+    invalid_priority:
+      en: Priority must be an integer between 0 and 255
+      zh-CN: 优先级必须是 0-255 的整数
+      zh-HK: 優先級必須是 0-255 的整數
+    pattern_required:
+      en: Regex pattern cannot be empty
+      zh-CN: 正则不能为空
+      zh-HK: 正則不能為空
+    color_required:
+      en: Set at least one color
+      zh-CN: 至少设置一种颜色
+      zh-HK: 至少設定一種顏色
+    invalid_regex:
+      en: 'Invalid regex: %{error}'
+      zh-CN: '正则无效：%{error}'
+      zh-HK: '正則無效：%{error}'
+    invalid_foreground:
+      en: 'Invalid foreground color: %{error}'
+      zh-CN: '前景色无效：%{error}'
+      zh-HK: '前景色無效：%{error}'
+    invalid_background:
+      en: 'Invalid background color: %{error}'
+      zh-CN: '背景色无效：%{error}'
+      zh-HK: '背景色無效：%{error}'
+  presets:
+    linux_permissions:
+      title:
+        en: Linux Permissions
+        zh-CN: Linux 权限与属主
+        zh-HK: Linux 權限與屬主
+      description:
+        en: Highlight permission bits and privileged commands in common shell output.
+        zh-CN: 高亮常见 shell 输出中的权限位和提权相关命令。
+        zh-HK: 高亮常見 shell 輸出中的權限位與提權相關命令。
+      rules:
+        root:
+          en: root, sudo, and su users or commands
+          zh-CN: root、sudo、su 用户或命令
+          zh-HK: root、sudo、su 使用者或指令
+        owner:
+          en: ownership and permission commands
+          zh-CN: 属主与权限修改命令
+          zh-HK: 擁有者與權限修改指令
+        mode:
+          en: ls -l permission bits
+          zh-CN: ls -l 权限位
+          zh-HK: ls -l 權限位
+    status_signals:
+      title:
+        en: Status Signals
+        zh-CN: 状态信号词
+        zh-HK: 狀態訊號詞
+      description:
+        en: Emphasize success, warning, and failure keywords in logs and command output.
+        zh-CN: 突出日志和命令输出中的成功、警告与失败关键词。
+        zh-HK: 突出日誌與指令輸出中的成功、警告與失敗關鍵字。
+      rules:
+        success:
+          en: success keywords
+          zh-CN: 成功状态词
+          zh-HK: 成功狀態詞
+        warning:
+          en: warning keywords
+          zh-CN: 警告状态词
+          zh-HK: 警告狀態詞
+        error:
+          en: failure keywords
+          zh-CN: 失败状态词
+          zh-HK: 失敗狀態詞
+    ip_addresses:
+      title:
+        en: IP Addresses
+        zh-CN: IP 地址
+        zh-HK: IP 位址
+      description:
+        en: Highlight IPv4 and IPv6 addresses directly in terminal output.
+        zh-CN: 直接高亮终端输出中的 IPv4 和 IPv6 地址。
+        zh-HK: 直接高亮終端輸出中的 IPv4 與 IPv6 位址。
+      rules:
+        ipv4:
+          en: IPv4 addresses
+          zh-CN: IPv4 地址
+          zh-HK: IPv4 位址
+        ipv6:
+          en: IPv6 addresses
+          zh-CN: IPv6 地址
+          zh-HK: IPv6 位址
+    network_markers:
+      title:
+        en: Network Markers
+        zh-CN: 网络标记
+        zh-HK: 網路標記
+      description:
+        en: Mark URLs and port hints when reading connectivity output.
+        zh-CN: 标记连接输出里的 URL 和端口提示。
+        zh-HK: 標記連線輸出中的 URL 與連接埠提示。
+      rules:
+        url:
+          en: URL links
+          zh-CN: URL 链接
+          zh-HK: URL 連結
+        port:
+          en: ports and listening hints
+          zh-CN: 端口与监听信息
+          zh-HK: 連接埠與監聽資訊
+    time_and_numbers:
+      title:
+        en: Time and Numbers
+        zh-CN: 时间与数值
+        zh-HK: 時間與數值
+      description:
+        en: Highlight timestamps, clock values, and common duration or size units.
+        zh-CN: 高亮时间戳、时分秒和常见耗时或容量单位。
+        zh-HK: 高亮時間戳、時分秒與常見耗時或容量單位。
+      rules:
+        datetime:
+          en: dates and timestamps
+          zh-CN: 日期与时间戳
+          zh-HK: 日期與時間戳
+        clock:
+          en: HH:MM:SS clock values
+          zh-CN: 时分秒
+          zh-HK: 時分秒
+        quantity:
+          en: durations, sizes, and percentages
+          zh-CN: 耗时、大小与百分比
+          zh-HK: 耗時、大小與百分比
+
+# 右键菜单
+ContextMenu:
+  copy:
+    en: Copy
+    zh-CN: 复制
+    zh-HK: 複製
+  copy_with_shortcut:
+    en: "Copy (%{shortcut})"
+    zh-CN: "复制（%{shortcut}）"
+    zh-HK: "複製（%{shortcut}）"
+  paste:
+    en: Paste
+    zh-CN: 粘贴
+    zh-HK: 貼上
+  paste_selection:
+    en: Paste Selected Text
+    zh-CN: 粘贴选中内容
+    zh-HK: 貼上選取內容
+  paste_with_shortcut:
+    en: "Paste (%{shortcut})"
+    zh-CN: "粘贴（%{shortcut}）"
+    zh-HK: "貼上（%{shortcut}）"
+  select_all:
+    en: Select All
+    zh-CN: 全选
+    zh-HK: 全選
+  select_all_with_shortcut:
+    en: "Select All (%{shortcut})"
+    zh-CN: "全选（%{shortcut}）"
+    zh-HK: "全選（%{shortcut}）"
+  clear_screen:
+    en: Clear Screen
+    zh-CN: 清屏
+    zh-HK: 清屏
+  clear_screen_with_shortcut:
+    en: "Clear Screen (%{shortcut})"
+    zh-CN: "清屏（%{shortcut}）"
+    zh-HK: "清屏（%{shortcut}）"
+  clear_selection:
+    en: Clear Selection
+    zh-CN: 清除选择
+    zh-HK: 清除選擇
+  ask_ai:
+    en: Ask AI
+    zh-CN: 询问AI
+    zh-HK: 詢問AI
+  save_quick_command:
+    en: Save as Quick Command
+    zh-CN: 保存为快捷命令
+    zh-HK: 保存為快捷命令
+
+
+TerminalAddon:
+  path_regex_build_failed:
+    en: "Failed to build file path regex: %{error}"
+    zh-CN: "文件路径正则构建失败: %{error}"
+    zh-HK: "文件路徑正則構建失敗: %{error}"
+  open_local_path_failed:
+    en: "Failed to open local path: %{error}"
+    zh-CN: "无法打开本地路径: %{error}"
+    zh-HK: "無法打開本地路徑: %{error}"
+
+TerminalView:
+  local_terminal_create_failed:
+    en: "Failed to create local terminal: %{error}"
+    zh-CN: "创建本地终端失败：%{error}"
+    zh-HK: "建立本機終端機失敗：%{error}"
+  reconnect_load_latest_failed:
+    en: "Failed to load the latest SSH connection settings: %{error}"
+    zh-CN: "读取最新 SSH 连接配置失败：%{error}"
+    zh-HK: "讀取最新 SSH 連線設定失敗：%{error}"
+  reconnect_apply_latest_failed:
+    en: "Failed to apply the latest SSH connection settings: %{error}"
+    zh-CN: "应用最新 SSH 连接配置失败：%{error}"
+    zh-HK: "套用最新 SSH 連線設定失敗：%{error}"
+  clipboard_image_requires_ssh:
+    en: Clipboard images can only be uploaded from an SSH terminal
+    zh-CN: 当前终端不是 SSH 终端，无法上传剪贴板图片
+    zh-HK: 目前終端機不是 SSH 終端機，無法上傳剪貼簿圖片
+  clipboard_image_empty:
+    en: The clipboard image is empty and cannot be uploaded
+    zh-CN: 剪贴板图片为空，无法上传
+    zh-HK: 剪貼簿圖片是空的，無法上傳
+  clipboard_image_uploading:
+    en: Uploading clipboard image to the remote server...
+    zh-CN: 正在上传剪贴板图片到远程服务器...
+    zh-HK: 正在上傳剪貼簿圖片到遠端伺服器...
+  clipboard_image_uploaded:
+    en: "Clipboard image uploaded and path pasted: %{path}"
+    zh-CN: "已上传剪贴板图片并粘贴路径：%{path}"
+    zh-HK: "已上傳剪貼簿圖片並貼上路徑：%{path}"
+  clipboard_image_upload_failed:
+    en: "Failed to upload clipboard image: %{error}"
+    zh-CN: "上传剪贴板图片失败：%{error}"
+    zh-HK: "上傳剪貼簿圖片失敗：%{error}"
+  clipboard_image_task_failed:
+    en: "Clipboard image upload task failed: %{error}"
+    zh-CN: "上传剪贴板图片任务失败：%{error}"
+    zh-HK: "上傳剪貼簿圖片工作失敗：%{error}"
+  terminal_size_changed:
+    en: "Terminal size changed: %{old} -> %{new}, cell_width=%{cell_width}, line_height=%{line_height}, bounds=%{bounds}"
+    zh-CN: "终端尺寸变化: %{old} -> %{new}, cell_width=%{cell_width}, line_height=%{line_height}, bounds=%{bounds}"
+    zh-HK: "終端尺寸變化: %{old} -> %{new}, cell_width=%{cell_width}, line_height=%{line_height}, bounds=%{bounds}"
+  cell_width_changed:
+    en: "cell_width changed: %{old} -> %{new}, font=%{font}, size=%{size}"
+    zh-CN: "cell_width 变化: %{old} -> %{new}, font=%{font}, size=%{size}"
+    zh-HK: "cell_width 變化: %{old} -> %{new}, font=%{font}, size=%{size}"
+  ask_ai_selection_template:
+    en: |-
+      Here is the text I selected in the terminal. Please analyze:
+
+      ```
+      %{content}
+      ```
+    zh-CN: |-
+      以下是我在终端中选中的内容，请帮我分析：
+
+      ```
+      %{content}
+      ```
+    zh-HK: |-
+      以下是我在終端中選中的內容，請幫我分析：
+
+      ```
+      %{content}
+      ```
+  vi_mode_enabled:
+    en: "Vi mode enabled. Press %{shortcut} again or Esc to exit."
+    zh-CN: "已进入 Vi 模式。再次按 %{shortcut} 或按 Esc 退出。"
+    zh-HK: "已進入 Vi 模式。再次按 %{shortcut} 或按 Esc 退出。"
+  vi_mode_disabled:
+    en: "Vi mode disabled."
+    zh-CN: "已退出 Vi 模式。"
+    zh-HK: "已退出 Vi 模式。"
+  font_reset_triggered:
+    en: "Terminal font size has been reset to 15."
+    zh-CN: "已触发终端字体重置为 15。"
+    zh-HK: "已觸發終端字體重置為 15。"
+  multiline_paste_title:
+    en: Confirm Multiline Paste
+    zh-CN: 确认多行粘贴
+    zh-HK: 確認多行貼上
+  multiline_paste_message:
+    en: Bracketed paste is disabled. Multiline content may execute immediately. Continue?
+    zh-CN: 当前未开启 bracketed paste，多行内容可能立即执行。是否继续？
+    zh-HK: 當前未開啟 bracketed paste，多行內容可能立即執行。是否繼續？
+  high_risk_paste_title:
+    en: Confirm High-Risk Command
+    zh-CN: 确认高危命令
+    zh-HK: 確認高危命令
+  high_risk_paste_message:
+    en: Potentially destructive command detected. Please confirm before pasting.
+    zh-CN: 检测到可能破坏系统的命令，请确认后再粘贴。
+    zh-HK: 檢測到可能破壞系統的命令，請確認後再貼上。
+  unbracketed_paste_block_title:
+    en: Blocked Unsafe Multiline Paste
+    zh-CN: 已拦截不安全的多行粘贴
+    zh-HK: 已攔截不安全的多行貼上
+  unbracketed_paste_heredoc_message:
+    en: The pasted content contains a heredoc block. Without bracketed paste, the remote shell may treat subsequent lines as continuation input and parse the command incorrectly.
+    zh-CN: 粘贴内容包含 heredoc 结构。当前远端未开启 bracketed paste，后续行可能被 shell 当作续行输入，导致命令边界识别错误。
+    zh-HK: 貼上內容包含 heredoc 結構。當前遠端未開啟 bracketed paste，後續行可能被 shell 當作續行輸入，導致命令邊界識別錯誤。
+  unbracketed_paste_quote_message:
+    en: The pasted content contains an unterminated quoted string. Without bracketed paste, the remote shell may continue waiting for more input and merge later commands into the same block.
+    zh-CN: 粘贴内容包含未闭合的引号结构。当前远端未开启 bracketed paste，shell 可能继续等待补全输入，并把后续命令并入同一块内容。
+    zh-HK: 貼上內容包含未閉合的引號結構。當前遠端未開啟 bracketed paste，shell 可能繼續等待補全輸入，並把後續命令併入同一塊內容。
+  paste_anyway:
+    en: Paste Anyway
+    zh-CN: 仍然粘贴
+    zh-HK: 仍然貼上
+  paste_preview:
+    en: Paste preview
+    zh-CN: 粘贴预览
+    zh-HK: 貼上預覽
+  paste_summary:
+    en: "%{lines} lines · %{chars} chars"
+    zh-CN: 共 %{lines} 行 · %{chars} 字符
+    zh-HK: 共 %{lines} 行 · %{chars} 字元
+  paste_as_single_line:
+    en: Paste as single line
+    zh-CN: 合并为单行粘贴
+    zh-HK: 合併為單行貼上
+  paste_open_settings:
+    en: Open Settings
+    zh-CN: 打开设置
+    zh-HK: 開啟設定
+  paste_dont_ask_again:
+    en: Don't Ask Again
+    zh-CN: 不再提示
+    zh-HK: 不再提示
+  large_paste_title:
+    en: Confirm Large Paste
+    zh-CN: 确认大段粘贴
+    zh-HK: 確認大段貼上
+  large_paste_message:
+    en: The pasted content is large (over 200 lines or 32 KB). Please confirm before pasting.
+    zh-CN: 粘贴内容较大（超过 200 行或 32 KB），请确认后再粘贴。
+    zh-HK: 貼上內容較大（超過 200 行或 32 KB），請確認後再貼上。
+
+TerminalSidebar:
+  paste_to_terminal:
+    en: "Paste to terminal"
+    zh-CN: "粘贴到终端"
+    zh-HK: "貼上到終端"
+  file_explorer:
+    en: File Explorer
+    zh-CN: 文件浏览器
+    zh-HK: 檔案瀏覽器
+  settings:
+    en: Settings
+    zh-CN: 设置
+    zh-HK: 設定
+  quick_commands:
+    en: Quick Commands
+    zh-CN: 快捷命令
+    zh-HK: 快捷命令
+  history_commands:
+    en: History Commands
+    zh-CN: 历史命令
+    zh-HK: 歷史命令
+  ai_chat:
+    en: AI Chat
+    zh-CN: AI 对话
+    zh-HK: AI 對話
+  broadcast_input:
+    en: Broadcast Input
+    zh-CN: 广播输入
+    zh-HK: 廣播輸入
+  file_manager:
+    en: File Manager
+    zh-CN: 文件管理器
+    zh-HK: 檔案管理器
+  server_monitor:
+    en: Server Monitor
+    zh-CN: 服务器监控
+    zh-HK: 伺服器監控
+  save_as_connection:
+    en: Save as connection
+    zh-CN: 保存为连接
+    zh-HK: 儲存為連線
+
+LocalTerminalClose:
+  title:
+    en: Close local terminal?
+    zh-CN: 关闭本地终端？
+    zh-HK: 關閉本機終端？
+  message:
+    en: A command or terminal application is still running in this local terminal.
+    zh-CN: 当前本地终端中仍有命令或终端应用正在运行。
+    zh-HK: 目前本機終端中仍有命令或終端應用正在執行。
+  warning:
+    en: Closing it will terminate the process and any unsaved terminal state may be lost.
+    zh-CN: 关闭后将终止该进程，未保存的终端状态可能会丢失。
+    zh-HK: 關閉後將終止該行程，未儲存的終端狀態可能會遺失。
+  workspace_unsaved_title:
+    en: Unsaved workspace files
+    zh-CN: 工作区文件尚未保存
+    zh-HK: 工作區檔案尚未儲存
+  workspace_unsaved_message:
+    en: One or more opened files have unsaved changes.
+    zh-CN: 一个或多个已打开的文件有未保存的更改。
+    zh-HK: 一個或多個已打開的檔案有未儲存的更改。
+  workspace_unsaved_warning:
+    en: Closing this terminal will discard those changes.
+    zh-CN: 关闭此终端将放弃这些更改。
+    zh-HK: 關閉此終端將放棄這些變更。
+
+ServerMonitor:
+  per_core:
+    en: Per-core
+    zh-CN: 每核心
+    zh-HK: 每核心
+  title:
+    en: Server Monitor
+    zh-CN: 服务器监控
+    zh-HK: 伺服器監控
+  start:
+    en: Start Monitoring
+    zh-CN: 开始监控
+    zh-HK: 開始監控
+  start_hint:
+    en: Start monitoring for the current SSH connection. The collector runs only within this SSH session and nothing is written to the remote host.
+    zh-CN: 为当前 SSH 连接启动监控。采集脚本仅通过当前 SSH 会话推送执行，不会在远端主机写入任何文件。
+    zh-HK: 為目前 SSH 連線啟動監控。採集腳本僅透過目前 SSH 連線推送執行，不會在遠端主機寫入任何檔案。
+  monitoring:
+    en: Monitoring
+    zh-CN: 监控
+    zh-HK: 監控
+  preparing:
+    en: Collecting first sample...
+    zh-CN: 正在采集第一份数据...
+    zh-HK: 正在採集第一份數據...
+  refresh:
+    en: Refresh
+    zh-CN: 刷新
+    zh-HK: 重新整理
+  close:
+    en: Close
+    zh-CN: 关闭
+    zh-HK: 關閉
+  cpu:
+    en: CPU
+    zh-CN: CPU
+    zh-HK: CPU
+  memory:
+    en: Memory
+    zh-CN: 内存
+    zh-HK: 記憶體
+  disk:
+    en: Disk
+    zh-CN: 磁盘
+    zh-HK: 磁碟
+  disk_hint:
+    en: Mount usage
+    zh-CN: 挂载点使用情况
+    zh-HK: 掛載點使用情況
+  network:
+    en: Network
+    zh-CN: 网络
+    zh-HK: 網路
+  processes:
+    en: Processes
+    zh-CN: 进程
+    zh-HK: 行程
+  process_hint:
+    en: Top resource usage
+    zh-CN: 资源占用排行
+    zh-HK: 資源佔用排行
+  by_cpu:
+    en: By CPU
+    zh-CN: 按 CPU
+    zh-HK: 按 CPU
+  by_memory:
+    en: By Memory
+    zh-CN: 按内存
+    zh-HK: 按記憶體
+  awaiting_data:
+    en: Awaiting next sample...
+    zh-CN: 等待下一次采样...
+    zh-HK: 等待下一次採樣...
+  unavailable:
+    en: Unavailable
+    zh-CN: 暂不可用
+    zh-HK: 暫不可用
+
+QuickCommand:
+  search:
+    en: Search
+    zh-CN: 搜索
+    zh-HK: 搜尋
+  name:
+    en: Name
+    zh-CN: 名称
+    zh-HK: 名稱
+  name_placeholder:
+    en: Enter a short name (optional)
+    zh-CN: 输入简短名称（可选）
+    zh-HK: 輸入簡短名稱（選填）
+  description:
+    en: Description
+    zh-CN: 说明
+    zh-HK: 說明
+  description_placeholder:
+    en: Enter notes or usage instructions (optional)
+    zh-CN: 输入备注或使用说明（可选）
+    zh-HK: 輸入備註或使用說明（選填）
+  group:
+    en: Group
+    zh-CN: 分组
+    zh-HK: 群組
+  group_placeholder:
+    en: Enter a group name (optional)
+    zh-CN: 输入分组名称（可选）
+    zh-HK: 輸入群組名稱（選填）
+  group_color:
+    en: Group Color
+    zh-CN: 分组颜色
+    zh-HK: 群組顏色
+  command:
+    en: Command
+    zh-CN: 命令
+    zh-HK: 命令
+  command_placeholder:
+    en: Enter command
+    zh-CN: 输入命令
+    zh-HK: 輸入命令
+  auto_run:
+    en: Execute on click
+    zh-CN: 点击执行
+    zh-HK: 點擊執行
+  auto_run_hint:
+    en: Send Enter automatically after triggering the command
+    zh-CN: 触发后自动发送回车执行命令
+    zh-HK: 觸發後自動傳送回車執行命令
+  shortcut:
+    en: Shortcut
+    zh-CN: 快捷键
+    zh-HK: 快捷鍵
+  shortcut_unassigned:
+    en: Not assigned
+    zh-CN: 未绑定
+    zh-HK: 未綁定
+  press_shortcut:
+    en: Press a shortcut
+    zh-CN: 请按下快捷键
+    zh-HK: 請按下快捷鍵
+  invalid_shortcut:
+    en: Shortcut must include Ctrl, Alt, Shift, or Command
+    zh-CN: 快捷键必须包含 Ctrl、Alt、Shift 或 Command
+    zh-HK: 快捷鍵必須包含 Ctrl、Alt、Shift 或 Command
+  scope:
+    en: Scope
+    zh-CN: 作用范围
+    zh-HK: 作用範圍
+  current_connection:
+    en: Current connection
+    zh-CN: 当前连接
+    zh-HK: 目前連線
+  global_shared:
+    en: Global
+    zh-CN: 全局共享
+    zh-HK: 全域共享
+  global_shared_description:
+    en: Available to all connections and local terminals
+    zh-CN: 所有连接和本地终端均可使用
+    zh-HK: 所有連線和本機終端均可使用
+  add:
+    en: Add Quick Command
+    zh-CN: 新增快捷命令
+    zh-HK: 新增快速命令
+  edit:
+    en: Edit Quick Command
+    zh-CN: 编辑快捷命令
+    zh-HK: 編輯快速命令
+  add_action:
+    en: Add
+    zh-CN: 新增
+    zh-HK: 新增
+  save:
+    en: Save
+    zh-CN: 保存
+    zh-HK: 儲存
+  cancel:
+    en: Cancel
+    zh-CN: 取消
+    zh-HK: 取消
+  command_required:
+    en: Command is required
+    zh-CN: 命令不能为空
+    zh-HK: 命令不能為空
+  save_failed:
+    en: "Failed to save quick command: %{error}"
+    zh-CN: "保存快捷命令失败：%{error}"
+    zh-HK: "儲存快速命令失敗：%{error}"
+  rename_group:
+    en: Rename Group
+    zh-CN: 重命名分组
+    zh-HK: 重新命名群組
+  rename_group_placeholder:
+    en: Enter a new group name
+    zh-CN: 输入新的分组名称
+    zh-HK: 輸入新的群組名稱
+  delete_group:
+    en: Delete Group
+    zh-CN: 删除分组
+    zh-HK: 刪除群組
+  delete_group_confirm:
+    en: "Delete group “%{name}”? Its quick commands will be kept but become ungrouped."
+    zh-CN: "确定删除分组“%{name}”吗？该分组下的快捷命令会保留，但会变为未分组。"
+    zh-HK: "確定刪除群組「%{name}」嗎？群組中的快速命令會保留，但會變為未分組。"
+  color_option:
+    en: "Color: %{color}"
+    zh-CN: "颜色：%{color}"
+    zh-HK: "顏色：%{color}"
+  empty_group:
+    en: No commands in this group
+    zh-CN: 当前分组暂无命令
+    zh-HK: 目前群組沒有命令
+  no_matches:
+    en: No matching commands
+    zh-CN: 没有匹配的命令
+    zh-HK: 找不到符合的命令
+  add_command:
+    en: Add Command
+    zh-CN: 新增命令
+    zh-HK: 新增命令
+  loading:
+    en: Loading...
+    zh-CN: 加载中...
+    zh-HK: 載入中...
+  copied:
+    en: Command copied to clipboard
+    zh-CN: 命令已复制到剪贴板
+    zh-HK: 命令已複製到剪貼板
+  copy_tooltip:
+    en: Copy to clipboard
+    zh-CN: 复制到剪贴板
+    zh-HK: 複製到剪貼板
+  edit_tooltip:
+    en: Edit command
+    zh-CN: 编辑命令
+    zh-HK: 編輯命令
+  paste_tooltip:
+    en: Paste to terminal input
+    zh-CN: 粘贴到终端输入框
+    zh-HK: 貼上到終端輸入框
+  pin_tooltip:
+    en: Pin command
+    zh-CN: 置顶命令
+    zh-HK: 置頂命令
+  unpin_tooltip:
+    en: Unpin command
+    zh-CN: 取消置顶命令
+    zh-HK: 取消置頂命令
+  delete_tooltip:
+    en: Delete command
+    zh-CN: 删除命令
+    zh-HK: 刪除命令
+  add_tooltip:
+    en: Add quick command
+    zh-CN: 添加快捷命令
+    zh-HK: 添加快捷命令
+  close_tooltip:
+    en: Close panel
+    zh-CN: 关闭面板
+    zh-HK: 關閉面板
+  cancel_tooltip:
+    en: Cancel adding command
+    zh-CN: 取消添加命令
+    zh-HK: 取消添加命令
+  confirm_add_tooltip:
+    en: Confirm add command
+    zh-CN: 确认添加命令
+    zh-HK: 確認添加命令
+  delete_confirm_title:
+    en: Confirm delete quick command
+    zh-CN: 确认删除快捷命令
+    zh-HK: 確認刪除快捷命令
+  delete_confirm_message:
+    en: This action cannot be undone. Continue?
+    zh-CN: 删除后不可恢复，是否继续？
+    zh-HK: 刪除後不可恢復，是否繼續？
+  delete_action:
+    en: Delete
+    zh-CN: 删除
+    zh-HK: 刪除
+
+HistoryCommand:
+  search:
+    en: Search
+    zh-CN: 搜索
+    zh-HK: 搜尋
+  most_used:
+    en: Most Used
+    zh-CN: 最常使用
+    zh-HK: 最常使用
+  latest:
+    en: Latest
+    zh-CN: 最近使用
+    zh-HK: 最近使用
+  favorite:
+    en: Favorite
+    zh-CN: 收藏
+    zh-HK: 收藏
+  unfavorite:
+    en: Unfavorite
+    zh-CN: 取消收藏
+    zh-HK: 取消收藏
+  paste:
+    en: Paste
+    zh-CN: 粘贴
+    zh-HK: 貼上
+  delete:
+    en: Delete
+    zh-CN: 删除
+    zh-HK: 刪除
+  no_commands:
+    en: No commands
+    zh-CN: 暂无命令
+    zh-HK: 暫無命令
+
+TerminalCommandBar:
+  title:
+    en: Command Input
+    zh-CN: 命令输入
+    zh-HK: 命令輸入
+  placeholder:
+    en: One command per line · Up/Down select · Tab complete · Enter run · Shift+Enter newline
+    zh-CN: 输入命令，每行一条 · ↑/↓ 选择 · Tab 补全 · Enter 逐条执行 · Shift+Enter 换行
+    zh-HK: 輸入命令，每行一條 · ↑/↓ 選擇 · Tab 補全 · Enter 逐條執行 · Shift+Enter 換行
+  search_quick_commands:
+    en: Search quick commands
+    zh-CN: 搜索快捷指令
+    zh-HK: 搜尋快速指令
+  ungrouped:
+    en: Ungrouped
+    zh-CN: 未分组
+    zh-HK: 未分組
+  no_quick_commands:
+    en: No matching quick commands
+    zh-CN: 没有匹配的快捷指令
+    zh-HK: 沒有符合的快速指令
+  quick_commands:
+    en: Quick Commands
+    zh-CN: 快捷指令
+    zh-HK: 快速指令
+  all_groups:
+    en: All Commands
+    zh-CN: 全部指令
+    zh-HK: 全部指令
+  history:
+    en: Command History
+    zh-CN: 命令历史
+    zh-HK: 命令歷史
+  quick_source:
+    en: Quick
+    zh-CN: 快捷
+    zh-HK: 快速
+  history_source:
+    en: History
+    zh-CN: 历史
+    zh-HK: 歷史
+  collapsed_hint:
+    en: Click to expand · Command input runs multiple commands
+    zh-CN: 点击展开 · 命令输入支持批量执行
+    zh-HK: 點擊展開 · 命令輸入支援批次執行
+  expand:
+    en: Expand command input
+    zh-CN: 展开命令输入
+    zh-HK: 展開命令輸入
+  collapse:
+    en: Collapse command input
+    zh-CN: 收起命令输入
+    zh-HK: 收起命令輸入
+  open_quick_commands:
+    en: Open quick commands
+    zh-CN: 打开快捷指令
+    zh-HK: 開啟快速指令
+  close_quick_commands:
+    en: Close quick commands
+    zh-CN: 关闭快捷指令
+    zh-HK: 關閉快速指令
+  fill:
+    en: Fill
+    zh-CN: 填入
+    zh-HK: 填入
+  local_shell:
+    en: Local Shell
+    zh-CN: 本地终端
+    zh-HK: 本機終端
+  remote_shell:
+    en: Remote Shell
+    zh-CN: 远程终端
+    zh-HK: 遠端終端
+  serial_terminal:
+    en: Serial Terminal
+    zh-CN: 串口终端
+    zh-HK: 串口終端
+
+Sidebar:
+  panel_options:
+    en: Panel options
+    zh-CN: 面板选项
+    zh-HK: 面板選項
+  close_panel:
+    en: Close panel
+    zh-CN: 关闭面板
+    zh-HK: 關閉面板
+  move_to:
+    en: Move to
+    zh-CN: 移动到
+    zh-HK: 移動到
+  placement_left:
+    en: Left
+    zh-CN: 左侧
+    zh-HK: 左側
+  placement_right:
+    en: Right
+    zh-CN: 右侧
+    zh-HK: 右側
+  placement_bottom:
+    en: Bottom
+    zh-CN: 底部
+    zh-HK: 底部
+  remove_from_sidebar:
+    en: Remove from Sidebar
+    zh-CN: 从侧边栏移除
+    zh-HK: 從側邊欄移除
+
+# Telnet 连接
+Telnet:
+  new:
+    en: New Telnet Connection
+    zh-CN: 新建 Telnet 连接
+    zh-HK: 新建 Telnet 連接
+  edit:
+    en: Edit Telnet Connection
+    zh-CN: 编辑 Telnet 连接
+    zh-HK: 編輯 Telnet 連接
+  name:
+    en: Connection Name
+    zh-CN: 连接名称
+    zh-HK: 連線名稱
+  name_placeholder:
+    en: Enter connection name
+    zh-CN: 请输入连接名称
+    zh-HK: 請輸入連線名稱
+  host:
+    en: Host
+    zh-CN: 主机
+    zh-HK: 主機
+  host_placeholder:
+    en: "e.g. 192.168.1.1 or switch.example.com"
+    zh-CN: "如 192.168.1.1 或 switch.example.com"
+    zh-HK: "如 192.168.1.1 或 switch.example.com"
+  port:
+    en: Port
+    zh-CN: 端口
+    zh-HK: 端口
+  port_placeholder:
+    en: "23"
+    zh-CN: "23"
+    zh-HK: "23"
+  backspace_code:
+    en: Backspace Key
+    zh-CN: 退格键
+    zh-HK: 退格鍵
+  keychain:
+    en: Keychain
+    zh-CN: 钥匙串
+    zh-HK: 鑰匙圈
+  workspace:
+    en: Group
+    zh-CN: 分组
+    zh-HK: 分組
+  remark:
+    en: Remark
+    zh-CN: 备注
+    zh-HK: 備註
+  remark_placeholder:
+    en: Enter remark
+    zh-CN: 请输入备注
+    zh-HK: 請輸入備註
+  validation_error:
+    en: Please enter a valid host and port
+    zh-CN: 请输入有效的主机和端口
+    zh-HK: 請輸入有效的主機和端口
+  login_script:
+    en: Login Script
+    zh-CN: 登录脚本
+    zh-HK: 登入腳本
+  login_script_hint:
+    en: "Expect is a regular expression matched against server output. An explicit Send value takes priority; when Send is empty, Navop recognizes username/password prompts from Expect and uses the referenced keychain value. A carriage return is appended automatically when Send does not end with \\r or \\n."
+    zh-CN: "Expect 是匹配服务端输出的正则表达式。显式填写的发送内容优先；发送内容为空时，Navop 会根据 Expect 识别用户名或密码提示，并使用引用钥匙串中的对应值。发送内容不以 \\r 或 \\n 结尾时会自动补回车。"
+    zh-HK: "Expect 是比對伺服器輸出的正規表示式。明確填寫的傳送內容優先；傳送內容為空時，Navop 會依據 Expect 識別使用者名稱或密碼提示，並使用引用鑰匙圈中的對應值。傳送內容不以 \\r 或 \\n 結尾時會自動補回車。"
+  login_script_credential_hint:
+    en: "Keychain values are injected only into the in-memory connection and are not written to the connection configuration. Automated login sends are excluded from input recording, but Telnet still transmits credentials in plaintext on the network."
+    zh-CN: "钥匙串中的值只会注入本次内存连接，不会写入连接配置；自动登录发送内容不会写入输入录制，但 Telnet 仍会在网络上明文传输凭据。"
+    zh-HK: "鑰匙圈中的值只會注入本次記憶體連線，不會寫入連線設定；自動登入傳送內容不會寫入輸入錄製，但 Telnet 仍會在網路上以明文傳輸憑據。"
+  login_script_expect:
+    en: Expect Regex
+    zh-CN: Expect 正则
+    zh-HK: Expect 正規表示式
+  login_script_expect_placeholder:
+    en: "e.g. (?i)(?:login|username)\\s*:"
+    zh-CN: "如 (?i)(?:login|username)\\s*:"
+    zh-HK: "如 (?i)(?:login|username)\\s*:"
+  login_script_send:
+    en: Send
+    zh-CN: 发送内容
+    zh-HK: 傳送內容
+  login_script_send_placeholder:
+    en: "Leave empty to use the recognized keychain field"
+    zh-CN: "留空时使用识别到的钥匙串字段"
+    zh-HK: "留空時使用識別到的鑰匙圈欄位"
+  login_script_add:
+    en: Add Step
+    zh-CN: 添加步骤
+    zh-HK: 新增步驟
+  login_script_remove:
+    en: Remove Step
+    zh-CN: 移除步骤
+    zh-HK: 移除步驟
+  login_script_validation_error:
+    en: Please complete all expect fields and use valid regular expressions that do not match empty input
+    zh-CN: 请完整填写登录脚本的 expect 字段，并使用不会匹配空内容的有效正则表达式
+    zh-HK: 請完整填寫登入腳本的 expect 欄位，並使用不會匹配空內容的有效正規表示式
+  save_failed:
+    en: "Failed to save Telnet connection: %{error}"
+    zh-CN: "保存 Telnet 连接失败：%{error}"
+    zh-HK: "儲存 Telnet 連線失敗：%{error}"
+  test_tcp:
+    en: Test TCP Port
+    zh-CN: 测试 TCP 端口
+    zh-HK: 測試 TCP 端口
+  test_tcp_success:
+    en: TCP port is reachable (this does not validate the Telnet protocol or login script)
+    zh-CN: TCP 端口可达（此测试不验证 Telnet 协议或登录脚本）
+    zh-HK: TCP 端口可達（此測試不驗證 Telnet 協定或登入腳本）
+  test_timeout:
+    en: TCP connection timed out
+    zh-CN: TCP 连接超时
+    zh-HK: TCP 連接超時
+
+TelnetSession:
+  credentials_required:
+    en: Telnet Credentials Required
+    zh-CN: 需要 Telnet 连接凭据
+    zh-HK: 需要 Telnet 連線憑據
+  credentials_hint:
+    en: The referenced keychain item is unavailable on this device. Enter a username and password for this connection only; they will not be saved or synced.
+    zh-CN: 当前设备无法获取此连接引用的钥匙串，请仅为本次连接输入用户名和密码；这些内容不会保存或同步。
+    zh-HK: 目前裝置無法取得此連線引用的鑰匙圈，請只為本次連線輸入使用者名稱和密碼；這些內容不會儲存或同步。
+  username:
+    en: Username
+    zh-CN: 用户名
+    zh-HK: 使用者名稱
+  password:
+    en: Password
+    zh-CN: 密码
+    zh-HK: 密碼
+
+# 串口连接
+Serial:
+  new:
+    en: New Serial Connection
+    zh-CN: 新建串口连接
+    zh-HK: 新建串口連接
+  edit:
+    en: Edit Serial Connection
+    zh-CN: 编辑串口连接
+    zh-HK: 編輯串口連接
+  name:
+    en: Connection Name
+    zh-CN: 连接名称
+    zh-HK: 連線名稱
+  name_placeholder:
+    en: Enter connection name
+    zh-CN: 请输入连接名称
+    zh-HK: 請輸入連線名稱
+  port_name:
+    en: Serial Port
+    zh-CN: 串口设备
+    zh-HK: 串口設備
+  port_name_placeholder:
+    en: "e.g. /dev/ttyUSB0 or COM1"
+    zh-CN: "如 /dev/ttyUSB0 或 COM1"
+    zh-HK: "如 /dev/ttyUSB0 或 COM1"
+  baud_rate:
+    en: Baud Rate
+    zh-CN: 波特率
+    zh-HK: 波特率
+  custom_baud_rate_placeholder:
+    en: Custom baud rate (optional)
+    zh-CN: 自定义波特率（可选）
+    zh-HK: 自訂波特率（可選）
+  data_bits:
+    en: Data Bits
+    zh-CN: 数据位
+    zh-HK: 數據位
+  stop_bits:
+    en: Stop Bits
+    zh-CN: 停止位
+    zh-HK: 停止位
+  parity:
+    en: Parity
+    zh-CN: 校验位
+    zh-HK: 校驗位
+  flow_control:
+    en: Flow Control
+    zh-CN: 流控
+    zh-HK: 流控
+  workspace:
+    en: Group
+    zh-CN: 分组
+    zh-HK: 分組
+  remark:
+    en: Remark
+    zh-CN: 备注
+    zh-HK: 備註
+  remark_placeholder:
+    en: Enter remark
+    zh-CN: 请输入备注
+    zh-HK: 請輸入備註
+  validation_error:
+    en: Please select a serial port
+    zh-CN: 请选择串口设备
+    zh-HK: 請選擇串口設備
+  test_success:
+    en: Serial port opened successfully
+    zh-CN: 串口打开成功
+    zh-HK: 串口打開成功
+  refresh_ports:
+    en: Refresh
+    zh-CN: 刷新
+    zh-HK: 刷新
+  no_ports:
+    en: No serial ports found
+    zh-CN: 未发现串口设备
+    zh-HK: 未發現串口設備
+  connecting:
+    en: Connecting...
+    zh-CN: 连接中...
+    zh-HK: 連接中...
+  connection_lost:
+    en: Connection Lost
+    zh-CN: 连接已断开
+    zh-HK: 連接已斷開
+  establishing:
+    en: Opening serial port...
+    zh-CN: 正在打开串口...
+    zh-HK: 正在打開串口...
+  disconnected:
+    en: The serial connection has been disconnected.
+    zh-CN: 串口连接已断开。
+    zh-HK: 串口連接已斷開。
+  enotty_hint:
+    en: "macOS does not support virtual serial ports (pty). Please use a real serial device."
+    zh-CN: macOS 不支持虚拟串口(pty)，请使用真实串口设备。
+    zh-HK: macOS 不支持虛擬串口(pty)，請使用真實串口設備。
+
+# SSH 会话状态
+SshSession:
+  connecting:
+    en: Connecting...
+    zh-CN: 连接中...
+    zh-HK: 連接中...
+  connection_lost:
+    en: Connection Lost
+    zh-CN: 连接已断开
+    zh-HK: 連接已斷開
+  establishing:
+    en: Establishing SSH connection...
+    zh-CN: 正在建立 SSH 连接...
+    zh-HK: 正在建立 SSH 連接...
+  disconnected:
+    en: The SSH session has been disconnected.
+    zh-CN: SSH 会话已断开连接。
+    zh-HK: SSH 工作階段已斷開連接。
+  connecting_preserves_terminal:
+    en: Establishing the terminal connection. Existing terminal output remains visible.
+    zh-CN: 正在建立终端连接，当前终端内容会保持可见。
+    zh-HK: 正在建立終端連線，目前終端內容會保持可見。
+  reconnecting_preserves_terminal:
+    en: Opening a new remote shell. Existing terminal output will remain visible.
+    zh-CN: 正在打开新的远端 Shell，当前终端内容会继续保留。
+    zh-HK: 正在開啟新的遠端 Shell，目前終端內容會繼續保留。
+  disconnected_preserves_terminal:
+    en: Terminal output is preserved. Reconnect to open a new remote shell and continue below it.
+    zh-CN: 终端内容已保留；重新连接后会打开新的远端 Shell，并在现有内容后继续显示。
+    zh-HK: 終端內容已保留；重新連線後會開啟新的遠端 Shell，並在現有內容後繼續顯示。
+  authentication_required:
+    en: SSH Authentication Required
+    zh-CN: 需要完成 SSH 身份验证
+    zh-HK: 需要完成 SSH 身分驗證
+  credentials_required:
+    en: SSH Credentials Required
+    zh-CN: 需要 SSH 连接凭据
+    zh-HK: 需要 SSH 連線憑據
+  credentials_hint:
+    en: Enter the required credentials for this connection only. They will not be saved or synced.
+    zh-CN: 请输入本次连接所需的凭据；这些内容不会保存或同步。
+    zh-HK: 請輸入本次連線所需的憑據；這些內容不會儲存或同步。
+  username:
+    en: Username
+    zh-CN: 用户名
+    zh-HK: 使用者名稱
+  password:
+    en: Password
+    zh-CN: 密码
+    zh-HK: 密碼
+  reconnect:
+    en: Reconnect
+    zh-CN: 重新连接
+    zh-HK: 重新連接
+  press_enter_to_reconnect:
+    en: Press Enter to reconnect.
+    zh-CN: 按 Enter 重新连接。
+    zh-HK: 按 Enter 重新連線。
+  host_key_title:
+    en: Verify SSH Host Key
+    zh-CN: 验证 SSH 主机指纹
+    zh-HK: 驗證 SSH 主機指紋
+  host_key_message:
+    en: This server is not yet trusted. Verify the fingerprint before continuing.
+    zh-CN: 尚未信任此服务器。继续前请核对主机指纹。
+    zh-HK: 尚未信任此伺服器。繼續前請核對主機指紋。
+  host_key_changed_title:
+    en: SSH Host Key Changed
+    zh-CN: SSH 主机指纹已变更
+    zh-HK: SSH 主機指紋已變更
+  host_key_changed_message:
+    en: The server presented a different host key. This can happen after reinstalling the server or rotating its keys, but it may also indicate a man-in-the-middle attack. Verify the new fingerprint through a trusted channel before continuing.
+    zh-CN: 服务器提供了与之前不同的主机指纹。这可能由系统重装或密钥轮换引起，也可能意味着遭到中间人攻击。继续前请通过可信渠道核对新指纹。
+    zh-HK: 伺服器提供了與之前不同的主機指紋。這可能由系統重裝或金鑰輪換引起，也可能表示遭到中間人攻擊。繼續前請透過可信渠道核對新指紋。
+  host_key_identity:
+    en: Server
+    zh-CN: 服务器
+    zh-HK: 伺服器
+  host_key_presented:
+    en: New Host Key
+    zh-CN: 新主机指纹
+    zh-HK: 新主機指紋
+  host_key_expected:
+    en: Previously Trusted Host Keys
+    zh-CN: 之前信任的主机指纹
+    zh-HK: 之前信任的主機指紋
+  host_key_algorithm:
+    en: Algorithm
+    zh-CN: 算法
+    zh-HK: 演算法
+  host_key_fingerprint:
+    en: SHA-256 Fingerprint
+    zh-CN: SHA-256 指纹
+    zh-HK: SHA-256 指紋
+  host_key_accept_save:
+    en: Accept and Save
+    zh-CN: 接受并保存
+    zh-HK: 接受並儲存
+  host_key_update_save:
+    en: Update and Save
+    zh-CN: 更新并保存
+    zh-HK: 更新並儲存
+  host_key_accept_once:
+    en: Accept Once
+    zh-CN: 仅本次接受
+    zh-HK: 僅本次接受
+  host_key_reject:
+    en: Reject
+    zh-CN: 拒绝
+    zh-HK: 拒絕
+  host_key_rejected:
+    en: SSH host key was rejected.
+    zh-CN: 已拒绝 SSH 主机指纹。
+    zh-HK: 已拒絕 SSH 主機指紋。
+
+# 文件管理器
+FileManager:
+  open_sftp:
+    en: Open SFTP in New Tab
+    zh-CN: 在新页签中打开 SFTP
+    zh-HK: 在新頁籤中開啟 SFTP
+  clipboard_upload_not_connected:
+    en: File Manager is not connected, so clipboard content cannot be uploaded
+    zh-CN: 文件管理器未连接，无法上传剪贴板内容
+    zh-HK: 檔案管理器尚未連線，無法上傳剪貼簿內容
+  clipboard_read_failed:
+    en: "Failed to read clipboard: %{error}"
+    zh-CN: "读取剪贴板失败：%{error}"
+    zh-HK: "讀取剪貼簿失敗：%{error}"
+  clipboard_no_uploads:
+    en: The clipboard contains no files or images to upload
+    zh-CN: 剪贴板没有可上传的文件或图片
+    zh-HK: 剪貼簿沒有可上傳的檔案或圖片
+  sftp_not_connected:
+    en: SFTP client is not connected
+    zh-CN: SFTP 客户端未连接
+    zh-HK: SFTP 用戶端尚未連線
+  panel_options:
+    en: Panel Options
+    zh-CN: 面板选项
+    zh-HK: 面板選項
+  title:
+    en: File Manager
+    zh-CN: 文件管理
+    zh-HK: 文件管理
+  connecting:
+    en: Connecting...
+    zh-CN: 连接中...
+    zh-HK: 連接中...
+  connect:
+    en: Connect
+    zh-CN: 连接
+    zh-HK: 連接
+  connect_failed:
+    en: Connection failed
+    zh-CN: 连接失败
+    zh-HK: 連接失敗
+  read_dir_failed_recovered:
+    en: "Failed to read directory: %{error}. Returned to your working directory."
+    zh-CN: "读取目录失败：%{error}。已返回你的工作目录。"
+    zh-HK: "讀取目錄失敗：%{error}。已返回你的工作目錄。"
+  foreign_host_notice:
+    en: "Terminal is now on %{host}; the file panel is still connected to %{connection}."
+    zh-CN: "终端已进入 %{host}，文件面板仍连接 %{connection}。"
+    zh-HK: "終端已進入 %{host}，檔案面板仍連線 %{connection}。"
+  foreign_host_hint:
+    en: "Directory sync is paused: SFTP follows the connection's host, so nested SSH sessions are not tracked. If this host is saved as its own connection (with the current one as jump host), use the target picker in the toolbar to switch to it."
+    zh-CN: "已暂停目录同步：SFTP 跟随连接所在主机，嵌套 SSH 不会被跟踪。若该主机已保存为独立连接（跳板机填当前主机），可用工具栏的目标选择器直接切过去。"
+    zh-HK: "已暫停目錄同步：SFTP 跟隨連線所在主機，嵌套 SSH 不會被追蹤。若該主機已存為獨立連線（跳板機填目前主機），可用工具列的目標選擇器直接切過去。"
+  target_tooltip:
+    en: "Choose the remote target this panel browses"
+    zh-CN: "选择该面板浏览的远端目标"
+    zh-HK: "選擇該面板瀏覽的遠端目標"
+  target_picker_title:
+    en: Choose remote target
+    zh-CN: 选择远端目标
+    zh-HK: 選擇遠端目標
+  target_search:
+    en: Search hosts
+    zh-CN: 搜索主机
+    zh-HK: 搜尋主機
+  target_empty:
+    en: "No saved SSH or FTP connection available"
+    zh-CN: "没有可用的 SSH 或 FTP 连接"
+    zh-HK: "沒有可用的 SSH 或 FTP 連線"
+  target_terminal_badge:
+    en: "Terminal"
+    zh-CN: "终端"
+    zh-HK: "終端"
+  target_switch_invalid:
+    en: "Cannot switch remote target"
+    zh-CN: "无法切换远端目标"
+    zh-HK: "無法切換遠端目標"
+  retry:
+    en: Retry
+    zh-CN: 重试
+    zh-HK: 重試
+  cd_to_terminal:
+    en: CD in Terminal
+    zh-CN: 在终端中 CD
+    zh-HK: 在終端中 CD
+  copy:
+    en: Copy
+    zh-CN: 复制
+    zh-HK: 複製
+  cut:
+    en: Cut
+    zh-CN: 剪切
+    zh-HK: 剪下
+  paste:
+    en: Paste
+    zh-CN: 粘贴
+    zh-HK: 貼上
+  properties:
+    en: Properties
+    zh-CN: 属性
+    zh-HK: 屬性
+  calculate:
+    en: Calculate
+    zh-CN: 计算
+    zh-HK: 計算
+  calculating:
+    en: Calculating…
+    zh-CN: 计算中…
+    zh-HK: 計算中…
+  property_name:
+    en: Name
+    zh-CN: 名称
+    zh-HK: 名稱
+  property_path:
+    en: Path
+    zh-CN: 路径
+    zh-HK: 路徑
+  property_type:
+    en: Type
+    zh-CN: 类型
+    zh-HK: 類型
+  property_file:
+    en: File
+    zh-CN: 文件
+    zh-HK: 文件
+  property_folder:
+    en: Folder
+    zh-CN: 文件夹
+    zh-HK: 文件夾
+  property_size:
+    en: Size
+    zh-CN: 大小
+    zh-HK: 大小
+  property_modified:
+    en: Modified
+    zh-CN: 修改时间
+    zh-HK: 修改時間
+  property_permissions:
+    en: Permissions
+    zh-CN: 权限
+    zh-HK: 權限
+  property_owner:
+    en: Owner
+    zh-CN: 拥有者
+    zh-HK: 擁有者
+  copy_ready:
+    en: Files copied. Choose a destination and paste.
+    zh-CN: 已复制文件，请选择目标位置后粘贴
+    zh-HK: 已複製文件，請選擇目標位置後貼上
+  cut_ready:
+    en: Files cut. Choose a destination and paste.
+    zh-CN: 已剪切文件，请选择目标位置后粘贴
+    zh-HK: 已剪下文件，請選擇目標位置後貼上
+  paste_success:
+    en: Paste completed
+    zh-CN: 粘贴完成
+    zh-HK: 貼上完成
+  clipboard_empty:
+    en: No files have been copied or cut
+    zh-CN: 尚未复制或剪切文件
+    zh-HK: 尚未複製或剪下文件
+  invalid_paste_target:
+    en: A folder cannot be pasted into itself or one of its descendants
+    zh-CN: 文件夹不能粘贴到自身或其子目录
+    zh-HK: 文件夾不能貼上到自身或其子目錄
+  paste_failed:
+    en: "Paste failed: %{error}"
+    zh-CN: "粘贴失败：%{error}"
+    zh-HK: "貼上失敗：%{error}"
+  calculate_size_failed:
+    en: "Failed to calculate folder size: %{error}"
+    zh-CN: "计算文件夹大小失败：%{error}"
+    zh-HK: "計算文件夾大小失敗：%{error}"
+  copy_path:
+    en: Copy Path
+    zh-CN: 复制路径
+    zh-HK: 複製路徑
+  copy_name:
+    en: Copy Name
+    zh-CN: 复制名称
+    zh-HK: 複製名稱
+  refresh:
+    en: Refresh
+    zh-CN: 刷新
+    zh-HK: 刷新
+  go_back:
+    en: Go Back
+    zh-CN: 返回上一级历史
+    zh-HK: 返回上一級歷史
+  go_home:
+    en: Go Home
+    zh-CN: 回到初始目录
+    zh-HK: 回到初始目錄
+  go_parent:
+    en: Go Parent Directory
+    zh-CN: 进入上级目录
+    zh-HK: 進入上級目錄
+  toggle_hidden:
+    en: Toggle Hidden Files
+    zh-CN: 显示/隐藏文件
+    zh-HK: 顯示/隱藏文件
+  search_placeholder:
+    en: Search...
+    zh-CN: 搜索...
+    zh-HK: 搜索...
+  name:
+    en: Name
+    zh-CN: 名称
+    zh-HK: 名稱
+  size:
+    en: Size
+    zh-CN: 大小
+    zh-HK: 大小
+  time:
+    en: Time
+    zh-CN: 时间
+    zh-HK: 時間
+  current_path:
+    en: Current Path
+    zh-CN: 当前路径
+    zh-HK: 當前路徑
+  edit_path:
+    en: Click to edit path
+    zh-CN: 点击编辑路径
+    zh-HK: 點擊編輯路徑
+  path_placeholder:
+    en: Enter remote path
+    zh-CN: 输入远程路径
+    zh-HK: 輸入遠程路徑
+  sync_terminal_dir:
+    en: Sync Terminal Directory
+    zh-CN: 同步终端目录
+    zh-HK: 同步終端目錄
+  locate_terminal_dir:
+    en: Locate Current Directory in Terminal
+    zh-CN: 定位到终端目录
+    zh-HK: 定位到終端目錄
+  follow_terminal_dir_on:
+    en: "Following terminal directory: on. Click to stop auto-following."
+    zh-CN: "已跟随终端目录：开启。点击可停止自动跟随。"
+    zh-HK: "已跟隨終端目錄：開啟。點擊可停止自動跟隨。"
+  follow_terminal_dir_off:
+    en: "Following terminal directory: off. Click to auto-follow the terminal directory."
+    zh-CN: "已跟随终端目录：关闭。点击可自动跟随终端目录。"
+    zh-HK: "已跟隨終端目錄：關閉。點擊可自動跟隨終端目錄。"
+  download:
+    en: Download
+    zh-CN: 下载
+    zh-HK: 下載
+  rename:
+    en: Rename
+    zh-CN: 重命名
+    zh-HK: 重命名
+  rename_placeholder:
+    en: Enter new name
+    zh-CN: 输入新名称
+    zh-HK: 輸入新名稱
+  rename_failed:
+    en: "Failed to rename: %{error}"
+    zh-CN: "重命名失败: %{error}"
+    zh-HK: "重命名失敗: %{error}"
+  extract:
+    en: Extract
+    zh-CN: 解压
+    zh-HK: 解壓
+  extract_success:
+    en: Extract completed
+    zh-CN: 解压完成
+    zh-HK: 解壓完成
+  extract_running:
+    en: Extracting...
+    zh-CN: 正在解压...
+    zh-HK: 正在解壓...
+  extract_conflict_title:
+    en: Extract Conflict
+    zh-CN: 解压冲突
+    zh-HK: 解壓衝突
+  extract_conflict_message:
+    en: "Existing files may be overwritten while extracting %{name}. Choose how to continue."
+    zh-CN: "解压 %{name} 可能会影响已有文件，请选择处理方式。"
+    zh-HK: "解壓 %{name} 可能會影響已有文件，請選擇處理方式。"
+  extract_skip_existing:
+    en: Skip Existing
+    zh-CN: 跳过已有
+    zh-HK: 跳過已有
+  extract_check_failed:
+    en: "Failed to check existing files before extract: %{error}"
+    zh-CN: "解压前检查已有文件失败: %{error}"
+    zh-HK: "解壓前檢查已有文件失敗: %{error}"
+  extract_failed:
+    en: "Failed to extract: %{error}"
+    zh-CN: "解压失败: %{error}"
+    zh-HK: "解壓失敗: %{error}"
+  extract_unsupported:
+    en: Unsupported archive type
+    zh-CN: 不支持的压缩包类型
+    zh-HK: 不支持的壓縮包類型
+  delete:
+    en: Delete
+    zh-CN: 删除
+    zh-HK: 刪除
+  delete_n_items:
+    en: "Delete %{count} items"
+    zh-CN: "删除 %{count} 个项目"
+    zh-HK: "刪除 %{count} 個項目"
+  confirm_delete_title:
+    en: Confirm Delete
+    zh-CN: 确认删除
+    zh-HK: 確認刪除
+  confirm_delete_file:
+    en: Delete this file?
+    zh-CN: 确定删除这个文件吗？
+    zh-HK: 確定刪除這個文件嗎？
+  confirm_delete_files:
+    en: "Delete %{count} files?"
+    zh-CN: "确定删除 %{count} 个文件吗？"
+    zh-HK: "確定刪除 %{count} 個文件嗎？"
+  confirm_delete_folder:
+    en: Delete this folder and all of its contents?
+    zh-CN: 确定删除这个文件夹及其全部内容吗？
+    zh-HK: 確定刪除這個文件夾及其全部內容嗎？
+  confirm_delete_folders:
+    en: "Delete %{count} folders and all of their contents?"
+    zh-CN: "确定删除 %{count} 个文件夹及其全部内容吗？"
+    zh-HK: "確定刪除 %{count} 個文件夾及其全部內容嗎？"
+  confirm_delete_mixed:
+    en: "Delete %{files} files and %{dirs} folders?"
+    zh-CN: "确定删除 %{files} 个文件和 %{dirs} 个文件夹吗？"
+    zh-HK: "確定刪除 %{files} 個文件和 %{dirs} 個文件夾嗎？"
+  and_more:
+    en: "...and %{count} more"
+    zh-CN: "...以及另外 %{count} 项"
+    zh-HK: "...以及另外 %{count} 項"
+  favorite_add_current:
+    en: Add current path to favorites
+    zh-CN: 收藏当前路径
+    zh-HK: 收藏當前路徑
+  favorite_add_path:
+    en: Add path to favorites
+    zh-CN: 收藏路径
+    zh-HK: 收藏路徑
+  favorite_remove_current:
+    en: Remove current path from favorites
+    zh-CN: 取消收藏当前路径
+    zh-HK: 取消收藏當前路徑
+  favorite_open:
+    en: Open favorite paths
+    zh-CN: 打开收藏路径
+    zh-HK: 打開收藏路徑
+  favorite_added:
+    en: Path added to favorites
+    zh-CN: 已收藏路径
+    zh-HK: 已收藏路徑
+  favorite_removed:
+    en: Path removed from favorites
+    zh-CN: 已取消收藏路径
+    zh-HK: 已取消收藏路徑
+  favorite_updated:
+    en: Favorite path updated
+    zh-CN: 已更新收藏路径
+    zh-HK: 已更新收藏路徑
+  favorite_search_placeholder:
+    en: Search paths
+    zh-CN: 搜索路径
+    zh-HK: 搜索路徑
+  favorite_edit_placeholder:
+    en: Edit path
+    zh-CN: 修改路径
+    zh-HK: 修改路徑
+  favorite_no_results:
+    en: No matching paths
+    zh-CN: 没有匹配的路径
+    zh-HK: 沒有匹配的路徑
+  favorite_edit:
+    en: Edit path
+    zh-CN: 修改路径
+    zh-HK: 修改路徑
+  favorite_delete:
+    en: Delete path
+    zh-CN: 删除路径
+    zh-HK: 刪除路徑
+  favorite_save:
+    en: Save
+    zh-CN: 保存
+    zh-HK: 保存
+  favorite_cancel:
+    en: Cancel
+    zh-CN: 取消
+    zh-HK: 取消
+  favorite_save_failed:
+    en: "Failed to save favorite path: %{error}"
+    zh-CN: "保存收藏路径失败：%{error}"
+    zh-HK: "保存收藏路徑失敗：%{error}"
+  upload_file:
+    en: Upload File
+    zh-CN: 上传文件
+    zh-HK: 上傳文件
+  new_folder:
+    en: New Folder
+    zh-CN: 新建文件夹
+    zh-HK: 新建文件夾
+  new_file:
+    en: New File
+    zh-CN: 新建文件
+    zh-HK: 新建文件
+  upload_folder:
+    en: Upload Folder
+    zh-CN: 上传文件夹
+    zh-HK: 上傳文件夾
+  new_folder_placeholder:
+    en: Enter folder name
+    zh-CN: 输入文件夹名称
+    zh-HK: 輸入文件夾名稱
+  new_file_placeholder:
+    en: Enter file name
+    zh-CN: 输入文件名称
+    zh-HK: 輸入文件名稱
+  select_upload_files:
+    en: Select files to upload
+    zh-CN: 选择要上传的文件
+    zh-HK: 選擇要上傳的文件
+  select_upload_folder:
+    en: Select folder to upload
+    zh-CN: 选择要上传的文件夹
+    zh-HK: 選擇要上傳的文件夾
+  select_download_dir:
+    en: Select download destination
+    zh-CN: 选择下载目标目录
+    zh-HK: 選擇下載目標目錄
+  drop_files_here:
+    en: Drop files here to upload
+    zh-CN: 拖放文件到此处上传
+    zh-HK: 拖放文件到此處上傳
+  transfer_pending:
+    en: Pending
+    zh-CN: 等待中
+    zh-HK: 等待中
+  transfer_done:
+    en: Done
+    zh-CN: 完成
+    zh-HK: 完成
+  transfer_failed:
+    en: Failed
+    zh-CN: 失败
+    zh-HK: 失敗
+  transfer_cancelled:
+    en: Cancelled
+    zh-CN: 已取消
+    zh-HK: 已取消
+  transfer_connect_failed:
+    en: Transfer connection failed
+    zh-CN: 传输连接建立失败
+    zh-HK: 傳輸連接建立失敗
+  read_dir_failed:
+    en: "Failed to read directory: %{error}"
+    zh-CN: "读取目录失败: %{error}"
+    zh-HK: "讀取目錄失敗: %{error}"
+  invalid_name:
+    en: Invalid file or folder name
+    zh-CN: 文件或文件夹名称无效
+    zh-HK: 文件或文件夾名稱無效
+  create_folder_failed:
+    en: "Failed to create folder: %{error}"
+    zh-CN: "创建文件夹失败: %{error}"
+    zh-HK: "建立文件夾失敗: %{error}"
+  create_file_failed:
+    en: "Failed to create file: %{error}"
+    zh-CN: "创建文件失败: %{error}"
+    zh-HK: "建立文件失敗: %{error}"
+
+Dialog:
+  file_conflict:
+    en: File Conflict
+    zh-CN: 文件冲突
+    zh-HK: 文件衝突
+
+Conflict:
+  item_exists:
+    en: "An item with this name already exists at destination:"
+    zh-CN: "目标位置已存在同名项目："
+    zh-HK: "目標位置已存在同名項目："
+  progress:
+    en: "Conflict %{current} of %{total}"
+    zh-CN: "第 %{current} / %{total} 个冲突"
+    zh-HK: "第 %{current} / %{total} 個衝突"
+  apply_all:
+    en: "Apply to all similar conflicts"
+    zh-CN: "应用到所有同类冲突"
+    zh-HK: "套用到所有同類衝突"
+  files_exist:
+    en: "The following files already exist at destination:"
+    zh-CN: "以下文件在目标位置已存在："
+    zh-HK: "以下文件在目標位置已存在："
+  choose_action:
+    en: "Choose how to proceed:"
+    zh-CN: "请选择处理方式："
+    zh-HK: "請選擇處理方式："
+  skip:
+    en: Skip
+    zh-CN: 跳过
+    zh-HK: 跳過
+  keep_both:
+    en: Keep Both
+    zh-CN: 保留两者
+    zh-HK: 保留兩者
+  merge:
+    en: Merge
+    zh-CN: 合并
+    zh-HK: 合併
+  overwrite:
+    en: Overwrite
+    zh-CN: 覆盖
+    zh-HK: 覆蓋
+  overwrite_warning_title:
+    en: Confirm Overwrite Folder
+    zh-CN: 确认覆盖文件夹
+    zh-HK: 確認覆蓋文件夾
+  overwrite_warning:
+    en: "Overwrite replaces the existing folder at the destination with the local folder as a whole. Files that exist only in the destination folder will be deleted. Choose Merge if you only want to replace files with the same name and keep the rest."
+    zh-CN: "覆盖会用本地文件夹的整体内容替换目标位置的同名文件夹，只存在于目标文件夹里的其它文件会被删除。如果只想替换同名文件、保留目标文件夹里的其它内容，请选择「合并」。"
+    zh-HK: "覆蓋會用本地文件夾的整體內容替換目標位置的同名文件夾，只存在於目標文件夾裡的其它檔案會被刪除。如果只想替換同名檔案、保留目標文件夾裡的其它內容，請選擇「合併」。"
+  overwrite_warning_apply_all:
+    en: "Note: 'Apply to all similar conflicts' is checked, so every similar folder conflict will use overwrite."
+    zh-CN: "注意：已勾选「应用到所有同类冲突」，确认后所有同类的文件夹冲突都会按覆盖处理。"
+    zh-HK: "注意：已勾選「套用到所有同類衝突」，確認後所有同類的文件夾衝突都會按覆蓋處理。"
+  overwrite_confirm:
+    en: Overwrite Anyway
+    zh-CN: 仍然覆盖
+    zh-HK: 仍然覆蓋
+  n_files:
+    en: "%{name} and %{count} other files"
+    zh-CN: "%{name} 等 %{count} 个文件"
+    zh-HK: "%{name} 等 %{count} 個文件"
+
+TerminalRecording:
+  control:
+    en: Recording
+    zh-CN: 录制
+    zh-HK: 錄製
+  ready:
+    en: Ready
+    zh-CN: 准备录制
+    zh-HK: 準備錄製
+  recording:
+    en: Recording
+    zh-CN: 录制中
+    zh-HK: 錄製中
+  paused:
+    en: Paused
+    zh-CN: 已暂停
+    zh-HK: 已暫停
+  stopping:
+    en: Stopping
+    zh-CN: 正在停止
+    zh-HK: 正在停止
+  stopped:
+    en: Stopped
+    zh-CN: 已停止
+    zh-HK: 已停止
+  failed:
+    en: Failed
+    zh-CN: 录制失败
+    zh-HK: 錄製失敗
+  output_only:
+    en: Output only · Input not recorded
+    zh-CN: 仅录制输出 · 不记录输入
+    zh-HK: 僅錄製輸出 · 不記錄輸入
+  input_included:
+    en: Input recording enabled
+    zh-CN: 已启用输入录制
+    zh-HK: 已啟用輸入錄製
+  start:
+    en: Start
+    zh-CN: 开始
+    zh-HK: 開始
+  pause:
+    en: Pause
+    zh-CN: 暂停
+    zh-HK: 暫停
+  resume:
+    en: Resume
+    zh-CN: 继续
+    zh-HK: 繼續
+  stop:
+    en: Stop
+    zh-CN: 停止
+    zh-HK: 停止
+  select_directory:
+    en: Select a folder for the terminal recording
+    zh-CN: 选择终端录制文件保存目录
+    zh-HK: 選擇終端錄製檔案儲存目錄
+  selecting_directory:
+    en: Selecting folder…
+    zh-CN: 正在选择目录…
+    zh-HK: 正在選擇目錄…
+  select_directory_failed:
+    en: Failed to select recording folder
+    zh-CN: 选择录制目录失败
+    zh-HK: 選擇錄製目錄失敗
+
+TerminalSessionLog:
+  tab_title:
+    en: "Log · %{name}"
+    zh-CN: "日志 · %{name}"
+    zh-HK: "日誌 · %{name}"
+
+TerminalRecordingPlayback:
+  title:
+    en: Recording Playback
+    zh-CN: 终端录制回放
+    zh-HK: 終端錄製回放
+  tab_title:
+    en: "Playback · %{name}"
+    zh-CN: "回放 · %{name}"
+    zh-HK: "回放 · %{name}"
+  read_only:
+    en: Read-only
+    zh-CN: 只读
+    zh-HK: 唯讀
+  playing:
+    en: Playing
+    zh-CN: 播放中
+    zh-HK: 播放中
+  paused:
+    en: Paused
+    zh-CN: 已暂停
+    zh-HK: 已暫停
+  finished:
+    en: Finished
+    zh-CN: 已结束
+    zh-HK: 已結束
+  pause:
+    en: Pause
+    zh-CN: 暂停
+    zh-HK: 暫停
+  resume:
+    en: Resume
+    zh-CN: 继续
+    zh-HK: 繼續
+  replay:
+    en: Replay
+    zh-CN: 重新播放
+    zh-HK: 重新播放
+  partial_recovery:
+    en: "Partial recovery · %{bytes} trailing bytes discarded"
+    zh-CN: "部分恢复 · 已丢弃尾部 %{bytes} 字节"
+    zh-HK: "部分恢復 · 已丟棄尾部 %{bytes} 位元組"
+  discarded_bytes:
+    en: "%{bytes} bytes discarded"
+    zh-CN: "已丢弃 %{bytes} 字节"
+    zh-HK: "已丟棄 %{bytes} 位元組"
+  search:
+    en: Search
+    zh-CN: 搜索
+    zh-HK: 搜尋
+  search_placeholder:
+    en: Search this recording
+    zh-CN: 搜索当前录制
+    zh-HK: 搜尋目前錄製
+  search_index_truncated:
+    en: "Search index truncated at %{events} events / %{bytes} bytes"
+    zh-CN: "搜索索引已在 %{events} 个事件 / %{bytes} 字节处截断"
+    zh-HK: "搜尋索引已在 %{events} 個事件 / %{bytes} 位元組處截斷"
+  output_match:
+    en: Output
+    zh-CN: 输出
+    zh-HK: 輸出
+  input_display_only:
+    en: Input · display only
+    zh-CN: 输入 · 仅展示
+    zh-HK: 輸入 · 僅展示
+  marker_display_only:
+    en: Marker · display only
+    zh-CN: 标记 · 仅展示
+    zh-HK: 標記 · 僅展示
+  unavailable:
+    en: Playback controls are unavailable
+    zh-CN: 回放控制当前不可用
+    zh-HK: 回放控制目前不可用
+
+TerminalZmodem:
+  upload_title:
+    en: Upload
+    zh-CN: 上传
+    zh-HK: 上傳
+  download_title:
+    en: Download
+    zh-CN: 下载
+    zh-HK: 下載
+  uploading:
+    en: Uploading with ZMODEM
+    zh-CN: 正在通过 ZMODEM 上传
+    zh-HK: 正在透過 ZMODEM 上傳
+  select_upload_files:
+    en: Select files to upload with ZMODEM
+    zh-CN: 选择要通过 ZMODEM 上传的文件
+    zh-HK: 選擇要透過 ZMODEM 上傳的檔案
+  select_download_directory:
+    en: Select a folder for the ZMODEM download
+    zh-CN: 选择 ZMODEM 下载保存目录
+    zh-HK: 選擇 ZMODEM 下載儲存目錄
+Ftp:
+  new:
+    en: New FTP Connection
+    zh-CN: 新建 FTP 连接
+    zh-HK: 新建 FTP 連接
+  edit:
+    en: Edit FTP Connection
+    zh-CN: 编辑 FTP 连接
+    zh-HK: 編輯 FTP 連接
+  name:
+    en: Connection Name
+    zh-CN: 连接名称
+    zh-HK: 連線名稱
+  name_placeholder:
+    en: e.g. intranet FTP
+    zh-CN: 例如：内网 FTP
+    zh-HK: 例如：內網 FTP
+  host:
+    en: Host
+    zh-CN: 主机
+    zh-HK: 主機
+  host_placeholder:
+    en: Hostname or IP address
+    zh-CN: 主机名或 IP 地址
+    zh-HK: 主機名稱或 IP 位址
+  port:
+    en: Port
+    zh-CN: 端口
+    zh-HK: 連接埠
+  port_placeholder:
+    en: Port
+    zh-CN: 端口
+    zh-HK: 連接埠
+  username:
+    en: Username
+    zh-CN: 用户名
+    zh-HK: 使用者名稱
+  username_placeholder:
+    en: Username
+    zh-CN: 用户名
+    zh-HK: 使用者名稱
+  password:
+    en: Password
+    zh-CN: 密码
+    zh-HK: 密碼
+  password_placeholder:
+    en: Password
+    zh-CN: 密码
+    zh-HK: 密碼
+  passive_mode:
+    en: Passive Mode
+    zh-CN: 被动模式
+    zh-HK: 被動模式
+  passive_mode_desc:
+    en: Recommended behind NAT/firewall
+    zh-CN: NAT/防火墙后建议开启
+    zh-HK: NAT/防火牆後建議開啟
+  use_tls:
+    en: FTPS (Explicit TLS)
+    zh-CN: FTPS（显式 TLS）
+    zh-HK: FTPS（顯式 TLS）
+  use_tls_desc:
+    en: Encrypt control and data connections via AUTH TLS
+    zh-CN: 通过 AUTH TLS 加密控制与数据连接
+    zh-HK: 透過 AUTH TLS 加密控制與資料連線
+  keychain:
+    en: Keychain
+    zh-CN: 钥匙串
+    zh-HK: 鑰匙圈
+  workspace:
+    en: Group
+    zh-CN: 分组
+    zh-HK: 分組
+  remark:
+    en: Remark
+    zh-CN: 备注
+    zh-HK: 備註
+  remark_placeholder:
+    en: Optional notes for this connection
+    zh-CN: 可选的连接备注
+    zh-HK: 可選的連線備註
+  validation_error:
+    en: Host is required and port must be valid
+    zh-CN: 请填写主机并确保端口有效
+    zh-HK: 請填寫主機並確保連接埠有效
+  test:
+    en: Test Connection
+    zh-CN: 测试连接
+    zh-HK: 測試連線
+  test_success:
+    en: FTP connection established
+    zh-CN: FTP 连接成功
+    zh-HK: FTP 連線成功
+  save_failed:
+    en: "Failed to save connection: %{error}"
+    zh-CN: "保存连接失败：%{error}"
+    zh-HK: "儲存連線失敗：%{error}"
+
+# 会话锁定：锁定后的占位文案由终端视图自己渲染，`t!` 只查本 crate 的语言包，
+# 不能指望 core 语言包里那份 SessionLock.*（见 crates/core/locales/core.yml）。
+SessionLock:
+  locked_notice:
+    en: "Session Locked"
+    zh-CN: "会话已锁定"
+    zh-HK: "會話已鎖定"
+  hidden_notice:
+    en: "Session Locked - Output Hidden"
+    zh-CN: "会话已锁定 - 输出已隐藏"
+    zh-HK: "會話已鎖定 - 輸出已隱藏"
+
+# 侧边栏文件管理器的操作菜单按钮
+File:
+  actions:
+    en: "File actions"
+    zh-CN: "文件操作"
+    zh-HK: "文件操作"
+
+# 侧栏 composer 的上下文行：工作区目录选择、worktree 创建失败的提示。
+# `t!` 只查调用方 crate 的语言包，不能指望 workspace_explorer / main 里那两份。
+WorkspaceExplorer:
+  frame:
+    choose_root:
+      en: "Choose Workspace Folder"
+      zh-CN: "选择工作区目录"
+      zh-HK: "選擇工作區資料夾"
+
+Home:
+  worktree_create_failed:
+    en: "Could not create the Git worktree, message not sent: %{error}"
+    zh-CN: "Git worktree 创建失败，消息未发送：%{error}"
+    zh-HK: "Git worktree 建立失敗，訊息未傳送：%{error}"

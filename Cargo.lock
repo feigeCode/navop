@@ -13059,6 +13059,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "ssh_form"
+version = "0.15.2"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "connection-form",
+ "gpui-component",
+ "gpui-fast",
+ "one-assets",
+ "one-core",
+ "rust-i18n",
+ "ssh",
+ "tempfile",
+ "terminal",
+ "tokio",
+ "tool_runtime",
+ "tracing",
+]
+
+[[package]]
 name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13632,6 +13652,7 @@ dependencies = [
  "sftp_transfer",
  "sha2 0.10.9",
  "ssh",
+ "ssh_form",
  "tempfile",
  "terminal",
  "tokio",

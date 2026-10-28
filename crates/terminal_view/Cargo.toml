@@ -26,6 +26,7 @@ one-core = { workspace = true }
 tool_runtime = { workspace = true }
 one-ui = { workspace = true }
 connection-form = { workspace = true }
+ssh_form = { workspace = true }
 # Terminal emulation
 alacritty_terminal.workspace = true
 
