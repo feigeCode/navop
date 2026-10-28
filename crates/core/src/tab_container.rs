@@ -791,6 +791,20 @@ impl TabItem {
         }
     }
 
+    /// 用已擦除的 `TabContentView` 构造 tab，供领域注册表按 `TabIntent` 返回。
+    pub fn from_dyn(
+        id: impl Into<String>,
+        from: impl Into<String>,
+        content: Arc<dyn TabContentView>,
+    ) -> Self {
+        Self {
+            id: SharedString::from(id.into()),
+            from: SharedString::from(from.into()),
+            metadata: HashMap::new(),
+            content,
+        }
+    }
+
     pub fn with_metadata(mut self, metadata: HashMap<String, String>) -> Self {
         self.metadata = metadata;
         self
@@ -5438,6 +5452,18 @@ mod tests {
             (TAB_RENAME_MIN_WIDTH, px(320.0)),
             tab_width_bounds(px(320.0), true)
         );
+    }
+
+    #[gpui::test]
+    fn tab_item_from_dyn_wraps_erased_tab_content(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let tab = cx.new(|cx| TestTab::new("dyn", cx));
+            let item = TabItem::from_dyn("dyn-tab", "test", Arc::new(tab));
+
+            assert_eq!("dyn-tab", item.id().as_ref());
+            assert_eq!("test", item.from().as_ref());
+            assert_eq!("TestTab", item.content().content_key(cx));
+        });
     }
 
     #[gpui::test]
