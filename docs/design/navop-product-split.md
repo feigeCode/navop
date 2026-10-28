@@ -921,9 +921,10 @@ apps/*        不得直接依赖域 crate（只能经 *_domain）
 | `93b073e56` | Mongo 单连接/工作区标签迁入 `data_domain` | 已完成，`main` 767 个测试通过 |
 | `6f53fbecf` | 本地终端经 `DomainRegistry` 打开；`TabHost` 增加聚焦打开，`HomePage` 按 id 去重；`TabOpener` 返回 `bool` 并拿到 `HomeContext` | 已完成，`main` 767 个测试、`shell_domain` 3 个测试通过 |
 | `f0cb91d75` | SSH 终端经 `ConnectionOpener` 打开；新增 `app_kit::ShellHost` 事件桥，SFTP/保存临时连接回到当前 `HomePage`；`HomeContext::keep_subscription` 保管事件订阅 | 已完成，`main` 767 个测试、`shell_domain` 4 个测试通过 |
+| `36b4818ee` | SFTP 双栏视图经 `ConnectionOpener::open_sftp` 打开；`ShellHost` 增加 SFTP→本地终端/SSH 终端回调，`HomePage` 保留原标签序号与聚焦行为 | 已完成，`main` 767 个测试，改动 crate 以 `-Dwarnings` 通过 clippy |
 
-尚未开始：`runtime_core/runtime_database` 独立包、`apps/navop` 全量包、打包与 CI 矩阵；`shell_domain` 仍缺 SFTP、端口转发、RDP/VNC 的 Tab 打开（SSH 已迁入，SFTP/保存连接经事件桥回 `main`）。
+尚未开始：`runtime_core/runtime_database` 独立包、`apps/navop` 全量包、打包与 CI 矩阵；`shell_domain` 仍缺端口转发、RDP/VNC 的 Tab 打开（SSH 与 SFTP 已迁入）。
 
 已知问题：`extension-runtime` 的 `db_tree_action_runs_registered_wasm_component` 在本机因 fixture 指向 `.wat` 文本而失败（`bad magic number`），与本次改动无关；其余 227 个测试通过。`ssh_form` 暂用 `edition = "2021"` 以保持与原实现一致，后续随 `terminal_view` 一起升级。
 
-下一步建议：SSH 已进入 `shell_domain`；下一步把 SFTP 也迁入 `shell_domain`（把 `OpenLocalTerminal` 事件同样经 `ShellHost` 桥接），然后处理端口转发/RDP/VNC 与外部驱动守卫（抽 `DriverGate`）。`apps/navop` 全量包暂时仍由 `main` 的 `navop` bin 承担，等 `main` 抽出 lib 后再迁。
+下一步建议：SSH 与 SFTP 已进入 `shell_domain`；下一步处理端口转发（需要把 `PortForwardingRuntime` 句柄经 `HomeContext` 暴露）与 RDP/VNC（`remote_desktop_view` 仍较重），再抽外部驱动守卫 `DriverGate`。`apps/navop` 全量包暂时仍由 `main` 的 `navop` bin 承担，等 `main` 抽出 lib 后再迁。
