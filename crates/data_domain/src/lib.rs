@@ -43,21 +43,37 @@ impl ConnectionOpener for RedisConnectionOpener {
         window: &mut Window,
         cx: &mut App,
     ) -> bool {
-        if !Self::supports_type(connection.connection_type) || connection.workspace_id.is_some() {
+        if !Self::supports_type(connection.connection_type) {
             return false;
         }
         let connection = connection.clone();
         let connection_id = connection.id;
-        let tab_id = format!("redis-{}", connection_id.unwrap_or(0));
+        let (tab_id, connections, workspace) = match connection.workspace_id {
+            Some(workspace_id) => {
+                let mut connections: Vec<StoredConnection> = home
+                    .connections()
+                    .iter()
+                    .filter(|candidate| {
+                        candidate.connection_type == ConnectionType::Redis
+                            && candidate.workspace_id == Some(workspace_id)
+                    })
+                    .cloned()
+                    .collect();
+                if connections.is_empty() {
+                    connections.push(connection);
+                }
+                home.sort_connections(&mut connections, cx);
+                (
+                    format!("workspace-redis-tab-{workspace_id}"),
+                    connections,
+                    home.workspace(workspace_id),
+                )
+            }
+            None => (format!("redis-{}", connection_id.unwrap_or(0)), vec![connection], None),
+        };
         let view = cx.new(|cx| {
-            RedisTabView::new_with_active_conn(
-                None,
-                vec![connection],
-                connection_id,
-                window,
-                cx,
-            )
-            .with_external_sidebar()
+            RedisTabView::new_with_active_conn(workspace, connections, connection_id, window, cx)
+                .with_external_sidebar()
         });
         home.open_tab(
             TabItem::from_dyn(tab_id, "redis", Arc::new(view)),
