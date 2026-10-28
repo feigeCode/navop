@@ -1,4 +1,5 @@
-use gpui::{Context, Window};
+use gpui::{App, Context, Window};
+use gpui_component::WindowExt as _;
 use one_core::storage::{DatabaseType, DbConnectionConfig, StoredConnection, Workspace};
 use one_core::tab_container::TabOpenMode;
 use std::sync::Arc;
@@ -9,7 +10,9 @@ use crate::extension_downloader::{
     DownloadProgressCallback, MarketplaceEntry, fetch_default_manifest_url, fetch_manifest_url,
     install_marketplace_entry_generic, install_marketplace_entry_with_progress,
 };
-use crate::install_flow::{notify_error, run_install_with_progress_prompt};
+use crate::install_flow::{
+    notify_error, run_install_with_progress_prompt, run_install_with_progress_prompt_app,
+};
 const DUCKDB_DRIVER_ID: &str = "duckdb";
 /// TDengine IPC 驱动扩展 id(navop-extensions,driver_id "tdengine")
 const TDENGINE_DRIVER_ID: &str = "tdengine";
@@ -429,6 +432,56 @@ async fn install_database_driver_from_marketplace(
     .await?;
     db::ipc::IpcDriverRegistry::refresh_global_registry();
     Ok(summary)
+}
+
+/// 数据库驱动是否已安装且满足最低版本要求。
+pub fn database_driver_meets_requirement(driver_id: &str, minimum_version: Option<&str>) -> bool {
+    db::ipc::IpcDriverRegistry::load_default()
+        .find(driver_id)
+        .is_some_and(|driver| driver_version_meets_minimum(&driver.version, minimum_version))
+}
+
+/// `&mut App` 版本的驱动安装提示，供没有宿主实体上下文的独立产品使用。
+///
+/// 安装成功后会弹出成功通知，但不会自动重开连接；调用方应提示用户再次打开。
+pub fn prompt_install_database_driver_app(
+    cx: &mut App,
+    window: &mut Window,
+    driver_id: String,
+    connection_name: String,
+) {
+    if ExtensionRegistry::global().is_none() {
+        window.push_notification(
+            gpui_component::notification::Notification::error(
+                "扩展系统未初始化，无法安装数据库驱动",
+            ),
+            cx,
+        );
+        return;
+    }
+    let install_driver_id = driver_id.clone();
+    run_install_with_progress_prompt_app(
+        window,
+        cx,
+        (driver_id.clone(), connection_name.clone()),
+        "需要安装或更新驱动",
+        format!(
+            "连接「{}」需要安装或更新「{}」database 驱动。",
+            connection_name, driver_id
+        ),
+        &["下载并安装/更新", "取消"],
+        move |http_client, progress_callback| {
+            install_database_driver_from_marketplace(
+                http_client,
+                install_driver_id,
+                None,
+                progress_callback,
+            )
+        },
+        |_, _| {},
+        format!("已安装 {driver_id} database 驱动，请重新打开连接"),
+        format!("安装 {driver_id} database 驱动失败"),
+    );
 }
 
 pub(crate) fn find_database_driver_entry_for_requirement<'a>(

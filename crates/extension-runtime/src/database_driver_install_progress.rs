@@ -114,15 +114,13 @@ pub(super) fn mark_driver_install_finished(
     });
 }
 
-pub(super) fn watch_driver_install_progress<T>(
+pub(super) fn watch_driver_install_progress(
     progress_view: WeakEntity<DriverInstallProgressView>,
     progress_snapshot: Arc<Mutex<DriverInstallProgressSnapshot>>,
     progress_finished: Arc<AtomicBool>,
-    cx: &mut Context<T>,
-) where
-    T: 'static,
-{
-    cx.spawn(async move |_: WeakEntity<T>, cx| {
+    cx: &mut App,
+) {
+    cx.spawn(async move |cx| {
         loop {
             if progress_finished.load(Ordering::Relaxed) {
                 break;
