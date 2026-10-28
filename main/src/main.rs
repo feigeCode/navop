@@ -391,6 +391,7 @@ fn main() {
                 return;
             }
         };
+    app_kit::configure_identity(&domain_api::AppIdentity::FULL);
     let path_context = match one_core::app_paths::process_context() {
         Ok(context) => context,
         Err(error) => {
@@ -456,7 +457,6 @@ fn main() {
         tracing::warn!(%error, "failed to enqueue initial startup request");
     }
 
-    app_kit::configure_identity(&domain_api::AppIdentity::FULL);
     if resolved_paths.uses_installed_directories()
         && let Err(error) = one_core::app_dirs::migrate_legacy_directories()
     {

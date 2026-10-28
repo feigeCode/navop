@@ -19,6 +19,11 @@ pub fn configure_identity(identity: &'static AppIdentity) {
         identity.keychain_service,
         identity.development_keychain_service,
     );
+    one_core::app_paths::configure_app_path_names(
+        identity.portable_marker,
+        identity.development_data_dir_name,
+        identity.data_dir_name,
+    );
 }
 
 /// 应用身份后初始化产品领域。

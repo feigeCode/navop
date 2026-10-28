@@ -111,6 +111,38 @@ pub struct AppPathResolutionContext {
 
 static APP_PATHS: OnceLock<AppPaths> = OnceLock::new();
 
+#[derive(Clone, Copy, Debug)]
+struct AppPathNames {
+    portable_marker: &'static str,
+    development_data_dir_name: &'static str,
+    cache_dir_name: &'static str,
+}
+
+const DEFAULT_APP_PATH_NAMES: AppPathNames = AppPathNames {
+    portable_marker: PORTABLE_MARKER_FILE,
+    development_data_dir_name: DEVELOPMENT_DATA_DIR_NAME,
+    cache_dir_name: "navop",
+};
+
+static APP_PATH_NAMES: OnceLock<AppPathNames> = OnceLock::new();
+
+/// 在任何路径解析之前按产品身份覆盖便携标记、开发目录与缓存目录名。
+pub fn configure_app_path_names(
+    portable_marker: &'static str,
+    development_data_dir_name: &'static str,
+    cache_dir_name: &'static str,
+) {
+    let _ = APP_PATH_NAMES.set(AppPathNames {
+        portable_marker,
+        development_data_dir_name,
+        cache_dir_name,
+    });
+}
+
+fn app_path_names() -> &'static AppPathNames {
+    APP_PATH_NAMES.get().unwrap_or(&DEFAULT_APP_PATH_NAMES)
+}
+
 pub fn parse_startup_arguments(
     arguments: impl IntoIterator<Item = OsString>,
 ) -> Result<ParsedStartupArguments> {
@@ -195,7 +227,9 @@ fn requested_data_root(
         .portable_environment
         .as_deref()
         .is_some_and(is_truthy);
-    let marker_portable = executable_root.join(PORTABLE_MARKER_FILE).is_file();
+    let marker_portable = executable_root
+        .join(app_path_names().portable_marker)
+        .is_file();
 
     (portable_environment || marker_portable).then(|| executable_root.join("data"))
 }
@@ -251,7 +285,7 @@ fn development_data_dir() -> Option<PathBuf> {
         return None;
     }
 
-    dirs::home_dir().map(|home| home.join(DEVELOPMENT_DATA_DIR_NAME))
+    dirs::home_dir().map(|home| home.join(app_path_names().development_data_dir_name))
 }
 
 fn development_paths(root: PathBuf) -> AppPaths {
@@ -277,7 +311,7 @@ fn installed_paths() -> Result<AppPaths> {
         mode: AppRunMode::Installed,
         config_dir: crate::app_dirs::installed_config_dir()?,
         data_dir: crate::app_dirs::installed_data_dir(),
-        cache_dir: dirs::cache_dir().map(|root| root.join("navop")),
+        cache_dir: dirs::cache_dir().map(|root| root.join(app_path_names().cache_dir_name)),
     })
 }
 
