@@ -30,6 +30,9 @@ pub trait HomeContext: TabHost {
     /// 按当前产品的排序设置排列工作区连接。
     fn sort_connections(&self, connections: &mut [StoredConnection], cx: &App);
 
+    /// 当前产品的数据库标签打开方式。
+    fn database_open_mode(&self, cx: &App) -> crate::DatabaseTabMode;
+
     fn notify(
         &mut self,
         level: NotifyLevel,

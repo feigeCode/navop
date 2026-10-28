@@ -6,7 +6,9 @@ publish = false
 
 [dependencies]
 anyhow.workspace = true
+db_view.workspace = true
 domain_api.workspace = true
+extension-runtime = { workspace = true, default-features = false, features = ["database"] }
 gpui.workspace = true
 one-core.workspace = true
 redis_view.workspace = true

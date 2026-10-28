@@ -2962,7 +2962,9 @@ name = "data_domain"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "db_view",
  "domain_api",
+ "extension-runtime",
  "gpui-fast",
  "one-core",
  "redis_view",

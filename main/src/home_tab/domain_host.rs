@@ -40,6 +40,20 @@ impl HomeContext for HomePage {
         crate::connection_sort::sort_connections(connections, sort_order);
     }
 
+    fn database_open_mode(&self, cx: &App) -> domain_api::DatabaseTabMode {
+        let mode = if cx.has_global::<crate::setting_tab::AppSettings>() {
+            crate::setting_tab::AppSettings::global(cx).database_open_mode
+        } else {
+            one_core::settings::DatabaseOpenMode::default()
+        };
+        match mode {
+            one_core::settings::DatabaseOpenMode::Single => domain_api::DatabaseTabMode::Single,
+            one_core::settings::DatabaseOpenMode::Workspace => {
+                domain_api::DatabaseTabMode::Workspace
+            }
+        }
+    }
+
     fn notify(
         &mut self,
         level: NotifyLevel,
