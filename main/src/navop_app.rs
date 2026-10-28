@@ -1962,7 +1962,7 @@ mod tests {
     /// SQL 编辑器的重新登记。
     #[test]
     fn sql_editor_keybindings_are_registered_after_notes_init() {
-        let source = include_str!("main.rs");
+        let source = include_str!("lib.rs");
         let notes_init = source.find("notes::init(cx);").expect("notes::init");
         let rebind = source
             .find("db_view::sql_editor_view::refresh_keybindings(cx);")

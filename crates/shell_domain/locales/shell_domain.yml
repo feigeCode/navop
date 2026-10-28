@@ -1,5 +1,15 @@
 _version: 2
 
+Common:
+  cancel:
+    en: Cancel
+    zh-CN: 取消
+    zh-HK: 取消
+  delete:
+    en: Delete
+    zh-CN: 删除
+    zh-HK: 刪除
+
 SessionLogs:
   title:
     en: Session Logs

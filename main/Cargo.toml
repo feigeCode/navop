@@ -4,9 +4,10 @@ version = "0.22.0"
 publish.workspace = true
 edition.workspace = true
 
-[[bin]]
-name = "navop"
-path = "src/main.rs"
+[lib]
+name = "navop_app"
+path = "src/lib.rs"
+
 
 [dependencies]
 one-assets = { workspace = true }

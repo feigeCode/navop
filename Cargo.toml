@@ -1,5 +1,5 @@
 [workspace]
-default-members = ["main"]
+default-members = ["apps/navop"]
 members = [
     "crates/ai_chat_view",
     "crates/llm-connector",
@@ -49,6 +49,7 @@ members = [
     "tools/gpui-rdp-smoke",
     "tools/windows-rdp-probe",
     "main",
+    "apps/navop",
     "apps/navop-shell",
     "apps/navop-data",
     "crates/ssh",

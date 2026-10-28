@@ -8254,6 +8254,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "navop"
+version = "0.22.0"
+dependencies = [
+ "main",
+]
+
+[[package]]
 name = "navop-data"
 version = "0.1.0"
 dependencies = [

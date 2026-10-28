@@ -1,0 +1,11 @@
+[package]
+name = "navop"
+version = "0.22.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+main = { path = "../../main" }
+
+[lints]
+workspace = true
