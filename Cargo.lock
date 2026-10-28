@@ -8291,6 +8291,7 @@ dependencies = [
  "futures",
  "one-core",
  "redis-runtime",
+ "runtime_core",
  "rusqlite",
  "serde_json",
  "sftp",
@@ -11605,6 +11606,15 @@ dependencies = [
  "rustc_version",
  "syn 2.0.119",
  "unicode-ident",
+]
+
+[[package]]
+name = "runtime_core"
+version = "0.1.0"
+dependencies = [
+ "one-core",
+ "serde_json",
+ "tool_runtime",
 ]
 
 [[package]]

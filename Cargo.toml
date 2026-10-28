@@ -59,6 +59,7 @@ members = [
     "crates/sftp_view",
     "crates/one_ui",
     "crates/redis-runtime",
+    "crates/runtime_core",
     "crates/mongodb-runtime",
     "crates/redis_view",
     "crates/license_tool",
@@ -155,6 +156,7 @@ connection-import-protocol = { path = "crates/connection-import-protocol" }
 db_view = { path = "crates/db_view" }
 redis_view = { path = "crates/redis_view" }
 redis-runtime = { path = "crates/redis-runtime" }
+runtime_core = { path = "crates/runtime_core" }
 mongodb-runtime = { path = "crates/mongodb-runtime" }
 one-ui = { path = "crates/one_ui" }
 one-assets = { path = "crates/one-assets" }
