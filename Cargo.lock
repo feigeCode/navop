@@ -8277,13 +8277,20 @@ dependencies = [
 name = "navop-shell"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "app_kit",
  "domain_api",
+ "gpui-component",
  "gpui-fast",
  "gpui-fast-platform",
+ "gpui-kit-assets",
  "one-assets",
  "one-core",
+ "port_forwarding",
+ "remote_desktop_view",
  "shell_domain",
+ "terminal_view",
+ "tokio",
 ]
 
 [[package]]
