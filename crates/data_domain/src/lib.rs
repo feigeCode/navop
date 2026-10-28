@@ -9,6 +9,7 @@ use domain_api::{
 };
 use extension_runtime::database_driver_install::{DriverRequirement, required_driver_for_config};
 use gpui::{App, AppContext, Window};
+use mongodb_view::MongoTabView;
 use one_core::storage::{ConnectionType, StoredConnection};
 use one_core::tab_container::{TabItem, TabOpenMode};
 use redis_view::RedisTabView;
@@ -26,6 +27,10 @@ impl Domain for DataDomain {
         registry.register_connection_opener(
             ConnectionType::Database,
             Arc::new(DatabaseConnectionOpener),
+        );
+        registry.register_connection_opener(
+            ConnectionType::MongoDB,
+            Arc::new(MongoConnectionOpener),
         );
     }
 
@@ -172,6 +177,76 @@ impl ConnectionOpener for DatabaseConnectionOpener {
     }
 }
 
+struct MongoConnectionOpener;
+
+impl MongoConnectionOpener {
+    fn supports_type(connection_type: ConnectionType) -> bool {
+        connection_type == ConnectionType::MongoDB
+    }
+}
+
+impl ConnectionOpener for MongoConnectionOpener {
+    fn open(
+        &self,
+        connection: &StoredConnection,
+        mode: TabOpenMode,
+        home: &mut dyn HomeContext,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        if !Self::supports_type(connection.connection_type) {
+            return false;
+        }
+
+        let active_connection_id = connection.id;
+        let (tab_id, connections, workspace) =
+            match (home.database_open_mode(cx), connection.workspace_id) {
+                (DatabaseTabMode::Workspace, Some(workspace_id)) => {
+                    let mut connections: Vec<StoredConnection> = home
+                        .connections()
+                        .iter()
+                        .filter(|candidate| {
+                            candidate.connection_type == ConnectionType::MongoDB
+                                && candidate.workspace_id == Some(workspace_id)
+                        })
+                        .cloned()
+                        .collect();
+                    if connections.is_empty() {
+                        connections.push(connection.clone());
+                    }
+                    home.sort_connections(&mut connections, cx);
+                    (
+                        format!("workspace-mongodb-tab-{workspace_id}"),
+                        connections,
+                        home.workspace(workspace_id),
+                    )
+                }
+                _ => (
+                    format!("mongodb-{}", active_connection_id.unwrap_or(0)),
+                    vec![connection.clone()],
+                    None,
+                ),
+            };
+
+        let view = cx.new(|cx| {
+            MongoTabView::new_with_active_conn(
+                workspace,
+                connections,
+                active_connection_id,
+                window,
+                cx,
+            )
+            .with_external_sidebar()
+        });
+        home.open_tab(
+            TabItem::from_dyn(tab_id, "mongodb", Arc::new(view)),
+            mode,
+            window,
+            cx,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -191,5 +266,11 @@ mod tests {
     fn database_opener_accepts_only_database_type() {
         assert!(DatabaseConnectionOpener::supports_type(ConnectionType::Database));
         assert!(!DatabaseConnectionOpener::supports_type(ConnectionType::Redis));
+    }
+
+    #[test]
+    fn mongo_opener_accepts_only_mongodb_type() {
+        assert!(MongoConnectionOpener::supports_type(ConnectionType::MongoDB));
+        assert!(!MongoConnectionOpener::supports_type(ConnectionType::Database));
     }
 }

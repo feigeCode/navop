@@ -2966,6 +2966,7 @@ dependencies = [
  "domain_api",
  "extension-runtime",
  "gpui-fast",
+ "mongodb_view",
  "one-core",
  "redis_view",
 ]
