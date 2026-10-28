@@ -206,8 +206,8 @@ impl HomeContext for ShellHome {
         }
     }
 
-    fn port_forwarding_runtime(&self) -> Arc<tokio::sync::Mutex<PortForwardingRuntime>> {
-        Arc::clone(&self.port_forwarding_runtime)
+    fn port_forwarding_runtime(&self) -> Option<Arc<tokio::sync::Mutex<PortForwardingRuntime>>> {
+        Some(Arc::clone(&self.port_forwarding_runtime))
     }
 
     fn notify(&mut self, level: NotifyLevel, message: &str, window: &mut Window, cx: &mut App) {

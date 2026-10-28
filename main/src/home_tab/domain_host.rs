@@ -114,8 +114,8 @@ impl HomeContext for HomePage {
 
     fn port_forwarding_runtime(
         &self,
-    ) -> Arc<tokio::sync::Mutex<port_forwarding::PortForwardingRuntime>> {
-        Arc::clone(&self.port_forwarding_runtime)
+    ) -> Option<Arc<tokio::sync::Mutex<port_forwarding::PortForwardingRuntime>>> {
+        Some(Arc::clone(&self.port_forwarding_runtime))
     }
 
     fn notify(&mut self, level: NotifyLevel, message: &str, window: &mut Window, cx: &mut App) {

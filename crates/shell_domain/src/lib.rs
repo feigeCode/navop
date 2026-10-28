@@ -401,11 +401,10 @@ fn port_forwarding_config(
         .find(|conn| conn.id == Some(params.ssh_connection_id))
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("referenced SSH connection is missing"))?;
-    PortForwardingTabConfig::new(
-        connection.clone(),
-        ssh_connection,
-        home.port_forwarding_runtime(),
-    )
+    let runtime = home
+        .port_forwarding_runtime()
+        .ok_or_else(|| anyhow::anyhow!("port forwarding runtime is unavailable"))?;
+    PortForwardingTabConfig::new(connection.clone(), ssh_connection, runtime)
 }
 
 fn local_profile_kind(kind: TerminalProfileKind) -> LocalTerminalProfileKind {

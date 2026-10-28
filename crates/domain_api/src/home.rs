@@ -69,7 +69,7 @@ pub trait HomeContext: TabHost {
     ) -> Option<StoredConnection>;
 
     /// 应用级端口转发运行时；端口转发 Tab 与宿主共享同一组隧道。
-    fn port_forwarding_runtime(&self) -> Arc<tokio::sync::Mutex<PortForwardingRuntime>>;
+    fn port_forwarding_runtime(&self) -> Option<Arc<tokio::sync::Mutex<PortForwardingRuntime>>>;
 
     fn notify(&mut self, level: NotifyLevel, message: &str, window: &mut Window, cx: &mut App);
 }
