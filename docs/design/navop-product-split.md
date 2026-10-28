@@ -894,3 +894,24 @@ apps/*        不得直接依赖域 crate（只能经 *_domain）
 - [ ] 全量 app 的 bundle id/数据目录/更新源未变。
 - [ ] 253 处 `include_str!` 测试全部迁移或改写。
 - [ ] 三产品在 6 平台安装/启动/更新 smoke 通过。
+
+## 17. 实施进度（2026-10-29）
+
+分支：`refactor/product-split`（基于 `dev@3dbe5f87a`）。
+
+| 提交 | 内容 | 状态 |
+| --- | --- | --- |
+| `8093ed9d9` | 本文档 | 已完成 |
+| `312aa8e8b` | `navop_runtime` 的 `database`/`redis`/`sftp` 可选特性 | 已完成，三种组合均通过 `cargo check`/`cargo test` |
+| `d83316cb9` | `TabItem::from_dyn` + 单测 | 已完成 |
+| `dc3c7e98d` | `domain_api`：`AppIdentity`/`Product`/`Domain`/`TabIntent`/`DomainRegistry` | 已完成，5 个单测 |
+| `e4181254e` | `HomePage` 实现 `TabHost`/`HomeContext` | 已完成，`main` 编译通过 |
+| `e12c7945b` | `extension-runtime` 的 `database`/`remote-desktop` 可选特性 | 已完成，默认/无域/仅 wasm 三种组合编译通过 |
+| `62d38c9ce` | Shell 侧下游关闭扩展默认域特性 | 已完成，`terminal_view` 闭包已无 `db`/`db_view`/`redis-runtime`/`mongodb-runtime` |
+| `4bc1361c8` | 抽出 `crates/ssh_form`（SSH 表单 + 主机密钥 UI + MFA） | 已完成，51 个测试通过 |
+
+尚未开始：`app_kit`、`data_domain`、`shell_domain`、`runtime_core/runtime_database` 独立包、三个 `apps/*` bin、身份/数据目录切换、打包与 CI 矩阵。
+
+已知问题：`extension-runtime` 的 `db_tree_action_runs_registered_wasm_component` 在本机因 fixture 指向 `.wat` 文本而失败（`bad magic number`），与本次改动无关；其余 227 个测试通过。`ssh_form` 暂用 `edition = "2021"` 以保持与原实现一致，后续随 `terminal_view` 一起升级。
+
+下一步建议：先抽 `app_kit` 的 `Product` 启动骨架与身份切换，再迁 `shell_domain`（先 KnownHosts/本地终端），最后迁 `data_domain`（先 Redis，再 Database）。
