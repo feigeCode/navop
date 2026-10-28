@@ -67,6 +67,7 @@ one-core.workspace = true
 domain_api.workspace = true
 app_kit.workspace = true
 shell_domain.workspace = true
+data_domain.workspace = true
 one-ui.workspace = true
 navop_runtime.workspace = true
 reqwest_client.workspace = true

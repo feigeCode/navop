@@ -15,3 +15,4 @@ gpui.workspace = true
 gpui_platform.workspace = true
 one-core.workspace = true
 one-assets.workspace = true
+data_domain.workspace = true

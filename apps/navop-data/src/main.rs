@@ -23,7 +23,7 @@ impl Product for DataProduct {
     }
 
     fn domains(&self) -> Vec<Arc<dyn domain_api::Domain>> {
-        Vec::new()
+        vec![Arc::new(data_domain::DataDomain)]
     }
 }
 

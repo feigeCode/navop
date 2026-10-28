@@ -270,7 +270,10 @@ impl domain_api::Product for FullProduct {
     }
 
     fn domains(&self) -> Vec<std::sync::Arc<dyn domain_api::Domain>> {
-        vec![std::sync::Arc::new(shell_domain::ShellDomain)]
+        vec![
+            std::sync::Arc::new(shell_domain::ShellDomain),
+            std::sync::Arc::new(data_domain::DataDomain),
+        ]
     }
 
     fn init(&self, cx: &mut gpui::App) -> anyhow::Result<()> {

@@ -2958,6 +2958,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be1e0bca6c3637f992fc1cc7cbc52a78c1ef6db076dbf1059c4323d6a2048376"
 
 [[package]]
+name = "data_domain"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "domain_api",
+ "gpui-fast",
+ "one-core",
+ "redis_view",
+]
+
+[[package]]
 name = "db"
 version = "0.15.2"
 dependencies = [
@@ -7525,6 +7536,7 @@ dependencies = [
  "chrono",
  "connection-form",
  "connection-import-protocol",
+ "data_domain",
  "db",
  "db_view",
  "dirs 6.0.0",
@@ -8241,6 +8253,7 @@ name = "navop-data"
 version = "0.1.0"
 dependencies = [
  "app_kit",
+ "data_domain",
  "domain_api",
  "gpui-fast",
  "gpui-fast-platform",

@@ -129,6 +129,10 @@ impl HomePage {
         let workspace = connection
             .workspace_id
             .and_then(|id| self.workspaces.iter().find(|w| w.id == Some(id)).cloned());
+        if app_kit::registry().open_connection(&connection, open_mode, self, window, cx) {
+            cx.notify();
+            return;
+        }
         let strategy = build_connection_open_strategy(connection, workspace);
         strategy.open(self, open_mode, window, cx);
         cx.notify();
