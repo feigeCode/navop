@@ -1540,3 +1540,21 @@ test("release version source stays aligned with the navop product package", () =
   assert.ok(mainVersion, "main/Cargo.toml must declare a version");
   assert.equal(navopVersion, mainVersion, "apps/navop/Cargo.toml version must match main");
 });
+
+test("standalone products ship their own Linux desktop identity and portable marker", () => {
+  const shellDesktop = read("resources/linux/navop-shell.desktop");
+  const dataDesktop = read("resources/linux/navop-data.desktop");
+  const script = read("script/package-linux-product.sh");
+  const shellIdentity = read("crates/domain_api/src/identity.rs");
+
+  assert.match(shellDesktop, /^Name=Navop Shell$/m);
+  assert.match(shellDesktop, /^Exec=navop-shell %F$/m);
+  assert.match(shellDesktop, /^StartupWMClass=navop-shell$/m);
+  assert.match(dataDesktop, /^Name=Navop Data$/m);
+  assert.match(dataDesktop, /^Exec=navop-data %F$/m);
+  assert.match(dataDesktop, /^StartupWMClass=navop-data$/m);
+  assert.match(script, /PORTABLE_MARKER="navop-shell\.portable"/);
+  assert.match(script, /PORTABLE_MARKER="navop-data\.portable"/);
+  assert.match(shellIdentity, /portable_marker: "navop-shell\.portable"/);
+  assert.match(shellIdentity, /portable_marker: "navop-data\.portable"/);
+});

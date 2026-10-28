@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Navop Data
+Comment=Navop Data - Database, Redis, MongoDB, SQL
+Exec=navop-data %F
+Icon=navop-data
+Type=Application
+Categories=Development;Utility;Database;
+Terminal=false
+StartupWMClass=navop-data
+Keywords=database;sql;postgresql;mysql;sqlite;duckdb;redis;mongodb;
