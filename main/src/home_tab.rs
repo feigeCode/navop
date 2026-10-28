@@ -274,6 +274,7 @@ pub(crate) mod connection_selection;
 mod connection_type_filter_bar;
 mod content;
 mod data;
+mod domain_host;
 mod encryption;
 mod forwarding;
 mod grid;

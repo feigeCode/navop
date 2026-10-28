@@ -153,6 +153,7 @@ remote_desktop_view = { path = "crates/remote_desktop_view" }
 windows_rdp_host = { path = "crates/windows_rdp_host" }
 sftp_view = { path = "crates/sftp_view" }
 one-core = { path = "crates/core" }
+domain_api = { path = "crates/domain_api" }
 mongodb_view = {path = "crates/mongodb_view"}
 navop_runtime = { path = "crates/navop_runtime" }
 remote_file_editor = { path = "crates/remote_file_editor" }
