@@ -3,8 +3,19 @@
 //! `app_kit` 只负责把产品身份落到进程级配置（数据目录、keychain），
 //! 再调用产品自己的领域初始化；它不依赖任何具体领域 crate。
 
-use domain_api::{AppIdentity, Product};
+use domain_api::{AppIdentity, DomainRegistry, Product};
 use gpui::App;
+use std::sync::OnceLock;
+
+static DOMAIN_REGISTRY: OnceLock<DomainRegistry> = OnceLock::new();
+static EMPTY_DOMAIN_REGISTRY: OnceLock<DomainRegistry> = OnceLock::new();
+
+/// 当前产品注册的领域表；未 bootstrap 时返回空表。
+pub fn registry() -> &'static DomainRegistry {
+    DOMAIN_REGISTRY
+        .get()
+        .unwrap_or_else(|| EMPTY_DOMAIN_REGISTRY.get_or_init(DomainRegistry::default))
+}
 
 /// 在访问任何数据目录 / keychain 之前应用产品身份。
 ///
@@ -32,6 +43,12 @@ pub fn configure_identity(identity: &'static AppIdentity) {
 /// 各产品的错误处理策略写死。
 pub fn bootstrap<P: Product>(product: &P, cx: &mut App) -> anyhow::Result<()> {
     configure_identity(product.identity());
+    let mut registry = DomainRegistry::default();
+    for domain in product.domains() {
+        registry.register_domain(domain.id());
+        domain.register(&mut registry);
+    }
+    let _ = DOMAIN_REGISTRY.set(registry);
     product.init(cx)
 }
 

@@ -1,0 +1,12 @@
+[package]
+name = "shell_domain"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+domain_api.workspace = true
+gpui.workspace = true
+known_hosts_view.workspace = true
+one-core.workspace = true

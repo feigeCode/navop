@@ -21,6 +21,7 @@ members = [
     "crates/tool_runtime",
     "crates/domain_api",
     "crates/app_kit",
+    "crates/shell_domain",
     "crates/ssh_form",
     "crates/universal-plugins",
     "crates/navop_runtime",
@@ -176,6 +177,7 @@ sftp_view = { path = "crates/sftp_view" }
 one-core = { path = "crates/core" }
 domain_api = { path = "crates/domain_api" }
 app_kit = { path = "crates/app_kit" }
+shell_domain = { path = "crates/shell_domain" }
 ssh_form = { path = "crates/ssh_form" }
 mongodb_view = {path = "crates/mongodb_view"}
 navop_runtime = { path = "crates/navop_runtime" }

@@ -270,7 +270,7 @@ impl domain_api::Product for FullProduct {
     }
 
     fn domains(&self) -> Vec<std::sync::Arc<dyn domain_api::Domain>> {
-        Vec::new()
+        vec![std::sync::Arc::new(shell_domain::ShellDomain)]
     }
 
     fn init(&self, cx: &mut gpui::App) -> anyhow::Result<()> {
@@ -920,7 +920,7 @@ mod embedded_cli_removal_tests {
             .find("migrate_legacy_directories()")
             .expect("startup directory migration");
         let assets = source
-            .find("AppAssets::new()")
+            .find(".with_assets(AppAssets::new())")
             .expect("application asset initialization");
 
         assert!(resolution < migration);

@@ -1386,6 +1386,25 @@ impl HomePage {
     }
 
     pub(crate) fn add_known_hosts_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(item) = app_kit::registry().open_tab(
+            &domain_api::TabIntent::KnownHosts,
+            self,
+            window,
+            cx,
+        ) {
+            let tab_container = self.active_tab_container(cx);
+            window.defer(cx, move |window, cx| {
+                tab_container.update(cx, |tabs, cx| {
+                    tabs.activate_or_add_tab_lazy(
+                        "known-hosts",
+                        move |_window, _cx| item,
+                        window,
+                        cx,
+                    );
+                });
+            });
+            return;
+        }
         let tab_container = self.active_tab_container(cx);
         window.defer(cx, move |window, cx| {
             tab_container.update(cx, |tabs, cx| {
