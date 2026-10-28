@@ -7,7 +7,10 @@ use db_view::database_tab::DatabaseTabView;
 use domain_api::{
     ConnectionOpener, DatabaseTabMode, Domain, DomainId, DomainRegistry, HomeContext,
 };
-use extension_runtime::database_driver_install::{DriverRequirement, required_driver_for_config};
+use extension_runtime::database_driver_install::{
+    DriverRequirement, database_driver_meets_requirement, prompt_install_database_driver_app,
+    required_driver_for_config,
+};
 use gpui::{App, AppContext, Window};
 use mongodb_view::MongoTabView;
 use one_core::storage::{ConnectionType, StoredConnection};
@@ -28,10 +31,8 @@ impl Domain for DataDomain {
             ConnectionType::Database,
             Arc::new(DatabaseConnectionOpener),
         );
-        registry.register_connection_opener(
-            ConnectionType::MongoDB,
-            Arc::new(MongoConnectionOpener),
-        );
+        registry
+            .register_connection_opener(ConnectionType::MongoDB, Arc::new(MongoConnectionOpener));
     }
 
     fn init(&self, _cx: &mut App) -> anyhow::Result<()> {
@@ -134,12 +135,26 @@ impl ConnectionOpener for DatabaseConnectionOpener {
         let Ok(config) = connection.to_db_connection() else {
             return false;
         };
-        // 需要外部驱动的连接仍交给 main 的驱动守卫/安装提示处理。
-        if !matches!(
-            required_driver_for_config(&config),
-            DriverRequirement::NotRequired
-        ) {
-            return false;
+        match required_driver_for_config(&config) {
+            DriverRequirement::NotRequired => {}
+            DriverRequirement::InvalidConfig { message } => {
+                home.notify(domain_api::NotifyLevel::Error, &message, window, cx);
+                return true;
+            }
+            DriverRequirement::Required {
+                driver_id,
+                minimum_version,
+            } => {
+                if !database_driver_meets_requirement(&driver_id, minimum_version.as_deref()) {
+                    prompt_install_database_driver_app(
+                        cx,
+                        window,
+                        driver_id,
+                        connection.name.clone(),
+                    );
+                    return true;
+                }
+            }
         }
 
         let open_mode = home.database_open_mode(cx);
@@ -281,18 +296,28 @@ mod tests {
     #[test]
     fn redis_opener_accepts_only_redis_type() {
         assert!(RedisConnectionOpener::supports_type(ConnectionType::Redis));
-        assert!(!RedisConnectionOpener::supports_type(ConnectionType::Database));
+        assert!(!RedisConnectionOpener::supports_type(
+            ConnectionType::Database
+        ));
     }
 
     #[test]
     fn database_opener_accepts_only_database_type() {
-        assert!(DatabaseConnectionOpener::supports_type(ConnectionType::Database));
-        assert!(!DatabaseConnectionOpener::supports_type(ConnectionType::Redis));
+        assert!(DatabaseConnectionOpener::supports_type(
+            ConnectionType::Database
+        ));
+        assert!(!DatabaseConnectionOpener::supports_type(
+            ConnectionType::Redis
+        ));
     }
 
     #[test]
     fn mongo_opener_accepts_only_mongodb_type() {
-        assert!(MongoConnectionOpener::supports_type(ConnectionType::MongoDB));
-        assert!(!MongoConnectionOpener::supports_type(ConnectionType::Database));
+        assert!(MongoConnectionOpener::supports_type(
+            ConnectionType::MongoDB
+        ));
+        assert!(!MongoConnectionOpener::supports_type(
+            ConnectionType::Database
+        ));
     }
 }

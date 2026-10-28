@@ -8270,6 +8270,7 @@ dependencies = [
  "db",
  "db_view",
  "domain_api",
+ "extension-runtime",
  "gpui-component",
  "gpui-fast",
  "gpui-fast-platform",

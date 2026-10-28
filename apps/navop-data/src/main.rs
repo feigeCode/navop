@@ -43,6 +43,7 @@ impl Product for DataProduct {
         cx.set_global(settings);
         one_ui::init(cx, Default::default());
         db::init_cache(cx);
+        extension_runtime::init(cx);
         db_view::search_shortcut::init(cx);
         db_view::sql_editor_view::init(cx);
         redis_view::init(cx);

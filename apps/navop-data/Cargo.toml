@@ -16,6 +16,7 @@ gpui_platform.workspace = true
 one-core.workspace = true
 one-assets.workspace = true
 data_domain.workspace = true
+extension-runtime.workspace = true
 anyhow.workspace = true
 db.workspace = true
 db_view.workspace = true
