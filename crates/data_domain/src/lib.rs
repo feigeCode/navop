@@ -82,17 +82,31 @@ impl ConnectionOpener for RedisConnectionOpener {
                     home.workspace(workspace_id),
                 )
             }
-            None => (format!("redis-{}", connection_id.unwrap_or(0)), vec![connection], None),
+            None => (
+                format!("redis-{}", connection_id.unwrap_or(0)),
+                vec![connection],
+                None,
+            ),
         };
-        let view = cx.new(|cx| {
-            RedisTabView::new_with_active_conn(workspace, connections, connection_id, window, cx)
-                .with_external_sidebar()
-        });
-        home.open_tab(
-            TabItem::from_dyn(tab_id, "redis", Arc::new(view)),
+        let item_id = tab_id.clone();
+        home.open_tab_lazy(
+            tab_id,
             mode,
             window,
             cx,
+            Box::new(move |window, cx| {
+                let view = cx.new(|cx| {
+                    RedisTabView::new_with_active_conn(
+                        workspace,
+                        connections,
+                        connection_id,
+                        window,
+                        cx,
+                    )
+                    .with_external_sidebar()
+                });
+                TabItem::from_dyn(item_id, "redis", Arc::new(view))
+            }),
         )
     }
 }
@@ -158,21 +172,25 @@ impl ConnectionOpener for DatabaseConnectionOpener {
             ),
         };
 
-        let view = cx.new(|cx| {
-            DatabaseTabView::new_with_active_conn(
-                workspace,
-                connections,
-                active_connection_id,
-                window,
-                cx,
-            )
-            .with_external_sidebar()
-        });
-        home.open_tab(
-            TabItem::from_dyn(tab_id, "home", Arc::new(view)),
+        let item_id = tab_id.clone();
+        home.open_tab_lazy(
+            tab_id,
             mode,
             window,
             cx,
+            Box::new(move |window, cx| {
+                let view = cx.new(|cx| {
+                    DatabaseTabView::new_with_active_conn(
+                        workspace,
+                        connections,
+                        active_connection_id,
+                        window,
+                        cx,
+                    )
+                    .with_external_sidebar()
+                });
+                TabItem::from_dyn(item_id, "home", Arc::new(view))
+            }),
         )
     }
 }
@@ -228,21 +246,25 @@ impl ConnectionOpener for MongoConnectionOpener {
                 ),
             };
 
-        let view = cx.new(|cx| {
-            MongoTabView::new_with_active_conn(
-                workspace,
-                connections,
-                active_connection_id,
-                window,
-                cx,
-            )
-            .with_external_sidebar()
-        });
-        home.open_tab(
-            TabItem::from_dyn(tab_id, "mongodb", Arc::new(view)),
+        let item_id = tab_id.clone();
+        home.open_tab_lazy(
+            tab_id,
             mode,
             window,
             cx,
+            Box::new(move |window, cx| {
+                let view = cx.new(|cx| {
+                    MongoTabView::new_with_active_conn(
+                        workspace,
+                        connections,
+                        active_connection_id,
+                        window,
+                        cx,
+                    )
+                    .with_external_sidebar()
+                });
+                TabItem::from_dyn(item_id, "mongodb", Arc::new(view))
+            }),
         )
     }
 }

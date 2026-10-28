@@ -246,9 +246,17 @@ impl ConnectionOpener for PortForwardingConnectionOpener {
             return false;
         };
         let connection_id = connection.id.unwrap_or(0);
-        let tab = cx.new(|cx| PortForwardingTab::new(config, cx));
-        let item = TabItem::new(format!("port-forwarding-{connection_id}"), "home", tab);
-        home.open_tab(item, mode, window, cx)
+        let tab_id = format!("port-forwarding-{connection_id}");
+        home.open_tab_lazy(
+            tab_id.clone(),
+            mode,
+            window,
+            cx,
+            Box::new(move |_window, cx| {
+                let tab = cx.new(|cx| PortForwardingTab::new(config, cx));
+                TabItem::new(tab_id, "home", tab)
+            }),
+        )
     }
 }
 

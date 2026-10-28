@@ -35,6 +35,29 @@ impl TabHost for HomePage {
         });
         true
     }
+
+    fn open_tab_lazy(
+        &mut self,
+        id: String,
+        mode: TabOpenMode,
+        window: &mut Window,
+        cx: &mut App,
+        build: Box<dyn FnOnce(&mut Window, &mut App) -> TabItem>,
+    ) -> bool {
+        let tab_container = self.tab_container.clone();
+        window.defer(cx, move |window, cx| {
+            tab_container.update(cx, |container, cx| {
+                container.activate_or_add_tab_lazy_with_mode(
+                    id,
+                    mode,
+                    move |window, cx| build(window, cx),
+                    window,
+                    cx,
+                );
+            });
+        });
+        true
+    }
 }
 
 impl HomeContext for HomePage {

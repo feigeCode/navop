@@ -18,6 +18,20 @@ pub trait TabHost {
     fn open_tab_with_focus(&mut self, item: TabItem, window: &mut Window, cx: &mut App) -> bool {
         self.open_tab(item, TabOpenMode::Activate, window, cx)
     }
+
+    /// 按 id 惰性打开 Tab：已存在同 id 标签时直接激活，不执行 `build`。
+    /// 数据库、Redis、端口转发等“打开即建立连接”的领域必须用它。
+    fn open_tab_lazy(
+        &mut self,
+        _id: String,
+        mode: TabOpenMode,
+        window: &mut Window,
+        cx: &mut App,
+        build: Box<dyn FnOnce(&mut Window, &mut App) -> TabItem>,
+    ) -> bool {
+        let item = build(window, cx);
+        self.open_tab(item, mode, window, cx)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
