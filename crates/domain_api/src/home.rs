@@ -24,5 +24,11 @@ pub enum NotifyLevel {
 pub trait HomeContext: TabHost {
     fn connections(&self) -> &[StoredConnection];
 
-    fn notify(&mut self, level: NotifyLevel, message: &str);
+    fn notify(
+        &mut self,
+        level: NotifyLevel,
+        message: &str,
+        window: &mut Window,
+        cx: &mut App,
+    );
 }
