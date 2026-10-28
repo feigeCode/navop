@@ -415,8 +415,8 @@ mod tests {
                 ),
             ),
             (
-                "crates/terminal_view/src/ssh_form_window.rs",
-                include_str!("../../../crates/terminal_view/src/ssh_form_window.rs"),
+                "crates/ssh_form/src/ssh_form_window.rs",
+                include_str!("../../../crates/ssh_form/src/ssh_form_window.rs"),
             ),
             (
                 "crates/terminal_view/src/ftp_form_window.rs",
@@ -521,8 +521,8 @@ mod tests {
                 include_str!("../../../crates/terminal_view/src/serial_form_window.rs"),
             ),
             (
-                "crates/terminal_view/src/ssh_form_window.rs",
-                include_str!("../../../crates/terminal_view/src/ssh_form_window.rs"),
+                "crates/ssh_form/src/ssh_form_window.rs",
+                include_str!("../../../crates/ssh_form/src/ssh_form_window.rs"),
             ),
             (
                 "crates/terminal_view/src/telnet_form_window.rs",
@@ -603,8 +603,8 @@ mod tests {
                 "fn mark_saved(&mut self, saved: &StoredConnection",
             ),
             (
-                "crates/terminal_view/src/ssh_form_window.rs",
-                include_str!("../../../crates/terminal_view/src/ssh_form_window.rs"),
+                "crates/ssh_form/src/ssh_form_window.rs",
+                include_str!("../../../crates/ssh_form/src/ssh_form_window.rs"),
                 "fn mark_saved(&mut self, saved: &StoredConnection",
             ),
             (

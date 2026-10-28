@@ -1,0 +1,10 @@
+[package]
+name = "app_kit"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+domain_api.workspace = true
+gpui.workspace = true
+one-core.workspace = true

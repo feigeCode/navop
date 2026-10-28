@@ -20,6 +20,7 @@ members = [
     "crates/extension-wasm",
     "crates/tool_runtime",
     "crates/domain_api",
+    "crates/app_kit",
     "crates/ssh_form",
     "crates/universal-plugins",
     "crates/navop_runtime",
@@ -155,6 +156,7 @@ windows_rdp_host = { path = "crates/windows_rdp_host" }
 sftp_view = { path = "crates/sftp_view" }
 one-core = { path = "crates/core" }
 domain_api = { path = "crates/domain_api" }
+app_kit = { path = "crates/app_kit" }
 ssh_form = { path = "crates/ssh_form" }
 mongodb_view = {path = "crates/mongodb_view"}
 navop_runtime = { path = "crates/navop_runtime" }

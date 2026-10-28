@@ -413,7 +413,7 @@ mod tests {
             ),
             (
                 "ssh",
-                include_str!("../../terminal_view/src/ssh_form_window.rs"),
+                include_str!("../../ssh_form/src/ssh_form_window.rs"),
             ),
             (
                 "serial",

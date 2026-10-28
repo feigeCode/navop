@@ -456,6 +456,7 @@ fn main() {
         tracing::warn!(%error, "failed to enqueue initial startup request");
     }
 
+    app_kit::configure_identity(&domain_api::AppIdentity::FULL);
     if resolved_paths.uses_installed_directories()
         && let Err(error) = one_core::app_dirs::migrate_legacy_directories()
     {
