@@ -50,6 +50,8 @@ jobs:
           matrix+='{"product":"navop-data","label":"macos-arm64","os":"macos-latest","target":"aarch64-apple-darwin","app":"Navop Data.app"},'
           matrix+='{"product":"navop-data","label":"macos-x64","os":"macos-15-intel","target":"x86_64-apple-darwin","app":"Navop Data.app"},'
           matrix+='{"product":"navop-data","label":"linux-x64","os":"ubuntu-latest","target":"x86_64-unknown-linux-gnu","app":""}'
+          matrix+='{"product":"navop-shell","label":"windows-x64","os":"windows-latest","target":"x86_64-pc-windows-msvc","app":""},'
+          matrix+='{"product":"navop-data","label":"windows-x64","os":"windows-latest","target":"x86_64-pc-windows-msvc","app":""}'
           matrix+=']}'
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -78,7 +80,17 @@ jobs:
           cache: false
 
       - name: Install system dependencies
+        if: runner.os != 'Windows'
         run: script/bootstrap
+
+      - name: Install Windows build dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install nasm --no-progress --yes
+          $nasmDir = Join-Path $env:ProgramFiles "NASM"
+          $nasmDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          nasm -v
 
       - name: Build product
         run: cargo build --release -p "${{ matrix.product }}" --target "${{ matrix.target }}"
@@ -99,6 +111,23 @@ jobs:
           set -euo pipefail
           script/package-linux-product.sh "${{ matrix.product }}" "${{ matrix.target }}"
 
+      - name: Package Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          node script/generate-windows-license.mjs
+          dotnet tool install --global wix --version 6.0.2
+          wix extension add -g WixToolset.UI.wixext/6.0.2
+          wix extension add -g WixToolset.BootstrapperApplications.wixext/6.0.2
+          New-Item -ItemType Directory -Force -Path package | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.product }}.exe" "package/${{ matrix.product }}.exe"
+          ./installer/windows/build-product-installer.ps1 `
+            -Product "${{ matrix.product }}" `
+            -Version "$env:ONETCLI_VERSION" `
+            -SourceDir package `
+            -OutDir dist `
+            -Arch x64
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -108,3 +137,5 @@ jobs:
             target/*.dmg
             target/${{ matrix.product }}-${{ matrix.target }}*.tar.gz
             target/${{ matrix.product }}-*${{ matrix.target }}*.tar.gz
+            dist/*.msi
+            dist/*.exe

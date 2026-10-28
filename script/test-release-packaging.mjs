@@ -1568,3 +1568,31 @@ test("standalone products workflow builds Shell and Data on macOS and Linux", ()
   assert.match(workflow, /script\/package-linux-product\.sh "\$\{\{ matrix\.product \}\}"/);
   assert.match(workflow, /cargo build --release -p "\$\{\{ matrix\.product \}\}"/);
 });
+
+
+test("standalone Windows installers keep distinct upgrade identities", () => {
+  const script = read("installer/windows/build-product-installer.ps1");
+  const msi = read("installer/windows/navop-product.wxs");
+  const bundle = read("installer/windows/navop-product-bundle.wxs");
+  const full = read("installer/windows/navop.wxs");
+
+  assert.match(script, /"navop-shell"\s*=\s*@\{/);
+  assert.match(script, /"navop-data"\s*=\s*@\{/);
+  assert.match(script, /6B438332-1757-4910-965B-F85C7B6B0F37/);
+  assert.match(script, /E3605D1B-559A-4C46-B03A-A4770236A48A/);
+  assert.doesNotMatch(script, /2EAB58E6-27F7-4D97-81A1-7CE4B50FA294/);
+  assert.match(msi, /UpgradeCode="\$\(var\.UpgradeCode\)"/);
+  assert.match(msi, /Source="\$\(var\.SourceDir\)\\\$\(var\.ExeName\)"/);
+  assert.match(bundle, /Id="feigeCode\.\$\(var\.BundleId\)"/);
+  assert.doesNotMatch(msi, /CFBundle|ProgId/);
+  assert.match(full, /2EAB58E6-27F7-4D97-81A1-7CE4B50FA294/);
+});
+
+
+test("standalone CI builds Windows installers for both products", () => {
+  const workflow = read(".github/workflows/standalone-products.yml");
+  assert.match(workflow, /"product":"navop-shell","label":"windows-x64"/);
+  assert.match(workflow, /"product":"navop-data","label":"windows-x64"/);
+  assert.match(workflow, /build-product-installer\.ps1/);
+  assert.match(workflow, /WixToolset\.BootstrapperApplications/);
+});
