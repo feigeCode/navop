@@ -923,8 +923,9 @@ apps/*        不得直接依赖域 crate（只能经 *_domain）
 | `f0cb91d75` | SSH 终端经 `ConnectionOpener` 打开；新增 `app_kit::ShellHost` 事件桥，SFTP/保存临时连接回到当前 `HomePage`；`HomeContext::keep_subscription` 保管事件订阅 | 已完成，`main` 767 个测试、`shell_domain` 4 个测试通过 |
 | `36b4818ee` | SFTP 双栏视图经 `ConnectionOpener::open_sftp` 打开；`ShellHost` 增加 SFTP→本地终端/SSH 终端回调，`HomePage` 保留原标签序号与聚焦行为 | 已完成，`main` 767 个测试，改动 crate 以 `-Dwarnings` 通过 clippy |
 | `9a5455c47` | 端口转发连接经 `ConnectionOpener` 打开；`HomeContext` 暴露 `port_forwarding_runtime`，领域与宿主共享隧道运行时 | 已完成，`main` 767 个测试、`shell_domain` 5 个测试通过 |
+| `0209bdb91` | `TabHost::open_tab_lazy` 惰性创建；数据库/Redis/Mongo/端口转发已存在同 id 标签时只激活，不重复建连 | 已完成，`main` 767 个测试，`domain_api`/`shell_domain`/`data_domain` 测试通过 |
 
-尚未开始：`runtime_core/runtime_database` 独立包、`apps/navop` 全量包、打包与 CI 矩阵；`shell_domain` 仍缺 RDP/VNC 的 Tab 打开（SSH、SFTP、端口转发已迁入）。
+尚未开始：`runtime_core/runtime_database` 独立包、`apps/navop` 全量包、打包与 CI 矩阵；`shell_domain` 仍缺 RDP/VNC 的 Tab 打开（SSH、SFTP、端口转发已迁入）。注意：构建期间磁盘曾满，已清理 `target` 与 mbx 增量/action 缓存；后续构建缓存会重建。
 
 已知问题：`extension-runtime` 的 `db_tree_action_runs_registered_wasm_component` 在本机因 fixture 指向 `.wat` 文本而失败（`bad magic number`），与本次改动无关；其余 227 个测试通过。`ssh_form` 暂用 `edition = "2021"` 以保持与原实现一致，后续随 `terminal_view` 一起升级。
 
