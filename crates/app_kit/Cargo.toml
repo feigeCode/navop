@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+anyhow.workspace = true
 domain_api.workspace = true
 gpui.workspace = true
 one-core.workspace = true

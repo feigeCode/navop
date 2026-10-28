@@ -31,5 +31,6 @@ pub trait Domain: Send + Sync {
 
     fn register(&self, registry: &mut super::DomainRegistry);
 
-    fn init(&self, cx: &mut App);
+    /// 领域初始化；返回错误时由产品启动流程决定是否退出。
+    fn init(&self, cx: &mut App) -> anyhow::Result<()>;
 }

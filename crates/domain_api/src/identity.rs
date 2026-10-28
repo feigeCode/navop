@@ -120,10 +120,11 @@ pub trait Product: 'static {
 
     fn domains(&self) -> Vec<Arc<dyn super::Domain>>;
 
-    fn init(&self, cx: &mut App) {
+    fn init(&self, cx: &mut App) -> anyhow::Result<()> {
         for domain in self.domains() {
-            domain.init(cx);
+            domain.init(cx)?;
         }
+        Ok(())
     }
 }
 

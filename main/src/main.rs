@@ -252,6 +252,32 @@ impl AppAssets {
     }
 }
 
+struct FullProduct;
+
+impl domain_api::Product for FullProduct {
+    type Assets = AppAssets;
+
+    fn identity(&self) -> &'static domain_api::AppIdentity {
+        &domain_api::AppIdentity::FULL
+    }
+
+    fn features(&self) -> domain_api::ProductFeatures {
+        domain_api::ProductFeatures::FULL
+    }
+
+    fn assets(&self) -> Self::Assets {
+        AppAssets::new()
+    }
+
+    fn domains(&self) -> Vec<std::sync::Arc<dyn domain_api::Domain>> {
+        Vec::new()
+    }
+
+    fn init(&self, cx: &mut gpui::App) -> anyhow::Result<()> {
+        navop_app::init(cx)
+    }
+}
+
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<std::borrow::Cow<'static, [u8]>>> {
         if path == NAVOP_ICON_ASSET_PATH {
@@ -504,7 +530,7 @@ fn main() {
             .expect("main package version must be valid semver");
         extension_runtime::set_current_host_version(env!("CARGO_PKG_VERSION"))
             .expect("main package version must be valid semver");
-        if let Err(error) = navop_app::init(cx) {
+        if let Err(error) = app_kit::bootstrap(&FullProduct, cx) {
             tracing::error!(error = %error, "failed to initialize Navop application state");
             eprintln!("Failed to initialize Navop application state: {error:#}");
             cx.quit();

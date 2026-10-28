@@ -27,9 +27,12 @@ pub fn configure_identity(identity: &'static AppIdentity) {
 }
 
 /// 应用身份后初始化产品领域。
-pub fn bootstrap<P: Product>(product: &P, cx: &mut App) {
+///
+/// 返回错误由调用方决定是否退出；`app_kit` 不在这里 `expect`，避免把
+/// 各产品的错误处理策略写死。
+pub fn bootstrap<P: Product>(product: &P, cx: &mut App) -> anyhow::Result<()> {
     configure_identity(product.identity());
-    product.init(cx);
+    product.init(cx)
 }
 
 #[cfg(test)]

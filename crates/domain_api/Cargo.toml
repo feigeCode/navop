@@ -5,6 +5,7 @@ publish.workspace = true
 edition.workspace = true
 
 [dependencies]
+anyhow.workspace = true
 gpui = { workspace = true }
 one-core = { workspace = true }
 
