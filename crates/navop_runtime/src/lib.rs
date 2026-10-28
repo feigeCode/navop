@@ -1,6 +1,9 @@
 pub mod connections;
+#[cfg(feature = "database")]
 pub mod database_tools;
+#[cfg(feature = "redis")]
 pub mod redis_tools;
+#[cfg(feature = "sftp")]
 pub mod sftp_tools;
 pub mod workspaces;
 
@@ -22,12 +25,16 @@ pub fn tool_registry_with_version(
     repo: std::sync::Arc<one_core::storage::ConnectionRepository>,
     version: &'static str,
 ) -> Result<tool_runtime::ToolRegistry, tool_runtime::ToolRegistryError> {
-    tool_runtime::ToolRegistry::merge(vec![
+    #[allow(unused_mut)]
+    let mut registries = vec![
         builtin_tool_registry_with_version(version),
         connections::connection_tool_registry(repo.clone()),
-        database_tools::database_tool_registry(repo.clone()),
-        redis_tools::redis_tool_registry(repo),
-    ])
+    ];
+    #[cfg(feature = "database")]
+    registries.push(database_tools::database_tool_registry(repo.clone()));
+    #[cfg(feature = "redis")]
+    registries.push(redis_tools::redis_tool_registry(repo));
+    tool_runtime::ToolRegistry::merge(registries)
 }
 
 #[derive(Clone)]
