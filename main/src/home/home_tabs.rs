@@ -1388,6 +1388,7 @@ impl HomePage {
     pub(crate) fn add_known_hosts_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(item) = app_kit::registry().open_tab(
             &domain_api::TabIntent::KnownHosts,
+            TabOpenMode::Activate,
             self,
             window,
             cx,

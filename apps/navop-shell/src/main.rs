@@ -1,8 +1,31 @@
-use domain_api::AppIdentity;
+use domain_api::{AppIdentity, Product, ProductFeatures};
 use gpui::{
     App, Bounds, Context, IntoElement, QuitMode, Render, TitlebarOptions, Window, WindowBounds,
     WindowOptions, div, prelude::*, px, size,
 };
+use std::sync::Arc;
+
+struct ShellProduct;
+
+impl Product for ShellProduct {
+    type Assets = one_assets::Assets;
+
+    fn identity(&self) -> &'static AppIdentity {
+        &AppIdentity::SHELL
+    }
+
+    fn features(&self) -> ProductFeatures {
+        ProductFeatures::SHELL
+    }
+
+    fn assets(&self) -> Self::Assets {
+        one_assets::Assets::new()
+    }
+
+    fn domains(&self) -> Vec<Arc<dyn domain_api::Domain>> {
+        vec![Arc::new(shell_domain::ShellDomain)]
+    }
+}
 
 struct ShellPlaceholder {
     identity: &'static AppIdentity,
@@ -23,11 +46,16 @@ impl Render for ShellPlaceholder {
 }
 
 fn main() {
-    let identity = &AppIdentity::SHELL;
-    app_kit::configure_identity(identity);
+    let product = ShellProduct;
+    let identity = product.identity();
     gpui_platform::application()
         .with_quit_mode(QuitMode::LastWindowClosed)
         .run(move |cx: &mut App| {
+            if let Err(error) = app_kit::bootstrap(&product, cx) {
+                eprintln!("failed to initialize navop-shell: {error:#}");
+                cx.quit();
+                return;
+            }
             let bounds = Bounds::centered(None, size(px(900.0), px(600.0)), cx);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),

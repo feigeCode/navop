@@ -38,6 +38,7 @@ impl TabOpener for KnownHostsTabOpener {
     fn open(
         &self,
         intent: &TabIntent,
+        _mode: one_core::tab_container::TabOpenMode,
         _host: &mut dyn domain_api::TabHost,
         window: &mut Window,
         cx: &mut App,

@@ -23,6 +23,7 @@ pub trait TabOpener: Send + Sync {
     fn open(
         &self,
         intent: &TabIntent,
+        mode: TabOpenMode,
         host: &mut dyn TabHost,
         window: &mut Window,
         cx: &mut App,
@@ -91,13 +92,14 @@ impl DomainRegistry {
     pub fn open_tab(
         &self,
         intent: &TabIntent,
+        mode: TabOpenMode,
         host: &mut dyn TabHost,
         window: &mut Window,
         cx: &mut App,
     ) -> Option<TabItem> {
         self.tab_openers
             .iter()
-            .find_map(|opener| opener.open(intent, host, window, cx))
+            .find_map(|opener| opener.open(intent, mode, host, window, cx))
     }
 }
 

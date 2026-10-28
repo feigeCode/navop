@@ -8244,6 +8244,7 @@ dependencies = [
  "domain_api",
  "gpui-fast",
  "gpui-fast-platform",
+ "one-assets",
  "one-core",
 ]
 
@@ -8255,7 +8256,9 @@ dependencies = [
  "domain_api",
  "gpui-fast",
  "gpui-fast-platform",
+ "one-assets",
  "one-core",
+ "shell_domain",
 ]
 
 [[package]]

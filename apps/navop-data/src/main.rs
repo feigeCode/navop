@@ -1,8 +1,31 @@
-use domain_api::AppIdentity;
+use domain_api::{AppIdentity, Product, ProductFeatures};
 use gpui::{
     App, Bounds, Context, IntoElement, QuitMode, Render, TitlebarOptions, Window, WindowBounds,
     WindowOptions, div, prelude::*, px, size,
 };
+use std::sync::Arc;
+
+struct DataProduct;
+
+impl Product for DataProduct {
+    type Assets = one_assets::Assets;
+
+    fn identity(&self) -> &'static AppIdentity {
+        &AppIdentity::DATA
+    }
+
+    fn features(&self) -> ProductFeatures {
+        ProductFeatures::DATA
+    }
+
+    fn assets(&self) -> Self::Assets {
+        one_assets::Assets::new()
+    }
+
+    fn domains(&self) -> Vec<Arc<dyn domain_api::Domain>> {
+        Vec::new()
+    }
+}
 
 struct DataPlaceholder {
     identity: &'static AppIdentity,
@@ -23,11 +46,16 @@ impl Render for DataPlaceholder {
 }
 
 fn main() {
-    let identity = &AppIdentity::DATA;
-    app_kit::configure_identity(identity);
+    let product = DataProduct;
+    let identity = product.identity();
     gpui_platform::application()
         .with_quit_mode(QuitMode::LastWindowClosed)
         .run(move |cx: &mut App| {
+            if let Err(error) = app_kit::bootstrap(&product, cx) {
+                eprintln!("failed to initialize navop-data: {error:#}");
+                cx.quit();
+                return;
+            }
             let bounds = Bounds::centered(None, size(px(900.0), px(600.0)), cx);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
