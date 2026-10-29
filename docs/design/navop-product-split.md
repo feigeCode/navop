@@ -1009,3 +1009,56 @@ cargo run -p navop-data   # Data
 2. 为三个产品隔离更新 feed，并补 macOS 公证与 Windows 代码签名。
 3. 逐步删除 `main` 中已被领域注册表覆盖的 fallback，防止两套路径长期漂移。
 4. 给 `navop-shell`/`navop-data` 补最小设置页与“从全量导入连接”的迁移入口。
+
+## 19. Public MCP 三产品隔离（2026-10-29）
+
+### 19.1 实现
+
+- 新增 `crates/mcp_host`：
+  - 从 `main/src/public_mcp_runtime/config.rs` 迁入 `PublicMcpStartConfig` / `PublicMcpEnvOverride`，main 改为 re-export，避免两端配置漂移。
+  - `register_toolset(toolset, default_enabled, factory)`：领域 crate 只声明本域工具，`mcp_host` 负责按产品、设置和 `ToolExposureToolsetSettings` 组装。
+  - `start(cx, identity)`：读取 `AppSettings`，按注册表构建 `PublicMcpToolRegistry`，经 `Tokio::spawn_result` 启动 `PublicMcpRuntime`；`stop`/`is_running`/`client_count`/`last_error` 提供生命周期查询。
+  - 独立产品的核心工具集默认开启，避免没有完整设置页时 Data 产品默认暴露 0 个数据库工具。
+- `public_mcp::discovery` 增加 `DiscoveryIdentity { app, legacy, file_name }` 与 `configure_discovery_identity`：
+  - `DiscoveryDocument::new`、`legacy_compatible`、`validate_for_stdio_bridge`、`public_mcp_discovery_path*` 全部改为运行时身份。
+  - 默认仍是 `navop` + `onetcli`，全量产品行为不变。
+- `AppIdentity` 增加 `mcp_legacy_app_name`：Full 为 `Some("onetcli")`，Shell/Data 为 `None`。
+- `app_kit`：
+  - `configure_identity` 同时配置 discovery 身份。
+  - `bootstrap` 在路径初始化后设置 canonical/legacy discovery 路径。
+  - `Product::mcp_managed_by_app_kit` 默认 `true`；`FullProduct` 覆盖为 `false`，继续由 main 的 `public_mcp_runtime` 管理。
+  - `bootstrap` 在产品 `init` 后读取 `ProductFeatures.public_mcp`：true 调 `mcp_host::start`，false 调 `stop`。`ProductFeatures` 不再是死配置。
+- 工具下沉：
+  - `shell_domain` 注册 Terminal（terminal_exec/read/control/write_keys/remote_ops）与 SFTP 工具集。
+  - `data_domain` 注册 Database 与 Redis 工具集。
+  - Mongo 仍留在 main 的 live-state provider，尚未下沉。
+
+### 19.2 验证
+
+| 验证 | 结果 |
+|---|---|
+| `navop-shell` + `NAVOP_PUBLIC_MCP=1` 启动 | `.navop-shell-dev/state/public-mcp.json`，`app=navop-shell`，loopback 随机端口 |
+| `navop-data` + `NAVOP_PUBLIC_MCP=1` 启动 | `.navop-data-dev/state/public-mcp.json`，`app=navop-data` |
+| `navop` 全量启动 | 仍由 main 启动，`app=navop`，未出现第二个 mcp_host server |
+| `cargo test -p main --lib` | 750 passed（config 的 10 个测试随文件迁到 mcp_host） |
+| `cargo test -p main --tests` | 3 个集成测试通过 |
+| `mcp_host` / `domain_api` / `app_kit` / `shell_domain` / `data_domain` | 12 / 5 / 3 / 15 / 4 passed |
+| `cargo check -p navop -p navop-shell -p navop-data`（`-Dwarnings`） | 通过 |
+| `cargo clippy --no-deps -p mcp_host -p app_kit -p domain_api -p shell_domain -p data_domain -- -D warnings` | 通过；`public_mcp` 仍命中既有 `tool_runtime_adapter.rs:134` 的 `too_many_arguments` 基线 lint |
+
+### 19.3 启停与权限
+
+- 默认仍关闭：需 `NAVOP_PUBLIC_MCP=1` 或设置里启用。
+- 独立产品暂无审批弹窗；`PermissionMode::Ask` 会走默认拒绝 approver。需要可执行时使用：
+  - `NAVOP_PUBLIC_MCP=1`
+  - `NAVOP_PUBLIC_MCP_PERMISSION=allow`
+- 发现文件权限仍为 0600，只监听 loopback；token 每次启动重新生成。
+
+### 19.4 尚未完成
+
+- Mongo 工具集与 connection 管理工具集未迁入 `data_domain`，因此 Data 产品当前只暴露 database/redis 工具。
+- 独立产品没有 MCP 设置页与审批 UI；`Ask` 模式实际不可用。
+- 全量产品仍走 main 的 `public_mcp_runtime`，两条实现并存；后续应让 main 也改用 `mcp_host`，或明确保留 main 的高级能力（resource pool/access guard/审批）。
+- 三产品的工具暴露设置目前共用 `AppSettings.tool_exposure.mcp`；独立产品默认值由 `default_enabled` 兜底，还没有产品级 UI。
+
+提交：`0a5b4e472 feat(mcp): 增加三产品 Public MCP 宿主与独立发现身份`。
