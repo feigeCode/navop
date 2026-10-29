@@ -4,10 +4,11 @@ use gpui::{
     App, AppContext, AsyncApp, ClickEvent, Context, ParentElement, SharedString, Styled, Window,
 };
 use gpui_component::{WindowExt, notification::Notification};
-use one_core::storage::{
-    ConnectionType, ExtensionConnectionParams, PreferredOpenMode, StoredConnection, Workspace,
-};
+use one_core::storage::{ConnectionType, ExtensionConnectionParams, StoredConnection, Workspace};
+#[cfg(feature = "shell")]
+use one_core::storage::PreferredOpenMode;
 use one_core::tab_container::{TabItem, TabOpenMode};
+#[cfg(feature = "shell")]
 use remote_desktop::RemoteDesktopProtocol;
 use std::sync::Arc;
 
@@ -25,7 +26,9 @@ pub(crate) fn build_connection_open_strategy(
     connection: StoredConnection,
     workspace: Option<Workspace>,
 ) -> Box<dyn ConnectionOpenStrategy> {
+    let _ = &workspace;
     match connection.connection_type {
+        #[cfg(feature = "shell")]
         ConnectionType::SshSftp => Box::new(SshOpenStrategy { connection }),
         #[cfg(feature = "database")]
         ConnectionType::Database => Box::new(DatabaseOpenStrategy {
@@ -43,14 +46,19 @@ pub(crate) fn build_connection_open_strategy(
             workspace,
         }),
         ConnectionType::Mqtt => Box::new(MiddlewareExtensionOpenStrategy { connection }),
+        #[cfg(feature = "shell")]
         ConnectionType::Serial => Box::new(SerialOpenStrategy { connection }),
+        #[cfg(feature = "shell")]
         ConnectionType::Telnet => Box::new(TelnetOpenStrategy { connection }),
+        #[cfg(feature = "shell")]
         ConnectionType::Ftp => Box::new(FtpOpenStrategy { connection }),
         ConnectionType::PortForwarding => Box::new(PortForwardingOpenStrategy { connection }),
+        #[cfg(feature = "shell")]
         ConnectionType::Rdp => Box::new(RemoteDesktopOpenStrategy {
             connection,
             protocol: RemoteDesktopProtocol::Rdp,
         }),
+        #[cfg(feature = "shell")]
         ConnectionType::Vnc => Box::new(RemoteDesktopOpenStrategy {
             connection,
             protocol: RemoteDesktopProtocol::Vnc,
@@ -196,6 +204,23 @@ fn open_extension_terminal_connection(
     window: &mut Window,
     cx: &mut App,
 ) {
+    #[cfg(not(feature = "shell"))]
+    {
+        let _ = (connection, contribution, mode, window, cx);
+    }
+    #[cfg(feature = "shell")]
+    open_extension_terminal_connection_shell(connection, contribution, mode, window, cx);
+}
+
+/// shell 领域下的终端型扩展连接启动实现。
+#[cfg(feature = "shell")]
+fn open_extension_terminal_connection_shell(
+    connection: StoredConnection,
+    contribution: &extension_runtime::RegisteredResourceConnectionContribution,
+    mode: TabOpenMode,
+    window: &mut Window,
+    cx: &mut App,
+) {
     let Some(terminal) = contribution.terminal.as_ref() else {
         return;
     };
@@ -241,6 +266,7 @@ fn open_extension_terminal_connection(
         Some(contribution),
     ));
     // 与其他终端标签一致:把创建与容器更新移出 HomePage 租约。
+    #[cfg(feature = "shell")]
     window.defer(cx, move |window, cx| {
         let view = cx.new(|cx| {
             terminal_view::TerminalWorkspace::new_launched(
@@ -559,10 +585,12 @@ fn open_extension_connection_now(
     }
 }
 
+#[cfg(feature = "shell")]
 struct SshOpenStrategy {
     connection: StoredConnection,
 }
 
+#[cfg(feature = "shell")]
 impl ConnectionOpenStrategy for SshOpenStrategy {
     fn open(
         self: Box<Self>,
@@ -581,10 +609,12 @@ impl ConnectionOpenStrategy for SshOpenStrategy {
 }
 
 /// 独立 FTP 连接没有终端形态，固定打开双栏文件视图（内部按协议走 FTP 客户端）。
+#[cfg(feature = "shell")]
 struct FtpOpenStrategy {
     connection: StoredConnection,
 }
 
+#[cfg(feature = "shell")]
 impl ConnectionOpenStrategy for FtpOpenStrategy {
     fn open(
         self: Box<Self>,
@@ -622,6 +652,7 @@ impl ConnectionOpenStrategy for DatabaseOpenStrategy {
     }
 }
 
+#[cfg(feature = "shell")]
 impl extension_runtime::remote_desktop_provider_install::RemoteDesktopConnectionOpener
     for HomePage
 {
@@ -722,10 +753,12 @@ impl ConnectionOpenStrategy for MongoOpenStrategy {
 
 struct NoopOpenStrategy;
 
+#[cfg(feature = "shell")]
 struct SerialOpenStrategy {
     connection: StoredConnection,
 }
 
+#[cfg(feature = "shell")]
 impl ConnectionOpenStrategy for SerialOpenStrategy {
     fn open(
         self: Box<Self>,
@@ -738,10 +771,12 @@ impl ConnectionOpenStrategy for SerialOpenStrategy {
     }
 }
 
+#[cfg(feature = "shell")]
 struct TelnetOpenStrategy {
     connection: StoredConnection,
 }
 
+#[cfg(feature = "shell")]
 impl ConnectionOpenStrategy for TelnetOpenStrategy {
     fn open(
         self: Box<Self>,
@@ -770,11 +805,13 @@ impl ConnectionOpenStrategy for PortForwardingOpenStrategy {
     }
 }
 
+#[cfg(feature = "shell")]
 struct RemoteDesktopOpenStrategy {
     connection: StoredConnection,
     protocol: RemoteDesktopProtocol,
 }
 
+#[cfg(feature = "shell")]
 impl ConnectionOpenStrategy for RemoteDesktopOpenStrategy {
     fn open(
         self: Box<Self>,

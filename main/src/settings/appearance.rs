@@ -16,6 +16,7 @@ use one_assets::IconName;
 use one_core::{settings::AppSettings, themes};
 use rust_i18n::t;
 use std::rc::Rc;
+#[cfg(feature = "shell")]
 use terminal_view::TerminalTheme;
 
 const OPACITY_PRESETS: &[f32] = &[100.0, 85.0, 70.0];
@@ -202,6 +203,12 @@ fn render_theme_card(config: &Rc<ThemeConfig>, selected: &str, cx: &App) -> impl
         )
 }
 
+#[cfg(not(feature = "shell"))]
+fn render_terminal_palette(_cx: &App) -> impl IntoElement {
+    gpui::div()
+}
+
+#[cfg(feature = "shell")]
 fn render_terminal_palette(cx: &App) -> impl IntoElement {
     let selected = AppSettings::global(cx).terminal_theme.as_str();
     let themes = TerminalTheme::all(cx.theme())
@@ -224,6 +231,7 @@ fn render_terminal_palette(cx: &App) -> impl IntoElement {
         .child(h_flex().flex_wrap().gap_2().children(themes))
 }
 
+#[cfg(feature = "shell")]
 fn render_terminal_theme_card(theme: TerminalTheme, selected: &str, cx: &App) -> impl IntoElement {
     let is_selected = theme.name == selected;
     let theme_name = theme.name;
@@ -269,6 +277,7 @@ fn render_terminal_theme_card(theme: TerminalTheme, selected: &str, cx: &App) ->
         )
 }
 
+#[cfg(feature = "shell")]
 fn set_terminal_theme(theme_name: &'static str, cx: &mut App) {
     if AppSettings::global(cx).terminal_theme == theme_name {
         return;

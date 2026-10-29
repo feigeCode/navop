@@ -3,6 +3,7 @@ rust_i18n::i18n!("locales", fallback = "en");
 mod blend;
 pub mod content_state;
 pub mod edit_table;
+pub mod fonts;
 pub mod file_conflict_prompt;
 pub use blend::ColorMix;
 
@@ -33,6 +34,7 @@ pub use edit_table::{
 };
 use gpui::App;
 pub use icon_button::{IconButton, IconButtonRole};
+pub use fonts::{MAX_FONT_SIZE, MIN_FONT_SIZE, available_monospace_fonts};
 pub use icon_size::IconSize;
 pub use large_text_editor::{
     LargeTextEditor, LargeTextEditorEvent, LargeTextEditorTab,

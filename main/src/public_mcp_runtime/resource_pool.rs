@@ -18,7 +18,10 @@ use tool_runtime::{
 
 pub(super) fn app_resource_pool_provider(cx: &App) -> Option<ResourcePoolProvider> {
     let repo = connection_repository(cx);
+    #[cfg(feature = "shell")]
     let terminal_registry = terminal_view::public_mcp::registry(cx);
+    #[cfg(not(feature = "shell"))]
+    let terminal_registry: Option<public_mcp::registry::PublicMcpRegistry> = None;
     #[cfg(feature = "database")]
     let redis_state = cx.try_global::<GlobalRedisState>().cloned();
     #[cfg(not(feature = "database"))]
@@ -222,6 +225,7 @@ fn append_active_redis_resources(
         .fold(pool, insert_or_merge_resource)
 }
 
+#[cfg(feature = "database")]
 fn active_redis_resource(
     connection_id: String,
     ai_access_levels: &AiAccessLevels,
@@ -247,6 +251,7 @@ fn active_redis_resource(
     Some(resource)
 }
 
+#[cfg(feature = "database")]
 fn insert_or_merge_resource(mut pool: ResourcePool, resource: ResourceRef) -> ResourcePool {
     let Some(existing) = pool
         .resources

@@ -195,7 +195,7 @@ data_domain = { path = "crates/data_domain" }
 shell_domain = { path = "crates/shell_domain" }
 ssh_form = { path = "crates/ssh_form" }
 mongodb_view = {path = "crates/mongodb_view"}
-navop_runtime = { path = "crates/navop_runtime" }
+navop_runtime = { path = "crates/navop_runtime", default-features = false }
 remote_file_editor = { path = "crates/remote_file_editor" }
 remote_image_preview = { path = "crates/remote_image_preview" }
 notes = { path = "crates/notes" }

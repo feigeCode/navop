@@ -5,6 +5,7 @@ use gpui::{
     ParentElement, Pixels, Styled, UniformListScrollHandle, Window, deferred, div, hsla, px,
 };
 use gpui_component::input::{InputEvent, InputState};
+#[cfg(feature = "shell")]
 use terminal_view::TerminalColors;
 
 use crate::home_tab::HomePage;
@@ -70,6 +71,7 @@ impl SidebarPalette {
     }
 }
 
+#[cfg(feature = "shell")]
 impl From<&TerminalColors> for SidebarPalette {
     fn from(colors: &TerminalColors) -> Self {
         Self {
@@ -113,6 +115,7 @@ pub(crate) struct PersistentConnectionSidebar {
     tree_width: Pixels,
     /// 最近一次落盘的宽度，用于拖拽过程中的增量持久化判断。
     persisted_tree_width: Pixels,
+    #[cfg(feature = "shell")]
     terminal_colors: Option<TerminalColors>,
     pub(super) tree_scroll_handle: UniformListScrollHandle,
     /// Tree 布局把侧栏作为主页内容渲染时为 true；渲染主体仍由 Render 承担，
@@ -278,6 +281,7 @@ impl PersistentConnectionSidebar {
             search_input,
             tree_width,
             persisted_tree_width: tree_width,
+            #[cfg(feature = "shell")]
             terminal_colors: None,
             tree_scroll_handle: UniformListScrollHandle::new(),
             home_embedded: false,
@@ -326,6 +330,7 @@ impl PersistentConnectionSidebar {
         self.render_docked_tree(cx)
     }
 
+    #[cfg(feature = "shell")]
     pub(crate) fn set_terminal_colors(
         &mut self,
         colors: Option<TerminalColors>,
@@ -336,10 +341,11 @@ impl PersistentConnectionSidebar {
     }
 
     pub(super) fn palette(&self, cx: &gpui::App) -> SidebarPalette {
-        self.terminal_colors
-            .as_ref()
-            .map(SidebarPalette::from)
-            .unwrap_or_else(|| SidebarPalette::app(cx))
+        #[cfg(feature = "shell")]
+        if let Some(colors) = self.terminal_colors.as_ref() {
+            return SidebarPalette::from(colors);
+        }
+        SidebarPalette::app(cx)
     }
 }
 

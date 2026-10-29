@@ -22,6 +22,7 @@ mod file_open;
 mod home;
 mod home_tab;
 mod license;
+#[cfg(feature = "shell")]
 mod local_terminal_profiles;
 mod master_key_dialogs;
 mod master_key_flow;
@@ -61,7 +62,6 @@ use gpui_component::Root;
 use gpui_component_assets::Assets;
 use one_core::settings::{AppSettings, MainWindowSize, MainWindowState};
 use std::path::PathBuf;
-use std::sync::Arc;
 use tracing::{info, warn};
 
 pub struct AppAssets {
@@ -504,6 +504,7 @@ where
     // 单例构造时读取一次，所以必须在这里、在 GPUI 之前决定；使用共享编译期标记
     // （`remote_desktop_view/windows-native-rdp` 也会启用它）而不是 main 自身的
     // feature，保证两种 feature 写法都生效。
+    #[cfg(feature = "shell")]
     if remote_desktop::windows_native_rdp_compiled()
         && std::env::var_os("NAVOP_RDP_DISABLE_COMPOSITION").is_some()
     {
@@ -1313,7 +1314,7 @@ mod native_driver_feature_contract_tests {
 
         assert!(
             main_features
-                .contains("windows-native-rdp = [\"remote_desktop_view/windows-native-rdp\"]")
+                .contains("windows-native-rdp = [\"remote_desktop_view?/windows-native-rdp\"]")
         );
         assert!(
             main_default.contains("windows-native-rdp"),

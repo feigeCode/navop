@@ -110,6 +110,7 @@ impl HomePage {
         cx.notify();
     }
 
+    #[cfg(feature = "shell")]
     pub(crate) fn open_remote_desktop_fullscreen_window(
         &mut self,
         connection: &StoredConnection,

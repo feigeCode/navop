@@ -11,7 +11,7 @@ path = "src/main.rs"
 # 独立产品与全量产品共用同一套应用外壳：这里只依赖 `navop_app`（`main` 包），
 # 由 `run_product_with_version` 决定产品身份与领域装配。
 [dependencies]
-main = { path = "../../main" }
+main = { path = "../../main", default-features = false, features = ["wasm-components", "windows-native-rdp", "shell-plugins", "database"] }
 domain_api = { workspace = true }
 gpui = { workspace = true }
 anyhow = { workspace = true }

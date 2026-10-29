@@ -44,8 +44,10 @@ use one_core::storage::{
 };
 use one_core::tab_container::{TabContainer, TabContent, TabContentEvent, TabOpenMode};
 use one_ui::{IconButton, IconButtonRole};
+#[cfg(feature = "shell")]
 use port_forwarding::PortForwardingRuntime;
 use rust_i18n::t;
+#[cfg(feature = "shell")]
 use terminal_view::{SshFormWindow, SshFormWindowConfig};
 
 use crate::auth::{AuthService, load_auth_data, show_auth_dialog};
@@ -57,6 +59,7 @@ use crate::home::home_workspace_filter::{
     WorkspaceDialogConfig, WorkspaceFilterDelegate, show_workspace_dialog,
 };
 use crate::license::{get_license_service, is_feature_enabled, show_upgrade_dialog};
+#[cfg(feature = "shell")]
 use crate::local_terminal_profiles::{
     LocalTerminalLaunchTarget, effective_kind, launch_options, launch_target_is_default,
 };
@@ -118,6 +121,23 @@ impl From<ConnectionLayout> for HomeConnectionLayout {
 }
 
 impl HomePage {
+    /// 本地终端按钮；不含终端领域的构建下返回空占位。
+    pub(crate) fn local_terminal_button_element(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        #[cfg(feature = "shell")]
+        {
+            return self.render_local_terminal_button(window, cx);
+        }
+        #[cfg(not(feature = "shell"))]
+        {
+            let _ = (window, cx);
+            gpui::div().into_any_element()
+        }
+    }
+
     pub(crate) fn set_connection_sidebar(
         &mut self,
         sidebar: Entity<crate::persistent_connection_sidebar::PersistentConnectionSidebar>,
@@ -207,8 +227,10 @@ pub struct HomePage {
     /// 防止主密钥对话框被启动提示和用户点击重复打开。
     master_key_dialog_open: bool,
     team_permissions: TeamPermissionSnapshot,
+    #[cfg(feature = "shell")]
     port_forwarding_runtime: Arc<tokio::sync::Mutex<PortForwardingRuntime>>,
     /// Windows 已识别的 WSL 发行版缓存（issue #182）；None=识别中，空列表=无发行版。
+    #[cfg(feature = "shell")]
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) wsl_distributions: Option<Arc<Vec<terminal::WslDistribution>>>,
 }
@@ -264,6 +286,7 @@ mod home_layout;
 mod home_shortcuts;
 mod keybindings;
 mod lifecycle;
+#[cfg(feature = "shell")]
 mod local_terminal;
 mod navigation;
 mod recent;
@@ -289,9 +312,8 @@ use connection_info::{
     card_connection_info, connection_display_name, generate_duplicate_name,
     port_forwarding_connection_info,
 };
-pub(super) use keybindings::{
-    OPEN_LOCAL_TERMINAL_SHORTCUT_MACOS, OPEN_LOCAL_TERMINAL_SHORTCUT_OTHER,
-};
+#[cfg(feature = "shell")]
+pub(super) use keybindings::{OPEN_LOCAL_TERMINAL_SHORTCUT_MACOS, OPEN_LOCAL_TERMINAL_SHORTCUT_OTHER};
 pub use keybindings::{init, refresh_keybindings};
 use sync_route::{
     HomeSyncRoute, refreshed_pending_conflicts, should_auto_onet_cloud_sync,

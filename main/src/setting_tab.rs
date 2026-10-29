@@ -69,7 +69,7 @@ use one_core::utils::auto_save_config::AutoSaveConfig;
 use one_core::window_close::close_window_for_reuse;
 use reqwest_client::ReqwestClient;
 use rust_i18n::t;
-use terminal_view::{MAX_FONT_SIZE, MIN_FONT_SIZE, available_monospace_fonts};
+use one_ui::{MAX_FONT_SIZE, MIN_FONT_SIZE, available_monospace_fonts};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 

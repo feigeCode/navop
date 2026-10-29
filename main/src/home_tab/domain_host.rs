@@ -114,8 +114,13 @@ impl HomeContext for HomePage {
 
     fn port_forwarding_runtime(
         &self,
-    ) -> Option<Arc<tokio::sync::Mutex<port_forwarding::PortForwardingRuntime>>> {
-        Some(Arc::clone(&self.port_forwarding_runtime))
+    ) -> Option<Arc<tokio::sync::Mutex<domain_api::PortForwardingRuntime>>> {
+        #[cfg(feature = "shell")]
+        {
+            return Some(Arc::clone(&self.port_forwarding_runtime));
+        }
+        #[cfg(not(feature = "shell"))]
+        None
     }
 
     fn notify(&mut self, level: NotifyLevel, message: &str, window: &mut Window, cx: &mut App) {
@@ -129,8 +134,10 @@ impl HomeContext for HomePage {
 }
 
 /// 全量产品的 shell 宿主：领域事件回到当前 `HomePage`。
+#[cfg(feature = "shell")]
 pub(crate) struct NavopShellHost;
 
+#[cfg(feature = "shell")]
 impl app_kit::ShellHost for NavopShellHost {
     fn open_sftp(&self, connection: StoredConnection, window: &mut Window, cx: &mut App) {
         let Some(home) = cx

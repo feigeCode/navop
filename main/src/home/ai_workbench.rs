@@ -10,7 +10,9 @@ use ai_chat_view::{
 };
 use gpui::{App, AppContext as _, Entity, Subscription, Window};
 use gpui_component::ActiveTheme as _;
+#[cfg(feature = "shell")]
 use terminal::LocalConfig;
+#[cfg(feature = "shell")]
 use terminal_view::TerminalView;
 use workspace_explorer::{
     WorkspaceEditor, WorkspaceExplorer, WorkspaceExplorerConfig, WorkspaceExplorerEvent,
@@ -82,6 +84,7 @@ fn remember_workspace_root(root: &std::path::Path, cx: &mut App) {
     });
 }
 
+#[cfg(feature = "shell")]
 fn default_terminal_config(root: &std::path::Path) -> LocalConfig {
     LocalConfig {
         shell: None,
@@ -130,7 +133,9 @@ pub(crate) fn build_ai_workbench_shell(
     // 初始工作区也要进入最近列表，否则第一次打开时菜单里是空的。
     remember_workspace_root(&workspace_root, cx);
     chat.update(cx, |panel, cx| panel.set_sidebar_suppressed(true, cx));
+    #[cfg(feature = "shell")]
     let terminal_root = workspace_root.clone();
+    #[cfg(feature = "shell")]
     let terminal = cx.new(|cx| {
         TerminalView::new(default_terminal_config(&terminal_root), window, cx).with_workspace_pane()
     });
@@ -144,13 +149,23 @@ pub(crate) fn build_ai_workbench_shell(
     let shell = cx.new(|cx| {
         WorkbenchShell::new(
             WorkbenchShellConfig {
-                panels: vec![
-                    WorkbenchPanelEntry::new(WorkbenchPanelKind::Chat, chat.clone()),
-                    WorkbenchPanelEntry::new(WorkbenchPanelKind::Review, editor.clone()),
-                    WorkbenchPanelEntry::new(WorkbenchPanelKind::Files, explorer.clone()),
-                    WorkbenchPanelEntry::new(WorkbenchPanelKind::Terminal, terminal.clone()),
-                    WorkbenchPanelEntry::new(WorkbenchPanelKind::Subagent, subagent_detail.clone()),
-                ],
+                panels: {
+                    let mut panels = vec![
+                        WorkbenchPanelEntry::new(WorkbenchPanelKind::Chat, chat.clone()),
+                        WorkbenchPanelEntry::new(WorkbenchPanelKind::Review, editor.clone()),
+                        WorkbenchPanelEntry::new(WorkbenchPanelKind::Files, explorer.clone()),
+                    ];
+                    #[cfg(feature = "shell")]
+                    panels.push(WorkbenchPanelEntry::new(
+                        WorkbenchPanelKind::Terminal,
+                        terminal.clone(),
+                    ));
+                    panels.push(WorkbenchPanelEntry::new(
+                        WorkbenchPanelKind::Subagent,
+                        subagent_detail.clone(),
+                    ));
+                    panels
+                },
                 session_nav: None,
                 session_source: Some(chat.clone()),
                 // 布局从持久化设置还原；坏字段/空配置由 from_settings 容错。
@@ -404,6 +419,7 @@ pub(crate) fn build_ai_workbench_shell(
     // 多例面板工厂：「新建页签」选终端时创建一个全新终端实例（工作目录取
     // 外壳当前工作区根），而不是定位到已有终端。审查/文件是单例面板，
     // 重复打开只会定位，不走这里。
+    #[cfg(feature = "shell")]
     shell.update(cx, |shell, cx| {
         shell.set_panel_factory(
             move |root: &std::path::Path, window: &mut gpui::Window, cx: &mut gpui::App| {

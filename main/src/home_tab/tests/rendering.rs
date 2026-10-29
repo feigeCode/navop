@@ -12,7 +12,7 @@ fn local_terminal_launcher_is_visible_in_home_toolbar() {
     let toolbar = include_str!("../toolbar.rs");
     let launcher = include_str!("../local_terminal.rs");
 
-    assert!(toolbar.contains("render_local_terminal_button(window, cx)"));
+    assert!(toolbar.contains("local_terminal_button_element(window, cx)"));
     assert!(launcher.contains("DropdownButton::new(\"local-terminal-dropdown\")"));
     assert!(launcher.contains("IconName::SquareTerminal)"));
     assert!(launcher.contains(".mono()"));

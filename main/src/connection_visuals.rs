@@ -11,6 +11,7 @@ use one_core::storage::{
 use one_ui::IconSize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 enum ExternalDriverIconSource<'a> {
     File(&'a Path),
     Asset(&'a str),
@@ -252,21 +253,6 @@ pub(crate) fn external_driver_icon_for_config(
 
 /// Resolves external driver visuals with the host-authoritative precedence:
 /// filesystem path, bundled asset path, then caller-provided fallback.
-pub(crate) fn external_driver_icon_from_sources(
-    icon_asset_path: Option<&str>,
-    icon_file_path: Option<&Path>,
-    size: ConnectionVisualSize,
-) -> Option<Icon> {
-    match external_driver_icon_source(icon_asset_path, icon_file_path)? {
-        ExternalDriverIconSource::File(path) => {
-            Some(icon_from_file_path(path.to_path_buf(), size.icon_size()))
-        }
-        ExternalDriverIconSource::Asset(path) => {
-            Some(icon_from_asset_path(path.to_string(), size.icon_size()))
-        }
-    }
-}
-
 fn generic_database_icon(size: ConnectionVisualSize) -> Icon {
     IconName::Database.color().with_size(size.icon_size())
 }
@@ -275,6 +261,7 @@ fn color_icon(name: IconName, size: ConnectionVisualSize) -> Icon {
     name.color().with_size(size.icon_size())
 }
 
+#[cfg(test)]
 fn external_driver_icon_source<'a>(
     icon_asset_path: Option<&'a str>,
     icon_file_path: Option<&'a Path>,

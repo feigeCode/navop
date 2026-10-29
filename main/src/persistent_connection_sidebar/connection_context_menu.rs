@@ -221,10 +221,35 @@ fn connection_menu_item(
     match action {
         ConnectionMenuAction::OpenInBackground => background_connection_item(connection, home),
         ConnectionMenuAction::OpenFullscreenWindow => {
-            fullscreen_window_connection_item(connection, home)
+            #[cfg(feature = "shell")]
+            {
+                fullscreen_window_connection_item(connection, home)
+            }
+            #[cfg(not(feature = "shell"))]
+            {
+                unsupported_menu_item("Connection.open_in_fullscreen_window")
+            }
         }
-        ConnectionMenuAction::OpenSftp => open_sftp_item(connection, home),
-        ConnectionMenuAction::OpenTerminal => open_terminal_item(connection, home),
+        ConnectionMenuAction::OpenSftp => {
+            #[cfg(feature = "shell")]
+            {
+                open_sftp_item(connection, home)
+            }
+            #[cfg(not(feature = "shell"))]
+            {
+                unsupported_menu_item("Home.open_sftp")
+            }
+        }
+        ConnectionMenuAction::OpenTerminal => {
+            #[cfg(feature = "shell")]
+            {
+                open_terminal_item(connection, home)
+            }
+            #[cfg(not(feature = "shell"))]
+            {
+                unsupported_menu_item("Home.open_terminal")
+            }
+        }
         ConnectionMenuAction::CopyConnection => {
             unreachable!("copy connection action renders a submenu")
         }
@@ -235,6 +260,7 @@ fn connection_menu_item(
     }
 }
 
+#[cfg(feature = "shell")]
 fn fullscreen_window_connection_item(
     connection: &StoredConnection,
     home: &Entity<crate::home_tab::HomePage>,
@@ -642,6 +668,11 @@ fn move_target_item(
     )
 }
 
+#[cfg(not(feature = "shell"))]
+fn unsupported_menu_item(label_key: &'static str) -> PopupMenuItem {
+    PopupMenuItem::new(t!(label_key).to_string()).disabled(true)
+}
+
 fn background_connection_item(
     connection: &StoredConnection,
     home: &Entity<crate::home_tab::HomePage>,
@@ -662,6 +693,7 @@ fn background_connection_item(
         })
 }
 
+#[cfg(feature = "shell")]
 fn open_sftp_item(
     connection: &StoredConnection,
     home: &Entity<crate::home_tab::HomePage>,
@@ -678,6 +710,7 @@ fn open_sftp_item(
 }
 
 /// SSH 条目偏好为双栏文件视图时的右键切换入口：临时按终端打开。
+#[cfg(feature = "shell")]
 fn open_terminal_item(
     connection: &StoredConnection,
     home: &Entity<crate::home_tab::HomePage>,

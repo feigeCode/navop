@@ -1381,3 +1381,62 @@ fallback 代码与 17 个只覆盖 fallback 的测试（对应行为已由 `shel
 5. 从 `main/Cargo.toml` 删除领域 crate 依赖，验收依赖树：
    `cargo tree -p navop-shell | grep -E "db_view|redis_view|mongodb_view"` 为空、
    `cargo tree -p navop-data | grep -E "terminal_view|sftp_view|remote_desktop_view"` 为空。
+
+## 25. 领域 feature 拆分落地（2026-10-29，第三批）
+
+第二十四节留下的「删领域 Cargo 依赖」没有直接删，而是改用**编译期 feature + 领域契约**
+完成：`main` 仍是唯一公共应用壳，但默认构建才同时装配数据库与终端；独立产品按需打开。
+
+### 25.1 `main` 的领域 feature
+
+```toml
+default  = ["wasm-components", "windows-native-rdp", "shell-plugins", "database", "shell"]
+database = ["extension-runtime/database", "navop_runtime/database", "navop_runtime/redis", "dep:db", ...]
+shell    = ["extension-runtime/remote-desktop", "navop_runtime/sftp", "dep:terminal", ...]
+```
+
+- 领域 crate（`db`/`db_view`/`redis_view`/`mongodb_view`/`terminal`/`terminal_view`/`sftp_view`/
+  `ssh`/`known_hosts_view`/`port_forwarding_view`/`remote_desktop_view`/`data_domain`/`shell_domain`）
+  在 `main/Cargo.toml` 里全部改成 `optional = true`，由 feature 引入。
+- 三个应用各自选 feature：`navop` 用默认（both），`navop-shell` 用 `default-features = false,
+  features = [..., "shell"]`，`navop-data` 用 `[..., "database"]`。
+- 第三方能力同样门控：`extension-runtime` 的 `database`/`remote-desktop`、`navop_runtime` 的
+  `database`/`redis`/`sftp`（workspace 级 `default-features = false`，各产品显式打开）。
+  `windows-native-rdp` 改成弱依赖形式 `remote_desktop_view?/windows-native-rdp`，
+  数据产品不再被 RDP 依赖拖入 `remote_desktop_view`。
+
+### 25.2 门控落点（`#[cfg(feature = "database")]` / `shell`）
+
+| 位置 | 处理 |
+|---|---|
+| `home/home_strategy.rs` | 数据库/Redis/Mongo 策略、RDP/VNC/SSH/FTP/Serial/Telnet 策略按领域 cfg；扩展终端启动拆出 `_shell` 版本 |
+| `home/home_tabs.rs` | shell 终端/SFTP/远程桌面/本地终端/已知主机/会话日志入口按 shell cfg，Redis/Mongo 入口按 database cfg |
+| `home/home_connection_quick_open.rs` | 临时连接「保存为连接」按 shell cfg |
+| `home/ai_workbench.rs` | 终端面板与面板工厂按 shell cfg（工作台其余面板保留） |
+| `home_tab/domain_host.rs` | `ShellHost` 实现整体 shell cfg，`port_forwarding_runtime()` 双分支 |
+| `home_tab/connection_forms.rs` | 临时连接表单 shell cfg，其余表单早在第二十四节交还注册表 |
+| `persistent_connection_sidebar` | SFTP/终端/全屏远程桌面菜单项与 `TerminalColors` 按 shell cfg（非 shell 给禁用项） |
+| `public_mcp_runtime` | terminal/redis/mongo 工具集与资源池、访问守卫按领域 cfg |
+| `settings/appearance.rs`、`home_tab/local_terminal.rs`、`local_terminal_profiles.rs` | 终端主题/本地终端 UI 按 shell cfg |
+| `file_open.rs`、`navop_app.rs` | 会话日志/录制、SFTP 粘贴键位、mongo 原生驱动工厂按领域 cfg |
+| `lib.rs`（`AppAssets`） | 驱动图标/资产改走 `app_kit::visuals::ConnectionVisuals`（由 `data_domain` 注入），公共壳不再依赖 `db::ipc` |
+| `connection_visuals.rs` | 驱动图标改走 `app_kit::visuals` + `one_ui::fonts`（字体表下沉），SSH 自定义图标用通用 helper |
+
+### 25.3 依赖树验收（真实输出）
+
+| 命令 | 结果 |
+|---|---|
+| `cargo tree -p navop-shell -e normal \| grep -E "db_view v\|redis_view v\|mongodb_view v\| db v0"` | 0 行 |
+| `cargo tree -p navop-data -e normal \| grep -E "terminal_view v\|sftp_view v\|remote_desktop_view v\|known_hosts_view v\|port_forwarding_view v"` | 0 行（`ssh` 仍保留：数据库 SSH 隧道 `connection_tunnel` 需要） |
+| `cargo build -p navop -p navop-shell -p navop-data` | 通过，0 rustc 警告 |
+| `cargo test -p main --lib` | 611 passed, 0 failed |
+| `cargo test -p app_kit -p domain_api -p shell_domain -p data_domain` | 141 / 18 / 28 / 11 passed |
+| `cargo test -p main --test i18n_locale_keys_contract` | 1 passed |
+| 临时 HOME 启动 `navop-shell` / `navop-data` | 均 RUNNING_OK，无 panic |
+
+### 25.4 与「拆成多个 crate」的关系
+
+`main` 仍然是单一 crate，但领域代码不再随产物编译：公共壳部分（HomePage、标签页、
+设置容器、账户、AI、笔记、团队、扩展、凭据库、云同步）保持共享，领域实现留在家门
+crate 或按 feature 排除。后续若要进一步拆 crate，可把 `home_tabs`/`home_strategy`
+的领域分支整体搬进 `shell_domain`/`data_domain`（现在由 cfg 隔离，迁移风险更低）。

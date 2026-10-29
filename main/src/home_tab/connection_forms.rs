@@ -94,6 +94,16 @@ impl HomePage {
         );
     }
 
+    #[cfg(not(feature = "shell"))]
+    pub(crate) fn show_save_temporary_connection_form(
+        &mut self,
+        _connection: StoredConnection,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+    }
+
+    #[cfg(feature = "shell")]
     pub(crate) fn show_save_temporary_connection_form(
         &mut self,
         connection: StoredConnection,

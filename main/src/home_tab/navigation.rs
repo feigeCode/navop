@@ -14,11 +14,17 @@ impl HomePage {
             NavigationApplication::Notes => self.add_notes_tab(window, cx),
             NavigationApplication::Toolbox => self.add_toolbox_tab(window, cx),
             NavigationApplication::JsonFormatter => self.add_json_formatter_tab(window, cx),
+            #[cfg(feature = "shell")]
             NavigationApplication::SessionLogs => self.add_session_logs_tab(window, cx),
+            #[cfg(not(feature = "shell"))]
+            NavigationApplication::SessionLogs => {}
             NavigationApplication::CredentialVault => {
                 self.add_credential_vault_tab(window, cx);
             }
+            #[cfg(feature = "shell")]
             NavigationApplication::KnownHosts => self.add_known_hosts_tab(window, cx),
+            #[cfg(not(feature = "shell"))]
+            NavigationApplication::KnownHosts => {}
             NavigationApplication::Extensions => self.add_extensions_tab(window, cx),
             NavigationApplication::Settings => self.add_settings_tab(window, cx),
         }

@@ -72,7 +72,7 @@ impl HomePage {
             )
             .child(self.render_new_connection_button(window, cx))
             .when(crate::product::supports_shell_domain(), |toolbar| {
-                toolbar.child(self.render_local_terminal_button(window, cx))
+                toolbar.child(self.local_terminal_button_element(window, cx))
             })
             .into_any_element()
     }

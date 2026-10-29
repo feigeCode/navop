@@ -249,6 +249,7 @@ use one_core::tab_navigation::{
     ActiveTabSlot, TabCycleDirection, tab_number_target, tab_slot_after_cycle,
 };
 use one_core::themes;
+#[cfg(feature = "shell")]
 use sftp_view::{PasteUpload as SftpPasteUpload, SFTP_VIEW_CONTEXT};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
@@ -812,6 +813,7 @@ pub fn init(cx: &mut App) -> anyhow::Result<()> {
     one_core::themes::load_imported(cx);
     setting_tab::init_settings(cx);
     one_core::init(cx)?;
+    #[cfg(feature = "shell")]
     app_kit::set_shell_host(Arc::new(crate::home_tab::domain_host::NavopShellHost));
     ai_chat_view::init(cx);
     mcp_approval::init(cx);
@@ -1072,6 +1074,7 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
         .into_iter()
         .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, QuitApp, None, cx)),
     );
+    #[cfg(feature = "shell")]
     keybindings.push(KeyBinding::new(
         default_shortcut("cmd-v", "ctrl-v"),
         SftpPasteUpload,
@@ -1104,6 +1107,7 @@ fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
         None,
         ToggleConnectionSidebar,
     ));
+    #[cfg(feature = "shell")]
     keybindings.push(KeyBinding::new(
         default_shortcut("cmd-v", "ctrl-v"),
         SftpPasteUpload,
@@ -1247,6 +1251,7 @@ fn init_action_handlers(cx: &mut App) {
                 if window.has_active_dialog(cx) {
                     window.close_all_dialogs(cx);
                 }
+                #[cfg(feature = "shell")]
                 home_page.update(cx, |hp, cx| {
                     hp.add_terminal_tab(window, cx);
                 });
@@ -1517,6 +1522,7 @@ impl NavopApp {
         cx.notify();
     }
 
+    #[cfg(feature = "shell")]
     fn sync_connection_sidebar_theme(&mut self, cx: &mut Context<Self>) {
         let terminal_active = {
             let tabs = self.tab_container.read(cx);
@@ -1539,6 +1545,9 @@ impl NavopApp {
         self.connection_sidebar
             .update(cx, |sidebar, cx| sidebar.set_terminal_colors(colors, cx));
     }
+
+    #[cfg(not(feature = "shell"))]
+    fn sync_connection_sidebar_theme(&mut self, _cx: &mut Context<Self>) {}
 
     fn save_main_window_state(&self, window: &Window, cx: &mut App) {
         let bounds = window.window_bounds().get_bounds();

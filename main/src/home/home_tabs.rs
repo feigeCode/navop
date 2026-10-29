@@ -2,25 +2,38 @@ use crate::credential_vault::CredentialVaultView;
 use crate::home_tab::HomePage;
 use crate::license::is_feature_enabled;
 
-use crate::setting_tab::{AppSettings, SettingsPanel};
-use domain_api::{TabIntent, TerminalProfileDescriptor, TerminalProfileKind};
+#[cfg(feature = "shell")]
+use crate::setting_tab::AppSettings;
+use crate::setting_tab::SettingsPanel;
+#[cfg(feature = "shell")]
+use domain_api::{TabIntent, TerminalProfileDescriptor};
+#[cfg(feature = "shell")]
+use domain_api::TerminalProfileKind;
 use gpui::{App, AppContext, Context, Entity, Window};
 use gpui_component::{WindowExt, notification::Notification};
 use json_view::JsonFormatterView;
+#[cfg(feature = "shell")]
 use known_hosts_view::KnownHostsPage;
 use notes::NotesView;
 use one_core::license::Feature;
+#[cfg(feature = "shell")]
 use one_core::settings::{LocalTerminalCustomProfile, LocalTerminalProfileKind};
-use one_core::storage::{StoredConnection, Workspace};
+use one_core::storage::StoredConnection;
+#[cfg(any(feature = "database", test))]
+use one_core::storage::Workspace;
 use one_core::tab_actions::next_duplicate_tab_index;
 use one_core::tab_container::GlobalTabContainer;
 use one_core::tab_container::{TabContainer, TabItem, TabOpenMode};
+#[cfg(feature = "shell")]
 use remote_desktop::{RemoteDesktopConnectionOptions, RemoteDesktopProtocol};
+#[cfg(any(feature = "shell", test))]
 use rust_i18n::t;
+#[cfg(feature = "shell")]
 use terminal::{
     local_config_from_custom_profile, local_config_from_settings,
     local_config_from_settings_with_profile,
 };
+#[cfg(feature = "shell")]
 use terminal_view::{
     TerminalConnectionKind, TerminalWorkspace, current_settings as current_terminal_settings,
 };
@@ -100,10 +113,12 @@ impl HomePage {
         next_duplicate_tab_index(base_title, titles.iter().map(String::as_str))
     }
 
+    #[cfg(feature = "shell")]
     fn terminal_sync_path_enabled(cx: &App) -> bool {
         current_terminal_settings(cx).sync_path_with_terminal
     }
 
+    #[cfg(feature = "shell")]
     pub(crate) fn open_ssh_terminal(
         &mut self,
         conn: StoredConnection,
@@ -113,6 +128,7 @@ impl HomePage {
         self.open_ssh_terminal_with_mode(conn, TabOpenMode::Activate, window, cx);
     }
 
+    #[cfg(feature = "shell")]
     pub(crate) fn open_ssh_terminal_with_mode(
         &mut self,
         conn: StoredConnection,
@@ -125,6 +141,7 @@ impl HomePage {
         }
     }
 
+    #[cfg(feature = "shell")]
     pub(crate) fn open_serial_terminal(
         &mut self,
         conn: StoredConnection,
@@ -134,6 +151,7 @@ impl HomePage {
         self.open_serial_terminal_with_mode(conn, TabOpenMode::Activate, window, cx);
     }
 
+    #[cfg(feature = "shell")]
     pub(crate) fn open_serial_terminal_with_mode(
         &mut self,
         conn: StoredConnection,
@@ -146,6 +164,7 @@ impl HomePage {
         }
     }
 
+    #[cfg(feature = "shell")]
     pub(crate) fn open_telnet_terminal(
         &mut self,
         conn: StoredConnection,
@@ -155,6 +174,7 @@ impl HomePage {
         self.open_telnet_terminal_with_mode(conn, TabOpenMode::Activate, window, cx);
     }
 
+    #[cfg(feature = "shell")]
     pub(crate) fn open_telnet_terminal_with_mode(
         &mut self,
         conn: StoredConnection,
@@ -167,6 +187,7 @@ impl HomePage {
         }
     }
 
+    #[cfg(feature = "shell")]
     pub(crate) fn open_sftp_view(
         &mut self,
         conn: StoredConnection,
@@ -179,6 +200,7 @@ impl HomePage {
     }
 
     /// SFTP 双栏视图请求在指定目录打开本地终端。
+    #[cfg(feature = "shell")]
     pub(crate) fn open_sftp_local_terminal(
         &mut self,
         working_dir: String,
@@ -214,6 +236,7 @@ impl HomePage {
     }
 
     /// SFTP 双栏视图请求在指定目录打开该连接的 SSH 终端。
+    #[cfg(feature = "shell")]
     pub(crate) fn open_sftp_ssh_terminal(
         &mut self,
         connection: StoredConnection,
@@ -261,6 +284,7 @@ impl HomePage {
         });
     }
 
+    #[cfg(feature = "shell")]
     pub(crate) fn open_remote_desktop_with_mode(
         &mut self,
         conn: StoredConnection,
@@ -275,6 +299,7 @@ impl HomePage {
         }
     }
 
+    #[cfg(feature = "database")]
     pub(crate) fn open_redis_tab_with_mode(
         &mut self,
         conn: StoredConnection,
@@ -289,6 +314,7 @@ impl HomePage {
         }
     }
 
+    #[cfg(feature = "database")]
     pub(crate) fn open_mongodb_tab_with_mode(
         &mut self,
         conn: StoredConnection,
@@ -435,6 +461,7 @@ impl HomePage {
         });
     }
 
+    #[cfg(feature = "shell")]
     pub(crate) fn add_session_logs_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let _ = app_kit::registry().open_tab(
             &domain_api::TabIntent::SessionLogs,
@@ -462,6 +489,7 @@ impl HomePage {
         });
     }
 
+    #[cfg(feature = "shell")]
     pub(crate) fn add_known_hosts_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if app_kit::registry().open_tab(
             &domain_api::TabIntent::KnownHosts,
@@ -513,10 +541,12 @@ impl HomePage {
         });
     }
 
+    #[cfg(feature = "shell")]
     pub(crate) fn add_terminal_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.add_terminal_tab_from_profile(None, window, cx);
     }
 
+    #[cfg(feature = "shell")]
     pub(crate) fn add_terminal_tab_with_profile(
         &mut self,
         profile_kind: LocalTerminalProfileKind,
@@ -526,6 +556,7 @@ impl HomePage {
         self.add_terminal_tab_from_profile(Some(profile_kind), window, cx);
     }
 
+    #[cfg(feature = "shell")]
     pub(crate) fn add_terminal_tab_with_custom_profile(
         &mut self,
         profile: LocalTerminalCustomProfile,
@@ -544,6 +575,7 @@ impl HomePage {
 
     /// 以指定 WSL 发行版打开本地终端标签页（`wsl.exe -d <name>`，feigeCode/navop#182）。
     #[cfg(target_os = "windows")]
+    #[cfg(feature = "shell")]
     pub(crate) fn add_terminal_tab_with_wsl_distro(
         &mut self,
         distro: String,
@@ -560,6 +592,7 @@ impl HomePage {
         self.add_local_terminal_tab(config, window, cx);
     }
 
+    #[cfg(feature = "shell")]
     fn add_terminal_tab_from_profile(
         &mut self,
         profile_kind: Option<LocalTerminalProfileKind>,
@@ -591,6 +624,7 @@ impl HomePage {
         self.add_local_terminal_tab(config, window, cx);
     }
 
+    #[cfg(feature = "shell")]
     fn add_local_terminal_tab(
         &mut self,
         config: terminal::LocalConfig,
@@ -628,6 +662,7 @@ impl HomePage {
         });
     }
 
+    #[cfg(feature = "database")]
     pub(crate) fn add_item_to_tab_with_mode(
         &mut self,
         conn: &StoredConnection,
@@ -664,6 +699,8 @@ impl HomePage {
     /// 复制当前活动标签并打开
     pub(crate) fn duplicate_active_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let tab_container = self.active_tab_container(cx);
+        #[cfg(not(feature = "shell"))]
+        let _ = &window;
         let tc = tab_container.read(cx);
 
         // pinned tab 不支持复制
@@ -678,6 +715,7 @@ impl HomePage {
         let content_key = active_tab.content().content_key(cx);
 
         match content_key {
+            #[cfg(feature = "shell")]
             "Terminal" => {
                 // 获取终端视图的连接信息
                 let view = active_tab.content().view();
@@ -740,6 +778,7 @@ impl HomePage {
     }
 }
 
+#[cfg(feature = "shell")]
 pub(crate) fn remote_desktop_options(
     conn: &StoredConnection,
     protocol: RemoteDesktopProtocol,
@@ -752,6 +791,7 @@ pub(crate) fn remote_desktop_options(
     Some(RemoteDesktopConnectionOptions::from_storage_params(params))
 }
 
+#[cfg(feature = "shell")]
 fn push_local_terminal_config_error<T>(
     window: &mut Window,
     error: &dyn std::fmt::Display,
@@ -763,6 +803,7 @@ fn push_local_terminal_config_error<T>(
     );
 }
 
+#[cfg(feature = "shell")]
 fn domain_terminal_kind(kind: LocalTerminalProfileKind) -> TerminalProfileKind {
     match kind {
         LocalTerminalProfileKind::System => TerminalProfileKind::System,

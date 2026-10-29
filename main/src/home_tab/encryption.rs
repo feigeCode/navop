@@ -1,6 +1,7 @@
 use super::*;
 
 impl HomePage {
+    #[cfg(feature = "shell")]
     pub(crate) fn is_master_key_ready_for_new_connection(&self) -> bool {
         crypto::has_master_key()
     }
