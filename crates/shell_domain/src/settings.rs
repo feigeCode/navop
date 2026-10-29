@@ -5,6 +5,9 @@
 //! 监听全局设置，保存后立即生效，不需要额外的应用钩子。
 
 use domain_api::SettingsSectionProvider;
+
+mod local_terminal;
+mod local_terminal_profiles;
 use gpui::{App, SharedString};
 use gpui_component::setting::{
     NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage,
@@ -20,16 +23,21 @@ const TERMINAL_SETTINGS_ORDER: i32 = 20;
 pub(crate) struct ShellSettingsProvider;
 
 impl SettingsSectionProvider for ShellSettingsProvider {
-    fn pages(&self, _cx: &mut App) -> Vec<(i32, SettingPage)> {
-        vec![(TERMINAL_SETTINGS_ORDER, terminal_settings_page())]
+    fn pages(&self, cx: &mut App) -> Vec<(i32, SettingPage)> {
+        vec![(TERMINAL_SETTINGS_ORDER, terminal_settings_page(cx))]
     }
 }
 
-/// 终端设置页。
-fn terminal_settings_page() -> SettingPage {
+/// 终端设置页：终端外观/行为 + 本地终端默认 shell 与自定义终端。
+fn terminal_settings_page(cx: &mut App) -> SettingPage {
+    let profile = AppSettings::global(cx).local_terminal_profile.clone();
     SettingPage::new(t!("Settings.terminal.title"))
         .default_open(true)
-        .groups([terminal_setting_group()])
+        .resettable(true)
+        .groups([
+            terminal_setting_group(),
+            local_terminal::local_terminal_setting_group(&profile),
+        ])
 }
 
 /// 终端设置分组：字体、字号、回滚行数与剪贴板/补全开关。

@@ -249,3 +249,114 @@ Settings:
       en: Suggest previous commands while typing in the terminal.
       zh-CN: 输入命令时显示历史命令建议。
       zh-HK: 輸入指令時顯示歷史指令建議。
+
+LocalTerminal:
+  group_title:
+    en: Local Terminal
+    zh-CN: 本地终端
+    zh-HK: 本機終端
+  profile:
+    en: Default shell
+    zh-CN: 默认终端
+    zh-HK: 預設終端
+  profile_desc:
+    en: Choose the shell used when opening a new local terminal tab
+    zh-CN: 选择新建本地终端标签页时使用的 shell
+    zh-HK: 選擇新增本機終端分頁時使用的 shell
+  system:
+    en: System Default
+    zh-CN: 系统默认
+    zh-HK: 系統預設
+  zsh:
+    en: Zsh
+    zh-CN: Zsh
+    zh-HK: Zsh
+  bash:
+    en: Bash
+    zh-CN: Bash
+    zh-HK: Bash
+  fish:
+    en: Fish
+    zh-CN: Fish
+    zh-HK: Fish
+  nushell:
+    en: Nushell
+    zh-CN: Nushell
+    zh-HK: Nushell
+  powershell:
+    en: PowerShell
+    zh-CN: PowerShell
+    zh-HK: PowerShell
+  cmd:
+    en: Command Prompt
+    zh-CN: 命令提示符（CMD）
+    zh-HK: 命令提示字元（CMD）
+  wsl:
+    en: WSL
+    zh-CN: WSL
+    zh-HK: WSL
+  git_bash:
+    en: Git Bash
+    zh-CN: Git Bash
+    zh-HK: Git Bash
+  custom:
+    en: Custom
+    zh-CN: 自定义
+    zh-HK: 自訂
+  custom_program:
+    en: Custom program
+    zh-CN: 自定义程序
+    zh-HK: 自訂程式
+  custom_program_desc:
+    en: Executable path or command used when the Custom profile is selected
+    zh-CN: 选择“自定义”时使用的可执行程序路径或命令
+    zh-HK: 選擇「自訂」時使用的可執行程式路徑或命令
+  custom_arguments:
+    en: Custom arguments
+    zh-CN: 自定义参数
+    zh-HK: 自訂參數
+  custom_arguments_desc:
+    en: Arguments are parsed safely and passed directly to the program without a command shell
+    zh-CN: 参数会被安全解析并直接传给程序，不经过命令 shell
+    zh-HK: 參數會被安全解析並直接傳給程式，不經過命令 shell
+  custom_profiles:
+    en: Custom terminals
+    zh-CN: 自定义终端
+    zh-HK: 自訂終端
+  custom_command:
+    en: Terminal command
+    zh-CN: 终端命令
+    zh-HK: 終端命令
+  profiles_desc:
+    en: Add multiple named terminal commands. On macOS, .app bundle paths are resolved to their executable automatically.
+    zh-CN: 添加多个带名称的终端命令。macOS 的 .app 路径会自动解析到应用内的可执行文件。
+    zh-HK: 新增多個帶名稱的終端命令。macOS 的 .app 路徑會自動解析到應用程式內的可執行檔。
+  profiles_placeholder:
+    en: "Ghostty | /Applications/Ghostty.app\nFish | fish --login"
+    zh-CN: "Ghostty | /Applications/Ghostty.app\nFish | fish --login"
+    zh-HK: "Ghostty | /Applications/Ghostty.app\nFish | fish --login"
+  default_custom:
+    en: Default custom terminal
+    zh-CN: 默认自定义终端
+    zh-HK: 預設自訂終端
+  add_example:
+    en: Add example
+    zh-CN: 添加示例
+    zh-HK: 新增範例
+  name_placeholder:
+    en: Name
+    zh-CN: 名称
+    zh-HK: 名稱
+  command_placeholder:
+    en: Command or executable path
+    zh-CN: 命令或可执行文件路径
+    zh-HK: 命令或可執行檔路徑
+  set_default:
+    en: Set as default custom terminal
+    zh-CN: 设为默认自定义终端
+    zh-HK: 設為預設自訂終端
+  add_terminal:
+    en: Add custom terminal
+    zh-CN: 添加自定义终端
+    zh-HK: 新增自訂終端
+

@@ -4,6 +4,8 @@
 //! `one_core::settings::AppSettings`；文案硬编码中文（`data_domain` 不依赖 rust-i18n）。
 
 use domain_api::SettingsSectionProvider;
+
+mod sql_format;
 use gpui::{App, SharedString};
 use gpui_component::setting::{
     NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage,
@@ -21,13 +23,25 @@ pub struct DataSettingsProvider;
 
 impl SettingsSectionProvider for DataSettingsProvider {
     fn pages(&self, _cx: &mut App) -> Vec<(i32, SettingPage)> {
-        vec![(DATABASE_SETTINGS_ORDER, database_settings_page())]
+        vec![
+            (DATABASE_SETTINGS_ORDER, database_settings_page()),
+            (DATABASE_SETTINGS_ORDER + 1, sql_format_page()),
+        ]
     }
+}
+
+/// SQL 格式化设置页：关键字大小写、缩进风格与预览。
+fn sql_format_page() -> SettingPage {
+    SettingPage::new("SQL 格式化")
+        .resettable(true)
+        .groups([sql_format::sql_format_setting_group()])
 }
 
 /// 数据库设置页。
 fn database_settings_page() -> SettingPage {
-    SettingPage::new("数据库").groups([database_setting_group()])
+    SettingPage::new("数据库")
+        .resettable(true)
+        .groups([database_setting_group()])
 }
 
 /// 数据库设置分组：打开方式、大文本编辑器、自动保存、查询上限与表格展示。

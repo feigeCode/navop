@@ -18,13 +18,9 @@ pub(crate) fn is_full_product() -> bool {
 ///
 /// 只用来裁剪「数据库专属」的界面：数据库设置页、数据库连接类型、驱动安装提示。
 /// AI、笔记、团队、扩展等能力三产品一致，不在这里判断。
-pub(crate) fn supports_database_domain() -> bool {
-    is_full_product() || app_kit::registry().has_connection_opener(ConnectionType::Database)
-}
-
 /// 当前产品是否装配了终端领域（SSH / SFTP / 远程桌面 / 串口 / Telnet）。
 ///
-/// 用途同 [`supports_database_domain`]：终端设置页、本地终端入口、远程文件编辑器
+/// 用途：本地终端入口、远程文件编辑器设置等终端专属界面按它裁剪。
 /// 设置等终端专属界面按它裁剪。
 pub(crate) fn supports_shell_domain() -> bool {
     is_full_product() || app_kit::registry().has_connection_opener(ConnectionType::SshSftp)
@@ -57,7 +53,6 @@ mod tests {
         if identity.is_none_or(|identity| identity.app_id == AppIdentity::FULL.app_id) {
             assert!(connection_type_supported(ConnectionType::Database));
             assert!(connection_type_supported(ConnectionType::SshSftp));
-            assert!(supports_database_domain());
             assert!(supports_shell_domain());
         }
         assert_eq!(

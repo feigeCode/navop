@@ -9,7 +9,6 @@ use gpui_component::{
     v_flex,
 };
 use one_core::settings::{AppSettings, SqlIndentStyle, SqlKeywordCase};
-use rust_i18n::t;
 
 use db::{SqlFormatOptions, format_sql_with_options};
 
@@ -17,34 +16,25 @@ const SAMPLE_SQL: &str = "SELECT u.id, u.name FROM users u WHERE u.status = 'ACT
 
 pub fn sql_format_setting_group() -> SettingGroup {
     SettingGroup::new()
-        .title(t!("Settings.General.SqlFormat.group_title"))
+        .title("SQL 格式化")
         .item(keyword_case_item())
         .item(indent_item())
         .item(
             SettingItem::render(|_options, window, cx| render_preview(window, cx)).keywords([
-                t!("Settings.General.SqlFormat.preview").to_string(),
-                t!("Settings.General.SqlFormat.preview_desc").to_string(),
+                "实时预览".to_string(),
+                "编辑示例 SQL，下方按当前配置实时显示格式化结果；${...}、#{...}、{{...}} 模板片段会原样保留。".to_string(),
             ]),
         )
 }
 
 fn keyword_case_item() -> SettingItem {
     SettingItem::new(
-        t!("Settings.General.SqlFormat.keyword_case"),
+        "关键字大小写",
         SettingField::dropdown(
             vec![
-                (
-                    SqlKeywordCase::Preserve.as_str().into(),
-                    t!("Settings.General.SqlFormat.keyword_case_preserve").into(),
-                ),
-                (
-                    SqlKeywordCase::Upper.as_str().into(),
-                    t!("Settings.General.SqlFormat.keyword_case_upper").into(),
-                ),
-                (
-                    SqlKeywordCase::Lower.as_str().into(),
-                    t!("Settings.General.SqlFormat.keyword_case_lower").into(),
-                ),
+                (SqlKeywordCase::Preserve.as_str().into(), "保持原样".into()),
+                (SqlKeywordCase::Upper.as_str().into(), "全部大写".into()),
+                (SqlKeywordCase::Lower.as_str().into(), "全部小写".into()),
             ],
             |cx: &App| SharedString::from(AppSettings::global(cx).sql_format.keyword_case.as_str()),
             |val: SharedString, cx: &mut App| {
@@ -56,26 +46,17 @@ fn keyword_case_item() -> SettingItem {
         )
         .default_value(SharedString::from(SqlKeywordCase::Preserve.as_str())),
     )
-    .description(t!("Settings.General.SqlFormat.keyword_case_desc").to_string())
+    .description("格式化时 SQL 关键字的大小写策略；“保持原样”不改变原文大小写".to_string())
 }
 
 fn indent_item() -> SettingItem {
     SettingItem::new(
-        t!("Settings.General.SqlFormat.indent"),
+        "缩进风格",
         SettingField::dropdown(
             vec![
-                (
-                    SqlIndentStyle::TwoSpaces.as_str().into(),
-                    t!("Settings.General.SqlFormat.indent_two_spaces").into(),
-                ),
-                (
-                    SqlIndentStyle::FourSpaces.as_str().into(),
-                    t!("Settings.General.SqlFormat.indent_four_spaces").into(),
-                ),
-                (
-                    SqlIndentStyle::Tabs.as_str().into(),
-                    t!("Settings.General.SqlFormat.indent_tabs").into(),
-                ),
+                (SqlIndentStyle::TwoSpaces.as_str().into(), "2 空格".into()),
+                (SqlIndentStyle::FourSpaces.as_str().into(), "4 空格".into()),
+                (SqlIndentStyle::Tabs.as_str().into(), "Tab 缩进".into()),
             ],
             |cx: &App| SharedString::from(AppSettings::global(cx).sql_format.indent.as_str()),
             |val: SharedString, cx: &mut App| {
@@ -87,7 +68,7 @@ fn indent_item() -> SettingItem {
         )
         .default_value(SharedString::from(SqlIndentStyle::TwoSpaces.as_str())),
     )
-    .description(t!("Settings.General.SqlFormat.indent_desc").to_string())
+    .description("格式化后 SQL 使用的缩进".to_string())
 }
 
 struct SqlFormatPreview {
@@ -134,7 +115,7 @@ impl Render for SqlFormatPreview {
                 div()
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
-                    .child(t!("Settings.General.SqlFormat.preview_desc")),
+                    .child("编辑示例 SQL，下方按当前配置实时显示格式化结果；${...}、#{...}、{{...}} 模板片段会原样保留。"),
             )
             .child(div().max_w(px(640.)).child(Textarea::new(&self.input)))
             .child(

@@ -9,16 +9,13 @@ use crate::settings::acp_agents_settings::AcpAgentsView;
 use crate::settings::agent_settings::agent_setting_group;
 use crate::settings::appearance::render as render_appearance_settings;
 use crate::settings::connection_display_settings::connection_display_setting_group;
-use crate::settings::database_settings::database_setting_group;
 use crate::settings::llm_providers_view::LlmProvidersView;
-use crate::settings::local_terminal_settings::local_terminal_setting_group;
 use crate::settings::mcp_settings::mcp_setting_group;
 use crate::settings::notes_settings::notes_setting_group;
 use crate::settings::notes_shortcuts::{
     render_group as render_notes_shortcuts_group, search_texts as notes_shortcut_search_texts,
 };
 use crate::settings::remote_file_editor_settings::remote_file_editor_setting_group;
-use crate::settings::sql_format_settings::sql_format_setting_group;
 use crate::settings::tool_exposure_settings::{
     agent_tool_exposure_setting_group, mcp_tool_exposure_setting_group,
 };
@@ -57,19 +54,8 @@ use one_core::llm::manager::GlobalProviderState;
 use one_core::popup_window::{PopupWindowOptions, open_reusable_popup_window};
 pub const DEFAULT_SYSTEM_HOTKEY_MACOS: &str = "cmd-alt-m";
 pub const DEFAULT_SYSTEM_HOTKEY_OTHER: &str = "ctrl-alt-m";
-const DATABASE_SETTINGS_PAGE_INDEX: usize = 1;
-const TERMINAL_SETTINGS_PAGE_INDEX: usize = 2;
-const SYNC_SETTINGS_PAGE_INDEX: usize = 6;
-
-/// 当前产品实际渲染出的「同步」设置页序号。
-///
-/// 独立产品会按领域裁掉数据库页或终端页，同步页随之左移；设置页跳转必须用这个
-/// 值，不能再直接用 [`SYNC_SETTINGS_PAGE_INDEX`]。
-fn sync_settings_page_index() -> usize {
-    SYNC_SETTINGS_PAGE_INDEX
-        - usize::from(!crate::product::supports_database_domain())
-        - usize::from(!crate::product::supports_shell_domain())
-}
+/// 「同步」设置页序号：General、Agent、Acp、Mcp、Sync，同步页固定在第 5 页。
+const SYNC_SETTINGS_PAGE_INDEX: usize = 4;
 
 use gpui_component::input::InputEvent;
 pub use one_core::settings::{
@@ -592,7 +578,7 @@ impl SettingsPanel {
     }
 
     pub fn new_sync(_window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self::new_with_initial_page(sync_settings_page_index(), cx)
+        Self::new_with_initial_page(SYNC_SETTINGS_PAGE_INDEX, cx)
     }
 
     fn new_with_initial_page(initial_page_index: usize, cx: &mut Context<Self>) -> Self {
@@ -645,7 +631,7 @@ impl SettingsPanel {
         (app_options, monospace_options)
     }
 
-    fn setting_pages(&mut self, _window: &mut Window, cx: &App) -> Vec<SettingPage> {
+    fn setting_pages(&mut self, _window: &mut Window, cx: &mut App) -> Vec<SettingPage> {
         let llm_view = self.llm_providers_view.clone();
         let acp_view = self.acp_agents_view.clone();
         let default_settings = AppSettings::default();
@@ -1123,16 +1109,6 @@ impl SettingsPanel {
                     );
                     groups
                 }),
-            // 数据库设置页
-            SettingPage::new(t!("Settings.Database.title"))
-                .resettable(true)
-                .groups(vec![database_setting_group(), sql_format_setting_group()]),
-            // 终端设置页
-            SettingPage::new(t!("Settings.Terminal.title"))
-                .resettable(true)
-                .group(local_terminal_setting_group(
-                    &default_settings.local_terminal_profile,
-                )),
             // Agent 设置页
             SettingPage::new(t!("Settings.Agent.title"))
                 .resettable(true)
@@ -1238,15 +1214,10 @@ impl SettingsPanel {
                     self.update_check_state.clone(),
                 )),
         ];
-        // 独立产品只保留本领域的设置页：终端产品没有数据库设置，数据库产品没有
-        // 终端设置。先删靠后的终端页，再删数据库页，避免下标错位。
+        // 领域设置页由领域注册表提供：数据库页来自 data_domain，终端页来自
+        // shell_domain；哪个领域参与编译，就只会出现哪一页。
         let mut pages = pages;
-        if !crate::product::supports_shell_domain() {
-            pages.remove(TERMINAL_SETTINGS_PAGE_INDEX);
-        }
-        if !crate::product::supports_database_domain() {
-            pages.remove(DATABASE_SETTINGS_PAGE_INDEX);
-        }
+        pages.extend(app_kit::registry().settings_pages(cx));
         pages
     }
 }
@@ -1979,7 +1950,7 @@ impl Render for SettingsPanel {
 
         let initial_page_index = self.initial_page_index;
         let settings_id = match initial_page_index {
-            index if index == sync_settings_page_index() => "main-app-settings-sync",
+            index if index == SYNC_SETTINGS_PAGE_INDEX => "main-app-settings-sync",
             _ => "main-app-settings",
         };
 
@@ -3743,7 +3714,6 @@ mod tests {
         merge_font_options_with_custom_fonts, monospace_font_options, parse_font_families,
         personal_sync_backend_options, personal_sync_status_label, personal_sync_status_view_model,
     };
-    use crate::local_terminal_profiles::setting_options as local_terminal_profile_options;
     use crate::personal_sync_status::PersonalSyncRuntimeStatus;
     use one_core::settings::{LocalTerminalProfileKind, MasterKeyStorage};
     use std::path::Path;
@@ -4135,37 +4105,6 @@ mod tests {
         assert_eq!(&["cmd-alt-t"], entry.keys_macos);
         assert_eq!(&["alt-t"], entry.keys_other);
         assert_eq!("Settings.Shortcuts.open_local_terminal", entry.label_key);
-    }
-
-    #[test]
-    fn windows_local_terminal_options_include_wsl_git_bash_and_custom() {
-        let options = local_terminal_profile_options(true)
-            .into_iter()
-            .map(|(value, _)| LocalTerminalProfileKind::parse(value.as_ref()))
-            .collect::<Vec<_>>();
-
-        assert!(options.contains(&LocalTerminalProfileKind::System));
-        assert!(options.contains(&LocalTerminalProfileKind::PowerShell));
-        assert!(options.contains(&LocalTerminalProfileKind::Cmd));
-        assert!(options.contains(&LocalTerminalProfileKind::Wsl));
-        assert!(options.contains(&LocalTerminalProfileKind::GitBash));
-        assert!(options.contains(&LocalTerminalProfileKind::Custom));
-    }
-
-    #[test]
-    fn unix_local_terminal_options_include_common_shells() {
-        let options = local_terminal_profile_options(false)
-            .into_iter()
-            .map(|(value, _)| LocalTerminalProfileKind::parse(value.as_ref()))
-            .collect::<Vec<_>>();
-
-        assert!(options.contains(&LocalTerminalProfileKind::System));
-        assert!(options.contains(&LocalTerminalProfileKind::Zsh));
-        assert!(options.contains(&LocalTerminalProfileKind::Bash));
-        assert!(options.contains(&LocalTerminalProfileKind::Fish));
-        assert!(options.contains(&LocalTerminalProfileKind::Nushell));
-        assert!(options.contains(&LocalTerminalProfileKind::Custom));
-        assert!(!options.contains(&LocalTerminalProfileKind::Wsl));
     }
 
     #[test]

@@ -16,7 +16,7 @@ use one_core::settings::{
 };
 use rust_i18n::t;
 
-use crate::local_terminal_profiles::{effective_kind, setting_options};
+use super::local_terminal_profiles::{effective_kind, setting_options};
 
 struct TerminalProfileRow {
     id: String,
@@ -32,19 +32,19 @@ struct TerminalProfilesEditor {
 /// 本地终端设置分组：默认 profile 与自定义 profile 编辑。
 pub fn local_terminal_setting_group(defaults: &LocalTerminalProfileSettings) -> SettingGroup {
     SettingGroup::new()
-        .title(t!("Settings.General.LocalTerminal.group_title"))
+        .title(t!("LocalTerminal.group_title"))
         .items(vec![
             local_terminal_profile_item(defaults.kind),
             SettingItem::render(move |_options, window, cx| render(window, cx)).keywords([
-                t!("Settings.General.LocalTerminal.custom_profiles").to_string(),
-                t!("Settings.General.LocalTerminal.custom_command").to_string(),
+                t!("LocalTerminal.custom_profiles").to_string(),
+                t!("LocalTerminal.custom_command").to_string(),
             ]),
         ])
 }
 
 fn local_terminal_profile_item(default: LocalTerminalProfileKind) -> SettingItem {
     SettingItem::new(
-        t!("Settings.General.LocalTerminal.profile"),
+        t!("LocalTerminal.profile"),
         SettingField::dropdown(
             setting_options(cfg!(target_os = "windows")),
             |cx: &App| {
@@ -65,7 +65,7 @@ fn local_terminal_profile_item(default: LocalTerminalProfileKind) -> SettingItem
         )
         .default_value(SharedString::from(default.as_str())),
     )
-    .description(t!("Settings.General.LocalTerminal.profile_desc").to_string())
+    .description(t!("LocalTerminal.profile_desc").to_string())
 }
 
 pub(crate) fn render(window: &mut Window, cx: &mut App) -> gpui::AnyElement {
@@ -99,12 +99,12 @@ impl TerminalProfilesEditor {
         let name = cx.new(|cx| {
             InputState::new(window, cx)
                 .default_value(profile.name)
-                .placeholder(t!("Settings.General.LocalTerminal.name_placeholder"))
+                .placeholder(t!("LocalTerminal.name_placeholder"))
         });
         let command = cx.new(|cx| {
             InputState::new(window, cx)
                 .default_value(profile.command)
-                .placeholder(t!("Settings.General.LocalTerminal.command_placeholder"))
+                .placeholder(t!("LocalTerminal.command_placeholder"))
         });
         let name_subscription = cx.subscribe(&name, |editor, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
@@ -205,7 +205,7 @@ impl Render for TerminalProfilesEditor {
                 div()
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
-                    .child(t!("Settings.General.LocalTerminal.profiles_desc")),
+                    .child(t!("LocalTerminal.profiles_desc")),
             )
             .children(self.rows.iter().enumerate().map(|(index, row)| {
                 let id = row.id.clone();
@@ -222,7 +222,7 @@ impl Render for TerminalProfilesEditor {
                             .ghost()
                             .small()
                             .selected(selected)
-                            .tooltip(t!("Settings.General.LocalTerminal.set_default"))
+                            .tooltip(t!("LocalTerminal.set_default"))
                             .on_click(cx.listener(move |editor, _, _, cx| {
                                 editor.select_default(id.clone(), cx);
                             })),
@@ -241,7 +241,7 @@ impl Render for TerminalProfilesEditor {
             .child(
                 Button::new("terminal-profile-add")
                     .icon(IconName::Plus)
-                    .label(t!("Settings.General.LocalTerminal.add_terminal"))
+                    .label(t!("LocalTerminal.add_terminal"))
                     .small()
                     .on_click(cx.listener(|editor, _, window, cx| {
                         editor.add_row(window, cx);
