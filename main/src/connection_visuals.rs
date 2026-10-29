@@ -31,6 +31,7 @@ pub(crate) enum ConnectionVisualSize {
     Tree,
     List,
     Card,
+    #[allow(dead_code)]
     Hero,
 }
 

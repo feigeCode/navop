@@ -61,44 +61,17 @@ impl HomePage {
         });
     }
 
-    /// 打开「新建连接」向导。
+    /// 打开「新建连接」对话框。
     ///
-    /// `target_workspace` 为进入向导的分组（UI 上的「文件夹」）：从某分组右键新建时传该分组 id，
-    /// 表单会预选这个分组，保存后连接直接落在该分组；其它入口传 `None`。
+    /// 连接类型与表单都由领域注册表提供：全量产品看到全部类型，独立产品只看到
+    /// 自己领域注册的类型。这里不再维护产品内的向导页面。
     pub(crate) fn show_new_connection_dialog(
         &mut self,
         target_workspace: Option<i64>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.editing_connection_id = None;
-
-        if !self.ensure_master_key_ready_for_new_connection(window, cx) {
-            return;
-        }
-
-        let parent = cx.entity();
-        let parent_window = window.window_handle();
-        let external_driver_registry = self.external_driver_registry.clone();
-        open_reusable_popup_window(
-            PopupWindowOptions::new(t!("Home.new_connection").to_string()).size(1100.0, 700.0),
-            // 新建连接向导全局只有一个：菜单 / 快捷键 / 空列表按钮共用同一个窗口。
-            "new-connection-dialog",
-            move |window, cx| {
-                cx.new(|cx| {
-                    NewConnectionWindow::new(
-                        parent.clone(),
-                        parent_window,
-                        external_driver_registry.clone(),
-                        target_workspace,
-                        window,
-                        cx,
-                    )
-                })
-            },
-            Some(window),
-            cx,
-        );
+        app_kit::connection_actions::open_new_connection_in_workspace(target_workspace, window, cx);
     }
 
     pub(crate) fn open_connection_from_quick(

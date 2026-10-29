@@ -1,13 +1,45 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-//! `navop-data`：数据库 / Redis / MongoDB 产品。
+//! `navop-data`：Data。
 //!
-//! 与全量产品共用同一套应用外壳与主页，只换产品身份（数据目录、密钥链、MCP
-//! 发现、更新 feed）与领域装配；入口显隐由领域注册表与 `ProductFeatures` 决定。
+//! 应用 crate 只负责**装配**：选定产品身份、领域包与初始化流程；主页、设置、
+//! 标签、AI、Notes、团队、扩展、凭据库、云同步、托盘、更新等能力全部来自共享
+//! 外壳 `navop_app`（`main` 包）。
+
+use std::sync::Arc;
+
+use domain_api::{AppIdentity, Domain, Product, ProductFeatures};
+
+struct DataProduct;
+
+impl Product for DataProduct {
+    type Assets = navop_app::AppAssets;
+
+    fn identity(&self) -> &'static AppIdentity {
+        &AppIdentity::DATA
+    }
+
+    fn features(&self) -> ProductFeatures {
+        ProductFeatures::DATA
+    }
+
+    fn assets(&self) -> Self::Assets {
+        navop_app::AppAssets::new()
+    }
+
+    fn domains(&self) -> Vec<Arc<dyn Domain>> {
+        vec![Arc::new(data_domain::DataDomain)]
+    }
+
+    fn mcp_managed_by_app_kit(&self) -> bool {
+        true
+    }
+
+    fn init(&self, cx: &mut gpui::App) -> anyhow::Result<()> {
+        navop_app::init_app(cx)
+    }
+}
 
 fn main() {
-    navop_app::run_product_with_version(
-        navop_app::ProductKind::Data,
-        env!("CARGO_PKG_VERSION"),
-    );
+    navop_app::run_with(DataProduct, env!("CARGO_PKG_VERSION"));
 }

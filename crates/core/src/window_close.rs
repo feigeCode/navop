@@ -379,11 +379,7 @@ mod tests {
     #[test]
     fn secondary_windows_never_destroy_themselves() {
         // include_str! 用的是相对于本文件的路径，所以从 crates/core/src 往上退三级。
-        let sources: [(&str, &str); 15] = [
-            (
-                "main/src/new_connection/connection_window.rs",
-                include_str!("../../../main/src/new_connection/connection_window.rs"),
-            ),
+        let sources: [(&str, &str); 14] = [
             (
                 "main/src/credential_vault/form_window.rs",
                 include_str!("../../../main/src/credential_vault/form_window.rs"),

@@ -1,19 +1,6 @@
 use super::*;
 
 impl HomePage {
-    pub(crate) fn ensure_master_key_ready_for_new_connection(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        if self.is_master_key_ready_for_new_connection() {
-            return true;
-        }
-
-        self.show_encryption_key_dialog(window, cx);
-        false
-    }
-
     pub(crate) fn is_master_key_ready_for_new_connection(&self) -> bool {
         crypto::has_master_key()
     }

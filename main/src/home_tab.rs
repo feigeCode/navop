@@ -71,7 +71,6 @@ use crate::license::{get_license_service, is_feature_enabled, show_upgrade_dialo
 use crate::local_terminal_profiles::{
     LocalTerminalLaunchTarget, effective_kind, launch_options, launch_target_is_default,
 };
-use crate::new_connection::NewConnectionWindow;
 use crate::setting_tab::GlobalCurrentUser;
 use remote_desktop_view::remote_desktop_form::{
     RemoteDesktopFormWindow, RemoteDesktopFormWindowConfig,

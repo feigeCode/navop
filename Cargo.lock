@@ -8321,13 +8321,22 @@ dependencies = [
 name = "navop"
 version = "0.22.0"
 dependencies = [
+ "anyhow",
+ "data_domain",
+ "domain_api",
+ "gpui-fast",
  "main",
+ "shell_domain",
 ]
 
 [[package]]
 name = "navop-data"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "data_domain",
+ "domain_api",
+ "gpui-fast",
  "main",
 ]
 
@@ -8335,7 +8344,11 @@ dependencies = [
 name = "navop-shell"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "domain_api",
+ "gpui-fast",
  "main",
+ "shell_domain",
 ]
 
 [[package]]

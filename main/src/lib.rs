@@ -27,7 +27,6 @@ mod master_key_dialogs;
 mod master_key_flow;
 mod navigation_applications;
 mod navop_app;
-pub mod new_connection;
 mod persistent_connection_sidebar;
 mod personal_sync_conflicts;
 mod personal_sync_runtime;
@@ -50,8 +49,12 @@ mod window_visibility;
 mod windows_single_instance;
 
 use crate::navop_app::NavopApp;
+
+/// 共享应用初始化：三个产品 crate 的 `Product::init` 都调用它。
+pub use crate::navop_app::init as init_app;
 use gpui::*;
 
+#[allow(unused_imports)]
 use domain_api::Product as _;
 use gpui_component::Root;
 use gpui_component_assets::Assets;
@@ -60,7 +63,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{info, warn};
 
-struct AppAssets {
+pub struct AppAssets {
     builtin: Assets,
     navop_icons: one_assets::Assets,
     driver: db::ipc::DriverAssetSource,
@@ -242,7 +245,7 @@ fn main_window_options(
 }
 
 impl AppAssets {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             builtin: Assets,
             navop_icons: one_assets::Assets::new(),
@@ -439,12 +442,23 @@ pub fn run_product(kind: ProductKind) {
 /// 独立产品的包版本与 `main` 包版本不同：自动更新必须用**自己**的版本去比较
 /// release，否则 `navop-shell` 会拿全量产品的版本号判断是否需要更新。
 pub fn run_product_with_version(kind: ProductKind, version: &'static str) {
+    run_with(ProductProfile(kind), version);
+}
+
+/// 以调用方装配的产品启动完整应用。
+///
+/// 三个应用 crate 各自定义自己的 `Product`（身份、领域包、初始化），这里只负责
+/// 与产品无关的启动流程：环境文件、路径、单实例、窗口、平台集成。
+pub fn run_with<P>(product: P, version: &'static str)
+where
+    P: domain_api::Product + 'static,
+{
     env_file::load_env_files();
 
-    let profile = ProductProfile(kind);
     // 身份必须先于一切按产品派生的行为（数据目录、密钥链、MCP 发现、更新 feed）
     // 确定；全量产品也走这条路径，避免维护两套启动顺序。
-    app_kit::configure_identity(profile.identity());
+    app_kit::configure_identity(product.identity());
+    let is_full = product.identity().app_id == domain_api::AppIdentity::FULL.app_id;
 
     // GPUI 的 Windows 平台通过 DirectComposition visual 呈现窗口内容；原生 RDP
     // 后端可以把 ActiveX 子窗口作为**合成 surface** 挂进同一棵 visual 树
@@ -529,11 +543,11 @@ pub fn run_product_with_version(kind: ProductKind, version: &'static str) {
 
     // 独立产品的单实例门禁走 `app_kit` 的跨平台实现；全量产品在 Windows 上保留
     // 自己的命名管道 + 启动路径转发（两者参数与语义不同，不能共用）。
-    let mut startup_gate = match kind {
-        ProductKind::Full => None,
-        _ => match app_kit::integration::single_instance::acquire_for_product(
-            profile.identity().app_id,
-        ) {
+    let mut startup_gate = if is_full {
+        None
+    } else {
+        match app_kit::integration::single_instance::acquire_for_product(product.identity().app_id)
+        {
             Ok(Some(gate)) => Some(gate),
             // 已有实例在运行：本进程干净退出，由主实例把窗口带到前台。
             Ok(None) => return,
@@ -545,11 +559,11 @@ pub fn run_product_with_version(kind: ProductKind, version: &'static str) {
                 eprintln!("Failed to establish the single instance gate: {error:#}");
                 return;
             }
-        },
+        }
     };
 
     #[cfg(target_os = "windows")]
-    if kind == ProductKind::Full {
+    if is_full {
         use windows_single_instance::{SingleInstanceOutcome, StartupRequest};
 
         let forwarded_request_tx = startup_request_tx.clone();
@@ -613,7 +627,7 @@ pub fn run_product_with_version(kind: ProductKind, version: &'static str) {
     public_mcp::client_config::set_client_config_installed_mode(one_core::app_paths::is_installed());
 
     let app = gpui_platform::application()
-        .with_assets(AppAssets::new())
+        .with_assets(product.assets())
         // 主窗口可以被关闭 handler 保留（隐藏到托盘），所以不能再靠
         // 「最后一个窗口关掉就退出」来决定进程生死；真正退出只走既有
         // `cx.quit()` 路径（退出确认 → `close_all_tabs` 成功）。
@@ -635,7 +649,7 @@ pub fn run_product_with_version(kind: ProductKind, version: &'static str) {
         db::ipc::set_host_version(version).expect("product version must be valid semver");
         extension_runtime::set_current_host_version(version)
             .expect("product version must be valid semver");
-        if let Err(error) = app_kit::bootstrap(&profile, cx) {
+        if let Err(error) = app_kit::bootstrap(&product, cx) {
             tracing::error!(error = %error, "failed to initialize Navop application state");
             eprintln!("Failed to initialize Navop application state: {error:#}");
             cx.quit();
@@ -648,7 +662,7 @@ pub fn run_product_with_version(kind: ProductKind, version: &'static str) {
         }
         // 只有正式安装态才注册宿主文件关联；便携版与 debug 开发构建不应改写系统关联。
         // 独立产品不接管任何扩展名（`file_associations` 为空），文件关联始终归全量产品。
-        if one_core::app_paths::is_installed() && !profile.identity().file_associations.is_empty() {
+        if one_core::app_paths::is_installed() && !product.identity().file_associations.is_empty() {
             file_association::schedule_registration(cx);
         }
         notes::init(cx);
@@ -692,7 +706,7 @@ pub fn run_product_with_version(kind: ProductKind, version: &'static str) {
             initial_main_window_bounds(state_to_restore, legacy_saved_size, display.as_deref());
         // 窗口标题与桌面 app_id 都来自产品身份：独立产品必须与全量产品区分，
         // 否则 macOS 的 Dock 分组与 Linux 的 WM_CLASS 会把三个产品混在一起。
-        let identity = profile.identity();
+        let identity = product.identity();
         let options = main_window_options(
             identity.display_name,
             identity.app_id,

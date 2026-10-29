@@ -6,6 +6,11 @@ publish = false
 
 [dependencies]
 main = { path = "../../main" }
+domain_api = { workspace = true }
+gpui = { workspace = true }
+anyhow = { workspace = true }
+shell_domain = { workspace = true }
+data_domain = { workspace = true }
 
 [lints]
 workspace = true
