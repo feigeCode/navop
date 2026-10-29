@@ -351,6 +351,96 @@ mod tests {
         DatabaseType, DbConnectionConfig, RemoteDesktopParams, RemoteDesktopProtocol,
     };
 
+    struct EscDelegate;
+
+    impl ListDelegate for EscDelegate {
+        type Item = ListItem;
+
+        fn items_count(&self, _section: usize, _cx: &App) -> usize {
+            0
+        }
+
+        fn render_item(
+            &mut self,
+            _ix: IndexPath,
+            _window: &mut Window,
+            _cx: &mut Context<ListState<Self>>,
+        ) -> Option<Self::Item> {
+            None
+        }
+
+        fn set_selected_index(
+            &mut self,
+            _ix: Option<IndexPath>,
+            _window: &mut Window,
+            _cx: &mut Context<ListState<Self>>,
+        ) {
+        }
+
+        fn cancel(&mut self, window: &mut Window, cx: &mut Context<ListState<Self>>) {
+            window.close_dialog(cx);
+        }
+    }
+
+    struct FocusHost {
+        focus: gpui::FocusHandle,
+    }
+
+    impl gpui::Render for FocusHost {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl gpui::IntoElement {
+            use gpui::InteractiveElement as _;
+            div().size_full().track_focus(&self.focus)
+        }
+    }
+
+    #[gpui::test]
+    fn escape_closes_quick_open_dialog(cx: &mut gpui::TestAppContext) {
+        use gpui::{AppContext as _, InteractiveElement as _};
+        use gpui_component::{Root, Theme, list::List};
+
+        cx.update(|cx| {
+            cx.set_global(Theme::default());
+            gpui_component::init(cx);
+            notes::init(cx);
+        });
+        let (_host, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|cx| FocusHost {
+                focus: cx.focus_handle(),
+            });
+            let focus = view.read(cx).focus.clone();
+            focus.focus(window, cx);
+            Root::new(view, window, cx)
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        cx.update(|window, cx| {
+            let list = cx.new(|cx| ListState::new(EscDelegate, window, cx).searchable(true));
+            let list_for_dialog = list.clone();
+            window.open_dialog(cx, move |dialog, _window, _cx| {
+                let list = list_for_dialog.clone();
+                dialog
+                    .title("open")
+                    .w(px(640.0))
+                    .close_button(false)
+                    .content(move |content, _window, _cx| {
+                        content.p_0().child(div().id("quick-open").child(List::new(&list)))
+                    })
+            });
+            list.update(cx, |state, cx| state.focus(window, cx));
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.update(|window, cx| {
+            assert!(window.has_active_dialog(cx));
+        });
+
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(!window.has_active_dialog(cx), "Esc must close the quick open dialog");
+        });
+    }
+
     #[test]
     fn quick_open_matches_database_connection_by_ip() {
         let connection = StoredConnection::new_database(
