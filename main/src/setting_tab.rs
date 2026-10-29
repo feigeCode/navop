@@ -8,8 +8,8 @@ use crate::license::{get_license_service, offline_license_public_key};
 use crate::settings::acp_agents_settings::AcpAgentsView;
 use crate::settings::agent_settings::agent_setting_group;
 use crate::settings::appearance::render as render_appearance_settings;
-use crate::settings::database_settings::database_setting_group;
 use crate::settings::connection_display_settings::connection_display_setting_group;
+use crate::settings::database_settings::database_setting_group;
 use crate::settings::llm_providers_view::LlmProvidersView;
 use crate::settings::local_terminal_settings::local_terminal_setting_group;
 use crate::settings::mcp_settings::mcp_setting_group;
@@ -1165,19 +1165,21 @@ impl SettingsPanel {
             // 所以拆成两个并列分组，关系与「关于 / 更新」一致。
             SettingPage::new(t!("Settings.Account.title"))
                 .group(
-                    SettingGroup::new().title(t!("Settings.Account.title")).item(
-                        SettingItem::render(move |_options, window, cx| {
-                            render_account_section(window, cx)
-                        })
-                        .keywords([
-                            t!("Settings.Account.title").to_string(),
-                            t!("Settings.Account.username").to_string(),
-                            t!("Settings.Account.email").to_string(),
-                            t!("Settings.Account.not_logged_in").to_string(),
-                            t!("Auth.logout").to_string(),
-                            t!("License.import_offline").to_string(),
-                        ]),
-                    ),
+                    SettingGroup::new()
+                        .title(t!("Settings.Account.title"))
+                        .item(
+                            SettingItem::render(move |_options, window, cx| {
+                                render_account_section(window, cx)
+                            })
+                            .keywords([
+                                t!("Settings.Account.title").to_string(),
+                                t!("Settings.Account.username").to_string(),
+                                t!("Settings.Account.email").to_string(),
+                                t!("Settings.Account.not_logged_in").to_string(),
+                                t!("Auth.logout").to_string(),
+                                t!("License.import_offline").to_string(),
+                            ]),
+                        ),
                 )
                 .group(
                     SettingGroup::new()

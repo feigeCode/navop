@@ -9,6 +9,7 @@ mod connection_forms;
 mod connection_openers;
 mod session_logs;
 mod settings;
+mod tab_restore;
 
 use connection_forms::ShellConnectionFormProvider;
 use connection_openers::{FtpConnectionOpener, SerialConnectionOpener, TelnetConnectionOpener};
@@ -116,6 +117,8 @@ impl Domain for ShellDomain {
         );
         registry.register_form_provider(Arc::new(ShellConnectionFormProvider));
         registry.register_settings_provider(Arc::new(ShellSettingsProvider));
+        // Tab 会话恢复：把上次关闭时的终端 / SFTP / 远程桌面等标签重建出来。
+        registry.register_tab_restorer(Arc::new(tab_restore::ShellTabRestorer));
         register_mcp_toolsets();
     }
 
@@ -462,6 +465,23 @@ fn local_profile_kind(kind: TerminalProfileKind) -> LocalTerminalProfileKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shell_domain_registers_its_tab_restorer() {
+        let mut registry = DomainRegistry::default();
+        ShellDomain.register(&mut registry);
+        assert_eq!(1, registry.tab_restorers().len());
+        let keys = registry.tab_restorers()[0].content_keys();
+        for key in [
+            "Terminal",
+            "SFTP",
+            "RemoteDesktop",
+            "KnownHosts",
+            "SessionLogs",
+        ] {
+            assert!(keys.contains(&key), "缺少 {key}");
+        }
+    }
 
     #[test]
     fn shell_domain_has_stable_id() {

@@ -137,14 +137,14 @@ fn build_tool_registry_for_surface(
         }
     }
     if toolsets.redis {
-        runtime_registries.push(tool_runtime::ToolRegistry::new(data_domain::mcp::redis_tool_handlers(
-            cx,
-        )));
+        runtime_registries.push(tool_runtime::ToolRegistry::new(
+            data_domain::mcp::redis_tool_handlers(cx),
+        ));
     }
     if toolsets.mongo {
-        runtime_registries.push(tool_runtime::ToolRegistry::new(data_domain::mcp::mongo_tool_handlers(
-            cx,
-        )));
+        runtime_registries.push(tool_runtime::ToolRegistry::new(
+            data_domain::mcp::mongo_tool_handlers(cx),
+        ));
     }
     if !runtime_registries.is_empty() {
         // 连接级 AI 访问策略：合并后的 registry 不继承子 registry 的 guard，这里统一挂一次。

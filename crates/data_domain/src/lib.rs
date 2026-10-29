@@ -21,6 +21,7 @@ use std::sync::Arc;
 pub mod connection_forms;
 pub mod mcp;
 pub mod settings;
+mod tab_restore;
 
 pub struct DataDomain;
 
@@ -93,6 +94,8 @@ impl Domain for DataDomain {
         registry.register_form_provider(Arc::new(connection_forms::DataConnectionFormProvider));
         // 设置页：数据库打开方式、表格与查询相关设置。
         registry.register_settings_provider(Arc::new(settings::DataSettingsProvider));
+        // Tab 会话恢复：把上次关闭时的 Database / Redis / MongoDB 标签重建出来。
+        registry.register_tab_restorer(Arc::new(tab_restore::DataTabRestorer));
         register_mcp_toolsets();
     }
 
@@ -348,6 +351,17 @@ impl ConnectionOpener for MongoConnectionOpener {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn data_domain_registers_its_tab_restorer() {
+        let mut registry = DomainRegistry::default();
+        DataDomain.register(&mut registry);
+        assert_eq!(1, registry.tab_restorers().len());
+        assert_eq!(
+            vec!["Database", "Redis", "MongoDB"],
+            registry.tab_restorers()[0].content_keys()
+        );
+    }
 
     #[test]
     fn data_domain_has_stable_id() {

@@ -226,6 +226,17 @@ impl HomePage {
                             show_connection_import_window(import_home.clone(), window, cx)
                         }),
                 )
+                // 独立产品的数据目录里没有旧版本连接，只能从全量产品（或迁移包）
+                // 导入；全量产品自己就是来源，不展示这个入口。
+                .when(!crate::product::is_full_product(), |menu| {
+                    menu.item(
+                        PopupMenuItem::new(t!("Home.import_from_full_product").to_string())
+                            .icon(IconName::Inbox)
+                            .on_click(move |_, window, cx| {
+                                app_kit::import::open_import_dialog(window, cx)
+                            }),
+                    )
+                })
             })
             .into_any_element()
     }

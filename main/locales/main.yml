@@ -338,6 +338,10 @@ Home:
     en: Import from other apps
     zh-CN: 从其他应用导入
     zh-HK: 從其他應用導入
+  import_from_full_product:
+    en: Import from Navop
+    zh-CN: 从全量 Navop 导入连接
+    zh-HK: 從全量 Navop 匯入連線
   more_connection_types:
     en: More Connection Types
     zh-CN: 更多连接类型

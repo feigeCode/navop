@@ -434,12 +434,33 @@ name = "app_kit"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
+ "dirs 6.0.0",
  "domain_api",
+ "flate2",
+ "futures",
  "gpui-component",
  "gpui-fast",
+ "image",
  "mcp_host",
  "one-core",
  "public_mcp",
+ "rusqlite",
+ "rust-i18n",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "smol",
+ "tar",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tray-icon",
+ "url",
+ "windows 0.62.2",
+ "x11rb",
+ "zip 2.4.2",
 ]
 
 [[package]]
@@ -3467,6 +3488,7 @@ dependencies = [
  "gpui-fast",
  "one-core",
  "port_forwarding",
+ "serde_json",
  "tokio",
 ]
 
@@ -7568,7 +7590,6 @@ dependencies = [
  "extension-protocol",
  "extension-runtime",
  "extension_view",
- "flate2",
  "futures",
  "global-hotkey",
  "gpui-component",
@@ -7604,7 +7625,6 @@ dependencies = [
  "remote_file_editor",
  "resource_view",
  "rust-i18n",
- "semver",
  "serde",
  "serde_json",
  "sftp_view",
@@ -7612,7 +7632,6 @@ dependencies = [
  "shell_domain",
  "smol",
  "ssh",
- "tar",
  "tempfile",
  "terminal",
  "terminal_view",
@@ -7631,7 +7650,6 @@ dependencies = [
  "x11rb",
  "zed-font-kit 0.14.1-zed (git+https://github.com/zed-industries/font-kit?rev=110523127440aefb11ce0cf280ae7c5071337ec5)",
  "zeroize",
- "zip 2.4.2",
 ]
 
 [[package]]
@@ -8310,48 +8328,14 @@ dependencies = [
 name = "navop-data"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "app_kit",
- "data_domain",
- "db",
- "db_view",
- "domain_api",
- "extension-runtime",
- "gpui-component",
- "gpui-fast",
- "gpui-fast-platform",
- "gpui-kit-assets",
- "mcp_approval",
- "mcp_host",
- "mongodb_view",
- "one-assets",
- "one-core",
- "one-ui",
- "port_forwarding",
- "redis_view",
- "tokio",
+ "main",
 ]
 
 [[package]]
 name = "navop-shell"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "app_kit",
- "domain_api",
- "gpui-component",
- "gpui-fast",
- "gpui-fast-platform",
- "gpui-kit-assets",
- "mcp_approval",
- "mcp_host",
- "one-assets",
- "one-core",
- "port_forwarding",
- "remote_desktop_view",
- "shell_domain",
- "terminal_view",
- "tokio",
+ "main",
 ]
 
 [[package]]

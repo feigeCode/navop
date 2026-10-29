@@ -4,6 +4,7 @@ use crate::home::HomeContext;
 use crate::intent::TabIntent;
 use crate::kind::ConnectionKindDescriptor;
 use crate::settings::SettingsSectionProvider;
+use crate::tab_restore::TabRestorer;
 use gpui::{AnyView, App, SharedString, Window};
 use one_core::storage::{ConnectionType, StoredConnection};
 use one_core::tab_container::TabOpenMode;
@@ -50,6 +51,7 @@ pub struct DomainRegistry {
     domains: Vec<DomainId>,
     connection_openers: Vec<(ConnectionType, Arc<dyn ConnectionOpener>)>,
     tab_openers: Vec<Arc<dyn TabOpener>>,
+    tab_restorers: Vec<Arc<dyn TabRestorer>>,
     form_providers: Vec<Arc<dyn ConnectionFormProvider>>,
     settings_providers: Vec<Arc<dyn SettingsSectionProvider>>,
 }
@@ -73,6 +75,15 @@ impl DomainRegistry {
 
     pub fn register_tab_opener(&mut self, opener: Arc<dyn TabOpener>) {
         self.tab_openers.push(opener);
+    }
+
+    /// 登记一个领域级 Tab 恢复器；`app_kit::tabs` 启动时读取这张表。
+    pub fn register_tab_restorer(&mut self, restorer: Arc<dyn TabRestorer>) {
+        self.tab_restorers.push(restorer);
+    }
+
+    pub fn tab_restorers(&self) -> &[Arc<dyn TabRestorer>] {
+        &self.tab_restorers
     }
 
     pub fn register_form_provider(&mut self, provider: Arc<dyn ConnectionFormProvider>) {
@@ -245,5 +256,35 @@ mod tests {
     #[test]
     fn notify_level_is_product_independent() {
         assert_ne!(NotifyLevel::Info, NotifyLevel::Error);
+    }
+
+    struct FakeTabRestorer;
+
+    impl TabRestorer for FakeTabRestorer {
+        fn content_keys(&self) -> Vec<&'static str> {
+            vec!["Terminal", "SFTP"]
+        }
+
+        fn restore(
+            &self,
+            _state: &one_core::tab_container::TabItemState,
+            _window: &mut Window,
+            _cx: &mut App,
+        ) -> Option<Arc<dyn one_core::tab_container::TabContentView>> {
+            None
+        }
+    }
+
+    #[test]
+    fn tab_restorers_are_registered_and_expose_their_content_keys() {
+        let mut registry = DomainRegistry::default();
+        assert!(registry.tab_restorers().is_empty());
+
+        registry.register_tab_restorer(Arc::new(FakeTabRestorer));
+        assert_eq!(1, registry.tab_restorers().len());
+        assert_eq!(
+            vec!["Terminal", "SFTP"],
+            registry.tab_restorers()[0].content_keys()
+        );
     }
 }

@@ -18,7 +18,14 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
     keybindings.extend(
         shortcuts_for(cx, action_id::HOME_QUICK_OPEN, &[quick_open_default])
             .into_iter()
-            .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, OpenConnectionQuickOpen, None, cx)),
+            .map(|key| {
+                one_core::keybindings::load_dynamic_keybinding(
+                    &key,
+                    OpenConnectionQuickOpen,
+                    None,
+                    cx,
+                )
+            }),
     );
     keybindings.extend(
         shortcuts_for(
@@ -27,7 +34,9 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
             &[new_connection_default],
         )
         .into_iter()
-        .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, NewConnectionShortcut, None, cx)),
+        .map(|key| {
+            one_core::keybindings::load_dynamic_keybinding(&key, NewConnectionShortcut, None, cx)
+        }),
     );
     keybindings.extend(
         shortcuts_for(
@@ -36,7 +45,14 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
             &[open_local_terminal_default_shortcut()],
         )
         .into_iter()
-        .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, OpenLocalTerminalShortcut, None, cx)),
+        .map(|key| {
+            one_core::keybindings::load_dynamic_keybinding(
+                &key,
+                OpenLocalTerminalShortcut,
+                None,
+                cx,
+            )
+        }),
     );
     keybindings
 }

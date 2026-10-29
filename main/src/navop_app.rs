@@ -986,7 +986,14 @@ pub fn init(cx: &mut App) -> anyhow::Result<()> {
     mongodb_view::init(cx);
     #[cfg(not(feature = "builtin-mongodb"))]
     init_native_data_driver_factories(cx);
-    crate::public_mcp_runtime::init(cx);
+    // 独立产品（`navop-shell` / `navop-data`）用 `app_kit` 托管的通用 MCP 宿主
+    // (`mcp_host`)；全量产品才启动自己的 `public_mcp_runtime`，否则两套 MCP
+    // 会同时监听，发现文件与工具集互相覆盖。
+    if app_kit::identity()
+        .is_none_or(|identity| identity.app_id == domain_api::AppIdentity::FULL.app_id)
+    {
+        crate::public_mcp_runtime::init(cx);
+    }
     remote_desktop_view::init(cx);
     crate::home_tab::init(cx);
     cx.bind_keys(init_keybindings(cx));
@@ -1099,7 +1106,9 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
             &[close_active_window_default_shortcut()],
         )
         .into_iter()
-        .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, CloseActiveWindow, None, cx)),
+        .map(|key| {
+            one_core::keybindings::load_dynamic_keybinding(&key, CloseActiveWindow, None, cx)
+        }),
     );
     keybindings.extend(
         shortcuts_for(
@@ -1108,7 +1117,9 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
             &[default_shortcut("cmd-b", "ctrl-b")],
         )
         .into_iter()
-        .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, ToggleConnectionSidebar, None, cx)),
+        .map(|key| {
+            one_core::keybindings::load_dynamic_keybinding(&key, ToggleConnectionSidebar, None, cx)
+        }),
     );
     keybindings.extend(vec![
         #[cfg(target_os = "macos")]
@@ -1155,7 +1166,9 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
             &[default_shortcut("ctrl-cmd-f", "alt-enter")],
         )
         .into_iter()
-        .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, ToggleFullscreen, None, cx)),
+        .map(|key| {
+            one_core::keybindings::load_dynamic_keybinding(&key, ToggleFullscreen, None, cx)
+        }),
     );
     keybindings.extend(
         shortcuts_for(
@@ -1164,7 +1177,9 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
             &[default_shortcut("ctrl-cmd-t", "ctrl-alt-t")],
         )
         .into_iter()
-        .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, ToggleAlwaysOnTop, None, cx)),
+        .map(|key| {
+            one_core::keybindings::load_dynamic_keybinding(&key, ToggleAlwaysOnTop, None, cx)
+        }),
     );
     keybindings.extend(
         shortcuts_for(
@@ -1187,12 +1202,16 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
     keybindings.extend(
         shortcuts_for(cx, action_id::APP_SWITCH_NEXT_TAB, &["ctrl-tab"])
             .into_iter()
-            .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, SwitchNextTab, None, cx)),
+            .map(|key| {
+                one_core::keybindings::load_dynamic_keybinding(&key, SwitchNextTab, None, cx)
+            }),
     );
     keybindings.extend(
         shortcuts_for(cx, action_id::APP_SWITCH_PREVIOUS_TAB, &["ctrl-shift-tab"])
             .into_iter()
-            .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, SwitchPreviousTab, None, cx)),
+            .map(|key| {
+                one_core::keybindings::load_dynamic_keybinding(&key, SwitchPreviousTab, None, cx)
+            }),
     );
     keybindings.extend(
         shortcuts_for(
@@ -2282,9 +2301,18 @@ mod tests {
         assert!(confirm_quit.contains("shutdown_application_resources_and_quit"));
         assert!(!confirm_quit.contains("cx.quit()"));
 
-        let update_dialog = include_str!("update/dialog.rs");
-        assert!(update_dialog.contains("shutdown_application_resources_and_quit"));
+        // 更新弹窗已迁到 `app_kit::update`：它必须走宿主持有的退出漏斗
+        // （`app_kit::update::host::shutdown_application`，main 注册的 hook 正是
+        // `shutdown_application_resources_and_quit`），而不是自己调 `cx.quit()`。
+        let update_dialog = include_str!("../../crates/app_kit/src/update/dialog.rs");
+        assert!(update_dialog.contains("shutdown_application(cx"));
         assert!(!update_dialog.contains("cx.quit()"));
+
+        let main_lib = include_str!("lib.rs").replace("\r\n", "\n");
+        assert!(
+            main_lib
+                .contains("set_shutdown_hook(navop_app::shutdown_application_resources_and_quit)")
+        );
     }
 
     /// 退出漏斗必须先把留在主线程 TLS 上的原生平台句柄释放掉，再调 `cx.quit()`。

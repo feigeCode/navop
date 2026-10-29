@@ -20,7 +20,6 @@ async-trait = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-semver = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "net"] }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -81,8 +80,6 @@ global-hotkey.workspace = true
 process-util.workspace = true
 sha2 = { workspace = true }
 zeroize = { workspace = true }
-flate2 = "1"
-tar = "0.4"
 # `window_visibility` 要拿 AppKit/Win32/Xcb 原生句柄，并对 `HandleError` 用
 # `anyhow::Context`；`raw-window-handle` 0.6 没有默认特性，`std` 必须显式开，
 # 否则 `HandleError` 不实现 `std::error::Error`（今天靠别的 crate 顺带开启）。
@@ -115,7 +112,6 @@ tray-icon = { version = "0.25", default-features = false, features = ["ksni"] }
 x11rb = "0.13"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-zip = { version = "2", default-features = false, features = ["deflate"] }
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Security_Credentials", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "windows")'.build-dependencies]
@@ -148,7 +144,7 @@ builtin-data-drivers = ["builtin-mongodb"]
 embedded-webview = ["ai_chat_view/embedded-webview"]
 github-distribution = ["github-updates", "github-marketplace"]
 github-marketplace = ["extension-runtime/github-marketplace"]
-github-updates = []
+github-updates = ["app_kit/github-updates"]
 # `macos-touchbar-window-hide`：关闭窗口只隐藏原生窗口、绝不销毁，规避带 Touch Bar 的 Mac
 # 上关闭窗口闪退（navop#262 / #308 / #314）。
 #

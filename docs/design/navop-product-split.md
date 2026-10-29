@@ -1123,3 +1123,151 @@ cargo run -p navop-data   # Data
 - 数据库 AI、AI Chat、Notes/Team/Toolbox、扩展市场、云同步与账户、主密钥解锁 UI。
 - Tab 持久化、窗口状态、托盘、单实例、自动更新、文件关联、全局热键。
 - 独立产品更新 feed 与 macOS 公证/Windows 签名（见 §18.4）。
+
+## 21. 独立产品能力对齐第二批（2026-10-29）
+
+目标变为「独立产品该有的都要有」之后，第二批把 `main` 里的系统级能力整体下沉到
+`app_kit`，三产品共用同一份实现，`main` 只留薄 shim 保持既有调用点与行为不变。
+
+### 21.1 下沉的能力（`crates/app_kit`）
+
+| 模块 | 能力 | main 侧 |
+|---|---|---|
+| `actions.rs` | 可配置快捷键的动作清单（id / 标题 / 默认键位 / 平台差异） | 无 |
+| `settings/` | 通用设置页：外观（主题、字体、缩放、语言）、快捷键、Public MCP、安全与凭据、关于 | `setting_tab.rs` 保留全量产品的完整设置 |
+| `import/` | 连接导出/导入（JSON bundle）与从全量产品 `one-hub.db` 只读迁移 | 无 |
+| `integration/window_state.rs` | 窗口位置/尺寸持久化（关闭时保存 + 20s 周期保存） | 无（全量走 `AppSettings.main_window_state`） |
+| `integration/shortcuts.rs` | `cmd-n` 新建连接、`cmd-,` 设置、标签关闭/切换等绑定 | 各产品自行 `cx.bind_keys` |
+| `integration/single_instance.rs` | 三平台单实例门禁（Windows 命名管道 / Unix socket），二次启动转发 `show` | `windows_single_instance.rs` shim |
+| `integration/tray.rs` | 系统托盘：会话菜单、显示/隐藏主窗口、退出走既有确认流程 | `system_tray.rs` shim，注入 `TrayHost` |
+| `tabs.rs` | Tab 会话快照保存/恢复（复用 `one_core` 的 `TabContainerState`） | 无 |
+| `update/` | 自动更新：检查/下载/校验/安装，feed 按产品隔离 | `update/mod.rs` shim |
+| `file_association.rs` | 文件关联注册/注销，扩展名由 `AppIdentity.file_associations` 派生 | `file_association.rs` shim |
+| `vault/` | 主密钥首次设置/解锁/修改/重置、凭据库列表与表单 | `master_key_flow.rs`、`master_key_dialogs.rs` 与 `credential_vault/` shim |
+
+### 21.2 关键决策
+
+1. **Tab 恢复不复用 `TabContainer::load`**：`load` 走的是不订阅内容事件的私有路径，
+   恢复出来的标签收不到 `TabContentEvent`。改为逐条 `add_tab_with_mode(_, Background, _)`
+   （公开加法会订阅内容事件），全部加完后再激活快照里的当前标签；`PortForwarding`
+   标签依赖主页 runtime，恢复时跳过。
+2. **更新 feed 按产品隔离**：全量产品维持 `{base}/updates/latest.json`；独立产品走
+   `{base}/updates/{binary_name}/{channel}/latest.json`，`NAVOP_UPDATE_URL` 仍可整体覆盖。
+   版本号用 `update::set_current_version()` 由各 bin 注入，避免 `env!("CARGO_PKG_VERSION")`
+   在 `app_kit` 里取到错的包版本。
+3. **文件关联默认 no-op**：SHELL/DATA 的 `AppIdentity.file_associations` 为空数组，
+   `windows_registry_plan` 在 `specs.is_empty()` 时直接返回空，不再写
+   `Applications\{binary}.exe\shell\open\command`，避免独立产品抢占 `.db/.duckdb`。
+4. **托盘/单实例靠宿主注入，不反向依赖 main**：`TrayHost` 注入主窗口句柄、原生显示/
+   隐藏、标签激活与退出请求；`app_kit` 不依赖 `main` 的任何模块，独立产品注入默认实现。
+5. **主密钥门禁前移到"新建/编辑/复制连接"入口**：与全量产品一致，先
+   `vault::ensure_master_key_ready`，未设置或未解锁时弹设置/解锁弹窗，本次不打开表单。
+
+### 21.3 独立产品接入点
+
+- `apps/navop-shell/src/main.rs`、`apps/navop-data/src/main.rs`：单实例门禁 →
+  `window_state::initial_bounds` → 开窗 → `set_global(GlobalTabContainer)` →
+  `window_state::attach` + `shortcuts::install` + `single_instance.install` + `tray::install`。
+- 两个主页 `Home::new` 末尾调 `app_kit::tabs::install`，恢复上次会话的标签。
+- 侧栏工具栏新增「导入连接」；设置页新增「安全与凭据」（凭据库、修改/重置主密钥）
+  与「快捷键」（可编辑、可一键恢复默认）。
+
+### 21.4 验证结果（2026-10-29）
+
+| 验证 | 结果 |
+|---|---|
+| `cargo test -p app_kit` | 141 passed |
+| `cargo test -p domain_api -p shell_domain -p data_domain` | 18 / 11 / 24 passed |
+| `cargo test -p main --lib` | 见交付说明（托盘/更新/文件关联源码守卫已按新实现改写） |
+| `cargo build -p navop -p navop-shell -p navop-data` | 通过 |
+| `cargo test -p main --test i18n_locale_keys_contract` | 1 passed |
+| `navop-shell` / `navop-data` 临时 `HOME` 启动 | 进程存活、无 panic |
+
+### 21.5 仍未覆盖（下一批）
+
+- 账户登录与个人云同步（`main/src/auth.rs`、`personal_sync_*` 尚未下沉）。
+- Shell 工作区文件浏览/编辑器、会话日志完整入口已接但工作区浏览器未下沉。
+- Data 的数据库 AI 能力与 AI Chat、Notes/Team、扩展市场、主题级外观自定义。
+- 独立产品的更新 feed 实际发布、macOS 公证与 Windows 签名。
+
+## 22. 统一到全量主页（2026-10-29，方向修正）
+
+### 22.1 为什么改
+
+§20、§21 的独立产品是「薄壳主页 + 领域开放入口」，功能永远追不上全量产品：
+用户需要的设置、标签、AI、团队、扩展市场都要在薄壳里再实现一遍。方向修正为
+**现有功能全部保留，包括主页；只把「产品差异」做成门控**：
+
+- 三个产品共用同一套 `navop_app` 主页、设置、标签体系与系统集成；
+- 差异来自 `ProductKind`（身份、领域包、能力集合），而不是另写一套 UI；
+- 隔离更彻底：每个产品有自己的 `one-hub.db`、数据目录、keychain、MCP 发现
+  文件与更新 feed，互不读取；连接通过迁移向导导入；
+- 文件关联仍只归全量产品（`file_associations` 为空的产品不注册）。
+
+### 22.2 改动
+
+- `main/src/lib.rs`
+  - 新增 `pub enum ProductKind { Full, Shell, Data }`，集中给出 `identity()`
+    （`AppIdentity::{FULL,SHELL,DATA}`）、`features()`、`domains()`
+    （Full = Shell + Data，Shell/Data 只装自己的领域包）、
+    `mcp_managed_by_app_kit()`（全量产品仍走自己的 `public_mcp_runtime`）。
+  - `run()` → `run_product(kind)` → `run_product_with_version(kind, version)`：
+    原 `run()` 函数体参数化。身份在最前面配置（早于更新 CLI、数据目录、单实例
+    与窗口创建）；`set_current_version`/`db::ipc::set_host_version`/
+    `extension_runtime::set_current_host_version` 使用产品自己的包版本
+    （独立产品 `0.1.0`，避免与 `main` 的 `0.22.0` 混用导致更新判断错误）。
+  - 单实例：全量产品沿用 Windows 命名管道门禁；独立产品统一走
+    `app_kit::integration::single_instance::acquire_for_product`（macOS/Linux
+    用 unix socket，Windows 用命名管道），已有实例时直接退出。
+  - 文件关联：`is_installed()` 且 `file_associations` 非空才注册。
+  - 托盘：`TrayConfig` 标题取当前身份显示名，三产品同机可区分。
+  - `public_mcp_runtime` 只对全量产品启动，独立产品用 `mcp_host`，避免两套 MCP
+    抢同一个发现文件。
+- `main/src/product.rs`（新）：`is_full_product()` 与
+  `connection_type_supported(ConnectionType)`。内置类型以「当前产品的领域包是否
+  注册了打开入口」为准（`app_kit::registry().has_connection_opener`），扩展连接
+  始终保留（由扩展运行时打开）。
+- 门控接入点：主页列表/最近/侧栏树（`home_tab::connection_filter::
+  match_connection_type`）、类型筛选条与菜单（`connection_type_menu::
+  builtin_filter_types`）、新建连接清单（`new_connection::connection_kind::
+  all_with_registry` + `connection_type()`）、快速打开
+  （`home::home_connection_quick_open::update_items`）。因此：
+  `navop-shell` 只出现 SSH/SFTP/FTP/串口/Telnet/端口转发/RDP/VNC，
+  `navop-data` 只出现数据库/Redis/MongoDB，全量产品不受影响。
+- 三个 bin：`apps/navop-shell`、`apps/navop-data` 只调用
+  `navop_app::run_product_with_version(ProductKind::Shell/Data, env!("CARGO_PKG_VERSION"))`，
+  依赖收敛为 `main`；旧薄壳 `apps/*/src/home.rs`、`home/`、`sort.rs` 删除。
+- 「从全量产品导入连接」入口：新建连接下拉菜单里对独立产品展示
+  （`Home.import_from_full_product` → `app_kit::import::open_import_dialog`），
+  设置页「迁移」组同样只在独立产品展示。
+
+### 22.3 数据隔离
+
+| 项目 | navop | navop-shell | navop-data |
+|---|---|---|---|
+| 数据目录（开发） | `.navop-dev` | `.navop-shell-dev` | `.navop-data-dev` |
+| `one-hub.db` | 自己的 | 自己的（首次为空） | 自己的（首次为空） |
+| keychain service | `com.navop.desktop` | `com.navop.desktop.shell` | `com.navop.desktop.data` |
+| MCP 发现文件 | `public-mcp.json`（app=`navop`） | 同左（app=`navop-shell`） | 同左（app=`navop-data`） |
+| 更新 feed | `updates/latest.json` | `updates/navop-shell/shell/latest.json` | `updates/navop-data/data/latest.json` |
+| 文件关联 | 注册 `.db/.duckdb/.md/.cast` | 不注册 | 不注册 |
+
+开发态若设置了 `NAVOP_DATA_DIR`（本仓库 `.env.local` 默认指向 `~/.navop-dev`），
+它会覆盖上述开发目录——三产品会共享同一个数据目录，这仅是本地调试便利，
+打包（release）构建不读取 `.env*`。
+
+### 22.4 验证结果（2026-10-29）
+
+| 验证 | 结果 |
+|---|---|
+| `cargo check -p main --lib` | 0 error / 0 warning |
+| `cargo test -p main --lib` | 657 passed, 0 failed |
+| `cargo build -p navop -p navop-shell -p navop-data` | 通过 |
+| `HOME=<临时> NAVOP_DATA_DIR=<临时> navop-shell` / `navop-data` 启动 | 均存活 9s、无 panic，`Settings saved to <临时>/data/config/settings.json` |
+
+### 22.5 仍未覆盖
+
+- 账户登录与个人云同步、Notes/Team、扩展市场在独立产品中仍按全量能力提供，
+  尚未按产品做更细的入口收敛（`ProductFeatures` 目前三产品都为 `true`）。
+- Shell 工作区文件浏览/远程文件编辑器、Data 的数据库 AI 入口尚未按产品验证。
+- 独立产品的更新 feed 实际发布、macOS 公证与 Windows 签名。

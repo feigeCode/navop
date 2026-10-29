@@ -101,6 +101,11 @@ fn open_dialog(
     window: &mut Window,
     cx: &mut App,
 ) {
+    // 连接参数里可能带密码，保存时会走主密钥加密；与全量产品一致，先确保
+    // 主密钥可用，未设置/已锁定时先弹设置或解锁弹窗，本次不继续打开表单。
+    if !crate::vault::ensure_master_key_ready(window, cx) {
+        return;
+    }
     open_reusable_popup_window(
         PopupWindowOptions::new(mode.title()).size(DIALOG_WIDTH, DIALOG_HEIGHT),
         DIALOG_REUSE_KEY,

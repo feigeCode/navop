@@ -39,7 +39,15 @@ impl ConnectionQuickOpenDelegate {
     }
 
     pub(crate) fn update_items(&mut self, connections: &[StoredConnection]) {
-        self.items = connections.to_vec();
+        // 快速打开只列当前产品能力范围内的连接：独立产品不能从这里绕过列表
+        // 看到并打开自己领域之外的类型。
+        self.items = connections
+            .iter()
+            .filter(|connection| {
+                crate::product::connection_type_supported(connection.connection_type)
+            })
+            .cloned()
+            .collect();
         self.apply_filter();
     }
 

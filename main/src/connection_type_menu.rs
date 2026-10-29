@@ -43,6 +43,8 @@ pub(crate) fn builtin_filter_types(extensions: &[ExtensionFilterTarget]) -> Vec<
                 .iter()
                 .any(|ext| ext.label.eq_ignore_ascii_case(ConnectionType::label(kind)))
         })
+        // 独立产品不展示自己领域之外的筛选项（与连接列表的可见性保持一致）。
+        .filter(|kind| crate::product::connection_type_supported(*kind))
         .collect()
 }
 

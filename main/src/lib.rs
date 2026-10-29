@@ -34,6 +34,7 @@ mod personal_sync_runtime;
 #[cfg(test)]
 mod personal_sync_runtime_tests;
 mod personal_sync_status;
+mod product;
 mod public_mcp_runtime;
 mod resource_workbench_terminal;
 mod screenshot_safe;
@@ -51,6 +52,7 @@ mod windows_single_instance;
 use crate::navop_app::NavopApp;
 use gpui::*;
 
+use domain_api::Product as _;
 use gpui_component::Root;
 use gpui_component_assets::Assets;
 use one_core::settings::{AppSettings, MainWindowSize, MainWindowState};
@@ -98,7 +100,8 @@ fn navop_brand_icon(path: &str) -> Option<std::borrow::Cow<'static, [u8]>> {
     Some(std::borrow::Cow::Borrowed(bytes))
 }
 
-const NAVOP_APP_ID: &str = "navop";
+/// 单实例失败提示的对话框标题：只在 Windows 上需要（release 无控制台）。
+#[cfg(target_os = "windows")]
 pub(crate) const NAVOP_WINDOW_TITLE: &str = "Navop";
 const DEFAULT_MAIN_WINDOW_WIDTH: f32 = 1800.0;
 const DEFAULT_MAIN_WINDOW_HEIGHT: f32 = 1260.0;
@@ -215,11 +218,13 @@ fn initial_main_window_bounds_for_display(
 }
 
 fn main_window_options(
+    title: &'static str,
+    app_id: &'static str,
     window_bounds: Bounds<Pixels>,
     display_id: Option<DisplayId>,
 ) -> WindowOptions {
     let mut titlebar = gpui_component::TitleBar::title_bar_options();
-    titlebar.title = Some(NAVOP_WINDOW_TITLE.into());
+    titlebar.title = Some(title.into());
 
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(window_bounds)),
@@ -230,7 +235,7 @@ fn main_window_options(
         #[cfg(target_os = "linux")]
         window_decorations: Some(WindowDecorations::Client),
         kind: WindowKind::Normal,
-        app_id: Some(NAVOP_APP_ID.to_owned()),
+        app_id: Some(app_id.to_owned()),
         app_owns_titlebar_drag: true,
         ..Default::default()
     }
@@ -246,39 +251,6 @@ impl AppAssets {
                 Arc::new(db::ipc::IpcDriverRegistry::load_default()),
             ),
         }
-    }
-}
-
-struct FullProduct;
-
-impl domain_api::Product for FullProduct {
-    type Assets = AppAssets;
-
-    fn identity(&self) -> &'static domain_api::AppIdentity {
-        &domain_api::AppIdentity::FULL
-    }
-
-    fn features(&self) -> domain_api::ProductFeatures {
-        domain_api::ProductFeatures::FULL
-    }
-
-    fn assets(&self) -> Self::Assets {
-        AppAssets::new()
-    }
-
-    fn domains(&self) -> Vec<std::sync::Arc<dyn domain_api::Domain>> {
-        vec![
-            std::sync::Arc::new(shell_domain::ShellDomain),
-            std::sync::Arc::new(data_domain::DataDomain),
-        ]
-    }
-
-    fn mcp_managed_by_app_kit(&self) -> bool {
-        false
-    }
-
-    fn init(&self, cx: &mut gpui::App) -> anyhow::Result<()> {
-        navop_app::init(cx)
     }
 }
 
@@ -368,8 +340,111 @@ fn report_single_instance_failure(message: &str) {
     }
 }
 
+/// 产品装配选择。
+///
+/// 三产品共用同一套应用外壳（主页、设置、标签、AI、Notes、托盘、更新……），差别
+/// 只在**身份**（数据目录 / 密钥链 / MCP 发现 / 更新 feed）与**领域装配**。这样
+/// 全量产品的功能不会在独立产品里被复制成另一份残缺实现。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProductKind {
+    /// 全量产品：桌面端全部领域与文件关联独占。
+    Full,
+    /// 终端/远程产品：SSH、SFTP、终端、远程桌面、端口转发。
+    Shell,
+    /// 数据产品：数据库、Redis、MongoDB。
+    Data,
+}
+
+impl ProductKind {
+    fn identity(self) -> &'static domain_api::AppIdentity {
+        match self {
+            Self::Full => &domain_api::AppIdentity::FULL,
+            Self::Shell => &domain_api::AppIdentity::SHELL,
+            Self::Data => &domain_api::AppIdentity::DATA,
+        }
+    }
+
+    fn features(self) -> domain_api::ProductFeatures {
+        match self {
+            Self::Full => domain_api::ProductFeatures::FULL,
+            Self::Shell => domain_api::ProductFeatures::SHELL,
+            Self::Data => domain_api::ProductFeatures::DATA,
+        }
+    }
+
+    fn domains(self) -> Vec<std::sync::Arc<dyn domain_api::Domain>> {
+        match self {
+            Self::Full => vec![
+                std::sync::Arc::new(shell_domain::ShellDomain),
+                std::sync::Arc::new(data_domain::DataDomain),
+            ],
+            Self::Shell => vec![std::sync::Arc::new(shell_domain::ShellDomain)],
+            Self::Data => vec![std::sync::Arc::new(data_domain::DataDomain)],
+        }
+    }
+
+    /// Public MCP 是否交给 `app_kit` 托管。
+    ///
+    /// 全量产品仍走 main 自己的 `public_mcp_runtime`（历史行为、工具集更全）；
+    /// 独立产品用通用的 `mcp_host`，默认关闭，与产品隔离策略一致。
+    fn mcp_managed_by_app_kit(self) -> bool {
+        !matches!(self, Self::Full)
+    }
+}
+
+struct ProductProfile(ProductKind);
+
+impl domain_api::Product for ProductProfile {
+    type Assets = AppAssets;
+
+    fn identity(&self) -> &'static domain_api::AppIdentity {
+        self.0.identity()
+    }
+
+    fn features(&self) -> domain_api::ProductFeatures {
+        self.0.features()
+    }
+
+    fn assets(&self) -> Self::Assets {
+        AppAssets::new()
+    }
+
+    fn domains(&self) -> Vec<std::sync::Arc<dyn domain_api::Domain>> {
+        self.0.domains()
+    }
+
+    fn mcp_managed_by_app_kit(&self) -> bool {
+        self.0.mcp_managed_by_app_kit()
+    }
+
+    fn init(&self, cx: &mut gpui::App) -> anyhow::Result<()> {
+        navop_app::init(cx)
+    }
+}
+
 pub fn run() {
+    run_product(ProductKind::Full);
+}
+
+/// 以指定产品身份启动完整应用。
+///
+/// `navop-shell` / `navop-data` 与全量产品共享同一套 UI 与初始化流程，只换身份与
+/// 领域装配；入口显隐由各领域注册表与 `ProductFeatures` 决定。
+pub fn run_product(kind: ProductKind) {
+    run_product_with_version(kind, env!("CARGO_PKG_VERSION"));
+}
+
+/// 与 [`run_product`] 相同，但由调用方指定版本号。
+///
+/// 独立产品的包版本与 `main` 包版本不同：自动更新必须用**自己**的版本去比较
+/// release，否则 `navop-shell` 会拿全量产品的版本号判断是否需要更新。
+pub fn run_product_with_version(kind: ProductKind, version: &'static str) {
     env_file::load_env_files();
+
+    let profile = ProductProfile(kind);
+    // 身份必须先于一切按产品派生的行为（数据目录、密钥链、MCP 发现、更新 feed）
+    // 确定；全量产品也走这条路径，避免维护两套启动顺序。
+    app_kit::configure_identity(profile.identity());
 
     // GPUI 的 Windows 平台通过 DirectComposition visual 呈现窗口内容；原生 RDP
     // 后端可以把 ActiveX 子窗口作为**合成 surface** 挂进同一棵 visual 树
@@ -409,6 +484,13 @@ pub fn run() {
         }
     }
 
+    // 更新与文件关联的实现已迁入 `app_kit`，这里注入只有本产品才知道的三件事：
+    // 版本号（与 Cargo 包版本一致，`app_kit` 自身版本恒为 0.1.0）、退出前的资源清理
+    // （RDP/SSH/插件），以及更新弹窗用的品牌图标路径。
+    app_kit::update::set_current_version(version);
+    app_kit::update::set_shutdown_hook(navop_app::shutdown_application_resources_and_quit);
+    app_kit::update::set_icon_asset_path(NAVOP_ICON_ASSET_PATH);
+
     if update::handle_update_command() {
         return;
     }
@@ -421,7 +503,6 @@ pub fn run() {
                 return;
             }
         };
-    app_kit::configure_identity(&domain_api::AppIdentity::FULL);
     let path_context = match one_core::app_paths::process_context() {
         Ok(context) => context,
         Err(error) => {
@@ -446,8 +527,29 @@ pub fn run() {
         .collect::<Vec<_>>();
     let (startup_request_tx, startup_request_rx) = smol::channel::unbounded();
 
+    // 独立产品的单实例门禁走 `app_kit` 的跨平台实现；全量产品在 Windows 上保留
+    // 自己的命名管道 + 启动路径转发（两者参数与语义不同，不能共用）。
+    let mut startup_gate = match kind {
+        ProductKind::Full => None,
+        _ => match app_kit::integration::single_instance::acquire_for_product(
+            profile.identity().app_id,
+        ) {
+            Ok(Some(gate)) => Some(gate),
+            // 已有实例在运行：本进程干净退出，由主实例把窗口带到前台。
+            Ok(None) => return,
+            Err(error) => {
+                // 不能把“无法建立通信”解释成“可以另开一个实例”：放行会直接产出
+                // 第二个 GUI，而第二个窗口既没有单实例语义、也分不清谁该处理启动
+                // 文件。这里明确报错并退出。
+                tracing::error!(%error, "failed to establish the single instance gate");
+                eprintln!("Failed to establish the single instance gate: {error:#}");
+                return;
+            }
+        },
+    };
+
     #[cfg(target_os = "windows")]
-    {
+    if kind == ProductKind::Full {
         use windows_single_instance::{SingleInstanceOutcome, StartupRequest};
 
         let forwarded_request_tx = startup_request_tx.clone();
@@ -530,18 +632,23 @@ pub fn run() {
     });
 
     app.run(move |cx| {
-        db::ipc::set_host_version(env!("CARGO_PKG_VERSION"))
-            .expect("main package version must be valid semver");
-        extension_runtime::set_current_host_version(env!("CARGO_PKG_VERSION"))
-            .expect("main package version must be valid semver");
-        if let Err(error) = app_kit::bootstrap(&FullProduct, cx) {
+        db::ipc::set_host_version(version).expect("product version must be valid semver");
+        extension_runtime::set_current_host_version(version)
+            .expect("product version must be valid semver");
+        if let Err(error) = app_kit::bootstrap(&profile, cx) {
             tracing::error!(error = %error, "failed to initialize Navop application state");
             eprintln!("Failed to initialize Navop application state: {error:#}");
             cx.quit();
             return;
         }
+        // 独立产品的单实例监听在应用启动后挂载：转发请求到达时只做「前置主窗口」，
+        // 与全量产品的启动路径转发互不影响。
+        if let Some(gate) = startup_gate.take() {
+            gate.install(cx);
+        }
         // 只有正式安装态才注册宿主文件关联；便携版与 debug 开发构建不应改写系统关联。
-        if one_core::app_paths::is_installed() {
+        // 独立产品不接管任何扩展名（`file_associations` 为空），文件关联始终归全量产品。
+        if one_core::app_paths::is_installed() && !profile.identity().file_associations.is_empty() {
             file_association::schedule_registration(cx);
         }
         notes::init(cx);
@@ -583,8 +690,15 @@ pub fn run() {
             .flatten();
         let window_bounds =
             initial_main_window_bounds(state_to_restore, legacy_saved_size, display.as_deref());
-        let options =
-            main_window_options(window_bounds, display.as_ref().map(|display| display.id()));
+        // 窗口标题与桌面 app_id 都来自产品身份：独立产品必须与全量产品区分，
+        // 否则 macOS 的 Dock 分组与 Linux 的 WM_CLASS 会把三个产品混在一起。
+        let identity = profile.identity();
+        let options = main_window_options(
+            identity.display_name,
+            identity.app_id,
+            window_bounds,
+            display.as_ref().map(|display| display.id()),
+        );
 
         cx.spawn(async move |cx| {
             let main_window = match cx.open_window(options, |window, cx| {
@@ -1074,7 +1188,9 @@ mod embedded_cli_removal_tests {
             origin: gpui::point(px(0.0), px(0.0)),
             size: size(px(800.0), px(600.0)),
         };
-        let options = super::main_window_options(bounds, None);
+        let identity = &domain_api::AppIdentity::FULL;
+        let options =
+            super::main_window_options(identity.display_name, identity.app_id, bounds, None);
 
         assert_eq!(Some("navop"), options.app_id.as_deref());
         assert_eq!(
@@ -1088,6 +1204,32 @@ mod embedded_cli_removal_tests {
             gpui::WindowBackgroundAppearance::Transparent,
             options.window_background
         );
+    }
+
+    /// 独立产品的窗口标题与 app_id 必须与全量产品不同，否则 macOS Dock 分组与
+    /// Linux 的 WM_CLASS 会把三个产品当成同一个应用。
+    #[test]
+    fn product_identities_are_distinct_windows() {
+        let bounds = gpui::Bounds {
+            origin: gpui::point(px(0.0), px(0.0)),
+            size: size(px(800.0), px(600.0)),
+        };
+
+        for identity in [
+            &domain_api::AppIdentity::SHELL,
+            &domain_api::AppIdentity::DATA,
+        ] {
+            let options =
+                super::main_window_options(identity.display_name, identity.app_id, bounds, None);
+            assert_eq!(Some(identity.app_id), options.app_id.as_deref());
+            assert_eq!(
+                Some(identity.display_name),
+                options
+                    .titlebar
+                    .as_ref()
+                    .and_then(|titlebar| titlebar.title.as_deref())
+            );
+        }
     }
 }
 

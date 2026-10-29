@@ -7,10 +7,19 @@ use domain_api::{AppIdentity, DomainRegistry, Product};
 use gpui::App;
 use std::sync::OnceLock;
 
+rust_i18n::i18n!("locales", fallback = "en");
+
+pub mod actions;
 pub mod connection_actions;
+pub mod file_association;
 pub mod host;
+pub mod import;
+pub mod integration;
 pub mod new_connection;
 pub mod settings;
+pub mod tabs;
+pub mod update;
+pub mod vault;
 
 pub use connection_actions::{
     delete_connection, duplicate_connection, edit_connection, open_new_connection,

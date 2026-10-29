@@ -8,24 +8,10 @@ publish = false
 name = "navop-data"
 path = "src/main.rs"
 
+# 独立产品与全量产品共用同一套应用外壳：这里只依赖 `navop_app`（`main` 包），
+# 由 `run_product_with_version` 决定产品身份与领域装配。
 [dependencies]
-mcp_approval.workspace = true
-mcp_host.workspace = true
-app_kit.workspace = true
-domain_api.workspace = true
-gpui.workspace = true
-gpui_platform.workspace = true
-one-core.workspace = true
-one-assets.workspace = true
-data_domain.workspace = true
-extension-runtime.workspace = true
-anyhow.workspace = true
-db.workspace = true
-db_view.workspace = true
-gpui-component.workspace = true
-gpui-component-assets.workspace = true
-mongodb_view.workspace = true
-one-ui.workspace = true
-port_forwarding.workspace = true
-redis_view.workspace = true
-tokio.workspace = true
+main = { path = "../../main" }
+
+[lints]
+workspace = true

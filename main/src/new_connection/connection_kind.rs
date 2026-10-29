@@ -125,8 +125,32 @@ impl NewConnectionKind {
                 .map(Self::Database),
         );
         items.extend(external_database_kinds(registry));
+        // 只保留当前产品能力范围内的入口：独立产品看不到自己领域之外的连接类型。
+        items.retain(|kind| match kind.connection_type() {
+            Some(connection_type) => crate::product::connection_type_supported(connection_type),
+            None => true,
+        });
         items.push(Self::MoreConnections);
         items
+    }
+
+    /// 该新建入口对应的内置连接类型；类目占位与扩展入口返回 `None`。
+    pub(super) fn connection_type(&self) -> Option<ConnectionType> {
+        Some(match self {
+            Self::Ssh => ConnectionType::SshSftp,
+            Self::Ftp => ConnectionType::Ftp,
+            Self::Rdp => ConnectionType::Rdp,
+            Self::Vnc => ConnectionType::Vnc,
+            Self::Redis => ConnectionType::Redis,
+            Self::MongoDB => ConnectionType::MongoDB,
+            Self::Serial => ConnectionType::Serial,
+            Self::Telnet => ConnectionType::Telnet,
+            Self::PortForwarding => ConnectionType::PortForwarding,
+            Self::Database(_) | Self::ExternalDatabase { .. } => ConnectionType::Database,
+            Self::Extension(_) | Self::MoreConnections | Self::InstallCategoryExtensions(_) => {
+                return None;
+            }
+        })
     }
 
     /// 为没有任何成员的类目追加「+」安装入口。

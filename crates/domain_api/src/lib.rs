@@ -11,6 +11,7 @@ mod intent;
 mod kind;
 mod registry;
 mod settings;
+mod tab_restore;
 
 pub use domain::{Domain, DomainId};
 pub use form::{ConnectionFormProvider, ConnectionFormRequest, ConnectionSavedCallback};
@@ -22,3 +23,4 @@ pub use intent::{
 pub use kind::{ConnectionKindDescriptor, ConnectionKindGroup};
 pub use registry::{ConnectionOpener, DomainRegistry, TabOpener};
 pub use settings::SettingsSectionProvider;
+pub use tab_restore::TabRestorer;
