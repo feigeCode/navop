@@ -35,6 +35,7 @@ mod personal_sync_runtime_tests;
 mod personal_sync_status;
 mod product;
 mod public_mcp_runtime;
+#[cfg(feature = "shell")]
 mod resource_workbench_terminal;
 mod screenshot_safe;
 mod setting_tab;
@@ -66,7 +67,6 @@ use tracing::{info, warn};
 pub struct AppAssets {
     builtin: Assets,
     navop_icons: one_assets::Assets,
-    driver: db::ipc::DriverAssetSource,
 }
 
 pub(crate) const NAVOP_ICON_ASSET_PATH: &str = "navop/app-icon.png";
@@ -249,10 +249,6 @@ impl AppAssets {
         Self {
             builtin: Assets,
             navop_icons: one_assets::Assets::new(),
-            driver: db::ipc::DriverAssetSource::new(
-                Arc::new(db::ipc::DriverResourceLoader::new()),
-                Arc::new(db::ipc::IpcDriverRegistry::load_default()),
-            ),
         }
     }
 }
@@ -269,49 +265,54 @@ impl AssetSource for AppAssets {
             return Ok(Some(asset));
         }
 
-        match self.driver.load(path) {
-            Ok(Some(asset)) => {
-                if db::ipc::is_icon_asset_path(path) {
-                    info!(
-                        target: "driver_icon",
+        if let Some(file) = app_kit::visuals::local_icon_file_path(path) {
+            return match std::fs::read(&file) {
+                Ok(bytes) => Ok(Some(std::borrow::Cow::Owned(bytes))),
+                Err(error) => {
+                    warn!(
+                        target: "local_icon",
                         asset_path = path,
-                        bytes = asset.len(),
-                        "app asset source served driver asset"
+                        %error,
+                        "failed to read local icon asset"
                     );
+                    Ok(None)
                 }
-                Ok(Some(asset))
-            }
-            Ok(None) => {
-                if db::ipc::is_icon_asset_path(path) {
-                    info!(
-                        target: "driver_icon",
-                        asset_path = path,
-                        "driver asset source returned none; trying navop/builtin assets"
-                    );
+            };
+        }
+
+        if let Some(visuals) = app_kit::visuals::connection_visuals() {
+            match visuals.load_driver_asset(path) {
+                Some(bytes) => {
+                    if app_kit::visuals::is_icon_asset_path(path) {
+                        info!(
+                            target: "driver_icon",
+                            asset_path = path,
+                            bytes = bytes.len(),
+                            "app asset source served driver asset"
+                        );
+                    }
+                    return Ok(Some(std::borrow::Cow::Owned(bytes)));
                 }
-                if let Ok(Some(asset)) = self.navop_icons.load(path) {
-                    return Ok(Some(asset));
+                None => {
+                    if app_kit::visuals::is_icon_asset_path(path) {
+                        info!(
+                            target: "driver_icon",
+                            asset_path = path,
+                            "driver asset source returned none; trying navop/builtin assets"
+                        );
+                    }
                 }
-                self.builtin.load(path)
-            }
-            Err(error) => {
-                warn!(
-                    target: "driver_icon",
-                    asset_path = path,
-                    error = %error,
-                    "driver asset source failed; trying navop/builtin assets"
-                );
-                if let Ok(Some(asset)) = self.navop_icons.load(path) {
-                    return Ok(Some(asset));
-                }
-                self.builtin.load(path)
             }
         }
+
+        if let Ok(Some(asset)) = self.navop_icons.load(path) {
+            return Ok(Some(asset));
+        }
+        self.builtin.load(path)
     }
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
-        let mut assets = self.driver.list(path).unwrap_or_default();
-        assets.extend(self.navop_icons.list(path).unwrap_or_default());
+        let mut assets = self.navop_icons.list(path).unwrap_or_default();
         assets.extend(self.builtin.list(path).unwrap_or_default());
         assets.sort();
         assets.dedup();
@@ -376,13 +377,28 @@ impl ProductKind {
     }
 
     fn domains(self) -> Vec<std::sync::Arc<dyn domain_api::Domain>> {
-        match self {
-            Self::Full => vec![
-                std::sync::Arc::new(shell_domain::ShellDomain),
-                std::sync::Arc::new(data_domain::DataDomain),
-            ],
-            Self::Shell => vec![std::sync::Arc::new(shell_domain::ShellDomain)],
-            Self::Data => vec![std::sync::Arc::new(data_domain::DataDomain)],
+        #[cfg(all(feature = "shell", feature = "database"))]
+        {
+            match self {
+                Self::Full => vec![
+                    std::sync::Arc::new(shell_domain::ShellDomain),
+                    std::sync::Arc::new(data_domain::DataDomain),
+                ],
+                Self::Shell => vec![std::sync::Arc::new(shell_domain::ShellDomain)],
+                Self::Data => vec![std::sync::Arc::new(data_domain::DataDomain)],
+            }
+        }
+
+        #[cfg(all(feature = "shell", not(feature = "database")))]
+        {
+            let _ = self;
+            vec![std::sync::Arc::new(shell_domain::ShellDomain)]
+        }
+
+        #[cfg(all(feature = "database", not(feature = "shell")))]
+        {
+            let _ = self;
+            vec![std::sync::Arc::new(data_domain::DataDomain)]
         }
     }
 
@@ -646,7 +662,6 @@ where
     });
 
     app.run(move |cx| {
-        db::ipc::set_host_version(version).expect("product version must be valid semver");
         extension_runtime::set_current_host_version(version)
             .expect("product version must be valid semver");
         if let Err(error) = app_kit::bootstrap(&product, cx) {
@@ -668,12 +683,13 @@ where
         notes::init(cx);
         // notes::init 给 `secondary-/` 绑了一个全局的「切换源码模式」，而 gpui 的
         // 绑定优先级是「无 context 的绑定等价于最深的 context，同深度后注册者胜」；
-        // SQL 编辑器的注释快捷键必须再登记一次，才能在编辑器里按得动 cmd+/（#290 反馈）。
-        db_view::sql_editor_view::refresh_keybindings(cx);
+        // 领域快捷键必须再登记一次，才能在编辑器里按得动 cmd+/（#290 反馈）。
+        app_kit::refresh_domain_keybindings(cx);
         extension_runtime::init(cx);
         universal_plugins::init(cx);
         // 资源工作台的 terminal 页面需要宿主提供可嵌入终端;未注册时
         // 工作台渲染「此构建不可用」而不是崩溃。
+        #[cfg(feature = "shell")]
         resource_workbench_terminal::install_terminal_host(cx);
         #[cfg(feature = "shell-plugins")]
         dev_extension_registry::install_dev_host_ops(cx);

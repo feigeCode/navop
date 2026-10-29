@@ -7,7 +7,9 @@ use one_core::storage::{
 };
 use public_mcp::registry::PublicMcpRegistry;
 use public_mcp::tools::ResourcePoolProvider;
+#[cfg(feature = "database")]
 use redis_view::GlobalRedisState;
+
 use serde_json::Value;
 use std::sync::Arc;
 use tool_runtime::{
@@ -17,16 +19,23 @@ use tool_runtime::{
 pub(super) fn app_resource_pool_provider(cx: &App) -> Option<ResourcePoolProvider> {
     let repo = connection_repository(cx);
     let terminal_registry = terminal_view::public_mcp::registry(cx);
+    #[cfg(feature = "database")]
     let redis_state = cx.try_global::<GlobalRedisState>().cloned();
+    #[cfg(not(feature = "database"))]
+    let redis_state: Option<()> = None;
     if repo.is_none() && terminal_registry.is_none() && redis_state.is_none() {
         return None;
     }
     Some(Arc::new(move || {
-        match resource_pool_from_sources(
+        #[cfg(feature = "database")]
+        let pool = resource_pool_from_sources(
             repo.as_ref(),
             terminal_registry.as_ref(),
             redis_state.as_ref(),
-        ) {
+        );
+        #[cfg(not(feature = "database"))]
+        let pool = resource_pool_from_sources(repo.as_ref(), terminal_registry.as_ref());
+        match pool {
             Ok(pool) => Some(pool),
             Err(error) => {
                 tracing::warn!(error = %error, "Failed to build Public MCP resource pool");
@@ -42,6 +51,7 @@ fn connection_repository(cx: &App) -> Option<Arc<ConnectionRepository>> {
         .get::<ConnectionRepository>()
 }
 
+#[cfg(feature = "database")]
 fn resource_pool_from_sources(
     repo: Option<&Arc<ConnectionRepository>>,
     terminal_registry: Option<&PublicMcpRegistry>,
@@ -63,6 +73,26 @@ fn resource_pool_from_sources(
     }
     if let Some(state) = redis_state {
         pool = append_active_redis_resources(pool, state.connection_ids(), &ai_access_levels);
+    }
+    Ok(pool)
+}
+
+#[cfg(not(feature = "database"))]
+fn resource_pool_from_sources(
+    repo: Option<&Arc<ConnectionRepository>>,
+    terminal_registry: Option<&PublicMcpRegistry>,
+) -> Result<ResourcePool> {
+    let ai_access_levels = load_ai_access_levels(repo)?;
+    let mut pool = match repo {
+        Some(repo) => saved_connection_resource_pool(repo, &ai_access_levels)?,
+        None => ResourcePool::new(),
+    };
+    if let Some(registry) = terminal_registry {
+        pool = registry
+            .list_sessions()
+            .into_iter()
+            .filter_map(|session| terminal_session_resource(session, &ai_access_levels))
+            .fold(pool, ResourcePool::with_resource);
     }
     Ok(pool)
 }
@@ -179,6 +209,7 @@ fn terminal_session_resource(
     Some(resource)
 }
 
+#[cfg(feature = "database")]
 fn append_active_redis_resources(
     pool: ResourcePool,
     connection_ids: Vec<String>,

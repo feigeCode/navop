@@ -1,14 +1,18 @@
+#[cfg(feature = "database")]
 use db_view::connection_form_window::{
     ConnectionFormPostSaveAction, ConnectionFormWindow, ConnectionFormWindowConfig,
 };
 use gpui::{App, AppContext, Context, Window};
+#[cfg(feature = "database")]
 use mongodb_view::{MongoFormSavedCallback, MongoFormWindow, MongoFormWindowConfig};
 use one_core::cloud_sync::get_cached_team_options;
 use one_core::popup_window::{PopupWindowOptions, open_reusable_popup_window};
 use one_core::storage::{ConnectionType, StoredConnection};
+#[cfg(feature = "database")]
 use redis_view::{RedisFormSavedCallback, RedisFormWindow, RedisFormWindowConfig};
 use rust_i18n::t;
 use std::sync::Arc;
+#[cfg(feature = "shell")]
 use terminal_view::{SshFormPostSaveAction, SshFormWindow, SshFormWindowConfig};
 
 use super::ConnectionImportWindow;
@@ -37,14 +41,19 @@ impl ConnectionImportWindow {
         cx: &mut Context<Self>,
     ) {
         match connection.connection_type {
+            #[cfg(feature = "database")]
             ConnectionType::Database => self.open_database_editor(record_id, connection, cx),
+            #[cfg(feature = "database")]
             ConnectionType::Redis => self.open_redis_editor(record_id, connection, cx),
+            #[cfg(feature = "database")]
             ConnectionType::MongoDB => self.open_mongodb_editor(record_id, connection, cx),
+            #[cfg(feature = "shell")]
             ConnectionType::SshSftp => self.open_ssh_editor(record_id, connection, cx),
             _ => {}
         }
     }
 
+    #[cfg(feature = "database")]
     fn open_database_editor(
         &self,
         record_id: String,
@@ -56,8 +65,8 @@ impl ConnectionImportWindow {
         };
         // 复用键按导入草稿行区分：同一行反复编辑复用同一个窗口。
         let reuse_key = format!("connection-form:import-db:{record_id}");
-        let (workspaces, ssh_connections, external_driver_registry) =
-            self.parent.read(cx).import_editor_context();
+        let (workspaces, ssh_connections) = self.parent.read(cx).import_editor_context();
+        let external_driver_registry = self.parent.read(cx).import_editor_driver_registry();
         let form_config = ConnectionFormWindowConfig {
             initial_workspace_id: None,
             db_type: config.database_type.clone(),
@@ -81,13 +90,14 @@ impl ConnectionImportWindow {
         );
     }
 
+    #[cfg(feature = "database")]
     fn open_redis_editor(
         &self,
         record_id: String,
         connection: StoredConnection,
         cx: &mut Context<Self>,
     ) {
-        let (workspaces, ssh_connections, _) = self.parent.read(cx).import_editor_context();
+        let (workspaces, ssh_connections) = self.parent.read(cx).import_editor_context();
         // 复用键按导入草稿行区分：同一行反复编辑复用同一个窗口。
         let reuse_key = format!("connection-form:import-redis:{record_id}");
         let form_config = RedisFormWindowConfig {
@@ -108,13 +118,14 @@ impl ConnectionImportWindow {
         );
     }
 
+    #[cfg(feature = "database")]
     fn open_mongodb_editor(
         &self,
         record_id: String,
         connection: StoredConnection,
         cx: &mut Context<Self>,
     ) {
-        let (workspaces, ssh_connections, _) = self.parent.read(cx).import_editor_context();
+        let (workspaces, ssh_connections) = self.parent.read(cx).import_editor_context();
         // 复用键按导入草稿行区分：同一行反复编辑复用同一个窗口。
         let reuse_key = format!("connection-form:import-mongo:{record_id}");
         let form_config = MongoFormWindowConfig {
@@ -135,13 +146,14 @@ impl ConnectionImportWindow {
         );
     }
 
+    #[cfg(feature = "shell")]
     fn open_ssh_editor(
         &self,
         record_id: String,
         connection: StoredConnection,
         cx: &mut Context<Self>,
     ) {
-        let (workspaces, _, _) = self.parent.read(cx).import_editor_context();
+        let (workspaces, _) = self.parent.read(cx).import_editor_context();
         // 复用键按导入草稿行区分：同一行反复编辑复用同一个窗口。
         let reuse_key = format!("connection-form:import-ssh:{record_id}");
         let form_config = SshFormWindowConfig {
@@ -161,6 +173,7 @@ impl ConnectionImportWindow {
         );
     }
 
+    #[cfg(feature = "database")]
     fn database_editor_saved_callback(
         &self,
         record_id: String,
@@ -186,6 +199,7 @@ impl ConnectionImportWindow {
         })
     }
 
+    #[cfg(feature = "database")]
     fn redis_editor_saved_callback(
         &self,
         record_id: String,
@@ -201,6 +215,7 @@ impl ConnectionImportWindow {
         })
     }
 
+    #[cfg(feature = "database")]
     fn mongodb_editor_saved_callback(
         &self,
         record_id: String,
@@ -216,6 +231,7 @@ impl ConnectionImportWindow {
         })
     }
 
+    #[cfg(feature = "shell")]
     fn ssh_editor_saved_callback(
         &self,
         record_id: String,
@@ -259,33 +275,25 @@ impl ConnectionImportWindow {
 }
 
 trait ImportEditorContext {
-    fn import_editor_context(
-        &self,
-    ) -> (
-        Vec<one_core::storage::Workspace>,
-        Vec<StoredConnection>,
-        db::ipc::IpcDriverRegistry,
-    );
+    fn import_editor_context(&self) -> (Vec<one_core::storage::Workspace>, Vec<StoredConnection>);
+
+    #[cfg(feature = "database")]
+    fn import_editor_driver_registry(&self) -> db::ipc::IpcDriverRegistry;
 }
 
 impl ImportEditorContext for HomePage {
-    fn import_editor_context(
-        &self,
-    ) -> (
-        Vec<one_core::storage::Workspace>,
-        Vec<StoredConnection>,
-        db::ipc::IpcDriverRegistry,
-    ) {
+    fn import_editor_context(&self) -> (Vec<one_core::storage::Workspace>, Vec<StoredConnection>) {
         let ssh_connections = self
             .connections
             .iter()
             .filter(|connection| connection.connection_type == ConnectionType::SshSftp)
             .cloned()
             .collect();
-        (
-            self.workspaces.clone(),
-            ssh_connections,
-            self.external_driver_registry.clone(),
-        )
+        (self.workspaces.clone(), ssh_connections)
+    }
+
+    #[cfg(feature = "database")]
+    fn import_editor_driver_registry(&self) -> db::ipc::IpcDriverRegistry {
+        db::ipc::IpcDriverRegistry::load_default()
     }
 }

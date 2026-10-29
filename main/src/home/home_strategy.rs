@@ -27,14 +27,17 @@ pub(crate) fn build_connection_open_strategy(
 ) -> Box<dyn ConnectionOpenStrategy> {
     match connection.connection_type {
         ConnectionType::SshSftp => Box::new(SshOpenStrategy { connection }),
+        #[cfg(feature = "database")]
         ConnectionType::Database => Box::new(DatabaseOpenStrategy {
             connection,
             workspace,
         }),
+        #[cfg(feature = "database")]
         ConnectionType::Redis => Box::new(RedisOpenStrategy {
             connection,
             workspace,
         }),
+        #[cfg(feature = "database")]
         ConnectionType::MongoDB => Box::new(MongoOpenStrategy {
             connection,
             workspace,
@@ -594,11 +597,13 @@ impl ConnectionOpenStrategy for FtpOpenStrategy {
     }
 }
 
+#[cfg(feature = "database")]
 struct DatabaseOpenStrategy {
     connection: StoredConnection,
     workspace: Option<Workspace>,
 }
 
+#[cfg(feature = "database")]
 impl ConnectionOpenStrategy for DatabaseOpenStrategy {
     fn open(
         self: Box<Self>,
@@ -632,6 +637,7 @@ impl extension_runtime::remote_desktop_provider_install::RemoteDesktopConnection
     }
 }
 
+#[cfg(feature = "database")]
 impl extension_runtime::database_driver_install::DatabaseDriverConnectionOpener for HomePage {
     fn open_database_connection(
         &mut self,
@@ -645,11 +651,13 @@ impl extension_runtime::database_driver_install::DatabaseDriverConnectionOpener 
     }
 }
 
+#[cfg(feature = "database")]
 struct RedisOpenStrategy {
     connection: StoredConnection,
     workspace: Option<Workspace>,
 }
 
+#[cfg(feature = "database")]
 impl ConnectionOpenStrategy for RedisOpenStrategy {
     fn open(
         self: Box<Self>,
@@ -666,11 +674,13 @@ impl ConnectionOpenStrategy for RedisOpenStrategy {
     }
 }
 
+#[cfg(feature = "database")]
 struct MongoOpenStrategy {
     connection: StoredConnection,
     workspace: Option<Workspace>,
 }
 
+#[cfg(feature = "database")]
 fn mongodb_driver_id(connection: &StoredConnection) -> String {
     connection
         .to_mongodb_params()
@@ -678,6 +688,7 @@ fn mongodb_driver_id(connection: &StoredConnection) -> String {
         .unwrap_or_else(|_| mongodb_runtime::DEFAULT_MONGODB_MODERN_DRIVER_ID.to_string())
 }
 
+#[cfg(feature = "database")]
 impl ConnectionOpenStrategy for MongoOpenStrategy {
     fn open(
         self: Box<Self>,

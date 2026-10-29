@@ -103,7 +103,6 @@ impl HomePage {
             port_forwarding_runtime: Arc::new(
                 tokio::sync::Mutex::new(PortForwardingRuntime::new()),
             ),
-            external_driver_registry: IpcDriverRegistry::empty(),
             wsl_distributions: None,
         };
 

@@ -34,7 +34,7 @@ uuid = { workspace = true }
 dirs = {workspace = true}
 futures = { workspace = true }
 smol = { workspace = true }
-db_view = { workspace = true }
+db_view = { workspace = true, optional = true }
 extension-runtime = { workspace = true, features = ["wasm-components", "database", "remote-desktop"] }
 extension-host.workspace = true
 extension-plugin-adapter.workspace = true
@@ -45,35 +45,35 @@ universal-plugins.workspace = true
 resource_view.workspace = true
 workspace_explorer.workspace = true
 json_view = { workspace = true }
-terminal = { workspace = true }
-terminal_view = { workspace = true }
+terminal = { workspace = true, optional = true }
+terminal_view = { workspace = true, optional = true }
 agent_runtime = { workspace = true }
 ai_chat_view = { workspace = true, default-features = false }
 public_mcp = { workspace = true }
 tool_runtime = { workspace = true }
-port_forwarding = { workspace = true }
-port_forwarding_view = { workspace = true }
-sftp_view = { workspace = true }
-known_hosts_view = { workspace = true }
-ssh.workspace = true
-redis_view = { workspace = true }
-redis-runtime.workspace = true
-mongodb_view = { workspace = true }
-mongodb-runtime.workspace = true
-remote_desktop = { workspace = true }
-remote_desktop_view = { workspace = true }
+port_forwarding = { workspace = true, optional = true }
+port_forwarding_view = { workspace = true, optional = true }
+sftp_view = { workspace = true, optional = true }
+known_hosts_view = { workspace = true, optional = true }
+ssh = { workspace = true, optional = true }
+redis_view = { workspace = true, optional = true }
+redis-runtime = { workspace = true, optional = true }
+mongodb_view = { workspace = true, optional = true }
+mongodb-runtime = { workspace = true, optional = true }
+remote_desktop = { workspace = true, optional = true }
+remote_desktop_view = { workspace = true, optional = true }
 remote_file_editor = { workspace = true }
 one-core.workspace = true
 domain_api.workspace = true
 mcp_host.workspace = true
 mcp_approval.workspace = true
 app_kit.workspace = true
-shell_domain.workspace = true
-data_domain.workspace = true
+shell_domain = { workspace = true, optional = true }
+data_domain = { workspace = true, optional = true }
 one-ui.workspace = true
 navop_runtime.workspace = true
 reqwest_client.workspace = true
-db.workspace = true
+db = { workspace = true, optional = true }
 connection-import-protocol.workspace = true
 connection-form.workspace = true
 global-hotkey.workspace = true
@@ -137,7 +137,29 @@ tempfile = "3"
 # 「用浏览器打开」与「下载 HTML」两条路径不受影响。
 # 需要时显式开启：`cargo build -p main --features embedded-webview`
 # （Linux 另需 `webkit2gtk-4.1` 开发包，见 `script/install-linux.sh`）。
-default = ["wasm-components", "windows-native-rdp", "shell-plugins"]
+default = ["wasm-components", "windows-native-rdp", "shell-plugins", "database", "shell"]
+# 领域门控：独立产品只打开自己需要的领域，公共壳保持与领域无关。
+database = [
+    "dep:db",
+    "dep:db_view",
+    "dep:redis_view",
+    "dep:redis-runtime",
+    "dep:mongodb_view",
+    "dep:mongodb-runtime",
+    "dep:data_domain",
+]
+shell = [
+    "dep:terminal",
+    "dep:terminal_view",
+    "dep:sftp_view",
+    "dep:ssh",
+    "dep:known_hosts_view",
+    "dep:port_forwarding",
+    "dep:port_forwarding_view",
+    "dep:remote_desktop",
+    "dep:remote_desktop_view",
+    "dep:shell_domain",
+]
 builtin-duckdb = ["db/builtin-duckdb", "db_view/builtin-duckdb", "navop_runtime/builtin-duckdb"]
 builtin-mongodb = ["mongodb_view/builtin-mongodb"]
 builtin-data-drivers = ["builtin-mongodb"]

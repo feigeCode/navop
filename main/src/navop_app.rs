@@ -837,7 +837,7 @@ pub fn init(cx: &mut App) -> anyhow::Result<()> {
     // 领域专属子系统（数据库缓存、SQL 编辑器、Redis/Mongo 视图、终端视图等）
     // 由各领域包自己初始化，公共壳只知道“按注册顺序调用”。
     app_kit::init_domains(cx)?;
-    #[cfg(not(feature = "builtin-mongodb"))]
+    #[cfg(all(feature = "database", not(feature = "builtin-mongodb")))]
     init_native_data_driver_factories(cx);
     crate::personal_sync_runtime::init(cx);
     // 独立产品（`navop-shell` / `navop-data`）用 `app_kit` 托管的通用 MCP 宿主
@@ -859,7 +859,7 @@ pub fn init(cx: &mut App) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(not(feature = "builtin-mongodb"))]
+#[cfg(all(feature = "database", not(feature = "builtin-mongodb")))]
 fn init_native_data_driver_factories(cx: &mut App) {
     let Some(root) = extension_runtime::extension::extensions_root() else {
         return;
@@ -874,21 +874,15 @@ fn init_native_data_driver_factories(cx: &mut App) {
 pub fn refresh_keybindings(cx: &mut App) {
     cx.bind_keys(refreshable_keybindings(cx));
     crate::home_tab::refresh_keybindings(cx);
-    db_view::search_shortcut::refresh_keybindings(cx);
     // AI 工作台的快捷键是 app 级（无 context 冲突），留在原位即可。
     ai_chat_view::find_shortcut::refresh_keybindings(cx);
     ai_chat_view::session_shortcut::refresh_keybindings(cx);
-    terminal_view::refresh_keybindings(cx);
-    redis_view::refresh_keybindings(cx);
-    remote_desktop_view::refresh_keybindings(cx);
     let table_keybindings = table_keybindings(cx);
     one_ui::refresh_keybindings(cx, table_keybindings);
     remote_file_editor::refresh_keybindings(cx);
     notes::refresh_keybindings(cx);
-    // 必须排在 notes 之后：notes 的 `secondary-/` 是**无 context** 的全局绑定，
-    // 而 gpui 里无 context 等价于最深的 context、同深度后注册者胜；晚一步登记
-    // 才能让带 `SqlEditor` context 的注释快捷键在编辑器里胜出（#290 反馈）。
-    db_view::sql_editor_view::refresh_keybindings(cx);
+    // 领域快捷键放在通用绑定之后：顺序契约见 `app_kit::refresh_domain_keybindings`。
+    app_kit::refresh_domain_keybindings(cx);
 }
 
 fn table_keybindings(cx: &App) -> one_ui::TableKeybindings {
@@ -1828,8 +1822,8 @@ mod tests {
         let source = include_str!("lib.rs");
         let notes_init = source.find("notes::init(cx);").expect("notes::init");
         let rebind = source
-            .find("db_view::sql_editor_view::refresh_keybindings(cx);")
-            .expect("SQL 编辑器快捷键重新登记");
+            .find("app_kit::refresh_domain_keybindings(cx);")
+            .expect("领域快捷键重新登记");
 
         assert!(
             notes_init < rebind,

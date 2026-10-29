@@ -23,9 +23,8 @@ impl HomePage {
 
         let parent = cx.entity();
         let connections = self.connections.clone();
-        let external_driver_registry = self.external_driver_registry.clone();
         let list = cx.new(|cx| {
-            let mut delegate = ConnectionQuickOpenDelegate::new(parent, external_driver_registry);
+            let mut delegate = ConnectionQuickOpenDelegate::new(parent);
             delegate.update_items(&connections);
             ListState::new(delegate, window, cx).searchable(true)
         });

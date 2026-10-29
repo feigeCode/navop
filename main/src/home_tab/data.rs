@@ -63,17 +63,16 @@ impl HomePage {
                 let repo = storage
                     .get::<ConnectionRepository>()
                     .ok_or_else(|| anyhow::anyhow!("ConnectionRepository not found"))?;
-                Ok::<_, anyhow::Error>((repo.list()?, IpcDriverRegistry::load_default()))
+                Ok::<_, anyhow::Error>((repo.list()?, ()))
             })()
         });
 
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             let result = load_task.await;
             match result {
-                Ok((connections, external_driver_registry)) => {
+                Ok((connections, ())) => {
                     _ = this.update(cx, |this, cx| {
                         this.connections = connections;
-                        this.external_driver_registry = external_driver_registry;
                         this.prune_connection_selection();
                         cx.notify();
                     });

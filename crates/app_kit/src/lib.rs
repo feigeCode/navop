@@ -19,6 +19,7 @@ pub mod new_connection;
 pub mod settings;
 pub mod tabs;
 pub mod update;
+pub mod visuals;
 pub mod vault;
 
 pub use connection_actions::{
@@ -131,6 +132,16 @@ pub fn shutdown_domains(cx: &mut App) -> Vec<gpui::Task<()>> {
         .iter()
         .filter_map(|domain| domain.shutdown(cx))
         .collect()
+}
+
+/// 按注册顺序让每个领域注册自己的快捷键。
+pub fn refresh_domain_keybindings(cx: &mut App) {
+    let Some(domains) = DOMAINS.get() else {
+        return;
+    };
+    for domain in domains {
+        domain.refresh_keybindings(cx);
+    }
 }
 
 /// 首次启动写入本产品的默认 MCP 工具集，与领域包保持一致。

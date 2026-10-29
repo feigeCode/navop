@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 anyhow.workspace = true
+app_kit.workspace = true
 base64.workspace = true
 db.workspace = true
 db_view.workspace = true

@@ -2986,6 +2986,7 @@ name = "data_domain"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "app_kit",
  "base64 0.22.1",
  "db",
  "db_view",

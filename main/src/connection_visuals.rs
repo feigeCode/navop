@@ -2,7 +2,7 @@ use std::path::Path;
 
 use gpui::App;
 
-use db::ipc::{IpcDriverRegistry, driver_icon_from_asset_path, driver_icon_from_file_path};
+use app_kit::visuals::{DriverIconSource, icon_from_asset_path, icon_from_file_path};
 use gpui_component::{Icon, Sizable};
 use one_assets::IconName;
 use one_core::storage::{
@@ -163,12 +163,8 @@ pub(crate) fn database_type_icon(kind: &DatabaseType, size: ConnectionVisualSize
     name.color().with_size(size.icon_size())
 }
 
-pub(crate) fn database_config_icon(
-    config: &DbConnectionConfig,
-    size: ConnectionVisualSize,
-    registry: &IpcDriverRegistry,
-) -> Icon {
-    external_driver_icon_for_config_with_registry(config, size, registry)
+pub(crate) fn database_config_icon(config: &DbConnectionConfig, size: ConnectionVisualSize) -> Icon {
+    external_driver_icon_for_config(config, size)
         .unwrap_or_else(|| database_type_icon(&config.database_type, size))
 }
 
@@ -179,13 +175,12 @@ pub(crate) fn database_config_icon(
 pub(crate) fn stored_connection_icon_with_catalog(
     connection: &StoredConnection,
     size: ConnectionVisualSize,
-    registry: &IpcDriverRegistry,
     extension_catalog: Option<&extension_runtime::ExtensionRuntimeCatalog>,
 ) -> Icon {
     match connection.connection_type {
         ConnectionType::Database => connection
             .to_db_connection()
-            .map(|config| database_config_icon(&config, size, registry))
+            .map(|config| database_config_icon(&config, size))
             .unwrap_or_else(|_| generic_database_icon(size)),
         ConnectionType::SshSftp => connection
             .to_ssh_params()
@@ -227,7 +222,7 @@ pub(crate) fn extension_catalog_from_cx(
 fn ssh_icon(params: &SshParams, size: ConnectionVisualSize) -> Icon {
     match ssh_icon_source(params) {
         SshIconSource::File(path) => {
-            driver_icon_from_file_path(path.to_path_buf(), size.icon_size())
+            icon_from_file_path(path.to_path_buf(), size.icon_size())
         }
         SshIconSource::BuiltIn(name) => color_icon(name, size),
     }
@@ -243,17 +238,15 @@ fn ssh_icon_source(params: &SshParams) -> SshIconSource<'_> {
         .unwrap_or_else(|| SshIconSource::BuiltIn(params.os_icon()))
 }
 
-pub(crate) fn external_driver_icon_for_config_with_registry(
+pub(crate) fn external_driver_icon_for_config(
     config: &DbConnectionConfig,
     size: ConnectionVisualSize,
-    registry: &IpcDriverRegistry,
 ) -> Option<Icon> {
-    let display = registry.display_for_config(config)?;
-    external_driver_icon_from_sources(
-        display.icon_asset_path.as_deref(),
-        display.icon_file_path.as_deref(),
-        size,
-    )
+    let source = app_kit::visuals::connection_visuals()?.driver_icon(config)?;
+    match source {
+        DriverIconSource::Asset(path) => Some(icon_from_asset_path(path, size.icon_size())),
+        DriverIconSource::File(path) => Some(icon_from_file_path(path, size.icon_size())),
+    }
 }
 
 /// Resolves external driver visuals with the host-authoritative precedence:
@@ -264,14 +257,10 @@ pub(crate) fn external_driver_icon_from_sources(
     size: ConnectionVisualSize,
 ) -> Option<Icon> {
     match external_driver_icon_source(icon_asset_path, icon_file_path)? {
-        ExternalDriverIconSource::File(path) => Some(driver_icon_from_file_path(
-            path.to_path_buf(),
-            size.icon_size(),
-        )),
-        ExternalDriverIconSource::Asset(path) => Some(driver_icon_from_asset_path(
-            path.to_string(),
-            size.icon_size(),
-        )),
+        ExternalDriverIconSource::File(path) => {
+            Some(icon_from_file_path(path.to_path_buf(), size.icon_size()))
+        }
+        ExternalDriverIconSource::Asset(path) => Some(icon_from_asset_path(path.to_string(), size.icon_size())),
     }
 }
 

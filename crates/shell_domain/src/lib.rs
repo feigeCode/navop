@@ -124,6 +124,11 @@ impl Domain for ShellDomain {
     }
 
     /// 终端领域的子系统初始化：SSH 会话服务、终端视图与远程桌面视图。
+    fn refresh_keybindings(&self, cx: &mut App) {
+        terminal_view::refresh_keybindings(cx);
+        remote_desktop_view::refresh_keybindings(cx);
+    }
+
     fn init(&self, cx: &mut App) -> anyhow::Result<()> {
         lifecycle::init(cx);
         terminal_view::init(cx);

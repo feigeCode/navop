@@ -2,6 +2,10 @@ _version: 2
 
 # 通用文本
 Common:
+  connection_type_unsupported:
+    en: "This product cannot open this connection type: %{name}"
+    zh-CN: "当前产品不支持打开该连接类型：%{name}"
+    zh-HK: "目前產品不支援開啟此連線類型：%{name}"
   ok:
     en: OK
     zh-CN: 好

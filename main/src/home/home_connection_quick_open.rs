@@ -1,6 +1,5 @@
 use crate::connection_visuals::{ConnectionVisualSize, stored_connection_icon_with_catalog};
 use crate::home_tab::{HomePage, connection_matches_query};
-use db::ipc::IpcDriverRegistry;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, Context, Entity, FontWeight, ParentElement, SharedString, Styled, Task, Window, div, px,
@@ -16,7 +15,6 @@ use rust_i18n::t;
 
 pub(crate) struct ConnectionQuickOpenDelegate {
     parent: Entity<HomePage>,
-    external_driver_registry: IpcDriverRegistry,
     items: Vec<StoredConnection>,
     filtered_items: Vec<StoredConnection>,
     selected_index: Option<IndexPath>,
@@ -26,11 +24,9 @@ pub(crate) struct ConnectionQuickOpenDelegate {
 impl ConnectionQuickOpenDelegate {
     pub(crate) fn new(
         parent: Entity<HomePage>,
-        external_driver_registry: IpcDriverRegistry,
     ) -> Self {
         Self {
             parent,
-            external_driver_registry,
             items: Vec::new(),
             filtered_items: Vec::new(),
             selected_index: None,
@@ -252,7 +248,6 @@ impl ListDelegate for ConnectionQuickOpenDelegate {
             stored_connection_icon_with_catalog(
                 &connection,
                 ConnectionVisualSize::Tree,
-                &self.external_driver_registry,
                 extension_catalog.as_deref(),
             )
         };

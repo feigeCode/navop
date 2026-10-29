@@ -136,11 +136,13 @@ fn build_tool_registry_for_surface(
             tracing::warn!("Public MCP database tools enabled before storage is initialized");
         }
     }
+    #[cfg(feature = "database")]
     if toolsets.redis {
         runtime_registries.push(tool_runtime::ToolRegistry::new(
             data_domain::mcp::redis_tool_handlers(cx),
         ));
     }
+    #[cfg(feature = "database")]
     if toolsets.mongo {
         runtime_registries.push(tool_runtime::ToolRegistry::new(
             data_domain::mcp::mongo_tool_handlers(cx),

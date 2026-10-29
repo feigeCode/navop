@@ -13,7 +13,9 @@ use rust_i18n::t;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
+#[cfg(feature = "shell")]
 mod recording;
+#[cfg(feature = "shell")]
 pub(crate) use recording::open_session_log_file;
 
 #[derive(Debug)]
@@ -26,6 +28,7 @@ pub(crate) enum FileOpenInput {
 enum OpenFileKind {
     Database(DatabaseType),
     Markdown,
+    #[cfg(feature = "shell")]
     TerminalRecording,
 }
 
@@ -87,6 +90,7 @@ fn try_open_input(input: FileOpenInput, window: &mut Window, cx: &mut App) -> Re
             open_markdown_file(prepared.path, window, cx);
             Ok(())
         }
+        #[cfg(feature = "shell")]
         OpenFileKind::TerminalRecording => {
             recording::open_recording_file(prepared.path, window, cx);
             Ok(())
@@ -102,6 +106,7 @@ fn prepare_open_file(input: FileOpenInput) -> Result<Option<PreparedOpenFile>> {
     let Some(kind) = classify_supported_path(&path) else {
         return Ok(None);
     };
+    #[cfg(feature = "shell")]
     if kind == OpenFileKind::TerminalRecording {
         return Ok(Some(PreparedOpenFile { path, kind }));
     }
@@ -122,6 +127,7 @@ fn prepare_open_file(input: FileOpenInput) -> Result<Option<PreparedOpenFile>> {
             .canonicalize()
             .with_context(|| format!("规范化数据库文件路径失败: {}", absolute.display()))?,
         OpenFileKind::Markdown => absolute,
+        #[cfg(feature = "shell")]
         OpenFileKind::TerminalRecording => {
             unreachable!("recordings are prepared in the background")
         }
@@ -130,6 +136,7 @@ fn prepare_open_file(input: FileOpenInput) -> Result<Option<PreparedOpenFile>> {
 }
 
 fn classify_supported_path(path: &Path) -> Option<OpenFileKind> {
+    #[cfg(feature = "shell")]
     if is_terminal_recording_path(path) {
         return Some(OpenFileKind::TerminalRecording);
     }
@@ -142,6 +149,7 @@ fn classify_supported_path(path: &Path) -> Option<OpenFileKind> {
     }
 }
 
+#[cfg(feature = "shell")]
 fn is_terminal_recording_path(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return false;
@@ -184,16 +192,26 @@ fn open_database_file(
         .map(|global| global.home_page.clone())
         .context("home page is not ready")?;
     let connection = persisted.connection;
+    // 驱动安装检查与标签创建都属于领域职责：文件关联只负责把连接写入仓库，
+    // 随后交给领域注册表按连接类型打开。
     window.defer(cx, move |window, cx| {
         home.update(cx, |home, cx| {
-            extension_runtime::database_driver_install::open_database_connection_with_driver_guard(
-                home,
-                connection,
-                None,
+            if !app_kit::registry().open_connection(
+                &connection,
                 TabOpenMode::Activate,
+                home,
                 window,
                 cx,
-            );
+            ) {
+                window.push_notification(
+                    Notification::warning(
+                        t!("Common.connection_type_unsupported", name = connection.name.clone())
+                            .to_string(),
+                    )
+                    .autohide(true),
+                    cx,
+                );
+            }
         });
     });
     Ok(())

@@ -23,6 +23,7 @@ use std::sync::Arc;
 pub mod connection_forms;
 pub mod mcp;
 pub mod settings;
+pub mod visuals;
 mod tab_restore;
 
 pub struct DataDomain;
@@ -86,7 +87,18 @@ impl Domain for DataDomain {
 
     /// 数据领域的子系统初始化：数据库缓存、SQL 编辑器、Redis/Mongo 视图、
     /// 全局数据库状态与“询问 AI”通知器。
+    fn refresh_keybindings(&self, cx: &mut App) {
+        db_view::search_shortcut::refresh_keybindings(cx);
+        redis_view::refresh_keybindings(cx);
+        // 必须排在笔记之后：笔记的 `secondary-/` 是无 context 的全局绑定，
+        // 同深度后注册者胜，SQL 编辑器的带 context 绑定要靠后登记（#290）。
+        db_view::sql_editor_view::refresh_keybindings(cx);
+    }
+
     fn init(&self, cx: &mut App) -> anyhow::Result<()> {
+        db::ipc::set_host_version(app_kit::update::current_version())
+            .map_err(|error| anyhow::anyhow!("invalid product version: {error}"))?;
+        app_kit::visuals::set_connection_visuals(Arc::new(visuals::DataConnectionVisuals::new()));
         db::init_cache(cx);
         if let Some(cache) = cx.try_global::<db::GlobalNodeCache>() {
             cache.start_cleanup_task(cx);
