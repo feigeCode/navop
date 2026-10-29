@@ -167,3 +167,85 @@ SessionLogs:
     en: Port
     zh-CN: 串口
     zh-HK: 連接埠
+
+ConnectionForm:
+  kind:
+    ssh:
+      en: SSH / SFTP
+      zh-CN: SSH / SFTP
+      zh-HK: SSH / SFTP
+    ftp:
+      en: FTP
+      zh-CN: FTP
+      zh-HK: FTP
+    serial:
+      en: Serial Port
+      zh-CN: 串口
+      zh-HK: 序列埠
+    telnet:
+      en: Telnet
+      zh-CN: Telnet
+      zh-HK: Telnet
+    port_forwarding:
+      en: Port Forwarding
+      zh-CN: 端口转发
+      zh-HK: 連接埠轉送
+    rdp:
+      en: RDP Remote Desktop
+      zh-CN: RDP 远程桌面
+      zh-HK: RDP 遠端桌面
+    vnc:
+      en: VNC Remote Desktop
+      zh-CN: VNC 远程桌面
+      zh-HK: VNC 遠端桌面
+
+Settings:
+  terminal:
+    title:
+      en: Terminal
+      zh-CN: 终端
+      zh-HK: 終端
+    group_title:
+      en: Display and Behavior
+      zh-CN: 终端显示与行为
+      zh-HK: 終端顯示與行為
+    font_family:
+      en: Font Family
+      zh-CN: 字体
+      zh-HK: 字體
+    font_family_description:
+      en: Monospace font used by terminal views.
+      zh-CN: 终端使用的等宽字体。
+      zh-HK: 終端使用的等寬字體。
+    font_size:
+      en: Font Size
+      zh-CN: 字号
+      zh-HK: 字號
+    font_size_description:
+      en: Terminal font size, between 8 and 32.
+      zh-CN: 终端字体大小，范围 8–32。
+      zh-HK: 終端字體大小，範圍 8–32。
+    scrollback_lines:
+      en: Scrollback Lines
+      zh-CN: 回滚行数
+      zh-HK: 回捲行數
+    scrollback_lines_description:
+      en: Maximum lines kept above the viewport, between 1,000 and 1,000,000.
+      zh-CN: 向上可回看的最大行数，范围 1,000–1,000,000。
+      zh-HK: 向上可回看的最大行數，範圍 1,000–1,000,000。
+    auto_copy:
+      en: Auto Copy
+      zh-CN: 自动复制
+      zh-HK: 自動複製
+    auto_copy_description:
+      en: Copy selected terminal text to the clipboard automatically.
+      zh-CN: 选中终端文本后自动复制到剪贴板。
+      zh-HK: 選取終端文字後自動複製到剪貼簿。
+    autocomplete:
+      en: Command Autocomplete
+      zh-CN: 命令自动补全
+      zh-HK: 指令自動補全
+    autocomplete_description:
+      en: Suggest previous commands while typing in the terminal.
+      zh-CN: 输入命令时显示历史命令建议。
+      zh-HK: 輸入指令時顯示歷史指令建議。

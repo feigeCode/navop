@@ -1000,7 +1000,8 @@ cargo run -p navop-data   # Data
 - macOS 包默认 ad-hoc 签名，未接 Developer ID/公证；三产品更新 feed 尚未隔离，独立产品不应复用全量的更新清单。
 - Linux 包使用构建机 glibc，尚未接主 Release 的 `cargo zigbuild ... .2.28` 基线。
 - `main` 仍保留旧域名打开路径作为未注册时的 fallback，以及旧的数据库驱动守卫；`navop-shell`/`navop-data` 已不再走这些 fallback。
-- 两个独立产品当前只装配连接列表与领域打开入口，不含设置、AI、Notes、Team、凭据库、云同步；这些属于全量产品。
+- 两个独立产品已具备新建/编辑/复制/删除连接、搜索、基础设置页与会话日志入口，但仍不含 AI、Notes、Team、凭据库、云同步、扩展市场与主题级外观自定义；这些属于全量产品。
+- 独立产品暂不支持「从全量产品导入连接」，首次使用需在新产品里重新建连接（或手工复制数据目录）。
 - 启动冒烟只验证进程存活与目录创建，真实连接、窗口交互仍需人工验证。
 
 ### 18.5 后续建议
@@ -1008,7 +1009,7 @@ cargo run -p navop-data   # Data
 1. 把 `standalone-products.yml` 合入默认分支后跑一次 Windows/Linux/macOS 矩阵，按真实日志修 WiX 与 Linux 打包。
 2. 为三个产品隔离更新 feed，并补 macOS 公证与 Windows 代码签名。
 3. 逐步删除 `main` 中已被领域注册表覆盖的 fallback，防止两套路径长期漂移。
-4. 给 `navop-shell`/`navop-data` 补最小设置页与“从全量导入连接”的迁移入口。
+4. 给 `navop-shell`/`navop-data` 补“从全量导入连接”的迁移入口（设置页已完成，见 §20）。
 
 ## 19. Public MCP 三产品隔离（2026-10-29）
 
@@ -1072,3 +1073,53 @@ cargo run -p navop-data   # Data
 - 三产品的工具暴露设置目前共用 `AppSettings.tool_exposure.mcp`；独立产品默认值由 `default_enabled` 兜底，还没有产品级 UI。
 
 提交：`0a5b4e472`、`cbb72d954`、`0c958ddcf`、`0c56a0b98 feat(mcp): 工具集开关接入设置并增加逐项 UI`。
+
+## 20. 独立产品基础能力补齐（2026-10-29）
+
+目标：保持三产品代码隔离的前提下，让 `navop-shell`/`navop-data` 从“已有连接查看器”变成可独立交付的产品。领域仍然只依赖 `domain_api` 与自己的领域 crate，`app_kit` 不反向依赖任何领域。
+
+### 20.1 契约扩展（`domain_api`）
+
+- `kind.rs`：`ConnectionKindDescriptor { id, label: fn(&App) -> SharedString, group, order }` 与 `ConnectionKindGroup::{Database, Terminal, Remote, Extension}`。侧栏筛选、新建连接左栏分组都读同一份种类清单。
+- `form.rs`：`ConnectionFormProvider`，由领域声明本产品支持哪些连接种类（`kinds`）、已有连接属于哪个种类（`kind_for`）、如何构造表单（`build`）。`ConnectionFormRequest` 承载编辑/复制/预选工作区/保存回调。
+- `settings.rs`：`SettingsSectionProvider::pages(&mut App) -> Vec<(i32, SettingPage)>`。返回 `SettingPage` 而不是 `AnyView`，因为 gpui-kit 的页面只能由 `Settings` 容器渲染（`SettingPage::render` 是 `pub(super)`），顺带复用内建侧栏与搜索。
+- `DomainRegistry` 增加 `register_form_provider`/`register_settings_provider`，以及 `kinds`/`kind_for_connection`/`build_connection_form`/`settings_pages` 四个聚合入口。
+
+### 20.2 共享外壳（`app_kit`）
+
+| 模块 | 职责 |
+|---|---|
+| `new_connection.rs` | 连接向导：左栏按 `ConnectionKindGroup` 分组列出本产品种类，右栏渲染领域表单；支持新建、编辑（`editing_connection`）、复制（`initial_connection` + 清空 id/云端字段）与预选工作区 |
+| `connection_actions.rs` | `open_new_connection`/`open_new_connection_in_workspace`/`edit_connection`/`duplicate_connection`/`delete_connection`；删除走确认弹窗，成功后广播 `ConnectionDataEvent::ConnectionDeleted` |
+| `settings.rs` | 设置弹窗 = 通用页（外观：主题/语言；Public MCP：开关与权限模式；关于：产品名与数据目录）+ 各领域 `SettingsSectionProvider` 页面 |
+| `host.rs`/`lib.rs` | 原有 `ShellHost`、身份配置、领域注册表保持不变；新增 `identity()` 供设置页“关于”读取产品身份 |
+
+所有表单都承载在 `open_reusable_popup_window` 的独立弹窗里：表单保存后自身调用 `close_window_after_save`，若嵌在主窗口标签里会误关主窗口。
+
+### 20.3 领域补齐
+
+- `shell_domain`
+  - `connection_forms/`：SSH/SFTP、FTP、Serial、Telnet、端口转发、RDP、VNC 七种 `kind`，`kind_for` 是纯函数便于单测。
+  - `connection_openers.rs`：新增 `FtpConnectionOpener`（双栏 SFTP 视图）、`SerialConnectionOpener`/`TelnetConnectionOpener`（`TerminalWorkspace::new_serial_with_index`/`new_telnet_with_index`）。此前列表里能看到 Serial/Telnet/FTP，但点击“打开”会失败。
+  - `settings.rs`：终端设置分区（字体、字号、回滚行数、自动复制、自动补全）。
+- `data_domain`
+  - `connection_forms.rs`：`db:{DatabaseType}` × `builtin_all()` + `redis` + `mongodb`，`kind_for` 用 `to_db_connection().db_type` 反查；`build` 复用 `ConnectionFormWindow`/`RedisFormWindow`/`MongoFormWindow`。
+  - `settings.rs`：数据库设置分区（打开方式、连接排序等），读写 `AppSettings`。
+- 两个产品主页：工具栏“新建连接/设置”、搜索框、行内编辑/复制/删除（右键菜单）、空列表引导；宿主订阅 `ConnectionDataEvent` 刷新列表，Shell 另补“会话日志”入口。
+
+### 20.4 验证结果
+
+| 验证 | 结果 |
+|---|---|
+| `cargo test -p domain_api -p app_kit -p shell_domain -p data_domain` | 10 / 3 / 20 / 13 passed |
+| `cargo build -p navop` | 通过（仅既有 linker 警告） |
+| `cargo build -p navop-shell -p navop-data` | 通过（无 rustc 警告，仅既有 linker 警告） |
+| `cargo test -p main --test i18n_locale_keys_contract` | 1 passed |
+| `navop-shell`/`navop-data` 临时 `HOME` 启动 | 进程存活 12 秒、无 panic、日志无报错 |
+
+### 20.5 仍未覆盖
+
+- 从全量产品导入连接（迁移向导）。
+- 数据库 AI、AI Chat、Notes/Team/Toolbox、扩展市场、云同步与账户、主密钥解锁 UI。
+- Tab 持久化、窗口状态、托盘、单实例、自动更新、文件关联、全局热键。
+- 独立产品更新 feed 与 macOS 公证/Windows 签名（见 §18.4）。

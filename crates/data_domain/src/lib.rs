@@ -18,7 +18,9 @@ use one_core::tab_container::{TabItem, TabOpenMode};
 use redis_view::RedisTabView;
 use std::sync::Arc;
 
+pub mod connection_forms;
 pub mod mcp;
+pub mod settings;
 
 pub struct DataDomain;
 
@@ -87,6 +89,10 @@ impl Domain for DataDomain {
         );
         registry
             .register_connection_opener(ConnectionType::MongoDB, Arc::new(MongoConnectionOpener));
+        // 新建连接向导：数据库 / Redis / MongoDB 三个表单由本领域装配。
+        registry.register_form_provider(Arc::new(connection_forms::DataConnectionFormProvider));
+        // 设置页：数据库打开方式、表格与查询相关设置。
+        registry.register_settings_provider(Arc::new(settings::DataSettingsProvider));
         register_mcp_toolsets();
     }
 

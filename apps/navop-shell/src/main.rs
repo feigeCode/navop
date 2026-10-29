@@ -109,7 +109,7 @@ fn main() {
             if let Err(error) = cx.open_window(options, |window, cx| {
                 window.activate_window();
                 let tab_container = cx.new(|cx| TabContainer::new(window, cx));
-                let home = cx.new(|cx| ShellHome::new(tab_container, cx));
+                let home = cx.new(|cx| ShellHome::new(tab_container, window, cx));
                 cx.new(|cx| Root::new(home, window, cx))
             }) {
                 eprintln!("failed to open navop-shell window: {error}");

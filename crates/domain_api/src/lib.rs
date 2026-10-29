@@ -4,15 +4,21 @@
 //! 不依赖 `db`、`db_view`、`terminal_view` 等具体领域 crate。
 
 mod domain;
+mod form;
 mod home;
 mod identity;
 mod intent;
+mod kind;
 mod registry;
+mod settings;
 
 pub use domain::{Domain, DomainId};
+pub use form::{ConnectionFormProvider, ConnectionFormRequest, ConnectionSavedCallback};
 pub use home::{HomeContext, NotifyLevel, TabHost};
 pub use identity::{AppIdentity, Product, ProductFeatures};
 pub use intent::{
     DatabaseTabMode, RemoteProtocol, TabIntent, TerminalProfileDescriptor, TerminalProfileKind,
 };
+pub use kind::{ConnectionKindDescriptor, ConnectionKindGroup};
 pub use registry::{ConnectionOpener, DomainRegistry, TabOpener};
+pub use settings::SettingsSectionProvider;

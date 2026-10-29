@@ -1,7 +1,10 @@
 use crate::DomainId;
+use crate::form::{ConnectionFormProvider, ConnectionFormRequest};
 use crate::home::HomeContext;
 use crate::intent::TabIntent;
-use gpui::{App, Window};
+use crate::kind::ConnectionKindDescriptor;
+use crate::settings::SettingsSectionProvider;
+use gpui::{AnyView, App, SharedString, Window};
 use one_core::storage::{ConnectionType, StoredConnection};
 use one_core::tab_container::TabOpenMode;
 use std::sync::Arc;
@@ -47,6 +50,8 @@ pub struct DomainRegistry {
     domains: Vec<DomainId>,
     connection_openers: Vec<(ConnectionType, Arc<dyn ConnectionOpener>)>,
     tab_openers: Vec<Arc<dyn TabOpener>>,
+    form_providers: Vec<Arc<dyn ConnectionFormProvider>>,
+    settings_providers: Vec<Arc<dyn SettingsSectionProvider>>,
 }
 
 impl DomainRegistry {
@@ -68,6 +73,68 @@ impl DomainRegistry {
 
     pub fn register_tab_opener(&mut self, opener: Arc<dyn TabOpener>) {
         self.tab_openers.push(opener);
+    }
+
+    pub fn register_form_provider(&mut self, provider: Arc<dyn ConnectionFormProvider>) {
+        self.form_providers.push(provider);
+    }
+
+    pub fn register_settings_provider(&mut self, provider: Arc<dyn SettingsSectionProvider>) {
+        self.settings_providers.push(provider);
+    }
+
+    /// 汇总各领域声明的连接种类，按分组、组内顺序排序，同 ID 只保留首次注册。
+    pub fn kinds(&self, cx: &App) -> Vec<ConnectionKindDescriptor> {
+        let mut kinds: Vec<ConnectionKindDescriptor> = Vec::new();
+        for provider in &self.form_providers {
+            for kind in provider.kinds(cx) {
+                if kinds.iter().all(|existing| existing.id != kind.id) {
+                    kinds.push(kind);
+                }
+            }
+        }
+        kinds.sort_by(|left, right| {
+            left.group
+                .order()
+                .cmp(&right.group.order())
+                .then(left.order.cmp(&right.order))
+                .then(left.id.cmp(&right.id))
+        });
+        kinds
+    }
+
+    /// 已有连接对应的种类 ID，用于编辑/复制时预选表单。
+    pub fn kind_for_connection(
+        &self,
+        connection: &StoredConnection,
+        cx: &App,
+    ) -> Option<SharedString> {
+        self.form_providers
+            .iter()
+            .find_map(|provider| provider.kind_for(connection, cx))
+    }
+
+    /// 按请求构造连接表单；由声明了该种类的领域负责。
+    pub fn build_connection_form(
+        &self,
+        request: ConnectionFormRequest,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<AnyView> {
+        self.form_providers
+            .iter()
+            .find_map(|provider| provider.build(request.clone(), window, cx))
+    }
+
+    /// 汇总各领域提供的设置页，按 order 排序。
+    pub fn settings_pages(&self, cx: &mut App) -> Vec<gpui_component::setting::SettingPage> {
+        let mut pages: Vec<(i32, gpui_component::setting::SettingPage)> = self
+            .settings_providers
+            .iter()
+            .flat_map(|provider| provider.pages(cx))
+            .collect();
+        pages.sort_by_key(|(order, _)| *order);
+        pages.into_iter().map(|(_, page)| page).collect()
     }
 
     pub fn domains(&self) -> &[DomainId] {

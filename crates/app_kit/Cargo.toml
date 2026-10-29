@@ -7,6 +7,7 @@ publish = false
 [dependencies]
 anyhow.workspace = true
 domain_api.workspace = true
+gpui-component.workspace = true
 gpui.workspace = true
 mcp_host.workspace = true
 one-core.workspace = true

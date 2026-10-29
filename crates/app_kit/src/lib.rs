@@ -7,12 +7,26 @@ use domain_api::{AppIdentity, DomainRegistry, Product};
 use gpui::App;
 use std::sync::OnceLock;
 
+pub mod connection_actions;
 pub mod host;
+pub mod new_connection;
+pub mod settings;
 
+pub use connection_actions::{
+    delete_connection, duplicate_connection, edit_connection, open_new_connection,
+    open_new_connection_in_workspace,
+};
 pub use host::{ShellHost, set_shell_host, shell_host};
+pub use settings::open_settings;
 
 static DOMAIN_REGISTRY: OnceLock<DomainRegistry> = OnceLock::new();
 static EMPTY_DOMAIN_REGISTRY: OnceLock<DomainRegistry> = OnceLock::new();
+static APP_IDENTITY: OnceLock<&'static AppIdentity> = OnceLock::new();
+
+/// 当前产品的身份；`bootstrap` 之后可用。
+pub fn identity() -> Option<&'static AppIdentity> {
+    APP_IDENTITY.get().copied()
+}
 
 /// 当前产品注册的领域表；未 bootstrap 时返回空表。
 pub fn registry() -> &'static DomainRegistry {
@@ -53,6 +67,7 @@ pub fn configure_identity(identity: &'static AppIdentity) {
 /// 返回错误由调用方决定是否退出；`app_kit` 不在这里 `expect`，避免把
 /// 各产品的错误处理策略写死。
 pub fn bootstrap<P: Product>(product: &P, cx: &mut App) -> anyhow::Result<()> {
+    let _ = APP_IDENTITY.set(product.identity());
     configure_identity(product.identity());
     if one_core::app_paths::initialized_paths().is_none() {
         let context = one_core::app_paths::process_context()?;

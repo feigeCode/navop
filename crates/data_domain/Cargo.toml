@@ -7,9 +7,11 @@ publish = false
 [dependencies]
 anyhow.workspace = true
 base64.workspace = true
+db.workspace = true
 db_view.workspace = true
 domain_api.workspace = true
 extension-runtime = { workspace = true, default-features = false, features = ["database"] }
+gpui-component.workspace = true
 gpui.workspace = true
 mcp_host.workspace = true
 navop_runtime = { path = "../navop_runtime", default-features = false }
@@ -17,6 +19,7 @@ mongodb_view.workspace = true
 runtime_database.workspace = true
 runtime_redis.workspace = true
 one-core.workspace = true
+one-ui.workspace = true
 public_mcp.workspace = true
 serde_json.workspace = true
 tool_runtime.workspace = true

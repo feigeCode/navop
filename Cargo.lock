@@ -435,6 +435,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "domain_api",
+ "gpui-component",
  "gpui-fast",
  "mcp_host",
  "one-core",
@@ -2965,14 +2966,17 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "db",
  "db_view",
  "domain_api",
  "extension-runtime",
+ "gpui-component",
  "gpui-fast",
  "mcp_host",
  "mongodb_view",
  "navop_runtime",
  "one-core",
+ "one-ui",
  "public_mcp",
  "redis_view",
  "runtime_database",
@@ -3459,6 +3463,7 @@ name = "domain_api"
 version = "0.15.2"
 dependencies = [
  "anyhow",
+ "gpui-component",
  "gpui-fast",
  "one-core",
  "port_forwarding",

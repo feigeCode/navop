@@ -5,9 +5,15 @@
 
 rust_i18n::i18n!("locales", fallback = "en");
 
+mod connection_forms;
+mod connection_openers;
 mod session_logs;
+mod settings;
 
+use connection_forms::ShellConnectionFormProvider;
+use connection_openers::{FtpConnectionOpener, SerialConnectionOpener, TelnetConnectionOpener};
 use session_logs::SessionLogsPage;
+use settings::ShellSettingsProvider;
 
 use domain_api::{
     ConnectionOpener, Domain, DomainId, DomainRegistry, HomeContext, NotifyLevel, TabIntent,
@@ -23,7 +29,6 @@ use one_core::tab_container::{TabItem, TabOpenMode};
 use port_forwarding_view::{PortForwardingTab, PortForwardingTabConfig};
 use remote_desktop::{RemoteDesktopConnectionOptions, RemoteDesktopProtocol};
 use remote_desktop_view::{RemoteDesktopView, RemoteDesktopViewConfig};
-use sftp_view::{SftpView, SftpViewEvent};
 use std::sync::Arc;
 use terminal::{local_config_from_settings, local_config_from_settings_with_profile};
 use terminal_view::{TerminalWorkspace, TerminalWorkspaceEvent};
@@ -92,6 +97,11 @@ impl Domain for ShellDomain {
         registry.register_tab_opener(Arc::new(TerminalTabOpener));
         registry.register_tab_opener(Arc::new(SessionLogsTabOpener));
         registry.register_connection_opener(ConnectionType::SshSftp, Arc::new(SshConnectionOpener));
+        registry.register_connection_opener(ConnectionType::Ftp, Arc::new(FtpConnectionOpener));
+        registry
+            .register_connection_opener(ConnectionType::Serial, Arc::new(SerialConnectionOpener));
+        registry
+            .register_connection_opener(ConnectionType::Telnet, Arc::new(TelnetConnectionOpener));
         registry.register_connection_opener(
             ConnectionType::PortForwarding,
             Arc::new(PortForwardingConnectionOpener),
@@ -104,6 +114,8 @@ impl Domain for ShellDomain {
             ConnectionType::Vnc,
             Arc::new(RemoteDesktopConnectionOpener),
         );
+        registry.register_form_provider(Arc::new(ShellConnectionFormProvider));
+        registry.register_settings_provider(Arc::new(ShellSettingsProvider));
         register_mcp_toolsets();
     }
 
@@ -295,41 +307,13 @@ impl ConnectionOpener for SshConnectionOpener {
         ) {
             return false;
         }
-        let connection_id = connection.id.unwrap_or(0);
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_millis())
-            .unwrap_or(0);
-        let tab_id = format!("sftp-{connection_id}-{timestamp}");
-        let tab_index = home.next_tab_index(&connection.name, cx);
-        let sftp = cx.new(|cx| SftpView::new_with_index(connection.clone(), tab_index, window, cx));
-        let window_handle = window.window_handle();
-        let subscription = cx.subscribe(&sftp, move |_, event: &SftpViewEvent, cx| {
-            let Some(host) = app_kit::shell_host() else {
-                return;
-            };
-            match event {
-                SftpViewEvent::OpenLocalTerminal { working_dir } => {
-                    let working_dir = working_dir.clone();
-                    let _ = window_handle.update(cx, move |_, window, cx| {
-                        host.open_local_terminal(working_dir, window, cx);
-                    });
-                }
-                SftpViewEvent::OpenSshTerminal {
-                    connection,
-                    working_dir,
-                } => {
-                    let connection = connection.clone();
-                    let working_dir = working_dir.clone();
-                    let _ = window_handle.update(cx, move |_, window, cx| {
-                        host.open_ssh_terminal(connection, working_dir, window, cx);
-                    });
-                }
-            }
-        });
-        home.keep_subscription(subscription);
-        let item = TabItem::new(tab_id, "sftp", sftp);
-        home.open_tab_with_focus(item, window, cx)
+        connection_openers::TabEnvironment {
+            mode: TabOpenMode::Activate,
+            home,
+            window,
+            cx,
+        }
+        .open_sftp_view(connection)
     }
 }
 
@@ -489,6 +473,15 @@ mod tests {
         let mut registry = DomainRegistry::default();
         ShellDomain.register(&mut registry);
         assert!(registry.has_connection_opener(ConnectionType::SshSftp));
+    }
+
+    #[test]
+    fn shell_domain_registers_terminal_and_file_openers() {
+        let mut registry = DomainRegistry::default();
+        ShellDomain.register(&mut registry);
+        assert!(registry.has_connection_opener(ConnectionType::Ftp));
+        assert!(registry.has_connection_opener(ConnectionType::Serial));
+        assert!(registry.has_connection_opener(ConnectionType::Telnet));
     }
 
     #[test]

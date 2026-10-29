@@ -1,6 +1,8 @@
-use domain_api::{DatabaseTabMode, HomeContext, NotifyLevel, TabHost, TabIntent};
-use gpui::{App, Context, Entity, Subscription, Window};
+use domain_api::{DatabaseTabMode, HomeContext, NotifyLevel, TabHost};
+use gpui::{App, AppContext as _, Context, Entity, Subscription, Window};
 use gpui_component::WindowExt as _;
+use gpui_component::input::{InputEvent, InputState};
+use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
 use one_core::storage::traits::Repository;
 use one_core::storage::{
     ConnectionRepository, ConnectionType, GlobalStorageState, StoredConnection, Workspace,
@@ -10,93 +12,115 @@ use one_core::tab_container::{TabContainer, TabItem, TabOpenMode};
 use port_forwarding::runtime::PortForwardingRuntime;
 use std::sync::Arc;
 
+mod actions;
+mod dialogs;
 mod render;
+mod sidebar;
 
 pub struct ShellHome {
     tab_container: Entity<TabContainer>,
     connections: Vec<StoredConnection>,
     workspaces: Vec<Workspace>,
+    /// 侧栏搜索框；输入变化时整体重绘，渲染时读当前文本过滤列表。
+    search_input: Entity<InputState>,
     port_forwarding_runtime: Arc<tokio::sync::Mutex<PortForwardingRuntime>>,
     subscriptions: Vec<Subscription>,
 }
 
 impl ShellHome {
-    pub fn new(tab_container: Entity<TabContainer>, cx: &mut Context<Self>) -> Self {
-        let storage = cx.global::<GlobalStorageState>().storage.clone();
-        let connections = storage
-            .get::<ConnectionRepository>()
-            .and_then(|repo| repo.list().ok())
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|connection| {
-                matches!(
-                    connection.connection_type,
-                    ConnectionType::SshSftp
-                        | ConnectionType::Ftp
-                        | ConnectionType::PortForwarding
-                        | ConnectionType::Rdp
-                        | ConnectionType::Vnc
-                        | ConnectionType::Serial
-                        | ConnectionType::Telnet
-                )
-            })
-            .collect();
-        let workspaces = storage
-            .get::<WorkspaceRepository>()
-            .and_then(|repo| repo.list().ok())
-            .unwrap_or_default();
-        Self {
+    pub fn new(
+        tab_container: Entity<TabContainer>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let search_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("搜索连接")
+                .clean_on_escape()
+        });
+        // 搜索框只负责把变更同步成一次重绘，过滤逻辑在渲染期读取最新文本。
+        cx.subscribe_in(&search_input, window, |_, _, event: &InputEvent, _, cx| {
+            if matches!(event, InputEvent::Change) {
+                cx.notify();
+            }
+        })
+        .detach();
+        let mut this = Self {
             tab_container,
-            connections,
-            workspaces,
+            connections: Vec::new(),
+            workspaces: Vec::new(),
+            search_input,
             port_forwarding_runtime: Arc::new(
                 tokio::sync::Mutex::new(PortForwardingRuntime::new()),
             ),
             subscriptions: Vec::new(),
-        }
+        };
+        this.reload_data(cx);
+        this.subscribe_connection_events(cx);
+        this
     }
 
-    fn open_connection(&mut self, connection: StoredConnection, window: &mut Window, cx: &mut App) {
-        if !app_kit::registry().open_connection(
-            &connection,
-            TabOpenMode::Activate,
-            self,
-            window,
-            cx,
-        ) {
-            self.notify(
-                NotifyLevel::Warning,
-                "该连接类型尚未接入 navop-shell",
-                window,
-                cx,
-            );
-        }
+    /// 从全局存储重新加载连接与工作区，保留 shell 的远程连接类型过滤。
+    fn reload_data(&mut self, cx: &mut Context<Self>) {
+        let storage = cx.global::<GlobalStorageState>().storage.clone();
+        self.connections = storage
+            .get::<ConnectionRepository>()
+            .and_then(|repo| repo.list().ok())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|connection| is_shell_connection(connection.connection_type))
+            .collect();
+        self.workspaces = storage
+            .get::<WorkspaceRepository>()
+            .and_then(|repo| repo.list().ok())
+            .unwrap_or_default();
+        cx.notify();
     }
 
-    fn open_sftp(&mut self, connection: StoredConnection, window: &mut Window, cx: &mut App) {
-        if !app_kit::registry().open_sftp(&connection, self, window, cx) {
-            self.notify(NotifyLevel::Warning, "该连接不支持 SFTP", window, cx);
-        }
+    /// 订阅全局连接数据事件：连接或工作区变化后重新加载列表。
+    fn subscribe_connection_events(&mut self, cx: &mut Context<Self>) {
+        let Some(notifier) = get_notifier(cx) else {
+            return;
+        };
+        let subscription = cx.subscribe(&notifier, |this, _, event: &ConnectionDataEvent, cx| {
+            if is_connection_data_changed(event) {
+                this.reload_data(cx);
+            }
+        });
+        self.subscriptions.push(subscription);
     }
+}
 
-    fn open_local_terminal(&mut self, window: &mut Window, cx: &mut App) {
-        let intent = TabIntent::Terminal { profile: None };
-        if !app_kit::registry().open_tab(&intent, TabOpenMode::Activate, self, window, cx) {
-            self.notify(NotifyLevel::Warning, "本地终端尚未接入", window, cx);
-        }
-    }
+/// shell 只展示远程终端类连接，数据库类留给 navop-data。
+fn is_shell_connection(kind: ConnectionType) -> bool {
+    matches!(
+        kind,
+        ConnectionType::SshSftp
+            | ConnectionType::Ftp
+            | ConnectionType::PortForwarding
+            | ConnectionType::Rdp
+            | ConnectionType::Vnc
+            | ConnectionType::Serial
+            | ConnectionType::Telnet
+    )
+}
 
-    fn open_known_hosts(&mut self, window: &mut Window, cx: &mut App) {
-        if !app_kit::registry().open_tab(
-            &TabIntent::KnownHosts,
-            TabOpenMode::Activate,
-            self,
-            window,
-            cx,
-        ) {
-            self.notify(NotifyLevel::Warning, "Known Hosts 尚未接入", window, cx);
-        }
-    }
+/// 与列表刷新相关的连接/工作区事件；其余事件（凭据、Schema 等）不触发重载。
+fn is_connection_data_changed(event: &ConnectionDataEvent) -> bool {
+    matches!(
+        event,
+        ConnectionDataEvent::ConnectionCreated { .. }
+            | ConnectionDataEvent::ConnectionUpdated { .. }
+            | ConnectionDataEvent::ConnectionDeleted { .. }
+            | ConnectionDataEvent::WorkspaceCreated { .. }
+            | ConnectionDataEvent::WorkspaceUpdated { .. }
+            | ConnectionDataEvent::WorkspaceDeleted { .. }
+    )
+}
+
+/// 名称搜索：空查询返回全部，否则大小写不敏感的包含匹配（`query` 已转小写）。
+pub(super) fn matches_query(name: &str, query: &str) -> bool {
+    query.is_empty() || name.to_lowercase().contains(query)
 }
 
 impl TabHost for ShellHome {
@@ -217,5 +241,26 @@ impl HomeContext for ShellHome {
             NotifyLevel::Error => gpui_component::notification::Notification::error(message),
         };
         window.push_notification(notification, cx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn search_is_case_insensitive_contains() {
+        assert!(matches_query("Prod-MySQL", "prod"));
+        assert!(matches_query("Prod-MySQL", "sql"));
+        assert!(!matches_query("Prod-MySQL", "redis"));
+        assert!(matches_query("任意名称", ""));
+    }
+
+    #[test]
+    fn shell_keeps_remote_connections_only() {
+        assert!(is_shell_connection(ConnectionType::SshSftp));
+        assert!(is_shell_connection(ConnectionType::Rdp));
+        assert!(!is_shell_connection(ConnectionType::Database));
+        assert!(!is_shell_connection(ConnectionType::Redis));
     }
 }
