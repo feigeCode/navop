@@ -4,9 +4,9 @@ use gpui::{
     App, AppContext, AsyncApp, ClickEvent, Context, ParentElement, SharedString, Styled, Window,
 };
 use gpui_component::{WindowExt, notification::Notification};
-use one_core::storage::{ConnectionType, ExtensionConnectionParams, StoredConnection, Workspace};
 #[cfg(feature = "shell")]
 use one_core::storage::PreferredOpenMode;
+use one_core::storage::{ConnectionType, ExtensionConnectionParams, StoredConnection, Workspace};
 use one_core::tab_container::{TabItem, TabOpenMode};
 #[cfg(feature = "shell")]
 use remote_desktop::RemoteDesktopProtocol;

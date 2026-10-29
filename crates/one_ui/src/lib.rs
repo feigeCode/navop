@@ -3,8 +3,8 @@ rust_i18n::i18n!("locales", fallback = "en");
 mod blend;
 pub mod content_state;
 pub mod edit_table;
-pub mod fonts;
 pub mod file_conflict_prompt;
+pub mod fonts;
 pub use blend::ColorMix;
 
 mod geometry;
@@ -32,9 +32,9 @@ pub use edit_table::{
     ScrollbarVisible, SearchPanel, SearchPanelEvent, SelectNextColumn, SelectPrevColumn,
     TableKeybindings, TableOptions, TableSelection, TableVisibleRange, refresh_keybindings,
 };
+pub use fonts::{MAX_FONT_SIZE, MIN_FONT_SIZE, available_monospace_fonts};
 use gpui::App;
 pub use icon_button::{IconButton, IconButtonRole};
-pub use fonts::{MAX_FONT_SIZE, MIN_FONT_SIZE, available_monospace_fonts};
 pub use icon_size::IconSize;
 pub use large_text_editor::{
     LargeTextEditor, LargeTextEditorEvent, LargeTextEditorTab,

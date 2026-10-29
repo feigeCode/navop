@@ -313,7 +313,9 @@ use connection_info::{
     port_forwarding_connection_info,
 };
 #[cfg(feature = "shell")]
-pub(super) use keybindings::{OPEN_LOCAL_TERMINAL_SHORTCUT_MACOS, OPEN_LOCAL_TERMINAL_SHORTCUT_OTHER};
+pub(super) use keybindings::{
+    OPEN_LOCAL_TERMINAL_SHORTCUT_MACOS, OPEN_LOCAL_TERMINAL_SHORTCUT_OTHER,
+};
 pub use keybindings::{init, refresh_keybindings};
 use sync_route::{
     HomeSyncRoute, refreshed_pending_conflicts, should_auto_onet_cloud_sync,

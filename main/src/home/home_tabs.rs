@@ -6,9 +6,9 @@ use crate::license::is_feature_enabled;
 use crate::setting_tab::AppSettings;
 use crate::setting_tab::SettingsPanel;
 #[cfg(feature = "shell")]
-use domain_api::{TabIntent, TerminalProfileDescriptor};
-#[cfg(feature = "shell")]
 use domain_api::TerminalProfileKind;
+#[cfg(feature = "shell")]
+use domain_api::{TabIntent, TerminalProfileDescriptor};
 use gpui::{App, AppContext, Context, Entity, Window};
 use gpui_component::{WindowExt, notification::Notification};
 use json_view::JsonFormatterView;
