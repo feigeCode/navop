@@ -1030,8 +1030,13 @@ cargo run -p navop-data   # Data
   - `bootstrap` 在产品 `init` 后读取 `ProductFeatures.public_mcp`：true 调 `mcp_host::start`，false 调 `stop`。`ProductFeatures` 不再是死配置。
 - 工具下沉：
   - `shell_domain` 注册 Terminal（terminal_exec/read/control/write_keys/remote_ops）与 SFTP 工具集。
-  - `data_domain` 注册 Database 与 Redis 工具集。
-  - Mongo 仍留在 main 的 live-state provider，尚未下沉。
+  - `data_domain` 注册 Database 工具集，以及 Redis/Mongo 的 live-state provider；`main/src/public_mcp_runtime/{redis,mongo}.rs` 已迁入 `data_domain::mcp`，main 改为复用，避免两套实现。
+  - connection 管理工具集仍未下沉。
+- 审批复用：
+  - `main/src/public_mcp_approval/*` 抽成独立 `mcp_approval` crate，窗口解析改为 `active_window`/首个窗口，不再依赖 main 的 `resolve_navop_window`。
+  - main 与 `navop-shell`/`navop-data` 都调用 `mcp_approval::init`；`mcp_host` 用它的 `PublicMcpApprovalManager` 启动 server，因此独立产品的 `Ask` 模式会弹同一个审批对话框。
+  - 无窗口时仍走默认拒绝。
+- 独立产品主页增加 `MCP 已连接 / 启动中 / 关闭` 切换按钮：直接持久化 `AppSettings.mcp.server_enabled` 并立即 start/stop；`is_starting` 防止重复点击启动两个 server。
 
 ### 19.2 验证
 
@@ -1042,23 +1047,24 @@ cargo run -p navop-data   # Data
 | `navop` 全量启动 | 仍由 main 启动，`app=navop`，未出现第二个 mcp_host server |
 | `cargo test -p main --lib` | 750 passed（config 的 10 个测试随文件迁到 mcp_host） |
 | `cargo test -p main --tests` | 3 个集成测试通过 |
-| `mcp_host` / `domain_api` / `app_kit` / `shell_domain` / `data_domain` | 12 / 5 / 3 / 15 / 4 passed |
+| `mcp_host` / `mcp_approval` / `domain_api` / `app_kit` / `shell_domain` / `data_domain` | 12 / 10 / 5 / 3 / 15 / 7 passed |
 | `cargo check -p navop -p navop-shell -p navop-data`（`-Dwarnings`） | 通过 |
 | `cargo clippy --no-deps -p mcp_host -p app_kit -p domain_api -p shell_domain -p data_domain -- -D warnings` | 通过；`public_mcp` 仍命中既有 `tool_runtime_adapter.rs:134` 的 `too_many_arguments` 基线 lint |
 
 ### 19.3 启停与权限
 
 - 默认仍关闭：需 `NAVOP_PUBLIC_MCP=1` 或设置里启用。
-- 独立产品暂无审批弹窗；`PermissionMode::Ask` 会走默认拒绝 approver。需要可执行时使用：
+- 独立产品已复用通用审批弹窗；`PermissionMode::Ask` 会请求审批。无窗口或超时会拒绝。
+- 无设置页时可通过主页的 MCP 按钮启停；也可用环境变量强制：
   - `NAVOP_PUBLIC_MCP=1`
-  - `NAVOP_PUBLIC_MCP_PERMISSION=allow`
+  - `NAVOP_PUBLIC_MCP_PERMISSION=allow`（跳过审批，仅用于本地调试）
 - 发现文件权限仍为 0600，只监听 loopback；token 每次启动重新生成。
 
 ### 19.4 尚未完成
 
-- Mongo 工具集与 connection 管理工具集未迁入 `data_domain`，因此 Data 产品当前只暴露 database/redis 工具。
-- 独立产品没有 MCP 设置页与审批 UI；`Ask` 模式实际不可用。
+- connection 管理工具集未迁入独立产品；Data 当前暴露 database/redis/mongo 工具。
+- 独立产品没有完整 MCP 设置页，只有主页开关；审批已有通用弹窗。
 - 全量产品仍走 main 的 `public_mcp_runtime`，两条实现并存；后续应让 main 也改用 `mcp_host`，或明确保留 main 的高级能力（resource pool/access guard/审批）。
 - 三产品的工具暴露设置目前共用 `AppSettings.tool_exposure.mcp`；独立产品默认值由 `default_enabled` 兜底，还没有产品级 UI。
 
-提交：`0a5b4e472 feat(mcp): 增加三产品 Public MCP 宿主与独立发现身份`。
+提交：`0a5b4e472`、`cbb72d954 refactor(mcp): 下沉 Mongo/Redis live provider 并复用通用审批 UI`。
