@@ -57,7 +57,19 @@ use one_core::llm::manager::GlobalProviderState;
 use one_core::popup_window::{PopupWindowOptions, open_reusable_popup_window};
 pub const DEFAULT_SYSTEM_HOTKEY_MACOS: &str = "cmd-alt-m";
 pub const DEFAULT_SYSTEM_HOTKEY_OTHER: &str = "ctrl-alt-m";
+const DATABASE_SETTINGS_PAGE_INDEX: usize = 1;
+const TERMINAL_SETTINGS_PAGE_INDEX: usize = 2;
 const SYNC_SETTINGS_PAGE_INDEX: usize = 6;
+
+/// 当前产品实际渲染出的「同步」设置页序号。
+///
+/// 独立产品会按领域裁掉数据库页或终端页，同步页随之左移；设置页跳转必须用这个
+/// 值，不能再直接用 [`SYNC_SETTINGS_PAGE_INDEX`]。
+fn sync_settings_page_index() -> usize {
+    SYNC_SETTINGS_PAGE_INDEX
+        - usize::from(!crate::product::supports_database_domain())
+        - usize::from(!crate::product::supports_shell_domain())
+}
 
 use gpui_component::input::InputEvent;
 pub use one_core::settings::{
@@ -580,7 +592,7 @@ impl SettingsPanel {
     }
 
     pub fn new_sync(_window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self::new_with_initial_page(SYNC_SETTINGS_PAGE_INDEX, cx)
+        Self::new_with_initial_page(sync_settings_page_index(), cx)
     }
 
     fn new_with_initial_page(initial_page_index: usize, cx: &mut Context<Self>) -> Self {
@@ -679,7 +691,9 @@ impl SettingsPanel {
             SettingPage::new(t!("Settings.General.title"))
                 .resettable(true)
                 .default_open(true)
-                .groups(vec![
+                .groups({
+                    let mut groups =
+                        vec![
                     SettingGroup::new()
                         .title(t!("Settings.General.Language.group_title"))
                         .items(vec![
@@ -1083,22 +1097,32 @@ impl SettingsPanel {
                             )
                             .description(t!("Settings.General.Log.file_path_desc").to_string()),
                         ),
-                    remote_file_editor_setting_group(&default_settings.remote_file_editor, cx),
-                    connection_display_setting_group(),
-                    SettingGroup::new()
-                        .title(t!("Settings.General.Proxy.group_title"))
-                        .item(
-                            SettingItem::render(move |_options, _window, cx| {
-                                render_global_proxy_settings_item(cx)
-                            })
-                            .keywords([
-                                t!("Settings.General.Proxy.group_title").to_string(),
-                                t!("Settings.General.Proxy.title").to_string(),
-                                t!("Settings.General.Proxy.description").to_string(),
-                                t!("Settings.General.Proxy.open").to_string(),
-                            ]),
-                        ),
-                ]),
+                    ];
+                    // 远程文件编辑器属于终端（SFTP）领域，数据库产品里没有意义。
+                    if crate::product::supports_shell_domain() {
+                        groups.push(remote_file_editor_setting_group(
+                            &default_settings.remote_file_editor,
+                            cx,
+                        ));
+                    }
+                    groups.push(connection_display_setting_group());
+                    groups.push(
+                        SettingGroup::new()
+                            .title(t!("Settings.General.Proxy.group_title"))
+                            .item(
+                                SettingItem::render(move |_options, _window, cx| {
+                                    render_global_proxy_settings_item(cx)
+                                })
+                                .keywords([
+                                    t!("Settings.General.Proxy.group_title").to_string(),
+                                    t!("Settings.General.Proxy.title").to_string(),
+                                    t!("Settings.General.Proxy.description").to_string(),
+                                    t!("Settings.General.Proxy.open").to_string(),
+                                ]),
+                            ),
+                    );
+                    groups
+                }),
             // 数据库设置页
             SettingPage::new(t!("Settings.Database.title"))
                 .resettable(true)
@@ -1214,6 +1238,15 @@ impl SettingsPanel {
                     self.update_check_state.clone(),
                 )),
         ];
+        // 独立产品只保留本领域的设置页：终端产品没有数据库设置，数据库产品没有
+        // 终端设置。先删靠后的终端页，再删数据库页，避免下标错位。
+        let mut pages = pages;
+        if !crate::product::supports_shell_domain() {
+            pages.remove(TERMINAL_SETTINGS_PAGE_INDEX);
+        }
+        if !crate::product::supports_database_domain() {
+            pages.remove(DATABASE_SETTINGS_PAGE_INDEX);
+        }
         pages
     }
 }
@@ -1946,7 +1979,7 @@ impl Render for SettingsPanel {
 
         let initial_page_index = self.initial_page_index;
         let settings_id = match initial_page_index {
-            SYNC_SETTINGS_PAGE_INDEX => "main-app-settings-sync",
+            index if index == sync_settings_page_index() => "main-app-settings-sync",
             _ => "main-app-settings",
         };
 

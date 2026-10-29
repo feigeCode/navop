@@ -38,22 +38,25 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
             one_core::keybindings::load_dynamic_keybinding(&key, NewConnectionShortcut, None, cx)
         }),
     );
-    keybindings.extend(
-        shortcuts_for(
-            cx,
-            action_id::HOME_OPEN_LOCAL_TERMINAL,
-            &[open_local_terminal_default_shortcut()],
-        )
-        .into_iter()
-        .map(|key| {
-            one_core::keybindings::load_dynamic_keybinding(
-                &key,
-                OpenLocalTerminalShortcut,
-                None,
+    // 本地终端属于终端领域：数据库产品不注册这个快捷键。
+    if crate::product::supports_shell_domain() {
+        keybindings.extend(
+            shortcuts_for(
                 cx,
+                action_id::HOME_OPEN_LOCAL_TERMINAL,
+                &[open_local_terminal_default_shortcut()],
             )
-        }),
-    );
+            .into_iter()
+            .map(|key| {
+                one_core::keybindings::load_dynamic_keybinding(
+                    &key,
+                    OpenLocalTerminalShortcut,
+                    None,
+                    cx,
+                )
+            }),
+        );
+    }
     keybindings
 }
 
@@ -73,13 +76,15 @@ fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
         None,
         NewConnectionShortcut,
     ));
-    keybindings.extend(rebind_keybindings(
-        cx,
-        action_id::HOME_OPEN_LOCAL_TERMINAL,
-        &[open_local_terminal_default_shortcut()],
-        None,
-        OpenLocalTerminalShortcut,
-    ));
+    if crate::product::supports_shell_domain() {
+        keybindings.extend(rebind_keybindings(
+            cx,
+            action_id::HOME_OPEN_LOCAL_TERMINAL,
+            &[open_local_terminal_default_shortcut()],
+            None,
+            OpenLocalTerminalShortcut,
+        ));
+    }
     keybindings
 }
 

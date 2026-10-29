@@ -64,9 +64,11 @@ impl NewConnectionWindow {
         focus_handle.focus(window, cx);
         let mut connection_kinds = NewConnectionKind::all_with_registry(&external_driver_registry);
         let more_connections = connection_kinds.pop();
-        if let Some(catalog) = cx
-            .try_global::<extension_runtime::GlobalExtensionRuntimeCatalog>()
-            .and_then(|catalog| catalog.get())
+        // 扩展贡献的连接（RDP 等 provider）属于终端领域；数据库产品不展示它们。
+        if crate::product::supports_shell_domain()
+            && let Some(catalog) = cx
+                .try_global::<extension_runtime::GlobalExtensionRuntimeCatalog>()
+                .and_then(|catalog| catalog.get())
         {
             connection_kinds.extend(
                 catalog
@@ -77,7 +79,9 @@ impl NewConnectionWindow {
         }
         if let Some(more_connections) = more_connections {
             // 空类目「+」安装入口按约定插在 Extension 贡献项之后、MoreConnections 之前。
-            NewConnectionKind::append_empty_category_install_entries(&mut connection_kinds);
+            if crate::product::supports_database_domain() {
+                NewConnectionKind::append_empty_category_install_entries(&mut connection_kinds);
+            }
             connection_kinds.push(more_connections);
         }
         let selected_kind =

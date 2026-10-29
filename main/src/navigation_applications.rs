@@ -29,6 +29,10 @@ pub(crate) fn home_applications(show_team: bool) -> Vec<NavigationApplication> {
         KnownHosts,
         SessionLogs,
     ]);
+    // 已知主机与会话日志属于终端领域：没有终端领域的产品不展示这两个入口。
+    if !crate::product::supports_shell_domain() {
+        applications.retain(|app| !matches!(app, KnownHosts | SessionLogs));
+    }
     applications
 }
 

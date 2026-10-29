@@ -14,17 +14,33 @@ pub(crate) fn is_full_product() -> bool {
     app_kit::identity().is_none_or(|identity| identity.app_id == AppIdentity::FULL.app_id)
 }
 
+/// 当前产品是否装配了数据库领域（数据库 / Redis / MongoDB）。
+///
+/// 只用来裁剪「数据库专属」的界面：数据库设置页、数据库连接类型、驱动安装提示。
+/// AI、笔记、团队、扩展等能力三产品一致，不在这里判断。
+pub(crate) fn supports_database_domain() -> bool {
+    is_full_product() || app_kit::registry().has_connection_opener(ConnectionType::Database)
+}
+
+/// 当前产品是否装配了终端领域（SSH / SFTP / 远程桌面 / 串口 / Telnet）。
+///
+/// 用途同 [`supports_database_domain`]：终端设置页、本地终端入口、远程文件编辑器
+/// 设置等终端专属界面按它裁剪。
+pub(crate) fn supports_shell_domain() -> bool {
+    is_full_product() || app_kit::registry().has_connection_opener(ConnectionType::SshSftp)
+}
+
 /// 当前产品是否支持某类连接。
 ///
 /// 内置类型以「领域包是否注册了打开入口」为准：`navop-shell` 没有数据库领域，
-/// 数据库连接就不应出现在列表与新建入口里；扩展连接由扩展运行时统一打开，与
-/// 产品无关，始终保留。
+/// 数据库连接就不应出现在列表与新建入口里；扩展连接（RDP 等 provider 由扩展
+/// 运行时打开）属于终端领域，只在装配了终端领域的产品里保留。
 pub(crate) fn connection_type_supported(connection_type: ConnectionType) -> bool {
     if is_full_product() {
         return true;
     }
     if connection_type == ConnectionType::Extension {
-        return true;
+        return supports_shell_domain();
     }
     app_kit::registry().has_connection_opener(connection_type)
 }
@@ -41,7 +57,12 @@ mod tests {
         if identity.is_none_or(|identity| identity.app_id == AppIdentity::FULL.app_id) {
             assert!(connection_type_supported(ConnectionType::Database));
             assert!(connection_type_supported(ConnectionType::SshSftp));
+            assert!(supports_database_domain());
+            assert!(supports_shell_domain());
         }
-        assert!(connection_type_supported(ConnectionType::Extension));
+        assert_eq!(
+            connection_type_supported(ConnectionType::Extension),
+            supports_shell_domain()
+        );
     }
 }
