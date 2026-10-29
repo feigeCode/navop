@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 use tool_runtime::{ToolError, ToolHandler, ToolResult};
 
-pub(super) fn mongo_tool_handlers(cx: &App) -> Vec<Arc<dyn ToolHandler>> {
+pub fn mongo_tool_handlers(cx: &App) -> Vec<Arc<dyn ToolHandler>> {
     match cx.try_global::<GlobalMongoState>().cloned() {
         Some(state) => MongoToolProvider::handlers(Arc::new(MongoRuntimeAdapter { state })),
         None => {
@@ -290,12 +290,12 @@ fn required_pipeline(input: &Value) -> Result<Vec<Document>, ToolError> {
 }
 
 fn find_options(input: &Value) -> Result<FindOptions, ToolError> {
-    let mut options = FindOptions::default();
-    options.sort = optional_document(input, "sort")?;
-    options.projection = optional_document(input, "projection")?;
-    options.skip = optional_i64(input, "skip")?;
-    options.limit = optional_i64(input, "limit")?;
-    Ok(options)
+    Ok(FindOptions {
+        sort: optional_document(input, "sort")?,
+        projection: optional_document(input, "projection")?,
+        skip: optional_i64(input, "skip")?,
+        limit: optional_i64(input, "limit")?,
+    })
 }
 
 fn optional_i64(input: &Value, name: &str) -> Result<Option<i64>, ToolError> {

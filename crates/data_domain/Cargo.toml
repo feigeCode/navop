@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 anyhow.workspace = true
+base64.workspace = true
 db_view.workspace = true
 domain_api.workspace = true
 extension-runtime = { workspace = true, default-features = false, features = ["database"] }
@@ -15,4 +16,8 @@ mongodb_view.workspace = true
 runtime_database.workspace = true
 runtime_redis.workspace = true
 one-core.workspace = true
+public_mcp.workspace = true
+serde_json.workspace = true
+tool_runtime.workspace = true
+tracing.workspace = true
 redis_view.workspace = true

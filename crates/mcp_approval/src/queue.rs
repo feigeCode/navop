@@ -17,6 +17,7 @@ pub(super) struct ApprovalQueueSnapshot {
 }
 
 impl ApprovalQueueState {
+    #[allow(clippy::result_large_err)]
     pub fn enqueue(&mut self, envelope: ApprovalEnvelope) -> Result<(), ApprovalEnvelope> {
         if self.active.is_none() {
             self.active = Some(envelope);

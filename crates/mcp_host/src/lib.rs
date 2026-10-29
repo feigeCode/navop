@@ -36,6 +36,7 @@ struct Registration {
 }
 
 static REGISTRATIONS: OnceLock<Mutex<Vec<Registration>>> = OnceLock::new();
+static IDENTITY: OnceLock<&'static AppIdentity> = OnceLock::new();
 
 fn registrations() -> &'static Mutex<Vec<Registration>> {
     REGISTRATIONS.get_or_init(|| Mutex::new(Vec::new()))
@@ -58,6 +59,14 @@ pub fn register_toolset(toolset: McpToolset, default_enabled: bool, factory: Pro
     }
 }
 
+/// 已注册的工具集，供状态页与测试使用。
+pub fn registered_toolsets() -> Vec<McpToolset> {
+    registrations()
+        .lock()
+        .map(|entries| entries.iter().map(|entry| entry.toolset).collect())
+        .unwrap_or_default()
+}
+
 /// 当前进程的连接仓库；独立产品的工具工厂都从这里取连接。
 pub fn connection_repository(cx: &App) -> Option<Arc<one_core::storage::ConnectionRepository>> {
     cx.try_global::<one_core::storage::GlobalStorageState>()?
@@ -74,6 +83,7 @@ pub fn runtime_provider(registry: tool_runtime::ToolRegistry) -> Arc<dyn PublicM
 struct HostState {
     runtime: Option<PublicMcpRuntime>,
     last_error: Option<String>,
+    starting: bool,
 }
 
 struct GlobalMcpHost(HostState);
@@ -84,6 +94,7 @@ impl Global for GlobalMcpHost {}
 ///
 /// 必须在产品的 `init` 之后调用：领域工具工厂依赖终端/Redis/Mongo 等全局状态。
 pub fn start(cx: &mut App, identity: &'static AppIdentity) -> anyhow::Result<()> {
+    let _ = IDENTITY.set(identity);
     let settings = AppSettings::current(cx);
     let config = PublicMcpStartConfig::from_settings_session_and_env(
         &settings,
@@ -94,6 +105,11 @@ pub fn start(cx: &mut App, identity: &'static AppIdentity) -> anyhow::Result<()>
         stop(cx);
         return Ok(());
     }
+    if is_running(cx) || is_starting(cx) {
+        return Ok(());
+    }
+    ensure_global(cx);
+    cx.global_mut::<GlobalMcpHost>().0.starting = true;
 
     let Some(registry) = build_registry(cx, &config.toolsets) else {
         set_error(cx, "no MCP toolsets registered".to_string());
@@ -102,9 +118,16 @@ pub fn start(cx: &mut App, identity: &'static AppIdentity) -> anyhow::Result<()>
     let discovery_path = public_mcp_discovery_path();
     let mode = config.mode;
     let permission_mode = config.permission_mode;
+    let approval_manager = mcp_approval::approval_manager(cx);
     let task = Tokio::spawn_result(cx, async move {
-        PublicMcpRuntime::start_with_tool_registry(registry, mode, permission_mode, discovery_path)
-            .await
+        PublicMcpRuntime::start_with_tool_registry_and_approval(
+            registry,
+            mode,
+            permission_mode,
+            discovery_path,
+            approval_manager,
+        )
+        .await
     });
     ensure_global(cx);
     cx.spawn(async move |cx: &mut AsyncApp| {
@@ -112,11 +135,12 @@ pub fn start(cx: &mut App, identity: &'static AppIdentity) -> anyhow::Result<()>
             Ok(runtime) => {
                 let bind_addr = runtime.bind_addr();
                 let path = runtime.discovery_path().clone();
-                let _ = cx.update(move |cx| {
+                cx.update(move |cx| {
                     ensure_global(cx);
                     let state = &mut cx.global_mut::<GlobalMcpHost>().0;
                     state.runtime = Some(runtime);
                     state.last_error = None;
+                    state.starting = false;
                     tracing::info!(
                         app = identity.mcp_app_name,
                         bind_addr = %bind_addr,
@@ -127,7 +151,7 @@ pub fn start(cx: &mut App, identity: &'static AppIdentity) -> anyhow::Result<()>
             }
             Err(error) => {
                 let message = error.to_string();
-                let _ = cx.update(move |cx| set_error(cx, message));
+                cx.update(move |cx| set_error(cx, message));
             }
         }
         Ok::<(), anyhow::Error>(())
@@ -136,11 +160,34 @@ pub fn start(cx: &mut App, identity: &'static AppIdentity) -> anyhow::Result<()>
     Ok(())
 }
 
+/// 打开/关闭当前产品的 Public MCP；设置持久化后立即应用。
+pub fn set_enabled(cx: &mut App, enabled: bool) -> anyhow::Result<()> {
+    AppSettings::update_and_save(cx, |settings| {
+        settings.mcp.server_enabled = enabled;
+    });
+    let Some(identity) = IDENTITY.get().copied() else {
+        return Ok(());
+    };
+    start(cx, identity)
+}
+
+/// 设置里的 MCP 开关，用于状态展示。
+pub fn settings_enabled(cx: &App) -> bool {
+    AppSettings::current(cx).mcp.server_enabled
+}
+
 /// 停止 server；发现文件由 `PublicMcpRuntime::Drop` 清理。
 pub fn stop(cx: &mut App) {
     ensure_global(cx);
     let state = &mut cx.global_mut::<GlobalMcpHost>().0;
     state.runtime = None;
+    state.starting = false;
+}
+
+fn is_starting(cx: &App) -> bool {
+    cx.try_global::<GlobalMcpHost>()
+        .map(|state| state.0.starting)
+        .unwrap_or(false)
 }
 
 pub fn is_running(cx: &App) -> bool {
@@ -172,6 +219,7 @@ fn set_error(cx: &mut App, message: String) {
     let state = &mut cx.global_mut::<GlobalMcpHost>().0;
     tracing::warn!(error = %message, "public MCP runtime failed");
     state.last_error = Some(message);
+    state.starting = false;
 }
 
 fn build_registry(
@@ -189,7 +237,12 @@ fn build_registry(
     if providers.is_empty() {
         return None;
     }
-    PublicMcpToolRegistry::try_new(providers).ok()
+    let registry = PublicMcpToolRegistry::try_new(providers).ok()?;
+    tracing::info!(
+        tools = registry.tools().len(),
+        "public MCP tool registry assembled"
+    );
+    Some(registry)
 }
 
 fn toolset_enabled(toolset: McpToolset, toolsets: &ToolExposureToolsetSettings) -> bool {

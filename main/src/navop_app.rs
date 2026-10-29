@@ -953,7 +953,7 @@ pub fn init(cx: &mut App) -> anyhow::Result<()> {
     app_kit::set_shell_host(Arc::new(crate::home_tab::domain_host::NavopShellHost));
     init_ssh_session_service(cx);
     ai_chat_view::init(cx);
-    crate::public_mcp_approval::init(cx);
+    mcp_approval::init(cx);
     crate::ai_chat_acp::init(cx);
     one_ui::init_table_display_settings(
         cx,

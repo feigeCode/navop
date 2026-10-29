@@ -126,6 +126,16 @@ impl Render for ShellHome {
             sidebar = sidebar.child(self.connection_row(connection, cx));
         }
 
+        let mcp_running = mcp_host::is_running(cx);
+        let mcp_enabled = mcp_host::settings_enabled(cx);
+        let mcp_label = if mcp_running {
+            "MCP 已连接"
+        } else if mcp_enabled {
+            "MCP 启动中"
+        } else {
+            "MCP 关闭"
+        };
+
         div()
             .size_full()
             .flex()
@@ -146,9 +156,21 @@ impl Render for ShellHome {
                     )
                     .child(
                         div()
-                            .text_xs()
-                            .text_color(gpui::rgba(0x666666ff))
-                            .child("SSH / SFTP / 终端 / 端口转发 / 远程桌面"),
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(Button::new("mcp-toggle").small().label(mcp_label).on_click(
+                                cx.listener(|_, _, _window, cx| {
+                                    let enabled = mcp_host::settings_enabled(cx);
+                                    let _ = mcp_host::set_enabled(cx, !enabled);
+                                }),
+                            ))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(gpui::rgba(0x666666ff))
+                                    .child("SSH / SFTP / 终端 / 端口转发 / 远程桌面"),
+                            ),
                     ),
             )
             .child(

@@ -9,6 +9,8 @@ name = "navop-data"
 path = "src/main.rs"
 
 [dependencies]
+mcp_approval.workspace = true
+mcp_host.workspace = true
 app_kit.workspace = true
 domain_api.workspace = true
 gpui.workspace = true

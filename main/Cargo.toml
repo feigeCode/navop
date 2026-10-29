@@ -67,6 +67,7 @@ remote_file_editor = { workspace = true }
 one-core.workspace = true
 domain_api.workspace = true
 mcp_host.workspace = true
+mcp_approval.workspace = true
 app_kit.workspace = true
 shell_domain.workspace = true
 data_domain.workspace = true

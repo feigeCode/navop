@@ -48,6 +48,7 @@ impl Product for DataProduct {
         db_view::sql_editor_view::init(cx);
         redis_view::init(cx);
         mongodb_view::init(cx);
+        mcp_approval::init(cx);
         Ok(())
     }
 }

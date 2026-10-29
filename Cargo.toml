@@ -21,6 +21,7 @@ members = [
     "crates/tool_runtime",
     "crates/domain_api",
     "crates/mcp_host",
+    "crates/mcp_approval",
     "crates/app_kit",
     "crates/data_domain",
     "crates/shell_domain",
@@ -188,6 +189,7 @@ sftp_view = { path = "crates/sftp_view" }
 one-core = { path = "crates/core" }
 domain_api = { path = "crates/domain_api" }
 mcp_host = { path = "crates/mcp_host" }
+mcp_approval = { path = "crates/mcp_approval" }
 app_kit = { path = "crates/app_kit" }
 data_domain = { path = "crates/data_domain" }
 shell_domain = { path = "crates/shell_domain" }

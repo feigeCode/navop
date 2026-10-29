@@ -1,3 +1,5 @@
+rust_i18n::i18n!("locales", fallback = "en");
+
 mod channel;
 #[cfg(test)]
 mod protocol_tests;
@@ -124,7 +126,10 @@ fn present_approval_request(
 }
 
 fn present_next_approval(queue: Arc<Mutex<ApprovalQueueState>>, cx: &mut App) -> bool {
-    let Some(window_id) = crate::app_init::resolve_navop_window(cx) else {
+    let Some(window_id) = cx
+        .active_window()
+        .or_else(|| cx.windows().into_iter().next())
+    else {
         return false;
     };
     let snapshot = queue

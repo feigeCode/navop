@@ -1,4 +1,4 @@
-use super::{access_guard, diagnostics, internal_functions, mongo, redis, resource_pool};
+use super::{access_guard, diagnostics, internal_functions, resource_pool};
 use gpui::App;
 use one_core::settings::ToolExposureToolsetSettings;
 use one_core::tab_container::TabOpenMode;
@@ -137,12 +137,12 @@ fn build_tool_registry_for_surface(
         }
     }
     if toolsets.redis {
-        runtime_registries.push(tool_runtime::ToolRegistry::new(redis::redis_tool_handlers(
+        runtime_registries.push(tool_runtime::ToolRegistry::new(data_domain::mcp::redis_tool_handlers(
             cx,
         )));
     }
     if toolsets.mongo {
-        runtime_registries.push(tool_runtime::ToolRegistry::new(mongo::mongo_tool_handlers(
+        runtime_registries.push(tool_runtime::ToolRegistry::new(data_domain::mcp::mongo_tool_handlers(
             cx,
         )));
     }

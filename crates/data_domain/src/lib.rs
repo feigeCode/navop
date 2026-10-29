@@ -18,6 +18,8 @@ use one_core::tab_container::{TabItem, TabOpenMode};
 use redis_view::RedisTabView;
 use std::sync::Arc;
 
+pub mod mcp;
+
 pub struct DataDomain;
 
 fn register_mcp_toolsets() {
@@ -37,12 +39,26 @@ fn register_mcp_toolsets() {
         mcp_host::McpToolset::Redis,
         true,
         Arc::new(|cx: &App| {
-            let Some(repo) = mcp_host::connection_repository(cx) else {
+            let handlers = mcp::redis_tool_handlers(cx);
+            if handlers.is_empty() {
                 return Vec::new();
-            };
-            vec![mcp_host::runtime_provider(
-                runtime_redis::redis_tools::redis_tool_registry(repo),
-            )]
+            }
+            vec![mcp_host::runtime_provider(tool_runtime::ToolRegistry::new(
+                handlers,
+            ))]
+        }),
+    );
+    mcp_host::register_toolset(
+        mcp_host::McpToolset::Mongo,
+        true,
+        Arc::new(|cx: &App| {
+            let handlers = mcp::mongo_tool_handlers(cx);
+            if handlers.is_empty() {
+                return Vec::new();
+            }
+            vec![mcp_host::runtime_provider(tool_runtime::ToolRegistry::new(
+                handlers,
+            ))]
         }),
     );
 }
@@ -337,6 +353,16 @@ mod tests {
         assert!(!DatabaseConnectionOpener::supports_type(
             ConnectionType::Redis
         ));
+    }
+
+    #[test]
+    fn data_domain_registers_database_redis_mongo_mcp_toolsets() {
+        let mut registry = DomainRegistry::default();
+        DataDomain.register(&mut registry);
+        let toolsets = mcp_host::registered_toolsets();
+        assert!(toolsets.contains(&mcp_host::McpToolset::Database));
+        assert!(toolsets.contains(&mcp_host::McpToolset::Redis));
+        assert!(toolsets.contains(&mcp_host::McpToolset::Mongo));
     }
 
     #[test]

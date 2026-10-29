@@ -34,7 +34,6 @@ mod personal_sync_runtime;
 #[cfg(test)]
 mod personal_sync_runtime_tests;
 mod personal_sync_status;
-mod public_mcp_approval;
 mod public_mcp_runtime;
 mod resource_workbench_terminal;
 mod screenshot_safe;

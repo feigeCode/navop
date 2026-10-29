@@ -3,8 +3,6 @@ mod config;
 mod connection_sessions;
 mod diagnostics;
 mod internal_functions;
-mod mongo;
-mod redis;
 mod resource_pool;
 mod session;
 mod status;
@@ -313,7 +311,7 @@ fn start_runtime(cx: &mut App, config: PublicMcpStartConfig) {
 }
 
 fn build_approval_manager(cx: &App) -> PublicMcpApprovalManager {
-    crate::public_mcp_approval::approval_manager(cx)
+    mcp_approval::approval_manager(cx)
 }
 
 fn next_generation(cx: &mut App) -> u64 {

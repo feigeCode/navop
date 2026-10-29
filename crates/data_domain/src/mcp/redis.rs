@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 use tool_runtime::{ToolError, ToolHandler, ToolResult};
 
-pub(super) fn redis_tool_handlers(cx: &App) -> Vec<Arc<dyn ToolHandler>> {
+pub fn redis_tool_handlers(cx: &App) -> Vec<Arc<dyn ToolHandler>> {
     match cx.try_global::<GlobalRedisState>().cloned() {
         Some(state) => RedisToolProvider::handlers(Arc::new(RedisRuntimeSnapshots { state })),
         None => {

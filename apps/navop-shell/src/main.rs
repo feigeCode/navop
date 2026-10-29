@@ -42,6 +42,7 @@ impl Product for ShellProduct {
         cx.set_global(settings);
         terminal_view::init(cx);
         remote_desktop_view::init(cx);
+        mcp_approval::init(cx);
         Ok(())
     }
 }

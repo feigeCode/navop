@@ -9,6 +9,8 @@ name = "navop-shell"
 path = "src/main.rs"
 
 [dependencies]
+mcp_approval.workspace = true
+mcp_host.workspace = true
 anyhow.workspace = true
 app_kit.workspace = true
 domain_api.workspace = true

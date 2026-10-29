@@ -2964,6 +2964,7 @@ name = "data_domain"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "db_view",
  "domain_api",
  "extension-runtime",
@@ -2971,9 +2972,13 @@ dependencies = [
  "mcp_host",
  "mongodb_view",
  "one-core",
+ "public_mcp",
  "redis_view",
  "runtime_database",
  "runtime_redis",
+ "serde_json",
+ "tool_runtime",
+ "tracing",
 ]
 
 [[package]]
@@ -7568,6 +7573,7 @@ dependencies = [
  "image",
  "json_view",
  "known_hosts_view",
+ "mcp_approval",
  "mcp_host",
  "mongodb-runtime",
  "mongodb_view",
@@ -7782,12 +7788,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "mcp_approval"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "gpui-component",
+ "gpui-fast",
+ "one-core",
+ "public_mcp",
+ "rust-i18n",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "mcp_host"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "domain_api",
  "gpui-fast",
+ "mcp_approval",
  "one-core",
  "public_mcp",
  "tool_runtime",
@@ -8294,6 +8315,8 @@ dependencies = [
  "gpui-fast",
  "gpui-fast-platform",
  "gpui-kit-assets",
+ "mcp_approval",
+ "mcp_host",
  "mongodb_view",
  "one-assets",
  "one-core",
@@ -8314,6 +8337,8 @@ dependencies = [
  "gpui-fast",
  "gpui-fast-platform",
  "gpui-kit-assets",
+ "mcp_approval",
+ "mcp_host",
  "one-assets",
  "one-core",
  "port_forwarding",
