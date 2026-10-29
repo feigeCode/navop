@@ -391,8 +391,6 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use crate::setting_tab;
-use db::GlobalDbState;
-use one_core::storage::{ConnectionRepository, GlobalStorageState};
 
 fn activate_tab_by_number(number: usize, cx: &mut App) {
     let Some(active_window) = cx.active_window() else {
@@ -962,8 +960,6 @@ pub fn init(cx: &mut App) -> anyhow::Result<()> {
     );
     let table_keybindings = table_keybindings(cx);
     one_ui::init(cx, table_keybindings);
-    db_view::search_shortcut::init(cx);
-    db_view::sql_editor_view::init(cx);
     // ai_chat_view 的会话搜索快捷键随 `ai_chat_view::init(cx)` 一起注册（见该 crate 的 lib.rs）。
     crate::auth::init(cx);
     crate::license::init(cx);
@@ -975,17 +971,12 @@ pub fn init(cx: &mut App) -> anyhow::Result<()> {
         global_provider_state
             .set_request_timeout_secs(Some(AppSettings::global(cx).ai_chat.request_timeout_secs));
     }
-    db::init_cache(cx);
-    // 启动后台磁盘缓存清理任务
-    if let Some(cache) = cx.try_global::<db::GlobalNodeCache>() {
-        cache.start_cleanup_task(cx);
-    }
-    terminal_view::init(cx);
-    redis_view::init(cx);
-    crate::personal_sync_runtime::init(cx);
-    mongodb_view::init(cx);
+    // 领域专属子系统（数据库缓存、SQL 编辑器、Redis/Mongo 视图、终端视图等）
+    // 由各领域包自己初始化，公共壳只知道“按注册顺序调用”。
+    app_kit::init_domains(cx)?;
     #[cfg(not(feature = "builtin-mongodb"))]
     init_native_data_driver_factories(cx);
+    crate::personal_sync_runtime::init(cx);
     // 独立产品（`navop-shell` / `navop-data`）用 `app_kit` 托管的通用 MCP 宿主
     // (`mcp_host`)；全量产品才启动自己的 `public_mcp_runtime`，否则两套 MCP
     // 会同时监听，发现文件与工具集互相覆盖。
@@ -994,7 +985,6 @@ pub fn init(cx: &mut App) -> anyhow::Result<()> {
     {
         crate::public_mcp_runtime::init(cx);
     }
-    remote_desktop_view::init(cx);
     crate::home_tab::init(cx);
     cx.bind_keys(init_keybindings(cx));
     init_action_handlers(cx);
@@ -1002,12 +992,6 @@ pub fn init(cx: &mut App) -> anyhow::Result<()> {
     let registry = TabContentRegistry::new();
     cx.set_global(registry);
 
-    let storage_state = cx.global::<GlobalStorageState>();
-    let conn_repo = storage_state.storage.get::<ConnectionRepository>();
-    let db_state = GlobalDbState::with_connection_repository(conn_repo);
-    db_state.start_cleanup_task(cx);
-    cx.set_global(db_state);
-    db_view::init_ask_ai_notifier(cx);
     cx.activate(true);
     Ok(())
 }
@@ -2584,15 +2568,15 @@ mod tests {
     #[test]
     fn native_driver_factories_are_ready_before_public_mcp_init() {
         let source = include_str!("navop_app.rs");
-        let redis_init = source.find("redis_view::init(cx);").unwrap();
-        let mongo_init = source.find("mongodb_view::init(cx);").unwrap();
+        let domains = source.find("app_kit::init_domains(cx)?;").unwrap();
         let native_factories = source
             .find("init_native_data_driver_factories(cx);")
             .unwrap();
         let public_mcp = source.find("crate::public_mcp_runtime::init(cx);").unwrap();
 
-        assert!(redis_init < native_factories);
-        assert!(mongo_init < native_factories);
+        // 领域初始化（含 Redis/Mongo 视图）→ 原生驱动工厂 → 公共 MCP 工具注册表，
+        // 顺序保证 MCP 资源池里的驱动已经可用。
+        assert!(domains < native_factories);
         assert!(native_factories < public_mcp);
     }
 

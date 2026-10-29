@@ -122,7 +122,10 @@ impl Domain for ShellDomain {
         register_mcp_toolsets();
     }
 
-    fn init(&self, _cx: &mut App) -> anyhow::Result<()> {
+    /// 终端领域的子系统初始化：终端视图与远程桌面视图。
+    fn init(&self, cx: &mut App) -> anyhow::Result<()> {
+        terminal_view::init(cx);
+        remote_desktop_view::init(cx);
         Ok(())
     }
 }

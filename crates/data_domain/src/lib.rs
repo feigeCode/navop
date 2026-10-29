@@ -13,7 +13,9 @@ use extension_runtime::database_driver_install::{
 };
 use gpui::{App, AppContext, Window};
 use mongodb_view::MongoTabView;
-use one_core::storage::{ConnectionType, StoredConnection};
+use one_core::storage::{
+    ConnectionRepository, ConnectionType, GlobalStorageState, StoredConnection,
+};
 use one_core::tab_container::{TabItem, TabOpenMode};
 use redis_view::RedisTabView;
 use std::sync::Arc;
@@ -82,6 +84,26 @@ impl Domain for DataDomain {
         DomainId::DATABASE
     }
 
+    /// 数据领域的子系统初始化：数据库缓存、SQL 编辑器、Redis/Mongo 视图、
+    /// 全局数据库状态与“询问 AI”通知器。
+    fn init(&self, cx: &mut App) -> anyhow::Result<()> {
+        db::init_cache(cx);
+        if let Some(cache) = cx.try_global::<db::GlobalNodeCache>() {
+            cache.start_cleanup_task(cx);
+        }
+        db_view::search_shortcut::init(cx);
+        db_view::sql_editor_view::init(cx);
+        redis_view::init(cx);
+        mongodb_view::init(cx);
+        let storage_state = cx.global::<GlobalStorageState>();
+        let connection_repository = storage_state.storage.get::<ConnectionRepository>();
+        let db_state = db::GlobalDbState::with_connection_repository(connection_repository);
+        db_state.start_cleanup_task(cx);
+        cx.set_global(db_state);
+        db_view::init_ask_ai_notifier(cx);
+        Ok(())
+    }
+
     fn register(&self, registry: &mut DomainRegistry) {
         registry.register_connection_opener(ConnectionType::Redis, Arc::new(RedisConnectionOpener));
         registry.register_connection_opener(
@@ -97,10 +119,6 @@ impl Domain for DataDomain {
         // Tab 会话恢复：把上次关闭时的 Database / Redis / MongoDB 标签重建出来。
         registry.register_tab_restorer(Arc::new(tab_restore::DataTabRestorer));
         register_mcp_toolsets();
-    }
-
-    fn init(&self, _cx: &mut App) -> anyhow::Result<()> {
-        Ok(())
     }
 }
 

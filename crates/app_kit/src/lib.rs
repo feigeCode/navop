@@ -3,7 +3,7 @@
 //! `app_kit` 只负责把产品身份落到进程级配置（数据目录、keychain），
 //! 再调用产品自己的领域初始化；它不依赖任何具体领域 crate。
 
-use domain_api::{AppIdentity, DomainId, DomainRegistry, Product};
+use domain_api::{AppIdentity, Domain, DomainId, DomainRegistry, Product};
 use gpui::App;
 use std::sync::OnceLock;
 
@@ -31,6 +31,7 @@ pub use settings::open_settings;
 static DOMAIN_REGISTRY: OnceLock<DomainRegistry> = OnceLock::new();
 static EMPTY_DOMAIN_REGISTRY: OnceLock<DomainRegistry> = OnceLock::new();
 static APP_IDENTITY: OnceLock<&'static AppIdentity> = OnceLock::new();
+static DOMAINS: OnceLock<Vec<std::sync::Arc<dyn Domain>>> = OnceLock::new();
 
 /// 当前产品的身份；`bootstrap` 之后可用。
 pub fn identity() -> Option<&'static AppIdentity> {
@@ -87,11 +88,13 @@ pub fn bootstrap<P: Product>(product: &P, cx: &mut App) -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("app data directory is not initialized"))?;
     let (canonical, legacy) = public_mcp::discovery::public_mcp_discovery_paths_in(data_dir);
     let _ = public_mcp::discovery::set_public_mcp_discovery_paths(canonical, legacy);
+    let domains = product.domains();
     let mut registry = DomainRegistry::default();
-    for domain in product.domains() {
+    for domain in &domains {
         registry.register_domain(domain.id());
         domain.register(&mut registry);
     }
+    let _ = DOMAINS.set(domains);
     let _ = DOMAIN_REGISTRY.set(registry);
     product.init(cx)?;
     if product.mcp_managed_by_app_kit() {
@@ -101,6 +104,20 @@ pub fn bootstrap<P: Product>(product: &P, cx: &mut App) -> anyhow::Result<()> {
         } else {
             mcp_host::stop(cx);
         }
+    }
+    Ok(())
+}
+
+/// 调用当前产品每个领域的初始化（`Domain::init`）。
+///
+/// 领域初始化包含数据库缓存、SQL 编辑器、Redis/Mongo 视图、终端视图等
+/// 领域专属子系统；公共壳只按注册顺序调用，不知道具体是什么。
+pub fn init_domains(cx: &mut App) -> anyhow::Result<()> {
+    let Some(domains) = DOMAINS.get() else {
+        return Ok(());
+    };
+    for domain in domains {
+        domain.init(cx)?;
     }
     Ok(())
 }
