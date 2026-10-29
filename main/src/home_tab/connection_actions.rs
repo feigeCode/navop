@@ -22,105 +22,32 @@ impl HomePage {
         let Some(connection_id) = connection.id else {
             return;
         };
-        match connection.connection_type {
-            ConnectionType::Database => {
-                let database_type = connection
-                    .to_db_connection()
-                    .ok()
-                    .map(|params| params.database_type);
-                self.confirm_edit_connection(
-                    connection_id,
-                    connection.name,
-                    database_type,
-                    window,
-                    cx,
-                );
-            }
-            ConnectionType::SshSftp => {
-                self.editing_connection_id = Some(connection_id);
-                self.show_ssh_form(window, cx);
-            }
-            ConnectionType::Redis => {
-                self.editing_connection_id = Some(connection_id);
-                self.show_redis_form(window, cx);
-            }
-            ConnectionType::MongoDB => {
-                self.editing_connection_id = Some(connection_id);
-                self.show_mongodb_form(window, cx);
-            }
-            ConnectionType::Ftp => {
-                self.editing_connection_id = Some(connection_id);
-                self.show_ftp_form(window, cx);
-            }
-            ConnectionType::Serial => {
-                self.editing_connection_id = Some(connection_id);
-                self.show_serial_form(window, cx);
-            }
-            ConnectionType::Telnet => {
-                self.editing_connection_id = Some(connection_id);
-                self.show_telnet_form(window, cx);
-            }
-            ConnectionType::PortForwarding => {
-                self.editing_connection_id = Some(connection_id);
-                self.show_port_forwarding_form(window, cx);
-            }
-            ConnectionType::Rdp | ConnectionType::Vnc => {
-                let protocol = if connection.connection_type == ConnectionType::Rdp {
-                    StoredRemoteDesktopProtocol::Rdp
-                } else {
-                    StoredRemoteDesktopProtocol::Vnc
-                };
-                self.editing_connection_id = Some(connection_id);
-                self.show_remote_desktop_form(protocol, window, cx);
-            }
-            // 旧内置 MQTT 连接与原生扩展连接共用扩展表单(历史参数先迁移为扩展形态)。
-            ConnectionType::Extension | ConnectionType::Mqtt => {
-                if cx.global::<ActiveConnections>().is_active(connection_id) {
-                    let name = connection.name;
-                    window.open_dialog(cx, move |dialog, _window, _cx| {
-                        dialog
-                            .title(t!("Connection.in_use_title").to_string().into_any_element())
-                            .child(
-                                t!("Connection.in_use_cannot_edit", conn_name = name)
-                                    .to_string()
-                                    .into_any_element(),
-                            )
-                            .alert()
-                    });
-                } else {
-                    self.editing_connection_id = Some(connection_id);
-                    self.show_extension_form(window, cx);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    pub(super) fn confirm_edit_connection(
-        &mut self,
-        conn_id: i64,
-        conn_name: String,
-        db_type: Option<DatabaseType>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let is_active = cx.global::<ActiveConnections>().is_active(conn_id);
-
-        if is_active {
+        if cx.global::<ActiveConnections>().is_active(connection_id) {
+            let name = connection.name;
             window.open_dialog(cx, move |dialog, _window, _cx| {
                 dialog
                     .title(t!("Connection.in_use_title").to_string().into_any_element())
                     .child(
-                        t!("Connection.in_use_cannot_edit", conn_name = conn_name)
+                        t!("Connection.in_use_cannot_edit", conn_name = name)
                             .to_string()
                             .into_any_element(),
                     )
                     .alert()
             });
-        } else if let Some(db_type) = db_type {
-            self.editing_connection_id = Some(conn_id);
-            self.show_connection_form(db_type, window, cx);
+            return;
         }
+
+        // 扩展连接（含历史内置 MQTT）由扩展运行时提供的表单编辑；其余类型统一
+        // 走通用连接表单宿主，由各领域包注册的 provider 构建具体表单。
+        if matches!(
+            connection.connection_type,
+            ConnectionType::Extension | ConnectionType::Mqtt
+        ) {
+            self.editing_connection_id = Some(connection_id);
+            self.show_extension_form(window, cx);
+            return;
+        }
+        app_kit::connection_actions::edit_connection(connection, window, cx);
     }
 
     /// 复制连接，创建一个副本
@@ -441,11 +368,11 @@ impl HomePage {
 
 #[cfg(test)]
 mod edit_routing_tests {
-    /// 旧内置 MQTT 曾落在 `ConnectionType::Mqtt => {}` 空实现里,导致老连接无法编辑。
+    /// 旧内置 MQTT 曾落在 `ConnectionType::Mqtt => {}` 空实现里，导致老连接无法编辑。
     #[test]
     fn legacy_mqtt_edit_routes_to_the_extension_form() {
         let source = include_str!("connection_actions.rs");
-        // 只看生产代码;测试模块自身的字面量不算。
+        // 只看生产代码；测试模块自身的字面量不算。
         let production = source
             .split("#[cfg(test)]")
             .next()
@@ -455,8 +382,32 @@ mod edit_routing_tests {
             "旧内置 MQTT 不能是编辑空实现"
         );
         assert!(
-            production.contains("ConnectionType::Extension | ConnectionType::Mqtt =>"),
+            production.contains("ConnectionType::Extension | ConnectionType::Mqtt"),
             "旧内置 MQTT 应与扩展连接共用扩展表单入口"
+        );
+        assert!(
+            production.contains("self.show_extension_form(window, cx)"),
+            "扩展 / 旧内置 MQTT 编辑必须落到扩展表单"
+        );
+    }
+
+    /// 其余连接类型统一走通用表单宿主，由领域包注册的 provider 构建表单，
+    /// 公共主页不再按类型分派到领域表单窗口。
+    #[test]
+    fn domain_connections_edit_through_the_generic_form_host() {
+        let source = include_str!("connection_actions.rs");
+        let production = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production source");
+        assert!(
+            production
+                .contains("app_kit::connection_actions::edit_connection(connection, window, cx)"),
+            "领域连接编辑应交给通用表单宿主"
+        );
+        assert!(
+            !production.contains("show_ssh_form"),
+            "公共主页不再持有 SSH 表单构造"
         );
     }
 }

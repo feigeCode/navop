@@ -3715,7 +3715,7 @@ mod tests {
         personal_sync_backend_options, personal_sync_status_label, personal_sync_status_view_model,
     };
     use crate::personal_sync_status::PersonalSyncRuntimeStatus;
-    use one_core::settings::{LocalTerminalProfileKind, MasterKeyStorage};
+    use one_core::settings::MasterKeyStorage;
     use std::path::Path;
 
     /// `include_str!` 的源码契约必须先截掉测试模块本身，否则断言会命中测试自己写的字面量。

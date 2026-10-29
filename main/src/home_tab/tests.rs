@@ -6,7 +6,6 @@ use super::keybindings::{OPEN_LOCAL_TERMINAL_SHORTCUT_MACOS, OPEN_LOCAL_TERMINAL
 mod local_terminal;
 mod rendering;
 mod sync;
-mod titles;
 mod workspace;
 
 fn stored_external_connection(driver_id: &str) -> StoredConnection {

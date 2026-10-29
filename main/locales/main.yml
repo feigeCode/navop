@@ -314,6 +314,10 @@ Home:
     en: "Port Forwarding %{name} failed: %{error}"
     zh-CN: "端口转发 %{name} 启动失败：%{error}"
     zh-HK: "端口轉發 %{name} 啟動失敗：%{error}"
+  port_forwarding_unsupported:
+    en: "This product cannot open port forwarding: %{name}"
+    zh-CN: "当前产品不支持打开端口转发连接：%{name}"
+    zh-HK: "目前產品不支援開啟連接埠轉發連線：%{name}"
   port_forwarding_missing_ssh:
     en: Referenced SSH server was not found.
     zh-CN: 找不到引用的 SSH 服务器。

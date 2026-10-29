@@ -2,7 +2,6 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use db::ipc::IpcDriverRegistry;
-use db_view::connection_form_window::{ConnectionFormWindow, ConnectionFormWindowConfig};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Anchor, AnyElement, App, AppContext, AsyncApp, ClipboardItem, Context, Entity, EventEmitter,
@@ -24,7 +23,6 @@ use gpui_component::{
     tooltip::Tooltip,
     v_flex,
 };
-use mongodb_view::{MongoFormWindow, MongoFormWindowConfig};
 use one_assets::IconName;
 use one_core::cloud_sync::{
     CloudAccountScope, CloudApiClient, CloudSyncService, SyncConflict, SyncEngine, SyncError,
@@ -42,22 +40,14 @@ use one_core::storage::traits::Repository;
 use one_core::storage::{
     ActiveConnections, ConnectionRepository, ConnectionType, CredentialResolutionError,
     DatabaseType, GlobalStorageState, PendingCloudDeletionRepository, RedisMode,
-    RemoteDesktopParams, RemoteDesktopProtocol as StoredRemoteDesktopProtocol, SshAuthMethod,
-    StoredConnection, TeamMembershipState, TelnetLoginStep, Workspace, WorkspaceRepository,
+    RemoteDesktopParams, SshAuthMethod, StoredConnection, TeamMembershipState, TelnetLoginStep,
+    Workspace, WorkspaceRepository,
 };
-use one_core::tab_container::{TabContainer, TabContent, TabContentEvent, TabItem, TabOpenMode};
+use one_core::tab_container::{TabContainer, TabContent, TabContentEvent, TabOpenMode};
 use one_ui::{IconButton, IconButtonRole};
 use port_forwarding::PortForwardingRuntime;
-use port_forwarding_view::{
-    PortForwardingFormWindow, PortForwardingFormWindowConfig, PortForwardingTab,
-    PortForwardingTabConfig,
-};
-use redis_view::{RedisFormWindow, RedisFormWindowConfig};
 use rust_i18n::t;
-use terminal_view::{FtpFormWindow, FtpFormWindowConfig};
-use terminal_view::{SerialFormWindow, SerialFormWindowConfig};
 use terminal_view::{SshFormWindow, SshFormWindowConfig};
-use terminal_view::{TelnetFormWindow, TelnetFormWindowConfig};
 
 use crate::auth::{AuthService, load_auth_data, show_auth_dialog};
 use crate::connection_visuals::{ConnectionVisualSize, connection_type_navigation_icon};
@@ -72,9 +62,6 @@ use crate::local_terminal_profiles::{
     LocalTerminalLaunchTarget, effective_kind, launch_options, launch_target_is_default,
 };
 use crate::setting_tab::GlobalCurrentUser;
-use remote_desktop_view::remote_desktop_form::{
-    RemoteDesktopFormWindow, RemoteDesktopFormWindowConfig,
-};
 
 actions!(
     home_tab,
@@ -260,7 +247,6 @@ mod connection_details;
 pub(crate) mod connection_filter;
 pub(crate) use connection_filter::ConnectionFilter;
 mod account_menu;
-mod connection_form_title;
 mod connection_forms;
 mod connection_grouping;
 mod connection_icon;
@@ -299,7 +285,6 @@ use connection_badge::ConnectionTeamBadge;
 pub(crate) use connection_badge::connection_team_badge;
 use connection_badge::render_team_badge;
 pub(crate) use connection_filter::connection_matches_query;
-use connection_form_title::{external_driver_id_for_connection_form, non_empty_name};
 #[cfg(test)]
 pub(crate) use connection_grouping::can_manage_connection_with_permissions;
 use connection_info::{
@@ -316,8 +301,6 @@ use sync_route::{
 };
 pub(crate) use team_permissions::TeamPermissionSnapshot;
 
-#[cfg(test)]
-use connection_info::remote_desktop_connection_info;
 #[cfg(test)]
 use sync_route::sync_route_for_provider;
 #[cfg(test)]
