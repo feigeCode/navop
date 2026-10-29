@@ -8,4 +8,6 @@ publish = false
 anyhow.workspace = true
 domain_api.workspace = true
 gpui.workspace = true
+mcp_host.workspace = true
 one-core.workspace = true
+public_mcp.workspace = true

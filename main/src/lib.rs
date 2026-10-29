@@ -274,6 +274,10 @@ impl domain_api::Product for FullProduct {
         ]
     }
 
+    fn mcp_managed_by_app_kit(&self) -> bool {
+        false
+    }
+
     fn init(&self, cx: &mut gpui::App) -> anyhow::Result<()> {
         navop_app::init(cx)
     }

@@ -20,6 +20,33 @@ use std::sync::Arc;
 
 pub struct DataDomain;
 
+fn register_mcp_toolsets() {
+    mcp_host::register_toolset(
+        mcp_host::McpToolset::Database,
+        true,
+        Arc::new(|cx: &App| {
+            let Some(repo) = mcp_host::connection_repository(cx) else {
+                return Vec::new();
+            };
+            vec![mcp_host::runtime_provider(
+                runtime_database::database_tools::database_tool_registry(repo),
+            )]
+        }),
+    );
+    mcp_host::register_toolset(
+        mcp_host::McpToolset::Redis,
+        true,
+        Arc::new(|cx: &App| {
+            let Some(repo) = mcp_host::connection_repository(cx) else {
+                return Vec::new();
+            };
+            vec![mcp_host::runtime_provider(
+                runtime_redis::redis_tools::redis_tool_registry(repo),
+            )]
+        }),
+    );
+}
+
 impl Domain for DataDomain {
     fn id(&self) -> DomainId {
         DomainId::DATABASE
@@ -33,6 +60,7 @@ impl Domain for DataDomain {
         );
         registry
             .register_connection_opener(ConnectionType::MongoDB, Arc::new(MongoConnectionOpener));
+        register_mcp_toolsets();
     }
 
     fn init(&self, _cx: &mut App) -> anyhow::Result<()> {

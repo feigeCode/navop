@@ -436,7 +436,9 @@ dependencies = [
  "anyhow",
  "domain_api",
  "gpui-fast",
+ "mcp_host",
  "one-core",
+ "public_mcp",
 ]
 
 [[package]]
@@ -2966,9 +2968,12 @@ dependencies = [
  "domain_api",
  "extension-runtime",
  "gpui-fast",
+ "mcp_host",
  "mongodb_view",
  "one-core",
  "redis_view",
+ "runtime_database",
+ "runtime_redis",
 ]
 
 [[package]]
@@ -7563,6 +7568,7 @@ dependencies = [
  "image",
  "json_view",
  "known_hosts_view",
+ "mcp_host",
  "mongodb-runtime",
  "mongodb_view",
  "navop_runtime",
@@ -7773,6 +7779,19 @@ checksum = "8ea1f30cedd69f0a2954655f7188c6a834246d2bcf1e315e2ac40c4b24dc9519"
 dependencies = [
  "cfg-if",
  "rayon",
+]
+
+[[package]]
+name = "mcp_host"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "domain_api",
+ "gpui-fast",
+ "one-core",
+ "public_mcp",
+ "tool_runtime",
+ "tracing",
 ]
 
 [[package]]
@@ -12792,11 +12811,14 @@ dependencies = [
  "gpui-component",
  "gpui-fast",
  "known_hosts_view",
+ "mcp_host",
  "one-assets",
  "one-core",
  "port_forwarding_view",
+ "public_mcp",
  "remote_desktop",
  "remote_desktop_view",
+ "runtime_sftp",
  "rust-i18n",
  "sftp_view",
  "smol",

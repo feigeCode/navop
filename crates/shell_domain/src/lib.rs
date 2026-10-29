@@ -30,6 +30,45 @@ use terminal_view::{TerminalWorkspace, TerminalWorkspaceEvent};
 
 pub struct ShellDomain;
 
+fn register_mcp_toolsets() {
+    mcp_host::register_toolset(
+        mcp_host::McpToolset::Terminal,
+        true,
+        Arc::new(|cx: &App| {
+            let Some(registry) = terminal_view::public_mcp::registry(cx) else {
+                return Vec::new();
+            };
+            vec![
+                mcp_host::runtime_provider(public_mcp::tools::terminal_exec_tool_registry(
+                    registry.clone(),
+                )),
+                mcp_host::runtime_provider(public_mcp::tools::terminal_read_tool_registry(
+                    registry.clone(),
+                )),
+                mcp_host::runtime_provider(public_mcp::tools::terminal_control_tool_registry(
+                    registry.clone(),
+                )),
+                mcp_host::runtime_provider(public_mcp::tools::terminal_write_keys_tool_registry(
+                    registry.clone(),
+                )),
+                mcp_host::runtime_provider(public_mcp::tools::remote_ops_tool_registry(registry)),
+            ]
+        }),
+    );
+    mcp_host::register_toolset(
+        mcp_host::McpToolset::Sftp,
+        true,
+        Arc::new(|cx: &App| {
+            let Some(repo) = mcp_host::connection_repository(cx) else {
+                return Vec::new();
+            };
+            vec![mcp_host::runtime_provider(
+                runtime_sftp::sftp_tools::sftp_tool_registry(repo),
+            )]
+        }),
+    );
+}
+
 impl Domain for ShellDomain {
     fn id(&self) -> DomainId {
         DomainId::SHELL
@@ -52,6 +91,7 @@ impl Domain for ShellDomain {
             ConnectionType::Vnc,
             Arc::new(RemoteDesktopConnectionOpener),
         );
+        register_mcp_toolsets();
     }
 
     fn init(&self, _cx: &mut App) -> anyhow::Result<()> {

@@ -39,6 +39,13 @@ pub fn configure_identity(identity: &'static AppIdentity) {
         identity.development_data_dir_name,
         identity.data_dir_name,
     );
+    let _ = public_mcp::discovery::configure_discovery_identity(
+        public_mcp::discovery::DiscoveryIdentity {
+            app: identity.mcp_app_name,
+            legacy: identity.mcp_legacy_app_name,
+            file_name: "public-mcp.json",
+        },
+    );
 }
 
 /// 应用身份后初始化产品领域。
@@ -51,13 +58,26 @@ pub fn bootstrap<P: Product>(product: &P, cx: &mut App) -> anyhow::Result<()> {
         let context = one_core::app_paths::process_context()?;
         one_core::app_paths::initialize_app_paths(&Default::default(), &context)?;
     }
+    let data_dir = one_core::app_paths::initialized_paths()
+        .and_then(|paths| paths.data_dir())
+        .ok_or_else(|| anyhow::anyhow!("app data directory is not initialized"))?;
+    let (canonical, legacy) = public_mcp::discovery::public_mcp_discovery_paths_in(data_dir);
+    let _ = public_mcp::discovery::set_public_mcp_discovery_paths(canonical, legacy);
     let mut registry = DomainRegistry::default();
     for domain in product.domains() {
         registry.register_domain(domain.id());
         domain.register(&mut registry);
     }
     let _ = DOMAIN_REGISTRY.set(registry);
-    product.init(cx)
+    product.init(cx)?;
+    if product.mcp_managed_by_app_kit() {
+        if product.features().public_mcp {
+            mcp_host::start(cx, product.identity())?;
+        } else {
+            mcp_host::stop(cx);
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

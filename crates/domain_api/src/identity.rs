@@ -16,6 +16,7 @@ pub struct AppIdentity {
     pub dir_migration_marker: &'static str,
     pub portable_marker: &'static str,
     pub mcp_app_name: &'static str,
+    pub mcp_legacy_app_name: Option<&'static str>,
     pub mcp_update_channel: &'static str,
     pub file_associations: &'static [&'static str],
 }
@@ -35,6 +36,7 @@ impl AppIdentity {
         dir_migration_marker: ".one-hub-migration-complete",
         portable_marker: "navop.portable",
         mcp_app_name: "navop",
+        mcp_legacy_app_name: Some("onetcli"),
         mcp_update_channel: "stable",
         file_associations: &["db", "duckdb", "md", "cast"],
     };
@@ -52,6 +54,7 @@ impl AppIdentity {
         dir_migration_marker: ".navop-shell-migration-complete",
         portable_marker: "navop-shell.portable",
         mcp_app_name: "navop-shell",
+        mcp_legacy_app_name: None,
         mcp_update_channel: "shell",
         file_associations: &[],
     };
@@ -69,6 +72,7 @@ impl AppIdentity {
         dir_migration_marker: ".navop-data-migration-complete",
         portable_marker: "navop-data.portable",
         mcp_app_name: "navop-data",
+        mcp_legacy_app_name: None,
         mcp_update_channel: "data",
         file_associations: &[],
     };
@@ -97,15 +101,9 @@ impl ProductFeatures {
         public_mcp: true,
     };
 
-    pub const SHELL: Self = Self {
-        public_mcp: false,
-        ..Self::FULL
-    };
+    pub const SHELL: Self = Self { ..Self::FULL };
 
-    pub const DATA: Self = Self {
-        public_mcp: false,
-        ..Self::FULL
-    };
+    pub const DATA: Self = Self { ..Self::FULL };
 }
 
 /// 一个产品由身份、功能开关、资产与领域列表组成。
@@ -119,6 +117,12 @@ pub trait Product: 'static {
     fn assets(&self) -> Self::Assets;
 
     fn domains(&self) -> Vec<Arc<dyn super::Domain>>;
+
+    /// 全量产品由 main 自己的 `public_mcp_runtime` 管理 MCP；独立产品由
+    /// `app_kit` 统一管理。
+    fn mcp_managed_by_app_kit(&self) -> bool {
+        true
+    }
 
     fn init(&self, cx: &mut App) -> anyhow::Result<()> {
         for domain in self.domains() {
@@ -136,15 +140,18 @@ mod tests {
     fn three_products_have_distinct_identities() {
         assert_ne!(AppIdentity::FULL.app_id, AppIdentity::SHELL.app_id);
         assert_ne!(AppIdentity::FULL.bundle_id, AppIdentity::DATA.bundle_id);
-        assert_ne!(AppIdentity::SHELL.binary_name, AppIdentity::DATA.binary_name);
+        assert_ne!(
+            AppIdentity::SHELL.binary_name,
+            AppIdentity::DATA.binary_name
+        );
         assert_eq!(AppIdentity::FULL.data_dir_name, "navop");
     }
 
     #[test]
-    fn standalone_products_disable_public_mcp_only() {
+    fn standalone_products_support_public_mcp() {
         assert!(ProductFeatures::FULL.public_mcp);
-        assert!(!ProductFeatures::SHELL.public_mcp);
-        assert!(!ProductFeatures::DATA.public_mcp);
+        assert!(ProductFeatures::SHELL.public_mcp);
+        assert!(ProductFeatures::DATA.public_mcp);
         assert!(ProductFeatures::SHELL.ai);
         assert!(ProductFeatures::DATA.cloud_sync);
     }
