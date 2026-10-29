@@ -1320,3 +1320,64 @@ AI 工作台、笔记、团队、扩展市场、Toolbox、凭据库、云同步�
 - 数据库驱动的扩展市场分类、Data 侧数据库 AI 入口的实际可用性验证。
 - Shell 工作区文件浏览在独立产品中的入口验证。
 - 更新 feed 的实际发布、macOS 公证与 Windows 签名。
+
+## 24. main 拆分：应用自组装 + 领域标签页收敛（2026-10-29，第三轮）
+
+### 24.1 方向
+
+用户要求「把 main 拆为公共组件，然后每个应用自己创建自己的 crate 来组装」。本轮先落两步，
+让「产品装配」从 main 内部移到各应用，再让 main 不再自带领域标签页实现。
+
+### 24.2 应用自组装
+
+| 文件 | 内容 |
+|---|---|
+| `main/src/lib.rs` | `pub fn run_with<P: domain_api::Product + 'static>(product, version)`；`pub struct AppAssets`；`pub use navop_app::init as init_app` |
+| `apps/navop/src/main.rs` | `FullProduct`（FULL 身份、`mcp_managed_by_app_kit() = false`、domains = Shell + Data） |
+| `apps/navop-shell/src/main.rs` | `ShellProduct`（SHELL 身份、domains = ShellDomain、MCP 由 app_kit 托管） |
+| `apps/navop-data/src/main.rs` | `DataProduct`（DATA 身份、domains = DataDomain、MCP 由 app_kit 托管） |
+
+`run_with` 内部按 `product.identity()` 决定身份、单实例、文件关联与窗口标题，因此应用自己
+声明 `Product` 即可复用全量主页；`main` 不再内置产品枚举。
+
+### 24.3 删除 main 的新建连接向导
+
+`main/src/new_connection/`（约 1750 行）整目录删除，`HomePage::show_new_connection_dialog`
+改为委托 `app_kit::connection_actions::open_new_connection_in_workspace`；连接类型清单与
+表单全部由领域注册表（`ConnectionFormProvider`）提供。`crates/core/src/window_close.rs`
+的源码契约测试同步移除该文件条目。
+
+### 24.4 领域标签页收敛
+
+`main/src/home/home_tabs.rs` 中 8 个入口（`open_ssh/serial/telnet/sftp/remote_desktop/
+redis/mongodb` 与 `add_item_to_tab_with_mode`）改为只调用 `app_kit::registry()`；
+未注册类型给出「当前产品不支持打开该连接」提示。随之删除 main 内直接构造
+`DatabaseTabView`/`RedisTabView`/`MongoTabView`/`SftpView`/`RemoteDesktopView` 的
+fallback 代码与 17 个只覆盖 fallback 的测试（对应行为已由 `shell_domain`/`data_domain`
+的 opener 测试覆盖）。
+
+### 24.5 验证结果
+
+| 验证 | 结果 |
+|---|---|
+| `cargo check -p main --lib --tests` | 0 error / 0 warning |
+| `cargo test -p main --lib` | 622 passed, 0 failed（较 657 少的是向导与 fallback 测试） |
+| `cargo test -p main --test i18n_locale_keys_contract` | 1 passed |
+| `cargo build -p navop -p navop-shell -p navop-data` | 通过，无 rustc 警告 |
+
+### 24.6 剩余拆分路线（按依赖移除顺序）
+
+1. `main/src/home_tab/connection_forms.rs` 编辑/复制流程改走 `app_kit::connection_actions`，
+   仅保留扩展连接表单，删掉 `db_view`/`redis_view`/`mongodb_view`/`terminal_view`/
+   `port_forwarding_view`/`remote_desktop_view` 的表单构造。
+2. 设置页数据库/终端页改由 `SettingsSectionProvider` 提供，删除 `main/src/settings/
+   {database_settings,local_terminal_settings,sql_format_settings}.rs`。
+3. 领域初始化搬到 `Domain::init`：`db::init_cache`/`db_view::*`/`redis_view::init`/
+   `mongodb_view::init` → `DataDomain`；`terminal_view::init`/`remote_desktop_view::init`/
+   SSH 会话服务 → `ShellDomain`；`Domain` 增加默认空实现的 `refresh_keybindings`。
+4. 迁移 `main` 其余领域 UI：`home_tab/local_terminal.rs`、`resource_workbench_terminal.rs`、
+   `home/ai_workbench*.rs`、`file_open/recording.rs`、`public_mcp_runtime/*`、
+   `persistent_connection_sidebar`、`connection_visuals.rs`、`home/connection_import_*`。
+5. 从 `main/Cargo.toml` 删除领域 crate 依赖，验收依赖树：
+   `cargo tree -p navop-shell | grep -E "db_view|redis_view|mongodb_view"` 为空、
+   `cargo tree -p navop-data | grep -E "terminal_view|sftp_view|remote_desktop_view"` 为空。
