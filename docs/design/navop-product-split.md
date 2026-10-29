@@ -1222,7 +1222,9 @@ cargo run -p navop-data   # Data
   - 文件关联：`is_installed()` 且 `file_associations` 非空才注册。
   - 托盘：`TrayConfig` 标题取当前身份显示名，三产品同机可区分。
   - `public_mcp_runtime` 只对全量产品启动，独立产品用 `mcp_host`，避免两套 MCP
-    抢同一个发现文件。
+    抢同一个发现文件；`app_kit::bootstrap` 首次启动按领域包写入默认工具集
+    （Shell = Terminal/Sftp/Connections，Data = Database/Redis/Mongo/Connections），
+    之后由用户在设置里接管。
 - `main/src/product.rs`（新）：`is_full_product()` 与
   `connection_type_supported(ConnectionType)`。内置类型以「当前产品的领域包是否
   注册了打开入口」为准（`app_kit::registry().has_connection_opener`），扩展连接

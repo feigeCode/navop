@@ -3,7 +3,7 @@
 //! `app_kit` 只负责把产品身份落到进程级配置（数据目录、keychain），
 //! 再调用产品自己的领域初始化；它不依赖任何具体领域 crate。
 
-use domain_api::{AppIdentity, DomainRegistry, Product};
+use domain_api::{AppIdentity, DomainId, DomainRegistry, Product};
 use gpui::App;
 use std::sync::OnceLock;
 
@@ -96,12 +96,34 @@ pub fn bootstrap<P: Product>(product: &P, cx: &mut App) -> anyhow::Result<()> {
     product.init(cx)?;
     if product.mcp_managed_by_app_kit() {
         if product.features().public_mcp {
+            enable_default_toolsets(cx);
             mcp_host::start(cx, product.identity())?;
         } else {
             mcp_host::stop(cx);
         }
     }
     Ok(())
+}
+
+/// 首次启动写入本产品的默认 MCP 工具集，与领域包保持一致。
+///
+/// 工具集开关一次写盘后由用户接管：后续只改设置里的勾选，不再覆盖。
+fn enable_default_toolsets(cx: &mut App) {
+    let mut toolsets = vec![mcp_host::McpToolset::Connections];
+    for domain in registry().domains() {
+        match *domain {
+            DomainId::SHELL => {
+                toolsets.extend([mcp_host::McpToolset::Terminal, mcp_host::McpToolset::Sftp])
+            }
+            DomainId::DATABASE => toolsets.extend([
+                mcp_host::McpToolset::Database,
+                mcp_host::McpToolset::Redis,
+                mcp_host::McpToolset::Mongo,
+            ]),
+            _ => {}
+        }
+    }
+    mcp_host::enable_default_toolsets(cx, &toolsets);
 }
 
 #[cfg(test)]
