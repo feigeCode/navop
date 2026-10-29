@@ -73,8 +73,8 @@ fn sync_settings_page_index() -> usize {
 
 use gpui_component::input::InputEvent;
 pub use one_core::settings::{
-    AppSettings, CloseButtonBehavior, CustomFont, DatabaseOpenMode, GlobalCurrentUser,
-    GlobalProxySettings, LOCALE_EN, LOCALE_SYSTEM, LOCALE_ZH_CN, LOCALE_ZH_HK, MasterKeyStorage,
+    AppSettings, CloseButtonBehavior, CustomFont, GlobalCurrentUser, GlobalProxySettings,
+    LOCALE_EN, LOCALE_SYSTEM, LOCALE_ZH_CN, LOCALE_ZH_HK, MasterKeyStorage,
     PersonalSyncBackendKind, PersonalSyncSettings, ProxyType, SyncProvider,
     effective_locale_for_setting, is_installed_font_family, is_supported_grid_monospace_font,
 };
