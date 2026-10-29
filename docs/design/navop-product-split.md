@@ -1031,7 +1031,7 @@ cargo run -p navop-data   # Data
 - 工具下沉：
   - `shell_domain` 注册 Terminal（terminal_exec/read/control/write_keys/remote_ops）与 SFTP 工具集。
   - `data_domain` 注册 Database 工具集，以及 Redis/Mongo 的 live-state provider；`main/src/public_mcp_runtime/{redis,mongo}.rs` 已迁入 `data_domain::mcp`，main 改为复用，避免两套实现。
-  - connection 管理工具集仍未下沉。
+  - `shell_domain` 与 `data_domain` 都注册 connection 管理工具集（`McpToolset::Connections`，复用 `navop_runtime::connections`），`mcp_host` 按工具集去重，全量产品同时注册两个域时不会重复。
 - 审批复用：
   - `main/src/public_mcp_approval/*` 抽成独立 `mcp_approval` crate，窗口解析改为 `active_window`/首个窗口，不再依赖 main 的 `resolve_navop_window`。
   - main 与 `navop-shell`/`navop-data` 都调用 `mcp_approval::init`；`mcp_host` 用它的 `PublicMcpApprovalManager` 启动 server，因此独立产品的 `Ask` 模式会弹同一个审批对话框。
@@ -1047,7 +1047,7 @@ cargo run -p navop-data   # Data
 | `navop` 全量启动 | 仍由 main 启动，`app=navop`，未出现第二个 mcp_host server |
 | `cargo test -p main --lib` | 750 passed（config 的 10 个测试随文件迁到 mcp_host） |
 | `cargo test -p main --tests` | 3 个集成测试通过 |
-| `mcp_host` / `mcp_approval` / `domain_api` / `app_kit` / `shell_domain` / `data_domain` | 12 / 10 / 5 / 3 / 15 / 7 passed |
+| `mcp_host` / `mcp_approval` / `domain_api` / `app_kit` / `shell_domain` / `data_domain` | 12 / 10 / 5 / 3 / 15 / 12 passed |
 | `cargo check -p navop -p navop-shell -p navop-data`（`-Dwarnings`） | 通过 |
 | `cargo clippy --no-deps -p mcp_host -p app_kit -p domain_api -p shell_domain -p data_domain -- -D warnings` | 通过；`public_mcp` 仍命中既有 `tool_runtime_adapter.rs:134` 的 `too_many_arguments` 基线 lint |
 
@@ -1062,9 +1062,9 @@ cargo run -p navop-data   # Data
 
 ### 19.4 尚未完成
 
-- connection 管理工具集未迁入独立产品；Data 当前暴露 database/redis/mongo 工具。
+- 独立产品没有逐工具集勾选 UI；当前注册的工具集默认全部启用，只能整体开关 MCP。`AppSettings.tool_exposure.mcp` 已接入 `mcp_host::toolset_enabled`，但独立产品的 `default_enabled` 会兜底打开核心工具。
 - 独立产品没有完整 MCP 设置页，只有主页开关；审批已有通用弹窗。
 - 全量产品仍走 main 的 `public_mcp_runtime`，两条实现并存；后续应让 main 也改用 `mcp_host`，或明确保留 main 的高级能力（resource pool/access guard/审批）。
 - 三产品的工具暴露设置目前共用 `AppSettings.tool_exposure.mcp`；独立产品默认值由 `default_enabled` 兜底，还没有产品级 UI。
 
-提交：`0a5b4e472`、`cbb72d954 refactor(mcp): 下沉 Mongo/Redis live provider 并复用通用审批 UI`。
+提交：`0a5b4e472`、`cbb72d954`、`0c958ddcf feat(mcp): 为独立产品注册 connection 管理工具集`。
