@@ -12851,9 +12851,11 @@ dependencies = [
  "rust-i18n",
  "sftp_view",
  "smol",
+ "ssh",
  "tempfile",
  "terminal",
  "terminal_view",
+ "tracing",
 ]
 
 [[package]]
