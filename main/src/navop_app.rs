@@ -18,14 +18,12 @@ use gpui_component::{
     notification::Notification,
     render_dialog_layer, render_notification_layer, render_sheet_layer,
 };
-use one_core::gpui_tokio::{JoinError, Tokio};
 use one_core::keybindings::{action_id, rebind_keybindings, shortcuts_for};
 use one_core::settings::CloseButtonBehavior;
 use raw_window_handle::HasWindowHandle;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use raw_window_handle::RawWindowHandle;
 use rust_i18n::t;
-use ssh::{SshSessionService, SshSessionShutdownReport};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -134,130 +132,6 @@ fn settings_button_handler() -> Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>
     })
 }
 
-/// The application-owned SSH session lifecycle.
-///
-/// The `ssh` crate deliberately stays independent of GPUI. This narrow
-/// wrapper installs exactly one service in the application and lets app code
-/// pass service clones to consumers without making any terminal or file view
-/// the owner of shared transports.
-#[derive(Clone)]
-pub(crate) struct GlobalSshSessionService {
-    service: SshSessionService,
-}
-
-impl gpui::Global for GlobalSshSessionService {}
-
-impl GlobalSshSessionService {
-    fn new() -> Self {
-        Self {
-            service: SshSessionService::new(),
-        }
-    }
-
-    pub(crate) fn service(&self) -> SshSessionService {
-        self.service.clone()
-    }
-}
-
-fn init_ssh_session_service(cx: &mut App) {
-    assert!(
-        cx.try_global::<GlobalSshSessionService>().is_none(),
-        "SSH session service must have exactly one application owner"
-    );
-
-    let global = GlobalSshSessionService::new();
-    let fallback_service = global.service();
-    cx.set_global(global);
-
-    // Normal Navop quit paths await shutdown before asking GPUI to quit.
-    // This callback is an idempotent fallback for platform-driven quit paths.
-    // GPUI only gives quit callbacks a short fixed budget, so it must not be
-    // the primary owner shutdown path.
-    cx.on_app_quit(move |cx| {
-        let rdp_shutdown_report =
-            remote_desktop_view::fail_closed_windows_native_rdp_for_platform_quit(cx);
-        log_windows_native_rdp_shutdown("gpui quit fallback", rdp_shutdown_report);
-
-        let service = fallback_service.clone();
-        let shutdown_task = Tokio::spawn(cx, async move { service.shutdown().await });
-        async move {
-            log_ssh_session_shutdown("gpui quit fallback", shutdown_task.await);
-        }
-    })
-    .detach();
-}
-
-fn spawn_ssh_session_shutdown(
-    cx: &App,
-) -> Option<Task<Result<SshSessionShutdownReport, JoinError>>> {
-    let service = cx.try_global::<GlobalSshSessionService>()?.service();
-    Some(Tokio::spawn(cx, async move { service.shutdown().await }))
-}
-
-fn log_ssh_session_shutdown(
-    reason: &'static str,
-    result: Result<SshSessionShutdownReport, JoinError>,
-) {
-    match result {
-        Ok(report)
-            if report.timed_out
-                || report.manager_failures > 0
-                || report.managers_remaining > 0
-                || report.registry_tasks_remaining > 0 =>
-        {
-            tracing::warn!(
-                reason,
-                timed_out = report.timed_out,
-                managers_requested = report.managers_requested,
-                managers_completed = report.managers_completed,
-                manager_failures = report.manager_failures,
-                managers_remaining = report.managers_remaining,
-                registry_tasks_remaining = report.registry_tasks_remaining,
-                "SSH session service shutdown completed with incomplete cleanup"
-            );
-        }
-        Ok(report) => {
-            tracing::info!(
-                reason,
-                managers_requested = report.managers_requested,
-                managers_completed = report.managers_completed,
-                "SSH session service shutdown completed"
-            );
-        }
-        Err(error) => {
-            tracing::error!(
-                reason,
-                %error,
-                "SSH session service shutdown task failed"
-            );
-        }
-    }
-}
-
-fn log_windows_native_rdp_shutdown(
-    reason: &'static str,
-    report: remote_desktop_view::WindowsNativeRdpShutdownReport,
-) {
-    if report.incomplete() {
-        tracing::warn!(
-            reason,
-            requested = report.requested(),
-            destroyed = report.destroyed(),
-            timed_out_leaked = report.timed_out_leaked(),
-            owner_lost = report.owner_lost(),
-            controller_unavailable = report.controller_unavailable(),
-            "Windows native RDP shutdown completed with incomplete cleanup"
-        );
-    } else {
-        tracing::info!(
-            reason,
-            requested = report.requested(),
-            destroyed = report.destroyed(),
-            "Windows native RDP shutdown completed"
-        );
-    }
-}
-
 /// Await bounded application-owned resource teardown before invoking GPUI's
 /// platform quit routine. Native RDP hosts drain before their shared SSH
 /// transports so COM/child-window cleanup retains a live application owner.
@@ -266,21 +140,11 @@ fn log_windows_native_rdp_shutdown(
 /// Repeated callers join the same idempotent Native RDP drain and
 /// `SshSessionService::shutdown` lifecycle.
 pub(crate) fn shutdown_application_resources_and_quit(cx: &mut App, reason: &'static str) {
-    let rdp_shutdown_task = remote_desktop_view::shutdown_windows_native_rdp(cx);
+    let domain_shutdowns = app_kit::shutdown_domains(cx);
 
     cx.spawn(async move |cx| {
-        let rdp_shutdown_report = rdp_shutdown_task.await;
-        log_windows_native_rdp_shutdown(reason, rdp_shutdown_report);
-
-        let ssh_shutdown_task = cx.update(|cx| spawn_ssh_session_shutdown(cx));
-        if let Some(shutdown_task) = ssh_shutdown_task {
-            let shutdown_result = shutdown_task.await;
-            log_ssh_session_shutdown(reason, shutdown_result);
-        } else {
-            tracing::error!(
-                reason,
-                "SSH session service global is missing; quitting after remaining application teardown"
-            );
+        for shutdown in domain_shutdowns {
+            shutdown.await;
         }
 
         let plugin_shutdown_task = cx.update(|cx| universal_plugins::spawn_shutdown(cx));
@@ -949,7 +813,6 @@ pub fn init(cx: &mut App) -> anyhow::Result<()> {
     setting_tab::init_settings(cx);
     one_core::init(cx)?;
     app_kit::set_shell_host(Arc::new(crate::home_tab::domain_host::NavopShellHost));
-    init_ssh_session_service(cx);
     ai_chat_view::init(cx);
     mcp_approval::init(cx);
     crate::ai_chat_acp::init(cx);
@@ -1895,12 +1758,9 @@ impl NavopApp {
 #[cfg(test)]
 mod tests {
     use super::{
-        GlobalSshSessionService, LOG_FILE_MAX_BYTES, LOG_FILE_NAME,
-        close_active_window_default_shortcut, configured_log_file_path, default_log_file_path,
-        init_ssh_session_service, initial_content_layout, log_file_appender,
+        LOG_FILE_MAX_BYTES, LOG_FILE_NAME, close_active_window_default_shortcut,
+        configured_log_file_path, default_log_file_path, initial_content_layout, log_file_appender,
     };
-    use one_core::gpui_tokio::Tokio;
-    use ssh::SshSessionServiceState;
     use std::io::Write;
 
     /// gpui 的绑定优先级：**无 context 的绑定等价于最深的 context**，同深度
@@ -2230,23 +2090,6 @@ mod tests {
         assert!(quit_fn.contains("request_active_window_quit(cx)"));
     }
 
-    #[gpui::test]
-    fn ssh_session_service_has_one_application_global_owner(cx: &mut gpui::TestAppContext) {
-        let (first, second, runtime) = cx.update(|cx| {
-            one_core::gpui_tokio::init(cx);
-            init_ssh_session_service(cx);
-
-            let first = cx.global::<GlobalSshSessionService>().service();
-            let second = cx.global::<GlobalSshSessionService>().service();
-            (first, second, Tokio::handle(cx))
-        });
-
-        let report = runtime.block_on(first.shutdown());
-
-        assert!(!report.timed_out);
-        assert_eq!(SshSessionServiceState::Stopped, second.snapshot().state);
-    }
-
     #[test]
     fn confirmed_and_update_quit_paths_await_all_application_resource_shutdown() {
         let source = include_str!("navop_app.rs").replace("\r\n", "\n");
@@ -2258,23 +2101,20 @@ mod tests {
             .map(|offset| helper_start + offset)
             .expect("shared application resource shutdown helper end");
         let helper = &source[helper_start..helper_end];
-        let start_rdp_shutdown = helper
-            .find("remote_desktop_view::shutdown_windows_native_rdp(cx)")
-            .expect("start Windows native RDP shutdown");
-        let await_rdp_shutdown = helper
-            .find("let rdp_shutdown_report = rdp_shutdown_task.await;")
-            .expect("await Windows native RDP shutdown");
-        let await_ssh_shutdown = helper
-            .find("let shutdown_result = shutdown_task.await;")
-            .expect("await SSH shutdown");
+        // 领域资源（原生 RDP、SSH 传输等）由各自领域包关停，公共壳只负责
+        // 在退出前按注册顺序 await 它们，然后再关停插件、托盘与热键。
+        let collect_domains = helper
+            .find("app_kit::shutdown_domains(cx)")
+            .expect("collect domain shutdown tasks");
+        let await_domains = helper
+            .find("shutdown.await;")
+            .expect("await domain shutdown tasks");
         let platform_quit = helper
             .find("cx.update(|cx| cx.quit())")
             .expect("platform quit");
 
-        assert!(start_rdp_shutdown < await_rdp_shutdown);
-        assert!(await_rdp_shutdown < await_ssh_shutdown);
-        assert!(await_ssh_shutdown < platform_quit);
-        assert!(helper.contains("log_windows_native_rdp_shutdown"));
+        assert!(collect_domains < await_domains);
+        assert!(await_domains < platform_quit);
 
         let confirm_start = source.find("fn confirm_quit").expect("confirm_quit");
         let confirm_end = source[confirm_start..]
@@ -2335,35 +2175,6 @@ mod tests {
             hotkey_release < platform_quit,
             "全局热键句柄必须在 cx.quit() 之前释放"
         );
-    }
-
-    #[test]
-    fn platform_quit_fails_closed_native_rdp_before_ssh_without_recursive_quit() {
-        let source = include_str!("navop_app.rs").replace("\r\n", "\n");
-        let start = source
-            .find("fn init_ssh_session_service")
-            .expect("init_ssh_session_service");
-        let end = source[start..]
-            .find("\n}\n\nfn spawn_ssh_session_shutdown")
-            .map(|offset| start + offset)
-            .expect("init_ssh_session_service end");
-        let init = &source[start..end];
-        let callback_start = init
-            .find("cx.on_app_quit(move |cx|")
-            .expect("platform quit callback");
-        let callback = &init[callback_start..];
-        let fail_closed_rdp = callback
-            .find("remote_desktop_view::fail_closed_windows_native_rdp_for_platform_quit(cx)")
-            .expect("Native RDP platform-quit fail-closed fallback");
-        let spawn_ssh = callback
-            .find("Tokio::spawn(cx")
-            .expect("SSH platform-quit fallback");
-
-        assert!(fail_closed_rdp < spawn_ssh);
-        assert!(callback.contains("log_windows_native_rdp_shutdown"));
-        assert!(!callback.contains("shutdown_application_resources_and_quit"));
-        assert!(!callback.contains("shutdown_windows_native_rdp(cx)"));
-        assert!(!callback.contains("cx.quit()"));
     }
 
     #[test]

@@ -122,6 +122,17 @@ pub fn init_domains(cx: &mut App) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// 收集各领域的关停任务，退出时按注册顺序 await。
+pub fn shutdown_domains(cx: &mut App) -> Vec<gpui::Task<()>> {
+    let Some(domains) = DOMAINS.get() else {
+        return Vec::new();
+    };
+    domains
+        .iter()
+        .filter_map(|domain| domain.shutdown(cx))
+        .collect()
+}
+
 /// 首次启动写入本产品的默认 MCP 工具集，与领域包保持一致。
 ///
 /// 工具集开关一次写盘后由用户接管：后续只改设置里的勾选，不再覆盖。

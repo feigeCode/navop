@@ -7,6 +7,7 @@ rust_i18n::i18n!("locales", fallback = "en");
 
 mod connection_forms;
 mod connection_openers;
+mod lifecycle;
 mod session_logs;
 mod settings;
 mod tab_restore;
@@ -122,11 +123,17 @@ impl Domain for ShellDomain {
         register_mcp_toolsets();
     }
 
-    /// 终端领域的子系统初始化：终端视图与远程桌面视图。
+    /// 终端领域的子系统初始化：SSH 会话服务、终端视图与远程桌面视图。
     fn init(&self, cx: &mut App) -> anyhow::Result<()> {
+        lifecycle::init(cx);
         terminal_view::init(cx);
         remote_desktop_view::init(cx);
         Ok(())
+    }
+
+    /// 先排空原生 RDP 宿主，再关停 SSH 传输。
+    fn shutdown(&self, cx: &mut App) -> Option<gpui::Task<()>> {
+        Some(lifecycle::shutdown(cx, "application shutdown".into()))
     }
 }
 

@@ -33,4 +33,11 @@ pub trait Domain: Send + Sync {
 
     /// 领域初始化；返回错误时由产品启动流程决定是否退出。
     fn init(&self, cx: &mut App) -> anyhow::Result<()>;
+
+    /// 有界关停领域持有的资源；返回的任务会在退出流程中被 await。
+    ///
+    /// 公共壳不知道领域里有什么，只按注册顺序等待。
+    fn shutdown(&self, _cx: &mut App) -> Option<gpui::Task<()>> {
+        None
+    }
 }

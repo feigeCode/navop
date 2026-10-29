@@ -26,6 +26,8 @@ remote_desktop_view.workspace = true
 sftp_view.workspace = true
 terminal.workspace = true
 terminal_view.workspace = true
+ssh.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
