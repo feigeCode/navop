@@ -22,9 +22,7 @@ pub(crate) struct ConnectionQuickOpenDelegate {
 }
 
 impl ConnectionQuickOpenDelegate {
-    pub(crate) fn new(
-        parent: Entity<HomePage>,
-    ) -> Self {
+    pub(crate) fn new(parent: Entity<HomePage>) -> Self {
         Self {
             parent,
             items: Vec::new(),

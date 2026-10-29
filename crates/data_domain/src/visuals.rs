@@ -3,7 +3,9 @@
 use std::sync::{Arc, OnceLock};
 
 use app_kit::visuals::{ConnectionVisuals, DriverIconSource};
-use db::ipc::{DRIVER_ICON_ASSET_PREFIX, DriverAssetSource, DriverResourceLoader, IpcDriverRegistry};
+use db::ipc::{
+    DRIVER_ICON_ASSET_PREFIX, DriverAssetSource, DriverResourceLoader, IpcDriverRegistry,
+};
 use one_core::storage::DbConnectionConfig;
 
 /// 由数据库领域提供的连接视觉解析。

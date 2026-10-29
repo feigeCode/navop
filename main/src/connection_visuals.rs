@@ -163,7 +163,10 @@ pub(crate) fn database_type_icon(kind: &DatabaseType, size: ConnectionVisualSize
     name.color().with_size(size.icon_size())
 }
 
-pub(crate) fn database_config_icon(config: &DbConnectionConfig, size: ConnectionVisualSize) -> Icon {
+pub(crate) fn database_config_icon(
+    config: &DbConnectionConfig,
+    size: ConnectionVisualSize,
+) -> Icon {
     external_driver_icon_for_config(config, size)
         .unwrap_or_else(|| database_type_icon(&config.database_type, size))
 }
@@ -221,9 +224,7 @@ pub(crate) fn extension_catalog_from_cx(
 
 fn ssh_icon(params: &SshParams, size: ConnectionVisualSize) -> Icon {
     match ssh_icon_source(params) {
-        SshIconSource::File(path) => {
-            icon_from_file_path(path.to_path_buf(), size.icon_size())
-        }
+        SshIconSource::File(path) => icon_from_file_path(path.to_path_buf(), size.icon_size()),
         SshIconSource::BuiltIn(name) => color_icon(name, size),
     }
 }
@@ -260,7 +261,9 @@ pub(crate) fn external_driver_icon_from_sources(
         ExternalDriverIconSource::File(path) => {
             Some(icon_from_file_path(path.to_path_buf(), size.icon_size()))
         }
-        ExternalDriverIconSource::Asset(path) => Some(icon_from_asset_path(path.to_string(), size.icon_size())),
+        ExternalDriverIconSource::Asset(path) => {
+            Some(icon_from_asset_path(path.to_string(), size.icon_size()))
+        }
     }
 }
 

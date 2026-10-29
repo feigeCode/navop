@@ -23,8 +23,8 @@ use std::sync::Arc;
 pub mod connection_forms;
 pub mod mcp;
 pub mod settings;
-pub mod visuals;
 mod tab_restore;
+pub mod visuals;
 
 pub struct DataDomain;
 

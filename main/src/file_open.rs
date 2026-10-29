@@ -205,8 +205,11 @@ fn open_database_file(
             ) {
                 window.push_notification(
                     Notification::warning(
-                        t!("Common.connection_type_unsupported", name = connection.name.clone())
-                            .to_string(),
+                        t!(
+                            "Common.connection_type_unsupported",
+                            name = connection.name.clone()
+                        )
+                        .to_string(),
                     )
                     .autohide(true),
                     cx,
