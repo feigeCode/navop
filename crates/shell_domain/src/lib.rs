@@ -67,6 +67,22 @@ fn register_mcp_toolsets() {
             )]
         }),
     );
+
+    mcp_host::register_toolset(
+        mcp_host::McpToolset::Connections,
+        true,
+        Arc::new(|cx: &App| {
+            let Some(repo) = mcp_host::connection_repository(cx) else {
+                return Vec::new();
+            };
+            let workspaces = mcp_host::workspace_repository(cx);
+            vec![mcp_host::runtime_provider(
+                navop_runtime::connections::connection_tool_registry_with_workspaces(
+                    repo, workspaces,
+                ),
+            )]
+        }),
+    );
 }
 
 impl Domain for ShellDomain {

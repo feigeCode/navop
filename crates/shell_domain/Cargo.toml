@@ -16,6 +16,7 @@ domain_api.workspace = true
 gpui.workspace = true
 known_hosts_view.workspace = true
 mcp_host.workspace = true
+navop_runtime = { path = "../navop_runtime", default-features = false }
 public_mcp.workspace = true
 runtime_sftp.workspace = true
 one-core.workspace = true

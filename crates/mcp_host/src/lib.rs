@@ -74,6 +74,12 @@ pub fn connection_repository(cx: &App) -> Option<Arc<one_core::storage::Connecti
         .get::<one_core::storage::ConnectionRepository>()
 }
 
+pub fn workspace_repository(cx: &App) -> Option<Arc<one_core::storage::WorkspaceRepository>> {
+    cx.try_global::<one_core::storage::GlobalStorageState>()?
+        .storage
+        .get::<one_core::storage::WorkspaceRepository>()
+}
+
 /// 把任意 `ToolRegistry` 包装成 Public MCP provider。
 pub fn runtime_provider(registry: tool_runtime::ToolRegistry) -> Arc<dyn PublicMcpToolProvider> {
     Arc::new(ToolRuntimeMcpProvider::new(registry))

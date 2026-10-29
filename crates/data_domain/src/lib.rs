@@ -49,6 +49,21 @@ fn register_mcp_toolsets() {
         }),
     );
     mcp_host::register_toolset(
+        mcp_host::McpToolset::Connections,
+        true,
+        Arc::new(|cx: &App| {
+            let Some(repo) = mcp_host::connection_repository(cx) else {
+                return Vec::new();
+            };
+            let workspaces = mcp_host::workspace_repository(cx);
+            vec![mcp_host::runtime_provider(
+                navop_runtime::connections::connection_tool_registry_with_workspaces(
+                    repo, workspaces,
+                ),
+            )]
+        }),
+    );
+    mcp_host::register_toolset(
         mcp_host::McpToolset::Mongo,
         true,
         Arc::new(|cx: &App| {
@@ -356,13 +371,14 @@ mod tests {
     }
 
     #[test]
-    fn data_domain_registers_database_redis_mongo_mcp_toolsets() {
+    fn data_domain_registers_database_redis_mongo_and_connections_mcp_toolsets() {
         let mut registry = DomainRegistry::default();
         DataDomain.register(&mut registry);
         let toolsets = mcp_host::registered_toolsets();
         assert!(toolsets.contains(&mcp_host::McpToolset::Database));
         assert!(toolsets.contains(&mcp_host::McpToolset::Redis));
         assert!(toolsets.contains(&mcp_host::McpToolset::Mongo));
+        assert!(toolsets.contains(&mcp_host::McpToolset::Connections));
     }
 
     #[test]
