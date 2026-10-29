@@ -1,6 +1,6 @@
 use super::DataHome;
-use gpui::{Context, IntoElement, ParentElement, Render, Styled, Window, div, prelude::*, px};
-use gpui_component::{Sizable as _, button::Button};
+use gpui::{App, Context, IntoElement, ParentElement, Render, Styled, Window, div, prelude::*, px};
+use gpui_component::{Sizable as _, WindowExt as _, button::Button, checkbox::Checkbox};
 use one_core::storage::{ConnectionType, StoredConnection};
 
 impl DataHome {
@@ -109,6 +109,11 @@ impl Render for DataHome {
                             .flex()
                             .items_center()
                             .gap_2()
+                            .child(Button::new("mcp-tools").small().label("MCP 工具").on_click(
+                                cx.listener(|_, _, window, cx| {
+                                    open_mcp_tools_dialog(window, cx);
+                                }),
+                            ))
                             .child(Button::new("mcp-toggle").small().label(mcp_label).on_click(
                                 cx.listener(|_, _, _window, cx| {
                                     let enabled = mcp_host::settings_enabled(cx);
@@ -141,4 +146,78 @@ fn connection_type_label(kind: ConnectionType) -> &'static str {
         ConnectionType::MongoDB => "MongoDB",
         _ => "Unknown",
     }
+}
+
+fn open_mcp_tools_dialog(window: &mut Window, cx: &mut App) {
+    window.open_dialog(cx, |dialog, _window, cx| {
+        dialog
+            .title("MCP 工具集")
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        Checkbox::new("mcp-toolset-database")
+                            .checked(mcp_host::current_toolset_enabled(
+                                cx,
+                                mcp_host::McpToolset::Database,
+                            ))
+                            .label("Database")
+                            .on_click(|checked, _, cx| {
+                                let _ = mcp_host::set_toolset_enabled(
+                                    cx,
+                                    mcp_host::McpToolset::Database,
+                                    *checked,
+                                );
+                            }),
+                    )
+                    .child(
+                        Checkbox::new("mcp-toolset-redis")
+                            .checked(mcp_host::current_toolset_enabled(
+                                cx,
+                                mcp_host::McpToolset::Redis,
+                            ))
+                            .label("Redis")
+                            .on_click(|checked, _, cx| {
+                                let _ = mcp_host::set_toolset_enabled(
+                                    cx,
+                                    mcp_host::McpToolset::Redis,
+                                    *checked,
+                                );
+                            }),
+                    )
+                    .child(
+                        Checkbox::new("mcp-toolset-mongo")
+                            .checked(mcp_host::current_toolset_enabled(
+                                cx,
+                                mcp_host::McpToolset::Mongo,
+                            ))
+                            .label("MongoDB")
+                            .on_click(|checked, _, cx| {
+                                let _ = mcp_host::set_toolset_enabled(
+                                    cx,
+                                    mcp_host::McpToolset::Mongo,
+                                    *checked,
+                                );
+                            }),
+                    )
+                    .child(
+                        Checkbox::new("mcp-toolset-connections")
+                            .checked(mcp_host::current_toolset_enabled(
+                                cx,
+                                mcp_host::McpToolset::Connections,
+                            ))
+                            .label("连接管理")
+                            .on_click(|checked, _, cx| {
+                                let _ = mcp_host::set_toolset_enabled(
+                                    cx,
+                                    mcp_host::McpToolset::Connections,
+                                    *checked,
+                                );
+                            }),
+                    ),
+            )
+            .confirm()
+    });
 }

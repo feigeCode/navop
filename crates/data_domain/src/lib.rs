@@ -25,7 +25,6 @@ pub struct DataDomain;
 fn register_mcp_toolsets() {
     mcp_host::register_toolset(
         mcp_host::McpToolset::Database,
-        true,
         Arc::new(|cx: &App| {
             let Some(repo) = mcp_host::connection_repository(cx) else {
                 return Vec::new();
@@ -37,7 +36,6 @@ fn register_mcp_toolsets() {
     );
     mcp_host::register_toolset(
         mcp_host::McpToolset::Redis,
-        true,
         Arc::new(|cx: &App| {
             let handlers = mcp::redis_tool_handlers(cx);
             if handlers.is_empty() {
@@ -50,7 +48,6 @@ fn register_mcp_toolsets() {
     );
     mcp_host::register_toolset(
         mcp_host::McpToolset::Connections,
-        true,
         Arc::new(|cx: &App| {
             let Some(repo) = mcp_host::connection_repository(cx) else {
                 return Vec::new();
@@ -65,7 +62,6 @@ fn register_mcp_toolsets() {
     );
     mcp_host::register_toolset(
         mcp_host::McpToolset::Mongo,
-        true,
         Arc::new(|cx: &App| {
             let handlers = mcp::mongo_tool_handlers(cx);
             if handlers.is_empty() {

@@ -49,6 +49,15 @@ impl Product for DataProduct {
         redis_view::init(cx);
         mongodb_view::init(cx);
         mcp_approval::init(cx);
+        mcp_host::enable_default_toolsets(
+            cx,
+            &[
+                mcp_host::McpToolset::Database,
+                mcp_host::McpToolset::Redis,
+                mcp_host::McpToolset::Mongo,
+                mcp_host::McpToolset::Connections,
+            ],
+        );
         Ok(())
     }
 }

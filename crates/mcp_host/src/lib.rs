@@ -31,7 +31,6 @@ type ProviderFactory = Arc<dyn Fn(&App) -> Vec<Arc<dyn PublicMcpToolProvider>> +
 
 struct Registration {
     toolset: McpToolset,
-    default_enabled: bool,
     factory: ProviderFactory,
 }
 
@@ -43,19 +42,12 @@ fn registrations() -> &'static Mutex<Vec<Registration>> {
 }
 
 /// 注册一个领域的工具集工厂。
-///
-/// `default_enabled` 用于独立产品：它们没有完整的设置页，核心工具集默认开启；
-/// 全量产品仍由设置里的 tool exposure 决定。
-pub fn register_toolset(toolset: McpToolset, default_enabled: bool, factory: ProviderFactory) {
+pub fn register_toolset(toolset: McpToolset, factory: ProviderFactory) {
     if let Ok(mut entries) = registrations().lock() {
         if entries.iter().any(|entry| entry.toolset == toolset) {
             return;
         }
-        entries.push(Registration {
-            toolset,
-            default_enabled,
-            factory,
-        });
+        entries.push(Registration { toolset, factory });
     }
 }
 
@@ -182,6 +174,55 @@ pub fn settings_enabled(cx: &App) -> bool {
     AppSettings::current(cx).mcp.server_enabled
 }
 
+/// 首次启动独立产品时，把本产品的核心工具集写入设置。
+/// 之后用户在设置里关掉的工具集不会被再次打开。
+pub fn enable_default_toolsets(cx: &mut App, toolsets: &[McpToolset]) {
+    if AppSettings::current(cx).mcp.toolsets_initialized {
+        return;
+    }
+    AppSettings::update_and_save(cx, |settings| {
+        for toolset in toolsets {
+            set_toolset_fields(&mut settings.tool_exposure.mcp, *toolset, true);
+        }
+        settings.mcp.toolsets_initialized = true;
+    });
+}
+
+/// 读取当前设置里的工具集开关。
+pub fn current_toolset_enabled(cx: &App, toolset: McpToolset) -> bool {
+    toolset_enabled(toolset, &AppSettings::current(cx).tool_exposure.mcp)
+}
+
+/// 修改单个工具集并重启 server。
+pub fn set_toolset_enabled(
+    cx: &mut App,
+    toolset: McpToolset,
+    enabled: bool,
+) -> anyhow::Result<()> {
+    AppSettings::update_and_save(cx, |settings| {
+        set_toolset_fields(&mut settings.tool_exposure.mcp, toolset, enabled);
+    });
+    let Some(identity) = IDENTITY.get().copied() else {
+        return Ok(());
+    };
+    start(cx, identity)
+}
+
+fn set_toolset_fields(toolsets: &mut ToolExposureToolsetSettings, toolset: McpToolset, enabled: bool) {
+    match toolset {
+        McpToolset::Terminal => {
+            toolsets.terminal = enabled;
+            toolsets.terminal_ssh_exec = enabled;
+            toolsets.terminal_exec = enabled;
+        }
+        McpToolset::Sftp => toolsets.sftp = enabled,
+        McpToolset::Database => toolsets.database = enabled,
+        McpToolset::Redis => toolsets.redis = enabled,
+        McpToolset::Mongo => toolsets.mongo = enabled,
+        McpToolset::Connections => toolsets.connections = enabled,
+    }
+}
+
 /// 停止 server；发现文件由 `PublicMcpRuntime::Drop` 清理。
 pub fn stop(cx: &mut App) {
     ensure_global(cx);
@@ -235,7 +276,7 @@ fn build_registry(
     let mut providers = Vec::new();
     if let Ok(entries) = registrations().lock() {
         for entry in entries.iter() {
-            if entry.default_enabled || toolset_enabled(entry.toolset, toolsets) {
+            if toolset_enabled(entry.toolset, toolsets) {
                 providers.extend((entry.factory)(cx));
             }
         }
@@ -251,7 +292,7 @@ fn build_registry(
     Some(registry)
 }
 
-fn toolset_enabled(toolset: McpToolset, toolsets: &ToolExposureToolsetSettings) -> bool {
+pub fn toolset_enabled(toolset: McpToolset, toolsets: &ToolExposureToolsetSettings) -> bool {
     match toolset {
         McpToolset::Terminal => {
             toolsets.terminal || toolsets.terminal_ssh_exec || toolsets.terminal_exec

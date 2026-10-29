@@ -1,6 +1,6 @@
 use super::ShellHome;
-use gpui::{Context, IntoElement, ParentElement, Render, Styled, Window, div, prelude::*, px};
-use gpui_component::{Sizable as _, button::Button};
+use gpui::{App, Context, IntoElement, ParentElement, Render, Styled, Window, div, prelude::*, px};
+use gpui_component::{Sizable as _, WindowExt as _, button::Button, checkbox::Checkbox};
 use one_core::storage::{ConnectionType, StoredConnection};
 
 impl ShellHome {
@@ -159,6 +159,11 @@ impl Render for ShellHome {
                             .flex()
                             .items_center()
                             .gap_2()
+                            .child(Button::new("mcp-tools").small().label("MCP 工具").on_click(
+                                cx.listener(|_, _, window, cx| {
+                                    open_mcp_tools_dialog(window, cx);
+                                }),
+                            ))
                             .child(Button::new("mcp-toggle").small().label(mcp_label).on_click(
                                 cx.listener(|_, _, _window, cx| {
                                     let enabled = mcp_host::settings_enabled(cx);
@@ -182,4 +187,63 @@ impl Render for ShellHome {
                     .child(div().flex_1().min_w_0().child(self.tab_container.clone())),
             )
     }
+}
+
+fn open_mcp_tools_dialog(window: &mut Window, cx: &mut App) {
+    window.open_dialog(cx, |dialog, _window, cx| {
+        dialog
+            .title("MCP 工具集")
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        Checkbox::new("mcp-toolset-terminal")
+                            .checked(mcp_host::current_toolset_enabled(
+                                cx,
+                                mcp_host::McpToolset::Terminal,
+                            ))
+                            .label("终端")
+                            .on_click(|checked, _, cx| {
+                                let _ = mcp_host::set_toolset_enabled(
+                                    cx,
+                                    mcp_host::McpToolset::Terminal,
+                                    *checked,
+                                );
+                            }),
+                    )
+                    .child(
+                        Checkbox::new("mcp-toolset-sftp")
+                            .checked(mcp_host::current_toolset_enabled(
+                                cx,
+                                mcp_host::McpToolset::Sftp,
+                            ))
+                            .label("SFTP")
+                            .on_click(|checked, _, cx| {
+                                let _ = mcp_host::set_toolset_enabled(
+                                    cx,
+                                    mcp_host::McpToolset::Sftp,
+                                    *checked,
+                                );
+                            }),
+                    )
+                    .child(
+                        Checkbox::new("mcp-toolset-connections")
+                            .checked(mcp_host::current_toolset_enabled(
+                                cx,
+                                mcp_host::McpToolset::Connections,
+                            ))
+                            .label("连接管理")
+                            .on_click(|checked, _, cx| {
+                                let _ = mcp_host::set_toolset_enabled(
+                                    cx,
+                                    mcp_host::McpToolset::Connections,
+                                    *checked,
+                                );
+                            }),
+                    ),
+            )
+            .confirm()
+    });
 }

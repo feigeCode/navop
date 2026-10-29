@@ -1037,6 +1037,10 @@ cargo run -p navop-data   # Data
   - main 与 `navop-shell`/`navop-data` 都调用 `mcp_approval::init`；`mcp_host` 用它的 `PublicMcpApprovalManager` 启动 server，因此独立产品的 `Ask` 模式会弹同一个审批对话框。
   - 无窗口时仍走默认拒绝。
 - 独立产品主页增加 `MCP 已连接 / 启动中 / 关闭` 切换按钮：直接持久化 `AppSettings.mcp.server_enabled` 并立即 start/stop；`is_starting` 防止重复点击启动两个 server。
+- 工具暴露设置真正生效：
+  - `McpSettings` 增加 `toolsets_initialized`；独立产品首次启动时，`mcp_host::enable_default_toolsets` 把本产品核心工具集写入 `AppSettings.tool_exposure.mcp`，之后以设置为准，不再用 `default_enabled` 强制打开。
+  - `mcp_host::register_toolset` 去掉 `default_enabled` 参数；`build_registry` 只按 `ToolExposureToolsetSettings` 过滤。
+  - 主页新增 `MCP 工具` 对话框，Terminal/SFTP/Connections（Shell）或 Database/Redis/Mongo/Connections（Data）可逐项开关；每次修改持久化并重启 server。
 
 ### 19.2 验证
 
@@ -1062,9 +1066,9 @@ cargo run -p navop-data   # Data
 
 ### 19.4 尚未完成
 
-- 独立产品没有逐工具集勾选 UI；当前注册的工具集默认全部启用，只能整体开关 MCP。`AppSettings.tool_exposure.mcp` 已接入 `mcp_host::toolset_enabled`，但独立产品的 `default_enabled` 会兜底打开核心工具。
-- 独立产品没有完整 MCP 设置页，只有主页开关；审批已有通用弹窗。
+- 独立产品没有完整 MCP 设置页；主页的 `MCP 工具` 对话框只能开关工具集，不能改权限模式/审批超时。
+- `toolsets_initialized` 是进程级设置字段：首次启动后即写入 true；如果用户清空设置文件，下次启动会重新写入本产品默认工具集。
 - 全量产品仍走 main 的 `public_mcp_runtime`，两条实现并存；后续应让 main 也改用 `mcp_host`，或明确保留 main 的高级能力（resource pool/access guard/审批）。
 - 三产品的工具暴露设置目前共用 `AppSettings.tool_exposure.mcp`；独立产品默认值由 `default_enabled` 兜底，还没有产品级 UI。
 
-提交：`0a5b4e472`、`cbb72d954`、`0c958ddcf feat(mcp): 为独立产品注册 connection 管理工具集`。
+提交：`0a5b4e472`、`cbb72d954`、`0c958ddcf`、`e2b5c8f0a feat(mcp): 工具集开关接入设置并增加逐项 UI`（待提交）。

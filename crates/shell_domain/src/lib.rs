@@ -33,7 +33,6 @@ pub struct ShellDomain;
 fn register_mcp_toolsets() {
     mcp_host::register_toolset(
         mcp_host::McpToolset::Terminal,
-        true,
         Arc::new(|cx: &App| {
             let Some(registry) = terminal_view::public_mcp::registry(cx) else {
                 return Vec::new();
@@ -57,7 +56,6 @@ fn register_mcp_toolsets() {
     );
     mcp_host::register_toolset(
         mcp_host::McpToolset::Sftp,
-        true,
         Arc::new(|cx: &App| {
             let Some(repo) = mcp_host::connection_repository(cx) else {
                 return Vec::new();
@@ -70,7 +68,6 @@ fn register_mcp_toolsets() {
 
     mcp_host::register_toolset(
         mcp_host::McpToolset::Connections,
-        true,
         Arc::new(|cx: &App| {
             let Some(repo) = mcp_host::connection_repository(cx) else {
                 return Vec::new();

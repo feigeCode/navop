@@ -43,6 +43,14 @@ impl Product for ShellProduct {
         terminal_view::init(cx);
         remote_desktop_view::init(cx);
         mcp_approval::init(cx);
+        mcp_host::enable_default_toolsets(
+            cx,
+            &[
+                mcp_host::McpToolset::Terminal,
+                mcp_host::McpToolset::Sftp,
+                mcp_host::McpToolset::Connections,
+            ],
+        );
         Ok(())
     }
 }
