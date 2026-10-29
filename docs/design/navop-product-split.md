@@ -1071,4 +1071,4 @@ cargo run -p navop-data   # Data
 - 全量产品仍走 main 的 `public_mcp_runtime`，两条实现并存；后续应让 main 也改用 `mcp_host`，或明确保留 main 的高级能力（resource pool/access guard/审批）。
 - 三产品的工具暴露设置目前共用 `AppSettings.tool_exposure.mcp`；独立产品默认值由 `default_enabled` 兜底，还没有产品级 UI。
 
-提交：`0a5b4e472`、`cbb72d954`、`0c958ddcf`、`e2b5c8f0a feat(mcp): 工具集开关接入设置并增加逐项 UI`（待提交）。
+提交：`0a5b4e472`、`cbb72d954`、`0c958ddcf`、`0c56a0b98 feat(mcp): 工具集开关接入设置并增加逐项 UI`。
