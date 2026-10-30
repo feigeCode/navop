@@ -61,6 +61,11 @@ const DEVELOPMENT_KEYRING_SERVICE: &str = "com.navop.desktop.dev";
 const KEYRING_USER: &str = "master-key";
 
 #[derive(Clone, Copy, Debug)]
+// 只在提供系统凭据库的平台上被读取；其余平台保留结构以免配置接口分叉。
+#[cfg_attr(
+    not(any(test, target_os = "macos", target_os = "windows")),
+    allow(dead_code)
+)]
 struct KeyringServices {
     installed: &'static str,
     development: &'static str,
