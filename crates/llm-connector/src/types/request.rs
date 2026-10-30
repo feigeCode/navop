@@ -28,6 +28,11 @@ pub enum Role {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ReasoningEffort {
+    /// 关闭推理（OpenAI `reasoning_effort: "none"`）。
+    ///
+    /// 部分推理模型在 `/v1/chat/completions` 上默认开启推理，而推理与函数工具
+    /// 互斥，只有显式传 `"none"` 时才允许同时携带 `tools`。
+    None,
     Low,
     Medium,
     High,
@@ -1092,5 +1097,36 @@ impl ResponseFormat {
                 strict: Some(true),
             }),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reasoning_effort_none_serializes_as_none_literal() {
+        let request = ChatRequest {
+            model: "gpt-6.1-sol".to_string(),
+            reasoning_effort: Some(ReasoningEffort::None),
+            ..Default::default()
+        };
+
+        let value = serde_json::to_value(&request).expect("请求应可序列化");
+        assert_eq!(
+            Some("none"),
+            value.get("reasoning_effort").and_then(|v| v.as_str())
+        );
+    }
+
+    #[test]
+    fn reasoning_effort_is_omitted_when_unset() {
+        let request = ChatRequest {
+            model: "gpt-6.1-sol".to_string(),
+            ..Default::default()
+        };
+
+        let value = serde_json::to_value(&request).expect("请求应可序列化");
+        assert!(value.get("reasoning_effort").is_none());
     }
 }

@@ -1,7 +1,9 @@
 use super::*;
 use agent_runtime::model::{Message, ModelStreamEvent, Tool, ToolChoice, collect_model_stream};
 use agent_runtime::tools::builtin::LoadSkillTool;
-use llm_connector::types::{ChatResponse, Choice, Delta, FunctionCall, StreamingChoice};
+use llm_connector::types::{
+    ChatResponse, Choice, Delta, FunctionCall, ReasoningEffort, StreamingChoice,
+};
 use one_core::llm::StreamingResponse;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -143,6 +145,62 @@ fn empty_tools_map_to_none() {
     let request = ModelRequest::new(vec![Message::user("hi")]);
     let chat_request = client.to_chat_request(request);
     assert!(chat_request.tools.is_none(), "无工具时应映射为 None");
+}
+
+#[test]
+fn gpt6_tool_requests_turn_reasoning_off() {
+    // #487：gpt-6 系列在 /v1/chat/completions 上不接受「推理 + 函数工具」，
+    // 必须在带工具的请求里显式传 reasoning_effort: "none"，否则上游直接 400。
+    let client = LlmModelClient::new(sample_provider_named("openai"), "gpt-6.1-sol");
+    let request = ModelRequest::new(vec![Message::user("hi")])
+        .with_tools(vec![Tool::function("echo", None, serde_json::json!({}))]);
+
+    let chat_request = client.to_chat_request(request);
+
+    assert_eq!(
+        Some(ReasoningEffort::None),
+        chat_request.reasoning_effort,
+        "带工具的 gpt-6 请求必须关掉推理"
+    );
+    let body = serde_json::to_value(&chat_request).expect("请求体应可序列化");
+    assert_eq!(
+        Some("none"),
+        body.get("reasoning_effort").and_then(|v| v.as_str()),
+        "序列化后必须是上游认识的字面量 none"
+    );
+    assert!(
+        body.get("tools").is_some_and(|v| !v.is_null()),
+        "工具仍要照常下发，只是关掉推理"
+    );
+}
+
+#[test]
+fn gpt6_plain_chat_keeps_upstream_default_reasoning() {
+    let client = LlmModelClient::new(sample_provider_named("openai"), "gpt-6.1-sol");
+    let request = ModelRequest::new(vec![Message::user("hi")]);
+
+    let chat_request = client.to_chat_request(request);
+
+    assert!(
+        chat_request.reasoning_effort.is_none(),
+        "普通对话保持上游默认推理，不主动注入 none"
+    );
+}
+
+#[test]
+fn non_gpt6_tool_requests_keep_upstream_default_reasoning() {
+    for model in ["gpt-5.5", "deepseek-v4-flash"] {
+        let client = LlmModelClient::new(sample_provider_named("openai"), model);
+        let request = ModelRequest::new(vec![Message::user("hi")])
+            .with_tools(vec![Tool::function("echo", None, serde_json::json!({}))]);
+
+        let chat_request = client.to_chat_request(request);
+
+        assert!(
+            chat_request.reasoning_effort.is_none(),
+            "{model} 不应被注入 reasoning_effort"
+        );
+    }
 }
 
 #[test]

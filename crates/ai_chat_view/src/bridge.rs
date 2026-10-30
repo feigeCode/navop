@@ -14,8 +14,8 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use self::model_policy::{
-    should_disable_function_calling_for_model, should_disable_tool_choice_for_model,
-    should_stream_tools_via_completion,
+    reasoning_effort_for_request, should_disable_function_calling_for_model,
+    should_disable_tool_choice_for_model, should_stream_tools_via_completion,
 };
 use self::stream_tools::merge_stream_tool_calls;
 use agent_runtime::model::{
@@ -76,14 +76,20 @@ impl LlmModelClient {
         let disable_tool_choice =
             should_disable_tool_choice_for_model(self.provider.provider_name(), &self.model);
 
+        let tools = if disable_function_calling {
+            None
+        } else {
+            (!request.tools.is_empty()).then_some(request.tools)
+        };
+        // #487: GPT-6 系列推理模型在 chat/completions 上不接受「推理 + 函数工具」，
+        // 必须在带工具的请求里显式关闭推理，否则上游直接 400。
+        let reasoning_effort =
+            reasoning_effort_for_request(&self.model, tools.as_ref().is_some());
+
         ChatRequest {
             model: self.model.clone(),
             messages: request.messages,
-            tools: if disable_function_calling {
-                None
-            } else {
-                (!request.tools.is_empty()).then_some(request.tools)
-            },
+            tools,
             tool_choice: if disable_function_calling {
                 None
             } else if disable_tool_choice {
@@ -93,6 +99,7 @@ impl LlmModelClient {
             },
             temperature: request.temperature.or(self.temperature),
             max_tokens: request.max_tokens.or(self.max_tokens),
+            reasoning_effort,
             ..Default::default()
         }
     }
