@@ -19,7 +19,7 @@ use super::{SingleInstanceError, SingleInstanceOutcome, StartupRequest};
 mod forward;
 mod server;
 
-use forward::{ERROR_ACCESS_DENIED, forward_attempt};
+use forward::{ERROR_ACCESS_DENIED, ForwardAttempt, forward_attempt};
 use server::{create_pipe_instance, serve_forever};
 
 const CLAIM_DEADLINE: Duration = Duration::from_secs(2);

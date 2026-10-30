@@ -5,7 +5,7 @@ use std::io;
 use super::super::{MAX_PAYLOAD_BYTES, StartupRequest, codec};
 use super::forward::{ACKNOWLEDGEMENT_ACCEPTED, ACKNOWLEDGEMENT_REJECTED, REQUEST_IO_TIMEOUT};
 
-fn create_pipe_instance(
+pub(super) fn create_pipe_instance(
     pipe_name: &str,
     first: bool,
 ) -> io::Result<tokio::net::windows::named_pipe::NamedPipeServer> {
@@ -19,7 +19,7 @@ fn create_pipe_instance(
     options.create(pipe_name)
 }
 
-async fn serve_forever(
+pub(super) async fn serve_forever(
     pipe_name: String,
     first_instance: tokio::net::windows::named_pipe::NamedPipeServer,
     on_request: std::sync::Arc<dyn Fn(StartupRequest) -> bool + Send + Sync>,

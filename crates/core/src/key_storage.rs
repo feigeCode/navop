@@ -79,6 +79,7 @@ pub fn configure_keyring_services(installed: &'static str, development: &'static
     });
 }
 
+#[cfg(any(test, target_os = "macos", target_os = "windows"))]
 fn keyring_services() -> KeyringServices {
     KEYRING_SERVICES.get().copied().unwrap_or(KeyringServices {
         installed: KEYRING_SERVICE,

@@ -30,7 +30,7 @@ fn is_connect_retryable(error: &io::Error) -> bool {
     )
 }
 
-async fn forward_attempt(pipe_name: &str, request: &StartupRequest) -> ForwardAttempt {
+pub(super) async fn forward_attempt(pipe_name: &str, request: &StartupRequest) -> ForwardAttempt {
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
     use tokio::net::windows::named_pipe::ClientOptions;
     use tokio::time::timeout;
