@@ -1559,3 +1559,29 @@ UI（161 处）。本批把这些入口改造成「公共壳调注册表/领域�
 - `home/home_strategy` 的扩展连接终端启动、`home_tab/connection_open` 的远程桌面协议映射。
 - `main::ProductKind`（产品装配最终要移到 `apps/*`）。
 - CI 增加依赖树 guard job。
+
+## §26 产品装配移出 main（2026-10-30，dev）
+
+### 26.1 改动
+
+- 删除 `main/src/lib.rs` 的 `ProductKind` / `ProductProfile` / `run()` / `run_product()` /
+  `run_product_with_version()`：产品装配（身份 + 领域包 + MCP 托管策略）现在**只**存在于
+  各应用 crate 的 `Product` 实现里，`main` 只保留与产品无关的 `run_with(product, version)`。
+- 删除 `main/src/main.rs`：`main` 包只提供 `navop_app` 库，不再有同名 bin。入口统一为
+  `apps/navop|navop-shell|navop-data`（文档里的 `cargo run -p main` 已改 `cargo run -p navop`）。
+- `shell_domain` 从 `main/Cargo.toml` 的 `shell` feature 与依赖表移除：`main` 不再构造
+  `ShellDomain`。`data_domain` 暂留（公共 MCP 的 Redis/Mongo 工具集实现仍在
+  `data_domain::mcp`）。
+
+### 26.2 验证
+
+- `cargo test -p main --lib` → 591 passed（`domain_features_only_pull_their_own_optional_dependencies`
+  同步更新：shell feature 断言 `dep:terminal_view` 且**不含** `dep:shell_domain`）。
+- `cargo build -p navop -p navop-shell -p navop-data` 无 error、无 rustc 警告。
+- `cargo test -p main --test i18n_locale_keys_contract` 与
+  `--test product_dependency_isolation` 均通过。
+
+### 26.3 剩余
+
+`data_domain` 依赖（MCP 工具集实现）、`ProductFeatures`/`AppIdentity` 常量重复、两套 MCP
+实现合并、`public_mcp_runtime` 的 57 处领域 cfg 收敛。

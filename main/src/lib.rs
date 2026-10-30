@@ -343,123 +343,6 @@ fn report_single_instance_failure(message: &str) {
     }
 }
 
-/// 产品装配选择。
-///
-/// 三产品共用同一套应用外壳（主页、设置、标签、AI、Notes、托盘、更新……），差别
-/// 只在**身份**（数据目录 / 密钥链 / MCP 发现 / 更新 feed）与**领域装配**。这样
-/// 全量产品的功能不会在独立产品里被复制成另一份残缺实现。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ProductKind {
-    /// 全量产品：桌面端全部领域与文件关联独占。
-    Full,
-    /// 终端/远程产品：SSH、SFTP、终端、远程桌面、端口转发。
-    Shell,
-    /// 数据产品：数据库、Redis、MongoDB。
-    Data,
-}
-
-impl ProductKind {
-    fn identity(self) -> &'static domain_api::AppIdentity {
-        match self {
-            Self::Full => &domain_api::AppIdentity::FULL,
-            Self::Shell => &domain_api::AppIdentity::SHELL,
-            Self::Data => &domain_api::AppIdentity::DATA,
-        }
-    }
-
-    fn features(self) -> domain_api::ProductFeatures {
-        match self {
-            Self::Full => domain_api::ProductFeatures::FULL,
-            Self::Shell => domain_api::ProductFeatures::SHELL,
-            Self::Data => domain_api::ProductFeatures::DATA,
-        }
-    }
-
-    fn domains(self) -> Vec<std::sync::Arc<dyn domain_api::Domain>> {
-        #[cfg(all(feature = "shell", feature = "database"))]
-        {
-            match self {
-                Self::Full => vec![
-                    std::sync::Arc::new(shell_domain::ShellDomain),
-                    std::sync::Arc::new(data_domain::DataDomain),
-                ],
-                Self::Shell => vec![std::sync::Arc::new(shell_domain::ShellDomain)],
-                Self::Data => vec![std::sync::Arc::new(data_domain::DataDomain)],
-            }
-        }
-
-        #[cfg(all(feature = "shell", not(feature = "database")))]
-        {
-            let _ = self;
-            vec![std::sync::Arc::new(shell_domain::ShellDomain)]
-        }
-
-        #[cfg(all(feature = "database", not(feature = "shell")))]
-        {
-            let _ = self;
-            vec![std::sync::Arc::new(data_domain::DataDomain)]
-        }
-    }
-
-    /// Public MCP 是否交给 `app_kit` 托管。
-    ///
-    /// 全量产品仍走 main 自己的 `public_mcp_runtime`（历史行为、工具集更全）；
-    /// 独立产品用通用的 `mcp_host`，默认关闭，与产品隔离策略一致。
-    fn mcp_managed_by_app_kit(self) -> bool {
-        !matches!(self, Self::Full)
-    }
-}
-
-struct ProductProfile(ProductKind);
-
-impl domain_api::Product for ProductProfile {
-    type Assets = AppAssets;
-
-    fn identity(&self) -> &'static domain_api::AppIdentity {
-        self.0.identity()
-    }
-
-    fn features(&self) -> domain_api::ProductFeatures {
-        self.0.features()
-    }
-
-    fn assets(&self) -> Self::Assets {
-        AppAssets::new()
-    }
-
-    fn domains(&self) -> Vec<std::sync::Arc<dyn domain_api::Domain>> {
-        self.0.domains()
-    }
-
-    fn mcp_managed_by_app_kit(&self) -> bool {
-        self.0.mcp_managed_by_app_kit()
-    }
-
-    fn init(&self, cx: &mut gpui::App) -> anyhow::Result<()> {
-        navop_app::init(cx)
-    }
-}
-
-pub fn run() {
-    run_product(ProductKind::Full);
-}
-
-/// 以指定产品身份启动完整应用。
-///
-/// `navop-shell` / `navop-data` 与全量产品共享同一套 UI 与初始化流程，只换身份与
-/// 领域装配；入口显隐由各领域注册表与 `ProductFeatures` 决定。
-pub fn run_product(kind: ProductKind) {
-    run_product_with_version(kind, env!("CARGO_PKG_VERSION"));
-}
-
-/// 与 [`run_product`] 相同，但由调用方指定版本号。
-///
-/// 独立产品的包版本与 `main` 包版本不同：自动更新必须用**自己**的版本去比较
-/// release，否则 `navop-shell` 会拿全量产品的版本号判断是否需要更新。
-pub fn run_product_with_version(kind: ProductKind, version: &'static str) {
-    run_with(ProductProfile(kind), version);
-}
-
 /// 以调用方装配的产品启动完整应用。
 ///
 /// 三个应用 crate 各自定义自己的 `Product`（身份、领域包、初始化），这里只负责
@@ -1328,7 +1211,11 @@ mod native_driver_feature_contract_tests {
 
         assert!(database.contains("dep:db_view") && database.contains("dep:data_domain"));
         assert!(!database.contains("dep:terminal_view") && !database.contains("dep:shell_domain"));
-        assert!(shell.contains("dep:terminal_view") && shell.contains("dep:shell_domain"));
+        // `main` 不再装配领域包（`ShellDomain` 由 apps 提供），shell feature 只剩
+        // UI/后端依赖；`data_domain` 仍在 database feature 里，因为公共 MCP 的
+        // Redis/Mongo 工具集实现暂时还留在 data_domain。
+        assert!(shell.contains("dep:terminal_view"));
+        assert!(!shell.contains("dep:shell_domain"));
         assert!(!shell.contains("dep:db_view") && !shell.contains("dep:data_domain"));
         for dependency in [
             "db",

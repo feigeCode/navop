@@ -63,7 +63,6 @@ domain_api.workspace = true
 mcp_host.workspace = true
 mcp_approval.workspace = true
 app_kit.workspace = true
-shell_domain = { workspace = true, optional = true }
 data_domain = { workspace = true, optional = true }
 one-ui.workspace = true
 navop_runtime = { workspace = true }
@@ -148,8 +147,7 @@ shell = [
     "dep:terminal",
     "dep:terminal_view",
     "dep:remote_desktop",
-    "dep:remote_desktop_view",
-    "dep:shell_domain"]
+    "dep:remote_desktop_view",]
 builtin-duckdb = ["db_view/builtin-duckdb", "navop_runtime/builtin-duckdb"]
 builtin-mongodb = ["mongodb_view/builtin-mongodb"]
 builtin-data-drivers = ["builtin-mongodb"]
