@@ -8,7 +8,9 @@ rust_i18n::i18n!("locales", fallback = "en");
 mod connection_forms;
 mod connection_openers;
 mod lifecycle;
+mod recording;
 mod remote_desktop_window;
+mod terminals;
 mod session_logs;
 mod settings;
 mod shell_extras;
@@ -122,6 +124,7 @@ impl Domain for ShellDomain {
         registry.register_form_provider(Arc::new(ShellConnectionFormProvider));
         registry.register_settings_provider(Arc::new(ShellSettingsProvider));
         registry.register_shell_extras(Arc::new(shell_extras::ShellExtrasImpl));
+        registry.register_file_open_handler(Arc::new(recording::RecordingFileOpenHandler));
         // Tab 会话恢复：把上次关闭时的终端 / SFTP / 远程桌面等标签重建出来。
         registry.register_tab_restorer(Arc::new(tab_restore::ShellTabRestorer));
         register_mcp_toolsets();
@@ -144,6 +147,19 @@ impl Domain for ShellDomain {
     }
 
     /// 先排空原生 RDP 宿主，再关停 SSH 传输。
+    fn keybindings(&self, _cx: &App) -> Vec<gpui::KeyBinding> {
+        let keystrokes = if cfg!(target_os = "macos") {
+            "cmd-v"
+        } else {
+            "ctrl-v"
+        };
+        vec![gpui::KeyBinding::new(
+            keystrokes,
+            sftp_view::PasteUpload,
+            Some(sftp_view::SFTP_VIEW_CONTEXT),
+        )]
+    }
+
     fn shutdown(&self, cx: &mut App) -> Option<gpui::Task<()>> {
         Some(lifecycle::shutdown(cx, "application shutdown".into()))
     }
@@ -308,6 +324,34 @@ impl ConnectionOpener for SshConnectionOpener {
         if connection.effective_open_mode() == one_core::storage::PreferredOpenMode::DualPane {
             return self.open_sftp(connection, home, window, cx);
         }
+        self.open_ssh_terminal(connection, None, mode, home, window, cx)
+    }
+
+    fn open_sftp(
+        &self,
+        connection: &StoredConnection,
+        home: &mut dyn HomeContext,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        self.open_sftp_impl(connection, home, window, cx)
+    }
+}
+
+impl SshConnectionOpener {
+    /// 打开 SSH 终端；`working_dir` 用于「SFTP 在某目录下开终端」这类入口。
+    pub(crate) fn open_ssh_terminal(
+        &self,
+        connection: &StoredConnection,
+        working_dir: Option<String>,
+        mode: TabOpenMode,
+        home: &mut dyn HomeContext,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        if connection.connection_type != ConnectionType::SshSftp {
+            return false;
+        }
         let connection_id = connection.id.unwrap_or(0);
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -322,7 +366,7 @@ impl ConnectionOpener for SshConnectionOpener {
                 tab_index,
                 window,
                 cx,
-                None,
+                working_dir.as_deref(),
                 sync_path,
             )
         });
@@ -351,7 +395,7 @@ impl ConnectionOpener for SshConnectionOpener {
         home.open_tab(item, mode, window, cx)
     }
 
-    fn open_sftp(
+    fn open_sftp_impl(
         &self,
         connection: &StoredConnection,
         home: &mut dyn HomeContext,

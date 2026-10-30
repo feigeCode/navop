@@ -2,9 +2,13 @@ use std::sync::{Mutex, OnceLock};
 
 use std::sync::Arc;
 
-use domain_api::{PortForwardingRuntime, RemoteProtocol, ShellExtras, WslDistributionInfo};
-use gpui::App;
+use domain_api::{
+    HomeContext, PortForwardingRuntime, RemoteProtocol, ShellExtras, WslDistributionInfo,
+};
+use gpui::{App, AppContext as _, Window};
 use one_core::storage::StoredConnection;
+use one_core::tab_container::{TabItem, TabOpenMode};
+use terminal_view::{TerminalConnectionKind, TerminalWorkspace};
 
 static PORT_FORWARDING: OnceLock<Arc<tokio::sync::Mutex<PortForwardingRuntime>>> = OnceLock::new();
 
@@ -26,6 +30,112 @@ impl ShellExtras for ShellExtrasImpl {
 
     fn refresh_wsl_distributions(&self, cx: &mut App) {
         detect(cx);
+    }
+
+    fn save_temporary_connection(
+        &self,
+        connection: StoredConnection,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        if !app_kit::vault::ensure_master_key_ready(window, cx) {
+            return false;
+        }
+        let workspaces = cx
+            .try_global::<one_core::storage::GlobalStorageState>()
+            .and_then(|state| state.storage.get::<one_core::storage::WorkspaceRepository>())
+            .and_then(|repository| {
+                use one_core::storage::traits::Repository as _;
+                repository.list().ok()
+            })
+            .unwrap_or_default();
+        let config = ssh_form::SshFormWindowConfig {
+            editing_connection: None,
+            initial_connection: Some(connection),
+            initial_workspace_id: None,
+            on_saved: Some(Arc::new(|saved, _action, window, cx| {
+                use gpui_component::WindowExt as _;
+                window.push_notification(
+                    format!("已保存连接：{}", saved.name),
+                    cx,
+                );
+            })),
+            workspaces,
+            teams: one_core::cloud_sync::get_cached_team_options(cx),
+        };
+        one_core::popup_window::open_reusable_popup_window(
+            one_core::popup_window::PopupWindowOptions::new("保存为连接").size(820.0, 750.0),
+            "app-kit-save-temporary-ssh".to_string(),
+            move |window, cx| {
+                cx.new(|cx| ssh_form::SshFormWindow::new(config.clone(), window, cx))
+            },
+            Some(window),
+            cx,
+        );
+        true
+    }
+
+    fn open_session_log(&self, path: std::path::PathBuf, window: &mut Window, cx: &mut App) -> bool {
+        crate::recording::open_session_log_file(path, window, cx);
+        true
+    }
+
+    fn open_terminal_in_dir(
+        &self,
+        home: &mut dyn HomeContext,
+        working_dir: Option<String>,
+        connection: Option<StoredConnection>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        match connection {
+            Some(connection) => crate::SshConnectionOpener.open_ssh_terminal(
+                &connection,
+                working_dir,
+                TabOpenMode::Activate,
+                home,
+                window,
+                cx,
+            ),
+            None => {
+                crate::terminals::open_local_terminal_with_dir(working_dir, home, window, cx)
+            }
+        }
+    }
+
+    fn duplicate_terminal_tab(
+        &self,
+        tab: &TabItem,
+        home: &mut dyn HomeContext,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        let view = tab.content().view();
+        let Ok(workspace) = view.downcast::<TerminalWorkspace>() else {
+            return false;
+        };
+        let kind = workspace.read(cx).connection_kind(cx);
+        if kind == TerminalConnectionKind::Local {
+            return app_kit::registry().open_tab(
+                &domain_api::TabIntent::Terminal { profile: None },
+                TabOpenMode::Activate,
+                home,
+                window,
+                cx,
+            );
+        }
+        let Some(connection_id) = workspace.read(cx).connection_id(cx) else {
+            return false;
+        };
+        let Some(connection) = home
+            .connections()
+            .iter()
+            .find(|connection| connection.id == Some(connection_id))
+            .cloned()
+        else {
+            return false;
+        };
+        app_kit::registry().open_connection(&connection, TabOpenMode::Activate, home, window, cx)
     }
 
     fn open_remote_desktop_fullscreen(

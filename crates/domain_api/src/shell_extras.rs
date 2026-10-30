@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
-use gpui::{App, SharedString};
+use gpui::{App, SharedString, Window};
 
-use crate::{PortForwardingRuntime, RemoteProtocol};
+use crate::{HomeContext, PortForwardingRuntime, RemoteProtocol};
 use one_core::storage::StoredConnection;
+use one_core::tab_container::TabItem;
 
 /// WSL 发行版信息（Windows 专用；其它平台为空列表）。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -21,6 +22,49 @@ pub trait ShellExtras: Send + Sync {
     }
 
     fn refresh_wsl_distributions(&self, _cx: &mut App) {}
+
+    /// 把临时连接保存为正式连接（打开 SSH 表单）；返回 `false` 表示不支持。
+    fn save_temporary_connection(
+        &self,
+        _connection: StoredConnection,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) -> bool {
+        false
+    }
+
+    /// 打开终端会话日志文件；返回 `false` 表示不支持。
+    fn open_session_log(
+        &self,
+        _path: std::path::PathBuf,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) -> bool {
+        false
+    }
+
+    /// 在指定目录打开终端：`connection` 为 `None` 时开本地终端，否则开该连接的 SSH 终端。
+    fn open_terminal_in_dir(
+        &self,
+        _home: &mut dyn HomeContext,
+        _working_dir: Option<String>,
+        _connection: Option<StoredConnection>,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) -> bool {
+        false
+    }
+
+    /// 复制一个领域标签页（例如终端标签）；返回 `false` 表示不支持该标签。
+    fn duplicate_terminal_tab(
+        &self,
+        _tab: &TabItem,
+        _home: &mut dyn HomeContext,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) -> bool {
+        false
+    }
 
     /// 以内置视图全屏打开远程桌面；返回 `false` 表示不支持。
     fn open_remote_desktop_fullscreen(

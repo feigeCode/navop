@@ -2,8 +2,6 @@ use crate::credential_vault::CredentialVaultView;
 use crate::home_tab::HomePage;
 use crate::license::is_feature_enabled;
 
-#[cfg(feature = "shell")]
-use crate::setting_tab::AppSettings;
 use crate::setting_tab::SettingsPanel;
 #[cfg(feature = "shell")]
 use domain_api::{TabIntent, TerminalProfileDescriptor};
@@ -20,14 +18,6 @@ use one_core::tab_container::GlobalTabContainer;
 #[cfg(feature = "shell")]
 use one_core::tab_container::TabOpenMode;
 use one_core::tab_container::{TabContainer, TabItem};
-#[cfg(any(feature = "shell", test))]
-use rust_i18n::t;
-#[cfg(feature = "shell")]
-use terminal::local_config_from_settings;
-#[cfg(feature = "shell")]
-use terminal_view::{
-    TerminalConnectionKind, TerminalWorkspace, current_settings as current_terminal_settings,
-};
 
 #[cfg(test)]
 mod tests {
@@ -105,80 +95,6 @@ impl HomePage {
     }
 
     #[cfg(feature = "shell")]
-    fn terminal_sync_path_enabled(cx: &App) -> bool {
-        current_terminal_settings(cx).sync_path_with_terminal
-    }
-
-    #[cfg(feature = "shell")]
-    pub(crate) fn open_ssh_terminal(
-        &mut self,
-        conn: StoredConnection,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.open_ssh_terminal_with_mode(conn, TabOpenMode::Activate, window, cx);
-    }
-
-    #[cfg(feature = "shell")]
-    pub(crate) fn open_ssh_terminal_with_mode(
-        &mut self,
-        conn: StoredConnection,
-        mode: TabOpenMode,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if !app_kit::registry().open_connection(&conn, mode, self, window, cx) {
-            notify_unsupported(&conn, window, cx);
-        }
-    }
-
-    #[cfg(feature = "shell")]
-    pub(crate) fn open_serial_terminal(
-        &mut self,
-        conn: StoredConnection,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.open_serial_terminal_with_mode(conn, TabOpenMode::Activate, window, cx);
-    }
-
-    #[cfg(feature = "shell")]
-    pub(crate) fn open_serial_terminal_with_mode(
-        &mut self,
-        conn: StoredConnection,
-        mode: TabOpenMode,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if !app_kit::registry().open_connection(&conn, mode, self, window, cx) {
-            notify_unsupported(&conn, window, cx);
-        }
-    }
-
-    #[cfg(feature = "shell")]
-    pub(crate) fn open_telnet_terminal(
-        &mut self,
-        conn: StoredConnection,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.open_telnet_terminal_with_mode(conn, TabOpenMode::Activate, window, cx);
-    }
-
-    #[cfg(feature = "shell")]
-    pub(crate) fn open_telnet_terminal_with_mode(
-        &mut self,
-        conn: StoredConnection,
-        mode: TabOpenMode,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if !app_kit::registry().open_connection(&conn, mode, self, window, cx) {
-            notify_unsupported(&conn, window, cx);
-        }
-    }
-
-    #[cfg(feature = "shell")]
     pub(crate) fn open_sftp_view(
         &mut self,
         conn: StoredConnection,
@@ -198,32 +114,12 @@ impl HomePage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
-        let config = match local_config_from_settings(AppSettings::global(cx), Some(working_dir)) {
-            Ok(config) => config,
-            Err(error) => {
-                push_local_terminal_config_error(window, &error, cx);
-                return;
-            }
+        let Some(extras) = app_kit::registry().shell_extras() else {
+            return;
         };
-        let tab_id = format!("local-terminal-{}", timestamp);
-        let tab_container = self.active_tab_container(cx);
-        let existing = tab_container
-            .read(cx)
-            .tabs()
-            .iter()
-            .filter(|t| t.id().starts_with("local-terminal-") || t.id().starts_with("terminal-"))
-            .count();
-        let tab_index = (existing > 0).then_some(existing + 1);
-        let terminal_view =
-            cx.new(|cx| TerminalWorkspace::new_with_index(config, tab_index, window, cx));
-        tab_container.update(cx, |tc, cx| {
-            let tab = TabItem::new(tab_id, "terminal", terminal_view);
-            tc.add_and_activate_tab_with_focus(tab, window, cx);
-        });
+        if !extras.open_terminal_in_dir(self, Some(working_dir), None, window, cx) {
+            window.push_notification(Notification::error("当前产品不支持本地终端"), cx);
+        }
     }
 
     /// SFTP 双栏视图请求在指定目录打开该连接的 SSH 终端。
@@ -235,44 +131,12 @@ impl HomePage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
-        let conn_id = connection.id.unwrap_or(0);
-        let tab_id = format!("ssh-terminal-{}-{}", conn_id, timestamp);
-        let prefix = format!("ssh-terminal-{}-", conn_id);
-        let tab_container = self.active_tab_container(cx);
-        let existing = tab_container
-            .read(cx)
-            .tabs()
-            .iter()
-            .filter(|t| t.id().starts_with(&prefix))
-            .count();
-        let base_title = connection.name.clone();
-        let titles: Vec<String> = tab_container
-            .read(cx)
-            .tabs()
-            .iter()
-            .map(|tab| tab.title(cx).to_string())
-            .collect();
-        let tab_index = next_duplicate_tab_index(&base_title, titles.iter().map(String::as_str))
-            .or_else(|| (existing > 0).then_some(existing));
-        let sync_path = Self::terminal_sync_path_enabled(cx);
-        let terminal_view = cx.new(|cx| {
-            TerminalWorkspace::new_ssh_with_index(
-                connection,
-                tab_index,
-                window,
-                cx,
-                Some(working_dir.as_str()),
-                sync_path,
-            )
-        });
-        tab_container.update(cx, |tc, cx| {
-            let tab = TabItem::new(tab_id, "ssh", terminal_view);
-            tc.add_and_activate_tab_with_focus(tab, window, cx);
-        });
+        let Some(extras) = app_kit::registry().shell_extras() else {
+            return;
+        };
+        if !extras.open_terminal_in_dir(self, Some(working_dir), Some(connection), window, cx) {
+            window.push_notification(Notification::error("当前产品不支持 SSH 终端"), cx);
+        }
     }
 
     pub(crate) fn add_settings_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -481,97 +345,27 @@ impl HomePage {
         });
     }
 
-    /// 复制当前活动标签并打开
     pub(crate) fn duplicate_active_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let tab_container = self.active_tab_container(cx);
-        #[cfg(not(feature = "shell"))]
-        let _ = &window;
-        let tc = tab_container.read(cx);
-
-        // pinned tab 不支持复制
-        if tc.is_pinned_tab_active() {
-            return;
-        }
-
-        let Some(active_tab) = tc.active_tab() else {
+        let (content_key, active_tab) = {
+            let tc = tab_container.read(cx);
+            // pinned tab 不支持复制
+            if tc.is_pinned_tab_active() {
+                return;
+            }
+            let Some(active_tab) = tc.active_tab() else {
+                return;
+            };
+            (active_tab.content().content_key(cx), active_tab.clone())
+        };
+        let Some(extras) = app_kit::registry().shell_extras() else {
             return;
         };
-
-        let content_key = active_tab.content().content_key(cx);
-
-        match content_key {
-            #[cfg(feature = "shell")]
-            "Terminal" => {
-                // 获取终端视图的连接信息
-                let view = active_tab.content().view();
-                let Ok(terminal_view) = view.downcast::<TerminalWorkspace>() else {
-                    return;
-                };
-
-                let kind = terminal_view.read(cx).connection_kind(cx);
-                match kind {
-                    TerminalConnectionKind::Ssh => {
-                        // SSH 终端：通过 connection_id 找到 StoredConnection 并打开新连接
-                        let conn_id = terminal_view.read(cx).connection_id(cx);
-                        if let Some(conn_id) = conn_id {
-                            if let Some(conn) = self
-                                .connections
-                                .iter()
-                                .find(|c| c.id == Some(conn_id))
-                                .cloned()
-                            {
-                                self.open_ssh_terminal(conn, window, cx);
-                            }
-                        }
-                    }
-                    TerminalConnectionKind::Serial => {
-                        let conn_id = terminal_view.read(cx).connection_id(cx);
-                        if let Some(conn_id) = conn_id {
-                            if let Some(conn) = self
-                                .connections
-                                .iter()
-                                .find(|c| c.id == Some(conn_id))
-                                .cloned()
-                            {
-                                self.open_serial_terminal(conn, window, cx);
-                            }
-                        }
-                    }
-                    TerminalConnectionKind::Telnet => {
-                        let conn_id = terminal_view.read(cx).connection_id(cx);
-                        if let Some(conn_id) = conn_id {
-                            if let Some(conn) = self
-                                .connections
-                                .iter()
-                                .find(|c| c.id == Some(conn_id))
-                                .cloned()
-                            {
-                                self.open_telnet_terminal(conn, window, cx);
-                            }
-                        }
-                    }
-                    TerminalConnectionKind::Local => {
-                        // 本地终端：直接新建
-                        self.open_local_terminal_tab(None, window, cx);
-                    }
-                }
-            }
-            _ => {
-                // 其他类型暂不支持复制
-            }
+        // 领域标签（例如终端）由领域自己决定怎么复制；其它类型暂不支持复制。
+        if content_key == "Terminal" {
+            let _ = extras.duplicate_terminal_tab(&active_tab, self, window, cx);
         }
     }
-}
-#[cfg(feature = "shell")]
-fn push_local_terminal_config_error<T>(
-    window: &mut Window,
-    error: &dyn std::fmt::Display,
-    cx: &mut Context<T>,
-) {
-    window.push_notification(
-        Notification::error(t!("Home.local_terminal_invalid_config", error = error).to_string()),
-        cx,
-    );
 }
 
 #[cfg(feature = "shell")]

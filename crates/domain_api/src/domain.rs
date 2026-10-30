@@ -43,6 +43,11 @@ pub trait Domain: Send + Sync {
     /// 有界关停领域持有的资源；返回的任务会在退出流程中被 await。
     ///
     /// 公共壳不知道领域里有什么，只按注册顺序等待。
+    /// 领域自己的键位（例如 SFTP 视图的粘贴快捷键）。
+    fn keybindings(&self, _cx: &App) -> Vec<gpui::KeyBinding> {
+        Vec::new()
+    }
+
     fn shutdown(&self, _cx: &mut App) -> Option<gpui::Task<()>> {
         None
     }

@@ -45,8 +45,6 @@ use one_core::storage::{
 use one_core::tab_container::{TabContainer, TabContent, TabContentEvent, TabOpenMode};
 use one_ui::{IconButton, IconButtonRole};
 use rust_i18n::t;
-#[cfg(feature = "shell")]
-use terminal_view::{SshFormWindow, SshFormWindowConfig};
 
 use crate::auth::{AuthService, load_auth_data, show_auth_dialog};
 use crate::connection_visuals::{ConnectionVisualSize, connection_type_navigation_icon};

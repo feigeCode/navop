@@ -8,7 +8,47 @@ use terminal::recording::{
 };
 use terminal_view::{RecordingPlaybackViewConfig, SessionLogViewConfig, TerminalWorkspace};
 
-use super::{show_file_open_error, stable_file_key};
+use gpui_component::{WindowExt as _, notification::Notification};
+use rust_i18n::t;
+use sha2::{Digest as _, Sha256};
+
+/// 判断路径是否为终端录制文件（`.cast` / `.cast.partial`）。
+pub(crate) fn is_terminal_recording_path(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let name = name.to_ascii_lowercase();
+    name.ends_with(".cast") || name.ends_with(".cast.partial")
+}
+
+fn stable_file_key(path: &Path) -> String {
+    let digest = Sha256::digest(path.to_string_lossy().as_bytes());
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn show_file_open_error(error: &anyhow::Error, window: &mut Window, cx: &mut App) {
+    tracing::warn!(error = %error, "failed to open terminal recording");
+    window.push_notification(
+        Notification::error(
+            t!("Common.file_open_failed", error = format!("{error:#}")).to_string(),
+        )
+        .autohide(true),
+        cx,
+    );
+}
+
+/// 终端录制 / 会话日志的文件打开处理器。
+pub(crate) struct RecordingFileOpenHandler;
+
+impl domain_api::FileOpenHandler for RecordingFileOpenHandler {
+    fn handles(&self, path: &Path) -> bool {
+        is_terminal_recording_path(path)
+    }
+
+    fn open(&self, path: &Path, window: &mut Window, cx: &mut App) {
+        open_recording_file(path.to_path_buf(), window, cx);
+    }
+}
 
 struct PreparedRecordingPlayback {
     path: PathBuf,

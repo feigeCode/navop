@@ -721,12 +721,21 @@ fn open_terminal_item(
         .icon(IconName::Terminal)
         .on_click(move |_, window, cx| {
             home.update(cx, |home, cx| {
-                home.open_ssh_terminal_with_mode(
-                    connection.clone(),
+                if !app_kit::registry().open_connection(
+                    &connection,
                     TabOpenMode::Activate,
+                    home,
                     window,
                     cx,
-                );
+                ) {
+                    window.push_notification(
+                        gpui_component::notification::Notification::error(format!(
+                            "当前产品不支持打开该连接：{}",
+                            connection.name
+                        )),
+                        cx,
+                    );
+                }
             });
         })
 }

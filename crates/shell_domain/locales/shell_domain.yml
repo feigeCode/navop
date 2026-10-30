@@ -1,6 +1,10 @@
 _version: 2
 
 Common:
+  file_open_failed:
+      en: "Unable to open file: %{error}"
+      zh-CN: "无法打开文件：%{error}"
+      zh-HK: "無法開啟檔案：%{error}"
   cancel:
     en: Cancel
     zh-CN: 取消

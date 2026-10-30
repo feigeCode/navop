@@ -1,4 +1,5 @@
 use crate::DomainId;
+use crate::file_open::FileOpenHandler;
 use crate::form::{ConnectionFormProvider, ConnectionFormRequest};
 use crate::home::HomeContext;
 use crate::intent::TabIntent;
@@ -55,6 +56,7 @@ pub struct DomainRegistry {
     tab_restorers: Vec<Arc<dyn TabRestorer>>,
     form_providers: Vec<Arc<dyn ConnectionFormProvider>>,
     settings_providers: Vec<Arc<dyn SettingsSectionProvider>>,
+    file_open_handlers: Vec<Arc<dyn FileOpenHandler>>,
     shell_extras: Option<Arc<dyn ShellExtras>>,
 }
 
@@ -98,6 +100,21 @@ impl DomainRegistry {
 
     pub fn shell_extras(&self) -> Option<Arc<dyn ShellExtras>> {
         self.shell_extras.clone()
+    }
+
+    pub fn register_file_open_handler(&mut self, handler: Arc<dyn FileOpenHandler>) {
+        self.file_open_handlers.push(handler);
+    }
+
+    /// 让领域处理器接管路径；返回 `true` 表示已接管。
+    pub fn open_file(&self, path: &std::path::Path, window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
+        for handler in &self.file_open_handlers {
+            if handler.handles(path) {
+                handler.open(path, window, cx);
+                return true;
+            }
+        }
+        false
     }
 
     pub fn register_settings_provider(&mut self, provider: Arc<dyn SettingsSectionProvider>) {

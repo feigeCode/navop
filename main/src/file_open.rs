@@ -13,11 +13,6 @@ use rust_i18n::t;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
-#[cfg(feature = "shell")]
-mod recording;
-#[cfg(feature = "shell")]
-pub(crate) use recording::open_session_log_file;
-
 #[derive(Debug)]
 pub(crate) enum FileOpenInput {
     Path(PathBuf),
@@ -28,8 +23,6 @@ pub(crate) enum FileOpenInput {
 enum OpenFileKind {
     Database(DatabaseType),
     Markdown,
-    #[cfg(feature = "shell")]
-    TerminalRecording,
 }
 
 struct PreparedOpenFile {
@@ -78,6 +71,16 @@ fn show_file_open_error(error: &anyhow::Error, window: &mut Window, cx: &mut App
 }
 
 fn try_open_input(input: FileOpenInput, window: &mut Window, cx: &mut App) -> Result<()> {
+    let path = match &input {
+        FileOpenInput::Path(path) => Some(path.clone()),
+        FileOpenInput::Url(url) => local_path_from_file_url(url).ok(),
+    };
+    // 领域（例如终端录制）优先接管自己认识的文件类型。
+    if let Some(path) = path
+        && app_kit::registry().open_file(&path, window, cx)
+    {
+        return Ok(());
+    }
     let Some(prepared) = prepare_open_file(input)? else {
         return Ok(());
     };
@@ -88,11 +91,6 @@ fn try_open_input(input: FileOpenInput, window: &mut Window, cx: &mut App) -> Re
         }
         OpenFileKind::Markdown => {
             open_markdown_file(prepared.path, window, cx);
-            Ok(())
-        }
-        #[cfg(feature = "shell")]
-        OpenFileKind::TerminalRecording => {
-            recording::open_recording_file(prepared.path, window, cx);
             Ok(())
         }
     }
@@ -106,10 +104,6 @@ fn prepare_open_file(input: FileOpenInput) -> Result<Option<PreparedOpenFile>> {
     let Some(kind) = classify_supported_path(&path) else {
         return Ok(None);
     };
-    #[cfg(feature = "shell")]
-    if kind == OpenFileKind::TerminalRecording {
-        return Ok(Some(PreparedOpenFile { path, kind }));
-    }
     let absolute = if path.is_absolute() {
         path
     } else {
@@ -127,19 +121,11 @@ fn prepare_open_file(input: FileOpenInput) -> Result<Option<PreparedOpenFile>> {
             .canonicalize()
             .with_context(|| format!("规范化数据库文件路径失败: {}", absolute.display()))?,
         OpenFileKind::Markdown => absolute,
-        #[cfg(feature = "shell")]
-        OpenFileKind::TerminalRecording => {
-            unreachable!("recordings are prepared in the background")
-        }
     };
     Ok(Some(PreparedOpenFile { path, kind }))
 }
 
 fn classify_supported_path(path: &Path) -> Option<OpenFileKind> {
-    #[cfg(feature = "shell")]
-    if is_terminal_recording_path(path) {
-        return Some(OpenFileKind::TerminalRecording);
-    }
     let extension = path.extension()?.to_str()?.to_ascii_lowercase();
     match extension.as_str() {
         "db" | "sqlite" | "sqlite3" => Some(OpenFileKind::Database(DatabaseType::SQLite)),
@@ -147,15 +133,6 @@ fn classify_supported_path(path: &Path) -> Option<OpenFileKind> {
         "md" | "markdown" | "mdown" | "mkd" => Some(OpenFileKind::Markdown),
         _ => None,
     }
-}
-
-#[cfg(feature = "shell")]
-fn is_terminal_recording_path(path: &Path) -> bool {
-    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-        return false;
-    };
-    let name = name.to_ascii_lowercase();
-    name.ends_with(".cast") || name.ends_with(".cast.partial")
 }
 
 fn local_path_from_file_url(raw: &str) -> Result<PathBuf> {
@@ -369,22 +346,9 @@ mod tests {
             Some(OpenFileKind::Markdown),
             classify_supported_path(Path::new("guide.mkd"))
         );
-        assert_eq!(
-            Some(OpenFileKind::TerminalRecording),
-            classify_supported_path(Path::new("session.cast"))
-        );
-        assert_eq!(
-            Some(OpenFileKind::TerminalRecording),
-            classify_supported_path(Path::new("session.CAST"))
-        );
-        assert_eq!(
-            Some(OpenFileKind::TerminalRecording),
-            classify_supported_path(Path::new("session.cast.partial"))
-        );
-        assert_eq!(
-            Some(OpenFileKind::TerminalRecording),
-            classify_supported_path(Path::new("session.CAST.PARTIAL"))
-        );
+        // 终端录制由领域文件处理器接管（见 shell_domain 的 RecordingFileOpenHandler）。
+        assert_eq!(None, classify_supported_path(Path::new("session.cast")));
+        assert_eq!(None, classify_supported_path(Path::new("session.cast.partial")));
         assert_eq!(None, classify_supported_path(Path::new("session.partial")));
         assert_eq!(None, classify_supported_path(Path::new("cast")));
         assert_eq!(None, classify_supported_path(Path::new("notes.txt")));
@@ -397,20 +361,6 @@ mod tests {
         let url = url::Url::from_file_path(&path).unwrap().to_string();
         assert_eq!(path, local_path_from_file_url(&url).unwrap());
         assert!(local_path_from_file_url("https://example.com/README.md").is_err());
-    }
-
-    #[test]
-    fn recording_file_urls_are_routed_without_synchronous_file_io() -> Result<()> {
-        let temp = tempfile::tempdir()?;
-        let path = temp.path().join("missing.CAST.PARTIAL");
-        let url = url::Url::from_file_path(&path).unwrap().to_string();
-
-        let prepared = prepare_open_file(FileOpenInput::Url(url))?.unwrap();
-
-        assert_eq!(OpenFileKind::TerminalRecording, prepared.kind);
-        assert_eq!(path, prepared.path);
-        assert!(!prepared.path.exists());
-        Ok(())
     }
 
     #[test]

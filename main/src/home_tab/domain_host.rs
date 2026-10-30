@@ -197,6 +197,8 @@ impl app_kit::ShellHost for NavopShellHost {
     }
 
     fn open_session_log_file(&self, path: std::path::PathBuf, window: &mut Window, cx: &mut App) {
-        crate::file_open::open_session_log_file(path, window, cx);
+        if let Some(extras) = app_kit::registry().shell_extras() {
+            extras.open_session_log(path, window, cx);
+        }
     }
 }

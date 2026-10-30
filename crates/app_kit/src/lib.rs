@@ -135,6 +135,17 @@ pub fn shutdown_domains(cx: &mut App) -> Vec<gpui::Task<()>> {
 }
 
 /// 按注册顺序让每个领域注册自己的快捷键。
+/// 收集各领域注册的键位（静态绑定，不随设置变化）。
+pub fn domain_keybindings(cx: &App) -> Vec<gpui::KeyBinding> {
+    let Some(domains) = DOMAINS.get() else {
+        return Vec::new();
+    };
+    domains
+        .iter()
+        .flat_map(|domain| domain.keybindings(cx))
+        .collect()
+}
+
 pub fn refresh_domain_keybindings(cx: &mut App) {
     let Some(domains) = DOMAINS.get() else {
         return;

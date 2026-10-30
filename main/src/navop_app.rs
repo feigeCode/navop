@@ -249,8 +249,6 @@ use one_core::tab_navigation::{
     ActiveTabSlot, TabCycleDirection, tab_number_target, tab_slot_after_cycle,
 };
 use one_core::themes;
-#[cfg(feature = "shell")]
-use sftp_view::{PasteUpload as SftpPasteUpload, SFTP_VIEW_CONTEXT};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
@@ -1074,12 +1072,8 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
         .into_iter()
         .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, QuitApp, None, cx)),
     );
-    #[cfg(feature = "shell")]
-    keybindings.push(KeyBinding::new(
-        default_shortcut("cmd-v", "ctrl-v"),
-        SftpPasteUpload,
-        Some(SFTP_VIEW_CONTEXT),
-    ));
+    // 领域注册的键位（例如 SFTP 视图的粘贴）。
+    keybindings.extend(app_kit::domain_keybindings(cx));
 
     keybindings
 }
@@ -1107,12 +1101,8 @@ fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
         None,
         ToggleConnectionSidebar,
     ));
-    #[cfg(feature = "shell")]
-    keybindings.push(KeyBinding::new(
-        default_shortcut("cmd-v", "ctrl-v"),
-        SftpPasteUpload,
-        Some(SFTP_VIEW_CONTEXT),
-    ));
+    // 领域注册的键位（例如 SFTP 视图的粘贴）。
+    keybindings.extend(app_kit::domain_keybindings(cx));
     keybindings.extend(rebind_keybindings(
         cx,
         action_id::WINDOW_TOGGLE_FULLSCREEN,

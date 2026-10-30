@@ -4,6 +4,7 @@
 //! 不依赖 `db`、`db_view`、`terminal_view` 等具体领域 crate。
 
 mod domain;
+mod file_open;
 mod form;
 mod home;
 mod identity;
@@ -15,6 +16,7 @@ mod shell_extras;
 mod tab_restore;
 
 pub use domain::{Domain, DomainId};
+pub use file_open::FileOpenHandler;
 pub use form::{ConnectionFormProvider, ConnectionFormRequest, ConnectionSavedCallback};
 pub use home::{HomeContext, NotifyLevel, TabHost};
 pub use identity::{AppIdentity, Product, ProductFeatures};

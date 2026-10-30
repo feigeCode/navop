@@ -29,7 +29,9 @@ sftp_view.workspace = true
 terminal.workspace = true
 terminal_view.workspace = true
 ssh.workspace = true
+ssh_form.workspace = true
 tracing.workspace = true
+sha2.workspace = true
 zeroize.workspace = true
 tokio = { workspace = true }
 

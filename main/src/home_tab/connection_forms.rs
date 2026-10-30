@@ -94,47 +94,17 @@ impl HomePage {
         );
     }
 
-    #[cfg(not(feature = "shell"))]
-    pub(crate) fn show_save_temporary_connection_form(
-        &mut self,
-        _connection: StoredConnection,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) {
-    }
-
-    #[cfg(feature = "shell")]
+    /// 把临时连接保存为正式连接：表单由 shell 领域提供。
     pub(crate) fn show_save_temporary_connection_form(
         &mut self,
         connection: StoredConnection,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.is_master_key_ready_for_new_connection() {
+        let Some(extras) = app_kit::registry().shell_extras() else {
             return;
-        }
-
-        let config = SshFormWindowConfig {
-            initial_workspace_id: None,
-            editing_connection: None,
-            initial_connection: Some(connection),
-            on_saved: Some(Arc::new(|saved, _action, window, cx| {
-                window.push_notification(
-                    t!("Home.save_as_connection_done", name = saved.name.clone()).to_string(),
-                    cx,
-                );
-            })),
-            workspaces: self.workspaces.clone(),
-            teams: get_cached_team_options(cx),
         };
-
-        open_reusable_popup_window(
-            PopupWindowOptions::new(t!("Home.save_as_connection").to_string()).size(820.0, 750.0),
-            connection_form_reuse_key("ssh-save-temporary", None),
-            move |window, cx| cx.new(|cx| SshFormWindow::new(config.clone(), window, cx)),
-            Some(window),
-            cx,
-        );
+        let _ = extras.save_temporary_connection(connection, window, cx);
     }
 }
 
