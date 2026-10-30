@@ -141,6 +141,9 @@ pub(crate) struct ShortcutDefinition {
 }
 
 const BLOCK_CONTEXT: Option<&str> = Some("BlockEditor");
+/// 编辑器根节点的 key context：无 context 的绑定在 gpui 里优先级最高，
+/// Esc 若绑成全局会压过对话框/列表自己的 Cancel，所以只在编辑器内生效。
+pub(crate) const EDITOR_CONTEXT: &str = "MarkdownEditor";
 const SELECT_ALL_ID: &str = "select_all";
 const LEGACY_SELECT_ALL_IDS: &[&str] = &[
     "select_all_source_text",
@@ -485,7 +488,7 @@ const SHORTCUT_DEFINITIONS: &[ShortcutDefinition] = &[
         command: ShortcutCommand::DismissTransientUi,
         id: "dismiss_transient_ui",
         default_keys: &["escape"],
-        context: None,
+        context: Some(EDITOR_CONTEXT),
     },
     ShortcutDefinition {
         command: ShortcutCommand::ToggleViewMode,

@@ -350,7 +350,7 @@ macro_rules! command_list {
                 "view.dismiss_transient_ui",
                 "Dismiss Transient UI",
                 &["escape"],
-                GLOBAL_CONTEXT,
+                Some("MarkdownEditor"),
                 DismissTransientUi
             ),
             (
