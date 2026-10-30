@@ -1440,3 +1440,58 @@ shell    = ["extension-runtime/remote-desktop", "navop_runtime/sftp", "dep:termi
 设置容器、账户、AI、笔记、团队、扩展、凭据库、云同步）保持共享，领域实现留在家门
 crate 或按 feature 排除。后续若要进一步拆 crate，可把 `home_tabs`/`home_strategy`
 的领域分支整体搬进 `shell_domain`/`data_domain`（现在由 cfg 隔离，迁移风险更低）。
+
+## 二十六、领域 UI 继续下沉：从「cfg 隔离」走向「注册表 + 领域钩子」（2026-10-30，第四批）
+
+§25 让产物依赖树完成了隔离，但 `main/src` 里仍留着大量 `#[cfg(feature = ...)]` 的领域
+UI（161 处）。本批把这些入口改造成「公共壳调注册表/领域钩子」，把实现搬进
+`shell_domain` / `data_domain`，cfg 数量降到 100 处、领域引用文件 21 → 13 个。
+
+### 26.1 新增/扩展的契约
+
+| 契约 | 位置 | 作用 |
+|---|---|---|
+| `TabIntent::{SessionLogs, KnownHosts, Terminal, ...}` | `domain_api` | 主页导航、本地终端菜单统一按意图打开标签页 |
+| `ShellExtras::wsl_distributions` / `refresh_wsl_distributions` | `domain_api::shell_extras` | 公共壳渲染本地终端菜单时查询 WSL 发行版，不再导入 `terminal` |
+| `ShellExtras::port_forwarding_runtime` | 同上 | 端口转发运行时由 `shell_domain` 持有，`HomeContext` 只读钩子 |
+| `ShellExtras::open_remote_desktop_fullscreen` / `launch_remote_desktop_external` | 同上 | 远程桌面全屏窗口与 Windows 系统客户端由领域实现 |
+| `ConnectionFormRequest` + `app_kit::connection_actions::open_form` | `domain_api` / `app_kit` | 通用表单宿主：任何连接类型都通过注册表构建表单 |
+| `WorkbenchTerminalProvider` | `ai_chat_view::workbench` | 工作台终端面板由 shell 领域注入，数据产品无终端面板 |
+| `HomeContext::{touch_connection_last_used, set_selected_connection}` | `domain_api::home` | 领域打开连接后回报宿主状态 |
+
+### 26.2 迁移落点
+
+| 原位置（`main/src`） | 去向 |
+|---|---|
+| 会话日志 / 已知主机导航 | `home_tab/navigation.rs` 改为 `registry().open_tab`，删除 `home_tabs::add_*_tab` 与 `KnownHostsPage` 兜底 |
+| 本地终端菜单与 WSL | 菜单只产出 `TerminalProfileDescriptor`；配置解析、WSL、自定义 profile 全在 `shell_domain::TerminalTabOpener` |
+| 连接打开策略（Ssh/Database/Redis/Mongo/Serial/Telnet/PortForwarding/RDP/VNC） | 删除 9 个策略与 2 个 extension 守卫实现，统一 `RegistryOpenStrategy` |
+| 导入窗口逐类型编辑器（SSH/DB/Redis/Mongo） | `connection_import_window/editor.rs` 改用 `open_form`，删除 `ImportEditorContext` 与 4 类编辑器 |
+| 资源工作台终端宿主（`resource_workbench_terminal.rs`） | `shell_domain::workbench_terminal`（`NativeTerminalHost` + `WorkbenchTerminalProvider`） |
+| 端口转发运行时 | `shell_domain::shell_extras` 持有，`HomePage` 字段删除 |
+| 远程桌面窗口 + mstsc 凭据（547 行） | `shell_domain::remote_desktop_window`（含 Windows mstsc 启动与凭据解码，9 个测试随之迁移） |
+
+### 26.3 验证（真实输出）
+
+| 命令 | 结果 |
+|---|---|
+| `cargo test -p main --lib` | 595 passed, 0 failed |
+| `cargo test -p shell_domain --lib` | 37 passed |
+| `cargo test -p app_kit / domain_api / data_domain` | 141 / 18 / 11 passed |
+| `cargo test -p main --test i18n_locale_keys_contract` | 1 passed |
+| `cargo check -p main --lib`（默认 both） | 0 error / 0 warning |
+| `cargo check -p main --lib --no-default-features --features "wasm-components,windows-native-rdp,shell-plugins,shell"` | 0 error / 0 warning |
+| `cargo check -p main --lib --no-default-features --features "wasm-components,windows-native-rdp,shell-plugins,database"` | 0 error / 0 warning |
+| `cargo build -p navop -p navop-shell -p navop-data` | 通过，无 rustc 警告 |
+| 依赖树互斥计数（shell 不含 db*/redis*/mongo*，data 不含 terminal*/sftp*/remote_desktop*/known_hosts*/port_forwarding_view） | 0 / 0 |
+| 临时 HOME 启动两个独立产品 | RUNNING_OK |
+
+### 26.4 仍未迁移（下一步）
+
+- `home/home_tabs.rs` 中标签复制对 `TerminalWorkspace` 的下转型、`duplicate_active_tab` 的终端分支。
+- `persistent_connection_sidebar` 的终端配色、`settings/appearance.rs` 的终端主题卡片
+  （属共享 UI 里的小块领域渲染，可继续用 cfg 或抽 `ShellExtras::terminal_palette`）。
+- `public_mcp_runtime` 的 terminal/redis/mongo 工具集实现（可搬进领域包的 MCP 注册函数）。
+- `file_open/recording.rs`（终端录制）与 `home_tab/encryption.rs`（主密钥门禁）的 shell 分支。
+- 之后的最终形态仍是 §24 的方案：把 HomePage 骨架抽成 `app_shell`，用 `HomeProfile` /
+  `HomeSection` 让每个产品装配自己的主页微调。

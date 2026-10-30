@@ -117,101 +117,66 @@ impl HomePage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let Some(extras) = app_kit::registry().shell_extras() else {
+            return;
+        };
+        // Windows 的 RDP 优先调用系统客户端（原生全屏体验）。
         #[cfg(target_os = "windows")]
-        {
-            if connection.connection_type == ConnectionType::Rdp {
-                if !self.ensure_master_key_ready_for_saved_connections(window, cx) {
-                    return;
-                }
-                let Some(connection) = resolve_connection_credentials(connection, window, cx)
-                else {
-                    return;
-                };
-                let params = match connection.to_remote_desktop_params() {
-                    Ok(params) => params,
-                    Err(error) => {
-                        tracing::warn!(
-                            connection_id = ?connection.id,
-                            ?error,
-                            "无法解析远程桌面连接参数"
-                        );
-                        window.push_notification(
-                            Notification::error(
-                                t!(
-                                    "Home.remote_desktop_parameters_invalid",
-                                    error = format!("{error:#}")
-                                )
-                                .to_string(),
-                            ),
-                            cx,
-                        );
-                        return;
-                    }
-                };
-
-                match crate::home::remote_desktop_window::launch_mstsc_fullscreen(&params) {
-                    Ok(()) => {
-                        self.selected_connection_id = connection.id;
-                        self.touch_connection_last_used(connection.id, cx);
-                        cx.notify();
-                    }
-                    Err(error) => {
-                        tracing::warn!(
-                            connection_id = ?connection.id,
-                            ?error,
-                            "无法启动 Windows 远程桌面客户端"
-                        );
-                        window.push_notification(
-                            Notification::error(
-                                t!(
-                                    "Home.external_program_launch_failed",
-                                    error = format!("{error:#}")
-                                )
-                                .to_string(),
-                            ),
-                            cx,
-                        );
-                    }
-                }
+        if connection.connection_type == ConnectionType::Rdp {
+            if !self.ensure_master_key_ready_for_saved_connections(window, cx) {
                 return;
             }
+            let Some(connection) = resolve_connection_credentials(connection, window, cx) else {
+                return;
+            };
+            match extras.launch_remote_desktop_external(&connection) {
+                Ok(()) => {
+                    self.selected_connection_id = connection.id;
+                    self.touch_connection_last_used(connection.id, cx);
+                    cx.notify();
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        connection_id = ?connection.id,
+                        "无法启动 Windows 远程桌面客户端: {error}"
+                    );
+                    window.push_notification(
+                        Notification::error(
+                            t!("Home.external_program_launch_failed", error = error).to_string(),
+                        ),
+                        cx,
+                    );
+                }
+            }
+            return;
         }
 
         if !self.ensure_master_key_ready_for_saved_connections(window, cx) {
             return;
         }
-
         let protocol = match connection.connection_type {
-            ConnectionType::Rdp => remote_desktop::RemoteDesktopProtocol::Rdp,
-            ConnectionType::Vnc => remote_desktop::RemoteDesktopProtocol::Vnc,
+            ConnectionType::Rdp => domain_api::RemoteProtocol::Rdp,
+            ConnectionType::Vnc => domain_api::RemoteProtocol::Vnc,
             _ => return,
+        };
+        let provider_protocol = match protocol {
+            domain_api::RemoteProtocol::Rdp => remote_desktop::RemoteDesktopProtocol::Rdp,
+            domain_api::RemoteProtocol::Vnc => remote_desktop::RemoteDesktopProtocol::Vnc,
         };
         let Some(connection) = resolve_connection_credentials(connection, window, cx) else {
             return;
         };
         self.selected_connection_id = connection.id;
         self.touch_connection_last_used(connection.id, cx);
+        let title = connection.name.clone();
         extension_runtime::remote_desktop_provider_install::run_with_remote_desktop_provider_guard(
             self,
             connection.clone(),
-            protocol,
+            provider_protocol,
             window,
             cx,
             move |_, _, cx| {
-                let Some(options) =
-                    crate::home::home_tabs::remote_desktop_options(&connection, protocol)
-                else {
-                    tracing::warn!(
-                        connection_id = ?connection.id,
-                        "无法解析远程桌面连接参数"
-                    );
-                    return;
-                };
-                crate::home::remote_desktop_window::open_remote_desktop_fullscreen_window(
-                    options,
-                    connection.name.clone(),
-                    cx,
-                );
+                extras.open_remote_desktop_fullscreen(&connection, protocol, title, cx);
             },
         );
         cx.notify();

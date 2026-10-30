@@ -12860,6 +12860,7 @@ dependencies = [
  "terminal_view",
  "tokio",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]

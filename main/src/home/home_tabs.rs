@@ -20,8 +20,6 @@ use one_core::tab_container::GlobalTabContainer;
 #[cfg(feature = "shell")]
 use one_core::tab_container::TabOpenMode;
 use one_core::tab_container::{TabContainer, TabItem};
-#[cfg(feature = "shell")]
-use remote_desktop::{RemoteDesktopConnectionOptions, RemoteDesktopProtocol};
 #[cfg(any(feature = "shell", test))]
 use rust_i18n::t;
 #[cfg(feature = "shell")]
@@ -564,20 +562,6 @@ impl HomePage {
         }
     }
 }
-
-#[cfg(feature = "shell")]
-pub(crate) fn remote_desktop_options(
-    conn: &StoredConnection,
-    protocol: RemoteDesktopProtocol,
-) -> Option<RemoteDesktopConnectionOptions> {
-    let mut params = conn.to_remote_desktop_params().ok()?;
-    params.protocol = match protocol {
-        RemoteDesktopProtocol::Rdp => one_core::storage::RemoteDesktopProtocol::Rdp,
-        RemoteDesktopProtocol::Vnc => one_core::storage::RemoteDesktopProtocol::Vnc,
-    };
-    Some(RemoteDesktopConnectionOptions::from_storage_params(params))
-}
-
 #[cfg(feature = "shell")]
 fn push_local_terminal_config_error<T>(
     window: &mut Window,

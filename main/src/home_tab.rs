@@ -44,7 +44,6 @@ use one_core::storage::{
 };
 use one_core::tab_container::{TabContainer, TabContent, TabContentEvent, TabOpenMode};
 use one_ui::{IconButton, IconButtonRole};
-#[cfg(feature = "shell")]
 use rust_i18n::t;
 #[cfg(feature = "shell")]
 use terminal_view::{SshFormWindow, SshFormWindowConfig};

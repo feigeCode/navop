@@ -360,3 +360,9 @@ LocalTerminal:
     zh-CN: 添加自定义终端
     zh-HK: 新增自訂終端
 
+
+RemoteDesktop:
+  fullscreen_exit_hint:
+    en: "Fullscreen mode. Press Esc to exit fullscreen."
+    zh-CN: "已进入全屏，按 Esc 退出全屏。"
+    zh-HK: "已進入全螢幕，按 Esc 退出全螢幕。"

@@ -8,6 +8,7 @@ rust_i18n::i18n!("locales", fallback = "en");
 mod connection_forms;
 mod connection_openers;
 mod lifecycle;
+mod remote_desktop_window;
 mod session_logs;
 mod settings;
 mod shell_extras;

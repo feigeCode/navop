@@ -80,8 +80,6 @@ fn remember_workspace_root(root: &std::path::Path, cx: &mut App) {
     });
 }
 
-#[cfg(feature = "shell")]
-
 /// 构建 AI 工作台标签页内容。
 pub(crate) fn build_ai_workbench_shell(
     scope: agent_runtime::AgentResourceScope,

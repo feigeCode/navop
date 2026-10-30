@@ -2,8 +2,9 @@ use std::sync::{Mutex, OnceLock};
 
 use std::sync::Arc;
 
-use domain_api::{PortForwardingRuntime, ShellExtras, WslDistributionInfo};
+use domain_api::{PortForwardingRuntime, RemoteProtocol, ShellExtras, WslDistributionInfo};
 use gpui::App;
+use one_core::storage::StoredConnection;
 
 static PORT_FORWARDING: OnceLock<Arc<tokio::sync::Mutex<PortForwardingRuntime>>> = OnceLock::new();
 
@@ -25,6 +26,41 @@ impl ShellExtras for ShellExtrasImpl {
 
     fn refresh_wsl_distributions(&self, cx: &mut App) {
         detect(cx);
+    }
+
+    fn open_remote_desktop_fullscreen(
+        &self,
+        connection: &StoredConnection,
+        protocol: RemoteProtocol,
+        title: String,
+        cx: &mut App,
+    ) -> bool {
+        let Ok(mut params) = connection.to_remote_desktop_params() else {
+            return false;
+        };
+        params.protocol = match protocol {
+            RemoteProtocol::Rdp => one_core::storage::RemoteDesktopProtocol::Rdp,
+            RemoteProtocol::Vnc => one_core::storage::RemoteDesktopProtocol::Vnc,
+        };
+        let options = remote_desktop::RemoteDesktopConnectionOptions::from_storage_params(params);
+        crate::remote_desktop_window::open_remote_desktop_fullscreen_window(options, title, cx);
+        true
+    }
+
+    fn launch_remote_desktop_external(&self, connection: &StoredConnection) -> Result<(), String> {
+        let params = connection
+            .to_remote_desktop_params()
+            .map_err(|error| format!("{error:#}"))?;
+        #[cfg(target_os = "windows")]
+        {
+            crate::remote_desktop_window::launch_mstsc_fullscreen(&params)
+                .map_err(|error| format!("{error:#}"))
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = params;
+            Err("当前平台不支持外部远程桌面客户端".to_string())
+        }
     }
 
     fn port_forwarding_runtime(&self) -> Option<Arc<tokio::sync::Mutex<PortForwardingRuntime>>> {

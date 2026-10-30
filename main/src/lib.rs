@@ -14,6 +14,7 @@ mod connection_type_menu;
 mod connection_visuals;
 mod credential_vault;
 #[cfg(feature = "shell-plugins")]
+#[cfg(feature = "shell")]
 mod dev_extension_registry;
 mod env_file;
 mod extension_update;
@@ -36,7 +37,6 @@ mod personal_sync_runtime_tests;
 mod personal_sync_status;
 mod product;
 mod public_mcp_runtime;
-#[cfg(feature = "shell")]
 mod screenshot_safe;
 mod setting_tab;
 mod settings;

@@ -45,7 +45,7 @@ pub(crate) fn mstsc_launch_plan(host: &str, port: u16) -> MstscLaunchPlan {
 }
 
 #[cfg(target_os = "windows")]
-pub(crate) fn launch_mstsc_fullscreen(params: &RemoteDesktopParams) -> anyhow::Result<()> {
+pub(super) fn launch_mstsc_fullscreen(params: &RemoteDesktopParams) -> anyhow::Result<()> {
     let plan = mstsc_launch_plan(&params.host, params.port);
     let credentials = mstsc_credentials(MstscCredentialInput {
         host: &params.host,
@@ -73,10 +73,10 @@ fn remote_desktop_window_options(title: String) -> PopupWindowOptions {
         .min_height(MIN_WINDOW_HEIGHT)
         .fullscreen(true)
         .hide_titlebar_when_fullscreen(true)
-        .fullscreen_hint(t!("Connection.fullscreen_exit_hint").to_string())
+        .fullscreen_hint(t!("RemoteDesktop.fullscreen_exit_hint").to_string())
 }
 
-pub(crate) fn open_remote_desktop_fullscreen_window(
+pub(super) fn open_remote_desktop_fullscreen_window(
     options: RemoteDesktopConnectionOptions,
     title: String,
     cx: &mut gpui::App,
