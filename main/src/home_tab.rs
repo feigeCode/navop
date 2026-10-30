@@ -276,7 +276,6 @@ mod content;
 mod data;
 pub(crate) mod domain_host;
 mod encryption;
-mod forwarding;
 mod grid;
 mod home_layout;
 mod home_shortcuts;

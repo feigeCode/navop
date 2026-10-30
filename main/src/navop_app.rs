@@ -2395,51 +2395,6 @@ mod tests {
     }
 
     #[test]
-    fn mongodb_open_strategy_guards_the_saved_native_driver_variant() {
-        let source = include_str!("home/home_strategy.rs");
-        let strategy = source
-            .find("impl ConnectionOpenStrategy for MongoOpenStrategy")
-            .unwrap();
-        let body = &source[strategy..];
-        let requirement = body
-            .find("mongodb_driver_id(&connection)")
-            .expect("MongoDB saved driver requirement");
-        let guard = body
-            .find("open_native_driver_connection_with_guard")
-            .expect("native driver install guard");
-        let open = body
-            .find("open_mongodb_tab_with_mode")
-            .expect("MongoDB tab open callback");
-
-        assert!(requirement < guard);
-        assert!(guard < open);
-    }
-
-    #[test]
-    fn redis_open_strategy_uses_the_embedded_backend_without_driver_guard() {
-        let source = include_str!("home/home_strategy.rs");
-        let strategy = source
-            .find("impl ConnectionOpenStrategy for RedisOpenStrategy")
-            .unwrap();
-        let rest = &source[strategy..];
-        let end = rest
-            .find("struct MongoOpenStrategy")
-            .expect("next strategy boundary");
-        let body = &rest[..end];
-
-        body.find("open_redis_tab_with_mode")
-            .expect("Redis tab open callback");
-        assert!(
-            !body.contains("open_native_driver_connection_with_guard"),
-            "builtin Redis must not require an installed native driver"
-        );
-        assert!(
-            !body.contains("DEFAULT_REDIS_DRIVER_ID"),
-            "builtin Redis must not reference the IPC sidecar driver id"
-        );
-    }
-
-    #[test]
     fn native_data_driver_factories_only_keep_mongodb() {
         let source = include_str!("navop_app.rs");
         let init = source.find("fn init_native_data_driver_factories").unwrap();

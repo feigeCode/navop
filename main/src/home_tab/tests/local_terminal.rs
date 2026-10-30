@@ -13,7 +13,9 @@ fn local_terminal_tabs_open_through_the_domain_registry() {
 
     // 公共壳不再自己构造终端视图：本地终端由 shell 领域注册的 TabOpener 打开。
     assert!(opener.contains("let intent = TabIntent::Terminal { profile };"));
-    assert!(opener.contains("app_kit::registry().open_tab(&intent, TabOpenMode::Activate, self, window, cx)"));
+    assert!(opener.contains(
+        "app_kit::registry().open_tab(&intent, TabOpenMode::Activate, self, window, cx)"
+    ));
     assert!(!opener.contains("TerminalWorkspace::new_with_index"));
     assert!(!opener.contains("TerminalView::new"));
 }

@@ -4,12 +4,8 @@ use gpui::{
     App, AppContext, AsyncApp, ClickEvent, Context, ParentElement, SharedString, Styled, Window,
 };
 use gpui_component::{WindowExt, notification::Notification};
-#[cfg(feature = "shell")]
-use one_core::storage::PreferredOpenMode;
 use one_core::storage::{ConnectionType, ExtensionConnectionParams, StoredConnection, Workspace};
 use one_core::tab_container::{TabItem, TabOpenMode};
-#[cfg(feature = "shell")]
-use remote_desktop::RemoteDesktopProtocol;
 use std::sync::Arc;
 
 pub(crate) trait ConnectionOpenStrategy {
@@ -24,47 +20,39 @@ pub(crate) trait ConnectionOpenStrategy {
 
 pub(crate) fn build_connection_open_strategy(
     connection: StoredConnection,
-    workspace: Option<Workspace>,
+    _workspace: Option<Workspace>,
 ) -> Box<dyn ConnectionOpenStrategy> {
-    let _ = &workspace;
+    // 领域连接不再由公共壳按类型分派：扩展连接仍走扩展运行时，
+    // 其余类型交给对应产品注册的 `ConnectionOpener`。
     match connection.connection_type {
-        #[cfg(feature = "shell")]
-        ConnectionType::SshSftp => Box::new(SshOpenStrategy { connection }),
-        #[cfg(feature = "database")]
-        ConnectionType::Database => Box::new(DatabaseOpenStrategy {
-            connection,
-            workspace,
-        }),
-        #[cfg(feature = "database")]
-        ConnectionType::Redis => Box::new(RedisOpenStrategy {
-            connection,
-            workspace,
-        }),
-        #[cfg(feature = "database")]
-        ConnectionType::MongoDB => Box::new(MongoOpenStrategy {
-            connection,
-            workspace,
-        }),
         ConnectionType::Mqtt => Box::new(MiddlewareExtensionOpenStrategy { connection }),
-        #[cfg(feature = "shell")]
-        ConnectionType::Serial => Box::new(SerialOpenStrategy { connection }),
-        #[cfg(feature = "shell")]
-        ConnectionType::Telnet => Box::new(TelnetOpenStrategy { connection }),
-        #[cfg(feature = "shell")]
-        ConnectionType::Ftp => Box::new(FtpOpenStrategy { connection }),
-        ConnectionType::PortForwarding => Box::new(PortForwardingOpenStrategy { connection }),
-        #[cfg(feature = "shell")]
-        ConnectionType::Rdp => Box::new(RemoteDesktopOpenStrategy {
-            connection,
-            protocol: RemoteDesktopProtocol::Rdp,
-        }),
-        #[cfg(feature = "shell")]
-        ConnectionType::Vnc => Box::new(RemoteDesktopOpenStrategy {
-            connection,
-            protocol: RemoteDesktopProtocol::Vnc,
-        }),
         ConnectionType::Extension => Box::new(ExtensionOpenStrategy { connection }),
-        _ => Box::new(NoopOpenStrategy),
+        _ => Box::new(RegistryOpenStrategy { connection }),
+    }
+}
+
+/// 通过领域注册表打开连接；当前产品没有对应领域时给出明确提示。
+struct RegistryOpenStrategy {
+    connection: StoredConnection,
+}
+
+impl ConnectionOpenStrategy for RegistryOpenStrategy {
+    fn open(
+        self: Box<Self>,
+        home: &mut HomePage,
+        mode: TabOpenMode,
+        window: &mut Window,
+        cx: &mut Context<HomePage>,
+    ) {
+        if !app_kit::registry().open_connection(&self.connection, mode, home, window, cx) {
+            window.push_notification(
+                format!(
+                    "当前产品不支持打开该连接：{}（{}）",
+                    self.connection.name, self.connection.connection_type
+                ),
+                cx,
+            );
+        }
     }
 }
 
@@ -582,349 +570,5 @@ fn open_extension_connection_now(
         cx,
     ) {
         window.push_notification(format!("Failed to open extension connection: {error}"), cx);
-    }
-}
-
-#[cfg(feature = "shell")]
-struct SshOpenStrategy {
-    connection: StoredConnection,
-}
-
-#[cfg(feature = "shell")]
-impl ConnectionOpenStrategy for SshOpenStrategy {
-    fn open(
-        self: Box<Self>,
-        home: &mut HomePage,
-        mode: TabOpenMode,
-        window: &mut Window,
-        cx: &mut Context<HomePage>,
-    ) {
-        // SSH 条目同时具备终端与双栏文件视图两种形态，按打开方式偏好分流
-        if self.connection.effective_open_mode() == PreferredOpenMode::DualPane {
-            home.open_sftp_view(self.connection, window, cx);
-        } else {
-            home.open_ssh_terminal_with_mode(self.connection, mode, window, cx);
-        }
-    }
-}
-
-/// 独立 FTP 连接没有终端形态，固定打开双栏文件视图（内部按协议走 FTP 客户端）。
-#[cfg(feature = "shell")]
-struct FtpOpenStrategy {
-    connection: StoredConnection,
-}
-
-#[cfg(feature = "shell")]
-impl ConnectionOpenStrategy for FtpOpenStrategy {
-    fn open(
-        self: Box<Self>,
-        home: &mut HomePage,
-        _mode: TabOpenMode,
-        window: &mut Window,
-        cx: &mut Context<HomePage>,
-    ) {
-        home.open_sftp_view(self.connection, window, cx);
-    }
-}
-
-#[cfg(feature = "database")]
-struct DatabaseOpenStrategy {
-    connection: StoredConnection,
-    workspace: Option<Workspace>,
-}
-
-#[cfg(feature = "database")]
-impl ConnectionOpenStrategy for DatabaseOpenStrategy {
-    fn open(
-        self: Box<Self>,
-        home: &mut HomePage,
-        mode: TabOpenMode,
-        window: &mut Window,
-        cx: &mut Context<HomePage>,
-    ) {
-        let DatabaseOpenStrategy {
-            connection,
-            workspace,
-        } = *self;
-        extension_runtime::database_driver_install::open_database_connection_with_driver_guard(
-            home, connection, workspace, mode, window, cx,
-        );
-    }
-}
-
-#[cfg(feature = "shell")]
-impl extension_runtime::remote_desktop_provider_install::RemoteDesktopConnectionOpener
-    for HomePage
-{
-    fn open_remote_desktop_connection(
-        &mut self,
-        connection: &StoredConnection,
-        protocol: RemoteDesktopProtocol,
-        mode: TabOpenMode,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.open_remote_desktop_with_mode(connection.clone(), protocol, mode, window, cx);
-    }
-}
-
-#[cfg(feature = "database")]
-impl extension_runtime::database_driver_install::DatabaseDriverConnectionOpener for HomePage {
-    fn open_database_connection(
-        &mut self,
-        connection: &StoredConnection,
-        workspace: Option<Workspace>,
-        mode: TabOpenMode,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.add_item_to_tab_with_mode(connection, workspace, mode, window, cx);
-    }
-}
-
-#[cfg(feature = "database")]
-struct RedisOpenStrategy {
-    connection: StoredConnection,
-    workspace: Option<Workspace>,
-}
-
-#[cfg(feature = "database")]
-impl ConnectionOpenStrategy for RedisOpenStrategy {
-    fn open(
-        self: Box<Self>,
-        home: &mut HomePage,
-        mode: TabOpenMode,
-        window: &mut Window,
-        cx: &mut Context<HomePage>,
-    ) {
-        let RedisOpenStrategy {
-            connection,
-            workspace,
-        } = *self;
-        home.open_redis_tab_with_mode(connection, workspace, mode, window, cx);
-    }
-}
-
-#[cfg(feature = "database")]
-struct MongoOpenStrategy {
-    connection: StoredConnection,
-    workspace: Option<Workspace>,
-}
-
-#[cfg(feature = "database")]
-fn mongodb_driver_id(connection: &StoredConnection) -> String {
-    connection
-        .to_mongodb_params()
-        .map(|params| params.driver_variant.driver_id().to_string())
-        .unwrap_or_else(|_| mongodb_runtime::DEFAULT_MONGODB_MODERN_DRIVER_ID.to_string())
-}
-
-#[cfg(feature = "database")]
-impl ConnectionOpenStrategy for MongoOpenStrategy {
-    fn open(
-        self: Box<Self>,
-        home: &mut HomePage,
-        mode: TabOpenMode,
-        window: &mut Window,
-        cx: &mut Context<HomePage>,
-    ) {
-        let MongoOpenStrategy {
-            connection,
-            workspace,
-        } = *self;
-        let connection_name = connection.name.clone();
-        let driver_id = mongodb_driver_id(&connection);
-        let requirement = extension_runtime::database_driver_install::required_native_driver(
-            "mongodb",
-            extension_runtime::database_driver_install::NativeDriverBackend::Ipc { driver_id },
-        );
-        extension_runtime::database_driver_install::open_native_driver_connection_with_guard(
-            home,
-            requirement,
-            connection_name,
-            window,
-            cx,
-            move |home, window, cx| {
-                home.open_mongodb_tab_with_mode(connection, workspace, mode, window, cx);
-            },
-        );
-    }
-}
-
-struct NoopOpenStrategy;
-
-#[cfg(feature = "shell")]
-struct SerialOpenStrategy {
-    connection: StoredConnection,
-}
-
-#[cfg(feature = "shell")]
-impl ConnectionOpenStrategy for SerialOpenStrategy {
-    fn open(
-        self: Box<Self>,
-        home: &mut HomePage,
-        mode: TabOpenMode,
-        window: &mut Window,
-        cx: &mut Context<HomePage>,
-    ) {
-        home.open_serial_terminal_with_mode(self.connection, mode, window, cx);
-    }
-}
-
-#[cfg(feature = "shell")]
-struct TelnetOpenStrategy {
-    connection: StoredConnection,
-}
-
-#[cfg(feature = "shell")]
-impl ConnectionOpenStrategy for TelnetOpenStrategy {
-    fn open(
-        self: Box<Self>,
-        home: &mut HomePage,
-        mode: TabOpenMode,
-        window: &mut Window,
-        cx: &mut Context<HomePage>,
-    ) {
-        home.open_telnet_terminal_with_mode(self.connection, mode, window, cx);
-    }
-}
-
-struct PortForwardingOpenStrategy {
-    connection: StoredConnection,
-}
-
-impl ConnectionOpenStrategy for PortForwardingOpenStrategy {
-    fn open(
-        self: Box<Self>,
-        home: &mut HomePage,
-        _mode: TabOpenMode,
-        window: &mut Window,
-        cx: &mut Context<HomePage>,
-    ) {
-        home.open_port_forwarding_tab(self.connection, _mode, window, cx);
-    }
-}
-
-#[cfg(feature = "shell")]
-struct RemoteDesktopOpenStrategy {
-    connection: StoredConnection,
-    protocol: RemoteDesktopProtocol,
-}
-
-#[cfg(feature = "shell")]
-impl ConnectionOpenStrategy for RemoteDesktopOpenStrategy {
-    fn open(
-        self: Box<Self>,
-        home: &mut HomePage,
-        mode: TabOpenMode,
-        window: &mut Window,
-        cx: &mut Context<HomePage>,
-    ) {
-        let RemoteDesktopOpenStrategy {
-            connection,
-            protocol,
-        } = *self;
-        // 双击等常规打开一律走 tab；独立全屏窗口仅保留在连接的右键菜单里
-        // （Connection.open_in_fullscreen_window）。
-        extension_runtime::remote_desktop_provider_install::open_remote_desktop_connection_with_provider_guard(
-            home, connection, protocol, mode, window, cx,
-        );
-    }
-}
-
-impl ConnectionOpenStrategy for NoopOpenStrategy {
-    fn open(
-        self: Box<Self>,
-        _home: &mut HomePage,
-        _mode: TabOpenMode,
-        _window: &mut Window,
-        _cx: &mut Context<HomePage>,
-    ) {
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::mongodb_driver_id;
-    use one_core::storage::{MongoDBParams, MongoDriverVariant, StoredConnection};
-
-    #[test]
-    fn remote_desktop_double_click_opens_in_a_tab() {
-        let source = include_str!("home_strategy.rs").replace("\r\n", "\n");
-        let start = source
-            .find("impl ConnectionOpenStrategy for RemoteDesktopOpenStrategy")
-            .expect("remote desktop open strategy");
-        let end = source[start..]
-            .find("impl ConnectionOpenStrategy for NoopOpenStrategy")
-            .map(|offset| start + offset)
-            .expect("next strategy");
-        let strategy = &source[start..end];
-
-        assert!(
-            strategy.contains("open_remote_desktop_connection_with_provider_guard("),
-            "double-click must open the remote desktop in a tab"
-        );
-        assert!(
-            !strategy.contains("open_remote_desktop_fullscreen_window"),
-            "the fullscreen window must stay behind the context-menu action"
-        );
-    }
-
-    #[test]
-    fn mongodb_driver_id_follows_the_saved_variant() {
-        let connection = StoredConnection::new_mongodb(
-            "legacy mongo".to_string(),
-            MongoDBParams {
-                driver_variant: MongoDriverVariant::Legacy,
-                connection_string: String::new(),
-                host: "127.0.0.1".to_string(),
-                port: Some(27017),
-                database: None,
-                username: None,
-                password: None,
-                credential_reference: None,
-                auth_source: None,
-                replica_set: None,
-                read_preference: None,
-                use_srv_record: false,
-                direct_connection: false,
-                use_tls: false,
-                connect_timeout_seconds: None,
-                application_name: None,
-                ssh_tunnel: None,
-            },
-            None,
-        );
-
-        assert_eq!("mongodb-legacy", mongodb_driver_id(&connection));
-    }
-
-    #[test]
-    fn mongodb_driver_id_supports_the_mongodb_3_2_variant() {
-        let connection = StoredConnection::new_mongodb(
-            "mongo 3.2".to_string(),
-            MongoDBParams {
-                driver_variant: MongoDriverVariant::Legacy32,
-                connection_string: String::new(),
-                host: "127.0.0.1".to_string(),
-                port: Some(27017),
-                database: None,
-                username: None,
-                password: None,
-                credential_reference: None,
-                auth_source: None,
-                replica_set: None,
-                read_preference: None,
-                use_srv_record: false,
-                direct_connection: false,
-                use_tls: false,
-                connect_timeout_seconds: None,
-                application_name: None,
-                ssh_tunnel: None,
-            },
-            None,
-        );
-
-        assert_eq!("mongodb-legacy-3-2", mongodb_driver_id(&connection));
     }
 }

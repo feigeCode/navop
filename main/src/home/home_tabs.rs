@@ -8,16 +8,18 @@ use crate::setting_tab::SettingsPanel;
 #[cfg(feature = "shell")]
 use domain_api::{TabIntent, TerminalProfileDescriptor};
 use gpui::{App, AppContext, Context, Entity, Window};
+#[cfg(feature = "shell")]
 use gpui_component::{WindowExt, notification::Notification};
 use json_view::JsonFormatterView;
 use notes::NotesView;
 use one_core::license::Feature;
+#[cfg(feature = "shell")]
 use one_core::storage::StoredConnection;
-#[cfg(any(feature = "database", test))]
-use one_core::storage::Workspace;
 use one_core::tab_actions::next_duplicate_tab_index;
 use one_core::tab_container::GlobalTabContainer;
-use one_core::tab_container::{TabContainer, TabItem, TabOpenMode};
+#[cfg(feature = "shell")]
+use one_core::tab_container::TabOpenMode;
+use one_core::tab_container::{TabContainer, TabItem};
 #[cfg(feature = "shell")]
 use remote_desktop::{RemoteDesktopConnectionOptions, RemoteDesktopProtocol};
 #[cfg(any(feature = "shell", test))]
@@ -275,51 +277,6 @@ impl HomePage {
         });
     }
 
-    #[cfg(feature = "shell")]
-    pub(crate) fn open_remote_desktop_with_mode(
-        &mut self,
-        conn: StoredConnection,
-        protocol: RemoteDesktopProtocol,
-        mode: TabOpenMode,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let _ = protocol;
-        if !app_kit::registry().open_connection(&conn, mode, self, window, cx) {
-            notify_unsupported(&conn, window, cx);
-        }
-    }
-
-    #[cfg(feature = "database")]
-    pub(crate) fn open_redis_tab_with_mode(
-        &mut self,
-        conn: StoredConnection,
-        workspace: Option<Workspace>,
-        mode: TabOpenMode,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let _ = workspace;
-        if !app_kit::registry().open_connection(&conn, mode, self, window, cx) {
-            notify_unsupported(&conn, window, cx);
-        }
-    }
-
-    #[cfg(feature = "database")]
-    pub(crate) fn open_mongodb_tab_with_mode(
-        &mut self,
-        conn: StoredConnection,
-        workspace: Option<Workspace>,
-        mode: TabOpenMode,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let _ = workspace;
-        if !app_kit::registry().open_connection(&conn, mode, self, window, cx) {
-            notify_unsupported(&conn, window, cx);
-        }
-    }
-
     pub(crate) fn add_settings_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let tab_container = self.active_tab_container(cx);
         window.defer(cx, move |window, cx| {
@@ -507,21 +464,6 @@ impl HomePage {
         }
     }
 
-    #[cfg(feature = "database")]
-    pub(crate) fn add_item_to_tab_with_mode(
-        &mut self,
-        conn: &StoredConnection,
-        workspace: Option<Workspace>,
-        mode: TabOpenMode,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let _ = workspace;
-        if !app_kit::registry().open_connection(conn, mode, self, window, cx) {
-            notify_unsupported(conn, window, cx);
-        }
-    }
-
     /// 关闭当前活动标签（pinned tab 不支持通过快捷键关闭）
     pub(crate) fn close_active_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let tab_container = self.active_tab_container(cx);
@@ -648,7 +590,7 @@ fn push_local_terminal_config_error<T>(
     );
 }
 
-#[cfg(any(feature = "database", feature = "shell"))]
+#[cfg(feature = "shell")]
 
 /// 当前产品没有注册该连接类型时给出明确提示，而不是静默失败。
 fn notify_unsupported(conn: &StoredConnection, window: &mut Window, cx: &mut gpui::App) {

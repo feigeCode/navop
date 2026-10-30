@@ -8,9 +8,9 @@ rust_i18n::i18n!("locales", fallback = "en");
 mod connection_forms;
 mod connection_openers;
 mod lifecycle;
-mod shell_extras;
 mod session_logs;
 mod settings;
+mod shell_extras;
 mod tab_restore;
 
 use connection_forms::ShellConnectionFormProvider;
@@ -240,12 +240,7 @@ impl TabOpener for TerminalTabOpener {
                             .find(|profile| profile.id == id)
                     });
                     let Some(custom) = custom else {
-                        home.notify(
-                            NotifyLevel::Error,
-                            "自定义本地终端配置不存在",
-                            window,
-                            cx,
-                        );
+                        home.notify(NotifyLevel::Error, "自定义本地终端配置不存在", window, cx);
                         return false;
                     };
                     terminal::local_config_from_custom_profile(custom, None)
@@ -260,9 +255,11 @@ impl TabOpener for TerminalTabOpener {
                         None,
                     ),
                 },
-                kind => {
-                    local_config_from_settings_with_profile(settings, local_profile_kind(kind), None)
-                }
+                kind => local_config_from_settings_with_profile(
+                    settings,
+                    local_profile_kind(kind),
+                    None,
+                ),
             },
         };
         let config = match config {
@@ -302,6 +299,10 @@ impl ConnectionOpener for SshConnectionOpener {
     ) -> bool {
         if connection.connection_type != ConnectionType::SshSftp {
             return false;
+        }
+        // SSH 条目同时具备终端与双栏文件视图两种形态，按打开方式偏好分流。
+        if connection.effective_open_mode() == one_core::storage::PreferredOpenMode::DualPane {
+            return self.open_sftp(connection, home, window, cx);
         }
         let connection_id = connection.id.unwrap_or(0);
         let timestamp = std::time::SystemTime::now()
