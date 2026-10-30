@@ -7,9 +7,6 @@ use one_core::storage::{
 };
 use public_mcp::registry::PublicMcpRegistry;
 use public_mcp::tools::ResourcePoolProvider;
-#[cfg(feature = "database")]
-use redis_view::GlobalRedisState;
-
 use serde_json::Value;
 use std::sync::Arc;
 use tool_runtime::{
@@ -22,22 +19,22 @@ pub(super) fn app_resource_pool_provider(cx: &App) -> Option<ResourcePoolProvide
     let terminal_registry = terminal_view::public_mcp::registry(cx);
     #[cfg(not(feature = "shell"))]
     let terminal_registry: Option<public_mcp::registry::PublicMcpRegistry> = None;
-    #[cfg(feature = "database")]
-    let redis_state = cx.try_global::<GlobalRedisState>().cloned();
-    #[cfg(not(feature = "database"))]
-    let redis_state: Option<()> = None;
-    if repo.is_none() && terminal_registry.is_none() && redis_state.is_none() {
+    // 活动连接由各领域注册提供（例如 Redis 运行时），公共壳只按 kind 合并。
+    let active_resources = app_kit::registry().active_resources(cx);
+    let active_redis_ids: Vec<String> = active_resources
+        .iter()
+        .filter(|resources| resources.kind == ResourceKind::Redis.as_str())
+        .flat_map(|resources| resources.connection_ids.clone())
+        .collect();
+    if repo.is_none() && terminal_registry.is_none() && active_redis_ids.is_empty() {
         return None;
     }
     Some(Arc::new(move || {
-        #[cfg(feature = "database")]
         let pool = resource_pool_from_sources(
             repo.as_ref(),
             terminal_registry.as_ref(),
-            redis_state.as_ref(),
+            &active_redis_ids,
         );
-        #[cfg(not(feature = "database"))]
-        let pool = resource_pool_from_sources(repo.as_ref(), terminal_registry.as_ref());
         match pool {
             Ok(pool) => Some(pool),
             Err(error) => {
@@ -54,11 +51,10 @@ fn connection_repository(cx: &App) -> Option<Arc<ConnectionRepository>> {
         .get::<ConnectionRepository>()
 }
 
-#[cfg(feature = "database")]
 fn resource_pool_from_sources(
     repo: Option<&Arc<ConnectionRepository>>,
     terminal_registry: Option<&PublicMcpRegistry>,
-    redis_state: Option<&GlobalRedisState>,
+    active_redis_ids: &[String],
 ) -> Result<ResourcePool> {
     // 一次读取连接级 AI 访问策略，随后对已保存连接、活动终端会话和活动 Redis
     // 连接统一收窄；公共 MCP 会话与内嵌 AI 共用同一份策略，避免出现绕过通道。
@@ -74,28 +70,8 @@ fn resource_pool_from_sources(
             .filter_map(|session| terminal_session_resource(session, &ai_access_levels))
             .fold(pool, ResourcePool::with_resource);
     }
-    if let Some(state) = redis_state {
-        pool = append_active_redis_resources(pool, state.connection_ids(), &ai_access_levels);
-    }
-    Ok(pool)
-}
-
-#[cfg(not(feature = "database"))]
-fn resource_pool_from_sources(
-    repo: Option<&Arc<ConnectionRepository>>,
-    terminal_registry: Option<&PublicMcpRegistry>,
-) -> Result<ResourcePool> {
-    let ai_access_levels = load_ai_access_levels(repo)?;
-    let mut pool = match repo {
-        Some(repo) => saved_connection_resource_pool(repo, &ai_access_levels)?,
-        None => ResourcePool::new(),
-    };
-    if let Some(registry) = terminal_registry {
-        pool = registry
-            .list_sessions()
-            .into_iter()
-            .filter_map(|session| terminal_session_resource(session, &ai_access_levels))
-            .fold(pool, ResourcePool::with_resource);
+    if !active_redis_ids.is_empty() {
+        pool = append_active_redis_resources(pool, active_redis_ids.to_vec(), &ai_access_levels);
     }
     Ok(pool)
 }

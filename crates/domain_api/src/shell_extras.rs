@@ -34,6 +34,11 @@ pub trait ShellExtras: Send + Sync {
 
     fn refresh_wsl_distributions(&self, _cx: &mut App) {}
 
+    /// 设置页的「终端主题」区块；返回 `None` 表示不渲染。
+    fn terminal_theme_section(&self, _cx: &App) -> Option<gpui::AnyElement> {
+        None
+    }
+
     /// 当前终端主题下的侧栏配色；返回 `None` 表示沿用应用主题。
     fn sidebar_colors(&self, _cx: &App) -> Option<SidebarColors> {
         None

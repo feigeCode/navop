@@ -24,7 +24,8 @@ pub mod connection_forms;
 pub mod mcp;
 pub mod settings;
 mod tab_restore;
-pub mod visuals;
+pub mod active_resources;
+mod visuals;
 
 pub struct DataDomain;
 
@@ -117,6 +118,9 @@ impl Domain for DataDomain {
     }
 
     fn register(&self, registry: &mut DomainRegistry) {
+        registry.register_active_resource_provider(Arc::new(
+            active_resources::RedisActiveResourceProvider,
+        ));
         registry.register_connection_opener(ConnectionType::Redis, Arc::new(RedisConnectionOpener));
         registry.register_connection_opener(
             ConnectionType::Database,

@@ -57,6 +57,7 @@ pub struct DomainRegistry {
     form_providers: Vec<Arc<dyn ConnectionFormProvider>>,
     settings_providers: Vec<Arc<dyn SettingsSectionProvider>>,
     file_open_handlers: Vec<Arc<dyn FileOpenHandler>>,
+    resource_providers: Vec<Arc<dyn crate::resources::ActiveResourceProvider>>,
     shell_extras: Option<Arc<dyn ShellExtras>>,
 }
 
@@ -100,6 +101,21 @@ impl DomainRegistry {
 
     pub fn shell_extras(&self) -> Option<Arc<dyn ShellExtras>> {
         self.shell_extras.clone()
+    }
+
+    pub fn register_active_resource_provider(
+        &mut self,
+        provider: Arc<dyn crate::resources::ActiveResourceProvider>,
+    ) {
+        self.resource_providers.push(provider);
+    }
+
+    /// 汇总所有领域当前的活动资源。
+    pub fn active_resources(&self, cx: &gpui::App) -> Vec<crate::resources::ActiveResourceIds> {
+        self.resource_providers
+            .iter()
+            .flat_map(|provider| provider.active_resources(cx))
+            .collect()
     }
 
     pub fn register_file_open_handler(&mut self, handler: Arc<dyn FileOpenHandler>) {

@@ -33,6 +33,10 @@ impl ShellExtras for ShellExtrasImpl {
         detect(cx);
     }
 
+    fn terminal_theme_section(&self, cx: &App) -> Option<gpui::AnyElement> {
+        Some(crate::terminal_theme_section::render(cx))
+    }
+
     fn sidebar_colors(&self, cx: &App) -> Option<domain_api::SidebarColors> {
         let colors = terminal_view::TerminalColors::from_application_theme(cx.theme());
         Some(domain_api::SidebarColors {

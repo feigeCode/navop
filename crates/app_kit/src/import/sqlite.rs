@@ -204,10 +204,15 @@ mod tests {
 
     impl TempDb {
         fn create(sql: &str) -> Self {
+            // 进程内计数器避免并行测试在同一微秒取到同名临时库（见 MEMORY 的 flaky 约定）。
+            static TEMP_DB_COUNTER: std::sync::atomic::AtomicUsize =
+                std::sync::atomic::AtomicUsize::new(0);
+            let counter = TEMP_DB_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let unique = format!(
-                "navop-import-{}-{}.db",
+                "navop-import-{}-{}-{}.db",
                 std::process::id(),
-                Utc::now().timestamp_nanos_opt().unwrap_or_default()
+                Utc::now().timestamp_nanos_opt().unwrap_or_default(),
+                counter
             );
             let path = std::env::temp_dir().join(unique);
             let conn = open(&path);

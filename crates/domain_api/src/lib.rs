@@ -11,6 +11,7 @@ mod identity;
 mod intent;
 mod kind;
 mod registry;
+mod resources;
 mod settings;
 mod shell_extras;
 mod tab_restore;
@@ -24,6 +25,7 @@ pub use intent::{
     DatabaseTabMode, RemoteProtocol, TabIntent, TerminalProfileDescriptor, TerminalProfileKind,
 };
 pub use kind::{ConnectionKindDescriptor, ConnectionKindGroup};
+pub use resources::{ActiveResourceIds, ActiveResourceProvider};
 pub use registry::{ConnectionOpener, DomainRegistry, TabOpener};
 pub use settings::SettingsSectionProvider;
 pub use shell_extras::{ShellExtras, SidebarColors, WslDistributionInfo};

@@ -9,6 +9,7 @@ mod connection_forms;
 mod connection_openers;
 mod lifecycle;
 mod recording;
+mod terminal_theme_section;
 mod remote_desktop_window;
 mod terminals;
 mod session_logs;
