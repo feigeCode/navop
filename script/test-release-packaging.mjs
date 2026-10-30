@@ -345,7 +345,7 @@ test("the embedded webview is an opt-in feature on every platform", () => {
   assert.match(htmlCodeBlock, /HtmlPreview\.webview_unavailable/);
   assert.match(
     mainCargo,
-    /^default = \["wasm-components", "windows-native-rdp", "shell-plugins"\]$/m,
+    /^default = \["wasm-components", "windows-native-rdp", "shell-plugins", "database", "shell"\]$/m,
   );
   assert.doesNotMatch(mainCargo, /default = \[[^\]]*embedded-webview/);
   assert.match(
@@ -1420,7 +1420,7 @@ test("Rust workflows share one cache strategy without archiving target", () => {
 });
 
 test("application updates prefer navop while accepting legacy package names", () => {
-  const install = read("main/src/update/install.rs");
+  const install = read("crates/app_kit/src/update/install.rs");
 
   assert.match(install, /\["navop\.exe", "onetcli\.exe"\]/);
   assert.match(install, /find_file_named\(staging_dir, name\)/);
