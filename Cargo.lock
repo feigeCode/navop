@@ -12856,6 +12856,7 @@ dependencies = [
  "terminal_view",
  "tokio",
  "tracing",
+ "windows 0.62.2",
  "zeroize",
 ]
 
