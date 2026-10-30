@@ -12858,6 +12858,7 @@ dependencies = [
  "tempfile",
  "terminal",
  "terminal_view",
+ "tokio",
  "tracing",
 ]
 

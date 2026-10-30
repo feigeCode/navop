@@ -45,7 +45,6 @@ use one_core::storage::{
 use one_core::tab_container::{TabContainer, TabContent, TabContentEvent, TabOpenMode};
 use one_ui::{IconButton, IconButtonRole};
 #[cfg(feature = "shell")]
-use port_forwarding::PortForwardingRuntime;
 use rust_i18n::t;
 #[cfg(feature = "shell")]
 use terminal_view::{SshFormWindow, SshFormWindowConfig};
@@ -227,8 +226,6 @@ pub struct HomePage {
     /// 防止主密钥对话框被启动提示和用户点击重复打开。
     master_key_dialog_open: bool,
     team_permissions: TeamPermissionSnapshot,
-    #[cfg(feature = "shell")]
-    port_forwarding_runtime: Arc<tokio::sync::Mutex<PortForwardingRuntime>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

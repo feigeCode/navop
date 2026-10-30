@@ -115,12 +115,10 @@ impl HomeContext for HomePage {
     fn port_forwarding_runtime(
         &self,
     ) -> Option<Arc<tokio::sync::Mutex<domain_api::PortForwardingRuntime>>> {
-        #[cfg(feature = "shell")]
-        {
-            return Some(Arc::clone(&self.port_forwarding_runtime));
-        }
-        #[cfg(not(feature = "shell"))]
-        None
+        // 运行时由 shell 领域持有，公共壳只向注册表询问。
+        app_kit::registry()
+            .shell_extras()
+            .and_then(|extras| extras.port_forwarding_runtime())
     }
 
     fn notify(&mut self, level: NotifyLevel, message: &str, window: &mut Window, cx: &mut App) {

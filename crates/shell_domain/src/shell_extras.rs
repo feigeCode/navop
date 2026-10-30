@@ -1,7 +1,11 @@
 use std::sync::{Mutex, OnceLock};
 
-use domain_api::{ShellExtras, WslDistributionInfo};
+use std::sync::Arc;
+
+use domain_api::{PortForwardingRuntime, ShellExtras, WslDistributionInfo};
 use gpui::App;
+
+static PORT_FORWARDING: OnceLock<Arc<tokio::sync::Mutex<PortForwardingRuntime>>> = OnceLock::new();
 
 static WSL_DISTRIBUTIONS: OnceLock<Mutex<Option<Vec<WslDistributionInfo>>>> = OnceLock::new();
 
@@ -22,6 +26,17 @@ impl ShellExtras for ShellExtrasImpl {
     fn refresh_wsl_distributions(&self, cx: &mut App) {
         detect(cx);
     }
+
+    fn port_forwarding_runtime(&self) -> Option<Arc<tokio::sync::Mutex<PortForwardingRuntime>>> {
+        Some(port_forwarding_runtime())
+    }
+}
+
+/// 端口转发运行时：由 shell 领域持有，连接打开器与主页共享同一份状态。
+pub(crate) fn port_forwarding_runtime() -> Arc<tokio::sync::Mutex<PortForwardingRuntime>> {
+    PORT_FORWARDING
+        .get_or_init(|| Arc::new(tokio::sync::Mutex::new(PortForwardingRuntime::new())))
+        .clone()
 }
 
 pub(crate) fn init(cx: &mut App) {
