@@ -4,9 +4,10 @@ version = "0.22.0"
 publish.workspace = true
 edition.workspace = true
 
-[[bin]]
-name = "navop"
-path = "src/main.rs"
+[lib]
+name = "navop_app"
+path = "src/lib.rs"
+
 
 [dependencies]
 one-assets = { workspace = true }
@@ -19,7 +20,6 @@ async-trait = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-semver = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "net"] }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -34,8 +34,8 @@ uuid = { workspace = true }
 dirs = {workspace = true}
 futures = { workspace = true }
 smol = { workspace = true }
-db_view = { workspace = true }
-extension-runtime = { workspace = true, features = ["wasm-components"] }
+db_view = { workspace = true, optional = true }
+extension-runtime = { workspace = true }
 extension-host.workspace = true
 extension-plugin-adapter.workspace = true
 extension-protocol.workspace = true
@@ -45,37 +45,35 @@ universal-plugins.workspace = true
 resource_view.workspace = true
 workspace_explorer.workspace = true
 json_view = { workspace = true }
-terminal = { workspace = true }
-terminal_view = { workspace = true }
+terminal = { workspace = true, optional = true }
+terminal_view = { workspace = true, optional = true }
 agent_runtime = { workspace = true }
 ai_chat_view = { workspace = true, default-features = false }
 public_mcp = { workspace = true }
 tool_runtime = { workspace = true }
-port_forwarding = { workspace = true }
-port_forwarding_view = { workspace = true }
-sftp_view = { workspace = true }
-known_hosts_view = { workspace = true }
-ssh.workspace = true
-redis_view = { workspace = true }
-redis-runtime.workspace = true
-mongodb_view = { workspace = true }
-mongodb-runtime.workspace = true
-remote_desktop = { workspace = true }
-remote_desktop_view = { workspace = true }
+redis_view = { workspace = true, optional = true }
+redis-runtime = { workspace = true, optional = true }
+mongodb_view = { workspace = true, optional = true }
+mongodb-runtime = { workspace = true, optional = true }
+remote_desktop = { workspace = true, optional = true }
+remote_desktop_view = { workspace = true, optional = true }
 remote_file_editor = { workspace = true }
 one-core.workspace = true
+domain_api.workspace = true
+mcp_host.workspace = true
+mcp_approval.workspace = true
+app_kit.workspace = true
+shell_domain = { workspace = true, optional = true }
+data_domain = { workspace = true, optional = true }
 one-ui.workspace = true
-navop_runtime.workspace = true
+navop_runtime = { workspace = true }
 reqwest_client.workspace = true
-db.workspace = true
 connection-import-protocol.workspace = true
 connection-form.workspace = true
 global-hotkey.workspace = true
 process-util.workspace = true
 sha2 = { workspace = true }
 zeroize = { workspace = true }
-flate2 = "1"
-tar = "0.4"
 # `window_visibility` 要拿 AppKit/Win32/Xcb 原生句柄，并对 `HandleError` 用
 # `anyhow::Context`；`raw-window-handle` 0.6 没有默认特性，`std` 必须显式开，
 # 否则 `HandleError` 不实现 `std::error::Error`（今天靠别的 crate 顺带开启）。
@@ -91,8 +89,7 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "NSApplication",
     "NSResponder",
     "NSView",
-    "NSWindow",
-] }
+    "NSWindow"] }
 
 # 系统托盘（`system_tray`）。macOS/Windows 用 tray-icon 的原生后端；
 # Linux 只启用它的 ksni 后端（freedesktop StatusNotifierItem），必须关掉默认的
@@ -108,7 +105,6 @@ tray-icon = { version = "0.25", default-features = false, features = ["ksni"] }
 x11rb = "0.13"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-zip = { version = "2", default-features = false, features = ["deflate"] }
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Security_Credentials", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "windows")'.build-dependencies]
@@ -134,14 +130,33 @@ tempfile = "3"
 # 「用浏览器打开」与「下载 HTML」两条路径不受影响。
 # 需要时显式开启：`cargo build -p main --features embedded-webview`
 # （Linux 另需 `webkit2gtk-4.1` 开发包，见 `script/install-linux.sh`）。
-default = ["wasm-components", "windows-native-rdp", "shell-plugins"]
-builtin-duckdb = ["db/builtin-duckdb", "db_view/builtin-duckdb", "navop_runtime/builtin-duckdb"]
+default = ["wasm-components", "windows-native-rdp", "shell-plugins", "database", "shell"]
+# 领域门控：独立产品只打开自己需要的领域，公共壳保持与领域无关。
+database = [
+    "extension-runtime/database",
+    "navop_runtime/database",
+    "navop_runtime/redis",
+    "dep:db_view",
+    "dep:redis_view",
+    "dep:redis-runtime",
+    "dep:mongodb_view",
+    "dep:mongodb-runtime",
+    "dep:data_domain"]
+shell = [
+    "extension-runtime/remote-desktop",
+    "navop_runtime/sftp",
+    "dep:terminal",
+    "dep:terminal_view",
+    "dep:remote_desktop",
+    "dep:remote_desktop_view",
+    "dep:shell_domain"]
+builtin-duckdb = ["db_view/builtin-duckdb", "navop_runtime/builtin-duckdb"]
 builtin-mongodb = ["mongodb_view/builtin-mongodb"]
 builtin-data-drivers = ["builtin-mongodb"]
 embedded-webview = ["ai_chat_view/embedded-webview"]
 github-distribution = ["github-updates", "github-marketplace"]
 github-marketplace = ["extension-runtime/github-marketplace"]
-github-updates = []
+github-updates = ["app_kit/github-updates"]
 # `macos-touchbar-window-hide`：关闭窗口只隐藏原生窗口、绝不销毁，规避带 Touch Bar 的 Mac
 # 上关闭窗口闪退（navop#262 / #308 / #314）。
 #
@@ -156,7 +171,7 @@ macos-touchbar-window-hide = ["one-core/macos-touchbar-window-hide"]
 screenshot-safe = []
 shell-plugins = ["universal-plugins/shell-plugins"]
 wasm-components = ["extension-runtime/wasm-components"]
-windows-native-rdp = ["remote_desktop_view/windows-native-rdp"]
+windows-native-rdp = ["remote_desktop_view?/windows-native-rdp"]
 
 [lints]
 workspace = true

@@ -13,6 +13,41 @@ const LEGACY_APP_NAME: &str = "onetcli";
 const DISCOVERY_FILE_NAME: &str = "public-mcp.json";
 const TOKEN_HEX_LEN: usize = 64;
 
+/// 宿主产品注入的发现文件身份。三产品各自使用不同的 `app` 名称，
+/// 但发现文件仍落在各自的数据目录里。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DiscoveryIdentity {
+    pub app: &'static str,
+    pub legacy: Option<&'static str>,
+    pub file_name: &'static str,
+}
+
+impl DiscoveryIdentity {
+    pub const NAVOP: Self = Self {
+        app: APP_NAME,
+        legacy: Some(LEGACY_APP_NAME),
+        file_name: DISCOVERY_FILE_NAME,
+    };
+
+    pub fn accepts(&self, app: &str) -> bool {
+        app == self.app || self.legacy == Some(app)
+    }
+}
+
+static DISCOVERY_IDENTITY: OnceLock<DiscoveryIdentity> = OnceLock::new();
+
+/// 覆盖发现文件身份。只在进程启动早期调用一次；重复调用返回 `false`。
+pub fn configure_discovery_identity(identity: DiscoveryIdentity) -> bool {
+    DISCOVERY_IDENTITY.set(identity).is_ok()
+}
+
+fn discovery_identity() -> DiscoveryIdentity {
+    DISCOVERY_IDENTITY
+        .get()
+        .copied()
+        .unwrap_or(DiscoveryIdentity::NAVOP)
+}
+
 /// 宿主注入的发现文件路径（正式、开发、便携必须各自落在自己的目录里）。
 ///
 /// `dirs::config_dir()` 对已安装版和开发版返回同一个目录，而发现文件里有
@@ -45,7 +80,7 @@ impl DiscoveryDocument {
     pub fn new(pid: u32, bind_addr: SocketAddr, token: String, mode: PublicMcpMode) -> Self {
         Self {
             version: DISCOVERY_VERSION,
-            app: APP_NAME.to_string(),
+            app: discovery_identity().app.to_string(),
             pid,
             host: bind_addr.ip().to_string(),
             port: bind_addr.port(),
@@ -61,8 +96,9 @@ impl DiscoveryDocument {
     }
 
     pub fn legacy_compatible(&self) -> Self {
+        let identity = discovery_identity();
         let mut document = self.clone();
-        document.app = LEGACY_APP_NAME.to_string();
+        document.app = identity.legacy.unwrap_or(identity.app).to_string();
         document
     }
 
@@ -74,7 +110,7 @@ impl DiscoveryDocument {
                 DISCOVERY_VERSION
             );
         }
-        if self.app != APP_NAME && self.app != LEGACY_APP_NAME {
+        if !discovery_identity().accepts(&self.app) {
             bail!("unexpected app `{}` in public MCP discovery", self.app);
         }
         let addr = self.socket_addr()?;
@@ -122,20 +158,27 @@ pub fn legacy_public_mcp_discovery_path() -> PathBuf {
 /// 安装位置完全一致（`.../navop/public-mcp.json` 与 `.../onetcli/public-mcp.json`）；
 /// 开发/便携版的数据根不同，推导结果自然落到各自的目录，不会碰到正式版。
 pub fn public_mcp_discovery_paths_in(data_dir: &Path) -> (PathBuf, PathBuf) {
-    let canonical = data_dir.join(DISCOVERY_FILE_NAME);
-    let legacy_root = match data_dir.parent() {
-        Some(parent) => parent.join(LEGACY_APP_NAME),
-        None => data_dir.join(LEGACY_APP_NAME),
+    let identity = discovery_identity();
+    let canonical = data_dir.join(identity.file_name);
+    let legacy_root = match identity.legacy {
+        Some(legacy) => match data_dir.parent() {
+            Some(parent) => parent.join(legacy),
+            None => data_dir.join(legacy),
+        },
+        None => data_dir.to_path_buf(),
     };
-    (canonical, legacy_root.join(DISCOVERY_FILE_NAME))
+    (canonical, legacy_root.join(identity.file_name))
 }
 
 pub fn public_mcp_discovery_path_from(base: &Path) -> PathBuf {
-    base.join(APP_NAME).join(DISCOVERY_FILE_NAME)
+    let identity = discovery_identity();
+    base.join(identity.app).join(identity.file_name)
 }
 
 pub fn legacy_public_mcp_discovery_path_from(base: &Path) -> PathBuf {
-    base.join(LEGACY_APP_NAME).join(DISCOVERY_FILE_NAME)
+    let identity = discovery_identity();
+    base.join(identity.legacy.unwrap_or(identity.app))
+        .join(identity.file_name)
 }
 
 fn default_config_dir() -> PathBuf {
@@ -192,4 +235,28 @@ fn write_user_only_file(path: &Path, bytes: Vec<u8>) -> Result<()> {
 
 fn is_valid_token(token: &str) -> bool {
     token.len() == TOKEN_HEX_LEN && token.as_bytes().iter().all(|byte| byte.is_ascii_hexdigit())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn standalone_identity_accepts_only_its_own_app() {
+        let identity = DiscoveryIdentity {
+            app: "navop-data",
+            legacy: None,
+            file_name: "public-mcp.json",
+        };
+        assert!(identity.accepts("navop-data"));
+        assert!(!identity.accepts("navop"));
+        assert!(!identity.accepts("navop-shell"));
+    }
+
+    #[test]
+    fn full_identity_keeps_legacy_onetcli_compatibility() {
+        assert!(DiscoveryIdentity::NAVOP.accepts("navop"));
+        assert!(DiscoveryIdentity::NAVOP.accepts("onetcli"));
+        assert!(!DiscoveryIdentity::NAVOP.accepts("navop-data"));
+    }
 }

@@ -100,21 +100,12 @@ impl HomePage {
             master_key_unlock_prompt_pending: false,
             master_key_dialog_open: false,
             team_permissions: TeamPermissionSnapshot::from_persisted_user_id(persisted_user_id),
-            port_forwarding_runtime: Arc::new(
-                tokio::sync::Mutex::new(PortForwardingRuntime::new()),
-            ),
-            external_driver_registry: IpcDriverRegistry::empty(),
-            wsl_distributions: None,
         };
 
         // 使用持久化身份预载本地团队权限，不等待在线会话恢复。
         page.load_team_options(cx);
         // 异步加载工作区
         page.load_workspaces(cx);
-
-        // Windows 下后台识别 WSL 发行版，供本地终端下拉菜单展示（feigeCode/navop#182）。
-        #[cfg(target_os = "windows")]
-        page.load_wsl_distributions(cx);
 
         let has_repo_password = crypto::has_repo_password_set();
         let settings = AppSettings::current(cx);

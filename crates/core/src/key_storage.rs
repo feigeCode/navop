@@ -23,6 +23,7 @@ use rand::rngs::OsRng;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -59,13 +60,46 @@ const DEVELOPMENT_KEYRING_SERVICE: &str = "com.navop.desktop.dev";
 #[cfg(all(not(test), any(target_os = "macos", target_os = "windows")))]
 const KEYRING_USER: &str = "master-key";
 
+#[derive(Clone, Copy, Debug)]
+// 只在提供系统凭据库的平台上被读取；其余平台保留结构以免配置接口分叉。
+#[cfg_attr(
+    not(any(test, target_os = "macos", target_os = "windows")),
+    allow(dead_code)
+)]
+struct KeyringServices {
+    installed: &'static str,
+    development: &'static str,
+}
+
+static KEYRING_SERVICES: OnceLock<KeyringServices> = OnceLock::new();
+
+/// 在初始化密钥存储之前按产品身份覆盖系统凭据库服务名。
+///
+/// 默认值保持 Navop 全量版的历史服务名；navop-shell / navop-data 必须
+/// 使用各自的服务名，避免三个产品互相覆盖主密钥记录。
+pub fn configure_keyring_services(installed: &'static str, development: &'static str) {
+    let _ = KEYRING_SERVICES.set(KeyringServices {
+        installed,
+        development,
+    });
+}
+
+#[cfg(any(test, target_os = "macos", target_os = "windows"))]
+fn keyring_services() -> KeyringServices {
+    KEYRING_SERVICES.get().copied().unwrap_or(KeyringServices {
+        installed: KEYRING_SERVICE,
+        development: DEVELOPMENT_KEYRING_SERVICE,
+    })
+}
+
 /// 按运行模式挑选系统凭据库服务名。
 #[cfg(any(test, target_os = "macos", target_os = "windows"))]
 fn keyring_service_for(installed: bool) -> &'static str {
+    let services = keyring_services();
     if installed {
-        KEYRING_SERVICE
+        services.installed
     } else {
-        DEVELOPMENT_KEYRING_SERVICE
+        services.development
     }
 }
 

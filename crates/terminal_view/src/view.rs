@@ -57,7 +57,7 @@ use crate::cd_completion::{
     parse_cd_completion_query,
 };
 use crate::history_prompt::{HistoryPromptAccept, HistoryPromptMode, HistoryPromptState};
-use crate::host_key_dialog::{host_key_dialog_presentation, render_host_key_details_card};
+use ssh_form::host_key_dialog::{host_key_dialog_presentation, render_host_key_details_card};
 use crate::public_mcp::TerminalPublicMcpRegistration;
 use crate::quick_command_sync::{QuickCommandSyncEvent, QuickCommandSyncNotifier};
 use crate::selection_highlight_addon::SelectionHighlightAddon;

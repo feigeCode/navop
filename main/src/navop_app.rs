@@ -18,14 +18,12 @@ use gpui_component::{
     notification::Notification,
     render_dialog_layer, render_notification_layer, render_sheet_layer,
 };
-use one_core::gpui_tokio::{JoinError, Tokio};
 use one_core::keybindings::{action_id, rebind_keybindings, shortcuts_for};
 use one_core::settings::CloseButtonBehavior;
 use raw_window_handle::HasWindowHandle;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use raw_window_handle::RawWindowHandle;
 use rust_i18n::t;
-use ssh::{SshSessionService, SshSessionShutdownReport};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -134,130 +132,6 @@ fn settings_button_handler() -> Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>
     })
 }
 
-/// The application-owned SSH session lifecycle.
-///
-/// The `ssh` crate deliberately stays independent of GPUI. This narrow
-/// wrapper installs exactly one service in the application and lets app code
-/// pass service clones to consumers without making any terminal or file view
-/// the owner of shared transports.
-#[derive(Clone)]
-pub(crate) struct GlobalSshSessionService {
-    service: SshSessionService,
-}
-
-impl gpui::Global for GlobalSshSessionService {}
-
-impl GlobalSshSessionService {
-    fn new() -> Self {
-        Self {
-            service: SshSessionService::new(),
-        }
-    }
-
-    pub(crate) fn service(&self) -> SshSessionService {
-        self.service.clone()
-    }
-}
-
-fn init_ssh_session_service(cx: &mut App) {
-    assert!(
-        cx.try_global::<GlobalSshSessionService>().is_none(),
-        "SSH session service must have exactly one application owner"
-    );
-
-    let global = GlobalSshSessionService::new();
-    let fallback_service = global.service();
-    cx.set_global(global);
-
-    // Normal Navop quit paths await shutdown before asking GPUI to quit.
-    // This callback is an idempotent fallback for platform-driven quit paths.
-    // GPUI only gives quit callbacks a short fixed budget, so it must not be
-    // the primary owner shutdown path.
-    cx.on_app_quit(move |cx| {
-        let rdp_shutdown_report =
-            remote_desktop_view::fail_closed_windows_native_rdp_for_platform_quit(cx);
-        log_windows_native_rdp_shutdown("gpui quit fallback", rdp_shutdown_report);
-
-        let service = fallback_service.clone();
-        let shutdown_task = Tokio::spawn(cx, async move { service.shutdown().await });
-        async move {
-            log_ssh_session_shutdown("gpui quit fallback", shutdown_task.await);
-        }
-    })
-    .detach();
-}
-
-fn spawn_ssh_session_shutdown(
-    cx: &App,
-) -> Option<Task<Result<SshSessionShutdownReport, JoinError>>> {
-    let service = cx.try_global::<GlobalSshSessionService>()?.service();
-    Some(Tokio::spawn(cx, async move { service.shutdown().await }))
-}
-
-fn log_ssh_session_shutdown(
-    reason: &'static str,
-    result: Result<SshSessionShutdownReport, JoinError>,
-) {
-    match result {
-        Ok(report)
-            if report.timed_out
-                || report.manager_failures > 0
-                || report.managers_remaining > 0
-                || report.registry_tasks_remaining > 0 =>
-        {
-            tracing::warn!(
-                reason,
-                timed_out = report.timed_out,
-                managers_requested = report.managers_requested,
-                managers_completed = report.managers_completed,
-                manager_failures = report.manager_failures,
-                managers_remaining = report.managers_remaining,
-                registry_tasks_remaining = report.registry_tasks_remaining,
-                "SSH session service shutdown completed with incomplete cleanup"
-            );
-        }
-        Ok(report) => {
-            tracing::info!(
-                reason,
-                managers_requested = report.managers_requested,
-                managers_completed = report.managers_completed,
-                "SSH session service shutdown completed"
-            );
-        }
-        Err(error) => {
-            tracing::error!(
-                reason,
-                %error,
-                "SSH session service shutdown task failed"
-            );
-        }
-    }
-}
-
-fn log_windows_native_rdp_shutdown(
-    reason: &'static str,
-    report: remote_desktop_view::WindowsNativeRdpShutdownReport,
-) {
-    if report.incomplete() {
-        tracing::warn!(
-            reason,
-            requested = report.requested(),
-            destroyed = report.destroyed(),
-            timed_out_leaked = report.timed_out_leaked(),
-            owner_lost = report.owner_lost(),
-            controller_unavailable = report.controller_unavailable(),
-            "Windows native RDP shutdown completed with incomplete cleanup"
-        );
-    } else {
-        tracing::info!(
-            reason,
-            requested = report.requested(),
-            destroyed = report.destroyed(),
-            "Windows native RDP shutdown completed"
-        );
-    }
-}
-
 /// Await bounded application-owned resource teardown before invoking GPUI's
 /// platform quit routine. Native RDP hosts drain before their shared SSH
 /// transports so COM/child-window cleanup retains a live application owner.
@@ -266,21 +140,11 @@ fn log_windows_native_rdp_shutdown(
 /// Repeated callers join the same idempotent Native RDP drain and
 /// `SshSessionService::shutdown` lifecycle.
 pub(crate) fn shutdown_application_resources_and_quit(cx: &mut App, reason: &'static str) {
-    let rdp_shutdown_task = remote_desktop_view::shutdown_windows_native_rdp(cx);
+    let domain_shutdowns = app_kit::shutdown_domains(cx);
 
     cx.spawn(async move |cx| {
-        let rdp_shutdown_report = rdp_shutdown_task.await;
-        log_windows_native_rdp_shutdown(reason, rdp_shutdown_report);
-
-        let ssh_shutdown_task = cx.update(|cx| spawn_ssh_session_shutdown(cx));
-        if let Some(shutdown_task) = ssh_shutdown_task {
-            let shutdown_result = shutdown_task.await;
-            log_ssh_session_shutdown(reason, shutdown_result);
-        } else {
-            tracing::error!(
-                reason,
-                "SSH session service global is missing; quitting after remaining application teardown"
-            );
+        for shutdown in domain_shutdowns {
+            shutdown.await;
         }
 
         let plugin_shutdown_task = cx.update(|cx| universal_plugins::spawn_shutdown(cx));
@@ -385,14 +249,11 @@ use one_core::tab_navigation::{
     ActiveTabSlot, TabCycleDirection, tab_number_target, tab_slot_after_cycle,
 };
 use one_core::themes;
-use sftp_view::{PasteUpload as SftpPasteUpload, SFTP_VIEW_CONTEXT};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use crate::setting_tab;
-use db::GlobalDbState;
-use one_core::storage::{ConnectionRepository, GlobalStorageState};
 
 fn activate_tab_by_number(number: usize, cx: &mut App) {
     let Some(active_window) = cx.active_window() else {
@@ -950,9 +811,10 @@ pub fn init(cx: &mut App) -> anyhow::Result<()> {
     one_core::themes::load_imported(cx);
     setting_tab::init_settings(cx);
     one_core::init(cx)?;
-    init_ssh_session_service(cx);
+    #[cfg(feature = "shell")]
+    app_kit::set_shell_host(Arc::new(crate::home_tab::domain_host::NavopShellHost));
     ai_chat_view::init(cx);
-    crate::public_mcp_approval::init(cx);
+    mcp_approval::init(cx);
     crate::ai_chat_acp::init(cx);
     one_ui::init_table_display_settings(
         cx,
@@ -961,8 +823,6 @@ pub fn init(cx: &mut App) -> anyhow::Result<()> {
     );
     let table_keybindings = table_keybindings(cx);
     one_ui::init(cx, table_keybindings);
-    db_view::search_shortcut::init(cx);
-    db_view::sql_editor_view::init(cx);
     // ai_chat_view 的会话搜索快捷键随 `ai_chat_view::init(cx)` 一起注册（见该 crate 的 lib.rs）。
     crate::auth::init(cx);
     crate::license::init(cx);
@@ -974,19 +834,20 @@ pub fn init(cx: &mut App) -> anyhow::Result<()> {
         global_provider_state
             .set_request_timeout_secs(Some(AppSettings::global(cx).ai_chat.request_timeout_secs));
     }
-    db::init_cache(cx);
-    // 启动后台磁盘缓存清理任务
-    if let Some(cache) = cx.try_global::<db::GlobalNodeCache>() {
-        cache.start_cleanup_task(cx);
-    }
-    terminal_view::init(cx);
-    redis_view::init(cx);
-    crate::personal_sync_runtime::init(cx);
-    mongodb_view::init(cx);
-    #[cfg(not(feature = "builtin-mongodb"))]
+    // 领域专属子系统（数据库缓存、SQL 编辑器、Redis/Mongo 视图、终端视图等）
+    // 由各领域包自己初始化，公共壳只知道“按注册顺序调用”。
+    app_kit::init_domains(cx)?;
+    #[cfg(all(feature = "database", not(feature = "builtin-mongodb")))]
     init_native_data_driver_factories(cx);
-    crate::public_mcp_runtime::init(cx);
-    remote_desktop_view::init(cx);
+    crate::personal_sync_runtime::init(cx);
+    // 独立产品（`navop-shell` / `navop-data`）用 `app_kit` 托管的通用 MCP 宿主
+    // (`mcp_host`)；全量产品才启动自己的 `public_mcp_runtime`，否则两套 MCP
+    // 会同时监听，发现文件与工具集互相覆盖。
+    if app_kit::identity()
+        .is_none_or(|identity| identity.app_id == domain_api::AppIdentity::FULL.app_id)
+    {
+        crate::public_mcp_runtime::init(cx);
+    }
     crate::home_tab::init(cx);
     cx.bind_keys(init_keybindings(cx));
     init_action_handlers(cx);
@@ -994,17 +855,11 @@ pub fn init(cx: &mut App) -> anyhow::Result<()> {
     let registry = TabContentRegistry::new();
     cx.set_global(registry);
 
-    let storage_state = cx.global::<GlobalStorageState>();
-    let conn_repo = storage_state.storage.get::<ConnectionRepository>();
-    let db_state = GlobalDbState::with_connection_repository(conn_repo);
-    db_state.start_cleanup_task(cx);
-    cx.set_global(db_state);
-    db_view::init_ask_ai_notifier(cx);
     cx.activate(true);
     Ok(())
 }
 
-#[cfg(not(feature = "builtin-mongodb"))]
+#[cfg(all(feature = "database", not(feature = "builtin-mongodb")))]
 fn init_native_data_driver_factories(cx: &mut App) {
     let Some(root) = extension_runtime::extension::extensions_root() else {
         return;
@@ -1019,21 +874,15 @@ fn init_native_data_driver_factories(cx: &mut App) {
 pub fn refresh_keybindings(cx: &mut App) {
     cx.bind_keys(refreshable_keybindings(cx));
     crate::home_tab::refresh_keybindings(cx);
-    db_view::search_shortcut::refresh_keybindings(cx);
     // AI 工作台的快捷键是 app 级（无 context 冲突），留在原位即可。
     ai_chat_view::find_shortcut::refresh_keybindings(cx);
     ai_chat_view::session_shortcut::refresh_keybindings(cx);
-    terminal_view::refresh_keybindings(cx);
-    redis_view::refresh_keybindings(cx);
-    remote_desktop_view::refresh_keybindings(cx);
     let table_keybindings = table_keybindings(cx);
     one_ui::refresh_keybindings(cx, table_keybindings);
     remote_file_editor::refresh_keybindings(cx);
     notes::refresh_keybindings(cx);
-    // 必须排在 notes 之后：notes 的 `secondary-/` 是**无 context** 的全局绑定，
-    // 而 gpui 里无 context 等价于最深的 context、同深度后注册者胜；晚一步登记
-    // 才能让带 `SqlEditor` context 的注释快捷键在编辑器里胜出（#290 反馈）。
-    db_view::sql_editor_view::refresh_keybindings(cx);
+    // 领域快捷键放在通用绑定之后：顺序契约见 `app_kit::refresh_domain_keybindings`。
+    app_kit::refresh_domain_keybindings(cx);
 }
 
 fn table_keybindings(cx: &App) -> one_ui::TableKeybindings {
@@ -1098,7 +947,9 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
             &[close_active_window_default_shortcut()],
         )
         .into_iter()
-        .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, CloseActiveWindow, None, cx)),
+        .map(|key| {
+            one_core::keybindings::load_dynamic_keybinding(&key, CloseActiveWindow, None, cx)
+        }),
     );
     keybindings.extend(
         shortcuts_for(
@@ -1107,7 +958,9 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
             &[default_shortcut("cmd-b", "ctrl-b")],
         )
         .into_iter()
-        .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, ToggleConnectionSidebar, None, cx)),
+        .map(|key| {
+            one_core::keybindings::load_dynamic_keybinding(&key, ToggleConnectionSidebar, None, cx)
+        }),
     );
     keybindings.extend(vec![
         #[cfg(target_os = "macos")]
@@ -1154,7 +1007,9 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
             &[default_shortcut("ctrl-cmd-f", "alt-enter")],
         )
         .into_iter()
-        .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, ToggleFullscreen, None, cx)),
+        .map(|key| {
+            one_core::keybindings::load_dynamic_keybinding(&key, ToggleFullscreen, None, cx)
+        }),
     );
     keybindings.extend(
         shortcuts_for(
@@ -1163,7 +1018,9 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
             &[default_shortcut("ctrl-cmd-t", "ctrl-alt-t")],
         )
         .into_iter()
-        .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, ToggleAlwaysOnTop, None, cx)),
+        .map(|key| {
+            one_core::keybindings::load_dynamic_keybinding(&key, ToggleAlwaysOnTop, None, cx)
+        }),
     );
     keybindings.extend(
         shortcuts_for(
@@ -1186,12 +1043,16 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
     keybindings.extend(
         shortcuts_for(cx, action_id::APP_SWITCH_NEXT_TAB, &["ctrl-tab"])
             .into_iter()
-            .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, SwitchNextTab, None, cx)),
+            .map(|key| {
+                one_core::keybindings::load_dynamic_keybinding(&key, SwitchNextTab, None, cx)
+            }),
     );
     keybindings.extend(
         shortcuts_for(cx, action_id::APP_SWITCH_PREVIOUS_TAB, &["ctrl-shift-tab"])
             .into_iter()
-            .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, SwitchPreviousTab, None, cx)),
+            .map(|key| {
+                one_core::keybindings::load_dynamic_keybinding(&key, SwitchPreviousTab, None, cx)
+            }),
     );
     keybindings.extend(
         shortcuts_for(
@@ -1211,11 +1072,8 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
         .into_iter()
         .map(|key| one_core::keybindings::load_dynamic_keybinding(&key, QuitApp, None, cx)),
     );
-    keybindings.push(KeyBinding::new(
-        default_shortcut("cmd-v", "ctrl-v"),
-        SftpPasteUpload,
-        Some(SFTP_VIEW_CONTEXT),
-    ));
+    // 领域注册的键位（例如 SFTP 视图的粘贴）。
+    keybindings.extend(app_kit::domain_keybindings(cx));
 
     keybindings
 }
@@ -1243,11 +1101,8 @@ fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
         None,
         ToggleConnectionSidebar,
     ));
-    keybindings.push(KeyBinding::new(
-        default_shortcut("cmd-v", "ctrl-v"),
-        SftpPasteUpload,
-        Some(SFTP_VIEW_CONTEXT),
-    ));
+    // 领域注册的键位（例如 SFTP 视图的粘贴）。
+    keybindings.extend(app_kit::domain_keybindings(cx));
     keybindings.extend(rebind_keybindings(
         cx,
         action_id::WINDOW_TOGGLE_FULLSCREEN,
@@ -1386,8 +1241,9 @@ fn init_action_handlers(cx: &mut App) {
                 if window.has_active_dialog(cx) {
                     window.close_all_dialogs(cx);
                 }
+                #[cfg(feature = "shell")]
                 home_page.update(cx, |hp, cx| {
-                    hp.add_terminal_tab(window, cx);
+                    hp.open_local_terminal_tab(None, window, cx);
                 });
             });
         });
@@ -1656,6 +1512,7 @@ impl NavopApp {
         cx.notify();
     }
 
+    #[cfg(feature = "shell")]
     fn sync_connection_sidebar_theme(&mut self, cx: &mut Context<Self>) {
         let terminal_active = {
             let tabs = self.tab_container.read(cx);
@@ -1673,11 +1530,20 @@ impl NavopApp {
                     .is_some()
             }
         };
-        let colors = terminal_active
-            .then(|| terminal_view::TerminalColors::from_application_theme(cx.theme()));
+        let palette = terminal_active
+            .then(|| {
+                app_kit::registry()
+                    .shell_extras()
+                    .and_then(|extras| extras.sidebar_colors(cx))
+            })
+            .flatten()
+            .map(crate::persistent_connection_sidebar::SidebarPalette::from);
         self.connection_sidebar
-            .update(cx, |sidebar, cx| sidebar.set_terminal_colors(colors, cx));
+            .update(cx, |sidebar, cx| sidebar.set_terminal_palette(palette, cx));
     }
+
+    #[cfg(not(feature = "shell"))]
+    fn sync_connection_sidebar_theme(&mut self, _cx: &mut Context<Self>) {}
 
     fn save_main_window_state(&self, window: &Window, cx: &mut App) {
         let bounds = window.window_bounds().get_bounds();
@@ -1891,12 +1757,9 @@ impl NavopApp {
 #[cfg(test)]
 mod tests {
     use super::{
-        GlobalSshSessionService, LOG_FILE_MAX_BYTES, LOG_FILE_NAME,
-        close_active_window_default_shortcut, configured_log_file_path, default_log_file_path,
-        init_ssh_session_service, initial_content_layout, log_file_appender,
+        LOG_FILE_MAX_BYTES, LOG_FILE_NAME, close_active_window_default_shortcut,
+        configured_log_file_path, default_log_file_path, initial_content_layout, log_file_appender,
     };
-    use one_core::gpui_tokio::Tokio;
-    use ssh::SshSessionServiceState;
     use std::io::Write;
 
     /// gpui 的绑定优先级：**无 context 的绑定等价于最深的 context**，同深度
@@ -1961,11 +1824,11 @@ mod tests {
     /// SQL 编辑器的重新登记。
     #[test]
     fn sql_editor_keybindings_are_registered_after_notes_init() {
-        let source = include_str!("main.rs");
+        let source = include_str!("lib.rs");
         let notes_init = source.find("notes::init(cx);").expect("notes::init");
         let rebind = source
-            .find("db_view::sql_editor_view::refresh_keybindings(cx);")
-            .expect("SQL 编辑器快捷键重新登记");
+            .find("app_kit::refresh_domain_keybindings(cx);")
+            .expect("领域快捷键重新登记");
 
         assert!(
             notes_init < rebind,
@@ -2226,23 +2089,6 @@ mod tests {
         assert!(quit_fn.contains("request_active_window_quit(cx)"));
     }
 
-    #[gpui::test]
-    fn ssh_session_service_has_one_application_global_owner(cx: &mut gpui::TestAppContext) {
-        let (first, second, runtime) = cx.update(|cx| {
-            one_core::gpui_tokio::init(cx);
-            init_ssh_session_service(cx);
-
-            let first = cx.global::<GlobalSshSessionService>().service();
-            let second = cx.global::<GlobalSshSessionService>().service();
-            (first, second, Tokio::handle(cx))
-        });
-
-        let report = runtime.block_on(first.shutdown());
-
-        assert!(!report.timed_out);
-        assert_eq!(SshSessionServiceState::Stopped, second.snapshot().state);
-    }
-
     #[test]
     fn confirmed_and_update_quit_paths_await_all_application_resource_shutdown() {
         let source = include_str!("navop_app.rs").replace("\r\n", "\n");
@@ -2254,23 +2100,20 @@ mod tests {
             .map(|offset| helper_start + offset)
             .expect("shared application resource shutdown helper end");
         let helper = &source[helper_start..helper_end];
-        let start_rdp_shutdown = helper
-            .find("remote_desktop_view::shutdown_windows_native_rdp(cx)")
-            .expect("start Windows native RDP shutdown");
-        let await_rdp_shutdown = helper
-            .find("let rdp_shutdown_report = rdp_shutdown_task.await;")
-            .expect("await Windows native RDP shutdown");
-        let await_ssh_shutdown = helper
-            .find("let shutdown_result = shutdown_task.await;")
-            .expect("await SSH shutdown");
+        // 领域资源（原生 RDP、SSH 传输等）由各自领域包关停，公共壳只负责
+        // 在退出前按注册顺序 await 它们，然后再关停插件、托盘与热键。
+        let collect_domains = helper
+            .find("app_kit::shutdown_domains(cx)")
+            .expect("collect domain shutdown tasks");
+        let await_domains = helper
+            .find("shutdown.await;")
+            .expect("await domain shutdown tasks");
         let platform_quit = helper
             .find("cx.update(|cx| cx.quit())")
             .expect("platform quit");
 
-        assert!(start_rdp_shutdown < await_rdp_shutdown);
-        assert!(await_rdp_shutdown < await_ssh_shutdown);
-        assert!(await_ssh_shutdown < platform_quit);
-        assert!(helper.contains("log_windows_native_rdp_shutdown"));
+        assert!(collect_domains < await_domains);
+        assert!(await_domains < platform_quit);
 
         let confirm_start = source.find("fn confirm_quit").expect("confirm_quit");
         let confirm_end = source[confirm_start..]
@@ -2281,9 +2124,18 @@ mod tests {
         assert!(confirm_quit.contains("shutdown_application_resources_and_quit"));
         assert!(!confirm_quit.contains("cx.quit()"));
 
-        let update_dialog = include_str!("update/dialog.rs");
-        assert!(update_dialog.contains("shutdown_application_resources_and_quit"));
+        // 更新弹窗已迁到 `app_kit::update`：它必须走宿主持有的退出漏斗
+        // （`app_kit::update::host::shutdown_application`，main 注册的 hook 正是
+        // `shutdown_application_resources_and_quit`），而不是自己调 `cx.quit()`。
+        let update_dialog = include_str!("../../crates/app_kit/src/update/dialog.rs");
+        assert!(update_dialog.contains("shutdown_application(cx"));
         assert!(!update_dialog.contains("cx.quit()"));
+
+        let main_lib = include_str!("lib.rs").replace("\r\n", "\n");
+        assert!(
+            main_lib
+                .contains("set_shutdown_hook(navop_app::shutdown_application_resources_and_quit)")
+        );
     }
 
     /// 退出漏斗必须先把留在主线程 TLS 上的原生平台句柄释放掉，再调 `cx.quit()`。
@@ -2322,35 +2174,6 @@ mod tests {
             hotkey_release < platform_quit,
             "全局热键句柄必须在 cx.quit() 之前释放"
         );
-    }
-
-    #[test]
-    fn platform_quit_fails_closed_native_rdp_before_ssh_without_recursive_quit() {
-        let source = include_str!("navop_app.rs").replace("\r\n", "\n");
-        let start = source
-            .find("fn init_ssh_session_service")
-            .expect("init_ssh_session_service");
-        let end = source[start..]
-            .find("\n}\n\nfn spawn_ssh_session_shutdown")
-            .map(|offset| start + offset)
-            .expect("init_ssh_session_service end");
-        let init = &source[start..end];
-        let callback_start = init
-            .find("cx.on_app_quit(move |cx|")
-            .expect("platform quit callback");
-        let callback = &init[callback_start..];
-        let fail_closed_rdp = callback
-            .find("remote_desktop_view::fail_closed_windows_native_rdp_for_platform_quit(cx)")
-            .expect("Native RDP platform-quit fail-closed fallback");
-        let spawn_ssh = callback
-            .find("Tokio::spawn(cx")
-            .expect("SSH platform-quit fallback");
-
-        assert!(fail_closed_rdp < spawn_ssh);
-        assert!(callback.contains("log_windows_native_rdp_shutdown"));
-        assert!(!callback.contains("shutdown_application_resources_and_quit"));
-        assert!(!callback.contains("shutdown_windows_native_rdp(cx)"));
-        assert!(!callback.contains("cx.quit()"));
     }
 
     #[test]
@@ -2555,61 +2378,16 @@ mod tests {
     #[test]
     fn native_driver_factories_are_ready_before_public_mcp_init() {
         let source = include_str!("navop_app.rs");
-        let redis_init = source.find("redis_view::init(cx);").unwrap();
-        let mongo_init = source.find("mongodb_view::init(cx);").unwrap();
+        let domains = source.find("app_kit::init_domains(cx)?;").unwrap();
         let native_factories = source
             .find("init_native_data_driver_factories(cx);")
             .unwrap();
         let public_mcp = source.find("crate::public_mcp_runtime::init(cx);").unwrap();
 
-        assert!(redis_init < native_factories);
-        assert!(mongo_init < native_factories);
+        // 领域初始化（含 Redis/Mongo 视图）→ 原生驱动工厂 → 公共 MCP 工具注册表，
+        // 顺序保证 MCP 资源池里的驱动已经可用。
+        assert!(domains < native_factories);
         assert!(native_factories < public_mcp);
-    }
-
-    #[test]
-    fn mongodb_open_strategy_guards_the_saved_native_driver_variant() {
-        let source = include_str!("home/home_strategy.rs");
-        let strategy = source
-            .find("impl ConnectionOpenStrategy for MongoOpenStrategy")
-            .unwrap();
-        let body = &source[strategy..];
-        let requirement = body
-            .find("mongodb_driver_id(&connection)")
-            .expect("MongoDB saved driver requirement");
-        let guard = body
-            .find("open_native_driver_connection_with_guard")
-            .expect("native driver install guard");
-        let open = body
-            .find("open_mongodb_tab_with_mode")
-            .expect("MongoDB tab open callback");
-
-        assert!(requirement < guard);
-        assert!(guard < open);
-    }
-
-    #[test]
-    fn redis_open_strategy_uses_the_embedded_backend_without_driver_guard() {
-        let source = include_str!("home/home_strategy.rs");
-        let strategy = source
-            .find("impl ConnectionOpenStrategy for RedisOpenStrategy")
-            .unwrap();
-        let rest = &source[strategy..];
-        let end = rest
-            .find("struct MongoOpenStrategy")
-            .expect("next strategy boundary");
-        let body = &rest[..end];
-
-        body.find("open_redis_tab_with_mode")
-            .expect("Redis tab open callback");
-        assert!(
-            !body.contains("open_native_driver_connection_with_guard"),
-            "builtin Redis must not require an installed native driver"
-        );
-        assert!(
-            !body.contains("DEFAULT_REDIS_DRIVER_ID"),
-            "builtin Redis must not reference the IPC sidecar driver id"
-        );
     }
 
     #[test]

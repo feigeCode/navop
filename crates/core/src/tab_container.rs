@@ -791,6 +791,20 @@ impl TabItem {
         }
     }
 
+    /// 用已擦除的 `TabContentView` 构造 tab，供领域注册表按 `TabIntent` 返回。
+    pub fn from_dyn(
+        id: impl Into<String>,
+        from: impl Into<String>,
+        content: Arc<dyn TabContentView>,
+    ) -> Self {
+        Self {
+            id: SharedString::from(id.into()),
+            from: SharedString::from(from.into()),
+            metadata: HashMap::new(),
+            content,
+        }
+    }
+
     pub fn with_metadata(mut self, metadata: HashMap<String, String>) -> Self {
         self.metadata = metadata;
         self
@@ -1637,6 +1651,20 @@ impl TabContainer {
         cx.notify();
     }
 
+    /// 按 id 激活已有 Tab；不存在时返回 false，由调用方决定是否新建。
+    pub fn activate_tab_by_id(
+        &mut self,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(index) = self.tabs.iter().position(|tab| tab.id() == id) else {
+            return false;
+        };
+        self.set_active_index(index, window, cx);
+        true
+    }
+
     pub fn add_tab_with_mode(
         &mut self,
         tab: TabItem,
@@ -1756,8 +1784,8 @@ impl TabContainer {
     /// 背后是空白页，切回该标签页还是空白。这个布尔量要表达的只有「GPUI 主内容真的盖住了
     /// 呈现」，浮层让位不该走撤销会话这条路。
     fn recompute_active_presentation_obscured(&mut self, cx: &mut Context<Self>) {
-        let obscured =
-            self.presentation_obscured_by_main_content || self.presentation_obscured_by_legacy_caller;
+        let obscured = self.presentation_obscured_by_main_content
+            || self.presentation_obscured_by_legacy_caller;
         if self.presentation_obscured == obscured {
             return;
         }
@@ -5438,6 +5466,18 @@ mod tests {
             (TAB_RENAME_MIN_WIDTH, px(320.0)),
             tab_width_bounds(px(320.0), true)
         );
+    }
+
+    #[gpui::test]
+    fn tab_item_from_dyn_wraps_erased_tab_content(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let tab = cx.new(|cx| TestTab::new("dyn", cx));
+            let item = TabItem::from_dyn("dyn-tab", "test", Arc::new(tab));
+
+            assert_eq!("dyn-tab", item.id().as_ref());
+            assert_eq!("test", item.from().as_ref());
+            assert_eq!("TestTab", item.content().content_key(cx));
+        });
     }
 
     #[gpui::test]

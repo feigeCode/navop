@@ -6,7 +6,7 @@ edition.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-extension-runtime = { workspace = true }
+extension-runtime = { workspace = true, default-features = false }
 futures = { workspace = true }
 gpui = { workspace = true}
 gpui-component = { workspace = true }

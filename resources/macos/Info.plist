@@ -28,6 +28,7 @@
     <string>Navop needs access to devices on your local network for SSH, SFTP, databases, remote desktop, and port forwarding.</string>
     <key>NSSupportsAutomaticGraphicsSwitching</key>
     <true/>
+    <!-- NAVOP_DOCUMENT_TYPES_START -->
     <key>CFBundleDocumentTypes</key>
     <array>
         <dict>
@@ -150,6 +151,7 @@
             </dict>
         </dict>
     </array>
+    <!-- NAVOP_DOCUMENT_TYPES_END -->
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.developer-tools</string>
 </dict>

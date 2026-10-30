@@ -1,11 +1,15 @@
-use super::{access_guard, diagnostics, internal_functions, mongo, redis, resource_pool};
+use super::{access_guard, diagnostics, internal_functions, resource_pool};
 use gpui::App;
 use one_core::settings::ToolExposureToolsetSettings;
 use one_core::tab_container::TabOpenMode;
 use public_mcp::tools::{
     PublicMcpToolProvider, PublicMcpToolRegistry, ToolRuntimeMcpProvider,
-    internal_function_tool_registry, remote_ops_tool_registry, terminal_control_tool_registry,
-    terminal_exec_tool_registry, terminal_read_tool_registry, terminal_write_keys_tool_registry,
+    internal_function_tool_registry,
+};
+#[cfg(feature = "shell")]
+use public_mcp::tools::{
+    remote_ops_tool_registry, terminal_control_tool_registry, terminal_exec_tool_registry,
+    terminal_read_tool_registry, terminal_write_keys_tool_registry,
 };
 use std::sync::Arc;
 
@@ -45,6 +49,7 @@ fn build_tool_registry_for_surface(
 ) -> anyhow::Result<PublicMcpToolRegistry> {
     let mut providers: Vec<Arc<dyn PublicMcpToolProvider>> = Vec::new();
     let mut runtime_registries = vec![diagnostics::runtime_status_tool_registry(toolsets)];
+    #[cfg(feature = "shell")]
     if toolsets.terminal {
         if let Some(registry) = terminal_view::public_mcp::registry(cx) {
             if toolsets.terminal_ssh_exec {
@@ -107,6 +112,7 @@ fn build_tool_registry_for_surface(
             tracing::warn!("Public MCP connection tools enabled before storage is initialized");
         }
     }
+    #[cfg(feature = "shell")]
     if toolsets.sftp {
         if let Some(storage) = cx.try_global::<one_core::storage::GlobalStorageState>() {
             if let Some(repo) = storage
@@ -121,6 +127,7 @@ fn build_tool_registry_for_surface(
             tracing::warn!("Public MCP SFTP tools enabled before storage is initialized");
         }
     }
+    #[cfg(feature = "database")]
     if toolsets.database {
         if let Some(storage) = cx.try_global::<one_core::storage::GlobalStorageState>() {
             if let Some(repo) = storage
@@ -136,15 +143,18 @@ fn build_tool_registry_for_surface(
             tracing::warn!("Public MCP database tools enabled before storage is initialized");
         }
     }
+    #[cfg(feature = "database")]
+    #[cfg(feature = "database")]
     if toolsets.redis {
-        runtime_registries.push(tool_runtime::ToolRegistry::new(redis::redis_tool_handlers(
-            cx,
-        )));
+        runtime_registries.push(tool_runtime::ToolRegistry::new(
+            data_domain::mcp::redis_tool_handlers(cx),
+        ));
     }
+    #[cfg(feature = "database")]
     if toolsets.mongo {
-        runtime_registries.push(tool_runtime::ToolRegistry::new(mongo::mongo_tool_handlers(
-            cx,
-        )));
+        runtime_registries.push(tool_runtime::ToolRegistry::new(
+            data_domain::mcp::mongo_tool_handlers(cx),
+        ));
     }
     if !runtime_registries.is_empty() {
         // 连接级 AI 访问策略：合并后的 registry 不继承子 registry 的 guard，这里统一挂一次。

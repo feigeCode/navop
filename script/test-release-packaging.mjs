@@ -197,7 +197,7 @@ test("Linux publishes one package per architecture plus a separate GPU dependenc
   assert.match(build, /if \[ "\$\{\{ runner\.os \}\}" = "Linux" \]/);
   assert.match(
     build,
-    /cargo zigbuild[\s\S]*--release[\s\S]*-p main[\s\S]*--target "\$\{\{ matrix\.target \}\}\.2\.28"/,
+    /cargo zigbuild[\s\S]*--release[\s\S]*-p navop[\s\S]*--target "\$\{\{ matrix\.target \}\}\.2\.28"/,
   );
   // No platform drops the default feature set: `embedded-webview` is off in the
   // default set itself (see main/Cargo.toml), so the shape that gets published is
@@ -218,7 +218,7 @@ test("Linux publishes one package per architecture plus a separate GPU dependenc
   assert.doesNotMatch(build, /extra_features/);
   assert.match(
     build,
-    /cargo build --release -p main --target "\$\{\{ matrix\.target \}\}"/,
+    /cargo build --release -p navop --target "\$\{\{ matrix\.target \}\}"/,
   );
   assert.match(
     build,
@@ -251,7 +251,7 @@ test("Linux publishes one package per architecture plus a separate GPU dependenc
   // Portable mode exists at all only because this detection stays platform
   // independent; a Windows-only guard here would make the Linux archive ship a
   // marker file that nothing ever reads.
-  assert.match(appPathsSource, /join\(PORTABLE_MARKER_FILE\)\.is_file\(\)/);
+  assert.match(appPathsSource, /join\(app_path_names\(\)\.portable_marker\)\s*\.is_file\(\)/);
   assert.doesNotMatch(appPathsSource, /cfg\(windows\)/);
   assert.doesNotMatch(appPathsSource, /cfg\(target_os = "windows"\)/);
   assert.match(packageLinux, new RegExp(`PORTABLE_MARKER_FILE="${markerFile}"`));
@@ -345,7 +345,7 @@ test("the embedded webview is an opt-in feature on every platform", () => {
   assert.match(htmlCodeBlock, /HtmlPreview\.webview_unavailable/);
   assert.match(
     mainCargo,
-    /^default = \["wasm-components", "windows-native-rdp", "shell-plugins"\]$/m,
+    /^default = \["wasm-components", "windows-native-rdp", "shell-plugins", "database", "shell"\]$/m,
   );
   assert.doesNotMatch(mainCargo, /default = \[[^\]]*embedded-webview/);
   assert.match(
@@ -393,7 +393,7 @@ test("no release build enables the embedded webview, while the opt-in path still
   assert.doesNotMatch(build, /--features[^\n]*wasm-components/);
   assert.match(
     build,
-    /cargo zigbuild[\s\S]*--release[\s\S]*-p main[\s\S]*--target "\$\{\{ matrix\.target \}\}\.2\.28"/,
+    /cargo zigbuild[\s\S]*--release[\s\S]*-p navop[\s\S]*--target "\$\{\{ matrix\.target \}\}\.2\.28"/,
   );
 
   // Windows 32-bit is the one platform that has to name features explicitly (it
@@ -1420,7 +1420,7 @@ test("Rust workflows share one cache strategy without archiving target", () => {
 });
 
 test("application updates prefer navop while accepting legacy package names", () => {
-  const install = read("main/src/update/install.rs");
+  const install = read("crates/app_kit/src/update/install.rs");
 
   assert.match(install, /\["navop\.exe", "onetcli\.exe"\]/);
   assert.match(install, /find_file_named\(staging_dir, name\)/);
@@ -1531,4 +1531,68 @@ test("Windows 清单门禁能识别缺失清单的 PE（含真实失败现象的
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
   }
+});
+
+test("release version source stays aligned with the navop product package", () => {
+  const versionOf = (source) => source.match(/^version = "([^"]+)"/m)?.[1];
+  const mainVersion = versionOf(read("main/Cargo.toml"));
+  const navopVersion = versionOf(read("apps/navop/Cargo.toml"));
+  assert.ok(mainVersion, "main/Cargo.toml must declare a version");
+  assert.equal(navopVersion, mainVersion, "apps/navop/Cargo.toml version must match main");
+});
+
+test("standalone products ship their own Linux desktop identity and portable marker", () => {
+  const shellDesktop = read("resources/linux/navop-shell.desktop");
+  const dataDesktop = read("resources/linux/navop-data.desktop");
+  const script = read("script/package-linux-product.sh");
+  const shellIdentity = read("crates/domain_api/src/identity.rs");
+
+  assert.match(shellDesktop, /^Name=Navop Shell$/m);
+  assert.match(shellDesktop, /^Exec=navop-shell %F$/m);
+  assert.match(shellDesktop, /^StartupWMClass=navop-shell$/m);
+  assert.match(dataDesktop, /^Name=Navop Data$/m);
+  assert.match(dataDesktop, /^Exec=navop-data %F$/m);
+  assert.match(dataDesktop, /^StartupWMClass=navop-data$/m);
+  assert.match(script, /PORTABLE_MARKER="navop-shell\.portable"/);
+  assert.match(script, /PORTABLE_MARKER="navop-data\.portable"/);
+  assert.match(shellIdentity, /portable_marker: "navop-shell\.portable"/);
+  assert.match(shellIdentity, /portable_marker: "navop-data\.portable"/);
+});
+
+test("standalone products workflow builds Shell and Data on macOS and Linux", () => {
+  const workflow = read(".github/workflows/standalone-products.yml");
+  assert.match(workflow, /name: Standalone Products/);
+  assert.match(workflow, /"product":"navop-shell"/);
+  assert.match(workflow, /"product":"navop-data"/);
+  assert.match(workflow, /script\/bundle-macos\.sh "\$\{\{ matrix\.target \}\}" "\$\{\{ matrix\.product \}\}"/);
+  assert.match(workflow, /script\/package-linux-product\.sh "\$\{\{ matrix\.product \}\}"/);
+  assert.match(workflow, /cargo build --release -p "\$\{\{ matrix\.product \}\}"/);
+});
+
+
+test("standalone Windows installers keep distinct upgrade identities", () => {
+  const script = read("installer/windows/build-product-installer.ps1");
+  const msi = read("installer/windows/navop-product.wxs");
+  const bundle = read("installer/windows/navop-product-bundle.wxs");
+  const full = read("installer/windows/navop.wxs");
+
+  assert.match(script, /"navop-shell"\s*=\s*@\{/);
+  assert.match(script, /"navop-data"\s*=\s*@\{/);
+  assert.match(script, /6B438332-1757-4910-965B-F85C7B6B0F37/);
+  assert.match(script, /E3605D1B-559A-4C46-B03A-A4770236A48A/);
+  assert.doesNotMatch(script, /2EAB58E6-27F7-4D97-81A1-7CE4B50FA294/);
+  assert.match(msi, /UpgradeCode="\$\(var\.UpgradeCode\)"/);
+  assert.match(msi, /Source="\$\(var\.SourceDir\)\\\$\(var\.ExeName\)"/);
+  assert.match(bundle, /Id="feigeCode\.\$\(var\.BundleId\)"/);
+  assert.doesNotMatch(msi, /CFBundle|ProgId/);
+  assert.match(full, /2EAB58E6-27F7-4D97-81A1-7CE4B50FA294/);
+});
+
+
+test("standalone CI builds Windows installers for both products", () => {
+  const workflow = read(".github/workflows/standalone-products.yml");
+  assert.match(workflow, /"product":"navop-shell","label":"windows-x64"/);
+  assert.match(workflow, /"product":"navop-data","label":"windows-x64"/);
+  assert.match(workflow, /build-product-installer\.ps1/);
+  assert.match(workflow, /WixToolset\.BootstrapperApplications/);
 });

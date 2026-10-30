@@ -1,0 +1,19 @@
+[package]
+name = "runtime_redis"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+base64.workspace = true
+one-core.workspace = true
+redis-runtime.workspace = true
+serde_json.workspace = true
+tool_runtime.workspace = true
+
+[dev-dependencies]
+futures.workspace = true
+rusqlite.workspace = true
+tempfile = "3"
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+tokio-util.workspace = true

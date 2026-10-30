@@ -5,7 +5,7 @@ use std::sync::{
 
 use futures::Future;
 use gpui::{
-    AnyWindowHandle, AppContext, AsyncApp, Context, PromptLevel, WeakEntity, Window,
+    AnyWindowHandle, App, AppContext, AsyncApp, Context, PromptLevel, WeakEntity, Window,
     http_client::HttpClient,
 };
 use gpui_component::{WindowExt, notification::Notification};
@@ -91,6 +91,104 @@ pub(crate) fn run_install_with_progress_prompt<T, Fut, F>(
         );
     })
     .detach();
+}
+
+/// `&mut App` 版本的安装流水线，供没有宿主实体上下文的独立产品使用。
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_install_with_progress_prompt_app<Fut, F>(
+    window: &mut Window,
+    cx: &mut App,
+    progress_label: (String, String),
+    prompt_title: &'static str,
+    prompt_message: String,
+    prompt_buttons: &'static [&str],
+    install: F,
+    on_success: impl FnOnce(&mut Window, &mut App) + 'static,
+    success_message: impl Into<String>,
+    failure_prefix: impl Into<String>,
+) where
+    Fut: Future<Output = anyhow::Result<ExtensionSummary>> + Send + 'static,
+    F: FnOnce(Arc<dyn HttpClient>, DownloadProgressCallback) -> Fut + Send + 'static,
+{
+    let answer = window.prompt(
+        PromptLevel::Warning,
+        prompt_title,
+        Some(&prompt_message),
+        prompt_buttons,
+        cx,
+    );
+    let http_client = cx.http_client();
+    let window_handle = window.window_handle();
+    let progress_view =
+        cx.new(|_| DriverInstallProgressView::new(&progress_label.0, &progress_label.1));
+    let progress_view_weak = progress_view.downgrade();
+    let progress_snapshot = Arc::new(Mutex::new(DriverInstallProgressSnapshot::default()));
+    let progress_finished = Arc::new(AtomicBool::new(false));
+    watch_driver_install_progress(
+        progress_view_weak.clone(),
+        Arc::clone(&progress_snapshot),
+        Arc::clone(&progress_finished),
+        cx,
+    );
+    let success_message = success_message.into();
+    let failure_prefix = failure_prefix.into();
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        if answer.await.ok() != Some(0) {
+            progress_finished.store(true, Ordering::Relaxed);
+            return;
+        }
+        open_install_progress_dialog(window_handle, progress_view, cx);
+        let progress_callback = driver_install_progress_callback(progress_snapshot);
+        let task = Tokio::spawn(
+            cx,
+            async move { install(http_client, progress_callback).await },
+        );
+        let outcome = match task.await {
+            Ok(Ok(_summary)) => Ok(()),
+            Ok(Err(error)) => Err(format!("{error:?}")),
+            Err(error) => Err(format!("任务执行失败: {error}")),
+        };
+        progress_finished.store(true, Ordering::Relaxed);
+        finish_install_app(
+            window_handle,
+            progress_view_weak,
+            outcome,
+            on_success,
+            success_message,
+            failure_prefix,
+            cx,
+        );
+    })
+    .detach();
+}
+
+fn finish_install_app(
+    window_handle: AnyWindowHandle,
+    progress_view: gpui::WeakEntity<DriverInstallProgressView>,
+    outcome: Result<(), String>,
+    on_success: impl FnOnce(&mut Window, &mut App) + 'static,
+    success_message: impl Into<String>,
+    failure_prefix: impl Into<String>,
+    cx: &mut AsyncApp,
+) {
+    if outcome.is_ok() {
+        mark_driver_install_finished(&progress_view, cx);
+    }
+    let success_message = success_message.into();
+    let failure_prefix = failure_prefix.into();
+    let _ = cx.update_window(window_handle, |_, window, cx| {
+        window.close_dialog(cx);
+        match outcome {
+            Ok(()) => {
+                window.push_notification(Notification::success(success_message), cx);
+                on_success(window, cx);
+            }
+            Err(error) => window.push_notification(
+                Notification::error(format!("{failure_prefix}: {error}")),
+                cx,
+            ),
+        }
+    });
 }
 
 /// 打开带进度弹窗的安装对话框。数据库驱动与远程桌面插件安装共用。

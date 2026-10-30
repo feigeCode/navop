@@ -219,9 +219,11 @@ fn render_shortcut_values(keys: &[String], cx: &App) -> gpui::AnyElement {
         .gap_1()
         .flex_wrap()
         .justify_end()
-        .children(keys.iter().map(|key| match Keystroke::parse_with_os(key, one_core::keybindings::current_os()) {
-            Ok(keystroke) => Kbd::new(keystroke).into_any_element(),
-            Err(_) => div().text_sm().child(key.clone()).into_any_element(),
+        .children(keys.iter().map(|key| {
+            match Keystroke::parse_with_os(key, one_core::keybindings::current_os()) {
+                Ok(keystroke) => Kbd::new(keystroke).into_any_element(),
+                Err(_) => div().text_sm().child(key.clone()).into_any_element(),
+            }
         }))
         .into_any_element()
 }

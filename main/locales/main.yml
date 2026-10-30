@@ -2,6 +2,10 @@ _version: 2
 
 # 通用文本
 Common:
+  connection_type_unsupported:
+    en: "This product cannot open this connection type: %{name}"
+    zh-CN: "当前产品不支持打开该连接类型：%{name}"
+    zh-HK: "目前產品不支援開啟此連線類型：%{name}"
   ok:
     en: OK
     zh-CN: 好
@@ -314,6 +318,10 @@ Home:
     en: "Port Forwarding %{name} failed: %{error}"
     zh-CN: "端口转发 %{name} 启动失败：%{error}"
     zh-HK: "端口轉發 %{name} 啟動失敗：%{error}"
+  port_forwarding_unsupported:
+    en: "This product cannot open port forwarding: %{name}"
+    zh-CN: "当前产品不支持打开端口转发连接：%{name}"
+    zh-HK: "目前產品不支援開啟連接埠轉發連線：%{name}"
   port_forwarding_missing_ssh:
     en: Referenced SSH server was not found.
     zh-CN: 找不到引用的 SSH 服务器。
@@ -338,6 +346,10 @@ Home:
     en: Import from other apps
     zh-CN: 从其他应用导入
     zh-HK: 從其他應用導入
+  import_from_full_product:
+    en: Import from Navop
+    zh-CN: 从全量 Navop 导入连接
+    zh-HK: 從全量 Navop 匯入連線
   more_connection_types:
     en: More Connection Types
     zh-CN: 更多连接类型
