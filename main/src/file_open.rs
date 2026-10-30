@@ -348,7 +348,10 @@ mod tests {
         );
         // 终端录制由领域文件处理器接管（见 shell_domain 的 RecordingFileOpenHandler）。
         assert_eq!(None, classify_supported_path(Path::new("session.cast")));
-        assert_eq!(None, classify_supported_path(Path::new("session.cast.partial")));
+        assert_eq!(
+            None,
+            classify_supported_path(Path::new("session.cast.partial"))
+        );
         assert_eq!(None, classify_supported_path(Path::new("session.partial")));
         assert_eq!(None, classify_supported_path(Path::new("cast")));
         assert_eq!(None, classify_supported_path(Path::new("notes.txt")));

@@ -16,8 +16,6 @@ use one_assets::IconName;
 use one_core::{settings::AppSettings, themes};
 use rust_i18n::t;
 use std::rc::Rc;
-#[cfg(feature = "shell")]
-
 const OPACITY_PRESETS: &[f32] = &[100.0, 85.0, 70.0];
 const THEME_CARD_WIDTH: f32 = 132.0;
 const THEME_CARD_HEIGHT: f32 = 64.0;
@@ -273,11 +271,13 @@ mod tests {
         assert!(source.contains("(\"system\", t!"));
         assert!(source.contains("(\"dark\", t!"));
         assert!(source.contains("ThemeRegistry::global"));
-        assert!(source.contains(".children(
+        assert!(source.contains(
+            ".children(
             app_kit::registry()
                 .shell_extras()
                 .and_then(|extras| extras.terminal_theme_section(cx)),
-        )"));
+        )"
+        ));
         assert!(source.contains("TerminalTheme::all(cx.theme())"));
         assert!(source.contains("settings.terminal_theme = theme_name.to_string()"));
         assert!(source.contains("Slider::new"));

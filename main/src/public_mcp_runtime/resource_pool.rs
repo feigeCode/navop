@@ -70,9 +70,12 @@ fn resource_pool_from_sources(
             .filter_map(|session| terminal_session_resource(session, &ai_access_levels))
             .fold(pool, ResourcePool::with_resource);
     }
+    #[cfg(feature = "database")]
     if !active_redis_ids.is_empty() {
         pool = append_active_redis_resources(pool, active_redis_ids.to_vec(), &ai_access_levels);
     }
+    #[cfg(not(feature = "database"))]
+    let _ = &active_redis_ids;
     Ok(pool)
 }
 

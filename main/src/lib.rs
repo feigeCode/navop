@@ -1281,6 +1281,70 @@ mod native_driver_feature_contract_tests {
             .is_none_or(|line| line.contains("optional = true"))
     }
 
+    fn main_dependency_line<'a>(manifest: &'a str, dependency: &str) -> Option<&'a str> {
+        manifest
+            .lines()
+            .find(|line| line.trim_start().starts_with(&format!("{dependency} = {{")))
+    }
+
+    #[test]
+    fn standalone_products_only_enable_their_own_domain_feature() {
+        let shell_manifest = include_str!("../../apps/navop-shell/Cargo.toml");
+        let data_manifest = include_str!("../../apps/navop-data/Cargo.toml");
+        let shell_line =
+            main_dependency_line(shell_manifest, "main").expect("navop-shell depends on main");
+        let data_line =
+            main_dependency_line(data_manifest, "main").expect("navop-data depends on main");
+
+        assert!(shell_line.contains("default-features = false"));
+        assert!(shell_line.contains("\"shell\""));
+        assert!(
+            !shell_line.contains("\"database\""),
+            "navop-shell must not enable the database domain"
+        );
+        assert!(data_line.contains("default-features = false"));
+        assert!(data_line.contains("\"database\""));
+        assert!(
+            !data_line.contains("\"shell\""),
+            "navop-data must not enable the shell domain"
+        );
+    }
+
+    #[test]
+    fn domain_features_only_pull_their_own_optional_dependencies() {
+        let manifest = include_str!("../Cargo.toml");
+        let features = feature_block(manifest);
+        fn feature_entry<'a>(features: &'a str, name: &str) -> &'a str {
+            let start = features
+                .find(&format!("\n{name} = ["))
+                .expect("feature must be declared");
+            let rest = &features[start..];
+            let end = rest.find(']').expect("feature list must be closed");
+            &rest[..=end]
+        }
+
+        let database = feature_entry(features, "database");
+        let shell = feature_entry(features, "shell");
+
+        assert!(database.contains("dep:db_view") && database.contains("dep:data_domain"));
+        assert!(!database.contains("dep:terminal_view") && !database.contains("dep:shell_domain"));
+        assert!(shell.contains("dep:terminal_view") && shell.contains("dep:shell_domain"));
+        assert!(!shell.contains("dep:db_view") && !shell.contains("dep:data_domain"));
+        for dependency in [
+            "db",
+            "ssh",
+            "sftp_view",
+            "known_hosts_view",
+            "port_forwarding",
+            "port_forwarding_view",
+        ] {
+            assert!(
+                dependency_is_optional_or_absent(manifest, dependency),
+                "{dependency} must be pruned from main"
+            );
+        }
+    }
+
     #[test]
     fn builtin_mongodb_feature_is_declared_and_default_off() {
         let manifest = include_str!("../Cargo.toml");

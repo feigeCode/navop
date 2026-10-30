@@ -1495,3 +1495,67 @@ UI（161 处）。本批把这些入口改造成「公共壳调注册表/领域�
 - `file_open/recording.rs`（终端录制）与 `home_tab/encryption.rs`（主密钥门禁）的 shell 分支。
 - 之后的最终形态仍是 §24 的方案：把 HomePage 骨架抽成 `app_shell`，用 `HomeProfile` /
   `HomeSection` 让每个产品装配自己的主页微调。
+
+## 二十七、main 去掉最后一处领域 `use`（2026-10-30，第五批）
+
+§26 之后 `main/src` 仍在 6 个文件里直接 `use` 领域 crate（终端配色、终端主题卡片、
+录制文件打开、标签复制、临时连接保存、SFTP 粘贴键位、Redis 活动连接）。本批把这些
+全部改造成「注册表 + 领域钩子」，`main/src` 已**没有任何 `use 领域crate::…`**。
+
+### 27.1 新增/扩展的契约
+
+| 契约 | 位置 | 作用 |
+|---|---|---|
+| `FileOpenHandler { handles, open }` + `DomainRegistry::open_file` | `domain_api::file_open` | 文件关联打开先问领域（终端录制 `.cast` 归 shell） |
+| `ShellExtras::duplicate_terminal_tab` | `domain_api::shell_extras` | 终端标签复制：领域自己读工作区连接并重开 |
+| `ShellExtras::open_terminal_in_dir` | 同上 | SFTP 双栏「在本地终端打开 / 在此连接开终端」不再由公共壳构造终端 |
+| `ShellExtras::open_session_log` | 同上 | 会话日志窗口的打开由 shell 领域实现 |
+| `ShellExtras::save_temporary_connection` | 同上 | 临时连接「保存为连接」走领域内的 SSH 表单 |
+| `ShellExtras::sidebar_colors` / `SidebarColors` | 同上 | 侧栏配色由领域按终端配色算好，公共壳只存 `SidebarPalette` |
+| `ShellExtras::terminal_theme_section` | 同上 | 外观设置里的终端主题卡片由领域渲染成 `AnyElement` 插槽 |
+| `Domain::keybindings` + `app_kit::domain_keybindings` | `domain_api::domain` | 领域自带键位（如 SFTP 粘贴），公共壳统一 bind |
+| `ActiveResourceProvider` + `ActiveResourceIds` | `domain_api::resources` | 公共 MCP 资源池需要「当前活跃连接」时由领域提供快照（Redis 已接） |
+| `DomainRegistry::active_resources` | 同上 | 聚合所有领域快照，按 `kind` 分类 |
+
+### 27.2 迁移落点
+
+| 原位置（`main/src`） | 去向 |
+|---|---|
+| `file_open/recording.rs`（338 行终端录制） | `shell_domain::recording`（含 `.cast` 判定、sha2 稳定键、`RecordingFileOpenHandler`） |
+| `home_tabs::duplicate_active_tab` 的终端分支 | `shell_domain::ShellExtrasImpl::duplicate_terminal_tab` |
+| `home_tabs::open_sftp_local_terminal` / `open_sftp_ssh_terminal` | `shell_domain::terminals::open_local_terminal_with_dir` + `SshConnectionOpener::open_ssh_terminal` |
+| `home_tab/domain_host::open_session_log_file` | `ShellExtras::open_session_log` |
+| `home_tab/connection_forms::show_save_temporary_connection_form` | `ShellExtras::save_temporary_connection`（SSH 表单 + 主密钥门禁） |
+| `persistent_connection_sidebar` 的 `TerminalColors` 转换 | `ShellExtras::sidebar_colors` |
+| `settings/appearance::render_terminal_palette` 等（3 个函数） | `shell_domain::terminal_theme_section` |
+| `navop_app` 的 SFTP 粘贴 `KeyBinding` | `Domain::keybindings`（`sftp_view::PasteUpload` + `SFTP_VIEW_CONTEXT`） |
+| `public_mcp_runtime::resource_pool` 的 `GlobalRedisState` | `data_domain::active_resources::RedisActiveResourceProvider` |
+
+### 27.3 依赖与配置收口
+
+- `main/Cargo.toml` 删除 6 个已无引用的 optional 依赖：`db`、`ssh`、`sftp_view`、
+  `known_hosts_view`、`port_forwarding`、`port_forwarding_view`（`builtin-duckdb`
+  改由 `db_view/builtin-duckdb` 转发）。
+- 领域 cfg 从 161 处降到 **57 处**（shell 45 / database 12），全部集中在
+  `public_mcp_runtime` 的工具集装配、Mongo 原生驱动工厂、扩展连接终端启动与
+  远程桌面协议映射。
+
+### 27.4 验证（真实输出）
+
+| 命令 | 结果 |
+|---|---|
+| `cargo test -p main --lib` | 589 passed, 0 failed |
+| `cargo test -p shell_domain --lib` | 42 passed |
+| `cargo test -p app_kit / domain_api / data_domain` | 141 / 18 / 11 passed |
+| `cargo test -p main --test i18n_locale_keys_contract` | 1 passed |
+| `cargo build -p navop -p navop-shell -p navop-data` | 通过，无 rustc 警告 |
+| 依赖树互斥计数 | 0 / 0 |
+| 临时 HOME 启动 `navop-shell` / `navop-data` | RUNNING_OK |
+
+### 27.5 剩余
+
+- `public_mcp_runtime` 的 data/shell 工具集装配与 Mongo 原生驱动工厂（建议直接合并两套
+  MCP 实现，让全量产品也走 `mcp_host`）。
+- `home/home_strategy` 的扩展连接终端启动、`home_tab/connection_open` 的远程桌面协议映射。
+- `main::ProductKind`（产品装配最终要移到 `apps/*`）。
+- CI 增加依赖树 guard job。

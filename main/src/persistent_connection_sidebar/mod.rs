@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
+use crate::home_tab::HomePage;
 use gpui::{
     AnyElement, AppContext, Context, Entity, EventEmitter, Hsla, InteractiveElement, IntoElement,
     ParentElement, Pixels, Styled, UniformListScrollHandle, Window, deferred, div, hsla, px,
 };
 use gpui_component::input::{InputEvent, InputState};
-use crate::home_tab::HomePage;
 
 mod batch_toolbar;
 mod connection_command;

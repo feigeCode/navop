@@ -51,11 +51,6 @@ agent_runtime = { workspace = true }
 ai_chat_view = { workspace = true, default-features = false }
 public_mcp = { workspace = true }
 tool_runtime = { workspace = true }
-port_forwarding = { workspace = true, optional = true }
-port_forwarding_view = { workspace = true, optional = true }
-sftp_view = { workspace = true, optional = true }
-known_hosts_view = { workspace = true, optional = true }
-ssh = { workspace = true, optional = true }
 redis_view = { workspace = true, optional = true }
 redis-runtime = { workspace = true, optional = true }
 mongodb_view = { workspace = true, optional = true }
@@ -73,7 +68,6 @@ data_domain = { workspace = true, optional = true }
 one-ui.workspace = true
 navop_runtime = { workspace = true }
 reqwest_client.workspace = true
-db = { workspace = true, optional = true }
 connection-import-protocol.workspace = true
 connection-form.workspace = true
 global-hotkey.workspace = true
@@ -95,8 +89,7 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "NSApplication",
     "NSResponder",
     "NSView",
-    "NSWindow",
-] }
+    "NSWindow"] }
 
 # 系统托盘（`system_tray`）。macOS/Windows 用 tray-icon 的原生后端；
 # Linux 只启用它的 ksni 后端（freedesktop StatusNotifierItem），必须关掉默认的
@@ -143,29 +136,21 @@ database = [
     "extension-runtime/database",
     "navop_runtime/database",
     "navop_runtime/redis",
-    "dep:db",
     "dep:db_view",
     "dep:redis_view",
     "dep:redis-runtime",
     "dep:mongodb_view",
     "dep:mongodb-runtime",
-    "dep:data_domain",
-]
+    "dep:data_domain"]
 shell = [
     "extension-runtime/remote-desktop",
     "navop_runtime/sftp",
     "dep:terminal",
     "dep:terminal_view",
-    "dep:sftp_view",
-    "dep:ssh",
-    "dep:known_hosts_view",
-    "dep:port_forwarding",
-    "dep:port_forwarding_view",
     "dep:remote_desktop",
     "dep:remote_desktop_view",
-    "dep:shell_domain",
-]
-builtin-duckdb = ["db/builtin-duckdb", "db_view/builtin-duckdb", "navop_runtime/builtin-duckdb"]
+    "dep:shell_domain"]
+builtin-duckdb = ["db_view/builtin-duckdb", "navop_runtime/builtin-duckdb"]
 builtin-mongodb = ["mongodb_view/builtin-mongodb"]
 builtin-data-drivers = ["builtin-mongodb"]
 embedded-webview = ["ai_chat_view/embedded-webview"]
