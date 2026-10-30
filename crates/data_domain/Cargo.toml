@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[features]
+# 与 `mongodb_view` 同名 feature 对齐：打开后使用内嵌驱动，不再从已安装驱动目录
+# 构造原生驱动工厂（详见 `DataDomain::init`）。
+builtin-mongodb = ["mongodb_view/builtin-mongodb"]
+
 [dependencies]
 anyhow.workspace = true
 app_kit.workspace = true
@@ -17,6 +22,7 @@ gpui.workspace = true
 mcp_host.workspace = true
 navop_runtime = { path = "../navop_runtime", default-features = false }
 mongodb_view.workspace = true
+mongodb-runtime.workspace = true
 runtime_database.workspace = true
 runtime_redis.workspace = true
 one-core.workspace = true

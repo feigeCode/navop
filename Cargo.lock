@@ -2995,6 +2995,7 @@ dependencies = [
  "gpui-component",
  "gpui-fast",
  "mcp_host",
+ "mongodb-runtime",
  "mongodb_view",
  "navop_runtime",
  "one-core",

@@ -837,8 +837,6 @@ pub fn init(cx: &mut App) -> anyhow::Result<()> {
     // 领域专属子系统（数据库缓存、SQL 编辑器、Redis/Mongo 视图、终端视图等）
     // 由各领域包自己初始化，公共壳只知道“按注册顺序调用”。
     app_kit::init_domains(cx)?;
-    #[cfg(all(feature = "database", not(feature = "builtin-mongodb")))]
-    init_native_data_driver_factories(cx);
     crate::personal_sync_runtime::init(cx);
     // 独立产品（`navop-shell` / `navop-data`）用 `app_kit` 托管的通用 MCP 宿主
     // (`mcp_host`)；全量产品才启动自己的 `public_mcp_runtime`，否则两套 MCP
@@ -857,18 +855,6 @@ pub fn init(cx: &mut App) -> anyhow::Result<()> {
 
     cx.activate(true);
     Ok(())
-}
-
-#[cfg(all(feature = "database", not(feature = "builtin-mongodb")))]
-fn init_native_data_driver_factories(cx: &mut App) {
-    let Some(root) = extension_runtime::extension::extensions_root() else {
-        return;
-    };
-    let driver_root = root.join("database_drivers");
-    mongodb_view::init_with_factory(
-        cx,
-        mongodb_runtime::MongoConnectionFactory::from_installed_root(driver_root),
-    );
 }
 
 pub fn refresh_keybindings(cx: &mut App) {
@@ -2376,32 +2362,14 @@ mod tests {
     }
 
     #[test]
-    fn native_driver_factories_are_ready_before_public_mcp_init() {
+    fn domain_init_precedes_public_mcp_init() {
         let source = include_str!("navop_app.rs");
         let domains = source.find("app_kit::init_domains(cx)?;").unwrap();
-        let native_factories = source
-            .find("init_native_data_driver_factories(cx);")
-            .unwrap();
         let public_mcp = source.find("crate::public_mcp_runtime::init(cx);").unwrap();
 
-        // 领域初始化（含 Redis/Mongo 视图）→ 原生驱动工厂 → 公共 MCP 工具注册表，
-        // 顺序保证 MCP 资源池里的驱动已经可用。
-        assert!(domains < native_factories);
-        assert!(native_factories < public_mcp);
-    }
-
-    #[test]
-    fn native_data_driver_factories_only_keep_mongodb() {
-        let source = include_str!("navop_app.rs");
-        let init = source.find("fn init_native_data_driver_factories").unwrap();
-        let rest = &source[init..];
-        let end = rest
-            .find("pub fn refresh_keybindings")
-            .expect("next item boundary");
-        let body = &rest[..end];
-
-        assert!(body.contains("MongoConnectionFactory::from_installed_root"));
-        assert!(!body.contains("RedisConnectionFactory"));
+        // 领域初始化里包含 Mongo 原生驱动工厂（`data_domain` 负责），必须早于
+        // 公共 MCP 工具注册表，否则资源池会拿到内嵌驱动。
+        assert!(domains < public_mcp);
     }
 
     #[test]

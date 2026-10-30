@@ -149,7 +149,7 @@ shell = [
     "dep:remote_desktop",
     "dep:remote_desktop_view",]
 builtin-duckdb = ["db_view/builtin-duckdb", "navop_runtime/builtin-duckdb"]
-builtin-mongodb = ["mongodb_view/builtin-mongodb"]
+builtin-mongodb = ["mongodb_view/builtin-mongodb", "data_domain?/builtin-mongodb"]
 builtin-data-drivers = ["builtin-mongodb"]
 embedded-webview = ["ai_chat_view/embedded-webview"]
 github-distribution = ["github-updates", "github-marketplace"]

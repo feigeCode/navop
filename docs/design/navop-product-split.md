@@ -1581,7 +1581,13 @@ UI（161 处）。本批把这些入口改造成「公共壳调注册表/领域�
 - `cargo test -p main --test i18n_locale_keys_contract` 与
   `--test product_dependency_isolation` 均通过。
 
-### 26.3 剩余
+### 26.3 Mongo 原生驱动工厂跟进
 
-`data_domain` 依赖（MCP 工具集实现）、`ProductFeatures`/`AppIdentity` 常量重复、两套 MCP
-实现合并、`public_mcp_runtime` 的 57 处领域 cfg 收敛。
+`init_native_data_driver_factories` 也迁到了 `DataDomain::init`（`data_domain` 新增同名
+`builtin-mongodb` feature，`main` 用弱依赖 `data_domain?/builtin-mongodb` 转发）。顺序不变：
+领域初始化 → 公共 MCP 工具注册表。
+
+### 26.4 剩余
+
+`data_domain` 依赖（公共 MCP 的 Redis/Mongo 工具集实现）、`ProductFeatures`/`AppIdentity`
+常量重复、两套 MCP 实现合并、`public_mcp_runtime` 的领域 cfg 收敛。

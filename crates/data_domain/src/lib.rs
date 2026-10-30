@@ -20,12 +20,27 @@ use one_core::tab_container::{TabItem, TabOpenMode};
 use redis_view::RedisTabView;
 use std::sync::Arc;
 
+pub mod active_resources;
 pub mod connection_forms;
 pub mod mcp;
 pub mod settings;
 mod tab_restore;
-pub mod active_resources;
 mod visuals;
+
+/// 未启用内嵌 Mongo 驱动时，从已安装的扩展驱动目录构造原生驱动工厂。
+///
+/// 必须早于公共 MCP 的工具集装配：`public_mcp_runtime` 的 Mongo 工具会读
+/// `GlobalMongoState`，工厂晚到就会退回内嵌驱动、连不上已安装的 IPC 驱动。
+#[cfg(not(feature = "builtin-mongodb"))]
+fn init_native_data_driver_factories(cx: &mut App) {
+    let Some(root) = extension_runtime::extension::extensions_root() else {
+        return;
+    };
+    mongodb_view::init_with_factory(
+        cx,
+        mongodb_runtime::MongoConnectionFactory::from_installed_root(root.join("database_drivers")),
+    );
+}
 
 pub struct DataDomain;
 
@@ -108,6 +123,8 @@ impl Domain for DataDomain {
         db_view::sql_editor_view::init(cx);
         redis_view::init(cx);
         mongodb_view::init(cx);
+        #[cfg(not(feature = "builtin-mongodb"))]
+        init_native_data_driver_factories(cx);
         let storage_state = cx.global::<GlobalStorageState>();
         let connection_repository = storage_state.storage.get::<ConnectionRepository>();
         let db_state = db::GlobalDbState::with_connection_repository(connection_repository);
@@ -395,6 +412,22 @@ mod tests {
             vec!["Database", "Redis", "MongoDB"],
             registry.tab_restorers()[0].content_keys()
         );
+    }
+
+    #[test]
+    fn native_mongo_driver_factory_is_installed_from_the_extension_root() {
+        let source = include_str!("lib.rs");
+        let Some(init) = source.find("fn init_native_data_driver_factories") else {
+            // 内嵌驱动构建下工厂函数被 cfg 掉，无需安装。
+            return;
+        };
+        let rest = &source[init..];
+        let end = rest.find("pub struct DataDomain").expect("next item");
+        let body = &rest[..end];
+
+        assert!(body.contains("MongoConnectionFactory::from_installed_root"));
+        assert!(body.contains("database_drivers"));
+        assert!(!body.contains("RedisConnectionFactory"));
     }
 
     #[test]
