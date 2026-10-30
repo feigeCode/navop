@@ -12,7 +12,7 @@ use one_core::storage::traits::Repository as _;
 use one_core::storage::{ConnectionRepository, GlobalStorageState, StoredConnection};
 
 pub use crate::new_connection::{
-    ConnectionFormDialog, ConnectionFormMode, duplicate_connection, edit_connection,
+    ConnectionFormDialog, ConnectionFormMode, duplicate_connection, edit_connection, open_form,
     open_new_connection, open_new_connection_in_workspace,
 };
 

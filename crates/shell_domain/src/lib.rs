@@ -12,6 +12,7 @@ mod session_logs;
 mod settings;
 mod shell_extras;
 mod tab_restore;
+mod workbench_terminal;
 
 use connection_forms::ShellConnectionFormProvider;
 use connection_openers::{FtpConnectionOpener, SerialConnectionOpener, TelnetConnectionOpener};
@@ -136,6 +137,8 @@ impl Domain for ShellDomain {
         shell_extras::init(cx);
         terminal_view::init(cx);
         remote_desktop_view::init(cx);
+        workbench_terminal::install_terminal_host(cx);
+        workbench_terminal::install_workbench_terminal_provider();
         Ok(())
     }
 

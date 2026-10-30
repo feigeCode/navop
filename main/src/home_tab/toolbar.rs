@@ -203,7 +203,6 @@ impl HomePage {
             )
             .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
                 let group_home = home.clone();
-                let import_home = home.clone();
                 menu.item(
                     PopupMenuItem::new(t!("Workspace.new").to_string())
                         .icon(IconName::FolderOpen)
@@ -224,9 +223,7 @@ impl HomePage {
                 .item(
                     PopupMenuItem::new(t!("Home.other_app_import").to_string())
                         .icon(IconName::Upload)
-                        .on_click(move |_, window, cx| {
-                            show_connection_import_window(import_home.clone(), window, cx)
-                        }),
+                        .on_click(move |_, window, cx| show_connection_import_window(window, cx)),
                 )
                 // 独立产品的数据目录里没有旧版本连接，只能从全量产品（或迁移包）
                 // 导入；全量产品自己就是来源，不展示这个入口。

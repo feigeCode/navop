@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use connection_import_protocol::ImporterDescriptor;
 use gpui::{
-    AnyWindowHandle, App, AppContext, AsyncApp, Context, Entity, FocusHandle, Focusable,
-    PathPromptOptions, WeakEntity, Window,
+    App, AppContext, AsyncApp, Context, FocusHandle, Focusable, PathPromptOptions, WeakEntity,
+    Window,
 };
 use one_core::gpui_tokio::Tokio;
 use one_core::popup_window::{PopupWindowOptions, open_reusable_popup_window};
@@ -14,7 +14,6 @@ use super::connection_import_actions::{
     scan_import_sources,
 };
 use super::connection_import_model::{ImportRowSaveStatus, previewable_source_ids_after_scan};
-use crate::home_tab::HomePage;
 
 mod editor;
 mod model;
@@ -23,7 +22,6 @@ mod render;
 pub(crate) use model::ConnectionImportWindowModel;
 
 pub(crate) struct ConnectionImportWindow {
-    parent: Entity<HomePage>,
     focus_handle: FocusHandle,
     model: ConnectionImportWindowModel,
     loading_sources: bool,
@@ -31,36 +29,23 @@ pub(crate) struct ConnectionImportWindow {
     status_message: Option<String>,
 }
 
-pub(crate) fn show_connection_import_window(
-    parent: Entity<HomePage>,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    let parent_window = window.window_handle();
+pub(crate) fn show_connection_import_window(window: &mut Window, cx: &mut App) {
     // 导入窗口全局只有一个：所有入口共用同一个原生窗口。
     open_reusable_popup_window(
         PopupWindowOptions::new(t!("Home.import").to_string()).size(1040.0, 720.0),
         "connection-import-window",
-        move |window, cx| {
-            cx.new(|cx| ConnectionImportWindow::new(parent.clone(), parent_window, window, cx))
-        },
+        move |window, cx| cx.new(|cx| ConnectionImportWindow::new(window, cx)),
         Some(window),
         cx,
     );
 }
 
 impl ConnectionImportWindow {
-    pub(crate) fn new(
-        parent: Entity<HomePage>,
-        _parent_window: AnyWindowHandle,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    pub(crate) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
         focus_handle.focus(window, cx);
         let (descriptors, status_message) = load_importer_descriptors();
         Self {
-            parent,
             focus_handle,
             model: ConnectionImportWindowModel::new(descriptors),
             loading_sources: false,

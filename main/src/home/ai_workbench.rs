@@ -10,10 +10,6 @@ use ai_chat_view::{
 };
 use gpui::{App, AppContext as _, Entity, Subscription, Window};
 use gpui_component::ActiveTheme as _;
-#[cfg(feature = "shell")]
-use terminal::LocalConfig;
-#[cfg(feature = "shell")]
-use terminal_view::TerminalView;
 use workspace_explorer::{
     WorkspaceEditor, WorkspaceExplorer, WorkspaceExplorerConfig, WorkspaceExplorerEvent,
     WorkspaceTheme,
@@ -85,14 +81,6 @@ fn remember_workspace_root(root: &std::path::Path, cx: &mut App) {
 }
 
 #[cfg(feature = "shell")]
-fn default_terminal_config(root: &std::path::Path) -> LocalConfig {
-    LocalConfig {
-        shell: None,
-        args: Vec::new(),
-        working_dir: Some(root.to_string_lossy().into_owned()),
-        env: Vec::new(),
-    }
-}
 
 /// 构建 AI 工作台标签页内容。
 pub(crate) fn build_ai_workbench_shell(
@@ -133,12 +121,9 @@ pub(crate) fn build_ai_workbench_shell(
     // 初始工作区也要进入最近列表，否则第一次打开时菜单里是空的。
     remember_workspace_root(&workspace_root, cx);
     chat.update(cx, |panel, cx| panel.set_sidebar_suppressed(true, cx));
-    #[cfg(feature = "shell")]
-    let terminal_root = workspace_root.clone();
-    #[cfg(feature = "shell")]
-    let terminal = cx.new(|cx| {
-        TerminalView::new(default_terminal_config(&terminal_root), window, cx).with_workspace_pane()
-    });
+    // 终端面板由 shell 领域通过提供者注入；数据产品不注册，因此没有终端面板。
+    let terminal_view = ai_chat_view::workbench_terminal_provider()
+        .and_then(|provider| provider.terminal_panel(&workspace_root, window, cx));
     // 子代理详情面板：内容由「点开某张子代理卡片」决定。
     //
     // 面板自己订阅聊天面板的事件、自己认领要看哪条子代理；宿主只负责在请求到来时
@@ -155,11 +140,9 @@ pub(crate) fn build_ai_workbench_shell(
                         WorkbenchPanelEntry::new(WorkbenchPanelKind::Review, editor.clone()),
                         WorkbenchPanelEntry::new(WorkbenchPanelKind::Files, explorer.clone()),
                     ];
-                    #[cfg(feature = "shell")]
-                    panels.push(WorkbenchPanelEntry::new(
-                        WorkbenchPanelKind::Terminal,
-                        terminal.clone(),
-                    ));
+                    if let Some(view) = terminal_view.clone() {
+                        panels.push(WorkbenchPanelEntry::new(WorkbenchPanelKind::Terminal, view));
+                    }
                     panels.push(WorkbenchPanelEntry::new(
                         WorkbenchPanelKind::Subagent,
                         subagent_detail.clone(),
@@ -419,17 +402,18 @@ pub(crate) fn build_ai_workbench_shell(
     // 多例面板工厂：「新建页签」选终端时创建一个全新终端实例（工作目录取
     // 外壳当前工作区根），而不是定位到已有终端。审查/文件是单例面板，
     // 重复打开只会定位，不走这里。
-    #[cfg(feature = "shell")]
-    shell.update(cx, |shell, cx| {
-        shell.set_panel_factory(
-            move |root: &std::path::Path, window: &mut gpui::Window, cx: &mut gpui::App| {
-                let config = default_terminal_config(root);
-                cx.new(|cx| TerminalView::new(config, window, cx).with_workspace_pane())
-                    .into()
-            },
-            cx,
-        );
-    });
+    if let Some(factory) =
+        ai_chat_view::workbench_terminal_provider().and_then(|provider| provider.panel_factory())
+    {
+        shell.update(cx, |shell, cx| {
+            shell.set_panel_factory(
+                move |root: &std::path::Path, window: &mut gpui::Window, cx: &mut gpui::App| {
+                    factory(root, window, cx)
+                },
+                cx,
+            );
+        });
+    }
 
     // AI 提交信息：Explorer 发请求，这里取已配置 provider 生成后回填。
     let explorer_for_message = explorer.clone();

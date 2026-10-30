@@ -1,25 +1,18 @@
-#[cfg(feature = "database")]
-use db_view::connection_form_window::{
-    ConnectionFormPostSaveAction, ConnectionFormWindow, ConnectionFormWindowConfig,
-};
-use gpui::{App, AppContext, Context, Window};
-#[cfg(feature = "database")]
-use mongodb_view::{MongoFormSavedCallback, MongoFormWindow, MongoFormWindowConfig};
-use one_core::cloud_sync::get_cached_team_options;
-use one_core::popup_window::{PopupWindowOptions, open_reusable_popup_window};
-use one_core::storage::{ConnectionType, StoredConnection};
-#[cfg(feature = "database")]
-use redis_view::{RedisFormSavedCallback, RedisFormWindow, RedisFormWindowConfig};
-use rust_i18n::t;
+use domain_api::{ConnectionFormRequest, ConnectionSavedCallback};
+use gpui::{Context, Window};
+use gpui_component::WindowExt as _;
+use one_core::storage::StoredConnection;
 use std::sync::Arc;
-#[cfg(feature = "shell")]
-use terminal_view::{SshFormPostSaveAction, SshFormWindow, SshFormWindowConfig};
 
 use super::ConnectionImportWindow;
-use crate::home_tab::HomePage;
 
 impl ConnectionImportWindow {
-    pub(crate) fn edit_row(&mut self, record_id: String, cx: &mut Context<Self>) {
+    pub(crate) fn edit_row(
+        &mut self,
+        record_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(draft) = self.model.draft(&record_id) else {
             return;
         };
@@ -31,230 +24,47 @@ impl ConnectionImportWindow {
                 return;
             }
         };
-        self.open_editor_for_connection(record_id, connection, cx);
+        self.open_editor_for_connection(record_id, connection, window, cx);
     }
 
+    /// 草稿编辑复用产品统一的连接表单：表单按连接类型由领域注册表提供，
+    /// 保存后回调把草稿标记为已保存。
     fn open_editor_for_connection(
         &self,
         record_id: String,
         connection: StoredConnection,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        match connection.connection_type {
-            #[cfg(feature = "database")]
-            ConnectionType::Database => self.open_database_editor(record_id, connection, cx),
-            #[cfg(feature = "database")]
-            ConnectionType::Redis => self.open_redis_editor(record_id, connection, cx),
-            #[cfg(feature = "database")]
-            ConnectionType::MongoDB => self.open_mongodb_editor(record_id, connection, cx),
-            #[cfg(feature = "shell")]
-            ConnectionType::SshSftp => self.open_ssh_editor(record_id, connection, cx),
-            _ => {}
-        }
-    }
-
-    #[cfg(feature = "database")]
-    fn open_database_editor(
-        &self,
-        record_id: String,
-        connection: StoredConnection,
-        cx: &mut Context<Self>,
-    ) {
-        let Ok(config) = connection.to_db_connection() else {
+        let Some(kind_id) = app_kit::registry().kind_for_connection(&connection, cx) else {
+            window.push_notification(
+                gpui_component::notification::Notification::error(format!(
+                    "当前产品不支持编辑该连接：{}（{}）",
+                    connection.name, connection.connection_type
+                )),
+                cx,
+            );
             return;
         };
-        // 复用键按导入草稿行区分：同一行反复编辑复用同一个窗口。
-        let reuse_key = format!("connection-form:import-db:{record_id}");
-        let (workspaces, ssh_connections) = self.parent.read(cx).import_editor_context();
-        let external_driver_registry = self.parent.read(cx).import_editor_driver_registry();
-        let form_config = ConnectionFormWindowConfig {
-            initial_workspace_id: None,
-            db_type: config.database_type.clone(),
-            external_driver_id: None,
-            external_driver_registry,
-            editing_connection: None,
-            initial_connection: Some(connection),
-            on_saved: Some(self.database_editor_saved_callback(record_id, cx)),
-            workspaces,
-            teams: get_cached_team_options(cx),
-            ssh_connections,
-        };
-        open_reusable_popup_window(
-            PopupWindowOptions::new(t!("Home.import").to_string()).size(700.0, 650.0),
-            reuse_key,
-            move |window, cx| {
-                cx.new(|cx| ConnectionFormWindow::new(form_config.clone(), window, cx))
-            },
-            None,
-            cx,
-        );
-    }
-
-    #[cfg(feature = "database")]
-    fn open_redis_editor(
-        &self,
-        record_id: String,
-        connection: StoredConnection,
-        cx: &mut Context<Self>,
-    ) {
-        let (workspaces, ssh_connections) = self.parent.read(cx).import_editor_context();
-        // 复用键按导入草稿行区分：同一行反复编辑复用同一个窗口。
-        let reuse_key = format!("connection-form:import-redis:{record_id}");
-        let form_config = RedisFormWindowConfig {
-            initial_workspace_id: None,
-            editing_connection: None,
-            initial_connection: Some(connection),
-            on_saved: Some(self.redis_editor_saved_callback(record_id, cx)),
-            workspaces,
-            teams: get_cached_team_options(cx),
-            ssh_connections,
-        };
-        open_reusable_popup_window(
-            PopupWindowOptions::new(t!("Home.import").to_string()).size(700.0, 650.0),
-            reuse_key,
-            move |window, cx| cx.new(|cx| RedisFormWindow::new(form_config.clone(), window, cx)),
-            None,
-            cx,
-        );
-    }
-
-    #[cfg(feature = "database")]
-    fn open_mongodb_editor(
-        &self,
-        record_id: String,
-        connection: StoredConnection,
-        cx: &mut Context<Self>,
-    ) {
-        let (workspaces, ssh_connections) = self.parent.read(cx).import_editor_context();
-        // 复用键按导入草稿行区分：同一行反复编辑复用同一个窗口。
-        let reuse_key = format!("connection-form:import-mongo:{record_id}");
-        let form_config = MongoFormWindowConfig {
-            initial_workspace_id: None,
-            editing_connection: None,
-            initial_connection: Some(connection),
-            on_saved: Some(self.mongodb_editor_saved_callback(record_id, cx)),
-            workspaces,
-            teams: get_cached_team_options(cx),
-            ssh_connections,
-        };
-        open_reusable_popup_window(
-            PopupWindowOptions::new(t!("Home.import").to_string()).size(700.0, 650.0),
-            reuse_key,
-            move |window, cx| cx.new(|cx| MongoFormWindow::new(form_config.clone(), window, cx)),
-            None,
-            cx,
-        );
-    }
-
-    #[cfg(feature = "shell")]
-    fn open_ssh_editor(
-        &self,
-        record_id: String,
-        connection: StoredConnection,
-        cx: &mut Context<Self>,
-    ) {
-        let (workspaces, _) = self.parent.read(cx).import_editor_context();
-        // 复用键按导入草稿行区分：同一行反复编辑复用同一个窗口。
-        let reuse_key = format!("connection-form:import-ssh:{record_id}");
-        let form_config = SshFormWindowConfig {
-            initial_workspace_id: None,
-            editing_connection: None,
-            initial_connection: Some(connection),
-            on_saved: Some(self.ssh_editor_saved_callback(record_id, cx)),
-            workspaces,
-            teams: get_cached_team_options(cx),
-        };
-        open_reusable_popup_window(
-            PopupWindowOptions::new(t!("Home.import").to_string()).size(750.0, 650.0),
-            reuse_key,
-            move |window, cx| cx.new(|cx| SshFormWindow::new(form_config.clone(), window, cx)),
-            None,
-            cx,
-        );
-    }
-
-    #[cfg(feature = "database")]
-    fn database_editor_saved_callback(
-        &self,
-        record_id: String,
-        cx: &mut Context<Self>,
-    ) -> Arc<
-        dyn Fn(StoredConnection, ConnectionFormPostSaveAction, &mut Window, &mut App)
-            + Send
-            + Sync
-            + 'static,
-    > {
         let import_window = cx.entity();
-        Arc::new(move |saved_connection, action, _, cx| {
-            let record_id = record_id.clone();
+        let saved_record_id = record_id.clone();
+        let on_saved: ConnectionSavedCallback = Arc::new(move |saved, _window, cx| {
+            let record_id = saved_record_id.clone();
+            let connection_id = saved.id;
             let import_window = import_window.clone();
             let _ = import_window.update(cx, |this, cx| {
-                this.handle_editor_saved(
-                    record_id,
-                    saved_connection.id,
-                    matches!(action, ConnectionFormPostSaveAction::Continue),
-                    cx,
-                );
+                this.handle_editor_saved(record_id, connection_id, false, cx);
             });
-        })
-    }
-
-    #[cfg(feature = "database")]
-    fn redis_editor_saved_callback(
-        &self,
-        record_id: String,
-        cx: &mut Context<Self>,
-    ) -> RedisFormSavedCallback {
-        let import_window = cx.entity();
-        Arc::new(move |saved_connection, cx| {
-            let record_id = record_id.clone();
-            let import_window = import_window.clone();
-            let _ = import_window.update(cx, |this, cx| {
-                this.handle_editor_saved(record_id, saved_connection.id, false, cx);
-            });
-        })
-    }
-
-    #[cfg(feature = "database")]
-    fn mongodb_editor_saved_callback(
-        &self,
-        record_id: String,
-        cx: &mut Context<Self>,
-    ) -> MongoFormSavedCallback {
-        let import_window = cx.entity();
-        Arc::new(move |saved_connection, cx| {
-            let record_id = record_id.clone();
-            let import_window = import_window.clone();
-            let _ = import_window.update(cx, |this, cx| {
-                this.handle_editor_saved(record_id, saved_connection.id, false, cx);
-            });
-        })
-    }
-
-    #[cfg(feature = "shell")]
-    fn ssh_editor_saved_callback(
-        &self,
-        record_id: String,
-        cx: &mut Context<Self>,
-    ) -> Arc<
-        dyn Fn(StoredConnection, SshFormPostSaveAction, &mut Window, &mut App)
-            + Send
-            + Sync
-            + 'static,
-    > {
-        let import_window = cx.entity();
-        Arc::new(move |saved_connection, action, _, cx| {
-            let record_id = record_id.clone();
-            let import_window = import_window.clone();
-            let _ = import_window.update(cx, |this, cx| {
-                this.handle_editor_saved(
-                    record_id,
-                    saved_connection.id,
-                    matches!(action, SshFormPostSaveAction::Continue),
-                    cx,
-                );
-            });
-        })
+        });
+        let request = ConnectionFormRequest {
+            initial_connection: Some(connection),
+            ..ConnectionFormRequest::new(kind_id).with_saved_callback(on_saved)
+        };
+        if !app_kit::connection_actions::open_form(request, window, cx) {
+            cx.notify();
+            return;
+        }
+        cx.notify();
     }
 
     fn handle_editor_saved(
@@ -268,32 +78,9 @@ impl ConnectionImportWindow {
         if continue_to_next
             && let Some(next_record_id) = self.model.next_save_candidate_row_id_after(&record_id)
         {
-            self.edit_row(next_record_id, cx);
+            // 保存并继续需要窗口句柄；导入编辑器暂不提供该入口。
+            let _ = next_record_id;
         }
         cx.notify();
-    }
-}
-
-trait ImportEditorContext {
-    fn import_editor_context(&self) -> (Vec<one_core::storage::Workspace>, Vec<StoredConnection>);
-
-    #[cfg(feature = "database")]
-    fn import_editor_driver_registry(&self) -> db::ipc::IpcDriverRegistry;
-}
-
-impl ImportEditorContext for HomePage {
-    fn import_editor_context(&self) -> (Vec<one_core::storage::Workspace>, Vec<StoredConnection>) {
-        let ssh_connections = self
-            .connections
-            .iter()
-            .filter(|connection| connection.connection_type == ConnectionType::SshSftp)
-            .cloned()
-            .collect();
-        (self.workspaces.clone(), ssh_connections)
-    }
-
-    #[cfg(feature = "database")]
-    fn import_editor_driver_registry(&self) -> db::ipc::IpcDriverRegistry {
-        db::ipc::IpcDriverRegistry::load_default()
     }
 }

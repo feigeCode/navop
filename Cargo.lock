@@ -12833,6 +12833,7 @@ checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
 name = "shell_domain"
 version = "0.1.0"
 dependencies = [
+ "ai_chat_view",
  "anyhow",
  "app_kit",
  "chrono",
@@ -12848,6 +12849,7 @@ dependencies = [
  "public_mcp",
  "remote_desktop",
  "remote_desktop_view",
+ "resource_view",
  "runtime_sftp",
  "rust-i18n",
  "sftp_view",

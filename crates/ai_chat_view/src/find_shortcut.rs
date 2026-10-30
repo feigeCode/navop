@@ -333,8 +333,9 @@ mod tests {
             .iter()
             .map(|context| KeyContext::parse(context).expect("valid context"))
             .collect::<Vec<_>>();
-        let keystroke = Keystroke::parse_with_os(CLOSE_FINDBAR_SHORTCUT, gpui::OperatingSystem::Mac)
-            .expect("valid keystroke");
+        let keystroke =
+            Keystroke::parse_with_os(CLOSE_FINDBAR_SHORTCUT, gpui::OperatingSystem::Mac)
+                .expect("valid keystroke");
         let (bindings, _) = keymap.bindings_for_input(&[keystroke], &contexts);
 
         assert!(

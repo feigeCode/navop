@@ -228,6 +228,32 @@ impl ConnectionFormDialog {
     }
 }
 
+/// 以通用请求直接打开连接表单弹窗（导入草稿等宿主复用）。
+///
+/// 表单自身写仓库并关窗；宿主通过 `request.on_saved` 刷新自己的列表。
+pub fn open_form(request: ConnectionFormRequest, window: &mut Window, cx: &mut App) -> bool {
+    if !crate::vault::ensure_master_key_ready(window, cx) {
+        return false;
+    }
+    let kind_id = request.kind_id.clone();
+    let Some(form) = crate::registry().build_connection_form(request.clone(), window, cx) else {
+        window.push_notification(
+            Notification::error(format!("当前产品不支持该连接类型：{kind_id}")),
+            cx,
+        );
+        return false;
+    };
+    let reuse_key = format!("{DIALOG_REUSE_KEY}:{kind_id}");
+    let _ = open_reusable_popup_window(
+        PopupWindowOptions::new("连接").size(DIALOG_WIDTH, DIALOG_HEIGHT),
+        reuse_key,
+        move |_window, _cx| form.clone(),
+        Some(window),
+        cx,
+    );
+    true
+}
+
 fn build_form(
     kind_id: SharedString,
     mode: ConnectionFormMode,
