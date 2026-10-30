@@ -26,7 +26,7 @@ pub use intent::{
 pub use kind::{ConnectionKindDescriptor, ConnectionKindGroup};
 pub use registry::{ConnectionOpener, DomainRegistry, TabOpener};
 pub use settings::SettingsSectionProvider;
-pub use shell_extras::{ShellExtras, WslDistributionInfo};
+pub use shell_extras::{ShellExtras, SidebarColors, WslDistributionInfo};
 pub use tab_restore::TabRestorer;
 
 /// 端口转发运行时句柄：契约层统一暴露，避免各产品直接依赖 `port_forwarding`。

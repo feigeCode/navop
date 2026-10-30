@@ -6,6 +6,7 @@ use domain_api::{
     HomeContext, PortForwardingRuntime, RemoteProtocol, ShellExtras, WslDistributionInfo,
 };
 use gpui::{App, AppContext as _, Window};
+use gpui_component::ActiveTheme as _;
 use one_core::storage::StoredConnection;
 use one_core::tab_container::{TabItem, TabOpenMode};
 use terminal_view::{TerminalConnectionKind, TerminalWorkspace};
@@ -30,6 +31,18 @@ impl ShellExtras for ShellExtrasImpl {
 
     fn refresh_wsl_distributions(&self, cx: &mut App) {
         detect(cx);
+    }
+
+    fn sidebar_colors(&self, cx: &App) -> Option<domain_api::SidebarColors> {
+        let colors = terminal_view::TerminalColors::from_application_theme(cx.theme());
+        Some(domain_api::SidebarColors {
+            background: colors.background,
+            foreground: colors.foreground,
+            muted: colors.muted,
+            muted_foreground: colors.muted_foreground,
+            border: colors.border,
+            accent: colors.accent,
+        })
     }
 
     fn save_temporary_connection(

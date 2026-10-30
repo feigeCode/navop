@@ -1530,10 +1530,16 @@ impl NavopApp {
                     .is_some()
             }
         };
-        let colors = terminal_active
-            .then(|| terminal_view::TerminalColors::from_application_theme(cx.theme()));
+        let palette = terminal_active
+            .then(|| {
+                app_kit::registry()
+                    .shell_extras()
+                    .and_then(|extras| extras.sidebar_colors(cx))
+            })
+            .flatten()
+            .map(crate::persistent_connection_sidebar::SidebarPalette::from);
         self.connection_sidebar
-            .update(cx, |sidebar, cx| sidebar.set_terminal_colors(colors, cx));
+            .update(cx, |sidebar, cx| sidebar.set_terminal_palette(palette, cx));
     }
 
     #[cfg(not(feature = "shell"))]

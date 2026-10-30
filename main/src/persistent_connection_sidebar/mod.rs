@@ -5,9 +5,6 @@ use gpui::{
     ParentElement, Pixels, Styled, UniformListScrollHandle, Window, deferred, div, hsla, px,
 };
 use gpui_component::input::{InputEvent, InputState};
-#[cfg(feature = "shell")]
-use terminal_view::TerminalColors;
-
 use crate::home_tab::HomePage;
 
 mod batch_toolbar;
@@ -71,9 +68,8 @@ impl SidebarPalette {
     }
 }
 
-#[cfg(feature = "shell")]
-impl From<&TerminalColors> for SidebarPalette {
-    fn from(colors: &TerminalColors) -> Self {
+impl From<domain_api::SidebarColors> for SidebarPalette {
+    fn from(colors: domain_api::SidebarColors) -> Self {
         Self {
             background: colors.background,
             rail_background: shade(colors.background, true),
@@ -115,8 +111,7 @@ pub(crate) struct PersistentConnectionSidebar {
     tree_width: Pixels,
     /// 最近一次落盘的宽度，用于拖拽过程中的增量持久化判断。
     persisted_tree_width: Pixels,
-    #[cfg(feature = "shell")]
-    terminal_colors: Option<TerminalColors>,
+    terminal_palette: Option<SidebarPalette>,
     pub(super) tree_scroll_handle: UniformListScrollHandle,
     /// Tree 布局把侧栏作为主页内容渲染时为 true；渲染主体仍由 Render 承担，
     /// 避免在 HomePage 自身 render 租约内 read(home_page) 造成重入。
@@ -281,8 +276,7 @@ impl PersistentConnectionSidebar {
             search_input,
             tree_width,
             persisted_tree_width: tree_width,
-            #[cfg(feature = "shell")]
-            terminal_colors: None,
+            terminal_palette: None,
             tree_scroll_handle: UniformListScrollHandle::new(),
             home_embedded: false,
             home_navigation_layout: false,
@@ -331,19 +325,18 @@ impl PersistentConnectionSidebar {
     }
 
     #[cfg(feature = "shell")]
-    pub(crate) fn set_terminal_colors(
+    pub(crate) fn set_terminal_palette(
         &mut self,
-        colors: Option<TerminalColors>,
+        palette: Option<SidebarPalette>,
         cx: &mut Context<Self>,
     ) {
-        self.terminal_colors = colors;
+        self.terminal_palette = palette;
         cx.notify();
     }
 
     pub(super) fn palette(&self, cx: &gpui::App) -> SidebarPalette {
-        #[cfg(feature = "shell")]
-        if let Some(colors) = self.terminal_colors.as_ref() {
-            return SidebarPalette::from(colors);
+        if let Some(palette) = self.terminal_palette {
+            return palette;
         }
         SidebarPalette::app(cx)
     }
