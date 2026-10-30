@@ -906,7 +906,7 @@ mod embedded_cli_removal_tests {
         // 否则同一个配置目录会出现第二个 GUI。
         assert!(source.contains("Ok(SingleInstanceOutcome::Forwarded) => return"));
         assert!(source.contains("std::process::exit(1)"));
-        assert!(source.contains("report_single_instance_failure(error.user_message())"));
+        assert!(source.contains("report_single_instance_failure(&error.user_message())"));
         assert!(!source.contains("continuing startup"));
     }
 
