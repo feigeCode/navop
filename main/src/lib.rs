@@ -607,7 +607,7 @@ where
                 // 第二个 GUI，而第二个窗口既没有单实例语义、也分不清谁该处理启动
                 // 文件。这里明确报错并退出。
                 tracing::error!(%error, "failed to establish the Windows single instance");
-                report_single_instance_failure(error.user_message());
+                report_single_instance_failure(&error.user_message());
                 std::process::exit(1);
             }
         }
