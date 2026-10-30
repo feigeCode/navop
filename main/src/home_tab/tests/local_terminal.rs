@@ -1,70 +1,49 @@
 #[test]
-fn local_terminal_activation_does_not_reborrow_home() {
+fn local_terminal_tabs_open_through_the_domain_registry() {
     let source = include_str!("../../home/home_tabs.rs");
     let opener = source
-        .split("    fn add_local_terminal_tab(")
+        .split("    pub(crate) fn open_local_terminal_tab(")
         .nth(1)
         .and_then(|source| {
             source
-                .split("    pub(crate) fn add_item_to_tab_with_mode(")
+                .split("    #[cfg(feature = \"database\")]\n    pub(crate) fn add_item_to_tab_with_mode(")
                 .next()
         })
         .expect("local terminal tab opener");
 
-    // Activating a terminal deactivates the pinned HomePage via Entity::update.
-    // Deferring is not enough if the callback leases HomePage again.
-    assert!(opener.contains("window.defer(cx, move |window, cx|"));
-    assert!(opener.contains("tc.add_and_activate_tab_with_focus(tab, window, cx)"));
-    assert!(!opener.contains("home.update("));
-    assert!(!opener.contains("cx.entity()"));
-    assert!(!opener.contains("cx.defer_in("));
+    // 公共壳不再自己构造终端视图：本地终端由 shell 领域注册的 TabOpener 打开。
+    assert!(opener.contains("let intent = TabIntent::Terminal { profile };"));
+    assert!(opener.contains("app_kit::registry().open_tab(&intent, TabOpenMode::Activate, self, window, cx)"));
+    assert!(!opener.contains("TerminalWorkspace::new_with_index"));
+    assert!(!opener.contains("TerminalView::new"));
 }
 
 #[test]
-fn all_local_terminal_profiles_use_the_same_tab_opener() {
-    let source = include_str!("../../home/home_tabs.rs");
-    let openers = source
-        .split("    pub(crate) fn add_terminal_tab(")
-        .nth(1)
-        .and_then(|source| source.split("    fn add_local_terminal_tab(").next())
-        .expect("local terminal profile openers");
-
-    assert!(openers.contains("self.add_terminal_tab_from_profile(None, window, cx)"));
-    assert!(openers.contains("self.add_terminal_tab_from_profile(Some(profile_kind), window, cx)"));
-    assert_eq!(
-        openers
-            .matches("self.add_local_terminal_tab(config, window, cx)")
-            .count(),
-        3,
-        "custom, built-in and WSL distro profiles must use the shared activation path",
-    );
-}
-
-#[test]
-fn wsl_distro_menu_items_reuse_the_local_terminal_activation_path() {
-    let source = include_str!("../../home/home_tabs.rs");
-    let opener = source
-        .split("    pub(crate) fn add_terminal_tab_with_wsl_distro(")
-        .nth(1)
-        .and_then(|source| source.split("    fn add_terminal_tab_from_profile(").next())
-        .expect("WSL distro tab opener");
-
-    assert!(opener.contains("local_config_for_wsl_distro(&distro)"));
-    assert!(opener.contains("self.add_local_terminal_tab(config, window, cx)"));
-
+fn local_terminal_menu_passes_profile_descriptors() {
     let menu_source = include_str!("../../home_tab/local_terminal.rs");
-    // WSL 发行版区段仅在 Windows 上渲染，其余平台保持原菜单。
-    assert!(menu_source.contains("#[cfg(target_os = \"windows\")]\nfn append_wsl_distributions"));
+
+    // 内置 profile 与自定义 profile 都通过领域描述传递，公共壳不解析启动参数。
+    assert!(menu_source.contains("kind: domain_terminal_kind(*kind)"));
+    assert!(menu_source.contains("kind: TerminalProfileKind::Custom"));
+    assert!(menu_source.contains("id: Some(profile.id.clone())"));
+    assert!(menu_source.contains("open_local_terminal_tab("));
+    assert!(!menu_source.contains("add_terminal_tab_with_profile"));
+    assert!(!menu_source.contains("add_terminal_tab_with_custom_profile"));
+}
+
+#[test]
+fn wsl_distro_menu_uses_shell_extras_snapshot() {
+    let menu_source = include_str!("../../home_tab/local_terminal.rs");
+
+    // WSL 发行版由 shell 领域的 ShellExtras 暴露，公共壳只渲染已有快照。
+    assert!(menu_source.contains("app_kit::registry().shell_extras()"));
+    assert!(menu_source.contains("extras.wsl_distributions(cx)"));
+    assert!(menu_source.contains("refresh_wsl_distributions(cx)"));
+    assert!(menu_source.contains("kind: TerminalProfileKind::Wsl"));
     assert!(menu_source.contains("wsl_distributions_section"));
-    assert!(menu_source.contains("add_terminal_tab_with_wsl_distro"));
-    // 区段入口仅在识别到发行版后出现，并提供重新识别操作。
     assert!(menu_source.contains("wsl_distributions_refresh"));
-    assert!(menu_source.contains("load_wsl_distributions"));
 
     let data_source = include_str!("../data.rs");
-    assert!(
-        data_source
-            .contains("#[cfg(target_os = \"windows\")]\n    pub(super) fn load_wsl_distributions")
-    );
-    assert!(data_source.contains("terminal::list_wsl_distributions()"));
+    assert!(!data_source.contains("load_wsl_distributions"));
+    assert!(!data_source.contains("terminal::list_wsl_distributions"));
 }

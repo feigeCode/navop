@@ -11,6 +11,7 @@ mod intent;
 mod kind;
 mod registry;
 mod settings;
+mod shell_extras;
 mod tab_restore;
 
 pub use domain::{Domain, DomainId};
@@ -22,6 +23,7 @@ pub use intent::{
 };
 pub use kind::{ConnectionKindDescriptor, ConnectionKindGroup};
 pub use registry::{ConnectionOpener, DomainRegistry, TabOpener};
+pub use shell_extras::{ShellExtras, WslDistributionInfo};
 pub use settings::SettingsSectionProvider;
 pub use tab_restore::TabRestorer;
 

@@ -112,6 +112,7 @@ fn build_tool_registry_for_surface(
             tracing::warn!("Public MCP connection tools enabled before storage is initialized");
         }
     }
+    #[cfg(feature = "shell")]
     if toolsets.sftp {
         if let Some(storage) = cx.try_global::<one_core::storage::GlobalStorageState>() {
             if let Some(repo) = storage
@@ -126,6 +127,7 @@ fn build_tool_registry_for_surface(
             tracing::warn!("Public MCP SFTP tools enabled before storage is initialized");
         }
     }
+    #[cfg(feature = "database")]
     if toolsets.database {
         if let Some(storage) = cx.try_global::<one_core::storage::GlobalStorageState>() {
             if let Some(repo) = storage
@@ -141,6 +143,7 @@ fn build_tool_registry_for_surface(
             tracing::warn!("Public MCP database tools enabled before storage is initialized");
         }
     }
+    #[cfg(feature = "database")]
     #[cfg(feature = "database")]
     if toolsets.redis {
         runtime_registries.push(tool_runtime::ToolRegistry::new(

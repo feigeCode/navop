@@ -1253,7 +1253,7 @@ fn init_action_handlers(cx: &mut App) {
                 }
                 #[cfg(feature = "shell")]
                 home_page.update(cx, |hp, cx| {
-                    hp.add_terminal_tab(window, cx);
+                    hp.open_local_terminal_tab(None, window, cx);
                 });
             });
         });

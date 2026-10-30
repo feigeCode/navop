@@ -229,10 +229,6 @@ pub struct HomePage {
     team_permissions: TeamPermissionSnapshot,
     #[cfg(feature = "shell")]
     port_forwarding_runtime: Arc<tokio::sync::Mutex<PortForwardingRuntime>>,
-    /// Windows 已识别的 WSL 发行版缓存（issue #182）；None=识别中，空列表=无发行版。
-    #[cfg(feature = "shell")]
-    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-    pub(crate) wsl_distributions: Option<Arc<Vec<terminal::WslDistribution>>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

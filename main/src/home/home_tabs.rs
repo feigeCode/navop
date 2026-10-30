@@ -6,18 +6,12 @@ use crate::license::is_feature_enabled;
 use crate::setting_tab::AppSettings;
 use crate::setting_tab::SettingsPanel;
 #[cfg(feature = "shell")]
-use domain_api::TerminalProfileKind;
-#[cfg(feature = "shell")]
 use domain_api::{TabIntent, TerminalProfileDescriptor};
 use gpui::{App, AppContext, Context, Entity, Window};
 use gpui_component::{WindowExt, notification::Notification};
 use json_view::JsonFormatterView;
-#[cfg(feature = "shell")]
-use known_hosts_view::KnownHostsPage;
 use notes::NotesView;
 use one_core::license::Feature;
-#[cfg(feature = "shell")]
-use one_core::settings::{LocalTerminalCustomProfile, LocalTerminalProfileKind};
 use one_core::storage::StoredConnection;
 #[cfg(any(feature = "database", test))]
 use one_core::storage::Workspace;
@@ -29,10 +23,7 @@ use remote_desktop::{RemoteDesktopConnectionOptions, RemoteDesktopProtocol};
 #[cfg(any(feature = "shell", test))]
 use rust_i18n::t;
 #[cfg(feature = "shell")]
-use terminal::{
-    local_config_from_custom_profile, local_config_from_settings,
-    local_config_from_settings_with_profile,
-};
+use terminal::local_config_from_settings;
 #[cfg(feature = "shell")]
 use terminal_view::{
     TerminalConnectionKind, TerminalWorkspace, current_settings as current_terminal_settings,
@@ -461,17 +452,6 @@ impl HomePage {
         });
     }
 
-    #[cfg(feature = "shell")]
-    pub(crate) fn add_session_logs_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let _ = app_kit::registry().open_tab(
-            &domain_api::TabIntent::SessionLogs,
-            TabOpenMode::Activate,
-            self,
-            window,
-            cx,
-        );
-    }
-
     pub(crate) fn add_credential_vault_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let tab_container = self.active_tab_container(cx);
         window.defer(cx, move |window, cx| {
@@ -481,33 +461,6 @@ impl HomePage {
                     |window, cx| {
                         let vault = cx.new(|cx| CredentialVaultView::new(window, cx));
                         TabItem::new("credential-vault", "home", vault)
-                    },
-                    window,
-                    cx,
-                );
-            });
-        });
-    }
-
-    #[cfg(feature = "shell")]
-    pub(crate) fn add_known_hosts_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if app_kit::registry().open_tab(
-            &domain_api::TabIntent::KnownHosts,
-            TabOpenMode::Activate,
-            self,
-            window,
-            cx,
-        ) {
-            return;
-        }
-        let tab_container = self.active_tab_container(cx);
-        window.defer(cx, move |window, cx| {
-            tab_container.update(cx, |tabs, cx| {
-                tabs.activate_or_add_tab_lazy(
-                    "known-hosts",
-                    |window, cx| {
-                        let page = cx.new(|cx| KnownHostsPage::new(window, cx));
-                        TabItem::new("known-hosts", "home", page)
                     },
                     window,
                     cx,
@@ -542,124 +495,16 @@ impl HomePage {
     }
 
     #[cfg(feature = "shell")]
-    pub(crate) fn add_terminal_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.add_terminal_tab_from_profile(None, window, cx);
-    }
-
-    #[cfg(feature = "shell")]
-    pub(crate) fn add_terminal_tab_with_profile(
+    pub(crate) fn open_local_terminal_tab(
         &mut self,
-        profile_kind: LocalTerminalProfileKind,
+        profile: Option<TerminalProfileDescriptor>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.add_terminal_tab_from_profile(Some(profile_kind), window, cx);
-    }
-
-    #[cfg(feature = "shell")]
-    pub(crate) fn add_terminal_tab_with_custom_profile(
-        &mut self,
-        profile: LocalTerminalCustomProfile,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let config = match local_config_from_custom_profile(&profile, None) {
-            Ok(config) => config,
-            Err(error) => {
-                push_local_terminal_config_error(window, &error, cx);
-                return;
-            }
-        };
-        self.add_local_terminal_tab(config, window, cx);
-    }
-
-    /// 以指定 WSL 发行版打开本地终端标签页（`wsl.exe -d <name>`，feigeCode/navop#182）。
-    #[cfg(target_os = "windows")]
-    #[cfg(feature = "shell")]
-    pub(crate) fn add_terminal_tab_with_wsl_distro(
-        &mut self,
-        distro: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let config = match terminal::local_config_for_wsl_distro(&distro) {
-            Ok(config) => config,
-            Err(error) => {
-                push_local_terminal_config_error(window, &error, cx);
-                return;
-            }
-        };
-        self.add_local_terminal_tab(config, window, cx);
-    }
-
-    #[cfg(feature = "shell")]
-    fn add_terminal_tab_from_profile(
-        &mut self,
-        profile_kind: Option<LocalTerminalProfileKind>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let intent = TabIntent::Terminal {
-            profile: profile_kind.map(|kind| TerminalProfileDescriptor {
-                kind: domain_terminal_kind(kind),
-                id: None,
-            }),
-        };
-        if app_kit::registry().open_tab(&intent, TabOpenMode::Activate, self, window, cx) {
-            return;
+        let intent = TabIntent::Terminal { profile };
+        if !app_kit::registry().open_tab(&intent, TabOpenMode::Activate, self, window, cx) {
+            window.push_notification(Notification::error("当前产品不支持本地终端"), cx);
         }
-
-        let settings = AppSettings::global(cx);
-        let config = match profile_kind {
-            Some(kind) => local_config_from_settings_with_profile(settings, kind, None),
-            None => local_config_from_settings(settings, None),
-        };
-        let config = match config {
-            Ok(config) => config,
-            Err(error) => {
-                push_local_terminal_config_error(window, &error, cx);
-                return;
-            }
-        };
-        self.add_local_terminal_tab(config, window, cx);
-    }
-
-    #[cfg(feature = "shell")]
-    fn add_local_terminal_tab(
-        &mut self,
-        config: terminal::LocalConfig,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        // 使用时间戳生成唯一 tab_id，支持打开多个本地终端
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
-        let tab_id = format!("terminal-{}", timestamp);
-
-        // 统计已有本地终端数量，计算序号（从 (1) 开始，复用已释放序号）
-        let tab_container = self.active_tab_container(cx);
-        let existing_count = tab_container
-            .read(cx)
-            .tabs()
-            .iter()
-            .filter(|t| t.id().starts_with("terminal-") || t.id().starts_with("local-terminal-"))
-            .count();
-        let tab_index = self
-            .next_available_tab_index("Terminal", cx)
-            .or_else(|| (existing_count > 0).then_some(existing_count));
-
-        // Activating the terminal synchronously deactivates the current tab,
-        // which may be HomePage. Do not lease HomePage again inside this defer.
-        window.defer(cx, move |window, cx| {
-            let terminal_view =
-                cx.new(|cx| TerminalWorkspace::new_with_index(config, tab_index, window, cx));
-            tab_container.update(cx, |tc, cx| {
-                let tab = TabItem::new(tab_id, "home", terminal_view);
-                tc.add_and_activate_tab_with_focus(tab, window, cx);
-            });
-        });
     }
 
     #[cfg(feature = "database")]
@@ -767,7 +612,7 @@ impl HomePage {
                     }
                     TerminalConnectionKind::Local => {
                         // 本地终端：直接新建
-                        self.add_terminal_tab(window, cx);
+                        self.open_local_terminal_tab(None, window, cx);
                     }
                 }
             }
@@ -803,21 +648,7 @@ fn push_local_terminal_config_error<T>(
     );
 }
 
-#[cfg(feature = "shell")]
-fn domain_terminal_kind(kind: LocalTerminalProfileKind) -> TerminalProfileKind {
-    match kind {
-        LocalTerminalProfileKind::System => TerminalProfileKind::System,
-        LocalTerminalProfileKind::PowerShell => TerminalProfileKind::PowerShell,
-        LocalTerminalProfileKind::Cmd => TerminalProfileKind::Cmd,
-        LocalTerminalProfileKind::Wsl => TerminalProfileKind::Wsl,
-        LocalTerminalProfileKind::GitBash => TerminalProfileKind::GitBash,
-        LocalTerminalProfileKind::Zsh => TerminalProfileKind::Zsh,
-        LocalTerminalProfileKind::Bash => TerminalProfileKind::Bash,
-        LocalTerminalProfileKind::Fish => TerminalProfileKind::Fish,
-        LocalTerminalProfileKind::Nushell => TerminalProfileKind::Nushell,
-        LocalTerminalProfileKind::Custom => TerminalProfileKind::Custom,
-    }
-}
+#[cfg(any(feature = "database", feature = "shell"))]
 
 /// 当前产品没有注册该连接类型时给出明确提示，而不是静默失败。
 fn notify_unsupported(conn: &StoredConnection, window: &mut Window, cx: &mut gpui::App) {

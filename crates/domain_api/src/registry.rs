@@ -3,6 +3,7 @@ use crate::form::{ConnectionFormProvider, ConnectionFormRequest};
 use crate::home::HomeContext;
 use crate::intent::TabIntent;
 use crate::kind::ConnectionKindDescriptor;
+use crate::shell_extras::ShellExtras;
 use crate::settings::SettingsSectionProvider;
 use crate::tab_restore::TabRestorer;
 use gpui::{AnyView, App, SharedString, Window};
@@ -54,6 +55,7 @@ pub struct DomainRegistry {
     tab_restorers: Vec<Arc<dyn TabRestorer>>,
     form_providers: Vec<Arc<dyn ConnectionFormProvider>>,
     settings_providers: Vec<Arc<dyn SettingsSectionProvider>>,
+    shell_extras: Option<Arc<dyn ShellExtras>>,
 }
 
 impl DomainRegistry {
@@ -88,6 +90,14 @@ impl DomainRegistry {
 
     pub fn register_form_provider(&mut self, provider: Arc<dyn ConnectionFormProvider>) {
         self.form_providers.push(provider);
+    }
+
+    pub fn register_shell_extras(&mut self, extras: Arc<dyn ShellExtras>) {
+        self.shell_extras = Some(extras);
+    }
+
+    pub fn shell_extras(&self) -> Option<Arc<dyn ShellExtras>> {
+        self.shell_extras.clone()
     }
 
     pub fn register_settings_provider(&mut self, provider: Arc<dyn SettingsSectionProvider>) {

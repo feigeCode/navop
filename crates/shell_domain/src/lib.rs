@@ -8,6 +8,7 @@ rust_i18n::i18n!("locales", fallback = "en");
 mod connection_forms;
 mod connection_openers;
 mod lifecycle;
+mod shell_extras;
 mod session_logs;
 mod settings;
 mod tab_restore;
@@ -118,6 +119,7 @@ impl Domain for ShellDomain {
         );
         registry.register_form_provider(Arc::new(ShellConnectionFormProvider));
         registry.register_settings_provider(Arc::new(ShellSettingsProvider));
+        registry.register_shell_extras(Arc::new(shell_extras::ShellExtrasImpl));
         // Tab 会话恢复：把上次关闭时的终端 / SFTP / 远程桌面等标签重建出来。
         registry.register_tab_restorer(Arc::new(tab_restore::ShellTabRestorer));
         register_mcp_toolsets();
@@ -131,6 +133,7 @@ impl Domain for ShellDomain {
 
     fn init(&self, cx: &mut App) -> anyhow::Result<()> {
         lifecycle::init(cx);
+        shell_extras::init(cx);
         terminal_view::init(cx);
         remote_desktop_view::init(cx);
         Ok(())
@@ -225,11 +228,42 @@ impl TabOpener for TerminalTabOpener {
             return false;
         };
         let settings = AppSettings::global(cx);
-        let config = match profile.as_ref().map(|profile| profile.kind) {
-            Some(kind) => {
-                local_config_from_settings_with_profile(settings, local_profile_kind(kind), None)
-            }
+        let config = match profile.as_ref() {
             None => local_config_from_settings(settings, None),
+            Some(descriptor) => match descriptor.kind {
+                domain_api::TerminalProfileKind::Custom => {
+                    let custom = descriptor.id.as_deref().and_then(|id| {
+                        settings
+                            .local_terminal_profile
+                            .custom_profiles
+                            .iter()
+                            .find(|profile| profile.id == id)
+                    });
+                    let Some(custom) = custom else {
+                        home.notify(
+                            NotifyLevel::Error,
+                            "自定义本地终端配置不存在",
+                            window,
+                            cx,
+                        );
+                        return false;
+                    };
+                    terminal::local_config_from_custom_profile(custom, None)
+                }
+                domain_api::TerminalProfileKind::Wsl => match descriptor.id.as_deref() {
+                    Some(distro) if cfg!(target_os = "windows") => {
+                        terminal::local_config_for_wsl_distro(distro)
+                    }
+                    _ => local_config_from_settings_with_profile(
+                        settings,
+                        local_profile_kind(descriptor.kind),
+                        None,
+                    ),
+                },
+                kind => {
+                    local_config_from_settings_with_profile(settings, local_profile_kind(kind), None)
+                }
+            },
         };
         let config = match config {
             Ok(config) => config,
