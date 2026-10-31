@@ -75,8 +75,35 @@ mod platform {
             decoded
         };
 
+        let scaled = match crate::integration::tray::config().badge {
+            Some(badge) => add_badge(scaled, badge),
+            None => scaled,
+        };
         let (width, height) = scaled.dimensions();
         Ok((scaled.into_raw(), width, height))
+    }
+
+    /// 在图标右下角画一个带白边的实心圆角标，作为产品区分标记。
+    fn add_badge(mut icon: image::RgbaImage, badge: [u8; 4]) -> image::RgbaImage {
+        let (width, height) = icon.dimensions();
+        let radius = (width.min(height) / 4).max(3);
+        let center_x = width.saturating_sub(radius);
+        let center_y = height.saturating_sub(radius);
+        let ring = radius.saturating_add(1);
+        for y in 0..height {
+            for x in 0..width {
+                let dx = i64::from(x) - i64::from(center_x);
+                let dy = i64::from(y) - i64::from(center_y);
+                let distance = (dx * dx + dy * dy) as f64;
+                if distance <= f64::from(ring * ring) {
+                    icon.put_pixel(x, y, image::Rgba([255, 255, 255, 255]));
+                }
+                if distance <= f64::from(radius * radius) {
+                    icon.put_pixel(x, y, image::Rgba(badge));
+                }
+            }
+        }
+        icon
     }
 
     /// 会话段 → 分隔线 →（快捷动作段）→ 显示 / 退出。会话段为空时不留下孤立分隔线。

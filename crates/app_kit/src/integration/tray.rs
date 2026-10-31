@@ -99,6 +99,8 @@ pub struct TrayConfig {
     pub icon_png: &'static [u8],
     /// 是否在菜单里放「新建连接 / 打开设置」。全量产品关掉以保持原有菜单。
     pub show_quick_actions: bool,
+    /// 右下角角标颜色（RGBA）。独立产品用它和全量产品区分托盘图标。
+    pub badge: Option<[u8; 4]>,
 }
 
 impl TrayConfig {
@@ -110,6 +112,7 @@ impl TrayConfig {
             display_name,
             icon_png: brand_icon_png(),
             show_quick_actions: true,
+            badge: None,
         }
     }
 
@@ -125,6 +128,12 @@ impl TrayConfig {
 
     pub fn show_quick_actions(mut self, show: bool) -> Self {
         self.show_quick_actions = show;
+        self
+    }
+
+    /// 给托盘图标加一个右下角角标，用于区分同机运行的多个产品。
+    pub fn with_badge(mut self, badge: Option<[u8; 4]>) -> Self {
+        self.badge = badge;
         self
     }
 }

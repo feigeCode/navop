@@ -28,7 +28,14 @@ fn config() -> app_kit::integration::tray::TrayConfig {
     let display_name = app_kit::identity()
         .map(|identity| identity.display_name)
         .unwrap_or("Navop");
-    app_kit::integration::tray::TrayConfig::new(display_name).show_quick_actions(false)
+    let badge = app_kit::identity().and_then(|identity| match identity.app_id {
+        "com.navop.shell" => Some([59, 130, 246, 255]),
+        "com.navop.data" => Some([16, 185, 129, 255]),
+        _ => None,
+    });
+    app_kit::integration::tray::TrayConfig::new(display_name)
+        .show_quick_actions(false)
+        .with_badge(badge)
 }
 
 fn host() -> app_kit::integration::tray::TrayHost {

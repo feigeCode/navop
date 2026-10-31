@@ -1691,13 +1691,16 @@ impl NavopApp {
             let app_for_ok = app_for_ok.clone();
             let app_for_cancel = app_for_cancel.clone();
             let app_for_close = app_for_close.clone();
+            let app_name = app_kit::identity()
+                .map(|identity| identity.display_name)
+                .unwrap_or("Navop");
             dialog
-                .title(t!("Quit.confirm_title").to_string())
-                .child(t!("Quit.confirm_message").to_string())
+                .title(t!("Quit.confirm_title_app", app = app_name).to_string())
+                .child(t!("Quit.confirm_message_app", app = app_name).to_string())
                 .confirm()
                 .button_props(
                     DialogButtonProps::default()
-                        .ok_text(t!("Quit.confirm_action").to_string())
+                        .ok_text(t!("Quit.confirm_action_app", app = app_name).to_string())
                         .cancel_text(t!("Common.cancel").to_string()),
                 )
                 .on_ok(move |_, window, cx: &mut App| {
