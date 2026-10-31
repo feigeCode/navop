@@ -3492,6 +3492,7 @@ dependencies = [
  "port_forwarding",
  "serde_json",
  "tokio",
+ "tool_runtime",
 ]
 
 [[package]]
@@ -12855,6 +12856,7 @@ dependencies = [
  "terminal",
  "terminal_view",
  "tokio",
+ "tool_runtime",
  "tracing",
  "windows 0.62.2",
  "zeroize",

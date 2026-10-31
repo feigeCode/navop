@@ -60,7 +60,11 @@ impl ShellExtras for ShellExtrasImpl {
         }
         let workspaces = cx
             .try_global::<one_core::storage::GlobalStorageState>()
-            .and_then(|state| state.storage.get::<one_core::storage::WorkspaceRepository>())
+            .and_then(|state| {
+                state
+                    .storage
+                    .get::<one_core::storage::WorkspaceRepository>()
+            })
             .and_then(|repository| {
                 use one_core::storage::traits::Repository as _;
                 repository.list().ok()
@@ -72,10 +76,7 @@ impl ShellExtras for ShellExtrasImpl {
             initial_workspace_id: None,
             on_saved: Some(Arc::new(|saved, _action, window, cx| {
                 use gpui_component::WindowExt as _;
-                window.push_notification(
-                    format!("已保存连接：{}", saved.name),
-                    cx,
-                );
+                window.push_notification(format!("已保存连接：{}", saved.name), cx);
             })),
             workspaces,
             teams: one_core::cloud_sync::get_cached_team_options(cx),
@@ -83,16 +84,19 @@ impl ShellExtras for ShellExtrasImpl {
         one_core::popup_window::open_reusable_popup_window(
             one_core::popup_window::PopupWindowOptions::new("保存为连接").size(820.0, 750.0),
             "app-kit-save-temporary-ssh".to_string(),
-            move |window, cx| {
-                cx.new(|cx| ssh_form::SshFormWindow::new(config.clone(), window, cx))
-            },
+            move |window, cx| cx.new(|cx| ssh_form::SshFormWindow::new(config.clone(), window, cx)),
             Some(window),
             cx,
         );
         true
     }
 
-    fn open_session_log(&self, path: std::path::PathBuf, window: &mut Window, cx: &mut App) -> bool {
+    fn open_session_log(
+        &self,
+        path: std::path::PathBuf,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
         crate::recording::open_session_log_file(path, window, cx);
         true
     }
@@ -114,9 +118,7 @@ impl ShellExtras for ShellExtrasImpl {
                 window,
                 cx,
             ),
-            None => {
-                crate::terminals::open_local_terminal_with_dir(working_dir, home, window, cx)
-            }
+            None => crate::terminals::open_local_terminal_with_dir(working_dir, home, window, cx),
         }
     }
 

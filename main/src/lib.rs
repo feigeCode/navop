@@ -1209,7 +1209,7 @@ mod native_driver_feature_contract_tests {
         let database = feature_entry(features, "database");
         let shell = feature_entry(features, "shell");
 
-        assert!(database.contains("dep:db_view") && database.contains("dep:data_domain"));
+        assert!(database.contains("dep:db_view") && !database.contains("dep:data_domain"));
         assert!(!database.contains("dep:terminal_view") && !database.contains("dep:shell_domain"));
         // `main` 不再装配领域包（`ShellDomain` 由 apps 提供），shell feature 只剩
         // UI/后端依赖；`data_domain` 仍在 database feature 里，因为公共 MCP 的

@@ -10,6 +10,7 @@ mod home;
 mod identity;
 mod intent;
 mod kind;
+mod mcp;
 mod registry;
 mod resources;
 mod settings;
@@ -25,8 +26,11 @@ pub use intent::{
     DatabaseTabMode, RemoteProtocol, TabIntent, TerminalProfileDescriptor, TerminalProfileKind,
 };
 pub use kind::{ConnectionKindDescriptor, ConnectionKindGroup};
-pub use resources::{ActiveResourceIds, ActiveResourceProvider};
+pub use mcp::{
+    RuntimeMcpProviders, RuntimeMcpSelection, register_runtime_mcp_provider, runtime_mcp_registries,
+};
 pub use registry::{ConnectionOpener, DomainRegistry, TabOpener};
+pub use resources::{ActiveResourceIds, ActiveResourceProvider};
 pub use settings::SettingsSectionProvider;
 pub use shell_extras::{ShellExtras, SidebarColors, WslDistributionInfo};
 pub use tab_restore::TabRestorer;

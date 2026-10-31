@@ -20,7 +20,7 @@ extension-runtime = { workspace = true, default-features = false, features = ["d
 gpui-component.workspace = true
 gpui.workspace = true
 mcp_host.workspace = true
-navop_runtime = { path = "../navop_runtime", default-features = false }
+navop_runtime = { path = "../navop_runtime", default-features = false, features = ["database", "redis"] }
 mongodb_view.workspace = true
 mongodb-runtime.workspace = true
 runtime_database.workspace = true

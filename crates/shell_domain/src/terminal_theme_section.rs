@@ -95,4 +95,3 @@ fn set_terminal_theme(theme_name: &'static str, cx: &mut App) {
         settings.terminal_theme = theme_name.to_string();
     });
 }
-

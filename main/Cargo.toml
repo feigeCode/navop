@@ -63,7 +63,6 @@ domain_api.workspace = true
 mcp_host.workspace = true
 mcp_approval.workspace = true
 app_kit.workspace = true
-data_domain = { workspace = true, optional = true }
 one-ui.workspace = true
 navop_runtime = { workspace = true }
 reqwest_client.workspace = true
@@ -110,6 +109,7 @@ windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Security_Cr
 winresource = "0.1"
 
 [dev-dependencies]
+data_domain = { workspace = true }
 gpui = { workspace = true, features = ["test-support"] }
 async-trait = { workspace = true }
 extension-protocol = { workspace = true }
@@ -139,8 +139,7 @@ database = [
     "dep:redis_view",
     "dep:redis-runtime",
     "dep:mongodb_view",
-    "dep:mongodb-runtime",
-    "dep:data_domain"]
+    "dep:mongodb-runtime"]
 shell = [
     "extension-runtime/remote-desktop",
     "navop_runtime/sftp",
@@ -149,7 +148,7 @@ shell = [
     "dep:remote_desktop",
     "dep:remote_desktop_view",]
 builtin-duckdb = ["db_view/builtin-duckdb", "navop_runtime/builtin-duckdb"]
-builtin-mongodb = ["mongodb_view/builtin-mongodb", "data_domain?/builtin-mongodb"]
+builtin-mongodb = ["mongodb_view/builtin-mongodb"]
 builtin-data-drivers = ["builtin-mongodb"]
 embedded-webview = ["ai_chat_view/embedded-webview"]
 github-distribution = ["github-updates", "github-marketplace"]

@@ -23,9 +23,11 @@ use std::sync::Arc;
 pub mod active_resources;
 pub mod connection_forms;
 pub mod mcp;
+pub(crate) mod runtime_mcp;
 pub mod settings;
 mod tab_restore;
 mod visuals;
+pub use runtime_mcp::DataRuntimeMcp;
 
 /// 未启用内嵌 Mongo 驱动时，从已安装的扩展驱动目录构造原生驱动工厂。
 ///
@@ -135,6 +137,7 @@ impl Domain for DataDomain {
     }
 
     fn register(&self, registry: &mut DomainRegistry) {
+        domain_api::register_runtime_mcp_provider(std::sync::Arc::new(runtime_mcp::DataRuntimeMcp));
         registry.register_active_resource_provider(Arc::new(
             active_resources::RedisActiveResourceProvider,
         ));

@@ -42,29 +42,20 @@ pub(super) fn build_agent_tool_registry(
     build_tool_registry_for_surface(cx, toolsets, ToolRegistrySurface::Agent)
 }
 
+#[cfg(test)]
+fn ensure_test_runtime_mcp_providers() {
+    domain_api::register_runtime_mcp_provider(Arc::new(data_domain::DataRuntimeMcp));
+}
+
 fn build_tool_registry_for_surface(
     cx: &mut App,
     toolsets: &ToolExposureToolsetSettings,
     surface: ToolRegistrySurface,
 ) -> anyhow::Result<PublicMcpToolRegistry> {
+    #[cfg(test)]
+    ensure_test_runtime_mcp_providers();
     let mut providers: Vec<Arc<dyn PublicMcpToolProvider>> = Vec::new();
     let mut runtime_registries = vec![diagnostics::runtime_status_tool_registry(toolsets)];
-    #[cfg(feature = "shell")]
-    if toolsets.terminal {
-        if let Some(registry) = terminal_view::public_mcp::registry(cx) {
-            if toolsets.terminal_ssh_exec {
-                runtime_registries.push(remote_ops_tool_registry(registry.clone()));
-            }
-            if toolsets.terminal_exec {
-                runtime_registries.push(terminal_exec_tool_registry(registry.clone()));
-                runtime_registries.push(terminal_read_tool_registry(registry.clone()));
-                runtime_registries.push(terminal_control_tool_registry(registry.clone()));
-                runtime_registries.push(terminal_write_keys_tool_registry(registry));
-            }
-        } else {
-            tracing::warn!("Public MCP terminal registry is not initialized");
-        }
-    }
     if toolsets.internal_functions {
         runtime_registries.push(navop_runtime::builtin_tool_registry_with_version(env!(
             "CARGO_PKG_VERSION"
@@ -113,6 +104,35 @@ fn build_tool_registry_for_surface(
         }
     }
     #[cfg(feature = "shell")]
+    if toolsets.terminal {
+        if let Some(registry) = terminal_view::public_mcp::registry(cx) {
+            if toolsets.terminal_ssh_exec {
+                runtime_registries.push(remote_ops_tool_registry(registry.clone()));
+            }
+            if toolsets.terminal_exec {
+                runtime_registries.push(terminal_exec_tool_registry(registry.clone()));
+                runtime_registries.push(terminal_read_tool_registry(registry.clone()));
+                runtime_registries.push(terminal_control_tool_registry(registry.clone()));
+                runtime_registries.push(terminal_write_keys_tool_registry(registry));
+            }
+        } else {
+            tracing::warn!("Public MCP terminal registry is not initialized");
+        }
+    }
+    let selection = domain_api::RuntimeMcpSelection {
+        database: false,
+        redis: toolsets.redis,
+        mongo: toolsets.mongo,
+        terminal: false,
+        terminal_ssh_exec: toolsets.terminal_ssh_exec,
+        terminal_exec: toolsets.terminal_exec,
+        terminal_control: false,
+        terminal_read: false,
+        terminal_write_keys: false,
+        sftp: false,
+    };
+    runtime_registries.extend(domain_api::runtime_mcp_registries(cx, &selection));
+    #[cfg(feature = "shell")]
     if toolsets.sftp {
         if let Some(storage) = cx.try_global::<one_core::storage::GlobalStorageState>() {
             if let Some(repo) = storage
@@ -142,19 +162,6 @@ fn build_tool_registry_for_surface(
         } else {
             tracing::warn!("Public MCP database tools enabled before storage is initialized");
         }
-    }
-    #[cfg(feature = "database")]
-    #[cfg(feature = "database")]
-    if toolsets.redis {
-        runtime_registries.push(tool_runtime::ToolRegistry::new(
-            data_domain::mcp::redis_tool_handlers(cx),
-        ));
-    }
-    #[cfg(feature = "database")]
-    if toolsets.mongo {
-        runtime_registries.push(tool_runtime::ToolRegistry::new(
-            data_domain::mcp::mongo_tool_handlers(cx),
-        ));
     }
     if !runtime_registries.is_empty() {
         // 连接级 AI 访问策略：合并后的 registry 不继承子 registry 的 guard，这里统一挂一次。

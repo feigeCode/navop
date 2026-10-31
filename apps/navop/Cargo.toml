@@ -4,6 +4,10 @@ version = "0.22.0"
 edition.workspace = true
 publish = false
 
+[features]
+default = []
+builtin-mongodb = ["main/builtin-mongodb", "data_domain/builtin-mongodb"]
+
 [dependencies]
 main = { path = "../../main" }
 domain_api = { workspace = true }

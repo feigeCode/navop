@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+tool_runtime.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 gpui-component.workspace = true
@@ -17,7 +18,7 @@ domain_api.workspace = true
 gpui.workspace = true
 known_hosts_view.workspace = true
 mcp_host.workspace = true
-navop_runtime = { path = "../navop_runtime", default-features = false }
+navop_runtime = { path = "../navop_runtime", default-features = false, features = ["sftp"] }
 public_mcp.workspace = true
 runtime_sftp.workspace = true
 one-core.workspace = true

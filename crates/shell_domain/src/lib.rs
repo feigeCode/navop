@@ -9,13 +9,14 @@ mod connection_forms;
 mod connection_openers;
 mod lifecycle;
 mod recording;
-mod terminal_theme_section;
 mod remote_desktop_window;
-mod terminals;
+pub(crate) mod runtime_mcp;
 mod session_logs;
 mod settings;
 mod shell_extras;
 mod tab_restore;
+mod terminal_theme_section;
+mod terminals;
 mod workbench_terminal;
 
 use connection_forms::ShellConnectionFormProvider;
@@ -101,6 +102,9 @@ impl Domain for ShellDomain {
     }
 
     fn register(&self, registry: &mut DomainRegistry) {
+        domain_api::register_runtime_mcp_provider(std::sync::Arc::new(
+            runtime_mcp::ShellRuntimeMcp,
+        ));
         registry.register_tab_opener(Arc::new(KnownHostsTabOpener));
         registry.register_tab_opener(Arc::new(TerminalTabOpener));
         registry.register_tab_opener(Arc::new(SessionLogsTabOpener));

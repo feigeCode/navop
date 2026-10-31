@@ -123,7 +123,12 @@ impl DomainRegistry {
     }
 
     /// 让领域处理器接管路径；返回 `true` 表示已接管。
-    pub fn open_file(&self, path: &std::path::Path, window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
+    pub fn open_file(
+        &self,
+        path: &std::path::Path,
+        window: &mut gpui::Window,
+        cx: &mut gpui::App,
+    ) -> bool {
         for handler in &self.file_open_handlers {
             if handler.handles(path) {
                 handler.open(path, window, cx);
