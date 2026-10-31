@@ -1147,9 +1147,12 @@ test("R2 keeps only the release it just uploaded", () => {
     pruneStep,
     /if: \$\{\{ steps\.r2_config\.outputs\.skip != 'true' && steps\.release\.outputs\.skip != 'true' \}\}/,
   );
-  // 只动 releases/<tag>/：updates/latest.json 是更新入口，任何时候都不能删。
+  // 只删 releases/<tag>/：updates/ 下的清单是更新入口，任何时候都不能删。
+  // （prune 会读 updates/beta/latest.json 来保住它指向的安装包，只读不删。）
   assert.match(pruneStep, /prefix="releases"/);
-  assert.doesNotMatch(pruneStep, /updates\//);
+  const pruneDeletes = (pruneStep.match(/aws s3 rm[\s\S]*?--recursive/g) ?? []).join("\n");
+  assert.ok(pruneDeletes, "prune must delete through aws s3 rm");
+  assert.doesNotMatch(pruneDeletes, /updates\//);
   // 只有稳定版本号才清理，预发布不能把上一个稳定版本的安装包带走。
   assert.match(pruneStep, /=\~ \^v\[0-9\]\+\\\.\[0-9\]\+\\\.\[0-9\]\+\$ \]\]/);
   assert.match(pruneStep, /Skipping R2 prune for non-stable release tag/);
@@ -1189,6 +1192,15 @@ case "\${1:-} \${2:-}" in
     done
     [[ -z "\$line" ]] || printf '%s\\n' "\$line"
     ;;
+  "s3api get-object")
+    # 只有显式给了 beta 清单才会命中，用于验证「按清单 version 精确保留」。
+    if [ -n "\${FAKE_R2_BETA_MANIFEST:-}" ]; then
+      for argument in "\$@"; do last="\$argument"; done
+      printf '%s' "\${FAKE_R2_BETA_MANIFEST}" > "\$last"
+      exit 0
+    fi
+    exit 1
+    ;;
   "s3 rm")
     target=""
     for argument in "\$@"; do
@@ -1209,7 +1221,7 @@ esac
     { mode: 0o755 },
   );
 
-  const runPrune = (tags, releaseTag = "v0.19.5") => {
+  const runPrune = (tags, releaseTag = "v0.19.5", betaManifest = "") => {
     fs.writeFileSync(statePath, `${tags.join("\n")}\n`);
     fs.writeFileSync(deletedPath, "");
     const result = spawnSync("bash", ["-c", pruneRun], {
@@ -1219,6 +1231,7 @@ esac
         PATH: `${fixtureDir}:${process.env.PATH}`,
         FAKE_R2_STATE: statePath,
         FAKE_R2_DELETED: deletedPath,
+        FAKE_R2_BETA_MANIFEST: betaManifest,
         CLOUDFLARE_ACCOUNT_ID: "test-account",
         CLOUDFLARE_R2_BUCKET: "test-bucket",
         RELEASE_TAG: releaseTag,
@@ -1248,7 +1261,27 @@ esac
       "releases/v0.19.3",
       "releases/v0.19.4",
     ]);
-    assert.match(pruned.result.stdout, /R2 now keeps only releases\/v0\.19\.5\//);
+    assert.match(pruned.result.stdout, /R2 now keeps .*v0\.19\.5/);
+
+    // 稳定发版不能把 beta 清单指向的安装包删掉，否则 beta 用户点下载会 404。
+    // 读不到清单时退回「保留版本号最大的 beta」。
+    const betaFallback = runPrune(["v0.19.5", "v0.20.0-beta.2", "v0.19.4"]);
+    assert.equal(betaFallback.result.status, 0, betaFallback.result.stderr);
+    assert.deepEqual(betaFallback.remaining, ["v0.19.5", "v0.20.0-beta.2"]);
+    assert.deepEqual(betaFallback.deleted, ["releases/v0.19.4"]);
+
+    // 能读到清单时必须按清单里的 version 精确保留，而不是笼统留下最大的 beta。
+    const betaExact = runPrune(
+      ["v0.19.5", "v0.20.0-beta.1", "v0.20.0-beta.3", "v0.19.4"],
+      "v0.19.5",
+      JSON.stringify({ version: "0.20.0-beta.1" }),
+    );
+    assert.equal(betaExact.result.status, 0, betaExact.result.stderr);
+    assert.deepEqual(betaExact.remaining, ["v0.19.5", "v0.20.0-beta.1"]);
+    assert.deepEqual(betaExact.deleted, [
+      "releases/v0.19.4",
+      "releases/v0.20.0-beta.3",
+    ]);
 
     // 本次 tag 不在桶里（上传其实没成功）时，一个旧版本都不能删。
     const missing = runPrune(["v0.19.4", "v0.19.3"]);
@@ -1266,6 +1299,291 @@ esac
       prerelease.result.stdout,
       /Skipping R2 prune for non-stable release tag/,
     );
+  } finally {
+    fs.rmSync(fixtureDir, { recursive: true, force: true });
+  }
+});
+
+test("release workflow derives the channel and marks only beta releases as prerelease", () => {
+  const release = read(".github/workflows/release.yml");
+  const upload = read(".github/workflows/upload-r2.yml");
+
+  // prepare job 暴露 channel，后续 step 只从这里取，避免两处各推导一遍。
+  assert.match(release, /channel: \$\{\{ steps\.release\.outputs\.channel \}\}/);
+  assert.match(release, /echo "channel=\$CHANNEL"/);
+  // 与 upload-r2.yml 共用同一条推导规则：纯稳定版本号 stable，其余 beta。
+  assert.ok(
+    release.includes(
+      'if [[ "$RELEASE_TAG" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]; then CHANNEL=stable; else CHANNEL=beta; fi',
+    ),
+    "release.yml 缺少按 tag 推导通道的逻辑",
+  );
+  assert.ok(
+    upload.includes(
+      'if [[ "$release_tag" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]; then CHANNEL=stable; else CHANNEL=beta; fi',
+    ),
+    "upload-r2.yml 缺少按 tag 推导通道的逻辑",
+  );
+
+  const publishStep = workflowStep(release, "Create or update GitHub Release");
+  assert.match(publishStep, /CHANNEL: \$\{\{ needs\.prepare\.outputs\.channel \}\}/);
+  assert.match(
+    publishStep,
+    /if \[ "\$CHANNEL" = "beta" \]; then\n\s+prerelease_args\+=\(--prerelease\)/,
+  );
+  // 稳定通道绝不能出现 --prerelease：误标会让 /releases/latest 跳过稳定版。
+  assert.equal(
+    (publishStep.match(/--prerelease/g) ?? []).length,
+    1,
+    "--prerelease 只能出现在 beta 条件分支里",
+  );
+  // 空数组在 set -u 下的展开必须显式兜底，否则 stable 发布会直接报 unbound variable。
+  assert.match(
+    publishStep,
+    /gh release create "\$RELEASE_TAG"[\s\S]*?\$\{prerelease_args\[@\]\+"\$\{prerelease_args\[@\]\}"\}/,
+  );
+  assert.match(
+    publishStep,
+    /gh release edit "\$RELEASE_TAG"[\s\S]*?\$\{prerelease_args\[@\]\+"\$\{prerelease_args\[@\]\}"\}/,
+  );
+  // dispatch upload-r2 时必须显式带 channel，不能让它自己从 tag 猜。
+  assert.match(publishStep, /-f channel="\$CHANNEL"/);
+
+  // upload-r2 的 channel input 与白名单校验。
+  assert.match(
+    upload,
+    /channel:\n\s+description: 发布通道[\s\S]*?required: false\n\s+default: ""\n\s+type: string/,
+  );
+  assert.match(upload, /CHANNEL="\$\{INPUT_CHANNEL:-\}"/);
+  assert.match(upload, /::error::Invalid channel '\$\{CHANNEL\}'; expected stable or beta/);
+  // 清单 key 由通道计算，上传行不再硬编码稳定 key。
+  assert.match(upload, /stable\) manifest_key="updates\/latest\.json"/);
+  assert.match(upload, /beta\) manifest_key="updates\/beta\/latest\.json"/);
+  assert.match(upload, /upload_object "artifacts\/updates\/latest\.json" "\$\{manifest_key\}"/);
+  assert.doesNotMatch(
+    upload,
+    /upload_object "artifacts\/updates\/latest\.json" "updates\/latest\.json"/,
+  );
+});
+
+test("beta tag uploads the update manifest under updates/beta and never overwrites the stable feed", () => {
+  const upload = read(".github/workflows/upload-r2.yml");
+  const resolveStep = workflowStep(upload, "Resolve release tag");
+  const uploadStep = workflowStep(upload, "Upload update archives and manifest to R2");
+
+  const stepRun = (step) =>
+    step
+      .match(/run: \|\n([\s\S]*)/)?.[1]
+      .split("\n")
+      .map((line) => line.replace(/^ {10}/, ""))
+      .join("\n");
+
+  const resolveRun = stepRun(resolveStep);
+  const uploadRun = stepRun(uploadStep);
+  assert.ok(resolveRun, "Resolve release tag step must have a run script");
+  assert.ok(uploadRun, "Upload step must have a run script");
+
+  const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "navop-r2-beta-"));
+  const workDir = path.join(fixtureDir, "work");
+  const objectsPath = path.join(fixtureDir, "objects");
+  const outputPath = path.join(fixtureDir, "github-output");
+
+  // 假 gh：本仿真只用到 `gh release view`，Release 存在即成功。
+  fs.writeFileSync(
+    path.join(fixtureDir, "gh"),
+    `#!/usr/bin/env bash
+exit 0
+`,
+    { mode: 0o755 },
+  );
+
+  // 假 sha256sum：让仿真在 Linux 与 macOS 上都能跑（macOS 默认没有 sha256sum）。
+  fs.writeFileSync(
+    path.join(fixtureDir, "sha256sum"),
+    `#!/usr/bin/env bash
+set -euo pipefail
+for file in "$@"; do
+  digest="$(node -e 'const crypto=require("crypto"),fs=require("fs");const f=process.argv[1];process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync(f)).digest("hex"))' "$file")"
+  printf '%s  %s\\n' "$digest" "$file"
+done
+`,
+    { mode: 0o755 },
+  );
+
+  // 假 jq：只覆盖这一步的三种查询（ContentLength / Metadata.sha256 / CacheControl）。
+  fs.writeFileSync(
+    path.join(fixtureDir, "jq"),
+    `#!/usr/bin/env bash
+set -euo pipefail
+filter="\${!#}"
+input="$(cat)"
+case "$filter" in
+  ".ContentLength")
+    sed -n 's/.*"ContentLength":\\([0-9][0-9]*\\).*/\\1/p' <<< "$input"
+    ;;
+  ".Metadata.sha256 // empty")
+    sed -n 's/.*"sha256":"\\([^"]*\\)".*/\\1/p' <<< "$input"
+    ;;
+  ".CacheControl // empty")
+    sed -n 's/.*"CacheControl":"\\([^"]*\\)".*/\\1/p' <<< "$input"
+    ;;
+  *)
+    echo "unexpected jq filter: $filter" >&2
+    exit 42
+    ;;
+esac
+`,
+    { mode: 0o755 },
+  );
+
+  // 假 aws：实现 s3 cp 与 s3api head-object，并把 key 记下来供断言。
+  fs.writeFileSync(
+    path.join(fixtureDir, "aws"),
+    `#!/usr/bin/env bash
+set -euo pipefail
+case "\${1:-} \${2:-}" in
+  "s3 cp")
+    shift 2
+    source=""
+    target=""
+    cache_control=""
+    metadata=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --endpoint-url|--content-type) shift 2 ;;
+        --cache-control) cache_control="\${2:-}"; shift 2 ;;
+        --metadata) metadata="\${2:-}"; shift 2 ;;
+        s3://*) target="$1"; shift ;;
+        *) source="$1"; shift ;;
+      esac
+    done
+    key="\${target#s3://*/}"
+    printf '%s\\t%s\\t%s\\t%s\\n' "$key" "$source" "$cache_control" "$metadata" >> "\${FAKE_R2_OBJECTS}"
+    ;;
+  "s3api head-object")
+    shift 2
+    key=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --key) key="\${2:-}"; shift 2 ;;
+        --bucket|--endpoint-url|--output) shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    row="$(awk -F'\\t' -v key="$key" '$1 == key { print; exit }' "\${FAKE_R2_OBJECTS}")"
+    if [ -z "$row" ]; then
+      echo "head-object for unknown key: $key" >&2
+      exit 1
+    fi
+    source="$(cut -f2 <<< "$row")"
+    cache_control="$(cut -f3 <<< "$row")"
+    metadata="$(cut -f4 <<< "$row")"
+    size="$(wc -c < "$source" | tr -d '[:space:]')"
+    sha="\${metadata#sha256=}"
+    printf '{"ContentLength":%s,"Metadata":{"sha256":"%s"},"CacheControl":"%s"}\\n' "$size" "$sha" "$cache_control"
+    ;;
+  *)
+    echo "unexpected aws invocation: $*" >&2
+    exit 42
+    ;;
+esac
+`,
+    { mode: 0o755 },
+  );
+
+  fs.mkdirSync(path.join(workDir, "artifacts", "updates"), { recursive: true });
+  fs.writeFileSync(
+    path.join(workDir, "artifacts", "navop-x86_64-unknown-linux-gnu.tar.gz"),
+    "fake package",
+  );
+  fs.writeFileSync(
+    path.join(workDir, "artifacts", "updates", "latest.json"),
+    '{"schema_version":1}\n',
+  );
+
+  const baseEnv = {
+    ...process.env,
+    PATH: `${fixtureDir}:${process.env.PATH}`,
+    GH_TOKEN: "test-token",
+    GITHUB_REPOSITORY: "feigeCode/navop",
+    FAKE_R2_OBJECTS: objectsPath,
+    CLOUDFLARE_ACCOUNT_ID: "test-account",
+    CLOUDFLARE_R2_BUCKET: "test-bucket",
+  };
+
+  const resolveChannel = (tag, channel) => {
+    fs.writeFileSync(outputPath, "");
+    const result = spawnSync("bash", ["-c", resolveRun], {
+      encoding: "utf8",
+      cwd: workDir,
+      env: {
+        ...baseEnv,
+        INPUT_TAG: tag,
+        INPUT_CHANNEL: channel,
+        GITHUB_OUTPUT: outputPath,
+      },
+    });
+    const outputs = Object.fromEntries(
+      fs
+        .readFileSync(outputPath, "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => {
+          const separator = line.indexOf("=");
+          return [line.slice(0, separator), line.slice(separator + 1)];
+        }),
+    );
+    return { result, outputs };
+  };
+
+  const runUpload = (channel, releaseTag) => {
+    fs.writeFileSync(objectsPath, "");
+    const result = spawnSync("bash", ["-c", uploadRun], {
+      encoding: "utf8",
+      cwd: workDir,
+      env: { ...baseEnv, RELEASE_TAG: releaseTag, CHANNEL: channel },
+    });
+    const keys = fs
+      .readFileSync(objectsPath, "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((row) => row.split("\t")[0]);
+    return { result, keys };
+  };
+
+  try {
+    // beta tag：留空 channel 时按 tag 自动推导，清单只写 beta 前缀。
+    const beta = resolveChannel("v0.23.0-beta.1", "");
+    assert.equal(beta.result.status, 0, beta.result.stderr);
+    assert.equal(beta.outputs.channel, "beta");
+
+    const betaUpload = runUpload("beta", "v0.23.0-beta.1");
+    assert.equal(betaUpload.result.status, 0, betaUpload.result.stderr);
+    assert.ok(betaUpload.keys.includes("updates/beta/latest.json"));
+    assert.ok(
+      !betaUpload.keys.includes("updates/latest.json"),
+      "beta 发布绝不能写稳定清单 updates/latest.json",
+    );
+    assert.ok(
+      betaUpload.keys.some((key) => key.startsWith("releases/v0.23.0-beta.1/")),
+      "beta 安装包仍需按 releases/<tag>/<file> 上传",
+    );
+
+    // 稳定 tag：清单仍落在老客户端认识的 updates/latest.json。
+    const stable = resolveChannel("v0.23.0", "");
+    assert.equal(stable.result.status, 0, stable.result.stderr);
+    assert.equal(stable.outputs.channel, "stable");
+
+    const stableUpload = runUpload("stable", "v0.23.0");
+    assert.equal(stableUpload.result.status, 0, stableUpload.result.stderr);
+    assert.ok(stableUpload.keys.includes("updates/latest.json"));
+    assert.ok(!stableUpload.keys.includes("updates/beta/latest.json"));
+
+    // 显式 channel 优先；非法值必须在推导阶段就被拒绝，不能走到上传。
+    assert.equal(resolveChannel("v0.23.0-beta.1", "stable").outputs.channel, "stable");
+    const invalid = resolveChannel("v0.23.0", "nightly");
+    assert.notEqual(invalid.result.status, 0);
+    assert.match(invalid.result.stdout, /::error::Invalid channel/);
   } finally {
     fs.rmSync(fixtureDir, { recursive: true, force: true });
   }

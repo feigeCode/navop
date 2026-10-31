@@ -41,9 +41,14 @@ const DOWNLOAD_WINDOW_HEIGHT: f32 = 170.0;
 const UPDATE_DIALOG_WINDOW_KEY: &str = "update.available";
 
 pub(super) fn show_update_dialog(info: UpdateDialogInfo, cx: &mut App) {
+    // 测试通道的弹窗换个标题，窗口标题栏上也能一眼看出来是预发布版本。
+    let title = if info.is_prerelease {
+        t!("Update.beta_title").to_string()
+    } else {
+        t!("Update.title").to_string()
+    };
     open_reusable_popup_window(
-        PopupWindowOptions::new(t!("Update.title").to_string())
-            .size(AVAILABLE_WINDOW_WIDTH, AVAILABLE_WINDOW_HEIGHT),
+        PopupWindowOptions::new(title).size(AVAILABLE_WINDOW_WIDTH, AVAILABLE_WINDOW_HEIGHT),
         UPDATE_DIALOG_WINDOW_KEY,
         move |_window, cx| {
             // factory 会被调用多次（每次重新显示都重建 view），所以在里面 clone 一份，
@@ -395,8 +400,11 @@ impl UpdateDialogView {
 
     fn skip_version(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let latest_version = self.info.latest_version.clone();
+        // 跳过记录按通道分开存：`beta:0.23.0-beta.2` 与 `stable:0.23.0` 互不影响。
+        let channel = super::effective_channel(AppSettings::global(cx).update_channel);
+        let skipped_version = super::encode_skipped_update_version(channel, &latest_version);
         AppSettings::update_and_save(cx, |settings| {
-            settings.skipped_update_version = Some(latest_version);
+            settings.skipped_update_version = Some(skipped_version);
         });
         let _ = close_window_for_reuse(window, cx);
     }

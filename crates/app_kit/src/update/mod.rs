@@ -5,7 +5,7 @@ use gpui::{App, AppContext};
 use gpui_component::WindowExt;
 use one_core::config::UpdateConfig;
 use one_core::gpui_tokio::Tokio;
-use one_core::settings::AppSettings;
+use one_core::settings::{AppSettings, UpdateChannel};
 use rust_i18n::t;
 
 mod check_state;
@@ -23,8 +23,8 @@ mod util;
 
 pub use crate::file_association::registered_extensions;
 pub use config::{
-    current_version, derive_update_config, set_current_version, update_check_available,
-    update_config,
+    current_version, derive_update_config, effective_channel, set_current_version,
+    update_check_available, update_config,
 };
 pub use host::{icon_asset_path, set_icon_asset_path, set_shutdown_hook};
 
@@ -60,6 +60,12 @@ const LOCAL_UPDATE_SOURCES: &[UpdateSource] = &[UpdateSource::CustomApi];
 const GITHUB_UPDATE_SOURCES: &[UpdateSource] = &[UpdateSource::GitHub];
 #[cfg(not(feature = "github-updates"))]
 const CUSTOM_API_UPDATE_SOURCES: &[UpdateSource] = &[UpdateSource::CustomApi, UpdateSource::GitHub];
+/// 测试通道只认自己的清单：GitHub Releases 分不出「beta 清单」，回退过去只会拿到最新
+/// 稳定版，等于把测试通道悄悄降级成稳定通道，因此 beta 不做 GitHub 兜底。
+#[cfg(not(feature = "github-updates"))]
+const BETA_UPDATE_SOURCES: &[UpdateSource] = &[UpdateSource::CustomApi];
+/// 没有任何可用更新源。
+const NO_UPDATE_SOURCES: &[UpdateSource] = &[];
 
 /// 更新源类型
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -95,6 +101,8 @@ pub(crate) struct UpdateDialogInfo {
     fallback_download_url: Option<String>,
     expected_sha256: Option<String>,
     is_local_simulation: bool,
+    /// 目标版本是否为预发布（测试通道），弹窗据此显示 Beta 标记与提示。
+    is_prerelease: bool,
 }
 
 impl UpdateDialogInfo {
@@ -162,7 +170,8 @@ pub fn check_for_updates_manually(cx: &mut App) {
 }
 
 fn run_update_check(cx: &mut App, trigger: UpdateCheckTrigger) {
-    let config = update_config();
+    let channel = effective_channel(AppSettings::global(cx).update_channel);
+    let config = update_config(channel);
     if !update_check_available(&config) {
         // 没有可用 feed 的产品什么都不做：既不能弹失败提示，也不能 panic。
         tracing::debug!("no update feed configured; skipping update check");
@@ -177,11 +186,14 @@ fn run_update_check(cx: &mut App, trigger: UpdateCheckTrigger) {
 
     let http_client = cx.http_client();
     let current_version = current_version().to_string();
-    let skipped_version = AppSettings::global(cx).skipped_update_version.clone();
+    let skipped_version = skipped_version_for_channel(
+        channel,
+        AppSettings::global(cx).skipped_update_version.as_deref(),
+    );
     let update_task = Tokio::spawn(cx, async move {
         match tokio::time::timeout(
             UPDATE_CHECK_TIMEOUT,
-            perform_update_check(config, http_client, current_version),
+            perform_update_check(config, http_client, current_version, channel),
         )
         .await
         {
@@ -252,13 +264,20 @@ async fn perform_update_check(
     config: UpdateConfig,
     http_client: std::sync::Arc<dyn gpui::http_client::HttpClient>,
     current_version: String,
+    channel: UpdateChannel,
 ) -> UpdateCheckOutcome {
     let mut last_error = None;
     let mut saw_no_update = false;
 
-    for source in active_update_sources(&config) {
-        match fetch_dialog_info_from_source(*source, &config, http_client.clone(), &current_version)
-            .await
+    for source in active_update_sources(&config, channel) {
+        match fetch_dialog_info_from_source(
+            *source,
+            &config,
+            http_client.clone(),
+            &current_version,
+            channel,
+        )
+        .await
         {
             Ok(Some(info)) => return UpdateCheckOutcome::ShowDialog(info),
             Ok(None) => saw_no_update = true,
@@ -278,7 +297,10 @@ async fn perform_update_check(
 }
 
 #[cfg(feature = "github-updates")]
-fn active_update_sources(config: &UpdateConfig) -> &'static [UpdateSource] {
+fn active_update_sources(
+    config: &UpdateConfig,
+    _channel: UpdateChannel,
+) -> &'static [UpdateSource] {
     if is_local_file_source(&config.update_url) {
         LOCAL_UPDATE_SOURCES
     } else {
@@ -287,9 +309,16 @@ fn active_update_sources(config: &UpdateConfig) -> &'static [UpdateSource] {
 }
 
 #[cfg(not(feature = "github-updates"))]
-fn active_update_sources(config: &UpdateConfig) -> &'static [UpdateSource] {
+fn active_update_sources(config: &UpdateConfig, channel: UpdateChannel) -> &'static [UpdateSource] {
     if is_local_file_source(&config.update_url) {
         LOCAL_UPDATE_SOURCES
+    } else if channel == UpdateChannel::Beta {
+        // 测试通道只读 beta 清单；没有可用 feed 时宁可报错，也不把稳定版当 beta 推给用户。
+        if config.is_valid() {
+            BETA_UPDATE_SOURCES
+        } else {
+            NO_UPDATE_SOURCES
+        }
     } else if config.is_valid() {
         CUSTOM_API_UPDATE_SOURCES
     } else {
@@ -302,6 +331,7 @@ async fn fetch_dialog_info_from_source(
     config: &UpdateConfig,
     http_client: std::sync::Arc<dyn gpui::http_client::HttpClient>,
     current_version: &str,
+    channel: UpdateChannel,
 ) -> Result<Option<UpdateDialogInfo>, String> {
     if source != UpdateSource::CustomApi || !is_local_file_source(&config.update_url) {
         // 网络连通性检查：直接探测对应更新源，而非第三方地址
@@ -316,9 +346,11 @@ async fn fetch_dialog_info_from_source(
     }
 
     match source {
-        UpdateSource::GitHub => fetch_github_dialog_info(http_client, current_version).await,
+        UpdateSource::GitHub => {
+            fetch_github_dialog_info(http_client, current_version, channel).await
+        }
         UpdateSource::CustomApi => {
-            fetch_custom_dialog_info(config, http_client, current_version).await
+            fetch_custom_dialog_info(config, http_client, current_version, channel).await
         }
     }
 }
@@ -353,6 +385,33 @@ fn should_show_available_update(
     }
 }
 
+/// 「跳过此版本」的存储值带上通道前缀（例如 `beta:0.23.0-beta.2`）。
+///
+/// 两个通道的版本号可能重号（`0.23.0` 与 `0.23.0-beta.2`），不带前缀时在一个通道里
+/// 跳过的版本会连带跳过另一个通道的同号版本。
+fn encode_skipped_update_version(channel: UpdateChannel, version: &str) -> String {
+    format!("{}:{}", channel.as_str(), version.trim())
+}
+
+/// 取出属于当前通道的跳过版本；老版本写下的裸版本号只对稳定通道生效。
+fn skipped_version_for_channel(channel: UpdateChannel, stored: Option<&str>) -> Option<String> {
+    let stored = stored?.trim();
+    if stored.is_empty() {
+        return None;
+    }
+
+    match stored.split_once(':') {
+        Some((prefix, version))
+            if prefix == UpdateChannel::Stable.as_str()
+                || prefix == UpdateChannel::Beta.as_str() =>
+        {
+            (prefix == channel.as_str()).then(|| version.trim().to_string())
+        }
+        // 兼容历史数据：没有可识别的通道前缀，只当作稳定通道的跳过记录。
+        _ => (channel == UpdateChannel::Stable).then(|| stored.to_string()),
+    }
+}
+
 fn notify_no_update_if_needed(trigger: UpdateCheckTrigger, cx: &mut gpui::AsyncApp) {
     if trigger == UpdateCheckTrigger::Manual {
         push_notification_on_active_window(t!("Update.already_up_to_date").to_string(), cx);
@@ -371,9 +430,29 @@ fn notify_timeout_if_needed(trigger: UpdateCheckTrigger, cx: &mut gpui::AsyncApp
     }
 }
 
+/// 该版本是否值得提示。
+///
+/// 稳定通道只接受正式版本：semver 里 `0.23.0-beta.1 > 0.22.0`，不显式排除预发布就会
+/// 把测试版推给只想用稳定版的用户。测试通道接受任何更高的版本（含预发布），但同样不降级。
+fn should_offer_update(
+    latest: &semver::Version,
+    current: &semver::Version,
+    channel: UpdateChannel,
+) -> bool {
+    if latest <= current {
+        return false;
+    }
+
+    match channel {
+        UpdateChannel::Stable => latest.pre.is_empty(),
+        UpdateChannel::Beta => true,
+    }
+}
+
 async fn fetch_github_dialog_info(
     http_client: std::sync::Arc<dyn gpui::http_client::HttpClient>,
     current_version: &str,
+    channel: UpdateChannel,
 ) -> Result<Option<UpdateDialogInfo>, String> {
     let release = fetch_github_release(http_client).await?;
     let latest_version = parse_version(&release.tag_name)
@@ -381,11 +460,11 @@ async fn fetch_github_dialog_info(
     let current_semver = parse_version(current_version)
         .ok_or_else(|| format!("当前版本号无法解析 {}", current_version))?;
 
-    if latest_version <= current_semver {
+    if !should_offer_update(&latest_version, &current_semver, channel) {
         return Ok(None);
     }
 
-    github_release_to_dialog_info(&release, current_version)
+    github_release_to_dialog_info(&release, current_version, !latest_version.pre.is_empty())
         .map(Some)
         .map_err(|err| format!("转换 GitHub Release 失败: {}", err))
 }
@@ -394,18 +473,28 @@ async fn fetch_custom_dialog_info(
     config: &UpdateConfig,
     http_client: std::sync::Arc<dyn gpui::http_client::HttpClient>,
     current_version: &str,
+    channel: UpdateChannel,
 ) -> Result<Option<UpdateDialogInfo>, String> {
     if !config.is_valid() {
         return Err("缺少更新接口地址，无法检查更新".to_string());
     }
 
     let response = fetch_update_info(http_client, &config.update_url).await?;
+    let Some(response) = response else {
+        // 测试清单在首个 beta 发布前并不存在：对 beta 通道来说「清单不存在」就是
+        // 「还没有 beta 版本」，不能报成检查失败。
+        return if channel == UpdateChannel::Beta {
+            Ok(None)
+        } else {
+            Err("更新接口返回异常状态码: 404 Not Found".to_string())
+        };
+    };
     let latest_version = parse_version(&response.version)
         .ok_or_else(|| format!("版本号无法解析 {}", response.version))?;
     let current_semver = parse_version(current_version)
         .ok_or_else(|| format!("当前版本号无法解析 {}", current_version))?;
 
-    if latest_version <= current_semver {
+    if !should_offer_update(&latest_version, &current_semver, channel) {
         return Ok(None);
     }
 
@@ -422,6 +511,7 @@ async fn fetch_custom_dialog_info(
         fallback_download_url,
         expected_sha256: select_sha256(&response),
         is_local_simulation: is_local_file_source(&config.update_url),
+        is_prerelease: !latest_version.pre.is_empty(),
     }))
 }
 
@@ -534,10 +624,12 @@ mod tests {
     use gpui::http_client::HttpClient;
     #[cfg(not(feature = "github-updates"))]
     use one_core::config::update_url_from_public_base;
+    use one_core::settings::UpdateChannel;
 
     use super::{
         ACTIVE_UPDATE_SOURCE, UPDATE_CHECK_TIMEOUT, UpdateCheckTrigger, UpdateDialogInfo,
-        UpdateSource, should_run_update_check, should_show_available_update,
+        UpdateSource, encode_skipped_update_version, parse_version, should_offer_update,
+        should_run_update_check, should_show_available_update, skipped_version_for_channel,
     };
     use super::{UpdateCheckOutcome, perform_update_check};
     use crate::update::test_support::FakeHttpClient;
@@ -650,6 +742,7 @@ mod tests {
             fallback_download_url: Some("https://github.example.test/update.tar.gz".to_string()),
             expected_sha256: None,
             is_local_simulation: false,
+            is_prerelease: false,
         };
 
         assert_eq!(
@@ -671,6 +764,7 @@ mod tests {
             fallback_download_url: Some("https://github.example.test/update.tar.gz".to_string()),
             expected_sha256: None,
             is_local_simulation: false,
+            is_prerelease: false,
         };
 
         assert_eq!(
@@ -701,7 +795,13 @@ mod tests {
             download_url: None,
         };
 
-        let outcome = perform_update_check(config, http_client, "0.10.0".to_string()).await;
+        let outcome = perform_update_check(
+            config,
+            http_client,
+            "0.10.0".to_string(),
+            UpdateChannel::Stable,
+        )
+        .await;
 
         let UpdateCheckOutcome::ShowDialog(info) = outcome else {
             panic!("本地 manifest 应展示更新模拟窗口");
@@ -713,6 +813,7 @@ mod tests {
             Some(package_path.to_string_lossy().as_ref())
         );
         assert!(info.is_local_simulation);
+        assert!(!info.is_prerelease, "本地模拟的正式版本不带预发布标记");
         assert!(client.take_requests().is_empty());
     }
 
@@ -731,7 +832,13 @@ mod tests {
             download_url: None,
         };
 
-        let outcome = perform_update_check(config, http_client, "0.1.0".to_string()).await;
+        let outcome = perform_update_check(
+            config,
+            http_client,
+            "0.1.0".to_string(),
+            UpdateChannel::Stable,
+        )
+        .await;
 
         let UpdateCheckOutcome::ShowDialog(info) = outcome else {
             panic!("R2 失败后应回退到 GitHub Release");
@@ -764,7 +871,13 @@ mod tests {
             download_url: None,
         };
 
-        let outcome = perform_update_check(config, http_client, "0.1.0".to_string()).await;
+        let outcome = perform_update_check(
+            config,
+            http_client,
+            "0.1.0".to_string(),
+            UpdateChannel::Stable,
+        )
+        .await;
 
         assert!(matches!(outcome, UpdateCheckOutcome::ShowDialog(_)));
         let requests = client.take_requests();
@@ -792,7 +905,13 @@ mod tests {
             download_url: None,
         };
 
-        let outcome = perform_update_check(config, http_client, "0.1.0".to_string()).await;
+        let outcome = perform_update_check(
+            config,
+            http_client,
+            "0.1.0".to_string(),
+            UpdateChannel::Stable,
+        )
+        .await;
 
         let UpdateCheckOutcome::ShowDialog(info) = outcome else {
             panic!("R2 manifest 未更新时应继续回退到 GitHub Release");
@@ -823,7 +942,13 @@ mod tests {
             download_url: None,
         };
 
-        let outcome = perform_update_check(config, http_client, "0.1.0".to_string()).await;
+        let outcome = perform_update_check(
+            config,
+            http_client,
+            "0.1.0".to_string(),
+            UpdateChannel::Stable,
+        )
+        .await;
 
         let UpdateCheckOutcome::ShowDialog(info) = outcome else {
             panic!("R2 manifest 有新版本时应展示更新对话框");
@@ -902,5 +1027,97 @@ mod tests {
         } else {
             archive
         }
+    }
+
+    #[test]
+    fn stable_channel_never_offers_prerelease_manifests() {
+        let current = parse_version("0.22.0").expect("版本号合法");
+        let beta = parse_version("0.23.0-beta.1").expect("版本号合法");
+        let stable = parse_version("0.23.0").expect("版本号合法");
+
+        // semver 认为 0.23.0-beta.1 > 0.22.0，稳定通道必须显式排除它。
+        assert!(!should_offer_update(&beta, &current, UpdateChannel::Stable));
+        assert!(should_offer_update(
+            &stable,
+            &current,
+            UpdateChannel::Stable
+        ));
+        assert!(should_offer_update(&beta, &current, UpdateChannel::Beta));
+        // 同版本不提示，测试通道也不接受降级。
+        assert!(!should_offer_update(
+            &current,
+            &current,
+            UpdateChannel::Beta
+        ));
+        assert!(!should_offer_update(&beta, &stable, UpdateChannel::Beta));
+    }
+
+    #[test]
+    fn skipped_versions_are_scoped_per_channel() {
+        let stored = encode_skipped_update_version(UpdateChannel::Beta, "0.23.0-beta.2");
+        assert_eq!("beta:0.23.0-beta.2", stored);
+        assert_eq!(
+            Some("0.23.0-beta.2".to_string()),
+            skipped_version_for_channel(UpdateChannel::Beta, Some(&stored))
+        );
+        // 在测试通道跳过的版本不能连带跳过稳定通道的同号版本。
+        assert_eq!(
+            None,
+            skipped_version_for_channel(UpdateChannel::Stable, Some(&stored))
+        );
+
+        let stable_key = encode_skipped_update_version(UpdateChannel::Stable, "0.22.1");
+        assert_eq!("stable:0.22.1", stable_key);
+        assert_eq!(
+            Some("0.22.1".to_string()),
+            skipped_version_for_channel(UpdateChannel::Stable, Some(&stable_key))
+        );
+        assert_eq!(
+            None,
+            skipped_version_for_channel(UpdateChannel::Beta, Some(&stable_key))
+        );
+
+        // 历史数据是没有前缀的裸版本号，只对稳定通道生效。
+        assert_eq!(
+            Some("0.22.1".to_string()),
+            skipped_version_for_channel(UpdateChannel::Stable, Some("0.22.1"))
+        );
+        assert_eq!(
+            None,
+            skipped_version_for_channel(UpdateChannel::Beta, Some("0.22.1"))
+        );
+        assert_eq!(
+            None,
+            skipped_version_for_channel(UpdateChannel::Beta, Some("  "))
+        );
+    }
+
+    #[cfg(not(feature = "github-updates"))]
+    #[test]
+    fn beta_channel_only_reads_the_beta_manifest() {
+        use super::{BETA_UPDATE_SOURCES, CUSTOM_API_UPDATE_SOURCES, active_update_sources};
+
+        let beta_config = one_core::config::UpdateConfig {
+            update_url: "https://cdn.example.test/updates/beta/latest.json".to_string(),
+            download_url: None,
+        };
+        assert_eq!(
+            BETA_UPDATE_SOURCES,
+            active_update_sources(&beta_config, UpdateChannel::Beta)
+        );
+        assert_eq!(
+            CUSTOM_API_UPDATE_SOURCES,
+            active_update_sources(&beta_config, UpdateChannel::Stable)
+        );
+
+        // 没有 feed 时测试通道宁可报错，也不把最新稳定版当成 beta 更新推给用户。
+        let invalid_config = one_core::config::UpdateConfig {
+            update_url: String::new(),
+            download_url: None,
+        };
+        assert!(
+            active_update_sources(&invalid_config, UpdateChannel::Beta).is_empty(),
+            "测试通道不能回退到 GitHub Releases"
+        );
     }
 }

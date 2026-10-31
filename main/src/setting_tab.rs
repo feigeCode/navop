@@ -19,6 +19,7 @@ use crate::settings::remote_file_editor_settings::remote_file_editor_setting_gro
 use crate::settings::tool_exposure_settings::{
     agent_tool_exposure_setting_group, mcp_tool_exposure_setting_group,
 };
+use crate::settings::update_channel::{beta_exit_notice_item, update_channel_item};
 use crate::update;
 use font_kit::{file_type::FileType, font::Font};
 use gpui::http_client::{AsyncBody, Method, Request};
@@ -43,7 +44,7 @@ use gpui_component::{
         Settings,
     },
     switch::Switch,
-    v_flex,
+    tag, v_flex,
 };
 use one_assets::IconName;
 use one_core::cloud_sync::personal::{SyncStoreHealth, open_webdav_password, seal_webdav_password};
@@ -1972,31 +1973,40 @@ fn about_update_setting_group(
     auto_update_default: bool,
     update_check_state: Entity<update::UpdateCheckState>,
 ) -> SettingGroup {
+    let mut items = vec![
+        SettingItem::new(
+            t!("Settings.About.Update.auto_update"),
+            SettingField::switch(
+                |cx: &App| AppSettings::global(cx).auto_update,
+                |val: bool, cx: &mut App| {
+                    AppSettings::update_and_save(cx, |settings| {
+                        settings.auto_update = val;
+                    });
+                },
+            )
+            .default_value(auto_update_default),
+        )
+        .description(t!("Settings.About.Update.auto_update_desc").to_string()),
+        // 稳定/测试通道选择：切到测试通道会先弹确认框
+        update_channel_item(),
+    ];
+    // 只有预发布构建才可能「在用 beta 却选了稳定通道」，稳定性构建不放这条提示。
+    if crate::settings::update_channel::current_build_is_prerelease() {
+        items.push(beta_exit_notice_item());
+    }
+    items.push(
+        SettingItem::render(move |_options, _window, cx| {
+            render_manual_update_check_item(&update_check_state, cx)
+        })
+        .keywords([
+            t!("Settings.About.Update.group_title").to_string(),
+            t!("Settings.About.Update.check_now").to_string(),
+            t!("Settings.About.Update.check_now_desc").to_string(),
+        ]),
+    );
     SettingGroup::new()
         .title(t!("Settings.About.Update.group_title"))
-        .items(vec![
-            SettingItem::new(
-                t!("Settings.About.Update.auto_update"),
-                SettingField::switch(
-                    |cx: &App| AppSettings::global(cx).auto_update,
-                    |val: bool, cx: &mut App| {
-                        AppSettings::update_and_save(cx, |settings| {
-                            settings.auto_update = val;
-                        });
-                    },
-                )
-                .default_value(auto_update_default),
-            )
-            .description(t!("Settings.About.Update.auto_update_desc").to_string()),
-            SettingItem::render(move |_options, _window, cx| {
-                render_manual_update_check_item(&update_check_state, cx)
-            })
-            .keywords([
-                t!("Settings.About.Update.group_title").to_string(),
-                t!("Settings.About.Update.check_now").to_string(),
-                t!("Settings.About.Update.check_now_desc").to_string(),
-            ]),
-        ])
+        .items(items)
 }
 
 fn render_manual_update_check_item(
@@ -4047,6 +4057,21 @@ mod tests {
         assert!(source.contains("cx.observe(&update_check_state"));
     }
 
+    /// 关于页的「更新」分组必须挂上通道下拉；预发布构建还要挂「退出测试」提示。
+    #[test]
+    fn about_update_group_exposes_the_update_channel_switch() {
+        let group = method_source(implementation_source(), "fn about_update_setting_group(");
+
+        assert!(
+            group.contains("update_channel_item()"),
+            "更新分组缺少通道下拉入口"
+        );
+        assert!(
+            group.contains("beta_exit_notice_item()"),
+            "更新分组缺少预发布构建的退出测试提示"
+        );
+    }
+
     #[test]
     fn global_proxy_settings_build_proxy_url_without_auth() {
         let settings = GlobalProxySettings {
@@ -4516,20 +4541,29 @@ fn render_about_section(cx: &App) -> gpui::AnyElement {
         })
         .collect();
 
+    // 版本信息：预发布构建挂个标签，用户一眼能看出自己装的是测试版。
+    let mut version_row = h_flex()
+        .gap_2()
+        .items_center()
+        .child(
+            div()
+                .text_sm()
+                .child(format!("{}: {}", t!("Settings.About.version"), version)),
+        );
+    if version.contains('-') {
+        version_row = version_row.child(
+            tag::Tag::warning()
+                .small()
+                .rounded_full()
+                .child(t!("Settings.About.Update.channel_beta").to_string()),
+        );
+    }
+
     v_flex()
         .gap_4()
         .p_4()
         // 版本信息
-        .child(
-            h_flex()
-                .gap_2()
-                .items_center()
-                .child(div().text_sm().child(format!(
-                    "{}: {}",
-                    t!("Settings.About.version"),
-                    version
-                ))),
-        )
+        .child(version_row)
         // GitHub 开源地址
         .child(
             h_flex()

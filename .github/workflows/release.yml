@@ -51,6 +51,7 @@ jobs:
       tag: ${{ steps.release.outputs.tag }}
       platform: ${{ steps.release.outputs.platform }}
       build_mode: ${{ steps.release.outputs.build_mode }}
+      channel: ${{ steps.release.outputs.channel }}
 
     steps:
       - name: Validate release request
@@ -70,6 +71,9 @@ jobs:
             echo "::error::Invalid release tag: $RELEASE_TAG"
             exit 1
           fi
+          # 发布通道：纯稳定版本号（vX.Y.Z）走 stable，其余（vX.Y.Z-beta.N /
+          # -rc.N 等预发布）走 beta。与 upload-r2.yml 里的推导规则保持一字不差。
+          if [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then CHANNEL=stable; else CHANNEL=beta; fi
           gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" >/dev/null
           if [ "$RELEASE_PLATFORM" != "all" ]; then
             gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
@@ -78,7 +82,9 @@ jobs:
             echo "tag=$RELEASE_TAG"
             echo "platform=$RELEASE_PLATFORM"
             echo "build_mode=$BUILD_MODE"
+            echo "channel=$CHANNEL"
           } >> "$GITHUB_OUTPUT"
+          echo "Release channel: $CHANNEL"
 
       - name: Check out release tag
         uses: actions/checkout@v7
@@ -868,18 +874,28 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          CHANNEL: ${{ needs.prepare.outputs.channel }}
         run: |
           set -euo pipefail
+          # 只有 beta 通道把 Release 标成 prerelease：稳定版修复时误标会让
+          # /releases/latest 跳过它，老客户端（只认该端点）就再也收不到更新。
+          # 空数组在 `set -u` 下的展开要显式兜底，见 ${arr[@]+"${arr[@]}"}.
+          prerelease_args=()
+          if [ "$CHANNEL" = "beta" ]; then
+            prerelease_args+=(--prerelease)
+          fi
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release edit "$RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" \
               --title "Navop $RELEASE_TAG" \
+              ${prerelease_args[@]+"${prerelease_args[@]}"} \
               --notes-file release-notes.md
           else
             gh release create "$RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" \
               --verify-tag \
               --title "Navop $RELEASE_TAG" \
+              ${prerelease_args[@]+"${prerelease_args[@]}"} \
               --notes-file release-notes.md
           fi
 
@@ -898,10 +914,13 @@ jobs:
           # Dispatch R2 explicitly after the Release assets are present.
           # Relying only on workflow_run is not reliable when this workflow
           # itself is dispatched by release-trigger.yml.
+          # channel 必须显式传下去：beta 发布只能写 updates/beta/latest.json，
+          # 绝不能覆盖稳定清单 updates/latest.json。
           gh workflow run upload-r2.yml \
             --repo "$GITHUB_REPOSITORY" \
             --ref main \
-            -f tag="$RELEASE_TAG"
+            -f tag="$RELEASE_TAG" \
+            -f channel="$CHANNEL"
 
           gh workflow run sync-cnb-release-assets.yml \
             --repo "$GITHUB_REPOSITORY" \

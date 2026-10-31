@@ -14,6 +14,14 @@ Update:
     en: Navop local update simulation
     zh-CN: Navop 本地更新模拟
     zh-HK: Navop 本地更新模擬
+  beta_title:
+    en: Beta update available
+    zh-CN: 发现测试版更新
+    zh-HK: 發現測試版更新
+  beta_badge:
+    en: Beta
+    zh-CN: 测试版
+    zh-HK: 測試版
   message:
     en: "Navop %{latest} is available. You are currently using %{current}. Download it now?"
     zh-CN: "Navop %{latest} 可供下载，您现在的版本是 %{current}。要现在下载吗？"

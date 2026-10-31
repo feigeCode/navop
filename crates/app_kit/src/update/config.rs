@@ -2,11 +2,15 @@
 //!
 //! 独立产品各自使用自己那份更新清单；全量产品沿用历史路径，保证
 //! 已发布的老版本还能收到升级提示。
+//!
+//! 稳定通道与测试通道各有一份清单（测试通道在 `updates/` 下多一层 `beta/`），
+//! 稳定清单的路径一个字都没改，所以 beta 机制上线不会让老版本收到预发布版本。
 
 use std::sync::OnceLock;
 
 use domain_api::AppIdentity;
 use one_core::config::{UpdateConfig, public_base_url, update_url_from_public_base};
+use one_core::settings::UpdateChannel;
 
 /// 运行时覆盖更新接口地址；与 `one_core::config` 共用同一个环境变量。
 const UPDATE_URL_ENV: &str = "NAVOP_UPDATE_URL";
@@ -20,6 +24,8 @@ const BUILD_TIME_DOWNLOAD_URL: Option<&str> = option_env!("NAVOP_UPDATE_DOWNLOAD
 const UPDATE_ROOT: &str = "updates";
 /// 统一更新清单文件名。
 const UPDATE_MANIFEST: &str = "latest.json";
+/// 测试通道清单所在的子目录。
+const BETA_CHANNEL_SEGMENT: &str = "beta";
 /// 全量产品的 `app_id`：它的 feed 不含产品段，保持历史路径。
 const LEGACY_FULL_APP_ID: &str = "navop";
 
@@ -39,14 +45,25 @@ pub fn current_version() -> &'static str {
         .unwrap_or(env!("CARGO_PKG_VERSION"))
 }
 
-/// 当前产品使用的更新配置。
-pub fn update_config() -> UpdateConfig {
+/// 当前实际生效的更新通道。
+///
+/// 用户显式选了通道就听用户的；没选过则跟随当前构建：预发布构建（`0.23.0-beta.2`）
+/// 自动走测试通道，正式构建走稳定通道。
+pub fn effective_channel(configured: Option<UpdateChannel>) -> UpdateChannel {
+    UpdateChannel::resolve(configured, current_version())
+}
+
+/// 当前产品在指定通道上使用的更新配置。
+pub fn update_config(channel: UpdateChannel) -> UpdateConfig {
     let runtime_url = override_update_url();
     let base_url = public_base_url();
     let mut config = match crate::identity() {
-        Some(identity) => {
-            derive_update_config(runtime_url.as_deref(), base_url.as_deref(), identity)
-        }
+        Some(identity) => derive_update_config(
+            runtime_url.as_deref(),
+            base_url.as_deref(),
+            identity,
+            channel,
+        ),
         // 尚未 bootstrap 时无法派生产品 feed，只能退化为「仅环境变量覆盖」。
         None => UpdateConfig {
             update_url: runtime_url.unwrap_or_default(),
@@ -65,14 +82,15 @@ pub fn update_check_available(config: &UpdateConfig) -> bool {
     config.is_valid() || crate::identity().is_some_and(is_legacy_full)
 }
 
-/// 纯函数版本：由覆盖地址、站点根地址与产品身份派生更新配置。
+/// 纯函数版本：由覆盖地址、站点根地址、产品身份与更新通道派生更新配置。
 pub fn derive_update_config(
     runtime: Option<&str>,
     base: Option<&str>,
     identity: &AppIdentity,
+    channel: UpdateChannel,
 ) -> UpdateConfig {
     let update_url = normalize_url(runtime.map(ToOwned::to_owned))
-        .or_else(|| base.and_then(|base| feed_url(base, identity)))
+        .or_else(|| base.and_then(|base| feed_url(base, identity, channel)))
         .unwrap_or_default();
     UpdateConfig {
         update_url,
@@ -98,30 +116,51 @@ fn normalize_url(value: Option<String>) -> Option<String> {
         .filter(|url| !url.is_empty())
 }
 
-/// 产品自己的更新清单地址。
+/// 拼接 `{base}/updates/<segments…>/latest.json`，空段自动跳过。
+fn updates_url(base: &str, segments: &[&str]) -> String {
+    let mut url = format!("{base}/{UPDATE_ROOT}");
+    for segment in segments
+        .iter()
+        .copied()
+        .filter(|segment| !segment.is_empty())
+    {
+        url.push('/');
+        url.push_str(segment);
+    }
+    url.push('/');
+    url.push_str(UPDATE_MANIFEST);
+    url
+}
+
+/// 产品在指定通道上的更新清单地址。
 ///
-/// 全量产品保持 `{base}/updates/latest.json`；独立产品带上产品名与发布通道，
-/// 三者的 feed 因此互不覆盖。
-fn feed_url(base: &str, identity: &AppIdentity) -> Option<String> {
+/// 稳定通道保持历史路径（全量产品 `{base}/updates/latest.json`，独立产品带上产品名
+/// 与发布通道）；测试通道在其后多一层 `beta/`，因此两份清单互不覆盖。
+fn feed_url(base: &str, identity: &AppIdentity, channel: UpdateChannel) -> Option<String> {
     let base = base.trim().trim_end_matches('/');
     if base.is_empty() {
         return None;
     }
-    if is_legacy_full(identity) {
-        return Some(update_url_from_public_base(base));
+    if channel == UpdateChannel::Stable {
+        if is_legacy_full(identity) {
+            return Some(update_url_from_public_base(base));
+        }
+        return Some(updates_url(
+            base,
+            &[identity.binary_name, identity.mcp_update_channel.trim()],
+        ));
     }
-    let channel = identity.mcp_update_channel.trim();
-    Some(if channel.is_empty() {
-        format!(
-            "{base}/{UPDATE_ROOT}/{}/{UPDATE_MANIFEST}",
-            identity.binary_name
-        )
-    } else {
-        format!(
-            "{base}/{UPDATE_ROOT}/{}/{channel}/{UPDATE_MANIFEST}",
-            identity.binary_name
-        )
-    })
+    if is_legacy_full(identity) {
+        return Some(updates_url(base, &[BETA_CHANNEL_SEGMENT]));
+    }
+    Some(updates_url(
+        base,
+        &[
+            identity.binary_name,
+            identity.mcp_update_channel.trim(),
+            BETA_CHANNEL_SEGMENT,
+        ],
+    ))
 }
 
 fn is_legacy_full(identity: &AppIdentity) -> bool {
@@ -140,6 +179,7 @@ mod tests {
             Some("https://mirror.example.test/latest.json"),
             Some(BASE),
             &AppIdentity::FULL,
+            UpdateChannel::Stable,
         );
         assert_eq!(config.update_url, "https://mirror.example.test/latest.json");
         assert_eq!(config.download_url, None);
@@ -147,7 +187,12 @@ mod tests {
 
     #[test]
     fn blank_runtime_override_falls_back_to_the_product_feed() {
-        let config = derive_update_config(Some("  "), Some(BASE), &AppIdentity::FULL);
+        let config = derive_update_config(
+            Some("  "),
+            Some(BASE),
+            &AppIdentity::FULL,
+            UpdateChannel::Stable,
+        );
         assert_eq!(
             config.update_url,
             "https://cdn.example.test/updates/latest.json"
@@ -156,8 +201,12 @@ mod tests {
 
     #[test]
     fn full_product_keeps_the_legacy_feed_path() {
-        let config =
-            derive_update_config(None, Some("https://cdn.example.test/"), &AppIdentity::FULL);
+        let config = derive_update_config(
+            None,
+            Some("https://cdn.example.test/"),
+            &AppIdentity::FULL,
+            UpdateChannel::Stable,
+        );
         assert_eq!(
             config.update_url,
             "https://cdn.example.test/updates/latest.json"
@@ -166,9 +215,12 @@ mod tests {
 
     #[test]
     fn split_products_use_their_own_feed() {
-        let full = derive_update_config(None, Some(BASE), &AppIdentity::FULL);
-        let shell = derive_update_config(None, Some(BASE), &AppIdentity::SHELL);
-        let data = derive_update_config(None, Some(BASE), &AppIdentity::DATA);
+        let full =
+            derive_update_config(None, Some(BASE), &AppIdentity::FULL, UpdateChannel::Stable);
+        let shell =
+            derive_update_config(None, Some(BASE), &AppIdentity::SHELL, UpdateChannel::Stable);
+        let data =
+            derive_update_config(None, Some(BASE), &AppIdentity::DATA, UpdateChannel::Stable);
 
         assert_eq!(
             shell.update_url,
@@ -185,10 +237,49 @@ mod tests {
 
     #[test]
     fn missing_base_url_disables_the_feed_without_panicking() {
-        let config = derive_update_config(None, None, &AppIdentity::SHELL);
+        let config = derive_update_config(None, None, &AppIdentity::SHELL, UpdateChannel::Stable);
         assert!(config.update_url.is_empty());
         assert!(!config.is_valid());
         assert!(!update_check_available(&config));
+    }
+
+    #[test]
+    fn beta_feed_sits_beside_the_stable_one_without_shadowing_it() {
+        let stable =
+            derive_update_config(None, Some(BASE), &AppIdentity::FULL, UpdateChannel::Stable);
+        let beta = derive_update_config(None, Some(BASE), &AppIdentity::FULL, UpdateChannel::Beta);
+
+        assert_eq!(
+            stable.update_url,
+            "https://cdn.example.test/updates/latest.json"
+        );
+        assert_eq!(
+            beta.update_url,
+            "https://cdn.example.test/updates/beta/latest.json"
+        );
+    }
+
+    #[test]
+    fn split_product_beta_feed_appends_the_channel_segment() {
+        let beta = derive_update_config(None, Some(BASE), &AppIdentity::SHELL, UpdateChannel::Beta);
+
+        assert_eq!(
+            beta.update_url,
+            "https://cdn.example.test/updates/navop-shell/shell/beta/latest.json"
+        );
+    }
+
+    #[test]
+    fn effective_channel_prefers_the_explicit_choice() {
+        // 这里只验证显式选择优先：全局 current_version 会被别的测试覆盖，不在此断言默认值。
+        assert_eq!(
+            UpdateChannel::Stable,
+            effective_channel(Some(UpdateChannel::Stable))
+        );
+        assert_eq!(
+            UpdateChannel::Beta,
+            effective_channel(Some(UpdateChannel::Beta))
+        );
     }
 
     #[test]

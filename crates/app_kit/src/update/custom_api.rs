@@ -25,15 +25,18 @@ pub(crate) struct UpdateResponse {
     sha256s: Option<HashMap<String, String>>,
 }
 
+/// 拉取一份更新清单。`Ok(None)` 表示清单不存在（HTTP 404）：测试通道在首个 beta
+/// 发布前就是这种状态，调用方据此区分「还没有 beta 版本」与「服务真的出错了」。
 pub(crate) async fn fetch_update_info(
     http_client: Arc<dyn HttpClient>,
     update_url: &str,
-) -> Result<UpdateResponse, String> {
+) -> Result<Option<UpdateResponse>, String> {
     if let Some(path) = local_file_path(update_url) {
         let bytes = tokio::fs::read(&path)
             .await
             .map_err(|err| format!("读取本地更新文件失败 {}: {}", path.display(), err))?;
         return serde_json::from_slice::<UpdateResponse>(&bytes)
+            .map(Some)
             .map_err(|err| format!("解析本地更新文件失败 {}: {}", path.display(), err));
     }
 
@@ -56,11 +59,16 @@ pub(crate) async fn fetch_update_info(
         .await
         .map_err(|err| format!("读取更新响应失败: {}", err))?;
 
+    // 404 表示清单还不存在（例如测试通道在首个 beta 发布前），不是服务故障。
+    if status.as_u16() == 404 {
+        return Ok(None);
+    }
     if !status.is_success() {
         return Err(format!("更新接口返回异常状态码: {}", status));
     }
 
     serde_json::from_slice::<UpdateResponse>(&bytes)
+        .map(Some)
         .map_err(|err| format!("解析更新响应失败: {}", err))
 }
 
@@ -145,7 +153,8 @@ mod tests {
 
         let response = fetch_update_info(http_client, &manifest_path.to_string_lossy())
             .await
-            .expect("应读取本地 manifest");
+            .expect("应读取本地 manifest")
+            .expect("本地 manifest 一定存在");
 
         assert_eq!(response.version, "99.0.0");
         assert_eq!(response.release_notes.as_deref(), Some("## 本地模拟"));
@@ -165,10 +174,35 @@ mod tests {
 
         let response = fetch_update_info(http_client, &manifest_url)
             .await
-            .expect("应读取 file URL manifest");
+            .expect("应读取 file URL manifest")
+            .expect("file URL manifest 一定存在");
 
         assert_eq!(response.version, "99.0.1");
         assert!(client.take_requests().is_empty());
+    }
+
+    #[tokio::test]
+    async fn fetch_update_info_treats_a_missing_manifest_as_no_manifest() {
+        let client: Arc<dyn HttpClient> = Arc::new(FakeHttpClient::new(vec![
+            FakeHttpClient::response(404, ""),
+            FakeHttpClient::response(500, "boom"),
+        ]));
+
+        let missing = fetch_update_info(
+            client.clone(),
+            "https://cdn.example.test/updates/beta/latest.json",
+        )
+        .await
+        .expect("404 不该是错误");
+        assert!(missing.is_none(), "404 应表示清单不存在");
+
+        let error = fetch_update_info(client, "https://cdn.example.test/updates/latest.json")
+            .await
+            .expect_err("5xx 仍是错误");
+        assert!(
+            error.contains("异常状态码"),
+            "错误信息应带上状态码: {error}"
+        );
     }
 
     #[tokio::test]

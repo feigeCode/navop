@@ -7,6 +7,7 @@ use gpui_component::{
     checkbox::Checkbox,
     h_flex,
     progress::Progress,
+    tag::Tag,
     text::TextView,
     v_flex,
 };
@@ -64,6 +65,25 @@ impl UpdateDialogView {
         } else {
             t!("Update.available_title").to_string()
         };
+        // 测试通道的版本号同样长这样（0.23.0-beta.2），标题旁挂个徽标，避免用户把预发布
+        // 包当成正式更新装上。
+        let title_row = h_flex().items_center().gap_2().child(
+            div()
+                .text_xl()
+                .font_semibold()
+                .text_color(cx.theme().foreground)
+                .child(available_title),
+        );
+        let title_row = if self.info.is_prerelease {
+            title_row.child(
+                Tag::warning()
+                    .small()
+                    .rounded_full()
+                    .child(t!("Update.beta_badge").to_string()),
+            )
+        } else {
+            title_row
+        };
 
         v_flex()
             .size_full()
@@ -76,22 +96,12 @@ impl UpdateDialogView {
                     .gap_4()
                     .child(self.render_app_icon(68.0))
                     .child(
-                        v_flex()
-                            .min_w_0()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_xl()
-                                    .font_semibold()
-                                    .text_color(cx.theme().foreground)
-                                    .child(available_title),
-                            )
-                            .child(
-                                div()
-                                    .text_base()
-                                    .text_color(cx.theme().foreground)
-                                    .child(message),
-                            ),
+                        v_flex().min_w_0().gap_1().child(title_row).child(
+                            div()
+                                .text_base()
+                                .text_color(cx.theme().foreground)
+                                .child(message),
+                        ),
                     ),
             )
             .child(

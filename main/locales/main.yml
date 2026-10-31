@@ -4989,6 +4989,50 @@ Settings:
         en: Automatically check for updates when the application starts
         zh-CN: 应用启动时自动检查新版本
         zh-HK: 應用啟動時自動檢查新版本
+      channel:
+        en: Update Channel
+        zh-CN: 更新通道
+        zh-HK: 更新通道
+      channel_desc:
+        en: Stable receives only official releases. Beta receives pre-release builds earlier; switching back to Stable stops future beta updates, while the installed beta keeps working until the next stable release replaces it.
+        zh-CN: 稳定版只接收正式发布；测试版能更早拿到预发布版本。切回稳定版只会停止后续测试版更新，已安装的测试版可以继续使用，直到下个正式版覆盖它。
+        zh-HK: 穩定版只接收正式發佈；測試版能更早拿到預發佈版本。切回穩定版只會停止後續測試版更新，已安裝的測試版可以繼續使用，直到下個正式版覆蓋它。
+      channel_stable:
+        en: Stable
+        zh-CN: 稳定版
+        zh-HK: 穩定版
+      channel_beta:
+        en: Beta
+        zh-CN: 测试版
+        zh-HK: 測試版
+      switch_beta_title:
+        en: Switch to the beta channel?
+        zh-CN: 切换到测试版通道？
+        zh-HK: 切換到測試版通道？
+      switch_beta_desc:
+        en: Beta builds get new features earlier, but they may contain bugs and unfinished changes. There is no one-click rollback - switching back to Stable only stops future beta updates, and you can install a stable build manually from the release page if needed.
+        zh-CN: 测试版会更早拿到新功能，但也可能带有缺陷和未完成的改动。这里没有一键回退：切回稳定版只会停止后续测试版更新，需要时可以到发布页手动安装正式版。
+        zh-HK: 測試版會更早拿到新功能，但也可能帶有缺陷和未完成的改動。這裡沒有一鍵回退：切回穩定版只會停止後續測試版更新，需要時可以到發佈頁手動安裝正式版。
+      switch_beta_confirm:
+        en: Switch to Beta
+        zh-CN: 切换到测试版
+        zh-HK: 切換到測試版
+      switch_beta_cancel:
+        en: Cancel
+        zh-CN: 取消
+        zh-HK: 取消
+      switched_beta:
+        en: Switched to the beta channel, checking for updates...
+        zh-CN: 已切换到测试版通道，正在检查更新...
+        zh-HK: 已切換到測試版通道，正在檢查更新...
+      switched_stable:
+        en: Switched to the stable channel, checking for updates...
+        zh-CN: 已切换到稳定版通道，正在检查更新...
+        zh-HK: 已切換到穩定版通道，正在檢查更新...
+      beta_exit_notice:
+        en: You are running a beta build while the stable channel is selected. It keeps working, and the next stable release will replace it - no rollback needed.
+        zh-CN: 当前运行的是测试版，但已选择稳定通道。这个版本可以继续使用，下个正式发布会自动覆盖它，无需手动回退。
+        zh-HK: 目前執行的是測試版，但已選擇穩定通道。這個版本可以繼續使用，下個正式發佈會自動覆蓋它，無需手動回退。
       check_now:
         en: Check for Updates
         zh-CN: 检查更新

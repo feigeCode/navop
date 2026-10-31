@@ -7,6 +7,11 @@ on:
         description: GitHub Release tag to upload to R2, for example v0.4.8
         required: true
         type: string
+      channel:
+        description: 发布通道 stable 或 beta；留空则从 tag 自动推导（稳定 tag → stable，其余 → beta）
+        required: false
+        default: ""
+        type: string
 
 permissions:
   actions: read
@@ -42,6 +47,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           INPUT_TAG: ${{ inputs.tag }}
+          INPUT_CHANNEL: ${{ inputs.channel }}
         run: |
           set -euo pipefail
 
@@ -53,15 +59,31 @@ jobs:
             exit 0
           fi
 
+          # 发布通道：显式传入优先；留空则按 tag 推导。规则与 release.yml 的
+          # prepare job 一字不差——纯稳定版本号是 stable，预发布一律 beta。
+          CHANNEL="${INPUT_CHANNEL:-}"
+          if [ -z "$CHANNEL" ]; then
+            if [[ "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then CHANNEL=stable; else CHANNEL=beta; fi
+          fi
+          case "$CHANNEL" in
+            stable|beta) ;;
+            *)
+              echo "::error::Invalid channel '${CHANNEL}'; expected stable or beta"
+              exit 1
+              ;;
+          esac
+
           gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null
           echo "tag=$release_tag" >> "$GITHUB_OUTPUT"
           echo "version=${release_tag#v}" >> "$GITHUB_OUTPUT"
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
           echo "skip=false" >> "$GITHUB_OUTPUT"
 
       - name: Show R2 upload target
         if: ${{ steps.r2_config.outputs.skip != 'true' && steps.release.outputs.skip != 'true' }}
         run: |
           echo "Release tag: ${{ steps.release.outputs.tag }}"
+          echo "Release channel: ${{ steps.release.outputs.channel }}"
           echo "R2 public base URL: ${{ steps.r2_config.outputs.base_url }}"
 
       - name: Check out release tag
@@ -324,9 +346,22 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_R2_BUCKET: ${{ secrets.CLOUDFLARE_R2_BUCKET }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          CHANNEL: ${{ steps.release.outputs.channel }}
         run: |
           set -euo pipefail
           endpoint="https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com"
+
+          # 更新清单按通道落位：stable 继续写 updates/latest.json（老客户端唯一
+          # 认识的位置），beta 只写 updates/beta/latest.json，绝不能覆盖稳定清单。
+          case "${CHANNEL}" in
+            stable) manifest_key="updates/latest.json" ;;
+            beta) manifest_key="updates/beta/latest.json" ;;
+            *)
+              echo "::error::Unsupported release channel: ${CHANNEL:-<empty>}"
+              exit 1
+              ;;
+          esac
+          echo "Release channel ${CHANNEL}; update manifest key: ${manifest_key}"
 
           upload_object() {
             local source="$1"
@@ -397,7 +432,7 @@ jobs:
             upload_object "$path" "releases/${RELEASE_TAG}/${file}" "$content_type" "public, max-age=0, must-revalidate"
           done
 
-          upload_object "artifacts/updates/latest.json" "updates/latest.json" "application/json; charset=utf-8" "no-store, max-age=0"
+          upload_object "artifacts/updates/latest.json" "${manifest_key}" "application/json; charset=utf-8" "no-store, max-age=0"
 
       # 桶里只留这次上传的版本：旧安装包在 R2 上只占空间，下载入口都不依赖它们
       # —— updates/latest.json 只指向本次 tag，旧版本另有 GitHub Release 与 CNB
@@ -454,11 +489,42 @@ jobs:
             exit 1
           fi
 
+          # 测试通道清单（updates/beta/latest.json）不受 prune 影响，但它指向的
+          # 安装包就在 ${prefix}/ 下：删掉它会让 beta 用户点下载拿到 404。
+          # 优先读清单里的 version 精确保留；读不到（首次 beta 之前、或对象不存在）
+          # 就退回「保留版本号最大的一个 beta」。
+          beta_manifest_key="updates/beta/latest.json"
+          beta_manifest_path="$(mktemp)"
+          keep_beta_tag=""
+          if aws s3api get-object \
+            --bucket "${CLOUDFLARE_R2_BUCKET}" \
+            --key "${beta_manifest_key}" \
+            --endpoint-url "${endpoint}" \
+            "${beta_manifest_path}" >/dev/null 2>&1; then
+            keep_beta_tag="$(jq -r '.version // empty' "${beta_manifest_path}" 2>/dev/null || true)"
+          fi
+          rm -f "${beta_manifest_path}"
+          if [ -n "${keep_beta_tag}" ]; then
+            # 清单里的 version 不带 v 前缀，桶里的目录前缀带。
+            case "${keep_beta_tag}" in
+              v*) ;;
+              *) keep_beta_tag="v${keep_beta_tag}" ;;
+            esac
+          else
+            keep_beta_tag="$(printf '%s\n' ${tags} | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-' | sort -V | tail -1 || true)"
+          fi
+
+          keep_tags=" ${RELEASE_TAG} "
+          if [ -n "${keep_beta_tag}" ]; then
+            keep_tags="${keep_tags}${keep_beta_tag} "
+            echo "Keeping ${prefix}/${keep_beta_tag}/ for the beta channel manifest"
+          fi
+
           # 注意这里的 for 依赖分词逐行遍历。
           for tag in ${tags}; do
-            if [ "${tag}" = "${RELEASE_TAG}" ]; then
-              continue
-            fi
+            case "${keep_tags}" in
+              *" ${tag} "*) continue ;;
+            esac
             echo "Deleting ${prefix}/${tag}/"
             aws s3 rm "s3://${CLOUDFLARE_R2_BUCKET}/${prefix}/${tag}/" \
               --recursive \
@@ -466,10 +532,13 @@ jobs:
           done
 
           for tag in $(list_release_prefixes); do
-            if [ "${tag}" != "${RELEASE_TAG}" ]; then
-              echo "::error::R2 still holds ${prefix}/${tag}/ after pruning"
-              exit 1
-            fi
+            case "${keep_tags}" in
+              *" ${tag} "*) ;;
+              *)
+                echo "::error::R2 still holds ${prefix}/${tag}/ after pruning"
+                exit 1
+                ;;
+            esac
           done
 
-          echo "R2 now keeps only ${prefix}/${RELEASE_TAG}/"
+          echo "R2 now keeps ${keep_tags}(under ${prefix}/)"

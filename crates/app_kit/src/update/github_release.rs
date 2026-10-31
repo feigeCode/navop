@@ -89,6 +89,7 @@ pub(crate) fn select_github_asset(release: &GithubRelease) -> Option<&GithubRele
 pub(crate) fn github_release_to_dialog_info(
     release: &GithubRelease,
     current_version: &str,
+    is_prerelease: bool,
 ) -> Result<UpdateDialogInfo, String> {
     let asset = select_github_asset(release)
         .ok_or_else(|| format!("未找到当前平台的发布资产: {}", EXPECTED_ARCHIVE_NAME))?;
@@ -101,6 +102,7 @@ pub(crate) fn github_release_to_dialog_info(
         fallback_download_url: None,
         expected_sha256: None,
         is_local_simulation: false,
+        is_prerelease,
     })
 }
 
@@ -157,10 +159,12 @@ mod tests {
             ],
         };
 
-        let info = github_release_to_dialog_info(&release, "0.1.0").expect("应选择当前平台资产");
+        let info =
+            github_release_to_dialog_info(&release, "0.1.0", false).expect("应选择当前平台资产");
 
         assert_eq!(info.latest_version, "v1.2.3");
         assert_eq!(info.current_version, "0.1.0");
+        assert!(!info.is_prerelease);
         assert_eq!(info.release_notes.as_deref(), Some("## What's New"));
         assert_eq!(
             info.download_url.as_deref(),
