@@ -10,6 +10,7 @@ mod kinds;
 mod sqlite;
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result, anyhow, bail};
@@ -30,15 +31,81 @@ pub use self::bundle::{
     BUNDLE_VERSION, BundleConnection, BundleWorkspace, ConnectionBundle, ImportReport,
 };
 pub use self::dialog::open_import_dialog;
-pub use self::sqlite::{detect_full_product, full_product_candidates};
+pub use self::sqlite::{
+    detect_full_product, full_product_candidates, is_sqlite_database, read_bundle_from_sqlite,
+};
 
 pub(crate) use self::kinds::supported_connection_types;
 
 /// 从全量产品的数据库文件一键迁移（自动探测源库）。
 pub fn import_from_full_product(cx: &mut App) -> Result<ImportReport> {
-    let path = detect_full_product()
-        .ok_or_else(|| anyhow!("未找到全量产品数据库，请在「迁移包」页手动指定 one-hub.db 路径"))?;
-    import_parsed_bundle(self::sqlite::read_bundle_from_sqlite(&path)?, cx)
+    let path = detect_full_product().ok_or_else(|| {
+        anyhow!(
+            "未自动找到全量产品的 one-hub.db，请点「选择文件…」手动指定（常见位置：~/.config/navop/one-hub.db）"
+        )
+    })?;
+    import_from_database(&path, cx)
+}
+
+/// 从用户指定的数据库文件迁移（只读打开，不改动源库）。
+pub fn import_from_database(path: &Path, cx: &mut App) -> Result<ImportReport> {
+    import_parsed_bundle(self::sqlite::read_bundle_from_sqlite(path)?, cx)
+}
+
+/// 从用户指定的源文件迁移：SQLite 库按全量产品库读取，其余按迁移包 JSON 读取。
+///
+/// 独立产品没有「全量产品目录」可探测时（换机、便携版、全量版已卸载），这是唯一
+/// 的迁移入口，因此不能只看扩展名：`one-hub.db` 常被重命名或没有扩展名。
+pub fn import_from_source_file(path: &Path, cx: &mut App) -> Result<ImportReport> {
+    if is_sqlite_database(path) {
+        return import_from_database(path, cx);
+    }
+    let text =
+        std::fs::read_to_string(path).with_context(|| format!("读取「{}」失败", path.display()))?;
+    import_bundle(&text, cx)
+}
+
+/// 展开用户手填/粘贴的路径：去空白与引号、去 `file://` 前缀、展开 `~` 与 `%VAR%`。
+///
+/// 弹窗会优先让用户点「选择文件…」，但输入框仍允许手写，而手写时常见的
+/// `"~/Desktop/one-hub.db"`（从 Finder 复制/拖入带引号）与 Windows 的
+/// `%USERPROFILE%\...` 必须能读通。
+pub fn expand_source_path(input: &str) -> PathBuf {
+    let trimmed = input.trim().trim_matches(|ch| ch == '"' || ch == '\'');
+    let without_scheme = trimmed.strip_prefix("file://").unwrap_or(trimmed);
+    let expanded = expand_env_vars(without_scheme);
+    if expanded == "~" {
+        return dirs::home_dir().unwrap_or_else(|| PathBuf::from(expanded));
+    }
+    if let Some(rest) = expanded
+        .strip_prefix("~/")
+        .or_else(|| expanded.strip_prefix("~\\"))
+        && let Some(home) = dirs::home_dir()
+    {
+        return home.join(rest);
+    }
+    PathBuf::from(expanded)
+}
+
+/// 展开 `%VAR%`（Windows 手写路径的常见写法）；不认识的变量原样保留。
+fn expand_env_vars(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(start) = rest.find('%') {
+        let Some(end_offset) = rest[start + 1..].find('%') else {
+            break;
+        };
+        let end = start + 1 + end_offset;
+        let name = &rest[start + 1..end];
+        out.push_str(&rest[..start]);
+        match std::env::var(name) {
+            Ok(value) if !name.is_empty() => out.push_str(&value),
+            _ => out.push_str(&rest[start..=end]),
+        }
+        rest = &rest[end + 1..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// 迁移包里的 JSON 字符串必须是合法 JSON，否则说明包已被破坏。

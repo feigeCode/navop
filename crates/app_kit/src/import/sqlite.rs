@@ -4,6 +4,7 @@
 //! 版本读取（老库缺 `workspace_id`、`remark` 等列也能导入）。
 
 use std::collections::HashMap;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
@@ -12,6 +13,8 @@ use rusqlite::{Connection, OpenFlags};
 
 use super::bundle::{BUNDLE_VERSION, BundleConnection, BundleWorkspace, ConnectionBundle};
 
+/// sqlite 文件头魔数，用来区分 `one-hub.db` 与迁移包 JSON。
+const SQLITE_MAGIC: &[u8; 16] = b"SQLite format 3\0";
 /// 三个产品共用的数据库文件名。
 const DB_FILE_NAME: &str = "one-hub.db";
 /// 全量产品的 app id，写入迁移包便于追溯来源。
@@ -50,17 +53,48 @@ pub fn full_product_candidates() -> Vec<PathBuf> {
     candidates
 }
 
-/// 探测本机可用于迁移的全量产品数据库；返回第一个能读通的文件。
+/// 探测本机可用于迁移的全量产品数据库。
+///
+/// 优先返回真正带连接的那个库：全量产品目录里可能残留刚被独立产品初始化出来
+/// 的空库（0 条连接），若只按「能读通」判断就会导入 0 条连接。因此先找有连接
+/// 的候选，都为空时才退回第一个可读库。
 pub fn detect_full_product() -> Option<PathBuf> {
-    full_product_candidates()
-        .into_iter()
-        .find(|path| is_readable_db(path) && read_bundle_from_sqlite(path).is_ok())
+    pick_candidate(full_product_candidates())
+}
+
+fn pick_candidate(candidates: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
+    let mut fallback = None;
+    for path in candidates {
+        if !is_readable_db(&path) {
+            continue;
+        }
+        let Ok(bundle) = read_bundle_from_sqlite(&path) else {
+            continue;
+        };
+        if !bundle.connections.is_empty() {
+            return Some(path);
+        }
+        fallback.get_or_insert(path);
+    }
+    fallback
 }
 
 fn is_readable_db(path: &Path) -> bool {
     std::fs::metadata(path)
         .map(|meta| meta.is_file() && meta.len() > 0)
         .unwrap_or(false)
+}
+
+/// 文件头是否为 sqlite 数据库。
+///
+/// 「选择文件」同时接受 `one-hub.db` 与迁移包 JSON，靠文件头区分，比看扩展名可靠
+///（用户常把 `one-hub.db` 改名或没有扩展名）。
+pub fn is_sqlite_database(path: &Path) -> bool {
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut header = [0u8; 16];
+    file.read_exact(&mut header).is_ok() && &header == SQLITE_MAGIC
 }
 
 /// 只读读取数据库里的连接与工作区，组装成迁移包。
@@ -297,5 +331,50 @@ mod tests {
         assert!(!is_readable_db(
             &std::env::temp_dir().join("definitely-missing.db")
         ));
+        assert!(!is_sqlite_database(
+            &std::env::temp_dir().join("definitely-missing.db")
+        ));
+    }
+
+    #[test]
+    fn recognizes_sqlite_header_only() {
+        let db = TempDb::create("CREATE TABLE connections (id INTEGER PRIMARY KEY);");
+        assert!(is_sqlite_database(&db.0));
+
+        let json_dir = std::env::temp_dir();
+        let json_path = json_dir.join(format!(
+            "navop-import-bundle-{}-{}.json",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::write(&json_path, r#"{"version":1,"connections":[]}"#).expect("写迁移包失败");
+        assert!(!is_sqlite_database(&json_path));
+        let _ = std::fs::remove_file(&json_path);
+    }
+
+    #[test]
+    fn pick_candidate_prefers_database_with_connections() {
+        let empty = TempDb::create("CREATE TABLE connections (id INTEGER PRIMARY KEY, name TEXT);");
+        let filled = TempDb::create(
+            "CREATE TABLE connections (id INTEGER PRIMARY KEY, name TEXT, params TEXT);
+             INSERT INTO connections (name, params) VALUES ('主库', '{}');",
+        );
+        let picked = pick_candidate(vec![empty.0.clone(), filled.0.clone()]).expect("应当选出一个");
+        assert_eq!(picked, filled.0);
+
+        // 只有空库时也要给用户一个可用路径，由导入结果去提示 0 条。
+        let only_empty = pick_candidate(vec![empty.0.clone()]).expect("应当退回到空库");
+        assert_eq!(only_empty, empty.0);
+        assert_eq!(pick_candidate(Vec::new()), None);
+    }
+
+    #[test]
+    fn pick_candidate_skips_unreadable_files() {
+        let missing = std::env::temp_dir().join("navop-import-missing-candidate.db");
+        let db = TempDb::create("CREATE TABLE connections (id INTEGER PRIMARY KEY, name TEXT);");
+        assert_eq!(
+            pick_candidate(vec![missing, db.0.clone()]),
+            Some(db.0.clone())
+        );
     }
 }
