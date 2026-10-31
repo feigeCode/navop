@@ -8327,7 +8327,7 @@ dependencies = [
 
 [[package]]
 name = "navop-data"
-version = "0.1.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "data_domain",
@@ -8338,7 +8338,7 @@ dependencies = [
 
 [[package]]
 name = "navop-shell"
-version = "0.1.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "domain_api",

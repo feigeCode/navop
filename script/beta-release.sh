@@ -6,9 +6,11 @@ set -Eeuo pipefail
 #   script/beta-release.sh --next --notes-file /private/tmp/navop-v0.23.0-beta.2-notes.md
 #   script/beta-release.sh --next --notes-file ... --dry-run
 #
-# 作用：在 dev 分支上一条命令发测试版。脚本会把 main/Cargo.toml 的
-# [package].version 改成 X.Y.Z-beta.N（--base 从 beta.1 起步，--next 递增当前
-# beta 序号），同步 Cargo.lock 与 CHANGELOG.md，提交后创建并推送 v* tag。
+# 作用：在 dev 分支上一条命令发测试版。脚本会把 main/Cargo.toml 与三个
+# app crate（apps/navop、apps/navop-shell、apps/navop-data）的
+# [package].version 统一改成 X.Y.Z-beta.N（--base 从 beta.1 起步，--next
+# 递增当前 beta 序号），同步 Cargo.lock 与 CHANGELOG.md，提交后创建并推送
+# v* tag。统一版本：一个 tag 同发三个产品，版本必须一起 bump。
 #
 # tag 推送会触发 release-trigger.yml -> release.yml。预发布 tag 自动走 beta
 # 通道：GitHub Release 打上 --prerelease，R2 更新清单写到
@@ -34,6 +36,11 @@ NOTES_FILE=""
 DRY_RUN="false"
 REMOTE="${REMOTE:-cnb}"
 MAIN_MANIFEST="${MAIN_MANIFEST:-${REPO_ROOT}/main/Cargo.toml}"
+APP_MANIFESTS=(
+  "${REPO_ROOT}/apps/navop/Cargo.toml"
+  "${REPO_ROOT}/apps/navop-shell/Cargo.toml"
+  "${REPO_ROOT}/apps/navop-data/Cargo.toml"
+)
 LOCKFILE="${LOCKFILE:-${REPO_ROOT}/Cargo.lock}"
 CHANGELOG="${CHANGELOG:-CHANGELOG.md}"
 COMMITTED="false"
@@ -149,20 +156,22 @@ if [[ ! -f "${NOTES_FILE}" || ! -s "${NOTES_FILE}" ]]; then
 fi
 
 read_manifest_version() {
+  local manifest="${1:-${MAIN_MANIFEST}}"
   awk -F'"' '
     /^\[package\]$/ { in_package = 1; next }
     /^\[/ { in_package = 0 }
     in_package && /^version = "/ { print $2; exit }
-  ' "${MAIN_MANIFEST}"
+  ' "${manifest}"
 }
 
 read_lock_version() {
-  awk '
+  local package_name="${1:-main}"
+  awk -v want="${package_name}" '
     /^\[\[package\]\]$/ { in_package = 1; name = ""; next }
     in_package && /^name = "/ { split($0, parts, "\""); name = parts[2] }
     in_package && /^version = "/ {
       split($0, parts, "\"")
-      if (name == "main") { print parts[2]; exit }
+      if (name == want) { print parts[2]; exit }
     }
   ' "${LOCKFILE}"
 }
@@ -171,6 +180,16 @@ current_version="$(read_manifest_version)"
 if [[ -z "${current_version}" ]]; then
   die "无法从 ${MAIN_MANIFEST} 读取 [package].version。"
 fi
+for app_manifest in "${APP_MANIFESTS[@]}"; do
+  app_version="$(read_manifest_version "${app_manifest}")"
+  if [[ -z "${app_version}" ]]; then
+    die "无法从 ${app_manifest} 读取 [package].version。"
+  fi
+  if [[ "${app_version}" != "${current_version}" ]]; then
+    die "统一版本校验失败：${app_manifest} 为 ${app_version}，main 为 ${current_version}。请先手动对齐再发 beta。"
+  fi
+done
+echo "统一版本校验通过：main 与三个 app crate 均为 ${current_version}"
 
 # 2. 计算目标版本。
 if [[ "${NEXT}" == "true" ]]; then
@@ -218,10 +237,14 @@ echo "tag 唯一性校验通过：${TAG} 在本地与 ${REMOTE} 均不存在"
 if [[ "${DRY_RUN}" == "true" ]]; then
   echo ""
   echo "== --dry-run：以下操作不会执行 =="
-  echo "  1. ${MAIN_MANIFEST} [package].version: ${current_version} -> ${VERSION}"
-  echo "  2. ${LOCKFILE}: 同步 main 包版本到 ${VERSION}"
+  echo "  1. 四个 manifest 的 [package].version: ${current_version} -> ${VERSION}"
+  echo "     - ${MAIN_MANIFEST}"
+  for app_manifest in "${APP_MANIFESTS[@]}"; do
+    echo "     - ${app_manifest}"
+  done
+  echo "  2. ${LOCKFILE}: 同步 main 与三个 app 包版本到 ${VERSION}"
   echo "  3. CHANGELOG.md: python3 script/changelog.py upsert --tag ${TAG} --date $(date +%F) --notes-file ${NOTES_FILE} --changelog ${CHANGELOG}"
-  echo "  4. git add ${MAIN_MANIFEST} ${LOCKFILE} ${CHANGELOG}"
+  echo "  4. git add 四个 manifest ${LOCKFILE} ${CHANGELOG}"
   echo "  5. git commit -m \"chore(release): 发布 ${TAG} 测试版\""
   echo "  6. git tag -a ${TAG} -m ${TAG}"
   echo "  7. git push ${REMOTE} dev && git push ${REMOTE} ${TAG}"
@@ -233,8 +256,9 @@ if [[ "${DRY_RUN}" == "true" ]]; then
   exit 0
 fi
 
-# 5. 改写 main/Cargo.toml 的 [package].version。
-python3 - "${MAIN_MANIFEST}" "${VERSION}" <<'PY'
+# 5. 改写 main 与三个 app crate 的 [package].version（统一版本）。
+for bump_manifest in "${MAIN_MANIFEST}" "${APP_MANIFESTS[@]}"; do
+python3 - "${bump_manifest}" "${VERSION}" <<'PY'
 import re
 import sys
 from pathlib import Path
@@ -263,12 +287,13 @@ if not updated:
 
 manifest_path.write_text("".join(lines), encoding="utf-8")
 PY
+done
 
 # 6. 同步 Cargo.lock：优先让 cargo 自己刷新，离线失败再精确改写。
 if cargo metadata --offline --no-deps --format-version 1 >/dev/null 2>&1; then
   echo "Cargo.lock 已通过 cargo metadata 刷新。"
 else
-  echo "警告：cargo metadata --offline 失败，改为精确改写 ${LOCKFILE} 的 main 包版本。" >&2
+  echo "警告：cargo metadata --offline 失败，改为精确改写 ${LOCKFILE} 中 main 与三个 app 包的版本。" >&2
   python3 - "${LOCKFILE}" "${VERSION}" <<'PY'
 import re
 import sys
@@ -276,11 +301,12 @@ from pathlib import Path
 
 lock_path = Path(sys.argv[1])
 version = sys.argv[2]
+names = {"main", "navop", "navop-shell", "navop-data"}
 lines = lock_path.read_text(encoding="utf-8").splitlines(keepends=True)
 
 in_package = False
 package_name = ""
-updated = False
+updated = set()
 for index, line in enumerate(lines):
     stripped = line.strip()
     if stripped == "[[package]]":
@@ -293,24 +319,26 @@ for index, line in enumerate(lines):
         name_match = re.match(r'^name = "([^"]*)"$', stripped)
         if name_match:
             package_name = name_match.group(1)
-        if package_name == "main" and re.match(r'^version = "', stripped):
+        if package_name in names and re.match(r'^version = "', stripped):
             ending = "\r\n" if line.endswith("\r\n") else "\n" if line.endswith("\n") else ""
             lines[index] = f'version = "{version}"{ending}'
-            updated = True
-            break
+            updated.add(package_name)
 
-if not updated:
-    raise SystemExit(f'package "main" version not found in {lock_path}')
+missing = names - updated
+if missing:
+    raise SystemExit(f'packages not found in lockfile: {sorted(missing)}')
 
 lock_path.write_text("".join(lines), encoding="utf-8")
 PY
 fi
 
-lock_version="$(read_lock_version)"
-if [[ "${lock_version}" != "${VERSION}" ]]; then
-  die "${LOCKFILE} 中 main 包版本为 ${lock_version:-<missing>}，未能同步到 ${VERSION}。"
-fi
-echo "Cargo.lock 已同步：main ${lock_version}"
+for lock_package in main navop navop-shell navop-data; do
+  lock_version="$(read_lock_version "${lock_package}")"
+  if [[ "${lock_version}" != "${VERSION}" ]]; then
+    die "${LOCKFILE} 中 ${lock_package} 包版本为 ${lock_version:-<missing>}，未能同步到 ${VERSION}。"
+  fi
+done
+echo "Cargo.lock 已同步：main / navop / navop-shell / navop-data -> ${VERSION}"
 
 # 7. 写入 CHANGELOG.md 条目并回读校验（release.yml 硬校验的就是这条）。
 python3 script/changelog.py upsert \
@@ -324,7 +352,7 @@ python3 script/changelog.py validate \
 echo "CHANGELOG.md 已写入并校验：${TAG}"
 
 # 8. 提交、打 tag、推送。
-git add -- "${MAIN_MANIFEST}" "${LOCKFILE}" "${CHANGELOG}"
+git add -- "${MAIN_MANIFEST}" "${APP_MANIFESTS[@]}" "${LOCKFILE}" "${CHANGELOG}"
 git commit -m "chore(release): 发布 ${TAG} 测试版"
 COMMITTED="true"
 

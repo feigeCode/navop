@@ -202,15 +202,51 @@ jobs:
               }),
           );
 
-          const updaterAssets = {
-            "aarch64-apple-darwin": "navop-aarch64-apple-darwin.tar.gz",
-            "x86_64-apple-darwin": "navop-x86_64-apple-darwin.tar.gz",
-            "x86_64-unknown-linux-gnu": "navop-x86_64-unknown-linux-gnu.tar.gz",
-            "x86_64-pc-windows-msvc": "navop-x86_64-pc-windows-msvc.zip",
-            "i686-pc-windows-msvc": "navop-i686-pc-windows-msvc.zip",
-          };
+          // 统一 tag 发布三个产品：每个产品各生成一份清单，指向各自的
+          // updater 资产（{binary}-{target} 命名）与各自的公开安装包。
+          // 全量的清单键位由上传步骤按 channel 落位（updates/latest.json
+          // 或 updates/beta/latest.json）；独立产品键位为
+          // updates/{binary}/{mcp_update_channel}[/beta]/latest.json，
+          // 与 crates/app_kit/src/update/config.rs 的 feed_url() 推导一致。
+          const products = [
+            {
+              id: "navop",
+              prefix: "navop-",
+              updaterAssets: {
+                "aarch64-apple-darwin": "navop-aarch64-apple-darwin.tar.gz",
+                "x86_64-apple-darwin": "navop-x86_64-apple-darwin.tar.gz",
+                "x86_64-unknown-linux-gnu": "navop-x86_64-unknown-linux-gnu.tar.gz",
+                "x86_64-pc-windows-msvc": "navop-x86_64-pc-windows-msvc.zip",
+                "i686-pc-windows-msvc": "navop-i686-pc-windows-msvc.zip",
+              },
+              manifestPath: "artifacts/updates/latest.json",
+            },
+            {
+              id: "navop-shell",
+              prefix: "navop-shell-",
+              updaterAssets: {
+                "aarch64-apple-darwin": "navop-shell-aarch64-apple-darwin.tar.gz",
+                "x86_64-apple-darwin": "navop-shell-x86_64-apple-darwin.tar.gz",
+                "x86_64-unknown-linux-gnu": "navop-shell-x86_64-unknown-linux-gnu.tar.gz",
+                "x86_64-pc-windows-msvc": "navop-shell-x86_64-pc-windows-msvc.zip",
+              },
+              manifestPath: "artifacts/updates/navop-shell/shell/latest.json",
+            },
+            {
+              id: "navop-data",
+              prefix: "navop-data-",
+              updaterAssets: {
+                "aarch64-apple-darwin": "navop-data-aarch64-apple-darwin.tar.gz",
+                "x86_64-apple-darwin": "navop-data-x86_64-apple-darwin.tar.gz",
+                "x86_64-unknown-linux-gnu": "navop-data-x86_64-unknown-linux-gnu.tar.gz",
+                "x86_64-pc-windows-msvc": "navop-data-x86_64-pc-windows-msvc.zip",
+              },
+              manifestPath: "artifacts/updates/navop-data/data/latest.json",
+            },
+          ];
           if (fs.existsSync("artifacts/navop-aarch64-unknown-linux-gnu.tar.gz")) {
-            updaterAssets["aarch64-unknown-linux-gnu"] = "navop-aarch64-unknown-linux-gnu.tar.gz";
+            products[0].updaterAssets["aarch64-unknown-linux-gnu"] =
+              "navop-aarch64-unknown-linux-gnu.tar.gz";
           }
 
           function checksumFor(fileName) {
@@ -290,6 +326,10 @@ jobs:
             return "universal";
           }
 
+          const availableFiles = new Set(fs.readdirSync("artifacts"));
+          // updater 资产（{binary}-{target} 命名）与公开安装包
+          // （{product}-{version}-{label} 命名）同时存在时，packages 列表只
+          // 保留公开命名那份；独立产品没有替代对，全部文件都进列表。
           const publicUpdaterAlternatives = new Map([
             ["navop-aarch64-apple-darwin.tar.gz", `navop-${version}-macos-arm64.tar.gz`],
             ["navop-x86_64-apple-darwin.tar.gz", `navop-${version}-macos-x64.tar.gz`],
@@ -297,8 +337,15 @@ jobs:
             ["navop-aarch64-unknown-linux-gnu.tar.gz", `navop-${version}-linux-arm64.tar.gz`],
             ["navop-x86_64-pc-windows-msvc.zip", `navop-${version}-windows-x64.zip`],
             ["navop-i686-pc-windows-msvc.zip", `navop-${version}-win32.zip`],
+            [`navop-shell-aarch64-apple-darwin.tar.gz`, `navop-shell-${version}-macos-arm64.tar.gz`],
+            [`navop-shell-x86_64-apple-darwin.tar.gz`, `navop-shell-${version}-macos-x64.tar.gz`],
+            [`navop-shell-x86_64-unknown-linux-gnu.tar.gz`, `navop-shell-${version}-linux-x64.tar.gz`],
+            [`navop-shell-x86_64-pc-windows-msvc.zip`, `navop-shell-${version}-windows-x64.zip`],
+            [`navop-data-aarch64-apple-darwin.tar.gz`, `navop-data-${version}-macos-arm64.tar.gz`],
+            [`navop-data-x86_64-apple-darwin.tar.gz`, `navop-data-${version}-macos-x64.tar.gz`],
+            [`navop-data-x86_64-unknown-linux-gnu.tar.gz`, `navop-data-${version}-linux-x64.tar.gz`],
+            [`navop-data-x86_64-pc-windows-msvc.zip`, `navop-data-${version}-windows-x64.zip`],
           ]);
-          const availableFiles = new Set(fs.readdirSync("artifacts"));
           const packageFiles = [...availableFiles]
             .filter((fileName) => /^navop[-_]/.test(fileName))
             .filter((fileName) => {
@@ -316,23 +363,24 @@ jobs:
           }));
 
           fs.mkdirSync("artifacts/updates", { recursive: true });
-          fs.writeFileSync(
-            "artifacts/updates/latest.json",
-            `${JSON.stringify(
-              {
-                schema_version: 1,
-                version,
-                release_page_url: `${baseUrl}/releases/${releaseTag}/`,
-                release_notes: releaseNotes,
-                downloads: objectUrls("releases", updaterAssets),
-                fallback_downloads: githubReleaseUrls(updaterAssets),
-                sha256s: objectChecksums(updaterAssets),
-                packages,
-              },
-              null,
-              2,
-            )}\n`,
-          );
+          for (const product of products) {
+            const manifest = {
+              schema_version: 1,
+              version,
+              release_page_url: `${baseUrl}/releases/${releaseTag}/`,
+              release_notes: releaseNotes,
+              downloads: objectUrls("releases", product.updaterAssets),
+              fallback_downloads: githubReleaseUrls(product.updaterAssets),
+              sha256s: objectChecksums(product.updaterAssets),
+              packages,
+            };
+            fs.mkdirSync(product.manifestPath.replace(/\/[^/]+$/, ""), { recursive: true });
+            fs.writeFileSync(
+              product.manifestPath,
+              `${JSON.stringify(manifest, null, 2)}\n`,
+            );
+            console.log(`Wrote ${product.manifestPath}`);
+          }
           NODE
 
       - name: Upload update archives and manifest to R2
@@ -353,9 +401,19 @@ jobs:
 
           # 更新清单按通道落位：stable 继续写 updates/latest.json（老客户端唯一
           # 认识的位置），beta 只写 updates/beta/latest.json，绝不能覆盖稳定清单。
+          # 独立产品清单键位 updates/{binary}/{mcp_update_channel}[/beta]/latest.json
+          # 与 crates/app_kit/src/update/config.rs 的 feed_url() 保持一致。
           case "${CHANNEL}" in
-            stable) manifest_key="updates/latest.json" ;;
-            beta) manifest_key="updates/beta/latest.json" ;;
+            stable)
+              manifest_key="updates/latest.json"
+              shell_manifest_key="updates/navop-shell/shell/latest.json"
+              data_manifest_key="updates/navop-data/data/latest.json"
+              ;;
+            beta)
+              manifest_key="updates/beta/latest.json"
+              shell_manifest_key="updates/navop-shell/shell/beta/latest.json"
+              data_manifest_key="updates/navop-data/data/beta/latest.json"
+              ;;
             *)
               echo "::error::Unsupported release channel: ${CHANNEL:-<empty>}"
               exit 1
@@ -433,6 +491,8 @@ jobs:
           done
 
           upload_object "artifacts/updates/latest.json" "${manifest_key}" "application/json; charset=utf-8" "no-store, max-age=0"
+          upload_object "artifacts/updates/navop-shell/shell/latest.json" "${shell_manifest_key}" "application/json; charset=utf-8" "no-store, max-age=0"
+          upload_object "artifacts/updates/navop-data/data/latest.json" "${data_manifest_key}" "application/json; charset=utf-8" "no-store, max-age=0"
 
       # 桶里只留这次上传的版本：旧安装包在 R2 上只占空间，下载入口都不依赖它们
       # —— updates/latest.json 只指向本次 tag，旧版本另有 GitHub Release 与 CNB

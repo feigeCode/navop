@@ -11,6 +11,29 @@ const CURRENT_APP_BUNDLE_NAME: &str = "Navop.app";
 #[cfg(target_os = "macos")]
 const LEGACY_APP_BUNDLE_NAME: &str = "OnetCli.app";
 
+/// 当前产品期望的 macOS bundle 目录名，例如 "Navop Shell.app"。
+///
+/// 独立产品（navop-shell / navop-data）与全量产品共用这一套自更新安装器，
+/// 它们的 bundle 名从 `AppIdentity::display_name` 推导；未 bootstrap 身份的
+/// 场景（单元测试）回退到全量包名。legacy `OnetCli.app` 只在全量更新包里出现，
+/// 独立产品从没以 OnetCli 的名字发过包，所以 legacy 兼容判断不按产品区分。
+#[cfg(target_os = "macos")]
+fn expected_app_bundle_name() -> String {
+    match crate::identity() {
+        Some(identity) => format!("{}.app", identity.display_name),
+        None => CURRENT_APP_BUNDLE_NAME.to_string(),
+    }
+}
+
+/// 当前产品的可执行文件名（macOS/Linux）。
+///
+/// Linux 更新包布局是 `usr/bin/{binary_name}`，三产品各自叫 navop /
+/// navop-shell / navop-data；`onetcli` 是全量产品的历史名字，仅作兼容候选。
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn expected_binary_name() -> &'static str {
+    crate::identity().map_or("navop", |identity| identity.binary_name)
+}
+
 /// 等旧版本进程释放可执行文件的上限。
 ///
 /// 更新替换可以**在旧进程仍然存活时**完成（Windows 允许重命名正在运行的 exe），
@@ -159,7 +182,17 @@ fn spawn_windows_helper(staging_dir: &Path) -> Result<(), String> {
 
 #[cfg(target_os = "windows")]
 fn find_windows_executable(staging_dir: &Path) -> Result<PathBuf, String> {
-    for name in ["navop.exe", "onetcli.exe"] {
+    // 独立产品的更新包里是 navop-shell.exe / navop-data.exe；navop.exe 是全量
+    // 产品，onetcli.exe 是其历史名。顺序即优先级：先当前产品，再全量，最后 legacy。
+    let binary_name = crate::identity().map_or("navop", |identity| identity.binary_name);
+    let mut names = vec![format!("{binary_name}.exe"), "navop.exe".to_string()];
+    if format!("{binary_name}.exe") != "navop.exe" {
+        // 独立产品：只需自身与全量候选，legacy onetcli.exe 与它无关，但保留
+        // 它不会误装——更新包里不存在该文件时查找自然落空。
+    }
+    names.push("onetcli.exe".to_string());
+
+    for name in &names {
         let direct = staging_dir.join(name);
         if direct.is_file() {
             return Ok(direct);
@@ -169,7 +202,9 @@ fn find_windows_executable(staging_dir: &Path) -> Result<PathBuf, String> {
         }
     }
 
-    Err("未找到 navop.exe 或兼容的 onetcli.exe".to_string())
+    Err(format!(
+        "未找到 {binary_name}.exe 或兼容的 navop.exe / onetcli.exe"
+    ))
 }
 
 #[cfg(target_os = "windows")]
@@ -387,6 +422,7 @@ fn current_app_bundle_path_from_exe(exe_path: &Path) -> Result<PathBuf, String> 
 
 #[cfg(target_os = "macos")]
 fn find_first_app_bundle(staging_dir: &Path) -> Result<PathBuf, String> {
+    let expected = expected_app_bundle_name();
     let mut stack = vec![staging_dir.to_path_buf()];
     while let Some(dir) = stack.pop() {
         let entries = fs::read_dir(&dir)
@@ -396,7 +432,7 @@ fn find_first_app_bundle(staging_dir: &Path) -> Result<PathBuf, String> {
             let entry = entry.map_err(|err| format!("读取 staging 条目失败: {}", err))?;
             let path = entry.path();
             if path.is_dir() {
-                if is_supported_app_bundle(&path) {
+                if is_supported_app_bundle(&path, &expected) {
                     return Ok(path);
                 }
                 stack.push(path);
@@ -404,13 +440,15 @@ fn find_first_app_bundle(staging_dir: &Path) -> Result<PathBuf, String> {
         }
     }
 
-    Err("未找到 Navop.app 或 OnetCli.app".to_string())
+    Err(format!("未找到 {expected} 或 {LEGACY_APP_BUNDLE_NAME}"))
 }
 
 #[cfg(target_os = "macos")]
-fn is_supported_app_bundle(path: &Path) -> bool {
+fn is_supported_app_bundle(path: &Path, expected: &str) -> bool {
     let name = path.file_name().and_then(|name| name.to_str());
-    name == Some(CURRENT_APP_BUNDLE_NAME) || name == Some(LEGACY_APP_BUNDLE_NAME)
+    name == Some(expected)
+        || name == Some(CURRENT_APP_BUNDLE_NAME)
+        || name == Some(LEGACY_APP_BUNDLE_NAME)
 }
 
 #[cfg(target_os = "macos")]
@@ -477,14 +515,26 @@ fn install_linux(staging_dir: &Path) -> Result<(), String> {
 
 #[cfg(target_os = "linux")]
 fn locate_linux_binary(staging_dir: &Path) -> Result<PathBuf, String> {
-    for relative in ["usr/bin/navop", "navop", "usr/bin/onetcli", "onetcli"] {
+    let binary_name = expected_binary_name();
+    // 候选顺序：当前产品 → 全量 navop → legacy onetcli（各自都先 usr/bin 后根目录）。
+    let candidates = [
+        format!("usr/bin/{binary_name}"),
+        binary_name.to_string(),
+        "usr/bin/navop".to_string(),
+        "navop".to_string(),
+        "usr/bin/onetcli".to_string(),
+        "onetcli".to_string(),
+    ];
+    for relative in candidates {
         let candidate = staging_dir.join(relative);
         if candidate.is_file() {
             return Ok(candidate);
         }
     }
 
-    Err("未找到 Linux 更新二进制 navop 或兼容的 onetcli".to_string())
+    Err(format!(
+        "未找到 Linux 更新二进制 {binary_name} 或兼容的 navop / onetcli"
+    ))
 }
 
 /// 校验更新目标**所在目录**可写。
@@ -958,6 +1008,33 @@ mod tests {
             err.contains("OnetCli.app"),
             "错误应包含旧版 bundle 名: {err}"
         );
+    }
+
+    /// 独立产品（navop-shell / navop-data）的更新包里是 "Navop Shell.app" 这类
+    /// bundle 目录：bundle 名来自身份常量的 display_name，finder 必须认。
+    /// 单测进程没有 bootstrap 产品身份，回退路径应仍认全量 "Navop.app"。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn find_app_bundle_accepts_product_bundle_name() {
+        use super::{expected_app_bundle_name, is_supported_app_bundle};
+
+        // 回退（无身份）时期望全量 bundle 名。
+        assert_eq!(expected_app_bundle_name(), "Navop.app");
+
+        for name in ["Navop Shell.app", "Navop Data.app"] {
+            let temp = TestDir::new("find-app-bundle-product");
+            let app = temp.path.join(name);
+            std::fs::create_dir_all(&app).expect("创建产品 app bundle 失败");
+
+            // 无 bootstrap 身份时 finder 仍认 Navop.app/OnetCli.app；产品 bundle
+            // 目录必须能被识别——通过直接调 is_supported_app_bundle 验证参数化分支。
+            // （身份 OnceLock 无法在单测里安全改写，这里覆盖参数化函数的判等逻辑。）
+            let expected = name;
+            assert!(
+                super::is_supported_app_bundle(&app, expected),
+                "应接受产品 bundle 名 {name}"
+            );
+        }
     }
 
     struct TestDir {
