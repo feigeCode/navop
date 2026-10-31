@@ -11,7 +11,7 @@ chrono.workspace = true
 dirs.workspace = true
 dunce = "1"
 futures.workspace = true
-extension-runtime = { workspace = true, features = ["wasm-components"] }
+extension-runtime = { workspace = true, default-features = false, features = ["wasm-components"] }
 extension_view.workspace = true
 extension-wasm.workspace = true
 gpui.workspace = true

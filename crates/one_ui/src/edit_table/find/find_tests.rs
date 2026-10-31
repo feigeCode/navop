@@ -162,8 +162,13 @@ fn hosted_find_bar_binds_the_same_navigation_shortcuts() {
 
     // 宿主渲染的输入框要能复用同一份（可重绑的）上下跳键位。
     assert!(source.contains("pub const HOSTED_FIND_CONTEXT: &str = \"EditTableHostedFind\";"));
-    assert!(source.contains("load_dynamic_keybinding(key, FindNext, Some(HOSTED_FIND_CONTEXT), cx)"));
-    assert!(source.contains("load_dynamic_keybinding(key, FindPrevious, Some(HOSTED_FIND_CONTEXT), cx)"));
+    assert!(
+        source.contains("load_dynamic_keybinding(key, FindNext, Some(HOSTED_FIND_CONTEXT), cx)")
+    );
+    assert!(
+        source
+            .contains("load_dynamic_keybinding(key, FindPrevious, Some(HOSTED_FIND_CONTEXT), cx)")
+    );
     assert!(source.contains("Some(HOSTED_FIND_CONTEXT),\n        FindNext,"));
     assert!(source.contains("Some(HOSTED_FIND_CONTEXT),\n        FindPrevious,"));
 }

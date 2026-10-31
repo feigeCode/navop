@@ -5,6 +5,7 @@ mod build;
 mod extended_build;
 mod input;
 mod management;
+#[cfg(feature = "database")]
 mod schema;
 mod validation;
 
@@ -20,6 +21,7 @@ use tool_runtime::{
 };
 
 #[derive(Clone, Copy)]
+#[cfg_attr(not(feature = "database"), allow(dead_code))]
 enum ConnectionTool {
     List,
     Show,
@@ -114,48 +116,33 @@ pub fn connection_tool_registry_with_workspaces_and_hooks(
     workspaces: Option<Arc<WorkspaceRepository>>,
     hooks: ConnectionToolHooks,
 ) -> ToolRegistry {
-    ToolRegistry::new(vec![
-        Arc::new(
-            ConnectionToolHandler::new(repo.clone(), workspaces.clone(), ConnectionTool::List)
+    let mut tools: Vec<Arc<dyn ToolHandler>> = Vec::new();
+    for tool in [
+        ConnectionTool::List,
+        ConnectionTool::Show,
+        ConnectionTool::Validate,
+        ConnectionTool::Save,
+        ConnectionTool::Find,
+        ConnectionTool::Delete,
+        ConnectionTool::OpenSession,
+    ] {
+        tools.push(Arc::new(
+            ConnectionToolHandler::new(repo.clone(), workspaces.clone(), tool)
                 .with_hooks(hooks.clone()),
-        ),
-        Arc::new(
-            ConnectionToolHandler::new(repo.clone(), workspaces.clone(), ConnectionTool::Show)
+        ));
+    }
+    #[cfg(feature = "database")]
+    for tool in [
+        ConnectionTool::ListKinds,
+        ConnectionTool::GetSchema,
+        ConnectionTool::Test,
+    ] {
+        tools.push(Arc::new(
+            ConnectionToolHandler::new(repo.clone(), workspaces.clone(), tool)
                 .with_hooks(hooks.clone()),
-        ),
-        Arc::new(
-            ConnectionToolHandler::new(repo.clone(), workspaces.clone(), ConnectionTool::ListKinds)
-                .with_hooks(hooks.clone()),
-        ),
-        Arc::new(
-            ConnectionToolHandler::new(repo.clone(), workspaces.clone(), ConnectionTool::GetSchema)
-                .with_hooks(hooks.clone()),
-        ),
-        Arc::new(
-            ConnectionToolHandler::new(repo.clone(), workspaces.clone(), ConnectionTool::Validate)
-                .with_hooks(hooks.clone()),
-        ),
-        Arc::new(
-            ConnectionToolHandler::new(repo.clone(), workspaces.clone(), ConnectionTool::Save)
-                .with_hooks(hooks.clone()),
-        ),
-        Arc::new(
-            ConnectionToolHandler::new(repo.clone(), workspaces.clone(), ConnectionTool::Find)
-                .with_hooks(hooks.clone()),
-        ),
-        Arc::new(
-            ConnectionToolHandler::new(repo.clone(), workspaces.clone(), ConnectionTool::Delete)
-                .with_hooks(hooks.clone()),
-        ),
-        Arc::new(
-            ConnectionToolHandler::new(repo.clone(), workspaces.clone(), ConnectionTool::Test)
-                .with_hooks(hooks.clone()),
-        ),
-        Arc::new(
-            ConnectionToolHandler::new(repo, workspaces, ConnectionTool::OpenSession)
-                .with_hooks(hooks),
-        ),
-    ])
+        ));
+    }
+    ToolRegistry::new(tools)
 }
 
 impl ConnectionToolHandler {
@@ -185,8 +172,26 @@ impl ConnectionToolHandler {
                 management::list_saved(&self.repo, self.workspaces.as_ref(), input)
             }
             ConnectionTool::Show => management::show(&self.repo, self.workspaces.as_ref(), input),
-            ConnectionTool::ListKinds => Ok(ToolResult::structured(schema::list_kinds())),
-            ConnectionTool::GetSchema => Ok(ToolResult::structured(schema::schema_for(input)?)),
+            ConnectionTool::ListKinds => {
+                #[cfg(feature = "database")]
+                {
+                    Ok(ToolResult::structured(schema::list_kinds()))
+                }
+                #[cfg(not(feature = "database"))]
+                {
+                    Err(feature_disabled("database"))
+                }
+            }
+            ConnectionTool::GetSchema => {
+                #[cfg(feature = "database")]
+                {
+                    Ok(ToolResult::structured(schema::schema_for(input)?))
+                }
+                #[cfg(not(feature = "database"))]
+                {
+                    Err(feature_disabled("database"))
+                }
+            }
             ConnectionTool::Validate => Ok(ToolResult::structured(validation::validate(input))),
             ConnectionTool::Save => self.save(input).await,
             ConnectionTool::Find => management::find(&self.repo, self.workspaces.as_ref(), input),
@@ -194,7 +199,14 @@ impl ConnectionToolHandler {
                 management::delete(&self.repo, self.workspaces.as_ref(), input)
             }
             ConnectionTool::Test => {
-                management::test_connection(&self.repo, self.workspaces.as_ref(), input).await
+                #[cfg(feature = "database")]
+                {
+                    management::test_connection(&self.repo, self.workspaces.as_ref(), input).await
+                }
+                #[cfg(not(feature = "database"))]
+                {
+                    Err(feature_disabled("database"))
+                }
             }
             ConnectionTool::OpenSession => self.open_session(input, context).await,
         }
@@ -412,6 +424,13 @@ fn input_schema(tool: ConnectionTool) -> Value {
             "properties": { "connection": connection_ref_schema() },
             "required": ["connection"]
         }),
+    }
+}
+
+#[cfg(not(feature = "database"))]
+fn feature_disabled(feature: &str) -> ToolError {
+    ToolError::Failed {
+        message: format!("connection tool requires the `{feature}` feature"),
     }
 }
 

@@ -48,7 +48,10 @@ pub(super) fn connection_ai_access_guard(cx: &App) -> Option<Arc<dyn ToolAccessG
         .try_global::<GlobalStorageState>()?
         .storage
         .get::<ConnectionRepository>()?;
+    #[cfg(feature = "shell")]
     let terminal_registry = terminal_view::public_mcp::registry(cx);
+    #[cfg(not(feature = "shell"))]
+    let terminal_registry = None;
     Some(Arc::new(ConnectionAiAccessGuard {
         repo,
         terminal_registry,

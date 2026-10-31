@@ -11,7 +11,6 @@ impl HomePage {
         crate::connection_visuals::stored_connection_icon_with_catalog(
             conn,
             size,
-            &self.external_driver_registry,
             extension_catalog.as_deref(),
         )
     }

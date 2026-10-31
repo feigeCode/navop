@@ -8,7 +8,7 @@ pub mod cd_completion;
 pub mod ftp_form_window;
 pub mod highlight_presets;
 pub mod history_prompt;
-mod host_key_dialog;
+
 pub mod keys;
 pub mod public_mcp;
 pub mod public_mcp_remote_ops;
@@ -17,8 +17,8 @@ pub mod selection_highlight_addon;
 pub mod serial_form_window;
 pub mod settings;
 pub mod sidebar;
-mod ssh_form_mfa;
-pub mod ssh_form_window;
+
+
 pub mod telnet_form_window;
 pub mod terminal_element;
 mod theme;
@@ -36,7 +36,7 @@ pub use settings::{
     TerminalHighlightRule, TerminalSettings, current_settings, init_settings, update_settings,
 };
 pub use sidebar::{SettingsPanel, SidebarPanel, TerminalSidebar, TerminalSidebarEvent};
-pub use ssh_form_window::{SshFormPostSaveAction, SshFormWindow, SshFormWindowConfig};
+pub use ssh_form::{SshFormPostSaveAction, SshFormWindow, SshFormWindowConfig};
 pub use telnet_form_window::{TelnetFormWindow, TelnetFormWindowConfig};
 pub use terminal::terminal::{
     ConnectionState, SshTerminalConfig, Terminal, TerminalConnectionKind, TerminalModelEvent,

@@ -160,7 +160,7 @@ Navop uses the Rust 2024 edition and requires platform-specific system dependenc
 ./script/bootstrap
 
 # Run the application
-cargo run -p main
+cargo run -p navop
 ```
 
 On Windows, install dependencies from PowerShell with:

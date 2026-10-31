@@ -12,7 +12,7 @@ fn local_terminal_launcher_is_visible_in_home_toolbar() {
     let toolbar = include_str!("../toolbar.rs");
     let launcher = include_str!("../local_terminal.rs");
 
-    assert!(toolbar.contains("render_local_terminal_button(window, cx)"));
+    assert!(toolbar.contains("local_terminal_button_element(window, cx)"));
     assert!(launcher.contains("DropdownButton::new(\"local-terminal-dropdown\")"));
     assert!(launcher.contains("IconName::SquareTerminal)"));
     assert!(launcher.contains(".mono()"));
@@ -526,16 +526,15 @@ fn home_render_uses_cached_external_driver_registry() {
     let card = include_str!("../connection_card_content.rs");
     let quick_open = include_str!("../../home/home_connection_quick_open.rs");
 
-    assert!(home.contains("external_driver_registry: IpcDriverRegistry"));
+    assert!(!home.contains("external_driver_registry: IpcDriverRegistry"));
     assert!(icon.contains("stored_connection_icon_with_catalog"));
     assert!(icon.contains("extension_catalog_from_cx"));
-    assert!(visuals.contains("external_driver_icon_for_config_with_registry"));
-    assert!(visuals.contains("external_driver_icon_from_sources"));
+    assert!(visuals.contains("external_driver_icon_for_config"));
     assert!(visuals.contains("extension_connection_icon"));
     assert!(list_item.contains("connection_icon"));
     assert!(card.contains("connection_icon"));
     assert!(quick_open.contains("stored_connection_icon_with_catalog"));
-    assert!(quick_open.contains("external_driver_registry: IpcDriverRegistry"));
+    assert!(!quick_open.contains("external_driver_registry: IpcDriverRegistry"));
     assert!(!icon.contains("IpcDriverRegistry::load_default()"));
     assert!(!quick_open.contains("IpcDriverRegistry::load_default()"));
 }

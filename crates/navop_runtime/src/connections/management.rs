@@ -1,4 +1,5 @@
 use super::{build, input};
+#[cfg(feature = "database")]
 use db::manager::DbManager;
 use one_core::storage::traits::Repository;
 use one_core::storage::{
@@ -85,6 +86,7 @@ pub(super) fn delete(
     })))
 }
 
+#[cfg(feature = "database")]
 pub(super) async fn test_connection(
     repo: &ConnectionRepository,
     workspace_repo: Option<&Arc<WorkspaceRepository>>,
@@ -106,6 +108,7 @@ pub(super) async fn test_connection(
     test_database_connection(&connection, resolved, workspace_repo).await
 }
 
+#[cfg(feature = "database")]
 async fn test_database_connection(
     original: &StoredConnection,
     resolved: StoredConnection,
@@ -411,6 +414,7 @@ fn optional_i64_or_null(input: &Value, field: &str) -> Result<Option<i64>, ToolE
     }
 }
 
+#[cfg(feature = "database")]
 fn test_failure(
     connection: &StoredConnection,
     workspace_repo: Option<&Arc<WorkspaceRepository>>,
@@ -426,6 +430,7 @@ fn test_failure(
     }))
 }
 
+#[cfg(feature = "database")]
 fn classify_db_error(message: &str) -> &'static str {
     let message = message.to_ascii_lowercase();
     if message.contains("timeout") {

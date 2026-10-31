@@ -430,6 +430,40 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
+name = "app_kit"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "dirs 6.0.0",
+ "domain_api",
+ "flate2",
+ "futures",
+ "gpui-component",
+ "gpui-fast",
+ "image",
+ "mcp_host",
+ "one-core",
+ "public_mcp",
+ "rusqlite",
+ "rust-i18n",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "smol",
+ "tar",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tray-icon",
+ "url",
+ "windows 0.62.2",
+ "x11rb",
+ "zip 2.4.2",
+]
+
+[[package]]
 name = "approx"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2948,6 +2982,34 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be1e0bca6c3637f992fc1cc7cbc52a78c1ef6db076dbf1059c4323d6a2048376"
 
 [[package]]
+name = "data_domain"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "app_kit",
+ "base64 0.22.1",
+ "db",
+ "db_view",
+ "domain_api",
+ "extension-runtime",
+ "gpui-component",
+ "gpui-fast",
+ "mcp_host",
+ "mongodb-runtime",
+ "mongodb_view",
+ "navop_runtime",
+ "one-core",
+ "one-ui",
+ "public_mcp",
+ "redis_view",
+ "runtime_database",
+ "runtime_redis",
+ "serde_json",
+ "tool_runtime",
+ "tracing",
+]
+
+[[package]]
 name = "db"
 version = "0.15.2"
 dependencies = [
@@ -3417,6 +3479,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d4b8a88685455ed29a21542a33abd9cb6510b6b129abadabdcef0f4c55bc8f61"
 dependencies = [
  "litrs",
+]
+
+[[package]]
+name = "domain_api"
+version = "0.15.2"
+dependencies = [
+ "anyhow",
+ "gpui-component",
+ "gpui-fast",
+ "one-core",
+ "port_forwarding",
+ "serde_json",
+ "tokio",
+ "tool_runtime",
 ]
 
 [[package]]
@@ -7500,21 +7576,22 @@ dependencies = [
  "agent_runtime",
  "ai_chat_view",
  "anyhow",
+ "app_kit",
  "async-trait",
  "base64 0.22.1",
  "chrono",
  "connection-form",
  "connection-import-protocol",
- "db",
+ "data_domain",
  "db_view",
  "dirs 6.0.0",
+ "domain_api",
  "dotenvy",
  "extension-host",
  "extension-plugin-adapter",
  "extension-protocol",
  "extension-runtime",
  "extension_view",
- "flate2",
  "futures",
  "global-hotkey",
  "gpui-component",
@@ -7524,7 +7601,8 @@ dependencies = [
  "gpui-pre-reqwest-client",
  "image",
  "json_view",
- "known_hosts_view",
+ "mcp_approval",
+ "mcp_host",
  "mongodb-runtime",
  "mongodb_view",
  "navop_runtime",
@@ -7535,8 +7613,6 @@ dependencies = [
  "one-core",
  "one-ui",
  "percent-encoding",
- "port_forwarding",
- "port_forwarding_view",
  "process-util",
  "public_mcp",
  "raw-window-handle",
@@ -7548,14 +7624,10 @@ dependencies = [
  "remote_file_editor",
  "resource_view",
  "rust-i18n",
- "semver",
  "serde",
  "serde_json",
- "sftp_view",
  "sha2 0.10.9",
  "smol",
- "ssh",
- "tar",
  "tempfile",
  "terminal",
  "terminal_view",
@@ -7574,7 +7646,6 @@ dependencies = [
  "x11rb",
  "zed-font-kit 0.14.1-zed (git+https://github.com/zed-industries/font-kit?rev=110523127440aefb11ce0cf280ae7c5071337ec5)",
  "zeroize",
- "zip 2.4.2",
 ]
 
 [[package]]
@@ -7734,6 +7805,34 @@ checksum = "8ea1f30cedd69f0a2954655f7188c6a834246d2bcf1e315e2ac40c4b24dc9519"
 dependencies = [
  "cfg-if",
  "rayon",
+]
+
+[[package]]
+name = "mcp_approval"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "gpui-component",
+ "gpui-fast",
+ "one-core",
+ "public_mcp",
+ "rust-i18n",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "mcp_host"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "domain_api",
+ "gpui-fast",
+ "mcp_approval",
+ "one-core",
+ "public_mcp",
+ "tool_runtime",
+ "tracing",
 ]
 
 [[package]]
@@ -8215,21 +8314,52 @@ dependencies = [
 ]
 
 [[package]]
+name = "navop"
+version = "0.22.0"
+dependencies = [
+ "anyhow",
+ "data_domain",
+ "domain_api",
+ "gpui-fast",
+ "main",
+ "shell_domain",
+]
+
+[[package]]
+name = "navop-data"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "data_domain",
+ "domain_api",
+ "gpui-fast",
+ "main",
+]
+
+[[package]]
+name = "navop-shell"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "domain_api",
+ "gpui-fast",
+ "main",
+ "shell_domain",
+]
+
+[[package]]
 name = "navop_runtime"
 version = "0.15.2"
 dependencies = [
- "agent_runtime",
- "anyhow",
- "async-trait",
- "base64 0.22.1",
  "db",
  "futures",
  "one-core",
- "redis-runtime",
+ "runtime_core",
+ "runtime_database",
+ "runtime_redis",
+ "runtime_sftp",
  "rusqlite",
  "serde_json",
- "sftp",
- "ssh",
  "tempfile",
  "tokio",
  "tokio-util",
@@ -11543,6 +11673,62 @@ dependencies = [
 ]
 
 [[package]]
+name = "runtime_core"
+version = "0.1.0"
+dependencies = [
+ "one-core",
+ "serde_json",
+ "tool_runtime",
+]
+
+[[package]]
+name = "runtime_database"
+version = "0.1.0"
+dependencies = [
+ "db",
+ "one-core",
+ "rusqlite",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tool_runtime",
+]
+
+[[package]]
+name = "runtime_redis"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "futures",
+ "one-core",
+ "redis-runtime",
+ "rusqlite",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tool_runtime",
+]
+
+[[package]]
+name = "runtime_sftp"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "futures",
+ "one-core",
+ "rusqlite",
+ "serde_json",
+ "sftp",
+ "ssh",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tool_runtime",
+]
+
+[[package]]
 name = "rusqlite"
 version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12639,6 +12825,44 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
 
 [[package]]
+name = "shell_domain"
+version = "0.1.0"
+dependencies = [
+ "ai_chat_view",
+ "anyhow",
+ "app_kit",
+ "chrono",
+ "domain_api",
+ "gpui-component",
+ "gpui-fast",
+ "known_hosts_view",
+ "mcp_host",
+ "navop_runtime",
+ "one-assets",
+ "one-core",
+ "port_forwarding_view",
+ "public_mcp",
+ "remote_desktop",
+ "remote_desktop_view",
+ "resource_view",
+ "runtime_sftp",
+ "rust-i18n",
+ "sftp_view",
+ "sha2 0.10.9",
+ "smol",
+ "ssh",
+ "ssh_form",
+ "tempfile",
+ "terminal",
+ "terminal_view",
+ "tokio",
+ "tool_runtime",
+ "tracing",
+ "windows 0.62.2",
+ "zeroize",
+]
+
+[[package]]
 name = "shellexpand"
 version = "3.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13047,6 +13271,26 @@ dependencies = [
  "ssh-cipher",
  "ssh-encoding",
  "zeroize",
+]
+
+[[package]]
+name = "ssh_form"
+version = "0.15.2"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "connection-form",
+ "gpui-component",
+ "gpui-fast",
+ "one-assets",
+ "one-core",
+ "rust-i18n",
+ "ssh",
+ "tempfile",
+ "terminal",
+ "tokio",
+ "tool_runtime",
+ "tracing",
 ]
 
 [[package]]
@@ -13623,6 +13867,7 @@ dependencies = [
  "sftp_transfer",
  "sha2 0.10.9",
  "ssh",
+ "ssh_form",
  "tempfile",
  "terminal",
  "tokio",

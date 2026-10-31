@@ -66,7 +66,7 @@ fn render_row_actions(
                         .disabled(matches!(row.save_status, ImportRowSaveStatus::Saving))
                         .on_click(cx.listener({
                             let record_id = record_id.to_string();
-                            move |this, _, _, cx| this.edit_row(record_id.clone(), cx)
+                            move |this, _, window, cx| this.edit_row(record_id.clone(), window, cx)
                         })),
                 )
             },

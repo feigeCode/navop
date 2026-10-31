@@ -1,0 +1,27 @@
+[package]
+name = "ssh_form"
+version = "0.15.2"
+edition = "2021"
+publish.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+connection-form = { workspace = true }
+gpui = { workspace = true }
+gpui-component = { workspace = true }
+one-assets = { workspace = true }
+one-core = { workspace = true }
+rust-i18n = { workspace = true }
+ssh = { workspace = true }
+terminal = { workspace = true }
+tokio = { workspace = true }
+tool_runtime = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+tempfile = "3"
+
+[lints]
+workspace = true

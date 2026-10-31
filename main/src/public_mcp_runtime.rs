@@ -3,8 +3,6 @@ mod config;
 mod connection_sessions;
 mod diagnostics;
 mod internal_functions;
-mod mongo;
-mod redis;
 mod resource_pool;
 mod session;
 mod status;
@@ -146,8 +144,11 @@ pub fn agent_runtime_tool_registry(cx: &mut App) -> anyhow::Result<agent_runtime
         PublicMcpEnvOverride::from_env(),
     );
     let mut agent_toolsets = settings.tool_exposure.agent.clone();
+    #[cfg(feature = "database")]
     let agent_database_enabled = agent_toolsets.database;
+    #[cfg(feature = "database")]
     let agent_redis_enabled = agent_toolsets.redis;
+    #[cfg(feature = "shell")]
     let agent_sftp_enabled = agent_toolsets.sftp;
     agent_toolsets.database = false;
     agent_toolsets.redis = false;
@@ -158,6 +159,7 @@ pub fn agent_runtime_tool_registry(cx: &mut App) -> anyhow::Result<agent_runtime
         config.permission_mode,
         build_approval_manager(cx),
     );
+    #[cfg(feature = "database")]
     if agent_database_enabled {
         if let Some(repo) = connection_repository(cx) {
             let runtime_db_registry = navop_runtime::database_tools::database_tool_registry(repo)
@@ -171,9 +173,11 @@ pub fn agent_runtime_tool_registry(cx: &mut App) -> anyhow::Result<agent_runtime
             tracing::warn!("Agent database tools enabled without ConnectionRepository");
         }
     }
+    #[cfg(feature = "database")]
     if agent_redis_enabled {
         register_runtime_redis_tools(cx, &mut agent_registry)?;
     }
+    #[cfg(feature = "shell")]
     if agent_sftp_enabled {
         if let Some(repo) = connection_repository(cx) {
             register_runtime_sftp_tools(cx, repo, &mut agent_registry)?;
@@ -184,6 +188,7 @@ pub fn agent_runtime_tool_registry(cx: &mut App) -> anyhow::Result<agent_runtime
     Ok(agent_registry)
 }
 
+#[cfg(feature = "database")]
 fn register_runtime_redis_tools(
     cx: &App,
     agent_registry: &mut agent_runtime::ToolRegistry,
@@ -202,6 +207,7 @@ fn register_runtime_redis_tools(
     Ok(())
 }
 
+#[cfg(feature = "shell")]
 fn register_runtime_sftp_tools(
     cx: &App,
     repo: std::sync::Arc<one_core::storage::ConnectionRepository>,
@@ -313,7 +319,7 @@ fn start_runtime(cx: &mut App, config: PublicMcpStartConfig) {
 }
 
 fn build_approval_manager(cx: &App) -> PublicMcpApprovalManager {
-    crate::public_mcp_approval::approval_manager(cx)
+    mcp_approval::approval_manager(cx)
 }
 
 fn next_generation(cx: &mut App) -> u64 {

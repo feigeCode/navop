@@ -1,11 +1,15 @@
-use super::{access_guard, diagnostics, internal_functions, mongo, redis, resource_pool};
+use super::{access_guard, diagnostics, internal_functions, resource_pool};
 use gpui::App;
 use one_core::settings::ToolExposureToolsetSettings;
 use one_core::tab_container::TabOpenMode;
 use public_mcp::tools::{
     PublicMcpToolProvider, PublicMcpToolRegistry, ToolRuntimeMcpProvider,
-    internal_function_tool_registry, remote_ops_tool_registry, terminal_control_tool_registry,
-    terminal_exec_tool_registry, terminal_read_tool_registry, terminal_write_keys_tool_registry,
+    internal_function_tool_registry,
+};
+#[cfg(feature = "shell")]
+use public_mcp::tools::{
+    remote_ops_tool_registry, terminal_control_tool_registry, terminal_exec_tool_registry,
+    terminal_read_tool_registry, terminal_write_keys_tool_registry,
 };
 use std::sync::Arc;
 
@@ -38,28 +42,20 @@ pub(super) fn build_agent_tool_registry(
     build_tool_registry_for_surface(cx, toolsets, ToolRegistrySurface::Agent)
 }
 
+#[cfg(test)]
+fn ensure_test_runtime_mcp_providers() {
+    domain_api::register_runtime_mcp_provider(Arc::new(data_domain::DataRuntimeMcp));
+}
+
 fn build_tool_registry_for_surface(
     cx: &mut App,
     toolsets: &ToolExposureToolsetSettings,
     surface: ToolRegistrySurface,
 ) -> anyhow::Result<PublicMcpToolRegistry> {
+    #[cfg(test)]
+    ensure_test_runtime_mcp_providers();
     let mut providers: Vec<Arc<dyn PublicMcpToolProvider>> = Vec::new();
     let mut runtime_registries = vec![diagnostics::runtime_status_tool_registry(toolsets)];
-    if toolsets.terminal {
-        if let Some(registry) = terminal_view::public_mcp::registry(cx) {
-            if toolsets.terminal_ssh_exec {
-                runtime_registries.push(remote_ops_tool_registry(registry.clone()));
-            }
-            if toolsets.terminal_exec {
-                runtime_registries.push(terminal_exec_tool_registry(registry.clone()));
-                runtime_registries.push(terminal_read_tool_registry(registry.clone()));
-                runtime_registries.push(terminal_control_tool_registry(registry.clone()));
-                runtime_registries.push(terminal_write_keys_tool_registry(registry));
-            }
-        } else {
-            tracing::warn!("Public MCP terminal registry is not initialized");
-        }
-    }
     if toolsets.internal_functions {
         runtime_registries.push(navop_runtime::builtin_tool_registry_with_version(env!(
             "CARGO_PKG_VERSION"
@@ -107,6 +103,36 @@ fn build_tool_registry_for_surface(
             tracing::warn!("Public MCP connection tools enabled before storage is initialized");
         }
     }
+    #[cfg(feature = "shell")]
+    if toolsets.terminal {
+        if let Some(registry) = terminal_view::public_mcp::registry(cx) {
+            if toolsets.terminal_ssh_exec {
+                runtime_registries.push(remote_ops_tool_registry(registry.clone()));
+            }
+            if toolsets.terminal_exec {
+                runtime_registries.push(terminal_exec_tool_registry(registry.clone()));
+                runtime_registries.push(terminal_read_tool_registry(registry.clone()));
+                runtime_registries.push(terminal_control_tool_registry(registry.clone()));
+                runtime_registries.push(terminal_write_keys_tool_registry(registry));
+            }
+        } else {
+            tracing::warn!("Public MCP terminal registry is not initialized");
+        }
+    }
+    let selection = domain_api::RuntimeMcpSelection {
+        database: false,
+        redis: toolsets.redis,
+        mongo: toolsets.mongo,
+        terminal: false,
+        terminal_ssh_exec: toolsets.terminal_ssh_exec,
+        terminal_exec: toolsets.terminal_exec,
+        terminal_control: false,
+        terminal_read: false,
+        terminal_write_keys: false,
+        sftp: false,
+    };
+    runtime_registries.extend(domain_api::runtime_mcp_registries(cx, &selection));
+    #[cfg(feature = "shell")]
     if toolsets.sftp {
         if let Some(storage) = cx.try_global::<one_core::storage::GlobalStorageState>() {
             if let Some(repo) = storage
@@ -121,6 +147,7 @@ fn build_tool_registry_for_surface(
             tracing::warn!("Public MCP SFTP tools enabled before storage is initialized");
         }
     }
+    #[cfg(feature = "database")]
     if toolsets.database {
         if let Some(storage) = cx.try_global::<one_core::storage::GlobalStorageState>() {
             if let Some(repo) = storage
@@ -135,16 +162,6 @@ fn build_tool_registry_for_surface(
         } else {
             tracing::warn!("Public MCP database tools enabled before storage is initialized");
         }
-    }
-    if toolsets.redis {
-        runtime_registries.push(tool_runtime::ToolRegistry::new(redis::redis_tool_handlers(
-            cx,
-        )));
-    }
-    if toolsets.mongo {
-        runtime_registries.push(tool_runtime::ToolRegistry::new(mongo::mongo_tool_handlers(
-            cx,
-        )));
     }
     if !runtime_registries.is_empty() {
         // 连接级 AI 访问策略：合并后的 registry 不继承子 registry 的 guard，这里统一挂一次。

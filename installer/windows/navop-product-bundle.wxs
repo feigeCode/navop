@@ -1,0 +1,21 @@
+<Wix
+  xmlns="http://wixtoolset.org/schemas/v4/wxs"
+  xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
+  <Bundle
+    Id="feigeCode.$(var.BundleId)"
+    Name="$(var.ProductName)"
+    Manufacturer="feigeCode"
+    Version="$(var.Version)"
+    IconSourceFile="$(var.IconPath)">
+    <BootstrapperApplication>
+      <bal:WixInternalUIBootstrapperApplication />
+    </BootstrapperApplication>
+
+    <Chain>
+      <MsiPackage
+        SourceFile="$(var.MsiPath)"
+        Compressed="yes"
+        bal:PrimaryPackageType="default" />
+    </Chain>
+  </Bundle>
+</Wix>

@@ -1,0 +1,354 @@
+use std::{collections::HashMap, sync::Arc};
+
+use futures::AsyncReadExt;
+use gpui::http_client::{AsyncBody, HttpClient, Method, Request};
+use serde::Deserialize;
+
+use super::local_source::local_file_path;
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct UpdateResponse {
+    pub(crate) version: String,
+    #[serde(default, alias = "body", alias = "changelog")]
+    pub(crate) release_notes: Option<String>,
+    #[serde(default)]
+    download_url: Option<String>,
+    #[serde(default)]
+    downloads: Option<HashMap<String, String>>,
+    #[serde(default, alias = "github_download_url")]
+    fallback_download_url: Option<String>,
+    #[serde(default, alias = "github_downloads")]
+    fallback_downloads: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub(crate) sha256: Option<String>,
+    #[serde(default)]
+    sha256s: Option<HashMap<String, String>>,
+}
+
+/// 拉取一份更新清单。`Ok(None)` 表示清单不存在（HTTP 404）：测试通道在首个 beta
+/// 发布前就是这种状态，调用方据此区分「还没有 beta 版本」与「服务真的出错了」。
+pub(crate) async fn fetch_update_info(
+    http_client: Arc<dyn HttpClient>,
+    update_url: &str,
+) -> Result<Option<UpdateResponse>, String> {
+    if let Some(path) = local_file_path(update_url) {
+        let bytes = tokio::fs::read(&path)
+            .await
+            .map_err(|err| format!("读取本地更新文件失败 {}: {}", path.display(), err))?;
+        return serde_json::from_slice::<UpdateResponse>(&bytes)
+            .map(Some)
+            .map_err(|err| format!("解析本地更新文件失败 {}: {}", path.display(), err));
+    }
+
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri(update_url)
+        .header("Accept", "application/json")
+        .body(AsyncBody::empty())
+        .map_err(|err| format!("构建更新请求失败: {}", err))?;
+
+    let response = http_client
+        .send(request)
+        .await
+        .map_err(|err| format!("发送更新请求失败: {}", err))?;
+
+    let status = response.status();
+    let mut body = response.into_body();
+    let mut bytes = Vec::new();
+    body.read_to_end(&mut bytes)
+        .await
+        .map_err(|err| format!("读取更新响应失败: {}", err))?;
+
+    // 404 表示清单还不存在（例如测试通道在首个 beta 发布前），不是服务故障。
+    if status.as_u16() == 404 {
+        return Ok(None);
+    }
+    if !status.is_success() {
+        return Err(format!("更新接口返回异常状态码: {}", status));
+    }
+
+    serde_json::from_slice::<UpdateResponse>(&bytes)
+        .map(Some)
+        .map_err(|err| format!("解析更新响应失败: {}", err))
+}
+
+pub(crate) fn select_download_url(
+    response: &UpdateResponse,
+    default_download_url: Option<String>,
+) -> Option<String> {
+    select_download_url_for_keys(response, default_download_url, platform_download_keys())
+}
+
+pub(crate) fn select_sha256(response: &UpdateResponse) -> Option<String> {
+    select_sha256_for_keys(response, platform_download_keys())
+}
+
+pub(crate) fn select_fallback_download_url(response: &UpdateResponse) -> Option<String> {
+    select_fallback_download_url_for_keys(response, platform_download_keys())
+}
+
+pub(crate) fn platform_download_keys_for(os: &str, arch: &str) -> &'static [&'static str] {
+    match (os, arch) {
+        ("macos", "aarch64") => &["aarch64-apple-darwin", "macos"],
+        ("macos", "x86_64") => &["x86_64-apple-darwin", "macos"],
+        ("linux", "x86_64") => &["x86_64-unknown-linux-gnu", "linux"],
+        ("linux", "aarch64") => &["aarch64-unknown-linux-gnu", "linux"],
+        ("windows", "x86_64") => &["x86_64-pc-windows-msvc", "windows"],
+        ("windows", "x86") => &["i686-pc-windows-msvc", "windows"],
+        _ => &[],
+    }
+}
+
+fn select_download_url_for_keys(
+    response: &UpdateResponse,
+    default_download_url: Option<String>,
+    keys: &[&str],
+) -> Option<String> {
+    select_keyed_value(&response.downloads, keys)
+        .or_else(|| response.download_url.clone())
+        .or(default_download_url)
+}
+
+fn select_sha256_for_keys(response: &UpdateResponse, keys: &[&str]) -> Option<String> {
+    select_keyed_value(&response.sha256s, keys).or_else(|| response.sha256.clone())
+}
+
+fn select_fallback_download_url_for_keys(
+    response: &UpdateResponse,
+    keys: &[&str],
+) -> Option<String> {
+    select_keyed_value(&response.fallback_downloads, keys)
+        .or_else(|| response.fallback_download_url.clone())
+}
+
+fn select_keyed_value(values: &Option<HashMap<String, String>>, keys: &[&str]) -> Option<String> {
+    values
+        .as_ref()
+        .and_then(|values| keys.iter().find_map(|key| values.get(*key).cloned()))
+}
+
+fn platform_download_keys() -> &'static [&'static str] {
+    platform_download_keys_for(std::env::consts::OS, std::env::consts::ARCH)
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::http_client::HttpClient;
+
+    use crate::update::test_support::FakeHttpClient;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn fetch_update_info_reads_plain_local_manifest_without_http_request() {
+        let temp_dir = tempfile::TempDir::new().expect("创建临时目录失败");
+        let manifest_path = temp_dir.path().join("latest.json");
+        std::fs::write(
+            &manifest_path,
+            "{\"version\":\"99.0.0\",\"release_notes\":\"## 本地模拟\"}",
+        )
+        .expect("写入本地 manifest 失败");
+        let client = Arc::new(FakeHttpClient::new(Vec::new()));
+        let http_client: Arc<dyn HttpClient> = client.clone();
+
+        let response = fetch_update_info(http_client, &manifest_path.to_string_lossy())
+            .await
+            .expect("应读取本地 manifest")
+            .expect("本地 manifest 一定存在");
+
+        assert_eq!(response.version, "99.0.0");
+        assert_eq!(response.release_notes.as_deref(), Some("## 本地模拟"));
+        assert!(client.take_requests().is_empty());
+    }
+
+    #[tokio::test]
+    async fn fetch_update_info_reads_file_url_without_http_request() {
+        let temp_dir = tempfile::TempDir::new().expect("创建临时目录失败");
+        let manifest_path = temp_dir.path().join("latest file.json");
+        std::fs::write(&manifest_path, r#"{"version":"99.0.1"}"#).expect("写入本地 manifest 失败");
+        let manifest_url = url::Url::from_file_path(&manifest_path)
+            .expect("应生成 file URL")
+            .to_string();
+        let client = Arc::new(FakeHttpClient::new(Vec::new()));
+        let http_client: Arc<dyn HttpClient> = client.clone();
+
+        let response = fetch_update_info(http_client, &manifest_url)
+            .await
+            .expect("应读取 file URL manifest")
+            .expect("file URL manifest 一定存在");
+
+        assert_eq!(response.version, "99.0.1");
+        assert!(client.take_requests().is_empty());
+    }
+
+    #[tokio::test]
+    async fn fetch_update_info_treats_a_missing_manifest_as_no_manifest() {
+        let client: Arc<dyn HttpClient> = Arc::new(FakeHttpClient::new(vec![
+            FakeHttpClient::response(404, ""),
+            FakeHttpClient::response(500, "boom"),
+        ]));
+
+        let missing = fetch_update_info(
+            client.clone(),
+            "https://cdn.example.test/updates/beta/latest.json",
+        )
+        .await
+        .expect("404 不该是错误");
+        assert!(missing.is_none(), "404 应表示清单不存在");
+
+        let error = fetch_update_info(client, "https://cdn.example.test/updates/latest.json")
+            .await
+            .expect_err("5xx 仍是错误");
+        assert!(
+            error.contains("异常状态码"),
+            "错误信息应带上状态码: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn local_manifest_parse_error_includes_file_path() {
+        let temp_dir = tempfile::TempDir::new().expect("创建临时目录失败");
+        let manifest_path = temp_dir.path().join("broken.json");
+        std::fs::write(&manifest_path, b"not-json").expect("写入损坏 manifest 失败");
+        let client: Arc<dyn HttpClient> = Arc::new(FakeHttpClient::new(Vec::new()));
+
+        let error = fetch_update_info(client, &manifest_path.to_string_lossy())
+            .await
+            .expect_err("损坏 manifest 应返回错误");
+
+        assert!(error.contains("解析本地更新文件失败"));
+        assert!(error.contains(&manifest_path.display().to_string()));
+    }
+
+    #[test]
+    fn update_response_accepts_release_notes_aliases() {
+        let response = serde_json::from_str::<UpdateResponse>(
+            "{\n\
+                \"version\": \"1.2.3\",\n\
+                \"body\": \"## Fixes\"\n\
+            }",
+        )
+        .unwrap();
+
+        assert_eq!(response.release_notes.as_deref(), Some("## Fixes"));
+    }
+
+    #[test]
+    fn select_download_url_prefers_target_triple_before_os_fallback() {
+        let response = serde_json::from_str::<UpdateResponse>(
+            r#"{
+                "version": "1.2.3",
+                "downloads": {
+                    "aarch64-apple-darwin": "https://example.test/arm64.tar.gz",
+                    "macos": "https://example.test/macos.tar.gz"
+                }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            Some("https://example.test/arm64.tar.gz".to_string()),
+            select_download_url_for_keys(&response, None, &["aarch64-apple-darwin", "macos"])
+        );
+    }
+
+    #[test]
+    fn select_sha256_prefers_target_triple_before_global_fallback() {
+        let response = serde_json::from_str::<UpdateResponse>(
+            r#"{
+                "version": "1.2.3",
+                "sha256": "global",
+                "sha256s": {
+                    "x86_64-unknown-linux-gnu": "linux-sha"
+                }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            Some("linux-sha".to_string()),
+            select_sha256_for_keys(&response, &["x86_64-unknown-linux-gnu", "linux"])
+        );
+    }
+
+    #[test]
+    fn select_fallback_download_url_prefers_target_triple_before_global_fallback() {
+        let response = serde_json::from_str::<UpdateResponse>(
+            r#"{
+                "version": "1.2.3",
+                "fallback_download_url": "https://github.example.test/global.tar.gz",
+                "fallback_downloads": {
+                    "x86_64-unknown-linux-gnu": "https://github.example.test/linux.tar.gz"
+                }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            Some("https://github.example.test/linux.tar.gz".to_string()),
+            select_fallback_download_url_for_keys(
+                &response,
+                &["x86_64-unknown-linux-gnu", "linux"]
+            )
+        );
+    }
+
+    #[test]
+    fn platform_download_keys_include_linux_arm64() {
+        assert_eq!(
+            &["aarch64-unknown-linux-gnu", "linux"],
+            platform_download_keys_for("linux", "aarch64")
+        );
+    }
+
+    #[test]
+    fn platform_download_keys_include_windows_x86() {
+        assert_eq!(
+            &["i686-pc-windows-msvc", "windows"],
+            platform_download_keys_for("windows", "x86")
+        );
+    }
+
+    #[test]
+    fn windows_x86_download_metadata_prefers_target_before_fallbacks() {
+        let response = serde_json::from_str::<UpdateResponse>(
+            r#"{
+                "version": "1.2.3",
+                "download_url": "https://example.test/global.zip",
+                "downloads": {
+                    "windows": "https://example.test/windows.zip",
+                    "i686-pc-windows-msvc": "https://example.test/i686.zip"
+                },
+                "fallback_download_url": "https://github.example.test/global.zip",
+                "fallback_downloads": {
+                    "windows": "https://github.example.test/windows.zip",
+                    "i686-pc-windows-msvc": "https://github.example.test/i686.zip"
+                },
+                "sha256": "global-sha",
+                "sha256s": {
+                    "windows": "windows-sha",
+                    "i686-pc-windows-msvc": "i686-sha"
+                }
+            }"#,
+        )
+        .unwrap();
+        let keys = platform_download_keys_for("windows", "x86");
+
+        assert_eq!(
+            Some("https://example.test/i686.zip".to_string()),
+            select_download_url_for_keys(
+                &response,
+                Some("https://default.example.test/navop.zip".to_string()),
+                keys
+            )
+        );
+        assert_eq!(
+            Some("https://github.example.test/i686.zip".to_string()),
+            select_fallback_download_url_for_keys(&response, keys)
+        );
+        assert_eq!(
+            Some("i686-sha".to_string()),
+            select_sha256_for_keys(&response, keys)
+        );
+    }
+}

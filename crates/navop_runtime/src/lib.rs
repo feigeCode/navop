@@ -1,15 +1,16 @@
 pub mod connections;
-pub mod database_tools;
-pub mod redis_tools;
-pub mod sftp_tools;
-pub mod workspaces;
+#[cfg(feature = "database")]
+pub use runtime_database::database_tools;
+#[cfg(feature = "redis")]
+pub use runtime_redis::redis_tools;
+#[cfg(feature = "sftp")]
+pub use runtime_sftp::sftp_tools;
+
+pub use runtime_core::workspaces;
+pub use runtime_core::builtin_tool_registry_with_version;
 
 pub fn builtin_tool_registry() -> tool_runtime::ToolRegistry {
     builtin_tool_registry_with_version(env!("CARGO_PKG_VERSION"))
-}
-
-pub fn builtin_tool_registry_with_version(version: &'static str) -> tool_runtime::ToolRegistry {
-    tool_runtime::ToolRegistry::new(vec![std::sync::Arc::new(AppInfoTool { version })])
 }
 
 pub fn tool_registry(
@@ -22,60 +23,16 @@ pub fn tool_registry_with_version(
     repo: std::sync::Arc<one_core::storage::ConnectionRepository>,
     version: &'static str,
 ) -> Result<tool_runtime::ToolRegistry, tool_runtime::ToolRegistryError> {
-    tool_runtime::ToolRegistry::merge(vec![
+    #[allow(unused_mut)]
+    let mut registries = vec![
         builtin_tool_registry_with_version(version),
         connections::connection_tool_registry(repo.clone()),
-        database_tools::database_tool_registry(repo.clone()),
-        redis_tools::redis_tool_registry(repo),
-    ])
-}
-
-#[derive(Clone)]
-struct AppInfoTool {
-    version: &'static str,
-}
-
-impl tool_runtime::ToolHandler for AppInfoTool {
-    fn descriptor(&self) -> tool_runtime::ToolDescriptor {
-        tool_runtime::ToolDescriptor {
-            id: "onetcli.app_info".to_string(),
-            title: "App Info".to_string(),
-            description: "Read metadata for the running Navop application, including app name and version. Use this for version checks, diagnostics, or compatibility reporting; it does not inspect remote hosts or saved connections.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {}
-            }),
-            output_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "name": { "type": "string" },
-                    "version": { "type": "string" }
-                },
-                "required": ["name", "version"]
-            }),
-            permissions: Vec::new(),
-            mode: tool_runtime::ToolMode::Deterministic,
-            adapters: vec![
-                tool_runtime::ToolAdapter::Mcp,
-                tool_runtime::ToolAdapter::FunctionCalling,
-            ],
-            annotations: tool_runtime::ToolAnnotations::read_only("App Info"),
-        }
-    }
-
-    fn call(
-        &self,
-        _input: serde_json::Value,
-        _context: tool_runtime::ToolContext,
-    ) -> tool_runtime::ToolFuture {
-        let version = self.version;
-        Box::pin(async move {
-            Ok(tool_runtime::ToolResult::structured(serde_json::json!({
-                "name": "Navop",
-                "version": version
-            })))
-        })
-    }
+    ];
+    #[cfg(feature = "database")]
+    registries.push(database_tools::database_tool_registry(repo.clone()));
+    #[cfg(feature = "redis")]
+    registries.push(redis_tools::redis_tool_registry(repo));
+    tool_runtime::ToolRegistry::merge(registries)
 }
 
 #[cfg(test)]

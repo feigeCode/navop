@@ -1,10 +1,52 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 const CURRENT_APP_DIR_NAME: &str = "navop";
 const LEGACY_APP_DIR_NAME: &str = "one-hub";
 const MIGRATION_MARKER: &str = ".one-hub-migration-complete";
 const COPY_TEMP_SUFFIX: &str = ".navop-migration-tmp";
+
+#[derive(Clone, Copy, Debug)]
+struct AppDirNames {
+    current: &'static str,
+    legacy: &'static [&'static str],
+    migration_marker: &'static str,
+}
+
+const DEFAULT_APP_DIR_NAMES: AppDirNames = AppDirNames {
+    current: CURRENT_APP_DIR_NAME,
+    legacy: &[LEGACY_APP_DIR_NAME],
+    migration_marker: MIGRATION_MARKER,
+};
+
+static APP_DIR_NAMES: OnceLock<AppDirNames> = OnceLock::new();
+
+/// 在 `initialize_app_paths` 之前按产品身份覆盖目录名。
+///
+/// 默认值保持 Navop 全量版的历史目录，确保老用户升级后仍能找到数据。
+/// 独立产品（navop-shell / navop-data）必须在任何目录访问前调用本函数，
+/// 否则会读写全量版的配置与数据目录。
+pub fn configure_app_dir_names(
+    current: &'static str,
+    legacy: &'static [&'static str],
+    migration_marker: &'static str,
+) {
+    let _ = APP_DIR_NAMES.set(AppDirNames {
+        current,
+        legacy,
+        migration_marker,
+    });
+}
+
+fn app_dir_names() -> &'static AppDirNames {
+    APP_DIR_NAMES.get().unwrap_or(&DEFAULT_APP_DIR_NAMES)
+}
+
+/// 当前产品使用的数据目录名。
+pub fn current_app_dir_name() -> &'static str {
+    app_dir_names().current
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MigrationOutcome {
@@ -90,7 +132,11 @@ fn config_root() -> Result<PathBuf> {
 }
 
 fn migrate_root(root: &Path) -> Result<MigrationOutcome> {
-    migrate_directory(&legacy_dir_from_root(root), &current_dir_from_root(root))
+    let names = app_dir_names();
+    let Some(legacy_name) = names.legacy.first() else {
+        return Ok(MigrationOutcome::AlreadyMigrated);
+    };
+    migrate_directory(&root.join(legacy_name), &current_dir_from_root(root))
 }
 
 fn migrate_directory(legacy: &Path, current: &Path) -> Result<MigrationOutcome> {
@@ -172,15 +218,20 @@ fn write_migration_marker(current: &Path) -> Result<()> {
 }
 
 fn migration_marker(current: &Path) -> PathBuf {
-    current.join(MIGRATION_MARKER)
+    current.join(app_dir_names().migration_marker)
 }
 
 fn current_dir_from_root(root: &Path) -> PathBuf {
-    root.join(CURRENT_APP_DIR_NAME)
+    root.join(app_dir_names().current)
 }
 
 fn legacy_dir_from_root(root: &Path) -> PathBuf {
-    root.join(LEGACY_APP_DIR_NAME)
+    let legacy = app_dir_names()
+        .legacy
+        .first()
+        .copied()
+        .unwrap_or(app_dir_names().current);
+    root.join(legacy)
 }
 
 #[cfg(test)]

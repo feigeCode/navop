@@ -1,6 +1,6 @@
 use super::*;
 use one_core::tab_container::TabContainerEvent;
-use terminal_view::TerminalWorkspace;
+use terminal_view::{TerminalWorkspace, TerminalWorkspaceEvent};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct StartupMasterKeyPolicy {
@@ -123,21 +123,12 @@ impl HomePage {
             master_key_unlock_prompt_pending: false,
             master_key_dialog_open: false,
             team_permissions: TeamPermissionSnapshot::from_persisted_user_id(persisted_user_id),
-            port_forwarding_runtime: Arc::new(
-                tokio::sync::Mutex::new(PortForwardingRuntime::new()),
-            ),
-            external_driver_registry: IpcDriverRegistry::empty(),
-            wsl_distributions: None,
         };
 
         // 使用持久化身份预载本地团队权限，不等待在线会话恢复。
         page.load_team_options(cx);
         // 异步加载工作区
         page.load_workspaces(cx);
-
-        // Windows 下后台识别 WSL 发行版，供本地终端下拉菜单展示（feigeCode/navop#182）。
-        #[cfg(target_os = "windows")]
-        page.load_wsl_distributions(cx);
 
         let has_repo_password = crypto::has_repo_password_set();
         let settings = AppSettings::current(cx);
@@ -260,6 +251,33 @@ impl HomePage {
         }
 
         page
+    }
+
+    /// 复制出的终端标签由 TabContainer 内部克隆创建，需补上 OpenSftp / SaveAsConnection 的响应。
+    pub(super) fn subscribe_terminal_workspace_events(
+        &mut self,
+        terminal: &Entity<TerminalWorkspace>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let subscription = cx.subscribe_in(
+            terminal,
+            window,
+            |_, _, event: &TerminalWorkspaceEvent, window, cx| {
+                let Some(host) = app_kit::shell_host() else {
+                    return;
+                };
+                match event {
+                    TerminalWorkspaceEvent::OpenSftp(connection) => {
+                        host.open_sftp(connection.clone(), window, cx);
+                    }
+                    TerminalWorkspaceEvent::SaveAsConnection(connection) => {
+                        host.save_temporary_connection(connection.clone(), window, cx);
+                    }
+                }
+            },
+        );
+        self._subscriptions.push(subscription);
     }
 }
 

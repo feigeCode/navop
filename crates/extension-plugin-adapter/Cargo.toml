@@ -10,7 +10,7 @@ base64 = { workspace = true }
 dirs = { workspace = true }
 extension-host = { workspace = true }
 extension-protocol = { workspace = true }
-extension-runtime = { workspace = true }
+extension-runtime = { workspace = true, default-features = false }
 futures = { workspace = true }
 parking_lot = { workspace = true }
 serde_json = { workspace = true }

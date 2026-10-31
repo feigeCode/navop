@@ -1,0 +1,169 @@
+name: Standalone Products
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build, for example v0.22.0"
+        required: true
+        type: string
+      platform:
+        description: "Build one matrix label or all"
+        required: true
+        type: choice
+        default: all
+        options:
+          - all
+          - macos-arm64
+          - macos-x64
+          - linux-x64
+          - windows-x64
+      ref:
+        description: "Optional branch or SHA to build instead of the tag"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: standalone-products-${{ inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  prepare:
+    name: Prepare standalone build
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      version: ${{ steps.matrix.outputs.version }}
+    steps:
+      - name: Validate tag
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Invalid tag: $TAG"
+            exit 1
+          fi
+
+      - name: Build matrix
+        id: matrix
+        env:
+          TAG: ${{ inputs.tag }}
+          PLATFORM: ${{ inputs.platform }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          entries=(
+            '{"product":"navop-shell","label":"macos-arm64","os":"macos-latest","target":"aarch64-apple-darwin","app":"Navop Shell.app"}'
+            '{"product":"navop-shell","label":"macos-x64","os":"macos-15-intel","target":"x86_64-apple-darwin","app":"Navop Shell.app"}'
+            '{"product":"navop-shell","label":"linux-x64","os":"ubuntu-latest","target":"x86_64-unknown-linux-gnu","app":""}'
+            '{"product":"navop-shell","label":"windows-x64","os":"windows-latest","target":"x86_64-pc-windows-msvc","app":""}'
+            '{"product":"navop-data","label":"macos-arm64","os":"macos-latest","target":"aarch64-apple-darwin","app":"Navop Data.app"}'
+            '{"product":"navop-data","label":"macos-x64","os":"macos-15-intel","target":"x86_64-apple-darwin","app":"Navop Data.app"}'
+            '{"product":"navop-data","label":"linux-x64","os":"ubuntu-latest","target":"x86_64-unknown-linux-gnu","app":""}'
+            '{"product":"navop-data","label":"windows-x64","os":"windows-latest","target":"x86_64-pc-windows-msvc","app":""}'
+          )
+          selected=()
+          for entry in "${entries[@]}"; do
+            if [ "$PLATFORM" = "all" ] || [[ "$entry" == *"\"label\":\"${PLATFORM}\""* ]]; then
+              selected+=("$entry")
+            fi
+          done
+          if [ "${#selected[@]}" -eq 0 ]; then
+            echo "::error::No matrix entries for platform: $PLATFORM"
+            exit 1
+          fi
+          matrix="{\"include\":[$(IFS=,; echo "${selected[*]}")]}"
+          python3 -c 'import json,sys; json.loads(sys.argv[1])' "$matrix"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build (${{ matrix.product }}, ${{ matrix.label }})
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    env:
+      ONETCLI_VERSION: ${{ needs.prepare.outputs.version }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || inputs.tag }}
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.target }}
+          cache: false
+
+      - name: Install system dependencies
+        if: runner.os != 'Windows'
+        run: script/bootstrap
+
+      - name: Install Windows build dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install nasm --no-progress --yes
+          $nasmDir = Join-Path $env:ProgramFiles "NASM"
+          $nasmDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          nasm -v
+
+      - name: Build product
+        run: cargo build --release -p "${{ matrix.product }}" --target "${{ matrix.target }}"
+
+      - name: Package macOS app
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          chmod +x script/bundle-macos.sh script/bundle-macos-dmg.sh
+          script/bundle-macos.sh "${{ matrix.target }}" "${{ matrix.product }}"
+          script/bundle-macos-dmg.sh "${{ matrix.target }}" "${{ matrix.product }}"
+          tar -czf "target/${{ matrix.product }}-${ONETCLI_VERSION}-${{ matrix.target }}.tar.gz" \
+            -C target "${{ matrix.app }}"
+
+      - name: Package Linux tarball
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          script/package-linux-product.sh "${{ matrix.product }}" "${{ matrix.target }}"
+
+      - name: Package Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          node script/generate-windows-license.mjs
+          dotnet tool install --global wix --version 6.0.2
+          wix extension add -g WixToolset.UI.wixext/6.0.2
+          wix extension add -g WixToolset.BootstrapperApplications.wixext/6.0.2
+          New-Item -ItemType Directory -Force -Path package | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.product }}.exe" "package/${{ matrix.product }}.exe"
+          ./installer/windows/build-product-installer.ps1 `
+            -Product "${{ matrix.product }}" `
+            -Version "$env:ONETCLI_VERSION" `
+            -SourceDir package `
+            -OutDir dist `
+            -Arch x64
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.product }}-${{ matrix.label }}
+          if-no-files-found: error
+          path: |
+            target/*.dmg
+            target/${{ matrix.product }}-${{ matrix.target }}*.tar.gz
+            target/${{ matrix.product }}-*${{ matrix.target }}*.tar.gz
+            dist/*.msi
+            dist/*.exe

@@ -7,7 +7,7 @@ edition.workspace = true
 [dependencies]
 extension-plugin-adapter.workspace = true
 extension-protocol.workspace = true
-extension-runtime.workspace = true
+extension-runtime = { workspace = true, default-features = false }
 extension-host.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true

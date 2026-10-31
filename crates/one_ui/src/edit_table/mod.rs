@@ -124,7 +124,6 @@ impl Default for TableKeybindings {
     }
 }
 
-
 /// 动态字符串构造 KeyBinding（gpui-fast v0.1.12 起 KeyBinding::new 只收 &'static str）。
 fn load_dynamic_keybinding<A: Action>(
     keystrokes: &str,
@@ -132,9 +131,20 @@ fn load_dynamic_keybinding<A: Action>(
     context: Option<&str>,
     cx: &App,
 ) -> KeyBinding {
-    let context_predicate = context
-        .map(|context| gpui::KeyBindingContextPredicate::parse(context).unwrap().into());
-    KeyBinding::load(keystrokes, Box::new(action), context_predicate, false, None, cx).unwrap()
+    let context_predicate = context.map(|context| {
+        gpui::KeyBindingContextPredicate::parse(context)
+            .unwrap()
+            .into()
+    });
+    KeyBinding::load(
+        keystrokes,
+        Box::new(action),
+        context_predicate,
+        false,
+        None,
+        cx,
+    )
+    .unwrap()
 }
 
 /// 编译目标对应的 gpui `OperatingSystem`。
@@ -156,9 +166,7 @@ fn init_keybindings(bindings: &TableKeybindings, cx: &App) -> Vec<KeyBinding> {
         bindings
             .cancel
             .iter()
-            .map(|key| {
-                load_dynamic_keybinding(key, Cancel, Some(CONTEXT), cx)
-            }),
+            .map(|key| load_dynamic_keybinding(key, Cancel, Some(CONTEXT), cx)),
     );
     keybindings.extend([
         KeyBinding::new("up", SelectUp, Some(CONTEXT)),
@@ -333,7 +341,9 @@ fn shadow_shortcuts(
         .map(|key| key.to_string())
         .chain(active)
         .chain(current.iter().cloned())
-        .filter(|key| Keystroke::parse_with_os(key, current_os()).is_ok() && seen.insert(key.clone()))
+        .filter(|key| {
+            Keystroke::parse_with_os(key, current_os()).is_ok() && seen.insert(key.clone())
+        })
         .collect()
 }
 

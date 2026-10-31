@@ -19,9 +19,9 @@ use gpui::{
     AnyElement, AppContext, Axis, Bounds, ClickEvent, ClipboardItem, Context, Div, DragMoveEvent,
     ElementId, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement,
     IsZero, ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, Pixels, Point, Render,
-    ScrollStrategy, ScrollEvent, SharedString, Stateful, StatefulInteractiveElement as _,
-    Styled, Subscription, Task, UniformListScrollHandle, Window, canvas, div,
-    prelude::FluentBuilder, px, uniform_list,
+    ScrollEvent, ScrollStrategy, SharedString, Stateful, StatefulInteractiveElement as _, Styled,
+    Subscription, Task, UniformListScrollHandle, Window, canvas, div, prelude::FluentBuilder, px,
+    uniform_list,
 };
 use gpui_component::list::{List, ListState};
 use gpui_component::scroll::ScrollbarHandle;

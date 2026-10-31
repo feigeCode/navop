@@ -1,6 +1,5 @@
 use crate::connection_visuals::{ConnectionVisualSize, stored_connection_icon_with_catalog};
 use crate::home_tab::{HomePage, connection_matches_query};
-use db::ipc::IpcDriverRegistry;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, Context, Entity, FontWeight, ParentElement, SharedString, Styled, Task, Window, div, px,
@@ -16,7 +15,6 @@ use rust_i18n::t;
 
 pub(crate) struct ConnectionQuickOpenDelegate {
     parent: Entity<HomePage>,
-    external_driver_registry: IpcDriverRegistry,
     items: Vec<StoredConnection>,
     filtered_items: Vec<StoredConnection>,
     selected_index: Option<IndexPath>,
@@ -24,13 +22,9 @@ pub(crate) struct ConnectionQuickOpenDelegate {
 }
 
 impl ConnectionQuickOpenDelegate {
-    pub(crate) fn new(
-        parent: Entity<HomePage>,
-        external_driver_registry: IpcDriverRegistry,
-    ) -> Self {
+    pub(crate) fn new(parent: Entity<HomePage>) -> Self {
         Self {
             parent,
-            external_driver_registry,
             items: Vec::new(),
             filtered_items: Vec::new(),
             selected_index: None,
@@ -39,7 +33,15 @@ impl ConnectionQuickOpenDelegate {
     }
 
     pub(crate) fn update_items(&mut self, connections: &[StoredConnection]) {
-        self.items = connections.to_vec();
+        // 快速打开只列当前产品能力范围内的连接：独立产品不能从这里绕过列表
+        // 看到并打开自己领域之外的类型。
+        self.items = connections
+            .iter()
+            .filter(|connection| {
+                crate::product::connection_type_supported(connection.connection_type)
+            })
+            .cloned()
+            .collect();
         self.apply_filter();
     }
 
@@ -244,7 +246,6 @@ impl ListDelegate for ConnectionQuickOpenDelegate {
             stored_connection_icon_with_catalog(
                 &connection,
                 ConnectionVisualSize::Tree,
-                &self.external_driver_registry,
                 extension_catalog.as_deref(),
             )
         };
@@ -387,7 +388,11 @@ mod tests {
     }
 
     impl gpui::Render for FocusHost {
-        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl gpui::IntoElement {
+        fn render(
+            &mut self,
+            _window: &mut Window,
+            _cx: &mut Context<Self>,
+        ) -> impl gpui::IntoElement {
             use gpui::InteractiveElement as _;
             div().size_full().track_focus(&self.focus)
         }
@@ -423,7 +428,9 @@ mod tests {
                     .w(px(640.0))
                     .close_button(false)
                     .content(move |content, _window, _cx| {
-                        content.p_0().child(div().id("quick-open").child(List::new(&list)))
+                        content
+                            .p_0()
+                            .child(div().id("quick-open").child(List::new(&list)))
                     })
             });
             list.update(cx, |state, cx| state.focus(window, cx));
@@ -437,7 +444,10 @@ mod tests {
         cx.simulate_keystrokes("escape");
         cx.run_until_parked();
         cx.update(|window, cx| {
-            assert!(!window.has_active_dialog(cx), "Esc must close the quick open dialog");
+            assert!(
+                !window.has_active_dialog(cx),
+                "Esc must close the quick open dialog"
+            );
         });
     }
 

@@ -8,20 +8,18 @@ use crate::license::{get_license_service, offline_license_public_key};
 use crate::settings::acp_agents_settings::AcpAgentsView;
 use crate::settings::agent_settings::agent_setting_group;
 use crate::settings::appearance::render as render_appearance_settings;
-use crate::settings::database_settings::database_setting_group;
 use crate::settings::connection_display_settings::connection_display_setting_group;
 use crate::settings::llm_providers_view::LlmProvidersView;
-use crate::settings::local_terminal_settings::local_terminal_setting_group;
 use crate::settings::mcp_settings::mcp_setting_group;
 use crate::settings::notes_settings::notes_setting_group;
 use crate::settings::notes_shortcuts::{
     render_group as render_notes_shortcuts_group, search_texts as notes_shortcut_search_texts,
 };
 use crate::settings::remote_file_editor_settings::remote_file_editor_setting_group;
-use crate::settings::sql_format_settings::sql_format_setting_group;
 use crate::settings::tool_exposure_settings::{
     agent_tool_exposure_setting_group, mcp_tool_exposure_setting_group,
 };
+use crate::settings::update_channel::{beta_exit_notice_item, update_channel_item};
 use crate::update;
 use font_kit::{file_type::FileType, font::Font};
 use gpui::http_client::{AsyncBody, Method, Request};
@@ -46,7 +44,7 @@ use gpui_component::{
         Settings,
     },
     switch::Switch,
-    v_flex,
+    tag, v_flex,
 };
 use one_assets::IconName;
 use one_core::cloud_sync::personal::{SyncStoreHealth, open_webdav_password, seal_webdav_password};
@@ -57,21 +55,22 @@ use one_core::llm::manager::GlobalProviderState;
 use one_core::popup_window::{PopupWindowOptions, open_reusable_popup_window};
 pub const DEFAULT_SYSTEM_HOTKEY_MACOS: &str = "cmd-alt-m";
 pub const DEFAULT_SYSTEM_HOTKEY_OTHER: &str = "ctrl-alt-m";
-const SYNC_SETTINGS_PAGE_INDEX: usize = 6;
+/// 「同步」设置页序号：General、Agent、Acp、Mcp、Sync，同步页固定在第 5 页。
+const SYNC_SETTINGS_PAGE_INDEX: usize = 4;
 
 use gpui_component::input::InputEvent;
 pub use one_core::settings::{
-    AppSettings, CloseButtonBehavior, CustomFont, DatabaseOpenMode, GlobalCurrentUser,
-    GlobalProxySettings, LOCALE_EN, LOCALE_SYSTEM, LOCALE_ZH_CN, LOCALE_ZH_HK, MasterKeyStorage,
+    AppSettings, CloseButtonBehavior, CustomFont, GlobalCurrentUser, GlobalProxySettings,
+    LOCALE_EN, LOCALE_SYSTEM, LOCALE_ZH_CN, LOCALE_ZH_HK, MasterKeyStorage,
     PersonalSyncBackendKind, PersonalSyncSettings, ProxyType, SyncProvider,
     effective_locale_for_setting, is_installed_font_family, is_supported_grid_monospace_font,
 };
 use one_core::tab_container::{TabContent, TabContentEvent};
 use one_core::utils::auto_save_config::AutoSaveConfig;
 use one_core::window_close::close_window_for_reuse;
+use one_ui::{MAX_FONT_SIZE, MIN_FONT_SIZE, available_monospace_fonts};
 use reqwest_client::ReqwestClient;
 use rust_i18n::t;
-use terminal_view::{MAX_FONT_SIZE, MIN_FONT_SIZE, available_monospace_fonts};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -633,7 +632,7 @@ impl SettingsPanel {
         (app_options, monospace_options)
     }
 
-    fn setting_pages(&mut self, _window: &mut Window, cx: &App) -> Vec<SettingPage> {
+    fn setting_pages(&mut self, _window: &mut Window, cx: &mut App) -> Vec<SettingPage> {
         let llm_view = self.llm_providers_view.clone();
         let acp_view = self.acp_agents_view.clone();
         let default_settings = AppSettings::default();
@@ -679,7 +678,9 @@ impl SettingsPanel {
             SettingPage::new(t!("Settings.General.title"))
                 .resettable(true)
                 .default_open(true)
-                .groups(vec![
+                .groups({
+                    let mut groups =
+                        vec![
                     SettingGroup::new()
                         .title(t!("Settings.General.Language.group_title"))
                         .items(vec![
@@ -1083,32 +1084,32 @@ impl SettingsPanel {
                             )
                             .description(t!("Settings.General.Log.file_path_desc").to_string()),
                         ),
-                    remote_file_editor_setting_group(&default_settings.remote_file_editor, cx),
-                    connection_display_setting_group(),
-                    SettingGroup::new()
-                        .title(t!("Settings.General.Proxy.group_title"))
-                        .item(
-                            SettingItem::render(move |_options, _window, cx| {
-                                render_global_proxy_settings_item(cx)
-                            })
-                            .keywords([
-                                t!("Settings.General.Proxy.group_title").to_string(),
-                                t!("Settings.General.Proxy.title").to_string(),
-                                t!("Settings.General.Proxy.description").to_string(),
-                                t!("Settings.General.Proxy.open").to_string(),
-                            ]),
-                        ),
-                ]),
-            // 数据库设置页
-            SettingPage::new(t!("Settings.Database.title"))
-                .resettable(true)
-                .groups(vec![database_setting_group(), sql_format_setting_group()]),
-            // 终端设置页
-            SettingPage::new(t!("Settings.Terminal.title"))
-                .resettable(true)
-                .group(local_terminal_setting_group(
-                    &default_settings.local_terminal_profile,
-                )),
+                    ];
+                    // 远程文件编辑器属于终端（SFTP）领域，数据库产品里没有意义。
+                    if crate::product::supports_shell_domain() {
+                        groups.push(remote_file_editor_setting_group(
+                            &default_settings.remote_file_editor,
+                            cx,
+                        ));
+                    }
+                    groups.push(connection_display_setting_group());
+                    groups.push(
+                        SettingGroup::new()
+                            .title(t!("Settings.General.Proxy.group_title"))
+                            .item(
+                                SettingItem::render(move |_options, _window, cx| {
+                                    render_global_proxy_settings_item(cx)
+                                })
+                                .keywords([
+                                    t!("Settings.General.Proxy.group_title").to_string(),
+                                    t!("Settings.General.Proxy.title").to_string(),
+                                    t!("Settings.General.Proxy.description").to_string(),
+                                    t!("Settings.General.Proxy.open").to_string(),
+                                ]),
+                            ),
+                    );
+                    groups
+                }),
             // Agent 设置页
             SettingPage::new(t!("Settings.Agent.title"))
                 .resettable(true)
@@ -1165,19 +1166,21 @@ impl SettingsPanel {
             // 所以拆成两个并列分组，关系与「关于 / 更新」一致。
             SettingPage::new(t!("Settings.Account.title"))
                 .group(
-                    SettingGroup::new().title(t!("Settings.Account.title")).item(
-                        SettingItem::render(move |_options, window, cx| {
-                            render_account_section(window, cx)
-                        })
-                        .keywords([
-                            t!("Settings.Account.title").to_string(),
-                            t!("Settings.Account.username").to_string(),
-                            t!("Settings.Account.email").to_string(),
-                            t!("Settings.Account.not_logged_in").to_string(),
-                            t!("Auth.logout").to_string(),
-                            t!("License.import_offline").to_string(),
-                        ]),
-                    ),
+                    SettingGroup::new()
+                        .title(t!("Settings.Account.title"))
+                        .item(
+                            SettingItem::render(move |_options, window, cx| {
+                                render_account_section(window, cx)
+                            })
+                            .keywords([
+                                t!("Settings.Account.title").to_string(),
+                                t!("Settings.Account.username").to_string(),
+                                t!("Settings.Account.email").to_string(),
+                                t!("Settings.Account.not_logged_in").to_string(),
+                                t!("Auth.logout").to_string(),
+                                t!("License.import_offline").to_string(),
+                            ]),
+                        ),
                 )
                 .group(
                     SettingGroup::new()
@@ -1212,6 +1215,10 @@ impl SettingsPanel {
                     self.update_check_state.clone(),
                 )),
         ];
+        // 领域设置页由领域注册表提供：数据库页来自 data_domain，终端页来自
+        // shell_domain；哪个领域参与编译，就只会出现哪一页。
+        let mut pages = pages;
+        pages.extend(app_kit::registry().settings_pages(cx));
         pages
     }
 }
@@ -1944,7 +1951,7 @@ impl Render for SettingsPanel {
 
         let initial_page_index = self.initial_page_index;
         let settings_id = match initial_page_index {
-            SYNC_SETTINGS_PAGE_INDEX => "main-app-settings-sync",
+            index if index == SYNC_SETTINGS_PAGE_INDEX => "main-app-settings-sync",
             _ => "main-app-settings",
         };
 
@@ -1966,31 +1973,40 @@ fn about_update_setting_group(
     auto_update_default: bool,
     update_check_state: Entity<update::UpdateCheckState>,
 ) -> SettingGroup {
+    let mut items = vec![
+        SettingItem::new(
+            t!("Settings.About.Update.auto_update"),
+            SettingField::switch(
+                |cx: &App| AppSettings::global(cx).auto_update,
+                |val: bool, cx: &mut App| {
+                    AppSettings::update_and_save(cx, |settings| {
+                        settings.auto_update = val;
+                    });
+                },
+            )
+            .default_value(auto_update_default),
+        )
+        .description(t!("Settings.About.Update.auto_update_desc").to_string()),
+        // 稳定/测试通道选择：切到测试通道会先弹确认框
+        update_channel_item(),
+    ];
+    // 只有预发布构建才可能「在用 beta 却选了稳定通道」，稳定性构建不放这条提示。
+    if crate::settings::update_channel::current_build_is_prerelease() {
+        items.push(beta_exit_notice_item());
+    }
+    items.push(
+        SettingItem::render(move |_options, _window, cx| {
+            render_manual_update_check_item(&update_check_state, cx)
+        })
+        .keywords([
+            t!("Settings.About.Update.group_title").to_string(),
+            t!("Settings.About.Update.check_now").to_string(),
+            t!("Settings.About.Update.check_now_desc").to_string(),
+        ]),
+    );
     SettingGroup::new()
         .title(t!("Settings.About.Update.group_title"))
-        .items(vec![
-            SettingItem::new(
-                t!("Settings.About.Update.auto_update"),
-                SettingField::switch(
-                    |cx: &App| AppSettings::global(cx).auto_update,
-                    |val: bool, cx: &mut App| {
-                        AppSettings::update_and_save(cx, |settings| {
-                            settings.auto_update = val;
-                        });
-                    },
-                )
-                .default_value(auto_update_default),
-            )
-            .description(t!("Settings.About.Update.auto_update_desc").to_string()),
-            SettingItem::render(move |_options, _window, cx| {
-                render_manual_update_check_item(&update_check_state, cx)
-            })
-            .keywords([
-                t!("Settings.About.Update.group_title").to_string(),
-                t!("Settings.About.Update.check_now").to_string(),
-                t!("Settings.About.Update.check_now_desc").to_string(),
-            ]),
-        ])
+        .items(items)
 }
 
 fn render_manual_update_check_item(
@@ -3708,9 +3724,8 @@ mod tests {
         merge_font_options_with_custom_fonts, monospace_font_options, parse_font_families,
         personal_sync_backend_options, personal_sync_status_label, personal_sync_status_view_model,
     };
-    use crate::local_terminal_profiles::setting_options as local_terminal_profile_options;
     use crate::personal_sync_status::PersonalSyncRuntimeStatus;
-    use one_core::settings::{LocalTerminalProfileKind, MasterKeyStorage};
+    use one_core::settings::MasterKeyStorage;
     use std::path::Path;
 
     /// `include_str!` 的源码契约必须先截掉测试模块本身，否则断言会命中测试自己写的字面量。
@@ -4042,6 +4057,21 @@ mod tests {
         assert!(source.contains("cx.observe(&update_check_state"));
     }
 
+    /// 关于页的「更新」分组必须挂上通道下拉；预发布构建还要挂「退出测试」提示。
+    #[test]
+    fn about_update_group_exposes_the_update_channel_switch() {
+        let group = method_source(implementation_source(), "fn about_update_setting_group(");
+
+        assert!(
+            group.contains("update_channel_item()"),
+            "更新分组缺少通道下拉入口"
+        );
+        assert!(
+            group.contains("beta_exit_notice_item()"),
+            "更新分组缺少预发布构建的退出测试提示"
+        );
+    }
+
     #[test]
     fn global_proxy_settings_build_proxy_url_without_auth() {
         let settings = GlobalProxySettings {
@@ -4100,37 +4130,6 @@ mod tests {
         assert_eq!(&["cmd-alt-t"], entry.keys_macos);
         assert_eq!(&["alt-t"], entry.keys_other);
         assert_eq!("Settings.Shortcuts.open_local_terminal", entry.label_key);
-    }
-
-    #[test]
-    fn windows_local_terminal_options_include_wsl_git_bash_and_custom() {
-        let options = local_terminal_profile_options(true)
-            .into_iter()
-            .map(|(value, _)| LocalTerminalProfileKind::parse(value.as_ref()))
-            .collect::<Vec<_>>();
-
-        assert!(options.contains(&LocalTerminalProfileKind::System));
-        assert!(options.contains(&LocalTerminalProfileKind::PowerShell));
-        assert!(options.contains(&LocalTerminalProfileKind::Cmd));
-        assert!(options.contains(&LocalTerminalProfileKind::Wsl));
-        assert!(options.contains(&LocalTerminalProfileKind::GitBash));
-        assert!(options.contains(&LocalTerminalProfileKind::Custom));
-    }
-
-    #[test]
-    fn unix_local_terminal_options_include_common_shells() {
-        let options = local_terminal_profile_options(false)
-            .into_iter()
-            .map(|(value, _)| LocalTerminalProfileKind::parse(value.as_ref()))
-            .collect::<Vec<_>>();
-
-        assert!(options.contains(&LocalTerminalProfileKind::System));
-        assert!(options.contains(&LocalTerminalProfileKind::Zsh));
-        assert!(options.contains(&LocalTerminalProfileKind::Bash));
-        assert!(options.contains(&LocalTerminalProfileKind::Fish));
-        assert!(options.contains(&LocalTerminalProfileKind::Nushell));
-        assert!(options.contains(&LocalTerminalProfileKind::Custom));
-        assert!(!options.contains(&LocalTerminalProfileKind::Wsl));
     }
 
     #[test]
@@ -4542,20 +4541,29 @@ fn render_about_section(cx: &App) -> gpui::AnyElement {
         })
         .collect();
 
+    // 版本信息：预发布构建挂个标签，用户一眼能看出自己装的是测试版。
+    let mut version_row = h_flex()
+        .gap_2()
+        .items_center()
+        .child(
+            div()
+                .text_sm()
+                .child(format!("{}: {}", t!("Settings.About.version"), version)),
+        );
+    if version.contains('-') {
+        version_row = version_row.child(
+            tag::Tag::warning()
+                .small()
+                .rounded_full()
+                .child(t!("Settings.About.Update.channel_beta").to_string()),
+        );
+    }
+
     v_flex()
         .gap_4()
         .p_4()
         // 版本信息
-        .child(
-            h_flex()
-                .gap_2()
-                .items_center()
-                .child(div().text_sm().child(format!(
-                    "{}: {}",
-                    t!("Settings.About.version"),
-                    version
-                ))),
-        )
+        .child(version_row)
         // GitHub 开源地址
         .child(
             h_flex()

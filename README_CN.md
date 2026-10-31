@@ -161,7 +161,7 @@ Navop 使用 Rust 2024 edition，并需要安装各平台的系统依赖。
 ./script/bootstrap
 
 # 运行应用
-cargo run -p main
+cargo run -p navop
 ```
 
 Windows 请在 PowerShell 中安装依赖：

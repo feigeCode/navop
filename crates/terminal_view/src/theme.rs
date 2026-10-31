@@ -27,9 +27,9 @@ use rust_i18n::t;
 /// 使用当前应用主题生成终端配色。
 pub const APPLICATION_THEME_NAME: &str = DEFAULT_TERMINAL_THEME;
 /// 最小字体大小
-pub const MIN_FONT_SIZE: f32 = 8.0;
+pub const MIN_FONT_SIZE: f32 = one_ui::MIN_FONT_SIZE;
 /// 最大字体大小
-pub const MAX_FONT_SIZE: f32 = 32.0;
+pub const MAX_FONT_SIZE: f32 = one_ui::MAX_FONT_SIZE;
 /// 默认行高比例
 pub const DEFAULT_LINE_HEIGHT_SCALE: f32 = 1.4;
 const TERMINAL_CELL_WIDTH_RATIO: f32 = 0.6;
@@ -556,46 +556,7 @@ impl TerminalTheme {
 
 /// 获取可用的等宽字体列表（按操作系统优化排序）。
 pub fn available_monospace_fonts() -> Vec<&'static str> {
-    if cfg!(target_os = "macos") {
-        vec![
-            "Menlo",
-            "Monaco",
-            "SF Mono",
-            "Courier New",
-            "Fira Code",
-            "JetBrains Mono",
-            "Source Code Pro",
-            "Cascadia Code",
-            "Hack",
-            "IBM Plex Mono",
-        ]
-    } else if cfg!(target_os = "windows") {
-        vec![
-            "Consolas",
-            "Cascadia Mono",
-            "Cascadia Code",
-            "Courier New",
-            "Lucida Console",
-            "Fira Code",
-            "JetBrains Mono",
-            "Source Code Pro",
-            "Hack",
-            "IBM Plex Mono",
-        ]
-    } else {
-        vec![
-            "DejaVu Sans Mono",
-            "Ubuntu Mono",
-            "Liberation Mono",
-            "Courier New",
-            "Fira Code",
-            "JetBrains Mono",
-            "Source Code Pro",
-            "Cascadia Code",
-            "Hack",
-            "IBM Plex Mono",
-        ]
-    }
+    one_ui::available_monospace_fonts()
 }
 
 #[cfg(test)]

@@ -379,11 +379,7 @@ mod tests {
     #[test]
     fn secondary_windows_never_destroy_themselves() {
         // include_str! 用的是相对于本文件的路径，所以从 crates/core/src 往上退三级。
-        let sources: [(&str, &str); 15] = [
-            (
-                "main/src/new_connection/connection_window.rs",
-                include_str!("../../../main/src/new_connection/connection_window.rs"),
-            ),
+        let sources: [(&str, &str); 14] = [
             (
                 "main/src/credential_vault/form_window.rs",
                 include_str!("../../../main/src/credential_vault/form_window.rs"),
@@ -415,8 +411,8 @@ mod tests {
                 ),
             ),
             (
-                "crates/terminal_view/src/ssh_form_window.rs",
-                include_str!("../../../crates/terminal_view/src/ssh_form_window.rs"),
+                "crates/ssh_form/src/ssh_form_window.rs",
+                include_str!("../../../crates/ssh_form/src/ssh_form_window.rs"),
             ),
             (
                 "crates/terminal_view/src/ftp_form_window.rs",
@@ -521,8 +517,8 @@ mod tests {
                 include_str!("../../../crates/terminal_view/src/serial_form_window.rs"),
             ),
             (
-                "crates/terminal_view/src/ssh_form_window.rs",
-                include_str!("../../../crates/terminal_view/src/ssh_form_window.rs"),
+                "crates/ssh_form/src/ssh_form_window.rs",
+                include_str!("../../../crates/ssh_form/src/ssh_form_window.rs"),
             ),
             (
                 "crates/terminal_view/src/telnet_form_window.rs",
@@ -603,8 +599,8 @@ mod tests {
                 "fn mark_saved(&mut self, saved: &StoredConnection",
             ),
             (
-                "crates/terminal_view/src/ssh_form_window.rs",
-                include_str!("../../../crates/terminal_view/src/ssh_form_window.rs"),
+                "crates/ssh_form/src/ssh_form_window.rs",
+                include_str!("../../../crates/ssh_form/src/ssh_form_window.rs"),
                 "fn mark_saved(&mut self, saved: &StoredConnection",
             ),
             (

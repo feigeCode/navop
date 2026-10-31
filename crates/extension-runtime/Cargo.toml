@@ -8,9 +8,9 @@ publish.workspace = true
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 connection-import-protocol = { workspace = true }
-db = { workspace = true }
-db-value = { workspace = true }
-db_view = { workspace = true }
+db = { workspace = true, optional = true }
+db-value = { workspace = true, optional = true }
+db_view = { workspace = true, optional = true }
 extension-component = { workspace = true }
 extension-protocol = { workspace = true }
 extension-wasm = { workspace = true, optional = true }
@@ -21,7 +21,7 @@ gpui = { workspace = true }
 gpui-component = { workspace = true, features = ["tree-sitter"] }
 html-preview.workspace = true
 one-core = { workspace = true }
-remote_desktop = { workspace = true }
+remote_desktop = { workspace = true, optional = true }
 rust-i18n = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
@@ -40,9 +40,11 @@ tempfile = "3"
 security-framework = { workspace = true }
 
 [features]
-default = ["wasm-components"]
+default = ["wasm-components", "database", "remote-desktop"]
 github-marketplace = []
 wasm-components = ["dep:extension-wasm"]
+database = ["dep:db", "dep:db-value", "dep:db_view"]
+remote-desktop = ["dep:remote_desktop"]
 
 [lints]
 workspace = true
