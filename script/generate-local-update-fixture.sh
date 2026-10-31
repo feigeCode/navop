@@ -107,6 +107,6 @@ echo "  Package:  ${PACKAGE_PATH}"
 echo "  SHA256:   ${SHA256}"
 echo
 echo "启动 Navop："
-printf '  NAVOP_UPDATE_URL=%q cargo run -p main\n' "${MANIFEST_PATH}"
+printf '  NAVOP_UPDATE_URL=%q cargo run -p navop\n' "${MANIFEST_PATH}"
 echo
 echo "然后打开：设置 → 更新 → 检查更新"

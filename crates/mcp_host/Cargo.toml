@@ -1,0 +1,15 @@
+[package]
+name = "mcp_host"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+domain_api.workspace = true
+gpui.workspace = true
+one-core.workspace = true
+mcp_approval.workspace = true
+public_mcp.workspace = true
+tool_runtime.workspace = true
+tracing.workspace = true

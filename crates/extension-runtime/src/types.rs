@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+#[cfg(feature = "database")]
 use db_view::extension_menu::DbTreeExtensionMenuItem;
 use one_core::{
     command_registry::{CommandDescriptor, CommandHandler, CommandRegistryError},
@@ -56,6 +57,7 @@ pub struct RegisteredKeybindingContribution {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(feature = "database")]
 pub(super) struct RegisteredDbTreeMenuContribution {
     pub position: String,
     pub item: DbTreeExtensionMenuItem,
@@ -114,6 +116,7 @@ pub struct RegisteredIpcRuntimeBinding {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(not(feature = "database"), allow(dead_code))]
 pub struct WasmRuntimeBinding {
     #[cfg(feature = "wasm-components")]
     pub extension_id: String,

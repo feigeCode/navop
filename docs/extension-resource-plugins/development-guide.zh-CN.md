@@ -872,7 +872,7 @@ cargo test -p elasticsearch-provider --test end_to_end -- --test-threads=1
 ```bash
 cargo test -p extension-runtime
 cargo test -p main
-cargo run -p main
+cargo run -p navop
 ```
 
 扩展仓库脚本测试：
@@ -914,7 +914,7 @@ NAVOP_COMPOSITE_EXTENSION_DIR=/tmp/navop-extensions \
 安装后启动 Navop：
 
 ```bash
-cargo run -p main
+cargo run -p navop
 ```
 
 ## 16. 手工打包

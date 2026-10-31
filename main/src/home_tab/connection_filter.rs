@@ -321,6 +321,11 @@ mod tests {
 
 /// Stateless predicate: home and tree must each supply their own selection.
 pub(crate) fn match_connection_type(filter: &ConnectionFilter, conn: &StoredConnection) -> bool {
+    // 独立产品只显示自己领域支持的连接类型：`navop-shell` 不列数据库，
+    // `navop-data` 不列终端/远程桌面。判断来自领域注册表（见 `crate::product`）。
+    if !crate::product::connection_type_supported(conn.connection_type) {
+        return false;
+    }
     match filter {
         ConnectionFilter::All => true,
         ConnectionFilter::Builtin(kind) => {

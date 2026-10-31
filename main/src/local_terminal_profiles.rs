@@ -1,4 +1,3 @@
-use gpui::SharedString;
 use one_core::settings::{
     LocalTerminalCustomProfile, LocalTerminalProfileKind, LocalTerminalProfileSettings,
 };
@@ -67,13 +66,6 @@ pub(crate) fn label(kind: LocalTerminalProfileKind) -> String {
         }
         LocalTerminalProfileKind::Custom => t!("Settings.General.LocalTerminal.custom").to_string(),
     }
-}
-
-pub(crate) fn setting_options(include_windows: bool) -> Vec<(SharedString, SharedString)> {
-    kinds(include_windows)
-        .into_iter()
-        .map(|kind| (kind.as_str().into(), label(kind).into()))
-        .collect()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -1,5 +1,5 @@
 [workspace]
-default-members = ["main"]
+default-members = ["apps/navop"]
 members = [
     "crates/ai_chat_view",
     "crates/llm-connector",
@@ -19,6 +19,13 @@ members = [
     "crates/extension-component",
     "crates/extension-wasm",
     "crates/tool_runtime",
+    "crates/domain_api",
+    "crates/mcp_host",
+    "crates/mcp_approval",
+    "crates/app_kit",
+    "crates/data_domain",
+    "crates/shell_domain",
+    "crates/ssh_form",
     "crates/universal-plugins",
     "crates/navop_runtime",
     "crates/er_flow",
@@ -43,7 +50,31 @@ members = [
     "crates/one-assets",
     "tools/gpui-rdp-smoke",
     "tools/windows-rdp-probe",
-    "main", "crates/ssh", "crates/x11_forwarding", "crates/sftp", "crates/ftp", "crates/sftp_transfer", "crates/sftp_view", "crates/one_ui", "crates/redis-runtime", "crates/mongodb-runtime", "crates/redis_view", "crates/license_tool", "crates/mongodb_view", "crates/remote_file_editor", "crates/remote_image_preview", "crates/resource_view", "crates/embedded_terminal"]
+    "main",
+    "apps/navop",
+    "apps/navop-shell",
+    "apps/navop-data",
+    "crates/ssh",
+    "crates/x11_forwarding",
+    "crates/sftp",
+    "crates/ftp",
+    "crates/sftp_transfer",
+    "crates/sftp_view",
+    "crates/one_ui",
+    "crates/redis-runtime",
+    "crates/runtime_core",
+    "crates/runtime_database",
+    "crates/runtime_redis",
+    "crates/runtime_sftp",
+    "crates/mongodb-runtime",
+    "crates/redis_view",
+    "crates/license_tool",
+    "crates/mongodb_view",
+    "crates/remote_file_editor",
+    "crates/remote_image_preview",
+    "crates/resource_view",
+    "crates/embedded_terminal",
+]
 resolver = "2"
 
 [workspace.package]
@@ -131,6 +162,10 @@ connection-import-protocol = { path = "crates/connection-import-protocol" }
 db_view = { path = "crates/db_view" }
 redis_view = { path = "crates/redis_view" }
 redis-runtime = { path = "crates/redis-runtime" }
+runtime_core = { path = "crates/runtime_core" }
+runtime_database = { path = "crates/runtime_database" }
+runtime_redis = { path = "crates/runtime_redis" }
+runtime_sftp = { path = "crates/runtime_sftp" }
 mongodb-runtime = { path = "crates/mongodb-runtime" }
 one-ui = { path = "crates/one_ui" }
 one-assets = { path = "crates/one-assets" }
@@ -152,8 +187,15 @@ remote_desktop_view = { path = "crates/remote_desktop_view" }
 windows_rdp_host = { path = "crates/windows_rdp_host" }
 sftp_view = { path = "crates/sftp_view" }
 one-core = { path = "crates/core" }
+domain_api = { path = "crates/domain_api" }
+mcp_host = { path = "crates/mcp_host" }
+mcp_approval = { path = "crates/mcp_approval" }
+app_kit = { path = "crates/app_kit" }
+data_domain = { path = "crates/data_domain" }
+shell_domain = { path = "crates/shell_domain" }
+ssh_form = { path = "crates/ssh_form" }
 mongodb_view = {path = "crates/mongodb_view"}
-navop_runtime = { path = "crates/navop_runtime" }
+navop_runtime = { path = "crates/navop_runtime", default-features = false }
 remote_file_editor = { path = "crates/remote_file_editor" }
 remote_image_preview = { path = "crates/remote_image_preview" }
 notes = { path = "crates/notes" }

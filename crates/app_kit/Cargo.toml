@@ -1,0 +1,57 @@
+[package]
+name = "app_kit"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[features]
+# 由主产品转发：启用 GitHub Releases 作为更新源（历史行为），独立产品默认只用自建 feed。
+github-updates = []
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+domain_api.workspace = true
+flate2 = "1"
+futures.workspace = true
+gpui-component.workspace = true
+gpui.workspace = true
+image.workspace = true
+mcp_host.workspace = true
+one-core.workspace = true
+public_mcp.workspace = true
+rusqlite.workspace = true
+rust-i18n.workspace = true
+semver.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+smol.workspace = true
+tar = "0.4"
+tokio = { workspace = true, features = ["io-util", "net"] }
+tracing.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+# 系统托盘：macOS/Windows 用原生后端，Linux 只启用 ksni（freedesktop StatusNotifierItem），
+# 避免把 GTK 事件循环和 libappindicator/libxdo 带进 Linux 构建。
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+tray-icon = { version = "0.25", default-features = false }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+tray-icon = { version = "0.25", default-features = false, features = ["ksni"] }
+x11rb = "0.13"
+
+# Windows 单实例与自更新安装：沿用全量产品的实现（tokio 异步 I/O、zip 解包、Shell 通知）。
+[target.'cfg(target_os = "windows")'.dependencies]
+tokio = { workspace = true, features = ["io-util", "net"] }
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Security_Credentials",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+zip = { version = "2", default-features = false, features = ["deflate"] }

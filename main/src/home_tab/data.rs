@@ -27,28 +27,6 @@ impl HomePage {
         .detach();
     }
 
-    /// 后台识别已安装的 WSL 发行版，供本地终端下拉菜单展示（feigeCode/navop#182）。
-    #[cfg(target_os = "windows")]
-    pub(super) fn load_wsl_distributions(&mut self, cx: &mut Context<Self>) {
-        let detect_task = cx.background_spawn(async move { terminal::list_wsl_distributions() });
-
-        cx.spawn(async move |this, cx: &mut AsyncApp| {
-            let distributions = match detect_task.await {
-                Ok(distributions) => distributions,
-                // 未安装 WSL、未启用 WSL 功能或没有发行版时识别失败属预期，按空列表处理。
-                Err(error) => {
-                    tracing::info!("WSL 发行版识别失败: {error}");
-                    Vec::new()
-                }
-            };
-            _ = this.update(cx, |this, cx| {
-                this.wsl_distributions = Some(Arc::new(distributions));
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
     pub(super) fn load_connections(&mut self, cx: &mut Context<Self>) {
         if self.saved_connections_locked() {
             tracing::warn!("主密钥未解锁，暂缓加载本地连接，避免将加密密码解密为空");
@@ -63,17 +41,16 @@ impl HomePage {
                 let repo = storage
                     .get::<ConnectionRepository>()
                     .ok_or_else(|| anyhow::anyhow!("ConnectionRepository not found"))?;
-                Ok::<_, anyhow::Error>((repo.list()?, IpcDriverRegistry::load_default()))
+                Ok::<_, anyhow::Error>((repo.list()?, ()))
             })()
         });
 
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             let result = load_task.await;
             match result {
-                Ok((connections, external_driver_registry)) => {
+                Ok((connections, ())) => {
                     _ = this.update(cx, |this, cx| {
                         this.connections = connections;
-                        this.external_driver_registry = external_driver_registry;
                         this.prune_connection_selection();
                         cx.notify();
                     });

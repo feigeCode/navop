@@ -1,0 +1,84 @@
+<Wix
+  xmlns="http://wixtoolset.org/schemas/v4/wxs"
+  xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <Package
+    Name="$(var.ProductName)"
+    Manufacturer="feigeCode"
+    Version="$(var.Version)"
+    UpgradeCode="$(var.UpgradeCode)"
+    Language="1033"
+    Codepage="936"
+    InstallerVersion="500"
+    Scope="perUser">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of $(var.ProductName) is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="ProductIcon" SourceFile="$(var.IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="ProductIcon" />
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLROOT" />
+    <WixVariable
+      Id="WixUILicenseRtf"
+      Value="$(sys.SOURCEFILEDIR)navop-license.rtf" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="INSTALLROOT" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="$(var.InstallDirName)" />
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ApplicationProgramsFolder" Name="$(var.InstallDirName)" />
+    </StandardDirectory>
+
+    <StandardDirectory Id="DesktopFolder" />
+
+    <Feature Id="ProductFeature" Title="$(var.ProductName)" Level="1">
+      <ComponentGroupRef Id="ProductComponents" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
+      <Component Id="ApplicationExecutable" Guid="*">
+        <File Id="ProductExecutable" Source="$(var.SourceDir)\$(var.ExeName)" KeyPath="yes" />
+      </Component>
+
+      <Component Id="StartMenuShortcutComponent" Directory="ApplicationProgramsFolder" Guid="*">
+        <Shortcut
+          Id="StartMenuShortcut"
+          Name="$(var.ProductName)"
+          Description="$(var.ProductDescription)"
+          Target="[#ProductExecutable]"
+          WorkingDirectory="INSTALLFOLDER"
+          Advertise="no" />
+        <RemoveFolder Id="RemoveApplicationProgramsFolder" Directory="ApplicationProgramsFolder" On="uninstall" />
+        <RegistryValue
+          Id="StartMenuShortcutRegistry"
+          Root="HKCU"
+          Key="Software\$(var.RegistryKey)"
+          Name="StartMenuShortcutInstalled"
+          Type="integer"
+          Value="1"
+          KeyPath="yes" />
+      </Component>
+
+      <Component Id="DesktopShortcutComponent" Directory="DesktopFolder" Guid="*">
+        <Shortcut
+          Id="DesktopShortcut"
+          Name="$(var.ProductName)"
+          Description="$(var.ProductDescription)"
+          Target="[#ProductExecutable]"
+          WorkingDirectory="INSTALLFOLDER"
+          Advertise="no" />
+        <RegistryValue
+          Id="DesktopShortcutRegistry"
+          Root="HKCU"
+          Key="Software\$(var.RegistryKey)"
+          Name="DesktopShortcutInstalled"
+          Type="integer"
+          Value="1"
+          KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>

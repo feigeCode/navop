@@ -554,6 +554,9 @@ pub struct McpSettings {
     pub permission_mode: McpPermissionMode,
     #[serde(default = "default_mcp_approval_timeout_ms")]
     pub approval_timeout_ms: u64,
+    /// 独立产品首次启动时是否已经把本产品的核心工具集写入设置。
+    #[serde(default)]
+    pub toolsets_initialized: bool,
     #[serde(default, rename = "toolsets", skip_serializing)]
     pub legacy_toolsets: Option<ToolExposureToolsetSettings>,
 }
@@ -574,6 +577,7 @@ impl Default for McpSettings {
             server_mode: McpServerMode::Temporary,
             permission_mode: McpPermissionMode::Deny,
             approval_timeout_ms: default_mcp_approval_timeout_ms(),
+            toolsets_initialized: false,
             legacy_toolsets: None,
         }
     }

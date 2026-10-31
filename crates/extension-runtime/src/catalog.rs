@@ -6,6 +6,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 
+#[cfg(feature = "database")]
 use db_view::extension_menu::DbTreeExtensionMenuRegistry;
 use one_core::{
     command_registry::{CommandHandler, CommandRegistry},
@@ -16,7 +17,7 @@ use crate::extension::manifest::{Manifest, WasmRuntimeKind};
 
 use super::registration::load_installed_composite_manifests;
 use super::types::{
-    ExtensionRuntimeError, RegisteredDbTreeMenuContribution, RegisteredDocumentExporter,
+    ExtensionRuntimeError, RegisteredDocumentExporter,
     RegisteredDocumentRenderer, RegisteredHtmlPreviewTransform, RegisteredIpcRuntimeBinding,
     RegisteredKeybindingContribution, RegisteredRemoteFileEditorContribution,
     RegisteredResourceConnectionContribution, RegisteredResourceWorkbenchContribution,
@@ -30,7 +31,8 @@ pub struct ExtensionRuntimeCatalog {
     pub(super) commands: CommandRegistry,
     pub(super) wasm_runtimes: BTreeMap<String, WasmRuntimeBinding>,
     pub(super) ipc_runtimes: BTreeMap<String, RegisteredIpcRuntimeBinding>,
-    pub(super) db_tree_menus: Vec<RegisteredDbTreeMenuContribution>,
+    #[cfg(feature = "database")]
+    pub(super) db_tree_menus: Vec<crate::types::RegisteredDbTreeMenuContribution>,
     pub(super) toolbar_slots: SlotRegistry,
     pub(super) menu_slots: SlotRegistry,
     pub(super) keybindings: Vec<RegisteredKeybindingContribution>,
@@ -70,6 +72,7 @@ impl ExtensionRuntimeCatalog {
             commands: CommandRegistry::new(),
             wasm_runtimes: BTreeMap::new(),
             ipc_runtimes: BTreeMap::new(),
+            #[cfg(feature = "database")]
             db_tree_menus: Vec::new(),
             toolbar_slots: SlotRegistry::default(),
             menu_slots: SlotRegistry::default(),
@@ -124,6 +127,7 @@ impl ExtensionRuntimeCatalog {
         Ok(ExtensionRuntimeCatalogLoadReport { catalog, loaded })
     }
 
+    #[cfg(feature = "database")]
     pub fn db_tree_menu_registry(&self) -> DbTreeExtensionMenuRegistry {
         let mut registry = DbTreeExtensionMenuRegistry::default();
         for menu in &self.db_tree_menus {

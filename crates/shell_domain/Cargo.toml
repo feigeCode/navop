@@ -1,0 +1,44 @@
+[package]
+name = "shell_domain"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+tool_runtime.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+gpui-component.workspace = true
+one-assets.workspace = true
+rust-i18n.workspace = true
+smol.workspace = true
+app_kit.workspace = true
+ai_chat_view.workspace = true
+domain_api.workspace = true
+gpui.workspace = true
+known_hosts_view.workspace = true
+mcp_host.workspace = true
+navop_runtime = { path = "../navop_runtime", default-features = false, features = ["sftp"] }
+public_mcp.workspace = true
+runtime_sftp.workspace = true
+one-core.workspace = true
+port_forwarding_view.workspace = true
+remote_desktop.workspace = true
+remote_desktop_view.workspace = true
+resource_view.workspace = true
+sftp_view.workspace = true
+terminal.workspace = true
+terminal_view.workspace = true
+ssh.workspace = true
+ssh_form.workspace = true
+tracing.workspace = true
+sha2.workspace = true
+zeroize.workspace = true
+tokio = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# MSTSC 临时凭据写入 Windows 凭据管理器（`remote_desktop_window`）。
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Security_Credentials"] }

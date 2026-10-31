@@ -1,6 +1,7 @@
 //! Redis 连接实现
 
 use crate::builtin_pubsub as redis_pubsub;
+use crate::key_codec;
 use crate::types::*;
 use crate::{RedisConnection, RedisPubSubHandle};
 use async_trait::async_trait;
@@ -694,8 +695,9 @@ impl RedisConnectionImpl {
         conn: &mut ConnectionManager,
         key: &str,
     ) -> Result<RedisKeyType, RedisError> {
+        let key = key_codec::decode(key);
         let type_str: String = redis_client::cmd("TYPE")
-            .arg(key)
+            .arg(key.as_ref())
             .query_async(&mut *conn)
             .await
             .map_err(|e| {
@@ -713,7 +715,7 @@ impl RedisConnectionImpl {
     ) -> RedisResult<Vec<String>> {
         let mut pipe = redis_client::pipe();
         for key in keys {
-            pipe.cmd("TYPE").arg(key);
+            pipe.cmd("TYPE").arg(key_codec::decode(key).as_ref());
         }
 
         pipe.query_async(conn).await
@@ -721,7 +723,7 @@ impl RedisConnectionImpl {
 
     async fn ttl_with_conn(conn: &mut ConnectionManager, key: &str) -> Result<i64, RedisError> {
         redis_client::cmd("TTL")
-            .arg(key)
+            .arg(key_codec::decode(key).as_ref())
             .query_async(&mut *conn)
             .await
             .map_err(|e| {
@@ -747,7 +749,7 @@ impl RedisConnectionImpl {
             RedisKeyType::None => return None,
         };
         redis_client::cmd(command)
-            .arg(key)
+            .arg(key_codec::decode(key).as_ref())
             .query_async::<i64>(&mut *conn)
             .await
             .ok()
@@ -778,12 +780,13 @@ impl RedisConnectionImpl {
         conn: &mut ConnectionManager,
         key: &str,
     ) -> Result<(Vec<Vec<u8>>, bool), RedisError> {
+        let key = key_codec::decode(key);
         let mut cursor: u64 = 0;
         let mut members: Vec<Vec<u8>> = Vec::new();
         let mut budget = CollectionBudget::new();
         loop {
             let (next, batch): (u64, Vec<Vec<u8>>) = redis_client::cmd("SSCAN")
-                .arg(key)
+                .arg(key.as_ref())
                 .arg(cursor)
                 .arg("COUNT")
                 .arg(200)
@@ -812,12 +815,13 @@ impl RedisConnectionImpl {
         conn: &mut ConnectionManager,
         key: &str,
     ) -> Result<(Vec<HashField>, bool), RedisError> {
+        let key = key_codec::decode(key);
         let mut cursor: u64 = 0;
         let mut fields: Vec<HashField> = Vec::new();
         let mut budget = CollectionBudget::new();
         loop {
             let (next, batch): (u64, Vec<(Vec<u8>, Vec<u8>)>) = redis_client::cmd("HSCAN")
-                .arg(key)
+                .arg(key.as_ref())
                 .arg(cursor)
                 .arg("COUNT")
                 .arg(200)
@@ -847,6 +851,7 @@ impl RedisConnectionImpl {
         conn: &mut ConnectionManager,
         key: &str,
     ) -> Result<(Vec<ZSetMember>, bool), RedisError> {
+        let key = key_codec::decode(key);
         const BATCH: i64 = 200;
         let mut members: Vec<ZSetMember> = Vec::new();
         let mut budget = CollectionBudget::new();
@@ -854,7 +859,7 @@ impl RedisConnectionImpl {
         loop {
             let stop = start + BATCH - 1;
             let batch: Vec<(Vec<u8>, f64)> = conn
-                .zrange_withscores(key, start as isize, stop as isize)
+                .zrange_withscores(key.as_ref(), start as isize, stop as isize)
                 .await
                 .map_err(|e| {
                     RedisError::command_with_source(
@@ -883,6 +888,7 @@ impl RedisConnectionImpl {
         conn: &mut ConnectionManager,
         key: &str,
     ) -> Result<(Vec<Vec<u8>>, bool), RedisError> {
+        let key = key_codec::decode(key);
         const BATCH: i64 = 200;
         let mut items: Vec<Vec<u8>> = Vec::new();
         let mut budget = CollectionBudget::new();
@@ -890,7 +896,7 @@ impl RedisConnectionImpl {
         loop {
             let stop = start + BATCH - 1;
             let batch: Vec<Vec<u8>> = conn
-                .lrange(key, start as isize, stop as isize)
+                .lrange(key.as_ref(), start as isize, stop as isize)
                 .await
                 .map_err(|e| {
                     RedisError::command_with_source(
@@ -920,7 +926,7 @@ impl RedisConnectionImpl {
         key: &str,
     ) -> Result<(Vec<StreamEntry>, bool), RedisError> {
         let result: Vec<(String, Vec<(Vec<u8>, Vec<u8>)>)> = redis_client::cmd("XRANGE")
-            .arg(key)
+            .arg(key_codec::decode(key).as_ref())
             .arg("-")
             .arg("+")
             .arg("COUNT")
@@ -960,9 +966,10 @@ impl RedisConnectionImpl {
         key_info: &KeyInfo,
     ) -> Result<(KeyValueContent, bool), RedisError> {
         let total = key_info.size.unwrap_or(0).max(0) as usize;
+        let key = key_codec::decode(key);
         if total > MAX_COLLECTION_BYTES {
             let last = (MAX_COLLECTION_BYTES - 1) as isize;
-            let value: Vec<u8> = conn.getrange(key, 0, last).await.map_err(|e| {
+            let value: Vec<u8> = conn.getrange(key.as_ref(), 0, last).await.map_err(|e| {
                 RedisError::command_with_source(
                     t!("RedisConnection.command_failed", command = "GETRANGE").to_string(),
                     e,
@@ -972,7 +979,7 @@ impl RedisConnectionImpl {
         }
 
         let value: Option<Vec<u8>> = redis_client::cmd("GET")
-            .arg(key)
+            .arg(key.as_ref())
             .query_async(&mut *conn)
             .await
             .map_err(|e| {
@@ -1074,7 +1081,7 @@ impl RedisConnection for RedisConnectionImpl {
 
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, RedisError> {
         let mut conn = self.get_conn().await?;
-        let result: RedisResult<Option<Vec<u8>>> = conn.get(key).await;
+        let result: RedisResult<Option<Vec<u8>>> = conn.get(key_codec::decode(key).as_ref()).await;
         result.map_err(|e| {
             RedisError::command_with_source(
                 t!("RedisConnection.command_failed", command = "GET").to_string(),
@@ -1094,7 +1101,7 @@ impl RedisConnection for RedisConnectionImpl {
         value: &str,
         ttl: Option<i64>,
     ) -> Result<(), RedisError> {
-        let key = key.to_string();
+        let key = key_codec::decode(key).into_owned();
         let value = value.to_string();
         self.with_moved_retry(db, move |conn| {
             let (key, value) = (key.clone(), value.clone());
@@ -1124,6 +1131,12 @@ impl RedisConnection for RedisConnectionImpl {
     }
 
     async fn del_in_db(&self, db: u8, keys: &[&str]) -> Result<i64, RedisError> {
+        // 键按二进制安全表示还原成真实字节（见 key_codec），普通文本键恒等。
+        let decoded_keys: Vec<Vec<u8>> = keys
+            .iter()
+            .map(|key| key_codec::decode(key).into_owned())
+            .collect();
+        let keys: Vec<&[u8]> = decoded_keys.iter().map(Vec::as_slice).collect();
         // 集群模式：DEL 须发到键所属 master；对不存在键 DEL 无副作用，
         // 逐 master 发整批累加即可。
         if self.cluster_fanout_enabled() && !keys.is_empty() {
@@ -1132,7 +1145,7 @@ impl RedisConnection for RedisConnectionImpl {
             for (host, port) in masters {
                 let (_, mut conn) =
                     Self::open_connection_for_endpoint(&self.config, db, &host, port).await?;
-                let n: i64 = conn.del(keys).await.map_err(|e| {
+                let n: i64 = conn.del(&keys).await.map_err(|e| {
                     RedisError::command_with_source(
                         t!("RedisConnection.command_failed", command = "DEL").to_string(),
                         e,
@@ -1144,7 +1157,7 @@ impl RedisConnection for RedisConnectionImpl {
         }
 
         let mut conn = self.get_db_conn(db).await?;
-        conn.del(keys).await.map_err(|e| {
+        conn.del(&keys).await.map_err(|e| {
             RedisError::command_with_source(
                 t!("RedisConnection.command_failed", command = "DEL").to_string(),
                 e,
@@ -1154,23 +1167,28 @@ impl RedisConnection for RedisConnectionImpl {
 
     async fn exists(&self, key: &str) -> Result<bool, RedisError> {
         let mut conn = self.get_conn().await?;
-        let count: i64 = conn.exists(key).await.map_err(|e| {
-            RedisError::command_with_source(
-                t!("RedisConnection.command_failed", command = "EXISTS").to_string(),
-                e,
-            )
-        })?;
+        let count: i64 = conn
+            .exists(key_codec::decode(key).as_ref())
+            .await
+            .map_err(|e| {
+                RedisError::command_with_source(
+                    t!("RedisConnection.command_failed", command = "EXISTS").to_string(),
+                    e,
+                )
+            })?;
         Ok(count > 0)
     }
 
     async fn keys(&self, pattern: &str) -> Result<Vec<String>, RedisError> {
         let mut conn = self.get_conn().await?;
-        conn.keys(pattern).await.map_err(|e| {
+        // KEYS 同样可能返回二进制键，先按字节收下再编码成显示形态。
+        let keys: Vec<Vec<u8>> = conn.keys(pattern).await.map_err(|e| {
             RedisError::command_with_source(
                 t!("RedisConnection.command_failed", command = "KEYS").to_string(),
                 e,
             )
-        })
+        })?;
+        Ok(keys.iter().map(|key| key_codec::encode(key)).collect())
     }
 
     async fn scan(
@@ -1180,7 +1198,7 @@ impl RedisConnection for RedisConnectionImpl {
         count: usize,
     ) -> Result<ScanResult, RedisError> {
         let mut conn = self.get_conn().await?;
-        let (next_cursor, keys): (u64, Vec<String>) = redis_client::cmd("SCAN")
+        let reply: (u64, Vec<Vec<u8>>) = redis_client::cmd("SCAN")
             .arg(cursor)
             .arg("MATCH")
             .arg(pattern)
@@ -1194,7 +1212,7 @@ impl RedisConnection for RedisConnectionImpl {
                     e,
                 )
             })?;
-        Ok(ScanResult::new(next_cursor, keys))
+        Ok(scan_result_from_reply(reply))
     }
 
     async fn scan_in_db(
@@ -1211,13 +1229,13 @@ impl RedisConnection for RedisConnectionImpl {
         // 升级为每节点 cursor 集，调用方同步改造。
         if self.cluster_fanout_enabled() && cursor == 0 {
             let masters = self.cluster_master_endpoints().await?;
-            let mut all_keys = Vec::new();
+            let mut all_keys: Vec<Vec<u8>> = Vec::new();
             for (host, port) in masters {
                 let (_, mut conn) =
                     Self::open_connection_for_endpoint(&self.config, db, &host, port).await?;
                 let mut node_cursor = 0u64;
                 loop {
-                    let (next, keys): (u64, Vec<String>) = redis_client::cmd("SCAN")
+                    let (next, keys): (u64, Vec<Vec<u8>>) = redis_client::cmd("SCAN")
                         .arg(node_cursor)
                         .arg("MATCH")
                         .arg(pattern)
@@ -1240,12 +1258,15 @@ impl RedisConnection for RedisConnectionImpl {
             }
             all_keys.sort();
             all_keys.dedup();
-            return Ok(ScanResult::new(0, all_keys));
+            return Ok(ScanResult::new(
+                0,
+                all_keys.iter().map(|key| key_codec::encode(key)).collect(),
+            ));
         }
 
         let mut conn = self.get_db_conn(db).await?;
 
-        let (next_cursor, keys): (u64, Vec<String>) = redis_client::cmd("SCAN")
+        let reply: (u64, Vec<Vec<u8>>) = redis_client::cmd("SCAN")
             .arg(cursor)
             .arg("MATCH")
             .arg(pattern)
@@ -1260,7 +1281,7 @@ impl RedisConnection for RedisConnectionImpl {
                 )
             })?;
 
-        Ok(ScanResult::new(next_cursor, keys))
+        Ok(scan_result_from_reply(reply))
     }
 
     async fn key_type(&self, key: &str) -> Result<RedisKeyType, RedisError> {
@@ -1413,7 +1434,7 @@ impl RedisConnection for RedisConnectionImpl {
     }
 
     async fn expire_in_db(&self, db: u8, key: &str, seconds: i64) -> Result<bool, RedisError> {
-        let key = key.to_string();
+        let key = key_codec::decode(key).into_owned();
         self.with_moved_retry(db, move |conn| {
             let key = key.clone();
             Box::pin(async move {
@@ -1434,7 +1455,7 @@ impl RedisConnection for RedisConnectionImpl {
     }
 
     async fn persist_in_db(&self, db: u8, key: &str) -> Result<bool, RedisError> {
-        let key = key.to_string();
+        let key = key_codec::decode(key).into_owned();
         self.with_moved_retry(db, move |conn| {
             let key = key.clone();
             Box::pin(async move {
@@ -1456,8 +1477,9 @@ impl RedisConnection for RedisConnectionImpl {
     }
 
     async fn rename_in_db(&self, db: u8, old_key: &str, new_key: &str) -> Result<(), RedisError> {
-        let old_key = old_key.to_string();
-        let new_key = new_key.to_string();
+        // 旧键可能来自二进制键的转义显示形态；新键是用户在界面上输入的名字。
+        let old_key = key_codec::decode(old_key).into_owned();
+        let new_key = key_codec::decode(new_key).into_owned();
         self.with_moved_retry(db, move |conn| {
             let old_key = old_key.clone();
             let new_key = new_key.clone();
@@ -1485,7 +1507,7 @@ impl RedisConnection for RedisConnectionImpl {
         field: &str,
         value: &str,
     ) -> Result<(), RedisError> {
-        let key = key.to_string();
+        let key = key_codec::decode(key).into_owned();
         let field = field.to_string();
         let value = value.to_string();
         self.with_moved_retry(db, move |conn| {
@@ -1507,7 +1529,7 @@ impl RedisConnection for RedisConnectionImpl {
     }
 
     async fn hdel_in_db(&self, db: u8, key: &str, fields: &[&str]) -> Result<i64, RedisError> {
-        let key = key.to_string();
+        let key = key_codec::decode(key).into_owned();
         let fields: Vec<String> = fields.iter().map(|s| s.to_string()).collect();
         self.with_moved_retry(db, move |conn| {
             let key = key.clone();
@@ -1527,24 +1549,30 @@ impl RedisConnection for RedisConnectionImpl {
 
     async fn hlen(&self, key: &str) -> Result<i64, RedisError> {
         let mut conn = self.get_conn().await?;
-        conn.hlen(key).await.map_err(|e| {
-            RedisError::command_with_source(
-                t!("RedisConnection.command_failed", command = "HLEN").to_string(),
-                e,
-            )
-        })
+        conn.hlen(key_codec::decode(key).as_ref())
+            .await
+            .map_err(|e| {
+                RedisError::command_with_source(
+                    t!("RedisConnection.command_failed", command = "HLEN").to_string(),
+                    e,
+                )
+            })
     }
 
     async fn lrange(&self, key: &str, start: i64, stop: i64) -> Result<Vec<Vec<u8>>, RedisError> {
         let mut conn = self.get_conn().await?;
-        conn.lrange(key, start as isize, stop as isize)
-            .await
-            .map_err(|e| {
-                RedisError::command_with_source(
-                    t!("RedisConnection.command_failed", command = "LRANGE").to_string(),
-                    e,
-                )
-            })
+        conn.lrange(
+            key_codec::decode(key).as_ref(),
+            start as isize,
+            stop as isize,
+        )
+        .await
+        .map_err(|e| {
+            RedisError::command_with_source(
+                t!("RedisConnection.command_failed", command = "LRANGE").to_string(),
+                e,
+            )
+        })
     }
 
     async fn lpush(&self, key: &str, values: &[&str]) -> Result<i64, RedisError> {
@@ -1552,7 +1580,7 @@ impl RedisConnection for RedisConnectionImpl {
     }
 
     async fn lpush_in_db(&self, db: u8, key: &str, values: &[&str]) -> Result<i64, RedisError> {
-        let key = key.to_string();
+        let key = key_codec::decode(key).into_owned();
         let values: Vec<String> = values.iter().map(|s| s.to_string()).collect();
         self.with_moved_retry(db, move |conn| {
             let key = key.clone();
@@ -1575,7 +1603,7 @@ impl RedisConnection for RedisConnectionImpl {
     }
 
     async fn rpush_in_db(&self, db: u8, key: &str, values: &[&str]) -> Result<i64, RedisError> {
-        let key = key.to_string();
+        let key = key_codec::decode(key).into_owned();
         let values: Vec<String> = values.iter().map(|s| s.to_string()).collect();
         self.with_moved_retry(db, move |conn| {
             let key = key.clone();
@@ -1605,7 +1633,7 @@ impl RedisConnection for RedisConnectionImpl {
         index: i64,
         value: &str,
     ) -> Result<(), RedisError> {
-        let key = key.to_string();
+        let key = key_codec::decode(key).into_owned();
         let value = value.to_string();
         self.with_moved_retry(db, move |conn| {
             let (key, value) = (key.clone(), value.clone());
@@ -1623,12 +1651,14 @@ impl RedisConnection for RedisConnectionImpl {
 
     async fn llen(&self, key: &str) -> Result<i64, RedisError> {
         let mut conn = self.get_conn().await?;
-        conn.llen(key).await.map_err(|e| {
-            RedisError::command_with_source(
-                t!("RedisConnection.command_failed", command = "LLEN").to_string(),
-                e,
-            )
-        })
+        conn.llen(key_codec::decode(key).as_ref())
+            .await
+            .map_err(|e| {
+                RedisError::command_with_source(
+                    t!("RedisConnection.command_failed", command = "LLEN").to_string(),
+                    e,
+                )
+            })
     }
 
     async fn sadd(&self, key: &str, members: &[&str]) -> Result<i64, RedisError> {
@@ -1636,7 +1666,7 @@ impl RedisConnection for RedisConnectionImpl {
     }
 
     async fn sadd_in_db(&self, db: u8, key: &str, members: &[&str]) -> Result<i64, RedisError> {
-        let key = key.to_string();
+        let key = key_codec::decode(key).into_owned();
         let members: Vec<String> = members.iter().map(|s| s.to_string()).collect();
         self.with_moved_retry(db, move |conn| {
             let key = key.clone();
@@ -1659,7 +1689,7 @@ impl RedisConnection for RedisConnectionImpl {
     }
 
     async fn srem_in_db(&self, db: u8, key: &str, members: &[&str]) -> Result<i64, RedisError> {
-        let key = key.to_string();
+        let key = key_codec::decode(key).into_owned();
         let members: Vec<String> = members.iter().map(|s| s.to_string()).collect();
         self.with_moved_retry(db, move |conn| {
             let key = key.clone();
@@ -1679,12 +1709,14 @@ impl RedisConnection for RedisConnectionImpl {
 
     async fn scard(&self, key: &str) -> Result<i64, RedisError> {
         let mut conn = self.get_conn().await?;
-        conn.scard(key).await.map_err(|e| {
-            RedisError::command_with_source(
-                t!("RedisConnection.command_failed", command = "SCARD").to_string(),
-                e,
-            )
-        })
+        conn.scard(key_codec::decode(key).as_ref())
+            .await
+            .map_err(|e| {
+                RedisError::command_with_source(
+                    t!("RedisConnection.command_failed", command = "SCARD").to_string(),
+                    e,
+                )
+            })
     }
 
     async fn zrange_with_scores(
@@ -1695,7 +1727,11 @@ impl RedisConnection for RedisConnectionImpl {
     ) -> Result<Vec<ZSetMember>, RedisError> {
         let mut conn = self.get_conn().await?;
         let result: Vec<(Vec<u8>, f64)> = conn
-            .zrange_withscores(key, start as isize, stop as isize)
+            .zrange_withscores(
+                key_codec::decode(key).as_ref(),
+                start as isize,
+                stop as isize,
+            )
             .await
             .map_err(|e| {
                 RedisError::command_with_source(
@@ -1719,7 +1755,7 @@ impl RedisConnection for RedisConnectionImpl {
         key: &str,
         members: &[(f64, &str)],
     ) -> Result<i64, RedisError> {
-        let key = key.to_string();
+        let key = key_codec::decode(key).into_owned();
         let members: Vec<(f64, String)> =
             members.iter().map(|(s, m)| (*s, m.to_string())).collect();
         self.with_moved_retry(db, move |conn| {
@@ -1744,7 +1780,7 @@ impl RedisConnection for RedisConnectionImpl {
     }
 
     async fn zrem_in_db(&self, db: u8, key: &str, members: &[&str]) -> Result<i64, RedisError> {
-        let key = key.to_string();
+        let key = key_codec::decode(key).into_owned();
         let members: Vec<String> = members.iter().map(|s| s.to_string()).collect();
         self.with_moved_retry(db, move |conn| {
             let key = key.clone();
@@ -1764,12 +1800,14 @@ impl RedisConnection for RedisConnectionImpl {
 
     async fn zcard(&self, key: &str) -> Result<i64, RedisError> {
         let mut conn = self.get_conn().await?;
-        conn.zcard(key).await.map_err(|e| {
-            RedisError::command_with_source(
-                t!("RedisConnection.command_failed", command = "ZCARD").to_string(),
-                e,
-            )
-        })
+        conn.zcard(key_codec::decode(key).as_ref())
+            .await
+            .map_err(|e| {
+                RedisError::command_with_source(
+                    t!("RedisConnection.command_failed", command = "ZCARD").to_string(),
+                    e,
+                )
+            })
     }
 
     async fn xrange(
@@ -1781,7 +1819,7 @@ impl RedisConnection for RedisConnectionImpl {
     ) -> Result<Vec<StreamEntry>, RedisError> {
         let mut conn = self.get_conn().await?;
         let mut cmd = redis_client::cmd("XRANGE");
-        cmd.arg(key).arg(start).arg(end);
+        cmd.arg(key_codec::decode(key).as_ref()).arg(start).arg(end);
         if let Some(c) = count {
             cmd.arg("COUNT").arg(c);
         }
@@ -1808,7 +1846,7 @@ impl RedisConnection for RedisConnectionImpl {
     async fn xlen(&self, key: &str) -> Result<i64, RedisError> {
         let mut conn = self.get_conn().await?;
         redis_client::cmd("XLEN")
-            .arg(key)
+            .arg(key_codec::decode(key).as_ref())
             .query_async(&mut conn)
             .await
             .map_err(|e| {
@@ -1903,6 +1941,7 @@ impl RedisConnection for RedisConnectionImpl {
         key: &str,
     ) -> Result<KeyValueDetail, RedisError> {
         // 集群模式：单键命令会命中任意节点，MOVED 重试到所属 master。
+        // 键保持显示形态，由 key_value_detail_with_conn 及其下游在命令边界还原字节。
         let key = key.to_string();
         self.with_moved_retry(db, move |conn| {
             let key = key.clone();
@@ -2281,6 +2320,100 @@ pub(crate) mod tests {
         assert!(matches!(content, KeyValueContent::String(value) if value == bytes));
     }
 
+    /// issue #485：SCAN 回复里可能混有非法 UTF-8 的二进制键。按 `Vec<String>` 解析会
+    /// 整块失败（`Cannot convert from UTF-8`），因此必须先按字节收下再编码成显示形态。
+    #[test]
+    fn scan_reply_keeps_binary_keys_as_escaped_text() {
+        let java_serialized = vec![0xac, 0xed, 0x00, 0x05, 0x74, 0x00, 0x03, 0x6b, 0x65, 0x79];
+        let reply = redis_client::Value::Array(vec![
+            redis_client::Value::BulkString(b"0".to_vec()),
+            redis_client::Value::Array(vec![
+                redis_client::Value::BulkString("普通键".as_bytes().to_vec()),
+                redis_client::Value::BulkString(java_serialized.clone()),
+            ]),
+        ]);
+
+        let (cursor, keys): (u64, Vec<Vec<u8>>) =
+            redis_client::from_redis_value(&reply).expect("SCAN 回复应能按字节解析");
+        let result = scan_result_from_reply((cursor, keys));
+
+        assert_eq!(0, result.cursor);
+        assert_eq!("普通键", result.keys[0]);
+        assert_eq!(key_codec::encode(&java_serialized), result.keys[1]);
+        assert_eq!(java_serialized, key_codec::decode(&result.keys[1]).as_ref());
+
+        // 回归防线：旧实现用 Vec<String> 解析同一条回复会整块失败。
+        assert!(
+            redis_client::from_redis_value::<Vec<String>>(&reply).is_err(),
+            "二进制键必须无法按 String 解析，否则该测试失去意义"
+        );
+    }
+
+    /// issue #485 端到端：二进制键要能被 SCAN 列出、点开读到真实值、并被删除。
+    /// 本机没有 Redis（127.0.0.1:6379）时跳过，与集群集成测试同策略。
+    #[tokio::test]
+    async fn binary_key_survives_scan_read_and_delete() {
+        if tokio::net::TcpStream::connect("127.0.0.1:6379")
+            .await
+            .is_err()
+        {
+            return;
+        }
+
+        let java_serialized = vec![0xac, 0xed, 0x00, 0x05, 0x74, 0x00, 0x03, 0x6b, 0x65, 0x79];
+        let mut connection = RedisConnectionImpl::new(config(RedisConnectionMode::Standalone, 0));
+        connection.connect().await.expect("connect redis");
+        {
+            // 界面无法输入原始字节，直接下发原始命令写入二进制键。
+            let mut conn = connection.get_db_conn(0).await.expect("db conn");
+            redis_client::cmd("SET")
+                .arg(java_serialized.as_slice())
+                .arg("bin-value")
+                .query_async::<()>(&mut conn)
+                .await
+                .expect("write binary key");
+        }
+
+        let escaped = key_codec::encode(&java_serialized);
+        let scan = connection.scan_in_db(0, 0, "*", 1000).await.expect("scan");
+        assert!(
+            scan.keys.contains(&escaped),
+            "SCAN 应把二进制键编码成转义显示形态: {:?}",
+            scan.keys
+        );
+
+        let detail = connection
+            .get_key_value_detail_in_db(0, &escaped)
+            .await
+            .expect("二进制键应能读回详情");
+        assert_eq!(escaped, detail.key_info.name);
+        assert!(
+            matches!(detail.value, KeyValueContent::String(ref value) if value == b"bin-value"),
+            "应读到二进制键的真实值: {:?}",
+            detail.value
+        );
+
+        let deleted = connection
+            .del_in_db(0, &[escaped.as_str()])
+            .await
+            .expect("delete binary key");
+        assert_eq!(1, deleted);
+        assert!(
+            scan_after_delete_missing(&mut connection, &escaped).await,
+            "删除后不应再扫到该键"
+        );
+    }
+
+    async fn scan_after_delete_missing(
+        connection: &mut RedisConnectionImpl,
+        escaped: &str,
+    ) -> bool {
+        match connection.scan_in_db(0, 0, "*", 1000).await {
+            Ok(scan) => !scan.keys.iter().any(|key| key == escaped),
+            Err(_) => false,
+        }
+    }
+
     #[tokio::test]
     async fn command_parts_in_db_rejects_empty_parts_before_connecting() {
         let connection = RedisConnectionImpl::new(config(RedisConnectionMode::Standalone, 0));
@@ -2417,6 +2550,18 @@ pub(crate) mod tests {
             .expect("expire moved");
         assert!(expired, "EXPIRE 应在正确 master 上生效");
     }
+}
+
+/// SCAN 回复 → [`ScanResult`]。
+///
+/// 键先按字节收下、再编码成显示形态（见 [`key_codec`]）。Redis 的键是任意字节序列，
+/// 若直接按 `Vec<String>` 解析，遇到 JDK 原生序列化等二进制键会整块失败
+/// （`Cannot convert from UTF-8`，issue #485）。
+fn scan_result_from_reply((cursor, keys): (u64, Vec<Vec<u8>>)) -> ScanResult {
+    ScanResult::new(
+        cursor,
+        keys.iter().map(|key| key_codec::encode(key)).collect(),
+    )
 }
 
 fn parse_command_args(command: &str) -> Vec<String> {

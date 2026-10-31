@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Navop Shell
+Comment=Navop Shell - SSH, SFTP, Terminal, Port Forwarding
+Exec=navop-shell %F
+Icon=navop-shell
+Type=Application
+Categories=Development;Utility;System;
+Terminal=false
+StartupWMClass=navop-shell
+Keywords=ssh;sftp;ftp;terminal;port-forwarding;rdp;vnc;

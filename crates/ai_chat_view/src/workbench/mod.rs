@@ -9,6 +9,11 @@
 
 mod shell;
 mod state;
+mod terminal_provider;
 
 pub use shell::{WorkbenchPanelEntry, WorkbenchShell, WorkbenchShellConfig};
 pub use state::{WorkbenchPanelKind, WorkbenchPlacement, WorkbenchState, WorkbenchTab};
+pub use terminal_provider::{
+    TerminalPanelFactory, WorkbenchTerminalProvider, set_workbench_terminal_provider,
+    workbench_terminal_provider,
+};

@@ -44,7 +44,20 @@ impl HomePage {
                         .on_click(cx.listener(
                             move |this, _, window, cx| {
                                 cx.stop_propagation();
-                                this.open_sftp_view(sftp_connection.clone(), window, cx);
+                                if !app_kit::registry().open_sftp(
+                                    &sftp_connection,
+                                    this,
+                                    window,
+                                    cx,
+                                ) {
+                                    window.push_notification(
+                                        Notification::error(format!(
+                                            "当前产品不支持 SFTP：{}",
+                                            sftp_connection.name
+                                        )),
+                                        cx,
+                                    );
+                                }
                             },
                         )),
                     )

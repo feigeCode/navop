@@ -3,6 +3,7 @@
 rust_i18n::i18n!("../redis_view/locales", fallback = "zh-CN");
 
 pub mod connection;
+pub mod key_codec;
 pub mod pubsub;
 pub mod types;
 

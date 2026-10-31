@@ -1,8 +1,10 @@
+#[cfg(feature = "database")]
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
+#[cfg(feature = "database")]
 use db_view::extension_menu::DbTreeExtensionMenuItem;
 use serde_json::Value;
 
@@ -14,7 +16,7 @@ use crate::extension::manifest::{
 
 use super::catalog::ExtensionRuntimeCatalog;
 use super::types::{
-    ExtensionRuntimeError, RegisteredDbTreeMenuContribution, RegisteredDocumentExporter,
+    ExtensionRuntimeError, RegisteredDocumentExporter,
     RegisteredDocumentRenderer, RegisteredHtmlPreviewTransform, RegisteredIpcRuntimeBinding,
     RegisteredKeybindingContribution, RegisteredRemoteFileEditorCommand,
     RegisteredRemoteFileEditorContribution, RegisteredResourceConnectionContribution,
@@ -346,6 +348,7 @@ impl ExtensionRuntimeCatalog {
         self.register_toolbar_slots(&manifest);
         self.register_keybindings(&manifest);
         self.register_remote_file_editors(&manifest)?;
+        #[cfg(feature = "database")]
         self.register_db_tree_menus(&manifest);
         Ok(())
     }
@@ -722,6 +725,7 @@ impl ExtensionRuntimeCatalog {
         Ok(())
     }
 
+    #[cfg(feature = "database")]
     fn register_db_tree_menus(&mut self, manifest: &Manifest) {
         let command_titles = command_titles(manifest);
         for (position, menus) in &manifest.contributes.menus {
@@ -735,7 +739,7 @@ impl ExtensionRuntimeCatalog {
                     .clone()
                     .or_else(|| command_titles.get(command_id.as_str()).cloned())
                     .unwrap_or_else(|| command_id.clone());
-                self.db_tree_menus.push(RegisteredDbTreeMenuContribution {
+                self.db_tree_menus.push(crate::types::RegisteredDbTreeMenuContribution {
                     position: position.clone(),
                     item: DbTreeExtensionMenuItem {
                         extension_id: manifest.id.clone(),
@@ -1373,6 +1377,7 @@ fn is_candidate_composite_dir(entry: &std::fs::DirEntry) -> bool {
     file_type.is_dir() && is_active_install_dir_name(&entry.file_name())
 }
 
+#[cfg(feature = "database")]
 fn command_titles(manifest: &Manifest) -> BTreeMap<&str, String> {
     manifest
         .contributes

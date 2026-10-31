@@ -1,0 +1,382 @@
+_version: 2
+
+Common:
+  file_open_failed:
+      en: "Unable to open file: %{error}"
+      zh-CN: "无法打开文件：%{error}"
+      zh-HK: "無法開啟檔案：%{error}"
+  cancel:
+    en: Cancel
+    zh-CN: 取消
+    zh-HK: 取消
+  delete:
+    en: Delete
+    zh-CN: 删除
+    zh-HK: 刪除
+
+SessionLogs:
+  title:
+    en: Session Logs
+    zh-CN: 会话日志
+    zh-HK: 工作階段日誌
+  search_placeholder:
+    en: Search sessions, hosts, users, or ports...
+    zh-CN: 搜索会话、主机、用户或端口...
+    zh-HK: 搜尋工作階段、主機、使用者或連接埠...
+  refresh:
+    en: Refresh
+    zh-CN: 刷新
+    zh-HK: 重新整理
+  refreshing:
+    en: Refreshing...
+    zh-CN: 正在刷新...
+    zh-HK: 正在重新整理...
+  select_all:
+    en: Select All
+    zh-CN: 全选
+    zh-HK: 全選
+  clear_selection:
+    en: Clear Selection
+    zh-CN: 清除选择
+    zh-HK: 清除選取
+  empty:
+    en: No session logs yet
+    zh-CN: 暂无会话日志
+    zh-HK: 尚無工作階段日誌
+  empty_search:
+    en: No matching session logs
+    zh-CN: 没有匹配的会话日志
+    zh-HK: 沒有相符的工作階段日誌
+  source_help:
+    en: ".cast is the source container for a static, read-only terminal history. Open it to scroll, select, copy, and search just like a terminal; TXT is a readable exported copy."
+    zh-CN: ".cast 是静态只读终端历史的源文件。打开后可像终端一样滚动、选中、复制和搜索；TXT 是导出的可读副本。"
+    zh-HK: ".cast 是靜態唯讀終端歷史的來源檔案。開啟後可像終端一樣捲動、選取、複製和搜尋；TXT 是匯出的可讀副本。"
+  output_only_help:
+    en: Automatic session logging records output only and never records keyboard input, reducing exposure of passwords, tokens, and one-time codes. Session logs have no playback timeline or replay controls.
+    zh-CN: 自动会话日志只记录输出，绝不记录键盘输入，以减少密码、令牌和一次性验证码泄露风险。会话日志没有播放时间轴或回放控制。
+    zh-HK: 自動工作階段日誌只記錄輸出，絕不記錄鍵盤輸入，以減少密碼、權杖和一次性驗證碼外洩風險。工作階段日誌沒有播放時間軸或回放控制。
+  favorite:
+    en: Favorite
+    zh-CN: 收藏
+    zh-HK: 收藏
+  unfavorite:
+    en: Remove favorite
+    zh-CN: 取消收藏
+    zh-HK: 取消收藏
+  view_log:
+    en: View log
+    zh-CN: 查看日志
+    zh-HK: 查看日誌
+  export_text:
+    en: Export TXT
+    zh-CN: 导出 TXT
+    zh-HK: 匯出 TXT
+  export_select_directory:
+    en: Select a directory for the exported TXT file
+    zh-CN: 选择 TXT 导出目录
+    zh-HK: 選擇 TXT 匯出目錄
+  export_success:
+    en: "TXT exported to %{path}"
+    zh-CN: "TXT 已导出到 %{path}"
+    zh-HK: "TXT 已匯出到 %{path}"
+  export_failed:
+    en: "Failed to export TXT: %{error}"
+    zh-CN: "导出 TXT 失败：%{error}"
+    zh-HK: "匯出 TXT 失敗：%{error}"
+  delete:
+    en: Delete
+    zh-CN: 删除
+    zh-HK: 刪除
+  delete_title:
+    en: Delete session log
+    zh-CN: 删除会话日志
+    zh-HK: 刪除工作階段日誌
+  delete_description:
+    en: "Delete %{name}? This cannot be undone."
+    zh-CN: "确定删除 %{name}？此操作无法撤销。"
+    zh-HK: "確定刪除 %{name}？此操作無法復原。"
+  delete_success:
+    en: Session log deleted.
+    zh-CN: 会话日志已删除。
+    zh-HK: 工作階段日誌已刪除。
+  delete_selected:
+    en: Delete selected
+    zh-CN: 删除已选
+    zh-HK: 刪除已選
+  delete_selected_count:
+    en: "Delete selected (%{count})"
+    zh-CN: "删除已选（%{count}）"
+    zh-HK: "刪除已選（%{count}）"
+  delete_selected_description:
+    en: "Delete %{count} selected session logs? This cannot be undone."
+    zh-CN: "确定删除选中的 %{count} 条会话日志？此操作无法撤销。"
+    zh-HK: "確定刪除選取的 %{count} 條工作階段日誌？此操作無法復原。"
+  delete_success_count:
+    en: "%{count} session logs deleted."
+    zh-CN: "已删除 %{count} 条会话日志。"
+    zh-HK: "已刪除 %{count} 條工作階段日誌。"
+  delete_failed:
+    en: "Failed to delete session log: %{error}"
+    zh-CN: "删除会话日志失败：%{error}"
+    zh-HK: "刪除工作階段日誌失敗：%{error}"
+  load_failed:
+    en: "Failed to load session logs: %{error}"
+    zh-CN: "加载会话日志失败：%{error}"
+    zh-HK: "載入工作階段日誌失敗：%{error}"
+  data_directory_unavailable:
+    en: Application data directory is unavailable
+    zh-CN: 无法获取应用数据目录
+    zh-HK: 無法取得應用程式資料目錄
+  favorite_failed:
+    en: "Failed to save favorite: %{error}"
+    zh-CN: "保存收藏失败：%{error}"
+    zh-HK: "儲存收藏失敗：%{error}"
+  complete:
+    en: Complete
+    zh-CN: 完整
+    zh-HK: 完整
+  partial:
+    en: Partial
+    zh-CN: 未完整
+    zh-HK: 未完整
+  local:
+    en: Local
+    zh-CN: 本地
+    zh-HK: 本機
+  ssh:
+    en: SSH
+    zh-CN: SSH
+    zh-HK: SSH
+  serial:
+    en: Serial
+    zh-CN: 串口
+    zh-HK: 串列
+  telnet:
+    en: Telnet
+    zh-CN: Telnet
+    zh-HK: Telnet
+  skipped:
+    en: "%{count} files skipped"
+    zh-CN: "跳过 %{count} 个文件"
+    zh-HK: "已略過 %{count} 個檔案"
+  local_identity:
+    en: Local
+    zh-CN: 本地
+    zh-HK: 本機
+  remote_identity:
+    en: Remote
+    zh-CN: 远端
+    zh-HK: 遠端
+  serial_port:
+    en: Port
+    zh-CN: 串口
+    zh-HK: 連接埠
+
+ConnectionForm:
+  kind:
+    ssh:
+      en: SSH / SFTP
+      zh-CN: SSH / SFTP
+      zh-HK: SSH / SFTP
+    ftp:
+      en: FTP
+      zh-CN: FTP
+      zh-HK: FTP
+    serial:
+      en: Serial Port
+      zh-CN: 串口
+      zh-HK: 序列埠
+    telnet:
+      en: Telnet
+      zh-CN: Telnet
+      zh-HK: Telnet
+    port_forwarding:
+      en: Port Forwarding
+      zh-CN: 端口转发
+      zh-HK: 連接埠轉送
+    rdp:
+      en: RDP Remote Desktop
+      zh-CN: RDP 远程桌面
+      zh-HK: RDP 遠端桌面
+    vnc:
+      en: VNC Remote Desktop
+      zh-CN: VNC 远程桌面
+      zh-HK: VNC 遠端桌面
+
+Settings:
+  General:
+    Appearance:
+      terminal_theme:
+        en: Terminal Theme
+        zh-CN: 终端主题
+        zh-HK: 終端主題
+      terminal_theme_desc:
+        en: Choose a terminal palette independently, or follow the application theme.
+        zh-CN: 为终端单独选择配色，或跟随应用主题。
+        zh-HK: 為終端單獨選擇配色，或跟隨應用主題。
+  terminal:
+    title:
+      en: Terminal
+      zh-CN: 终端
+      zh-HK: 終端
+    group_title:
+      en: Display and Behavior
+      zh-CN: 终端显示与行为
+      zh-HK: 終端顯示與行為
+    font_family:
+      en: Font Family
+      zh-CN: 字体
+      zh-HK: 字體
+    font_family_description:
+      en: Monospace font used by terminal views.
+      zh-CN: 终端使用的等宽字体。
+      zh-HK: 終端使用的等寬字體。
+    font_size:
+      en: Font Size
+      zh-CN: 字号
+      zh-HK: 字號
+    font_size_description:
+      en: Terminal font size, between 8 and 32.
+      zh-CN: 终端字体大小，范围 8–32。
+      zh-HK: 終端字體大小，範圍 8–32。
+    scrollback_lines:
+      en: Scrollback Lines
+      zh-CN: 回滚行数
+      zh-HK: 回捲行數
+    scrollback_lines_description:
+      en: Maximum lines kept above the viewport, between 1,000 and 1,000,000.
+      zh-CN: 向上可回看的最大行数，范围 1,000–1,000,000。
+      zh-HK: 向上可回看的最大行數，範圍 1,000–1,000,000。
+    auto_copy:
+      en: Auto Copy
+      zh-CN: 自动复制
+      zh-HK: 自動複製
+    auto_copy_description:
+      en: Copy selected terminal text to the clipboard automatically.
+      zh-CN: 选中终端文本后自动复制到剪贴板。
+      zh-HK: 選取終端文字後自動複製到剪貼簿。
+    autocomplete:
+      en: Command Autocomplete
+      zh-CN: 命令自动补全
+      zh-HK: 指令自動補全
+    autocomplete_description:
+      en: Suggest previous commands while typing in the terminal.
+      zh-CN: 输入命令时显示历史命令建议。
+      zh-HK: 輸入指令時顯示歷史指令建議。
+
+LocalTerminal:
+  group_title:
+    en: Local Terminal
+    zh-CN: 本地终端
+    zh-HK: 本機終端
+  profile:
+    en: Default shell
+    zh-CN: 默认终端
+    zh-HK: 預設終端
+  profile_desc:
+    en: Choose the shell used when opening a new local terminal tab
+    zh-CN: 选择新建本地终端标签页时使用的 shell
+    zh-HK: 選擇新增本機終端分頁時使用的 shell
+  system:
+    en: System Default
+    zh-CN: 系统默认
+    zh-HK: 系統預設
+  zsh:
+    en: Zsh
+    zh-CN: Zsh
+    zh-HK: Zsh
+  bash:
+    en: Bash
+    zh-CN: Bash
+    zh-HK: Bash
+  fish:
+    en: Fish
+    zh-CN: Fish
+    zh-HK: Fish
+  nushell:
+    en: Nushell
+    zh-CN: Nushell
+    zh-HK: Nushell
+  powershell:
+    en: PowerShell
+    zh-CN: PowerShell
+    zh-HK: PowerShell
+  cmd:
+    en: Command Prompt
+    zh-CN: 命令提示符（CMD）
+    zh-HK: 命令提示字元（CMD）
+  wsl:
+    en: WSL
+    zh-CN: WSL
+    zh-HK: WSL
+  git_bash:
+    en: Git Bash
+    zh-CN: Git Bash
+    zh-HK: Git Bash
+  custom:
+    en: Custom
+    zh-CN: 自定义
+    zh-HK: 自訂
+  custom_program:
+    en: Custom program
+    zh-CN: 自定义程序
+    zh-HK: 自訂程式
+  custom_program_desc:
+    en: Executable path or command used when the Custom profile is selected
+    zh-CN: 选择“自定义”时使用的可执行程序路径或命令
+    zh-HK: 選擇「自訂」時使用的可執行程式路徑或命令
+  custom_arguments:
+    en: Custom arguments
+    zh-CN: 自定义参数
+    zh-HK: 自訂參數
+  custom_arguments_desc:
+    en: Arguments are parsed safely and passed directly to the program without a command shell
+    zh-CN: 参数会被安全解析并直接传给程序，不经过命令 shell
+    zh-HK: 參數會被安全解析並直接傳給程式，不經過命令 shell
+  custom_profiles:
+    en: Custom terminals
+    zh-CN: 自定义终端
+    zh-HK: 自訂終端
+  custom_command:
+    en: Terminal command
+    zh-CN: 终端命令
+    zh-HK: 終端命令
+  profiles_desc:
+    en: Add multiple named terminal commands. On macOS, .app bundle paths are resolved to their executable automatically.
+    zh-CN: 添加多个带名称的终端命令。macOS 的 .app 路径会自动解析到应用内的可执行文件。
+    zh-HK: 新增多個帶名稱的終端命令。macOS 的 .app 路徑會自動解析到應用程式內的可執行檔。
+  profiles_placeholder:
+    en: "Ghostty | /Applications/Ghostty.app\nFish | fish --login"
+    zh-CN: "Ghostty | /Applications/Ghostty.app\nFish | fish --login"
+    zh-HK: "Ghostty | /Applications/Ghostty.app\nFish | fish --login"
+  default_custom:
+    en: Default custom terminal
+    zh-CN: 默认自定义终端
+    zh-HK: 預設自訂終端
+  add_example:
+    en: Add example
+    zh-CN: 添加示例
+    zh-HK: 新增範例
+  name_placeholder:
+    en: Name
+    zh-CN: 名称
+    zh-HK: 名稱
+  command_placeholder:
+    en: Command or executable path
+    zh-CN: 命令或可执行文件路径
+    zh-HK: 命令或可執行檔路徑
+  set_default:
+    en: Set as default custom terminal
+    zh-CN: 设为默认自定义终端
+    zh-HK: 設為預設自訂終端
+  add_terminal:
+    en: Add custom terminal
+    zh-CN: 添加自定义终端
+    zh-HK: 新增自訂終端
+
+
+RemoteDesktop:
+  fullscreen_exit_hint:
+    en: "Fullscreen mode. Press Esc to exit fullscreen."
+    zh-CN: "已进入全屏，按 Esc 退出全屏。"
+    zh-HK: "已進入全螢幕，按 Esc 退出全螢幕。"

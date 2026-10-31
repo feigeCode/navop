@@ -1,8 +1,6 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use db::ipc::IpcDriverRegistry;
-use db_view::connection_form_window::{ConnectionFormWindow, ConnectionFormWindowConfig};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Anchor, AnyElement, App, AppContext, AsyncApp, ClipboardItem, Context, Entity, EventEmitter,
@@ -24,7 +22,6 @@ use gpui_component::{
     tooltip::Tooltip,
     v_flex,
 };
-use mongodb_view::{MongoFormWindow, MongoFormWindowConfig};
 use one_assets::IconName;
 use one_core::cloud_sync::{
     CloudAccountScope, CloudApiClient, CloudSyncService, SyncConflict, SyncEngine, SyncError,
@@ -42,22 +39,12 @@ use one_core::storage::traits::Repository;
 use one_core::storage::{
     ActiveConnections, ConnectionRepository, ConnectionType, CredentialResolutionError,
     DatabaseType, GlobalStorageState, PendingCloudDeletionRepository, RedisMode,
-    RemoteDesktopParams, RemoteDesktopProtocol as StoredRemoteDesktopProtocol, SshAuthMethod,
-    StoredConnection, TeamMembershipState, TelnetLoginStep, Workspace, WorkspaceRepository,
+    RemoteDesktopParams, SshAuthMethod, StoredConnection, TeamMembershipState, TelnetLoginStep,
+    Workspace, WorkspaceRepository,
 };
-use one_core::tab_container::{TabContainer, TabContent, TabContentEvent, TabItem, TabOpenMode};
+use one_core::tab_container::{TabContainer, TabContent, TabContentEvent, TabOpenMode};
 use one_ui::{IconButton, IconButtonRole};
-use port_forwarding::PortForwardingRuntime;
-use port_forwarding_view::{
-    PortForwardingFormWindow, PortForwardingFormWindowConfig, PortForwardingTab,
-    PortForwardingTabConfig,
-};
-use redis_view::{RedisFormWindow, RedisFormWindowConfig};
 use rust_i18n::t;
-use terminal_view::{FtpFormWindow, FtpFormWindowConfig};
-use terminal_view::{SerialFormWindow, SerialFormWindowConfig};
-use terminal_view::{SshFormWindow, SshFormWindowConfig};
-use terminal_view::{TelnetFormWindow, TelnetFormWindowConfig};
 
 use crate::auth::{AuthService, load_auth_data, show_auth_dialog};
 use crate::connection_visuals::{ConnectionVisualSize, connection_type_navigation_icon};
@@ -68,14 +55,11 @@ use crate::home::home_workspace_filter::{
     WorkspaceDialogConfig, WorkspaceFilterDelegate, show_workspace_dialog,
 };
 use crate::license::{get_license_service, is_feature_enabled, show_upgrade_dialog};
+#[cfg(feature = "shell")]
 use crate::local_terminal_profiles::{
     LocalTerminalLaunchTarget, effective_kind, launch_options, launch_target_is_default,
 };
-use crate::new_connection::NewConnectionWindow;
 use crate::setting_tab::GlobalCurrentUser;
-use remote_desktop_view::remote_desktop_form::{
-    RemoteDesktopFormWindow, RemoteDesktopFormWindowConfig,
-};
 
 actions!(
     home_tab,
@@ -133,6 +117,23 @@ impl From<ConnectionLayout> for HomeConnectionLayout {
 }
 
 impl HomePage {
+    /// 本地终端按钮；不含终端领域的构建下返回空占位。
+    pub(crate) fn local_terminal_button_element(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        #[cfg(feature = "shell")]
+        {
+            return self.render_local_terminal_button(window, cx);
+        }
+        #[cfg(not(feature = "shell"))]
+        {
+            let _ = (window, cx);
+            gpui::div().into_any_element()
+        }
+    }
+
     pub(crate) fn set_connection_sidebar(
         &mut self,
         sidebar: Entity<crate::persistent_connection_sidebar::PersistentConnectionSidebar>,
@@ -222,11 +223,6 @@ pub struct HomePage {
     /// 防止主密钥对话框被启动提示和用户点击重复打开。
     master_key_dialog_open: bool,
     team_permissions: TeamPermissionSnapshot,
-    port_forwarding_runtime: Arc<tokio::sync::Mutex<PortForwardingRuntime>>,
-    pub(crate) external_driver_registry: IpcDriverRegistry,
-    /// Windows 已识别的 WSL 发行版缓存（issue #182）；None=识别中，空列表=无发行版。
-    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-    pub(crate) wsl_distributions: Option<Arc<Vec<terminal::WslDistribution>>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -260,7 +256,7 @@ mod connection_card_content;
 mod connection_details;
 pub(crate) mod connection_filter;
 pub(crate) use connection_filter::ConnectionFilter;
-mod connection_form_title;
+mod account_menu;
 mod connection_forms;
 mod connection_grouping;
 mod connection_icon;
@@ -268,19 +264,18 @@ mod connection_info;
 mod connection_list;
 mod connection_list_actions;
 mod connection_open;
-pub(crate) use connection_open::resolve_connection_credentials;
-mod account_menu;
 pub(crate) mod connection_selection;
 mod connection_type_filter_bar;
 mod content;
 mod data;
+pub(crate) mod domain_host;
 mod encryption;
-mod forwarding;
 mod grid;
 mod home_layout;
 mod home_shortcuts;
 mod keybindings;
 mod lifecycle;
+#[cfg(feature = "shell")]
 mod local_terminal;
 mod navigation;
 mod recent;
@@ -300,13 +295,13 @@ use connection_badge::ConnectionTeamBadge;
 pub(crate) use connection_badge::connection_team_badge;
 use connection_badge::render_team_badge;
 pub(crate) use connection_filter::connection_matches_query;
-use connection_form_title::{external_driver_id_for_connection_form, non_empty_name};
 #[cfg(test)]
 pub(crate) use connection_grouping::can_manage_connection_with_permissions;
 use connection_info::{
     card_connection_info, connection_display_name, generate_duplicate_name,
     port_forwarding_connection_info,
 };
+#[cfg(feature = "shell")]
 pub(super) use keybindings::{
     OPEN_LOCAL_TERMINAL_SHORTCUT_MACOS, OPEN_LOCAL_TERMINAL_SHORTCUT_OTHER,
 };
@@ -317,8 +312,6 @@ use sync_route::{
 };
 pub(crate) use team_permissions::TeamPermissionSnapshot;
 
-#[cfg(test)]
-use connection_info::remote_desktop_connection_info;
 #[cfg(test)]
 use sync_route::sync_route_for_provider;
 #[cfg(test)]

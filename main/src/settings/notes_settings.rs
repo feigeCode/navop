@@ -1,4 +1,7 @@
-use gpui::{App, AppContext, IntoElement, ParentElement, PathPromptOptions, SharedString, Styled, Window, div};
+use gpui::{
+    App, AppContext, IntoElement, ParentElement, PathPromptOptions, SharedString, Styled, Window,
+    div,
+};
 use gpui_component::{
     Sizable, WindowExt,
     button::Button,
@@ -11,9 +14,7 @@ use one_assets::IconName;
 use one_core::settings::AppSettings;
 use rust_i18n::t;
 
-pub fn notes_setting_group(
-    font_options: Vec<(SharedString, SharedString)>,
-) -> SettingGroup {
+pub fn notes_setting_group(font_options: Vec<(SharedString, SharedString)>) -> SettingGroup {
     SettingGroup::new()
         .title(t!("Settings.General.Notes.group_title"))
         .item(notes_path_item())
@@ -21,9 +22,7 @@ pub fn notes_setting_group(
 }
 
 /// Markdown 代码字体：行内代码、代码块与表格内代码统一取这一项。
-fn markdown_code_font_item(
-    font_options: Vec<(SharedString, SharedString)>,
-) -> SettingItem {
+fn markdown_code_font_item(font_options: Vec<(SharedString, SharedString)>) -> SettingItem {
     SettingItem::new(
         t!("Settings.General.Notes.markdown_code_font_family"),
         SettingField::scrollable_dropdown(

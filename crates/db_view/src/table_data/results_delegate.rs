@@ -1932,7 +1932,7 @@ impl EditTableDelegate for EditorTableDelegate {
                 };
                 // `get_selection_column_indices` 返回的是显示层列索引，复制链路内部
                 // 需要数据层（原始）列索引，否则隐藏/拖拽列后取值会错位。
-                let indices = state
+                let mut indices = state
                     .get_selection_column_indices(cx)
                     .into_iter()
                     .filter_map(|display_ix| state.delegate().original_column_index(display_ix))
@@ -1943,6 +1943,25 @@ impl EditTableDelegate for EditorTableDelegate {
                         cx,
                     );
                     return;
+                }
+
+                // UPDATE/DELETE 的 WHERE 只能由主键列生成。用户常常只选中某个非主键单元格
+                // 再「复制为 → UPDATE」，此时选区里没有主键、生成结果是空字符串，看起来就像
+                // 复制失败；这里把主键列补进复制上下文，SET 部分仍然只用选区列。
+                let table_metadata = state.delegate().get_table_metadata();
+                let needs_primary_key =
+                    matches!(format, CopyFormat::SqlUpdate | CopyFormat::SqlDelete);
+                if needs_primary_key {
+                    if table_metadata.primary_key_indices.is_empty() {
+                        window.push_notification(
+                            Notification::warning(
+                                t!("TableData.copy_sql_requires_primary_key").to_string(),
+                            ),
+                            cx,
+                        );
+                        return;
+                    }
+                    indices = table_metadata.indices_with_primary_keys(&indices);
                 }
 
                 let ((min_row, _), (max_row, _)) = range.normalized();
@@ -2010,14 +2029,18 @@ impl EditTableDelegate for EditorTableDelegate {
                 } else {
                     None
                 };
-                let columns = state.get_selection_columns(cx);
-                let (metadata, database_type) = {
-                    let delegate = state.delegate();
-                    (
-                        delegate.get_table_metadata().select_columns(&indices),
-                        delegate.database_type(),
-                    )
-                };
+                let columns = indices
+                    .iter()
+                    .map(|index| {
+                        table_metadata
+                            .column_names
+                            .get(*index)
+                            .cloned()
+                            .unwrap_or_default()
+                    })
+                    .collect::<Vec<_>>();
+                let metadata = table_metadata.select_columns(&indices);
+                let database_type = state.delegate().database_type();
                 let plugin = cx.global::<GlobalDbState>().get_plugin(&database_type).ok();
                 let mut context = CopyFormatContext::new(&data, &columns, &metadata)
                     .with_binary_cells(&binary_cells);
@@ -2028,6 +2051,15 @@ impl EditTableDelegate for EditorTableDelegate {
                     .as_deref()
                     .map_or(context, |plugin| context.with_plugin(plugin));
                 let text = CopyFormatter::format(format, context);
+                // UPDATE/DELETE 还要求主键值非空且选区含非主键列，否则会得到空字符串；
+                // 此时不要把空串写进剪贴板并谎报成功，直接提示原因。
+                if needs_primary_key && text.is_empty() {
+                    window.push_notification(
+                        Notification::warning(t!("TableData.copy_sql_unavailable").to_string()),
+                        cx,
+                    );
+                    return;
+                }
                 cx.write_to_clipboard(ClipboardItem::new_string(text));
                 window.push_notification(
                     Notification::success(t!("TableData.copy_success").to_string()),

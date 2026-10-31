@@ -189,9 +189,11 @@ fn reload_extension_runtime(kind: extension_view::ExtensionKind, cx: &mut App) {
         refresh_language_extension_manifests();
     }
     match kind {
+        #[cfg(feature = "database")]
         extension_view::ExtensionKind::DatabaseDriver => {
             db::ipc::IpcDriverRegistry::refresh_global_registry();
         }
+        #[cfg(feature = "remote-desktop")]
         extension_view::ExtensionKind::RemoteDesktopProvider => {
             remote_desktop::RemoteDesktopProviderRegistry::refresh_global_registry();
         }
