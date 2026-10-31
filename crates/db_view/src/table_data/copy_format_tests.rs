@@ -482,6 +482,54 @@ fn sql_mutations_require_non_null_primary_keys() {
     assert_eq!(CopyFormatter::format(CopyFormat::SqlDelete, context), "");
 }
 
+// 回归用例：只选中非主键单元格时「复制为 → UPDATE/DELETE」必须仍能生成可执行 SQL。
+// 修复前选区不含主键 → select_columns 丢掉 primary_key_indices → 生成空字符串。
+#[test]
+fn sql_mutations_include_primary_keys_missing_from_the_selection() {
+    let plugin = DbManager::default()
+        .get_plugin(&DatabaseType::MySQL)
+        .expect("MySQL plugin should exist");
+    let metadata = TableMetadata::new("items")
+        .with_columns(vec!["id", "name"])
+        .with_column_meta(vec![column("id", "INT"), column("name", "VARCHAR(20)")])
+        .with_primary_keys(vec![0]);
+
+    // 选区只有 name 列（原始索引 1），主键 id 被补到末尾。
+    let indices = metadata.indices_with_primary_keys(&[1]);
+    assert_eq!(indices, vec![1, 0]);
+
+    let selected = metadata.select_columns(&indices);
+    assert_eq!(selected.primary_key_indices, vec![1]);
+
+    let columns = indices
+        .iter()
+        .map(|index| metadata.column_names[*index].clone())
+        .collect::<Vec<SharedString>>();
+    let data = vec![vec![Some("safe".into()), Some("1".into())]];
+
+    let context = sql_context((&data, &columns, &selected), plugin.as_ref());
+    assert_eq!(
+        CopyFormatter::format(CopyFormat::SqlUpdate, context),
+        "UPDATE `items` SET `name` = 'safe' WHERE `id` = 1;"
+    );
+
+    let context = sql_context((&data, &columns, &selected), plugin.as_ref());
+    assert_eq!(
+        CopyFormatter::format(CopyFormat::SqlDelete, context),
+        "DELETE FROM `items` WHERE `id` = 1;"
+    );
+
+    // 表没有主键时语义不变：不补列，仍然给不出 UPDATE/DELETE。
+    let no_key_metadata = TableMetadata::new("items")
+        .with_columns(vec!["id", "name"])
+        .with_column_meta(vec![column("id", "INT"), column("name", "VARCHAR(20)")]);
+    assert_eq!(no_key_metadata.indices_with_primary_keys(&[1]), vec![1]);
+    let columns = vec!["name".into()];
+    let data = vec![vec![Some("safe".into())]];
+    let context = sql_context((&data, &columns, &no_key_metadata), plugin.as_ref());
+    assert_eq!(CopyFormatter::format(CopyFormat::SqlUpdate, context), "");
+}
+
 #[test]
 fn typed_cells_are_authoritative_over_legacy_projection() {
     let data = vec![vec![

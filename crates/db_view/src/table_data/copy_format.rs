@@ -81,6 +81,21 @@ impl TableMetadata {
         }
     }
 
+    /// 把主键列补进选区列索引。
+    ///
+    /// UPDATE/DELETE 的 WHERE 只能由主键列生成，而用户常常只选中某个非主键单元格
+    /// 再执行「复制为 → UPDATE」，此时选区里没有主键，生成结果是空字符串。
+    /// 这里在保持选区列顺序的前提下追加缺失的主键列（SET 仍只包含选区列）。
+    pub fn indices_with_primary_keys(&self, indices: &[usize]) -> Vec<usize> {
+        let mut extended = indices.to_vec();
+        for index in &self.primary_key_indices {
+            if !extended.contains(index) {
+                extended.push(*index);
+            }
+        }
+        extended
+    }
+
     pub fn for_columns(&self, columns: &[SharedString]) -> Self {
         let mut used = vec![false; self.column_names.len()];
         let indices = columns
