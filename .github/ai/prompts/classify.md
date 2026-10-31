@@ -1,7 +1,7 @@
 # Classify one navop issue (code-first)
 
 You are triaging a GitHub issue for **navop**, a Rust / GPUI desktop database and
-remote-connection client (crates under `crates/`, main app in `main/`).
+remote-connection client (crates under `crates/`, application shell in `crates/navop_app/`).
 
 **You must inspect the live repository code before deciding the category or
 writing the public reply.** Answering from the issue title/body alone is a hard
@@ -50,7 +50,7 @@ you hit, not guessed ones.
 ### 4. Open and read code (required)
 
 Open **at least two** source files that search returned. Prefer `crates/`,
-`main/src/`, `components/`, not docs-only files. Answer:
+`crates/navop_app/src/`, `components/`, not docs-only files. Answer:
 
 - What does the current implementation actually do?
 - Which structs / modules own that behavior?

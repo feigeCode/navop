@@ -38,7 +38,7 @@ When developing an importer for a new application, read the playbook first, then
 | Host WIT | `crates/extension-api/wit/connection-import.wit` |
 | Host WASM runtime | `crates/extension-wasm/src/connection_import.rs` |
 | Host manifest/provider | `crates/extension-runtime/src/connection_import_provider.rs`, `crates/extension-runtime/src/extension/composite_provider.rs` |
-| Import UI | `main/src/home/connection_import_*` |
+| Import UI | `crates/navop_app/src/home/connection_import_*` |
 
 ## Implementation Workflow
 
@@ -68,7 +68,7 @@ When an importer fails in the host, fix the host generically:
 - Candidate path expansion: `connection_import_provider.rs` must expand `~/` and `%VAR%/...` before reading files.
 - Local visibility: `CompositeExtensionProvider` uses `load_and_check`; host version checks must use the app version, not the `extension-runtime` crate version.
 - UI responsiveness: never call `futures::executor::block_on` from GPUI import actions/dialogs. Open the preview dialog in a loading state and run preview work through `one_core::gpui_tokio::Tokio`.
-- Feature wiring: `main` must enable `extension-runtime` with `features = ["wasm-components"]`, including `--no-default-features` builds when the app should still expose WASM importers.
+- Feature wiring: `navop_app` must enable `extension-runtime` with `features = ["wasm-components"]`, including `--no-default-features` builds when the app should still expose WASM importers.
 
 ## Manifest Pattern
 
@@ -144,9 +144,9 @@ Host repo:
 rtk cargo test -p extension-wasm
 rtk cargo test -p extension-runtime connection_import
 rtk cargo test -p extension-runtime composite_provider_lists_connection_importer_with_windows_env_permission
-rtk cargo check -p main
-rtk cargo check -p main --no-default-features
-rtk cargo build -p main
+rtk cargo check -p navop_app
+rtk cargo check -p navop_app --no-default-features
+rtk cargo build -p navop_app
 ```
 
 Add focused tests for every host ability that was missing. Useful examples include:

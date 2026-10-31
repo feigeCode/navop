@@ -90,7 +90,7 @@
       </Component>
       <!-- 快捷方式一律不引用 Icon 表：MSI 会把 Icon 表里的图标另存成一份文件，那份文件
            被清理或图标缓存失效后，快捷方式图标就退化成通用白纸（issue #325）。
-           navop.exe 已内嵌同一份图标（main/build.rs），留空即由目标 exe 提供。 -->
+           navop.exe 已内嵌同一份图标（crates/navop_app/build.rs），留空即由目标 exe 提供。 -->
       <Component Id="StartMenuShortcutComponent" Directory="ApplicationProgramsFolder" Guid="*">
         <Shortcut
           Id="StartMenuShortcut"

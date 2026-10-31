@@ -66,13 +66,13 @@ script/release-tag.sh vx.y.z
 
 ## Workspace Structure
 
-The workspace uses an external `gpui-component` checkout plus `main` and the Navop application crates. Edition is 2024.
+The workspace uses an external `gpui-component` checkout plus the application shell crate `navop_app` (`crates/navop_app`, historically the root `main/` directory) and the Navop application crates. Edition is 2024.
 
 ### Application Layer
 
-- **`main/`** — Application entry point and main UI. Orchestrates all subsystems: auth, settings, licensing, updates, home page. 入口：`apps/navop/src/main.rs` → `navop_app::run()`（`main/` 现在是 `navop_app` 库）。
+- **`crates/navop_app`** — 应用外壳库（package `navop_app`，历史名 `main`）。负责主窗口 UI 与所有子系统编排：auth、设置、许可、更新、主页等。三个产品 bin 在 `apps/*` 里只做装配，入口：`apps/navop/src/main.rs` → `navop_app::run_with(...)`。作为普通 `crates/` 成员，它不再占用仓库根目录。
 
-The `navop` executable is GUI/update-only and does not embed database, SSH, SFTP, or tool business subcommands. A future standalone `navop-cli` should connect to the running application through Public MCP discovery and its authenticated tool interface instead of linking directly to `main` or application state.
+The `navop` executable is GUI/update-only and does not embed database, SSH, SFTP, or tool business subcommands. A future standalone `navop-cli` should connect to the running application through Public MCP discovery and its authenticated tool interface instead of linking directly to `navop_app` or application state.
 
 ### Core Infrastructure
 
@@ -102,7 +102,7 @@ The `navop` executable is GUI/update-only and does not embed database, SSH, SFTP
 
 ## Application Initialization Flow
 
-The startup sequence in `main/src/lib.rs` and `main/src/navop_app.rs` is order-sensitive:
+The startup sequence in `crates/navop_app/src/lib.rs` and `crates/navop_app/src/navop_app.rs` is order-sensitive:
 
 1. `update::handle_update_command()` — handle self-update CLI commands
 2. `load_env_files()` — 仅开发构建从 CWD / 工作区加载 `.env.local` / `.env`

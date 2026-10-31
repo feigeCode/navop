@@ -111,7 +111,7 @@ jobs:
           # 包自报版本（env!("CARGO_PKG_VERSION")）与 feed 比较会错。
           status=0
           for manifest in \
-            main/Cargo.toml \
+            crates/navop_app/Cargo.toml \
             apps/navop/Cargo.toml \
             apps/navop-shell/Cargo.toml \
             apps/navop-data/Cargo.toml
@@ -442,7 +442,7 @@ jobs:
             #
             # No platform overrides the feature set: the default set is the one
             # shape all three platforms ship, and it leaves `embedded-webview`
-            # out (see main/Cargo.toml). The HTML preview host on Linux is
+            # out (see crates/navop_app/Cargo.toml). The HTML preview host on Linux is
             # WebKitGTK 4.1, which cannot be provided with the package, and an
             # in-app HTML preview that works on two platforms but not the third
             # is not worth a second shape to test and release.
@@ -508,7 +508,7 @@ jobs:
           # (x86_64/aarch64)，i686 无法编译。win32 构建先剔除该 feature。
           # 这是唯一一处显式写 feature 列表的地方，内容是「默认集减去 shell-plugins」，
           # 所以不要在这里补回 `embedded-webview`：默认集本身已经不带它了
-          # （见 main/Cargo.toml），补回来会让 win32 成为唯一的另一种形态。
+          # （见 crates/navop_app/Cargo.toml），补回来会让 win32 成为唯一的另一种形态。
           # 独立产品不构建 win32，-p 切包名即可，feature 分支只服务全量。
           $features = if ($target -eq "i686-pc-windows-msvc") {
             @("--no-default-features", "--features", "wasm-components,windows-native-rdp")

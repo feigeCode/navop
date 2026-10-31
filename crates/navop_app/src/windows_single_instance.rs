@@ -28,7 +28,7 @@ pub(crate) fn claim_or_forward(
 #[cfg(test)]
 mod tests {
     const WINDOWS_SOURCE: &str =
-        include_str!("../../crates/app_kit/src/integration/single_instance/windows.rs");
+        include_str!("../../../crates/app_kit/src/integration/single_instance/windows.rs");
     const SHIM_SOURCE: &str = include_str!("windows_single_instance.rs");
 
     #[test]

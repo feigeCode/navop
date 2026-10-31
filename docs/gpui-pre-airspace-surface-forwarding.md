@@ -280,11 +280,11 @@ script/migrate-to-git-fork.py \
 
 ## 5. navop 侧配套改动（已在仓库内，你自己提交）
 
-### 5.1 `main/src/main.rs` — DirectComposition 必须保持开启
+### 5.1 `crates/navop_app/src/main.rs` — DirectComposition 必须保持开启
 
 历史上为了让 ActiveX 子窗口可见，`main.rs` **无条件**设置
 `GPUI_DISABLE_DIRECT_COMPOSITION=1`；而 `windows-native-rdp` 是 default feature
-（`main/Cargo.toml:136`），等于把整条合成路径变成死代码 —— 这是 issue #310 一直复现的直接原因。
+（`crates/navop_app/Cargo.toml:136`），等于把整条合成路径变成死代码 —— 这是 issue #310 一直复现的直接原因。
 
 ```diff
 -    if remote_desktop::windows_native_rdp_compiled() {
@@ -309,7 +309,7 @@ HWND swap-chain 路径下的 airspace 症状。契约测试
   而 surface 初始 clip 为 0 面积、`sync_bounds` 在同一轮就会设好 bounds，
   所以平台拒绝隐藏时不该丢掉已经建好的合成 surface（这正是 bug B 的放大效应）。
 
-### 5.3 `main/src/main.rs` — 退出里程碑日志
+### 5.3 `crates/navop_app/src/main.rs` — 退出里程碑日志
 
 `Navop run loop returned; application resources released`：GPUI 的 `run` 返回之后进程才进入
 `ExitProcess` 逐个执行 `DLL_PROCESS_DETACH`。有这行才能把「卡在应用/GPU 资源析构」
@@ -322,11 +322,11 @@ HWND swap-chain 路径下的 airspace 症状。契约测试
 ### 编译
 
 ```bash
-python .workbuddy/build/cargo-msvc.py build -p main --bin navop \
+python .workbuddy/build/cargo-msvc.py build -p navop_app --bin navop \
     --config .workbuddy/tmp/navop-nodbg.toml
 ```
 
-本机约束：`CARGO_BUILD_JOBS=2`、`CARGO_INCREMENTAL=0`。`main` 的 codegen 峰值会撞
+本机约束：`CARGO_BUILD_JOBS=2`、`CARGO_INCREMENTAL=0`。`navop_app` 的 codegen 峰值会撞
 提交上限 23.2GB（物理 5.9GB + 页文件 17.3GB），编译成功是**概率性**的；
 失败形态是 `memory allocation of 2097152 bytes failed` + `exit code 0xc0000409`
 （后者是伪装）。降并发重跑即可，**不要 clean**。

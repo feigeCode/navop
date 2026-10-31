@@ -1,7 +1,7 @@
 //! 会话内搜索（findbar）的快捷键与按键上下文。
 //!
 //! 形状照 `db_view::search_shortcut`：上下文常量 + 动作 + `init` / `refresh_keybindings`，
-//! 由宿主（`main`）在启动与「设置变更后」各调一次。
+//! 由宿主（`navop_app`）在启动与「设置变更后」各调一次。
 //!
 //! 分工：
 //! - [`AI_CHAT_SEARCH_CONTEXT`] 挂在会话视图**根节点**上，负责「打开 findbar / 下一条 / 上一条」。
@@ -20,7 +20,7 @@
 //! 解法和 `db_view` 的 `SqlEditor > Input` 一致：再绑一条更具体的
 //! [`AI_CHAT_COMPOSER_CONTEXT`]。两条绑定在这条栈上的匹配深度都是 2，胜负由注册顺序
 //! 决定——本 crate 的 `init` 在 `gpui_component::init` 之后运行
-//! （`main/src/navop_app.rs`），更晚注册的那条胜出。`composer_context_wins_over_input_context`
+//! （`crates/navop_app/src/navop_app.rs`），更晚注册的那条胜出。`composer_context_wins_over_input_context`
 //! 这个测试把这条隐式依赖钉死，顺序一变就会炸。
 //!
 //! 明确不做：给 findbar 单独绑 `enter`。`Enter` / `Shift+Enter` 走

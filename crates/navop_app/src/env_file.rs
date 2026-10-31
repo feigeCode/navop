@@ -14,7 +14,11 @@ pub fn load_env_files() {
         push_unique(&mut directories, current_dir);
     }
 
-    if let Some(workspace_dir) = Path::new(env!("CARGO_MANIFEST_DIR")).parent() {
+    // `CARGO_MANIFEST_DIR` 是 `crates/navop_app`，工作区根还要再上两级。
+    if let Some(workspace_dir) = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+    {
         push_unique(&mut directories, workspace_dir.to_path_buf());
     }
 

@@ -1,7 +1,7 @@
 //! 主密钥修改、KDF 迁移与流程编排（三产品共享）。
 //!
 //! 这里只放"做什么、按什么顺序做"，界面在 [`super::dialogs`] / [`super::reset`] /
-//! [`super::unlock`]。关键顺序约束（原 `main/src/master_key_flow.rs` 文档）：
+//! [`super::unlock`]。关键顺序约束（原 `crates/navop_app/src/master_key_flow.rs` 文档）：
 //!
 //! 1. 本地先行：先在一个 SQLite 事务里把连接、钥匙串、团队密钥缓存和冲突快照
 //!    全部换成新密钥，成功后才切换验证数据；中途失败本地整体回滚。

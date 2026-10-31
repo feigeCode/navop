@@ -65,7 +65,7 @@ SELECT、4 组写入（云端 upsert 的 UPDATE 与 INSERT、`insert`、`update`
 
 ### 第 1 层：可见性（尽早不让模型看到）
 
-- `main/src/public_mcp_runtime/resource_pool.rs`：`Denied` 连接不进资源池；`ReadOnly` 连接的
+- `crates/navop_app/src/public_mcp_runtime/resource_pool.rs`：`Denied` 连接不进资源池；`ReadOnly` 连接的
   能力按白名单裁剪（`Query/DatabaseQuery/List/ReadFile`）。终端会话资源按 `session.connection_id`
   回查策略：`Denied` 会话整条移出池，`ReadOnly` 削掉 `TerminalExec/TerminalInput`；活动 Redis
   会话同样按连接 id 收窄。
@@ -81,7 +81,7 @@ SELECT、4 组写入（云端 upsert 的 UPDATE 与 INSERT、`insert`、`update`
 
 ### 第 3 层：执行（唯一的硬闸门）
 
-`main/src/public_mcp_runtime/access_guard.rs` 实现 `tool_runtime::ToolAccessGuard`，挂在
+`crates/navop_app/src/public_mcp_runtime/access_guard.rs` 实现 `tool_runtime::ToolAccessGuard`，挂在
 `ToolRegistry::call` 上（`crates/tool_runtime/src/registry.rs`），因此对
 **外部 MCP 客户端与内置 AI 对话同时生效**：
 

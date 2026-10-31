@@ -409,7 +409,7 @@ fn workspace_filter_exposes_its_active_state() {
 
 #[test]
 fn global_navigation_layout_combines_connection_tree_recent_connections_and_apps() {
-    let settings = include_str!("../../../../crates/core/src/settings.rs");
+    let settings = include_str!("../../../../../crates/core/src/settings.rs");
     let home = include_str!("../home_layout.rs");
     let content = include_str!("../content.rs");
     let tree = include_str!("../../persistent_connection_sidebar/tree.rs");
@@ -443,7 +443,7 @@ fn recent_section_does_not_participate_in_search() {
 
 #[test]
 fn recent_group_respects_home_show_recent_connections_setting() {
-    let settings = include_str!("../../../../crates/core/src/settings.rs");
+    let settings = include_str!("../../../../../crates/core/src/settings.rs");
     let content = include_str!("../content.rs");
     let display_group = include_str!("../../settings/connection_display_settings.rs");
 

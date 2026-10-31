@@ -73,7 +73,7 @@ pub enum MainWindowCloseAction {
 /// 宿主注入的平台相关回调。没注入的回调走本模块的通用实现。
 ///
 /// 全量产品的「显示主窗口」必须自己实现原生 order-front（见
-/// `main/src/window_visibility.rs`），所以这里给的是一个**完整接管**的
+/// `crates/navop_app/src/window_visibility.rs`），所以这里给的是一个**完整接管**的
 /// 异步回调，而不是一个可选装饰步骤。
 #[derive(Clone, Copy, Default)]
 pub struct TrayHost {

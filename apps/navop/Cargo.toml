@@ -6,10 +6,10 @@ publish = false
 
 [features]
 default = []
-builtin-mongodb = ["main/builtin-mongodb", "data_domain/builtin-mongodb"]
+builtin-mongodb = ["navop_app/builtin-mongodb", "data_domain/builtin-mongodb"]
 
 [dependencies]
-main = { path = "../../main" }
+navop_app = { path = "../../crates/navop_app" }
 domain_api = { workspace = true }
 gpui = { workspace = true }
 anyhow = { workspace = true }

@@ -376,7 +376,7 @@ impl ShellPluginHost {
 /// [`ShellPluginHost::refresh_views`]）。所以"在 `init` 里选好词条表"这种写法
 /// 在切语言后仍然显示旧语言 —— 这是本模块最容易被误判成"刷新生效了"的地方。
 ///
-/// 调用点：navop 切界面语言的地方（`main/src/setting_tab.rs` 的语言下拉）。
+/// 调用点：navop 切界面语言的地方（`crates/navop_app/src/setting_tab.rs` 的语言下拉）。
 ///
 /// ⚠️ **已知边界：只覆盖宿主装载的顶层视图。** 脚本里用 `cx.new(Class)` 造的
 /// 嵌套视图各自带一份描述缓存，宿主拿不到它们（gpui-shell 没有"重跑全部"的

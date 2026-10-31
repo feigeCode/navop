@@ -156,9 +156,9 @@ if [[ "${UPDATE_NAVOP}" == "true" ]]; then
   fi
   python3 "${UPDATE_ARGS[@]}"
   if [[ "${SKIP_VERIFY}" != "true" ]]; then
-    cargo "${CARGO_ARGS[@]}" check --manifest-path "${NAVOP_ROOT}/Cargo.toml" --locked -p main
+    cargo "${CARGO_ARGS[@]}" check --manifest-path "${NAVOP_ROOT}/Cargo.toml" --locked -p navop_app
     cargo "${CARGO_ARGS[@]}" test --manifest-path "${NAVOP_ROOT}/Cargo.toml" --locked \
-      -p main shell_plugin_host::components --no-fail-fast
+      -p navop_app shell_plugin_host::components --no-fail-fast
   fi
 fi
 

@@ -84,7 +84,7 @@ fn connection_tree_resize_clamps_to_supported_bounds() {
 fn connection_tree_width_is_persisted_across_sessions() {
     let resize = include_str!("resize.rs");
     let state = include_str!("state.rs");
-    let settings = include_str!("../../../crates/core/src/settings.rs");
+    let settings = include_str!("../../../../crates/core/src/settings.rs");
 
     // 拖拽结束时落盘最终宽度，过程中按增量阈值兜底
     assert!(resize.contains(".on_mouse_up("));

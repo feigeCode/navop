@@ -871,7 +871,7 @@ cargo test -p elasticsearch-provider --test end_to_end -- --test-threads=1
 
 ```bash
 cargo test -p extension-runtime
-cargo test -p main
+cargo test -p navop_app
 cargo run -p navop
 ```
 
@@ -1000,7 +1000,7 @@ CI、Release、R2 upload 和 Windows x86 backfill 已识别 `extensions/composit
 - [ ] shell UI 不读取保存 config 或 secret。
 - [ ] provider E2E 通过。
 - [ ] `cargo test -p extension-runtime` 通过。
-- [ ] `cargo test -p main` 通过。
+- [ ] `cargo test -p navop_app` 通过。
 - [ ] 扩展脚本测试通过。
 - [ ] 本地安装后 Navop 能发现扩展。
 - [ ] 真实目标服务完成一次 Test、Save、Open、Close 冒烟验证。
@@ -1028,10 +1028,10 @@ crates/extension-runtime/src/extension/manifest/contributes/connection.rs
 crates/extension-runtime/src/registration.rs
 crates/core/src/storage/models.rs
 crates/core/src/storage/repository.rs
-main/src/extension_connection_form.rs
-main/src/extension_connection_tab.rs
-main/src/shell_plugin_host/
-main/src/universal_plugins.rs
+crates/navop_app/src/extension_connection_form.rs
+crates/navop_app/src/extension_connection_tab.rs
+crates/navop_app/src/shell_plugin_host/
+crates/navop_app/src/universal_plugins.rs
 ```
 
 示例扩展：

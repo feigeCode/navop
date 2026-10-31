@@ -200,7 +200,7 @@ test("Linux publishes one package per architecture plus a separate GPU dependenc
     /cargo zigbuild[\s\S]*--release[\s\S]*-p \$\{\{ matrix\.product \}\}[\s\S]*--target "\$\{\{ matrix\.target \}\}\.2\.28"/,
   );
   // No platform drops the default feature set: `embedded-webview` is off in the
-  // default set itself (see main/Cargo.toml), so the shape that gets published is
+  // default set itself (see crates/navop_app/Cargo.toml), so the shape that gets published is
   // the plain default build on all three platforms. The guard for that lives in
   // its own test below.
   assert.doesNotMatch(build, /--no-default-features/);
@@ -308,13 +308,13 @@ test("Linux publishes one package per architecture plus a separate GPU dependenc
 test("the embedded webview is an opt-in feature on every platform", () => {
   const workspaceCargo = read("Cargo.toml");
   const cargo = read("crates/ai_chat_view/Cargo.toml");
-  const mainCargo = read("main/Cargo.toml");
+  const mainCargo = read("crates/navop_app/Cargo.toml");
   const universalPluginsCargo = read("crates/universal-plugins/Cargo.toml");
   const htmlCodeBlock = read(
     "crates/ai_chat_view/src/html_code_block.rs",
   );
   const dependentCargoFiles = [
-    "main/Cargo.toml",
+    "crates/navop_app/Cargo.toml",
     "crates/db_view/Cargo.toml",
     "crates/mongodb_view/Cargo.toml",
     "crates/redis_view/Cargo.toml",
@@ -391,7 +391,7 @@ test("no release build enables the embedded webview, while the opt-in path still
   // WebKitGTK 4.1 cannot travel with the package: the distributions that carry it
   // sit on glibc 2.39+, and `WebKitWebProcess` is resolved through a compile-time
   // path. Instead of giving Linux a feature set of its own, the feature is off in
-  // the default set (see main/Cargo.toml), so all three platforms publish the same
+  // the default set (see crates/navop_app/Cargo.toml), so all three platforms publish the same
   // shape and there is no per-platform list to keep in sync.
   assert.doesNotMatch(release, /--features[^\n]*embedded-webview/);
   const build = workflowStep(release, "Build release binary");
@@ -419,7 +419,7 @@ test("no release build enables the embedded webview, while the opt-in path still
     optIn,
     /cargo check -p ai_chat_view --features embedded-webview --tests/,
   );
-  assert.match(optIn, /cargo check -p main --features embedded-webview/);
+  assert.match(optIn, /cargo check -p navop_app --features embedded-webview/);
 });
 
 test("Linux GPU dependency stack replaces the retired portable runtime", () => {
@@ -1076,8 +1076,8 @@ test("Windows MSI shortcuts inherit the executable's embedded icon", () => {
   assert.match(wix, /<Icon Id="NavopIcon" SourceFile="\$\(IconPath\)"\s*\/>/);
   assert.match(wix, /<Property Id="ARPPRODUCTICON" Value="NavopIcon"\s*\/>/);
   assert.match(
-    read("main/build.rs"),
-    /set_icon\("\.\.\/resources\/windows\/navop\.ico"\)/,
+    read("crates/navop_app/build.rs"),
+    /set_icon\("\.\.\/\.\.\/resources\/windows\/navop\.ico"\)/,
   );
 });
 
@@ -1762,7 +1762,7 @@ test("application updates prefer navop while accepting legacy package names", ()
 });
 
 test("Windows 产物由宿主自己内嵌 Common-Controls v6 清单", () => {
-  const build = read("main/build.rs");
+  const build = read("crates/navop_app/build.rs");
   const manifest = read("resources/windows/navop.manifest.xml");
   const release = read(".github/workflows/release.yml");
 
@@ -1795,13 +1795,13 @@ test("Windows 产物由宿主自己内嵌 Common-Controls v6 清单", () => {
   // 所以这份清单只能由 navop 自己嵌。
   assert.match(
     build,
-    /set_manifest\(include_str!\("\.\.\/resources\/windows\/navop\.manifest\.xml"\)\)/,
+    /set_manifest\(include_str!\("\.\.\/\.\.\/resources\/windows\/navop\.manifest\.xml"\)\)/,
   );
   // winresource 只在 VersionInfo::FILETYPE 存在时才写清单块：漏了这行会静默不嵌。
   assert.match(build, /set_version_info\(winresource::VersionInfo::FILETYPE/);
   assert.match(
     build,
-    /rerun-if-changed=\.\.\/resources\/windows\/navop\.manifest\.xml/,
+    /rerun-if-changed=\.\.\/\.\.\/resources\/windows\/navop\.manifest\.xml/,
   );
 
   // 发布流程必须在打包前校验真实产物（静态检查拦不住「清单被上游吃掉」这类回归）。
@@ -1866,9 +1866,9 @@ test("Windows 清单门禁能识别缺失清单的 PE（含真实失败现象的
 
 test("release version source stays aligned with the navop product package", () => {
   const versionOf = (source) => source.match(/^version = "([^"]+)"/m)?.[1];
-  const mainVersion = versionOf(read("main/Cargo.toml"));
+  const mainVersion = versionOf(read("crates/navop_app/Cargo.toml"));
   const navopVersion = versionOf(read("apps/navop/Cargo.toml"));
-  assert.ok(mainVersion, "main/Cargo.toml must declare a version");
+  assert.ok(mainVersion, "crates/navop_app/Cargo.toml must declare a version");
   assert.equal(navopVersion, mainVersion, "apps/navop/Cargo.toml version must match main");
 });
 

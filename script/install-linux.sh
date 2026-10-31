@@ -3,7 +3,7 @@
 set -e
 
 # 说明：`webkit2gtk-4.1` 开发包只服务于可选的 `embedded-webview` feature（AI 对话里的
-# HTML 预览弹窗），它默认关闭、三平台一致，原因见 `main/Cargo.toml`。默认构建不装它
+# HTML 预览弹窗），它默认关闭、三平台一致，原因见 `crates/navop_app/Cargo.toml`。默认构建不装它
 # 也编得过，这里仍然装上只是为了 `cargo build --features embedded-webview` 能开箱即用。
 # 官方发布包不带它 —— 带 WebKitGTK 4.1 的发行版与发布包的 glibc 2.28 基线不相配，
 # 也没法随依赖包提供。

@@ -69,9 +69,9 @@ fn request_quit(_handle: AnyWindowHandle, window: &mut Window, cx: &mut App) {
 
 #[cfg(test)]
 mod tests {
-    const TRAY_SOURCE: &str = include_str!("../../crates/app_kit/src/integration/tray.rs");
+    const TRAY_SOURCE: &str = include_str!("../../../crates/app_kit/src/integration/tray.rs");
     const COMMANDS_SOURCE: &str =
-        include_str!("../../crates/app_kit/src/integration/tray/commands.rs");
+        include_str!("../../../crates/app_kit/src/integration/tray/commands.rs");
     const SHIM_SOURCE: &str = include_str!("system_tray.rs");
 
     #[test]

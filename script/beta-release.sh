@@ -6,7 +6,7 @@ set -Eeuo pipefail
 #   script/beta-release.sh --next --notes-file /private/tmp/navop-v0.23.0-beta.2-notes.md
 #   script/beta-release.sh --next --notes-file ... --dry-run
 #
-# 作用：在 dev 分支上一条命令发测试版。脚本会把 main/Cargo.toml 与三个
+# 作用：在 dev 分支上一条命令发测试版。脚本会把 crates/navop_app/Cargo.toml 与三个
 # app crate（apps/navop、apps/navop-shell、apps/navop-data）的
 # [package].version 统一改成 X.Y.Z-beta.N（--base 从 beta.1 起步，--next
 # 递增当前 beta 序号），同步 Cargo.lock 与 CHANGELOG.md，提交后创建并推送
@@ -35,7 +35,7 @@ NEXT="false"
 NOTES_FILE=""
 DRY_RUN="false"
 REMOTE="${REMOTE:-cnb}"
-MAIN_MANIFEST="${MAIN_MANIFEST:-${REPO_ROOT}/main/Cargo.toml}"
+MAIN_MANIFEST="${MAIN_MANIFEST:-${REPO_ROOT}/crates/navop_app/Cargo.toml}"
 APP_MANIFESTS=(
   "${REPO_ROOT}/apps/navop/Cargo.toml"
   "${REPO_ROOT}/apps/navop-shell/Cargo.toml"
@@ -62,7 +62,7 @@ usage() {
 
 环境变量：
   REMOTE             推送远端，默认 cnb
-  MAIN_MANIFEST      Cargo.toml 路径，默认 main/Cargo.toml
+  MAIN_MANIFEST      Cargo.toml 路径，默认 crates/navop_app/Cargo.toml
   LOCKFILE           Cargo.lock 路径，默认 Cargo.lock
   CHANGELOG          CHANGELOG.md 路径，默认 CHANGELOG.md
 
@@ -301,7 +301,7 @@ from pathlib import Path
 
 lock_path = Path(sys.argv[1])
 version = sys.argv[2]
-names = {"main", "navop", "navop-shell", "navop-data"}
+names = {"navop_app", "navop", "navop-shell", "navop-data"}
 lines = lock_path.read_text(encoding="utf-8").splitlines(keepends=True)
 
 in_package = False

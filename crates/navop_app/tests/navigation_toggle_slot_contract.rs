@@ -1,6 +1,6 @@
 #[test]
 fn hidden_navigation_toggle_keeps_its_layout_slot() {
-    let source = include_str!("../../crates/core/src/tab_container.rs");
+    let source = include_str!("../../../crates/core/src/tab_container.rs");
     assert!(source.contains("reserve_navigation_sidebar_toggle: false"));
     let builder = source
         .split("pub fn with_navigation_sidebar_toggle(")

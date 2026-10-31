@@ -1,6 +1,6 @@
 //! 产品依赖隔离契约：独立产品的依赖图里不能出现对方领域的 crate。
 //!
-//! 三个产品共用 `main`(navop_app)，领域代码靠 `database`/`shell` Cargo feature
+//! 三个产品共用 `navop_app`，领域代码靠 `database`/`shell` Cargo feature
 //! 裁剪。feature 一旦写漏（比如某个 cfg 反了、或者新代码直接引用领域 crate），
 //! 产物会悄悄把整条领域依赖链带回来——编译期不会报错，只有称重和依赖树能发现。
 //! 这里把「依赖树」变成可回归的断言，替代人工 `cargo tree | grep`。

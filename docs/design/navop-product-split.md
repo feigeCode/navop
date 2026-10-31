@@ -613,6 +613,10 @@ pub struct FileAssociation {
 
 全量包名从 `main` 改为 `navop` 会牵动 CI、`release.yml`、`script/*` 里的 `-p main`；建议 P2 先保留 package name `main`、只把目录挪到 `apps/navop`，P3 再统一改名，避免和领域迁移同时制造噪声。
 
+> **已被 §28 取代**：最终没有走 `apps/navop` 中转，也没有改叫 `navop`——目录直接落到
+> `crates/navop_app`、包名改为 `navop_app`（与 lib 名一致），CI/发布脚本/文档一次性同步。
+> 本文档 §1–§26 中出现的 `main` 均指改名前的历史名。
+
 ### 8.4 `one-core` 的边界
 
 `one-core` 继续做共享地基，但需要处理两个泄漏：
@@ -1591,3 +1595,53 @@ UI（161 处）。本批把这些入口改造成「公共壳调注册表/领域�
 
 `data_domain` 依赖（公共 MCP 的 Redis/Mongo 工具集实现）、`ProductFeatures`/`AppIdentity`
 常量重复、两套 MCP 实现合并、`public_mcp_runtime` 的领域 cfg 收敛。
+
+## §28 main 目录归位：`main/` → `crates/navop_app`，包名 `main` → `navop_app`（2026-11-01，dev）
+
+### 28.1 动机
+
+§26 之后 `main` 已只剩库（没有 bin、没有产品装配），但目录仍占用仓库根目录，与
+`apps/*` 并列时语义不清：根目录看起来像「一个 app」，实际它是所有产品共用的应用外壳
+库。改名后仓库根只剩 `apps/`（三个产品 bin）与 `crates/`（全部库），`navop_app` 与
+`app_kit`、`domain_api` 一起属于 crate 层。
+
+### 28.2 改动
+
+- `git mv main crates/navop_app`；`[package] name` 由 `main` 改为 `navop_app`，删掉冗余的
+  `[lib] name = "navop_app"` 块（包名与 lib 名现在一致）。
+- 根 `Cargo.toml`：members 里 `"main"` → `"crates/navop_app"`。三个 app 用**直接相对路径**
+  `navop_app = { path = "../../crates/navop_app" }`（shell/data 另加 `default-features = false`）；
+  不放进 `[workspace.dependencies]` 继承，因为 Cargo 不允许子 crate 对继承依赖再关
+  default features。
+- i18n 命名空间文件保持 `locales/main.yml` 原名：全仓 `t!("...")` 的 key 都带这个命名空间，
+  改文件名属于另一件事。
+- 26 处逃出 crate 根的 `include_str!` 各加一层 `../`（`resources/*`、`crates/core/build.rs`、
+  `apps/*/Cargo.toml`、`crates/*_view/Cargo.toml`、`app_kit` 源码）；`build.rs` 的
+  icon/manifest 路径同步。
+- `env_file.rs` 与 `tests/i18n_locale_keys_contract.rs` 的「工作区根」从 `parent()` 改为两级
+  `parent()`（`CARGO_MANIFEST_DIR` 现在是 `crates/navop_app`）。
+- 跨 crate 的源码断言（`crates/core/src/window_close.rs`、`crates/db_view/src/sql_editor_view.rs`、
+  `crates/one_ui/tests/dialog_footer_contract.rs`、`crates/windows_rdp_host/tests/contract.rs`）
+  同步指向新路径。
+- 发布链路同步：`script/release_pr.py`（`MANIFEST_PATH = "crates/navop_app/Cargo.toml"`、
+  `lock_app_version` 按 `navop_app` 取 `Cargo.lock` 版本）、`script/beta-release.sh` 的版本
+  包名集合、`script/release-tag.sh` / `.github/workflows/*` / `.github/RELEASE.md` 的清单路径与
+  `-p main` → `-p navop_app`。
+- 顺带修 `crates/app_kit/src/update/install.rs::expected_binary_name` 的 cfg 过宽（`macos|linux`
+  但只有 linux 调用点，macOS 构建 dead_code；自 b696f4ddb 引入，CI `-D warnings` 会拦）。
+
+### 28.3 验证
+
+- `cargo metadata` OK；`cargo tree -p navop|navop-shell|navop-data --depth 1` 均指向
+  `navop_app v0.22.0 (crates/navop_app)`。
+- `cargo check -p navop_app --all-targets`、`cargo clippy ... -D warnings`、
+  `cargo test -p navop_app`（含 4 个契约测试）通过。
+- 三个 app 的 `--all-targets` check 通过，产品依赖隔离契约不变。
+- `python3 -m unittest discover -s script/tests` 32 项通过（顺带修好 release PR 测试夹具：
+  setUp 现在写全四个 manifest）。
+
+### 28.4 剩余
+
+`navop_app` 内部 56k 行仍未按 §8.3 逐块下沉到 `app_kit`（home/home_tab/sidebar/settings/
+mcp/update/vault/account/team/tray）。这一层拆分牵动大量 `pub(crate)` 与循环引用，需要
+按模块逐个搬、每搬一块跑一次全量测试，不适合与本次目录归位混在一个提交里。

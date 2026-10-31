@@ -2118,7 +2118,7 @@ mod tests {
         // 更新弹窗已迁到 `app_kit::update`：它必须走宿主持有的退出漏斗
         // （`app_kit::update::host::shutdown_application`，main 注册的 hook 正是
         // `shutdown_application_resources_and_quit`），而不是自己调 `cx.quit()`。
-        let update_dialog = include_str!("../../crates/app_kit/src/update/dialog.rs");
+        let update_dialog = include_str!("../../../crates/app_kit/src/update/dialog.rs");
         assert!(update_dialog.contains("shutdown_application(cx"));
         assert!(!update_dialog.contains("cx.quit()"));
 

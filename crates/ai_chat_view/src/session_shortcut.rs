@@ -1,7 +1,7 @@
 //! 会话级快捷键：后退 / 前进导航、最近会话切换器。
 //!
 //! 形状照 [`crate::find_shortcut`]：上下文常量 + 动作 + `init` / `refresh_keybindings`，
-//! 由宿主（`main`）在启动与「设置变更后」各调一次；`init` 已随 `ai_chat_view::init`
+//! 由宿主（`navop_app`）在启动与「设置变更后」各调一次；`init` 已随 `ai_chat_view::init`
 //! 注册，漏调宿主也不会静默失效。
 //!
 //! 分工：

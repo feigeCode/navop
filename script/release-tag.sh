@@ -6,7 +6,7 @@ set -euo pipefail
 #   FORCE_RETAG=true script/release-tag.sh v1.2.3   # 覆盖同名 tag
 #
 # 前置条件（缺一不可）：
-#   1. 版本 bump（main + apps/navop + apps/navop-shell + apps/navop-data 四个
+#   1. 版本 bump（crates/navop_app + apps/navop + apps/navop-shell + apps/navop-data 四个
 #      Cargo.toml + Cargo.lock）已随发布 PR 合入 main，即四个 manifest 的
 #      版本均已等于 tag（统一版本：一个 tag 同发三个产品）；
 #   2. CHANGELOG.md 已包含该 tag 的双语条目并已提交；
@@ -27,7 +27,7 @@ REMOTE="${REMOTE:-origin}"
 FORCE_RETAG="${FORCE_RETAG:-false}"
 # 统一版本：一个 tag 同发全量与两个独立产品，四个 manifest 全部校验。
 RELEASE_MANIFESTS=(
-  "${REPO_ROOT}/main/Cargo.toml"
+  "${REPO_ROOT}/crates/navop_app/Cargo.toml"
   "${REPO_ROOT}/apps/navop/Cargo.toml"
   "${REPO_ROOT}/apps/navop-shell/Cargo.toml"
   "${REPO_ROOT}/apps/navop-data/Cargo.toml"

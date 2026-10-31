@@ -1,4 +1,4 @@
-//! 主密钥「修改」与「重置」弹窗——`main` 侧兼容层
+//! 主密钥「修改」与「重置」弹窗——`navop_app` 侧兼容层
 //!
 //! 弹窗本体已下沉到 `app_kit::vault::dialogs`。这里保留原来的函数名与签名，
 //! 只在打开前注册 [`crate::master_key_flow`] 里的宿主钩子（Navop Cloud / 个人

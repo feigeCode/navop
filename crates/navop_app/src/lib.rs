@@ -77,25 +77,25 @@ pub(crate) const NAVOP_ICON_ASSET_PATH: &str = "navop/app-icon.png";
 fn navop_brand_icon(path: &str) -> Option<std::borrow::Cow<'static, [u8]>> {
     let bytes: &'static [u8] = match path {
         one_core::storage::NAVOP_TDENGINE_COLOR_ICON => {
-            include_bytes!("../../resources/icons/tdengine-color.svg")
+            include_bytes!("../../../resources/icons/tdengine-color.svg")
         }
         one_core::storage::NAVOP_TDENGINE_LINE_COLOR_ICON => {
-            include_bytes!("../../resources/icons/tdengine-line-color.svg")
+            include_bytes!("../../../resources/icons/tdengine-line-color.svg")
         }
         one_core::storage::NAVOP_MQTT_COLOR_ICON => {
-            include_bytes!("../../resources/icons/mqtt-color.svg")
+            include_bytes!("../../../resources/icons/mqtt-color.svg")
         }
         one_core::storage::NAVOP_MQTT_LINE_ICON => {
-            include_bytes!("../../resources/icons/mqtt-line.svg")
+            include_bytes!("../../../resources/icons/mqtt-line.svg")
         }
         one_core::storage::NAVOP_BACKGROUND_TASK_ICON => {
-            include_bytes!("../../resources/icons/background-task.svg")
+            include_bytes!("../../../resources/icons/background-task.svg")
         }
         crate::home_tab::NAVOP_HISTORY_ICON => {
-            include_bytes!("../../resources/icons/history.svg")
+            include_bytes!("../../../resources/icons/history.svg")
         }
         crate::home_tab::NAVOP_HOME_LINE_ICON => {
-            include_bytes!("../../resources/icons/home-line.svg")
+            include_bytes!("../../../resources/icons/home-line.svg")
         }
         _ => return None,
     };
@@ -256,7 +256,7 @@ impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<std::borrow::Cow<'static, [u8]>>> {
         if path == NAVOP_ICON_ASSET_PATH {
             return Ok(Some(std::borrow::Cow::Borrowed(include_bytes!(
-                "../../resources/navop-icon.png"
+                "../../../resources/navop-icon.png"
             ))));
         }
 
@@ -756,7 +756,7 @@ mod embedded_cli_removal_tests {
     #[test]
     fn environment_files_are_disabled_for_release_builds() {
         let runtime_loader = include_str!("env_file.rs").replace("\r\n", "\n");
-        let build_script = include_str!("../../crates/core/build.rs");
+        let build_script = include_str!("../../../crates/core/build.rs");
 
         assert!(
             runtime_loader.contains("#[cfg(not(debug_assertions))]\npub fn load_env_files() {}")
@@ -1164,7 +1164,7 @@ mod native_driver_feature_contract_tests {
             .is_none_or(|line| line.contains("optional = true"))
     }
 
-    fn main_dependency_line<'a>(manifest: &'a str, dependency: &str) -> Option<&'a str> {
+    fn app_shell_dependency_line<'a>(manifest: &'a str, dependency: &str) -> Option<&'a str> {
         manifest
             .lines()
             .find(|line| line.trim_start().starts_with(&format!("{dependency} = {{")))
@@ -1172,12 +1172,14 @@ mod native_driver_feature_contract_tests {
 
     #[test]
     fn standalone_products_only_enable_their_own_domain_feature() {
-        let shell_manifest = include_str!("../../apps/navop-shell/Cargo.toml");
-        let data_manifest = include_str!("../../apps/navop-data/Cargo.toml");
+        let shell_manifest = include_str!("../../../apps/navop-shell/Cargo.toml");
+        let data_manifest = include_str!("../../../apps/navop-data/Cargo.toml");
         let shell_line =
-            main_dependency_line(shell_manifest, "main").expect("navop-shell depends on main");
+            app_shell_dependency_line(shell_manifest, "navop_app")
+                .expect("navop-shell depends on navop_app");
         let data_line =
-            main_dependency_line(data_manifest, "main").expect("navop-data depends on main");
+            app_shell_dependency_line(data_manifest, "navop_app")
+                .expect("navop-data depends on navop_app");
 
         assert!(shell_line.contains("default-features = false"));
         assert!(shell_line.contains("\"shell\""));
@@ -1211,7 +1213,7 @@ mod native_driver_feature_contract_tests {
 
         assert!(database.contains("dep:db_view") && !database.contains("dep:data_domain"));
         assert!(!database.contains("dep:terminal_view") && !database.contains("dep:shell_domain"));
-        // `main` 不再装配领域包（`ShellDomain` 由 apps 提供），shell feature 只剩
+        // `navop_app` 不再装配领域包（`ShellDomain` 由 apps 提供），shell feature 只剩
         // UI/后端依赖；`data_domain` 仍在 database feature 里，因为公共 MCP 的
         // Redis/Mongo 工具集实现暂时还留在 data_domain。
         assert!(shell.contains("dep:terminal_view"));
@@ -1249,7 +1251,7 @@ mod native_driver_feature_contract_tests {
     fn windows_native_rdp_feature_is_declared_and_enabled_by_default() {
         let main_manifest = include_str!("../Cargo.toml");
         let remote_desktop_view_manifest =
-            include_str!("../../crates/remote_desktop_view/Cargo.toml");
+            include_str!("../../../crates/remote_desktop_view/Cargo.toml");
         let main_features = feature_block(main_manifest);
         let remote_desktop_view_features = feature_block(remote_desktop_view_manifest);
         let main_default = main_features
@@ -1288,9 +1290,9 @@ mod native_driver_feature_contract_tests {
 
     #[test]
     fn direct_native_database_sdks_are_optional_or_absent() {
-        let redis_view = include_str!("../../crates/redis_view/Cargo.toml");
-        let mongodb_view = include_str!("../../crates/mongodb_view/Cargo.toml");
-        let navop_runtime = include_str!("../../crates/navop_runtime/Cargo.toml");
+        let redis_view = include_str!("../../../crates/redis_view/Cargo.toml");
+        let mongodb_view = include_str!("../../../crates/mongodb_view/Cargo.toml");
+        let navop_runtime = include_str!("../../../crates/navop_runtime/Cargo.toml");
 
         assert!(dependency_is_optional_or_absent(redis_view, "redis_client"));
         assert!(dependency_is_optional_or_absent(

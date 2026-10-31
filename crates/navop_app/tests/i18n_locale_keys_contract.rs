@@ -10,12 +10,15 @@ use std::path::{Path, PathBuf};
 
 #[test]
 fn every_t_key_exists_in_its_crate_locales() {
+    // `CARGO_MANIFEST_DIR` 是 `crates/navop_app`，工作区根在两级之上。
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
+        .and_then(Path::parent)
         .expect("workspace root")
         .to_path_buf();
 
-    let mut crate_dirs: Vec<PathBuf> = vec![workspace.join("main")];
+    // navop_app 自己就在 `crates/` 下，会被下面的遍历自动收录。
+    let mut crate_dirs: Vec<PathBuf> = Vec::new();
     for entry in fs::read_dir(workspace.join("crates")).expect("crates dir") {
         let path = entry.expect("crate entry").path();
         if path.join("src").is_dir() {

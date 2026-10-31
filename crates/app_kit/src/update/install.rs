@@ -25,11 +25,11 @@ fn expected_app_bundle_name() -> String {
     }
 }
 
-/// 当前产品的可执行文件名（macOS/Linux）。
+/// 当前产品的可执行文件名（Linux 更新包布局）。
 ///
 /// Linux 更新包布局是 `usr/bin/{binary_name}`，三产品各自叫 navop /
 /// navop-shell / navop-data；`onetcli` 是全量产品的历史名字，仅作兼容候选。
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(target_os = "linux")]
 fn expected_binary_name() -> &'static str {
     crate::identity().map_or("navop", |identity| identity.binary_name)
 }
@@ -1016,7 +1016,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn find_app_bundle_accepts_product_bundle_name() {
-        use super::{expected_app_bundle_name, is_supported_app_bundle};
+        use super::expected_app_bundle_name;
 
         // 回退（无身份）时期望全量 bundle 名。
         assert_eq!(expected_app_bundle_name(), "Navop.app");

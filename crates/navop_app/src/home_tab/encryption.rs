@@ -328,7 +328,7 @@ mod tests {
     #[test]
     fn startup_lock_keeps_the_unlocked_key_in_memory_only() {
         let source = include_str!("encryption.rs");
-        let flow = include_str!("../../../crates/app_kit/src/vault/master_key_flow.rs");
+        let flow = include_str!("../../../../crates/app_kit/src/vault/master_key_flow.rs");
         let dialog = source
             .split("pub(super) fn show_encryption_key_dialog(")
             .nth(1)
@@ -347,7 +347,7 @@ mod tests {
 
     #[test]
     fn master_key_change_rotates_connections_and_keychain_entries_together() {
-        let flow = include_str!("../../../crates/app_kit/src/vault/master_key_flow.rs");
+        let flow = include_str!("../../../../crates/app_kit/src/vault/master_key_flow.rs");
 
         assert!(flow.contains("one_core::storage::re_encrypt_secrets("));
         assert!(flow.contains("stats.connections"));

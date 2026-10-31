@@ -84,7 +84,7 @@ const RUN_ALL_QUERY_KEY_BINDINGS: [&str; 2] = ["cmd-shift-enter", "ctrl-shift-en
 /// 按平台给**单一**默认值，不做双绑：`cmd-/` 在 Windows / Linux 上是 Win 键（按不到），
 /// 而 `ctrl-/` 在 macOS 上又会被输入框自己的「全选」抢（见
 /// `ctrl_slash_binding_wins_inside_sql_input_context`），两边都列只会让人以为绑了两个。
-/// 设置面板展示的是同一对值：`main/src/setting_tab.rs` 的 `sql_toggle_comment` 条目。
+/// 设置面板展示的是同一对值：`crates/navop_app/src/setting_tab.rs` 的 `sql_toggle_comment` 条目。
 fn toggle_line_comment_defaults() -> &'static [&'static str] {
     if cfg!(target_os = "macos") {
         &["cmd-/"]
@@ -6846,7 +6846,7 @@ mod tests {
 
     /// 从设置面板的源码里取出注释快捷键条目某个平台字段列出的键位。
     fn panel_comment_shortcut_keys(field: &str) -> Vec<String> {
-        let settings_source = include_str!("../../../main/src/setting_tab.rs");
+        let settings_source = include_str!("../../../crates/navop_app/src/setting_tab.rs");
         let anchor = settings_source
             .find("action_id::SQL_TOGGLE_COMMENT")
             .expect("设置面板应列出注释快捷键");

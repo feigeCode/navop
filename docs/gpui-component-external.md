@@ -30,7 +30,7 @@ tag fork-0.3.108
 - feature crates: page-specific presentation and business interactions.
 
 `one_ui` must not depend on `one-core`. Settings persistence and shortcut
-resolution are injected by `main`.
+resolution are injected by `navop_app`.
 
 ## Updating
 
@@ -73,8 +73,8 @@ For network fetches on this machine, Clash is available at
 ## Verification
 
 ```bash
-cargo check -p main
-cargo test -p main --no-run
+cargo check -p navop_app
+cargo test -p navop_app --no-run
 cargo test -p one-ui
 cargo test -p extension-runtime
 cargo test -p extension-wasm

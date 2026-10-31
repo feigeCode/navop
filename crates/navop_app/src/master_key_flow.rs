@@ -1,4 +1,4 @@
-//! 主密钥修改与重置流程——`main` 侧兼容层
+//! 主密钥修改与重置流程——`navop_app` 侧兼容层
 //!
 //! 流程本体已下沉到 `app_kit::vault::{master_key_flow, reset}`，供 navop 全量版与
 //! `navop-shell` / `navop-data` 两个独立产品共享。这里不再实现流程，只做两件事：
