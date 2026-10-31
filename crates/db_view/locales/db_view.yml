@@ -2561,6 +2561,14 @@ TableData:
     en: Copied to clipboard
     zh-CN: 已复制到剪贴板
     zh-HK: 已複製到剪貼簿
+  copy_sql_requires_primary_key:
+    en: "Cannot generate UPDATE/DELETE: no primary key found for this table"
+    zh-CN: "无法生成 UPDATE/DELETE：未识别到该表的主键"
+    zh-HK: "無法產生 UPDATE/DELETE：未識別到該表的主鍵"
+  copy_sql_unavailable:
+    en: "Cannot generate UPDATE/DELETE: primary key value is empty, or the selection only contains primary key columns"
+    zh-CN: "无法生成 UPDATE/DELETE：主键值为空，或选区只包含主键列"
+    zh-HK: "無法產生 UPDATE/DELETE：主鍵值為空，或選區只包含主鍵欄位"
   copy_column_name:
     en: Copy Column Name
     zh-CN: 复制字段名称
