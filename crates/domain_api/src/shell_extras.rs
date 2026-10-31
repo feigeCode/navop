@@ -4,7 +4,6 @@ use gpui::{App, SharedString, Window};
 
 use crate::{HomeContext, PortForwardingRuntime, RemoteProtocol};
 use one_core::storage::StoredConnection;
-use one_core::tab_container::TabItem;
 
 /// WSL 发行版信息（Windows 专用；其它平台为空列表）。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -70,17 +69,6 @@ pub trait ShellExtras: Send + Sync {
         _home: &mut dyn HomeContext,
         _working_dir: Option<String>,
         _connection: Option<StoredConnection>,
-        _window: &mut Window,
-        _cx: &mut App,
-    ) -> bool {
-        false
-    }
-
-    /// 复制一个领域标签页（例如终端标签）；返回 `false` 表示不支持该标签。
-    fn duplicate_terminal_tab(
-        &self,
-        _tab: &TabItem,
-        _home: &mut dyn HomeContext,
         _window: &mut Window,
         _cx: &mut App,
     ) -> bool {

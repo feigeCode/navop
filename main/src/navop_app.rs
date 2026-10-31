@@ -1434,7 +1434,9 @@ impl NavopApp {
                         });
                     });
                 }
-                TabContainerEvent::LayoutChanged | TabContainerEvent::TabClosed { .. } => {
+                TabContainerEvent::LayoutChanged
+                | TabContainerEvent::TabClosed { .. }
+                | TabContainerEvent::TabDuplicated { .. } => {
                     cx.defer(move |cx| {
                         app.update(cx, |app, cx| {
                             app.sync_connection_sidebar_theme(cx);

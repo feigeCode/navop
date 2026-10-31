@@ -8,8 +8,7 @@ use domain_api::{
 use gpui::{App, AppContext as _, Window};
 use gpui_component::ActiveTheme as _;
 use one_core::storage::StoredConnection;
-use one_core::tab_container::{TabItem, TabOpenMode};
-use terminal_view::{TerminalConnectionKind, TerminalWorkspace};
+use one_core::tab_container::TabOpenMode;
 
 static PORT_FORWARDING: OnceLock<Arc<tokio::sync::Mutex<PortForwardingRuntime>>> = OnceLock::new();
 
@@ -120,41 +119,6 @@ impl ShellExtras for ShellExtrasImpl {
             ),
             None => crate::terminals::open_local_terminal_with_dir(working_dir, home, window, cx),
         }
-    }
-
-    fn duplicate_terminal_tab(
-        &self,
-        tab: &TabItem,
-        home: &mut dyn HomeContext,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> bool {
-        let view = tab.content().view();
-        let Ok(workspace) = view.downcast::<TerminalWorkspace>() else {
-            return false;
-        };
-        let kind = workspace.read(cx).connection_kind(cx);
-        if kind == TerminalConnectionKind::Local {
-            return app_kit::registry().open_tab(
-                &domain_api::TabIntent::Terminal { profile: None },
-                TabOpenMode::Activate,
-                home,
-                window,
-                cx,
-            );
-        }
-        let Some(connection_id) = workspace.read(cx).connection_id(cx) else {
-            return false;
-        };
-        let Some(connection) = home
-            .connections()
-            .iter()
-            .find(|connection| connection.id == Some(connection_id))
-            .cloned()
-        else {
-            return false;
-        };
-        app_kit::registry().open_connection(&connection, TabOpenMode::Activate, home, window, cx)
     }
 
     fn open_remote_desktop_fullscreen(

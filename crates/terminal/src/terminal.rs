@@ -1094,7 +1094,16 @@ pub fn resolve_local_workspace_root(config: &LocalConfig) -> Option<PathBuf> {
 fn prepare_shell_integration(shell: Option<&str>) -> (Vec<(String, String)>, Vec<String>) {
     // 使用进程级临时目录，确保不影响其他会话或工具
     let session_dir = std::env::temp_dir().join(format!("onetcli-{}", std::process::id()));
-    if fs::create_dir_all(&session_dir).is_err() {
+    prepare_shell_integration_in(&session_dir, shell)
+}
+
+/// 目录由调用方指定，便于测试各自使用独立目录而不互相删除对方的文件。
+#[cfg(not(target_os = "windows"))]
+fn prepare_shell_integration_in(
+    session_dir: &std::path::Path,
+    shell: Option<&str>,
+) -> (Vec<(String, String)>, Vec<String>) {
+    if fs::create_dir_all(session_dir).is_err() {
         tracing::warn!(
             "无法创建临时目录 {}，跳过 Shell Integration",
             session_dir.display()
@@ -1109,8 +1118,13 @@ fn prepare_shell_integration(shell: Option<&str>) -> (Vec<(String, String)>, Vec
         return (vec![], vec![]);
     }
 
-    let mut extra_env: Vec<(String, String)> =
-        vec![("ONETCLI_SHELL_INTEGRATION".into(), "1".into())];
+    // 宿主进程若本身从 Navop 终端启动，会继承已导出的 _ONETCLI_SHELL_INTEGRATED=1，
+    // 集成脚本的重复加载守卫随即提前返回，OSC 7/133 不再上报（复制标签丢 CWD）。
+    // 新会话必须显式清空，守卫只用于同一会话内的嵌套子 shell。
+    let mut extra_env: Vec<(String, String)> = vec![
+        ("ONETCLI_SHELL_INTEGRATION".into(), "1".into()),
+        ("_ONETCLI_SHELL_INTEGRATED".into(), String::new()),
+    ];
     let mut extra_args: Vec<String> = Vec::new();
 
     // 判断 shell 类型：优先用显式参数，否则读 $SHELL
@@ -6655,19 +6669,21 @@ mod tests {
     #[cfg(not(target_os = "windows"))]
     #[test]
     fn prepare_shell_integration_writes_lf_only_script() {
-        let session_dir = std::env::temp_dir().join(format!("onetcli-{}", std::process::id()));
-        let integration_path = session_dir.join("shell_integration.sh");
-        let _ = fs::remove_dir_all(&session_dir);
+        let session = tempfile::tempdir().expect("应创建临时目录");
+        let integration_path = session.path().join("shell_integration.sh");
 
-        let (_env, _args) = super::prepare_shell_integration(Some("/bin/bash"));
+        let (env, _args) = super::prepare_shell_integration_in(session.path(), Some("/bin/bash"));
 
+        assert!(
+            env.iter()
+                .any(|(key, value)| key == "_ONETCLI_SHELL_INTEGRATED" && value.is_empty()),
+            "从 Navop 终端启动的宿主进程会继承该变量，必须在新会话里显式清空: {env:?}"
+        );
         let script = fs::read_to_string(&integration_path).expect("应写入本地 integration 脚本");
         assert!(
             !script.contains('\r'),
             "本地 shell integration 脚本应统一写成 LF，避免 Windows 工件污染"
         );
-
-        let _ = fs::remove_dir_all(&session_dir);
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -6678,14 +6694,12 @@ mod tests {
             return;
         }
 
-        let session_dir = std::env::temp_dir().join(format!("onetcli-{}", std::process::id()));
-        let home_dir =
-            std::env::temp_dir().join(format!("onetcli-zsh-home-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&session_dir);
-        let _ = fs::remove_dir_all(&home_dir);
-        fs::create_dir_all(&home_dir).expect("应创建临时 HOME");
+        let session = tempfile::tempdir().expect("应创建临时目录");
+        let home = tempfile::tempdir().expect("应创建临时 HOME");
+        let home_dir = home.path().to_path_buf();
 
-        let (env_pairs, args) = super::prepare_shell_integration(Some("/bin/zsh"));
+        let (env_pairs, args) =
+            super::prepare_shell_integration_in(session.path(), Some("/bin/zsh"));
         assert!(args.is_empty(), "zsh 注入不应依赖额外启动参数");
 
         let mut command = Command::new(zsh);
@@ -6710,9 +6724,6 @@ mod tests {
             !stderr.contains("recursion limit") && !stderr.contains("job table full"),
             "zsh integration 不应递归 source 临时 .zshrc，stderr: {stderr:?}"
         );
-
-        let _ = fs::remove_dir_all(&session_dir);
-        let _ = fs::remove_dir_all(&home_dir);
     }
 
     #[test]

@@ -864,6 +864,7 @@ impl Render for Editor {
         let bounds_editor = cx.entity().downgrade();
 
         let base = div()
+            .key_context(crate::components::EDITOR_CONTEXT)
             .w_full()
             .min_w(px(0.0))
             .h_full()

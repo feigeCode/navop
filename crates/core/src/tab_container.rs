@@ -188,6 +188,12 @@ fn status_badge(id: String, icon: IconName, tooltip_text: String) -> AnyElement 
         .into_any_element()
 }
 
+/// 标签栏放不下时，非活动标签按 flex 收缩到 `TAB_MIN_WIDTH`（类似 SecureCRT）；
+/// 活动标签与正在重命名的标签始终保持完整宽度。
+fn tab_keeps_full_width(is_active: bool, is_renaming: bool) -> bool {
+    is_active || is_renaming
+}
+
 fn tab_width_bounds(tab_max_width: Pixels, is_renaming: bool) -> (Pixels, Pixels) {
     if !is_renaming {
         return (TAB_MIN_WIDTH, tab_max_width);
@@ -298,6 +304,9 @@ pub enum TabContainerEvent {
     TabClosed { id: String },
     /// The application navigation sidebar visibility was toggled.
     NavigationSidebarToggled { expanded: bool },
+    /// A tab was created by duplicating another tab. Emitted after the copy is
+    /// inserted so the host can attach content-specific event handling.
+    TabDuplicated { id: String },
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -2640,6 +2649,14 @@ impl TabContainer {
         cx.notify();
     }
 
+    /// Duplicates the active tab (what the tab menu does); pinned tabs are not duplicable.
+    pub fn duplicate_active_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_pinned_tab_active() {
+            return;
+        }
+        self.duplicate_tab(self.active_index, window, cx);
+    }
+
     fn duplicate_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         if index >= self.tabs.len() {
             return;
@@ -2685,6 +2702,7 @@ impl TabContainer {
         }
         self.tabs.insert(insert_index, duplicate);
         self.set_active_index(insert_index, window, cx);
+        cx.emit(TabContainerEvent::TabDuplicated { id: duplicate_id });
     }
 
     pub fn dump(&self, cx: &App) -> TabContainerState {
@@ -4251,13 +4269,18 @@ impl TabContainer {
                             tab_width_bounds(tab_max_width, rename_input_for_tab.is_some());
                         let show_title_tooltip = rename_input_for_tab.is_none() && !title.is_empty();
                         let tooltip_title = title.clone();
+                        let keep_full_width = tab_keeps_full_width(
+                            is_active,
+                            rename_input_for_tab.is_some(),
+                        );
 
                         div()
                             .id(idx)
                             .debug_selector(move || format!("tab-container.tab-{idx}"))
                             .flex()
                             .relative()
-                            .flex_shrink_0()
+                            .when(keep_full_width, |el| el.flex_shrink_0())
+                            .when(!keep_full_width, |el| el.flex_shrink_1())
                             .overflow_hidden()
                             .items_center()
                             .gap_2()
@@ -5457,6 +5480,17 @@ mod tests {
     }
 
     #[test]
+    fn inactive_tabs_shrink_before_tab_bar_scrolls() {
+        assert!(tab_keeps_full_width(true, false));
+        assert!(tab_keeps_full_width(false, true));
+        assert!(!tab_keeps_full_width(false, false));
+
+        let source = include_str!("tab_container.rs");
+        assert!(source.contains(".when(keep_full_width, |el| el.flex_shrink_0())"));
+        assert!(source.contains(".when(!keep_full_width, |el| el.flex_shrink_1())"));
+    }
+
+    #[test]
     fn renaming_tab_reserves_readable_input_width() {
         assert_eq!(
             (TAB_RENAME_MIN_WIDTH, TAB_RENAME_MIN_WIDTH),
@@ -5705,7 +5739,8 @@ mod tests {
                             format!("activated:{index}:{id}")
                         }
                         TabContainerEvent::LayoutChanged => "layout".to_string(),
-                        TabContainerEvent::NavigationSidebarToggled { .. } => return,
+                        TabContainerEvent::NavigationSidebarToggled { .. }
+                        | TabContainerEvent::TabDuplicated { .. } => return,
                     };
                     events_for_subscription
                         .lock()

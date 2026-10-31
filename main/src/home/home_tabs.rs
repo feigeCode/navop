@@ -23,6 +23,26 @@ use one_core::tab_container::{TabContainer, TabItem};
 mod tests {
 
     #[test]
+    fn duplicate_hotkey_shares_the_tab_menu_duplicate_path() {
+        let source = include_str!("home_tabs.rs").replace("\r\n", "\n");
+        let method = source
+            .split("\n    pub(crate) fn duplicate_active_tab")
+            .nth(1)
+            .and_then(|source| source.split("\n    }\n").next())
+            .expect("duplicate_active_tab method");
+
+        // 快捷键复制必须与标签菜单「复制」走同一条路，否则终端会丢当前工作目录。
+        assert!(method.contains("tc.duplicate_active_tab(window, cx)"));
+        assert!(!method.contains("duplicate_terminal_tab"));
+
+        let lifecycle = include_str!("../home_tab/lifecycle.rs");
+        assert!(lifecycle.contains("TabContainerEvent::TabDuplicated { id }"));
+        assert!(
+            lifecycle.contains("this.subscribe_terminal_workspace_events(&terminal, window, cx)")
+        );
+    }
+
+    #[test]
     fn notes_tab_uses_stable_identity() {
         let source = include_str!("home_tabs.rs").replace("\r\n", "\n");
         assert!(source.contains("fn add_notes_tab"));
@@ -347,30 +367,14 @@ impl HomePage {
 
     pub(crate) fn duplicate_active_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let tab_container = self.active_tab_container(cx);
-        let (content_key, active_tab) = {
-            let tc = tab_container.read(cx);
-            // pinned tab 不支持复制
-            if tc.is_pinned_tab_active() {
-                return;
-            }
-            let Some(active_tab) = tc.active_tab() else {
-                return;
-            };
-            (active_tab.content().content_key(cx), active_tab.clone())
-        };
-        let Some(extras) = app_kit::registry().shell_extras() else {
-            return;
-        };
-        // 领域标签（例如终端）由领域自己决定怎么复制；其它类型暂不支持复制。
-        if content_key == "Terminal" {
-            let _ = extras.duplicate_terminal_tab(&active_tab, self, window, cx);
-        }
+        // 与标签右键菜单「复制」共用 TabContainer::duplicate_active_tab：由标签内容自己克隆
+        // （终端会带上当前工作目录等状态），避免快捷键复制退化成新建连接。
+        tab_container.update(cx, |tc, cx| tc.duplicate_active_tab(window, cx));
     }
 }
 
-#[cfg(feature = "shell")]
-
 /// 当前产品没有注册该连接类型时给出明确提示，而不是静默失败。
+#[cfg(feature = "shell")]
 fn notify_unsupported(conn: &StoredConnection, window: &mut Window, cx: &mut gpui::App) {
     window.push_notification(
         Notification::error(format!(
