@@ -83,7 +83,7 @@ dotenvy = "0.15"
 # 需要重新打开时（上游修复在真机上被否证），按「已复现的机型 / 构建」给对应 target 传这个
 # feature 即可，代码不用改 —— 判据里没有架构条件（只有 `target_os = "macos"` + 这个
 # feature）：
-# `cargo build --release -p main --target x86_64-apple-darwin --features macos-touchbar-window-hide`。
+# `cargo build --release -p navop_app --target x86_64-apple-darwin --features macos-touchbar-window-hide`。
 # 未开启时所有隐藏路径都退回「关闭即销毁」，开关收敛在
 # `crate::window_close::HIDE_WINDOWS_ON_CLOSE` 一个常量上。
 default = []

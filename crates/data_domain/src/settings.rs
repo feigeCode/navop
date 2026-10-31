@@ -1,6 +1,6 @@
 //! 数据领域的设置分区：数据库设置页。
 //!
-//! 独立产品没有 `main` 的设置系统，本模块自建一页数据库设置，直接读写
+//! 独立产品没有 `navop_app` 的设置系统，本模块自建一页数据库设置，直接读写
 //! `one_core::settings::AppSettings`；文案硬编码中文（`data_domain` 不依赖 rust-i18n）。
 
 use domain_api::SettingsSectionProvider;

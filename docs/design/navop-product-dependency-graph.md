@@ -40,7 +40,7 @@ redis_view, redis-runtime, runtime_database, runtime_redis
 - `ssh` 与 `sftp`、`connection_tunnel` 三产品共有：数据库连接的 SSH 隧道（`connection_tunnel`
   → `ssh`）需要它们，属于数据库产品的合法后端依赖；终端/SFTP UI crate（`terminal_view`
   / `sftp_view` / `ssh_form`）只在全量 + shell 中出现。
-- `main`（公共应用壳）三产品共有，但领域代码用 `#[cfg(feature = "database")]` /
+- `navop_app`（公共应用壳）三产品共有，但领域代码用 `#[cfg(feature = "database")]` /
   `#[cfg(feature = "shell")]` 排除，独立产品的依赖树中不再出现对方领域的任何 crate。
 
 ## 重新生成

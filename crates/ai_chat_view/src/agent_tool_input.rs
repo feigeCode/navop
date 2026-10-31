@@ -161,11 +161,11 @@ mod tests {
     fn command_summary_uses_command_field() {
         let display = build_tool_input_display(
             "exec_command",
-            &json!({"command": "rtk cargo check -p main", "timeout": 30}),
+            &json!({"command": "rtk cargo check -p navop_app", "timeout": 30}),
         );
 
-        assert_eq!("rtk cargo check -p main", display.summary);
-        assert!(display.json.contains("rtk cargo check -p main"));
+        assert_eq!("rtk cargo check -p navop_app", display.summary);
+        assert!(display.json.contains("rtk cargo check -p navop_app"));
     }
 
     #[test]

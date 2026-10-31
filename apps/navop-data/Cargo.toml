@@ -1,6 +1,6 @@
 [package]
 name = "navop-data"
-version = "0.1.0"
+version = "0.22.0"
 edition.workspace = true
 publish = false
 
@@ -8,10 +8,10 @@ publish = false
 name = "navop-data"
 path = "src/main.rs"
 
-# 独立产品与全量产品共用同一套应用外壳：这里只依赖 `navop_app`（`main` 包），
+# 独立产品与全量产品共用同一套应用外壳：这里只依赖 `navop_app` 包，
 # 由 `run_product_with_version` 决定产品身份与领域装配。
 [dependencies]
-main = { path = "../../main", default-features = false, features = ["wasm-components", "windows-native-rdp", "shell-plugins", "database"] }
+navop_app = { path = "../../crates/navop_app", default-features = false, features = ["wasm-components", "windows-native-rdp", "shell-plugins", "database"] }
 domain_api = { workspace = true }
 gpui = { workspace = true }
 anyhow = { workspace = true }

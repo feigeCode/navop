@@ -50,7 +50,7 @@ members = [
     "crates/one-assets",
     "tools/gpui-rdp-smoke",
     "tools/windows-rdp-probe",
-    "main",
+    "crates/navop_app",
     "apps/navop",
     "apps/navop-shell",
     "apps/navop-data",

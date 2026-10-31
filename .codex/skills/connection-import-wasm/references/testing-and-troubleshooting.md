@@ -30,8 +30,8 @@ When host behavior changes, test in `../onetcli`:
 ```bash
 rtk cargo test -p extension-wasm
 rtk cargo test -p extension-runtime connection_import
-rtk cargo check -p main
-rtk cargo check -p main --no-default-features
+rtk cargo check -p navop_app
+rtk cargo check -p navop_app --no-default-features
 ```
 
 Add host tests for generic host capabilities only:

@@ -1,6 +1,6 @@
 //! 独立产品补齐的连接打开器：FTP 双栏文件视图、串口与 Telnet 终端。
 //!
-//! 这三类连接原先只有主产品 `main` 里存在打开逻辑，领域注册表里没有对应
+//! 这三类连接原先只有主产品 `navop_app` 里存在打开逻辑，领域注册表里没有对应
 //! opener，独立产品里点「打开」会失败。
 
 use domain_api::{ConnectionOpener, HomeContext};

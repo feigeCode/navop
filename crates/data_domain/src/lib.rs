@@ -1,6 +1,6 @@
 //! `navopData` 的领域实现（骨架）。
 //!
-//! 首个迁入的是 Redis 单连接打开路径；工作区分组仍留在 `main`，
+//! 首个迁入的是 Redis 单连接打开路径；工作区分组仍留在 `navop_app`，
 //! 等 `HomeContext` 暴露当前工作区后再迁。Database/Mongo 随后加入。
 
 use db_view::database_tab::DatabaseTabView;

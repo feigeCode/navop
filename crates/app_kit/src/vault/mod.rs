@@ -1,7 +1,7 @@
 //! 主密钥解锁 / 设置流程与凭据库弹窗（三个产品共享）。
 //!
-//! 迁移自 `main/src/master_key_flow.rs`、`main/src/master_key_dialogs.rs` 与
-//! `main/src/credential_vault/*`。本地加解密与仓库层都在 `one_core`，这里只负责
+//! 迁移自 `crates/navop_app/src/master_key_flow.rs`、`crates/navop_app/src/master_key_dialogs.rs` 与
+//! `crates/navop_app/src/credential_vault/*`。本地加解密与仓库层都在 `one_core`，这里只负责
 //! 流程编排与 UI，因此独立产品也能直接使用：没有主密钥 UI 的产品接上本模块后，
 //! 首次设置 / 解锁主密钥、查看与编辑凭据库都能真实工作。
 //!

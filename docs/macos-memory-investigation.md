@@ -699,7 +699,7 @@ arm 都一样）没有 Touch Bar。因此 CI 能钉住的是「修复所依赖�
   我们自己的一轮（保存/确定那条已经验证过的路线）。
   ⚠️ **这条只对了一半**：当天真机反馈「确定」确实不崩了，但**红点点仍然闪退** ——
   也就是说「挪回自己的一轮」还不够，见 §10.7。
-- 验证：`cargo check -p one-core -p main --all-targets` Finished；
+- 验证：`cargo check -p one-core -p navop_app --all-targets` Finished；
   `cargo test -p one-core --lib` **692 passed / 0 failed**；新增契约测试
   `every_popup_intercepts_the_native_close_route` 锁住「两类弹窗都装了关闭路线，且这条路线
   在 `reuse_key` 分支之外」（本机没有 Touch Bar，行为层面无法复现，结构断言是唯一能自动化
@@ -731,7 +731,7 @@ arm 都一样）没有 Touch Bar。因此 CI 能钉住的是「修复所依赖�
 - 计数器口径变化：`live_windows` 现在会随一次性弹窗的打开次数增长（停放窗口也是活窗口），
   这是**预期**，不再是「复用没命中」的信号。判断复用是否生效改看「同一类弹窗第二次打开时
   `opened_windows` 是否不再增长、`live_windows` 是否不变」。
-- 验证：`cargo check -p one-core -p main --all-targets` Finished；
+- 验证：`cargo check -p one-core -p navop_app --all-targets` Finished；
   `cargo test -p one-core --lib` **693 passed / 0 failed**。契约测试：
   `popup_windows_are_hidden_and_never_destroyed`（弹窗判断在隐藏之前；销毁动作只允许出现在
   「不是弹窗」与两个失败分支里）、`one_shot_popups_are_registered_as_parked`（一次性弹窗必须
@@ -781,7 +781,7 @@ arm 都一样）没有 Touch Bar。因此 CI 能钉住的是「修复所依赖�
   clippy 对本 crate 无新增告警（`gpui` crate 里有一处**既有** `redundant_clone` 会中断
   clippy 构建，只能临时 `-A clippy::redundant_clone` 绕过；与本改动无关）。
 - 已发布 `fork-0.3.119`（快照提交 `36429a19`，`zed-rev` = `b73d4c2b25`），navop 的
-  `[patch.crates-io]` 24 条与 `Cargo.lock` 一并切过去；`cargo check -p one-core -p main
+  `[patch.crates-io]` 24 条与 `Cargo.lock` 一并切过去；`cargo check -p one-core -p navop_app
   --all-targets` 通过。
 - ⚠️ 发出去给真机的那包是「**不销毁弹窗**（§10.7）+ **守卫关闭**」的组合：即最保守、
   引入最少新机制的形态。老崩溃家族（窗口销毁期被注销）由「不销毁」消除；如果仍偶发，再用
@@ -811,7 +811,7 @@ arm 都一样）没有 Touch Bar。因此 CI 能钉住的是「修复所依赖�
   （语义取反）。
 - 验证：`cargo test -p gpui_macos --lib` **14 passed / 0 failed**，
   `the_guard_is_on_unless_the_environment_says_off` 同时断言「什么都不设 ⇒ 守卫确实装上」
-  与「设成 `0` ⇒ 确实不装」；`cargo check -p one-core -p main --all-targets` 通过。
+  与「设成 `0` ⇒ 确实不装」；`cargo check -p one-core -p navop_app --all-targets` 通过。
 - 发给真机的第 5 版组合：**不销毁弹窗（§10.7）+ 守卫默认开启（本节）**。两个变体各有真机
   证据支撑：红点 / RDP 全屏那条由「不销毁」治住，「确定 / 取消」那条由守卫治住。
 - ⚠️ 仍未解释：`navop-2026-09-27-165228.ips`（退出应用时 Foundation KVO 记账里
@@ -878,7 +878,7 @@ arm 都一样）没有 Touch Bar。因此 CI 能钉住的是「修复所依赖�
 收敛成一个 cargo feature：
 
 - **开关**：`crates/core/Cargo.toml` 的 `macos-touchbar-window-hide`（`default = []`），
-  `main/Cargo.toml` 转发。整个链路只读**一个常量**：
+  `crates/navop_app/Cargo.toml` 转发。整个链路只读**一个常量**：
   `one_core::window_close::HIDE_WINDOWS_ON_CLOSE = cfg!(all(target_os = "macos", feature = "macos-touchbar-window-hide"))`。
   之所以不做成散落的 `#[cfg]`，是因为 `popup_window.rs`（弹窗注册与关闭路由）、
   `window_close.rs`（关闭漏斗）、`remote_file_editor::editor_window_visibility`（编辑器窗口）

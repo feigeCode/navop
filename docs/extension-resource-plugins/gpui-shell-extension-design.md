@@ -50,8 +50,8 @@ UI RPC。已有 provider 协议保持不变，Elasticsearch、Kafka、Kubernetes
 
 当前所有权入口见：
 
-- `main/src/universal_plugins.rs`
-- `main/src/shell_plugin_host.rs`
+- `crates/navop_app/src/universal_plugins.rs`
+- `crates/navop_app/src/shell_plugin_host.rs`
 - `crates/extension-plugin-adapter/src/activation.rs`
 - `crates/extension-host/src/universal_plugin.rs`
 - `crates/extension-runtime/src/global.rs`
@@ -1248,7 +1248,7 @@ install extension
 
 ### Phase 3：宿主和 tab
 
-- `main` 引入 `gpui-shell`。
+- `navop_app` 引入 `gpui-shell`。
 - `gpui_component::init(cx)` 后调用 fork 新增的 `gpui_shell::init_embedded(cx)`；该入口只
   初始化 shell reflection/runtime，不重复调用 `gpui_base::init(cx)`。
 - 扩展 `ShellPluginHost`、mount state 和 lease rollback。
@@ -1326,8 +1326,8 @@ MVP 拒绝原因：绕过 provider 的 permission authorizer、secret、timeout�
 
 ## 24. 关键代码引用
 
-- `main/src/shell_plugin_host.rs`：当前 runtime lease bridge。
-- `main/src/universal_plugins.rs`：应用唯一 provider owner、catalog sync 和 monitor。
+- `crates/navop_app/src/shell_plugin_host.rs`：当前 runtime lease bridge。
+- `crates/navop_app/src/universal_plugins.rs`：应用唯一 provider owner、catalog sync 和 monitor。
 - `crates/extension-plugin-adapter/src/activation.rs`：activation、generation 和 supervision。
 - `crates/extension-host/src/universal_plugin.rs`：typed resource/job/event/blob facade。
 - `crates/extension-runtime/src/extension/manifest/contributes.rs`：新 contribution 落点。

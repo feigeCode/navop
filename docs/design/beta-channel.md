@@ -1,6 +1,6 @@
 # Beta 发布通道设计
 
-> 文档状态：已实现（M0 服务端：GitHub Actions + `script/`；M1 客户端：`crates/app_kit/src/update/`、`main/src/settings/update_channel.rs`）
+> 文档状态：已实现（M0 服务端：GitHub Actions + `script/`；M1 客户端：`crates/app_kit/src/update/`、`crates/navop_app/src/settings/update_channel.rs`）
 >
 > 目标读者：发布流水线维护者、桌面端更新模块开发者
 >
@@ -150,8 +150,8 @@ bash -n script/beta-release.sh
 # 客户端
 cargo test -p one-core --lib update_channel
 cargo test -p app_kit --lib update
-cargo test -p main --lib settings::update_channel
-cargo test -p main --test i18n_locale_keys_contract
+cargo test -p navop_app --lib settings::update_channel
+cargo test -p navop_app --test i18n_locale_keys_contract
 
 ```
 python3 -c "import yaml,sys;[yaml.safe_load(open(p)) for p in sys.argv[1:]]" \

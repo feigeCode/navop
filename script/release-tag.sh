@@ -6,8 +6,9 @@ set -euo pipefail
 #   FORCE_RETAG=true script/release-tag.sh v1.2.3   # 覆盖同名 tag
 #
 # 前置条件（缺一不可）：
-#   1. 版本 bump（main/Cargo.toml + Cargo.lock）已随发布 PR 合入 main，
-#      即 main/Cargo.toml 的版本已等于 tag；
+#   1. 版本 bump（crates/navop_app + apps/navop + apps/navop-shell + apps/navop-data 四个
+#      Cargo.toml + Cargo.lock）已随发布 PR 合入 main，即四个 manifest 的
+#      版本均已等于 tag（统一版本：一个 tag 同发三个产品）；
 #   2. CHANGELOG.md 已包含该 tag 的双语条目并已提交；
 #   3. 当前在 main 分支且工作区干净。
 #
@@ -24,7 +25,13 @@ cd "${REPO_ROOT}"
 TAG="${1:-}"
 REMOTE="${REMOTE:-origin}"
 FORCE_RETAG="${FORCE_RETAG:-false}"
-MAIN_MANIFEST="${MAIN_MANIFEST:-${REPO_ROOT}/main/Cargo.toml}"
+# 统一版本：一个 tag 同发全量与两个独立产品，四个 manifest 全部校验。
+RELEASE_MANIFESTS=(
+  "${REPO_ROOT}/crates/navop_app/Cargo.toml"
+  "${REPO_ROOT}/apps/navop/Cargo.toml"
+  "${REPO_ROOT}/apps/navop-shell/Cargo.toml"
+  "${REPO_ROOT}/apps/navop-data/Cargo.toml"
+)
 RELEASE_VERSION="${TAG#v}"
 
 if [[ -z "${TAG}" ]]; then
@@ -62,19 +69,25 @@ if [[ -n "$(git status --porcelain)" ]]; then
   exit 1
 fi
 
-current_version="$(
-  awk -F'"' '
-    /^\[package\]$/ { in_package = 1; next }
-    /^\[/ { in_package = 0 }
-    in_package && /^version = "/ { print $2; exit }
-  ' "${MAIN_MANIFEST}"
-)"
-if [[ "${current_version}" != "${RELEASE_VERSION}" ]]; then
-  echo "错误：main/Cargo.toml 版本为 ${current_version:-<missing>}，与 ${TAG} 不一致。" >&2
+status=0
+for release_manifest in "${RELEASE_MANIFESTS[@]}"; do
+  current_version="$(
+    awk -F'"' '
+      /^\[package\]$/ { in_package = 1; next }
+      /^\[/ { in_package = 0 }
+      in_package && /^version = "/ { print $2; exit }
+    ' "${release_manifest}"
+  )"
+  if [[ "${current_version}" != "${RELEASE_VERSION}" ]]; then
+    echo "错误：${release_manifest} 版本为 ${current_version:-<missing>}，与 ${TAG} 不一致。" >&2
+    status=1
+  fi
+done
+if [[ "${status}" -ne 0 ]]; then
   echo "请先把版本 bump 放进 dev -> main 的发布 PR 并合入，再运行本脚本。" >&2
   exit 1
 fi
-echo "main/Cargo.toml 版本已匹配：${RELEASE_VERSION}"
+echo "四个 manifest 版本已匹配：${RELEASE_VERSION}（navop / navop-shell / navop-data）"
 
 if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
   if [[ "${FORCE_RETAG}" == "true" ]]; then

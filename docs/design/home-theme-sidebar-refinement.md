@@ -184,7 +184,7 @@ Dark 第一轮保留现有侧栏背景 `#1E1E1E`、选中背景 `#2D4A6F`、文�
 修改 `themes/navop.json` 的 sidebar token 会影响其他消费者。已确认：
 
 ```text
-main/src/persistent_connection_sidebar/mod.rs
+crates/navop_app/src/persistent_connection_sidebar/mod.rs
 SidebarPalette::app（约 52–69 行）
   foreground = theme.sidebar_foreground
   hover      = theme.sidebar_accent
@@ -211,7 +211,7 @@ SidebarPalette::app（约 52–69 行）
 - 依赖 `assets/icons/home.svg` 有固定填充 `#A3D2FF`。
 - 依赖 `assets/icons/terminal.svg` 有固定填充 `#C7D2F1`。
 - `Icon::new` 通过生成的图标元数据选择模式；该版本测试明确断言 `IconName::Terminal` 默认 Color。
-- `main/src/navigation_applications.rs::icon` 将 `SessionLogs` 映射到 `Terminal`。
+- `crates/navop_app/src/navigation_applications.rs::icon` 将 `SessionLogs` 映射到 `Terminal`。
 - `home_layout.rs::TabContent::icon` 还显式使用 `IconName::Home.color()`。
 
 实施要求：
@@ -249,7 +249,7 @@ SidebarPalette::app（约 52–69 行）
 
 ### 6.3 几何：给选中块一点呼吸空间
 
-当前实际展开宽度 `184px`、折叠宽度 `58px`，来源 `main/src/home_tab.rs:98–102`。截图是缩放后的图像，不可把图片测得的宽度直接写成 GPUI 数值。
+当前实际展开宽度 `184px`、折叠宽度 `58px`，来源 `crates/navop_app/src/home_tab.rs:98–102`。截图是缩放后的图像，不可把图片测得的宽度直接写成 GPUI 数值。
 
 建议第一轮：
 
@@ -305,7 +305,7 @@ gpui-component / crates/ui/src/avatar/avatar.rs::render
 
 ### 7.2 卡片 hover / selected 修正
 
-位置：`main/src/home_tab/connection_card.rs:32–62`。
+位置：`crates/navop_app/src/home_tab/connection_card.rs:32–62`。
 
 当前默认 hover 也使用 `list_active_border`，选中背景设置后又追加无条件 `.hover(...)`。这构成状态覆盖风险，需通过运行时验证确认修复。
 
@@ -333,12 +333,12 @@ Tab 栏全局配色重构、整套主题系统重写、右侧详情抽屉、侧�
 
 | 文件 | 修改内容 |
 | --- | --- |
-| `main/src/home_tab/sidebar_navigation.rs` | 功能图标、统一导航行、hover/selected 区分、设置行对齐 |
-| `main/src/home_tab/sidebar.rs` | 统一内缩、正确使用侧栏边界/前景，保留滚动与底部锚定 |
-| `main/src/home_tab/account_menu.rs` | 中性 fallback、账户状态、文字重量、与导航一致的 hover |
-| `main/src/home_tab/connection_card.rs` | 修复 hover/selected 优先级，减弱普通 hover |
-| `main/src/home_tab/tests/rendering.rs` 及必要的定向测试 | 状态、ID、布局与行为防回归 |
-| `main/src/home_tab/home_layout.rs`（按需） | 仅首页 Tab 功能图标一致性，不重写布局 |
+| `crates/navop_app/src/home_tab/sidebar_navigation.rs` | 功能图标、统一导航行、hover/selected 区分、设置行对齐 |
+| `crates/navop_app/src/home_tab/sidebar.rs` | 统一内缩、正确使用侧栏边界/前景，保留滚动与底部锚定 |
+| `crates/navop_app/src/home_tab/account_menu.rs` | 中性 fallback、账户状态、文字重量、与导航一致的 hover |
+| `crates/navop_app/src/home_tab/connection_card.rs` | 修复 hover/selected 优先级，减弱普通 hover |
+| `crates/navop_app/src/home_tab/tests/rendering.rs` 及必要的定向测试 | 状态、ID、布局与行为防回归 |
+| `crates/navop_app/src/home_tab/home_layout.rs`（按需） | 仅首页 Tab 功能图标一致性，不重写布局 |
 | `resources/icons/`（确无可复用资源时） | 自有线性 Home 资源与注册，不复制参考产品素材 |
 
 ### 阶段 B：内置侧栏主题微调
@@ -346,7 +346,7 @@ Tab 栏全局配色重构、整套主题系统重写、右侧详情抽屉、侧�
 | 文件 | 修改内容 |
 | --- | --- |
 | `themes/navop.json` | 应用第 5.2 节建议字段，其他主题值不动 |
-| `main/src/persistent_connection_sidebar/mod.rs`（仅确有副作用时） | 隔离 app palette 普通 hover，保留终端调色板分支 |
+| `crates/navop_app/src/persistent_connection_sidebar/mod.rs`（仅确有副作用时） | 隔离 app palette 普通 hover，保留终端调色板分支 |
 | `crates/core/src/themes.rs` 的测试部分（按需） | 验证显式 sidebar 前景、主题切换/回退不退化；不扩大 custom accent 覆盖面 |
 
 `crates/core/src/tab_container.rs`、业务状态、连接协议和数据库模块默认不在修改范围。
@@ -362,12 +362,12 @@ Tab 栏全局配色重构、整套主题系统重写、右侧详情抽屉、侧�
 在目标 worktree 内运行；以下是**交给实施模型的待执行命令，本次文档审阅没有运行它们**：
 
 ```bash
-rtk cargo check -p main
-rtk cargo test -p main home_tab::
-rtk cargo test -p main navigation_applications::
+rtk cargo check -p navop_app
+rtk cargo test -p navop_app home_tab::
+rtk cargo test -p navop_app navigation_applications::
 # 如果修改了主题或持久连接树：
 rtk cargo test -p one-core themes::
-rtk cargo test -p main persistent_connection_sidebar::
+rtk cargo test -p navop_app persistent_connection_sidebar::
 ```
 
 按仓库格式检查规则检查本轮改动，不对整个 dirty workspace 批量格式化。

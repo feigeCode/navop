@@ -24,14 +24,14 @@ Review the extracted Markdown and make sure it matches the source notes, includi
 The normal release sequence is:
 
 1. Generate, review, and commit the target version entry in `CHANGELOG.md`.
-2. Bump the application version (`main/Cargo.toml` and `Cargo.lock`) to the target `X.Y.Z` **inside the same `dev` → `main` release pull request**. `main` is a protected branch (PR + `CI gate`, `enforce_admins=true`), so the version change cannot be pushed to `main` directly.
+2. Bump the application version **in all four manifests at once** (`crates/navop_app/Cargo.toml`, `apps/navop/Cargo.toml`, `apps/navop-shell/Cargo.toml`, `apps/navop-data/Cargo.toml`, plus `Cargo.lock`) to the target `X.Y.Z` **inside the same `dev` → `main` release pull request**. `main` is a protected branch (PR + `CI gate`, `enforce_admins=true`), so the version change cannot be pushed to `main` directly.
 3. Merge the release pull request once CI passes; `main` now carries both the changelog entry and the bumped version.
-4. On `main`, run `script/release-tag.sh vX.Y.Z`. The script refuses to proceed unless `main/Cargo.toml` already equals the tag and the bilingual changelog entry is present; it then creates and pushes the `v*` tag (tag pushes are not branch-protected).
+4. On `main`, run `script/release-tag.sh vX.Y.Z`. The script refuses to proceed unless all four manifests already equal the tag and the bilingual changelog entry is present; it then creates and pushes the `v*` tag (tag pushes are not branch-protected).
 5. `Release Trigger` dispatches the shared `Release` workflow on the `main` branch.
-6. The workflow checks the application version and tagged changelog entry before starting expensive builds.
-7. macOS ARM64, macOS x86_64, Linux x86_64, Linux ARM64, and Windows x86_64 build in parallel in one matrix.
-8. After all requested platforms finish, the workflow extracts the tagged entry, uses it as the GitHub Release body, and writes the same Markdown to the R2 `latest.json` `release_notes` field.
-9. Once every uploaded object has been verified, R2 keeps only the tag that was just uploaded: the other `releases/<tag>/` prefixes are pruned, so the bucket carries one version's installers instead of the whole history. Nothing becomes unreachable — `updates/latest.json` only ever points at the tag being uploaded, and older installers stay on their GitHub Release and on the CNB mirror.
+6. The workflow checks the unified application version (all four manifests) and the tagged changelog entry before starting expensive builds.
+7. The full `navop` product builds its six platforms (macOS ARM64/x86_64, Linux x86_64/ARM64, Windows x86_64/x86); `navop-shell` and `navop-data` additionally build their four primary platforms (macOS ARM64/x86_64, Linux x86_64, Windows x64) — all in one matrix. The `products` input (`all` / `full` / `standalone`) trims the matrix when repairing a release.
+8. After all requested platforms finish, the workflow extracts the tagged entry, uses it as the GitHub Release body, and writes the same Markdown to every R2 manifest's `release_notes` field (up to six manifests per channel run: one per product).
+9. Once every uploaded object has been verified, R2 keeps only the tag that was just uploaded: the other `releases/<tag>/` prefixes are pruned, so the bucket carries one version's installers instead of the whole history. Nothing becomes unreachable — every `updates/**/latest.json` only ever points at the tag being uploaded, and older installers stay on their GitHub Release and on the CNB mirror.
 
 The build workflow checks out the requested tag, while the workflow itself runs from `main`. This keeps Cargo input caches and sccache data reusable across tags and repair runs.
 
@@ -39,8 +39,8 @@ The build workflow checks out the requested tag, while the workflow itself runs 
 
 A pull request that only carries the `CHANGELOG.md` entry and the version bump does not need the platform matrix. `.github/workflows/ci.yml` classifies every pull request in the `classify` job through `script/release_pr.py check`:
 
-- The pull request qualifies only when every changed file is `CHANGELOG.md`, `main/Cargo.toml`, or `Cargo.lock`, and the `Cargo.toml` / `Cargo.lock` diff contains nothing but `version = "..."` lines. Any other file, or a dependency change in `main/Cargo.toml`, keeps the full matrix.
-- When it qualifies, the `test` and `windows-rdp-probe` jobs are skipped and the release metadata is validated instead: `main/Cargo.toml` and the `main` package in `Cargo.lock` must agree, and the bilingual entry for that version must exist, be complete (`更新内容` / `修复与优化` plus `What's New` / `Fixes and Improvements`) and carry the CNB mirror line.
+- The pull request qualifies only when every changed file is `CHANGELOG.md`, `Cargo.lock`, or one of the four version manifests (`crates/navop_app/Cargo.toml`, `apps/navop/Cargo.toml`, `apps/navop-shell/Cargo.toml`, `apps/navop-data/Cargo.toml`), and the `Cargo.toml` / `Cargo.lock` diff contains nothing but `version = "..."` lines. Any other file, or a dependency change in any manifest, keeps the full matrix.
+- When it qualifies, the `test` and `windows-rdp-probe` jobs are skipped and the release metadata is validated instead: all four manifests must carry the same version as the `navop_app` package in `Cargo.lock`, and the bilingual entry for that version must exist, be complete (`更新内容` / `修复与优化` plus `What's New` / `Fixes and Improvements`) and carry the CNB mirror line.
 - `CI gate` stays the only required status check, and it still fails the pull request when the classification itself fails, so an invalid release entry cannot reach `main`.
 - If the diff cannot be computed (for example a fork pull request whose head commit was not fetched), the classifier falls back to the full matrix.
 
@@ -50,7 +50,17 @@ A release pull request keeps the fast path after `main` is merged back into `dev
 
 - `dev` is the beta development branch. Changes are pushed and validated here before a release.
 - `main` is the stable release branch and is protected: changes land via pull request, and CI must pass before merging.
-- Cut a release by merging the validated work from `dev` into `main` — including the `main/Cargo.toml` / `Cargo.lock` version bump — then creating the `v*` tag on `main` with `script/release-tag.sh`. The version bump must ride the pull request because direct pushes to `main` are rejected (GH006); only the tag is pushed directly.
+- Cut a release by merging the validated work from `dev` into `main` — including the four-manifest version bump (`crates/navop_app/Cargo.toml` + `apps/*/Cargo.toml`) and `Cargo.lock` — then creating the `v*` tag on `main` with `script/release-tag.sh`. The version bump must ride the pull request because direct pushes to `main` are rejected (GH006); only the tag is pushed directly.
+
+## Unified product releases（统一 tag 三产品发布）
+
+一个 tag 同时发布三个产品：全量 `navop`、独立 `navop-shell`、独立 `navop-data`。三个 app crate 的 `[package].version` 必须与 `navop_app` 完全一致（`env!("CARGO_PKG_VERSION")` 编译进各自二进制，feed 比较依赖它）。
+
+- **矩阵**：`release.yml` 的 `Resolve platform matrix` 步骤为三个产品各生成条目，字段携带 `product`（cargo 包名）、`binary`、`archive`（`{binary}-{target}` 自更新资产名）、`bundle_name`（macOS .app 目录名）、`portable_marker`。全量 6 平台，独立产品各 4 平台（无 linux-arm64 / win32）。
+- **`products` 输入**：`all`（默认）= 全量 + 两独立产品；`full` = 仅全量；`standalone` = 仅独立产品（选 linux-arm64/windows-x86 平台时会显式报错，因为独立产品不覆盖这两个平台）。
+- **产物命名**：公开安装包统一 `{product}-{version}-{public_label}`（如 `navop-shell-0.23.0-macos-arm64.dmg`、`navop-data-0.23.0-windows-x64.msi`）；自更新器直连的 updater 资产为 `{binary}-{target}.tar.gz|.zip`。独立产品不做 deb/rpm/AppImage/GPU stack。
+- **更新清单（6 份 = 3 产品 × 2 通道）**：全量 `updates/latest.json`（stable）/ `updates/beta/latest.json`（beta）；navop-shell `updates/navop-shell/shell/[beta/]latest.json`；navop-data `updates/navop-data/data/[beta/]latest.json`。键位与 `crates/app_kit/src/update/config.rs` 的 `feed_url()` 推导一致，schema 相同、共用同一份 release_notes。
+- **自更新安装**：`install.rs` 按运行时 identity（`crate::identity()`）参数化 bundle/exe/binary 候选名，独立产品可自更新；全量保留 `OnetCli.app` / `onetcli.exe` legacy 兼容。
 
 ## Beta 发布通道
 
@@ -66,7 +76,7 @@ beta 通道把测试版与稳定版的更新清单彻底分开：稳定通道继
 
 ### 一条命令发 beta
 
-beta 版本线走 `dev` 分支，前置条件是工作区干净、`dev` 已同步。脚本会改 `main/Cargo.toml` 与 `Cargo.lock`、写入 `CHANGELOG.md` 双语条目、提交、打 tag，并推送 `dev` 与 tag：
+beta 版本线走 `dev` 分支，前置条件是工作区干净、`dev` 已同步、四个 manifest 版本已对齐。脚本会把 `crates/navop_app/Cargo.toml` 与三个 app crate 的版本统一改成 `X.Y.Z-beta.N`、同步 `Cargo.lock`、写入 `CHANGELOG.md` 双语条目、提交、打 tag，并推送 `dev` 与 tag：
 
 ```bash
 script/beta-release.sh --base 0.23.0 --notes-file /private/tmp/navop-v0.23.0-beta.1.md
@@ -88,7 +98,7 @@ script/beta-release.sh --next --notes-file /private/tmp/navop-v0.23.0-beta.2.md
 
 ### 转正（promotion）
 
-beta 验证稳定后，按正常发布流程把 `dev` 合进 `main`：在 release PR 里把 `main/Cargo.toml` / `Cargo.lock` 的版本从 `X.Y.Z-beta.N` 改成 `X.Y.Z`，整理 `CHANGELOG.md` 中该版本的条目，合并后在 `main` 上执行 `script/release-tag.sh vX.Y.Z`。这条稳定 tag 会把同一版本写回 `updates/latest.json`，beta 清单留在原地作为历史。
+beta 验证稳定后，按正常发布流程把 `dev` 合进 `main`：在 release PR 里把四个 manifest 的版本从 `X.Y.Z-beta.N` 统一改成 `X.Y.Z`，整理 `CHANGELOG.md` 中该版本的条目，合并后在 `main` 上执行 `script/release-tag.sh vX.Y.Z`。这条稳定 tag 会把同一版本写回 `updates/latest.json` 与两个独立产品清单，beta 清单留在原地作为历史。
 
 ### 回滚
 
@@ -140,7 +150,7 @@ Do not move the release tag. Open **Actions → Release → Run workflow**, ente
 | `linux-arm64` | `aarch64-unknown-linux-gnu` |
 | `windows-x64` | `x86_64-pc-windows-msvc` |
 
-The repair run rebuilds only the selected platform, overwrites its assets on the existing GitHub Release, regenerates the complete `sha256sums.txt`, synchronizes the GitHub Release body from the changelog stored in that tag, and triggers R2 synchronization. Assets from other platforms are preserved.
+The repair run rebuilds only the selected platform, overwrites its assets on the existing GitHub Release, regenerates the complete `sha256sums.txt`, synchronizes the GitHub Release body from the changelog stored in that tag, and triggers R2 synchronization. Assets from other platforms are preserved. The `products` input works the same way for product selection: `all` rebuilds the full product plus both standalone products on the selected platform, `full`/`standalone` trim the matrix to one side. Selecting `standalone` together with `linux-arm64` or `windows-x86` fails fast — standalone products do not cover those platforms.
 
 Tags created before `CHANGELOG.md` was introduced are treated as legacy repairs: if the GitHub Release already exists, its current body is preserved and reused for R2. A new Release cannot be created from a tag that has neither a tracked changelog entry nor an existing legacy Release body.
 

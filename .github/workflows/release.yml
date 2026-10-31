@@ -19,6 +19,15 @@ on:
           - linux-arm64
           - windows-x64
           - windows-x86
+      products:
+        description: "all = 全量 + 两个独立产品同 tag 发布；full = 仅全量；standalone = 仅独立产品"
+        required: true
+        type: choice
+        default: all
+        options:
+          - all
+          - full
+          - standalone
       build_mode:
         description: "fast 用 thin LTO（构建较快、体积略大）；release 用 fat LTO + panic=abort（体积最小）"
         required: true
@@ -97,18 +106,32 @@ jobs:
         run: |
           set -euo pipefail
           expected_version="${RELEASE_TAG#v}"
-          manifest_version="$(
-            awk -F'"' '
-              /^\[package\]$/ { in_package = 1; next }
-              /^\[/ { in_package = 0 }
-              in_package && /^version = "/ { print $2; exit }
-            ' main/Cargo.toml
-          )"
-          if [ "$manifest_version" != "$expected_version" ]; then
-            echo "::error::main/Cargo.toml version ${manifest_version:-<missing>} does not match release tag ${RELEASE_TAG}"
+          # 统一版本约定：一个 tag 同时发布全量与两个独立产品，
+          # 四个 manifest 的 version 必须全部与 tag 对齐，否则装出来的
+          # 包自报版本（env!("CARGO_PKG_VERSION")）与 feed 比较会错。
+          status=0
+          for manifest in \
+            crates/navop_app/Cargo.toml \
+            apps/navop/Cargo.toml \
+            apps/navop-shell/Cargo.toml \
+            apps/navop-data/Cargo.toml
+          do
+            manifest_version="$(
+              awk -F'"' '
+                /^\[package\]$/ { in_package = 1; next }
+                /^\[/ { in_package = 0 }
+                in_package && /^version = "/ { print $2; exit }
+              ' "$manifest"
+            )"
+            if [ "$manifest_version" != "$expected_version" ]; then
+              echo "::error::${manifest} version ${manifest_version:-<missing>} does not match release tag ${RELEASE_TAG}"
+              status=1
+            fi
+          done
+          if [ "$status" -ne 0 ]; then
             exit 1
           fi
-          echo "Verified Navop application version: $manifest_version"
+          echo "Verified unified product versions: $expected_version (navop / navop-shell / navop-data)"
 
       - name: Verify changelog entry
         env:
@@ -133,33 +156,96 @@ jobs:
         id: matrix
         env:
           RELEASE_PLATFORM: ${{ inputs.platform }}
+          RELEASE_PRODUCTS: ${{ inputs.products }}
         run: |
           set -euo pipefail
           # Linux ships one package per architecture. It is built with
           # cargo-zigbuild against glibc 2.28 so it also runs on hosts that
           # predate the runner image, and the Mesa stack it may need is a
           # separate dependency archive rather than a second app package.
-          macos_arm64='{"target":"aarch64-apple-darwin","os":"macos-latest","binary":"navop","archive":"navop-aarch64-apple-darwin.tar.gz","public_label":"macos-arm64","arm_linux":false,"windows_native_rdp":false}'
-          macos_x64='{"target":"x86_64-apple-darwin","os":"macos-15-intel","binary":"navop","archive":"navop-x86_64-apple-darwin.tar.gz","public_label":"macos-x64","arm_linux":false,"windows_native_rdp":false}'
-          linux_x64='{"target":"x86_64-unknown-linux-gnu","os":"ubuntu-latest","binary":"navop","archive":"navop-x86_64-unknown-linux-gnu.tar.gz","public_label":"linux-x64","arm_linux":false,"windows_native_rdp":false}'
-          linux_arm64='{"target":"aarch64-unknown-linux-gnu","os":"ubuntu-24.04-arm","binary":"navop","archive":"navop-aarch64-unknown-linux-gnu.tar.gz","public_label":"linux-arm64","arm_linux":true,"windows_native_rdp":false}'
-          windows_x64='{"target":"x86_64-pc-windows-msvc","os":"windows-latest","binary":"navop.exe","archive":"navop-x86_64-pc-windows-msvc.zip","public_label":"windows-x64","arm_linux":false,"windows_native_rdp":true,"windows_arch":"x64"}'
-          windows_x86='{"target":"i686-pc-windows-msvc","os":"windows-latest","binary":"navop.exe","archive":"navop-i686-pc-windows-msvc.zip","public_label":"win32","arm_linux":false,"windows_native_rdp":true,"windows_arch":"x86"}'
+          #
+          # 三个产品共用同一份矩阵字段：product 是 cargo 包名（-p），
+          # binary 是产物二进制名，archive 是自更新器直连的 target-triple
+          # 资产名（{binary}-{target}.tar.gz|.zip），bundle_name 是 macOS
+          # .app 目录名，portable_marker 是便携版标记文件名。全量与独立
+          # 产品同 tag 发布，公开产物名统一 {product}-{version}-{label}。
+          macos_arm64='{"target":"aarch64-apple-darwin","os":"macos-latest","product":"navop","binary":"navop","archive":"navop-aarch64-apple-darwin.tar.gz","public_label":"macos-arm64","bundle_name":"Navop","portable_marker":"navop.portable","arm_linux":false,"windows_native_rdp":false}'
+          macos_x64='{"target":"x86_64-apple-darwin","os":"macos-15-intel","product":"navop","binary":"navop","archive":"navop-x86_64-apple-darwin.tar.gz","public_label":"macos-x64","bundle_name":"Navop","portable_marker":"navop.portable","arm_linux":false,"windows_native_rdp":false}'
+          linux_x64='{"target":"x86_64-unknown-linux-gnu","os":"ubuntu-latest","product":"navop","binary":"navop","archive":"navop-x86_64-unknown-linux-gnu.tar.gz","public_label":"linux-x64","bundle_name":"Navop","portable_marker":"navop.portable","arm_linux":false,"windows_native_rdp":false}'
+          linux_arm64='{"target":"aarch64-unknown-linux-gnu","os":"ubuntu-24.04-arm","product":"navop","binary":"navop","archive":"navop-aarch64-unknown-linux-gnu.tar.gz","public_label":"linux-arm64","bundle_name":"Navop","portable_marker":"navop.portable","arm_linux":true,"windows_native_rdp":false}'
+          windows_x64='{"target":"x86_64-pc-windows-msvc","os":"windows-latest","product":"navop","binary":"navop.exe","archive":"navop-x86_64-pc-windows-msvc.zip","public_label":"windows-x64","bundle_name":"Navop","portable_marker":"navop.portable","arm_linux":false,"windows_native_rdp":true,"windows_arch":"x64"}'
+          windows_x86='{"target":"i686-pc-windows-msvc","os":"windows-latest","product":"navop","binary":"navop.exe","archive":"navop-i686-pc-windows-msvc.zip","public_label":"win32","bundle_name":"Navop","portable_marker":"navop.portable","arm_linux":false,"windows_native_rdp":true,"windows_arch":"x86"}'
+          # 独立产品只覆盖主力平台（无 linux-arm64 / win32），对齐原
+          # standalone-products.yml 的平台面；win32 的 shell-plugins 依赖
+          # 仅支持 64 位，等独立产品需要 32 位时再单独评估。
+          shell_macos_arm64='{"target":"aarch64-apple-darwin","os":"macos-latest","product":"navop-shell","binary":"navop-shell","archive":"navop-shell-aarch64-apple-darwin.tar.gz","public_label":"macos-arm64","bundle_name":"Navop Shell","portable_marker":"navop-shell.portable","arm_linux":false,"windows_native_rdp":false}'
+          shell_macos_x64='{"target":"x86_64-apple-darwin","os":"macos-15-intel","product":"navop-shell","binary":"navop-shell","archive":"navop-shell-x86_64-apple-darwin.tar.gz","public_label":"macos-x64","bundle_name":"Navop Shell","portable_marker":"navop-shell.portable","arm_linux":false,"windows_native_rdp":false}'
+          shell_linux_x64='{"target":"x86_64-unknown-linux-gnu","os":"ubuntu-latest","product":"navop-shell","binary":"navop-shell","archive":"navop-shell-x86_64-unknown-linux-gnu.tar.gz","public_label":"linux-x64","bundle_name":"Navop Shell","portable_marker":"navop-shell.portable","arm_linux":false,"windows_native_rdp":false}'
+          shell_windows_x64='{"target":"x86_64-pc-windows-msvc","os":"windows-latest","product":"navop-shell","binary":"navop-shell.exe","archive":"navop-shell-x86_64-pc-windows-msvc.zip","public_label":"windows-x64","bundle_name":"Navop Shell","portable_marker":"navop-shell.portable","arm_linux":false,"windows_native_rdp":true,"windows_arch":"x64"}'
+          data_macos_arm64='{"target":"aarch64-apple-darwin","os":"macos-latest","product":"navop-data","binary":"navop-data","archive":"navop-data-aarch64-apple-darwin.tar.gz","public_label":"macos-arm64","bundle_name":"Navop Data","portable_marker":"navop-data.portable","arm_linux":false,"windows_native_rdp":false}'
+          data_macos_x64='{"target":"x86_64-apple-darwin","os":"macos-15-intel","product":"navop-data","binary":"navop-data","archive":"navop-data-x86_64-apple-darwin.tar.gz","public_label":"macos-x64","bundle_name":"Navop Data","portable_marker":"navop-data.portable","arm_linux":false,"windows_native_rdp":false}'
+          data_linux_x64='{"target":"x86_64-unknown-linux-gnu","os":"ubuntu-latest","product":"navop-data","binary":"navop-data","archive":"navop-data-x86_64-unknown-linux-gnu.tar.gz","public_label":"linux-x64","bundle_name":"Navop Data","portable_marker":"navop-data.portable","arm_linux":false,"windows_native_rdp":false}'
+          data_windows_x64='{"target":"x86_64-pc-windows-msvc","os":"windows-latest","product":"navop-data","binary":"navop-data.exe","archive":"navop-data-x86_64-pc-windows-msvc.zip","public_label":"windows-x64","bundle_name":"Navop Data","portable_marker":"navop-data.portable","arm_linux":false,"windows_native_rdp":true,"windows_arch":"x64"}'
 
           case "$RELEASE_PLATFORM" in
-            all) matrix="[$macos_arm64,$macos_x64,$linux_x64,$linux_arm64,$windows_x64,$windows_x86]" ;;
-            macos-arm64) matrix="[$macos_arm64]" ;;
-            macos-x64) matrix="[$macos_x64]" ;;
-            linux-x64) matrix="[$linux_x64]" ;;
-            linux-arm64) matrix="[$linux_arm64]" ;;
-            windows-x64) matrix="[$windows_x64]" ;;
-            windows-x86) matrix="[$windows_x86]" ;;
+            all)
+              full_matrix="[$macos_arm64,$macos_x64,$linux_x64,$linux_arm64,$windows_x64,$windows_x86]"
+              standalone_matrix="[$shell_macos_arm64,$shell_macos_x64,$shell_linux_x64,$shell_windows_x64,$data_macos_arm64,$data_macos_x64,$data_linux_x64,$data_windows_x64]"
+              ;;
+            macos-arm64)
+              full_matrix="[$macos_arm64]"
+              standalone_matrix="[$shell_macos_arm64,$data_macos_arm64]"
+              ;;
+            macos-x64)
+              full_matrix="[$macos_x64]"
+              standalone_matrix="[$shell_macos_x64,$data_macos_x64]"
+              ;;
+            linux-x64)
+              full_matrix="[$linux_x64]"
+              standalone_matrix="[$shell_linux_x64,$data_linux_x64]"
+              ;;
+            linux-arm64)
+              full_matrix="[$linux_arm64]"
+              standalone_matrix=""
+              ;;
+            windows-x64)
+              full_matrix="[$windows_x64]"
+              standalone_matrix="[$shell_windows_x64,$data_windows_x64]"
+              ;;
+            windows-x86)
+              full_matrix="[$windows_x86]"
+              standalone_matrix=""
+              ;;
             *) echo "::error::Unsupported platform: $RELEASE_PLATFORM"; exit 1 ;;
+          esac
+
+          case "$RELEASE_PRODUCTS" in
+            full)
+              matrix="$full_matrix"
+              ;;
+            standalone)
+              if [ -z "$standalone_matrix" ]; then
+                echo "::error::Standalone products are not built for platform: $RELEASE_PLATFORM"
+                exit 1
+              fi
+              matrix="$standalone_matrix"
+              ;;
+            all)
+              if [ -n "$standalone_matrix" ]; then
+                # 两个 JSON 数组拼成一个：去掉各自方括号后以逗号相连。
+                # 条目本身是不含空格的单行 JSON，全局替换空格安全。
+                combined="$(printf '%s %s' "$full_matrix" "$standalone_matrix" | tr -d '][' | tr ' ' ',')"
+                matrix="[${combined}]"
+              else
+                matrix="$full_matrix"
+              fi
+              ;;
+            *) echo "::error::Unsupported products selection: $RELEASE_PRODUCTS"; exit 1 ;;
           esac
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
   build:
-    name: Build (${{ matrix.target }})
+    name: Build (${{ matrix.product }} / ${{ matrix.target }})
     needs: prepare
     strategy:
       fail-fast: false
@@ -294,7 +380,10 @@ jobs:
         run: |
           VERSION="${{ needs.prepare.outputs.tag }}"
           echo "ONETCLI_VERSION=${VERSION#v}" >> "$GITHUB_ENV"
-          echo "PUBLIC_BASENAME=navop-${VERSION#v}-${{ matrix.public_label }}" >> "$GITHUB_ENV"
+          # 公开产物名统一 {product}-{version}-{label}：全量保持
+          # navop-{version}-{label} 不变，独立产品自带 navop-shell- /
+          # navop-data- 前缀，与全量在 Release 资产列表里天然分流。
+          echo "PUBLIC_BASENAME=${{ matrix.product }}-${VERSION#v}-${{ matrix.public_label }}" >> "$GITHUB_ENV"
 
       - name: Verify secrets are set
         shell: bash
@@ -353,16 +442,20 @@ jobs:
             #
             # No platform overrides the feature set: the default set is the one
             # shape all three platforms ship, and it leaves `embedded-webview`
-            # out (see main/Cargo.toml). The HTML preview host on Linux is
+            # out (see crates/navop_app/Cargo.toml). The HTML preview host on Linux is
             # WebKitGTK 4.1, which cannot be provided with the package, and an
             # in-app HTML preview that works on two platforms but not the third
             # is not worth a second shape to test and release.
+            #
+            # 三个 app crate 都依赖 main（default-features=false + 显式
+            # feature 列表），feature 形态由各 apps/*/Cargo.toml 固定，
+            # 这里只换 -p 包名即可构建对应产品。
             cargo zigbuild \
               --release \
-              -p navop \
+              -p ${{ matrix.product }} \
               --target "${{ matrix.target }}.2.28"
           else
-            cargo build --release -p navop --target "${{ matrix.target }}"
+            cargo build --release -p ${{ matrix.product }} --target "${{ matrix.target }}"
           fi
           test -x "target/${{ matrix.target }}/release/${{ matrix.binary }}"
           # 体积回归在日志里可见（fat LTO + panic=abort 后约 107MiB）
@@ -415,7 +508,8 @@ jobs:
           # (x86_64/aarch64)，i686 无法编译。win32 构建先剔除该 feature。
           # 这是唯一一处显式写 feature 列表的地方，内容是「默认集减去 shell-plugins」，
           # 所以不要在这里补回 `embedded-webview`：默认集本身已经不带它了
-          # （见 main/Cargo.toml），补回来会让 win32 成为唯一的另一种形态。
+          # （见 crates/navop_app/Cargo.toml），补回来会让 win32 成为唯一的另一种形态。
+          # 独立产品不构建 win32，-p 切包名即可，feature 分支只服务全量。
           $features = if ($target -eq "i686-pc-windows-msvc") {
             @("--no-default-features", "--features", "wasm-components,windows-native-rdp")
           } else {
@@ -423,7 +517,7 @@ jobs:
           }
           cargo build `
             --release `
-            -p navop `
+            -p ${{ matrix.product }} `
             @features `
             --target $target
 
@@ -441,7 +535,7 @@ jobs:
           # STATUS_ENTRYPOINT_NOT_FOUND / 0xC0000139 退出（弹「无法定位程序输入点」），
           # 编译期没有任何信号，所以必须在打包前对真实产物校验一次。
           node script/validate-windows-exe.mjs `
-            "target/${{ matrix.target }}/release/navop.exe"
+            "target/${{ matrix.target }}/release/${{ matrix.binary }}"
 
       - name: Verify Linux glibc baseline
         if: runner.os == 'Linux'
@@ -483,46 +577,56 @@ jobs:
         run: |
           chmod +x script/bundle-macos.sh
           chmod +x script/bundle-macos-dmg.sh
-          script/bundle-macos.sh ${{ matrix.target }}
+          script/bundle-macos.sh ${{ matrix.target }} ${{ matrix.product }}
           # 释放磁盘：release target 目录很大，DMG 制作（在 target/ 下写入镜像）
           # 会因 runner 空间不足而失败（hdiutil: No space left on device）。
           df -h
           rm -rf target/release/deps target/release/build target/release/incremental target/release/.fingerprint
           rm -rf "target/${{ matrix.target }}/release/deps" "target/${{ matrix.target }}/release/build" "target/${{ matrix.target }}/release/incremental" "target/${{ matrix.target }}/release/.fingerprint"
           df -h
-          script/bundle-macos-dmg.sh ${{ matrix.target }}
-          tar czf ${{ matrix.archive }} -C target Navop.app
+          script/bundle-macos-dmg.sh ${{ matrix.target }} ${{ matrix.product }}
+          tar czf ${{ matrix.archive }} -C target "${{ matrix.bundle_name }}.app"
           cp "${{ matrix.archive }}" "${PUBLIC_BASENAME}.tar.gz"
-          mv "navop-${{ matrix.target }}.dmg" "${PUBLIC_BASENAME}.dmg"
+          mv "${{ matrix.binary }}-${{ matrix.target }}.dmg" "${PUBLIC_BASENAME}.dmg"
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf package
-          mkdir -p package/usr/bin
-          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" package/usr/bin/
+          if [ "${{ matrix.product }}" = "navop" ]; then
+            # 全量：desktop/mime/icons 在工作流里就地打包。
+            rm -rf package
+            mkdir -p package/usr/bin
+            cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" package/usr/bin/
 
-          mkdir -p package/usr/share/applications
-          mkdir -p package/usr/share/mime/packages
-          mkdir -p package/usr/share/icons/hicolor/128x128/apps
-          mkdir -p package/usr/share/icons/hicolor/256x256/apps
-          mkdir -p package/usr/share/icons/hicolor/512x515/apps
-          cp resources/linux/navop.desktop package/usr/share/applications/
-          cp resources/linux/navop.xml package/usr/share/mime/packages/
-          cp resources/linux/navop-128.png package/usr/share/icons/hicolor/128x128/apps/navop.png
-          cp resources/linux/navop-256.png package/usr/share/icons/hicolor/256x256/apps/navop.png
-          cp resources/linux/navop-512.png package/usr/share/icons/hicolor/512x515/apps/navop.png
-          tar \
-            --sort=name \
-            --mtime='UTC 1970-01-01' \
-            --owner=0 \
-            --group=0 \
-            --numeric-owner \
-            -czf "${{ matrix.archive }}" \
-            -C package .
-          cp "${{ matrix.archive }}" "${PUBLIC_BASENAME}.tar.gz"
+            mkdir -p package/usr/share/applications
+            mkdir -p package/usr/share/mime/packages
+            mkdir -p package/usr/share/icons/hicolor/128x128/apps
+            mkdir -p package/usr/share/icons/hicolor/256x256/apps
+            mkdir -p package/usr/share/icons/hicolor/512x515/apps
+            cp resources/linux/navop.desktop package/usr/share/applications/
+            cp resources/linux/navop.xml package/usr/share/mime/packages/
+            cp resources/linux/navop-128.png package/usr/share/icons/hicolor/128x128/apps/navop.png
+            cp resources/linux/navop-256.png package/usr/share/icons/hicolor/256x256/apps/navop.png
+            cp resources/linux/navop-512.png package/usr/share/icons/hicolor/512x515/apps/navop.png
+            tar \
+              --sort=name \
+              --mtime='UTC 1970-01-01' \
+              --owner=0 \
+              --group=0 \
+              --numeric-owner \
+              -czf "${{ matrix.archive }}" \
+              -C package .
+            cp "${{ matrix.archive }}" "${PUBLIC_BASENAME}.tar.gz"
+          else
+            # 独立产品：desktop/icons 由 package-linux-product.sh 按产品身份
+            # 打包（usr/bin/{binary} + {product}.desktop + 三尺寸 icon），
+            # 产物名通过参数对齐 {product}-{version}-{label} 公开命名。
+            chmod +x script/package-linux-product.sh
+            script/package-linux-product.sh "${{ matrix.product }}" "${{ matrix.target }}" \
+              "${{ matrix.archive }}" "${PUBLIC_BASENAME}.tar.gz" "${PUBLIC_BASENAME}-portable.tar.gz"
+          fi
 
           # Portable variant: the very same binary plus the marker file the
           # application looks for next to the executable. With the marker
@@ -533,7 +637,7 @@ jobs:
           # Keep this in sync with PORTABLE_MARKER_FILE in
           # crates/core/src/app_paths.rs; script/test-release-packaging.mjs
           # asserts the two never drift apart.
-          PORTABLE_MARKER_FILE="navop.portable"
+          PORTABLE_MARKER_FILE="${{ matrix.portable_marker }}"
           rm -rf portable-package
           mkdir -p portable-package
           cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" portable-package/
@@ -548,7 +652,7 @@ jobs:
             -C portable-package .
 
       - name: Package Linux GPU dependency stack
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.product == 'navop'
         shell: bash
         run: |
           set -euo pipefail
@@ -566,13 +670,13 @@ jobs:
           cp dist-gpu-stack/navop-gpu-stack-linux-*.tar.gz "${PUBLIC_BASENAME}-gpu-stack.tar.gz"
 
       - name: Install Linux packaging dependencies
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        if: matrix.product == 'navop' && matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
           sudo apt-get update
           sudo apt-get install -y rpm
 
       - name: Package Linux installers (x86_64)
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        if: matrix.product == 'navop' && matrix.target == 'x86_64-unknown-linux-gnu'
         shell: bash
         run: |
           set -euo pipefail
@@ -694,7 +798,10 @@ jobs:
           New-Item -ItemType Directory -Force portable-package | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary }}" "package/${{ matrix.binary }}"
           Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary }}" "portable-package/${{ matrix.binary }}"
-          Set-Content -Path "portable-package/navop.portable" -Value "" -NoNewline
+          # 便携标记文件名按产品身份区分（navop.portable / navop-shell.portable /
+          # navop-data.portable），与 crates/core/src/app_paths.rs 的
+          # PORTABLE_MARKER_FILE 保持一致。
+          Set-Content -Path "portable-package/${{ matrix.portable_marker }}" -Value "" -NoNewline
           Compress-Archive -Path "package/*" -DestinationPath "${{ matrix.archive }}"
           Copy-Item "${{ matrix.archive }}" "${env:PUBLIC_BASENAME}.zip"
           Compress-Archive -Path "portable-package/*" -DestinationPath "${env:PUBLIC_BASENAME}-portable.zip"
@@ -709,7 +816,7 @@ jobs:
           wix extension add -g WixToolset.BootstrapperApplications.wixext/6.0.2
 
       - name: Build Windows installers
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && matrix.product == 'navop'
         shell: pwsh
         run: |
           $msiVersion = ($env:ONETCLI_VERSION -split '-')[0]
@@ -733,10 +840,32 @@ jobs:
             -d IconPath="${{ github.workspace }}\resources\windows\navop.ico" `
             -out "${env:PUBLIC_BASENAME}.exe"
 
-      - name: Validate Windows MSI metadata
-        if: runner.os == 'Windows'
+      - name: Build Windows product installers
+        if: runner.os == 'Windows' && matrix.product != 'navop'
         shell: pwsh
         run: |
+          # 独立产品用 build-product-installer.ps1（navop-product.wxs +
+          # navop-product-bundle.wxs，UpgradeCode 按 Product 固定），产物
+          # {Product}-{Version}-{Arch}.msi/.exe 再改名进公开命名。
+          New-Item -ItemType Directory -Force product-package | Out-Null
+          Copy-Item "package/${{ matrix.binary }}" "product-package/${{ matrix.binary }}"
+          ./installer/windows/build-product-installer.ps1 `
+            -Product "${{ matrix.product }}" `
+            -Version "$env:ONETCLI_VERSION" `
+            -SourceDir "${{ github.workspace }}\product-package" `
+            -OutDir "${{ github.workspace }}\dist-product" `
+            -Arch "x64"
+          $installerBase = "${{ matrix.product }}-$env:ONETCLI_VERSION-x64"
+          Move-Item "dist-product/$installerBase.msi" "${env:PUBLIC_BASENAME}.msi"
+          Move-Item "dist-product/$installerBase.exe" "${env:PUBLIC_BASENAME}.exe"
+
+      - name: Validate Windows MSI metadata
+        if: runner.os == 'Windows' && matrix.product == 'navop'
+        shell: pwsh
+        run: |
+          # validate-windows-msi.ps1 断言的是全量 navop.wxs 的 MSI 表结构
+          # （快捷方式/Directory 名），独立产品 MSI 用 navop-product.wxs，
+          # 不适用该校验（build-product-installer.ps1 内部自带断言）。
           ./script/validate-windows-msi.ps1 `
             -Path "${env:PUBLIC_BASENAME}.msi" `
             -ExpectedLanguage 1033
@@ -750,20 +879,20 @@ jobs:
       - name: Upload versioned public package artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: navop-${{ matrix.public_label }}-packages
+          name: ${{ matrix.product }}-${{ matrix.public_label }}-packages
           path: |
-            navop-*-${{ matrix.public_label }}.tar.gz
-            navop-*-${{ matrix.public_label }}-portable.tar.gz
-            navop-*-${{ matrix.public_label }}-gpu-stack.tar.gz
-            navop-*-${{ matrix.public_label }}.dmg
-            navop-*-${{ matrix.public_label }}.zip
-            navop-*-${{ matrix.public_label }}-portable.zip
-            navop-*-${{ matrix.public_label }}.msi
-            navop-*-${{ matrix.public_label }}.exe
+            ${{ matrix.product }}-*-${{ matrix.public_label }}.tar.gz
+            ${{ matrix.product }}-*-${{ matrix.public_label }}-portable.tar.gz
+            ${{ matrix.product }}-*-${{ matrix.public_label }}-gpu-stack.tar.gz
+            ${{ matrix.product }}-*-${{ matrix.public_label }}.dmg
+            ${{ matrix.product }}-*-${{ matrix.public_label }}.zip
+            ${{ matrix.product }}-*-${{ matrix.public_label }}-portable.zip
+            ${{ matrix.product }}-*-${{ matrix.public_label }}.msi
+            ${{ matrix.product }}-*-${{ matrix.public_label }}.exe
           if-no-files-found: error
 
       - name: Upload Linux installer artifacts
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        if: matrix.product == 'navop' && matrix.target == 'x86_64-unknown-linux-gnu'
         uses: actions/upload-artifact@v4
         with:
           name: navop-linux-x86_64-installers

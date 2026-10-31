@@ -95,7 +95,7 @@ Use `samply record` command to start rust development, and do some operations in
 
 When we are ready to release a new version, follow `.github/RELEASE.md`. In short:
 
-1. Bump the application version (`main/Cargo.toml` and `Cargo.lock`) to `x.y.z` and add the bilingual `CHANGELOG.md` entry.
+1. Bump the application version (`crates/navop_app/Cargo.toml` and `Cargo.lock`) to `x.y.z` and add the bilingual `CHANGELOG.md` entry.
 2. Land both in `main` through a `dev` → `main` pull request. `main` is protected, so the version change cannot be pushed directly.
 3. After the pull request is merged and CI is green, tag the release from `main`:
 
@@ -103,5 +103,5 @@ When we are ready to release a new version, follow `.github/RELEASE.md`. In shor
    script/release-tag.sh vx.y.z
    ```
 
-   The script refuses to run unless `main/Cargo.toml` already equals the tag and the changelog entry is valid, then creates and pushes the tag.
+   The script refuses to run unless `crates/navop_app/Cargo.toml` already equals the tag and the changelog entry is valid, then creates and pushes the tag.
 4. GitHub Actions builds and publishes the release from the pushed tag.

@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 fn configured_dialog_buttons_enable_the_default_footer() {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut files = Vec::new();
-    collect_rust_files(&workspace.join("main/src"), &mut files);
     collect_rust_files(&workspace.join("crates"), &mut files);
 
     let mut missing = Vec::new();

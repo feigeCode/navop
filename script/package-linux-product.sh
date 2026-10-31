@@ -1,9 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PRODUCT="${1:?usage: package-linux-product.sh <navop-shell|navop-data> [target]}"
+# 打包独立产品（navop-shell / navop-data）的 Linux 产物。
+#
+# 用法: package-linux-product.sh <navop-shell|navop-data> [target] \
+#         [archive-out] [public-out] [portable-out]
+#
+# 输出名参数由 release.yml 传入，用于把产物对齐到公开命名
+# {product}-{version}-{public_label}（如 navop-shell-0.22.0-linux-x64.tar.gz）；
+# 缺省时退回 {binary}-{version}-{target} 本地命名，便于手动调用。
+PRODUCT="${1:?usage: package-linux-product.sh <navop-shell|navop-data> [target] [archive-out] [public-out] [portable-out]}"
 TARGET="${2:-x86_64-unknown-linux-gnu}"
-VERSION="${NAVOP_VERSION:-0.0.0}"
+ARCHIVE_OUT="${3:-}"
+PUBLIC_OUT="${4:-}"
+PORTABLE_OUT="${5:-}"
+VERSION="${NAVOP_VERSION:-${ONETCLI_VERSION:-0.0.0}}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="${ONETCLI_PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
@@ -52,16 +63,34 @@ for size in 128 256 512; do
         "$STAGE_DIR/usr/share/icons/hicolor/${size}x${size}/apps/${BINARY_NAME}.png"
 done
 
-ARCHIVE="${PROJECT_DIR}/target/${BINARY_NAME}-${VERSION}-${TARGET}.tar.gz"
-tar -czf "$ARCHIVE" -C "$STAGE_DIR" .
+# tar 参数与 release.yml 全量 Package (Linux) 步骤保持一致：固定
+# mtime/owner 让同一 tag 的产物字节级可复现，sha256 才能对得上。
+ARCHIVE="${ARCHIVE_OUT:-${PROJECT_DIR}/target/${BINARY_NAME}-${VERSION}-${TARGET}.tar.gz}"
+tar \
+    --sort=name \
+    --mtime='UTC 1970-01-01' \
+    --owner=0 \
+    --group=0 \
+    --numeric-owner \
+    -czf "$ARCHIVE" -C "$STAGE_DIR" .
+if [ -n "$PUBLIC_OUT" ]; then
+    cp "$ARCHIVE" "$PUBLIC_OUT"
+fi
 
 PORTABLE_DIR="${PROJECT_DIR}/target/${PRODUCT}-portable"
 rm -rf "$PORTABLE_DIR"
 mkdir -p "$PORTABLE_DIR"
 cp "$BINARY_PATH" "$PORTABLE_DIR/${BINARY_NAME}"
 printf '%s\n' "$APP_NAME" > "$PORTABLE_DIR/${PORTABLE_MARKER}"
-PORTABLE_ARCHIVE="${PROJECT_DIR}/target/${BINARY_NAME}-${VERSION}-${TARGET}-portable.tar.gz"
-tar -czf "$PORTABLE_ARCHIVE" -C "$PORTABLE_DIR" .
+PORTABLE_ARCHIVE="${PORTABLE_OUT:-${PROJECT_DIR}/target/${BINARY_NAME}-${VERSION}-${TARGET}-portable.tar.gz}"
+tar \
+    --sort=name \
+    --mtime='UTC 1970-01-01' \
+    --owner=0 \
+    --group=0 \
+    --numeric-owner \
+    -czf "$PORTABLE_ARCHIVE" -C "$PORTABLE_DIR" .
 
 echo "Successfully built: ${ARCHIVE}"
+[ -n "$PUBLIC_OUT" ] && echo "Successfully built: ${PUBLIC_OUT}"
 echo "Successfully built: ${PORTABLE_ARCHIVE}"

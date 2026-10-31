@@ -170,11 +170,11 @@ test("Linux publishes one package per architecture plus a separate GPU dependenc
   );
   assert.match(
     release,
-    /all\) matrix="\[\$macos_arm64,\$macos_x64,\$linux_x64,\$linux_arm64,\$windows_x64,\$windows_x86\]"/,
+    /all\)[\s\S]*?matrix="\[\$\{combined\}\]"/,
   );
-  assert.match(release, /linux-x64\) matrix="\[\$linux_x64\]"/);
-  assert.match(release, /linux-arm64\) matrix="\[\$linux_arm64\]"/);
-  assert.match(release, /name: Build \(\$\{\{ matrix\.target \}\}\)$/m);
+  assert.match(release, /linux-x64\)\s*\n\s*full_matrix="\[\$linux_x64\]"\s*\n\s*standalone_matrix="\[\$shell_linux_x64,\$data_linux_x64\]"/);
+  assert.match(release, /linux-arm64\)\s*\n\s*full_matrix="\[\$linux_arm64\]"\s*\n\s*standalone_matrix=""/);
+  assert.match(release, /name: Build \(\$\{\{ matrix\.product \}\} \/ \$\{\{ matrix\.target \}\}\)/);
 
   // Zig is what lowers the C runtime requirement to glibc 2.28, so it now runs
   // for every Linux build rather than only for the retired portable variant.
@@ -197,10 +197,10 @@ test("Linux publishes one package per architecture plus a separate GPU dependenc
   assert.match(build, /if \[ "\$\{\{ runner\.os \}\}" = "Linux" \]/);
   assert.match(
     build,
-    /cargo zigbuild[\s\S]*--release[\s\S]*-p navop[\s\S]*--target "\$\{\{ matrix\.target \}\}\.2\.28"/,
+    /cargo zigbuild[\s\S]*--release[\s\S]*-p \$\{\{ matrix\.product \}\}[\s\S]*--target "\$\{\{ matrix\.target \}\}\.2\.28"/,
   );
   // No platform drops the default feature set: `embedded-webview` is off in the
-  // default set itself (see main/Cargo.toml), so the shape that gets published is
+  // default set itself (see crates/navop_app/Cargo.toml), so the shape that gets published is
   // the plain default build on all three platforms. The guard for that lives in
   // its own test below.
   assert.doesNotMatch(build, /--no-default-features/);
@@ -218,7 +218,7 @@ test("Linux publishes one package per architecture plus a separate GPU dependenc
   assert.doesNotMatch(build, /extra_features/);
   assert.match(
     build,
-    /cargo build --release -p navop --target "\$\{\{ matrix\.target \}\}"/,
+    /cargo build --release -p \$\{\{ matrix\.product \}\} --target "\$\{\{ matrix\.target \}\}"/,
   );
   assert.match(
     build,
@@ -254,7 +254,13 @@ test("Linux publishes one package per architecture plus a separate GPU dependenc
   assert.match(appPathsSource, /join\(app_path_names\(\)\.portable_marker\)\s*\.is_file\(\)/);
   assert.doesNotMatch(appPathsSource, /cfg\(windows\)/);
   assert.doesNotMatch(appPathsSource, /cfg\(target_os = "windows"\)/);
-  assert.match(packageLinux, new RegExp(`PORTABLE_MARKER_FILE="${markerFile}"`));
+  // 统一发布后 marker 名来自 matrix.portable_marker（源头是 identity.rs），
+  // 全量条目的值必须仍是 app_paths.rs 读的那个常量。
+  assert.match(packageLinux, /PORTABLE_MARKER_FILE="\$\{\{ matrix\.portable_marker \}\}"/);
+  assert.match(
+    read("crates/domain_api/src/identity.rs"),
+    new RegExp(`portable_marker: "${markerFile}"`),
+  );
   assert.match(packageLinux, /rm -rf portable-package/);
   assert.match(packageLinux, /mkdir -p portable-package/);
   assert.match(
@@ -270,13 +276,14 @@ test("Linux publishes one package per architecture plus a separate GPU dependenc
   assert.doesNotMatch(packageLinux, /cargo (?:zig)?build/);
   assert.match(
     release,
-    /navop-\*-\$\{\{ matrix\.public_label \}\}-portable\.tar\.gz/,
+    /\$\{\{ matrix\.product \}\}-\*-\$\{\{ matrix\.public_label \}\}-portable\.tar\.gz/,
   );
-  // The Windows portable ZIP ships the same contract and hardcodes the same
-  // marker name, so both platforms have to agree with the Rust constant.
+  // The Windows portable ZIP ships the same contract: the marker name now
+  // arrives via matrix.portable_marker, whose full-product value must still
+  // equal the Rust constant both platforms read.
   assert.match(
     release,
-    new RegExp(`"portable-package/${markerFile.replace(/\./g, "\\.")}"`),
+    /Set-Content -Path "portable-package\/\$\{\{ matrix\.portable_marker \}\}"/,
   );
 
   // The dependency stack is a second asset for the same target, built against
@@ -292,22 +299,22 @@ test("Linux publishes one package per architecture plus a separate GPU dependenc
   );
   assert.match(
     release,
-    /navop-\*-\$\{\{ matrix\.public_label \}\}-gpu-stack\.tar\.gz/,
+    /\$\{\{ matrix\.product \}\}-\*-\$\{\{ matrix\.public_label \}\}-gpu-stack\.tar\.gz/,
   );
 
-  assert.match(packageInstallers, /if: matrix\.target == 'x86_64-unknown-linux-gnu'/);
+  assert.match(packageInstallers, /if: matrix\.product == 'navop' && matrix\.target == 'x86_64-unknown-linux-gnu'/);
 });
 
 test("the embedded webview is an opt-in feature on every platform", () => {
   const workspaceCargo = read("Cargo.toml");
   const cargo = read("crates/ai_chat_view/Cargo.toml");
-  const mainCargo = read("main/Cargo.toml");
+  const mainCargo = read("crates/navop_app/Cargo.toml");
   const universalPluginsCargo = read("crates/universal-plugins/Cargo.toml");
   const htmlCodeBlock = read(
     "crates/ai_chat_view/src/html_code_block.rs",
   );
   const dependentCargoFiles = [
-    "main/Cargo.toml",
+    "crates/navop_app/Cargo.toml",
     "crates/db_view/Cargo.toml",
     "crates/mongodb_view/Cargo.toml",
     "crates/redis_view/Cargo.toml",
@@ -384,7 +391,7 @@ test("no release build enables the embedded webview, while the opt-in path still
   // WebKitGTK 4.1 cannot travel with the package: the distributions that carry it
   // sit on glibc 2.39+, and `WebKitWebProcess` is resolved through a compile-time
   // path. Instead of giving Linux a feature set of its own, the feature is off in
-  // the default set (see main/Cargo.toml), so all three platforms publish the same
+  // the default set (see crates/navop_app/Cargo.toml), so all three platforms publish the same
   // shape and there is no per-platform list to keep in sync.
   assert.doesNotMatch(release, /--features[^\n]*embedded-webview/);
   const build = workflowStep(release, "Build release binary");
@@ -393,7 +400,7 @@ test("no release build enables the embedded webview, while the opt-in path still
   assert.doesNotMatch(build, /--features[^\n]*wasm-components/);
   assert.match(
     build,
-    /cargo zigbuild[\s\S]*--release[\s\S]*-p navop[\s\S]*--target "\$\{\{ matrix\.target \}\}\.2\.28"/,
+    /cargo zigbuild[\s\S]*--release[\s\S]*-p \$\{\{ matrix\.product \}\}[\s\S]*--target "\$\{\{ matrix\.target \}\}\.2\.28"/,
   );
 
   // Windows 32-bit is the one platform that has to name features explicitly (it
@@ -412,7 +419,7 @@ test("no release build enables the embedded webview, while the opt-in path still
     optIn,
     /cargo check -p ai_chat_view --features embedded-webview --tests/,
   );
-  assert.match(optIn, /cargo check -p main --features embedded-webview/);
+  assert.match(optIn, /cargo check -p navop_app --features embedded-webview/);
 });
 
 test("Linux GPU dependency stack replaces the retired portable runtime", () => {
@@ -805,7 +812,7 @@ test("Windows release publishes versioned Win32 artifacts while preserving updat
   );
   assert.match(
     release,
-    /all\) matrix="\[\$macos_arm64,\$macos_x64,\$linux_x64,\$linux_arm64,\$windows_x64,\$windows_x86\]"/,
+    /all\)[\s\S]*?matrix="\[\$\{combined\}\]"/,
   );
   assert.match(
     release,
@@ -814,7 +821,7 @@ test("Windows release publishes versioned Win32 artifacts while preserving updat
   assert.match(release, /-arch \$\{\{ matrix\.windows_arch \}\}/);
   assert.match(release, /\$\{env:PUBLIC_BASENAME\}\.msi/);
   assert.match(release, /\$\{env:PUBLIC_BASENAME\}\.exe/);
-  assert.match(release, /PUBLIC_BASENAME=navop-\$\{VERSION#v\}-\$\{\{ matrix\.public_label \}\}/);
+  assert.match(release, /PUBLIC_BASENAME=\$\{\{ matrix\.product \}\}-\$\{VERSION#v\}-\$\{\{ matrix\.public_label \}\}/);
 
   assert.match(upload, /navop-i686-pc-windows-msvc\.zip/);
   assert.match(
@@ -882,7 +889,7 @@ test("Windows release keeps the legacy ZIP standard and publishes portable separ
   assert.match(release, /navop\.portable/);
   assert.match(
     release,
-    /Set-Content -Path "portable-package\/navop\.portable"/,
+    /Set-Content -Path "portable-package\/\$\{\{ matrix\.portable_marker \}\}"/,
   );
   assert.doesNotMatch(
     release,
@@ -905,19 +912,19 @@ test("Windows release keeps the legacy ZIP standard and publishes portable separ
   );
   assert.match(
     release,
-    /name: navop-\$\{\{ matrix\.public_label \}\}-packages/,
+    /name: \$\{\{ matrix\.product \}\}-\$\{\{ matrix\.public_label \}\}-packages/,
   );
   assert.match(
     release,
-    /navop-\*-\$\{\{ matrix\.public_label \}\}-portable\.zip/,
+    /\$\{\{ matrix\.product \}\}-\*-\$\{\{ matrix\.public_label \}\}-portable\.zip/,
   );
   assert.match(
     release,
-    /navop-\*-\$\{\{ matrix\.public_label \}\}\.msi/,
+    /\$\{\{ matrix\.product \}\}-\*-\$\{\{ matrix\.public_label \}\}\.msi/,
   );
   assert.match(
     release,
-    /navop-\*-\$\{\{ matrix\.public_label \}\}\.exe/,
+    /\$\{\{ matrix\.product \}\}-\*-\$\{\{ matrix\.public_label \}\}\.exe/,
   );
   for (const [guide, installerLabel] of [
     [installGuides[0], /EXE 安装包/],
@@ -1069,8 +1076,8 @@ test("Windows MSI shortcuts inherit the executable's embedded icon", () => {
   assert.match(wix, /<Icon Id="NavopIcon" SourceFile="\$\(IconPath\)"\s*\/>/);
   assert.match(wix, /<Property Id="ARPPRODUCTICON" Value="NavopIcon"\s*\/>/);
   assert.match(
-    read("main/build.rs"),
-    /set_icon\("\.\.\/resources\/windows\/navop\.ico"\)/,
+    read("crates/navop_app/build.rs"),
+    /set_icon\("\.\.\/\.\.\/resources\/windows\/navop\.ico"\)/,
   );
 });
 
@@ -1080,19 +1087,19 @@ test("GitHub and R2 publish every installer while the updater manifest remains c
 
   assert.match(
     release,
-    /name: navop-\$\{\{ matrix\.public_label \}\}-packages[\s\S]*?navop-\*-\$\{\{ matrix\.public_label \}\}\.msi/,
+    /name: \$\{\{ matrix\.product \}\}-\$\{\{ matrix\.public_label \}\}-packages[\s\S]*?\$\{\{ matrix\.product \}\}-\*-\$\{\{ matrix\.public_label \}\}\.msi/,
   );
   assert.match(release, /new_files=\(artifacts\/navop-\* artifacts\/navop_\*\)/);
   // Every asset, including the Linux GPU dependency stack, is matched by the
   // release globs rather than being enumerated by hand.
-  assert.match(release, /navop-\*-\$\{\{ matrix\.public_label \}\}-gpu-stack\.tar\.gz/);
+  assert.match(release, /\$\{\{ matrix\.product \}\}-\*-\$\{\{ matrix\.public_label \}\}-gpu-stack\.tar\.gz/);
   assert.match(upload, /--pattern "navop-\*"/);
   assert.match(upload, /--pattern "navop_\*"/);
   assert.match(upload, /release_files=\(artifacts\/navop-\* artifacts\/navop_\*\)/);
   assert.match(upload, /schema_version: 1/);
-  assert.match(upload, /downloads: objectUrls\("releases", updaterAssets\)/);
-  assert.match(upload, /fallback_downloads: githubReleaseUrls\(updaterAssets\)/);
-  assert.match(upload, /sha256s: objectChecksums\(updaterAssets\)/);
+  assert.match(upload, /downloads: objectUrls\("releases", product\.updaterAssets\)/);
+  assert.match(upload, /fallback_downloads: githubReleaseUrls\(product\.updaterAssets\)/);
+  assert.match(upload, /sha256s: objectChecksums\(product\.updaterAssets\)/);
   assert.match(upload, /packages,/);
   assert.match(upload, /publicUpdaterAlternatives/);
   assert.match(upload, /`navop-\$\{version\}-win32\.zip`/);
@@ -1357,8 +1364,8 @@ test("release workflow derives the channel and marks only beta releases as prere
   assert.match(upload, /CHANNEL="\$\{INPUT_CHANNEL:-\}"/);
   assert.match(upload, /::error::Invalid channel '\$\{CHANNEL\}'; expected stable or beta/);
   // 清单 key 由通道计算，上传行不再硬编码稳定 key。
-  assert.match(upload, /stable\) manifest_key="updates\/latest\.json"/);
-  assert.match(upload, /beta\) manifest_key="updates\/beta\/latest\.json"/);
+  assert.match(upload, /stable\)[\s\S]*?manifest_key="updates\/latest\.json"/);
+  assert.match(upload, /beta\)[\s\S]*?manifest_key="updates\/beta\/latest\.json"/);
   assert.match(upload, /upload_object "artifacts\/updates\/latest\.json" "\$\{manifest_key\}"/);
   assert.doesNotMatch(
     upload,
@@ -1496,10 +1503,16 @@ esac
     path.join(workDir, "artifacts", "navop-x86_64-unknown-linux-gnu.tar.gz"),
     "fake package",
   );
-  fs.writeFileSync(
-    path.join(workDir, "artifacts", "updates", "latest.json"),
-    '{"schema_version":1}\n',
-  );
+  // 上传段按固定路径读取三份产品清单（由 node 生成步骤产出），仿真里预置。
+  for (const productManifest of [
+    "updates/latest.json",
+    "updates/navop-shell/shell/latest.json",
+    "updates/navop-data/data/latest.json",
+  ]) {
+    const manifestPath = path.join(workDir, "artifacts", productManifest);
+    fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+    fs.writeFileSync(manifestPath, '{"schema_version":1}\n');
+  }
 
   const baseEnv = {
     ...process.env,
@@ -1688,7 +1701,7 @@ test("release builds are cacheable and individually repairable", () => {
   assert.match(trigger, /-f platform=all/);
   assert.match(
     release,
-    /all\) matrix="\[\$macos_arm64,\$macos_x64,\$linux_x64,\$linux_arm64,\$windows_x64,\$windows_x86\]"/,
+    /all\)[\s\S]*?matrix="\[\$\{combined\}\]"/,
   );
   assert.equal(fs.existsSync(".github/workflows/build-arm-linux.yml"), false);
 });
@@ -1740,16 +1753,16 @@ test("Rust workflows share one cache strategy without archiving target", () => {
 test("application updates prefer navop while accepting legacy package names", () => {
   const install = read("crates/app_kit/src/update/install.rs");
 
-  assert.match(install, /\["navop\.exe", "onetcli\.exe"\]/);
+  assert.match(install, /let mut names = vec!\[format!\("\{binary_name\}\.exe"\)/);
   assert.match(install, /find_file_named\(staging_dir, name\)/);
   assert.match(
     install,
-    /\["usr\/bin\/navop", "navop", "usr\/bin\/onetcli", "onetcli"\]/,
+    /format!\("usr\/bin\/\{binary_name\}"\)[\s\S]*"usr\/bin\/onetcli"\.to_string\(\),[\s\S]*"onetcli"\.to_string\(\)/,
   );
 });
 
 test("Windows 产物由宿主自己内嵌 Common-Controls v6 清单", () => {
-  const build = read("main/build.rs");
+  const build = read("crates/navop_app/build.rs");
   const manifest = read("resources/windows/navop.manifest.xml");
   const release = read(".github/workflows/release.yml");
 
@@ -1782,19 +1795,19 @@ test("Windows 产物由宿主自己内嵌 Common-Controls v6 清单", () => {
   // 所以这份清单只能由 navop 自己嵌。
   assert.match(
     build,
-    /set_manifest\(include_str!\("\.\.\/resources\/windows\/navop\.manifest\.xml"\)\)/,
+    /set_manifest\(include_str!\("\.\.\/\.\.\/resources\/windows\/navop\.manifest\.xml"\)\)/,
   );
   // winresource 只在 VersionInfo::FILETYPE 存在时才写清单块：漏了这行会静默不嵌。
   assert.match(build, /set_version_info\(winresource::VersionInfo::FILETYPE/);
   assert.match(
     build,
-    /rerun-if-changed=\.\.\/resources\/windows\/navop\.manifest\.xml/,
+    /rerun-if-changed=\.\.\/\.\.\/resources\/windows\/navop\.manifest\.xml/,
   );
 
   // 发布流程必须在打包前校验真实产物（静态检查拦不住「清单被上游吃掉」这类回归）。
   const validateStep = workflowStep(release, "Validate Windows executable manifest");
   assert.match(validateStep, /node script\/validate-windows-exe\.mjs/);
-  assert.match(validateStep, /\$\{\{ matrix\.target \}\}\/release\/navop\.exe/);
+  assert.match(validateStep, /\$\{\{ matrix\.target \}\}\/release\/\$\{\{ matrix\.binary \}\}/);
   assert.ok(
     release.indexOf("- name: Validate Windows executable manifest") >
       release.indexOf("- name: Build release binary (Windows)"),
@@ -1853,9 +1866,9 @@ test("Windows 清单门禁能识别缺失清单的 PE（含真实失败现象的
 
 test("release version source stays aligned with the navop product package", () => {
   const versionOf = (source) => source.match(/^version = "([^"]+)"/m)?.[1];
-  const mainVersion = versionOf(read("main/Cargo.toml"));
+  const mainVersion = versionOf(read("crates/navop_app/Cargo.toml"));
   const navopVersion = versionOf(read("apps/navop/Cargo.toml"));
-  assert.ok(mainVersion, "main/Cargo.toml must declare a version");
+  assert.ok(mainVersion, "crates/navop_app/Cargo.toml must declare a version");
   assert.equal(navopVersion, mainVersion, "apps/navop/Cargo.toml version must match main");
 });
 
@@ -1877,14 +1890,34 @@ test("standalone products ship their own Linux desktop identity and portable mar
   assert.match(shellIdentity, /portable_marker: "navop-data\.portable"/);
 });
 
-test("standalone products workflow builds Shell and Data on macOS and Linux", () => {
-  const workflow = read(".github/workflows/standalone-products.yml");
-  assert.match(workflow, /name: Standalone Products/);
-  assert.match(workflow, /"product":"navop-shell"/);
-  assert.match(workflow, /"product":"navop-data"/);
-  assert.match(workflow, /script\/bundle-macos\.sh "\$\{\{ matrix\.target \}\}" "\$\{\{ matrix\.product \}\}"/);
-  assert.match(workflow, /script\/package-linux-product\.sh "\$\{\{ matrix\.product \}\}"/);
-  assert.match(workflow, /cargo build --release -p "\$\{\{ matrix\.product \}\}"/);
+test("unified release workflow builds Shell and Data on every primary platform", () => {
+  const release = read(".github/workflows/release.yml");
+
+  // 独立产品不再有专属工作流：release.yml 的矩阵直接携带 navop-shell /
+  // navop-data 条目，复用与全量一致的构建、打包与上传步骤。
+  assert.match(release, /"product":"navop-shell"/);
+  assert.match(release, /"product":"navop-data"/);
+  assert.match(release, /"archive":"navop-shell-aarch64-apple-darwin\.tar\.gz"/);
+  assert.match(release, /"archive":"navop-data-x86_64-pc-windows-msvc\.zip"/);
+  assert.match(
+    release,
+    /script\/bundle-macos\.sh \$\{\{ matrix\.target \}\} \$\{\{ matrix\.product \}\}/,
+  );
+  assert.match(
+    release,
+    /script\/package-linux-product\.sh "\$\{\{ matrix\.product \}\}"/,
+  );
+  assert.match(
+    release,
+    /cargo build --release -p \$\{\{ matrix\.product \}\} --target "\$\{\{ matrix\.target \}\}"/,
+  );
+  // 独立产品产物用自身前缀发布，与全量并列。
+  assert.match(release, /PUBLIC_BASENAME=\$\{\{ matrix\.product \}\}-\$\{VERSION#v\}-\$\{\{ matrix\.public_label \}\}/);
+  assert.equal(
+    fs.existsSync(".github/workflows/standalone-products.yml"),
+    false,
+    "standalone builds belong to the unified release workflow",
+  );
 });
 
 
@@ -1907,10 +1940,22 @@ test("standalone Windows installers keep distinct upgrade identities", () => {
 });
 
 
-test("standalone CI builds Windows installers for both products", () => {
-  const workflow = read(".github/workflows/standalone-products.yml");
-  assert.match(workflow, /"product":"navop-shell","label":"windows-x64"/);
-  assert.match(workflow, /"product":"navop-data","label":"windows-x64"/);
-  assert.match(workflow, /build-product-installer\.ps1/);
-  assert.match(workflow, /WixToolset\.BootstrapperApplications/);
+test("unified release workflow builds Windows installers for both products", () => {
+  const release = read(".github/workflows/release.yml");
+
+  // 独立产品在 Windows 上走 build-product-installer.ps1（与原
+  // standalone-products.yml 相同的入口），全量仍走 navop.wxs 那套。
+  assert.match(
+    release,
+    /"product":"navop-shell","binary":"navop-shell\.exe","archive":"navop-shell-x86_64-pc-windows-msvc\.zip"/,
+  );
+  assert.match(
+    release,
+    /"product":"navop-data","binary":"navop-data\.exe","archive":"navop-data-x86_64-pc-windows-msvc\.zip"/,
+  );
+  assert.match(release, /build-product-installer\.ps1/);
+  assert.match(
+    release,
+    /-Product "\$\{\{ matrix\.product \}\}"[\s\S]*?-Version "\$env:ONETCLI_VERSION"/,
+  );
 });

@@ -781,7 +781,7 @@ mod tests {
             "worktree 要建在注入的根下，实际落到了 {switched:?}"
         );
 
-        // 线上这一步由 `RootChanged` 的订阅者做（`main/src/home/ai_workbench.rs`）；
+        // 线上这一步由 `RootChanged` 的订阅者做（`crates/navop_app/src/home/ai_workbench.rs`）；
         // fixture 没注册订阅，手动补上。
         //
         // 但得先等 Explorer 在后台把仓库重新发现出来：`apply_root_change` 会把

@@ -108,7 +108,7 @@ function validate(file) {
         "而 Windows 只会给声明了 Common-Controls v6 依赖的进程加载 v6，所以它会在 main 之前" +
         "以 0xC0000139 退出（现象：弹「无法定位程序输入点 TaskDialogIndirect …」）。"
       : "清单不完整，comctl32 v6 的激活上下文会失效。",
-    "修法：main/build.rs 里 set_version_info(VersionInfo::FILETYPE, 1) + " +
+    "修法：crates/navop_app/build.rs 里 set_version_info(VersionInfo::FILETYPE, 1) + " +
       "set_manifest(include_str!(\"../resources/windows/navop.manifest.xml\"))，" +
       "清单内容见 resources/windows/navop.manifest.xml。",
   ].join(" ");

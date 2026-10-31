@@ -2858,7 +2858,8 @@ fn release_only_pull_requests_skip_the_platform_matrix() {
     assert_contains_all(
         "script/release_pr.py",
         &[
-            "ALLOWED_FILES = (\"CHANGELOG.md\", \"main/Cargo.toml\", \"Cargo.lock\")",
+            "ALLOWED_FILES = (\"CHANGELOG.md\", \"Cargo.lock\", *APP_MANIFEST_PATHS)",
+            "\"crates/navop_app/Cargo.toml\",",
             "def classify(",
             "def verify_release_metadata(",
             "def validate_changelog_entry(",

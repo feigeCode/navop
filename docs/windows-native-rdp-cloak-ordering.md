@@ -3,7 +3,7 @@
 > **影响**：`backend_preference: windows_native` 的 RDP 会话——连接成功、日志零 WARN，  
 > 但 RDP 视图区域**永远是 GPUI 窗口背景色 `#171717`**。既不是远端桌面，也不是浮层自己的黑色。
 >
-> **改动面**：navop 仓库 6 个文件（`crates/remote_desktop_view` 5 个 + `main/src/main.rs`）+ smoke 工具；  
+> **改动面**：navop 仓库 6 个文件（`crates/remote_desktop_view` 5 个 + `crates/navop_app/src/main.rs`）+ smoke 工具；  
 > **GPUI fork 不需要新增改动**（上一份文档里的 A/B 两处修复仍然必需，那是另一个独立缺陷）。  
 > —— 这条只对 §1–§10 成立：§11 的按需 cloak 另需 fork 新增一处只读出口。
 >
@@ -155,9 +155,9 @@ apply_deferred_cloak()             ★ 检查真的在屏幕上 → RedrawWindow
 | `view/windows_native_composition.rs`       | 新增 `cloak_pending` 状态 + `cloak_pending()` / `mark_cloaked()`；`attach()` 置位                                                                                                                  |
 | `view/windows_native.rs`                   | `compose_native_window` **不再 cloak**；新增 `apply_deferred_cloak()`；`sync_composition_bounds`（`Some` 分支）与 `sync_composition_visibility`（`true` 分支）各调用一次；另加 `NAVOP_RDP_DISABLE_COMPOSITION` 逃生门 |
 | `view/render_contract_tests.rs`            | 新增契约测试 `windows_native_overlay_is_cloaked_only_after_it_is_positioned_and_painted`                                                                                                          |
-| `main/src/main.rs`                         | 闸门翻转：默认**不再**关 DirectComposition，改为由 `NAVOP_RDP_DISABLE_COMPOSITION` 把关；同名契约测试 `windows_native_rdp_keeps_direct_composition_unless_the_disable_switch_is_set` 同步改写                          |
+| `crates/navop_app/src/main.rs`                         | 闸门翻转：默认**不再**关 DirectComposition，改为由 `NAVOP_RDP_DISABLE_COMPOSITION` 把关；同名契约测试 `windows_native_rdp_keeps_direct_composition_unless_the_disable_switch_is_set` 同步改写                          |
 
-> `main/src/main.rs` 的翻转就是上一份文档 §5.1 早已写下的形态。  
+> `crates/navop_app/src/main.rs` 的翻转就是上一份文档 §5.1 早已写下的形态。  
 > 中间它曾退化成 `NAVOP_RDP_ENABLE_COMPOSITION`（opt-in），原因是合成路径当时交不出画面；  
 > 根因修掉之后又回到文档描述的形态，两份文档现在一致。
 
@@ -235,13 +235,13 @@ display: stage=success reason=login_complete desktop=1920x1030
 python .workbuddy/build/cargo-msvc.py check -p remote_desktop_view --features windows-native-rdp
 
 # 全量：必须用降内存配置，否则 main 的 codegen 峰值会撞提交上限
-python .workbuddy/build/cargo-msvc.py build -p main --bin navop \
+python .workbuddy/build/cargo-msvc.py build -p navop_app --bin navop \
     --config .workbuddy/tmp/navop-nodbg.toml
 ```
 
 > 本机编译的两个坑（都不是本次改动引入的）：
 >
-> 1. `main` 的 codegen 峰值会撞提交上限 → 失败形态是  
+> 1. `navop_app` 的 codegen 峰值会撞提交上限 → 失败形态是  
 >    `rustc-LLVM ERROR: out of memory` / `Allocation failed`，  
 >    错误进程退出码被伪装成 `0xc0000409 (STATUS_STACK_BUFFER_OVERRUN)`。**降内存重跑即可，不要 clean。**
 > 2. 上一次内存耗尽时正在写 `libdb_view-*.rlib`（1.03 GiB），文件被写坏，  
@@ -272,7 +272,7 @@ test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 282 filtered out
 ### 6.4 navop 产品侧真机验证（2026-10-10）
 
 
-`main/src/main.rs` 翻转闸门后，真机（`<RDP 主机>`，`backend_preference: windows_native`）  
+`crates/navop_app/src/main.rs` 翻转闸门后，真机（`<RDP 主机>`，`backend_preference: windows_native`）  
 跑默认路径，日志给出的正是新时序：
 
 ```
@@ -332,7 +332,7 @@ git apply .workbuddy/tmp/rdp-cloak-fix/navop-gpui-rdp-smoke.patch        # 可�
 | 补丁                                          | 内容                                                                                                            |
 | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
 | `navop-remote-desktop-view.patch`           | **核心修复**：`crates/remote_desktop_view` 全部改动，相对 `7d66a491e`（PR #358 之后）                                         |
-| `navop-main.patch`                          | `main/src/main.rs`：闸门翻转 + 契约测试改名改写；**另含一处与本修复无关的既有未提交改动**（`Navop run loop returned` 退出里程碑日志，见上一份文档 §5.3），按需取舍 |
+| `navop-main.patch`                          | `crates/navop_app/src/main.rs`：闸门翻转 + 契约测试改名改写；**另含一处与本修复无关的既有未提交改动**（`Navop run loop returned` 退出里程碑日志，见上一份文档 §5.3），按需取舍 |
 | `navop-gpui-rdp-smoke.patch`                | 测试工具（smoke）改动，含 `SMOKE_RDP_CLOAK_IMMEDIATE=1` 反向开关                                                            |
 | `gpui-pre-fork.patch`                       | GPUI fork 的 A/B 两处修复（与上一份文档相同，**本次未改动 GPUI**）                                                                 |
 | `docs/windows-native-rdp-cloak-ordering.md` | 本文                                                                                                            |
@@ -384,8 +384,8 @@ git apply .workbuddy/tmp/rdp-cloak-fix/navop-gpui-rdp-smoke.patch        # 可�
 4. **`update_session_display_settings` 偶发失败**：真机日志里出现过  
    `Windows RDP host result 4 with HRESULT 0x8000FFFF` → `retry_scheduled` → `success reason=Retry`  
    （自愈，与本次修复无关）。单独记录，不在本次范围内。
-5. **`cargo test -p main` 未在本机跑**：本机 5.9GB 物理内存 + `main` 的 codegen 峰值，  
-   跑 `main` 的测试二进制风险高、代价约 20–57 分钟。`main.rs` 的契约测试是纯源码文本断言，  
+5. **`cargo test -p navop_app` 未在本机跑**：本机 5.9GB 物理内存 + `navop_app` 的 codegen 峰值，  
+   跑 `navop_app` 的测试二进制风险高、代价约 20–57 分钟。`main.rs` 的契约测试是纯源码文本断言，  
    已用等价脚本（`production_source()` 同一段切片 + 同样 6 条断言）逐条复核通过；  
    仓库 CI 门禁 `cargo test --all` 会真正执行它。
 
@@ -449,7 +449,7 @@ cloak 就再也收不到，合成消息也救不回来。**cloak 与可交互在
 ### 9.4 最终闸门
 
 ```rust
-// main/src/main.rs
+// crates/navop_app/src/main.rs
 if remote_desktop::windows_native_rdp_compiled()
     && std::env::var_os("NAVOP_RDP_ENABLE_COMPOSITION").is_none()
 {
@@ -478,7 +478,7 @@ if remote_desktop::windows_native_rdp_compiled()
 `composition_verdict` 推出来的。这里补一组**从进程外测得、可重复、两条路径互为对照**的证据，  
 并且用**真实鼠标点击**（不是 `PostMessage`）验证默认路径确实可交互。
 
-构建：`target/debug/navop.exe`（`main/src/main.rs` 已翻回默认关闭合成），数据目录用用户真实配置  
+构建：`target/debug/navop.exe`（`crates/navop_app/src/main.rs` 已翻回默认关闭合成），数据目录用用户真实配置  
 `%APPDATA%\Navop`，连接 `我的win`（`windows_native`，<RDP 主机>:3389）。
 
 ### 10.1 判据一：命中测试落在谁身上
@@ -634,7 +634,7 @@ self.sync_native_overlay_cloak(window);
 | `view/windows_native.rs`             | `WindowsNativeAdapter` 加 `overlay_cloaked` / `overlay_cloak_painted` 字段与 `set_overlay_cloak(bool)` |
 | `view/windows_native_composition.rs` | `attach()` 的 `cloak_pending` 由 `true` 改 `false`：合成不再自己 cloak                                       |
 | `view/render.rs`                     | `sync_native_overlay_cloak` + 每帧驱动                                                                 |
-| `main/src/main.rs`                   | 闸门翻回**默认启用合成**；逃生门 `NAVOP_RDP_DISABLE_COMPOSITION=1`                                               |
+| `crates/navop_app/src/main.rs`                   | 闸门翻回**默认启用合成**；逃生门 `NAVOP_RDP_DISABLE_COMPOSITION=1`                                               |
 
 §5 的「`DWMWA_CLOAK` 必须晚于窗口第一次拿到真实尺寸并被绘制一次」仍是硬约束，  
 `set_overlay_cloak` 完整照做：`is_actually_visible()` → `redraw()` → `set_cloaked(true)`。
@@ -705,7 +705,7 @@ visual —— 于是窗口所在区域读出来是"洞"，透出下面的桌面�
 | ---------------------------------------------- | ------------------------------------------------------------------------------- |
 | gpui-kit `crates/base/src/dialog.rs:548`       | `Dialog::render` 的整个宿主是 `deferred(anchored().position(...).child(...))`         |
 | gpui-kit `crates/base/src/alert_dialog.rs:193` | `pub struct AlertDialog(Dialog)` —— 报警框在同一文件里就是包着它的元组结构，走同一条路                   |
-| navop `main/src/**`                            | 27 处 `window.open_dialog(...)` / `open_alert_dialog(...)` 调用点，全部落到上面那个 `Dialog` |
+| navop `crates/navop_app/src/**`                            | 27 处 `window.open_dialog(...)` / `open_alert_dialog(...)` 调用点，全部落到上面那个 `Dialog` |
 
 `has_deferred_content` 的取值是 `!next_frame.deferred_draws.is_empty() || prompt.is_some()`，  
 dialog 落进前者，所以 **dialog 一开就 cloak、一关就 uncloak**，与菜单共用同一条路，  

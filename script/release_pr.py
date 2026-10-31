@@ -22,10 +22,18 @@ import subprocess
 import sys
 from pathlib import Path
 
-ALLOWED_FILES = ("CHANGELOG.md", "main/Cargo.toml", "Cargo.lock")
-VERSION_PATHS = ("main/Cargo.toml", "Cargo.lock")
+# 统一版本约定：一个 tag 同发全量与两个独立产品，版本 bump 覆盖
+# 应用外壳 crate（navop_app，历史名 main）+ 三个 app crate 的 manifest 与 Cargo.lock。
+APP_MANIFEST_PATHS = (
+    "crates/navop_app/Cargo.toml",
+    "apps/navop/Cargo.toml",
+    "apps/navop-shell/Cargo.toml",
+    "apps/navop-data/Cargo.toml",
+)
+ALLOWED_FILES = ("CHANGELOG.md", "Cargo.lock", *APP_MANIFEST_PATHS)
+VERSION_PATHS = ("Cargo.lock", *APP_MANIFEST_PATHS)
 CHANGELOG_PATH = "CHANGELOG.md"
-MANIFEST_PATH = "main/Cargo.toml"
+MANIFEST_PATH = "crates/navop_app/Cargo.toml"
 LOCK_PATH = "Cargo.lock"
 VERSION_LINE_RE = re.compile(r'^[+-][ \t]*version[ \t]*=[ \t]*"')
 PACKAGE_SECTION_RE = re.compile(r"^\[package\]$")
@@ -105,7 +113,7 @@ def manifest_version(manifest: str) -> str:
     raise ReleasePrError(f"{MANIFEST_PATH} has no [package] version")
 
 
-def lock_main_version(lock: str) -> str:
+def lock_app_version(lock: str) -> str:
     current_name: str | None = None
     for line in lock.splitlines():
         if line == "[[package]]":
@@ -115,12 +123,12 @@ def lock_main_version(lock: str) -> str:
         if name_match:
             current_name = name_match.group(1)
             continue
-        if current_name != "main":
+        if current_name != "navop_app":
             continue
         version_match = VERSION_RE.match(line)
         if version_match:
             return version_match.group(1)
-    raise ReleasePrError(f'{LOCK_PATH} has no version for the "main" package')
+    raise ReleasePrError(f'{LOCK_PATH} has no version for the "navop_app" package')
 
 
 def load_changelog_module():
@@ -151,14 +159,23 @@ def read(path: Path) -> str:
 
 
 def verify_release_metadata(root: Path, changelog: str) -> str:
-    """Validate the release entry and the version pair; return the version."""
+    """Validate the release entry and the version set; return the version."""
 
     version = manifest_version(read(root / MANIFEST_PATH))
-    locked = lock_main_version(read(root / LOCK_PATH))
+    locked = lock_app_version(read(root / LOCK_PATH))
     if version != locked:
         raise ReleasePrError(
-            f"{MANIFEST_PATH} is {version} but {LOCK_PATH} pins main at {locked}"
+            f"{MANIFEST_PATH} is {version} but {LOCK_PATH} pins navop_app at {locked}"
         )
+    # 三个 app crate 与 navop_app 必须同版本：一个 tag 同时发布三个产品，
+    # 任何一处落后都会让对应产品的自报版本与 feed 版本比较出错。
+    for app_manifest in APP_MANIFEST_PATHS[1:]:
+        app_version = manifest_version(read(root / app_manifest))
+        if app_version != version:
+            raise ReleasePrError(
+                f"{app_manifest} is {app_version} but {MANIFEST_PATH} is {version}; "
+                "unified product releases must bump all four manifests together"
+            )
     validate_changelog_entry(changelog, version)
     return version
 

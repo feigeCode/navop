@@ -4,7 +4,7 @@ fn main() {
         const VFT_APP: u64 = 1;
 
         let mut res = winresource::WindowsResource::new();
-        res.set_icon("../resources/windows/navop.ico");
+        res.set_icon("../../resources/windows/navop.ico");
 
         // Common-Controls v6 清单**必须由宿主自己嵌**，缺了它 navop.exe 在 Windows 上根本
         // 起不来（加载器在 `main` 之前就以 STATUS_ENTRYPOINT_NOT_FOUND / 0xC0000139 退出，
@@ -25,8 +25,8 @@ fn main() {
         // winresource 只在 `VersionInfo::FILETYPE` 存在时才会写清单块（见其
         // `write_resource_file`），因此下面这行不是可选项：漏了会静默不嵌清单。
         res.set_version_info(winresource::VersionInfo::FILETYPE, VFT_APP);
-        res.set_manifest(include_str!("../resources/windows/navop.manifest.xml"));
-        println!("cargo:rerun-if-changed=../resources/windows/navop.manifest.xml");
+        res.set_manifest(include_str!("../../resources/windows/navop.manifest.xml"));
+        println!("cargo:rerun-if-changed=../../resources/windows/navop.manifest.xml");
 
         res.set("ProductName", "Navop");
         res.set("FileDescription", "Navop - Database and Remote Operations");
