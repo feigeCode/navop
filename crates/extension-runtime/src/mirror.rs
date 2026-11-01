@@ -5,9 +5,10 @@
 //! 「关于 → 更新」里的更新镜像下拉，只决定候选地址的尝试顺序，
 //! 选中的源失败后仍会回退到其余镜像。
 //!
-//! CNB 只镜像 Release 资产，不镜像 marketplace 的 `manifest.json`
-//! （仓库文件直链需要登录），所以 CNB 偏好只影响安装包与各自清单的取数顺序，
-//! 扩展市场列表仍走 R2 / GitHub。
+//! CNB 只镜像 Release 资产（仓库文件直链需要登录），所以扩展市场清单也发布成
+//! navop-extensions 固定 tag `manifest` 的 Release 资产：CNB 同步后即可国内直读，
+//! 客户端不需要做 tag 发现。取不到时回退 R2（`extensions/manifest.json`）与
+//! GitHub raw。
 
 use std::sync::atomic::{AtomicU8, Ordering};
 
@@ -21,6 +22,17 @@ pub(crate) const CNB_EXTENSION_RELEASE_BASE: &str =
 /// `onetcli-extensions` 没有同步，不能改写过去。
 const GITHUB_EXTENSION_RELEASE_PREFIX: &str =
     "github.com/feigeCode/navop-extensions/releases/download/";
+
+/// 扩展市场清单在 GitHub Release 上的地址。
+///
+/// navop-extensions 每次发布都会把 `manifest.json` 覆盖发到固定 tag `manifest`
+/// 的 Release 下，客户端不需要做 tag 发现，GitHub 与 CNB 用同一段路径。
+pub(crate) const GITHUB_MARKETPLACE_MANIFEST_RELEASE_URL: &str =
+    "https://github.com/feigeCode/navop-extensions/releases/download/manifest/manifest.json";
+
+/// 同一份扩展市场清单在 CNB 上的镜像地址（由 navop-extensions 的 CI 同步）。
+pub(crate) const CNB_MARKETPLACE_MANIFEST_URL: &str =
+    "https://cnb.cool/navop-dev/navop-extensions/-/releases/download/manifest/manifest.json";
 
 /// 进程内的扩展镜像偏好；启动时与设置页切换时由宿主写入。
 static EXTENSION_MIRROR: AtomicU8 = AtomicU8::new(0);
@@ -66,11 +78,20 @@ pub(crate) fn cnb_release_download_url(url: &str) -> Option<String> {
     Some(format!("{CNB_EXTENSION_RELEASE_BASE}{asset_path}"))
 }
 
-/// 按镜像偏好给下载地址候选排序。
+/// 扩展市场清单在 CNB 上的地址。
+///
+/// 市场清单以固定 tag `manifest` 的 Release 资产发布，因此不需要 tag 发现；
+/// 该 Release 还没同步到 CNB 时只会 404，由调用方回退下一个源。
+pub(crate) fn cnb_marketplace_manifest_url() -> &'static str {
+    CNB_MARKETPLACE_MANIFEST_URL
+}
+
+/// 按镜像偏好给候选地址排序。
 ///
 /// `candidates` 固定为 `[R2, GitHub, CNB]`；缺哪一项就跳过哪一项，
 /// 默认顺序保持历史行为（R2 → GitHub → CNB），CNB 只做兜底。
-pub(crate) fn ordered_download_urls(
+/// 安装包、单扩展清单与市场清单共用这套排序。
+pub(crate) fn ordered_mirror_candidates(
     preference: UpdateMirror,
     candidates: [Option<String>; 3],
 ) -> Vec<String> {
@@ -93,10 +114,28 @@ pub(crate) fn ordered_download_urls(
 #[cfg(test)]
 mod tests {
     use super::{
-        CNB_EXTENSION_RELEASE_BASE, cnb_release_download_url, extension_mirror,
-        ordered_download_urls, set_extension_mirror,
+        CNB_EXTENSION_RELEASE_BASE, GITHUB_MARKETPLACE_MANIFEST_RELEASE_URL,
+        cnb_marketplace_manifest_url, cnb_release_download_url, extension_mirror,
+        ordered_mirror_candidates, set_extension_mirror,
     };
     use one_core::settings::UpdateMirror;
+
+    #[test]
+    fn marketplace_manifest_uses_the_fixed_release_tag() {
+        assert_eq!(
+            GITHUB_MARKETPLACE_MANIFEST_RELEASE_URL,
+            "https://github.com/feigeCode/navop-extensions/releases/download/manifest/manifest.json"
+        );
+        assert_eq!(
+            cnb_marketplace_manifest_url(),
+            "https://cnb.cool/navop-dev/navop-extensions/-/releases/download/manifest/manifest.json"
+        );
+        // CNB 地址必须是 GitHub 地址同名改写来的，两边资产名与 tag 一致。
+        assert_eq!(
+            cnb_release_download_url(GITHUB_MARKETPLACE_MANIFEST_RELEASE_URL).as_deref(),
+            Some(cnb_marketplace_manifest_url())
+        );
+    }
 
     #[test]
     fn cnb_mirror_rewrites_github_release_assets() {
@@ -135,7 +174,7 @@ mod tests {
         let cnb = Some("https://cnb.cool/o/r/-/releases/download/t/a.tar.gz".to_string());
 
         assert_eq!(
-            ordered_download_urls(
+            ordered_mirror_candidates(
                 UpdateMirror::Auto,
                 [r2.clone(), github.clone(), cnb.clone()]
             ),
@@ -146,7 +185,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            ordered_download_urls(
+            ordered_mirror_candidates(
                 UpdateMirror::Cloudflare,
                 [r2.clone(), github.clone(), cnb.clone()]
             ),
@@ -157,7 +196,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            ordered_download_urls(
+            ordered_mirror_candidates(
                 UpdateMirror::Github,
                 [r2.clone(), github.clone(), cnb.clone()]
             ),
@@ -168,7 +207,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            ordered_download_urls(UpdateMirror::Cnb, [r2.clone(), github.clone(), cnb.clone()]),
+            ordered_mirror_candidates(UpdateMirror::Cnb, [r2.clone(), github.clone(), cnb.clone()]),
             vec![
                 cnb.clone().unwrap(),
                 r2.clone().unwrap(),
@@ -176,7 +215,7 @@ mod tests {
             ]
         );
         assert!(
-            ordered_download_urls(UpdateMirror::Cnb, [None, None, None]).is_empty(),
+            ordered_mirror_candidates(UpdateMirror::Cnb, [None, None, None]).is_empty(),
             "没有候选地址时应返回空列表"
         );
     }

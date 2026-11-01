@@ -7,11 +7,10 @@ use std::{
 use anyhow::{Context, Result, anyhow};
 use futures::AsyncReadExt;
 use gpui::http_client::{AsyncBody, HttpClient, Method, Request, http::header};
-use one_core::settings::UpdateMirror;
 
 use super::marketplace::{MarketplaceEntry, MarketplaceManifest};
 use crate::extension::{ExtensionKind, ExtensionRegistry, ExtensionSummary};
-use crate::mirror::extension_mirror;
+use crate::mirror::{cnb_marketplace_manifest_url, extension_mirror, ordered_mirror_candidates};
 
 pub const GITHUB_EXTENSION_MANIFEST_URL: &str =
     "https://raw.githubusercontent.com/feigeCode/navop-extensions/main/manifest.json";
@@ -112,23 +111,22 @@ pub fn manifest_urls_for_configured_url(configured_url: Option<String>) -> Vec<S
         return urls;
     }
 
-    // 镜像偏好只改变先问谁：CNB 没有 marketplace 清单（仓库文件直链需要登录），
-    // 所以清单候选只有 R2（configured）与 GitHub。
+    // 镜像偏好只改变先问谁：市场清单在 R2（`extensions/manifest.json`）、
+    // GitHub raw 与 Release 资产 `manifest` 上各有一份，CNB 只认 Release 资产，
+    // 所以第三个候选是固定 tag 的镜像地址。
     #[cfg(not(feature = "github-marketplace"))]
     {
         let configured = configured_url.and_then(|url| non_empty_trimmed(&url));
-        let mut urls = Vec::new();
-        if extension_mirror() == UpdateMirror::Github {
-            push_unique_url(&mut urls, GITHUB_EXTENSION_MANIFEST_URL.to_string());
-            if let Some(url) = configured {
-                push_unique_url(&mut urls, url);
-            }
-        } else {
-            if let Some(url) = configured {
-                push_unique_url(&mut urls, url);
-            }
-            push_unique_url(&mut urls, GITHUB_EXTENSION_MANIFEST_URL.to_string());
-        }
+        let cnb = Some(cnb_marketplace_manifest_url().to_string());
+        let mut urls = ordered_mirror_candidates(
+            extension_mirror(),
+            [
+                configured,
+                Some(GITHUB_EXTENSION_MANIFEST_URL.to_string()),
+                cnb,
+            ],
+        );
+        // 老仓库没有 CNB 镜像，只作为最后的兜底。
         push_unique_url(&mut urls, LEGACY_GITHUB_EXTENSION_MANIFEST_URL.to_string());
         urls
     }

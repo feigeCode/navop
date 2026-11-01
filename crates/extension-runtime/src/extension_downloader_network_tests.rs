@@ -69,13 +69,14 @@ fn fetch_manifest_url_parses_marketplace_manifest() {
 #[cfg(not(feature = "github-marketplace"))]
 #[test]
 fn missing_extension_manifest_env_uses_current_then_legacy_github() {
-    assert_eq!(
-        vec![
-            GITHUB_EXTENSION_MANIFEST_URL.to_string(),
-            LEGACY_GITHUB_EXTENSION_MANIFEST_URL.to_string(),
-        ],
-        manifest_urls_for_configured_url(None)
+    // 镜像偏好是进程级全局，这里只断言候选集合与首尾，不锁死中间顺序。
+    let urls = manifest_urls_for_configured_url(None);
+    assert_eq!(GITHUB_EXTENSION_MANIFEST_URL, urls[0]);
+    assert!(
+        urls.contains(&crate::mirror::CNB_MARKETPLACE_MANIFEST_URL.to_string()),
+        "市场清单应包含 CNB 镜像候选: {urls:?}"
     );
+    assert_eq!(LEGACY_GITHUB_EXTENSION_MANIFEST_URL, urls[urls.len() - 1]);
 }
 
 #[cfg(not(feature = "github-marketplace"))]
@@ -160,6 +161,7 @@ fn fetch_default_manifest_url_falls_back_to_legacy_github_source() {
     let client = Arc::new(FakeHttpClient::new(vec![
         Err(anyhow::anyhow!("r2 unavailable")),
         Err(anyhow::anyhow!("current GitHub unavailable")),
+        Err(anyhow::anyhow!("cnb mirror unavailable")),
         FakeHttpClient::response(
             200,
             r#"{
@@ -203,7 +205,8 @@ fn fetch_default_manifest_url_falls_back_to_legacy_github_source() {
         requests[0].uri
     );
     assert_eq!(GITHUB_EXTENSION_MANIFEST_URL, requests[1].uri);
-    assert_eq!(LEGACY_GITHUB_EXTENSION_MANIFEST_URL, requests[2].uri);
+    assert_eq!(crate::mirror::CNB_MARKETPLACE_MANIFEST_URL, requests[2].uri);
+    assert_eq!(LEGACY_GITHUB_EXTENSION_MANIFEST_URL, requests[3].uri);
 }
 
 #[cfg(not(feature = "github-marketplace"))]
@@ -243,6 +246,7 @@ fn legacy_github_manifest_keeps_extension_manifest_and_artifact_fallbacks_on_leg
     let client = Arc::new(FakeHttpClient::new(vec![
         Err(anyhow::anyhow!("r2 unavailable")),
         Err(anyhow::anyhow!("current GitHub unavailable")),
+        Err(anyhow::anyhow!("cnb mirror unavailable")),
         FakeHttpClient::response(200, marketplace_manifest),
         Err(anyhow::anyhow!(
             "legacy relative extension manifest unavailable"
@@ -266,18 +270,19 @@ fn legacy_github_manifest_keeps_extension_manifest_and_artifact_fallbacks_on_leg
 
     assert!(staging.join("driver.json").exists());
     let requests = client.take_requests();
-    assert_eq!(LEGACY_GITHUB_EXTENSION_MANIFEST_URL, requests[2].uri);
+    assert_eq!(crate::mirror::CNB_MARKETPLACE_MANIFEST_URL, requests[2].uri);
+    assert_eq!(LEGACY_GITHUB_EXTENSION_MANIFEST_URL, requests[3].uri);
     assert_eq!(
         "https://raw.githubusercontent.com/feigeCode/onetcli-extensions/main/fake_pg/manifest.json",
-        requests[3].uri
-    );
-    assert_eq!(
-        "https://github.com/feigeCode/onetcli-extensions/releases/download/fake_pg-v1.2.3/extension-manifest.json",
         requests[4].uri
     );
     assert_eq!(
-        "https://github.com/feigeCode/onetcli-extensions/releases/download/fake_pg-v1.2.3/fake_pg-driver-universal.tar.gz",
+        "https://github.com/feigeCode/onetcli-extensions/releases/download/fake_pg-v1.2.3/extension-manifest.json",
         requests[5].uri
+    );
+    assert_eq!(
+        "https://github.com/feigeCode/onetcli-extensions/releases/download/fake_pg-v1.2.3/fake_pg-driver-universal.tar.gz",
+        requests[6].uri
     );
     fs::remove_dir_all(staging).unwrap();
 }

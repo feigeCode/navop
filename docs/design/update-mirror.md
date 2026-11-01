@@ -126,8 +126,15 @@ curl -sI "https://cnb.cool/navop-dev/navop/-/releases/download/v0.22.0/sha256sum
 - CNB 地址由 GitHub Release 地址改写而来
   （`https://cnb.cool/navop-dev/navop-extensions/-/releases/download/<tag>/<file>`）；
   只改写 `feigeCode/navop-extensions`，历史仓库 `onetcli-extensions` 没有镜像、不改写。
-- 扩展市场列表（`manifest.json`）仍走 R2 → GitHub：CNB 仓库文件直链需要登录，
-  没法镜像；只有安装包与各自的扩展清单会优先走 CNB。
+- 扩展市场清单（`manifest.json`）也在 CNB 上有镜像：navop-extensions 的发布流水线
+  每次扩展发版都会把仓库里的 `manifest.json` 覆盖发到**固定 tag `manifest`** 的
+  GitHub Release（`Publish marketplace manifest release` 步骤），再派发
+  `sync-cnb-release-assets.yml -f tag=manifest` 同步到 CNB。客户端因此不需要 tag 发现：
+  两个地址分别是
+  `https://github.com/feigeCode/navop-extensions/releases/download/manifest/manifest.json`
+  与 `https://cnb.cool/navop-dev/navop-extensions/-/releases/download/manifest/manifest.json`。
+  市场清单的候选因此是 R2（`extensions/manifest.json`，最新）→ GitHub raw（最新）
+  → CNB（Release 快照），按镜像偏好排序。
 - 偏好通过 `extension_runtime::set_extension_mirror` 同步：启动时读一次设置
   （`crates/navop_app/src/lib.rs` 的 `extension_runtime::init(cx)` 之后），
   设置页切换镜像时立刻再写一次（`crates/navop_app/src/settings/update_mirror.rs`）。
@@ -141,6 +148,9 @@ curl -sI "https://cnb.cool/navop-dev/navop/-/releases/download/v0.22.0/sha256sum
 - 现有已发布版本不认识 CNB 源；CNB 镜像只对包含本改动的版本起效。
 - 首次发布包含本改动的版本之后，需到 CNB Release 页面确认 `feed-*.json` 资产确实被
   `mpgrm releases sync` 同步过去（若它按资产名白名单过滤，需要补一条同步规则）。
-- 走 CNB 时每次检查多一次 refs 请求（tag 发现），这是「没有 `latest` 别名」的代价。
+- 走 CNB 时每次检查多一次 refs 请求（tag 发现），这是「没有 `latest` 别名」的代价；
+  扩展市场清单不受影响（固定 tag `manifest`，无需发现）。
+- CNB 上的市场清单是「某次扩展发布时」的快照，可能比 R2 / GitHub raw 慢一个扩展版本；
+  想拿最新清单应选「自动」或「Cloudflare」。
 - 清单版本号与包内 `sha256` 仍只由 Cloudflare 清单提供校验值；CNB 与 GitHub 的安装包
   不做签名校验（现状如此，未因本改动变化）。

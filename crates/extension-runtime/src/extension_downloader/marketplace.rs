@@ -8,7 +8,7 @@ use one_core::settings::UpdateMirror;
 
 use crate::extension::ExtensionKind;
 use crate::extension::manifest::current_host_version;
-use crate::mirror::{cnb_release_download_url, extension_mirror, ordered_download_urls};
+use crate::mirror::{cnb_release_download_url, extension_mirror, ordered_mirror_candidates};
 
 const EXTENSION_RELEASE_MANIFEST_FILE: &str = "extension-manifest.json";
 const DEFAULT_GITHUB_RELEASE_DOWNLOAD_BASE: &str =
@@ -121,7 +121,7 @@ impl MarketplaceEntry {
         };
 
         self.resolved_download_urls =
-            ordered_download_urls(extension_mirror(), [primary_url, github_url, cnb_url]);
+            ordered_mirror_candidates(extension_mirror(), [primary_url, github_url, cnb_url]);
         self.resolved_sha256 = artifact.sha256.clone();
     }
 
