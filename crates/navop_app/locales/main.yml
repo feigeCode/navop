@@ -5038,9 +5038,9 @@ Settings:
         zh-CN: 更新镜像源
         zh-HK: 更新鏡像源
       mirror_desc:
-        en: The chosen mirror is tried first and the rest follow as fallbacks, so a slow or blocked mirror never stops update checks.
-        zh-CN: 选中的镜像源会优先尝试，其余镜像仍作为回退依次尝试，所以某个源变慢或被墙都不会让检查更新失败。
-        zh-HK: 選中的鏡像源會優先嘗試，其餘鏡像仍作為回退依次嘗試，所以某個源變慢或被牆都不會讓檢查更新失敗。
+        en: Applies to update checks and extension downloads. The chosen mirror is tried first and the rest follow as fallbacks, so a slow or blocked mirror never stops the download.
+        zh-CN: 同时作用于检查更新与扩展下载。选中的镜像源会优先尝试，其余镜像仍作为回退依次尝试，所以某个源变慢或被墙都不会让下载失败。
+        zh-HK: 同時作用於檢查更新與擴展下載。選中的鏡像源會優先嘗試，其餘鏡像仍作為回退依次嘗試，所以某個源變慢或被牆都不會讓下載失敗。
       mirror_auto:
         en: Auto (recommended)
         zh-CN: 自动（推荐）

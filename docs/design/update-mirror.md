@@ -1,8 +1,9 @@
 # 更新镜像源（Cloudflare / CNB / GitHub）
 
-> 状态：已实现（客户端 + CI）。相关代码：`crates/app_kit/src/update/mirror.rs`、
-> `crates/app_kit/src/update/mod.rs`、`crates/core/src/settings.rs`、
-> `crates/navop_app/src/settings/update_mirror.rs`。
+> 状态：已实现（客户端 + CI，更新与应用内扩展下载共用）。相关代码：
+> `crates/app_kit/src/update/mirror.rs`、`crates/app_kit/src/update/mod.rs`、
+> `crates/core/src/settings.rs`、`crates/navop_app/src/settings/update_mirror.rs`、
+> `crates/extension-runtime/src/mirror.rs`。
 > 通道机制见 [`beta-channel.md`](beta-channel.md)。
 
 ## 1. 要解决的问题
@@ -103,6 +104,8 @@ cargo test -p one-core --lib update_        # UpdateChannel / UpdateMirror 持�
 cargo test -p navop_app --lib settings::update  # 设置项
 cargo test -p navop_app --lib setting_tab       # 关于页分组装配
 cargo test -p navop_app --test i18n_locale_keys_contract
+cargo test -p extension-runtime --lib mirror     # 扩展镜像偏好、CNB 地址改写、候选排序
+cargo test -p extension-runtime --lib extension_downloader  # 扩展下载回退链
 node script/test-release-packaging.mjs      # workflow 文本断言 + prune/feed 仿真
 ```
 
@@ -113,7 +116,27 @@ curl -s "https://cnb.cool/navop-dev/navop.git/info/refs?service=git-upload-pack"
 curl -sI "https://cnb.cool/navop-dev/navop/-/releases/download/v0.22.0/sha256sums.txt"
 ```
 
-## 8. 已知限制
+## 8. 扩展下载复用同一个镜像偏好
+
+扩展安装包与各自的 `extension-manifest.json` 同样有 R2 / GitHub / CNB 三份副本，
+所以扩展下载直接复用同一个设置项（`AppSettings.update_mirror`），没有第二个下拉：
+
+- 候选顺序固定为 `[R2, GitHub, CNB]`；「自动」与「Cloudflare」保持历史顺序
+  （R2 → GitHub → CNB），「GitHub」→ GitHub → R2 → CNB，「CNB」→ CNB → R2 → GitHub。
+- CNB 地址由 GitHub Release 地址改写而来
+  （`https://cnb.cool/navop-dev/navop-extensions/-/releases/download/<tag>/<file>`）；
+  只改写 `feigeCode/navop-extensions`，历史仓库 `onetcli-extensions` 没有镜像、不改写。
+- 扩展市场列表（`manifest.json`）仍走 R2 → GitHub：CNB 仓库文件直链需要登录，
+  没法镜像；只有安装包与各自的扩展清单会优先走 CNB。
+- 偏好通过 `extension_runtime::set_extension_mirror` 同步：启动时读一次设置
+  （`crates/navop_app/src/lib.rs` 的 `extension_runtime::init(cx)` 之后），
+  设置页切换镜像时立刻再写一次（`crates/navop_app/src/settings/update_mirror.rs`）。
+
+实现：`crates/extension-runtime/src/mirror.rs`（偏好、地址改写、候选排序）、
+`extension_downloader/marketplace.rs`（条目候选下载地址）、
+`extension_downloader/transfer.rs`（市场清单候选顺序）。
+
+## 9. 已知限制
 
 - 现有已发布版本不认识 CNB 源；CNB 镜像只对包含本改动的版本起效。
 - 首次发布包含本改动的版本之后，需到 CNB Release 页面确认 `feed-*.json` 资产确实被

@@ -5,6 +5,11 @@
 //! 让用户「换到一个查不到更新的源」——最坏情况只是多花一次请求。
 //!
 //! 注意 GitHub 只发布正式版本，测试通道不会回退到 GitHub（见 `update_attempts`）。
+//!
+//! 同一个偏好也作用于扩展下载：扩展安装包与各自的 `extension-manifest.json`
+//! 在三处都有副本（R2 / GitHub / CNB），扩展侧按同一个偏好排序候选地址
+//! （见 `extension_runtime::mirror`）。CNB 没有 marketplace 清单，所以扩展列表
+//! 仍走 R2 / GitHub，只有安装包与扩展清单会优先走 CNB。
 
 use gpui::{App, AppContext as _, SharedString};
 use gpui_component::{
@@ -62,6 +67,8 @@ fn apply_mirror(cx: &mut App, mirror: UpdateMirror) {
     AppSettings::update_and_save(cx, |settings| {
         settings.update_mirror = Some(mirror);
     });
+    // 扩展下载复用同一个偏好，切换后立刻同步给扩展运行时。
+    extension_runtime::set_extension_mirror(mirror);
     notify(cx, t!("Settings.About.Update.switched_mirror").to_string());
     // 换源之后马上重查，否则用户要等下一次启动才能看出这个源通不通。
     update::check_for_updates_manually(cx);

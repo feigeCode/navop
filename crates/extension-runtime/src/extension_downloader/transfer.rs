@@ -7,9 +7,11 @@ use std::{
 use anyhow::{Context, Result, anyhow};
 use futures::AsyncReadExt;
 use gpui::http_client::{AsyncBody, HttpClient, Method, Request, http::header};
+use one_core::settings::UpdateMirror;
 
 use super::marketplace::{MarketplaceEntry, MarketplaceManifest};
 use crate::extension::{ExtensionKind, ExtensionRegistry, ExtensionSummary};
+use crate::mirror::extension_mirror;
 
 pub const GITHUB_EXTENSION_MANIFEST_URL: &str =
     "https://raw.githubusercontent.com/feigeCode/navop-extensions/main/manifest.json";
@@ -102,12 +104,34 @@ pub async fn fetch_manifest_url_with_fallback(
 }
 
 pub fn manifest_urls_for_configured_url(configured_url: Option<String>) -> Vec<String> {
-    let mut urls = manifest_urls_for_configured_url_with_github_fallback(
-        configured_url,
-        GITHUB_EXTENSION_MANIFEST_URL.to_string(),
-    );
-    push_unique_url(&mut urls, LEGACY_GITHUB_EXTENSION_MANIFEST_URL.to_string());
-    urls
+    #[cfg(feature = "github-marketplace")]
+    {
+        let _ = configured_url;
+        let mut urls = vec![GITHUB_EXTENSION_MANIFEST_URL.to_string()];
+        push_unique_url(&mut urls, LEGACY_GITHUB_EXTENSION_MANIFEST_URL.to_string());
+        return urls;
+    }
+
+    // 镜像偏好只改变先问谁：CNB 没有 marketplace 清单（仓库文件直链需要登录），
+    // 所以清单候选只有 R2（configured）与 GitHub。
+    #[cfg(not(feature = "github-marketplace"))]
+    {
+        let configured = configured_url.and_then(|url| non_empty_trimmed(&url));
+        let mut urls = Vec::new();
+        if extension_mirror() == UpdateMirror::Github {
+            push_unique_url(&mut urls, GITHUB_EXTENSION_MANIFEST_URL.to_string());
+            if let Some(url) = configured {
+                push_unique_url(&mut urls, url);
+            }
+        } else {
+            if let Some(url) = configured {
+                push_unique_url(&mut urls, url);
+            }
+            push_unique_url(&mut urls, GITHUB_EXTENSION_MANIFEST_URL.to_string());
+        }
+        push_unique_url(&mut urls, LEGACY_GITHUB_EXTENSION_MANIFEST_URL.to_string());
+        urls
+    }
 }
 
 pub fn manifest_urls_for_configured_url_with_github_fallback(

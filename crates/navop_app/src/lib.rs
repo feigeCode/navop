@@ -569,6 +569,10 @@ where
         // 领域快捷键必须再登记一次，才能在编辑器里按得动 cmd+/（#290 反馈）。
         app_kit::refresh_domain_keybindings(cx);
         extension_runtime::init(cx);
+        // 扩展下载跟随「关于 → 更新」里的镜像偏好；设置还没加载完时退回「自动」。
+        extension_runtime::set_extension_mirror(
+            AppSettings::current(cx).update_mirror.unwrap_or_default(),
+        );
         universal_plugins::init(cx);
         // 资源工作台的 terminal 页面需要宿主提供可嵌入终端;未注册时
         // 工作台渲染「此构建不可用」而不是崩溃。
