@@ -12,57 +12,36 @@ use chrono::Utc;
 use rusqlite::{Connection, OpenFlags};
 
 use super::bundle::{BUNDLE_VERSION, BundleConnection, BundleWorkspace, ConnectionBundle};
+/// 三个产品共用的数据库文件名（与全量产品 `get_db_path` 同源，仅测试断言用）。
+#[cfg(test)]
+use one_core::app_dirs::DATABASE_FILE_NAME as DB_FILE_NAME;
 
 /// sqlite 文件头魔数，用来区分 `one-hub.db` 与迁移包 JSON。
 const SQLITE_MAGIC: &[u8; 16] = b"SQLite format 3\0";
-/// 三个产品共用的数据库文件名。
-const DB_FILE_NAME: &str = "one-hub.db";
 /// 全量产品的 app id，写入迁移包便于追溯来源。
 const SOURCE_APP_ID: &str = "navop";
-/// 全量产品的数据目录候选：正式目录、开发目录与历史目录。
-const FULL_PRODUCT_DIR_NAMES: [&str; 3] = ["navop", ".navop-dev", "one-hub"];
 
 /// 全量产品可能的数据目录下的数据库文件；按优先级排序并去重。
+///
+/// 目录规则统一由 [`one_core::app_dirs::full_product_database_candidates`] 提供，
+/// 与全量产品自己的 `config_dir` 解析保持同一套名字（`navop` / 历史 `one-hub` /
+/// 开发 `~/.navop-dev`）：独立产品的目录名已被换成 `.navop-data-dev` 之类，不能
+/// 按当前身份解析。
 pub fn full_product_candidates() -> Vec<PathBuf> {
-    let mut roots: Vec<PathBuf> = Vec::new();
-    if let Some(dir) = dirs::config_dir() {
-        roots.push(dir);
-    }
-    if let Some(dir) = dirs::data_dir() {
-        roots.push(dir);
-    }
-    if let Some(home) = dirs::home_dir() {
-        roots.push(home.join(".config"));
-        roots.push(home.join(".local").join("share"));
-        roots.push(home);
-    }
-    let mut candidates = Vec::new();
-    for root in roots {
-        for name in FULL_PRODUCT_DIR_NAMES {
-            let dir = root.join(name);
-            for path in [
-                dir.join(DB_FILE_NAME),
-                dir.join("config").join(DB_FILE_NAME),
-            ] {
-                if !candidates.contains(&path) {
-                    candidates.push(path);
-                }
-            }
-        }
-    }
-    candidates
+    one_core::app_dirs::full_product_database_candidates()
 }
 
 /// 探测本机可用于迁移的全量产品数据库。
 ///
 /// 优先返回真正带连接的那个库：全量产品目录里可能残留刚被独立产品初始化出来
-/// 的空库（0 条连接），若只按「能读通」判断就会导入 0 条连接。因此先找有连接
-/// 的候选，都为空时才退回第一个可读库。
+/// 的空库（0 条连接），若只按「能读通」判断就会导入 0 条连接。多个库都非空时
+/// 取最近修改的那个（用户最后在用的数据），都为空时才退回第一个可读库。
 pub fn detect_full_product() -> Option<PathBuf> {
     pick_candidate(full_product_candidates())
 }
 
 fn pick_candidate(candidates: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
+    let mut freshest: Option<(std::time::SystemTime, PathBuf)> = None;
     let mut fallback = None;
     for path in candidates {
         if !is_readable_db(&path) {
@@ -71,12 +50,33 @@ fn pick_candidate(candidates: impl IntoIterator<Item = PathBuf>) -> Option<PathB
         let Ok(bundle) = read_bundle_from_sqlite(&path) else {
             continue;
         };
-        if !bundle.connections.is_empty() {
-            return Some(path);
+        if bundle.connections.is_empty() {
+            fallback.get_or_insert(path);
+            continue;
         }
-        fallback.get_or_insert(path);
+        let modified = database_modified(&path);
+        if freshest.as_ref().is_none_or(|(best, _)| modified > *best) {
+            freshest = Some((modified, path));
+        }
     }
-    fallback
+    freshest.map(|(_, path)| path).or(fallback)
+}
+
+/// 库文件（含 WAL 旁文件）的最后修改时间。
+///
+/// WAL 模式下新写入可能只落在 `one-hub.db-wal`，主库文件的 mtime 会偏旧。
+fn database_modified(path: &Path) -> std::time::SystemTime {
+    let mut newest = std::time::SystemTime::UNIX_EPOCH;
+    let mut wal = path.as_os_str().to_os_string();
+    wal.push("-wal");
+    for candidate in [path.to_path_buf(), PathBuf::from(wal)] {
+        if let Ok(modified) = std::fs::metadata(&candidate).and_then(|meta| meta.modified())
+            && modified > newest
+        {
+            newest = modified;
+        }
+    }
+    newest
 }
 
 fn is_readable_db(path: &Path) -> bool {
@@ -268,11 +268,15 @@ mod tests {
         assert!(candidates.iter().all(|path| path.ends_with(DB_FILE_NAME)));
         let unique: std::collections::HashSet<_> = candidates.iter().collect();
         assert_eq!(unique.len(), candidates.len());
-        assert!(candidates.iter().any(|path| {
-            path.parent()
-                .and_then(|dir| dir.file_name())
-                .is_some_and(|name| name == ".navop-dev")
-        }));
+        // 与全量产品的目录规则一致：现行 `navop`、开发 `.navop-dev`、历史 `one-hub`。
+        for name in ["navop", ".navop-dev", "one-hub"] {
+            assert!(
+                candidates
+                    .iter()
+                    .any(|path| path.components().any(|part| part.as_os_str() == name)),
+                "候选里应当包含 {name} 目录：{candidates:?}"
+            );
+        }
     }
 
     #[test]
@@ -366,6 +370,29 @@ mod tests {
         let only_empty = pick_candidate(vec![empty.0.clone()]).expect("应当退回到空库");
         assert_eq!(only_empty, empty.0);
         assert_eq!(pick_candidate(Vec::new()), None);
+    }
+
+    #[test]
+    fn pick_candidate_prefers_the_most_recently_used_database() {
+        let older = TempDb::create(
+            "CREATE TABLE connections (id INTEGER PRIMARY KEY, name TEXT, params TEXT);
+             INSERT INTO connections (name, params) VALUES ('旧', '{}');",
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let newer = TempDb::create(
+            "CREATE TABLE connections (id INTEGER PRIMARY KEY, name TEXT, params TEXT);
+             INSERT INTO connections (name, params) VALUES ('新', '{}');",
+        );
+
+        assert_eq!(
+            pick_candidate(vec![older.0.clone(), newer.0.clone()]),
+            Some(newer.0.clone())
+        );
+        // 候选顺序颠倒也要选「最近在用」的那个，而不是列表里的第一个。
+        assert_eq!(
+            pick_candidate(vec![newer.0.clone(), older.0.clone()]),
+            Some(newer.0.clone())
+        );
     }
 
     #[test]

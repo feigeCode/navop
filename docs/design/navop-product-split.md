@@ -1246,20 +1246,28 @@ cargo run -p navop-data   # Data
 - 「从全量产品导入连接」入口：新建连接下拉菜单里对独立产品展示
   （`Home.import_from_full_product` → `app_kit::import::open_import_dialog`），
   设置页「迁移」组同样只在独立产品展示。
-- 导入弹窗的源库定位（`crates/app_kit/src/import/`）：自动探测
-  （`sqlite::full_product_candidates` 覆盖 `~/.config`、
-  `~/Library/Application Support`、`%APPDATA%`、`~/.local/share` 与
-  `~/.navop-dev` 的开发目录）只是便利，真正的兜底是「选择文件…」原生
-  选择器 + 可编辑路径输入框：
+- 导入弹窗的源库定位（`crates/app_kit/src/import/`）：默认行为与全量产品
+  自己一致——自动检测。候选目录由
+  `one_core::app_dirs::full_product_database_candidates` 提供，和
+  `app_dirs::config_dir` / `storage::get_db_path` 共用同一套规则与
+  `app_dirs::DATABASE_FILE_NAME` 常量：安装态 `~/.config/navop`（Windows
+  `%APPDATA%\navop`）、迁移完成前的历史目录 `one-hub`、开发构建
+  `~/.navop-dev/config`、旧版本用过的数据目录根。独立产品自己的目录名
+  （`.navop-data-dev` 等）不参与解析，避免把自己初始化出来的空库当成全量库。
+  只有便携版（全量产品数据在安装目录 `data/config` 下）或有多套数据目录时
+  才需要手选，因此路径输入框默认收起，由「换一个文件…」展开：
   - 两个页签都先按文件头判断源文件（`is_sqlite_database` 读 16 字节
     `SQLite format 3\0`）：SQLite 库走全量产品只读迁移，其余按迁移包
     JSON 解析，所以「迁移包」页也能直接选 `one-hub.db`，改名或无扩展名
     都不影响；
   - 手写路径支持 `~`、`file://` 与 Windows `%VAR%`（`expand_source_path`），
     从 Finder / 资源管理器复制来的带引号路径也能读通；
-  - 探测在多个候选之间优先选真正带连接的那个库
-    （`sqlite::pick_candidate`）：全量产品目录里可能残留刚被独立产品
-    初始化出来的空库，只按「能读通」判断会导入 0 条连接。
+  - 探测在多个候选之间优先选真正带连接、且最近修改的库
+    （`sqlite::pick_candidate` 比较主库与 `-wal` 旁文件的 mtime）：全量产品
+    目录里可能残留刚被独立产品初始化出来的空库，只按「能读通」判断会导入
+    0 条连接；有多套数据目录时取用户最后在用的那个；
+  - `<exe>/data/config` 这个便携目录故意不猜：独立产品自己的便携数据目录
+    同样是这个形状，猜错会把独立产品的库当成全量产品的库。
 
 ### 22.3 数据隔离
 
