@@ -10,13 +10,20 @@ use gpui::http_client::{AsyncBody, HttpClient, Method, Request, http::header};
 
 use super::marketplace::{MarketplaceEntry, MarketplaceManifest};
 use crate::extension::{ExtensionKind, ExtensionRegistry, ExtensionSummary};
-use crate::mirror::{cnb_marketplace_manifest_url, extension_mirror, ordered_mirror_candidates};
+use crate::mirror::{
+    GITHUB_MARKETPLACE_MANIFEST_RELEASE_URL, cnb_marketplace_manifest_url, extension_mirror,
+    ordered_mirror_candidates,
+};
 
+/// 市场清单的 raw 文件：仓库主分支的最新内容，只作为 Release 快照缺失时的兜底。
 pub const GITHUB_EXTENSION_MANIFEST_URL: &str =
     "https://raw.githubusercontent.com/feigeCode/navop-extensions/main/manifest.json";
 pub const LEGACY_GITHUB_EXTENSION_MANIFEST_URL: &str =
     "https://raw.githubusercontent.com/feigeCode/onetcli-extensions/main/manifest.json";
-pub const DEFAULT_EXTENSION_MANIFEST_URL: &str = GITHUB_EXTENSION_MANIFEST_URL;
+/// 默认市场清单地址：固定 tag `manifest` 的 Release 资产。
+///
+/// 与 CNB 镜像同源同内容，GitHub 侧也走 Release 快照而不是 raw 分支文件。
+pub const DEFAULT_EXTENSION_MANIFEST_URL: &str = GITHUB_MARKETPLACE_MANIFEST_RELEASE_URL;
 const LEGACY_GITHUB_RELEASE_DOWNLOAD_BASE: &str =
     "https://github.com/feigeCode/onetcli-extensions/releases/download/";
 const DOWNLOAD_BUFFER_SIZE: usize = 16 * 1024;
@@ -106,27 +113,24 @@ pub fn manifest_urls_for_configured_url(configured_url: Option<String>) -> Vec<S
     #[cfg(feature = "github-marketplace")]
     {
         let _ = configured_url;
-        let mut urls = vec![GITHUB_EXTENSION_MANIFEST_URL.to_string()];
+        let mut urls = vec![GITHUB_MARKETPLACE_MANIFEST_RELEASE_URL.to_string()];
+        push_unique_url(&mut urls, GITHUB_EXTENSION_MANIFEST_URL.to_string());
         push_unique_url(&mut urls, LEGACY_GITHUB_EXTENSION_MANIFEST_URL.to_string());
         return urls;
     }
 
-    // 镜像偏好只改变先问谁：市场清单在 R2（`extensions/manifest.json`）、
-    // GitHub raw 与 Release 资产 `manifest` 上各有一份，CNB 只认 Release 资产，
-    // 所以第三个候选是固定 tag 的镜像地址。
+    // 镜像偏好只改变先问谁：市场清单在 R2（`extensions/manifest.json`）与固定 tag
+    // `manifest` 的 Release 上各有一份，GitHub / CNB 读的是同一份 Release 资产，
+    // 只是镜像域名不同。
     #[cfg(not(feature = "github-marketplace"))]
     {
         let configured = configured_url.and_then(|url| non_empty_trimmed(&url));
+        let github = Some(GITHUB_MARKETPLACE_MANIFEST_RELEASE_URL.to_string());
         let cnb = Some(cnb_marketplace_manifest_url().to_string());
-        let mut urls = ordered_mirror_candidates(
-            extension_mirror(),
-            [
-                configured,
-                Some(GITHUB_EXTENSION_MANIFEST_URL.to_string()),
-                cnb,
-            ],
-        );
-        // 老仓库没有 CNB 镜像，只作为最后的兜底。
+        let mut urls = ordered_mirror_candidates(extension_mirror(), [configured, github, cnb]);
+        // Release 快照缺失（例如 Release 被误删）才回到主分支 raw 文件。
+        push_unique_url(&mut urls, GITHUB_EXTENSION_MANIFEST_URL.to_string());
+        // 老仓库没有 Release 快照、也没有 CNB 镜像，只作为最后的兜底。
         push_unique_url(&mut urls, LEGACY_GITHUB_EXTENSION_MANIFEST_URL.to_string());
         urls
     }

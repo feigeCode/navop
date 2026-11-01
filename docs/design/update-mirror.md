@@ -133,8 +133,10 @@ curl -sI "https://cnb.cool/navop-dev/navop/-/releases/download/v0.22.0/sha256sum
   两个地址分别是
   `https://github.com/feigeCode/navop-extensions/releases/download/manifest/manifest.json`
   与 `https://cnb.cool/navop-dev/navop-extensions/-/releases/download/manifest/manifest.json`。
-  市场清单的候选因此是 R2（`extensions/manifest.json`，最新）→ GitHub raw（最新）
-  → CNB（Release 快照），按镜像偏好排序。
+  市场清单的候选因此是 R2（`extensions/manifest.json`）→ GitHub 的 Release 快照
+  → CNB 的 Release 快照，按镜像偏好排序；GitHub 侧的 raw 分支文件只作为 Release
+  快照缺失时的最后兜底。三家拿到的都是「某次发布时的快照」，内容一致，
+  区别只在 R2 上传最及时、两个镜像稍晚。
 - 偏好通过 `extension_runtime::set_extension_mirror` 同步：启动时读一次设置
   （`crates/navop_app/src/lib.rs` 的 `extension_runtime::init(cx)` 之后），
   设置页切换镜像时立刻再写一次（`crates/navop_app/src/settings/update_mirror.rs`）。
@@ -153,7 +155,7 @@ curl -sI "https://cnb.cool/navop-dev/navop/-/releases/download/v0.22.0/sha256sum
   sha256 一致。
 - 走 CNB 时每次检查多一次 refs 请求（tag 发现），这是「没有 `latest` 别名」的代价；
   扩展市场清单不受影响（固定 tag `manifest`，无需发现）。
-- CNB 上的市场清单是「某次扩展发布时」的快照，可能比 R2 / GitHub raw 慢一个扩展版本；
-  想拿最新清单应选「自动」或「Cloudflare」。
+- 市场清单的三个来源都是发布时快照：R2 在 upload-r2 里最先写好，GitHub / CNB 要等
+  Release 与 CNB 同步完成，可能晚几分钟到一次同步周期。
 - 清单版本号与包内 `sha256` 仍只由 Cloudflare 清单提供校验值；CNB 与 GitHub 的安装包
   不做签名校验（现状如此，未因本改动变化）。
