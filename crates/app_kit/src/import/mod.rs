@@ -37,11 +37,11 @@ pub use self::sqlite::{
 
 pub(crate) use self::kinds::supported_connection_types;
 
-/// 从全量产品的数据库文件一键迁移（自动探测源库）。
+/// 从全量产品的数据库文件一键迁移（按全量产品自己的目录规则自动探测源库）。
 pub fn import_from_full_product(cx: &mut App) -> Result<ImportReport> {
     let path = detect_full_product().ok_or_else(|| {
         anyhow!(
-            "未自动找到全量产品的 one-hub.db，请点「选择文件…」手动指定（常见位置：~/.config/navop/one-hub.db）"
+            "未自动找到全量产品的 one-hub.db，请点「选择文件…」手动指定（常规安装位置：~/.config/navop/one-hub.db；便携版在安装目录 data/config/one-hub.db）"
         )
     })?;
     import_from_database(&path, cx)

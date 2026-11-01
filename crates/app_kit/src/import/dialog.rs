@@ -56,6 +56,8 @@ pub struct ImportDialog {
     detected: Option<PathBuf>,
     /// 全量产品数据库路径：探测成功时预填，也可以由用户选择或手写。
     db_input: Entity<InputState>,
+    /// 用户点过「换一个文件…」（便携版/多套数据目录）后展开手动路径输入框。
+    manual_db: bool,
     /// 迁移包文件路径（也接受直接选 `one-hub.db`，按文件头判定）。
     path_input: Entity<InputState>,
     json_input: Entity<TextareaState>,
@@ -90,6 +92,7 @@ impl ImportDialog {
             tab: ImportTab::FullProduct,
             detected,
             db_input,
+            manual_db: false,
             path_input,
             json_input,
             status: None,
@@ -168,9 +171,13 @@ impl ImportDialog {
     }
 
     /// 原生文件选择器；选中后把路径回填到对应输入框并提示识别结果。
+    ///
+    /// `reveal_db_input` 为真时（全量产品源库的「换一个文件…」）顺带把手动路径
+    /// 输入框展开，让用户看到选中的是哪个文件。
     fn choose_file(
         input: Entity<InputState>,
         prompt: &'static str,
+        reveal_db_input: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -201,6 +208,9 @@ impl ImportDialog {
                             window.refresh();
                         });
                         let _ = dialog.update(cx, |this, cx| {
+                            if reveal_db_input {
+                                this.manual_db = true;
+                            }
                             this.status = Some(SharedString::from(note));
                             this.status_ok = true;
                             cx.notify();
@@ -255,43 +265,64 @@ impl ImportDialog {
     }
 
     fn render_full_product(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let (hint, muted_hint) = match &self.detected {
-            Some(path) => (
+        // 默认和全量产品自己一样：直接用自动探测到的库，不要求用户选路径。
+        // 只有便携版（数据在安装目录 data/config 下）或有多套数据目录时才手选。
+        let detected = self.detected.clone();
+        let manual = self.manual_db || detected.is_none();
+        let (hint, secondary) = match (&detected, self.manual_db) {
+            (Some(path), false) => (
                 format!("已自动识别全量产品数据库：{}", path.display()),
-                "如果这不是你要迁移的库（比如换机、便携版或多套数据目录），点「选择文件…」重新指定。",
+                "直接点下面的「从全量产品导入」即可。便携版（数据在安装目录 data/config 下）或有多套数据目录时，再用「换一个文件…」指定。".to_string(),
             ),
-            None => (
-                "未自动识别到全量产品数据库。".to_string(),
-                "点「选择文件…」定位全量产品的 one-hub.db：macOS/Linux 通常在 ~/.config/navop/one-hub.db，Windows 在 %APPDATA%\\navop\\one-hub.db。",
+            (_, true) => (
+                "已选好要迁移的源库。".to_string(),
+                "便携版请选全量产品安装目录下的 data/config/one-hub.db。".to_string(),
+            ),
+            (None, false) => (
+                "未在标准位置找到全量产品的 one-hub.db。".to_string(),
+                "常规安装通常在这个位置：~/.config/navop/one-hub.db（Windows 为 %APPDATA%\\navop\\one-hub.db）；便携版请点「选择文件…」选中安装目录下的 data/config/one-hub.db。".to_string(),
             ),
         };
         v_flex()
             .gap_3()
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(hint),
-            )
-            .child(div().text_sm().child("全量产品数据库路径"))
-            .child(
-                h_flex()
-                    .gap_2()
-                    .items_center()
-                    .child(div().flex_1().min_w_0().child(Input::new(&self.db_input)))
+            .child(div().text_sm().child(hint))
+            .when(!manual, |el| {
+                el.child(
+                    Button::new("import-choose-db-another")
+                        .label("换一个文件…")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            Self::choose_file(
+                                this.db_input.clone(),
+                                DB_PICKER_PROMPT,
+                                true,
+                                window,
+                                cx,
+                            );
+                        })),
+                )
+            })
+            .when(manual, |el| {
+                el.child(div().text_sm().child("全量产品数据库路径"))
                     .child(
-                        Button::new("import-choose-db-file")
-                            .label("选择文件…")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                Self::choose_file(
-                                    this.db_input.clone(),
-                                    DB_PICKER_PROMPT,
-                                    window,
-                                    cx,
-                                );
-                            })),
-                    ),
-            )
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .child(div().flex_1().min_w_0().child(Input::new(&self.db_input)))
+                            .child(
+                                Button::new("import-choose-db-file")
+                                    .label("选择文件…")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        Self::choose_file(
+                                            this.db_input.clone(),
+                                            DB_PICKER_PROMPT,
+                                            true,
+                                            window,
+                                            cx,
+                                        );
+                                    })),
+                            ),
+                    )
+            })
             .child(
                 Button::new("import-full-product")
                     .primary()
@@ -304,7 +335,7 @@ impl ImportDialog {
                 div()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child(muted_hint),
+                    .child(secondary),
             )
             .child(
                 div()
@@ -330,6 +361,7 @@ impl ImportDialog {
                                 Self::choose_file(
                                     this.path_input.clone(),
                                     BUNDLE_PICKER_PROMPT,
+                                    false,
                                     window,
                                     cx,
                                 );

@@ -85,8 +85,9 @@ fn general_page(cx: &App) -> SettingPage {
 
 /// 迁移：从全量产品导入连接。
 ///
-/// 只对独立产品展示：全量产品自己就是来源，没有可导入的对象。导入走同一份
-/// 迁移包规划逻辑（判重、重命名、工作区匹配），导入后通过连接事件刷新列表。
+/// 只对独立产品展示：全量产品自己就是来源，没有可导入的对象。默认按全量产品自己
+/// 的目录规则自动找库，便携版才需要手动选文件。导入走同一份迁移包规划逻辑
+/// （判重、重命名、工作区匹配），导入后通过连接事件刷新列表。
 fn migration_group() -> Option<SettingGroup> {
     let identity = crate::identity()?;
     if identity.app_id == domain_api::AppIdentity::FULL.app_id {
@@ -95,7 +96,7 @@ fn migration_group() -> Option<SettingGroup> {
     Some(SettingGroup::new().title("迁移").items([button_item(
         "import-from-full-product",
         "从全量产品导入连接",
-        "只读打开全量产品的 one-hub.db，也可以改用迁移包文件",
+        "默认自动找到全量产品的 one-hub.db；便携版可手动选择，也可以改用迁移包文件",
         |window, cx| {
             crate::import::open_import_dialog(window, cx);
         },

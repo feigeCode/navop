@@ -79,6 +79,67 @@ pub(crate) fn installed_data_dir() -> Option<PathBuf> {
     dirs::data_dir().map(|root| preferred_dir_from_root(&root))
 }
 
+/// 全量产品数据库文件名，与 [`storage`](crate::storage) 里 `get_db_path` 的拼法一致。
+pub const DATABASE_FILE_NAME: &str = "one-hub.db";
+
+/// 与当前运行身份无关的**全量产品**（navop）配置目录候选，顺序即优先级。
+///
+/// 独立产品（`navop-shell` / `navop-data`）启动时把目录名换成了
+/// `.navop-data-dev` 之类，[`config_dir`] 只对它自己的数据有效；迁移入口要按全量
+/// 产品自己的目录规则去找它的 `one-hub.db`，所以这里始终按全量产品的目录名
+/// （现行 `navop` + 迁移前的 `one-hub`）解析：
+///
+/// 1. 安装态配置根：Windows `%APPDATA%`，其它平台 `~/.config`（与
+///    [`config_root`] 一致，即全量产品自己的首选位置）；
+/// 2. 开发构建：`~/.navop-dev/config`（`cargo run -p navop` 的目录）；
+/// 3. 数据目录根：旧版本把配置放这里（macOS `~/Library/Application Support`、
+///    Linux `~/.local/share`）。
+///
+/// 便携版（`<安装目录>/data/config`）不在这里猜：独立产品自己的便携目录恰好也
+/// 是这个形状，猜错就会把独立产品的库当成全量产品的库；便携版用户用导入弹窗里的
+/// 「选择文件…」手动指定。
+pub fn full_product_config_dirs() -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+
+    if let Ok(root) = config_root() {
+        push_unique_dir(&mut dirs, root.join(CURRENT_APP_DIR_NAME));
+        push_unique_dir(&mut dirs, root.join(LEGACY_APP_DIR_NAME));
+    }
+
+    if let Some(home) = dirs::home_dir() {
+        push_unique_dir(
+            &mut dirs,
+            home.join(crate::app_paths::DEVELOPMENT_DATA_DIR_NAME)
+                .join("config"),
+        );
+        // Windows 上 `config_root` 是 `%APPDATA%`，但开发/早期版本可能在
+        // `~/.config` 下留过库。
+        push_unique_dir(&mut dirs, home.join(".config").join(CURRENT_APP_DIR_NAME));
+        push_unique_dir(&mut dirs, home.join(".config").join(LEGACY_APP_DIR_NAME));
+    }
+
+    if let Some(root) = dirs::data_dir() {
+        push_unique_dir(&mut dirs, root.join(CURRENT_APP_DIR_NAME));
+        push_unique_dir(&mut dirs, root.join(LEGACY_APP_DIR_NAME));
+    }
+
+    dirs
+}
+
+/// 全量产品数据库文件的候选路径（顺序即优先级）。
+pub fn full_product_database_candidates() -> Vec<PathBuf> {
+    full_product_config_dirs()
+        .into_iter()
+        .map(|dir| dir.join(DATABASE_FILE_NAME))
+        .collect()
+}
+
+fn push_unique_dir(dirs: &mut Vec<PathBuf>, dir: PathBuf) {
+    if !dirs.contains(&dir) {
+        dirs.push(dir);
+    }
+}
+
 /// 单元测试专用的数据目录。
 ///
 /// `cargo test` 绝不能落盘到真实用户数据目录：验证文件、密钥元信息这类
@@ -320,5 +381,67 @@ mod tests {
 
         assert_eq!(MigrationOutcome::LegacyMissing, outcome);
         assert!(!current.exists());
+    }
+
+    #[test]
+    fn full_product_candidates_use_full_product_names_and_are_unique() {
+        let candidates = full_product_database_candidates();
+
+        assert!(candidates.len() >= 4, "candidates: {candidates:?}");
+        for path in &candidates {
+            assert_eq!(
+                path.file_name().and_then(|name| name.to_str()),
+                Some(DATABASE_FILE_NAME),
+                "{path:?} 应当指向全量产品的数据库文件"
+            );
+        }
+
+        let mut deduped = candidates.clone();
+        deduped.sort();
+        deduped.dedup();
+        assert_eq!(deduped.len(), candidates.len(), "候选不应重复");
+
+        let home = dirs::home_dir().expect("home");
+        // 安装态（非 Windows 是 ~/.config）与开发构建的目录都必须覆盖到。
+        assert!(
+            candidates.contains(
+                &home
+                    .join(".config")
+                    .join(CURRENT_APP_DIR_NAME)
+                    .join(DATABASE_FILE_NAME)
+            )
+        );
+        assert!(
+            candidates.contains(
+                &home
+                    .join(crate::app_paths::DEVELOPMENT_DATA_DIR_NAME)
+                    .join("config")
+                    .join(DATABASE_FILE_NAME)
+            )
+        );
+        // 历史目录 `one-hub` 也要能在迁移前被找到。
+        assert!(
+            candidates.contains(
+                &home
+                    .join(".config")
+                    .join(LEGACY_APP_DIR_NAME)
+                    .join(DATABASE_FILE_NAME)
+            )
+        );
+    }
+
+    #[test]
+    fn full_product_candidates_do_not_guess_the_portable_install_dir() {
+        // 独立产品自己的便携数据目录同样是 `<exe>/data/config`，猜它会把独立产品的
+        // 库当成全量产品的库；便携版用户走导入弹窗的「选择文件…」。
+        let exe = std::env::current_exe().expect("current exe");
+        let portable = exe
+            .parent()
+            .expect("exe dir")
+            .join("data")
+            .join("config")
+            .join(DATABASE_FILE_NAME);
+
+        assert!(!full_product_database_candidates().contains(&portable));
     }
 }

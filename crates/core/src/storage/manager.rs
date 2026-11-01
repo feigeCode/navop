@@ -85,7 +85,7 @@ impl Clone for StorageManager {
 
 pub fn get_db_path() -> Result<PathBuf> {
     let config_dir = get_config_dir()?;
-    Ok(config_dir.join("one-hub.db"))
+    Ok(config_dir.join(crate::app_dirs::DATABASE_FILE_NAME))
 }
 
 pub fn get_config_dir() -> Result<PathBuf> {
