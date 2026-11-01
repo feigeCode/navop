@@ -1208,6 +1208,53 @@ impl UpdateChannel {
     }
 }
 
+/// 检查更新时优先使用的镜像源。
+///
+/// 选中的源只是「排在第一位」，不是「只用它」：连不上或清单缺失时仍会按内置顺序
+/// 依次尝试其它源，避免用户手动选错一次就再也查不到更新。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateMirror {
+    /// 自动：使用内置顺序（R2 清单 → CNB 镜像 → GitHub Releases）
+    #[default]
+    Auto,
+    /// Cloudflare 上的 JSON 清单（R2 公开域名）
+    Cloudflare,
+    /// GitHub Releases API
+    Github,
+    /// CNB 镜像
+    Cnb,
+}
+
+impl UpdateMirror {
+    /// 下拉框里的全部可选值，顺序即下拉展示顺序（自动排在第一位）。
+    pub const ALL: [UpdateMirror; 4] = [
+        UpdateMirror::Auto,
+        UpdateMirror::Cloudflare,
+        UpdateMirror::Cnb,
+        UpdateMirror::Github,
+    ];
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            UpdateMirror::Auto => "auto",
+            UpdateMirror::Cloudflare => "cloudflare",
+            UpdateMirror::Github => "github",
+            UpdateMirror::Cnb => "cnb",
+        }
+    }
+
+    /// 未知取值回退到「自动」：旧版本写下的新枚举值不能让检查卡在某个不可用的源上。
+    pub fn from_str(value: &str) -> Self {
+        match value {
+            "cloudflare" => UpdateMirror::Cloudflare,
+            "github" => UpdateMirror::Github,
+            "cnb" => UpdateMirror::Cnb,
+            _ => UpdateMirror::Auto,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     #[serde(default)]
@@ -1320,6 +1367,11 @@ pub struct AppSettings {
     /// 更新通道偏好；`None` 表示跟随当前构建（预发布构建自动进入测试通道）。
     #[serde(default)]
     pub update_channel: Option<UpdateChannel>,
+    /// 更新镜像源偏好；`None` 表示自动选择（Cloudflare → CNB → GitHub）。
+    ///
+    /// 选中的镜像只排到第一位，失败时仍会依次回退到其余镜像。
+    #[serde(default)]
+    pub update_mirror: Option<UpdateMirror>,
     /// 插件更新提示最近一次通知的更新集合签名，用于避免每次启动都重复提示。
     #[serde(default)]
     pub plugin_update_notified_signature: Option<String>,
@@ -1733,6 +1785,7 @@ impl Default for AppSettings {
             auto_update: true,
             skipped_update_version: None,
             update_channel: None,
+            update_mirror: None,
             plugin_update_notified_signature: None,
             sync_enabled: false,
             sync_provider: SyncProvider::OnetCloud,
@@ -1898,8 +1951,9 @@ impl AppSettings {
     pub fn normalize_terminal_settings(&mut self) {
         self.terminal_scrollback_lines =
             Self::normalize_terminal_scrollback_lines(self.terminal_scrollback_lines);
-        self.terminal_suggestion_popup_opacity =
-            Self::normalize_terminal_suggestion_popup_opacity(self.terminal_suggestion_popup_opacity);
+        self.terminal_suggestion_popup_opacity = Self::normalize_terminal_suggestion_popup_opacity(
+            self.terminal_suggestion_popup_opacity,
+        );
         let terminal_theme = self.terminal_theme.trim();
         self.terminal_theme = if terminal_theme.is_empty() {
             default_terminal_theme()
@@ -2212,9 +2266,9 @@ mod tests {
         MIN_AI_REQUEST_TIMEOUT_SECS, MainWindowState, MasterKeyStorage, McpPermissionMode,
         McpServerMode, PersonalSyncBackendKind, RemoteFileOpenMode, SqlFormatSettings,
         SqlIndentStyle, SqlKeywordCase, StartupDefaultPage, SyncProvider, TableViewMode,
-        UpdateChannel, default_grid_font_fallback_families, default_grid_monospace_font_family,
-        grid_monospace_font, installed_grid_monospace_font, is_installed_font_family,
-        resolve_installed_grid_monospace_font_family,
+        UpdateChannel, UpdateMirror, default_grid_font_fallback_families,
+        default_grid_monospace_font_family, grid_monospace_font, installed_grid_monospace_font,
+        is_installed_font_family, resolve_installed_grid_monospace_font_family,
     };
 
     #[test]
@@ -2293,7 +2347,10 @@ mod tests {
         )
         .expect("write settings");
 
-        assert_eq!(AppSettings::peek_log_file_path_from(&path), "/tmp/navop.log");
+        assert_eq!(
+            AppSettings::peek_log_file_path_from(&path),
+            "/tmp/navop.log"
+        );
         assert!(
             serde_json::from_str::<AppSettings>(
                 &std::fs::read_to_string(&path).expect("read settings")
@@ -3953,5 +4010,36 @@ mod tests {
         // 老版本的 settings.json 没有这个字段，必须照常读出来并落到「跟随构建」。
         let legacy: AppSettings = serde_json::from_str("{}").expect("空对象也应可解析");
         assert_eq!(None, legacy.update_channel);
+    }
+
+    #[test]
+    fn update_mirror_values_match_the_persisted_snake_case_values() {
+        assert_eq!("auto", UpdateMirror::Auto.as_str());
+        assert_eq!("cloudflare", UpdateMirror::Cloudflare.as_str());
+        assert_eq!("github", UpdateMirror::Github.as_str());
+        assert_eq!("cnb", UpdateMirror::Cnb.as_str());
+        assert_eq!(
+            UpdateMirror::Cloudflare,
+            UpdateMirror::from_str("cloudflare")
+        );
+        assert_eq!(UpdateMirror::Github, UpdateMirror::from_str("github"));
+        assert_eq!(UpdateMirror::Cnb, UpdateMirror::from_str("cnb"));
+        // 未知取值回退到「自动」，否则用户会被一个已删除的源永久卡住。
+        assert_eq!(UpdateMirror::Auto, UpdateMirror::from_str(""));
+        assert_eq!(UpdateMirror::Auto, UpdateMirror::from_str("gitee"));
+    }
+
+    #[test]
+    fn update_mirror_round_trips_through_settings_json_and_tolerates_missing_fields() {
+        let mut settings = AppSettings::default();
+        assert_eq!(None, settings.update_mirror);
+
+        settings.update_mirror = Some(UpdateMirror::Cnb);
+        let json = serde_json::to_string(&settings).expect("序列化设置失败");
+        let restored: AppSettings = serde_json::from_str(&json).expect("反序列化设置失败");
+        assert_eq!(Some(UpdateMirror::Cnb), restored.update_mirror);
+
+        let legacy: AppSettings = serde_json::from_str("{}").expect("空对象也应可解析");
+        assert_eq!(None, legacy.update_mirror);
     }
 }

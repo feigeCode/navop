@@ -1590,7 +1590,16 @@ esac
     const stableUpload = runUpload("stable", "v0.23.0");
     assert.equal(stableUpload.result.status, 0, stableUpload.result.stderr);
     assert.ok(stableUpload.keys.includes("updates/latest.json"));
-    assert.ok(!stableUpload.keys.includes("updates/beta/latest.json"));
+    // 稳定发布同时把同一份清单写进 beta 键位：beta 客户端只读 beta 清单，
+    // 不刷新这里它就永远停在最后一个 beta，收不到新的正式版。
+    assert.ok(
+      stableUpload.keys.includes("updates/beta/latest.json"),
+      "stable 发布必须同时刷新 updates/beta/latest.json",
+    );
+    assert.ok(stableUpload.keys.includes("updates/navop-shell/shell/latest.json"));
+    assert.ok(stableUpload.keys.includes("updates/navop-shell/shell/beta/latest.json"));
+    assert.ok(stableUpload.keys.includes("updates/navop-data/data/latest.json"));
+    assert.ok(stableUpload.keys.includes("updates/navop-data/data/beta/latest.json"));
 
     // 显式 channel 优先；非法值必须在推导阶段就被拒绝，不能走到上传。
     assert.equal(resolveChannel("v0.23.0-beta.1", "stable").outputs.channel, "stable");
@@ -1600,6 +1609,116 @@ esac
   } finally {
     fs.rmSync(fixtureDir, { recursive: true, force: true });
   }
+});
+
+test("update feed assets ride the GitHub Release so the CNB mirror can serve them", () => {
+  const upload = read(".github/workflows/upload-r2.yml");
+
+  // CNB 只同步 GitHub Release 资产，所以三份清单必须以扁平资产名 feed-*.json
+  // 回写上 Release，两种通道各一套命名。
+  for (const assetName of [
+    "feed-navop.json",
+    "feed-navop-beta.json",
+    "feed-navop-shell.json",
+    "feed-navop-data-beta.json",
+  ]) {
+    assert.ok(
+      upload.includes(assetName),
+      `upload-r2.yml 缺少 feed 资产命名 ${assetName}`,
+    );
+  }
+
+  const publishStep = workflowStep(upload, "Publish update feed assets for mirrors");
+  // 同一个 tag 的修复重跑必须能覆盖上一次的 feed 资产。
+  assert.match(
+    publishStep,
+    /gh release upload "\$RELEASE_TAG"[\s\S]*?--repo "\$GITHUB_REPOSITORY"[\s\S]*?--clobber[\s\S]*?artifacts\/feed\/\*\.json/,
+  );
+  // stable 额外发一份 -beta 资产，内容与稳定清单相同（同一个源文件）：beta
+  // 客户端只读 beta 清单/资产，不发这份它永远停在最后一个 beta，收不到新的
+  // 正式版。
+  assert.match(
+    publishStep,
+    /if \[ "\$\{CHANNEL\}" = "stable" \]; then[\s\S]*?cp artifacts\/updates\/latest\.json artifacts\/feed\/feed-navop\.json[\s\S]*?cp artifacts\/updates\/latest\.json artifacts\/feed\/feed-navop-beta\.json/,
+  );
+  // beta 通道只产 beta 命名的资产，稳定资产名归稳定 Release。
+  assert.match(
+    publishStep,
+    /else\n\s+#[^\n]*\n(?:\s+#[^\n]*\n)*\s+cp artifacts\/updates\/latest\.json artifacts\/feed\/feed-navop-beta\.json/,
+  );
+  assert.match(
+    publishStep,
+    /else\n[\s\S]*?cp artifacts\/updates\/navop-data\/data\/latest\.json artifacts\/feed\/feed-navop-data-beta\.json/,
+  );
+
+  // 必须先按通道写好 R2 清单，再把同一批清单回写成 Release 资产。
+  assert.ok(
+    upload.indexOf("Publish update feed assets for mirrors") >
+      upload.indexOf("Upload update archives and manifest to R2"),
+  );
+
+  // feed 资产绝不能被当成安装包：下载过滤与 packages 前缀都只认 navop- / navop_。
+  assert.doesNotMatch(upload, /--pattern "feed-\*"/);
+  const generateStep = workflowStep(upload, "Generate R2 update manifest");
+  assert.match(generateStep, /filter\(\(fileName\) => \/\^navop\[-_\]\/\.test\(fileName\)\)/);
+  // 安装包上传循环也只用 navop- / navop_ 通配，feed-*.json 不会进 R2 的
+  // releases/<tag>/ 前缀。
+  assert.match(upload, /release_files=\(artifacts\/navop-\* artifacts\/navop_\*\)/);
+});
+
+test("CNB mirror sync is dispatched after the feed assets exist", () => {
+  const upload = read(".github/workflows/upload-r2.yml");
+  const release = read(".github/workflows/release.yml");
+
+  const dispatchStep = workflowStep(upload, "Dispatch CNB release asset sync");
+  assert.match(
+    dispatchStep,
+    /gh workflow run sync-cnb-release-assets\.yml[\s\S]*?--repo "\$GITHUB_REPOSITORY"[\s\S]*?--ref main[\s\S]*?-f tag="\$RELEASE_TAG"/,
+  );
+  // 派发必须在 feed 资产上传之后，而且就是最后一步。
+  assert.ok(
+    upload.indexOf("Dispatch CNB release asset sync") >
+      upload.indexOf("Publish update feed assets for mirrors"),
+  );
+  const tail = upload.slice(upload.indexOf("Dispatch CNB release asset sync"));
+  assert.doesNotMatch(tail, /\n {6}- name:/, "CNB 派发必须是 upload-r2.yml 的最后一步");
+  // 它靠 actions: write 才能派发别的 workflow，并靠 contents: write 回写资产。
+  assert.match(upload, /permissions:\n {2}actions: write\n {2}contents: write/);
+
+  // release.yml 不再并发派发 CNB 同步：feed 资产还没生成时同步会什么都拿不到。
+  assert.doesNotMatch(release, /gh workflow run sync-cnb-release-assets\.yml/);
+  // 派发 upload-r2 的那段必须保留，且显式传 channel 与 tag。
+  assert.match(
+    release,
+    /gh workflow run upload-r2\.yml[\s\S]*?--ref main[\s\S]*?-f tag="\$RELEASE_TAG"[\s\S]*?-f channel="\$CHANNEL"/,
+  );
+});
+
+test("stable releases refresh the beta feed so beta clients can move to the stable build", () => {
+  const upload = read(".github/workflows/upload-r2.yml");
+  const uploadStep = workflowStep(upload, "Upload update archives and manifest to R2");
+
+  // stable 分支同时写稳定键位与 beta 键位，同一份清单、同样的 no-store 头。
+  assert.match(uploadStep, /stable\)\n\s+manifest_key="updates\/latest\.json"/);
+  assert.match(
+    uploadStep,
+    /if \[ "\$\{CHANNEL\}" = "stable" \]; then\n\s+upload_object "artifacts\/updates\/latest\.json" "updates\/beta\/latest\.json" "application\/json; charset=utf-8" "no-store, max-age=0"/,
+  );
+  assert.match(
+    uploadStep,
+    /upload_object "artifacts\/updates\/navop-shell\/shell\/latest\.json" "updates\/navop-shell\/shell\/beta\/latest\.json"/,
+  );
+  assert.match(
+    uploadStep,
+    /upload_object "artifacts\/updates\/navop-data\/data\/latest\.json" "updates\/navop-data\/data\/beta\/latest\.json"/,
+  );
+  // 稳定键位不得被硬编码成 beta 键位：上传行仍旧走 ${manifest_key} 变量。
+  assert.match(uploadStep, /upload_object "artifacts\/updates\/latest\.json" "\$\{manifest_key\}"/);
+  // beta 通道不写稳定键位（仿真用例已覆盖，这里守住脚本形态）。
+  assert.doesNotMatch(
+    uploadStep,
+    /beta\)\n\s+upload_object[\s\S]*?"updates\/latest\.json"/,
+  );
 });
 
 test("CNB release synchronization replaces moved tags before syncing assets", () => {

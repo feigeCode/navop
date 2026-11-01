@@ -5,7 +5,7 @@ use gpui::{App, AppContext};
 use gpui_component::WindowExt;
 use one_core::config::UpdateConfig;
 use one_core::gpui_tokio::Tokio;
-use one_core::settings::{AppSettings, UpdateChannel};
+use one_core::settings::{AppSettings, UpdateChannel, UpdateMirror};
 use rust_i18n::t;
 
 mod check_state;
@@ -18,6 +18,7 @@ mod github_release;
 mod host;
 mod install;
 mod local_source;
+mod mirror;
 mod network;
 mod util;
 
@@ -46,36 +47,18 @@ const APPLY_UPDATE_FLAG: &str = "--apply-update";
 /// 超时，代理或弱网下会长时间不返回，因此整体限时并给出明确提示。
 const UPDATE_CHECK_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// 当前使用的更新源。默认走 R2 JSON；启用 `github-updates` feature 时切回 GitHub Releases。
-#[cfg(test)]
-#[cfg(feature = "github-updates")]
-const ACTIVE_UPDATE_SOURCE: UpdateSource = UpdateSource::GitHub;
-#[cfg(test)]
-#[cfg(not(feature = "github-updates"))]
-const ACTIVE_UPDATE_SOURCE: UpdateSource = UpdateSource::CustomApi;
-#[cfg(feature = "github-updates")]
-const GITHUB_UPDATE_SOURCES: &[UpdateSource] = &[UpdateSource::GitHub];
-const LOCAL_UPDATE_SOURCES: &[UpdateSource] = &[UpdateSource::CustomApi];
-#[cfg(not(feature = "github-updates"))]
-const GITHUB_UPDATE_SOURCES: &[UpdateSource] = &[UpdateSource::GitHub];
-#[cfg(not(feature = "github-updates"))]
-const CUSTOM_API_UPDATE_SOURCES: &[UpdateSource] = &[UpdateSource::CustomApi, UpdateSource::GitHub];
-/// 测试通道只认自己的清单：GitHub Releases 分不出「beta 清单」，回退过去只会拿到最新
-/// 稳定版，等于把测试通道悄悄降级成稳定通道，因此 beta 不做 GitHub 兜底。
-#[cfg(not(feature = "github-updates"))]
-const BETA_UPDATE_SOURCES: &[UpdateSource] = &[UpdateSource::CustomApi];
-/// 没有任何可用更新源。
-const NO_UPDATE_SOURCES: &[UpdateSource] = &[];
-
-/// 更新源类型
+/// 一轮检查里的一次取数尝试。
+///
+/// 「镜像源」只决定这些尝试的先后顺序，具体走哪种形态由这里区分：R2/本地 fixture 是
+/// 一份 JSON 清单，CNB 要先发现 tag 再取 Release 资产，GitHub 走 Releases API。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum UpdateSource {
-    /// 通过 GitHub Releases 检查更新
-    #[cfg_attr(not(feature = "github-updates"), allow(dead_code))]
-    GitHub,
-    /// 通过 R2 或自定义 JSON API 检查更新
-    #[allow(dead_code)]
-    CustomApi,
+enum UpdateAttempt {
+    /// 直接读一份 JSON 清单；括号里只用于日志与下载地址改写
+    Manifest(UpdateMirror),
+    /// CNB 镜像：先读 git refs 拿到 tag，再取该 tag 的 feed 资产
+    Cnb,
+    /// GitHub Releases API，只在稳定通道使用
+    Github,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -171,6 +154,8 @@ pub fn check_for_updates_manually(cx: &mut App) {
 
 fn run_update_check(cx: &mut App, trigger: UpdateCheckTrigger) {
     let channel = effective_channel(AppSettings::global(cx).update_channel);
+    // 镜像源只影响「先问谁」，取默认值就是内置顺序（R2 → CNB → GitHub）。
+    let mirror = AppSettings::global(cx).update_mirror.unwrap_or_default();
     let config = update_config(channel);
     if !update_check_available(&config) {
         // 没有可用 feed 的产品什么都不做：既不能弹失败提示，也不能 panic。
@@ -193,7 +178,7 @@ fn run_update_check(cx: &mut App, trigger: UpdateCheckTrigger) {
     let update_task = Tokio::spawn(cx, async move {
         match tokio::time::timeout(
             UPDATE_CHECK_TIMEOUT,
-            perform_update_check(config, http_client, current_version, channel),
+            perform_update_check(config, http_client, current_version, channel, mirror),
         )
         .await
         {
@@ -265,13 +250,20 @@ async fn perform_update_check(
     http_client: std::sync::Arc<dyn gpui::http_client::HttpClient>,
     current_version: String,
     channel: UpdateChannel,
+    mirror: UpdateMirror,
 ) -> UpdateCheckOutcome {
-    let mut last_error = None;
-    let mut saw_no_update = false;
+    let attempts = update_attempts(&config, channel, mirror);
+    if attempts.is_empty() {
+        return UpdateCheckOutcome::Failure("没有可用的更新源".to_string());
+    }
 
-    for source in active_update_sources(&config, channel) {
-        match fetch_dialog_info_from_source(
-            *source,
+    let mut last_error = None;
+    let mut saw_up_to_date = false;
+    let mut saw_missing_manifest = false;
+
+    for attempt in attempts {
+        match fetch_dialog_info_from_attempt(
+            attempt,
             &config,
             http_client.clone(),
             &current_version,
@@ -279,80 +271,182 @@ async fn perform_update_check(
         )
         .await
         {
-            Ok(Some(info)) => return UpdateCheckOutcome::ShowDialog(info),
-            Ok(None) => saw_no_update = true,
+            Ok(AttemptOutcome::Found(info)) => return UpdateCheckOutcome::ShowDialog(info),
+            // 「已是最新」不立刻收尾：R2 的清单可能比实际 Release 慢一拍，继续问下一个源
+            // 才能把「清单还没更新」和「真的没有新版本」区分开。
+            Ok(AttemptOutcome::UpToDate) => saw_up_to_date = true,
+            Ok(AttemptOutcome::MissingManifest) => saw_missing_manifest = true,
             Err(err) => {
-                tracing::warn!("更新源 {:?} 检查失败: {}", source, err);
+                tracing::warn!("更新尝试 {:?} 检查失败: {}", attempt, err);
                 last_error = Some(err);
             }
         }
     }
 
-    if saw_no_update {
+    if saw_up_to_date {
         return UpdateCheckOutcome::NoUpdate;
     }
-
-    let err = last_error.unwrap_or_else(|| "没有可用的更新源".to_string());
-    UpdateCheckOutcome::Failure(err)
+    if let Some(err) = last_error {
+        return UpdateCheckOutcome::Failure(err);
+    }
+    if saw_missing_manifest {
+        // 所有源都说「这份清单不存在」：测试通道在首个 beta 发布前就是这种状态，
+        // 对稳定通道则确实是配置/发布出了问题。
+        return match channel {
+            UpdateChannel::Beta => UpdateCheckOutcome::NoUpdate,
+            UpdateChannel::Stable => {
+                UpdateCheckOutcome::Failure("更新接口返回异常状态码: 404 Not Found".to_string())
+            }
+        };
+    }
+    UpdateCheckOutcome::NoUpdate
 }
 
+/// 单次取数尝试的结果。
+enum AttemptOutcome {
+    /// 找到了比当前更新的版本
+    Found(UpdateDialogInfo),
+    /// 清单有效，但没有更新版本
+    UpToDate,
+    /// 清单不存在（HTTP 404）
+    #[cfg_attr(feature = "github-updates", allow(dead_code))]
+    MissingManifest,
+}
+
+/// 按镜像源偏好排出本轮要尝试的源。
+///
+/// 本地 fixture 不参与镜像回退：它只该读本地文件，不该把请求发到网络上。
 #[cfg(feature = "github-updates")]
-fn active_update_sources(
+fn update_attempts(
     config: &UpdateConfig,
     _channel: UpdateChannel,
-) -> &'static [UpdateSource] {
+    _mirror: UpdateMirror,
+) -> Vec<UpdateAttempt> {
     if is_local_file_source(&config.update_url) {
-        LOCAL_UPDATE_SOURCES
+        vec![UpdateAttempt::Manifest(UpdateMirror::Auto)]
     } else {
-        GITHUB_UPDATE_SOURCES
+        vec![UpdateAttempt::Github]
     }
 }
 
 #[cfg(not(feature = "github-updates"))]
-fn active_update_sources(config: &UpdateConfig, channel: UpdateChannel) -> &'static [UpdateSource] {
+fn update_attempts(
+    config: &UpdateConfig,
+    channel: UpdateChannel,
+    mirror: UpdateMirror,
+) -> Vec<UpdateAttempt> {
     if is_local_file_source(&config.update_url) {
-        LOCAL_UPDATE_SOURCES
-    } else if channel == UpdateChannel::Beta {
-        // 测试通道只读 beta 清单；没有可用 feed 时宁可报错，也不把稳定版当 beta 推给用户。
-        if config.is_valid() {
-            BETA_UPDATE_SOURCES
-        } else {
-            NO_UPDATE_SOURCES
-        }
-    } else if config.is_valid() {
-        CUSTOM_API_UPDATE_SOURCES
-    } else {
-        GITHUB_UPDATE_SOURCES
+        return vec![UpdateAttempt::Manifest(UpdateMirror::Auto)];
     }
+
+    let mut attempts = Vec::new();
+    for candidate in mirror::mirror_order(mirror) {
+        match candidate {
+            // 没有配置 feed 的产品（未注入 public base 的开发构建）跳过 R2。
+            UpdateMirror::Cloudflare if config.is_valid() => {
+                attempts.push(UpdateAttempt::Manifest(UpdateMirror::Cloudflare));
+            }
+            UpdateMirror::Cnb => attempts.push(UpdateAttempt::Cnb),
+            // GitHub 的 `releases/latest` 天然排除预发布，放进测试通道只会把通道悄悄
+            // 降级成稳定通道，所以测试通道不做 GitHub 兜底。
+            UpdateMirror::Github if channel == UpdateChannel::Stable => {
+                attempts.push(UpdateAttempt::Github);
+            }
+            _ => {}
+        }
+    }
+    attempts
 }
 
-async fn fetch_dialog_info_from_source(
-    source: UpdateSource,
+async fn fetch_dialog_info_from_attempt(
+    attempt: UpdateAttempt,
     config: &UpdateConfig,
     http_client: std::sync::Arc<dyn gpui::http_client::HttpClient>,
     current_version: &str,
     channel: UpdateChannel,
-) -> Result<Option<UpdateDialogInfo>, String> {
-    if source != UpdateSource::CustomApi || !is_local_file_source(&config.update_url) {
-        // 网络连通性检查：直接探测对应更新源，而非第三方地址
-        let connectivity_url = match source {
-            UpdateSource::GitHub => network::GITHUB_API_HOST,
-            UpdateSource::CustomApi => config.update_url.as_str(),
-        };
-        if let Err(err) = check_network_connectivity(http_client.clone(), connectivity_url).await {
-            tracing::warn!("{}: {}", t!("Update.network_check_failed"), err);
-            return Err(err);
+) -> Result<AttemptOutcome, String> {
+    match attempt {
+        UpdateAttempt::Manifest(mirror) => {
+            if !is_local_file_source(&config.update_url) {
+                probe_connectivity(http_client.clone(), mirror, &config.update_url).await?;
+            }
+            fetch_manifest_outcome(config, http_client, current_version, channel).await
+        }
+        UpdateAttempt::Cnb => {
+            let refs_url = mirror::cnb_refs_url();
+            probe_connectivity(http_client.clone(), UpdateMirror::Cnb, &refs_url).await?;
+            // CNB 既没有 JSON 清单的公开直链，也没有 `latest` 别名：先读 refs 找 tag，
+            // 再取该 tag 的 feed 资产，等价于「从清单里拿最新版本 + 下载地址」。
+            let tags = mirror::fetch_cnb_tags(http_client.clone()).await?;
+            let tag = mirror::latest_tag_for_channel(&tags, channel)
+                .ok_or_else(|| "CNB 镜像还没有可用版本".to_string())?;
+            let product = mirror::feed_product_slug();
+            let feed_url =
+                mirror::cnb_release_asset_url(&tag, &mirror::feed_asset_name(product, channel));
+            let feed_config = UpdateConfig {
+                update_url: feed_url,
+                download_url: None,
+            };
+            match fetch_manifest_outcome(&feed_config, http_client, current_version, channel)
+                .await?
+            {
+                AttemptOutcome::Found(info) => {
+                    Ok(AttemptOutcome::Found(rewrite_downloads_for_cnb(info, &tag)))
+                }
+                other => Ok(other),
+            }
+        }
+        UpdateAttempt::Github => {
+            probe_connectivity(
+                http_client.clone(),
+                UpdateMirror::Github,
+                network::GITHUB_API_HOST,
+            )
+            .await?;
+            let info = fetch_github_dialog_info(http_client, current_version, channel).await?;
+            Ok(match info {
+                Some(info) => AttemptOutcome::Found(info),
+                None => AttemptOutcome::UpToDate,
+            })
         }
     }
+}
 
-    match source {
-        UpdateSource::GitHub => {
-            fetch_github_dialog_info(http_client, current_version, channel).await
-        }
-        UpdateSource::CustomApi => {
-            fetch_custom_dialog_info(config, http_client, current_version, channel).await
-        }
+/// 先探测目标是否可达，失败就直接跳到下一个源。
+async fn probe_connectivity(
+    http_client: std::sync::Arc<dyn gpui::http_client::HttpClient>,
+    mirror: UpdateMirror,
+    target: &str,
+) -> Result<(), String> {
+    if let Err(err) = check_network_connectivity(http_client, target).await {
+        tracing::warn!(
+            "{} ({:?}): {}",
+            t!("Update.network_check_failed"),
+            mirror,
+            err
+        );
+        return Err(err);
     }
+    Ok(())
+}
+
+/// 把 CNB 清单里的下载地址改到 CNB 的 Release 资产上，改不动就保留原地址。
+fn rewrite_downloads_for_cnb(mut info: UpdateDialogInfo, tag: &str) -> UpdateDialogInfo {
+    if let Some(url) = info
+        .download_url
+        .as_deref()
+        .and_then(|url| mirror::cnb_download_url(tag, url))
+    {
+        info.download_url = Some(url);
+    }
+    if let Some(url) = info
+        .fallback_download_url
+        .as_deref()
+        .and_then(|url| mirror::cnb_download_url(tag, url))
+    {
+        info.fallback_download_url = Some(url);
+    }
+    info
 }
 
 fn should_run_update_check(
@@ -469,25 +563,20 @@ async fn fetch_github_dialog_info(
         .map_err(|err| format!("转换 GitHub Release 失败: {}", err))
 }
 
-async fn fetch_custom_dialog_info(
+async fn fetch_manifest_outcome(
     config: &UpdateConfig,
     http_client: std::sync::Arc<dyn gpui::http_client::HttpClient>,
     current_version: &str,
     channel: UpdateChannel,
-) -> Result<Option<UpdateDialogInfo>, String> {
+) -> Result<AttemptOutcome, String> {
     if !config.is_valid() {
         return Err("缺少更新接口地址，无法检查更新".to_string());
     }
 
-    let response = fetch_update_info(http_client, &config.update_url).await?;
-    let Some(response) = response else {
-        // 测试清单在首个 beta 发布前并不存在：对 beta 通道来说「清单不存在」就是
-        // 「还没有 beta 版本」，不能报成检查失败。
-        return if channel == UpdateChannel::Beta {
-            Ok(None)
-        } else {
-            Err("更新接口返回异常状态码: 404 Not Found".to_string())
-        };
+    let Some(response) = fetch_update_info(http_client, &config.update_url).await? else {
+        // 清单不存在只说明「这份 feed 还没有内容」，由调用方结合通道和其余源决定结论：
+        // 测试通道在首个 beta 之前就是 404，稳定通道则说明配置/发布出了问题。
+        return Ok(AttemptOutcome::MissingManifest);
     };
     let latest_version = parse_version(&response.version)
         .ok_or_else(|| format!("版本号无法解析 {}", response.version))?;
@@ -495,7 +584,7 @@ async fn fetch_custom_dialog_info(
         .ok_or_else(|| format!("当前版本号无法解析 {}", current_version))?;
 
     if !should_offer_update(&latest_version, &current_semver, channel) {
-        return Ok(None);
+        return Ok(AttemptOutcome::UpToDate);
     }
 
     let download_url = select_download_url(&response, config.download_url.clone())
@@ -503,7 +592,7 @@ async fn fetch_custom_dialog_info(
     let fallback_download_url = select_fallback_download_url(&response)
         .map(|url| resolve_local_reference(&config.update_url, &url));
 
-    Ok(Some(UpdateDialogInfo {
+    Ok(AttemptOutcome::Found(UpdateDialogInfo {
         current_version: current_version.to_string(),
         latest_version: response.version.clone(),
         release_notes: response.release_notes.clone(),
@@ -624,12 +713,12 @@ mod tests {
     use gpui::http_client::HttpClient;
     #[cfg(not(feature = "github-updates"))]
     use one_core::config::update_url_from_public_base;
-    use one_core::settings::UpdateChannel;
+    use one_core::settings::{UpdateChannel, UpdateMirror};
 
     use super::{
-        ACTIVE_UPDATE_SOURCE, UPDATE_CHECK_TIMEOUT, UpdateCheckTrigger, UpdateDialogInfo,
-        UpdateSource, encode_skipped_update_version, parse_version, should_offer_update,
-        should_run_update_check, should_show_available_update, skipped_version_for_channel,
+        UPDATE_CHECK_TIMEOUT, UpdateAttempt, UpdateCheckTrigger, UpdateDialogInfo,
+        encode_skipped_update_version, parse_version, should_offer_update, should_run_update_check,
+        should_show_available_update, skipped_version_for_channel, update_attempts,
     };
     use super::{UpdateCheckOutcome, perform_update_check};
     use crate::update::test_support::FakeHttpClient;
@@ -722,14 +811,107 @@ mod tests {
 
     #[cfg(not(feature = "github-updates"))]
     #[test]
-    fn default_update_source_uses_r2_custom_api() {
-        assert_eq!(UpdateSource::CustomApi, ACTIVE_UPDATE_SOURCE);
+    fn auto_mirror_order_tries_r2_then_cnb_then_github() {
+        let config = one_core::config::UpdateConfig {
+            update_url: update_url_from_public_base("https://onetcli.pdyyds.cn"),
+            download_url: None,
+        };
+
+        assert_eq!(
+            vec![
+                UpdateAttempt::Manifest(UpdateMirror::Cloudflare),
+                UpdateAttempt::Cnb,
+                UpdateAttempt::Github,
+            ],
+            update_attempts(&config, UpdateChannel::Stable, UpdateMirror::Auto)
+        );
+        assert_eq!(
+            vec![
+                UpdateAttempt::Manifest(UpdateMirror::Cloudflare),
+                UpdateAttempt::Cnb,
+                UpdateAttempt::Github,
+            ],
+            update_attempts(&config, UpdateChannel::Stable, UpdateMirror::Cloudflare)
+        );
+    }
+
+    #[cfg(not(feature = "github-updates"))]
+    #[test]
+    fn choosing_a_mirror_moves_it_first_without_dropping_the_fallbacks() {
+        let config = one_core::config::UpdateConfig {
+            update_url: update_url_from_public_base("https://onetcli.pdyyds.cn"),
+            download_url: None,
+        };
+
+        assert_eq!(
+            vec![
+                UpdateAttempt::Cnb,
+                UpdateAttempt::Manifest(UpdateMirror::Cloudflare),
+                UpdateAttempt::Github,
+            ],
+            update_attempts(&config, UpdateChannel::Stable, UpdateMirror::Cnb)
+        );
+        assert_eq!(
+            vec![
+                UpdateAttempt::Github,
+                UpdateAttempt::Manifest(UpdateMirror::Cloudflare),
+                UpdateAttempt::Cnb,
+            ],
+            update_attempts(&config, UpdateChannel::Stable, UpdateMirror::Github)
+        );
+    }
+
+    #[cfg(not(feature = "github-updates"))]
+    #[test]
+    fn beta_channel_never_falls_back_to_github_releases() {
+        let config = one_core::config::UpdateConfig {
+            update_url: "https://cdn.example.test/updates/beta/latest.json".to_string(),
+            download_url: None,
+        };
+
+        // GitHub 的 releases/latest 只给稳定版，beta 回退过去等于把通道降级。
+        let attempts = update_attempts(&config, UpdateChannel::Beta, UpdateMirror::Github);
+        assert_eq!(
+            vec![
+                UpdateAttempt::Manifest(UpdateMirror::Cloudflare),
+                UpdateAttempt::Cnb
+            ],
+            attempts
+        );
+        assert!(!attempts.contains(&UpdateAttempt::Github));
+    }
+
+    #[cfg(not(feature = "github-updates"))]
+    #[test]
+    fn missing_feed_still_leaves_the_mirror_attempts_available() {
+        let config = one_core::config::UpdateConfig {
+            update_url: String::new(),
+            download_url: None,
+        };
+
+        assert_eq!(
+            vec![UpdateAttempt::Cnb, UpdateAttempt::Github],
+            update_attempts(&config, UpdateChannel::Stable, UpdateMirror::Auto)
+        );
+        // 没有 R2 清单时测试通道只剩 CNB，仍然不会把稳定版当 beta 推给用户。
+        assert_eq!(
+            vec![UpdateAttempt::Cnb],
+            update_attempts(&config, UpdateChannel::Beta, UpdateMirror::Auto)
+        );
     }
 
     #[cfg(feature = "github-updates")]
     #[test]
-    fn github_updates_feature_uses_github_source() {
-        assert_eq!(UpdateSource::GitHub, ACTIVE_UPDATE_SOURCE);
+    fn github_updates_feature_ignores_the_mirror_preference() {
+        let config = one_core::config::UpdateConfig {
+            update_url: "https://cdn.example.test/updates/latest.json".to_string(),
+            download_url: None,
+        };
+
+        assert_eq!(
+            vec![UpdateAttempt::Github],
+            update_attempts(&config, UpdateChannel::Stable, UpdateMirror::Cnb)
+        );
     }
 
     #[test]
@@ -800,6 +982,7 @@ mod tests {
             http_client,
             "0.10.0".to_string(),
             UpdateChannel::Stable,
+            UpdateMirror::Auto,
         )
         .await;
 
@@ -823,6 +1006,7 @@ mod tests {
         let update_url = update_url_from_public_base("https://onetcli.pdyyds.cn");
         let client = Arc::new(FakeHttpClient::new(vec![
             Err(anyhow!("r2 unavailable")),
+            Err(anyhow!("cnb unavailable")),
             FakeHttpClient::response(200, ""),
             FakeHttpClient::response(200, &github_release_body("v9.9.9")),
         ]));
@@ -837,6 +1021,7 @@ mod tests {
             http_client,
             "0.1.0".to_string(),
             UpdateChannel::Stable,
+            UpdateMirror::Auto,
         )
         .await;
 
@@ -851,17 +1036,19 @@ mod tests {
 
         let requests = client.take_requests();
         assert_eq!(requests[0].uri, update_url);
-        assert_eq!(requests[1].uri, "https://api.github.com/");
+        assert_eq!(requests[1].uri, super::mirror::cnb_refs_url());
+        assert_eq!(requests[2].uri, "https://api.github.com/");
         assert_eq!(
-            requests[2].uri,
+            requests[3].uri,
             "https://api.github.com/repos/feigeCode/navop/releases/latest"
         );
     }
 
     #[cfg(not(feature = "github-updates"))]
     #[tokio::test]
-    async fn missing_cloudflare_update_url_uses_github_directly() {
+    async fn missing_cloudflare_update_url_uses_the_next_mirrors() {
         let client = Arc::new(FakeHttpClient::new(vec![
+            Err(anyhow!("cnb unavailable")),
             FakeHttpClient::response(200, ""),
             FakeHttpClient::response(200, &github_release_body("v9.9.9")),
         ]));
@@ -876,15 +1063,17 @@ mod tests {
             http_client,
             "0.1.0".to_string(),
             UpdateChannel::Stable,
+            UpdateMirror::Auto,
         )
         .await;
 
         assert!(matches!(outcome, UpdateCheckOutcome::ShowDialog(_)));
         let requests = client.take_requests();
-        assert_eq!(requests.len(), 2);
-        assert_eq!(requests[0].uri, "https://api.github.com/");
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[0].uri, super::mirror::cnb_refs_url());
+        assert_eq!(requests[1].uri, "https://api.github.com/");
         assert_eq!(
-            requests[1].uri,
+            requests[2].uri,
             "https://api.github.com/repos/feigeCode/navop/releases/latest"
         );
     }
@@ -896,6 +1085,7 @@ mod tests {
         let client = Arc::new(FakeHttpClient::new(vec![
             FakeHttpClient::response(200, ""),
             FakeHttpClient::response(200, r#"{"version":"0.1.0"}"#),
+            Err(anyhow!("cnb unavailable")),
             FakeHttpClient::response(200, ""),
             FakeHttpClient::response(200, &github_release_body("v9.9.9")),
         ]));
@@ -910,6 +1100,7 @@ mod tests {
             http_client,
             "0.1.0".to_string(),
             UpdateChannel::Stable,
+            UpdateMirror::Auto,
         )
         .await;
 
@@ -921,9 +1112,10 @@ mod tests {
         let requests = client.take_requests();
         assert_eq!(requests[0].uri, update_url);
         assert_eq!(requests[1].uri, update_url);
-        assert_eq!(requests[2].uri, "https://api.github.com/");
+        assert_eq!(requests[2].uri, super::mirror::cnb_refs_url());
+        assert_eq!(requests[3].uri, "https://api.github.com/");
         assert_eq!(
-            requests[3].uri,
+            requests[4].uri,
             "https://api.github.com/repos/feigeCode/navop/releases/latest"
         );
     }
@@ -947,6 +1139,7 @@ mod tests {
             http_client,
             "0.1.0".to_string(),
             UpdateChannel::Stable,
+            UpdateMirror::Auto,
         )
         .await;
 
@@ -1093,31 +1286,58 @@ mod tests {
     }
 
     #[cfg(not(feature = "github-updates"))]
-    #[test]
-    fn beta_channel_only_reads_the_beta_manifest() {
-        use super::{BETA_UPDATE_SOURCES, CUSTOM_API_UPDATE_SOURCES, active_update_sources};
-
-        let beta_config = one_core::config::UpdateConfig {
-            update_url: "https://cdn.example.test/updates/beta/latest.json".to_string(),
-            download_url: None,
-        };
-        assert_eq!(
-            BETA_UPDATE_SOURCES,
-            active_update_sources(&beta_config, UpdateChannel::Beta)
+    #[tokio::test]
+    async fn cnb_mirror_resolves_the_tag_and_rewrites_download_urls() {
+        let refs_body = format!(
+            "001e# service=git-upload-pack\n0000{:04x}4444444444444444444444444444444444444444 refs/tags/v9.9.9\n",
+            4 + "4444444444444444444444444444444444444444 refs/tags/v9.9.9\n".len()
         );
-        assert_eq!(
-            CUSTOM_API_UPDATE_SOURCES,
-            active_update_sources(&beta_config, UpdateChannel::Stable)
+        let feed_body = format!(
+            r#"{{"version":"9.9.9","downloads":{{"{}":"https://r2.example.test/releases/v9.9.9/{}"}}}}"#,
+            current_target_key(),
+            expected_archive_name()
         );
-
-        // 没有 feed 时测试通道宁可报错，也不把最新稳定版当成 beta 更新推给用户。
-        let invalid_config = one_core::config::UpdateConfig {
+        let client = Arc::new(FakeHttpClient::new(vec![
+            FakeHttpClient::response(200, ""),
+            FakeHttpClient::response(200, &refs_body),
+            FakeHttpClient::response(200, &feed_body),
+        ]));
+        let http_client: Arc<dyn HttpClient> = client.clone();
+        // 没有 R2 feed 时 CNB 就是第一个可用的源。
+        let config = one_core::config::UpdateConfig {
             update_url: String::new(),
             download_url: None,
         };
-        assert!(
-            active_update_sources(&invalid_config, UpdateChannel::Beta).is_empty(),
-            "测试通道不能回退到 GitHub Releases"
+
+        let outcome = perform_update_check(
+            config,
+            http_client,
+            "0.1.0".to_string(),
+            UpdateChannel::Stable,
+            UpdateMirror::Cnb,
+        )
+        .await;
+
+        let UpdateCheckOutcome::ShowDialog(info) = outcome else {
+            panic!("CNB 镜像应给出更新");
+        };
+        assert_eq!(info.latest_version, "9.9.9");
+        // 清单里指向 R2 的地址要被改写到 CNB 的同名资产上，否则国内用户依然慢。
+        assert_eq!(
+            Some(super::mirror::cnb_release_asset_url("v9.9.9", expected_archive_name()).as_str()),
+            info.download_url.as_deref()
+        );
+
+        let requests = client.take_requests();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[0].uri, super::mirror::cnb_refs_url());
+        assert_eq!(requests[1].uri, super::mirror::cnb_refs_url());
+        assert_eq!(
+            requests[2].uri,
+            super::mirror::cnb_release_asset_url(
+                "v9.9.9",
+                &super::mirror::feed_asset_name("navop", UpdateChannel::Stable)
+            )
         );
     }
 }

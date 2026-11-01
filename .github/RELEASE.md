@@ -106,6 +106,14 @@ beta 验证稳定后，按正常发布流程把 `dev` 合进 `main`：在 releas
 - 万一稳定清单被污染（例如误用 beta tag 跑了 stable 通道）：用一个已知正确的稳定 tag 重跑 `upload-r2.yml`（`-f tag=vX.Y.Z -f channel=stable`），脚本会幂等重建 `updates/latest.json` 与 `releases/<tag>/` 下的安装包。
 - `node script/test-release-packaging.mjs` 里有一组回归断言（含假 aws 仿真），保证 beta tag 永远只写 `updates/beta/latest.json`。
 
+## Update feed assets and the CNB mirror（feed 资产与 CNB 镜像）
+
+Every run of `upload-r2.yml` also copies the channel manifests onto the GitHub Release under flat `feed-*.json` asset names: `feed-navop.json` / `feed-navop-shell.json` / `feed-navop-data.json` on the stable channel and `feed-navop-beta.json` / `feed-navop-shell-beta.json` / `feed-navop-data-beta.json` on beta. This is not a second feed format — it exists because the CNB mirror (`https://cnb.cool/navop-dev/navop`) only synchronizes **GitHub Release assets**, and repository file raw URLs are not anonymously readable there. The Release assets are therefore the only place the CNB side can serve a manifest from a plain GET.
+
+- **稳定发布同时刷新 beta 清单**：a stable run also publishes the exact same stable manifests as `feed-<product>-beta.json` and overwrites the R2 beta keys (`updates/beta/latest.json`, `updates/navop-shell/shell/beta/latest.json`, `updates/navop-data/data/beta/latest.json`) with that same stable manifest. Beta clients only read the beta feed/assets; without this refresh they would stay pinned to the last beta forever and never receive a new stable release. A beta run still writes only the beta keys and beta asset names, so the stable feed and the un-suffixed asset names are never touched.
+- **CNB 同步由 `upload-r2.yml` 最后派发**：`sync-cnb-release-assets.yml` must run after the `feed-*.json` assets exist. The dispatch used to live at the end of `release.yml`, which raced the concurrent `upload-r2.yml` run and could complete before the feed assets were uploaded. `release.yml` now dispatches only `upload-r2.yml` (with `-f channel`), and the CNB sync is dispatched by the last step of `upload-r2.yml`.
+- **`feed-*.json` 不会被误当成安装包**：the installer download/upload globs are `navop-*` / `navop_*`, and the manifest's `packages` list keeps only names matching `/^navop[-_]/`, so feed assets never appear in `downloads`, `fallback_downloads` or `packages`, and never land under the R2 `releases/<tag>/` prefix.
+
 ## Changelog format
 
 The newest entry belongs immediately after the `<!-- NAVOP_RELEASES -->` marker:
