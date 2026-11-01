@@ -34,7 +34,8 @@ BASE=""
 NEXT="false"
 NOTES_FILE=""
 DRY_RUN="false"
-REMOTE="${REMOTE:-cnb}"
+REMOTE="${REMOTE:-origin}"
+MIRROR_REMOTE="${MIRROR_REMOTE:-cnb}"
 MAIN_MANIFEST="${MAIN_MANIFEST:-${REPO_ROOT}/crates/navop_app/Cargo.toml}"
 APP_MANIFESTS=(
   "${REPO_ROOT}/apps/navop/Cargo.toml"
@@ -61,7 +62,8 @@ usage() {
   -h, --help         显示本帮助
 
 环境变量：
-  REMOTE             推送远端，默认 cnb
+  REMOTE             推送远端，默认 origin（tag 必须推到 GitHub 才会触发 release-trigger.yml）
+  MIRROR_REMOTE      镜像远端，默认 cnb（成功后同步推 dev 与 tag，失败只警告）
   MAIN_MANIFEST      Cargo.toml 路径，默认 crates/navop_app/Cargo.toml
   LOCKFILE           Cargo.lock 路径，默认 Cargo.lock
   CHANGELOG          CHANGELOG.md 路径，默认 CHANGELOG.md
@@ -231,7 +233,11 @@ fi
 if git ls-remote --exit-code --tags "${REMOTE}" "refs/tags/${TAG}" >/dev/null 2>&1; then
   die "远端 ${REMOTE} 已存在标签 ${TAG}。如需重发测试版，请用 --next 递增序号。"
 fi
-echo "tag 唯一性校验通过：${TAG} 在本地与 ${REMOTE} 均不存在"
+if [[ -n "${MIRROR_REMOTE}" && "${MIRROR_REMOTE}" != "${REMOTE}" ]] \
+  && git ls-remote --exit-code --tags "${MIRROR_REMOTE}" "refs/tags/${TAG}" >/dev/null 2>&1; then
+  die "镜像远端 ${MIRROR_REMOTE} 已存在标签 ${TAG}。如需重发测试版，请用 --next 递增序号。"
+fi
+echo "tag 唯一性校验通过：${TAG} 在本地、${REMOTE} 与 ${MIRROR_REMOTE} 均不存在"
 
 # 4. --dry-run：只打印计划，绝不写文件/提交/打 tag。
 if [[ "${DRY_RUN}" == "true" ]]; then
@@ -247,7 +253,7 @@ if [[ "${DRY_RUN}" == "true" ]]; then
   echo "  4. git add 四个 manifest ${LOCKFILE} ${CHANGELOG}"
   echo "  5. git commit -m \"chore(release): 发布 ${TAG} 测试版\""
   echo "  6. git tag -a ${TAG} -m ${TAG}"
-  echo "  7. git push ${REMOTE} dev && git push ${REMOTE} ${TAG}"
+  echo "  7. git push ${REMOTE} dev && git push ${REMOTE} ${TAG}（镜像 ${MIRROR_REMOTE}）"
   echo ""
   echo "本次 tag：${TAG}"
   echo "通道：beta"
@@ -363,6 +369,16 @@ echo "推送 dev 与 tag 到 ${REMOTE} ..."
 git push "${REMOTE}" dev
 git push "${REMOTE}" "${TAG}"
 PUSHED="true"
+
+# tag 只有落到 GitHub 才会触发 release-trigger.yml；镜像远端同步一份，
+# 推不动只警告，不影响已经在 GitHub 上开始的发布。
+if [[ -n "${MIRROR_REMOTE}" && "${MIRROR_REMOTE}" != "${REMOTE}" ]]; then
+  if git push "${MIRROR_REMOTE}" dev && git push "${MIRROR_REMOTE}" "${TAG}"; then
+    echo "已同步 dev 与 ${TAG} 到镜像远端 ${MIRROR_REMOTE}。"
+  else
+    echo "警告：镜像远端 ${MIRROR_REMOTE} 同步失败，不影响 GitHub 侧的发布流程。" >&2
+  fi
+fi
 
 echo ""
 echo "完成：已推送 ${TAG}，release-trigger.yml -> release.yml 将按 beta 通道执行。"
