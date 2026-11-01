@@ -10,10 +10,9 @@ use gpui::http_client::{AsyncBody, HttpClient, Method, Request, http::header};
 
 use super::marketplace::{MarketplaceEntry, MarketplaceManifest};
 use crate::extension::{ExtensionKind, ExtensionRegistry, ExtensionSummary};
-use crate::mirror::{
-    GITHUB_MARKETPLACE_MANIFEST_RELEASE_URL, cnb_marketplace_manifest_url, extension_mirror,
-    ordered_mirror_candidates,
-};
+use crate::mirror::GITHUB_MARKETPLACE_MANIFEST_RELEASE_URL;
+#[cfg(not(feature = "github-marketplace"))]
+use crate::mirror::{cnb_marketplace_manifest_url, extension_mirror, ordered_mirror_candidates};
 
 /// 市场清单的 raw 文件：仓库主分支的最新内容，只作为 Release 快照缺失时的兜底。
 pub const GITHUB_EXTENSION_MANIFEST_URL: &str =

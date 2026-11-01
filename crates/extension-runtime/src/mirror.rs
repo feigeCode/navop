@@ -31,6 +31,9 @@ pub(crate) const GITHUB_MARKETPLACE_MANIFEST_RELEASE_URL: &str =
     "https://github.com/feigeCode/navop-extensions/releases/download/manifest/manifest.json";
 
 /// 同一份扩展市场清单在 CNB 上的镜像地址（由 navop-extensions 的 CI 同步）。
+///
+/// `github-marketplace` 特性构建只会走 GitHub，这条候选不会被引用。
+#[cfg_attr(feature = "github-marketplace", allow(dead_code))]
 pub(crate) const CNB_MARKETPLACE_MANIFEST_URL: &str =
     "https://cnb.cool/navop-dev/navop-extensions/-/releases/download/manifest/manifest.json";
 
@@ -82,6 +85,7 @@ pub(crate) fn cnb_release_download_url(url: &str) -> Option<String> {
 ///
 /// 市场清单以固定 tag `manifest` 的 Release 资产发布，因此不需要 tag 发现；
 /// 该 Release 还没同步到 CNB 时只会 404，由调用方回退下一个源。
+#[cfg_attr(feature = "github-marketplace", allow(dead_code))]
 pub(crate) fn cnb_marketplace_manifest_url() -> &'static str {
     CNB_MARKETPLACE_MANIFEST_URL
 }
