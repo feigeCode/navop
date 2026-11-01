@@ -148,6 +148,9 @@ curl -sI "https://cnb.cool/navop-dev/navop/-/releases/download/v0.22.0/sha256sum
 - 现有已发布版本不认识 CNB 源；CNB 镜像只对包含本改动的版本起效。
 - 首次发布包含本改动的版本之后，需到 CNB Release 页面确认 `feed-*.json` 资产确实被
   `mpgrm releases sync` 同步过去（若它按资产名白名单过滤，需要补一条同步规则）。
+  `mpgrm` 对非 semver tag（扩展市场的固定 `manifest` tag）的同步已实测通过；
+  扩展仓库的 `manifest` Release 首次手工建立后，GitHub 与 CNB 两侧都是 200、
+  sha256 一致。
 - 走 CNB 时每次检查多一次 refs 请求（tag 发现），这是「没有 `latest` 别名」的代价；
   扩展市场清单不受影响（固定 tag `manifest`，无需发现）。
 - CNB 上的市场清单是「某次扩展发布时」的快照，可能比 R2 / GitHub raw 慢一个扩展版本；
