@@ -1,10 +1,14 @@
-//! 「导入连接」弹窗：从全量产品一键迁移，或导入迁移包（文件 / 粘贴 JSON）。
+//! 「导入连接」弹窗：从全量产品迁移，或导入迁移包（文件 / 粘贴 JSON）。
+//!
+//! 自动探测只是便利：全量产品可能装在便携目录、被换过 `--data-dir`、或干脆已
+//! 卸载，因此两个页签都提供「选择文件…」原生选择器，输入框也允许手写路径
+//! （`~` 与 `%VAR%` 会被展开）。
 
 use std::path::PathBuf;
 
 use gpui::{
-    App, AppContext as _, Context, Entity, FocusHandle, Focusable, IntoElement, Render,
-    SharedString, Styled, Window, div, prelude::*, px,
+    App, AppContext as _, Context, Entity, FocusHandle, Focusable, IntoElement, PathPromptOptions,
+    Render, SharedString, Styled, Window, div, prelude::*, px,
 };
 use gpui_component::WindowExt as _;
 use gpui_component::input::{Input, InputState, Textarea, TextareaState};
@@ -17,11 +21,16 @@ use gpui_component::{
 };
 use one_core::popup_window::{PopupWindowOptions, open_reusable_popup_window};
 
-use super::{detect_full_product, import_bundle, import_from_full_product};
+use super::{
+    detect_full_product, expand_source_path, import_bundle, import_from_database,
+    import_from_full_product, import_from_source_file, is_sqlite_database,
+};
 
 const DIALOG_WIDTH: f32 = 760.0;
 const DIALOG_HEIGHT: f32 = 560.0;
 const DIALOG_REUSE_KEY: &str = "app-kit-import";
+const DB_PICKER_PROMPT: &str = "选择全量产品的 one-hub.db";
+const BUNDLE_PICKER_PROMPT: &str = "选择迁移包文件（.json 或 one-hub.db）";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ImportTab {
@@ -29,7 +38,7 @@ enum ImportTab {
     Bundle,
 }
 
-/// 打开「导入连接」弹窗；重复打开会复用同一个窗口。
+/// 打开「导入连接」弹窗；重复打开会复用同一个窗口（每次都会重新探测源库）。
 pub fn open_import_dialog(window: &mut Window, cx: &mut App) {
     open_reusable_popup_window(
         PopupWindowOptions::new("导入连接").size(DIALOG_WIDTH, DIALOG_HEIGHT),
@@ -45,6 +54,9 @@ pub struct ImportDialog {
     focus_handle: FocusHandle,
     tab: ImportTab,
     detected: Option<PathBuf>,
+    /// 全量产品数据库路径：探测成功时预填，也可以由用户选择或手写。
+    db_input: Entity<InputState>,
+    /// 迁移包文件路径（也接受直接选 `one-hub.db`，按文件头判定）。
     path_input: Entity<InputState>,
     json_input: Entity<TextareaState>,
     status: Option<SharedString>,
@@ -54,9 +66,16 @@ pub struct ImportDialog {
 impl ImportDialog {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let detected = detect_full_product();
+        let db_input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx)
+                .placeholder("全量产品的 one-hub.db 路径，例如 ~/.config/navop/one-hub.db");
+            if let Some(path) = detected.as_ref() {
+                state.set_value(path.to_string_lossy().to_string(), window, cx);
+            }
+            state
+        });
         let path_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("迁移包 JSON 文件路径，例如 ~/Desktop/navop-connections.json")
+            InputState::new(window, cx).placeholder("迁移包 JSON 路径，也可以直接选 one-hub.db")
         });
         let json_input = cx.new(|cx| {
             TextareaState::new(window, cx)
@@ -67,12 +86,10 @@ impl ImportDialog {
         focus_handle.focus(window, cx);
         Self {
             focus_handle,
-            tab: if detected.is_some() {
-                ImportTab::FullProduct
-            } else {
-                ImportTab::Bundle
-            },
+            // 始终落在「从全量产品迁移」页：即使没探测到，这一页现在也能选文件。
+            tab: ImportTab::FullProduct,
             detected,
+            db_input,
             path_input,
             json_input,
             status: None,
@@ -88,25 +105,53 @@ impl ImportDialog {
         cx.notify();
     }
 
+    /// 从全量产品数据库导入：优先用输入框（探测结果已预填），清空时重新探测。
     fn import_full_product(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        match import_from_full_product(cx) {
+        let typed = self.db_input.read(cx).value().trim().to_string();
+        if typed.is_empty() {
+            // 输入框被清空 = 想重新探测一次（探测结果是打开弹窗时抓的快照）。
+            return match import_from_full_product(cx) {
+                Ok(report) => self.finish("已从全量产品导入", &report, window, cx),
+                Err(error) => self.fail(error.to_string(), window, cx),
+            };
+        }
+        let path = expand_source_path(&typed);
+        if !is_sqlite_database(&path) {
+            self.fail(
+                format!(
+                    "「{}」不是 SQLite 数据库；迁移包 JSON 请到「迁移包」页导入",
+                    path.display()
+                ),
+                window,
+                cx,
+            );
+            return;
+        }
+        match import_from_database(&path, cx) {
             Ok(report) => self.finish("已从全量产品导入", &report, window, cx),
             Err(error) => self.fail(error.to_string(), window, cx),
         }
     }
 
+    /// 从文件导入：SQLite 库走全量产品迁移，其它按迁移包 JSON 解析。
     fn import_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let path = self.path_input.read(cx).value().trim().to_string();
-        if path.is_empty() {
-            self.fail("请先填写迁移包文件路径".to_string(), window, cx);
+        let typed = self.path_input.read(cx).value().trim().to_string();
+        if typed.is_empty() {
+            self.fail("请先选择或填写迁移包文件路径".to_string(), window, cx);
             return;
         }
-        let result = std::fs::read_to_string(&path)
-            .map_err(|error| format!("读取「{path}」失败：{error}"))
-            .and_then(|text| import_bundle(&text, cx).map_err(|error| error.to_string()));
-        match result {
-            Ok(report) => self.finish("已从迁移包导入", &report, window, cx),
-            Err(message) => self.fail(message, window, cx),
+        let path = expand_source_path(&typed);
+        let sqlite_source = is_sqlite_database(&path);
+        match import_from_source_file(&path, cx) {
+            Ok(report) => {
+                let prefix = if sqlite_source {
+                    "已从全量产品数据库导入"
+                } else {
+                    "已从迁移包导入"
+                };
+                self.finish(prefix, &report, window, cx);
+            }
+            Err(error) => self.fail(error.to_string(), window, cx),
         }
     }
 
@@ -120,6 +165,51 @@ impl ImportDialog {
             Ok(report) => self.finish("已从迁移包导入", &report, window, cx),
             Err(error) => self.fail(error.to_string(), window, cx),
         }
+    }
+
+    /// 原生文件选择器；选中后把路径回填到对应输入框并提示识别结果。
+    fn choose_file(
+        input: Entity<InputState>,
+        prompt: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let target_window = window.window_handle();
+        let dialog = cx.entity().downgrade();
+        let future = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(prompt.into()),
+        });
+        window
+            .spawn(cx, async move |cx| {
+                if let Ok(Ok(Some(paths))) = future.await
+                    && let Some(path) = paths.into_iter().next()
+                {
+                    let value = path.to_string_lossy().to_string();
+                    let note = if is_sqlite_database(&path) {
+                        format!("已选择数据库：{value}")
+                    } else {
+                        format!("已选择文件：{value}")
+                    };
+                    let _ = cx.update(|_view, cx: &mut App| {
+                        let _ = cx.update_window(target_window, |_, window, cx| {
+                            input.update(cx, |state, cx| {
+                                state.set_value(value.clone(), window, cx);
+                            });
+                            window.refresh();
+                        });
+                        let _ = dialog.update(cx, |this, cx| {
+                            this.status = Some(SharedString::from(note));
+                            this.status_ok = true;
+                            cx.notify();
+                        });
+                    });
+                }
+                Ok::<(), anyhow::Error>(())
+            })
+            .detach();
     }
 
     fn finish(
@@ -165,9 +255,15 @@ impl ImportDialog {
     }
 
     fn render_full_product(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let hint = match &self.detected {
-            Some(path) => format!("已检测到全量产品数据库：{}", path.display()),
-            None => "未自动检测到全量产品数据库。若已卸载全量版，可在「迁移包」页选择其 one-hub.db 路径。".to_string(),
+        let (hint, muted_hint) = match &self.detected {
+            Some(path) => (
+                format!("已自动识别全量产品数据库：{}", path.display()),
+                "如果这不是你要迁移的库（比如换机、便携版或多套数据目录），点「选择文件…」重新指定。",
+            ),
+            None => (
+                "未自动识别到全量产品数据库。".to_string(),
+                "点「选择文件…」定位全量产品的 one-hub.db：macOS/Linux 通常在 ~/.config/navop/one-hub.db，Windows 在 %APPDATA%\\navop\\one-hub.db。",
+            ),
         };
         v_flex()
             .gap_3()
@@ -177,6 +273,25 @@ impl ImportDialog {
                     .text_color(cx.theme().muted_foreground)
                     .child(hint),
             )
+            .child(div().text_sm().child("全量产品数据库路径"))
+            .child(
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(div().flex_1().min_w_0().child(Input::new(&self.db_input)))
+                    .child(
+                        Button::new("import-choose-db-file")
+                            .label("选择文件…")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                Self::choose_file(
+                                    this.db_input.clone(),
+                                    DB_PICKER_PROMPT,
+                                    window,
+                                    cx,
+                                );
+                            })),
+                    ),
+            )
             .child(
                 Button::new("import-full-product")
                     .primary()
@@ -184,6 +299,12 @@ impl ImportDialog {
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.import_full_product(window, cx);
                     })),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(muted_hint),
             )
             .child(
                 div()
@@ -203,12 +324,30 @@ impl ImportDialog {
                     .items_center()
                     .child(div().flex_1().min_w_0().child(Input::new(&self.path_input)))
                     .child(
+                        Button::new("import-choose-bundle-file")
+                            .label("选择文件…")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                Self::choose_file(
+                                    this.path_input.clone(),
+                                    BUNDLE_PICKER_PROMPT,
+                                    window,
+                                    cx,
+                                );
+                            })),
+                    )
+                    .child(
                         Button::new("import-from-file")
                             .label("从文件导入")
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.import_file(window, cx);
                             })),
                     ),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("支持迁移包 .json，也支持直接选择全量产品的 one-hub.db（按文件头自动识别）。"),
             )
             .child(div().mt_2().text_sm().child("或粘贴迁移包 JSON"))
             .child(Textarea::new(&self.json_input).h(px(180.0)))

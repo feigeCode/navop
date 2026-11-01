@@ -1246,6 +1246,20 @@ cargo run -p navop-data   # Data
 - 「从全量产品导入连接」入口：新建连接下拉菜单里对独立产品展示
   （`Home.import_from_full_product` → `app_kit::import::open_import_dialog`），
   设置页「迁移」组同样只在独立产品展示。
+- 导入弹窗的源库定位（`crates/app_kit/src/import/`）：自动探测
+  （`sqlite::full_product_candidates` 覆盖 `~/.config`、
+  `~/Library/Application Support`、`%APPDATA%`、`~/.local/share` 与
+  `~/.navop-dev` 的开发目录）只是便利，真正的兜底是「选择文件…」原生
+  选择器 + 可编辑路径输入框：
+  - 两个页签都先按文件头判断源文件（`is_sqlite_database` 读 16 字节
+    `SQLite format 3\0`）：SQLite 库走全量产品只读迁移，其余按迁移包
+    JSON 解析，所以「迁移包」页也能直接选 `one-hub.db`，改名或无扩展名
+    都不影响；
+  - 手写路径支持 `~`、`file://` 与 Windows `%VAR%`（`expand_source_path`），
+    从 Finder / 资源管理器复制来的带引号路径也能读通；
+  - 探测在多个候选之间优先选真正带连接的那个库
+    （`sqlite::pick_candidate`）：全量产品目录里可能残留刚被独立产品
+    初始化出来的空库，只按「能读通」判断会导入 0 条连接。
 
 ### 22.3 数据隔离
 

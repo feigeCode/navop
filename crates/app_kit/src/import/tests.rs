@@ -46,3 +46,43 @@ fn broken_params_json_is_rejected_before_writing() {
     };
     assert!(validate_params(&ok).is_ok());
 }
+
+#[test]
+fn expands_tilde_quotes_and_scheme_in_source_path() {
+    let Some(home) = dirs::home_dir() else {
+        return;
+    };
+    assert_eq!(
+        expand_source_path("~/Desktop/one-hub.db"),
+        home.join("Desktop/one-hub.db")
+    );
+    assert_eq!(
+        expand_source_path("  ~/Desktop/one-hub.db  "),
+        home.join("Desktop/one-hub.db")
+    );
+    assert_eq!(
+        expand_source_path("\"~/Desktop/one-hub.db\""),
+        home.join("Desktop/one-hub.db")
+    );
+    assert_eq!(
+        expand_source_path("file:///tmp/navop-connections.json"),
+        PathBuf::from("/tmp/navop-connections.json")
+    );
+    assert_eq!(expand_source_path("~"), home);
+}
+
+#[test]
+fn keeps_absolute_and_unknown_variable_paths() {
+    let absolute = PathBuf::from("/tmp/navop-connections.json");
+    assert_eq!(expand_source_path("/tmp/navop-connections.json"), absolute);
+    // 未定义的变量原样保留，避免把 `%VAR%` 吞成空路径。
+    assert_eq!(
+        expand_source_path("%NAVOP_TESTS_UNSET_VAR%\\one-hub.db"),
+        PathBuf::from("%NAVOP_TESTS_UNSET_VAR%\\one-hub.db")
+    );
+    // 只有前缀是 `~` 才算 home，`~user` 之类不动。
+    assert_eq!(
+        expand_source_path("~someone/db"),
+        PathBuf::from("~someone/db")
+    );
+}
