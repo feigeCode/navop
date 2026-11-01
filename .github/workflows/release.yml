@@ -1051,7 +1051,6 @@ jobs:
             -f tag="$RELEASE_TAG" \
             -f channel="$CHANNEL"
 
-          gh workflow run sync-cnb-release-assets.yml \
-            --repo "$GITHUB_REPOSITORY" \
-            --ref main \
-            -f tag="$RELEASE_TAG"
+          # CNB 镜像同步不在这里派发：它只同步 GitHub Release 资产，必须等
+          # upload-r2.yml 把 feed-*.json 写回 Release 之后再跑，所以由
+          # upload-r2.yml 的最后一步派发 sync-cnb-release-assets.yml。

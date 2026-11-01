@@ -20,6 +20,7 @@ use crate::settings::tool_exposure_settings::{
     agent_tool_exposure_setting_group, mcp_tool_exposure_setting_group,
 };
 use crate::settings::update_channel::{beta_exit_notice_item, update_channel_item};
+use crate::settings::update_mirror::update_mirror_item;
 use crate::update;
 use font_kit::{file_type::FileType, font::Font};
 use gpui::http_client::{AsyncBody, Method, Request};
@@ -1989,6 +1990,8 @@ fn about_update_setting_group(
         .description(t!("Settings.About.Update.auto_update_desc").to_string()),
         // 稳定/测试通道选择：切到测试通道会先弹确认框
         update_channel_item(),
+        // 镜像源偏好：选中的源排第一，失败仍会回退到其余镜像
+        update_mirror_item(),
     ];
     // 只有预发布构建才可能「在用 beta 却选了稳定通道」，稳定性构建不放这条提示。
     if crate::settings::update_channel::current_build_is_prerelease() {
@@ -4069,6 +4072,10 @@ mod tests {
         assert!(
             group.contains("beta_exit_notice_item()"),
             "更新分组缺少预发布构建的退出测试提示"
+        );
+        assert!(
+            group.contains("update_mirror_item()"),
+            "更新分组缺少镜像源下拉入口"
         );
     }
 

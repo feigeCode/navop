@@ -163,7 +163,7 @@ fn feed_url(base: &str, identity: &AppIdentity, channel: UpdateChannel) -> Optio
     ))
 }
 
-fn is_legacy_full(identity: &AppIdentity) -> bool {
+pub(super) fn is_legacy_full(identity: &AppIdentity) -> bool {
     identity.app_id == LEGACY_FULL_APP_ID
 }
 

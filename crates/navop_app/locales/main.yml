@@ -5033,6 +5033,34 @@ Settings:
         en: You are running a beta build while the stable channel is selected. It keeps working, and the next stable release will replace it - no rollback needed.
         zh-CN: 当前运行的是测试版，但已选择稳定通道。这个版本可以继续使用，下个正式发布会自动覆盖它，无需手动回退。
         zh-HK: 目前執行的是測試版，但已選擇穩定通道。這個版本可以繼續使用，下個正式發佈會自動覆蓋它，無需手動回退。
+      mirror:
+        en: Update Mirror
+        zh-CN: 更新镜像源
+        zh-HK: 更新鏡像源
+      mirror_desc:
+        en: Applies to update checks and extension downloads. The chosen mirror is tried first and the rest follow as fallbacks, so a slow or blocked mirror never stops the download.
+        zh-CN: 同时作用于检查更新与扩展下载。选中的镜像源会优先尝试，其余镜像仍作为回退依次尝试，所以某个源变慢或被墙都不会让下载失败。
+        zh-HK: 同時作用於檢查更新與擴展下載。選中的鏡像源會優先嘗試，其餘鏡像仍作為回退依次嘗試，所以某個源變慢或被牆都不會讓下載失敗。
+      mirror_auto:
+        en: Auto (recommended)
+        zh-CN: 自动（推荐）
+        zh-HK: 自動（推薦）
+      mirror_cloudflare:
+        en: Cloudflare
+        zh-CN: Cloudflare
+        zh-HK: Cloudflare
+      mirror_github:
+        en: GitHub
+        zh-CN: GitHub
+        zh-HK: GitHub
+      mirror_cnb:
+        en: CNB
+        zh-CN: CNB
+        zh-HK: CNB
+      switched_mirror:
+        en: Update mirror switched, checking for updates...
+        zh-CN: 已切换更新镜像源，正在检查更新...
+        zh-HK: 已切換更新鏡像源，正在檢查更新...
       check_now:
         en: Check for Updates
         zh-CN: 检查更新

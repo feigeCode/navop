@@ -13,9 +13,12 @@ on:
         default: ""
         type: string
 
+# actions: write 用于在最后派发 sync-cnb-release-assets.yml；contents: write
+# 用于把更新清单以 feed-*.json 资产名回写到本次 GitHub Release（CNB 镜像只
+# 同步 Release 资产，这是 CNB 侧唯一能匿名直接 GET 的清单位置）。
 permissions:
-  actions: read
-  contents: read
+  actions: write
+  contents: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ inputs.tag }}
@@ -494,6 +497,54 @@ jobs:
           upload_object "artifacts/updates/navop-shell/shell/latest.json" "${shell_manifest_key}" "application/json; charset=utf-8" "no-store, max-age=0"
           upload_object "artifacts/updates/navop-data/data/latest.json" "${data_manifest_key}" "application/json; charset=utf-8" "no-store, max-age=0"
 
+          # 稳定发布时把同一份稳定清单再写一遍 beta 键位。原因：beta 客户端只
+          # 读 beta 清单，不写这里它就永远停在最后一个 beta，收不到新的正式版。
+          # stable 自己的两个键位（上面的 ${manifest_key} 等）原有写入不动。
+          if [ "${CHANNEL}" = "stable" ]; then
+            upload_object "artifacts/updates/latest.json" "updates/beta/latest.json" "application/json; charset=utf-8" "no-store, max-age=0"
+            upload_object "artifacts/updates/navop-shell/shell/latest.json" "updates/navop-shell/shell/beta/latest.json" "application/json; charset=utf-8" "no-store, max-age=0"
+            upload_object "artifacts/updates/navop-data/data/latest.json" "updates/navop-data/data/beta/latest.json" "application/json; charset=utf-8" "no-store, max-age=0"
+          fi
+
+      # 更新清单同时以扁平资产名（feed-*.json）回写到本次 GitHub Release。
+      # CNB 镜像（sync-cnb-release-assets.yml）只同步 GitHub Release 资产，CNB
+      # 仓库文件的 raw 直链对匿名不可用，所以这些 Release 资产就是 CNB 侧唯一
+      # 能直接 GET 的更新清单。
+      - name: Publish update feed assets for mirrors
+        if: ${{ steps.r2_config.outputs.skip != 'true' && steps.release.outputs.skip != 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          CHANNEL: ${{ steps.release.outputs.channel }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/feed
+
+          if [ "${CHANNEL}" = "stable" ]; then
+            cp artifacts/updates/latest.json artifacts/feed/feed-navop.json
+            cp artifacts/updates/navop-shell/shell/latest.json artifacts/feed/feed-navop-shell.json
+            cp artifacts/updates/navop-data/data/latest.json artifacts/feed/feed-navop-data.json
+            # 稳定通道额外发一份 feed-<product>-beta.json，内容与稳定清单完全
+            # 相同。原因：beta 客户端只读 beta 清单/资产，不发这份它永远停在
+            # 最后一个 beta，收不到新的正式版。
+            cp artifacts/updates/latest.json artifacts/feed/feed-navop-beta.json
+            cp artifacts/updates/navop-shell/shell/latest.json artifacts/feed/feed-navop-shell-beta.json
+            cp artifacts/updates/navop-data/data/latest.json artifacts/feed/feed-navop-data-beta.json
+          else
+            # beta 通道只发 beta 命名的资产：不带 -beta 的稳定资产名属于稳定
+            # Release，beta 不该占用它们。
+            cp artifacts/updates/latest.json artifacts/feed/feed-navop-beta.json
+            cp artifacts/updates/navop-shell/shell/latest.json artifacts/feed/feed-navop-shell-beta.json
+            cp artifacts/updates/navop-data/data/latest.json artifacts/feed/feed-navop-data-beta.json
+          fi
+
+          ls -l artifacts/feed
+          # --clobber：同一个 tag 的修复重跑要能覆盖上一次的 feed 资产。
+          gh release upload "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber \
+            artifacts/feed/*.json
+
       # 桶里只留这次上传的版本：旧安装包在 R2 上只占空间，下载入口都不依赖它们
       # —— updates/latest.json 只指向本次 tag，旧版本另有 GitHub Release 与 CNB
       # 镜像作为存档。这一步必须待在上传与逐对象校验之后，且不能加 always()：
@@ -602,3 +653,19 @@ jobs:
           done
 
           echo "R2 now keeps ${keep_tags}(under ${prefix}/)"
+
+      # CNB 镜像只同步 GitHub Release 资产，所以必须先有上一步回写的 feed-*.json
+      # 资产再同步，否则 CNB 侧拿不到可直接 GET 的更新清单。派发原先在
+      # release.yml 末尾，与本 workflow 并发，可能在 feed 资产就位之前就跑完；
+      # 现在挪到这里，顺序有保证。
+      - name: Dispatch CNB release asset sync
+        if: ${{ steps.r2_config.outputs.skip != 'true' && steps.release.outputs.skip != 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh workflow run sync-cnb-release-assets.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref main \
+            -f tag="$RELEASE_TAG"

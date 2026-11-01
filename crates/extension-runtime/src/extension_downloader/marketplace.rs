@@ -4,8 +4,11 @@ use semver::{Version, VersionReq};
 use serde::{Deserialize, Deserializer, Serialize, de::Error};
 use serde_json::Value;
 
+use one_core::settings::UpdateMirror;
+
 use crate::extension::ExtensionKind;
 use crate::extension::manifest::current_host_version;
+use crate::mirror::{cnb_release_download_url, extension_mirror, ordered_mirror_candidates};
 
 const EXTENSION_RELEASE_MANIFEST_FILE: &str = "extension-manifest.json";
 const DEFAULT_GITHUB_RELEASE_DOWNLOAD_BASE: &str =
@@ -104,23 +107,21 @@ impl MarketplaceEntry {
 
         let github_url =
             self.github_download_url(&artifact.file, manifest_url, github_manifest_url);
-        let mut urls = Vec::new();
-        if is_github_release_download_url(manifest_url) {
-            push_unique(&mut urls, github_url);
+        let cnb_url = github_url.as_deref().and_then(cnb_release_download_url);
+        // manifest 本身来自 GitHub Release 时没有 R2 主路径，只剩镜像地址。
+        let primary_url = if is_github_release_download_url(manifest_url) {
+            None
         } else {
             let primary_path = if self.is_extension_manifest_url(manifest_url) {
                 format!("{}/{}", self.version, artifact.file)
             } else {
                 format!("{}/{}/{}", self.id, self.version, artifact.file)
             };
-            push_unique(
-                &mut urls,
-                Some(resolve_asset_url(manifest_url, &primary_path)),
-            );
-            push_unique(&mut urls, github_url);
-        }
+            Some(resolve_asset_url(manifest_url, &primary_path))
+        };
 
-        self.resolved_download_urls = urls;
+        self.resolved_download_urls =
+            ordered_mirror_candidates(extension_mirror(), [primary_url, github_url, cnb_url]);
         self.resolved_sha256 = artifact.sha256.clone();
     }
 
@@ -249,7 +250,15 @@ impl MarketplaceEntry {
     pub(crate) fn extension_manifest_urls(&self) -> Vec<String> {
         let mut urls = self.resolved_manifest_urls.clone();
         push_unique(&mut urls, self.extension_manifest_url());
-        push_unique(&mut urls, self.github_extension_manifest_url());
+        let github_url = self.github_extension_manifest_url();
+        let cnb_url = github_url.as_deref().and_then(cnb_release_download_url);
+        if extension_mirror() == UpdateMirror::Cnb {
+            push_unique(&mut urls, cnb_url);
+            push_unique(&mut urls, github_url);
+        } else {
+            push_unique(&mut urls, github_url);
+            push_unique(&mut urls, cnb_url);
+        }
         urls
     }
 

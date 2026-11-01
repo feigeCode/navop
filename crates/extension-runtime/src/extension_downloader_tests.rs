@@ -559,3 +559,52 @@ fn write_composite_manifest(dir: &std::path::Path, id: &str, permission: &str) {
     )
     .unwrap();
 }
+
+#[test]
+fn resolved_download_urls_include_the_cnb_mirror() {
+    let manifest: MarketplaceManifest = serde_json::from_str(
+        r#"{
+            "schema_version": 2,
+            "release_version": "2026.11",
+            "extensions": [{
+                "id": "clickhouse",
+                "kind": "database_driver",
+                "name": "ClickHouse",
+                "version": "0.1.0",
+                "release_tag": "clickhouse-v0.1.0",
+                "description": "ClickHouse driver",
+                "artifacts": {
+                    "universal": {
+                        "file": "clickhouse-driver-aarch64-apple-darwin.tar.gz",
+                        "sha256": "abc"
+                    }
+                }
+            }]
+        }"#,
+    )
+    .unwrap();
+    let mut entries = manifest.into_entries();
+    entries[0].resolve_downloads_for_test(
+        "https://cdn.example.test/updates/extensions/manifest.json",
+        "https://github.com/feigeCode/navop-extensions/releases/download/clickhouse-v0.1.0/extension-manifest.json",
+    );
+
+    let urls = entries[0].download_urls();
+    assert!(
+        urls.iter()
+            .any(|url| url.starts_with("https://cnb.cool/navop-dev/navop-extensions/")),
+        "候选地址里应带 CNB 镜像: {urls:?}"
+    );
+    assert!(
+        urls.iter()
+            .any(|url| url.contains("github.com/feigeCode/navop-extensions")),
+        "候选地址里应保留 GitHub 镜像: {urls:?}"
+    );
+    assert_eq!(
+        entries[0].asset_url().as_deref(),
+        Some(
+            "https://cdn.example.test/updates/extensions/clickhouse/0.1.0/clickhouse-driver-aarch64-apple-darwin.tar.gz"
+        ),
+        "默认（自动）仍优先 R2"
+    );
+}

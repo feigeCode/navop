@@ -22,6 +22,7 @@ pub mod global;
 #[cfg(any(feature = "database", feature = "remote-desktop"))]
 mod install_flow;
 pub mod language_extensions;
+mod mirror;
 mod registration;
 #[cfg(feature = "remote-desktop")]
 pub mod remote_desktop_provider_install;
@@ -33,6 +34,7 @@ pub use extension_view_host::MainExtensionViewHost;
 #[cfg(feature = "wasm-components")]
 pub use extension_wasm::{DocumentRenderArtifact, DocumentRenderRequest, DocumentRenderTheme};
 pub use global::{GlobalExtensionRuntimeCatalog, global_catalog, refresh_global_runtime_catalog};
+pub use mirror::{extension_mirror, set_extension_mirror};
 pub use types::{
     RegisteredDocumentExporter, RegisteredIpcRuntimeBinding, RegisteredRemoteFileEditorCommand,
     RegisteredRemoteFileEditorContribution, RegisteredResourceConnectionContribution,
