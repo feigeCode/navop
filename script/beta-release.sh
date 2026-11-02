@@ -167,7 +167,7 @@ read_manifest_version() {
 }
 
 read_lock_version() {
-  local package_name="${1:-main}"
+  local package_name="${1:-navop_app}"
   awk -v want="${package_name}" '
     /^\[\[package\]\]$/ { in_package = 1; name = ""; next }
     in_package && /^name = "/ { split($0, parts, "\""); name = parts[2] }
@@ -188,10 +188,10 @@ for app_manifest in "${APP_MANIFESTS[@]}"; do
     die "无法从 ${app_manifest} 读取 [package].version。"
   fi
   if [[ "${app_version}" != "${current_version}" ]]; then
-    die "统一版本校验失败：${app_manifest} 为 ${app_version}，main 为 ${current_version}。请先手动对齐再发 beta。"
+    die "统一版本校验失败：${app_manifest} 为 ${app_version}，navop_app 为 ${current_version}。请先手动对齐再发 beta。"
   fi
 done
-echo "统一版本校验通过：main 与三个 app crate 均为 ${current_version}"
+echo "统一版本校验通过：navop_app 与三个 app crate 均为 ${current_version}"
 
 # 2. 计算目标版本。
 if [[ "${NEXT}" == "true" ]]; then
@@ -248,7 +248,7 @@ if [[ "${DRY_RUN}" == "true" ]]; then
   for app_manifest in "${APP_MANIFESTS[@]}"; do
     echo "     - ${app_manifest}"
   done
-  echo "  2. ${LOCKFILE}: 同步 main 与三个 app 包版本到 ${VERSION}"
+  echo "  2. ${LOCKFILE}: 同步 navop_app 与三个 app 包版本到 ${VERSION}"
   echo "  3. CHANGELOG.md: python3 script/changelog.py upsert --tag ${TAG} --date $(date +%F) --notes-file ${NOTES_FILE} --changelog ${CHANGELOG}"
   echo "  4. git add 四个 manifest ${LOCKFILE} ${CHANGELOG}"
   echo "  5. git commit -m \"chore(release): 发布 ${TAG} 测试版\""
@@ -262,7 +262,7 @@ if [[ "${DRY_RUN}" == "true" ]]; then
   exit 0
 fi
 
-# 5. 改写 main 与三个 app crate 的 [package].version（统一版本）。
+# 5. 改写 navop_app 与三个 app crate 的 [package].version（统一版本）。
 for bump_manifest in "${MAIN_MANIFEST}" "${APP_MANIFESTS[@]}"; do
 python3 - "${bump_manifest}" "${VERSION}" <<'PY'
 import re
@@ -295,12 +295,10 @@ manifest_path.write_text("".join(lines), encoding="utf-8")
 PY
 done
 
-# 6. 同步 Cargo.lock：优先让 cargo 自己刷新，离线失败再精确改写。
-if cargo metadata --offline --no-deps --format-version 1 >/dev/null 2>&1; then
-  echo "Cargo.lock 已通过 cargo metadata 刷新。"
-else
-  echo "警告：cargo metadata --offline 失败，改为精确改写 ${LOCKFILE} 中 main 与三个 app 包的版本。" >&2
-  python3 - "${LOCKFILE}" "${VERSION}" <<'PY'
+# 6. 同步 Cargo.lock：工作区成员的版本由本脚本精确改写。
+# 注意：`cargo metadata --no-deps` 不会重算 lock 里的成员版本，不能靠它；
+# 成员条目没有 checksum，直接改 version 字段是安全的，改完由下面的回读校验兜底。
+python3 - "${LOCKFILE}" "${VERSION}" <<'PY'
 import re
 import sys
 from pathlib import Path
@@ -336,15 +334,14 @@ if missing:
 
 lock_path.write_text("".join(lines), encoding="utf-8")
 PY
-fi
 
-for lock_package in main navop navop-shell navop-data; do
+for lock_package in navop_app navop navop-shell navop-data; do
   lock_version="$(read_lock_version "${lock_package}")"
   if [[ "${lock_version}" != "${VERSION}" ]]; then
     die "${LOCKFILE} 中 ${lock_package} 包版本为 ${lock_version:-<missing>}，未能同步到 ${VERSION}。"
   fi
 done
-echo "Cargo.lock 已同步：main / navop / navop-shell / navop-data -> ${VERSION}"
+echo "Cargo.lock 已同步：navop_app / navop / navop-shell / navop-data -> ${VERSION}"
 
 # 7. 写入 CHANGELOG.md 条目并回读校验（release.yml 硬校验的就是这条）。
 python3 script/changelog.py upsert \
