@@ -174,6 +174,64 @@ pub(crate) fn register(
         });
     }
     register_capability_plane(channel, &abi, &session);
+    register_workbench(channel, &abi, &session);
+}
+
+/// 资源工作台嵌入页的通道：`current()` 是纯读，`dispatch` 要等 provider。
+fn register_workbench(
+    channel: &HostChannel,
+    abi: &Arc<HostAbi>,
+    session: &Arc<super::session::NshSession>,
+) {
+    if !abi.has_module("navop.workbench") {
+        return;
+    }
+    let abi_for_current = Arc::clone(abi);
+    let session_for_current = Arc::clone(session);
+    channel.handle("navop.workbench.current", move |call| {
+        let session = Arc::clone(&session_for_current);
+        respond(call, &abi_for_current, |_| {
+            session.workbench_current().map_err(capability_failure)
+        });
+    });
+    let abi_for_dispatch = Arc::clone(abi);
+    let session_for_dispatch = Arc::clone(session);
+    channel.handle("navop.workbench.dispatch", move |call| {
+        let data = call.data().clone();
+        let Some(reply) = call.into_reply() else {
+            return;
+        };
+        if abi_for_dispatch.cancelled() {
+            reject(reply, cancelled());
+            return;
+        }
+        let operation = payload_str(&data, "operationId");
+        let input = data.get("input").cloned().unwrap_or(Value::Null);
+        // `dispatch(op, input, { confirmed })`；也接受旧的裸 `confirmed` 字段。
+        let confirmed = data
+            .get("options")
+            .and_then(|options| options.get("confirmed"))
+            .or_else(|| data.get("confirmed"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let cancel = session_for_dispatch.call_token();
+        let session = Arc::clone(&session_for_dispatch);
+        session.tokio().spawn(async move {
+            let Some(operation) = operation else {
+                reject(
+                    reply,
+                    invalid_argument("navop.workbench.dispatch 需要 operationId 参数"),
+                );
+                return;
+            };
+            settle(
+                reply,
+                session
+                    .workbench_dispatch(&operation, input, confirmed, cancel)
+                    .await,
+            );
+        });
+    });
 }
 
 /// 能力平面（provider 侧资源）的 handler。

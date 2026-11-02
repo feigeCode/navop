@@ -11,6 +11,7 @@
 mod abi;
 mod bundle;
 mod opener;
+mod page_host;
 mod session;
 mod tab;
 mod theme;
@@ -94,6 +95,9 @@ impl NshHost {
 pub fn init(service: UniversalPluginService, cx: &mut App) {
     let host = NshHost::new(service);
     extension_view::register_shell_view_opener(Rc::new(host.clone()), cx);
+    // 同一份宿主也接嵌入页：资源工作台里的 nsh 页面走的还是这套
+    // session/ABI，只是主资源是借来的。
+    page_host::install(host.clone(), cx);
     cx.set_global(host);
 }
 
