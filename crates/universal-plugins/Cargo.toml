@@ -19,6 +19,10 @@ extension_view.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true
 gpui-shell = { workspace = true, optional = true }
+nsh-platform-gpui = { workspace = true, optional = true }
+# 页面 bundle 的能力声明（能力白名单）走 nsh-core 的 Capabilities 解析；
+# nsh-platform-gpui 没有重导出它。
+nsh-core = { workspace = true, optional = true }
 one-core.workspace = true
 resource_view.workspace = true
 rust-i18n.workspace = true
@@ -35,6 +39,10 @@ tempfile = "3"
 [features]
 default = []
 shell-plugins = ["dep:gpui-shell"]
+# M2 spike：nsh 扩展宿主（AppView）接线，方案见
+# docs/extension-resource-plugins/nsh-migration-plan.md。
+# build.rs 也随本 feature 打 spike bundle（optional build-deps）。
+nsh-spike = ["dep:nsh-platform-gpui", "dep:nsh-core"]
 
 [lints]
 workspace = true

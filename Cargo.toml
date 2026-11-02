@@ -97,6 +97,14 @@ gpui-shell = { git = "https://github.com/feigeCode/gpui-kit", rev = "62035f8de4b
 gpui-webview = { git = "https://github.com/feigeCode/gpui-kit", rev = "62035f8de4b8f6524a76eeb3cbb0a168d3183c35" }
 gpui-kit = { git = "https://github.com/feigeCode/gpui-kit", rev = "62035f8de4b8f6524a76eeb3cbb0a168d3183c35", features = ["gpui-fast"] }
 
+# nsh GPUI 后端（AppView）：扩展 UI 平面迁往 nsh 宿主形态（方案见
+# docs/extension-resource-plugins/nsh-migration-plan.md）。钉到 fork 的
+# navop/gpui-0.1.12 分支（已按同一 [patch.crates-io] 块对齐 gpui-fast 0.1.12），
+# 只开 js（QuickJS 引擎），不带 webview/video 等重组件。
+nsh-platform-gpui = { git = "https://github.com/feigeCode/nsh", branch = "navop/gpui-0.1.12", default-features = false, features = ["js"] }
+# 能力声明（Capabilities）解析用；nsh-platform-gpui 不重导出它。
+nsh-core = { git = "https://github.com/feigeCode/nsh", branch = "navop/gpui-0.1.12" }
+
 gpui = { package = "gpui-fast", version = "0.1" }
 gpui_platform = { package = "gpui-fast-platform", version = "0.1", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
 gpui_macros = { package = "gpui-fast-macros", version = "0.1" }

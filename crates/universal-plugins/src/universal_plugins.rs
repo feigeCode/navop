@@ -625,6 +625,20 @@ pub fn init(cx: &mut gpui::App) {
             Err(error) => tracing::warn!(%error, "failed to initialize gpui-shell host"),
         }
     }
+    // M2 spike：nsh 宿主 opener。两者都占用 GlobalShellViewOpener，所以默认
+    // 让位给 gpui-shell（现行机制）；只有 no-shell-plugins 的构建，或显式
+    // `NAVOP_NSH_SPIKE=1` 的冒烟运行时，才由 nsh 宿主接管（后者在
+    // gpui-shell 之后注册，也就是覆盖）。
+    #[cfg(feature = "nsh-spike")]
+    {
+        #[cfg(feature = "shell-plugins")]
+        let take_over = std::env::var_os("NAVOP_NSH_SPIKE").is_some();
+        #[cfg(not(feature = "shell-plugins"))]
+        let take_over = true;
+        if take_over {
+            crate::nsh_spike::init(cx);
+        }
+    }
 
     // RuntimeMonitor::start must be called from the Tokio runtime. Starting it
     // through a spawned task also keeps startup off the GPUI foreground thread.

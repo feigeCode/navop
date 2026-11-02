@@ -160,6 +160,8 @@ github-updates = ["app_kit/github-updates"]
 macos-touchbar-window-hide = ["one-core/macos-touchbar-window-hide"]
 screenshot-safe = []
 shell-plugins = ["universal-plugins/shell-plugins"]
+# M2 spike：挂一个 nsh AppView tab（nsh 扩展宿主方向验证），默认不开。
+nsh-spike = ["universal-plugins/nsh-spike"]
 wasm-components = ["extension-runtime/wasm-components"]
 windows-native-rdp = ["remote_desktop_view?/windows-native-rdp"]
 
