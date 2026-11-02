@@ -10,12 +10,16 @@
 
 mod abi;
 mod bundle;
+mod dev;
+mod dispatch;
+mod grant;
 mod opener;
 mod page_host;
 mod session;
 mod tab;
 mod theme;
 
+pub use dev::{DevOps, set_dev_ops};
 pub use tab::NshTab;
 
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
@@ -38,17 +42,25 @@ pub struct NshHost {
     service: UniversalPluginService,
     trust: Trust,
     tabs: Tabs,
+    /// 引擎线程 → 主线程的桥（`navop.dev` 这类要碰 GPUI 全局的操作走它）。
+    dispatcher: dispatch::MainThread,
 }
 
 impl Global for NshHost {}
 
 impl NshHost {
-    fn new(service: UniversalPluginService) -> Self {
+    fn new(service: UniversalPluginService, dispatcher: dispatch::MainThread) -> Self {
         Self {
             service,
             trust: bundle::trust_store(),
             tabs: Rc::new(RefCell::new(HashMap::new())),
+            dispatcher,
         }
+    }
+
+    /// 主线程桥的句柄。
+    pub(crate) fn dispatcher(&self) -> dispatch::MainThread {
+        self.dispatcher.clone()
     }
 
     /// 目录里登记的 shell view（manifest 的 `contributes.shellViews`）。
@@ -93,7 +105,7 @@ impl NshHost {
 /// 调用点保证与 gpui-shell 宿主互斥：两个宿主都往 `GlobalShellViewOpener`
 /// 里放实现，后注册的覆盖先注册的。
 pub fn init(service: UniversalPluginService, cx: &mut App) {
-    let host = NshHost::new(service);
+    let host = NshHost::new(service, dispatch::MainThread::new(cx));
     extension_view::register_shell_view_opener(Rc::new(host.clone()), cx);
     // 同一份宿主也接嵌入页：资源工作台里的 nsh 页面走的还是这套
     // session/ABI，只是主资源是借来的。
@@ -138,6 +150,7 @@ fn open_view(
                     contribution,
                     host_for_tab.service.clone(),
                     host_for_tab.trust().clone(),
+                    host_for_tab.dispatcher(),
                     cx,
                 );
                 host_for_tab.track(&extension_id, tab.downgrade());
@@ -239,7 +252,13 @@ mod tests {
         // 台子不碰真实数据目录：开发形态不需要信任库。
         let trust: Trust = Rc::new(RefCell::new(nsh_platform_gpui::package::TrustStore::new()));
         let tab = context.update(|_window, cx| {
-            let tab = NshTab::open(fixture_contribution(), service, trust, cx);
+            let tab = NshTab::open(
+                fixture_contribution(),
+                service,
+                trust,
+                dispatch::MainThread::new(cx),
+                cx,
+            );
             let tab_ref = tab.read(cx);
             assert_eq!(tab_ref.extension_id(), "dev.navop.nsh-host-test");
             assert_eq!(tab_ref.view_id(), "self-check");

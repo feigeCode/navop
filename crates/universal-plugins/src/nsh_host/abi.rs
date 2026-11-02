@@ -122,6 +122,7 @@ pub(crate) fn register(
     channel: &HostChannel,
     abi: Arc<HostAbi>,
     session: Arc<super::session::NshSession>,
+    dispatcher: &super::dispatch::MainThread,
 ) {
     if abi.has_module("navop.context") {
         let abi_for_current = Arc::clone(&abi);
@@ -175,6 +176,142 @@ pub(crate) fn register(
     }
     register_capability_plane(channel, &abi, &session);
     register_workbench(channel, &abi, &session);
+    register_dev(channel, &abi, &session, dispatcher);
+}
+
+/// 开发者工具的能力：`navop.dev.*`。
+///
+/// 这些操作都要读写 GPUI 全局（注册表、窗口、文件选择器），所以在引擎
+/// 线程上只做参数搬运，真正的执行投到主线程（[`super::dispatch`]）。
+fn register_dev(
+    channel: &HostChannel,
+    abi: &Arc<HostAbi>,
+    session: &Arc<super::session::NshSession>,
+    dispatcher: &super::dispatch::MainThread,
+) {
+    if !abi.has_module("navop.dev") {
+        return;
+    }
+    for (name, op) in DEV_OPS {
+        let abi_for = Arc::clone(abi);
+        let session = Arc::clone(session);
+        let dispatcher = dispatcher.clone();
+        channel.handle(name, move |call| {
+            let data = call.data().clone();
+            let Some(reply) = call.into_reply() else {
+                return;
+            };
+            if abi_for.cancelled() {
+                reject(reply, cancelled());
+                return;
+            }
+            // 参数都在这里取成拥有所有权的字符串：闭包要跨线程。
+            let first = payload_str(&data, "root")
+                .or_else(|| payload_str(&data, "extensionId"))
+                .or_else(|| data.as_str().map(str::to_owned));
+            let second = payload_str(&data, "viewId");
+            let tail = payload_u32(&data, "tail").unwrap_or(200) as usize;
+            let dispatcher = dispatcher.clone();
+            session.tokio().spawn(async move {
+                let (first, second) = match op.arguments() {
+                    Arguments::None => (String::new(), String::new()),
+                    Arguments::One => match first {
+                        Some(first) => (first, String::new()),
+                        None => {
+                            reject(reply, invalid_argument(format!("{name} 需要参数")));
+                            return;
+                        }
+                    },
+                    Arguments::Two => match first.zip(second) {
+                        Some((first, second)) => (first, second),
+                        None => {
+                            reject(reply, invalid_argument(format!("{name} 需要两个参数")));
+                            return;
+                        }
+                    },
+                };
+                settle_dev(
+                    reply,
+                    dispatcher
+                        .run(move |cx| op.run(cx, &first, &second, tail))
+                        .await,
+                );
+            });
+        });
+    }
+}
+
+/// `navop.dev` 的全部操作：名字、参数个数、执行方式钉在一处，
+/// 注册与执行就不会各写一遍。
+const DEV_OPS: [(&str, DevOp); 9] = [
+    ("navop.dev.list", DevOp::List),
+    ("navop.dev.open", DevOp::Open),
+    ("navop.dev.reload", DevOp::Reload),
+    ("navop.dev.watch", DevOp::Watch),
+    ("navop.dev.remove", DevOp::Remove),
+    ("navop.dev.logs", DevOp::Logs),
+    ("navop.dev.openView", DevOp::OpenView),
+    ("navop.dev.pickDirectory", DevOp::PickStart),
+    ("navop.dev.pickResult", DevOp::PickResult),
+];
+
+#[derive(Clone, Copy)]
+enum Arguments {
+    None,
+    One,
+    Two,
+}
+
+#[derive(Clone, Copy)]
+enum DevOp {
+    List,
+    Open,
+    Reload,
+    Watch,
+    Remove,
+    Logs,
+    OpenView,
+    PickStart,
+    PickResult,
+}
+
+impl DevOp {
+    fn arguments(self) -> Arguments {
+        match self {
+            Self::List | Self::PickStart | Self::PickResult => Arguments::None,
+            Self::Open | Self::Reload | Self::Watch | Self::Remove | Self::Logs => Arguments::One,
+            Self::OpenView => Arguments::Two,
+        }
+    }
+
+    /// 在主线程上执行；用不到的参数是占位。
+    fn run(
+        self,
+        cx: &mut gpui::App,
+        first: &str,
+        second: &str,
+        tail: usize,
+    ) -> Result<Value, String> {
+        match self {
+            Self::List => super::dev::op(cx, |ops| ops.list.clone())?(cx),
+            Self::Open => super::dev::op(cx, |ops| ops.open.clone())?(cx, first),
+            Self::Reload => super::dev::op(cx, |ops| ops.reload.clone())?(cx, first),
+            Self::Watch => super::dev::op(cx, |ops| ops.watch.clone())?(cx, first),
+            Self::Remove => super::dev::op(cx, |ops| ops.remove.clone())?(cx, first),
+            Self::Logs => super::dev::op(cx, |ops| ops.logs.clone())?(cx, first, tail),
+            Self::OpenView => super::dev::op(cx, |ops| ops.open_view.clone())?(cx, first, second),
+            Self::PickStart => super::dev::op(cx, |ops| ops.pick_start.clone())?(cx),
+            Self::PickResult => super::dev::op(cx, |ops| ops.pick_result.clone())?(cx),
+        }
+    }
+}
+
+/// dev 操作的失败只有一句话（没有稳定 code），按参数错误回给页面。
+fn settle_dev(reply: HostReply, result: Result<Value, String>) {
+    match result {
+        Ok(value) => reply.resolve(value),
+        Err(message) => reply.reject(invalid_argument(message).render()),
+    }
 }
 
 /// 资源工作台嵌入页的通道：`current()` 是纯读，`dispatch` 要等 provider。

@@ -97,7 +97,12 @@ impl CustomPageHost for NshHost {
 
         let host_abi = HostAbi::new(&contribution);
         let channel = HostChannel::default();
-        abi::register(&channel, Arc::clone(&host_abi), Arc::clone(&session));
+        abi::register(
+            &channel,
+            Arc::clone(&host_abi),
+            Arc::clone(&session),
+            &self.dispatcher(),
+        );
         let options = nsh_platform_gpui::AppOptions {
             app_id: program.app_id.clone(),
             asset_base: program.asset_base.clone(),

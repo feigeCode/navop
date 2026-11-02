@@ -35,7 +35,7 @@ pub use shell_plugin_host::{
 };
 
 #[cfg(feature = "nsh-host")]
-pub use nsh_host::{NshHost, init as init_nsh_host};
+pub use nsh_host::{DevOps, NshHost, init as init_nsh_host, set_dev_ops};
 
 /// 无 `shell-plugins` 构建里不存在脚本视图，没有东西可刷新。
 ///

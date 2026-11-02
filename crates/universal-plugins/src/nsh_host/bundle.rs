@@ -66,6 +66,17 @@ pub(super) fn load(
     // 开发形态：保留 eval 便于调试（Policy::development 只关 harden），
     // 能力声明照样强制 —— 缺能力在开发期就该暴露，而不是等发布。
     bundle.policy.harden = false;
+    // 宿主上限：页面声明只能在这个范围内生效。缺了它，nsh 会把
+    // "没声明" 读成 `Capabilities::all()`（见 `Policy::access`）。
+    let (granted, skipped) = super::grant::granted(contribution);
+    if !skipped.is_empty() {
+        tracing::warn!(
+            ?skipped,
+            extension = %contribution.extension_id,
+            "这些权限无法翻译成 nsh 能力，已按 fail-closed 丢弃"
+        );
+    }
+    bundle.policy.granted = Some(granted);
     match declared {
         Some(declared) => {
             let (capabilities, dropped) =

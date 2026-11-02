@@ -66,6 +66,8 @@ pub struct NshTab {
     channel: HostChannel,
     /// 能力平面会话：provider 句柄记账与取消。页面关闭即 drop，句柄随之回收。
     session: Option<Arc<NshSession>>,
+    /// 引擎线程 → 主线程的桥（`navop.dev` 这类操作要回主线程跑）。
+    dispatcher: super::dispatch::MainThread,
 }
 
 impl NshTab {
@@ -73,6 +75,7 @@ impl NshTab {
         contribution: extension_runtime::RegisteredShellViewContribution,
         service: crate::UniversalPluginService,
         trust: Trust,
+        dispatcher: super::dispatch::MainThread,
         cx: &mut App,
     ) -> Entity<Self> {
         let title: SharedString = contribution.title.clone().into();
@@ -115,6 +118,7 @@ impl NshTab {
                 _theme,
                 abi: None,
                 session: None,
+                dispatcher,
             }
         });
         tab.update(cx, |tab, cx| tab.start_prepare(cx));
@@ -198,7 +202,12 @@ impl NshTab {
             ..AppOptions::default()
         };
         // 先把能力挂到通道上，再让页面跑起来。
-        abi::register(&self.channel, Arc::clone(&host_abi), Arc::clone(&session));
+        abi::register(
+            &self.channel,
+            Arc::clone(&host_abi),
+            Arc::clone(&session),
+            &self.dispatcher,
+        );
         let view = cx.new(|cx| AppView::new(options, window, cx));
         theme::push(&view, cx);
         // 首帧前只填缓存，不推事件：页面启动时读 `navop.theme.snapshot`
