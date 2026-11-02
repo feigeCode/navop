@@ -262,4 +262,70 @@ mod tests {
             declared.host
         );
     }
+
+    /// 扩展仓里每个已迁移页面的产物都要能被宿主装载。
+    ///
+    /// 这条测试故意做成"扫目录"：M8 每迁完一页，它就自动多覆盖一页，
+    /// 不依赖谁记得往清单里加一行。产物不在（没初始化子模块）时跳过。
+    #[test]
+    fn every_built_page_in_the_extension_repo_loads() {
+        let root =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../navop-extensions/extensions");
+        if !root.is_dir() {
+            eprintln!("跳过：扩展仓不存在（{}）", root.display());
+            return;
+        }
+        let trust = Rc::new(RefCell::new(nsh_platform_gpui::package::TrustStore::new()));
+        let mut loaded = Vec::new();
+        for bundle in dist_bundles(&root) {
+            let program = load(&contribution(bundle.clone()), &trust)
+                .unwrap_or_else(|error| panic!("装载 {} 失败：{error:#}", bundle.display()));
+            assert!(
+                !program.app_id.is_empty(),
+                "{} 的 app_id 来自产物里的 app.json，不能为空",
+                bundle.display()
+            );
+            let nsh_platform_gpui::App::Js(js) = &program.app else {
+                panic!("{} 应当是 JS 程序", bundle.display());
+            };
+            assert!(
+                js.policy
+                    .declared
+                    .as_ref()
+                    .is_some_and(|declared| !declared.host.is_empty()),
+                "{} 没有声明任何 host 能力 —— 页面调不到宿主接口",
+                bundle.display()
+            );
+            loaded.push(program.app_id);
+        }
+        eprintln!("已装载 {} 个页面：{loaded:?}", loaded.len());
+        assert!(!loaded.is_empty(), "扩展仓里应当至少有一个已迁移的页面产物");
+    }
+
+    /// 递归找 `ui/pages/<page>/dist/bundle.js`；不引入 walkdir（只扫三层）。
+    fn dist_bundles(root: &std::path::Path) -> Vec<PathBuf> {
+        let mut found = Vec::new();
+        let Ok(extensions) = std::fs::read_dir(root) else {
+            return found;
+        };
+        for kind in extensions.flatten() {
+            let Ok(entries) = std::fs::read_dir(kind.path()) else {
+                continue;
+            };
+            for extension in entries.flatten() {
+                let pages = extension.path().join("ui/pages");
+                let Ok(pages) = std::fs::read_dir(pages) else {
+                    continue;
+                };
+                for page in pages.flatten() {
+                    let bundle = page.path().join("dist/bundle.js");
+                    if bundle.is_file() {
+                        found.push(bundle);
+                    }
+                }
+            }
+        }
+        found.sort();
+        found
+    }
 }
