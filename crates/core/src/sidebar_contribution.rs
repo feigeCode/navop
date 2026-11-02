@@ -2,7 +2,8 @@ use gpui::{AnyView, App, EntityId, Hsla, Pixels, SharedString, Window};
 use one_assets::IconName;
 use std::sync::Arc;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SidebarPlacement {
     Left,
     Right,

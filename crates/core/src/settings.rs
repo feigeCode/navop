@@ -1,4 +1,5 @@
 use crate::cloud_sync::{GlobalCloudUser, UserInfo};
+use crate::sidebar_contribution::SidebarPlacement;
 use crate::storage::get_config_dir;
 use crate::utils::auto_save_config::AutoSaveConfig;
 use agent_runtime::{
@@ -8,7 +9,7 @@ use gpui::http_client::Url;
 use gpui::{App, Font, FontFallbacks, Global, font, px};
 use gpui_component::{Theme, ThemeMode};
 use serde::{Deserialize, Deserializer, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use tracing::{error, info};
@@ -1362,6 +1363,13 @@ pub struct AppSettings {
     /// 终端左边距展示行号
     #[serde(default)]
     pub terminal_show_line_numbers: bool,
+    /// 终端侧栏各工具面板的停靠位置。
+    ///
+    /// 键是 `SidebarPanel::local_id()`（如 `terminal.ai-chat`），值是左 / 右 / 底。
+    /// 用户从面板的「移动到」菜单改过位置后写回这里，之后新建或重启的终端侧栏沿用；
+    /// 没有记录的面板保持默认右侧。
+    #[serde(default)]
+    pub terminal_tool_panel_placements: BTreeMap<String, SidebarPlacement>,
     #[serde(default)]
     pub local_terminal_profile: LocalTerminalProfileSettings,
     #[serde(default)]
@@ -1786,6 +1794,7 @@ impl Default for AppSettings {
             terminal_selection_highlight: default_true(),
             terminal_show_timestamps: false,
             terminal_show_line_numbers: false,
+            terminal_tool_panel_placements: BTreeMap::new(),
             local_terminal_profile: LocalTerminalProfileSettings::default(),
             log_file_path: String::new(),
             auto_update: true,
@@ -2334,7 +2343,8 @@ mod tests {
         MAX_CUSTOM_SYSTEM_PROMPT_CHARS, MAX_RECENT_WORKSPACE_ROOTS, MAX_REMEMBERED_ACP_SESSIONS,
         MIN_AI_REQUEST_TIMEOUT_SECS, MainWindowState, MasterKeyStorage, McpPermissionMode,
         McpServerMode, PersonalSyncBackendKind, RemoteFileOpenMode, SqlFormatSettings,
-        SqlIndentStyle, SqlKeywordCase, StartupDefaultPage, SyncProvider, TableViewMode,
+        SidebarPlacement, SqlIndentStyle, SqlKeywordCase, StartupDefaultPage, SyncProvider,
+        TableViewMode,
         UpdateChannel, UpdateMirror, default_grid_font_fallback_families,
         default_grid_monospace_font_family, grid_monospace_font, installed_grid_monospace_font,
         is_installed_font_family, resolve_installed_grid_monospace_font_family,
@@ -3181,6 +3191,52 @@ mod tests {
         .expect("connection sidebar tree state should deserialize");
 
         assert!(settings.connection_sidebar_tree_state.hide_empty_workspaces);
+    }
+
+    #[test]
+    fn app_settings_defaults_to_no_terminal_tool_panel_placements() {
+        let settings = AppSettings::default();
+
+        assert!(settings.terminal_tool_panel_placements.is_empty());
+    }
+
+    #[test]
+    fn app_settings_round_trips_terminal_tool_panel_placements() {
+        let mut settings = AppSettings::default();
+        settings
+            .terminal_tool_panel_placements
+            .insert("terminal.ai-chat".to_string(), SidebarPlacement::Left);
+        settings.terminal_tool_panel_placements.insert(
+            "terminal.file-manager".to_string(),
+            SidebarPlacement::Bottom,
+        );
+
+        let saved = serde_json::to_value(&settings).expect("settings should serialize");
+        assert_eq!(
+            saved["terminal_tool_panel_placements"]["terminal.ai-chat"],
+            "left"
+        );
+        assert_eq!(
+            saved["terminal_tool_panel_placements"]["terminal.file-manager"],
+            "bottom"
+        );
+
+        let restored: AppSettings =
+            serde_json::from_value(saved).expect("settings should round trip");
+        assert_eq!(
+            restored.terminal_tool_panel_placements,
+            settings.terminal_tool_panel_placements
+        );
+    }
+
+    #[test]
+    fn app_settings_without_terminal_tool_panel_placements_keeps_defaults() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "terminal_theme": "Default Dark"
+        }))
+        .expect("旧版 settings.json 应能读取");
+
+        assert!(settings.terminal_tool_panel_placements.is_empty());
     }
 
     #[test]

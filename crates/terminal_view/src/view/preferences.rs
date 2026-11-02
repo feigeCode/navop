@@ -12,6 +12,28 @@ impl TerminalView {
         });
     }
 
+    /// 把侧栏各工具面板的停靠位置合并进设置。
+    ///
+    /// 每台终端可用的面板不同（本地终端有文件浏览器，SSH 终端有文件管理器和
+    /// 服务器监控），所以只覆盖自己实际拥有的面板，别把另一类会话的位置抹掉。
+    pub(crate) fn persist_tool_panel_placements(&mut self, cx: &mut Context<Self>) {
+        let placements = self.sidebar.read(cx).tool_panel_placements();
+        let current = AppSettings::current(cx).terminal_tool_panel_placements;
+        if placements
+            .iter()
+            .all(|(panel_id, placement)| current.get(panel_id) == Some(placement))
+        {
+            return;
+        }
+        AppSettings::update_and_save(cx, |settings| {
+            for (panel_id, placement) in placements {
+                settings
+                    .terminal_tool_panel_placements
+                    .insert(panel_id, placement);
+            }
+        });
+    }
+
     pub fn set_auto_copy(&mut self, enabled: bool, cx: &mut Context<Self>) {
         if self.auto_copy_on_select == enabled {
             return;

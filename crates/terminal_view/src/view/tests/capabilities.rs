@@ -907,3 +907,51 @@ fn copy_writes_to_clipboard_before_dropping_the_selection() {
         "复制只清选区，不能顺带切换 VI 模式（那是 Escape/ClearSelection 的语义）"
     );
 }
+
+#[test]
+fn sidebar_panel_placements_persist_through_settings() {
+    let settings = include_str!("../../../../core/src/settings.rs");
+    assert!(
+        settings
+            .contains("pub terminal_tool_panel_placements: BTreeMap<String, SidebarPlacement>"),
+        "「移动到」之后的停靠位置必须落在 AppSettings 里才谈得上持久化"
+    );
+
+    let sidebar = include_str!("../../sidebar/mod.rs");
+    assert!(
+        sidebar.contains("pub fn tool_panel_placements(&self) -> BTreeMap<String, SidebarPlacement>"),
+        "侧栏要能把各面板的停靠位置快照成设置里的键值"
+    );
+    assert!(
+        sidebar.contains("sidebar.restore_tool_panel_placements(cx);"),
+        "侧栏构造时要按上次保存的位置复位"
+    );
+    assert!(
+        sidebar.contains("self.restore_tool_panel_placements(cx);"),
+        "补建 SSH 面板后也要再套一次保存过的位置"
+    );
+
+    let events = include_str!("../sidebar_events.rs");
+    let handler = function_region(
+        events,
+        "pub(super) fn handle_sidebar_event",
+        "pub(super) fn invalidate_terminal_searches",
+    );
+    let panel_changed = handler
+        .find("TerminalSidebarEvent::PanelChanged")
+        .expect("侧栏面板变化要通知终端视图");
+    assert!(
+        handler[panel_changed..].contains("self.persist_tool_panel_placements(cx)"),
+        "面板移动 / 展开 / 收起后要把停靠位置写回设置"
+    );
+
+    let settings_changed = function_region(
+        events,
+        "pub(super) fn handle_app_settings_changed",
+        "pub(super) fn handle_app_theme_changed",
+    );
+    assert!(
+        settings_changed.contains("restore_tool_panel_placements(cx)"),
+        "别的终端标签改了停靠位置后，本标签要跟着设置复位"
+    );
+}
