@@ -198,3 +198,25 @@ fn closing_pane_preserves_surviving_ratio(cx: &mut TestAppContext) {
     assert_width(pane_width(visual, PANE_SELECTORS[1]), px(630.));
     assert_eq!(2, visual.read(|cx| harness.read(cx).tree.panes().len()));
 }
+
+/// 侧栏拖动换算依赖 `workspace_bounds`。它必须来自工作区根元素的真实
+/// bounds:事件监听元素是 0×0 的弹性子项,拿它自己的 bounds 会让左侧
+/// 与底部拖动永远被夹到最小宽度(左侧面板拖不动)。
+#[test]
+fn sidebar_resize_bounds_come_from_the_workspace_root() {
+    let layout_source = include_str!("layout.rs");
+    let resize_source = include_str!("resize.rs");
+
+    assert!(
+        layout_source.contains(".on_prepaint(move |bounds, _, cx|"),
+        "workspace root must capture its own bounds via on_prepaint"
+    );
+    assert!(
+        layout_source.contains("workspace.workspace_bounds = bounds"),
+        "workspace root prepaint must write workspace_bounds"
+    );
+    assert!(
+        !resize_source.contains("workspace_bounds = bounds"),
+        "resize event handler is zero-sized; its bounds must not be used as the workspace bounds"
+    );
+}

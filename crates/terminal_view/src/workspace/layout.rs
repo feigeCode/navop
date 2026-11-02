@@ -3,7 +3,7 @@ use gpui::{
     AnyElement, Context, InteractiveElement as _, IntoElement as _, ParentElement as _,
     Styled as _, div,
 };
-use gpui_component::{h_flex, v_flex};
+use gpui_component::{ElementExt as _, h_flex, v_flex};
 use one_core::layout::TOOLBAR_WIDTH;
 use one_core::sidebar_contribution::SidebarPlacement;
 
@@ -76,12 +76,21 @@ impl TerminalWorkspace {
                 )
             });
 
+        let workspace = cx.entity();
         h_flex()
             .id("terminal-workspace-root")
             .size_full()
             .min_w_0()
             .min_h_0()
             .overflow_hidden()
+            // 侧栏拖动换算要用工作区根元素的真实 bounds。事件监听元素本身是
+            // 0×0 的弹性子项,拿它自己的 bounds 当工作区边界会让左/下拖动
+            // 永远被夹到最小宽度。
+            .on_prepaint(move |bounds, _, cx| {
+                workspace.update(cx, |workspace, _| {
+                    workspace.workspace_bounds = bounds;
+                });
+            })
             .when_some(left, |this, panel| {
                 this.child(
                     div()

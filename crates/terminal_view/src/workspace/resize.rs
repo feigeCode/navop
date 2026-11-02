@@ -116,14 +116,13 @@ impl Element for WorkspaceResizeEventHandler {
         &mut self,
         _: Option<&GlobalElementId>,
         _: Option<&InspectorElementId>,
-        bounds: Bounds<Pixels>,
+        _: Bounds<Pixels>,
         _: &mut Self::RequestLayoutState,
         _: &mut Window,
-        cx: &mut App,
+        _: &mut App,
     ) -> Self::PrepaintState {
-        self.workspace.update(cx, |workspace, _| {
-            workspace.workspace_bounds = bounds;
-        });
+        // 工作区 bounds 由根元素的 on_prepaint 写入:本元素是 0×0 的弹性
+        // 子项,自身 bounds 不能当作工作区边界。
     }
 
     fn paint(

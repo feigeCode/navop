@@ -945,3 +945,24 @@ fn terminal_render_uses_cached_font_metrics() {
     assert!(metric_source.contains("fn refresh_terminal_font_metrics("));
     assert!(!render_setup.contains("cx.text_system().all_font_names()"));
 }
+
+/// 内嵌 dock 的拖动换算同样必须使用 dock 根元素的真实 bounds,
+/// 不能用 `window.bounds()`(嵌入面板时原点/尺寸都不是 dock 的)。
+#[test]
+fn embedded_sidebar_resize_uses_dock_bounds_not_window_bounds() {
+    let render_layout = include_str!("../render_layout.rs");
+    let resize_event_handler = include_str!("../resize_event_handler.rs");
+
+    assert!(
+        render_layout.contains(".on_prepaint(move |bounds, _, cx|"),
+        "tool dock root must capture its own bounds via on_prepaint"
+    );
+    assert!(
+        render_layout.contains("view.view_bounds = bounds"),
+        "tool dock root prepaint must write view_bounds"
+    );
+    assert!(
+        !resize_event_handler.contains("window.bounds()"),
+        "resize event handler must not derive view bounds from the window"
+    );
+}
