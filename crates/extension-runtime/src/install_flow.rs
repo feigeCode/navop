@@ -4,8 +4,10 @@ use std::sync::{
 };
 
 use futures::Future;
+#[cfg(feature = "database")]
+use gpui::App;
 use gpui::{
-    AnyWindowHandle, App, AppContext, AsyncApp, Context, PromptLevel, WeakEntity, Window,
+    AnyWindowHandle, AppContext, AsyncApp, Context, PromptLevel, WeakEntity, Window,
     http_client::HttpClient,
 };
 use gpui_component::{WindowExt, notification::Notification};
@@ -94,6 +96,10 @@ pub(crate) fn run_install_with_progress_prompt<T, Fut, F>(
 }
 
 /// `&mut App` 版本的安装流水线，供没有宿主实体上下文的独立产品使用。
+///
+/// 只有数据库驱动安装用得到它；只带 remote-desktop 的构建（例如 Navop Shell）
+/// 里没有任何调用者，`-D warnings` 下会被判定为 dead code。
+#[cfg(feature = "database")]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_install_with_progress_prompt_app<Fut, F>(
     window: &mut Window,
@@ -162,6 +168,7 @@ pub(crate) fn run_install_with_progress_prompt_app<Fut, F>(
     .detach();
 }
 
+#[cfg(feature = "database")]
 fn finish_install_app(
     window_handle: AnyWindowHandle,
     progress_view: gpui::WeakEntity<DriverInstallProgressView>,
