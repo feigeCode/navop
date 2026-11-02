@@ -2150,12 +2150,17 @@ test("Windows build-shape checks run in a developer PowerShell", () => {
   const ci = read(".github/workflows/ci.yml");
   assert.match(ci, /uses: ilammy\/msvc-dev-cmd@v1/);
 
-  const step = workflowStep(ci, "Check the product build shape");
   // Git Bash 的 PATH 里 `link.exe` 是 GNU coreutils 的 link，会把 MSVC 链接器盖掉，
-  // 于是 cargo check 走到链接 build script 时全挂（`/usr/bin/link: extra operand`）。
+  // 于是 cargo check 编到 build script 时全挂（`/usr/bin/link: extra operand`）。
+  // `shell:` 不支持 matrix 上下文（Unrecognized named-value: 'matrix'），
+  // 所以 Windows 单独一步写死 pwsh，其余平台仍是 bash。
   assert.match(
-    step,
-    /shell: \$\{\{ matrix\.platform == 'windows' && 'pwsh' \|\| 'bash' \}\}/,
+    ci,
+    /- name: Check the product build shape \(Windows\)\n\s+if: \$\{\{ matrix\.platform == 'windows' \}\}\n\s+shell: pwsh\n\s+run: cargo check --locked/,
   );
-  assert.doesNotMatch(step, /set -euo pipefail/);
+  assert.match(
+    ci,
+    /- name: Check the product build shape\n\s+if: \$\{\{ matrix\.platform != 'windows' \}\}\n\s+shell: bash\n/,
+  );
+  assert.doesNotMatch(ci, /shell: \$\{\{ matrix\./);
 });
