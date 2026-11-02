@@ -3828,6 +3828,10 @@ Settings:
         en: "Failed to install Navop Skill: %{command} was not found. Install Node.js or add Node.js to the app PATH."
         zh-CN: "Navop Skill 安装失败：未找到 %{command}。请安装 Node.js，或将 Node.js 的 bin 目录加入 PATH。"
         zh-HK: "Navop Skill 安裝失敗：未找到 %{command}。請安裝 Node.js，或將 Node.js 的 bin 目錄加入 PATH。"
+      skill_install_skipped_in_development:
+        en: Skill installation is skipped in development builds so they cannot write to the production user Skill directories.
+        zh-CN: 开发构建不写入全局 Skill 目录，已跳过安装（避免污染生产用户目录）。
+        zh-HK: 開發構建不寫入全域 Skill 目錄，已跳過安裝（避免污染生產使用者目錄）。
       install_client_config_success:
         en: "MCP client config installed: %{path}"
         zh-CN: "MCP 客户端配置已安装：%{path}"

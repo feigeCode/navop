@@ -13,6 +13,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use tracing::{error, info};
 
+/// 本次运行是否从「无法解析」的 settings.json 起步。
+///
+/// 为 `true` 时禁止再写盘：坏文件已被隔离成 `.corrupt-*`，放任后续保存会用默认值
+/// 重写 `settings.json`，把「哪一份才是好配置」彻底搅乱（2026-11-01 事故的翻版）。
+static LOAD_DEGRADED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 mod locale;
 mod remote_file_editor;
 
@@ -2085,6 +2091,7 @@ impl AppSettings {
                     };
                     error!("{message}");
                     eprintln!("[settings] {message}");
+                    LOAD_DEGRADED.store(true, std::sync::atomic::Ordering::Relaxed);
                     Self::default()
                 }
             },
@@ -2093,12 +2100,40 @@ impl AppSettings {
                 let message = format!("Failed to read settings file: {read_error}");
                 error!("{message}");
                 eprintln!("[settings] {message}");
+                LOAD_DEGRADED.store(true, std::sync::atomic::Ordering::Relaxed);
                 Self::default()
             }
         }
     }
 
+    /// 把整份设置写回 `settings.json`。
+    ///
+    /// 两道硬闸，都是为了「设置不能被静默还原」：
+    ///
+    /// 1. 应用路径未初始化时拒绝落盘。测试进程、命令行辅助路径、以及任何在
+    ///    `initialize_app_paths` 之前触发的保存，目录都会经 `app_dirs::config_dir()`
+    ///    回落成正式安装目录，一次整份原子写就把用户真实设置覆盖成默认值
+    ///    （2026-11-01：`cargo test -p db_view` 的用例把 `~/.config/navop/settings.json`
+    ///    写成了 `AppSettings::default()`）。
+    /// 2. 本次运行是从读不出/解析不了的 settings.json 起步时拒绝落盘，避免默认值
+    ///    覆盖已经被隔离成 `.corrupt-*` 的现场（下次启动会正常加载/重建）。
     pub fn save(&self) {
+        if crate::app_paths::initialized_paths().is_none() {
+            let message = "Refusing to save settings: application paths are not initialized, \
+                 so the write target would fall back to the installed config directory";
+            error!("{message}");
+            eprintln!("[settings] {message}");
+            return;
+        }
+        if LOAD_DEGRADED.load(std::sync::atomic::Ordering::Relaxed) {
+            let message = "Refusing to save settings: this run started from a settings.json \
+                 that could not be loaded (it has been quarantined); saving defaults would \
+                 hide the cause";
+            error!("{message}");
+            eprintln!("[settings] {message}");
+            return;
+        }
+
         let Some(path) = Self::config_path() else {
             error!("Could not determine config path");
             return;
@@ -2206,27 +2241,61 @@ impl AppSettings {
     }
 }
 
-/// 原子写 settings.json，并在覆盖前保留上一份为 `settings.json.bak`。
+/// 原子写 settings.json，并在覆盖前把上一份滚进多代备份。
 ///
 /// 直接 `fs::write` 覆盖有两个老问题：写到一半崩溃会留下半截 JSON，而半截 JSON 会让
 /// [`AppSettings::load`] 走进 `Err` 分支、把整份设置回落成默认值；覆盖前也没有任何可回滚的副本。
+///
+/// 备份保留多代（`settings.json.bak`、`.bak.1`、`.bak.2`）：只留一代时，坏掉的默认值
+/// 被启动期连续 save 两次就会把仅有的好配置顶掉，之后再无回滚可能。
 fn write_settings_atomically(path: &Path, content: &str) -> std::io::Result<()> {
     let file_name = path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("settings.json");
-    let tmp_path = path.with_file_name(format!("{file_name}.tmp"));
+    // 临时文件名带进程号：两个实例同时保存时，固定名 `.tmp` 会互相写穿，
+    // 落盘的就是半截 JSON。
+    let tmp_path = path.with_file_name(format!("{file_name}.{}.tmp", std::process::id()));
     std::fs::write(&tmp_path, content)?;
 
     if path.exists() {
-        let backup_path = path.with_file_name(format!("{file_name}.bak"));
-        // 备份失败不阻断主写入：保住用户这次的改动比保住旧副本更重要。
-        if let Err(e) = std::fs::copy(path, &backup_path) {
-            error!("Failed to back up settings file: {}", e);
-        }
+        rotate_settings_backups(path, file_name);
     }
 
     std::fs::rename(&tmp_path, path)
+}
+
+/// 备份代数上限：`.bak`、`.bak.1`、`.bak.2`。
+const SETTINGS_BACKUP_GENERATIONS: usize = 3;
+
+fn rotate_settings_backups(path: &Path, file_name: &str) {
+    let generation_path = |generation: usize| {
+        if generation == 0 {
+            path.with_file_name(format!("{file_name}.bak"))
+        } else {
+            path.with_file_name(format!("{file_name}.bak.{generation}"))
+        }
+    };
+
+    let oldest = generation_path(SETTINGS_BACKUP_GENERATIONS - 1);
+    if oldest.exists() {
+        let _ = std::fs::remove_file(&oldest);
+    }
+    for generation in (0..SETTINGS_BACKUP_GENERATIONS - 1).rev() {
+        let from = generation_path(generation);
+        if from.exists() {
+            let to = generation_path(generation + 1);
+            if let Err(error) = std::fs::rename(&from, &to) {
+                error!("Failed to rotate settings backup: {}", error);
+            }
+        }
+    }
+
+    // 备份失败不阻断主写入：保住用户这次的改动比保住旧副本更重要。
+    let backup_path = generation_path(0);
+    if let Err(error) = std::fs::copy(path, &backup_path) {
+        error!("Failed to back up settings file: {}", error);
+    }
 }
 
 /// 把无法解析的 settings.json 改名保留为 `settings.json.corrupt-<时间戳>`。

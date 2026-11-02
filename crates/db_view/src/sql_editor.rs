@@ -3307,8 +3307,34 @@ mod tests {
         assert!(has_hover_item);
     }
 
+    /// 测试进程绝不能解析到真实安装目录。
+    ///
+    /// 本用例会走 `AppSettings::update_and_save`（整份写 settings.json），而测试里的
+    /// 设置起步是 `AppSettings::default()`；应用路径未初始化时 `app_dirs::config_dir()`
+    /// 会回落成 `~/.config/navop`，于是「跑一次单测＝把生产配置写成默认值」
+    /// （2026-11-01 事故即此）。这里把路径显式指到临时目录，进程内只初始化一次。
+    fn isolate_test_app_paths() {
+        static INIT: std::sync::Once = std::sync::Once::new();
+        INIT.call_once(|| {
+            let root = std::env::temp_dir().join(format!(
+                "navop-db-view-tests-{}",
+                std::process::id()
+            ));
+            let Ok(context) = one_core::app_paths::process_context() else {
+                return;
+            };
+            if let Err(error) = one_core::app_paths::initialize_app_paths(
+                &one_core::app_paths::AppPathOverrides::with_data_dir(root),
+                &context,
+            ) {
+                eprintln!("[db_view tests] failed to isolate app paths: {error}");
+            }
+        });
+    }
+
     #[gpui::test]
     fn sql_editor_installs_mouse_hover_provider_only_when_enabled(cx: &mut gpui::TestAppContext) {
+        isolate_test_app_paths();
         cx.update(|cx| {
             gpui_component::init(cx);
             cx.set_global(AppSettings::default());
