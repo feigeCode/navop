@@ -1,5 +1,7 @@
 use super::*;
+#[cfg(feature = "shell")]
 use one_core::tab_container::TabContainerEvent;
+#[cfg(feature = "shell")]
 use terminal_view::{TerminalWorkspace, TerminalWorkspaceEvent};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,25 +71,29 @@ impl HomePage {
         .detach();
 
         // 复制出的终端标签由 TabContainer 内部创建，需在此补上 OpenSftp / SaveAsConnection 的响应。
-        cx.subscribe_in(
-            &tab_container,
-            window,
-            |this, tab_container, event: &TabContainerEvent, window, cx| {
-                let TabContainerEvent::TabDuplicated { id } = event else {
-                    return;
-                };
-                let terminal = tab_container
-                    .read(cx)
-                    .tabs()
-                    .iter()
-                    .find(|tab| tab.id() == id.as_str())
-                    .and_then(|tab| tab.content().view().downcast::<TerminalWorkspace>().ok());
-                if let Some(terminal) = terminal {
-                    this.subscribe_terminal_workspace_events(&terminal, window, cx);
-                }
-            },
-        )
-        .detach();
+        // 独立数据产品不带 shell 领域，没有终端标签，这段订阅只在 shell 特性下编译。
+        #[cfg(feature = "shell")]
+        {
+            cx.subscribe_in(
+                &tab_container,
+                window,
+                |this, tab_container, event: &TabContainerEvent, window, cx| {
+                    let TabContainerEvent::TabDuplicated { id } = event else {
+                        return;
+                    };
+                    let terminal = tab_container
+                        .read(cx)
+                        .tabs()
+                        .iter()
+                        .find(|tab| tab.id() == id.as_str())
+                        .and_then(|tab| tab.content().view().downcast::<TerminalWorkspace>().ok());
+                    if let Some(terminal) = terminal {
+                        this.subscribe_terminal_workspace_events(&terminal, window, cx);
+                    }
+                },
+            )
+            .detach();
+        }
 
         let mut page = Self {
             focus_handle: cx.focus_handle(),
@@ -254,6 +260,7 @@ impl HomePage {
     }
 
     /// 复制出的终端标签由 TabContainer 内部克隆创建，需补上 OpenSftp / SaveAsConnection 的响应。
+    #[cfg(feature = "shell")]
     pub(super) fn subscribe_terminal_workspace_events(
         &mut self,
         terminal: &Entity<TerminalWorkspace>,
