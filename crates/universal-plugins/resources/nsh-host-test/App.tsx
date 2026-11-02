@@ -1,4 +1,12 @@
-// M2 spike：navop 窗口里挂的第一个 nsh 扩展页面。
+// nsh 宿主自检页：navop 窗口里挂的扩展页面（M3 起走扩展目录装载路径）。
+//
+// 这个页面同时是 bundle 的输入：改了它要重新生成 view.js：
+//
+// ```bash
+// cd crates/universal-plugins/resources/nsh-host-test
+// nsh build --out . && mv bundle.js view.js
+// ```
+//
 //
 // 这是 embed-gpui 官方示例（Order Ticket）的精简版：去掉了宿主
 // nativeModule/nativeComponent（`host/trading`、`host.switch`、
@@ -33,7 +41,7 @@ function App() {
   // M2 的宿主动手：页面真挂到这个点才算跑起来了（测试与冒烟都看这条）。
   // 能力在 capabilities.json 里声明为 host: ["spike.mounted"]，未声明会被
   // nsh 的 host 白名单直接拒掉。
-  host.call("spike.mounted", { title: "NSH Spike", items: items().length });
+  host.call("spike.mounted", { title: "NSH Host", items: items().length });
 
   return (
     <Scroll style={{ flex: 1 }}>

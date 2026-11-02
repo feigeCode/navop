@@ -12,8 +12,8 @@ mod connection_icon;
 mod extension_connection_form;
 mod extension_connection_tab;
 mod extension_resource;
-#[cfg(feature = "nsh-spike")]
-mod nsh_spike;
+#[cfg(feature = "nsh-host")]
+mod nsh_host;
 #[cfg(feature = "shell-plugins")]
 mod shell_page_host;
 #[cfg(feature = "shell-plugins")]
@@ -33,8 +33,8 @@ pub use shell_plugin_host::{
     refresh_shell_views, set_dev_host_ops,
 };
 
-#[cfg(feature = "nsh-spike")]
-pub use nsh_spike::init as init_nsh_spike;
+#[cfg(feature = "nsh-host")]
+pub use nsh_host::{NshHost, init as init_nsh_host};
 
 /// 无 `shell-plugins` 构建里不存在脚本视图，没有东西可刷新。
 ///

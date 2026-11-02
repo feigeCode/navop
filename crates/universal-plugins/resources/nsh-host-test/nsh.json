@@ -1,6 +1,6 @@
 {
-  "name": "Navop NSH Spike",
-  "id": "dev.navop.spike.embed-gpui",
+  "name": "Navop NSH Host 自检页",
+  "id": "dev.navop.nsh-host.self-check",
   "version": "0.1.0",
   "build": 1,
   "capabilities": {

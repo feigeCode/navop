@@ -39,10 +39,9 @@ tempfile = "3"
 [features]
 default = []
 shell-plugins = ["dep:gpui-shell"]
-# M2 spike：nsh 扩展宿主（AppView）接线，方案见
+# nsh 扩展宿主（AppView）：扩展页面以 nsh 程序运行，方案见
 # docs/extension-resource-plugins/nsh-migration-plan.md。
-# build.rs 也随本 feature 打 spike bundle（optional build-deps）。
-nsh-spike = ["dep:nsh-platform-gpui", "dep:nsh-core"]
+nsh-host = ["dep:nsh-platform-gpui", "dep:nsh-core"]
 
 [lints]
 workspace = true

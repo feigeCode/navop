@@ -17,7 +17,7 @@ function add() {
 }
 function App() {
 	host.call("spike.mounted", {
-		title: "NSH Spike",
+		title: "NSH Host",
 		items: items().length
 	});
 	return (() => {
