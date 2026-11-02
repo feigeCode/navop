@@ -174,6 +174,99 @@ jobs:
         shell: bash
         run: sccache --show-stats || true
 
+  # 发版矩阵（.github/workflows/release.yml）是「一个产品 × 一个目标」各自编译：
+  # 每个 job 只带自己那一个产品，extension-runtime 之类共享 crate 的 feature 就按
+  # 该产品的特性集求值。而 `cargo test --all` 会把整个 workspace 的特性合并求值，
+  # 于是「某个产品单独构建时这段代码没有调用者 / 这个 feature 不存在」这类问题
+  # 只有在发版时才炸：beta.1 的 `navop ... does not contain these features`、
+  # beta.2 的 navop-data 未门控终端视图、beta.3 的 install_flow 死代码都是这一类。
+  #
+  # 这里按发版矩阵逐产品、逐目标编译一次，参数抄自 release.yml 的构建步骤
+  # （独立产品不传 feature；navop 的 win32 是「默认集减去 shell-plugins」）。
+  # 只把 `cargo build --release` 换成 `cargo check`：feature 门控、未使用导入、
+  # 死代码在 check 阶段就会带着 `-D warnings` 报错，代价比完整构建小一个量级。
+  # 覆盖 linux x64 / macOS arm64 / Windows x64（+ navop 的 win32）这几个
+  # 真正出过问题的形态；macOS x64 与 linux arm64 只是同一份代码换目标，暂不重复。
+  product-check:
+    name: Build shape (${{ matrix.product }} / ${{ matrix.target }})
+    needs: [classify]
+    if: >-
+      ${{
+        (inputs.platform == '' ||
+         inputs.platform == 'all' ||
+         inputs.platform == matrix.platform) &&
+        needs.classify.outputs.release_only != 'true'
+      }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { product: navop, target: x86_64-unknown-linux-gnu, run_on: ubuntu-latest, platform: linux, args: "" }
+          - { product: navop, target: aarch64-apple-darwin, run_on: macos-latest, platform: macos, args: "" }
+          - { product: navop, target: x86_64-pc-windows-msvc, run_on: windows-2022, platform: windows, args: "--features windows-native-rdp" }
+          - { product: navop, target: i686-pc-windows-msvc, run_on: windows-2022, platform: windows, args: "--no-default-features --features wasm-components,windows-native-rdp" }
+          - { product: navop-shell, target: x86_64-unknown-linux-gnu, run_on: ubuntu-latest, platform: linux, args: "" }
+          - { product: navop-shell, target: aarch64-apple-darwin, run_on: macos-latest, platform: macos, args: "" }
+          - { product: navop-shell, target: x86_64-pc-windows-msvc, run_on: windows-2022, platform: windows, args: "" }
+          - { product: navop-data, target: x86_64-unknown-linux-gnu, run_on: ubuntu-latest, platform: linux, args: "" }
+          - { product: navop-data, target: aarch64-apple-darwin, run_on: macos-latest, platform: macos, args: "" }
+          - { product: navop-data, target: x86_64-pc-windows-msvc, run_on: windows-2022, platform: windows, args: "" }
+    runs-on: ${{ matrix.run_on }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install NASM
+        if: ${{ matrix.platform == 'windows' }}
+        shell: pwsh
+        run: |
+          choco install nasm --no-progress --yes
+          $nasmDir = Join-Path $env:ProgramFiles "NASM"
+          $nasmExe = Join-Path $nasmDir "nasm.exe"
+          if (-not (Test-Path -LiteralPath $nasmExe -PathType Leaf)) {
+            throw "NASM executable was not found at '$nasmExe'"
+          }
+          $env:Path = "$nasmDir;$env:Path"
+          $nasmDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          nasm -v
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.target }}
+          cache: false
+      - name: Setup sccache
+        id: sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+        continue-on-error: true
+      - name: Initialize sccache
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.sccache.outcome }}" != "success" ]; then
+            echo "::warning::sccache 安装失败，本次构建退化为无编译器缓存"
+            echo "RUSTC_WRAPPER=" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          sccache --start-server
+          sccache --show-stats
+      - name: Restore shared Cargo inputs
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: navop-cargo-inputs-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            navop-cargo-inputs-v1-${{ runner.os }}-
+            release-cargo-inputs-${{ runner.os }}-${{ matrix.target }}-
+      - name: Install system dependencies
+        if: ${{ matrix.platform != 'windows' }}
+        run: script/bootstrap
+      - name: Check the product build shape
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo check --locked -p ${{ matrix.product }} --target ${{ matrix.target }} ${{ matrix.args }}
+
   windows-rdp-probe:
     name: Windows RDP probe (${{ matrix.target }})
     needs: [classify]
@@ -220,7 +313,7 @@ jobs:
 
   ci-gate:
     name: CI gate
-    needs: [prepare, classify, test, windows-rdp-probe]
+    needs: [prepare, classify, test, product-check, windows-rdp-probe]
     if: always()
     runs-on: ubuntu-latest
     steps:
