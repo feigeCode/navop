@@ -2145,3 +2145,17 @@ test("release matrix keeps spaces inside macOS bundle names", () => {
     ["Navop", "Navop Data", "Navop Shell"],
   );
 });
+
+test("Windows build-shape checks run in a developer PowerShell", () => {
+  const ci = read(".github/workflows/ci.yml");
+  assert.match(ci, /uses: ilammy\/msvc-dev-cmd@v1/);
+
+  const step = workflowStep(ci, "Check the product build shape");
+  // Git Bash 的 PATH 里 `link.exe` 是 GNU coreutils 的 link，会把 MSVC 链接器盖掉，
+  // 于是 cargo check 走到链接 build script 时全挂（`/usr/bin/link: extra operand`）。
+  assert.match(
+    step,
+    /shell: \$\{\{ matrix\.platform == 'windows' && 'pwsh' \|\| 'bash' \}\}/,
+  );
+  assert.doesNotMatch(step, /set -euo pipefail/);
+});

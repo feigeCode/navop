@@ -284,10 +284,10 @@ jobs:
         if: ${{ matrix.platform != 'windows' }}
         run: script/bootstrap
       - name: Check the product build shape
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo check --locked -p ${{ matrix.product }} --target ${{ matrix.target }} ${{ matrix.args }}
+        # Windows 必须走 PowerShell：Git Bash 的 PATH 里 `link.exe` 是 GNU coreutils 的
+        # `link`，会把 MSVC 的链接器盖掉（报 `/usr/bin/link: extra operand`）。
+        shell: ${{ matrix.platform == 'windows' && 'pwsh' || 'bash' }}
+        run: cargo check --locked -p ${{ matrix.product }} --target ${{ matrix.target }} ${{ matrix.args }}
 
   windows-rdp-probe:
     name: Windows RDP probe (${{ matrix.target }})
