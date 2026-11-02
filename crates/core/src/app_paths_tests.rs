@@ -329,7 +329,7 @@ fn development_paths_are_created_and_checked_for_writes() {
 
 #[test]
 fn development_directory_is_derived_from_the_build_profile() {
-    let directory = development_data_dir();
+    let directory = development_data_dir_for(Path::new("/usr/local/bin/navop"));
 
     if cfg!(debug_assertions) {
         assert_eq!(
@@ -338,5 +338,47 @@ fn development_directory_is_derived_from_the_build_profile() {
         );
     } else {
         assert!(directory.is_none());
+    }
+}
+
+#[test]
+fn source_builds_are_isolated_even_in_release_profile() {
+    // release 自测同样必须隔离：这些路径过去都被当成「正式安装态」，
+    // 一次运行就会写生产配置与生产 keychain。
+    for executable in [
+        "/repo/target/release/navop",
+        "/repo/target/debug/navop",
+        "/repo/targets/build-123/release/navop",
+        "/repo/target/release/bundle/macos/Navop.app/Contents/MacOS/navop",
+    ] {
+        assert!(
+            runs_from_source_build(Path::new(executable)),
+            "{executable} 应当识别为源码构建"
+        );
+    }
+
+    // cargo install 的产物落在 ~/.cargo/bin，同样不是安装态。
+    let home = dirs::home_dir().expect("home");
+    assert!(
+        runs_from_source_build(&home.join(".cargo/bin/navop")),
+        "cargo install 产物应当识别为源码构建"
+    );
+
+    // 真正的安装位置不隔离。
+    for executable in [
+        "/Applications/Navop.app/Contents/MacOS/navop",
+        "/usr/bin/navop",
+        "/opt/Navop/navop",
+    ] {
+        assert!(
+            !runs_from_source_build(Path::new(executable)),
+            "{executable} 应当按安装态处理"
+        );
+        if !cfg!(debug_assertions) {
+            assert!(
+                development_data_dir_for(Path::new(executable)).is_none(),
+                "{executable} 在 release 下应当使用安装态目录"
+            );
+        }
     }
 }

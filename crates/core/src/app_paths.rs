@@ -269,23 +269,50 @@ pub fn master_key_on_startup_required(
 }
 
 pub fn process_context() -> Result<AppPathResolutionContext> {
+    let executable_path = std::env::current_exe().context("resolve current executable")?;
     Ok(AppPathResolutionContext {
-        executable_path: std::env::current_exe().context("resolve current executable")?,
+        development_data_dir: development_data_dir_for(&executable_path),
+        executable_path,
         current_dir: std::env::current_dir().context("resolve current directory")?,
         portable_environment: std::env::var_os("NAVOP_PORTABLE"),
         data_dir_environment: std::env::var_os("NAVOP_DATA_DIR"),
-        development_data_dir: development_data_dir(),
     })
 }
 
-/// debug 构建默认写入独立的开发目录，避免 `cargo run` 覆盖已安装版本的配置（issue: 开发态配置污染生产）。
-/// release 构建恒返回 `None`，保持安装态路径不变。
-fn development_data_dir() -> Option<PathBuf> {
-    if !cfg!(debug_assertions) {
+/// 本次运行该不该用独立的开发目录。
+///
+/// 只按 `cfg!(debug_assertions)` 判断不够：`cargo run --release`、`cargo build --release`
+/// 后直接执行 `target/release/navop`、以及本地 `cargo bundle` 出来的 `.app`，过去都套用
+/// 「正式安装态」的路径规则，会直接读写 `~/.config/navop` 与生产 keychain（issue: 开发态
+/// 配置污染生产）。因此额外按**可执行文件来源**判定：只要 exe 还在 cargo 产物目录里，
+/// 就是自测构建，一律隔离。
+fn development_data_dir_for(executable: &Path) -> Option<PathBuf> {
+    if !cfg!(debug_assertions) && !runs_from_source_build(executable) {
         return None;
     }
 
     dirs::home_dir().map(|home| home.join(app_path_names().development_data_dir_name))
+}
+
+/// 可执行文件是否来自源码构建：位于 cargo 的 `target/{debug,release}`（含 `targets`，
+/// 兼容自定义 `CARGO_TARGET_DIR`）或 `cargo install` 的 `~/.cargo/bin`。
+fn runs_from_source_build(executable: &Path) -> bool {
+    let components: Vec<&OsStr> = executable
+        .components()
+        .map(|component| component.as_os_str())
+        .collect();
+    let within_cargo_target = components
+        .iter()
+        .any(|component| matches!(component.to_str(), Some("target" | "targets")))
+        && components
+            .iter()
+            .any(|component| matches!(component.to_str(), Some("debug" | "release")));
+    if within_cargo_target {
+        return true;
+    }
+
+    dirs::home_dir()
+        .is_some_and(|home| executable.starts_with(home.join(".cargo").join("bin")))
 }
 
 fn development_paths(root: PathBuf) -> AppPaths {

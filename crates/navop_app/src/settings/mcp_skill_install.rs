@@ -132,6 +132,24 @@ enum SkillInstallFailure {
 }
 
 fn install_skill(target: SkillTarget, force: bool, window: &mut Window, cx: &mut App) {
+    // 目标目录是跨应用的全局目录（~/.codex、~/.agents），没有按构建模式区分的隔离位。
+    // 开发构建一旦安装，就会把开发版内容写进正式用户在用的 Skill 目录；因此开发态直接跳过。
+    if !one_core::app_paths::is_installed() {
+        tracing::info!(
+            target = target.id(),
+            "Skipping Navop Skill installation: development build"
+        );
+        window.push_notification(
+            Notification::warning(
+                t!("Settings.General.Mcp.skill_install_skipped_in_development").to_string(),
+            )
+            .autohide(true),
+            cx,
+        );
+        window.refresh();
+        return;
+    }
+
     let install = ClientConfigInstall::from_current_app();
     let launcher = install.launch_spec.command;
     let launcher_name = launcher.clone();

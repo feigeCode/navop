@@ -24,7 +24,16 @@ struct NotesLocation {
 }
 
 impl NotesStorage {
+    /// 笔记默认根目录。
+    ///
+    /// 跟随应用路径解析走：开发构建落在 `~/.navop-dev/state/notes`，安装态仍是
+    /// `~/Library/Application Support/navop/notes`。这里过去硬编码
+    /// `dirs::data_local_dir()/navop/notes`，`cargo run` 起来的开发实例会直接读写
+    /// 生产笔记目录（2026-11-01 事故复盘里被列为隔离缺口之一）。
     pub fn default_root() -> Result<PathBuf> {
+        if let Some(data_dir) = one_core::app_dirs::data_dir() {
+            return Ok(data_dir.join("notes"));
+        }
         let base = dirs::data_local_dir().context("local data directory is unavailable")?;
         Ok(base.join("navop").join("notes"))
     }

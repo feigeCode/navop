@@ -40,16 +40,11 @@ impl Element for ResizeEventHandler {
         _: Option<&InspectorElementId>,
         _: Bounds<Pixels>,
         _: &mut Self::RequestLayoutState,
-        window: &mut Window,
-        cx: &mut App,
+        _window: &mut Window,
+        _cx: &mut App,
     ) -> Self::PrepaintState {
-        let bounds = window.bounds();
-        self.view.update(cx, |view, _| {
-            view.view_bounds = Bounds {
-                origin: Point::default(),
-                size: bounds.size,
-            };
-        });
+        // view_bounds 由 dock 根元素的 on_prepaint 写入:本元素是 0×0 的弹性
+        // 子项,而窗口 bounds 在嵌入面板里也不等于 dock 的位置。
     }
 
     fn paint(

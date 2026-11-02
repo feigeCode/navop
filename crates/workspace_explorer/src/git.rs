@@ -102,9 +102,16 @@ pub fn create_worktree(
     project_root: &Path,
     base_branch: Option<&str>,
 ) -> Result<CreatedWorktree> {
+    // 开发构建写到 `~/.navop-dev/worktrees`：`~/.navop/worktrees` 是正式安装态的目录，
+    // 从源码跑的实例不该往里塞自测 worktree（历史上这些目录会被误当成用户的远端分支）。
+    let root_name = if cfg!(debug_assertions) {
+        ".navop-dev/worktrees"
+    } else {
+        ".navop/worktrees"
+    };
     let worktree_root = dirs::home_dir()
         .ok_or_else(|| anyhow!("Home directory is unavailable"))?
-        .join(".navop/worktrees");
+        .join(root_name);
     create_worktree_in(&worktree_root, repository, project_root, base_branch)
 }
 

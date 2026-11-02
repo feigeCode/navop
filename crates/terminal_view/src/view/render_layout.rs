@@ -88,6 +88,7 @@ impl TerminalView {
     ) -> AnyElement {
         let state = self.tool_dock_render_state(cx);
         let view = cx.entity().clone();
+        let bounds_view = view.clone();
         let bg_color = self.current_theme.background;
         let center = CenterRegionState {
             font_family,
@@ -106,6 +107,13 @@ impl TerminalView {
             .min_w_0()
             .min_h_0()
             .overflow_hidden()
+            // 拖动换算要用 dock 根元素的真实 bounds;事件监听元素自身是 0×0,
+            // 而 window.bounds() 在嵌入面板里也不等于 dock 的位置。
+            .on_prepaint(move |bounds, _, cx| {
+                bounds_view.update(cx, |view, _| {
+                    view.view_bounds = bounds;
+                });
+            })
             .bg(bg_color)
             .key_context(TERMINAL_CONTEXT)
             .on_action(cx.listener(Self::start_recording_action))
