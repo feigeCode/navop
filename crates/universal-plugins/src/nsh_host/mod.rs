@@ -129,12 +129,11 @@ fn open_view(
         let host_for_tab = host.clone();
         tabs.activate_or_add_tab_lazy(
             tab_id.clone(),
-            move |window, cx| {
+            move |_window, cx| {
                 let tab = NshTab::open(
                     contribution,
                     host_for_tab.service.clone(),
                     host_for_tab.trust().clone(),
-                    window,
                     cx,
                 );
                 host_for_tab.track(&extension_id, tab.downgrade());
@@ -234,25 +233,20 @@ mod tests {
         let mounted = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
         // 台子不碰真实数据目录：开发形态不需要信任库。
         let trust: Trust = Rc::new(RefCell::new(nsh_platform_gpui::package::TrustStore::new()));
-        let tab = context.update(|window, cx| {
-            let tab = NshTab::open(fixture_contribution(), service, trust, window, cx);
+        let tab = context.update(|_window, cx| {
+            let tab = NshTab::open(fixture_contribution(), service, trust, cx);
             let tab_ref = tab.read(cx);
             assert_eq!(tab_ref.extension_id(), "dev.navop.nsh-host-test");
             assert_eq!(tab_ref.view_id(), "self-check");
-            assert_eq!(tab_ref.error(), None, "装载失败: {:?}", tab_ref.error());
-            let view = tab_ref
-                .app_view()
-                .expect("fixture 应能装载：装载失败说明入口/能力声明/引擎接线有问题")
-                .clone();
+            // 页面装载发生在第一次 render（provider 激活可能异步），而宿主
+            // handler 必须早于页面 —— 通道在 `open` 就建好了，所以这里能挂。
             let mounted = mounted.clone();
-            view.update(cx, |view, _| {
-                view.host().handle("spike.mounted", move |call| {
-                    let data = call.data().clone();
-                    if let Ok(mut mounted) = mounted.lock() {
-                        mounted.push(data);
-                    }
-                    call.resolve(serde_json::Value::Null);
-                });
+            tab_ref.host_channel().handle("spike.mounted", move |call| {
+                let data = call.data().clone();
+                if let Ok(mut mounted) = mounted.lock() {
+                    mounted.push(data);
+                }
+                call.resolve(serde_json::Value::Null);
             });
             tab
         });
@@ -279,6 +273,13 @@ mod tests {
         }
         draw(&mut context);
         context.run_until_parked();
+
+        // 激活 → 装载都在 `render` 里落地，画到这里页面应该已经挂上了。
+        let loaded = context.update(|_window, cx| {
+            let tab = tab.read(cx);
+            (tab.app_view().is_some(), tab.error().map(str::to_owned))
+        });
+        assert!(loaded.0, "首帧后页面应已装载，失败原因: {:?}", loaded.1);
 
         let mounted = mounted.lock().unwrap();
         assert_eq!(
