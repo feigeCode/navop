@@ -22,6 +22,11 @@ impl extension_view::ShellViewOpener for NshHost {
         // 每个 tab 关掉时它自己的 `Entity<AppView>` 被 drop，`AppView` 的
         // `Drop` 会停掉引擎线程；这里只清掉登记表里的条目。
         let open = self.open_tabs(extension_id);
+        // 扩展被停用/卸载：页面在途的 `host.call` 按 `REQUEST_CANCELLED` 退出，
+        // 而不是等引擎线程把资源调完再丢结果（那时扩展目录已经不认它了）。
+        for tab in &open {
+            tab.update(cx, |tab, _| tab.cancel());
+        }
         for tab in &open {
             let tab = tab.read(cx);
             tracing::debug!(

@@ -8,6 +8,7 @@
 //!
 //! 迁移方案见 `docs/extension-resource-plugins/nsh-migration-plan.md`。
 
+mod abi;
 mod bundle;
 mod opener;
 mod tab;
@@ -152,13 +153,14 @@ static NEXT_TAB_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64:
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::{BTreeMap, BTreeSet},
+        collections::BTreeMap,
         ops::Deref as _,
         path::PathBuf,
         sync::{Arc, Mutex},
     };
 
     use extension_runtime::RegisteredShellViewContribution;
+    use extension_runtime::extension::manifest::ShellHostModule;
     use gpui::{Context, IntoElement, Render, TestAppContext, VisualTestContext, Window, div};
 
     use super::*;
@@ -189,7 +191,16 @@ mod tests {
             keywords: Vec::new(),
             singleton: true,
             backends: BTreeMap::new(),
-            modules: BTreeSet::new(),
+            // 页面在启动时读宿主能力，所以台子要声明这几个模块（真实 manifest
+            // 里就是 `contributes.shellViews[].modules: ["context","theme",…]`）。
+            modules: [
+                ShellHostModule::Context,
+                ShellHostModule::Log,
+                ShellHostModule::I18n,
+                ShellHostModule::Theme,
+            ]
+            .into_iter()
+            .collect(),
             permissions: Vec::new(),
             shell_api_version: "1".into(),
             required_gpui_shell_version: "0.6.4".into(),
@@ -265,6 +276,23 @@ mod tests {
         assert_eq!(
             mounted[0]["title"], "NSH Host",
             "回报数据来自页面: {}",
+            mounted[0]
+        );
+        // 页面在回报里带上了宿主 ABI 的应答，这两条断言盯的是"页面调到的是
+        // 宿主，而不是自己编的值"。
+        assert_eq!(
+            mounted[0]["viewId"], "self-check",
+            "navop.context.current 的应答应带 view 身份: {}",
+            mounted[0]
+        );
+        assert!(
+            mounted[0]["locale"].as_str().is_some_and(|l| !l.is_empty()),
+            "navop.i18n.locale 应答出一个语言: {}",
+            mounted[0]
+        );
+        assert!(
+            mounted[0]["themeRevision"].as_u64().is_some_and(|r| r > 0),
+            "navop.theme.snapshot 应带版本号（空主题也算 1）: {}",
             mounted[0]
         );
     }

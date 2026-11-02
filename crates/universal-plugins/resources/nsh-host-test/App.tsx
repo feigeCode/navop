@@ -7,27 +7,37 @@
 // nsh build --out . && mv bundle.js view.js
 // ```
 //
+// 两件事一起验：
 //
-// 这是 embed-gpui 官方示例（Order Ticket）的精简版：去掉了宿主
-// nativeModule/nativeComponent（`host/trading`、`host.switch`、
-// `host.watchlist`），只保留 `nsh` / `nsh/base` 自足的部分 —— spike 阶段
-// 宿主还不注册任何 native 模块，页面必须完全自持。
+// 1. **页面画得出来**（nsh 自绘 + 宿主推来的 shadcn token）——主题跟随
+//    宿主：`AppView::set_theme` 送 token，Tailwind 类（bg-card / border-border）
+//    取色；明暗跟随 `set_appearance`（`dark:` 变体）。
+// 2. **宿主 ABI 答得上**（M4）：启动时把 `navop.context.current`、
+//    `navop.i18n.locale`、`navop.theme.snapshot` 的应答一起回报给宿主，
+//    测试台子据此断言"页面真的调到了宿主，且拿到的是宿主的值"。
 //
-// 主题跟随宿主：AppView::set_theme 推来的 shadcn token 供 Tailwind 类
-// （bg-card / border-border / text-primary-foreground）取色；明暗跟随
-// set_appearance（`dark:` 变体）。
+// `nsh.json` 的 `capabilities.host` 必须列出这些名字（含通配），否则 nsh 的
+// host 白名单在引擎侧就拒掉，根本到不了宿主。
 
 import { host, mount, Scroll, signal, Text, View } from "nsh";
 import { Button, Input } from "nsh/base";
 
-/** 一条会话内自增的记录（spike 自己的状态，无宿主交互）。 */
+/** 一条会话内自增的记录（页面自己的状态，无宿主交互）。 */
 interface Item {
   id: number;
   title: string;
 }
 
+interface Snapshot {
+  viewId?: string;
+  locale?: string;
+  themeRevision?: number;
+  dark?: boolean;
+}
+
 const items = signal<Item[]>([]);
 const draft = signal("");
+const snapshot = signal<Snapshot>({});
 let next = 1;
 
 function add() {
@@ -37,11 +47,29 @@ function add() {
   draft.set("");
 }
 
+/** 走一遍宿主 ABI，把结果留在页面上（也回报给宿主，供台子断言）。 */
+async function probe(host_) {
+  const context = await host_.call("navop.context.current", {});
+  const theme = await host_.call("navop.theme.snapshot", {});
+  const locale = await host_.call("navop.i18n.locale", {});
+  snapshot.set({
+    viewId: context?.viewId,
+    locale,
+    themeRevision: theme?.revision,
+    dark: theme?.dark,
+  });
+  host_.call("navop.log.info", { message: "nsh 自检页装载完成" });
+  host_.call("spike.mounted", {
+    title: "NSH Host",
+    items: items().length,
+    viewId: context?.viewId,
+    locale,
+    themeRevision: theme?.revision,
+  });
+}
+
 function App() {
-  // M2 的宿主动手：页面真挂到这个点才算跑起来了（测试与冒烟都看这条）。
-  // 能力在 capabilities.json 里声明为 host: ["spike.mounted"]，未声明会被
-  // nsh 的 host 白名单直接拒掉。
-  host.call("spike.mounted", { title: "NSH Host", items: items().length });
+  void probe(host);
 
   return (
     <Scroll style={{ flex: 1 }}>
@@ -54,7 +82,7 @@ function App() {
             gap: 8,
           }}
         >
-          <Text class="text-lg font-semibold text-foreground">NSH Spike</Text>
+          <Text class="text-lg font-semibold text-foreground">NSH Host</Text>
           <Text class="text-sm text-muted-foreground">navop tab · nsh engine</Text>
         </View>
 
@@ -82,6 +110,15 @@ function App() {
               </View>
             ))
           )}
+        </View>
+
+        <View class="gap-1 rounded-xl border border-border px-3 py-2">
+          <Text class="text-xs text-muted-foreground">host ABI</Text>
+          <Text class="text-sm text-card-foreground">
+            view · {snapshot().viewId ?? "—"}　语言 · {snapshot().locale ?? "—"}　
+            主题 · rev {snapshot().themeRevision ?? "—"}
+            {snapshot().dark ? "（暗）" : "（亮）"}
+          </Text>
         </View>
 
         <Text class="text-xs text-muted-foreground">

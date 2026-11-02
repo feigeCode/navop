@@ -15147,6 +15147,7 @@ dependencies = [
  "gpui-fast",
  "gpui-shell",
  "nsh-core",
+ "nsh-engine",
  "nsh-platform-gpui",
  "one-assets",
  "one-core",

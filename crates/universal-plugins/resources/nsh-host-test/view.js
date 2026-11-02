@@ -5,6 +5,7 @@ import { Button } from "nsh/base";
 //#region App.tsx
 const items = signal([]);
 const draft = signal("");
+const snapshot = signal({});
 let next = 1;
 function add() {
 	const title = draft().trim();
@@ -15,11 +16,28 @@ function add() {
 	}, ...all]);
 	draft.set("");
 }
-function App() {
-	host.call("spike.mounted", {
-		title: "NSH Host",
-		items: items().length
+/** 走一遍宿主 ABI，把结果留在页面上（也回报给宿主，供台子断言）。 */
+async function probe(host_) {
+	const context = await host_.call("navop.context.current", {});
+	const theme = await host_.call("navop.theme.snapshot", {});
+	const locale = await host_.call("navop.i18n.locale", {});
+	snapshot.set({
+		viewId: context?.viewId,
+		locale,
+		themeRevision: theme?.revision,
+		dark: theme?.dark
 	});
+	host_.call("navop.log.info", { message: "nsh 自检页装载完成" });
+	host_.call("spike.mounted", {
+		title: "NSH Host",
+		items: items().length,
+		viewId: context?.viewId,
+		locale,
+		themeRevision: theme?.revision
+	});
+}
+function App() {
+	probe(host);
 	return (() => {
 		const __nsh_hv0 = element("scroll");
 		prop(__nsh_hv0, "style", { flex: 1 });
@@ -37,7 +55,7 @@ function App() {
 		});
 		const __nsh_hv3 = element("text");
 		prop(__nsh_hv3, "class", "text-lg font-semibold text-foreground");
-		const __nsh_hv4 = text("NSH Spike");
+		const __nsh_hv4 = text("NSH Host");
 		append(__nsh_hv3, __nsh_hv4);
 		const __nsh_hv5 = element("text");
 		prop(__nsh_hv5, "class", "text-sm text-muted-foreground");
@@ -84,13 +102,33 @@ function App() {
 			append(__nsh_hv13, __nsh_hv14);
 			return __nsh_hv13;
 		})()));
-		const __nsh_hv15 = element("text");
-		prop(__nsh_hv15, "class", "text-xs text-muted-foreground");
-		const __nsh_hv16 = text("第一个跑在 navop 窗口里的 nsh 页面：主题、字体、明暗全部来自宿主。");
+		const __nsh_hv15 = element("view");
+		prop(__nsh_hv15, "class", "gap-1 rounded-xl border border-border px-3 py-2");
+		const __nsh_hv16 = element("text");
+		prop(__nsh_hv16, "class", "text-xs text-muted-foreground");
+		const __nsh_hv17 = text("host ABI");
+		append(__nsh_hv16, __nsh_hv17);
+		const __nsh_hv18 = element("text");
+		prop(__nsh_hv18, "class", "text-sm text-card-foreground");
+		const __nsh_hv19 = text("view · ");
+		const __nsh_hv20 = text("　语言 · ");
+		const __nsh_hv21 = text("主题 · rev ");
+		append(__nsh_hv18, __nsh_hv19);
+		append(__nsh_hv18, __nsh_hv20);
+		append(__nsh_hv18, __nsh_hv21);
+		insert(__nsh_hv18, () => snapshot().viewId ?? "—", __nsh_hv20);
+		insert(__nsh_hv18, () => snapshot().locale ?? "—", __nsh_hv21);
+		insert(__nsh_hv18, [() => snapshot().themeRevision ?? "—", () => snapshot().dark ? "（暗）" : "（亮）"]);
 		append(__nsh_hv15, __nsh_hv16);
+		append(__nsh_hv15, __nsh_hv18);
+		const __nsh_hv22 = element("text");
+		prop(__nsh_hv22, "class", "text-xs text-muted-foreground");
+		const __nsh_hv23 = text("第一个跑在 navop 窗口里的 nsh 页面：主题、字体、明暗全部来自宿主。");
+		append(__nsh_hv22, __nsh_hv23);
 		append(__nsh_hv1, __nsh_hv2);
 		append(__nsh_hv1, __nsh_hv7);
 		append(__nsh_hv1, __nsh_hv15);
+		append(__nsh_hv1, __nsh_hv22);
 		append(__nsh_hv0, __nsh_hv1);
 		return __nsh_hv0;
 	})();
