@@ -12,6 +12,7 @@ mod connection_icon;
 mod extension_connection_form;
 mod extension_connection_tab;
 mod extension_resource;
+mod host_error;
 #[cfg(feature = "nsh-host")]
 mod nsh_host;
 #[cfg(feature = "shell-plugins")]

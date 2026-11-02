@@ -15,7 +15,7 @@ use gpui::{
 use gpui_component::Theme;
 use nsh_platform_gpui::{AppOptions, AppView};
 
-use super::{Trust, abi, bundle, theme};
+use super::{Trust, abi, bundle, session::NshSession, theme};
 
 /// 一个扩展页面（一个 `AppView` + 它的 manifest 元数据）。
 pub struct NshTab {
@@ -30,11 +30,14 @@ pub struct NshTab {
     _theme: Subscription,
     /// 页面可见的宿主能力（`host.call("navop.*")`）。关闭时置取消位。
     abi: Option<Arc<abi::HostAbi>>,
+    /// 能力平面会话：provider 句柄记账与取消。页面关闭即 drop，句柄随之回收。
+    _session: Option<Arc<NshSession>>,
 }
 
 impl NshTab {
     pub(crate) fn open(
         contribution: extension_runtime::RegisteredShellViewContribution,
+        service: crate::UniversalPluginService,
         trust: Trust,
         window: &mut Window,
         cx: &mut App,
@@ -46,6 +49,11 @@ impl NshTab {
         // 页面能力在建 `AppView` 之前就要有：handler 必须挂在它的通道上，
         // 而页面启动的第一行就可能 `host.call`。
         let host_abi = abi::HostAbi::new(&contribution);
+        let session = Arc::new(NshSession::new(
+            service,
+            contribution.backends.clone(),
+            one_core::gpui_tokio::Tokio::handle(cx),
+        ));
 
         let (view, error, accepted) = match program {
             Ok(program) => {
@@ -57,7 +65,7 @@ impl NshTab {
                 };
                 let view = cx.new(|cx| AppView::new(options, window, cx));
                 let host = view.read(cx).host();
-                abi::register(&host, Arc::clone(&host_abi));
+                abi::register(&host, Arc::clone(&host_abi), Arc::clone(&session));
                 theme::push(&view, cx);
                 // 首帧前只填缓存，不推事件：页面启动时读 `navop.theme.snapshot`
                 // 就是当前主题，多一条 'changed' 只会让它多做一次渲染。
@@ -112,6 +120,7 @@ impl NshTab {
                 title,
                 _theme,
                 abi: Some(host_abi),
+                _session: Some(session.clone()),
             }
         });
 
@@ -199,6 +208,10 @@ impl NshTab {
     pub(crate) fn cancel(&self) {
         if let Some(abi) = &self.abi {
             abi.cancel();
+        }
+        // 取消在途 provider 调用；句柄本身等 tab drop 时统一回收。
+        if let Some(session) = &self._session {
+            session.cancel();
         }
     }
 

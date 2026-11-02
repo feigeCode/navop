@@ -4,6 +4,13 @@
   "version": "0.1.0",
   "build": 1,
   "capabilities": {
-    "host": ["spike.mounted", "navop.context.*", "navop.log.*", "navop.i18n.*", "navop.theme.*"]
+    "host": [
+      "spike.mounted",
+      "navop.context.*",
+      "navop.log.*",
+      "navop.i18n.*",
+      "navop.theme.*",
+      "navop.resource.*"
+    ]
   }
 }

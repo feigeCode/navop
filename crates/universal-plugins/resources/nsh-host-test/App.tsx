@@ -33,6 +33,8 @@ interface Snapshot {
   locale?: string;
   themeRevision?: number;
   dark?: boolean;
+  /** 能力平面自检：拿一个不存在的 backend 开资源，宿主必须回稳定 code。 */
+  resourceError?: string;
 }
 
 const items = signal<Item[]>([]);
@@ -52,11 +54,23 @@ async function probe(host_) {
   const context = await host_.call("navop.context.current", {});
   const theme = await host_.call("navop.theme.snapshot", {});
   const locale = await host_.call("navop.i18n.locale", {});
+  // 能力平面（M4 第二批）：故意用一个不存在的 backend，验证调用真的
+  // 走到了 provider 分发层、并且结构化错误经 envelope 回来了。
+  let resourceError = "";
+  try {
+    await host_.call("navop.resource.open", {
+      backend: "missing",
+      resourceType: "noop",
+    });
+  } catch (error) {
+    resourceError = String((error as { message?: string })?.message ?? error);
+  }
   snapshot.set({
     viewId: context?.viewId,
     locale,
     themeRevision: theme?.revision,
     dark: theme?.dark,
+    resourceError,
   });
   host_.call("navop.log.info", { message: "nsh 自检页装载完成" });
   host_.call("spike.mounted", {
@@ -65,6 +79,7 @@ async function probe(host_) {
     viewId: context?.viewId,
     locale,
     themeRevision: theme?.revision,
+    resourceError,
   });
 }
 
@@ -118,6 +133,9 @@ function App() {
             view · {snapshot().viewId ?? "—"}　语言 · {snapshot().locale ?? "—"}　
             主题 · rev {snapshot().themeRevision ?? "—"}
             {snapshot().dark ? "（暗）" : "（亮）"}
+          </Text>
+          <Text class="text-sm text-card-foreground">
+            能力平面 · {snapshot().resourceError || "—"}
           </Text>
         </View>
 

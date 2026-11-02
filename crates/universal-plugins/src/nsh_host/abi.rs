@@ -30,14 +30,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use base64::Engine as _;
-use nsh_engine::{HostCall, HostChannel};
+use nsh_engine::{HostCall, HostChannel, HostReply};
 use serde_json::{Map, Value, json};
-
-/// SDK 用来定位错误信封的 marker（与 `shell_plugin_host::error` 同一个字符串：
-/// 页面侧的 `decodeHostError` 只认这个值，两套宿主不能各说各的。gpui-shell
-/// 那套删掉后，这个常量就只剩这里一处）。
-const ERROR_MARKER: &str = "__NAVOP_ERROR__";
 
 /// 宿主主题的一份投影（`navop.theme.snapshot` 的应答，也是推送事件的载荷）。
 #[derive(Clone, Debug, Default)]
@@ -124,7 +118,11 @@ impl HostAbi {
 ///
 /// 每个模块单独判断 manifest 是否声明 —— 与 gpui-shell 版 `with_host_module`
 /// 的开关语义一致：没声明就不挂，页面调用会得到"宿主没有处理这个名字"。
-pub(crate) fn register(channel: &HostChannel, abi: Arc<HostAbi>) {
+pub(crate) fn register(
+    channel: &HostChannel,
+    abi: Arc<HostAbi>,
+    session: Arc<super::session::NshSession>,
+) {
     if abi.has_module("navop.context") {
         let abi_for_current = Arc::clone(&abi);
         channel.handle("navop.context.current", move |call| {
@@ -165,9 +163,7 @@ pub(crate) fn register(channel: &HostChannel, abi: Arc<HostAbi>) {
             let name = call_data_str(call.data(), "name");
             respond(call, &abi_for_theme, |abi| {
                 let Some(name) = name else {
-                    return Err(HostFailure::invalid_argument(
-                        "navop.theme.color 需要 name 参数",
-                    ));
+                    return Err(invalid_argument("navop.theme.color 需要 name 参数"));
                 };
                 let theme = abi.theme.lock().unwrap_or_else(|e| e.into_inner());
                 match theme.colors.get(&name) {
@@ -177,6 +173,311 @@ pub(crate) fn register(channel: &HostChannel, abi: Arc<HostAbi>) {
             });
         });
     }
+    register_capability_plane(channel, &abi, &session);
+}
+
+/// 能力平面（provider 侧资源）的 handler。
+///
+/// 这些调用都要等 provider 进程，绝不能占着引擎线程：所以先把应答句柄
+/// `into_reply()` 取出来（`HostReply` 是 `Send`），再搬到 tokio 线程上
+/// 跑，结论照 envelope 回填。
+fn register_capability_plane(
+    channel: &HostChannel,
+    abi: &Arc<HostAbi>,
+    session: &Arc<super::session::NshSession>,
+) {
+    if abi.has_module("navop.runtime") {
+        let abi_for_runtime = Arc::clone(abi);
+        let session = Arc::clone(&session);
+        channel.handle("navop.runtime.info", move |call| {
+            let backend = payload_str(call.data(), "backend");
+            respond(call, &abi_for_runtime, |_| {
+                let Some(backend) = backend else {
+                    return Err(invalid_argument("navop.runtime.info 需要 backend 参数"));
+                };
+                session.runtime_info(&backend).map_err(capability_failure)
+            });
+        });
+    }
+    if abi.has_module("navop.resource") {
+        let abi_for = Arc::clone(abi);
+        let session_for_open = Arc::clone(&session);
+        channel.handle("navop.resource.open", move |call| {
+            let data = call.data().clone();
+            let Some(reply) = call.into_reply() else {
+                return;
+            };
+            if abi_for.cancelled() {
+                reject(reply, cancelled());
+                return;
+            }
+            let backend = payload_str(&data, "backend");
+            let resource_type = payload_str(&data, "resourceType");
+            let config = payload_value(&data, "config");
+            let cancel = session_for_open.call_token();
+            let session = Arc::clone(&session_for_open);
+            session.tokio().spawn(async move {
+                let Some((backend, resource_type)) = backend.zip(resource_type) else {
+                    reject(
+                        reply,
+                        invalid_argument("navop.resource.open 需要 backend 与 resourceType 参数"),
+                    );
+                    return;
+                };
+                settle(
+                    reply,
+                    session
+                        .open_resource(&backend, resource_type, config, cancel)
+                        .await,
+                );
+            });
+        });
+
+        for (name, pick) in [("invoke", "invoke"), ("ping", "ping"), ("close", "close")] {
+            let abi_for = Arc::clone(abi);
+            let session = Arc::clone(&session);
+            channel.handle(format!("navop.resource.{name}"), move |call| {
+                let data = call.data().clone();
+                let Some(reply) = call.into_reply() else {
+                    return;
+                };
+                if abi_for.cancelled() {
+                    reject(reply, cancelled());
+                    return;
+                }
+                let handle = payload_str(&data, "handle");
+                let method = payload_str(&data, "method");
+                let params = payload_value(&data, "params");
+                let cancel = session.call_token();
+                let session = Arc::clone(&session);
+                session.tokio().spawn(async move {
+                    let Some(handle) = handle else {
+                        reject(
+                            reply,
+                            invalid_argument(format!("navop.resource.{pick} 需要 handle 参数")),
+                        );
+                        return;
+                    };
+                    let result = match pick {
+                        "invoke" => match method {
+                            Some(method) => {
+                                session
+                                    .invoke_resource(&handle, method, params, cancel)
+                                    .await
+                            }
+                            None => Err(invalid_argument("navop.resource.invoke 需要 method 参数")),
+                        },
+                        "ping" => session.ping_resource(&handle, cancel).await,
+                        _ => session.close_resource(&handle, cancel).await,
+                    };
+                    settle(reply, result);
+                });
+            });
+        }
+    }
+    if abi.has_module("navop.job") {
+        let abi_for = Arc::clone(abi);
+        let session_for_start = Arc::clone(&session);
+        channel.handle("navop.job.start", move |call| {
+            let data = call.data().clone();
+            let Some(reply) = call.into_reply() else {
+                return;
+            };
+            if abi_for.cancelled() {
+                reject(reply, cancelled());
+                return;
+            }
+            let resource = payload_str(&data, "resource");
+            let method = payload_str(&data, "method");
+            let params = payload_value(&data, "params");
+            let cancel = session_for_start.call_token();
+            let session = Arc::clone(&session_for_start);
+            session.tokio().spawn(async move {
+                let Some((resource, method)) = resource.zip(method) else {
+                    reject(
+                        reply,
+                        invalid_argument("navop.job.start 需要 resource 与 method 参数"),
+                    );
+                    return;
+                };
+                settle(
+                    reply,
+                    session.start_job(&resource, method, params, cancel).await,
+                );
+            });
+        });
+        for (name, pick) in [
+            ("status", "status"),
+            ("cancel", "cancel"),
+            ("result", "result"),
+            ("close", "close"),
+        ] {
+            let abi_for = Arc::clone(abi);
+            let session = Arc::clone(&session);
+            channel.handle(format!("navop.job.{name}"), move |call| {
+                let handle = payload_str(call.data(), "handle");
+                let Some(reply) = call.into_reply() else {
+                    return;
+                };
+                if abi_for.cancelled() {
+                    reject(reply, cancelled());
+                    return;
+                }
+                let cancel = session.call_token();
+                let session = Arc::clone(&session);
+                session.tokio().spawn(async move {
+                    let Some(handle) = handle else {
+                        reject(
+                            reply,
+                            invalid_argument(format!("navop.job.{pick} 需要 handle 参数")),
+                        );
+                        return;
+                    };
+                    let result = match pick {
+                        "status" => session.job_status(&handle, cancel).await,
+                        "cancel" => session.cancel_job(&handle, cancel).await,
+                        "result" => session.job_result(&handle, cancel).await,
+                        _ => session.close_job(&handle, cancel).await,
+                    };
+                    settle(reply, result);
+                });
+            });
+        }
+    }
+    if abi.has_module("navop.event") {
+        let abi_for = Arc::clone(abi);
+        let session_for_open = Arc::clone(&session);
+        channel.handle("navop.event.open", move |call| {
+            let data = call.data().clone();
+            let Some(reply) = call.into_reply() else {
+                return;
+            };
+            if abi_for.cancelled() {
+                reject(reply, cancelled());
+                return;
+            }
+            let resource = payload_str(&data, "resource");
+            let kind = payload_str(&data, "kind");
+            let capacity = payload_u32(&data, "capacity");
+            let cancel = session_for_open.call_token();
+            let session = Arc::clone(&session_for_open);
+            session.tokio().spawn(async move {
+                let Some((resource, kind)) = resource.zip(kind) else {
+                    reject(
+                        reply,
+                        invalid_argument("navop.event.open 需要 resource 与 kind 参数"),
+                    );
+                    return;
+                };
+                settle(
+                    reply,
+                    session.open_event(&resource, kind, capacity, cancel).await,
+                );
+            });
+        });
+        for (name, pick) in [("read", "read"), ("close", "close")] {
+            let abi_for = Arc::clone(abi);
+            let session = Arc::clone(&session);
+            channel.handle(format!("navop.event.{name}"), move |call| {
+                let data = call.data().clone();
+                let Some(reply) = call.into_reply() else {
+                    return;
+                };
+                if abi_for.cancelled() {
+                    reject(reply, cancelled());
+                    return;
+                }
+                let handle = payload_str(&data, "handle");
+                let max_events = payload_u32(&data, "maxEvents");
+                let wait_ms = payload_u32(&data, "waitMs");
+                let cancel = session.call_token();
+                let session = Arc::clone(&session);
+                session.tokio().spawn(async move {
+                    let Some(handle) = handle else {
+                        reject(
+                            reply,
+                            invalid_argument(format!("navop.event.{pick} 需要 handle 参数")),
+                        );
+                        return;
+                    };
+                    let result = match pick {
+                        "read" => {
+                            session
+                                .read_event(&handle, max_events, wait_ms, cancel)
+                                .await
+                        }
+                        _ => session.close_event(&handle, cancel).await,
+                    };
+                    settle(reply, result);
+                });
+            });
+        }
+    }
+    if abi.has_module("navop.blob") {
+        for (name, pick) in [("read", "read"), ("close", "close")] {
+            let abi_for = Arc::clone(abi);
+            let session = Arc::clone(&session);
+            channel.handle(format!("navop.blob.{name}"), move |call| {
+                let data = call.data().clone();
+                let Some(reply) = call.into_reply() else {
+                    return;
+                };
+                if abi_for.cancelled() {
+                    reject(reply, cancelled());
+                    return;
+                }
+                let handle = payload_str(&data, "handle");
+                let max_bytes = payload_u32(&data, "maxBytes");
+                let cancel = session.call_token();
+                let session = Arc::clone(&session);
+                session.tokio().spawn(async move {
+                    let Some(handle) = handle else {
+                        reject(
+                            reply,
+                            invalid_argument(format!("navop.blob.{pick} 需要 handle 参数")),
+                        );
+                        return;
+                    };
+                    let result = match pick {
+                        "read" => session.read_blob(&handle, max_bytes, cancel).await,
+                        _ => session.close_blob(&handle, cancel).await,
+                    };
+                    settle(reply, result);
+                });
+            });
+        }
+    }
+}
+
+/// 把 `NavopError` 摊平成 handler 侧统一的失败类型。
+fn capability_failure(error: crate::host_error::NavopError) -> HostFailure {
+    error
+}
+
+/// 在 tokio 线程上把结论回填给页面。
+fn settle(reply: HostReply, result: Result<Value, crate::host_error::NavopError>) {
+    match result {
+        Ok(value) => reply.resolve(value),
+        Err(error) => reply.reject(error.render()),
+    }
+}
+
+fn reject(reply: HostReply, failure: HostFailure) {
+    reply.reject(failure.render());
+}
+
+fn payload_str(data: &Value, field: &str) -> Option<String> {
+    data.get(field)?.as_str().map(str::to_owned)
+}
+
+fn payload_value(data: &Value, field: &str) -> Value {
+    data.get(field).cloned().unwrap_or(Value::Null)
+}
+
+fn payload_u32(data: &Value, field: &str) -> Option<u32> {
+    data.get(field)?
+        .as_u64()
+        .and_then(|value| u32::try_from(value).ok())
 }
 
 /// 宿主可能处在的语言，与 `one_core` 的常量同源（设置页下拉项就是这一组）。
@@ -193,7 +494,7 @@ fn respond(
     body: impl FnOnce(&HostAbi) -> Result<Value, HostFailure>,
 ) {
     if abi.cancelled() {
-        call.reject(render_error(HostFailure::cancelled()));
+        call.reject(render_error(cancelled()));
         return;
     }
     match body(abi) {
@@ -213,12 +514,12 @@ fn context_current(abi: &HostAbi) -> Value {
 
 fn log(abi: &HostAbi, level: &str, message: Option<String>) -> Result<Value, HostFailure> {
     let Some(message) = message else {
-        return Err(HostFailure::invalid_argument(format!(
+        return Err(invalid_argument(format!(
             "navop.log.{level} 需要 message 参数"
         )));
     };
     if message.len() > 16 * 1024 {
-        return Err(HostFailure::invalid_argument("log message 超过 16 KiB"));
+        return Err(invalid_argument("log message 超过 16 KiB"));
     }
     let (extension_id, view_id) = (&abi.extension_id, &abi.view_id);
     match level {
@@ -238,59 +539,36 @@ fn call_data_str(data: &Value, field: &str) -> Option<String> {
     }
 }
 
-/// 一条 ABI 错误：稳定 code + message（+ 可选 details）。
-struct HostFailure {
-    code: &'static str,
-    message: String,
-    retryable: bool,
-    details: Option<Value>,
+/// 与 gpui-shell 平面同一个信封、同一套稳定 code：统一走
+/// [`crate::host_error`]，避免两个 UI 平面的错误词汇表漂移。
+type HostFailure = crate::host_error::NavopError;
+
+fn cancelled() -> HostFailure {
+    HostFailure::new(
+        crate::host_error::ErrorCode::RequestCancelled,
+        "页面已关闭，调用取消",
+    )
 }
 
-impl HostFailure {
-    fn invalid_argument(message: impl Into<String>) -> Self {
-        Self {
-            code: "INVALID_ARGUMENT",
-            message: message.into(),
-            retryable: false,
-            details: None,
-        }
-    }
-
-    fn cancelled() -> Self {
-        Self {
-            code: "REQUEST_CANCELLED",
-            message: "页面已关闭，调用取消".into(),
-            retryable: false,
-            details: None,
-        }
-    }
+fn invalid_argument(message: impl Into<String>) -> HostFailure {
+    HostFailure::new(crate::host_error::ErrorCode::InvalidArgument, message)
 }
 
-/// 与 `shell_plugin_host::error` 同一个信封：`message\n__NAVOP_ERROR__<base64url-json>`。
+/// `message\n__NAVOP_ERROR__<base64url-json>`。
 fn render_error(failure: HostFailure) -> String {
-    let message = failure.message;
-    let mut envelope = json!({
-        "code": failure.code,
-        "message": message,
-        "retryable": failure.retryable,
-    });
-    if let Some(details) = failure.details {
-        envelope["details"] = details;
-    }
-    let encoded =
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(envelope.to_string().as_bytes());
-    format!("{message}\n{ERROR_MARKER}{encoded}")
+    failure.render()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine as _;
 
     #[test]
     fn error_envelope_round_trips() {
-        let rendered = render_error(HostFailure::invalid_argument("缺少 name"));
+        let rendered = render_error(invalid_argument("缺少 name"));
         let (message, envelope) = rendered
-            .split_once(ERROR_MARKER)
+            .split_once(crate::host_error::ERROR_MARKER)
             .expect("envelope marker present");
         assert_eq!(message.trim(), "缺少 name");
         let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD

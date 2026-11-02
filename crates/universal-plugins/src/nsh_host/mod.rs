@@ -11,6 +11,7 @@
 mod abi;
 mod bundle;
 mod opener;
+mod session;
 mod tab;
 mod theme;
 
@@ -129,7 +130,13 @@ fn open_view(
         tabs.activate_or_add_tab_lazy(
             tab_id.clone(),
             move |window, cx| {
-                let tab = NshTab::open(contribution, host_for_tab.trust().clone(), window, cx);
+                let tab = NshTab::open(
+                    contribution,
+                    host_for_tab.service.clone(),
+                    host_for_tab.trust().clone(),
+                    window,
+                    cx,
+                );
                 host_for_tab.track(&extension_id, tab.downgrade());
                 TabItem::new(tab_id, format!("nsh:{extension_id}"), tab)
             },
@@ -198,6 +205,8 @@ mod tests {
                 ShellHostModule::Log,
                 ShellHostModule::I18n,
                 ShellHostModule::Theme,
+                ShellHostModule::Resource,
+                ShellHostModule::Runtime,
             ]
             .into_iter()
             .collect(),
@@ -211,7 +220,12 @@ mod tests {
     fn a_registered_view_loads_and_reaches_the_host(cx: &mut TestAppContext) {
         cx.update(|cx| {
             gpui_component::init(cx);
+            // 能力平面会话要 tokio 句柄；台子里现起一个最小的。
+            one_core::gpui_tokio::init(cx);
         });
+        let service = cx
+            .update(|cx| crate::universal_plugins::register_application_owner(cx))
+            .expect("台子只注册一次 plugin service");
         // nsh 引擎有自己的线程；gpui 的测试调度器默认断言只有测试线程在跑。
         cx.executor().allow_parking();
         let window = cx.add_window(|_, _| Empty);
@@ -221,7 +235,7 @@ mod tests {
         // 台子不碰真实数据目录：开发形态不需要信任库。
         let trust: Trust = Rc::new(RefCell::new(nsh_platform_gpui::package::TrustStore::new()));
         let tab = context.update(|window, cx| {
-            let tab = NshTab::open(fixture_contribution(), trust, window, cx);
+            let tab = NshTab::open(fixture_contribution(), service, trust, window, cx);
             let tab_ref = tab.read(cx);
             assert_eq!(tab_ref.extension_id(), "dev.navop.nsh-host-test");
             assert_eq!(tab_ref.view_id(), "self-check");
