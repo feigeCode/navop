@@ -40,6 +40,10 @@ pub(crate) fn granted(
         "network": { "hosts": hosts, "sockets": sockets },
         "process": { "execute": commands },
         "host": host,
+        // 页面要读还得自己在 nsh.json 里声明 `"clipboard": true`（声明与
+        // 上限取交集）。写剪贴板只影响用户下一次粘贴，且必须由页面在
+        // 一次按键/点击里发起，风险低于 fs/net，所以上限这里放行。
+        "clipboard": true,
     });
     if value["network"]["hosts"]
         .as_array()
