@@ -241,3 +241,71 @@ M1–M2 去风险（嵌入可行性最便宜的验证点）；M3–M5 是本方�
 | 开发者工作流 | navop 自建脚本装载 | nsh CLI 原生（init/build/check/test/dev/publish），navop 只做宿主 |
 | host ABI | 30 函数逐个映射 HostChannel | 按 nsh 四类桥接分流（host.call/nativeModule/nativeComponent/params+on） |
 | 战略含义 | navop 继续拥有扩展格式 | **扩展生态直接对接 nsh 生态**（含 AI 生成 UI 方向）；navop 差异化 = 宿主能力 + 工作台 + 分发治理 |
+
+---
+
+## 14. 实施记录（2026-11-02）
+
+方案已按 M1–M8 全部落地，分支 `refactor/nsh-host`（开发期在 `m2-nsh-spike`），
+扩展仓分支 `feat/nsh-pages`。沉淀下来的事实与**与方案的偏差**都在这一节。
+
+### 14.1 里程碑与实际提交
+
+| 里程碑 | 内容 | 落点 |
+|---|---|---|
+| M1 | nsh fork 兼容 gpui-fast 0.1.12 | `feigeCode/nsh` 分支 `navop/gpui-0.1.12` 提交 `81c93f59`：`chrome.rs` 改用 `KeyBinding::load`（`KeyBinding::new` 现在要 `&'static str`），并补本地 patch 块把 `gpui-fast*`/`gpui-pre-*` 全钉到 `release/v0.1.12` |
+| M2 | navop 里挂 `AppView` tab | `nsh_host/` 雏形 + 编译期 `nsh build` 产物内嵌 |
+| M3 | `NshHost` 骨架（目录装载） | `nsh:{view_key}` tab、装载失败也开 tab 并显示原因 |
+| M4 | host ABI 全量桥接 | `abi.rs`（context/log/i18n/theme/resource/job/event/blob/runtime/dev/workbench）+ `session.rs`（四张句柄表、generation、取消）+ `host_error.rs`（12 个稳定码） |
+| M5 | 租约装载 + 嵌入页 | `NshTab::start_prepare` 走 `activate_runtime` 租约；`page_host.rs` 实现 `CustomPageHost`（借来的资源 `owned:false`，`navop.workbench.dispatch`） |
+| M6 | 引擎门 + 产物布局 + 试点页 | `engines.nsh`、`entry → dist/bundle.js`、docker overview 试点 |
+| M7 | 删除 gpui-shell | `8cba5c7a5`：删 `shell_plugin_host/`、`shell_plugin_tab*`、`shell_page_host.rs`、`gpui-shell` 依赖与 `engines.gpui_shell` 门；`cargo tree -i gpui-shell` 不再命中，`Cargo.lock` 里 0 处 |
+| M8 | 24 个页面改用 TSX | docker 10 / mqtt 5 / rocketmq 3 / elasticsearch 1 / dev-tools 1 / 示例 4；共享设计系统 `docker/ui/lib/{theme,format,ui}` |
+
+### 14.2 与方案不一致的地方（都是有意收敛）
+
+- **打包分发仍未走 `.nshpkg` 签名包**。宿主两条装载路径都在（`bundle.rs`：同目录
+  有 `.nshpkg` 就 `verify_package` + 首帧健康后 `accept_package`；否则 `Bundle::source`
+  直装），但扩展仓目前发布的是**目录形态**——`dist/bundle.js` 随扩展包一起走，
+  信任边界仍是"扩展包整体签名/安装"，没有用到 nsh 的包级签名与防回滚。要走签名包，
+  扩展仓的发布流水线得改成 `nsh publish` 产出 `.nshpkg`，宿主把安装目录里的 `.nshpkg`
+  交给 `verify_package`。这一步没有做，因为扩展仓的发布链路（R2/多 target）不在本
+  次重构范围内。
+- **`navop.json` 资产没有引入**。方案里设想把 navop 专有的工作台声明塞进包内
+  asset 参与签名；实际仍用 `extension.json`（nsh CLI 不解析它，所以不冲突），
+  也就没动 `deny_unknown_fields` 那条约束。
+- **`nativeModule` / `nativeComponent` 没有用**。四类桥接里只落地了 `host.call`
+  一类：navop 的工作台/资源能力全是数据型调用，不需要把 gpui-kit 控件注入页面；
+  需要原生控件时再按 `examples/embed-gpui` 的 `NativeComponent` 做法补。
+- **`set_ui_sets` 只用默认集**（`nsh_base::registry()`），没有注册 navop 自有组件
+  目录——`ui_sets` 是进程级的，而 navop 的组件需求已经在 TSX 里自绘解决。
+- **热更新接入 dev server 未接**：`connect_dev_server` 已有 API，但 navop 的开发者
+  工具页现在是"打开本地工程目录"的形态（`navop.dev.*`）。
+
+### 14.3 迁移中确认的宿主侧缺口（provider 侧后续可补）
+
+- docker：`containerStats` 缺 networks/blkio；`containerTop` 不能传 `psArgs`；
+  网络列表返回 12 位短 id，`inspect/remove` 原样透传（daemon 不认短 id 会 404）；
+  日志只能轮询，没有 follow 通道。
+- mqtt：`client_addr`、主题级 `message_count` 恒为 `None`；`metrics` 无连接建立时间，
+  速率只能页面采样差算。
+- rocketmq：`metrics` 无消费组数/消息总量；`clusterOverview` 只回主节点（无 role/磁盘）；
+  `MessagePage.total` 是本页条数，`has_more` 恒真；三个查询都强制 topic；
+  `sendMessage` 的字段是单数 `tag`/`key`。
+
+### 14.4 nsh/TSX 的语义坑（写页面前必读，已写进 [`nsh-page-guide.zh-CN.md`](nsh-page-guide.zh-CN.md)）
+
+组件体只在挂载时执行一次（顶层 `if (...) return` 会永久停在加载态）；
+`onChange={sig.set}` 抛 `not a live signal`；`numberOfLines` 是 prop 不是 style；
+`Each` 不从 `"nsh"` 导出、不能传 `key=`；主题颜色写在模块级常量里会冻住（要 getter）；
+百分比宽度只能 `` `${Math.round(p*100)}%` ``。
+
+### 14.5 给后续接手的人
+
+- 写页面看 [`nsh-page-guide.zh-CN.md`](nsh-page-guide.zh-CN.md)（页面工程结构、
+  `navop.*` 命名空间表、两种页面形态、设计系统、10 条坑、测试与交付清单）。
+- 宿主侧入口：`crates/universal-plugins/src/nsh_host/{mod,tab,session,abi,bundle,page_host,connection,monitor,dev,dispatch,grant,theme}`。
+  加一个 `navop.*` 能力 = 在 `abi.rs` 注册 handler + 在 `nsh-page-guide` 的命名空间表
+  里登记；加一种页面形态 = 看 `tab.rs`（tab）与 `page_host.rs`（嵌入页）。
+- 别再加回 gpui-shell：`crates/resource_view` 的 `CustomPageHost` 是引擎无关契约，
+  换/加第三套 UI 平面时才需要动它。
