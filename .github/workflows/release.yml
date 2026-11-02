@@ -509,8 +509,12 @@ jobs:
           # 这是唯一一处显式写 feature 列表的地方，内容是「默认集减去 shell-plugins」，
           # 所以不要在这里补回 `embedded-webview`：默认集本身已经不带它了
           # （见 crates/navop_app/Cargo.toml），补回来会让 win32 成为唯一的另一种形态。
-          # 独立产品不构建 win32，-p 切包名即可，feature 分支只服务全量。
-          $features = if ($target -eq "i686-pc-windows-msvc") {
+          # 这两组开关只服务全量产品（`apps/navop` 会把它们转发给 `navop_app`）；
+          # 独立产品的特性集写在自己的 Cargo.toml 里（`default-features = false`），
+          # 给它们传同样的 feature 名会直接报「package does not contain these features」。
+          $features = if ("${{ matrix.product }}" -ne "navop") {
+            @()
+          } elseif ($target -eq "i686-pc-windows-msvc") {
             @("--no-default-features", "--features", "wasm-components,windows-native-rdp")
           } else {
             @("--features", "windows-native-rdp")
