@@ -58,6 +58,12 @@
 
 `AppView`：标准 GPUI Entity（Render/Focusable/EntityInputHandler），per-view 独立 engine 线程 + QuickJS VM + data_dir + HostChannel；`AppView::new(AppOptions, window, cx)` → `load(App::Js(bundle))` 或 `run_package(&LoadedPackage)`；`connect_dev_server`（dev 热更新）；进程级共享面：`set_ui_sets(Vec<Registry>)`（组件/模块注册表）、keybindings、rt 主线程队列、macOS 菜单 last-wins。
 
+### 2.7 UE 表现力（方言对比，2026-11-02 核实）
+
+- **TSX 结构化 vs JS builder 链**：gpui-shell 方言（`v_flex().child(h_flex().child(...))`）嵌套 3~4 层后结构不可读，是现有 31 页全是「平铺列表+徽章+按钮」的结构性原因；nsh 方言（JSX 树 + style 对象/className） UE 上限高一个档次——实证：nwork（自研 nsh 应用，split-grid 分栏、quicklook、批量操作栏等复杂 UE，docs/shots/ 27 张截图）与官方 gallery（60+ demo）。
+- **组件覆盖**：`nsh/base`（TSX 侧模块）71+ 组件（gallery import 统计）：DataTable（百万行虚拟化、onVisibleRowsChange 窗口服务、33ms 实时 tick）、Editor（LSP diagnostics/completion/decoration）、TextView(markdown/html)、DiffView、DockArea、ResizablePanel、Tree、Combobox、Command、ColorPicker 全家、plot 全家（Arc/Area/Bar/Line/Pie/Sankey）、Carousel、Tabs、Toolbar、HoverCard、Canvas 2D 等——gpui-component 深水区均有对应物。nativeComponent 桥只是兜底，不是主路径。
+- **Tailwind className**：原生支持任意值/渐变/内阴影/dark 变体（gallery/Tailwind.tsx），AI 生成 UI 语料直接可用；主题 token 统一 `token("background")` / className，无 gpui-shell 的暗规则坑（如 Badge.color 拒主题 token 名）。
+
 ---
 
 ## 3. 目标架构：navop 作为一个 nsh host
@@ -195,7 +201,7 @@ host.handle("navop.job.*", …); host.handle("navop.event.*", …); host.handle(
 | M3 NshHost 骨架 | TrustStore 持久化（目录）、verify/load/accept 两阶段、NshTab 生命周期（stop 后台化）、`navop.json` asset 解析 | 从磁盘装一个 .nshpkg 开 tab、close、再装回退包 |
 | M4 host ABI | navop.* 按 §6 四类桥接分流（resource/job/event/blob → host.call；workbench → nativeModule；主题/i18n → push）；错误/取消语义 | TSX 页面 await host.call 打通 provider 全链路 |
 | M5 catalog/市场接线 | ExtensionRuntimeCatalog 收 .nshpkg、lease 咬合（§7）、安装/更新/回滚/撤销流、dev 模式例外 | 市场装包→升级→撤销→回退全流程；本地 dev bundle 热载 |
-| M6 试点迁移 | shell-view-example、js-toolbox(3)、docker overview 以 nsh app 形态重写 | 试点页全功能；产出方言映射表（gpui-component → nsh 组件） |
+| M6 试点迁移 | shell-view-example、js-toolbox(3)、docker overview 以 nsh app 形态重写 | 试点页全功能；产出方言映射表（gpui-component → nsh/base，注意组件名与 props 语义差异） |
 | M7 全量迁移 + 收尾 | 剩余页面、测试基线重建（extension_pages_render_tests → nsh test/shot 形态）、移除 gpui-shell 依赖、docs 更新 | cargo tree 无 gpui-shell；全页断言通过 |
 
 M1–M2 去风险（嵌入可行性最便宜的验证点）；M3–M5 是本方案的核心重构量；M6–M7 机械迁移。
@@ -220,7 +226,7 @@ M1–M2 去风险（嵌入可行性最便宜的验证点）；M3–M5 是本方�
 | UI_SETS/keybindings/rt 队列进程级共享；macOS 菜单 last-wins | 中 | UI_SETS 只放公共集（nsh_base::registry() + navop 桥接件）；per-view 走 AppOptions.components；扩展页不定义应用菜单 |
 | stop() join 阻塞 UI | 中 | close 路径 background_executor 后台化 |
 | webview overlay 盖 GPUI；Linux 外 video；变换组字形等渲染缺口 | 低 | 扩展页暂无此需求；需要时 nativeComponent 桥接兜底 |
-| 31 页全量重写人力 | 中 | M6 产出方言映射表后机械化；nativeComponent 桥兜底复杂页面 |
+| 31 页全量重写人力 | 中 | TSX 结构化写法 UE 上限高于 builder 链（nwork 27 张截图 + 官方 gallery 60+ demo 已验证）；nsh/base 71+ 组件（DataTable 百万行虚拟化/Editor+LSP/DiffView/DockArea/plot 全家，gallery import 证实）覆盖 gpui-component 深水区；nativeComponent 桥仅兜底 |
 | 生态断代（老 extension.json UI 扩展全失效） | 低 | 用户已确认：扩展尚未正式使用（28 个现存扩展全是 provider，不受影响） |
 | 未来 gpui-fast 动态 keybinding 方向易碎 | 中 | KeyBinding::load 补丁模式固定；跟踪上游 0.2 |
 
