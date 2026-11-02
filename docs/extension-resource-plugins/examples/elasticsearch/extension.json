@@ -6,7 +6,7 @@
   "description": "Reference IPC provider for Elasticsearch indices, mappings, search and documents.",
   "engines": {
     "onetcli": ">=0.15.1",
-    "gpui_shell": "0.6.4"
+    "nsh": "0.3.0"
   },
   "api": {
     "extension": "1.0",
@@ -41,11 +41,20 @@
         "resourceType": "elasticsearch",
         "shellViewId": "explorer",
         "form": {
-          "tabs": [{
-            "id": "general",
-            "label": "General",
-            "fields": [{ "id": "url", "label": "URL", "fieldType": "Text", "required": true }]
-          }]
+          "tabs": [
+            {
+              "id": "general",
+              "label": "General",
+              "fields": [
+                {
+                  "id": "url",
+                  "label": "URL",
+                  "fieldType": "Text",
+                  "required": true
+                }
+              ]
+            }
+          ]
         }
       }
     ],
@@ -59,7 +68,10 @@
         "backends": {
           "search": "main"
         },
-        "modules": ["context", "resource"]
+        "modules": [
+          "context",
+          "resource"
+        ]
       }
     ]
   }

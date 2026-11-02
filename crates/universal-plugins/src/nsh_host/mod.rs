@@ -444,7 +444,6 @@ mod tests {
             .collect(),
             permissions: Vec::new(),
             shell_api_version: "1".into(),
-            required_gpui_shell_version: String::new(),
             required_nsh_version: Some("0.3.0".into()),
         }
     }

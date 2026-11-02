@@ -163,7 +163,6 @@ mod tests {
             modules: modules.iter().copied().collect::<BTreeSet<_>>(),
             permissions: Vec::new(),
             shell_api_version: "1.0".into(),
-            required_gpui_shell_version: String::new(),
             required_nsh_version: Some("0.3.0".into()),
         }
     }

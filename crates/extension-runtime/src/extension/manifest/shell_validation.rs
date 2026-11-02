@@ -8,7 +8,6 @@ use super::{Manifest, ShellHostModule, ShellViewContrib};
 
 const SHELL_EXEC_PERMISSION: &str = "shell:exec";
 const RESERVED_BACKEND_ALIASES: &[&str] = &["host", "navop", "default"];
-const GPUI_SHELL_VERSION: &str = "0.6.4";
 /// navop 内置的 nsh 运行时版本（`nsh-platform-gpui` 的 minor）。
 const NSH_VERSION: &str = "0.3.0";
 
@@ -101,30 +100,15 @@ fn validate_shell_view(
 
 /// shellView 必须声明它跑在哪个 UI 平面上，并且那个平面得够新。
 ///
-/// 两个门是**可选二选一**（也可以都声明）：`engines.nsh` 交给 nsh 宿主，
-/// `engines.gpui_shell` 交给旧 gpui-shell 宿主。存量扩展只声明后者，迁移中
-/// 两边都要能装；M7 删掉 gpui-shell 后这道门只剩 nsh。
+/// 现在只有 nsh 一个平面：声明了 `engines.nsh` 的扩展才会被登记出
+/// shellView。旧的 `engines.gpui_shell` 随 gpui-shell 一起删掉了——
+/// 宿主已经没有那条渲染路径，再接受这个门只会让扩展以为自己能跑。
 fn validate_engine_versions(manifest: &Manifest) -> Result<(), ShellViewValidationError> {
     let nsh = manifest.engines.nsh.trim();
-    let gpui_shell = manifest.engines.gpui_shell.trim();
-    if nsh.is_empty() && gpui_shell.is_empty() {
-        return Err(error(
-            "/engines/nsh",
-            "shellViews requires `engines.nsh` (or the legacy `engines.gpui_shell`)",
-        ));
+    if nsh.is_empty() {
+        return Err(error("/engines/nsh", "shellViews requires `engines.nsh`"));
     }
-    if !nsh.is_empty() {
-        validate_engine_version(nsh, NSH_VERSION, "/engines/nsh", "nsh")?;
-    }
-    if !gpui_shell.is_empty() {
-        validate_engine_version(
-            gpui_shell,
-            GPUI_SHELL_VERSION,
-            "/engines/gpui_shell",
-            "gpui-shell",
-        )?;
-    }
-    Ok(())
+    validate_engine_version(nsh, NSH_VERSION, "/engines/nsh", "nsh")
 }
 
 fn validate_engine_version(

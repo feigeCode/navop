@@ -430,7 +430,6 @@ impl ExtensionRuntimeCatalog {
                     modules: view.modules.iter().copied().collect(),
                     permissions: manifest.permissions.clone(),
                     shell_api_version: manifest.api.shell.clone(),
-                    required_gpui_shell_version: manifest.engines.gpui_shell.clone(),
                     required_nsh_version: (!manifest.engines.nsh.trim().is_empty())
                         .then(|| manifest.engines.nsh.clone()),
                 },

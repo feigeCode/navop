@@ -140,7 +140,7 @@ fn manifest_loads_resource_workbench_with_route_and_navigation() {
             "version": "1.0.0",
             "engines": {
                 "onetcli": ">=0.1.0",
-                "gpui_shell": "0.6.4"
+                "nsh": "0.3.0"
             },
             "permissions": ["shell:exec", "spawn:./bin/provider"],
             "runtime": {
@@ -947,7 +947,6 @@ fn shell_views_accept_the_nsh_engine_gate() {
     let manifest =
         load_from_dir(tmp.path()).expect("声明 engines.nsh 的 shellView 应能通过清单校验");
     assert_eq!(manifest.engines.nsh, "0.3.0");
-    assert!(manifest.engines.gpui_shell.is_empty());
 }
 
 #[test]
@@ -1261,7 +1260,7 @@ fn write_shell_manifest(dir: &std::path::Path, view: serde_json::Value) {
         "id": "com.example.resources",
         "name": "Resources",
         "version": "0.1.0",
-        "engines": { "onetcli": ">=0.1.0", "gpui_shell": "0.6.4" },
+        "engines": { "onetcli": ">=0.1.0", "nsh": "0.3.0" },
         "api": { "shell": "1.0" },
         "permissions": ["shell:exec", "spawn:./bin/provider"],
         "runtime": {

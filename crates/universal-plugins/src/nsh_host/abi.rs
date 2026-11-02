@@ -216,9 +216,16 @@ fn register_dev(
                 return;
             }
             // 参数都在这里取成拥有所有权的字符串：闭包要跨线程。
-            let first = payload_str(&data, "root")
-                .or_else(|| payload_str(&data, "extensionId"))
-                .or_else(|| data.as_str().map(str::to_owned));
+            // `openView` 认的是扩展 id（宿主内部再补 dev 前缀），其余操作认的是
+            // 项目根路径 —— 所以按操作决定先读哪个字段，不能一律 `root` 优先。
+            let first = match op {
+                DevOp::OpenView => payload_str(&data, "extensionId")
+                    .or_else(|| payload_str(&data, "root"))
+                    .or_else(|| data.as_str().map(str::to_owned)),
+                _ => payload_str(&data, "root")
+                    .or_else(|| payload_str(&data, "extensionId"))
+                    .or_else(|| data.as_str().map(str::to_owned)),
+            };
             let second = payload_str(&data, "viewId");
             let tail = payload_u32(&data, "tail").unwrap_or(200) as usize;
             let dispatcher = dispatcher.clone();

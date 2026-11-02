@@ -231,7 +231,6 @@ mod tests {
             modules: modules.iter().copied().collect::<BTreeSet<_>>(),
             permissions: permissions.iter().map(|p| (*p).to_string()).collect(),
             shell_api_version: "1.0".into(),
-            required_gpui_shell_version: String::new(),
             required_nsh_version: Some("0.3.0".into()),
         }
     }
