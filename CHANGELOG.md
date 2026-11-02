@@ -4,6 +4,56 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.23.0-beta.3] - 2026-11-02
+
+#### 更新内容
+
+- 桌面端正式拆成三个产品，同一个版本号一起发：**Navop**（数据库 + SSH/SFTP + 终端 + 远程桌面 + AI 全量版）、**Navop Shell**（SSH/SFTP、本地终端、端口转发、RDP/VNC）、**Navop Data**（PostgreSQL / MySQL / SQLite / SQL Server / Oracle / ClickHouse / Redis / MongoDB）。三个产品各有独立的安装包、数据目录与钥匙串条目，可以并排安装、互不干扰，托盘图标带产品角标，退出提示也会写明是哪个产品。
+- 更新机制分成稳定通道与 beta 测试通道：稳定版只收正式版本，测试通道只收预发布版本，两者清单完全分开，老版本不会被悄悄推到 beta。设置「关于 → 更新」新增通道下拉，切到测试版会先确认一次，版本号旁边会显示「测试版」徽标。
+- 检查更新可以选镜像源：自动 / Cloudflare / CNB / GitHub。选中的源排在最前，失败自动按顺序回退，切换后立即用新源检查一次。beta 通道不会回退到 GitHub 源——GitHub 的 latest 只认正式版本，回退过去会把测试通道悄悄降级成稳定版。
+- 扩展下载沿用同一份镜像偏好：扩展安装包、单扩展自己的清单、扩展市场清单都按这个顺序回退，CNB 侧从 Release 资产读快照，国内网络慢时不用再手动换源。
+- 扩展市场清单改由固定的 `manifest` Release 资产托管（GitHub 与 CNB 各一份快照），客户端优先读 R2，其次 GitHub 快照与 CNB 快照，raw 直链只作最后兜底，清单不再依赖 GitHub raw 的可用性。
+- 三个产品各自提供 Public MCP 宿主与独立的发现身份，外部工具按产品分别发现、分别授权；「设置 → MCP」新增工具集开关与逐项开关，可以只暴露需要的工具，数据库连接管理等工具集按产品能力注册。
+- 独立产品补齐了自己的主页与打包链路：Navop Shell 装配终端/SSH 主页，Navop Data 装配数据库/Redis/MongoDB 主页；macOS、Linux、Windows 安装包按产品生成独立身份，Windows 安装器身份可参数化。
+- Navop Data 首次启动会检查数据库驱动，缺驱动时在应用内提示并可直接安装，不用再去翻驱动下载页。
+
+#### 修复与优化
+
+- SFTP 上传/下载多个冲突项时，只有一个冲突项就不再显示「应用于全部」；目录覆盖改成对话框内红字二次确认，不再套三层弹窗。
+- 终端侧栏「移动到」选过的位置会记进设置，重启和新标签都沿用；多分屏下上传/下载完成提示按传输 id 去重，不再重复弹窗；左侧/底部侧栏拖动改用工作区根元素真实 bounds，不再出现拖不动或错位。
+- 修复跑测试或自测构建时可能覆盖生产配置的问题。
+- 数据库视图：SQL 编辑器滚动条常显，不再跟着光标时隐时现；表设计器的列列表直接显示并可以就地编辑默认值；复制为 UPDATE/DELETE 时，选区不含主键不再输出空字符串。
+- Redis 键名含非法 UTF-8 时，列表加载、读取和删除不再直接失败。
+- 内置 Agent 带工具调用时，gpt-6 系列不再返回 400。
+- 打开已存在的连接不会重复建连，直接复用已有标签。
+- 修复 Esc 快捷键在对话框里误关的问题，现在只在编辑器上下文生效；标签页空间不足时允许已被切走的标签收缩，不再挤掉当前标签。
+- 开发版彻底隔离 Public MCP 发现文件与主密钥钥匙串，和正式安装互不影响；Windows 上子进程 PATH 补上 GUI 应用看不到的工具链目录。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.23.0-beta.3) 下载桌面端安装包
+
+#### What's New
+
+- The desktop app is now three products shipped together under one version: **Navop** (databases + SSH/SFTP + terminal + remote desktop + AI), **Navop Shell** (SSH/SFTP, local terminal, port forwarding, RDP/VNC) and **Navop Data** (PostgreSQL / MySQL / SQLite / SQL Server / Oracle / ClickHouse / Redis / MongoDB). Each product has its own installers, data directory and keychain entry, so they can be installed side by side; tray icons carry a product badge and quit prompts name the product.
+- Updates are split into a stable channel and a beta channel. Stable builds only see stable releases and beta builds only see prereleases, with separate manifests, so existing installs are never silently moved to beta. Settings → About → Update gains a channel dropdown, switching to beta asks for confirmation, and prerelease builds show a "Beta" badge next to the version.
+- Update checks can pick a mirror: Auto / Cloudflare / CNB / GitHub. The chosen source goes first and failures fall back in order, with an immediate re-check after switching. The beta channel never falls back to GitHub, because GitHub's latest only points at stable releases and would silently downgrade the channel.
+- Extension downloads reuse the same mirror preference: installers, per-extension manifests and the marketplace manifest all fall back across these sources, with CNB served from release-asset snapshots.
+- The extension marketplace manifest is now hosted as a fixed `manifest` release asset (one snapshot on GitHub, one on CNB). The client reads R2 first, then the GitHub and CNB snapshots, with GitHub raw only as a last resort.
+- Each product exposes its own Public MCP host and discovery identity, so external tools discover and authorize them separately. Settings → MCP adds tool-set toggles with per-tool switches, and the connection-management tool set is registered per product capability.
+- Standalone products got their own home pages and packaging: Navop Shell assembles the terminal/SSH home, Navop Data the database/Redis/MongoDB home, and macOS, Linux and Windows installers now use per-product identities, with parameterized Windows installer identity.
+- Navop Data checks database drivers on first launch and can install a missing driver from inside the app.
+
+#### Fixes and Improvements
+
+- SFTP hides "apply to all" when only one conflict is queued, and directory overwrites now use an in-dialog confirmation instead of nested modals.
+- The terminal sidebar remembers the last "move to" position across restarts and new tabs; upload/download completion notices are de-duplicated by transfer id in split views; sidebar dragging uses the workspace root bounds.
+- Fixed a path where running tests or a self-test build could overwrite production configuration.
+- Database views: the SQL editor scrollbar stays visible; the table designer shows column defaults inline and allows editing them; copying as UPDATE/DELETE no longer emits an empty statement when no primary key is selected.
+- Redis no longer fails to list, read or delete keys whose names contain invalid UTF-8.
+- Built-in agent tool calls no longer return 400 on the gpt-6 family.
+- Opening an already-open connection reuses the existing tab instead of creating a duplicate.
+- Esc no longer dismisses dialogs globally; it only applies in editor contexts, and tabs that are not active may shrink instead of pushing the current tab out.
+- Development builds fully isolate their Public MCP discovery file and master key from production installs, and child processes on Windows now get the toolchain directories a GUI app cannot see.
+
 ## [v0.23.0-beta.2] - 2026-11-02
 
 #### 更新内容

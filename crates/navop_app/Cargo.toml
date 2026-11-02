@@ -1,6 +1,6 @@
 [package]
 name = "navop_app"
-version = "0.23.0-beta.2"
+version = "0.23.0-beta.3"
 publish.workspace = true
 edition.workspace = true
 
