@@ -8244,6 +8244,7 @@ dependencies = [
  "gpui-fast",
  "navop_app",
  "shell_domain",
+ "winresource",
 ]
 
 [[package]]
@@ -8255,6 +8256,7 @@ dependencies = [
  "domain_api",
  "gpui-fast",
  "navop_app",
+ "winresource",
 ]
 
 [[package]]
@@ -8266,6 +8268,7 @@ dependencies = [
  "gpui-fast",
  "navop_app",
  "shell_domain",
+ "winresource",
 ]
 
 [[package]]
@@ -8340,7 +8343,6 @@ dependencies = [
  "url",
  "uuid",
  "windows 0.62.2",
- "winresource",
  "workspace_explorer",
  "x11rb",
  "zed-font-kit 0.14.1-zed (git+https://github.com/zed-industries/font-kit?rev=110523127440aefb11ce0cf280ae7c5071337ec5)",

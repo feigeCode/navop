@@ -232,10 +232,12 @@ jobs:
               ;;
             all)
               if [ -n "$standalone_matrix" ]; then
-                # 两个 JSON 数组拼成一个：去掉各自方括号后以逗号相连。
-                # 条目本身是不含空格的单行 JSON，全局替换空格安全。
-                combined="$(printf '%s %s' "$full_matrix" "$standalone_matrix" | tr -d '][' | tr ' ' ',')"
-                matrix="[${combined}]"
+                # 两个 JSON 数组拼成一个：各去掉一层方括号后以逗号相连。
+                # 不能用 `tr ' ' ','` 拼接：`bundle_name` 里带空格（"Navop Shell"），
+                # 那样会把空格也换成逗号，macOS 产物目录变成 `Navop,Shell.app`，
+                # 后续 `tar` 找不到包。方括号用参数展开去掉，其余字节原样保留。
+                combined="${full_matrix%]},${standalone_matrix#\[}"
+                matrix="$combined"
               else
                 matrix="$full_matrix"
               fi

@@ -19,3 +19,6 @@ data_domain = { workspace = true }
 
 [lints]
 workspace = true
+
+[target.'cfg(target_os = "windows")'.build-dependencies]
+winresource = "0.1"
