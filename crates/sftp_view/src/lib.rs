@@ -3958,37 +3958,36 @@ impl SftpView {
         };
         let view = cx.entity().clone();
         let apply_all = Arc::new(AtomicBool::new(false));
+        let prompt = FileConflictPrompt::entity(
+            cx,
+            FileConflictPromptSpec {
+                name: current.transfer.name.clone().into(),
+                is_directory: current.transfer.is_dir,
+                apply_all: apply_all.clone(),
+                labels: upload_conflict_prompt_labels(position),
+            },
+            move |choice, apply_all, window, cx| {
+                window.close_dialog(cx);
+                let uploads = resolve_upload_conflicts(&session, (choice, apply_all));
+                let has_next = session.resolver.borrow().current().is_some();
+                let _ = view.update(cx, |this, cx| {
+                    if this.close_state.is_closing()
+                        || !this.is_current_connection_generation(session.connection_generation)
+                    {
+                        return;
+                    }
+                    this.execute_upload_decisions(uploads, cx);
+                    if has_next {
+                        this.show_next_upload_conflict(session.clone(), window, cx);
+                    }
+                });
+            },
+        );
         window.open_dialog(cx, move |dialog, _window, _cx| {
-            let session = session.clone();
-            let view = view.clone();
             dialog
                 .title(t!("Dialog.file_conflict").to_string())
                 .w(px(480.))
-                .child(FileConflictPrompt::new(
-                    FileConflictPromptSpec {
-                        name: current.transfer.name.clone().into(),
-                        is_directory: current.transfer.is_dir,
-                        apply_all: apply_all.clone(),
-                        labels: upload_conflict_prompt_labels(position),
-                    },
-                    move |choice, apply_all, window, cx| {
-                        window.close_dialog(cx);
-                        let uploads = resolve_upload_conflicts(&session, (choice, apply_all));
-                        let has_next = session.resolver.borrow().current().is_some();
-                        let _ = view.update(cx, |this, cx| {
-                            if this.close_state.is_closing()
-                                || !this
-                                    .is_current_connection_generation(session.connection_generation)
-                            {
-                                return;
-                            }
-                            this.execute_upload_decisions(uploads, cx);
-                            if has_next {
-                                this.show_next_upload_conflict(session.clone(), window, cx);
-                            }
-                        });
-                    },
-                ))
+                .child(prompt.clone())
                 .overlay_closable(false)
                 .close_button(true)
         });

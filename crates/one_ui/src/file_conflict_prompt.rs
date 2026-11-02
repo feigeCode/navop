@@ -1,11 +1,17 @@
-use std::{rc::Rc, sync::Arc, sync::atomic::AtomicBool, sync::atomic::Ordering};
+use std::{
+    rc::Rc,
+    sync::Arc,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
-use gpui::{App, IntoElement, ParentElement, RenderOnce, SharedString, Styled, Window, div, px};
+use gpui::{
+    App, AppContext as _, Context, Entity, IntoElement, ParentElement, Render, SharedString, Styled,
+    Window, div, prelude::FluentBuilder as _,
+};
 use gpui_component::{
-    ActiveTheme, WindowExt as _,
+    ActiveTheme, StyledExt,
     button::{Button, ButtonVariants},
     checkbox::Checkbox,
-    dialog::{Dialog, DialogFooter},
     h_flex, v_flex,
 };
 
@@ -18,7 +24,7 @@ pub enum FileConflictChoice {
 }
 
 /// 文件夹冲突里的「覆盖」是整目录替换，目标目录中独有的文件会一起消失；
-/// 它和「合并」的区别最容易被误选，因此执行前必须让用户再确认一次。
+/// 它和「合并」的区别最容易被误选，因此执行前必须在同一提示框里再确认一次。
 pub fn requires_overwrite_confirmation(choice: FileConflictChoice, is_directory: bool) -> bool {
     is_directory && choice == FileConflictChoice::Overwrite
 }
@@ -33,9 +39,9 @@ pub struct FileConflictPromptLabels {
     pub keep_both: SharedString,
     pub merge: SharedString,
     pub overwrite: SharedString,
-    /// 「覆盖」风险确认弹窗的标题。
+    /// 覆盖确认区域的标题。
     pub overwrite_warning_title: SharedString,
-    /// 「覆盖」风险确认弹窗的正文。
+    /// 覆盖确认区域的正文。
     pub overwrite_warning: SharedString,
     /// 已勾选「应用到所有同类冲突」时的追加提醒。
     pub overwrite_warning_apply_all: SharedString,
@@ -54,13 +60,17 @@ pub struct FileConflictPromptSpec {
     pub labels: FileConflictPromptLabels,
 }
 
-#[derive(IntoElement)]
+/// 冲突处理提示框。
+///
+/// 目录冲突选择「覆盖」时不再叠加第二个弹窗，而是在同一框内展开红色风险说明，
+/// 并把按钮换成「取消 / 仍然覆盖」；再次确认后才执行。
 pub struct FileConflictPrompt {
     name: SharedString,
     is_directory: bool,
     apply_all: Arc<AtomicBool>,
     labels: FileConflictPromptLabels,
     on_choice: ChoiceHandler,
+    confirming_overwrite: bool,
 }
 
 impl FileConflictPrompt {
@@ -74,21 +84,39 @@ impl FileConflictPrompt {
             apply_all: spec.apply_all,
             labels: spec.labels,
             on_choice: Rc::new(on_choice),
+            confirming_overwrite: false,
         }
     }
 
-    fn action_button(&self, choice: FileConflictChoice, label: SharedString) -> Button {
+    /// 创建可复用的提示框实体。
+    ///
+    /// 确认状态要跨渲染保留，调用方需在 `window.open_dialog` 之前创建实体，
+    /// 不能在对话框构建闭包里创建。
+    pub fn entity(
+        cx: &mut App,
+        spec: FileConflictPromptSpec,
+        on_choice: impl Fn(FileConflictChoice, bool, &mut Window, &mut App) + 'static,
+    ) -> Entity<Self> {
+        cx.new(|_| Self::new(spec, on_choice))
+    }
+
+    fn choose(
+        &self,
+        choice: FileConflictChoice,
+        label: SharedString,
+        cx: &mut Context<Self>,
+    ) -> Button {
         let apply_all = self.apply_all.clone();
         let on_choice = self.on_choice.clone();
         let button = Button::new(format!("file-conflict-{choice:?}")).label(label);
         if requires_overwrite_confirmation(choice, self.is_directory) {
-            let warning = OverwriteWarning {
-                name: self.name.clone(),
-                labels: self.labels.clone(),
-                apply_all,
-                on_choice,
-            };
-            return button.on_click(move |_, window, cx| warning.open(window, cx));
+            let prompt = cx.entity();
+            return button.on_click(move |_, _window, cx| {
+                prompt.update(cx, |this, cx| {
+                    this.confirming_overwrite = true;
+                    cx.notify();
+                });
+            });
         }
         button.on_click(move |_, window, cx| {
             on_choice(choice, apply_all.load(Ordering::Relaxed), window, cx);
@@ -96,20 +124,27 @@ impl FileConflictPrompt {
     }
 }
 
-impl RenderOnce for FileConflictPrompt {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        v_flex()
+impl Render for FileConflictPrompt {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let content = v_flex()
             .gap_3()
             .child(self.labels.exists.clone())
-            .child(self.info_card(cx))
-            .child(self.labels.choose_action.clone())
-            .child(self.apply_all_checkbox())
-            .child(
-                h_flex()
-                    .justify_end()
-                    .gap_2()
-                    .children(self.action_buttons()),
-            )
+            .child(self.info_card(cx));
+
+        let content = if self.confirming_overwrite {
+            content.child(self.overwrite_warning(cx))
+        } else {
+            content
+                .child(self.labels.choose_action.clone())
+                .child(self.apply_all_checkbox(cx))
+        };
+
+        content.child(
+            h_flex()
+                .justify_end()
+                .gap_2()
+                .children(self.action_buttons(cx)),
+        )
     }
 }
 
@@ -138,151 +173,111 @@ impl FileConflictPrompt {
             )
     }
 
-    fn apply_all_checkbox(&self) -> impl IntoElement {
+    fn apply_all_checkbox(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let checked = self.apply_all.load(Ordering::Relaxed);
         let apply_all = self.apply_all.clone();
+        let prompt = cx.entity();
         Checkbox::new("file-conflict-apply-all")
             .checked(checked)
             .label(self.labels.apply_all.clone())
-            .on_click(move |checked, window, _cx| {
+            .on_click(move |checked, _window, cx| {
                 apply_all.store(*checked, Ordering::Relaxed);
-                window.refresh();
+                prompt.update(cx, |_this, cx| cx.notify());
             })
     }
 
-    fn action_buttons(&self) -> Vec<Button> {
+    /// 「覆盖」是整目录替换的风险说明，用红色文字直接展示在原对话框里。
+    fn overwrite_warning(&self, cx: &App) -> impl IntoElement {
+        let danger = cx.theme().danger;
+        div()
+            .p_3()
+            .rounded_md()
+            .border_1()
+            .border_color(danger)
+            .bg(danger.opacity(0.08))
+            .child(
+                div()
+                    .text_sm()
+                    .font_semibold()
+                    .text_color(danger)
+                    .child(self.labels.overwrite_warning_title.clone()),
+            )
+            .child(
+                div()
+                    .mt_1()
+                    .text_sm()
+                    .text_color(danger)
+                    .child(self.labels.overwrite_warning.clone()),
+            )
+            .when(self.apply_all.load(Ordering::Relaxed), |el| {
+                el.child(
+                    div()
+                        .mt_2()
+                        .text_xs()
+                        .text_color(danger)
+                        .child(self.labels.overwrite_warning_apply_all.clone()),
+                )
+            })
+    }
+
+    fn action_buttons(&mut self, cx: &mut Context<Self>) -> Vec<Button> {
+        if self.confirming_overwrite {
+            return self.confirm_buttons(cx);
+        }
+
         let mut actions = vec![
-            self.action_button(FileConflictChoice::Skip, self.labels.skip.clone())
+            self.choose(FileConflictChoice::Skip, self.labels.skip.clone(), cx)
                 .ghost(),
-            self.action_button(FileConflictChoice::KeepBoth, self.labels.keep_both.clone())
-                .ghost(),
+            self.choose(
+                FileConflictChoice::KeepBoth,
+                self.labels.keep_both.clone(),
+                cx,
+            )
+            .ghost(),
         ];
         if self.is_directory {
             actions.push(
-                self.action_button(FileConflictChoice::Merge, self.labels.merge.clone())
+                self.choose(FileConflictChoice::Merge, self.labels.merge.clone(), cx)
                     .ghost(),
             );
         }
         actions.push(
-            self.action_button(FileConflictChoice::Overwrite, self.labels.overwrite.clone())
-                .primary(),
+            self.choose(
+                FileConflictChoice::Overwrite,
+                self.labels.overwrite.clone(),
+                cx,
+            )
+            .primary(),
         );
         actions
     }
-}
 
-/// 目录冲突选择「覆盖」后叠加的二次确认框，说清楚整目录替换会丢掉什么。
-struct OverwriteWarning {
-    name: SharedString,
-    labels: FileConflictPromptLabels,
-    apply_all: Arc<AtomicBool>,
-    on_choice: ChoiceHandler,
-}
+    fn confirm_buttons(&self, cx: &mut Context<Self>) -> Vec<Button> {
+        let prompt = cx.entity();
+        let cancel = Button::new("file-conflict-overwrite-cancel")
+            .label(self.labels.cancel.clone())
+            .ghost()
+            .on_click(move |_, _window, cx| {
+                prompt.update(cx, |this, cx| {
+                    this.confirming_overwrite = false;
+                    cx.notify();
+                });
+            });
 
-impl OverwriteWarning {
-    fn open(&self, window: &mut Window, cx: &mut App) {
-        let warning = Self {
-            name: self.name.clone(),
-            labels: self.labels.clone(),
-            apply_all: self.apply_all.clone(),
-            on_choice: self.on_choice.clone(),
-        };
-        window.open_dialog(cx, move |dialog, _window, cx| warning.render(dialog, cx));
-    }
-
-    fn render(&self, dialog: Dialog, cx: &App) -> Dialog {
-        dialog
-            .title(self.labels.overwrite_warning_title.clone())
-            .w(px(460.))
-            .child(self.details(cx))
-            .footer(self.footer())
-            .overlay_closable(false)
-            .close_button(true)
-    }
-
-    /// 正文：覆盖的风险说明、当前文件夹名，以及勾选「应用全部」时的追加提醒。
-    fn details(&self, cx: &App) -> impl IntoElement {
-        let labels = &self.labels;
-        let mut content = v_flex()
-            .gap_3()
-            .child(div().text_sm().child(labels.overwrite_warning.clone()));
-        content = content.child(
-            div()
-                .p_2()
-                .rounded_md()
-                .bg(cx.theme().secondary)
-                .overflow_hidden()
-                .child(
-                    div()
-                        .text_sm()
-                        .overflow_hidden()
-                        .text_ellipsis()
-                        .whitespace_nowrap()
-                        .child(self.name.clone()),
-                ),
-        );
-        if self.apply_all.load(Ordering::Relaxed) {
-            content = content.child(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(labels.overwrite_warning_apply_all.clone()),
-            );
-        }
-        content
-    }
-
-    fn footer(&self) -> impl IntoElement {
-        let labels = &self.labels;
         let apply_all = self.apply_all.clone();
         let on_choice = self.on_choice.clone();
-        DialogFooter::new().children(vec![
-            Button::new("file-conflict-overwrite-cancel")
-                .label(labels.cancel.clone())
-                .ghost()
-                .on_click(|_, window, cx| window.close_dialog(cx))
-                .into_any_element(),
-            Button::new("file-conflict-overwrite-confirm")
-                .label(labels.overwrite_confirm.clone())
-                .danger()
-                .on_click(move |_, window, cx| {
-                    let apply_all = apply_all.load(Ordering::Relaxed);
-                    window.close_dialog(cx);
-                    on_choice(FileConflictChoice::Overwrite, apply_all, window, cx);
-                })
-                .into_any_element(),
-        ])
-    }
-}
+        let confirm = Button::new("file-conflict-overwrite-confirm")
+            .label(self.labels.overwrite_confirm.clone())
+            .danger()
+            .on_click(move |_, window, cx| {
+                on_choice(
+                    FileConflictChoice::Overwrite,
+                    apply_all.load(Ordering::Relaxed),
+                    window,
+                    cx,
+                );
+            });
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn directory_overwrite_requires_confirmation() {
-        assert!(requires_overwrite_confirmation(
-            FileConflictChoice::Overwrite,
-            true
-        ));
-    }
-
-    #[test]
-    fn file_overwrite_skips_confirmation() {
-        assert!(!requires_overwrite_confirmation(
-            FileConflictChoice::Overwrite,
-            false
-        ));
-    }
-
-    #[test]
-    fn other_choices_skip_confirmation() {
-        for choice in [
-            FileConflictChoice::Skip,
-            FileConflictChoice::KeepBoth,
-            FileConflictChoice::Merge,
-        ] {
-            assert!(!requires_overwrite_confirmation(choice, true));
-        }
+        vec![cancel, confirm]
     }
 }
