@@ -914,6 +914,82 @@ fn manifest_rejects_shell_view_entry_escape() {
 }
 
 #[test]
+fn shell_views_accept_the_nsh_engine_gate() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_manifest(
+        tmp.path(),
+        r#"{
+            "schema_version": 1,
+            "id": "com.example.nsh",
+            "name": "Nsh",
+            "version": "0.1.0",
+            "engines": { "onetcli": ">=0.1.0", "nsh": "0.3.0" },
+            "api": { "shell": "1.0" },
+            "permissions": ["shell:exec", "spawn:./bin/provider"],
+            "runtime": {
+                "ipc": [{ "id": "provider", "entry": { "command": "./bin/provider" } }]
+            },
+            "contributes": {
+                "shellViews": [{
+                    "id": "overview",
+                    "title": "Overview",
+                    "entry": "ui/overview.js",
+                    "surface": "tab",
+                    "backends": { "main": "provider" },
+                    "modules": ["context", "resource"]
+                }]
+            }
+        }"#,
+    );
+    std::fs::create_dir_all(tmp.path().join("ui")).unwrap();
+    std::fs::write(tmp.path().join("ui/overview.js"), "export default {}").unwrap();
+
+    let manifest =
+        load_from_dir(tmp.path()).expect("声明 engines.nsh 的 shellView 应能通过清单校验");
+    assert_eq!(manifest.engines.nsh, "0.3.0");
+    assert!(manifest.engines.gpui_shell.is_empty());
+}
+
+#[test]
+fn shell_views_require_an_engine_gate() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_manifest(
+        tmp.path(),
+        r#"{
+            "schema_version": 1,
+            "id": "com.example.noengine",
+            "name": "No engine",
+            "version": "0.1.0",
+            "engines": { "onetcli": ">=0.1.0" },
+            "permissions": ["shell:exec", "spawn:./bin/provider"],
+            "runtime": {
+                "ipc": [{ "id": "provider", "entry": { "command": "./bin/provider" } }]
+            },
+            "contributes": {
+                "shellViews": [{
+                    "id": "overview",
+                    "title": "Overview",
+                    "entry": "ui/overview.js",
+                    "surface": "tab",
+                    "backends": { "main": "provider" },
+                    "modules": ["context"]
+                }]
+            }
+        }"#,
+    );
+    std::fs::create_dir_all(tmp.path().join("ui")).unwrap();
+    std::fs::write(tmp.path().join("ui/overview.js"), "export default {}").unwrap();
+
+    match load_from_dir(tmp.path()).unwrap_err() {
+        ManifestError::InvalidField { field, reason } => {
+            assert_eq!("/engines/nsh", field);
+            assert!(reason.contains("engines.nsh"), "{reason}");
+        }
+        other => panic!("expected engine gate error, got {other:?}"),
+    }
+}
+
+#[test]
 fn manifest_rejects_missing_shell_view_entry() {
     let tmp = tempfile::TempDir::new().unwrap();
     write_shell_manifest(

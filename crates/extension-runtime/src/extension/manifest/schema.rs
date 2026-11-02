@@ -48,8 +48,13 @@ pub struct Manifest {
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct Engines {
     pub onetcli: String,
+    /// 旧 UI 平面（gpui-shell）的版本门。只为兼容存量扩展保留：
+    /// 迁移完成后（M7）这条路径整条删掉。
     #[serde(default)]
     pub gpui_shell: String,
+    /// nsh 宿主（`AppView`）的版本门。声明了它的 shellView 由 nsh 装载。
+    #[serde(default)]
+    pub nsh: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

@@ -16,12 +16,12 @@ use crate::extension::manifest::{
 
 use super::catalog::ExtensionRuntimeCatalog;
 use super::types::{
-    ExtensionRuntimeError, RegisteredDocumentExporter,
-    RegisteredDocumentRenderer, RegisteredHtmlPreviewTransform, RegisteredIpcRuntimeBinding,
-    RegisteredKeybindingContribution, RegisteredRemoteFileEditorCommand,
-    RegisteredRemoteFileEditorContribution, RegisteredResourceConnectionContribution,
-    RegisteredResourceWorkbenchContribution, RegisteredShellViewContribution, WasmRuntimeBinding,
-    command_descriptor, runtime_key, slot_item_from_menu,
+    ExtensionRuntimeError, RegisteredDocumentExporter, RegisteredDocumentRenderer,
+    RegisteredHtmlPreviewTransform, RegisteredIpcRuntimeBinding, RegisteredKeybindingContribution,
+    RegisteredRemoteFileEditorCommand, RegisteredRemoteFileEditorContribution,
+    RegisteredResourceConnectionContribution, RegisteredResourceWorkbenchContribution,
+    RegisteredShellViewContribution, WasmRuntimeBinding, command_descriptor, runtime_key,
+    slot_item_from_menu,
 };
 
 static WASM_REGISTRATION_LOG_KEYS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -431,6 +431,8 @@ impl ExtensionRuntimeCatalog {
                     permissions: manifest.permissions.clone(),
                     shell_api_version: manifest.api.shell.clone(),
                     required_gpui_shell_version: manifest.engines.gpui_shell.clone(),
+                    required_nsh_version: (!manifest.engines.nsh.trim().is_empty())
+                        .then(|| manifest.engines.nsh.clone()),
                 },
             );
         }
@@ -739,17 +741,18 @@ impl ExtensionRuntimeCatalog {
                     .clone()
                     .or_else(|| command_titles.get(command_id.as_str()).cloned())
                     .unwrap_or_else(|| command_id.clone());
-                self.db_tree_menus.push(crate::types::RegisteredDbTreeMenuContribution {
-                    position: position.clone(),
-                    item: DbTreeExtensionMenuItem {
-                        extension_id: manifest.id.clone(),
-                        command_id,
-                        label,
-                        group: menu.group.clone(),
-                        when_clause: menu.when.clone(),
-                        requires_active: menu.requires_active,
-                    },
-                });
+                self.db_tree_menus
+                    .push(crate::types::RegisteredDbTreeMenuContribution {
+                        position: position.clone(),
+                        item: DbTreeExtensionMenuItem {
+                            extension_id: manifest.id.clone(),
+                            command_id,
+                            label,
+                            group: menu.group.clone(),
+                            when_clause: menu.when.clone(),
+                            requires_active: menu.requires_active,
+                        },
+                    });
             }
         }
     }

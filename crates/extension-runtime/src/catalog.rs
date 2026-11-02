@@ -17,11 +17,10 @@ use crate::extension::manifest::{Manifest, WasmRuntimeKind};
 
 use super::registration::load_installed_composite_manifests;
 use super::types::{
-    ExtensionRuntimeError, RegisteredDocumentExporter,
-    RegisteredDocumentRenderer, RegisteredHtmlPreviewTransform, RegisteredIpcRuntimeBinding,
-    RegisteredKeybindingContribution, RegisteredRemoteFileEditorContribution,
-    RegisteredResourceConnectionContribution, RegisteredResourceWorkbenchContribution,
-    RegisteredShellViewContribution, WasmRuntimeBinding,
+    ExtensionRuntimeError, RegisteredDocumentExporter, RegisteredDocumentRenderer,
+    RegisteredHtmlPreviewTransform, RegisteredIpcRuntimeBinding, RegisteredKeybindingContribution,
+    RegisteredRemoteFileEditorContribution, RegisteredResourceConnectionContribution,
+    RegisteredResourceWorkbenchContribution, RegisteredShellViewContribution, WasmRuntimeBinding,
 };
 
 static WASM_CATALOG_LOG_KEYS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();

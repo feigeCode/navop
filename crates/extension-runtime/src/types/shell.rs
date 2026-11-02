@@ -25,4 +25,6 @@ pub struct RegisteredShellViewContribution {
     pub permissions: Vec<String>,
     pub shell_api_version: String,
     pub required_gpui_shell_version: String,
+    /// 声明的 nsh 版本门；`Some` 表示这个页面由 nsh 宿主装载。
+    pub required_nsh_version: Option<String>,
 }
