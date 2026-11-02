@@ -30,7 +30,7 @@ enum State {
 ///
 /// 抽成自由函数是为了让"事件 → 动作"的映射可以被单元测试直接覆盖,
 /// 不必在 GPUI 里构造真实 provider 进程与 session。
-// 仅 `shell-plugins` feature 下的 monitor 桥接线调用;关闭 feature 时是合法的休眠代码。
+// 仅 `nsh-host` feature 下的 monitor 桥接线调用;关闭 feature 时是合法的休眠代码。
 #[cfg_attr(not(feature = "nsh-host"), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuntimeChangeDecision {
@@ -53,7 +53,7 @@ pub(crate) enum RuntimeChangeDecision {
 ///   自动重启被禁用或重启预算耗尽,tab 无法自愈;
 /// - 其余情况(`Degraded`,或仍在退避中的 `Restarting`)是瞬时抖动,忽略,
 ///   否则会在重启窗口内反复重建连接。
-// 仅 `shell-plugins` feature 下的 monitor 桥接线调用;关闭 feature 时是合法的休眠代码。
+// 仅 `nsh-host` feature 下的 monitor 桥接线调用;关闭 feature 时是合法的休眠代码。
 #[cfg_attr(not(feature = "nsh-host"), allow(dead_code))]
 pub(crate) fn decide_runtime_change(
     event: &RuntimeMonitorEvent,
@@ -253,7 +253,7 @@ impl ExtensionConnectionTab {
     }
 
     /// 宿主监视事件入口。仅由 shell host 的 monitor bridge 调用,而该 bridge
-    /// 在测试构建与关闭 `shell-plugins` feature 的构建下都不会出现,
+    /// 在测试构建与关闭 `nsh-host` feature 的构建下都不会出现,
     /// 所以这些构建里这几个方法看起来未被使用。
     #[cfg_attr(any(test, not(feature = "nsh-host")), allow(dead_code))]
     pub(crate) fn runtime_changed(&mut self, event: &RuntimeMonitorEvent, cx: &mut Context<Self>) {

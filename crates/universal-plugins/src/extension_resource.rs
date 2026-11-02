@@ -9,7 +9,7 @@ use crate::universal_plugins::UniversalPluginService;
 /// 只携带 credential 引用，不携带明文 secret。
 #[derive(Clone)]
 pub(crate) struct ExtensionResourceLaunch {
-    // 访问方都在 `shell-plugins` feature 路径下;关闭 feature 时是合法的休眠字段。
+    // 访问方都在 `nsh-host` feature 路径下;关闭 feature 时是合法的休眠字段。
     #[cfg_attr(not(feature = "nsh-host"), allow(dead_code))]
     connection_id: i64,
     runtime_id: String,

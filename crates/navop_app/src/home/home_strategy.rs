@@ -86,21 +86,18 @@ impl ConnectionOpenStrategy for ExtensionOpenStrategy {
             window.push_notification("This extension contribution is unavailable", cx);
             return;
         };
-        // 终端型连接不需要提供者进程,也不依赖 shell-plugins 构建。
+        // 终端型连接不需要提供者进程,也不依赖 nsh 构建。
         if contribution.terminal.is_some() {
             open_extension_terminal_connection(self.connection, &contribution, mode, window, cx);
             return;
         }
         // 无 Shell 构建以 workbench 绑定为决策点:
         // 有原生工作台即可打开(legacy shellViewId 不阻塞),
-        // 没有工作台才提示需要 shell-plugins 构建。
+        // 没有工作台才提示需要 nsh 构建。
         let Some(workbench) = service
             .resource_workbench_for_connection(&params.extension_id, &params.contribution_id)
         else {
-            window.push_notification(
-                "This extension connection requires the shell-plugins build",
-                cx,
-            );
+            window.push_notification("This extension connection requires the nsh build", cx);
             return;
         };
         open_native_extension_connection(
@@ -271,7 +268,7 @@ fn open_extension_terminal_connection_shell(
 }
 
 /// 打开原生扩展连接工作台 tab(共享实现,两种 feature 构建都使用)。
-/// headless tab 到 ShellPluginHost 的注册由 ExtensionConnectionTab::load
+/// headless tab 到 NshHost 的注册由 ExtensionConnectionTab::load
 /// 内部按 global 存在性自行处理。
 #[allow(clippy::too_many_arguments)]
 fn open_native_extension_connection(
@@ -489,10 +486,7 @@ fn open_extension_connection_now(
     let Some(workbench) =
         service.resource_workbench_for_connection(&params.extension_id, &params.contribution_id)
     else {
-        window.push_notification(
-            "This extension connection requires the shell-plugins build",
-            cx,
-        );
+        window.push_notification("This extension connection requires the nsh build", cx);
         return;
     };
     let Some(contribution) =

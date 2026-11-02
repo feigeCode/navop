@@ -175,7 +175,7 @@ impl UniversalPluginService {
         self.manager.universal_plugin_client(runtime_id)
     }
 
-    // 以下方法仅 `shell-plugins` feature 路径下被调用;关闭 feature 时是合法的休眠代码。
+    // 以下方法仅 `nsh-host` feature 路径下被调用;关闭 feature 时是合法的休眠代码。
     #[cfg_attr(not(feature = "nsh-host"), allow(dead_code))]
     pub(crate) fn shell_view(
         &self,

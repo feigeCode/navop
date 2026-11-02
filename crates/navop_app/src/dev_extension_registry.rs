@@ -296,7 +296,7 @@ mod tests {
                 "id": id,
                 "name": id,
                 "version": "0.1.0",
-                "engines": { "onetcli": ">=0.1.0", "gpui_shell": "0.6.4" },
+                "engines": { "onetcli": ">=0.1.0", "nsh": "0.3.0" },
                 "api": { "shell": "1.0" },
                 "permissions": ["shell:exec"],
                 "contributes": { "shellViews": [{
