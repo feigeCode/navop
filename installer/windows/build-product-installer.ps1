@@ -44,8 +44,22 @@ $products = @{
 
 $config = $products[$Product]
 $resolvedSourceDir = (Resolve-Path $SourceDir).Path
-$resolvedIconPath = (Resolve-Path (Join-Path $repoRoot $IconPath)).Path
-$resolvedOutDir = Join-Path $repoRoot $OutDir
+# -OutDir / -IconPath 既接受相对仓库根的路径，也接受绝对路径（CI 传的是
+# ${{ github.workspace }}\dist-product）。Join-Path 遇到绝对路径会拼出
+# `D:\a\navop\navop\D:\a\navop\navop\dist-product` 这种非法路径。
+function Resolve-RepoPath([string]$Path) {
+    if ([System.IO.Path]::IsPathRooted($Path)) {
+        return (Resolve-Path -LiteralPath $Path).Path
+    }
+    return (Resolve-Path -LiteralPath (Join-Path $repoRoot $Path)).Path
+}
+
+$resolvedIconPath = Resolve-RepoPath $IconPath
+$resolvedOutDir = if ([System.IO.Path]::IsPathRooted($OutDir)) {
+    $OutDir
+} else {
+    Join-Path $repoRoot $OutDir
+}
 New-Item -ItemType Directory -Force -Path $resolvedOutDir | Out-Null
 
 $msiVersion = ($Version -split "-")[0]

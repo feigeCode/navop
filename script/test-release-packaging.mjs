@@ -2097,6 +2097,12 @@ test("unified release workflow builds Windows installers for both products", () 
     release,
     /-Product "\$\{\{ matrix\.product \}\}"[\s\S]*?-Version "\$env:ONETCLI_VERSION"/,
   );
+
+  // CI 传的 -OutDir 是绝对路径（${{ github.workspace }}\dist-product），
+  // 脚本里不能无脑 Join-Path $repoRoot，否则拼出 `D:\a\...\D:\a\...` 直接失败。
+  const script = read("installer/windows/build-product-installer.ps1");
+  assert.match(script, /\[System\.IO\.Path\]::IsPathRooted\(\$OutDir\)/);
+  assert.doesNotMatch(script, /\$resolvedOutDir = Join-Path \$repoRoot \$OutDir/);
 });
 
 test("release matrix keeps spaces inside macOS bundle names", () => {
