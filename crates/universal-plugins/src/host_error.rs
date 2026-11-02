@@ -20,7 +20,7 @@ const MAX_DETAILS_BYTES: usize = 8192;
 // 与 gpui-shell 平面共用一套 code：本 feature 单独开时，只有另一边用到的
 // 变体/映射暂时没人构造（M7 删掉 gpui-shell 后由 workbench 段承接）。
 #[cfg_attr(
-    not(feature = "shell-plugins"),
+    not(feature = "nsh-host"),
     allow(
         dead_code,
         reason = "workbench 映射在 M5 接线前只被 gpui-shell 平面使用"
@@ -159,7 +159,7 @@ pub(crate) fn service_error(error: extension_plugin_adapter::ActivationError) ->
 
 /// 把 `WorkbenchDispatchError` 映射为稳定 code。
 #[cfg_attr(
-    not(feature = "shell-plugins"),
+    not(feature = "nsh-host"),
     allow(
         dead_code,
         reason = "workbench 分发在 M5 接线（navop.workbench）后才被 nsh 平面使用"

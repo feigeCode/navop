@@ -176,7 +176,7 @@ impl UniversalPluginService {
     }
 
     // 以下方法仅 `shell-plugins` feature 路径下被调用;关闭 feature 时是合法的休眠代码。
-    #[cfg_attr(not(feature = "shell-plugins"), allow(dead_code))]
+    #[cfg_attr(not(feature = "nsh-host"), allow(dead_code))]
     pub(crate) fn shell_view(
         &self,
         extension_id: &str,
@@ -215,7 +215,7 @@ impl UniversalPluginService {
             .cloned()
     }
 
-    #[cfg_attr(not(feature = "shell-plugins"), allow(dead_code))]
+    #[cfg_attr(not(feature = "nsh-host"), allow(dead_code))]
     pub(crate) async fn deactivate_extension(&self, extension_id: &str) {
         let _activation_guard = self.activation_lock.lock().await;
         self.sync_catalog();
@@ -292,14 +292,14 @@ impl UniversalPluginService {
         opened.map(|_| ()).map_err(Into::into)
     }
 
-    #[cfg_attr(not(feature = "shell-plugins"), allow(dead_code))]
+    #[cfg_attr(not(feature = "nsh-host"), allow(dead_code))]
     pub(crate) fn begin_extension_retire(&self, extension_id: &str) {
         if let Ok(mut retiring) = self.retiring_extensions.write() {
             retiring.insert(extension_id.to_string());
         }
     }
 
-    #[cfg_attr(not(feature = "shell-plugins"), allow(dead_code))]
+    #[cfg_attr(not(feature = "nsh-host"), allow(dead_code))]
     pub(crate) fn finish_extension_retire(&self, extension_id: &str) {
         if let Ok(mut retiring) = self.retiring_extensions.write() {
             retiring.remove(extension_id);
@@ -611,34 +611,12 @@ pub fn init(cx: &mut gpui::App) {
         .expect("universal plugin service must have exactly one application owner");
     let startup_service = service.clone();
     let quit_service = service.clone();
-    #[cfg(feature = "shell-plugins")]
-    {
-        gpui_shell::init_embedded(cx);
-        match crate::shell_plugin_host::ShellPluginHost::new(service.clone(), cx) {
-            Ok(host) => {
-                #[cfg(not(test))]
-                host.start_monitor_bridge(cx);
-                extension_view::register_shell_view_opener(std::rc::Rc::new(host.clone()), cx);
-                crate::shell_page_host::install_custom_page_host(host.clone(), cx);
-                cx.set_global(host);
-            }
-            Err(error) => tracing::warn!(%error, "failed to initialize gpui-shell host"),
-        }
-    }
-    // nsh 宿主 opener。两者都占用 GlobalShellViewOpener，所以默认让位给
-    // gpui-shell（现行机制）；只有 no-shell-plugins 的构建，或显式
-    // `NAVOP_NSH_HOST=1` 的对照运行时，才由 nsh 宿主接管（后者在
-    // gpui-shell 之后注册，也就是覆盖）。
+    // 扩展页面的 UI 平面就是 nsh：页面以 nsh 程序运行、画在 navop 的
+    // GPUI 窗口里。这里装的是宿主本体（信任库、tab 登记、主线程桥）与
+    // 两个注入点：`ShellViewOpener`（打开页面）和 `CustomPageHost`（把页面
+    // 嵌进资源工作台）。
     #[cfg(feature = "nsh-host")]
-    {
-        #[cfg(feature = "shell-plugins")]
-        let take_over = std::env::var_os("NAVOP_NSH_HOST").is_some();
-        #[cfg(not(feature = "shell-plugins"))]
-        let take_over = true;
-        if take_over {
-            crate::nsh_host::init(service.clone(), cx);
-        }
-    }
+    crate::nsh_host::init(service.clone(), cx);
 
     // RuntimeMonitor::start must be called from the Tokio runtime. Starting it
     // through a spawned task also keeps startup off the GPUI foreground thread.

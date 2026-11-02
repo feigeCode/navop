@@ -13,7 +13,7 @@ mod connection_sort;
 mod connection_type_menu;
 mod connection_visuals;
 mod credential_vault;
-#[cfg(feature = "shell-plugins")]
+#[cfg(feature = "nsh-host")]
 #[cfg(feature = "shell")]
 mod dev_extension_registry;
 mod dev_host_ops;
@@ -580,7 +580,7 @@ where
         // dev 工程注册表与 `navop.dev` 操作集：nsh 宿主接管时也要装，
         // 否则开发者工具页拿不到「加载本地工程」这套能力。
         #[cfg(feature = "shell")]
-        #[cfg(any(feature = "shell-plugins", feature = "nsh-host"))]
+        #[cfg(any(feature = "nsh-host", feature = "nsh-host"))]
         dev_extension_registry::install_dev_host_ops(cx);
 
         let settings = AppSettings::current(cx);

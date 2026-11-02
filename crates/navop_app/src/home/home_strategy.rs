@@ -60,7 +60,7 @@ struct ExtensionOpenStrategy {
     connection: StoredConnection,
 }
 
-#[cfg(not(feature = "shell-plugins"))]
+#[cfg(not(feature = "nsh-host"))]
 impl ConnectionOpenStrategy for ExtensionOpenStrategy {
     fn open(
         self: Box<Self>,
@@ -115,7 +115,7 @@ impl ConnectionOpenStrategy for ExtensionOpenStrategy {
     }
 }
 
-#[cfg(feature = "shell-plugins")]
+#[cfg(feature = "nsh-host")]
 impl ConnectionOpenStrategy for ExtensionOpenStrategy {
     fn open(
         self: Box<Self>,
@@ -128,10 +128,7 @@ impl ConnectionOpenStrategy for ExtensionOpenStrategy {
             window.push_notification("Extension connection data is invalid", cx);
             return;
         };
-        let Some(host) = cx
-            .try_global::<universal_plugins::ShellPluginHost>()
-            .cloned()
-        else {
+        let Some(host) = cx.try_global::<universal_plugins::NshHost>().cloned() else {
             window.push_notification("Extension runtime is unavailable", cx);
             return;
         };
@@ -167,7 +164,7 @@ impl ConnectionOpenStrategy for ExtensionOpenStrategy {
                 cx,
             );
         } else if let Err(error) = host.open_connection(
-            universal_plugins::ConnectionShellOpen {
+            universal_plugins::ConnectionPageOpen {
                 connection: self.connection,
                 contribution,
                 mode,
@@ -348,16 +345,16 @@ impl ConnectionOpenStrategy for MiddlewareExtensionOpenStrategy {
 
 /// 扩展是否已安装并注册了对应连接贡献项。
 fn extension_connection_is_registered(params: &ExtensionConnectionParams, cx: &App) -> bool {
-    #[cfg(feature = "shell-plugins")]
+    #[cfg(feature = "nsh-host")]
     {
-        cx.try_global::<universal_plugins::ShellPluginHost>()
+        cx.try_global::<universal_plugins::NshHost>()
             .map(|host| {
                 host.resource_connection(&params.extension_id, &params.contribution_id)
                     .is_some()
             })
             .unwrap_or(false)
     }
-    #[cfg(not(feature = "shell-plugins"))]
+    #[cfg(not(feature = "nsh-host"))]
     {
         cx.try_global::<universal_plugins::GlobalUniversalPluginService>()
             .map(|global| {
@@ -471,7 +468,7 @@ fn prompt_middleware_extension_install(
 }
 
 /// 打开已注册的扩展连接(不依赖 HomePage,便于安装完成后在回调中复用)。
-#[cfg(not(feature = "shell-plugins"))]
+#[cfg(not(feature = "nsh-host"))]
 fn open_extension_connection_now(
     connection: StoredConnection,
     mode: TabOpenMode,
@@ -515,7 +512,7 @@ fn open_extension_connection_now(
     );
 }
 
-#[cfg(feature = "shell-plugins")]
+#[cfg(feature = "nsh-host")]
 fn open_extension_connection_now(
     connection: StoredConnection,
     mode: TabOpenMode,
@@ -526,10 +523,7 @@ fn open_extension_connection_now(
         window.push_notification("Extension connection data is invalid", cx);
         return;
     };
-    let Some(host) = cx
-        .try_global::<universal_plugins::ShellPluginHost>()
-        .cloned()
-    else {
+    let Some(host) = cx.try_global::<universal_plugins::NshHost>().cloned() else {
         window.push_notification("Extension runtime is unavailable", cx);
         return;
     };
@@ -561,7 +555,7 @@ fn open_extension_connection_now(
             cx,
         );
     } else if let Err(error) = host.open_connection(
-        universal_plugins::ConnectionShellOpen {
+        universal_plugins::ConnectionPageOpen {
             connection,
             contribution,
             mode,

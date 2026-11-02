@@ -10,7 +10,7 @@ use crate::universal_plugins::UniversalPluginService;
 #[derive(Clone)]
 pub(crate) struct ExtensionResourceLaunch {
     // 访问方都在 `shell-plugins` feature 路径下;关闭 feature 时是合法的休眠字段。
-    #[cfg_attr(not(feature = "shell-plugins"), allow(dead_code))]
+    #[cfg_attr(not(feature = "nsh-host"), allow(dead_code))]
     connection_id: i64,
     runtime_id: String,
     resource_type: String,
@@ -45,12 +45,12 @@ impl ExtensionResourceLaunch {
         })
     }
 
-    #[cfg_attr(not(feature = "shell-plugins"), allow(dead_code))]
+    #[cfg_attr(not(feature = "nsh-host"), allow(dead_code))]
     pub(crate) fn connection_id(&self) -> i64 {
         self.connection_id
     }
 
-    #[cfg_attr(not(feature = "shell-plugins"), allow(dead_code))]
+    #[cfg_attr(not(feature = "nsh-host"), allow(dead_code))]
     pub(crate) fn resource_type(&self) -> &str {
         &self.resource_type
     }
@@ -95,7 +95,7 @@ impl OpenedExtensionResource {
         self.client.runtime_generation()
     }
 
-    #[cfg_attr(not(feature = "shell-plugins"), allow(dead_code))]
+    #[cfg_attr(not(feature = "nsh-host"), allow(dead_code))]
     pub(crate) fn client(&self) -> &ManagedUniversalPluginClient {
         &self.client
     }

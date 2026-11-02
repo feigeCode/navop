@@ -64,6 +64,9 @@ pub(crate) struct HostAbi {
     backends: BTreeMap<String, String>,
     modules: Vec<String>,
     theme: Mutex<ThemeSnapshot>,
+    /// 连接型页面的连接事实（`navop.context.current().connection`）；
+    /// 普通 tab 页面是 `null`。
+    connection: Mutex<Value>,
     /// 取消位：随页面关闭置位，在途的 provider 调用据此 reject。
     cancelled: Mutex<bool>,
 }
@@ -82,6 +85,7 @@ impl HostAbi {
                 .map(|module| module.module_specifier().to_owned())
                 .collect(),
             theme: Mutex::new(ThemeSnapshot::default()),
+            connection: Mutex::new(Value::Null),
             cancelled: Mutex::new(false),
         })
     }
@@ -107,6 +111,12 @@ impl HostAbi {
     /// 页面关闭：置取消位，让在途调用按 `REQUEST_CANCELLED` 退出。
     pub(crate) fn cancel(&self) {
         *self.cancelled.lock().unwrap_or_else(|e| e.into_inner()) = true;
+    }
+
+    pub(crate) fn set_connection(&self, connection: Value) {
+        if let Ok(mut slot) = self.connection.lock() {
+            *slot = connection;
+        }
     }
 
     fn cancelled(&self) -> bool {
@@ -703,7 +713,11 @@ fn context_current(abi: &HostAbi) -> Value {
         "extensionId": abi.extension_id,
         "viewId": abi.view_id,
         "backends": abi.backends.keys().collect::<Vec<_>>(),
-        "connection": Value::Null,
+        "connection": abi
+            .connection
+            .lock()
+            .map(|connection| connection.clone())
+            .unwrap_or(Value::Null),
     })
 }
 

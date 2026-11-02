@@ -1,6 +1,6 @@
 //! Shell 页面挂载契约:资源工作台向可选 Shell 渲染器暴露的嵌入接口。
 //!
-//! 接口由 resource_view 定义、universal-plugins(feature = "shell-plugins")
+//! 接口由 resource_view 定义、universal-plugins(feature = "nsh-host")
 //! 实现。核心约束:`mount` 只借用页面 scope,不打开主连接、不复用旧
 //! `ShellPluginHost::open_connection` 路径;dispose 只回收本 mount 的
 //! 订阅与子资源。

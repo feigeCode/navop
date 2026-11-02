@@ -14,7 +14,6 @@
 use std::path::{Path, PathBuf};
 
 use extension_runtime::RegisteredShellViewContribution;
-use extension_runtime::extension::manifest::ShellHostModule;
 use extension_runtime::extension::manifest::security::{PermissionKind, validate_permissions};
 use nsh_core::access::Capabilities;
 use serde_json::json;
@@ -208,6 +207,8 @@ fn command_name(path: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
+
+    use extension_runtime::extension::manifest::ShellHostModule;
 
     use super::*;
 

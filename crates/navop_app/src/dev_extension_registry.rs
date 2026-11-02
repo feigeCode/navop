@@ -174,7 +174,7 @@ fn load_dev_manifest(root: &std::path::Path) -> Result<Manifest, String> {
 // ---------------------------------------------------------------------------
 
 /// 构造 main 层 DevHostOps,注入到 universal-plugins Global。
-#[cfg(feature = "shell-plugins")]
+#[cfg(feature = "nsh-host")]
 pub fn install_dev_host_ops(cx: &mut gpui::App) {
     cx.default_global::<DevExtensionRegistry>();
     cx.default_global::<DevLogRing>();
@@ -185,7 +185,7 @@ pub fn install_dev_host_ops(cx: &mut gpui::App) {
     crate::dev_host_ops::install(cx);
 }
 
-#[cfg(feature = "shell-plugins")]
+#[cfg(feature = "nsh-host")]
 pub(crate) fn close_dev_extension(extension_id: String, cx: &mut gpui::App) {
     let Some(window) = crate::app_init::resolve_navop_window(cx) else {
         extension_view::finish_shell_extension(&extension_id, cx);

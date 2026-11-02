@@ -91,7 +91,6 @@ edition = "2024"
 gpui-component = { git = "https://github.com/feigeCode/gpui-kit", rev = "62035f8de4b8f6524a76eeb3cbb0a168d3183c35", features = ["gpui-fast"] }
 gpui-component-assets = { package = "gpui-kit-assets", git = "https://github.com/feigeCode/gpui-kit", rev = "62035f8de4b8f6524a76eeb3cbb0a168d3183c35", features = ["gpui-fast"] }
 gpui-base = { git = "https://github.com/feigeCode/gpui-kit", rev = "62035f8de4b8f6524a76eeb3cbb0a168d3183c35", features = ["gpui-fast"] }
-gpui-shell = { git = "https://github.com/feigeCode/gpui-kit", rev = "62035f8de4b8f6524a76eeb3cbb0a168d3183c35", features = ["gpui-fast"] }
 # gpui-webview（原 gpui-wry）强制 GPUI Fast；#3398 后它依赖
 # gpui-pre-util =0.3.8 的版本要求与下面的 fork 快照天然一致（同一 snapshot 0.3.126）。
 gpui-webview = { git = "https://github.com/feigeCode/gpui-kit", rev = "62035f8de4b8f6524a76eeb3cbb0a168d3183c35" }

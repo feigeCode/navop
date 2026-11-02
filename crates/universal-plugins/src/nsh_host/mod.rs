@@ -10,9 +10,11 @@
 
 mod abi;
 mod bundle;
+mod connection;
 mod dev;
 mod dispatch;
 mod grant;
+mod monitor;
 mod opener;
 mod page_host;
 mod session;
@@ -22,6 +24,13 @@ mod theme;
 pub use dev::{DevOps, set_dev_ops};
 pub use tab::NshTab;
 
+/// 打开一条扩展连接的页面（provider 资源由页面自己开）。
+pub struct ConnectionPageOpen {
+    pub connection: one_core::storage::StoredConnection,
+    pub contribution: extension_runtime::RegisteredResourceConnectionContribution,
+    pub mode: one_core::tab_container::TabOpenMode,
+}
+
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use gpui::{App, Global, WeakEntity};
@@ -30,6 +39,23 @@ use crate::universal_plugins::UniversalPluginService;
 
 /// 已打开 tab 的按扩展登记（弱引用：tab 关掉条目自己失效）。
 type Tabs = Rc<RefCell<HashMap<String, Vec<WeakEntity<NshTab>>>>>;
+
+/// 正在退役的扩展（卸载/停用中，不再接受新页面）。
+type Retiring = Rc<RefCell<std::collections::HashSet<String>>>;
+
+/// 需要跟随 provider 重启的实体：脚本页，以及 headless 连接 tab。
+#[derive(Clone)]
+pub(crate) enum Tracked {
+    Page(WeakEntity<NshTab>),
+    Headless {
+        runtime_id: String,
+        tab: WeakEntity<crate::ExtensionConnectionTab>,
+    },
+}
+
+/// headless tab 的登记表（按扩展 id 分组）。
+type HeadlessTabs =
+    Rc<RefCell<HashMap<String, Vec<(String, WeakEntity<crate::ExtensionConnectionTab>)>>>>;
 
 pub(crate) type Trust = Rc<RefCell<nsh_platform_gpui::package::TrustStore>>;
 
@@ -42,28 +68,99 @@ pub struct NshHost {
     service: UniversalPluginService,
     trust: Trust,
     tabs: Tabs,
+    headless: HeadlessTabs,
+    /// 正在退役的扩展 id 集合。
+    retiring: Retiring,
+    /// 监视事件的转发目标（脚本页 + headless tab）。
+    tracked: Rc<RefCell<HashMap<String, Vec<Tracked>>>>,
     /// 引擎线程 → 主线程的桥（`navop.dev` 这类要碰 GPUI 全局的操作走它）。
     dispatcher: dispatch::MainThread,
+    /// provider 事件转发要一个 tokio 句柄（订阅流在 tokio 上收）。
+    tokio: tokio::runtime::Handle,
 }
 
 impl Global for NshHost {}
 
 impl NshHost {
-    fn new(service: UniversalPluginService, dispatcher: dispatch::MainThread) -> Self {
+    fn new(
+        service: UniversalPluginService,
+        dispatcher: dispatch::MainThread,
+        tokio: tokio::runtime::Handle,
+    ) -> Self {
         Self {
             service,
             trust: bundle::trust_store(),
             tabs: Rc::new(RefCell::new(HashMap::new())),
+            headless: Rc::new(RefCell::new(HashMap::new())),
+            retiring: Rc::new(RefCell::new(std::collections::HashSet::new())),
+            tracked: Rc::new(RefCell::new(HashMap::new())),
             dispatcher,
+            tokio,
         }
     }
 
     /// 主线程桥的句柄。
+    pub(crate) fn retiring(&self) -> std::cell::Ref<'_, std::collections::HashSet<String>> {
+        self.retiring.borrow()
+    }
+
+    pub(crate) fn retiring_mut(&self) -> std::cell::RefMut<'_, std::collections::HashSet<String>> {
+        self.retiring.borrow_mut()
+    }
+
+    pub(crate) fn service(&self) -> &UniversalPluginService {
+        &self.service
+    }
+
+    /// 这个扩展名下还开着的 headless 连接 tab。
+    pub(crate) fn headless_tabs(
+        &self,
+        extension_id: &str,
+    ) -> Vec<gpui::Entity<crate::ExtensionConnectionTab>> {
+        let mut headless = self.headless.borrow_mut();
+        let Some(entries) = headless.get_mut(extension_id) else {
+            return Vec::new();
+        };
+        let mut open = Vec::new();
+        entries.retain(|(_, tab)| match tab.upgrade() {
+            Some(tab) => {
+                open.push(tab);
+                true
+            }
+            None => false,
+        });
+        open
+    }
+
+    fn tokio(&self) -> tokio::runtime::Handle {
+        self.tokio.clone()
+    }
+
     pub(crate) fn dispatcher(&self) -> dispatch::MainThread {
         self.dispatcher.clone()
     }
 
     /// 目录里登记的 shell view（manifest 的 `contributes.shellViews`）。
+    /// 连接贡献项：`home` 决定链用（与旧 shell 宿主同名，调用点不必改）。
+    pub fn resource_connection(
+        &self,
+        extension_id: &str,
+        contribution_id: &str,
+    ) -> Option<extension_runtime::RegisteredResourceConnectionContribution> {
+        self.service
+            .resource_connection(extension_id, contribution_id)
+    }
+
+    /// 这条连接绑定的原生工作台（有就走原生页，没有才开脚本页）。
+    pub fn resource_workbench_for_connection(
+        &self,
+        extension_id: &str,
+        contribution_id: &str,
+    ) -> Option<extension_runtime::RegisteredResourceWorkbenchContribution> {
+        self.service
+            .resource_workbench_for_connection(extension_id, contribution_id)
+    }
+
     pub(crate) fn contribution(
         &self,
         extension_id: &str,
@@ -77,12 +174,36 @@ impl NshHost {
         &self.trust
     }
 
+    /// 登记一个跟随 provider 重启的 headless 连接 tab。
+    pub(crate) fn register_headless_tab(
+        &self,
+        extension_id: String,
+        runtime_id: String,
+        tab: WeakEntity<crate::ExtensionConnectionTab>,
+    ) {
+        self.headless
+            .borrow_mut()
+            .entry(extension_id.clone())
+            .or_default()
+            .push((runtime_id.clone(), tab.clone()));
+        self.tracked
+            .borrow_mut()
+            .entry(extension_id)
+            .or_default()
+            .push(Tracked::Headless { runtime_id, tab });
+    }
+
     pub(crate) fn track(&self, extension_id: &str, tab: WeakEntity<NshTab>) {
         self.tabs
             .borrow_mut()
             .entry(extension_id.to_string())
             .or_default()
-            .push(tab);
+            .push(tab.clone());
+        self.tracked
+            .borrow_mut()
+            .entry(extension_id.to_string())
+            .or_default()
+            .push(Tracked::Page(tab));
     }
 
     /// 这个扩展当前开着的 tab（顺手清掉已关闭的条目）。
@@ -105,12 +226,107 @@ impl NshHost {
 /// 调用点保证与 gpui-shell 宿主互斥：两个宿主都往 `GlobalShellViewOpener`
 /// 里放实现，后注册的覆盖先注册的。
 pub fn init(service: UniversalPluginService, cx: &mut App) {
-    let host = NshHost::new(service, dispatch::MainThread::new(cx));
+    let host = NshHost::new(
+        service,
+        dispatch::MainThread::new(cx),
+        one_core::gpui_tokio::Tokio::handle(cx),
+    );
     extension_view::register_shell_view_opener(Rc::new(host.clone()), cx);
     // 同一份宿主也接嵌入页：资源工作台里的 nsh 页面走的还是这套
     // session/ABI，只是主资源是借来的。
     page_host::install(host.clone(), cx);
+    // provider 换进程后，已打开的页面要跟着重装或报错，否则会一直拿着
+    // 作废的 generation 调用。
+    host.start_monitor_bridge(cx);
     cx.set_global(host);
+}
+
+impl NshHost {
+    /// 打开连接型扩展页面：先按连接配置打开 provider 资源，再挂页面。
+    ///
+    /// tab id 用 `extension-connection:{id}`，同一连接重复打开复用同一个 tab
+    /// ——连接的资源只该开一份。
+    pub fn open_connection(
+        &self,
+        request: ConnectionPageOpen,
+        window: &mut gpui::Window,
+        cx: &mut App,
+    ) -> anyhow::Result<()> {
+        let ConnectionPageOpen {
+            connection,
+            contribution,
+            mode,
+        } = request;
+        let connection_id = connection
+            .id
+            .ok_or_else(|| anyhow::anyhow!("扩展连接必须先保存再打开"))?;
+        let view_id = contribution
+            .shell_view_id
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("这条扩展连接没有对应的 shell view"))?;
+        let view = self
+            .contribution(&contribution.extension_id, view_id)
+            .ok_or_else(|| anyhow::anyhow!("扩展连接声明的 shell view 不存在"))?;
+        // 凭据在内存里还原成明文随 open 载荷送到 provider；解析副本不落盘。
+        let connection =
+            crate::universal_plugins::resolve_extension_connection_for_runtime(connection, cx)?;
+        let launch = connection::NshConnectionLaunch::new(&connection, &contribution, &view)?;
+        let host = self.clone();
+        let extension_id = contribution.extension_id.clone();
+        let title: gpui::SharedString = connection.name.clone().into();
+        let tab_id = format!("extension-connection:{connection_id}");
+        let tab_container = cx
+            .global::<one_core::tab_container::GlobalTabContainer>()
+            .primary_pane();
+        tab_container.update(cx, |tabs, cx| {
+            tabs.activate_or_add_tab_lazy_with_mode(
+                tab_id.clone(),
+                mode,
+                move |_window, cx| {
+                    let registry_host = host.clone();
+                    let tab = NshTab::open_connection(
+                        view.clone(),
+                        host.service.clone(),
+                        host.trust().clone(),
+                        host.dispatcher(),
+                        launch,
+                        title,
+                        cx,
+                    );
+                    registry_host.track(&extension_id, tab.downgrade());
+                    one_core::tab_container::TabItem::new(tab_id, "extension-connection", tab)
+                },
+                window,
+                cx,
+            );
+        });
+        Ok(())
+    }
+}
+
+/// 界面语言变化后让已打开的页面重新取词条。
+///
+/// nsh 页面把 locale 当输入：`set_locale` 会触发重渲染，页面里 `t("…")`
+/// 自然读到新语言；不需要像 gpui-shell 那样重跑脚本。
+pub fn refresh_views(cx: &mut App) {
+    let Some(host) = cx.try_global::<NshHost>().cloned() else {
+        return;
+    };
+    let locale = rust_i18n::locale().to_string();
+    let tabs = host
+        .tabs
+        .borrow()
+        .values()
+        .flatten()
+        .filter_map(|tab| tab.upgrade())
+        .collect::<Vec<_>>();
+    for tab in tabs {
+        let locale = locale.clone();
+        tab.update(cx, |tab, cx| {
+            tab.apply_locale(&locale, cx);
+            cx.notify();
+        });
+    }
 }
 
 /// 打开一个扩展页面：singleton 的 view 复用同一个 tab id。

@@ -670,6 +670,29 @@ impl NshSession {
         }))
     }
 
+    /// 连接页拥有的主资源：页面关闭时随会话回收（与嵌入页"借来的"相反）。
+    pub(crate) fn register_connection_resource(
+        &self,
+        client: &ManagedUniversalPluginClient,
+        result: ResourceOpenResult,
+    ) -> Result<String, NavopError> {
+        let handle = new_handle("resource");
+        self.resources
+            .lock()
+            .map_err(|_| poisoned("resource"))?
+            .insert(
+                handle.clone(),
+                ProviderHandle {
+                    runtime_id: client.runtime_id.clone(),
+                    generation: client.generation,
+                    provider_id: result.resource_id,
+                    resource: None,
+                    owned: true,
+                },
+            );
+        Ok(handle)
+    }
+
     pub(crate) fn set_workbench(
         &self,
         descriptor: RegisteredResourceWorkbenchContribution,
