@@ -46,6 +46,7 @@ use gpui_component::{
 };
 use one_assets::IconName;
 use one_core::layout::TOOLBAR_WIDTH;
+use one_core::settings::AppSettings;
 use one_core::sidebar_contribution::SidebarPlacement;
 use one_core::storage::{
     ConnectionRepository, GlobalStorageState, TerminalHistoryScope, models::StoredConnection,
@@ -57,7 +58,7 @@ use one_ui::{
 };
 use rust_i18n::t;
 use ssh::SshSessionManager;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use terminal::ReportedWorkingDir;
@@ -676,6 +677,34 @@ impl TerminalToolDockState {
     pub fn first_open_panel(&self) -> Option<SidebarPanel> {
         self.open_panels().first().map(|(panel, _)| *panel)
     }
+
+    /// 当前可用面板的停靠位置快照（含未展开的面板），用于写回设置。
+    pub fn panel_placements(&self) -> Vec<(SidebarPanel, SidebarPlacement)> {
+        self.panels
+            .iter()
+            .map(|panel| (*panel, self.panel_placement(*panel)))
+            .collect()
+    }
+
+    /// 按持久化的停靠位置复位各面板，返回真正被改动位置的面板。
+    ///
+    /// 只看已经存在的面板：设置里其它会话的面板（例如 SSH 的文件管理器）
+    /// 在这台终端上还没建出来，留给 `update_available_panels` 之后的那次复位。
+    pub fn apply_persisted_placements(
+        &mut self,
+        persisted: &BTreeMap<String, SidebarPlacement>,
+    ) -> Vec<SidebarPanel> {
+        let mut moved = Vec::new();
+        for panel in self.panels.clone() {
+            let Some(placement) = persisted.get(panel.local_id()).copied() else {
+                continue;
+            };
+            if self.panel_placement(panel) != placement && self.move_tool(panel, placement) {
+                moved.push(panel);
+            }
+        }
+        moved
+    }
 }
 
 /// 终端侧边栏事件
@@ -1007,6 +1036,9 @@ impl TerminalSidebar {
         if changed {
             cx.notify();
         }
+        // 后补建的面板（SSH 文件管理器 / 服务器监控）落在默认右侧，
+        // 这里再套一次用户上次选好的位置。
+        self.restore_tool_panel_placements(cx);
         changed
     }
 
@@ -1393,7 +1425,7 @@ impl TerminalSidebar {
             history_command_panel.is_some(),
             broadcast_input_panel.is_some(),
         );
-        Self {
+        let mut sidebar = Self {
             tool_dock: TerminalToolDockState::new(available_panels),
             settings_panel,
             quick_command_panel,
@@ -1411,7 +1443,11 @@ impl TerminalSidebar {
             focus_handle: cx.focus_handle(),
             colors,
             _subs: subs,
-        }
+        };
+        // 上次用「移动到」选好的停靠位置在设置里，构造时就复位，
+        // 否则新建终端会把面板全部拉回默认的右侧。
+        sidebar.restore_tool_panel_placements(cx);
+        sidebar
     }
 
     /// 获取当前激活的面板
@@ -1467,6 +1503,34 @@ impl TerminalSidebar {
 
     pub fn panel_placement(&self, panel: SidebarPanel) -> SidebarPlacement {
         self.tool_dock.panel_placement(panel)
+    }
+
+    /// 各工具面板当前的停靠位置，键与设置里的存档一致（`SidebarPanel::local_id`）。
+    pub fn tool_panel_placements(&self) -> BTreeMap<String, SidebarPlacement> {
+        self.tool_dock
+            .panel_placements()
+            .into_iter()
+            .map(|(panel, placement)| (panel.local_id().to_string(), placement))
+            .collect()
+    }
+
+    /// 按设置里记录的停靠位置复位面板（只改位置，不动展开状态）。
+    ///
+    /// 侧栏构造、补建 SSH 面板、以及设置变更后都会走这里。
+    pub(crate) fn restore_tool_panel_placements(&mut self, cx: &mut Context<Self>) {
+        let persisted = AppSettings::current(cx).terminal_tool_panel_placements;
+        if persisted.is_empty() {
+            return;
+        }
+        let moved = self.tool_dock.apply_persisted_placements(&persisted);
+        for panel in &moved {
+            let placement = self.tool_dock.panel_placement(*panel);
+            self.update_panel_frame_placement(*panel, placement, cx);
+            cx.emit(TerminalSidebarEvent::PanelChanged(Some(*panel)));
+        }
+        if !moved.is_empty() {
+            cx.notify();
+        }
     }
 
     pub(crate) fn colors(&self) -> TerminalColors {
@@ -2151,6 +2215,7 @@ mod tests {
     use gpui_component::{Theme, ThemeColor};
     use one_core::sidebar_contribution::SidebarPlacement;
     use one_core::storage::{ConnectionType, StoredConnection};
+    use std::collections::BTreeMap;
     use terminal::terminal::TerminalConnectionKind;
 
     fn stored_connection(id: i64, name: &str, connection_type: ConnectionType) -> StoredConnection {
@@ -2511,6 +2576,81 @@ mod tests {
             vec![(SidebarPanel::AiChat, SidebarPlacement::Bottom)],
         );
         assert!(dock.toolbar_visible());
+    }
+
+    #[test]
+    fn tool_dock_restores_persisted_placements_for_available_panels() {
+        let mut dock = TerminalToolDockState::new([SidebarPanel::Settings, SidebarPanel::AiChat]);
+        let mut persisted = BTreeMap::new();
+        persisted.insert(
+            SidebarPanel::AiChat.local_id().to_string(),
+            SidebarPlacement::Left,
+        );
+        // 只在别的会话里存在的面板（SSH 文件管理器）这里忽略，不能凭空建出来。
+        persisted.insert(
+            SidebarPanel::FileManager.local_id().to_string(),
+            SidebarPlacement::Bottom,
+        );
+
+        let moved = dock.apply_persisted_placements(&persisted);
+
+        assert_eq!(moved, vec![SidebarPanel::AiChat]);
+        assert_eq!(
+            dock.panel_placement(SidebarPanel::AiChat),
+            SidebarPlacement::Left
+        );
+        assert_eq!(
+            dock.panel_placement(SidebarPanel::Settings),
+            SidebarPlacement::Right
+        );
+    }
+
+    #[test]
+    fn tool_dock_reapplies_persisted_placement_to_late_added_panels() {
+        let mut dock = TerminalToolDockState::new([SidebarPanel::Settings]);
+        let mut persisted = BTreeMap::new();
+        persisted.insert(
+            SidebarPanel::ServerMonitor.local_id().to_string(),
+            SidebarPlacement::Bottom,
+        );
+
+        assert!(dock.apply_persisted_placements(&persisted).is_empty());
+
+        assert!(dock.update_available_panels([
+            SidebarPanel::Settings,
+            SidebarPanel::ServerMonitor,
+        ]));
+        assert_eq!(
+            dock.apply_persisted_placements(&persisted),
+            vec![SidebarPanel::ServerMonitor]
+        );
+        assert_eq!(
+            dock.panel_placement(SidebarPanel::ServerMonitor),
+            SidebarPlacement::Bottom
+        );
+    }
+
+    #[test]
+    fn tool_dock_placement_snapshot_keeps_one_entry_per_available_panel() {
+        let mut dock =
+            TerminalToolDockState::new([SidebarPanel::Settings, SidebarPanel::QuickCommand]);
+        dock.move_tool(SidebarPanel::Settings, SidebarPlacement::Bottom);
+
+        let snapshot = dock
+            .panel_placements()
+            .into_iter()
+            .map(|(panel, placement)| (panel.local_id().to_string(), placement))
+            .collect::<BTreeMap<_, _>>();
+
+        assert_eq!(snapshot.len(), 2);
+        assert_eq!(
+            snapshot.get(SidebarPanel::Settings.local_id()),
+            Some(&SidebarPlacement::Bottom)
+        );
+        assert_eq!(
+            snapshot.get(SidebarPanel::QuickCommand.local_id()),
+            Some(&SidebarPlacement::Right)
+        );
     }
 
     #[test]

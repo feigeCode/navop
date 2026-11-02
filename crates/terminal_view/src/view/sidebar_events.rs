@@ -148,6 +148,10 @@ impl TerminalView {
     ) {
         let settings = current_settings(cx);
         self.apply_settings_snapshot(&settings, window, cx);
+        // 停靠位置也存在设置里：别的终端标签里改过「移动到」后，本标签跟着复位。
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.restore_tool_panel_placements(cx);
+        });
     }
 
     pub(super) fn handle_app_theme_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -197,6 +201,8 @@ impl TerminalView {
     ) {
         match event {
             TerminalSidebarEvent::PanelChanged(_panel) => {
+                // 面板移动 / 展开 / 收起都会走到这里；位置有变化才真的写盘。
+                self.persist_tool_panel_placements(cx);
                 cx.emit(TabContentEvent::StateChanged);
                 cx.notify();
             }
