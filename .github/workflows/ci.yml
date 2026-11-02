@@ -33,6 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
+      product_matrix: ${{ steps.products.outputs.product_matrix }}
 
     steps:
       - name: Resolve requested platforms
@@ -53,6 +54,38 @@ jobs:
             *) echo "::error::Unsupported platform: $platform"; exit 1 ;;
           esac
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+      # 产品检查是「一个产品 × 一个目标」一条，矩阵项比测试矩阵多得多，
+      # 所以单独按 REQUESTED_PLATFORM 裁剪，让 workflow_dispatch 选单个平台时
+      # 只跑该平台的三条。
+      - name: Resolve product check matrix
+        id: products
+        env:
+          REQUESTED_PLATFORM: ${{ inputs.platform }}
+        run: |
+          set -euo pipefail
+          platform="${REQUESTED_PLATFORM:-all}"
+          navop_linux='{"product":"navop","target":"x86_64-unknown-linux-gnu","run_on":"ubuntu-latest","platform":"linux","args":""}'
+          navop_macos='{"product":"navop","target":"aarch64-apple-darwin","run_on":"macos-latest","platform":"macos","args":""}'
+          navop_win_x64='{"product":"navop","target":"x86_64-pc-windows-msvc","run_on":"windows-2022","platform":"windows","args":"--features windows-native-rdp"}'
+          navop_win_x86='{"product":"navop","target":"i686-pc-windows-msvc","run_on":"windows-2022","platform":"windows","args":"--no-default-features --features wasm-components,windows-native-rdp"}'
+          shell_linux='{"product":"navop-shell","target":"x86_64-unknown-linux-gnu","run_on":"ubuntu-latest","platform":"linux","args":""}'
+          shell_macos='{"product":"navop-shell","target":"aarch64-apple-darwin","run_on":"macos-latest","platform":"macos","args":""}'
+          shell_win='{"product":"navop-shell","target":"x86_64-pc-windows-msvc","run_on":"windows-2022","platform":"windows","args":""}'
+          data_linux='{"product":"navop-data","target":"x86_64-unknown-linux-gnu","run_on":"ubuntu-latest","platform":"linux","args":""}'
+          data_macos='{"product":"navop-data","target":"aarch64-apple-darwin","run_on":"macos-latest","platform":"macos","args":""}'
+          data_win='{"product":"navop-data","target":"x86_64-pc-windows-msvc","run_on":"windows-2022","platform":"windows","args":""}'
+          linux="[$navop_linux,$shell_linux,$data_linux]"
+          macos="[$navop_macos,$shell_macos,$data_macos]"
+          windows="[$navop_win_x64,$navop_win_x86,$shell_win,$data_win]"
+          case "$platform" in
+            all) product_matrix="[$navop_linux,$navop_macos,$navop_win_x64,$navop_win_x86,$shell_linux,$shell_macos,$shell_win,$data_linux,$data_macos,$data_win]" ;;
+            linux) product_matrix="$linux" ;;
+            windows) product_matrix="$windows" ;;
+            macos) product_matrix="$macos" ;;
+            *) echo "::error::Unsupported platform: $platform"; exit 1 ;;
+          esac
+          echo "product_matrix=$product_matrix" >> "$GITHUB_OUTPUT"
 
   # 发布 PR 只改 CHANGELOG + 版本号，跑全平台测试没有意义：这一层只做分类，
   # 并在判定为发布改动时就地校验 changelog 与版本号；其余 PR 照旧跑全量测试。
@@ -189,28 +222,12 @@ jobs:
   # 真正出过问题的形态；macOS x64 与 linux arm64 只是同一份代码换目标，暂不重复。
   product-check:
     name: Build shape (${{ matrix.product }} / ${{ matrix.target }})
-    needs: [classify]
-    if: >-
-      ${{
-        (inputs.platform == '' ||
-         inputs.platform == 'all' ||
-         inputs.platform == matrix.platform) &&
-        needs.classify.outputs.release_only != 'true'
-      }}
+    needs: [prepare, classify]
+    if: ${{ needs.classify.outputs.release_only != 'true' }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { product: navop, target: x86_64-unknown-linux-gnu, run_on: ubuntu-latest, platform: linux, args: "" }
-          - { product: navop, target: aarch64-apple-darwin, run_on: macos-latest, platform: macos, args: "" }
-          - { product: navop, target: x86_64-pc-windows-msvc, run_on: windows-2022, platform: windows, args: "--features windows-native-rdp" }
-          - { product: navop, target: i686-pc-windows-msvc, run_on: windows-2022, platform: windows, args: "--no-default-features --features wasm-components,windows-native-rdp" }
-          - { product: navop-shell, target: x86_64-unknown-linux-gnu, run_on: ubuntu-latest, platform: linux, args: "" }
-          - { product: navop-shell, target: aarch64-apple-darwin, run_on: macos-latest, platform: macos, args: "" }
-          - { product: navop-shell, target: x86_64-pc-windows-msvc, run_on: windows-2022, platform: windows, args: "" }
-          - { product: navop-data, target: x86_64-unknown-linux-gnu, run_on: ubuntu-latest, platform: linux, args: "" }
-          - { product: navop-data, target: aarch64-apple-darwin, run_on: macos-latest, platform: macos, args: "" }
-          - { product: navop-data, target: x86_64-pc-windows-msvc, run_on: windows-2022, platform: windows, args: "" }
+        include: ${{ fromJSON(needs.prepare.outputs.product_matrix) }}
     runs-on: ${{ matrix.run_on }}
     steps:
       - uses: actions/checkout@v7
