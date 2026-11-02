@@ -1,6 +1,6 @@
 [package]
 name = "navop-shell"
-version = "0.23.0-beta.2"
+version = "0.23.0-beta.4"
 edition.workspace = true
 publish = false
 
@@ -19,3 +19,6 @@ shell_domain = { workspace = true }
 
 [lints]
 workspace = true
+
+[target.'cfg(target_os = "windows")'.build-dependencies]
+winresource = "0.1"

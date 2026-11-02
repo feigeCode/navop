@@ -170,7 +170,7 @@ test("Linux publishes one package per architecture plus a separate GPU dependenc
   );
   assert.match(
     release,
-    /all\)[\s\S]*?matrix="\[\$\{combined\}\]"/,
+    /all\)[\s\S]*?matrix="\$combined"/,
   );
   assert.match(release, /linux-x64\)\s*\n\s*full_matrix="\[\$linux_x64\]"\s*\n\s*standalone_matrix="\[\$shell_linux_x64,\$data_linux_x64\]"/);
   assert.match(release, /linux-arm64\)\s*\n\s*full_matrix="\[\$linux_arm64\]"\s*\n\s*standalone_matrix=""/);
@@ -812,7 +812,7 @@ test("Windows release publishes versioned Win32 artifacts while preserving updat
   );
   assert.match(
     release,
-    /all\)[\s\S]*?matrix="\[\$\{combined\}\]"/,
+    /all\)[\s\S]*?matrix="\$combined"/,
   );
   assert.match(
     release,
@@ -1075,10 +1075,20 @@ test("Windows MSI shortcuts inherit the executable's embedded icon", () => {
   // 控制面板的卸载项仍走 Icon 表；快捷方式图标则由 exe 的内嵌资源提供。
   assert.match(wix, /<Icon Id="NavopIcon" SourceFile="\$\(IconPath\)"\s*\/>/);
   assert.match(wix, /<Property Id="ARPPRODUCTICON" Value="NavopIcon"\s*\/>/);
-  assert.match(
-    read("crates/navop_app/build.rs"),
-    /set_icon\("\.\.\/\.\.\/resources\/windows\/navop\.ico"\)/,
-  );
+  // 图标与清单必须由**二进制 crate 自己**嵌入：`cargo:rustc-link-arg` 只作用于本包的
+  // targets，`crates/navop_app` 是库，它的 build.rs 嵌出来的资源到不了 `apps/navop*/`
+  // 里的 exe（v0.23.0-beta.4 的 navop.exe 因此没有 .rsrc）。
+  const embed = read("resources/windows/embed_app_resources.rs");
+  assert.match(embed, /res\.set_icon\(icon\)/);
+  for (const product of ["navop", "navop-shell", "navop-data"]) {
+    const build = read(`apps/${product}/build.rs`);
+    assert.match(
+      build,
+      /include!\("\.\.\/\.\.\/resources\/windows\/embed_app_resources\.rs"\)/,
+    );
+    assert.match(build, /embed_windows_resources\(/);
+    assert.match(build, /"\.\.\/\.\.\/resources\/windows\/navop\.ico"/);
+  }
 });
 
 test("GitHub and R2 publish every installer while the updater manifest remains compatible", () => {
@@ -1820,7 +1830,7 @@ test("release builds are cacheable and individually repairable", () => {
   assert.match(trigger, /-f platform=all/);
   assert.match(
     release,
-    /all\)[\s\S]*?matrix="\[\$\{combined\}\]"/,
+    /all\)[\s\S]*?matrix="\$combined"/,
   );
   assert.equal(fs.existsSync(".github/workflows/build-arm-linux.yml"), false);
 });
@@ -1881,7 +1891,7 @@ test("application updates prefer navop while accepting legacy package names", ()
 });
 
 test("Windows 产物由宿主自己内嵌 Common-Controls v6 清单", () => {
-  const build = read("crates/navop_app/build.rs");
+  const build = read("resources/windows/embed_app_resources.rs");
   const manifest = read("resources/windows/navop.manifest.xml");
   const release = read(".github/workflows/release.yml");
 
@@ -1912,10 +1922,20 @@ test("Windows 产物由宿主自己内嵌 Common-Controls v6 清单", () => {
   // 上游 gpui-fast 只在宿主没声明「我自己提供清单」时才嵌（gpui-kit 声明了
   // windows-manifest-provided-by-host，而 Cargo 特性只做并集、下游关不掉），
   // 所以这份清单只能由 navop 自己嵌。
-  assert.match(
-    build,
-    /set_manifest\(include_str!\("\.\.\/\.\.\/resources\/windows\/navop\.manifest\.xml"\)\)/,
+  assert.match(build, /set_manifest\(include_str!\("navop\.manifest\.xml"\)\)/);
+  // 资源嵌入必须留在二进制 crate：库的 build.rs 嵌不到依赖方的 exe。
+  assert.equal(
+    fs.existsSync("crates/navop_app/build.rs"),
+    false,
+    "crates/navop_app 是库，资源嵌入必须放在 apps/<product>/build.rs",
   );
+  for (const product of ["navop", "navop-shell", "navop-data"]) {
+    assert.match(
+      read(`apps/${product}/build.rs`),
+      /embed_windows_resources\(/,
+      `${product} 的 build.rs 必须嵌入 Windows 资源`,
+    );
+  }
   // winresource 只在 VersionInfo::FILETYPE 存在时才写清单块：漏了这行会静默不嵌。
   assert.match(build, /set_version_info\(winresource::VersionInfo::FILETYPE/);
   assert.match(
@@ -2077,4 +2097,76 @@ test("unified release workflow builds Windows installers for both products", () 
     release,
     /-Product "\$\{\{ matrix\.product \}\}"[\s\S]*?-Version "\$env:ONETCLI_VERSION"/,
   );
+
+  // CI 传的 -OutDir 是绝对路径（${{ github.workspace }}\dist-product），
+  // 脚本里不能无脑 Join-Path $repoRoot，否则拼出 `D:\a\...\D:\a\...` 直接失败。
+  const script = read("installer/windows/build-product-installer.ps1");
+  assert.match(script, /\[System\.IO\.Path\]::IsPathRooted\(\$OutDir\)/);
+  assert.doesNotMatch(script, /\$resolvedOutDir = Join-Path \$repoRoot \$OutDir/);
+});
+
+test("release matrix keeps spaces inside macOS bundle names", () => {
+  const release = read(".github/workflows/release.yml");
+  const step = workflowStep(release, "Resolve platform matrix");
+
+  // 拼接矩阵时不能把空格当分隔符：`bundle_name` 里带空格（"Navop Shell"），
+  // 用 `tr ' ' ','` 会拼出 `Navop,Shell`，macOS 打包步骤随后 `tar` 找不到 .app。
+  assert.doesNotMatch(step, /\| tr ' ' ','/);
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "navop-matrix-"));
+  const output = path.join(dir, "github_output.txt");
+  // 只取 `run: |` 之后、缩进 10 空格的块，遇到下一个 job（缩进 2）就停，
+  // 否则会把后面的 `build:` job 头当成脚本内容。
+  const body = [];
+  let inBody = false;
+  for (const line of step.split("\n")) {
+    if (!inBody) {
+      inBody = line.trim() === "run: |";
+      continue;
+    }
+    if (line !== "" && !line.startsWith("          ")) break;
+    body.push(line.replace(/^ {10}/, ""));
+  }
+  const script = body.join("\n");
+  const scriptPath = path.join(dir, "matrix.sh");
+  fs.writeFileSync(scriptPath, script);
+
+  const result = spawnSync("bash", [scriptPath], {
+    env: {
+      ...process.env,
+      RELEASE_PLATFORM: "all",
+      RELEASE_PRODUCTS: "all",
+      GITHUB_OUTPUT: output,
+    },
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr);
+
+  const entry = fs.readFileSync(output, "utf8").match(/^matrix=(.*)$/m);
+  assert.ok(entry, "matrix output is missing");
+  const matrix = JSON.parse(entry[1]);
+  assert.equal(matrix.length, 14);
+  assert.deepEqual(
+    [...new Set(matrix.map((item) => item.bundle_name))].sort(),
+    ["Navop", "Navop Data", "Navop Shell"],
+  );
+});
+
+test("Windows build-shape checks run in a developer PowerShell", () => {
+  const ci = read(".github/workflows/ci.yml");
+  assert.match(ci, /uses: ilammy\/msvc-dev-cmd@v1/);
+
+  // Git Bash 的 PATH 里 `link.exe` 是 GNU coreutils 的 link，会把 MSVC 链接器盖掉，
+  // 于是 cargo check 编到 build script 时全挂（`/usr/bin/link: extra operand`）。
+  // `shell:` 不支持 matrix 上下文（Unrecognized named-value: 'matrix'），
+  // 所以 Windows 单独一步写死 pwsh，其余平台仍是 bash。
+  assert.match(
+    ci,
+    /- name: Check the product build shape \(Windows\)\n\s+if: \$\{\{ matrix\.platform == 'windows' \}\}\n\s+shell: pwsh\n\s+run: cargo check --locked/,
+  );
+  assert.match(
+    ci,
+    /- name: Check the product build shape\n\s+if: \$\{\{ matrix\.platform != 'windows' \}\}\n\s+shell: bash\n/,
+  );
+  assert.doesNotMatch(ci, /shell: \$\{\{ matrix\./);
 });

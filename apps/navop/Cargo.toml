@@ -1,6 +1,6 @@
 [package]
 name = "navop"
-version = "0.23.0-beta.2"
+version = "0.23.0-beta.4"
 edition.workspace = true
 publish = false
 
@@ -25,3 +25,6 @@ data_domain = { workspace = true }
 
 [lints]
 workspace = true
+
+[target.'cfg(target_os = "windows")'.build-dependencies]
+winresource = "0.1"
