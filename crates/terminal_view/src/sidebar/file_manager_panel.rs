@@ -228,6 +228,14 @@ struct GlobalDeleteView {
     remote_dir: String,
 }
 
+/// 传输终态提示的稳定通知类型（配合 `Notification::id1`）。
+///
+/// 同一连接可以同时开多路终端分屏，每路分屏的侧栏文件管理器面板都会收到
+/// 同一笔传输的终态事件；若各自用随机 id 弹提示，一次上传就会叠出多条
+/// 「上传完成」（issue #499）。用传输 id 作通知 id 后，重复 push 只会替换
+/// 上一条，最终每个窗口只留一条。
+struct TransferFinishNotification;
+
 #[derive(Clone, Copy)]
 enum TransferProgressState {
     Pending,
@@ -2869,11 +2877,11 @@ impl FileManagerPanel {
         let file_name = Some(snapshot.display_name.as_str());
         match snapshot.state {
             SftpTransferState::Succeeded => {
-                self.notify_transfer_finish(action, file_name, None, cx);
+                self.notify_transfer_finish(action, snapshot.id, file_name, None, cx);
             }
             SftpTransferState::Failed => {
                 let error = snapshot.error.as_deref().unwrap_or_default();
-                self.notify_transfer_finish(action, file_name, Some(error), cx);
+                self.notify_transfer_finish(action, snapshot.id, file_name, Some(error), cx);
             }
             // 进行中与用户主动取消都不打扰。
             SftpTransferState::Queued
@@ -2887,14 +2895,20 @@ impl FileManagerPanel {
     ///
     /// 传输回调里只有 `cx`、拿不到 `&mut Window`，所以走构造时记下的窗口句柄；
     /// 窗口已关闭时静默放弃（终态在后台任务面板里依然可见）。
+    ///
+    /// 通知 id 由传输 id 固定（见 [`TransferFinishNotification`]）：同一连接的多个
+    /// 终端分屏都会收到同一条终态事件，后到的 push 替换先到的，最终只留一条提示。
     fn notify_transfer_finish(
         &self,
         action: TransferAction,
+        transfer_id: SftpTransferId,
         file_name: Option<&str>,
         error: Option<&str>,
         cx: &mut Context<Self>,
     ) {
-        let notification = transfer_finish_notification(action, file_name, error);
+        let notification =
+            transfer_finish_notification(action, file_name, error)
+                .id1::<TransferFinishNotification>(("sftp-transfer-finish", transfer_id.as_u64()));
         let _ = self.window_handle.update(cx, |_root, window, cx| {
             window.push_notification(notification, cx);
         });
@@ -6910,6 +6924,59 @@ mod tests {
         panel.read_with(cx, |panel, _| {
             assert!(!panel.transfer_queue.has_active());
         });
+    }
+
+    /// 同一连接的每个终端分屏都有一个文件管理器面板，都会收到同一笔传输的终态；
+    /// 完成提示必须只留一条，不能每个面板各弹一条（issue #499）。
+    #[gpui::test]
+    fn duplicate_panels_collapse_finish_toast_into_one(mut cx: &mut TestAppContext) {
+        use gpui_component::WindowExt;
+
+        let temp_dir = tempfile::TempDir::new().expect("create fixture temp dir");
+        let (provider, _executor, panel, window) = file_manager_fixture(&mut cx, &temp_dir);
+        // 直接用 AnyWindowHandle 更新窗口：不占用 Root 的更新状态，通知列表才可读。
+        let window_handle: gpui::AnyWindowHandle = window.into();
+
+        // 第二个面板模拟同一连接的另一路终端分屏：它和首个面板订阅同一个全局执行器。
+        let _extra_panel = window_handle
+            .update(cx, |_, window, cx| {
+                cx.new(|cx| {
+                    super::FileManagerPanel::new(
+                        test_stored_connection(),
+                        test_session_manager(),
+                        TerminalColors {
+                            background: gpui::black(),
+                            foreground: gpui::white(),
+                            muted: gpui::black(),
+                            muted_foreground: gpui::black(),
+                            border: gpui::black(),
+                            accent: gpui::black(),
+                            accent_foreground: gpui::white(),
+                        },
+                        window,
+                        cx,
+                    )
+                })
+            })
+            .expect("window should stay open");
+
+        let local_path = temp_dir.path().join("report.txt");
+        let id = submit_download(&mut cx, &panel, local_path);
+        wait_until(&mut cx, |_| {
+            provider.operation(id) == Some(FileManagerTestOperation::Download)
+        });
+        provider.complete(id, Ok(()));
+        wait_until(&mut cx, |cx| {
+            executor_state(cx, &panel, id) == Some(SftpTransferState::Succeeded)
+        });
+
+        let notification_count = window_handle
+            .update(cx, |_, window, cx| window.notifications(cx).len())
+            .expect("window should stay open");
+        assert_eq!(
+            notification_count, 1,
+            "同一笔传输的完成提示应只保留一条，不能每个面板各弹一条"
+        );
     }
 
     #[gpui::test]
