@@ -3963,6 +3963,7 @@ impl SftpView {
             FileConflictPromptSpec {
                 name: current.transfer.name.clone().into(),
                 is_directory: current.transfer.is_dir,
+                show_apply_all: position.1 > 1,
                 apply_all: apply_all.clone(),
                 labels: upload_conflict_prompt_labels(position),
             },

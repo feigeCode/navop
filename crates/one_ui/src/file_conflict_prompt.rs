@@ -5,8 +5,8 @@ use std::{
 };
 
 use gpui::{
-    App, AppContext as _, Context, Entity, IntoElement, ParentElement, Render, SharedString, Styled,
-    Window, div, prelude::FluentBuilder as _,
+    App, AppContext as _, Context, Entity, IntoElement, ParentElement, Render, SharedString,
+    Styled, Window, div, prelude::FluentBuilder as _,
 };
 use gpui_component::{
     ActiveTheme, StyledExt,
@@ -56,6 +56,8 @@ type ChoiceHandler = Rc<dyn Fn(FileConflictChoice, bool, &mut Window, &mut App)>
 pub struct FileConflictPromptSpec {
     pub name: SharedString,
     pub is_directory: bool,
+    /// 是否展示「应用于全部」复选框。只有存在多个冲突项时才有意义。
+    pub show_apply_all: bool,
     pub apply_all: Arc<AtomicBool>,
     pub labels: FileConflictPromptLabels,
 }
@@ -67,6 +69,7 @@ pub struct FileConflictPromptSpec {
 pub struct FileConflictPrompt {
     name: SharedString,
     is_directory: bool,
+    show_apply_all: bool,
     apply_all: Arc<AtomicBool>,
     labels: FileConflictPromptLabels,
     on_choice: ChoiceHandler,
@@ -81,6 +84,7 @@ impl FileConflictPrompt {
         Self {
             name: spec.name,
             is_directory: spec.is_directory,
+            show_apply_all: spec.show_apply_all,
             apply_all: spec.apply_all,
             labels: spec.labels,
             on_choice: Rc::new(on_choice),
@@ -134,10 +138,11 @@ impl Render for FileConflictPrompt {
         let content = if self.confirming_overwrite {
             content.child(self.overwrite_warning(cx))
         } else {
-            content
-                .child(self.labels.choose_action.clone())
-                .child(self.apply_all_checkbox(cx))
+            content.child(self.labels.choose_action.clone())
         };
+        let content = content.when(self.show_apply_all, |this| {
+            this.child(self.apply_all_checkbox(cx))
+        });
 
         content.child(
             h_flex()
