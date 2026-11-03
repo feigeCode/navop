@@ -275,6 +275,9 @@ impl NshTab {
             app_id: program.app_id,
             asset_base: program.asset_base,
             host: self.channel.clone(),
+            // 原生组件（`<Terminal/>` 这类）按**本页面**的注册表注入：
+            // 每视图一份，工厂里钉死扩展身份与清单权限。
+            components: super::native::components_for(&self.contribution, cx),
             ..AppOptions::default()
         };
         // 连接型页面：把刚打开的资源交给会话（句柄归本 tab 所有），

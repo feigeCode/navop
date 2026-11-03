@@ -147,7 +147,46 @@ const volumes = await call<{ volumes: Volume[] }>("docker/volume/list", {});
 `resourceWorkbenches[].operations` 也写着 operationId → method 的对应关系，
 但那份声明已经不再参与运行。
 
-## 5. 设计系统（别自己重造）
+## 5. 原生组件（`nativeComponent`）
+
+TSX 画不了、但必须是 Rust 实体的东西（终端、编辑器、图表面板）走原生组件：
+宿主注册一个名字，页面用 `nativeComponent` 声明，然后像普通元素一样摆位置。
+
+```tsx
+import { nativeComponent } from "nsh";
+
+const Terminal = nativeComponent<{ command: string; args: string[] }>("navop.terminal", {
+  props: ["command", "args", "env", "title"],
+});
+
+<Terminal command="docker" args={["exec", "-it", container.name, "/bin/sh"]} />
+```
+
+第二个参数是**声明面**：`props` 里列出的名字才会被转发给 Rust；
+`events` 里列出的名字才会回调页面（`onXxx`）。不列 = 不传。
+
+### 目前可用的原生组件
+
+| 名字 | props | 说明 |
+|---|---|---|
+| `navop.terminal` | `command`（必填）、`args`、`env`、`cwd`、`title` | 宿主本地终端（PTY）。改 `command`/`args`/`env`/`cwd` 会**重开**一个 pty；只改 `title` 不会 |
+
+### 权限与边界
+
+- `navop.terminal` 会起**宿主本地进程**，因此扩展清单（`extension.json` 的
+  `permissions`）必须声明 `shell:exec`；没声明时组件渲染一行错误，不会静默失败。
+- 终端进程不受 provider 沙箱约束：**命令与参数必须由页面显式给出**，不要做成
+  "用户随手输入一条命令"的形态（那就等于给了扩展一个任意命令执行入口）。
+- 组件的键盘焦点由宿主接管，Tab 会走进终端；页面不需要也不想管焦点。
+- 页面关掉时宿主动手回收 pty（组件 drop 后主线程补 `shutdown_embedded`）。
+
+### 什么时候**不**该用
+
+- 需要"发请求拿数据"的：那是能力平面（`host.call("navop.resource.*")`）。
+- 需要 provider 侧执行的：扩展协议只有请求-响应与 job 两种形态，没有流式 pty，
+  所以 `navop.terminal` 的 `operation` 参数目前直接报错，别用。
+
+## 6. 设计系统（别自己重造）
 
 共享库在 `extensions/composite/docker/ui/lib/`，其它扩展用一行转发复用：
 
@@ -169,7 +208,7 @@ export * from "../../../docker/ui/lib/theme";
 （tabular-nums，滚动不抖），文案简体中文，三态齐备（加载 / 失败可重试 /
 正常；有数据后失败用 `Notice` 保留内容，不要清空）。
 
-## 6. nsh/TSX 的坑（都是实测踩出来的）
+## 7. nsh/TSX 的坑（都是实测踩出来的）
 
 1. **组件体只在挂载时执行一次**。所以三态判断不能写成顶层
    `if (loading()) return <Loading/>;` —— 会永久停在加载态。写成
@@ -200,7 +239,7 @@ export * from "../../../docker/ui/lib/theme";
     取值函数（`disabled?: boolean | (() => boolean)`）。空态这类**结构**分支也别
     用体级 `if (...) return ...`，写成 `<If when={...}>` 或渲染函数。
 
-## 7. 测试
+## 8. 测试
 
 `nsh test .` 跑 `*.test.tsx`，宿主能力用 mock 给：
 
@@ -221,7 +260,7 @@ test("列表与详情", async () => {
 
 建议每条页面至少覆盖：列表渲染、选中后详情、写操作（是否带 `id`）、失败重试。
 
-## 8. 交付清单
+## 9. 交付清单
 
 - `nsh check .` 零错误（故意插一个类型错误确认它真会报，别信静默成功）；
 - `nsh build . --out dist` 退出 0，`dist/` 一并入库；

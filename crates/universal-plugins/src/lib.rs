@@ -21,7 +21,10 @@ pub use connection_icon::{
 };
 pub use extension_connection_form::{ExtensionConnectionForm, ExtensionConnectionFormConfig};
 #[cfg(feature = "nsh-host")]
-pub use nsh_host::{ConnectionPageOpen, DevOps, NshHost, init as init_nsh_host, set_dev_ops};
+pub use nsh_host::{
+    ConnectionPageOpen, DevOps, NativeFactory, NativeViewContext, NshHost, init as init_nsh_host,
+    register_native_component, set_dev_ops,
+};
 
 /// 界面语言变化后刷新已打开的脚本页面。
 ///

@@ -190,12 +190,31 @@ impl NshSession {
         match &result.result {
             ResultRef::Inline { value } => Ok(value.clone()),
             ResultRef::Blob { id } => self.decode_blob(&client, handle, id, cancel).await,
-            ResultRef::EventStream { id } => Ok(json!({
-                "kind": "event_stream",
-                "handle": self.insert_provider_handle(
-                    &self.events, "event", handle, client.generation, id,
-                )?,
-            })),
+            ResultRef::EventStream { id } => {
+                // 走 invoke 拿到的流不经过 `open_event_stream`，宿主必须自己
+                // 记账 —— 否则页面第一次 `navop.event.read` 会被
+                // EventActivationManager 以「not open for this runtime
+                // generation」拒掉。登记失败时 provider 已经把流分出去了，
+                // 回手关掉，不然它再也不会被任何一方认领。
+                if let Err(error) = client.register_invoked_event_stream(id) {
+                    let _ = client
+                        .client()
+                        .close_event_stream(&EventCloseParams {
+                            stream_id: id.clone(),
+                        })
+                        .await;
+                    return Err(NavopError::new(
+                        ErrorCode::ProtocolError,
+                        format!("事件流登记失败: {error}"),
+                    ));
+                }
+                Ok(json!({
+                    "kind": "event_stream",
+                    "handle": self.insert_provider_handle(
+                        &self.events, "event", handle, client.generation, id,
+                    )?,
+                }))
+            }
         }
     }
 

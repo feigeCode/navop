@@ -16,12 +16,14 @@ mod dev;
 mod dispatch;
 mod grant;
 mod monitor;
+mod native;
 mod opener;
 mod session;
 mod tab;
 mod theme;
 
 pub use dev::{DevOps, set_dev_ops};
+pub use native::{NativeFactory, NativeViewContext, register_native_component};
 pub use tab::NshTab;
 
 /// 打开一条扩展连接的页面（provider 资源由页面自己开）。

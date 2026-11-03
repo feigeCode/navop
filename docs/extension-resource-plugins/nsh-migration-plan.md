@@ -356,3 +356,54 @@ blob 走分片读并按 8 MiB 上限拼回 JSON，事件流给句柄。页面拿
 §14 记的是"把 UI 平面从 gpui-shell 换成 nsh"；本节记的是"换完之后再把插件机制
 本身砍到最小"。§14.2 里"nativeModule/nativeComponent 没有用""`set_ui_sets` 只用
 默认集"这两条在这里变成定论：不再计划引入，页面就是纯 TSX + 数据通道。
+
+## 16. 原生组件（nativeComponent）
+
+页面是 TSX，凡是「必须是 Rust 实体」的东西 —— 终端、编辑器、图表面板 —— 只能以
+原生组件出现。这一节记录接法，因为它是这套机制里唯一**跨宿主层**的缝。
+
+### 16.1 方向
+
+注入方向是「注册表在扩展宿主、实现在应用层」：
+
+- `crates/universal-plugins/src/nsh_host/native.rs` 只有注册表：
+  `register_native_component(name, factory, cx)` + `NativeViewContext
+  { extension_id, view_id, allow_process, component }`；
+- `NshTab` 建 `AppView` 时调 `native::components_for(&contribution, cx)` 拼出
+  **本页面**的 `Components` 交给 `AppOptions.components`（不是进程级
+  `set_ui_sets`：那样一页注册的名字会漏给所有页面）；
+- 真正的实现在 `crates/shell_domain/src/native_terminal.rs`（终端），
+  由 `shell_domain::init` 调 `install(cx)` 注册 —— 扩展宿主不依赖
+  `terminal_view`，应用层才认识它。
+
+### 16.2 权限
+
+`allow_process` = 该页面所属扩展的清单里有没有 `shell:exec`。没有时组件渲染
+一行错误而不是静默空白。`navop.terminal` 起的是宿主本地进程，命令与参数必须由
+页面显式给出（不是"用户随便敲命令"的入口）。
+
+### 16.3 生命周期
+
+- 组件每次建实例都能拿到 `NativeViewContext`（含页面身份），props 走 `set_prop`；
+- 改 `command`/`args`/`env`/`cwd` 触发**重开** pty（页面上的「重新连接」就是改
+  一个环境变量），只改 `title` 不重开；
+- 组件 drop 时主线程拿不到 `App`，所以终端走的是一条回收队列：drop 里把
+  `Entity<TerminalView>` 投给 `smol::channel`，主线程任务补一次
+  `shutdown_embedded`（注销广播输入、释放连接占用、关 pty）。
+
+### 16.4 同时删掉的旧机制
+
+- `crates/resource_view` 整个 crate（3228 行原生工作台 + `TerminalHost` 契约）；
+- `extension_plugin_adapter::workbench_dispatch`（`dispatch_invoke*/dispatch_job*`
+  与 `BindingContext` 那一套）；
+- `extension-runtime::registration` 里的 `validate_shell_renderer` /
+  `validate_resource_workbench` / `validate_workbench_layout` /
+  `validate_route_bindings` / `validate_tree_children` / `TREE_CHILDREN_MAX_DEPTH`
+  与它们唯一的测试模块（`tree_children_tests`，10 条）；
+- `shell_domain::workbench_terminal::{NativeTerminalHost, install_terminal_host}`
+  （保留 `install_workbench_terminal_provider`，那是 AI 工作台的面板，与扩展无关）。
+
+**还留着**：`extension-runtime` 里 `ResourceWorkbench*` 的清单类型（675 行
+`contributes/resource_workbench.rs` + `types/resource_workbench.rs` 等）。清单里
+已经不再有 `resourceWorkbenches` 字段，这些类型现在**没有任何读取者**，只剩
+类型定义本身；删它们是一次纯机械的清扫，留待单独一次提交做（不影响行为）。
