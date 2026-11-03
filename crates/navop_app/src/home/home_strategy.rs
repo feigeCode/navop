@@ -5,7 +5,9 @@ use gpui::{
 };
 use gpui_component::{WindowExt, notification::Notification};
 use one_core::storage::{ConnectionType, ExtensionConnectionParams, StoredConnection, Workspace};
-#[cfg(all(feature = "nsh-host", feature = "shell"))]
+// `TabItem` 只在开 `shell` 的路径上用（终端型连接、nsh 页面 tab），
+// 32 位 Windows 那种「无 nsh-host」构建同样要编译这一段。
+#[cfg(feature = "shell")]
 use one_core::tab_container::TabItem;
 use one_core::tab_container::TabOpenMode;
 use std::sync::Arc;
