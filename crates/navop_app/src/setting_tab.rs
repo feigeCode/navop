@@ -56,8 +56,18 @@ use one_core::llm::manager::GlobalProviderState;
 use one_core::popup_window::{PopupWindowOptions, open_reusable_popup_window};
 pub const DEFAULT_SYSTEM_HOTKEY_MACOS: &str = "cmd-alt-m";
 pub const DEFAULT_SYSTEM_HOTKEY_OTHER: &str = "ctrl-alt-m";
-/// 「同步」设置页序号：General、Agent、Acp、Mcp、Sync，同步页固定在第 5 页。
-const SYNC_SETTINGS_PAGE_INDEX: usize = 4;
+/// 「同步」页在固定尾巴里的偏移。
+///
+/// 页面顺序：通用 → 领域页（数据库 / SQL 格式化 / 终端，由领域注册表提供，数量随
+/// 参与编译的领域变化）→ Agent、ACP、MCP、**同步**、快捷键、LLM 提供商 → 账户、关于。
+/// 领域页数量不固定，同步页的绝对下标只能在拼接时现算，所以这里只记录它在固定尾巴
+/// 里的偏移：Agent、ACP、MCP 三页之后。
+const SYNC_PAGE_OFFSET_IN_REST: usize = 3;
+
+/// 「通用 + 领域页」这些前置页之后，「同步」页在整份页面列表里的下标。
+fn sync_page_index(pages_before_rest: usize) -> usize {
+    pages_before_rest + SYNC_PAGE_OFFSET_IN_REST
+}
 
 use gpui_component::input::InputEvent;
 pub use one_core::settings::{
@@ -549,6 +559,15 @@ fn update_master_key_storage(backend: MasterKeyStorage, cx: &mut App) {
     }
 }
 
+/// 打开设置页时默认选中哪一页。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InitialPage {
+    /// 通用页（第一页）。
+    First,
+    /// 同步页：同步冲突等场景直接跳过去。
+    Sync,
+}
+
 pub struct SettingsPanel {
     focus_handle: FocusHandle,
     llm_providers_view: Entity<LlmProvidersView>,
@@ -557,7 +576,7 @@ pub struct SettingsPanel {
     _update_check_subscription: gpui::Subscription,
     size: Size,
     group_variant: GroupBoxVariant,
-    initial_page_index: usize,
+    initial_page: InitialPage,
     font_options_cache: Option<FontOptionsCache>,
 }
 
@@ -576,14 +595,14 @@ struct FontOptionsCache {
 
 impl SettingsPanel {
     pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self::new_with_initial_page(0, cx)
+        Self::new_with_initial_page(InitialPage::First, cx)
     }
 
     pub fn new_sync(_window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self::new_with_initial_page(SYNC_SETTINGS_PAGE_INDEX, cx)
+        Self::new_with_initial_page(InitialPage::Sync, cx)
     }
 
-    fn new_with_initial_page(initial_page_index: usize, cx: &mut Context<Self>) -> Self {
+    fn new_with_initial_page(initial_page: InitialPage, cx: &mut Context<Self>) -> Self {
         let llm_providers_view = cx.new(|cx| LlmProvidersView::new(cx));
         let acp_agents_view = cx.new(|cx| AcpAgentsView::new(cx));
         // 检查更新状态由 app 持有（启动时的自动检查可能早于设置页打开），这里只观察它，
@@ -598,7 +617,7 @@ impl SettingsPanel {
             _update_check_subscription,
             size: Size::default(),
             group_variant: GroupBoxVariant::Outline,
-            initial_page_index,
+            initial_page,
             font_options_cache: None,
         }
     }
@@ -633,7 +652,17 @@ impl SettingsPanel {
         (app_options, monospace_options)
     }
 
-    fn setting_pages(&mut self, _window: &mut Window, cx: &mut App) -> Vec<SettingPage> {
+    /// 组装设置页，返回 `(页面列表, 「同步」页下标)`。
+    ///
+    /// 顺序：通用 → 领域页（数据库 / SQL 格式化 / 终端）→ Agent、ACP、MCP、同步、
+    /// 快捷键、LLM 提供商 → 账户、关于。数据库与终端是日常最常用的功能，放在前面；
+    /// 账户与关于收尾。领域页来自注册表，数量随参与编译的领域变化，所以同步页的
+    /// 绝对下标要在拼接完之后才算得出来。
+    fn setting_pages(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut App,
+    ) -> (Vec<SettingPage>, usize) {
         let llm_view = self.llm_providers_view.clone();
         let acp_view = self.acp_agents_view.clone();
         let default_settings = AppSettings::default();
@@ -675,7 +704,7 @@ impl SettingsPanel {
             description
         };
 
-        let pages = vec![
+        let mut pages = vec![
             SettingPage::new(t!("Settings.General.title"))
                 .resettable(true)
                 .default_open(true)
@@ -1111,6 +1140,14 @@ impl SettingsPanel {
                     );
                     groups
                 }),
+        ];
+        // 领域设置页由领域注册表提供：数据库页来自 data_domain，终端页来自
+        // shell_domain；哪个领域参与编译，就只会出现哪一页。它们紧跟「通用」，
+        // 因为数据库和终端是使用频率最高的两块设置。
+        let domain_pages = app_kit::registry().settings_pages(cx);
+        let sync_page_ix = sync_page_index(pages.len() + domain_pages.len());
+        pages.extend(domain_pages);
+        pages.extend(vec![
             // Agent 设置页
             SettingPage::new(t!("Settings.Agent.title"))
                 .resettable(true)
@@ -1118,7 +1155,7 @@ impl SettingsPanel {
                     agent_setting_group(&default_settings.ai_chat),
                     agent_tool_exposure_setting_group(&default_settings.tool_exposure),
                 ]),
-            // ACP 智能体设置页（插在 Agent 与 MCP 之间，改这里必须同步 SYNC_SETTINGS_PAGE_INDEX）
+            // ACP 智能体设置页（插在 Agent 与 MCP 之间；改页面顺序要同步 SYNC_PAGE_OFFSET_IN_REST）
             SettingPage::new(t!("Settings.AcpAgents.title")).group(
                 SettingGroup::new().item(
                     SettingItem::render(move |_options, _window, _cx| {
@@ -1215,12 +1252,8 @@ impl SettingsPanel {
                     default_settings.auto_update,
                     self.update_check_state.clone(),
                 )),
-        ];
-        // 领域设置页由领域注册表提供：数据库页来自 data_domain，终端页来自
-        // shell_domain；哪个领域参与编译，就只会出现哪一页。
-        let mut pages = pages;
-        pages.extend(app_kit::registry().settings_pages(cx));
-        pages
+        ]);
+        (pages, sync_page_ix)
     }
 }
 
@@ -1950,10 +1983,15 @@ impl Render for SettingsPanel {
             init_settings(cx);
         }
 
-        let initial_page_index = self.initial_page_index;
-        let settings_id = match initial_page_index {
-            index if index == SYNC_SETTINGS_PAGE_INDEX => "main-app-settings-sync",
-            _ => "main-app-settings",
+        let (pages, sync_page_ix) = self.setting_pages(window, cx);
+        let initial_page = self.initial_page;
+        let settings_id = match initial_page {
+            InitialPage::Sync => "main-app-settings-sync",
+            InitialPage::First => "main-app-settings",
+        };
+        let page_ix = match initial_page {
+            InitialPage::Sync => sync_page_ix,
+            InitialPage::First => 0,
         };
 
         div().track_focus(&self.focus_handle).size_full().child(
@@ -1961,10 +1999,10 @@ impl Render for SettingsPanel {
                 .with_size(self.size)
                 .with_group_variant(self.group_variant)
                 .default_selected_index(SelectIndex {
-                    page_ix: initial_page_index,
+                    page_ix,
                     ..Default::default()
                 })
-                .pages(self.setting_pages(window, cx)),
+                .pages(pages),
         )
     }
 }
@@ -4266,6 +4304,14 @@ mod tests {
         assert!(options.iter().any(|(value, label)| {
             value.as_ref() == "Custom Mono" && label.as_ref() == "Custom Mono (未安装)"
         }));
+    }
+
+    #[test]
+    fn sync_page_index_follows_the_domain_pages() {
+        // 通用页 1 页 + 数据库 / SQL 格式化 / 终端 3 页，其后是 Agent、ACP、MCP，
+        // 所以同步页下标是 7；领域页少几个时整条链跟着前移。
+        assert_eq!(super::sync_page_index(4), 7);
+        assert_eq!(super::sync_page_index(1), 4);
     }
 
     #[test]

@@ -11,7 +11,9 @@ use anyhow::{Context as _, Result};
 use chrono::Utc;
 use rusqlite::{Connection, OpenFlags};
 
-use super::bundle::{BUNDLE_VERSION, BundleConnection, BundleWorkspace, ConnectionBundle};
+use super::bundle::{
+    BUNDLE_VERSION, BundleConnection, BundleWorkspace, ConnectionBundle, workspace_bundle_id,
+};
 /// 三个产品共用的数据库文件名（与全量产品 `get_db_path` 同源，仅测试断言用）。
 #[cfg(test)]
 use one_core::app_dirs::DATABASE_FILE_NAME as DB_FILE_NAME;
@@ -118,11 +120,12 @@ fn read_workspaces(conn: &Connection) -> Result<(Vec<BundleWorkspace>, HashMap<i
         return Ok((Vec::new(), HashMap::new()));
     }
     let sql = format!(
-        "SELECT {}, {}, {}, {} FROM workspaces ORDER BY {}",
+        "SELECT {}, {}, {}, {}, {} FROM workspaces ORDER BY {}",
         column_expr(&columns, "id", "rowid"),
         column_expr(&columns, "name", "NULL"),
         column_expr(&columns, "color", "NULL"),
         column_expr(&columns, "icon", "NULL"),
+        column_expr(&columns, "parent_id", "NULL"),
         column_expr(&columns, "id", "rowid"),
     );
     let mut stmt = conn.prepare(&sql)?;
@@ -132,17 +135,25 @@ fn read_workspaces(conn: &Connection) -> Result<(Vec<BundleWorkspace>, HashMap<i
             row.get::<_, Option<String>>(1)?,
             row.get::<_, Option<String>>(2)?,
             row.get::<_, Option<String>>(3)?,
+            row.get::<_, Option<i64>>(4)?,
         ))
     })?;
     let mut workspaces = Vec::new();
     let mut names = HashMap::new();
     for row in rows {
-        let (id, name, color, icon) = row?;
+        let (id, name, color, icon, parent_id) = row?;
         let Some(name) = non_empty(name) else {
             continue;
         };
         names.insert(id, name.clone());
-        workspaces.push(BundleWorkspace { name, color, icon });
+        // 包内 id 只在这次导入里用来还原层级，本地会重新分配。
+        workspaces.push(BundleWorkspace {
+            id: Some(workspace_bundle_id(id)),
+            parent: parent_id.map(workspace_bundle_id),
+            name,
+            color,
+            icon,
+        });
     }
     Ok((workspaces, names))
 }
@@ -316,11 +327,44 @@ mod tests {
         let bundle = read_bundle_from_sqlite(&db.0).expect("读取失败");
         assert_eq!(bundle.workspaces.len(), 1);
         assert_eq!(bundle.workspaces[0].name, "生产");
+        assert_eq!(bundle.workspaces[0].id.as_deref(), Some("w7"));
+        assert_eq!(bundle.workspaces[0].parent, None);
         assert_eq!(bundle.workspaces[0].color.as_deref(), Some("#ff0000"));
         assert_eq!(bundle.connections[0].workspace.as_deref(), Some("生产"));
         assert_eq!(bundle.connections[0].remark.as_deref(), Some("只读"));
         assert!(!bundle.connections[0].sync_enabled);
         assert_eq!(bundle.connections[1].workspace, None);
+    }
+
+    #[test]
+    fn reads_workspace_hierarchy_from_parent_id() {
+        let db = TempDb::create(
+            "CREATE TABLE workspaces (
+                 id INTEGER PRIMARY KEY, name TEXT, color TEXT, icon TEXT, parent_id INTEGER
+             );
+             CREATE TABLE connections (id INTEGER PRIMARY KEY, name TEXT, connection_type TEXT, params TEXT);
+             INSERT INTO workspaces (id, name, parent_id) VALUES (1, '生产', NULL);
+             INSERT INTO workspaces (id, name, parent_id) VALUES (2, '生产 / 只读从库', 1);
+             INSERT INTO workspaces (id, name, parent_id) VALUES (3, '生产 / 只读从库 / 报表', 2);",
+        );
+        let bundle = read_bundle_from_sqlite(&db.0).expect("读取失败");
+        assert_eq!(bundle.workspaces.len(), 3);
+        let by_name = |name: &str| {
+            bundle
+                .workspaces
+                .iter()
+                .find(|workspace| workspace.name == name)
+                .unwrap_or_else(|| panic!("缺少工作区「{name}」"))
+        };
+        // 包内 id 用 `w<本地 id>` 表示，父级也换成同一个标识，导入时再解析。
+        assert_eq!(by_name("生产").id.as_deref(), Some("w1"));
+        assert_eq!(by_name("生产").parent, None);
+        assert_eq!(by_name("生产 / 只读从库").id.as_deref(), Some("w2"));
+        assert_eq!(by_name("生产 / 只读从库").parent.as_deref(), Some("w1"));
+        assert_eq!(
+            by_name("生产 / 只读从库 / 报表").parent.as_deref(),
+            Some("w2")
+        );
     }
 
     #[test]

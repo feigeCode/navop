@@ -30,6 +30,7 @@ use self::bundle::plan::{
 pub use self::bundle::{
     BUNDLE_VERSION, BundleConnection, BundleWorkspace, ConnectionBundle, ImportReport,
 };
+use self::bundle::workspace_bundle_id;
 pub use self::dialog::open_import_dialog;
 pub use self::sqlite::{
     detect_full_product, full_product_candidates, is_sqlite_database, read_bundle_from_sqlite,
@@ -145,6 +146,8 @@ pub fn export_bundle(cx: &App) -> Result<String> {
 
 fn to_bundle_workspace(workspace: &Workspace) -> BundleWorkspace {
     BundleWorkspace {
+        id: workspace.id.map(workspace_bundle_id),
+        parent: workspace.parent_id.map(workspace_bundle_id),
         name: workspace.name.clone(),
         color: workspace.color.clone(),
         icon: workspace.icon.clone(),
@@ -244,12 +247,17 @@ fn create_workspaces(
 ) -> Result<()> {
     let repo = workspace_repository(cx)?;
     for planned in workspaces {
+        // 父工作区一定已经落库（规划阶段按「父在前」排序），这里直接按名称取本地 id。
+        let parent_id = planned
+            .parent_key
+            .as_ref()
+            .and_then(|key| workspace_ids.get(key).copied());
         let mut workspace = Workspace {
             id: None,
             name: planned.name,
             color: planned.color,
             icon: planned.icon,
-            parent_id: None,
+            parent_id,
             created_at: None,
             updated_at: None,
             cloud_id: None,

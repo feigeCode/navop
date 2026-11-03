@@ -855,11 +855,14 @@ jobs:
           # {Product}-{Version}-{Arch}.msi/.exe 再改名进公开命名。
           New-Item -ItemType Directory -Force product-package | Out-Null
           Copy-Item "package/${{ matrix.binary }}" "product-package/${{ matrix.binary }}"
+          # 每个独立产品有自己的 ico，安装包与卸载项都跟着产品身份走。
+          $iconPath = "${{ github.workspace }}\resources\windows\${{ matrix.product }}.ico"
           ./installer/windows/build-product-installer.ps1 `
             -Product "${{ matrix.product }}" `
             -Version "$env:ONETCLI_VERSION" `
             -SourceDir "${{ github.workspace }}\product-package" `
             -OutDir "${{ github.workspace }}\dist-product" `
+            -IconPath $iconPath `
             -Arch "x64"
           $installerBase = "${{ matrix.product }}-$env:ONETCLI_VERSION-x64"
           Move-Item "dist-product/$installerBase.msi" "${env:PUBLIC_BASENAME}.msi"

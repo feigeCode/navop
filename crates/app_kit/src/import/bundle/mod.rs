@@ -11,7 +11,15 @@ use serde::{Deserialize, Serialize};
 pub use plan::ImportReport;
 
 /// 迁移包格式版本；读取比它更高的版本时直接拒绝，避免误读未来字段。
-pub const BUNDLE_VERSION: u32 = 1;
+///
+/// v2 起工作区带有包内 `id` / `parent`，用来保留工作区层级；v1 包没有这两个字段，
+/// 读进来是平铺的一层工作区，与升级前的行为一致。
+pub const BUNDLE_VERSION: u32 = 2;
+
+/// 工作区在迁移包里的稳定标识；只在包内有效，导入后会重新分配。
+pub(crate) fn workspace_bundle_id(local_id: i64) -> String {
+    format!("w{local_id}")
+}
 
 /// 跨产品搬运的连接与工作区快照。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -35,6 +43,12 @@ pub struct ConnectionBundle {
 /// 迁移包中的工作区。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BundleWorkspace {
+    /// 包内稳定标识（v2 起）；导入时按它还原父子关系，本地 id 会重新分配。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// 父工作区的包内标识；`None` 表示顶层工作区。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,

@@ -1087,8 +1087,60 @@ test("Windows MSI shortcuts inherit the executable's embedded icon", () => {
       /include!\("\.\.\/\.\.\/resources\/windows\/embed_app_resources\.rs"\)/,
     );
     assert.match(build, /embed_windows_resources\(/);
-    assert.match(build, /"\.\.\/\.\.\/resources\/windows\/navop\.ico"/);
+    // 三个产品各有自己的 ico：exe 内嵌图标、任务栏与快捷方式才不会长得一样。
+    assert.match(
+      build,
+      new RegExp(`"\\.\\./\\.\\./resources/windows/${product}\\.ico"`),
+    );
+    assert.ok(
+      fs.existsSync(`resources/windows/${product}.ico`),
+      `missing icon for ${product}`,
+    );
   }
+});
+
+test("Each product ships its own icon on every platform", () => {
+  const release = read(".github/workflows/release.yml");
+  const bundle = read("script/bundle-macos.sh");
+  const productInstaller = read("installer/windows/build-product-installer.ps1");
+
+  // macOS：三个产品各自的 icns，Info.plist 里仍统一叫 Navop.icns。
+  for (const [product, icns] of [
+    ["navop", "Navop"],
+    ["navop-shell", "NavopShell"],
+    ["navop-data", "NavopData"],
+  ]) {
+    assert.ok(
+      bundle.includes(`PACKAGE_NAME="${product}"`) &&
+        bundle.includes(`ICNS_NAME="${icns}"`),
+      `missing icns mapping for ${product}`,
+    );
+    assert.ok(
+      fs.existsSync(`resources/macos/${icns}.icns`),
+      `missing icns file for ${product}`,
+    );
+  }
+  assert.match(bundle, /ICNS_PATH="\$\{RESOURCE_DIR\}\/\$\{ICNS_NAME\}\.icns"/);
+
+  // Linux 的 desktop/icon 由 package-linux-product.sh 按产品取 png。
+  for (const product of ["navop-shell", "navop-data"]) {
+    for (const size of [128, 256, 512]) {
+      assert.ok(
+        fs.existsSync(`resources/linux/${product}-${size}.png`),
+        `missing ${product}-${size}.png`,
+      );
+    }
+  }
+
+  // Windows 独立产品的 MSI/卸载项用产品自己的 ico。
+  assert.match(
+    productInstaller,
+    /\[string\]\$IconPath = "resources\/windows\/navop\.ico"/,
+  );
+  assert.ok(
+    release.includes("\\resources\\windows\\${{ matrix.product }}.ico"),
+    "standalone Windows installer must pass the product icon",
+  );
 });
 
 test("GitHub and R2 publish every installer while the updater manifest remains compatible", () => {
