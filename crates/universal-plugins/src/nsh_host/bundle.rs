@@ -255,9 +255,18 @@ mod tests {
             .declared
             .as_ref()
             .expect("capabilities.json 里的 host 能力应当被读成声明上限");
+        // 工作台删除后，页面只该声明「读上下文 + 调资源」这两个命名空间。
         assert!(
-            declared.host.iter().any(|host| host == "navop.workbench.*"),
-            "试点页要声明工作台能力，实际 {:?}",
+            declared.host.iter().any(|host| host == "navop.resource.*"),
+            "试点页要声明资源能力，实际 {:?}",
+            declared.host
+        );
+        assert!(
+            !declared
+                .host
+                .iter()
+                .any(|host| host.starts_with("navop.workbench")),
+            "页面不该再依赖已删除的工作台通道，实际 {:?}",
             declared.host
         );
     }

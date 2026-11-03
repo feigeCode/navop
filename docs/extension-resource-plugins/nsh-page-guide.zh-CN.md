@@ -188,8 +188,17 @@ export * from "../../../docker/ui/lib/theme";
    `theme.ts` 里已经这么做了，页面自己别写 `color: c.text()` 的常量。
 9. 相对导入层级要对：`ui/pages/<page>/App.tsx` → `../../lib/ui`；
    `tsconfig.json` 的 include 要含 `../../lib/*.ts`、`../../lib/*.tsx`。
-10. 设计系统组件的标量 prop（如 `disabled`、`tone`）在某些组合下会停留在
-    构造时的值；需要动态时要么在 JSX 里传 Accessor，要么用函数子重建。
+10. **不要在组件体里把 props 算成常量**。组件体只跑一次，算出来的就是挂载
+    值；只有 JSX 属性表达式与子节点绑定按帧求值。反例（会让按钮永久点不动、
+    进度条不动、空态不消失）：
+    ```tsx
+    const disabled = props.disabled === true;
+    return <View onPress={disabled ? undefined : props.onPress} style={{ opacity: disabled ? 0.5 : 1 }} />;
+    ```
+    正解是全部内联：`onPress={props.disabled === true ? undefined : props.onPress}`、
+    `style={{ opacity: props.disabled ? 0.5 : 1 }}`。需要动态能力时让 prop 接受
+    取值函数（`disabled?: boolean | (() => boolean)`）。空态这类**结构**分支也别
+    用体级 `if (...) return ...`，写成 `<If when={...}>` 或渲染函数。
 
 ## 7. 测试
 
