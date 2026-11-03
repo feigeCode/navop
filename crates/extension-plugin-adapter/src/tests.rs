@@ -7,14 +7,9 @@ use extension_host::{
     FramedTransport, JsonRpcClient, NegotiationConfig, ProcessRpcSession, ProcessRpcSessionConfig,
     SpawnConfig, UniversalPluginClient,
 };
-use extension_protocol::resource::{ResourceInvokeParams, ResourceOpenResult};
-use extension_protocol::result_ref::ResultRef;
+use extension_protocol::resource::ResourceInvokeParams;
 use extension_runtime::ExtensionRuntimeCatalog;
-use extension_runtime::RegisteredResourceWorkbenchContribution;
 use extension_runtime::extension::manifest::load_from_dir;
-use extension_runtime::extension::manifest::{
-    ResourceWorkbenchEffect, ResourceWorkbenchOperation, ResourceWorkbenchOperationMode,
-};
 use futures::future::BoxFuture;
 use tokio::io::duplex;
 
@@ -1231,10 +1226,6 @@ async fn provider_event_streams_are_lifecycle_managed_by_the_host() {
         .unwrap();
 }
 
-/// workbench 的 stream 页(`load` 返回 `ResultRef::EventStream`)走普通 invoke
-/// 通道,不经过 `open_event_stream`;宿主必须在 dispatch 边界把这个流登记进
-/// `EventActivationManager`,否则订阅后的第一次 read 会被
-/// *"not open for this runtime generation"* 拒掉。
 #[tokio::test]
 async fn check_runtime_does_not_restart_open_sessions() {
     let (_root, manager, calls, shutdowns, _closed) = activation_manager(&[("topics", "main")]);

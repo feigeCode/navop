@@ -20,7 +20,7 @@ use super::types::{
     ExtensionRuntimeError, RegisteredDocumentExporter, RegisteredDocumentRenderer,
     RegisteredHtmlPreviewTransform, RegisteredIpcRuntimeBinding, RegisteredKeybindingContribution,
     RegisteredRemoteFileEditorContribution, RegisteredResourceConnectionContribution,
-    RegisteredResourceWorkbenchContribution, RegisteredShellViewContribution, WasmRuntimeBinding,
+    RegisteredShellViewContribution, WasmRuntimeBinding,
 };
 
 static WASM_CATALOG_LOG_KEYS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -47,7 +47,6 @@ pub struct ExtensionRuntimeCatalog {
     pub(super) remote_file_editors: Vec<RegisteredRemoteFileEditorContribution>,
     pub(super) shell_views: BTreeMap<String, RegisteredShellViewContribution>,
     pub(super) resource_connections: BTreeMap<String, RegisteredResourceConnectionContribution>,
-    pub(super) resource_workbenches: BTreeMap<String, RegisteredResourceWorkbenchContribution>,
 }
 
 #[derive(Debug)]
@@ -86,7 +85,6 @@ impl ExtensionRuntimeCatalog {
             remote_file_editors: Vec::new(),
             shell_views: BTreeMap::new(),
             resource_connections: BTreeMap::new(),
-            resource_workbenches: BTreeMap::new(),
         }
     }
 
@@ -175,14 +173,10 @@ impl ExtensionRuntimeCatalog {
 
     /// 工具箱聚合的独立 shell 工具，按 title 排序。
     ///
-    /// 成员 = 没有任何「非工具箱归属」引用的 shell 视图。三类视图必须排除：
+    /// 成员 = 没有任何「非工具箱归属」引用的 shell 视图。两类视图必须排除：
     ///
     /// 1. 连接的 `shellViewId` 指向的视图（连接打开，不由工具箱打开）；
     /// 2. 资源工作台页面的**页体**：`pages[*].renderer.viewId` 指向的视图；
-    /// 3. 声明了 `workbench` 模块的视图 —— `navop.workbench` 只在工作台挂载
-    ///    会话里可用，独立打开时宿主必然失败（"navop.workbench requires a
-    ///    borrowed resource-workbench session"）。把它列进工具箱只会产出
-    ///    「点了就报错」的假卡片。
     ///
     /// `surface` 不参与判定：`surface: "tab"` 的独立工具（如 dev-tools 的
     /// `workbench`）同样要进工具箱，只有「被别的入口占用」才排除。
@@ -195,28 +189,15 @@ impl ExtensionRuntimeCatalog {
                     .map(|view_id| (conn.extension_id.as_str(), view_id))
             })
             .collect();
-        let embedded_view_keys: HashSet<(&str, &str)> = self
-            .resource_workbenches()
-            .flat_map(|workbench| {
-                workbench.pages.iter().filter_map(|page| {
-                    page.renderer
-                        .view_id
-                        .as_deref()
-                        .map(|view_id| (workbench.extension_id.as_str(), view_id))
-                })
-            })
-            .collect();
         let mut tools: Vec<_> = self
             .shell_views
             .values()
             .filter(|view| {
                 let key = (view.extension_id.as_str(), view.id.as_str());
-                if connection_view_keys.contains(&key) || embedded_view_keys.contains(&key) {
+                if connection_view_keys.contains(&key) {
                     return false;
                 }
-                !view
-                    .modules
-                    .contains(&crate::extension::manifest::ShellHostModule::Workbench)
+                true
             })
             .collect();
         tools.sort_by(|a, b| a.title.cmp(&b.title));
@@ -244,35 +225,6 @@ impl ExtensionRuntimeCatalog {
     ) -> Option<&RegisteredResourceConnectionContribution> {
         self.resource_connections
             .get(&format!("{extension_id}::{connection_id}"))
-    }
-
-    pub fn resource_workbenches(
-        &self,
-    ) -> impl Iterator<Item = &RegisteredResourceWorkbenchContribution> {
-        self.resource_workbenches.values()
-    }
-
-    pub fn resource_workbench(
-        &self,
-        extension_id: &str,
-        workbench_id: &str,
-    ) -> Option<&RegisteredResourceWorkbenchContribution> {
-        self.resource_workbenches
-            .get(&format!("{extension_id}::{workbench_id}"))
-    }
-
-    pub fn resource_workbench_for_connection(
-        &self,
-        extension_id: &str,
-        connection_id: &str,
-    ) -> Option<&RegisteredResourceWorkbenchContribution> {
-        self.resource_workbenches.values().find(|workbench| {
-            workbench.extension_id == extension_id
-                && workbench
-                    .connection_ids
-                    .iter()
-                    .any(|id| id == connection_id)
-        })
     }
 
     pub fn document_renderer_for_kind(

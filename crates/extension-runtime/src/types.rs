@@ -17,14 +17,6 @@ pub use shell::RegisteredShellViewContribution;
 #[path = "types/resource_connection.rs"]
 mod resource_connection;
 pub use resource_connection::RegisteredResourceConnectionContribution;
-#[path = "types/resource_workbench.rs"]
-mod resource_workbench;
-pub use resource_workbench::RegisteredResourceWorkbenchContribution;
-#[path = "types/workbench_operation_catalog.rs"]
-mod workbench_operation_catalog;
-pub use workbench_operation_catalog::{
-    WorkbenchOperationCatalog, WorkbenchOperationEntry, WorkbenchOperationParam,
-};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisteredRemoteFileEditorContribution {
@@ -160,8 +152,6 @@ pub enum ExtensionRuntimeError {
     DuplicateShellView { view_key: String },
     #[error("invalid resource connection: {0}")]
     InvalidResourceConnection(String),
-    #[error("invalid resource workbench: {0}")]
-    InvalidResourceWorkbench(String),
     #[error("invalid declarative layout: {reason}")]
     InvalidLayout { reason: String },
 }

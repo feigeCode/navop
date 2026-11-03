@@ -14,10 +14,6 @@ mod connection;
 mod terminal_launch;
 pub use connection::*;
 pub use terminal_launch::{ResolvedTerminalLaunch, TerminalLaunchError};
-#[path = "contributes/resource_workbench.rs"]
-mod resource_workbench;
-pub use resource_workbench::*;
-
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct ContributesManifest {
     #[serde(default)]

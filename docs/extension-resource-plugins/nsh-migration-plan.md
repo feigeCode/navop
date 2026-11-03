@@ -403,7 +403,8 @@ blob 走分片读并按 8 MiB 上限拼回 JSON，事件流给句柄。页面拿
 - `shell_domain::workbench_terminal::{NativeTerminalHost, install_terminal_host}`
   （保留 `install_workbench_terminal_provider`，那是 AI 工作台的面板，与扩展无关）。
 
-**还留着**：`extension-runtime` 里 `ResourceWorkbench*` 的清单类型（675 行
-`contributes/resource_workbench.rs` + `types/resource_workbench.rs` 等）。清单里
-已经不再有 `resourceWorkbenches` 字段，这些类型现在**没有任何读取者**，只剩
-类型定义本身；删它们是一次纯机械的清扫，留待单独一次提交做（不影响行为）。
+**当时还留着、后来也删干净了**：`extension-runtime` 里 `ResourceWorkbench*`
+的清单类型（`contributes/resource_workbench.rs` 675 行、`types/resource_workbench.rs`、
+`types/workbench_operation_catalog.rs`）与只测它们的 `tree_children_tests` 模块，
+以及 `InvalidResourceWorkbench` 错误变体。现在清单里既没有字段也没有类型，
+`catalog.rs` 的工具箱过滤不再有「工作台页体」这个例外。

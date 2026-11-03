@@ -203,18 +203,6 @@ impl UniversalPluginService {
     }
 
     /// 按 (extension_id, connection contribution id) 查询绑定的原生工作台。
-    pub fn resource_workbench_for_connection(
-        &self,
-        extension_id: &str,
-        contribution_id: &str,
-    ) -> Option<extension_runtime::RegisteredResourceWorkbenchContribution> {
-        self.sync_catalog();
-        self.catalog_source
-            .get()?
-            .resource_workbench_for_connection(extension_id, contribution_id)
-            .cloned()
-    }
-
     #[cfg_attr(not(feature = "nsh-host"), allow(dead_code))]
     pub(crate) async fn deactivate_extension(&self, extension_id: &str) {
         let _activation_guard = self.activation_lock.lock().await;

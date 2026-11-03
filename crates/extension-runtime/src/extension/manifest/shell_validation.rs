@@ -185,7 +185,6 @@ fn validate_modules(view: &ShellViewContrib) -> Result<(), ShellViewValidationEr
                 | ShellHostModule::Log
                 | ShellHostModule::Runtime
                 | ShellHostModule::Dev
-                | ShellHostModule::Workbench
                 | ShellHostModule::I18n
                 | ShellHostModule::Theme
         ) {
