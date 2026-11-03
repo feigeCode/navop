@@ -14,7 +14,9 @@ use anyhow::{Result, anyhow};
 use extension_host::CancellationToken;
 use serde_json::{Value, json};
 
-use crate::extension_resource::{ExtensionResourceLaunch, OpenedExtensionResource};
+use crate::extension_resource::{
+    ExtensionResourceLaunch, OpenedExtensionResource, ui_connection_context,
+};
 use crate::universal_plugins::UniversalPluginService;
 
 /// 一次连接页面的启动参数（借用前）。
@@ -23,6 +25,8 @@ pub(crate) struct NshConnectionLaunch {
     name: String,
     contribution_id: String,
     alias: String,
+    /// 连接的非敏感配置（页面用它显示"这个页面连着谁"）。
+    config: Value,
     pub(crate) resource: ExtensionResourceLaunch,
 }
 
@@ -44,6 +48,7 @@ impl NshConnectionLaunch {
             name: connection.name.clone(),
             contribution_id: contribution.id.clone(),
             alias,
+            config: ui_connection_context(connection),
             resource,
         })
     }
@@ -69,6 +74,7 @@ impl PreparedNshConnection {
             "resourceType": self.launch.resource.resource_type(),
             "resourceHandle": handle,
             "alias": self.launch.alias,
+            "config": self.launch.config,
         }))
     }
 }

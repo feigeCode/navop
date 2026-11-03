@@ -16,11 +16,9 @@ use std::{
     time::Duration,
 };
 
+use base64::Engine as _;
 use extension_host::{CancellationToken, RequestOptions};
-use extension_plugin_adapter::{
-    BindingContext, JobActivationHandle, ManagedUniversalPluginClient, ResourceSessionHandle,
-    dispatch_invoke_scoped, dispatch_job_scoped,
-};
+use extension_plugin_adapter::{JobActivationHandle, ManagedUniversalPluginClient};
 use extension_protocol::{
     blob::{BlobCloseParams, BlobReadParams, MAX_BLOB_CHUNK_BYTES},
     event_stream::{EventCloseParams, EventOpenParams, EventReadParams},
@@ -36,10 +34,17 @@ use crate::{
     universal_plugins::UniversalPluginService,
 };
 use extension_protocol::resource::ResourceOpenResult;
-use extension_runtime::RegisteredResourceWorkbenchContribution;
 
 /// provider 侧关闭的总预算；超时后放弃剩余句柄，交由 runtime 最终 shutdown 兜底。
 const CLOSE_ALL_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// `invoke` 替页面解码大结果时的上限；超过就只给句柄，页面自己分片读。
+const MAX_DECODED_RESULT_BYTES: usize = 8 * 1024 * 1024;
+
+// provider 的 blob 分片是标准 base64（带 padding），见 extension-protocol 的
+// `BlobReadResult::data`。
+const BASE64: base64::engine::general_purpose::GeneralPurpose =
+    base64::engine::general_purpose::STANDARD;
 
 #[derive(Clone)]
 struct ProviderHandle {
@@ -53,14 +58,6 @@ struct ProviderHandle {
     /// 关闭页面只放弃使用权，句柄本身归外层连接会话，关掉就把别人的
     /// 连接掐了。
     owned: bool,
-}
-
-/// 嵌入资源工作台的页面需要的上下文：工作台描述、借来的会话、
-/// 以及宿主给的页面上下文（route/selection/connection）。
-struct WorkbenchContext {
-    descriptor: RegisteredResourceWorkbenchContribution,
-    handle: ResourceSessionHandle,
-    page_context: Value,
 }
 
 #[derive(Clone)]
@@ -78,7 +75,6 @@ pub(crate) struct NshSession {
     blobs: Mutex<HashMap<String, ProviderHandle>>,
     events: Mutex<HashMap<String, ProviderHandle>>,
     jobs: Mutex<HashMap<String, JobHandle>>,
-    workbench: Mutex<Option<std::sync::Arc<WorkbenchContext>>>,
     root: CancellationToken,
     tokio: tokio::runtime::Handle,
 }
@@ -96,7 +92,6 @@ impl NshSession {
             blobs: Mutex::new(HashMap::new()),
             events: Mutex::new(HashMap::new()),
             jobs: Mutex::new(HashMap::new()),
-            workbench: Mutex::new(None),
             root: CancellationToken::new(),
             tokio,
         }
@@ -185,11 +180,68 @@ impl NshSession {
                     method,
                     params,
                 },
-                RequestOptions::default().with_cancel(cancel),
+                RequestOptions::default().with_cancel(cancel.clone()),
             )
             .await
             .map_err(NavopError::from)?;
-        self.result_ref(&client, handle, &result.result)
+        // 页面只需要"调一个方法、拿到数据"。provider 用 `ResultRef` 表达大结果，
+        // 这里替页面落成值：内联直接给，大块尽量读完并解析成 JSON。页面的 API
+        // 面因此只剩 invoke —— 不再需要自己拼 result_ref 的分支。
+        match &result.result {
+            ResultRef::Inline { value } => Ok(value.clone()),
+            ResultRef::Blob { id } => self.decode_blob(&client, handle, id, cancel).await,
+            ResultRef::EventStream { id } => Ok(json!({
+                "kind": "event_stream",
+                "handle": self.insert_provider_handle(
+                    &self.events, "event", handle, client.generation, id,
+                )?,
+            })),
+        }
+    }
+
+    /// 把 `ResultRef::Blob` 读完并解析成 JSON；读不完或不是 JSON 时给回句柄，
+    /// 页面仍可用 `navop.blob.read` 自己分片读。
+    async fn decode_blob(
+        &self,
+        client: &ManagedUniversalPluginClient,
+        resource: &str,
+        id: &str,
+        cancel: CancellationToken,
+    ) -> Result<Value, NavopError> {
+        let mut raw = String::new();
+        let mut bytes = 0;
+        let mut complete = false;
+        while bytes < MAX_DECODED_RESULT_BYTES {
+            let chunk = client
+                .read_blob_with_options(
+                    &BlobReadParams {
+                        blob_id: id.to_owned(),
+                        max_bytes: Some(MAX_BLOB_CHUNK_BYTES),
+                    },
+                    RequestOptions::default().with_cancel(cancel.clone()),
+                )
+                .await
+                .map_err(NavopError::from)?;
+            raw.push_str(&chunk.data);
+            bytes += chunk.bytes_read as usize;
+            if chunk.done {
+                complete = true;
+                break;
+            }
+        }
+        if complete
+            && let Ok(bytes) = BASE64.decode(raw.as_bytes())
+            && let Ok(value) = serde_json::from_slice::<Value>(&bytes)
+        {
+            return Ok(value);
+        }
+        Ok(json!({
+            "kind": "blob",
+            "handle": self.insert_provider_handle(
+                &self.blobs, "blob", resource, client.generation, id,
+            )?,
+            "bytes": bytes,
+        }))
     }
 
     pub(crate) async fn ping_resource(
@@ -640,37 +692,8 @@ impl NshSession {
         close_all(&self.service, Vec::new(), blobs, events, jobs).await;
     }
 
-    // ---- 借来的资源 + 资源工作台 ---------------------------------------
+    // ---- 连接资源 -----------------------------------------------------
 
-    /// 把外层连接会话持有的主资源借给页面：句柄能 invoke，但**不归本会话所有**
-    /// （`owned: false`），页面关掉时不调 provider 的 close。
-    pub(crate) fn register_borrowed_resource(
-        &self,
-        client: &ManagedUniversalPluginClient,
-        result: ResourceOpenResult,
-    ) -> Result<Value, NavopError> {
-        let handle = new_handle("resource");
-        self.resources
-            .lock()
-            .map_err(|_| poisoned("resource"))?
-            .insert(
-                handle.clone(),
-                ProviderHandle {
-                    runtime_id: client.runtime_id.clone(),
-                    generation: client.generation,
-                    provider_id: result.resource_id,
-                    resource: None,
-                    owned: false,
-                },
-            );
-        Ok(json!({
-            "handle": handle,
-            "capabilities": result.capabilities,
-            "metadata": result.metadata,
-        }))
-    }
-
-    /// 连接页拥有的主资源：页面关闭时随会话回收（与嵌入页"借来的"相反）。
     pub(crate) fn register_connection_resource(
         &self,
         client: &ManagedUniversalPluginClient,
@@ -691,98 +714,6 @@ impl NshSession {
                 },
             );
         Ok(handle)
-    }
-
-    pub(crate) fn set_workbench(
-        &self,
-        descriptor: RegisteredResourceWorkbenchContribution,
-        handle: ResourceSessionHandle,
-        page_context: Value,
-    ) {
-        if let Ok(mut slot) = self.workbench.lock() {
-            *slot = Some(std::sync::Arc::new(WorkbenchContext {
-                descriptor,
-                handle,
-                page_context,
-            }));
-        }
-    }
-
-    pub(crate) fn workbench_current(&self) -> Result<Value, NavopError> {
-        Ok(self.workbench()?.page_context.clone())
-    }
-
-    /// 派发一个工作台操作。`current()` 给的上下文原样进 `BindingContext`，
-    /// 与原生工作台同源（两边解析 `source: connection` 必须得到同一个值）。
-    pub(crate) async fn workbench_dispatch(
-        &self,
-        operation_id: &str,
-        input: Value,
-        confirmed: bool,
-        cancel: CancellationToken,
-    ) -> Result<Value, NavopError> {
-        let workbench = self.workbench()?;
-        let page_context = &workbench.page_context;
-        let page_id = page_context
-            .get("pageId")
-            .and_then(Value::as_str)
-            .unwrap_or("nsh")
-            .to_owned();
-        let context = BindingContext {
-            input,
-            route: page_context.get("route").cloned().unwrap_or(Value::Null),
-            selection: page_context
-                .get("selection")
-                .cloned()
-                .unwrap_or(Value::Null),
-            paging: page_context
-                .get("paging")
-                .cloned()
-                .unwrap_or_else(|| json!({"page": 1, "limit": 50, "cursor": null})),
-            parent: Value::Null,
-            connection: page_context
-                .get("connection")
-                .cloned()
-                .unwrap_or(Value::Null),
-        };
-        let operation = workbench
-            .descriptor
-            .operations
-            .get(operation_id)
-            .ok_or_else(|| {
-                NavopError::new(
-                    ErrorCode::InvalidArgument,
-                    format!("unknown workbench operation `{operation_id}`"),
-                )
-            })?;
-        let is_job = matches!(
-            operation.mode,
-            extension_runtime::extension::manifest::ResourceWorkbenchOperationMode::Job
-        );
-        let scope = workbench
-            .handle
-            .scope_with_cancel(page_id, 0, cancel.clone());
-        let descriptor = workbench.descriptor.clone();
-        let result = if is_job {
-            dispatch_job_scoped(&scope, &descriptor, operation_id, &context, confirmed).await
-        } else {
-            dispatch_invoke_scoped(&scope, &descriptor, operation_id, &context, confirmed).await
-        }
-        .map_err(crate::host_error::workbench_error)?;
-        Ok(result)
-    }
-
-    fn workbench(&self) -> Result<std::sync::Arc<WorkbenchContext>, NavopError> {
-        self.workbench
-            .lock()
-            .map_err(|_| poisoned("workbench"))?
-            .clone()
-            .ok_or_else(|| {
-                NavopError::new(
-                    ErrorCode::InvalidArgument,
-                    "navop.workbench 只在资源工作台嵌入的页面里可用",
-                )
-            })
     }
 }
 

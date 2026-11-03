@@ -2,7 +2,7 @@
 //!
 //! 页面持有的是"某个 provider 进程的 generation"：进程一旦换掉，旧的
 //! provider 客户端、打开的资源、派生的句柄全部作废。监视事件是唯一能告诉
-//! 我们这件事的通道，所以 tab（脚本页与 headless 连接 tab）都要登记进来，
+//! 我们这件事的通道，所以每个扩展页面都要登记进来，
 //! 由这里统一转发。
 
 use std::rc::Rc;
@@ -32,7 +32,6 @@ impl NshHost {
         let tracked = Rc::clone(&self.tracked);
         cx.spawn(async move |cx| {
             while let Ok(event) = receiver.recv().await {
-                let runtime_id = event.runtime_id().to_owned();
                 let entries = tracked
                     .borrow()
                     .values()
@@ -44,13 +43,6 @@ impl NshHost {
                         Tracked::Page(tab) => {
                             let _ = tab.update(cx, |tab, cx| tab.runtime_changed(&event, cx));
                         }
-                        Tracked::Headless {
-                            runtime_id: tracked,
-                            tab,
-                        } if tracked == runtime_id => {
-                            let _ = tab.update(cx, |tab, cx| tab.runtime_changed(&event, cx));
-                        }
-                        Tracked::Headless { .. } => {}
                     }
                 }
             }

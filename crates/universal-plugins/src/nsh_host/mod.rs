@@ -11,12 +11,12 @@
 mod abi;
 mod bundle;
 mod connection;
+mod decision;
 mod dev;
 mod dispatch;
 mod grant;
 mod monitor;
 mod opener;
-mod page_host;
 mod session;
 mod tab;
 mod theme;
@@ -43,19 +43,11 @@ type Tabs = Rc<RefCell<HashMap<String, Vec<WeakEntity<NshTab>>>>>;
 /// 正在退役的扩展（卸载/停用中，不再接受新页面）。
 type Retiring = Rc<RefCell<std::collections::HashSet<String>>>;
 
-/// 需要跟随 provider 重启的实体：脚本页，以及 headless 连接 tab。
+/// 需要跟随 provider 重启的实体：扩展页面。
 #[derive(Clone)]
 pub(crate) enum Tracked {
     Page(WeakEntity<NshTab>),
-    Headless {
-        runtime_id: String,
-        tab: WeakEntity<crate::ExtensionConnectionTab>,
-    },
 }
-
-/// headless tab 的登记表（按扩展 id 分组）。
-type HeadlessTabs =
-    Rc<RefCell<HashMap<String, Vec<(String, WeakEntity<crate::ExtensionConnectionTab>)>>>>;
 
 pub(crate) type Trust = Rc<RefCell<nsh_platform_gpui::package::TrustStore>>;
 
@@ -68,10 +60,9 @@ pub struct NshHost {
     service: UniversalPluginService,
     trust: Trust,
     tabs: Tabs,
-    headless: HeadlessTabs,
     /// 正在退役的扩展 id 集合。
     retiring: Retiring,
-    /// 监视事件的转发目标（脚本页 + headless tab）。
+    /// 监视事件的转发目标（扩展页面）。
     tracked: Rc<RefCell<HashMap<String, Vec<Tracked>>>>,
     /// 引擎线程 → 主线程的桥（`navop.dev` 这类要碰 GPUI 全局的操作走它）。
     dispatcher: dispatch::MainThread,
@@ -91,7 +82,6 @@ impl NshHost {
             service,
             trust: bundle::trust_store(),
             tabs: Rc::new(RefCell::new(HashMap::new())),
-            headless: Rc::new(RefCell::new(HashMap::new())),
             retiring: Rc::new(RefCell::new(std::collections::HashSet::new())),
             tracked: Rc::new(RefCell::new(HashMap::new())),
             dispatcher,
@@ -110,26 +100,6 @@ impl NshHost {
 
     pub(crate) fn service(&self) -> &UniversalPluginService {
         &self.service
-    }
-
-    /// 这个扩展名下还开着的 headless 连接 tab。
-    pub(crate) fn headless_tabs(
-        &self,
-        extension_id: &str,
-    ) -> Vec<gpui::Entity<crate::ExtensionConnectionTab>> {
-        let mut headless = self.headless.borrow_mut();
-        let Some(entries) = headless.get_mut(extension_id) else {
-            return Vec::new();
-        };
-        let mut open = Vec::new();
-        entries.retain(|(_, tab)| match tab.upgrade() {
-            Some(tab) => {
-                open.push(tab);
-                true
-            }
-            None => false,
-        });
-        open
     }
 
     fn tokio(&self) -> tokio::runtime::Handle {
@@ -152,15 +122,6 @@ impl NshHost {
     }
 
     /// 这条连接绑定的原生工作台（有就走原生页，没有才开脚本页）。
-    pub fn resource_workbench_for_connection(
-        &self,
-        extension_id: &str,
-        contribution_id: &str,
-    ) -> Option<extension_runtime::RegisteredResourceWorkbenchContribution> {
-        self.service
-            .resource_workbench_for_connection(extension_id, contribution_id)
-    }
-
     pub(crate) fn contribution(
         &self,
         extension_id: &str,
@@ -172,25 +133,6 @@ impl NshHost {
     /// 信任库（根公钥、撤销表、已接受的 build）。
     pub(crate) fn trust(&self) -> &Trust {
         &self.trust
-    }
-
-    /// 登记一个跟随 provider 重启的 headless 连接 tab。
-    pub(crate) fn register_headless_tab(
-        &self,
-        extension_id: String,
-        runtime_id: String,
-        tab: WeakEntity<crate::ExtensionConnectionTab>,
-    ) {
-        self.headless
-            .borrow_mut()
-            .entry(extension_id.clone())
-            .or_default()
-            .push((runtime_id.clone(), tab.clone()));
-        self.tracked
-            .borrow_mut()
-            .entry(extension_id)
-            .or_default()
-            .push(Tracked::Headless { runtime_id, tab });
     }
 
     pub(crate) fn track(&self, extension_id: &str, tab: WeakEntity<NshTab>) {
@@ -232,9 +174,6 @@ pub fn init(service: UniversalPluginService, cx: &mut App) {
         one_core::gpui_tokio::Tokio::handle(cx),
     );
     extension_view::register_shell_view_opener(Rc::new(host.clone()), cx);
-    // 同一份宿主也接嵌入页：资源工作台里的 nsh 页面走的还是这套
-    // session/ABI，只是主资源是借来的。
-    page_host::install(host.clone(), cx);
     // provider 换进程后，已打开的页面要跟着重装或报错，否则会一直拿着
     // 作废的 generation 调用。
     host.start_monitor_bridge(cx);

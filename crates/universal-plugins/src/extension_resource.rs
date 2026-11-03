@@ -91,9 +91,6 @@ impl OpenedExtensionResource {
     }
 
     /// 打开资源时观察到的 provider 进程 generation。
-    pub(crate) fn generation(&self) -> u64 {
-        self.client.runtime_generation()
-    }
 
     #[cfg_attr(not(feature = "nsh-host"), allow(dead_code))]
     pub(crate) fn client(&self) -> &ManagedUniversalPluginClient {
@@ -102,15 +99,6 @@ impl OpenedExtensionResource {
 
     /// 把打开的资源移交给 ResourceSessionOwner;移交后本句柄不再负责关闭。
     /// client 是 Clone 句柄,clone 后本句柄的 Drop 变为 no-op(result 已被取走)。
-    pub(crate) fn into_session(
-        mut self,
-        identity: extension_plugin_adapter::ResourceSessionIdentity,
-    ) -> extension_plugin_adapter::ResourceSessionOwner {
-        let result = self
-            .take_result()
-            .expect("opened resource was already adopted");
-        extension_plugin_adapter::ResourceSessionOwner::new(identity, self.client.clone(), result)
-    }
 
     pub(crate) async fn close(&mut self) {
         let Some(result) = self.result.take() else {
@@ -172,7 +160,11 @@ fn credential_refs<'a>(
 ///   不该顺着 UI 通道漏出去。
 ///
 /// 解析失败(非扩展连接 / schema 版本不符)时返回 `Null`:连接上下文是可选
-/// 增强,不该让工作台起不来。
+
+/// 扩展连接里**非敏感**的配置字段（secrets 与取密句柄绝不出现）。
+///
+/// 页面把它渲染成"当前连接"，宿主工作台/调试也用它 —— 只给 UI 能看的
+/// 那部分。
 pub(crate) fn ui_connection_context(
     connection: &one_core::storage::StoredConnection,
 ) -> serde_json::Value {

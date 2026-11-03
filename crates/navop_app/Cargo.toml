@@ -37,7 +37,6 @@ extension-protocol.workspace = true
 extension_view = { workspace = true }
 notes = { workspace = true }
 universal-plugins.workspace = true
-resource_view.workspace = true
 workspace_explorer.workspace = true
 json_view = { workspace = true }
 terminal = { workspace = true, optional = true }

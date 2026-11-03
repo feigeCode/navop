@@ -22,7 +22,7 @@ impl extension_view::ShellViewOpener for NshHost {
         super::open_view(self.clone(), contribution, window, cx);
     }
 
-    /// 扩展被停用/卸载：关掉它的所有页面（脚本页 + headless 连接 tab），
+    /// 扩展被停用/卸载：关掉它的所有页面，
     /// 等它们都关干净，再让能力平面卸掉这个扩展。
     fn close_extension(&self, extension_id: &str, _: &mut Window, cx: &mut App) -> Task<bool> {
         self.service().begin_extension_retire(extension_id);
@@ -58,7 +58,7 @@ impl extension_view::ShellViewOpener for NshHost {
 impl NshHost {
     /// 关掉一个扩展名下所有页面，返回每个页面的关闭任务。
     fn close_extension_tabs(&self, extension_id: &str, cx: &mut App) -> Vec<Task<bool>> {
-        let mut tasks = self
+        let tasks = self
             .open_tabs(extension_id)
             .into_iter()
             .map(|tab| {
@@ -74,11 +74,6 @@ impl NshHost {
                 tab.update(cx, |tab, cx| tab.close_for_extension(cx))
             })
             .collect::<Vec<_>>();
-        tasks.extend(
-            self.headless_tabs(extension_id)
-                .into_iter()
-                .map(|tab| tab.update(cx, |tab, cx| tab.close_for_extension(cx))),
-        );
         self.forget(extension_id);
         tasks
     }

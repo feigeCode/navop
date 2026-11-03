@@ -19,9 +19,8 @@ use super::types::{
     ExtensionRuntimeError, RegisteredDocumentExporter, RegisteredDocumentRenderer,
     RegisteredHtmlPreviewTransform, RegisteredIpcRuntimeBinding, RegisteredKeybindingContribution,
     RegisteredRemoteFileEditorCommand, RegisteredRemoteFileEditorContribution,
-    RegisteredResourceConnectionContribution, RegisteredResourceWorkbenchContribution,
-    RegisteredShellViewContribution, WasmRuntimeBinding, command_descriptor, runtime_key,
-    slot_item_from_menu,
+    RegisteredResourceConnectionContribution, RegisteredShellViewContribution, WasmRuntimeBinding,
+    command_descriptor, runtime_key, slot_item_from_menu,
 };
 
 static WASM_REGISTRATION_LOG_KEYS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -339,7 +338,6 @@ impl ExtensionRuntimeCatalog {
         self.register_ipc_runtimes(&manifest)?;
         self.register_shell_views(&manifest)?;
         self.register_resource_connections(&manifest)?;
-        self.register_resource_workbenches(&manifest)?;
         self.register_html_preview_transforms(&manifest)?;
         self.register_document_renderers(&manifest)?;
         self.register_document_exporters(&manifest)?;
@@ -469,28 +467,6 @@ impl ExtensionRuntimeCatalog {
                     terminal: connection.terminal.clone(),
                     form: connection.form.clone(),
                 },
-            );
-        }
-        Ok(())
-    }
-
-    fn register_resource_workbenches(
-        &mut self,
-        manifest: &Manifest,
-    ) -> Result<(), ExtensionRuntimeError> {
-        let mut bound_connections = HashSet::new();
-        for workbench in &manifest.contributes.resource_workbenches {
-            validate_resource_workbench(manifest, workbench, &mut bound_connections)?;
-            let key = runtime_key(&manifest.id, &workbench.id);
-            if self.resource_workbenches.contains_key(&key) {
-                return Err(ExtensionRuntimeError::InvalidResourceWorkbench(format!(
-                    "duplicate workbench id `{}`",
-                    workbench.id
-                )));
-            }
-            self.resource_workbenches.insert(
-                key,
-                RegisteredResourceWorkbenchContribution::from_manifest(&manifest.id, workbench),
             );
         }
         Ok(())

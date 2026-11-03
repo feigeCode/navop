@@ -472,7 +472,7 @@ impl NshTab {
         event: &extension_plugin_adapter::RuntimeMonitorEvent,
         cx: &mut Context<Self>,
     ) {
-        use crate::extension_connection_tab::{RuntimeChangeDecision, decide_runtime_change};
+        use crate::nsh_host::decision::{RuntimeChangeDecision, decide_runtime_change};
 
         let decision = self
             .contribution

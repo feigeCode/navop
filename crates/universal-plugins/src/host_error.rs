@@ -124,6 +124,16 @@ impl From<extension_host::HostError> for NavopError {
                 ErrorCode::ResultTooLarge,
                 Some(serde_json::json!({ "limitBytes": limit_bytes })),
             ),
+            // provider 用协议错误码表达权限拒绝；页面应该看到稳定的
+            // PERMISSION_DENIED，而不是笼统的 PROTOCOL_ERROR。
+            ProviderError::Protocol(protocol)
+                if protocol.code == extension_protocol::error::error_codes::PERMISSION_DENIED =>
+            {
+                (
+                    ErrorCode::PermissionDenied,
+                    Some(serde_json::json!({ "providerMessage": protocol.message })),
+                )
+            }
             ProviderError::Protocol(protocol) => (
                 ErrorCode::ProtocolError,
                 Some(serde_json::json!({
@@ -154,35 +164,6 @@ pub(crate) fn service_error(error: extension_plugin_adapter::ActivationError) ->
     };
     let mut navop = NavopError::new(code, error.to_string());
     navop.retryable = retryable;
-    navop
-}
-
-/// 把 `WorkbenchDispatchError` 映射为稳定 code。
-#[cfg_attr(
-    not(feature = "nsh-host"),
-    allow(
-        dead_code,
-        reason = "workbench 分发在 M5 接线（navop.workbench）后才被 nsh 平面使用"
-    )
-)]
-pub(crate) fn workbench_error(
-    error: extension_plugin_adapter::WorkbenchDispatchError,
-) -> NavopError {
-    use extension_plugin_adapter::WorkbenchDispatchError as W;
-    let code = match &error {
-        W::MissingCapability { .. } | W::ConfirmationRequired(_) => ErrorCode::PermissionDenied,
-        W::UnknownOperation(_) | W::BindingMissing { .. } | W::BindingType { .. } => {
-            ErrorCode::InvalidArgument
-        }
-        // 运行时/传输没了只是暂时的:前端可以自愈重试,所以给可重试的稳定 code,
-        // 而不是让用户看到一个笼统的 PROTOCOL_ERROR。
-        W::ProviderUnavailable(_) => ErrorCode::RuntimeUnavailable,
-        W::ResultContract { .. } | W::Provider(_) | W::EventStreamRegistration { .. } => {
-            ErrorCode::ProtocolError
-        }
-    };
-    let mut navop = NavopError::new(code, error.to_string());
-    navop.retryable = matches!(error, W::ProviderUnavailable(_));
     navop
 }
 

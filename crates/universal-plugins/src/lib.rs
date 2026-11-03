@@ -9,8 +9,8 @@ rust_i18n::i18n!("locales", fallback = "en");
 
 mod connection_icon;
 mod extension_connection_form;
-mod extension_connection_tab;
 mod extension_resource;
+#[cfg(feature = "nsh-host")]
 mod host_error;
 #[cfg(feature = "nsh-host")]
 mod nsh_host;
@@ -20,7 +20,6 @@ pub use connection_icon::{
     extension_connection_icon_or_default, resolve_extension_connection_icon,
 };
 pub use extension_connection_form::{ExtensionConnectionForm, ExtensionConnectionFormConfig};
-pub use extension_connection_tab::ExtensionConnectionTab;
 #[cfg(feature = "nsh-host")]
 pub use nsh_host::{ConnectionPageOpen, DevOps, NshHost, init as init_nsh_host, set_dev_ops};
 
