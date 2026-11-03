@@ -40,7 +40,7 @@ ui/pages/<page>/
       "entry": "ui/pages/overview/dist/bundle.js",
       "surface": "tab",
       "backends": { "docker": "main" },
-      "modules": ["context", "workbench"]
+      "modules": ["context", "resource"]
     }]
   }
 }
@@ -70,7 +70,7 @@ nsh test .                 # headless 测试（mock host.call）
   "id": "com.navop.docker.volumes",
   "version": "0.1.0",
   "build": 1,
-  "capabilities": { "host": ["navop.workbench.*"] }
+  "capabilities": { "host": ["navop.context.*", "navop.resource.*"] }
 }
 ```
 
@@ -88,13 +88,12 @@ nsh test .                 # headless 测试（mock host.call）
 | `log` | `navop.log.{debug,info,warn,error}` | 写进宿主日志（`{ message }`） |
 | `i18n` | `navop.i18n.{locale,available}` | 宿主界面语言；变更会以 `navop.i18n.changed` 推送 |
 | `theme` | `navop.theme.{snapshot,color}` | 当前主题（明暗 + 30 个 shadcn token）；`navop.theme.changed` 推送 |
-| `resource` | `navop.resource.{open,invoke,ping,close}` | 原始资源句柄（tab 页可以用；**嵌入页被禁用**，见第 4 节） |
+| `resource` | `navop.resource.{open,invoke,ping,close}` | 资源句柄。`invoke` 是页面读数据的主要方式（见第 4 节） |
 | `job` | `navop.job.{start,status,cancel,result,close}` | 长任务 |
 | `event` | `navop.event.{open,read,close}` | 事件流（嵌入式页面暂时没有推送通道，轮询更实际） |
 | `blob` | `navop.blob.{read,close}` | 大块数据分片读 |
 | `runtime` | `navop.runtime.info` | provider 运行时信息 |
 | `dev` | `navop.dev.*` | 开发者工具页专用（只有 navop 自己的 dev-tools 扩展用） |
-| `workbench` | `navop.workbench.{current,dispatch}` | 资源工作台嵌入页：上下文 + 操作派发 |
 
 **错误**：失败时 reject 的 message 形如
 `人类可读消息\n__NAVOP_ERROR__<base64url(JSON)>`，解码出
@@ -107,25 +106,46 @@ nsh test .                 # headless 测试（mock host.call）
 **取消**：没有单独的 cancel API。页面被关闭（tab 关掉 / 扩展停用）时，宿主
 会取消所有在途调用并在有必要时补一次 close（open 了一半的资源会被回收）。
 
-## 4. 两种页面形态
+## 4. 页面怎么拿数据
 
-### 4.1 独立 tab（`surface: "tab"`，模块里没有 `workbench`）
+宿主只给页面两条通道：
 
-宿主打开即装载，`navop.context.current` 的 `connection` 为 null。声明了
-`backends` 的页面只有在连接页里打开时才会带连接（`surface` 不变，
-`contributes.connections[].shellViewId` 指过来即可）。
+1. `navop.context.current` —— 页面上下文。扩展连接里打开的页面会带
+   `connection`：
+   ```ts
+   {
+     connectionId, name, contributionId, resourceType,
+     resourceHandle,        // 借来的资源句柄
+     alias,                 // 这个句柄在页面 backends 里的别名
+     config,                // 连接的非敏感配置（secrets 不会出现）
+   }
+   ```
+   不是从连接打开的页面（例如工具箱里直接打开的页面）`connection` 为 null。
+2. `navop.resource.invoke` —— 按 provider 的方法名调一次：
+   ```ts
+   await host.call("navop.resource.invoke", {
+     handle: connection().resourceHandle,
+     method: "docker/volume/list",
+     params: {},
+   });
+   ```
 
-### 4.2 资源工作台嵌入页（模块必须含 `context` + `workbench`）
+共享库 `ui/lib/host.ts` 把这两步包成一行：
 
-从资源工作台里嵌进来，主资源由**外层连接会话**开好，页面借用：
+```ts
+import { call } from "../../lib/host";
 
-- `navop.workbench.current` 给出 `{ pageId, route, selection, paging, connection }`；
-- `navop.workbench.dispatch(operationId, input, { confirmed })` 派发
-  `resourceWorkbenches[].operations` 里的操作；`confirmed: true` 表示用户已在
-  页面上确认过（宿主据此弹/不弹二次确认）。
+const volumes = await call<{ volumes: Volume[] }>("docker/volume/list", {});
+```
 
-嵌入页的能力是**黑名单**：`resource` / `job` / `event` / `blob` / `runtime` /
-`dev` 一律被拒（页面不该自己开资源），`i18n` / `theme` 放行。
+**没有第二套"声明式 UI"机制了**：没有工作台描述、没有 operation 派发、
+没有宿主注入的 route/selection。页面要选容器/选索引/选主题，就自己拉列表、
+自己放选择器——宿主不再替页面决定"当前对象是什么"。
+
+方法名去哪找：provider 的 `src/main.rs`（或扩展的 README）里有
+`match method { "docker/volume/list" => ... }` 这样的大表；旧清单里
+`resourceWorkbenches[].operations` 也写着 operationId → method 的对应关系，
+但那份声明已经不再参与运行。
 
 ## 5. 设计系统（别自己重造）
 
@@ -177,20 +197,20 @@ export * from "../../../docker/ui/lib/theme";
 
 ```tsx
 import { expect, open, test } from "nsh/test";
+import { hostHandlers } from "../../../lib/test-host";
 
 test("列表与详情", async () => {
   const app = await open("./App.tsx", {
     width: 1100,
     height: 800,
-    host: { handlers: { "navop.workbench.dispatch": (data) => /* 真数据形状 */ ({}) } },
+    host: { handlers: hostHandlers({ "docker/volume/list": () => /* 真数据形状 */ ({}) }) },
   });
   await app.waitFor("text:存储卷");
   await app.press("text:app-data");
 });
 ```
 
-建议每条页面至少覆盖：列表渲染、选中后详情、写操作的 `confirmed` 载荷、
-失败重试。
+建议每条页面至少覆盖：列表渲染、选中后详情、写操作（是否带 `id`）、失败重试。
 
 ## 8. 交付清单
 

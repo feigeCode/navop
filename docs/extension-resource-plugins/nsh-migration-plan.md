@@ -309,3 +309,50 @@ M1–M2 去风险（嵌入可行性最便宜的验证点）；M3–M5 是本方�
   里登记；加一种页面形态 = 看 `tab.rs`（tab）与 `page_host.rs`（嵌入页）。
 - 别再加回 gpui-shell：`crates/resource_view` 的 `CustomPageHost` 是引擎无关契约，
   换/加第三套 UI 平面时才需要动它。
+
+## 15. 再收敛：一个 tab 视图 + 最小 API（2026-11-03）
+
+用户决定（原话）："整个插件机制我想改一下，就直接给一个 tab 视图，让用户自由发挥
+就行，不再保留目前的工作台，原生加脚本的混合机制了，只保留最简单的 api 就行，
+给用户足够的定制化需求"。
+
+### 15.1 删掉了什么
+
+- **原生资源工作台**：`contributes.resourceWorkbenches` 整块声明式 UI（表格/树/
+  表单/路由）不再存在。清单里这个键被 serde 忽略（旧扩展仍能注册，但那些页面
+  不会出现）。
+- **`navop.workbench.*` 通道**：`current` / `dispatch` 都没了，连同宿主侧
+  `WorkbenchContext`、`dispatch_invoke_scoped` / `dispatch_job_scoped` 的调用、
+  `BindingContext` 的 route/selection/paging/parent 注入。
+- **headless 连接 tab**（`ExtensionConnectionTab`，609 行）：连接只有一种形态，
+  就是打开自己的页面；`decide_runtime_change` 留在 `nsh_host/decision.rs` 供页面
+  tab 复用。
+- **嵌入页机制**（`CustomPageHost` / `page_host.rs`）：页面不再有"从工作台里
+  嵌进来"的第二种形态。
+
+### 15.2 留下了什么
+
+`navop.*` 只剩：`context.current`、`resource.{open,invoke,ping,close}`、
+`job.*`、`event.*`、`blob.*`、`runtime.info`、`log.*`、`dev.*`，外加宿主推送的
+`theme` / `i18n`（页面 token 依赖它们，属于"宿主事实"而不是"插件机制"）。
+
+`navop.resource.invoke` 现在替页面解码 provider 的 `ResultRef`：inline 直接给值，
+blob 走分片读并按 8 MiB 上限拼回 JSON，事件流给句柄。页面拿到就是普通数据。
+
+### 15.3 页面侧的影响
+
+- 一页一个 `dist/bundle.js`，数据全靠 `navop.resource.invoke({handle, method,
+  params})`；句柄来自 `navop.context.current().connection.resourceHandle`。
+- 共享库 `ui/lib/host.ts`（`connection()` / `call()`）与 `ui/lib/test-host.ts`
+  （`hostHandlers()`）承担这层仪式，页面里不重复写。
+- **页面自己决定"当前对象"**：docker 的 6 个容器级页面（进程/变更/挂载/统计/日志/
+  详情）过去由宿主注入容器 id，现在页面自己拉容器列表、自己放选择器。这是这次
+  简化的真实代价，也是"给用户足够定制化"的直接体现。
+- docker 新增「容器」页（列表 + 启停/重启/暂停/删除），补上被删掉的工作台表格页；
+  连接默认打开它。
+
+### 15.4 与 §14 的关系
+
+§14 记的是"把 UI 平面从 gpui-shell 换成 nsh"；本节记的是"换完之后再把插件机制
+本身砍到最小"。§14.2 里"nativeModule/nativeComponent 没有用""`set_ui_sets` 只用
+默认集"这两条在这里变成定论：不再计划引入，页面就是纯 TSX + 数据通道。
