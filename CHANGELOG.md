@@ -4,6 +4,44 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.23.0-beta.5] - 2026-11-03
+
+#### 更新内容
+
+- 插件（扩展）引擎整体换代：插件页面从旧的 gpui-shell 构件迁到 nsh 运行时，页面改用 TSX 编写，能力按 manifest 权限收敛——页面只能调用被授权的宿主能力，越权直接拒绝。安装、更新、卸载与本地覆盖安装的流程没有变化。
+- 全部插件页面重写并统一视觉：Docker 12 个视图（容器、镜像、卷、网络、日志、进程、统计、文件变更、挂载、inspect、容器终端、概览）、MQTT 5 个、RocketMQ 3 个、Elasticsearch 与开发工具各 1 个，共用同一套组件、排版与配色。
+- 插件页面可以内嵌宿主原生组件：Docker 的容器终端直接用宿主终端控件，分屏、字体、快捷键与内置终端完全一致。
+- 插件机制收敛成「一个视图 = 一个标签页」：扩展不再声明多页工作台结构，页面数据统一走 `navop.resource.invoke`，扩展升级时页面整套装卸。
+- 插件页面可以申请剪贴板写权限，复制日志、镜像名、MQTT 消息体不再受只读限制。
+- Navop Shell 与 Navop Data 换成各自的图标（「N + 领域脚标」），三个产品不再共用一套图标。
+
+#### 修复与优化
+
+- 导入迁移包时保留原工作区层级，全量产品的父子连接结构不再被拍平。
+- 设置页把数据库与终端相关项提到前面，账户与关于收尾。
+- 依赖图收敛到单份 wgpu 30，发布产物的图形栈不再随目标平台分叉。
+- 修掉 32 位 Windows 构建形态编不过的问题。
+- 说明：插件引擎换代后，旧版插件包（gpui-shell 时代）不再装载。市场里现有的 Docker 0.6.3、MQTT 0.2.2 属于旧包，等新版插件包发布后再从市场安装；本地已装的旧插件会从列表里消失，不会报错。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.23.0-beta.5) 下载桌面端安装包
+
+#### What's New
+
+- The plugin (extension) engine has been replaced: plugin pages moved from the old gpui-shell runtime to nsh and are written as TSX pages, with capabilities narrowed to what the manifest grants — a page can only call the host capabilities it was given and everything else is rejected. Install, update, uninstall and local override installs work as before.
+- Every plugin page was rewritten on one visual system: Docker now has 12 views (containers, images, volumes, networks, logs, processes, stats, filesystem changes, mounts, inspect, container terminal, overview), MQTT 5, RocketMQ 3, plus one each for Elasticsearch and the developer tools, all sharing the same components, spacing and colors.
+- Plugin pages can embed native host components: the Docker container terminal is the host terminal, so splits, fonts and shortcuts behave exactly like the built-in terminal.
+- The plugin model is now one view per tab: extensions no longer declare a multi-page workbench, page data flows through `navop.resource.invoke`, and an extension update swaps pages as a unit.
+- Plugin pages can request clipboard write access, so copying logs, image names and MQTT payloads is no longer read-only.
+- Navop Shell and Navop Data have their own icons ("N" with a domain subscript) instead of sharing one set across all three products.
+
+#### Fixes and Improvements
+
+- Importing a migration package keeps the original workspace hierarchy, so parent/child connections in the full product are no longer flattened.
+- The settings page lists database and terminal options first, with account and about at the end.
+- The dependency graph is down to a single wgpu 30, so the graphics stack in release builds no longer forks per platform.
+- Fixed the 32-bit Windows build shape failing to compile.
+- Note: after the engine change, old plugin packages (gpui-shell era) no longer load. The Docker 0.6.3 and MQTT 0.2.2 currently in the marketplace are old packages — wait for the republished ones before installing from the marketplace; already-installed old plugins simply disappear from the list without an error.
+
 ## [v0.23.0-beta.4] - 2026-11-02
 
 #### 更新内容
