@@ -16,6 +16,8 @@ mod credential_vault;
 #[cfg(feature = "nsh-host")]
 #[cfg(feature = "shell")]
 mod dev_extension_registry;
+#[cfg(feature = "nsh-host")]
+#[cfg(feature = "shell")]
 mod dev_host_ops;
 mod env_file;
 mod extension_update;

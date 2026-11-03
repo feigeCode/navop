@@ -5,7 +5,9 @@ use gpui::{
 };
 use gpui_component::{WindowExt, notification::Notification};
 use one_core::storage::{ConnectionType, ExtensionConnectionParams, StoredConnection, Workspace};
-use one_core::tab_container::{TabItem, TabOpenMode};
+#[cfg(all(feature = "nsh-host", feature = "shell"))]
+use one_core::tab_container::TabItem;
+use one_core::tab_container::TabOpenMode;
 use std::sync::Arc;
 
 pub(crate) trait ConnectionOpenStrategy {

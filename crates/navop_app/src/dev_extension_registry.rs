@@ -12,10 +12,7 @@
 use gpui::{AppContext as _, BorrowAppContext as _};
 
 use std::path::PathBuf;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::{Arc, atomic::AtomicBool};
 
 use extension_runtime::GlobalExtensionRuntimeCatalog;
 use extension_runtime::extension::manifest::{Manifest, load_from_dir};

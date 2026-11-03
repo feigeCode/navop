@@ -9,9 +9,8 @@
 
 use std::path::PathBuf;
 
-use gpui::{App, BorrowAppContext as _, Context as _};
+use gpui::{App, BorrowAppContext as _};
 use serde_json::{Value, json};
-use universal_plugins::DevOps;
 
 use crate::dev_extension_registry::{
     DEV_ID_PREFIX, DevExtensionRegistry, DevLogRing, DevPickState, DevProject, DevWatchSet,
