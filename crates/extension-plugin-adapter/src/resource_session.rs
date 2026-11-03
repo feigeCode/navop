@@ -98,11 +98,6 @@ impl ResourceSessionHandle {
         self.inner.identity.runtime_generation
     }
 
-    /// 受限访问:页面只能通过 dispatcher 走命名操作,不直接持有裸 client。
-    pub(crate) fn client(&self) -> &ManagedUniversalPluginClient {
-        &self.inner.client
-    }
-
     pub fn resource_snapshot(&self) -> Result<ResourceOpenResult, PluginAdapterError> {
         self.inner
             .resource

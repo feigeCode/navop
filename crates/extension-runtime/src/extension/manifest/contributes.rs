@@ -14,10 +14,6 @@ mod connection;
 mod terminal_launch;
 pub use connection::*;
 pub use terminal_launch::{ResolvedTerminalLaunch, TerminalLaunchError};
-#[path = "contributes/resource_workbench.rs"]
-mod resource_workbench;
-pub use resource_workbench::*;
-
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct ContributesManifest {
     #[serde(default)]
@@ -28,8 +24,8 @@ pub struct ContributesManifest {
     pub drivers: Vec<Value>,
     #[serde(default)]
     pub connections: Vec<ResourceConnectionContrib>,
-    #[serde(default, rename = "resourceWorkbenches")]
-    pub resource_workbenches: Vec<ResourceWorkbenchContrib>,
+    // `resourceWorkbenches` 已废弃：扩展只能提供页面（tab 视图），
+    // 原生工作台不再由清单驱动。旧清单里的这个键会被 serde 忽略。
     #[serde(default)]
     pub commands: Vec<CommandContrib>,
     #[serde(default)]
@@ -76,7 +72,6 @@ impl ContributesManifest {
             + self.connection_importers.len()
             + self.drivers.len()
             + self.connections.len()
-            + self.resource_workbenches.len()
             + self.commands.len()
             + self.menus.len()
             + self.toolbars.len()

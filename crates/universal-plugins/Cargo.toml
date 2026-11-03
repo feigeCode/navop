@@ -18,9 +18,12 @@ extension-runtime.workspace = true
 extension_view.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true
-gpui-shell = { workspace = true, optional = true }
+nsh-platform-gpui = { workspace = true, optional = true }
+# 页面 bundle 的能力声明（能力白名单）走 nsh-core 的 Capabilities 解析；
+# nsh-platform-gpui 没有重导出它。
+nsh-core = { workspace = true, optional = true }
+nsh-engine = { workspace = true, optional = true }
 one-core.workspace = true
-resource_view.workspace = true
 rust-i18n.workspace = true
 serde_json.workspace = true
 smol.workspace = true
@@ -34,7 +37,10 @@ tempfile = "3"
 
 [features]
 default = []
-shell-plugins = ["dep:gpui-shell"]
+# 扩展页面的 UI 平面：nsh 宿主（AppView）。扩展页面以 nsh 程序运行，
+# 画在 navop 的 GPUI 窗口里，方案见
+# docs/extension-resource-plugins/nsh-migration-plan.md。
+nsh-host = ["dep:nsh-platform-gpui", "dep:nsh-core", "dep:nsh-engine"]
 
 [lints]
 workspace = true

@@ -23,8 +23,6 @@ pub enum ShellHostModule {
     Blob,
     Log,
     Runtime,
-    /// Embedded resource-workbench pages: named operation dispatch only.
-    Workbench,
     /// 开发者工具专用（navop.dev host 模块）。
     Dev,
     /// 宿主界面语言（`navop.i18n` host 模块）。
@@ -43,10 +41,7 @@ pub enum ShellHostModule {
 
 impl ShellHostModule {
     pub fn requires_backend(self) -> bool {
-        matches!(
-            self,
-            Self::Resource | Self::Job | Self::Event | Self::Blob | Self::Workbench
-        )
+        matches!(self, Self::Resource | Self::Job | Self::Event | Self::Blob)
     }
 
     /// 该模块在脚本里的 import specifier：`"navop.i18n"` 对应
@@ -65,7 +60,6 @@ impl ShellHostModule {
             Self::Blob => "navop.blob",
             Self::Log => "navop.log",
             Self::Runtime => "navop.runtime",
-            Self::Workbench => "navop.workbench",
             Self::Dev => "navop.dev",
             Self::I18n => "navop.i18n",
             Self::Theme => "navop.theme",
@@ -85,7 +79,6 @@ impl ShellHostModule {
         Self::Blob,
         Self::Log,
         Self::Runtime,
-        Self::Workbench,
         Self::Dev,
         Self::I18n,
         Self::Theme,

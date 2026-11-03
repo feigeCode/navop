@@ -5,7 +5,11 @@ use gpui::{
 };
 use gpui_component::{WindowExt, notification::Notification};
 use one_core::storage::{ConnectionType, ExtensionConnectionParams, StoredConnection, Workspace};
-use one_core::tab_container::{TabItem, TabOpenMode};
+// `TabItem` 只在开 `shell` 的路径上用（终端型连接、nsh 页面 tab），
+// 32 位 Windows 那种「无 nsh-host」构建同样要编译这一段。
+#[cfg(feature = "shell")]
+use one_core::tab_container::TabItem;
+use one_core::tab_container::TabOpenMode;
 use std::sync::Arc;
 
 pub(crate) trait ConnectionOpenStrategy {
@@ -60,7 +64,7 @@ struct ExtensionOpenStrategy {
     connection: StoredConnection,
 }
 
-#[cfg(not(feature = "shell-plugins"))]
+#[cfg(not(feature = "nsh-host"))]
 impl ConnectionOpenStrategy for ExtensionOpenStrategy {
     fn open(
         self: Box<Self>,
@@ -86,36 +90,19 @@ impl ConnectionOpenStrategy for ExtensionOpenStrategy {
             window.push_notification("This extension contribution is unavailable", cx);
             return;
         };
-        // 终端型连接不需要提供者进程,也不依赖 shell-plugins 构建。
+        // 终端型连接不需要提供者进程,也不依赖 nsh 构建。
         if contribution.terminal.is_some() {
             open_extension_terminal_connection(self.connection, &contribution, mode, window, cx);
             return;
         }
-        // 无 Shell 构建以 workbench 绑定为决策点:
-        // 有原生工作台即可打开(legacy shellViewId 不阻塞),
-        // 没有工作台才提示需要 shell-plugins 构建。
-        let Some(workbench) = service
-            .resource_workbench_for_connection(&params.extension_id, &params.contribution_id)
-        else {
-            window.push_notification(
-                "This extension connection requires the shell-plugins build",
-                cx,
-            );
-            return;
-        };
-        open_native_extension_connection(
-            service,
-            self.connection,
-            contribution,
-            workbench,
-            mode,
-            window,
-            cx,
-        );
+        // 扩展连接现在只有一种 UI：扩展自己的页面 —— 它跑在 nsh 宿主里，
+        // 所以没有 nsh 构建时这些连接没有界面。
+        let _ = (service, contribution, mode);
+        window.push_notification("This extension connection requires the nsh build", cx);
     }
 }
 
-#[cfg(feature = "shell-plugins")]
+#[cfg(feature = "nsh-host")]
 impl ConnectionOpenStrategy for ExtensionOpenStrategy {
     fn open(
         self: Box<Self>,
@@ -128,10 +115,7 @@ impl ConnectionOpenStrategy for ExtensionOpenStrategy {
             window.push_notification("Extension connection data is invalid", cx);
             return;
         };
-        let Some(host) = cx
-            .try_global::<universal_plugins::ShellPluginHost>()
-            .cloned()
-        else {
+        let Some(host) = cx.try_global::<universal_plugins::NshHost>().cloned() else {
             window.push_notification("Extension runtime is unavailable", cx);
             return;
         };
@@ -151,23 +135,10 @@ impl ConnectionOpenStrategy for ExtensionOpenStrategy {
             open_extension_terminal_connection(self.connection, &contribution, mode, window, cx);
             return;
         }
-        if let Some(workbench) =
-            host.resource_workbench_for_connection(&params.extension_id, &params.contribution_id)
-        {
-            let service = cx
-                .global::<universal_plugins::GlobalUniversalPluginService>()
-                .service();
-            open_native_extension_connection(
-                service,
-                self.connection,
-                contribution,
-                workbench,
-                mode,
-                window,
-                cx,
-            );
-        } else if let Err(error) = host.open_connection(
-            universal_plugins::ConnectionShellOpen {
+        // 一条连接就是一个页面：不再有"声明了工作台就走原生 UI"的分支。
+        // 页面自己决定长什么样，宿主只负责给上下文和借来的资源句柄。
+        if let Err(error) = host.open_connection(
+            universal_plugins::ConnectionPageOpen {
                 connection: self.connection,
                 contribution,
                 mode,
@@ -273,46 +244,6 @@ fn open_extension_terminal_connection_shell(
     });
 }
 
-/// 打开原生扩展连接工作台 tab(共享实现,两种 feature 构建都使用)。
-/// headless tab 到 ShellPluginHost 的注册由 ExtensionConnectionTab::load
-/// 内部按 global 存在性自行处理。
-#[allow(clippy::too_many_arguments)]
-fn open_native_extension_connection(
-    service: universal_plugins::UniversalPluginService,
-    connection: StoredConnection,
-    contribution: extension_runtime::RegisteredResourceConnectionContribution,
-    workbench: extension_runtime::RegisteredResourceWorkbenchContribution,
-    mode: TabOpenMode,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    let connection_id = connection.id.expect("saved extension connection");
-    let tab_id = format!("extension-connection:{connection_id}");
-    let tabs = cx
-        .global::<one_core::tab_container::GlobalTabContainer>()
-        .primary_pane();
-    // 把 tab 创建与容器更新移出 HomePage 租约,避免激活已有 tab 时同步触发
-    // HomePage::on_deactivate 造成实体租约重入。
-    window.defer(cx, move |window, cx| {
-        let tab = universal_plugins::ExtensionConnectionTab::load(
-            service,
-            connection,
-            contribution,
-            workbench,
-            cx,
-        );
-        tabs.update(cx, |tabs, cx| {
-            tabs.activate_or_add_tab_lazy_with_mode(
-                tab_id.clone(),
-                mode,
-                move |_, _| TabItem::new(tab_id.clone(), "extension-connection", tab.clone()),
-                window,
-                cx,
-            );
-        });
-    });
-}
-
 struct MiddlewareExtensionOpenStrategy {
     connection: StoredConnection,
 }
@@ -348,16 +279,16 @@ impl ConnectionOpenStrategy for MiddlewareExtensionOpenStrategy {
 
 /// 扩展是否已安装并注册了对应连接贡献项。
 fn extension_connection_is_registered(params: &ExtensionConnectionParams, cx: &App) -> bool {
-    #[cfg(feature = "shell-plugins")]
+    #[cfg(feature = "nsh-host")]
     {
-        cx.try_global::<universal_plugins::ShellPluginHost>()
+        cx.try_global::<universal_plugins::NshHost>()
             .map(|host| {
                 host.resource_connection(&params.extension_id, &params.contribution_id)
                     .is_some()
             })
             .unwrap_or(false)
     }
-    #[cfg(not(feature = "shell-plugins"))]
+    #[cfg(not(feature = "nsh-host"))]
     {
         cx.try_global::<universal_plugins::GlobalUniversalPluginService>()
             .map(|global| {
@@ -471,7 +402,7 @@ fn prompt_middleware_extension_install(
 }
 
 /// 打开已注册的扩展连接(不依赖 HomePage,便于安装完成后在回调中复用)。
-#[cfg(not(feature = "shell-plugins"))]
+#[cfg(not(feature = "nsh-host"))]
 fn open_extension_connection_now(
     connection: StoredConnection,
     mode: TabOpenMode,
@@ -489,33 +420,18 @@ fn open_extension_connection_now(
         window.push_notification("Extension runtime is unavailable", cx);
         return;
     };
-    let Some(workbench) =
-        service.resource_workbench_for_connection(&params.extension_id, &params.contribution_id)
-    else {
-        window.push_notification(
-            "This extension connection requires the shell-plugins build",
-            cx,
-        );
-        return;
-    };
     let Some(contribution) =
         service.resource_connection(&params.extension_id, &params.contribution_id)
     else {
         window.push_notification("This extension contribution is unavailable", cx);
         return;
     };
-    open_native_extension_connection(
-        service,
-        connection,
-        contribution,
-        workbench,
-        mode,
-        window,
-        cx,
-    );
+    // 扩展连接现在只有一种 UI：扩展自己的页面（跑在 nsh 宿主里）。
+    let _ = (contribution, mode);
+    window.push_notification("This extension connection requires the nsh build", cx);
 }
 
-#[cfg(feature = "shell-plugins")]
+#[cfg(feature = "nsh-host")]
 fn open_extension_connection_now(
     connection: StoredConnection,
     mode: TabOpenMode,
@@ -526,10 +442,7 @@ fn open_extension_connection_now(
         window.push_notification("Extension connection data is invalid", cx);
         return;
     };
-    let Some(host) = cx
-        .try_global::<universal_plugins::ShellPluginHost>()
-        .cloned()
-    else {
+    let Some(host) = cx.try_global::<universal_plugins::NshHost>().cloned() else {
         window.push_notification("Extension runtime is unavailable", cx);
         return;
     };
@@ -545,23 +458,9 @@ fn open_extension_connection_now(
         );
         return;
     };
-    if let Some(workbench) =
-        host.resource_workbench_for_connection(&params.extension_id, &params.contribution_id)
-    {
-        let service = cx
-            .global::<universal_plugins::GlobalUniversalPluginService>()
-            .service();
-        open_native_extension_connection(
-            service,
-            connection,
-            contribution,
-            workbench,
-            mode,
-            window,
-            cx,
-        );
-    } else if let Err(error) = host.open_connection(
-        universal_plugins::ConnectionShellOpen {
+    // 一条连接就是一个页面（同 ExtensionOpenStrategy::open）。
+    if let Err(error) = host.open_connection(
+        universal_plugins::ConnectionPageOpen {
             connection,
             contribution,
             mode,

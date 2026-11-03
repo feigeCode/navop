@@ -1,0 +1,9 @@
+# `nsh build --out .` 的中间产物：入库只留 view.js（改名后的 bundle.js）
+# 与它的 source map，其余每次构建都会重写。
+.nsh/
+app.json
+capabilities.json
+bundle.nshc
+bundle.js
+bundle.js.map
+dist/

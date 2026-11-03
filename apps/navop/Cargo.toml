@@ -6,13 +6,13 @@ publish = false
 
 # 全量产品：领域特性（database / shell）常开，与全量应用一致。
 # 发布流水线会按 target 显式开关 wasm-components / windows-native-rdp，并从
-# 默认集里剔掉 shell-plugins（32 位 Windows 不支持 quickjs-jit 运行时），
+# 默认集里剔掉 nsh-host（32 位 Windows 不支持 quickjs-jit 运行时），
 # 所以这几个特性必须由本包转发给 `navop_app`，不能只依赖依赖项的默认特性。
 [features]
-default = ["wasm-components", "windows-native-rdp", "shell-plugins"]
+default = ["wasm-components", "windows-native-rdp", "nsh-host"]
 wasm-components = ["navop_app/wasm-components"]
 windows-native-rdp = ["navop_app/windows-native-rdp"]
-shell-plugins = ["navop_app/shell-plugins"]
+nsh-host = ["navop_app/nsh-host"]
 builtin-mongodb = ["navop_app/builtin-mongodb", "data_domain/builtin-mongodb"]
 
 [dependencies]

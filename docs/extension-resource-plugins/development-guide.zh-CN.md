@@ -1,5 +1,9 @@
 # Navop 通用资源扩展开发指南
 
+> UI 部分已迁移到 nsh：页面不再用 gpui-shell 的 builder 链方言，而是 TSX 页面
+> （见 [`nsh-page-guide.zh-CN.md`](nsh-page-guide.zh-CN.md)）。本文的 provider /
+> runtime / 清单 / 权限章节仍然有效，涉及 shell view 装载与脚本 API 的部分已过期。
+
 本文描述当前 Navop 通用资源扩展机制的实际开发方式。可运行参考实现位于：
 
 ```text

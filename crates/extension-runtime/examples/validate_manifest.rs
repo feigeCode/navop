@@ -14,11 +14,8 @@ fn main() {
         eprintln!("manifest validation failed: {error}");
         std::process::exit(1);
     });
-    let id = manifest.id.clone();
-    let workbench_count = manifest.contributes.resource_workbenches.len();
     ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap_or_else(|error| {
         eprintln!("catalog registration failed: {error}");
         std::process::exit(1);
     });
-    println!("validated {id}: {workbench_count} resource workbench(es)");
 }

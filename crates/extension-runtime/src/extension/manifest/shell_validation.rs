@@ -8,7 +8,8 @@ use super::{Manifest, ShellHostModule, ShellViewContrib};
 
 const SHELL_EXEC_PERMISSION: &str = "shell:exec";
 const RESERVED_BACKEND_ALIASES: &[&str] = &["host", "navop", "default"];
-const GPUI_SHELL_VERSION: &str = "0.6.4";
+/// navop 内置的 nsh 运行时版本（`nsh-platform-gpui` 的 minor）。
+const NSH_VERSION: &str = "0.3.0";
 
 pub(crate) fn validate_shell_views(manifest: &Manifest) -> Result<(), ShellViewValidationError> {
     if manifest.contributes.shell_views.is_empty() {
@@ -21,7 +22,7 @@ pub(crate) fn validate_shell_views(manifest: &Manifest) -> Result<(), ShellViewV
     {
         return Err(error("/permissions", "shellViews requires `shell:exec`"));
     }
-    validate_gpui_shell_version(manifest)?;
+    validate_engine_versions(manifest)?;
 
     let ipc_ids: HashSet<&str> = manifest
         .runtime
@@ -97,14 +98,32 @@ fn validate_shell_view(
     Ok(())
 }
 
-fn validate_gpui_shell_version(manifest: &Manifest) -> Result<(), ShellViewValidationError> {
-    let required = Version::parse(&manifest.engines.gpui_shell).map_err(|_| {
+/// shellView 必须声明它跑在哪个 UI 平面上，并且那个平面得够新。
+///
+/// 现在只有 nsh 一个平面：声明了 `engines.nsh` 的扩展才会被登记出
+/// shellView。旧的 `engines.gpui_shell` 随 gpui-shell 一起删掉了——
+/// 宿主已经没有那条渲染路径，再接受这个门只会让扩展以为自己能跑。
+fn validate_engine_versions(manifest: &Manifest) -> Result<(), ShellViewValidationError> {
+    let nsh = manifest.engines.nsh.trim();
+    if nsh.is_empty() {
+        return Err(error("/engines/nsh", "shellViews requires `engines.nsh`"));
+    }
+    validate_engine_version(nsh, NSH_VERSION, "/engines/nsh", "nsh")
+}
+
+fn validate_engine_version(
+    required: &str,
+    host: &str,
+    field: &str,
+    engine: &str,
+) -> Result<(), ShellViewValidationError> {
+    let required = Version::parse(required).map_err(|_| {
         error(
-            "/engines/gpui_shell",
-            "shellViews requires a semantic gpui_shell version",
+            field,
+            format!("shellViews requires a semantic {engine} version"),
         )
     })?;
-    let current = Version::parse(GPUI_SHELL_VERSION).expect("host shell version must be semantic");
+    let current = Version::parse(host).expect("host shell version must be semantic");
     let compatible = if required.major == 0 {
         current.major == 0 && current.minor == required.minor
     } else {
@@ -114,8 +133,8 @@ fn validate_gpui_shell_version(manifest: &Manifest) -> Result<(), ShellViewValid
         return Ok(());
     }
     Err(error(
-        "/engines/gpui_shell",
-        format!("requires gpui-shell {required}, host provides {current}"),
+        field,
+        format!("requires {engine} {required}, host provides {current}"),
     ))
 }
 
@@ -166,7 +185,6 @@ fn validate_modules(view: &ShellViewContrib) -> Result<(), ShellViewValidationEr
                 | ShellHostModule::Log
                 | ShellHostModule::Runtime
                 | ShellHostModule::Dev
-                | ShellHostModule::Workbench
                 | ShellHostModule::I18n
                 | ShellHostModule::Theme
         ) {

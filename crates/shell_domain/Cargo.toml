@@ -25,15 +25,17 @@ one-core.workspace = true
 port_forwarding_view.workspace = true
 remote_desktop.workspace = true
 remote_desktop_view.workspace = true
-resource_view.workspace = true
 sftp_view.workspace = true
 terminal.workspace = true
 terminal_view.workspace = true
+universal-plugins = { workspace = true, features = ["nsh-host"] }
+nsh-platform-gpui.workspace = true
 ssh.workspace = true
 ssh_form.workspace = true
 tracing.workspace = true
 sha2.workspace = true
 zeroize.workspace = true
+serde_json.workspace = true
 tokio = { workspace = true }
 
 [dev-dependencies]

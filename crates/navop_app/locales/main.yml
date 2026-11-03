@@ -207,17 +207,17 @@ Home:
     zh-CN: "筛选独立于主页"
     zh-HK: "篩選獨立於主頁"
   toolbox_description:
-    en: "Built-in tools in one place; more tools can be contributed by gpui-shell extensions."
-    zh-CN: "内置小工具统一入口；后续可通过 gpui-shell 扩展注册更多工具"
-    zh-HK: "內建小工具統一入口；後續可透過 gpui-shell 擴充功能註冊更多工具"
+    en: "Built-in tools in one place; more tools can be contributed by nsh extensions."
+    zh-CN: "内置小工具统一入口；后续可通过 nsh 扩展注册更多工具"
+    zh-HK: "內建小工具統一入口；後續可透過 nsh 擴充功能註冊更多工具"
   toolbox_more_tools:
     en: "More tools"
     zh-CN: "更多工具"
     zh-HK: "更多工具"
   toolbox_more_hint:
-    en: "Contributed by gpui-shell extensions"
-    zh-CN: "由 gpui-shell 扩展贡献"
-    zh-HK: "由 gpui-shell 擴充功能貢獻"
+    en: "Contributed by nsh extensions"
+    zh-CN: "由 nsh 扩展贡献"
+    zh-HK: "由 nsh 擴充功能貢獻"
   sync_just_now:
     en: "Just now"
     zh-CN: "刚刚"

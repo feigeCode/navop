@@ -58,6 +58,12 @@
 
 `AppView`：标准 GPUI Entity（Render/Focusable/EntityInputHandler），per-view 独立 engine 线程 + QuickJS VM + data_dir + HostChannel；`AppView::new(AppOptions, window, cx)` → `load(App::Js(bundle))` 或 `run_package(&LoadedPackage)`；`connect_dev_server`（dev 热更新）；进程级共享面：`set_ui_sets(Vec<Registry>)`（组件/模块注册表）、keybindings、rt 主线程队列、macOS 菜单 last-wins。
 
+### 2.7 UE 表现力（方言对比，2026-11-02 核实）
+
+- **TSX 结构化 vs JS builder 链**：gpui-shell 方言（`v_flex().child(h_flex().child(...))`）嵌套 3~4 层后结构不可读，是现有 31 页全是「平铺列表+徽章+按钮」的结构性原因；nsh 方言（JSX 树 + style 对象/className） UE 上限高一个档次——实证：nwork（自研 nsh 应用，split-grid 分栏、quicklook、批量操作栏等复杂 UE，docs/shots/ 27 张截图）与官方 gallery（60+ demo）。
+- **组件覆盖**：`nsh/base`（TSX 侧模块）71+ 组件（gallery import 统计）：DataTable（百万行虚拟化、onVisibleRowsChange 窗口服务、33ms 实时 tick）、Editor（LSP diagnostics/completion/decoration）、TextView(markdown/html)、DiffView、DockArea、ResizablePanel、Tree、Combobox、Command、ColorPicker 全家、plot 全家（Arc/Area/Bar/Line/Pie/Sankey）、Carousel、Tabs、Toolbar、HoverCard、Canvas 2D 等——gpui-component 深水区均有对应物。nativeComponent 桥只是兜底，不是主路径。
+- **Tailwind className**：原生支持任意值/渐变/内阴影/dark 变体（gallery/Tailwind.tsx），AI 生成 UI 语料直接可用；主题 token 统一 `token("background")` / className，无 gpui-shell 的暗规则坑（如 Badge.color 拒主题 token 名）。
+
 ---
 
 ## 3. 目标架构：navop 作为一个 nsh host
@@ -195,7 +201,7 @@ host.handle("navop.job.*", …); host.handle("navop.event.*", …); host.handle(
 | M3 NshHost 骨架 | TrustStore 持久化（目录）、verify/load/accept 两阶段、NshTab 生命周期（stop 后台化）、`navop.json` asset 解析 | 从磁盘装一个 .nshpkg 开 tab、close、再装回退包 |
 | M4 host ABI | navop.* 按 §6 四类桥接分流（resource/job/event/blob → host.call；workbench → nativeModule；主题/i18n → push）；错误/取消语义 | TSX 页面 await host.call 打通 provider 全链路 |
 | M5 catalog/市场接线 | ExtensionRuntimeCatalog 收 .nshpkg、lease 咬合（§7）、安装/更新/回滚/撤销流、dev 模式例外 | 市场装包→升级→撤销→回退全流程；本地 dev bundle 热载 |
-| M6 试点迁移 | shell-view-example、js-toolbox(3)、docker overview 以 nsh app 形态重写 | 试点页全功能；产出方言映射表（gpui-component → nsh 组件） |
+| M6 试点迁移 | shell-view-example、js-toolbox(3)、docker overview 以 nsh app 形态重写 | 试点页全功能；产出方言映射表（gpui-component → nsh/base，注意组件名与 props 语义差异） |
 | M7 全量迁移 + 收尾 | 剩余页面、测试基线重建（extension_pages_render_tests → nsh test/shot 形态）、移除 gpui-shell 依赖、docs 更新 | cargo tree 无 gpui-shell；全页断言通过 |
 
 M1–M2 去风险（嵌入可行性最便宜的验证点）；M3–M5 是本方案的核心重构量；M6–M7 机械迁移。
@@ -220,7 +226,7 @@ M1–M2 去风险（嵌入可行性最便宜的验证点）；M3–M5 是本方�
 | UI_SETS/keybindings/rt 队列进程级共享；macOS 菜单 last-wins | 中 | UI_SETS 只放公共集（nsh_base::registry() + navop 桥接件）；per-view 走 AppOptions.components；扩展页不定义应用菜单 |
 | stop() join 阻塞 UI | 中 | close 路径 background_executor 后台化 |
 | webview overlay 盖 GPUI；Linux 外 video；变换组字形等渲染缺口 | 低 | 扩展页暂无此需求；需要时 nativeComponent 桥接兜底 |
-| 31 页全量重写人力 | 中 | M6 产出方言映射表后机械化；nativeComponent 桥兜底复杂页面 |
+| 31 页全量重写人力 | 中 | TSX 结构化写法 UE 上限高于 builder 链（nwork 27 张截图 + 官方 gallery 60+ demo 已验证）；nsh/base 71+ 组件（DataTable 百万行虚拟化/Editor+LSP/DiffView/DockArea/plot 全家，gallery import 证实）覆盖 gpui-component 深水区；nativeComponent 桥仅兜底 |
 | 生态断代（老 extension.json UI 扩展全失效） | 低 | 用户已确认：扩展尚未正式使用（28 个现存扩展全是 provider，不受影响） |
 | 未来 gpui-fast 动态 keybinding 方向易碎 | 中 | KeyBinding::load 补丁模式固定；跟踪上游 0.2 |
 
@@ -235,3 +241,170 @@ M1–M2 去风险（嵌入可行性最便宜的验证点）；M3–M5 是本方�
 | 开发者工作流 | navop 自建脚本装载 | nsh CLI 原生（init/build/check/test/dev/publish），navop 只做宿主 |
 | host ABI | 30 函数逐个映射 HostChannel | 按 nsh 四类桥接分流（host.call/nativeModule/nativeComponent/params+on） |
 | 战略含义 | navop 继续拥有扩展格式 | **扩展生态直接对接 nsh 生态**（含 AI 生成 UI 方向）；navop 差异化 = 宿主能力 + 工作台 + 分发治理 |
+
+---
+
+## 14. 实施记录（2026-11-02）
+
+方案已按 M1–M8 全部落地，分支 `refactor/nsh-host`（开发期在 `m2-nsh-spike`），
+扩展仓分支 `feat/nsh-pages`。沉淀下来的事实与**与方案的偏差**都在这一节。
+
+### 14.1 里程碑与实际提交
+
+| 里程碑 | 内容 | 落点 |
+|---|---|---|
+| M1 | nsh fork 兼容 gpui-fast 0.1.12 | `feigeCode/nsh` 分支 `navop/gpui-0.1.12` 提交 `81c93f59`：`chrome.rs` 改用 `KeyBinding::load`（`KeyBinding::new` 现在要 `&'static str`），并补本地 patch 块把 `gpui-fast*`/`gpui-pre-*` 全钉到 `release/v0.1.12` |
+| M2 | navop 里挂 `AppView` tab | `nsh_host/` 雏形 + 编译期 `nsh build` 产物内嵌 |
+| M3 | `NshHost` 骨架（目录装载） | `nsh:{view_key}` tab、装载失败也开 tab 并显示原因 |
+| M4 | host ABI 全量桥接 | `abi.rs`（context/log/i18n/theme/resource/job/event/blob/runtime/dev/workbench）+ `session.rs`（四张句柄表、generation、取消）+ `host_error.rs`（12 个稳定码） |
+| M5 | 租约装载 + 嵌入页 | `NshTab::start_prepare` 走 `activate_runtime` 租约；`page_host.rs` 实现 `CustomPageHost`（借来的资源 `owned:false`，`navop.workbench.dispatch`） |
+| M6 | 引擎门 + 产物布局 + 试点页 | `engines.nsh`、`entry → dist/bundle.js`、docker overview 试点 |
+| M7 | 删除 gpui-shell | `8cba5c7a5`：删 `shell_plugin_host/`、`shell_plugin_tab*`、`shell_page_host.rs`、`gpui-shell` 依赖与 `engines.gpui_shell` 门；`cargo tree -i gpui-shell` 不再命中，`Cargo.lock` 里 0 处 |
+| M8 | 24 个页面改用 TSX | docker 10 / mqtt 5 / rocketmq 3 / elasticsearch 1 / dev-tools 1 / 示例 4；共享设计系统 `docker/ui/lib/{theme,format,ui}` |
+
+### 14.2 与方案不一致的地方（都是有意收敛）
+
+- **打包分发仍未走 `.nshpkg` 签名包**。宿主两条装载路径都在（`bundle.rs`：同目录
+  有 `.nshpkg` 就 `verify_package` + 首帧健康后 `accept_package`；否则 `Bundle::source`
+  直装），但扩展仓目前发布的是**目录形态**——`dist/bundle.js` 随扩展包一起走，
+  信任边界仍是"扩展包整体签名/安装"，没有用到 nsh 的包级签名与防回滚。要走签名包，
+  扩展仓的发布流水线得改成 `nsh publish` 产出 `.nshpkg`，宿主把安装目录里的 `.nshpkg`
+  交给 `verify_package`。这一步没有做，因为扩展仓的发布链路（R2/多 target）不在本
+  次重构范围内。
+- **`navop.json` 资产没有引入**。方案里设想把 navop 专有的工作台声明塞进包内
+  asset 参与签名；实际仍用 `extension.json`（nsh CLI 不解析它，所以不冲突），
+  也就没动 `deny_unknown_fields` 那条约束。
+- **`nativeModule` / `nativeComponent` 没有用**。四类桥接里只落地了 `host.call`
+  一类：navop 的工作台/资源能力全是数据型调用，不需要把 gpui-kit 控件注入页面；
+  需要原生控件时再按 `examples/embed-gpui` 的 `NativeComponent` 做法补。
+- **`set_ui_sets` 只用默认集**（`nsh_base::registry()`），没有注册 navop 自有组件
+  目录——`ui_sets` 是进程级的，而 navop 的组件需求已经在 TSX 里自绘解决。
+- **热更新接入 dev server 未接**：`connect_dev_server` 已有 API，但 navop 的开发者
+  工具页现在是"打开本地工程目录"的形态（`navop.dev.*`）。
+
+### 14.3 迁移中确认的宿主侧缺口（provider 侧后续可补）
+
+- docker：`containerStats` 缺 networks/blkio；`containerTop` 不能传 `psArgs`；
+  网络列表返回 12 位短 id，`inspect/remove` 原样透传（daemon 不认短 id 会 404）；
+  日志只能轮询，没有 follow 通道。
+- mqtt：`client_addr`、主题级 `message_count` 恒为 `None`；`metrics` 无连接建立时间，
+  速率只能页面采样差算。
+- rocketmq：`metrics` 无消费组数/消息总量；`clusterOverview` 只回主节点（无 role/磁盘）；
+  `MessagePage.total` 是本页条数，`has_more` 恒真；三个查询都强制 topic；
+  `sendMessage` 的字段是单数 `tag`/`key`。
+
+### 14.4 nsh/TSX 的语义坑（写页面前必读，已写进 [`nsh-page-guide.zh-CN.md`](nsh-page-guide.zh-CN.md)）
+
+组件体只在挂载时执行一次（顶层 `if (...) return` 会永久停在加载态）；
+`onChange={sig.set}` 抛 `not a live signal`；`numberOfLines` 是 prop 不是 style；
+`Each` 不从 `"nsh"` 导出、不能传 `key=`；主题颜色写在模块级常量里会冻住（要 getter）；
+百分比宽度只能 `` `${Math.round(p*100)}%` ``。
+
+### 14.5 给后续接手的人
+
+- 写页面看 [`nsh-page-guide.zh-CN.md`](nsh-page-guide.zh-CN.md)（页面工程结构、
+  `navop.*` 命名空间表、两种页面形态、设计系统、10 条坑、测试与交付清单）。
+- 宿主侧入口：`crates/universal-plugins/src/nsh_host/{mod,tab,session,abi,bundle,page_host,connection,monitor,dev,dispatch,grant,theme}`。
+  加一个 `navop.*` 能力 = 在 `abi.rs` 注册 handler + 在 `nsh-page-guide` 的命名空间表
+  里登记；加一种页面形态 = 看 `tab.rs`（tab）与 `page_host.rs`（嵌入页）。
+- 别再加回 gpui-shell：`crates/resource_view` 的 `CustomPageHost` 是引擎无关契约，
+  换/加第三套 UI 平面时才需要动它。
+
+## 15. 再收敛：一个 tab 视图 + 最小 API（2026-11-03）
+
+用户决定（原话）："整个插件机制我想改一下，就直接给一个 tab 视图，让用户自由发挥
+就行，不再保留目前的工作台，原生加脚本的混合机制了，只保留最简单的 api 就行，
+给用户足够的定制化需求"。
+
+### 15.1 删掉了什么
+
+- **原生资源工作台**：`contributes.resourceWorkbenches` 整块声明式 UI（表格/树/
+  表单/路由）不再存在。清单里这个键被 serde 忽略（旧扩展仍能注册，但那些页面
+  不会出现）。
+- **`navop.workbench.*` 通道**：`current` / `dispatch` 都没了，连同宿主侧
+  `WorkbenchContext`、`dispatch_invoke_scoped` / `dispatch_job_scoped` 的调用、
+  `BindingContext` 的 route/selection/paging/parent 注入。
+- **headless 连接 tab**（`ExtensionConnectionTab`，609 行）：连接只有一种形态，
+  就是打开自己的页面；`decide_runtime_change` 留在 `nsh_host/decision.rs` 供页面
+  tab 复用。
+- **嵌入页机制**（`CustomPageHost` / `page_host.rs`）：页面不再有"从工作台里
+  嵌进来"的第二种形态。
+
+### 15.2 留下了什么
+
+`navop.*` 只剩：`context.current`、`resource.{open,invoke,ping,close}`、
+`job.*`、`event.*`、`blob.*`、`runtime.info`、`log.*`、`dev.*`，外加宿主推送的
+`theme` / `i18n`（页面 token 依赖它们，属于"宿主事实"而不是"插件机制"）。
+
+`navop.resource.invoke` 现在替页面解码 provider 的 `ResultRef`：inline 直接给值，
+blob 走分片读并按 8 MiB 上限拼回 JSON，事件流给句柄。页面拿到就是普通数据。
+
+### 15.3 页面侧的影响
+
+- 一页一个 `dist/bundle.js`，数据全靠 `navop.resource.invoke({handle, method,
+  params})`；句柄来自 `navop.context.current().connection.resourceHandle`。
+- 共享库 `ui/lib/host.ts`（`connection()` / `call()`）与 `ui/lib/test-host.ts`
+  （`hostHandlers()`）承担这层仪式，页面里不重复写。
+- **页面自己决定"当前对象"**：docker 的 6 个容器级页面（进程/变更/挂载/统计/日志/
+  详情）过去由宿主注入容器 id，现在页面自己拉容器列表、自己放选择器。这是这次
+  简化的真实代价，也是"给用户足够定制化"的直接体现。
+- docker 新增「容器」页（列表 + 启停/重启/暂停/删除），补上被删掉的工作台表格页；
+  连接默认打开它。
+
+### 15.4 与 §14 的关系
+
+§14 记的是"把 UI 平面从 gpui-shell 换成 nsh"；本节记的是"换完之后再把插件机制
+本身砍到最小"。§14.2 里"nativeModule/nativeComponent 没有用""`set_ui_sets` 只用
+默认集"这两条在这里变成定论：不再计划引入，页面就是纯 TSX + 数据通道。
+
+## 16. 原生组件（nativeComponent）
+
+页面是 TSX，凡是「必须是 Rust 实体」的东西 —— 终端、编辑器、图表面板 —— 只能以
+原生组件出现。这一节记录接法，因为它是这套机制里唯一**跨宿主层**的缝。
+
+### 16.1 方向
+
+注入方向是「注册表在扩展宿主、实现在应用层」：
+
+- `crates/universal-plugins/src/nsh_host/native.rs` 只有注册表：
+  `register_native_component(name, factory, cx)` + `NativeViewContext
+  { extension_id, view_id, allow_process, component }`；
+- `NshTab` 建 `AppView` 时调 `native::components_for(&contribution, cx)` 拼出
+  **本页面**的 `Components` 交给 `AppOptions.components`（不是进程级
+  `set_ui_sets`：那样一页注册的名字会漏给所有页面）；
+- 真正的实现在 `crates/shell_domain/src/native_terminal.rs`（终端），
+  由 `shell_domain::init` 调 `install(cx)` 注册 —— 扩展宿主不依赖
+  `terminal_view`，应用层才认识它。
+
+### 16.2 权限
+
+`allow_process` = 该页面所属扩展的清单里有没有 `shell:exec`。没有时组件渲染
+一行错误而不是静默空白。`navop.terminal` 起的是宿主本地进程，命令与参数必须由
+页面显式给出（不是"用户随便敲命令"的入口）。
+
+### 16.3 生命周期
+
+- 组件每次建实例都能拿到 `NativeViewContext`（含页面身份），props 走 `set_prop`；
+- 改 `command`/`args`/`env`/`cwd` 触发**重开** pty（页面上的「重新连接」就是改
+  一个环境变量），只改 `title` 不重开；
+- 组件 drop 时主线程拿不到 `App`，所以终端走的是一条回收队列：drop 里把
+  `Entity<TerminalView>` 投给 `smol::channel`，主线程任务补一次
+  `shutdown_embedded`（注销广播输入、释放连接占用、关 pty）。
+
+### 16.4 同时删掉的旧机制
+
+- `crates/resource_view` 整个 crate（3228 行原生工作台 + `TerminalHost` 契约）；
+- `extension_plugin_adapter::workbench_dispatch`（`dispatch_invoke*/dispatch_job*`
+  与 `BindingContext` 那一套）；
+- `extension-runtime::registration` 里的 `validate_shell_renderer` /
+  `validate_resource_workbench` / `validate_workbench_layout` /
+  `validate_route_bindings` / `validate_tree_children` / `TREE_CHILDREN_MAX_DEPTH`
+  与它们唯一的测试模块（`tree_children_tests`，10 条）；
+- `shell_domain::workbench_terminal::{NativeTerminalHost, install_terminal_host}`
+  （保留 `install_workbench_terminal_provider`，那是 AI 工作台的面板，与扩展无关）。
+
+**当时还留着、后来也删干净了**：`extension-runtime` 里 `ResourceWorkbench*`
+的清单类型（`contributes/resource_workbench.rs` 675 行、`types/resource_workbench.rs`、
+`types/workbench_operation_catalog.rs`）与只测它们的 `tree_children_tests` 模块，
+以及 `InvalidResourceWorkbench` 错误变体。现在清单里既没有字段也没有类型，
+`catalog.rs` 的工具箱过滤不再有「工作台页体」这个例外。

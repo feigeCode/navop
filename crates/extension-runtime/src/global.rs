@@ -219,7 +219,7 @@ mod tests {
             keywords: Vec::new(),
             engines: Engines {
                 onetcli: ">=0.1.0".into(),
-                gpui_shell: "0.6.4".into(),
+                nsh: "0.3.0".into(),
             },
             api: ApiVersions::default(),
             activation: Vec::new(),

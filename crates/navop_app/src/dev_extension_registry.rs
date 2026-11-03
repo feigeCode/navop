@@ -12,15 +12,10 @@
 use gpui::{AppContext as _, BorrowAppContext as _};
 
 use std::path::PathBuf;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::{Arc, atomic::AtomicBool};
 
 use extension_runtime::GlobalExtensionRuntimeCatalog;
 use extension_runtime::extension::manifest::{Manifest, load_from_dir};
-#[cfg(feature = "shell-plugins")]
-use universal_plugins::gpui_shell_reexport as gpui_shell_scope;
 
 /// dev 工程扩展 id 前缀(同时用于 view_key 隔离)。
 pub const DEV_ID_PREFIX: &str = "dev.";
@@ -73,7 +68,7 @@ impl DevLogRing {
 
 impl gpui::Global for DevLogRing {}
 
-fn push_log(cx: &gpui::App, root: &std::path::Path, message: impl Into<String>) {
+pub(crate) fn push_log(cx: &gpui::App, root: &std::path::Path, message: impl Into<String>) {
     if let Some(ring) = cx.try_global::<DevLogRing>() {
         ring.push(root, message.into());
     }
@@ -175,399 +170,20 @@ fn load_dev_manifest(root: &std::path::Path) -> Result<Manifest, String> {
 // navop.dev host 操作集实现
 // ---------------------------------------------------------------------------
 
-fn host_error(message: impl Into<String>) -> gpui_shell_scope::HostError {
-    gpui_shell_scope::HostError::new(message.into())
-}
-
 /// 构造 main 层 DevHostOps,注入到 universal-plugins Global。
-#[cfg(feature = "shell-plugins")]
+#[cfg(feature = "nsh-host")]
 pub fn install_dev_host_ops(cx: &mut gpui::App) {
-    use std::rc::Rc;
-    use universal_plugins::gpui_shell_reexport::{HostError, HostObject, HostValue};
-
-    fn view_value(
-        view: &extension_runtime::extension::manifest::contributes::ShellViewContrib,
-    ) -> HostValue {
-        let surface = match view.surface {
-            extension_runtime::extension::manifest::ShellSurface::Tab => "tab",
-            extension_runtime::extension::manifest::ShellSurface::Toolbox => "toolbox",
-        };
-        HostObject::new()
-            .field("id", view.id.clone())
-            .field("title", view.title.clone())
-            .field("surface", surface)
-            .field(
-                "category",
-                view.category
-                    .clone()
-                    .map(HostValue::Str)
-                    .unwrap_or(HostValue::Null),
-            )
-            .into()
-    }
-
-    fn project_value(project: &DevProject, watching: bool) -> HostValue {
-        let (id, name, version, views) = match &project.manifest {
-            Some(manifest) => (
-                strip_dev_prefix(&manifest.id),
-                manifest.name.clone(),
-                manifest.version.clone(),
-                manifest
-                    .contributes
-                    .shell_views
-                    .iter()
-                    .map(view_value)
-                    .collect::<Vec<_>>(),
-            ),
-            None => (String::new(), String::new(), String::new(), Vec::new()),
-        };
-        HostObject::new()
-            .field("root", project.root.display().to_string())
-            .field("id", id)
-            .field("name", name)
-            .field("version", version)
-            .field(
-                "error",
-                project
-                    .error
-                    .clone()
-                    .map(HostValue::Str)
-                    .unwrap_or(HostValue::Null),
-            )
-            .field("watching", watching)
-            .field("views", HostValue::Array(views))
-            .into()
-    }
-
-    fn project_result(project: &DevProject) -> HostValue {
-        HostObject::new()
-            .field("root", project.root.display().to_string())
-            .field(
-                "id",
-                project
-                    .manifest
-                    .as_ref()
-                    .map(|manifest| strip_dev_prefix(&manifest.id))
-                    .unwrap_or_default(),
-            )
-            .field(
-                "error",
-                project
-                    .error
-                    .clone()
-                    .map(HostValue::Str)
-                    .unwrap_or(HostValue::Null),
-            )
-            .into()
-    }
-
-    fn projects_value() -> Result<HostValue, HostError> {
-        let projects = gpui_shell_scope::with_current_app(|cx| {
-            let projects = DevExtensionRegistry::global(cx)
-                .map(|registry| registry.projects().to_vec())
-                .unwrap_or_default();
-            let watching = cx
-                .try_global::<DevWatchSet>()
-                .map(|watch_set| {
-                    watch_set
-                        .0
-                        .borrow()
-                        .keys()
-                        .cloned()
-                        .collect::<std::collections::HashSet<_>>()
-                })
-                .unwrap_or_default();
-            projects
-                .into_iter()
-                .map(|project| project_value(&project, watching.contains(&project.root)))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-        Ok(HostValue::Array(projects))
-    }
-
-    fn open_project(root: &str) -> Result<HostValue, HostError> {
-        let root = std::path::PathBuf::from(root);
-        if !root.join("extension.json").is_file() {
-            return Err(host_error(format!(
-                "extension.json not found in {}",
-                root.display()
-            )));
-        }
-        gpui_shell_scope::with_current_app(|cx| {
-            cx.update_default_global::<DevExtensionRegistry, _>(|registry, cx| {
-                registry.load(root.clone(), cx);
-            })
-        })
-        .ok_or_else(|| host_error("no active app context"))?;
-        let project = gpui_shell_scope::with_current_app(|cx| {
-            DevExtensionRegistry::global(cx)
-                .and_then(|registry| registry.project(&root))
-                .cloned()
-        })
-        .flatten()
-        .ok_or_else(|| host_error("development project was not retained"))?;
-        gpui_shell_scope::with_current_app(|cx| {
-            push_log(
-                &*cx,
-                &root,
-                project
-                    .error
-                    .as_deref()
-                    .map(|error| format!("open failed: {error}"))
-                    .unwrap_or_else(|| "project loaded".to_string()),
-            );
-        });
-        Ok(project_result(&project))
-    }
-
-    fn remove_project(root: &str) -> Result<HostValue, HostError> {
-        let root = std::path::PathBuf::from(root);
-        let project = gpui_shell_scope::with_current_app(|cx| {
-            if let Some(watch_set) = cx.try_global::<DevWatchSet>() {
-                if let Some((_, task, cancelled)) = watch_set.0.borrow_mut().remove(&root) {
-                    cancelled.store(true, Ordering::Release);
-                    drop(task);
-                }
-            }
-            let project = cx.update_default_global::<DevExtensionRegistry, _>(|registry, cx| {
-                let project = registry.project(&root).cloned();
-                registry.remove(&root, cx);
-                project
-            });
-            if let Some(extension_id) = project
-                .as_ref()
-                .and_then(|project| project.manifest.as_ref())
-                .map(|manifest| manifest.id.clone())
-            {
-                close_dev_extension(extension_id, cx);
-            }
-            project
-        })
-        .ok_or_else(|| host_error("no active app context"))?;
-        Ok(project.as_ref().map(project_result).unwrap_or_else(|| {
-            HostObject::new()
-                .field("root", root.display().to_string())
-                .field("id", "")
-                .into()
-        }))
-    }
-
-    fn open_view(extension_id: &str, view_id: &str) -> Result<HostValue, HostError> {
-        let dev_extension_id = format!("{DEV_ID_PREFIX}{extension_id}");
-        gpui_shell_scope::with_current_app(|cx| -> Result<(), HostError> {
-            let contribution = extension_runtime::global_catalog(cx)
-                .and_then(|catalog| catalog.shell_view(&dev_extension_id, view_id).cloned())
-                .ok_or_else(|| {
-                    host_error(format!(
-                        "view not found: {extension_id}/{view_id}; reload the project and try again"
-                    ))
-                })?;
-            if !contribution.entry_path.is_file() {
-                return Err(host_error(format!(
-                    "view entry not found: {}",
-                    contribution.entry_path.display()
-                )));
-            }
-            let extension_id = dev_extension_id.clone();
-            let view_id = view_id.to_string();
-            cx.defer(move |cx| {
-                let Some(window) = crate::app_init::resolve_navop_window(cx) else {
-                    tracing::warn!(%extension_id, %view_id, "no Navop window available for dev view");
-                    return;
-                };
-                let _ = window.update(cx, |_, window, cx| {
-                    extension_view::open_shell_view(&extension_id, &view_id, window, cx);
-                });
-            });
-            Ok(())
-        })
-        .ok_or_else(|| host_error("no active app context"))??;
-        Ok(HostValue::Null)
-    }
-
-    fn project_logs(root: &str, tail: f64) -> Result<HostValue, HostError> {
-        let root = std::path::PathBuf::from(root);
-        let logs = gpui_shell_scope::with_current_app(|cx| {
-            cx.try_global::<DevLogRing>()
-                .map(|ring| ring.tail(&root, tail.max(0.0) as usize))
-                .unwrap_or_default()
-        })
-        .unwrap_or_default();
-        Ok(HostValue::Array(
-            logs.into_iter().map(HostValue::Str).collect(),
-        ))
-    }
-
-    fn reload_project(root: &str) -> Result<HostValue, HostError> {
-        let root = std::path::PathBuf::from(root);
-        if !root.join("extension.json").is_file() {
-            return Err(host_error(format!(
-                "extension.json not found in {}",
-                root.display()
-            )));
-        }
-        gpui_shell_scope::with_current_app(|cx| {
-            let old_dev_id = cx.update_default_global::<DevExtensionRegistry, _>(|registry, cx| {
-                let old_dev_id = registry
-                    .project(&root)
-                    .and_then(|project| project.manifest.as_ref())
-                    .map(|manifest| manifest.id.clone());
-                registry.load(root.clone(), cx);
-                old_dev_id
-            });
-            // 关闭该 dev 扩展已打开的视图，让下次 open 使用新 manifest。
-            if let Some(old_dev_id) = old_dev_id {
-                close_dev_extension(old_dev_id, cx);
-            }
-        })
-        .ok_or_else(|| host_error("no active app context"))?;
-        let project = gpui_shell_scope::with_current_app(|cx| {
-            DevExtensionRegistry::global(cx)
-                .and_then(|registry| registry.project(&root))
-                .cloned()
-        })
-        .flatten()
-        .ok_or_else(|| host_error("development project was not retained"))?;
-        Ok(project_result(&project))
-    }
-
-    fn watch_project(root: &str) -> Result<HostValue, HostError> {
-        let root = std::path::PathBuf::from(root);
-        if !root.join("extension.json").is_file() {
-            return Err(host_error(format!(
-                "extension.json not found in {}",
-                root.display()
-            )));
-        }
-        gpui_shell_scope::with_current_app(|cx| {
-            let Some(watch_set) = cx.try_global::<DevWatchSet>() else {
-                return watch_result(false);
-            };
-            let mut watch_set = watch_set.0.borrow_mut();
-            if let Some((_, task, cancelled)) = watch_set.remove(&root) {
-                cancelled.store(true, Ordering::Release);
-                drop(task);
-                push_log(&*cx, &root, "watch stopped");
-                return watch_result(false);
-            }
-            let Some(last_sig) = source_fingerprint(&root) else {
-                return watch_result(false);
-            };
-            let watch_root = root.clone();
-            let cancelled = Arc::new(AtomicBool::new(false));
-            let task_cancelled = cancelled.clone();
-            let task = cx.spawn(async move |cx| {
-                loop {
-                    cx.background_executor()
-                        .timer(std::time::Duration::from_millis(800))
-                        .await;
-                    if task_cancelled.load(Ordering::Acquire) {
-                        break;
-                    }
-                    // 变更检测与重载都回主线程做,Global 访问需要 &App。
-                    let _ = cx.update(|cx| {
-                        let Some(watch_set) = cx.try_global::<DevWatchSet>() else {
-                            return;
-                        };
-                        let Some(current) = source_fingerprint(&watch_root) else {
-                            return;
-                        };
-                        let changed = {
-                            let mut watch_set = watch_set.0.borrow_mut();
-                            let Some((last, _, _)) = watch_set.get_mut(&watch_root) else {
-                                return;
-                            };
-                            let changed = current != *last;
-                            *last = current.clone();
-                            changed
-                        };
-                        if changed {
-                            let old_dev_id = cx
-                                .try_global::<DevExtensionRegistry>()
-                                .and_then(|registry| registry.project(&watch_root))
-                                .and_then(|project| project.manifest.as_ref())
-                                .map(|manifest| manifest.id.clone());
-                            let _ = cx.update_default_global::<DevExtensionRegistry, _>(
-                                |registry, cx| {
-                                    registry.load(watch_root.clone(), cx);
-                                },
-                            );
-                            if let Some(old_dev_id) = old_dev_id {
-                                close_dev_extension(old_dev_id, cx);
-                            }
-                        }
-                    });
-                }
-            });
-            push_log(&*cx, &root, "watch started");
-            watch_set.insert(root, (last_sig, task, cancelled));
-            watch_result(true)
-        })
-        .ok_or_else(|| host_error("no active app context"))
-    }
-
-    fn pick_directory_start() -> Result<HostValue, HostError> {
-        let launched = gpui_shell_scope::with_current_app(|cx| {
-            let prompt = cx.prompt_for_paths(gpui::PathPromptOptions {
-                files: false,
-                directories: true,
-                multiple: false,
-                prompt: Some("选择扩展工程目录（含 extension.json）".into()),
-            });
-            if let Some(pick) = cx.try_global::<DevPickState>() {
-                *pick.0.borrow_mut() = None;
-            }
-            cx.spawn(async move |cx| {
-                let picked = match prompt.await {
-                    Ok(Ok(Some(paths))) => paths.first().map(|path| path.display().to_string()),
-                    _ => None,
-                };
-                let _ = cx.update(|cx| {
-                    if let Some(pick) = cx.try_global::<DevPickState>() {
-                        *pick.0.borrow_mut() = Some(picked.unwrap_or_default());
-                    }
-                });
-            })
-            .detach();
-            true
-        });
-        if launched == Some(true) {
-            Ok(HostValue::Str("pending".into()))
-        } else {
-            Err(host_error("no active app context for directory picker"))
-        }
-    }
-
-    fn pick_directory_result() -> Result<HostValue, HostError> {
-        let picked = gpui_shell_scope::with_current_app(|cx| {
-            cx.try_global::<DevPickState>()
-                .and_then(|pick| pick.0.borrow().clone())
-        })
-        .flatten();
-        Ok(picked.map(HostValue::Str).unwrap_or(HostValue::Null))
-    }
-
-    let ops = Rc::new(universal_plugins::DevHostOps {
-        list: Rc::new(projects_value),
-        open: Rc::new(open_project),
-        remove: Rc::new(remove_project),
-        open_view: Rc::new(open_view),
-        logs: Rc::new(project_logs),
-        reload: Rc::new(reload_project),
-        watch: Rc::new(watch_project),
-        pick_start: Rc::new(pick_directory_start),
-        pick_result: Rc::new(pick_directory_result),
-    });
     cx.default_global::<DevExtensionRegistry>();
     cx.default_global::<DevLogRing>();
     cx.default_global::<DevWatchSet>();
     cx.default_global::<DevPickState>();
-    universal_plugins::set_dev_host_ops(ops, cx);
+    // 操作集本身在 `dev_host_ops`：每个函数都在主线程上跑，参数与返回值
+    // 都是 JSON，不再依赖 gpui-shell 的 HostValue/with_current_app。
+    crate::dev_host_ops::install(cx);
 }
 
-#[cfg(feature = "shell-plugins")]
-fn close_dev_extension(extension_id: String, cx: &mut gpui::App) {
+#[cfg(feature = "nsh-host")]
+pub(crate) fn close_dev_extension(extension_id: String, cx: &mut gpui::App) {
     let Some(window) = crate::app_init::resolve_navop_window(cx) else {
         extension_view::finish_shell_extension(&extension_id, cx);
         return;
@@ -594,20 +210,13 @@ fn close_dev_extension(extension_id: String, cx: &mut gpui::App) {
     .detach();
 }
 
-#[cfg(feature = "shell-plugins")]
-fn watch_result(watching: bool) -> gpui_shell_scope::HostValue {
-    gpui_shell_scope::HostObject::new()
-        .field("watching", watching)
-        .into()
-}
-
-fn strip_dev_prefix(id: &str) -> String {
+pub(crate) fn strip_dev_prefix(id: &str) -> String {
     id.strip_prefix(DEV_ID_PREFIX).unwrap_or(id).to_string()
 }
 
 /// 工程目录 source 指纹:recursive scan ui/ + entry,按 (相对路径, mt_s) 排序。
 /// dev 视图少、文件小,轮询成本可忽略。
-fn source_fingerprint(root: &std::path::Path) -> Option<String> {
+pub(crate) fn source_fingerprint(root: &std::path::Path) -> Option<String> {
     let entry_rel = {
         let manifest = load_from_dir(root).ok()?;
         manifest.contributes.shell_views.first()?.entry.clone()
@@ -659,7 +268,7 @@ fn is_ignored_watch_dir(path: &std::path::Path) -> bool {
 /// 自动重载已开启的工程。
 #[derive(Default)]
 pub struct DevWatchSet(
-    std::cell::RefCell<
+    pub(crate)  std::cell::RefCell<
         std::collections::HashMap<std::path::PathBuf, (String, gpui::Task<()>, Arc<AtomicBool>)>,
     >,
 );
@@ -667,7 +276,7 @@ impl gpui::Global for DevWatchSet {}
 
 /// 原生目录选择结果槽:pick_start 清空并起 task 等 modal,pick_result 读取。
 #[derive(Default)]
-pub struct DevPickState(std::cell::RefCell<Option<String>>);
+pub struct DevPickState(pub(crate) std::cell::RefCell<Option<String>>);
 impl gpui::Global for DevPickState {}
 
 #[cfg(test)]
@@ -684,7 +293,7 @@ mod tests {
                 "id": id,
                 "name": id,
                 "version": "0.1.0",
-                "engines": { "onetcli": ">=0.1.0", "gpui_shell": "0.6.4" },
+                "engines": { "onetcli": ">=0.1.0", "nsh": "0.3.0" },
                 "api": { "shell": "1.0" },
                 "permissions": ["shell:exec"],
                 "contributes": { "shellViews": [{

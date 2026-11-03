@@ -38,8 +38,7 @@ pub use mirror::{extension_mirror, set_extension_mirror};
 pub use types::{
     RegisteredDocumentExporter, RegisteredIpcRuntimeBinding, RegisteredRemoteFileEditorCommand,
     RegisteredRemoteFileEditorContribution, RegisteredResourceConnectionContribution,
-    RegisteredResourceWorkbenchContribution, RegisteredShellViewContribution,
-    WorkbenchOperationCatalog, WorkbenchOperationEntry, WorkbenchOperationParam,
+    RegisteredShellViewContribution,
 };
 
 #[cfg(all(test, feature = "wasm-components"))]
