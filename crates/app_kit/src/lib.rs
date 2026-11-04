@@ -26,7 +26,7 @@ pub use connection_actions::{
     delete_connection, duplicate_connection, edit_connection, open_new_connection,
     open_new_connection_in_workspace,
 };
-pub use host::{ShellHost, set_shell_host, shell_host};
+pub use host::{ExtensionsHost, ShellHost, set_extensions_host, set_shell_host, shell_host};
 pub use settings::open_settings;
 
 static DOMAIN_REGISTRY: OnceLock<DomainRegistry> = OnceLock::new();

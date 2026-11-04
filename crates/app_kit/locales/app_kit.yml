@@ -286,25 +286,45 @@ NewConnection:
     zh-CN: 全部
     zh-HK: 全部
   category_database:
-    en: Databases
+    en: Database
     zh-CN: 数据库
     zh-HK: 資料庫
+  category_domestic_database:
+    en: Domestic Database
+    zh-CN: 国产数据库
+    zh-HK: 國產資料庫
+  category_time_series:
+    en: Time Series
+    zh-CN: 时序数据库
+    zh-HK: 時序資料庫
+  category_middleware:
+    en: Middleware
+    zh-CN: 中间件
+    zh-HK: 中介軟體
   category_terminal:
-    en: Terminal & Files
-    zh-CN: 终端与文件
-    zh-HK: 終端與檔案
-  category_remote:
-    en: Remote Desktop & Forwarding
-    zh-CN: 远程桌面与转发
-    zh-HK: 遠端桌面與轉發
-  category_extension:
-    en: Extensions
-    zh-CN: 扩展
-    zh-HK: 擴展
+    en: Terminal
+    zh-CN: 终端
+    zh-HK: 終端
+  more_connections:
+    en: "More Connections"
+    zh-CN: "更多连接"
+    zh-HK: "更多連線"
+  more_middleware:
+    en: "More middleware"
+    zh-CN: "更多中间件"
+    zh-HK: "更多中介軟體"
+  more_time_series:
+    en: "More time series"
+    zh-CN: "更多时序数据库"
+    zh-HK: "更多時序資料庫"
   description_database:
     en: Relational database connection
     zh-CN: 关系型数据库连接
     zh-HK: 關聯式資料庫連線
+  description_more_connections:
+    en: Find more connection drivers in Extensions
+    zh-CN: 前往扩展市场发现更多连接类型
+    zh-HK: 前往擴展市場探索更多連線類型
   description_redis:
     en: Redis standalone, sentinel or cluster connection
     zh-CN: Redis 单机、哨兵或集群连接
