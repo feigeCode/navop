@@ -180,6 +180,64 @@ fn build_tool_registry_for_surface(
 }
 
 #[cfg(test)]
+pub(crate) mod tests_helpers {
+
+    /// 写入临时 extension.json 并把 catalog + UniversalPluginService
+    /// 注册进 GPUI globals（扩展工具注册测试用）。
+    pub(crate) fn install_extension_catalog(cx: &mut gpui::App, manifest_json: &str) {
+        let directory = tempfile::tempdir().expect("temporary extension dir");
+        // shellApp.entry 要求文件存在：解析前先落一个占位入口。
+        let entry = directory.path().join("./app/index.html");
+        if let Some(parent) = entry.parent() {
+            std::fs::create_dir_all(parent).expect("app dir should be created");
+        }
+        std::fs::write(&entry, "<!doctype html><title>app</title>")
+            .expect("app entry should be written");
+        std::fs::write(directory.path().join("extension.json"), manifest_json)
+            .expect("temporary manifest should be written");
+        let manifest = extension_runtime::extension::manifest::load_from_dir(directory.path())
+            .expect("manifest should parse");
+        let catalog = extension_runtime::ExtensionRuntimeCatalog::from_manifests(vec![manifest])
+            .expect("catalog should build");
+
+        let global_catalog = cx.default_global::<extension_runtime::GlobalExtensionRuntimeCatalog>();
+        global_catalog.replace(catalog);
+        // tempdir 生命周期只到本函数；catalog 已经把需要的路径收进结构，安全。
+        std::mem::forget(directory);
+        // universal_plugins 需要 GPUI 全局 Tokio；测试里用不起 monitor 的变体，
+        // 避免真实 Tokio worker 唤醒确定性测试调度器。
+        one_core::gpui_tokio::init(cx);
+        universal_plugins::init_for_tests(cx);
+    }
+
+    /// 与 tests 模块共用的连接仓库注册。
+    pub(crate) fn register_connection_repository(cx: &mut gpui::App) {
+        use one_core::storage::{
+            ConnectionRepository, GlobalStorageState, StorageManager, WorkspaceRepository,
+        };
+
+        let storage = StorageManager::new_with_connection(in_memory_sqlite());
+        let repo = ConnectionRepository::new(storage.connection());
+        storage.register(repo);
+        storage.register(WorkspaceRepository::new(storage.connection()));
+        cx.set_global(GlobalStorageState { storage });
+    }
+
+    fn in_memory_sqlite() -> one_core::storage::connection::SqliteConnection {
+        let conn = one_core::storage::connection::SqliteConnection::open_with_pool_size(
+            ":memory:", 1,
+        )
+        .expect("sqlite should open");
+        conn.with_connection(|db| {
+            one_core::storage::migration::run_migrations(db)?;
+            Ok(())
+        })
+        .expect("migrations should run");
+        conn
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::{ToolRegistrySurface, build_tool_registry};
     use crate::public_mcp_runtime::register_internal_function;

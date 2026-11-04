@@ -19,6 +19,7 @@ mod grant;
 mod monitor;
 mod native;
 mod opener;
+mod plugin_ai_panel;
 mod session;
 mod tab;
 mod theme;
@@ -375,12 +376,35 @@ mod tests {
         }
     }
 
+    /// 测试用内存库（AI 侧栏回查连接走 GlobalStorageState）。
+    fn test_sqlite() -> one_core::storage::connection::SqliteConnection {
+        let conn =
+            one_core::storage::connection::SqliteConnection::open_with_pool_size(":memory:", 1)
+                .expect("sqlite should open");
+        conn.with_connection(|db| {
+            one_core::storage::migration::run_migrations(db)?;
+            Ok(())
+        })
+        .expect("migrations should run");
+        conn
+    }
+
     #[gpui::test]
     fn a_registered_view_loads_and_reaches_the_host(cx: &mut TestAppContext) {
         cx.update(|cx| {
             gpui_component::init(cx);
             // 能力平面会话要 tokio 句柄；台子里现起一个最小的。
             one_core::gpui_tokio::init(cx);
+            // AI 侧栏装载时要从全局存储回查连接；台子里给一份空的。
+            use one_core::storage::{
+                ConnectionRepository, GlobalStorageState, StorageManager, WorkspaceRepository,
+            };
+            let storage = StorageManager::new_with_connection(test_sqlite());
+            storage.register(ConnectionRepository::new(storage.connection()));
+            storage.register(WorkspaceRepository::new(storage.connection()));
+            cx.set_global(GlobalStorageState { storage });
+            // AI 侧栏（DefaultAgentChatPanel）还需要 LLM provider 状态。
+            one_core::llm::init(cx);
         });
         let service = cx
             .update(|cx| crate::universal_plugins::register_application_owner(cx))

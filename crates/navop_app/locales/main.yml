@@ -3603,6 +3603,14 @@ Settings:
         en: Expose app-provided function tools to the built-in Agent
         zh-CN: 向内置 Agent 暴露应用内置函数工具
         zh-HK: 向內建 Agent 暴露應用內建函數工具
+      extensions:
+        en: Extension Tools
+        zh-CN: 扩展工具
+        zh-HK: 擴展工具
+      extensions_desc:
+        en: Expose tools declared by installed extensions (com.navop.docker etc.)
+        zh-CN: 暴露已安装扩展声明的 AI 工具（如 com.navop.docker）
+        zh-HK: 暴露已安裝擴展聲明的 AI 工具（如 com.navop.docker）
     Mcp:
       group_title:
         en: MCP

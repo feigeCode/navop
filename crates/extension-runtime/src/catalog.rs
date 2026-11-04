@@ -20,7 +20,7 @@ use super::types::{
     ExtensionRuntimeError, RegisteredDocumentExporter, RegisteredDocumentRenderer,
     RegisteredHtmlPreviewTransform, RegisteredIpcRuntimeBinding, RegisteredKeybindingContribution,
     RegisteredRemoteFileEditorContribution, RegisteredResourceConnectionContribution,
-    RegisteredShellAppContribution, WasmRuntimeBinding,
+    RegisteredShellAppContribution, RegisteredToolContribution, WasmRuntimeBinding,
 };
 
 static WASM_CATALOG_LOG_KEYS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -48,6 +48,8 @@ pub struct ExtensionRuntimeCatalog {
     /// 扩展 id → nsh app（一个扩展最多一个）。
     pub(super) shell_apps: BTreeMap<String, RegisteredShellAppContribution>,
     pub(super) resource_connections: BTreeMap<String, RegisteredResourceConnectionContribution>,
+    /// `{extension}::{tool_id}` → 已注册扩展工具。
+    pub(super) tools: BTreeMap<String, RegisteredToolContribution>,
 }
 
 #[derive(Debug)]
@@ -86,6 +88,7 @@ impl ExtensionRuntimeCatalog {
             remote_file_editors: Vec::new(),
             shell_apps: BTreeMap::new(),
             resource_connections: BTreeMap::new(),
+            tools: BTreeMap::new(),
         }
     }
 
@@ -210,6 +213,19 @@ impl ExtensionRuntimeCatalog {
     ) -> Option<&RegisteredResourceConnectionContribution> {
         self.resource_connections
             .get(&format!("{extension_id}::{connection_id}"))
+    }
+
+    /// 目录里登记的全部扩展工具。
+    pub fn tools(&self) -> impl Iterator<Item = &RegisteredToolContribution> {
+        self.tools.values()
+    }
+
+    pub fn tool(
+        &self,
+        extension_id: &str,
+        tool_id: &str,
+    ) -> Option<&RegisteredToolContribution> {
+        self.tools.get(&format!("{extension_id}::{tool_id}"))
     }
 
     pub fn document_renderer_for_kind(

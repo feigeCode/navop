@@ -11,7 +11,7 @@ use serde_json::Value;
 use crate::extension::is_active_install_dir_name;
 use crate::extension::manifest::{
     HostApiVersions, Manifest, ManifestError, current_host_version, load_and_check,
-    required_spawn_permission, validate_shell_app,
+    required_spawn_permission, validate_shell_app, validate_tools,
 };
 
 use super::catalog::ExtensionRuntimeCatalog;
@@ -19,11 +19,21 @@ use super::types::{
     ExtensionRuntimeError, RegisteredDocumentExporter, RegisteredDocumentRenderer,
     RegisteredHtmlPreviewTransform, RegisteredIpcRuntimeBinding, RegisteredKeybindingContribution,
     RegisteredRemoteFileEditorCommand, RegisteredRemoteFileEditorContribution,
-    RegisteredResourceConnectionContribution, RegisteredShellAppContribution, WasmRuntimeBinding,
-    command_descriptor, runtime_key, slot_item_from_menu,
+    RegisteredResourceConnectionContribution, RegisteredShellAppContribution,
+    RegisteredToolContribution, WasmRuntimeBinding, command_descriptor, runtime_key,
+    slot_item_from_menu,
 };
 
 static WASM_REGISTRATION_LOG_KEYS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+/// 从 `/contributes/tools/<id>/<field>` 风格的错误路径里取出工具 id。
+fn tool_id_from_field(field: &str) -> String {
+    field
+        .strip_prefix("/contributes/tools/")
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or("unknown")
+        .to_string()
+}
 
 fn validate_resource_connection(
     manifest: &Manifest,
@@ -330,6 +340,7 @@ impl ExtensionRuntimeCatalog {
         self.register_wasm_runtimes(&manifest)?;
         self.register_ipc_runtimes(&manifest)?;
         self.register_shell_app(&manifest)?;
+        self.register_tools(&manifest)?;
         self.register_resource_connections(&manifest)?;
         self.register_html_preview_transforms(&manifest)?;
         self.register_document_renderers(&manifest)?;
@@ -422,6 +433,51 @@ impl ExtensionRuntimeCatalog {
                     .then(|| manifest.engines.nsh.clone()),
             },
         );
+        Ok(())
+    }
+
+    fn register_tools(&mut self, manifest: &Manifest) -> Result<(), ExtensionRuntimeError> {
+        validate_tools(manifest).map_err(|error| {
+            ExtensionRuntimeError::InvalidTool {
+                tool_id: tool_id_from_field(&error.field),
+                reason: error.reason,
+            }
+        })?;
+        let Some(app) = manifest.contributes.shell_app.as_ref() else {
+            return Ok(());
+        };
+        for tool in &manifest.contributes.tools {
+            let Some(runtime_id) = app.backends.get(&tool.backend) else {
+                return Err(ExtensionRuntimeError::InvalidTool {
+                    tool_id: tool.id.clone(),
+                    reason: format!("backend `{}` 不在 shellApp.backends 里", tool.backend),
+                });
+            };
+            let key = runtime_key(&manifest.id, &tool.id);
+            if self.tools.contains_key(&key) {
+                return Err(ExtensionRuntimeError::InvalidTool {
+                    tool_id: tool.id.clone(),
+                    reason: "同一扩展内的工具 id 不能重复".to_string(),
+                });
+            }
+            self.tools.insert(
+                key,
+                RegisteredToolContribution {
+                    extension_id: manifest.id.clone(),
+                    id: tool.id.clone(),
+                    title: tool.title.clone(),
+                    description: tool.description.clone(),
+                    runtime_key: runtime_key(&manifest.id, runtime_id),
+                    method: tool.method.clone(),
+                    input_schema: tool.input_schema.clone(),
+                    risk: tool.risk,
+                    annotations: tool.annotations.clone(),
+                    connection: tool.connection,
+                    timeout_ms: tool.timeout_ms,
+                    max_result_bytes: tool.max_result_bytes,
+                },
+            );
+        }
         Ok(())
     }
 

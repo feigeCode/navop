@@ -17,6 +17,9 @@ pub use shell::RegisteredShellAppContribution;
 #[path = "types/resource_connection.rs"]
 mod resource_connection;
 pub use resource_connection::RegisteredResourceConnectionContribution;
+#[path = "types/tools.rs"]
+mod tools;
+pub use tools::RegisteredToolContribution;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisteredRemoteFileEditorContribution {
@@ -152,6 +155,8 @@ pub enum ExtensionRuntimeError {
     DuplicateShellApp { extension_id: String },
     #[error("invalid resource connection: {0}")]
     InvalidResourceConnection(String),
+    #[error("invalid tool `{tool_id}`: {reason}")]
+    InvalidTool { tool_id: String, reason: String },
     #[error("invalid declarative layout: {reason}")]
     InvalidLayout { reason: String },
 }

@@ -70,6 +70,7 @@ fn agent_runtime_tool_registry_ignores_public_mcp_toolset_exposure(cx: &mut Test
             redis: false,
             mongo: false,
             internal_functions: false,
+            extensions: false,
         };
         cx.set_global(settings);
 

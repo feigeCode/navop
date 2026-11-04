@@ -80,6 +80,9 @@ pub struct NshTab {
     is_connection: bool,
     /// 连接资源准备好了但还没交给会话（建会话要等窗口）。
     prepared_connection: Option<super::connection::PreparedNshConnection>,
+    /// 插件 AI 侧栏（plugin-ai-tools.md §9）：每 tab 一个实例，默认收起。
+    /// 页面装载成功后创建；会话 v1 只在内存里，tab 关掉即丢。
+    plugin_ai: Option<Entity<super::plugin_ai_panel::PluginAiPanel>>,
 }
 
 impl NshTab {
@@ -178,6 +181,7 @@ impl NshTab {
                 is_connection: connection.is_some(),
                 connection,
                 prepared_connection: None,
+                plugin_ai: None,
             }
         });
         tab.update(cx, |tab, cx| tab.start_prepare(cx));
@@ -325,6 +329,33 @@ impl NshTab {
         };
         // 事件泵先于 handler 建好：`navop.event.subscribe` 会把订阅交给它。
         let pump = EventPump::new(self.channel.clone(), Arc::clone(&session));
+
+        // 插件 AI 侧栏（§9）：页面装载成功后建好（默认收起，随时可开）。
+        // 连接型页面回查完整 StoredConnection（build_sidebar_resource_state
+        // 需要它），查不到按"无连接"处理。先建面板再注册 ABI：navop.ai.*
+        // 的 handler 需要面板句柄。
+        let connection = self.connection.as_ref().and_then(|launch| {
+            use one_core::storage::traits::Repository as _;
+            let id = launch.connection_id();
+            cx.try_global::<one_core::storage::GlobalStorageState>()
+                .and_then(|state| state.storage.get::<one_core::storage::ConnectionRepository>())
+                .and_then(|repo| repo.get(id).ok().flatten())
+        });
+        let contribution_title = self.contribution.title.clone();
+        let extension_id: Arc<str> = Arc::from(self.extension_id.as_str());
+        let route: Option<Arc<str>> = self.route.as_deref().map(Arc::from);
+        let service = self.service.clone();
+        let plugin_ai = cx.new(|cx| {
+            super::plugin_ai_panel::PluginAiPanel::new(
+                &service,
+                extension_id,
+                Arc::from(contribution_title.as_str()),
+                route,
+                connection,
+                window,
+                cx,
+            )
+        });
         // 先把能力挂到通道上，再让页面跑起来。
         abi::register(
             &self.channel,
@@ -332,7 +363,9 @@ impl NshTab {
             Arc::clone(&session),
             &pump,
             &self.dispatcher,
+            Some(plugin_ai.downgrade()),
         );
+        self.plugin_ai = Some(plugin_ai);
         let view = cx.new(|cx| AppView::new(options, window, cx));
         // 首帧前把宿主主题与界面语言交给页面（spec §2 附、§7 主题走原生）。
         theme::push(&view, cx);
@@ -360,6 +393,8 @@ impl NshTab {
         self.session = Some(session);
         self.pump = Some(pump);
         self.view = Some(view);
+
+
 
         // 两阶段装载的第二步：首帧画出来、且没有立刻报错，才算这个 build
         // 健康，把它记进信任库（方案 §8）。失败就让上一个 build 继续可用。
@@ -678,7 +713,18 @@ impl Render for NshTab {
         }
         let mut root = div().size_full().min_w_0().min_h_0();
         match (&self.view, self.error.as_deref()) {
-            (Some(view), _) => root = root.child(view.clone()),
+            (Some(view), _) => {
+                // AI 侧栏贴右缘；页面本体占剩余空间（min_w_0 防 intrinsic 挤压）。
+                // h_flex 默认 items_center：侧栏与页面都显式 h_full。
+                root = root.child(
+                    gpui_component::h_flex()
+                        .size_full()
+                        .min_w_0()
+                        .min_h_0()
+                        .child(div().flex_1().min_w_0().min_h_0().child(view.clone()))
+                        .children(self.plugin_ai.clone()),
+                );
+            }
             (None, Some(error)) => {
                 root = root
                     .p_4()

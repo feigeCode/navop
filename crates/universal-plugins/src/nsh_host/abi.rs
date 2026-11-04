@@ -108,10 +108,12 @@ pub(crate) fn register(
     session: Arc<NshSession>,
     pump: &Arc<EventPump>,
     dispatcher: &super::dispatch::MainThread,
+    plugin_ai: Option<gpui::WeakEntity<super::plugin_ai_panel::PluginAiPanel>>,
 ) {
     register_post(channel, &abi);
     register_capability_plane(channel, &abi, &session, pump);
     register_dev(channel, &abi, &session, dispatcher);
+    register_ai_plane(channel, &abi, &session, dispatcher, plugin_ai);
 }
 
 /// `host.post("navop.log", { level, message, fields })`。
@@ -283,6 +285,149 @@ impl DevOp {
             Self::PickResult => super::dev::op(cx, |ops| ops.pick_result.clone())?(cx),
         }
     }
+}
+
+/// AI 平面（`navop.ai.*`，plugin-ai-tools.md §9.4）。
+///
+/// - `navop.ai.context`：`host.post`，页面把上下文覆盖式报给宿主；
+///   侧栏没建（面板装载失败等）就静默丢弃，post 没有应答。
+/// - `navop.ai.open`：`host.call`，打开本 tab 的 AI 侧栏。
+/// - `navop.ai.ask`：`host.call`，打开侧栏并发一条消息（submit 默认 true，
+///   v1 不做「只预填不发送」，一律直接发送）。
+///
+/// 权限不设新模块：shellApp 存在（页面能起来）即可用。侧栏实体在主线程，
+/// 所以所有变更都经 dispatcher 派回主线程。
+fn register_ai_plane(
+    channel: &HostChannel,
+    abi: &Arc<HostAbi>,
+    session: &Arc<NshSession>,
+    dispatcher: &super::dispatch::MainThread,
+    plugin_ai: Option<gpui::WeakEntity<super::plugin_ai_panel::PluginAiPanel>>,
+) {
+    // navop.ai.context —— post-only，无应答，失败只记宿主日志。
+    let abi_for_context = Arc::clone(abi);
+    let panel_for_context = plugin_ai.clone();
+    let dispatcher_for_context = dispatcher.clone();
+    let session_for_context = Arc::clone(session);
+    channel.handle("navop.ai.context", move |call| {
+        let context = call.data().clone();
+        if !call.is_post() {
+            // post-only 名字上的 host.call 按参数错误回。
+            if let Some(reply) = call.into_reply() {
+                reject(reply, invalid_argument("navop.ai.context 只接受 host.post"));
+            }
+            return;
+        }
+        if abi_for_context.cancelled() {
+            return;
+        }
+        if serialization_too_large(&context) {
+            tracing::debug!("navop.ai.context 超过 2KB，丢弃");
+            return;
+        }
+        let Some(panel) = panel_for_context.clone() else {
+            return;
+        };
+        let dispatcher = dispatcher_for_context.clone();
+        session_for_context.tokio().spawn(async move {
+            let _ = dispatcher
+                .run(move |cx| {
+                    if let Some(panel) = panel.upgrade() {
+                        panel.update(cx, |panel, cx| panel.set_page_context(context, cx));
+                    }
+                    Ok(serde_json::json!(null))
+                })
+                .await;
+        });
+    });
+
+    // navop.ai.open —— 打开侧栏，回 {ok:true}。
+    let abi_for_open = Arc::clone(abi);
+    let panel_for_open = plugin_ai.clone();
+    let dispatcher_for_open = dispatcher.clone();
+    let session_for_open = Arc::clone(session);
+    channel.handle("navop.ai.open", move |call| {
+        let Some(reply) = call.into_reply() else {
+            return;
+        };
+        if abi_for_open.cancelled() {
+            reject(reply, cancelled());
+            return;
+        }
+        let Some(panel) = panel_for_open.clone() else {
+            reject(reply, ai_unavailable());
+            return;
+        };
+        let dispatcher = dispatcher_for_open.clone();
+        session_for_open.tokio().spawn(async move {
+            let result = dispatcher
+                .run(move |cx| {
+                    let Some(panel) = panel.upgrade() else {
+                        return Err("AI 侧栏不可用".to_string());
+                    };
+                    panel.update(cx, |panel, cx| panel.open_panel(cx));
+                    Ok(serde_json::json!({ "ok": true }))
+                })
+                .await;
+            settle_dev(reply, result);
+        });
+    });
+
+    // navop.ai.ask —— 打开侧栏并发消息，回 {ok:true}。
+    let abi_for_ask = Arc::clone(abi);
+    let panel_for_ask = plugin_ai.clone();
+    let dispatcher_for_ask = dispatcher.clone();
+    let session_for_ask = Arc::clone(session);
+    channel.handle("navop.ai.ask", move |call| {
+        let data = call.data().clone();
+        let Some(reply) = call.into_reply() else {
+            return;
+        };
+        if abi_for_ask.cancelled() {
+            reject(reply, cancelled());
+            return;
+        }
+        // prompt 必须是非空字符串（到尾空白不算）。
+        let prompt = payload_str(&data, "prompt")
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty());
+        let Some(prompt) = prompt else {
+            reject(reply, invalid_argument("navop.ai.ask 需要 prompt 参数"));
+            return;
+        };
+        let Some(panel) = panel_for_ask.clone() else {
+            reject(reply, ai_unavailable());
+            return;
+        };
+        let dispatcher = dispatcher_for_ask.clone();
+        session_for_ask.tokio().spawn(async move {
+            let result = dispatcher
+                .run(move |cx| {
+                    let Some(panel) = panel.upgrade() else {
+                        return Err("AI 侧栏不可用".to_string());
+                    };
+                    panel.update(cx, |panel, cx| panel.ask(prompt, cx));
+                    Ok(serde_json::json!({ "ok": true }))
+                })
+                .await;
+            settle_dev(reply, result);
+        });
+    });
+}
+
+/// AI 侧栏不可用（面板没建起来）的失败。错误码复用 RUNTIME_UNAVAILABLE
+/// （AI 平面对页面就是一块宿主运行面）。
+fn ai_unavailable() -> HostFailure {
+    HostFailure::new(
+        crate::host_error::ErrorCode::RuntimeUnavailable,
+        "AI 侧栏不可用",
+    )
+}
+
+fn serialization_too_large(value: &Value) -> bool {
+    serde_json::to_string(value)
+        .map(|serialized| serialized.len() > 2048)
+        .unwrap_or(true)
 }
 
 /// dev 操作的失败只有一句话（没有稳定 code），按参数错误回给页面。

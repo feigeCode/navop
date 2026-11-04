@@ -25,6 +25,8 @@ pub enum McpToolset {
     Redis,
     Mongo,
     Connections,
+    /// 扩展声明的 AI 工具（plugin-ai-tools.md，默认关闭）。
+    Extensions,
 }
 
 type ProviderFactory = Arc<dyn Fn(&App) -> Vec<Arc<dyn PublicMcpToolProvider>> + Send + Sync>;
@@ -220,6 +222,7 @@ fn set_toolset_fields(toolsets: &mut ToolExposureToolsetSettings, toolset: McpTo
         McpToolset::Redis => toolsets.redis = enabled,
         McpToolset::Mongo => toolsets.mongo = enabled,
         McpToolset::Connections => toolsets.connections = enabled,
+        McpToolset::Extensions => toolsets.extensions = enabled,
     }
 }
 
@@ -302,6 +305,7 @@ pub fn toolset_enabled(toolset: McpToolset, toolsets: &ToolExposureToolsetSettin
         McpToolset::Redis => toolsets.redis,
         McpToolset::Mongo => toolsets.mongo,
         McpToolset::Connections => toolsets.connections,
+        McpToolset::Extensions => toolsets.extensions,
     }
 }
 

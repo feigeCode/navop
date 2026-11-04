@@ -8,8 +8,9 @@
 rust_i18n::i18n!("locales", fallback = "en");
 
 mod connection_icon;
-mod extension_connection_form;
+pub mod extension_connection_form;
 mod extension_resource;
+pub mod extension_tools;
 #[cfg(feature = "nsh-host")]
 mod host_error;
 #[cfg(feature = "nsh-host")]
@@ -40,5 +41,5 @@ pub fn refresh_shell_apps(cx: &mut gpui::App) {
 pub fn refresh_shell_apps(_cx: &mut gpui::App) {}
 
 pub use universal_plugins::{
-    GlobalUniversalPluginService, UniversalPluginService, init, spawn_shutdown,
+    GlobalUniversalPluginService, UniversalPluginService, init, init_for_tests, spawn_shutdown,
 };

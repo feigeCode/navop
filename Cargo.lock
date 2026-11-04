@@ -14764,6 +14764,8 @@ dependencies = [
 name = "universal-plugins"
 version = "0.16.1"
 dependencies = [
+ "agent_runtime",
+ "ai_chat_view",
  "anyhow",
  "async-trait",
  "base64 0.22.1",
@@ -14781,11 +14783,15 @@ dependencies = [
  "nsh-platform-gpui",
  "one-assets",
  "one-core",
+ "one-ui",
  "rust-i18n",
+ "serde",
  "serde_json",
  "smol",
  "tempfile",
  "tokio",
+ "tokio-util",
+ "tool_runtime",
  "tracing",
  "uuid",
 ]

@@ -31,6 +31,11 @@ pub(crate) struct NshConnectionLaunch {
 }
 
 impl NshConnectionLaunch {
+    /// 已保存连接的 id（AI 侧栏回查完整 StoredConnection 用）。
+    pub(crate) fn connection_id(&self) -> i64 {
+        self.resource.connection_id()
+    }
+
     pub(crate) fn new(
         connection: &one_core::storage::StoredConnection,
         contribution: &extension_runtime::RegisteredResourceConnectionContribution,

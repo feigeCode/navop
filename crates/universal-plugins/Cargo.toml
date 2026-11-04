@@ -6,6 +6,9 @@ edition.workspace = true
 
 [dependencies]
 one-assets = { workspace = true }
+agent_runtime = { workspace = true }
+tool_runtime = { workspace = true }
+ai_chat_view = { workspace = true, optional = true }
 anyhow.workspace = true
 async-trait.workspace = true
 base64.workspace = true
@@ -24,10 +27,13 @@ nsh-platform-gpui = { workspace = true, optional = true }
 nsh-core = { workspace = true, optional = true }
 nsh-engine = { workspace = true, optional = true }
 one-core.workspace = true
+one-ui = { workspace = true, optional = true }
 rust-i18n.workspace = true
+serde = { workspace = true, optional = true }
 serde_json.workspace = true
 smol.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 
@@ -40,7 +46,14 @@ default = []
 # 扩展页面的 UI 平面：nsh 宿主（AppView）。扩展页面以 nsh 程序运行，
 # 画在 navop 的 GPUI 窗口里，方案见
 # docs/extension-resource-plugins/nsh-migration-plan.md。
-nsh-host = ["dep:nsh-platform-gpui", "dep:nsh-core", "dep:nsh-engine"]
+nsh-host = [
+    "dep:nsh-platform-gpui",
+    "dep:nsh-core",
+    "dep:nsh-engine",
+    "dep:ai_chat_view",
+    "dep:one-ui",
+    "dep:serde",
+]
 
 [lints]
 workspace = true

@@ -340,6 +340,13 @@ impl UniversalPluginService {
         self.catalog_revision.store(revision, Ordering::Release);
     }
 
+    /// 当前 catalog 快照（extension_tools 注册表构建用）。
+    pub(crate) fn catalog_snapshot(&self) -> Arc<extension_runtime::ExtensionRuntimeCatalog> {
+        self.sync_catalog();
+        let (_, catalog) = self.catalog_source.snapshot();
+        catalog.unwrap_or_else(|| Arc::new(ExtensionRuntimeCatalog::empty()))
+    }
+
     /// Gracefully stops active runtimes and then stops the monitor task.
     pub(crate) async fn shutdown(&self) {
         let _shutdown_guard = self.shutdown_lock.lock().await;
@@ -623,6 +630,16 @@ pub fn init(cx: &mut gpui::App) {
         }
     })
     .detach();
+}
+
+/// 只注册 global、不起 monitor / 不挂 quit 钩子的 [`init`]。
+///
+/// 给 `#[gpui::test]` 用：真实 monitor 完成时会从 Tokio worker 线程唤醒
+/// GPUI background executor，让确定性测试调度器误报 non-deterministic。
+/// 注册表构建（extension_tools 等）只读 catalog 快照，不需要 monitor。
+pub fn init_for_tests(cx: &mut gpui::App) {
+    register_application_owner(cx)
+        .expect("universal plugin service must have exactly one application owner");
 }
 
 pub fn spawn_shutdown(

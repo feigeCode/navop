@@ -8,6 +8,9 @@ use super::menus::{MenuCommandRef, MenuContrib};
 #[path = "contributes/shell.rs"]
 mod shell;
 pub use shell::{ShellAppContrib, ShellHostModule};
+#[path = "contributes/tools.rs"]
+mod tools;
+pub use tools::{ToolAnnotations, ToolContrib, ToolRisk};
 #[path = "contributes/connection.rs"]
 mod connection;
 #[path = "contributes/terminal_launch.rs"]
@@ -45,6 +48,12 @@ pub struct ContributesManifest {
     /// 一个扩展最多一个 nsh app（多页面在 app 内路由）。
     #[serde(default, rename = "shellApp")]
     pub shell_app: Option<ShellAppContrib>,
+    /// 扩展向宿主 AI 声明的工具（`contributes.tools`）。
+    ///
+    /// 声明面：必须有 shellApp 且工具的 backend 必须是 `shellApp.backends`
+    /// 的别名，安装期校验在 `tools_validation.rs`。
+    #[serde(default)]
+    pub tools: Vec<ToolContrib>,
     #[serde(default)]
     pub views: Vec<Value>,
     #[serde(default)]
@@ -82,6 +91,7 @@ impl ContributesManifest {
             + self.document_exporters.len()
             + self.remote_file_editors.len()
             + usize::from(self.shell_app.is_some())
+            + self.tools.len()
             + self.views.len()
             + self.tasks.len()
             + self.data_types.len()
