@@ -230,3 +230,126 @@ Settings:
         en: timed out
         zh-CN: 检查超时
         zh-HK: 檢查超時
+
+# 新建连接向导（app_kit 提供，三产品共用）
+NewConnection:
+  title_new:
+    en: New Connection
+    zh-CN: 新建连接
+    zh-HK: 新建連線
+  title_edit:
+    en: Edit Connection
+    zh-CN: 编辑连接
+    zh-HK: 編輯連線
+  title_duplicate:
+    en: Duplicate Connection
+    zh-CN: 复制连接
+    zh-HK: 複製連線
+  window_title:
+    en: Connection
+    zh-CN: 连接
+    zh-HK: 連線
+  close:
+    en: Close
+    zh-CN: 关闭
+    zh-HK: 關閉
+  cancel:
+    en: Cancel
+    zh-CN: 取消
+    zh-HK: 取消
+  next:
+    en: Next
+    zh-CN: 下一步
+    zh-HK: 下一步
+  previous:
+    en: Back
+    zh-CN: 上一步
+    zh-HK: 上一步
+  step_indicator:
+    en: "Step %{current} of 2"
+    zh-CN: "第 %{current} 步 / 共 2 步"
+    zh-HK: "第 %{current} 步 / 共 2 步"
+  select_type_title:
+    en: Select Connection Type
+    zh-CN: 选择连接类型
+    zh-HK: 選擇連線類型
+  select_type_hint:
+    en: Click to select, then click Next; or double-click to open the form directly.
+    zh-CN: 单击选择后点击下一步，或双击直接进入连接表单。
+    zh-HK: 單擊選擇後點擊下一步，或雙擊直接進入連線表單。
+  empty:
+    en: No connection types are available in this product.
+    zh-CN: 当前产品没有可用的连接类型。
+    zh-HK: 當前產品沒有可用的連線類型。
+  category_all:
+    en: All
+    zh-CN: 全部
+    zh-HK: 全部
+  category_database:
+    en: Databases
+    zh-CN: 数据库
+    zh-HK: 資料庫
+  category_terminal:
+    en: Terminal & Files
+    zh-CN: 终端与文件
+    zh-HK: 終端與檔案
+  category_remote:
+    en: Remote Desktop & Forwarding
+    zh-CN: 远程桌面与转发
+    zh-HK: 遠端桌面與轉發
+  category_extension:
+    en: Extensions
+    zh-CN: 扩展
+    zh-HK: 擴展
+  description_database:
+    en: Relational database connection
+    zh-CN: 关系型数据库连接
+    zh-HK: 關聯式資料庫連線
+  description_redis:
+    en: Redis standalone, sentinel or cluster connection
+    zh-CN: Redis 单机、哨兵或集群连接
+    zh-HK: Redis 單機、哨兵或叢集連線
+  description_mongodb:
+    en: MongoDB database connection
+    zh-CN: MongoDB 数据库连接
+    zh-HK: MongoDB 資料庫連線
+  description_ssh:
+    en: Remote server terminal and file connection
+    zh-CN: 远程服务器终端与文件连接
+    zh-HK: 遠端伺服器終端與檔案連線
+  description_ftp:
+    en: Standalone FTP / FTPS file transfer connection
+    zh-CN: 独立 FTP / FTPS 文件传输连接
+    zh-HK: 獨立 FTP / FTPS 檔案傳輸連線
+  description_serial:
+    en: Serial device connection
+    zh-CN: 串口设备连接
+    zh-HK: 串口裝置連線
+  description_telnet:
+    en: Telnet network device connection
+    zh-CN: Telnet 网络设备连接
+    zh-HK: Telnet 網絡設備連線
+  description_port_forwarding:
+    en: SSH local or remote port forwarding and SOCKS tunnels
+    zh-CN: SSH 本地、远程端口转发或 SOCKS 隧道
+    zh-HK: SSH 本機、遠端連接埠轉發或 SOCKS 隧道
+  description_rdp:
+    en: Remote Desktop Protocol connection
+    zh-CN: 远程桌面协议连接
+    zh-HK: 遠端桌面協議連線
+  description_vnc:
+    en: VNC remote desktop connection
+    zh-CN: VNC 远程桌面连接
+    zh-HK: VNC 遠端桌面連線
+  description_terminal:
+    en: Terminal and file connection
+    zh-CN: 终端与文件类连接
+    zh-HK: 終端與檔案類連線
+  description_remote:
+    en: Remote desktop and port forwarding connection
+    zh-CN: 远程桌面与端口转发连接
+    zh-HK: 遠端桌面與連接埠轉發連線
+  description_extension:
+    en: Connection type provided by an extension
+    zh-CN: 由扩展提供的连接类型
+    zh-HK: 由擴展提供的連線類型

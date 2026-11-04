@@ -443,6 +443,7 @@ dependencies = [
  "gpui-fast",
  "image",
  "mcp_host",
+ "one-assets",
  "one-core",
  "public_mcp",
  "rusqlite",

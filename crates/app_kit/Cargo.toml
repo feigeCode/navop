@@ -19,6 +19,7 @@ gpui-component.workspace = true
 gpui.workspace = true
 image.workspace = true
 mcp_host.workspace = true
+one-assets.workspace = true
 one-core.workspace = true
 public_mcp.workspace = true
 rusqlite.workspace = true
