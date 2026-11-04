@@ -1,10 +1,10 @@
 //! 导入规划的纯函数：判重、重命名、工作区匹配与统计。
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use one_core::storage::ConnectionType;
 
-use super::{BundleConnection, ConnectionBundle};
+use super::{BundleConnection, BundleWorkspace, ConnectionBundle};
 
 /// 一次导入的统计结果。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -68,6 +68,8 @@ pub struct PlannedWorkspace {
     pub name: String,
     pub color: Option<String>,
     pub icon: Option<String>,
+    /// 父工作区名（已规范化）；`None` 表示顶层。父级一定排在子级之前。
+    pub parent_key: Option<String>,
 }
 
 /// 待写入的连接（id、云端字段等本地元数据全部清空）。
@@ -122,16 +124,32 @@ pub fn plan_import(
         .map(|name| normalize_name(name))
         .collect();
     let mut plan = ImportPlan::default();
+    let bundle_workspace_names: HashMap<&str, &str> = bundle
+        .workspaces
+        .iter()
+        .filter_map(|workspace| Some((workspace.id.as_deref()?, workspace.name.as_str())))
+        .collect();
 
-    for workspace in &bundle.workspaces {
+    // 按「父在前」展开：迁移包里的顺序不保证父级先出现，而父级必须先于子级落库，
+    // 子级才能拿到父工作区的本地 id。
+    for workspace in order_workspaces(&bundle.workspaces) {
         let key = normalize_name(&workspace.name);
-        if key.is_empty() || !workspace_keys.insert(key) {
+        if key.is_empty() || !workspace_keys.insert(key.clone()) {
             continue;
         }
+        // 父级可能来自已有工作区，也可能是本次刚规划的工作区；两种情况都已写进
+        // workspace_keys。父级缺失、自指向或成环时降级为顶层，保证导入能继续。
+        let parent_key = workspace
+            .parent
+            .as_deref()
+            .and_then(|parent_id| bundle_workspace_names.get(parent_id))
+            .map(|parent_name| normalize_name(parent_name))
+            .filter(|parent_key| parent_key != &key && workspace_keys.contains(parent_key));
         plan.workspaces.push(PlannedWorkspace {
             name: workspace.name.trim().to_string(),
             color: workspace.color.clone(),
             icon: workspace.icon.clone(),
+            parent_key,
         });
     }
 
@@ -248,4 +266,40 @@ fn unique_name(base: &str, used: &HashSet<String>) -> String {
         }
         index += 1;
     }
+}
+
+/// 把迁移包里的工作区按「父在前」重排。
+///
+/// 迁移包本身不保证顺序（旧版本平铺导出、手写 JSON、数据库里按 id 排序都可能让子级
+/// 先出现），而落库时子级要用父级的本地 id，所以这里先按 `parent` 拓扑展开。成环的
+/// 工作区留在最后，规划阶段会把它们的父级指针降级为顶层，避免导入卡死。
+fn order_workspaces(workspaces: &[BundleWorkspace]) -> Vec<&BundleWorkspace> {
+    let by_id: HashMap<&str, &BundleWorkspace> = workspaces
+        .iter()
+        .filter_map(|workspace| Some((workspace.id.as_deref()?, workspace)))
+        .collect();
+    let mut ordered: Vec<&BundleWorkspace> = Vec::with_capacity(workspaces.len());
+    let mut emitted: HashSet<&str> = HashSet::new();
+    let mut pending: Vec<&BundleWorkspace> = workspaces.iter().collect();
+    while !pending.is_empty() {
+        let before = pending.len();
+        pending.retain(|workspace| {
+            let ready = match workspace.parent.as_deref() {
+                None => true,
+                // 父级不在包里（v1 包或已被删掉）的条目不需要等待。
+                Some(parent) => !by_id.contains_key(parent) || emitted.contains(parent),
+            };
+            if ready {
+                if let Some(id) = workspace.id.as_deref() {
+                    emitted.insert(id);
+                }
+                ordered.push(*workspace);
+            }
+            !ready
+        });
+        if pending.len() == before {
+            ordered.extend(std::mem::take(&mut pending));
+        }
+    }
+    ordered
 }

@@ -8,6 +8,7 @@ case "$PRODUCT" in
         BINARY_NAME="navop"
         BUNDLE_ID="com.onetcli.app"
         PACKAGE_NAME="navop"
+        ICNS_NAME="Navop"
         INCLUDE_DOCUMENT_TYPES=1
         ;;
     navop-shell)
@@ -15,6 +16,7 @@ case "$PRODUCT" in
         BINARY_NAME="navop-shell"
         BUNDLE_ID="com.navop.shell"
         PACKAGE_NAME="navop-shell"
+        ICNS_NAME="NavopShell"
         INCLUDE_DOCUMENT_TYPES=0
         ;;
     navop-data)
@@ -22,6 +24,7 @@ case "$PRODUCT" in
         BINARY_NAME="navop-data"
         BUNDLE_ID="com.navop.data"
         PACKAGE_NAME="navop-data"
+        ICNS_NAME="NavopData"
         INCLUDE_DOCUMENT_TYPES=0
         ;;
     *)
@@ -77,8 +80,9 @@ else
         > "$APP_DIR/Contents/Info.plist"
 fi
 
-# Copy icon
-ICNS_PATH="${RESOURCE_DIR}/Navop.icns"
+# Copy icon（三个产品各有自己的 icns，Info.plist 的 CFBundleIconFile 都是 Navop，
+# 所以统一拷成 Navop.icns）
+ICNS_PATH="${RESOURCE_DIR}/${ICNS_NAME}.icns"
 if [ ! -f "$ICNS_PATH" ]; then
     echo "Error: Icon file not found at ${ICNS_PATH}"
     exit 1

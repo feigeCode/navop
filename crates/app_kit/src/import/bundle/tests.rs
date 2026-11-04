@@ -27,6 +27,8 @@ fn full_bundle() -> ConnectionBundle {
         exported_at: 1_760_000_000,
         app_id: Some("navop".to_string()),
         workspaces: vec![BundleWorkspace {
+            id: Some("w1".to_string()),
+            parent: None,
             name: "生产".to_string(),
             color: Some("#ff0000".to_string()),
             icon: Some("database".to_string()),
@@ -49,7 +51,7 @@ fn bundle_round_trips_through_json() {
     let json = serde_json::to_string(&bundle).expect("序列化失败");
     let decoded: ConnectionBundle = serde_json::from_str(&json).expect("反序列化失败");
     assert_eq!(decoded, bundle);
-    assert!(json.contains(r#""version":1"#));
+    assert!(json.contains(r#""version":2"#));
 }
 
 #[test]
@@ -206,4 +208,94 @@ fn canonical_kind_rejects_unknown_names() {
     assert_eq!(canonical_kind("Database"), Some("Database".to_string()));
     assert_eq!(canonical_kind("数据库"), None);
     assert_eq!(canonical_kind(""), None);
+}
+
+fn workspace(id: &str, parent: Option<&str>, name: &str) -> BundleWorkspace {
+    BundleWorkspace {
+        id: Some(id.to_string()),
+        parent: parent.map(str::to_string),
+        name: name.to_string(),
+        color: None,
+        icon: None,
+    }
+}
+
+fn workspace_bundle(workspaces: Vec<BundleWorkspace>) -> ConnectionBundle {
+    ConnectionBundle {
+        version: BUNDLE_VERSION,
+        exported_at: 0,
+        app_id: Some("navop".to_string()),
+        workspaces,
+        connections: vec![],
+    }
+}
+
+#[test]
+fn nested_workspaces_keep_their_parent_chain() {
+    // 子级故意排在父级前面：迁移包的顺序不可信，规划阶段要先按「父在前」重排。
+    let bundle = workspace_bundle(vec![
+        workspace("w2", Some("w1"), "生产 / 只读从库"),
+        workspace("w1", None, "生产"),
+        workspace("w3", Some("w2"), "生产 / 只读从库 / 报表"),
+    ]);
+    let plan = plan_import(&bundle, empty_input(), &supported_kinds());
+    let names: Vec<&str> = plan
+        .workspaces
+        .iter()
+        .map(|workspace| workspace.name.as_str())
+        .collect();
+    assert_eq!(names, ["生产", "生产 / 只读从库", "生产 / 只读从库 / 报表"]);
+    assert_eq!(plan.workspaces[0].parent_key, None);
+    assert_eq!(plan.workspaces[1].parent_key.as_deref(), Some("生产"));
+    assert_eq!(
+        plan.workspaces[2].parent_key.as_deref(),
+        Some("生产 / 只读从库")
+    );
+}
+
+#[test]
+fn existing_workspace_is_reused_as_parent() {
+    let bundle = workspace_bundle(vec![
+        workspace("w1", None, "生产"),
+        workspace("w2", Some("w1"), "生产 / 只读从库"),
+    ]);
+    let existing = vec!["生产".to_string()];
+    let plan = plan_import(
+        &bundle,
+        PlanInput {
+            existing_names: &[],
+            existing_identities: &[],
+            existing_workspaces: &existing,
+        },
+        &supported_kinds(),
+    );
+    assert_eq!(plan.workspaces.len(), 1);
+    assert_eq!(plan.workspaces[0].name, "生产 / 只读从库");
+    assert_eq!(plan.workspaces[0].parent_key.as_deref(), Some("生产"));
+}
+
+#[test]
+fn cyclic_parent_is_broken_instead_of_hanging() {
+    let bundle = workspace_bundle(vec![
+        workspace("w1", Some("w404"), "孤儿"),
+        workspace("w2", Some("w3"), "甲"),
+        workspace("w3", Some("w2"), "乙"),
+    ]);
+    let plan = plan_import(&bundle, empty_input(), &supported_kinds());
+    assert_eq!(plan.workspaces.len(), 3);
+    let by_name = |name: &str| {
+        plan.workspaces
+            .iter()
+            .find(|workspace| workspace.name == name)
+            .unwrap_or_else(|| panic!("缺少工作区「{name}」"))
+    };
+    // 父级不存在的降级为顶层。
+    assert_eq!(by_name("孤儿").parent_key, None);
+    // 父子成环时只断一条边：先出现的「甲」留在顶层，「乙」挂在它下面，导入不会卡死。
+    assert_eq!(by_name("甲").parent_key, None);
+    assert_eq!(by_name("乙").parent_key.as_deref(), Some("甲"));
+}
+
+fn supported_kinds() -> Vec<String> {
+    vec!["Database".to_string(), "Ssh".to_string(), "Ftp".to_string()]
 }
