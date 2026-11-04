@@ -42,9 +42,14 @@ fn mongodb_connection() -> StoredConnection {
 }
 
 /// 种类 ID 集合 = 内置数据库各一个 + redis + mongodb。
+///
+/// 已安装的外部驱动会追加种类，这里只断言内置部分。
 #[test]
 fn kind_ids_cover_builtin_databases_redis_and_mongodb() {
-    let kinds = kind_descriptors();
+    let kinds: Vec<ConnectionKindDescriptor> = kind_descriptors()
+        .into_iter()
+        .filter(|kind| !kind.id.starts_with(DB_EXTERNAL_KIND_PREFIX))
+        .collect();
     assert_eq!(
         DatabaseType::builtin_all().len() + 2,
         kinds.len(),
@@ -75,6 +80,7 @@ fn redis_and_mongodb_kinds_are_ordered_after_databases() {
     let max_db_order = kinds
         .iter()
         .filter(|kind| kind.id.starts_with(DB_KIND_PREFIX))
+        .filter(|kind| !kind.id.starts_with(DB_EXTERNAL_KIND_PREFIX))
         .map(|kind| kind.order)
         .max()
         .expect("至少有一种内置数据库");
@@ -141,4 +147,78 @@ fn resolve_kind_rejects_unknown_ids() {
         resolve_kind(MONGO_KIND_ID),
         Some(KindTarget::Mongo)
     ));
+}
+
+/// 驱动清单：只填反序列化必需的字段。
+fn driver_manifest(value: serde_json::Value) -> IpcDriverManifest {
+    serde_json::from_value(value).expect("驱动清单应能反序列化")
+}
+
+fn external_driver(id: &str, name: &str) -> IpcDriverManifest {
+    driver_manifest(serde_json::json!({
+        "id": id,
+        "name": name,
+        "description": format!("{name} 数据库连接"),
+        "entry": { "command": "driver" },
+        "transport": { "name": "stdio" },
+    }))
+}
+
+/// 外部驱动种类：跳过内置类型代表与声明不展示的驱动。
+#[test]
+fn external_kind_descriptors_skip_builtin_and_hidden_drivers() {
+    let mut hidden = external_driver("hidden", "Hidden");
+    hidden.ui.show_in_new_connection = false;
+    let registry = IpcDriverRegistry::from_drivers(vec![
+        external_driver("kingbase", "KingbaseES"),
+        external_driver("duckdb", "DuckDB"),
+        external_driver("oracle-go", "Oracle Go"),
+        external_driver("tdengine", "TDengine"),
+        external_driver("clickhouse", "ClickHouse"),
+        hidden,
+    ]);
+
+    let kinds = external_kind_descriptors(&registry);
+    let ids: Vec<&str> = kinds.iter().map(|kind| kind.id.as_ref()).collect();
+    assert_eq!(vec!["db:external:kingbase"], ids);
+}
+
+/// 外部驱动种类带上清单里的名字、描述与类目。
+#[test]
+fn external_kind_descriptor_carries_manifest_metadata() {
+    let mut driver = external_driver("kingbase", "KingbaseES");
+    driver.category = Some("domestic_database".to_string());
+    let registry = IpcDriverRegistry::from_drivers(vec![driver]);
+
+    let kind = &external_kind_descriptors(&registry)[0];
+    assert_eq!("db:external:kingbase", kind.id.as_ref());
+    assert_eq!(ConnectionKindGroup::Database, kind.group);
+    assert!(kind.order >= EXTERNAL_KIND_ORDER_BASE);
+    assert_eq!(
+        Some("KingbaseES"),
+        kind.label_override().map(|v| v.as_ref())
+    );
+    assert_eq!(
+        Some("KingbaseES 数据库连接"),
+        kind.description().map(|v| v.as_ref())
+    );
+    assert_eq!(
+        Some("domestic_database"),
+        kind.category().map(|v| v.as_ref())
+    );
+}
+
+/// 外部驱动的连接映射回 `db:external:{driver_id}`，并能还原为表单种类。
+#[test]
+fn external_database_type_round_trips_through_kind_id() {
+    let connection = database_connection(DatabaseType::external("kingbase"));
+    assert_eq!(
+        Some(SharedString::from("db:external:kingbase")),
+        kind_id_for_connection(&connection)
+    );
+    assert!(matches!(
+        resolve_kind("db:external:kingbase"),
+        Some(KindTarget::Database(DatabaseType::External { .. }))
+    ));
+    assert!(resolve_kind("db:external:").is_none());
 }

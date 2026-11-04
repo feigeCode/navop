@@ -7,7 +7,9 @@
 //! 多产品构建（全量 / Data / Shell）各自只展示已装配的类型，不写死任何一种。
 //! 表单保存后自身写仓库并广播 `ConnectionDataEvent`，宿主列表据此刷新。
 
-use domain_api::{ConnectionFormRequest, ConnectionKindDescriptor, ConnectionKindGroup};
+use domain_api::{
+    ConnectionFormRequest, ConnectionKindDescriptor, ConnectionKindGroup, ConnectionKindIcon,
+};
 use gpui::{
     AnyView, AnyWindowHandle, App, AppContext as _, Context, FocusHandle, Focusable, FontWeight,
     IntoElement, KeyBinding, Render, SharedString, Styled, Window, div, prelude::*, px,
@@ -266,7 +268,7 @@ impl WizardEntry {
 
     fn description(&self) -> SharedString {
         match self {
-            Self::Kind(kind) => kind_description(&kind.id, kind.group),
+            Self::Kind(kind) => kind_description(kind),
             Self::Install(_) | Self::More => t!("NewConnection.description_more_connections")
                 .to_string()
                 .into(),
@@ -275,7 +277,7 @@ impl WizardEntry {
 
     fn icon(&self) -> Icon {
         match self {
-            Self::Kind(kind) => kind_icon(&kind.id, kind.group),
+            Self::Kind(kind) => kind_icon(kind),
             Self::Install(_) | Self::More => IconName::Plus.mono().with_size(px(KIND_ICON_SIZE)),
         }
     }
@@ -938,6 +940,12 @@ fn category_icon(category: WizardCategory) -> IconName {
 
 /// 连接类型所属的旧版类目。
 fn kind_category(kind: &ConnectionKindDescriptor) -> WizardCategory {
+    if let Some(category) = kind
+        .category()
+        .and_then(|category| manifest_category(category.as_ref()))
+    {
+        return category;
+    }
     if let Some(db_type) = kind.id.strip_prefix(DB_KIND_PREFIX) {
         return if db_type == "TDengine" {
             WizardCategory::TimeSeries
@@ -952,6 +960,20 @@ fn kind_category(kind: &ConnectionKindDescriptor) -> WizardCategory {
             ConnectionKindGroup::Terminal | ConnectionKindGroup::Remote => WizardCategory::Terminal,
             ConnectionKindGroup::Extension => WizardCategory::Extensions,
         },
+    }
+}
+
+/// 驱动清单声明的类目 → 向导类目；未知取值交给壳按分组推导。
+fn manifest_category(category: &str) -> Option<WizardCategory> {
+    match category {
+        "database" => Some(WizardCategory::Database),
+        "domestic_database" => Some(WizardCategory::DomesticDatabase),
+        "time_series" => Some(WizardCategory::TimeSeries),
+        "nosql" => Some(WizardCategory::NoSql),
+        "middleware" => Some(WizardCategory::Middleware),
+        "terminal" => Some(WizardCategory::Terminal),
+        "extension" | "extensions" => Some(WizardCategory::Extensions),
+        _ => None,
     }
 }
 
@@ -987,7 +1009,20 @@ fn group_icon(group: ConnectionKindGroup) -> IconName {
     }
 }
 
-fn kind_icon(kind_id: &str, group: ConnectionKindGroup) -> Icon {
+fn kind_icon(kind: &ConnectionKindDescriptor) -> Icon {
+    // 领域解析好的图标优先（外部驱动清单里的品牌图标）。
+    if let Some(icon) = kind.icon() {
+        return match icon {
+            ConnectionKindIcon::Asset(path) => {
+                crate::visuals::icon_from_asset_path(path.clone(), px(KIND_ICON_SIZE))
+            }
+            ConnectionKindIcon::File(path) => {
+                crate::visuals::icon_from_file_path(path.clone(), px(KIND_ICON_SIZE))
+            }
+        };
+    }
+    let kind_id = kind.id.as_ref();
+    let group = kind.group;
     if let Some(db_type) = kind_id.strip_prefix(DB_KIND_PREFIX) {
         return database_kind_icon(db_type);
     }
@@ -1027,7 +1062,13 @@ fn database_kind_icon(db_type: &str) -> Icon {
     icon.color().with_size(px(KIND_ICON_SIZE))
 }
 
-fn kind_description(kind_id: &str, group: ConnectionKindGroup) -> SharedString {
+fn kind_description(kind: &ConnectionKindDescriptor) -> SharedString {
+    // 领域给了描述时直接用（外部驱动清单的描述）。
+    if let Some(description) = kind.description() {
+        return description.clone();
+    }
+    let kind_id = kind.id.as_ref();
+    let group = kind.group;
     let description = if kind_id.starts_with(DB_KIND_PREFIX) {
         t!("NewConnection.description_database").to_string()
     } else {
@@ -1068,5 +1109,52 @@ impl Render for ConnectionFormDialog {
             WizardStep::SelectKind => self.render_selection_page(cx).into_any_element(),
             WizardStep::Form => self.render_form_page(cx).into_any_element(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn label(_cx: &App) -> SharedString {
+        "默认".into()
+    }
+
+    fn descriptor(id: &str, group: ConnectionKindGroup) -> ConnectionKindDescriptor {
+        ConnectionKindDescriptor::new(id, label, group, 200)
+    }
+
+    #[test]
+    fn manifest_category_overrides_group_fallback() {
+        let kind = descriptor("db:external:kingbase", ConnectionKindGroup::Database)
+            .with_category("domestic_database");
+        assert_eq!(WizardCategory::DomesticDatabase, kind_category(&kind));
+
+        let kind = descriptor("db:external:iotdb", ConnectionKindGroup::Database);
+        assert_eq!(WizardCategory::Database, kind_category(&kind));
+
+        let unknown = descriptor("db:external:demo", ConnectionKindGroup::Database)
+            .with_category("unknown_category");
+        assert_eq!(WizardCategory::Database, kind_category(&unknown));
+    }
+
+    #[test]
+    fn builtin_kinds_keep_legacy_categories() {
+        let mysql = descriptor("db:MySQL", ConnectionKindGroup::Database);
+        assert_eq!(WizardCategory::Database, kind_category(&mysql));
+        let tdengine = descriptor("db:TDengine", ConnectionKindGroup::Database);
+        assert_eq!(WizardCategory::TimeSeries, kind_category(&tdengine));
+        let redis = descriptor(KIND_REDIS, ConnectionKindGroup::Database);
+        assert_eq!(WizardCategory::NoSql, kind_category(&redis));
+        let ssh = descriptor(KIND_SSH, ConnectionKindGroup::Terminal);
+        assert_eq!(WizardCategory::Terminal, kind_category(&ssh));
+    }
+
+    #[test]
+    fn manifest_metadata_wins_over_builtin_defaults() {
+        let kind = descriptor("db:external:kingbase", ConnectionKindGroup::Database)
+            .with_label("KingbaseES")
+            .with_description("人大金仓数据库连接");
+        assert_eq!("人大金仓数据库连接", kind_description(&kind).as_ref());
     }
 }
