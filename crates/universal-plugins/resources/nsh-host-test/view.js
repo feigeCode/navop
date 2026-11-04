@@ -1,5 +1,5 @@
 import { append, bindProp, component, element, insert, prop, text } from "nsh:rt";
-import { host, mount, signal } from "nsh";
+import { host, locale, mount, signal } from "nsh";
 import { Button } from "nsh/base";
 
 //#region App.tsx
@@ -17,38 +17,45 @@ function add() {
 	draft.set("");
 }
 /** 走一遍宿主 ABI，把结果留在页面上（也回报给宿主，供台子断言）。 */
-async function probe(host_) {
-	const context = await host_.call("navop.context.current", {});
-	const theme = await host_.call("navop.theme.snapshot", {});
-	const locale = await host_.call("navop.i18n.locale", {});
-	let resourceError = "";
+async function probe() {
+	const params = host.params ?? {};
+	let resourceErrorCode = "";
 	try {
-		await host_.call("navop.resource.open", {
+		await host.call("navop.resource.open", {
 			backend: "missing",
 			resourceType: "noop"
-		});
+		}, { timeout: 5e3 });
 	} catch (error) {
-		resourceError = String(error?.message ?? error);
+		const code = error?.code;
+		resourceErrorCode = typeof code === "string" && code !== "" ? code : String(error);
 	}
 	snapshot.set({
-		viewId: context?.viewId,
-		locale,
-		themeRevision: theme?.revision,
-		dark: theme?.dark,
-		resourceError
+		apiVersion: params.apiVersion,
+		extensionId: params.extension?.id,
+		route: params.route,
+		backends: (params.backends ?? []).join(","),
+		connection: params.connection == null ? "none" : "present",
+		resourceErrorCode
 	});
-	host_.call("navop.log.info", { message: "nsh 自检页装载完成" });
-	host_.call("spike.mounted", {
+	host.post("navop.log", {
+		level: "info",
+		message: "nsh 自检页装载完成",
+		fields: { source: "self-check" }
+	});
+	host.call("spike.mounted", {
 		title: "NSH Host",
 		items: items().length,
-		viewId: context?.viewId,
-		locale,
-		themeRevision: theme?.revision,
-		resourceError
+		apiVersion: params.apiVersion,
+		extensionId: params.extension?.id,
+		route: params.route,
+		backends: params.backends ?? [],
+		hasConnection: params.connection != null,
+		locale: locale(),
+		resourceErrorCode
 	});
 }
 function App() {
-	probe(host);
+	probe();
 	return (() => {
 		const __nsh_hv0 = element("scroll");
 		prop(__nsh_hv0, "style", { flex: 1 });
@@ -117,35 +124,45 @@ function App() {
 		prop(__nsh_hv15, "class", "gap-1 rounded-xl border border-border px-3 py-2");
 		const __nsh_hv16 = element("text");
 		prop(__nsh_hv16, "class", "text-xs text-muted-foreground");
-		const __nsh_hv17 = text("host ABI");
+		const __nsh_hv17 = text("host ABI v2");
 		append(__nsh_hv16, __nsh_hv17);
 		const __nsh_hv18 = element("text");
 		prop(__nsh_hv18, "class", "text-sm text-card-foreground");
-		const __nsh_hv19 = text("view · ");
-		const __nsh_hv20 = text("　语言 · ");
-		const __nsh_hv21 = text("主题 · rev ");
+		const __nsh_hv19 = text(" · view ");
+		const __nsh_hv20 = text("　api");
 		append(__nsh_hv18, __nsh_hv19);
 		append(__nsh_hv18, __nsh_hv20);
-		append(__nsh_hv18, __nsh_hv21);
+		insert(__nsh_hv18, () => snapshot().extensionId ?? "—", __nsh_hv19);
 		insert(__nsh_hv18, () => snapshot().viewId ?? "—", __nsh_hv20);
-		insert(__nsh_hv18, () => snapshot().locale ?? "—", __nsh_hv21);
-		insert(__nsh_hv18, [() => snapshot().themeRevision ?? "—", () => snapshot().dark ? "（暗）" : "（亮）"]);
-		const __nsh_hv22 = element("text");
-		prop(__nsh_hv22, "class", "text-sm text-card-foreground");
-		const __nsh_hv23 = text("能力平面 · ");
-		append(__nsh_hv22, __nsh_hv23);
-		insert(__nsh_hv22, () => snapshot().resourceError || "—");
+		insert(__nsh_hv18, [" ", () => snapshot().apiVersion ?? "—"]);
+		const __nsh_hv21 = element("text");
+		prop(__nsh_hv21, "class", "text-sm text-card-foreground");
+		const __nsh_hv22 = text("语言 · ");
+		const __nsh_hv23 = text("　backends · ");
+		const __nsh_hv24 = text("　连接 ·");
+		append(__nsh_hv21, __nsh_hv22);
+		append(__nsh_hv21, __nsh_hv23);
+		append(__nsh_hv21, __nsh_hv24);
+		insert(__nsh_hv21, () => locale(), __nsh_hv23);
+		insert(__nsh_hv21, () => snapshot().backends || "—", __nsh_hv24);
+		insert(__nsh_hv21, [" ", () => snapshot().connection ?? "—"]);
+		const __nsh_hv25 = element("text");
+		prop(__nsh_hv25, "class", "text-sm text-card-foreground");
+		const __nsh_hv26 = text("能力平面 · ");
+		append(__nsh_hv25, __nsh_hv26);
+		insert(__nsh_hv25, () => snapshot().resourceErrorCode || "—");
 		append(__nsh_hv15, __nsh_hv16);
 		append(__nsh_hv15, __nsh_hv18);
-		append(__nsh_hv15, __nsh_hv22);
-		const __nsh_hv24 = element("text");
-		prop(__nsh_hv24, "class", "text-xs text-muted-foreground");
-		const __nsh_hv25 = text("第一个跑在 navop 窗口里的 nsh 页面：主题、字体、明暗全部来自宿主。");
-		append(__nsh_hv24, __nsh_hv25);
+		append(__nsh_hv15, __nsh_hv21);
+		append(__nsh_hv15, __nsh_hv25);
+		const __nsh_hv27 = element("text");
+		prop(__nsh_hv27, "class", "text-xs text-muted-foreground");
+		const __nsh_hv28 = text("第一个跑在 navop 窗口里的 nsh 页面：主题、字体、明暗、语言全部来自宿主。");
+		append(__nsh_hv27, __nsh_hv28);
 		append(__nsh_hv1, __nsh_hv2);
 		append(__nsh_hv1, __nsh_hv7);
 		append(__nsh_hv1, __nsh_hv15);
-		append(__nsh_hv1, __nsh_hv24);
+		append(__nsh_hv1, __nsh_hv27);
 		append(__nsh_hv0, __nsh_hv1);
 		return __nsh_hv0;
 	})();

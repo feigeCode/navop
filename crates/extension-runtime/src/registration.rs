@@ -11,7 +11,7 @@ use serde_json::Value;
 use crate::extension::is_active_install_dir_name;
 use crate::extension::manifest::{
     HostApiVersions, Manifest, ManifestError, current_host_version, load_and_check,
-    required_spawn_permission, validate_shell_views,
+    required_spawn_permission, validate_shell_app,
 };
 
 use super::catalog::ExtensionRuntimeCatalog;
@@ -19,7 +19,7 @@ use super::types::{
     ExtensionRuntimeError, RegisteredDocumentExporter, RegisteredDocumentRenderer,
     RegisteredHtmlPreviewTransform, RegisteredIpcRuntimeBinding, RegisteredKeybindingContribution,
     RegisteredRemoteFileEditorCommand, RegisteredRemoteFileEditorContribution,
-    RegisteredResourceConnectionContribution, RegisteredShellViewContribution, WasmRuntimeBinding,
+    RegisteredResourceConnectionContribution, RegisteredShellAppContribution, WasmRuntimeBinding,
     command_descriptor, runtime_key, slot_item_from_menu,
 };
 
@@ -57,36 +57,29 @@ fn validate_resource_connection(
     {
         return invalid_connection(format!("unknown IPC runtime `{}`", connection.runtime_id));
     }
-    if let Some(view_id) = connection.shell_view_id.as_deref() {
-        let Some(view) = manifest
-            .contributes
-            .shell_views
-            .iter()
-            .find(|view| view.id == view_id)
-        else {
-            return invalid_connection(format!("unknown shell view `{view_id}`"));
+    if let Some(route) = connection.route.as_deref() {
+        if route.trim().is_empty() {
+            return invalid_connection("connection route must not be empty");
+        }
+        let Some(app) = manifest.contributes.shell_app.as_ref() else {
+            return invalid_connection("connection route requires a shellApp");
         };
-        if view.singleton {
-            return invalid_connection("connection shell view must not be singleton");
-        }
-        if !view
+        // 连接型 app 只需要 `resource`：连接上下文（runtimeId / resourceType /
+        // 配置表单）由宿主通过 host.params 交给 app，v2 已删除 `context` 模块，
+        // 不能再要求清单里出现这个名字。
+        if !app
             .modules
-            .contains(&crate::extension::manifest::ShellHostModule::Context)
-            || !view
-                .modules
-                .contains(&crate::extension::manifest::ShellHostModule::Resource)
+            .contains(&crate::extension::manifest::ShellHostModule::Resource)
         {
-            return invalid_connection(
-                "connection shell view requires context and resource modules",
-            );
+            return invalid_connection("connection shellApp requires the resource module");
         }
-        if !view
+        if !app
             .backends
             .values()
             .any(|runtime_id| runtime_id == &connection.runtime_id)
         {
             return invalid_connection(
-                "connection shell view must expose the connection runtime as a backend",
+                "connection shellApp must expose the connection runtime as a backend",
             );
         }
     }
@@ -125,10 +118,10 @@ fn validate_terminal_connection(
     use crate::extension::manifest::ResourceConnectionFieldType;
     if !connection.runtime_id.trim().is_empty()
         || !connection.resource_type.trim().is_empty()
-        || connection.shell_view_id.is_some()
+        || connection.route.is_some()
     {
         return invalid_connection(
-            "terminal connection must not declare runtimeId, resourceType or shellViewId",
+            "terminal connection must not declare runtimeId, resourceType or route",
         );
     }
     let referenced = match terminal.validate() {
@@ -336,7 +329,7 @@ impl ExtensionRuntimeCatalog {
     ) -> Result<(), ExtensionRuntimeError> {
         self.register_wasm_runtimes(&manifest)?;
         self.register_ipc_runtimes(&manifest)?;
-        self.register_shell_views(&manifest)?;
+        self.register_shell_app(&manifest)?;
         self.register_resource_connections(&manifest)?;
         self.register_html_preview_transforms(&manifest)?;
         self.register_document_renderers(&manifest)?;
@@ -388,51 +381,47 @@ impl ExtensionRuntimeCatalog {
         Ok(())
     }
 
-    fn register_shell_views(&mut self, manifest: &Manifest) -> Result<(), ExtensionRuntimeError> {
-        validate_shell_views(manifest).map_err(|error| {
-            ExtensionRuntimeError::InvalidShellView {
-                field: error.field,
-                reason: error.reason,
-            }
+    fn register_shell_app(&mut self, manifest: &Manifest) -> Result<(), ExtensionRuntimeError> {
+        validate_shell_app(manifest).map_err(|error| ExtensionRuntimeError::InvalidShellApp {
+            field: error.field,
+            reason: error.reason,
         })?;
-        for view in &manifest.contributes.shell_views {
-            let view_key = runtime_key(&manifest.id, &view.id);
-            if self.shell_views.contains_key(&view_key) {
-                return Err(ExtensionRuntimeError::DuplicateShellView { view_key });
-            }
-            let backends = view
-                .backends
-                .iter()
-                .map(|(alias, runtime_id)| (alias.clone(), runtime_key(&manifest.id, runtime_id)))
-                .collect();
-            self.shell_views.insert(
-                view_key.clone(),
-                RegisteredShellViewContribution {
-                    extension_id: manifest.id.clone(),
-                    extension_version: manifest.version.clone(),
-                    id: view.id.clone(),
-                    view_key,
-                    title: view.title.clone(),
-                    description: view.description.clone(),
-                    icon_path: view
-                        .icon
-                        .as_deref()
-                        .map(|icon| resolve_extension_path(&manifest.manifest_dir, icon)),
-                    extension_root: manifest.manifest_dir.clone(),
-                    entry_path: resolve_extension_path(&manifest.manifest_dir, &view.entry),
-                    surface: view.surface,
-                    category: view.category.clone(),
-                    keywords: view.keywords.clone().unwrap_or_default(),
-                    singleton: view.singleton,
-                    backends,
-                    modules: view.modules.iter().copied().collect(),
-                    permissions: manifest.permissions.clone(),
-                    shell_api_version: manifest.api.shell.clone(),
-                    required_nsh_version: (!manifest.engines.nsh.trim().is_empty())
-                        .then(|| manifest.engines.nsh.clone()),
-                },
-            );
+        let Some(app) = manifest.contributes.shell_app.as_ref() else {
+            return Ok(());
+        };
+        if self.shell_apps.contains_key(&manifest.id) {
+            return Err(ExtensionRuntimeError::DuplicateShellApp {
+                extension_id: manifest.id.clone(),
+            });
         }
+        let backends = app
+            .backends
+            .iter()
+            .map(|(alias, runtime_id)| (alias.clone(), runtime_key(&manifest.id, runtime_id)))
+            .collect();
+        self.shell_apps.insert(
+            manifest.id.clone(),
+            RegisteredShellAppContribution {
+                extension_id: manifest.id.clone(),
+                extension_version: manifest.version.clone(),
+                title: app.title.clone().unwrap_or_else(|| manifest.name.clone()),
+                description: app.description.clone(),
+                icon_path: app
+                    .icon
+                    .as_deref()
+                    .map(|icon| resolve_extension_path(&manifest.manifest_dir, icon)),
+                extension_root: manifest.manifest_dir.clone(),
+                entry_path: resolve_extension_path(&manifest.manifest_dir, &app.entry),
+                category: app.category.clone(),
+                keywords: app.keywords.clone().unwrap_or_default(),
+                backends,
+                modules: app.modules.iter().copied().collect(),
+                permissions: manifest.permissions.clone(),
+                shell_api_version: manifest.api.shell.clone(),
+                required_nsh_version: (!manifest.engines.nsh.trim().is_empty())
+                    .then(|| manifest.engines.nsh.clone()),
+            },
+        );
         Ok(())
     }
 
@@ -463,7 +452,7 @@ impl ExtensionRuntimeCatalog {
                         runtime_key(&manifest.id, &connection.runtime_id)
                     },
                     resource_type: connection.resource_type.clone(),
-                    shell_view_id: connection.shell_view_id.clone(),
+                    route: connection.route.clone(),
                     terminal: connection.terminal.clone(),
                     form: connection.form.clone(),
                 },

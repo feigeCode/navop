@@ -192,7 +192,7 @@ mod tests {
             icon_path: None,
             runtime_id: "com.example.search::main".into(),
             resource_type: "search".into(),
-            shell_view_id: Some("explorer".into()),
+            route: Some("explorer".into()),
             terminal: None,
             form: Default::default(),
         }

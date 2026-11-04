@@ -9,8 +9,8 @@ use crate::{
         DocumentExporterContrib, Engines, HtmlPreviewTransformContrib, IpcEntry, IpcRuntime,
         IpcTransport, Manifest, MenuCommandRef, MenuContrib, ResourceConnectionContrib,
         ResourceConnectionFieldType, ResourceConnectionForm, ResourceConnectionFormField,
-        ResourceConnectionFormTab, ResourceConnectionTerminal, RuntimeSection, ShellHostModule,
-        ShellSurface, ShellViewContrib, WasmRuntime, WasmRuntimeKind,
+        ResourceConnectionFormTab, ResourceConnectionTerminal, RuntimeSection, ShellAppContrib,
+        ShellHostModule, WasmRuntime, WasmRuntimeKind,
         contributes::{
             RemoteFileEditorCommandContrib, RemoteFileEditorContrib, RemoteFileEditorLaunchMode,
         },
@@ -184,43 +184,36 @@ fn runtime_catalog_registers_remote_file_editors() {
 }
 
 #[test]
-fn runtime_catalog_registers_shell_view_with_resolved_backend() {
+fn runtime_catalog_registers_shell_app_with_resolved_backend() {
     let mut manifest = shell_manifest();
-    manifest
-        .contributes
-        .shell_views
-        .push(shell_view("ui/explorer.js"));
+    manifest.contributes.shell_app = Some(shell_app("ui/explorer.js"));
 
     let catalog = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap();
-    let contribution = catalog.shell_view("com.example.tools", "explorer").unwrap();
+    let app = catalog.shell_app("com.example.tools").unwrap();
 
-    assert_eq!("com.example.tools::explorer", contribution.view_key);
-    assert_eq!("Example Explorer", contribution.title);
+    assert_eq!("Example Explorer", app.title);
     assert_eq!(
         PathBuf::from("/tmp/com.example.tools/ui/explorer.js"),
-        contribution.entry_path
+        app.entry_path
     );
     assert_eq!(
         Some("com.example.tools::provider"),
-        contribution.backends.get("search").map(String::as_str)
+        app.backends.get("search").map(String::as_str)
     );
     assert_eq!(
-        vec![ShellHostModule::Context, ShellHostModule::Resource],
-        contribution.modules.iter().copied().collect::<Vec<_>>()
+        vec![ShellHostModule::Resource],
+        app.modules.iter().copied().collect::<Vec<_>>()
     );
     assert_eq!(
         vec!["shell:exec", "spawn:./bin/provider", "secrets:read:self.*"],
-        contribution.permissions
+        app.permissions
     );
 }
 
 #[test]
-fn runtime_catalog_registers_extension_connection_with_optional_shell_view() {
+fn runtime_catalog_registers_extension_connection_with_optional_route() {
     let mut manifest = shell_manifest();
-    manifest
-        .contributes
-        .shell_views
-        .push(shell_view("ui/explorer.js"));
+    manifest.contributes.shell_app = Some(shell_app("ui/explorer.js"));
     manifest.contributes.connections.push(resource_connection());
 
     let catalog = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap();
@@ -230,7 +223,7 @@ fn runtime_catalog_registers_extension_connection_with_optional_shell_view() {
 
     assert_eq!("com.example.tools::provider", connection.runtime_id);
     assert_eq!("elasticsearch", connection.resource_type);
-    assert_eq!(Some("explorer"), connection.shell_view_id.as_deref());
+    assert_eq!(Some("explorer"), connection.route.as_deref());
     assert_eq!(2, connection.form.tabs[0].fields.len());
 }
 
@@ -238,7 +231,7 @@ fn runtime_catalog_registers_extension_connection_with_optional_shell_view() {
 fn runtime_catalog_registers_headless_extension_connection() {
     let mut manifest = shell_manifest();
     let mut connection = resource_connection();
-    connection.shell_view_id = None;
+    connection.route = None;
     manifest.contributes.connections.push(connection);
 
     let catalog = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap();
@@ -247,7 +240,7 @@ fn runtime_catalog_registers_headless_extension_connection() {
         catalog
             .resource_connection("com.example.tools", "search")
             .unwrap()
-            .shell_view_id
+            .route
             .is_none()
     );
 }
@@ -264,7 +257,7 @@ fn runtime_catalog_registers_terminal_connection_without_provider_runtime() {
         .unwrap();
 
     assert_eq!("", connection.runtime_id);
-    assert!(connection.shell_view_id.is_none());
+    assert!(connection.route.is_none());
     let terminal = connection.terminal.as_ref().unwrap();
     assert_eq!("tsh", terminal.command);
     assert_eq!(vec!["ssh", "{{target}}"], terminal.args);
@@ -274,7 +267,7 @@ fn runtime_catalog_registers_terminal_connection_without_provider_runtime() {
 fn runtime_catalog_accepts_single_icon_field() {
     let mut manifest = shell_manifest();
     let mut connection = resource_connection();
-    connection.shell_view_id = None;
+    connection.route = None;
     connection.form.tabs[0].fields.push(icon_field());
     manifest.contributes.connections.push(connection);
 
@@ -285,7 +278,7 @@ fn runtime_catalog_accepts_single_icon_field() {
 fn runtime_catalog_rejects_second_icon_field_and_icon_options() {
     let mut manifest = shell_manifest();
     let mut connection = resource_connection();
-    connection.shell_view_id = None;
+    connection.route = None;
     connection.form.tabs[0].fields.push(icon_field());
     let mut duplicate = icon_field();
     duplicate.id = "icon2".into();
@@ -299,7 +292,7 @@ fn runtime_catalog_rejects_second_icon_field_and_icon_options() {
 
     let mut manifest = shell_manifest();
     let mut connection = resource_connection();
-    connection.shell_view_id = None;
+    connection.route = None;
     let mut field = icon_field();
     field
         .options
@@ -338,7 +331,7 @@ fn runtime_catalog_rejects_terminal_connection_with_provider_fields() {
     for mutate in [
         (|c: &mut ResourceConnectionContrib| c.runtime_id = "provider".into()) as fn(&mut _),
         |c| c.resource_type = "tsh".into(),
-        |c| c.shell_view_id = Some("explorer".into()),
+        |c| c.route = Some("explorer".into()),
     ] {
         let mut manifest = base_manifest();
         let mut connection = terminal_connection();
@@ -350,7 +343,7 @@ fn runtime_catalog_rejects_terminal_connection_with_provider_fields() {
         assert!(
             error
                 .to_string()
-                .contains("must not declare runtimeId, resourceType or shellViewId"),
+                .contains("must not declare runtimeId, resourceType or route"),
             "{error}"
         );
     }
@@ -422,7 +415,7 @@ fn runtime_catalog_rejects_connection_secret_without_self_permission() {
         .permissions
         .retain(|permission| permission != "secrets:read:self.*");
     let mut connection = resource_connection();
-    connection.shell_view_id = None;
+    connection.route = None;
     manifest.contributes.connections.push(connection);
 
     let error = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap_err();
@@ -431,26 +424,26 @@ fn runtime_catalog_rejects_connection_secret_without_self_permission() {
 }
 
 #[test]
-fn runtime_catalog_rejects_singleton_connection_shell_view() {
+fn runtime_catalog_rejects_connection_route_without_resource_module() {
+    let mut app = shell_app("ui/explorer.js");
+    app.modules = vec![ShellHostModule::Log];
     let mut manifest = shell_manifest();
-    let mut view = shell_view("ui/explorer.js");
-    view.singleton = true;
-    manifest.contributes.shell_views.push(view);
+    manifest.contributes.shell_app = Some(app);
     manifest.contributes.connections.push(resource_connection());
 
     let error = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap_err();
 
     assert!(
-        error.to_string().contains("must not be singleton"),
+        error.to_string().contains("requires the resource module"),
         "{error}"
     );
 }
 
 #[test]
-fn runtime_catalog_rejects_connection_view_without_connection_runtime() {
+fn runtime_catalog_rejects_connection_app_without_connection_runtime() {
+    let mut app = shell_app("ui/explorer.js");
+    app.backends.insert("search".into(), "other".into());
     let mut manifest = shell_manifest();
-    let mut view = shell_view("ui/explorer.js");
-    view.backends.insert("search".into(), "other".into());
     manifest.runtime.ipc.push(IpcRuntime {
         id: "other".into(),
         entry: IpcEntry {
@@ -464,11 +457,10 @@ fn runtime_catalog_rejects_connection_view_without_connection_runtime() {
         max_restart_attempts: 3,
         shutdown_grace_ms: 1_000,
     });
-    manifest.contributes.shell_views.push(view);
+    manifest.contributes.shell_app = Some(app);
     manifest.contributes.connections.push(resource_connection());
 
     let error = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap_err();
-
     assert!(error.to_string().contains("connection runtime"), "{error}");
 }
 
@@ -476,7 +468,7 @@ fn runtime_catalog_rejects_connection_view_without_connection_runtime() {
 fn runtime_catalog_rejects_unknown_visibility_field() {
     let mut manifest = shell_manifest();
     let mut connection = resource_connection();
-    connection.shell_view_id = None;
+    connection.route = None;
     connection.form.tabs[0].fields[0].visible_when.push(
         crate::extension::manifest::ResourceConnectionVisibilityRule {
             field: "missing".into(),
@@ -501,7 +493,7 @@ fn terminal_connection() -> ResourceConnectionContrib {
         icon: None,
         runtime_id: String::new(),
         resource_type: String::new(),
-        shell_view_id: None,
+        route: None,
         terminal: Some(ResourceConnectionTerminal {
             command: "tsh".into(),
             args: vec!["ssh".into(), "{{target}}".into()],
@@ -543,7 +535,7 @@ fn resource_connection() -> ResourceConnectionContrib {
         icon: None,
         runtime_id: "provider".into(),
         resource_type: "elasticsearch".into(),
-        shell_view_id: Some("explorer".into()),
+        route: Some("explorer".into()),
         terminal: None,
         form: ResourceConnectionForm {
             tabs: vec![ResourceConnectionFormTab {
@@ -581,12 +573,12 @@ fn resource_connection() -> ResourceConnectionContrib {
 }
 
 #[test]
-fn runtime_catalog_rejects_shell_view_with_unknown_backend() {
+fn runtime_catalog_rejects_shell_app_with_unknown_backend() {
     let mut manifest = shell_manifest();
-    let mut view = shell_view("ui/explorer.js");
-    view.backends
+    let mut app = shell_app("ui/explorer.js");
+    app.backends
         .insert("search".to_string(), "missing".to_string());
-    manifest.contributes.shell_views.push(view);
+    manifest.contributes.shell_app = Some(app);
 
     let error = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap_err();
 
@@ -594,15 +586,12 @@ fn runtime_catalog_rejects_shell_view_with_unknown_backend() {
 }
 
 #[test]
-fn runtime_catalog_rejects_shell_view_without_shell_exec_permission() {
+fn runtime_catalog_rejects_shell_app_without_shell_exec_permission() {
     let mut manifest = shell_manifest();
     manifest
         .permissions
         .retain(|permission| permission != "shell:exec");
-    manifest
-        .contributes
-        .shell_views
-        .push(shell_view("ui/explorer.js"));
+    manifest.contributes.shell_app = Some(shell_app("ui/explorer.js"));
 
     let error = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap_err();
 
@@ -610,13 +599,13 @@ fn runtime_catalog_rejects_shell_view_without_shell_exec_permission() {
 }
 
 #[test]
-fn runtime_catalog_rejects_shell_view_with_reserved_backend_alias() {
+fn runtime_catalog_rejects_shell_app_with_reserved_backend_alias() {
     let mut manifest = shell_manifest();
-    let mut view = shell_view("ui/explorer.js");
-    view.backends.clear();
-    view.backends
+    let mut app = shell_app("ui/explorer.js");
+    app.backends.clear();
+    app.backends
         .insert("navop".to_string(), "provider".to_string());
-    manifest.contributes.shell_views.push(view);
+    manifest.contributes.shell_app = Some(app);
 
     let error = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap_err();
 
@@ -624,12 +613,9 @@ fn runtime_catalog_rejects_shell_view_with_reserved_backend_alias() {
 }
 
 #[test]
-fn runtime_catalog_rejects_shell_view_entry_escape() {
+fn runtime_catalog_rejects_shell_app_entry_escape() {
     let mut manifest = shell_manifest();
-    manifest
-        .contributes
-        .shell_views
-        .push(shell_view("../escape.js"));
+    manifest.contributes.shell_app = Some(shell_app("../escape.js"));
 
     let error = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap_err();
 
@@ -910,22 +896,19 @@ fn shell_manifest() -> Manifest {
     manifest
 }
 
-fn shell_view(entry: &str) -> ShellViewContrib {
-    ShellViewContrib {
-        id: "explorer".to_string(),
-        title: "Example Explorer".to_string(),
+fn shell_app(entry: &str) -> ShellAppContrib {
+    ShellAppContrib {
+        title: Some("Example Explorer".to_string()),
         description: None,
         icon: None,
         entry: entry.to_string(),
-        surface: ShellSurface::Tab,
         category: None,
         keywords: None,
-        singleton: false,
         backends: std::collections::BTreeMap::from([(
             "search".to_string(),
             "provider".to_string(),
         )]),
-        modules: vec![ShellHostModule::Context, ShellHostModule::Resource],
+        modules: vec![ShellHostModule::Resource],
     }
 }
 
@@ -990,40 +973,32 @@ fn write_composite_manifest(root: &std::path::Path, id: &str, content: &str) {
 }
 
 #[test]
-fn catalog_toolbox_views_exclude_connection_owned_shell_views() {
-    // 独立工具(tab surface + toolbox surface,未被连接引用)进工具箱;
-    // 连接 shellViewId 引用的视图不进。
-    let mut standalone_tab = shell_view("ui/standalone.js");
-    standalone_tab.id = "standalone-tool".into();
-    standalone_tab.singleton = true;
-    standalone_tab.surface = crate::extension::manifest::ShellSurface::Tab;
+fn catalog_toolbox_lists_apps_without_connections() {
+    // 工具箱按 app 列：没有连接型连接的扩展进工具箱；有连接的可通过连接打开，
+    // 不再重复出现在工具箱里。
+    let mut connected = shell_manifest();
+    connected.contributes.shell_app = Some(shell_app("ui/explorer.js"));
+    connected
+        .contributes
+        .connections
+        .push(resource_connection());
 
-    let mut standalone_toolbox = shell_view("ui/toolbox.js");
-    standalone_toolbox.id = "toolbox-tool".into();
-    standalone_toolbox.surface = crate::extension::manifest::ShellSurface::Toolbox;
+    let mut standalone = shell_manifest();
+    standalone.id = "com.example.standalone".to_string();
+    standalone.contributes.shell_app = Some(shell_app("ui/standalone.js"));
 
-    let mut owned = shell_view("ui/explorer.js");
-    owned.id = "explorer".into();
-
-    let mut manifest = shell_manifest();
-    manifest.contributes.shell_views.push(standalone_tab);
-    manifest.contributes.shell_views.push(standalone_toolbox);
-    manifest.contributes.shell_views.push(owned);
-    manifest.contributes.connections.push(resource_connection());
-
-    let catalog = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap();
-    let tools = catalog.toolbox_views();
-    let ids: Vec<&str> = tools.iter().map(|view| view.id.as_str()).collect();
+    let catalog = ExtensionRuntimeCatalog::from_manifests(vec![connected, standalone]).unwrap();
+    let ids: Vec<&str> = catalog
+        .toolbox_apps()
+        .iter()
+        .map(|app| app.extension_id.as_str())
+        .collect();
     assert!(
-        ids.contains(&"standalone-tool"),
-        "独立 tab 工具应进工具箱: {ids:?}"
+        ids.contains(&"com.example.standalone"),
+        "无连接的 app 应进工具箱: {ids:?}"
     );
     assert!(
-        ids.contains(&"toolbox-tool"),
-        "toolbox surface 工具应进工具箱: {ids:?}"
-    );
-    assert!(
-        !ids.contains(&"explorer"),
-        "连接关联的 shell view 不应进工具箱: {ids:?}"
+        !ids.contains(&"com.example.tools"),
+        "有连接的 app 不应重复进工具箱: {ids:?}"
     );
 }

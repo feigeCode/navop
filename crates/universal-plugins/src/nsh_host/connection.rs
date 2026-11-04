@@ -2,8 +2,8 @@
 //!
 //! 连接型扩展（远程桌面、ACP agent…）打开时做两件事：激活 provider，然后
 //! **把连接资源本身打开**（`resource.open`，配置来自保存的连接），再把打开
-//! 得到的句柄借给页面。页面拿到的 `navop.context.current().connection` 就是
-//! 这份上下文，`resourceHandle` 可以直接 invoke。
+//! 得到的句柄借给页面：它就是 `host.params.connection`（启动参数的一部分，
+//! 同步可读），`resourceHandle` 可以直接 `navop.resource.invoke`。
 //!
 //! 与嵌入工作台的"借来的会话"不同，这里的资源是**本页拥有的**：tab 关掉
 //! 就该把它关掉 —— 连接是页面开起来的。
@@ -34,16 +34,16 @@ impl NshConnectionLaunch {
     pub(crate) fn new(
         connection: &one_core::storage::StoredConnection,
         contribution: &extension_runtime::RegisteredResourceConnectionContribution,
-        view: &extension_runtime::RegisteredShellViewContribution,
+        app: &extension_runtime::RegisteredShellAppContribution,
     ) -> Result<Self> {
         let resource = ExtensionResourceLaunch::new(connection, contribution)?;
-        let alias = view
+        let alias = app
             .backends
             .iter()
             .find_map(|(alias, runtime_id)| {
                 (runtime_id == &contribution.runtime_id).then(|| alias.clone())
             })
-            .ok_or_else(|| anyhow!("connection shell view does not expose its runtime"))?;
+            .ok_or_else(|| anyhow!("connection shell app does not expose its runtime"))?;
         Ok(Self {
             name: connection.name.clone(),
             contribution_id: contribution.id.clone(),

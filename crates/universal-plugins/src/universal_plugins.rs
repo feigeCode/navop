@@ -177,16 +177,12 @@ impl UniversalPluginService {
 
     // 以下方法仅 `nsh-host` feature 路径下被调用;关闭 feature 时是合法的休眠代码。
     #[cfg_attr(not(feature = "nsh-host"), allow(dead_code))]
-    pub(crate) fn shell_view(
+    pub(crate) fn shell_app(
         &self,
         extension_id: &str,
-        view_id: &str,
-    ) -> Option<extension_runtime::RegisteredShellViewContribution> {
+    ) -> Option<extension_runtime::RegisteredShellAppContribution> {
         self.sync_catalog();
-        self.catalog_source
-            .get()?
-            .shell_view(extension_id, view_id)
-            .cloned()
+        self.catalog_source.get()?.shell_app(extension_id).cloned()
     }
 
     /// 查询已注册的扩展连接贡献(不依赖 Shell feature)。

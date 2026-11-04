@@ -20,13 +20,13 @@ mod view;
 pub use host::ExtensionViewHost;
 pub use model::{
     DownloadedMarketplaceExtension, ExtensionKind, ExtensionSummary, MarketplaceEntry,
-    MarketplaceInstallOutcome, MarketplaceInstallState, PermissionReviewModel, ShellViewSummary,
+    MarketplaceInstallOutcome, MarketplaceInstallState, PermissionReviewModel, ShellAppSummary,
     filter_installed, filter_marketplace, filter_updatable_marketplace,
     marketplace_entry_install_id, marketplace_install_state,
 };
 pub use shell::{
-    ShellViewOpener, close_shell_extension, finish_shell_extension, open_shell_view,
-    register_shell_view_opener,
+    ShellAppOpener, close_shell_extension, finish_shell_extension, open_shell_app,
+    register_shell_app_opener,
 };
 pub use view::{ExtensionManagerMode, ExtensionManagerView};
 
@@ -36,7 +36,7 @@ mod tests {
 
     use super::{
         ExtensionKind, ExtensionSummary, MarketplaceEntry, MarketplaceInstallState,
-        ShellViewSummary, filter_installed, filter_marketplace, filter_updatable_marketplace,
+        ShellAppSummary, filter_installed, filter_marketplace, filter_updatable_marketplace,
         marketplace_install_state,
     };
 
@@ -55,12 +55,11 @@ mod tests {
     }
 
     #[test]
-    fn extension_summary_tracks_shell_views() {
+    fn extension_summary_tracks_shell_app() {
         let summary = summary(ExtensionKind::Composite, "search", "1.0.0")
-            .with_shell_views(vec![ShellViewSummary::new("explorer", "Explorer")]);
+            .with_shell_app(Some(ShellAppSummary::new("Explorer")));
 
-        assert_eq!("explorer", summary.shell_views[0].id);
-        assert_eq!("Explorer", summary.shell_views[0].title);
+        assert_eq!("Explorer", summary.shell_app.expect("shell app").title);
     }
 
     #[test]

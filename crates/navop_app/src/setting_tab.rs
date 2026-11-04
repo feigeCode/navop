@@ -715,11 +715,12 @@ impl SettingsPanel {
                                             effective_locale_for_setting(&locale);
                                         gpui_component::set_locale(effective_locale);
                                         notes::set_markdown_editor_locale(effective_locale, cx);
-                                        // 扩展页自己带词条表，读的是宿主的语言事实
-                                        // (`navop.i18n.locale()`)；而页面描述重建不会
+                                        // 扩展页自己带词条表，语言由宿主通过
+                                        // `AppView::set_locale` 交给页面（v2 不再有
+                                        // `navop.i18n.locale()`）；而页面描述重建不会
                                         // 因为 set_locale 自己发生 —— 必须显式叫醒
                                         // 它们，否则页面停在旧语言上。
-                                        universal_plugins::refresh_shell_views(cx);
+                                        universal_plugins::refresh_shell_apps(cx);
                                         AppSettings::update_and_save(cx, |settings| {
                                             settings.locale = locale;
                                         });
@@ -4020,10 +4021,10 @@ mod tests {
 
     /// 切界面语言必须**叫醒已挂载的扩展页面**。
     ///
-    /// 扩展页的文案不在宿主的 rust-i18n 目录里：页面自己带词条表，只从宿主读
-    /// 「现在是什么语言」（`navop.i18n.locale()`）。而 `gpui_component::set_locale`
-    /// 只换宿主自己的词条，**不会**让脚本重建页面描述 —— 少了这一行，界面切了、
-    /// 扩展页停在旧语言上，且不报任何错。
+    /// 扩展页的文案不在宿主的 rust-i18n 目录里：页面自己带词条表，语言由宿主
+    /// 通过 `AppView::set_locale` 交给页面（v2 不再有 `navop.i18n.locale()`）。
+    /// 而 `gpui_component::set_locale` 只换宿主自己的词条，**不会**让脚本重建
+    /// 页面描述 —— 少了这一行，界面切了、扩展页停在旧语言上，且不报任何错。
     ///
     /// 断言两件事：这行在实现里存在，且在语言下拉的 `set_locale` 之后 ——
     /// 顺序反了会读到上一个语言值。
@@ -4034,7 +4035,7 @@ mod tests {
             .find("gpui_component::set_locale(effective_locale);")
             .expect("语言下拉里应有一处 set_locale");
         let refresh = source
-            .find("universal_plugins::refresh_shell_views(cx)")
+            .find("universal_plugins::refresh_shell_apps(cx)")
             .expect("切语言后必须让扩展页重跑脚本");
         assert!(
             refresh > set_locale,

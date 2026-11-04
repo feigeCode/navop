@@ -39,7 +39,6 @@
         "label": "Elasticsearch",
         "runtimeId": "main",
         "resourceType": "elasticsearch",
-        "shellViewId": "explorer",
         "form": {
           "tabs": [
             {
@@ -55,24 +54,24 @@
               ]
             }
           ]
-        }
+        },
+        "route": "explorer"
       }
     ],
-    "shellViews": [
-      {
-        "id": "explorer",
-        "title": "Open Elasticsearch Explorer",
-        "entry": "ui/explorer.js",
-        "surface": "tab",
-        "singleton": false,
-        "backends": {
-          "search": "main"
-        },
-        "modules": [
-          "context",
-          "resource"
-        ]
-      }
-    ]
+    "shellApp": {
+      "title": "Open Elasticsearch Explorer",
+      "entry": "ui/explorer.js",
+      "category": "database",
+      "keywords": [
+        "elasticsearch",
+        "search"
+      ],
+      "backends": {
+        "search": "main"
+      },
+      "modules": [
+        "resource"
+      ]
+    }
   }
 }

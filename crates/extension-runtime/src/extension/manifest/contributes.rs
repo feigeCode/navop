@@ -7,7 +7,7 @@ use super::menus::{MenuCommandRef, MenuContrib};
 
 #[path = "contributes/shell.rs"]
 mod shell;
-pub use shell::{ShellHostModule, ShellSurface, ShellViewContrib};
+pub use shell::{ShellAppContrib, ShellHostModule};
 #[path = "contributes/connection.rs"]
 mod connection;
 #[path = "contributes/terminal_launch.rs"]
@@ -42,8 +42,9 @@ pub struct ContributesManifest {
     pub document_exporters: Vec<DocumentExporterContrib>,
     #[serde(default, rename = "remoteFileEditors")]
     pub remote_file_editors: Vec<RemoteFileEditorContrib>,
-    #[serde(default, rename = "shellViews")]
-    pub shell_views: Vec<ShellViewContrib>,
+    /// 一个扩展最多一个 nsh app（多页面在 app 内路由）。
+    #[serde(default, rename = "shellApp")]
+    pub shell_app: Option<ShellAppContrib>,
     #[serde(default)]
     pub views: Vec<Value>,
     #[serde(default)]
@@ -80,7 +81,7 @@ impl ContributesManifest {
             + self.document_renderers.len()
             + self.document_exporters.len()
             + self.remote_file_editors.len()
-            + self.shell_views.len()
+            + usize::from(self.shell_app.is_some())
             + self.views.len()
             + self.tasks.len()
             + self.data_types.len()

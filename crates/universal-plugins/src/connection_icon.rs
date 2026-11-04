@@ -65,7 +65,7 @@ mod tests {
             icon_path,
             runtime_id: String::new(),
             resource_type: String::new(),
-            shell_view_id: None,
+            route: None,
             terminal: None,
             form: Default::default(),
         }

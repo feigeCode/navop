@@ -13,7 +13,7 @@ use crate::extension::manifest::{CommandContrib, RemoteFileEditorLaunchMode, Was
 
 #[path = "types/shell.rs"]
 mod shell;
-pub use shell::RegisteredShellViewContribution;
+pub use shell::RegisteredShellAppContribution;
 #[path = "types/resource_connection.rs"]
 mod resource_connection;
 pub use resource_connection::RegisteredResourceConnectionContribution;
@@ -146,10 +146,10 @@ pub enum ExtensionRuntimeError {
     UnsupportedCommand { command_id: String },
     #[error("invalid remote file editor `{editor_id}`: {reason}")]
     InvalidRemoteFileEditor { editor_id: String, reason: String },
-    #[error("invalid shell view manifest field {field}: {reason}")]
-    InvalidShellView { field: String, reason: String },
-    #[error("duplicate shell view key: {view_key}")]
-    DuplicateShellView { view_key: String },
+    #[error("invalid shell app manifest field {field}: {reason}")]
+    InvalidShellApp { field: String, reason: String },
+    #[error("duplicate shell app for extension `{extension_id}`")]
+    DuplicateShellApp { extension_id: String },
     #[error("invalid resource connection: {0}")]
     InvalidResourceConnection(String),
     #[error("invalid declarative layout: {reason}")]

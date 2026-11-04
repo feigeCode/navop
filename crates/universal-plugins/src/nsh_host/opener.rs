@@ -1,25 +1,21 @@
-//! `ShellViewOpener` 的 nsh 实现：扩展页面从"gpui-shell 脚本视图"换成
+//! `ShellAppOpener` 的 nsh 实现：扩展页面从"gpui-shell 脚本视图"换成
 //! "nsh 程序"，但对上层的契约不变（`extension_view` 只认这个 trait）。
 
 use gpui::{App, Task, Window};
 
 use super::NshHost;
 
-impl extension_view::ShellViewOpener for NshHost {
-    fn open(&self, extension_id: &str, view_id: &str, window: &mut Window, cx: &mut App) {
+impl extension_view::ShellAppOpener for NshHost {
+    fn open(&self, extension_id: &str, route: Option<&str>, window: &mut Window, cx: &mut App) {
         // 正在退役的扩展不再接受新页面：它马上就要被卸载了。
         if self.retiring().contains(extension_id) {
             return;
         }
-        let Some(contribution) = self.contribution(extension_id, view_id) else {
-            tracing::warn!(
-                extension_id,
-                view_id,
-                "扩展目录里没有这个 shell view，忽略打开请求"
-            );
+        let Some(contribution) = self.contribution(extension_id) else {
+            tracing::warn!(extension_id, "扩展目录里没有这个 shell app，忽略打开请求");
             return;
         };
-        super::open_view(self.clone(), contribution, window, cx);
+        super::open_view(self.clone(), contribution, route, window, cx);
     }
 
     /// 扩展被停用/卸载：关掉它的所有页面，
@@ -62,14 +58,14 @@ impl NshHost {
             .open_tabs(extension_id)
             .into_iter()
             .map(|tab| {
-                let (view_id, view_name) = {
+                let (route, extension_name) = {
                     let tab = tab.read(cx);
-                    (tab.view_id().clone(), tab.extension_id().clone())
+                    (tab.route().cloned(), tab.extension_id().clone())
                 };
                 tracing::debug!(
                     extension_id,
-                    view_id = %view_id,
-                    "扩展停用：关闭脚本页（所属 {view_name}）"
+                    route = route.as_deref().unwrap_or("<default>"),
+                    "扩展停用：关闭 nsh app 页（所属 {extension_name}）"
                 );
                 tab.update(cx, |tab, cx| tab.close_for_extension(cx))
             })

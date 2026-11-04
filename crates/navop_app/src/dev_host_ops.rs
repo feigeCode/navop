@@ -25,7 +25,7 @@ pub fn install(cx: &mut App) {
         reload: Some(std::rc::Rc::new(reload)),
         watch: Some(std::rc::Rc::new(watch)),
         remove: Some(std::rc::Rc::new(remove)),
-        open_view: Some(std::rc::Rc::new(open_view)),
+        open_app: Some(std::rc::Rc::new(open_app)),
         logs: Some(std::rc::Rc::new(logs)),
         pick_start: Some(std::rc::Rc::new(pick_start)),
         pick_result: Some(std::rc::Rc::new(pick_result)),
@@ -33,35 +33,23 @@ pub fn install(cx: &mut App) {
     universal_plugins::set_dev_ops(std::rc::Rc::new(ops), cx);
 }
 
-fn view_value(
-    view: &extension_runtime::extension::manifest::contributes::ShellViewContrib,
-) -> Value {
-    let surface = match view.surface {
-        extension_runtime::extension::manifest::ShellSurface::Tab => "tab",
-        extension_runtime::extension::manifest::ShellSurface::Toolbox => "toolbox",
-    };
-    json!({
-        "id": view.id,
-        "title": view.title,
-        "surface": surface,
-        "category": view.category,
-    })
+fn app_value(project: &DevProject) -> Value {
+    project
+        .manifest
+        .as_ref()
+        .and_then(|manifest| manifest.contributes.shell_app.as_ref())
+        .map(|app| json!({ "title": app.title }))
+        .unwrap_or(Value::Null)
 }
 
 fn project_value(project: &DevProject, watching: bool) -> Value {
-    let (id, name, version, views) = match &project.manifest {
+    let (id, name, version) = match &project.manifest {
         Some(manifest) => (
             strip_dev_prefix(&manifest.id),
             manifest.name.clone(),
             manifest.version.clone(),
-            manifest
-                .contributes
-                .shell_views
-                .iter()
-                .map(view_value)
-                .collect::<Vec<_>>(),
         ),
-        None => (String::new(), String::new(), String::new(), Vec::new()),
+        None => (String::new(), String::new(), String::new()),
     };
     json!({
         "root": project.root.display().to_string(),
@@ -70,7 +58,7 @@ fn project_value(project: &DevProject, watching: bool) -> Value {
         "version": version,
         "error": project.error,
         "watching": watching,
-        "views": views,
+        "app": app_value(project),
     })
 }
 
@@ -251,28 +239,28 @@ fn remove(cx: &mut App, root: &str) -> Result<Value, String> {
         .unwrap_or_else(|| json!({"root": root.display().to_string(), "id": ""})))
 }
 
-fn open_view(cx: &mut App, extension_id: &str, view_id: &str) -> Result<Value, String> {
+fn open_app(cx: &mut App, extension_id: &str, route: Option<&str>) -> Result<Value, String> {
     let dev_extension_id = format!("{DEV_ID_PREFIX}{extension_id}");
     let contribution = extension_runtime::global_catalog(cx)
-        .and_then(|catalog| catalog.shell_view(&dev_extension_id, view_id).cloned())
+        .and_then(|catalog| catalog.shell_app(&dev_extension_id).cloned())
         .ok_or_else(|| {
-            format!("view not found: {extension_id}/{view_id}; reload the project and try again")
+            format!("app not found: {extension_id}; reload the project and try again")
         })?;
     if !contribution.entry_path.is_file() {
         return Err(format!(
-            "view entry not found: {}",
+            "app entry not found: {}",
             contribution.entry_path.display()
         ));
     }
-    let view_id = view_id.to_string();
-    // 打开视图要窗口，等这一帧的借用结束再做。
+    let route = route.map(str::to_owned);
+    // 打开 app 要窗口，等这一帧的借用结束再做。
     cx.defer(move |cx| {
         let Some(window) = crate::app_init::resolve_navop_window(cx) else {
-            tracing::warn!(%dev_extension_id, %view_id, "no Navop window available for dev view");
+            tracing::warn!(%dev_extension_id, ?route, "no Navop window available for dev app");
             return;
         };
         let _ = window.update(cx, |_, window, cx| {
-            extension_view::open_shell_view(&dev_extension_id, &view_id, window, cx);
+            extension_view::open_shell_app(&dev_extension_id, route.as_deref(), window, cx);
         });
     });
     Ok(Value::Null)

@@ -284,7 +284,7 @@ mod tests {
             icon_path: None,
             runtime_id: "main".to_string(),
             resource_type: "middleware".to_string(),
-            shell_view_id: None,
+            route: None,
             terminal: None,
             form: ResourceConnectionForm {
                 tabs: vec![

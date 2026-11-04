@@ -12,7 +12,7 @@ pub use contributes::{
     ResolvedTerminalLaunch, ResourceConnectionContrib, ResourceConnectionFieldType,
     ResourceConnectionForm, ResourceConnectionFormField, ResourceConnectionFormTab,
     ResourceConnectionSelectOption, ResourceConnectionTerminal, ResourceConnectionVisibilityRule,
-    ShellHostModule, ShellSurface, ShellViewContrib, TerminalLaunchError,
+    ShellAppContrib, ShellHostModule, TerminalLaunchError,
 };
 #[cfg(test)]
 pub use contributes::{CommandHandlerContrib, ContributesManifest, HtmlPreviewTransformContrib};
@@ -26,7 +26,7 @@ pub use schema::{
 };
 pub use schema::{Manifest, WasmRuntimeKind};
 pub use security::build_permission_review;
-pub(crate) use shell_validation::validate_shell_views;
+pub(crate) use shell_validation::validate_shell_app;
 pub use versioning::{HostApiVersions, current_host_version, set_current_host_version};
 
 #[cfg(test)]

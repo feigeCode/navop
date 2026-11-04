@@ -38,7 +38,7 @@ pub use mirror::{extension_mirror, set_extension_mirror};
 pub use types::{
     RegisteredDocumentExporter, RegisteredIpcRuntimeBinding, RegisteredRemoteFileEditorCommand,
     RegisteredRemoteFileEditorContribution, RegisteredResourceConnectionContribution,
-    RegisteredShellViewContribution,
+    RegisteredShellAppContribution,
 };
 
 #[cfg(all(test, feature = "wasm-components"))]

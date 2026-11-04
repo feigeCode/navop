@@ -20,7 +20,7 @@ use super::types::{
     ExtensionRuntimeError, RegisteredDocumentExporter, RegisteredDocumentRenderer,
     RegisteredHtmlPreviewTransform, RegisteredIpcRuntimeBinding, RegisteredKeybindingContribution,
     RegisteredRemoteFileEditorContribution, RegisteredResourceConnectionContribution,
-    RegisteredShellViewContribution, WasmRuntimeBinding,
+    RegisteredShellAppContribution, WasmRuntimeBinding,
 };
 
 static WASM_CATALOG_LOG_KEYS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -45,7 +45,8 @@ pub struct ExtensionRuntimeCatalog {
     pub(super) document_exporter_runtimes:
         Mutex<HashMap<String, Arc<extension_wasm::DocumentExporterRuntime>>>,
     pub(super) remote_file_editors: Vec<RegisteredRemoteFileEditorContribution>,
-    pub(super) shell_views: BTreeMap<String, RegisteredShellViewContribution>,
+    /// 扩展 id → nsh app（一个扩展最多一个）。
+    pub(super) shell_apps: BTreeMap<String, RegisteredShellAppContribution>,
     pub(super) resource_connections: BTreeMap<String, RegisteredResourceConnectionContribution>,
 }
 
@@ -83,7 +84,7 @@ impl ExtensionRuntimeCatalog {
             #[cfg(feature = "wasm-components")]
             document_exporter_runtimes: Mutex::new(HashMap::new()),
             remote_file_editors: Vec::new(),
-            shell_views: BTreeMap::new(),
+            shell_apps: BTreeMap::new(),
             resource_connections: BTreeMap::new(),
         }
     }
@@ -167,49 +168,33 @@ impl ExtensionRuntimeCatalog {
         self.ipc_runtimes.values()
     }
 
-    pub fn shell_views(&self) -> impl Iterator<Item = &RegisteredShellViewContribution> {
-        self.shell_views.values()
+    /// 目录里登记的全部 nsh app。
+    pub fn shell_apps(&self) -> impl Iterator<Item = &RegisteredShellAppContribution> {
+        self.shell_apps.values()
     }
 
-    /// 工具箱聚合的独立 shell 工具，按 title 排序。
+    /// 工具箱聚合的独立 app，按 title 排序。
     ///
-    /// 成员 = 没有任何「非工具箱归属」引用的 shell 视图。两类视图必须排除：
-    ///
-    /// 1. 连接的 `shellViewId` 指向的视图（连接打开，不由工具箱打开）；
-    /// 2. 资源工作台页面的**页体**：`pages[*].renderer.viewId` 指向的视图；
-    ///
-    /// `surface` 不参与判定：`surface: "tab"` 的独立工具（如 dev-tools 的
-    /// `workbench`）同样要进工具箱，只有「被别的入口占用」才排除。
-    pub fn toolbox_views(&self) -> Vec<&RegisteredShellViewContribution> {
-        let connection_view_keys: HashSet<(&str, &str)> = self
+    /// 有非终端连接的扩展从工具箱排除：它是从连接打开的，工具箱打开只会
+    /// 停在「请先打开一条连接」的空态。没有连接的 app（如 dev-tools）才
+    /// 作为独立工具出现。
+    pub fn toolbox_apps(&self) -> Vec<&RegisteredShellAppContribution> {
+        let connection_extensions: HashSet<&str> = self
             .resource_connections()
-            .filter_map(|conn| {
-                conn.shell_view_id
-                    .as_deref()
-                    .map(|view_id| (conn.extension_id.as_str(), view_id))
-            })
+            .filter(|conn| conn.terminal.is_none())
+            .map(|conn| conn.extension_id.as_str())
             .collect();
         let mut tools: Vec<_> = self
-            .shell_views
+            .shell_apps
             .values()
-            .filter(|view| {
-                let key = (view.extension_id.as_str(), view.id.as_str());
-                if connection_view_keys.contains(&key) {
-                    return false;
-                }
-                true
-            })
+            .filter(|app| !connection_extensions.contains(app.extension_id.as_str()))
             .collect();
         tools.sort_by(|a, b| a.title.cmp(&b.title));
         tools
     }
 
-    pub fn shell_view(
-        &self,
-        extension_id: &str,
-        view_id: &str,
-    ) -> Option<&RegisteredShellViewContribution> {
-        self.shell_views.get(&format!("{extension_id}::{view_id}"))
+    pub fn shell_app(&self, extension_id: &str) -> Option<&RegisteredShellAppContribution> {
+        self.shell_apps.get(extension_id)
     }
 
     pub fn resource_connections(
