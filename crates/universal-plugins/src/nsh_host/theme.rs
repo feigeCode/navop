@@ -4,19 +4,9 @@
 //! 所以这里只做名字映射；页面里写 `bg-card` / `text-muted-foreground` /
 //! `border-border` 就能跟着宿主换肤与明暗切换。
 
-use std::cell::RefCell;
-
 use gpui::{App, Entity, Hsla as GpuiHsla};
 use gpui_component::{ActiveTheme as _, Theme, ThemeMode};
 use nsh_platform_gpui::{AdaptiveColor, AppView, Appearance, Hsla};
-
-use super::abi::ThemeSnapshot;
-
-thread_local! {
-    /// 上一次投影的"颜色表 + 明暗"键与版本号：序列化结果不变就不加版本，
-    /// 页面据此决定要不要重建自己的颜色缓存。
-    static REVISION: RefCell<(Option<String>, u64)> = const { RefCell::new((None, 0)) };
-}
 
 /// `nsh_core::element::tokens::{FONT_SANS, FONT_MONO}` 的字面值。
 /// nsh-platform-gpui 没有重导出 tokens 模块，这里不为此引入 nsh-core。
@@ -89,39 +79,6 @@ pub(crate) fn appearance(mode: ThemeMode) -> Appearance {
         Appearance::Dark
     } else {
         Appearance::Light
-    }
-}
-
-/// 宿主主题的 JSON 投影（`navop.theme.snapshot` 的应答与推送载荷）。
-///
-/// 颜色走 `serde_json` 反射 `Theme::colors`，不抄匹配表：组件库加字段时
-/// 这里自动跟上，页面写 `colors.tab_active` 就能用（gpui-shell 版同样是反射）。
-pub(crate) fn snapshot(cx: &App) -> ThemeSnapshot {
-    let Some(theme) = cx.try_global::<Theme>() else {
-        // 主题还没初始化（测试台、极早期）：空表让页面自己兜底，不是错误。
-        return ThemeSnapshot::default();
-    };
-    let dark = theme.mode.is_dark();
-    let colors = serde_json::to_value(&theme.colors)
-        .ok()
-        .and_then(|value| value.as_object().cloned())
-        .unwrap_or_default();
-    let mut key = String::with_capacity(4);
-    key.push(if dark { 'd' } else { 'l' });
-    key.push_str(&serde_json::Value::Object(colors.clone()).to_string());
-    let revision = REVISION.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        if cache.0.as_deref() == Some(key.as_str()) {
-            return cache.1;
-        }
-        cache.1 = cache.1.wrapping_add(1);
-        cache.0 = Some(key);
-        cache.1
-    });
-    ThemeSnapshot {
-        revision,
-        dark,
-        colors,
     }
 }
 

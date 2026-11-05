@@ -30,6 +30,7 @@ mod types;
 
 pub use catalog::ExtensionRuntimeCatalog;
 pub use extension::{init, manifest::set_current_host_version};
+pub use extension::manifest::{ToolAnnotations, ToolContrib, ToolRisk};
 pub use extension_view_host::MainExtensionViewHost;
 #[cfg(feature = "wasm-components")]
 pub use extension_wasm::{DocumentRenderArtifact, DocumentRenderRequest, DocumentRenderTheme};
@@ -38,7 +39,7 @@ pub use mirror::{extension_mirror, set_extension_mirror};
 pub use types::{
     RegisteredDocumentExporter, RegisteredIpcRuntimeBinding, RegisteredRemoteFileEditorCommand,
     RegisteredRemoteFileEditorContribution, RegisteredResourceConnectionContribution,
-    RegisteredShellViewContribution,
+    RegisteredShellAppContribution, RegisteredToolContribution,
 };
 
 #[cfg(all(test, feature = "wasm-components"))]

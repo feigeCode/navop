@@ -304,19 +304,16 @@ fn install_staging_with_permission(
 }
 
 fn to_view_summary(summary: host_extension::ExtensionSummary) -> extension_view::ExtensionSummary {
-    let shell_views = if summary.kind == host_extension::ExtensionKind::Composite {
-        load_from_dir(&summary.path)
-            .map(|manifest| {
-                manifest
-                    .contributes
-                    .shell_views
-                    .into_iter()
-                    .map(|view| extension_view::ShellViewSummary::new(view.id, view.title))
-                    .collect()
+    let shell_app = if summary.kind == host_extension::ExtensionKind::Composite {
+        load_from_dir(&summary.path).ok().and_then(|manifest| {
+            manifest.contributes.shell_app.map(|app| {
+                extension_view::ShellAppSummary::new(
+                    app.title.unwrap_or_else(|| summary.name.clone()),
+                )
             })
-            .unwrap_or_default()
+        })
     } else {
-        Vec::new()
+        None
     };
     extension_view::ExtensionSummary::new(
         to_view_kind(summary.kind),
@@ -329,7 +326,7 @@ fn to_view_summary(summary: host_extension::ExtensionSummary) -> extension_view:
     .with_icon(summary.icon)
     .with_driver_id(summary.driver_id)
     .with_default_port(summary.default_port)
-    .with_shell_views(shell_views)
+    .with_shell_app(shell_app)
 }
 
 fn to_view_entry(mut entry: host_downloader::MarketplaceEntry) -> extension_view::MarketplaceEntry {

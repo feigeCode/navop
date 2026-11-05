@@ -28,8 +28,8 @@ pub struct DevOps {
     pub watch: Option<Rc<dyn Fn(&mut App, &str) -> Result<Value, String>>>,
     /// 从注册表移除工程。
     pub remove: Option<Rc<dyn Fn(&mut App, &str) -> Result<Value, String>>>,
-    /// 打开工程的某个 shell view。
-    pub open_view: Option<Rc<dyn Fn(&mut App, &str, &str) -> Result<Value, String>>>,
+    /// 打开某个扩展的 app，指定初始路由。
+    pub open_app: Option<Rc<dyn Fn(&mut App, &str, Option<&str>) -> Result<Value, String>>>,
     /// 读工程日志尾部。
     pub logs: Option<Rc<dyn Fn(&mut App, &str, usize) -> Result<Value, String>>>,
     /// 弹原生目录选择器（返回 "pending"）。

@@ -1,31 +1,21 @@
-//! 结构化的 navop 错误 envelope（design §16）。
+//! 结构化的 navop 错误（host ABI v2 §6）。
 //!
-//! 两个 UI 平面共用的错误词汇表：gpui-shell 的 `HostError` 只携带一句
-//! message，nsh 的 `HostCall::reject` 也一样，所以稳定 code 统一编码成
-//! 可搜索 marker + Base64URL JSON 追加到 message 末尾；SDK 搜索最后一个
-//! `__NAVOP_ERROR__` 并解码，解码失败则退回普通 JavaScript Error。
+//! 稳定 code + message + retryable + 可选 details；页面侧从 `host.call` 的
+//! rejection 上读 `error.code` / `error.retryable` / `error.details`。nsh 的
+//! [`HostCall::reject_error`](nsh_engine::HostCall::reject_error) 直接把
+//! `JsError` 变成带属性的 JS 错误，所以这里不再编码 markers/base64 信封，
+//! 只负责把 `NavopError` 翻译成 `JsError::Fields`。
 //!
-//! 本模块不依赖任何 UI 平面类型，只产出 `NavopError`；各平面再决定怎么
-//! 把它交给脚本（`HostError::new` / `reject`）。
+//! 本模块不依赖任何 UI 平面类型，只产出 `NavopError`；调用方把它翻成
+//! `JsError` 再经 `HostCall::reject_error` / `HostReply::reply_error` 交给脚本。
 
-use base64::Engine as _;
+use nsh_core::element::{ErrorClass, ErrorFields, JsError};
+use serde_json::Value;
 
-/// SDK 用于定位 envelope 的 marker。
-pub(crate) const ERROR_MARKER: &str = "__NAVOP_ERROR__";
 const MAX_MESSAGE_CHARS: usize = 2048;
-const MAX_DETAILS_BYTES: usize = 8192;
 
 /// design §16 的稳定错误码。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-// 与 gpui-shell 平面共用一套 code：本 feature 单独开时，只有另一边用到的
-// 变体/映射暂时没人构造（M7 删掉 gpui-shell 后由 workbench 段承接）。
-#[cfg_attr(
-    not(feature = "nsh-host"),
-    allow(
-        dead_code,
-        reason = "workbench 映射在 M5 接线前只被 gpui-shell 平面使用"
-    )
-)]
 pub(crate) enum ErrorCode {
     InvalidArgument,
     PermissionDenied,
@@ -80,27 +70,23 @@ impl NavopError {
         }
     }
 
-    /// 渲染成 `"<message>\n__NAVOP_ERROR__<base64url>"`。
-    pub(crate) fn render(&self) -> String {
+    /// 变成页面侧能按属性读取的 JS 错误：`Error { code, retryable, details? }`。
+    pub(crate) fn to_js_error(&self) -> JsError {
+        // message 截断到 2K 字符：错误说明不需要整段堆栈，撑爆 IPC 反而
+        // 让页面拿不到结构化字段。
         let message = truncate_chars(&self.message, MAX_MESSAGE_CHARS);
-        let mut envelope = serde_json::json!({
-            "code": self.code.as_str(),
-            "message": message,
-            "retryable": self.retryable,
-        });
+        let mut fields = vec![
+            ("code", Value::String(self.code.as_str().to_owned())),
+            ("retryable", Value::Bool(self.retryable)),
+        ];
         if let Some(details) = &self.details {
-            match serde_json::to_vec(details) {
-                Ok(encoded) if encoded.len() <= MAX_DETAILS_BYTES => {
-                    envelope["details"] = details.clone();
-                }
-                _ => {
-                    envelope["details"] = serde_json::Value::Null;
-                }
-            }
+            fields.push(("details", details.clone()));
         }
-        let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(serde_json::to_vec(&envelope).unwrap_or_default());
-        format!("{message}\n{ERROR_MARKER}{encoded}")
+        JsError::Fields(Box::new(ErrorFields {
+            class: ErrorClass::Error,
+            message,
+            fields,
+        }))
     }
 }
 
@@ -180,23 +166,30 @@ fn truncate_chars(value: &str, max: usize) -> String {
 mod tests {
     use super::*;
 
-    fn decode(error: &NavopError) -> serde_json::Value {
-        let rendered = error.render();
-        let marker = rendered.rfind(ERROR_MARKER).expect("marker is present");
-        let encoded = &rendered[marker + ERROR_MARKER.len()..];
-        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(encoded)
-            .expect("envelope is valid base64url");
-        serde_json::from_slice(&bytes).expect("envelope is valid json")
+    fn code(error: &NavopError) -> String {
+        error
+            .to_js_error()
+            .code()
+            .expect("the JS error carries a code")
+            .to_owned()
+    }
+
+    fn field(error: &NavopError, key: &str) -> Option<Value> {
+        match error.to_js_error() {
+            JsError::Fields(fields) => fields.field(key).cloned(),
+            other => panic!("expected JsError::Fields, got {other:?}"),
+        }
     }
 
     #[test]
-    fn invalid_handle_renders_decodable_envelope() {
+    fn invalid_handle_becomes_a_structured_js_error() {
         let error = NavopError::new(ErrorCode::InvalidHandle, "invalid blob handle `blob-1`");
-        let envelope = decode(&error);
-        assert_eq!(envelope["code"], "INVALID_HANDLE");
-        assert_eq!(envelope["retryable"], false);
-        assert!(error.render().starts_with("invalid blob handle"));
+        let js = error.to_js_error();
+        assert_eq!(js.code(), Some("INVALID_HANDLE"));
+        assert_eq!(js.message(), "invalid blob handle `blob-1`");
+        assert_eq!(field(&error, "retryable"), Some(Value::Bool(false)));
+        // details 缺省时不出现在映射里。
+        assert_eq!(field(&error, "details"), None);
     }
 
     #[test]
@@ -204,7 +197,7 @@ mod tests {
         let error = NavopError::from(extension_host::HostError::Cancelled {
             method: "job/start".into(),
         });
-        assert_eq!(decode(&error)["code"], "REQUEST_CANCELLED");
+        assert_eq!(code(&error), "REQUEST_CANCELLED");
     }
 
     #[test]
@@ -213,17 +206,18 @@ mod tests {
             method: "resource/invoke".into(),
             timeout_ms: 30_000,
         });
-        let envelope = decode(&error);
-        assert_eq!(envelope["code"], "REQUEST_TIMEOUT");
-        assert_eq!(envelope["retryable"], true);
+        assert_eq!(code(&error), "REQUEST_TIMEOUT");
+        assert_eq!(field(&error, "retryable"), Some(Value::Bool(true)));
     }
 
     #[test]
     fn frame_too_large_maps_to_result_too_large() {
         let error =
             NavopError::from(extension_host::HostError::FrameTooLarge { limit_bytes: 4096 });
-        let envelope = decode(&error);
-        assert_eq!(envelope["code"], "RESULT_TOO_LARGE");
-        assert_eq!(envelope["details"]["limitBytes"], 4096);
+        assert_eq!(code(&error), "RESULT_TOO_LARGE");
+        assert_eq!(
+            field(&error, "details").unwrap()["limitBytes"],
+            serde_json::json!(4096)
+        );
     }
 }

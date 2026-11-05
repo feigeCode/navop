@@ -1,4 +1,4 @@
-//! 承载一个 nsh 扩展页面的 tab。
+//! 承载一个扩展 nsh app 的 tab。
 //!
 //! 装载分两段，和 gpui-shell 那侧同构：先**租**provider（激活后端 runtime，
 //! 拿到 activation lease），租到手再挂页面。顺序不能倒 —— 页面 `mount` 的
@@ -9,8 +9,9 @@
 //! 中间任何一步失败也把已经租到的那些还掉。
 
 use std::{
+    collections::HashMap,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     time::Duration,
@@ -24,11 +25,12 @@ use gpui::{
 };
 use gpui_component::Theme;
 use nsh_engine::HostChannel;
-use nsh_platform_gpui::{AppOptions, AppView};
+use nsh_platform_gpui::{AppOptions, AppView, Locale};
+use serde_json::{Map, Value, json};
 
 use super::{Trust, abi, bundle, session::NshSession, theme};
 
-/// 一个扩展页面（一个 `AppView` + 它的 manifest 元数据）。
+/// 一个扩展的 nsh app 实例（一个 `AppView` + 它的 manifest 元数据 + 初始路由）。
 pub struct NshTab {
     /// 激活 lease 用：还租约要在 tokio 上 await。
     service: crate::UniversalPluginService,
@@ -36,10 +38,11 @@ pub struct NshTab {
     /// 签名包验签要信任库；它是主线程独占的（`Rc<RefCell<_>>`），所以
     /// 装载动作只在本结构所在线程上做。
     trust: Trust,
-    contribution: extension_runtime::RegisteredShellViewContribution,
-    /// 页面的扩展 / view 身份：host 会话按它建，关闭与排障也要它。
+    contribution: extension_runtime::RegisteredShellAppContribution,
+    /// 页面的扩展身份：host 会话按它建，关闭与排障也要它。
     extension_id: SharedString,
-    view_id: SharedString,
+    /// 打开这个 tab 时 app 的初始路由（`host.params.route`）。
+    route: Option<SharedString>,
     title: SharedString,
     view: Option<Entity<AppView>>,
     /// 装载失败时的原因：tab 照样开出来，把错误写在页面上，而不是静默失败。
@@ -64,6 +67,8 @@ pub struct NshTab {
     /// 起来再取 `AppView::host()` —— 页面 `mount` 第一行就可能调宿主，
     /// handler 必须先于页面就位。这也让调用方（含台子）能在挂载前挂 handler。
     channel: HostChannel,
+    /// provider 事件流 → `navop.event` 推送的泵（v2 的唯一推送平面）。
+    pump: Option<Arc<EventPump>>,
     /// 能力平面会话：provider 句柄记账与取消。页面关闭即 drop，句柄随之回收。
     session: Option<Arc<NshSession>>,
     /// 引擎线程 → 主线程的桥（`navop.dev` 这类操作要回主线程跑）。
@@ -75,22 +80,37 @@ pub struct NshTab {
     is_connection: bool,
     /// 连接资源准备好了但还没交给会话（建会话要等窗口）。
     prepared_connection: Option<super::connection::PreparedNshConnection>,
+    /// 插件 AI 侧栏（plugin-ai-tools.md §9）：每 tab 一个实例，默认收起。
+    /// 页面装载成功后创建；会话 v1 只在内存里，tab 关掉即丢。
+    plugin_ai: Option<Entity<super::plugin_ai_panel::PluginAiPanel>>,
 }
 
 impl NshTab {
     pub(crate) fn open(
-        contribution: extension_runtime::RegisteredShellViewContribution,
+        contribution: extension_runtime::RegisteredShellAppContribution,
+        route: Option<String>,
         service: crate::UniversalPluginService,
         trust: Trust,
         dispatcher: super::dispatch::MainThread,
         cx: &mut App,
     ) -> Entity<Self> {
-        Self::create(contribution, service, trust, dispatcher, None, None, cx)
+        Self::create(
+            contribution,
+            route,
+            service,
+            trust,
+            dispatcher,
+            None,
+            None,
+            cx,
+        )
     }
 
     /// 连接型页面：先用连接配置打开 provider 资源，再把页面挂在这个会话上。
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn open_connection(
-        contribution: extension_runtime::RegisteredShellViewContribution,
+        contribution: extension_runtime::RegisteredShellAppContribution,
+        route: Option<String>,
         service: crate::UniversalPluginService,
         trust: Trust,
         dispatcher: super::dispatch::MainThread,
@@ -100,6 +120,7 @@ impl NshTab {
     ) -> Entity<Self> {
         Self::create(
             contribution,
+            route,
             service,
             trust,
             dispatcher,
@@ -109,8 +130,10 @@ impl NshTab {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn create(
-        contribution: extension_runtime::RegisteredShellViewContribution,
+        contribution: extension_runtime::RegisteredShellAppContribution,
+        route: Option<String>,
         service: crate::UniversalPluginService,
         trust: Trust,
         dispatcher: super::dispatch::MainThread,
@@ -122,23 +145,16 @@ impl NshTab {
             .clone()
             .unwrap_or_else(|| contribution.title.clone().into());
         let extension_id: SharedString = contribution.extension_id.clone().into();
-        let view_id: SharedString = contribution.id.clone().into();
+        let route: Option<SharedString> = route.map(Into::into);
         let tokio = one_core::gpui_tokio::Tokio::handle(cx);
         let channel = HostChannel::default();
 
-        let channel_for_theme = channel.clone();
         let tab: Entity<Self> = cx.new(|cx| {
             let _theme = cx.observe_global::<Theme>(move |this: &mut Self, cx| {
+                // v2 的主题走 nsh 原生（`set_theme` / `set_appearance`）：
+                // 不再向页面推 `navop.theme.changed`，页面也不读 navop.theme.*。
                 if let Some(view) = &this.view {
                     theme::push(view, cx);
-                    // 缓存里那份供 `navop.theme.snapshot` 读，同时推
-                    // `navop.theme.changed` 给页面。
-                    if let Some(abi) = &this.abi
-                        && let Some(payload) = abi.set_theme(theme::snapshot(cx))
-                        && let Err(error) = channel_for_theme.send("navop.theme.changed", payload)
-                    {
-                        tracing::warn!(%error, "nsh 页面主题推送失败");
-                    }
                 }
             });
             Self {
@@ -147,9 +163,10 @@ impl NshTab {
                 trust,
                 contribution,
                 extension_id,
-                view_id,
+                route,
                 title,
                 channel,
+                pump: None,
                 view: None,
                 error: None,
                 prepared: None,
@@ -164,6 +181,7 @@ impl NshTab {
                 is_connection: connection.is_some(),
                 connection,
                 prepared_connection: None,
+                plugin_ai: None,
             }
         });
         tab.update(cx, |tab, cx| tab.start_prepare(cx));
@@ -254,7 +272,7 @@ impl NshTab {
             Err(error) => {
                 tracing::error!(
                     extension_id = %self.extension_id,
-                    view_id = %self.view_id,
+                    route = %self.route_display(),
                     path = %self.contribution.entry_path.display(),
                     "nsh 页面装载失败: {error:#}"
                 );
@@ -264,54 +282,108 @@ impl NshTab {
         };
         // 页面能力要在页面起来之前就有：handler 必须挂在它的通道上，
         // 而页面启动的第一行就可能 `host.call`。
-        let host_abi = abi::HostAbi::new(&self.contribution);
+        let host_abi = abi::HostAbi::new(&self.contribution, self.route.as_deref());
         let session = Arc::new(NshSession::new(
             self.service.clone(),
             self.contribution.backends.clone(),
             self.tokio.clone(),
         ));
         let accepted = program.accepted;
+        // 连接型页面：资源句柄仍旧交给会话持有；连接事实本身进 `host.params`
+        // —— v2 删了 `navop.connection.current`，params 是页面的唯一来源。
+        let connection = match self.prepared_connection.take() {
+            Some(prepared) => match prepared.adopt(&session) {
+                Ok(context) => context,
+                Err(error) => {
+                    // 连接资源没接上：页面照常起来，但 `params.connection`
+                    // 只能是 null（spec §2）。
+                    tracing::warn!(
+                        extension_id = %self.extension_id,
+                        route = %self.route_display(),
+                        "连接资源接入失败，params.connection 置空: {error:#}"
+                    );
+                    Value::Null
+                }
+            },
+            None => Value::Null,
+        };
+        // 启动事实要在 `AppOptions` / `cx.new(AppView::new)` 之前写进通道：
+        // 页面顶层同步读 `host.params`，首帧就要看到完整的一份（spec §2）。
+        self.channel.set_params(params_payload(
+            &self.contribution,
+            self.route.as_deref(),
+            connection,
+        ));
         let options = AppOptions {
             app_id: program.app_id,
             asset_base: program.asset_base,
             host: self.channel.clone(),
             // 原生组件（`<Terminal/>` 这类）按**本页面**的注册表注入：
             // 每视图一份，工厂里钉死扩展身份与清单权限。
-            components: super::native::components_for(&self.contribution, cx),
+            components: super::native::components_for(
+                &self.contribution,
+                self.route.as_deref(),
+                cx,
+            ),
             ..AppOptions::default()
         };
-        // 连接型页面：把刚打开的资源交给会话（句柄归本 tab 所有），
-        // 并把连接事实放进 `navop.context.current()` —— 页面据此知道自己
-        // 在服务哪条连接。
-        if let Some(prepared) = self.prepared_connection.take()
-            && let Ok(context) = prepared.adopt(&session)
-        {
-            host_abi.set_connection(context);
-        }
+        // 事件泵先于 handler 建好：`navop.event.subscribe` 会把订阅交给它。
+        let pump = EventPump::new(self.channel.clone(), Arc::clone(&session));
+
+        // 插件 AI 侧栏（§9）：页面装载成功后建好（默认收起，随时可开）。
+        // 连接型页面回查完整 StoredConnection（build_sidebar_resource_state
+        // 需要它），查不到按"无连接"处理。先建面板再注册 ABI：navop.ai.*
+        // 的 handler 需要面板句柄。
+        let connection = self.connection.as_ref().and_then(|launch| {
+            use one_core::storage::traits::Repository as _;
+            let id = launch.connection_id();
+            cx.try_global::<one_core::storage::GlobalStorageState>()
+                .and_then(|state| state.storage.get::<one_core::storage::ConnectionRepository>())
+                .and_then(|repo| repo.get(id).ok().flatten())
+        });
+        let contribution_title = self.contribution.title.clone();
+        let extension_id: Arc<str> = Arc::from(self.extension_id.as_str());
+        let route: Option<Arc<str>> = self.route.as_deref().map(Arc::from);
+        let service = self.service.clone();
+        let plugin_ai = cx.new(|cx| {
+            super::plugin_ai_panel::PluginAiPanel::new(
+                &service,
+                extension_id,
+                Arc::from(contribution_title.as_str()),
+                route,
+                connection,
+                window,
+                cx,
+            )
+        });
         // 先把能力挂到通道上，再让页面跑起来。
         abi::register(
             &self.channel,
             Arc::clone(&host_abi),
             Arc::clone(&session),
+            &pump,
             &self.dispatcher,
+            Some(plugin_ai.downgrade()),
         );
+        self.plugin_ai = Some(plugin_ai);
         let view = cx.new(|cx| AppView::new(options, window, cx));
+        // 首帧前把宿主主题与界面语言交给页面（spec §2 附、§7 主题走原生）。
         theme::push(&view, cx);
-        // 首帧前只填缓存，不推事件：页面启动时读 `navop.theme.snapshot`
-        // 就是当前主题，多一条 'changed' 只会让它多做一次渲染。
-        host_abi.set_theme(theme::snapshot(cx));
+        let locale = rust_i18n::locale().to_string();
+        let locale = Locale::parse(&locale).unwrap_or(Locale::EN_US);
+        view.update(cx, |view, cx| view.set_locale(Some(locale), cx));
 
         let failed = Arc::new(AtomicBool::new(false));
         let failed_for_error = Arc::clone(&failed);
         let extension_id = self.extension_id.clone();
-        let view_id = self.view_id.clone();
+        let route = self.route_display().to_owned();
         view.update(cx, |view, _cx| {
             view.on_error(move |message| {
                 failed_for_error.store(true, Ordering::Relaxed);
                 tracing::error!(
                     extension_id = %extension_id,
-                    view_id = %view_id,
-                    "nsh 页面错误: {message}"
+                    route = %route,
+                    "nsh app 错误: {message}"
                 );
             });
             view.load(program.app);
@@ -319,7 +391,10 @@ impl NshTab {
 
         self.abi = Some(host_abi);
         self.session = Some(session);
+        self.pump = Some(pump);
         self.view = Some(view);
+
+
 
         // 两阶段装载的第二步：首帧画出来、且没有立刻报错，才算这个 build
         // 健康，把它记进信任库（方案 §8）。失败就让上一个 build 继续可用。
@@ -343,6 +418,234 @@ impl NshTab {
     }
 }
 
+/// `host.params` 的载荷（契约 §3）：启动事实，运行期不变。
+///
+/// 页面在顶层同步读它，所以字段名一旦定下就是契约：`apiVersion` /
+/// `extension.{id,title}` / `route` / `backends` / `connection`。
+///
+/// `route` 是宿主建议的初始页面（来自连接清单的 `route` 或打开方给的
+/// deep link）；页面可以用它当默认值，也可以在 app 内继续导航。
+fn params_payload(
+    contribution: &extension_runtime::RegisteredShellAppContribution,
+    route: Option<&str>,
+    connection: Value,
+) -> Map<String, Value> {
+    let mut params = Map::new();
+    params.insert("apiVersion".to_owned(), json!(2));
+    params.insert(
+        "extension".to_owned(),
+        json!({
+            "id": contribution.extension_id,
+            "title": contribution.title,
+        }),
+    );
+    params.insert("route".to_owned(), json!(route));
+    params.insert(
+        "backends".to_owned(),
+        json!(contribution.backends.keys().collect::<Vec<&String>>()),
+    );
+    params.insert("connection".to_owned(), connection);
+    params
+}
+
+/// provider 事件流 → `navop.event` 推送的泵（spec §3）。
+///
+/// `host.call("navop.event.subscribe")` 打开一条 provider 事件流之后，这里用
+/// 一条 tokio 任务持续 `read_event`，把每批包成
+/// `{handle,cursor,events:[{seq,data}]}` 推给页面；流结束推
+/// `{handle,cursor,done:true}`，溢出推 `EVENT_OVERFLOW` 并结束订阅。
+pub(crate) struct EventPump {
+    channel: HostChannel,
+    session: Arc<NshSession>,
+    /// 在订的订阅：handle → 泵任务的取消位（`unsubscribe` / 页面关闭时掐）。
+    subscriptions: Mutex<HashMap<String, CancellationToken>>,
+}
+
+/// 单批最多 64 条（spec §3）。
+const EVENT_BATCH: u32 = 64;
+/// 拉空一批后最多等这么久：provider 不支持阻塞读时也不会空转。
+const EVENT_POLL_MS: u32 = 500;
+
+impl EventPump {
+    pub(crate) fn new(channel: HostChannel, session: Arc<NshSession>) -> Arc<Self> {
+        Arc::new(Self {
+            channel,
+            session,
+            subscriptions: Mutex::new(HashMap::new()),
+        })
+    }
+
+    /// 订阅一条事件流：回 `{handle,cursor}`，事件随后经 `navop.event` 推送。
+    pub(crate) async fn subscribe(
+        self: Arc<Self>,
+        resource: String,
+        kind: String,
+        since: u64,
+        cancel: CancellationToken,
+    ) -> Result<Value, crate::host_error::NavopError> {
+        let opened = self
+            .session
+            .open_event(&resource, kind, None, cancel)
+            .await?;
+        // 先取出句柄再动 `opened`：下面出错时要把整个结果塞进 details。
+        let opened_handle = opened
+            .get("handle")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let Some(handle) = opened_handle else {
+            let mut error = crate::host_error::NavopError::new(
+                crate::host_error::ErrorCode::ProtocolError,
+                "provider 的 event open 结果没有 handle",
+            );
+            error.details = Some(opened);
+            return Err(error);
+        };
+        // 泵用独立的取消位：`unsubscribe` 只停这一条，不影响别的在途调用。
+        let token = self.session.call_token();
+        self.subscriptions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(handle.clone(), token.clone());
+        let pump = Arc::clone(&self);
+        let channel = self.channel.clone();
+        let session = Arc::clone(&self.session);
+        // 泵任务拿走一份句柄；`handle` 本身还要用来回订阅应答。
+        let stream = handle.clone();
+        let subscription = handle.clone();
+        session.tokio().spawn(async move {
+            let mut cursor = since;
+            loop {
+                if token.is_cancelled() {
+                    break;
+                }
+                match session
+                    .read_event(
+                        &stream,
+                        Some(EVENT_BATCH),
+                        Some(EVENT_POLL_MS),
+                        token.clone(),
+                    )
+                    .await
+                {
+                    Ok(value) => {
+                        let dropped = value
+                            .get("dropped_count")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0);
+                        let closed = value
+                            .get("closed")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false);
+                        let events = value
+                            .get("events")
+                            .and_then(Value::as_array)
+                            .cloned()
+                            .unwrap_or_default();
+                        // 先把这一批送到：溢出丢的是更早的事件，手上这批
+                        // 仍然有效，不该跟着一起扔。
+                        if !events.is_empty() {
+                            let batch: Vec<Value> = events
+                                .into_iter()
+                                .map(|data| {
+                                    cursor += 1;
+                                    json!({ "seq": cursor, "data": data })
+                                })
+                                .collect();
+                            let frame = json!({
+                                "handle": subscription.clone(),
+                                "cursor": cursor,
+                                "events": batch,
+                            });
+                            if channel.send("navop.event", frame).is_err() {
+                                break;
+                            }
+                        }
+                        if dropped > 0 {
+                            // 页面拿 `cursor` 作 since 续订；这条 error 之后
+                            // 订阅就结束了（spec §3）。
+                            let _ = channel.send(
+                                "navop.event",
+                                json!({
+                                    "handle": subscription.clone(),
+                                    "cursor": cursor,
+                                    "error": {
+                                        "code": "EVENT_OVERFLOW",
+                                        "message": format!("事件缓冲溢出，丢弃了 {dropped} 条"),
+                                        "retryable": true,
+                                    },
+                                }),
+                            );
+                            break;
+                        }
+                        if closed {
+                            let _ = channel.send(
+                                "navop.event",
+                                json!({
+                                    "handle": subscription.clone(),
+                                    "cursor": cursor,
+                                    "done": true,
+                                }),
+                            );
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        if token.is_cancelled() {
+                            break;
+                        }
+                        let _ = channel.send(
+                            "navop.event",
+                            json!({
+                                "handle": subscription.clone(),
+                                "cursor": cursor,
+                                "error": {
+                                    "code": error.code.as_str(),
+                                    "message": error.message,
+                                    "retryable": error.retryable,
+                                },
+                            }),
+                        );
+                        break;
+                    }
+                }
+            }
+            pump.forget(&stream);
+        });
+        Ok(json!({ "handle": handle, "cursor": since }))
+    }
+
+    /// 取消一条订阅：泵任务看到取消位后自行退出。
+    pub(crate) fn unsubscribe(&self, handle: &str) {
+        if let Some(token) = self
+            .subscriptions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(handle)
+        {
+            token.cancel();
+        }
+    }
+
+    /// 页面关闭：停掉全部订阅。
+    pub(crate) fn cancel(&self) {
+        for (_, token) in self
+            .subscriptions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .drain()
+        {
+            token.cancel();
+        }
+    }
+
+    fn forget(&self, handle: &str) {
+        self.subscriptions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(handle);
+    }
+}
+
 impl Drop for NshTab {
     fn drop(&mut self) {
         // tab 关掉：先掐掉还在路上的激活与在途调用，再还不租约。
@@ -350,6 +653,9 @@ impl Drop for NshTab {
         self.cancel.cancel();
         if let Some(abi) = &self.abi {
             abi.cancel();
+        }
+        if let Some(pump) = &self.pump {
+            pump.cancel();
         }
         if let Some(session) = &self.session {
             session.cancel();
@@ -397,7 +703,7 @@ impl Render for NshTab {
                     Err(error) => {
                         tracing::error!(
                             extension_id = %self.extension_id,
-                            view_id = %self.view_id,
+                            route = %self.route_display(),
                             "nsh 页面 provider 激活失败: {error}"
                         );
                         self.error = Some(error);
@@ -407,7 +713,18 @@ impl Render for NshTab {
         }
         let mut root = div().size_full().min_w_0().min_h_0();
         match (&self.view, self.error.as_deref()) {
-            (Some(view), _) => root = root.child(view.clone()),
+            (Some(view), _) => {
+                // AI 侧栏贴右缘；页面本体占剩余空间（min_w_0 防 intrinsic 挤压）。
+                // h_flex 默认 items_center：侧栏与页面都显式 h_full。
+                root = root.child(
+                    gpui_component::h_flex()
+                        .size_full()
+                        .min_w_0()
+                        .min_h_0()
+                        .child(div().flex_1().min_w_0().min_h_0().child(view.clone()))
+                        .children(self.plugin_ai.clone()),
+                );
+            }
             (None, Some(error)) => {
                 root = root
                     .p_4()
@@ -439,8 +756,13 @@ impl NshTab {
         &self.extension_id
     }
 
-    pub(crate) fn view_id(&self) -> &SharedString {
-        &self.view_id
+    pub(crate) fn route(&self) -> Option<&SharedString> {
+        self.route.as_ref()
+    }
+
+    /// 日志用：没有初始路由时显示 `<default>`。
+    fn route_display(&self) -> &str {
+        self.route.as_deref().unwrap_or("<default>")
     }
 
     /// 与页面通行的宿主通道。调用方可以在挂载前挂 handler。
@@ -539,7 +861,7 @@ impl NshTab {
     fn fail(&mut self, message: &str, cx: &mut Context<Self>) {
         tracing::warn!(
             extension_id = %self.extension_id,
-            view_id = %self.view_id,
+            route = %self.route_display(),
             "{message}"
         );
         self.cancel_flight();
@@ -553,6 +875,9 @@ impl NshTab {
         self.cancel.cancel();
         if let Some(abi) = self.abi.take() {
             abi.cancel();
+        }
+        if let Some(pump) = self.pump.take() {
+            pump.cancel();
         }
         if let Some(session) = self.session.take() {
             session.cancel();

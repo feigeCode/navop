@@ -18,7 +18,7 @@ navop-extensions/extensions/composite/elasticsearch
 
 1. **连接声明**：`contributes.connections` 描述连接表单、provider runtime 和可选 UI。
 2. **Headless provider**：独立进程实现稳定的 resource/job/event/blob JSON-RPC 协议。
-3. **可选 shell UI**：gpui-shell JavaScript 页面，只负责显示和交互，不负责连接持久化或 secret 管理。
+3. **可选页面**：nsh（TSX）页面，只负责显示和交互，不负责连接持久化或 secret 管理。
 
 连接统一保存为 Navop 的 `StoredConnection`，不会创建插件专属 profile 表。宿主自动提供：
 
@@ -58,11 +58,11 @@ Navop 的打开顺序是：
 → 激活 runtime
 → 宿主执行 resource/open
 → 将 provider resource id 包装为 mount-scoped opaque handle
-→ 加载 gpui-shell 页面
-→ 通过 navop.context 注入 opaque handle
+→ 加载 nsh 页面
+→ 通过 host.params 注入 opaque handle
 ```
 
-shell UI 不会收到保存的 config 或 secret，也不应再次调用 `resource/open` 创建主连接。
+页面不会收到保存的 config 或 secret，也不应再次调用 `resource/open` 创建主连接。
 
 ### 2.3 终端型连接(无 provider)
 
@@ -424,7 +424,7 @@ team_id
 - `net:tcp:*:<port>` 允许该端口上的任意主机，属于高权限声明，应谨慎使用。
 - `secrets:read:self.*` 只允许 provider 解析属于自身扩展连接的 secret reference。
 - `shell:exec` 仅在声明 shell view 时需要。
-- Native provider 与 shell UI 属于同一扩展信任主体；当前不提供完整 OS 网络 sandbox。
+- Native provider 与 nsh 页面属于同一扩展信任主体；当前不提供完整 OS 网络 sandbox。
 
 ## 8. Provider 进程
 
@@ -517,7 +517,7 @@ pub struct ResourceOpenParams {
 }
 ```
 
-provider 不应要求 shell UI 传入 secret 明文。
+provider 不应要求页面传入 secret 明文。
 
 返回：
 
@@ -674,143 +674,25 @@ blob/close
 
 单次 `max_bytes` 上限为 4 MiB。caller 读到 `done: true` 后仍应显式 close。
 
-## 12. gpui-shell UI
+## 12. 页面（nsh / TSX）
 
-### 12.1 连接 context
+页面不再是 gpui-shell 的 View 子类，也不是 `navop.context` / `navop.resource`
+这类 ES module；页面是一个 nsh 应用，能力经四类通道暴露给 TSX：
 
-连接关联 UI 通过以下 API 获取 context：
+| 通道 | 用途 |
+|---|---|
+| `host.params` | 启动事实（extension / backends / connection），首帧同步可读 |
+| `host.on("navop.event", fn)` | 事件推送 |
+| `host.call("navop.*", data, {timeout})` | 命令，失败带 `e.code` / `e.retryable` / `e.details` |
+| `host.post("navop.log", …)` | 日志（单向） |
 
-```js
-import { current } from "navop.context";
+完整契约、名字清单与迁移说明见 `host-abi-v2.md`；写页面的实操指南（目录结构、
+构建、测试、设计系统、nsh/TSX 的坑）见 `nsh-page-guide.zh-CN.md`。页面 ABI 的
+v1（`navop.context.current` / `navop.theme.*` / `navop.i18n.*` /
+`navop.log.*`(call) / `navop.event.*`(轮询) / `__NAVOP_ERROR__` 信封）已整体删除。
 
-const context = current();
-const connection = context.connection;
-const resource = connection.resource.handle;
-```
-
-结构：
-
-```ts
-{
-  extensionId: string;
-  viewId: string;
-  backends: string[];
-  connection: null | {
-    id: number;
-    name: string;
-    contributionId: string;
-    resourceType: string;
-    resource: {
-      handle: string;
-      capabilities: string[];
-      metadata: unknown;
-    };
-  };
-}
-```
-
-`resource.handle` 是 mount-scoped opaque handle，不是 provider 原始 resource ID。不能跨 tab、跨 reload 或跨 provider generation 保存使用。
-
-### 12.2 navop.resource
-
-```ts
-export function invoke(
-  handle: string,
-  method: string,
-  params?: unknown,
-): Promise<
-  | { kind: "inline"; value: unknown }
-  | { kind: "blob"; handle: string }
-  | { kind: "event_stream"; handle: string }
->;
-
-export function ping(handle: string): Promise<void>;
-export function close(handle: string): Promise<void>;
-```
-
-模块也保留 `open(backend, resourceType, config)`，供独立工具页创建额外资源；连接主 UI 应使用 Host 已注入的 handle。
-
-### 12.3 navop.job
-
-```ts
-start(resource, method, params?)
-status(handle)
-cancel(handle)
-result(handle)
-close(handle)
-```
-
-### 12.4 navop.event
-
-```ts
-open(resource, kind, capacity?)
-read(handle, maxEvents?, waitMs?)
-close(handle)
-```
-
-### 12.5 navop.blob
-
-```ts
-read(handle, maxBytes?)
-close(handle)
-```
-
-`read` 返回 Base64 string，UI 自己解码。
-
-### 12.6 navop.runtime
-
-```ts
-info(backend)
-```
-
-返回 backend、runtime ID 和当前 generation。
-
-### 12.7 navop.log
-
-```ts
-debug(message)
-info(message)
-warn(message)
-error(message)
-```
-
-单条日志上限 16 KiB。不要输出 secret、完整 token 或未脱敏连接 config。
-
-### 12.8 最小 UI
-
-```js
-import { View, div } from "gpui";
-import { v_flex } from "gpui-base";
-import { current } from "navop.context";
-import { invoke } from "navop.resource";
-
-export default class Explorer extends View {
-  init(_props, cx) {
-    this.context = current();
-    this.data = null;
-    this.error = null;
-    cx.spawn(async (cx) => {
-      try {
-        const handle = this.context.connection.resource.handle;
-        const result = await invoke(handle, "my-provider/item/list", {});
-        this.data = result.kind === "inline" ? result.value : result;
-      } catch (error) {
-        this.error = error.message;
-      }
-      cx.notify();
-    });
-  }
-
-  render() {
-    return v_flex()
-      .size_full()
-      .p(16)
-      .child(this.error || JSON.stringify(this.data, null, 2));
-  }
-}
-```
-
-gpui-shell 状态应在 `init` 中创建，不要在 `render` 中创建 `InputState` 等 retained state。
+provider 侧协议不受影响：第 9–11 节的 resource / job / event / blob 协议仍是
+宿主与 provider 之间的帧格式，页面看到的是 `navop.resource.invoke` 这样的包装。
 
 ## 13. 生命周期与清理
 
@@ -1000,8 +882,8 @@ CI、Release、R2 upload 和 Windows x86 backfill 已识别 `extensions/composit
 - [ ] provider 支持多 resource。
 - [ ] resource close 不影响其他连接。
 - [ ] job/blob/event 均有显式 close。
-- [ ] shell UI 使用 `context.connection.resource.handle`。
-- [ ] shell UI 不读取保存 config 或 secret。
+- [ ] 页面使用 `host.params.connection.resourceHandle`。
+- [ ] 页面不读取保存 config 或 secret。
 - [ ] provider E2E 通过。
 - [ ] `cargo test -p extension-runtime` 通过。
 - [ ] `cargo test -p navop_app` 通过。

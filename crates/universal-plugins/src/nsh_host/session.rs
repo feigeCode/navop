@@ -491,17 +491,17 @@ impl NshSession {
         max_bytes: Option<u32>,
         cancel: CancellationToken,
     ) -> Result<Value, NavopError> {
-        let max_bytes = max_bytes
-            .filter(|value| (1..=MAX_BLOB_CHUNK_BYTES).contains(value))
-            .map(Some)
-            .ok_or_else(|| {
-                NavopError::new(
+        // 不给 maxBytes 时由 provider 决定批次大小（协议默认），给了就必须在
+        // 1..=MAX_BLOB_CHUNK_BYTES 之内：越界是页面写错，不是缺省。
+        let max_bytes = match max_bytes {
+            Some(value) if !(1..=MAX_BLOB_CHUNK_BYTES).contains(&value) => {
+                return Err(NavopError::new(
                     ErrorCode::InvalidArgument,
                     format!("maxBytes must be between 1 and {MAX_BLOB_CHUNK_BYTES}"),
-                )
-            });
-
-        let max_bytes = max_bytes?;
+                ));
+            }
+            value => value,
+        };
         let (client, blob_id) = self.provider_handle(&self.blobs, "blob", handle)?;
         let result = client
             .read_blob_with_options(

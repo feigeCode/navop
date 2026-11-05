@@ -17,8 +17,9 @@ pub struct ResourceConnectionContrib {
     /// 传给提供者 `resource/open` 的资源类型。声明了 `terminal` 时不适用。
     #[serde(default, rename = "resourceType")]
     pub resource_type: String,
-    #[serde(default, rename = "shellViewId")]
-    pub shell_view_id: Option<String>,
+    /// 打开这条连接时 app 的初始路由（如 `containers`）。
+    #[serde(default)]
+    pub route: Option<String>,
     /// 终端型连接:打开时由宿主直接以本地进程启动一个终端标签,不需要提供者进程。
     #[serde(default)]
     pub terminal: Option<ResourceConnectionTerminal>,

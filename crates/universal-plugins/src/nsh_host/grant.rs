@@ -13,22 +13,30 @@
 
 use std::path::{Path, PathBuf};
 
-use extension_runtime::RegisteredShellViewContribution;
+use extension_runtime::RegisteredShellAppContribution;
 use extension_runtime::extension::manifest::security::{PermissionKind, validate_permissions};
 use nsh_core::access::Capabilities;
 use serde_json::json;
 
 /// 组装宿主授予上限。
 pub(crate) fn granted(
-    contribution: &RegisteredShellViewContribution,
+    contribution: &RegisteredShellAppContribution,
 ) -> (Capabilities, Vec<String>) {
     let (read, write, hosts, sockets, commands, mut skipped) =
         grants_from_permissions(&contribution.permissions, &contribution.extension_root);
-    // 页面能调的宿主函数 = 它声明的模块对应的命名空间。
+    // 页面能调的宿主函数 = 它声明的模块对应的命名空间。裸名字和 `.*` 都要给：
+    // `navop.log` 模块唯一的宿主函数就叫裸的 `navop.log`（host.post），而
+    // `navop.log.*` 只按前缀 `navop.log.` 匹配，匹配不到它本身。
+    // 只认 `is_supported()` 的模块：validate_modules 已经拒绝 v2 删除的旧值，
+    // 这里再兜一层，保证旧枚举值永远不会派生任何 host 能力。
     let mut host = contribution
         .modules
         .iter()
-        .map(|module| format!("{}.*", module.module_specifier()))
+        .filter(|module| module.is_supported())
+        .flat_map(|module| {
+            let name = module.module_specifier();
+            [name.to_string(), format!("{name}.*")]
+        })
         .collect::<Vec<_>>();
     if cfg!(test) {
         // 自检页用一个假宿主函数回报装载结果；只在测试构建里放开，
@@ -40,9 +48,10 @@ pub(crate) fn granted(
         "network": { "hosts": hosts, "sockets": sockets },
         "process": { "execute": commands },
         "host": host,
-        // 页面要读还得自己在 nsh.json 里声明 `"clipboard": true`（声明与
-        // 上限取交集）。写剪贴板只影响用户下一次粘贴，且必须由页面在
-        // 一次按键/点击里发起，风险低于 fs/net，所以上限这里放行。
+        // clipboard 上限恒放行：nsh 侧它对应真实可用的 `nsh/clipboard`（读写
+        // 剪贴板），spec §7 也明确把 clipboard 计入派生集合；页面仍要自己在
+        // nsh.json 里声明并与上限取交集。等 `navop.clipboard.*` 宿主能力落地后
+        // 再决定是否按声明收紧。
         "clipboard": true,
     });
     if value["network"]["hosts"]
@@ -129,6 +138,19 @@ fn grants_from_permissions(permissions: &[String], extension_root: &Path) -> Gra
                 }
             }
             PermissionKind::Network => {
+                // `net:unix:` 在扩展清单里是合法声明（docker 扩展就声明了两条），
+                // 但 nsh 的 Capabilities 没有 Unix socket 字段，也没有对应的宿主
+                // 函数入口。这里**显式 warn + 丢弃**，比静默 continue 好：作者能
+                // 从日志看出这条权限没生效，而不是等到页面调不通才发现。
+                if let Some(path) = permission.raw.strip_prefix("net:unix:") {
+                    tracing::warn!(
+                        permission = %permission.raw,
+                        path = %path,
+                        "nsh 能力模型不支持 Unix socket，权限丢弃（fail-closed）"
+                    );
+                    skipped.push(permission.raw.clone());
+                    continue;
+                }
                 let Some(rest) = permission
                     .raw
                     .strip_prefix("net:tcp:")
@@ -216,21 +238,17 @@ mod tests {
 
     use super::*;
 
-    fn view(permissions: &[&str], modules: &[ShellHostModule]) -> RegisteredShellViewContribution {
-        RegisteredShellViewContribution {
+    fn view(permissions: &[&str], modules: &[ShellHostModule]) -> RegisteredShellAppContribution {
+        RegisteredShellAppContribution {
             extension_id: "dev.navop.grant-test".into(),
             extension_version: "0.1.0".into(),
-            id: "page".into(),
-            view_key: "dev.navop.grant-test::page".into(),
             title: "页".into(),
             description: None,
             icon_path: None,
-            entry_path: PathBuf::from("ui/page.js"),
+            entry_path: PathBuf::from("ui/bundle.js"),
             extension_root: PathBuf::from("."),
-            surface: extension_runtime::extension::manifest::ShellSurface::Tab,
             category: None,
             keywords: Vec::new(),
-            singleton: false,
             backends: BTreeMap::new(),
             modules: modules.iter().copied().collect::<BTreeSet<_>>(),
             permissions: permissions.iter().map(|p| (*p).to_string()).collect(),
@@ -243,21 +261,73 @@ mod tests {
     fn host_capability_follows_declared_modules() {
         let (capabilities, _) = granted(&view(
             &["shell:exec"],
-            &[ShellHostModule::Context, ShellHostModule::Theme],
+            &[ShellHostModule::Resource, ShellHostModule::Log],
         ));
-        assert!(
-            capabilities
-                .host
-                .iter()
-                .any(|host| host == "navop.context.*")
-        );
-        assert!(capabilities.host.iter().any(|host| host == "navop.theme.*"));
+        // 裸名字和 `.*` 都在：`navop.log` 是 log 模块唯一宿主函数的真名，
+        // `navop.resource.*` 才是它命名空间下函数的前缀匹配。
+        for expected in [
+            "navop.resource",
+            "navop.resource.*",
+            "navop.log",
+            "navop.log.*",
+        ] {
+            assert!(
+                capabilities.host.iter().any(|host| host == expected),
+                "缺少 `{expected}`: {:?}",
+                capabilities.host
+            );
+        }
+        // 模块只放出命名空间，不预先放出具体函数名。
         assert!(
             !capabilities
                 .host
                 .iter()
-                .any(|host| host == "navop.resource.*")
+                .any(|host| host == "navop.resource.read")
         );
+    }
+
+    /// v2 删除的旧模块即使残留在清单里（安装期会被 shell_validation 拒掉），
+    /// 也不能靠这里派生能力——fail-closed 的第二道闸。
+    #[test]
+    fn legacy_modules_never_grant_host_capabilities() {
+        let (capabilities, _) = granted(&view(
+            &["shell:exec"],
+            &[
+                ShellHostModule::Context,
+                ShellHostModule::I18n,
+                ShellHostModule::Theme,
+            ],
+        ));
+        for legacy in ["navop.context", "navop.i18n", "navop.theme"] {
+            let wildcard = format!("{legacy}.*");
+            assert!(
+                !capabilities
+                    .host
+                    .iter()
+                    .any(|host| host == legacy || host == &wildcard),
+                "旧模块 `{legacy}` 不应派生宿主能力: {:?}",
+                capabilities.host
+            );
+        }
+    }
+
+    /// nsh 的 Capabilities 没有 Unix socket 字段：这类权限必须显式丢弃并计入
+    /// skipped（调用方据此告警），绝不静默变成"看起来授予了"。
+    #[test]
+    fn unix_socket_permission_is_dropped_with_explicit_skip() {
+        let raw = "net:unix:/var/run/docker.sock";
+        let (capabilities, skipped) = granted(&view(&["shell:exec", raw], &[]));
+        assert!(
+            capabilities.network.sockets.is_empty(),
+            "{:?}",
+            capabilities.network.sockets
+        );
+        assert!(
+            capabilities.network.hosts.is_empty(),
+            "{:?}",
+            capabilities.network.hosts
+        );
+        assert_eq!(skipped, vec![raw.to_string()]);
     }
 
     #[test]

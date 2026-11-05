@@ -7,19 +7,21 @@
 // nsh build --out . && mv bundle.js view.js
 // ```
 //
-// 两件事一起验：
+// 三件事一起验：
 //
-// 1. **页面画得出来**（nsh 自绘 + 宿主推来的 shadcn token）——主题跟随
+// 1. **页面画得出来**（nsh 自绘 + 宿主写入 nsh 的 shadcn token）——主题跟随
 //    宿主：`AppView::set_theme` 送 token，Tailwind 类（bg-card / border-border）
 //    取色；明暗跟随 `set_appearance`（`dark:` 变体）。
-// 2. **宿主 ABI 答得上**（M4）：启动时把 `navop.context.current`、
-//    `navop.i18n.locale`、`navop.theme.snapshot` 的应答一起回报给宿主，
-//    测试台子据此断言"页面真的调到了宿主，且拿到的是宿主的值"。
+// 2. **启动事实同步可读**（ABI v2）：`host.params` 在首帧就有 extension /
+//    apiVersion / backends / connection，页面不 await 任何 RPC。
+// 3. **宿主 ABI 答得上**：用不存在的 backend 开一次资源，宿主必须回带
+//    `code` 的结构化错误（不再有 base64 信封），并把它一起回报给宿主的
+//    `spike.mounted`，测试台子据此断言「页面真的调到了宿主」。
 //
-// `nsh.json` 的 `capabilities.host` 必须列出这些名字（含通配），否则 nsh 的
-// host 白名单在引擎侧就拒掉，根本到不了宿主。
+// `nsh.json` 的 `capabilities.host` 在 nsh 引擎侧只是白名单的默认值；宿主
+// 装载页面时会用 extension.json 派生的授权覆盖它（ABI v2 §6）。
 
-import { host, mount, Scroll, signal, Text, View } from "nsh";
+import { host, locale, mount, Scroll, signal, Text, View } from "nsh";
 import { Button, Input } from "nsh/base";
 
 /** 一条会话内自增的记录（页面自己的状态，无宿主交互）。 */
@@ -28,13 +30,22 @@ interface Item {
   title: string;
 }
 
+/** 宿主写进 `host.params` 的启动事实（ABI v2 §2）。 */
+interface Params {
+  apiVersion?: number;
+  extension?: { id?: string; viewId?: string; viewKey?: string; title?: string };
+  backends?: string[];
+  connection?: unknown | null;
+}
+
 interface Snapshot {
+  apiVersion?: number;
+  extensionId?: string;
   viewId?: string;
-  locale?: string;
-  themeRevision?: number;
-  dark?: boolean;
+  backends?: string;
+  connection?: string;
   /** 能力平面自检：拿一个不存在的 backend 开资源，宿主必须回稳定 code。 */
-  resourceError?: string;
+  resourceErrorCode?: string;
 }
 
 const items = signal<Item[]>([]);
@@ -50,41 +61,49 @@ function add() {
 }
 
 /** 走一遍宿主 ABI，把结果留在页面上（也回报给宿主，供台子断言）。 */
-async function probe(host_) {
-  const context = await host_.call("navop.context.current", {});
-  const theme = await host_.call("navop.theme.snapshot", {});
-  const locale = await host_.call("navop.i18n.locale", {});
+async function probe() {
+  const params = (host.params ?? {}) as Params;
   // 能力平面（M4 第二批）：故意用一个不存在的 backend，验证调用真的
-  // 走到了 provider 分发层、并且结构化错误经 envelope 回来了。
-  let resourceError = "";
+  // 走到了 provider 分发层、并且结构化错误带 code 回来。
+  let resourceErrorCode = "";
   try {
-    await host_.call("navop.resource.open", {
-      backend: "missing",
-      resourceType: "noop",
-    });
+    await host.call(
+      "navop.resource.open",
+      { backend: "missing", resourceType: "noop" },
+      { timeout: 5_000 },
+    );
   } catch (error) {
-    resourceError = String((error as { message?: string })?.message ?? error);
+    const code = (error as { code?: unknown })?.code;
+    resourceErrorCode = typeof code === "string" && code !== "" ? code : String(error);
   }
   snapshot.set({
-    viewId: context?.viewId,
-    locale,
-    themeRevision: theme?.revision,
-    dark: theme?.dark,
-    resourceError,
+    apiVersion: params.apiVersion,
+    extensionId: params.extension?.id,
+    viewId: params.extension?.viewId,
+    backends: (params.backends ?? []).join(","),
+    connection: params.connection == null ? "none" : "present",
+    resourceErrorCode,
   });
-  host_.call("navop.log.info", { message: "nsh 自检页装载完成" });
-  host_.call("spike.mounted", {
+  host.post("navop.log", {
+    level: "info",
+    message: "nsh 自检页装载完成",
+    fields: { source: "self-check" },
+  });
+  host.call("spike.mounted", {
     title: "NSH Host",
     items: items().length,
-    viewId: context?.viewId,
-    locale,
-    themeRevision: theme?.revision,
-    resourceError,
+    apiVersion: params.apiVersion,
+    extensionId: params.extension?.id,
+    viewId: params.extension?.viewId,
+    backends: params.backends ?? [],
+    hasConnection: params.connection != null,
+    locale: locale(),
+    resourceErrorCode,
   });
 }
 
 function App() {
-  void probe(host);
+  void probe();
 
   return (
     <Scroll style={{ flex: 1 }}>
@@ -128,19 +147,22 @@ function App() {
         </View>
 
         <View class="gap-1 rounded-xl border border-border px-3 py-2">
-          <Text class="text-xs text-muted-foreground">host ABI</Text>
+          <Text class="text-xs text-muted-foreground">host ABI v2</Text>
           <Text class="text-sm text-card-foreground">
-            view · {snapshot().viewId ?? "—"}　语言 · {snapshot().locale ?? "—"}　
-            主题 · rev {snapshot().themeRevision ?? "—"}
-            {snapshot().dark ? "（暗）" : "（亮）"}
+            {snapshot().extensionId ?? "—"} · view {snapshot().viewId ?? "—"}　api{" "}
+            {snapshot().apiVersion ?? "—"}
           </Text>
           <Text class="text-sm text-card-foreground">
-            能力平面 · {snapshot().resourceError || "—"}
+            语言 · {locale()}　backends · {snapshot().backends || "—"}　连接 ·{" "}
+            {snapshot().connection ?? "—"}
+          </Text>
+          <Text class="text-sm text-card-foreground">
+            能力平面 · {snapshot().resourceErrorCode || "—"}
           </Text>
         </View>
 
         <Text class="text-xs text-muted-foreground">
-          第一个跑在 navop 窗口里的 nsh 页面：主题、字体、明暗全部来自宿主。
+          第一个跑在 navop 窗口里的 nsh 页面：主题、字体、明暗、语言全部来自宿主。
         </Text>
       </View>
     </Scroll>

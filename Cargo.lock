@@ -8478,7 +8478,7 @@ dependencies = [
 [[package]]
 name = "nsh-base"
 version = "0.3.0"
-source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.12#e2a57dd38a30b0fabfd4d6c9306d7f6b6bff69fa"
+source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.12#fc4c88e6a590410735666db053416bac995fea2a"
 dependencies = [
  "chrono",
  "html5ever 0.27.0",
@@ -8500,7 +8500,7 @@ dependencies = [
 [[package]]
 name = "nsh-core"
 version = "0.3.0"
-source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.12#e2a57dd38a30b0fabfd4d6c9306d7f6b6bff69fa"
+source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.12#fc4c88e6a590410735666db053416bac995fea2a"
 dependencies = [
  "cap-std 4.0.3",
  "crc32fast",
@@ -8534,7 +8534,7 @@ dependencies = [
 [[package]]
 name = "nsh-engine"
 version = "0.3.0"
-source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.12#e2a57dd38a30b0fabfd4d6c9306d7f6b6bff69fa"
+source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.12#fc4c88e6a590410735666db053416bac995fea2a"
 dependencies = [
  "crossbeam-channel",
  "libc",
@@ -8555,7 +8555,7 @@ dependencies = [
 [[package]]
 name = "nsh-js"
 version = "0.3.0"
-source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.12#e2a57dd38a30b0fabfd4d6c9306d7f6b6bff69fa"
+source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.12#fc4c88e6a590410735666db053416bac995fea2a"
 dependencies = [
  "futures-util",
  "getrandom 0.4.3",
@@ -8576,7 +8576,7 @@ dependencies = [
 [[package]]
 name = "nsh-macros"
 version = "0.3.0"
-source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.12#e2a57dd38a30b0fabfd4d6c9306d7f6b6bff69fa"
+source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.12#fc4c88e6a590410735666db053416bac995fea2a"
 dependencies = [
  "imagesize 0.15.0",
  "proc-macro2",
@@ -8588,7 +8588,7 @@ dependencies = [
 [[package]]
 name = "nsh-package"
 version = "0.3.0"
-source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.12#e2a57dd38a30b0fabfd4d6c9306d7f6b6bff69fa"
+source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.12#fc4c88e6a590410735666db053416bac995fea2a"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek 2.2.0",
@@ -8603,7 +8603,7 @@ dependencies = [
 [[package]]
 name = "nsh-platform-gpui"
 version = "0.3.0"
-source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.12#e2a57dd38a30b0fabfd4d6c9306d7f6b6bff69fa"
+source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.12#fc4c88e6a590410735666db053416bac995fea2a"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -14765,6 +14765,8 @@ dependencies = [
 name = "universal-plugins"
 version = "0.16.1"
 dependencies = [
+ "agent_runtime",
+ "ai_chat_view",
  "anyhow",
  "async-trait",
  "base64 0.22.1",
@@ -14782,11 +14784,15 @@ dependencies = [
  "nsh-platform-gpui",
  "one-assets",
  "one-core",
+ "one-ui",
  "rust-i18n",
+ "serde",
  "serde_json",
  "smol",
  "tempfile",
  "tokio",
+ "tokio-util",
+ "tool_runtime",
  "tracing",
  "uuid",
 ]

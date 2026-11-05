@@ -3,9 +3,20 @@
 本文是扩展作者写 **UI 页面**的指南。扩展机制在这一轮重构成了 nsh 宿主：
 页面不再是 gpui-shell 的 builder 链脚本，而是一个 nsh 应用（TSX），由宿主用
 `AppView` 装载。能力平面（provider / resource / job / event / blob）没有变，
-页面通过 `host.call("navop.*")` 调它。
+但页面与宿主的四类通道各归其位（ABI v2，契约见 `host-abi-v2.md`）：
 
-参考实现（照抄它们最快的）：
+| 通道 | 用途 | 典型调用 |
+|---|---|---|
+| `host.params` | **启动事实**，首帧前写死，同步读 | `host.params.connection` |
+| `host.on(name, fn)` | **事实变化**，宿主推送 | `host.on("navop.event", fn)` |
+| `host.call(name, data, {timeout})` | **命令**，有应答、可失败、带 `e.code` | `host.call("navop.resource.invoke", …)` |
+| `host.post(name, data)` | **通知**，单向、无应答 | `host.post("navop.log", …)` |
+
+v1 的 `navop.context.current` 启动 RPC、`navop.theme.*`、`navop.i18n.*`、
+`navop.log.*`（call 形态）、`navop.event.read` 轮询、以及 `__NAVOP_ERROR__`
+base64 信封**全部删除**，没有兼容层。
+
+参考实现（照抄它们最快的；每一项都是某个 app 内的一个路由组件）：
 
 ```text
 navop-extensions/extensions/composite/docker/ui/pages/volumes        # 列表 + 详情 + 写操作
@@ -16,127 +27,201 @@ navop-extensions/examples/shell-view-example/ui/pages/tool           # 直接调
 
 ---
 
-## 1. 一个页面是什么
+## 1. 一个扩展 app 是什么
+
+宿主装载的单位是**扩展 app**，不是一个页面：一个扩展 = 一个 nsh app = 一个
+`dist/` 包。页面是 app 内部的路由组件，不再各自有 `nsh.json` / `dist/`。
 
 ```text
-ui/pages/<page>/
-  nsh.json        # nsh 应用身份 + 能力声明（构建输入）
-  App.tsx         # 页面本体，结尾 mount(App)
-  App.test.tsx    # headless 测试（nsh test）
-  tsconfig.json   # extends ./.nsh/tsconfig.json，include 要含 ui/lib
-  .gitignore      # 忽略 .nsh/ 与 target/，**dist/ 要入库**
-  dist/           # nsh build 产物：宿主直接装它，运行时不跑构建
+ui/
+  App.tsx        # 应用入口：外壳（侧栏/导航）+ 路由表，结尾 mount(App)
+  App.test.tsx   # 外壳测试（可选，但推荐）
+  nsh.json       # nsh app 身份 + capabilities.host（构建输入）
+  tsconfig.json  # extends ./.nsh/tsconfig.json，include 要含 lib 与 pages
+  .gitignore     # 忽略 .nsh/ 与 target/，**dist/ 要入库**
+  dist/          # nsh build 产物：宿主直接装它，运行时不跑构建
+  lib/           # 共享库（host 调用封装、组件、格式化）
+  pages/<page>/  # 普通 TSX 模块：export default 页面组件，不 mount、没有自己的 nsh.json
 ```
 
-`extension.json` 里声明这个页面：
+`extension.json` 里声明这个 app：
 
 ```json
 {
   "engines": { "onetcli": ">=0.17.0", "nsh": "0.3.0" },
   "contributes": {
-    "shellViews": [{
-      "id": "overview",
-      "title": "Docker Engine Overview",
-      "entry": "ui/pages/overview/dist/bundle.js",
-      "surface": "tab",
+    "shellApp": {
+      "title": "Docker",
+      "entry": "ui/dist/bundle.js",
       "backends": { "docker": "main" },
-      "modules": ["context", "resource"]
+      "modules": ["resource"],
+      "category": "container",
+      "keywords": ["docker"]
+    },
+    "connections": [{
+      "id": "docker-local",
+      "label": "Docker",
+      "runtimeId": "main",
+      "resourceType": "docker",
+      "route": "containers",
+      "form": { "tabs": [] }
     }]
   }
 }
 ```
 
-- `engines.nsh` 是**必需**的：没有它，`shellViews` 在清单校验阶段就被拒
+- `engines.nsh` 是**必需**的：没有它，`shellApp` 在清单校验阶段就被拒
   （`/engines/nsh`）。`engines.gpui_shell` 已经随旧 UI 平面一起删掉。
 - `entry` 指向**构建产物**（`dist/bundle.js`），不是 TSX 源文件。
-- `backends` / `modules` 语义与以前一致，见第 4 节。
+- `backends` / `modules` 语义见第 4 节：`modules` 是**唯一的授权源**。
+- `connections[].route` 是这个连接打开 app 时的**初始路由**；工具箱打开时
+  `route` 为 `null`，由 app 自己决定默认页。
+- 一个扩展只能有一个 `shellApp`、一个 `build` 号；页面增减不再改版本号。
 
-## 2. 从零建一页
+## 2. 从零建一个 app
 
 ```bash
-mkdir -p ui/pages/my-page && cd ui/pages/my-page
-nsh init .                 # 生成 tsconfig.json / .gitignore / 示例 App.tsx + nsh.json
-# 写 App.tsx、改 nsh.json
+mkdir -p ui/pages/my-page && cd ui
+nsh init .                 # 生成 tsconfig.json / .gitignore / 示例入口 + nsh.json
+# 写 App.tsx（外壳 + 路由）、pages/my-page/App.tsx（页面组件）
 nsh check .                # 类型检查（TypeScript 7，不需要 node）
 nsh build . --out dist     # 产出 dist/{bundle.js,bundle.js.map,bundle.nshc,app.json,capabilities.json}
 nsh test .                 # headless 测试（mock host.call）
 ```
 
-`nsh.json` 最小形态：
+`ui/nsh.json` 最小形态：
 
 ```json
 {
-  "name": "Docker 存储卷",
-  "id": "com.navop.docker.volumes",
-  "version": "0.1.0",
+  "name": "Docker",
+  "id": "com.navop.docker",
+  "version": "0.6.3",
   "build": 1,
-  "capabilities": { "host": ["navop.context.*", "navop.resource.*"] }
+  "capabilities": { "host": true }
 }
 ```
 
-`id` 用反域名，和 `extension.json` 的 `id` 是两回事（前者标识这个 nsh 应用，
-后者标识整个扩展包）。
+`"capabilities": { "host": true }` 的意思是「这个 app 的 host 调用交给宿主裁决」，
+不是「什么都能调」：宿主安装时把 declared 覆盖成 `extension.json` 的
+`modules` + `permissions` 派生出来的那一份，app 能调到什么由 `modules` 决定。
+
+这么写有两个实际原因：一是 nsh build 会因为「导入了 `host` 却没声明
+`capabilities.host`」报一条 warn（它假设页面自己声明能调什么），对 navop
+app 是误报；二是没有宿主的地方（`nsh test`、`nsh preview`）会按「没声明」
+把调用全部拒掉，app 就没法独立跑。
+
+**不要在这里列具体名字**（比如 `["navop.resource.*"]`）：那会和 `extension.json`
+的 `modules` 形成第二份需要人工同步的清单，v2 就是要消掉它。
+`id` 是 nsh app id，建议**直接等于扩展 id**（一插件一包）；它和
+`extension.json` 的 `id` 此时相同，`build` 每次发布递增即可。
+
+### 路由
+
+`App.tsx` 读 `host.params.route` 选根页面（一般用侧栏 + 内容区），未知或
+`null` 回落默认路由；页面之间的切换只改 app 内状态，不再经过宿主。需要深链
+时把 route 设计成 `"containers/<id>"` 这类可解析的字符串即可——宿主只负责把
+它原样透传。
+
+### nsh 只读入口目录的 `nsh.json`
+
+`nsh check/build/test` 只会读**入口所在目录**的 `nsh.json`，不向上找。所以
+不要为了测试把入口放到别的目录再补一份 `nsh.json`；直接 `open("../../App.tsx")`
+打开 app 入口（见第 8 节）。
 
 ## 3. 页面能用什么宿主能力
 
-页面看到的是 `host.call(name, payload)`（返回 Promise）。名字由页面的
-`modules` 决定 —— 没声明的模块，宿主根本不注册对应 handler，调用会失败。
-
-| 模块 | 命名空间 | 说明 |
+| 通道 | 名字 | 说明 |
 |---|---|---|
-| `context` | `navop.context.current` | 页面上下文：extensionId / viewId / backends / 借来的连接 |
-| `log` | `navop.log.{debug,info,warn,error}` | 写进宿主日志（`{ message }`） |
-| `i18n` | `navop.i18n.{locale,available}` | 宿主界面语言；变更会以 `navop.i18n.changed` 推送 |
-| `theme` | `navop.theme.{snapshot,color}` | 当前主题（明暗 + 30 个 shadcn token）；`navop.theme.changed` 推送 |
-| `resource` | `navop.resource.{open,invoke,ping,close}` | 资源句柄。`invoke` 是页面读数据的主要方式（见第 4 节） |
-| `job` | `navop.job.{start,status,cancel,result,close}` | 长任务 |
-| `event` | `navop.event.{open,read,close}` | 事件流（嵌入式页面暂时没有推送通道，轮询更实际） |
-| `blob` | `navop.blob.{read,close}` | 大块数据分片读 |
-| `runtime` | `navop.runtime.info` | provider 运行时信息 |
-| `dev` | `navop.dev.*` | 开发者工具页专用（只有 navop 自己的 dev-tools 扩展用） |
+| `host.params` | （对象） | 启动事实：`apiVersion` / `extension{id,viewId,viewKey,title}` / `backends` / `connection` |
+| `host.call` | `navop.resource.{open,invoke,ping,close}` | 资源句柄。`invoke` 是页面读写数据的主要方式 |
+| `host.call` | `navop.job.{start,status,cancel,result,close}` | 长任务 |
+| `host.call` | `navop.blob.read` / `navop.blob.close` | 大块数据分片读 |
+| `host.call` | `navop.event.{subscribe,unsubscribe}` | 订阅事件流；随后由 `host.on("navop.event")` 推送 |
+| `host.call` | `navop.runtime.info` | provider 运行时信息 |
+| `host.call` | `navop.dev.*` | 只有 navop 内置的 dev-tools 扩展能用，第三方扩展调不到 |
+| `host.on` | `navop.event` | 事件批次 `{ handle, cursor, events, done?, error? }`，单批最多 64 条，溢出时带 `EVENT_OVERFLOW` 并可用 `since` 续订 |
+| `host.post` | `navop.log` | `{ level, message, fields }`，写进宿主日志，无应答 |
 
-**错误**：失败时 reject 的 message 形如
-`人类可读消息\n__NAVOP_ERROR__<base64url(JSON)>`，解码出
-`{ code, message, retryable, details }`，稳定码有
-`INVALID_ARGUMENT` / `PERMISSION_DENIED` / `BACKEND_NOT_FOUND` /
+没在 `modules` 里声明的命名空间，宿主**也注册了** handler，只是在调用时回
+`PERMISSION_DENIED`，`details.module` 指出缺的是哪个模块（`resource` / `job` …）。
+调用名本身写错才会拿到 nsh 的 `ERR_NSH_HOST_ERROR`（「宿主没有这个 handler」）。
+两者因此可区分：`PERMISSION_DENIED` → 去 `extension.json` 补 `modules`；
+`ERR_NSH_HOST_ERROR` → 名字拼错了。
+
+**错误**：reject 的对象是 nsh 的 `JsError`，直接读字段：
+
+```ts
+try {
+  await invoke("docker/volume/list", {});
+} catch (e) {
+  e.code;       // "INVALID_HANDLE" / "STALE_HANDLE" / "REQUEST_TIMEOUT" / …
+  e.retryable;  // boolean
+  e.details;    // 可选，结构化补充（如 { limitBytes })
+  e.message;    // 人类可读，不要用来分支
+}
+```
+
+稳定码：`INVALID_ARGUMENT` / `PERMISSION_DENIED` / `BACKEND_NOT_FOUND` /
 `BACKEND_START_FAILED` / `RUNTIME_UNAVAILABLE` / `INVALID_HANDLE` /
-`STALE_HANDLE` / `REQUEST_CANCELLED` / `REQUEST_TIMEOUT` 等。页面关闭时在途
-调用一律 `REQUEST_CANCELLED`。
+`STALE_HANDLE` / `REQUEST_CANCELLED` / `REQUEST_TIMEOUT` / `RESULT_TOO_LARGE` /
+`PROTOCOL_ERROR` / `EXTENSION_UNLOADED`。页面关闭时在途调用一律
+`REQUEST_CANCELLED`。
 
-**取消**：没有单独的 cancel API。页面被关闭（tab 关掉 / 扩展停用）时，宿主
-会取消所有在途调用并在有必要时补一次 close（open 了一半的资源会被回收）。
+**超时**：`host.call` 第三参数 `{ timeout }`（毫秒），不传时 nsh 默认 30 秒，
+`0` 表示不限。跑得久的 `invoke`（建连、跑查询）自己给一个明确的超时，别让
+页面在 30 秒被 `ETIMEDOUT` 打断而宿主还在跑。
+
+**语言与明暗**：都走 nsh 原生，不需要宿主推送。
+- 语言：`import { locale } from "nsh"`（`locale()` 是 accessor，随 nsh 的 surface
+  环境变化）。宿主在首帧之前就 `set_locale` 成 navop 的语言设置，所以
+  `locale()` 就是用户在设置里选的那个，冷启动也一样。
+- 明暗：`import { colorScheme } from "nsh"`，以及 `theme.ts` 的 `c.*()` /
+  `token()` 返回的主题 token —— 它们自动跟随系统/宿主的 appearance，页面不
+  需要订阅任何 `theme.changed` 事件，也不要自己存一份颜色常量。
+
+**取消**：仍然没有单独的 cancel API。页面被关闭（tab 关掉 / 扩展停用）时，
+宿主会取消所有在途调用并在有必要时补一次 close（open 了一半的资源会被回收）。
 
 ## 4. 页面怎么拿数据
 
 宿主只给页面两条通道：
 
-1. `navop.context.current` —— 页面上下文。扩展连接里打开的页面会带
-   `connection`：
+1. `host.params`（同步，首帧就有）：
    ```ts
    {
-     connectionId, name, contributionId, resourceType,
-     resourceHandle,        // 借来的资源句柄
-     alias,                 // 这个句柄在页面 backends 里的别名
-     config,                // 连接的非敏感配置（secrets 不会出现）
+     apiVersion: 2,
+     extension: { id, viewId, viewKey, title },
+     backends: ["main"],
+     connection: null | {
+       connectionId, name, contributionId, resourceType,
+       resourceHandle,        // 借来的资源句柄
+       alias,                 // 这个句柄在页面 backends 里的别名
+       config,                // 连接的非敏感配置（secrets 不会出现）
+     },
    }
    ```
    不是从连接打开的页面（例如工具箱里直接打开的页面）`connection` 为 null。
+   读不到 `host.params` 属于宿主 bug，不是页面要去兜底的情况。
 2. `navop.resource.invoke` —— 按 provider 的方法名调一次：
    ```ts
    await host.call("navop.resource.invoke", {
-     handle: connection().resourceHandle,
+     handle: connection?.resourceHandle,
      method: "docker/volume/list",
      params: {},
-   });
+   }, { timeout: 60_000 });
    ```
 
-共享库 `ui/lib/host.ts` 把这两步包成一行：
+共享库 `ui/lib/navop.ts` 把这两步包成一行：
 
 ```ts
-import { call } from "../../lib/host";
+import { invoke } from "../../lib/navop";
 
-const volumes = await call<{ volumes: Volume[] }>("docker/volume/list", {});
+const volumes = await invoke<{ volumes: Volume[] }>("docker/volume/list", {});
 ```
+
+`modules` 的合法值只有 `resource` / `job` / `event` / `blob` / `runtime` /
+`log` / `dev`；声明 `resource` / `job` / `event` / `blob` 的页面必须有
+`backends`。**声明了就代表你授权了这个命名空间**，页面没用到的不声明。
 
 **没有第二套"声明式 UI"机制了**：没有工作台描述、没有 operation 派发、
 没有宿主注入的 route/selection。页面要选容器/选索引/选主题，就自己拉列表、
@@ -241,22 +326,29 @@ export * from "../../../docker/ui/lib/theme";
 
 ## 8. 测试
 
-`nsh test .` 跑 `*.test.tsx`，宿主能力用 mock 给：
+`nsh test .` 跑 `*.test.tsx`，启动事实用 `params` 给，宿主能力用 mock 给：
 
 ```tsx
 import { expect, open, test } from "nsh/test";
-import { hostHandlers } from "../../../lib/test-host";
+import { TEST_PARAMS, hostHandlers } from "../../../lib/test-host";
+
+// 从 ui/pages/<page>/App.test.tsx 出发：打开 app 入口，用 route 选中本页。
+const PARAMS = { ...TEST_PARAMS, route: "volumes" };
 
 test("列表与详情", async () => {
-  const app = await open("./App.tsx", {
-    width: 1100,
-    height: 800,
-    host: { handlers: hostHandlers({ "docker/volume/list": () => /* 真数据形状 */ ({}) }) },
+  const app = await open("../../App.tsx", {
+    width: 1200,
+    height: 800,                       // nsh 默认视口 390，带侧栏的 app 要显式给宽高
+    host: { params: PARAMS, handlers: hostHandlers({ "docker/volume/list": () => /* 真数据形状 */ ({}) }) },
   });
   await app.waitFor("text:存储卷");
   await app.press("text:app-data");
 });
 ```
+
+`TEST_PARAMS` / `TEST_PARAMS.route` 与真实宿主写入的 `host.params` 同形（含
+`apiVersion: 2`、`extension`、`route`、`backends`、`connection`），测试里不要
+另造一套字段名：打开 app 入口、传 route，是唯一一条同时覆盖「路由 → 页面」的路径。
 
 建议每条页面至少覆盖：列表渲染、选中后详情、写操作（是否带 `id`）、失败重试。
 
@@ -264,7 +356,9 @@ test("列表与详情", async () => {
 
 - `nsh check .` 零错误（故意插一个类型错误确认它真会报，别信静默成功）；
 - `nsh build . --out dist` 退出 0，`dist/` 一并入库；
-- `nsh test .` 全绿；
-- `extension.json`：`engines.nsh`、`entry` 指到 `dist/bundle.js`、
-  `modules` 与页面真实用到的命名空间一致；
-- `nsh.json` 的 `capabilities.host` 只列真用到的命名空间（多给等于多授权）。
+- `nsh test .` 全绿（页面测试从页面目录 `open("../../App.tsx")` 并传 `route`）；
+- `extension.json`：`engines.nsh`、`shellApp.entry` 指到 `dist/bundle.js`、
+  `modules` 与 app 真实用到的命名空间一致（`resource`/`job`/`event`/`blob`/
+  `runtime`/`log`/`dev`，没有 `context`/`theme`/`i18n` 了）、连接用 `route` 而不是旧 `shellViewId`；
+- 页面目录里没有 `nsh.json` / `tsconfig.json` / `dist/`（它们只属于 app 根）；
+- `ui/nsh.json` 的 `capabilities.host` 是 `true`（交给宿主裁决，不要列具体名字）。

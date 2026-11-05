@@ -6,10 +6,7 @@
   "capabilities": {
     "host": [
       "spike.mounted",
-      "navop.context.*",
-      "navop.log.*",
-      "navop.i18n.*",
-      "navop.theme.*",
+      "navop.log",
       "navop.resource.*"
     ]
   }

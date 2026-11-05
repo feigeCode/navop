@@ -95,6 +95,34 @@ fn register_mcp_toolsets() {
             )]
         }),
     );
+
+    // 扩展声明的 AI 工具（plugin-ai-tools.md §11）：catalog 快照 → MCP handler
+    // registry → provider。默认关闭（settings.tool_exposure.mcp.extensions）。
+    mcp_host::register_toolset(
+        mcp_host::McpToolset::Extensions,
+        Arc::new(|cx: &App| {
+            let Some(global) = cx.try_global::<universal_plugins::GlobalUniversalPluginService>()
+            else {
+                return Vec::new();
+            };
+            let service = global.service();
+            let connections = mcp_host::connection_repository(cx).map(|repo| {
+                std::sync::Arc::new(universal_plugins::extension_tools::RepositoryConnectionSource::new(repo))
+                    as universal_plugins::extension_tools::ConnectionStore
+            });
+            let disabled = one_core::settings::AppSettings::current(cx)
+                .tool_exposure
+                .disabled_extension_tools
+                .clone();
+            vec![mcp_host::runtime_provider(
+                universal_plugins::extension_tools::extension_mcp_tool_registry(
+                    &service,
+                    connections,
+                    &disabled,
+                ),
+            )]
+        }),
+    );
 }
 
 impl Domain for ShellDomain {

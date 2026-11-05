@@ -6,8 +6,9 @@
 //!   验签 → 解包资产 → 运行；首帧健康后再 `accept_package` 记下 build 数
 //!   （两阶段，见迁移方案 §8）。
 //! - **开发形态**：入口本身就是 JS 源码（作者 `nsh build` 产出的 `bundle.js`
-//!   或手写单文件）。源码随扩展目录发布，没有签名可验，因此能力仍按
-//!   `nsh.json` 显式声明限制。
+//!   或手写单文件）。源码随扩展目录发布，没有签名可验；能力面同样只认
+//!   `extension.json`（宿主权威），页面自带的 `nsh.json` / `capabilities.json`
+//!   只用来做诊断比对。
 
 use std::{
     cell::RefCell,
@@ -16,7 +17,8 @@ use std::{
 };
 
 use anyhow::{Context as _, Result, anyhow};
-use extension_runtime::RegisteredShellViewContribution;
+use extension_runtime::RegisteredShellAppContribution;
+use nsh_core::access::Capabilities;
 use nsh_platform_gpui::{App, AssetBase, Bundle, LoadedPackage};
 
 /// 一个 view 的可运行程序。
@@ -31,12 +33,11 @@ pub(super) struct ViewProgram {
 
 /// 装载入口：优先签名包，回落到源码。
 pub(super) fn load(
-    contribution: &RegisteredShellViewContribution,
+    contribution: &RegisteredShellAppContribution,
     trust: &Rc<RefCell<nsh_platform_gpui::package::TrustStore>>,
 ) -> Result<ViewProgram> {
     let entry = &contribution.entry_path;
     let app_id = read_app_id(entry).unwrap_or_else(|| default_app_id(contribution));
-    let declared = read_capabilities(entry);
 
     let package_path = entry.with_extension("nshpkg");
     if package_path.is_file() {
@@ -51,9 +52,15 @@ pub(super) fn load(
             build = loaded.app.build,
             "nsh 签名包已验证，等首帧健康后接受"
         );
+        // 签名包只证明"包完整、发布者可信"，不证明"页面该拿什么能力"。能力面
+        // 一律从安装期注册的 extension.json 重建（`contribution` 就是它的注册
+        // 结果），包内若有能力声明也不生效。
+        let mut bundle = loaded.bundle.clone();
+        let granted = apply_host_policy(&mut bundle, contribution);
+        log_page_declaration_drift(entry, &granted);
         return Ok(ViewProgram {
             asset_base: Some(AssetBase::Directory(loaded.assets.clone())),
-            app: App::Js(loaded.bundle.clone()),
+            app: App::Js(bundle),
             app_id,
             accepted: Some(loaded),
         });
@@ -63,11 +70,28 @@ pub(super) fn load(
         .with_context(|| format!("读取页面入口失败: {}", entry.display()))?;
     let mut bundle = Bundle::source(source);
     bundle.app_id = Some(app_id.clone());
-    // 开发形态：保留 eval 便于调试（Policy::development 只关 harden），
-    // 能力声明照样强制 —— 缺能力在开发期就该暴露，而不是等发布。
-    bundle.policy.harden = false;
-    // 宿主上限：页面声明只能在这个范围内生效。缺了它，nsh 会把
-    // "没声明" 读成 `Capabilities::all()`（见 `Policy::access`）。
+    let granted = apply_host_policy(&mut bundle, contribution);
+    log_page_declaration_drift(entry, &granted);
+    Ok(ViewProgram {
+        asset_base: asset_base_for(entry),
+        app: App::Js(bundle),
+        app_id,
+        accepted: None,
+    })
+}
+
+/// 宿主权威的能力面：`declared` 与 `granted` 都由 `extension.json` 派生。
+///
+/// 这样页面自带的 `capabilities.json` / `nsh.json` 不能自行扩权，也不会因为
+/// "没声明" 被 nsh 读成 `Capabilities::all()`（见 `Policy::access`）。返回值是
+/// 授予上限，调用方拿去和页面自带声明做诊断比对。
+///
+/// `harden = true` 两条加载路径一致：开发形态也不能因为"源码没签名"而放宽，
+/// 缺能力在开发期就该暴露。
+fn apply_host_policy(
+    bundle: &mut Bundle,
+    contribution: &RegisteredShellAppContribution,
+) -> Capabilities {
     let (granted, skipped) = super::grant::granted(contribution);
     if !skipped.is_empty() {
         tracing::warn!(
@@ -76,29 +100,44 @@ pub(super) fn load(
             "这些权限无法翻译成 nsh 能力，已按 fail-closed 丢弃"
         );
     }
-    bundle.policy.granted = Some(granted);
-    match declared {
-        Some(declared) => {
-            let (capabilities, dropped) =
-                nsh_core::access::Capabilities::from_json_lenient(&declared).map_err(|error| {
-                    anyhow!("解析 {} 的 capabilities 失败: {error}", entry.display())
-                })?;
-            if !dropped.is_empty() {
-                tracing::warn!(?dropped, path = %entry.display(), "nsh 能力声明有字段被丢弃");
-            }
-            bundle.policy.declared = Some(capabilities);
-        }
-        None => tracing::warn!(
+    bundle.policy.harden = true;
+    bundle.policy.granted = Some(granted.clone());
+    bundle.policy.declared = Some(granted.clone());
+    granted
+}
+
+/// 页面自带的声明只作诊断：与宿主授予不同就记 debug，实际生效的永远是
+/// `extension.json`。文件缺失或解析失败都不再是错误，也不再单独告警。
+fn log_page_declaration_drift(entry: &Path, granted: &Capabilities) {
+    let Some(value) = read_capabilities(entry) else {
+        return;
+    };
+    let Ok((page, dropped)) = Capabilities::from_json_lenient(&value) else {
+        tracing::debug!(
             path = %entry.display(),
-            "nsh.json 没有声明 capabilities：页面拿不到任何 host 能力"
-        ),
+            "页面自带的能力声明无法解析，忽略（以 extension.json 为准）"
+        );
+        return;
+    };
+    if !dropped.is_empty() {
+        tracing::debug!(
+            ?dropped,
+            path = %entry.display(),
+            "页面自带的能力声明有字段被丢弃"
+        );
     }
-    Ok(ViewProgram {
-        asset_base: asset_base_for(entry),
-        app: App::Js(bundle),
-        app_id,
-        accepted: None,
-    })
+    let mut page_hosts = page.host;
+    let mut granted_hosts = granted.host.clone();
+    page_hosts.sort();
+    granted_hosts.sort();
+    if page_hosts != granted_hosts {
+        tracing::debug!(
+            path = %entry.display(),
+            ?page_hosts,
+            ?granted_hosts,
+            "页面自带的能力声明与宿主授予不同，以 extension.json 为准"
+        );
+    }
 }
 
 /// 两阶段装载的第二阶段：首帧健康，把这个 build 记下来（此后旧包不再通过
@@ -158,12 +197,12 @@ fn read_app_id(entry: &Path) -> Option<String> {
     None
 }
 
-/// 页面声明的能力上限。
+/// 页面自带的能力声明（只用于诊断）。
 ///
 /// `capabilities.json` 是 `nsh build` 的产物；`nsh.json` 里的
-/// `capabilities` 是源目录形态。取到哪个用哪个——**没有声明就没有能力**，
-/// 由调用方按「不授予」处理（`Policy` 的默认值是 `Capabilities::all`，
-/// 所以这里必须显式给出）。
+/// `capabilities` 是源目录形态。取到哪个用哪个。v2 起宿主不再信任它：生效的
+/// 能力面来自 `extension.json`（见 `apply_host_policy`），这里读到的只用于
+/// debug 比对与定位作者 misunderstanding。
 fn read_capabilities(entry: &Path) -> Option<serde_json::Value> {
     let dir = entry.parent()?;
     if let Ok(text) = std::fs::read_to_string(dir.join("capabilities.json"))
@@ -176,12 +215,8 @@ fn read_capabilities(entry: &Path) -> Option<serde_json::Value> {
     value.get("capabilities").cloned()
 }
 
-fn default_app_id(contribution: &RegisteredShellViewContribution) -> String {
-    format!(
-        "dev.navop.{}.{}",
-        sanitize(&contribution.extension_id),
-        sanitize(&contribution.id)
-    )
+fn default_app_id(contribution: &RegisteredShellAppContribution) -> String {
+    format!("dev.navop.{}", sanitize(&contribution.extension_id))
 }
 
 fn sanitize(value: &str) -> String {
@@ -204,28 +239,24 @@ mod tests {
     use std::path::PathBuf;
     use std::rc::Rc;
 
-    use extension_runtime::RegisteredShellViewContribution;
-    use extension_runtime::extension::manifest::ShellSurface;
+    use extension_runtime::RegisteredShellAppContribution;
+    use extension_runtime::extension::manifest::ShellHostModule;
 
     use super::load;
 
-    fn contribution(entry: PathBuf) -> RegisteredShellViewContribution {
-        RegisteredShellViewContribution {
+    fn contribution(entry: PathBuf, modules: &[ShellHostModule]) -> RegisteredShellAppContribution {
+        RegisteredShellAppContribution {
             extension_id: "com.navop.docker".into(),
             extension_version: "0.6.3".into(),
-            id: "overview".into(),
-            view_key: "com.navop.docker::overview".into(),
-            title: "Docker Engine Overview".into(),
+            title: "Docker".into(),
             description: None,
             icon_path: None,
             entry_path: entry,
             extension_root: PathBuf::from("."),
-            surface: ShellSurface::Tab,
             category: None,
             keywords: Vec::new(),
-            singleton: false,
             backends: BTreeMap::new(),
-            modules: BTreeSet::new(),
+            modules: modules.iter().copied().collect::<BTreeSet<_>>(),
             permissions: Vec::new(),
             shell_api_version: "1.0".into(),
             required_nsh_version: Some("0.3.0".into()),
@@ -234,105 +265,179 @@ mod tests {
 
     #[test]
     fn built_pages_load_from_their_dist_layout() {
-        // 试点页的产物就躺在扩展仓里：用它验证「dist/{bundle.js, app.json,
-        // capabilities.json}」这套发布布局能被宿主直接装载 —— 页面目录里
-        // 没有 nsh.json（那是构建输入），宿主只读产物。
+        // 试点 app 的产物就躺在扩展仓里：用它验证「dist/{bundle.js, app.json,
+        // capabilities.json}」这套发布布局能被宿主直接装载 —— ui/ 里
+        // 没有 nsh.json 的产物副本（那是构建输入），宿主只读产物。
         let dist = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../navop-extensions/extensions/composite/docker/ui/pages/overview/dist");
+            .join("../../navop-extensions/extensions/composite/docker/ui/dist");
         if !dist.join("bundle.js").is_file() {
             eprintln!("跳过：扩展仓里的试点页产物不存在（{}）", dist.display());
             return;
         }
         let trust = Rc::new(RefCell::new(nsh_platform_gpui::package::TrustStore::new()));
-        let program = load(&contribution(dist.join("bundle.js")), &trust).expect("装载试点页");
-        assert_eq!(program.app_id, "com.navop.docker.overview");
+        let program = load(
+            &contribution(dist.join("bundle.js"), &[ShellHostModule::Resource]),
+            &trust,
+        )
+        .expect("装载试点页");
+        assert_eq!(program.app_id, "com.navop.docker");
         assert!(program.asset_base.is_none(), "开发形态没有资产目录");
         let nsh_platform_gpui::App::Js(bundle) = &program.app else {
             panic!("页面应当是 JS 程序");
         };
-        let declared = bundle
+        // v2：两条加载路径都关掉 harden 放宽，declared 与 granted 都由宿主
+        // 按 extension.json 给出，不再读页面自带的 capabilities.json。
+        assert!(bundle.policy.harden, "harden 必须始终为 true");
+        assert_eq!(
+            bundle.policy.declared.as_ref(),
+            bundle.policy.granted.as_ref(),
+            "declared 必须等于宿主授予上限"
+        );
+        let granted = bundle
             .policy
-            .declared
+            .granted
             .as_ref()
-            .expect("capabilities.json 里的 host 能力应当被读成声明上限");
-        // 工作台删除后，页面只该声明「读上下文 + 调资源」这两个命名空间。
+            .expect("宿主必须显式给出 granted");
         assert!(
-            declared.host.iter().any(|host| host == "navop.resource.*"),
-            "试点页要声明资源能力，实际 {:?}",
-            declared.host
+            granted.host.iter().any(|host| host == "navop.resource.*"),
+            "资源模块要派生资源命名空间，实际 {:?}",
+            granted.host
         );
         assert!(
-            !declared
+            !granted
                 .host
                 .iter()
                 .any(|host| host.starts_with("navop.workbench")),
             "页面不该再依赖已删除的工作台通道，实际 {:?}",
-            declared.host
+            granted.host
         );
     }
 
-    /// 扩展仓里每个已迁移页面的产物都要能被宿主装载。
+    /// 扩展仓里每个已发布 app 的产物都要能被宿主装载。
     ///
-    /// 这条测试故意做成"扫目录"：M8 每迁完一页，它就自动多覆盖一页，
-    /// 不依赖谁记得往清单里加一行。产物不在（没初始化子模块）时跳过。
+    /// 这条测试故意做成"扫目录"：新扩一个 app 就自动多覆盖一个，不依赖谁记得
+    /// 往清单里加一行。`extensions/` 与 `examples/` 都扫；产物不在（没初始化
+    /// 子模块）时跳过。
     #[test]
     fn every_built_page_in_the_extension_repo_loads() {
-        let root =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../navop-extensions/extensions");
-        if !root.is_dir() {
-            eprintln!("跳过：扩展仓不存在（{}）", root.display());
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../navop-extensions");
+        // CI 的 checkout 不初始化子模块：目录在、内容是空壳，这时要整条跳过，
+        // 而不是拿「一个产物都没有」去断言失败。
+        if !root.join("extensions").is_dir() {
+            eprintln!("跳过：扩展仓子模块没有检出（{}）", root.display());
             return;
         }
         let trust = Rc::new(RefCell::new(nsh_platform_gpui::package::TrustStore::new()));
         let mut loaded = Vec::new();
         for bundle in dist_bundles(&root) {
-            let program = load(&contribution(bundle.clone()), &trust)
-                .unwrap_or_else(|error| panic!("装载 {} 失败：{error:#}", bundle.display()));
+            let program = load(
+                &contribution(bundle.clone(), &[ShellHostModule::Resource]),
+                &trust,
+            )
+            .unwrap_or_else(|error| panic!("装载 {} 失败：{error:#}", bundle.display()));
             assert!(
                 !program.app_id.is_empty(),
                 "{} 的 app_id 来自产物里的 app.json，不能为空",
+                bundle.display()
+            );
+            // 一个扩展一个包：产物里的 app id 必须是扩展 id，否则 UI 与
+            // manifest 会各说各话（旧模型一页一个 app id 就是这么漂的）。
+            let extension_dir = bundle
+                .ancestors()
+                .nth(3)
+                .unwrap_or_else(|| panic!("{} 不在 <extension>/ui/dist 下", bundle.display()));
+            let manifest_text = std::fs::read_to_string(extension_dir.join("extension.json"))
+                .unwrap_or_else(|error| {
+                    panic!("读 {} 的清单失败：{error}", extension_dir.display())
+                });
+            let manifest: serde_json::Value =
+                serde_json::from_str(&manifest_text).unwrap_or_else(|error| {
+                    panic!("解析 {} 的清单失败：{error}", extension_dir.display())
+                });
+            let extension_id = manifest["id"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{} 的清单缺 id", extension_dir.display()));
+            assert_eq!(
+                program.app_id,
+                extension_id,
+                "{} 的 app id 必须等于扩展 id",
                 bundle.display()
             );
             let nsh_platform_gpui::App::Js(js) = &program.app else {
                 panic!("{} 应当是 JS 程序", bundle.display());
             };
             assert!(
-                js.policy
-                    .declared
-                    .as_ref()
-                    .is_some_and(|declared| !declared.host.is_empty()),
-                "{} 没有声明任何 host 能力 —— 页面调不到宿主接口",
+                js.policy.harden,
+                "{} 的 harden 必须为 true（开发形态也不放宽）",
+                bundle.display()
+            );
+            assert_eq!(
+                js.policy.declared.as_ref(),
+                js.policy.granted.as_ref(),
+                "{} 的 declared 必须等于宿主授予上限",
+                bundle.display()
+            );
+            let grants_resource =
+                js.policy.granted.as_ref().is_some_and(|granted| {
+                    granted.host.iter().any(|host| host == "navop.resource.*")
+                });
+            assert!(
+                grants_resource,
+                "{} 声明的 resource 模块没有派生到宿主能力",
                 bundle.display()
             );
             loaded.push(program.app_id);
         }
-        eprintln!("已装载 {} 个页面：{loaded:?}", loaded.len());
-        assert!(!loaded.is_empty(), "扩展仓里应当至少有一个已迁移的页面产物");
+        eprintln!("已装载 {} 个 app：{loaded:?}", loaded.len());
+        assert!(!loaded.is_empty(), "扩展仓里应当至少有一个 app 产物");
+        let mut unique = loaded.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(
+            unique.len(),
+            loaded.len(),
+            "同一扩展只能产出一个 app，实际 {loaded:?}"
+        );
     }
 
-    /// 递归找 `ui/pages/<page>/dist/bundle.js`；不引入 walkdir（只扫三层）。
+    /// 递归找 `<extension>/ui/dist/bundle.js`；不引入 walkdir。
+    ///
+    /// `extensions/composite/<ext>` 与 `examples/<ext>` 深度不同，所以按目录递归，
+    /// 但不进 `ui/`、`dist/`、`node_modules/`、`target/`。
     fn dist_bundles(root: &std::path::Path) -> Vec<PathBuf> {
-        let mut found = Vec::new();
-        let Ok(extensions) = std::fs::read_dir(root) else {
-            return found;
-        };
-        for kind in extensions.flatten() {
-            let Ok(entries) = std::fs::read_dir(kind.path()) else {
-                continue;
+        fn walk(dir: &std::path::Path, depth: usize, found: &mut Vec<PathBuf>) {
+            if depth > 3 {
+                return;
+            }
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
             };
-            for extension in entries.flatten() {
-                let pages = extension.path().join("ui/pages");
-                let Ok(pages) = std::fs::read_dir(pages) else {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_dir() {
                     continue;
-                };
-                for page in pages.flatten() {
-                    let bundle = page.path().join("dist/bundle.js");
-                    if bundle.is_file() {
-                        found.push(bundle);
-                    }
                 }
+                let bundle = path.join("ui/dist/bundle.js");
+                if bundle.is_file() {
+                    found.push(bundle);
+                    continue;
+                }
+                let name = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("");
+                if matches!(
+                    name,
+                    "node_modules" | "target" | "ui" | "dist" | ".nsh" | "src"
+                ) {
+                    continue;
+                }
+                walk(&path, depth + 1, found);
             }
         }
+
+        let mut found = Vec::new();
+        walk(root, 0, &mut found);
         found.sort();
         found
     }

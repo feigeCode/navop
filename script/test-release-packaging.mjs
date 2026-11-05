@@ -372,7 +372,7 @@ test("the embedded webview is an opt-in feature on every platform", () => {
   );
   assert.match(
     universalPluginsCargo,
-    /nsh-host = \["dep:nsh-platform-gpui", "dep:nsh-core", "dep:nsh-engine"\]/,
+    /nsh-host = \[\s*"dep:nsh-platform-gpui",\s*"dep:nsh-core",\s*"dep:nsh-engine",\s*"dep:ai_chat_view",\s*"dep:one-ui",\s*"dep:serde",\s*\]/,
   );
   assert.match(
     workspaceCargo,

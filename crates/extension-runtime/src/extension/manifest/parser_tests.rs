@@ -1,8 +1,6 @@
 use std::fs;
 
-use super::{
-    ManifestError, RemoteFileEditorLaunchMode, ShellHostModule, ShellSurface, load_from_dir,
-};
+use super::{ManifestError, RemoteFileEditorLaunchMode, ShellHostModule, load_from_dir};
 
 fn write_manifest(dir: &std::path::Path, body: &str) {
     fs::write(dir.join("extension.json"), body).unwrap();
@@ -320,42 +318,38 @@ fn manifest_parses_document_exporters() {
 }
 
 #[test]
-fn manifest_parses_typed_shell_view() {
+fn manifest_parses_typed_shell_app() {
     let tmp = tempfile::TempDir::new().unwrap();
     write_shell_entry(tmp.path(), "ui/explorer.js");
     write_shell_manifest(
         tmp.path(),
         serde_json::json!({
-            "id": "explorer",
             "title": "Resources",
             "entry": "ui/explorer.js",
-            "surface": "tab",
             "backends": { "main": "provider" },
-            "modules": ["context", "resource"]
+            "modules": ["resource"]
         }),
     );
 
     let manifest = load_from_dir(tmp.path()).unwrap();
-    let view = &manifest.contributes.shell_views[0];
+    let app = manifest.contributes.shell_app.expect("shellApp");
 
-    assert_eq!("explorer", view.id);
-    assert_eq!("ui/explorer.js", view.entry);
+    assert_eq!(app.title.as_deref(), Some("Resources"));
+    assert_eq!("ui/explorer.js", app.entry);
     assert_eq!(
         Some("provider"),
-        view.backends.get("main").map(String::as_str)
+        app.backends.get("main").map(String::as_str)
     );
 }
 
 #[test]
-fn manifest_rejects_shell_view_entry_escape() {
+fn manifest_rejects_shell_app_entry_escape() {
     let tmp = tempfile::TempDir::new().unwrap();
     write_shell_manifest(
         tmp.path(),
         serde_json::json!({
-            "id": "explorer",
             "title": "Resources",
             "entry": "../escape.js",
-            "surface": "tab",
             "backends": { "main": "provider" },
             "modules": ["resource"]
         }),
@@ -363,7 +357,7 @@ fn manifest_rejects_shell_view_entry_escape() {
 
     match load_from_dir(tmp.path()).unwrap_err() {
         ManifestError::InvalidField { field, reason } => {
-            assert_eq!("/contributes/shellViews/explorer/entry", field);
+            assert_eq!("/contributes/shellApp/entry", field);
             assert!(reason.contains("escape"), "{reason}");
         }
         other => panic!("expected invalid shell entry, got {other:?}"),
@@ -371,7 +365,7 @@ fn manifest_rejects_shell_view_entry_escape() {
 }
 
 #[test]
-fn shell_views_accept_the_nsh_engine_gate() {
+fn shell_app_accepts_the_nsh_engine_gate() {
     let tmp = tempfile::TempDir::new().unwrap();
     write_manifest(
         tmp.path(),
@@ -387,14 +381,12 @@ fn shell_views_accept_the_nsh_engine_gate() {
                 "ipc": [{ "id": "provider", "entry": { "command": "./bin/provider" } }]
             },
             "contributes": {
-                "shellViews": [{
-                    "id": "overview",
+                "shellApp": {
                     "title": "Overview",
                     "entry": "ui/overview.js",
-                    "surface": "tab",
                     "backends": { "main": "provider" },
-                    "modules": ["context", "resource"]
-                }]
+                    "modules": ["resource"]
+                }
             }
         }"#,
     );
@@ -402,12 +394,12 @@ fn shell_views_accept_the_nsh_engine_gate() {
     std::fs::write(tmp.path().join("ui/overview.js"), "export default {}").unwrap();
 
     let manifest =
-        load_from_dir(tmp.path()).expect("声明 engines.nsh 的 shellView 应能通过清单校验");
+        load_from_dir(tmp.path()).expect("声明 engines.nsh 的 shellApp 应能通过清单校验");
     assert_eq!(manifest.engines.nsh, "0.3.0");
 }
 
 #[test]
-fn shell_views_require_an_engine_gate() {
+fn shell_app_requires_an_engine_gate() {
     let tmp = tempfile::TempDir::new().unwrap();
     write_manifest(
         tmp.path(),
@@ -422,14 +414,12 @@ fn shell_views_require_an_engine_gate() {
                 "ipc": [{ "id": "provider", "entry": { "command": "./bin/provider" } }]
             },
             "contributes": {
-                "shellViews": [{
-                    "id": "overview",
+                "shellApp": {
                     "title": "Overview",
                     "entry": "ui/overview.js",
-                    "surface": "tab",
                     "backends": { "main": "provider" },
-                    "modules": ["context"]
-                }]
+                    "modules": ["resource"]
+                }
             }
         }"#,
     );
@@ -446,15 +436,13 @@ fn shell_views_require_an_engine_gate() {
 }
 
 #[test]
-fn manifest_rejects_missing_shell_view_entry() {
+fn manifest_rejects_missing_shell_app_entry() {
     let tmp = tempfile::TempDir::new().unwrap();
     write_shell_manifest(
         tmp.path(),
         serde_json::json!({
-            "id": "explorer",
             "title": "Resources",
             "entry": "ui/missing.js",
-            "surface": "tab",
             "backends": { "main": "provider" },
             "modules": ["resource"]
         }),
@@ -466,16 +454,14 @@ fn manifest_rejects_missing_shell_view_entry() {
 }
 
 #[test]
-fn manifest_rejects_unknown_shell_view_field() {
+fn manifest_rejects_unknown_shell_app_field() {
     let tmp = tempfile::TempDir::new().unwrap();
     write_shell_entry(tmp.path(), "ui/explorer.js");
     write_shell_manifest(
         tmp.path(),
         serde_json::json!({
-            "id": "explorer",
             "title": "Resources",
             "entry": "ui/explorer.js",
-            "surface": "tab",
             "backends": { "main": "provider" },
             "modules": ["resource"],
             "unexpected": true
@@ -486,7 +472,7 @@ fn manifest_rejects_unknown_shell_view_field() {
         ManifestError::Parse { message, .. } => {
             assert!(message.contains("unknown field"), "{message}")
         }
-        other => panic!("expected shell view parse failure, got {other:?}"),
+        other => panic!("expected shell app parse failure, got {other:?}"),
     }
 }
 
@@ -497,10 +483,8 @@ fn manifest_rejects_removed_ui_host_module() {
     write_shell_manifest(
         tmp.path(),
         serde_json::json!({
-            "id": "explorer",
             "title": "Resources",
             "entry": "ui/explorer.js",
-            "surface": "tab",
             "modules": ["ui"]
         }),
     );
@@ -519,17 +503,23 @@ fn manifest_accepts_registered_shell_lifecycle_modules() {
     write_shell_manifest(
         tmp.path(),
         serde_json::json!({
-            "id": "explorer",
             "title": "Resources",
             "entry": "ui/explorer.js",
-            "surface": "tab",
             "backends": { "main": "provider" },
             "modules": ["job", "event", "blob", "runtime", "log"]
         }),
     );
 
     let manifest = load_from_dir(tmp.path()).expect("registered shell modules");
-    assert_eq!(5, manifest.contributes.shell_views[0].modules.len());
+    assert_eq!(
+        5,
+        manifest
+            .contributes
+            .shell_app
+            .expect("shellApp")
+            .modules
+            .len()
+    );
 }
 
 #[cfg(unix)]
@@ -539,7 +529,7 @@ fn manifest_rejects_shell_entry_symlink_escape() {
 
     let tmp = tempfile::TempDir::new().unwrap();
     let outside = tempfile::TempDir::new().unwrap();
-    std::fs::write(outside.path().join("outside.js"), "export default class {}").unwrap();
+    std::fs::write(outside.path().join("outside.js"), "export default {}").unwrap();
     std::fs::create_dir_all(tmp.path().join("ui")).unwrap();
     symlink(
         outside.path().join("outside.js"),
@@ -549,12 +539,10 @@ fn manifest_rejects_shell_entry_symlink_escape() {
     write_shell_manifest(
         tmp.path(),
         serde_json::json!({
-            "id": "explorer",
             "title": "Resources",
             "entry": "ui/explorer.js",
-            "surface": "tab",
             "backends": { "main": "provider" },
-            "modules": ["context", "resource"]
+            "modules": ["resource"]
         }),
     );
 
@@ -726,7 +714,7 @@ fn write_shell_manifest(dir: &std::path::Path, view: serde_json::Value) {
                 "entry": { "command": "./bin/provider" }
             }]
         },
-        "contributes": { "shellViews": [view] }
+        "contributes": { "shellApp": view }
     });
     write_manifest(dir, &serde_json::to_string_pretty(&manifest).unwrap());
 }
@@ -779,16 +767,13 @@ fn reference_resource_plugin_manifests_are_parser_valid() {
 }
 
 #[test]
-fn manifest_accepts_toolbox_surface_with_log_only_modules() {
+fn manifest_accepts_shell_app_category_and_keywords() {
     let tmp = tempfile::TempDir::new().unwrap();
     write_shell_manifest(
         tmp.path(),
         serde_json::json!({
-            "id": "hosts-tool",
             "title": "Hosts Editor",
             "entry": "ui/tool.js",
-            "surface": "toolbox",
-            "singleton": true,
             "category": "system",
             "keywords": ["hosts", "dns"],
             "modules": ["log"]
@@ -796,11 +781,10 @@ fn manifest_accepts_toolbox_surface_with_log_only_modules() {
     );
     write_shell_entry(tmp.path(), "ui/tool.js");
     let manifest = load_from_dir(tmp.path()).unwrap();
-    let view = &manifest.contributes.shell_views[0];
-    assert_eq!(view.surface, ShellSurface::Toolbox);
-    assert_eq!(view.category.as_deref(), Some("system"));
+    let app = manifest.contributes.shell_app.expect("shellApp");
+    assert_eq!(app.category.as_deref(), Some("system"));
     assert_eq!(
-        view.keywords.as_deref(),
+        app.keywords.as_deref(),
         Some(
             ["hosts", "dns"]
                 .iter()
@@ -812,16 +796,13 @@ fn manifest_accepts_toolbox_surface_with_log_only_modules() {
 }
 
 #[test]
-fn manifest_accepts_toolbox_surface_with_backends_and_backend_modules() {
+fn manifest_accepts_shell_app_backends_and_backend_modules() {
     let tmp = tempfile::TempDir::new().unwrap();
     write_shell_manifest(
         tmp.path(),
         serde_json::json!({
-            "id": "docker-tool",
             "title": "Docker Cleaner",
             "entry": "ui/tool.js",
-            "surface": "toolbox",
-            "singleton": true,
             "category": "network",
             "backends": { "main": "provider" },
             "modules": ["resource", "job", "log"]
@@ -829,22 +810,19 @@ fn manifest_accepts_toolbox_surface_with_backends_and_backend_modules() {
     );
     write_shell_entry(tmp.path(), "ui/tool.js");
     let manifest = load_from_dir(tmp.path()).unwrap();
-    let view = &manifest.contributes.shell_views[0];
-    assert_eq!(view.surface, ShellSurface::Toolbox);
-    assert_eq!(view.backends.len(), 1);
-    assert!(view.modules.contains(&ShellHostModule::Resource));
+    let app = manifest.contributes.shell_app.expect("shellApp");
+    assert_eq!(app.backends.len(), 1);
+    assert!(app.modules.contains(&ShellHostModule::Resource));
 }
 
 #[test]
-fn manifest_rejects_invalid_toolbox_category() {
+fn manifest_rejects_invalid_category() {
     let tmp = tempfile::TempDir::new().unwrap();
     write_shell_manifest(
         tmp.path(),
         serde_json::json!({
-            "id": "bad-tool",
             "title": "Bad Tool",
             "entry": "ui/tool.js",
-            "surface": "toolbox",
             "category": "Network Tools!"
         }),
     );

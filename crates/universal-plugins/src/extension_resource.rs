@@ -55,6 +55,16 @@ impl ExtensionResourceLaunch {
         &self.resource_type
     }
 
+    /// 组装 resource/open 的参数（extension_tools 执行器用：它已经持有
+    /// provider 租约与 client，不走 `open` 里的第二次 client 获取）。
+    pub(crate) fn open_params(&self) -> ResourceOpenParams {
+        ResourceOpenParams {
+            resource_type: self.resource_type.clone(),
+            config: self.config.clone(),
+            metadata: None,
+        }
+    }
+
     pub(crate) async fn open(
         self,
         service: &UniversalPluginService,
@@ -118,6 +128,22 @@ impl OpenedExtensionResource {
             .take()
             .ok_or_else(|| anyhow!("extension connection resource was already adopted"))
     }
+}
+
+/// 便捷入口：从连接记录与连接贡献直接得到 open 参数。
+/// 组装失败（连接未保存等）时返回空配置——调用方在 open 阶段拿到
+/// provider 的结构化错误，比在这里拼一个伪错误更诚实。
+pub(crate) fn launch_open_params(
+    connection: &one_core::storage::StoredConnection,
+    contribution: &extension_runtime::RegisteredResourceConnectionContribution,
+) -> ResourceOpenParams {
+    ExtensionResourceLaunch::new(connection, contribution)
+        .map(|launch| launch.open_params())
+        .unwrap_or(ResourceOpenParams {
+            resource_type: contribution.resource_type.clone(),
+            config: serde_json::Value::Object(Default::default()),
+            metadata: None,
+        })
 }
 
 impl Drop for OpenedExtensionResource {
@@ -192,7 +218,7 @@ mod tests {
             icon_path: None,
             runtime_id: "com.example.search::main".into(),
             resource_type: "search".into(),
-            shell_view_id: Some("explorer".into()),
+            route: Some("explorer".into()),
             terminal: None,
             form: Default::default(),
         }

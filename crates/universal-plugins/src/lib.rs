@@ -8,8 +8,9 @@
 rust_i18n::i18n!("locales", fallback = "en");
 
 mod connection_icon;
-mod extension_connection_form;
+pub mod extension_connection_form;
 mod extension_resource;
+pub mod extension_tools;
 #[cfg(feature = "nsh-host")]
 mod host_error;
 #[cfg(feature = "nsh-host")]
@@ -31,14 +32,14 @@ pub use nsh_host::{
 /// 名字沿用 gpui-shell 时期的调用点（设置页切语言那一处）；实现换成了
 /// nsh 的 `set_locale`（页面重渲染取词条），不再重跑整个脚本。
 #[cfg(feature = "nsh-host")]
-pub fn refresh_shell_views(cx: &mut gpui::App) {
+pub fn refresh_shell_apps(cx: &mut gpui::App) {
     nsh_host::refresh_views(cx);
 }
 
 /// 不含脚本页面的构建里没有东西可刷新。
 #[cfg(not(feature = "nsh-host"))]
-pub fn refresh_shell_views(_cx: &mut gpui::App) {}
+pub fn refresh_shell_apps(_cx: &mut gpui::App) {}
 
 pub use universal_plugins::{
-    GlobalUniversalPluginService, UniversalPluginService, init, spawn_shutdown,
+    GlobalUniversalPluginService, UniversalPluginService, init, init_for_tests, spawn_shutdown,
 };

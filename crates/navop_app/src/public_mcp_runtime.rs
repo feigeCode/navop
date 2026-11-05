@@ -10,6 +10,8 @@ mod tool_registry;
 
 #[cfg(test)]
 mod agent_db_registry_tests;
+#[cfg(test)]
+mod extension_tools_tests;
 
 pub use config::{PublicMcpEnvOverride, PublicMcpStartConfig};
 pub use session::{mcp_server_enabled, set_mcp_server_enabled, set_mcp_server_mode};
@@ -185,7 +187,45 @@ pub fn agent_runtime_tool_registry(cx: &mut App) -> anyhow::Result<agent_runtime
             tracing::warn!("Agent SSH/SFTP tools enabled without ConnectionRepository");
         }
     }
+    if agent_toolsets.extensions {
+        register_extension_tools(cx, &mut agent_registry)?;
+    }
     Ok(agent_registry)
+}
+
+/// 把扩展声明的 AI 工具（`contributes.tools`）追加进 Agent 注册表。
+///
+/// 每轮对话重建一次注册表；扩展目录（catalog）在构建时读快照，无失效通知。
+fn register_extension_tools(
+    cx: &App,
+    agent_registry: &mut agent_runtime::ToolRegistry,
+) -> anyhow::Result<()> {
+    let Some(service) = cx.try_global::<universal_plugins::GlobalUniversalPluginService>() else {
+        tracing::warn!("Agent extension tools enabled without UniversalPluginService");
+        return Ok(());
+    };
+    let connections = connection_repository(cx).map(|repo| {
+        std::sync::Arc::new(universal_plugins::extension_tools::RepositoryConnectionSource::new(
+            repo,
+        ))
+            as std::sync::Arc<
+                dyn universal_plugins::extension_tools::ConnectionSource + Send + Sync,
+            >
+    });
+    let disabled = AppSettings::current(cx)
+        .tool_exposure
+        .disabled_extension_tools
+        .clone();
+    let snapshot = universal_plugins::extension_tools::build_extension_tool_registry(
+        &service.service(),
+        connections,
+        &disabled,
+    );
+    if snapshot.index.is_empty() {
+        tracing::debug!("Agent extension tools enabled but no tools registered");
+    }
+    agent_registry.try_extend(snapshot.registry)?;
+    Ok(())
 }
 
 #[cfg(feature = "database")]

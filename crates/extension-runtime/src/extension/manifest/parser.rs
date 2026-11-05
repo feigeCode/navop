@@ -4,7 +4,8 @@ use thiserror::Error;
 
 use super::schema::Manifest;
 use super::security::{path_has_escape, validate_permissions};
-use super::shell_validation::validate_shell_views;
+use super::shell_validation::validate_shell_app;
+use super::tools_validation::validate_tools;
 use super::versioning::{CompatibilityError, HostApiVersions, check_compatibility};
 
 pub const MANIFEST_FILE_NAME: &str = "extension.json";
@@ -92,7 +93,11 @@ fn validate_structural(manifest: &Manifest) -> Result<(), ManifestError> {
     if !duplicated.is_empty() {
         return Err(ManifestError::DuplicatedRuntimeId { duplicated });
     }
-    validate_shell_views(manifest).map_err(|error| ManifestError::InvalidField {
+    validate_shell_app(manifest).map_err(|error| ManifestError::InvalidField {
+        field: error.field,
+        reason: error.reason,
+    })?;
+    validate_tools(manifest).map_err(|error| ManifestError::InvalidField {
         field: error.field,
         reason: error.reason,
     })?;

@@ -22,19 +22,18 @@ pub struct ExtensionSummary {
     pub icon: Option<String>,
     pub driver_id: Option<String>,
     pub default_port: Option<u16>,
-    pub shell_views: Vec<ShellViewSummary>,
+    /// 扩展的 nsh app（有没有、叫什么）。
+    pub shell_app: Option<ShellAppSummary>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ShellViewSummary {
-    pub id: String,
+pub struct ShellAppSummary {
     pub title: String,
 }
 
-impl ShellViewSummary {
-    pub fn new(id: impl Into<String>, title: impl Into<String>) -> Self {
+impl ShellAppSummary {
+    pub fn new(title: impl Into<String>) -> Self {
         Self {
-            id: id.into(),
             title: title.into(),
         }
     }
@@ -57,7 +56,7 @@ impl ExtensionSummary {
             icon: None,
             driver_id: None,
             default_port: None,
-            shell_views: Vec::new(),
+            shell_app: None,
         }
     }
 
@@ -86,8 +85,8 @@ impl ExtensionSummary {
         self
     }
 
-    pub fn with_shell_views(mut self, shell_views: Vec<ShellViewSummary>) -> Self {
-        self.shell_views = shell_views;
+    pub fn with_shell_app(mut self, shell_app: Option<ShellAppSummary>) -> Self {
+        self.shell_app = shell_app;
         self
     }
 }

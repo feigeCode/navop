@@ -120,6 +120,12 @@
 
 **一个 .nshpkg = 一个 nsh app = navop 里一个可装载的扩展单元。**
 
+> **实现状态（2026-11-04）**：已按本节落地「一个扩展一个 nsh app、一个 entry、一个
+> build 号」，页面改为 app 内路由；宿主清单用 `contributes.shellApp`（而不是包内
+> `navop.json` asset），连接用 `connections[].route`。细节见
+> `docs/extension-resource-plugins/plugin-app.md`。仍未做的是真正的 `.nshpkg`
+> 签名分发（§14.2），当前仍是目录形态的 `ui/dist/`。
+
 - **一包一 app，app id 即扩展 id**（反域名，如 `com.navop.ext.docker`）。需要多页面的扩展：页面内用 NavStack/NavPage 自行导航（nsh 原生模式），或发布多个包（同 publisher 前缀，证书可限定 `com.navop.ext.docker.*`）。
 - **navop 特有声明放包内 asset `navop.json`**（参与整包签名哈希，不能被篡改）：
   ```json
@@ -312,6 +318,11 @@ M1–M2 去风险（嵌入可行性最便宜的验证点）；M3–M5 是本方�
 
 ## 15. 再收敛：一个 tab 视图 + 最小 API（2026-11-03）
 
+> **实现状态（2026-11-04）**：§15 的「一个插件一个 tab 视图」已落地为「一个插件
+> 一个 nsh app + 一个 tab（连接型按连接复用）」，`host.params` 增加 `route`，
+> 页面在 app 内自行导航；`shellViews` 已删除。docker/mqtt/rocketmq/elasticsearch/
+> dev-tools 五个复合扩展均已迁移（22 个页面 → 5 个 app）。
+
 用户决定（原话）："整个插件机制我想改一下，就直接给一个 tab 视图，让用户自由发挥
 就行，不再保留目前的工作台，原生加脚本的混合机制了，只保留最简单的 api 就行，
 给用户足够的定制化需求"。
@@ -408,3 +419,31 @@ blob 走分片读并按 8 MiB 上限拼回 JSON，事件流给句柄。页面拿
 `types/workbench_operation_catalog.rs`）与只测它们的 `tree_children_tests` 模块，
 以及 `InvalidResourceWorkbench` 错误变体。现在清单里既没有字段也没有类型，
 `catalog.rs` 的工具箱过滤不再有「工作台页体」这个例外。
+
+## 17. 页面 host ABI v2（已完成，2026-11-03）
+
+§6 里「`host.set_params` 替代 `navop.context`」当时只写了、没做：v1 的落地形态是把
+gpui-shell 的 21 个 `HostModule` 函数原样摊平成 `host.call("navop.*")` 字符串调用，
+nsh 的四类桥接只用了一类。本节记录补齐后的形态，实现细节与逐条契约见
+[`host-abi-v2.md`](host-abi-v2.md)，页面作者看
+[`nsh-page-guide.zh-CN.md`](nsh-page-guide.zh-CN.md)。
+
+- **启动事实**走 `host.params`（`host.set_params` 在首帧前写入，页面同步可读），
+  不再有一次 `navop.context.current` 的启动 RPC；
+- **宿主 → 页面**只有 `host.on("navop.event")` 一组推送（事件泵在宿主侧，
+  单批 ≤64、溢出 `EVENT_OVERFLOW` 带 `since` 续订），删掉轮询的 `navop.event.read`；
+- **页面 → 宿主**：动作走 `host.call`（resource / job / blob / event / runtime /
+  dev），日志走 `host.post("navop.log")`，不再一次日志一个 promise；
+- **错误**改走 nsh 原生的 `JsError::Fields`：页面直接 `e.code` / `e.retryable` /
+  `e.details`，`__NAVOP_ERROR__` base64 信封删除。为此在 nsh 侧加了
+  `HostCall::reject_error` / `HostReply::reply_error`（旧 String 入口保留，
+  `with_host_code` 兜底成 `ERR_NSH_HOST_ERROR`）；
+- **删掉的模块**：`context` / `i18n` / `theme`（语言用 nsh 的 `locale()`，明暗用
+  `colorScheme()` / `token()`）；清单里再写它们会得到「ABI v2 已删除」的安装期错误；
+- **权限**单层化：`granted` 由 `modules` + `permissions` 机械派生，`declared = granted`
+  由宿主权威写入，源码与 `.nshpkg` 两条加载路径都 `harden = true`；
+  `dev` 模块只给内置扩展 `com.navop.devtools`。
+
+仍未做（维持 §14.2 的结论，不在本次范围）：扩展包改走 `.nshpkg` 签名分发、
+navop 的 nsh 依赖与仓库 `nsh` CLI 对齐（当前 CLI 0.3.0 比内嵌引擎新，
+`numberOfLines` / `Input.onChange` / `nsh/base` 的 `Text` 等 UI 差异是改造前就有的）。

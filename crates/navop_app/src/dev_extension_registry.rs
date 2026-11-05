@@ -219,7 +219,7 @@ pub(crate) fn strip_dev_prefix(id: &str) -> String {
 pub(crate) fn source_fingerprint(root: &std::path::Path) -> Option<String> {
     let entry_rel = {
         let manifest = load_from_dir(root).ok()?;
-        manifest.contributes.shell_views.first()?.entry.clone()
+        manifest.contributes.shell_app?.entry.clone()
     };
     let mut hashes = Vec::new();
     let mut dirs = vec![root.to_path_buf()];
@@ -283,7 +283,7 @@ impl gpui::Global for DevPickState {}
 mod tests {
     use super::*;
 
-    fn write_manifest(root: &std::path::Path, id: &str, surface: &str) {
+    fn write_manifest(root: &std::path::Path, id: &str, category: &str) {
         std::fs::create_dir_all(root.join("ui")).unwrap();
         std::fs::write(root.join("ui/tool.js"), "export default class V {}").unwrap();
         std::fs::write(
@@ -296,14 +296,12 @@ mod tests {
                 "engines": { "onetcli": ">=0.1.0", "nsh": "0.3.0" },
                 "api": { "shell": "1.0" },
                 "permissions": ["shell:exec"],
-                "contributes": { "shellViews": [{
-                    "id": "view",
+                "contributes": { "shellApp": {
                     "title": "View",
                     "entry": "ui/tool.js",
-                    "surface": surface,
-                    "singleton": true,
+                    "category": category,
                     "modules": ["log"]
-                }]}
+                }}
             }))
             .unwrap(),
         )
@@ -320,7 +318,10 @@ mod tests {
         assert_eq!(manifest.id, "dev.com.example.my-tool");
         assert_eq!(strip_dev_prefix(&manifest.id), "com.example.my-tool");
         assert_eq!(manifest.manifest_dir, root);
-        assert_eq!(manifest.contributes.shell_views[0].entry, "ui/tool.js");
+        assert_eq!(
+            manifest.contributes.shell_app.expect("shellApp").entry,
+            "ui/tool.js"
+        );
     }
 
     #[test]
@@ -333,7 +334,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn loading_dev_project_registers_shell_views_without_existing_catalog(
+    fn loading_dev_project_registers_shell_app_without_existing_catalog(
         cx: &mut gpui::TestAppContext,
     ) {
         let tmp = tempfile::TempDir::new().unwrap();
@@ -350,7 +351,7 @@ mod tests {
                 .global::<GlobalExtensionRuntimeCatalog>()
                 .get()
                 .expect("dev load should initialize the runtime catalog");
-            assert!(catalog.shell_view("dev.com.example.tool", "view").is_some());
+            assert!(catalog.shell_app("dev.com.example.tool").is_some());
         });
     }
 
@@ -363,17 +364,13 @@ mod tests {
             registry.load(tmp.path().to_path_buf(), cx);
             extension_runtime::refresh_global_runtime_catalog(cx);
             let catalog = extension_runtime::global_catalog(cx).unwrap();
-            assert!(
-                catalog
-                    .shell_view("dev.com.example.refresh", "view")
-                    .is_some()
-            );
+            assert!(catalog.shell_app("dev.com.example.refresh").is_some());
             registry.remove(tmp.path(), cx);
             extension_runtime::refresh_global_runtime_catalog(cx);
             assert!(
                 extension_runtime::global_catalog(cx)
                     .unwrap()
-                    .shell_view("dev.com.example.refresh", "view")
+                    .shell_app("dev.com.example.refresh")
                     .is_none()
             );
         });
@@ -405,7 +402,7 @@ mod tests {
             let catalog = extension_runtime::global_catalog(cx).unwrap();
             assert_eq!(
                 catalog
-                    .shell_view("dev.com.example.duplicate", "view")
+                    .shell_app("dev.com.example.duplicate")
                     .unwrap()
                     .entry_path,
                 second.join("ui/tool.js")
@@ -458,8 +455,6 @@ mod tests {
 
     #[gpui::test]
     fn reload_replaces_manifest_in_place(cx: &mut gpui::TestAppContext) {
-        use extension_runtime::extension::manifest::ShellSurface;
-
         let tmp = tempfile::TempDir::new().unwrap();
         let root = tmp.path().join("tool");
         std::fs::create_dir_all(&root).unwrap();
@@ -468,14 +463,17 @@ mod tests {
         cx.update(|cx| {
             let mut registry = DevExtensionRegistry::default();
             registry.load(root.clone(), cx);
-            let first_surface = registry.projects()[0]
+            let first_category = registry.projects()[0]
                 .manifest
                 .as_ref()
                 .unwrap()
                 .contributes
-                .shell_views[0]
-                .surface;
-            assert_eq!(first_surface, ShellSurface::Tab);
+                .shell_app
+                .as_ref()
+                .unwrap()
+                .category
+                .clone();
+            assert_eq!(first_category.as_deref(), Some("tab"));
 
             write_manifest(&root, "com.example.tool", "toolbox");
             registry.load(root.clone(), cx);
@@ -485,9 +483,12 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .contributes
-                .shell_views[0]
-                .surface;
-            assert_eq!(after, ShellSurface::Toolbox);
+                .shell_app
+                .as_ref()
+                .unwrap()
+                .category
+                .clone();
+            assert_eq!(after.as_deref(), Some("toolbox"));
         });
     }
 
