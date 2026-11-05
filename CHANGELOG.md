@@ -4,6 +4,36 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.23.0-beta.6] - 2026-11-05
+
+#### 更新内容
+
+- 扩展管理里的语言能力收成「语言包」一个入口：语言包卡片直接列出支持的语言（前 6 个 + 总数），详情弹窗展示完整语言列表；独立语言扩展不再平铺成单独的插件卡片，后续新增语言统一随语言包发布。已安装的语法解析器继续生效，语法高亮不受影响。
+- 新建连接向导按旧版结构重排：去掉内容区重复的标题栏，「取消 / 下一步」改为整窗宽底部栏，窗口高度较小时也不会被挤出可视区；第一步卡片固定三列等宽，不再因卡片数量变化而换行跳动。
+- 新建连接的类目从 8 个减为 7 个：「扩展」不再单独占一类，扩展提供的连接统一归入「中间件」；「更多中间件 / 更多时序数据库」只在对应类目出现，「全部」只保留一个「更多连接」。
+
+#### 修复与优化
+
+- 修复 beta 构建加载不到已安装外部数据库驱动的问题：带 `-beta.N` 的宿主版本现在也能匹配 `>=0.10.0` 这类驱动版本要求，国产数据库类目以及由驱动提供的 TDengine、ClickHouse 类型恢复正常。
+- 退出确认弹窗不再显示字面量 `{app}`，正确插入当前产品名；托盘关闭提示同样带上产品名，独立产品不会再被叫成 Navop。顺带修复终端 vi 模式提示里丢失的重新进入快捷键。
+- 空连接类目保持旧版空白，不再显示占位文案。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.23.0-beta.6) 下载桌面端安装包
+
+#### What's New
+
+- Language support in extension management is now a single "language bundle" entry: the bundle card lists the supported languages (first six plus a total), and the detail dialog shows the full list. Standalone language extensions are no longer tiled as separate plugin cards, and new languages will ship inside language bundles. The installed tree-sitter parsers keep working, so syntax highlighting is unaffected.
+- The new-connection wizard follows the old layout again: the duplicate header inside the content area is gone, Cancel / Next now sit in a full-width footer so they stay visible in short windows, and the first step uses a fixed three-column card grid instead of reflowing with the number of cards.
+- Connection categories went from eight to seven: "Extensions" is no longer a separate category and extension-provided connections are grouped under "Middleware"; the "More middleware" / "More time series" entries only show in their own category, and "All" keeps a single "More connections" entry.
+
+#### Fixes and Improvements
+
+- Fixed installed external database drivers not loading in beta builds: a host version carrying a `-beta.N` suffix now also matches requirements such as `>=0.10.0`, so the domestic-database category and driver-provided TDengine / ClickHouse types work again.
+- The quit confirmation no longer shows a literal `{app}` and inserts the current product name; the tray close prompt names the product too, so standalone products are no longer called Navop. Also fixed the missing re-entry shortcut in the terminal vi-mode hint.
+- Empty connection categories stay blank as in the old version instead of showing placeholder copy.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.23.0-beta.5...v0.23.0-beta.6
+
 ## [v0.23.0-beta.5] - 2026-11-05
 
 #### 更新内容
