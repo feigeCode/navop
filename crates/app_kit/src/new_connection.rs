@@ -177,8 +177,10 @@ enum WizardStep {
 
 /// 类型选择页左侧的类目。
 ///
-/// 与产品分离前的旧版向导保持一致：固定 8 个类目，即使当前产品没有任何
+/// 与产品分离前的旧版向导保持一致：固定 7 个类目，即使当前产品没有任何
 /// 归属某类目的连接类型也照常展示（便于用户从「安装扩展」入口补齐）。
+///
+/// 扩展贡献的连接不单独成「扩展」类目：只要它带连接入口就归入中间件。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum WizardCategory {
     All,
@@ -188,11 +190,10 @@ enum WizardCategory {
     NoSql,
     Middleware,
     Terminal,
-    Extensions,
 }
 
 impl WizardCategory {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 7] = [
         Self::All,
         Self::Database,
         Self::DomesticDatabase,
@@ -200,7 +201,6 @@ impl WizardCategory {
         Self::NoSql,
         Self::Middleware,
         Self::Terminal,
-        Self::Extensions,
     ];
 
     fn key(self) -> &'static str {
@@ -212,7 +212,6 @@ impl WizardCategory {
             Self::NoSql => "nosql",
             Self::Middleware => "middleware",
             Self::Terminal => "terminal",
-            Self::Extensions => "extensions",
         }
     }
 
@@ -357,7 +356,7 @@ impl ConnectionFormDialog {
     }
 
     /// 左侧类目：与旧版一致固定 8 个（空类目也照常展示）。
-    fn categories(&self) -> [WizardCategory; 8] {
+    fn categories(&self) -> [WizardCategory; 7] {
         WizardCategory::ALL
     }
 
@@ -867,7 +866,6 @@ fn category_title(category: WizardCategory) -> SharedString {
         WizardCategory::NoSql => "NoSQL".to_string(),
         WizardCategory::Middleware => t!("NewConnection.category_middleware").to_string(),
         WizardCategory::Terminal => t!("NewConnection.category_terminal").to_string(),
-        WizardCategory::Extensions => "Extensions".to_string(),
     };
     title.into()
 }
@@ -880,7 +878,6 @@ fn category_icon(category: WizardCategory) -> IconName {
         WizardCategory::NoSql => IconName::Server,
         WizardCategory::Middleware => IconName::Network,
         WizardCategory::Terminal => IconName::Terminal,
-        WizardCategory::Extensions => IconName::ExtensionsLine,
     }
 }
 
@@ -904,7 +901,8 @@ fn kind_category(kind: &ConnectionKindDescriptor) -> WizardCategory {
         _ => match kind.group {
             ConnectionKindGroup::Database => WizardCategory::Database,
             ConnectionKindGroup::Terminal | ConnectionKindGroup::Remote => WizardCategory::Terminal,
-            ConnectionKindGroup::Extension => WizardCategory::Extensions,
+            // 扩展贡献的连接统一归入中间件，不再单列「扩展」类目。
+            ConnectionKindGroup::Extension => WizardCategory::Middleware,
         },
     }
 }
@@ -918,7 +916,7 @@ fn manifest_category(category: &str) -> Option<WizardCategory> {
         "nosql" => Some(WizardCategory::NoSql),
         "middleware" => Some(WizardCategory::Middleware),
         "terminal" => Some(WizardCategory::Terminal),
-        "extension" | "extensions" => Some(WizardCategory::Extensions),
+        "extension" | "extensions" => Some(WizardCategory::Middleware),
         _ => None,
     }
 }
@@ -1094,6 +1092,16 @@ mod tests {
         assert_eq!(WizardCategory::NoSql, kind_category(&redis));
         let ssh = descriptor(KIND_SSH, ConnectionKindGroup::Terminal);
         assert_eq!(WizardCategory::Terminal, kind_category(&ssh));
+    }
+
+    #[test]
+    fn extension_kinds_join_middleware_category() {
+        let extension = descriptor("ext:com.navop.foo", ConnectionKindGroup::Extension);
+        assert_eq!(WizardCategory::Middleware, kind_category(&extension));
+
+        let declared = descriptor("ext:com.navop.foo", ConnectionKindGroup::Extension)
+            .with_category("extensions");
+        assert_eq!(WizardCategory::Middleware, kind_category(&declared));
     }
 
     #[test]
