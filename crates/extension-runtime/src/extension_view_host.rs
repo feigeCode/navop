@@ -22,6 +22,7 @@ impl extension_view::ExtensionViewHost for MainExtensionViewHost {
         Ok(registry
             .list_all_installed()
             .into_iter()
+            .filter(|summary| is_manager_visible_kind(summary.kind))
             .map(to_view_summary)
             .collect())
     }
@@ -30,14 +31,12 @@ impl extension_view::ExtensionViewHost for MainExtensionViewHost {
         &self,
         http_client: Arc<dyn HttpClient>,
     ) -> BoxFuture<'static, anyhow::Result<Vec<extension_view::MarketplaceEntry>>> {
+        let host = self.clone();
         async move {
             let manifest = host_downloader::fetch_default_manifest_url(http_client).await?;
-            Ok(manifest
-                .into_entries()
-                .into_iter()
-                .filter(|entry| entry.kind != host_extension::ExtensionKind::Unsupported)
-                .map(to_view_entry)
-                .collect())
+            let mut entries = marketplace_view_entries(manifest.into_entries());
+            merge_installed_languages(&mut entries, host.list_installed().unwrap_or_default());
+            Ok(entries)
         }
         .boxed()
     }
@@ -47,14 +46,12 @@ impl extension_view::ExtensionViewHost for MainExtensionViewHost {
         http_client: Arc<dyn HttpClient>,
         manifest_url: String,
     ) -> BoxFuture<'static, anyhow::Result<Vec<extension_view::MarketplaceEntry>>> {
+        let host = self.clone();
         async move {
             let manifest = host_downloader::fetch_manifest_url(http_client, &manifest_url).await?;
-            Ok(manifest
-                .into_entries()
-                .into_iter()
-                .filter(|entry| entry.kind != host_extension::ExtensionKind::Unsupported)
-                .map(to_view_entry)
-                .collect())
+            let mut entries = marketplace_view_entries(manifest.into_entries());
+            merge_installed_languages(&mut entries, host.list_installed().unwrap_or_default());
+            Ok(entries)
         }
         .boxed()
     }
@@ -80,6 +77,10 @@ impl extension_view::ExtensionViewHost for MainExtensionViewHost {
     ) -> anyhow::Result<extension_view::MarketplaceInstallOutcome> {
         let staging = host_downloader::stage_local_tarball(&path)?;
         let kind = host_downloader::detect_package_kind(&staging)?;
+        if let Err(err) = ensure_language_package_supported(kind) {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(err);
+        }
         let name = path
             .file_name()
             .and_then(|name| name.to_str())
@@ -92,6 +93,7 @@ impl extension_view::ExtensionViewHost for MainExtensionViewHost {
             version: String::new(),
             description: String::new(),
             file_extensions: Vec::new(),
+            languages: Vec::new(),
             required_host_version: None,
             host_compatible: true,
             asset_url: path.display().to_string(),
@@ -143,6 +145,56 @@ impl extension_view::ExtensionViewHost for MainExtensionViewHost {
 
 fn registry() -> anyhow::Result<&'static std::sync::RwLock<host_extension::ExtensionRegistry>> {
     host_extension::ExtensionRegistry::global().ok_or_else(|| anyhow::anyhow!("扩展系统未初始化"))
+}
+
+/// 扩展管理页只展示语言包：独立语言扩展仍由运行时按需加载语法解析器，
+/// 但不再作为可单独安装/卸载的条目平铺出来。
+fn is_manager_visible_kind(kind: host_extension::ExtensionKind) -> bool {
+    !matches!(
+        kind,
+        host_extension::ExtensionKind::Language | host_extension::ExtensionKind::Unsupported
+    )
+}
+
+fn is_marketplace_visible_kind(kind: host_extension::ExtensionKind) -> bool {
+    is_manager_visible_kind(kind)
+}
+
+fn marketplace_view_entries(
+    entries: impl IntoIterator<Item = host_downloader::MarketplaceEntry>,
+) -> Vec<extension_view::MarketplaceEntry> {
+    entries
+        .into_iter()
+        .filter(|entry| is_marketplace_visible_kind(entry.kind))
+        .map(to_view_entry)
+        .collect()
+}
+
+/// 旧版市场目录尚未声明语言包支持的语言；已安装的语言包本地有完整清单，
+/// 用它的语言列表补全目录条目，避免市场卡片缺少“支持语言”信息。
+fn merge_installed_languages(
+    entries: &mut [extension_view::MarketplaceEntry],
+    installed: Vec<extension_view::ExtensionSummary>,
+) {
+    for entry in entries {
+        if entry.kind != extension_view::ExtensionKind::LanguageBundle
+            || !entry.languages.is_empty()
+        {
+            continue;
+        }
+        let install_id = if entry.id.is_empty() {
+            entry.name.as_str()
+        } else {
+            entry.id.as_str()
+        };
+        let Some(summary) = installed.iter().find(|summary| {
+            summary.kind == extension_view::ExtensionKind::LanguageBundle
+                && summary.name == install_id
+        }) else {
+            continue;
+        };
+        entry.languages = summary.languages.clone();
+    }
 }
 
 fn ensure_extension_path_still_installed(
@@ -219,11 +271,22 @@ fn refresh_language_extension_manifests() {
     }
 }
 
+fn ensure_language_package_supported(kind: host_extension::ExtensionKind) -> anyhow::Result<()> {
+    if kind == host_extension::ExtensionKind::Language {
+        anyhow::bail!("不再支持单独安装语言扩展，请安装对应的语言包");
+    }
+    Ok(())
+}
+
 fn review_downloaded_extension(
     staging: PathBuf,
     kind: host_extension::ExtensionKind,
     entry: extension_view::MarketplaceEntry,
 ) -> anyhow::Result<extension_view::MarketplaceInstallOutcome> {
+    if let Err(err) = ensure_language_package_supported(kind) {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(err);
+    }
     let target_extension_id = if kind == host_extension::ExtensionKind::Composite {
         load_from_dir(&package_root(&staging)?)?.id
     } else {
@@ -323,6 +386,7 @@ fn to_view_summary(summary: host_extension::ExtensionSummary) -> extension_view:
     )
     .with_description(summary.description)
     .with_file_extensions(summary.file_extensions)
+    .with_languages(summary.languages)
     .with_icon(summary.icon)
     .with_driver_id(summary.driver_id)
     .with_default_port(summary.default_port)
@@ -345,6 +409,7 @@ fn to_view_entry(mut entry: host_downloader::MarketplaceEntry) -> extension_view
         version: entry.version,
         description: entry.description,
         file_extensions: entry.file_extensions,
+        languages: entry.languages,
         required_host_version: (!entry.engines.onetcli.trim().is_empty())
             .then_some(entry.engines.onetcli),
         host_compatible,
@@ -385,6 +450,7 @@ fn to_host_entry(entry: extension_view::MarketplaceEntry) -> host_downloader::Ma
         }
     }
     let required_host_version = entry.required_host_version.clone();
+    let languages = entry.languages;
     let mut host_entry = host_downloader::MarketplaceEntry::from_resolved_urls(
         entry.id,
         to_host_kind(entry.kind),
@@ -395,6 +461,7 @@ fn to_host_entry(entry: extension_view::MarketplaceEntry) -> host_downloader::Ma
         download_urls,
         entry.sha256,
     )
+    .with_languages(languages)
     .with_manifest_urls(manifest_urls);
     if let Some(required) = required_host_version {
         host_entry.engines.onetcli = required;
@@ -612,6 +679,102 @@ mod tests {
         assert_eq!(
             host_extension::ExtensionKind::LanguageBundle,
             round_tripped.kind
+        );
+    }
+
+    #[test]
+    fn to_view_summary_preserves_language_bundle_languages() {
+        let summary = host_extension::ExtensionSummary::new(
+            host_extension::ExtensionKind::LanguageBundle,
+            "tree-sitter-languages",
+            "0.1.0",
+            PathBuf::from("/tmp/tree-sitter-languages"),
+        )
+        .with_description("Tree-sitter syntax bundle")
+        .with_languages(vec!["rust".to_string(), "typescript".to_string()]);
+
+        let view = to_view_summary(summary);
+
+        assert_eq!(
+            vec!["rust".to_string(), "typescript".to_string()],
+            view.languages
+        );
+    }
+
+    #[test]
+    fn marketplace_entries_hide_legacy_language_extensions() {
+        let legacy = host_downloader::MarketplaceEntry::from_resolved_urls(
+            "rust",
+            host_extension::ExtensionKind::Language,
+            "Rust",
+            "0.1.0",
+            "",
+            vec!["rs".to_string()],
+            vec!["https://example.test/rust.tar.gz".to_string()],
+            None,
+        );
+        let bundle = host_downloader::MarketplaceEntry::from_resolved_urls(
+            "tree-sitter-languages",
+            host_extension::ExtensionKind::LanguageBundle,
+            "Tree-sitter Languages",
+            "0.1.0",
+            "",
+            vec!["rs".to_string()],
+            vec!["https://example.test/tree-sitter-languages.tar.gz".to_string()],
+            None,
+        );
+
+        let visible = marketplace_view_entries([legacy, bundle]);
+
+        assert_eq!(1, visible.len());
+        assert_eq!("tree-sitter-languages", visible[0].id);
+    }
+
+    #[test]
+    fn installed_bundle_languages_fill_marketplace_entries() {
+        let mut entries = vec![extension_view::MarketplaceEntry {
+            id: "tree-sitter-languages".to_string(),
+            kind: extension_view::ExtensionKind::LanguageBundle,
+            name: "Tree-sitter Languages".to_string(),
+            version: "0.1.0".to_string(),
+            description: String::new(),
+            file_extensions: Vec::new(),
+            languages: Vec::new(),
+            required_host_version: None,
+            host_compatible: true,
+            asset_url: String::new(),
+            sha256: None,
+            fallback_asset_url: None,
+            manifest_url: None,
+            manifest_fallback_url: None,
+            screenshots: Vec::new(),
+        }];
+        let installed = vec![
+            extension_view::ExtensionSummary::new(
+                extension_view::ExtensionKind::LanguageBundle,
+                "tree-sitter-languages",
+                "0.1.0",
+                PathBuf::from("/tmp/tree-sitter-languages"),
+            )
+            .with_languages(vec!["rust".to_string(), "python".to_string()]),
+        ];
+
+        merge_installed_languages(&mut entries, installed);
+
+        assert_eq!(
+            vec!["rust".to_string(), "python".to_string()],
+            entries[0].languages
+        );
+    }
+
+    #[test]
+    fn standalone_language_package_installs_are_rejected() {
+        let err = ensure_language_package_supported(host_extension::ExtensionKind::Language)
+            .expect_err("standalone language extension must be rejected");
+        assert!(err.to_string().contains("语言包"));
+        assert!(
+            ensure_language_package_supported(host_extension::ExtensionKind::LanguageBundle)
+                .is_ok()
         );
     }
 }

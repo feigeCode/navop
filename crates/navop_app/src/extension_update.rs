@@ -164,6 +164,7 @@ mod tests {
             version: version.to_string(),
             description: String::new(),
             file_extensions: Vec::new(),
+            languages: Vec::new(),
             required_host_version: None,
             host_compatible: true,
             asset_url: String::new(),

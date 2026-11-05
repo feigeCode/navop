@@ -147,6 +147,8 @@ struct LanguageBundleInstallManifest {
     name: String,
     version: String,
     #[serde(default)]
+    description: String,
+    #[serde(default)]
     languages: Vec<String>,
     #[serde(default)]
     file_extensions: Vec<String>,
@@ -320,13 +322,19 @@ fn language_bundle_summary(
     manifest: &LanguageBundleInstallManifest,
     marker_dir: PathBuf,
 ) -> ExtensionSummary {
+    let description = if manifest.description.trim().is_empty() {
+        format!("{} language bundle", manifest.name)
+    } else {
+        manifest.description.trim().to_string()
+    };
     ExtensionSummary::new(
         ExtensionKind::LanguageBundle,
         manifest.id.clone(),
         manifest.version.clone(),
         marker_dir,
     )
-    .with_description(format!("{} language bundle", manifest.name))
+    .with_description(description)
+    .with_languages(manifest.languages.clone())
     .with_file_extensions(manifest.file_extensions.clone())
 }
 

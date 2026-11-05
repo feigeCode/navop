@@ -67,6 +67,7 @@ pub(crate) fn installed_card(
             summary.name.clone(),
             summary.version.clone(),
             summary.description.clone(),
+            summary.languages.clone(),
             vec![reload, uninstall],
         ),
         format!("ext-card-installed-{}", summary.name),
@@ -106,6 +107,7 @@ pub(crate) fn marketplace_card(
             entry.name.clone(),
             entry.version.clone(),
             crate::cards::marketplace_description_public(&entry),
+            entry.languages.clone(),
             vec![install],
         ),
         format!("ext-card-market-{}", entry.id),
@@ -149,6 +151,7 @@ fn card_shell_data(
     name: String,
     version: String,
     description: String,
+    languages: Vec<String>,
     actions: Vec<Button>,
 ) -> crate::cards::CardShell {
     crate::cards::CardShell {
@@ -157,6 +160,7 @@ fn card_shell_data(
         name,
         version,
         description,
+        languages,
         actions,
     }
 }

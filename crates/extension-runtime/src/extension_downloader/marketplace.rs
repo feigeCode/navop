@@ -51,6 +51,9 @@ pub struct MarketplaceEntry {
     pub description: String,
     #[serde(default)]
     pub file_extensions: Vec<String>,
+    /// 语言包支持的语言标识；旧目录条目缺省为空。
+    #[serde(default)]
+    pub languages: Vec<String>,
     #[serde(default)]
     pub engines: MarketplaceEngines,
     #[serde(default)]
@@ -143,6 +146,7 @@ impl MarketplaceEntry {
             release_tag: String::new(),
             description: description.into(),
             file_extensions,
+            languages: Vec::new(),
             engines: MarketplaceEngines::default(),
             manifest: String::new(),
             artifacts: HashMap::new(),
@@ -187,6 +191,11 @@ impl MarketplaceEntry {
             );
         }
         Ok(())
+    }
+
+    pub(crate) fn with_languages(mut self, languages: Vec<String>) -> Self {
+        self.languages = languages;
+        self
     }
 
     pub(crate) fn with_manifest_urls(mut self, manifest_urls: Vec<String>) -> Self {
@@ -457,6 +466,7 @@ mod tests {
             release_tag: "duckdb-v1.0.0".to_string(),
             description: String::new(),
             file_extensions: Vec::new(),
+            languages: Vec::new(),
             engines: Default::default(),
             manifest: String::new(),
             screenshots: Vec::new(),
@@ -504,6 +514,7 @@ mod tests {
             release_tag: "duckdb-v1.0.0".to_string(),
             description: String::new(),
             file_extensions: Vec::new(),
+            languages: Vec::new(),
             engines: Default::default(),
             manifest: String::new(),
             screenshots: Vec::new(),
