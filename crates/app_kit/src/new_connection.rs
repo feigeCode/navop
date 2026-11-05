@@ -38,7 +38,6 @@ const DIALOG_REUSE_KEY: &str = "app-kit-connection-form";
 const WIZARD_KEY_CONTEXT: &str = "ConnectionKindWizard";
 
 const CATEGORY_SIDEBAR_WIDTH: f32 = 180.0;
-const KIND_CARD_WIDTH: f32 = 280.0;
 const KIND_CARD_HEIGHT: f32 = 112.0;
 const KIND_ICON_SIZE: f32 = 40.0;
 const KIND_ICON_BOX: f32 = 48.0;
@@ -392,7 +391,7 @@ impl ConnectionFormDialog {
             entries.into_iter().map(|(_, _, entry)| entry).collect();
         // 旧版只为「中间件 / 时序数据库」这两个依赖外部驱动填充的类目补安装入口。
         for install_category in [WizardCategory::Middleware, WizardCategory::TimeSeries] {
-            if !category.matches(install_category) || !self.has_database_kinds() {
+            if category != install_category || !self.has_database_kinds() {
                 continue;
             }
             if !self
@@ -658,14 +657,10 @@ impl ConnectionFormDialog {
         if entries.is_empty() {
             return card_area.child(content);
         }
-        let mut grid = div().flex().flex_wrap().w_full().gap_3();
+        // 默认三列等宽网格；卡片数量随类目变化，列数保持不变。
+        let mut grid = div().grid().grid_cols(3).w_full().gap_3();
         for entry in &entries {
-            grid = grid.child(
-                div()
-                    .w(px(KIND_CARD_WIDTH))
-                    .flex_shrink_0()
-                    .child(self.render_kind_card(entry, cx)),
-            );
+            grid = grid.child(self.render_kind_card(entry, cx));
         }
         card_area.child(content.child(grid))
     }
