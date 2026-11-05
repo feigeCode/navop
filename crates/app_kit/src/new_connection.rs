@@ -654,15 +654,9 @@ impl ConnectionFormDialog {
             .min_h_0()
             .min_w_0()
             .overflow_hidden();
+        // 与旧版一致：没有成员的类目留空白，由「+」安装入口或更多连接引导。
         if entries.is_empty() {
-            return card_area.child(
-                content.child(
-                    div()
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(t!("NewConnection.empty").to_string()),
-                ),
-            );
+            return card_area.child(content);
         }
         let mut grid = div().flex().flex_wrap().w_full().gap_3();
         for entry in &entries {
