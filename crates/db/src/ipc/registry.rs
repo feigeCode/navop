@@ -388,7 +388,7 @@ impl IpcDriverManifest {
                 self.id, required, error
             ))
         })?;
-        if !requirement.matches(host_version) {
+        if !host_version_satisfies(&requirement, host_version) {
             return Err(DbError::connection(format!(
                 "数据库驱动 '{}' 要求 Navop {}, 当前 Navop 版本 {}, 请升级 Navop 或安装兼容版本",
                 self.name, required, host_version
@@ -396,6 +396,32 @@ impl IpcDriverManifest {
         }
         Ok(())
     }
+}
+
+/// 宿主版本是否满足驱动声明的版本范围。
+///
+/// SemVer 规定带预发布标识的版本不满足不含预发布标识的范围（
+/// `0.23.0-beta.5` 不被 `>=0.10.0` 匹配），但测试通道同样需要加载已发布的
+/// 驱动：宿主是预发布版本时退回到 release 三元组再比较一次。
+///
+/// 范围自身带预发布标识时不做回退，保持 SemVer 的严格语义，避免把
+/// `>=0.23.0-beta.6` 这类范围放宽成 `>=0.23.0`。
+fn host_version_satisfies(requirement: &VersionReq, host_version: &Version) -> bool {
+    if requirement.matches(host_version) {
+        return true;
+    }
+    if host_version.pre.is_empty() || requirement_has_prerelease(requirement) {
+        return false;
+    }
+    let release_only = Version::new(host_version.major, host_version.minor, host_version.patch);
+    requirement.matches(&release_only)
+}
+
+fn requirement_has_prerelease(requirement: &VersionReq) -> bool {
+    requirement
+        .comparators
+        .iter()
+        .any(|comparator| !comparator.pre.is_empty())
 }
 
 pub fn set_host_version(version: &str) -> Result<(), semver::Error> {

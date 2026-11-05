@@ -106,12 +106,36 @@ fn checks_driver_host_version_requirement() {
         .check_host_compatibility(&semver::Version::parse("0.10.1").unwrap())
         .unwrap();
 
-    for incompatible in ["0.9.9", "0.10.1-alpha.1"] {
+    // 预发布宿主（测试通道）按 release 三元组再匹配一次，仍能加载已发布的驱动。
+    manifest
+        .check_host_compatibility(&semver::Version::parse("0.10.1-alpha.1").unwrap())
+        .unwrap();
+    manifest
+        .check_host_compatibility(&semver::Version::parse("0.23.0-beta.5").unwrap())
+        .unwrap();
+
+    for incompatible in ["0.9.9"] {
         let error = manifest
             .check_host_compatibility(&semver::Version::parse(incompatible).unwrap())
             .unwrap_err();
         assert!(format!("{error}").contains("要求 Navop >=0.10.0"));
     }
+}
+
+#[test]
+fn prerelease_requirement_is_not_relaxed_by_release_fallback() {
+    let mut manifest = manifest("demo", "Demo");
+    manifest.engines.onetcli = ">=0.10.1-beta.1".to_string();
+
+    // 宿主 release 三元组满足范围，但预发布标识低于声明范围：必须拒绝。
+    let error = manifest
+        .check_host_compatibility(&semver::Version::parse("0.10.1-alpha.1").unwrap())
+        .unwrap_err();
+    assert!(format!("{error}").contains("要求 Navop >=0.10.1-beta.1"));
+
+    manifest
+        .check_host_compatibility(&semver::Version::parse("0.10.1-beta.2").unwrap())
+        .unwrap();
 }
 
 #[test]
