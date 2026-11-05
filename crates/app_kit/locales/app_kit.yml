@@ -249,10 +249,6 @@ NewConnection:
     en: Connection
     zh-CN: 连接
     zh-HK: 連線
-  close:
-    en: Close
-    zh-CN: 关闭
-    zh-HK: 關閉
   cancel:
     en: Cancel
     zh-CN: 取消
@@ -265,10 +261,6 @@ NewConnection:
     en: Back
     zh-CN: 上一步
     zh-HK: 上一步
-  step_indicator:
-    en: "Step %{current} of 2"
-    zh-CN: "第 %{current} 步 / 共 2 步"
-    zh-HK: "第 %{current} 步 / 共 2 步"
   select_type_title:
     en: Select Connection Type
     zh-CN: 选择连接类型

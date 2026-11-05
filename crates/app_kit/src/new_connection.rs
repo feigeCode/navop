@@ -544,82 +544,40 @@ impl ConnectionFormDialog {
         self.open_selected(window, cx);
     }
 
-    fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        h_flex()
-            .h(px(44.0))
-            .px_3()
-            .items_center()
-            .justify_between()
-            .border_b_1()
-            .border_color(cx.theme().border)
-            .child(
-                h_flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(self.mode.title()),
-                    )
-                    .when(self.is_wizard(), |this| {
-                        this.child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(step_indicator(self.step)),
-                        )
-                    }),
-            )
-            .child(
-                Button::new("connection-form-close")
-                    .small()
-                    .label(t!("NewConnection.close").to_string())
-                    .on_click(cx.listener(|_, _, window, cx| {
-                        let _ = one_core::window_close::close_window_for_reuse(window, cx);
-                    })),
-            )
-    }
-
     /// 第 1 步：左侧类目 + 右侧卡片网格 + 底部「取消 / 下一步」。
     fn render_selection_page(&self, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .key_context(WIZARD_KEY_CONTEXT)
             .size_full()
+            .min_h_0()
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::on_select_previous))
             .on_action(cx.listener(Self::on_select_next))
             .on_action(cx.listener(Self::on_open_selected))
             .bg(cx.theme().background)
-            .child(self.render_header(cx))
             .child(
                 h_flex()
                     .flex_1()
                     .min_h_0()
-                    .min_w_0()
+                    .w_full()
+                    .overflow_hidden()
                     .child(self.render_category_sidebar(cx))
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .min_h_0()
-                            .child(self.render_kind_grid(cx))
-                            .child(self.render_selection_footer(cx)),
-                    ),
+                    .child(self.render_card_area(cx)),
             )
+            .child(self.render_selection_footer(cx))
     }
 
     fn render_category_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let mut sidebar = v_flex()
-            .id("connection-kind-categories")
+            .flex_none()
             .w(px(CATEGORY_SIDEBAR_WIDTH))
             .h_full()
             .min_h_0()
             .p_2()
-            .gap_0p5()
+            .gap_2()
             .bg(cx.theme().sidebar)
             .border_r_1()
-            .border_color(cx.theme().border)
-            .overflow_y_scrollbar();
+            .border_color(cx.theme().border);
         for category in self.categories() {
             let selected = self.category == category;
             let theme = cx.theme();
@@ -665,12 +623,10 @@ impl ConnectionFormDialog {
         sidebar
     }
 
-    fn render_kind_grid(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_card_area(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let entries = self.entries_in(self.category);
         let content = v_flex()
-            .flex_1()
-            .min_h_0()
-            .min_w_0()
+            .size_full()
             .overflow_y_scrollbar()
             .bg(cx.theme().muted)
             .p_6()
@@ -692,12 +648,20 @@ impl ConnectionFormDialog {
                             .child(t!("NewConnection.select_type_hint").to_string()),
                     ),
             );
+        let card_area = div()
+            .flex_1()
+            .h_full()
+            .min_h_0()
+            .min_w_0()
+            .overflow_hidden();
         if entries.is_empty() {
-            return content.child(
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(t!("NewConnection.empty").to_string()),
+            return card_area.child(
+                content.child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(t!("NewConnection.empty").to_string()),
+                ),
             );
         }
         let mut grid = div().flex().flex_wrap().w_full().gap_3();
@@ -709,7 +673,7 @@ impl ConnectionFormDialog {
                     .child(self.render_kind_card(entry, cx)),
             );
         }
-        content.child(grid)
+        card_area.child(content.child(grid))
     }
 
     fn render_kind_card(&self, entry: &WizardEntry, cx: &mut Context<Self>) -> impl IntoElement {
@@ -729,6 +693,7 @@ impl ConnectionFormDialog {
             .p_3()
             .rounded_lg()
             .border_1()
+            .relative()
             .bg(theme.background)
             .border_color(if selected {
                 theme.list_active_border
@@ -853,9 +818,9 @@ impl ConnectionFormDialog {
         }
         v_flex()
             .size_full()
+            .min_h_0()
             .track_focus(&self.focus_handle)
             .bg(cx.theme().background)
-            .child(self.render_header(cx))
             .child(body)
     }
 }
@@ -899,14 +864,6 @@ fn build_form(
         .request(kind_id, connection)
         .with_workspace(workspace_id);
     crate::registry().build_connection_form(request, window, cx)
-}
-
-fn step_indicator(step: WizardStep) -> String {
-    let current = match step {
-        WizardStep::SelectKind => 1,
-        WizardStep::Form => 2,
-    };
-    t!("NewConnection.step_indicator", current = current).to_string()
 }
 
 fn category_title(category: WizardCategory) -> SharedString {
