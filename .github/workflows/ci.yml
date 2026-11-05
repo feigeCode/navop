@@ -185,7 +185,7 @@ jobs:
         if: ${{ matrix.platform == 'linux' || github.event_name != 'pull_request' }}
         uses: actions/cache@v6
         with:
-          path: ~/.cargo/bin/wasm-tools
+          path: ~/.cargo/bin/wasm-tools*
           key: wasm-tools-1.251.0-${{ runner.os }}
       - name: Install wasm-tools
         if: ${{ matrix.platform == 'linux' || github.event_name != 'pull_request' }}
