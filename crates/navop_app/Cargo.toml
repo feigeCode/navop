@@ -105,6 +105,7 @@ data_domain = { workspace = true }
 gpui = { workspace = true, features = ["test-support"] }
 async-trait = { workspace = true }
 extension-protocol = { workspace = true }
+serde_yaml = { workspace = true }
 tempfile = "3"
 
 [features]

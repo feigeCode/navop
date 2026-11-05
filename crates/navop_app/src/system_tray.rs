@@ -25,9 +25,7 @@ pub(crate) fn init(cx: &mut App) -> bool {
 
 fn config() -> app_kit::integration::tray::TrayConfig {
     // 托盘文案跟随产品身份：三个产品同机运行时，菜单里必须能区分「这是哪个应用」。
-    let display_name = app_kit::identity()
-        .map(|identity| identity.display_name)
-        .unwrap_or("Navop");
+    let display_name = app_kit::display_name();
     let badge = app_kit::identity().and_then(|identity| match identity.app_id {
         "com.navop.shell" => Some([59, 130, 246, 255]),
         "com.navop.data" => Some([16, 185, 129, 255]),

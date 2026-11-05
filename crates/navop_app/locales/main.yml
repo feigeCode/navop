@@ -68,42 +68,32 @@ Common:
     zh-HK: 應用程式儲存空間不可用
 
 # 应用退出
+# `%{app}` 是 rust-i18n 的插值语法（`%{name}`，不是 `{name}`）：写成单花括号会原样显示
+# `{app}`，产品名根本插不进去。
 Quit:
   confirm_title_app:
-    en: Quit {app}?
-    zh-CN: 退出 {app}？
-    zh-HK: 結束 {app}？
+    en: Quit %{app}?
+    zh-CN: 退出 %{app}？
+    zh-HK: 結束 %{app}？
   confirm_message_app:
-    en: All tabs of {app} will be closed. Some tabs may ask for additional confirmation before quitting.
-    zh-CN: 将关闭 {app} 的所有标签页，部分标签页可能会在退出前要求再次确认。
-    zh-HK: 將關閉 {app} 的所有標籤頁，部分標籤頁可能會在結束前要求再次確認。
+    en: All tabs of %{app} will be closed. Some tabs may ask for additional confirmation before quitting.
+    zh-CN: 将关闭 %{app} 的所有标签页，部分标签页可能会在退出前要求再次确认。
+    zh-HK: 將關閉 %{app} 的所有標籤頁，部分標籤頁可能會在結束前要求再次確認。
   confirm_action_app:
-    en: Quit {app}
-    zh-CN: 退出 {app}
-    zh-HK: 結束 {app}
-  confirm_title:
-    en: Quit application?
-    zh-CN: 退出应用？
-    zh-HK: 結束應用程式？
-  confirm_message:
-    en: All tabs will be closed. Some tabs may ask for additional confirmation before quitting.
-    zh-CN: 将关闭所有标签页，部分标签页可能会在退出前要求再次确认。
-    zh-HK: 將關閉所有標籤頁，部分標籤頁可能會在結束前要求再次確認。
-  confirm_action:
-    en: Quit
-    zh-CN: 退出
-    zh-HK: 結束
+    en: Quit %{app}
+    zh-CN: 退出 %{app}
+    zh-HK: 結束 %{app}
 
 # 系统托盘
 Tray:
-  close_title:
-    en: Close Navop?
-    zh-CN: 关闭 Navop？
-    zh-HK: 關閉 Navop？
-  close_message:
-    en: Minimize Navop to the system tray and keep everything running, or quit the application.
-    zh-CN: 可以最小化到系统托盘并保持连接与后台任务继续运行，也可以直接退出应用。
-    zh-HK: 可以最小化到系統匣並保持連線與背景工作繼續執行，也可以直接結束應用程式。
+  close_title_app:
+    en: Close %{app}?
+    zh-CN: 关闭 %{app}？
+    zh-HK: 關閉 %{app}？
+  close_message_app:
+    en: Minimize %{app} to the system tray and keep everything running, or quit the application.
+    zh-CN: 可以将 %{app} 最小化到系统托盘并保持连接与后台任务继续运行，也可以直接退出应用。
+    zh-HK: 可以將 %{app} 最小化到系統匣並保持連線與背景工作繼續執行，也可以直接結束應用程式。
   close_minimize:
     en: Minimize to tray
     zh-CN: 最小化到托盘

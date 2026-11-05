@@ -1185,9 +1185,9 @@ TerminalView:
     zh-CN: "已进入 Vi 模式。再次按 %{shortcut} 或按 Esc 退出。"
     zh-HK: "已進入 Vi 模式。再次按 %{shortcut} 或按 Esc 退出。"
   vi_mode_disabled:
-    en: "Vi mode disabled."
-    zh-CN: "已退出 Vi 模式。"
-    zh-HK: "已退出 Vi 模式。"
+    en: "Vi mode disabled. Press %{shortcut} to enable it again."
+    zh-CN: "已退出 Vi 模式。再次按 %{shortcut} 可重新进入。"
+    zh-HK: "已退出 Vi 模式。再次按 %{shortcut} 可重新進入。"
   font_reset_triggered:
     en: "Terminal font size has been reset to 15."
     zh-CN: "已触发终端字体重置为 15。"

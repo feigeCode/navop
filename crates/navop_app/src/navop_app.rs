@@ -1589,6 +1589,8 @@ impl NavopApp {
         let app_for_minimize = cx.entity().downgrade();
         let app_for_quit = cx.entity().downgrade();
         let app_for_close = cx.entity().downgrade();
+        // 弹窗标题带产品名：三个产品同机运行时，光看窗口分不清是哪个应用。
+        let app_name = app_kit::display_name();
 
         window.open_dialog(cx, move |dialog, _window, _cx| {
             let remember_for_minimize = remember.clone();
@@ -1621,8 +1623,8 @@ impl NavopApp {
                 });
 
             dialog
-                .title(t!("Tray.close_title").to_string())
-                .child(t!("Tray.close_message").to_string())
+                .title(t!("Tray.close_title_app", app = app_name).to_string())
+                .child(t!("Tray.close_message_app", app = app_name).to_string())
                 .child(remember.clone())
                 .footer(
                     DialogFooter::new()
@@ -1712,9 +1714,7 @@ impl NavopApp {
             let app_for_ok = app_for_ok.clone();
             let app_for_cancel = app_for_cancel.clone();
             let app_for_close = app_for_close.clone();
-            let app_name = app_kit::identity()
-                .map(|identity| identity.display_name)
-                .unwrap_or("Navop");
+            let app_name = app_kit::display_name();
             dialog
                 .title(t!("Quit.confirm_title_app", app = app_name).to_string())
                 .child(t!("Quit.confirm_message_app", app = app_name).to_string())

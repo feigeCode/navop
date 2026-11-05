@@ -430,7 +430,7 @@ impl RenderOnce for TimePicker {
             let placeholder = self
                 .placeholder
                 .clone()
-                .unwrap_or_else(|| t!("TimePicker.placeholder", default = "Select time").into());
+                .unwrap_or_else(|| t!("TimePicker.placeholder").into());
             let display_title = state
                 .format_time()
                 .unwrap_or_else(|| placeholder.to_string());

@@ -39,6 +39,16 @@ pub fn identity() -> Option<&'static AppIdentity> {
     APP_IDENTITY.get().copied()
 }
 
+/// 当前产品的展示名；未 bootstrap 时回退到全量产品的名字。
+///
+/// 弹窗、托盘这类「必须能区分是哪个应用」的文案统一走这里，
+/// 免得各处在语言包里写死 `Navop`，独立产品（`navop-shell` / `navop-data`）就报错名字。
+pub fn display_name() -> &'static str {
+    identity()
+        .map(|identity| identity.display_name)
+        .unwrap_or(AppIdentity::FULL.display_name)
+}
+
 /// 当前产品注册的领域表；未 bootstrap 时返回空表。
 pub fn registry() -> &'static DomainRegistry {
     DOMAIN_REGISTRY
