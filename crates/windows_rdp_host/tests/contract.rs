@@ -2802,7 +2802,7 @@ fn build_is_windows_hosted_msvc_only_and_ci_runs_host_tests() {
     );
     assert_contains_all(
         ".github/workflows/ci.yml",
-        &["needs: [prepare, classify, test, product-check, windows-rdp-probe]"],
+        &["needs: [prepare, classify, test, product-check, webview-check, windows-rdp-probe]"],
     );
     // 产品构建形态检查（product-check）要有东西可跑：矩阵来自 prepare 的输出，
     // 每个条目真正执行 `cargo check --locked -p <product> --target <target>`。
