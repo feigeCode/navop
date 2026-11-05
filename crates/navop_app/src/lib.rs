@@ -1349,3 +1349,57 @@ mod system_tray_lifecycle_contract_tests {
         );
     }
 }
+
+/// 弹窗文案必须真把产品名插进去：`%{app}` 才是 rust-i18n 的占位符语法，
+/// 写成 `{app}` 会原样露给用户（退出弹窗就漏过这一次），漏传参数则露出
+/// `%{app}` 源码片段。三个语言的文案都过一遍，避免只有某个语言漏改。
+#[cfg(test)]
+mod quit_prompt_localization_tests {
+    use rust_i18n::t;
+
+    const APP_NAME: &str = "Navop";
+    const LOCALES: [&str; 3] = ["en", "zh-CN", "zh-HK"];
+
+    fn assert_rendered(rendered: &str, key: &str) {
+        assert!(
+            !rendered.contains("%{") && !rendered.contains("{app}"),
+            "{key} 的占位符没有被替换：{rendered}"
+        );
+        assert!(
+            rendered.contains(APP_NAME),
+            "{key} 的文案里缺少产品名「{APP_NAME}」：{rendered}"
+        );
+    }
+
+    #[test]
+    fn quit_prompt_renders_the_product_name() {
+        for locale in LOCALES {
+            assert_rendered(
+                &t!("Quit.confirm_title_app", locale = locale, app = APP_NAME).to_string(),
+                "Quit.confirm_title_app",
+            );
+            assert_rendered(
+                &t!("Quit.confirm_message_app", locale = locale, app = APP_NAME).to_string(),
+                "Quit.confirm_message_app",
+            );
+            assert_rendered(
+                &t!("Quit.confirm_action_app", locale = locale, app = APP_NAME).to_string(),
+                "Quit.confirm_action_app",
+            );
+        }
+    }
+
+    #[test]
+    fn close_prompt_renders_the_product_name() {
+        for locale in LOCALES {
+            assert_rendered(
+                &t!("Tray.close_title_app", locale = locale, app = APP_NAME).to_string(),
+                "Tray.close_title_app",
+            );
+            assert_rendered(
+                &t!("Tray.close_message_app", locale = locale, app = APP_NAME).to_string(),
+                "Tray.close_message_app",
+            );
+        }
+    }
+}
