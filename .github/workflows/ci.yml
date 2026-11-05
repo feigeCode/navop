@@ -107,6 +107,10 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: python3 script/release_pr.py check
 
+  # PR 快车道：Linux 跑完整 `cargo test --all`；macOS / Windows 只编译
+  # （`cargo check --workspace --all-targets`，含测试目标）不链接、不跑测试，
+  # 平台相关的编译问题仍然会在 PR 阶段暴露。完整三平台测试在 push main
+  # 与 workflow_dispatch 时执行。
   test:
     name: Test (${{ matrix.platform }}, ${{ matrix.target }})
     needs: [prepare, classify]
@@ -177,35 +181,94 @@ jobs:
       - name: Install lrzsz on macOS
         if: ${{ matrix.platform == 'macos' }}
         run: brew list lrzsz >/dev/null 2>&1 || brew install lrzsz
+      - name: Cache wasm-tools
+        if: ${{ matrix.platform == 'linux' || github.event_name != 'pull_request' }}
+        uses: actions/cache@v6
+        with:
+          path: ~/.cargo/bin/wasm-tools
+          key: wasm-tools-1.251.0-${{ runner.os }}
       - name: Install wasm-tools
-        run: cargo install wasm-tools --locked --version 1.251.0
+        if: ${{ matrix.platform == 'linux' || github.event_name != 'pull_request' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          wasm-tools --version >/dev/null 2>&1 || cargo install wasm-tools --locked --version 1.251.0
       - name: Test Linux
         if: ${{ matrix.platform == 'linux' }}
         run: |
           cargo test --all
-      # 默认构建（三平台一致）不带 `embedded-webview`：它的宿主 WebView 在 Linux 上
-      # 无法随发布包提供（原因见 crates/navop_app/Cargo.toml）。`cargo test --all` 编的正是这个
-      # 默认形态，所以「显式打开该 feature」的那一半反而没有地方会编到 —— 在这里补一次
-      # check，免得它悄悄腐烂到有人真要用时才发现。
-      # 本步骤依赖 `script/install-linux.sh` 装上的 webkit2gtk-4.1 开发包。
-      - name: Check the opt-in embedded webview feature
-        if: ${{ matrix.platform == 'linux' }}
-        run: |
-          set -euo pipefail
-          cargo check -p ai_chat_view --features embedded-webview --tests
-          cargo check -p navop_app --features embedded-webview
+      - name: Configure MSVC environment (PR check)
+        if: ${{ matrix.platform == 'windows' && github.event_name == 'pull_request' }}
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      # PR 快车道：macOS / Windows 只编译（含测试目标），不链接、不跑测试。
+      # 完整测试仍在 Linux 以及 push main / 手动触发时跑三平台。
+      - name: Check the workspace (PR fast lane)
+        if: ${{ github.event_name == 'pull_request' && matrix.platform != 'linux' }}
+        run: cargo check --workspace --all-targets
       - name: Test Windows
-        if: ${{ matrix.platform == 'windows' }}
+        if: ${{ matrix.platform == 'windows' && github.event_name != 'pull_request' }}
         shell: pwsh
         run: ./script/test-windows.ps1
       - name: Test MacOS
-        if: ${{ matrix.platform == 'macos' }}
+        if: ${{ matrix.platform == 'macos' && github.event_name != 'pull_request' }}
         run: |
           cargo test --all
       - name: Show sccache statistics
         if: always()
         shell: bash
         run: sccache --show-stats || true
+
+  # 默认构建（三平台一致）不带 `embedded-webview`：它的宿主 WebView 在 Linux 上
+  # 无法随发布包提供（原因见 crates/navop_app/Cargo.toml）。`cargo test --all` 编的正是这个
+  # 默认形态，所以「显式打开该 feature」的那一半反而没有地方会编到 —— 单独一个 job
+  # 补一次 check，免得它悄悄腐烂到有人真要用时才发现；独立成 job 是为了和上面的
+  # 全量测试并行，不占关键路径。
+  # 本 job 依赖 `script/install-linux.sh` 装上的 webkit2gtk-4.1 开发包。
+  webview-check:
+    name: Linux opt-in features
+    needs: [classify]
+    if: ${{ needs.classify.outputs.release_only != 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+      - name: Setup sccache
+        id: sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+        continue-on-error: true
+      - name: Initialize sccache
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.sccache.outcome }}" != "success" ]; then
+            echo "::warning::sccache 安装失败，本次构建退化为无编译器缓存"
+            echo "RUSTC_WRAPPER=" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          sccache --start-server
+          sccache --zero-stats
+      - name: Restore shared Cargo inputs
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: navop-cargo-inputs-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            navop-cargo-inputs-v1-${{ runner.os }}-
+      - name: Install system dependencies
+        run: script/bootstrap
+      - name: Check the opt-in embedded webview feature
+        run: |
+          set -euo pipefail
+          cargo check -p ai_chat_view --features embedded-webview --tests
+          cargo check -p navop_app --features embedded-webview
 
   # 发版矩阵（.github/workflows/release.yml）是「一个产品 × 一个目标」各自编译：
   # 每个 job 只带自己那一个产品，extension-runtime 之类共享 crate 的 feature 就按
@@ -301,8 +364,10 @@ jobs:
   windows-rdp-probe:
     name: Windows RDP probe (${{ matrix.target }})
     needs: [classify]
+    # 探针只验证 Windows 打包形态，PR 阶段交给 product-check；完整探针留在 main / 手动。
     if: >-
       ${{
+        github.event_name != 'pull_request' &&
         (inputs.platform == '' ||
          inputs.platform == 'all' ||
          inputs.platform == 'windows') &&
@@ -344,7 +409,7 @@ jobs:
 
   ci-gate:
     name: CI gate
-    needs: [prepare, classify, test, product-check, windows-rdp-probe]
+    needs: [prepare, classify, test, product-check, webview-check, windows-rdp-probe]
     if: always()
     runs-on: ubuntu-latest
     steps:
