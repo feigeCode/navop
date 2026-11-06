@@ -20,10 +20,11 @@ use std::{
 use extension_host::CancellationToken;
 use extension_plugin_adapter::ActivationHandle;
 use gpui::{
-    App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
-    ParentElement, Render, SharedString, Styled, Subscription, Task, Window, div,
+    App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    InteractiveElement as _, IntoElement, ParentElement, Render, SharedString,
+    StatefulInteractiveElement as _, Styled, Subscription, Task, Window, div,
 };
-use gpui_component::Theme;
+use gpui_component::{ActiveTheme as _, Theme};
 use nsh_engine::HostChannel;
 use nsh_platform_gpui::{AppOptions, AppView, Locale};
 use serde_json::{Map, Value, json};
@@ -365,6 +366,10 @@ impl NshTab {
             &self.dispatcher,
             Some(plugin_ai.downgrade()),
         );
+        // 侧栏展开/收起改变的是 tab 的布局（展开时占宽度、收起时只剩浮层按钮），
+        // 所以要跟着侧栏的更新重画这个 tab。
+        cx.observe(&plugin_ai, |_this, _panel, cx| cx.notify())
+            .detach();
         self.plugin_ai = Some(plugin_ai);
         let view = cx.new(|cx| AppView::new(options, window, cx));
         // 首帧前把宿主主题与界面语言交给页面（spec §2 附、§7 主题走原生）。
@@ -714,16 +719,57 @@ impl Render for NshTab {
         let mut root = div().size_full().min_w_0().min_h_0();
         match (&self.view, self.error.as_deref()) {
             (Some(view), _) => {
-                // AI 侧栏贴右缘；页面本体占剩余空间（min_w_0 防 intrinsic 挤压）。
-                // h_flex 默认 items_center：侧栏与页面都显式 h_full。
-                root = root.child(
-                    gpui_component::h_flex()
-                        .size_full()
-                        .min_w_0()
-                        .min_h_0()
-                        .child(div().flex_1().min_w_0().min_h_0().child(view.clone()))
-                        .children(self.plugin_ai.clone()),
-                );
+                // 页面本体占满内容区，AI 侧栏只在展开时让出宽度。收起态以前由
+                // 侧栏自己渲染 size_full，会把页面挤成 0 宽（整个页面空白），
+                // 所以收起时改成 tab 上的右下角浮层按钮。
+                let mut row = gpui_component::h_flex()
+                    .size_full()
+                    .min_w_0()
+                    .min_h_0()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .min_h_0()
+                            .h_full()
+                            .child(view.clone()),
+                    );
+                let mut collapsed_panel = None;
+                if let Some(panel) = self.plugin_ai.clone() {
+                    if panel.read(cx).is_open() {
+                        row = row.child(panel);
+                    } else {
+                        collapsed_panel = Some(panel);
+                    }
+                }
+                root = root.relative().child(row);
+                if let Some(panel) = collapsed_panel {
+                    let fab_panel = panel.clone();
+                    root = root.child(
+                        div()
+                            .id("plugin-ai-fab-host")
+                            .absolute()
+                            .bottom_4()
+                            .right_4()
+                            .child(
+                                div()
+                                    .id("plugin-ai-fab")
+                                    .on_click(move |_event, _window, cx: &mut App| {
+                                        fab_panel
+                                            .update(cx, |panel, cx| panel.open_panel(cx));
+                                    })
+                                    .flex()
+                                    .items_center()
+                                    .px_3()
+                                    .py_2()
+                                    .rounded_full()
+                                    .bg(cx.theme().primary)
+                                    .text_color(cx.theme().primary_foreground)
+                                    .text_sm()
+                                    .child("AI"),
+                            ),
+                    );
+                }
             }
             (None, Some(error)) => {
                 root = root
