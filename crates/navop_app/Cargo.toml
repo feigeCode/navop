@@ -1,6 +1,6 @@
 [package]
 name = "navop_app"
-version = "0.23.0-beta.4"
+version = "0.23.0-beta.6"
 publish.workspace = true
 edition.workspace = true
 
@@ -37,7 +37,6 @@ extension-protocol.workspace = true
 extension_view = { workspace = true }
 notes = { workspace = true }
 universal-plugins.workspace = true
-resource_view.workspace = true
 workspace_explorer.workspace = true
 json_view = { workspace = true }
 terminal = { workspace = true, optional = true }
@@ -106,6 +105,7 @@ data_domain = { workspace = true }
 gpui = { workspace = true, features = ["test-support"] }
 async-trait = { workspace = true }
 extension-protocol = { workspace = true }
+serde_yaml = { workspace = true }
 tempfile = "3"
 
 [features]
@@ -122,7 +122,7 @@ tempfile = "3"
 # 「用浏览器打开」与「下载 HTML」两条路径不受影响。
 # 需要时显式开启：`cargo build -p navop_app --features embedded-webview`
 # （Linux 另需 `webkit2gtk-4.1` 开发包，见 `script/install-linux.sh`）。
-default = ["wasm-components", "windows-native-rdp", "shell-plugins", "database", "shell"]
+default = ["wasm-components", "windows-native-rdp", "nsh-host", "database", "shell"]
 # 领域门控：独立产品只打开自己需要的领域，公共壳保持与领域无关。
 database = [
     "extension-runtime/database",
@@ -159,7 +159,8 @@ github-updates = ["app_kit/github-updates"]
 # `cargo build --release -p navop_app --target x86_64-apple-darwin --features macos-touchbar-window-hide`
 macos-touchbar-window-hide = ["one-core/macos-touchbar-window-hide"]
 screenshot-safe = []
-shell-plugins = ["universal-plugins/shell-plugins"]
+# M2 spike：挂一个 nsh AppView tab（nsh 扩展宿主方向验证），默认不开。
+nsh-host = ["universal-plugins/nsh-host"]
 wasm-components = ["extension-runtime/wasm-components"]
 windows-native-rdp = ["remote_desktop_view?/windows-native-rdp"]
 

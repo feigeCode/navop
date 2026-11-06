@@ -34,7 +34,6 @@ pub(crate) enum ToolLaunch {
 /// 扩展贡献的 toolbox shell 视图（surface: "toolbox"）。
 pub(crate) struct ExtensionTool {
     pub extension_id: String,
-    pub view_id: String,
     pub title: String,
     pub description: Option<String>,
     pub category: String,
@@ -60,21 +59,20 @@ impl ExtensionTool {
     }
 }
 
-/// 从全局 runtime catalog 读取 toolbox surface 的 shell 视图。
+/// 从全局 runtime catalog 读取工具箱里的扩展 app（没有连接的才有卡片）。
 pub(crate) fn extension_tools(cx: &App) -> Vec<ExtensionTool> {
     let Some(catalog) = extension_runtime::global_catalog(cx) else {
         return Vec::new();
     };
     catalog
-        .toolbox_views()
+        .toolbox_apps()
         .into_iter()
-        .map(|view| ExtensionTool {
-            extension_id: view.extension_id.clone(),
-            view_id: view.id.clone(),
-            title: view.title.clone(),
-            description: view.description.clone(),
-            category: view.category.clone().unwrap_or_else(|| "general".into()),
-            keywords: view.keywords.clone(),
+        .map(|app| ExtensionTool {
+            extension_id: app.extension_id.clone(),
+            title: app.title.clone(),
+            description: app.description.clone(),
+            category: app.category.clone().unwrap_or_else(|| "general".into()),
+            keywords: app.keywords.clone(),
         })
         .collect()
 }
@@ -192,7 +190,7 @@ impl ToolboxTab {
             })
     }
 
-    /// 扩展工具卡片（surface: toolbox 的 shell 视图）。
+    /// 扩展工具卡片（没有连接的 shell app）。
     fn render_extension_tool_card(
         &self,
         tool: &ExtensionTool,
@@ -200,11 +198,11 @@ impl ToolboxTab {
     ) -> impl IntoElement {
         let accent = cx.theme().accent;
         let accent_soft = cx.theme().accent.opacity(0.12);
-        let (extension_id, view_id) = (tool.extension_id.clone(), tool.view_id.clone());
+        let extension_id = tool.extension_id.clone();
         v_flex()
             .id(SharedString::from(format!(
-                "ext-tool-{}-{}",
-                tool.extension_id, tool.view_id
+                "ext-tool-{}",
+                tool.extension_id
             )))
             .w(gpui::rems(18.0))
             .min_h(gpui::rems(7.5))
@@ -249,7 +247,7 @@ impl ToolboxTab {
                     )),
             )
             .on_click(move |_, window, cx| {
-                extension_view::open_shell_view(&extension_id, &view_id, window, cx);
+                extension_view::open_shell_app(&extension_id, None, window, cx);
             })
     }
 
@@ -403,7 +401,6 @@ mod tests {
     fn extension_tool_matches_searches_title_description_and_keywords() {
         let tool = ExtensionTool {
             extension_id: "com.example".into(),
-            view_id: "hosts".into(),
             title: "Hosts Editor".into(),
             description: Some("Edit /etc/hosts".into()),
             category: "system".into(),

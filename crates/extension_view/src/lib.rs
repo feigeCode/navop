@@ -20,13 +20,13 @@ mod view;
 pub use host::ExtensionViewHost;
 pub use model::{
     DownloadedMarketplaceExtension, ExtensionKind, ExtensionSummary, MarketplaceEntry,
-    MarketplaceInstallOutcome, MarketplaceInstallState, PermissionReviewModel, ShellViewSummary,
+    MarketplaceInstallOutcome, MarketplaceInstallState, PermissionReviewModel, ShellAppSummary,
     filter_installed, filter_marketplace, filter_updatable_marketplace,
     marketplace_entry_install_id, marketplace_install_state,
 };
 pub use shell::{
-    ShellViewOpener, close_shell_extension, finish_shell_extension, open_shell_view,
-    register_shell_view_opener,
+    ShellAppOpener, close_shell_extension, finish_shell_extension, open_shell_app,
+    register_shell_app_opener,
 };
 pub use view::{ExtensionManagerMode, ExtensionManagerView};
 
@@ -36,7 +36,7 @@ mod tests {
 
     use super::{
         ExtensionKind, ExtensionSummary, MarketplaceEntry, MarketplaceInstallState,
-        ShellViewSummary, filter_installed, filter_marketplace, filter_updatable_marketplace,
+        ShellAppSummary, filter_installed, filter_marketplace, filter_updatable_marketplace,
         marketplace_install_state,
     };
 
@@ -55,18 +55,25 @@ mod tests {
     }
 
     #[test]
-    fn extension_summary_tracks_shell_views() {
+    fn extension_summary_tracks_shell_app() {
         let summary = summary(ExtensionKind::Composite, "search", "1.0.0")
-            .with_shell_views(vec![ShellViewSummary::new("explorer", "Explorer")]);
+            .with_shell_app(Some(ShellAppSummary::new("Explorer")));
 
-        assert_eq!("explorer", summary.shell_views[0].id);
-        assert_eq!("Explorer", summary.shell_views[0].title);
+        assert_eq!("Explorer", summary.shell_app.expect("shell app").title);
     }
 
     #[test]
     fn marketplace_state_detects_newer_marketplace_version() {
-        let installed = vec![summary(ExtensionKind::Language, "rust", "1.2.0")];
-        let entry = marketplace_entry(ExtensionKind::Language, "rust", "1.3.0");
+        let installed = vec![summary(
+            ExtensionKind::LanguageBundle,
+            "tree-sitter-languages",
+            "1.2.0",
+        )];
+        let entry = marketplace_entry(
+            ExtensionKind::LanguageBundle,
+            "tree-sitter-languages",
+            "1.3.0",
+        );
 
         let state = marketplace_install_state(&installed, &entry);
 
@@ -87,7 +94,12 @@ mod tests {
     #[test]
     fn installed_filter_matches_kind_name_and_description() {
         let installed = vec![
-            summary(ExtensionKind::Language, "rust", "1.0.0").with_description("Rust syntax"),
+            summary(
+                ExtensionKind::LanguageBundle,
+                "tree-sitter-languages",
+                "1.0.0",
+            )
+            .with_description("Tree-sitter syntax"),
             summary(ExtensionKind::Composite, "sql-tools", "1.0.0")
                 .with_description("Database helpers"),
         ];
@@ -101,7 +113,11 @@ mod tests {
     #[test]
     fn marketplace_filter_matches_kind_name_and_file_extensions() {
         let mut entries = vec![
-            marketplace_entry(ExtensionKind::Language, "rust", "1.0.0"),
+            marketplace_entry(
+                ExtensionKind::LanguageBundle,
+                "tree-sitter-languages",
+                "1.0.0",
+            ),
             marketplace_entry(ExtensionKind::DatabaseDriver, "fake_pg", "1.0.0"),
         ];
         entries[1].file_extensions = vec!["psql".to_string()];
@@ -156,6 +172,35 @@ mod tests {
         );
     }
 
+    #[test]
+    fn installed_and_marketplace_filters_match_supported_languages() {
+        let installed = vec![
+            summary(
+                ExtensionKind::LanguageBundle,
+                "tree-sitter-languages",
+                "1.0.0",
+            )
+            .with_languages(vec!["rust".to_string(), "typescript".to_string()]),
+        ];
+        assert_eq!(
+            1,
+            filter_installed(&installed, "typescript", None).len(),
+            "installed language bundle should be searchable by its supported languages"
+        );
+
+        let mut entry = marketplace_entry(
+            ExtensionKind::LanguageBundle,
+            "tree-sitter-languages",
+            "1.0.0",
+        );
+        entry.languages = vec!["rust".to_string()];
+        assert_eq!(
+            1,
+            filter_marketplace(&[entry], "rust", None).len(),
+            "marketplace language bundle should be searchable by its supported languages"
+        );
+    }
+
     fn summary(kind: ExtensionKind, name: &str, version: &str) -> ExtensionSummary {
         ExtensionSummary::new(kind, name, version, PathBuf::from(format!("/tmp/{name}")))
     }
@@ -168,6 +213,7 @@ mod tests {
             version: version.to_string(),
             description: String::new(),
             file_extensions: Vec::new(),
+            languages: Vec::new(),
             required_host_version: None,
             host_compatible: true,
             asset_url: "https://example.test/ext.tar.gz".to_string(),

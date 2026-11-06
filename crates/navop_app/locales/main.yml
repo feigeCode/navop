@@ -68,42 +68,32 @@ Common:
     zh-HK: 應用程式儲存空間不可用
 
 # 应用退出
+# `%{app}` 是 rust-i18n 的插值语法（`%{name}`，不是 `{name}`）：写成单花括号会原样显示
+# `{app}`，产品名根本插不进去。
 Quit:
   confirm_title_app:
-    en: Quit {app}?
-    zh-CN: 退出 {app}？
-    zh-HK: 結束 {app}？
+    en: Quit %{app}?
+    zh-CN: 退出 %{app}？
+    zh-HK: 結束 %{app}？
   confirm_message_app:
-    en: All tabs of {app} will be closed. Some tabs may ask for additional confirmation before quitting.
-    zh-CN: 将关闭 {app} 的所有标签页，部分标签页可能会在退出前要求再次确认。
-    zh-HK: 將關閉 {app} 的所有標籤頁，部分標籤頁可能會在結束前要求再次確認。
+    en: All tabs of %{app} will be closed. Some tabs may ask for additional confirmation before quitting.
+    zh-CN: 将关闭 %{app} 的所有标签页，部分标签页可能会在退出前要求再次确认。
+    zh-HK: 將關閉 %{app} 的所有標籤頁，部分標籤頁可能會在結束前要求再次確認。
   confirm_action_app:
-    en: Quit {app}
-    zh-CN: 退出 {app}
-    zh-HK: 結束 {app}
-  confirm_title:
-    en: Quit application?
-    zh-CN: 退出应用？
-    zh-HK: 結束應用程式？
-  confirm_message:
-    en: All tabs will be closed. Some tabs may ask for additional confirmation before quitting.
-    zh-CN: 将关闭所有标签页，部分标签页可能会在退出前要求再次确认。
-    zh-HK: 將關閉所有標籤頁，部分標籤頁可能會在結束前要求再次確認。
-  confirm_action:
-    en: Quit
-    zh-CN: 退出
-    zh-HK: 結束
+    en: Quit %{app}
+    zh-CN: 退出 %{app}
+    zh-HK: 結束 %{app}
 
 # 系统托盘
 Tray:
-  close_title:
-    en: Close Navop?
-    zh-CN: 关闭 Navop？
-    zh-HK: 關閉 Navop？
-  close_message:
-    en: Minimize Navop to the system tray and keep everything running, or quit the application.
-    zh-CN: 可以最小化到系统托盘并保持连接与后台任务继续运行，也可以直接退出应用。
-    zh-HK: 可以最小化到系統匣並保持連線與背景工作繼續執行，也可以直接結束應用程式。
+  close_title_app:
+    en: Close %{app}?
+    zh-CN: 关闭 %{app}？
+    zh-HK: 關閉 %{app}？
+  close_message_app:
+    en: Minimize %{app} to the system tray and keep everything running, or quit the application.
+    zh-CN: 可以将 %{app} 最小化到系统托盘并保持连接与后台任务继续运行，也可以直接退出应用。
+    zh-HK: 可以將 %{app} 最小化到系統匣並保持連線與背景工作繼續執行，也可以直接結束應用程式。
   close_minimize:
     en: Minimize to tray
     zh-CN: 最小化到托盘
@@ -207,17 +197,17 @@ Home:
     zh-CN: "筛选独立于主页"
     zh-HK: "篩選獨立於主頁"
   toolbox_description:
-    en: "Built-in tools in one place; more tools can be contributed by gpui-shell extensions."
-    zh-CN: "内置小工具统一入口；后续可通过 gpui-shell 扩展注册更多工具"
-    zh-HK: "內建小工具統一入口；後續可透過 gpui-shell 擴充功能註冊更多工具"
+    en: "Built-in tools in one place; more tools can be contributed by nsh extensions."
+    zh-CN: "内置小工具统一入口；后续可通过 nsh 扩展注册更多工具"
+    zh-HK: "內建小工具統一入口；後續可透過 nsh 擴充功能註冊更多工具"
   toolbox_more_tools:
     en: "More tools"
     zh-CN: "更多工具"
     zh-HK: "更多工具"
   toolbox_more_hint:
-    en: "Contributed by gpui-shell extensions"
-    zh-CN: "由 gpui-shell 扩展贡献"
-    zh-HK: "由 gpui-shell 擴充功能貢獻"
+    en: "Contributed by nsh extensions"
+    zh-CN: "由 nsh 扩展贡献"
+    zh-HK: "由 nsh 擴充功能貢獻"
   sync_just_now:
     en: "Just now"
     zh-CN: "刚刚"
@@ -3603,6 +3593,14 @@ Settings:
         en: Expose app-provided function tools to the built-in Agent
         zh-CN: 向内置 Agent 暴露应用内置函数工具
         zh-HK: 向內建 Agent 暴露應用內建函數工具
+      extensions:
+        en: Extension Tools
+        zh-CN: 扩展工具
+        zh-HK: 擴展工具
+      extensions_desc:
+        en: Expose tools declared by installed extensions (com.navop.docker etc.)
+        zh-CN: 暴露已安装扩展声明的 AI 工具（如 com.navop.docker）
+        zh-HK: 暴露已安裝擴展聲明的 AI 工具（如 com.navop.docker）
     Mcp:
       group_title:
         en: MCP

@@ -65,10 +65,11 @@ enum ToolExposureItem {
     Mongo,
     Database,
     InternalFunctions,
+    Extensions,
 }
 
 impl ToolExposureItem {
-    const MCP_VISIBLE: [Self; 9] = [
+    const MCP_VISIBLE: [Self; 10] = [
         Self::Terminal,
         Self::TerminalSshExec,
         Self::TerminalExec,
@@ -78,8 +79,9 @@ impl ToolExposureItem {
         Self::Mongo,
         Self::Database,
         Self::InternalFunctions,
+        Self::Extensions,
     ];
-    const AGENT_VISIBLE: [Self; 9] = [
+    const AGENT_VISIBLE: [Self; 10] = [
         Self::Terminal,
         Self::TerminalSshExec,
         Self::TerminalExec,
@@ -89,6 +91,7 @@ impl ToolExposureItem {
         Self::Mongo,
         Self::Database,
         Self::InternalFunctions,
+        Self::Extensions,
     ];
 
     #[cfg(test)]
@@ -103,6 +106,7 @@ impl ToolExposureItem {
             Self::Mongo => "mongo",
             Self::Database => "database",
             Self::InternalFunctions => "internal_functions",
+            Self::Extensions => "extensions",
         }
     }
 
@@ -117,6 +121,7 @@ impl ToolExposureItem {
             Self::Mongo => "Settings.General.ToolExposure.mongo",
             Self::Database => "Settings.General.ToolExposure.database",
             Self::InternalFunctions => "Settings.General.ToolExposure.internal_functions",
+            Self::Extensions => "Settings.General.ToolExposure.extensions",
         }
     }
 
@@ -131,6 +136,7 @@ impl ToolExposureItem {
             Self::Mongo => "Settings.General.ToolExposure.mongo_desc",
             Self::Database => "Settings.General.ToolExposure.database_desc",
             Self::InternalFunctions => "Settings.General.ToolExposure.internal_functions_desc",
+            Self::Extensions => "Settings.General.ToolExposure.extensions_desc",
         }
     }
 
@@ -145,6 +151,7 @@ impl ToolExposureItem {
             Self::Mongo => settings.mongo,
             Self::Database => settings.database,
             Self::InternalFunctions => settings.internal_functions,
+            Self::Extensions => settings.extensions,
         }
     }
 
@@ -159,6 +166,7 @@ impl ToolExposureItem {
             Self::Mongo => settings.mongo = enabled,
             Self::Database => settings.database = enabled,
             Self::InternalFunctions => settings.internal_functions = enabled,
+            Self::Extensions => settings.extensions = enabled,
         }
     }
 }
@@ -243,7 +251,8 @@ mod tests {
                 "redis",
                 "mongo",
                 "database",
-                "internal_functions"
+                "internal_functions",
+                "extensions"
             ],
             ids
         );
@@ -263,7 +272,8 @@ mod tests {
                 "redis",
                 "mongo",
                 "database",
-                "internal_functions"
+                "internal_functions",
+                "extensions"
             ],
             ids
         );

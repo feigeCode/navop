@@ -4,6 +4,86 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.23.0-beta.6] - 2026-11-05
+
+#### 更新内容
+
+- 扩展管理里的语言能力收成「语言包」一个入口：语言包卡片直接列出支持的语言（前 6 个 + 总数），详情弹窗展示完整语言列表；独立语言扩展不再平铺成单独的插件卡片，后续新增语言统一随语言包发布。已安装的语法解析器继续生效，语法高亮不受影响。
+- 新建连接向导按旧版结构重排：去掉内容区重复的标题栏，「取消 / 下一步」改为整窗宽底部栏，窗口高度较小时也不会被挤出可视区；第一步卡片固定三列等宽，不再因卡片数量变化而换行跳动。
+- 新建连接的类目从 8 个减为 7 个：「扩展」不再单独占一类，扩展提供的连接统一归入「中间件」；「更多中间件 / 更多时序数据库」只在对应类目出现，「全部」只保留一个「更多连接」。
+
+#### 修复与优化
+
+- 修复 beta 构建加载不到已安装外部数据库驱动的问题：带 `-beta.N` 的宿主版本现在也能匹配 `>=0.10.0` 这类驱动版本要求，国产数据库类目以及由驱动提供的 TDengine、ClickHouse 类型恢复正常。
+- 退出确认弹窗不再显示字面量 `{app}`，正确插入当前产品名；托盘关闭提示同样带上产品名，独立产品不会再被叫成 Navop。顺带修复终端 vi 模式提示里丢失的重新进入快捷键。
+- 空连接类目保持旧版空白，不再显示占位文案。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.23.0-beta.6) 下载桌面端安装包
+
+#### What's New
+
+- Language support in extension management is now a single "language bundle" entry: the bundle card lists the supported languages (first six plus a total), and the detail dialog shows the full list. Standalone language extensions are no longer tiled as separate plugin cards, and new languages will ship inside language bundles. The installed tree-sitter parsers keep working, so syntax highlighting is unaffected.
+- The new-connection wizard follows the old layout again: the duplicate header inside the content area is gone, Cancel / Next now sit in a full-width footer so they stay visible in short windows, and the first step uses a fixed three-column card grid instead of reflowing with the number of cards.
+- Connection categories went from eight to seven: "Extensions" is no longer a separate category and extension-provided connections are grouped under "Middleware"; the "More middleware" / "More time series" entries only show in their own category, and "All" keeps a single "More connections" entry.
+
+#### Fixes and Improvements
+
+- Fixed installed external database drivers not loading in beta builds: a host version carrying a `-beta.N` suffix now also matches requirements such as `>=0.10.0`, so the domestic-database category and driver-provided TDengine / ClickHouse types work again.
+- The quit confirmation no longer shows a literal `{app}` and inserts the current product name; the tray close prompt names the product too, so standalone products are no longer called Navop. Also fixed the missing re-entry shortcut in the terminal vi-mode hint.
+- Empty connection categories stay blank as in the old version instead of showing placeholder copy.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.23.0-beta.5...v0.23.0-beta.6
+
+## [v0.23.0-beta.5] - 2026-11-05
+
+#### 更新内容
+
+- 插件（扩展）引擎整体换代：插件页面从旧的 gpui-shell 构件迁到 nsh 运行时，页面改用 TSX 编写，能力按扩展清单收敛，越权调用直接拒绝。安装、更新、卸载与本地覆盖安装的流程不变。
+- 插件宿主接口升级到 ABI v2：启动事实（扩展、路由、后端、连接）首帧同步可读；资源事件改成推送，不再轮询；错误带结构化错误码；主题与语言直接用 nsh 自带能力。
+- 插件从「一页一个包」收成「一个扩展一个 app」：每个扩展只占一个标签页（连接型扩展按连接各开一个），页面在扩展内部用路由组织（侧栏、标签栏、栈都可以），一个包、一个版本、一次构建；扩展升级整套装卸。
+- 插件可以把自己的能力声明成 AI 工具（`contributes.tools`）：内置 Agent 与外部 MCP 都能调用，默认关闭，设置里按扩展逐个开关、也可以单独禁用某个工具；调用带超时、结果上限与按风险确认。
+- 插件标签页自带 AI 侧边栏：右侧浮钮打开、默认收起、宽度可拖，自动带上当前扩展、页面路由、连接与可用工具；页面还能主动上报当前状态给 AI（上限 2KB）。
+- 全部插件页面重写并统一视觉：Docker 12 个视图（容器、镜像、卷、网络、日志、进程、统计、文件变更、挂载、inspect、容器终端、概览）、MQTT 5 个、RocketMQ 3 个、Elasticsearch 与开发工具各 1 个，共用同一套组件、排版与配色。
+- 插件页面可以内嵌宿主原生组件：Docker 的容器终端直接用宿主终端控件，分屏、字体、快捷键与内置终端完全一致。
+- 插件页面可以申请剪贴板写权限，复制日志、镜像名、MQTT 消息体不再受只读限制。
+- Navop Shell 与 Navop Data 换成各自的图标（「N + 领域脚标」），三个产品不再共用一套图标。
+- 新建连接恢复两步向导：先选类目（全部 / 数据库 / 国产数据库 / 时序数据库 / NoSQL / 中间件 / 终端 / 扩展）再选卡片；空类目给「更多…」入口，末尾固定「更多连接」，点进去直接打开扩展管理。
+- 已安装的外部数据库驱动（国产数据库等）接回新建连接：按驱动清单显示标签、描述与图标，连接表单带上驱动 ID，各产品仍只出现自己支持的连接类型。
+
+#### 修复与优化
+
+- 导入迁移包时保留原工作区层级，全量产品的父子连接结构不再被拍平。
+- 设置页把数据库与终端相关项提到前面，账户与关于收尾。
+- 依赖图收敛到单份 wgpu 30，发布产物的图形栈不再随目标平台分叉。
+- 修掉 32 位 Windows 构建形态编不过的问题。
+- 页面与宿主之间不再走 base64 错误信封，错误直接带错误码与细节，排查插件问题更快。
+- 说明：插件引擎换代后，旧版插件包（gpui-shell 时代、ABI v1）不再装载。市场里现有的 Docker 0.6.3、MQTT 0.2.2 属于旧包，等新版插件包发布后再从市场安装；本地已装的旧插件会从列表里消失，不会报错。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.23.0-beta.5) 下载桌面端安装包
+
+#### What's New
+
+- The plugin (extension) engine has been replaced: plugin pages moved from the old gpui-shell runtime to nsh and are written as TSX pages, with capabilities narrowed to what the extension manifest grants — a page can only call the host capabilities it was given and everything else is rejected. Install, update, uninstall and local override installs work as before.
+- The plugin host interface is now ABI v2: startup facts (extension, route, backends, connection) are readable synchronously on the first frame; resource events are pushed instead of polled; errors carry structured codes; theme and locale use nsh's own surfaces.
+- Plugins went from "one package per page" to "one app per extension": each extension opens a single tab (one per connection for connection-type apps), pages are organized by routes inside the extension (sidebar, tab bar or a stack — the extension decides), one package, one version, one build, and an extension update swaps the whole app.
+- Extensions can declare their capabilities as AI tools (`contributes.tools`): the built-in agent and external MCP clients can call them. Off by default, switchable per extension in Settings, with per-tool disable; calls are bounded by timeouts, result caps and risk-based confirmation.
+- Each plugin tab has a built-in AI sidebar: opened from a floating button, collapsed by default, resizable, and preloaded with the current extension, route, connection and available tools. Pages can also push their own state to the AI (2 KB cap).
+- Every plugin page was rewritten on one visual system: Docker now has 12 views (containers, images, volumes, networks, logs, processes, stats, filesystem changes, mounts, inspect, container terminal, overview), MQTT 5, RocketMQ 3, plus one each for Elasticsearch and the developer tools, all sharing the same components, spacing and colors.
+- Plugin pages can embed native host components: the Docker container terminal is the host terminal, so splits, fonts and shortcuts behave exactly like the built-in terminal.
+- Plugin pages can request clipboard write access, so copying logs, image names and MQTT payloads is no longer read-only.
+- Navop Shell and Navop Data have their own icons ("N" with a domain subscript) instead of sharing one set across all three products.
+- The new-connection wizard is back to two steps: pick a category first (All / Databases / Domestic databases / Time series / NoSQL / Middleware / Terminal / Extensions), then a card. Empty categories offer a "More…" entry, the list always ends with "More connections", which opens extension management directly.
+- Installed external database drivers (domestic databases and others) are back in the new-connection flow: label, description and icon come from the driver manifest, the connection form carries the driver id, and each product still only offers the connection types it supports.
+
+#### Fixes and Improvements
+
+- Importing a migration package keeps the original workspace hierarchy, so parent/child connections in the full product are no longer flattened.
+- The settings page lists database and terminal options first, with account and about at the end.
+- The dependency graph is down to a single wgpu 30, so the graphics stack in release builds no longer forks per platform.
+- Fixed the 32-bit Windows build shape failing to compile.
+- Pages and the host no longer exchange base64 error envelopes; errors carry a code and details directly, which makes plugin issues easier to diagnose.
+- Note: after the engine change, old plugin packages (gpui-shell era, ABI v1) no longer load. The Docker 0.6.3 and MQTT 0.2.2 currently in the marketplace are old packages — wait for the republished ones before installing from the marketplace; already-installed old plugins simply disappear from the list without an error.
+
 ## [v0.23.0-beta.4] - 2026-11-02
 
 #### 更新内容

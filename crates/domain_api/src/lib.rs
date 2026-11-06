@@ -25,7 +25,7 @@ pub use identity::{AppIdentity, Product, ProductFeatures};
 pub use intent::{
     DatabaseTabMode, RemoteProtocol, TabIntent, TerminalProfileDescriptor, TerminalProfileKind,
 };
-pub use kind::{ConnectionKindDescriptor, ConnectionKindGroup};
+pub use kind::{ConnectionKindDescriptor, ConnectionKindGroup, ConnectionKindIcon};
 pub use mcp::{
     RuntimeMcpProviders, RuntimeMcpSelection, register_runtime_mcp_provider, runtime_mcp_registries,
 };

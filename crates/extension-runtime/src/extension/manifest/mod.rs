@@ -5,6 +5,7 @@ pub mod schema;
 pub mod security;
 mod security_rules;
 mod shell_validation;
+mod tools_validation;
 pub mod versioning;
 
 pub use contributes::{
@@ -12,23 +13,7 @@ pub use contributes::{
     ResolvedTerminalLaunch, ResourceConnectionContrib, ResourceConnectionFieldType,
     ResourceConnectionForm, ResourceConnectionFormField, ResourceConnectionFormTab,
     ResourceConnectionSelectOption, ResourceConnectionTerminal, ResourceConnectionVisibilityRule,
-    ResourceWorkbenchAction, ResourceWorkbenchBinding, ResourceWorkbenchBindingSource,
-    ResourceWorkbenchBottomRegion, ResourceWorkbenchBottomSource, ResourceWorkbenchCenterRegion,
-    ResourceWorkbenchCenterSource, ResourceWorkbenchColumn, ResourceWorkbenchColumnStyle,
-    ResourceWorkbenchColumnType, ResourceWorkbenchContrib, ResourceWorkbenchEffect,
-    ResourceWorkbenchForm, ResourceWorkbenchInput, ResourceWorkbenchInputEditor,
-    ResourceWorkbenchInputOption, ResourceWorkbenchInputType, ResourceWorkbenchLayout,
-    ResourceWorkbenchLeftRegion, ResourceWorkbenchNavEntry, ResourceWorkbenchNavSource,
-    ResourceWorkbenchOpen, ResourceWorkbenchOperation, ResourceWorkbenchOperationMode,
-    ResourceWorkbenchPage, ResourceWorkbenchPagination, ResourceWorkbenchPaginationKind,
-    ResourceWorkbenchPrimitive, ResourceWorkbenchRenderer, ResourceWorkbenchRendererKind,
-    ResourceWorkbenchRowAction, ResourceWorkbenchShellSource, ResourceWorkbenchSideRegion,
-    ResourceWorkbenchSideSource, ResourceWorkbenchStaticTreeItem, ResourceWorkbenchStatusFormat,
-    ResourceWorkbenchStatusItem, ResourceWorkbenchTab, ResourceWorkbenchTabGroup,
-    ResourceWorkbenchTable, ResourceWorkbenchTerminal, ResourceWorkbenchTerminalOperation,
-    ResourceWorkbenchTreeChildren, ResourceWorkbenchTreeChildrenKind, ResourceWorkbenchTreeRoot,
-    ResourceWorkbenchValueType, ResourceWorkbenchViewer, ResourceWorkbenchViewerFormat,
-    ShellHostModule, ShellSurface, ShellViewContrib, TerminalLaunchError,
+    ShellAppContrib, ShellHostModule, TerminalLaunchError, ToolAnnotations, ToolContrib, ToolRisk,
 };
 #[cfg(test)]
 pub use contributes::{CommandHandlerContrib, ContributesManifest, HtmlPreviewTransformContrib};
@@ -42,7 +27,8 @@ pub use schema::{
 };
 pub use schema::{Manifest, WasmRuntimeKind};
 pub use security::build_permission_review;
-pub(crate) use shell_validation::validate_shell_views;
+pub(crate) use shell_validation::validate_shell_app;
+pub(crate) use tools_validation::validate_tools;
 pub use versioning::{HostApiVersions, current_host_version, set_current_host_version};
 
 #[cfg(test)]

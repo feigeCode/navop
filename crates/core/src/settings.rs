@@ -494,6 +494,11 @@ pub struct ToolExposureToolsetSettings {
     pub mongo: bool,
     #[serde(default)]
     pub internal_functions: bool,
+    /// 扩展声明的 AI 工具（`contributes.tools`）。
+    ///
+    /// 默认关闭：扩展工具默认不进任何对话面，需要显式打开。
+    #[serde(default)]
+    pub extensions: bool,
 }
 
 impl ToolExposureToolsetSettings {
@@ -508,6 +513,7 @@ impl ToolExposureToolsetSettings {
             redis: false,
             mongo: false,
             internal_functions: false,
+            extensions: false,
         }
     }
 
@@ -522,6 +528,7 @@ impl ToolExposureToolsetSettings {
             redis: true,
             mongo: true,
             internal_functions: true,
+            extensions: false,
         }
     }
 }
@@ -540,6 +547,9 @@ pub struct ToolExposureSettings {
     pub mcp: ToolExposureToolsetSettings,
     #[serde(default = "ToolExposureToolsetSettings::agent_default")]
     pub agent: ToolExposureToolsetSettings,
+    /// 按扩展 id 禁用其全部工具（对 agent 与 mcp 两个面同时生效）。
+    #[serde(default)]
+    pub disabled_extension_tools: std::collections::BTreeSet<String>,
 }
 
 impl Default for ToolExposureSettings {
@@ -547,6 +557,7 @@ impl Default for ToolExposureSettings {
         Self {
             mcp: ToolExposureToolsetSettings::public_mcp_default(),
             agent: ToolExposureToolsetSettings::agent_default(),
+            disabled_extension_tools: std::collections::BTreeSet::new(),
         }
     }
 }

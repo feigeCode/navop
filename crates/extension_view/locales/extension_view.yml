@@ -123,6 +123,14 @@ Extension:
     en: Language Bundle
     zh-CN: 语言包
     zh-HK: 語言包
+  languages_supported:
+    en: "Supports %{names}"
+    zh-CN: "支持 %{names}"
+    zh-HK: "支援 %{names}"
+  languages_supported_more:
+    en: "Supports %{names} and %{count} languages"
+    zh-CN: "支持 %{names} 等 %{count} 种语言"
+    zh-HK: "支援 %{names} 等 %{count} 種語言"
   kind_database_driver:
     en: Database Driver
     zh-CN: 数据库驱动
@@ -303,6 +311,10 @@ Extension:
     en: File Types
     zh-CN: 文件类型
     zh-HK: 檔案類型
+  detail_languages:
+    en: Supported Languages
+    zh-CN: 支持语言
+    zh-HK: 支援語言
   detail_requires_host:
     en: Requires
     zh-CN: 宿主要求

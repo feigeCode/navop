@@ -11,6 +11,10 @@ pub struct ExtensionSummary {
     pub version: String,
     pub description: String,
     pub file_extensions: Vec<String>,
+    /// 语言包支持的语言标识（例如 `rust`、`typescript`）。
+    ///
+    /// 只有 `ExtensionKind::LanguageBundle` 会填充；独立语言扩展不再对外展示。
+    pub languages: Vec<String>,
     pub path: PathBuf,
     pub icon: Option<String>,
     pub driver_id: Option<String>,
@@ -32,6 +36,7 @@ impl ExtensionSummary {
             version: version.into(),
             description: String::new(),
             file_extensions: Vec::new(),
+            languages: Vec::new(),
             path,
             icon: None,
             driver_id: None,
@@ -48,6 +53,11 @@ impl ExtensionSummary {
 
     pub fn with_file_extensions(mut self, file_extensions: Vec<String>) -> Self {
         self.file_extensions = file_extensions;
+        self
+    }
+
+    pub fn with_languages(mut self, languages: Vec<String>) -> Self {
+        self.languages = languages;
         self
     }
 

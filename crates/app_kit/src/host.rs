@@ -4,7 +4,7 @@
 //! 领域把事件交给这里注册的应用壳实现，由具体产品决定怎么打开 SFTP、
 //! 保存临时连接等。没有注册宿主时（例如领域单元测试）调用会被忽略。
 
-use gpui::{App, Window};
+use gpui::{AnyWindowHandle, App, Window};
 use one_core::storage::StoredConnection;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
@@ -45,4 +45,24 @@ pub fn set_shell_host(host: Arc<dyn ShellHost>) {
 
 pub fn shell_host() -> Option<Arc<dyn ShellHost>> {
     SHELL_HOST.get().cloned()
+}
+
+/// 应用壳打开「扩展管理」页的出口。
+///
+/// 新建连接向导里的「更多连接 / 安装扩展」入口属于壳层能力：`app_kit`
+/// 不依赖扩展运行时，只把父窗口交给产品注册的实现去打开对应 tab。
+pub trait ExtensionsHost: Send + Sync {
+    /// `parent` 是向导弹窗的父窗口（应用主窗口）；返回 `false` 表示无法打开。
+    fn open_extensions(&self, parent: AnyWindowHandle, window: &mut Window, cx: &mut App) -> bool;
+}
+
+static EXTENSIONS_HOST: OnceLock<Arc<dyn ExtensionsHost>> = OnceLock::new();
+
+/// 注册扩展管理页入口；重复注册会被忽略。
+pub fn set_extensions_host(host: Arc<dyn ExtensionsHost>) {
+    let _ = EXTENSIONS_HOST.set(host);
+}
+
+pub fn extensions_host() -> Option<Arc<dyn ExtensionsHost>> {
+    EXTENSIONS_HOST.get().cloned()
 }

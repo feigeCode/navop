@@ -182,6 +182,13 @@ impl ExtensionDetailView {
                 muted,
             ));
         }
+        if !entry.languages.is_empty() {
+            rows.push(self.render_meta_row(
+                t!("Extension.detail_languages").into(),
+                crate::cards::language_display_list(&entry.languages),
+                muted,
+            ));
+        }
         if let Some(required) = entry
             .required_host_version
             .as_deref()

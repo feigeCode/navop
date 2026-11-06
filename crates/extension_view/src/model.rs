@@ -19,22 +19,23 @@ pub struct ExtensionSummary {
     pub path: PathBuf,
     pub description: String,
     pub file_extensions: Vec<String>,
+    /// 语言包支持的语言标识（例如 `rust`、`typescript`）。
+    pub languages: Vec<String>,
     pub icon: Option<String>,
     pub driver_id: Option<String>,
     pub default_port: Option<u16>,
-    pub shell_views: Vec<ShellViewSummary>,
+    /// 扩展的 nsh app（有没有、叫什么）。
+    pub shell_app: Option<ShellAppSummary>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ShellViewSummary {
-    pub id: String,
+pub struct ShellAppSummary {
     pub title: String,
 }
 
-impl ShellViewSummary {
-    pub fn new(id: impl Into<String>, title: impl Into<String>) -> Self {
+impl ShellAppSummary {
+    pub fn new(title: impl Into<String>) -> Self {
         Self {
-            id: id.into(),
             title: title.into(),
         }
     }
@@ -54,10 +55,11 @@ impl ExtensionSummary {
             path,
             description: String::new(),
             file_extensions: Vec::new(),
+            languages: Vec::new(),
             icon: None,
             driver_id: None,
             default_port: None,
-            shell_views: Vec::new(),
+            shell_app: None,
         }
     }
 
@@ -68,6 +70,11 @@ impl ExtensionSummary {
 
     pub fn with_file_extensions(mut self, extensions: Vec<String>) -> Self {
         self.file_extensions = extensions;
+        self
+    }
+
+    pub fn with_languages(mut self, languages: Vec<String>) -> Self {
+        self.languages = languages;
         self
     }
 
@@ -86,8 +93,8 @@ impl ExtensionSummary {
         self
     }
 
-    pub fn with_shell_views(mut self, shell_views: Vec<ShellViewSummary>) -> Self {
-        self.shell_views = shell_views;
+    pub fn with_shell_app(mut self, shell_app: Option<ShellAppSummary>) -> Self {
+        self.shell_app = shell_app;
         self
     }
 }
@@ -100,6 +107,8 @@ pub struct MarketplaceEntry {
     pub version: String,
     pub description: String,
     pub file_extensions: Vec<String>,
+    /// 语言包支持的语言标识；旧版市场目录可能缺省为空。
+    pub languages: Vec<String>,
     pub required_host_version: Option<String>,
     pub host_compatible: bool,
     pub asset_url: String,
@@ -227,6 +236,10 @@ fn summary_matches_query(summary: &ExtensionSummary, query: &str) -> bool {
             .file_extensions
             .iter()
             .any(|extension| contains_query(extension, query))
+        || summary
+            .languages
+            .iter()
+            .any(|language| contains_query(language, query))
 }
 
 fn marketplace_entry_matches_query(entry: &MarketplaceEntry, query: &str) -> bool {
@@ -238,6 +251,10 @@ fn marketplace_entry_matches_query(entry: &MarketplaceEntry, query: &str) -> boo
             .file_extensions
             .iter()
             .any(|extension| contains_query(extension, query))
+        || entry
+            .languages
+            .iter()
+            .any(|language| contains_query(language, query))
 }
 
 fn normalized_query(query: &str) -> String {

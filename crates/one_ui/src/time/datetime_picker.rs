@@ -487,13 +487,10 @@ impl RenderOnce for DateTimePicker {
         let (show_clean, display_title, hour_input, minute_input, second_input, is_open) = {
             let state = self.state.read(cx);
             let show_clean = self.cleanable && state.datetime.is_some();
-            let placeholder = self.placeholder.clone().unwrap_or_else(|| {
-                t!(
-                    "DateTimePicker.placeholder",
-                    default = "Select date and time"
-                )
-                .into()
-            });
+            let placeholder = self
+                .placeholder
+                .clone()
+                .unwrap_or_else(|| t!("DateTimePicker.placeholder").into());
             let display_title = state
                 .format_datetime()
                 .unwrap_or_else(|| placeholder.to_string());

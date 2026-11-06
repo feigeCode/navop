@@ -48,8 +48,9 @@ pub struct Manifest {
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct Engines {
     pub onetcli: String,
+    /// nsh 宿主（`AppView`）的版本门。声明了它的 shellView 由 nsh 装载。
     #[serde(default)]
-    pub gpui_shell: String,
+    pub nsh: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

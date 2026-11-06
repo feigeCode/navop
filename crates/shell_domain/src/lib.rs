@@ -8,6 +8,7 @@ rust_i18n::i18n!("locales", fallback = "en");
 mod connection_forms;
 mod connection_openers;
 mod lifecycle;
+mod native_terminal;
 mod recording;
 mod remote_desktop_window;
 pub(crate) mod runtime_mcp;
@@ -94,6 +95,34 @@ fn register_mcp_toolsets() {
             )]
         }),
     );
+
+    // 扩展声明的 AI 工具（plugin-ai-tools.md §11）：catalog 快照 → MCP handler
+    // registry → provider。默认关闭（settings.tool_exposure.mcp.extensions）。
+    mcp_host::register_toolset(
+        mcp_host::McpToolset::Extensions,
+        Arc::new(|cx: &App| {
+            let Some(global) = cx.try_global::<universal_plugins::GlobalUniversalPluginService>()
+            else {
+                return Vec::new();
+            };
+            let service = global.service();
+            let connections = mcp_host::connection_repository(cx).map(|repo| {
+                std::sync::Arc::new(universal_plugins::extension_tools::RepositoryConnectionSource::new(repo))
+                    as universal_plugins::extension_tools::ConnectionStore
+            });
+            let disabled = one_core::settings::AppSettings::current(cx)
+                .tool_exposure
+                .disabled_extension_tools
+                .clone();
+            vec![mcp_host::runtime_provider(
+                universal_plugins::extension_tools::extension_mcp_tool_registry(
+                    &service,
+                    connections,
+                    &disabled,
+                ),
+            )]
+        }),
+    );
 }
 
 impl Domain for ShellDomain {
@@ -146,7 +175,7 @@ impl Domain for ShellDomain {
         shell_extras::init(cx);
         terminal_view::init(cx);
         remote_desktop_view::init(cx);
-        workbench_terminal::install_terminal_host(cx);
+        native_terminal::install(cx);
         workbench_terminal::install_workbench_terminal_provider();
         Ok(())
     }

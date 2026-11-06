@@ -1,9 +1,6 @@
 use std::fs;
 
-use super::{
-    ManifestError, RemoteFileEditorLaunchMode, ResourceWorkbenchPrimitive, ShellHostModule,
-    ShellSurface, load_from_dir,
-};
+use super::{ManifestError, RemoteFileEditorLaunchMode, ShellHostModule, load_from_dir};
 
 fn write_manifest(dir: &std::path::Path, body: &str) {
     fs::write(dir.join("extension.json"), body).unwrap();
@@ -128,553 +125,11 @@ fn manifest_parses_connection_importers() {
     );
 }
 
-#[test]
-fn manifest_loads_resource_workbench_with_route_and_navigation() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    write_manifest(
-        tmp.path(),
-        r#"{
-            "schema_version": 1,
-            "id": "com.example.search",
-            "name": "Search",
-            "version": "1.0.0",
-            "engines": {
-                "onetcli": ">=0.1.0",
-                "gpui_shell": "0.6.4"
-            },
-            "permissions": ["shell:exec", "spawn:./bin/provider"],
-            "runtime": {
-                "ipc": [{
-                    "id": "main",
-                    "entry": { "command": "./bin/provider" },
-                    "transport": { "kind": "local_socket" }
-                }]
-            },
-            "contributes": {
-                "shellViews": [{
-                    "id": "search-editor",
-                    "title": "Search Editor",
-                    "entry": "ui/search-editor.js",
-                    "backends": {"search": "main"},
-                    "modules": ["context", "workbench"]
-                }],
-                "connections": [{
-                    "id": "search9",
-                    "label": "Search 9",
-                    "runtimeId": "main",
-                    "resourceType": "search"
-                }],
-                "resourceWorkbenches": [{
-                    "schemaVersion": 3,
-                    "id": "search",
-                    "title": "Search",
-                    "connectionIds": ["search9"],
-                    "runtimeId": "main",
-                    "resourceType": "search",
-                    "defaultPage": "overview",
-                    "operations": {
-                        "list": {
-                            "mode": "invoke",
-                            "method": "search/list",
-                            "requires": ["search/list"],
-                            "effect": "read"
-                        },
-                        "query": {
-                            "mode": "job",
-                            "method": "search/async",
-                            "requires": ["search/async"],
-                            "effect": "read",
-                            "params": {
-                                "q": {"source": "input", "path": "/q", "type": "string"}
-                            }
-                        }
-                    },
-                    "pages": [
-                        {
-                            "id": "overview",
-                            "title": "Overview",
-                            "renderer": {"kind": "native"},
-                            "load": {"operation": "list"},
-                            "stack": [{
-                                "kind": "table",
-                                "itemsPath": "/items",
-                                "keyPaths": ["/name"],
-                                "pagination": {"kind": "none"},
-                                "columns": [
-                                    {"id": "name", "title": "Name", "path": "/name", "type": "string"}
-                                ],
-                                "open": {
-                                    "pageId": "detail",
-                                    "route": {
-                                        "name": {"source": "selection", "path": "/name", "type": "string"}
-                                    }
-                                }
-                            }]
-                        },
-                        {
-                            "id": "detail",
-                            "title": "Detail",
-                            "renderer": {"kind": "native"},
-                            "route": {"name": {"type": "string", "required": true}},
-                            "load": {"operation": "list"},
-                            "links": [{
-                                "title": "Mapping",
-                                "pageId": "mapping",
-                                "route": {
-                                    "name": {"source": "route", "path": "/name", "type": "string"}
-                                }
-                            }],
-                            "stack": [{"kind": "viewer", "format": "json"}]
-                        },
-                        {
-                            "id": "mapping",
-                            "title": "Mapping",
-                            "renderer": {"kind": "native"},
-                            "route": {"name": {"type": "string", "required": true}},
-                            "load": {"operation": "list"},
-                            "stack": [{"kind": "viewer", "format": "json"}]
-                        },
-                        {
-                            "id": "search",
-                            "title": "Search",
-                            "renderer": {"kind": "shell", "viewId": "search-editor", "fallback": "native"},
-                            "stack": [{
-                                "kind": "form",
-                                "submit": {"operation": "query"},
-                                "inputs": [{"id": "q", "type": "string", "editor": "text", "default": "*", "required": true}]
-                            }]
-                        }
-                    ]
-                }]
-            }
-        }"#,
-    );
-    fs::create_dir_all(tmp.path().join("ui")).unwrap();
-    fs::write(
-        tmp.path().join("ui/search-editor.js"),
-        "export default class {}\n",
-    )
-    .unwrap();
-
-    let manifest = load_from_dir(tmp.path()).unwrap();
-    let workbench = &manifest.contributes.resource_workbenches[0];
-
-    assert_eq!("search", workbench.id);
-    assert_eq!(1, workbench.connection_ids.len());
-    // collection open 声明。
-    let overview = workbench.pages.iter().find(|p| p.id == "overview").unwrap();
-    let open = overview
-        .stack
-        .iter()
-        .find_map(|primitive| match primitive {
-            ResourceWorkbenchPrimitive::Table(table) => table.open.as_ref(),
-            _ => None,
-        })
-        .unwrap();
-    assert_eq!("detail", open.page_id);
-    assert!(open.route.contains_key("name"));
-    // detail route 参数与 links。
-    let detail = workbench.pages.iter().find(|p| p.id == "detail").unwrap();
-    assert!(detail.route.as_ref().unwrap().contains_key("name"));
-    assert_eq!(1, detail.links.len());
-    assert_eq!("mapping", detail.links[0].page_id);
-    // query 页面输入与 job 操作。
-    let search = workbench.pages.iter().find(|p| p.id == "search").unwrap();
-    assert_eq!(Some("search-editor"), search.renderer.view_id.as_deref());
-    let form = search
-        .stack
-        .iter()
-        .find_map(|primitive| match primitive {
-            ResourceWorkbenchPrimitive::Form(form) => Some(form),
-            _ => None,
-        })
-        .unwrap();
-    assert_eq!(1, form.inputs.len());
-    assert_eq!("query", form.submit.operation);
-    let query_op = workbench.operations.get("query").unwrap();
-    assert!(matches!(
-        query_op.mode,
-        crate::extension::manifest::ResourceWorkbenchOperationMode::Job
-    ));
-}
-
-#[test]
-fn manifest_parses_v2_layout_tree_tabs_and_status_bar() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    write_manifest(
-        tmp.path(),
-        r#"{
-            "schema_version": 1,
-            "id": "com.example.docker",
-            "name": "Docker",
-            "version": "0.1.0",
-            "engines": { "onetcli": ">=0.1.0" },
-            "permissions": ["spawn:./bin/provider"],
-            "runtime": {
-                "ipc": [{
-                    "id": "main",
-                    "entry": { "command": "./bin/provider" },
-                    "transport": { "kind": "local_socket" }
-                }]
-            },
-            "contributes": {
-                "connections": [{
-                    "id": "docker-local",
-                    "label": "Docker",
-                    "runtimeId": "main",
-                    "resourceType": "docker"
-                }],
-                "resourceWorkbenches": [{
-                    "schemaVersion": 3,
-                    "id": "docker",
-                    "title": "Docker",
-                    "connectionIds": ["docker-local"],
-                    "runtimeId": "main",
-                    "resourceType": "docker",
-                    "defaultPage": "container-inspect",
-                    "layout": {
-                        "left": {
-                            "width": 260,
-                            "source": {
-                                "kind": "tree",
-                                "roots": [{
-                                    "id": "containers",
-                                    "title": "Containers",
-                                    "pageId": "container-inspect",
-                                    "children": {
-                                        "operation": "listContainers",
-                                        "itemsPath": "/containers",
-                                        "keyPaths": ["/id"],
-                                        "labelPath": "/name",
-                                        "open": {
-                                            "pageId": "container-inspect",
-                                            "route": {"id": {"source": "selection", "path": "/id", "type": "string"}}
-                                        },
-                                        "children": {
-                                            "operation": "listContainers",
-                                            "itemsPath": "/mounts",
-                                            "keyPaths": ["/path"],
-                                            "labelPath": "/path",
-                                            "open": {
-                                                "pageId": "container-inspect",
-                                                "route": {"id": {"source": "parent", "path": "/id", "type": "string"}}
-                                            }
-                                        }
-                                    }
-                                }]
-                            }
-                        },
-                        "center": {
-                            "source": {
-                                "kind": "pages",
-                                "tabGroups": [{
-                                    "id": "container",
-                                    "tabs": [
-                                        {
-                                            "id": "inspect",
-                                            "title": "Inspect",
-                                            "pageId": "container-inspect",
-                                            "route": {"id": {"source": "route", "path": "/id", "type": "string"}}
-                                        },
-                                        {
-                                            "id": "exec",
-                                            "title": "Exec",
-                                            "pageId": "container-exec",
-                                            "route": {"id": {"source": "route", "path": "/id", "type": "string"}}
-                                        }
-                                    ]
-                                }]
-                            }
-                        },
-                        "bottom": {
-                            "source": {
-                                "kind": "status",
-                                "operation": "systemUsage",
-                                "items": [
-                                    {"path": "/engine", "label": "Engine", "format": "boolean-up"},
-                                    {"path": "/containers_running", "label": "Containers", "format": "pair", "otherPath": "/containers_total"},
-                                    {"path": "/disk_used_bytes", "label": "Disk", "format": "bytes"}
-                                ]
-                            }
-                        }
-                    },
-                    "operations": {
-                        "systemUsage": {
-                            "mode": "invoke",
-                            "method": "docker/system/usage",
-                            "requires": ["docker/system/usage"],
-                            "effect": "read"
-                        },
-                        "inspectContainer": {
-                            "mode": "invoke",
-                            "method": "docker/container/inspect",
-                            "requires": ["docker/container/inspect"],
-                            "effect": "read",
-                            "params": {
-                                "id": {"source": "route", "path": "/id", "type": "string"}
-                            }
-                        },
-                        "listContainers": {
-                            "mode": "invoke",
-                            "method": "docker/container/list",
-                            "requires": ["docker/container/list"],
-                            "effect": "read"
-                        }
-                    },
-                    "pages": [
-                        {
-                            "id": "container-inspect",
-                            "title": "Inspect",
-                            "renderer": {"kind": "native"},
-                            "route": {"id": {"type": "string", "required": true}},
-                            "load": {"operation": "inspectContainer"},
-                            "tabGroupId": "container",
-                            "stack": [{"kind": "viewer", "format": "json"}]
-                        },
-                        {
-                            "id": "container-exec",
-                            "title": "Container Exec",
-                            "renderer": {"kind": "native"},
-                            "route": {"id": {"type": "string", "required": true}},
-                            "tabGroupId": "container",
-                            "stack": [{
-                                "kind": "terminal",
-                                "command": "docker",
-                                "args": ["exec", "-it", "{{id}}", "sh"],
-                                "env": {"TERM": "xterm-256color"},
-                                "workingDir": "/"
-                            }]
-                        }
-                    ]
-                }]
-            }
-        }"#,
-    );
-
-    let manifest = load_from_dir(tmp.path()).unwrap();
-    let workbench = &manifest.contributes.resource_workbenches[0];
-
-    let layout = workbench.layout.as_ref().unwrap();
-    // left tree 根节点 + lazy children 声明。
-    let left = layout.left.as_ref().unwrap();
-    assert_eq!(Some(260), left.width);
-    match &left.source {
-        crate::extension::manifest::ResourceWorkbenchNavSource::Tree { roots } => {
-            assert_eq!(1, roots.len());
-            let children = roots[0].children.as_ref().unwrap();
-            // 旧 manifest 不写 `kind`:必须解析成 remote,行为与改动前逐字一致。
-            assert!(children.is_remote());
-            assert!(children.static_items().is_none());
-            assert!(children.items.is_empty());
-            assert_eq!(Some("listContainers"), children.operation.as_deref());
-            assert_eq!(Some("/containers"), children.items_path.as_deref());
-            let open = children.open.as_ref().unwrap();
-            assert_eq!("container-inspect", open.page_id);
-            // 二级 lazy children:route 用 parent 绑定源引用父行。
-            let nested = children.children.as_deref().unwrap();
-            assert_eq!(Some("/mounts"), nested.items_path.as_deref());
-            assert!(nested.children.is_none());
-            assert_eq!(
-                crate::extension::manifest::ResourceWorkbenchBindingSource::Parent,
-                nested.open.as_ref().unwrap().route["id"].source
-            );
-        }
-        other => panic!("expected tree nav, got {other:?}"),
-    }
-    // center tabGroups:组只声明一份,页面经 tabGroupId 引用。
-    let center = layout.center.as_ref().unwrap();
-    match &center.source {
-        crate::extension::manifest::ResourceWorkbenchCenterSource::Pages { tab_groups } => {
-            assert_eq!(1, tab_groups.len());
-            assert_eq!(2, tab_groups[0].tabs.len());
-            assert_eq!("container-exec", tab_groups[0].tabs[1].page_id);
-        }
-        other => panic!("expected pages center, got {other:?}"),
-    }
-    let inspect = workbench
-        .pages
-        .iter()
-        .find(|page| page.id == "container-inspect")
-        .unwrap();
-    assert_eq!(Some("container"), inspect.tab_group_id.as_deref());
-    // bottom status items 声明。
-    let bottom = layout.bottom.as_ref().unwrap();
-    match &bottom.source {
-        crate::extension::manifest::ResourceWorkbenchBottomSource::Status { operation, items } => {
-            assert_eq!("systemUsage", operation);
-            assert_eq!(3, items.len());
-            assert!(matches!(
-                items[1].format,
-                crate::extension::manifest::ResourceWorkbenchStatusFormat::Pair
-            ));
-            assert_eq!(Some("/containers_total"), items[1].other_path.as_deref());
-        }
-        other => panic!("expected status bottom, got {other:?}"),
-    }
-
-    let exec = workbench
-        .pages
-        .iter()
-        .find(|page| page.id == "container-exec")
-        .unwrap();
-    let terminal = exec
-        .stack
-        .iter()
-        .find_map(|primitive| match primitive {
-            ResourceWorkbenchPrimitive::Terminal(terminal) => Some(terminal),
-            _ => None,
-        })
-        .unwrap();
-    assert_eq!(Some("docker"), terminal.command.as_deref());
-    assert_eq!(terminal.args, ["exec", "-it", "{{id}}", "sh"]);
-    assert_eq!(
-        Some("xterm-256color"),
-        terminal.env.get("TERM").map(String::as_str)
-    );
-    assert_eq!(Some("/"), terminal.working_dir.as_deref());
-}
-
 /// 静态树子项:`kind: "static"` + `items`,展开即得、零请求。
 ///
 /// 同一个 `children` 结构体承载两套字段,靠 `kind` 判形。这里把两件事钉在一起:
 /// 静态形态能解析出来,且静态项各自持有自己的 `open`(集合级 `open` 只属于
 /// 远程形态)。写错形态由注册期拒绝,不在解析期静默兜底。
-#[test]
-fn manifest_parses_static_tree_children() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    write_manifest(
-        tmp.path(),
-        r#"{
-            "schema_version": 1,
-            "id": "com.example.indexstore",
-            "name": "Index Store",
-            "version": "1.0.0",
-            "engines": { "onetcli": ">=0.1.0" },
-            "permissions": ["spawn:./bin/provider"],
-            "runtime": {
-                "ipc": [{
-                    "id": "main",
-                    "entry": { "command": "./bin/provider" },
-                    "transport": { "kind": "local_socket" }
-                }]
-            },
-            "contributes": {
-                "connections": [{
-                    "id": "store",
-                    "label": "Store",
-                    "runtimeId": "main",
-                    "resourceType": "search"
-                }],
-                "resourceWorkbenches": [{
-                    "schemaVersion": 3,
-                    "id": "store",
-                    "title": "Store",
-                    "connectionIds": ["store"],
-                    "runtimeId": "main",
-                    "resourceType": "search",
-                    "defaultPage": "indices",
-                    "operations": {
-                        "listIndices": {
-                            "mode": "invoke",
-                            "method": "store/index/list",
-                            "requires": ["store/index/list"],
-                            "effect": "read"
-                        }
-                    },
-                    "pages": [{
-                        "id": "indices",
-                        "title": "Indices",
-                        "renderer": {"kind": "native"},
-                        "load": {"operation": "listIndices"},
-                        "stack": [{"kind": "viewer", "format": "json"}]
-                    }, {
-                        "id": "index-mapping",
-                        "title": "Mapping",
-                        "renderer": {"kind": "native"},
-                        "route": {"name": {"type": "string", "required": true}},
-                        "stack": [{"kind": "viewer", "format": "json"}]
-                    }, {
-                        "id": "index-settings",
-                        "title": "Settings",
-                        "renderer": {"kind": "native"},
-                        "route": {"name": {"type": "string", "required": true}},
-                        "stack": [{"kind": "viewer", "format": "json"}]
-                    }],
-                    "layout": {
-                        "left": {
-                            "width": 260,
-                            "source": {
-                                "kind": "tree",
-                                "roots": [{
-                                    "id": "indices",
-                                    "title": "Indices",
-                                    "pageId": "indices",
-                                    "children": {
-                                        "operation": "listIndices",
-                                        "itemsPath": "/indices",
-                                        "keyPaths": ["/name"],
-                                        "labelPath": "/name",
-                                        "open": {
-                                            "pageId": "indices",
-                                            "route": {"name": {"source": "selection", "path": "/name", "type": "string"}}
-                                        },
-                                        "children": {
-                                            "kind": "static",
-                                            "items": [
-                                                {
-                                                    "id": "mapping",
-                                                    "title": "Mapping",
-                                                    "open": {
-                                                        "pageId": "index-mapping",
-                                                        "route": {"name": {"source": "parent", "path": "/name", "type": "string"}}
-                                                    }
-                                                },
-                                                {
-                                                    "id": "settings",
-                                                    "title": "Settings",
-                                                    "open": {
-                                                        "pageId": "index-settings",
-                                                        "route": {"name": {"source": "parent", "path": "/name", "type": "string"}}
-                                                    }
-                                                }
-                                            ]
-                                        }
-                                    }
-                                }]
-                            }
-                        }
-                    }
-                }]
-            }
-        }"#,
-    );
-
-    let manifest = load_from_dir(tmp.path()).unwrap();
-    let workbench = &manifest.contributes.resource_workbenches[0];
-    let layout = workbench.layout.as_ref().unwrap();
-    match &layout.left.as_ref().unwrap().source {
-        crate::extension::manifest::ResourceWorkbenchNavSource::Tree { roots } => {
-            let children = roots[0].children.as_ref().unwrap();
-            assert!(children.is_remote());
-            let static_children = children.children.as_deref().unwrap();
-            assert!(!static_children.is_remote());
-            let items = static_children.static_items().unwrap();
-            assert_eq!(2, items.len());
-            assert_eq!("mapping", items[0].id);
-            assert_eq!("settings", items[1].id);
-            // 静态项各带自己的 open:同一层可以指向不同页面。
-            assert_eq!("index-mapping", items[0].open.page_id);
-            assert_eq!("index-settings", items[1].open.page_id);
-            assert_eq!(
-                crate::extension::manifest::ResourceWorkbenchBindingSource::Parent,
-                items[0].open.route["name"].source
-            );
-            assert!(items[0].children.is_none());
-        }
-        other => panic!("expected tree nav, got {other:?}"),
-    }
-}
-
 #[test]
 fn manifest_loads_remote_file_editor_contributions() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -863,42 +318,38 @@ fn manifest_parses_document_exporters() {
 }
 
 #[test]
-fn manifest_parses_typed_shell_view() {
+fn manifest_parses_typed_shell_app() {
     let tmp = tempfile::TempDir::new().unwrap();
     write_shell_entry(tmp.path(), "ui/explorer.js");
     write_shell_manifest(
         tmp.path(),
         serde_json::json!({
-            "id": "explorer",
             "title": "Resources",
             "entry": "ui/explorer.js",
-            "surface": "tab",
             "backends": { "main": "provider" },
-            "modules": ["context", "resource"]
+            "modules": ["resource"]
         }),
     );
 
     let manifest = load_from_dir(tmp.path()).unwrap();
-    let view = &manifest.contributes.shell_views[0];
+    let app = manifest.contributes.shell_app.expect("shellApp");
 
-    assert_eq!("explorer", view.id);
-    assert_eq!("ui/explorer.js", view.entry);
+    assert_eq!(app.title.as_deref(), Some("Resources"));
+    assert_eq!("ui/explorer.js", app.entry);
     assert_eq!(
         Some("provider"),
-        view.backends.get("main").map(String::as_str)
+        app.backends.get("main").map(String::as_str)
     );
 }
 
 #[test]
-fn manifest_rejects_shell_view_entry_escape() {
+fn manifest_rejects_shell_app_entry_escape() {
     let tmp = tempfile::TempDir::new().unwrap();
     write_shell_manifest(
         tmp.path(),
         serde_json::json!({
-            "id": "explorer",
             "title": "Resources",
             "entry": "../escape.js",
-            "surface": "tab",
             "backends": { "main": "provider" },
             "modules": ["resource"]
         }),
@@ -906,7 +357,7 @@ fn manifest_rejects_shell_view_entry_escape() {
 
     match load_from_dir(tmp.path()).unwrap_err() {
         ManifestError::InvalidField { field, reason } => {
-            assert_eq!("/contributes/shellViews/explorer/entry", field);
+            assert_eq!("/contributes/shellApp/entry", field);
             assert!(reason.contains("escape"), "{reason}");
         }
         other => panic!("expected invalid shell entry, got {other:?}"),
@@ -914,15 +365,84 @@ fn manifest_rejects_shell_view_entry_escape() {
 }
 
 #[test]
-fn manifest_rejects_missing_shell_view_entry() {
+fn shell_app_accepts_the_nsh_engine_gate() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_manifest(
+        tmp.path(),
+        r#"{
+            "schema_version": 1,
+            "id": "com.example.nsh",
+            "name": "Nsh",
+            "version": "0.1.0",
+            "engines": { "onetcli": ">=0.1.0", "nsh": "0.3.0" },
+            "api": { "shell": "1.0" },
+            "permissions": ["shell:exec", "spawn:./bin/provider"],
+            "runtime": {
+                "ipc": [{ "id": "provider", "entry": { "command": "./bin/provider" } }]
+            },
+            "contributes": {
+                "shellApp": {
+                    "title": "Overview",
+                    "entry": "ui/overview.js",
+                    "backends": { "main": "provider" },
+                    "modules": ["resource"]
+                }
+            }
+        }"#,
+    );
+    std::fs::create_dir_all(tmp.path().join("ui")).unwrap();
+    std::fs::write(tmp.path().join("ui/overview.js"), "export default {}").unwrap();
+
+    let manifest =
+        load_from_dir(tmp.path()).expect("声明 engines.nsh 的 shellApp 应能通过清单校验");
+    assert_eq!(manifest.engines.nsh, "0.3.0");
+}
+
+#[test]
+fn shell_app_requires_an_engine_gate() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_manifest(
+        tmp.path(),
+        r#"{
+            "schema_version": 1,
+            "id": "com.example.noengine",
+            "name": "No engine",
+            "version": "0.1.0",
+            "engines": { "onetcli": ">=0.1.0" },
+            "permissions": ["shell:exec", "spawn:./bin/provider"],
+            "runtime": {
+                "ipc": [{ "id": "provider", "entry": { "command": "./bin/provider" } }]
+            },
+            "contributes": {
+                "shellApp": {
+                    "title": "Overview",
+                    "entry": "ui/overview.js",
+                    "backends": { "main": "provider" },
+                    "modules": ["resource"]
+                }
+            }
+        }"#,
+    );
+    std::fs::create_dir_all(tmp.path().join("ui")).unwrap();
+    std::fs::write(tmp.path().join("ui/overview.js"), "export default {}").unwrap();
+
+    match load_from_dir(tmp.path()).unwrap_err() {
+        ManifestError::InvalidField { field, reason } => {
+            assert_eq!("/engines/nsh", field);
+            assert!(reason.contains("engines.nsh"), "{reason}");
+        }
+        other => panic!("expected engine gate error, got {other:?}"),
+    }
+}
+
+#[test]
+fn manifest_rejects_missing_shell_app_entry() {
     let tmp = tempfile::TempDir::new().unwrap();
     write_shell_manifest(
         tmp.path(),
         serde_json::json!({
-            "id": "explorer",
             "title": "Resources",
             "entry": "ui/missing.js",
-            "surface": "tab",
             "backends": { "main": "provider" },
             "modules": ["resource"]
         }),
@@ -934,16 +454,14 @@ fn manifest_rejects_missing_shell_view_entry() {
 }
 
 #[test]
-fn manifest_rejects_unknown_shell_view_field() {
+fn manifest_rejects_unknown_shell_app_field() {
     let tmp = tempfile::TempDir::new().unwrap();
     write_shell_entry(tmp.path(), "ui/explorer.js");
     write_shell_manifest(
         tmp.path(),
         serde_json::json!({
-            "id": "explorer",
             "title": "Resources",
             "entry": "ui/explorer.js",
-            "surface": "tab",
             "backends": { "main": "provider" },
             "modules": ["resource"],
             "unexpected": true
@@ -954,7 +472,7 @@ fn manifest_rejects_unknown_shell_view_field() {
         ManifestError::Parse { message, .. } => {
             assert!(message.contains("unknown field"), "{message}")
         }
-        other => panic!("expected shell view parse failure, got {other:?}"),
+        other => panic!("expected shell app parse failure, got {other:?}"),
     }
 }
 
@@ -965,10 +483,8 @@ fn manifest_rejects_removed_ui_host_module() {
     write_shell_manifest(
         tmp.path(),
         serde_json::json!({
-            "id": "explorer",
             "title": "Resources",
             "entry": "ui/explorer.js",
-            "surface": "tab",
             "modules": ["ui"]
         }),
     );
@@ -987,17 +503,23 @@ fn manifest_accepts_registered_shell_lifecycle_modules() {
     write_shell_manifest(
         tmp.path(),
         serde_json::json!({
-            "id": "explorer",
             "title": "Resources",
             "entry": "ui/explorer.js",
-            "surface": "tab",
             "backends": { "main": "provider" },
             "modules": ["job", "event", "blob", "runtime", "log"]
         }),
     );
 
     let manifest = load_from_dir(tmp.path()).expect("registered shell modules");
-    assert_eq!(5, manifest.contributes.shell_views[0].modules.len());
+    assert_eq!(
+        5,
+        manifest
+            .contributes
+            .shell_app
+            .expect("shellApp")
+            .modules
+            .len()
+    );
 }
 
 #[cfg(unix)]
@@ -1007,7 +529,7 @@ fn manifest_rejects_shell_entry_symlink_escape() {
 
     let tmp = tempfile::TempDir::new().unwrap();
     let outside = tempfile::TempDir::new().unwrap();
-    std::fs::write(outside.path().join("outside.js"), "export default class {}").unwrap();
+    std::fs::write(outside.path().join("outside.js"), "export default {}").unwrap();
     std::fs::create_dir_all(tmp.path().join("ui")).unwrap();
     symlink(
         outside.path().join("outside.js"),
@@ -1017,12 +539,10 @@ fn manifest_rejects_shell_entry_symlink_escape() {
     write_shell_manifest(
         tmp.path(),
         serde_json::json!({
-            "id": "explorer",
             "title": "Resources",
             "entry": "ui/explorer.js",
-            "surface": "tab",
             "backends": { "main": "provider" },
-            "modules": ["context", "resource"]
+            "modules": ["resource"]
         }),
     );
 
@@ -1185,7 +705,7 @@ fn write_shell_manifest(dir: &std::path::Path, view: serde_json::Value) {
         "id": "com.example.resources",
         "name": "Resources",
         "version": "0.1.0",
-        "engines": { "onetcli": ">=0.1.0", "gpui_shell": "0.6.4" },
+        "engines": { "onetcli": ">=0.1.0", "nsh": "0.3.0" },
         "api": { "shell": "1.0" },
         "permissions": ["shell:exec", "spawn:./bin/provider"],
         "runtime": {
@@ -1194,7 +714,7 @@ fn write_shell_manifest(dir: &std::path::Path, view: serde_json::Value) {
                 "entry": { "command": "./bin/provider" }
             }]
         },
-        "contributes": { "shellViews": [view] }
+        "contributes": { "shellApp": view }
     });
     write_manifest(dir, &serde_json::to_string_pretty(&manifest).unwrap());
 }
@@ -1247,16 +767,13 @@ fn reference_resource_plugin_manifests_are_parser_valid() {
 }
 
 #[test]
-fn manifest_accepts_toolbox_surface_with_log_only_modules() {
+fn manifest_accepts_shell_app_category_and_keywords() {
     let tmp = tempfile::TempDir::new().unwrap();
     write_shell_manifest(
         tmp.path(),
         serde_json::json!({
-            "id": "hosts-tool",
             "title": "Hosts Editor",
             "entry": "ui/tool.js",
-            "surface": "toolbox",
-            "singleton": true,
             "category": "system",
             "keywords": ["hosts", "dns"],
             "modules": ["log"]
@@ -1264,11 +781,10 @@ fn manifest_accepts_toolbox_surface_with_log_only_modules() {
     );
     write_shell_entry(tmp.path(), "ui/tool.js");
     let manifest = load_from_dir(tmp.path()).unwrap();
-    let view = &manifest.contributes.shell_views[0];
-    assert_eq!(view.surface, ShellSurface::Toolbox);
-    assert_eq!(view.category.as_deref(), Some("system"));
+    let app = manifest.contributes.shell_app.expect("shellApp");
+    assert_eq!(app.category.as_deref(), Some("system"));
     assert_eq!(
-        view.keywords.as_deref(),
+        app.keywords.as_deref(),
         Some(
             ["hosts", "dns"]
                 .iter()
@@ -1280,16 +796,13 @@ fn manifest_accepts_toolbox_surface_with_log_only_modules() {
 }
 
 #[test]
-fn manifest_accepts_toolbox_surface_with_backends_and_backend_modules() {
+fn manifest_accepts_shell_app_backends_and_backend_modules() {
     let tmp = tempfile::TempDir::new().unwrap();
     write_shell_manifest(
         tmp.path(),
         serde_json::json!({
-            "id": "docker-tool",
             "title": "Docker Cleaner",
             "entry": "ui/tool.js",
-            "surface": "toolbox",
-            "singleton": true,
             "category": "network",
             "backends": { "main": "provider" },
             "modules": ["resource", "job", "log"]
@@ -1297,22 +810,19 @@ fn manifest_accepts_toolbox_surface_with_backends_and_backend_modules() {
     );
     write_shell_entry(tmp.path(), "ui/tool.js");
     let manifest = load_from_dir(tmp.path()).unwrap();
-    let view = &manifest.contributes.shell_views[0];
-    assert_eq!(view.surface, ShellSurface::Toolbox);
-    assert_eq!(view.backends.len(), 1);
-    assert!(view.modules.contains(&ShellHostModule::Resource));
+    let app = manifest.contributes.shell_app.expect("shellApp");
+    assert_eq!(app.backends.len(), 1);
+    assert!(app.modules.contains(&ShellHostModule::Resource));
 }
 
 #[test]
-fn manifest_rejects_invalid_toolbox_category() {
+fn manifest_rejects_invalid_category() {
     let tmp = tempfile::TempDir::new().unwrap();
     write_shell_manifest(
         tmp.path(),
         serde_json::json!({
-            "id": "bad-tool",
             "title": "Bad Tool",
             "entry": "ui/tool.js",
-            "surface": "toolbox",
             "category": "Network Tools!"
         }),
     );

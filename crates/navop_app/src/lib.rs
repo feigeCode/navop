@@ -13,9 +13,12 @@ mod connection_sort;
 mod connection_type_menu;
 mod connection_visuals;
 mod credential_vault;
-#[cfg(feature = "shell-plugins")]
+#[cfg(feature = "nsh-host")]
 #[cfg(feature = "shell")]
 mod dev_extension_registry;
+#[cfg(feature = "nsh-host")]
+#[cfg(feature = "shell")]
+mod dev_host_ops;
 mod env_file;
 mod extension_update;
 mod file_association;
@@ -576,8 +579,10 @@ where
         universal_plugins::init(cx);
         // 资源工作台的 terminal 页面需要宿主提供可嵌入终端;未注册时
         // 工作台渲染「此构建不可用」而不是崩溃。
+        // dev 工程注册表与 `navop.dev` 操作集：nsh 宿主接管时也要装，
+        // 否则开发者工具页拿不到「加载本地工程」这套能力。
         #[cfg(feature = "shell")]
-        #[cfg(feature = "shell-plugins")]
+        #[cfg(any(feature = "nsh-host", feature = "nsh-host"))]
         dev_extension_registry::install_dev_host_ops(cx);
 
         let settings = AppSettings::current(cx);
@@ -1178,12 +1183,10 @@ mod native_driver_feature_contract_tests {
     fn standalone_products_only_enable_their_own_domain_feature() {
         let shell_manifest = include_str!("../../../apps/navop-shell/Cargo.toml");
         let data_manifest = include_str!("../../../apps/navop-data/Cargo.toml");
-        let shell_line =
-            app_shell_dependency_line(shell_manifest, "navop_app")
-                .expect("navop-shell depends on navop_app");
-        let data_line =
-            app_shell_dependency_line(data_manifest, "navop_app")
-                .expect("navop-data depends on navop_app");
+        let shell_line = app_shell_dependency_line(shell_manifest, "navop_app")
+            .expect("navop-shell depends on navop_app");
+        let data_line = app_shell_dependency_line(data_manifest, "navop_app")
+            .expect("navop-data depends on navop_app");
 
         assert!(shell_line.contains("default-features = false"));
         assert!(shell_line.contains("\"shell\""));
@@ -1344,5 +1347,59 @@ mod system_tray_lifecycle_contract_tests {
             tray < close_handler,
             "关闭 handler 要按托盘可用性分流，托盘必须先在主窗口上初始化"
         );
+    }
+}
+
+/// 弹窗文案必须真把产品名插进去：`%{app}` 才是 rust-i18n 的占位符语法，
+/// 写成 `{app}` 会原样露给用户（退出弹窗就漏过这一次），漏传参数则露出
+/// `%{app}` 源码片段。三个语言的文案都过一遍，避免只有某个语言漏改。
+#[cfg(test)]
+mod quit_prompt_localization_tests {
+    use rust_i18n::t;
+
+    const APP_NAME: &str = "Navop";
+    const LOCALES: [&str; 3] = ["en", "zh-CN", "zh-HK"];
+
+    fn assert_rendered(rendered: &str, key: &str) {
+        assert!(
+            !rendered.contains("%{") && !rendered.contains("{app}"),
+            "{key} 的占位符没有被替换：{rendered}"
+        );
+        assert!(
+            rendered.contains(APP_NAME),
+            "{key} 的文案里缺少产品名「{APP_NAME}」：{rendered}"
+        );
+    }
+
+    #[test]
+    fn quit_prompt_renders_the_product_name() {
+        for locale in LOCALES {
+            assert_rendered(
+                &t!("Quit.confirm_title_app", locale = locale, app = APP_NAME).to_string(),
+                "Quit.confirm_title_app",
+            );
+            assert_rendered(
+                &t!("Quit.confirm_message_app", locale = locale, app = APP_NAME).to_string(),
+                "Quit.confirm_message_app",
+            );
+            assert_rendered(
+                &t!("Quit.confirm_action_app", locale = locale, app = APP_NAME).to_string(),
+                "Quit.confirm_action_app",
+            );
+        }
+    }
+
+    #[test]
+    fn close_prompt_renders_the_product_name() {
+        for locale in LOCALES {
+            assert_rendered(
+                &t!("Tray.close_title_app", locale = locale, app = APP_NAME).to_string(),
+                "Tray.close_title_app",
+            );
+            assert_rendered(
+                &t!("Tray.close_message_app", locale = locale, app = APP_NAME).to_string(),
+                "Tray.close_message_app",
+            );
+        }
     }
 }

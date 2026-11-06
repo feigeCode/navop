@@ -1,5 +1,9 @@
 # 基于 gpui-shell 的通用扩展机制设计
 
+> **已废弃（2026-11-02）**：UI 平面已整体换成 nsh，本文只作追溯用。
+> 现行页面开发方式见 [`nsh-page-guide.zh-CN.md`](nsh-page-guide.zh-CN.md)，
+> 迁移方案与实施记录见 [`nsh-migration-plan.md`](nsh-migration-plan.md)。
+
 状态：设计稿  
 日期：2026-08-31  
 目标分支：`feat/universal-resource-plugins`

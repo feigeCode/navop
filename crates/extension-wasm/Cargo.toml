@@ -29,8 +29,13 @@ wasmtime = { version = "=36.0.14", default-features = false, features = [
 # 只用 p2（wasmtime_wasi::p2::add_to_linker_async），不需要 default 的 preview1/wiggle。
 wasmtime-wasi = { version = "=36.0.14", default-features = false }
 
+[features]
+# 文件型 fixture（fixtures/coverage-plugin/wasm/*.wat）是文本，加载时要 wat 解析器。
+# 生产页面只分发编译好的 .wasm，所以默认不开；本 crate 的测试与
+# `extension-runtime` 的契约测试通过 dev 依赖打开它。
+wat-fixtures = ["wasmtime/wat"]
+
 [dev-dependencies]
-# 只有测试读 .wat 文本（fixtures/*.wat），wat 解析器按需在 dev 依赖里打开。
 wasmtime = { version = "=36.0.14", features = ["wat"] }
 async-trait = { workspace = true }
 futures = { workspace = true }

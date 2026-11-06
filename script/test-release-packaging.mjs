@@ -352,24 +352,31 @@ test("the embedded webview is an opt-in feature on every platform", () => {
   assert.match(htmlCodeBlock, /HtmlPreview\.webview_unavailable/);
   assert.match(
     mainCargo,
-    /^default = \["wasm-components", "windows-native-rdp", "shell-plugins", "database", "shell"\]$/m,
+    /^default = \["wasm-components", "windows-native-rdp", "nsh-host", "database", "shell"\]$/m,
   );
   assert.doesNotMatch(mainCargo, /default = \[[^\]]*embedded-webview/);
   assert.match(
     mainCargo,
     /embedded-webview = \["ai_chat_view\/embedded-webview"\]/,
   );
+  // The extension UI plane is the nsh host. Its GPUI backend also ships a
+  // `webview` feature (wry / WebKitGTK), so the same opt-in rule applies: the
+  // host must ask for `default-features = false` and list the modules it wants.
   assert.match(
     mainCargo,
-    /shell-plugins = \["universal-plugins\/shell-plugins"\]/,
+    /nsh-host = \["universal-plugins\/nsh-host"\]/,
   );
   assert.match(
     universalPluginsCargo,
-    /gpui-shell = \{[^}]*optional = true[^}]*\}/,
+    /nsh-platform-gpui = \{[^}]*optional = true[^}]*\}/,
   );
   assert.match(
     universalPluginsCargo,
-    /shell-plugins = \["dep:gpui-shell"\]/,
+    /nsh-host = \[\s*"dep:nsh-platform-gpui",\s*"dep:nsh-core",\s*"dep:nsh-engine",\s*"dep:ai_chat_view",\s*"dep:one-ui",\s*"dep:serde",\s*\]/,
+  );
+  assert.match(
+    workspaceCargo,
+    /^nsh-platform-gpui = \{ git = [^}]*default-features = false, features = \["js"\] \}$/m,
   );
   assert.match(
     workspaceCargo,

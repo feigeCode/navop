@@ -2,20 +2,14 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ShellSurface {
-    /// 从扩展管理页或 shell 入口打开的普通 tab 视图。
-    #[default]
-    Tab,
-    /// 工具箱页面聚合的小工具卡片；与连接扩展(contributes.connections)
-    /// 区分：无连接表单、无 shellViewId 关联、面向单机小工具。
-    Toolbox,
-}
-
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum ShellHostModule {
+    /// ⚠️ ABI v2 已删除该模块：连接参数改从 `host.params` 读。
+    ///
+    /// 变体保留只为让老清单落到 `validate_modules` 的可读安装期错误（serde
+    /// 认这个拼写）；它不在 [`ShellHostModule::is_supported`] 里，因此永远
+    /// 派生不出 host 能力。
     Context,
     Resource,
     Job,
@@ -23,29 +17,43 @@ pub enum ShellHostModule {
     Blob,
     Log,
     Runtime,
-    /// Embedded resource-workbench pages: named operation dispatch only.
-    Workbench,
     /// 开发者工具专用（navop.dev host 模块）。
-    Dev,
-    /// 宿主界面语言（`navop.i18n` host 模块）。
     ///
-    /// 只给「宿主当前是什么语言」这一个事实与它的变更信号；**不含词条表** ——
-    /// 扩展文案不在宿主的 rust-i18n 目录里，词条由扩展自己带。
+    /// 只对内置扩展开放：`validate_modules` 在安装期按 id 白名单拒绝第三方声明。
+    Dev,
+    /// ⚠️ ABI v2 已删除该模块：界面语言由 nsh 原生提供。
+    ///
+    /// 变体保留只为让老清单报安装期错误，见 [`ShellHostModule::is_supported`]。
     #[serde(rename = "i18n")]
     I18n,
-    /// 宿主的组件主题（`navop.theme` host 模块）。
+    /// ⚠️ ABI v2 已删除该模块：组件主题由 nsh 原生提供。
     ///
-    /// `cx.theme()` 给的是 gpui-base 的 18 个语义色；宿主界面真正在用的
-    /// `list_active` / `table_hover` / `sidebar_*` 这些面只在这个模块里。
+    /// 变体保留只为让老清单报安装期错误，见 [`ShellHostModule::is_supported`]。
     #[serde(rename = "theme")]
     Theme,
 }
 
 impl ShellHostModule {
     pub fn requires_backend(self) -> bool {
+        matches!(self, Self::Resource | Self::Job | Self::Event | Self::Blob)
+    }
+
+    /// 宿主当前支持的模块集合（ABI v2，spec §7）。
+    ///
+    /// 唯一的支持面判定入口：`validate_modules` 用它做安装期拒绝，
+    /// `nsh_host::grant` 用它决定派生哪些 host 能力。`Context` / `I18n` /
+    /// `Theme` 是 v2 删掉的旧值——保留枚举变体只是为了报错清楚，三者一律
+    /// 返回 `false`，不会出现在任何一处分发里。
+    pub const fn is_supported(self) -> bool {
         matches!(
             self,
-            Self::Resource | Self::Job | Self::Event | Self::Blob | Self::Workbench
+            Self::Resource
+                | Self::Job
+                | Self::Event
+                | Self::Blob
+                | Self::Log
+                | Self::Runtime
+                | Self::Dev
         )
     }
 
@@ -65,7 +73,6 @@ impl ShellHostModule {
             Self::Blob => "navop.blob",
             Self::Log => "navop.log",
             Self::Runtime => "navop.runtime",
-            Self::Workbench => "navop.workbench",
             Self::Dev => "navop.dev",
             Self::I18n => "navop.i18n",
             Self::Theme => "navop.theme",
@@ -85,7 +92,6 @@ impl ShellHostModule {
         Self::Blob,
         Self::Log,
         Self::Runtime,
-        Self::Workbench,
         Self::Dev,
         Self::I18n,
         Self::Theme,
@@ -94,27 +100,24 @@ impl ShellHostModule {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct ShellViewContrib {
-    pub id: String,
-    pub title: String,
+pub struct ShellAppContrib {
+    /// tab 标题；缺省回退清单的 `name`。
+    #[serde(default)]
+    pub title: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
     pub icon: Option<String>,
+    /// nsh 程序的入口，相对于扩展根（通常是 `ui/dist/bundle.js`）。
     pub entry: String,
-    #[serde(default)]
-    pub surface: ShellSurface,
-    #[serde(default)]
-    pub singleton: bool,
+    /// 别名 → 本清单里 `runtime.ipc[].id`。
     #[serde(default)]
     pub backends: BTreeMap<String, String>,
     #[serde(default)]
     pub modules: Vec<ShellHostModule>,
-    /// toolbox surface 专用：卡片所属分类（如 `text`、`network`、`system`）。
-    /// `tab` surface 忽略该字段。
+    /// 工具箱卡片分组（没有连接的 app 才进工具箱）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
-    /// toolbox surface 专用：搜索关键词，补充 title/description 匹配。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keywords: Option<Vec<String>>,
 }
@@ -151,12 +154,45 @@ mod tests {
         }
     }
 
-    /// 两个新模块的定位：**脚本要给名字，但不许要后端**。
+    /// v2 的支持面就是这七个模块，且顺序稳定（`ALL` 的声明顺序）。
     ///
-    /// 「不许要后端」不是风格问题：`validate_modules` 对「声明了
-    /// `requires_backend` 的模块 + `backends` 为空」判安装期失败，而这两个模块
-    /// 的目标场景恰恰是纯界面页（只有文案和配色，没有任何连接）—— 误算进那一
-    /// 类，这类页面连装都装不上。
+    /// `context` / `i18n` / `theme` 是 v2 删除的旧值：枚举变体保留只为让老清单
+    /// 在 `validate_modules` 里落到一句可读的「已删除」错误，它们不能算支持面，
+    /// 也不能再派生 host 能力。
+    #[test]
+    fn only_the_v2_modules_are_supported() {
+        let supported = ShellHostModule::ALL
+            .iter()
+            .filter(|module| module.is_supported())
+            .map(|module| module.module_specifier())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            vec![
+                "navop.resource",
+                "navop.job",
+                "navop.event",
+                "navop.blob",
+                "navop.log",
+                "navop.runtime",
+                "navop.dev",
+            ],
+            supported
+        );
+        for legacy in [
+            ShellHostModule::Context,
+            ShellHostModule::I18n,
+            ShellHostModule::Theme,
+        ] {
+            assert!(
+                !legacy.is_supported(),
+                "{} 不应算 v2 支持面",
+                legacy.module_specifier()
+            );
+        }
+    }
+
+    /// i18n/theme 已从 v2 删除，但枚举契约保持不变：旧清单反序列化出来的值
+    /// 仍然不需要后端（报错路径不依赖这条，保留它是为了防止枚举语义漂移）。
     #[test]
     fn language_and_theme_are_declared_but_never_require_a_backend() {
         assert_eq!("navop.i18n", ShellHostModule::I18n.module_specifier());

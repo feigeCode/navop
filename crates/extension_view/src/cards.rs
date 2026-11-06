@@ -89,6 +89,8 @@ pub(crate) struct CardShell {
     pub name: String,
     pub version: String,
     pub description: String,
+    /// 语言包支持的语言；其它类型为空。
+    pub languages: Vec<String>,
     pub actions: Vec<Button>,
 }
 
@@ -129,6 +131,7 @@ fn build_card(shell: CardShell, cx: &App) -> gpui::Div {
         name,
         version,
         description,
+        languages,
         actions,
     } = shell;
     let fg = cx.theme().foreground;
@@ -158,6 +161,9 @@ fn build_card(shell: CardShell, cx: &App) -> gpui::Div {
                 .line_clamp(2)
                 .child(description),
         )
+        .when(!languages.is_empty(), |this| {
+            this.child(languages_line(&languages, muted))
+        })
         .child(card_footer(vec![tag], actions))
 }
 
@@ -211,6 +217,81 @@ fn card_header(
                 .with_size(IconSize::Small)
                 .text_color(muted.opacity(0.7)),
         )
+}
+
+/// 卡片上最多预览的语言数量，超出后追加“等 N 种语言”。
+const CARD_LANGUAGE_PREVIEW: usize = 6;
+
+/// 语言标识 → 展示名。未知标识做可读化兜底，保证新增语言无需改 UI 代码。
+pub(crate) fn language_display_name(language: &str) -> String {
+    match language {
+        "c" => "C".to_string(),
+        "cmake" => "CMake".to_string(),
+        "cpp" => "C++".to_string(),
+        "csharp" => "C#".to_string(),
+        "css" => "CSS".to_string(),
+        "ejs" => "EJS".to_string(),
+        "erb" => "ERB".to_string(),
+        "graphql" => "GraphQL".to_string(),
+        "html" => "HTML".to_string(),
+        "javascript" => "JavaScript".to_string(),
+        "jsdoc" => "JSDoc".to_string(),
+        "php" => "PHP".to_string(),
+        "proto" | "protobuf" => "Protobuf".to_string(),
+        "toml" => "TOML".to_string(),
+        "tsx" => "TSX".to_string(),
+        "typescript" => "TypeScript".to_string(),
+        "yaml" => "YAML".to_string(),
+        other => {
+            let mut chars = other.chars();
+            match chars.next() {
+                Some(first) => {
+                    let mut name = first.to_uppercase().to_string();
+                    name.push_str(&chars.as_str().replace('_', " "));
+                    name
+                }
+                None => String::new(),
+            }
+        }
+    }
+}
+
+/// 详情页用的完整语言列表。
+pub(crate) fn language_display_list(languages: &[String]) -> String {
+    languages
+        .iter()
+        .map(|language| language_display_name(language))
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+fn language_names_preview(languages: &[String]) -> String {
+    languages
+        .iter()
+        .take(CARD_LANGUAGE_PREVIEW)
+        .map(|language| language_display_name(language))
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+fn languages_line(languages: &[String], muted: gpui::Hsla) -> impl IntoElement {
+    let names = language_names_preview(languages);
+    let text = if languages.len() > CARD_LANGUAGE_PREVIEW {
+        t!(
+            "Extension.languages_supported_more",
+            names = names,
+            count = languages.len()
+        )
+        .to_string()
+    } else {
+        t!("Extension.languages_supported", names = names).to_string()
+    };
+    div()
+        .text_xs()
+        .line_height(rems(1.4))
+        .text_color(muted)
+        .line_clamp(1)
+        .child(text)
 }
 
 fn card_footer(tags: Vec<Tag>, actions: Vec<Button>) -> impl IntoElement {
@@ -285,4 +366,60 @@ pub(crate) fn marketplace_description_public(entry: &MarketplaceEntry) -> String
         "{description}\n{}",
         t!("Extension.requires_host", version = required)
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn common_language_ids_map_to_expected_display_names() {
+        for (id, expected) in [
+            ("c", "C"),
+            ("cpp", "C++"),
+            ("csharp", "C#"),
+            ("javascript", "JavaScript"),
+            ("typescript", "TypeScript"),
+            ("graphql", "GraphQL"),
+            ("php", "PHP"),
+            ("proto", "Protobuf"),
+            ("tsx", "TSX"),
+            ("markdown_inline", "Markdown inline"),
+        ] {
+            assert_eq!(expected, language_display_name(id), "language id {id}");
+        }
+    }
+
+    #[test]
+    fn unknown_language_ids_fall_back_to_readable_names() {
+        assert_eq!(
+            "Some new language",
+            language_display_name("some_new_language")
+        );
+        assert_eq!("", language_display_name(""));
+    }
+
+    #[test]
+    fn card_preview_shows_at_most_six_languages() {
+        let languages = [
+            "rust",
+            "typescript",
+            "python",
+            "go",
+            "csharp",
+            "cpp",
+            "javascript",
+            "java",
+        ]
+        .map(str::to_string);
+
+        assert_eq!(
+            "Rust · TypeScript · Python · Go · C# · C++",
+            language_names_preview(&languages)
+        );
+        assert_eq!(
+            "Rust · TypeScript · Python · Go · C# · C++ · JavaScript · Java",
+            language_display_list(&languages)
+        );
+    }
 }

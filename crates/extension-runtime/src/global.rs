@@ -198,11 +198,10 @@ fn install_html_preview_transform_provider(catalog: Arc<ExtensionRuntimeCatalog>
 mod tests {
     use super::*;
     use crate::extension::manifest::{
-        ApiVersions, ContributesManifest, Engines, RuntimeSection, ShellHostModule, ShellSurface,
-        ShellViewContrib,
+        ApiVersions, ContributesManifest, Engines, RuntimeSection, ShellAppContrib, ShellHostModule,
     };
 
-    fn development_manifest(id: &str, root: &str, view_id: &str) -> Manifest {
+    fn development_manifest(id: &str, root: &str) -> Manifest {
         Manifest {
             schema_version: 1,
             id: id.into(),
@@ -219,26 +218,23 @@ mod tests {
             keywords: Vec::new(),
             engines: Engines {
                 onetcli: ">=0.1.0".into(),
-                gpui_shell: "0.6.4".into(),
+                nsh: "0.3.0".into(),
             },
             api: ApiVersions::default(),
             activation: Vec::new(),
             permissions: vec!["shell:exec".into()],
             runtime: RuntimeSection::default(),
             contributes: ContributesManifest {
-                shell_views: vec![ShellViewContrib {
-                    id: view_id.into(),
-                    title: view_id.into(),
+                shell_app: Some(ShellAppContrib {
+                    title: Some(id.into()),
                     description: None,
                     icon: None,
                     entry: "ui/tool.js".into(),
-                    surface: ShellSurface::Toolbox,
-                    singleton: true,
                     backends: Default::default(),
                     modules: vec![ShellHostModule::Log],
                     category: Some("test".into()),
                     keywords: None,
-                }],
+                }),
                 ..Default::default()
             },
             manifest_dir: root.into(),
@@ -246,21 +242,25 @@ mod tests {
     }
 
     #[test]
-    fn invalid_development_manifest_does_not_remove_valid_views() {
-        let valid = development_manifest("dev.valid", "/tmp/valid", "tool");
-        let mut invalid = development_manifest("dev.invalid", "/tmp/invalid", "tool");
-        // `shellView.category` is optional (only validated when present), so make
-        // the development manifest genuinely invalid instead: a toolbox view with
-        // an undeclared IPC runtime backend is rejected by `validate_backends`.
-        invalid.contributes.shell_views[0]
+    fn invalid_development_manifest_does_not_remove_valid_apps() {
+        let valid = development_manifest("dev.valid", "/tmp/valid");
+        let mut invalid = development_manifest("dev.invalid", "/tmp/invalid");
+        // `shellApp.category` is optional (only validated when present), so make
+        // the development manifest genuinely invalid instead: an app with an
+        // undeclared IPC runtime backend is rejected by `validate_backends`.
+        invalid
+            .contributes
+            .shell_app
+            .as_mut()
+            .expect("shellApp")
             .backends
             .insert("search".into(), "missing".into());
 
         let (catalog, accepted, report) =
             build_catalog_with_development(Vec::new(), &[valid, invalid]).unwrap();
 
-        assert!(catalog.shell_view("dev.valid", "tool").is_some());
-        assert!(catalog.shell_view("dev.invalid", "tool").is_none());
+        assert!(catalog.shell_app("dev.valid").is_some());
+        assert!(catalog.shell_app("dev.invalid").is_none());
         assert_eq!(accepted.len(), 1);
         assert_eq!(report.failures.len(), 1);
         assert_eq!(
@@ -270,16 +270,16 @@ mod tests {
     }
 
     #[test]
-    fn development_views_are_rebuilt_with_installed_views() {
-        let installed = development_manifest("installed.tools", "/tmp/installed", "installed");
-        let development = development_manifest("dev.tools", "/tmp/dev", "dev");
+    fn development_apps_are_rebuilt_with_installed_apps() {
+        let installed = development_manifest("installed.tools", "/tmp/installed");
+        let development = development_manifest("dev.tools", "/tmp/dev");
 
         let (catalog, accepted, report) =
             build_catalog_with_development(vec![installed], &[development]).unwrap();
 
         assert!(report.failures.is_empty());
         assert_eq!(accepted.len(), 1);
-        assert!(catalog.shell_view("installed.tools", "installed").is_some());
-        assert!(catalog.shell_view("dev.tools", "dev").is_some());
+        assert!(catalog.shell_app("installed.tools").is_some());
+        assert!(catalog.shell_app("dev.tools").is_some());
     }
 }

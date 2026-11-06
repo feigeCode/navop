@@ -33,6 +33,8 @@ tracing = { workspace = true }
 tree-sitter = { version = "0.26", features = ["wasm"] }
 
 [dev-dependencies]
+# 契约测试直接加载 extension-wasm 的文本 fixture（*.wat），需要打开 wat 解析器。
+extension-wasm = { workspace = true, features = ["wat-fixtures"] }
 smol = { workspace = true }
 tempfile = "3"
 

@@ -6,8 +6,8 @@ use crate::persistent_connection_sidebar::{
 };
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext, Context, Entity, ExternalPaths, InteractiveElement, IntoElement, KeyBinding,
-    Keystroke, ParentElement, Render, Styled, Task, Window, actions, div,
+    AnyWindowHandle, App, AppContext, Context, Entity, ExternalPaths, InteractiveElement,
+    IntoElement, KeyBinding, Keystroke, ParentElement, Render, Styled, Task, Window, actions, div,
 };
 use gpui_component::{
     WindowExt,
@@ -64,6 +64,23 @@ pub struct GlobalHomePage {
 }
 
 impl gpui::Global for GlobalHomePage {}
+
+/// 新建连接向导的「更多连接 / 安装扩展」入口：切到扩展管理 tab。
+struct NavopExtensionsHost;
+
+impl app_kit::ExtensionsHost for NavopExtensionsHost {
+    fn open_extensions(&self, parent: AnyWindowHandle, _window: &mut Window, cx: &mut App) -> bool {
+        let Some(home) = cx.try_global::<GlobalHomePage>() else {
+            return false;
+        };
+        let home = home.home_page.clone();
+        parent
+            .update(cx, |_, window, cx| {
+                home.update(cx, |home, cx| home.add_extensions_tab(window, cx));
+            })
+            .is_ok()
+    }
+}
 
 #[derive(Clone)]
 pub struct GlobalNavopApp {
@@ -813,6 +830,8 @@ pub fn init(cx: &mut App) -> anyhow::Result<()> {
     one_core::init(cx)?;
     #[cfg(feature = "shell")]
     app_kit::set_shell_host(Arc::new(crate::home_tab::domain_host::NavopShellHost));
+    // 新建连接向导的「更多连接 / 安装扩展」入口由应用壳实现，`app_kit` 不感知扩展运行时。
+    app_kit::set_extensions_host(Arc::new(NavopExtensionsHost));
     ai_chat_view::init(cx);
     mcp_approval::init(cx);
     crate::ai_chat_acp::init(cx);
@@ -1570,6 +1589,8 @@ impl NavopApp {
         let app_for_minimize = cx.entity().downgrade();
         let app_for_quit = cx.entity().downgrade();
         let app_for_close = cx.entity().downgrade();
+        // 弹窗标题带产品名：三个产品同机运行时，光看窗口分不清是哪个应用。
+        let app_name = app_kit::display_name();
 
         window.open_dialog(cx, move |dialog, _window, _cx| {
             let remember_for_minimize = remember.clone();
@@ -1602,8 +1623,8 @@ impl NavopApp {
                 });
 
             dialog
-                .title(t!("Tray.close_title").to_string())
-                .child(t!("Tray.close_message").to_string())
+                .title(t!("Tray.close_title_app", app = app_name).to_string())
+                .child(t!("Tray.close_message_app", app = app_name).to_string())
                 .child(remember.clone())
                 .footer(
                     DialogFooter::new()
@@ -1693,9 +1714,7 @@ impl NavopApp {
             let app_for_ok = app_for_ok.clone();
             let app_for_cancel = app_for_cancel.clone();
             let app_for_close = app_for_close.clone();
-            let app_name = app_kit::identity()
-                .map(|identity| identity.display_name)
-                .unwrap_or("Navop");
+            let app_name = app_kit::display_name();
             dialog
                 .title(t!("Quit.confirm_title_app", app = app_name).to_string())
                 .child(t!("Quit.confirm_message_app", app = app_name).to_string())

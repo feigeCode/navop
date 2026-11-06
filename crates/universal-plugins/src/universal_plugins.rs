@@ -175,18 +175,14 @@ impl UniversalPluginService {
         self.manager.universal_plugin_client(runtime_id)
     }
 
-    // 以下方法仅 `shell-plugins` feature 路径下被调用;关闭 feature 时是合法的休眠代码。
-    #[cfg_attr(not(feature = "shell-plugins"), allow(dead_code))]
-    pub(crate) fn shell_view(
+    // 以下方法仅 `nsh-host` feature 路径下被调用;关闭 feature 时是合法的休眠代码。
+    #[cfg_attr(not(feature = "nsh-host"), allow(dead_code))]
+    pub(crate) fn shell_app(
         &self,
         extension_id: &str,
-        view_id: &str,
-    ) -> Option<extension_runtime::RegisteredShellViewContribution> {
+    ) -> Option<extension_runtime::RegisteredShellAppContribution> {
         self.sync_catalog();
-        self.catalog_source
-            .get()?
-            .shell_view(extension_id, view_id)
-            .cloned()
+        self.catalog_source.get()?.shell_app(extension_id).cloned()
     }
 
     /// 查询已注册的扩展连接贡献(不依赖 Shell feature)。
@@ -203,19 +199,7 @@ impl UniversalPluginService {
     }
 
     /// 按 (extension_id, connection contribution id) 查询绑定的原生工作台。
-    pub fn resource_workbench_for_connection(
-        &self,
-        extension_id: &str,
-        contribution_id: &str,
-    ) -> Option<extension_runtime::RegisteredResourceWorkbenchContribution> {
-        self.sync_catalog();
-        self.catalog_source
-            .get()?
-            .resource_workbench_for_connection(extension_id, contribution_id)
-            .cloned()
-    }
-
-    #[cfg_attr(not(feature = "shell-plugins"), allow(dead_code))]
+    #[cfg_attr(not(feature = "nsh-host"), allow(dead_code))]
     pub(crate) async fn deactivate_extension(&self, extension_id: &str) {
         let _activation_guard = self.activation_lock.lock().await;
         self.sync_catalog();
@@ -292,14 +276,14 @@ impl UniversalPluginService {
         opened.map(|_| ()).map_err(Into::into)
     }
 
-    #[cfg_attr(not(feature = "shell-plugins"), allow(dead_code))]
+    #[cfg_attr(not(feature = "nsh-host"), allow(dead_code))]
     pub(crate) fn begin_extension_retire(&self, extension_id: &str) {
         if let Ok(mut retiring) = self.retiring_extensions.write() {
             retiring.insert(extension_id.to_string());
         }
     }
 
-    #[cfg_attr(not(feature = "shell-plugins"), allow(dead_code))]
+    #[cfg_attr(not(feature = "nsh-host"), allow(dead_code))]
     pub(crate) fn finish_extension_retire(&self, extension_id: &str) {
         if let Ok(mut retiring) = self.retiring_extensions.write() {
             retiring.remove(extension_id);
@@ -354,6 +338,13 @@ impl UniversalPluginService {
         let catalog = catalog.unwrap_or_else(|| Arc::new(ExtensionRuntimeCatalog::empty()));
         self.manager.replace_catalog(catalog);
         self.catalog_revision.store(revision, Ordering::Release);
+    }
+
+    /// 当前 catalog 快照（extension_tools 注册表构建用）。
+    pub(crate) fn catalog_snapshot(&self) -> Arc<extension_runtime::ExtensionRuntimeCatalog> {
+        self.sync_catalog();
+        let (_, catalog) = self.catalog_source.snapshot();
+        catalog.unwrap_or_else(|| Arc::new(ExtensionRuntimeCatalog::empty()))
     }
 
     /// Gracefully stops active runtimes and then stops the monitor task.
@@ -611,20 +602,12 @@ pub fn init(cx: &mut gpui::App) {
         .expect("universal plugin service must have exactly one application owner");
     let startup_service = service.clone();
     let quit_service = service.clone();
-    #[cfg(feature = "shell-plugins")]
-    {
-        gpui_shell::init_embedded(cx);
-        match crate::shell_plugin_host::ShellPluginHost::new(service.clone(), cx) {
-            Ok(host) => {
-                #[cfg(not(test))]
-                host.start_monitor_bridge(cx);
-                extension_view::register_shell_view_opener(std::rc::Rc::new(host.clone()), cx);
-                crate::shell_page_host::install_custom_page_host(host.clone(), cx);
-                cx.set_global(host);
-            }
-            Err(error) => tracing::warn!(%error, "failed to initialize gpui-shell host"),
-        }
-    }
+    // 扩展页面的 UI 平面就是 nsh：页面以 nsh 程序运行、画在 navop 的
+    // GPUI 窗口里。这里装的是宿主本体（信任库、tab 登记、主线程桥）与
+    // 两个注入点：`ShellViewOpener`（打开页面）和 `CustomPageHost`（把页面
+    // 嵌进资源工作台）。
+    #[cfg(feature = "nsh-host")]
+    crate::nsh_host::init(service.clone(), cx);
 
     // RuntimeMonitor::start must be called from the Tokio runtime. Starting it
     // through a spawned task also keeps startup off the GPUI foreground thread.
@@ -647,6 +630,16 @@ pub fn init(cx: &mut gpui::App) {
         }
     })
     .detach();
+}
+
+/// 只注册 global、不起 monitor / 不挂 quit 钩子的 [`init`]。
+///
+/// 给 `#[gpui::test]` 用：真实 monitor 完成时会从 Tokio worker 线程唤醒
+/// GPUI background executor，让确定性测试调度器误报 non-deterministic。
+/// 注册表构建（extension_tools 等）只读 catalog 快照，不需要 monitor。
+pub fn init_for_tests(cx: &mut gpui::App) {
+    register_application_owner(cx)
+        .expect("universal plugin service must have exactly one application owner");
 }
 
 pub fn spawn_shutdown(

@@ -8,6 +8,7 @@ use one_core::settings::UpdateMirror;
 
 use crate::extension::ExtensionKind;
 use crate::extension::manifest::current_host_version;
+use crate::extension::manifest::versioning::host_version_satisfies;
 use crate::mirror::{cnb_release_download_url, extension_mirror, ordered_mirror_candidates};
 
 const EXTENSION_RELEASE_MANIFEST_FILE: &str = "extension-manifest.json";
@@ -51,6 +52,9 @@ pub struct MarketplaceEntry {
     pub description: String,
     #[serde(default)]
     pub file_extensions: Vec<String>,
+    /// 语言包支持的语言标识；旧目录条目缺省为空。
+    #[serde(default)]
+    pub languages: Vec<String>,
     #[serde(default)]
     pub engines: MarketplaceEngines,
     #[serde(default)]
@@ -143,6 +147,7 @@ impl MarketplaceEntry {
             release_tag: String::new(),
             description: description.into(),
             file_extensions,
+            languages: Vec::new(),
             engines: MarketplaceEngines::default(),
             manifest: String::new(),
             artifacts: HashMap::new(),
@@ -178,7 +183,7 @@ impl MarketplaceEntry {
                 error
             )
         })?;
-        if !requirement.matches(current) {
+        if !host_version_satisfies(&requirement, current) {
             anyhow::bail!(
                 "插件 {} 要求 Navop {}, 当前 Navop 版本 {}, 请先升级 Navop 或安装兼容版本",
                 self.name,
@@ -187,6 +192,11 @@ impl MarketplaceEntry {
             );
         }
         Ok(())
+    }
+
+    pub(crate) fn with_languages(mut self, languages: Vec<String>) -> Self {
+        self.languages = languages;
+        self
     }
 
     pub(crate) fn with_manifest_urls(mut self, manifest_urls: Vec<String>) -> Self {
@@ -457,6 +467,7 @@ mod tests {
             release_tag: "duckdb-v1.0.0".to_string(),
             description: String::new(),
             file_extensions: Vec::new(),
+            languages: Vec::new(),
             engines: Default::default(),
             manifest: String::new(),
             screenshots: Vec::new(),
@@ -504,6 +515,7 @@ mod tests {
             release_tag: "duckdb-v1.0.0".to_string(),
             description: String::new(),
             file_extensions: Vec::new(),
+            languages: Vec::new(),
             engines: Default::default(),
             manifest: String::new(),
             screenshots: Vec::new(),
@@ -568,7 +580,14 @@ mod tests {
         entry
             .check_host_compatibility_with(&Version::parse("0.10.1").unwrap())
             .unwrap();
-        for incompatible in ["0.9.9", "0.10.1-alpha.1"] {
+        // 预发布宿主（beta / dev 构建）回退到 release 三元组再比一次，
+        // 否则 `0.23.0-beta.6` 会因为 SemVer 规则被 `>=0.10.0` 拒绝。
+        for compatible in ["0.10.1-alpha.1", "0.23.0-beta.6"] {
+            entry
+                .check_host_compatibility_with(&Version::parse(compatible).unwrap())
+                .unwrap();
+        }
+        for incompatible in ["0.9.9", "0.9.9-alpha.1"] {
             let error = entry
                 .check_host_compatibility_with(&Version::parse(incompatible).unwrap())
                 .unwrap_err();

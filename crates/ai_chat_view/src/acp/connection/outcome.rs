@@ -24,10 +24,12 @@ pub(super) fn finish_connect(
                 build_pending(shared, spawned, connection, methods),
             )))
         }
-        Ok(Ok(Err(error))) => abort_with_error(
+        // 文案里没有 `%{error}` 占位符，多传的 `error = …` 会被 rust-i18n 静默忽略；
+        // 详情要显示得走 `AcpError::with_detail`，别留个参数假装已经展示了。
+        Ok(Ok(Err(_))) => abort_with_error(
             shared,
             spawned,
-            t!("AgentUi.connect_acp_failed", error = error).to_string(),
+            t!("AgentUi.connect_acp_failed").to_string(),
         ),
         Ok(Err(_)) => abort_with_error(shared, spawned, t!("AgentUi.acp_not_ready").to_string()),
         Err(_) => abort_with_error(

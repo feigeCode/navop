@@ -7,8 +7,10 @@ use crate::{ExtensionKind, ExtensionManagerMode, ExtensionSummary, MarketplaceEn
 const MANIFEST_JSON_SUFFIX: &str = ".json";
 const INSTALL_PROGRESS_VALUE: f32 = 28.0;
 /// 浏览态分区顺序，与过滤 chips 一致。
-pub(crate) const EXTENSION_KINDS: [ExtensionKind; 5] = [
-    ExtensionKind::Language,
+///
+/// 独立语言扩展已不再作为可管理条目：语法解析器统一随语言包安装，
+/// 因此这里不包含 `ExtensionKind::Language`。
+pub(crate) const EXTENSION_KINDS: [ExtensionKind; 4] = [
     ExtensionKind::LanguageBundle,
     ExtensionKind::DatabaseDriver,
     ExtensionKind::RemoteDesktopProvider,
@@ -295,7 +297,7 @@ mod tests {
     }
 
     fn marketplace_entry(id: &str) -> MarketplaceEntry {
-        marketplace_entry_with_kind(id, ExtensionKind::Language)
+        marketplace_entry_with_kind(id, ExtensionKind::LanguageBundle)
     }
 
     fn marketplace_entry_with_kind(id: &str, kind: ExtensionKind) -> MarketplaceEntry {
@@ -306,6 +308,7 @@ mod tests {
             version: "1.0.0".to_string(),
             description: String::new(),
             file_extensions: Vec::new(),
+            languages: Vec::new(),
             required_host_version: None,
             host_compatible: true,
             asset_url: format!("https://example.test/{id}.tar.gz"),
@@ -321,7 +324,7 @@ mod tests {
     fn browse_mode_groups_marketplace_by_kind_in_stable_order() {
         let filtered = vec![
             marketplace_entry_with_kind("pg", ExtensionKind::DatabaseDriver),
-            marketplace_entry_with_kind("rust", ExtensionKind::Language),
+            marketplace_entry_with_kind("tree-sitter-languages", ExtensionKind::LanguageBundle),
             marketplace_entry_with_kind("mysql", ExtensionKind::DatabaseDriver),
         ];
 
@@ -329,7 +332,7 @@ mod tests {
 
         assert_eq!(
             [
-                Some(ExtensionKind::Language),
+                Some(ExtensionKind::LanguageBundle),
                 Some(ExtensionKind::DatabaseDriver)
             ],
             sections
@@ -343,15 +346,35 @@ mod tests {
     }
 
     #[test]
-    fn active_filter_flattens_marketplace_into_single_section() {
+    fn browse_mode_does_not_render_legacy_language_sections() {
         let filtered = vec![
             marketplace_entry_with_kind("rust", ExtensionKind::Language),
+            marketplace_entry_with_kind("tree-sitter-languages", ExtensionKind::LanguageBundle),
+        ];
+
+        let sections = marketplace_sections(filtered, None, "", false);
+
+        assert_eq!(
+            [Some(ExtensionKind::LanguageBundle)],
+            sections
+                .iter()
+                .map(|section| section.kind)
+                .collect::<Vec<_>>()
+                .as_slice()
+        );
+    }
+
+    #[test]
+    fn active_filter_flattens_marketplace_into_single_section() {
+        let filtered = vec![
+            marketplace_entry_with_kind("tree-sitter-languages", ExtensionKind::LanguageBundle),
             marketplace_entry_with_kind("pg", ExtensionKind::DatabaseDriver),
         ];
 
         let by_query = marketplace_sections(filtered.clone(), None, "ru", false);
         let by_updates = marketplace_sections(filtered.clone(), None, "", true);
-        let by_kind = marketplace_sections(filtered, Some(ExtensionKind::Language), "", false);
+        let by_kind =
+            marketplace_sections(filtered, Some(ExtensionKind::LanguageBundle), "", false);
 
         assert_eq!(1, by_query.len());
         assert_eq!(None, by_query[0].kind);
@@ -359,7 +382,7 @@ mod tests {
         assert_eq!(1, by_updates.len());
         assert_eq!(None, by_updates[0].kind);
         assert_eq!(1, by_kind.len());
-        assert_eq!(Some(ExtensionKind::Language), by_kind[0].kind);
+        assert_eq!(Some(ExtensionKind::LanguageBundle), by_kind[0].kind);
     }
 
     #[test]
