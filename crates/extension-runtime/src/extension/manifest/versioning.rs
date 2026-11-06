@@ -152,7 +152,7 @@ pub fn check_compatibility(
             reason: e.to_string(),
         }
     })?;
-    if !req.matches(host_version) {
+    if !host_version_satisfies(&req, host_version) {
         return Err(CompatibilityError::HostVersionMismatch {
             required: manifest.engines.onetcli.clone(),
             current: host_version.to_string(),
@@ -186,6 +186,33 @@ pub fn check_compatibility(
     Ok(())
 }
 
+/// 宿主版本是否满足扩展声明的 `engines.onetcli` 范围。
+///
+/// SemVer 规定带预发布标识的版本不满足不含预发布标识的范围
+/// （`0.23.0-beta.6` 不被 `>=0.16.1` 匹配），但测试通道和本地开发构建同样需要
+/// 加载已经发布的扩展：宿主是预发布版本时退回到 release 三元组再比较一次。
+///
+/// 范围自身带预发布标识时不做回退，保持 SemVer 的严格语义，避免把
+/// `>=0.23.0-beta.6` 这类范围放宽成 `>=0.23.0`。数据库驱动侧
+/// （`db::ipc::registry::host_version_satisfies`）是同一套规则。
+pub fn host_version_satisfies(requirement: &VersionReq, host_version: &Version) -> bool {
+    if requirement.matches(host_version) {
+        return true;
+    }
+    if host_version.pre.is_empty() || requirement_has_prerelease(requirement) {
+        return false;
+    }
+    let release_only = Version::new(host_version.major, host_version.minor, host_version.patch);
+    requirement.matches(&release_only)
+}
+
+fn requirement_has_prerelease(requirement: &VersionReq) -> bool {
+    requirement
+        .comparators
+        .iter()
+        .any(|comparator| !comparator.pre.is_empty())
+}
+
 static HOST_VERSION_OVERRIDE: OnceLock<RwLock<Option<Version>>> = OnceLock::new();
 
 pub fn set_current_host_version(version: &str) -> Result<(), semver::Error> {
@@ -213,7 +240,82 @@ fn host_version_override() -> &'static RwLock<Option<Version>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ApiVersion, CompatibilityError, HostApiVersions};
+    use semver::{Version, VersionReq};
+
+    use super::{ApiVersion, CompatibilityError, HostApiVersions, host_version_satisfies};
+    use crate::extension::manifest::load_and_check;
+
+    fn version(text: &str) -> Version {
+        Version::parse(text).expect("valid semver")
+    }
+
+    fn req(text: &str) -> VersionReq {
+        VersionReq::parse(text).expect("valid version requirement")
+    }
+
+    #[test]
+    fn prerelease_host_satisfies_release_only_requirement() {
+        assert!(host_version_satisfies(
+            &req(">=0.16.1"),
+            &version("0.23.0-beta.6")
+        ));
+        assert!(host_version_satisfies(
+            &req(">=0.7.0"),
+            &version("0.23.0-beta.6")
+        ));
+        assert!(!host_version_satisfies(
+            &req(">=0.24.0"),
+            &version("0.23.0-beta.6")
+        ));
+    }
+
+    #[test]
+    fn stable_host_keeps_strict_semver_semantics() {
+        assert!(host_version_satisfies(&req(">=0.16.1"), &version("0.23.0")));
+        assert!(!host_version_satisfies(
+            &req(">=0.24.0"),
+            &version("0.23.0")
+        ));
+    }
+
+    #[test]
+    fn prerelease_requirement_is_not_relaxed() {
+        // 范围自己带预发布标识时按 SemVer 严格匹配：beta.6 不满足 beta.7，
+        // 但稳定的 0.23.0 满足 `>=0.23.0-beta.7`。
+        assert!(!host_version_satisfies(
+            &req(">=0.23.0-beta.7"),
+            &version("0.23.0-beta.6")
+        ));
+        assert!(host_version_satisfies(
+            &req(">=0.23.0-beta.7"),
+            &version("0.23.0")
+        ));
+    }
+
+    #[test]
+    fn prerelease_host_loads_installed_composite_manifest() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        std::fs::write(
+            dir.path().join("extension.json"),
+            r#"{
+                "schema_version": 1,
+                "id": "com.navop.devtools",
+                "name": "开发者工具",
+                "version": "0.1.0",
+                "engines": { "onetcli": ">=0.16.1" },
+                "api": { "extension": "1.0", "shell": "1.0" },
+                "contributes": {}
+            }"#,
+        )
+        .expect("write manifest");
+
+        let loaded = load_and_check(
+            dir.path(),
+            &version("0.23.0-beta.6"),
+            &HostApiVersions::current(),
+        );
+        assert!(loaded.is_ok(), "预发布宿主必须能加载已发布扩展: {loaded:?}");
+    }
 
     #[test]
     fn compatibility_errors_use_navop_product_name() {
