@@ -216,28 +216,36 @@ impl NshHost {
         let tab_container = cx
             .global::<one_core::tab_container::GlobalTabContainer>()
             .primary_pane();
-        tab_container.update(cx, |tabs, cx| {
-            tabs.activate_or_add_tab_lazy_with_mode(
-                tab_id.clone(),
-                mode,
-                move |_window, cx| {
-                    let registry_host = host.clone();
-                    let tab = NshTab::open_connection(
-                        app.clone(),
-                        route.clone(),
-                        host.service.clone(),
-                        host.trust().clone(),
-                        host.dispatcher(),
-                        launch,
-                        title,
-                        cx,
-                    );
-                    registry_host.track(&extension_id, tab.downgrade());
-                    one_core::tab_container::TabItem::new(tab_id, "extension-connection", tab)
-                },
-                window,
-                cx,
-            );
+        // 激活新 tab 前，`TabContainer` 会同步对当前内容调用 `on_deactivate`，而
+        // `TabContentView for Entity<T>` 是用 `Entity::update` 进入那个实体的。
+        // 调用方往往正处在该实体的 update 里（首页连接卡片、连接侧栏、公共 MCP
+        // 的 `connection.open` 都是 `home_page.update(...)`），同步挂 tab 会重入
+        // 同一个实体触发 double lease panic（复合扩展连接因此闪退）。把挂载动作
+        // 延后到本轮 effect flush，那时实体已离开调用栈。
+        window.defer(cx, move |window, cx| {
+            tab_container.update(cx, |tabs, cx| {
+                tabs.activate_or_add_tab_lazy_with_mode(
+                    tab_id.clone(),
+                    mode,
+                    move |_window, cx| {
+                        let registry_host = host.clone();
+                        let tab = NshTab::open_connection(
+                            app.clone(),
+                            route.clone(),
+                            host.service.clone(),
+                            host.trust().clone(),
+                            host.dispatcher(),
+                            launch,
+                            title,
+                            cx,
+                        );
+                        registry_host.track(&extension_id, tab.downgrade());
+                        one_core::tab_container::TabItem::new(tab_id, "extension-connection", tab)
+                    },
+                    window,
+                    cx,
+                );
+            });
         });
         Ok(())
     }
@@ -672,5 +680,33 @@ mount(App);
             shell_api_version: "2".into(),
             required_nsh_version: Some("0.3.0".into()),
         }
+    }
+
+    /// 挂载连接 tab 必须延后到本轮 effect flush：调用方常常正处在当前 tab
+    /// 内容实体的 update 里（首页连接卡片、连接侧栏、公共 MCP 的
+    /// `connection.open` 都是 `home_page.update(...)`），而激活新 tab 会同步对
+    /// 当前内容调用 `on_deactivate`，对同一实体重入 `update` 会 double lease
+    /// panic（复合扩展连接曾因此闪退）。
+    #[test]
+    fn open_connection_defers_tab_activation_out_of_the_caller_update() {
+        let source = include_str!("mod.rs");
+        let open = source
+            .split("pub fn open_connection(")
+            .nth(1)
+            .and_then(|source| source.split("\n    }\n}\n").next())
+            .expect("NshHost::open_connection source");
+        let normalized = open.split_whitespace().collect::<Vec<_>>().join(" ");
+
+        let defer = normalized
+            .find("window.defer(cx, move |window, cx| {")
+            .expect("open_connection 必须用 window.defer 延后挂载 tab");
+        let mount = normalized
+            .find("tab_container.update(cx,")
+            .expect("open_connection 仍需在 tab container 上挂载");
+
+        assert!(
+            defer < mount,
+            "tab 挂载必须发生在 window.defer 内部：{normalized}"
+        );
     }
 }
