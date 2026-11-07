@@ -3651,7 +3651,10 @@ impl AgentChatView {
         let images = crate::message_image::images_from_attachments(attachments);
         if session_uid == self.current_session {
             self.transcript.set_resource_context(resources);
-            self.transcript.push_user(text, images);
+            // 本地提交的用户消息不带轮次标：此刻新一轮 TurnStarted 尚未到达，
+            // current_turn 还指着上一轮，盖标会让轮次投影把两轮折进同一个 key
+            // （详见 AgentTranscript::push_user_fresh）。
+            self.transcript.push_user_fresh(text, images);
             return;
         }
         {
@@ -3664,7 +3667,7 @@ impl AgentChatView {
                     transcript
                 });
             transcript.set_resource_context(resources);
-            transcript.push_user(text, images);
+            transcript.push_user_fresh(text, images);
         }
         self.touch_session_transcript(session_uid);
         self.trim_session_transcripts();
