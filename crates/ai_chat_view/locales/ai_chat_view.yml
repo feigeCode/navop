@@ -264,9 +264,17 @@ AgentUi:
     zh-CN: 发送到下一轮
     zh-HK: 傳送到下一輪
   queued_for_next_turn:
-    en: "Queued for next turn (%{count})"
-    zh-CN: "下一轮带入（%{count}）"
-    zh-HK: "下一輪帶入（%{count}）"
+    en: "Pending (%{count})"
+    zh-CN: "待发送（%{count}）"
+    zh-HK: "待傳送（%{count}）"
+  send_queued_now:
+    en: Send now (insert into the running turn)
+    zh-CN: 立即发送（插进正在跑的这一轮）
+    zh-HK: 立即傳送（插進正在跑的這一輪）
+  send_queued_now_deferred:
+    en: This turn just ended or cannot take the message mid-flight, so it stays in Pending and goes out when the turn finishes
+    zh-CN: 这一轮刚结束或不能中途插入，消息仍留在待发送列表，等这一轮收尾后自动发出
+    zh-HK: 這一輪剛結束或不能中途插入，訊息仍留在待傳送列表，等這一輪收尾後自動發出
   edit_queued_item:
     en: Edit and pull back into the composer
     zh-CN: 编辑（拉回输入框）

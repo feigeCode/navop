@@ -1510,6 +1510,18 @@ impl AcpAgentInput {
                     )
                     .child(div().flex_1().min_w_0().truncate().child(text))
                     .child(
+                        Button::new(SharedString::from(format!("acp-queued-send-{index}")))
+                            .debug_selector(|| "agent-input-queued-send".to_string())
+                            .icon(IconName::ArrowUp)
+                            .ghost()
+                            .small()
+                            .tooltip(t!("AgentUi.send_queued_now").to_string())
+                            .on_click(cx.listener(move |_this, _, _window, cx| {
+                                cx.emit(AgentInputEvent::SendQueuedNow { index });
+                                cx.notify();
+                            })),
+                    )
+                    .child(
                         Button::new(SharedString::from(format!("acp-queued-edit-{index}")))
                             .icon(IconName::Edit)
                             .ghost()

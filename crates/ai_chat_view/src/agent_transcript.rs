@@ -1848,7 +1848,9 @@ mod tests {
         tr.push_user_fresh("第二问", Vec::new());
         assert_eq!(
             None,
-            tr.messages.last().and_then(|message| message.turn_id.as_deref()),
+            tr.messages
+                .last()
+                .and_then(|message| message.turn_id.as_deref()),
             "本地提交的用户消息不得继承上一轮的轮次标"
         );
 
@@ -1863,10 +1865,7 @@ mod tests {
             delta: "答案二".into(),
         });
 
-        let turns = crate::turn::project_turns(
-            &tr.messages,
-            &crate::turn::TurnTimings::new(),
-        );
+        let turns = crate::turn::project_turns(&tr.messages, &crate::turn::TurnTimings::new());
         assert_eq!(2, turns.len());
         assert_eq!(Some("t1".to_string()), turns[0].turn_id);
         assert_eq!(Some("t2".to_string()), turns[1].turn_id);

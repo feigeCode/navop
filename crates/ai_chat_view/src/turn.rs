@@ -722,12 +722,29 @@ mod tests {
         let turns = project_turns(&messages, &timings);
 
         assert_eq!(2, turns.len());
-        assert_eq!(Some("t1".to_string()), turns[0].turn_id, "回退链从正文取回 t1");
+        assert_eq!(
+            Some("t1".to_string()),
+            turns[0].turn_id,
+            "回退链从正文取回 t1"
+        );
         assert!(!turns[0].live, "第一轮已收尾，默认收起");
-        assert_eq!(Some("t2".to_string()), turns[1].turn_id, "回退链从本轮工具卡取回 t2");
-        assert!(turns[1].live, "第二轮空档期没有 live 消息，但时间表说它还在跑");
-        assert!(turns[1].default_process_expanded(), "空档不该把过程区收起再弹开");
-        assert_ne!(turns[0].key, turns[1].key, "两轮 key 相撞会让折叠覆盖表联动两轮");
+        assert_eq!(
+            Some("t2".to_string()),
+            turns[1].turn_id,
+            "回退链从本轮工具卡取回 t2"
+        );
+        assert!(
+            turns[1].live,
+            "第二轮空档期没有 live 消息，但时间表说它还在跑"
+        );
+        assert!(
+            turns[1].default_process_expanded(),
+            "空档不该把过程区收起再弹开"
+        );
+        assert_ne!(
+            turns[0].key, turns[1].key,
+            "两轮 key 相撞会让折叠覆盖表联动两轮"
+        );
     }
 
     /// 反面教材（回归护轨）：假如本地提交的用户消息被盖上**上一轮**的轮次标
@@ -753,9 +770,19 @@ mod tests {
         let turns = project_turns(&messages, &timings);
 
         // 这些断言记录的是**错误**行为，用来钉死根因：turn_id 被头消息的 t1 劫走。
-        assert_eq!(Some("t1".to_string()), turns[1].turn_id, "头消息的旧轮标劫走了轮次 id");
-        assert!(!turns[1].live, "拿第一轮的已收尾时间表判第二轮：空档被误判成结束");
-        assert_eq!(turns[0].key, turns[1].key, "两轮 key 相撞：折叠覆盖表会联动两轮");
+        assert_eq!(
+            Some("t1".to_string()),
+            turns[1].turn_id,
+            "头消息的旧轮标劫走了轮次 id"
+        );
+        assert!(
+            !turns[1].live,
+            "拿第一轮的已收尾时间表判第二轮：空档被误判成结束"
+        );
+        assert_eq!(
+            turns[0].key, turns[1].key,
+            "两轮 key 相撞：折叠覆盖表会联动两轮"
+        );
     }
 
     /// 分段：当前段是「最后一次助手叙事正文之后」的过程项，之前的算历史段。

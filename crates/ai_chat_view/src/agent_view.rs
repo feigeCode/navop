@@ -2965,6 +2965,27 @@ impl AgentChatView {
                     cx.notify();
                 }
             }
+            AgentInputEvent::SendQueuedNow { index } => {
+                let session_uid = self.current_session.clone();
+                let Some(submission) = self.pending_submissions.remove_at(&session_uid, index)
+                else {
+                    return;
+                };
+                let sent = self.send_queued_now(&session_uid, &submission, cx);
+                if !sent {
+                    // 送不进去：放回原位，队列顺序一点不动，等这一轮收尾后按 FIFO
+                    // 自然发走。留一句话说明它去哪了——否则点了按钮界面毫无反应，
+                    // 看起来像坏了。
+                    self.pending_submissions
+                        .insert_at(&session_uid, index, submission);
+                    self.push_system_to_session(
+                        &session_uid,
+                        t!("AgentUi.send_queued_now_deferred").to_string(),
+                    );
+                }
+                self.sync_pending_preview(cx);
+                cx.notify();
+            }
             AgentInputEvent::DraftChanged => {
                 self.schedule_draft_save(cx);
             }
@@ -3166,67 +3187,15 @@ impl AgentChatView {
             mentions,
             images,
         };
-        // steer：会话正在跑一轮、队列为空时，新提交**并发注入**而不是排队。
-        // ACP：并发 prompt 直接发；本地：入 runtime 队列，由当前轮在下一轮采样前
-        // 注入历史（见 `run_agent_loop` 开头的 take_pending_inputs）。
-        // 有排队时仍走 FIFO——插队会破坏已排消息的顺序。
-        let steer_in_flight_turn = self.backend == Backend::Acp
-            && self.running_sessions.contains(&session_uid)
-            && self.acp_session_has_foreground_turn(&session_uid)
-            && self.pending_submissions.len(&session_uid) == 0
-            && !self.acp_connecting
-            && self.acp_pending.is_none()
-            && self.acp_session_transition_phase(&session_uid).is_none();
-        let steer_local_turn = self.backend == Backend::Local
-            && self.running_sessions.contains(&session_uid)
-            && self.pending_submissions.len(&session_uid) == 0;
-        if self.running_sessions.contains(&session_uid)
-            && !steer_in_flight_turn
-            && !steer_local_turn
-        {
-            self.enqueue_submission(&session_uid, submission, cx);
-            return;
-        }
-        if steer_in_flight_turn {
-            self.push_user_to_session(
-                &session_uid,
-                &submission.text,
-                &submission.images,
-                &self.resources.clone(),
-            );
-            self.push_system_to_session(&session_uid, t!("AgentUi.acp_steer_sent").to_string());
-            self.request_scroll_to_bottom();
-            // 直接发；发不出去（连接问题等）就退回排队语义。
-            if self.start_submission(&session_uid, &submission, cx) == SubmissionStart::RetryLater {
-                self.enqueue_submission(&session_uid, submission, cx);
-            }
-            return;
-        }
-        if steer_local_turn {
-            // 本地 steer：入 runtime 输入队列即可，当前轮自己会在下一轮采样前取走。
-            // 含图片时退回排队——同轮多批图片会叠加 token / 请求体，留到轮次结束后重开。
-            let session_id = SessionId::from_string(session_uid.clone());
-            let steered = submission.images.is_empty()
-                && self
-                    .runtime
-                    .session(&session_id)
-                    .is_some_and(|session| session.steer(UserInput::new(submission.text.clone())));
-            if steered {
-                self.push_user_to_session(
-                    &session_uid,
-                    &submission.text,
-                    &submission.images,
-                    &self.resources.clone(),
-                );
-                self.push_system_to_session(
-                    &session_uid,
-                    t!("AgentUi.local_steer_sent").to_string(),
-                );
-                self.request_scroll_to_bottom();
-                cx.notify();
-                return;
-            }
-            // 会话已不在运行中（轮次刚好结束）或带图片：退回排队语义，轮次收尾时自然发走。
+        // 会话正在跑一轮：新提交**一律先排到输入框上方的待发送列表**，等这一轮收尾
+        // 再发。插话（steer）是显式动作 —— 用户点那条上的「立即发送」才走
+        // [`Self::send_queued_now`]。
+        //
+        // 隐式插话时代价很实在：消息会当场被塞进转录，而 runtime / ACP 那边随后
+        // 广播的 `UserMessage` 又落一条同样的气泡（本地 `record_steering_message`
+        // 就是这么发的），同一句话在对话里出现两遍；而且它插在上一轮中间，轮次
+        // 投影会多切一刀。排在输入框上方就能编辑 / 删除 / 再决定发不发。
+        if self.running_sessions.contains(&session_uid) {
             self.enqueue_submission(&session_uid, submission, cx);
             return;
         }
@@ -3266,6 +3235,64 @@ impl AgentChatView {
             self.sync_pending_preview(cx);
         }
         cx.notify();
+    }
+
+    /// 把待发送列表里的一条立刻插进正在跑的轮次（「立即发送」/ steer）。
+    ///
+    /// 返回 `false` 表示这一条送不进去（这一轮已经收尾、连接不可用、或本地后端
+    /// 带图片时同轮多批图会叠加请求体），调用方负责把它放回列表原位，等轮次
+    /// 收尾后按 FIFO 自然发走。
+    ///
+    /// 两种后端都不在这里补用户气泡：本地插话由 runtime 的 `record_steering_message`
+    /// 广播 `UserMessage`（见 agent_runtime 的 session.rs）；ACP 并发 prompt 由
+    /// [`Self::start_acp_submission`] 自己落一条。多补一次就是两条一样的气泡。
+    fn send_queued_now(
+        &mut self,
+        session_uid: &str,
+        submission: &PendingSubmission,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.running_sessions.contains(session_uid) {
+            return false;
+        }
+        match self.backend {
+            Backend::Acp => {
+                let can_steer = self.acp_session_has_foreground_turn(session_uid)
+                    && !self.acp_connecting
+                    && self.acp_pending.is_none()
+                    && self.acp_session_transition_phase(session_uid).is_none();
+                if !can_steer {
+                    return false;
+                }
+                if self.start_submission(session_uid, submission, cx) != SubmissionStart::Started {
+                    return false;
+                }
+                self.push_system_to_session(session_uid, t!("AgentUi.acp_steer_sent").to_string());
+                self.request_scroll_to_bottom();
+                true
+            }
+            Backend::Local => {
+                // 含图片时退回排队：同轮多批图片会叠加 token / 请求体，留到轮次
+                // 结束后重开一轮。
+                if !submission.images.is_empty() {
+                    return false;
+                }
+                let session_id = SessionId::from_string(session_uid.to_string());
+                let steered = self
+                    .runtime
+                    .session(&session_id)
+                    .is_some_and(|session| session.steer(UserInput::new(submission.text.clone())));
+                if !steered {
+                    return false;
+                }
+                self.push_system_to_session(
+                    session_uid,
+                    t!("AgentUi.local_steer_sent").to_string(),
+                );
+                self.request_scroll_to_bottom();
+                true
+            }
+        }
     }
 
     fn sync_pending_preview(&self, cx: &mut Context<Self>) {
@@ -9494,10 +9521,13 @@ mod tests {
         });
     }
 
-    /// steer：ACP 前台轮次在飞时提交新消息，不排队、直接插入在飞轮次。
-    /// 连接不在时退回排队语义（RetryLater），消息不丢。
+    /// 轮次在飞时提交新消息：**只排到输入框上方**，不插进正在跑的轮次。
+    ///
+    /// 这是用户明确要的形态（"正常应该是先到输入框上面，然后这个消息可以编辑、
+    /// 删除、直接发送"）。隐式插话的代价是转录里同一句话出现两条气泡：视图先
+    /// push 一条，runtime / ACP 随后广播 `UserMessage` 又落一条。
     #[gpui::test]
-    fn steering_submission_while_acp_turn_in_flight(cx: &mut TestAppContext) {
+    fn submitting_while_a_turn_runs_queues_instead_of_steering(cx: &mut TestAppContext) {
         init_test_ui(cx);
         let config =
             AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
@@ -9515,8 +9545,8 @@ mod tests {
                 cancel_requested: false,
             }];
             view.set_session_running(&session_uid, true, cx);
+            let messages_before = view.transcript.messages.len();
 
-            // 无连接：steer 发送会失败退回排队，但用户消息与插话提示都已落转录。
             view.submit(
                 "插一句：别忘了看并发测试".to_string(),
                 Vec::new(),
@@ -9524,18 +9554,156 @@ mod tests {
                 cx,
             );
 
+            assert_eq!(
+                1,
+                view.pending_submissions.len(&session_uid),
+                "在飞轮次下发消息应排进待发送列表"
+            );
+            assert_eq!(
+                "插一句：别忘了看并发测试",
+                view.pending_submissions
+                    .front(&session_uid)
+                    .map(|item| item.text.as_str())
+                    .unwrap_or_default(),
+                "排进去的就是刚提交的那条"
+            );
+            assert_eq!(
+                messages_before,
+                view.transcript.messages.len(),
+                "还没发出去，转录里不该多出气泡"
+            );
             assert!(
                 view.acp_turn_owners
                     .iter()
                     .any(|owner| owner.turn_id.as_str() == "turn-steer"),
-                "原在飞轮次的 owner 不受插话影响"
+                "原在飞轮次的 owner 不受影响"
             );
+        });
+    }
+
+    /// 「立即发送」把待发送的一条插进正在跑的本地轮次：不问转录要气泡
+    /// （气泡由 runtime 的 `UserMessage` 事件落下），只落一条插话提示。
+    #[gpui::test]
+    fn send_queued_now_steers_the_running_local_turn_without_a_duplicate_bubble(
+        cx: &mut TestAppContext,
+    ) {
+        use agent_runtime::runtime::ActiveTurn;
+
+        init_test_ui(cx);
+        let runtime = test_runtime("m");
+        let config = AgentChatViewConfig::new(runtime.clone(), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let session_id = view.read_with(cx, |view, _| view.session_id.clone());
+
+        view.update_in(cx, |view, window, cx| {
+            let session_uid = view.current_session.clone();
+            view.backend = Backend::Local;
+            view.set_session_running(&session_uid, true, cx);
+            let session = runtime.session(&session_id).expect("session should exist");
+            session.set_active_turn(ActiveTurn::detached(TurnId::from_string("turn-live")));
+            view.pending_submissions
+                .enqueue(&session_uid, pending_submission("立刻插一句"));
+            view.pending_submissions
+                .enqueue(&session_uid, pending_submission("这条留在队里"));
+            view.sync_pending_preview(cx);
+            let messages_before = view.transcript.messages.len();
+            let input = view.input.clone();
+
+            view.on_input_event(
+                &input,
+                &AgentInputEvent::SendQueuedNow { index: 0 },
+                window,
+                cx,
+            );
+
             assert!(
+                session.has_pending_input(),
+                "插话应进 runtime 的输入队列，由当前轮在下一步前取走"
+            );
+            let remaining: Vec<String> = view
+                .pending_submissions
+                .items(&session_uid)
+                .into_iter()
+                .map(|item| item.text.clone())
+                .collect();
+            assert_eq!(vec!["这条留在队里"], remaining, "发出去的那条要出队");
+            assert_eq!(
+                messages_before + 1,
+                view.transcript.messages.len(),
+                "只该多一条插话提示，不该再补一条用户气泡"
+            );
+            // 文案随 locale 走（进程级全局，CI 上可能是英文），所以只认角色不认字面。
+            assert_eq!(
+                Some(crate::ChatRole::System),
                 view.transcript
                     .messages
+                    .last()
+                    .map(|message| message.role.clone()),
+                "插话提示要落进转录，否则用户看不出这条去了哪"
+            );
+            assert!(
+                !view
+                    .transcript
+                    .messages
                     .iter()
-                    .any(|message| message.content.contains("插一句")),
-                "插话消息应落进当前转录"
+                    .any(|message| message.content == "立刻插一句"),
+                "用户气泡归 runtime 的 UserMessage 事件，视图再 push 一次就是重复"
+            );
+        });
+    }
+
+    /// 插不进去时（这一轮已经收尾 / 带图片）原样留在列表里，位置不动。
+    #[gpui::test]
+    fn send_queued_now_keeps_the_item_queued_when_it_cannot_be_inserted(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update_in(cx, |view, window, cx| {
+            let session_uid = view.current_session.clone();
+            view.backend = Backend::Local;
+            // 这一轮已经收尾：running 还没清掉也插不进去。
+            view.pending_submissions
+                .enqueue(&session_uid, pending_submission("排在最前"));
+            view.pending_submissions
+                .enqueue(&session_uid, pending_submission("想直接发"));
+            view.sync_pending_preview(cx);
+            let messages_before = view.transcript.messages.len();
+            let input = view.input.clone();
+
+            view.on_input_event(
+                &input,
+                &AgentInputEvent::SendQueuedNow { index: 1 },
+                window,
+                cx,
+            );
+
+            let remaining: Vec<String> = view
+                .pending_submissions
+                .items(&session_uid)
+                .into_iter()
+                .map(|item| item.text.clone())
+                .collect();
+            assert_eq!(
+                vec!["排在最前", "想直接发"],
+                remaining,
+                "发不出去要放回原位，别把队列顺序打乱"
+            );
+            assert_eq!(
+                messages_before + 1,
+                view.transcript.messages.len(),
+                "插不进去只留一条说明，不能写用户气泡"
+            );
+            assert_eq!(
+                Some(crate::ChatRole::System),
+                view.transcript
+                    .messages
+                    .last()
+                    .map(|message| message.role.clone()),
+                "说明要落成系统提示，别混进对话正文"
             );
         });
     }
