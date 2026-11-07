@@ -1228,6 +1228,10 @@ TerminalView:
     en: Paste preview
     zh-CN: 粘贴预览
     zh-HK: 貼上預覽
+  paste_edit:
+    en: Review and edit
+    zh-CN: 检查并编辑
+    zh-HK: 檢查並編輯
   paste_summary:
     en: "%{lines} lines · %{chars} chars"
     zh-CN: 共 %{lines} 行 · %{chars} 字符
@@ -1236,6 +1240,10 @@ TerminalView:
     en: Paste as single line
     zh-CN: 合并为单行粘贴
     zh-HK: 合併為單行貼上
+  paste_line_by_line:
+    en: Send line by line
+    zh-CN: 逐行发送
+    zh-HK: 逐行傳送
   paste_open_settings:
     en: Open Settings
     zh-CN: 打开设置
