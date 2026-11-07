@@ -565,10 +565,10 @@ impl SupabaseClient {
         &self,
         url: &str,
         headers: Vec<(&'static str, String)>,
-    ) -> Result<StatusCode, CloudApiError> {
+    ) -> Result<(StatusCode, String), CloudApiError> {
         let request = self.build_request(Method::DELETE, url, headers, None)?;
-        let (status, _) = self.send_request(request).await?;
-        Ok(status)
+        let (status, body) = self.send_request(request).await?;
+        Ok((status, String::from_utf8_lossy(&body).to_string()))
     }
 
     // ========================================================================
@@ -798,26 +798,31 @@ impl SupabaseClient {
     }
 
     /// 发送带 401 自动重试的 DELETE 请求
-    #[allow(dead_code)]
-    async fn delete_with_retry(&self, url: &str) -> Result<StatusCode, CloudApiError> {
+    async fn delete_with_retry(
+        &self,
+        url: &str,
+        extra_headers: Vec<(&'static str, String)>,
+    ) -> Result<(StatusCode, String), CloudApiError> {
         // 主动检查 token 是否即将过期
         if self.is_token_expiring_soon() {
             info!("[supabase] proactive token refresh before DELETE {}", url);
             self.ensure_token_valid().await?;
         }
 
-        let headers = self.auth_headers()?;
-        let status = self.delete_request(url, headers).await?;
+        let mut headers = self.auth_headers()?;
+        headers.extend(extra_headers.clone());
+        let (status, body) = self.delete_request(url, headers).await?;
 
         if status == StatusCode::UNAUTHORIZED {
             warn!("[supabase] 401 received, refreshing token: DELETE {}", url);
             // 尝试刷新 token
             self.ensure_token_valid().await?;
             // 重试请求
-            let retry_headers = self.auth_headers()?;
+            let mut retry_headers = self.auth_headers()?;
+            retry_headers.extend(extra_headers);
             self.delete_request(url, retry_headers).await
         } else {
-            Ok(status)
+            Ok((status, body))
         }
     }
 
@@ -2292,6 +2297,49 @@ impl CloudApiClient for SupabaseClient {
         Err(CloudApiError::ServerError(message))
     }
 
+    async fn leave_team(&self, team_id: &str) -> Result<(), CloudApiError> {
+        let user_id = self.get_user_id().ok_or(CloudApiError::NotAuthenticated)?;
+        let url = format!(
+            "{}?team_id=eq.{}&user_id=eq.{}",
+            self.rest_url("team_members"),
+            Self::url_encode(team_id),
+            Self::url_encode(&user_id)
+        );
+        // RLS 对无权限的 DELETE 往往只返回 0 行而不是错误；要求 PostgREST
+        // 回传被删记录，避免把“什么都没删”误报成退出成功。
+        let headers = vec![("Prefer", "return=representation".to_string())];
+        let (status, body) = self.delete_with_retry(&url, headers).await?;
+
+        if !status.is_success() {
+            let message = rpc_error_message(&body);
+            warn!(
+                status = status.as_u16(),
+                team_id = team_id,
+                user_id = user_id,
+                error = %message,
+                "退出团队失败"
+            );
+            return Err(CloudApiError::ServerError(message));
+        }
+
+        let deleted_rows = if body.trim().is_empty() {
+            0
+        } else {
+            serde_json::from_str::<Vec<serde_json::Value>>(&body)
+                .map_err(|error| {
+                    CloudApiError::ParseError(format!("退出团队响应解析失败: {error}"))
+                })?
+                .len()
+        };
+        if deleted_rows == 0 {
+            return Err(CloudApiError::Conflict(
+                "你不是该团队成员，或没有退出该团队的权限".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
     // ========================================================================
     // AI 聊天
     // ========================================================================
@@ -2862,6 +2910,54 @@ mod tests {
         match error {
             CloudApiError::ServerError(message) => {
                 assert_eq!("Owners cannot be removed from the website console", message)
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn leave_team_deletes_current_users_membership() {
+        let (client, http) = team_client(200, r#"[{"id":"member-1"}]"#);
+
+        client.leave_team("team-1").await.expect("member can leave");
+
+        let url = http.last_url();
+        assert!(url.contains("/rest/v1/team_members?"));
+        assert!(url.contains("team_id=eq.team-1"));
+        assert!(url.contains("user_id=eq.user-1"));
+        assert_eq!(
+            Some("return=representation".to_string()),
+            http.last_prefer()
+        );
+    }
+
+    #[tokio::test]
+    async fn leave_team_rejects_empty_delete_response() {
+        let (client, _http) = team_client(200, "[]");
+
+        let error = client
+            .leave_team("team-1")
+            .await
+            .expect_err("RLS must not report a zero-row delete as success");
+
+        assert!(matches!(error, CloudApiError::Conflict(_)));
+    }
+
+    #[tokio::test]
+    async fn leave_team_surfaces_server_error() {
+        let (client, _http) = team_client(
+            403,
+            r#"{"code":"42501","message":"new row violates row-level security policy","details":null,"hint":null}"#,
+        );
+
+        let error = client
+            .leave_team("team-1")
+            .await
+            .expect_err("owner leave must fail");
+
+        match error {
+            CloudApiError::ServerError(message) => {
+                assert_eq!("new row violates row-level security policy", message);
             }
             other => panic!("unexpected error: {other}"),
         }

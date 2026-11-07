@@ -114,12 +114,38 @@ BEFORE UPDATE OF owner_id ON public.sync_data
 FOR EACH ROW
 EXECUTE FUNCTION public.prevent_direct_owner_change();
 
+-- 创建者不能把自己从 owner 降级，否则团队会失去可管理的所有者。
+-- 其他 owner 仍可调整该成员的 owner 角色，用于所有权交接。
+CREATE OR REPLACE FUNCTION public.prevent_owner_self_demotion()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
+BEGIN
+    IF OLD.user_id = auth.uid()
+       AND OLD.role = 'owner'
+       AND NEW.role <> 'owner' THEN
+        RAISE EXCEPTION 'Owners cannot change their own role'
+            USING ERRCODE = '42501';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_prevent_owner_self_demotion ON public.team_members;
+CREATE TRIGGER trg_prevent_owner_self_demotion
+BEFORE UPDATE OF role ON public.team_members
+FOR EACH ROW
+EXECUTE FUNCTION public.prevent_owner_self_demotion();
+
 REVOKE ALL ON FUNCTION public.current_team_role(uuid) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.get_my_team_ids() FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.can_manage_team_members(uuid) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.can_manage_team_owners(uuid) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.can_edit_team_sync_data(uuid) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.prevent_direct_owner_change()
+FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.prevent_owner_self_demotion()
 FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.current_team_role(uuid) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.get_my_team_ids() TO authenticated, service_role;

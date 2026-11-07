@@ -286,6 +286,29 @@ impl TeamTab {
                             .items_center()
                             .gap_2()
                             .child(team_role_badge(team.role.as_deref(), cx))
+                            .when(
+                                can_leave_team(team.role.as_deref(), team.membership_state),
+                                |this| {
+                                    let tab = tab.clone();
+                                    let team_id = team.id.clone();
+                                    let team_name = team.name.clone();
+                                    this.child(
+                                        Button::new("team-profile-leave")
+                                            .label(t!("TeamManagement.leave_team").to_string())
+                                            .small()
+                                            .danger()
+                                            .on_click(move |_, window, cx| {
+                                                show_leave_team_dialog(
+                                                    tab.clone(),
+                                                    team_id.clone(),
+                                                    team_name.clone(),
+                                                    window,
+                                                    cx,
+                                                );
+                                            }),
+                                    )
+                                },
+                            )
                             .when(can_edit_team_profile(team.role.as_deref()), |this| {
                                 let tab = tab.clone();
                                 let team_id = team.id.clone();
@@ -691,7 +714,7 @@ fn render_member_row(
     cx: &mut App,
 ) -> AnyElement {
     let is_current_user = current_user_id == Some(member.user_id.as_str());
-    let can_change_role = can_change_member_role(actor_role, member.role);
+    let can_change_role = can_change_member_role(actor_role, member.role, is_current_user);
     let can_remove = can_remove_member(actor_role, member.role, is_current_user);
     h_flex()
         .id(SharedString::from(format!("team-member-row-{}", member.id)))
@@ -760,6 +783,7 @@ fn render_member_row(
                         team_id.clone(),
                         member.clone(),
                         actor_role.clone(),
+                        is_current_user,
                         window,
                         cx,
                     );
@@ -1375,13 +1399,22 @@ fn assignable_team_roles(actor_role: Option<&str>) -> Vec<TeamRole> {
     }
 }
 
-/// 改角色：owner 可以改任何人；admin 只能动 member，且不能授 owner。
-fn can_change_member_role(actor_role: Option<&str>, target_role: TeamRole) -> bool {
+/// 改角色：owner 可以改其他人；admin 只能动 member，且不能授 owner。
+/// 任何人不能在成员列表里修改自己的角色，避免 owner 把自己降级后失去管理能力。
+fn can_change_member_role(actor_role: Option<&str>, target_role: TeamRole, is_self: bool) -> bool {
+    if is_self {
+        return false;
+    }
     match actor_role {
         Some("owner") => true,
         Some("admin") => target_role == TeamRole::Member,
         _ => false,
     }
+}
+
+/// 非 owner 的有效成员可以自助退出团队；owner 必须先完成所有权交接。
+fn can_leave_team(role: Option<&str>, membership_state: TeamMembershipState) -> bool {
+    membership_state == TeamMembershipState::Active && matches!(role, Some("admin" | "member"))
 }
 
 /// 移除成员：owner 不可移除；移除 admin 只有 owner 能做；不提供「移除自己」。
@@ -1463,6 +1496,16 @@ fn role_choice_chips(
 /// 写操作成功后的统一收尾：重载当前团队详情，并通知其它页面刷新缓存。
 fn after_team_admin_change(tab: &Entity<TeamTab>, window: &mut Window, cx: &mut App) {
     tab.update(cx, |team_tab, cx| {
+        team_tab.load_selected_team(window, cx);
+        cx.notify();
+    });
+    team_key_change_completed(window, cx);
+}
+
+/// 退出成功后团队已从缓存移除，先回落到剩余团队，再加载详情。
+fn after_leaving_team(tab: &Entity<TeamTab>, window: &mut Window, cx: &mut App) {
+    tab.update(cx, |team_tab, cx| {
+        team_tab.sync_selection_from_cache(cx);
         team_tab.load_selected_team(window, cx);
         cx.notify();
     });
@@ -1818,15 +1861,17 @@ fn show_change_member_role_dialog(
     team_id: String,
     member: TeamMemberWithEmail,
     actor_role: Option<String>,
+    is_self: bool,
     window: &mut Window,
     cx: &mut App,
 ) {
+    if !can_change_member_role(actor_role.as_deref(), member.role, is_self) {
+        return;
+    }
     let roles = assignable_team_roles(actor_role.as_deref());
-    if roles.is_empty() || !roles.contains(&member.role) {
-        // 当前角色的权限不允许改这个成员，或者目标角色不在可授予集合里（防御性兜底）。
-        if !can_change_member_role(actor_role.as_deref(), member.role) {
-            return;
-        }
+    if roles.is_empty() {
+        // 防御性兜底：没有可授予角色时不要打开空对话框。
+        return;
     }
     let role_entity = cx.new(|_| member.role);
     let role_for_ok = role_entity.clone();
@@ -1942,6 +1987,55 @@ fn show_remove_member_dialog(
     });
 }
 
+fn show_leave_team_dialog(
+    tab: Entity<TeamTab>,
+    team_id: String,
+    team_name: String,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    window.open_dialog(cx, move |dialog, _window, _cx| {
+        let tab_ok = tab.clone();
+        let team_id_ok = team_id.clone();
+        let team_name = team_name.clone();
+        dialog
+            .title(t!("TeamManagement.leave_team_title").to_string())
+            .width(px(420.))
+            .confirm()
+            .on_ok(move |_, window, cx: &mut App| {
+                let Some(engine) = team_key_engine(window, cx) else {
+                    return false;
+                };
+                let tab = tab_ok.clone();
+                let team_id = team_id_ok.clone();
+                window
+                    .spawn(cx, async move |cx| {
+                        let result = engine.leave_team(&team_id).await;
+                        if let Err(error) = cx.update(|window, cx: &mut App| match result {
+                            Ok(()) => {
+                                window.push_notification(
+                                    t!("TeamManagement.team_left").to_string(),
+                                    cx,
+                                );
+                                after_leaving_team(&tab, window, cx);
+                            }
+                            Err(error) => window.push_notification(error.to_string(), cx),
+                        }) {
+                            tracing::warn!("退出团队后更新窗口失败: {error}");
+                        }
+                    })
+                    .detach();
+                true
+            })
+            .child(
+                div()
+                    .p_4()
+                    .text_sm()
+                    .child(t!("TeamManagement.leave_team_confirm", team = team_name).to_string()),
+            )
+    });
+}
+
 fn team_key_role_can_rotate(role: Option<&str>) -> bool {
     matches!(role, Some("owner" | "admin"))
 }
@@ -1994,10 +2088,11 @@ mod tests {
 
     use super::{
         MemberDirectory, TeamKeyCacheStatus, TeamMembershipState, TeamOption,
-        assignable_team_roles, can_change_member_role, can_edit_team_profile, can_manage_members,
-        can_remove_member, emit_team_key_change_event, team_description_exceeds_limit,
-        team_key_refresh_success_message, team_key_role_can_rotate, team_key_rotation_inputs_valid,
-        team_key_summary, team_name_exceeds_limit, team_role_label, unix_millis_to_date,
+        assignable_team_roles, can_change_member_role, can_edit_team_profile, can_leave_team,
+        can_manage_members, can_remove_member, emit_team_key_change_event,
+        team_description_exceeds_limit, team_key_refresh_success_message, team_key_role_can_rotate,
+        team_key_rotation_inputs_valid, team_key_summary, team_name_exceeds_limit, team_role_label,
+        unix_millis_to_date,
     };
 
     /// `include_str!` 的源码契约必须先截掉测试模块本身，否则断言会命中测试自己写的字面量。
@@ -2356,13 +2451,62 @@ mod tests {
         assert!(assignable_team_roles(Some("member")).is_empty());
         assert!(assignable_team_roles(None).is_empty());
 
-        // 改角色：owner 可改任何人；admin 只能把 member 改成 admin/member。
-        assert!(can_change_member_role(Some("owner"), TeamRole::Owner));
-        assert!(can_change_member_role(Some("owner"), TeamRole::Admin));
-        assert!(can_change_member_role(Some("admin"), TeamRole::Member));
-        assert!(!can_change_member_role(Some("admin"), TeamRole::Admin));
-        assert!(!can_change_member_role(Some("admin"), TeamRole::Owner));
-        assert!(!can_change_member_role(Some("member"), TeamRole::Member));
+        // 改角色：owner 可改其他人；admin 只能把 member 改成 admin/member；
+        // 任何人都不能改自己的角色。
+        assert!(can_change_member_role(
+            Some("owner"),
+            TeamRole::Owner,
+            false
+        ));
+        assert!(can_change_member_role(
+            Some("owner"),
+            TeamRole::Admin,
+            false
+        ));
+        assert!(!can_change_member_role(
+            Some("owner"),
+            TeamRole::Member,
+            true
+        ));
+        assert!(!can_change_member_role(
+            Some("admin"),
+            TeamRole::Member,
+            true
+        ));
+        assert!(can_change_member_role(
+            Some("admin"),
+            TeamRole::Member,
+            false
+        ));
+        assert!(!can_change_member_role(
+            Some("admin"),
+            TeamRole::Admin,
+            false
+        ));
+        assert!(!can_change_member_role(
+            Some("admin"),
+            TeamRole::Owner,
+            false
+        ));
+        assert!(!can_change_member_role(
+            Some("member"),
+            TeamRole::Member,
+            false
+        ));
+
+        // 非 owner 的有效成员可以退出；owner 和已离开/状态未知的成员没有入口。
+        assert!(can_leave_team(Some("member"), TeamMembershipState::Active));
+        assert!(can_leave_team(Some("admin"), TeamMembershipState::Active));
+        assert!(!can_leave_team(Some("owner"), TeamMembershipState::Active));
+        assert!(!can_leave_team(
+            Some("member"),
+            TeamMembershipState::Departed
+        ));
+        assert!(!can_leave_team(
+            Some("member"),
+            TeamMembershipState::Unknown
+        ));
+        assert!(!can_leave_team(None, TeamMembershipState::Active));
 
         // 移除：owner 永远不可移除（包括 owner 自己），成员不能移除自己，
         // admin 只能移除 member。
@@ -2390,6 +2534,7 @@ mod tests {
             ".add_team_member(",
             "\n                            .set_team_member_role(",
             ".remove_team_member(",
+            ".leave_team(",
         ] {
             assert!(production.contains(call), "缺少引擎调用: {call}");
         }
@@ -2400,12 +2545,26 @@ mod tests {
             "fn show_add_member_dialog(",
             "fn show_change_member_role_dialog(",
             "fn show_remove_member_dialog(",
+            "fn show_leave_team_dialog(",
             "fn after_team_admin_change(",
+            "fn after_leaving_team(",
         ] {
             assert!(production.contains(entry), "缺少入口: {entry}");
         }
-        // 角色变更 / 移除都只有拿到权限判断才渲染按钮。
-        assert!(production.contains("can_change_member_role(actor_role, member.role)"));
+        // 角色变更 / 移除 / 退出都只有拿到权限判断才渲染按钮。
+        assert!(
+            production.contains("can_change_member_role(actor_role, member.role, is_current_user)")
+        );
         assert!(production.contains("can_remove_member(actor_role, member.role, is_current_user)"));
+        assert!(production.contains("can_leave_team(team.role.as_deref(), team.membership_state)"));
+    }
+
+    #[test]
+    fn owner_self_demotion_is_blocked_on_the_server() {
+        let sql = include_str!("../../../team-sync-rls.sql");
+        assert!(sql.contains("prevent_owner_self_demotion"));
+        assert!(sql.contains("OLD.role = 'owner'"));
+        assert!(sql.contains("RAISE EXCEPTION 'Owners cannot change their own role'"));
+        assert!(sql.contains("BEFORE UPDATE OF role ON public.team_members"));
     }
 }

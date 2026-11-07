@@ -1337,6 +1337,22 @@ TeamManagement:
     en: Member removed
     zh-CN: 成员已移除
     zh-HK: 成員已移除
+  leave_team:
+    en: Leave team
+    zh-CN: 退出团队
+    zh-HK: 退出團隊
+  leave_team_title:
+    en: Leave team
+    zh-CN: 退出团队
+    zh-HK: 退出團隊
+  leave_team_confirm:
+    en: "Leave %{team}? You will lose access to this team's connections."
+    zh-CN: 确定退出 %{team} 吗？退出后将失去该团队连接的访问权限。
+    zh-HK: 確定退出 %{team} 嗎？退出後將失去該團隊連線的存取權限。
+  team_left:
+    en: You left the team
+    zh-CN: 已退出团队
+    zh-HK: 已退出團隊
 
 # 团队同步
 TeamSync:
