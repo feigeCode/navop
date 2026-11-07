@@ -6,7 +6,7 @@ use gpui::prelude::*;
 use gpui::{
     App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement, IntoElement, Keystroke, ListSizingBehavior, MouseButton, ParentElement,
-    Render, SharedString, Styled, UniformListScrollHandle, Window, div, uniform_list,
+    Render, SharedString, Styled, UniformListScrollHandle, Window, div, px, uniform_list,
 };
 use gpui_component::{
     ActiveTheme, Icon, Sizable, Size, WindowExt,
@@ -34,6 +34,8 @@ use std::{ops::Range, sync::Arc};
 use crate::quick_command_sync::emit_quick_commands_changed;
 use crate::theme::TerminalColors;
 use crate::view::quick_command_executes_on_click;
+
+const QUICK_COMMAND_ROW_HEIGHT: f32 = 52.0;
 
 /// 快捷命令面板事件
 #[derive(Clone, Debug)]
@@ -1676,7 +1678,8 @@ impl QuickCommandPanel {
             .as_ref()
             .filter(|name| !name.trim().is_empty())
             .cloned()
-            .unwrap_or_else(|| value.clone());
+            .unwrap_or_else(|| value.clone())
+            .replace(['\r', '\n'], " ↵ ");
         let pin_color = cx.theme().warning;
         let muted_bg = self.colors.muted;
 
@@ -1684,6 +1687,7 @@ impl QuickCommandPanel {
             .id(SharedString::from(format!("quick-cmd-item-{index}")))
             .group(item_group.clone())
             .w_full()
+            .h(px(QUICK_COMMAND_ROW_HEIGHT))
             .px_3()
             .py_2()
             .rounded_md()
@@ -1721,6 +1725,7 @@ impl QuickCommandPanel {
                                     .text_sm()
                                     .overflow_hidden()
                                     .text_ellipsis()
+                                    .whitespace_nowrap()
                                     .tooltip(move |window, cx| {
                                         Tooltip::new(tooltip.clone()).build(window, cx)
                                     })
@@ -1996,6 +2001,16 @@ mod tests {
             &["root".to_string(), "example.com".to_string()],
         );
         assert_eq!("ssh root@example.com && echo root {{missing", rendered);
+    }
+
+    #[test]
+    fn quick_command_rows_use_a_stable_single_line_height() {
+        let source = include_str!("quick_command_panel.rs");
+        let implementation = source.split("#[cfg(test)]").next().unwrap();
+        assert!(implementation.contains("const QUICK_COMMAND_ROW_HEIGHT: f32 = 52.0"));
+        assert!(implementation.contains(".h(px(QUICK_COMMAND_ROW_HEIGHT))"));
+        assert!(implementation.contains(".replace(['\\r', '\\n'], \" ↵ \")"));
+        assert!(implementation.contains(".whitespace_nowrap()"));
     }
 
     #[test]
