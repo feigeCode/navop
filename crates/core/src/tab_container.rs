@@ -485,6 +485,16 @@ pub trait TabContent: EventEmitter<TabContentEvent> + Render + Focusable {
         None
     }
 
+    /// Whether the tab can open the same connection in the SFTP dual-pane view.
+    fn can_open_sftp(&self, cx: &App) -> bool {
+        false
+    }
+
+    /// Open the tab's connection in the SFTP dual-pane view.
+    fn open_sftp(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        false
+    }
+
     /// Build a new content view for a duplicated tab.
     fn duplicate(
         &mut self,
@@ -587,6 +597,8 @@ pub trait TabContentView: 'static + Send + Sync {
     fn can_duplicate(&self, cx: &App) -> bool;
     fn duplicate(&self, window: &mut Window, cx: &mut App) -> Option<Arc<dyn TabContentView>>;
     fn copy_label(&self, cx: &App) -> Option<String>;
+    fn can_open_sftp(&self, cx: &App) -> bool;
+    fn open_sftp(&self, window: &mut Window, cx: &mut App) -> bool;
     fn on_activate(&self, window: &mut Window, cx: &mut App);
     fn on_deactivate(&self, window: &mut Window, cx: &mut App);
     fn set_presentation_obscured(&self, obscured: bool, cx: &mut App);
@@ -670,6 +682,14 @@ impl<T: TabContent> TabContentView for Entity<T> {
 
     fn copy_label(&self, cx: &App) -> Option<String> {
         self.read(cx).copy_label(cx)
+    }
+
+    fn can_open_sftp(&self, cx: &App) -> bool {
+        self.read(cx).can_open_sftp(cx)
+    }
+
+    fn open_sftp(&self, window: &mut Window, cx: &mut App) -> bool {
+        self.update(cx, |this, cx| this.open_sftp(window, cx))
     }
 
     fn duplicate(&self, window: &mut Window, cx: &mut App) -> Option<Arc<dyn TabContentView>> {
@@ -2705,6 +2725,15 @@ impl TabContainer {
         cx.emit(TabContainerEvent::TabDuplicated { id: duplicate_id });
     }
 
+    fn open_sftp_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get(index) else {
+            return;
+        };
+        if !tab.content().open_sftp(window, cx) {
+            tracing::warn!("当前标签页无法打开 SFTP 文件视图");
+        }
+    }
+
     pub fn dump(&self, cx: &App) -> TabContainerState {
         let tabs = self
             .tabs
@@ -4454,6 +4483,12 @@ impl TabContainer {
                                     .get(idx)
                                     .map(|tab| tab.content().can_duplicate(cx))
                                     .unwrap_or(false);
+                                let can_open_sftp = view_for_menu
+                                    .read(cx)
+                                    .tabs
+                                    .get(idx)
+                                    .map(|tab| tab.content().can_open_sftp(cx))
+                                    .unwrap_or(false);
                                 let closeable = view_for_menu
                                     .read(cx)
                                     .tabs
@@ -4511,6 +4546,23 @@ impl TabContainer {
                                         ),
                                     ),
                                 )
+                                .map(|menu| {
+                                    if !can_open_sftp {
+                                        return menu;
+                                    }
+                                    menu.item(
+                                        PopupMenuItem::new(
+                                            t!("TabContextMenu.open_sftp").to_string(),
+                                        )
+                                        .icon(IconName::FolderOpen)
+                                        .on_click(window.listener_for(
+                                            &view_for_menu,
+                                            move |this, _, window, cx| {
+                                                this.open_sftp_tab(idx, window, cx);
+                                            },
+                                        )),
+                                    )
+                                })
                                 .map(|menu| match copy_label {
                                     Some(label) => menu.item(
                                         PopupMenuItem::new(t!("TabContextMenu.copy_label", label = label.as_str()).to_string())
@@ -5445,6 +5497,16 @@ mod tests {
         assert!(implementation.contains("tab.content().copy_label(cx)"));
         assert!(implementation.contains("TabContextMenu.copy_label"));
         assert!(implementation.contains("None => menu"));
+    }
+
+    #[test]
+    fn tab_context_menu_opens_sftp_only_for_capable_tabs() {
+        let source = include_str!("tab_container.rs");
+        let implementation = source.split("mod tests").next().unwrap();
+        assert!(implementation.contains("fn can_open_sftp(&self, cx: &App) -> bool"));
+        assert!(implementation.contains("tab.content().can_open_sftp(cx)"));
+        assert!(implementation.contains("TabContextMenu.open_sftp"));
+        assert!(implementation.contains("this.open_sftp_tab(idx, window, cx)"));
     }
 
     #[test]

@@ -12,6 +12,10 @@ impl TerminalView {
         self.terminal.read(cx).connection_id()
     }
 
+    pub(crate) fn stored_connection(&self, cx: &App) -> Option<StoredConnection> {
+        self.sidebar.read(cx).stored_connection()
+    }
+
     /// 获取本地终端的工作目录
     pub fn local_working_dir(&self) -> Option<&std::path::Path> {
         self.local_working_dir.as_deref()

@@ -37,6 +37,18 @@ impl TabContent for TerminalWorkspace {
         self.active_pane().read(cx).duplicate_supported(cx)
     }
 
+    fn can_open_sftp(&self, cx: &App) -> bool {
+        self.active_pane().read(cx).stored_connection(cx).is_some()
+    }
+
+    fn open_sftp(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(connection) = self.active_pane().read(cx).stored_connection(cx) else {
+            return false;
+        };
+        cx.emit(TerminalWorkspaceEvent::OpenSftp(connection));
+        true
+    }
+
     fn on_activate(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.set_tab_metric_state(true, cx);
         self.set_active_pane_metric_state(cx);
@@ -141,5 +153,15 @@ impl TabContent for TerminalWorkspace {
             }
         }
         unlocked
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn tab_content_opens_sftp_for_the_active_terminal_connection() {
+        let source = include_str!("tab_content.rs");
+        assert!(source.contains("fn can_open_sftp(&self, cx: &App) -> bool"));
+        assert!(source.contains("TerminalWorkspaceEvent::OpenSftp(connection)"));
     }
 }
