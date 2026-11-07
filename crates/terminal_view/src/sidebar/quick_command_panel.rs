@@ -86,6 +86,57 @@ fn normalize_quick_command_value(value: &str) -> String {
     }
 }
 
+/// 提取 `{{name}}` 形式的参数，按首次出现顺序去重。
+fn quick_command_parameters(command: &str) -> Vec<String> {
+    let mut parameters = Vec::new();
+    let mut rest = command;
+    while let Some(start) = rest.find("{{") {
+        let after_start = &rest[start + 2..];
+        let Some(end) = after_start.find("}}") else {
+            break;
+        };
+        let name = after_start[..end].trim();
+        if !name.is_empty() && !parameters.iter().any(|parameter| parameter == name) {
+            parameters.push(name.to_string());
+        }
+        rest = &after_start[end + 2..];
+    }
+    parameters
+}
+
+fn replace_quick_command_parameters(
+    command: &str,
+    parameters: &[String],
+    values: &[String],
+) -> String {
+    let mut rendered = String::with_capacity(command.len());
+    let mut rest = command;
+    while let Some(start) = rest.find("{{") {
+        rendered.push_str(&rest[..start]);
+        let after_start = &rest[start + 2..];
+        let Some(end) = after_start.find("}}") else {
+            rendered.push_str(&rest[start..]);
+            return rendered;
+        };
+        let name = after_start[..end].trim();
+        match parameters
+            .iter()
+            .position(|parameter| parameter == name)
+            .and_then(|index| values.get(index))
+        {
+            Some(value) => rendered.push_str(value),
+            None => {
+                rendered.push_str("{{");
+                rendered.push_str(&after_start[..end]);
+                rendered.push_str("}}");
+            }
+        }
+        rest = &after_start[end + 2..];
+    }
+    rendered.push_str(rest);
+    rendered
+}
+
 /// 按「点击执行」开关维护命令末尾的换行标记：
 /// 勾选时保证末尾有换行（触发即执行），取消时去掉末尾换行（仅粘贴）。
 fn apply_auto_run_marker(command: &str, auto_run: bool) -> String {
@@ -1320,6 +1371,74 @@ impl QuickCommandPanel {
         cx.emit(QuickCommandPanelEvent::ExecuteCommand(command));
     }
 
+    fn execute_command_with_parameters(
+        &self,
+        command: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let parameters = quick_command_parameters(&command);
+        if parameters.is_empty() {
+            self.paste_command(command, cx);
+            return;
+        }
+
+        let inputs = parameters
+            .iter()
+            .map(|parameter| {
+                let placeholder =
+                    t!("QuickCommand.parameter_placeholder", name = parameter).to_string();
+                cx.new(|cx| InputState::new(window, cx).placeholder(placeholder))
+            })
+            .collect::<Vec<_>>();
+        let inputs_for_ok = inputs.clone();
+        let parameters_for_ok = parameters.clone();
+        let command_for_ok = command.clone();
+        let panel = cx.entity();
+        let muted_foreground = self.colors.muted_foreground;
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let inputs = inputs.clone();
+            let inputs_for_ok = inputs_for_ok.clone();
+            let parameters = parameters_for_ok.clone();
+            let parameters_for_ok = parameters.clone();
+            let command = command_for_ok.clone();
+            let panel = panel.clone();
+            dialog
+                .title(t!("QuickCommand.parameters_title").to_string())
+                .width(gpui::px(440.0))
+                .confirm()
+                .on_ok(move |_, _, cx| {
+                    let values = inputs_for_ok
+                        .iter()
+                        .map(|input| input.read(cx).text().to_string())
+                        .collect::<Vec<_>>();
+                    let command =
+                        replace_quick_command_parameters(&command, &parameters_for_ok, &values);
+                    panel.update(cx, |panel, cx| panel.paste_command(command, cx));
+                    true
+                })
+                .child(
+                    v_flex()
+                        .gap_3()
+                        .p_4()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(muted_foreground)
+                                .child(t!("QuickCommand.parameters_hint").to_string()),
+                        )
+                        .children(parameters.iter().zip(inputs.iter()).map(
+                            |(parameter, input)| {
+                                v_flex()
+                                    .gap_1()
+                                    .child(div().text_sm().child(parameter.clone()))
+                                    .child(Input::new(input).w_full())
+                            },
+                        )),
+                )
+        });
+    }
+
     fn command_tooltip(command: &QuickCommand) -> String {
         let mut lines = Vec::new();
         if let Some(name) = command.name.as_ref().filter(|name| !name.trim().is_empty()) {
@@ -1572,7 +1691,9 @@ impl QuickCommandPanel {
             .hover(|style| style.bg(muted_bg))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |this, _, _, cx| this.paste_command(value_for_row.clone(), cx)),
+                cx.listener(move |this, _, window, cx| {
+                    this.execute_command_with_parameters(value_for_row.clone(), window, cx)
+                }),
             )
             .child(
                 h_flex()
@@ -1694,8 +1815,12 @@ impl QuickCommandPanel {
                                 .role(IconButtonRole::Compact)
                                 .tooltip(t!("QuickCommand.paste_tooltip").to_string())
                                 .on_click(cx.listener(
-                                    move |this, _, _, cx| {
-                                        this.paste_command(value_for_paste.clone(), cx);
+                                    move |this, _, window, cx| {
+                                        this.execute_command_with_parameters(
+                                            value_for_paste.clone(),
+                                            window,
+                                            cx,
+                                        );
                                     },
                                 )),
                             ),
@@ -1827,8 +1952,8 @@ mod tests {
         apply_auto_run_marker, capture_quick_command_shortcut, command_matches_group_filter,
         connection_id_for_scope, new_command_group_defaults, normalize_group_fields,
         normalize_quick_command_value, quick_command_group_chip_label,
-        quick_command_group_color_items, quick_command_groups, shortcut_capture_label,
-        validated_quick_command_shortcut,
+        quick_command_group_color_items, quick_command_groups, quick_command_parameters,
+        replace_quick_command_parameters, shortcut_capture_label, validated_quick_command_shortcut,
     };
     use gpui::Keystroke;
     use one_core::storage::QuickCommand;
@@ -1857,6 +1982,20 @@ mod tests {
         // 多行命令内部的换行不受影响
         assert_eq!("cd /tmp\nls", apply_auto_run_marker("cd /tmp\nls\n", false));
         assert_eq!("cd /tmp\nls\n", apply_auto_run_marker("cd /tmp\nls", true));
+    }
+
+    #[test]
+    fn parameterized_quick_commands_extract_unique_names_and_replace_values() {
+        let command = "ssh {{ user }}@{{host}} && echo {{user}} {{missing";
+        let parameters = quick_command_parameters(command);
+        assert_eq!(vec!["user".to_string(), "host".to_string()], parameters);
+
+        let rendered = replace_quick_command_parameters(
+            command,
+            &parameters,
+            &["root".to_string(), "example.com".to_string()],
+        );
+        assert_eq!("ssh root@example.com && echo root {{missing", rendered);
     }
 
     #[test]

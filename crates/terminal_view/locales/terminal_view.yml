@@ -1440,6 +1440,18 @@ QuickCommand:
     en: Enter command
     zh-CN: 输入命令
     zh-HK: 輸入命令
+  parameters_title:
+    en: Fill Command Parameters
+    zh-CN: 填写命令参数
+    zh-HK: 填寫命令參數
+  parameters_hint:
+    en: "Use {{name}} placeholders in the command; fill their values here before sending."
+    zh-CN: "在命令中使用 {{name}} 占位符，发送前在这里填写对应值。"
+    zh-HK: "在命令中使用 {{name}} 佔位符，傳送前在這裡填寫對應值。"
+  parameter_placeholder:
+    en: Enter %{name}
+    zh-CN: 输入 %{name}
+    zh-HK: 輸入 %{name}
   auto_run:
     en: Execute on click
     zh-CN: 点击执行
