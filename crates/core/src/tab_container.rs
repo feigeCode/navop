@@ -4765,6 +4765,28 @@ impl TabContainer {
                     }),
             )
             .child(
+                div()
+                    .id("tab-bar-actions-drag")
+                    .debug_selector(|| "tab-bar-actions-drag".to_owned())
+                    .w(px(16.0))
+                    .h_full()
+                    .flex_shrink_0()
+                    .when(enable_titlebar_interactions, |this| {
+                        with_tab_bar_window_drag(this, &drag_state, window)
+                    })
+                    .when(enable_titlebar_interactions, |this| {
+                        this.when(is_linux, |this| {
+                            this.on_double_click(|_, window, _| window.zoom_window())
+                        })
+                        .when(is_macos, |this| {
+                            this.on_double_click(|_, window, _| window.titlebar_double_click())
+                        })
+                    })
+                    .when(show_window_controls, |this| {
+                        this.window_control_area(WindowControlArea::Drag)
+                    }),
+            )
+            .child(
                 Button::new("tab-dropdown-btn")
                     .debug_selector(|| "tab-dropdown-btn".to_owned())
                     .flex_shrink_0()

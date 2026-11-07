@@ -16,6 +16,8 @@ fn macos_keeps_tab_drag_enabled_while_blank_space_moves_the_window() {
     assert!(!source.contains(&macos_disable));
     assert!(source.contains(".id(\"tab-bar-window-drag-left\")"));
     assert!(source.contains(".id(\"tab-bar-window-drag-right\")"));
+    assert!(source.contains(".id(\"tab-bar-actions-drag\")"));
+    assert!(source.contains("with_tab_bar_window_drag(this, &drag_state, window)"));
     assert!(source.contains("window.start_window_move()"));
     assert!(!tabs_block.contains("window_control_area(WindowControlArea::Drag)"));
     assert!(!tabs_block.contains(".child(right_window_drag_region)"));
