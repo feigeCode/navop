@@ -21,6 +21,15 @@ fn local_terminal_launcher_is_visible_in_home_toolbar() {
 }
 
 #[test]
+fn home_toolbar_exports_a_connection_bundle() {
+    let toolbar = include_str!("../toolbar.rs");
+    assert!(toolbar.contains("Home.export_connections"));
+    assert!(toolbar.contains("app_kit::import::export_bundle(cx)"));
+    assert!(toolbar.contains("prompt_for_paths(PathPromptOptions"));
+    assert!(toolbar.contains("navop-connections-"));
+}
+
+#[test]
 fn connection_team_badge_uses_cached_team_name() {
     let teams = vec![TeamOption {
         id: "team-1".to_string(),

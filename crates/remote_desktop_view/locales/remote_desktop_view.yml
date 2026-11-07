@@ -25,6 +25,10 @@ RemoteDesktop:
     en: "Reconnecting %{protocol} session"
     zh-CN: "正在重新连接 %{protocol} 会话"
     zh-HK: "正在重新連線 %{protocol} 工作階段"
+  manual_reconnect:
+    en: "Reconnect"
+    zh-CN: "重新连接"
+    zh-HK: "重新連線"
   reconnect_reason_display_update:
     en: display update error
     zh-CN: 显示更新错误

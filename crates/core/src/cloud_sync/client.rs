@@ -237,6 +237,12 @@ pub trait CloudApiClient: Send + Sync {
     async fn remove_team_member(&self, team_id: &str, member_id: &str)
     -> Result<(), CloudApiError>;
 
+    /// 非 owner 成员退出团队。
+    ///
+    /// 服务端 RLS 只允许成员删除自己的非 owner 记录；owner 必须先转让
+    /// 所有权。`team_id` 同时用于定位成员记录和刷新本地团队缓存。
+    async fn leave_team(&self, team_id: &str) -> Result<(), CloudApiError>;
+
     // ========================================================================
     // AI 聊天
     // ========================================================================

@@ -257,7 +257,7 @@ use gpui::px;
 use gpui_component::ActiveTheme;
 use gpui_component::dock::ToggleZoom;
 use one_core::llm::manager::GlobalProviderState;
-use one_core::settings::{AppSettings, MainWindowState};
+use one_core::settings::{AppSettings, MainWindowState, StartupDefaultPage};
 use one_core::storage::manager::get_config_dir;
 use one_core::tab_container::{
     GlobalTabContainer, TabContainer, TabContainerEvent, TabContentRegistry, TabItem,
@@ -1482,6 +1482,14 @@ impl NavopApp {
                 });
             });
         }
+        if settings.startup_default_page == StartupDefaultPage::AiWorkbench {
+            let home_for_ai_workbench = home_page.clone();
+            window.defer(cx, move |window, cx| {
+                home_for_ai_workbench.update(cx, |home, cx| {
+                    home.add_ai_workbench_tab(window, cx);
+                });
+            });
+        }
         let appearance_subscription = window.observe_window_appearance(|_, cx| {
             let settings = AppSettings::current(cx);
             if settings.auto_switch_theme || settings.theme_mode == "system" {
@@ -1847,7 +1855,7 @@ mod tests {
     }
 
     #[test]
-    fn initial_layout_always_opens_home_without_the_ai_workbench() {
+    fn initial_layout_pins_home_and_honors_the_startup_page_setting() {
         let layout = initial_content_layout();
         assert!(layout.pin_home);
         assert_eq!("home", layout.home_tab_id);
@@ -1863,7 +1871,9 @@ mod tests {
                     .next()
             })
             .expect("application constructor");
-        assert!(!constructor.contains("settings.startup_default_page"));
+        assert!(constructor.contains("settings.startup_default_page"));
+        assert!(constructor.contains("StartupDefaultPage::AiWorkbench"));
+        assert!(constructor.contains("home.add_ai_workbench_tab(window, cx)"));
         assert!(!constructor.contains("DefaultAgentChatPanel::new_workbench"));
     }
 

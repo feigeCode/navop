@@ -1862,6 +1862,18 @@ fn reconnect_status_uses_a_transient_notification_outside_tab_content() {
 }
 
 #[test]
+fn rdp_disconnected_status_offers_manual_reconnect() {
+    let render = include_str!("render.rs");
+    let reconnect = render
+        .split("Button::new(\"remote-desktop-reconnect\")")
+        .nth(1)
+        .expect("manual reconnect button");
+    assert!(reconnect.contains("this.send_input(RemoteDesktopInput::Reconnect)"));
+    assert!(render.contains("self.options.protocol == RemoteDesktopProtocol::Rdp"));
+    assert!(render.contains("!self.connected"));
+}
+
+#[test]
 fn session_takeover_notifies_the_user_and_requests_tab_close_without_reconnecting() {
     let output = include_str!("output.rs");
     let notifications = include_str!("notifications.rs");

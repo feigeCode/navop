@@ -2,9 +2,12 @@ use std::ops::Range;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, IntoElement, ListSizingBehavior, ParentElement, Styled, div, px, uniform_list,
+    AnyElement, InteractiveElement, IntoElement, ListSizingBehavior, MouseButton, ParentElement,
+    Styled, WindowControlArea, div, px, uniform_list,
 };
-use gpui_component::{Icon, Sizable, StyledExt, h_flex, input::Input, v_flex};
+use gpui_component::{
+    Icon, InteractiveElementExt as _, Sizable, StyledExt, h_flex, input::Input, v_flex,
+};
 use one_assets::IconName;
 use one_core::settings::{AppSettings, ConnectionSortOrder};
 use one_ui::IconSize;
@@ -333,6 +336,7 @@ impl PersistentConnectionSidebar {
         // 停靠树的 header 从窗口左上角开始；macOS 红绿灯覆盖该区域，需左侧避让。
         let titlebar_inset = cfg!(target_os = "macos") && macos_titlebar_inset;
         h_flex()
+            .id("persistent-connection-header")
             .w_full()
             .h(layout.embedded_panel_header)
             .flex_shrink_0()
@@ -354,6 +358,12 @@ impl PersistentConnectionSidebar {
             .text_color(palette.foreground)
             .border_b_1()
             .border_color(palette.border.opacity(0.6))
+            .window_control_area(WindowControlArea::Drag)
+            .on_mouse_down(MouseButton::Left, |_, window, cx| {
+                window.start_window_move();
+                cx.stop_propagation();
+            })
+            .on_double_click(|_, window, _| window.titlebar_double_click())
             .child(
                 h_flex()
                     .min_w_0()
@@ -378,6 +388,7 @@ impl PersistentConnectionSidebar {
             .child(
                 h_flex()
                     .gap_1()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .child(auto_hide_tree_toggle(
                         view_for_batch.clone(),
                         self.auto_hide_tree,
@@ -408,6 +419,18 @@ mod tests {
         assert!(!implementation.contains("persistent-hide-empty-workspaces"));
         assert!(!implementation.contains("persistent-new-root-group"));
         assert!(!implementation.contains("persistent-refresh-connections"));
+    }
+
+    #[test]
+    fn connection_header_is_a_window_drag_region_with_interactive_actions_excluded() {
+        let source = include_str!("tree.rs");
+        let implementation = source.split("#[cfg(test)]").next().unwrap();
+        assert!(implementation.contains("window_control_area(WindowControlArea::Drag)"));
+        assert!(implementation.contains("window.start_window_move()"));
+        assert!(
+            implementation
+                .contains("on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())")
+        );
     }
 
     #[test]

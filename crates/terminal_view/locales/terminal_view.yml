@@ -1228,6 +1228,10 @@ TerminalView:
     en: Paste preview
     zh-CN: 粘贴预览
     zh-HK: 貼上預覽
+  paste_edit:
+    en: Review and edit
+    zh-CN: 检查并编辑
+    zh-HK: 檢查並編輯
   paste_summary:
     en: "%{lines} lines · %{chars} chars"
     zh-CN: 共 %{lines} 行 · %{chars} 字符
@@ -1236,6 +1240,10 @@ TerminalView:
     en: Paste as single line
     zh-CN: 合并为单行粘贴
     zh-HK: 合併為單行貼上
+  paste_line_by_line:
+    en: Send line by line
+    zh-CN: 逐行发送
+    zh-HK: 逐行傳送
   paste_open_settings:
     en: Open Settings
     zh-CN: 打开设置
@@ -1440,6 +1448,18 @@ QuickCommand:
     en: Enter command
     zh-CN: 输入命令
     zh-HK: 輸入命令
+  parameters_title:
+    en: Fill Command Parameters
+    zh-CN: 填写命令参数
+    zh-HK: 填寫命令參數
+  parameters_hint:
+    en: "Use {{name}} placeholders in the command; fill their values here before sending."
+    zh-CN: "在命令中使用 {{name}} 占位符，发送前在这里填写对应值。"
+    zh-HK: "在命令中使用 {{name}} 佔位符，傳送前在這裡填寫對應值。"
+  parameter_placeholder:
+    en: Enter %{name}
+    zh-CN: 输入 %{name}
+    zh-HK: 輸入 %{name}
   auto_run:
     en: Execute on click
     zh-CN: 点击执行

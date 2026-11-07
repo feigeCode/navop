@@ -398,6 +398,24 @@ impl AgentTranscript {
         self.enforce_budget();
     }
 
+    /// 推入一条**本地提交的**用户消息，轮次标恒为 `None`。
+    ///
+    /// 与 [`AgentTranscript::push_user`] 的差别只有一处：不走 `push_message`，
+    /// 因此不会被 `current_turn` 盖标。提交时这轮的 `TurnStarted` 还没回来
+    /// （事件是异步送达的），`current_turn` 停留在**上一轮**——盖标会把新
+    /// 问题错挂到旧轮次上，轮次投影随即把两轮折进同一个 key：旧轮时间表
+    /// （已 started+finished）被拿去判新轮的 running，工具空档期过程区先收
+    /// 起、下一条 live 消息到达又展开，就是「第二次对话折叠又弹开」的闪动。
+    /// 留 `None` 让投影的回退链（head → process → answer）从本轮正文消息
+    /// 取回正确的轮次 id，两轮天然分开。
+    pub fn push_user_fresh(&mut self, text: &str, images: Vec<MessageImage>) {
+        let message = ChatMessageUI::user(text).with_images(images);
+        // 与 push_message 保持同样的修订推进，会话内搜索才能感知到新消息。
+        self.messages.push(message);
+        self.touch();
+        self.enforce_budget();
+    }
+
     /// 追加一条来自运行时事件 / ACP 回放的用户消息。
     ///
     /// ACP agent 会把带图片的 prompt 原样重放回来，图片在那条 update 里是
@@ -1797,6 +1815,61 @@ mod tests {
             turn_labels(&tr)
         );
         assert_eq!(Some("t2"), tr.current_turn_id());
+    }
+
+    /// 回归：本地提交的用户消息（`push_user_fresh`）不继承 `current_turn`。
+    ///
+    /// 第一轮收尾后 `current_turn` 仍指 t1（终态事件带轮次 id），此时用户提交
+    /// 第二问 —— 走 `push_user` 会把新问题错盖上 t1，轮次投影随之把两轮折进
+    /// 同一个 key，就是「第二次对话折叠又弹开」的闪动（详见 turn.rs 的投影
+    /// 回归测试）。`push_user_fresh` 必须保持 `None`，让投影的回退链从本轮
+    /// 正文消息取回正确的 t2。
+    #[test]
+    fn locally_submitted_user_messages_never_inherit_the_previous_turn() {
+        let mut tr = AgentTranscript::new();
+
+        tr.apply(&RuntimeEvent::TurnStarted {
+            session_id: sid(),
+            turn_id: turn(1),
+        });
+        tr.apply(&RuntimeEvent::AssistantMessageDelta {
+            session_id: sid(),
+            turn_id: turn(1),
+            delta: "答案一".into(),
+        });
+        tr.apply(&RuntimeEvent::TurnCompleted {
+            session_id: sid(),
+            turn_id: turn(1),
+            answer: Some("答案一".into()),
+        });
+        // 终态事件把 current_turn 留在 t1 —— 这正是提交第二问时的转录状态。
+        assert_eq!(Some("t1"), tr.current_turn_id());
+
+        tr.push_user_fresh("第二问", Vec::new());
+        assert_eq!(
+            None,
+            tr.messages
+                .last()
+                .and_then(|message| message.turn_id.as_deref()),
+            "本地提交的用户消息不得继承上一轮的轮次标"
+        );
+
+        // 第二轮事件到达后，正文消息归 t2，投影回退链据此把两轮分开。
+        tr.apply(&RuntimeEvent::TurnStarted {
+            session_id: sid(),
+            turn_id: turn(2),
+        });
+        tr.apply(&RuntimeEvent::AssistantMessageDelta {
+            session_id: sid(),
+            turn_id: turn(2),
+            delta: "答案二".into(),
+        });
+
+        let turns = crate::turn::project_turns(&tr.messages, &crate::turn::TurnTimings::new());
+        assert_eq!(2, turns.len());
+        assert_eq!(Some("t1".to_string()), turns[0].turn_id);
+        assert_eq!(Some("t2".to_string()), turns[1].turn_id);
+        assert_ne!(turns[0].key, turns[1].key);
     }
 
     #[test]

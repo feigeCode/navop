@@ -828,6 +828,18 @@ impl SyncEngine {
         Ok(())
     }
 
+    /// 当前用户退出团队。
+    ///
+    /// owner 不能直接退出；服务端 RLS 和触发器会拒绝越权删除。
+    pub async fn leave_team(&self, team_id: &str) -> Result<(), SyncError> {
+        self.cloud_client
+            .leave_team(team_id)
+            .await
+            .map_err(team_admin_sync_error)?;
+        self.refresh_team_cache_best_effort("退出团队").await;
+        Ok(())
+    }
+
     /// 刷新本地团队缓存，失败只记日志，不影响已经成功的写操作。
     async fn refresh_team_cache_best_effort(&self, action: &str) {
         if let Err(error) = self.refresh_team_key_cache().await {
@@ -1375,6 +1387,10 @@ mod tests {
             _team_id: &str,
             _member_id: &str,
         ) -> Result<(), CloudApiError> {
+            Err(CloudApiError::Unknown("not used".to_string()))
+        }
+
+        async fn leave_team(&self, _team_id: &str) -> Result<(), CloudApiError> {
             Err(CloudApiError::Unknown("not used".to_string()))
         }
 

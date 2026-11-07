@@ -80,9 +80,11 @@ impl TerminalView {
             TerminalDuplicateSource::Local(config) => {
                 Self::new_with_index(config, None, window, cx)
             }
-            TerminalDuplicateSource::Launched { config, title, icon } => {
-                Self::new_launched(config, title, icon, None, window, cx)
-            }
+            TerminalDuplicateSource::Launched {
+                config,
+                title,
+                icon,
+            } => Self::new_launched(config, title, icon, None, window, cx),
             TerminalDuplicateSource::Serial(connection) => {
                 Self::new_serial_with_index(connection, None, window, cx)
             }
@@ -161,6 +163,22 @@ impl TerminalView {
             terminal.connection_state(),
             ConnectionState::Disconnected { .. }
         ) || terminal.child_exited().is_some()
+    }
+
+    pub(crate) fn terminal_can_disconnect(&self, cx: &App) -> bool {
+        self.terminal.read(cx).live_connection_kind() == Some(TerminalConnectionKind::Ssh)
+            && !self.terminal_is_disconnected(cx)
+    }
+
+    pub(crate) fn disconnect_terminal(&mut self, cx: &mut Context<Self>) -> bool {
+        let disconnected = self
+            .terminal
+            .update(cx, |terminal, cx| terminal.disconnect(cx));
+        if disconnected {
+            self.release_active_connection(cx);
+            cx.notify();
+        }
+        disconnected
     }
 
     pub(crate) fn terminal_connection_status(

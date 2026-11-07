@@ -11,6 +11,16 @@
 
 use super::clipboard_image::join_paste_as_single_line;
 use super::*;
+use gpui_component::input::{Textarea, TextareaState};
+use std::time::Duration;
+
+const LINE_BY_LINE_INTERVAL: Duration = Duration::from_millis(80);
+
+fn line_by_line_payloads(text: &str) -> Vec<Vec<u8>> {
+    text.lines()
+        .map(|line| format!("{line}\r").into_bytes())
+        .collect()
+}
 
 /// 粘贴确认弹窗的触发原因。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,15 +71,19 @@ impl PasteConfirmKind {
     }
 }
 
-/// 预览面板：标题行（含行数与字符数）加可滚动的正文预览。
-fn paste_preview_panel(preview: &str, summary: &str, cx: &App) -> Div {
+/// 编辑面板：标题行（含行数与字符数）加可编辑的多行正文。
+fn paste_edit_panel(editor: &Entity<TextareaState>, summary: &str, cx: &App) -> Div {
     v_flex()
         .gap_2()
         .min_h_0()
         .child(
             h_flex()
                 .justify_between()
-                .child(div().text_xs().child(t!("TerminalView.paste_preview")))
+                .child(
+                    div()
+                        .text_xs()
+                        .child(t!("TerminalView.paste_edit").to_string()),
+                )
                 .child(
                     div()
                         .text_xs()
@@ -78,12 +92,10 @@ fn paste_preview_panel(preview: &str, summary: &str, cx: &App) -> Div {
                 ),
         )
         .child(
-            v_flex()
+            div()
                 .id("paste-preview")
-                .max_h(px(160.0))
-                .overflow_y_scroll()
-                .text_xs()
-                .child(preview.to_string()),
+                .max_h(px(220.0))
+                .child(Textarea::new(editor).h(px(180.0)).w_full()),
         )
 }
 
@@ -93,12 +105,14 @@ fn paste_preview_panel(preview: &str, summary: &str, cx: &App) -> Div {
 /// 该提示存在对应开关时才出现（大段粘贴是硬阈值，两者都不显示）。
 fn paste_confirm_actions(
     view: &Entity<TerminalView>,
-    text: &str,
+    editor: &Entity<TextareaState>,
     single_line_available: bool,
     disable_setting: Option<PasteSafetySetting>,
 ) -> Div {
     let view_single = view.clone();
-    let text_single = text.to_string();
+    let editor_single = editor.clone();
+    let view_line_by_line = view.clone();
+    let editor_line_by_line = editor.clone();
     let view_settings = view.clone();
     let view_disable = view.clone();
 
@@ -111,10 +125,23 @@ fn paste_confirm_actions(
                     .small()
                     .outline()
                     .on_click(move |_event, window, cx| {
-                        let joined = join_paste_as_single_line(&text_single);
+                        let joined = join_paste_as_single_line(&editor_single.read(cx).value());
                         window.close_dialog(cx);
                         view_single.update(cx, |this, cx| {
                             this.paste_text_unchecked(&joined, window, cx);
+                        });
+                    }),
+            )
+            .child(
+                Button::new("paste-line-by-line")
+                    .label(t!("TerminalView.paste_line_by_line"))
+                    .small()
+                    .outline()
+                    .on_click(move |_event, window, cx| {
+                        let text = editor_line_by_line.read(cx).value().to_string();
+                        window.close_dialog(cx);
+                        view_line_by_line.update(cx, |this, cx| {
+                            this.paste_line_by_line_unchecked(&text, cx);
                         });
                     }),
             )
@@ -157,15 +184,20 @@ impl TerminalView {
     ) {
         let title = kind.title();
         let message = kind.message();
-        let preview_text = Self::paste_preview_text(&text);
         let summary_text = Self::paste_summary_text(&text);
         let single_line_available = multiline_non_empty_line_count(&text) > 1;
         let disable_setting = kind.disable_setting();
         let view = cx.entity().clone();
+        let editor = cx.new(|cx| {
+            let mut state = TextareaState::new(window, cx).auto_grow(4, 12);
+            state.set_value(text.clone(), window, cx);
+            state
+        });
+        let editor_for_ok = editor.clone();
 
         window.open_dialog(cx, move |dialog, _window, _cx| {
             let view_ok = view.clone();
-            let text_ok = text.clone();
+            let editor_ok = editor_for_ok.clone();
 
             dialog
                 .title(title.clone())
@@ -174,10 +206,10 @@ impl TerminalView {
                         .gap_2()
                         .min_h_0()
                         .child(div().text_sm().child(message.clone()))
-                        .child(paste_preview_panel(&preview_text, &summary_text, _cx))
+                        .child(paste_edit_panel(&editor, &summary_text, _cx))
                         .child(paste_confirm_actions(
                             &view,
-                            &text,
+                            &editor,
                             single_line_available,
                             disable_setting,
                         ))
@@ -191,12 +223,34 @@ impl TerminalView {
                         .cancel_text(t!("Common.cancel")),
                 )
                 .on_ok(move |_event, window, cx| {
+                    let text = editor_ok.read(cx).value().to_string();
                     view_ok.update(cx, |this, cx| {
-                        this.paste_text_unchecked(&text_ok, window, cx);
+                        this.paste_text_unchecked(&text, window, cx);
                     });
                     true
                 })
         });
+    }
+
+    fn paste_line_by_line_unchecked(&mut self, text: &str, cx: &mut Context<Self>) {
+        let mut payloads = line_by_line_payloads(text).into_iter();
+        let Some(first) = payloads.next() else {
+            return;
+        };
+        self.write_to_pty(first, cx);
+        let remaining = payloads.collect::<Vec<_>>();
+        if remaining.is_empty() {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            for payload in remaining {
+                cx.background_executor().timer(LINE_BY_LINE_INTERVAL).await;
+                let _ = this.update(cx, |this, cx| {
+                    this.write_to_pty(payload, cx);
+                });
+            }
+        })
+        .detach();
     }
 
     /// 打开终端工具侧边栏的设置面板（粘贴弹窗的「打开设置」入口）。
@@ -228,5 +282,26 @@ impl TerminalView {
                 self.apply_confirm_high_risk_command(false, cx);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn line_by_line_payloads_send_one_command_per_line() {
+        assert_eq!(
+            vec![b"echo one\r".to_vec(), b"echo two\r".to_vec()],
+            super::line_by_line_payloads("echo one\necho two\n")
+        );
+        assert!(super::line_by_line_payloads("").is_empty());
+    }
+
+    #[test]
+    fn paste_confirmation_is_editable_and_exposes_line_by_line_send() {
+        let source = include_str!("paste_confirm_dialog.rs");
+        let implementation = source.split("#[cfg(test)]").next().unwrap();
+        assert!(implementation.contains("Textarea::new(editor)"));
+        assert!(implementation.contains("paste-line-by-line"));
+        assert!(implementation.contains("TerminalView.paste_line_by_line"));
     }
 }

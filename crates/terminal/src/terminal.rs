@@ -4565,6 +4565,38 @@ impl Terminal {
         true
     }
 
+    /// 主动断开 SSH 会话但保留终端缓冲区，之后可按 Enter 重新连接。
+    pub fn disconnect(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.is_read_only()
+            || self.connection_kind != TerminalConnectionKind::Ssh
+            || matches!(self.connection_state, ConnectionState::Disconnected { .. })
+        {
+            return false;
+        }
+
+        if let Some(responder) = &self.ssh_mfa_responder {
+            responder.cancel();
+        }
+        self.ssh_mfa_responder = None;
+        self.ssh_credential_request = None;
+        if let Some(responder) = &self.zmodem_responder {
+            responder.cancel();
+        }
+        if let Some(backend) = self.backend.take() {
+            backend.shutdown();
+        }
+        if let Some(session_manager) = self.ssh_session_manager.take() {
+            cx.spawn(async move |_, _| {
+                let _ = session_manager.disconnect().await;
+            })
+            .detach();
+        }
+        self.connection_state = ConnectionState::Disconnected { error: None };
+        self.set_connection_active(false, cx);
+        cx.emit(TerminalModelEvent::Wakeup);
+        true
+    }
+
     fn prepare_surface_for_reconnect(&mut self) {
         // Keep the primary grid and scrollback, but never carry a stale full-screen
         // alternate-screen application (such as Vim) into the replacement backend.

@@ -244,6 +244,10 @@ impl CloudApiClient for FakeCloudClient {
         Err(not_used())
     }
 
+    async fn leave_team(&self, _team_id: &str) -> Result<(), CloudApiError> {
+        Err(not_used())
+    }
+
     async fn initialize_team_key(&self, _team: &Team) -> Result<Team, CloudApiError> {
         Err(not_used())
     }
