@@ -49,6 +49,15 @@ impl TabContent for TerminalWorkspace {
         true
     }
 
+    fn can_disconnect(&self, cx: &App) -> bool {
+        self.active_pane().read(cx).terminal_can_disconnect(cx)
+    }
+
+    fn disconnect(&mut self, cx: &mut Context<Self>) -> bool {
+        let pane = self.active_pane();
+        pane.update(cx, |pane, cx| pane.disconnect_terminal(cx))
+    }
+
     fn on_activate(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.set_tab_metric_state(true, cx);
         self.set_active_pane_metric_state(cx);
@@ -163,5 +172,7 @@ mod tests {
         let source = include_str!("tab_content.rs");
         assert!(source.contains("fn can_open_sftp(&self, cx: &App) -> bool"));
         assert!(source.contains("TerminalWorkspaceEvent::OpenSftp(connection)"));
+        assert!(source.contains("fn can_disconnect(&self, cx: &App) -> bool"));
+        assert!(source.contains("pane.disconnect_terminal(cx)"));
     }
 }

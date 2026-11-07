@@ -215,6 +215,10 @@ TabContextMenu:
     en: "Open SFTP File View"
     zh-CN: "打开 SFTP 文件视图"
     zh-HK: "開啟 SFTP 檔案檢視"
+  disconnect_session:
+    en: "Disconnect"
+    zh-CN: "断开连接"
+    zh-HK: "中斷連線"
   lock_session:
     en: "Lock Session"
     zh-CN: "锁定会话"

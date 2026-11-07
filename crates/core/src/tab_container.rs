@@ -495,6 +495,16 @@ pub trait TabContent: EventEmitter<TabContentEvent> + Render + Focusable {
         false
     }
 
+    /// Whether this tab can disconnect its live connection without closing.
+    fn can_disconnect(&self, cx: &App) -> bool {
+        false
+    }
+
+    /// Disconnect the tab's live connection while keeping the tab open.
+    fn disconnect(&mut self, cx: &mut Context<Self>) -> bool {
+        false
+    }
+
     /// Build a new content view for a duplicated tab.
     fn duplicate(
         &mut self,
@@ -599,6 +609,8 @@ pub trait TabContentView: 'static + Send + Sync {
     fn copy_label(&self, cx: &App) -> Option<String>;
     fn can_open_sftp(&self, cx: &App) -> bool;
     fn open_sftp(&self, window: &mut Window, cx: &mut App) -> bool;
+    fn can_disconnect(&self, cx: &App) -> bool;
+    fn disconnect(&self, cx: &mut App) -> bool;
     fn on_activate(&self, window: &mut Window, cx: &mut App);
     fn on_deactivate(&self, window: &mut Window, cx: &mut App);
     fn set_presentation_obscured(&self, obscured: bool, cx: &mut App);
@@ -690,6 +702,14 @@ impl<T: TabContent> TabContentView for Entity<T> {
 
     fn open_sftp(&self, window: &mut Window, cx: &mut App) -> bool {
         self.update(cx, |this, cx| this.open_sftp(window, cx))
+    }
+
+    fn can_disconnect(&self, cx: &App) -> bool {
+        self.read(cx).can_disconnect(cx)
+    }
+
+    fn disconnect(&self, cx: &mut App) -> bool {
+        self.update(cx, |this, cx| this.disconnect(cx))
     }
 
     fn duplicate(&self, window: &mut Window, cx: &mut App) -> Option<Arc<dyn TabContentView>> {
@@ -2734,6 +2754,15 @@ impl TabContainer {
         }
     }
 
+    fn disconnect_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get(index) else {
+            return;
+        };
+        if !tab.content().disconnect(cx) {
+            tracing::warn!("当前标签页无法断开连接");
+        }
+    }
+
     pub fn dump(&self, cx: &App) -> TabContainerState {
         let tabs = self
             .tabs
@@ -4489,6 +4518,12 @@ impl TabContainer {
                                     .get(idx)
                                     .map(|tab| tab.content().can_open_sftp(cx))
                                     .unwrap_or(false);
+                                let can_disconnect = view_for_menu
+                                    .read(cx)
+                                    .tabs
+                                    .get(idx)
+                                    .map(|tab| tab.content().can_disconnect(cx))
+                                    .unwrap_or(false);
                                 let closeable = view_for_menu
                                     .read(cx)
                                     .tabs
@@ -4559,6 +4594,23 @@ impl TabContainer {
                                             &view_for_menu,
                                             move |this, _, window, cx| {
                                                 this.open_sftp_tab(idx, window, cx);
+                                            },
+                                        )),
+                                    )
+                                })
+                                .map(|menu| {
+                                    if !can_disconnect {
+                                        return menu;
+                                    }
+                                    menu.item(
+                                        PopupMenuItem::new(
+                                            t!("TabContextMenu.disconnect_session").to_string(),
+                                        )
+                                        .icon(IconName::StatusDisconnected)
+                                        .on_click(window.listener_for(
+                                            &view_for_menu,
+                                            move |this, _, _window, cx| {
+                                                this.disconnect_tab(idx, cx);
                                             },
                                         )),
                                     )
@@ -5507,6 +5559,9 @@ mod tests {
         assert!(implementation.contains("tab.content().can_open_sftp(cx)"));
         assert!(implementation.contains("TabContextMenu.open_sftp"));
         assert!(implementation.contains("this.open_sftp_tab(idx, window, cx)"));
+        assert!(implementation.contains("fn can_disconnect(&self, cx: &App) -> bool"));
+        assert!(implementation.contains("TabContextMenu.disconnect_session"));
+        assert!(implementation.contains("this.disconnect_tab(idx, cx)"));
     }
 
     #[test]
