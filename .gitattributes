@@ -1,3 +1,8 @@
 * text=auto eol=lf
 
+*.png binary
+*.ico binary
+*.icns binary
+*.wasm binary
+
 crates/terminal/src/shell_integration.sh text eol=lf

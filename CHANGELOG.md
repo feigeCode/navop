@@ -4,6 +4,36 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.23.0-beta.7] - 2026-11-07
+
+#### 更新内容
+
+- 插件机制完成一次大版本收敛：nsh-host 页面全面切换到 host ABI v2，扩展收成一个 nsh app；插件可以注册自己的 AI 工具，也可以在页面内展开 AI 侧边栏（plugin-ai-tools M0–M3）。
+- 独立产品图标改为「N + 领域脚标」体系，Shell 与 Data 各自有专属图标，三个产品不再共用一套图标。
+- 迁移包导入保留工作区层级，全量产品的父子结构不再被拍平；设置页重新排序，数据库与终端提到前面，账户与关于收尾。
+
+#### 修复与优化
+
+- 修复 beta 构建加载不到已安装复合扩展的问题：SemVer 规定预发布版本不满足普通范围，导致 beta / dev 构建把扩展清单的 `>=0.16.1` 判为不兼容；现在预发布宿主会额外按 release 三元组回退匹配一次，扩展管理器与扩展市场恢复正常（数据库驱动侧同类问题此前已修，这次补齐扩展侧）。
+- 修复打开扩展连接（首页卡片、连接侧栏、公共 MCP）偶发崩溃的问题：挂 tab 的操作移到本轮 effect flush 之后，不再重入 HomePage 的 update 造成 double lease panic。
+- 修复插件 AI 侧边栏收起后扩展页面被挤成 0 宽、整页空白的问题：页面本体始终占满内容区，侧栏收起时入口改为 tab 右下角浮层按钮。
+- 32 位 Windows 构建形态修复：wgpu-hal 与 gpu-allocator 的 windows 依赖边统一，gpu-allocator 钉到 wgpu-hal 使用的 0.62 版本。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.23.0-beta.7) 下载桌面端安装包
+
+#### What's New
+
+- The extension system completed a major convergence: nsh-host pages moved fully onto host ABI v2 and extensions now build as a single nsh app. Plugins can register their own AI tools and open an in-page AI sidebar (plugin-ai-tools M0–M3).
+- Standalone product icons switched to an "N + domain badge" system: Shell and Data each get their own icon, and the three products no longer share one set.
+- Migration package import preserves the workspace hierarchy so the parent-child structure of full products is no longer flattened; the settings page is reordered with Database and Terminal first and Account / About last.
+
+#### Fixes and Improvements
+
+- Fixed installed composite extensions not loading in beta builds: SemVer makes pre-release versions fail plain ranges, so beta / dev hosts rejected extension manifests requiring `>=0.16.1`. A pre-release host now falls back to matching the release triple once, restoring the extension manager and marketplace (the same issue was fixed earlier for database drivers; this closes the extension side).
+- Fixed an occasional crash when opening an extension connection (home card, connection sidebar, or Public MCP): attaching the tab is deferred until the current effect flush instead of re-entering HomePage's update, avoiding the double lease panic.
+- Fixed extension pages collapsing to zero width and showing a blank page after the plugin AI sidebar was collapsed: the page body always fills the content area and the collapsed sidebar entry becomes a floating button at the tab's bottom-right corner.
+- Fixed 32-bit Windows build shapes: the windows dependency edges of wgpu-hal and gpu-allocator are unified, pinning gpu-allocator to the 0.62 line used by wgpu-hal.
+
 ## [v0.23.0-beta.6] - 2026-11-05
 
 #### 更新内容

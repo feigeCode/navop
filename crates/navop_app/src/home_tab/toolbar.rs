@@ -1,4 +1,6 @@
 use super::*;
+use chrono::Local;
+use gpui::PathPromptOptions;
 use gpui_component::Selectable as _;
 use one_core::settings::ConnectionSortOrder;
 use one_ui::IconSize;
@@ -221,6 +223,13 @@ impl HomePage {
                 )
                 .separator()
                 .item(
+                    PopupMenuItem::new(t!("Home.export_connections").to_string())
+                        .icon(IconName::File)
+                        .on_click(move |_, window, cx| {
+                            prompt_export_connections(window, cx);
+                        }),
+                )
+                .item(
                     PopupMenuItem::new(t!("Home.other_app_import").to_string())
                         .icon(IconName::Upload)
                         .on_click(move |_, window, cx| show_connection_import_window(window, cx)),
@@ -239,4 +248,54 @@ impl HomePage {
             })
             .into_any_element()
     }
+}
+
+fn prompt_export_connections(window: &mut Window, cx: &mut App) {
+    let json = match app_kit::import::export_bundle(cx) {
+        Ok(json) => json,
+        Err(error) => {
+            window.push_notification(
+                t!("Home.export_connections_failed", error = error).to_string(),
+                cx,
+            );
+            return;
+        }
+    };
+    let future = cx.prompt_for_paths(PathPromptOptions {
+        files: false,
+        directories: true,
+        multiple: false,
+        prompt: Some(
+            t!("Home.export_connections_select_directory")
+                .to_string()
+                .into(),
+        ),
+    });
+    window
+        .spawn(cx, async move |cx| {
+            let result = if let Ok(Ok(Some(paths))) = future.await {
+                paths.into_iter().next().map(|directory| {
+                    let path = directory.join(format!(
+                        "navop-connections-{}.json",
+                        Local::now().format("%Y%m%d-%H%M%S")
+                    ));
+                    std::fs::write(&path, json).map(|_| path)
+                })
+            } else {
+                None
+            };
+            if let Some(result) = result {
+                let _ = cx.update(|window, cx: &mut App| match result {
+                    Ok(path) => window.push_notification(
+                        t!("Home.export_connections_success", path = path.display()).to_string(),
+                        cx,
+                    ),
+                    Err(error) => window.push_notification(
+                        t!("Home.export_connections_failed", error = error).to_string(),
+                        cx,
+                    ),
+                });
+            }
+        })
+        .detach();
 }

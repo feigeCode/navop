@@ -6,8 +6,8 @@ use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::TermDamage;
 use terminal::line_timeline::SharedLineTimeline;
 
-/// 时间戳列宽（`[HH:MM:SS]`）
-const TIMESTAMP_COLUMNS: usize = 10;
+/// 时间戳列宽（`[HH:MM:SS.mmm]`）
+const TIMESTAMP_COLUMNS: usize = 14;
 /// 时间戳与行号之间、边距文本与终端内容之间的固定间隔（照 WindTerm 实测 3 格）
 const MARGIN_GAP: usize = 3;
 /// 行号列最小宽度（跟随当前最大行号位数）
@@ -24,7 +24,7 @@ pub(super) fn line_number_digits(max_line_number: usize) -> usize {
 }
 
 /// 左边距占用的文本列数；两列均关闭时为 0。
-/// 布局照 WindTerm：`[HH:MM:SS]` + 3 格 + 行号 + 3 格 + 内容。
+/// 布局照 WindTerm：`[HH:MM:SS.mmm]` + 3 格 + 行号 + 3 格 + 内容。
 pub(super) fn line_margin_columns(
     show_timestamps: bool,
     show_numbers: bool,
@@ -46,7 +46,7 @@ pub(super) fn line_margin_columns(
     columns
 }
 
-/// 单个屏幕行的边距文本：`[HH:MM:SS]` + 3 格 + 行号 + 3 格，长度恒等于
+/// 单个屏幕行的边距文本：`[HH:MM:SS.mmm]` + 3 格 + 行号 + 3 格，长度恒等于
 /// [`line_margin_columns`]。
 ///
 /// `label` 是该行的时间戳标签，同时表达“这一行是否已有输出”：`None` 表示还
@@ -68,7 +68,7 @@ fn line_margin_row_text(
         number_digits,
     ));
     if show_timestamps {
-        // 方括号照 WindTerm，时间线侧只存 `HH:MM:SS`。
+        // 方括号照 WindTerm，时间线侧存 `HH:MM:SS.mmm`。
         text.push('[');
         text.push_str(label);
         text.push(']');
@@ -470,16 +470,16 @@ mod tests {
     #[test]
     fn line_margin_columns_matches_windterm_layout() {
         assert_eq!(0, line_margin_columns(false, false, 2));
-        assert_eq!(13, line_margin_columns(true, false, 2));
+        assert_eq!(17, line_margin_columns(true, false, 2));
         assert_eq!(5, line_margin_columns(false, true, 2));
-        assert_eq!(18, line_margin_columns(true, true, 2));
-        assert_eq!(21, line_margin_columns(true, true, 5));
+        assert_eq!(22, line_margin_columns(true, true, 2));
+        assert_eq!(25, line_margin_columns(true, true, 5));
     }
 
     #[test]
     fn timestamped_row_keeps_brackets_and_number() {
-        let text = line_margin_row_text(Some("14:45:38"), 2, true, true, 2);
-        assert_eq!("[14:45:38]    2   ", text.as_str());
+        let text = line_margin_row_text(Some("14:45:38.123"), 2, true, true, 2);
+        assert_eq!("[14:45:38.123]    2   ", text.as_str());
         assert_eq!(
             line_margin_columns(true, true, 2),
             text.len(),

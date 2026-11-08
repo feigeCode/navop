@@ -596,6 +596,11 @@ fn save_block_message(reason: &str) -> String {
     }
 }
 
+/// 勾选时显式保存双栏偏好；取消勾选时清空偏好，回落到连接类型默认打开方式。
+fn preferred_open_mode_from_form(open_dual_pane_by_default: bool) -> Option<PreferredOpenMode> {
+    open_dual_pane_by_default.then_some(PreferredOpenMode::DualPane)
+}
+
 /// 将跳板机配置回填到表单输入框；`enabled` 输出该配置是否处于启用状态。
 #[allow(clippy::too_many_arguments)]
 fn load_jump_server_into_form(
@@ -2230,6 +2235,7 @@ impl SshFormWindow {
         let workspace_id = self.get_workspace_id(cx);
         let mut conn = StoredConnection::new_ssh(name, params, workspace_id);
         conn.sync_enabled = self.sync_enabled; // 设置同步状态
+        conn.preferred_open_mode = preferred_open_mode_from_form(self.open_dual_pane_by_default);
         let assignment = match resolve_team_assignment(
             self.get_team_id(cx),
             self.is_editing,
@@ -3929,7 +3935,7 @@ mod tests {
         connection_test_host_key_request, connection_test_needs_xquartz_warning,
         credential_capabilities_for_auth, format_connection_error,
         format_connection_error_for_platform, parse_os_release_id, parse_uname_os_id,
-        validate_save_state, xquartz_installation_warning_required,
+        preferred_open_mode_from_form, validate_save_state, xquartz_installation_warning_required,
     };
     use anyhow::Context as _;
     use connection_form::credential::CredentialCapabilities;
@@ -4403,6 +4409,31 @@ mod tests {
         form.read_with(cx, |form, _| {
             assert!(form.open_dual_pane_by_default);
         });
+    }
+
+    #[test]
+    fn saved_open_mode_preference_follows_the_checkbox() {
+        assert_eq!(
+            Some(PreferredOpenMode::DualPane),
+            preferred_open_mode_from_form(true)
+        );
+        assert_eq!(None, preferred_open_mode_from_form(false));
+    }
+
+    #[test]
+    fn ssh_form_save_persists_open_mode_preference() {
+        let source = include_str!("ssh_form_window.rs");
+        let save = source
+            .split_once("fn save(&mut self")
+            .expect("SSH form save function should exist")
+            .1
+            .split_once("fn mark_saved(")
+            .expect("SSH form save function should end before mark_saved")
+            .0;
+
+        assert!(save.contains(
+            "conn.preferred_open_mode = preferred_open_mode_from_form(self.open_dual_pane_by_default)"
+        ));
     }
 
     #[gpui::test]

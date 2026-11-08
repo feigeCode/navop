@@ -570,7 +570,28 @@ impl Render for RemoteDesktopView {
                                                 ));
                                             }),
                                     )
-                                }),
+                                })
+                                .when(
+                                    self.options.protocol == RemoteDesktopProtocol::Rdp
+                                        && !self.connected
+                                        && self.input_tx.is_some(),
+                                    |this| {
+                                        this.child(
+                                            Button::new("remote-desktop-reconnect")
+                                                .small()
+                                                .outline()
+                                                .compact()
+                                                .label(
+                                                    t!("RemoteDesktop.manual_reconnect")
+                                                        .to_string(),
+                                                )
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.send_input(RemoteDesktopInput::Reconnect);
+                                                    cx.notify();
+                                                })),
+                                        )
+                                    },
+                                ),
                         )
                     },
                 ),

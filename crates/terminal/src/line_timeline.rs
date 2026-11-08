@@ -70,7 +70,7 @@ struct LineTimeline {
 
 impl LineTimeline {
     fn observe(&mut self, sample: LineTimelineSample) {
-        let label: Arc<str> = Local::now().format("%H:%M:%S").to_string().into();
+        let label: Arc<str> = Local::now().format("%H:%M:%S%.3f").to_string().into();
         self.observe_labelled(sample, label);
     }
 
@@ -290,8 +290,10 @@ mod tests {
         let label = labels[0]
             .as_deref()
             .expect("sampled line should have a label");
-        assert_eq!(8, label.len());
+        assert_eq!(12, label.len());
         assert_eq!(Some(':'), label.chars().nth(2));
+        assert_eq!(Some('.'), label.chars().nth(8));
+        assert_eq!(3, label.chars().skip(9).count());
         assert!(labels[1].is_some(), "第 1 行已有输出");
         assert!(labels[2].is_none(), "光标下方还没有输出的行为 None");
     }

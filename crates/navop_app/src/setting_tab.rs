@@ -73,7 +73,7 @@ use gpui_component::input::InputEvent;
 pub use one_core::settings::{
     AppSettings, CloseButtonBehavior, CustomFont, GlobalCurrentUser, GlobalProxySettings,
     LOCALE_EN, LOCALE_SYSTEM, LOCALE_ZH_CN, LOCALE_ZH_HK, MasterKeyStorage,
-    PersonalSyncBackendKind, PersonalSyncSettings, ProxyType, SyncProvider,
+    PersonalSyncBackendKind, PersonalSyncSettings, ProxyType, StartupDefaultPage, SyncProvider,
     effective_locale_for_setting, is_installed_font_family, is_supported_grid_monospace_font,
 };
 use one_core::tab_container::{TabContent, TabContentEvent};
@@ -764,6 +764,45 @@ impl SettingsPanel {
                     SettingGroup::new()
                         .title(t!("Settings.General.Startup.group_title"))
                         .items(vec![
+                            SettingItem::new(
+                                t!("Settings.General.Startup.default_page"),
+                                SettingField::dropdown(
+                                    vec![
+                                        (
+                                            SharedString::from(StartupDefaultPage::Home.as_str()),
+                                            t!("Settings.General.Startup.default_page_home").into(),
+                                        ),
+                                        (
+                                            SharedString::from(
+                                                StartupDefaultPage::AiWorkbench.as_str(),
+                                            ),
+                                            t!(
+                                                "Settings.General.Startup.default_page_ai_workbench"
+                                            )
+                                            .into(),
+                                        ),
+                                    ],
+                                    |cx: &App| {
+                                        SharedString::from(
+                                            AppSettings::global(cx)
+                                                .startup_default_page
+                                                .as_str(),
+                                        )
+                                    },
+                                    |value: SharedString, cx: &mut App| {
+                                        let page = StartupDefaultPage::from_str(value.as_ref());
+                                        AppSettings::update_and_save(cx, |settings| {
+                                            settings.startup_default_page = page;
+                                        });
+                                    },
+                                )
+                                .default_value(SharedString::from(
+                                    default_settings.startup_default_page.as_str(),
+                                )),
+                            )
+                            .description(
+                                t!("Settings.General.Startup.default_page_desc").to_string(),
+                            ),
                             SettingItem::new(
                                 master_key_setting_title,
                                 SettingField::switch(
@@ -3989,6 +4028,16 @@ mod tests {
             compact.matches(&ansi_off).count(),
             "只该对写文件的那一层关 ANSI；终端那一层要保留颜色"
         );
+    }
+
+    #[test]
+    fn startup_page_setting_is_wired_to_home_and_ai_workbench() {
+        let source = include_str!("setting_tab.rs");
+        let implementation = source.split("#[cfg(test)]").next().unwrap();
+        assert!(implementation.contains("Settings.General.Startup.default_page"));
+        assert!(implementation.contains("Settings.General.Startup.default_page_home"));
+        assert!(implementation.contains("Settings.General.Startup.default_page_ai_workbench"));
+        assert!(implementation.contains("settings.startup_default_page = page"));
     }
 
     #[test]

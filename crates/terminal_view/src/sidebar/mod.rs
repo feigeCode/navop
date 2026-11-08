@@ -915,6 +915,11 @@ impl TerminalSidebar {
             .cloned()
     }
 
+    /// 当前终端对应的连接；本地终端返回 `None`。
+    pub(crate) fn stored_connection(&self) -> Option<StoredConnection> {
+        self.stored_connection.clone()
+    }
+
     /// 请求把当前临时连接保存为正式连接。
     pub(crate) fn request_save_as_connection(&self, cx: &mut Context<Self>) {
         if !self.save_as_connection_available() {

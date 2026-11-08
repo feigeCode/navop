@@ -29,6 +29,7 @@ struct TeamCalls {
     add: Mutex<Vec<(String, String, TeamRole)>>,
     set_role: Mutex<Vec<(String, String, TeamRole)>>,
     remove: Mutex<Vec<(String, String)>>,
+    leave: Mutex<Vec<String>>,
     list_teams: AtomicUsize,
 }
 
@@ -242,6 +243,18 @@ impl CloudApiClient for FakeTeamClient {
             .lock()
             .expect("remove calls lock")
             .push((team_id.to_string(), member_id.to_string()));
+        Ok(())
+    }
+
+    async fn leave_team(&self, team_id: &str) -> Result<(), CloudApiError> {
+        if let Some(error) = &self.team_error {
+            return Err(clone_error(error));
+        }
+        self.calls
+            .leave
+            .lock()
+            .expect("leave calls lock")
+            .push(team_id.to_string());
         Ok(())
     }
 
@@ -504,6 +517,38 @@ async fn remove_team_member_forwards_ids() {
     assert_eq!(
         vec![("team-1".to_string(), "member-1".to_string())],
         *calls.remove.lock().expect("remove calls lock")
+    );
+}
+
+#[tokio::test]
+async fn leave_team_forwards_team_id_and_refreshes_cache() {
+    let client = fake_client(vec![team("Platform")]);
+    let calls = client.calls.clone();
+    let (engine, _storage) = test_engine(client);
+
+    engine.leave_team("team-1").await.expect("leave succeeds");
+
+    assert_eq!(
+        vec!["team-1".to_string()],
+        *calls.leave.lock().expect("leave calls lock")
+    );
+    assert_eq!(1, calls.list_teams.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn leave_team_maps_owner_self_demotion_error() {
+    let mut client = fake_client(Vec::new());
+    client.team_error = team_error("Owners cannot change their own role");
+    let (engine, _storage) = test_engine(client);
+
+    let error = engine
+        .leave_team("team-1")
+        .await
+        .expect_err("owner cannot leave");
+
+    assert_eq!(
+        "拥有者不能移除自己的拥有者角色，请先转让所有权",
+        error.to_string()
     );
 }
 

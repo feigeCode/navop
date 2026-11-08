@@ -35,6 +35,10 @@ const TEAM_ADMIN_ERROR_MESSAGES: &[(&str, &str)] = &[
         "Owners cannot be removed from the website console",
         "不能直接移除团队所有者，请先把所有者降级",
     ),
+    (
+        "Owners cannot change their own role",
+        "拥有者不能移除自己的拥有者角色，请先转让所有权",
+    ),
     ("Insufficient team permissions", "当前角色没有该操作权限"),
     ("Team membership required", "你不是该团队成员"),
     ("Authentication required", NOT_LOGGED_IN_MESSAGE),

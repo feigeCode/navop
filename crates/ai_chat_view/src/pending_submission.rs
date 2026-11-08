@@ -42,6 +42,21 @@ impl PendingSubmissions {
             .unwrap_or_default()
     }
 
+    /// 把一条插回队列的第 `index` 个位置（越界追加到末尾）。
+    ///
+    /// 「直接发送」会先把条目取出来试着插进在飞轮次，送不进去时用它放回原位——
+    /// 否则一次失败的插话会把后面排好的消息顺序打乱。
+    pub(crate) fn insert_at(
+        &mut self,
+        session_uid: &str,
+        index: usize,
+        submission: PendingSubmission,
+    ) {
+        let queue = self.by_session.entry(session_uid.to_string()).or_default();
+        let index = index.min(queue.len());
+        queue.insert(index, submission);
+    }
+
     /// 删除队列中第 `index` 条；越界返回 `None`。删除不改变其余条目的相对顺序。
     pub(crate) fn remove_at(
         &mut self,
@@ -189,6 +204,34 @@ mod tests {
         pending.enqueue("session-a", submission("a2"));
         pending.remove_session("session-a");
         assert_eq!(0, pending.len("session-a"));
+        assert_eq!(1, pending.len("session-b"));
+    }
+
+    #[test]
+    fn insert_at_restores_an_entry_to_its_original_slot() {
+        let mut pending = PendingSubmissions::default();
+        pending.enqueue("session-a", submission("a1"));
+        pending.enqueue("session-a", submission("a2"));
+        pending.enqueue("session-a", submission("a3"));
+
+        // 「立即发送」失败时的原路放回：拿出来再插回去，顺序必须一模一样。
+        let taken = pending.remove_at("session-a", 1).expect("taken entry");
+        pending.insert_at("session-a", 1, taken);
+        assert_eq!(
+            vec!["a1", "a2", "a3"],
+            pending
+                .items("session-a")
+                .into_iter()
+                .map(|item| item.text.as_str())
+                .collect::<Vec<_>>()
+        );
+
+        // 越界下标追加到末尾，而不是 panic 或丢消息。
+        pending.insert_at("session-a", 99, submission("a4"));
+        assert_eq!("a4", pending.items("session-a")[3].text.as_str());
+
+        // 队列已被清空的会话也要能插回去（空队列 + entry 不存在都要新开一个）。
+        pending.insert_at("session-b", 0, submission("b1"));
         assert_eq!(1, pending.len("session-b"));
     }
 
