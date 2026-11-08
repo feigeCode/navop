@@ -5040,7 +5040,7 @@ dependencies = [
  "log",
  "presser",
  "thiserror 2.0.21",
- "windows 0.62.2",
+ "windows 0.58.0",
 ]
 
 [[package]]
@@ -6182,7 +6182,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.58.0",
+ "windows-core 0.62.2",
 ]
 
 [[package]]
@@ -8599,7 +8599,7 @@ dependencies = [
 [[package]]
 name = "nsh-base"
 version = "0.4.0"
-source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.13#fa5ea67a6e3fd85472bf91d569a73b127b90c00e"
+source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.13#08cc3750fcf71fc26e7949659816eacae7c8fbe7"
 dependencies = [
  "chrono",
  "html5ever 0.27.0",
@@ -8629,7 +8629,7 @@ dependencies = [
 [[package]]
 name = "nsh-core"
 version = "0.4.0"
-source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.13#fa5ea67a6e3fd85472bf91d569a73b127b90c00e"
+source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.13#08cc3750fcf71fc26e7949659816eacae7c8fbe7"
 dependencies = [
  "cap-std 4.0.3",
  "crc32fast",
@@ -8667,7 +8667,7 @@ dependencies = [
 [[package]]
 name = "nsh-engine"
 version = "0.4.0"
-source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.13#fa5ea67a6e3fd85472bf91d569a73b127b90c00e"
+source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.13#08cc3750fcf71fc26e7949659816eacae7c8fbe7"
 dependencies = [
  "crossbeam-channel",
  "libc",
@@ -8689,12 +8689,12 @@ dependencies = [
 [[package]]
 name = "nsh-i18n"
 version = "0.4.0"
-source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.13#fa5ea67a6e3fd85472bf91d569a73b127b90c00e"
+source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.13#08cc3750fcf71fc26e7949659816eacae7c8fbe7"
 
 [[package]]
 name = "nsh-js"
 version = "0.4.0"
-source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.13#fa5ea67a6e3fd85472bf91d569a73b127b90c00e"
+source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.13#08cc3750fcf71fc26e7949659816eacae7c8fbe7"
 dependencies = [
  "futures-util",
  "getrandom 0.4.3",
@@ -8717,7 +8717,7 @@ dependencies = [
 [[package]]
 name = "nsh-macros"
 version = "0.4.0"
-source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.13#fa5ea67a6e3fd85472bf91d569a73b127b90c00e"
+source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.13#08cc3750fcf71fc26e7949659816eacae7c8fbe7"
 dependencies = [
  "imagesize 0.15.0",
  "proc-macro2",
@@ -8730,7 +8730,7 @@ dependencies = [
 [[package]]
 name = "nsh-package"
 version = "0.4.0"
-source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.13#fa5ea67a6e3fd85472bf91d569a73b127b90c00e"
+source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.13#08cc3750fcf71fc26e7949659816eacae7c8fbe7"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek 2.2.0",
@@ -8745,7 +8745,7 @@ dependencies = [
 [[package]]
 name = "nsh-platform-gpui"
 version = "0.4.0"
-source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.13#fa5ea67a6e3fd85472bf91d569a73b127b90c00e"
+source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.13#08cc3750fcf71fc26e7949659816eacae7c8fbe7"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -8777,7 +8777,7 @@ dependencies = [
 [[package]]
 name = "nsh-updater"
 version = "0.4.0"
-source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.13#fa5ea67a6e3fd85472bf91d569a73b127b90c00e"
+source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.13#08cc3750fcf71fc26e7949659816eacae7c8fbe7"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek 2.2.0",
@@ -12728,7 +12728,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8050abb251097357e24aff63ba2c52a6309ecb7d23a5474023df960a02694d8"
 dependencies = [
  "annotate-snippets",
- "base64 0.21.7",
+ "base64 0.23.1",
  "encoding_rs_io",
  "granit-parser",
  "nohash-hasher",
