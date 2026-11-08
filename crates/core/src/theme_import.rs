@@ -45,10 +45,8 @@ fn parse_structured(value: Value, path: &Path) -> Result<ThemeSet, String> {
     }
 
     if let Some(themes) = value.as_array() {
-        let mut set = ThemeSet {
-            name: import_name(path).into(),
-            ..ThemeSet::default()
-        };
+        let mut set = ThemeSet::default();
+        set.name = import_name(path).into();
         for (index, theme) in themes.iter().enumerate() {
             set.themes.push(parse_vscode_theme(theme, path, index + 1)?);
         }
@@ -258,20 +256,18 @@ fn parse_iterm(source: &str, path: &Path) -> Result<ThemeSet, String> {
 }
 
 fn theme_config(name: String, mode: ThemeMode) -> ThemeConfig {
-    ThemeConfig {
-        name: name.into(),
-        mode,
-        colors: ThemeConfigColors::default(),
-        ..ThemeConfig::default()
-    }
+    let mut config = ThemeConfig::default();
+    config.name = name.into();
+    config.mode = mode;
+    config.colors = ThemeConfigColors::default();
+    config
 }
 
 fn single_theme_set(theme: ThemeConfig) -> ThemeSet {
-    ThemeSet {
-        name: theme.name.clone(),
-        themes: vec![theme],
-        ..ThemeSet::default()
-    }
+    let mut set = ThemeSet::default();
+    set.name = theme.name.clone();
+    set.themes = vec![theme];
+    set
 }
 
 fn import_name(path: &Path) -> String {

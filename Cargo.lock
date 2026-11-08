@@ -386,6 +386,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "alloca"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5a7d05ea6aea7e9e64d25b9156ba2fee3fdd659e34e41063cd2fc7cd020d7f4"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "allocator-api2"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -405,6 +414,12 @@ checksum = "ae221649c9976a6f6c56ae1facf410f3ddb33cc661c4b7b61020a912d4237fbc"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "anes"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4b46cbb362ab8752921c97e041f5e366ee6297bd428a31275b9fcf1e380f7299"
 
 [[package]]
 name = "annotate-snippets"
@@ -1170,6 +1185,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "bench-metrics"
+version = "0.1.13"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
+dependencies = [
+ "anyhow",
+ "criterion",
+ "libc",
+ "perf-event2",
+]
+
+[[package]]
 name = "bincode"
 version = "1.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1205,15 +1231,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "08807e080ed7f9d5433fa9b275196cfc35414f66a0c79d864dc51a0d825231a3"
 dependencies = [
  "bit-vec 0.8.0",
-]
-
-[[package]]
-name = "bit-set"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34ddef2995421ab6a5c779542c81ee77c115206f4ad9d5a8e05f4ff49716a3dd"
-dependencies = [
- "bit-vec 0.9.1",
 ]
 
 [[package]]
@@ -1567,6 +1584,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "c-enum"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd17eb909a8c6a894926bfcc3400a4bb0e732f5a57d37b1f14e8b29e329bace8"
+
+[[package]]
 name = "cairo-rs"
 version = "0.18.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1854,6 +1877,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "ciborium"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42e69ffd6f0917f5c029256a24d0161db17cea3997d185db0d35926308770f0e"
+dependencies = [
+ "ciborium-io",
+ "ciborium-ll",
+ "serde",
+]
+
+[[package]]
+name = "ciborium-io"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05afea1e0a06c9be33d539b876f1ce3692f4afea2cb41f740e7743225ed1c757"
+
+[[package]]
+name = "ciborium-ll"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57663b653d948a338bfb3eeba9bb2fd5fcfaecb9e199e87e1eda4d9e8b240fd9"
+dependencies = [
+ "ciborium-io",
+ "half",
+]
+
+[[package]]
 name = "cipher"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1886,6 +1936,31 @@ dependencies = [
  "libc",
  "libloading",
 ]
+
+[[package]]
+name = "clap"
+version = "4.6.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa8876b300ab35ba921adea3dfd70157a46249b33f95c9084ae5709785478946"
+dependencies = [
+ "clap_builder",
+]
+
+[[package]]
+name = "clap_builder"
+version = "4.6.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec0797fb7aeb1406c84efac526901f7ec3ead2124f946b494e72879d4b54704d"
+dependencies = [
+ "anstyle",
+ "clap_lex",
+]
+
+[[package]]
+name = "clap_lex"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 
 [[package]]
 name = "cmake"
@@ -1954,8 +2029,8 @@ dependencies = [
 
 [[package]]
 name = "collections"
-version = "0.1.12"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+version = "0.1.13"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 dependencies = [
  "gpui-fast-util",
  "indexmap 2.14.2",
@@ -2088,6 +2163,15 @@ name = "constant_time_eq"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c74b8349d32d297c9134b8c88677813a227df8f779daa29bfc29c183fe3dca6"
+
+[[package]]
+name = "constant_time_eq"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9eb6feb175df65d0a3ccd3e73484e940d0ac664e8034f0519fd49a93db3071d9"
+dependencies = [
+ "rustversion",
+]
 
 [[package]]
 name = "convert_case"
@@ -2478,6 +2562,41 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "01a7799fd6b852db0e61728dde9a204c423b44d689dbd432522543614b490e78"
 dependencies = [
  "cfg-if",
+]
+
+[[package]]
+name = "criterion"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "950046b2aa2492f9a536f5f4f9a3de7b9e2476e575e05bd6c333371add4d98f3"
+dependencies = [
+ "alloca",
+ "anes",
+ "cast",
+ "ciborium",
+ "clap",
+ "criterion-plot",
+ "itertools 0.13.0",
+ "num-traits",
+ "oorandom",
+ "page_size",
+ "plotters",
+ "rayon",
+ "regex",
+ "serde",
+ "serde_json",
+ "tinytemplate",
+ "walkdir",
+]
+
+[[package]]
+name = "criterion-plot"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d8d80a2f4f5b554395e47b5d8305bc3d27813bacb73493eb1001e8f76dae29ea"
+dependencies = [
+ "cast",
+ "itertools 0.13.0",
 ]
 
 [[package]]
@@ -3164,8 +3283,8 @@ dependencies = [
 
 [[package]]
 name = "derive-refineable"
-version = "0.1.12"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+version = "0.1.13"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4926,8 +5045,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-base"
-version = "0.8.1"
-source = "git+https://github.com/feigeCode/gpui-kit?rev=62035f8de4b8f6524a76eeb3cbb0a168d3183c35#62035f8de4b8f6524a76eeb3cbb0a168d3183c35"
+version = "0.9.0"
+source = "git+https://github.com/feigeCode/gpui-kit?rev=36266413cd4f73e6b1d43e03f94e927b61b2bb9e#36266413cd4f73e6b1d43e03f94e927b61b2bb9e"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -4967,8 +5086,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-component"
-version = "0.8.1"
-source = "git+https://github.com/feigeCode/gpui-kit?rev=62035f8de4b8f6524a76eeb3cbb0a168d3183c35#62035f8de4b8f6524a76eeb3cbb0a168d3183c35"
+version = "0.9.0"
+source = "git+https://github.com/feigeCode/gpui-kit?rev=36266413cd4f73e6b1d43e03f94e927b61b2bb9e#36266413cd4f73e6b1d43e03f94e927b61b2bb9e"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5020,8 +5139,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-component-macros"
-version = "0.8.1"
-source = "git+https://github.com/feigeCode/gpui-kit?rev=62035f8de4b8f6524a76eeb3cbb0a168d3183c35#62035f8de4b8f6524a76eeb3cbb0a168d3183c35"
+version = "0.9.0"
+source = "git+https://github.com/feigeCode/gpui-kit?rev=36266413cd4f73e6b1d43e03f94e927b61b2bb9e#36266413cd4f73e6b1d43e03f94e927b61b2bb9e"
 dependencies = [
  "proc-macro-crate 3.5.0",
  "proc-macro2",
@@ -5031,18 +5150,18 @@ dependencies = [
 
 [[package]]
 name = "gpui-fast"
-version = "0.1.12"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+version = "0.1.13"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 dependencies = [
  "accesskit",
  "anyhow",
  "async-channel",
  "async-task",
  "backtrace",
+ "bench-metrics",
  "bitflags 2.13.2",
  "chrono",
  "collections",
- "ctor",
  "derive_more 2.1.1",
  "embed-resource",
  "etagere",
@@ -5054,6 +5173,7 @@ dependencies = [
  "gpui-fast-util",
  "heapless",
  "http-client",
+ "icu_segmenter",
  "image",
  "inventory",
  "itertools 0.14.0",
@@ -5088,6 +5208,7 @@ dependencies = [
  "taffy",
  "thiserror 2.0.21",
  "ttf-parser",
+ "unicode-segmentation",
  "url",
  "usvg",
  "uuid",
@@ -5099,8 +5220,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-fast-apple"
-version = "0.1.12"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+version = "0.1.13"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 dependencies = [
  "anyhow",
  "async-task",
@@ -5111,10 +5232,8 @@ dependencies = [
  "core-foundation-sys",
  "core-graphics 0.24.0",
  "core-text",
- "derive_more 2.1.1",
  "dispatch2",
  "etagere",
- "foreign-types",
  "futures",
  "gpui-fast",
  "gpui-fast-util",
@@ -5122,9 +5241,9 @@ dependencies = [
  "libc",
  "log",
  "mach2 0.6.0",
- "metal",
  "objc2 0.6.5",
  "objc2-core-foundation",
+ "objc2-core-graphics",
  "objc2-core-text",
  "objc2-core-video",
  "objc2-foundation 0.3.2",
@@ -5140,8 +5259,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-fast-linux"
-version = "0.1.12"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+version = "0.1.13"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -5184,8 +5303,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-fast-macos"
-version = "0.1.12"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+version = "0.1.13"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -5210,6 +5329,8 @@ dependencies = [
  "objc2-core-graphics",
  "objc2-core-video",
  "objc2-foundation 0.3.2",
+ "objc2-quartz-core 0.3.2",
+ "objc2-uniform-type-identifiers",
  "objc2-user-notifications",
  "parking_lot",
  "raw-window-handle",
@@ -5222,8 +5343,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-fast-macros"
-version = "0.1.12"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+version = "0.1.13"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -5233,8 +5354,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-fast-platform"
-version = "0.1.12"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+version = "0.1.13"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
@@ -5247,8 +5368,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-fast-shared-string"
-version = "0.1.12"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+version = "0.1.13"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 dependencies = [
  "schemars 1.2.2",
  "serde",
@@ -5257,8 +5378,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-fast-util"
-version = "0.1.12"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+version = "0.1.13"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 dependencies = [
  "anyhow",
  "log",
@@ -5267,8 +5388,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-fast-web"
-version = "0.1.12"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+version = "0.1.13"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -5296,8 +5417,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-fast-wgpu"
-version = "0.1.12"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+version = "0.1.13"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -5322,8 +5443,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-fast-windows"
-version = "0.1.12"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+version = "0.1.13"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -5351,8 +5472,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-kit"
-version = "0.8.1"
-source = "git+https://github.com/feigeCode/gpui-kit?rev=62035f8de4b8f6524a76eeb3cbb0a168d3183c35#62035f8de4b8f6524a76eeb3cbb0a168d3183c35"
+version = "0.9.0"
+source = "git+https://github.com/feigeCode/gpui-kit?rev=36266413cd4f73e6b1d43e03f94e927b61b2bb9e#36266413cd4f73e6b1d43e03f94e927b61b2bb9e"
 dependencies = [
  "gpui-base",
  "gpui-pre",
@@ -5363,8 +5484,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-kit-assets"
-version = "0.8.1"
-source = "git+https://github.com/feigeCode/gpui-kit?rev=62035f8de4b8f6524a76eeb3cbb0a168d3183c35#62035f8de4b8f6524a76eeb3cbb0a168d3183c35"
+version = "0.9.0"
+source = "git+https://github.com/feigeCode/gpui-kit?rev=36266413cd4f73e6b1d43e03f94e927b61b2bb9e#36266413cd4f73e6b1d43e03f94e927b61b2bb9e"
 dependencies = [
  "anyhow",
  "gpui-fast",
@@ -5379,7 +5500,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre"
 version = "0.3.126"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 dependencies = [
  "gpui-fast",
 ]
@@ -5387,7 +5508,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-macros"
 version = "0.3.126"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 dependencies = [
  "gpui-fast-macros",
 ]
@@ -5395,7 +5516,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-platform"
 version = "0.3.126"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 dependencies = [
  "gpui-fast-platform",
 ]
@@ -5453,7 +5574,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-reqwest-client"
 version = "0.3.126"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 dependencies = [
  "reqwest-client",
 ]
@@ -5461,7 +5582,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-sum-tree"
 version = "0.3.126"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 dependencies = [
  "sum-tree",
 ]
@@ -5469,7 +5590,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-util"
 version = "0.3.126"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 dependencies = [
  "gpui-fast-util",
 ]
@@ -5477,7 +5598,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-web"
 version = "0.3.126"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 dependencies = [
  "gpui-fast-web",
 ]
@@ -5494,8 +5615,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-webview"
-version = "0.8.1"
-source = "git+https://github.com/feigeCode/gpui-kit?rev=62035f8de4b8f6524a76eeb3cbb0a168d3183c35#62035f8de4b8f6524a76eeb3cbb0a168d3183c35"
+version = "0.9.0"
+source = "git+https://github.com/feigeCode/gpui-kit?rev=36266413cd4f73e6b1d43e03f94e927b61b2bb9e#36266413cd4f73e6b1d43e03f94e927b61b2bb9e"
 dependencies = [
  "anyhow",
  "gpui-kit",
@@ -5753,12 +5874,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hexf-parse"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
-
-[[package]]
 name = "hickory-net"
 version = "0.26.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5945,8 +6060,8 @@ dependencies = [
 
 [[package]]
 name = "http-client"
-version = "0.1.12"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+version = "0.1.13"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -5963,8 +6078,8 @@ dependencies = [
 
 [[package]]
 name = "http-client-tls"
-version = "0.1.12"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+version = "0.1.13"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 dependencies = [
  "log",
  "rustls 0.23.45",
@@ -6101,10 +6216,31 @@ checksum = "d56e28588da92eee5c3201a6eff33fabdd49b62269c8938d4ff050ce4d900deb"
 dependencies = [
  "displaydoc",
  "litemap",
+ "serde",
  "tinystr",
  "writeable",
  "zerovec",
 ]
+
+[[package]]
+name = "icu_locale_fallback"
+version = "2.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "251af8e57c9400e3eb58242fe5b8b1152b2a64fdf4cf632f923c38ccee6f2fa9"
+dependencies = [
+ "icu_locale_core",
+ "icu_locale_fallback_data",
+ "icu_provider",
+ "potential_utf",
+ "tinystr",
+ "zerovec",
+]
+
+[[package]]
+name = "icu_locale_fallback_data"
+version = "2.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "decf2a22ec8fa68f1a0c1129a3f8583f8f8bc24e8b9ccbe98ead99f62a4dc3a8"
 
 [[package]]
 name = "icu_normalizer"
@@ -6155,12 +6291,36 @@ checksum = "d27bbb9d3abbefac45d55f647c9de1d44aafcd1186eb91879afef17c396c3e73"
 dependencies = [
  "displaydoc",
  "icu_locale_core",
+ "serde",
+ "stable_deref_trait",
  "writeable",
  "yoke",
  "zerofrom",
  "zerotrie",
  "zerovec",
 ]
+
+[[package]]
+name = "icu_segmenter"
+version = "2.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "82d07aafccd67af15d02512a6adf5896fbc5ed00f2e99b471d2efa14016db3db"
+dependencies = [
+ "icu_collections",
+ "icu_locale_fallback",
+ "icu_provider",
+ "icu_segmenter_data",
+ "potential_utf",
+ "smallvec",
+ "utf8_iter",
+ "zerovec",
+]
+
+[[package]]
+name = "icu_segmenter_data"
+version = "2.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae293c039020f9ec10710af98d29ce6aa2051486638b49c9a6409f3b4a9e98ad"
 
 [[package]]
 name = "id-arena"
@@ -7672,21 +7832,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "metal"
-version = "0.33.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7047791b5bc903b8cd963014b355f71dc9864a9a0b727057676c1dcae5cbc15"
-dependencies = [
- "bitflags 2.13.2",
- "block",
- "core-graphics-types 0.2.0",
- "foreign-types",
- "log",
- "objc",
- "paste",
-]
-
-[[package]]
 name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8041,31 +8186,6 @@ dependencies = [
  "sha2 0.10.9",
  "thiserror 2.0.21",
  "uuid",
-]
-
-[[package]]
-name = "naga"
-version = "29.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2bf919621e7975acb27d881bae2fb993e0d45c8e0446e85e6272971e00dc8df"
-dependencies = [
- "arrayvec",
- "bit-set 0.9.1",
- "bitflags 2.13.2",
- "cfg-if",
- "cfg_aliases",
- "codespan-reporting",
- "half",
- "hashbrown 0.16.1",
- "hexf-parse",
- "indexmap 2.14.2",
- "libm",
- "log",
- "num-traits",
- "once_cell",
- "rustc-hash 1.1.0",
- "thiserror 2.0.21",
- "unicode-ident",
 ]
 
 [[package]]
@@ -8478,8 +8598,8 @@ dependencies = [
 
 [[package]]
 name = "nsh-base"
-version = "0.3.0"
-source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.12#fc4c88e6a590410735666db053416bac995fea2a"
+version = "0.4.0"
+source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.13#fa5ea67a6e3fd85472bf91d569a73b127b90c00e"
 dependencies = [
  "chrono",
  "html5ever 0.27.0",
@@ -8488,20 +8608,28 @@ dependencies = [
  "markdown",
  "markup5ever_rcdom",
  "nsh-core",
+ "ratex-font",
+ "ratex-layout",
+ "ratex-parser",
+ "ratex-types",
  "regex",
  "ropey 1.6.1",
  "rustc-hash 2.1.3",
  "serde",
  "serde_json",
  "syntect",
+ "ttf-parser",
  "two-face",
  "unicode-segmentation",
+ "unicode-width",
+ "vte",
+ "zstd 0.14.2",
 ]
 
 [[package]]
 name = "nsh-core"
-version = "0.3.0"
-source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.12#fc4c88e6a590410735666db053416bac995fea2a"
+version = "0.4.0"
+source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.13#fa5ea67a6e3fd85472bf91d569a73b127b90c00e"
 dependencies = [
  "cap-std 4.0.3",
  "crc32fast",
@@ -8511,10 +8639,12 @@ dependencies = [
  "imagesize 0.15.0",
  "libc",
  "log",
- "naga 29.0.4",
+ "naga",
  "nsh-macros",
+ "nsh-updater",
  "ordered-float",
  "resvg",
+ "rust-i18n",
  "rustc-hash 2.1.3",
  "rustls 0.23.45",
  "serde",
@@ -8524,18 +8654,20 @@ dependencies = [
  "taffy",
  "tokio",
  "tokio-tungstenite",
+ "ttf-parser",
  "unicode-linebreak",
  "unicode-properties",
  "ureq",
  "url",
  "webpki-roots 1.0.9",
  "windows-sys 0.61.2",
+ "wuff",
 ]
 
 [[package]]
 name = "nsh-engine"
-version = "0.3.0"
-source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.12#fc4c88e6a590410735666db053416bac995fea2a"
+version = "0.4.0"
+source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.13#fa5ea67a6e3fd85472bf91d569a73b127b90c00e"
 dependencies = [
  "crossbeam-channel",
  "libc",
@@ -8543,6 +8675,7 @@ dependencies = [
  "nsh-core",
  "nsh-js",
  "nsh-package",
+ "nsh-updater",
  "oxc_sourcemap",
  "pollster 0.4.0",
  "rustc-hash 2.1.3",
@@ -8554,19 +8687,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "nsh-i18n"
+version = "0.4.0"
+source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.13#fa5ea67a6e3fd85472bf91d569a73b127b90c00e"
+
+[[package]]
 name = "nsh-js"
-version = "0.3.0"
-source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.12#fc4c88e6a590410735666db053416bac995fea2a"
+version = "0.4.0"
+source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.13#fa5ea67a6e3fd85472bf91d569a73b127b90c00e"
 dependencies = [
  "futures-util",
  "getrandom 0.4.3",
  "libc",
  "log",
  "nsh-core",
+ "nsh-i18n",
  "percent-encoding",
  "quickjs-jit",
  "quickjs-jit-stdlib",
  "rustc-hash 2.1.3",
+ "serde",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
@@ -8576,20 +8716,21 @@ dependencies = [
 
 [[package]]
 name = "nsh-macros"
-version = "0.3.0"
-source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.12#fc4c88e6a590410735666db053416bac995fea2a"
+version = "0.4.0"
+source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.13#fa5ea67a6e3fd85472bf91d569a73b127b90c00e"
 dependencies = [
  "imagesize 0.15.0",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
  "ttf-parser",
+ "wuff",
 ]
 
 [[package]]
 name = "nsh-package"
-version = "0.3.0"
-source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.12#fc4c88e6a590410735666db053416bac995fea2a"
+version = "0.4.0"
+source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.13#fa5ea67a6e3fd85472bf91d569a73b127b90c00e"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek 2.2.0",
@@ -8603,8 +8744,8 @@ dependencies = [
 
 [[package]]
 name = "nsh-platform-gpui"
-version = "0.3.0"
-source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.12#fc4c88e6a590410735666db053416bac995fea2a"
+version = "0.4.0"
+source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.13#fa5ea67a6e3fd85472bf91d569a73b127b90c00e"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -8618,7 +8759,9 @@ dependencies = [
  "nsh-base",
  "nsh-core",
  "nsh-engine",
+ "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
  "raw-window-handle",
  "rustc-hash 2.1.3",
  "serde_json",
@@ -8629,6 +8772,23 @@ dependencies = [
  "windows-sys 0.61.2",
  "x11rb",
  "zbus",
+]
+
+[[package]]
+name = "nsh-updater"
+version = "0.4.0"
+source = "git+https://github.com/feigeCode/nsh?branch=navop%2Fgpui-0.1.13#fa5ea67a6e3fd85472bf91d569a73b127b90c00e"
+dependencies = [
+ "base64 0.22.1",
+ "ed25519-dalek 2.2.0",
+ "flate2",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tar",
+ "thiserror 2.0.21",
+ "zip 9.4.2",
 ]
 
 [[package]]
@@ -8883,6 +9043,7 @@ dependencies = [
  "objc2-core-video",
  "objc2-foundation 0.3.2",
  "objc2-quartz-core 0.3.2",
+ "objc2-uniform-type-identifiers",
 ]
 
 [[package]]
@@ -9062,6 +9223,7 @@ checksum = "a0125f776a10d00af4152d74616409f0d4a2053a6f57fa5b7d6aa2854ac04794"
 dependencies = [
  "bitflags 2.13.2",
  "block2 0.6.2",
+ "dispatch2",
  "objc2 0.6.5",
  "objc2-foundation 0.3.2",
 ]
@@ -9120,6 +9282,16 @@ dependencies = [
  "bitflags 2.13.2",
  "objc2 0.6.5",
  "objc2-core-foundation",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
+name = "objc2-uniform-type-identifiers"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7902ac02859fc1f7045f8b598c63f1ae0cc7efeaa06a9bc9f3d9a3c955974fa4"
+dependencies = [
+ "objc2 0.6.5",
  "objc2-foundation 0.3.2",
 ]
 
@@ -9326,6 +9498,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "oorandom"
+version = "11.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
+
+[[package]]
 name = "opaque-debug"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9472,6 +9650,16 @@ dependencies = [
  "primefield",
  "primeorder",
  "sha2 0.11.0",
+]
+
+[[package]]
+name = "page_size"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "30d5b2194ed13191c1999ae0704b7839fb18384fa22e49b57eeaa97d79ce40da"
+dependencies = [
+ "libc",
+ "winapi",
 ]
 
 [[package]]
@@ -9679,6 +9867,41 @@ name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
+
+[[package]]
+name = "perf-event-data"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "575828d9d7d205188048eb1508560607a03d21eafdbba47b8cade1736c1c28e1"
+dependencies = [
+ "bitflags 2.13.2",
+ "c-enum",
+ "perf-event-open-sys2",
+]
+
+[[package]]
+name = "perf-event-open-sys2"
+version = "5.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d9c25955321465255e437600b54296983fab1feac2cd0c38958adeb26dbae49e"
+dependencies = [
+ "libc",
+ "memoffset",
+]
+
+[[package]]
+name = "perf-event2"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0939b8fad77dfaeb29ebbd35faaeaadbf833167f30975f1b8993bbba09ea0a0f"
+dependencies = [
+ "bitflags 2.13.2",
+ "c-enum",
+ "libc",
+ "memmap2",
+ "perf-event-data",
+ "perf-event-open-sys2",
+]
 
 [[package]]
 name = "phc"
@@ -10021,6 +10244,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "plotters"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5aeb6f403d7a4911efb1e33402027fc44f29b5bf6def3effcc22d7bb75f2b747"
+dependencies = [
+ "num-traits",
+ "plotters-backend",
+ "plotters-svg",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "plotters-backend"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df42e13c12958a16b3f7f4386b9ab1f3e7933914ecea48da7139435263a4172a"
+
+[[package]]
+name = "plotters-svg"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "51bae2ac328883f7acdfea3d66a7c35751187f870bc81f94563733a154d7a670"
+dependencies = [
+ "plotters-backend",
+]
+
+[[package]]
 name = "png"
 version = "0.17.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10223,6 +10474,8 @@ version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d83eb9bc6d8e5cf568e7a1101d60ee05e81ed50ea106026f3d18deeb046d7661"
 dependencies = [
+ "serde_core",
+ "writeable",
  "zerovec",
 ]
 
@@ -10578,9 +10831,9 @@ dependencies = [
 
 [[package]]
 name = "quickjs-jit"
-version = "0.14.1"
+version = "0.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70d41722208581628761f6e7c3ada5c357cc4df244c238c880e64a541bb32d0e"
+checksum = "f5f4423709e8709eb3ee02d23b30fba4cc6f3ab0ee90c3fc08edfb968b3c8b73"
 dependencies = [
  "quickjs-jit-core",
  "quickjs-jit-macro",
@@ -10588,9 +10841,9 @@ dependencies = [
 
 [[package]]
 name = "quickjs-jit-core"
-version = "0.14.1"
+version = "0.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d05311dece4caaf4f49a170d95ba34f82de26910128ad1d302ce607da81407b5"
+checksum = "c3dbd3a4da98e06d0bbc0f65a4719155b7923461194c3b26860b87e1568aff09"
 dependencies = [
  "async-lock",
  "half",
@@ -10601,9 +10854,9 @@ dependencies = [
 
 [[package]]
 name = "quickjs-jit-macro"
-version = "0.14.1"
+version = "0.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "95d84c7d9ea1fbd6682660cc6d1357537d014ed1d14c87a57b5f8bb04f5f0685"
+checksum = "0e8f4ad21cdeaceb5e65e5b8ae8a3695a4a1b4e368a5dc65709da27d03110bbb"
 dependencies = [
  "convert_case 0.12.0",
  "indexmap 2.14.2",
@@ -10616,9 +10869,9 @@ dependencies = [
 
 [[package]]
 name = "quickjs-jit-stdlib"
-version = "0.14.1"
+version = "0.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0599ae2a818de29d5e7618df383deb38a7c827dbe2dd57dcebf1694bc766d90"
+checksum = "a3ad9800d6824112e3d1032078c8e8bcabc47870bbedc858ef6b6fae12de3070"
 dependencies = [
  "aes 0.9.3",
  "aes-gcm 0.11.1",
@@ -10675,9 +10928,9 @@ dependencies = [
 
 [[package]]
 name = "quickjs-jit-sys"
-version = "0.14.1"
+version = "0.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de70d3b7f215521a57a1da2843ef54e0cdfcae1fadf2cfc712cb92d965931f77"
+checksum = "44983d24261238e3db9f543729c1ec806dc199f7dd360560699498608ff7cfb8"
 dependencies = [
  "bindgen",
  "cc",
@@ -10925,9 +11178,9 @@ checksum = "a611d15b50743feb4c76b7d03edcb0e64f399c26961e4efe6975bc398be6aa3d"
 
 [[package]]
 name = "ratex-font"
-version = "0.1.14"
+version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a7b73531dabe934a3e725ed5c90d18dacf43778b7a208381390943a9a8c24db"
+checksum = "e4373503a1068c9f7d07862583bbd897ac4d2bdf89d42ac8c65870c33135bf6f"
 dependencies = [
  "phf 0.11.3",
  "ratex-types",
@@ -10957,9 +11210,9 @@ dependencies = [
 
 [[package]]
 name = "ratex-layout"
-version = "0.1.14"
+version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1792738e2e36683cd20de742296a5233759565efc8cd03831064a0ccfb1fe0f7"
+checksum = "33c14e7af0d1c60da19e67df1fe08186eb91d0d04e0c6482ae90a8318ec7bb0a"
 dependencies = [
  "ratex-font",
  "ratex-parser",
@@ -10969,9 +11222,9 @@ dependencies = [
 
 [[package]]
 name = "ratex-lexer"
-version = "0.1.14"
+version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f704add86d7bf4c4ecc7767f45ab38a44f1bbfa4b49725b2ae53c32e83b8a61e"
+checksum = "2f50074761e3e048f432fd1653f132a333883f02ecccf272599917bf1043a8cd"
 dependencies = [
  "ratex-types",
  "serde",
@@ -10980,9 +11233,9 @@ dependencies = [
 
 [[package]]
 name = "ratex-parser"
-version = "0.1.14"
+version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "079ec2e7ac6bc76137a6de093a173d1f901139a51318589ab9ce17139c21a6f0"
+checksum = "51f3c0d7744db2b9b4c0034d3983264543e701cda5268392e5829b2e24bc7624"
 dependencies = [
  "fancy-regex 0.14.0",
  "ratex-font",
@@ -11013,9 +11266,9 @@ dependencies = [
 
 [[package]]
 name = "ratex-types"
-version = "0.1.14"
+version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0cf0be3d050525f0f7d37af55a443d7648c222ccc617639950e3de1f8e6f9900"
+checksum = "ae81208192f9898cbd2424aa42fd4472bd79c44a52092673b101cdca72c89b7c"
 dependencies = [
  "serde",
 ]
@@ -11316,8 +11569,8 @@ dependencies = [
 
 [[package]]
 name = "refineable"
-version = "0.1.12"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+version = "0.1.13"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 dependencies = [
  "derive-refineable",
 ]
@@ -11478,8 +11731,8 @@ checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
 name = "reqwest-client"
-version = "0.1.12"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+version = "0.1.13"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -12258,8 +12511,8 @@ dependencies = [
 
 [[package]]
 name = "scheduler"
-version = "0.1.12"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+version = "0.1.13"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 dependencies = [
  "async-task",
  "backtrace",
@@ -13450,8 +13703,8 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "sum-tree"
-version = "0.1.12"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+version = "0.1.13"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 dependencies = [
  "heapless",
  "rayon",
@@ -14042,7 +14295,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b1e27c91459209c2986af3dcf603a5a74a4368754ce37414f59acc971167f643"
 dependencies = [
  "displaydoc",
+ "serde_core",
  "zerovec",
+]
+
+[[package]]
+name = "tinytemplate"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be4d6b5f19ff7664e8c98d03e2139cb510db9b0a60b55f8e8709b689d939b6bc"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -14610,6 +14874,12 @@ name = "typed-path"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8e28f89b80c87b8fb0cf04ab448d5dd0dd0ade2f8891bae878de66a75a28600e"
+
+[[package]]
+name = "typed-path"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ce898823d8cd0f028662d2f349694b1af0a5cc9be83f1d213a00d3147445e1e"
 
 [[package]]
 name = "typenum"
@@ -15825,7 +16095,7 @@ dependencies = [
  "hashbrown 0.17.1",
  "js-sys",
  "log",
- "naga 30.0.1",
+ "naga",
  "parking_lot",
  "portable-atomic",
  "profiling",
@@ -15856,7 +16126,7 @@ dependencies = [
  "hashbrown 0.17.1",
  "indexmap 2.14.2",
  "log",
- "naga 30.0.1",
+ "naga",
  "naga-types",
  "once_cell",
  "parking_lot",
@@ -15935,7 +16205,7 @@ dependencies = [
  "libc",
  "libloading",
  "log",
- "naga 30.0.1",
+ "naga",
  "naga-types",
  "ndk-sys",
  "objc2 0.6.5",
@@ -15973,7 +16243,7 @@ version = "30.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2f62e73117bb7a62bfd9c5a5841438a823f6566c6442a808ee269d2d055c081"
 dependencies = [
- "naga 30.0.1",
+ "naga",
  "wgpu-types",
 ]
 
@@ -16937,6 +17207,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 
 [[package]]
+name = "wuff"
+version = "0.2.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f6a992b57b3d1ee972b2e3fd9225e44793104d49818836dd812d5459187712dd"
+dependencies = [
+ "brotli-decompressor",
+ "bytes",
+ "flate2",
+]
+
+[[package]]
 name = "wyz"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -17520,6 +17801,7 @@ dependencies = [
  "displaydoc",
  "yoke",
  "zerofrom",
+ "zerovec",
 ]
 
 [[package]]
@@ -17528,6 +17810,7 @@ version = "0.11.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bb0464e17806c1d976d5cba29399c7f08e516e279e2ba493f63123b5fca67dd8"
 dependencies = [
+ "serde",
  "yoke",
  "zerofrom",
  "zerovec-derive",
@@ -17570,7 +17853,7 @@ dependencies = [
  "aes 0.8.4",
  "arbitrary",
  "bzip2",
- "constant_time_eq",
+ "constant_time_eq 0.3.1",
  "crc32fast",
  "deflate64",
  "flate2",
@@ -17598,7 +17881,27 @@ dependencies = [
  "flate2",
  "indexmap 2.14.2",
  "memchr",
- "typed-path",
+ "typed-path 0.12.3",
+ "zopfli",
+]
+
+[[package]]
+name = "zip"
+version = "9.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df3845f734baabdd02de353a20580e30ceccd03897def44a4eb8e9654992e294"
+dependencies = [
+ "constant_time_eq 0.6.1",
+ "crc32fast",
+ "flate2",
+ "getrandom 0.4.3",
+ "indexmap 2.14.2",
+ "libc",
+ "memchr",
+ "nix 0.31.3",
+ "typed-path 0.13.0",
+ "windows-sys 0.61.2",
+ "zeroize",
  "zopfli",
 ]
 
@@ -17674,8 +17977,8 @@ dependencies = [
 
 [[package]]
 name = "ztracing"
-version = "0.1.12"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+version = "0.1.13"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 dependencies = [
  "tracing",
  "ztracing-macro",
@@ -17683,8 +17986,8 @@ dependencies = [
 
 [[package]]
 name = "ztracing-macro"
-version = "0.1.12"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+version = "0.1.13"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 
 [[package]]
 name = "zune-core"
@@ -17755,79 +18058,79 @@ dependencies = [
 [[patch.unused]]
 name = "gpui-pre-apple"
 version = "0.3.126"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 
 [[patch.unused]]
 name = "gpui-pre-bench-metrics"
 version = "0.3.126"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 
 [[patch.unused]]
 name = "gpui-pre-collections"
 version = "0.3.126"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 
 [[patch.unused]]
 name = "gpui-pre-derive-refineable"
 version = "0.3.126"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 
 [[patch.unused]]
 name = "gpui-pre-http-client"
 version = "0.3.126"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 
 [[patch.unused]]
 name = "gpui-pre-http-client-tls"
 version = "0.3.126"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 
 [[patch.unused]]
 name = "gpui-pre-linux"
 version = "0.3.126"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 
 [[patch.unused]]
 name = "gpui-pre-macos"
 version = "0.3.126"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 
 [[patch.unused]]
 name = "gpui-pre-refineable"
 version = "0.3.126"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 
 [[patch.unused]]
 name = "gpui-pre-scheduler"
 version = "0.3.126"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 
 [[patch.unused]]
 name = "gpui-pre-shared-string"
 version = "0.3.126"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 
 [[patch.unused]]
 name = "gpui-pre-wgpu"
 version = "0.3.126"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 
 [[patch.unused]]
 name = "gpui-pre-windows"
 version = "0.3.126"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 
 [[patch.unused]]
 name = "gpui-pre-zlog"
 version = "0.3.126"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 
 [[patch.unused]]
 name = "gpui-pre-ztracing"
 version = "0.3.126"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
 
 [[patch.unused]]
 name = "gpui-pre-ztracing-macro"
 version = "0.3.126"
-source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.12#5e8e231fbde0c4833878e9c0c18ada53f74174a0"
+source = "git+https://github.com/feigeCode/gpui-fast.git?branch=release%2Fv0.1.13#03739d5141308df9535deec776287bcb941e9ea0"
