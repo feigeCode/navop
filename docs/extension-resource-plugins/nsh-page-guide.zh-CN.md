@@ -273,12 +273,24 @@ const Terminal = nativeComponent<{ command: string; args: string[] }>("navop.ter
 
 ## 6. 设计系统（别自己重造）
 
-共享库在 `extensions/composite/docker/ui/lib/`，其它扩展用一行转发复用：
+共享库抽在 `@navop/extension-kit`（仓库内 `packages/extension-kit`），扩展的
+`ui/lib/*` 只做一行转发，页面路径不变：
 
 ```ts
 // ui/lib/theme.ts
-export * from "../../../docker/ui/lib/theme";
+export * from "@navop/extension-kit/theme";
 ```
+
+新扩展用模板生成（一个插件一个 nsh app）：
+
+```bash
+npx @navop/create-extension new --id com.example.demo --name "演示扩展"   # 公共 npm
+node scripts/create-extension.mjs --id com.example.demo --name "演示扩展"  # 仓库内（workspace）
+```
+
+离线 / 内网不装 npm：`bash scripts/create-extension-offline.sh --id … --name …`
+（把 kit 源码复制进 `ui/lib`，`nsh build` 不读 `node_modules`）；需要把整套东西
+拷进内网机器就 `bash scripts/pack-offline.sh` 打离线包。
 
 - `theme.ts`：`c.*()`（bg/panel/text/muted/line/accent/danger/hover/chart(i)，
   返回主题 token）、`r`（圆角）、`t.*`（h1/h2/body/label/meta/mono 排版）、
