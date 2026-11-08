@@ -17,6 +17,7 @@ struct ProviderConfigRow {
     api_key: Option<String>,
     api_base: Option<String>,
     api_version: Option<String>,
+    extra_headers: Option<String>,
     model: String,
     models: Option<String>,
     max_tokens: Option<i32>,
@@ -36,6 +37,7 @@ impl FromSqliteRow for ProviderConfigRow {
             api_key: row.get("api_key")?,
             api_base: row.get("api_base")?,
             api_version: row.get("api_version")?,
+            extra_headers: row.get("extra_headers")?,
             model: row.get("model")?,
             models: row.get("models")?,
             max_tokens: row.get("max_tokens")?,
@@ -59,6 +61,10 @@ impl TryFrom<ProviderConfigRow> for ProviderConfig {
             Some(json) => serde_json::from_str::<Vec<String>>(json).unwrap_or_default(),
             None => Vec::new(),
         };
+        let extra_headers = match row.extra_headers.as_deref() {
+            Some(json) => serde_json::from_str::<Vec<(String, String)>>(json).unwrap_or_default(),
+            None => Vec::new(),
+        };
         let mut models = models;
         if !row.model.is_empty() {
             if models.is_empty() {
@@ -75,6 +81,7 @@ impl TryFrom<ProviderConfigRow> for ProviderConfig {
             api_key: row.api_key,
             api_base: row.api_base,
             api_version: row.api_version,
+            extra_headers,
             model: row.model,
             models,
             max_tokens: row.max_tokens,
@@ -126,6 +133,8 @@ impl Repository for ProviderRepository {
         let api_key = item.api_key.clone();
         let api_base = item.api_base.clone();
         let api_version = item.api_version.clone();
+        let extra_headers =
+            serde_json::to_string(&item.extra_headers).unwrap_or_else(|_| "[]".to_string());
         let model = item.model.clone();
         let models = if item.models.is_empty() && !item.model.is_empty() {
             vec![item.model.clone()]
@@ -142,9 +151,9 @@ impl Repository for ProviderRepository {
 
         self.conn.with_connection(|conn| {
             conn.execute(
-                "INSERT INTO llm_providers (id, name, provider_type, api_key, api_base, api_version, model, models, max_tokens, temperature, enabled, is_default, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
-                params![id, name, provider_type, api_key, api_base, api_version, model, models_json, max_tokens, temperature, enabled, is_default, created_at, updated_at],
+                "INSERT INTO llm_providers (id, name, provider_type, api_key, api_base, api_version, extra_headers, model, models, max_tokens, temperature, enabled, is_default, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                params![id, name, provider_type, api_key, api_base, api_version, extra_headers, model, models_json, max_tokens, temperature, enabled, is_default, created_at, updated_at],
             )?;
             Ok(())
         })?;
@@ -159,6 +168,8 @@ impl Repository for ProviderRepository {
         let api_key = item.api_key.clone();
         let api_base = item.api_base.clone();
         let api_version = item.api_version.clone();
+        let extra_headers =
+            serde_json::to_string(&item.extra_headers).unwrap_or_else(|_| "[]".to_string());
         let model = item.model.clone();
         let models = if item.models.is_empty() && !item.model.is_empty() {
             vec![item.model.clone()]
@@ -174,8 +185,8 @@ impl Repository for ProviderRepository {
 
         self.conn.with_connection(|conn| {
             conn.execute(
-                "UPDATE llm_providers SET name = ?1, provider_type = ?2, api_key = ?3, api_base = ?4, api_version = ?5, model = ?6, models = ?7, max_tokens = ?8, temperature = ?9, enabled = ?10, is_default = ?11, updated_at = ?12 WHERE id = ?13",
-                params![name, provider_type, api_key, api_base, api_version, model, models_json, max_tokens, temperature, enabled, is_default, updated_at, id],
+                "UPDATE llm_providers SET name = ?1, provider_type = ?2, api_key = ?3, api_base = ?4, api_version = ?5, extra_headers = ?6, model = ?7, models = ?8, max_tokens = ?9, temperature = ?10, enabled = ?11, is_default = ?12, updated_at = ?13 WHERE id = ?14",
+                params![name, provider_type, api_key, api_base, api_version, extra_headers, model, models_json, max_tokens, temperature, enabled, is_default, updated_at, id],
             )?;
             Ok(())
         })
@@ -191,7 +202,7 @@ impl Repository for ProviderRepository {
     fn get(&self, id: i64) -> Result<Option<Self::Entity>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, provider_type, api_key, api_base, api_version, model, models, max_tokens, temperature, enabled, is_default, created_at, updated_at FROM llm_providers WHERE id = ?1",
+                "SELECT id, name, provider_type, api_key, api_base, api_version, extra_headers, model, models, max_tokens, temperature, enabled, is_default, created_at, updated_at FROM llm_providers WHERE id = ?1",
             )?;
             let mut rows = stmt.query(params![id])?;
             if let Some(row) = rows.next()? {
@@ -206,7 +217,7 @@ impl Repository for ProviderRepository {
     fn list(&self) -> Result<Vec<Self::Entity>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, provider_type, api_key, api_base, api_version, model, models, max_tokens, temperature, enabled, is_default, created_at, updated_at FROM llm_providers ORDER BY created_at DESC",
+                "SELECT id, name, provider_type, api_key, api_base, api_version, extra_headers, model, models, max_tokens, temperature, enabled, is_default, created_at, updated_at FROM llm_providers ORDER BY created_at DESC",
             )?;
             let rows = stmt.query_map([], |row| ProviderConfigRow::from_row(row))?;
             let mut results = Vec::new();
@@ -261,6 +272,7 @@ pub fn init(cx: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::migration::run_migrations;
 
     #[test]
     fn provider_config_row_with_empty_model_keeps_models_untouched() {
@@ -271,6 +283,7 @@ mod tests {
             api_key: None,
             api_base: None,
             api_version: None,
+            extra_headers: None,
             model: String::new(),
             models: Some(serde_json::to_string(&["qwen-max", "deepseek-v3"]).unwrap()),
             max_tokens: None,
@@ -294,6 +307,7 @@ mod tests {
             api_key: None,
             api_base: None,
             api_version: None,
+            extra_headers: None,
             model: String::new(),
             models: None,
             max_tokens: None,
@@ -306,5 +320,94 @@ mod tests {
         let config = ProviderConfig::try_from(row).unwrap();
         assert!(config.model.is_empty());
         assert!(config.models.is_empty());
+    }
+
+    #[test]
+    fn provider_config_row_round_trips_extra_headers() {
+        let headers = vec![
+            ("x-opencode-session".to_string(), "ses_test".to_string()),
+            ("User-Agent".to_string(), "custom-agent".to_string()),
+        ];
+        let row = ProviderConfigRow {
+            id: 1,
+            name: "opencode-go".into(),
+            provider_type: ProviderType::OpenAICompatible.as_str().to_string(),
+            api_key: Some("sk-test".into()),
+            api_base: Some("https://opencode.ai/inference/go/openai/v1".into()),
+            api_version: None,
+            extra_headers: Some(serde_json::to_string(&headers).unwrap()),
+            model: "deepseek-v4.1-flash".into(),
+            models: None,
+            max_tokens: None,
+            temperature: None,
+            enabled: 1,
+            is_default: 0,
+            created_at: 0,
+            updated_at: 0,
+        };
+
+        let config = ProviderConfig::try_from(row).unwrap();
+        assert_eq!(headers, config.extra_headers);
+    }
+
+    #[test]
+    fn malformed_stored_extra_headers_fall_back_to_empty() {
+        let row = ProviderConfigRow {
+            id: 1,
+            name: "custom".into(),
+            provider_type: ProviderType::OpenAICompatible.as_str().to_string(),
+            api_key: Some("sk-test".into()),
+            api_base: Some("https://llm.example.com/v1".into()),
+            api_version: None,
+            extra_headers: Some("not-json".into()),
+            model: "custom-model".into(),
+            models: None,
+            max_tokens: None,
+            temperature: None,
+            enabled: 1,
+            is_default: 0,
+            created_at: 0,
+            updated_at: 0,
+        };
+
+        let config = ProviderConfig::try_from(row).unwrap();
+        assert!(config.extra_headers.is_empty());
+    }
+
+    #[test]
+    fn provider_repository_round_trips_extra_headers_after_migration() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let connection = SqliteConnection::open_with_pool_size(temp.path().join("providers.db"), 1)
+            .expect("open sqlite");
+        connection
+            .with_connection(run_migrations)
+            .expect("run migrations");
+        let repository = ProviderRepository::new(connection);
+        let headers = vec![
+            ("x-opencode-session".to_string(), "ses_test".to_string()),
+            ("User-Agent".to_string(), "opencode-navop".to_string()),
+        ];
+        let mut config = ProviderConfig {
+            id: 42,
+            name: "opencode-go".to_string(),
+            provider_type: ProviderType::OpenAICompatible,
+            api_key: Some("sk-test".to_string()),
+            api_base: Some("https://opencode.ai/inference/go/openai/v1".to_string()),
+            extra_headers: headers.clone(),
+            model: "deepseek-v4.1-flash".to_string(),
+            models: vec!["deepseek-v4.1-flash".to_string()],
+            enabled: true,
+            created_at: 1,
+            updated_at: 1,
+            ..Default::default()
+        };
+
+        repository.insert(&mut config).expect("insert provider");
+        let stored = repository
+            .get(config.id)
+            .expect("load provider")
+            .expect("provider exists");
+
+        assert_eq!(headers, stored.extra_headers);
     }
 }

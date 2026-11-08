@@ -23,6 +23,8 @@ pub enum ProviderType {
     Xiaomi,
     /// 本地 / 自托管 Xinference（OpenAI 兼容，默认无需 API Key）。
     Xinference,
+    /// OpenCode Go 订阅：OpenAI 兼容端点，要求稳定的 `x-opencode-session` 请求头。
+    OpenCodeGo,
     AzureOpenAI,
     OpenAICompatible,
 }
@@ -45,6 +47,7 @@ impl ProviderType {
             ProviderType::TencentHunyuan => "tencent_hunyuan",
             ProviderType::Xiaomi => "xiaomi",
             ProviderType::Xinference => "xinference",
+            ProviderType::OpenCodeGo => "opencode_go",
             ProviderType::AzureOpenAI => "azure_openai",
             ProviderType::OpenAICompatible => "openai_compatible",
         }
@@ -67,6 +70,7 @@ impl ProviderType {
             "tencent_hunyuan" => Some(ProviderType::TencentHunyuan),
             "xiaomi" => Some(ProviderType::Xiaomi),
             "xinference" => Some(ProviderType::Xinference),
+            "opencode_go" => Some(ProviderType::OpenCodeGo),
             "azure_openai" => Some(ProviderType::AzureOpenAI),
             "openai_compatible" => Some(ProviderType::OpenAICompatible),
             _ => None,
@@ -90,6 +94,7 @@ impl ProviderType {
             ProviderType::TencentHunyuan => "Tencent Hunyuan",
             ProviderType::Xiaomi => "Xiaomi (MiMo)",
             ProviderType::Xinference => "Xinference",
+            ProviderType::OpenCodeGo => "OpenCode Go",
             ProviderType::AzureOpenAI => "Azure OpenAI",
             ProviderType::OpenAICompatible => "OpenAI Compatible",
         }
@@ -112,6 +117,7 @@ impl ProviderType {
             ProviderType::TencentHunyuan,
             ProviderType::Xiaomi,
             ProviderType::Xinference,
+            ProviderType::OpenCodeGo,
             ProviderType::AzureOpenAI,
             ProviderType::OpenAICompatible,
         ]
@@ -131,6 +137,9 @@ pub struct ProviderConfig {
     pub api_key: Option<String>,
     pub api_base: Option<String>,
     pub api_version: Option<String>,
+    /// Extra HTTP headers for OpenAI-compatible gateways, stored in display order.
+    #[serde(default)]
+    pub extra_headers: Vec<(String, String)>,
     pub model: String,
     pub models: Vec<String>,
     pub max_tokens: Option<i32>,
@@ -150,6 +159,7 @@ impl Default for ProviderConfig {
             api_key: None,
             api_base: None,
             api_version: None,
+            extra_headers: Vec::new(),
             model: String::new(),
             models: Vec::new(),
             max_tokens: None,
@@ -164,7 +174,32 @@ impl Default for ProviderConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::ProviderType;
+    use super::{ProviderConfig, ProviderType};
+
+    #[test]
+    fn provider_config_defaults_to_no_extra_headers() {
+        assert!(ProviderConfig::default().extra_headers.is_empty());
+    }
+
+    #[test]
+    fn provider_config_deserializes_legacy_json_without_extra_headers() {
+        let mut value = serde_json::to_value(ProviderConfig::default()).unwrap();
+        value.as_object_mut().unwrap().remove("extra_headers");
+
+        let config: ProviderConfig = serde_json::from_value(value).unwrap();
+        assert!(config.extra_headers.is_empty());
+    }
+
+    #[test]
+    fn opencode_go_is_an_api_key_provider_offered_to_users() {
+        let provider_type = ProviderType::OpenCodeGo;
+
+        assert_eq!("opencode_go", provider_type.as_str());
+        assert_eq!(Some(provider_type), ProviderType::from_str("opencode_go"));
+        assert_eq!("OpenCode Go", provider_type.display_name());
+        assert!(provider_type.requires_api_key());
+        assert!(ProviderType::all().contains(&provider_type));
+    }
 
     /// 内置 Navop AI（`onet_cli`）已下线：历史配置值不再被识别，也不再出现在候选列表里。
     #[test]
@@ -202,6 +237,7 @@ mod tests {
             (ProviderType::TencentHunyuan, "tencent_hunyuan"),
             (ProviderType::Xiaomi, "xiaomi"),
             (ProviderType::Xinference, "xinference"),
+            (ProviderType::OpenCodeGo, "opencode_go"),
         ];
 
         for (provider_type, storage_id) in cases {
@@ -230,6 +266,7 @@ mod tests {
             ProviderType::TencentHunyuan,
             ProviderType::Xiaomi,
             ProviderType::Xinference,
+            ProviderType::OpenCodeGo,
         ] {
             assert!(
                 all.contains(&provider_type),
@@ -247,5 +284,6 @@ mod tests {
         assert!(ProviderType::TencentHunyuan.requires_api_key());
         assert!(ProviderType::Xiaomi.requires_api_key());
         assert!(ProviderType::MiniMax.requires_api_key());
+        assert!(ProviderType::OpenCodeGo.requires_api_key());
     }
 }

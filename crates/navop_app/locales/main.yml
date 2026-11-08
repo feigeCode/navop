@@ -5538,6 +5538,26 @@ LlmProviders:
     en: API version (optional)
     zh-CN: API 版本（可选）
     zh-HK: API 版本（可選）
+  extra_headers_label:
+    en: Custom request headers (optional)
+    zh-CN: 自定义请求头（可选）
+    zh-HK: 自訂請求標頭（可選）
+  extra_headers_placeholder:
+    en: "x-opencode-session: ses_..."
+    zh-CN: "x-opencode-session: ses_..."
+    zh-HK: "x-opencode-session: ses_..."
+  extra_headers_help:
+    en: 'One "Header-Name: value" pair per line. Custom values override defaults such as User-Agent.'
+    zh-CN: "每行一个“请求头名称: 值”；自定义值会覆盖 User-Agent 等默认请求头。"
+    zh-HK: "每行一個「請求標頭名稱: 值」；自訂值會覆蓋 User-Agent 等預設請求標頭。"
+  extra_headers_invalid:
+    en: "Invalid custom request headers: %{error}"
+    zh-CN: "自定义请求头格式错误：%{error}"
+    zh-HK: "自訂請求標頭格式錯誤：%{error}"
+  opencode_go_help:
+    en: "OpenCode Go automatically sends a stable x-opencode-session header. DeepSeek V4.1 Flash and V4 Pro require the Global region in OpenCode Console."
+    zh-CN: "OpenCode Go 会自动发送稳定的 x-opencode-session 请求头。DeepSeek V4.1 Flash / V4 Pro 需要在 OpenCode Console 中选择 Global 区域。"
+    zh-HK: "OpenCode Go 會自動傳送穩定的 x-opencode-session 請求標頭。DeepSeek V4.1 Flash / V4 Pro 需要在 OpenCode Console 中選擇 Global 區域。"
   models_label:
     en: Models
     zh-CN: 模型列表

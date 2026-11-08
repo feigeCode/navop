@@ -129,6 +129,11 @@ impl Protocol for OpenAIProtocol {
     }
 
     fn models_endpoint(&self, base_url: &str) -> Option<String> {
+        if self.service_name == "opencode-go"
+            && let Some(prefix) = base_url.trim_end_matches('/').strip_suffix("/openai/v1")
+        {
+            return Some(format!("{prefix}/v1/models"));
+        }
         Some(resolve_endpoint(base_url, "", "/models"))
     }
 
@@ -392,6 +397,26 @@ pub struct OpenAIEmbedRequest {
 mod tests {
     use super::*;
     use crate::types::{FunctionCall, Message, MessageBlock, Role, Tool, ToolCall, ToolChoice};
+
+    #[test]
+    fn opencode_go_models_endpoint_uses_go_v1_models() {
+        let protocol = OpenAIProtocol::with_service("test-key", "opencode-go");
+
+        assert_eq!(
+            Some("https://opencode.ai/inference/go/v1/models".to_string()),
+            protocol.models_endpoint("https://opencode.ai/inference/go/openai/v1")
+        );
+    }
+
+    #[test]
+    fn regular_openai_compatible_models_endpoint_stays_under_base_url() {
+        let protocol = OpenAIProtocol::with_service("test-key", "custom");
+
+        assert_eq!(
+            Some("https://llm.example.com/v1/models".to_string()),
+            protocol.models_endpoint("https://llm.example.com/v1")
+        );
+    }
 
     #[test]
     fn test_openai_request_downgrade_for_deepseek() {

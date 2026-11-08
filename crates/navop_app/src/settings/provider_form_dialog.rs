@@ -9,7 +9,7 @@ use gpui_component::{
     ActiveTheme, Disableable, IndexPath, WindowExt,
     button::{Button, ButtonVariant, ButtonVariants},
     h_flex,
-    input::{Input, InputState},
+    input::{Input, InputState, Textarea, TextareaState},
     select::{Select, SelectEvent, SelectItem, SelectState},
     switch::Switch,
     v_flex,
@@ -21,6 +21,104 @@ use one_core::llm::types::{ProviderConfig, ProviderType};
 use rust_i18n::t;
 
 const CUSTOM_MODEL_ID: &str = "__custom__";
+
+fn is_valid_header_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
+}
+
+fn parse_header_lines(input: &str) -> Result<Vec<(String, String)>, String> {
+    let mut headers: Vec<(String, String)> = Vec::new();
+
+    for (line_index, raw_line) in input.lines().enumerate() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let Some((name, value)) = line.split_once(':') else {
+            return Err(format!(
+                "Line {} must use the format 'Header-Name: value'",
+                line_index + 1
+            ));
+        };
+        let name = name.trim();
+        let value = value.trim();
+        if !is_valid_header_name(name) {
+            return Err(format!(
+                "Line {} has an invalid header name",
+                line_index + 1
+            ));
+        }
+
+        if let Some((_, existing_value)) = headers
+            .iter_mut()
+            .find(|(existing_name, _)| existing_name.eq_ignore_ascii_case(name))
+        {
+            *existing_value = value.to_string();
+        } else {
+            headers.push((name.to_string(), value.to_string()));
+        }
+    }
+
+    Ok(headers)
+}
+
+fn format_header_lines(headers: &[(String, String)]) -> String {
+    headers
+        .iter()
+        .map(|(name, value)| format!("{name}: {value}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn parse_headers_for_provider(
+    provider_type: ProviderType,
+    input: &str,
+) -> Result<Vec<(String, String)>, String> {
+    if !matches!(
+        provider_type,
+        ProviderType::OpenAICompatible | ProviderType::OpenCodeGo
+    ) {
+        return Ok(Vec::new());
+    }
+    parse_header_lines(input)
+}
+
+fn filter_loaded_models(provider_type: ProviderType, models: Vec<String>) -> Vec<String> {
+    if provider_type != ProviderType::OpenCodeGo {
+        return models;
+    }
+
+    models
+        .into_iter()
+        .filter(|model| {
+            !matches!(
+                model.to_ascii_lowercase().as_str(),
+                "beam-free" | "iceman-contributor-free"
+            )
+        })
+        .collect()
+}
 
 /// 切换供应商类型后 api_base 输入框应采取的动作。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -172,6 +270,7 @@ pub struct ProviderForm {
     api_key_input: Entity<InputState>,
     api_base_input: Entity<InputState>,
     api_version_input: Entity<InputState>,
+    extra_headers_input: Entity<TextareaState>,
     model_items: Vec<ModelItem>,
     model_rows: Vec<ModelRow>,
     is_default: bool,
@@ -259,6 +358,18 @@ impl ProviderForm {
             state
         });
 
+        let extra_headers_input = cx.new(|cx| {
+            let mut state = TextareaState::new(window, cx)
+                .auto_grow(2, 7)
+                .placeholder(t!("LlmProviders.extra_headers_placeholder"));
+            if let Some(ref cfg) = config {
+                if !cfg.extra_headers.is_empty() {
+                    state = state.default_value(format_header_lines(&cfg.extra_headers));
+                }
+            }
+            state
+        });
+
         let config_models = config.as_ref().map(|cfg| {
             if cfg.models.is_empty() {
                 vec![cfg.model.clone()]
@@ -335,6 +446,7 @@ impl ProviderForm {
             api_key_input,
             api_base_input,
             api_version_input,
+            extra_headers_input,
             model_items,
             model_rows,
             is_default: config.map(|cfg| cfg.is_default).unwrap_or(false),
@@ -514,6 +626,20 @@ impl ProviderForm {
         let api_key = self.api_key_input.read(cx).value().to_string();
         let api_base = self.api_base_input.read(cx).value().to_string();
         let api_version = self.api_version_input.read(cx).value().to_string();
+        let extra_headers = match parse_headers_for_provider(
+            provider_type,
+            self.extra_headers_input.read(cx).value().as_ref(),
+        ) {
+            Ok(headers) => headers,
+            Err(error) => {
+                self.models_loading = false;
+                self.model_load_status = Some(ModelLoadStatus::error(
+                    t!("LlmProviders.extra_headers_invalid", error = error).to_string(),
+                ));
+                cx.notify();
+                return;
+            }
+        };
         let mut models = self.collect_models(cx);
         let fallback_model = models
             .first()
@@ -547,6 +673,7 @@ impl ProviderForm {
             } else {
                 Some(api_version)
             },
+            extra_headers,
             model: fallback_model,
             models,
             max_tokens: Some(4096),
@@ -570,7 +697,7 @@ impl ProviderForm {
             .await;
 
             let result: Result<Vec<String>, String> = match result {
-                Ok(Ok(models)) => Ok(models),
+                Ok(Ok(models)) => Ok(filter_loaded_models(provider_type, models)),
                 Ok(Err(e)) => Err(e.to_string()),
                 Err(e) => Err(t!("LlmProviders.model_task_failed", error = e).to_string()),
             };
@@ -637,6 +764,20 @@ impl ProviderForm {
         let api_key = self.api_key_input.read(cx).value().to_string();
         let api_base = self.api_base_input.read(cx).value().to_string();
         let api_version = self.api_version_input.read(cx).value().to_string();
+        let extra_headers = match parse_headers_for_provider(
+            provider_type,
+            self.extra_headers_input.read(cx).value().as_ref(),
+        ) {
+            Ok(headers) => headers,
+            Err(error) => {
+                tracing::warn!("{}", error);
+                self.model_load_status = Some(ModelLoadStatus::error(
+                    t!("LlmProviders.extra_headers_invalid", error = error).to_string(),
+                ));
+                cx.notify();
+                return None;
+            }
+        };
         let models = self.collect_models(cx);
 
         if name.trim().is_empty() {
@@ -675,6 +816,7 @@ impl ProviderForm {
             } else {
                 Some(api_version)
             },
+            extra_headers,
             model,
             models,
             max_tokens: Some(4096),
@@ -726,6 +868,17 @@ impl Render for ProviderForm {
         } else {
             t!("LlmProviders.model_load")
         };
+        let selected_provider_type = self
+            .provider_type_select
+            .read(cx)
+            .selected_value()
+            .copied()
+            .unwrap_or(ProviderType::OpenAI);
+        let supports_extra_headers = matches!(
+            selected_provider_type,
+            ProviderType::OpenAICompatible | ProviderType::OpenCodeGo
+        );
+        let is_opencode_go = selected_provider_type == ProviderType::OpenCodeGo;
 
         v_flex()
             .gap_3()
@@ -784,6 +937,31 @@ impl Render for ProviderForm {
                     )
                     .child(Input::new(&self.api_version_input)),
             )
+            .when(supports_extra_headers, |this| {
+                this.child(
+                    v_flex()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .child(t!("LlmProviders.extra_headers_label").to_string()),
+                        )
+                        .child(Textarea::new(&self.extra_headers_input))
+                        .child(
+                            div()
+                                .text_xs()
+                                .child(t!("LlmProviders.extra_headers_help").to_string()),
+                        ),
+                )
+            })
+            .when(is_opencode_go, |this| {
+                this.child(
+                    div()
+                        .text_xs()
+                        .child(t!("LlmProviders.opencode_go_help").to_string()),
+                )
+            })
             .child(
                 v_flex()
                     .gap_2()
@@ -843,8 +1021,100 @@ impl Render for ProviderForm {
 
 #[cfg(test)]
 mod tests {
-    use super::{ApiBaseAction, api_base_action_on_type_change};
+    use super::{
+        ApiBaseAction, api_base_action_on_type_change, filter_loaded_models, format_header_lines,
+        parse_header_lines, parse_headers_for_provider,
+    };
     use one_core::llm::types::ProviderType;
+
+    #[test]
+    fn custom_headers_parse_one_name_value_pair_per_line() {
+        let headers =
+            parse_header_lines("x-opencode-session: ses_test\nUser-Agent: opencode-navop\r\n\r\n")
+                .expect("valid headers");
+
+        assert_eq!(
+            vec![
+                ("x-opencode-session".to_string(), "ses_test".to_string()),
+                ("User-Agent".to_string(), "opencode-navop".to_string()),
+            ],
+            headers
+        );
+    }
+
+    #[test]
+    fn custom_header_values_may_contain_colons() {
+        let headers = parse_header_lines("Authorization: Bearer abc:def").expect("valid header");
+        assert_eq!(
+            vec![("Authorization".to_string(), "Bearer abc:def".to_string())],
+            headers
+        );
+    }
+
+    #[test]
+    fn custom_headers_reject_malformed_lines() {
+        let error = parse_header_lines("x-opencode-session ses_test").expect_err("invalid line");
+        assert!(
+            error.contains('1'),
+            "error should identify the line: {error}"
+        );
+    }
+
+    #[test]
+    fn custom_headers_round_trip_through_the_editor() {
+        let headers = vec![
+            ("x-opencode-session".to_string(), "ses_test".to_string()),
+            ("User-Agent".to_string(), "opencode-navop".to_string()),
+        ];
+        assert_eq!(
+            headers,
+            parse_header_lines(&format_header_lines(&headers)).expect("formatted headers")
+        );
+    }
+
+    #[test]
+    fn hidden_header_text_is_ignored_for_non_custom_providers() {
+        assert_eq!(
+            Ok(Vec::<(String, String)>::new()),
+            parse_headers_for_provider(ProviderType::OpenAI, "not a valid header")
+        );
+    }
+
+    #[test]
+    fn opencode_go_accepts_custom_request_header_overrides() {
+        assert_eq!(
+            Ok(vec![(
+                "x-opencode-session".to_string(),
+                "ses_custom".to_string()
+            )]),
+            parse_headers_for_provider(ProviderType::OpenCodeGo, "x-opencode-session: ses_custom")
+        );
+    }
+
+    #[test]
+    fn opencode_go_model_list_hides_models_unavailable_outside_its_client() {
+        let models = vec![
+            "deepseek-v4.1-flash".to_string(),
+            "beam-free".to_string(),
+            "iceman-contributor-free".to_string(),
+            "glm-5.3".to_string(),
+        ];
+
+        assert_eq!(
+            vec!["deepseek-v4.1-flash".to_string(), "glm-5.3".to_string()],
+            filter_loaded_models(ProviderType::OpenCodeGo, models)
+        );
+    }
+
+    #[test]
+    fn other_provider_model_lists_are_not_filtered() {
+        let models = vec!["beam-free".to_string(), "custom-model".to_string()];
+
+        assert_eq!(
+            models,
+            filter_loaded_models(ProviderType::OpenAICompatible, models.clone())
+        );
+    }
 
     #[test]
     fn empty_input_is_filled_with_the_new_type_preset() {
