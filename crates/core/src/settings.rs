@@ -206,6 +206,8 @@ pub enum ConnectionSortOrder {
     Natural,
     /// 最近使用优先（LRU）：最近打开过的连接排在最前
     Lru,
+    /// 手动排序：按用户拖拽后保存的 `sort_order`，同序时按名称自然排序
+    Manual,
 }
 
 impl ConnectionSortOrder {
@@ -213,12 +215,14 @@ impl ConnectionSortOrder {
         match self {
             Self::Natural => "natural",
             Self::Lru => "lru",
+            Self::Manual => "manual",
         }
     }
 
     pub fn from_value(value: &str) -> Self {
         match value {
             "lru" => Self::Lru,
+            "manual" => Self::Manual,
             _ => Self::Natural,
         }
     }
@@ -2353,10 +2357,9 @@ mod tests {
         LocalTerminalProfileKind, LocalTerminalProfileSettings, MAX_AI_REQUEST_TIMEOUT_SECS,
         MAX_CUSTOM_SYSTEM_PROMPT_CHARS, MAX_RECENT_WORKSPACE_ROOTS, MAX_REMEMBERED_ACP_SESSIONS,
         MIN_AI_REQUEST_TIMEOUT_SECS, MainWindowState, MasterKeyStorage, McpPermissionMode,
-        McpServerMode, PersonalSyncBackendKind, RemoteFileOpenMode, SqlFormatSettings,
-        SidebarPlacement, SqlIndentStyle, SqlKeywordCase, StartupDefaultPage, SyncProvider,
-        TableViewMode,
-        UpdateChannel, UpdateMirror, default_grid_font_fallback_families,
+        McpServerMode, PersonalSyncBackendKind, RemoteFileOpenMode, SidebarPlacement,
+        SqlFormatSettings, SqlIndentStyle, SqlKeywordCase, StartupDefaultPage, SyncProvider,
+        TableViewMode, UpdateChannel, UpdateMirror, default_grid_font_fallback_families,
         default_grid_monospace_font_family, grid_monospace_font, installed_grid_monospace_font,
         is_installed_font_family, resolve_installed_grid_monospace_font_family,
     };
@@ -3124,9 +3127,14 @@ mod tests {
     fn connection_sort_order_round_trips_via_value() {
         assert_eq!("natural", ConnectionSortOrder::Natural.as_str());
         assert_eq!("lru", ConnectionSortOrder::Lru.as_str());
+        assert_eq!("manual", ConnectionSortOrder::Manual.as_str());
         assert_eq!(
             ConnectionSortOrder::Lru,
             ConnectionSortOrder::from_value("lru")
+        );
+        assert_eq!(
+            ConnectionSortOrder::Manual,
+            ConnectionSortOrder::from_value("manual")
         );
         assert_eq!(
             ConnectionSortOrder::Natural,

@@ -319,6 +319,7 @@ fn build_ssh_auth(auth_method: &SshAuthMethod) -> SshAuth {
         SshAuthMethod::Agent => SshAuth::Agent,
         SshAuthMethod::Pageant => SshAuth::Pageant,
         SshAuthMethod::AutoPublicKey => SshAuth::AutoPublicKey,
+        SshAuthMethod::None => SshAuth::None,
         SshAuthMethod::Chain(steps) => SshAuth::Chain(steps.iter().map(build_ssh_auth).collect()),
     }
 }

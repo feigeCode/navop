@@ -1,4 +1,5 @@
 use super::*;
+use crate::connection_sort::manual_order_name_cmp;
 
 pub(crate) fn can_manage_connection_with_permissions(
     connections: &[StoredConnection],
@@ -98,6 +99,118 @@ impl HomePage {
         .detach();
     }
 
+    pub(crate) fn reorder_connection_before(
+        &mut self,
+        connection_id: i64,
+        target_id: i64,
+        target_workspace_id: Option<i64>,
+        cx: &mut Context<Self>,
+    ) {
+        if connection_id == target_id || !self.can_move_connection(connection_id) {
+            return;
+        }
+        let target_exists = target_workspace_id.is_none()
+            || self
+                .workspaces
+                .iter()
+                .any(|workspace| workspace.id == target_workspace_id);
+        if !target_exists {
+            return;
+        }
+        let Some(source) = self
+            .connections
+            .iter()
+            .find(|connection| connection.id == Some(connection_id))
+            .cloned()
+        else {
+            return;
+        };
+        if !self.connections.iter().any(|connection| {
+            connection.id == Some(target_id) && connection.workspace_id == target_workspace_id
+        }) {
+            return;
+        }
+
+        let mut group = self
+            .connections
+            .iter()
+            .filter(|connection| connection.workspace_id == target_workspace_id)
+            .filter_map(|connection| {
+                connection
+                    .id
+                    .map(|id| (id, connection.sort_order, connection.name.clone()))
+            })
+            .collect::<Vec<_>>();
+        if source.workspace_id != target_workspace_id {
+            group.push((connection_id, source.sort_order, source.name.clone()));
+        }
+        let ordered_ids = reorder_connection_ids_before(group, connection_id, target_id);
+        if ordered_ids.is_empty() {
+            return;
+        }
+
+        let orders = ordered_ids
+            .iter()
+            .enumerate()
+            .map(|(index, id)| (*id, index as i32))
+            .collect::<Vec<_>>();
+        let workspace_changed = source.workspace_id != target_workspace_id;
+        let storage = cx.global::<GlobalStorageState>().storage.clone();
+        let save_task = cx.background_spawn(async move {
+            let repo = storage
+                .get::<ConnectionRepository>()
+                .ok_or_else(|| anyhow::anyhow!("ConnectionRepository not found"))?;
+            let updated_at = if workspace_changed {
+                Some(repo.update_workspace(connection_id, target_workspace_id)?)
+            } else {
+                None
+            };
+            repo.update_sort_orders(&orders)?;
+            Ok::<_, anyhow::Error>(updated_at)
+        });
+        cx.spawn(async move |this, cx| match save_task.await {
+            Ok(updated_at) => {
+                _ = this.update(cx, |this, cx| {
+                    for (index, id) in ordered_ids.iter().enumerate() {
+                        if let Some(connection) = this
+                            .connections
+                            .iter_mut()
+                            .find(|connection| connection.id == Some(*id))
+                        {
+                            connection.sort_order = Some(index as i32);
+                            if *id == connection_id {
+                                connection.workspace_id = target_workspace_id;
+                                if let Some(updated_at) = updated_at {
+                                    connection.updated_at = Some(updated_at);
+                                }
+                            }
+                        }
+                    }
+                    if workspace_changed {
+                        if let Some(connection) = this
+                            .connections
+                            .iter()
+                            .find(|connection| connection.id == Some(connection_id))
+                            .cloned()
+                        {
+                            emit_connection_event(
+                                ConnectionDataEvent::ConnectionUpdated { connection },
+                                cx,
+                            );
+                        }
+                    }
+                    if should_auto_onet_cloud_sync(cx, this.current_user.is_some()) {
+                        tracing::info!("连接手动排序变化，自动触发云同步");
+                        this.trigger_sync(cx);
+                    }
+                    cx.notify();
+                });
+            }
+            Err(error) => tracing::error!("更新连接手动排序失败: {error}"),
+        })
+        .detach();
+    }
+
     fn valid_workspace_move(&self, connection_id: i64, workspace_id: Option<i64>) -> bool {
         let target_exists = workspace_id.is_none()
             || self
@@ -110,6 +223,27 @@ impl HomePage {
                 connection.id == Some(connection_id) && connection.workspace_id != workspace_id
             })
     }
+}
+
+pub(crate) fn reorder_connection_ids_before(
+    mut items: Vec<(i64, Option<i32>, String)>,
+    moved_id: i64,
+    target_id: i64,
+) -> Vec<i64> {
+    items.sort_by(|left, right| manual_order_name_cmp(left.1, &left.2, right.1, &right.2));
+    let Some(moved) = items.iter().find(|(id, _, _)| *id == moved_id).cloned() else {
+        return Vec::new();
+    };
+    let Some(target_index) = items.iter().position(|(id, _, _)| *id == target_id) else {
+        return Vec::new();
+    };
+    items.retain(|(id, _, _)| *id != moved_id);
+    let insert_at = items
+        .iter()
+        .position(|(id, _, _)| *id == target_id)
+        .unwrap_or(target_index.min(items.len()));
+    items.insert(insert_at, moved);
+    items.into_iter().map(|(id, _, _)| id).collect()
 }
 
 /// 首页列表里一条连接应该落在哪个分组桶里。
@@ -172,5 +306,27 @@ mod connection_bucket_tests {
             Some(None),
             connection_bucket(Some(9), &ids(&[1, 2]), &ids(&[1]))
         );
+    }
+
+    #[test]
+    fn manual_reorder_inserts_the_dragged_connection_before_its_target() {
+        let items = vec![
+            (1, Some(0), "first".to_string()),
+            (2, Some(1), "second".to_string()),
+            (3, Some(2), "third".to_string()),
+        ];
+
+        assert_eq!(vec![1, 3, 2], reorder_connection_ids_before(items, 3, 2));
+    }
+
+    #[test]
+    fn manual_reorder_uses_name_as_the_tie_breaker() {
+        let items = vec![
+            (1, Some(0), "z-last".to_string()),
+            (2, Some(0), "a-first".to_string()),
+            (3, Some(1), "target".to_string()),
+        ];
+
+        assert_eq!(vec![2, 3, 1], reorder_connection_ids_before(items, 3, 1));
     }
 }

@@ -344,7 +344,8 @@ fn credential_capabilities_for_auth(auth_method: AuthMethodSelection) -> Credent
         AuthMethodSelection::PrivateKey | AuthMethodSelection::PrivateKeyContent => {
             CredentialCapabilities::ssh_private_key()
         }
-        AuthMethodSelection::Agent
+        AuthMethodSelection::None
+        | AuthMethodSelection::Agent
         | AuthMethodSelection::Pageant
         | AuthMethodSelection::AutoPublicKey => CredentialCapabilities::username_only(),
     }
@@ -383,7 +384,8 @@ fn agent_identities_from_auth(auth: &SshAuthMethod) -> Vec<AgentIdentity> {
         SshAuthMethod::Password { .. }
         | SshAuthMethod::Agent
         | SshAuthMethod::Pageant
-        | SshAuthMethod::AutoPublicKey => Vec::new(),
+        | SshAuthMethod::AutoPublicKey
+        | SshAuthMethod::None => Vec::new(),
     }
 }
 
@@ -667,6 +669,9 @@ fn load_jump_server_into_form(
         SshAuthMethod::AutoPublicKey => {
             *jump_auth_method = AuthMethodSelection::AutoPublicKey;
         }
+        SshAuthMethod::None => {
+            *jump_auth_method = AuthMethodSelection::None;
+        }
     }
 }
 
@@ -678,6 +683,7 @@ fn build_jump_auth_method(
     passphrase: String,
 ) -> SshAuthMethod {
     match auth_method {
+        AuthMethodSelection::None => SshAuthMethod::None,
         AuthMethodSelection::Password => SshAuthMethod::Password { password },
         AuthMethodSelection::PasswordAndPrivateKey => SshAuthMethod::Chain(vec![
             SshAuthMethod::Password { password },
@@ -783,6 +789,7 @@ fn runtime_ssh_auth(auth: &SshAuthMethod) -> SshAuth {
         SshAuthMethod::Agent => SshAuth::Agent,
         SshAuthMethod::Pageant => SshAuth::Pageant,
         SshAuthMethod::AutoPublicKey => SshAuth::AutoPublicKey,
+        SshAuthMethod::None => SshAuth::None,
         SshAuthMethod::Chain(steps) => SshAuth::Chain(steps.iter().map(runtime_ssh_auth).collect()),
     }
 }
@@ -1094,6 +1101,9 @@ impl SshFormWindow {
                     }
                     SshAuthMethod::AutoPublicKey => {
                         auth_method = AuthMethodSelection::AutoPublicKey;
+                    }
+                    SshAuthMethod::None => {
+                        auth_method = AuthMethodSelection::None;
                     }
                 }
 
@@ -1481,6 +1491,7 @@ impl SshFormWindow {
         }
 
         let auth_method = match self.auth_method {
+            AuthMethodSelection::None => SshAuthMethod::None,
             AuthMethodSelection::Password => {
                 let password = self.password_input.read(cx).text().to_string();
                 SshAuthMethod::Password { password }
@@ -2577,6 +2588,14 @@ impl SshFormWindow {
                             .gap_4()
                             .flex_wrap()
                             .child(
+                                Radio::new("no-auth")
+                                    .label(t!("SSH.none_auth").to_string())
+                                    .checked(auth_method == AuthMethodSelection::None)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.set_auth_method(AuthMethodSelection::None, window, cx);
+                                    })),
+                            )
+                            .child(
                                 Radio::new("password")
                                     .label(t!("SSH.password").to_string())
                                     .checked(auth_method == AuthMethodSelection::Password)
@@ -3020,6 +3039,18 @@ impl SshFormWindow {
                         h_flex()
                             .gap_4()
                             .flex_wrap()
+                            .child(
+                                Radio::new("jump-no-auth")
+                                    .label(t!("SSH.none_auth").to_string())
+                                    .checked(jump_auth_method == AuthMethodSelection::None)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.set_jump_auth_method(
+                                            AuthMethodSelection::None,
+                                            window,
+                                            cx,
+                                        );
+                                    })),
+                            )
                             .child(
                                 Radio::new("jump-password")
                                     .label(t!("SSH.password").to_string())
@@ -5198,6 +5229,19 @@ mod tests {
         );
 
         assert!(matches!(auth, SshAuthMethod::Pageant));
+    }
+
+    #[test]
+    fn jump_auth_builder_supports_no_authentication() {
+        let auth = build_jump_auth_method(
+            AuthMethodSelection::None,
+            "ignored".to_string(),
+            "ignored-path".to_string(),
+            "ignored-key".to_string(),
+            "ignored-passphrase".to_string(),
+        );
+
+        assert!(matches!(auth, SshAuthMethod::None));
     }
 
     #[test]

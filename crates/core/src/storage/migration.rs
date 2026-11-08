@@ -134,6 +134,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "20261022000001",
         include_str!("../../migrations/20261022000001_connection_ai_access.sql"),
     ),
+    (
+        "20261108000001",
+        include_str!("../../migrations/20261108000001_llm_provider_extra_headers.sql"),
+    ),
 ];
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {

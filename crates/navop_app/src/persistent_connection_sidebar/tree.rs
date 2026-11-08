@@ -13,7 +13,7 @@ use one_core::settings::{AppSettings, ConnectionSortOrder};
 use one_ui::IconSize;
 use rust_i18n::t;
 
-use crate::connection_sort::{connection_name_cmp, lru_sort_key};
+use crate::connection_sort::{connection_name_cmp, lru_sort_key, manual_order_name_cmp};
 
 use super::batch_toolbar::{auto_hide_tree_toggle, batch_mode_toggle};
 use super::tree_model::{
@@ -191,6 +191,7 @@ impl PersistentConnectionSidebar {
                     } else {
                         connection.name.clone()
                     },
+                    sort_order: connection.sort_order,
                     last_used_at: connection.last_used_at,
                     updated_at: connection.updated_at,
                     created_at: connection.created_at,
@@ -216,6 +217,16 @@ impl PersistentConnectionSidebar {
                         left.created_at,
                         Some(left.id),
                     ))
+                });
+            }
+            ConnectionSortOrder::Manual => {
+                connections.sort_by(|left, right| {
+                    manual_order_name_cmp(
+                        left.sort_order,
+                        &left.name,
+                        right.sort_order,
+                        &right.name,
+                    )
                 });
             }
         }
@@ -476,6 +487,7 @@ mod tests {
             implementation
                 .contains("unassigned_expanded: !home.unassigned_connections_collapsed()")
         );
+        assert!(implementation.contains("ConnectionSortOrder::Manual"));
     }
 
     #[test]

@@ -86,6 +86,7 @@ impl HomePage {
             Icon::new(match selected {
                 ConnectionSortOrder::Natural => IconName::SortAscending,
                 ConnectionSortOrder::Lru => IconName::SortDescending,
+                ConnectionSortOrder::Manual => IconName::ListChecks,
             })
             .mono()
             .with_size(IconSize::Small),
@@ -102,6 +103,10 @@ impl HomePage {
                 (
                     ConnectionSortOrder::Lru,
                     t!("Settings.General.ConnectionDisplay.connection_sort_lru"),
+                ),
+                (
+                    ConnectionSortOrder::Manual,
+                    t!("Settings.General.ConnectionDisplay.connection_sort_manual"),
                 ),
             ]
             .into_iter()

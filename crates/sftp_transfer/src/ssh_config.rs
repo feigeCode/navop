@@ -137,6 +137,7 @@ pub fn ssh_auth(method: SshAuthMethod) -> SshAuth {
         SshAuthMethod::Agent => SshAuth::Agent,
         SshAuthMethod::Pageant => SshAuth::Pageant,
         SshAuthMethod::AutoPublicKey => SshAuth::AutoPublicKey,
+        SshAuthMethod::None => SshAuth::None,
         SshAuthMethod::Chain(steps) => SshAuth::Chain(steps.into_iter().map(ssh_auth).collect()),
     }
 }
@@ -164,6 +165,7 @@ fn agent_identities_from_auth(auth: &SshAuthMethod) -> Vec<AgentIdentity> {
         SshAuthMethod::Password { .. }
         | SshAuthMethod::Agent
         | SshAuthMethod::Pageant
-        | SshAuthMethod::AutoPublicKey => Vec::new(),
+        | SshAuthMethod::AutoPublicKey
+        | SshAuthMethod::None => Vec::new(),
     }
 }

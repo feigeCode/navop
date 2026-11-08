@@ -233,6 +233,10 @@ SSH:
     en: Private Key Content
     zh-CN: 私钥内容
     zh-HK: 私鑰內容
+  none_auth:
+    en: None (no password or key)
+    zh-CN: 无认证（无密码或密钥）
+    zh-HK: 無認證（無密碼或金鑰）
   agent:
     en: SSH Agent
     zh-CN: SSH Agent

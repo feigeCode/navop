@@ -23,7 +23,23 @@ pub(crate) fn sort_connections(connections: &mut [StoredConnection], order: Conn
         ConnectionSortOrder::Lru => {
             connections.sort_by(lru_cmp);
         }
+        ConnectionSortOrder::Manual => {
+            connections.sort_by(|left, right| {
+                manual_order_name_cmp(left.sort_order, &left.name, right.sort_order, &right.name)
+            });
+        }
     }
+}
+
+pub(crate) fn manual_order_name_cmp(
+    left_order: Option<i32>,
+    left_name: &str,
+    right_order: Option<i32>,
+    right_name: &str,
+) -> Ordering {
+    left_order
+        .cmp(&right_order)
+        .then_with(|| connection_name_cmp(left_name, right_name))
 }
 
 /// LRU 比较：最近打开过的连接排最前；从未打开过的按更新时间/创建时间回退；
@@ -249,6 +265,21 @@ mod tests {
         assert_eq!(
             vec!["ninth", "fifth", "first"],
             sorted_connection_names(connections, ConnectionSortOrder::Lru),
+        );
+    }
+
+    #[test]
+    fn manual_order_uses_sort_order_then_name() {
+        let mut second = connection(1, "z-second", None);
+        second.sort_order = Some(1);
+        let mut first = connection(2, "b-first", None);
+        first.sort_order = Some(0);
+        let mut same_order = connection(3, "a-same-order", None);
+        same_order.sort_order = Some(1);
+
+        assert_eq!(
+            vec!["b-first", "a-same-order", "z-second"],
+            sorted_connection_names(vec![second, same_order, first], ConnectionSortOrder::Manual,),
         );
     }
 }

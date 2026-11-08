@@ -11,7 +11,7 @@
 | 问题 | 答案 |
 |---|---|
 | 为什么反转方向？ | nsh 已经有完整的**分发/信任/工具链闭环**（keygen→certify→publish→verify→accept→revoke、build 单调防回滚、min_runtime 版本门、critical 前向兼容、capabilities 声明+授予双层），且其 TSX 运行时加载模型就是为 plugins/AI 生成 UI 设计的。navop 自造的 extension.json + engines 门 + grant.rs 是这套东西的子集——映射进 nsh 模型，而不是让 nsh 适配 navop。 |
-| 会有两份 gpui 吗？ | **不会**（结论与 v1 相同）。nsh 的 GPUI 后端依赖 gpui-fast（crates.io 0.1.9 需求），被 navop 的 `[patch.crates-io]` 统一解析到 feigeCode/gpui-fast `release/v0.1.12`：全进程一份 gpui-fast、一个 App/事件循环/渲染管线。 |
+| 会有两份 gpui 吗？ | **不会**（结论与 v1 相同）。nsh 的 GPUI 后端依赖 gpui-fast（crates.io 0.1.9 需求），被 navop 的 `[patch.crates-io]` 统一解析到 feigeCode/gpui-fast `release/v0.1.13`：全进程一份 gpui-fast、一个 App/事件循环/渲染管线。 |
 | navop 现有机制怎么办？ | 能力平面（provider runtime / ActivationManager / lease / RuntimeMonitor / ProcessRpcSession）**原样保留**，通过 host ABI 暴露给 nsh 页面；UI 平面与扩展格式（extension.json + engines.gpui_shell + contributes.shellViews + 31 个 JS 页面）**整体换血**为 .nshpkg + TSX 页面。 |
 | 重构代价 | navop 侧：NshHost 新写（TrustStore 集成 + host ABI + 主题桥 + 装载）、catalog/激活接线改造；扩展侧：31 个页面 view 层重写为 nsh 方言 TSX（逻辑层可搬）；工具链**零成本**（nsh CLI 现成：init/build/check/test/dev/publish）。 |
 
@@ -192,8 +192,8 @@ host.handle("navop.job.*", …); host.handle("navop.event.*", …); host.handle(
 ## 9. 依赖与版本策略（同 v1，摘要）
 
 1. navop workspace git 依赖 `nsh-platform-gpui`（feigeCode/nsh fork，钉 rev），`default-features = false, features = ["js"]`（按需 webview）。
-2. `[patch.crates-io]`（现 Cargo.toml:393-425）天然把 nsh 侧 gpui-fast 0.1.9 需求统一到 release/v0.1.12，全进程一份 gpui-fast。
-3. **nsh fork 补丁（唯一必改点）**：chrome.rs:1315 `KeyBinding::new` 对 0.1.12 编译不过（'static + panic），改为 `KeyBinding::load(&s, …, cx)` + 失败跳过。官方 upstream（HEAD 201d780）钉 0.1.9 不受影响，PR 定性「适配 gpui-fast 0.1.12」。
+2. `[patch.crates-io]`（现 Cargo.toml:393-425）天然把 nsh 侧 gpui-fast 0.1.9 需求统一到 release/v0.1.13，全进程一份 gpui-fast。
+3. **nsh fork 补丁（唯一必改点）**：chrome.rs:1315 `KeyBinding::new` 对 0.1.12 编译不过（'static + panic），改为 `KeyBinding::load(&s, …, cx)` + 失败跳过。官方 upstream（HEAD 201d780）钉 0.1.9 不受影响，PR 定性「适配 gpui-fast 0.1.13」。
 4. 每次 gpui-fast bump 同步验证 nsh fork 编译（两消费方一个 patch 面），进 CI。
 
 ---
@@ -202,7 +202,7 @@ host.handle("navop.job.*", …); host.handle("navop.event.*", …); host.handle(
 
 | 阶段 | 内容 | 验收 |
 |---|---|---|
-| M1 fork 补丁 | nsh fork chrome.rs:1315 改 KeyBinding::load；上游 PR | nsh-platform-gpui 在 gpui-fast 0.1.12 下 cargo check 通过 |
+| M1 fork 补丁 | nsh fork chrome.rs:1315 改 KeyBinding::load；上游 PR | nsh-platform-gpui 在 gpui-fast 0.1.13 下 cargo check 通过 |
 | M2 spike | navop 挂一个 AppView tab（Bundle::source 加载 nsh 官方示例）；主题桥（~90 行） | tab 内渲染、Tab 进出 surface、宿主 overlay 盖其上 |
 | M3 NshHost 骨架 | TrustStore 持久化（目录）、verify/load/accept 两阶段、NshTab 生命周期（stop 后台化）、`navop.json` asset 解析 | 从磁盘装一个 .nshpkg 开 tab、close、再装回退包 |
 | M4 host ABI | navop.* 按 §6 四类桥接分流（resource/job/event/blob → host.call；workbench → nativeModule；主题/i18n → push）；错误/取消语义 | TSX 页面 await host.call 打通 provider 全链路 |
@@ -259,7 +259,7 @@ M1–M2 去风险（嵌入可行性最便宜的验证点）；M3–M5 是本方�
 
 | 里程碑 | 内容 | 落点 |
 |---|---|---|
-| M1 | nsh fork 兼容 gpui-fast 0.1.12 | `feigeCode/nsh` 分支 `navop/gpui-0.1.12` 提交 `81c93f59`：`chrome.rs` 改用 `KeyBinding::load`（`KeyBinding::new` 现在要 `&'static str`），并补本地 patch 块把 `gpui-fast*`/`gpui-pre-*` 全钉到 `release/v0.1.12` |
+| M1 | nsh fork 兼容 gpui-fast 0.1.13 | `feigeCode/nsh` 分支 `navop/gpui-0.1.13` 提交 `81c93f59`：`chrome.rs` 改用 `KeyBinding::load`（`KeyBinding::new` 现在要 `&'static str`），并补本地 patch 块把 `gpui-fast*`/`gpui-pre-*` 全钉到 `release/v0.1.13` |
 | M2 | navop 里挂 `AppView` tab | `nsh_host/` 雏形 + 编译期 `nsh build` 产物内嵌 |
 | M3 | `NshHost` 骨架（目录装载） | `nsh:{view_key}` tab、装载失败也开 tab 并显示原因 |
 | M4 | host ABI 全量桥接 | `abi.rs`（context/log/i18n/theme/resource/job/event/blob/runtime/dev/workbench）+ `session.rs`（四张句柄表、generation、取消）+ `host_error.rs`（12 个稳定码） |

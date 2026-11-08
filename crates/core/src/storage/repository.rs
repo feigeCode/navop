@@ -635,8 +635,7 @@ impl ConnectionRepository {
         })
     }
 
-    /// 暂停连接拖拽排序：当前连接列表以 LRU 为准，后续重新设计手动排序与 LRU 的关系后再启用。
-    #[allow(dead_code)]
+    /// 批量更新连接手动排序；仅 `ConnectionSortOrder::Manual` 模式会触发。
     pub fn update_sort_orders(&self, orders: &[(i64, i32)]) -> Result<()> {
         self.conn.with_connection(|conn| {
             for (id, sort_order) in orders {

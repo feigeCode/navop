@@ -3,10 +3,13 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
+use base64::Engine as _;
 use futures::Stream;
 use llm_connector::builder::LlmClientBuilder;
+use llm_connector::core::ProviderBuilder;
 use llm_connector::types::{ChatRequest, ChatResponse, Message, Role, StreamingResponse};
 use llm_connector::{GenericProvider, HttpClient, LlmClient, OpenAIProtocol};
+use sha2::{Digest, Sha256};
 
 use super::types::{ProviderConfig, ProviderType};
 
@@ -31,6 +34,7 @@ const SILICONFLOW_BASE_URL: &str = "https://api.siliconflow.cn/v1";
 const HUNYUAN_BASE_URL: &str = "https://api.hunyuan.cloud.tencent.com/v1";
 const XIAOMI_BASE_URL: &str = "https://api.xiaomimimo.com/v1";
 const XINFERENCE_BASE_URL: &str = "http://127.0.0.1:9997/v1";
+const OPENCODE_GO_BASE_URL: &str = "https://opencode.ai/inference/go/openai/v1";
 /// Idle timeout: aborts a request only after this long without any bytes, so
 /// long streaming responses (thinking/CoT, tool loops) are not cut off.
 pub const LLM_CLIENT_TIMEOUT_SECS: u64 = 120;
@@ -119,6 +123,8 @@ struct ClientOptions<'a> {
 }
 
 fn client_from_config(config: &ProviderConfig, options: ClientOptions<'_>) -> Result<LlmClient> {
+    let extra_headers = effective_openai_compatible_headers(config);
+
     match config.provider_type {
         ProviderType::OpenAI => build_client(
             LlmClient::builder().openai(required_api_key(config, "OpenAI")?),
@@ -130,7 +136,7 @@ fn client_from_config(config: &ProviderConfig, options: ClientOptions<'_>) -> Re
             provider_base_url(config, ANTHROPIC_BASE_URL),
             options,
         ),
-        ProviderType::Aliyun => aliyun_client(config, options),
+        ProviderType::Aliyun => aliyun_client(config, &extra_headers, options),
         ProviderType::Zhipu => build_client(
             LlmClient::builder().zhipu(required_api_key(config, "Zhipu")?),
             provider_base_url(config, ZHIPU_BASE_URL),
@@ -166,6 +172,7 @@ fn client_from_config(config: &ProviderConfig, options: ClientOptions<'_>) -> Re
             required_api_key(config, "OpenRouter")?,
             provider_base_url(config, OPENROUTER_BASE_URL),
             "openrouter",
+            &extra_headers,
             options,
         ),
         // MiniMax：复用 minimax 能力位（文本块模式，不带多模态）。
@@ -173,18 +180,21 @@ fn client_from_config(config: &ProviderConfig, options: ClientOptions<'_>) -> Re
             required_api_key(config, "MiniMax")?,
             provider_base_url(config, MINIMAX_BASE_URL),
             "minimax",
+            &extra_headers,
             options,
         ),
         ProviderType::SiliconFlow => openai_compatible_client(
             required_api_key(config, "SiliconFlow")?,
             provider_base_url(config, SILICONFLOW_BASE_URL),
             "siliconflow",
+            &extra_headers,
             options,
         ),
         ProviderType::TencentHunyuan => openai_compatible_client(
             required_api_key(config, "Tencent Hunyuan")?,
             provider_base_url(config, HUNYUAN_BASE_URL),
             "hunyuan",
+            &extra_headers,
             options,
         ),
         ProviderType::Xiaomi => build_client(
@@ -197,11 +207,19 @@ fn client_from_config(config: &ProviderConfig, options: ClientOptions<'_>) -> Re
             provider_base_url(config, XINFERENCE_BASE_URL),
             options,
         ),
+        ProviderType::OpenCodeGo => openai_compatible_client(
+            required_api_key(config, "OpenCode Go")?,
+            provider_base_url(config, OPENCODE_GO_BASE_URL),
+            "opencode-go",
+            &extra_headers,
+            options,
+        ),
         ProviderType::AzureOpenAI => azure_openai_client(config, options),
         ProviderType::OpenAICompatible => openai_compatible_client(
             required_api_key(config, "OpenAI Compatible")?,
             required_base_url(config, "OpenAI Compatible")?,
             &config.name,
+            &extra_headers,
             options,
         ),
     }
@@ -219,10 +237,20 @@ fn build_client(
     Ok(builder.build()?)
 }
 
-fn aliyun_client(config: &ProviderConfig, options: ClientOptions<'_>) -> Result<LlmClient> {
+fn aliyun_client(
+    config: &ProviderConfig,
+    extra_headers: &[(String, String)],
+    options: ClientOptions<'_>,
+) -> Result<LlmClient> {
     let api_key = required_api_key(config, "Aliyun")?;
     if aliyun_prefers_compatible_mode(config) {
-        openai_compatible_client(api_key, aliyun_base_url(config), &config.name, options)
+        openai_compatible_client(
+            api_key,
+            aliyun_base_url(config),
+            &config.name,
+            extra_headers,
+            options,
+        )
     } else {
         build_client(
             LlmClient::builder().aliyun(api_key),
@@ -232,28 +260,74 @@ fn aliyun_client(config: &ProviderConfig, options: ClientOptions<'_>) -> Result<
     }
 }
 
+fn effective_openai_compatible_headers(config: &ProviderConfig) -> Vec<(String, String)> {
+    let mut headers = config.extra_headers.clone();
+    if config.provider_type == ProviderType::OpenCodeGo
+        && !headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("x-opencode-session"))
+    {
+        headers.push((
+            "x-opencode-session".to_string(),
+            opencode_go_session_id(config),
+        ));
+    }
+    headers
+}
+
+fn opencode_go_session_id(config: &ProviderConfig) -> String {
+    let seed = format!(
+        "{}|{}",
+        config.id,
+        config.api_base.as_deref().unwrap_or_default()
+    );
+    let digest = Sha256::digest(seed.as_bytes());
+    format!(
+        "ses_{}",
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
+    )
+}
+
+fn canonical_extra_header_name(name: &str) -> &str {
+    if name.eq_ignore_ascii_case("Authorization") {
+        "Authorization"
+    } else if name.eq_ignore_ascii_case("User-Agent") {
+        "User-Agent"
+    } else {
+        name
+    }
+}
+
 fn openai_compatible_client(
     api_key: &str,
     base_url: &str,
     service_name: &str,
+    extra_headers: &[(String, String)],
     options: ClientOptions<'_>,
 ) -> Result<LlmClient> {
-    if let Some(proxy_url) = options.proxy_url {
-        let provider = llm_connector::providers::openai_compatible_with_config(
-            api_key,
-            base_url,
-            service_name,
-            Some(options.timeout_secs),
-            Some(proxy_url),
-        )?;
-        return Ok(LlmClient::from_provider(Arc::new(provider)));
+    let mut builder = ProviderBuilder::new(
+        OpenAIProtocol::with_service(api_key, service_name),
+        base_url,
+    )
+    .timeout(options.timeout_secs);
+
+    if !extra_headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("User-Agent"))
+    {
+        builder = builder.header("User-Agent", &format!("llm-connector/{service_name}"));
     }
 
-    build_client(
-        LlmClient::builder().openai_compatible(api_key, service_name),
-        base_url,
-        options,
-    )
+    if let Some(proxy_url) = options.proxy_url {
+        builder = builder.proxy(proxy_url);
+    }
+
+    for (name, value) in extra_headers {
+        builder = builder.header(canonical_extra_header_name(name), value);
+    }
+
+    let provider = builder.build()?;
+    Ok(LlmClient::from_provider(Arc::new(provider)))
 }
 
 fn azure_openai_client(config: &ProviderConfig, options: ClientOptions<'_>) -> Result<LlmClient> {
@@ -321,6 +395,7 @@ pub fn default_api_base(provider_type: ProviderType) -> Option<&'static str> {
         ProviderType::TencentHunyuan => Some(HUNYUAN_BASE_URL),
         ProviderType::Xiaomi => Some(XIAOMI_BASE_URL),
         ProviderType::Xinference => Some(XINFERENCE_BASE_URL),
+        ProviderType::OpenCodeGo => Some(OPENCODE_GO_BASE_URL),
         ProviderType::AzureOpenAI | ProviderType::OpenAICompatible => None,
     }
 }
@@ -390,6 +465,7 @@ pub fn system_message(content: impl Into<String>) -> Message {
 mod tests {
     use super::*;
     use llm_connector::types::ChatResponse;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     struct TextOnlyProvider;
 
@@ -533,6 +609,190 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn openai_compatible_client_sends_configured_extra_headers() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let address = listener.local_addr().expect("local address");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept request");
+            let mut request = vec![0u8; 4096];
+            let bytes_read = socket.read(&mut request).await.expect("read request");
+            let request = String::from_utf8_lossy(&request[..bytes_read]).to_string();
+            let body = r#"{"object":"list","data":[{"id":"custom-model"}]}"#;
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .expect("write response");
+            request
+        });
+
+        let config = ProviderConfig {
+            provider_type: ProviderType::OpenAICompatible,
+            name: "opencode-go".to_string(),
+            api_key: Some("sk-test".to_string()),
+            api_base: Some(format!("http://{address}/v1")),
+            model: "custom-model".to_string(),
+            extra_headers: vec![
+                ("x-opencode-session".to_string(), "ses_test".to_string()),
+                ("user-agent".to_string(), "opencode-navop-test".to_string()),
+                (
+                    "authorization".to_string(),
+                    "Bearer custom-test".to_string(),
+                ),
+            ],
+            ..Default::default()
+        };
+
+        let connector = LlmConnector::from_config(&config).expect("build connector");
+        let models = connector.models().await.expect("load models");
+        assert_eq!(vec!["custom-model"], models);
+
+        let request = server.await.expect("server task");
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("x-opencode-session: ses_test"),
+            "missing custom session header in request: {request}"
+        );
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("user-agent: opencode-navop-test"),
+            "custom User-Agent should override the default: {request}"
+        );
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer custom-test"),
+            "custom Authorization should override the API-key default: {request}"
+        );
+        assert_eq!(
+            1,
+            request
+                .to_ascii_lowercase()
+                .matches("authorization:")
+                .count(),
+            "custom Authorization should not be duplicated: {request}"
+        );
+    }
+
+    #[test]
+    fn opencode_go_uses_a_stable_auto_session_header_without_duplicates() {
+        let config = ProviderConfig {
+            id: 505,
+            name: "OpenCode Go".to_string(),
+            provider_type: ProviderType::OpenCodeGo,
+            api_key: Some("sk-test".to_string()),
+            api_base: Some("https://opencode.ai/inference/go/openai/v1".to_string()),
+            model: "deepseek-v4.1-flash".to_string(),
+            ..Default::default()
+        };
+
+        let first = effective_openai_compatible_headers(&config);
+        let second = effective_openai_compatible_headers(&config);
+        let session_values = first
+            .iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("x-opencode-session"))
+            .map(|(_, value)| value)
+            .collect::<Vec<_>>();
+
+        assert_eq!(first, second);
+        assert_eq!(1, session_values.len());
+        assert!(session_values[0].starts_with("ses_"));
+    }
+
+    #[test]
+    fn opencode_go_keeps_an_explicit_session_header() {
+        let config = ProviderConfig {
+            id: 505,
+            name: "OpenCode Go".to_string(),
+            provider_type: ProviderType::OpenCodeGo,
+            api_key: Some("sk-test".to_string()),
+            api_base: Some("https://opencode.ai/inference/go/openai/v1".to_string()),
+            model: "deepseek-v4.1-flash".to_string(),
+            extra_headers: vec![("X-OpenCode-Session".to_string(), "ses_custom".to_string())],
+            ..Default::default()
+        };
+
+        let headers = effective_openai_compatible_headers(&config);
+        let sessions = headers
+            .iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("x-opencode-session"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(1, sessions.len());
+        assert_eq!("X-OpenCode-Session", sessions[0].0);
+        assert_eq!("ses_custom", sessions[0].1);
+    }
+
+    #[tokio::test]
+    async fn opencode_go_loads_models_from_the_go_v1_models_endpoint() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let address = listener.local_addr().expect("local address");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept request");
+            let mut request = vec![0u8; 4096];
+            let bytes_read = socket.read(&mut request).await.expect("read request");
+            let request = String::from_utf8_lossy(&request[..bytes_read]).to_string();
+            let body = r#"{"object":"list","data":[{"id":"glm-5.3"}]}"#;
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .expect("write response");
+            request
+        });
+
+        let config = ProviderConfig {
+            id: 505,
+            name: "OpenCode Go".to_string(),
+            provider_type: ProviderType::OpenCodeGo,
+            api_key: Some("sk-test".to_string()),
+            api_base: Some(format!("http://{address}/inference/go/openai/v1")),
+            model: "glm-5.3".to_string(),
+            ..Default::default()
+        };
+
+        let connector = LlmConnector::from_config(&config).expect("build connector");
+        let models = connector.models().await.expect("load models");
+        assert_eq!(vec!["glm-5.3"], models);
+
+        let request = server.await.expect("server task");
+        assert!(
+            request.starts_with("GET /inference/go/v1/models "),
+            "unexpected model request path: {request}"
+        );
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("x-opencode-session: ses_"),
+            "model request should include the automatic session header: {request}"
+        );
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer sk-test"),
+            "model request should use bearer authentication: {request}"
+        );
+    }
+
     #[test]
     fn connector_proxy_rejects_invalid_proxy_for_azure_openai_path() {
         let config = ProviderConfig {
@@ -590,6 +850,10 @@ mod tests {
         assert_eq!(
             Some("http://127.0.0.1:9997/v1"),
             default_api_base(ProviderType::Xinference)
+        );
+        assert_eq!(
+            Some("https://opencode.ai/inference/go/openai/v1"),
+            default_api_base(ProviderType::OpenCodeGo)
         );
     }
 

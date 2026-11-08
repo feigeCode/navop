@@ -107,8 +107,9 @@ impl Default for ProviderManager {
 }
 
 fn provider_cache_signature(config: &ProviderConfig, proxy_url: Option<&str>) -> String {
+    let extra_headers = serde_json::to_string(&config.extra_headers).unwrap_or_default();
     format!(
-        "{}|{}|{}|{}|{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}|{}|{}|{}|{}",
         config.provider_type.as_str(),
         config.model,
         config.api_base.as_deref().unwrap_or_default(),
@@ -117,6 +118,7 @@ fn provider_cache_signature(config: &ProviderConfig, proxy_url: Option<&str>) ->
         config.enabled,
         config.name,
         proxy_url.unwrap_or_default(),
+        extra_headers,
     )
 }
 
@@ -187,6 +189,26 @@ mod tests {
         };
         let mut changed = base.clone();
         changed.model = "qwen3.5-plus".to_string();
+
+        assert_ne!(
+            provider_cache_signature(&base, None),
+            provider_cache_signature(&changed, None)
+        );
+    }
+
+    #[test]
+    fn provider_cache_signature_changes_with_extra_headers() {
+        let base = ProviderConfig {
+            id: 1,
+            provider_type: ProviderType::OpenAICompatible,
+            name: "opencode-go".to_string(),
+            api_key: Some("sk-test".to_string()),
+            api_base: Some("https://opencode.ai/inference/go/openai/v1".to_string()),
+            model: "deepseek-v4.1-flash".to_string(),
+            ..Default::default()
+        };
+        let mut changed = base.clone();
+        changed.extra_headers = vec![("x-opencode-session".to_string(), "ses_changed".to_string())];
 
         assert_ne!(
             provider_cache_signature(&base, None),

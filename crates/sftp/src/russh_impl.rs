@@ -1203,6 +1203,7 @@ fn sftp_auth_failure_messages() -> AuthFailureMessages {
         agent_no_identities: t!("Sftp.auth_agent_no_identities").to_string(),
         agent_auth_failed: t!("Sftp.auth_agent_failed").to_string(),
         auto_publickey_failed: t!("Sftp.auth_auto_publickey_failed").to_string(),
+        none_failed: t!("Sftp.auth_none_failed").to_string(),
         no_local_identity: t!("Sftp.auth_no_local_identity").to_string(),
         auto_publickey_next_step: t!("Sftp.auth_auto_publickey_next_step").to_string(),
         keyboard_interactive_required: t!("Sftp.auth_keyboard_interactive_required").to_string(),

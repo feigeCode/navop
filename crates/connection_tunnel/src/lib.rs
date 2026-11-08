@@ -330,6 +330,7 @@ fn build_auth(config: &SshTunnelConfig) -> Result<SshAuth, TunnelError> {
         "agent" => Ok(SshAuth::Agent),
         "pageant" => Ok(SshAuth::Pageant),
         "auto_publickey" | "auto_public_key" => Ok(SshAuth::AutoPublicKey),
+        "none" => Ok(SshAuth::None),
         "private_key" => Ok(SshAuth::PrivateKey {
             key_path: required_value(
                 "private_key_path",
