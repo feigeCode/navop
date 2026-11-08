@@ -177,8 +177,8 @@ enum WizardStep {
 
 /// 类型选择页左侧的类目。
 ///
-/// 与产品分离前的旧版向导保持一致：固定 7 个类目，即使当前产品没有任何
-/// 归属某类目的连接类型也照常展示（便于用户从「安装扩展」入口补齐）。
+/// 类目清单按当前产品实际装配的连接类型裁剪（见 [`visible_categories`]）：
+/// 终端产品只保留「全部 / 中间件 / 终端」，数据库产品不出现「终端」。
 ///
 /// 扩展贡献的连接不单独成「扩展」类目：只要它带连接入口就归入中间件。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -193,15 +193,18 @@ enum WizardCategory {
 }
 
 impl WizardCategory {
-    const ALL: [Self; 7] = [
-        Self::All,
+    /// 数据库侧的四个类目（数据库 / 国产数据库 / 时序数据库 / NoSQL）。
+    const DATABASE_SIDE: [Self; 4] = [
         Self::Database,
         Self::DomesticDatabase,
         Self::TimeSeries,
         Self::NoSql,
-        Self::Middleware,
-        Self::Terminal,
     ];
+
+    /// 是否属于数据库侧类目。
+    fn is_database_side(self) -> bool {
+        Self::DATABASE_SIDE.contains(&self)
+    }
 
     fn key(self) -> &'static str {
         match self {
@@ -355,56 +358,15 @@ impl ConnectionFormDialog {
         self.mode == ConnectionFormMode::New
     }
 
-    /// 左侧类目：与旧版一致固定 8 个（空类目也照常展示）。
-    fn categories(&self) -> [WizardCategory; 7] {
-        WizardCategory::ALL
-    }
-
-    /// 当前产品是否装配了数据库领域：决定是否展示「安装时序 / 中间件」入口。
-    fn has_database_kinds(&self) -> bool {
-        self.kinds.iter().any(|kind| {
-            matches!(
-                kind_category(kind),
-                WizardCategory::Database | WizardCategory::TimeSeries | WizardCategory::NoSql
-            )
-        })
+    /// 左侧类目：只展示当前产品装配了连接类型的领域，避免终端产品出现
+    /// 数据库/NoSQL 等空类目、数据库产品出现终端类目。
+    fn categories(&self) -> Vec<WizardCategory> {
+        visible_categories(&self.kinds)
     }
 
     /// 类目下的条目：真实种类按旧版顺序排列，空类目补「+」入口，最后放「更多连接」。
     fn entries_in(&self, category: WizardCategory) -> Vec<WizardEntry> {
-        let mut entries: Vec<(u8, usize, WizardEntry)> = self
-            .kinds
-            .iter()
-            .enumerate()
-            .filter_map(|(index, kind)| {
-                let entry = WizardEntry::Kind(kind.clone());
-                if !category.matches(entry.category()) {
-                    return None;
-                }
-                let (bucket, rank) = kind_sort_key(kind, index);
-                Some((bucket, rank, entry))
-            })
-            .collect();
-        entries.sort_by_key(|(bucket, rank, _)| (*bucket, *rank));
-        let mut entries: Vec<WizardEntry> =
-            entries.into_iter().map(|(_, _, entry)| entry).collect();
-        // 旧版只为「中间件 / 时序数据库」这两个依赖外部驱动填充的类目补安装入口。
-        for install_category in [WizardCategory::Middleware, WizardCategory::TimeSeries] {
-            if category != install_category || !self.has_database_kinds() {
-                continue;
-            }
-            if !self
-                .kinds
-                .iter()
-                .any(|kind| kind_category(kind) == install_category)
-            {
-                entries.push(WizardEntry::Install(install_category));
-            }
-        }
-        if category == WizardCategory::All {
-            entries.push(WizardEntry::More);
-        }
-        entries
+        category_entries(&self.kinds, category)
     }
 
     fn select_category(&mut self, category: WizardCategory, cx: &mut Context<Self>) {
@@ -881,6 +843,74 @@ fn category_icon(category: WizardCategory) -> IconName {
     }
 }
 
+/// 某个类目下的条目：真实种类按旧版顺序排列，空类目补「+」安装入口，
+/// 「全部」末尾放「更多连接」。
+fn category_entries(
+    kinds: &[ConnectionKindDescriptor],
+    category: WizardCategory,
+) -> Vec<WizardEntry> {
+    let mut entries: Vec<(u8, usize, WizardEntry)> = kinds
+        .iter()
+        .enumerate()
+        .filter_map(|(index, kind)| {
+            let entry = WizardEntry::Kind(kind.clone());
+            if !category.matches(entry.category()) {
+                return None;
+            }
+            let (bucket, rank) = kind_sort_key(kind, index);
+            Some((bucket, rank, entry))
+        })
+        .collect();
+    entries.sort_by_key(|(bucket, rank, _)| (*bucket, *rank));
+    let mut entries: Vec<WizardEntry> = entries.into_iter().map(|(_, _, entry)| entry).collect();
+    let has_member =
+        |category: WizardCategory| kinds.iter().any(|kind| kind_category(kind) == category);
+    // 「中间件」三产品一致：类目为空时补安装入口，指向扩展市场。
+    if category == WizardCategory::Middleware && !has_member(category) {
+        entries.push(WizardEntry::Install(category));
+    }
+    // 「时序数据库」依赖数据库驱动，只在装配了数据库领域的产品里补入口。
+    if category == WizardCategory::TimeSeries && has_database_kinds(kinds) && !has_member(category)
+    {
+        entries.push(WizardEntry::Install(category));
+    }
+    if category == WizardCategory::All {
+        entries.push(WizardEntry::More);
+    }
+    entries
+}
+
+/// 按当前产品实际装配的连接类型裁剪左侧类目。
+///
+/// 领域注册表只含有本产品装配的领域类型：终端产品没有任何数据库类型，
+/// 数据库产品也没有终端类型。据此只展示有归属类型的类目，避免独立产品
+/// 出现另一领域的空类目。「中间件」跨领域（扩展贡献的连接归此），恒展示。
+fn visible_categories(kinds: &[ConnectionKindDescriptor]) -> Vec<WizardCategory> {
+    let mut categories = vec![WizardCategory::All];
+    if has_database_kinds(kinds) {
+        categories.extend(WizardCategory::DATABASE_SIDE);
+    }
+    categories.push(WizardCategory::Middleware);
+    if has_terminal_kinds(kinds) {
+        categories.push(WizardCategory::Terminal);
+    }
+    categories
+}
+
+/// 当前产品是否装配了数据库侧类型（决定数据库类目与「安装时序驱动」入口）。
+fn has_database_kinds(kinds: &[ConnectionKindDescriptor]) -> bool {
+    kinds
+        .iter()
+        .any(|kind| kind_category(kind).is_database_side())
+}
+
+/// 当前产品是否装配了终端侧类型（含远程桌面，决定「终端」类目是否展示）。
+fn has_terminal_kinds(kinds: &[ConnectionKindDescriptor]) -> bool {
+    kinds
+        .iter()
+        .any(|kind| kind_category(kind) == WizardCategory::Terminal)
+}
+
 /// 连接类型所属的旧版类目。
 fn kind_category(kind: &ConnectionKindDescriptor) -> WizardCategory {
     if let Some(category) = kind
@@ -1102,6 +1132,129 @@ mod tests {
         let declared = descriptor("ext:com.navop.foo", ConnectionKindGroup::Extension)
             .with_category("extensions");
         assert_eq!(WizardCategory::Middleware, kind_category(&declared));
+    }
+
+    fn shell_kinds() -> Vec<ConnectionKindDescriptor> {
+        [KIND_SSH, KIND_RDP, KIND_VNC, KIND_SERIAL]
+            .into_iter()
+            .map(|id| {
+                let group = match id {
+                    KIND_RDP | KIND_VNC => ConnectionKindGroup::Remote,
+                    _ => ConnectionKindGroup::Terminal,
+                };
+                descriptor(id, group)
+            })
+            .collect()
+    }
+
+    fn data_kinds() -> Vec<ConnectionKindDescriptor> {
+        [
+            "db:MySQL",
+            "db:PostgreSQL",
+            "db:TDengine",
+            KIND_REDIS,
+            KIND_MONGODB,
+        ]
+        .into_iter()
+        .map(|id| descriptor(id, ConnectionKindGroup::Database))
+        .collect()
+    }
+
+    #[test]
+    fn terminal_product_only_shows_all_middleware_and_terminal_categories() {
+        assert_eq!(
+            visible_categories(&shell_kinds()),
+            vec![
+                WizardCategory::All,
+                WizardCategory::Middleware,
+                WizardCategory::Terminal,
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_middleware_category_gets_an_install_entry() {
+        let entries = category_entries(&shell_kinds(), WizardCategory::Middleware);
+        assert!(
+            entries
+                .iter()
+                .any(|entry| matches!(entry, WizardEntry::Install(WizardCategory::Middleware)))
+        );
+    }
+
+    #[test]
+    fn terminal_product_never_offers_time_series_install_entry() {
+        assert!(category_entries(&shell_kinds(), WizardCategory::TimeSeries).is_empty());
+    }
+
+    #[test]
+    fn time_series_install_entry_follows_the_database_domain() {
+        let without_tdengine: Vec<_> = data_kinds()
+            .into_iter()
+            .filter(|kind| kind.id.as_ref() != "db:TDengine")
+            .collect();
+        assert!(
+            category_entries(&without_tdengine, WizardCategory::TimeSeries)
+                .iter()
+                .any(|entry| matches!(entry, WizardEntry::Install(WizardCategory::TimeSeries)))
+        );
+        assert!(
+            category_entries(&data_kinds(), WizardCategory::TimeSeries)
+                .iter()
+                .all(|entry| matches!(entry, WizardEntry::Kind(_)))
+        );
+    }
+
+    #[test]
+    fn database_product_hides_terminal_category() {
+        assert_eq!(
+            visible_categories(&data_kinds()),
+            vec![
+                WizardCategory::All,
+                WizardCategory::Database,
+                WizardCategory::DomesticDatabase,
+                WizardCategory::TimeSeries,
+                WizardCategory::NoSql,
+                WizardCategory::Middleware,
+            ]
+        );
+    }
+
+    #[test]
+    fn domestic_database_kind_alone_counts_as_database_side() {
+        let kinds = vec![
+            descriptor("db:external:kingbase", ConnectionKindGroup::Database)
+                .with_category("domestic_database"),
+        ];
+        assert_eq!(
+            visible_categories(&kinds),
+            vec![
+                WizardCategory::All,
+                WizardCategory::Database,
+                WizardCategory::DomesticDatabase,
+                WizardCategory::TimeSeries,
+                WizardCategory::NoSql,
+                WizardCategory::Middleware,
+            ]
+        );
+    }
+
+    #[test]
+    fn full_product_keeps_all_legacy_categories() {
+        let mut kinds = shell_kinds();
+        kinds.extend(data_kinds());
+        assert_eq!(
+            visible_categories(&kinds),
+            vec![
+                WizardCategory::All,
+                WizardCategory::Database,
+                WizardCategory::DomesticDatabase,
+                WizardCategory::TimeSeries,
+                WizardCategory::NoSql,
+                WizardCategory::Middleware,
+                WizardCategory::Terminal,
+            ]
+        );
     }
 
     #[test]
