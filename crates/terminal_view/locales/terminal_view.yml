@@ -1338,6 +1338,22 @@ ServerMonitor:
     en: Server Monitor
     zh-CN: 服务器监控
     zh-HK: 伺服器監控
+  overview:
+    en: Overview
+    zh-CN: 总览
+    zh-HK: 總覽
+  gpu:
+    en: GPU
+    zh-CN: GPU
+    zh-HK: GPU
+  npu:
+    en: NPU
+    zh-CN: NPU
+    zh-HK: NPU
+  utilization:
+    en: Utilization
+    zh-CN: 使用率
+    zh-HK: 使用率
   start:
     en: Start Monitoring
     zh-CN: 开始监控
