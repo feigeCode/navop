@@ -820,6 +820,8 @@ pub enum SshAuthMethod {
     Agent,
     Pageant,
     AutoPublicKey,
+    /// 服务端允许无认证登录（RFC 4252 `none`）。
+    None,
     /// 多因素认证：服务器要求依次通过多个因素（例如 `AuthenticationMethods password,publickey`）。
     ///
     /// 列表只声明「客户端持有哪些因素」，实际提交顺序由服务器返回的
@@ -895,6 +897,7 @@ fn tunnel_auth_fields(auth: &SshAuthMethod) -> TunnelAuthFields {
         SshAuthMethod::Agent => empty("agent"),
         SshAuthMethod::Pageant => empty("pageant"),
         SshAuthMethod::AutoPublicKey => empty("auto_publickey"),
+        SshAuthMethod::None => empty("none"),
         SshAuthMethod::Chain(steps) => {
             let mut fields = empty("password_and_private_key");
             for step in steps {
@@ -4099,6 +4102,15 @@ mod serial_tests {
         let parsed: SshAuthMethod =
             serde_json::from_str(&json).expect("自动公钥认证方式应可反序列化");
         assert!(matches!(parsed, SshAuthMethod::AutoPublicKey));
+    }
+
+    #[test]
+    fn ssh_auth_method_none_serialize_deserialize() {
+        let auth = SshAuthMethod::None;
+        let json = serde_json::to_string(&auth).expect("无认证方式应可序列化");
+        assert_eq!(json, "\"None\"");
+        let parsed: SshAuthMethod = serde_json::from_str(&json).expect("无认证方式应可反序列化");
+        assert!(matches!(parsed, SshAuthMethod::None));
     }
 
     #[test]

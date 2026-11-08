@@ -298,6 +298,8 @@ pub enum SshAuth {
     Agent,
     Pageant,
     AutoPublicKey,
+    /// RFC 4252 `none` authentication for servers that explicitly allow it.
+    None,
     /// 多因素认证链：一次登录需要依次通过多个认证因素。
     ///
     /// 防火墙、交换机等设备会配置 `AuthenticationMethods password,publickey` 这类
@@ -317,6 +319,7 @@ impl SshAuth {
             | SshAuth::Agent
             | SshAuth::Pageant
             | SshAuth::AutoPublicKey => Some(MethodKind::PublicKey),
+            SshAuth::None => Some(MethodKind::None),
             SshAuth::Chain(_) => None,
         }
     }
@@ -358,6 +361,7 @@ pub struct AuthFailureMessages {
     pub agent_no_identities: String,
     pub agent_auth_failed: String,
     pub auto_publickey_failed: String,
+    pub none_failed: String,
     pub no_local_identity: String,
     pub auto_publickey_next_step: String,
     pub keyboard_interactive_required: String,
@@ -995,6 +999,12 @@ where
             authenticate_with_pageant(session, username, hash_alg, &messages).await?
         }
         SshAuth::AutoPublicKey => unreachable!("AutoPublicKey 应由高层认证编排处理"),
+        SshAuth::None => {
+            let result = session.authenticate_none(username).await?;
+            if !matches!(result, client::AuthResult::Success) {
+                anyhow::bail!(messages.none_failed.clone());
+            }
+        }
         SshAuth::Chain(_) => {
             unreachable!("SshAuth::Chain 应由 authenticate_with_strategy_for_target 处理")
         }
@@ -1409,6 +1419,7 @@ fn default_auth_failure_messages() -> AuthFailureMessages {
         agent_no_identities: t!("Ssh.auth_agent_no_identities").to_string(),
         agent_auth_failed: t!("Ssh.auth_agent_failed").to_string(),
         auto_publickey_failed: t!("Ssh.auth_auto_publickey_failed").to_string(),
+        none_failed: t!("Ssh.auth_none_failed").to_string(),
         no_local_identity: t!("Ssh.auth_no_local_identity").to_string(),
         auto_publickey_next_step: t!("Ssh.auth_auto_publickey_next_step").to_string(),
         keyboard_interactive_required: t!("Ssh.auth_keyboard_interactive_required").to_string(),
@@ -1968,6 +1979,7 @@ mod tests {
             agent_no_identities: "agent_no_identities".to_string(),
             agent_auth_failed: "agent_auth_failed".to_string(),
             auto_publickey_failed: "auto_publickey_failed".to_string(),
+            none_failed: "none_failed".to_string(),
             no_local_identity: "no_local_identity".to_string(),
             auto_publickey_next_step: "next_step".to_string(),
             keyboard_interactive_required: "keyboard_interactive_required".to_string(),
@@ -2092,6 +2104,11 @@ mod tests {
             auth,
             SshAuth::PrivateKey { key_path: path, .. } if path == &key_path.to_string_lossy().to_string()
         )));
+    }
+
+    #[test]
+    fn none_authentication_maps_to_the_none_method() {
+        assert_eq!(SshAuth::None.factor_method_kind(), Some(MethodKind::None));
     }
 
     #[test]

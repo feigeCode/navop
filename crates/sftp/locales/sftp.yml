@@ -29,6 +29,10 @@ Sftp:
     en: Automatic public key authentication failed
     zh-CN: 自动公钥认证失败
     zh-HK: 自動公鑰認證失敗
+  auth_none_failed:
+    en: The server rejected no-authentication login
+    zh-CN: 服务器拒绝了无认证登录
+    zh-HK: 伺服器拒絕了無認證登入
   auth_no_local_identity:
     en: No available local SSH identity was detected
     zh-CN: 未检测到可用的本地 SSH 身份

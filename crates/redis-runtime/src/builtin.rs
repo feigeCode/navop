@@ -87,6 +87,7 @@ fn build_ssh_auth(
         "agent" => Ok(SshAuth::Agent),
         "pageant" => Ok(SshAuth::Pageant),
         "auto_publickey" | "auto_public_key" => Ok(SshAuth::AutoPublicKey),
+        "none" => Ok(SshAuth::None),
         "private_key" => {
             let key_path = tunnel_config
                 .private_key_path

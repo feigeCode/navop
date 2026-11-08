@@ -2422,6 +2422,10 @@ Connection:
       en: Automatic Public Key
       zh-CN: 自动公钥
       zh-HK: 自動公鑰
+    auth_none:
+      en: No Authentication
+      zh-CN: 无认证
+      zh-HK: 無認證
     auth_password_and_private_key:
       en: Password + Private Key
       zh-CN: 密码 + 密钥

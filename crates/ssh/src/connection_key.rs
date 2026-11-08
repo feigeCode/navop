@@ -360,6 +360,7 @@ enum AuthenticationKey {
     Agent(CredentialRevision),
     Pageant(CredentialRevision),
     AutoPublicKey(CredentialRevision),
+    None(CredentialRevision),
     /// 多因素认证链：依次包含各因素的身份键。
     Chain(Vec<AuthenticationKey>),
 }
@@ -386,6 +387,7 @@ impl AuthenticationKey {
             SshAuth::Agent => Self::Agent(credential),
             SshAuth::Pageant => Self::Pageant(credential),
             SshAuth::AutoPublicKey => Self::AutoPublicKey(credential),
+            SshAuth::None => Self::None(credential),
             SshAuth::Chain(steps) => Self::Chain(
                 steps
                     .iter()
@@ -403,6 +405,7 @@ impl AuthenticationKey {
             Self::Agent(_) => "agent",
             Self::Pageant(_) => "pageant",
             Self::AutoPublicKey(_) => "auto-public-key",
+            Self::None(_) => "none",
             Self::Chain(_) => "chain",
         }
     }

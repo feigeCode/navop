@@ -7,6 +7,8 @@
 pub enum SshAuthOption {
     #[default]
     Password,
+    /// RFC 4252 `none` authentication；服务端明确允许无密码/无密钥登录时使用。
+    None,
     /// 先密码、后密钥的组合认证（服务器 `AuthenticationMethods password,publickey`）。
     /// 只用于 SSH 会话表单，数据库 SSH 隧道等单一认证入口不展示该选项。
     PasswordAndPrivateKey,
@@ -19,6 +21,7 @@ pub enum SshAuthOption {
 
 impl SshAuthOption {
     pub const ALL: &'static [Self] = &[
+        Self::None,
         Self::Password,
         Self::PrivateKey,
         Self::PrivateKeyContent,
@@ -38,6 +41,7 @@ impl SshAuthOption {
 
     pub const fn value(self) -> &'static str {
         match self {
+            Self::None => "none",
             Self::Password => "password",
             Self::PasswordAndPrivateKey => "password_and_private_key",
             Self::PrivateKey => "private_key",
@@ -50,6 +54,7 @@ impl SshAuthOption {
 
     pub const fn label_i18n_key(self) -> &'static str {
         match self {
+            Self::None => "ConnectionForm.ssh_auth_none",
             Self::Password => "ConnectionForm.ssh_auth_password",
             Self::PasswordAndPrivateKey => "ConnectionForm.ssh_auth_password_and_private_key",
             Self::PrivateKey => "ConnectionForm.ssh_auth_private_key",
@@ -62,6 +67,7 @@ impl SshAuthOption {
 
     pub fn label(self) -> String {
         match self {
+            Self::None => t!("ConnectionForm.ssh_auth_none").to_string(),
             Self::Password => t!("ConnectionForm.ssh_auth_password").to_string(),
             Self::PasswordAndPrivateKey => {
                 t!("ConnectionForm.ssh_auth_password_and_private_key").to_string()
@@ -91,7 +97,9 @@ impl SshAuthOption {
 
 pub fn normalize_ssh_auth_type(auth_type: &str) -> &str {
     let auth_type = auth_type.trim();
-    if auth_type.eq_ignore_ascii_case("private_key_material") {
+    if auth_type.eq_ignore_ascii_case("none") {
+        "none"
+    } else if auth_type.eq_ignore_ascii_case("private_key_material") {
         "private_key_content"
     } else if auth_type.eq_ignore_ascii_case("private_key_content") {
         "private_key_content"
@@ -127,6 +135,7 @@ mod tests {
                 .map(|option| option.value())
                 .collect::<Vec<_>>(),
             vec![
+                "none",
                 "password",
                 "private_key",
                 "private_key_content",
@@ -138,6 +147,10 @@ mod tests {
         assert_eq!(
             SshAuthOption::Pageant.label_i18n_key(),
             "ConnectionForm.ssh_auth_pageant"
+        );
+        assert_eq!(
+            SshAuthOption::None.label_i18n_key(),
+            "ConnectionForm.ssh_auth_none"
         );
     }
 
@@ -173,6 +186,7 @@ mod tests {
     #[test]
     fn shared_ssh_auth_type_normalization_preserves_pageant() {
         assert_eq!(normalize_ssh_auth_type(" Pageant "), "pageant");
+        assert_eq!(normalize_ssh_auth_type(" NONE "), "none");
         assert_eq!(normalize_ssh_auth_type("Auto_PublicKey"), "auto_public_key");
         assert_eq!(
             normalize_ssh_auth_type("private_key_material"),

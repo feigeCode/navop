@@ -77,6 +77,10 @@ ConnectionForm:
     en: Auto Public Key
     zh-CN: 自动公钥
     zh-HK: 自動公鑰
+  ssh_auth_none:
+    en: None (no password or key)
+    zh-CN: 无认证（无密码或密钥）
+    zh-HK: 無認證（無密碼或金鑰）
   ssh_private_key_path:
     en: Private Key Path
     zh-CN: 私钥路径
