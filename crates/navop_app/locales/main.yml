@@ -2835,9 +2835,9 @@ Settings:
         zh-CN: 连接排序
         zh-HK: 連線排序
       connection_sort_desc:
-        en: Choose how connections are ordered in Home and the connection tree. More sorting modes will be added over time.
-        zh-CN: 选择首页与连接树中连接的排列方式，后续会持续新增更多排序方式。
-        zh-HK: 選擇首頁與連線樹中連線的排列方式，後續會持續新增更多排序方式。
+        en: Choose how connections are ordered in Home and the connection tree.
+        zh-CN: 选择首页与连接树中连接的排列方式。
+        zh-HK: 選擇首頁與連線樹中連線的排列方式。
       connection_sort_natural:
         en: Name (Natural Order)
         zh-CN: 按名称（自然排序）
@@ -2846,6 +2846,10 @@ Settings:
         en: Most Recently Used
         zh-CN: 最近使用优先
         zh-HK: 最近使用優先
+      connection_sort_manual:
+        en: Manual (Drag to Reorder)
+        zh-CN: 手动排序（拖拽调整）
+        zh-HK: 手動排序（拖曳調整）
 
     # 文件传输设置
     FileTransfer:

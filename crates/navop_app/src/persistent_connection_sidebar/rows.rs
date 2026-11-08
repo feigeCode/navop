@@ -5,6 +5,7 @@ use gpui::{
 };
 use gpui_component::{Icon, InteractiveElementExt, Sizable, h_flex, menu::ContextMenuExt};
 use one_assets::IconName;
+use one_core::settings::{AppSettings, ConnectionSortOrder};
 use one_ui::IconSize;
 use rust_i18n::t;
 
@@ -390,8 +391,24 @@ impl PersistentConnectionSidebar {
                         if let Some(workspace_id) = workspace_id {
                             this.set_workspace_collapsed(workspace_id, false, cx);
                         }
+                        let manual_reorder = AppSettings::global(cx).connection_sort_order
+                            == ConnectionSortOrder::Manual;
+                        let target_id = id;
                         this.home_page.update(cx, |home, cx| {
-                            home.move_connection_to_workspace(drag.connection_id, workspace_id, cx);
+                            if manual_reorder && drag.connection_id != target_id {
+                                home.reorder_connection_before(
+                                    drag.connection_id,
+                                    target_id,
+                                    workspace_id,
+                                    cx,
+                                );
+                            } else {
+                                home.move_connection_to_workspace(
+                                    drag.connection_id,
+                                    workspace_id,
+                                    cx,
+                                );
+                            }
                         });
                         cx.notify();
                     },
