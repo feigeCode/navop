@@ -107,7 +107,8 @@ extensions/composite/<ext>/
     App.tsx                      # 入口：路由表 + 外壳，结尾 mount(App)
     nsh.json                     # id = 扩展 id，name/version/build
     tsconfig.json                # extends ./.nsh/tsconfig.json，include 页面与 lib
-    lib/                         # 共享库（navop.ts、test-host.ts、ui.tsx、theme.ts）
+    lib/                         # @navop/extension-kit 的转发层（navop/theme/format/ui）+ 测试启动事实
+    package.json                 # 依赖 @navop/extension-kit（workspace 或公共 npm）
     pages/<page>/App.tsx         # 页面组件（export default，不再 mount）
     pages/<page>/App.test.tsx    # 页面测试（打开外壳入口 + params.route）
     dist/                        # nsh build 产物，入库
@@ -126,6 +127,11 @@ extensions/composite/<ext>/
 - `params.backends` 是 `shellApp.backends` 的别名 keys（如 `["docker"]`、`["resource"]`），
   不是 `runtime.ipc` 的 runtime id。
 - `dist/app.json` 的 id 必须等于扩展 id（宿主按它认 app）。
+- 新扩展用 `npx @navop/create-extension new --id … --name …`（仓库内用
+  `node scripts/create-extension.mjs`，模板 `templates/extension-basic`）；
+  离线 / 内网用 `bash scripts/create-extension-offline.sh --id … --name …`：
+  它把 kit 源码复制进 `ui/lib`，**不需要 npm install**；整套离线包用
+  `bash scripts/pack-offline.sh` 生成。
 
 ## 6. app 外壳约定（各插件保持一致）
 
