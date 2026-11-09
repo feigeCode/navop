@@ -1169,7 +1169,9 @@ test("GitHub and R2 publish every installer while the updater manifest remains c
   assert.match(upload, /downloads: objectUrls\("releases", product\.updaterAssets\)/);
   assert.match(upload, /fallback_downloads: githubReleaseUrls\(product\.updaterAssets\)/);
   assert.match(upload, /sha256s: objectChecksums\(product\.updaterAssets\)/);
-  assert.match(upload, /packages,/);
+  // Manifest packages are filtered per product (shared single release), so
+  // every installer lands only in its own product manifest.
+  assert.match(upload, /packages: packagesByProduct\[product\.id\]/);
   assert.match(upload, /publicUpdaterAlternatives/);
   assert.match(upload, /`navop-\$\{version\}-win32\.zip`/);
   assert.match(upload, /\["win32", "i686-pc-windows-msvc"\]/);

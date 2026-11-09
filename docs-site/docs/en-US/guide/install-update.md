@@ -72,7 +72,7 @@ navop-data-<version>-<label>.<ext>
 | Linux x64 | Yes | Yes | Yes |
 | Linux ARM64 | Yes | — | — |
 | `.deb` / `.rpm` / `.AppImage` | Linux x64 only | — | — |
-| GPU dependency bundle (`-gpu-stack`) | Linux x64 only | — | — |
+| GPU dependency bundle (`-gpu-stack`) | Linux x64 / arm64 (full Navop only) | — | — |
 | Scoop | Yes | — | — |
 | Flatpak | Yes | — | — |
 | File associations (`.db`/`.duckdb`/`.md`/`.cast`) | Yes | — | — |
@@ -124,7 +124,7 @@ The first time you connect to a LAN device, macOS asks for Local Network permiss
 
 ## Windows
 
-- **Installer**: run the `.msi` or `.exe` and follow the wizard. The `.exe` embeds and launches the same MSI flow. Both install into the current user profile by default, create Start menu and desktop shortcuts, use the normal Windows user data directory, and can remember the master key for automatic unlock; no administrator rights are required for the default location.
+- **Installer**: run the `.msi` or the `navop-<version>-windows-x64.exe` EXE installer and follow the wizard. The `.exe` embeds and launches the same MSI flow. Both install into the current user profile by default, create Start menu and desktop shortcuts, use the normal Windows user data directory, and can remember the master key for automatic unlock; no administrator rights are required for the default location.
 - **Standalone ZIP**: extract `navop-<version>-windows-x64.zip` and run `navop.exe`, `navop-shell.exe`, or `navop-data.exe` from the folder. It creates no shortcuts or file associations but still uses the normal Windows user data directory.
 - **Portable ZIP**: extract `...-portable.zip`; data goes into the `data` folder inside the extracted directory. Do not place a marker file next to a regular ZIP unless you really intend to switch to portable mode.
 
@@ -155,9 +155,9 @@ chmod +x navop_<version>_amd64.AppImage
 
 These three formats ship only with the full Navop Linux x64 target; Navop Shell and Navop Data do not have them.
 
-### GPU dependency bundle (full Linux x64 only)
+### GPU graphics dependency package (full Linux only)
 
-If the app exits at startup with `Failed to create surface: Failed to create surface for any enabled backend`, the system is missing a usable graphics backend. Download `navop-<version>-linux-x64-gpu-stack.tar.gz` and run its installer:
+If the app exits at startup with `Failed to create surface: Failed to create surface for any enabled backend`, the system is missing a usable graphics backend. The full Navop ships this graphics dependency package for both Linux x64 (`navop-<version>-linux-x64-gpu-stack.tar.gz`) and Linux arm64 (`navop-<version>-linux-arm64-gpu-stack.tar.gz`). Extract the matching archive and run its installer:
 
 ```bash
 mkdir navop-gpu-stack
@@ -166,7 +166,7 @@ sudo navop-gpu-stack/install.sh --dry-run   # review what will be installed
 sudo navop-gpu-stack/install.sh
 ```
 
-The installer is incremental: libraries the system already resolves are skipped, and the host's own versions win; if the system already has usable EGL and DRI drivers, the entire Mesa renderer is skipped. `install.sh` supports `--dry-run`, `--force`, and `--uninstall`, and records installed files in `/usr/lib/navop-gpu-stack/installed.tsv`; uninstall removes only files the script actually wrote. The bundle targets glibc 2.28 and applies only to the full Navop Linux x64 build.
+The installer is incremental: libraries the system already resolves are skipped, and the host's own versions win; if the system already has usable EGL and DRI drivers, the entire Mesa renderer is skipped. `install.sh` supports `--dry-run`, `--force`, and `--uninstall`, and records installed files in `/usr/lib/navop-gpu-stack/installed.tsv`; uninstall removes only files the script actually wrote. The bundle targets glibc 2.28 and ships only with the full Navop Linux builds; Navop Shell and Navop Data do not have it.
 
 ## Scoop (full edition only)
 

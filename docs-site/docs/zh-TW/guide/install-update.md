@@ -72,7 +72,7 @@ navop-data-<version>-<label>.<ext>
 | Linux x64 | 支援 | 支援 | 支援 |
 | Linux ARM64 | 支援 | — | — |
 | `.deb` / `.rpm` / `.AppImage` | 僅 Linux x64 | — | — |
-| GPU 相依套件（`-gpu-stack`） | 僅 Linux x64 | — | — |
+| GPU 相依套件（`-gpu-stack`） | 僅 Linux x64 / arm64（完整版） | — | — |
 | Scoop | 支援 | — | — |
 | Flatpak | 支援 | — | — |
 | 檔案關聯（`.db`/`.duckdb`/`.md`/`.cast`） | 支援 | — | — |
@@ -124,7 +124,7 @@ sudo xattr -rd com.apple.quarantine /Applications/Navop.app
 
 ## Windows
 
-- **安裝版**：執行 `.msi` 或 `.exe`，依精靈完成安裝。`.exe` 內嵌並啟動同一套 MSI 流程，兩者預設都安裝到目前使用者目錄，建立開始功能表與桌面捷徑，使用正常的 Windows 使用者資料目錄，並支援記住主密鑰後自動解鎖；使用預設位置不需要系統管理員權限。
+- **安裝版**：執行 `.msi` 或 `navop-<version>-windows-x64.exe`（EXE 安裝包），依精靈完成安裝。`.exe` 內嵌並啟動同一套 MSI 流程，兩者預設都安裝到目前使用者目錄，建立開始功能表與桌面捷徑，使用正常的 Windows 使用者資料目錄，並支援記住主密鑰後自動解鎖；使用預設位置不需要系統管理員權限。
 - **免安裝 ZIP**：解壓 `navop-<version>-windows-x64.zip` 後直接執行目錄中的 `navop.exe`、`navop-shell.exe` 或 `navop-data.exe`。它不會建立捷徑或檔案關聯，但仍使用正常的 Windows 使用者資料目錄。
 - **便攜版 ZIP**：解壓 `...-portable.zip`，資料會寫入解壓目錄下的 `data`，適合放在隨身碟或受控目錄使用。不要在一般 ZIP 旁放置標記檔，除非確實想切換到便攜模式。
 
@@ -155,9 +155,9 @@ chmod +x navop_<version>_amd64.AppImage
 
 這三種格式只隨完整版 Navop 的 Linux x64 目標發布，Navop Shell 與 Navop Data 沒有對應套件。
 
-### GPU 相依套件（僅完整版 Linux x64）
+### GPU 圖形相依套件（僅完整版 Linux）
 
-如果啟動時出現 `Failed to create surface: Failed to create surface for any enabled backend`，表示系統缺少可用的圖形後端。下載 `navop-<version>-linux-x64-gpu-stack.tar.gz`，解壓後執行安裝腳本：
+如果啟動時出現 `Failed to create surface: Failed to create surface for any enabled backend`，表示系統缺少可用的圖形後端。完整版 Navop 的 Linux x64 與 arm64 都提供對應的 GPU 圖形相依套件：x64 用 `navop-<version>-linux-x64-gpu-stack.tar.gz`，arm64 用 `navop-<version>-linux-arm64-gpu-stack.tar.gz`。下載後解壓並執行安裝腳本：
 
 ```bash
 mkdir navop-gpu-stack
@@ -166,7 +166,7 @@ sudo navop-gpu-stack/install.sh --dry-run   # 先查看將安裝的相依套件
 sudo navop-gpu-stack/install.sh
 ```
 
-安裝腳本是增量式的：系統已能解析的 SONAME 會跳過，主機自帶的版本優先；系統已有可用的 EGL 與 DRI 驅動時，整個 Mesa 渲染器也會跳過。`install.sh` 支援 `--dry-run`、`--force` 與 `--uninstall`，安裝紀錄保存在 `/usr/lib/navop-gpu-stack/installed.tsv`；解除安裝只會刪除腳本實際寫入的檔案。此套件以 glibc 2.28 為基準，只用於完整版 Navop 的 Linux x64 版本。
+安裝腳本是增量式的：系統已能解析的 SONAME 會跳過，主機自帶的版本優先；系統已有可用的 EGL 與 DRI 驅動時，整個 Mesa 渲染器也會跳過。`install.sh` 支援 `--dry-run`、`--force` 與 `--uninstall`，安裝紀錄保存在 `/usr/lib/navop-gpu-stack/installed.tsv`；解除安裝只會刪除腳本實際寫入的檔案。此套件以 glibc 2.28 為基準，只隨完整版 Navop 的 Linux 版本發布；Navop Shell 與 Navop Data 沒有 GPU 相依套件。
 
 ## Scoop（僅完整版）
 
