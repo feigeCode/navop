@@ -4,6 +4,30 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.23.0-beta.9] - 2026-11-09
+
+#### 更新内容
+
+- 快捷指令的管理入口迁到底部命令栏：点命令栏上的快捷指令按钮即可新建命令、按分组筛选，右键分组可以改名、改颜色或删除，侧栏不再重复维护一套管理面板；连接笔记输入框跟随主题配色。
+
+#### 修复与优化
+
+- 快捷指令的 `{{name}}` 参数占位符在命令列表、输入建议和快捷键入口都能正确生效，发送前照常弹出表单填写取值。
+- 终端支持 X10 鼠标协议，htop 这类老式 TUI 程序里点击表头排序、点选进程恢复正常。
+- 修复点击 AI 消息的「复制」按钮会触发整块选中：复制按钮现在自己截断鼠标按下 / 抬起事件，不会再被外层转录当成选中起点。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.23.0-beta.9) 下载桌面端安装包
+
+#### What's New
+
+- Quick command management moved into the bottom command bar: the quick-command button opens a panel where you can add commands and filter by group, and right-clicking a group lets you rename it, change its color or delete it, so the sidebar no longer keeps a second management panel. The connection notes input now follows the theme.
+
+#### Fixes and Improvements
+
+- `{{name}}` placeholders in quick commands now work in the command list, the input suggestions and the shortcut entry, and still prompt for values before sending.
+- The terminal now speaks the X10 mouse protocol, so clicking table headers to sort or selecting rows in older TUI programs such as htop works again.
+- Fixed clicking the copy button on an AI message starting a block selection: the button now stops mouse-down / mouse-up propagation instead of letting the transcript treat the click as the start of a selection.
+
 ## [v0.23.0-beta.8] - 2026-11-09
 
 #### 更新内容
