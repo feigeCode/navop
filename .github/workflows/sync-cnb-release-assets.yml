@@ -81,7 +81,23 @@ jobs:
           tar -xf mpgrm_linux_amd64.tar.gz
           chmod +x mpgrm
 
-          ./mpgrm releases sync \
-            --repo "https://github.com/${GITHUB_REPOSITORY}.git" \
-            --target-repo "https://cnb.cool/${CNB_REPOSITORY}.git" \
-            --tags "${TAG_NAME}"
+          # mpgrm 从 GitHub Release 下载资产时偶发请求长时间挂起，其内部
+          # errgroup 会因此死锁（fatal error: all goroutines are asleep），
+          # 单次同步直接失败。这里强制走 HTTP/1.1 并对整体失败做有限重试。
+          export GODEBUG=http2client=0
+          sync_ok=false
+          for attempt in 1 2 3; do
+            echo "mpgrm sync attempt ${attempt}/3 for ${TAG_NAME}"
+            if ./mpgrm releases sync \
+              --repo "https://github.com/${GITHUB_REPOSITORY}.git" \
+              --target-repo "https://cnb.cool/${CNB_REPOSITORY}.git" \
+              --tags "${TAG_NAME}"; then
+              sync_ok=true
+              break
+            fi
+            sleep 15
+          done
+          if [ "${sync_ok}" != "true" ]; then
+            echo "::error::mpgrm release sync failed after 3 attempts for ${TAG_NAME}"
+            exit 1
+          fi
