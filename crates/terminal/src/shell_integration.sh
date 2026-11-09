@@ -75,6 +75,18 @@ if [[ -n "${ZSH_VERSION:-}" ]]; then
     precmd_functions+=(__onetcli_precmd_zsh)
     preexec_functions+=(__onetcli_preexec_zsh)
     PROMPT="${PROMPT}"$'%{\033]133;B\007%}'
+
+    # 提示符框架（oh-my-posh / powerlevel10k / starship 等）每个 precmd 都会重写
+    # PROMPT，把上面补的结束标记冲掉；导航端就永远等不到 OSC 133;B，握手卡到
+    # 30 秒看门狗（表现为「连上后要等 30 秒才能输入」）。这里再挂一个追加到最后
+    # 的 precmd 钩子，每轮按需把标记补回 PROMPT 末尾。
+    __onetcli_prompt_trailer_zsh() {
+        if [[ "${PROMPT:-}" != *$'\033]133;B\007'* ]]; then
+            PROMPT="${PROMPT:-}"$'%{\033]133;B\007%}'
+        fi
+        return 0
+    }
+    precmd_functions+=(__onetcli_prompt_trailer_zsh)
 else
     __onetcli_precmd_bash() {
         # 退出码由 PROMPT_COMMAND 钩子显式传入；直接调用（无参数）时回退到 $?。
@@ -105,5 +117,28 @@ else
     fi
 
     PS1="${PS1}"$'\\[\033]133;B\007\\]'
+
+    # 同上（zsh 分支）：oh-my-posh / starship 这类框架每轮重写 PS1，会把上面补的
+    # 结束标记冲掉，握手拿不到 OSC 133;B 就卡满看门狗。注册时必须排在框架之后
+    # （注入发生在登录 rc 执行完之后，追加到 PROMPT_COMMAND 末尾即可），并在每轮
+    # 提示符按需补回标记。
+    __onetcli_prompt_trailer_bash() {
+        if [[ -n "${PS1:-}" && "${PS1}" != *$'\033]133;B\007'* ]]; then
+            PS1="${PS1}"$'\\[\033]133;B\007\\]'
+        fi
+        return 0
+    }
+    # 不写 `command -v ... &&` 那种存在性判断：钩子里的每条命令都会触发上面的
+    # DEBUG trap（多一个假的 133;C）。函数名本身就以 __onetcli_ 开头，trap 会忽略；
+    # 函数缺失时（PROMPT_COMMAND 被导出到子 shell）重定向已把报错吞掉。
+    __ONETCLI_PROMPT_TRAILER_HOOK='__onetcli_prompt_trailer_bash 2>/dev/null'
+
+    # bash 5.1+ 的 PROMPT_COMMAND 可能是数组，按实际形态追加到末尾。
+    if [[ $(declare -p PROMPT_COMMAND 2>/dev/null) == "declare -a"* ]]; then
+        PROMPT_COMMAND+=("$__ONETCLI_PROMPT_TRAILER_HOOK")
+    else
+        PROMPT_COMMAND="${PROMPT_COMMAND:+${PROMPT_COMMAND}; }$__ONETCLI_PROMPT_TRAILER_HOOK"
+    fi
+
     trap '__onetcli_preexec_bash' DEBUG
 fi
