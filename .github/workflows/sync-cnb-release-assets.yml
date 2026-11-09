@@ -81,7 +81,33 @@ jobs:
           tar -xf mpgrm_linux_amd64.tar.gz
           chmod +x mpgrm
 
-          ./mpgrm releases sync \
-            --repo "https://github.com/${GITHUB_REPOSITORY}.git" \
-            --target-repo "https://cnb.cool/${CNB_REPOSITORY}.git" \
-            --tags "${TAG_NAME}"
+          # mpgrm 直接用匿名链接下载 GitHub Release 资产，连续下载若干个大文件
+          # 后请求会长时间挂起，其内部 errgroup 随之死锁
+          # （fatal error: all goroutines are asleep），整次同步失败。
+          # 先用带 token 的 gh 把资产预取到 mpgrm 的工作目录，mpgrm 发现本地
+          # 文件已完整会直接跳过下载。
+          export GODEBUG=http2client=0
+          asset_dir="${GITHUB_WORKSPACE}/runtime/releases/github.com/${GITHUB_REPOSITORY}/${TAG_NAME}"
+          mkdir -p "${asset_dir}"
+          GH_TOKEN="${GITHUB_TOKEN}" gh release download "${TAG_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --dir "${asset_dir}" \
+            --clobber
+          prefetched_count="$(find "${asset_dir}" -maxdepth 1 -type f | wc -l | tr -d ' ')"
+          echo "prefetched assets: ${prefetched_count}"
+          sync_ok=false
+          for attempt in 1 2 3; do
+            echo "mpgrm sync attempt ${attempt}/3 for ${TAG_NAME}"
+            if ./mpgrm releases sync \
+              --repo "https://github.com/${GITHUB_REPOSITORY}.git" \
+              --target-repo "https://cnb.cool/${CNB_REPOSITORY}.git" \
+              --tags "${TAG_NAME}"; then
+              sync_ok=true
+              break
+            fi
+            sleep 15
+          done
+          if [ "${sync_ok}" != "true" ]; then
+            echo "::error::mpgrm release sync failed after 3 attempts for ${TAG_NAME}"
+            exit 1
+          fi
