@@ -17036,6 +17036,39 @@ mod tests {
         );
     }
 
+    #[gpui::test]
+    fn gpui_copy_message_button_does_not_start_transcript_selection(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        view.update(cx, |view, cx| {
+            view.transcript
+                .push_message(crate::ChatMessageUI::assistant("需要复制的回复"));
+            cx.notify();
+        });
+        let cx: &mut VisualTestContext = cx;
+        draw_frame(cx);
+
+        let copy = cx
+            .debug_bounds("ai-chat-message-copy")
+            .expect("消息旁应有复制按钮");
+        cx.simulate_mouse_down(copy.center(), MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_up(copy.center(), MouseButton::Left, Modifiers::default());
+        draw_frame(cx);
+
+        assert!(
+            view.read_with(cx, |view, _| view.selected_transcript_text().is_none()),
+            "点击消息复制按钮不应开始块级选中"
+        );
+        assert!(
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .is_some_and(|text| text.contains("需要复制的回复")),
+            "复制按钮仍应正常把消息写入剪贴板"
+        );
+    }
+
     /// `@` 菜单里除了业务资源还要有工作区文件，且遍历在后台跑完才并进来。
     #[gpui::test]
     fn gpui_workspace_files_join_the_mention_menu(cx: &mut TestAppContext) {
