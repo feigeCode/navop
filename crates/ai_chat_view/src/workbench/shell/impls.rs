@@ -80,7 +80,9 @@ impl Focusable for WorkbenchShell {
 }
 
 impl Render for WorkbenchShell {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // 懒面板在这里落地：只有本帧真正要显示的面板才建视图。
+        self.materialize_visible_panel(window, cx);
         let theme = self.snapshot(cx);
         let show_nav = !self.state.nav_collapsed() && self.has_nav();
         let nav = show_nav

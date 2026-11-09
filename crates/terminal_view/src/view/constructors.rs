@@ -24,14 +24,7 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        Self::new_local_view(
-            config,
-            tab_index,
-            Some(title),
-            connection_icon,
-            window,
-            cx,
-        )
+        Self::new_local_view(config, tab_index, Some(title), connection_icon, window, cx)
     }
 
     /// `title` 为 `Some` 表示扩展声明的终端型连接:固定标题且可重启。
@@ -55,15 +48,15 @@ impl TerminalView {
         let local_working_dir = resolve_local_working_dir(config.working_dir.clone());
         // WSL 会话没有 Windows 工作目录，文件树需要改指发行版文件系统
         let workspace_source = resolve_local_workspace_source(&config);
-        let init_error = Rc::new(RefCell::new(None));
-        let init_error_clone = init_error.clone();
+        // 本地 PTY 现在由 Terminal 内部的后台线程创建：这里拿到的是处于
+        // Connecting 的空终端，创建结果（含失败）稍后经 TerminalModelEvent::Wakeup
+        // 落到界面上，不再需要同步收集 init_error。
         let terminal = cx.new(move |cx| {
-            let (mut terminal, error) = if title.is_some() {
+            let mut terminal = if title.is_some() {
                 Terminal::new_local_restartable_or_disconnected(config, cx)
             } else {
                 Terminal::new_local_or_disconnected(config, cx)
             };
-            *init_error_clone.borrow_mut() = error;
             terminal.set_connection_name(title);
             terminal
         });
@@ -84,16 +77,6 @@ impl TerminalView {
             window,
             cx,
         );
-
-        if let Some(error) = init_error.borrow_mut().take() {
-            window.push_notification(
-                Notification::error(
-                    t!("TerminalView.local_terminal_create_failed", error = error).to_string(),
-                )
-                .autohide(true),
-                cx,
-            );
-        }
 
         view
     }

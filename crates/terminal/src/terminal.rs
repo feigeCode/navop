@@ -848,6 +848,21 @@ fn ssh_config_with_confirmed_host_key(
 const DEFAULT_COLS: usize = 80;
 const DEFAULT_ROWS: usize = 24;
 
+/// 本地 PTY 创建线程的等待上限。
+///
+/// 正常 fork+exec 是几十毫秒量级；超过这个长度只可能是子进程卡在 fork 之后的
+/// atfork 处理里（实测为 `dispatch_atfork_child` 自旋）。到点后作废这次握手并
+/// 把会话判为创建失败，用户可按 Enter 重试——绝不让界面无限期停在 Connecting。
+const LOCAL_PTY_START_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// 本地 PTY 创建线程回传给 UI 的消息。
+enum LocalPtyStartEvent {
+    /// 创建完成（成功或失败）。
+    Ready(Result<LocalPtyBackend>),
+    /// 超过 [`LOCAL_PTY_START_TIMEOUT`] 仍未创建完成。
+    TimedOut,
+}
+
 /// 本地 PTY 后端异常停止时写入 `child_exited` 的哨兵值。
 ///
 /// 后端停止时子进程状态未知（PTY 读取线程可能已异常终止，而子进程本身仍然存在），
@@ -1918,24 +1933,18 @@ impl Terminal {
         }
     }
 
-    pub fn new_local_or_disconnected(
-        config: LocalConfig,
-        cx: &mut Context<Self>,
-    ) -> (Self, Option<String>) {
-        match Self::new_local(config, cx) {
-            Ok(terminal) => (terminal, None),
-            Err(error) => {
-                let message = error.to_string();
-                (
-                    Self::new_local_disconnected(message.clone(), cx),
-                    Some(message),
-                )
-            }
-        }
+    /// 创建本地终端。
+    ///
+    /// PTY 由专用线程建立，因此本函数不再阻塞 GPUI 主线程，也不再同步返回创建错误：
+    /// 返回时终端处于 [`ConnectionState::Connecting`]，PTY 就绪后自动切到
+    /// `Connected`；创建失败或超时会落到 `Disconnected{error}`，与原来的失败表现一致
+    /// （可重启终端按 Enter 重试）。
+    pub fn new_local_or_disconnected(config: LocalConfig, cx: &mut Context<Self>) -> Self {
+        Self::new_local_with_restart(config, false, cx)
     }
 
     /// 创建本地终端
-    pub fn new_local(config: LocalConfig, cx: &mut Context<Self>) -> Result<Self> {
+    pub fn new_local(config: LocalConfig, cx: &mut Context<Self>) -> Self {
         Self::new_local_with_restart(config, false, cx)
     }
 
@@ -1946,24 +1955,15 @@ impl Terminal {
     pub fn new_local_restartable_or_disconnected(
         config: LocalConfig,
         cx: &mut Context<Self>,
-    ) -> (Self, Option<String>) {
-        match Self::new_local_with_restart(config, true, cx) {
-            Ok(terminal) => (terminal, None),
-            Err(error) => {
-                let message = error.to_string();
-                (
-                    Self::new_local_disconnected(message.clone(), cx),
-                    Some(message),
-                )
-            }
-        }
+    ) -> Self {
+        Self::new_local_with_restart(config, true, cx)
     }
 
     fn new_local_with_restart(
         config: LocalConfig,
         restartable: bool,
         cx: &mut Context<Self>,
-    ) -> Result<Self> {
+    ) -> Self {
         let (event_tx, event_rx) = unbounded_channel::<TerminalEvent>();
         let app_settings = AppSettings::current(cx);
         let scrollback_lines = app_settings.terminal_scrollback_lines;
@@ -1998,23 +1998,18 @@ impl Terminal {
             Self::recording_tap_for_runtimes(&recording_runtime, &session_log_runtime);
         let restart_config = restartable.then(|| config.clone());
         let (pty_options, history_shell) = build_local_pty_options(config);
-        let local_backend = LocalPtyBackend::new_with_recording(
-            term.clone(),
-            event_proxy.clone(),
-            pty_options,
-            recording_tap,
-        )?;
 
+        // 事件循环必须先起来：PTY 创建线程拿到后端后就会往里灌输出。
         Self::spawn_event_loop(event_rx, wakeup_pending.clone(), cx);
         Self::spawn_local_history_loader(history_shell.as_deref(), cx);
         let history_repository = Self::history_repository(cx);
 
-        Ok(Self {
+        let mut terminal = Self {
             line_timeline: Default::default(),
             term,
             session_mode: TerminalSessionMode::Live,
             performance_metrics,
-            backend: Some(Box::new(local_backend)),
+            backend: None,
             recording_runtime,
             session_log_runtime,
             playback_runtime: None,
@@ -2023,7 +2018,7 @@ impl Terminal {
             title: String::new(),
             reported_working_dir: None,
             child_exited: None,
-            connection_state: ConnectionState::Connected,
+            connection_state: ConnectionState::Connecting,
             session_lock: None,
             cols: DEFAULT_COLS,
             rows: DEFAULT_ROWS,
@@ -2061,7 +2056,190 @@ impl Terminal {
                 event_proxy: event_proxy.clone(),
             }),
             scrollback_lines,
+        };
+
+        let generation = terminal.next_connection_generation();
+        Self::spawn_local_pty_start(
+            terminal.term.clone(),
+            event_proxy,
+            pty_options,
+            recording_tap,
+            generation,
+            cx,
+        );
+        terminal
+    }
+
+    /// 在专用线程里创建本地 PTY，结果经事件通道回送到 UI 线程。
+    ///
+    /// 为什么不能在 UI 线程建：`tty::new` 通过 `Command::pre_exec` 做 `setsid`，
+    /// Rust 标准库因此放弃 `posix_spawn` 退回 `fork+exec`。多线程进程里一旦有其它
+    /// 线程持有 objc/dispatch 的锁，子进程会卡在 `dispatch_atfork_child` 自旋，父进程
+    /// 则阻塞在 exec 握手的 `read` 上。GPUI 主线程一旦卷进去，整个窗口就永久冻结
+    /// （0.23.0-beta.7 现场即此）。挪到专用线程后，最坏情况只是这一个线程卡住，
+    /// UI 由看门狗超时兜底。
+    fn spawn_local_pty_start(
+        term: Arc<FairMutex<Term<GpuiEventProxy>>>,
+        event_proxy: GpuiEventProxy,
+        pty_options: PtyOptions,
+        recording_tap: Option<RecordingTap>,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) {
+        let (event_tx, mut event_rx) = unbounded_channel::<LocalPtyStartEvent>();
+        // 工作线程完成标记：看门狗据此区分「慢」与「卡死」，并在正常结束时立即退出。
+        let finished: Arc<(StdMutex<bool>, std::sync::Condvar)> =
+            Arc::new((StdMutex::new(false), std::sync::Condvar::new()));
+
+        let spawn_tx = event_tx.clone();
+        let spawn_finished = finished.clone();
+        let started = std::thread::Builder::new()
+            .name("local-pty-spawn".to_string())
+            .spawn(move || {
+                let backend = LocalPtyBackend::new_with_recording(
+                    term,
+                    event_proxy,
+                    pty_options,
+                    recording_tap,
+                );
+                if let Err(event) = spawn_tx.send(LocalPtyStartEvent::Ready(backend)) {
+                    // 界面已经不在等这次握手（标签被关掉/会话已换代）：别把 PTY 线程泄漏掉。
+                    if let LocalPtyStartEvent::Ready(Ok(backend)) = event.0 {
+                        backend.shutdown();
+                    }
+                }
+                // 工作线程即使 panic 也只让本次握手失败，不能把看门狗一起毒化掉。
+                let (lock, condvar) = &*spawn_finished;
+                let mut done = match lock.lock() {
+                    Ok(done) => done,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                *done = true;
+                condvar.notify_all();
+            });
+
+        if let Err(error) = started {
+            tracing::error!(%error, "本地终端 PTY 创建线程启动失败");
+            let _ = event_tx.send(LocalPtyStartEvent::Ready(Err(anyhow!(
+                "failed to start the local PTY creation thread: {error}"
+            ))));
+        } else {
+            // 看门狗：只在「工作线程还没完成」且已经超时时上报。
+            let watchdog_tx = event_tx.clone();
+            let watchdog_finished = finished.clone();
+            let _ = std::thread::Builder::new()
+                .name("local-pty-watchdog".to_string())
+                .spawn(move || {
+                    let (lock, condvar) = &*watchdog_finished;
+                    // 锁被毒化时按「没完成」处理：宁可多报一次超时，也不要让界面
+                    // 永远停在 Connecting。
+                    let guard = match lock.lock() {
+                        Ok(guard) => guard,
+                        Err(poisoned) => poisoned.into_inner(),
+                    };
+                    let finished = match condvar.wait_timeout_while(
+                        guard,
+                        LOCAL_PTY_START_TIMEOUT,
+                        |done: &mut bool| !*done,
+                    ) {
+                        Ok((guard, waited)) => *guard || !waited.timed_out(),
+                        Err(_) => false,
+                    };
+                    if finished {
+                        return;
+                    }
+                    let _ = watchdog_tx.send(LocalPtyStartEvent::TimedOut);
+                });
+        }
+
+        cx.spawn(async move |this: WeakEntity<Self>, cx| {
+            while let Some(event) = event_rx.recv().await {
+                let delivered = this.update(cx, |this, cx| {
+                    this.handle_local_pty_start_event(event, generation, cx);
+                });
+                if delivered.is_err() {
+                    break;
+                }
+            }
         })
+        .detach();
+    }
+
+    /// 处理 PTY 创建线程（或看门狗）的回传。
+    ///
+    /// 晚到的结果按连接代次丢弃：超时之后才创建成功的后端必须关掉，不能把已经
+    /// 报错、甚至已经重试过的会话再改回 `Connected`。
+    fn handle_local_pty_start_event(
+        &mut self,
+        event: LocalPtyStartEvent,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.is_current_connection_generation(generation) {
+            if let LocalPtyStartEvent::Ready(Ok(backend)) = event {
+                backend.shutdown();
+            }
+            return;
+        }
+
+        match event {
+            LocalPtyStartEvent::Ready(result) => self.install_local_pty_backend(result, cx),
+            LocalPtyStartEvent::TimedOut => {
+                let secs = LOCAL_PTY_START_TIMEOUT.as_secs();
+                tracing::error!(
+                    target: "terminal.local.pty",
+                    timeout_secs = secs,
+                    "本地终端 PTY 创建超时，按创建失败处理"
+                );
+                // 作废本次握手：之后才创建出来的后端会被代次守卫关闭。
+                self.next_connection_generation();
+                self.connection_state = ConnectionState::Disconnected {
+                    error: Some(format!(
+                        "local PTY did not start within {secs}s (the fork child never finished exec)"
+                    )),
+                };
+                cx.emit(TerminalModelEvent::Wakeup);
+            }
+        }
+    }
+
+    /// 装上 PTY 创建线程交回的本地后端。
+    fn install_local_pty_backend(
+        &mut self,
+        result: Result<LocalPtyBackend>,
+        cx: &mut Context<Self>,
+    ) {
+        match result {
+            Ok(backend) => {
+                if !should_install_connected_backend(&self.connection_state) {
+                    // 握手期间会话已被用户关掉/已判失败：不得把状态覆盖回 Connected。
+                    backend.shutdown();
+                    return;
+                }
+                // PTY 是用 80x24 的默认尺寸建出来的，装上以后立刻对齐真实格子。
+                self.term.lock().resize(TermDimensions {
+                    cols: self.cols,
+                    rows: self.rows,
+                });
+                backend.resize(TerminalSize {
+                    rows: self.rows as u16,
+                    cols: self.cols as u16,
+                    pixel_width: self.pixel_width,
+                    pixel_height: self.pixel_height,
+                });
+                self.backend = Some(Box::new(backend));
+                self.connection_state = ConnectionState::Connected;
+                self.set_connection_active(true, cx);
+                cx.emit(TerminalModelEvent::Wakeup);
+            }
+            Err(error) => {
+                tracing::error!(target: "terminal.local.pty", %error, "本地终端 PTY 创建失败");
+                self.connection_state = ConnectionState::Disconnected {
+                    error: Some(error.to_string()),
+                };
+                cx.emit(TerminalModelEvent::Wakeup);
+            }
+        }
     }
 
     pub fn clear_screen(&mut self, cx: &mut Context<Self>) {
@@ -4539,26 +4717,21 @@ impl Terminal {
                 backend.shutdown();
             }
             self.prepare_surface_for_reconnect();
+            self.connection_state = ConnectionState::Connecting;
+            self.set_connection_active(false, cx);
+            let generation = self.next_connection_generation();
+            self.record_connection_generation_marker(generation);
             let (pty_options, _history_shell) = build_local_pty_options(restart.config);
-            match LocalPtyBackend::new_with_recording(
+            // 同首次创建：PTY 必须在专用线程里建，UI 线程只等回传。
+            Self::spawn_local_pty_start(
                 self.term.clone(),
                 restart.event_proxy,
                 pty_options,
                 self.recording_tap(),
-            ) {
-                Ok(backend) => {
-                    self.backend = Some(Box::new(backend));
-                    self.connection_state = ConnectionState::Connected;
-                }
-                Err(error) => {
-                    tracing::error!(%error, "本地终端重启失败");
-                    self.connection_state = ConnectionState::Disconnected {
-                        error: Some(error.to_string()),
-                    };
-                    cx.emit(TerminalModelEvent::Wakeup);
-                    return false;
-                }
-            }
+                generation,
+                cx,
+            );
+            return true;
         } else {
             return false;
         }
@@ -6587,6 +6760,32 @@ mod tests {
     #[test]
     fn plain_local_session_keeps_its_state_when_child_exits() {
         assert_eq!(None, local_session_end_state(false, 0));
+    }
+
+    /// 回归守卫：本地 PTY 的 `fork` 只能发生在 `local-pty-spawn` 线程里。
+    ///
+    /// 一旦有人在 UI 线程（构造或重启路径）直接调 `new_with_recording`，多线程
+    /// 进程里的 fork+exec 就可能卡在 atfork 处理上，把整个窗口冻住——0.23.0-beta.7
+    /// 的现场就是这么来的。这条断言把「只留一个调用点」钉在代码结构上。
+    #[test]
+    fn local_pty_creation_happens_only_on_the_dedicated_thread() {
+        let source = include_str!("terminal.rs");
+        let production = source.split("mod tests").next().unwrap_or_default();
+        assert_eq!(
+            1,
+            production
+                .matches("LocalPtyBackend::new_with_recording(")
+                .count(),
+            "本地 PTY 必须在专用线程里创建：UI 线程直接建会阻塞事件循环"
+        );
+        let worker = production
+            .split("fn spawn_local_pty_start")
+            .nth(1)
+            .expect("spawn_local_pty_start 必须存在");
+        assert!(
+            worker.contains("LocalPtyBackend::new_with_recording("),
+            "唯一的创建调用点应当在 spawn_local_pty_start 的工作线程闭包里"
+        );
     }
 
     #[test]
