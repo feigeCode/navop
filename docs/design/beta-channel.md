@@ -65,10 +65,13 @@ flowchart LR
 - 清单上传后按 key 回读校验（size / sha256 元数据 / cache-control），beta 清单同样走这套校验。
 - 安装包 `cache-control` 为 `public, max-age=0, must-revalidate`，允许同 tag 修复时覆盖。
 
-- prune 语义（已在 M1 补齐）：稳定版发布只清理 `releases/` 前缀，beta tag 整体跳过；稳定版清理时
-  **额外保留 `updates/beta/latest.json` 里 `version` 指向的那个安装包目录**，否则 beta 清单的下载链接会
-  404。清单读取失败（首次 beta 之前、对象不存在）时退回「保留版本号最大的一个 beta」。
-  `updates/` 前缀下的任何对象都不删。
+- prune 语义（M1 补齐，beta 通道上线后修正为「beta 也清理」）：每次发布都清理 `releases/` 前缀，
+  只保留三者的并集——本次上传的 tag、`updates/latest.json` 里 `version` 指向的稳定 tag、
+  `updates/beta/latest.json` 里 `version` 指向的 beta tag，其余 `releases/<tag>/` 前缀递归删除。
+  早期版本对 beta tag 整体跳过清理，结果每个 beta（三产品全平台，约 2.2 GB）都永久留在桶里，
+  五六个就把 10 GB 免费额度撑爆；现在 beta 发布同样只留最新一份。
+  清单读取失败时保底不删：稳定清单读不到就整体放弃清理；beta 清单读不到（首次 beta 之前、对象不存在）退回
+  「保留版本号最大的一个 beta」。`updates/` 前缀下的任何对象都不删。
 
 ## 4. 通道推导规则
 
