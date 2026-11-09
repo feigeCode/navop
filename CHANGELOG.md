@@ -23,6 +23,8 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 #### 修复与优化
 
+- 修复新建本地终端时整个窗口可能长时间无响应、甚至卡死的问题：本地 PTY 创建移出主线程，AI 工作台不再提前拉起隐藏的终端面板。
+- 修复 SSH 会话在 oh-my-posh / starship 等提示符框架下「连上后要等约 30 秒才能输入」的问题，并恢复握手期间被吞掉的登录 banner。
 - 修复快捷指令列表中行高重叠、内容互相挤压的问题。
 - 修复 SFTP「默认打开双栏文件视图」勾选后点确认不生效的问题。
 - 修复标签栏与扩展标题栏右侧留白区域无法拖动窗口的问题。
@@ -51,6 +53,8 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 #### Fixes and Improvements
 
+- Fixed the window becoming unresponsive or freezing when opening a new local terminal: local PTY creation moved off the main thread, and the AI workbench no longer creates hidden terminal panels ahead of time.
+- Fixed SSH sessions waiting roughly 30 seconds before accepting input, and dropped login banners during the handshake, under prompt frameworks such as oh-my-posh / starship.
 - Fixed overlapping row heights that squeezed content in the quick command list.
 - Fixed the SFTP "open dual-pane file view by default" preference not taking effect after confirming.
 - Fixed blank areas at the right end of the tab bar and extended title bar not dragging the window.
