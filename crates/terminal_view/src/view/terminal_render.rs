@@ -295,6 +295,7 @@ impl TerminalView {
         let view_select_all = view.clone();
         let view_clear_screen = view.clone();
         let view_clear = view.clone();
+        let view_quick = view.clone();
         let can_paste_selection =
             accepts_live_input && selection_text.as_ref().is_some_and(|text| !text.is_empty());
         let selection_text_for_paste = selection_text.clone();
@@ -408,14 +409,13 @@ impl TerminalView {
             );
 
             let save_text = text.trim().to_string();
-            let sidebar_quick = sidebar.clone();
             if !save_text.is_empty() {
                 menu = menu.item(
                     PopupMenuItem::new(t!("ContextMenu.save_quick_command"))
                         .icon(IconName::SquareTerminal)
                         .on_click(move |_, window, cx| {
-                            sidebar_quick.update(cx, |sidebar, cx| {
-                                sidebar.add_quick_command(save_text.clone(), window, cx);
+                            view_quick.update(cx, |view, cx| {
+                                view.add_quick_command(save_text.clone(), window, cx);
                             });
                         }),
                 );

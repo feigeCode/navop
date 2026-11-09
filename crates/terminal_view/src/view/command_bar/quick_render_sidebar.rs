@@ -5,8 +5,10 @@ use gpui::{
     StatefulInteractiveElement, Styled, div, px,
 };
 use gpui_component::{
-    ActiveTheme, button::ButtonVariants as _, h_flex, scroll::ScrollableElement, v_flex,
+    ActiveTheme, button::ButtonVariants as _, h_flex, menu::ContextMenuExt,
+    scroll::ScrollableElement, v_flex,
 };
+use one_assets::IconName;
 use one_ui::{IconButton, IconButtonRole, PanelHeader, PanelHeaderVariant};
 use rust_i18n::t;
 
@@ -60,16 +62,34 @@ impl TerminalCommandBar {
                     .child(t!("TerminalCommandBar.quick_commands").to_string()),
             )
             .trailing(
-                IconButton::new("terminal-command-quick-close", one_assets::IconName::Close)
-                    .role(IconButtonRole::Compact)
-                    .custom(
-                        self.colors
-                            .icon_button_variant(self.colors.muted_foreground, cx),
+                h_flex()
+                    .gap_1()
+                    .child(
+                        IconButton::new("terminal-command-quick-add", IconName::Plus)
+                            .role(IconButtonRole::Compact)
+                            .custom(
+                                self.colors
+                                    .icon_button_variant(self.colors.muted_foreground, cx),
+                            )
+                            .tooltip(t!("QuickCommand.add_tooltip").to_string())
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.quick_command_panel.update(cx, |panel, cx| {
+                                    panel.open_add_command_dialog(window, cx);
+                                });
+                            })),
                     )
-                    .tooltip(t!("TerminalCommandBar.close_quick_commands").to_string())
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.toggle_quick_commands(window, cx);
-                    })),
+                    .child(
+                        IconButton::new("terminal-command-quick-close", IconName::Close)
+                            .role(IconButtonRole::Compact)
+                            .custom(
+                                self.colors
+                                    .icon_button_variant(self.colors.muted_foreground, cx),
+                            )
+                            .tooltip(t!("TerminalCommandBar.close_quick_commands").to_string())
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.toggle_quick_commands(window, cx);
+                            })),
+                    ),
             )
             .into_any_element()
     }
@@ -83,7 +103,14 @@ impl TerminalCommandBar {
         let active = self.quick_group_filter == group.filter;
         let filter = group.filter.clone();
         let color = group_color(group.color.as_deref(), self.colors.accent);
-        h_flex()
+        let panel = self.quick_command_panel.clone();
+        let colors = self.colors.clone();
+        let context_group = match &group.filter {
+            QuickGroupFilter::Group(name) => Some(name.clone()),
+            QuickGroupFilter::All | QuickGroupFilter::Ungrouped => None,
+        };
+        let context_color = group.color.clone();
+        let row = h_flex()
             .id(("terminal-command-quick-group-filter", index))
             .w_full()
             .gap_2()
@@ -124,7 +151,21 @@ impl TerminalCommandBar {
                     .text_center()
                     .text_xs()
                     .child(group.count.to_string()),
-            )
+            );
+
+        if let Some(group_name) = context_group {
+            row.context_menu(move |menu, _window, _cx| {
+                QuickCommandPanel::group_context_menu_for(
+                    panel.clone(),
+                    group_name.clone(),
+                    context_color.clone(),
+                    menu,
+                    colors.clone(),
+                )
+            })
             .into_any_element()
+        } else {
+            row.into_any_element()
+        }
     }
 }

@@ -65,13 +65,13 @@ impl TerminalView {
         }
 
         if accepts_live_input && mode.contains(TermMode::ALT_SCREEN) {
-            if sgr_mouse_mode_enabled(mode) {
+            if mouse_reporting_enabled(mode) {
                 let point = self.pixel_to_point(event.position, self.terminal_bounds, cx);
                 if let Some(report) =
-                    sgr_mouse_wheel_report(lines, point.column.0, point.line.0 as usize)
+                    mouse_wheel_report(lines, point.column.0, point.line.0 as usize, mode)
                 {
                     for _ in 0..lines.unsigned_abs() {
-                        self.write_to_pty(report.as_bytes().to_vec(), cx);
+                        self.write_to_pty(report.clone(), cx);
                     }
                 }
             } else if self.vim_scroll_to_arrow_keys && lines != 0 {
@@ -156,14 +156,14 @@ impl TerminalView {
         }
     }
 
-    /// 当终端启用 SGR 鼠标 + 任意鼠标报告模式时，把按钮按下/释放事件以 SGR 形式
-    /// 回报给 PTY。返回 true 表示已经处理，调用方应跳过 selection/dismiss/paste 等本地行为。
+    /// 当终端启用任意鼠标报告模式时，把按钮按下/释放事件按当前协议回报给 PTY。
+    /// 返回 true 表示已经处理，调用方应跳过 selection/dismiss/paste 等本地行为。
     ///
     /// 特殊穿透:Shift+Left 永远走终端自身的文本选区,不向 TUI 转发 —— 这是 xterm/iTerm/
     /// kitty/wezterm 等的通用约定,让用户在 vim/tmux 等捕获鼠标的应用里仍能复制文本。
     /// 同理 mouse_up 时,如果当前正在终端选区(由 shift+drag 启动),也跳过 release 回报,
     /// 避免在 release 阶段 shift 已松开就把 release 事件错发给 TUI、丢掉 selection 收尾。
-    pub(super) fn try_report_sgr_mouse_button(
+    pub(super) fn try_report_mouse_button(
         &mut self,
         button: MouseButton,
         position: Point<Pixels>,
@@ -180,13 +180,13 @@ impl TerminalView {
             return false;
         }
         let mode = self.terminal_frame_snapshot.mode;
-        if !sgr_mouse_mode_enabled(mode) {
+        if !mouse_reporting_enabled(mode) {
             return false;
         }
-        self.write_sgr_mouse_button_report(button, position, modifiers, pressed, cx)
+        self.write_mouse_button_report(button, position, modifiers, pressed, cx)
     }
 
-    pub(super) fn write_sgr_mouse_button_report(
+    pub(super) fn write_mouse_button_report(
         &mut self,
         button: MouseButton,
         position: Point<Pixels>,
@@ -202,9 +202,17 @@ impl TerminalView {
         };
         let point = self.pixel_to_point(position, self.terminal_bounds, cx);
         let encoded = base | encode_mouse_modifiers(modifiers);
-        let report =
-            sgr_mouse_button_report(encoded, point.column.0, point.line.0 as usize, pressed);
-        self.write_to_pty(report.into_bytes(), cx);
+        let mode = self.terminal_frame_snapshot.mode;
+        let Some(report) = mouse_button_report(
+            encoded,
+            point.column.0,
+            point.line.0 as usize,
+            pressed,
+            mode,
+        ) else {
+            return false;
+        };
+        self.write_to_pty(report, cx);
         true
     }
 }

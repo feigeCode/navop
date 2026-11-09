@@ -9,7 +9,7 @@ use gpui_component::{
     ActiveTheme, Disableable, StyledExt,
     button::{Button, ButtonVariants as _},
     h_flex,
-    input::{InputEvent, Textarea, TextareaState},
+    input::{Editor, EditorState, EditorStyleOverrides, InputEvent},
     v_flex,
 };
 use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
@@ -20,7 +20,7 @@ use rust_i18n::t;
 
 pub struct ConnectionNotesPanel {
     connection: StoredConnection,
-    input: gpui::Entity<TextareaState>,
+    input: gpui::Entity<EditorState>,
     saved_note: String,
     last_error: Option<String>,
     colors: TerminalColors,
@@ -36,10 +36,11 @@ impl ConnectionNotesPanel {
     ) -> Self {
         let note = connection.remark.clone().unwrap_or_default();
         let input = cx.new(|cx| {
-            TextareaState::new(window, cx)
+            EditorState::new(window, cx)
                 .placeholder(t!("ConnectionNotes.placeholder").to_string())
-                .rows(12)
-                .default_value(&note)
+                .line_number(false)
+                .soft_wrap(true)
+                .default_value(note.clone())
         });
         let _input_subscription = cx.subscribe(&input, |this, _input, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
@@ -59,7 +60,7 @@ impl ConnectionNotesPanel {
     }
 
     fn current_note(&self, cx: &App) -> String {
-        self.input.read(cx).text().to_string()
+        self.input.read(cx).value().to_string()
     }
 
     fn save_note(&mut self, cx: &mut Context<Self>) {
@@ -159,10 +160,19 @@ impl Render for ConnectionNotesPanel {
                     .child(t!("ConnectionNotes.security_hint").to_string()),
             )
             .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .child(Textarea::new(&self.input).w_full().h_full()),
+                div().flex_1().min_h_0().child(
+                    Editor::new(&self.input)
+                        .w_full()
+                        .h_full()
+                        .font_family(cx.theme().font_family.clone())
+                        .text_size(cx.theme().font_size)
+                        .text_color(self.colors.foreground)
+                        .bg(self.colors.muted)
+                        .border_color(self.colors.border)
+                        .appearance(true)
+                        .bordered(true)
+                        .editor_style(connection_notes_editor_style(&self.colors)),
+                ),
             )
             .child(
                 h_flex()
@@ -183,6 +193,19 @@ impl Render for ConnectionNotesPanel {
     }
 }
 
+fn connection_notes_editor_style(colors: &TerminalColors) -> EditorStyleOverrides {
+    EditorStyleOverrides {
+        foreground: Some(colors.foreground),
+        muted_foreground: Some(colors.muted_foreground),
+        background: Some(colors.muted),
+        border: Some(colors.border),
+        selection: Some(colors.accent.opacity(0.35)),
+        caret: Some(colors.foreground),
+        editor_gutter_background: Some(colors.muted),
+        ..Default::default()
+    }
+}
+
 fn connection_with_note(mut connection: StoredConnection, note: &str) -> StoredConnection {
     connection.remark = (!note.trim().is_empty()).then(|| note.to_string());
     connection
@@ -190,7 +213,9 @@ fn connection_with_note(mut connection: StoredConnection, note: &str) -> StoredC
 
 #[cfg(test)]
 mod tests {
-    use super::connection_with_note;
+    use super::{connection_notes_editor_style, connection_with_note};
+    use crate::theme::TerminalColors;
+    use gpui::rgb;
     use one_core::storage::models::{ExtensionConnectionParams, StoredConnection};
     use std::collections::BTreeMap;
 
@@ -226,10 +251,32 @@ mod tests {
     }
 
     #[test]
+    fn connection_notes_editor_uses_terminal_theme_surface_colors() {
+        let colors = TerminalColors {
+            background: rgb(0x111827).into(),
+            foreground: rgb(0xf9fafb).into(),
+            muted: rgb(0x1f2937).into(),
+            muted_foreground: rgb(0x9ca3af).into(),
+            border: rgb(0x374151).into(),
+            accent: rgb(0x2563eb).into(),
+            accent_foreground: rgb(0xffffff).into(),
+        };
+
+        let style = connection_notes_editor_style(&colors);
+
+        assert_eq!(style.background, Some(colors.muted));
+        assert_eq!(style.foreground, Some(colors.foreground));
+        assert_eq!(style.border, Some(colors.border));
+        assert_eq!(style.caret, Some(colors.foreground));
+    }
+
+    #[test]
     fn connection_notes_panel_reuses_connection_persistence() {
         let source = include_str!("connection_notes_panel.rs");
 
-        assert!(source.contains("Textarea::new(&self.input)"));
+        assert!(source.contains("Editor::new(&self.input)"));
+        assert!(source.contains("EditorStyleOverrides"));
+        assert!(source.contains("background: Some(self.colors.muted)"));
         assert!(source.contains("ConnectionRepository"));
         assert!(source.contains("ConnectionDataEvent::ConnectionUpdated"));
     }

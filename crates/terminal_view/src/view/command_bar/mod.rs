@@ -1,4 +1,5 @@
 use super::command_bar_model::{CommandHistoryNavigation, CommandSuggestion};
+use crate::sidebar::{QuickCommandPanel, QuickCommandPanelEvent};
 use crate::theme::TerminalColors;
 use gpui::{
     App, Context, Entity, EventEmitter, FocusHandle, Focusable, ScrollHandle, Subscription, Window,
@@ -48,6 +49,7 @@ pub(super) struct TerminalCommandBar {
     terminal: Entity<Terminal>,
     connection_id: Option<i64>,
     input_state: Entity<TextareaState>,
+    quick_command_panel: Entity<QuickCommandPanel>,
     quick_search_state: Entity<InputState>,
     quick_group_scroll_handle: ScrollHandle,
     quick_scroll_handle: VirtualListScrollHandle,

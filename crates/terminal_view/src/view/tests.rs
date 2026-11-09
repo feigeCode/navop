@@ -11,6 +11,7 @@ use super::{
     has_unterminated_shell_quote, history_prompt_available, history_prompt_dropdown_origin,
     history_prompt_overlay_bounds, is_large_paste, join_paste_as_single_line,
     live_ssh_feature_supported, live_terminal_input_supported, mouse_button_code,
+    mouse_button_report, mouse_reporting_enabled, mouse_wheel_report,
     multiline_non_empty_line_count, recording_playback_display_name, remote_clipboard_image_path,
     resolve_live_term_mode, resolve_ssh_reconnect_source, sgr_mouse_button_report,
     sgr_mouse_mode_enabled, sgr_mouse_wheel_report, should_confirm_local_terminal_close,

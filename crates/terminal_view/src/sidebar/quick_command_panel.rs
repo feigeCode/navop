@@ -31,6 +31,7 @@ use one_ui::{IconButton, IconButtonRole};
 use rust_i18n::t;
 use std::{ops::Range, sync::Arc};
 
+use crate::quick_command_parameters::prompt_for_quick_command_parameters;
 use crate::quick_command_sync::emit_quick_commands_changed;
 use crate::theme::TerminalColors;
 use crate::view::quick_command_executes_on_click;
@@ -86,57 +87,6 @@ fn normalize_quick_command_value(value: &str) -> String {
     } else {
         command.to_string()
     }
-}
-
-/// 提取 `{{name}}` 形式的参数，按首次出现顺序去重。
-fn quick_command_parameters(command: &str) -> Vec<String> {
-    let mut parameters = Vec::new();
-    let mut rest = command;
-    while let Some(start) = rest.find("{{") {
-        let after_start = &rest[start + 2..];
-        let Some(end) = after_start.find("}}") else {
-            break;
-        };
-        let name = after_start[..end].trim();
-        if !name.is_empty() && !parameters.iter().any(|parameter| parameter == name) {
-            parameters.push(name.to_string());
-        }
-        rest = &after_start[end + 2..];
-    }
-    parameters
-}
-
-fn replace_quick_command_parameters(
-    command: &str,
-    parameters: &[String],
-    values: &[String],
-) -> String {
-    let mut rendered = String::with_capacity(command.len());
-    let mut rest = command;
-    while let Some(start) = rest.find("{{") {
-        rendered.push_str(&rest[..start]);
-        let after_start = &rest[start + 2..];
-        let Some(end) = after_start.find("}}") else {
-            rendered.push_str(&rest[start..]);
-            return rendered;
-        };
-        let name = after_start[..end].trim();
-        match parameters
-            .iter()
-            .position(|parameter| parameter == name)
-            .and_then(|index| values.get(index))
-        {
-            Some(value) => rendered.push_str(value),
-            None => {
-                rendered.push_str("{{");
-                rendered.push_str(&after_start[..end]);
-                rendered.push_str("}}");
-            }
-        }
-        rest = &after_start[end + 2..];
-    }
-    rendered.push_str(rest);
-    rendered
 }
 
 /// 按「点击执行」开关维护命令末尾的换行标记：
@@ -738,6 +688,60 @@ impl QuickCommandPanel {
         cx: &mut Context<Self>,
     ) {
         self.open_command_editor(None, Some(command), window, cx);
+    }
+
+    pub(crate) fn open_add_command_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_command_editor(None, None, window, cx);
+    }
+
+    pub(crate) fn open_edit_command_dialog(
+        &mut self,
+        command: QuickCommand,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_command_editor(Some(command), None, window, cx);
+    }
+
+    pub(crate) fn open_delete_command_dialog(
+        &mut self,
+        id: i64,
+        command: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.confirm_delete_command(id, command, window, cx);
+    }
+
+    pub(crate) fn toggle_command_pin(&mut self, id: i64, cx: &mut Context<Self>) {
+        self.toggle_pin(id, cx);
+    }
+
+    pub(crate) fn copy_command_to_clipboard(
+        &self,
+        command: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.copy_command(command, window, cx);
+    }
+
+    pub(crate) fn group_context_menu_for(
+        panel: Entity<Self>,
+        group_name: String,
+        color: Option<String>,
+        menu: PopupMenu,
+        colors: TerminalColors,
+    ) -> PopupMenu {
+        Self::group_context_menu(
+            panel,
+            QuickCommandGroupChip {
+                filter: QuickCommandGroupFilter::Group(group_name),
+                color,
+            },
+            menu,
+            colors,
+        )
     }
 
     fn save_new_command(
@@ -1379,66 +1383,20 @@ impl QuickCommandPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let parameters = quick_command_parameters(&command);
-        if parameters.is_empty() {
-            self.paste_command(command, cx);
-            return;
-        }
-
-        let inputs = parameters
-            .iter()
-            .map(|parameter| {
-                let placeholder =
-                    t!("QuickCommand.parameter_placeholder", name = parameter).to_string();
-                cx.new(|cx| InputState::new(window, cx).placeholder(placeholder))
-            })
-            .collect::<Vec<_>>();
-        let inputs_for_ok = inputs.clone();
-        let parameters_for_ok = parameters.clone();
-        let command_for_ok = command.clone();
         let panel = cx.entity();
         let muted_foreground = self.colors.muted_foreground;
-        window.open_dialog(cx, move |dialog, _window, _cx| {
-            let inputs = inputs.clone();
-            let inputs_for_ok = inputs_for_ok.clone();
-            let parameters = parameters_for_ok.clone();
-            let parameters_for_ok = parameters.clone();
-            let command = command_for_ok.clone();
-            let panel = panel.clone();
-            dialog
-                .title(t!("QuickCommand.parameters_title").to_string())
-                .width(gpui::px(440.0))
-                .confirm()
-                .on_ok(move |_, _, cx| {
-                    let values = inputs_for_ok
-                        .iter()
-                        .map(|input| input.read(cx).text().to_string())
-                        .collect::<Vec<_>>();
-                    let command =
-                        replace_quick_command_parameters(&command, &parameters_for_ok, &values);
-                    panel.update(cx, |panel, cx| panel.paste_command(command, cx));
-                    true
-                })
-                .child(
-                    v_flex()
-                        .gap_3()
-                        .p_4()
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(muted_foreground)
-                                .child(t!("QuickCommand.parameters_hint").to_string()),
-                        )
-                        .children(parameters.iter().zip(inputs.iter()).map(
-                            |(parameter, input)| {
-                                v_flex()
-                                    .gap_1()
-                                    .child(div().text_sm().child(parameter.clone()))
-                                    .child(Input::new(input).w_full())
-                            },
-                        )),
-                )
-        });
+        if prompt_for_quick_command_parameters(
+            &command,
+            muted_foreground,
+            window,
+            cx,
+            move |command, _, cx| {
+                panel.update(cx, |panel, cx| panel.paste_command(command, cx));
+            },
+        ) {
+            return;
+        }
+        self.paste_command(command, cx);
     }
 
     fn command_tooltip(command: &QuickCommand) -> String {
@@ -1957,8 +1915,8 @@ mod tests {
         apply_auto_run_marker, capture_quick_command_shortcut, command_matches_group_filter,
         connection_id_for_scope, new_command_group_defaults, normalize_group_fields,
         normalize_quick_command_value, quick_command_group_chip_label,
-        quick_command_group_color_items, quick_command_groups, quick_command_parameters,
-        replace_quick_command_parameters, shortcut_capture_label, validated_quick_command_shortcut,
+        quick_command_group_color_items, quick_command_groups, shortcut_capture_label,
+        validated_quick_command_shortcut,
     };
     use gpui::Keystroke;
     use one_core::storage::QuickCommand;
@@ -1990,20 +1948,6 @@ mod tests {
     }
 
     #[test]
-    fn parameterized_quick_commands_extract_unique_names_and_replace_values() {
-        let command = "ssh {{ user }}@{{host}} && echo {{user}} {{missing";
-        let parameters = quick_command_parameters(command);
-        assert_eq!(vec!["user".to_string(), "host".to_string()], parameters);
-
-        let rendered = replace_quick_command_parameters(
-            command,
-            &parameters,
-            &["root".to_string(), "example.com".to_string()],
-        );
-        assert_eq!("ssh root@example.com && echo root {{missing", rendered);
-    }
-
-    #[test]
     fn quick_command_rows_use_a_stable_single_line_height() {
         let source = include_str!("quick_command_panel.rs");
         let implementation = source.split("#[cfg(test)]").next().unwrap();
@@ -2011,6 +1955,7 @@ mod tests {
         assert!(implementation.contains(".h(px(QUICK_COMMAND_ROW_HEIGHT))"));
         assert!(implementation.contains(".replace(['\\r', '\\n'], \" ↵ \")"));
         assert!(implementation.contains(".whitespace_nowrap()"));
+        assert!(implementation.contains("prompt_for_quick_command_parameters"));
     }
 
     #[test]

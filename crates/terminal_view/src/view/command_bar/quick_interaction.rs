@@ -1,4 +1,5 @@
 use super::*;
+use crate::quick_command_parameters::prompt_for_quick_command_parameters;
 use crate::view::command_bar_model::{
     SelectionDirection, bounded_selection, quick_command_executes_on_click, selected_quick_command,
 };
@@ -46,6 +47,7 @@ impl TerminalCommandBar {
             return;
         }
         self.load_quick_commands(cx);
+        self.refresh_quick_command_panel(cx);
         self.quick_commands_open = true;
         self.recording_controls_open = false;
         self.suggestions.clear();
@@ -66,6 +68,29 @@ impl TerminalCommandBar {
     }
 
     pub(super) fn choose_command(
+        &mut self,
+        command: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let command_bar = cx.entity();
+        if prompt_for_quick_command_parameters(
+            &command,
+            self.colors.muted_foreground,
+            window,
+            cx,
+            move |command, window, cx| {
+                command_bar.update(cx, |command_bar, cx| {
+                    command_bar.commit_chosen_command(command, window, cx)
+                });
+            },
+        ) {
+            return;
+        }
+        self.commit_chosen_command(command, window, cx);
+    }
+
+    pub(super) fn commit_chosen_command(
         &mut self,
         command: String,
         window: &mut Window,

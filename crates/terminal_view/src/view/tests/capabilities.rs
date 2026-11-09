@@ -23,6 +23,33 @@ fn assert_function_guard_precedes(
 }
 
 #[test]
+fn quick_command_parameters_are_handled_by_every_execution_entry() {
+    let sidebar = include_str!("../../sidebar/quick_command_panel.rs");
+    let command_bar = include_str!("../command_bar/interaction.rs");
+    let quick_command_bar = include_str!("../command_bar/quick_interaction.rs");
+    let shortcut = include_str!("../text_input.rs");
+    let prompt = "prompt_for_quick_command_parameters";
+
+    assert!(
+        sidebar.contains(prompt),
+        "侧边栏快捷指令必须解析 {{name}} 参数"
+    );
+    assert!(
+        command_bar.contains(prompt)
+            && command_bar.contains("suggestion.kind == CommandSuggestionKind::QuickCommand"),
+        "命令栏建议中的快捷指令必须在提交前解析参数，普通终端输入不应被拦截"
+    );
+    assert!(
+        quick_command_bar.contains(prompt),
+        "命令栏快捷指令列表必须解析 {{name}} 参数"
+    );
+    assert!(
+        shortcut.contains(prompt),
+        "快捷指令键盘快捷键必须解析 {{name}} 参数"
+    );
+}
+
+#[test]
 fn playback_never_registers_or_uses_ssh_broadcast_input() {
     let source = include_str!("../registrations.rs");
     let registration = function_region(
@@ -213,27 +240,46 @@ fn quick_command_shortcuts_do_not_override_any_terminal_action_shortcut() {
 }
 
 #[test]
-fn quick_command_changes_refresh_the_command_bar_cache() {
-    let source = include_str!("../sidebar_events.rs");
-    let handler = function_region(
-        source,
-        "pub(super) fn handle_sidebar_event",
-        "pub(super) fn invalidate_terminal_searches",
-    );
-    let event = handler
-        .find("TerminalSidebarEvent::QuickCommandsChanged")
-        .expect("sidebar should forward quick-command changes");
-    let update = handler[event..]
-        .find("self.command_bar.update")
-        .expect("quick-command changes should update the command bar");
-    let load = handler[event..]
+fn quick_command_management_lives_in_the_bottom_command_bar() {
+    let command_bar = include_str!("../command_bar/interaction.rs");
+    let event = command_bar
+        .find("QuickCommandPanelEvent::QuickCommandsChanged")
+        .expect("the bottom command bar should subscribe to quick-command changes");
+    let load = command_bar[event..]
         .find("load_quick_commands")
         .expect("quick-command changes should reload the cache");
-    let refresh = handler[event..]
+    let refresh = command_bar[event..]
         .find("refresh_suggestions")
         .expect("quick-command changes should refresh active suggestions");
 
-    assert!(update < load && load < refresh);
+    assert!(load < refresh);
+    let management = include_str!("../command_bar/quick_render_sidebar.rs");
+    assert!(
+        management.contains("panel.open_add_command_dialog"),
+        "the bottom command bar must expose quick-command creation"
+    );
+    let rows = include_str!("../command_bar/quick_render_list.rs");
+    for action in [
+        "panel.toggle_command_pin",
+        "panel.open_edit_command_dialog",
+        "panel.copy_command_to_clipboard",
+        "panel.open_delete_command_dialog",
+    ] {
+        assert!(
+            rows.contains(action),
+            "the bottom command bar must expose `{action}`"
+        );
+    }
+    assert!(
+        management.contains("QuickCommandPanel::group_context_menu_for"),
+        "group rename, recolor, and delete should remain available from the bottom popover"
+    );
+
+    let sidebar = include_str!("../../sidebar/mod.rs");
+    assert!(
+        !sidebar.contains("SidebarPanel::QuickCommand"),
+        "quick commands must not remain in the terminal sidebar"
+    );
 }
 
 #[test]
@@ -279,22 +325,13 @@ fn quick_command_sync_refreshes_open_terminal_views_globally() {
         "pub(super) fn handle_sidebar_event",
     );
     let command_bar = sync_handler
-        .find("self.command_bar.update")
+        .find("command_bar.update")
         .expect("sync should refresh the command-bar cache");
     let load = command_bar
         + sync_handler[command_bar..]
             .find("load_quick_commands")
             .expect("sync should reload quick commands");
-    let sidebar = command_bar
-        + sync_handler[command_bar..]
-            .find("self.sidebar.update")
-            .expect("sync should refresh the sidebar panel");
-    let panel_refresh = sidebar
-        + sync_handler[sidebar..]
-            .find("refresh_quick_commands")
-            .expect("sync should reload sidebar quick commands");
-
-    assert!(command_bar < load && load < sidebar && sidebar < panel_refresh);
+    assert!(command_bar < load);
 }
 
 #[test]
@@ -652,19 +689,19 @@ fn playback_mouse_reporting_is_rejected_before_report_side_effects() {
 
     assert_function_guard_precedes(
         source,
-        "pub(super) fn try_report_sgr_mouse_button",
-        "pub(super) fn write_sgr_mouse_button_report",
+        "pub(super) fn try_report_mouse_button",
+        "pub(super) fn write_mouse_button_report",
         "if !self.accepts_live_terminal_input(cx)",
         "self.terminal_frame_snapshot.mode",
-        "SGR mouse reporting",
+        "terminal mouse reporting",
     );
     assert_function_guard_precedes(
         source,
-        "pub(super) fn write_sgr_mouse_button_report",
+        "pub(super) fn write_mouse_button_report",
         "\n}",
         "if !self.accepts_live_terminal_input(cx)",
-        "mouse_button_code(button)",
-        "SGR mouse report construction",
+        "mouse_button_report(",
+        "terminal mouse report construction",
     );
 }
 
@@ -677,7 +714,7 @@ fn playback_mouse_paste_handlers_reject_before_reporting_or_ui_side_effects() {
         "pub(super) fn handle_middle_mouse_down",
         "pub(super) fn handle_right_mouse_down",
         "if !self.accepts_live_terminal_input(cx)",
-        "self.try_report_sgr_mouse_button",
+        "self.try_report_mouse_button",
         "middle-click reporting and paste",
     );
     assert_function_guard_precedes(
@@ -912,14 +949,14 @@ fn copy_writes_to_clipboard_before_dropping_the_selection() {
 fn sidebar_panel_placements_persist_through_settings() {
     let settings = include_str!("../../../../core/src/settings.rs");
     assert!(
-        settings
-            .contains("pub terminal_tool_panel_placements: BTreeMap<String, SidebarPlacement>"),
+        settings.contains("pub terminal_tool_panel_placements: BTreeMap<String, SidebarPlacement>"),
         "「移动到」之后的停靠位置必须落在 AppSettings 里才谈得上持久化"
     );
 
     let sidebar = include_str!("../../sidebar/mod.rs");
     assert!(
-        sidebar.contains("pub fn tool_panel_placements(&self) -> BTreeMap<String, SidebarPlacement>"),
+        sidebar
+            .contains("pub fn tool_panel_placements(&self) -> BTreeMap<String, SidebarPlacement>"),
         "侧栏要能把各面板的停靠位置快照成设置里的键值"
     );
     assert!(

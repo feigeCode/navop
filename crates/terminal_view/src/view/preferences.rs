@@ -12,6 +12,17 @@ impl TerminalView {
         });
     }
 
+    pub(crate) fn add_quick_command(
+        &mut self,
+        command: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.command_bar.update(cx, |command_bar, cx| {
+            command_bar.add_quick_command(command, window, cx);
+        });
+    }
+
     /// 把侧栏各工具面板的停靠位置合并进设置。
     ///
     /// 每台终端可用的面板不同（本地终端有文件浏览器，SSH 终端有文件管理器和

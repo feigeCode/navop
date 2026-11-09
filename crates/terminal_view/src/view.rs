@@ -57,7 +57,6 @@ use crate::cd_completion::{
     parse_cd_completion_query,
 };
 use crate::history_prompt::{HistoryPromptAccept, HistoryPromptMode, HistoryPromptState};
-use ssh_form::host_key_dialog::{host_key_dialog_presentation, render_host_key_details_card};
 use crate::public_mcp::TerminalPublicMcpRegistration;
 use crate::quick_command_sync::{QuickCommandSyncEvent, QuickCommandSyncNotifier};
 use crate::selection_highlight_addon::SelectionHighlightAddon;
@@ -94,12 +93,15 @@ use history_prompt_rules::{
     terminal_history_scope,
 };
 use mouse_input::{
-    encode_mouse_modifiers, mouse_button_code, sgr_mouse_button_report, sgr_mouse_mode_enabled,
-    sgr_mouse_wheel_report, should_defer_inline_history_prompt_input_to_text_system,
-    should_defer_sgr_left_press, should_extend_selection_on_shift_click,
-    should_scroll_to_bottom_on_user_input, should_start_selection_from_pending_sgr_press,
-    take_whole_scroll_lines, terminal_selection_autoscroll_delta_rows,
+    encode_mouse_modifiers, mouse_button_code, mouse_button_report, mouse_reporting_enabled,
+    mouse_wheel_report, sgr_mouse_mode_enabled,
+    should_defer_inline_history_prompt_input_to_text_system, should_defer_sgr_left_press,
+    should_extend_selection_on_shift_click, should_scroll_to_bottom_on_user_input,
+    should_start_selection_from_pending_sgr_press, take_whole_scroll_lines,
+    terminal_selection_autoscroll_delta_rows,
 };
+#[cfg(test)]
+use mouse_input::{sgr_mouse_button_report, sgr_mouse_wheel_report};
 use one_core::background_tasks::BackgroundTaskId;
 use one_core::layout::{SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, TOOLBAR_WIDTH};
 use one_core::sidebar_contribution::{SidebarContribution, SidebarPlacement};
@@ -119,6 +121,7 @@ use remote_image_preview::image_from_local_path;
 use rust_i18n::t;
 use sftp::{RemoteFileClient, RusshSftpClient, SftpClient};
 use ssh::SshSessionManager;
+use ssh_form::host_key_dialog::{host_key_dialog_presentation, render_host_key_details_card};
 use std::ops::Deref;
 use terminal::GpuiEventProxy;
 use terminal::LocalConfig;
