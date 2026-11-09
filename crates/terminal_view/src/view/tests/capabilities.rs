@@ -689,19 +689,19 @@ fn playback_mouse_reporting_is_rejected_before_report_side_effects() {
 
     assert_function_guard_precedes(
         source,
-        "pub(super) fn try_report_sgr_mouse_button",
-        "pub(super) fn write_sgr_mouse_button_report",
+        "pub(super) fn try_report_mouse_button",
+        "pub(super) fn write_mouse_button_report",
         "if !self.accepts_live_terminal_input(cx)",
         "self.terminal_frame_snapshot.mode",
-        "SGR mouse reporting",
+        "terminal mouse reporting",
     );
     assert_function_guard_precedes(
         source,
-        "pub(super) fn write_sgr_mouse_button_report",
+        "pub(super) fn write_mouse_button_report",
         "\n}",
         "if !self.accepts_live_terminal_input(cx)",
-        "mouse_button_code(button)",
-        "SGR mouse report construction",
+        "mouse_button_report(",
+        "terminal mouse report construction",
     );
 }
 
@@ -714,7 +714,7 @@ fn playback_mouse_paste_handlers_reject_before_reporting_or_ui_side_effects() {
         "pub(super) fn handle_middle_mouse_down",
         "pub(super) fn handle_right_mouse_down",
         "if !self.accepts_live_terminal_input(cx)",
-        "self.try_report_sgr_mouse_button",
+        "self.try_report_mouse_button",
         "middle-click reporting and paste",
     );
     assert_function_guard_precedes(

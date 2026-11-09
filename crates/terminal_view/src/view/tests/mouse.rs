@@ -17,6 +17,65 @@ fn sgr_mouse_wheel_report_maps_negative_lines_to_wheel_down() {
 }
 
 #[test]
+fn mouse_reporting_enabled_accepts_legacy_click_tracking() {
+    assert!(mouse_reporting_enabled(TermMode::MOUSE_REPORT_CLICK));
+    assert!(mouse_reporting_enabled(TermMode::MOUSE_DRAG));
+    assert!(mouse_reporting_enabled(TermMode::MOUSE_MOTION));
+    assert!(!mouse_reporting_enabled(TermMode::SGR_MOUSE));
+    assert!(!mouse_reporting_enabled(TermMode::empty()));
+}
+
+#[test]
+fn mouse_button_report_encodes_legacy_x10_press() {
+    assert_eq!(
+        mouse_button_report(0, 4, 2, true, TermMode::MOUSE_REPORT_CLICK),
+        Some(b"\x1b[M %#".to_vec())
+    );
+}
+
+#[test]
+fn mouse_button_report_encodes_legacy_x10_release() {
+    assert_eq!(
+        mouse_button_report(0, 5, 3, false, TermMode::MOUSE_REPORT_CLICK),
+        Some(b"\x1b[M#&$".to_vec())
+    );
+}
+
+#[test]
+fn mouse_button_report_prefers_sgr_when_both_protocols_are_enabled() {
+    let mode = TermMode::MOUSE_REPORT_CLICK | TermMode::SGR_MOUSE;
+    assert_eq!(
+        mouse_button_report(0, 4, 2, true, mode),
+        Some(b"\x1b[<0;5;3M".to_vec())
+    );
+}
+
+#[test]
+fn mouse_wheel_report_encodes_legacy_x10_wheel() {
+    assert_eq!(
+        mouse_wheel_report(1, 4, 2, TermMode::MOUSE_REPORT_CLICK),
+        Some(b"\x1b[M`%#".to_vec())
+    );
+    assert_eq!(
+        mouse_wheel_report(-1, 4, 2, TermMode::MOUSE_REPORT_CLICK),
+        Some(b"\x1b[Ma%#".to_vec())
+    );
+}
+
+#[test]
+fn legacy_mouse_report_supports_utf8_coordinates() {
+    let mode = TermMode::MOUSE_REPORT_CLICK | TermMode::UTF8_MOUSE;
+    assert_eq!(
+        mouse_button_report(0, 223, 2, true, mode),
+        Some(b"\x1b[M \xc4\x80#".to_vec())
+    );
+    assert_eq!(
+        mouse_button_report(0, 223, 2, true, TermMode::MOUSE_REPORT_CLICK),
+        None
+    );
+}
+
+#[test]
 fn sgr_mouse_button_report_uses_capital_m_on_press() {
     // 左键按下，列 0、行 0 -> 转 1-based
     let s = sgr_mouse_button_report(0, 0, 0, true);

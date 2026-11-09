@@ -236,14 +236,14 @@ impl TerminalView {
                     cx,
                 );
                 if sgr_mouse_mode_enabled(self.terminal_frame_snapshot.mode) {
-                    self.write_sgr_mouse_button_report(
+                    self.write_mouse_button_report(
                         MouseButton::Left,
                         pending.position,
                         pending.modifiers,
                         true,
                         cx,
                     );
-                    self.write_sgr_mouse_button_report(
+                    self.write_mouse_button_report(
                         MouseButton::Left,
                         event.position,
                         event.modifiers,
@@ -255,13 +255,7 @@ impl TerminalView {
             }
         }
         // SGR 鼠标模式下：先回报释放，然后跳过 selection 收尾
-        if self.try_report_sgr_mouse_button(
-            event.button,
-            event.position,
-            event.modifiers,
-            false,
-            cx,
-        ) {
+        if self.try_report_mouse_button(event.button, event.position, event.modifiers, false, cx) {
             return;
         }
         if event.button != MouseButton::Left {

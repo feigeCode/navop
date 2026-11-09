@@ -34,9 +34,8 @@ impl TerminalView {
             });
             return;
         }
-        // SGR 鼠标模式下把按钮按下事件交给 TUI，跳过 selection/URL/dismiss
-        if self.try_report_sgr_mouse_button(event.button, event.position, event.modifiers, true, cx)
-        {
+        // 鼠标报告模式下把按钮按下事件交给 TUI，跳过 selection/URL/dismiss
+        if self.try_report_mouse_button(event.button, event.position, event.modifiers, true, cx) {
             return;
         }
         tracing::debug!(
@@ -143,8 +142,8 @@ impl TerminalView {
         if !self.accepts_live_terminal_input(cx) {
             return;
         }
-        // SGR 鼠标模式下中键按下走 TUI 报告而不是 middle-click paste
-        if self.try_report_sgr_mouse_button(
+        // 鼠标报告模式下中键按下走 TUI 报告而不是 middle-click paste
+        if self.try_report_mouse_button(
             MouseButton::Middle,
             event.position,
             event.modifiers,
