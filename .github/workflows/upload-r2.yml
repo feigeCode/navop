@@ -356,14 +356,31 @@ jobs:
               return !alternative || !availableFiles.has(alternative);
             })
             .sort();
-          const packages = packageFiles.map((fileName) => ({
+          const toPackage = (fileName) => ({
             target: targetFor(fileName),
             file: fileName,
             url: `${baseUrl}/releases/${releaseTag}/${fileName}`,
             github_url: `https://github.com/${repository}/releases/download/${releaseTag}/${fileName}`,
             sha256: checksumFor(fileName),
             size: fs.statSync(`artifacts/${fileName}`).size,
-          }));
+          });
+
+          // 三个产品的安装包放在同一个 Release 里，清单必须按产品前缀过滤：
+          // 否则全量版下载中心会把 navop-shell-*/navop-data-* 当成 Navop 的行。
+          const filesForProduct = (product) =>
+            packageFiles.filter((fileName) => {
+              const isShell = /^navop-shell[-_]/.test(fileName);
+              const isData = /^navop-data[-_]/.test(fileName);
+              if (product.id === "navop-shell") return isShell;
+              if (product.id === "navop-data") return isData;
+              return !isShell && !isData;
+            });
+          const packagesByProduct = Object.fromEntries(
+            products.map((product) => [
+              product.id,
+              filesForProduct(product).map(toPackage),
+            ]),
+          );
 
           fs.mkdirSync("artifacts/updates", { recursive: true });
           for (const product of products) {
@@ -375,7 +392,7 @@ jobs:
               downloads: objectUrls("releases", product.updaterAssets),
               fallback_downloads: githubReleaseUrls(product.updaterAssets),
               sha256s: objectChecksums(product.updaterAssets),
-              packages,
+              packages: packagesByProduct[product.id],
             };
             fs.mkdirSync(product.manifestPath.replace(/\/[^/]+$/, ""), { recursive: true });
             fs.writeFileSync(
