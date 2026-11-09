@@ -1,6 +1,22 @@
 const MAX_SUPPRESSED_OUTPUT_BYTES: usize = 64 * 1024;
 pub const SHELL_INTEGRATION_READY_MARKER: &[u8] = b"\x1b]1337;ShellIntegrationReady=1\x07";
 
+/// 注入命令回显的开头（[`runtime_shell_integration_command`] 以空格开头）。
+///
+/// 握手静默期里，PTY 会先把我们注入的那整行命令回显出来，然后才执行它。回显
+/// 前面的内容才是真正的首屏输出（pam_motd 打印的登录 banner / 欢迎信息），
+/// 它只是在静默期里被连带吞掉了；握手完成时可以按这个前缀切出来还回去。
+const INJECTION_ECHO_PREFIX: &[u8] = b" _ONETCLI_RUNTIME_SETUP=1";
+
+/// 最后一个完整行的结束位置；末尾没有换行的半行（注入前的旧提示符）会被丢掉。
+fn last_complete_line_end(bytes: &[u8]) -> usize {
+    bytes
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map(|index| index + 1)
+        .unwrap_or(0)
+}
+
 fn ansi_c_quote(input: &str) -> String {
     let mut quoted = String::from("$'");
     for character in input.chars() {
@@ -50,7 +66,11 @@ pub enum FilteredShellOutput {
 enum RuntimeShellIntegrationPhase {
     Disabled,
     WaitingForFirstOutput,
-    Injecting { suppressed: Vec<u8> },
+    Injecting {
+        suppressed: Vec<u8>,
+        /// 静默缓冲超过上限被截断时，首屏已被切掉一段，不再尝试还原。
+        overflowed: bool,
+    },
     AwaitingPrompt,
     Integrated,
     PlainAwaitingOutput,
@@ -103,6 +123,7 @@ impl RuntimeShellIntegration {
         ) {
             self.phase = RuntimeShellIntegrationPhase::Injecting {
                 suppressed: Vec::new(),
+                overflowed: false,
             };
         }
     }
@@ -127,22 +148,39 @@ impl RuntimeShellIntegration {
 
     pub fn filter_output(&mut self, data: Vec<u8>) -> FilteredShellOutput {
         match &mut self.phase {
-            RuntimeShellIntegrationPhase::Injecting { suppressed } => {
+            RuntimeShellIntegrationPhase::Injecting {
+                suppressed,
+                overflowed,
+            } => {
                 suppressed.extend_from_slice(&data);
                 if suppressed.len() > MAX_SUPPRESSED_OUTPUT_BYTES {
                     let retain_from = suppressed.len() - MAX_SUPPRESSED_OUTPUT_BYTES;
                     suppressed.drain(..retain_from);
+                    *overflowed = true;
                 }
                 let Some(marker_start) = find_subslice(suppressed, SHELL_INTEGRATION_READY_MARKER)
                 else {
                     return FilteredShellOutput::Suppressed;
+                };
+                // 注入回显之前的内容是真实首屏（登录 banner 等），只是被静默期连带
+                // 吞掉了：这里原样还回去，同时丢掉回显本身、以及注入前那半截旧
+                // 提示符行，避免多出一行残留 prompt。
+                let restored = if *overflowed {
+                    Vec::new()
+                } else {
+                    find_subslice(&suppressed[..marker_start], INJECTION_ECHO_PREFIX)
+                        .map(|echo_start| {
+                            let keep = last_complete_line_end(&suppressed[..echo_start]);
+                            suppressed[..keep].to_vec()
+                        })
+                        .unwrap_or_default()
                 };
                 let suffix_start = marker_start + SHELL_INTEGRATION_READY_MARKER.len();
                 let suffix = suppressed.split_off(suffix_start);
                 suppressed.clear();
                 self.phase = RuntimeShellIntegrationPhase::AwaitingPrompt;
                 FilteredShellOutput::Forward {
-                    data: suffix,
+                    data: [restored.as_slice(), suffix.as_slice()].concat(),
                     ready: ShellIntegrationReady::None,
                 }
             }
@@ -178,6 +216,21 @@ impl RuntimeShellIntegration {
         ) {
             self.phase = RuntimeShellIntegrationPhase::Integrated;
         }
+    }
+
+    /// 就绪标记已到、只差首个 OSC 133;B 时的兜底：直接放行输入并保持集成态。
+    ///
+    /// 提示符框架（oh-my-posh / starship / powerlevel10k 等）每轮重写
+    /// `PS1`/`PROMPT`，把注入时补上的 prompt-end 标记冲掉时，握手会一直停在
+    /// `AwaitingPrompt`，直到 30 秒看门狗把整个集成降级。注入命令已经执行成功
+    /// （ready marker 已收到），此时没有任何理由继续扣着键盘输入。
+    /// 返回是否真的改变了状态。
+    pub fn release_awaiting_prompt(&mut self) -> bool {
+        if matches!(self.phase, RuntimeShellIntegrationPhase::AwaitingPrompt) {
+            self.phase = RuntimeShellIntegrationPhase::Integrated;
+            return true;
+        }
+        false
     }
 
     pub fn on_timeout(&mut self) -> bool {
@@ -289,6 +342,90 @@ mod tests {
         assert!(!integration.accepts_terminal_input());
         integration.on_input_start();
         assert!(integration.accepts_terminal_input());
+    }
+
+    /// 握手静默期里被吞掉的登录 banner（pam_motd 在注入前打印的那几行）必须还回去，
+    /// 同时不能把注入命令回显和注入前的旧提示符残行带到屏幕上。
+    #[test]
+    fn ready_marker_restores_login_banner_swallowed_during_handshake() {
+        let mut integration = RuntimeShellIntegration::new(true);
+        assert!(integration.should_inject(b"Welcome\r\n", true, false));
+        integration.begin_injection();
+
+        assert_eq!(
+            FilteredShellOutput::Suppressed,
+            integration
+                .filter_output(b"Last login: Sun Nov  9 09:50:00 2026 from 10.0.0.2\r\n".to_vec())
+        );
+        // 注入行回显 + 注入前那半截旧提示符（没有换行，必须丢掉）
+        assert_eq!(
+            FilteredShellOutput::Suppressed,
+            integration.filter_output(
+                b"user@host:~$  _ONETCLI_RUNTIME_SETUP=1; : __ONETCLI_RUNTIME_SETUP_1; eval $'x'\r\n"
+                    .to_vec()
+            )
+        );
+
+        assert_eq!(
+            FilteredShellOutput::Forward {
+                data: b"Last login: Sun Nov  9 09:50:00 2026 from 10.0.0.2\r\n\
+                        \x1b]133;A\x07user@host:~$ "
+                    .to_vec(),
+                ready: ShellIntegrationReady::None,
+            },
+            integration.filter_output(
+                b"\x1b]1337;ShellIntegrationReady=1\x07\x1b]133;A\x07user@host:~$ ".to_vec()
+            )
+        );
+        assert_eq!("awaiting-prompt", integration.phase_name());
+    }
+
+    /// 静默缓冲被截断时首屏已经不完整，宁可不还原，也不要吐半截内容。
+    #[test]
+    fn overflowed_suppression_window_skips_banner_restore() {
+        let mut integration = RuntimeShellIntegration::new(true);
+        integration.begin_injection();
+
+        let mut chunk = vec![b'x'; MAX_SUPPRESSED_OUTPUT_BYTES + 4096];
+        chunk.extend_from_slice(b"\n _ONETCLI_RUNTIME_SETUP=1; eval $'x'\r\n");
+        chunk.extend_from_slice(SHELL_INTEGRATION_READY_MARKER);
+        chunk.extend_from_slice(b"prompt");
+        assert_eq!(
+            FilteredShellOutput::Forward {
+                data: b"prompt".to_vec(),
+                ready: ShellIntegrationReady::None,
+            },
+            integration.filter_output(chunk)
+        );
+    }
+
+    /// 提示符框架把 133;B 冲掉时，宽限期到点只放行输入、保持集成态，
+    /// 而不是像 30 秒看门狗那样整体降级为裸终端。
+    #[test]
+    fn prompt_grace_releases_input_but_keeps_integration() {
+        let mut integration = RuntimeShellIntegration::new(true);
+        integration.begin_injection();
+        // ready marker 与回显同批到达时，本批就只剩 marker 之后的空后缀。
+        assert_eq!(
+            FilteredShellOutput::Forward {
+                data: Vec::new(),
+                ready: ShellIntegrationReady::None,
+            },
+            integration.filter_output(b"echoed\r\n\x1b]1337;ShellIntegrationReady=1\x07".to_vec())
+        );
+        assert_eq!("awaiting-prompt", integration.phase_name());
+        assert!(!integration.accepts_terminal_input());
+
+        assert!(integration.release_awaiting_prompt());
+        assert!(integration.accepts_terminal_input());
+        assert!(integration.is_integrated());
+        assert_eq!("integrated", integration.phase_name());
+
+        // 幂等，且之后真正到达的 133;B 不会把它降级回握手态。
+        assert!(!integration.release_awaiting_prompt());
+        integration.on_input_start();
+        assert!(integration.is_integrated());
+        assert!(!integration.force_release_input());
     }
 
     #[test]

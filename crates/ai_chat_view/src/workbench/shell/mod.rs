@@ -27,17 +27,43 @@ const PANEL_HEADER_HEIGHT: f32 = 36.0;
 /// 未分组会话在折叠表里的键（与 `WorkspaceGroup` 的 `root: None` 对应）。
 pub(super) const GROUP_KEY_UNGROUPED: &str = "ungrouped";
 
+/// 面板视图的取得方式。
+pub(super) enum WorkbenchPanelSource {
+    /// 宿主直接给了实例。
+    Ready(AnyView),
+    /// 宿主只给了工厂：面板第一次真正显示时才建视图。
+    ///
+    /// 这条路径是给「建实例就有副作用」的面板用的（典型是终端：建 `TerminalView`
+    /// 就会拉起 PTY 子进程）。宿主注入后外壳不预建，等到布局真的把该面板摆到
+    /// 屏幕上才调用一次工厂。
+    Lazy(Box<dyn Fn(&std::path::Path, &mut Window, &mut gpui::App) -> AnyView + 'static>),
+}
+
 /// 一次注入给外壳的面板。
 pub struct WorkbenchPanelEntry {
     pub kind: WorkbenchPanelKind,
-    pub view: AnyView,
+    pub(super) source: WorkbenchPanelSource,
 }
 
 impl WorkbenchPanelEntry {
     pub fn new(kind: WorkbenchPanelKind, view: impl Into<AnyView>) -> Self {
         Self {
             kind,
-            view: view.into(),
+            source: WorkbenchPanelSource::Ready(view.into()),
+        }
+    }
+
+    /// 懒注入：面板第一次被布局显示时才调用 `factory` 建视图。
+    ///
+    /// `factory` 的入参是当前工作区根目录，与 [`WorkbenchShell::set_panel_factory`]
+    /// 一致；未设置工作区根目录时传入空路径。
+    pub fn lazy(
+        kind: WorkbenchPanelKind,
+        factory: impl Fn(&std::path::Path, &mut Window, &mut gpui::App) -> AnyView + 'static,
+    ) -> Self {
+        Self {
+            kind,
+            source: WorkbenchPanelSource::Lazy(Box::new(factory)),
         }
     }
 }
@@ -63,6 +89,11 @@ pub struct WorkbenchShell {
     /// 面板视图，按标签实例身份存放。宿主注入的初始面板用 `seq = 0`；
     /// 多例面板（终端）的新实例由 `panel_factory` 创建后以新标签身份入表。
     pub(super) panels: HashMap<WorkbenchTab, AnyView>,
+    /// 尚未实体化的懒面板：标签身份 -> 工厂。首次显示时从这张表里取走并建视图。
+    pub(super) lazy_panels: HashMap<
+        WorkbenchTab,
+        Box<dyn Fn(&std::path::Path, &mut Window, &mut gpui::App) -> AnyView + 'static>,
+    >,
     pub(super) nav: Option<AnyView>,
     pub(super) session_source: Option<Entity<DefaultAgentChatPanel>>,
     /// 会话搜索框；仅内建会话列表（`session_source`）存在时创建。
@@ -169,12 +200,25 @@ impl WorkbenchShell {
             None => (None, String::new()),
         };
 
+        // 懒面板只登记工厂，视图等真的显示时再建。
+        let mut materialized: HashMap<WorkbenchTab, AnyView> = HashMap::new();
+        let mut lazy_panels = HashMap::new();
+        for entry in panels {
+            let tab = WorkbenchTab::new(entry.kind);
+            match entry.source {
+                WorkbenchPanelSource::Ready(view) => {
+                    materialized.insert(tab, view);
+                }
+                WorkbenchPanelSource::Lazy(factory) => {
+                    lazy_panels.insert(tab, factory);
+                }
+            }
+        }
+
         Self {
             state: initial_state,
-            panels: panels
-                .into_iter()
-                .map(|entry| (WorkbenchTab::new(entry.kind), entry.view))
-                .collect(),
+            panels: materialized,
+            lazy_panels,
             nav: session_nav,
             session_source,
             search_input,
@@ -410,7 +454,10 @@ impl WorkbenchShell {
     }
 
     pub fn has_panel(&self, kind: WorkbenchPanelKind) -> bool {
-        self.panels.keys().any(|tab| tab.kind == kind)
+        self.panels
+            .keys()
+            .chain(self.lazy_panels.keys())
+            .any(|tab| tab.kind == kind)
     }
 
     pub fn has_session_nav(&self) -> bool {
@@ -418,8 +465,43 @@ impl WorkbenchShell {
     }
 
     pub fn set_panel(&mut self, kind: WorkbenchPanelKind, view: AnyView, cx: &mut Context<Self>) {
-        self.panels.insert(WorkbenchTab::new(kind), view);
+        let tab = WorkbenchTab::new(kind);
+        // 宿主显式给了实例，懒工厂就没用了。
+        self.lazy_panels.remove(&tab);
+        self.panels.insert(tab, view);
         cx.notify();
+    }
+
+    /// 把「当前布局真正会显示」的懒面板实体化。
+    ///
+    /// 在渲染开头调用：只有落在中心/左/底单槽或右侧激活标签上的面板才算显示，
+    /// 藏在标签组未激活位置、或在收起侧栏里的面板一律不建实例。
+    pub(super) fn materialize_visible_panel(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self.visible_lazy_tab() else {
+            return;
+        };
+        let Some(factory) = self.lazy_panels.remove(&tab) else {
+            return;
+        };
+        let root = self.workspace_root.clone().unwrap_or_default();
+        let view = factory(&root, window, cx);
+        self.panels.insert(tab, view);
+    }
+
+    /// 当前布局里可见、但还没有实例的懒面板（至多一个：每帧只实体化一个，
+    /// 避免一帧里建多个重面板）。
+    pub(super) fn visible_lazy_tab(&self) -> Option<WorkbenchTab> {
+        if self.lazy_panels.is_empty() {
+            return None;
+        }
+        self.state
+            .visible_tabs()
+            .into_iter()
+            .find(|tab| self.lazy_panels.contains_key(tab))
     }
 
     /// 注入多例面板工厂：为「新建页签」创建新实例视图（如新终端）。
@@ -652,5 +734,139 @@ impl WorkbenchShell {
         self.theme
             .clone()
             .unwrap_or_else(|| AgentChatTheme::from_app(cx))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::{Render, TestAppContext, WindowOptions, div};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// 测试用最薄视图：只用来占住 `AnyView` 的位置。
+    struct DummyPanel;
+
+    impl Render for DummyPanel {
+        fn render(
+            &mut self,
+            _window: &mut Window,
+            _cx: &mut Context<Self>,
+        ) -> impl gpui::IntoElement {
+            div()
+        }
+    }
+
+    fn config(panels: Vec<WorkbenchPanelEntry>) -> WorkbenchShellConfig {
+        WorkbenchShellConfig {
+            panels,
+            session_nav: None,
+            session_source: None,
+            initial_state: WorkbenchState::new(WorkbenchPanelKind::Chat),
+            theme: None,
+            subscriptions: Vec::new(),
+            workspace_root: Some(std::path::PathBuf::from("/tmp/navop-workbench-test")),
+        }
+    }
+
+    #[gpui::test]
+    fn lazy_panel_is_built_only_when_the_layout_shows_it(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_global(gpui_component::Theme::default());
+            cx.open_window(WindowOptions::default(), |window, cx| {
+                let builds = Arc::new(AtomicUsize::new(0));
+                let counter = builds.clone();
+                let chat = cx.new(|_| DummyPanel);
+                let shell = cx.new(|cx| {
+                    WorkbenchShell::new(
+                        config(vec![
+                            WorkbenchPanelEntry::new(WorkbenchPanelKind::Chat, chat),
+                            WorkbenchPanelEntry::lazy(
+                                WorkbenchPanelKind::Terminal,
+                                move |_root, _window, cx| {
+                                    counter.fetch_add(1, Ordering::Relaxed);
+                                    cx.new(|_| DummyPanel).into()
+                                },
+                            ),
+                        ]),
+                        window,
+                        cx,
+                    )
+                });
+
+                let terminal = WorkbenchTab::new(WorkbenchPanelKind::Terminal);
+                assert_eq!(0, builds.load(Ordering::Relaxed), "没显示就不该建视图");
+                assert!(!shell.read(cx).panels.contains_key(&terminal));
+                assert!(shell.read(cx).lazy_panels.contains_key(&terminal));
+
+                // 布局里终端不可见时，实体化入口什么都不做。
+                shell.update(cx, |shell, cx| shell.materialize_visible_panel(window, cx));
+                assert_eq!(0, builds.load(Ordering::Relaxed));
+                assert!(!shell.read(cx).panels.contains_key(&terminal));
+
+                // 把它摆到右侧并激活：下一次渲染开头实体化，且只建一次。
+                shell.update(cx, |shell, cx| {
+                    shell.reveal_panel(WorkbenchPanelKind::Terminal, cx)
+                });
+                shell.update(cx, |shell, cx| shell.materialize_visible_panel(window, cx));
+                assert_eq!(1, builds.load(Ordering::Relaxed));
+                assert!(shell.read(cx).panels.contains_key(&terminal));
+                assert!(!shell.read(cx).lazy_panels.contains_key(&terminal));
+
+                shell.update(cx, |shell, cx| shell.materialize_visible_panel(window, cx));
+                assert_eq!(1, builds.load(Ordering::Relaxed), "重复渲染不应重复建视图");
+
+                shell
+            })
+            .expect("window opens");
+        });
+    }
+
+    #[gpui::test]
+    fn collapsed_sidebar_keeps_lazy_panel_unbuilt(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_global(gpui_component::Theme::default());
+            cx.open_window(WindowOptions::default(), |window, cx| {
+                let builds = Arc::new(AtomicUsize::new(0));
+                let counter = builds.clone();
+                let chat = cx.new(|_| DummyPanel);
+                let shell = cx.new(|cx| {
+                    WorkbenchShell::new(
+                        config(vec![
+                            WorkbenchPanelEntry::new(WorkbenchPanelKind::Chat, chat),
+                            WorkbenchPanelEntry::lazy(
+                                WorkbenchPanelKind::Terminal,
+                                move |_root, _window, cx| {
+                                    counter.fetch_add(1, Ordering::Relaxed);
+                                    cx.new(|_| DummyPanel).into()
+                                },
+                            ),
+                        ]),
+                        window,
+                        cx,
+                    )
+                });
+
+                // 打开到右侧再收起：标签还在，但用户在屏幕上看不到它。
+                shell.update(cx, |shell, cx| {
+                    shell
+                        .state
+                        .open(WorkbenchPanelKind::Terminal, WorkbenchPlacement::Right);
+                    shell.state.set_right_collapsed(true);
+                    cx.notify();
+                });
+                shell.update(cx, |shell, cx| shell.materialize_visible_panel(window, cx));
+
+                assert_eq!(
+                    0,
+                    builds.load(Ordering::Relaxed),
+                    "收起侧栏里的面板不该建视图"
+                );
+                shell
+            })
+            .expect("window opens");
+        });
     }
 }

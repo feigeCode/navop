@@ -403,6 +403,36 @@ mod tests {
         assert!(!should_use_native_connection_test(&options));
     }
 
+    /// 两个连通性用例都会临时占用 127.0.0.1 的随机端口。并行执行时，正在
+    /// 监听的用例可能抢到另一个用例刚释放的端口，让「端口已关闭」的断言偶发
+    /// 变成可连通，因此用同一把锁串行化这两段端口占用。
+    static LOCAL_PORT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn lock_local_port_tests() -> std::sync::MutexGuard<'static, ()> {
+        LOCAL_PORT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// 预留一个确认无人监听的本机端口。系统可能把刚释放的临时端口立刻分配
+    /// 出去，所以这里换端口重试，避免把偶发的端口复用误判成「可连通」。
+    fn closed_local_destination() -> String {
+        use std::net::{TcpListener, TcpStream};
+
+        for _ in 0..8 {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("reserve local test port");
+            let destination = listener.local_addr().expect("read local test address");
+            drop(listener);
+            if TcpStream::connect_timeout(&destination, std::time::Duration::from_millis(200))
+                .is_err()
+            {
+                return destination.to_string();
+            }
+        }
+
+        panic!("could not reserve a closed local port for the reachability test");
+    }
+
     #[test]
     fn native_reachability_reports_missing_port() {
         let mut options = native_test_options(RemoteDesktopBackendPreference::WindowsNative);
@@ -430,6 +460,7 @@ mod tests {
     fn ironrdp_reachability_accepts_a_listening_target() {
         use std::net::TcpListener;
 
+        let _guard = lock_local_port_tests();
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind local test listener");
         let destination = listener.local_addr().unwrap().to_string();
 
@@ -446,12 +477,8 @@ mod tests {
 
     #[test]
     fn ironrdp_reachability_reports_a_closed_port() {
-        use std::net::TcpListener;
-
-        let listener = TcpListener::bind("127.0.0.1:0").expect("reserve local test port");
-        let destination = listener.local_addr().unwrap().to_string();
-        drop(listener);
-
+        let _guard = lock_local_port_tests();
+        let destination = closed_local_destination();
         let mut options = native_test_options(RemoteDesktopBackendPreference::Canvas);
         options.destination = destination.clone();
 

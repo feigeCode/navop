@@ -120,8 +120,19 @@ pub(crate) fn build_ai_workbench_shell(
     remember_workspace_root(&workspace_root, cx);
     chat.update(cx, |panel, cx| panel.set_sidebar_suppressed(true, cx));
     // 终端面板由 shell 领域通过提供者注入；数据产品不注册，因此没有终端面板。
-    let terminal_view = ai_chat_view::workbench_terminal_provider()
-        .and_then(|provider| provider.terminal_panel(&workspace_root, window, cx));
+    //
+    // 这里只取工厂，不建视图：建 `TerminalView` 会拉起本地 PTY 子进程，而工作台的
+    // 布局里终端常常没被打开（甚至被收在侧栏里）。提前建等于「一进工作台就多开
+    // 一个 shell」，还会在用户点击时把 fork 卷进 UI 线程。改成懒注入后，只有布局
+    // 真的把终端面板摆上屏幕，外壳才调一次工厂。
+    let terminal_factory =
+        ai_chat_view::workbench_terminal_provider().and_then(|provider| provider.panel_factory());
+    // 提供者只给了现成视图（没有工厂）时退回老路子：直接注入。
+    let terminal_view = match terminal_factory {
+        Some(_) => None,
+        None => ai_chat_view::workbench_terminal_provider()
+            .and_then(|provider| provider.terminal_panel(&workspace_root, window, cx)),
+    };
     // 子代理详情面板：内容由「点开某张子代理卡片」决定。
     //
     // 面板自己订阅聊天面板的事件、自己认领要看哪条子代理；宿主只负责在请求到来时
@@ -138,7 +149,12 @@ pub(crate) fn build_ai_workbench_shell(
                         WorkbenchPanelEntry::new(WorkbenchPanelKind::Review, editor.clone()),
                         WorkbenchPanelEntry::new(WorkbenchPanelKind::Files, explorer.clone()),
                     ];
-                    if let Some(view) = terminal_view.clone() {
+                    if let Some(factory) = terminal_factory.clone() {
+                        panels.push(WorkbenchPanelEntry::lazy(
+                            WorkbenchPanelKind::Terminal,
+                            move |root, window, cx| factory(root, window, cx),
+                        ));
+                    } else if let Some(view) = terminal_view.clone() {
                         panels.push(WorkbenchPanelEntry::new(WorkbenchPanelKind::Terminal, view));
                     }
                     panels.push(WorkbenchPanelEntry::new(

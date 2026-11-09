@@ -57,6 +57,13 @@ const SHELL_INTEGRATION_RUNTIME_TIMEOUT: Duration = Duration::from_secs(5);
 /// 握手就会永久停在暂存态，用户键盘输入被静默吞掉（Issue #206）。看门狗到期
 /// 后强制降级为裸终端并放行暂存输入，保证输入路径不会无限期失效。
 const SHELL_INTEGRATION_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
+/// 注入成功（收到 ready marker）后只等首个 OSC 133;B 的宽限期。
+///
+/// 30 秒看门狗是给「远端压根没有输出」准备的；而提示符框架重写
+/// `PS1`/`PROMPT` 导致 133;B 丢失是另一回事：集成本身已经装好，只是等不到
+/// prompt-end 标记。这种情况不该让用户白等满 30 秒，宽限期一到就放行输入、
+/// 保持集成态（后续真收到 133;B 时照常切到集成态）。
+const SHELL_INTEGRATION_PROMPT_GRACE: Duration = Duration::from_secs(3);
 /// 显式卸载属于用户主动操作，允许比自动探测更长的完成时间。
 const SHELL_INTEGRATION_UNINSTALL_TIMEOUT: Duration = Duration::from_secs(10);
 /// 没有 OSC prompt 信号时，多行初始化命令之间留出设备处理和显示交互提示的时间。
@@ -113,12 +120,18 @@ async fn wait_for_shell_integration_handshake(
 /// `PlainAwaitingOutput`）时武装；写成 `accepts_terminal_input().then(..)` 会正好
 /// 反过来，让看门狗只在不需要它的会话里到期。
 ///
-/// 状态机推进是单向的（可输入态不会再退回握手态），因此启动时判定一次即可。
+/// 状态机推进是单向的（可输入态不会再退回握手态）；只是「只等 133;B」那一段
+/// 会在收到 ready marker 时换成更短的宽限定时器（[`arm_shell_integration_prompt_grace`]）。
 fn arm_shell_integration_handshake_watchdog(
     shell_integration: &RuntimeShellIntegration,
 ) -> Option<ShellIntegrationHandshakeWatchdog> {
     (!shell_integration.accepts_terminal_input())
         .then(|| Box::pin(tokio::time::sleep(SHELL_INTEGRATION_HANDSHAKE_TIMEOUT)))
+}
+
+/// 收到 ready marker、进入「只等首个 133;B」阶段后换上的短宽限定时器。
+fn arm_shell_integration_prompt_grace() -> Option<ShellIntegrationHandshakeWatchdog> {
+    Some(Box::pin(tokio::time::sleep(SHELL_INTEGRATION_PROMPT_GRACE)))
 }
 
 /// 看门狗到期时的兜底：握手态必须降级为裸终端并放行暂存输入。
@@ -969,7 +982,18 @@ impl SshBackend {
                     }
                     SshRuntimeInput::ShellIntegrationHandshakeTimeout => {
                         shell_integration_handshake.take();
-                        if release_stalled_shell_integration_handshake(&mut shell_integration) {
+                        if shell_integration.release_awaiting_prompt() {
+                            // 集成已装好，只是等不到 prompt-end 标记（提示符框架把它
+                            // 冲掉了）。保持集成态、放行输入，别整体降级为裸终端。
+                            tracing::warn!(
+                                target: "terminal.ssh.setup",
+                                connection_id,
+                                "等待远端 prompt 结束标记（OSC 133;B）超时，先放行输入并保持 Shell Integration"
+                            );
+                            shell_ready = true;
+                        } else if release_stalled_shell_integration_handshake(
+                            &mut shell_integration,
+                        ) {
                             // 降级为裸终端后，初始化命令不再等 OSC prompt 信号。
                             shell_ready = true;
                         }
@@ -1310,6 +1334,9 @@ impl SshBackend {
                 };
                 if was_injecting && !shell_integration.is_injecting() {
                     shell_integration_timeout.take();
+                    // 注入已完成（ready marker 已到），只差首个 OSC 133;B：把 30 秒
+                    // 看门狗换成短宽限，别让提示符框架把用户输入按住半分钟。
+                    shell_integration_handshake = arm_shell_integration_prompt_grace();
                 }
                 if integration_ready == ShellIntegrationReady::Plain {
                     shell_ready = true;
@@ -1349,6 +1376,8 @@ impl SshBackend {
                             // 133;B: prompt 渲染完，用户可以输入了
                             // 第一次收到时发送 init_commands
                             shell_integration.on_input_start();
+                            // 已经可以输入，握手看门狗/宽限定时器都没必要留着了。
+                            shell_integration_handshake.take();
                             if !shell_ready {
                                 shell_ready = true;
                             }

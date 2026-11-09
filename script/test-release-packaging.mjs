@@ -1207,7 +1207,7 @@ test("R2 uploads are single-dispatch, revalidated, and verified after overwrite"
   assert.doesNotMatch(upload, /max-age=31536000, immutable/);
 });
 
-test("R2 keeps only the release it just uploaded", () => {
+test("R2 prunes old releases but keeps both channel manifests alive", () => {
   const upload = read(".github/workflows/upload-r2.yml");
 
   // 清理必须排在上传与逐对象校验之后，而且不能总是执行：上传失败时一个对象
@@ -1229,9 +1229,16 @@ test("R2 keeps only the release it just uploaded", () => {
   const pruneDeletes = (pruneStep.match(/aws s3 rm[\s\S]*?--recursive/g) ?? []).join("\n");
   assert.ok(pruneDeletes, "prune must delete through aws s3 rm");
   assert.doesNotMatch(pruneDeletes, /updates\//);
-  // 只有稳定版本号才清理，预发布不能把上一个稳定版本的安装包带走。
-  assert.match(pruneStep, /=\~ \^v\[0-9\]\+\\\.\[0-9\]\+\\\.\[0-9\]\+\$ \]\]/);
-  assert.match(pruneStep, /Skipping R2 prune for non-stable release tag/);
+  // 不再按 tag 形态跳过清理：预发布留下的安装包同样是纯占空间。
+  assert.doesNotMatch(pruneStep, /Skipping R2 prune for non-stable release tag/);
+  // beta 发布同样要清理，否则每个 beta（约 2.2 GB）都会永久占一份空间。
+  assert.match(pruneStep, /read_manifest_tag "updates\/latest\.json"/);
+  assert.match(pruneStep, /read_manifest_tag "updates\/beta\/latest\.json"/);
+  // 稳定清单读不到时必须整体放弃清理，而不是「只保留本次 tag」把稳定版删掉。
+  assert.match(
+    pruneStep,
+    /Cannot read updates\/latest\.json; skipping R2 prune/,
+  );
 
   const pruneRun = pruneStep
     .match(/run: \|\n([\s\S]*)/)?.[1]
@@ -1269,13 +1276,29 @@ case "\${1:-} \${2:-}" in
     [[ -z "\$line" ]] || printf '%s\\n' "\$line"
     ;;
   "s3api get-object")
-    # 只有显式给了 beta 清单才会命中，用于验证「按清单 version 精确保留」。
-    if [ -n "\${FAKE_R2_BETA_MANIFEST:-}" ]; then
-      for argument in "\$@"; do last="\$argument"; done
-      printf '%s' "\${FAKE_R2_BETA_MANIFEST}" > "\$last"
-      exit 0
-    fi
-    exit 1
+    # 按 --key 提供假清单：两条通道的清单都要能被读到，用于验证「按清单里的
+    # version 精确保留」，而不是笼统留下版本号最大的那个。
+    bucket_key=""
+    last=""
+    for argument in "\$@"; do
+      case "\$argument" in
+        updates/*) bucket_key="\$argument" ;;
+      esac
+      last="\$argument"
+    done
+    case "\$bucket_key" in
+      "updates/latest.json")
+        [ -n "\${FAKE_R2_STABLE_MANIFEST:-}" ] || exit 1
+        printf '%s' "\${FAKE_R2_STABLE_MANIFEST}" > "\$last"
+        ;;
+      "updates/beta/latest.json")
+        [ -n "\${FAKE_R2_BETA_MANIFEST:-}" ] || exit 1
+        printf '%s' "\${FAKE_R2_BETA_MANIFEST}" > "\$last"
+        ;;
+      *)
+        exit 1
+        ;;
+    esac
     ;;
   "s3 rm")
     target=""
@@ -1297,7 +1320,11 @@ esac
     { mode: 0o755 },
   );
 
-  const runPrune = (tags, releaseTag = "v0.19.5", betaManifest = "") => {
+  const runPrune = (
+    tags,
+    releaseTag = "v0.19.5",
+    { stableManifest = "", betaManifest = "" } = {},
+  ) => {
     fs.writeFileSync(statePath, `${tags.join("\n")}\n`);
     fs.writeFileSync(deletedPath, "");
     const result = spawnSync("bash", ["-c", pruneRun], {
@@ -1307,6 +1334,7 @@ esac
         PATH: `${fixtureDir}:${process.env.PATH}`,
         FAKE_R2_STATE: statePath,
         FAKE_R2_DELETED: deletedPath,
+        FAKE_R2_STABLE_MANIFEST: stableManifest,
         FAKE_R2_BETA_MANIFEST: betaManifest,
         CLOUDFLARE_ACCOUNT_ID: "test-account",
         CLOUDFLARE_R2_BUCKET: "test-bucket",
@@ -1330,7 +1358,10 @@ esac
   };
 
   try {
-    const pruned = runPrune(["v0.19.5", "v0.19.4", "v0.19.3"]);
+    // 稳定发布：本次 tag + 稳定清单指向的 tag，其余的旧稳定版统统删掉。
+    const pruned = runPrune(["v0.19.5", "v0.19.4", "v0.19.3"], "v0.19.5", {
+      stableManifest: JSON.stringify({ version: "0.19.5" }),
+    });
     assert.equal(pruned.result.status, 0, pruned.result.stderr);
     assert.deepEqual(pruned.remaining, ["v0.19.5"]);
     assert.deepEqual(pruned.deleted, [
@@ -1339,18 +1370,55 @@ esac
     ]);
     assert.match(pruned.result.stdout, /R2 now keeps .*v0\.19\.5/);
 
-    // 稳定发版不能把 beta 清单指向的安装包删掉，否则 beta 用户点下载会 404。
-    // 读不到清单时退回「保留版本号最大的 beta」。
-    const betaFallback = runPrune(["v0.19.5", "v0.20.0-beta.2", "v0.19.4"]);
+    // beta 发布同样清理：只留本次 beta + 稳定清单指向的稳定版，旧 beta 必须被
+    // 删掉，否则每发一个 beta 就永久多占约 2.2 GB。
+    const betaPruned = runPrune(
+      ["v0.19.5", "v0.20.0-beta.1", "v0.20.0-beta.2"],
+      "v0.20.0-beta.2",
+      {
+        stableManifest: JSON.stringify({ version: "0.19.5" }),
+        betaManifest: JSON.stringify({ version: "0.20.0-beta.2" }),
+      },
+    );
+    assert.equal(betaPruned.result.status, 0, betaPruned.result.stderr);
+    assert.deepEqual(betaPruned.remaining, ["v0.19.5", "v0.20.0-beta.2"]);
+    assert.deepEqual(betaPruned.deleted, ["releases/v0.20.0-beta.1"]);
+    assert.match(
+      betaPruned.result.stdout,
+      /Keeping releases\/v0\.19\.5\/ for the stable channel manifest/,
+    );
+
+    // beta 清单还指着上一个 beta（清单尚未切换或上一次上传中断）时，两个都得留。
+    const betaRaced = runPrune(
+      ["v0.19.5", "v0.20.0-beta.2", "v0.20.0-beta.3"],
+      "v0.20.0-beta.3",
+      {
+        stableManifest: JSON.stringify({ version: "0.19.5" }),
+        betaManifest: JSON.stringify({ version: "0.20.0-beta.2" }),
+      },
+    );
+    assert.equal(betaRaced.result.status, 0, betaRaced.result.stderr);
+    assert.deepEqual(betaRaced.remaining, ["v0.19.5", "v0.20.0-beta.2", "v0.20.0-beta.3"]);
+    assert.deepEqual(betaRaced.deleted, []);
+
+    // beta 清单读不到时退回「保留版本号最大的 beta」，稳定版照旧保留。
+    const betaFallback = runPrune(
+      ["v0.19.5", "v0.20.0-beta.2", "v0.19.4"],
+      "v0.20.0-beta.2",
+      { stableManifest: JSON.stringify({ version: "0.19.5" }) },
+    );
     assert.equal(betaFallback.result.status, 0, betaFallback.result.stderr);
     assert.deepEqual(betaFallback.remaining, ["v0.19.5", "v0.20.0-beta.2"]);
     assert.deepEqual(betaFallback.deleted, ["releases/v0.19.4"]);
 
-    // 能读到清单时必须按清单里的 version 精确保留，而不是笼统留下最大的 beta。
+    // 能读到清单时必须按清单里的 version 精确保留，而不是笼统留下最大的那个。
     const betaExact = runPrune(
       ["v0.19.5", "v0.20.0-beta.1", "v0.20.0-beta.3", "v0.19.4"],
       "v0.19.5",
-      JSON.stringify({ version: "0.20.0-beta.1" }),
+      {
+        stableManifest: JSON.stringify({ version: "0.19.5" }),
+        betaManifest: JSON.stringify({ version: "0.20.0-beta.1" }),
+      },
     );
     assert.equal(betaExact.result.status, 0, betaExact.result.stderr);
     assert.deepEqual(betaExact.remaining, ["v0.19.5", "v0.20.0-beta.1"]);
@@ -1360,20 +1428,30 @@ esac
     ]);
 
     // 本次 tag 不在桶里（上传其实没成功）时，一个旧版本都不能删。
-    const missing = runPrune(["v0.19.4", "v0.19.3"]);
+    const missing = runPrune(["v0.19.4", "v0.19.3"], "v0.19.5", {
+      stableManifest: JSON.stringify({ version: "0.19.5" }),
+    });
     assert.notEqual(missing.result.status, 0);
     assert.match(missing.result.stdout, /Refusing to prune/);
     assert.deepEqual(missing.deleted, []);
     assert.deepEqual(missing.remaining, ["v0.19.4", "v0.19.3"]);
 
-    // 预发布不清理，既有稳定版本原样保留。
-    const prerelease = runPrune(["v0.19.5", "v0.19.4"], "v0.20.0-rc.1");
-    assert.equal(prerelease.result.status, 0, prerelease.result.stderr);
-    assert.deepEqual(prerelease.deleted, []);
-    assert.deepEqual(prerelease.remaining, ["v0.19.5", "v0.19.4"]);
+    // 稳定清单读不到时整体放弃清理：既有的稳定安装包一个都不能少。
+    const noStableManifest = runPrune(
+      ["v0.20.0-rc.1", "v0.19.5", "v0.19.4"],
+      "v0.20.0-rc.1",
+      { stableManifest: "", betaManifest: '{"version":"0.20.0-rc.1"}' },
+    );
+    assert.equal(noStableManifest.result.status, 0, noStableManifest.result.stderr);
+    assert.deepEqual(noStableManifest.deleted, []);
+    assert.deepEqual(noStableManifest.remaining, [
+      "v0.20.0-rc.1",
+      "v0.19.5",
+      "v0.19.4",
+    ]);
     assert.match(
-      prerelease.result.stdout,
-      /Skipping R2 prune for non-stable release tag/,
+      noStableManifest.result.stdout,
+      /Cannot read updates\/latest\.json; skipping R2 prune/,
     );
   } finally {
     fs.rmSync(fixtureDir, { recursive: true, force: true });

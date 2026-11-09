@@ -545,10 +545,13 @@ jobs:
             --clobber \
             artifacts/feed/*.json
 
-      # 桶里只留这次上传的版本：旧安装包在 R2 上只占空间，下载入口都不依赖它们
-      # —— updates/latest.json 只指向本次 tag，旧版本另有 GitHub Release 与 CNB
-      # 镜像作为存档。这一步必须待在上传与逐对象校验之后，且不能加 always()：
-      # 上传没成功就一个对象都不许删，否则桶里可能新旧两份都不完整。
+      # 桶里只留「两条清单指向的版本 + 本次上传的版本」：旧安装包在 R2 上只占
+      # 空间，下载入口都不依赖它们——每个通道的 latest.json 只指向自己通道的
+      # 最新 tag，旧版本另有 GitHub Release 与 CNB 镜像作为存档。
+      # beta 发布也必须清理：一个 beta 就是三产品 × 各平台的完整安装包（约
+      # 2.2 GB），八个 beta 就能把 10 GB 的 R2 免费额度撑爆。
+      # 这一步必须待在上传与逐对象校验之后，且不能加 always()：上传没成功就一个
+      # 对象都不许删，否则桶里可能新旧两份都不完整。
       - name: Prune older R2 releases
         if: ${{ steps.r2_config.outputs.skip != 'true' && steps.release.outputs.skip != 'true' }}
         env:
@@ -566,13 +569,6 @@ jobs:
           # 所有删除都限定在这个前缀下：更新清单（latest.json 在另一条前缀里）
           # 永远不碰。
           prefix="releases"
-
-          # 预发布（v0.20.0-rc.1 之类）不清理：它不该把上一个稳定版本的安装包
-          # 带走，而它的对象本来也只是临时放一下。
-          if ! [[ "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::warning::Skipping R2 prune for non-stable release tag '${RELEASE_TAG}'."
-            exit 0
-          fi
 
           # 列出 releases/ 下的版本前缀（delimiter 让每页只回顶层目录名）。
           # 注意：--output text 对扁平列表是「一行、tab 拼接」，所以先用 tr 把它
@@ -600,35 +596,55 @@ jobs:
             exit 1
           fi
 
-          # 测试通道清单（updates/beta/latest.json）不受 prune 影响，但它指向的
-          # 安装包就在 ${prefix}/ 下：删掉它会让 beta 用户点下载拿到 404。
-          # 优先读清单里的 version 精确保留；读不到（首次 beta 之前、或对象不存在）
-          # 就退回「保留版本号最大的一个 beta」。
-          beta_manifest_key="updates/beta/latest.json"
-          beta_manifest_path="$(mktemp)"
-          keep_beta_tag=""
-          if aws s3api get-object \
-            --bucket "${CLOUDFLARE_R2_BUCKET}" \
-            --key "${beta_manifest_key}" \
-            --endpoint-url "${endpoint}" \
-            "${beta_manifest_path}" >/dev/null 2>&1; then
-            keep_beta_tag="$(jq -r '.version // empty' "${beta_manifest_path}" 2>/dev/null || true)"
-          fi
-          rm -f "${beta_manifest_path}"
-          if [ -n "${keep_beta_tag}" ]; then
-            # 清单里的 version 不带 v 前缀，桶里的目录前缀带。
-            case "${keep_beta_tag}" in
-              v*) ;;
-              *) keep_beta_tag="v${keep_beta_tag}" ;;
+          # 清单指向哪个 tag，那个 tag 的安装包目录就必须留着——删了客户端点下载
+          # 就是 404。清单里的 version 不带 v 前缀，桶里的目录前缀带。
+          read_manifest_tag() {
+            local key="$1"
+            local path
+            local version
+            path="$(mktemp)"
+            if ! aws s3api get-object \
+              --bucket "${CLOUDFLARE_R2_BUCKET}" \
+              --key "${key}" \
+              --endpoint-url "${endpoint}" \
+              "${path}" >/dev/null 2>&1; then
+              rm -f "${path}"
+              return 1
+            fi
+            version="$(jq -r '.version // empty' "${path}" 2>/dev/null || true)"
+            rm -f "${path}"
+            if [ -z "${version}" ]; then
+              return 1
+            fi
+            case "${version}" in
+              v*) printf '%s\n' "${version}" ;;
+              *) printf 'v%s\n' "${version}" ;;
             esac
-          else
-            keep_beta_tag="$(printf '%s\n' ${tags} | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-' | sort -V | tail -1 || true)"
-          fi
+          }
 
           keep_tags=" ${RELEASE_TAG} "
-          if [ -n "${keep_beta_tag}" ]; then
-            keep_tags="${keep_tags}${keep_beta_tag} "
-            echo "Keeping ${prefix}/${keep_beta_tag}/ for the beta channel manifest"
+
+          # 稳定清单是稳定通道客户端的唯一下载入口：读不到就整体放弃清理。宁可
+          # 留下旧版本，也不能把稳定版用户的安装包删掉。
+          if stable_tag="$(read_manifest_tag "updates/latest.json")"; then
+            keep_tags="${keep_tags}${stable_tag} "
+            echo "Keeping ${prefix}/${stable_tag}/ for the stable channel manifest"
+          else
+            echo "::warning::Cannot read updates/latest.json; skipping R2 prune."
+            exit 0
+          fi
+
+          # beta 清单同理。读不到（首次 beta 之前、或对象不存在）就退回「保留
+          # 版本号最大的一个 beta」，与旧行为一致。
+          if beta_tag="$(read_manifest_tag "updates/beta/latest.json")"; then
+            keep_tags="${keep_tags}${beta_tag} "
+            echo "Keeping ${prefix}/${beta_tag}/ for the beta channel manifest"
+          else
+            beta_tag="$(printf '%s\n' ${tags} | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-' | sort -V | tail -1 || true)"
+            if [ -n "${beta_tag}" ]; then
+              keep_tags="${keep_tags}${beta_tag} "
+              echo "::warning::Cannot read updates/beta/latest.json; keeping ${prefix}/${beta_tag}/ as the newest beta"
+            fi
           fi
 
           # 注意这里的 for 依赖分词逐行遍历。

@@ -374,6 +374,27 @@ impl WorkbenchState {
         &self.right
     }
 
+    /// 当前布局真正摆到屏幕上的面板标签，按「中心 → 左 → 底 → 右侧激活」排列。
+    ///
+    /// 只回答「用户看得见谁」：收起的侧栏、标签组里未激活的标签都不算。
+    /// 外壳据此决定懒面板要不要现在实例化（看不见的面板不建视图，见
+    /// `WorkbenchShell::materialize_visible_panel`）。
+    pub fn visible_tabs(&self) -> Vec<WorkbenchTab> {
+        let mut tabs = Vec::with_capacity(4);
+        if self.right_maximized() {
+            // 放大占满时其余区域全部让位，只剩右侧激活标签可见。
+            tabs.extend(self.right_active());
+            return tabs;
+        }
+        tabs.extend(self.center());
+        tabs.extend(self.left());
+        tabs.extend(self.bottom());
+        if self.right_sidebar_open() {
+            tabs.extend(self.right_active());
+        }
+        tabs
+    }
+
     pub fn right_active(&self) -> Option<WorkbenchTab> {
         self.right_active
     }
@@ -771,6 +792,43 @@ mod tests {
             !state.right_sidebar_open() && !state.right_maximized(),
             "收起优先级高于放大"
         );
+    }
+
+    #[test]
+    fn visible_tabs_follow_layout_and_drop_hidden_panels() {
+        let mut state = WorkbenchState::new(WorkbenchPanelKind::Chat);
+        assert_eq!(vec![tab(WorkbenchPanelKind::Chat)], state.visible_tabs());
+
+        open_right(&mut state, WorkbenchPanelKind::Files);
+        assert_eq!(
+            vec![
+                tab(WorkbenchPanelKind::Chat),
+                tab(WorkbenchPanelKind::Files)
+            ],
+            state.visible_tabs()
+        );
+
+        // 标签组里未激活的标签不算可见：它只是排在激活标签后面。
+        open_right(&mut state, WorkbenchPanelKind::Review);
+        assert_eq!(Some(tab(WorkbenchPanelKind::Review)), state.right_active());
+        assert_eq!(
+            vec![
+                tab(WorkbenchPanelKind::Chat),
+                tab(WorkbenchPanelKind::Review)
+            ],
+            state.visible_tabs()
+        );
+
+        assert!(state.set_right_collapsed(true));
+        assert_eq!(
+            vec![tab(WorkbenchPanelKind::Chat)],
+            state.visible_tabs(),
+            "收起右侧后它里面的面板全部不可见"
+        );
+
+        // 放大占满：中心区让位，只剩右侧激活标签。
+        assert!(state.toggle_right_maximized());
+        assert_eq!(vec![tab(WorkbenchPanelKind::Review)], state.visible_tabs());
     }
 
     #[test]
