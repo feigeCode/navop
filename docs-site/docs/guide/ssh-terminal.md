@@ -1,8 +1,11 @@
 # SSH 与终端工作区
 
-Navop 将远程 SSH 和本地 Terminal 放入统一终端工作区，支持多标签、分屏、广播输入、历史、快捷命令、自定义高亮和 Shell integration。终端命令会直接作用于本机或服务器，必须持续确认当前会话身份与主机。
+Navop 与 Navop Shell 将远程 SSH 和本地 Terminal 放入统一的终端工作区，支持多标签、分屏、广播输入、历史、快捷命令、自定义高亮和 Shell integration。终端命令会直接作用于本机或服务器，必须持续确认当前会话身份与主机。
 
 ![SSH 与终端工作区](/images/ssh.png)
+
+> [!NOTE]
+> 本页功能在 **Navop** 与 **Navop Shell** 中可用；**Navop Data** 不含终端工作区。
 
 ## 创建 SSH 与本地终端
 
@@ -51,7 +54,7 @@ SSH 连接可启用 X11 转发，将远端 X11 图形应用显示到本机 X ser
 
 Navop 会自动探测本机 X server：Windows 探测 `127.0.0.1:6000`，macOS 通过 DISPLAY、launchctl 与 Xauthority 识别。若 macOS 未检测到 XQuartz，勾选或测试连接会提示先安装并启动 XQuartz；本机 X11 环境不可用时，Navop 会停用转发，但不会阻断普通 SSH 终端。
 
-v0.9.3 改进了 Intel Mac 对旧版 XQuartz 环境、套接字和认证信息的检测。若启用后仍无法显示，先确认 XQuartz 正在运行，重新建立 SSH 连接，再检查远端 `sshd` 配置和当前账号权限。
+较新版本改进了 Intel Mac 对旧版 XQuartz 环境、套接字和认证信息的检测。若启用后仍无法显示，先确认 XQuartz 正在运行，重新建立 SSH 连接，再检查远端 `sshd` 配置和当前账号权限。
 
 ## 标签、分屏与布局
 

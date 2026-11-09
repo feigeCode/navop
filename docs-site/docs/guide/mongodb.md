@@ -4,6 +4,9 @@ MongoDB Explorer 用于管理连接、数据库、集合、文档、索引和校
 
 ![MongoDB Explorer](/images/mongodb.png)
 
+> [!NOTE]
+> 本页功能在 **Navop** 与 **Navop Data** 中可用；**Navop Shell** 不含 MongoDB Explorer。
+
 ## 连接与安全设置
 
 可以填写连接字符串，或按主机、端口和认证参数配置。根据部署选择认证数据库、超时和 TLS；网络受限时使用 SSH 隧道。副本集或分片集群的连接字符串应包含正确参数，并确保隧道或网络能访问驱动最终选择的节点。

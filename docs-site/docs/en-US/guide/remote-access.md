@@ -2,6 +2,9 @@
 
 Navop connects to RDP and VNC through provider extensions, offers Serial terminals, and can deploy an SSH monitoring helper. Platform, provider, and remote-system compatibility determine available behavior.
 
+> [!NOTE]
+> RDP/VNC and Serial are available in **Navop** and **Navop Shell**. SSH server monitoring is available only in the full **Navop**.
+
 ## Install RDP or VNC providers
 
 Install a compatible remote desktop provider from Extensions, then create an RDP or VNC connection. Enter host, port, user, and password; RDP may also require a Domain. A provider version mismatch should be fixed by updating or reloading the extension rather than randomly changing credentials.

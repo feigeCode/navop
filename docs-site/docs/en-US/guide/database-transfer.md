@@ -2,6 +2,9 @@
 
 Transfer tools import delimited text, export tables or query results, create SQL dumps, and run existing SQL files. Confirm the source format, target table, encoding, transaction policy, and recovery plan before moving data.
 
+> [!NOTE]
+> These tools are available in **Navop** and **Navop Data**. **Navop Shell** has no data transfer tools.
+
 ## Import CSV and delimited text
 
 Choose the target table and file, then configure encoding, field delimiter, text quote, escaping, and whether the first row is a header. Preview column mapping and compare source values with database types and nullability. Dates, decimals, booleans, `NULL`, and empty strings differ across systems, so validate a small sample first.

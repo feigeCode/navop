@@ -4,6 +4,9 @@ Redis 工作台支持单机、Sentinel 和 Cluster 连接，提供 Key 浏览、
 
 ![Redis 工作台](/images/redis.png)
 
+> [!NOTE]
+> 本页功能在 **Navop** 与 **Navop Data** 中可用；**Navop Shell** 不含 Redis 工作台。
+
 ## 创建 Redis 连接
 
 选择单机、Sentinel 或 Cluster 模式，填写节点、端口、用户名、密码和数据库等参数。需要加密时启用 TLS；无法直连时配置 SSH 隧道。Sentinel 需要正确的服务名称和节点信息，Cluster 则应确保客户端可访问重定向后的各个节点地址。

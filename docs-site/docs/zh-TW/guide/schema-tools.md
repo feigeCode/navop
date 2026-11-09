@@ -2,6 +2,9 @@
 
 結構工具包含物件瀏覽、表設計器、DDL、ER 圖、Schema Compare 和 Data Compare。它們可能產生 DROP、ALTER、INSERT、UPDATE 或 DELETE，所有自動計畫都必須人工審閱。
 
+> [!NOTE]
+> 本頁功能在 **Navop** 與 **Navop Data** 中可用；**Navop Shell** 不含資料庫結構工具。
+
 ## 瀏覽資料庫物件
 
 展開資料庫和 Schema，查看資料表、檢視及其他支援物件。資料表頁可顯示欄位、類型、預設值、可空性、主鍵、索引和 DDL；在物件列按右鍵可查看該物件類型與已安裝擴充提供的操作。可見性受權限、上下文與 Schema 過濾共同影響。

@@ -1,283 +1,321 @@
-# 安裝、更新與檔案關聯
+# 安裝與更新
 
-Navop 提供 macOS、Windows 與 Linux 桌面版本。安裝包必須符合系統與 CPU 架構；更新前先儲存 SQL、Notes 和遠端檔案，結束手動交易並等待傳輸完成。
+Navop 現在以三個應用程式發布：完整版 **Navop**、遠端維運 **Navop Shell**、資料工具 **Navop Data**。三者使用同一版本號、隨同一版本發布，可以並排安裝，但安裝套件、應用程式名稱、資料目錄與鑰匙圈彼此獨立。本文先幫你選對安裝套件，再分別說明各平台的安裝、便攜執行、更新與解除安裝方式。
 
-## 下載與安裝
+## 選擇要安裝的產品
 
-從[官網下載中心](https://navop.dev/zh-TW/extensions)選擇最新穩定版。macOS 依裝置選 Apple Silicon 或 Intel，將應用程式移入「應用程式」；Windows 執行相符安裝包；Linux 依發佈頁提供的格式安裝。
+| 你的使用方式 | 安裝產品 | 安裝檔前綴 |
+| --- | --- | --- |
+| 資料庫、伺服器、終端機、遠端桌面、監控都要用，或需要檔案關聯 | **Navop**（完整版） | `navop-` |
+| 只做 SSH/SFTP、終端機、連接埠轉送、RDP/VNC、串口/Telnet | **Navop Shell** | `navop-shell-` |
+| 只做 SQL、Redis、MongoDB、ER 圖、資料搬移 | **Navop Data** | `navop-data-` |
 
-若 macOS Gatekeeper 阻擋首次啟動，先確認來源為正式發佈頁，再到「隱私權與安全性」允許開啟。若確認來源可信但仍被系統隔離，可執行 `sudo xattr -rd com.apple.quarantine /Applications/Navop.app` 後重新開啟。Windows 或 Linux 的安全警告也應核對來源，不要關閉全域防護。受管理裝置可能需要管理員核准。
+不確定時先裝完整版 Navop。之後如果只想保留遠端維運或資料工具，可以再並排安裝 Navop Shell 或 Navop Data，不需要先解除安裝 Navop。
 
-## 安裝包選擇
+## 安裝套件一覽
 
-| 平台 | 裝置/架構 | 建議檔案 | 適用情境 |
+目前版本為 **v0.23.0**。三個產品使用同一套命名規則：
+
+```text
+navop-<version>-<label>.<ext>
+navop-shell-<version>-<label>.<ext>
+navop-data-<version>-<label>.<ext>
+```
+
+`<label>` 由平台與架構組成：
+
+| label | 含義 | 可用產品 |
+| --- | --- | --- |
+| `macos-arm64` | macOS Apple Silicon | Navop / Navop Shell / Navop Data |
+| `macos-x64` | macOS Intel | Navop / Navop Shell / Navop Data |
+| `windows-x64` | Windows 64 位元 | Navop / Navop Shell / Navop Data |
+| `win32` | Windows 32 位元 | 僅 Navop |
+| `linux-x64` | Linux 64 位元 | Navop / Navop Shell / Navop Data |
+| `linux-arm64` | Linux ARM64 | 僅 Navop |
+
+### Navop（完整版）
+
+| 平台 | 安裝套件 |
+| --- | --- |
+| macOS Apple Silicon | `navop-<version>-macos-arm64.dmg`、`navop-<version>-macos-arm64.tar.gz` |
+| macOS Intel | `navop-<version>-macos-x64.dmg`、`navop-<version>-macos-x64.tar.gz` |
+| Windows x64 | `navop-<version>-windows-x64.msi`、`navop-<version>-windows-x64.exe`、`navop-<version>-windows-x64.zip`、`navop-<version>-windows-x64-portable.zip` |
+| Windows 32 位元 | `navop-<version>-win32.*` |
+| Linux x64 | `navop-<version>-linux-x64.tar.gz`、`navop-<version>-linux-x64-portable.tar.gz`、`navop_<version>_amd64.deb`、`navop-<version>-1.x86_64.rpm`、`navop_<version>_amd64.AppImage`、`navop-<version>-linux-x64-gpu-stack.tar.gz` |
+| Linux ARM64 | `navop-<version>-linux-arm64.tar.gz`、`navop-<version>-linux-arm64-portable.tar.gz` |
+
+### Navop Shell（遠端維運）
+
+| 平台 | 安裝套件 |
+| --- | --- |
+| macOS Apple Silicon | `navop-shell-<version>-macos-arm64.dmg`、`navop-shell-<version>-macos-arm64.tar.gz` |
+| macOS Intel | `navop-shell-<version>-macos-x64.dmg`、`navop-shell-<version>-macos-x64.tar.gz` |
+| Windows x64 | `navop-shell-<version>-windows-x64.msi`、`navop-shell-<version>-windows-x64.exe`、`navop-shell-<version>-windows-x64.zip`、`navop-shell-<version>-windows-x64-portable.zip` |
+| Linux x64 | `navop-shell-<version>-linux-x64.tar.gz`、`navop-shell-<version>-linux-x64-portable.tar.gz` |
+
+### Navop Data（資料工具）
+
+| 平台 | 安裝套件 |
+| --- | --- |
+| macOS Apple Silicon | `navop-data-<version>-macos-arm64.dmg`、`navop-data-<version>-macos-arm64.tar.gz` |
+| macOS Intel | `navop-data-<version>-macos-x64.dmg`、`navop-data-<version>-macos-x64.tar.gz` |
+| Windows x64 | `navop-data-<version>-windows-x64.msi`、`navop-data-<version>-windows-x64.exe`、`navop-data-<version>-windows-x64.zip`、`navop-data-<version>-windows-x64-portable.zip` |
+| Linux x64 | `navop-data-<version>-linux-x64.tar.gz`、`navop-data-<version>-linux-x64-portable.tar.gz` |
+
+### 平台支援差異
+
+| 目標或安裝方式 | Navop | Navop Shell | Navop Data |
 | --- | --- | --- | --- |
-| macOS | Apple Silicon | `navop-<version>-macos-arm64.dmg` 或 `navop-<version>-macos-arm64.tar.gz` | M 系列 Mac |
-| macOS | Intel | `navop-<version>-macos-x64.dmg` 或 `navop-<version>-macos-x64.tar.gz` | Intel Mac |
-| Windows | x86_64 | `navop-<version>-windows-x64.msi` | MSI 安裝包，提供開始功能表、桌面捷徑與穩定的檔案關聯 |
-| Windows | x86_64 | `navop-<version>-windows-x64.exe` | EXE 安裝包，封裝同一套目前使用者 MSI 安裝流程 |
-| Windows | x86_64 | `navop-<version>-windows-x64.zip` | 免安裝執行；資料仍儲存在 Windows 使用者目錄 |
-| Windows | x86_64 | `navop-<version>-windows-x64-portable.zip` | 將程式與資料放在同一個可搬移目錄 |
-| Linux | x86_64 | `navop-<version>-linux-x64.tar.gz`、`navop_<version>_amd64.deb`、`navop-<version>-1.x86_64.rpm`、`navop_<version>_amd64.AppImage` | 依發行版與桌面環境選擇 |
-| Linux | x86_64 | `navop-<version>-linux-x64-portable.tar.gz` | 將程式與資料放在同一個可搬移目錄；詳見下文「Linux 可攜版」 |
-| Linux | ARM64 | `navop-<version>-linux-arm64.tar.gz` | ARM64 裝置 |
-| Linux | ARM64 | `navop-<version>-linux-arm64-portable.tar.gz` | 將程式與資料放在同一個可搬移目錄；詳見下文「Linux 可攜版」 |
-| Linux | x86_64 / ARM64 | `navop-<version>-linux-x64-gpu-stack.tar.gz`、`navop-<version>-linux-arm64-gpu-stack.tar.gz` | 僅在系統缺少可用的 Mesa/EGL 繪圖堆疊時補充安裝，可搭配上述任一 Linux 套件使用 |
+| macOS ARM64 / x64 | 支援 | 支援 | 支援 |
+| Windows x64 | 支援 | 支援 | 支援 |
+| Windows 32 位元（win32） | 支援 | — | — |
+| Linux x64 | 支援 | 支援 | 支援 |
+| Linux ARM64 | 支援 | — | — |
+| `.deb` / `.rpm` / `.AppImage` | 僅 Linux x64 | — | — |
+| GPU 相依套件（`-gpu-stack`） | 僅 Linux x64 | — | — |
+| Scoop | 支援 | — | — |
+| Flatpak | 支援 | — | — |
+| 檔案關聯（`.db`/`.duckdb`/`.md`/`.cast`） | 支援 | — | — |
 
-可使用同一發佈版本中的 `sha256sums.txt` 驗證下載完整性。
+獨立產品沒有 Linux ARM64、Windows 32 位元、deb/rpm/AppImage 與 GPU 相依套件。這些平台請使用完整版 Navop。
 
-## 透過 Scoop 安裝（Windows）
+## 下載與校驗
 
-Navop 已收錄在 Scoop 官方 `extras` bucket。安裝的是便攜版包，`data` 資料目錄持久化由 Scoop 管理：
+優先從以下位址下載：
+
+- 下載中心：[https://navop.dev/zh-TW/extensions](https://navop.dev/zh-TW/extensions)
+- GitHub Releases：[https://github.com/feigeCode/navop/releases](https://github.com/feigeCode/navop/releases)
+- CNB：[https://cnb.cool/navop-dev/navop/-/releases](https://cnb.cool/navop-dev/navop/-/releases)
+- Cloudflare R2 鏡像：`https://navop.pdyyds.cn/releases/<tag>/<file>`
+
+每個正式版本都會附上 `sha256sums.txt`。下載後先校驗再安裝：
+
+```bash
+# Linux
+sha256sum -c sha256sums.txt
+
+# macOS
+shasum -a 256 -c sha256sums.txt
+```
+
+Windows 可用 `certutil -hashfile <檔案> SHA256` 計算雜湊，再與 `sha256sums.txt` 中對應行比對。只校驗你實際下載的檔案，不要把不同版本的校驗檔混用。
+
+## 首次啟動
+
+啟動後先選擇介面語言、主題與預設啟動頁。SSH、SFTP、網路資料庫與遠端桌面都需要存取區域網路或網際網路；系統彈出本機網路、防火牆或鑰匙圈權限時，依實際連線範圍授權。Notes 目錄、外部編輯器與自訂字型需要對應的檔案系統權限。
+
+建議先建立一個不含正式環境憑證的測試連線，確認 DNS、代理、防火牆與憑證鏈正常。需要連線匯入、遠端桌面 Provider、資料庫擴充或 ACP Agent 時，再從擴充商店安裝對應元件。
+
+## macOS
+
+1. 下載對應產品的 `.dmg`（建議）或 `.tar.gz`。
+2. 開啟 `.dmg`，把 `Navop.app`、`Navop Shell.app` 或 `Navop Data.app` 拖進 `/Applications`。
+3. 如果從網路下載後提示「已損毀」或無法開啟，移除隔離屬性：
+
+```bash
+sudo xattr -rd com.apple.quarantine /Applications/Navop.app
+```
+
+安裝的是 Navop Shell 或 Navop Data 時，把指令中的 `/Applications/Navop.app` 換成對應的應用程式套件路徑。
+
+使用 `.tar.gz` 時，解壓後同樣把 `.app` 移到 `/Applications`，再視需要執行上面的指令。三個應用程式的套件名稱不同，可以同時放在 `/Applications`。
+
+首次連線區域網路裝置時，macOS 會要求「本機網路」權限。若之前拒絕過，請在「系統設定 > 隱私權與安全性 > 本機網路」中重新允許對應應用程式。
+
+## Windows
+
+- **安裝版**：執行 `.msi` 或 `.exe`，依精靈完成安裝。`.exe` 內嵌並啟動同一套 MSI 流程，兩者預設都安裝到目前使用者目錄，建立開始功能表與桌面捷徑，使用正常的 Windows 使用者資料目錄，並支援記住主密鑰後自動解鎖；使用預設位置不需要系統管理員權限。
+- **免安裝 ZIP**：解壓 `navop-<version>-windows-x64.zip` 後直接執行目錄中的 `navop.exe`、`navop-shell.exe` 或 `navop-data.exe`。它不會建立捷徑或檔案關聯，但仍使用正常的 Windows 使用者資料目錄。
+- **便攜版 ZIP**：解壓 `...-portable.zip`，資料會寫入解壓目錄下的 `data`，適合放在隨身碟或受控目錄使用。不要在一般 ZIP 旁放置標記檔，除非確實想切換到便攜模式。
+
+如果 SmartScreen 提示不明的發行者，請先確認檔案來自上述官方來源並通過 `sha256sums.txt` 校驗，再決定是否繼續。完整版 Navop 另有 win32 目標，供 32 位元 Windows 使用。
+
+## Linux
+
+### 便攜版 tar.gz
+
+三個產品都提供 Linux x64 的 `tar.gz` 與 `-portable.tar.gz`：
+
+```bash
+tar -xzf navop-<version>-linux-x64.tar.gz
+cd navop-<version>-linux-x64
+./navop
+```
+
+Navop Shell 與 Navop Data 的執行檔分別是 `navop-shell` 與 `navop-data`。`-portable.tar.gz` 解壓後直接以 `<安裝目錄>/data` 作為資料目錄，不會寫入使用者家目錄。
+
+### deb / rpm / AppImage（僅完整版）
+
+```bash
+sudo apt install ./navop_<version>_amd64.deb
+sudo dnf install ./navop-<version>-1.x86_64.rpm
+chmod +x navop_<version>_amd64.AppImage
+./navop_<version>_amd64.AppImage
+```
+
+這三種格式只隨完整版 Navop 的 Linux x64 目標發布，Navop Shell 與 Navop Data 沒有對應套件。
+
+### GPU 相依套件（僅完整版 Linux x64）
+
+如果啟動時出現 `Failed to create surface: Failed to create surface for any enabled backend`，表示系統缺少可用的圖形後端。下載 `navop-<version>-linux-x64-gpu-stack.tar.gz`，解壓後執行安裝腳本：
+
+```bash
+mkdir navop-gpu-stack
+tar -xzf navop-<version>-linux-x64-gpu-stack.tar.gz -C navop-gpu-stack
+sudo navop-gpu-stack/install.sh --dry-run   # 先查看將安裝的相依套件
+sudo navop-gpu-stack/install.sh
+```
+
+安裝腳本是增量式的：系統已能解析的 SONAME 會跳過，主機自帶的版本優先；系統已有可用的 EGL 與 DRI 驅動時，整個 Mesa 渲染器也會跳過。`install.sh` 支援 `--dry-run`、`--force` 與 `--uninstall`，安裝紀錄保存在 `/usr/lib/navop-gpu-stack/installed.tsv`；解除安裝只會刪除腳本實際寫入的檔案。此套件以 glibc 2.28 為基準，只用於完整版 Navop 的 Linux x64 版本。
+
+## Scoop（僅完整版）
+
+Scoop 只發佈完整版 Navop，安裝的是便攜形態，`data` 由 Scoop 管理：
 
 ```powershell
 scoop bucket add extras
 scoop install navop
 ```
 
-後續透過 `scoop update navop` 升級。Scoop 安裝與 MSI/EXE 安裝版使用不同的資料目錄；在兩者之間切換時，請參考下文便攜模式說明搬移 `data` 目錄。
+後續用 `scoop update navop` 升級。Scoop 安裝與 MSI/EXE 安裝版使用不同的資料目錄，切換安裝方式時請依便攜版說明搬移 `data`。Navop Shell 與 Navop Data 需要透過安裝版、ZIP 或便攜版安裝。
 
-## Windows 安裝版
+## Flatpak（僅完整版）
 
-一般安裝可以選擇 `navop-<version>-windows-x64.msi` 或 `navop-<version>-windows-x64.exe`；32 位元 Windows 請下載名稱中明確包含 `win32` 的安裝包，例如 `navop-<version>-win32.exe`。EXE 安裝包內嵌並啟動同一套 MSI 安裝流程，因此兩者預設都安裝到目前使用者目錄，建立開始功能表與桌面捷徑，註冊支援的檔案關聯，使用標準 Windows 使用者資料目錄，並支援記住主密鑰後自動解鎖。使用預設的目前使用者安裝位置時不需要管理員權限。
-
-## Windows 免安裝 ZIP
-
-一般 `navop-<version>-windows-x64.zip`（32 位元版本為 `navop-<version>-win32.zip`）只包含普通的 `navop.exe`，使用前必須完整解壓縮。它不會安裝捷徑或檔案關聯，但仍使用標準 Windows 使用者資料目錄，並支援記住主密鑰後自動解鎖。除非要主動啟用下述便攜模式，否則不要在執行檔旁放置 `navop.portable`。
-
-### 從 v0.10.1 或更早版本的 Windows ZIP 升級
-
-> [!IMPORTANT]
-> v0.10.1 及更早版本的一般 Windows ZIP 實際上已包含 `navop.portable`，因此這些使用者目前執行的是便攜模式。升級時請下載新的 `navop-<version>-windows-x64-portable.zip`（32 位元版本名稱包含 `win32`），備份並完整保留舊目錄中的 `data`，同時確認 `navop.portable` 仍與 `navop.exe` 位於同一層。
-
-不要為了切換版本而直接刪除舊目錄中的 `navop.portable`。刪除標記只會讓 Navop 改用標準 Windows 使用者資料目錄，不會自動複製或搬移原有的便攜資料。
-
-如果將新的一般 `navop-<version>-windows-x64.zip` 或 `navop-<version>-win32.zip` 解壓縮到全新目錄，或改用 MSI/EXE 安裝版，Navop 將使用標準 Windows 使用者資料目錄。此時原有連線、設定與擴充可能看似消失，但舊便攜目錄中的資料並未被刪除；安裝程式也不會自動搬移該目錄。需要改用安裝版時，請先保留完整的舊便攜目錄與主密鑰，確認搬移後的資料可用，再清理舊目錄。
-
-## Windows 便攜版
-
-### 解壓縮與首次啟動
-
-官方 Windows `-portable.zip` 是獨立的便攜版，壓縮包內含：
-
-```text
-navop.exe
-navop.portable
-```
-
-`navop.portable` 是啟用便攜模式的標記檔案，必須與 `navop.exe` 保持在同一目錄。不要直接在 ZIP 壓縮包內執行，也不建議刪除或重新命名此檔案。請先將壓縮包完整解壓縮到目前使用者可寫入的一般目錄，例如：
-
-```text
-D:\Apps\NavopPortable\
-├── navop.exe
-└── navop.portable
-```
-
-接著連按兩下 `navop.exe`，或在 PowerShell 中執行：
-
-```powershell
-.\navop.exe
-```
-
-首次啟動後，Navop 會在執行檔旁自動建立 `data` 目錄：
-
-```text
-D:\Apps\NavopPortable\
-├── navop.exe
-├── navop.portable
-└── data\
-    ├── config\
-    ├── state\
-    └── cache\
-```
-
-便攜目錄必須可寫入。不要放在 `Program Files`、唯讀目錄或唯讀移動媒體中；使用 USB 隨身碟或外接磁碟時，也應確認媒體連線穩定且允許寫入。目錄無法寫入時，Navop 會拒絕啟動。
-
-### 資料目錄與主密鑰
-
-便攜版將設定、應用程式狀態和快取分別儲存在 `data/config`、`data/state` 和 `data/cache`，方便連同程式一起搬移或備份。**預設情況下，便攜模式不會持久化主密鑰，每次啟動都必須重新輸入。**使用者可以在設定中明確選擇將可自動復原的加密副本儲存到 `data/state/key_storage`。
-
-此選項有顯著安全風險：檔案加密使用程式內置密鑰，而非裝置綁定保護。任何同時取得應用程式和完整 `data` 目錄的人都可能復原主密鑰。僅在理解並接受此風險時啟用。忘記的主密鑰仍無法僅靠重新下載或重裝 Navop 復原；只有先前已啟用此選項，並保留相符的完整應用程式和 `data` 副本時，才可能自動復原。
-
-請獨立保管主密鑰，不要以明文形式放入便攜目錄或同一個 USB 隨身碟。`data` 中可能包含連線設定、狀態、擴充和快取，不要公開分享、提交到 Git，或放在不可信任的雲端同步目錄中。
-
-### 更新便攜版
-
-便攜模式不支援在應用程式內安裝更新，也不會執行自動更新檢查。仍可手動檢查以得知新版本，但確認更新時會開啟 GitHub Releases，需要自行下載新的 Windows `-portable.zip`。
-
-不要將新版本直接覆蓋到仍在使用的舊目錄。建議依下列步驟升級：
-
-1. 儲存 SQL、Notes 和遠端檔案，提交或回復手動交易，並等待 SFTP、遠端編輯等工作完成。
-2. 完全結束 Navop。
-3. 備份舊便攜目錄，至少備份完整的 `data` 目錄。
-4. 下載符合目前架構的新 Windows `-portable.zip`，解壓縮到新的空目錄。
-5. 將舊版本的整個 `data` 目錄複製到新目錄，與新版 `navop.exe` 位於同一層。
-6. 確認新目錄中仍有與 `navop.exe` 同一層的 `navop.portable`。
-7. 啟動新版本並輸入原主密鑰，檢查版本、連線、擴充、Notes、主題與快捷鍵。
-8. 驗證完成後再刪除舊目錄；如需回退，可暫時保留舊目錄副本。
-
-例如：
-
-```text
-D:\Apps\
-├── NavopPortable-old\
-│   ├── navop.exe
-│   ├── navop.portable
-│   └── data\
-└── NavopPortable-new\
-    ├── navop.exe
-    ├── navop.portable
-    └── data\   ← 從舊版本複製
-```
-
-### 搬移、檔案關聯與安全
-
-搬移便攜版前應完全結束 Navop，並確認交易、傳輸和遠端編輯工作已完成。通常可以搬移整個便攜目錄，但不要讓兩個 Navop 執行個體或兩台裝置同時寫入同一份 `data`。
-
-便攜模式不會自動註冊 `.db`、`.duckdb` 和 `.md` 的 Windows 系統檔案關聯。仍可從 Navop 內開啟檔案，或使用 Windows「開啟方式」手動選擇 `navop.exe`；若搬移便攜目錄，手動建立的「開啟方式」路徑可能失效。需要穩定檔案關聯、開始功能表/桌面捷徑、應用程式內更新或由作業系統持久化主密鑰時，應選擇 `.msi` 或 EXE 安裝版。
-
-移動媒體遺失可能暴露加密資料和相關中繼資料。搬到新裝置後仍需輸入正確主密鑰；驗證新副本可正常使用之前，不要刪除原目錄或備份。
-
-### 進階啟動方式
-
-官方 Windows `-portable.zip` 已包含 `navop.portable`，一般使用不需要額外參數。測試或自訂部署時，也可以透過下列方式啟用便攜模式或指定資料目錄：
-
-```powershell
-# 暫時啟用便攜模式，預設使用 navop.exe 旁的 data 目錄
-.\navop.exe --portable
-
-# 指定資料目錄；此參數本身也會啟用便攜路徑模式
-.\navop.exe --data-dir "E:\NavopData"
-
-# 透過環境變數啟用便攜模式
-$env:NAVOP_PORTABLE = "1"
-.\navop.exe
-
-# 透過環境變數指定資料目錄
-$env:NAVOP_DATA_DIR = "E:\NavopData"
-.\navop.exe
-```
-
-`NAVOP_PORTABLE` 支援 `1`、`true`、`yes` 或 `on`。資料目錄的選擇優先順序為 `--data-dir`、`--portable`、`NAVOP_DATA_DIR`、`NAVOP_PORTABLE`/`navop.portable`，最後才是一般安裝模式。指定的資料目錄必須可寫入；建議使用絕對路徑，因為相對路徑會按照啟動 Navop 時的目前工作目錄解析。
-
-## Linux 可攜版
-
-`navop-<version>-linux-x64-portable.tar.gz`（ARM64 為 `navop-<version>-linux-arm64-portable.tar.gz`）與同架構的一般套件**共用同一個執行檔**，差別只在壓縮檔內多了一個 `navop.portable` 標記檔。Navop 啟動時若發現執行檔同層存在這個檔案，就會把資料目錄從系統使用者目錄改到程式旁的 `data` 目錄，因而能免安裝、整包搬移地執行：
+Flatpak 也只涵蓋完整版 Navop：
 
 ```bash
-mkdir navop-portable
-tar -xzf navop-<version>-linux-x64-portable.tar.gz -C navop-portable
-cd navop-portable
-./navop
+flatpak --user remote-add --if-not-exists flatpark https://dl.flatpark.org/flatpark.flatpakrepo
+flatpak --user install flatpark dev.navop.Navop
+flatpak run dev.navop.Navop
 ```
 
+套件名為 `dev.navop.Navop`，應用程式頁面見 [https://flatpark.org/apps/dev.navop.Navop/](https://flatpark.org/apps/dev.navop.Navop/)。Flatpak 執行於沙盒中，SSH、資料庫、SFTP 或遠端桌面等整合可能需要額外授權。Navop Shell 與 Navop Data 沒有 Flatpak 套件。
+
+## 便攜版
+
+三個產品都支援便攜執行，但使用各自的標記檔：
+
+| 產品 | 標記檔 | 執行檔 |
+| --- | --- | --- |
+| Navop | `navop.portable` | `navop` / `navop.exe` |
+| Navop Shell | `navop-shell.portable` | `navop-shell` / `navop-shell.exe` |
+| Navop Data | `navop-data.portable` | `navop-data` / `navop-data.exe` |
+
+在執行檔同目錄放置對應標記檔（內容可以為空），應用程式就會把設定、狀態與快取寫入 `<安裝目錄>/data`。也可以不改檔案，直接使用環境變數或命令列：
+
+```bash
+NAVOP_PORTABLE=1 ./navop
+NAVOP_DATA_DIR=/path/to/data ./navop
+./navop --portable
+./navop --data-dir /path/to/data
+```
+
+`NAVOP_PORTABLE` 接受 `1`、`true`、`yes`、`on`。資料目錄優先順序為：`--data-dir` > `--portable` > `NAVOP_DATA_DIR` > `NAVOP_PORTABLE` 或標記檔 > 一般使用者目錄。`NAVOP_*` 變數對三個產品通用，但標記檔名稱必須與產品相符。
+
+首次啟動後，便攜目錄結構如下：
+
 ```text
-navop-portable/
-├── navop
-├── navop.portable
-└── data/          ← 首次啟動時自動建立
+<安裝目錄>/
+├── navop            # 或 navop-shell / navop-data
+├── navop.portable   # 或 navop-shell.portable / navop-data.portable
+└── data/
     ├── config/
     ├── state/
     └── cache/
 ```
 
-請注意：
+便攜目錄必須可寫；放在唯讀位置會導致啟動失敗。便攜模式預設不持久化主密鑰，每次啟動都需要重新輸入；可以在設定中明確選擇把加密副本保存到 `data/state/key_storage`，但這會降低保護強度。
 
-- **可攜版不含圖形相依套件。** 與一般套件相同，繪圖堆疊仍由主機提供；缺少時依下文「Linux 圖形相依套件」補充安裝即可，兩者可搭配使用。
-- 可攜模式不會註冊 `.db`、`.duckdb`、`.md` 的系統檔案關聯，也不支援應用程式內安裝更新或自動檢查更新；需要這些能力請改用 `.deb`、`.rpm` 或 AppImage。
-- 可攜目錄必須可寫入，放在唯讀位置會導致啟動直接失敗。
-- 可攜模式預設不記住主金鑰，每次啟動都需輸入；可在設定中開啟記住，金鑰同樣只保存在可攜目錄內。
-- 搬移或備份時整包移動目錄即可，但要先完全結束 Navop，也不要讓兩個實例同時寫入同一份 `data`。
+便攜版不註冊檔案關聯，也不支援應用程式內更新與自動更新檢查。升級時先完全結束應用程式，把新版本解壓到新目錄，再把舊目錄的 `data` 整個複製過去，確認連線、擴充與 Notes 正常後再刪除舊目錄。搬移前應備份 `data`，並確保沒有兩個執行個體同時寫入同一份資料。
 
-### 更新可攜版
+## 資料目錄、鑰匙圈與並排安裝
 
-可攜版沒有應用程式內更新。升級時把新版本的 `-portable.tar.gz` 解壓縮到新目錄，再把舊目錄的 `data` 整份複製過去：
+三個產品的目錄名稱與系統身分彼此獨立：
+
+| 產品 | 目錄名稱 | 鑰匙圈服務 | bundle id |
+| --- | --- | --- | --- |
+| Navop | `navop` | `com.navop.desktop` | `com.onetcli.app` |
+| Navop Shell | `navop-shell` | `com.navop.desktop.shell` | `com.navop.shell` |
+| Navop Data | `navop-data` | `com.navop.desktop.data` | `com.navop.data` |
+
+目錄位置依平台區分：
+
+| 內容 | macOS | Linux | Windows |
+| --- | --- | --- | --- |
+| 設定 | `~/.config/<目錄名>` | `~/.config/<目錄名>` | `%APPDATA%\<目錄名>` |
+| 資料 | `~/Library/Application Support/<目錄名>` | `~/.local/share/<目錄名>` | `%APPDATA%\<目錄名>` |
+| 快取 | `~/Library/Caches/<目錄名>` | `~/.cache/<目錄名>` | `%APPDATA%\<目錄名>` |
+
+例如 Navop Shell 的 Linux 資料目錄是 `~/.local/share/navop-shell`，Navop Data 的 Windows 設定目錄是 `%APPDATA%\navop-data`。目錄名稱不同，三個應用程式不會讀寫同一份連線與設定，可以並排安裝、同時執行。
+
+憑證保存在系統鑰匙圈或認證儲存中，服務名稱使用上表的值。解除安裝應用程式通常不會自動刪除鑰匙圈項目與資料目錄，需要依下方步驟另行清理。
+
+## 檔案關聯與命令列開啟
+
+只有完整版 Navop 註冊 `.db`、`.duckdb`、`.md` 與 `.cast` 檔案關聯。雙擊這些檔案會交給 Navop 開啟；Navop Shell 與 Navop Data 不註冊關聯，也不會搶占既有的預設開啟方式。便攜模式同樣不註冊系統關聯，需要穩定關聯時請使用安裝版。
+
+命令列可以直接傳入檔案：
 
 ```bash
-mkdir navop-portable-new
-tar -xzf navop-<version>-linux-x64-portable.tar.gz -C navop-portable-new
-cp -a navop-portable/data navop-portable-new/data
+navop ./data.db
+navop ./notes.md
 ```
 
-確認新目錄能正常啟動、連線與擴充都在之後，再刪除舊目錄。
+Windows 使用 `navop.exe`。如果系統仍把關聯指向舊版本，請先用安裝套件重新安裝完整版 Navop，或在系統「預設應用程式」中重新選擇。
 
-### 進階啟動方式
+## 應用程式內更新與回復
 
-官方 `-portable.tar.gz` 已包含 `navop.portable`，一般使用不需額外參數。除錯或自訂部署時，也可以用下列方式啟用可攜模式或指定資料目錄：
+三個產品各自檢查自己的更新清單：
 
-```bash
-# 臨時啟用可攜模式，預設使用 navop 旁的 data 目錄
-./navop --portable
+| 產品 | 更新清單 |
+| --- | --- |
+| Navop | `https://navop.pdyyds.cn/updates/latest.json` |
+| Navop Shell | `https://navop.pdyyds.cn/updates/navop-shell/shell/latest.json` |
+| Navop Data | `https://navop.pdyyds.cn/updates/navop-data/data/latest.json` |
 
-# 指定資料目錄；此參數本身也會啟用可攜路徑模式
-./navop --data-dir /data/navop
+應用程式內更新只替換目前產品，不會把 Navop Shell 升級成完整版 Navop，也不會影響並排安裝的其他產品。需要換用另一個產品時，請下載對應安裝套件另行安裝。
 
-# 透過環境變數啟用可攜模式
-NAVOP_PORTABLE=1 ./navop
+便攜版（包括 Windows `-portable.zip`、Linux `-portable.tar.gz` 與 Scoop 安裝）沒有應用程式內更新，也不會自動檢查更新，需要依「便攜版」一節的步驟手動升級。安裝版、一般 ZIP 與其他非便攜安裝形態可以在設定中開啟自動檢查或手動檢查更新。
 
-# 透過環境變數指定資料目錄
-NAVOP_DATA_DIR=/data/navop ./navop
-```
+回復到舊版時，下載舊版安裝套件覆蓋安裝即可，連線與設定通常保留在資料目錄中。但如果新版本升級過本機資料結構，舊版可能無法讀取；回復前先備份對應產品的資料目錄。
 
-`NAVOP_PORTABLE` 支援 `1`、`true`、`yes` 或 `on`。資料目錄的選擇優先序為 `--data-dir`、`--portable`、`NAVOP_DATA_DIR`、`NAVOP_PORTABLE`/`navop.portable`，最後才是一般安裝模式。指定的資料目錄必須可寫入；相對路徑會依啟動 Navop 時的目前工作目錄解析。
+## 解除安裝與保留資料
 
-## Linux 圖形相依套件
+解除安裝應用程式不會自動刪除連線、設定與歷史紀錄。需要徹底清理時，先結束應用程式，再依產品刪除對應目錄。
 
-Linux 版的 `navop-<version>-linux-x64.tar.gz`、`.deb`、`.rpm` 與 `.AppImage` 都只包含 Navop 本身。桌面環境通常已提供 Navop 需要的繪圖堆疊，不需要任何額外步驟。但精簡容器、最小化伺服器安裝、WSL 以及部分裁剪過的發行版可能缺少 Mesa 軟體渲染器或 EGL 客戶端函式庫，表現為啟動即結束，日誌中出現：
+### macOS
+
+把 `Navop.app`、`Navop Shell.app` 或 `Navop Data.app` 移到垃圾桶。然後視需要刪除：
 
 ```text
-Failed to create surface: Failed to create surface for any enabled backend: {}
+~/Library/Application Support/<目錄名>
+~/Library/Caches/<目錄名>
+~/.config/<目錄名>
 ```
 
-這種情況下再下載同一發佈頁面上的**圖形相依套件**（`navop-<version>-linux-x64-gpu-stack.tar.gz` 或 `navop-<version>-linux-arm64-gpu-stack.tar.gz`），解壓縮後執行隨附的安裝腳本：
+### Windows
+
+在「設定 > 應用程式」中解除安裝對應產品。安裝版會移除程式檔案，但保留 `%APPDATA%\<目錄名>`；便攜版直接刪除整個解壓目錄即可。需要徹底清理時再刪除 `%APPDATA%\<目錄名>`。
+
+### Linux
+
+便攜版刪除解壓目錄；deb/rpm 安裝版用套件管理器移除：
 
 ```bash
-mkdir navop-gpu-stack
-tar -xzf navop-<version>-linux-x64-gpu-stack.tar.gz -C navop-gpu-stack
-sudo navop-gpu-stack/install.sh
+sudo apt remove navop
+sudo dnf remove navop
 ```
 
-安裝腳本是**增量式**的，只補齊系統目前解析不到的函式庫，因此可以搭配任何一種 Linux 安裝形態，也不需要設定任何環境變數：
+AppImage 直接刪除檔案。之後視需要刪除 `~/.local/share/<目錄名>`、`~/.config/<目錄名>` 與 `~/.cache/<目錄名>`。
 
-- 系統已能解析某個 SONAME 時，該檔案會被跳過，主機自帶的版本一律優先；系統已具備可用的 EGL 與 DRI 驅動時，整個 Mesa 渲染器都會被跳過。
-- `./install.sh --dry-run` 可先印出即將安裝哪些檔案，`./install.sh --force` 會覆寫已存在的同名檔案。
-- 相依檔案會放到動態載入器預設搜尋的目錄（`/usr/lib64` 等），Debian 系發行版會額外寫入 `/etc/ld.so.conf.d/navop-gpu-stack.conf` 並重新整理快取。
-- `sudo ./install.sh --uninstall` 只刪除該腳本實際寫入的檔案（記錄於 `/usr/lib/navop-gpu-stack/installed.tsv`），不會碰觸主機原有的函式庫；若某個檔案在安裝後被修改過，卸載時會保留並提示。卸載需要這個解壓縮目錄，想保留回復能力時就先不要刪除它。
-- 套件內所有 `.so` 都依 glibc 2.28 基線建置，與 Linux 版 Navop 執行檔一致。
+如果只想重設某個產品而不影響另外兩個，只刪除該產品目錄即可。不要把 `navop`、`navop-shell`、`navop-data` 的目錄合併或互相複製。
 
-相依套件依 CPU 架構區分，必須下載與 Navop 套件相同的架構；架構不符時安裝腳本會直接報錯結束。安裝完成後重新啟動 Navop 即可。
+## 安裝後驗證清單
 
-## Linux Flatpak
-
-Navop 也在 [FlatPark](https://flatpark.org/apps/dev.navop.Navop/) 上架為開發者認可的社群 Flatpak 軟體包。新增 FlatPark 軟體源並為目前使用者安裝：
-
-```bash
-flatpak --user remote-add --if-not-exists flatpark https://dl.flatpark.org/flatpark.flatpakrepo
-flatpak --user install flatpark dev.navop.Navop
-```
-
-Flatpak 軟體包在沙盒中執行，部分整合功能可能需要額外權限。詳細說明與疑難排解請參閱 [FlatPark 軟體包頁面](https://flatpark.org/apps/dev.navop.Navop/)。
-
-## 首次啟動與權限
-
-選擇語言、主題和啟動頁。資料庫、SSH、SFTP 與遠端桌面需要網路權限；本機網路、防火牆、鑰匙圈或檔案權限只按實際需求授予。Notes 目錄、外部編輯器和自訂字型需要各自的檔案存取權。
-
-先建立不含正式憑證的測試連線。只有需要資料庫驅動、遠端桌面 Provider、匯入器或 ACP Agent 時才安裝相應擴充。
-
-## 應用程式內更新與回退
-
-MSI、EXE 安裝版與一般 ZIP 版可在設定開啟自動檢查，或手動檢查更新。更新前關閉活動連線，提交或回復手動交易並完成 SFTP 傳輸；重新啟動後測試重要連線、擴充與快捷鍵。Windows `-portable.zip` 與 Linux `-portable.tar.gz` 可攜版沒有應用程式內更新，請依照上方各自的獨立更新流程手動升級。
-
-若新版本與關鍵擴充不相容，先備份 Navop 資料目錄，再從 Releases 安裝上一個穩定版。降版不能取代備份，因本機設定格式可能已變更。
-
-## 系統檔案關聯
-
-Navop 支援透過系統開啟 `.db`、`.duckdb` 和 `.md`。資料庫檔案會建立或開啟本機 SQLite/DuckDB 連線，Markdown 會進入 Notes。若未自動關聯，可在「開啟方式」選擇 Navop 並設為預設。
-
-不要直接開啟仍被其他程式寫入的正式資料庫檔案，應先複製副本。外部 Markdown 的圖片與連結仍相對於原目錄，移動後需檢查資源路徑。
-
-## 解除安裝與資料保留
-
-移除應用程式本體通常不會自動刪除設定、加密連線、Notes 或擴充快取。重裝時保留資料目錄；徹底移除前先匯出必要資料、停止同步並完成團隊交接。
-
-僅靠重裝無法復原忘記的主密鑰。若已啟用便攜主密鑰持久化，自動復原還需要相符的應用程式和完整 `data` 目錄，其中包括 `data/state/key_storage`。刪除本機資料前，確認主密鑰與團隊密鑰的安全備份狀態。
+- [ ] 應用程式名稱與圖示正確：Navop、Navop Shell 或 Navop Data，而不是另一個產品。
+- [ ] 「關於」頁顯示的版本為 v0.23.0。
+- [ ] 資料目錄建立在對應產品的目錄名稱下，沒有寫入另外兩個產品的目錄。
+- [ ] 檔案關聯只出現在完整版 Navop（`.db`/`.duckdb`/`.md`/`.cast`）。
+- [ ] Public MCP 的探索名稱與產品一致：`navop`、`navop-shell` 或 `navop-data`。
+- [ ] 並排安裝時，三個應用程式可以同時啟動，連線清單互不混入。
+- [ ] 更新檢查讀取的是目前產品自己的清單。

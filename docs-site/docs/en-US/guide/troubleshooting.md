@@ -2,6 +2,9 @@
 
 Change one variable at a time and classify the failure as network, authentication, authorization, driver, extension, client state, or remote service. Record platform, Navop version, connection type, time, and a minimal reproduction. Do not hide configuration errors by switching immediately to an administrator account.
 
+> [!NOTE]
+> First confirm which app is affected. All three share the same directory conventions, but their connection types and update manifests differ.
+
 ## Diagnose databases, Redis, and MongoDB
 
 For SQL databases, check DNS, host, port, firewall, account, default database/schema, TLS, proxy, SSH tunnel, driver, and server version. Reduce SQL failures to one statement and resolve commit or rollback state. Check permissions and schema filters for missing objects.
@@ -26,7 +29,7 @@ A Linux launch failing with "Failed to create surface" means the host lacks the 
 
 For models, check Provider state, API key, base URL, model, network, and quota. Missing tools can come from mode, resources, or permissions. ACP authorization does not remove Public MCP approval.
 
-For Public MCP, check running Navop, server mode, Node.js 20+, `npx`, client configuration, discovery permissions, Tool Exposure, and live schema. Reconnect after endpoint restart and never guess resource IDs.
+For Public MCP, check that the current app is running, server mode, Node.js 20+, `npx`, client configuration, discovery permissions, Tool Exposure, and live schema. Reconnect after endpoint restart and never guess resource IDs.
 
 ## Diagnose sync and update
 

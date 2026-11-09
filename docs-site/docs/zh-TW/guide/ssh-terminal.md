@@ -1,6 +1,9 @@
 # SSH 與終端工作區
 
-Navop 將遠端 SSH 和本機 Terminal 放在統一工作區，支援標籤、分割、廣播輸入、歷史、快捷命令、自訂醒目提示和 Shell integration。命令會直接作用於本機或伺服器，必須持續確認主機與身分。
+Navop 與 Navop Shell 將遠端 SSH 和本機 Terminal 放在統一工作區，支援標籤、分割、廣播輸入、歷史、快捷命令、自訂醒目提示和 Shell integration。命令會直接作用於本機或伺服器，必須持續確認主機與身分。
+
+> [!NOTE]
+> 本頁功能在 **Navop** 與 **Navop Shell** 中可用；**Navop Data** 不含終端機工作區。
 
 ## 建立 SSH 與本機終端
 
@@ -49,7 +52,7 @@ SSH 連線可啟用 X11 轉送，將遠端 X11 圖形應用程式顯示到本機
 
 Navop 會自動偵測本機 X server：Windows 偵測 `127.0.0.1:6000`，macOS 透過 DISPLAY、launchctl 與 Xauthority 識別。若 macOS 未偵測到 XQuartz，勾選或測試連線會提示先安裝並啟動 XQuartz；找不到可用 X11 環境時，Navop 會停用轉送，但不會阻斷一般 SSH 終端。
 
-v0.9.3 改善了 Intel Mac 對舊版 XQuartz 環境、socket 和驗證資訊的偵測。若啟用後仍無法顯示，先確認 XQuartz 正在執行，重新建立 SSH 連線，再檢查遠端 `sshd` 設定和目前帳號權限。
+較新版本改善了 Intel Mac 對舊版 XQuartz 環境、socket 和驗證資訊的偵測。若啟用後仍無法顯示，先確認 XQuartz 正在執行，重新建立 SSH 連線，再檢查遠端 `sshd` 設定和目前帳號權限。
 
 ## 標籤與分割
 

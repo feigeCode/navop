@@ -1,6 +1,9 @@
 # SSH and terminal workspaces
 
-Navop combines remote SSH and local Terminal sessions with tabs, splits, broadcast input, history, quick commands, highlighting, and shell integration. Every command acts on the current local machine or remote server, so keep the host and identity visible.
+Navop and Navop Shell combine remote SSH and local Terminal sessions with tabs, splits, broadcast input, history, quick commands, highlighting, and shell integration. Every command acts on the current local machine or remote server, so keep the host and identity visible.
+
+> [!NOTE]
+> This feature is available in **Navop** and **Navop Shell**. **Navop Data** has no terminal workspace.
 
 ## Create SSH and local profiles
 
@@ -49,7 +52,7 @@ An SSH connection can enable X11 forwarding so remote X11 applications render th
 
 Navop auto-detects the local X server: it probes `127.0.0.1:6000` on Windows, and on macOS it resolves DISPLAY, launchctl, and Xauthority in turn. If XQuartz is not detected on macOS, checking the box or testing the connection prompts you to install and start XQuartz; when no usable X11 environment is available, Navop disables forwarding without blocking the regular SSH terminal.
 
-v0.9.3 improves detection of older XQuartz environments, sockets, and authentication data on Intel Macs. If forwarding still fails, verify that XQuartz is running, reconnect the SSH session, and then check the remote `sshd` configuration and account permissions.
+Recent versions improve detection of older XQuartz environments, sockets, and authentication data on Intel Macs. If forwarding still fails, verify that XQuartz is running, reconnect the SSH session, and then check the remote `sshd` configuration and account permissions.
 
 ## Arrange tabs and splits
 

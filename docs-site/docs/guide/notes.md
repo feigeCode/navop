@@ -4,6 +4,9 @@ Notes 用于打开和编辑本地 Markdown 文件，提供**只读预览**与**�
 
 ![Markdown 源码编辑器](/images/markdown.png)
 
+> [!NOTE]
+> Notes 在三个应用中均可用，编辑的是本地 Markdown 文件。
+
 ## 打开 Markdown
 
 进入 Notes 后选择有读写权限的本地目录，即可浏览其中的 Markdown 文件。也可以通过操作系统文件关联直接使用 Navop 打开 `.md` 文件。

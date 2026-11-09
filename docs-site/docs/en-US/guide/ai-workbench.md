@@ -2,6 +2,9 @@
 
 The AI workbench places model conversations beside live databases, terminals, files, and Notes. Model output can be wrong, while tool calls can perform real operations. Select Ask, Plan, or Auto according to risk and keep human verification in the loop.
 
+> [!NOTE]
+> The AI workbench is available in all three apps; the tools it can use depend on the resources the current product exposes.
+
 ## Configure an LLM provider
 
 Add a Provider in Settings with its name, API key, base URL, API version, and other required values. Load available models or define a custom model, enable or disable providers, edit them, and choose a default. Validate compatibility and data policy for enterprise proxies or OpenAI-compatible endpoints.

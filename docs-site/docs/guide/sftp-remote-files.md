@@ -6,6 +6,9 @@ SFTP 文件管理器支持目录导航、收藏、上传下载、权限、解压
 ![SFTP 侧边栏](/images/sftp_sidebar.png)
 ![远程文件编辑器](/images/remote_file_editor.png)
 
+> [!NOTE]
+> 本页功能在 **Navop** 与 **Navop Shell** 中可用；**Navop Data** 不含 SFTP 与远程文件编辑。
+
 ## 浏览目录与终端协同
 
 进入 SSH/SFTP 连接后浏览目录，按需显示隐藏文件，并把常用路径加入收藏。SFTP 左侧远端面板会遵循连接配置的初始目录，打开时直接定位到该路径。可在当前目录打开终端；启用 Shell integration 后，终端当前路径也可同步到文件管理器。路径权限由远端账号决定，Navop 不绕过服务器访问控制。

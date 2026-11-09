@@ -2,6 +2,9 @@
 
 Table data views provide paging, filtering, copying, and row editing. Committing additions, edits, or deletions changes the real database. Confirm keys, filters, and environment before submitting.
 
+> [!NOTE]
+> This feature is available in **Navop** and **Navop Data**. **Navop Shell** has no data workspace.
+
 ## Browse and filter
 
 Open Data from a table or view and use paging to control load. Search on the current page filters only rows already loaded; use SQL for server-wide filtering or aggregation. Refresh to read the latest server state.

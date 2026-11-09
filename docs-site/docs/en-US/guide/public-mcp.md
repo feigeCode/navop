@@ -1,12 +1,15 @@
 # Public MCP and external automation
 
-Public MCP lets Codex, Claude Desktop, Claude Code, and compatible clients call the currently running Navop. It is not a fixed cloud API: discovery uses a dynamic loopback port and a user-only token, while live tools and schemas come from the local application.
+Public MCP lets Codex, Claude Desktop, Claude Code, and compatible clients call the currently running Navop, Navop Shell, or Navop Data. It is not a fixed cloud API: discovery uses a dynamic loopback port and a user-only token, while live tools and schemas come from the local application.
+
+> [!NOTE]
+> Public MCP is discovered and authorized per product: `navop`, `navop-shell`, and `navop-data` each expose only the tools available in that app. Confirm which product your client is pointing at.
 
 ## Choose a server mode
 
 Temporary mode is appropriate for short-lived use; clients should not expect it to remain available after the task or app ends. Persistent mode supports clients that need continuing local discovery. Both should remain loopback-only and use the protected per-user discovery information.
 
-Do not expose discovery files, tokens, or ports to the public network. Changing mode, restarting Navop, or changing Tool Exposure may restart the endpoint, requiring MCP and ACP clients to reconnect.
+Do not expose discovery files, tokens, or ports to the public network. Changing mode, restarting the current app, or changing Tool Exposure may restart the endpoint, requiring MCP and ACP clients to reconnect.
 
 ## Set permissions and Tool Exposure
 
@@ -16,7 +19,7 @@ Tool Exposure independently controls Terminal, SSH Exec, visible terminal, Conne
 
 ## Install client prerequisites
 
-The bridge requires Node.js 20+ and working `npx`. Verify the version, then copy the generated configuration for Codex, Claude Desktop, Claude Code, or a generic MCP JSON client from Navop Settings. Follow each client's path and restart instructions.
+The bridge requires Node.js 20+ and working `npx`. Verify the version, then copy the generated configuration for Codex, Claude Desktop, Claude Code, or a generic MCP JSON client from the current app's Settings. Follow each client's path and restart instructions.
 
 Navop can also install or update its Skill for Codex and Agents. Install `@navop/cli` globally before using the Skill; an AI Agent then uses `navop ... --json` to discover and operate databases, SSH sessions, terminals, files, connections, and workspaces owned by Navop. The Skill does not place a static copy of every tool in the prompt; it teaches the Agent to inspect status, commands, and live schemas only when needed.
 
@@ -33,7 +36,7 @@ navop tool schema <tool-name> --json
 navop tool call <tool-name> --arguments '<json-object>' --json
 ```
 
-Representative read-only operations are shown below. Replace placeholders with connection or session ids returned by the running Navop app, and inspect `--help` or the live schema before execution:
+Representative read-only operations are shown below. Replace placeholders with connection or session ids returned by the running app, and inspect `--help` or the live schema before execution:
 
 ```bash
 navop connections list --json
@@ -48,7 +51,7 @@ navop terminal read --target <terminal-session-id> --lines 80 --json
 
 This is useful for terminal-capable Agents such as Codex: they can discover current Navop resources and operations on demand without pre-registering the complete Navop catalog in every model turn. It can reduce repeated context and token overhead, although the exact savings depend on how the client injects MCP tool definitions and how many groups are enabled.
 
-The Skill does not completely remove MCP from the transport. The `navop` CLI still connects internally to Navop's authenticated loopback Public MCP endpoint, and Navop remains responsible for Tool Exposure, resource ids, permissions, approvals, sessions, results, and auditing. The Skill changes the Agent-side interaction from “carry every tool each turn” to “discover and call through terminal commands on demand.”
+The Skill does not completely remove MCP from the transport. The `navop` CLI still connects internally to the app's authenticated loopback Public MCP endpoint, and the app remains responsible for Tool Exposure, resource ids, permissions, approvals, sessions, results, and auditing. The Skill changes the Agent-side interaction from “carry every tool each turn” to “discover and call through terminal commands on demand.”
 
 ## Use @navop/cli
 
@@ -69,4 +72,4 @@ Run `npm install -g @navop/cli@latest` before using the Skill, and `npm update -
 
 The approval window shows the requesting client, operation, resource, and parameters. Reject unexpected requests and correct the client instead of globally weakening permissions. ACP authorization does not automatically approve Public MCP.
 
-For failures, check that Navop is running, server mode, Node.js, client configuration, discovery permissions, Tool Exposure, and live schema. Reconnect after endpoint changes. Redact tokens, local paths, connection names, and business parameters from logs.
+For failures, check that the current app is running, server mode, Node.js, client configuration, discovery permissions, Tool Exposure, and live schema. Reconnect after endpoint changes. Redact tokens, local paths, connection names, and business parameters from logs.

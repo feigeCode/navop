@@ -4,6 +4,9 @@ AI 工作台把模型对话放在数据库、终端、文件和 Notes 等真实�
 
 ![AI 工作台](/images/ai_chat.png)
 
+> [!NOTE]
+> AI 工作台在三个应用中均可用，可用工具取决于当前产品暴露的资源。
+
 ## 配置 LLM Provider
 
 在设置中新增 Provider，填写名称、API key、base URL、API version 等所需字段，然后加载模型列表或添加自定义模型。可以启用、停用、编辑和删除 Provider，并设置默认 Provider。企业代理或兼容接口应先验证协议与数据策略。
