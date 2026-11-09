@@ -4,6 +4,62 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.23.0-beta.8] - 2026-11-09
+
+#### 更新内容
+
+- AI 提供商新增「OpenCode Go」订阅类型，并支持为任意 OpenAI 兼容提供商填写自定义请求头（每行一个 `名称: 值`，可覆盖 User-Agent 等默认请求头）。OpenCode Go 会自动发送稳定的 `x-opencode-session`；DeepSeek V4.1 Flash / V4 Pro 需要在 OpenCode Console 选择 Global 区域。
+- 连接支持手动拖拽排序：首页与连接树都可以拖动文件夹和连接调整顺序，设置里新增排序方式选项，含「手动排序（拖拽调整）」。
+- SSH 新增「无认证」登录方式，服务器允许 none 认证时无需密码或密钥即可登录。
+- 服务器监控新增 NVIDIA GPU 与昇腾 NPU 视图，可查看使用率与设备信息。
+- 终端侧栏新增「连接笔记」，可以记录服务器密码、描述等信息。
+- 首页工具栏支持导出连接与分组迁移包，在其他设备导入时保留分组层级。
+- 终端多行粘贴可以先「检查并编辑」再发送，也可以直接「逐行发送」。
+- 快捷命令支持 `{{name}}` 参数占位符，发送前弹出表单逐个填写取值。
+- 设置 → 通用 → 启动新增「默认启动页」，可选择从首页或 AI 工作台进入。
+- 远程桌面（RDP）断线后可以直接「重新连接」，不必关闭再重开会话。
+- 终端标签页可以「断开连接」并保留会话内容；SSH 标签页可直接打开 SFTP 文件视图。
+- 终端行时间戳精确到毫秒。
+
+#### 修复与优化
+
+- 修复快捷指令列表中行高重叠、内容互相挤压的问题。
+- 修复 SFTP「默认打开双栏文件视图」勾选后点确认不生效的问题。
+- 修复标签栏与扩展标题栏右侧留白区域无法拖动窗口的问题。
+- 团队：修复 owner 不小心把自己降级成成员后无法退出团队的问题；成员现在可以主动退出团队。
+- AI 对话：运行中提交的消息改为先排到输入框上方的待发送列表，可以编辑、删除，或点「立即发送」插入当前轮次；修复同一条消息出现两条气泡的问题。
+- AI 对话：修复第二轮对话过程区「先折叠又展开」的闪动。
+- 独立产品（Navop Shell / Navop Data）的新建连接类目按各自领域裁剪：Shell 只保留全部 / 中间件 / 终端，Data 不再出现终端分类。
+- 升级底层界面与插件运行时：gpui-kit v0.9.0、nsh v0.4.0、gpui-fast 0.1.13；修复 32 位 Windows 构建（nsh i686 指针宽度别名、gpu-allocator 与 wgpu-hal 的 windows 依赖统一）。
+
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.23.0-beta.8) 下载桌面端安装包
+
+#### What's New
+
+- AI providers gain an "OpenCode Go" subscription type, and any OpenAI-compatible provider can now carry custom request headers (one `Name: value` pair per line, overriding defaults such as User-Agent). OpenCode Go sends a stable `x-opencode-session` automatically; DeepSeek V4.1 Flash / V4 Pro require the Global region in OpenCode Console.
+- Connections can be reordered by dragging: both Home and the connection tree support dragging folders and connections, and Settings gains a sort option including "Manual (Drag to Reorder)".
+- SSH adds a "None" authentication method, so servers that accept none authentication can be reached without a password or key.
+- Server monitoring adds NVIDIA GPU and Ascend NPU views with utilization and device information.
+- The terminal sidebar gains Connection Notes for recording server passwords, descriptions and other details.
+- The Home toolbar can export a connection and group migration package that keeps the group hierarchy when imported on another device.
+- Multi-line paste in the terminal can be reviewed and edited before sending, or sent line by line.
+- Quick commands support `{{name}}` placeholders and ask for their values in a form before sending.
+- Settings → General → Startup adds a default startup page choice between Home and the AI workbench.
+- Remote desktop (RDP) sessions that drop can reconnect from the disconnected view instead of closing and reopening the session.
+- Terminal tabs can be disconnected while keeping the session content, and SSH tabs can open the SFTP file view directly.
+- Terminal line timestamps are now precise to the millisecond.
+
+#### Fixes and Improvements
+
+- Fixed overlapping row heights that squeezed content in the quick command list.
+- Fixed the SFTP "open dual-pane file view by default" preference not taking effect after confirming.
+- Fixed blank areas at the right end of the tab bar and extended title bar not dragging the window.
+- Team: fixed the owner being demoted to member by accident and then being unable to leave; members can now leave a team.
+- AI chat: messages submitted while a turn is running now wait in a list above the composer where they can be edited, deleted, or sent immediately into the current turn; fixed the same message showing up as two bubbles.
+- AI chat: fixed the process area of the second conversation collapsing and then expanding again.
+- Standalone products (Navop Shell / Navop Data) now trim the new-connection categories to their own domain: Shell keeps All / Middleware / Terminal, and Data no longer shows the Terminal category.
+- Upgraded the UI and plugin runtime stack: gpui-kit v0.9.0, nsh v0.4.0, gpui-fast 0.1.13; fixed 32-bit Windows builds (nsh i686 pointer-width aliasing, and unified windows dependency edges between gpu-allocator and wgpu-hal).
+
 ## [v0.23.0-beta.7] - 2026-11-07
 
 #### 更新内容
