@@ -4,29 +4,79 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
-## [v0.23.0-beta.9] - 2026-11-09
+## [v0.23.0] - 2026-11-09
 
 #### 更新内容
 
-- 快捷指令的管理入口迁到底部命令栏：点命令栏上的快捷指令按钮即可新建命令、按分组筛选，右键分组可以改名、改颜色或删除，侧栏不再重复维护一套管理面板；连接笔记输入框跟随主题配色。
+- 桌面端正式拆成三个产品、同一个版本号一起发：**Navop**（数据库 + SSH/SFTP + 终端 + 远程桌面 + AI 全量版）、**Navop Shell**（SSH/SFTP、本地终端、端口转发、RDP/VNC）、**Navop Data**（PostgreSQL / MySQL / SQLite / SQL Server / Oracle / ClickHouse / Redis / MongoDB）。三个产品各有独立安装包、数据目录与钥匙串条目，可以并排安装、互不干扰；图标改成「N + 领域脚标」体系，托盘与退出提示都会写明是哪个产品，Public MCP 也按产品分别发现、分别授权。
+- 更新机制分成稳定通道与测试通道，清单完全分开，稳定版不会被悄悄推到 beta；设置「关于 → 更新」新增通道下拉（切测试版会先确认，版本号旁显示「测试版」徽标）。检查更新可选镜像源（自动 / Cloudflare / CNB / GitHub），选中的源排最前、失败按序回退；扩展下载复用同一份镜像偏好，扩展市场清单改由固定的 `manifest` Release 资产托管（R2 → GitHub 快照 → CNB 快照 → raw 兜底）。
+- 插件平台整体换代：插件页面从旧的 gpui-shell 构件迁到 nsh 运行时，页面用 TSX 编写，能力按扩展清单收敛，越权调用直接拒绝；宿主接口升级到 ABI v2（启动事实首帧同步可读、资源事件推送、结构化错误码、主题与语言直接用 nsh 能力）。插件从「一页一个包」收成「一个扩展一个 app」，页面在扩展内部用路由组织，一个包、一个版本、一次构建。
+- 插件可以把自己的能力声明成 AI 工具（`contributes.tools`）：内置 Agent 与外部 MCP 都能调用，默认关闭，设置里按扩展逐个开关、也能单独禁用某个工具，调用带超时、结果上限与按风险确认；每个插件标签页自带 AI 侧边栏（右侧浮钮、默认收起、可拖宽，自动带上当前扩展、路由、连接与可用工具），页面还能主动把当前状态上报给 AI。
+- 插件页面重写并统一视觉，Docker 12 个视图（容器、镜像、卷、网络、日志、进程、统计、文件变更、挂载、inspect、容器终端、概览）、MQTT 5 个、RocketMQ 3 个、Elasticsearch 与开发工具各 1 个；页面可以内嵌宿主原生组件，Docker 容器终端就是宿主终端，分屏、字体、快捷键与内置终端一致；也可以申请剪贴板写权限，复制日志、镜像名、消息体不再受限。
+- 新建连接恢复两步向导：先选类目（全部 / 数据库 / 国产数据库 / 时序数据库 / NoSQL / 中间件 / 终端）再选卡片，第一步固定三列等宽，底部「取消 / 下一步」改为整窗宽；类目从 8 个减为 7 个（扩展提供的连接归入中间件）。已安装的外部数据库驱动（国产数据库等）接回向导，Navop Data 首次启动会检查驱动并可直接在应用内安装。
+- 扩展管理里的语言能力收成「语言包」一个入口：卡片直接列出支持的语言（前 6 个 + 总数），详情弹窗展示完整列表，后续新增语言统一随语言包发布，已装的语法解析器继续生效。
+- 连接支持手动拖拽排序：首页与连接树都能拖动文件夹和连接调整顺序，设置里新增排序方式选项，含「手动排序（拖拽调整）」；首页工具栏支持导出连接与分组迁移包，在别的设备导入时保留分组层级。
+- SSH 新增「无认证」登录方式；服务器监控新增 NVIDIA GPU 与昇腾 NPU 视图，可查看使用率与设备信息；终端侧栏新增「连接笔记」，可以记录服务器密码、描述等信息。
+- 快捷指令支持 `{{name}}` 参数占位符，发送前弹出表单逐个填值；管理入口迁到底部命令栏，点快捷指令按钮即可新建命令、按分组筛选，右键分组可以改名、改颜色或删除。
+- 终端：多行粘贴可以先「检查并编辑」再发送，也可以直接「逐行发送」；行时间戳精确到毫秒；标签页可以「断开连接」并保留会话内容，SSH 标签页可直接打开 SFTP 文件视图；支持 X10 鼠标协议，htop 这类老式 TUI 里点表头排序、点选进程恢复正常。
+- 远程桌面（RDP）断线后可以直接「重新连接」，不必关闭再重开会话；设置 → 通用 → 启动新增「默认启动页」，可选从首页或 AI 工作台进入。
+- AI 提供商新增「OpenCode Go」订阅类型，并支持为任意 OpenAI 兼容提供商填写自定义请求头（每行一个 `名称: 值`，可覆盖 User-Agent 等默认请求头）；OpenCode Go 会自动发送稳定的 `x-opencode-session`，DeepSeek V4.1 Flash / V4 Pro 需要在 OpenCode Console 选择 Global 区域。
 
 #### 修复与优化
 
-- 快捷指令的 `{{name}}` 参数占位符在命令列表、输入建议和快捷键入口都能正确生效，发送前照常弹出表单填写取值。
-- 终端支持 X10 鼠标协议，htop 这类老式 TUI 程序里点击表头排序、点选进程恢复正常。
-- 修复点击 AI 消息的「复制」按钮会触发整块选中：复制按钮现在自己截断鼠标按下 / 抬起事件，不会再被外层转录当成选中起点。
+- 修复新建本地终端时整个窗口可能长时间无响应甚至卡死：本地 PTY 创建移出主线程，AI 工作台不再提前拉起隐藏的终端面板。
+- 修复 SSH 会话在 oh-my-posh / starship 等提示符框架下「连上后要等约 30 秒才能输入」的问题，并恢复握手期间被吞掉的登录 banner。
+- 修复 beta / dev 构建加载不到已安装外部数据库驱动与复合扩展的问题：预发布宿主会额外按 release 三元组回退匹配一次，扩展管理器、扩展市场与国产数据库类目恢复正常。
+- 修复打开扩展连接（首页卡片、连接侧栏、公共 MCP）偶发崩溃：挂 tab 的操作移到本轮 effect flush 之后，不再重入首页 update。
+- 修复插件 AI 侧边栏收起后扩展页面被挤成 0 宽、整页空白：页面本体始终占满内容区，收起后的入口改为 tab 右下角浮层按钮。
+- AI 对话：运行中提交的消息改为先排到输入框上方的待发送列表，可以编辑、删除，或点「立即发送」插入当前轮次；修复同一条消息出现两条气泡、第二轮对话过程区「先折叠又展开」的闪动，以及点击消息「复制」按钮触发整块选中的问题。
+- 修复快捷指令列表行高重叠、内容互相挤压；`{{name}}` 参数在命令列表、输入建议和快捷键入口均生效；连接笔记输入框跟随主题配色。
+- SFTP：上传/下载只有一个冲突项时不再显示「应用于全部」，目录覆盖改成对话框内红字二次确认；修复「默认打开双栏文件视图」勾选后点确认不生效；多分屏下完成提示按传输 id 去重，侧栏「移动到」选过的位置会记进设置。
+- 修复标签栏与扩展标题栏右侧留白区域无法拖动窗口；修复退出确认弹窗显示字面量 `{app}`、托盘关闭提示不带产品名（独立产品不会再被叫成 Navop），并恢复终端 vi 模式提示里丢失的重新进入快捷键。
+- 数据库视图：SQL 编辑器滚动条常显；表设计器的列列表直接显示并可就地编辑默认值；复制为 UPDATE/DELETE 时选区不含主键不再输出空字符串；Redis 键名含非法 UTF-8 时列表加载、读取和删除不再直接失败；打开已存在的连接直接复用已有标签，不再重复建连。
+- 修复团队 owner 不小心把自己降级成成员后无法退出团队的问题，成员现在可以主动退出团队。
+- 依赖图收敛到单份 wgpu 30，发布产物的图形栈不再随目标平台分叉；修复 32 位 Windows 构建（nsh i686 指针宽度别名、wgpu-hal 与 gpu-allocator 的 windows 依赖边统一）。
+- 独立产品的新建连接类目按各自领域裁剪：Shell 只保留全部 / 中间件 / 终端，Data 不再出现终端分类；空类目保持旧版空白，不再显示占位文案。
+- 设置页重新排序，数据库与终端提到前面、账户与关于收尾；开发版彻底隔离 Public MCP 发现文件与主密钥钥匙串，Windows 子进程 PATH 补上 GUI 应用看不到的工具链目录。
+- 说明：插件引擎换代后，旧版插件包（gpui-shell 时代、ABI v1）不再装载；市场里现有的 Docker 0.6.3、MQTT 0.2.2 属于旧包，等新版插件包发布后再从市场安装，本地已装的旧插件会从列表里消失，不会报错。
 
-国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.23.0-beta.9) 下载桌面端安装包
+国内下载：如果 GitHub 下载较慢，可从 [CNB 镜像](https://cnb.cool/navop-dev/navop/-/releases/tag/v0.23.0) 下载桌面端安装包
 
 #### What's New
 
-- Quick command management moved into the bottom command bar: the quick-command button opens a panel where you can add commands and filter by group, and right-clicking a group lets you rename it, change its color or delete it, so the sidebar no longer keeps a second management panel. The connection notes input now follows the theme.
+- The desktop app now ships as three products under one version: **Navop** (databases + SSH/SFTP + terminal + remote desktop + AI), **Navop Shell** (SSH/SFTP, local terminal, port forwarding, RDP/VNC) and **Navop Data** (PostgreSQL / MySQL / SQLite / SQL Server / Oracle / ClickHouse / Redis / MongoDB). Each has its own installers, data directory and keychain entry, so they install side by side without interference. Icons use an "N + domain badge" system, tray and quit prompts name the product, and each product exposes its own Public MCP host and discovery identity.
+- Updates are split into a stable channel and a beta channel with separate manifests, so stable installs are never silently moved to beta. Settings → About → Update gains a channel dropdown (switching to beta asks for confirmation and prerelease builds show a "Beta" badge). Update checks can pick a mirror (Auto / Cloudflare / CNB / GitHub) with ordered fallback, extension downloads reuse the same preference, and the extension marketplace manifest is hosted as a fixed `manifest` release asset (R2 → GitHub snapshot → CNB snapshot → raw fallback).
+- The plugin platform was rebuilt: pages moved from the old gpui-shell components to the nsh runtime and are written as TSX, capabilities are narrowed to the extension manifest and anything else is rejected, and the host interface is now ABI v2 (startup facts readable on the first frame, pushed resource events, structured error codes, theme and locale from nsh). Plugins went from "one package per page" to "one app per extension", with routing handled inside the extension — one package, one version, one build.
+- Extensions can declare their capabilities as AI tools (`contributes.tools`): the built-in agent and external MCP clients can call them. They are off by default, switchable per extension with per-tool disable in Settings, and calls carry timeouts, result caps and risk-based confirmation. Every plugin tab has a built-in AI sidebar (floating button, collapsed by default, resizable, preloaded with the current extension, route, connection and tools), and pages can push their own state to the AI.
+- Plugin pages were rewritten on one visual system: Docker now has 12 views (containers, images, volumes, networks, logs, processes, stats, filesystem changes, mounts, inspect, container terminal, overview), MQTT 5, RocketMQ 3, plus one each for Elasticsearch and the developer tools. Pages can embed native host components — the Docker container terminal is the host terminal, so splits, fonts and shortcuts match the built-in terminal — and can request clipboard write access.
+- The new-connection wizard is back to two steps: pick a category (All / Databases / Domestic databases / Time series / NoSQL / Middleware / Terminal) first, then a card. The first step uses a fixed three-column grid and Cancel / Next sit in a full-width footer; categories went from eight to seven, with extension-provided connections grouped under Middleware. Installed external database drivers are back in the flow, and Navop Data checks drivers on first launch and can install a missing one in-app.
+- Language support in extension management is now a single "language bundle" entry: the card lists the supported languages (first six plus a total) and the dialog shows the full list. New languages ship inside language bundles, and installed tree-sitter parsers keep working.
+- Connections can be reordered by dragging in both Home and the connection tree, and Settings gains a sort option including "Manual (Drag to Reorder)". The Home toolbar can export a connection and group migration package that keeps the group hierarchy when imported elsewhere.
+- SSH adds a "None" authentication method; server monitoring adds NVIDIA GPU and Ascend NPU views with utilization and device information; the terminal sidebar gains Connection Notes for recording server passwords, descriptions and other details.
+- Quick commands support `{{name}}` placeholders and ask for their values in a form before sending, and their management moved into the bottom command bar: add commands and filter by group from the quick-command button, and right-click a group to rename it, change its color or delete it.
+- Terminal: multi-line paste can be reviewed and edited before sending or sent line by line; line timestamps are precise to the millisecond; tabs can be disconnected while keeping their content and SSH tabs can open the SFTP file view directly; the X10 mouse protocol is supported, so clicking table headers to sort or selecting rows in older TUI programs such as htop works again.
+- Remote desktop (RDP) sessions that drop can reconnect from the disconnected view instead of closing and reopening the session, and Settings → General → Startup adds a default startup page choice between Home and the AI workbench.
+- AI providers gain an "OpenCode Go" subscription type, and any OpenAI-compatible provider can carry custom request headers (one `Name: value` pair per line, overriding defaults such as User-Agent). OpenCode Go sends a stable `x-opencode-session` automatically; DeepSeek V4.1 Flash / V4 Pro require the Global region in OpenCode Console.
 
 #### Fixes and Improvements
 
-- `{{name}}` placeholders in quick commands now work in the command list, the input suggestions and the shortcut entry, and still prompt for values before sending.
-- The terminal now speaks the X10 mouse protocol, so clicking table headers to sort or selecting rows in older TUI programs such as htop works again.
-- Fixed clicking the copy button on an AI message starting a block selection: the button now stops mouse-down / mouse-up propagation instead of letting the transcript treat the click as the start of a selection.
+- Fixed the window becoming unresponsive or freezing when opening a new local terminal: local PTY creation moved off the main thread, and the AI workbench no longer creates hidden terminal panels ahead of time.
+- Fixed SSH sessions waiting roughly 30 seconds before accepting input, and dropped login banners during the handshake, under prompt frameworks such as oh-my-posh / starship.
+- Fixed installed external database drivers and composite extensions not loading in beta / dev builds: a pre-release host now also falls back to matching the release triple, restoring the extension manager, marketplace and domestic-database categories.
+- Fixed an occasional crash when opening an extension connection (home card, connection sidebar or Public MCP) by deferring tab attachment until after the current effect flush.
+- Fixed extension pages collapsing to zero width and showing a blank page after the plugin AI sidebar was collapsed: the page body always fills the content area and the collapsed entry is a floating button at the tab's bottom-right corner.
+- AI chat: messages submitted while a turn is running now wait in a list above the composer where they can be edited, deleted, or sent immediately into the current turn; fixed duplicate bubbles for the same message, the second conversation's process area collapsing and then expanding, and clicking a message's copy button starting a block selection.
+- Fixed overlapping row heights in the quick command list; `{{name}}` now works in the command list, suggestions and the shortcut entry; the connection notes input follows the theme.
+- SFTP: "apply to all" is hidden when only one conflict is queued and directory overwrites now use an in-dialog confirmation; the "open dual-pane file view by default" preference now takes effect; completion notices are de-duplicated by transfer id in split views, and the sidebar remembers the last "move to" position.
+- Fixed blank areas at the right end of the tab bar and extended title bar not dragging the window; the quit confirmation no longer shows a literal `{app}` and the tray close prompt names the product (standalone products are no longer called Navop); the missing re-entry shortcut in the terminal vi-mode hint is restored.
+- Database views: the SQL editor scrollbar stays visible, the table designer shows column defaults inline and allows editing them, and copying as UPDATE/DELETE no longer emits an empty statement when no primary key is selected; Redis no longer fails on keys with invalid UTF-8; opening an already-open connection reuses its tab instead of creating a duplicate.
+- Fixed the team owner being unable to leave after accidentally demoting themselves; members can now leave a team.
+- The dependency graph is down to a single wgpu 30, so the graphics stack no longer forks per platform, and the 32-bit Windows build is fixed (nsh i686 pointer-width aliasing and unified windows dependency edges between wgpu-hal and gpu-allocator).
+- Standalone products trim the new-connection categories to their own domain: Shell keeps All / Middleware / Terminal, and Data no longer shows the Terminal category; empty categories stay blank as in the old version instead of showing placeholder copy.
+- The settings page lists database and terminal options first with account and about at the end; development builds fully isolate their Public MCP discovery file and master key from production installs, and Windows child processes now get the toolchain directories a GUI app cannot see.
+- Note: after the engine change, old plugin packages (gpui-shell era, ABI v1) no longer load. The Docker 0.6.3 and MQTT 0.2.2 currently in the marketplace are old packages — wait for the republished ones before installing from the marketplace; already-installed old plugins disappear from the list without an error.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.22.0...v0.23.0
 
 ## [v0.23.0-beta.8] - 2026-11-09
 
