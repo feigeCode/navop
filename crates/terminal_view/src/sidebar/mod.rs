@@ -21,7 +21,7 @@ use broadcast_input_panel::{BroadcastInputPanel, BroadcastInputPanelConfig};
 use connection_notes_panel::ConnectionNotesPanel;
 pub use file_manager_panel::{FileManagerPanel, FileManagerPanelEvent};
 pub use history_command_panel::{HistoryCommandPanel, HistoryCommandPanelEvent};
-pub use quick_command_panel::QuickCommandPanel;
+pub use quick_command_panel::{QuickCommandPanel, QuickCommandPanelEvent};
 pub use server_monitor_panel::{ServerMonitorPanel, ServerMonitorPanelEvent};
 pub use settings_panel::SettingsPanel;
 
@@ -341,8 +341,6 @@ pub enum SidebarPanel {
     FileExplorer,
     /// 设置面板（搜索 + 字体 + 主题）
     Settings,
-    /// 快捷命令面板
-    QuickCommand,
     /// 历史命令面板
     HistoryCommand,
     /// AI 聊天面板
@@ -358,10 +356,9 @@ pub enum SidebarPanel {
 }
 
 impl SidebarPanel {
-    pub const ALL: [SidebarPanel; 9] = [
+    pub const ALL: [SidebarPanel; 8] = [
         SidebarPanel::FileExplorer,
         SidebarPanel::Settings,
-        SidebarPanel::QuickCommand,
         SidebarPanel::HistoryCommand,
         SidebarPanel::AiChat,
         SidebarPanel::BroadcastInput,
@@ -378,7 +375,6 @@ impl SidebarPanel {
         match self {
             SidebarPanel::FileExplorer => "terminal.file-explorer",
             SidebarPanel::Settings => "terminal.settings",
-            SidebarPanel::QuickCommand => "terminal.quick-command",
             SidebarPanel::HistoryCommand => "terminal.history-command",
             SidebarPanel::AiChat => "terminal.ai-chat",
             SidebarPanel::BroadcastInput => "terminal.broadcast-input",
@@ -393,7 +389,6 @@ impl SidebarPanel {
         match self {
             SidebarPanel::FileExplorer => Icon::new(IconName::FolderOpen),
             SidebarPanel::Settings => Icon::new(IconName::Settings),
-            SidebarPanel::QuickCommand => Icon::new(IconName::SquareTerminal),
             SidebarPanel::HistoryCommand => Icon::new(IconName::BookOpen),
             SidebarPanel::AiChat => Icon::new(IconName::AILine),
             SidebarPanel::BroadcastInput => Icon::new(IconName::Network),
@@ -408,7 +403,6 @@ impl SidebarPanel {
         match self {
             SidebarPanel::FileExplorer => t!("TerminalSidebar.file_explorer"),
             SidebarPanel::Settings => t!("TerminalSidebar.settings"),
-            SidebarPanel::QuickCommand => t!("TerminalSidebar.quick_commands"),
             SidebarPanel::HistoryCommand => t!("TerminalSidebar.history_commands"),
             SidebarPanel::AiChat => t!("TerminalSidebar.ai_chat"),
             SidebarPanel::BroadcastInput => t!("TerminalSidebar.broadcast_input"),
@@ -512,7 +506,6 @@ fn terminal_sidebar_available_panels(
     if history_supported {
         panels.push(SidebarPanel::HistoryCommand);
     }
-    panels.push(SidebarPanel::QuickCommand);
     panels
 }
 
@@ -740,8 +733,6 @@ pub enum TerminalSidebarEvent {
     ScrollbackLinesChanged(usize),
     /// 粘贴命令到终端输入区（不自动回车）
     ExecuteCommand(String),
-    /// 快捷命令数据已变更
-    QuickCommandsChanged,
     /// 请求询问 AI
     AskAi,
     /// 粘贴代码到终端（用于AI生成的代码块）
@@ -816,8 +807,6 @@ pub struct TerminalSidebar {
     tool_dock: TerminalToolDockState,
     /// 设置面板
     settings_panel: Entity<SettingsPanel>,
-    /// 快捷命令面板
-    quick_command_panel: Entity<QuickCommandPanel>,
     /// 历史命令面板
     history_command_panel: Option<Entity<HistoryCommandPanel>>,
     /// AI 聊天面板
@@ -867,11 +856,6 @@ fn subscribe_server_monitor_panel(
 }
 
 impl TerminalSidebar {
-    pub(crate) fn refresh_quick_commands(&mut self, cx: &mut Context<Self>) {
-        self.quick_command_panel
-            .update(cx, |panel, cx| panel.load_commands(cx));
-    }
-
     fn handle_file_manager_event(&mut self, event: &FileManagerPanelEvent, cx: &mut Context<Self>) {
         match event {
             FileManagerPanelEvent::Close => {
@@ -1127,8 +1111,6 @@ impl TerminalSidebar {
                 };
                 cx.new(|cx| BroadcastInputPanel::new(config, window, cx))
             });
-        let quick_command_panel =
-            cx.new(|cx| QuickCommandPanel::new(connection_id, colors.clone(), window, cx));
         let connection_notes_panel = sidebar_connection
             .as_ref()
             .filter(|connection| connection.id.is_some())
@@ -1350,22 +1332,6 @@ impl TerminalSidebar {
             },
         );
 
-        // 订阅快捷命令面板事件
-        let quick_sub = cx.subscribe(
-            &quick_command_panel,
-            |this, _, event: &quick_command_panel::QuickCommandPanelEvent, cx| match event {
-                quick_command_panel::QuickCommandPanelEvent::Close => {
-                    this.close_tool(SidebarPanel::QuickCommand, cx);
-                }
-                quick_command_panel::QuickCommandPanelEvent::ExecuteCommand(cmd) => {
-                    cx.emit(TerminalSidebarEvent::ExecuteCommand(cmd.clone()));
-                }
-                quick_command_panel::QuickCommandPanelEvent::QuickCommandsChanged => {
-                    cx.emit(TerminalSidebarEvent::QuickCommandsChanged);
-                }
-            },
-        );
-
         let history_sub = history_command_panel.as_ref().map(|panel| {
             cx.subscribe(
                 panel,
@@ -1399,7 +1365,7 @@ impl TerminalSidebar {
             },
         );
 
-        let mut subs = vec![set_sub, quick_sub, ai_chat_sub];
+        let mut subs = vec![set_sub, ai_chat_sub];
         if let Some(sub) = history_sub {
             subs.push(sub);
         }
@@ -1457,7 +1423,6 @@ impl TerminalSidebar {
         let mut sidebar = Self {
             tool_dock: TerminalToolDockState::new(available_panels),
             settings_panel,
-            quick_command_panel,
             history_command_panel,
             ai_chat_panel,
             ai_connection_resource,
@@ -1574,7 +1539,6 @@ impl TerminalSidebar {
                 .as_ref()
                 .map(|panel| panel.clone().into()),
             SidebarPanel::Settings => Some(self.settings_panel.clone().into()),
-            SidebarPanel::QuickCommand => Some(self.quick_command_panel.clone().into()),
             SidebarPanel::HistoryCommand => self
                 .history_command_panel
                 .as_ref()
@@ -1714,9 +1678,6 @@ impl TerminalSidebar {
         let theme_clone = theme.clone();
         self.settings_panel.update(cx, |panel, cx| {
             panel.set_current_theme(theme_clone, window, cx);
-        });
-        self.quick_command_panel.update(cx, |panel, cx| {
-            panel.set_colors(self.colors.clone(), cx);
         });
         if let Some(ref history_panel) = self.history_command_panel {
             history_panel.update(cx, |panel, cx| {
@@ -1910,13 +1871,6 @@ impl TerminalSidebar {
         cx.notify();
     }
 
-    /// 添加快捷命令（外部调用）
-    pub fn add_quick_command(&self, command: String, window: &mut Window, cx: &mut Context<Self>) {
-        self.quick_command_panel.update(cx, |panel, cx| {
-            panel.add_command_external(command, window, cx);
-        });
-    }
-
     /// 从终端 OSC 7 同步路径到文件管理器
     ///
     /// 检查 `sync_path_enabled` 且存在文件管理器面板时，导航到指定路径。
@@ -2039,7 +1993,6 @@ impl TerminalSidebar {
         let needs_embedded_header = matches!(
             panel,
             SidebarPanel::Settings
-                | SidebarPanel::QuickCommand
                 | SidebarPanel::HistoryCommand
                 | SidebarPanel::BroadcastInput
                 | SidebarPanel::ConnectionNotes
@@ -2376,7 +2329,7 @@ mod tests {
 
     #[test]
     fn sidebar_default_panels_do_not_include_rich_input() {
-        assert_eq!(9, SidebarPanel::all().len());
+        assert_eq!(8, SidebarPanel::all().len());
         assert!(
             SidebarPanel::all()
                 .iter()
@@ -2673,7 +2626,7 @@ mod tests {
     #[test]
     fn tool_dock_placement_snapshot_keeps_one_entry_per_available_panel() {
         let mut dock =
-            TerminalToolDockState::new([SidebarPanel::Settings, SidebarPanel::QuickCommand]);
+            TerminalToolDockState::new([SidebarPanel::Settings, SidebarPanel::HistoryCommand]);
         dock.move_tool(SidebarPanel::Settings, SidebarPlacement::Bottom);
 
         let snapshot = dock
@@ -2688,7 +2641,7 @@ mod tests {
             Some(&SidebarPlacement::Bottom)
         );
         assert_eq!(
-            snapshot.get(SidebarPanel::QuickCommand.local_id()),
+            snapshot.get(SidebarPanel::HistoryCommand.local_id()),
             Some(&SidebarPlacement::Right)
         );
     }

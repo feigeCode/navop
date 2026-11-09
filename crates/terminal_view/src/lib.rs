@@ -12,12 +12,12 @@ pub mod history_prompt;
 pub mod keys;
 pub mod public_mcp;
 pub mod public_mcp_remote_ops;
+mod quick_command_parameters;
 mod quick_command_sync;
 pub mod selection_highlight_addon;
 pub mod serial_form_window;
 pub mod settings;
 pub mod sidebar;
-
 
 pub mod telnet_form_window;
 pub mod terminal_element;

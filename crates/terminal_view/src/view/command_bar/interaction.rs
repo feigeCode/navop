@@ -1,6 +1,7 @@
 use super::*;
+use crate::quick_command_parameters::prompt_for_quick_command_parameters;
 use crate::view::command_bar_model::{
-    SelectionDirection, build_command_suggestions, command_inline_suffix,
+    CommandSuggestionKind, SelectionDirection, build_command_suggestions, command_inline_suffix,
     quick_command_for_shortcut,
 };
 use gpui::{AppContext, Context, KeyDownEvent, Keystroke, Window};
@@ -18,15 +19,35 @@ impl TerminalCommandBar {
     ) -> Self {
         let input_state = Self::create_input_state(window, cx);
         let quick_search_state = Self::create_quick_search_state(window, cx);
+        let quick_command_panel = cx.new(|cx| {
+            QuickCommandPanel::new(config.connection_id, config.colors.clone(), window, cx)
+        });
+        let quick_command_subscription = cx.subscribe_in(
+            &quick_command_panel,
+            window,
+            |this, _, event, window, cx| match event {
+                QuickCommandPanelEvent::Close => this.close_quick_commands(window, cx),
+                QuickCommandPanelEvent::ExecuteCommand(command) => {
+                    this.commit_chosen_command(command.clone(), window, cx);
+                }
+                QuickCommandPanelEvent::QuickCommandsChanged => {
+                    this.load_quick_commands(cx);
+                    this.refresh_suggestions(cx);
+                    cx.notify();
+                }
+            },
+        );
         let subscriptions = vec![
             Self::subscribe_input(&input_state, window, cx),
             Self::subscribe_quick_search(&quick_search_state, window, cx),
+            quick_command_subscription,
             cx.observe(&config.terminal, |_, _, cx| cx.notify()),
         ];
         let mut this = Self {
             terminal: config.terminal,
             connection_id: config.connection_id,
             input_state,
+            quick_command_panel,
             quick_search_state,
             quick_group_scroll_handle: ScrollHandle::new(),
             quick_scroll_handle: VirtualListScrollHandle::new(),
@@ -82,7 +103,9 @@ impl TerminalCommandBar {
     }
 
     pub(in crate::view) fn set_colors(&mut self, colors: TerminalColors, cx: &mut Context<Self>) {
-        self.colors = colors;
+        self.colors = colors.clone();
+        self.quick_command_panel
+            .update(cx, |panel, cx| panel.set_colors(colors, cx));
         cx.notify();
     }
 
@@ -138,6 +161,22 @@ impl TerminalCommandBar {
             .unwrap_or_default();
     }
 
+    pub(in crate::view) fn refresh_quick_command_panel(&mut self, cx: &mut Context<Self>) {
+        self.quick_command_panel
+            .update(cx, |panel, cx| panel.load_commands(cx));
+    }
+
+    pub(in crate::view) fn add_quick_command(
+        &mut self,
+        command: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.quick_command_panel.update(cx, |panel, cx| {
+            panel.add_command_external(command, window, cx);
+        });
+    }
+
     pub(in crate::view) fn refresh_suggestions(&mut self, cx: &mut Context<Self>) {
         if !self.autocomplete_enabled {
             return;
@@ -171,12 +210,37 @@ impl TerminalCommandBar {
     fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let selected = self
             .selected_suggestion
-            .and_then(|index| self.suggestions.get(index))
-            .map(|item| item.command.clone());
-        let command = selected.unwrap_or_else(|| self.input_state.read(cx).value().to_string());
+            .and_then(|index| self.suggestions.get(index));
+        let (command, is_quick_command) = match selected {
+            Some(suggestion) => (
+                suggestion.command.clone(),
+                suggestion.kind == CommandSuggestionKind::QuickCommand,
+            ),
+            None => (self.input_state.read(cx).value().to_string(), false),
+        };
         if command.trim().is_empty() {
             return;
         }
+        if is_quick_command {
+            let command_bar = cx.entity();
+            if prompt_for_quick_command_parameters(
+                &command,
+                self.colors.muted_foreground,
+                window,
+                cx,
+                move |command, window, cx| {
+                    command_bar.update(cx, |command_bar, cx| {
+                        command_bar.submit_rendered(command, window, cx)
+                    });
+                },
+            ) {
+                return;
+            }
+        }
+        self.submit_rendered(command, window, cx);
+    }
+
+    fn submit_rendered(&mut self, command: String, window: &mut Window, cx: &mut Context<Self>) {
         self.input_state
             .update(cx, |state, cx| state.set_value("", window, cx));
         self.suggestions.clear();

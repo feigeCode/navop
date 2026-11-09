@@ -2,14 +2,15 @@ use super::*;
 use crate::view::command_bar::quick_render::group_color;
 use crate::view::command_bar_model::QuickCommandGroup;
 use gpui::{
-    AnyElement, Context, InteractiveElement, IntoElement, ParentElement,
+    AnyElement, Context, InteractiveElement, IntoElement, MouseButton, ParentElement, SharedString,
     StatefulInteractiveElement, Styled, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    ActiveTheme, Icon, Sizable, Size, h_flex, input::Input, scroll::ScrollableElement, v_flex,
-    v_virtual_list,
+    ActiveTheme, Icon, Sizable, Size, button::Button, h_flex, input::Input,
+    scroll::ScrollableElement, v_flex, v_virtual_list,
 };
 use one_assets::IconName;
+use one_ui::{IconButton, IconButtonRole};
 use rust_i18n::t;
 use std::rc::Rc;
 
@@ -78,7 +79,7 @@ impl TerminalCommandBar {
                     .flex_1()
                     .min_h_0()
                     .relative()
-                    .when(items_empty, |body| body.child(self.render_quick_empty()))
+                    .when(items_empty, |body| body.child(self.render_quick_empty(cx)))
                     .when(!items_empty, |body| {
                         body.child(
                             v_virtual_list(
@@ -125,7 +126,7 @@ impl TerminalCommandBar {
             .into_any_element()
     }
 
-    fn render_quick_empty(&self) -> AnyElement {
+    fn render_quick_empty(&self, cx: &mut Context<Self>) -> AnyElement {
         v_flex()
             .h(px(180.0))
             .items_center()
@@ -141,6 +142,16 @@ impl TerminalCommandBar {
                 div()
                     .text_sm()
                     .child(t!("TerminalCommandBar.no_quick_commands").to_string()),
+            )
+            .child(
+                Button::new("terminal-command-quick-empty-add")
+                    .label(t!("QuickCommand.add_command").to_string())
+                    .small()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.quick_command_panel.update(cx, |panel, cx| {
+                            panel.open_add_command_dialog(window, cx);
+                        });
+                    })),
             )
             .into_any_element()
     }
@@ -231,6 +242,14 @@ impl TerminalCommandBar {
         let (group_index, command_index) = item_index;
         let selected = self.selected_quick_command == Some(command_index);
         let value = command.command.clone();
+        let value_for_copy = value.clone();
+        let value_for_delete = value.clone();
+        let existing_for_edit = command.clone();
+        let id = command.id.unwrap_or(0);
+        let is_pinned = command.pinned;
+        let hover_group = SharedString::from(format!(
+            "terminal-quick-command-hover-{group_index}-{command_index}"
+        ));
         let label = command
             .name
             .clone()
@@ -253,6 +272,7 @@ impl TerminalCommandBar {
                     .min_w_0()
                     .gap_2()
                     .items_center()
+                    .group(hover_group.clone())
                     .rounded(cx.theme().radius)
                     .px_2()
                     .py_2()
@@ -264,11 +284,115 @@ impl TerminalCommandBar {
                     }))
                     .child(self.render_quick_command_text(label, command))
                     .child(
-                        div()
+                        h_flex()
                             .flex_shrink_0()
-                            .text_xs()
-                            .text_color(self.colors.muted_foreground)
-                            .child(t!("TerminalCommandBar.fill").to_string()),
+                            .gap_1()
+                            .items_center()
+                            .child(
+                                h_flex()
+                                    .gap_1()
+                                    .invisible()
+                                    .group_hover(hover_group, |style| style.visible())
+                                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                        cx.stop_propagation()
+                                    })
+                                    .child(
+                                        IconButton::new(
+                                            SharedString::from(format!(
+                                                "terminal-quick-command-pin-{id}"
+                                            )),
+                                            if is_pinned {
+                                                IconName::StarOff
+                                            } else {
+                                                IconName::Star
+                                            },
+                                        )
+                                        .role(IconButtonRole::Compact)
+                                        .tooltip(if is_pinned {
+                                            t!("QuickCommand.unpin_tooltip").to_string()
+                                        } else {
+                                            t!("QuickCommand.pin_tooltip").to_string()
+                                        })
+                                        .on_click(
+                                            cx.listener(move |this, _, _, cx| {
+                                                this.quick_command_panel.update(cx, |panel, cx| {
+                                                    panel.toggle_command_pin(id, cx);
+                                                });
+                                            }),
+                                        ),
+                                    )
+                                    .child(
+                                        IconButton::new(
+                                            SharedString::from(format!(
+                                                "terminal-quick-command-edit-{id}"
+                                            )),
+                                            IconName::Edit,
+                                        )
+                                        .role(IconButtonRole::Compact)
+                                        .tooltip(t!("QuickCommand.edit_tooltip").to_string())
+                                        .on_click(
+                                            cx.listener(move |this, _, window, cx| {
+                                                this.quick_command_panel.update(cx, |panel, cx| {
+                                                    panel.open_edit_command_dialog(
+                                                        existing_for_edit.clone(),
+                                                        window,
+                                                        cx,
+                                                    );
+                                                });
+                                            }),
+                                        ),
+                                    )
+                                    .child(
+                                        IconButton::new(
+                                            SharedString::from(format!(
+                                                "terminal-quick-command-copy-{id}"
+                                            )),
+                                            IconName::Copy,
+                                        )
+                                        .role(IconButtonRole::Compact)
+                                        .tooltip(t!("QuickCommand.copy_tooltip").to_string())
+                                        .on_click(
+                                            cx.listener(move |this, _, window, cx| {
+                                                this.quick_command_panel.update(cx, |panel, cx| {
+                                                    panel.copy_command_to_clipboard(
+                                                        &value_for_copy,
+                                                        window,
+                                                        cx,
+                                                    );
+                                                });
+                                            }),
+                                        ),
+                                    )
+                                    .child(
+                                        IconButton::new(
+                                            SharedString::from(format!(
+                                                "terminal-quick-command-delete-{id}"
+                                            )),
+                                            IconName::Remove,
+                                        )
+                                        .role(IconButtonRole::Compact)
+                                        .text_color(cx.theme().danger)
+                                        .tooltip(t!("QuickCommand.delete_tooltip").to_string())
+                                        .on_click(
+                                            cx.listener(move |this, _, window, cx| {
+                                                this.quick_command_panel.update(cx, |panel, cx| {
+                                                    panel.open_delete_command_dialog(
+                                                        id,
+                                                        value_for_delete.clone(),
+                                                        window,
+                                                        cx,
+                                                    );
+                                                });
+                                            }),
+                                        ),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(self.colors.muted_foreground)
+                                    .child(t!("TerminalCommandBar.fill").to_string()),
+                            ),
                     ),
             )
             .into_any_element()

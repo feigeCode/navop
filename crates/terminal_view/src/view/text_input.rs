@@ -1,4 +1,5 @@
 use super::*;
+use crate::quick_command_parameters::prompt_for_quick_command_parameters;
 
 /// 断开态 Ctrl+D 的关闭目标。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -327,6 +328,20 @@ impl TerminalView {
             .read(cx)
             .command_for_shortcut(&event.keystroke)
         {
+            let terminal = cx.entity();
+            if prompt_for_quick_command_parameters(
+                &command,
+                cx.theme().muted_foreground,
+                _window,
+                cx,
+                move |command, _, cx| {
+                    terminal.update(cx, |terminal, cx| {
+                        terminal.write_to_pty(command.into_bytes(), cx)
+                    });
+                },
+            ) {
+                return;
+            }
             self.write_to_pty(command.into_bytes(), cx);
             return;
         }
